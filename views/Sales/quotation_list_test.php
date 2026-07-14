@@ -3895,13 +3895,6 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
           <th style="width:11%">金額</th>
         </tr>
       </thead>`;
-    // 與 itemsTheadHtml 的 th 寬度一致：量測用的暫存表格沒有表頭列，需靠 colgroup 固定欄寬，
-    // 否則 table-layout:fixed 會用量測表第一列儲存格自動分配寬度，跟正式頁面欄寬不同，量到的列高會不準。
-    const itemsColgroupHtml = `<colgroup>
-        <col style="width:4%"><col style="width:20%"><col style="width:44%">
-        <col style="width:7%"><col style="width:5%"><col style="width:9%"><col style="width:11%">
-      </colgroup>`;
-
     const sigRowHtml = `<table class="footer-area">
         <colgroup>
           <col class="rem"><!-- 80%: 項次+料號+品名+數量+單位 -->
@@ -3947,8 +3940,11 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
     // 續頁重複表頭：跨頁分開後若紙本被拆散，仍能認出是哪張OP單、第幾頁 — 第1頁已有完整 meta-grid，故只在第2頁起顯示
     const contPageHeaderHtml = `<div class="cont-page-header">單　　號：${esc(q.quote_no)}　　客戶名稱：${esc(custName)}</div>`;
 
-    // 「以下空白」列：只加在最後一頁，量測其高度時一併算進頁尾預留空間
+    // 「以下空白」列：只加在最後一頁
     const blankLineHtml = `<tr><td colspan="7" class="center" style="color:#444;letter-spacing:6px;padding:4px;">─── 以下空白 ───</td></tr>`;
+
+    // 安全內嵌成 JS 字串常值：避免內容中若出現 "</script" 字樣時被瀏覽器誤判為結束標籤，提早截斷整段 script
+    const j = v => JSON.stringify(v).replace(/<\/script/gi, '<\\/script');
 
     return `<!DOCTYPE html>
 <html><head>
@@ -3993,17 +3989,6 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
   @media print { body { -webkit-print-color-adjust:exact; } }
 </style>
 </head><body>
-<!-- 量測用暫存區：跟正式頁面同寬(186mm)、同樣式，先量出各區塊真實渲染高度，
-     再由下方 script 依實際高度動態分頁，避免固定筆數假設在不同瀏覽器/字型下撐爆頁面。
-     量測完成後這整塊連同內容會被移除，使用者看不到。 -->
-<div id="printMeasure" style="position:absolute; visibility:hidden; left:-9999px; top:0; width:186mm;">
-  <div id="measFullHeader">${fullHeaderHtml}</div>
-  <div id="measContHeader">${contPageHeaderHtml}</div>
-  <table class="items" id="measThead">${itemsColgroupHtml}${itemsTheadHtml}</table>
-  <table class="items" id="measRows">${itemsColgroupHtml}${itemRowChunks.map((h, i) => `<tbody class="unit" data-idx="${i}">${h}</tbody>`).join('')}</table>
-  <table class="items"><tbody id="measBlank">${blankLineHtml}</tbody></table>
-  <div id="measFooter">${sigRowHtml}</div>
-</div>
 <div id="printRoot"></div>
 <script>
 (function () {
@@ -4011,70 +3996,75 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
     var pageH  = (297 - 24) * mmToPx; // A4 可印高度：297mm - 上下邊界各12mm
     var SAFETY = 6; // px，量測誤差緩衝
 
-    function h(el) { return el ? el.getBoundingClientRect().height : 0; }
+    var fullHeaderHtml = ${j(fullHeaderHtml)};
+    var contHeaderHtml = ${j(contPageHeaderHtml)};
+    var theadHtml       = ${j(itemsTheadHtml)};
+    var footerHtml      = ${j(sigRowHtml)};
+    var blankHtml       = ${j(blankLineHtml)};
+    var units           = ${j(itemRowChunks)}; // 每個元素＝一個主料號的所有列(含BOM子件續列)組成的HTML字串
 
-    var fullHeaderH = h(document.getElementById('measFullHeader'));
-    var contHeaderH = h(document.getElementById('measContHeader'));
-    var theadH      = h(document.querySelector('#measThead thead'));
-    var footerH     = h(document.getElementById('measFooter'));
-    var blankH      = h(document.getElementById('measBlank'));
-
-    var fullHeaderHtml = document.getElementById('measFullHeader').innerHTML;
-    var contHeaderHtml = document.getElementById('measContHeader').innerHTML;
-    var theadHtml       = document.getElementById('measThead').querySelector('thead').outerHTML;
-    var blankHtml       = document.getElementById('measBlank').innerHTML;
-    var footerHtml      = document.getElementById('measFooter').innerHTML;
-
-    var units = Array.prototype.map.call(document.querySelectorAll('#measRows tbody.unit'), function (tb) {
-        return { html: tb.innerHTML, h: h(tb) };
-    });
-
-    // 依實際量到的高度動態分頁（不再假設每頁固定筆數）：
-    // 逐頁往下塞，塞不下的自動換到下一頁；每次先檢查「剩下的料號列+以下空白+頁尾簽章」是否整批塞得進本頁，
-    // 塞得進才判定是最後一頁並保留頁尾空間，否則本頁不留頁尾空間、單純塞滿料號列，避免頁尾被擠出頁面或蓋住內容。
+    var root = document.getElementById('printRoot');
     var pages = [];
-    var remain = units.slice();
-    var pageIdx = 0;
-    while (remain.length) {
-        var isFirst = pageIdx === 0;
-        var avail = pageH - (isFirst ? fullHeaderH : contHeaderH) - theadH - SAFETY;
-        var sumAll = remain.reduce(function (s, u) { return s + u.h; }, 0);
-        if (sumAll + blankH + footerH <= avail) {
-            pages.push({ units: remain, isLast: true });
-            remain = [];
-        } else {
-            var used = 0, cut = 0;
-            for (; cut < remain.length; cut++) {
-                if (used + remain[cut].h > avail) break;
-                used += remain[cut].h;
-            }
-            if (cut === 0) cut = 1; // 單一料號本身已超過一頁高度：至少獨立成一頁，讓瀏覽器自行在列與列間換頁，不裁切內容
-            pages.push({ units: remain.slice(0, cut), isLast: false });
-            remain = remain.slice(cut);
-        }
-        pageIdx++;
-    }
-    if (!pages.length) pages.push({ units: [], isLast: true }); // 至少一頁（空報價單）
-    // 保險：若料號列剛好塞滿最後一頁、迴圈結束時最後一頁仍是「非最後頁」判定（沒留頁尾空間），
-    // 另補一頁只放頁尾簽章，寧可多印一張空白頁也不能讓合計/簽收/簽核列消失或蓋住內容。
-    if (!pages[pages.length - 1].isLast) {
-        pages.push({ units: [], isLast: true });
+    var curPage = null, curTbody = null;
+
+    function newPage(isFirst) {
+        var div = document.createElement('div');
+        div.className = 'print-page';
+        div.innerHTML = (isFirst ? fullHeaderHtml : contHeaderHtml)
+            + '<table class="items">' + theadHtml + '<tbody></tbody></table>';
+        root.appendChild(div);
+        curPage = div;
+        curTbody = div.querySelector('tbody');
+        pages.push(div);
     }
 
-    var pagesHtml = '';
-    pages.forEach(function (pg, pIdx) {
-        var isLast = pg.isLast;
-        var bodyRows = pg.units.map(function (u) { return u.html; }).join('');
-        if (isLast) bodyRows += blankHtml;
-        pagesHtml += '<div class="print-page' + (isLast ? ' print-page-last' : '') + '">'
-            + (pIdx === 0 ? fullHeaderHtml : contHeaderHtml)
-            + '<table class="items">' + theadHtml + '<tbody>' + bodyRows + '</tbody></table>'
-            + (isLast ? footerHtml : '<div class="continued-note">（接下頁）</div>')
-            + '</div>';
+    // 直接在「真正會列印出來的那個 DOM」上逐步塞內容、量真實高度，塞不下就換頁——
+    // 不再另外用一份離線複製品去估算高度，量測環境跟最終列印環境永遠是同一份，不會有落差。
+    function fits() { return curPage.getBoundingClientRect().height <= pageH - SAFETY; }
+
+    newPage(true);
+    units.forEach(function (html) {
+        var tmp = document.createElement('tbody');
+        tmp.innerHTML = html;
+        var trs = Array.prototype.slice.call(tmp.children);
+        trs.forEach(function (tr) { curTbody.appendChild(tr); });
+        if (!fits() && curTbody.children.length > trs.length) {
+            // 本頁放不下、而且本頁本來就已經有其他料號了：把這組整個搬到新頁
+            trs.forEach(function (tr) { curTbody.removeChild(tr); });
+            newPage(false);
+            trs.forEach(function (tr) { curTbody.appendChild(tr); });
+        }
+        // 若本頁原本是空的仍放不下（單一料號本身、含BOM子件續列，就比一整頁還高）：
+        // 保留在本頁，讓瀏覽器自行在列與列之間換頁，寧可多一張紙也不裁切/遮蔽內容
     });
 
-    document.getElementById('printRoot').innerHTML = pagesHtml;
-    document.getElementById('printMeasure').remove();
+    // 最後嘗試把「以下空白」列 + 頁尾簽章區塊放進目前頁
+    var blankTmp = document.createElement('tbody');
+    blankTmp.innerHTML = blankHtml;
+    var blankTrs = Array.prototype.slice.call(blankTmp.children);
+    blankTrs.forEach(function (tr) { curTbody.appendChild(tr); });
+
+    var footerTmp = document.createElement('div');
+    footerTmp.innerHTML = footerHtml;
+    var footerNodes = Array.prototype.slice.call(footerTmp.childNodes);
+    footerNodes.forEach(function (n) { curPage.appendChild(n); });
+
+    if (!fits() && curTbody.children.length > blankTrs.length) {
+        // 頁尾放不下、本頁本來就有料號列：把「以下空白+頁尾」整組搬到新的一頁
+        blankTrs.forEach(function (tr) { curTbody.removeChild(tr); });
+        footerNodes.forEach(function (n) { if (n.parentNode) curPage.removeChild(n); });
+        newPage(false);
+        blankTrs.forEach(function (tr) { curTbody.appendChild(tr); });
+        footerNodes.forEach(function (n) { curPage.appendChild(n); });
+    }
+
+    curPage.classList.add('print-page-last');
+    pages.slice(0, -1).forEach(function (div) {
+        var note = document.createElement('div');
+        note.className = 'continued-note';
+        note.textContent = '（接下頁）';
+        div.appendChild(note);
+    });
 
     // 內容超過一頁才顯示頁碼（單頁不顯示頁次）
     if (pages.length > 1) {
