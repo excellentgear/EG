@@ -1018,6 +1018,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <button class="pb-btn" onclick="layerCmd('forward')" title="上移一層"><i class="fa fa-angle-up"></i></button>
                 <button class="pb-btn" onclick="layerCmd('backward')" title="下移一層"><i class="fa fa-angle-down"></i></button>
                 <button class="pb-btn" onclick="layerCmd('back')" title="移到最下層"><i class="fa fa-angle-double-down"></i> 置底</button>
+                <button class="pb-btn" id="btn-edit-points" style="display:none;" onclick="togglePointEdit()" title="像 Excel 編輯端點：拖曳節點改形狀、點線段中間的「＋」新增節點（直線會先轉成折線）">編輯端點</button>
                 <button class="pb-btn" onclick="groupCmd()" id="btn-group">群組</button>
                 <button class="pb-btn" onclick="mergeSelection()" title="把多個線條/圖形合併成單一物件：縮放移動不走位、雙擊不會拆開（Alt+雙擊才拆）">合併</button>
                 <button class="pb-btn" id="btn-label-bg" style="display:none;" onclick="toggleLabelBg()" title="切換這個標籤的底色（白底 ⇄ 透明）">底色</button>
@@ -1964,6 +1965,146 @@ function lineAbsEndpoints(line) {
     }
     fabric.Line.prototype.controls = { p1: mkControl(1), p2: mkControl(2) };
 })();
+/* ── Excel「編輯端點」：直線/折線/不規則遮蓋 進入節點編輯模式 ──────────
+   拖曳實心圓點＝移動該節點；點各線段中間的「＋」＝在該處插入新節點（直線第一次編輯會先轉成折線）。
+   節點座標數學沿用 fabric 官方 custom-controls-polygon 範例（pathOffset / _setPositionDimensions / 錨定點）。 */
+function polyEditSizeWithStroke(o) {
+    const sx = o.strokeUniform ? 1 / o.scaleX : 1, sy = o.strokeUniform ? 1 / o.scaleY : 1;
+    return { x: o.width + sx * (o.strokeWidth || 0), y: o.height + sy * (o.strokeWidth || 0) };
+}
+function polyPointPositionHandler(i) {
+    return function (dim, finalMatrix, poly) {
+        const pt = { x: poly.points[i].x - poly.pathOffset.x, y: poly.points[i].y - poly.pathOffset.y };
+        return fabric.util.transformPoint(pt,
+            fabric.util.multiplyTransformMatrices(poly.canvas.viewportTransform, poly.calcTransformMatrix()));
+    };
+}
+function polyMidPositionHandler(i) {
+    return function (dim, finalMatrix, poly) {
+        const a = poly.points[i], b = poly.points[(i + 1) % poly.points.length];
+        const pt = { x: (a.x + b.x) / 2 - poly.pathOffset.x, y: (a.y + b.y) / 2 - poly.pathOffset.y };
+        return fabric.util.transformPoint(pt,
+            fabric.util.multiplyTransformMatrices(poly.canvas.viewportTransform, poly.calcTransformMatrix()));
+    };
+}
+function polyPointActionHandler(i) {
+    return function (eventData, transform, x, y) {
+        const poly = transform.target;
+        const local = poly.toLocalPoint(new fabric.Point(x, y), 'center', 'center');
+        const base = polyEditSizeWithStroke(poly);
+        const size = poly._getTransformedDimensions(0, 0);
+        poly.points[i] = { x: local.x * base.x / size.x + poly.pathOffset.x, y: local.y * base.y / size.y + poly.pathOffset.y };
+        return true;
+    };
+}
+/* 改動節點後物件的寬高/中心會變，用「另一個節點」當錨點把物件釘在原地（官方範例作法） */
+function polyAnchorWrapper(anchorIndex, fn) {
+    return function (eventData, transform, x, y) {
+        const poly = transform.target;
+        const anchorAbs = fabric.util.transformPoint(
+            { x: poly.points[anchorIndex].x - poly.pathOffset.x, y: poly.points[anchorIndex].y - poly.pathOffset.y },
+            poly.calcTransformMatrix());
+        const done = fn(eventData, transform, x, y);
+        poly._setPositionDimensions({});
+        const base = polyEditSizeWithStroke(poly);
+        const nx = (poly.points[anchorIndex].x - poly.pathOffset.x) / base.x;
+        const ny = (poly.points[anchorIndex].y - poly.pathOffset.y) / base.y;
+        poly.setPositionByOrigin(anchorAbs, nx + 0.5, ny + 0.5);
+        return done;
+    };
+}
+function polyInsertPointHandler(i) {
+    return function (eventData, transform, x, y) {
+        const poly = transform.target;
+        // 防連點：畫面卡頓時排隊的連續 click 會在同一個「＋」上狂插一堆節點
+        const now = Date.now();
+        if (poly.__lastNodeInsert && now - poly.__lastNodeInsert < 350) return;
+        poly.__lastNodeInsert = now;
+        const a = poly.points[i], b = poly.points[(i + 1) % poly.points.length];
+        poly.points.splice(i + 1, 0, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+        poly.controls = buildPolyEditControls(poly);
+        poly.dirty = true;
+        canvas.requestRenderAll();
+        pushState();
+    };
+}
+function buildPolyEditControls(poly) {
+    const controls = {};
+    poly.points.forEach((pt, i) => {
+        controls['p' + i] = new fabric.Control({
+            positionHandler: polyPointPositionHandler(i),
+            actionHandler: polyAnchorWrapper(i > 0 ? i - 1 : poly.points.length - 1, polyPointActionHandler(i)),
+            actionName: 'modifyPoly',
+            cursorStyle: 'crosshair',
+            render: function (ctx, left, top) {
+                ctx.save();
+                ctx.fillStyle = '#2779bd'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.arc(left, top, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                ctx.restore();
+            }
+        });
+    });
+    const segCount = (poly.type === 'polygon') ? poly.points.length : poly.points.length - 1;
+    for (let i = 0; i < segCount; i++) {
+        controls['m' + i] = new fabric.Control({
+            positionHandler: polyMidPositionHandler(i),
+            mouseDownHandler: polyInsertPointHandler(i),
+            actionHandler: function () { return false; },   // ＋只負責插入節點，插完由使用者拖新出現的實心點
+            cursorStyle: 'copy',
+            render: function (ctx, left, top) {
+                ctx.save();
+                ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#2779bd'; ctx.lineWidth = 1.2;
+                ctx.beginPath(); ctx.arc(left, top, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                ctx.strokeStyle = '#2779bd'; ctx.lineWidth = 1.4;
+                ctx.beginPath();
+                ctx.moveTo(left - 3, top); ctx.lineTo(left + 3, top);
+                ctx.moveTo(left, top - 3); ctx.lineTo(left, top + 3);
+                ctx.stroke();
+                ctx.restore();
+            }
+        });
+    }
+    return controls;
+}
+function toEditablePolyline(obj) {
+    if (obj.type === 'polyline' || obj.type === 'polygon') return obj;
+    if (obj.type !== 'line') return null;
+    const pts = lineAbsEndpoints(obj);
+    const poly = new fabric.Polyline([{ x: pts[0].x, y: pts[0].y }, { x: pts[1].x, y: pts[1].y }], {
+        stroke: obj.stroke, strokeWidth: obj.strokeWidth, strokeDashArray: obj.strokeDashArray || null,
+        fill: 'transparent', strokeUniform: true, strokeLineCap: 'round', strokeLineJoin: 'round'
+    });
+    canvas.remove(obj);
+    canvas.add(poly);
+    return poly;
+}
+function togglePointEdit() {
+    const obj = canvas.getActiveObject();
+    if (!obj) return;
+    if (obj.__pointEditing) {
+        delete obj.__pointEditing;
+        delete obj.controls;          // 還原成 prototype 預設控制點
+        obj.hasBorders = true;
+        obj.objectCaching = true;
+        obj.setCoords();
+        canvas.requestRenderAll();
+        refreshPropbar();
+        pushState();
+        return;
+    }
+    const poly = toEditablePolyline(obj);
+    if (!poly) { toast('只有直線、折線、不規則遮蓋可以編輯端點'); return; }
+    poly.__pointEditing = true;
+    poly.objectCaching = false;       // 編輯中即時重繪，節點拖曳才不會殘影
+    poly.hasBorders = false;
+    poly.controls = buildPolyEditControls(poly);
+    canvas.setActiveObject(poly);
+    canvas.requestRenderAll();
+    refreshPropbar();
+    pushState();
+    toast('拖曳藍色圓點調整形狀；點線段中間的「＋」在該處新增節點；再按一次「編輯端點」完成');
+}
+
 /* 雙底線：fabric 原生只有單底線(underline)。doubleUnderline=true 時沿用 fabric 自己的底線繪製流程，
    把 offset 往下移一段再畫第二條（同粗細同顏色），跟原生底線完全同款式。 */
 (function installDoubleUnderline() {
@@ -3154,6 +3295,7 @@ function startGroupTextEdit(group, child, cursorToEnd) {
         underline: !!child.underline
     });
     tmp.doubleUnderline = !!child.doubleUnderline;
+    tmp.__groupEditFor = group;   // 讓「刪除」知道使用者要刪的是整組，不是這個暫時編輯框
     canvas.add(tmp);
     canvas.setActiveObject(tmp);
     tmp.enterEditing();
@@ -3162,6 +3304,13 @@ function startGroupTextEdit(group, child, cursorToEnd) {
     tmp.on('editing:exited', function () {
         const val = tmp.text;
         canvas.remove(tmp);
+        if (tmp.__deleteGroup) {   // 編輯中按了刪除：連同整組一起刪，不要再把群組加回來
+            canvas.remove(group);
+            canvas.discardActiveObject();
+            canvas.requestRenderAll();
+            pushState();
+            return;
+        }
         child.visible = true;
         finishGroupTextEdit(group, child, val);
     });
@@ -3862,7 +4011,7 @@ function isTextEditing() {
 function isStrokeable(o) {
     if (!o) return false;
     if ((o.type === 'group' || o.type === 'activeSelection') && o.getObjects) return o.getObjects().some(isStrokeable);
-    return ['rect', 'ellipse', 'line', 'path', 'polygon'].includes(o.type);
+    return ['rect', 'ellipse', 'line', 'path', 'polygon', 'polyline'].includes(o.type);
 }
 function refreshPropbar() {
     const obj = canvas.getActiveObject();
@@ -3893,6 +4042,9 @@ function refreshPropbar() {
         document.getElementById('p-line-style').value = styleFromDashArray(strokedChild.strokeDashArray);
     }
     document.getElementById('btn-group').textContent = (obj.type === 'group') ? '解散群組' : '群組';
+    const epBtn = document.getElementById('btn-edit-points');
+    epBtn.style.display = (['line', 'polyline', 'polygon'].includes(obj.type) && !obj.isDimGuide) ? '' : 'none';
+    epBtn.textContent = obj.__pointEditing ? '完成編輯' : '編輯端點';
     document.getElementById('btn-label-bg').style.display = (obj.labelSpec && obj.labelSpec.kind !== 'fabric') ? '' : 'none';
     // 選到文字時同步文字屬性區
     if (obj.type === 'i-text' || obj.type === 'textbox') {
@@ -3907,7 +4059,7 @@ function refreshPropbar() {
 }
 function objTypeName(o) {
     return ({ image: '圖片', 'i-text': '文字', textbox: '文字', rect: '矩形', ellipse: '橢圓', line: '直線',
-              group: '群組', path: '手繪線', polygon: '遮蓋(不規則)' })[o.type] || o.type;
+              group: '群組', path: '手繪線', polygon: '遮蓋(不規則)', polyline: '折線' })[o.type] || o.type;
 }
 function toHex(c) {
     if (!c || typeof c !== 'string') return null;
@@ -4222,6 +4374,12 @@ function selectAllObjects() {
 }
 function deleteSelection() {
     const obj = canvas.getActiveObject(); if (!obj) return;
+    if (obj.__groupEditFor) {
+        // 正在編輯標籤/標註的文字：按刪除＝把整組刪掉（不然只會刪到暫時編輯框，群組又被加回來，看起來永遠刪不掉）
+        obj.__deleteGroup = true;
+        obj.exitEditing();
+        return;
+    }
     const hadBalloon = (obj.balloonLetter || (obj.type === 'activeSelection' && obj.getObjects().some(o => o.balloonLetter)));
     if (obj.type === 'activeSelection') obj.getObjects().slice().forEach(o => canvas.remove(o));
     else canvas.remove(obj);
@@ -4230,16 +4388,29 @@ function deleteSelection() {
     canvas.requestRenderAll(); pushState();
 }
 
-/* ── Undo / Redo（JSON 快照） ── */
-let undoStack = [], redoStack = [], restoring = false;
+/* ── Undo / Redo（JSON 快照） ──
+   快照＝整張畫布序列化（含底圖 dataURL），大圖時很重——改成 debounce 150ms 合併連續動作，
+   一連串操作只留最後一份快照，避免每個動作都當場凍結一次；undo/redo 前先 flush 未寫入的快照。 */
+let undoStack = [], redoStack = [], restoring = false, pushTimer = null;
 const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline'];
-function pushState() {
+function doPushState() {
+    pushTimer = null;
     if (restoring) return;
     try {
-        undoStack.push(JSON.stringify(canvas.toJSON(SNAP_PROPS)));
-        if (undoStack.length > 60) undoStack.shift();
+        const snap = JSON.stringify(canvas.toJSON(SNAP_PROPS));
+        if (undoStack[undoStack.length - 1] === snap) return;   // 內容沒變就不疊快照
+        undoStack.push(snap);
+        if (undoStack.length > 30) undoStack.shift();   // 大圖快照很吃記憶體，上限 60→30
         redoStack = [];
     } catch (e) { /* 圖太大時快照失敗不影響操作 */ }
+}
+function pushState() {
+    if (restoring) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(doPushState, 150);
+}
+function flushPendingState() {
+    if (pushTimer) { clearTimeout(pushTimer); doPushState(); }
 }
 function restoreState(json) {
     restoring = true;
@@ -4256,11 +4427,13 @@ function restoreState(json) {
     });
 }
 function undo() {
+    flushPendingState();
     if (undoStack.length < 2) { toast('沒有可復原的步驟'); return; }
     redoStack.push(undoStack.pop());
     restoreState(undoStack[undoStack.length - 1]);
 }
 function redo() {
+    flushPendingState();
     if (!redoStack.length) { toast('沒有可重做的步驟'); return; }
     const s = redoStack.pop();
     undoStack.push(s);
