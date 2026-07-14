@@ -956,6 +956,13 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <label>文字色 <input type="color" id="p-textcolor" value="#d32f2f"></label>
                 <label>字級 <input type="number" class="ni" id="p-fontsize" value="28" min="6" max="400"></label>
                 <label><input type="checkbox" id="p-bold" checked> 粗體</label>
+                <label>底線
+                    <select id="p-underline" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;">
+                        <option value="none">無</option>
+                        <option value="single">單底線</option>
+                        <option value="double">雙底線</option>
+                    </select>
+                </label>
                 <label>底色
                     <input type="color" id="p-textbg" value="#fff59d">
                     <input type="checkbox" id="p-textbg-on" title="文字是否加底色">
@@ -1834,11 +1841,13 @@ canvas.on('mouse:up', function (opt) {
     const dash = dashArrayFor(document.getElementById('p-line-style').value, width);
 
     if (d.type === 'dimdist' || d.type === 'dimcircle') {
-        const shape = makeDimDistanceShape(d.startX, d.startY, p.x, p.y, color, width, dash);
-        shape.dimKind = (d.type === 'dimcircle') ? 'diameter' : 'distance';
+        const isDia = (d.type === 'dimcircle');
+        const shape = makeDimDistanceShape(d.startX, d.startY, p.x, p.y, color, width, dash, !isDia, isDia ? '⌀' : '');
+        shape.dimKind = isDia ? 'diameter' : 'distance';
         canvas.add(shape);
         finishNewObject(shape);
-        placeDimText((d.startX + p.x) / 2, (d.startY + p.y) / 2, (d.type === 'dimcircle') ? '⌀' : '');
+        const txtChild = shape.getObjects().find(o => o.type === 'i-text');
+        if (txtChild) startGroupTextEdit(shape, txtChild, true);   // 畫完立刻進入輸入，游標停在最後（⌀後面）
         return;
     }
 
@@ -1894,23 +1903,80 @@ function trueLineAngle(o) {
 
 /* 箭頭 = 線 + 三角形頭端組成群組；ends: none / end(單) / both(雙) */
 function arrowHeadLen(width) { return Math.max(18, width * 5); }   // 箭頭大小公式；粗細調整時要用同一套（見 p-width 監聽）
+/* 箭頭三角形要「尖端剛好在線段端點」：Triangle 以中心定位，所以中心要沿線方向往內縮 headLen/2 */
+function arrowHeadTri(px, py, dirDeg, headLen, color) {
+    const rad = dirDeg * Math.PI / 180;
+    return new fabric.Triangle({
+        left: px - Math.cos(rad) * headLen / 2, top: py - Math.sin(rad) * headLen / 2,
+        originX: 'center', originY: 'center',
+        width: headLen, height: headLen, angle: dirDeg + 90, fill: color
+    });
+}
 function makeArrow(x1, y1, x2, y2, color, width, ends, dash) {
     const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
     const headLen = arrowHeadLen(width);
     const items = [new fabric.Line([x1, y1, x2, y2], { stroke: color, strokeWidth: width, strokeUniform: true, strokeDashArray: dash || null })];
-    if (ends === 'end' || ends === 'both') items.push(new fabric.Triangle({
-        left: x2, top: y2, originX: 'center', originY: 'center',
-        width: headLen, height: headLen, angle: angle + 90, fill: color
-    }));
-    if (ends === 'both') items.push(new fabric.Triangle({
-        left: x1, top: y1, originX: 'center', originY: 'center',
-        width: headLen, height: headLen, angle: angle - 90, fill: color
-    }));
+    if (ends === 'end' || ends === 'both') items.push(arrowHeadTri(x2, y2, angle, headLen, color));
+    if (ends === 'both') items.push(arrowHeadTri(x1, y1, angle + 180, headLen, color));
     const g = new fabric.Group(items, {});
     g.isArrowGroup = true;
     g.merged = true;   // 箭頭視為單一物件，雙擊不拆
     return g;
 }
+/* 直線端點的絕對座標（含物件自身/所屬群組的位移旋轉縮放） */
+function lineAbsEndpoints(line) {
+    const m = line.calcTransformMatrix();
+    const lp = line.calcLinePoints();   // 相對線中心的區域座標
+    return [fabric.util.transformPoint({ x: lp.x1, y: lp.y1 }, m),
+            fabric.util.transformPoint({ x: lp.x2, y: lp.y2 }, m)];
+}
+/* Excel 式端點拖曳：直線只顯示頭尾兩個圓形控制點，拖曳＝直接改該端點座標（改方向/長度）。
+   矩形/橢圓維持原生四角控制點拖曳調整大小。actionHandler 把絕對座標寫回 x1..y2 並歸零
+   angle/scale（fabric.Line 設定座標時會自動重算 left/top/width/height）。 */
+(function installLineEndpointControls() {
+    function mkControl(idx) {
+        return new fabric.Control({
+            positionHandler: function (dim, finalMatrix, obj) {
+                const lp = obj.calcLinePoints();
+                const pt = (idx === 1) ? { x: lp.x1, y: lp.y1 } : { x: lp.x2, y: lp.y2 };
+                return fabric.util.transformPoint(pt,
+                    fabric.util.multiplyTransformMatrices(obj.canvas.viewportTransform, obj.calcTransformMatrix()));
+            },
+            actionHandler: function (eventData, transform, x, y) {
+                const line = transform.target;
+                const pts = lineAbsEndpoints(line);
+                const p1 = (idx === 1) ? { x, y } : pts[0];
+                const p2 = (idx === 2) ? { x, y } : pts[1];
+                line.set({ angle: 0, scaleX: 1, scaleY: 1, flipX: false, flipY: false });
+                line.set({ x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y });
+                line.setCoords();
+                return true;
+            },
+            cursorStyle: 'crosshair',
+            actionName: 'modifyLineEnd',
+            render: function (ctx, left, top) {
+                ctx.save();
+                ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#2779bd'; ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.arc(left, top, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                ctx.restore();
+            }
+        });
+    }
+    fabric.Line.prototype.controls = { p1: mkControl(1), p2: mkControl(2) };
+})();
+/* 雙底線：fabric 原生只有單底線(underline)。doubleUnderline=true 時沿用 fabric 自己的底線繪製流程，
+   把 offset 往下移一段再畫第二條（同粗細同顏色），跟原生底線完全同款式。 */
+(function installDoubleUnderline() {
+    const origRender = fabric.Text.prototype._render;
+    fabric.Text.prototype._render = function (ctx) {
+        origRender.call(this, ctx);
+        if (this.doubleUnderline && this.underline) {
+            this.offsets = { underline: 0.24, linethrough: this.offsets.linethrough, overline: this.offsets.overline };
+            this._renderTextDecoration(ctx, 'underline');
+            delete this.offsets;   // 還原回 prototype 上的預設值（0.10）
+        }
+    };
+})();
 
 /* ── 文字 / 標籤（Figma 式：隨時可移動、雙擊編輯、拉角縮放） ──
    文字＝單一 IText，底色可選；標籤＝固定有邊框的文字框（像標籤機印出來的標籤），是「邊框 Rect + IText」
@@ -1923,12 +1989,15 @@ function addText(x, y, isLabel) {
     const bold = document.getElementById('p-bold').checked;
     const bgOn = document.getElementById('p-textbg-on').checked;
     const bg = document.getElementById('p-textbg').value;
+    const ul = document.getElementById('p-underline').value;
     const t = new fabric.IText('輸入文字', {
         left: x, top: y, fontSize: size, fill: color,
         fontFamily: '"Microsoft JhengHei", "PingFang TC", Arial, sans-serif',
         fontWeight: bold ? 'bold' : 'normal',
-        backgroundColor: bgOn ? bg : ''
+        backgroundColor: bgOn ? bg : '',
+        underline: ul !== 'none'
     });
+    t.doubleUnderline = (ul === 'double');
     canvas.add(t);
     canvas.setActiveObject(t);
     setTool('select');
@@ -1964,44 +2033,55 @@ function addLabelBox(x, y) {
 }
 
 /* ── 快速標註（CAD 風格）：距離 / 直徑 / 角度 ──────────────────────────
-   標註線（含箭頭/刻度/圓）跟文字數值是兩個各自獨立、可分別移動的物件（文字沿用原生 IText 雙擊編輯，
-   不用比照標籤庫另外做群組內文字編輯機制）。距離/直徑無法從像素推算真實尺寸，文字預設留空由使用者
-   自行輸入實測值；角度是純幾何夾角、不受比例尺影響，直接自動帶入算好的度數。 */
-function placeDimText(x, y, prefix, autoValue) {
-    const color = document.getElementById('p-textcolor').value;
-    const size = parseInt(document.getElementById('p-fontsize').value, 10) || 28;
-    const t = new fabric.IText((prefix || '') + (autoValue || ''), {
-        left: x, top: y, originX: 'center', originY: 'center', fontSize: size, fill: color,
+   標註線＋文字數值包成同一個群組（labelSpec kind='fabric'），移動時一起動；雙擊沿用標籤庫既有的
+   「群組內文字編輯」機制（startGroupTextEdit）。距離/直徑無法從像素推算真實尺寸，文字預設留空
+   （直徑帶 ⌀ 前綴）由使用者自行輸入實測值；角度是純幾何夾角、不受比例尺影響，自動帶入算好的度數。 */
+/* 標註文字的角度與擺放位置：沿線段方向、放在線的上側；角度正規化到 ±90 內，字不會上下顛倒 */
+function dimTextPose(x1, y1, x2, y2, extraGap) {
+    let a = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+    if (a > 90) a -= 180;
+    if (a < -90) a += 180;
+    const fs = parseInt(document.getElementById('p-fontsize').value, 10) || 28;
+    const k = fs * 0.75 + (extraGap || 0);
+    const rad = a * Math.PI / 180;
+    return { x: (x1 + x2) / 2 + Math.sin(rad) * k, y: (y1 + y2) / 2 - Math.cos(rad) * k, angle: a };
+}
+function makeDimText(x, y, str, angleDeg) {
+    const t = new fabric.IText(str || '', {
+        left: x, top: y, originX: 'center', originY: 'center',
+        fontSize: parseInt(document.getElementById('p-fontsize').value, 10) || 28,
+        fill: document.getElementById('p-textcolor').value, fontWeight: 'bold',
         fontFamily: '"Microsoft JhengHei", "PingFang TC", Arial, sans-serif',
-        fontWeight: 'bold', backgroundColor: '#ffffff'
+        backgroundColor: '#ffffff', angle: angleDeg || 0
     });
     t.dimKind = 'label';
-    canvas.add(t);
-    canvas.setActiveObject(t);
-    t.enterEditing();
-    if (autoValue) { t.selectAll(); } else { t.setSelectionStart(t.text.length); t.setSelectionEnd(t.text.length); }
-    canvas.requestRenderAll();
-    pushState();
+    return t;
 }
-function makeDimDistanceShape(x1, y1, x2, y2, color, width, dash) {
+/* withTicks：距離標註兩端有垂直小刻度線（CAD 尺寸界線收尾），直徑標註不要（會看起來像多出兩條線） */
+function makeDimDistanceShape(x1, y1, x2, y2, color, width, dash, withTicks, textPrefix) {
     const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
     const headLen = arrowHeadLen(width);
-    const nx = -Math.sin(angle * Math.PI / 180), ny = Math.cos(angle * Math.PI / 180);
-    const tick = 8 + width;
     const items = [
         new fabric.Line([x1, y1, x2, y2], { stroke: color, strokeWidth: width, strokeUniform: true, strokeDashArray: dash || null }),
-        new fabric.Triangle({ left: x2, top: y2, originX: 'center', originY: 'center', width: headLen, height: headLen, angle: angle + 90, fill: color }),
-        new fabric.Triangle({ left: x1, top: y1, originX: 'center', originY: 'center', width: headLen, height: headLen, angle: angle - 90, fill: color }),
-        new fabric.Line([x1 - nx * tick, y1 - ny * tick, x1 + nx * tick, y1 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) }),
-        new fabric.Line([x2 - nx * tick, y2 - ny * tick, x2 + nx * tick, y2 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) })
+        arrowHeadTri(x2, y2, angle, headLen, color),
+        arrowHeadTri(x1, y1, angle + 180, headLen, color)
     ];
+    if (withTicks) {
+        const nx = -Math.sin(angle * Math.PI / 180), ny = Math.cos(angle * Math.PI / 180);
+        const tick = 8 + width;
+        items.push(new fabric.Line([x1 - nx * tick, y1 - ny * tick, x1 + nx * tick, y1 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) }));
+        items.push(new fabric.Line([x2 - nx * tick, y2 - ny * tick, x2 + nx * tick, y2 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) }));
+    }
+    const pose = dimTextPose(x1, y1, x2, y2, width);
+    items.push(makeDimText(pose.x, pose.y, textPrefix || '', pose.angle));
     const g = new fabric.Group(items, {});
-    g.merged = true; g.dimKind = 'distance';
+    g.labelSpec = { kind: 'fabric' };   // 讓雙擊走「群組內文字編輯」而不是拆群組
+    g.dimKind = 'distance';
     return g;
 }
-/* 角度標註：點畫面設一個頂點，自動長出兩條可拖曳旋轉的「虛擬輔助線」（對稱橫跨頂點，
-   剛好讓 Fabric 內建的旋轉控制點以頂點為圓心旋轉），即時算出夾角畫弧線＋度數。
-   輔助線本身是一般 fabric.Line，可用既有「角度」屬性欄位直接輸入精確角度（沿用 Feature B 的水平基準）。
+/* 角度標註：點畫面設一個頂點，自動長出兩條「虛擬輔助線」（對稱橫跨頂點）。
+   拖曳輔助線任一處＝直接繞頂點旋轉跟著游標走（object:moving 攔截，不是平移），
+   也可選取後用既有「角度」欄輸入精確角度（沿用水平基準）。即時重畫雙箭頭弧線＋度數。
    調整滿意後，使用者框選兩條輔助線按 Delete，圖面上就只留下弧線+度數，不會真的有線。 */
 let dimAngleSession = null;   // { vertex:{x,y}, g1, g2, arc, text }
 function startDimAngle(vx, vy) {
@@ -2010,57 +2090,69 @@ function startDimAngle(vx, vy) {
         const rad = angDeg * Math.PI / 180;
         const dx = Math.cos(rad) * R, dy = Math.sin(rad) * R;
         const line = new fabric.Line([vx - dx, vy - dy, vx + dx, vy + dy], {
-            stroke: '#2b8fd6', strokeWidth: 2, strokeDashArray: [7, 5], opacity: 0.9
+            stroke: '#2b8fd6', strokeWidth: 3, strokeDashArray: [7, 5], opacity: 0.9,
+            hasControls: false, hasBorders: false, perPixelTargetFind: false, padding: 8
         });
         line.isDimGuide = true;
-        // 只留旋轉控制點，不給拉伸角控制點：拉伸會讓線中心偏離頂點，角度就算不準了
-        line.setControlsVisibility({ tl: false, tr: false, bl: false, br: false, ml: false, mt: false, mr: false, mb: false, mtr: true });
         return line;
     };
     const g1 = mkGuide(0), g2 = mkGuide(-60);
     canvas.add(g1); canvas.add(g2);
-    dimAngleSession = { vertex: { x: vx, y: vy }, g1, g2, arc: null, text: null };
+    dimAngleSession = { vertex: { x: vx, y: vy }, g1, g2, arc: null };
     refreshDimAngleArc();
-    canvas.setActiveObject(g1);
+    canvas.setActiveObject(g2);
     setTool('select');
-    toast('拖曳兩條藍色虛線調整角度（或選取後用上方「角度」欄輸入精確數值）；調整好後框選這兩條虛線按 Delete，只留下角度標示');
+    toast('直接拖曳藍色虛線＝繞頂點旋轉（或選取後用上方「角度」欄輸入精確數值）；調整好後框選兩條虛線按 Delete，只留下角度標示');
     canvas.requestRenderAll();
     pushState();
 }
+/* 拖曳輔助線＝繞頂點旋轉：把 Fabric 的平移拖曳攔下來，改成「線方向指向游標、中心鎖回頂點」 */
+canvas.on('object:moving', function (e) {
+    const t = e && e.target;
+    if (!dimAngleSession || (t !== dimAngleSession.g1 && t !== dimAngleSession.g2)) return;
+    const v = dimAngleSession.vertex;
+    const p = canvas.getPointer(e.e);
+    const desired = Math.atan2(p.y - v.y, p.x - v.x) * 180 / Math.PI;
+    const base = Math.atan2(t.y2 - t.y1, t.x2 - t.x1) * 180 / Math.PI;
+    t.angle = desired - base;
+    t.setPositionByOrigin(new fabric.Point(v.x, v.y), 'center', 'center');
+    t.setCoords();
+    refreshDimAngleArc();
+});
 function refreshDimAngleArc() {
     if (!dimAngleSession) return;
     const { vertex, g1, g2 } = dimAngleSession;
     if (dimAngleSession.arc) canvas.remove(dimAngleSession.arc);
-    if (dimAngleSession.text) canvas.remove(dimAngleSession.text);
     const a1 = trueLineAngle(g1), a2 = trueLineAngle(g2);
     let diff = ((a2 - a1) % 360 + 360) % 360;
     let signedHalf = diff > 180 ? (diff - 360) / 2 : diff / 2;
     if (diff > 180) diff = 360 - diff;
-    const R = 32;
+    const R = 40;
     const sweep = (((a2 - a1) % 360 + 360) % 360) <= 180 ? 1 : 0;
     const rad = deg => deg * Math.PI / 180;
     const sx = vertex.x + R * Math.cos(rad(a1)), sy = vertex.y + R * Math.sin(rad(a1));
     const ex = vertex.x + R * Math.cos(rad(a2)), ey = vertex.y + R * Math.sin(rad(a2));
     const color = document.getElementById('p-stroke').value;
     const width = parseInt(document.getElementById('p-width').value, 10) || 3;
-    const dash = dashArrayFor(document.getElementById('p-line-style').value, width);
+    const arcW = Math.max(1.5, width * 0.7);
     const arc = new fabric.Path('M ' + sx + ' ' + sy + ' A ' + R + ' ' + R + ' 0 0 ' + sweep + ' ' + ex + ' ' + ey,
-        { stroke: color, strokeWidth: Math.max(1.5, width * 0.7), fill: 'transparent', strokeDashArray: dash });
-    arc.dimKind = 'angle';
-    canvas.add(arc);
+        { stroke: color, strokeWidth: arcW, fill: 'transparent' });
+    // 弧線兩端加箭頭（沿弧線切線方向、尖端貼齊弧線端點），像真正的 CAD 角度標註
+    const headLen = Math.max(10, Math.min(18, arcW * 4.5));
+    const dirEnd = a2 + (sweep ? 90 : -90);
+    const dirStart = a1 + (sweep ? -90 : 90);
     const midAngle = a1 + signedHalf;
-    const tx = vertex.x + (R + 22) * Math.cos(rad(midAngle)), ty = vertex.y + (R + 22) * Math.sin(rad(midAngle));
-    const text = new fabric.IText(diff.toFixed(1) + '°', {
-        left: tx, top: ty, originX: 'center', originY: 'center',
-        fontSize: parseInt(document.getElementById('p-fontsize').value, 10) || 28,
-        fill: document.getElementById('p-textcolor').value, fontWeight: 'bold',
-        fontFamily: '"Microsoft JhengHei", "PingFang TC", Arial, sans-serif',
-        backgroundColor: '#ffffff'
-    });
-    text.dimKind = 'label';
-    canvas.add(text);
-    dimAngleSession.arc = arc;
-    dimAngleSession.text = text;
+    const tx = vertex.x + (R + 26) * Math.cos(rad(midAngle)), ty = vertex.y + (R + 26) * Math.sin(rad(midAngle));
+    const arcGroup = new fabric.Group([
+        arc,
+        arrowHeadTri(sx, sy, dirStart, headLen, color),
+        arrowHeadTri(ex, ey, dirEnd, headLen, color),
+        makeDimText(tx, ty, diff.toFixed(1) + '°', 0)
+    ], {});
+    arcGroup.labelSpec = { kind: 'fabric' };   // 雙擊可改度數文字（群組內文字編輯）
+    arcGroup.dimKind = 'angle';
+    canvas.add(arcGroup);
+    dimAngleSession.arc = arcGroup;
     canvas.requestRenderAll();
 }
 
@@ -3050,7 +3142,7 @@ canvas.on('mouse:dblclick', function (opt) {
     });
     startGroupTextEdit(g, best);
 });
-function startGroupTextEdit(group, child) {
+function startGroupTextEdit(group, child, cursorToEnd) {
     const dec = fabric.util.qrDecompose(child.calcTransformMatrix());
     child.visible = false; group.dirty = true;
     canvas.requestRenderAll();
@@ -3058,11 +3150,15 @@ function startGroupTextEdit(group, child) {
         left: dec.translateX, top: dec.translateY, originX: 'center', originY: 'center',
         angle: dec.angle, scaleX: dec.scaleX, scaleY: dec.scaleY,
         fontSize: child.fontSize, fontFamily: child.fontFamily, fontWeight: child.fontWeight,
-        fill: child.fill, textAlign: child.textAlign || 'center', backgroundColor: '#fff8d6'
+        fill: child.fill, textAlign: child.textAlign || 'center', backgroundColor: '#fff8d6',
+        underline: !!child.underline
     });
+    tmp.doubleUnderline = !!child.doubleUnderline;
     canvas.add(tmp);
     canvas.setActiveObject(tmp);
-    tmp.enterEditing(); tmp.selectAll();
+    tmp.enterEditing();
+    if (cursorToEnd) { tmp.setSelectionStart(tmp.text.length); tmp.setSelectionEnd(tmp.text.length); }
+    else tmp.selectAll();
     tmp.on('editing:exited', function () {
         const val = tmp.text;
         canvas.remove(tmp);
@@ -3085,9 +3181,9 @@ function finishGroupTextEdit(group, child, val) {
         canvas.add(ng);
         canvas.setActiveObject(ng);
     } else {
-        // 自由組合（fabric）標籤：改字後重組群組以重算邊界
+        // 自由組合（fabric）標籤／快速標註群組：改字後重組群組以重算邊界
         child.set('text', val); child.dirty = true;
-        const props = { labelSpec: group.labelSpec, labelKind: group.labelKind, isQuickLabel: group.isQuickLabel };
+        const props = { labelSpec: group.labelSpec, labelKind: group.labelKind, isQuickLabel: group.isQuickLabel, dimKind: group.dimKind };
         const kids = group.getObjects().slice();
         const wasQuickLabel = group.isQuickLabel;
         group.destroy();               // 還原子物件為絕對座標（含群組縮放）
@@ -3105,6 +3201,8 @@ function finishGroupTextEdit(group, child, val) {
         Object.assign(ng, props);
         canvas.add(ng);
         canvas.setActiveObject(ng);
+        // 角度標註調整期間改了度數文字：把 session 的弧線群組參照換成重組後的新群組，避免之後重算時殘留舊的
+        if (dimAngleSession && dimAngleSession.arc === group) dimAngleSession.arc = ng;
     }
     canvas.requestRenderAll();
     pushState();
@@ -3766,7 +3864,16 @@ function refreshPropbar() {
     sec.classList.toggle('show', !!obj);
     const st = document.getElementById('st-sel');
     // 選取時上方顏色/粗細列改依「選到的物件類型」決定要不要出現，不是只看目前工具
-    if (currentTool === 'select') document.getElementById('sec-stroke').classList.toggle('show', isStrokeable(obj));
+    if (currentTool === 'select') {
+        document.getElementById('sec-stroke').classList.toggle('show', isStrokeable(obj));
+        // 選到直線/箭頭時顯示「端點」下拉並回填目前模式，改選＝就地互換（見 p-line-ends change 監聽）
+        const canEnds = !!obj && isLineLike(obj) && !obj.dimKind && !obj.isDimGuide;
+        document.getElementById('wrap-line-ends').style.display = canEnds ? '' : 'none';
+        if (canEnds) {
+            document.getElementById('p-line-ends').value = (obj.type === 'line') ? 'none'
+                : (obj.getObjects().filter(c => c.type === 'triangle').length >= 2 ? 'both' : 'end');
+        }
+    }
     if (!obj) { st.textContent = '未選取'; return; }
     const b = obj.getBoundingRect(true, true);
     st.innerHTML = '選取 <b>' + (obj.type === 'activeSelection' ? obj.getObjects().length + ' 個物件' : objTypeName(obj)) +
@@ -3787,6 +3894,7 @@ function refreshPropbar() {
         document.getElementById('p-textcolor').value = toHex(obj.fill) || '#d32f2f';
         document.getElementById('p-fontsize').value = Math.round(obj.fontSize * (obj.scaleX || 1));
         document.getElementById('p-bold').checked = (obj.fontWeight === 'bold');
+        document.getElementById('p-underline').value = obj.underline ? (obj.doubleUnderline ? 'double' : 'single') : 'none';
         document.getElementById('p-textbg-on').checked = !!obj.backgroundColor;
         if (obj.backgroundColor) document.getElementById('p-textbg').value = toHex(obj.backgroundColor) || '#fff59d';
     }
@@ -3883,6 +3991,29 @@ document.getElementById('p-line-style').addEventListener('change', function () {
     });
     if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); pushState(); }
 });
+/* 端點下拉：選取既有直線/箭頭時改選＝就地互換（線↔單箭頭↔雙箭頭，保留顏色/粗細/線型與位置） */
+document.getElementById('p-line-ends').addEventListener('change', function () {
+    const obj = canvas.getActiveObject();
+    if (!obj || !isLineLike(obj) || obj.dimKind || obj.isDimGuide) return;
+    const line = (obj.type === 'line') ? obj : obj.getObjects().find(c => c.type === 'line');
+    if (!line) return;
+    const pts = lineAbsEndpoints(line);
+    const stroke = line.stroke || document.getElementById('p-stroke').value;
+    const sw = line.strokeWidth || 3;
+    const dashArr = line.strokeDashArray || null;
+    const ends = this.value;
+    canvas.remove(obj);
+    let no;
+    if (ends === 'none') {
+        no = new fabric.Line([pts[0].x, pts[0].y, pts[1].x, pts[1].y], { stroke, strokeWidth: sw, strokeUniform: true, strokeDashArray: dashArr });
+    } else {
+        no = makeArrow(pts[0].x, pts[0].y, pts[1].x, pts[1].y, stroke, sw, ends, dashArr);
+    }
+    canvas.add(no);
+    canvas.setActiveObject(no);
+    canvas.requestRenderAll();
+    pushState();
+});
 document.getElementById('p-stroke').addEventListener('input', function () {
     if (canvas.isDrawingMode) canvas.freeDrawingBrush.color = this.value;
     const v = this.value;
@@ -3933,6 +4064,17 @@ function applyTextBg() {
     });
     if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); pushState(); }
 }
+document.getElementById('p-underline').addEventListener('change', function () {
+    const v = this.value;
+    const obj = canvas.getActiveObject();
+    const n = eachInSelection(obj, o => {
+        if (o.type === 'i-text' || o.type === 'textbox' || o.type === 'text') {
+            o.set('underline', v !== 'none'); o.doubleUnderline = (v === 'double'); o.dirty = true; return true;
+        }
+        return false;
+    });
+    if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); pushState(); }
+});
 document.getElementById('p-textbg').addEventListener('input', applyTextBg);
 document.getElementById('p-textbg-on').addEventListener('change', applyTextBg);
 document.getElementById('p-maskcolor').addEventListener('input', function () {
@@ -4082,7 +4224,7 @@ function deleteSelection() {
 
 /* ── Undo / Redo（JSON 快照） ── */
 let undoStack = [], redoStack = [], restoring = false;
-const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel'];
+const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline'];
 function pushState() {
     if (restoring) return;
     try {
@@ -4137,14 +4279,8 @@ function applyFreehandEnds(path) {
     const angEnd = Math.atan2(last.y - prev.y, last.x - prev.x) * 180 / Math.PI;
     const angStart = Math.atan2(first.y - second.y, first.x - second.x) * 180 / Math.PI;
     const items = [path];
-    if (ends === 'end' || ends === 'both') items.push(new fabric.Triangle({
-        left: last.x, top: last.y, originX: 'center', originY: 'center',
-        width: headLen, height: headLen, angle: angEnd + 90, fill: color
-    }));
-    if (ends === 'both') items.push(new fabric.Triangle({
-        left: first.x, top: first.y, originX: 'center', originY: 'center',
-        width: headLen, height: headLen, angle: angStart + 90, fill: color
-    }));
+    if (ends === 'end' || ends === 'both') items.push(arrowHeadTri(last.x, last.y, angEnd, headLen, color));
+    if (ends === 'both') items.push(arrowHeadTri(first.x, first.y, angStart, headLen, color));
     if (items.length > 1) {
         canvas.remove(path);
         const g = new fabric.Group(items, {});
@@ -4266,9 +4402,9 @@ document.querySelectorAll('input[type=number], .ni').forEach(inp => {
 
 /* ── 個人畫圖偏好：顏色/粗細/印章大小…改過就記住，下次開啟沿用（存在 system_settings，依使用者區分）── */
 const PREF_FIELDS = [
-    ['p-stroke', 'stroke'], ['p-width', 'width'], ['p-line-ends', 'lineEnds'],
+    ['p-stroke', 'stroke'], ['p-width', 'width'], ['p-line-ends', 'lineEnds'], ['p-line-style', 'lineStyle'],
     ['p-fill', 'fill'], ['p-fill-on', 'fillOn', true],
-    ['p-textcolor', 'textColor'], ['p-fontsize', 'fontSize'], ['p-bold', 'bold', true],
+    ['p-textcolor', 'textColor'], ['p-fontsize', 'fontSize'], ['p-bold', 'bold', true], ['p-underline', 'underline'],
     ['p-textbg', 'textBg'], ['p-textbg-on', 'textBgOn', true],
     ['p-balloon-size', 'balloonSize'], ['p-dc-shape', 'dcShape'], ['p-dc-size', 'dcSize'],
     ['p-stamp-size', 'stampSize'], ['p-maskcolor', 'maskColor'], ['p-crop-transparent', 'cropTransparent', true]
