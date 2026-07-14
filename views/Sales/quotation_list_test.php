@@ -3993,49 +3993,16 @@ ${fullHeaderHtml}
 <table class="items">${itemsColgroupHtml}${itemsTheadHtml}<tbody>${itemRowChunks.join('')}${blankLineHtml}</tbody></table>
 <div class="sig-block">${sigRowHtml}</div>
 <script>
+// ★★ 本文件「零 JS 版面計算」鐵則 ★★
+// 列印對話框可以「即時切換印表機」：每台印表機記住的紙張大小/可印範圍/縮放都可能不同，
+// 切換目的地時瀏覽器會用新紙面重新排版，但這段 JS 不會重新執行——所以任何用 JS 算好的
+// 絕對高度（固定筆數分頁、量高度切頁、把頁尾推到頁底的 spacer）都必然在某台印表機上排錯、
+// 多頁或亂換頁（同一台電腦 SHARP/RICOH 預覽不同就是這樣來的）。分頁 100% 交給列印引擎。
 (function () {
-    var mmPx  = 96 / 25.4;
-    var pageH = (297 - 24) * mmPx; // 每頁可印高度（@page A4、上下邊界各12mm）
-    var GAP   = 8 * mmPx;          // 安全緩衝：簽章區底部目標離頁底約8mm，吸收螢幕與列印引擎的渲染差異
-
-    var body   = document.body;
-    var table  = document.querySelector('table.items');
-    var sig    = document.querySelector('.sig-block');
-    var theadH = table.querySelector('thead').getBoundingClientRect().height;
-    var sigH   = sig.getBoundingClientRect().height;
-    var bodyTop = body.getBoundingClientRect().top;
-
-    // 依「與引擎相同的規則」（tr 不可切斷、thead 每頁重複、放不下就到下一頁）推算最後一頁已用高度，
-    // 只為了插入撐高 spacer 把簽章區推到頁面最下方；實際分頁仍完全由列印引擎決定——
-    // 若推算與引擎有些微差異，最壞情況只是簽章區沒貼齊頁底或整塊落到下頁頂端，明細分頁永遠不受影響。
-    // 每列的行進高度用「下一列頂端 - 本列頂端」計算（而非各列自身高度），border-collapse 共用框線才不會累積誤差。
-    var rows = table.querySelectorAll('tbody tr');
-    var tops = [];
-    for (var i = 0; i < rows.length; i++) tops.push(rows[i].getBoundingClientRect().top - bodyTop);
-    var tableBottom = table.getBoundingClientRect().bottom - bodyTop;
-
-    var y = (table.getBoundingClientRect().top - bodyTop) + theadH; // 第1頁：表格前所有內容＋表頭
-    var pages = 1;
-    for (var i = 0; i < rows.length; i++) {
-        var h = (i + 1 < rows.length ? tops[i + 1] : tableBottom) - tops[i];
-        if (y + h > pageH && y > theadH) { pages++; y = theadH; } // 本頁放不下→下一頁（頁首重複表頭）
-        y += h;
-    }
-
-    // 鐵則：spacer 絕不可以造成多一頁。只有推算出「剩餘空間明顯放得下簽章區＋緩衝」才下推釘底；
-    // 空間緊繃或推算不確定時完全不插 spacer，簽章區緊接明細之後，同不同頁交給列印引擎依真實紙面
-    // 空間決定——引擎放得下就一定同頁。（曾因推算與引擎實排有差而強制換頁，把兩頁能印完的變三頁）
-    var remain = pageH - y; // 推算的最後一頁剩餘空間
-    var spacerH = (remain >= sigH + GAP * 1.5) ? (remain - sigH - GAP) : 0;
-    if (spacerH > 4) {
-        var sp = document.createElement('div');
-        sp.style.height = spacerH + 'px';
-        sig.parentNode.insertBefore(sp, sig);
-    }
-
-    // 內容超過一頁才顯示頁碼（單頁不顯示頁次）；簽章區推算放不下最後一頁時以多一頁計
-    if (remain < sigH) pages++;
-    if (pages > 1) {
+    // 內容明顯超過一頁(以A4概算)才顯示頁碼——只影響頁碼顯示、完全不影響分頁；
+    // counter(pages) 由列印引擎在列印當下算，換印表機頁數變了頁碼也自動正確
+    var onePageA4 = (297 - 24) * 96 / 25.4;
+    if (document.body.scrollHeight > onePageA4 * 0.92) {
         var st = document.createElement('style');
         st.textContent = "@page { @bottom-center { content: '第 ' counter(page) ' 頁，共 ' counter(pages) ' 頁'; font-family:'標楷體','DFKai-SB',serif; font-size:9pt; color:#333; } }";
         document.head.appendChild(st);
