@@ -789,7 +789,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     .tool-group-sep { width: 30px; height: 1px; background: #3c4046; margin: 4px 0; }
 
     /* 屬性列 */
-    #propbar { min-height: 40px; background: #292c31; border-bottom: 1px solid #17191c; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 12px; flex-shrink: 0; }
+    /* 固定保留兩列的高度：控制項多寡改變時（選取/取消選取）畫布位置才不會上上下下跳動；
+       適合視窗/適合內容用的是畫布容器當下尺寸，容器高度固定後自然一起正確 */
+    #propbar { height: 72px; background: #292c31; border-bottom: 1px solid #17191c; display: flex; flex-wrap: wrap; align-content: flex-start; align-items: center; gap: 6px 10px; padding: 6px 12px; flex-shrink: 0; overflow-y: auto; }
     #propbar label { font-size: 11.5px; color: #9aa4ad; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
     #propbar input[type=color] { width: 26px; height: 22px; border: 1px solid #45494f; border-radius: 3px; background: transparent; padding: 0 1px; cursor: pointer; }
     #propbar input[type=range] { width: 90px; }
