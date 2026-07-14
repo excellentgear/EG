@@ -956,6 +956,16 @@ body { background:var(--bg); }
               </div>
               <small class="text-muted">新增報價單時自動帶入有效日期（報價日 + N 天）</small>
             </div>
+            <div class="form-group" style="margin-top:12px;">
+              <label style="font-size:13px;">列印管制</label>
+              <div class="checkbox" style="margin:2px 0 4px;">
+                <label style="font-size:13px;font-weight:normal;">
+                  <input type="checkbox" id="qs-print-need-approval" onchange="savePrintNeedApproval(this.checked)">
+                  需主管審核通過才能列印
+                </label>
+              </div>
+              <small class="text-muted">勾選＝正式報價單須核准後才可列印（預設）；取消勾選＝存成正式報價單即可列印，不需等審核。草稿一律不能列印。</small>
+            </div>
           </div>
 
           <!-- ── Tab 2：附件類別 ── -->
@@ -1571,6 +1581,7 @@ $(document).ready(function () {
     loadDefaultTolerance();
     loadUploadPath();
     loadValidDays();        // ★ 載入有效天數設定
+    loadPrintApprovalSetting();  // ★ 載入「需審核通過才能列印」開關（列印閘門用）
     initFileUpload();
 
     // 備註欄自動展高 + 字數計數 + 標籤狀態同步
@@ -2356,9 +2367,10 @@ function openSettingsModal() {
     loadProcessTagTree(() => renderPtGroupList());
     // 載入備註模板
     loadAllNoteTemplates();
-    // 載入表單編號 + 有效天數
+    // 載入表單編號 + 有效天數 + 列印管制
     loadFormNumber();
     loadValidDays();
+    loadPrintApprovalSetting();
     $('#quoteSettingsModal').modal('show');
 }
 
@@ -3216,11 +3228,12 @@ function approvalBadgeHtml(q) {
     return '';
 }
 
-// 列印按鈕閘門：只有「正式報價單」且「已核准」才能列印
+// 列印按鈕閘門：「正式報價單」才能列印；「需審核通過才能列印」開關開啟時另須已核准（設定頁可關）
 function updatePrintGate(q) {
+    window._lastPrintGateQuote = q;   // 記住最後閘門判斷的單，設定切換時能立即重套用
     const $btn = $('#printQuoteBtn');
     if (!$btn.length) return;
-    const ok = q.is_draft != 1 && q.approval_status === 'approved';
+    const ok = q.is_draft != 1 && (!printNeedApproval || q.approval_status === 'approved');
     $btn.prop('disabled', !ok);
     if (ok) {
         $btn.removeAttr('title').css({opacity:'', cursor:''});
@@ -3699,7 +3712,8 @@ function _postQuoteSave(qd, onSuccess) {
             }
             // 簽核狀態提示（草稿不進審核，不另外提示）
             if (res.approval_status === 'pending') {
-                Swal.fire({ toast:true, position:'top-end', icon:'info', title:'已送出主管審核，待核准後才能列印',
+                Swal.fire({ toast:true, position:'top-end', icon:'info',
+                    title: printNeedApproval ? '已送出主管審核，待核准後才能列印' : '已送出主管審核',
                     showConfirmButton:false, timer:4000 });
             } else if (res.approval_status === 'approved') {
                 Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已自動核准（您本身具簽核權限）',
@@ -3759,8 +3773,8 @@ function printQuote() {
     $.get(API_URL, { action:'get_print_data', quote_id: currentEditId }, res => {
         if (!res.success) { Swal.fire('錯誤', res.message || '無法取得資料', 'error'); return; }
         const { quote, customer, contact, company, form_number } = res;
-        // 伺服器端資料為準的最後防線：草稿或未核准一律擋下（前端按鈕閘門可能被繞過）
-        if (quote.is_draft == 1 || quote.approval_status !== 'approved') {
+        // 伺服器端資料為準的最後防線：草稿一律擋下；「需審核通過才能列印」開關開啟時未核准也擋（前端按鈕閘門可能被繞過）
+        if (quote.is_draft == 1 || (printNeedApproval && quote.approval_status !== 'approved')) {
             const reason = quote.is_draft == 1 ? '草稿不能列印，請先存為正式報價單。' : '尚未通過主管審核，核准後才能列印。';
             Swal.fire('無法列印', reason, 'warning');
             return;
@@ -4906,6 +4920,34 @@ function saveFormNumber() {
 function loadFormNumber() {
     $.get(API_URL, { action:'get_param', param_group:'QUOTATION', param_key:'form_number' }, res => {
         if (res.success && res.value) $('#qs-form-number').val(typeof res.value === 'string' ? res.value : '');
+    });
+}
+
+// ── 列印是否需審核通過（設定頁勾選，僅有設定權限者能開設定視窗；未設定過＝需要審核，維持原行為）──
+let printNeedApproval = true;
+function loadPrintApprovalSetting() {
+    $.get(API_URL, { action:'get_param', param_group:'QUOTATION', param_key:'print_need_approval' }, res => {
+        if (res.success && res.value !== null && res.value !== undefined && res.value !== '') {
+            printNeedApproval = parseInt(res.value) !== 0;
+        }
+        $('#qs-print-need-approval').prop('checked', printNeedApproval);
+    });
+}
+function savePrintNeedApproval(on) {
+    // 值存字串 '1'/'0' 不存數字：API get_param 用 PHP 真值判斷($val?)，數字0存進去會被當空值回傳null
+    $.post(API_URL, { action:'save_param', param_group:'QUOTATION', param_key:'print_need_approval',
+        param_value: JSON.stringify(on ? '1' : '0'), description:'列印是否需主管審核通過' }, res => {
+        if (res.success) {
+            printNeedApproval = !!on;
+            // 目前開著的檢視/編輯畫面立即套用新規則（不用重開）
+            if (window._lastPrintGateQuote) updatePrintGate(window._lastPrintGateQuote);
+            Swal.fire({ toast:true, position:'top-end', icon:'success',
+                title: on ? '已設定：需審核通過才能列印' : '已設定：正式報價單不需審核即可列印',
+                showConfirmButton:false, timer:2500 });
+        } else {
+            $('#qs-print-need-approval').prop('checked', printNeedApproval); // 存檔失敗還原勾選狀態
+            Swal.fire('錯誤', res.message || '儲存失敗', 'error');
+        }
     });
 }
 function openUploadSettings() {
