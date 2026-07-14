@@ -908,6 +908,10 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <button class="tool-btn" id="tool-rect" onclick="setTool('rect')" title="矩形"><i class="fa fa-square-o"></i><span class="kbd">R</span></button>
         <button class="tool-btn" id="tool-ellipse" onclick="setTool('ellipse')" title="橢圓"><i class="fa fa-circle-o"></i><span class="kbd">O</span></button>
         <div class="tool-group-sep"></div>
+        <button class="tool-btn" id="tool-dimdist" onclick="setTool('dimdist')" title="快速標註：距離（拖曳兩點畫出標註線，中間自動出現輸入框，可輸入實際量測數值）" style="font-size:15px;font-weight:700;">↔</button>
+        <button class="tool-btn" id="tool-dimcircle" onclick="setTool('dimcircle')" title="快速標註：直徑（從圓心拖曳畫圓，自動帶「⌀」符號的輸入框）" style="font-size:15px;font-weight:700;">⌀</button>
+        <button class="tool-btn" id="tool-dimangle" onclick="setTool('dimangle')" title="快速標註：角度（先畫好兩條直線/箭頭，點這個工具後依序點選那兩條線，自動算出夾角並標示）" style="font-size:15px;font-weight:700;">∠</button>
+        <div class="tool-group-sep"></div>
         <button class="tool-btn" id="tool-text" onclick="setTool('text')" title="文字（點畫布加入，隨時可再點選拖移、雙擊改字、拉角縮放）"><i class="fa fa-font"></i><span class="kbd">T</span></button>
         <button class="tool-btn" id="tool-label" onclick="setTool('label')" title="標籤（有底色的文字框，適合製程/客戶標籤）"><i class="fa fa-tag"></i></button>
         <div class="tool-group-sep"></div>
@@ -934,6 +938,13 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                         <option value="none">─ 無</option>
                         <option value="end">→ 單箭頭</option>
                         <option value="both">↔ 雙箭頭</option>
+                    </select>
+                </label>
+                <label>線型
+                    <select id="p-line-style" title="線段/箭頭/矩形/橢圓/圓的邊框樣式" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;">
+                        <option value="solid">── 實線</option>
+                        <option value="dashed">╌╌ 虛線</option>
+                        <option value="dashdot">─‧─ 中心線</option>
                     </select>
                 </label>
                 <label>填色
@@ -1665,9 +1676,10 @@ function setTool(t) {
     canvas.skipTargetFind = !isSelect && !isCropTool;   // 框選複製/搬移也允許點到既有物件（例如剛切下那塊）直接拖曳，不必先切回選取
     canvas.defaultCursor = (t === 'pan') ? 'grab' : (isSelect ? 'default' : 'crosshair');
     if (!isSelect && !isCropTool) canvas.discardActiveObject();
+    clearDimAnglePick();   // 切工具（含 Esc／V）一律清掉角度標註「已選第1條線」的暫存狀態
 
     // 屬性列切換
-    document.getElementById('sec-stroke').classList.toggle('show', ['draw','line','arrow','rect','ellipse','select'].includes(t));
+    document.getElementById('sec-stroke').classList.toggle('show', ['draw','line','arrow','rect','ellipse','select','dimdist','dimcircle','dimangle'].includes(t));
     document.getElementById('sec-crop').classList.toggle('show', isCropTool);
     document.getElementById('sec-text').classList.toggle('show', ['text','label'].includes(t));
     document.getElementById('sec-mask').classList.toggle('show', ['maskrect','masklasso'].includes(t));
@@ -1702,7 +1714,8 @@ canvas.on('mouse:down', function (opt) {
     if (currentTool === 'balloon') { placeBalloon(p.x, p.y); return; }   // 工具保持啟用，連續點連續編
     if (currentTool === 'dc') { placeDcMark(p.x, p.y); return; }
     if (currentTool === 'stamp') { placeStamp(p.x, p.y); return; }
-    if (['rect','ellipse','line','arrow','maskrect','cropcopy','cropmove'].includes(currentTool)) {
+    if (currentTool === 'dimangle') { handleDimAnglePick(opt); return; }
+    if (['rect','ellipse','line','arrow','maskrect','cropcopy','cropmove','dimdist','dimcircle'].includes(currentTool)) {
         // 框選複製/搬移：點在既有物件上（例如剛切下、還沒拖到定位的那塊）就交給 Fabric 正常拖曳，不要開新框
         if ((currentTool === 'cropcopy' || currentTool === 'cropmove') && opt.target) return;
         drawing = { type: currentTool, startX: p.x, startY: p.y, obj: null };
@@ -1765,12 +1778,18 @@ canvas.on('mouse:move', function (opt) {
 
     if (drawing.obj) canvas.remove(drawing.obj);
     let o = null;
+    const lineDash = dashArrayFor(document.getElementById('p-line-style').value, sw);
     if (drawing.type === 'rect') {
-        o = new fabric.Rect({ left: x, top: y, width: w, height: h, stroke, strokeWidth: sw, fill, strokeUniform: true });
-    } else if (drawing.type === 'ellipse') {
-        o = new fabric.Ellipse({ left: x, top: y, rx: w / 2, ry: h / 2, stroke, strokeWidth: sw, fill, strokeUniform: true });
-    } else if (drawing.type === 'line' || drawing.type === 'arrow') {
-        o = new fabric.Line([drawing.startX, drawing.startY, p.x, p.y], { stroke, strokeWidth: sw, strokeUniform: true });
+        o = new fabric.Rect({ left: x, top: y, width: w, height: h, stroke, strokeWidth: sw, fill, strokeUniform: true, strokeDashArray: lineDash });
+    } else if (drawing.type === 'ellipse' || drawing.type === 'dimcircle') {
+        if (drawing.type === 'dimcircle') {
+            const r = Math.hypot(p.x - drawing.startX, p.y - drawing.startY);
+            o = new fabric.Circle({ left: drawing.startX, top: drawing.startY, radius: r, originX: 'center', originY: 'center', stroke, strokeWidth: sw, fill: 'transparent', strokeDashArray: lineDash });
+        } else {
+            o = new fabric.Ellipse({ left: x, top: y, rx: w / 2, ry: h / 2, stroke, strokeWidth: sw, fill, strokeUniform: true, strokeDashArray: lineDash });
+        }
+    } else if (drawing.type === 'line' || drawing.type === 'arrow' || drawing.type === 'dimdist') {
+        o = new fabric.Line([drawing.startX, drawing.startY, p.x, p.y], { stroke, strokeWidth: sw, strokeUniform: true, strokeDashArray: lineDash });
     } else if (drawing.type === 'maskrect') {
         o = new fabric.Rect({ left: x, top: y, width: w, height: h, fill: maskColor, stroke: null });
     } else if (drawing.type === 'cropcopy' || drawing.type === 'cropmove') {
@@ -1813,13 +1832,30 @@ canvas.on('mouse:up', function (opt) {
     if (d.type === 'cropcopy') { doCropCopy(Math.min(d.startX, p.x), Math.min(d.startY, p.y), w, h); return; }
     if (d.type === 'cropmove') { doCropMove(Math.min(d.startX, p.x), Math.min(d.startY, p.y), w, h); return; }
 
+    const color = document.getElementById('p-stroke').value;
+    const width = parseInt(document.getElementById('p-width').value, 10) || 3;
+    const dash = dashArrayFor(document.getElementById('p-line-style').value, width);
+
+    if (d.type === 'dimdist') {
+        const shape = makeDimDistanceShape(d.startX, d.startY, p.x, p.y, color, width, dash);
+        canvas.add(shape);
+        finishNewObject(shape);
+        placeDimText((d.startX + p.x) / 2, (d.startY + p.y) / 2, '');
+        return;
+    }
+    if (d.type === 'dimcircle') {
+        const shape = makeDimDiameterShape(d.startX, d.startY, p.x, p.y, color, width, dash);
+        canvas.add(shape);
+        finishNewObject(shape);
+        placeDimText(d.startX, d.startY, '⌀');
+        return;
+    }
+
     let o = null;
     const endsSel = document.getElementById('p-line-ends').value;
     const ends = (d.type === 'arrow') ? (endsSel === 'none' ? 'end' : endsSel) : endsSel;   // 箭頭工具至少單箭頭；直線依端點設定
     if ((d.type === 'arrow' || d.type === 'line') && ends !== 'none') {
-        o = makeArrow(d.startX, d.startY, p.x, p.y,
-            document.getElementById('p-stroke').value,
-            parseInt(document.getElementById('p-width').value, 10) || 3, ends);
+        o = makeArrow(d.startX, d.startY, p.x, p.y, color, width, ends, dash);
     } else {
         o = d.obj; // 直接把預覽物件轉正式
         o.set({ objectCaching: true });
@@ -1831,7 +1867,7 @@ canvas.on('mouse:up', function (opt) {
 });
 
 /* 連續工具：畫完不切回選取，可一直畫（同球標邏輯）；Esc 或 V 回選取工具 */
-const CONTINUOUS_TOOLS = ['maskrect', 'masklasso', 'rect', 'ellipse', 'line', 'arrow'];
+const CONTINUOUS_TOOLS = ['maskrect', 'masklasso', 'rect', 'ellipse', 'line', 'arrow', 'dimdist', 'dimcircle'];
 function finishNewObject(o) {
     if (CONTINUOUS_TOOLS.includes(currentTool)) {
         canvas.requestRenderAll();
@@ -1844,12 +1880,34 @@ function finishNewObject(o) {
     pushState();
 }
 
+/* 線型（實線/虛線/中心線）：dashArrayFor 依粗細等比縮放，styleFromDashArray 是反查（供屬性列同步顯示） */
+function dashArrayFor(style, sw) {
+    if (style === 'dashed') return [Math.max(6, sw * 3), Math.max(4, sw * 2)];
+    if (style === 'dashdot') return [Math.max(8, sw * 4), Math.max(3, sw * 1.5), Math.max(2, sw * 0.8), Math.max(3, sw * 1.5)];
+    return null;
+}
+function styleFromDashArray(arr) {
+    if (!arr || !arr.length) return 'solid';
+    return arr.length >= 4 ? 'dashdot' : 'dashed';
+}
+
+/* 直線/箭頭的「角度」以水平線為 0 度基準（畫出來當下的斜線本身 x1..y2 方向 + 目前旋轉量），而非物件自身方向 */
+function normDeg(a) { return ((a + 180) % 360 + 360) % 360 - 180; }
+function isLineLike(o) { return !!o && (o.type === 'line' || (o.type === 'group' && o.isArrowGroup)); }
+function trueLineAngle(o) {
+    const line = (o.type === 'line') ? o : o.getObjects().find(c => c.type === 'line');
+    if (!line) return o.angle || 0;
+    const dx = line.x2 - line.x1, dy = line.y2 - line.y1;
+    const base = Math.atan2(dy, dx) * 180 / Math.PI;
+    return normDeg(base + (o.angle || 0));
+}
+
 /* 箭頭 = 線 + 三角形頭端組成群組；ends: none / end(單) / both(雙) */
 function arrowHeadLen(width) { return Math.max(18, width * 5); }   // 箭頭大小公式；粗細調整時要用同一套（見 p-width 監聽）
-function makeArrow(x1, y1, x2, y2, color, width, ends) {
+function makeArrow(x1, y1, x2, y2, color, width, ends, dash) {
     const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
     const headLen = arrowHeadLen(width);
-    const items = [new fabric.Line([x1, y1, x2, y2], { stroke: color, strokeWidth: width, strokeUniform: true })];
+    const items = [new fabric.Line([x1, y1, x2, y2], { stroke: color, strokeWidth: width, strokeUniform: true, strokeDashArray: dash || null })];
     if (ends === 'end' || ends === 'both') items.push(new fabric.Triangle({
         left: x2, top: y2, originX: 'center', originY: 'center',
         width: headLen, height: headLen, angle: angle + 90, fill: color
@@ -1859,6 +1917,7 @@ function makeArrow(x1, y1, x2, y2, color, width, ends) {
         width: headLen, height: headLen, angle: angle - 90, fill: color
     }));
     const g = new fabric.Group(items, {});
+    g.isArrowGroup = true;
     g.merged = true;   // 箭頭視為單一物件，雙擊不拆
     return g;
 }
@@ -1882,6 +1941,118 @@ function addText(x, y, isLabel) {
     t.enterEditing(); t.selectAll();
     canvas.requestRenderAll();
     pushState();
+}
+
+/* ── 快速標註（CAD 風格）：距離 / 直徑 / 角度 ──────────────────────────
+   標註線（含箭頭/刻度/圓）跟文字數值是兩個各自獨立、可分別移動的物件（文字沿用原生 IText 雙擊編輯，
+   不用比照標籤庫另外做群組內文字編輯機制）。距離/直徑無法從像素推算真實尺寸，文字預設留空由使用者
+   自行輸入實測值；角度是純幾何夾角、不受比例尺影響，直接自動帶入算好的度數。 */
+function placeDimText(x, y, prefix, autoValue) {
+    const color = document.getElementById('p-textcolor').value;
+    const size = parseInt(document.getElementById('p-fontsize').value, 10) || 28;
+    const t = new fabric.IText((prefix || '') + (autoValue || ''), {
+        left: x, top: y, originX: 'center', originY: 'center', fontSize: size, fill: color,
+        fontFamily: '"Microsoft JhengHei", "PingFang TC", Arial, sans-serif',
+        fontWeight: 'bold', backgroundColor: '#ffffff'
+    });
+    t.dimKind = 'label';
+    canvas.add(t);
+    canvas.setActiveObject(t);
+    t.enterEditing();
+    if (autoValue) { t.selectAll(); } else { t.setSelectionStart(t.text.length); t.setSelectionEnd(t.text.length); }
+    canvas.requestRenderAll();
+    pushState();
+}
+function makeDimDistanceShape(x1, y1, x2, y2, color, width, dash) {
+    const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+    const headLen = arrowHeadLen(width);
+    const nx = -Math.sin(angle * Math.PI / 180), ny = Math.cos(angle * Math.PI / 180);
+    const tick = 8 + width;
+    const items = [
+        new fabric.Line([x1, y1, x2, y2], { stroke: color, strokeWidth: width, strokeUniform: true, strokeDashArray: dash || null }),
+        new fabric.Triangle({ left: x2, top: y2, originX: 'center', originY: 'center', width: headLen, height: headLen, angle: angle + 90, fill: color }),
+        new fabric.Triangle({ left: x1, top: y1, originX: 'center', originY: 'center', width: headLen, height: headLen, angle: angle - 90, fill: color }),
+        new fabric.Line([x1 - nx * tick, y1 - ny * tick, x1 + nx * tick, y1 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) }),
+        new fabric.Line([x2 - nx * tick, y2 - ny * tick, x2 + nx * tick, y2 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) })
+    ];
+    const g = new fabric.Group(items, {});
+    g.merged = true; g.dimKind = 'distance';
+    return g;
+}
+function makeDimDiameterShape(cx, cy, ex, ey, color, width, dash) {
+    const r = Math.max(1, Math.hypot(ex - cx, ey - cy));
+    const ang = Math.atan2(ey - cy, ex - cx);
+    const dx = Math.cos(ang), dy = Math.sin(ang);
+    const x1 = cx - dx * r, y1 = cy - dy * r, x2 = cx + dx * r, y2 = cy + dy * r;
+    const headLen = arrowHeadLen(width);
+    const angleDeg = ang * 180 / Math.PI;
+    const items = [
+        new fabric.Circle({ left: cx, top: cy, radius: r, originX: 'center', originY: 'center', stroke: color, strokeWidth: width, fill: 'transparent', strokeDashArray: dash || null }),
+        new fabric.Line([x1, y1, x2, y2], { stroke: color, strokeWidth: Math.max(1, width * 0.7), strokeUniform: true }),
+        new fabric.Triangle({ left: x2, top: y2, originX: 'center', originY: 'center', width: headLen, height: headLen, angle: angleDeg + 90, fill: color }),
+        new fabric.Triangle({ left: x1, top: y1, originX: 'center', originY: 'center', width: headLen, height: headLen, angle: angleDeg - 90, fill: color })
+    ];
+    const g = new fabric.Group(items, {});
+    g.merged = true; g.dimKind = 'diameter';
+    return g;
+}
+/* 角度標註：點選畫面上既有兩條直線/箭頭物件算夾角（不重新畫線）。用 canvas.findTarget 手動 hit-test，
+   跳過 Fabric 內建的選取/拖曳流程，避免點擊時不小心拖動到被點的線。 */
+let dimAngleFirst = null;
+function pickLineFromTarget(o) {
+    if (!o) return null;
+    if (o.type === 'line') return { line: o, parent: null };
+    if (o.type === 'group' && o.getObjects) {
+        const line = o.getObjects().find(c => c.type === 'line');
+        if (line) return { line, parent: o };
+    }
+    return null;
+}
+function lineDirAngle(pick) {
+    const dx = pick.line.x2 - pick.line.x1, dy = pick.line.y2 - pick.line.y1;
+    let a = Math.atan2(dy, dx) * 180 / Math.PI + (pick.line.angle || 0);
+    if (pick.parent) a += (pick.parent.angle || 0);
+    return a;
+}
+function clearDimAnglePick() {
+    if (dimAngleFirst) { dimAngleFirst.pick.line.set('shadow', null); canvas.requestRenderAll(); }
+    dimAngleFirst = null;
+}
+function finishAngleDim(first, second) {
+    const a1 = lineDirAngle(first.pick), a2 = lineDirAngle(second.pick);
+    let diff = ((a2 - a1) % 360 + 360) % 360;
+    if (diff > 180) diff = 360 - diff;
+    const cx = (first.pt.x + second.pt.x) / 2, cy = (first.pt.y + second.pt.y) / 2;
+    const R = 32;
+    const sweep = (((a2 - a1) % 360 + 360) % 360) <= 180 ? 1 : 0;
+    const rad = deg => deg * Math.PI / 180;
+    const sx = cx + R * Math.cos(rad(a1)), sy = cy + R * Math.sin(rad(a1));
+    const ex = cx + R * Math.cos(rad(a2)), ey = cy + R * Math.sin(rad(a2));
+    const color = document.getElementById('p-stroke').value;
+    const width = parseInt(document.getElementById('p-width').value, 10) || 3;
+    const dash = dashArrayFor(document.getElementById('p-line-style').value, width);
+    const arc = new fabric.Path('M ' + sx + ' ' + sy + ' A ' + R + ' ' + R + ' 0 0 ' + sweep + ' ' + ex + ' ' + ey,
+        { stroke: color, strokeWidth: Math.max(1.5, width * 0.7), fill: 'transparent', strokeDashArray: dash });
+    arc.dimKind = 'angle';
+    canvas.add(arc);
+    canvas.requestRenderAll();
+    placeDimText(cx, cy, '', diff.toFixed(1) + '°');
+}
+function handleDimAnglePick(opt) {
+    const target = canvas.findTarget(opt.e, false);
+    const pick = pickLineFromTarget(target);
+    if (!pick) { toast('請點選畫面上的「直線」或「箭頭」物件'); return; }
+    const pt = scenePoint(opt);
+    if (!dimAngleFirst) {
+        dimAngleFirst = { pick, pt, target };
+        pick.line.set('shadow', new fabric.Shadow({ color: '#6fc3ff', blur: 15 }));
+        canvas.requestRenderAll();
+        toast('已選第 1 條線，再點第 2 條線');
+        return;
+    }
+    if (target === dimAngleFirst.target) { toast('請點選另一條不同的線'); return; }
+    finishAngleDim(dimAngleFirst, { pick, pt });
+    clearDimAnglePick();
 }
 
 /* ── 蓋章：回墨印（版式沿用 CAR 簽章：公司名兩列/日期/下段文字） ────────
@@ -3542,8 +3713,13 @@ function refreshPropbar() {
     st.innerHTML = '選取 <b>' + (obj.type === 'activeSelection' ? obj.getObjects().length + ' 個物件' : objTypeName(obj)) +
         '</b>（' + Math.round(b.width) + '×' + Math.round(b.height) + '）';
     document.getElementById('p-scale').value = Math.round((obj.scaleX || 1) * 100);
-    document.getElementById('p-angle').value = Math.round(obj.angle || 0);
+    document.getElementById('p-angle').value = Math.round(isLineLike(obj) ? trueLineAngle(obj) : (obj.angle || 0));
     document.getElementById('p-opacity').value = Math.round((obj.opacity ?? 1) * 100);
+    if (isStrokeable(obj)) {
+        const strokedChild = (obj.type === 'group' || obj.type === 'activeSelection') && obj.getObjects
+            ? (obj.getObjects().find(isStrokeable) || obj) : obj;
+        document.getElementById('p-line-style').value = styleFromDashArray(strokedChild.strokeDashArray);
+    }
     document.getElementById('btn-group').textContent = (obj.type === 'group') ? '解散群組' : '群組';
     document.getElementById('btn-label-bg').style.display = (obj.labelSpec && obj.labelSpec.kind !== 'fabric') ? '' : 'none';
     // 選到文字時同步文字屬性區
@@ -3591,7 +3767,13 @@ document.getElementById('p-scale').addEventListener('change', function () {
 document.getElementById('p-angle').addEventListener('change', function () {
     const obj = canvas.getActiveObject(); if (!obj) return;
     let v = parseFloat(this.value) || 0;
-    obj.rotate(v);   // 以物件中心旋轉
+    if (isLineLike(obj)) {
+        // 直線/箭頭：0 度＝水平線，輸入值是「相對水平的目標角度」，換算成要疊加的旋轉量
+        const delta = v - trueLineAngle(obj);
+        obj.rotate((obj.angle || 0) + delta);
+    } else {
+        obj.rotate(v);   // 以物件中心旋轉
+    }
     obj.setCoords();
     canvas.requestRenderAll(); pushState();
 });
@@ -3618,7 +3800,7 @@ document.getElementById('p-width').addEventListener('input', function () {
     const headLen = arrowHeadLen(v);
     const obj = canvas.getActiveObject();
     const n = eachInSelection(obj, o => {
-        if (o.stroke && (o.type === 'line' || o.type === 'path' || o.type === 'rect' || o.type === 'ellipse' || o.type === 'polygon' || o.type === 'polyline')) {
+        if (o.stroke && (o.type === 'line' || o.type === 'path' || o.type === 'rect' || o.type === 'ellipse' || o.type === 'circle' || o.type === 'polygon' || o.type === 'polyline')) {
             o.set('strokeWidth', v); o.dirty = true; return true;
         }
         if (o.type === 'triangle') {   // 箭頭頭端：大小要跟著粗細一起變，不然線變粗頭還是原本那麼小
@@ -3627,6 +3809,17 @@ document.getElementById('p-width').addEventListener('input', function () {
         return false;
     });
     if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); }
+});
+document.getElementById('p-line-style').addEventListener('change', function () {
+    const v = this.value;
+    const obj = canvas.getActiveObject();
+    const n = eachInSelection(obj, o => {
+        if (o.stroke && (o.type === 'line' || o.type === 'path' || o.type === 'rect' || o.type === 'ellipse' || o.type === 'circle' || o.type === 'polygon' || o.type === 'polyline')) {
+            o.set('strokeDashArray', dashArrayFor(v, o.strokeWidth || 3)); o.dirty = true; return true;
+        }
+        return false;
+    });
+    if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); pushState(); }
 });
 document.getElementById('p-stroke').addEventListener('input', function () {
     if (canvas.isDrawingMode) canvas.freeDrawingBrush.color = this.value;
@@ -3820,7 +4013,7 @@ function deleteSelection() {
 
 /* ── Undo / Redo（JSON 快照） ── */
 let undoStack = [], redoStack = [], restoring = false;
-const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole'];
+const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind'];
 function pushState() {
     if (restoring) return;
     try {
