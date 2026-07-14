@@ -2013,7 +2013,9 @@ function polyEditSizeWithStroke(o) {
 }
 function polyPointPositionHandler(i) {
     return function (dim, finalMatrix, poly) {
-        const pt = { x: poly.points[i].x - poly.pathOffset.x, y: poly.points[i].y - poly.pathOffset.y };
+        const p = poly.points[i];
+        if (!p) return new fabric.Point(-99999, -99999);   // 節點數變動後的殘留控制點：移到畫面外，不讓它把渲染搞掛
+        const pt = { x: p.x - poly.pathOffset.x, y: p.y - poly.pathOffset.y };
         return fabric.util.transformPoint(pt,
             fabric.util.multiplyTransformMatrices(poly.canvas.viewportTransform, poly.calcTransformMatrix()));
     };
@@ -2021,6 +2023,7 @@ function polyPointPositionHandler(i) {
 function polyMidPositionHandler(i) {
     return function (dim, finalMatrix, poly) {
         const a = poly.points[i], b = poly.points[(i + 1) % poly.points.length];
+        if (!a || !b) return new fabric.Point(-99999, -99999);
         const pt = { x: (a.x + b.x) / 2 - poly.pathOffset.x, y: (a.y + b.y) / 2 - poly.pathOffset.y };
         return fabric.util.transformPoint(pt,
             fabric.util.multiplyTransformMatrices(poly.canvas.viewportTransform, poly.calcTransformMatrix()));
@@ -2083,7 +2086,8 @@ function buildPolyEditControls(poly) {
             }
         });
     });
-    const segCount = (poly.type === 'polygon') ? poly.points.length : poly.points.length - 1;
+    // 節點多時不放「＋」控制點（控制點數量加倍會拖慢渲染；要加節點的情境都是少節點的折線）
+    const segCount = (poly.points.length > 40) ? 0 : ((poly.type === 'polygon') ? poly.points.length : poly.points.length - 1);
     for (let i = 0; i < segCount; i++) {
         controls['m' + i] = new fabric.Control({
             positionHandler: polyMidPositionHandler(i),
@@ -2305,6 +2309,8 @@ function rebuildDimAngleArc(id) {
     const gs = guidesOfAngle(id);
     if (gs.length < 2) return;
     const old = arcOfAngle(id);
+    // 使用者改過度數文字的樣式（底色/顏色/字級…）時，重建後要沿用，不能每次調整輔助線就重設
+    const oldText = (old && old.getObjects) ? old.getObjects().find(o => o.type === 'i-text') : null;
     if (old) canvas.remove(old);
     const [g1, g2] = gs;
     const e1 = lineAbsEndpoints(g1), e2 = lineAbsEndpoints(g2);
@@ -2330,11 +2336,16 @@ function rebuildDimAngleArc(id) {
     const dirStart = a1 + (sweep ? -90 : 90);
     const midAngle = a1 + signedHalf;
     const tx = c.x + (R + 26) * Math.cos(rad(midAngle)), ty = c.y + (R + 26) * Math.sin(rad(midAngle));
+    const text = makeDimText(tx, ty, diff.toFixed(1) + '°', 0);
+    if (oldText) {
+        text.set({ fill: oldText.fill, fontSize: oldText.fontSize, fontWeight: oldText.fontWeight, backgroundColor: oldText.backgroundColor, underline: !!oldText.underline });
+        text.doubleUnderline = !!oldText.doubleUnderline;
+    }
     const arcGroup = new fabric.Group([
         arc,
         arrowHeadTri(sx, sy, dirStart, headLen, color),
         arrowHeadTri(ex, ey, dirEnd, headLen, color),
-        makeDimText(tx, ty, diff.toFixed(1) + '°', 0)
+        text
     ], {});
     arcGroup.labelSpec = { kind: 'fabric' };   // 雙擊可改度數文字（群組內文字編輯）
     arcGroup.dimKind = 'angle';
@@ -3381,6 +3392,11 @@ function startGroupTextEdit(group, child, cursorToEnd) {
             pushState();
             return;
         }
+        // 編輯期間若有改文字樣式（底色/顏色/粗體/字級/底線），要同步回真正的文字，不然編輯結束就跳回舊樣式
+        child.set({ fill: tmp.fill, fontWeight: tmp.fontWeight, fontSize: tmp.fontSize, underline: tmp.underline });
+        child.doubleUnderline = tmp.doubleUnderline;
+        if (tmp.backgroundColor !== '#fff8d6') child.set('backgroundColor', tmp.backgroundColor);   // #fff8d6=編輯中的提示底色，沒被使用者改過就不帶回去
+        child.dirty = true;
         child.visible = true;
         finishGroupTextEdit(group, child, val);
     });
