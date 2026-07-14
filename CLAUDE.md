@@ -1,6 +1,8 @@
 # EGsystem — AI 工作規範（每次 session 必讀）
 
-PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**這不是 git repo，改壞沒有 revert 可用。**
+> 最後修改：2026-07-14 — 改用 git 版控取代手動 .bak 備份（鐵律1、鐵律6）。
+
+PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**已用 git 版本控管**（GitHub private repo `ellentravel1003/EGsystem`，分支 `master`），改壞可用 git 復原——但前提是每個檔案改完都有立刻 commit+push（見鐵律6），沒 push 的部分一樣救不回來。
 
 ## 環境速查
 - 網址 http://192.168.2.128/EGsystem ｜ PHP 8.3.1 ｜ MySQL 9.4.0（utf8mb4）｜ Apache 2.4.33 ｜ phpMyAdmin 5.2.3
@@ -9,13 +11,14 @@ PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**�
 - PHP 語法檢查：`& C:\MAMP\bin\php\php8.3.1\php.exe -l 檔案路徑`
 
 ## 鐵律（違反任一條 = 本次工作不合格）
-1. **先備份再改檔**：`Copy-Item 檔案 檔案.bak-yyyyMMdd-HHmm`。每個要修改的既有檔案都要。
+1. **改檔前確認可回復**：本專案已用 git 版本控管，**不再手動 Copy-Item 備份 .bak 檔**（舊 .bak-* 已加入 .gitignore，不進版控）。改檔前用 `git status` 確認上一版已 commit 乾淨；真正的保障來自鐵律6——改完立刻 commit+push，才有真正救得回來的版本。
 2. **巨檔保護**：本專案多個 view 超過 500KB（stock.php 721KB、master_data_management.php 1.5MB）。超過 2000 行的檔案：禁止整檔 Read（先 Grep 定位，再 Read offset/limit ±100 行）；禁止 Write 整檔覆寫（只能 Edit，錨點含前後 2–3 行原文）。
 3. **不猜**：不確定的需求、業務邏輯、UI 取捨 → 問使用者。不確定的欄位名 → 先 `SHOW COLUMNS` 或查資料字典。何時該問、何時自己判斷：見 `ai-rules/02-判斷力rubric.md`。
 4. **不破壞既有功能**：只新增或修 bug，不重構已正常運作的程式。DB 寫入用 transaction。
 5. **檔案路徑一律「即時組路徑」**：任何跟磁碟/NAS 路徑相關的功能（附件、圖檔、匯出、備份等），DB 只能存檔名／相對值，完整路徑一律在讀取當下用「目前設定值＋即時算出的子資料夾」現場組出；**不可**把組好的完整絕對路徑寫死存進 DB 欄位——否則換 NAS 硬碟或資料夾位置後，舊資料會全部讀不到。範例、檢查清單、目前尚未合規模組見 `ai-rules/07-附件路徑儲存規範.md`。
-6. **收尾三件事**（每完成一個修改立刻做，勿累積到最後）：
+6. **收尾四件事**（每完成一個修改立刻做，勿累積到最後、勿等整個任務做完才一次處理）：
    - `php -l` 通過每個改過的檔案
+   - `git add <改過的檔案>` → `git commit -m "一句話說明"` → `git push`（單一檔案改完驗證通過就立刻推，不要累積多檔一起 commit，才能保證每個 commit 都是可回復的獨立檢查點）
    - 寫入 page_change_log（範本見下）
    - 若新增頁面：到 `views/user/user_permissions.php` 仿照報價單加上該頁角色設定區塊
 
