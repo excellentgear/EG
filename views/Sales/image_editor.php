@@ -3313,9 +3313,14 @@ async function pasteFromButton() {
     }
     if (!pasteInternalOrCross()) toast('請直接按 Ctrl+V 貼上（瀏覽器限制，按鈕無法讀取系統剪貼簿）');
 }
+const CLIP_TTL_MS = 10 * 60 * 1000;   // 跨視窗剪貼簿只保留 10 分鐘：過期自動失效，避免很久以前複製的東西一直被 Ctrl+V 貼回來
 function pasteInternalOrCross() {
     let cross = null;
     try { cross = JSON.parse(localStorage.getItem(CLIP_KEY) || 'null'); } catch (e) {}
+    if (cross && (!cross.ts || Date.now() - cross.ts > CLIP_TTL_MS)) {
+        cross = null;
+        try { localStorage.removeItem(CLIP_KEY); } catch (e) {}
+    }
     const crossIsNewer = cross && (!internalClip || cross.ts > internalClipTs);
     if (crossIsNewer && cross.objs && cross.objs.length) {
         // 跨視窗貼上：優先還原成可編輯的向量物件（保留顏色/線型/文字內容等），不是扁平化圖片
@@ -3354,19 +3359,20 @@ function pasteInternalOrCross() {
    扁平化 JPEG 預覽圖，兩者都失敗就明講「太大複製不過去」，不要默默失敗讓使用者以為有複製到） */
 function serializeSelectionForClip(obj, cb) {
     obj.clone(function (cl) {
+        // 單一物件：clone 本身就是絕對座標，直接序列化，不必經過畫布
+        if (cl.type !== 'activeSelection') { cb([cl.toObject(SNAP_PROPS)]); return; }
+        // 多選：子物件座標是相對於選取框的，得暫時放回畫布還原成絕對座標再序列化；
+        // 用 try/finally 保證一定移除，途中出錯才不會留下一份「殘影」在畫布上
         const added = [];
-        if (cl.type === 'activeSelection') {
+        try {
             cl.canvas = canvas;
             cl.forEachObject(o => { canvas.add(o); added.push(o); });
             cl.setCoords();
-        } else {
-            canvas.add(cl);
-            added.push(cl);
+            cb(added.map(o => o.toObject(SNAP_PROPS)));
+        } finally {
+            added.forEach(o => canvas.remove(o));
+            canvas.requestRenderAll();
         }
-        const arr = added.map(o => o.toObject(SNAP_PROPS));
-        added.forEach(o => canvas.remove(o));
-        canvas.requestRenderAll();
-        cb(arr);
     }, SNAP_PROPS);
 }
 function copySelection() {
@@ -3599,7 +3605,7 @@ function doCropMoveLasso(points) {
     const fillColor = toHex(artboard.fill) || '#ffffff';
     let anySkipped = false;
     bgObjs.forEach(o => { if (!punchHoleInImage(o, b.x, b.y, b.w, b.h, fillColor, points)) anySkipped = true; });
-    if (anySkipped) canvas.add(new fabric.Polygon(points.slice(), { fill: fillColor, selectable: false, evented: false }));
+    if (anySkipped) canvas.add(new fabric.Polygon(points.slice(), { fill: fillColor }));   // 跟矩形版遮板一樣保持可選取，才能被使用者移動/刪除
     canvas.requestRenderAll();
     fabric.Image.fromURL(url, function (img) {
         img.set({ left: b.x, top: b.y });
@@ -4095,7 +4101,9 @@ function lockSelection() {
     toast('已鎖定 ' + targets.length + ' 個物件（點擊會穿透）。要解開請按屬性列右側「解鎖全部」');
 }
 function unlockAll() {
-    const locked = canvas.getObjects().filter(o => o.locked);
+    // 除了正常鎖定的物件，也一併救回「點不到又刪不掉」的殘留物
+    // （selectable/evented 被設成 false 但沒有 locked 標記的物件，例如舊版工作檔存下來的遮板）
+    const locked = canvas.getObjects().filter(o => o !== artboard && (o.locked || o.selectable === false || o.evented === false));
     if (!locked.length) return;
     locked.forEach(o => { o.locked = false; o.selectable = true; o.evented = true; });
     canvas.requestRenderAll();
