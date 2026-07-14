@@ -3970,18 +3970,18 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
   table.items tr.cont-info td { border:none; font-size:9pt; color:#333; text-align:left; padding:0 0 3px; letter-spacing:1px; }
   .center { text-align:center; }
   .right  { text-align:right; }
-  .footer-area { display:table; width:97%; border-collapse:collapse; margin-top:6px; font-size:11pt; }
+  .footer-area { display:table; width:97%; border-collapse:collapse; margin-top:4px; font-size:11pt; }
   .footer-area colgroup col.rem  { width:80%; }
   .footer-area colgroup col.lbl  { width:9%; }
   .footer-area colgroup col.val  { width:11%; }
   .remark-cell { vertical-align:top; padding-right:10px; }
   .total-lbl { border:1px solid #000; padding:2px 5px; font-size:10pt; }
   .total-val { border:1px solid #000; padding:2px 5px; font-size:10pt; text-align:right; }
-  .page-footer { margin-top:16px; background:#fff; padding-top:8px; page-break-inside:avoid; }
+  .page-footer { margin-top:6px; background:#fff; padding-top:4px; page-break-inside:avoid; }
   .sig-row { display:flex; align-items:flex-end; margin-top:8px; font-size:10pt; border-top:1px solid #000; padding-top:4px; }
   .sig-row span { flex:1; text-align:left; }
   .sig-row span:not(:last-child) { margin-right:16px; }
-  .form-no { margin-top:4px; text-align:right; font-size:9pt; }
+  .form-no { margin-top:2px; text-align:right; font-size:9pt; }
   /* 合計/備註/簽章整塊不可被分頁切開：本頁放不下就整塊移到下一頁 */
   .sig-block { page-break-inside: avoid; }
   svg.car-stamp { width:91px !important; height:91px !important; }
@@ -4022,20 +4022,19 @@ ${fullHeaderHtml}
         y += h;
     }
 
-    var spacerH;
-    if (y + sigH + GAP <= pageH) {
-        spacerH = pageH - GAP - sigH - y;              // 簽章區跟最後幾筆明細同頁：往下推到貼近頁底
-    } else {
-        pages++;                                        // 本頁剩餘空間本來就放不下簽章區：推到下一頁的頁底
-        spacerH = (pageH - y) + (pageH - GAP - sigH);
-    }
+    // 鐵則：spacer 絕不可以造成多一頁。只有推算出「剩餘空間明顯放得下簽章區＋緩衝」才下推釘底；
+    // 空間緊繃或推算不確定時完全不插 spacer，簽章區緊接明細之後，同不同頁交給列印引擎依真實紙面
+    // 空間決定——引擎放得下就一定同頁。（曾因推算與引擎實排有差而強制換頁，把兩頁能印完的變三頁）
+    var remain = pageH - y; // 推算的最後一頁剩餘空間
+    var spacerH = (remain >= sigH + GAP * 1.5) ? (remain - sigH - GAP) : 0;
     if (spacerH > 4) {
         var sp = document.createElement('div');
         sp.style.height = spacerH + 'px';
         sig.parentNode.insertBefore(sp, sig);
     }
 
-    // 內容超過一頁才顯示頁碼（單頁不顯示頁次）
+    // 內容超過一頁才顯示頁碼（單頁不顯示頁次）；簽章區推算放不下最後一頁時以多一頁計
+    if (remain < sigH) pages++;
     if (pages > 1) {
         var st = document.createElement('style');
         st.textContent = "@page { @bottom-center { content: '第 ' counter(page) ' 頁，共 ' counter(pages) ' 頁'; font-family:'標楷體','DFKai-SB',serif; font-size:9pt; color:#333; } }";
