@@ -3814,8 +3814,9 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
     // 日期轉民國年顯示
     const toRoc = d => { if (!d) return ''; const dt = new Date(d); const y = dt.getFullYear()-1911; return `${y}/${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')}`; };
 
-    // 明細列：不再假設固定筆數/頁，改由列印視窗載入後依「實際渲染高度」動態分頁
-    // （見下方 <script>），避免不同瀏覽器/字型渲染出的列高不同時，內容被切斷或蓋住頁尾簽章列。
+    // 明細列：不做任何 JS 分頁計算，全部明細放進單一連續表格，交給瀏覽器列印引擎自動分頁——
+    // 只有引擎自己知道每張紙真正能印多少（字型渲染、列印縮放、各印表機可印範圍的差異它都會算進去），
+    // 填滿才換頁；JS 在螢幕上量高度再自己切頁的作法，量測結果跟引擎實排永遠有落差，會提早換頁或內容溢出。
     const items = q.items || [];
     let totalAmt = 0;
     const itemRowChunks = []; // 每個元素＝一個主料號的所有列(含BOM子件續列)組成的HTML字串
@@ -3884,15 +3885,22 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         ? EGStamp.stamp(q.approved_by_name, fmtDot(q.approved_at))
         : '';
 
+    // thead 第一列放單號/客戶名稱：表格跨頁時 thead 每頁自動重複，紙本被拆散仍能認出是哪張單；
+    // 欄寬一律由 colgroup 決定（table-layout:fixed 取第一列儲存格算欄寬，第一列是 colspan=7 的單號列，不能靠它）
+    const itemsColgroupHtml = `<colgroup>
+        <col style="width:4%"><col style="width:20%"><col style="width:44%">
+        <col style="width:7%"><col style="width:5%"><col style="width:9%"><col style="width:11%">
+      </colgroup>`;
     const itemsTheadHtml = `<thead>
+        <tr class="cont-info"><td colspan="7">單　　號：${esc(q.quote_no)}　　客戶名稱：${esc(custName)}</td></tr>
         <tr>
-          <th style="width:4%">項次</th>
-          <th style="width:20%">產品編號</th>
-          <th style="width:44%">品名規格／加工項目 / 備註</th>
-          <th style="width:7%">數量</th>
-          <th style="width:5%">單位</th>
-          <th style="width:9%">單價</th>
-          <th style="width:11%">金額</th>
+          <th>項次</th>
+          <th>產品編號</th>
+          <th>品名規格／加工項目 / 備註</th>
+          <th>數量</th>
+          <th>單位</th>
+          <th>單價</th>
+          <th>金額</th>
         </tr>
       </thead>`;
     const sigRowHtml = `<table class="footer-area">
@@ -3918,9 +3926,8 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
       </div>
       ${formNo ? `<div class="form-no">${esc(formNo)}</div>` : ''}`;
 
-    // 完整表頭（公司/客戶/單號等 meta-grid）：只在第1頁顯示，且必須放進第1頁的 .print-page 內，
-    // 若第1頁同時也是最後一頁（單頁報價單），.print-page-last 的 flex+min-height 版心計算才會把表頭高度算進去，
-    // 否則表頭會被排在版心box「外面」，單頁短報價單就會被多擠出一張空白頁。
+    // 完整表頭（公司/客戶/單號等 meta-grid）：放在表格前，自然只出現在第1頁；
+    // 第2頁起由 thead 的 cont-info 列（單號/客戶名稱）自動重複標示。
     const fullHeaderHtml = `<h2 class="co-name">${esc(coName)}</h2>
       <p class="co-info">${esc(coAddr)}<br>電話：${esc(coTel)}　傳真：${esc(coFax)}</p>
       <div style="text-align:center;margin:8px 0;"><h3 class="title">客戶報價單</h3></div>
@@ -3937,14 +3944,8 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         <div><span class="label">有效日期：</span>${esc(toRoc(q.valid_until))}</div>
       </div>`;
 
-    // 續頁重複表頭：跨頁分開後若紙本被拆散，仍能認出是哪張OP單、第幾頁 — 第1頁已有完整 meta-grid，故只在第2頁起顯示
-    const contPageHeaderHtml = `<div class="cont-page-header">單　　號：${esc(q.quote_no)}　　客戶名稱：${esc(custName)}</div>`;
-
-    // 「以下空白」列：只加在最後一頁
+    // 「以下空白」列：接在最後一筆明細後
     const blankLineHtml = `<tr><td colspan="7" class="center" style="color:#444;letter-spacing:6px;padding:4px;">─── 以下空白 ───</td></tr>`;
-
-    // 安全內嵌成 JS 字串常值：避免內容中若出現 "</script" 字樣時被瀏覽器誤判為結束標籤，提早截斷整段 script
-    const j = v => JSON.stringify(v).replace(/<\/script/gi, '<\\/script');
 
     return `<!DOCTYPE html>
 <html><head>
@@ -3952,7 +3953,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
 <title>客戶報價單 - ${esc(q.quote_no)}</title>
 <style>
   @page { size: A4; margin: 12mm; }
-  body { font-family:'標楷體','DFKai-SB',serif; font-size:11pt; margin:0; color:#000; }
+  body { font-family:'標楷體','DFKai-SB',serif; font-size:11pt; width:186mm; margin:0 auto; color:#000; }
   h2.co-name { text-align:center; font-size:20pt; font-weight:bold; margin:0 0 3px; }
   .co-info   { text-align:center; font-size:10pt; margin:0 0 6px; }
   h3.title   { text-align:center; font-size:18pt; font-weight:bold; margin:8px 0;
@@ -3964,6 +3965,9 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
   table.items td { vertical-align: top; }
   table.items tr { page-break-inside: avoid; }
   table.items th { text-align:center; font-weight:bold; }
+  /* 表格跨頁時 thead 每頁自動重複（含單號列+欄位標題列），瀏覽器列印引擎原生行為 */
+  table.items thead { display: table-header-group; }
+  table.items tr.cont-info td { border:none; font-size:9pt; color:#333; text-align:left; padding:0 0 3px; letter-spacing:1px; }
   .center { text-align:center; }
   .right  { text-align:right; }
   .footer-area { display:table; width:97%; border-collapse:collapse; margin-top:6px; font-size:11pt; }
@@ -3978,102 +3982,26 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
   .sig-row span { flex:1; text-align:left; }
   .sig-row span:not(:last-child) { margin-right:16px; }
   .form-no { margin-top:4px; text-align:right; font-size:9pt; }
-  /* 版面寬度固定為A4扣掉左右邊界，不隨視窗大小變動，量測高度時的欄寬才會跟實際列印一致 */
-  .print-page { width:186mm; margin:0 auto; page-break-after: always; }
-  .print-page.print-page-last { page-break-after: auto; display:flex; flex-direction:column; min-height: calc(297mm - 24mm); }
-  .print-page.print-page-last .page-footer { margin-top:auto; }
-  .continued-note { text-align:right; font-size:9pt; color:#666; margin-top:4px; padding-right:6px; }
-  .cont-page-header { font-size:9.5pt; color:#333; border-bottom:1px solid #999; padding-bottom:3px; margin-bottom:4px; }
+  /* 合計/備註/簽章整塊不可被分頁切開：本頁放不下就整塊移到下一頁 */
+  .sig-block { page-break-inside: avoid; }
   svg.car-stamp { width:91px !important; height:91px !important; }
   .sig-row .stamp-wrap { margin:0 0 0 4px; }
   @media print { body { -webkit-print-color-adjust:exact; } }
 </style>
 </head><body>
-<div id="printRoot"></div>
+${fullHeaderHtml}
+<table class="items">${itemsColgroupHtml}${itemsTheadHtml}<tbody>${itemRowChunks.join('')}${blankLineHtml}</tbody></table>
+<div class="sig-block">${sigRowHtml}</div>
 <script>
 (function () {
-    var mmToPx = 96 / 25.4;
-    var pageH  = (297 - 24) * mmToPx; // A4 可印高度：297mm - 上下邊界各12mm
-    var SAFETY = 6; // px，量測誤差緩衝
-
-    var fullHeaderHtml = ${j(fullHeaderHtml)};
-    var contHeaderHtml = ${j(contPageHeaderHtml)};
-    var theadHtml       = ${j(itemsTheadHtml)};
-    var footerHtml      = ${j(sigRowHtml)};
-    var blankHtml       = ${j(blankLineHtml)};
-    var units           = ${j(itemRowChunks)}; // 每個元素＝一個主料號的所有列(含BOM子件續列)組成的HTML字串
-
-    var root = document.getElementById('printRoot');
-    var pages = [];
-    var curPage = null, curTbody = null;
-
-    function newPage(isFirst) {
-        var div = document.createElement('div');
-        div.className = 'print-page';
-        div.innerHTML = (isFirst ? fullHeaderHtml : contHeaderHtml)
-            + '<table class="items">' + theadHtml + '<tbody></tbody></table>';
-        root.appendChild(div);
-        curPage = div;
-        curTbody = div.querySelector('tbody');
-        pages.push(div);
-    }
-
-    // 直接在「真正會列印出來的那個 DOM」上逐步塞內容、量真實高度，塞不下就換頁——
-    // 不再另外用一份離線複製品去估算高度，量測環境跟最終列印環境永遠是同一份，不會有落差。
-    function fits() { return curPage.getBoundingClientRect().height <= pageH - SAFETY; }
-
-    newPage(true);
-    units.forEach(function (html) {
-        var tmp = document.createElement('tbody');
-        tmp.innerHTML = html;
-        var trs = Array.prototype.slice.call(tmp.children);
-        trs.forEach(function (tr) { curTbody.appendChild(tr); });
-        if (!fits() && curTbody.children.length > trs.length) {
-            // 本頁放不下、而且本頁本來就已經有其他料號了：把這組整個搬到新頁
-            trs.forEach(function (tr) { curTbody.removeChild(tr); });
-            newPage(false);
-            trs.forEach(function (tr) { curTbody.appendChild(tr); });
-        }
-        // 若本頁原本是空的仍放不下（單一料號本身、含BOM子件續列，就比一整頁還高）：
-        // 保留在本頁，讓瀏覽器自行在列與列之間換頁，寧可多一張紙也不裁切/遮蔽內容
-    });
-
-    // 最後嘗試把「以下空白」列 + 頁尾簽章區塊放進目前頁
-    var blankTmp = document.createElement('tbody');
-    blankTmp.innerHTML = blankHtml;
-    var blankTrs = Array.prototype.slice.call(blankTmp.children);
-    blankTrs.forEach(function (tr) { curTbody.appendChild(tr); });
-
-    var footerTmp = document.createElement('div');
-    footerTmp.innerHTML = footerHtml;
-    var footerNodes = Array.prototype.slice.call(footerTmp.childNodes);
-    footerNodes.forEach(function (n) { curPage.appendChild(n); });
-
-    if (!fits() && curTbody.children.length > blankTrs.length) {
-        // 頁尾放不下、本頁本來就有料號列：把「以下空白+頁尾」整組搬到新的一頁
-        blankTrs.forEach(function (tr) { curTbody.removeChild(tr); });
-        footerNodes.forEach(function (n) { if (n.parentNode) curPage.removeChild(n); });
-        newPage(false);
-        blankTrs.forEach(function (tr) { curTbody.appendChild(tr); });
-        footerNodes.forEach(function (n) { curPage.appendChild(n); });
-    }
-
-    curPage.classList.add('print-page-last');
-    pages.slice(0, -1).forEach(function (div) {
-        var note = document.createElement('div');
-        note.className = 'continued-note';
-        note.textContent = '（接下頁）';
-        div.appendChild(note);
-    });
-
-    // 內容超過一頁才顯示頁碼（單頁不顯示頁次）
-    if (pages.length > 1) {
+    // 內容超過一頁才顯示頁碼（單頁不顯示頁次）；96dpi 概算只用來決定顯不顯示頁碼，不影響實際分頁
+    var onePage = (297 - 24) * 96 / 25.4; // A4 高 297mm - 上下邊界各 12mm
+    if (document.body.scrollHeight > onePage + 2) {
         var st = document.createElement('style');
         st.textContent = "@page { @bottom-center { content: '第 ' counter(page) ' 頁，共 ' counter(pages) ' 頁'; font-family:'標楷體','DFKai-SB',serif; font-size:9pt; color:#333; } }";
         document.head.appendChild(st);
     }
-
-    // 分頁計算完成後才叫用瀏覽器列印，取代舊版靠 win.onload 觸發（曾有時機競速、偶爾不會自動跳出列印視窗的問題）
+    // 版面組完才叫用瀏覽器列印，取代舊版靠 win.onload 觸發（曾有時機競速、偶爾不會自動跳出列印視窗的問題）
     window.print();
 })();
 <\/script>
