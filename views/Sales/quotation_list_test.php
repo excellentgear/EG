@@ -3994,9 +3994,49 @@ ${fullHeaderHtml}
 <div class="sig-block">${sigRowHtml}</div>
 <script>
 (function () {
-    // 內容超過一頁才顯示頁碼（單頁不顯示頁次）；96dpi 概算只用來決定顯不顯示頁碼，不影響實際分頁
-    var onePage = (297 - 24) * 96 / 25.4; // A4 高 297mm - 上下邊界各 12mm
-    if (document.body.scrollHeight > onePage + 2) {
+    var mmPx  = 96 / 25.4;
+    var pageH = (297 - 24) * mmPx; // 每頁可印高度（@page A4、上下邊界各12mm）
+    var GAP   = 8 * mmPx;          // 安全緩衝：簽章區底部目標離頁底約8mm，吸收螢幕與列印引擎的渲染差異
+
+    var body   = document.body;
+    var table  = document.querySelector('table.items');
+    var sig    = document.querySelector('.sig-block');
+    var theadH = table.querySelector('thead').getBoundingClientRect().height;
+    var sigH   = sig.getBoundingClientRect().height;
+    var bodyTop = body.getBoundingClientRect().top;
+
+    // 依「與引擎相同的規則」（tr 不可切斷、thead 每頁重複、放不下就到下一頁）推算最後一頁已用高度，
+    // 只為了插入撐高 spacer 把簽章區推到頁面最下方；實際分頁仍完全由列印引擎決定——
+    // 若推算與引擎有些微差異，最壞情況只是簽章區沒貼齊頁底或整塊落到下頁頂端，明細分頁永遠不受影響。
+    // 每列的行進高度用「下一列頂端 - 本列頂端」計算（而非各列自身高度），border-collapse 共用框線才不會累積誤差。
+    var rows = table.querySelectorAll('tbody tr');
+    var tops = [];
+    for (var i = 0; i < rows.length; i++) tops.push(rows[i].getBoundingClientRect().top - bodyTop);
+    var tableBottom = table.getBoundingClientRect().bottom - bodyTop;
+
+    var y = (table.getBoundingClientRect().top - bodyTop) + theadH; // 第1頁：表格前所有內容＋表頭
+    var pages = 1;
+    for (var i = 0; i < rows.length; i++) {
+        var h = (i + 1 < rows.length ? tops[i + 1] : tableBottom) - tops[i];
+        if (y + h > pageH && y > theadH) { pages++; y = theadH; } // 本頁放不下→下一頁（頁首重複表頭）
+        y += h;
+    }
+
+    var spacerH;
+    if (y + sigH + GAP <= pageH) {
+        spacerH = pageH - GAP - sigH - y;              // 簽章區跟最後幾筆明細同頁：往下推到貼近頁底
+    } else {
+        pages++;                                        // 本頁剩餘空間本來就放不下簽章區：推到下一頁的頁底
+        spacerH = (pageH - y) + (pageH - GAP - sigH);
+    }
+    if (spacerH > 4) {
+        var sp = document.createElement('div');
+        sp.style.height = spacerH + 'px';
+        sig.parentNode.insertBefore(sp, sig);
+    }
+
+    // 內容超過一頁才顯示頁碼（單頁不顯示頁次）
+    if (pages > 1) {
         var st = document.createElement('style');
         st.textContent = "@page { @bottom-center { content: '第 ' counter(page) ' 頁，共 ' counter(pages) ' 頁'; font-family:'標楷體','DFKai-SB',serif; font-size:9pt; color:#333; } }";
         document.head.appendChild(st);
