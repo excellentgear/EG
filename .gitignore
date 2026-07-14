@@ -1,0 +1,23 @@
+# 備份檔（本專案手動備份慣例產生，數量持續增加）
+*.bak-*
+
+# Composer 套件（可用 composer install 重建）
+/vendor/
+
+# 使用者上傳的附件資料（非程式碼）
+/uploads/
+
+# 含正式環境憑證，不可進版本歷史
+/src/common/DBConnection.php
+/config/telegram_config.php
+
+# DB dump / SQL 備份，可能含真實客戶資料
+/DB/*.sql
+/EGsystem_20251218_173007.sql
+/ST/import_transactions.sql
+
+# 名稱本身即為備份用途的資料夾
+/backup erp/
+
+# 2026-07-08 已封存的舊校務系統(schoolMS)遺留檔，非現用，含還原工具
+/_封存_20260708/

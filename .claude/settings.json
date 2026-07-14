@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(php -l views/pm/kpi_main.php)",
+      "Bash(php -r ' *)"
+    ],
+    "defaultMode": "acceptEdits"
+  }
+}

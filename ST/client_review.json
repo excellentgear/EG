@@ -1,0 +1,682 @@
+{
+  "generated_at": "2026-04-15 11:10:21",
+  "instruction": "SQL 已使用子查詢比對 customer_list.customer（TRIM後）。比對失敗 client_id=NULL。",
+  "total": 93,
+  "clients": [
+    {
+      "client_name": "",
+      "appeared_in": [
+        "東芳"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "***",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 12
+    },
+    {
+      "client_name": "GOGORO",
+      "appeared_in": [
+        "GOGORO",
+        "半成品"
+      ],
+      "row_count": 26
+    },
+    {
+      "client_name": "上銀",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 12
+    },
+    {
+      "client_name": "中央大學",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 2
+    },
+    {
+      "client_name": "事必得",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "倉佑",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 9
+    },
+    {
+      "client_name": "優廉",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 3
+    },
+    {
+      "client_name": "允享",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "元精",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "全宏",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 7
+    },
+    {
+      "client_name": "全球傳動",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "原億昌",
+      "appeared_in": [
+        "半成品",
+        "原億昌"
+      ],
+      "row_count": 236
+    },
+    {
+      "client_name": "台灣工機",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "台灣精雕",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "吉輔",
+      "appeared_in": [
+        "半成品",
+        "吉輔"
+      ],
+      "row_count": 51
+    },
+    {
+      "client_name": "向中",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 8
+    },
+    {
+      "client_name": "和大",
+      "appeared_in": [
+        "和大"
+      ],
+      "row_count": 18
+    },
+    {
+      "client_name": "和昕",
+      "appeared_in": [
+        "半成品",
+        "和昕"
+      ],
+      "row_count": 107
+    },
+    {
+      "client_name": "大同",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 2
+    },
+    {
+      "client_name": "寶嘉誠",
+      "appeared_in": [
+        "半成品",
+        "寶嘉誠"
+      ],
+      "row_count": 274
+    },
+    {
+      "client_name": "展暉",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 6
+    },
+    {
+      "client_name": "山崴",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "崴立",
+      "appeared_in": [
+        "半成品",
+        "崴立"
+      ],
+      "row_count": 37
+    },
+    {
+      "client_name": "崴立(新竹)",
+      "appeared_in": [
+        "崴立"
+      ],
+      "row_count": 4
+    },
+    {
+      "client_name": "工研院",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 3
+    },
+    {
+      "client_name": "弘旺",
+      "appeared_in": [
+        "弘旺"
+      ],
+      "row_count": 6
+    },
+    {
+      "client_name": "御成",
+      "appeared_in": [
+        "御成"
+      ],
+      "row_count": 12
+    },
+    {
+      "client_name": "德士",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 6
+    },
+    {
+      "client_name": "德川",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 8
+    },
+    {
+      "client_name": "成大",
+      "appeared_in": [
+        "半成品",
+        "成大"
+      ],
+      "row_count": 61
+    },
+    {
+      "client_name": "承楊",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "新穎",
+      "appeared_in": [
+        "半成品",
+        "新穎"
+      ],
+      "row_count": 6
+    },
+    {
+      "client_name": "旭本",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 3
+    },
+    {
+      "client_name": "旭陽",
+      "appeared_in": [
+        "半成品",
+        "旭陽"
+      ],
+      "row_count": 164
+    },
+    {
+      "client_name": "明暐",
+      "appeared_in": [
+        "明暐"
+      ],
+      "row_count": 20
+    },
+    {
+      "client_name": "昱勝",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "朋進",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 19
+    },
+    {
+      "client_name": "本土",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 3
+    },
+    {
+      "client_name": "村田",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 2
+    },
+    {
+      "client_name": "東展/立欣",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "東芳",
+      "appeared_in": [
+        "半成品",
+        "東芳"
+      ],
+      "row_count": 35
+    },
+    {
+      "client_name": "東鎂",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 3
+    },
+    {
+      "client_name": "板井",
+      "appeared_in": [
+        "板井"
+      ],
+      "row_count": 4
+    },
+    {
+      "client_name": "正東",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "永新鋒",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "永琪",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 3
+    },
+    {
+      "client_name": "沛博科技",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 3
+    },
+    {
+      "client_name": "沛得",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "油昇",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "泳建",
+      "appeared_in": [
+        "半成品",
+        "泳建"
+      ],
+      "row_count": 95
+    },
+    {
+      "client_name": "泳琪",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 2
+    },
+    {
+      "client_name": "湛積",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 8
+    },
+    {
+      "client_name": "漢鐘",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "瀚菱",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "登裕",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 7
+    },
+    {
+      "client_name": "發得",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 9
+    },
+    {
+      "client_name": "盟 英",
+      "appeared_in": [
+        "盟英"
+      ],
+      "row_count": 20
+    },
+    {
+      "client_name": "盟英",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 3
+    },
+    {
+      "client_name": "福碩",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "立翔",
+      "appeared_in": [
+        "立翔"
+      ],
+      "row_count": 16
+    },
+    {
+      "client_name": "綠點",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 7
+    },
+    {
+      "client_name": "綺發",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "緯翔",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "群燁",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "群琮",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "義高",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "胤福",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 2
+    },
+    {
+      "client_name": "自行車",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 25
+    },
+    {
+      "client_name": "般若",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "華宇",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "西石",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 3
+    },
+    {
+      "client_name": "誠岱",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 4
+    },
+    {
+      "client_name": "超正",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 4
+    },
+    {
+      "client_name": "邁萃斯",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "金堯",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 2
+    },
+    {
+      "client_name": "金宇",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "金竑",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "金聖錡",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 2
+    },
+    {
+      "client_name": "金豐",
+      "appeared_in": [
+        "金豐"
+      ],
+      "row_count": 13
+    },
+    {
+      "client_name": "銅熊立",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "銳昇",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "鋐穎",
+      "appeared_in": [
+        "半成品"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "錡夆",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 2
+    },
+    {
+      "client_name": "錦玉",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 6
+    },
+    {
+      "client_name": "鑫元鴻",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    },
+    {
+      "client_name": "長毅",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 5
+    },
+    {
+      "client_name": "霄特",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 9
+    },
+    {
+      "client_name": "高工",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ],
+      "row_count": 5
+    },
+    {
+      "client_name": "高明",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 2
+    },
+    {
+      "client_name": "高鋒",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 4
+    },
+    {
+      "client_name": "麗偉",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 2
+    },
+    {
+      "client_name": "麗台",
+      "appeared_in": [
+        "其它"
+      ],
+      "row_count": 1
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+# 本目錄僅含被 include 的設定/函式庫（VAPID 私鑰、發送核心、CA bundle），
+# 無任何對外 HTTP 端點 → 一律拒絕直接存取（防止 PHP handler 失效時原始碼外洩）。
+Require all denied

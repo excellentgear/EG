@@ -1,0 +1,9468 @@
+{
+  "generated_at": "2026-04-15 11:10:21",
+  "instruction": "所有料號已含 INSERT IGNORE INTO d_setting。重複 D_Setting_Id 自動跳過。",
+  "total": 1178,
+  "parts": [
+    {
+      "d_setting_id": "0-111121101-R106-0",
+      "spec": "M1.25T9W23L69.7",
+      "category": "馬達軸心1-1",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "0-111121101-R107-0",
+      "spec": "M1.25T33W15L15",
+      "category": "齒輪1-2",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "00352",
+      "spec": "全製",
+      "category": "上齒型定位盤",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "01-0201-0008",
+      "spec": "M4*21T*40W",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "01-0203-0007",
+      "spec": "(M4*21T*40W)",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "03G03TP0000011",
+      "spec": "M2T30W28L43",
+      "category": "左斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "04E03TP0000003",
+      "spec": "M2*22T*32L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "04E03TP0000004",
+      "spec": "M2*18T*32L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "07923200-GO-NOGO",
+      "spec": "",
+      "category": "內孔檢具",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "079232000",
+      "spec": "CP2T50W10L22.2",
+      "category": "直齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "1000002563",
+      "spec": "M2T25W20L54",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1000002571",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1002002571",
+      "spec": "M1.5T28W15.5L24",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1003002522",
+      "spec": "M2T30W18L38",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1003012513",
+      "spec": "M2T30W18L30",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1003012520",
+      "spec": "M1.5T30W18L22",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1003012531",
+      "spec": "M2T30W17.530",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1003022513",
+      "spec": "M2T30W17.5L26",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1003022530",
+      "spec": "M2T30W18L25",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1003022580",
+      "spec": "M2T30W18L32",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1003032530",
+      "spec": "M0.75T120",
+      "category": "主軸齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1004002501",
+      "spec": "M1.5T27W18L25",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1004002502",
+      "spec": "M1.5T27W19.5L25",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1004012500",
+      "spec": "M1.5T40W25L27",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1005012510",
+      "spec": "M2.5T27W21.5L25",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1006002591",
+      "spec": "M2.5T24W20L22.5",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1006002592",
+      "spec": "M2.5T24W20L22.5",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1007002514",
+      "spec": "M2.5T28W20L24",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1007002542",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "1007002543",
+      "spec": "M2.5T2819.5L24",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1007002551",
+      "spec": "M2.5T28W20L24",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1008002521",
+      "spec": "M2.5T28W22L49.5",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1009002510",
+      "spec": "M2.5T45W27L28",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1011002501",
+      "spec": "M4T18W34L48",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1011002510",
+      "spec": "M4T34W30L30",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "101433",
+      "spec": "M2T56W24L28",
+      "category": "斜齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "101454",
+      "spec": "M2T39W24L33",
+      "category": "斜齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "1015002512",
+      "spec": "M4T22W47L47",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1015002522",
+      "spec": "M4T44W34L47",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1017002500",
+      "spec": "M2T27W21.5L25",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1019002511",
+      "spec": "M2T35W20L24",
+      "category": "蝸感齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1020002510",
+      "spec": "M2.5T27W19.5L30",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1024005400",
+      "spec": "代料到齒研",
+      "category": "24T等分盤",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1027002500",
+      "spec": "M2.5T28W22L38",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1029002530",
+      "spec": "M1.5T30W17.5L19",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1047002500",
+      "spec": "M2T60W18L30",
+      "category": "凸輪軸齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1048002510",
+      "spec": "M1.5T48W18L21",
+      "category": "正齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1048002520",
+      "spec": "M1.5T32W19L27",
+      "category": "正齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1051002500",
+      "spec": "M2.5T20W21L58",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "1051002510",
+      "spec": "M2.5T50W21L27",
+      "category": "凸輪軸齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "106",
+      "spec": "M2.5T12W18L184",
+      "category": "B齒輪軸",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "106-2-24",
+      "spec": "M2*24T*41L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "10601-0530-04",
+      "spec": "M2*82T*L15",
+      "category": "內齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "10601-0531-01",
+      "spec": "SNCM21/8620",
+      "category": "外齒輪(M2*82T)",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "10601-0894-00",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "10601-0897-00",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "10601-0898-00",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "10601-1252-00",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "107-1",
+      "spec": "M2.5T22W18L46",
+      "category": "B軸變速齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "107-2",
+      "spec": "M2.5T39W13L13",
+      "category": "B軸變速齒輪2",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "107-3",
+      "spec": "M2.5T31W11.5L15",
+      "category": "B軸變速齒輪3",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "108606",
+      "spec": "M2T26W28L35",
+      "category": "斜齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "109",
+      "spec": "M2.5T32L107",
+      "category": "傳動套B齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "10M227T50L-2",
+      "spec": "M2*27T*W28",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "10M227T67L-2",
+      "spec": "M2*27T*W28",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "111",
+      "spec": "1478",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "111-08G-07",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "11121-BC2-0X01",
+      "spec": "Φ32*159.55L",
+      "category": "MOTOR OUTOUT SHAFT",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "11122-BC2-0X01",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "11122-HB2-0000-R05",
+      "spec": "DP24/48*17T*62.6L",
+      "category": "齒輪",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "11122-JR2-0X01",
+      "spec": "M1.25T19W23.5L23.5",
+      "category": "MOTOR OUTPUT GEAR",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "11122-UC2-1000-R01",
+      "spec": "M1.252T21W23.5L23.5",
+      "category": "MOTOR OUTPUT GEAR",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "111273",
+      "spec": "M2T56L30",
+      "category": "斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "11211-BC2-0X01",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "11211-HB2-0000-R01",
+      "spec": "M1.25W23L23",
+      "category": "SECONDARY GEAR",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "11211-HB2-0000-R02",
+      "spec": "M1.25W23L23",
+      "category": "SECONDARY GEAR",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "11211-HB2-0000-R04",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "112EB600-1-A",
+      "spec": "M0.8T8L71.7",
+      "category": "馬達心軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "112EB600-2-A",
+      "spec": "M0.8T48W15L16",
+      "category": "齒輪1-2",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "112EB600-3-A",
+      "spec": "M1.25T10W16.5L47",
+      "category": "齒輪2-1",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "112EB600-4-a",
+      "spec": "M1.25T59W16.5L26.5",
+      "category": "齒輪2-2",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "112EB600-5-a",
+      "spec": "M0.8T28L12",
+      "category": "轉接環內齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "1158-00454",
+      "spec": "M3T29W29L62",
+      "category": "左斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "1158-00455",
+      "spec": "M3T29W29L61",
+      "category": "左斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "119957",
+      "spec": "CP5T30W9L31.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "12-2117",
+      "spec": "M2T55W12",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "1200302T00",
+      "spec": "M3T66W30L204",
+      "category": "換刀齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "1200303T00",
+      "spec": "M3T55W30L171",
+      "category": "換刀齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "1210",
+      "spec": "M2T12W14L138",
+      "category": "B軸齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "1211-2",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "1211-3",
+      "spec": "M1.75T31W13L13",
+      "category": "B軸變速齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "121112301",
+      "spec": "M2T32W28L53.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "121481",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "1219",
+      "spec": "M2T55W11.5L29",
+      "category": "傳動套A齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "1219_M_JIG",
+      "spec": "",
+      "category": "銑床檢具",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "1220",
+      "spec": "M2T32W9L70",
+      "category": "傳動套B齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "1220_M_JIG",
+      "spec": "",
+      "category": "銑床檢具",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "1221",
+      "spec": "Φ40*199.5",
+      "category": "主軸傳動方栓",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "125638",
+      "spec": "CP5T30W18L42",
+      "category": "直齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "13006-0006-00",
+      "spec": "M4T16W34L35",
+      "category": "開發件-驅動齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "130150903",
+      "spec": "M2T32W28L53.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "14-14T",
+      "spec": "M1.75T14W23.8L60.5",
+      "category": "齒軸",
+      "appeared_in": [
+        "板井"
+      ]
+    },
+    {
+      "d_setting_id": "14-37T",
+      "spec": "M1.75T37W20L20",
+      "category": "齒輪",
+      "appeared_in": [
+        "板井"
+      ]
+    },
+    {
+      "d_setting_id": "14-38T",
+      "spec": "M1.75T38W20L20",
+      "category": "齒輪",
+      "appeared_in": [
+        "板井"
+      ]
+    },
+    {
+      "d_setting_id": "14-39T",
+      "spec": "M1.75T39W20L20",
+      "category": "齒輪",
+      "appeared_in": [
+        "板井"
+      ]
+    },
+    {
+      "d_setting_id": "1426436",
+      "spec": "PD161.95T32W7.2",
+      "category": "鍊輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "15001-012L-S02",
+      "spec": "無圖",
+      "category": "",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "160292-HG",
+      "spec": "1000",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "17-2114",
+      "spec": "M2T52W12",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "18-2115",
+      "spec": "M2T46W12",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "18-2115A",
+      "spec": "M2T32W12L36",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "1B10981",
+      "spec": "M8T24W14L16.6",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "1G0T-LBS0012-1040000",
+      "spec": "M3*32T*53W",
+      "category": "小齒輪-32T",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "1M19Z",
+      "spec": "M1T19W3L6.1",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "1M24Z",
+      "spec": "M1T24L26.8",
+      "category": "雙齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "1S005504",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "1S005505",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "1S008511",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "1S008513",
+      "spec": "M4.233*33T*63.5L",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "1S008514",
+      "spec": "M4.233*30T*36.576L",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "2000002230300",
+      "spec": "M1.25T54W30L40",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2000003780000",
+      "spec": "M1.25T36W20L37",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2000003780101",
+      "spec": "M1.25*36T*20W",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2000030360000",
+      "spec": "M1.25T36W21L56",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2000094320000",
+      "spec": "φ41.38T26W16.3L20",
+      "category": "馬達皮帶輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2000100210000",
+      "spec": "T36L59",
+      "category": "皮帶輪8YU",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2000100220000",
+      "spec": "T48L59",
+      "category": "皮帶輪8YU",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2005002520",
+      "spec": "M2.5T60W19L32",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "2005002530",
+      "spec": "M2.5T20W19.532",
+      "category": "手輪齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "2005012512",
+      "spec": "M2.5T26W20.5L29",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "20170927101-47.5L",
+      "spec": "16CrNn4",
+      "category": "斜齒輪(M2*35T)",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "202-21200581A",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "20550-6008-00",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "20550-6012-00",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "20557-5025-XO",
+      "spec": "20550-5067-00用",
+      "category": "齒輪結合鍵",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "2091360140003",
+      "spec": "M2T20W1262",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2093370160101",
+      "spec": "無圖",
+      "category": "驅動軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2093370160103",
+      "spec": "無圖",
+      "category": "驅動軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2093370180101",
+      "spec": "M2T38TW13.5L21.5",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2093370210100",
+      "spec": "M2T25TW16L23",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094120110304",
+      "spec": "M2.25T51W26L66",
+      "category": "齒輪/6支刀",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094120120300",
+      "spec": "M2.25T34W32.5L144",
+      "category": "滾輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094120120302",
+      "spec": "M2.25T34W32.5L144",
+      "category": "滾輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094400120000",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094400130000",
+      "spec": "M1.25T60TW12L23",
+      "category": "主軸齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094400160001",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094400170001",
+      "spec": "M1.25T12W13.5L57",
+      "category": "齒輪軸(A)",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094400170002",
+      "spec": "M1.25T12W13.5L57",
+      "category": "齒輪軸(A)",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094400180001",
+      "spec": "M1.5T12W27L57",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094400190001",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094400200001",
+      "spec": "M1.5T16W15L21",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094400210300",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094400210500",
+      "spec": "φ20L43",
+      "category": "齒輪心軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094410100001",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094410110000",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094410120000",
+      "spec": "M1.5T66W15L19",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094410130001",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094410140003",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094410320000",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094410330100",
+      "spec": "φ36L58",
+      "category": "馬達齒輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094420110001",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094420180001",
+      "spec": "M2T15W20L86",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094420260001",
+      "spec": "M2T45W15L21",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2094420280001",
+      "spec": "M2T17W15L86",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2096220110000",
+      "spec": "M2.25T19TW19L95",
+      "category": "內齒輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2096220140000",
+      "spec": "M2.25T15TW15L65",
+      "category": "外齒輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2096640110000",
+      "spec": "M2.75T17TL40",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2096640110001",
+      "spec": "M2.75T17W30L97",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2097090110002",
+      "spec": "M1.5T15W21L59",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2097090140002",
+      "spec": "M1.25T11W18L74",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2097180110001",
+      "spec": "M1.25T99W16L16",
+      "category": "轉位齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2097200140200",
+      "spec": "φ98t35w31.7L70",
+      "category": "時規皮帶輪8YUT35",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "20YF010-05-011",
+      "spec": "M3T28W30L336",
+      "category": "斜齒齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "20YF010-05-099",
+      "spec": "M3T22W30L360",
+      "category": "斜齒齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "20YF010-HJ-10-02",
+      "spec": "此料號作廢",
+      "category": "齒輪軸\n20YF010-R150001-HJ-10-02",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "20YF010-HJ-20-02",
+      "spec": "M3T28W30L336",
+      "category": "齒輪軸\n20YF010-R150001-HJ-20-02",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "21-2232",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "21002S",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "21003L",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "2100880320002",
+      "spec": "M1.5T60W20L50",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "21022L",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "21024L",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "2103340240101",
+      "spec": "1129",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "2103340240900",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103340241400",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "2103400240002",
+      "spec": "M1.5T60W25L50",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103400240200",
+      "spec": "M1.5T60W25L50",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103400240600",
+      "spec": "M1.5T60W25L50",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103430230000",
+      "spec": "無圖",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103430230103",
+      "spec": "M1.25T36W22L30",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103430230201",
+      "spec": "M1.25*36T22W30L",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103430230902",
+      "spec": "M1.25T36W22L30",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103430231601",
+      "spec": "M1.25T36W30L58",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103440180003",
+      "spec": "M1.25T45W25",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103500200601",
+      "spec": "M1.25T36W26L26",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103500202000",
+      "spec": "M1.25T32W23L26",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103500210004",
+      "spec": "M1.25T30W22L22",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "21035003500300",
+      "spec": "M1.25T24TW20",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103570130500",
+      "spec": "M3.25*24T*50L",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2103990040001",
+      "spec": "M1.25T84W17L17",
+      "category": "中間齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2105590150001",
+      "spec": "M1.25T24W15L36",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "21111L",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "21112L",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "2120020110000",
+      "spec": "M1.25T34W16L40",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2120020110801",
+      "spec": "M1.25T34W20",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2120020111000",
+      "spec": "M1.25T34W20L45",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2120020120001",
+      "spec": "M1.25*34T*18W",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2120020130002",
+      "spec": "M1.25*34T*16W",
+      "category": "中間齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2120020240701",
+      "spec": "M1.25T33W21L21",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2120020241100",
+      "spec": "M1.25T33W20L45",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2120020250001",
+      "spec": "M1.25T55W2626",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2120260100001",
+      "spec": "M1.25T42W2626",
+      "category": "中間齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2120260110300",
+      "spec": "M1.25T36W22L56",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "21203",
+      "spec": "M2.5*27T*78L",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "21204",
+      "spec": "M2.5*57T*25L",
+      "category": "馬達傳動齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "21206",
+      "spec": "M2.5*28T*241L",
+      "category": "A軸齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "21210",
+      "spec": "M2.5*18T**241L",
+      "category": "B軸齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "21211",
+      "spec": "M2.5T58W20L25",
+      "category": "B軸中齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "21212",
+      "spec": "M2.5*52T*25L",
+      "category": "B軸下齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "212133",
+      "spec": "M2T42W22",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "21219",
+      "spec": "M2.5*82T*40L",
+      "category": "主軸變速上齒輪",
+      "appeared_in": [
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "21220",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "東芳"
+      ]
+    },
+    {
+      "d_setting_id": "2123730070001",
+      "spec": "M1.25T60W24L26",
+      "category": "中間齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2124580160001",
+      "spec": "M1.25T52W38L38",
+      "category": "中間齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "21436-3001-00",
+      "spec": "M2W440L440",
+      "category": "長齒條",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "21436-3002-00",
+      "spec": "M2W230L230",
+      "category": "短齒條",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "21436-3003-00",
+      "spec": "2M*20T*20W",
+      "category": "大齒輪 HM500_ATC",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "21436-3004-00",
+      "spec": "2M*30T*20W",
+      "category": "小齒輪HMC500_ATC",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "21436-3008-00",
+      "spec": "M2W655L655",
+      "category": "長齒條 HMC630_ATC",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "21436-3009-00",
+      "spec": "M2W340L340",
+      "category": "短齒條 HMC630_ATC",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "2170600270101",
+      "spec": "M3W49.5L251",
+      "category": "油壓軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2172540160001",
+      "spec": "M1.25T54W20L35",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2172930100001",
+      "spec": "M3.25T25W28L113.5",
+      "category": "蝸輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2172930130001",
+      "spec": "M3.25T75W25L45",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900457A",
+      "spec": "無圖",
+      "category": "壓紙減速機",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900499A",
+      "spec": "無圖",
+      "category": "漏斗移動從動鏈輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900500A",
+      "spec": "無圖",
+      "category": "漏斗移動張力",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900502A",
+      "spec": "無圖",
+      "category": "漏斗移動張力鏈輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900508A",
+      "spec": "無圖",
+      "category": "第一漏斗脈衝齒輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900509A",
+      "spec": "無圖",
+      "category": "漏斗移動操作側鏈輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900568A",
+      "spec": "無圖",
+      "category": "輸送帶馬達鏈輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900574A",
+      "spec": "無圖",
+      "category": "鏈輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900575A",
+      "spec": "無圖",
+      "category": "鏈輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900577A",
+      "spec": "無圖",
+      "category": "譯碼器齒輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900612A",
+      "spec": "無圖",
+      "category": "馬達皮帶輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900639A",
+      "spec": "無圖",
+      "category": "驅動皮帶輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900657A",
+      "spec": "無圖",
+      "category": "輸送帶驅動皮帶輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900691A",
+      "spec": "無圖",
+      "category": "橫向移動渦輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "220-29900692A",
+      "spec": "無圖",
+      "category": "橫向移動渦輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "22150-0019-01",
+      "spec": "M2*21T",
+      "category": "齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22150-0020-02",
+      "spec": "M2*42T",
+      "category": "齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22150-0025-00",
+      "spec": "M4*20T",
+      "category": "馬達軸",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22150-0043-00",
+      "spec": "M2.5T18W29.3L29.3",
+      "category": "小齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22150-0045-00",
+      "spec": "M2.5T54W41L41",
+      "category": "大齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22150-0046-00",
+      "spec": "M2T21W24L31",
+      "category": "大齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22150-3001-01",
+      "spec": "M3T25W35L54",
+      "category": "齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22150-3001-02",
+      "spec": "M3T25W35L54",
+      "category": "齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22150-3002-00",
+      "spec": "M3T50W32L48",
+      "category": "APC傳動軸減速齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22150-3003-00",
+      "spec": "M3T18W48L229",
+      "category": "APC傳動齒輪軸",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22150-3004-00",
+      "spec": "M3T72W46L47",
+      "category": "APC旋輪齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22150-3005-01",
+      "spec": "M2.5*24T",
+      "category": "B軸輸入齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22150-3008-01",
+      "spec": "M3T24W38L40",
+      "category": "B軸輸入齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "22550-6014-00",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "崴立"
+      ]
+    },
+    {
+      "d_setting_id": "23-2131",
+      "spec": "M2T45W12L36",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "2500300210000",
+      "spec": "M1.25T72W18L30",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2501003",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "2503430180000",
+      "spec": "M1.25T72W19.5L25.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "251030030",
+      "spec": "M3T29W30L30",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "251030059",
+      "spec": "M3T23W30L30",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "2515120160001",
+      "spec": "M1.5T90W20L20",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2537100110000",
+      "spec": "OD120.8T48W26.7L33",
+      "category": "8YU-48齒時規皮帶輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2537340340100",
+      "spec": "OD159.06T63W26.7L33",
+      "category": "8YU-63齒時規皮帶輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2616360130000",
+      "spec": "φ151.42T60W21.7L55",
+      "category": "時規皮帶輪8YU",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2802002110-4",
+      "spec": "M1.75T48/M2T52L33",
+      "category": "迴轉齒",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "2803002100-4",
+      "spec": "φ140*φ75*L40",
+      "category": "迴轉齒",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "2804002101-4",
+      "spec": "M3T70/M3.5T48L41.5",
+      "category": "迴轉齒-4D",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "2804002111-4",
+      "spec": "M3T70W29.5L41.5",
+      "category": "迴轉齒",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "2806002100-5",
+      "spec": "M4T58W29.5L41.5",
+      "category": "回轉齒",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "2806002100-6",
+      "spec": "M4T48W7L45.5",
+      "category": "回轉齒",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "2904002521",
+      "spec": "M2.5T40W23.5L29",
+      "category": "小齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "290D1194P001-ID20",
+      "spec": "M1T40W15L17",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "2950250080100",
+      "spec": "M3T26W35L55",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2950250180001",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2953680210102",
+      "spec": "M3T40W35L50",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2954990100000",
+      "spec": "無圖",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2954990110002",
+      "spec": "無圖",
+      "category": "中間齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2956050160000",
+      "spec": "φ75.06T30W21.7L28",
+      "category": "時規皮帶輪8YU",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2956050170000",
+      "spec": "φ70T24W21.7L28",
+      "category": "時規皮帶輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2956050170100",
+      "spec": "φ59.75T24W21.7L28",
+      "category": "時規皮帶輪8YU",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2956260030100",
+      "spec": "φ178.25T70W26.7L60",
+      "category": "時規皮帶輪8YUT70",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2956350040000",
+      "spec": "OD120.86T48W26.7L33",
+      "category": "時規皮帶輪8YU",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2956580060000",
+      "spec": "M1.5T32W32",
+      "category": "正齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2956990110000",
+      "spec": "φ69.9T28W29L33",
+      "category": "時規皮帶輪8YU",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2965980150100",
+      "spec": "φ59.75T24W29L33",
+      "category": "皮帶輪8YU型",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2985830110000",
+      "spec": "OD69.9T28W26.7L33",
+      "category": "8YU-28T時規皮帶輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2985830120000",
+      "spec": "OD89.63T35W26.7L33",
+      "category": "8YU-35T時規皮帶輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "2GOT-LB50004-1030000",
+      "spec": "M3T36W53L96.5",
+      "category": "小齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "2R060M06L014BA",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "3000445541",
+      "spec": "M2T21W28L36",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "3003012570",
+      "spec": "M1.5T36W16L23",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3003012580",
+      "spec": "M1.5T30W20.5L36",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3003012590",
+      "spec": "M1.5T30W19L20",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3003022500",
+      "spec": "M1.5T28W12L70.5",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3004000001",
+      "spec": "M1.5T36W20L20",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3004000001A",
+      "spec": "M1.5T36W20L20",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3004002500",
+      "spec": "M1.5T30W21L23",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3004002530",
+      "spec": "M1.5T36W18.5L51.5",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3004002544",
+      "spec": "M1.5T36W20L68.5",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3004002550",
+      "spec": "M1.5T36W16L17",
+      "category": "正齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3004002570",
+      "spec": "M2T22W18L19",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3006002510",
+      "spec": "M1.5T40W26L50",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3006002532",
+      "spec": "M1.5T40W24L25",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3006002542",
+      "spec": "M1.5T36W21L73",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3006012560",
+      "spec": "M1.5T40W18.5L23.5",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3006022501",
+      "spec": "M2.5T32W20L21",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3007002513",
+      "spec": "M2T25W20L28",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3007002550",
+      "spec": "M2T50W20L25",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3010002511",
+      "spec": "M2.5T28W19.5L24",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3010002522",
+      "spec": "M2.5T52W20L26",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3011012510",
+      "spec": "M2.5T24W27L62",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3011012533",
+      "spec": "M2.5T24W23L58",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3011012543",
+      "spec": "M2.5T24W22.5L58",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3012002510",
+      "spec": "M2.5T38W20L32",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3013002501",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3014002560",
+      "spec": "M2.5T24W22.5L58",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3015002512",
+      "spec": "M2.5T36W20L24",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3015002544",
+      "spec": "M2.5*27T22W40L",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3015002570",
+      "spec": "M2.5T36W25L27",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3015012540",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "3017002521",
+      "spec": "M2.5T34W20L26",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3017002533",
+      "spec": "M3T32W24.5L30",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3017002593",
+      "spec": "M2.5T30W19.5L40",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3018002511",
+      "spec": "M2T25W22L23",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3018002521",
+      "spec": "M2T20W18L20",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3018002531",
+      "spec": "M2T24W13.5L30",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3018002580",
+      "spec": "M2T33W26L27",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3018002590",
+      "spec": "M1.5T36W19.5L84.5",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3018012500",
+      "spec": "M1.5T36W20L86",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3019002550",
+      "spec": "M1.5T40W26L28",
+      "category": "馬達齒輪-旋",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3019002560",
+      "spec": "M1.5T46W26L27",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3019002570",
+      "spec": "M1.5T36W23L24",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3019002591",
+      "spec": "M2T24W20L30",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3019012500",
+      "spec": "M2T36W20L49",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3019012501",
+      "spec": "M2T36W20.5L49",
+      "category": "蝸桿齒輪(弧形齒)",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3019012510",
+      "spec": "M2T38W26L27",
+      "category": "惰齒輪(弧形齒)",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3019012520",
+      "spec": "M2T40W22L24",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3019012560",
+      "spec": "M1.5T40W19L41",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3020002512",
+      "spec": "M2.5T35W23.5L26",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3020002580",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3024012503",
+      "spec": "M2.5T35W24L26",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3038002520",
+      "spec": "M1.5T36W16L23",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3038002542A",
+      "spec": "M1.5T40W15L19",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3038002543",
+      "spec": "M1.5T40W15L19",
+      "category": "蝸桿齒輪-弧型齒",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3038002550",
+      "spec": "M1.5T30W14.5L30",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3042002580",
+      "spec": "M2.5T27W21L52",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3042012500",
+      "spec": "M2T40W22L24",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3046002540",
+      "spec": "M2T30W26.5L53",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3046002580",
+      "spec": "M2.5T36W24L51",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3046012500",
+      "spec": "M2.5T36W24L51",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3052002501",
+      "spec": "M1.5T42W25.5L35",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3052002510",
+      "spec": "M1.5T28W20L35.5",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3052002521",
+      "spec": "M1.5T28W22L40",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "30521",
+      "spec": "Φ42L232",
+      "category": "栓槽軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "3053002510",
+      "spec": "M4T30W29.5L35",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "3109330190",
+      "spec": "M2.5T40W35",
+      "category": "正齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "3181000298",
+      "spec": "M1.5T11W36.5L325",
+      "category": "第一齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "3181000325",
+      "spec": "M2.5T84W33L35",
+      "category": "第二齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "3181000577",
+      "spec": "M2.5T84L35",
+      "category": "第一齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "3181000842",
+      "spec": "M3.5T13L191",
+      "category": "第三齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "3183044230",
+      "spec": "M2.5T84W35L67",
+      "category": "正齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "3183044240",
+      "spec": "M2.5T21W35L78.8",
+      "category": "正齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "3183045230",
+      "spec": "M2.5T56W35L67",
+      "category": "正齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "3281-S050-0604A",
+      "spec": "M1T29W7L9",
+      "category": "右旋斜齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "3610863",
+      "spec": "M2*21T*174.5L",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "3702-3248NC",
+      "spec": "M2T48W25L49",
+      "category": "右旋同步齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "3703-3258BD",
+      "spec": "M2T58W25L49",
+      "category": "右旋同步齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "3I0000080001-55",
+      "spec": "無圖",
+      "category": "電機齒輪-D55",
+      "appeared_in": [
+        "御成"
+      ]
+    },
+    {
+      "d_setting_id": "3I0000080003",
+      "spec": "M2.5T30W24L118",
+      "category": "電機軸齒輪30T",
+      "appeared_in": [
+        "御成"
+      ]
+    },
+    {
+      "d_setting_id": "3I0000080004",
+      "spec": "M2T51W22L46.5",
+      "category": "中軸齒輪",
+      "appeared_in": [
+        "御成"
+      ]
+    },
+    {
+      "d_setting_id": "3I0000080005",
+      "spec": "M2.5T40W22L34",
+      "category": "主軸齒輪40T",
+      "appeared_in": [
+        "御成"
+      ]
+    },
+    {
+      "d_setting_id": "3I0000080008",
+      "spec": "M2.5T68W22L31",
+      "category": "中軸齒輪",
+      "appeared_in": [
+        "御成"
+      ]
+    },
+    {
+      "d_setting_id": "3J0000080003",
+      "spec": "M2.5T60W20L46",
+      "category": "主軸小齒",
+      "appeared_in": [
+        "御成"
+      ]
+    },
+    {
+      "d_setting_id": "3J0000080005",
+      "spec": "M2.5T54W22L54",
+      "category": "中軸上齒",
+      "appeared_in": [
+        "御成"
+      ]
+    },
+    {
+      "d_setting_id": "3J0000080006-48",
+      "spec": "M2.5T45W24T127.5",
+      "category": "電機齒輪",
+      "appeared_in": [
+        "御成"
+      ]
+    },
+    {
+      "d_setting_id": "3K0000080002",
+      "spec": "M2.5*T72*20W",
+      "category": "中軸中齒(大齒)",
+      "appeared_in": [
+        "御成"
+      ]
+    },
+    {
+      "d_setting_id": "40152040402",
+      "spec": "Φ40*50L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "40152040502",
+      "spec": "Φ50*60L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "40152040901",
+      "spec": "Φ82>Φ90",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "40301001-01",
+      "spec": "M2T36W42",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "40301010-01",
+      "spec": "0",
+      "category": "PP箱*1",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "40301011-01",
+      "spec": "M2T66W30L143",
+      "category": "雙齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "40301017-01",
+      "spec": "M2T29L138",
+      "category": "雙齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "40302012-01",
+      "spec": "M1.5T24W3.75L27.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "40402035",
+      "spec": "M0.8T27L428",
+      "category": "心軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "409-251-522",
+      "spec": "M2T31W30L299",
+      "category": "齒軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "40G02",
+      "spec": "Φ50L337",
+      "category": "入力軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "40G04",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "40G06",
+      "spec": "M2T37W29L100",
+      "category": "入力齒輪©",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "42122",
+      "spec": "M2T32L44",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "44001030207",
+      "spec": "φ85.21T34W28L33",
+      "category": "皮帶輪P8M",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "453400CK",
+      "spec": "M2T19W13L47",
+      "category": "HS250馬達齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "462-25020001A",
+      "spec": "無圖",
+      "category": "螺旋齒輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "462-25020002A",
+      "spec": "無圖",
+      "category": "螺旋齒輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "478-0000-052-04",
+      "spec": "M3T26W35L60",
+      "category": "迴轉工作臺驅動1",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "478-0000-052-08",
+      "spec": "M3T40W30L45",
+      "category": "迴轉工作臺驅動1",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "478-0000-052-11",
+      "spec": "M3T33W50L160",
+      "category": "迴轉工作臺驅動1",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "478-0000-052-30",
+      "spec": "M4T36W30L55",
+      "category": "左旋迴轉工作臺驅動1",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "478-0000-052-62",
+      "spec": "M3T65W30L60",
+      "category": "迴轉工作臺驅動1",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "478-0000-052-70",
+      "spec": "M4T20W50L66",
+      "category": "左旋迴轉工作臺驅動1",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "478-0000-052-71",
+      "spec": "M4T36W30L60",
+      "category": "右旋迴轉工作臺驅動1",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "478-0000-052-74",
+      "spec": "M4T20W50L66",
+      "category": "右旋迴轉工作臺驅動1",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "483-08054001A",
+      "spec": "無圖",
+      "category": "時規皮帶輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "483-30044007A",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "明暐"
+      ]
+    },
+    {
+      "d_setting_id": "491-000C-111-54",
+      "spec": "5000",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "4C256LE1",
+      "spec": "M1.75T28L63",
+      "category": "RA63011NC01輸入齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "5002002521",
+      "spec": "M2.5T52W20L26",
+      "category": "惰輪齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "50024HRE01-02-000400",
+      "spec": "M2.5T40W24L40",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "5003002502",
+      "spec": "M2.5T36W20L85",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5003002521",
+      "spec": "M2.5T46W22L26",
+      "category": "惰齒輪(弧齒輪)",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5003002550",
+      "spec": "M2.5T43W20L26",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5003022510",
+      "spec": "M2.5T36W23L46",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5004002511",
+      "spec": "M4*28T*31L",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5004002512",
+      "spec": "M4*28T*31L",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5004002524",
+      "spec": "M4T28W30L35",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "50040HRE02-02-000400",
+      "spec": "2.5M*40T*24W",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "5005002503",
+      "spec": "M4T28W30L35",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5005002504",
+      "spec": "M4T28W30L35",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5007002501",
+      "spec": "M2.5T40W25L26",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5007002511",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5007002512",
+      "spec": "M2.5T38W20L32",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5007042501",
+      "spec": "M2.5T35W27.5L43",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5008002503",
+      "spec": "M4T32W38L43",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5008002523",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5008002532",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5008002533",
+      "spec": "M4T32W24L28",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5008042501",
+      "spec": "M2.5T20W28L66",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5010012503",
+      "spec": "M3T36W30L30",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5010012511",
+      "spec": "M3T20W35L158",
+      "category": "心軸齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5010012523",
+      "spec": "M3T48W32L42",
+      "category": "馬達連動齒",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5010012533",
+      "spec": "M3T24W41L42",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5012002523",
+      "spec": "M2.5T26W30L60",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5015002504",
+      "spec": "M2.5T26W27.5L38.5",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5017002503",
+      "spec": "M4T36W30L30",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5019002501",
+      "spec": "M2.5T21W23.5L35",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5020002522",
+      "spec": "M2.5T28W24.5L38",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5022002521",
+      "spec": "M2.5T26W25.5L30",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5023002503",
+      "spec": "0",
+      "category": "PP箱*2",
+      "appeared_in": [
+        "半成品",
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5024002502",
+      "spec": "M4T25W29.5L35",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5033002512",
+      "spec": "M3T40W31L43",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5033002523",
+      "spec": "M3T25W30",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5033002531",
+      "spec": "M3T30W35L36",
+      "category": "惰輪齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5033002561",
+      "spec": "M5T25W57L101",
+      "category": "小齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5033002570",
+      "spec": "M5T25W43L44",
+      "category": "惰齒輪(右旋)",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5069002501",
+      "spec": "M5T25W54.5L230",
+      "category": "小齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "5069002511",
+      "spec": "M5T28W55L57",
+      "category": "小齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "510系列",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "58-100-914027A0M",
+      "spec": "M2T65W10L34",
+      "category": "正齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "6001002501",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6001002513",
+      "spec": "M2.5T27W22L40",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6001002514",
+      "spec": "M2.5T27W22L40",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6001002530",
+      "spec": "M2.5T27W25L55",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6003002513",
+      "spec": "M5T36W10L179",
+      "category": "旋轉齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6006002503",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6006002530",
+      "spec": "M4T32W34L137",
+      "category": "旋轉齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6006002540",
+      "spec": "D83.71T19",
+      "category": "鏈輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6006002550",
+      "spec": "φ109.76T20",
+      "category": "鍊輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6006002560",
+      "spec": "φ190.76T20",
+      "category": "鏈輪T20",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6006002580",
+      "spec": "φ59.15T13",
+      "category": "鍊輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6006002590",
+      "spec": "OD109.76T20",
+      "category": "鍊輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6007002500",
+      "spec": "M2.5T20W28L62",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6007002513",
+      "spec": "M2.5T20W25.5L56",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6007002523",
+      "spec": "M5T36W40",
+      "category": "旋轉齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6007002530",
+      "spec": "φ89.33T16",
+      "category": "鏈輪ANSI50-16T",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6009002013",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6009002014",
+      "spec": "Φ277L235",
+      "category": "旋轉座",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6009002504",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "6009002505",
+      "spec": "M6T42W50L188",
+      "category": "旋轉齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6009002560檢具",
+      "spec": "",
+      "category": "內孔檢具",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6009002561",
+      "spec": "M6T42W50L245",
+      "category": "旋轉齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6010002504",
+      "spec": "M2.5T52W19.5L24",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6010002512",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "6010002513",
+      "spec": "M2.5T26W26L30",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6010002533",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "6010002534",
+      "spec": "M2.5T26W27L28",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6013002501",
+      "spec": "φ229.57T21",
+      "category": "主動鍊輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6013002512",
+      "spec": "M4T40W30L53",
+      "category": "齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6013002520",
+      "spec": "M4T22W29.5L30",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6013002521",
+      "spec": "M4T22W29.5L30",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6013002530",
+      "spec": "M4T20W29L53",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6013002531",
+      "spec": "M4T20W29L53",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6013002541",
+      "spec": "φ229.57T21",
+      "category": "被動鍊輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6013002550",
+      "spec": "OD116.76T10",
+      "category": "鏈輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6013002560",
+      "spec": "φ307.32T20",
+      "category": "鏈輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6014002502",
+      "spec": "M5T36W50L131",
+      "category": "旋轉齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6018002511",
+      "spec": "M3T15W26L52",
+      "category": "預備站小齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6018002520",
+      "spec": "M3T15W19L20",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6018002530",
+      "spec": "M3T120W28L28",
+      "category": "四分度大齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6018002540",
+      "spec": "M2.5T27W19.5L30",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6023002501",
+      "spec": "M6T25W69.5L85",
+      "category": "左旋齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6023002511",
+      "spec": "M6T25W70L103",
+      "category": "左旋齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6026002503",
+      "spec": "M5T36W44L138",
+      "category": "旋轉齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6027002560",
+      "spec": "φ56.11T26",
+      "category": "鏈輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6027002570",
+      "spec": "M3T34W25L29",
+      "category": "齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6027002580",
+      "spec": "M3T34W25L29",
+      "category": "齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6028002500",
+      "spec": "M3T42W25L74",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6028002530",
+      "spec": "M5T24W48.5L110",
+      "category": "直線軸馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6036002510",
+      "spec": "φ109.76T20",
+      "category": "鏈輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6043002510",
+      "spec": "M5T20W39L117",
+      "category": "小齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6043002520",
+      "spec": "M5T20W39L68",
+      "category": "小齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "6124",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "616D406-1 AA98366 P2",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "616D410A-1 AA96595 P3",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "62102",
+      "spec": "Φ30L245",
+      "category": "齒輪心軸",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "6P3A-LB63040-1020000",
+      "spec": "φ261.5T16L57.1",
+      "category": "主動鍊輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "6P3A-LB63040-1030000",
+      "spec": "φ261.5T16L56.1",
+      "category": "惰輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "6P4A-LB63024-1020100",
+      "spec": "φ208T24L44.6",
+      "category": "主動鍊輪24T",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "6P4A-LB63032-1020000",
+      "spec": "φ208T24L44.6",
+      "category": "主動鍊輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "6P4A-LB63032-1030000",
+      "spec": "φ208T24L49.6",
+      "category": "惰輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "6P5A-LB10020-118H000",
+      "spec": "HTD-8MT54L49",
+      "category": "齒型皮帶輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "7003002522",
+      "spec": "M2.5T60W20L35",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "7003002550",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "7009-C00587X-70T",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "7009-C00595X-28T",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "7017002500",
+      "spec": "M2.5T28W20L40",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "7018002541",
+      "spec": "M1.75T72W14L22",
+      "category": "外傳動齒",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "7018002551",
+      "spec": "M1.75T72W10L14.5",
+      "category": "內傳動齒",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "7018002561",
+      "spec": "M1.75T72W18L50",
+      "category": "外傳動齒",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "7018002570",
+      "spec": "M1.75T72W12L18.5",
+      "category": "內傳動齒",
+      "appeared_in": [
+        "寶嘉誠"
+      ]
+    },
+    {
+      "d_setting_id": "70A-03",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "72103",
+      "spec": "M2T45W12L24",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "72125",
+      "spec": "M2T42W10L26",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "75545",
+      "spec": "M2T50W24L24",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "8-2104",
+      "spec": "M2T20W12L60",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "80641",
+      "spec": "M2T39W24L33",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "81219-E1002",
+      "spec": "M6*20T*88L",
+      "category": "直齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "81A238-1 AA96598 P1",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "81A239-1 AA96597 P2",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "9-2105",
+      "spec": "M2T26W12L24",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "9-2105A",
+      "spec": "M2T40W12L16",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "9054051-Z05",
+      "spec": "M2*685L",
+      "category": "齒條",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "956303002MA4",
+      "spec": "M2T20W16L37",
+      "category": "齒輪(20T)",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "97-DE50-CHA-IS008511",
+      "spec": "M4.233T17W12.7L12.7",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "97-DE50-CHA-IS009705",
+      "spec": "M4.233T36W32.33L86",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "99045L-T",
+      "spec": "M4T32W85L441",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "A-21001S",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "A-21002S",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "A-21003L",
+      "spec": "M3T32W74L192",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "A-21022L",
+      "spec": "M3T32W74L192",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "A012-02-0135A",
+      "spec": "M2T34W15.6L15.6",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "A012-02-0136A",
+      "spec": "M2T34W15.5L23.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "A160-Y01-001-A0-Y",
+      "spec": "M1T22W15L24.5",
+      "category": "Y軸22齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "A4-CT-007",
+      "spec": "M1T22W8L8",
+      "category": "被動齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "A506GF90R165-5150000",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "A506GF90R165-5160000",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "A506GF90R165-5170000",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "AB080070",
+      "spec": "M5.862*29T*40W197.3L",
+      "category": "螺旋傘齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "AC080660",
+      "spec": "M5.862*29T*40W*287.6",
+      "category": "螺旋傘齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "ACL160J103DEX003",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "ADAPTOR",
+      "spec": "",
+      "category": "adaptor",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "ANT-100456",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "AR017008-A0",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "B-E151C-00352-00",
+      "spec": "M1T118W6L11.7",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "B003",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "B03L19A080",
+      "spec": "M3T19W20L52.5",
+      "category": "左斜法蘭齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "BDM02168",
+      "spec": "M3T40W28L38",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "BDM06129",
+      "spec": "M2T40W28L28",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "BDM06169",
+      "spec": "M2T40W28L28",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "BG01",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "BG02",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "BG04-415",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "BG07",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "BH115-016-5",
+      "spec": "145",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "BN32A006",
+      "spec": "M2T60W15L23",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "C02L29A031",
+      "spec": "M2T29W26L29",
+      "category": "左斜法蘭齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CA25050702-1",
+      "spec": "M1.5T15W21.99L136.65",
+      "category": "上軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "CC7-00-06D",
+      "spec": "M1.25T58TW9L9",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CC7-00-07A",
+      "spec": "M1.25T29W10L10",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CF_000079",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "CF_000079(1)",
+      "spec": "M3T27W30",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "CF_000079(2)",
+      "spec": "M3T27W30L174",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-020024038-01",
+      "spec": "Φ24*38L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-020025038-01",
+      "spec": "Φ25*38L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-024030048-01",
+      "spec": "Φ30*48L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-024030048-02",
+      "spec": "Φ30*48L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-027032050-01",
+      "spec": "Φ32*50L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-028038048-01",
+      "spec": "Φ38*48L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-028038048-02",
+      "spec": "Φ38*48L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-028042048-01",
+      "spec": "Φ42*48L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-028042048-02",
+      "spec": "Φ42*48L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-060065080-01",
+      "spec": "Φ65*80L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-060070080-01",
+      "spec": "Φ70*80L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-082088090-01",
+      "spec": "Φ88*90L",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CH-KP-082100090-01",
+      "spec": "Φ100*90L/IDΦ82",
+      "category": "膨脹心軸套筒",
+      "appeared_in": [
+        "立翔"
+      ]
+    },
+    {
+      "d_setting_id": "CHGH-20-21-2-Φ16K5",
+      "spec": "M2T21W28L44",
+      "category": "斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHGH0152112-Q6",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHGH02025-99021",
+      "spec": "M2*25T*56L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHGH0202552-Q5",
+      "spec": "M2*25TB*56L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHGH03022",
+      "spec": "M3*22TB*56L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHGH0401812-Q6",
+      "spec": "M4T18W40L75",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHGH0402112-Q6",
+      "spec": "代料至齒研",
+      "category": "M4*21T40W75L",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHGH042112-Q6",
+      "spec": "無圖",
+      "category": "",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHM01502112-P",
+      "spec": "M1.5T21W20L46",
+      "category": "斜齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHM02002042-DIN8",
+      "spec": "M1.5*20T",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHM02002042-R-DIN8",
+      "spec": "M2*20T*56L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHM0202022-Q8",
+      "spec": "M2T20W24L28",
+      "category": "斜齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHM0302012-Q8",
+      "spec": "M3*20T*37L",
+      "category": "斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHMH0401812-B",
+      "spec": "M4*18T*75L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHMH0402112-B",
+      "spec": "M4*21T*75L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHMH0501812-B-99021",
+      "spec": "M5*18T*85L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CHMH0502112-B-99021",
+      "spec": "M5*21T*85L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CL-00-207-2",
+      "spec": "M2T30W28L33",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CL-00-208",
+      "spec": "M2T20W16L234.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CMA1310CGA-01-03-03",
+      "spec": "M1.5T25W20L25",
+      "category": "T Y向主動齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CMA1325CGH-01A-04-11",
+      "spec": "M1.5*20T*W20",
+      "category": "-T X向主動齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CMA1530CGE-01-04-02",
+      "spec": "M2T25W30L45",
+      "category": "-T Y向主動齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CMA1606CDGFA-01-02-2",
+      "spec": "M1.5*25T*W19",
+      "category": "8-T X向齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CMA2040CGHA-01A-02-0",
+      "spec": "M2*20T*W24",
+      "category": "5-02-T X向主動齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CP10*30TB*60L-66013",
+      "spec": "CP10T30W30L60",
+      "category": "直齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CP5*25T*57L-35003",
+      "spec": "5CPT25W25L57",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CP5T24",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "CP820T211L",
+      "spec": "CP8T20W25L211",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CP820T25B40L",
+      "spec": "CP8T20W25L40",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CSM0250301-99611",
+      "spec": "M2.5T30W25L40",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CSM03002011-Q8",
+      "spec": "S45C/M3*20T",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CSM1000151",
+      "spec": "M10*15T*W80",
+      "category": "正齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CSMH02002411-B",
+      "spec": "M2T24W25L35",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CSMHCP1020-Q6",
+      "spec": "CP*10*20TB*43L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "CT46/52-004-021-B",
+      "spec": "M1.25T30W20L25",
+      "category": "小齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "CV03-CD63060-3040000",
+      "spec": "M2.5*32T*E24精滾",
+      "category": "齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "D060-M0245",
+      "spec": "M2T45W20L32",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "D2-1006",
+      "spec": "M2T48W35L43",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "D2-1016",
+      "spec": "M2.5T81W35L35",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "DA-52000210",
+      "spec": "270",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "DB-08",
+      "spec": "M2T80W15W22",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DB-09",
+      "spec": "M2T30W15L28",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DB-2",
+      "spec": "2M*70T",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DB-3",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "DB-4",
+      "spec": "M2T48W10L90",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DD-10",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "DD-11",
+      "spec": "M2T50W10L44",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DD-12",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "DD-13",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "DD-14",
+      "spec": "M2T50W10L23",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DD-16",
+      "spec": "φ32*253L",
+      "category": "齒輪心軸",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DD-22",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "DD-23",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "DD-24",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DD-25",
+      "spec": "M2T73W10L17",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DD-26",
+      "spec": "φ38*103",
+      "category": "齒輪六巢心軸",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DD-27",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DD-28",
+      "spec": "M2T50W10L17",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DD-29",
+      "spec": "M2T34W10L14",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DD-3",
+      "spec": "2M*45T",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DD-32",
+      "spec": "φ38*355",
+      "category": "齒輪心軸",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "DF-009",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "DP24PA20T10",
+      "spec": "DP24PA20T10",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "DRIVE GEAR 14T",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "DRIVE GEAR 14T-N",
+      "spec": "M18.143T14W24L165.7",
+      "category": "軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "DV-16500110",
+      "spec": "",
+      "category": "主軸齒輪",
+      "appeared_in": [
+        "新穎"
+      ]
+    },
+    {
+      "d_setting_id": "DV-16500220",
+      "spec": "M3T53W30L60",
+      "category": "中間軸齒輪",
+      "appeared_in": [
+        "新穎"
+      ]
+    },
+    {
+      "d_setting_id": "DV-32063081",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "DV-32063102",
+      "spec": "內M1.5T60L117",
+      "category": "分流轉軸",
+      "appeared_in": [
+        "新穎"
+      ]
+    },
+    {
+      "d_setting_id": "DV-42210180",
+      "spec": "",
+      "category": "從動齒輪",
+      "appeared_in": [
+        "新穎"
+      ]
+    },
+    {
+      "d_setting_id": "DV11-RB40024-1120000",
+      "spec": "Φ140L16",
+      "category": "定位盤",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "DWG-1318",
+      "spec": "M1T29",
+      "category": "36T Star Ratchet",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "E-ACU125J103DEX002",
+      "spec": "M1T38W12L28",
+      "category": "A軸-傳動齒輪(小)",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "E-ACU125J103DEX003",
+      "spec": "M1T38W12L28",
+      "category": "A軸-傳動齒輪(大)",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "E-ACU125J103DEX011",
+      "spec": "M1T30W10L21",
+      "category": "C軸-傳動齒輪(小)",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "E2020010060000",
+      "spec": "M1T37W12L16",
+      "category": "平齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2020010070000",
+      "spec": "無圖",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2020010130001",
+      "spec": "M1T37W12L16",
+      "category": "平齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2020010140000",
+      "spec": "M1T60W12L16",
+      "category": "轉位平齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2090220120005",
+      "spec": "M2T20W31L131",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2090220130002",
+      "spec": "M2T45W14L33",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2090220140001",
+      "spec": "M2T17W15L29",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2090240270000",
+      "spec": "M2.5T19W38L38",
+      "category": "轉位齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2090260120000",
+      "spec": "M2T15W65L161",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2090260130000",
+      "spec": "M2T77W14L33",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E209026014****",
+      "spec": "M2T28W15L29",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2090260140000",
+      "spec": "M2T28W15L29",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2090270080000",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2090330040000",
+      "spec": "M2.5T19W28L85",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2090330170000",
+      "spec": "φ85.21T34W22.8L34",
+      "category": "皮帶輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2093340040001",
+      "spec": "M3T18W46L46",
+      "category": "轉位齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2093350270001",
+      "spec": "M2.5T20W46L46",
+      "category": "轉位齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2991280320000",
+      "spec": "1085",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2991280330000",
+      "spec": "M1T20W9L20",
+      "category": "小齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2991281020000",
+      "spec": "M1T21W10L25",
+      "category": "齒輪",
+      "appeared_in": [
+        "旭陽"
+      ]
+    },
+    {
+      "d_setting_id": "E2C152A050096A",
+      "spec": "M4T21W40L55",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "E2C152A072176A",
+      "spec": "M4T42W40L56",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "EG-MF-M2T13L145",
+      "spec": "M2T13L145",
+      "category": "主動軸(13齒)",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "EG-MF-M2T32L30",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "EG-MF-M2T36L49",
+      "spec": "M2T36L49",
+      "category": "從動小齒輪(36齒)",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "EG-MF-M2T55L25.5",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "F-BW726934",
+      "spec": "M1.25T61W18L103.2",
+      "category": "輸出軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "F-DH416L-5",
+      "spec": "DP8T15L265.11",
+      "category": "螺旋齒軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "F-DH429F-5",
+      "spec": "DP16T86W31.95",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "F23383A",
+      "spec": "M6T24W60L107",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "FAR012007-C0",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "FC-BRACKET BLOCK",
+      "spec": "Φ38L9.6",
+      "category": "墊塊",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "FC-SHAFT",
+      "spec": "Φ15L119.3",
+      "category": "心軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "FC4S-LD63030-1100000",
+      "spec": "Φ171.37T20L18",
+      "category": "傳動鏈輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "FC4S-LD63030-1110000",
+      "spec": "Φ93T10W12.6L61.1",
+      "category": "驅動鏈輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "FF PULLEY_22T",
+      "spec": "M1T19W28L35.3",
+      "category": "皮帶輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "FHR025012-00",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "FHR032011-01",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "FINAL GEAR 40T",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "FINAL GEAR 40T-N",
+      "spec": "M1.8143T40W35",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "FINAL SHAFT-N",
+      "spec": "M1T19W36.5L201.4",
+      "category": "軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "FRONT SHAFT",
+      "spec": "φ25L193.5",
+      "category": "FRONT SHAFT",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "GEAR_M2_50_20",
+      "spec": "M2T50W20L34",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "GEAR_M2_75_20_2",
+      "spec": "M2T75W20L34",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "GF170N3023B01",
+      "spec": "M1.5T32W18",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "GF210N0050E01",
+      "spec": "M1.5T35W18L124",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "GF256N3023A01",
+      "spec": "M1.5T35W22L37",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "GF320N3021A",
+      "spec": "M2T46W28L28",
+      "category": "惰齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "GS-M100T15",
+      "spec": "M1T15W9L55",
+      "category": "齒軸",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "GS-M100T26T52",
+      "spec": "M1*26T-M1*52T",
+      "category": "齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "GS-M100T48-01",
+      "spec": "M1*48T",
+      "category": "齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "GS-M100T50-1",
+      "spec": "M1T50",
+      "category": "齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "GS-M100T50-2",
+      "spec": "M1T50",
+      "category": "齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "GS-M100T58-01",
+      "spec": "M1*58T",
+      "category": "齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "GS-M100T58-02",
+      "spec": "M1*58T",
+      "category": "齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "GS-M100T59",
+      "spec": "M1*59T",
+      "category": "齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "GS-M100T59b",
+      "spec": "M1T59W7L7",
+      "category": "齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "GS-M100T78",
+      "spec": "M1*78T",
+      "category": "齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "GS-M100T98",
+      "spec": "M1*98T",
+      "category": "齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "GSE3000-0059",
+      "spec": "M4T30TW40L40",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "GSH3000-0053",
+      "spec": "M4*25T*60L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "GT2021-00100",
+      "spec": "M2T21W15L37",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2021-001B0",
+      "spec": "M2T21W15L37",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2024-00100",
+      "spec": "M2T24W22L52",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2024-001A0",
+      "spec": "M2T24W22L52",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2027-00100",
+      "spec": "M2T27W15L37",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2027-00200",
+      "spec": "M2T27W20L42",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2036-00100",
+      "spec": "M2T36W15L40",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2036-00200",
+      "spec": "M2T36W15",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2040-00100",
+      "spec": "M2T40W15L47",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2044-00100",
+      "spec": "M2*44T*43L",
+      "category": "傾斜惰輪-1",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2048-00100",
+      "spec": "M2*48T*43L",
+      "category": "惰輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2048-00200",
+      "spec": "M2T48W17L20",
+      "category": "惰輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2055-00100",
+      "spec": "M2*55T*22L",
+      "category": "傾斜惰輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2060-00100",
+      "spec": "M2*60T*22L",
+      "category": "惰輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT2060-00201",
+      "spec": "M2T60W18L27",
+      "category": "從動齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT3021-00100",
+      "spec": "M3T21W22L52",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT3028-00100",
+      "spec": "M3T28W19.5L20.5",
+      "category": "旋轉齒輪-1",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT3028-00200",
+      "spec": "M3T28W18L20",
+      "category": "旋轉惰輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT3045-00100",
+      "spec": "M3T45W20L32",
+      "category": "從動齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GT3049-00100",
+      "spec": "M3T49W20L22",
+      "category": "旋轉惰輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GTA020-00100",
+      "spec": "M1.5T20W12L30",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GTA028-00200",
+      "spec": "M1.5T28W15L35",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GTA028-00300",
+      "spec": "M1.5T28W15L35",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GTA035-00200",
+      "spec": "M1.5T35W16L20",
+      "category": "惰輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "GW07M2T27W25D22A-L",
+      "spec": "61.3*M2*27T*25W",
+      "category": "傳動齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "GW11-M3-T30W32D32B-R",
+      "spec": "101.49*M3*30T*32W",
+      "category": "傳動齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "GX125N0028A01",
+      "spec": "M1.5T54W16L16",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "GX255N0032C02",
+      "spec": "M1.5T84W19L20",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "GX255N0032I0T",
+      "spec": "M1.5T64W18L35",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "HA3003F",
+      "spec": "M1T30W10L27",
+      "category": "齒輪",
+      "appeared_in": [
+        "弘旺"
+      ]
+    },
+    {
+      "d_setting_id": "HA3011A",
+      "spec": "M1T40W10L21",
+      "category": "正齒輪",
+      "appeared_in": [
+        "弘旺"
+      ]
+    },
+    {
+      "d_setting_id": "HCPR134-30029C",
+      "spec": "M1.25T17W12.5L96",
+      "category": "攻牙軸套推進齒輪\n(下次要調漲)",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "HELICAL GEAR-21",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "HELICAL GEAR-62",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "HF0101PAC9400644B",
+      "spec": "M4T40W40L60",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "HG17T",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "HG3005L",
+      "spec": "M2*20T*21L",
+      "category": "螺旋齒輪",
+      "appeared_in": [
+        "弘旺"
+      ]
+    },
+    {
+      "d_setting_id": "HG3006R",
+      "spec": "M2*20T*28L",
+      "category": "螺旋齒輪",
+      "appeared_in": [
+        "弘旺"
+      ]
+    },
+    {
+      "d_setting_id": "HG3007R",
+      "spec": "M2*20T*54L",
+      "category": "螺旋齒輪",
+      "appeared_in": [
+        "弘旺"
+      ]
+    },
+    {
+      "d_setting_id": "HG3008L",
+      "spec": "M1.5*26T10W*21L",
+      "category": "螺旋齒輪",
+      "appeared_in": [
+        "弘旺"
+      ]
+    },
+    {
+      "d_setting_id": "HGHAN4003",
+      "spec": "",
+      "category": "HGHDNG000-墊塊10 (每組2pcs)",
+      "appeared_in": [
+        "和大"
+      ]
+    },
+    {
+      "d_setting_id": "HGHAN4004",
+      "spec": "",
+      "category": "HGHDNG000-墊塊20 (每組3pcs)",
+      "appeared_in": [
+        "和大"
+      ]
+    },
+    {
+      "d_setting_id": "HGHAN4005",
+      "spec": "",
+      "category": "HGHDNG000-墊塊30 (每組2pcs)",
+      "appeared_in": [
+        "和大"
+      ]
+    },
+    {
+      "d_setting_id": "HGHAN4006",
+      "spec": "",
+      "category": "HGHDNG000-墊塊40 (每組2pcs)",
+      "appeared_in": [
+        "和大"
+      ]
+    },
+    {
+      "d_setting_id": "HGHANA003",
+      "spec": "",
+      "category": "HGHDNB000-墊塊20 (每組2pcs)",
+      "appeared_in": [
+        "和大"
+      ]
+    },
+    {
+      "d_setting_id": "HGHANA004",
+      "spec": "",
+      "category": "HGHDNB000-墊塊30 (每組2pcs)",
+      "appeared_in": [
+        "和大"
+      ]
+    },
+    {
+      "d_setting_id": "HGHANA005",
+      "spec": "",
+      "category": "HGHDNB000-墊塊40 (每組3pcs)",
+      "appeared_in": [
+        "和大"
+      ]
+    },
+    {
+      "d_setting_id": "HGHDNJ004",
+      "spec": "",
+      "category": "HGHDNJ000-墊塊10 (每組1pc)",
+      "appeared_in": [
+        "和大"
+      ]
+    },
+    {
+      "d_setting_id": "HGHDNJ005",
+      "spec": "",
+      "category": "HGHDNJ000-墊塊20 (每組2pcs)",
+      "appeared_in": [
+        "和大"
+      ]
+    },
+    {
+      "d_setting_id": "HGHDNJ006",
+      "spec": "",
+      "category": "HGHDNJ000-墊塊30 (每組2pcs)",
+      "appeared_in": [
+        "和大"
+      ]
+    },
+    {
+      "d_setting_id": "HGHDNJ007",
+      "spec": "",
+      "category": "HGHDNJ000-墊塊40 (每組2pcs)",
+      "appeared_in": [
+        "和大"
+      ]
+    },
+    {
+      "d_setting_id": "HH02-HB50060-306000D",
+      "spec": "M5T16W30L50",
+      "category": "齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "HH02-HB50060-306020A",
+      "spec": "M5T18W30L50",
+      "category": "齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "HH02-HB50060-307000E",
+      "spec": "M5T32W30L36",
+      "category": "齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "HH02-HB50060-308000D",
+      "spec": "M5T12W45L50",
+      "category": "齒輪(三)",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "HH02-HB50060-309000D",
+      "spec": "M5T60W45",
+      "category": "齒輪(60T)",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "HIB0006-A",
+      "spec": "無圖",
+      "category": "無資料",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "HR032008-00",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "HR050007-00",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "HR063012-00",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "HS05-HB50024-1240S00",
+      "spec": "8M*40T*W54",
+      "category": "齒型皮帶輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "HS05-HB50120-3840S00",
+      "spec": "40T-HTD-8M",
+      "category": "齒型皮帶輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "HS08-HB50060-5841S00",
+      "spec": "HTD-8M*40T",
+      "category": "齒型皮帶輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "HS0W-HT10240-1120000",
+      "spec": "M3*18T*30W",
+      "category": "齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "HSAN-HB50040-1060000",
+      "spec": "M3.5T60W30L42",
+      "category": "減速大齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "HSCT-HB50040-1070000",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "HSE8-HB50040-2060000",
+      "spec": "3.5M*50T*30W",
+      "category": "減速大齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "HSOK-HB50060-K090100",
+      "spec": "M5T60W45L65",
+      "category": "齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "I5023441",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "I5023445",
+      "spec": "M2T16W28L34",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "I5025365",
+      "spec": "M2T16W28L38",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "I5030624",
+      "spec": "M2T16W28L30",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "I5031586",
+      "spec": "M2.5T20W16L16",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "I5031589",
+      "spec": "M2.5T28W16L41",
+      "category": "直齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "I5033024",
+      "spec": "M1.5T13W18L76",
+      "category": "齒軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "I5034224",
+      "spec": "M1.5915T30W15L25",
+      "category": "直齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "I5034718",
+      "spec": "M1.5915T46W12L33.5",
+      "category": "齒輪CP5",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "ID36.81*OD29*L46.9",
+      "spec": "ID36.81*OD29*L46.9",
+      "category": "筒夾",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "IGN-GEAR-002",
+      "spec": "M1.25T32W6L9.1",
+      "category": "分電盤M1齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "IGN-GEAR-003",
+      "spec": "M1.25T16W13.4L24.4",
+      "category": "分電盤S1齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "IGN-GEAR-004",
+      "spec": "M1.25T16W6L7.6",
+      "category": "分電盤S2齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "IM038019",
+      "spec": "M3T26W30L41.5",
+      "category": "斜齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "JD56-0-20020701-L",
+      "spec": "M4T22W40L50",
+      "category": "斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "JIG-53-5302-A",
+      "spec": "DP12T85W30L30",
+      "category": "H-9B中心齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "JKGA01715R",
+      "spec": "M1.25T15W14L24",
+      "category": "17型1P齒軸(R3)",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGA1624R1",
+      "spec": "M1.25*24T*18W",
+      "category": "1P齒軸",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGA1822R",
+      "spec": "M1.25T22W21.2",
+      "category": "入力齒軸1P-5HP",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGASS13R3",
+      "spec": "M1.25*13T*18W28L",
+      "category": "齒輪",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGASS17R2",
+      "spec": "M0.8*17T*310L",
+      "category": "1P齒軸",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGASS20R1",
+      "spec": "M1*20T",
+      "category": "1P齒軸",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGB01750L",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "JKGB03749L",
+      "spec": "M1*49T*12W*15.5L",
+      "category": "1G齒輪(代料到齒研)",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGB07790L",
+      "spec": "M1*90T*18W*112外20長",
+      "category": "77型1G齒輪",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGC03715L1",
+      "spec": "M1.25*15T23W56L",
+      "category": "2P齒軸",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGC04719L1",
+      "spec": "M1.25*19T24.5W64L",
+      "category": "2P齒軸",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGD04794R",
+      "spec": "M1*94T*17W20L",
+      "category": "47型2G齒輪",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGE09715R1_35GO",
+      "spec": "",
+      "category": "外研35尺寸量測用",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGE09715R1_35NOGO",
+      "spec": "",
+      "category": "外研35尺寸量測用",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGE09715R1_JIG",
+      "spec": "",
+      "category": "外研40尺寸量測用(GO)",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKGF06780L",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "JKKE04715R",
+      "spec": "M1.25T15W47L112",
+      "category": "3P齒軸",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "JKYM11001711",
+      "spec": "M1.75T17W32L202",
+      "category": "入力軸",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "K96464",
+      "spec": "M5T18W55L55",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "KA0222S100",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "KA0222S101",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "KA0222S104",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "KA0222S107",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "KA0222S108",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH02125",
+      "spec": "",
+      "category": "免鍵軸襯-1.25\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH02143",
+      "spec": "",
+      "category": "免鍵軸襯-1.4375\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH02162",
+      "spec": "",
+      "category": "免鍵軸襯-1.625\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH02193",
+      "spec": "",
+      "category": "免鍵軸襯-1.9375\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH03193",
+      "spec": "",
+      "category": "免鍵軸襯",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH04193",
+      "spec": "",
+      "category": "免鍵軸襯-1.9375\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH05218",
+      "spec": "",
+      "category": "免鍵軸襯-2.1875\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH05243",
+      "spec": "",
+      "category": "免鍵軸襯-2.4375\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH05293",
+      "spec": "-\"2.9375\"",
+      "category": "免鍵軸襯",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH06250",
+      "spec": "",
+      "category": "免鍵軸襯-2.5\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH08343",
+      "spec": "",
+      "category": "免鍵軸襯-3.4375\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH10493",
+      "spec": "",
+      "category": "免鍵軸承#10-4.9375\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH12543",
+      "spec": "",
+      "category": "免鍵軸襯-5.4374\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH12593",
+      "spec": "",
+      "category": "免鍵軸襯-5.9375\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH12600",
+      "spec": "",
+      "category": "免鍵軸襯-6\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH12643",
+      "spec": "",
+      "category": "免鍵軸襯-6.4375\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KBSH12650",
+      "spec": "",
+      "category": "免鍵軸襯-6.5\"",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KDS-65L-SP003-001005",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "KF-6",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "KHYD0451",
+      "spec": "",
+      "category": "軸承小蓋",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KHYD0611",
+      "spec": "",
+      "category": "軸承小蓋",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KKYC11007121",
+      "spec": "M1.5*71T*23W*126.9外23長",
+      "category": "1G齒輪",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KKYC24710021-1",
+      "spec": "M2.5*100T36.5W*36.5L",
+      "category": "1G齒輪",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KKYC58209501",
+      "spec": "M7T95W66",
+      "category": "2G齒輪",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KKYC58210901",
+      "spec": "M3.75T109W42",
+      "category": "1G齒輪",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KKYM58203601",
+      "spec": "M4.5T36W55L592",
+      "category": "入力軸",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "KY-L650-092001-01",
+      "spec": "16800",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "LC01-LB50024-2020000",
+      "spec": "Φ265T12L101.1",
+      "category": "鍊輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "LC01-LB63020-102000D",
+      "spec": "φ154.1T24L35.5",
+      "category": "主動鍊輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "LEGS08922",
+      "spec": "",
+      "category": "直結出力軸",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "LEGS08923",
+      "spec": "M2.5*12T*180L",
+      "category": "出力軸",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "LEGS08924",
+      "spec": "M2.5T12W82.8L180",
+      "category": "出力軸",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "LEGS08924-JIG-GO",
+      "spec": "",
+      "category": "塞規",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "LEGS08924-JIG-NG",
+      "spec": "",
+      "category": "塞規",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "LJG2-CNC-0329",
+      "spec": "M2T32W24L32",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "LJJX-0701",
+      "spec": "M2*32TB*32L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "LKGA0891302",
+      "spec": "M3.75*13T*201.5L",
+      "category": "1P入力齒輪",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "LKGB0892602",
+      "spec": "",
+      "category": "1G/2P雙齒輪",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "LKGB0892602-A",
+      "spec": "M3.75*16T+M3.75*26T",
+      "category": "雙齒輪試樣圖\n=LKGB0892602",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "LKGB0892603",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "LKGD0891702-JIG",
+      "spec": "",
+      "category": "MS/LEGS08924公模",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "LKNA03502002",
+      "spec": "MN=2/20T",
+      "category": "磨板機Z軸正齒輪(大)MN=2/20T",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "LKNC152060L22",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "LSD00071-01-121-A",
+      "spec": "M2*25T*W28",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "LSD00071-01-144-0",
+      "spec": "M2*25T*W28",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "Long shaft for AM6",
+      "spec": "無圖",
+      "category": "Long shaft for AM6",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "M0.5*130T",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "M0.5*130T-M1*16T",
+      "spec": "M0.5*130T-M1*16T",
+      "category": "齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "M1*20T*13.2L",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "M1*26T-M1*52T-A",
+      "spec": "M1*26T*7.5W",
+      "category": "齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "M1*26T-M1*52T-A1",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "M1*26T-M1*52T-B",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "M1*58T*5.37L",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "M1.25*29TB*18.5L",
+      "spec": "M1.25T29W10L18.5",
+      "category": "正齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M1.5*20T*136L-KR021",
+      "spec": "M1.5T20W20L136",
+      "category": "斜齒齒研齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M1.5*24TB*20L",
+      "spec": "M1.5T24W15L20",
+      "category": "橫向齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M1.5*30T*110L-KR021",
+      "spec": "M1.5T30W14.5L110",
+      "category": "左旋齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M1.5*30TB*23L",
+      "spec": "M1.5*30T*23L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M1.5*30TB*48L",
+      "spec": "M1.5T30W20L48",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M1.5*40TB*40L-KR021",
+      "spec": "M1.5*40T*14W*40L",
+      "category": "斜齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M1.5*48T*110L-KR021",
+      "spec": "M1.5*48T*15W*110L",
+      "category": "斜齒齒研齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M1.75*14T-FH001",
+      "spec": "M1.75T14W26L108",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "M1.95T15PA20RH30.5",
+      "spec": "M1.95T15PA20°RH30.5°",
+      "category": "小齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "M1.95T64PA20°LH30°",
+      "spec": "M1.94T64PA20°LH30°",
+      "category": "大齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "M2*20T*30L-KR021",
+      "spec": "M2T20W20L30",
+      "category": "直齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M2*28T*20L LH",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "M2*28T*20L RH",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "M2*33TB*29L",
+      "spec": "M2T33W26L29",
+      "category": "斜齒法蘭齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M2*33TB*30L",
+      "spec": "M2T33W26L30",
+      "category": "左斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M2*39TB*38L-AU011",
+      "spec": "M2*39TB*38L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M2.5*26T-ID40",
+      "spec": "M2.5T34W30L79",
+      "category": "左斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M2.5-32T*20L-JP111",
+      "spec": "M2.5*32T*20L",
+      "category": "直齒法蘭齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M3*25TB*65L-AU011",
+      "spec": "M3*25TB*65L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M3.5T27W30L189",
+      "spec": "M3.5T27W30L189",
+      "category": "齒輪 4",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "M3.5T54W30L40",
+      "spec": "M3T81W30L50",
+      "category": "齒輪 3",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "M3.5T81W30L50-GAUGE",
+      "spec": "M3.5T81W30L50-gauge",
+      "category": "軌距",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "M3H-20Z-N001-1902181",
+      "spec": "M3T20W28L65",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M3T27W30L284",
+      "spec": "M3T27W30L284",
+      "category": "齒輪 2",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "M4*21TB*75L-AU011",
+      "spec": "M4*21TB*75L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M4*22TB*65L-42271",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "M4*24TB*80L-33108",
+      "spec": "M4T24W40L80",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "M5*17TB*425L-RU033",
+      "spec": "M5T17W75L425",
+      "category": "左旋齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MA00046P02",
+      "spec": "M8*24T*110L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MA00046P09",
+      "spec": "M2*24T*32L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MA00046P10",
+      "spec": "M4*24T*64.5L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MAINTAIN-02",
+      "spec": "CP5*25T*64L",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MB32003",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "MC20-HM50100-00008M0",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "MD20-HM50100-10007M0",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "ME-020.138",
+      "spec": "",
+      "category": "齒輪咬合儀",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "MGRNSP20092001A1",
+      "spec": "M2T92W24L35",
+      "category": "正齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MH25011",
+      "spec": "M1.25T48L31.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MH80010",
+      "spec": "無圖",
+      "category": "正齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MHFGH02002611-DIN6",
+      "spec": "M2T26W26L29",
+      "category": "左旋齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHFGH02003311-DIN6",
+      "spec": "M2T33W26L29",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHFGH02003711-DIN6",
+      "spec": "M2T37W26L29",
+      "category": "斜齒法蘭齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHFGH02003711-Φ6",
+      "spec": "M2T37W26L29",
+      "category": "DIN6",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHFGH020037Φ50-9904",
+      "spec": "M2T37W26L29",
+      "category": "0齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHFGH020037Φ63-9904",
+      "spec": "M2T37W26L29",
+      "category": "0齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHFGH02027-33.5L-B",
+      "spec": "M2T27W30L33.5",
+      "category": "斜齒法蘭齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHFGH03003143-DIN6",
+      "spec": "M3T31W31L36",
+      "category": "斜齒法蘭齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHFGH03004032-DIN6",
+      "spec": "M3T40W31L36",
+      "category": "斜齒法蘭齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHFGH0303012-Q6-REV",
+      "spec": "M3*30T*35W",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHFGH0303121",
+      "spec": "M3*31T*31W",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHFGHΦ063*40T*26L",
+      "spec": "同MHFGHΦ063-40T-26L",
+      "category": "法蘭齒輪M2T40",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH-L-0250161-DIN6",
+      "spec": "M2.5T16W19.5L108",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH-L-0250201-DIN6",
+      "spec": "M2.5*20T*108L",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH-L-0250251-DIN6",
+      "spec": "M2.5T25W19.5L108",
+      "category": "斜齒齒研齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH-L-0300201-DIN6",
+      "spec": "M3*20T*162L",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH010030-JIS2",
+      "spec": "M1*30T*21L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH01502112-B",
+      "spec": "M1.5T21W20L46",
+      "category": "斜齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH01502112-CN-U",
+      "spec": "M1.5*21T*46L",
+      "category": "斜齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH01502512-DIN6",
+      "spec": "M1.5*25T*46L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH01503022-DIN6",
+      "spec": "M1.5T30W20L50",
+      "category": "斜齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH02001811-US024",
+      "spec": "M2T18W28L34.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH02002011-US024",
+      "spec": "M2*20T*30",
+      "category": "齒輪L",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH02002051-DIN6",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH02002552-DIN6",
+      "spec": "M2T25W28L56",
+      "category": "左斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH02002572-99021",
+      "spec": "M2T25W25L46",
+      "category": "齒輪Gear",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH0200280",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH02003012-US024",
+      "spec": "M2*30T*66L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH03002211-US024",
+      "spec": "M3T22W28L93",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH03002252-DIN6",
+      "spec": "M3T22W28L65",
+      "category": "斜齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH03002282-DIN6",
+      "spec": "M3T22W30L60",
+      "category": "左斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH03003052-DIN6",
+      "spec": "M3T30W30L85",
+      "category": "斜齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH030032Φ22-DIN6",
+      "spec": "M3*32T*L65",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH03004512-DIN6",
+      "spec": "M3T45W28L65",
+      "category": "斜齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH04001812-DIN6",
+      "spec": "M4T18W40L75",
+      "category": "斜齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH04002132-DIN6",
+      "spec": "M421TW40L75",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHGH04021-99012",
+      "spec": "M4T21W40L80",
+      "category": "斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHMH0500243",
+      "spec": "M5*24T*110L",
+      "category": "斜齒硬化齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHSGH020015",
+      "spec": "M2T15W26L32",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHSGH020018",
+      "spec": "M2*18T*33L",
+      "category": "花鍵齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MHSGH040020",
+      "spec": "M4T20W41L54",
+      "category": "花鍵齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MI32012-A",
+      "spec": "M240T15WL23",
+      "category": "主動齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MI32018-A",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "MI80005",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN25015-A",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN25015-G",
+      "spec": "M2T18W15L42.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN25016",
+      "spec": "M2T37W18L20",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN25019",
+      "spec": "M2T45W15L23",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN25053-A-01",
+      "spec": "M2T35W14.5L23",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN32015-A",
+      "spec": "M2T50W15L23",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN32017-A",
+      "spec": "M2T54W15",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN32018-A",
+      "spec": "M2T30W20L43",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN32021-A-01",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN32021-D",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "MN32021-G",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "MN32021-H",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "MN50015",
+      "spec": "M2.5T48W15L23",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN50017",
+      "spec": "M2.5T40W15L23",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN50021",
+      "spec": "M2.5T32W15L23",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MN63006-D",
+      "spec": "M3T24W20L60",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "MR-10",
+      "spec": "M3.1831*20T",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MR32-03-09",
+      "spec": "M5T24W50L85",
+      "category": "斜齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MSCPG5-20A-33757-B",
+      "spec": "CP5*20T*30L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MSGH0100201-JIS2",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "MSGH0150801-JIS2",
+      "spec": "M1.5T80W15L25",
+      "category": "直齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MSGH0200241-JIS2",
+      "spec": "M2*24T*30L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MSGH02004041-DIN6",
+      "spec": "M2T40W28L30",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MSGH02005611-DIN6",
+      "spec": "M2T56W28L30",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MSGH03002252-DIN6",
+      "spec": "M3*22T*L65",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "MTA1700700",
+      "spec": "M2T20W15L30",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "MTH2550700",
+      "spec": "M2T21W15L30",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "MTH2550800",
+      "spec": "M2T35W20L20",
+      "category": "蝸桿齒輪(24錐孔)",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "MYM800404101-B",
+      "spec": "φ114.08*5.2",
+      "category": "傳動軸-盤面",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "NRFP01132830",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "O-112121107-R123-1",
+      "spec": "M1.25T7W23L66.6",
+      "category": "馬達軸心",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "O-112121107-R124-1",
+      "spec": "M1.25T25W15L15",
+      "category": "CHC版搭110",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "O-112121107-R126-1",
+      "spec": "M1.25T14W14L46.8",
+      "category": "齒輪2-1",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "O-112121107-R128-1",
+      "spec": "M1.5T15W16L65.5",
+      "category": "齒輪3-1",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "O-112121107-R129-1",
+      "spec": "M1.5T59W16L30",
+      "category": "齒輪3-2",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "O-112121107-R130-1",
+      "spec": "M0.8T28W12L13",
+      "category": "轉接環內齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "OD120*L50-ROLLER-A",
+      "spec": "φ50*117.63",
+      "category": "滾輪溝槽5/6",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "P00002502-A",
+      "spec": "M5T17W50L102",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "P1 MASTER AHAFT",
+      "spec": "",
+      "category": "P1 master shaft",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "P2_MASTER_GEAR_T80",
+      "spec": "master_gear",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "P4_TG_JIG_S",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "P8210901-0033",
+      "spec": "φ33.5L90",
+      "category": "從動輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "P8210901-0059",
+      "spec": "φ28.5L35",
+      "category": "主動輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "PDA758",
+      "spec": "M0.75*20T*42.7L",
+      "category": "離合器主軸",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "PF381A-0202A",
+      "spec": "M12T17W185L185",
+      "category": "小齒輪KP-400",
+      "appeared_in": [
+        "金豐"
+      ]
+    },
+    {
+      "d_setting_id": "PG-M080T90T87T18R30TM-03",
+      "spec": "M0.8T18W8.90L8.90",
+      "category": "M-03行星齒輪",
+      "appeared_in": [
+        "盟英"
+      ]
+    },
+    {
+      "d_setting_id": "PG_155_1227",
+      "spec": "0",
+      "category": "3*1",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "PG_155_240226",
+      "spec": "0",
+      "category": "3*1",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "PH300043-80",
+      "spec": "M3T43W20L85",
+      "category": "主軸小齒",
+      "appeared_in": [
+        "御成"
+      ]
+    },
+    {
+      "d_setting_id": "PH300047",
+      "spec": "M2.5*35T*W35",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "御成"
+      ]
+    },
+    {
+      "d_setting_id": "PH300049-80",
+      "spec": "M3T76W29L57",
+      "category": "主軸大齒",
+      "appeared_in": [
+        "御成"
+      ]
+    },
+    {
+      "d_setting_id": "PHGH-20-12-W50-06",
+      "spec": "M2T12W15L46",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "PLD035-8YU00",
+      "spec": "φ89.13T35W22L27",
+      "category": "蝸桿皮帶輪8YU",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "PLE024-8YU00",
+      "spec": "φ59.743T24W25L25",
+      "category": "馬達皮帶輪P24-8YU-20",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "PM1366-0203A",
+      "spec": "無圖",
+      "category": "齒輪STD-600",
+      "appeared_in": [
+        "金豐"
+      ]
+    },
+    {
+      "d_setting_id": "PM1369-0201A",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "金豐"
+      ]
+    },
+    {
+      "d_setting_id": "PM1618-0201A",
+      "spec": "無圖",
+      "category": "齒輪S4-1200，B40607",
+      "appeared_in": [
+        "金豐"
+      ]
+    },
+    {
+      "d_setting_id": "PM1656-0201A",
+      "spec": "無圖",
+      "category": "齒輪SDS-1000",
+      "appeared_in": [
+        "金豐"
+      ]
+    },
+    {
+      "d_setting_id": "PM1A03-0202A",
+      "spec": "M5T47W60L157",
+      "category": "齒輪S4-2000",
+      "appeared_in": [
+        "金豐"
+      ]
+    },
+    {
+      "d_setting_id": "PS2009-1301A-1",
+      "spec": "M1.5T30W15L20",
+      "category": "C型扣環",
+      "appeared_in": [
+        "金豐"
+      ]
+    },
+    {
+      "d_setting_id": "PS2056-0901A",
+      "spec": "φ60*L84",
+      "category": "接頭",
+      "appeared_in": [
+        "金豐"
+      ]
+    },
+    {
+      "d_setting_id": "PS2156-0910A",
+      "spec": "φ60*L99",
+      "category": "接頭",
+      "appeared_in": [
+        "金豐"
+      ]
+    },
+    {
+      "d_setting_id": "PS2396-0207A",
+      "spec": "M2T40W15L41",
+      "category": "齒輪",
+      "appeared_in": [
+        "金豐"
+      ]
+    },
+    {
+      "d_setting_id": "PS2506-0204A",
+      "spec": "76*2M2*36T*15W",
+      "category": "齒輪",
+      "appeared_in": [
+        "金豐"
+      ]
+    },
+    {
+      "d_setting_id": "PS2T31-0204A",
+      "spec": "10*11.5*7",
+      "category": "齒條M1.5T1",
+      "appeared_in": [
+        "金豐"
+      ]
+    },
+    {
+      "d_setting_id": "R174",
+      "spec": "1.25M*12T*15W",
+      "category": "齒軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RA63010JC",
+      "spec": "M2T32L17",
+      "category": "4C256GZ1/J1驅動齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RA63010KC",
+      "spec": "M1.75T28/84L78.8",
+      "category": "J1從動齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RA63030LC",
+      "spec": "M1.25T13L69",
+      "category": "4C256KJ1/輸入齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RA63060PC",
+      "spec": "M2T32L41.5",
+      "category": "驅動齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RA63060QC",
+      "spec": "M2T32L17",
+      "category": "從動齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RA63070AC",
+      "spec": "M2T30W17L31",
+      "category": "齒輪輸入軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RA63070BC",
+      "spec": "M2T42W17L88",
+      "category": "齒輪輸出軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RARM700-N01-JH",
+      "spec": "M10T18W100L125",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RB-1",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-100",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "RB-101",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-103-1",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-103-2",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "RB-14",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-14-1",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "RB-15",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-18",
+      "spec": "外M2.5*49T+外M2*23T",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-21",
+      "spec": "M2T23W40L244",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-27",
+      "spec": "M2T40W12L24",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-31",
+      "spec": "2M*31T*18W",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-36",
+      "spec": "",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "RB-43",
+      "spec": "2M*35T*15W",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-43-1",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "RB-43-2",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "RB-64",
+      "spec": "2.5M*30T*40W",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-77",
+      "spec": "M2.5T15W35L145",
+      "category": "齒輪軸",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-8",
+      "spec": "M2.5T34W30L54",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-87",
+      "spec": "M2T40W10L33",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-90",
+      "spec": "M2T31W10L32.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-93",
+      "spec": "2M*49T*22.2W",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-93-1",
+      "spec": "φ32*290",
+      "category": "齒輪軸(1)",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-93-2",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RB-99",
+      "spec": "M2T23W12L38",
+      "category": "齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RBT2000A030",
+      "spec": "M4T30W40L45",
+      "category": "金正達齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RC-120",
+      "spec": "M2T443W14L26",
+      "category": "Z軸傳動齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RC-134",
+      "spec": "2M*43T*14W",
+      "category": "Z軸帶動齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RC-97",
+      "spec": "2M*14T*14L",
+      "category": "X軸傳動齒輪",
+      "appeared_in": [
+        "泳建"
+      ]
+    },
+    {
+      "d_setting_id": "RD23B02-1A01",
+      "spec": "M1T48W8",
+      "category": "斜齒輪AA",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RD23B02-1A02",
+      "spec": "M1T48W8L41.5",
+      "category": "斜齒輪AB",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RD252035A",
+      "spec": "M1T46W5L5",
+      "category": "正齒輪4EC00021",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RD320J103DEX002",
+      "spec": "M2T26W16L35",
+      "category": "傳動齒-小",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "REAR SHAFT",
+      "spec": "φ36L228.5",
+      "category": "REAR SHAFT",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "RM001-L165.4",
+      "spec": "L165.4",
+      "category": "軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RM001-L178.5",
+      "spec": "L178.5",
+      "category": "六栓槽軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RM001-M2-16T",
+      "spec": "M2T16L33.5",
+      "category": "直齒齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RM001-M2-23T",
+      "spec": "M2T23L36.9",
+      "category": "直齒齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RM001-M2-53T",
+      "spec": "M2T53L67.5",
+      "category": "直齒齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RM001-M2T15L165.5",
+      "spec": "M2T15L165.5",
+      "category": "齒軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "RR BRAKE DISK HUB",
+      "spec": "Φ118*22L",
+      "category": "齒輪",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "RR SHAFT",
+      "spec": "Φ47L226.6",
+      "category": "RR SHAFT",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "RR WHEEL HUB",
+      "spec": "Φ132*28L",
+      "category": "齒輪",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "RXT141002000M1",
+      "spec": "M2T18W23L28",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "RZT141001000M1",
+      "spec": "M2T18W16L33",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "S1905F1006A-R",
+      "spec": "M3*20TB*60L 右斜",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "S2G_155_1227",
+      "spec": "0",
+      "category": "3*1",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "S2P_155_1227",
+      "spec": "0",
+      "category": "3*1",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "S3G_155_1227",
+      "spec": "0",
+      "category": "3*1",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "S3P_155_1227",
+      "spec": "0",
+      "category": "3*1",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "SC-5FH-D11",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "SD0025-GR57BA",
+      "spec": "M2T53W27L49",
+      "category": "右旋同步齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "SF30-HM50100-00066M0",
+      "spec": "M3T28W40L40",
+      "category": "正齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "SF30-HM50100-00067M0",
+      "spec": "M3T28W40L44",
+      "category": "正齒輪",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "SG_240226",
+      "spec": "M1T10W20內孔5.00",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "SG_240226_TEST",
+      "spec": "M1T10W20",
+      "category": "",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "SM10907TW1-064-0",
+      "spec": "M3T40W30L60",
+      "category": "螺旋傘齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "SP-0.5M25Z",
+      "spec": "6000",
+      "category": "",
+      "appeared_in": [
+        "其它",
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "SPTM-6",
+      "spec": "96L",
+      "category": "SPTM-六方栓輸出軸",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "SPTT-14T",
+      "spec": "14T*7.2L",
+      "category": "小鍊輪",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "SPTT-19T",
+      "spec": "M1.5*19T*20W",
+      "category": "小齒輪",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "SPTT-35T",
+      "spec": "35T*7L",
+      "category": "大鍊輪",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "SPUR GEAR-18",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "SPUR GEAR-54",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "GOGORO"
+      ]
+    },
+    {
+      "d_setting_id": "SRG-M2-22-22-53",
+      "spec": "M2T22W21L53",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "SRG-M2-30-22-36",
+      "spec": "M2T30W20L36",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "SRG-M2-30-32-58",
+      "spec": "M2T30W20L58.5",
+      "category": "直齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "SRG-M2.5-24-32-45",
+      "spec": "M2.5T24W25L45.5",
+      "category": "直齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "SRG-M2.5-24-32-58.5",
+      "spec": "M2.5T24W25L58.5",
+      "category": "直齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "SRS-M2-18-22-36",
+      "spec": "M2T18W25L36.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "SRS-M2-23-32-58.5",
+      "spec": "M2T23W25L58.5",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "SS-0.5M50Z-1",
+      "spec": "M0.5T50W3",
+      "category": "行星齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "SS-0.5M50Z-2",
+      "spec": "M0.5T50W3",
+      "category": "行星齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "SUSCP10-30J35-MLAT35",
+      "spec": "M3.1831T30W38L38",
+      "category": "直齒齒研齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "SV7063-79-CP15",
+      "spec": "CP15*25TA*50L",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "SW903697075090-01",
+      "spec": "M3.25T12W38.2L92.2",
+      "category": "齒軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "T2A-06-018",
+      "spec": "M2T25W20L23",
+      "category": "正齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "T2A-06-019",
+      "spec": "M2T25W20L30",
+      "category": "正齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "TAPER COLLET 25-28",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "TBGT-421222A1",
+      "spec": "M0.5L8Φ104",
+      "category": "傘齒輪齒胚",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "TR17016-E-01",
+      "spec": "M1.5*30T*15W*48外33長",
+      "category": "馬達齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TR17020",
+      "spec": "M1.5T50W20L20",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TR255011",
+      "spec": "M2T46W18L20",
+      "category": "惰輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TR54017",
+      "spec": "T45W32L32",
+      "category": "蝸桿皮帶輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TR54017-A",
+      "spec": "T37W44L44",
+      "category": "蝸桿皮帶輪P45-8YU",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TR54017-B",
+      "spec": "T55W32L32",
+      "category": "蝸桿皮帶輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TR54018",
+      "spec": "φ67.378T27W26.7L70",
+      "category": "馬達皮帶輪P27-8YU-25",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TR54018-A",
+      "spec": "φ67.378T27W26.7L70",
+      "category": "馬達皮帶輪P27-8YU-25",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TR54018-B",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "TR54018-C",
+      "spec": "OD68.75T27W26.7L70",
+      "category": "馬達皮帶輪P27-8YU-25",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TR54018-D",
+      "spec": "φ67.378T37W41.7L86",
+      "category": "馬達皮帶輪P27-8YU",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TR54018-E",
+      "spec": "φ67.378T37W41.7L86",
+      "category": "馬達皮帶輪P27-8YU-25",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TR54018-G",
+      "spec": "φ44.464T18W26L70",
+      "category": "馬達皮帶輪P18-8YU",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TR54018-H",
+      "spec": "8YU*22T*W27",
+      "category": "馬達皮帶輪(22T-Φ32)",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "TT00465-312325-W33-0",
+      "spec": "M1*60T*10L",
+      "category": "01直齒輪Z60",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "TT00465-312326-W33-0",
+      "spec": "M1*30T*10L",
+      "category": "01直齒輪Z30",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "TT00465-312327-W33-0",
+      "spec": "M1*50T*20L",
+      "category": "01直齒輪Z50",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "TT00465-398675-W36-0",
+      "spec": "M1*38T*12L",
+      "category": "01  S51帶動齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "TT00465-398964-W36-0",
+      "spec": "M1*40T*19.1L",
+      "category": "01圓柱直齒齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "UKGD0891702",
+      "spec": "M23.75*17T*16W",
+      "category": "出力齒輪",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "UKGD0892402",
+      "spec": "M3.75*24T*16W",
+      "category": "離合齒輪",
+      "appeared_in": [
+        "成大"
+      ]
+    },
+    {
+      "d_setting_id": "USTI4000106",
+      "spec": "M2T30W23L23",
+      "category": "蝸桿齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "UV35-A04",
+      "spec": "φ80L3",
+      "category": "封蓋1",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "UV35-A05",
+      "spec": "φ80L3",
+      "category": "封蓋2",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "UV35-A12",
+      "spec": "φ55L84",
+      "category": "正心軸心",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "V0011-TRC-024",
+      "spec": "M2T40W28L57",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "V2-6",
+      "spec": "M1.25T59W16.5L28.5",
+      "category": "第二級大齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "VB21002-H",
+      "spec": "M2T24W15L37",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "VB21005-A",
+      "spec": "M2T53W18L20",
+      "category": "惰輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "VB21006",
+      "spec": "M2*30T*20W*64外20長",
+      "category": "從動輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "VH05-HB50060-3840S00",
+      "spec": "HTD-8M",
+      "category": "齒型皮帶輪40T",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "VJB510200",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "VN12012-A",
+      "spec": "無圖",
+      "category": "蝸桿端齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "VN12013-Q",
+      "spec": "M1.5T32W10L24",
+      "category": "馬達軸齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "VN12013-T",
+      "spec": "M1.5T32W15L42",
+      "category": "齒輪",
+      "appeared_in": [
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "VN17015",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品",
+        "和昕"
+      ]
+    },
+    {
+      "d_setting_id": "VN17016-A",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "VRD2368-310",
+      "spec": "M4*15T*36.5W*176.5L",
+      "category": "小齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "VTM06-532175",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "VTM06-532192",
+      "spec": "無圖",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "VVB1-VA50050-1180000",
+      "spec": "M3*28T*28W",
+      "category": "齒輪(三)",
+      "appeared_in": [
+        "吉輔"
+      ]
+    },
+    {
+      "d_setting_id": "X12830",
+      "spec": "M2T60W24L24",
+      "category": "齒輪",
+      "appeared_in": [
+        "原億昌"
+      ]
+    },
+    {
+      "d_setting_id": "YVT-2-1",
+      "spec": "M1.25T11W13L61.9",
+      "category": "第二級減速輸入齒輪軸",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "YVT-2-2",
+      "spec": "M1.25T37W13L13",
+      "category": "第二級減速輸出齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "YVT-3-3",
+      "spec": "φ35*L17",
+      "category": "第三級減速輸出齒輪轉接環",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "Z080-E6111-00-P",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "Z080-E6151-00-P",
+      "spec": "M1.5T50W15L15",
+      "category": "齒輪",
+      "appeared_in": [
+        "其它"
+      ]
+    },
+    {
+      "d_setting_id": "ZZ024019",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "品號不明",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    },
+    {
+      "d_setting_id": "整棧齒輪-料號不明",
+      "spec": "0",
+      "category": "",
+      "appeared_in": [
+        "半成品"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+其他頁面套用步驟
+1. PHP 最上方（取得使用者 features）
+
+$_pdo     = $conn->getPDO();
+$_user_id = intval($_SESSION['id'] ?? 0);
+$_features = [];
+
+try {
+    $stmt = $_pdo->prepare("
+        SELECT DISTINCT rf.feature_code
+        FROM user_roles ur
+        JOIN role_features rf ON rf.role_id = ur.role_id
+        WHERE ur.user_id = ?
+    ");
+    $stmt->execute([$_user_id]);
+    $_features = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch(Exception $e) {}
+
+if (empty($_features)) $_features = ['all']; // 無設定 → 全權
+
+function _hasF(string $f): bool {
+    global $_features;
+    return in_array('all',$_features,true) || in_array($f,$_features,true);
+}
+
+// 對應本頁功能開關（feature code 自訂）
+$IS_ADMIN = _hasF('all');
+$CAN_VIEW = _hasF('your_page_view');
+$CAN_EDIT = _hasF('your_page_edit');
+// ...
+
+// 本頁功能清單（設定頁籤顯示用）
+$PAGE_FEATURES = [
+    ['group'=>'基本操作', 'code'=>'your_page_view',  'label'=>'檢視'],
+    ['group'=>'基本操作', 'code'=>'your_page_edit',  'label'=>'編輯'],
+    // ...
+];
+2. JS 常數
+
+const IS_ADMIN      = <?= json_encode($IS_ADMIN) ?>;
+const CAN_VIEW      = <?= json_encode($CAN_VIEW) ?>;
+const ROLES_API_URL = '../../src/store/Roles_API.php'; // 路徑依頁面位置調整
+3. 呼叫 Roles_API.php 的 actions
+Action	方法	用途
+get_roles	GET	取得所有角色清單
+save_role	POST	新增/更新角色（帶 role_id 為更新）
+delete_role	POST	刪除角色（系統角色不可刪）
+get_role_features	GET	取得角色的功能代碼清單
+save_role_features	POST	儲存角色功能（features 為 JSON 陣列）
+get_users	GET	取得所有使用者＋已指派角色（用於指派頁面）
+assign_user_role	POST	指派角色給使用者
+remove_user_role	POST	移除使用者的某角色
+get_user_features	GET	取得某使用者的所有功能代碼（除錯用）
+4. Feature Code 命名規則
+{頁面前綴}_{功能名稱}，全小寫底線。例：
+
+報價單：quotation_view、quotation_edit
+BOM：bom_view_price、bom_add
+訂單追蹤：sales_track_close、sales_track_view

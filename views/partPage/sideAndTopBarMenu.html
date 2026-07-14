@@ -1,0 +1,822 @@
+<?php
+ if (session_status() == PHP_SESSION_NONE && !headers_sent()) {
+    session_start();
+ }
+
+ if(!isset($_SESSION['id']) && !isset($_SESSION['user_password'])) {
+     header("Location:../../../index.php");
+ }
+
+@$id            = $_SESSION['id'];
+@$userid        = $_SESSION['userid'];
+@$user_cname    = $_SESSION['user_cname'];
+@$user_uname    = $_SESSION['user_uname'];
+@$user_password = $_SESSION['user_password'];
+@$user_status   = $_SESSION['status'];
+@$user_status2   = $_SESSION['status2'];
+
+$conn=new DBConnection();
+@$user_permissions = $conn->getAll("SELECT `KPI_vw` FROM `user_permissions` WHERE `user_id` = '".$id."'");
+
+@$KPI_vw = 0;
+if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
+    $KPI_vw = $user_permissions[0]['KPI_vw'];
+}
+
+@$user_status_now   = $KPI_vw;
+
+?>
+
+
+<div class="col-md-3 left_col sidebar-sticky">
+    <div class="left_col scroll-view">
+        <?php
+        
+        $conn=new DBConnection();
+        $user=$conn->getAll("SELECT * FROM `user` WHERE id=".$_SESSION['id']);
+
+        // 取得本人所有身分（主身分 + 兼任），用於比對公告/通知對象
+        $my_status_ids = [-1];
+        foreach (['status', 'status2', 'status3'] as $sk) {
+            if (isset($_SESSION[$sk]) && $_SESSION[$sk] !== '' && $_SESSION[$sk] !== null) {
+                $my_status_ids[] = (int)$_SESSION[$sk];
+            }
+        }
+        $status_in = implode(',', array_unique($my_status_ids));
+
+        // 取得本人所屬部門（含兼任）
+        $my_dept_ids = [-1];
+        foreach ($conn->getAll("SELECT department_id FROM user_department_position_map WHERE user_id = ".(int)$id) as $drow) {
+            if ($drow['department_id'] !== null && $drow['department_id'] !== '') {
+                $my_dept_ids[] = (int)$drow['department_id'];
+            }
+        }
+        $dept_in = implode(',', array_unique($my_dept_ids));
+
+        // 未過期、對象(全體/部門/身分/本人)符合，且「要求動作尚未完成」的公告/通知。
+        // 要求動作依 live_event_target.mode：read=已閱、sign=回簽、reply=回覆+回簽；
+        // 只點開看過(標了已閱)但還沒回簽/回覆者，仍要留在置頂欄未讀清單（need_mode=同一則中最重的未完成要求）。
+        $event = $conn->getAll(
+            "SELECT le.*, MAX(CASE WHEN t.mode='reply' THEN 3 WHEN t.mode='sign' THEN 2 ELSE 1 END) AS need_mode
+             FROM `live_event` le
+             JOIN `live_event_target` t ON t.live_event_id = le.id
+             LEFT JOIN `live_event_for_user` lr
+                    ON lr.live_event_id = le.id AND lr.user_id = ".(int)$id." AND lr.oready_read = 1
+             LEFT JOIN `live_event_response` resp
+                    ON resp.live_event_id = le.id AND resp.user_id = ".(int)$id."
+             WHERE (le.enddate IS NULL OR le.enddate >= CURDATE())
+               AND (
+                    t.target_type = 'all'
+                 OR (t.target_type = 'status' AND t.target_id IN (".$status_in."))
+                 OR (t.target_type = 'dept'   AND t.target_id IN (".$dept_in."))
+                 OR (t.target_type = 'user'   AND t.target_id = ".(int)$id.")
+               )
+               AND (
+                    (t.mode = 'reply' AND (le.reply_deadline IS NULL OR le.reply_deadline >= CURDATE()) AND (resp.id IS NULL OR resp.replied_at IS NULL))
+                 OR (t.mode = 'sign'  AND (le.reply_deadline IS NULL OR le.reply_deadline >= CURDATE()) AND (resp.id IS NULL OR resp.signed_at IS NULL))
+                 OR ((t.mode NOT IN ('sign','reply') OR (le.reply_deadline IS NOT NULL AND le.reply_deadline < CURDATE())) AND lr.id IS NULL)
+               )
+             GROUP BY le.id
+             ORDER BY le.eventdate DESC"
+        );
+        ?><?php foreach ($user as $user) { ?>
+        <!--<div class="navbar nav_title" style="border: 0;">
+            <a href="../admin/dashboard.php?id=<?=$user['id']?>" class="site_title">
+                <i class="fa fa-paw"></i>
+                <span>超正齒輪</span></a>
+        </div>-->
+
+        <div class="clearfix"></div>
+
+
+        <!-- menu profile quick info -->
+        <div class="profile clearfix">
+            <div class="profile_pic">
+                <img src="../../resource/images/LOGO.svg" alt="..." class="img-circle profile_img">
+                
+            </div>
+            <div class="profile_info">
+                <span>超正齒輪</span>
+                <h2><?= $user['user_cname'] ?></h2>
+            </div>
+        </div>
+        <!-- /menu profile quick info -->
+
+        <br />
+
+        <!-- sidebar menu -->
+        <div id="sidebar-menu" class="main_menu_side hidden-print main_menu">
+            <div class="menu_section">
+                <?php 
+                // 查詢使用者部門與職稱 (含兼任)
+                $user_roles = $conn->getAll("SELECT d.name as dept_name, p.name as pos_name, udp.is_main 
+                                             FROM user_department_position_map udp
+                                             LEFT JOIN department d ON udp.department_id = d.id
+                                             LEFT JOIN position p ON udp.position_id = p.id
+                                             WHERE udp.user_id = '".$user['id']."'
+                                             ORDER BY udp.is_main DESC, udp.id ASC");
+
+                if (!empty($user_roles)) {
+                    foreach ($user_roles as $role) {
+                        $dept_name = isset($role['dept_name']) ? $role['dept_name'] : '';
+                        $pos_name = isset($role['pos_name']) ? $role['pos_name'] : '';
+                        
+                        $display_title = $dept_name;
+                        if ($dept_name != '' && $pos_name != '') {
+                            $display_title .= '-' . $pos_name;
+                        } else {
+                            $display_title .= $pos_name;
+                            
+                        }
+                        
+                        $font_size = '14px';
+                        if (isset($role['is_main']) && $role['is_main'] == 0) {
+                            $display_title .= '(兼任)';
+                            $font_size = '11px';
+                        }
+                        
+                        echo '<h3 style="font-size: ' . $font_size . ';">' . $display_title . '</h3>';
+                    }
+                }
+                ?>
+                <ul class="nav side-menu">
+                    <li>
+                        <a href="../admin/dashboard.php"><i class="fa fa-home"></i> 首頁</a>
+                    </li>
+                <?php
+                // 動態生成選單邏輯
+
+                // 1. 取得所有模組 (system_modules)
+                $modules = $conn->getAll("SELECT * FROM `system_modules` ORDER BY `sort_order` ASC");
+
+                // 2. 取得所有子頁面 (system_module_pages)
+                $pages = $conn->getAll("SELECT * FROM `system_module_pages` ORDER BY `sort_order` ASC");
+
+                // 3. 取得使用者權限 (user_module_permissions)
+                $user_perms_db = $conn->getAll("SELECT * FROM `user_module_permissions` WHERE `user_id` = '".$user['id']."'");
+
+                // 整理權限資料
+                $user_perms = ['group' => [], 'page' => []];
+                if(!empty($user_perms_db)){
+                    foreach($user_perms_db as $perm){
+                        if($perm['scope'] == 'group'){
+                            $user_perms['group'][$perm['module_code']] = $perm['permission'];
+                        } elseif($perm['scope'] == 'page'){
+                            // 當 scope 是 page, module_code 存的是 page_id
+                            $user_perms['page'][$perm['module_code']] = $perm['permission'];
+                        }
+                    }
+                }
+
+                // 將頁面依群組ID分組
+                $pages_by_group = [];
+                if(!empty($pages)){
+                    foreach($pages as $p){
+                        if (!empty($p['group_id'])) {
+                            $pages_by_group[$p['group_id']][] = $p;
+                        }
+                    }
+                }
+
+                // 建立一個以 page_id 為鍵的頁面查找表
+                $pages_by_id = [];
+                if(!empty($pages)){
+                    foreach($pages as $p){
+                        $pages_by_id[$p['page_id']] = $p;
+                    }
+                }
+
+                // 權限檢查函式
+                if (!function_exists('checkPagePerm')) {
+                    function checkPagePerm($module_code, $page_id, $perms) {
+                        // 1. 單一頁面權限優先
+                        if (isset($perms['page'][$page_id])) {
+                            return true; // 只要有設定就顯示
+                        }
+                        // 2. 群組權限
+                        if (isset($perms['group'][$module_code])) {
+                            return true; // 只要有設定就顯示
+                        }
+                        // 3. 預設無權限
+                        return false;
+                    }
+                }
+
+                // 渲染選單
+                if (!empty($modules)) {
+                    foreach ($modules as $mod) {
+                        $module_code = $mod['module_code'];
+                        $module_name = $mod['module_name'];
+                        $group_id = $mod['group_id'];
+                        $page_id_link = $mod['page_id'];
+                        
+                        // 使用預設圖示
+                        $mod_icon = 'fa-edit';
+
+                        // Case 1: Module is a single page link (page_id is set)
+                        if (!empty($page_id_link)) {
+                            // 檢查模組本身是否有權限 (scope=group)
+                            if (isset($user_perms['group'][$module_code])) {
+                                // 查找對應的頁面以獲取 URL
+                                if (isset($pages_by_id[$page_id_link])) {
+                                    $page_details = $pages_by_id[$page_id_link];
+                                    $url = $page_details['page_url'];
+                                    echo '<li><a href="'.$url.'"><i class="fa '.$mod_icon.'"></i> '.$module_name.'</a></li>';
+                                }
+                            }
+                        } 
+                        // Case 2: Module is a group (group_id is set)
+                        elseif (!empty($group_id)) {
+                            $child_pages = $pages_by_group[$group_id] ?? [];
+                            $visible_pages = [];
+                            
+                            foreach ($child_pages as $page) {
+                                // 使用新的權限檢查函式
+                                if (checkPagePerm($module_code, $page['page_id'], $user_perms)) {
+                                    $visible_pages[] = $page;
+                                }
+                            }
+                            
+                            if (count($visible_pages) > 0) {
+                                echo '<li>';
+                                echo '<a><i class="fa '.$mod_icon.'"></i> '.$module_name.' <span class="fa fa-chevron-down"></span></a>';
+                                echo '<ul class="nav child_menu">';
+                                foreach ($visible_pages as $vp) {
+                                    echo '<li><a href="'.$vp['page_url'].'">'.$vp['page_name'].'</a></li>';
+                                }
+                                echo '</ul>';
+                                echo '</li>';
+                            }
+                        }
+                    }
+                }
+                ?>
+                </ul>
+            </div>
+        </div>
+        <!-- /sidebar menu -->
+
+    </div>
+</div>
+
+<!-- top navigation -->
+<div class="top_nav">
+    <div class="nav_menu">
+        <nav>
+            <div class="nav toggle">
+                <a id="menu_toggle"><i class="fa fa-bars"></i></a>
+            </div>
+
+            <ul class="nav navbar-nav navbar-right">
+                <li class="">
+                    <a href="javascript:;" class="user-profile dropdown-toggle" data-toggle="dropdown"
+                        aria-expanded="false">
+                        <img src="../../resource/images/img.png" alt="">超正齒輪
+                        <span class=" fa fa-angle-down"></span>
+                    </a>
+                    <ul class="dropdown-menu dropdown-usermenu pull-right">
+                        <li><a href="../user/user.php"><i class="fa pull-right"></i>
+                                修改個人資料</a></li>
+                        <li><a href="../../src/store/Logout.php"><i class="fa fa-sign-out pull-right"></i> 登出</a></li>
+                    </ul>
+                </li>
+
+
+                <li role="presentation" class="dropdown">
+                    <a href="javascript:;" class="dropdown-toggle info-number notice-toggle" data-toggle="dropdown" aria-expanded="false">
+                        <i class="fa fa-bell-o"></i>
+                        <span id="notice_badge" class="notice-badge"<?= count($event) ? '' : ' style="display:none;"' ?>><?= count($event) ?></span>
+                    </a>
+                    <ul id="menu1" class="dropdown-menu notice-dropdown" role="menu">
+                        <li class="notice-head">
+                            <span class="notice-head-title"><i class="fa fa-bell"></i> 公告 / 通知</span>
+                            <span id="notice_head_count" class="notice-head-count"<?= count($event) ? '' : ' style="display:none;"' ?>><?= count($event) ?> 則未讀</span>
+                        </li>
+                        <li class="notice-scroll">
+                            <ul class="notice-list">
+                                <?php foreach ($event as $ev) {
+                                    $preview = preg_replace('/\s+/', ' ', $ev['content']);
+                                    $preview = mb_strimwidth($preview, 0, 110, '…', 'UTF-8');
+                                ?>
+                                <li id="notice_item_<?= $ev['id'] ?>" class="notice-row">
+                                    <a href="javascript:;" class="notice-open"
+                                       data-id="<?= $ev['id'] ?>"
+                                       data-reftype="<?= htmlspecialchars($ev['ref_type'] ?? '', ENT_QUOTES) ?>"
+                                       data-refid="<?= (int)($ev['ref_id'] ?? 0) ?>"
+                                       data-needmode="<?= (int)($ev['need_mode'] ?? 1) ?>"
+                                       data-title="<?= htmlspecialchars($ev['title'], ENT_QUOTES) ?>"
+                                       data-content="<?= htmlspecialchars($ev['content'], ENT_QUOTES) ?>"
+                                       data-date="<?= htmlspecialchars($ev['eventdate'], ENT_QUOTES) ?>">
+                                        <span class="notice-dot"></span>
+                                        <?php
+                                        $_evRt = $ev['ref_type'] ?? '';
+                                        $_evIco = $_evRt === 'QA' ? 'fa-exclamation-triangle'
+                                                : ($_evRt === 'CAR' ? 'fa-wrench'
+                                                : ((strpos($_evRt, 'QUOTATION_APPROVAL') === 0) ? 'fa-file-text-o' : 'fa-bullhorn'));
+                                        ?>
+                                        <span class="notice-ico"><i class="fa <?= $_evIco ?>"></i></span>
+                                        <span class="notice-body">
+                                            <span class="notice-title"><?= htmlspecialchars($ev['title'], ENT_QUOTES) ?></span>
+                                            <span class="notice-preview"><?= htmlspecialchars($preview, ENT_QUOTES) ?></span>
+                                            <span class="notice-time"><i class="fa fa-clock-o"></i> <?= $ev['eventdate'] ?></span>
+                                        </span>
+                                    </a>
+                                </li>
+                                <?php } ?>
+                                <li id="notice_empty" class="notice-empty"<?= count($event) ? ' style="display:none;"' : '' ?>>
+                                    <i class="fa fa-check-circle"></i> 目前沒有新通知
+                                </li>
+                            </ul>
+                        </li>
+                        <li class="notice-foot">
+                            <a href="../liveEvent/createEvent.php">查看所有公告 / 通知 <i class="fa fa-angle-right"></i></a>
+                        </li>
+                    </ul>
+                </li>
+
+
+
+            </ul>
+            <?php } ?>
+        </nav>
+    </div>
+</div>
+<!-- /top navigation -->
+
+<!-- 公告/通知 跳窗（左右雙區塊）-->
+<div class="modal fade" id="noticeModal" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal-dialog eg-nm-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header eg-nm-head">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                <h4 class="modal-title"><i class="fa fa-bullhorn"></i> <span id="nm-title"></span></h4>
+                <small id="nm-meta"></small>
+            </div>
+            <div class="modal-body eg-nm-body">
+                <div id="nm-loading" class="eg-nm-loading"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>
+                <div class="eg-nm-2col" id="nm-2col" style="display:none;">
+                    <div class="eg-nm-left">
+                        <div class="eg-nm-content" id="nm-content"></div>
+                        <div class="eg-nm-attwrap" id="nm-attwrap" style="display:none;">
+                            <div class="eg-nm-atttabs" id="nm-atttabs"></div>
+                            <div class="eg-nm-preview" id="nm-preview"></div>
+                        </div>
+                    </div>
+                    <div class="eg-nm-right" id="nm-action"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.addEventListener("load", function() {
+        if (typeof $ === 'undefined') return;
+
+        var nmId = null;
+        var nmEsc = function(s) { return $('<i>').text(s == null ? '' : s).html(); };
+        var modeName = { read: '已閱', sign: '回簽', reply: '回覆 + 回簽' };
+
+        function nmRemoveFromList() {
+            $('#notice_item_' + nmId).remove();
+            var remain = $('#menu1 li[id^="notice_item_"]').length;
+            if (remain > 0) { $('#notice_badge').text(remain).show(); $('#notice_head_count').text(remain + ' 則未讀').show(); }
+            else { $('#notice_badge').hide(); $('#notice_head_count').hide(); $('#notice_empty').show(); }
+        }
+
+        // 點通知 → 載入詳情、開跳窗；品質異常單通知(ref_type='QA')改開異常單檢視頁
+        $(document).on('click', '.notice-open', function() {
+            nmId = $(this).data('id');
+            var refType = $(this).data('reftype');
+            if (refType === 'QA_EDIT_REQ') {
+                // 異常單修改請求（給主管）：開品管合併檢驗頁的核准畫面（含快速開放修改按鈕）
+                window.open('../QC/inspection_combined_prototype.php?edit_request=' + $(this).data('refid'));
+                $.post('../../src/store/_markEventRead.php', { eventid: nmId });
+                nmRemoveFromList();
+                return;
+            }
+            if (refType === 'QA_DECIDE' || refType === 'QA_DECIDE_F') {
+                // 處置判定/最終裁決：開決策畫面；判定完成前不移除未讀（任一決策者判定後全員自動消失）
+                window.open('../QC/inspection_combined_prototype.php?decide_abnormal=' + $(this).data('refid'));
+                return;
+            }
+            if (refType === 'QA_EDIT_OK') {
+                // 主管已開放修改：直接開異常單修改畫面
+                window.open('../QC/inspection_combined_prototype.php?edit_abnormal=' + $(this).data('refid'));
+                $.post('../../src/store/_markEventRead.php', { eventid: nmId });
+                nmRemoveFromList();
+                return;
+            }
+            if (refType === 'QA') {
+                // 異常單檢視頁進頁會自動標記已閱並提供回覆回簽；
+                // 但若此通知要求回簽/回覆(need_mode>1)，動作完成前不可從置頂欄未讀清單移除
+                window.open('../QA/qa_abnormal_view.php?event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) nmRemoveFromList();
+                return;
+            }
+            if (refType === 'CAR') {
+                // 異常矯正處理單：開單據頁並自動彈出該單（open_id），當事人(被指派/填表/簽核者)即使無檢閱權限也可開啟填寫。
+                // 行動型通知(need_mode>1，如「指派您回覆」)在填寫送出前不移除，持續提示。
+                window.open('../QA/correction_order.php?open_id=' + $(this).data('refid'));
+                if (parseInt($(this).data('needmode'), 10) <= 1) {
+                    $.post('../../src/store/_markEventRead.php', { eventid: nmId });
+                    nmRemoveFromList();
+                }
+                return;
+            }
+            if (refType === 'QUOTATION_APPROVAL') {
+                // 報價單待簽核：開專屬審核頁(左=報價單內容/右=核准駁回，RWD桌機手機通用)，帶event讓頁面判斷是否為對象。
+                // 任一簽核人核准/駁回完成前不移除(mode=sign)。
+                window.open('../Sales/quotation_approval_view.php?event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) {
+                    $.post('../../src/store/_markEventRead.php', { eventid: nmId });
+                    nmRemoveFromList();
+                }
+                return;
+            }
+            if (refType === 'QUOTATION_APPROVAL_RESULT') {
+                // 核准/駁回結果通知（給原送審人）：純資訊型，開同一審核頁檢視結果後直接標記已讀移除
+                window.open('../Sales/quotation_approval_view.php?event=' + nmId);
+                $.post('../../src/store/_markEventRead.php', { eventid: nmId });
+                nmRemoveFromList();
+                return;
+            }
+            $('#nm-title').text($(this).data('title') || '');
+            $('#nm-meta').text('');
+            $('#nm-loading').show(); $('#nm-2col').hide();
+            $('#noticeModal').modal('show');
+            $.get('../../src/store/_eventDetail.php', { eventid: nmId }, nmRender, 'json')
+                .fail(function() { $('#nm-loading').html('載入失敗'); });
+        });
+
+        function nmFileUrl(t, id, dl) { return '../../src/store/_eventFile.php?t=' + t + '&id=' + id + (dl ? '&dl=1' : ''); }
+
+        function nmRenderAttach(list, t) {
+            // t: 'e' 公告附件 / 'r' 回覆附件
+            var tabs = '', first = null;
+            list.forEach(function(f, i) {
+                if (first === null) first = f;
+                tabs += '<span class="eg-att-tab" data-t="' + t + '" data-id="' + f.id + '" data-ext="' + (f.ext || '') + '" data-name="' + nmEsc(f.name) + '"><i class="fa fa-paperclip"></i> ' + nmEsc(f.name) + '</span>';
+            });
+            return { tabs: tabs, first: first };
+        }
+
+        function nmShowPreview(t, id, ext, name) {
+            var $p = $('#nm-preview');
+            $('.eg-att-tab').removeClass('active');
+            $('.eg-att-tab[data-t="' + t + '"][data-id="' + id + '"]').addClass('active');
+            ext = (ext || '').toLowerCase();
+            if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].indexOf(ext) !== -1) {
+                $p.html('<img src="' + nmFileUrl(t, id) + '" alt="">');
+            } else if (ext === 'pdf') {
+                $p.html('<iframe src="' + nmFileUrl(t, id) + '"></iframe>');
+            } else {
+                $p.html('<div class="eg-nm-nopreview"><i class="fa fa-file-o"></i><div>' + nmEsc(name) + '</div><a class="eg-btn eg-btn-primary" href="' + nmFileUrl(t, id, 1) + '">下載檔案</a></div>');
+            }
+        }
+
+        function nmRender(res) {
+            if (!res || !res.ok) { $('#nm-loading').html(res && res.msg ? res.msg : '載入失敗'); return; }
+            var e = res.event;
+            $('#nm-title').text(e.title);
+            var meta = [];
+            if (e.source) meta.push('來源：' + e.source);
+            if (e.creator) meta.push('公告者：' + e.creator);
+            meta.push('發布：' + e.eventdate + (e.enddate ? ' ~ ' + e.enddate : ''));
+            if (e.reply_deadline) meta.push('回覆期限：' + e.reply_deadline);
+            $('#nm-meta').text(meta.join('　'));
+
+            // 內容
+            $('#nm-content').html('<div class="eg-nm-ctext">' + nmEsc(e.content).replace(/\n/g, '<br>') + '</div>');
+
+            // 公告附件
+            if (res.attachments && res.attachments.length) {
+                var a = nmRenderAttach(res.attachments, 'e');
+                $('#nm-atttabs').html('<div class="eg-att-label"><i class="fa fa-paperclip"></i> 公告附件（可切換預覽）</div>' + a.tabs);
+                $('#nm-attwrap').show();
+                if (a.first) nmShowPreview('e', a.first.id, a.first.ext, a.first.name);
+            } else {
+                $('#nm-attwrap').hide();
+            }
+
+            // 右側：依模式的回應區
+            $('#nm-action').html(nmBuildAction(res));
+
+            $('#nm-loading').hide(); $('#nm-2col').show();
+        }
+
+        function nmStatusLine(st) {
+            if (!st) return '<span class="eg-nm-todo">尚未處理</span>';
+            var s = '';
+            if (st.read_at) s += '<div><i class="fa fa-eye"></i> 已閱：' + nmEsc(st.read_at) + '</div>';
+            if (st.signed_at) s += '<div><i class="fa fa-pencil-square-o"></i> 已回簽：' + nmEsc(st.signed_at) + '</div>';
+            if (st.replied_at) s += '<div><i class="fa fa-comments-o"></i> 已回覆：' + nmEsc(st.replied_at) + '</div>';
+            return s || '<span class="eg-nm-todo">尚未處理</span>';
+        }
+
+        function nmBuildAction(res) {
+            var mode = res.my_mode, st = res.my_status, h = '';
+            h += '<div class="eg-nm-modebadge mode-' + mode + '">需求：' + modeName[mode] + '</div>';
+            h += '<div class="eg-nm-mystatus">' + nmStatusLine(st) + '</div>';
+
+            var done = st && ((mode === 'read' && st.read_at) || (mode === 'sign' && st.signed_at) || (mode === 'reply' && st.replied_at));
+            if (res.deadline_passed && (mode === 'sign' || mode === 'reply')) {
+                h += '<div class="eg-nm-expired"><i class="fa fa-clock-o"></i> 已超過回覆/回簽期限</div>';
+                if (!(st && st.read_at)) h += '<button class="eg-btn eg-btn-primary nm-do" data-act="read">確認已閱</button>';
+            } else if (mode === 'read') {
+                if (!done) h += '<button class="eg-btn eg-btn-primary nm-do" data-act="read"><i class="fa fa-check"></i> 確認已閱</button>';
+                else h += '<div class="eg-nm-doneok"><i class="fa fa-check-circle"></i> 已完成</div>';
+            } else if (mode === 'sign') {
+                if (!done) h += '<button class="eg-btn eg-btn-primary nm-do" data-act="sign"><i class="fa fa-pencil-square-o"></i> 回簽</button>';
+                else h += '<div class="eg-nm-doneok"><i class="fa fa-check-circle"></i> 已回簽</div>';
+            } else { // reply
+                if (done) {
+                    h += '<div class="eg-nm-doneok"><i class="fa fa-check-circle"></i> 已回覆</div>';
+                    h += '<div class="eg-nm-replyshow"><b>我的回覆：</b><div>' + nmEsc(st.reply_content || '').replace(/\n/g, '<br>') + '</div></div>';
+                    if (st.files && st.files.length) {
+                        var rf = '';
+                        // 我的回覆附件：本人可刪（期限內；管理者不受限，權限由後端把關）
+                        st.files.forEach(function(f) {
+                            rf += '<span style="display:inline-flex;align-items:center;"><a class="eg-file-chip" target="_blank" href="' + nmFileUrl('r', f.id) + '"><i class="fa fa-paperclip"></i> ' + nmEsc(f.name) + '</a>'
+                                + (res.can_del_my ? '<button type="button" class="nm-rf-del" data-id="' + f.id + '" title="刪除此附件" style="background:none;border:none;color:#e74c3c;cursor:pointer;padding:2px 6px;"><i class="fa fa-trash-o"></i></button>' : '')
+                                + '</span>';
+                        });
+                        h += '<div class="eg-nm-rfiles">' + rf + '</div>';
+                    }
+                } else {
+                    h += '<label class="eg-nm-lbl">回覆內容 <span style="color:#e74c3c;">*</span></label>';
+                    h += '<textarea id="nm-reply-text" class="eg-nm-textarea" placeholder="請輸入回覆…"></textarea>';
+                    h += '<label class="eg-nm-lbl">附件 <span class="hint">可多檔，單檔≤50MB，最多10個</span></label>';
+                    h += '<input type="file" id="nm-reply-files" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.bmp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z">';
+                    h += '<button class="eg-btn eg-btn-primary nm-do" data-act="reply" style="margin-top:10px;"><i class="fa fa-paper-plane"></i> 送出回覆</button>';
+                }
+            }
+
+            // 他人狀態
+            if (res.show_status && res.others && res.others.length) {
+                h += '<div class="eg-nm-others"><div class="eg-nm-others-h"><i class="fa fa-users"></i> 其他對象狀態</div>';
+                res.others.forEach(function(o) {
+                    var tag = o.replied_at ? '已回覆' : (o.signed_at ? '已回簽' : (o.read_at ? '已閱' : '—'));
+                    h += '<div class="eg-nm-other"><span class="nm-o-name">' + nmEsc(o.name) + '</span><span class="nm-o-tag">' + tag + '</span>';
+                    if (o.reply_content) h += '<div class="nm-o-reply">' + nmEsc(o.reply_content) + '</div>';
+                    // 他人回覆附件：只有最高管理者可刪
+                    if (o.files && o.files.length) { o.files.forEach(function(f) {
+                        h += '<span style="display:inline-flex;align-items:center;"><a class="eg-file-chip" target="_blank" href="' + nmFileUrl('r', f.id) + '"><i class="fa fa-paperclip"></i> ' + nmEsc(f.file_name) + '</a>'
+                           + (res.is_admin ? '<button type="button" class="nm-rf-del" data-id="' + f.id + '" title="刪除附件（管理者）" style="background:none;border:none;color:#e74c3c;cursor:pointer;padding:2px 6px;"><i class="fa fa-trash-o"></i></button>' : '')
+                           + '</span>';
+                    }); }
+                    h += '</div>';
+                });
+                h += '</div>';
+            }
+            return h;
+        }
+
+        // 附件切換
+        $(document).on('click', '.eg-att-tab', function() {
+            nmShowPreview($(this).data('t'), $(this).data('id'), $(this).data('ext'), $(this).data('name'));
+        });
+
+        // 刪除回覆附件（本人或管理者；權限由後端 _respFileDelete.php 把關）
+        $(document).on('click', '.nm-rf-del', function() {
+            var $b = $(this), id = $b.data('id');
+            var name = ($b.prev('a.eg-file-chip').text() || '').trim();
+            if (!confirm('確定刪除附件「' + name + '」？刪除後無法復原。')) return;
+            $b.prop('disabled', true);
+            $.post('../../src/store/_respFileDelete.php', { id: id }, function(res) {
+                if (res && res.ok) { $.get('../../src/store/_eventDetail.php', { eventid: nmId }, nmRender, 'json'); }
+                else { $b.prop('disabled', false); alert(res && res.msg ? res.msg : '刪除失敗'); }
+            }, 'json').fail(function() { $b.prop('disabled', false); alert('連線失敗'); });
+        });
+
+        // 送出回應（已閱/回簽/回覆）
+        $(document).on('click', '.nm-do', function() {
+            var act = $(this).data('act');
+            var $btn = $(this).prop('disabled', true);
+            var fd = new FormData();
+            fd.append('eventid', nmId);
+            fd.append('action', act);
+            if (act === 'reply') {
+                var txt = ($('#nm-reply-text').val() || '').trim();
+                if (!txt) { alert('請輸入回覆內容'); $btn.prop('disabled', false); return; }
+                fd.append('reply_content', txt);
+                var files = $('#nm-reply-files')[0];
+                if (files && files.files) { for (var i = 0; i < files.files.length; i++) fd.append('reply_files[]', files.files[i]); }
+            }
+            $btn.html('<i class="fa fa-spinner fa-spin"></i> 處理中…');
+            $.ajax({
+                url: '../../src/store/_eventRespond.php', type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json',
+                success: function(res) {
+                    if (res && res.ok) {
+                        nmRemoveFromList();
+                        // 重新載入詳情以顯示完成狀態
+                        $.get('../../src/store/_eventDetail.php', { eventid: nmId }, nmRender, 'json');
+                    } else {
+                        $btn.prop('disabled', false).text('重試');
+                        alert(res && res.msg ? res.msg : '送出失敗');
+                    }
+                },
+                error: function() { $btn.prop('disabled', false).text('重試'); alert('連線失敗'); }
+            });
+        });
+    });
+</script>
+
+<style>
+    /* 初始將側邊欄設為透明，並加入過渡效果，以平滑淡入取代閃爍 */
+    #sidebar-menu {
+        opacity: 0;
+        transition: opacity 0.2s ease-in-out;
+    }
+
+    /* ===== 置頂列 公告/通知 下拉 ===== */
+    .notice-toggle {
+        position: relative;
+        font-size: 18px;
+    }
+    .notice-badge {
+        position: absolute;
+        top: 6px;
+        right: 2px;
+        min-width: 17px;
+        height: 17px;
+        padding: 0 4px;
+        font-size: 11px;
+        line-height: 17px;
+        font-weight: 700;
+        text-align: center;
+        color: #fff;
+        background: #e74c3c;
+        border-radius: 9px;
+        box-shadow: 0 0 0 2px #fff;
+    }
+    .notice-dropdown {
+        width: 1320px;                      /* 加寬兩倍，避免標題/預覽文字被截 */
+        max-width: calc(100vw - 60px);      /* 小螢幕自動縮 */
+        padding: 0;
+        border: none;
+        border-radius: 8px;
+        box-shadow: 0 6px 22px rgba(0, 0, 0, .18);
+        overflow: hidden;
+    }
+    .notice-dropdown > li { display: block; }
+
+    .notice-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 11px 14px;
+        background: #2A3F54;
+        color: #fff;
+    }
+    .notice-head-title { font-size: 14px; font-weight: 600; white-space: nowrap; }
+    .notice-head-count {
+        font-size: 12px;
+        background: rgba(255, 255, 255, .18);
+        padding: 3px 16px;
+        border-radius: 12px;
+        white-space: nowrap;
+        min-width: 96px;
+        text-align: center;
+    }
+
+    .notice-scroll { max-height: 360px; overflow-y: auto; }
+    .notice-list { list-style: none; margin: 0; padding: 0; }
+
+    .notice-row { border-bottom: 1px solid #f0f0f0; }
+    .notice-row > a.notice-open {
+        display: flex;
+        align-items: flex-start;
+        padding: 11px 14px;
+        text-decoration: none;
+        color: #333;
+        transition: background .15s;
+    }
+    .notice-row > a.notice-open:hover { background: #f5f8fa; }
+
+    .notice-dot {
+        flex: 0 0 auto;
+        width: 8px;
+        height: 8px;
+        margin: 6px 8px 0 0;
+        background: #1ABB9C;
+        border-radius: 50%;
+    }
+    .notice-ico {
+        flex: 0 0 auto;
+        width: 34px;
+        height: 34px;
+        margin-right: 10px;
+        line-height: 34px;
+        text-align: center;
+        color: #2A3F54;
+        background: #eef2f5;
+        border-radius: 50%;
+        font-size: 15px;
+    }
+    .notice-body { flex: 1 1 auto; min-width: 0; }
+    .notice-title {
+        display: block;
+        font-size: 13px;
+        font-weight: 600;
+        color: #2A3F54;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .notice-preview {
+        display: block;
+        font-size: 12px;
+        color: #888;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin: 1px 0 2px;
+    }
+    .notice-time { display: block; font-size: 11px; color: #aaa; }
+
+    .notice-empty { padding: 26px 14px; text-align: center; color: #aaa; font-size: 13px; }
+    .notice-empty .fa { color: #1ABB9C; margin-right: 4px; }
+
+    .notice-foot { border-top: 1px solid #eee; }
+    .notice-foot > a {
+        display: block;
+        padding: 11px 14px;
+        text-align: center;
+        font-size: 13px;
+        font-weight: 600;
+        color: #2A3F54;
+        text-decoration: none;
+    }
+    .notice-foot > a:hover { background: #f5f8fa; }
+
+    /* 跳窗外觀（左右雙區塊）*/
+    #noticeModal .eg-nm-dialog { width: 1000px; max-width: 96vw; }
+    #noticeModal .modal-header { background: #2A3F54; color: #fff; border-radius: 6px 6px 0 0; }
+    #noticeModal .modal-header .close { color: #fff; opacity: .9; }
+    #noticeModal .modal-title { font-weight: 600; }
+    #noticeModal .modal-header small { color: rgba(255, 255, 255, .8); display: block; margin-top: 4px; font-size: 12px; }
+    #noticeModal .modal-body { padding: 0; }
+    .eg-nm-loading { padding: 40px; text-align: center; color: #8a9bab; }
+    .eg-nm-2col { display: grid; grid-template-columns: 1fr 360px; min-height: 300px; }
+    .eg-nm-left { padding: 16px 18px; border-right: 1px solid #e6ecf1; max-height: 68vh; overflow-y: auto; }
+    .eg-nm-right { padding: 16px 18px; background: #fafcfd; max-height: 68vh; overflow-y: auto; }
+    .eg-nm-ctext { font-size: 14px; line-height: 1.75; color: #34495e; white-space: normal; }
+    .eg-nm-attwrap { margin-top: 14px; border-top: 1px dashed #e6ecf1; padding-top: 12px; }
+    .eg-att-label { font-size: 12.5px; font-weight: 700; color: #2A3F54; margin-bottom: 7px; }
+    .eg-nm-atttabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .eg-att-tab { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 3px 10px; border-radius: 16px; background: #eef2f5; color: #5a6b7b; cursor: pointer; border: 1.5px solid transparent; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .eg-att-tab:hover { background: #e1e8ee; }
+    .eg-att-tab.active { border-color: #1ABB9C; background: rgba(26,187,156,.12); color: #169a80; }
+    .eg-nm-preview { border: 1px solid #e6ecf1; border-radius: 8px; overflow: hidden; background: #fff; min-height: 300px; display: flex; align-items: center; justify-content: center; }
+    .eg-nm-preview img { max-width: 100%; max-height: 460px; object-fit: contain; }
+    .eg-nm-preview iframe { width: 100%; height: 460px; border: none; }
+    .eg-nm-nopreview { text-align: center; color: #8a9bab; padding: 30px; }
+    .eg-nm-nopreview .fa { font-size: 40px; display: block; margin-bottom: 10px; color: #d7e0e7; }
+    .eg-nm-nopreview a { margin-top: 12px; display: inline-block; text-decoration: none; }
+    /* 右側回應區 */
+    .eg-nm-modebadge { display: inline-block; font-size: 12px; font-weight: 700; padding: 3px 12px; border-radius: 16px; margin-bottom: 10px; }
+    .eg-nm-modebadge.mode-read { background: rgba(26,187,156,.13); color: #169a80; }
+    .eg-nm-modebadge.mode-sign { background: #fff3df; color: #c77c1a; }
+    .eg-nm-modebadge.mode-reply { background: #f0eafc; color: #7a4fc0; }
+    .eg-nm-mystatus { font-size: 12.5px; color: #5a6b7b; line-height: 1.9; margin-bottom: 12px; }
+    .eg-nm-mystatus .fa { color: #1ABB9C; margin-right: 4px; }
+    .eg-nm-todo { color: #e67e22; }
+    .eg-nm-doneok { color: #169a80; font-weight: 600; font-size: 14px; margin: 8px 0; }
+    .eg-nm-expired { color: #e74c3c; font-weight: 600; font-size: 13px; margin-bottom: 10px; }
+    .eg-nm-lbl { display: block; font-size: 12.5px; font-weight: 600; color: #34495e; margin: 10px 0 5px; }
+    .eg-nm-lbl .hint { font-weight: 400; color: #8a9bab; }
+    .eg-nm-textarea { width: 100%; min-height: 90px; border: 1px solid #e6ecf1; border-radius: 8px; padding: 9px 11px; font-size: 13.5px; resize: vertical; font-family: inherit; }
+    .eg-nm-textarea:focus { outline: none; border-color: #1ABB9C; box-shadow: 0 0 0 3px rgba(26,187,156,.15); }
+    #nm-reply-files { font-size: 12.5px; }
+    .eg-nm-replyshow { font-size: 13px; color: #34495e; background: #fff; border: 1px solid #e6ecf1; border-radius: 8px; padding: 9px 11px; margin: 8px 0; line-height: 1.6; }
+    .eg-nm-rfiles, .eg-nm-other .eg-file-chip { margin-top: 6px; }
+    .eg-file-chip { display: inline-flex; align-items: center; gap: 5px; background: #f0f4f7; border: 1px solid #e6ecf1; border-radius: 7px; padding: 3px 9px; font-size: 12px; color: #169a80; text-decoration: none; margin: 3px 4px 0 0; }
+    .eg-file-chip:hover { text-decoration: underline; }
+    .eg-nm-others { margin-top: 16px; border-top: 1px solid #e6ecf1; padding-top: 12px; }
+    .eg-nm-others-h { font-size: 12.5px; font-weight: 700; color: #2A3F54; margin-bottom: 8px; }
+    .eg-nm-other { font-size: 12.5px; padding: 6px 0; border-bottom: 1px dashed #eef2f5; }
+    .nm-o-name { font-weight: 600; color: #34495e; }
+    .nm-o-tag { float: right; font-size: 11px; background: #eef2f5; color: #5a6b7b; border-radius: 10px; padding: 1px 8px; }
+    .nm-o-reply { color: #666; margin-top: 3px; }
+    .eg-btn { border: none; border-radius: 8px; padding: 9px 18px; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+    .eg-btn-primary { background: #1ABB9C; color: #fff; }
+    .eg-btn-primary:hover { background: #169a80; }
+    .eg-btn-primary:disabled { opacity: .6; cursor: not-allowed; }
+    @media (max-width: 860px) { .eg-nm-2col { grid-template-columns: 1fr; } .eg-nm-left { border-right: none; border-bottom: 1px solid #e6ecf1; } }
+</style>
+<script>
+    // 改用 window.load 確保在所有資源(包含 custom.js)載入後執行
+    window.addEventListener("load", function() {
+        if (typeof $ !== 'undefined') {
+            var $activeMenu = $('#sidebar-menu .nav.side-menu > li.active');
+            // 檢查是否有被樣板JS自動展開的主項目
+            if ($activeMenu.length) {
+                // 強制移除 active 狀態並收合子選單，但保留子頁面的 current-page 樣式
+                $activeMenu.removeClass('active').find('ul.child_menu').hide();
+            }
+            // 以淡入效果顯示側邊欄，避免閃爍
+            $('#sidebar-menu').css('opacity', 1);
+        }
+    });
+</script>

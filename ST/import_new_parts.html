@@ -1,0 +1,1300 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>庫存匯入 ── 待確認清單</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;700&display=swap');
+  :root{--bg:#0d1117;--sur:#161b22;--bdr:#30363d;--txt:#e6edf3;--dim:#8b949e;--acc:#58a6ff;--ok:#3fb950;--warn:#d29922;--err:#f85149;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font-family:'Noto Sans TC',sans-serif;font-size:14px;line-height:1.6;padding-bottom:60px}
+  header{background:var(--sur);border-bottom:1px solid var(--bdr);padding:24px 40px;display:flex;align-items:flex-end;gap:20px}
+  header h1{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;color:var(--acc)}
+  header .meta{font-size:12px;color:var(--dim);font-family:'IBM Plex Mono',monospace}
+  .summary{display:flex;gap:12px;padding:20px 40px;border-bottom:1px solid var(--bdr)}
+  .badge{padding:10px 20px;border-radius:8px;border:1px solid var(--bdr);font-family:'IBM Plex Mono',monospace;min-width:120px}
+  .badge .num{font-size:28px;font-weight:600;line-height:1}
+  .badge .lbl{font-size:11px;color:var(--dim);margin-top:4px}
+  .badge.b-new{border-color:#388bfd55;background:#388bfd0d}.badge.b-new .num{color:var(--acc)}
+  .badge.b-err{border-color:#f8514955;background:#f851490d}.badge.b-err .num{color:var(--err)}
+  .badge.b-ok{border-color:#3fb95055;background:#3fb9500d}.badge.b-ok .num{color:var(--ok)}
+  .section{margin:32px 40px 0}
+  .sec-title{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:2px;margin-bottom:12px;display:flex;align-items:center;gap:10px}
+  .sec-title::after{content:'';flex:1;height:1px;background:var(--bdr)}
+  .notice{border-radius:8px;padding:12px 16px;font-size:13px;margin-bottom:14px;line-height:1.8}
+  .n-info{background:#388bfd0d;border:1px solid #388bfd44;color:var(--acc)}
+  .n-warn{background:#d299220d;border:1px solid #d2992244;color:var(--warn)}
+  .tbl-wrap{border:1px solid var(--bdr);border-radius:8px;overflow:hidden;overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead tr{background:#1c2128}
+  th{padding:10px 14px;text-align:left;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:var(--dim);letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid var(--bdr);white-space:nowrap}
+  td{padding:9px 14px;border-bottom:1px solid #21262d;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  tbody tr:hover td{background:#1c2128}
+  .idx{color:var(--dim);font-family:'IBM Plex Mono',monospace;font-size:12px;width:36px}
+  .mono{font-family:'IBM Plex Mono',monospace}
+  .dim{color:var(--dim)}.sm{font-size:12px}.err{color:var(--err)}
+  .empty{text-align:center;color:var(--dim);padding:24px;font-style:italic}
+  .sql-box{margin-top:10px;border:1px solid var(--bdr);border-radius:8px;overflow:hidden}
+  .sql-bar{display:flex;justify-content:space-between;align-items:center;padding:6px 14px;background:#21262d;border-bottom:1px solid var(--bdr)}
+  .sql-bar span{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim)}
+  .btn{font-family:'IBM Plex Mono',monospace;font-size:11px;padding:4px 12px;background:transparent;border:1px solid var(--bdr);border-radius:4px;color:var(--dim);cursor:pointer;transition:all .15s}
+  .btn:hover{border-color:var(--acc);color:var(--acc)}
+  .btn.copied{border-color:var(--ok);color:var(--ok)}
+  pre{padding:14px 18px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--dim);overflow-x:auto;max-height:220px;background:var(--sur)}
+  footer{margin-top:48px;padding:0 40px;font-size:12px;color:var(--dim);font-family:'IBM Plex Mono',monospace}
+</style>
+</head>
+<body>
+<header>
+  <h1>庫存匯入 ── 待確認清單</h1>
+  <div class="meta">產生時間：2026-04-15 11:10:21</div>
+</header>
+
+<div class="summary">
+  <div class="badge b-new"><div class="num">1178</div><div class="lbl">新增料號</div></div>
+  <div class="badge b-err"><div class="num">0</div><div class="lbl">客戶比對失敗</div></div>
+  <div class="badge b-ok"><div class="num">✓</div><div class="lbl">客戶狀態</div></div>
+</div>
+
+<div class="section">
+  <div class="sec-title">新增料號 (1178 筆)</div>
+  <div class="notice n-info">
+    以下料號在 <code>d_setting</code> 中查無紀錄，SQL 已含 <code>INSERT IGNORE</code> 自動新增。<br>
+    僅建立基本欄位（D_Setting_Id / Spec_No / Type=N / Is_Assembly=0），請匯入後至料號管理頁面補齊。
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>#</th><th>料號 (D_Setting_Id)</th><th>規格</th><th>分類</th><th>出現分頁</th><th>範例列</th></tr></thead>
+      <tbody><tr><td class="idx">1</td><td class="mono">3015012540</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L4</td></tr>
+<tr><td class="idx">2</td><td class="mono">1211-2</td><td>0</td><td>—</td><td class="dim">半成品、東芳</td><td class="dim sm">半成品-L5<br>東芳-L17</td></tr>
+<tr><td class="idx">3</td><td class="mono">BG01</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L6<br>半成品-L9</td></tr>
+<tr><td class="idx">4</td><td class="mono">BG04-415</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L7</td></tr>
+<tr><td class="idx">5</td><td class="mono">DF-009</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L8</td></tr>
+<tr><td class="idx">6</td><td class="mono">BG07</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L10<br>半成品-L12</td></tr>
+<tr><td class="idx">7</td><td class="mono">BG02</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L11</td></tr>
+<tr><td class="idx">8</td><td class="mono">HG17T</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L13</td></tr>
+<tr><td class="idx">9</td><td class="mono">121481</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L14</td></tr>
+<tr><td class="idx">10</td><td class="mono">JKGB01750L</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L15</td></tr>
+<tr><td class="idx">11</td><td class="mono">2R060M06L014BA</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L16</td></tr>
+<tr><td class="idx">12</td><td class="mono">2094410110000</td><td>0</td><td>—</td><td class="dim">半成品、旭陽</td><td class="dim sm">半成品-L17<br>旭陽-L84</td></tr>
+<tr><td class="idx">13</td><td class="mono">MB32003</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L18</td></tr>
+<tr><td class="idx">14</td><td class="mono">LKGB0892603</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L19<br>半成品-L20</td></tr>
+<tr><td class="idx">15</td><td class="mono">3013002501</td><td>0</td><td>—</td><td class="dim">半成品、寶嘉誠</td><td class="dim sm">半成品-L21<br>寶嘉誠-L132</td></tr>
+<tr><td class="idx">16</td><td class="mono">1S005504</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L22</td></tr>
+<tr><td class="idx">17</td><td class="mono">1S005505</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L23</td></tr>
+<tr><td class="idx">18</td><td class="mono">1S008511</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L24</td></tr>
+<tr><td class="idx">19</td><td class="mono">KF-6</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L25</td></tr>
+<tr><td class="idx">20</td><td class="mono">70A-03</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L26</td></tr>
+<tr><td class="idx">21</td><td class="mono">3020002580</td><td>0</td><td>—</td><td class="dim">半成品、寶嘉誠</td><td class="dim sm">半成品-L27<br>寶嘉誠-L160</td></tr>
+<tr><td class="idx">22</td><td class="mono">6001002501</td><td>0</td><td>—</td><td class="dim">半成品、寶嘉誠</td><td class="dim sm">半成品-L28<br>寶嘉誠-L249<br>寶嘉誠-L264</td></tr>
+<tr><td class="idx">23</td><td class="mono">M1*26T-M1*52T-A1</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L29</td></tr>
+<tr><td class="idx">24</td><td class="mono">M1*26T-M1*52T-B</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L30</td></tr>
+<tr><td class="idx">25</td><td class="mono">2094410100001</td><td>0</td><td>—</td><td class="dim">半成品、旭陽</td><td class="dim sm">半成品-L31<br>旭陽-L96</td></tr>
+<tr><td class="idx">26</td><td class="mono">2103340240900</td><td>0</td><td>—</td><td class="dim">半成品、旭陽</td><td class="dim sm">半成品-L32<br>半成品-L196<br>旭陽-L129</td></tr>
+<tr><td class="idx">27</td><td class="mono">M0.5*130T</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L33</td></tr>
+<tr><td class="idx">28</td><td class="mono">2094410140003</td><td>0</td><td>—</td><td class="dim">半成品、旭陽</td><td class="dim sm">半成品-L34<br>旭陽-L82<br>旭陽-L95</td></tr>
+<tr><td class="idx">29</td><td class="mono">10601-1252-00</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L35</td></tr>
+<tr><td class="idx">30</td><td class="mono">40G04</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L36</td></tr>
+<tr><td class="idx">31</td><td class="mono">DD-27</td><td>0</td><td>—</td><td class="dim">半成品、泳建</td><td class="dim sm">半成品-L37<br>泳建-L51</td></tr>
+<tr><td class="idx">32</td><td class="mono">EG-MF-M2T55L25.5</td><td>0</td><td>—</td><td class="dim">其它、半成品</td><td class="dim sm">半成品-L38<br>半成品-L198<br>其它-L88</td></tr>
+<tr><td class="idx">33</td><td class="mono">EG-MF-M2T32L30</td><td>0</td><td>—</td><td class="dim">其它、半成品</td><td class="dim sm">半成品-L39<br>其它-L64<br>其它-L85</td></tr>
+<tr><td class="idx">34</td><td class="mono">VJB510200</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L40</td></tr>
+<tr><td class="idx">35</td><td class="mono">A-21002S</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L41</td></tr>
+<tr><td class="idx">36</td><td class="mono">21111L</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L42</td></tr>
+<tr><td class="idx">37</td><td class="mono">21002S</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L43</td></tr>
+<tr><td class="idx">38</td><td class="mono">A-21001S</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L44</td></tr>
+<tr><td class="idx">39</td><td class="mono">21112L</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L45</td></tr>
+<tr><td class="idx">40</td><td class="mono">M1*20T*13.2L</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L46</td></tr>
+<tr><td class="idx">41</td><td class="mono">M1*58T*5.37L</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L47</td></tr>
+<tr><td class="idx">42</td><td class="mono">21003L</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L48</td></tr>
+<tr><td class="idx">43</td><td class="mono">21022L</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L49</td></tr>
+<tr><td class="idx">44</td><td class="mono">MSGH0100201-JIS2</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L50</td></tr>
+<tr><td class="idx">45</td><td class="mono">M4*22TB*65L-42271</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L51</td></tr>
+<tr><td class="idx">46</td><td class="mono">NRFP01132830</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L52</td></tr>
+<tr><td class="idx">47</td><td class="mono">MHGH02002051-DIN6</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L53</td></tr>
+<tr><td class="idx">48</td><td class="mono">MHGH0200280</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L54</td></tr>
+<tr><td class="idx">49</td><td class="mono">M2*28T*20L RH</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L55</td></tr>
+<tr><td class="idx">50</td><td class="mono">M2*28T*20L LH</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L56</td></tr>
+<tr><td class="idx">51</td><td class="mono">CP5T24</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L57</td></tr>
+<tr><td class="idx">52</td><td class="mono">MN32021-H</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L58</td></tr>
+<tr><td class="idx">53</td><td class="mono">MN32021-A-01</td><td>0</td><td>—</td><td class="dim">半成品、和昕</td><td class="dim sm">半成品-L59<br>半成品-L83<br>半成品-L84</td></tr>
+<tr><td class="idx">54</td><td class="mono">FINAL GEAR 40T</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L60</td></tr>
+<tr><td class="idx">55</td><td class="mono">DRIVE GEAR 14T</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L61</td></tr>
+<tr><td class="idx">56</td><td class="mono">TAPER COLLET 25-28</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L62</td></tr>
+<tr><td class="idx">57</td><td class="mono">DD-22</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L63<br>半成品-L79</td></tr>
+<tr><td class="idx">58</td><td class="mono">2094410320000</td><td>0</td><td>—</td><td class="dim">半成品、旭陽</td><td class="dim sm">半成品-L64<br>旭陽-L104<br>旭陽-L105</td></tr>
+<tr><td class="idx">59</td><td class="mono">2094410130001</td><td>0</td><td>—</td><td class="dim">半成品、旭陽</td><td class="dim sm">半成品-L65<br>旭陽-L85</td></tr>
+<tr><td class="idx">60</td><td class="mono">21024L</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L66</td></tr>
+<tr><td class="idx">61</td><td class="mono">MN32021-G</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L67</td></tr>
+<tr><td class="idx">62</td><td class="mono">VN17016-A</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L68<br>半成品-L128</td></tr>
+<tr><td class="idx">63</td><td class="mono">E2090270080000</td><td>0</td><td>—</td><td class="dim">半成品、旭陽</td><td class="dim sm">半成品-L69<br>半成品-L70<br>半成品-L71</td></tr>
+<tr><td class="idx">64</td><td class="mono">Z080-E6111-00-P</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L73</td></tr>
+<tr><td class="idx">65</td><td class="mono">6010002533</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L74</td></tr>
+<tr><td class="idx">66</td><td class="mono">6010002512</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L75</td></tr>
+<tr><td class="idx">67</td><td class="mono">5008002532</td><td>0</td><td>—</td><td class="dim">半成品、寶嘉誠</td><td class="dim sm">半成品-L76<br>寶嘉誠-L66</td></tr>
+<tr><td class="idx">68</td><td class="mono">MN32021-D</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L77</td></tr>
+<tr><td class="idx">69</td><td class="mono">LKNC152060L22</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L78</td></tr>
+<tr><td class="idx">70</td><td class="mono">DV-32063081</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L80<br>半成品-L81</td></tr>
+<tr><td class="idx">71</td><td class="mono">2094420110001</td><td>0</td><td>—</td><td class="dim">半成品、旭陽</td><td class="dim sm">半成品-L82<br>旭陽-L97</td></tr>
+<tr><td class="idx">72</td><td class="mono">5007002511</td><td>0</td><td>—</td><td class="dim">半成品、寶嘉誠</td><td class="dim sm">半成品-L86<br>寶嘉誠-L217</td></tr>
+<tr><td class="idx">73</td><td class="mono">1000002571</td><td>0</td><td>—</td><td class="dim">半成品、寶嘉誠</td><td class="dim sm">半成品-L87<br>寶嘉誠-L52</td></tr>
+<tr><td class="idx">74</td><td class="mono">2103340241400</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L88</td></tr>
+<tr><td class="idx">75</td><td class="mono">7009-C00587X-70T</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L89</td></tr>
+<tr><td class="idx">76</td><td class="mono">7009-C00595X-28T</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L90</td></tr>
+<tr><td class="idx">77</td><td class="mono">CF_000079</td><td>0</td><td>—</td><td class="dim">其它、半成品</td><td class="dim sm">半成品-L91<br>其它-L58</td></tr>
+<tr><td class="idx">78</td><td class="mono">111-08G-07</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L92</td></tr>
+<tr><td class="idx">79</td><td class="mono">RB-103-1</td><td>0</td><td>—</td><td class="dim">半成品、泳建</td><td class="dim sm">半成品-L93<br>泳建-L46</td></tr>
+<tr><td class="idx">80</td><td class="mono">RB-1</td><td>0</td><td>—</td><td class="dim">半成品、泳建</td><td class="dim sm">半成品-L94<br>泳建-L77</td></tr>
+<tr><td class="idx">81</td><td class="mono">RB-14</td><td>0</td><td>—</td><td class="dim">半成品、泳建</td><td class="dim sm">半成品-L95<br>泳建-L24<br>泳建-L25</td></tr>
+<tr><td class="idx">82</td><td class="mono">DD-10</td><td>—</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L96</td></tr>
+<tr><td class="idx">83</td><td class="mono">RB-43-1</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L97<br>半成品-L100<br>半成品-L101</td></tr>
+<tr><td class="idx">84</td><td class="mono">RB-43-2</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L98<br>半成品-L99</td></tr>
+<tr><td class="idx">85</td><td class="mono">RB-14-1</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L102</td></tr>
+<tr><td class="idx">86</td><td class="mono">DD-13</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L103</td></tr>
+<tr><td class="idx">87</td><td class="mono">DB-3</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L104</td></tr>
+<tr><td class="idx">88</td><td class="mono">RB-15</td><td>0</td><td>—</td><td class="dim">半成品、泳建</td><td class="dim sm">半成品-L105<br>半成品-L107<br>半成品-L113</td></tr>
+<tr><td class="idx">89</td><td class="mono">RB-100</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L109</td></tr>
+<tr><td class="idx">90</td><td class="mono">RB-103-2</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L110</td></tr>
+<tr><td class="idx">91</td><td class="mono">DD-12</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L111</td></tr>
+<tr><td class="idx">92</td><td class="mono">RB-36</td><td>—</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L112</td></tr>
+<tr><td class="idx">93</td><td class="mono">DD-23</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L121</td></tr>
+<tr><td class="idx">94</td><td class="mono">DD-24</td><td>0</td><td>—</td><td class="dim">半成品、泳建</td><td class="dim sm">半成品-L122<br>泳建-L50</td></tr>
+<tr><td class="idx">95</td><td class="mono">ACL160J103DEX003</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L123</td></tr>
+<tr><td class="idx">96</td><td class="mono">RB-93-2</td><td>0</td><td>—</td><td class="dim">半成品、泳建</td><td class="dim sm">半成品-L124<br>泳建-L19<br>泳建-L45</td></tr>
+<tr><td class="idx">97</td><td class="mono">RB-101</td><td>0</td><td>—</td><td class="dim">半成品、泳建</td><td class="dim sm">半成品-L125<br>半成品-L126<br>泳建-L32</td></tr>
+<tr><td class="idx">98</td><td class="mono">MN25015-A</td><td>0</td><td>—</td><td class="dim">半成品、和昕</td><td class="dim sm">半成品-L127<br>和昕-L36<br>和昕-L65</td></tr>
+<tr><td class="idx">99</td><td class="mono">HSCT-HB50040-1070000</td><td>0</td><td>—</td><td class="dim">半成品、吉輔</td><td class="dim sm">半成品-L129<br>半成品-L130<br>吉輔-L12</td></tr>
+<tr><td class="idx">100</td><td class="mono">CHGH0152112-Q6</td><td>0</td><td>—</td><td class="dim">半成品、原億昌</td><td class="dim sm">半成品-L131<br>原億昌-L179</td></tr>
+<tr><td class="idx">101</td><td class="mono">11122-BC2-0X01</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L132</td></tr>
+<tr><td class="idx">102</td><td class="mono">11211-BC2-0X01</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L133</td></tr>
+<tr><td class="idx">103</td><td class="mono">11211-HB2-0000-R04</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L134</td></tr>
+<tr><td class="idx">104</td><td class="mono">品號不明</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L135<br>半成品-L136<br>半成品-L137</td></tr>
+<tr><td class="idx">105</td><td class="mono">AR017008-A0</td><td>—</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L147</td></tr>
+<tr><td class="idx">106</td><td class="mono">HR050007-00</td><td>—</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L148</td></tr>
+<tr><td class="idx">107</td><td class="mono">FAR012007-C0</td><td>—</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L149</td></tr>
+<tr><td class="idx">108</td><td class="mono">HR032008-00</td><td>—</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L150</td></tr>
+<tr><td class="idx">109</td><td class="mono">FHR025012-00</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L151</td></tr>
+<tr><td class="idx">110</td><td class="mono">FHR032011-01</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L152</td></tr>
+<tr><td class="idx">111</td><td class="mono">HR063012-00</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L153</td></tr>
+<tr><td class="idx">112</td><td class="mono">21220</td><td>0</td><td>—</td><td class="dim">半成品、東芳</td><td class="dim sm">半成品-L154<br>半成品-L209<br>東芳-L12</td></tr>
+<tr><td class="idx">113</td><td class="mono">JKGF06780L</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L155</td></tr>
+<tr><td class="idx">114</td><td class="mono">SC-5FH-D11</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L156</td></tr>
+<tr><td class="idx">115</td><td class="mono">B003</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L157</td></tr>
+<tr><td class="idx">116</td><td class="mono">ZZ024019</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L158</td></tr>
+<tr><td class="idx">117</td><td class="mono">5023002503</td><td>0</td><td>PP箱*2</td><td class="dim">半成品、寶嘉誠</td><td class="dim sm">半成品-L159<br>寶嘉誠-L53</td></tr>
+<tr><td class="idx">118</td><td class="mono">40301010-01</td><td>0</td><td>PP箱*1</td><td class="dim">半成品</td><td class="dim sm">半成品-L160</td></tr>
+<tr><td class="idx">119</td><td class="mono">S2P_155_1227</td><td>0</td><td>3*1</td><td class="dim">半成品</td><td class="dim sm">半成品-L165</td></tr>
+<tr><td class="idx">120</td><td class="mono">S3P_155_1227</td><td>0</td><td>3*1</td><td class="dim">半成品</td><td class="dim sm">半成品-L166</td></tr>
+<tr><td class="idx">121</td><td class="mono">S2G_155_1227</td><td>0</td><td>3*1</td><td class="dim">半成品</td><td class="dim sm">半成品-L167</td></tr>
+<tr><td class="idx">122</td><td class="mono">S3G_155_1227</td><td>0</td><td>3*1</td><td class="dim">半成品</td><td class="dim sm">半成品-L168</td></tr>
+<tr><td class="idx">123</td><td class="mono">PG_155_1227</td><td>0</td><td>3*1</td><td class="dim">半成品</td><td class="dim sm">半成品-L169</td></tr>
+<tr><td class="idx">124</td><td class="mono">PG_155_240226</td><td>0</td><td>3*1</td><td class="dim">半成品</td><td class="dim sm">半成品-L170</td></tr>
+<tr><td class="idx">125</td><td class="mono">P4_TG_JIG_S</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L172</td></tr>
+<tr><td class="idx">126</td><td class="mono">2103340240101</td><td>1129</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L195</td></tr>
+<tr><td class="idx">127</td><td class="mono">E2991280320000</td><td>1085</td><td>—</td><td class="dim">半成品、旭陽</td><td class="dim sm">半成品-L197<br>旭陽-L128<br>旭陽-L134</td></tr>
+<tr><td class="idx">128</td><td class="mono">I5023441</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L199</td></tr>
+<tr><td class="idx">129</td><td class="mono">ANT-100456</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L200</td></tr>
+<tr><td class="idx">130</td><td class="mono">160292-HG</td><td>1000</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L201</td></tr>
+<tr><td class="idx">131</td><td class="mono">DA-52000210</td><td>270</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L202</td></tr>
+<tr><td class="idx">132</td><td class="mono">BH115-016-5</td><td>145</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L203</td></tr>
+<tr><td class="idx">133</td><td class="mono">111</td><td>1478</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L204<br>半成品-L219</td></tr>
+<tr><td class="idx">134</td><td class="mono">KY-L650-092001-01</td><td>16800</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L205</td></tr>
+<tr><td class="idx">135</td><td class="mono">KDS-65L-SP003-001005</td><td>—</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L206</td></tr>
+<tr><td class="idx">136</td><td class="mono">6009002013</td><td>0</td><td>—</td><td class="dim">半成品、寶嘉誠</td><td class="dim sm">半成品-L218<br>寶嘉誠-L209<br>寶嘉誠-L210</td></tr>
+<tr><td class="idx">137</td><td class="mono">491-000C-111-54</td><td>5000</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L220</td></tr>
+<tr><td class="idx">138</td><td class="mono">MI32018-A</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L221</td></tr>
+<tr><td class="idx">139</td><td class="mono">5008002523</td><td>0</td><td>—</td><td class="dim">半成品、寶嘉誠</td><td class="dim sm">半成品-L222<br>寶嘉誠-L230</td></tr>
+<tr><td class="idx">140</td><td class="mono">整棧齒輪-料號不明</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L226</td></tr>
+<tr><td class="idx">141</td><td class="mono">6009002504</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L227</td></tr>
+<tr><td class="idx">142</td><td class="mono">1007002542</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L228</td></tr>
+<tr><td class="idx">143</td><td class="mono">SP-0.5M25Z</td><td>6000</td><td>—</td><td class="dim">其它、半成品</td><td class="dim sm">半成品-L229<br>其它-L37</td></tr>
+<tr><td class="idx">144</td><td class="mono">VN17015</td><td>0</td><td>—</td><td class="dim">半成品、和昕</td><td class="dim sm">半成品-L230<br>和昕-L31<br>和昕-L32</td></tr>
+<tr><td class="idx">145</td><td class="mono">TR54018-B</td><td>0</td><td>—</td><td class="dim">半成品</td><td class="dim sm">半成品-L231</td></tr>
+<tr><td class="idx">146</td><td class="mono">6009002560檢具</td><td>—</td><td>內孔檢具</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L4</td></tr>
+<tr><td class="idx">147</td><td class="mono">6013002550</td><td>OD116.76T10</td><td>鏈輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L5</td></tr>
+<tr><td class="idx">148</td><td class="mono">6013002501</td><td>φ229.57T21</td><td>主動鍊輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L6<br>寶嘉誠-L7</td></tr>
+<tr><td class="idx">149</td><td class="mono">6013002541</td><td>φ229.57T21</td><td>被動鍊輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L8<br>寶嘉誠-L9</td></tr>
+<tr><td class="idx">150</td><td class="mono">6006002530</td><td>M4T32W34L137</td><td>旋轉齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L10<br>寶嘉誠-L11<br>寶嘉誠-L38</td></tr>
+<tr><td class="idx">151</td><td class="mono">2804002111-4</td><td>M3T70W29.5L41.5</td><td>迴轉齒</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L12</td></tr>
+<tr><td class="idx">152</td><td class="mono">6006002503</td><td>—</td><td>—</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L14</td></tr>
+<tr><td class="idx">153</td><td class="mono">2803002100-4</td><td>φ140*φ75*L40</td><td>迴轉齒</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L15<br>寶嘉誠-L145</td></tr>
+<tr><td class="idx">154</td><td class="mono">5008042501</td><td>M2.5T20W28L66</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L16<br>寶嘉誠-L169</td></tr>
+<tr><td class="idx">155</td><td class="mono">6018002530</td><td>M3T120W28L28</td><td>四分度大齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L17</td></tr>
+<tr><td class="idx">156</td><td class="mono">5003002502</td><td>M2.5T36W20L85</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L18</td></tr>
+<tr><td class="idx">157</td><td class="mono">6013002560</td><td>φ307.32T20</td><td>鏈輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L19</td></tr>
+<tr><td class="idx">158</td><td class="mono">1011002510</td><td>M4T34W30L30</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L20</td></tr>
+<tr><td class="idx">159</td><td class="mono">2802002110-4</td><td>M1.75T48/M2T52L33</td><td>迴轉齒</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L21</td></tr>
+<tr><td class="idx">160</td><td class="mono">3015002544</td><td>M2.5*27T22W40L</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L22<br>寶嘉誠-L226</td></tr>
+<tr><td class="idx">161</td><td class="mono">5033002531</td><td>M3T30W35L36</td><td>惰輪齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L23<br>寶嘉誠-L232</td></tr>
+<tr><td class="idx">162</td><td class="mono">6007002500</td><td>M2.5T20W28L62</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L24</td></tr>
+<tr><td class="idx">163</td><td class="mono">1004012500</td><td>M1.5T40W25L27</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L25</td></tr>
+<tr><td class="idx">164</td><td class="mono">7003002522</td><td>M2.5T60W20L35</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L26<br>寶嘉誠-L234</td></tr>
+<tr><td class="idx">165</td><td class="mono">5007042501</td><td>M2.5T35W27.5L43</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L27<br>寶嘉誠-L224</td></tr>
+<tr><td class="idx">166</td><td class="mono">5012002523</td><td>M2.5T26W30L60</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L28<br>寶嘉誠-L29</td></tr>
+<tr><td class="idx">167</td><td class="mono">1007002551</td><td>M2.5T28W20L24</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L30</td></tr>
+<tr><td class="idx">168</td><td class="mono">3006022501</td><td>M2.5T32W20L21</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L31<br>寶嘉誠-L220</td></tr>
+<tr><td class="idx">169</td><td class="mono">6007002523</td><td>M5T36W40</td><td>旋轉齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L32</td></tr>
+<tr><td class="idx">170</td><td class="mono">6023002511</td><td>M6T25W70L103</td><td>左旋齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L33</td></tr>
+<tr><td class="idx">171</td><td class="mono">5008002533</td><td>M4T32W24L28</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L34<br>寶嘉誠-L231</td></tr>
+<tr><td class="idx">172</td><td class="mono">5010012523</td><td>M3T48W32L42</td><td>馬達連動齒</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L35<br>寶嘉誠-L36</td></tr>
+<tr><td class="idx">173</td><td class="mono">5010012511</td><td>M3T20W35L158</td><td>心軸齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L37</td></tr>
+<tr><td class="idx">174</td><td class="mono">6028002500</td><td>M3T42W25L74</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L41</td></tr>
+<tr><td class="idx">175</td><td class="mono">5002002521</td><td>M2.5T52W20L26</td><td>惰輪齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L42</td></tr>
+<tr><td class="idx">176</td><td class="mono">6013002512</td><td>M4T40W30L53</td><td>齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L43</td></tr>
+<tr><td class="idx">177</td><td class="mono">6013002530</td><td>M4T20W29L53</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L44</td></tr>
+<tr><td class="idx">178</td><td class="mono">5005002504</td><td>M4T28W30L35</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L45</td></tr>
+<tr><td class="idx">179</td><td class="mono">6013002531</td><td>M4T20W29L53</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L46</td></tr>
+<tr><td class="idx">180</td><td class="mono">1005012510</td><td>M2.5T27W21.5L25</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L47</td></tr>
+<tr><td class="idx">181</td><td class="mono">1003012513</td><td>M2T30W18L30</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L48<br>寶嘉誠-L111</td></tr>
+<tr><td class="idx">182</td><td class="mono">3015002570</td><td>M2.5T36W25L27</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L49<br>寶嘉誠-L62</td></tr>
+<tr><td class="idx">183</td><td class="mono">6028002530</td><td>M5T24W48.5L110</td><td>直線軸馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L50<br>寶嘉誠-L51</td></tr>
+<tr><td class="idx">184</td><td class="mono">6043002520</td><td>M5T20W39L68</td><td>小齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L54</td></tr>
+<tr><td class="idx">185</td><td class="mono">5022002521</td><td>M2.5T26W25.5L30</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L55</td></tr>
+<tr><td class="idx">186</td><td class="mono">5003002550</td><td>M2.5T43W20L26</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L56</td></tr>
+<tr><td class="idx">187</td><td class="mono">6006002580</td><td>φ59.15T13</td><td>鍊輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L57</td></tr>
+<tr><td class="idx">188</td><td class="mono">3006002532</td><td>M1.5T40W24L25</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L58<br>寶嘉誠-L244</td></tr>
+<tr><td class="idx">189</td><td class="mono">2005012512</td><td>M2.5T26W20.5L29</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L59</td></tr>
+<tr><td class="idx">190</td><td class="mono">3004002550</td><td>M1.5T36W16L17</td><td>正齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L60<br>寶嘉誠-L61</td></tr>
+<tr><td class="idx">191</td><td class="mono">3018002590</td><td>M1.5T36W19.5L84.5</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L63</td></tr>
+<tr><td class="idx">192</td><td class="mono">3053002510</td><td>M4T30W29.5L35</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L64</td></tr>
+<tr><td class="idx">193</td><td class="mono">5007002501</td><td>M2.5T40W25L26</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L65<br>寶嘉誠-L193</td></tr>
+<tr><td class="idx">194</td><td class="mono">5010012533</td><td>M3T24W41L42</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L67</td></tr>
+<tr><td class="idx">195</td><td class="mono">5024002502</td><td>M4T25W29.5L35</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L68</td></tr>
+<tr><td class="idx">196</td><td class="mono">6007002513</td><td>M2.5T20W25.5L56</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L69</td></tr>
+<tr><td class="idx">197</td><td class="mono">6018002520</td><td>M3T15W19L20</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L70</td></tr>
+<tr><td class="idx">198</td><td class="mono">6023002501</td><td>M6T25W69.5L85</td><td>左旋齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L71</td></tr>
+<tr><td class="idx">199</td><td class="mono">7017002500</td><td>M2.5T28W20L40</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L72</td></tr>
+<tr><td class="idx">200</td><td class="mono">1007002514</td><td>M2.5T28W20L24</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L73<br>寶嘉誠-L229</td></tr>
+<tr><td class="idx">201</td><td class="mono">1006002592</td><td>M2.5T24W20L22.5</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L74<br>寶嘉誠-L261</td></tr>
+<tr><td class="idx">202</td><td class="mono">3007002513</td><td>M2T25W20L28</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L75<br>寶嘉誠-L223<br>寶嘉誠-L245</td></tr>
+<tr><td class="idx">203</td><td class="mono">3003022500</td><td>M1.5T28W12L70.5</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L76</td></tr>
+<tr><td class="idx">204</td><td class="mono">1002002571</td><td>M1.5T28W15.5L24</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L77</td></tr>
+<tr><td class="idx">205</td><td class="mono">1020002510</td><td>M2.5T27W19.5L30</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L78</td></tr>
+<tr><td class="idx">206</td><td class="mono">3042012500</td><td>M2T40W22L24</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L79</td></tr>
+<tr><td class="idx">207</td><td class="mono">3052002501</td><td>M1.5T42W25.5L35</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L80</td></tr>
+<tr><td class="idx">208</td><td class="mono">6018002511</td><td>M3T15W26L52</td><td>預備站小齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L81</td></tr>
+<tr><td class="idx">209</td><td class="mono">6027002580</td><td>M3T34W25L29</td><td>齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L82</td></tr>
+<tr><td class="idx">210</td><td class="mono">5033002512</td><td>M3T40W31L43</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L83<br>寶嘉誠-L140<br>寶嘉誠-L141</td></tr>
+<tr><td class="idx">211</td><td class="mono">1003012520</td><td>M1.5T30W18L22</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L84</td></tr>
+<tr><td class="idx">212</td><td class="mono">1004002502</td><td>M1.5T27W19.5L25</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L85</td></tr>
+<tr><td class="idx">213</td><td class="mono">1048002510</td><td>M1.5T48W18L21</td><td>正齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L86</td></tr>
+<tr><td class="idx">214</td><td class="mono">1048002520</td><td>M1.5T32W19L27</td><td>正齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L87</td></tr>
+<tr><td class="idx">215</td><td class="mono">3004000001A</td><td>M1.5T36W20L20</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L88</td></tr>
+<tr><td class="idx">216</td><td class="mono">3006012560</td><td>M1.5T40W18.5L23.5</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L89<br>寶嘉誠-L256</td></tr>
+<tr><td class="idx">217</td><td class="mono">3017002521</td><td>M2.5T34W20L26</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L90</td></tr>
+<tr><td class="idx">218</td><td class="mono">3017002593</td><td>M2.5T30W19.5L40</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L91</td></tr>
+<tr><td class="idx">219</td><td class="mono">3018012500</td><td>M1.5T36W20L86</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L92</td></tr>
+<tr><td class="idx">220</td><td class="mono">3038002550</td><td>M1.5T30W14.5L30</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L93</td></tr>
+<tr><td class="idx">221</td><td class="mono">3052002510</td><td>M1.5T28W20L35.5</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L94</td></tr>
+<tr><td class="idx">222</td><td class="mono">6036002510</td><td>φ109.76T20</td><td>鏈輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L95</td></tr>
+<tr><td class="idx">223</td><td class="mono">3006002510</td><td>M1.5T40W26L50</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L96<br>寶嘉誠-L97</td></tr>
+<tr><td class="idx">224</td><td class="mono">3038002542A</td><td>M1.5T40W15L19</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L98</td></tr>
+<tr><td class="idx">225</td><td class="mono">1051002510</td><td>M2.5T50W21L27</td><td>凸輪軸齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L99</td></tr>
+<tr><td class="idx">226</td><td class="mono">3007002550</td><td>M2T50W20L25</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L100</td></tr>
+<tr><td class="idx">227</td><td class="mono">6010002534</td><td>M2.5T26W27L28</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L101</td></tr>
+<tr><td class="idx">228</td><td class="mono">5004002512</td><td>M4*28T*31L</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L102</td></tr>
+<tr><td class="idx">229</td><td class="mono">3004002500</td><td>M1.5T30W21L23</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L103<br>寶嘉誠-L269</td></tr>
+<tr><td class="idx">230</td><td class="mono">6013002520</td><td>M4T22W29.5L30</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L104</td></tr>
+<tr><td class="idx">231</td><td class="mono">1011002501</td><td>M4T18W34L48</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L105</td></tr>
+<tr><td class="idx">232</td><td class="mono">1019002511</td><td>M2T35W20L24</td><td>蝸感齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L106</td></tr>
+<tr><td class="idx">233</td><td class="mono">5007002512</td><td>M2.5T38W20L32</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L107</td></tr>
+<tr><td class="idx">234</td><td class="mono">6007002530</td><td>φ89.33T16</td><td>鏈輪ANSI50-16T</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L108<br>寶嘉誠-L239<br>寶嘉誠-L240</td></tr>
+<tr><td class="idx">235</td><td class="mono">6013002521</td><td>M4T22W29.5L30</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L109</td></tr>
+<tr><td class="idx">236</td><td class="mono">3003012570</td><td>M1.5T36W16L23</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L110</td></tr>
+<tr><td class="idx">237</td><td class="mono">6010002513</td><td>M2.5T26W26L30</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L112<br>寶嘉誠-L235</td></tr>
+<tr><td class="idx">238</td><td class="mono">5033002523</td><td>M3T25W30</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L113</td></tr>
+<tr><td class="idx">239</td><td class="mono">3003012590</td><td>M1.5T30W19L20</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L114<br>寶嘉誠-L248</td></tr>
+<tr><td class="idx">240</td><td class="mono">3038002520</td><td>M1.5T36W16L23</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L115</td></tr>
+<tr><td class="idx">241</td><td class="mono">1003032530</td><td>M0.75T120</td><td>主軸齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L116</td></tr>
+<tr><td class="idx">242</td><td class="mono">1004002501</td><td>M1.5T27W18L25</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L117<br>寶嘉誠-L215</td></tr>
+<tr><td class="idx">243</td><td class="mono">1009002510</td><td>M2.5T45W27L28</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L118</td></tr>
+<tr><td class="idx">244</td><td class="mono">6027002560</td><td>φ56.11T26</td><td>鏈輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L119</td></tr>
+<tr><td class="idx">245</td><td class="mono">6027002570</td><td>M3T34W25L29</td><td>齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L120<br>寶嘉誠-L121</td></tr>
+<tr><td class="idx">246</td><td class="mono">3019012510</td><td>M2T38W26L27</td><td>惰齒輪(弧形齒)</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L122</td></tr>
+<tr><td class="idx">247</td><td class="mono">5010012503</td><td>M3T36W30L30</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L123</td></tr>
+<tr><td class="idx">248</td><td class="mono">6018002540</td><td>M2.5T27W19.5L30</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L124</td></tr>
+<tr><td class="idx">249</td><td class="mono">3038002543</td><td>M1.5T40W15L19</td><td>蝸桿齒輪-弧型齒</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L125</td></tr>
+<tr><td class="idx">250</td><td class="mono">3012002510</td><td>M2.5T38W20L32</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L126</td></tr>
+<tr><td class="idx">251</td><td class="mono">2804002101-4</td><td>M3T70/M3.5T48L41.5</td><td>迴轉齒-4D</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L127<br>寶嘉誠-L139</td></tr>
+<tr><td class="idx">252</td><td class="mono">3019012501</td><td>M2T36W20.5L49</td><td>蝸桿齒輪(弧形齒)</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L129</td></tr>
+<tr><td class="idx">253</td><td class="mono">5017002503</td><td>M4T36W30L30</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L130</td></tr>
+<tr><td class="idx">254</td><td class="mono">3010002522</td><td>M2.5T52W20L26</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L131</td></tr>
+<tr><td class="idx">255</td><td class="mono">6014002502</td><td>M5T36W50L131</td><td>旋轉齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L133</td></tr>
+<tr><td class="idx">256</td><td class="mono">1047002500</td><td>M2T60W18L30</td><td>凸輪軸齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L134<br>寶嘉誠-L138<br>寶嘉誠-L157</td></tr>
+<tr><td class="idx">257</td><td class="mono">5004002511</td><td>M4*28T*31L</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L135</td></tr>
+<tr><td class="idx">258</td><td class="mono">6026002503</td><td>M5T36W44L138</td><td>旋轉齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L136<br>寶嘉誠-L255</td></tr>
+<tr><td class="idx">259</td><td class="mono">3006002542</td><td>M1.5T36W21L73</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L137<br>寶嘉誠-L241<br>寶嘉誠-L242</td></tr>
+<tr><td class="idx">260</td><td class="mono">3042002580</td><td>M2.5T27W21L52</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L142</td></tr>
+<tr><td class="idx">261</td><td class="mono">5005002503</td><td>M4T28W30L35</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L143</td></tr>
+<tr><td class="idx">262</td><td class="mono">1003012531</td><td>M2T30W17.530</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L144<br>寶嘉誠-L196</td></tr>
+<tr><td class="idx">263</td><td class="mono">5020002522</td><td>M2.5T28W24.5L38</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L147</td></tr>
+<tr><td class="idx">264</td><td class="mono">2806002100-6</td><td>M4T48W7L45.5</td><td>回轉齒</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L148</td></tr>
+<tr><td class="idx">265</td><td class="mono">2806002100-5</td><td>M4T58W29.5L41.5</td><td>回轉齒</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L149</td></tr>
+<tr><td class="idx">266</td><td class="mono">3011012533</td><td>M2.5T24W23L58</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L150<br>寶嘉誠-L158</td></tr>
+<tr><td class="idx">267</td><td class="mono">5015002504</td><td>M2.5T26W27.5L38.5</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L151</td></tr>
+<tr><td class="idx">268</td><td class="mono">2904002521</td><td>M2.5T40W23.5L29</td><td>小齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L152</td></tr>
+<tr><td class="idx">269</td><td class="mono">3015002512</td><td>M2.5T36W20L24</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L153</td></tr>
+<tr><td class="idx">270</td><td class="mono">1051002500</td><td>M2.5T20W21L58</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L154</td></tr>
+<tr><td class="idx">271</td><td class="mono">1029002530</td><td>M1.5T30W17.5L19</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L155</td></tr>
+<tr><td class="idx">272</td><td class="mono">1024005400</td><td>代料到齒研</td><td>24T等分盤</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L156</td></tr>
+<tr><td class="idx">273</td><td class="mono">3020002512</td><td>M2.5T35W23.5L26</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L159</td></tr>
+<tr><td class="idx">274</td><td class="mono">3046002580</td><td>M2.5T36W24L51</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L161</td></tr>
+<tr><td class="idx">275</td><td class="mono">3004002570</td><td>M2T22W18L19</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L162</td></tr>
+<tr><td class="idx">276</td><td class="mono">2005002520</td><td>M2.5T60W19L32</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L163</td></tr>
+<tr><td class="idx">277</td><td class="mono">2005002530</td><td>M2.5T20W19.532</td><td>手輪齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L164</td></tr>
+<tr><td class="idx">278</td><td class="mono">3018002580</td><td>M2T33W26L27</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L165</td></tr>
+<tr><td class="idx">279</td><td class="mono">3018002511</td><td>M2T25W22L23</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L166</td></tr>
+<tr><td class="idx">280</td><td class="mono">3018002521</td><td>M2T20W18L20</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L167</td></tr>
+<tr><td class="idx">281</td><td class="mono">3018002531</td><td>M2T24W13.5L30</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L168</td></tr>
+<tr><td class="idx">282</td><td class="mono">3052002521</td><td>M1.5T28W22L40</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L170</td></tr>
+<tr><td class="idx">283</td><td class="mono">6006002540</td><td>D83.71T19</td><td>鏈輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L171</td></tr>
+<tr><td class="idx">284</td><td class="mono">1015002512</td><td>M4T22W47L47</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L172<br>寶嘉誠-L214</td></tr>
+<tr><td class="idx">285</td><td class="mono">5033002561</td><td>M5T25W57L101</td><td>小齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L173</td></tr>
+<tr><td class="idx">286</td><td class="mono">6043002510</td><td>M5T20W39L117</td><td>小齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L174</td></tr>
+<tr><td class="idx">287</td><td class="mono">6006002550</td><td>φ109.76T20</td><td>鍊輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L175</td></tr>
+<tr><td class="idx">288</td><td class="mono">5069002511</td><td>M5T28W55L57</td><td>小齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L176</td></tr>
+<tr><td class="idx">289</td><td class="mono">5033002570</td><td>M5T25W43L44</td><td>惰齒輪(右旋)</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L177</td></tr>
+<tr><td class="idx">290</td><td class="mono">7003002550</td><td>無圖</td><td>齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L178</td></tr>
+<tr><td class="idx">291</td><td class="mono">7018002541</td><td>M1.75T72W14L22</td><td>外傳動齒</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L179</td></tr>
+<tr><td class="idx">292</td><td class="mono">7018002551</td><td>M1.75T72W10L14.5</td><td>內傳動齒</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L180</td></tr>
+<tr><td class="idx">293</td><td class="mono">7018002561</td><td>M1.75T72W18L50</td><td>外傳動齒</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L181</td></tr>
+<tr><td class="idx">294</td><td class="mono">7018002570</td><td>M1.75T72W12L18.5</td><td>內傳動齒</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L182</td></tr>
+<tr><td class="idx">295</td><td class="mono">5069002501</td><td>M5T25W54.5L230</td><td>小齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L183</td></tr>
+<tr><td class="idx">296</td><td class="mono">1003022513</td><td>M2T30W17.5L26</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L184</td></tr>
+<tr><td class="idx">297</td><td class="mono">3019002550</td><td>M1.5T40W26L28</td><td>馬達齒輪-旋</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L185</td></tr>
+<tr><td class="idx">298</td><td class="mono">3019002570</td><td>M1.5T36W23L24</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L186</td></tr>
+<tr><td class="idx">299</td><td class="mono">3019002591</td><td>M2T24W20L30</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L187</td></tr>
+<tr><td class="idx">300</td><td class="mono">3046002540</td><td>M2T30W26.5L53</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L188</td></tr>
+<tr><td class="idx">301</td><td class="mono">3046012500</td><td>M2.5T36W24L51</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L189</td></tr>
+<tr><td class="idx">302</td><td class="mono">3011012510</td><td>M2.5T24W27L62</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L190</td></tr>
+<tr><td class="idx">303</td><td class="mono">3014002560</td><td>M2.5T24W22.5L58</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L191</td></tr>
+<tr><td class="idx">304</td><td class="mono">5003022510</td><td>M2.5T36W23L46</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L192</td></tr>
+<tr><td class="idx">305</td><td class="mono">3004000001</td><td>M1.5T36W20L20</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L194</td></tr>
+<tr><td class="idx">306</td><td class="mono">1003022580</td><td>M2T30W18L32</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L195</td></tr>
+<tr><td class="idx">307</td><td class="mono">1027002500</td><td>M2.5T28W22L38</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L197</td></tr>
+<tr><td class="idx">308</td><td class="mono">3019012500</td><td>M2T36W20L49</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L198</td></tr>
+<tr><td class="idx">309</td><td class="mono">3011012543</td><td>M2.5T24W22.5L58</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L199</td></tr>
+<tr><td class="idx">310</td><td class="mono">1008002521</td><td>M2.5T28W22L49.5</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L200</td></tr>
+<tr><td class="idx">311</td><td class="mono">6009002561</td><td>M6T42W50L245</td><td>旋轉齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L201</td></tr>
+<tr><td class="idx">312</td><td class="mono">6009002014</td><td>Φ277L235</td><td>旋轉座</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L202</td></tr>
+<tr><td class="idx">313</td><td class="mono">1003022530</td><td>M2T30W18L25</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L211<br>寶嘉誠-L258</td></tr>
+<tr><td class="idx">314</td><td class="mono">5008002503</td><td>M4T32W38L43</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L212<br>寶嘉誠-L268</td></tr>
+<tr><td class="idx">315</td><td class="mono">3019012560</td><td>M1.5T40W19L41</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L213</td></tr>
+<tr><td class="idx">316</td><td class="mono">6001002530</td><td>M2.5T27W25L55</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L216</td></tr>
+<tr><td class="idx">317</td><td class="mono">3024012503</td><td>M2.5T35W24L26</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L218</td></tr>
+<tr><td class="idx">318</td><td class="mono">3019012520</td><td>M2T40W22L24</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L219</td></tr>
+<tr><td class="idx">319</td><td class="mono">6006002590</td><td>OD109.76T20</td><td>鍊輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L221</td></tr>
+<tr><td class="idx">320</td><td class="mono">5003002521</td><td>M2.5T46W22L26</td><td>惰齒輪(弧齒輪)</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L222</td></tr>
+<tr><td class="idx">321</td><td class="mono">1000002563</td><td>M2T25W20L54</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L225<br>寶嘉誠-L257</td></tr>
+<tr><td class="idx">322</td><td class="mono">1015002522</td><td>M4T44W34L47</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L227</td></tr>
+<tr><td class="idx">323</td><td class="mono">3004002530</td><td>M1.5T36W18.5L51.5</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L228</td></tr>
+<tr><td class="idx">324</td><td class="mono">6010002504</td><td>M2.5T52W19.5L24</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L233<br>寶嘉誠-L247</td></tr>
+<tr><td class="idx">325</td><td class="mono">1017002500</td><td>M2T27W21.5L25</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L236</td></tr>
+<tr><td class="idx">326</td><td class="mono">6009002505</td><td>M6T42W50L188</td><td>旋轉齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L237<br>寶嘉誠-L266</td></tr>
+<tr><td class="idx">327</td><td class="mono">1006002591</td><td>M2.5T24W20L22.5</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L238</td></tr>
+<tr><td class="idx">328</td><td class="mono">6006002560</td><td>φ190.76T20</td><td>鏈輪T20</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L243</td></tr>
+<tr><td class="idx">329</td><td class="mono">5004002524</td><td>M4T28W30L35</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L246<br>寶嘉誠-L272</td></tr>
+<tr><td class="idx">330</td><td class="mono">6001002513</td><td>M2.5T27W22L40</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L250</td></tr>
+<tr><td class="idx">331</td><td class="mono">3017002533</td><td>M3T32W24.5L30</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L251</td></tr>
+<tr><td class="idx">332</td><td class="mono">3019002560</td><td>M1.5T46W26L27</td><td>惰齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L252</td></tr>
+<tr><td class="idx">333</td><td class="mono">1007002543</td><td>M2.5T2819.5L24</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L253</td></tr>
+<tr><td class="idx">334</td><td class="mono">1003002522</td><td>M2T30W18L38</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L254<br>寶嘉誠-L259</td></tr>
+<tr><td class="idx">335</td><td class="mono">3003012580</td><td>M1.5T30W20.5L36</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L260</td></tr>
+<tr><td class="idx">336</td><td class="mono">3004002544</td><td>M1.5T36W20L68.5</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L262</td></tr>
+<tr><td class="idx">337</td><td class="mono">5019002501</td><td>M2.5T21W23.5L35</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L263<br>寶嘉誠-L270</td></tr>
+<tr><td class="idx">338</td><td class="mono">6003002513</td><td>M5T36W10L179</td><td>旋轉齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L265</td></tr>
+<tr><td class="idx">339</td><td class="mono">3010002511</td><td>M2.5T28W19.5L24</td><td>蝸桿齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L267</td></tr>
+<tr><td class="idx">340</td><td class="mono">6001002514</td><td>M2.5T27W22L40</td><td>馬達齒輪</td><td class="dim">寶嘉誠</td><td class="dim sm">寶嘉誠-L271</td></tr>
+<tr><td class="idx">341</td><td class="mono">E2093350270001</td><td>M2.5T20W46L46</td><td>轉位齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L4</td></tr>
+<tr><td class="idx">342</td><td class="mono">2103430230103</td><td>M1.25T36W22L30</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L5<br>旭陽-L139</td></tr>
+<tr><td class="idx">343</td><td class="mono">E2090220120005</td><td>M2T20W31L131</td><td>齒輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L6</td></tr>
+<tr><td class="idx">344</td><td class="mono">E2090220130002</td><td>M2T45W14L33</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L7</td></tr>
+<tr><td class="idx">345</td><td class="mono">E2090260130000</td><td>M2T77W14L33</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L8<br>旭陽-L109</td></tr>
+<tr><td class="idx">346</td><td class="mono">2537340340100</td><td>OD159.06T63W26.7L33</td><td>8YU-63齒時規皮帶輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L9</td></tr>
+<tr><td class="idx">347</td><td class="mono">2537100110000</td><td>OD120.8T48W26.7L33</td><td>8YU-48齒時規皮帶輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L10</td></tr>
+<tr><td class="idx">348</td><td class="mono">E2093340040001</td><td>M3T18W46L46</td><td>轉位齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L11<br>旭陽-L33</td></tr>
+<tr><td class="idx">349</td><td class="mono">2103430230902</td><td>M1.25T36W22L30</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L12<br>旭陽-L13<br>旭陽-L75</td></tr>
+<tr><td class="idx">350</td><td class="mono">2000100220000</td><td>T48L59</td><td>皮帶輪8YU</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L14<br>旭陽-L37</td></tr>
+<tr><td class="idx">351</td><td class="mono">2100880320002</td><td>M1.5T60W20L50</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L15</td></tr>
+<tr><td class="idx">352</td><td class="mono">2103570130500</td><td>M3.25*24T*50L</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L16</td></tr>
+<tr><td class="idx">353</td><td class="mono">2097180110001</td><td>M1.25T99W16L16</td><td>轉位齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L17</td></tr>
+<tr><td class="idx">354</td><td class="mono">2097090110002</td><td>M1.5T15W21L59</td><td>齒輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L18</td></tr>
+<tr><td class="idx">355</td><td class="mono">E2090220140001</td><td>M2T17W15L29</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L19</td></tr>
+<tr><td class="idx">356</td><td class="mono">2500300210000</td><td>M1.25T72W18L30</td><td>蝸桿齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L20</td></tr>
+<tr><td class="idx">357</td><td class="mono">2172930130001</td><td>M3.25T75W25L45</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L21</td></tr>
+<tr><td class="idx">358</td><td class="mono">2094420260001</td><td>M2T45W15L21</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L22</td></tr>
+<tr><td class="idx">359</td><td class="mono">2105590150001</td><td>M1.25T24W15L36</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L23<br>旭陽-L65<br>旭陽-L66</td></tr>
+<tr><td class="idx">360</td><td class="mono">2956260030100</td><td>φ178.25T70W26.7L60</td><td>時規皮帶輪8YUT70</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L24</td></tr>
+<tr><td class="idx">361</td><td class="mono">2094420280001</td><td>M2T17W15L86</td><td>齒輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L25</td></tr>
+<tr><td class="idx">362</td><td class="mono">2103430230201</td><td>M1.25*36T22W30L</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L26<br>旭陽-L77</td></tr>
+<tr><td class="idx">363</td><td class="mono">2172930100001</td><td>M3.25T25W28L113.5</td><td>蝸輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L27</td></tr>
+<tr><td class="idx">364</td><td class="mono">2103400240600</td><td>M1.5T60W25L50</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L28</td></tr>
+<tr><td class="idx">365</td><td class="mono">2123730070001</td><td>M1.25T60W24L26</td><td>中間齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L29<br>旭陽-L30</td></tr>
+<tr><td class="idx">366</td><td class="mono">2124580160001</td><td>M1.25T52W38L38</td><td>中間齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L31</td></tr>
+<tr><td class="idx">367</td><td class="mono">2120020240701</td><td>M1.25T33W21L21</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L32</td></tr>
+<tr><td class="idx">368</td><td class="mono">E2090260140000</td><td>M2T28W15L29</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L34<br>旭陽-L72</td></tr>
+<tr><td class="idx">369</td><td class="mono">2965980150100</td><td>φ59.75T24W29L33</td><td>皮帶輪8YU型</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L35<br>旭陽-L121</td></tr>
+<tr><td class="idx">370</td><td class="mono">2120260110300</td><td>M1.25T36W22L56</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L36</td></tr>
+<tr><td class="idx">371</td><td class="mono">21035003500300</td><td>M1.25T24TW20</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L38</td></tr>
+<tr><td class="idx">372</td><td class="mono">2985830120000</td><td>OD89.63T35W26.7L33</td><td>8YU-35T時規皮帶輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L39</td></tr>
+<tr><td class="idx">373</td><td class="mono">2985830110000</td><td>OD69.9T28W26.7L33</td><td>8YU-28T時規皮帶輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L40</td></tr>
+<tr><td class="idx">374</td><td class="mono">2103500210004</td><td>M1.25T30W22L22</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L41<br>旭陽-L69</td></tr>
+<tr><td class="idx">375</td><td class="mono">2120020111000</td><td>M1.25T34W20L45</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L42</td></tr>
+<tr><td class="idx">376</td><td class="mono">2120020241100</td><td>M1.25T33W20L45</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L43</td></tr>
+<tr><td class="idx">377</td><td class="mono">E2020010070000</td><td>無圖</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L45</td></tr>
+<tr><td class="idx">378</td><td class="mono">E2020010130001</td><td>M1T37W12L16</td><td>平齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L46</td></tr>
+<tr><td class="idx">379</td><td class="mono">2103430230000</td><td>無圖</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L47</td></tr>
+<tr><td class="idx">380</td><td class="mono">2103500200601</td><td>M1.25T36W26L26</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L48<br>旭陽-L62</td></tr>
+<tr><td class="idx">381</td><td class="mono">2103500202000</td><td>M1.25T32W23L26</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L49</td></tr>
+<tr><td class="idx">382</td><td class="mono">2000094320000</td><td>φ41.38T26W16.3L20</td><td>馬達皮帶輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L50</td></tr>
+<tr><td class="idx">383</td><td class="mono">2956050170100</td><td>φ59.75T24W21.7L28</td><td>時規皮帶輪8YU</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L51</td></tr>
+<tr><td class="idx">384</td><td class="mono">2120020110801</td><td>M1.25T34W20</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L52</td></tr>
+<tr><td class="idx">385</td><td class="mono">2120020110000</td><td>M1.25T34W16L40</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L53</td></tr>
+<tr><td class="idx">386</td><td class="mono">2172540160001</td><td>M1.25T54W20L35</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L54</td></tr>
+<tr><td class="idx">387</td><td class="mono">2956050160000</td><td>φ75.06T30W21.7L28</td><td>時規皮帶輪8YU</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L56<br>旭陽-L57</td></tr>
+<tr><td class="idx">388</td><td class="mono">2503430180000</td><td>M1.25T72W19.5L25.5</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L58</td></tr>
+<tr><td class="idx">389</td><td class="mono">2000002230300</td><td>M1.25T54W30L40</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L59</td></tr>
+<tr><td class="idx">390</td><td class="mono">2000003780000</td><td>M1.25T36W20L37</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L60</td></tr>
+<tr><td class="idx">391</td><td class="mono">2103430231601</td><td>M1.25T36W30L58</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L61</td></tr>
+<tr><td class="idx">392</td><td class="mono">2094120110304</td><td>M2.25T51W26L66</td><td>齒輪/6支刀</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L63</td></tr>
+<tr><td class="idx">393</td><td class="mono">2094400200001</td><td>M1.5T16W15L21</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L64</td></tr>
+<tr><td class="idx">394</td><td class="mono">E2090330040000</td><td>M2.5T19W28L85</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L67</td></tr>
+<tr><td class="idx">395</td><td class="mono">E2090330170000</td><td>φ85.21T34W22.8L34</td><td>皮帶輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L68</td></tr>
+<tr><td class="idx">396</td><td class="mono">2956050170000</td><td>φ70T24W21.7L28</td><td>時規皮帶輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L70<br>旭陽-L89</td></tr>
+<tr><td class="idx">397</td><td class="mono">E2090260120000</td><td>M2T15W65L161</td><td>齒輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L71</td></tr>
+<tr><td class="idx">398</td><td class="mono">2103400240002</td><td>M1.5T60W25L50</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L73<br>旭陽-L136<br>旭陽-L155</td></tr>
+<tr><td class="idx">399</td><td class="mono">44001030207</td><td>φ85.21T34W28L33</td><td>皮帶輪P8M</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L74</td></tr>
+<tr><td class="idx">400</td><td class="mono">2097200140200</td><td>φ98t35w31.7L70</td><td>時規皮帶輪8YUT35</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L76</td></tr>
+<tr><td class="idx">401</td><td class="mono">2170600270101</td><td>M3W49.5L251</td><td>油壓軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L78<br>旭陽-L79</td></tr>
+<tr><td class="idx">402</td><td class="mono">2120020120001</td><td>M1.25*34T*18W</td><td>蝸桿齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L80</td></tr>
+<tr><td class="idx">403</td><td class="mono">2094400160001</td><td>無圖</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L81</td></tr>
+<tr><td class="idx">404</td><td class="mono">2094400190001</td><td>無圖</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L83</td></tr>
+<tr><td class="idx">405</td><td class="mono">2094410330100</td><td>φ36L58</td><td>馬達齒輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L86</td></tr>
+<tr><td class="idx">406</td><td class="mono">2954990100000</td><td>無圖</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L87</td></tr>
+<tr><td class="idx">407</td><td class="mono">2954990110002</td><td>無圖</td><td>中間齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L88</td></tr>
+<tr><td class="idx">408</td><td class="mono">2956350040000</td><td>OD120.86T48W26.7L33</td><td>時規皮帶輪8YU</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L90</td></tr>
+<tr><td class="idx">409</td><td class="mono">2094410120000</td><td>M1.5T66W15L19</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L91</td></tr>
+<tr><td class="idx">410</td><td class="mono">E2020010140000</td><td>M1T60W12L16</td><td>轉位平齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L92</td></tr>
+<tr><td class="idx">411</td><td class="mono">E2020010060000</td><td>M1T37W12L16</td><td>平齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L93</td></tr>
+<tr><td class="idx">412</td><td class="mono">2093370160103</td><td>無圖</td><td>驅動軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L94</td></tr>
+<tr><td class="idx">413</td><td class="mono">2094420180001</td><td>M2T15W20L86</td><td>齒輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L98</td></tr>
+<tr><td class="idx">414</td><td class="mono">2094400120000</td><td>無圖</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L99</td></tr>
+<tr><td class="idx">415</td><td class="mono">2094400210500</td><td>φ20L43</td><td>齒輪心軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L100</td></tr>
+<tr><td class="idx">416</td><td class="mono">2094400170001</td><td>M1.25T12W13.5L57</td><td>齒輪軸(A)</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L101</td></tr>
+<tr><td class="idx">417</td><td class="mono">2094400170002</td><td>M1.25T12W13.5L57</td><td>齒輪軸(A)</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L102</td></tr>
+<tr><td class="idx">418</td><td class="mono">2094400180001</td><td>M1.5T12W27L57</td><td>齒輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L103</td></tr>
+<tr><td class="idx">419</td><td class="mono">2094400130000</td><td>M1.25T60TW12L23</td><td>主軸齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L106</td></tr>
+<tr><td class="idx">420</td><td class="mono">2094400210300</td><td>無圖</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L107</td></tr>
+<tr><td class="idx">421</td><td class="mono">E209026014****</td><td>M2T28W15L29</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L108</td></tr>
+<tr><td class="idx">422</td><td class="mono">2096640110001</td><td>M2.75T17W30L97</td><td>齒輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L110</td></tr>
+<tr><td class="idx">423</td><td class="mono">2093370160101</td><td>無圖</td><td>驅動軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L111</td></tr>
+<tr><td class="idx">424</td><td class="mono">2093370210100</td><td>M2T25TW16L23</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L112</td></tr>
+<tr><td class="idx">425</td><td class="mono">2094120120300</td><td>M2.25T34W32.5L144</td><td>滾輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L113</td></tr>
+<tr><td class="idx">426</td><td class="mono">2956990110000</td><td>φ69.9T28W29L33</td><td>時規皮帶輪8YU</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L114</td></tr>
+<tr><td class="idx">427</td><td class="mono">2093370180101</td><td>M2T38TW13.5L21.5</td><td>惰齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L115</td></tr>
+<tr><td class="idx">428</td><td class="mono">2091360140003</td><td>M2T20W1262</td><td>齒輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L116</td></tr>
+<tr><td class="idx">429</td><td class="mono">2096640110000</td><td>M2.75T17TL40</td><td>齒輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L117</td></tr>
+<tr><td class="idx">430</td><td class="mono">E2090240270000</td><td>M2.5T19W38L38</td><td>轉位齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L118</td></tr>
+<tr><td class="idx">431</td><td class="mono">2096220110000</td><td>M2.25T19TW19L95</td><td>內齒輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L119</td></tr>
+<tr><td class="idx">432</td><td class="mono">2096220140000</td><td>M2.25T15TW15L65</td><td>外齒輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L120</td></tr>
+<tr><td class="idx">433</td><td class="mono">2956580060000</td><td>M1.5T32W32</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L130<br>旭陽-L153</td></tr>
+<tr><td class="idx">434</td><td class="mono">2616360130000</td><td>φ151.42T60W21.7L55</td><td>時規皮帶輪8YU</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L131</td></tr>
+<tr><td class="idx">435</td><td class="mono">2950250180001</td><td>無圖</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L132</td></tr>
+<tr><td class="idx">436</td><td class="mono">2120020130002</td><td>M1.25*34T*16W</td><td>中間齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L133<br>旭陽-L143</td></tr>
+<tr><td class="idx">437</td><td class="mono">E2991280330000</td><td>M1T20W9L20</td><td>小齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L135<br>旭陽-L149</td></tr>
+<tr><td class="idx">438</td><td class="mono">2120260100001</td><td>M1.25T42W2626</td><td>中間齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L137</td></tr>
+<tr><td class="idx">439</td><td class="mono">2120020250001</td><td>M1.25T55W2626</td><td>蝸桿齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L138</td></tr>
+<tr><td class="idx">440</td><td class="mono">2097090140002</td><td>M1.25T11W18L74</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L140</td></tr>
+<tr><td class="idx">441</td><td class="mono">2094120120302</td><td>M2.25T34W32.5L144</td><td>滾輪軸</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L141<br>旭陽-L142</td></tr>
+<tr><td class="idx">442</td><td class="mono">2103440180003</td><td>M1.25T45W25</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L144</td></tr>
+<tr><td class="idx">443</td><td class="mono">2950250080100</td><td>M3T26W35L55</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L145</td></tr>
+<tr><td class="idx">444</td><td class="mono">2000003780101</td><td>M1.25*36T*20W</td><td>正齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L146</td></tr>
+<tr><td class="idx">445</td><td class="mono">2103400240200</td><td>M1.5T60W25L50</td><td>馬達齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L147</td></tr>
+<tr><td class="idx">446</td><td class="mono">2953680210102</td><td>M3T40W35L50</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L150</td></tr>
+<tr><td class="idx">447</td><td class="mono">E2991281020000</td><td>M1T21W10L25</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L151</td></tr>
+<tr><td class="idx">448</td><td class="mono">2103990040001</td><td>M1.25T84W17L17</td><td>中間齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L152</td></tr>
+<tr><td class="idx">449</td><td class="mono">2000100210000</td><td>T36L59</td><td>皮帶輪8YU</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L154</td></tr>
+<tr><td class="idx">450</td><td class="mono">2515120160001</td><td>M1.5T90W20L20</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L157</td></tr>
+<tr><td class="idx">451</td><td class="mono">2000030360000</td><td>M1.25T36W21L56</td><td>齒輪</td><td class="dim">旭陽</td><td class="dim sm">旭陽-L158</td></tr>
+<tr><td class="idx">452</td><td class="mono">MH80010</td><td>無圖</td><td>正齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L4</td></tr>
+<tr><td class="idx">453</td><td class="mono">MI80005</td><td>無圖</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L5</td></tr>
+<tr><td class="idx">454</td><td class="mono">MN25053-A-01</td><td>M2T35W14.5L23</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L6</td></tr>
+<tr><td class="idx">455</td><td class="mono">MN50021</td><td>M2.5T32W15L23</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L7<br>和昕-L38<br>和昕-L54</td></tr>
+<tr><td class="idx">456</td><td class="mono">GT2027-00100</td><td>M2T27W15L37</td><td>馬達齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L8<br>和昕-L21<br>和昕-L49</td></tr>
+<tr><td class="idx">457</td><td class="mono">GT2060-00100</td><td>M2*60T*22L</td><td>惰輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L9</td></tr>
+<tr><td class="idx">458</td><td class="mono">GT2048-00100</td><td>M2*48T*43L</td><td>惰輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L10</td></tr>
+<tr><td class="idx">459</td><td class="mono">GT2044-00100</td><td>M2*44T*43L</td><td>傾斜惰輪-1</td><td class="dim">和昕</td><td class="dim sm">和昕-L11</td></tr>
+<tr><td class="idx">460</td><td class="mono">GT2055-00100</td><td>M2*55T*22L</td><td>傾斜惰輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L12</td></tr>
+<tr><td class="idx">461</td><td class="mono">GT2060-00201</td><td>M2T60W18L27</td><td>從動齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L13<br>和昕-L62</td></tr>
+<tr><td class="idx">462</td><td class="mono">GTA028-00300</td><td>M1.5T28W15L35</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L14</td></tr>
+<tr><td class="idx">463</td><td class="mono">TR54017-B</td><td>T55W32L32</td><td>蝸桿皮帶輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L15<br>和昕-L16</td></tr>
+<tr><td class="idx">464</td><td class="mono">MN25016</td><td>M2T37W18L20</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L17<br>和昕-L18</td></tr>
+<tr><td class="idx">465</td><td class="mono">MN25019</td><td>M2T45W15L23</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L19<br>和昕-L80</td></tr>
+<tr><td class="idx">466</td><td class="mono">GT2036-00100</td><td>M2T36W15L40</td><td>馬達齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L20</td></tr>
+<tr><td class="idx">467</td><td class="mono">MN50017</td><td>M2.5T40W15L23</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L22</td></tr>
+<tr><td class="idx">468</td><td class="mono">TR255011</td><td>M2T46W18L20</td><td>惰輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L24</td></tr>
+<tr><td class="idx">469</td><td class="mono">GT3045-00100</td><td>M3T45W20L32</td><td>從動齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L25</td></tr>
+<tr><td class="idx">470</td><td class="mono">GT3028-00100</td><td>M3T28W19.5L20.5</td><td>旋轉齒輪-1</td><td class="dim">和昕</td><td class="dim sm">和昕-L26</td></tr>
+<tr><td class="idx">471</td><td class="mono">HIB0006-A</td><td>無圖</td><td>無資料</td><td class="dim">和昕</td><td class="dim sm">和昕-L28</td></tr>
+<tr><td class="idx">472</td><td class="mono">BN32A006</td><td>M2T60W15L23</td><td>蝸桿齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L29</td></tr>
+<tr><td class="idx">473</td><td class="mono">GT2048-00200</td><td>M2T48W17L20</td><td>惰輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L30</td></tr>
+<tr><td class="idx">474</td><td class="mono">MH25011</td><td>M1.25T48L31.5</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L34</td></tr>
+<tr><td class="idx">475</td><td class="mono">TR54017-A</td><td>T37W44L44</td><td>蝸桿皮帶輪P45-8YU</td><td class="dim">和昕</td><td class="dim sm">和昕-L35<br>和昕-L45</td></tr>
+<tr><td class="idx">476</td><td class="mono">GT2036-00200</td><td>M2T36W15</td><td>馬達齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L39</td></tr>
+<tr><td class="idx">477</td><td class="mono">VB21005-A</td><td>M2T53W18L20</td><td>惰輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L40</td></tr>
+<tr><td class="idx">478</td><td class="mono">VN12013-Q</td><td>M1.5T32W10L24</td><td>馬達軸齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L41</td></tr>
+<tr><td class="idx">479</td><td class="mono">PLE024-8YU00</td><td>φ59.743T24W25L25</td><td>馬達皮帶輪P24-8YU-20</td><td class="dim">和昕</td><td class="dim sm">和昕-L42</td></tr>
+<tr><td class="idx">480</td><td class="mono">PLD035-8YU00</td><td>φ89.13T35W22L27</td><td>蝸桿皮帶輪8YU</td><td class="dim">和昕</td><td class="dim sm">和昕-L43</td></tr>
+<tr><td class="idx">481</td><td class="mono">MN32017-A</td><td>M2T54W15</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L44<br>和昕-L116</td></tr>
+<tr><td class="idx">482</td><td class="mono">GT2021-00100</td><td>M2T21W15L37</td><td>馬達齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L46<br>和昕-L70</td></tr>
+<tr><td class="idx">483</td><td class="mono">GT2021-001B0</td><td>M2T21W15L37</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L47</td></tr>
+<tr><td class="idx">484</td><td class="mono">GT2024-001A0</td><td>M2T24W22L52</td><td>馬達齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L48<br>和昕-L60</td></tr>
+<tr><td class="idx">485</td><td class="mono">GT2040-00100</td><td>M2T40W15L47</td><td>馬達齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L50</td></tr>
+<tr><td class="idx">486</td><td class="mono">MN50015</td><td>M2.5T48W15L23</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L51</td></tr>
+<tr><td class="idx">487</td><td class="mono">VN12013-T</td><td>M1.5T32W15L42</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L52</td></tr>
+<tr><td class="idx">488</td><td class="mono">VN12012-A</td><td>無圖</td><td>蝸桿端齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L53</td></tr>
+<tr><td class="idx">489</td><td class="mono">USTI4000106</td><td>M2T30W23L23</td><td>蝸桿齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L55</td></tr>
+<tr><td class="idx">490</td><td class="mono">GT3028-00200</td><td>M3T28W18L20</td><td>旋轉惰輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L56<br>和昕-L146</td></tr>
+<tr><td class="idx">491</td><td class="mono">VB21002-H</td><td>M2T24W15L37</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L57</td></tr>
+<tr><td class="idx">492</td><td class="mono">GT3021-00100</td><td>M3T21W22L52</td><td>馬達齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L58</td></tr>
+<tr><td class="idx">493</td><td class="mono">VB21006</td><td>M2*30T*20W*64外20長</td><td>從動輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L59</td></tr>
+<tr><td class="idx">494</td><td class="mono">GT2024-00100</td><td>M2T24W22L52</td><td>馬達齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L61</td></tr>
+<tr><td class="idx">495</td><td class="mono">GT3049-00100</td><td>M3T49W20L22</td><td>旋轉惰輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L63</td></tr>
+<tr><td class="idx">496</td><td class="mono">MN63006-D</td><td>M3T24W20L60</td><td>馬達齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L66</td></tr>
+<tr><td class="idx">497</td><td class="mono">GTA020-00100</td><td>M1.5T20W12L30</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L71</td></tr>
+<tr><td class="idx">498</td><td class="mono">TR54018-G</td><td>φ44.464T18W26L70</td><td>馬達皮帶輪P18-8YU</td><td class="dim">和昕</td><td class="dim sm">和昕-L75<br>和昕-L143</td></tr>
+<tr><td class="idx">499</td><td class="mono">MN32015-A</td><td>M2T50W15L23</td><td>蝸桿齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L77<br>和昕-L81<br>和昕-L128</td></tr>
+<tr><td class="idx">500</td><td class="mono">MN32018-A</td><td>M2T30W20L43</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L118<br>和昕-L131</td></tr>
+<tr><td class="idx">501</td><td class="mono">TR54018-H</td><td>8YU*22T*W27</td><td>馬達皮帶輪(22T-Φ32)</td><td class="dim">和昕</td><td class="dim sm">和昕-L125<br>和昕-L144<br>和昕-L145</td></tr>
+<tr><td class="idx">502</td><td class="mono">TR54018-A</td><td>φ67.378T27W26.7L70</td><td>馬達皮帶輪P27-8YU-25</td><td class="dim">和昕</td><td class="dim sm">和昕-L126<br>和昕-L138</td></tr>
+<tr><td class="idx">503</td><td class="mono">TR54017</td><td>T45W32L32</td><td>蝸桿皮帶輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L127</td></tr>
+<tr><td class="idx">504</td><td class="mono">MI32012-A</td><td>M240T15WL23</td><td>主動齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L129</td></tr>
+<tr><td class="idx">505</td><td class="mono">MN25015-G</td><td>M2T18W15L42.5</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L130<br>和昕-L151</td></tr>
+<tr><td class="idx">506</td><td class="mono">GT2027-00200</td><td>M2T27W20L42</td><td>馬達齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L132<br>和昕-L133</td></tr>
+<tr><td class="idx">507</td><td class="mono">TR54018</td><td>φ67.378T27W26.7L70</td><td>馬達皮帶輪P27-8YU-25</td><td class="dim">和昕</td><td class="dim sm">和昕-L137</td></tr>
+<tr><td class="idx">508</td><td class="mono">TR54018-C</td><td>OD68.75T27W26.7L70</td><td>馬達皮帶輪P27-8YU-25</td><td class="dim">和昕</td><td class="dim sm">和昕-L139</td></tr>
+<tr><td class="idx">509</td><td class="mono">TR54018-D</td><td>φ67.378T37W41.7L86</td><td>馬達皮帶輪P27-8YU</td><td class="dim">和昕</td><td class="dim sm">和昕-L140</td></tr>
+<tr><td class="idx">510</td><td class="mono">TR54018-E</td><td>φ67.378T37W41.7L86</td><td>馬達皮帶輪P27-8YU-25</td><td class="dim">和昕</td><td class="dim sm">和昕-L141<br>和昕-L142</td></tr>
+<tr><td class="idx">511</td><td class="mono">TR17016-E-01</td><td>M1.5*30T*15W*48外33長</td><td>馬達齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L147</td></tr>
+<tr><td class="idx">512</td><td class="mono">GTA028-00200</td><td>M1.5T28W15L35</td><td>馬達齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L148</td></tr>
+<tr><td class="idx">513</td><td class="mono">GTA035-00200</td><td>M1.5T35W16L20</td><td>惰輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L149</td></tr>
+<tr><td class="idx">514</td><td class="mono">TR17020</td><td>M1.5T50W20L20</td><td>齒輪</td><td class="dim">和昕</td><td class="dim sm">和昕-L150</td></tr>
+<tr><td class="idx">515</td><td class="mono">D2-1016</td><td>M2.5T81W35L35</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L4</td></tr>
+<tr><td class="idx">516</td><td class="mono">F23383A</td><td>M6T24W60L107</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L5</td></tr>
+<tr><td class="idx">517</td><td class="mono">251030030</td><td>M3T29W30L30</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L6</td></tr>
+<tr><td class="idx">518</td><td class="mono">81219-E1002</td><td>M6*20T*88L</td><td>直齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L7</td></tr>
+<tr><td class="idx">519</td><td class="mono">M1.5*24TB*20L</td><td>M1.5T24W15L20</td><td>橫向齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L8<br>原億昌-L213</td></tr>
+<tr><td class="idx">520</td><td class="mono">MHGH03004512-DIN6</td><td>M3T45W28L65</td><td>斜齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L9</td></tr>
+<tr><td class="idx">521</td><td class="mono">SM10907TW1-064-0</td><td>M3T40W30L60</td><td>螺旋傘齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L10</td></tr>
+<tr><td class="idx">522</td><td class="mono">MHGH03003052-DIN6</td><td>M3T30W30L85</td><td>斜齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L11</td></tr>
+<tr><td class="idx">523</td><td class="mono">MA00046P02</td><td>M8*24T*110L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L12</td></tr>
+<tr><td class="idx">524</td><td class="mono">GSE3000-0059</td><td>M4T30TW40L40</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L13</td></tr>
+<tr><td class="idx">525</td><td class="mono">HF0101PAC9400644B</td><td>M4T40W40L60</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L14</td></tr>
+<tr><td class="idx">526</td><td class="mono">MHGH04002132-DIN6</td><td>M421TW40L75</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L15</td></tr>
+<tr><td class="idx">527</td><td class="mono">75545</td><td>M2T50W24L24</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L16</td></tr>
+<tr><td class="idx">528</td><td class="mono">80641</td><td>M2T39W24L33</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L17<br>原億昌-L136</td></tr>
+<tr><td class="idx">529</td><td class="mono">251030059</td><td>M3T23W30L30</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L18</td></tr>
+<tr><td class="idx">530</td><td class="mono">CSMH02002411-B</td><td>M2T24W25L35</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L19</td></tr>
+<tr><td class="idx">531</td><td class="mono">A012-02-0135A</td><td>M2T34W15.6L15.6</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L20</td></tr>
+<tr><td class="idx">532</td><td class="mono">A012-02-0136A</td><td>M2T34W15.5L23.5</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L21</td></tr>
+<tr><td class="idx">533</td><td class="mono">MHFGH020037Φ50-9904</td><td>M2T37W26L29</td><td>0齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L22</td></tr>
+<tr><td class="idx">534</td><td class="mono">MHFGH020037Φ63-9904</td><td>M2T37W26L29</td><td>0齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L23</td></tr>
+<tr><td class="idx">535</td><td class="mono">MHSGH020015</td><td>M2T15W26L32</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L24</td></tr>
+<tr><td class="idx">536</td><td class="mono">M2*20T*30L-KR021</td><td>M2T20W20L30</td><td>直齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L25<br>原億昌-L113</td></tr>
+<tr><td class="idx">537</td><td class="mono">CMA1530CGE-01-04-02</td><td>M2T25W30L45</td><td>-T Y向主動齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L26<br>原億昌-L146<br>原億昌-L153</td></tr>
+<tr><td class="idx">538</td><td class="mono">CSM1000151</td><td>M10*15T*W80</td><td>正齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L27</td></tr>
+<tr><td class="idx">539</td><td class="mono">MA00046P09</td><td>M2*24T*32L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L28<br>原億昌-L29</td></tr>
+<tr><td class="idx">540</td><td class="mono">MA00046P10</td><td>M4*24T*64.5L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L30</td></tr>
+<tr><td class="idx">541</td><td class="mono">V0011-TRC-024</td><td>M2T40W28L57</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L31</td></tr>
+<tr><td class="idx">542</td><td class="mono">CSM03002011-Q8</td><td>S45C/M3*20T</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L32</td></tr>
+<tr><td class="idx">543</td><td class="mono">CHM0302012-Q8</td><td>M3*20T*37L</td><td>斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L33</td></tr>
+<tr><td class="idx">544</td><td class="mono">CHM0202022-Q8</td><td>M2T20W24L28</td><td>斜齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L34</td></tr>
+<tr><td class="idx">545</td><td class="mono">1158-00455</td><td>M3T29W29L61</td><td>左斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L35</td></tr>
+<tr><td class="idx">546</td><td class="mono">1158-00454</td><td>M3T29W29L62</td><td>左斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L36</td></tr>
+<tr><td class="idx">547</td><td class="mono">I5030624</td><td>M2T16W28L30</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L37</td></tr>
+<tr><td class="idx">548</td><td class="mono">CHM01502112-P</td><td>M1.5T21W20L46</td><td>斜齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L38<br>原億昌-L89</td></tr>
+<tr><td class="idx">549</td><td class="mono">I5023445</td><td>M2T16W28L34</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L39</td></tr>
+<tr><td class="idx">550</td><td class="mono">MHSGH040020</td><td>M4T20W41L54</td><td>花鍵齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L40</td></tr>
+<tr><td class="idx">551</td><td class="mono">IM038019</td><td>M3T26W30L41.5</td><td>斜齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L41</td></tr>
+<tr><td class="idx">552</td><td class="mono">CSM0250301-99611</td><td>M2.5T30W25L40</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L42</td></tr>
+<tr><td class="idx">553</td><td class="mono">I5034718</td><td>M1.5915T46W12L33.5</td><td>齒輪CP5</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L43</td></tr>
+<tr><td class="idx">554</td><td class="mono">CHGH03022</td><td>M3*22TB*56L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L44</td></tr>
+<tr><td class="idx">555</td><td class="mono">CC7-00-06D</td><td>M1.25T58TW9L9</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L45</td></tr>
+<tr><td class="idx">556</td><td class="mono">CC7-00-07A</td><td>M1.25T29W10L10</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L46</td></tr>
+<tr><td class="idx">557</td><td class="mono">GEAR_M2_50_20</td><td>M2T50W20L34</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L47</td></tr>
+<tr><td class="idx">558</td><td class="mono">SRG-M2-30-22-36</td><td>M2T30W20L36</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L48</td></tr>
+<tr><td class="idx">559</td><td class="mono">SRG-M2-30-32-58</td><td>M2T30W20L58.5</td><td>直齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L49<br>原億昌-L50</td></tr>
+<tr><td class="idx">560</td><td class="mono">SRS-M2-23-32-58.5</td><td>M2T23W25L58.5</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L51</td></tr>
+<tr><td class="idx">561</td><td class="mono">SRS-M2-18-22-36</td><td>M2T18W25L36.5</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L52</td></tr>
+<tr><td class="idx">562</td><td class="mono">SRG-M2.5-24-32-45</td><td>M2.5T24W25L45.5</td><td>直齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L53<br>原億昌-L54</td></tr>
+<tr><td class="idx">563</td><td class="mono">119957</td><td>CP5T30W9L31.5</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L55</td></tr>
+<tr><td class="idx">564</td><td class="mono">M3H-20Z-N001-1902181</td><td>M3T20W28L65</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L56</td></tr>
+<tr><td class="idx">565</td><td class="mono">MHFGH02027-33.5L-B</td><td>M2T27W30L33.5</td><td>斜齒法蘭齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L57</td></tr>
+<tr><td class="idx">566</td><td class="mono">MHFGH02002611-DIN6</td><td>M2T26W26L29</td><td>左旋齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L58</td></tr>
+<tr><td class="idx">567</td><td class="mono">MHFGH03004032-DIN6</td><td>M3T40W31L36</td><td>斜齒法蘭齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L59</td></tr>
+<tr><td class="idx">568</td><td class="mono">MHSGH020018</td><td>M2*18T*33L</td><td>花鍵齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L60</td></tr>
+<tr><td class="idx">569</td><td class="mono">MHGH01502112-B</td><td>M1.5T21W20L46</td><td>斜齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L61</td></tr>
+<tr><td class="idx">570</td><td class="mono">MHGH02002011-US024</td><td>M2*20T*30</td><td>齒輪L</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L62<br>原億昌-L94</td></tr>
+<tr><td class="idx">571</td><td class="mono">MSCPG5-20A-33757-B</td><td>CP5*20T*30L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L63<br>原億昌-L204</td></tr>
+<tr><td class="idx">572</td><td class="mono">M5*17TB*425L-RU033</td><td>M5T17W75L425</td><td>左旋齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L64</td></tr>
+<tr><td class="idx">573</td><td class="mono">MR32-03-09</td><td>M5T24W50L85</td><td>斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L65</td></tr>
+<tr><td class="idx">574</td><td class="mono">MHFGHΦ063*40T*26L</td><td>同MHFGHΦ063-40T-26L</td><td>法蘭齒輪M2T40</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L66</td></tr>
+<tr><td class="idx">575</td><td class="mono">MSGH03002252-DIN6</td><td>M3*22T*L65</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L67</td></tr>
+<tr><td class="idx">576</td><td class="mono">K96464</td><td>M5T18W55L55</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L68</td></tr>
+<tr><td class="idx">577</td><td class="mono">I5031586</td><td>M2.5T20W16L16</td><td>馬達齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L69<br>原億昌-L130</td></tr>
+<tr><td class="idx">578</td><td class="mono">MHGH-L-0300201-DIN6</td><td>M3*20T*162L</td><td>齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L70<br>原億昌-L71</td></tr>
+<tr><td class="idx">579</td><td class="mono">CP820T25B40L</td><td>CP8T20W25L40</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L72</td></tr>
+<tr><td class="idx">580</td><td class="mono">CP820T211L</td><td>CP8T20W25L211</td><td>齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L73</td></tr>
+<tr><td class="idx">581</td><td class="mono">111273</td><td>M2T56L30</td><td>斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L74</td></tr>
+<tr><td class="idx">582</td><td class="mono">SUSCP10-30J35-MLAT35</td><td>M3.1831T30W38L38</td><td>直齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L75</td></tr>
+<tr><td class="idx">583</td><td class="mono">MHGH02002572-99021</td><td>M2T25W25L46</td><td>齒輪Gear</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L76</td></tr>
+<tr><td class="idx">584</td><td class="mono">CHGH02025-99021</td><td>M2*25T*56L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L77</td></tr>
+<tr><td class="idx">585</td><td class="mono">CHGH0402112-Q6</td><td>代料至齒研</td><td>M4*21T40W75L</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L78</td></tr>
+<tr><td class="idx">586</td><td class="mono">00352</td><td>全製</td><td>上齒型定位盤</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L79</td></tr>
+<tr><td class="idx">587</td><td class="mono">HCPR134-30029C</td><td>M1.25T17W12.5L96</td><td>攻牙軸套推進齒輪
+(下次要調漲)</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L80</td></tr>
+<tr><td class="idx">588</td><td class="mono">X12830</td><td>M2T60W24L24</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L81<br>原億昌-L108</td></tr>
+<tr><td class="idx">589</td><td class="mono">3610863</td><td>M2*21T*174.5L</td><td>齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L82<br>原億昌-L83<br>原億昌-L198</td></tr>
+<tr><td class="idx">590</td><td class="mono">101433</td><td>M2T56W24L28</td><td>斜齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L84</td></tr>
+<tr><td class="idx">591</td><td class="mono">PHGH-20-12-W50-06</td><td>M2T12W15L46</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L85</td></tr>
+<tr><td class="idx">592</td><td class="mono">CL-00-208</td><td>M2T20W16L234.5</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L86</td></tr>
+<tr><td class="idx">593</td><td class="mono">130150903</td><td>M2T32W28L53.5</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L87<br>原億昌-L88<br>原億昌-L156</td></tr>
+<tr><td class="idx">594</td><td class="mono">20YF010-05-099</td><td>M3T22W30L360</td><td>斜齒齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L90</td></tr>
+<tr><td class="idx">595</td><td class="mono">MHGH01503022-DIN6</td><td>M1.5T30W20L50</td><td>斜齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L91</td></tr>
+<tr><td class="idx">596</td><td class="mono">LJG2-CNC-0329</td><td>M2T32W24L32</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L92<br>原億昌-L93</td></tr>
+<tr><td class="idx">597</td><td class="mono">MHGH03002211-US024</td><td>M3T22W28L93</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L95</td></tr>
+<tr><td class="idx">598</td><td class="mono">MHGH02001811-US024</td><td>M2T18W28L34.5</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L96</td></tr>
+<tr><td class="idx">599</td><td class="mono">MHGH02002552-DIN6</td><td>M2T25W28L56</td><td>左斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L97</td></tr>
+<tr><td class="idx">600</td><td class="mono">MHGH03002282-DIN6</td><td>M3T22W30L60</td><td>左斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L98</td></tr>
+<tr><td class="idx">601</td><td class="mono">MHFGH02003311-DIN6</td><td>M2T33W26L29</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L99<br>原億昌-L210</td></tr>
+<tr><td class="idx">602</td><td class="mono">MHFGH03003143-DIN6</td><td>M3T31W31L36</td><td>斜齒法蘭齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L100</td></tr>
+<tr><td class="idx">603</td><td class="mono">MHFGH02003711-DIN6</td><td>M2T37W26L29</td><td>斜齒法蘭齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L101</td></tr>
+<tr><td class="idx">604</td><td class="mono">MSGH0150801-JIS2</td><td>M1.5T80W15L25</td><td>直齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L102</td></tr>
+<tr><td class="idx">605</td><td class="mono">121112301</td><td>M2T32W28L53.5</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L103</td></tr>
+<tr><td class="idx">606</td><td class="mono">CMA1325CGH-01A-04-11</td><td>M1.5*20T*W20</td><td>-T X向主動齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L104</td></tr>
+<tr><td class="idx">607</td><td class="mono">SRG-M2-22-22-53</td><td>M2T22W21L53</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L105</td></tr>
+<tr><td class="idx">608</td><td class="mono">SRG-M2.5-24-32-58.5</td><td>M2.5T24W25L58.5</td><td>直齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L106</td></tr>
+<tr><td class="idx">609</td><td class="mono">108606</td><td>M2T26W28L35</td><td>斜齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L107</td></tr>
+<tr><td class="idx">610</td><td class="mono">GEAR_M2_75_20_2</td><td>M2T75W20L34</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L109</td></tr>
+<tr><td class="idx">611</td><td class="mono">CHGH-20-21-2-Φ16K5</td><td>M2T21W28L44</td><td>斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L110</td></tr>
+<tr><td class="idx">612</td><td class="mono">CP10*30TB*60L-66013</td><td>CP10T30W30L60</td><td>直齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L111</td></tr>
+<tr><td class="idx">613</td><td class="mono">M1.25*29TB*18.5L</td><td>M1.25T29W10L18.5</td><td>正齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L112</td></tr>
+<tr><td class="idx">614</td><td class="mono">M2*33TB*29L</td><td>M2T33W26L29</td><td>斜齒法蘭齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L114</td></tr>
+<tr><td class="idx">615</td><td class="mono">M2*33TB*30L</td><td>M2T33W26L30</td><td>左斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L115</td></tr>
+<tr><td class="idx">616</td><td class="mono">M1.5*40TB*40L-KR021</td><td>M1.5*40T*14W*40L</td><td>斜齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L116</td></tr>
+<tr><td class="idx">617</td><td class="mono">M1.5*48T*110L-KR021</td><td>M1.5*48T*15W*110L</td><td>斜齒齒研齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L117</td></tr>
+<tr><td class="idx">618</td><td class="mono">M1.5*20T*136L-KR021</td><td>M1.5T20W20L136</td><td>斜齒齒研齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L118</td></tr>
+<tr><td class="idx">619</td><td class="mono">M1.5*30T*110L-KR021</td><td>M1.5T30W14.5L110</td><td>左旋齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L119<br>原億昌-L215</td></tr>
+<tr><td class="idx">620</td><td class="mono">M4*24TB*80L-33108</td><td>M4T24W40L80</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L120</td></tr>
+<tr><td class="idx">621</td><td class="mono">JIG-53-5302-A</td><td>DP12T85W30L30</td><td>H-9B中心齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L121</td></tr>
+<tr><td class="idx">622</td><td class="mono">E2C152A050096A</td><td>M4T21W40L55</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L122</td></tr>
+<tr><td class="idx">623</td><td class="mono">E2C152A072176A</td><td>M4T42W40L56</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L123</td></tr>
+<tr><td class="idx">624</td><td class="mono">T2A-06-018</td><td>M2T25W20L23</td><td>正齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L124</td></tr>
+<tr><td class="idx">625</td><td class="mono">T2A-06-019</td><td>M2T25W20L30</td><td>正齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L125</td></tr>
+<tr><td class="idx">626</td><td class="mono">LJJX-0701</td><td>M2*32TB*32L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L126</td></tr>
+<tr><td class="idx">627</td><td class="mono">D2-1006</td><td>M2T48W35L43</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L127</td></tr>
+<tr><td class="idx">628</td><td class="mono">CL-00-207-2</td><td>M2T30W28L33</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L128</td></tr>
+<tr><td class="idx">629</td><td class="mono">I5034224</td><td>M1.5915T30W15L25</td><td>直齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L129</td></tr>
+<tr><td class="idx">630</td><td class="mono">I5031589</td><td>M2.5T28W16L41</td><td>直齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L131</td></tr>
+<tr><td class="idx">631</td><td class="mono">I5025365</td><td>M2T16W28L38</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L132<br>原億昌-L133<br>原億昌-L134</td></tr>
+<tr><td class="idx">632</td><td class="mono">101454</td><td>M2T39W24L33</td><td>斜齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L135</td></tr>
+<tr><td class="idx">633</td><td class="mono">106-2-24</td><td>M2*24T*41L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L137</td></tr>
+<tr><td class="idx">634</td><td class="mono">20YF010-05-011</td><td>M3T28W30L336</td><td>斜齒齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L138</td></tr>
+<tr><td class="idx">635</td><td class="mono">3000445541</td><td>M2T21W28L36</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L139</td></tr>
+<tr><td class="idx">636</td><td class="mono">04E03TP0000004</td><td>M2*18T*32L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L140</td></tr>
+<tr><td class="idx">637</td><td class="mono">04E03TP0000003</td><td>M2*22T*32L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L141</td></tr>
+<tr><td class="idx">638</td><td class="mono">MHFGH02003711-Φ6</td><td>M2T37W26L29</td><td>DIN6</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L142</td></tr>
+<tr><td class="idx">639</td><td class="mono">MHGH-L-0250251-DIN6</td><td>M2.5T25W19.5L108</td><td>斜齒齒研齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L143</td></tr>
+<tr><td class="idx">640</td><td class="mono">JD56-0-20020701-L</td><td>M4T22W40L50</td><td>斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L144</td></tr>
+<tr><td class="idx">641</td><td class="mono">MHGH04021-99012</td><td>M4T21W40L80</td><td>斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L145</td></tr>
+<tr><td class="idx">642</td><td class="mono">MHGH02003012-US024</td><td>M2*30T*66L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L147</td></tr>
+<tr><td class="idx">643</td><td class="mono">MHGH04001812-DIN6</td><td>M4T18W40L75</td><td>斜齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L148</td></tr>
+<tr><td class="idx">644</td><td class="mono">MSGH02004041-DIN6</td><td>M2T40W28L30</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L149</td></tr>
+<tr><td class="idx">645</td><td class="mono">MSGH02005611-DIN6</td><td>M2T56W28L30</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L150</td></tr>
+<tr><td class="idx">646</td><td class="mono">M2.5*26T-ID40</td><td>M2.5T34W30L79</td><td>左斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L151</td></tr>
+<tr><td class="idx">647</td><td class="mono">MAINTAIN-02</td><td>CP5*25T*64L</td><td>齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L152</td></tr>
+<tr><td class="idx">648</td><td class="mono">CMA1606CDGFA-01-02-2</td><td>M1.5*25T*W19</td><td>8-T X向齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L154</td></tr>
+<tr><td class="idx">649</td><td class="mono">GSH3000-0053</td><td>M4*25T*60L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L155</td></tr>
+<tr><td class="idx">650</td><td class="mono">01-0203-0007</td><td>(M4*21T*40W)</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L157</td></tr>
+<tr><td class="idx">651</td><td class="mono">01-0201-0008</td><td>M4*21T*40W</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L158</td></tr>
+<tr><td class="idx">652</td><td class="mono">GW11-M3-T30W32D32B-R</td><td>101.49*M3*30T*32W</td><td>傳動齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L159</td></tr>
+<tr><td class="idx">653</td><td class="mono">M3*25TB*65L-AU011</td><td>M3*25TB*65L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L160</td></tr>
+<tr><td class="idx">654</td><td class="mono">M4*21TB*75L-AU011</td><td>M4*21TB*75L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L161</td></tr>
+<tr><td class="idx">655</td><td class="mono">I5033024</td><td>M1.5T13W18L76</td><td>齒軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L162</td></tr>
+<tr><td class="idx">656</td><td class="mono">MHGH01502112-CN-U</td><td>M1.5*21T*46L</td><td>斜齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L163</td></tr>
+<tr><td class="idx">657</td><td class="mono">MHGH03002252-DIN6</td><td>M3T22W28L65</td><td>斜齒齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L164</td></tr>
+<tr><td class="idx">658</td><td class="mono">125638</td><td>CP5T30W18L42</td><td>直齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L165</td></tr>
+<tr><td class="idx">659</td><td class="mono">CHMH0501812-B-99021</td><td>M5*18T*85L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L166</td></tr>
+<tr><td class="idx">660</td><td class="mono">CHMH0502112-B-99021</td><td>M5*21T*85L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L167</td></tr>
+<tr><td class="idx">661</td><td class="mono">CHGH042112-Q6</td><td>無圖</td><td>—</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L168</td></tr>
+<tr><td class="idx">662</td><td class="mono">CHGH0401812-Q6</td><td>M4T18W40L75</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L169</td></tr>
+<tr><td class="idx">663</td><td class="mono">UV35-A12</td><td>φ55L84</td><td>正心軸心</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L170</td></tr>
+<tr><td class="idx">664</td><td class="mono">UV35-A05</td><td>φ80L3</td><td>封蓋2</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L171</td></tr>
+<tr><td class="idx">665</td><td class="mono">UV35-A04</td><td>φ80L3</td><td>封蓋1</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L172</td></tr>
+<tr><td class="idx">666</td><td class="mono">CHM02002042-DIN8</td><td>M1.5*20T</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L173</td></tr>
+<tr><td class="idx">667</td><td class="mono">CHM02002042-R-DIN8</td><td>M2*20T*56L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L174</td></tr>
+<tr><td class="idx">668</td><td class="mono">CHMH0401812-B</td><td>M4*18T*75L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L175</td></tr>
+<tr><td class="idx">669</td><td class="mono">CHMH0402112-B</td><td>M4*21T*75L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L176</td></tr>
+<tr><td class="idx">670</td><td class="mono">LSD00071-01-121-A</td><td>M2*25T*W28</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L177</td></tr>
+<tr><td class="idx">671</td><td class="mono">LSD00071-01-144-0</td><td>M2*25T*W28</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L178</td></tr>
+<tr><td class="idx">672</td><td class="mono">CHGH0202552-Q5</td><td>M2*25TB*56L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L180</td></tr>
+<tr><td class="idx">673</td><td class="mono">CSMHCP1020-Q6</td><td>CP*10*20TB*43L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L181</td></tr>
+<tr><td class="idx">674</td><td class="mono">S1905F1006A-R</td><td>M3*20TB*60L 右斜</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L182</td></tr>
+<tr><td class="idx">675</td><td class="mono">TT00465-312325-W33-0</td><td>M1*60T*10L</td><td>01直齒輪Z60</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L183</td></tr>
+<tr><td class="idx">676</td><td class="mono">TT00465-312326-W33-0</td><td>M1*30T*10L</td><td>01直齒輪Z30</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L184</td></tr>
+<tr><td class="idx">677</td><td class="mono">TT00465-312327-W33-0</td><td>M1*50T*20L</td><td>01直齒輪Z50</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L185</td></tr>
+<tr><td class="idx">678</td><td class="mono">TT00465-398675-W36-0</td><td>M1*38T*12L</td><td>01  S51帶動齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L186</td></tr>
+<tr><td class="idx">679</td><td class="mono">TT00465-398964-W36-0</td><td>M1*40T*19.1L</td><td>01圓柱直齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L187</td></tr>
+<tr><td class="idx">680</td><td class="mono">20170927101-47.5L</td><td>16CrNn4</td><td>斜齒輪(M2*35T)</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L188</td></tr>
+<tr><td class="idx">681</td><td class="mono">10M227T67L-2</td><td>M2*27T*W28</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L189</td></tr>
+<tr><td class="idx">682</td><td class="mono">10M227T50L-2</td><td>M2*27T*W28</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L190</td></tr>
+<tr><td class="idx">683</td><td class="mono">MHGH-L-0250161-DIN6</td><td>M2.5T16W19.5L108</td><td>齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L191</td></tr>
+<tr><td class="idx">684</td><td class="mono">RZT141001000M1</td><td>M2T18W16L33</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L192<br>原億昌-L194</td></tr>
+<tr><td class="idx">685</td><td class="mono">RXT141002000M1</td><td>M2T18W23L28</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L193</td></tr>
+<tr><td class="idx">686</td><td class="mono">CP5*25T*57L-35003</td><td>5CPT25W25L57</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L195</td></tr>
+<tr><td class="idx">687</td><td class="mono">C02L29A031</td><td>M2T29W26L29</td><td>左斜法蘭齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L196</td></tr>
+<tr><td class="idx">688</td><td class="mono">03G03TP0000011</td><td>M2T30W28L43</td><td>左斜齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L197</td></tr>
+<tr><td class="idx">689</td><td class="mono">B03L19A080</td><td>M3T19W20L52.5</td><td>左斜法蘭齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L199</td></tr>
+<tr><td class="idx">690</td><td class="mono">CMA2040CGHA-01A-02-0</td><td>M2*20T*W24</td><td>5-02-T X向主動齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L200</td></tr>
+<tr><td class="idx">691</td><td class="mono">MHGH010030-JIS2</td><td>M1*30T*21L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L201</td></tr>
+<tr><td class="idx">692</td><td class="mono">MSGH0200241-JIS2</td><td>M2*24T*30L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L202</td></tr>
+<tr><td class="idx">693</td><td class="mono">GW07M2T27W25D22A-L</td><td>61.3*M2*27T*25W</td><td>傳動齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L203</td></tr>
+<tr><td class="idx">694</td><td class="mono">MHMH0500243</td><td>M5*24T*110L</td><td>斜齒硬化齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L205</td></tr>
+<tr><td class="idx">695</td><td class="mono">MHGH-L-0250201-DIN6</td><td>M2.5*20T*108L</td><td>齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L206</td></tr>
+<tr><td class="idx">696</td><td class="mono">MHGH01502512-DIN6</td><td>M1.5*25T*46L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L207</td></tr>
+<tr><td class="idx">697</td><td class="mono">CMA1310CGA-01-03-03</td><td>M1.5T25W20L25</td><td>T Y向主動齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L208</td></tr>
+<tr><td class="idx">698</td><td class="mono">MHGH030032Φ22-DIN6</td><td>M3*32T*L65</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L209</td></tr>
+<tr><td class="idx">699</td><td class="mono">SV7063-79-CP15</td><td>CP15*25TA*50L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L211</td></tr>
+<tr><td class="idx">700</td><td class="mono">M1.5*30TB*23L</td><td>M1.5*30T*23L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L212</td></tr>
+<tr><td class="idx">701</td><td class="mono">M1.5*30TB*48L</td><td>M1.5T30W20L48</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L214</td></tr>
+<tr><td class="idx">702</td><td class="mono">M2*39TB*38L-AU011</td><td>M2*39TB*38L</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L216</td></tr>
+<tr><td class="idx">703</td><td class="mono">M2.5-32T*20L-JP111</td><td>M2.5*32T*20L</td><td>直齒法蘭齒研齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L217</td></tr>
+<tr><td class="idx">704</td><td class="mono">409-251-522</td><td>M2T31W30L299</td><td>齒軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L218</td></tr>
+<tr><td class="idx">705</td><td class="mono">MGRNSP20092001A1</td><td>M2T92W24L35</td><td>正齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L219</td></tr>
+<tr><td class="idx">706</td><td class="mono">20YF010-HJ-20-02</td><td>M3T28W30L336</td><td>齒輪軸
+20YF010-R150001-HJ-20-02</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L220</td></tr>
+<tr><td class="idx">707</td><td class="mono">20YF010-HJ-10-02</td><td>此料號作廢</td><td>齒輪軸
+20YF010-R150001-HJ-10-02</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L221</td></tr>
+<tr><td class="idx">708</td><td class="mono">MHFGH0303012-Q6-REV</td><td>M3*30T*35W</td><td>齒輪軸</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L222</td></tr>
+<tr><td class="idx">709</td><td class="mono">MHFGH0303121</td><td>M3*31T*31W</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L223</td></tr>
+<tr><td class="idx">710</td><td class="mono">MR-10</td><td>M3.1831*20T</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L224</td></tr>
+<tr><td class="idx">711</td><td class="mono">BDM06169</td><td>M2T40W28L28</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L225</td></tr>
+<tr><td class="idx">712</td><td class="mono">BDM06129</td><td>M2T40W28L28</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L226</td></tr>
+<tr><td class="idx">713</td><td class="mono">BDM02168</td><td>M3T40W28L38</td><td>齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L227</td></tr>
+<tr><td class="idx">714</td><td class="mono">079232000</td><td>CP2T50W10L22.2</td><td>直齒齒輪</td><td class="dim">原億昌</td><td class="dim sm">原億昌-L235<br>原億昌-L236</td></tr>
+<tr><td class="idx">715</td><td class="mono">LKGB0892602</td><td>—</td><td>1G/2P雙齒輪</td><td class="dim">成大</td><td class="dim sm">成大-L4</td></tr>
+<tr><td class="idx">716</td><td class="mono">PDA758</td><td>M0.75*20T*42.7L</td><td>離合器主軸</td><td class="dim">成大</td><td class="dim sm">成大-L5</td></tr>
+<tr><td class="idx">717</td><td class="mono">JKGASS20R1</td><td>M1*20T</td><td>1P齒軸</td><td class="dim">成大</td><td class="dim sm">成大-L6</td></tr>
+<tr><td class="idx">718</td><td class="mono">KKYC24710021-1</td><td>M2.5*100T36.5W*36.5L</td><td>1G齒輪</td><td class="dim">成大</td><td class="dim sm">成大-L7</td></tr>
+<tr><td class="idx">719</td><td class="mono">KBSH05218</td><td>—</td><td>免鍵軸襯-2.1875"</td><td class="dim">成大</td><td class="dim sm">成大-L8</td></tr>
+<tr><td class="idx">720</td><td class="mono">LKGB0892602-A</td><td>M3.75*16T+M3.75*26T</td><td>雙齒輪試樣圖
+=LKGB0892602</td><td class="dim">成大</td><td class="dim sm">成大-L9</td></tr>
+<tr><td class="idx">721</td><td class="mono">JKYM11001711</td><td>M1.75T17W32L202</td><td>入力軸</td><td class="dim">成大</td><td class="dim sm">成大-L10</td></tr>
+<tr><td class="idx">722</td><td class="mono">LKNA03502002</td><td>MN=2/20T</td><td>磨板機Z軸正齒輪(大)MN=2/20T</td><td class="dim">成大</td><td class="dim sm">成大-L11</td></tr>
+<tr><td class="idx">723</td><td class="mono">JKGA01715R</td><td>M1.25T15W14L24</td><td>17型1P齒軸(R3)</td><td class="dim">成大</td><td class="dim sm">成大-L12<br>成大-L39</td></tr>
+<tr><td class="idx">724</td><td class="mono">JKGASS17R2</td><td>M0.8*17T*310L</td><td>1P齒軸</td><td class="dim">成大</td><td class="dim sm">成大-L13</td></tr>
+<tr><td class="idx">725</td><td class="mono">KBSH02162</td><td>—</td><td>免鍵軸襯-1.625"</td><td class="dim">成大</td><td class="dim sm">成大-L14</td></tr>
+<tr><td class="idx">726</td><td class="mono">JKGC03715L1</td><td>M1.25*15T23W56L</td><td>2P齒軸</td><td class="dim">成大</td><td class="dim sm">成大-L15</td></tr>
+<tr><td class="idx">727</td><td class="mono">LEGS08924</td><td>M2.5T12W82.8L180</td><td>出力軸</td><td class="dim">成大</td><td class="dim sm">成大-L16</td></tr>
+<tr><td class="idx">728</td><td class="mono">JKGC04719L1</td><td>M1.25*19T24.5W64L</td><td>2P齒軸</td><td class="dim">成大</td><td class="dim sm">成大-L17</td></tr>
+<tr><td class="idx">729</td><td class="mono">KBSH10493</td><td>—</td><td>免鍵軸承#10-4.9375"</td><td class="dim">成大</td><td class="dim sm">成大-L18</td></tr>
+<tr><td class="idx">730</td><td class="mono">LEGS08923</td><td>M2.5*12T*180L</td><td>出力軸</td><td class="dim">成大</td><td class="dim sm">成大-L19</td></tr>
+<tr><td class="idx">731</td><td class="mono">JKKE04715R</td><td>M1.25T15W47L112</td><td>3P齒軸</td><td class="dim">成大</td><td class="dim sm">成大-L20</td></tr>
+<tr><td class="idx">732</td><td class="mono">JKGA1624R1</td><td>M1.25*24T*18W</td><td>1P齒軸</td><td class="dim">成大</td><td class="dim sm">成大-L21</td></tr>
+<tr><td class="idx">733</td><td class="mono">UKGD0891702</td><td>M23.75*17T*16W</td><td>出力齒輪</td><td class="dim">成大</td><td class="dim sm">成大-L22</td></tr>
+<tr><td class="idx">734</td><td class="mono">UKGD0892402</td><td>M3.75*24T*16W</td><td>離合齒輪</td><td class="dim">成大</td><td class="dim sm">成大-L23</td></tr>
+<tr><td class="idx">735</td><td class="mono">LEGS08922</td><td>—</td><td>直結出力軸</td><td class="dim">成大</td><td class="dim sm">成大-L24</td></tr>
+<tr><td class="idx">736</td><td class="mono">JKGASS13R3</td><td>M1.25*13T*18W28L</td><td>齒輪</td><td class="dim">成大</td><td class="dim sm">成大-L25</td></tr>
+<tr><td class="idx">737</td><td class="mono">LKGA0891302</td><td>M3.75*13T*201.5L</td><td>1P入力齒輪</td><td class="dim">成大</td><td class="dim sm">成大-L26<br>成大-L27</td></tr>
+<tr><td class="idx">738</td><td class="mono">JKGE09715R1_JIG</td><td>—</td><td>外研40尺寸量測用(GO)</td><td class="dim">成大</td><td class="dim sm">成大-L28</td></tr>
+<tr><td class="idx">739</td><td class="mono">JKGE09715R1_35NOGO</td><td>—</td><td>外研35尺寸量測用</td><td class="dim">成大</td><td class="dim sm">成大-L29</td></tr>
+<tr><td class="idx">740</td><td class="mono">JKGE09715R1_35GO</td><td>—</td><td>外研35尺寸量測用</td><td class="dim">成大</td><td class="dim sm">成大-L30</td></tr>
+<tr><td class="idx">741</td><td class="mono">LKGD0891702-JIG</td><td>—</td><td>MS/LEGS08924公模</td><td class="dim">成大</td><td class="dim sm">成大-L31</td></tr>
+<tr><td class="idx">742</td><td class="mono">LEGS08924-JIG-NG</td><td>—</td><td>塞規</td><td class="dim">成大</td><td class="dim sm">成大-L32</td></tr>
+<tr><td class="idx">743</td><td class="mono">LEGS08924-JIG-GO</td><td>—</td><td>塞規</td><td class="dim">成大</td><td class="dim sm">成大-L33</td></tr>
+<tr><td class="idx">744</td><td class="mono">KHYD0611</td><td>—</td><td>軸承小蓋</td><td class="dim">成大</td><td class="dim sm">成大-L34</td></tr>
+<tr><td class="idx">745</td><td class="mono">KHYD0451</td><td>—</td><td>軸承小蓋</td><td class="dim">成大</td><td class="dim sm">成大-L35</td></tr>
+<tr><td class="idx">746</td><td class="mono">KBSH02193</td><td>—</td><td>免鍵軸襯-1.9375"</td><td class="dim">成大</td><td class="dim sm">成大-L36</td></tr>
+<tr><td class="idx">747</td><td class="mono">KBSH06250</td><td>—</td><td>免鍵軸襯-2.5"</td><td class="dim">成大</td><td class="dim sm">成大-L37</td></tr>
+<tr><td class="idx">748</td><td class="mono">KBSH08343</td><td>—</td><td>免鍵軸襯-3.4375"</td><td class="dim">成大</td><td class="dim sm">成大-L38</td></tr>
+<tr><td class="idx">749</td><td class="mono">KBSH02125</td><td>—</td><td>免鍵軸襯-1.25"</td><td class="dim">成大</td><td class="dim sm">成大-L40</td></tr>
+<tr><td class="idx">750</td><td class="mono">KBSH02143</td><td>—</td><td>免鍵軸襯-1.4375"</td><td class="dim">成大</td><td class="dim sm">成大-L41</td></tr>
+<tr><td class="idx">751</td><td class="mono">JKGB03749L</td><td>M1*49T*12W*15.5L</td><td>1G齒輪(代料到齒研)</td><td class="dim">成大</td><td class="dim sm">成大-L42</td></tr>
+<tr><td class="idx">752</td><td class="mono">JKGD04794R</td><td>M1*94T*17W20L</td><td>47型2G齒輪</td><td class="dim">成大</td><td class="dim sm">成大-L43</td></tr>
+<tr><td class="idx">753</td><td class="mono">KKYC11007121</td><td>M1.5*71T*23W*126.9外23長</td><td>1G齒輪</td><td class="dim">成大</td><td class="dim sm">成大-L44</td></tr>
+<tr><td class="idx">754</td><td class="mono">KKYC58209501</td><td>M7T95W66</td><td>2G齒輪</td><td class="dim">成大</td><td class="dim sm">成大-L45</td></tr>
+<tr><td class="idx">755</td><td class="mono">KKYM58203601</td><td>M4.5T36W55L592</td><td>入力軸</td><td class="dim">成大</td><td class="dim sm">成大-L46</td></tr>
+<tr><td class="idx">756</td><td class="mono">KKYC58210901</td><td>M3.75T109W42</td><td>1G齒輪</td><td class="dim">成大</td><td class="dim sm">成大-L47</td></tr>
+<tr><td class="idx">757</td><td class="mono">JKGB07790L</td><td>M1*90T*18W*112外20長</td><td>77型1G齒輪</td><td class="dim">成大</td><td class="dim sm">成大-L48<br>成大-L49</td></tr>
+<tr><td class="idx">758</td><td class="mono">KBSH12600</td><td>—</td><td>免鍵軸襯-6"</td><td class="dim">成大</td><td class="dim sm">成大-L55</td></tr>
+<tr><td class="idx">759</td><td class="mono">KBSH12593</td><td>—</td><td>免鍵軸襯-5.9375"</td><td class="dim">成大</td><td class="dim sm">成大-L56</td></tr>
+<tr><td class="idx">760</td><td class="mono">KBSH12643</td><td>—</td><td>免鍵軸襯-6.4375"</td><td class="dim">成大</td><td class="dim sm">成大-L57</td></tr>
+<tr><td class="idx">761</td><td class="mono">KBSH12650</td><td>—</td><td>免鍵軸襯-6.5"</td><td class="dim">成大</td><td class="dim sm">成大-L58</td></tr>
+<tr><td class="idx">762</td><td class="mono">KBSH12543</td><td>—</td><td>免鍵軸襯-5.4374"</td><td class="dim">成大</td><td class="dim sm">成大-L59</td></tr>
+<tr><td class="idx">763</td><td class="mono">JKGA1822R</td><td>M1.25T22W21.2</td><td>入力齒軸1P-5HP</td><td class="dim">成大</td><td class="dim sm">成大-L60</td></tr>
+<tr><td class="idx">764</td><td class="mono">KBSH04193</td><td>—</td><td>免鍵軸襯-1.9375"</td><td class="dim">成大</td><td class="dim sm">成大-L61</td></tr>
+<tr><td class="idx">765</td><td class="mono">KBSH03193</td><td>—</td><td>免鍵軸襯</td><td class="dim">成大</td><td class="dim sm">成大-L62</td></tr>
+<tr><td class="idx">766</td><td class="mono">KBSH05243</td><td>—</td><td>免鍵軸襯-2.4375"</td><td class="dim">成大</td><td class="dim sm">成大-L63</td></tr>
+<tr><td class="idx">767</td><td class="mono">KBSH05293</td><td>-"2.9375"</td><td>免鍵軸襯</td><td class="dim">成大</td><td class="dim sm">成大-L64</td></tr>
+<tr><td class="idx">768</td><td class="mono">LC01-LB50024-2020000</td><td>Φ265T12L101.1</td><td>鍊輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L4</td></tr>
+<tr><td class="idx">769</td><td class="mono">6P3A-LB63040-1020000</td><td>φ261.5T16L57.1</td><td>主動鍊輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L5</td></tr>
+<tr><td class="idx">770</td><td class="mono">6P3A-LB63040-1030000</td><td>φ261.5T16L56.1</td><td>惰輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L6</td></tr>
+<tr><td class="idx">771</td><td class="mono">HS05-HB50120-3840S00</td><td>40T-HTD-8M</td><td>齒型皮帶輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L7<br>吉輔-L9<br>吉輔-L36</td></tr>
+<tr><td class="idx">772</td><td class="mono">6P4A-LB63032-1020000</td><td>φ208T24L44.6</td><td>主動鍊輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L8</td></tr>
+<tr><td class="idx">773</td><td class="mono">FC4S-LD63030-1100000</td><td>Φ171.37T20L18</td><td>傳動鏈輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L10</td></tr>
+<tr><td class="idx">774</td><td class="mono">FC4S-LD63030-1110000</td><td>Φ93T10W12.6L61.1</td><td>驅動鏈輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L11</td></tr>
+<tr><td class="idx">775</td><td class="mono">1G0T-LBS0012-1040000</td><td>M3*32T*53W</td><td>小齒輪-32T</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L13<br>吉輔-L22</td></tr>
+<tr><td class="idx">776</td><td class="mono">HH02-HB50060-306020A</td><td>M5T18W30L50</td><td>齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L14</td></tr>
+<tr><td class="idx">777</td><td class="mono">HS08-HB50060-5841S00</td><td>HTD-8M*40T</td><td>齒型皮帶輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L15</td></tr>
+<tr><td class="idx">778</td><td class="mono">DV11-RB40024-1120000</td><td>Φ140L16</td><td>定位盤</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L16</td></tr>
+<tr><td class="idx">779</td><td class="mono">6P4A-LB63024-1020100</td><td>φ208T24L44.6</td><td>主動鍊輪24T</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L17</td></tr>
+<tr><td class="idx">780</td><td class="mono">VVB1-VA50050-1180000</td><td>M3*28T*28W</td><td>齒輪(三)</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L18</td></tr>
+<tr><td class="idx">781</td><td class="mono">VH05-HB50060-3840S00</td><td>HTD-8M</td><td>齒型皮帶輪40T</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L19<br>吉輔-L20</td></tr>
+<tr><td class="idx">782</td><td class="mono">CV03-CD63060-3040000</td><td>M2.5*32T*E24精滾</td><td>齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L21</td></tr>
+<tr><td class="idx">783</td><td class="mono">6P4A-LB63032-1030000</td><td>φ208T24L49.6</td><td>惰輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L23</td></tr>
+<tr><td class="idx">784</td><td class="mono">HSOK-HB50060-K090100</td><td>M5T60W45L65</td><td>齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L24</td></tr>
+<tr><td class="idx">785</td><td class="mono">15001-012L-S02</td><td>無圖</td><td>—</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L25<br>吉輔-L26<br>吉輔-L27</td></tr>
+<tr><td class="idx">786</td><td class="mono">HH02-HB50060-306000D</td><td>M5T16W30L50</td><td>齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L28<br>吉輔-L40</td></tr>
+<tr><td class="idx">787</td><td class="mono">HH02-HB50060-309000D</td><td>M5T60W45</td><td>齒輪(60T)</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L29<br>吉輔-L41</td></tr>
+<tr><td class="idx">788</td><td class="mono">HSE8-HB50040-2060000</td><td>3.5M*50T*30W</td><td>減速大齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L30<br>吉輔-L39</td></tr>
+<tr><td class="idx">789</td><td class="mono">HH02-HB50060-307000E</td><td>M5T32W30L36</td><td>齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L37<br>吉輔-L45</td></tr>
+<tr><td class="idx">790</td><td class="mono">LC01-LB63020-102000D</td><td>φ154.1T24L35.5</td><td>主動鍊輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L42<br>吉輔-L43</td></tr>
+<tr><td class="idx">791</td><td class="mono">HH02-HB50060-308000D</td><td>M5T12W45L50</td><td>齒輪(三)</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L44</td></tr>
+<tr><td class="idx">792</td><td class="mono">6P5A-LB10020-118H000</td><td>HTD-8MT54L49</td><td>齒型皮帶輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L46</td></tr>
+<tr><td class="idx">793</td><td class="mono">HS0W-HT10240-1120000</td><td>M3*18T*30W</td><td>齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L47</td></tr>
+<tr><td class="idx">794</td><td class="mono">HS05-HB50024-1240S00</td><td>8M*40T*W54</td><td>齒型皮帶輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L48</td></tr>
+<tr><td class="idx">795</td><td class="mono">2GOT-LB50004-1030000</td><td>M3T36W53L96.5</td><td>小齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L49</td></tr>
+<tr><td class="idx">796</td><td class="mono">MD20-HM50100-10007M0</td><td>無圖</td><td>齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L50</td></tr>
+<tr><td class="idx">797</td><td class="mono">MC20-HM50100-00008M0</td><td>無圖</td><td>齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L51</td></tr>
+<tr><td class="idx">798</td><td class="mono">SF30-HM50100-00067M0</td><td>M3T28W40L44</td><td>正齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L52</td></tr>
+<tr><td class="idx">799</td><td class="mono">SF30-HM50100-00066M0</td><td>M3T28W40L40</td><td>正齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L53</td></tr>
+<tr><td class="idx">800</td><td class="mono">A506GF90R165-5150000</td><td>無圖</td><td>齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L54</td></tr>
+<tr><td class="idx">801</td><td class="mono">A506GF90R165-5160000</td><td>無圖</td><td>齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L55</td></tr>
+<tr><td class="idx">802</td><td class="mono">A506GF90R165-5170000</td><td>無圖</td><td>齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L56</td></tr>
+<tr><td class="idx">803</td><td class="mono">HSAN-HB50040-1060000</td><td>M3.5T60W30L42</td><td>減速大齒輪</td><td class="dim">吉輔</td><td class="dim sm">吉輔-L57</td></tr>
+<tr><td class="idx">804</td><td class="mono">22150-0019-01</td><td>M2*21T</td><td>齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L4</td></tr>
+<tr><td class="idx">805</td><td class="mono">22150-0020-02</td><td>M2*42T</td><td>齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L5<br>崴立-L38</td></tr>
+<tr><td class="idx">806</td><td class="mono">22150-3001-01</td><td>M3T25W35L54</td><td>齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L6</td></tr>
+<tr><td class="idx">807</td><td class="mono">22150-3005-01</td><td>M2.5*24T</td><td>B軸輸入齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L7</td></tr>
+<tr><td class="idx">808</td><td class="mono">22150-3008-01</td><td>M3T24W38L40</td><td>B軸輸入齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L8</td></tr>
+<tr><td class="idx">809</td><td class="mono">22150-0046-00</td><td>M2T21W24L31</td><td>大齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L9</td></tr>
+<tr><td class="idx">810</td><td class="mono">21436-3003-00</td><td>2M*20T*20W</td><td>大齒輪 HM500_ATC</td><td class="dim">崴立</td><td class="dim sm">崴立-L10<br>崴立-L14<br>崴立-L26</td></tr>
+<tr><td class="idx">811</td><td class="mono">10601-0531-01</td><td>SNCM21/8620</td><td>外齒輪(M2*82T)</td><td class="dim">崴立</td><td class="dim sm">崴立-L11<br>崴立-L20</td></tr>
+<tr><td class="idx">812</td><td class="mono">21436-3001-00</td><td>M2W440L440</td><td>長齒條</td><td class="dim">崴立</td><td class="dim sm">崴立-L13<br>崴立-L15</td></tr>
+<tr><td class="idx">813</td><td class="mono">21436-3002-00</td><td>M2W230L230</td><td>短齒條</td><td class="dim">崴立</td><td class="dim sm">崴立-L16<br>崴立-L18</td></tr>
+<tr><td class="idx">814</td><td class="mono">21436-3004-00</td><td>2M*30T*20W</td><td>小齒輪HMC500_ATC</td><td class="dim">崴立</td><td class="dim sm">崴立-L17<br>崴立-L19<br>崴立-L27</td></tr>
+<tr><td class="idx">815</td><td class="mono">13006-0006-00</td><td>M4T16W34L35</td><td>開發件-驅動齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L22</td></tr>
+<tr><td class="idx">816</td><td class="mono">10601-0530-04</td><td>M2*82T*L15</td><td>內齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L23</td></tr>
+<tr><td class="idx">817</td><td class="mono">22150-0025-00</td><td>M4*20T</td><td>馬達軸</td><td class="dim">崴立</td><td class="dim sm">崴立-L24</td></tr>
+<tr><td class="idx">818</td><td class="mono">10601-0897-00</td><td>無圖</td><td>齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L28</td></tr>
+<tr><td class="idx">819</td><td class="mono">10601-0894-00</td><td>無圖</td><td>齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L29</td></tr>
+<tr><td class="idx">820</td><td class="mono">10601-0898-00</td><td>無圖</td><td>齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L30</td></tr>
+<tr><td class="idx">821</td><td class="mono">20550-6012-00</td><td>無圖</td><td>齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L31</td></tr>
+<tr><td class="idx">822</td><td class="mono">20550-6008-00</td><td>無圖</td><td>齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L32</td></tr>
+<tr><td class="idx">823</td><td class="mono">22150-0045-00</td><td>M2.5T54W41L41</td><td>大齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L33</td></tr>
+<tr><td class="idx">824</td><td class="mono">22150-0043-00</td><td>M2.5T18W29.3L29.3</td><td>小齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L34</td></tr>
+<tr><td class="idx">825</td><td class="mono">22550-6014-00</td><td>無圖</td><td>齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L35</td></tr>
+<tr><td class="idx">826</td><td class="mono">21436-3008-00</td><td>M2W655L655</td><td>長齒條 HMC630_ATC</td><td class="dim">崴立</td><td class="dim sm">崴立-L36</td></tr>
+<tr><td class="idx">827</td><td class="mono">21436-3009-00</td><td>M2W340L340</td><td>短齒條 HMC630_ATC</td><td class="dim">崴立</td><td class="dim sm">崴立-L37</td></tr>
+<tr><td class="idx">828</td><td class="mono">20557-5025-XO</td><td>20550-5067-00用</td><td>齒輪結合鍵</td><td class="dim">崴立</td><td class="dim sm">崴立-L39</td></tr>
+<tr><td class="idx">829</td><td class="mono">22150-3001-02</td><td>M3T25W35L54</td><td>齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L40</td></tr>
+<tr><td class="idx">830</td><td class="mono">22150-3002-00</td><td>M3T50W32L48</td><td>APC傳動軸減速齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L41<br>崴立-L54</td></tr>
+<tr><td class="idx">831</td><td class="mono">22150-3003-00</td><td>M3T18W48L229</td><td>APC傳動齒輪軸</td><td class="dim">崴立</td><td class="dim sm">崴立-L42<br>崴立-L55</td></tr>
+<tr><td class="idx">832</td><td class="mono">22150-3004-00</td><td>M3T72W46L47</td><td>APC旋輪齒輪</td><td class="dim">崴立</td><td class="dim sm">崴立-L43<br>崴立-L56</td></tr>
+<tr><td class="idx">833</td><td class="mono">PS2009-1301A-1</td><td>M1.5T30W15L20</td><td>C型扣環</td><td class="dim">金豐</td><td class="dim sm">金豐-L4</td></tr>
+<tr><td class="idx">834</td><td class="mono">PS2056-0901A</td><td>φ60*L84</td><td>接頭</td><td class="dim">金豐</td><td class="dim sm">金豐-L5</td></tr>
+<tr><td class="idx">835</td><td class="mono">PS2156-0910A</td><td>φ60*L99</td><td>接頭</td><td class="dim">金豐</td><td class="dim sm">金豐-L6</td></tr>
+<tr><td class="idx">836</td><td class="mono">PS2506-0204A</td><td>76*2M2*36T*15W</td><td>齒輪</td><td class="dim">金豐</td><td class="dim sm">金豐-L7</td></tr>
+<tr><td class="idx">837</td><td class="mono">PM1366-0203A</td><td>無圖</td><td>齒輪STD-600</td><td class="dim">金豐</td><td class="dim sm">金豐-L8</td></tr>
+<tr><td class="idx">838</td><td class="mono">PM1656-0201A</td><td>無圖</td><td>齒輪SDS-1000</td><td class="dim">金豐</td><td class="dim sm">金豐-L9<br>金豐-L12</td></tr>
+<tr><td class="idx">839</td><td class="mono">PM1618-0201A</td><td>無圖</td><td>齒輪S4-1200，B40607</td><td class="dim">金豐</td><td class="dim sm">金豐-L10</td></tr>
+<tr><td class="idx">840</td><td class="mono">PM1A03-0202A</td><td>M5T47W60L157</td><td>齒輪S4-2000</td><td class="dim">金豐</td><td class="dim sm">金豐-L11</td></tr>
+<tr><td class="idx">841</td><td class="mono">PF381A-0202A</td><td>M12T17W185L185</td><td>小齒輪KP-400</td><td class="dim">金豐</td><td class="dim sm">金豐-L13</td></tr>
+<tr><td class="idx">842</td><td class="mono">PM1369-0201A</td><td>無圖</td><td>齒輪</td><td class="dim">金豐</td><td class="dim sm">金豐-L14</td></tr>
+<tr><td class="idx">843</td><td class="mono">PS2T31-0204A</td><td>10*11.5*7</td><td>齒條M1.5T1</td><td class="dim">金豐</td><td class="dim sm">金豐-L15</td></tr>
+<tr><td class="idx">844</td><td class="mono">PS2396-0207A</td><td>M2T40W15L41</td><td>齒輪</td><td class="dim">金豐</td><td class="dim sm">金豐-L16</td></tr>
+<tr><td class="idx">845</td><td class="mono">483-08054001A</td><td>無圖</td><td>時規皮帶輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L4</td></tr>
+<tr><td class="idx">846</td><td class="mono">483-30044007A</td><td>無圖</td><td>齒輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L5</td></tr>
+<tr><td class="idx">847</td><td class="mono">462-25020001A</td><td>無圖</td><td>螺旋齒輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L6</td></tr>
+<tr><td class="idx">848</td><td class="mono">462-25020002A</td><td>無圖</td><td>螺旋齒輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L7</td></tr>
+<tr><td class="idx">849</td><td class="mono">220-29900457A</td><td>無圖</td><td>壓紙減速機</td><td class="dim">明暐</td><td class="dim sm">明暐-L8</td></tr>
+<tr><td class="idx">850</td><td class="mono">220-29900499A</td><td>無圖</td><td>漏斗移動從動鏈輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L9</td></tr>
+<tr><td class="idx">851</td><td class="mono">220-29900500A</td><td>無圖</td><td>漏斗移動張力</td><td class="dim">明暐</td><td class="dim sm">明暐-L10</td></tr>
+<tr><td class="idx">852</td><td class="mono">220-29900502A</td><td>無圖</td><td>漏斗移動張力鏈輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L11</td></tr>
+<tr><td class="idx">853</td><td class="mono">220-29900508A</td><td>無圖</td><td>第一漏斗脈衝齒輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L12</td></tr>
+<tr><td class="idx">854</td><td class="mono">220-29900509A</td><td>無圖</td><td>漏斗移動操作側鏈輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L13</td></tr>
+<tr><td class="idx">855</td><td class="mono">220-29900568A</td><td>無圖</td><td>輸送帶馬達鏈輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L14</td></tr>
+<tr><td class="idx">856</td><td class="mono">220-29900574A</td><td>無圖</td><td>鏈輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L15</td></tr>
+<tr><td class="idx">857</td><td class="mono">220-29900575A</td><td>無圖</td><td>鏈輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L16</td></tr>
+<tr><td class="idx">858</td><td class="mono">220-29900577A</td><td>無圖</td><td>譯碼器齒輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L17</td></tr>
+<tr><td class="idx">859</td><td class="mono">202-21200581A</td><td>無圖</td><td>齒輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L18</td></tr>
+<tr><td class="idx">860</td><td class="mono">220-29900612A</td><td>無圖</td><td>馬達皮帶輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L19</td></tr>
+<tr><td class="idx">861</td><td class="mono">220-29900639A</td><td>無圖</td><td>驅動皮帶輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L20</td></tr>
+<tr><td class="idx">862</td><td class="mono">220-29900657A</td><td>無圖</td><td>輸送帶驅動皮帶輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L21</td></tr>
+<tr><td class="idx">863</td><td class="mono">220-29900691A</td><td>無圖</td><td>橫向移動渦輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L22</td></tr>
+<tr><td class="idx">864</td><td class="mono">220-29900692A</td><td>無圖</td><td>橫向移動渦輪</td><td class="dim">明暐</td><td class="dim sm">明暐-L23</td></tr>
+<tr><td class="idx">865</td><td class="mono">DV-16500220</td><td>M3T53W30L60</td><td>中間軸齒輪</td><td class="dim">新穎</td><td class="dim sm">新穎-L4</td></tr>
+<tr><td class="idx">866</td><td class="mono">DV-32063102</td><td>內M1.5T60L117</td><td>分流轉軸</td><td class="dim">新穎</td><td class="dim sm">新穎-L5</td></tr>
+<tr><td class="idx">867</td><td class="mono">DV-16500110</td><td>—</td><td>主軸齒輪</td><td class="dim">新穎</td><td class="dim sm">新穎-L6</td></tr>
+<tr><td class="idx">868</td><td class="mono">DV-42210180</td><td>—</td><td>從動齒輪</td><td class="dim">新穎</td><td class="dim sm">新穎-L14</td></tr>
+<tr><td class="idx">869</td><td class="mono">1220_M_JIG</td><td>—</td><td>銑床檢具</td><td class="dim">東芳</td><td class="dim sm">東芳-L4</td></tr>
+<tr><td class="idx">870</td><td class="mono">1219_M_JIG</td><td>—</td><td>銑床檢具</td><td class="dim">東芳</td><td class="dim sm">東芳-L5</td></tr>
+<tr><td class="idx">871</td><td class="mono">21210</td><td>M2.5*18T**241L</td><td>B軸齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L6</td></tr>
+<tr><td class="idx">872</td><td class="mono">21206</td><td>M2.5*28T*241L</td><td>A軸齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L7</td></tr>
+<tr><td class="idx">873</td><td class="mono">21204</td><td>M2.5*57T*25L</td><td>馬達傳動齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L8</td></tr>
+<tr><td class="idx">874</td><td class="mono">21212</td><td>M2.5*52T*25L</td><td>B軸下齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L9</td></tr>
+<tr><td class="idx">875</td><td class="mono">21219</td><td>M2.5*82T*40L</td><td>主軸變速上齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L10</td></tr>
+<tr><td class="idx">876</td><td class="mono">21211</td><td>M2.5T58W20L25</td><td>B軸中齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L11</td></tr>
+<tr><td class="idx">877</td><td class="mono">21203</td><td>M2.5*27T*78L</td><td>馬達齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L13</td></tr>
+<tr><td class="idx">878</td><td class="mono">1220</td><td>M2T32W9L70</td><td>傳動套B齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L16</td></tr>
+<tr><td class="idx">879</td><td class="mono">1211-3</td><td>M1.75T31W13L13</td><td>B軸變速齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L18</td></tr>
+<tr><td class="idx">880</td><td class="mono">1221</td><td>Φ40*199.5</td><td>主軸傳動方栓</td><td class="dim">東芳</td><td class="dim sm">東芳-L19</td></tr>
+<tr><td class="idx">881</td><td class="mono">1219</td><td>M2T55W11.5L29</td><td>傳動套A齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L20</td></tr>
+<tr><td class="idx">882</td><td class="mono">107-3</td><td>M2.5T31W11.5L15</td><td>B軸變速齒輪3</td><td class="dim">東芳</td><td class="dim sm">東芳-L21<br>東芳-L25<br>東芳-L34</td></tr>
+<tr><td class="idx">883</td><td class="mono">106</td><td>M2.5T12W18L184</td><td>B齒輪軸</td><td class="dim">東芳</td><td class="dim sm">東芳-L22<br>東芳-L38<br>東芳-L39</td></tr>
+<tr><td class="idx">884</td><td class="mono">107-1</td><td>M2.5T22W18L46</td><td>B軸變速齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L23<br>東芳-L33<br>東芳-L35</td></tr>
+<tr><td class="idx">885</td><td class="mono">107-2</td><td>M2.5T39W13L13</td><td>B軸變速齒輪2</td><td class="dim">東芳</td><td class="dim sm">東芳-L24<br>東芳-L36</td></tr>
+<tr><td class="idx">886</td><td class="mono">109</td><td>M2.5T32L107</td><td>傳動套B齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L30<br>東芳-L32</td></tr>
+<tr><td class="idx">887</td><td class="mono">1210</td><td>M2T12W14L138</td><td>B軸齒輪</td><td class="dim">東芳</td><td class="dim sm">東芳-L40</td></tr>
+<tr><td class="idx">888</td><td class="mono">GS-M100T59b</td><td>M1T59W7L7</td><td>齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L4<br>盟英-L17</td></tr>
+<tr><td class="idx">889</td><td class="mono">GS-M100T26T52</td><td>M1*26T-M1*52T</td><td>齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L5<br>盟英-L14<br>盟英-L15</td></tr>
+<tr><td class="idx">890</td><td class="mono">GS-M100T78</td><td>M1*78T</td><td>齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L6<br>盟英-L18</td></tr>
+<tr><td class="idx">891</td><td class="mono">GS-M100T59</td><td>M1*59T</td><td>齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L7<br>盟英-L9<br>盟英-L23</td></tr>
+<tr><td class="idx">892</td><td class="mono">GS-M100T48-01</td><td>M1*48T</td><td>齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L8</td></tr>
+<tr><td class="idx">893</td><td class="mono">GS-M100T98</td><td>M1*98T</td><td>齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L10</td></tr>
+<tr><td class="idx">894</td><td class="mono">GS-M100T15</td><td>M1T15W9L55</td><td>齒軸</td><td class="dim">盟英</td><td class="dim sm">盟英-L11</td></tr>
+<tr><td class="idx">895</td><td class="mono">M0.5*130T-M1*16T</td><td>M0.5*130T-M1*16T</td><td>齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L12</td></tr>
+<tr><td class="idx">896</td><td class="mono">PG-M080T90T87T18R30TM-03</td><td>M0.8T18W8.90L8.90</td><td>M-03行星齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L13</td></tr>
+<tr><td class="idx">897</td><td class="mono">M1*26T-M1*52T-A</td><td>M1*26T*7.5W</td><td>齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L16</td></tr>
+<tr><td class="idx">898</td><td class="mono">GS-M100T58-01</td><td>M1*58T</td><td>齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L19</td></tr>
+<tr><td class="idx">899</td><td class="mono">GS-M100T50-1</td><td>M1T50</td><td>齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L20</td></tr>
+<tr><td class="idx">900</td><td class="mono">GS-M100T50-2</td><td>M1T50</td><td>齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L21</td></tr>
+<tr><td class="idx">901</td><td class="mono">GS-M100T58-02</td><td>M1*58T</td><td>齒輪</td><td class="dim">盟英</td><td class="dim sm">盟英-L22</td></tr>
+<tr><td class="idx">902</td><td class="mono">HGHANA005</td><td>—</td><td>HGHDNB000-墊塊40 (每組3pcs)</td><td class="dim">和大</td><td class="dim sm">和大-L4<br>和大-L8</td></tr>
+<tr><td class="idx">903</td><td class="mono">HGHANA003</td><td>—</td><td>HGHDNB000-墊塊20 (每組2pcs)</td><td class="dim">和大</td><td class="dim sm">和大-L5</td></tr>
+<tr><td class="idx">904</td><td class="mono">HGHAN4006</td><td>—</td><td>HGHDNG000-墊塊40 (每組2pcs)</td><td class="dim">和大</td><td class="dim sm">和大-L6<br>和大-L13<br>和大-L17</td></tr>
+<tr><td class="idx">905</td><td class="mono">HGHANA004</td><td>—</td><td>HGHDNB000-墊塊30 (每組2pcs)</td><td class="dim">和大</td><td class="dim sm">和大-L7</td></tr>
+<tr><td class="idx">906</td><td class="mono">HGHAN4003</td><td>—</td><td>HGHDNG000-墊塊10 (每組2pcs)</td><td class="dim">和大</td><td class="dim sm">和大-L9<br>和大-L14</td></tr>
+<tr><td class="idx">907</td><td class="mono">HGHAN4004</td><td>—</td><td>HGHDNG000-墊塊20 (每組3pcs)</td><td class="dim">和大</td><td class="dim sm">和大-L10<br>和大-L15</td></tr>
+<tr><td class="idx">908</td><td class="mono">HGHAN4005</td><td>—</td><td>HGHDNG000-墊塊30 (每組2pcs)</td><td class="dim">和大</td><td class="dim sm">和大-L11<br>和大-L12<br>和大-L16</td></tr>
+<tr><td class="idx">909</td><td class="mono">HGHDNJ004</td><td>—</td><td>HGHDNJ000-墊塊10 (每組1pc)</td><td class="dim">和大</td><td class="dim sm">和大-L18</td></tr>
+<tr><td class="idx">910</td><td class="mono">HGHDNJ005</td><td>—</td><td>HGHDNJ000-墊塊20 (每組2pcs)</td><td class="dim">和大</td><td class="dim sm">和大-L19</td></tr>
+<tr><td class="idx">911</td><td class="mono">HGHDNJ006</td><td>—</td><td>HGHDNJ000-墊塊30 (每組2pcs)</td><td class="dim">和大</td><td class="dim sm">和大-L20</td></tr>
+<tr><td class="idx">912</td><td class="mono">HGHDNJ007</td><td>—</td><td>HGHDNJ000-墊塊40 (每組2pcs)</td><td class="dim">和大</td><td class="dim sm">和大-L21</td></tr>
+<tr><td class="idx">913</td><td class="mono">SPTM-6</td><td>96L</td><td>SPTM-六方栓輸出軸</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L4</td></tr>
+<tr><td class="idx">914</td><td class="mono">HELICAL GEAR-21</td><td>無圖</td><td>齒輪</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L5<br>GOGORO-L6</td></tr>
+<tr><td class="idx">915</td><td class="mono">HELICAL GEAR-62</td><td>無圖</td><td>齒輪</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L7<br>GOGORO-L8</td></tr>
+<tr><td class="idx">916</td><td class="mono">SPUR GEAR-18</td><td>無圖</td><td>齒輪</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L9</td></tr>
+<tr><td class="idx">917</td><td class="mono">SPUR GEAR-54</td><td>無圖</td><td>齒輪</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L10</td></tr>
+<tr><td class="idx">918</td><td class="mono">SPTT-14T</td><td>14T*7.2L</td><td>小鍊輪</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L11</td></tr>
+<tr><td class="idx">919</td><td class="mono">SPTT-19T</td><td>M1.5*19T*20W</td><td>小齒輪</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L12</td></tr>
+<tr><td class="idx">920</td><td class="mono">SPTT-35T</td><td>35T*7L</td><td>大鍊輪</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L13</td></tr>
+<tr><td class="idx">921</td><td class="mono">Long shaft for AM6</td><td>無圖</td><td>Long shaft for AM6</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L14</td></tr>
+<tr><td class="idx">922</td><td class="mono">11121-BC2-0X01</td><td>Φ32*159.55L</td><td>MOTOR OUTOUT SHAFT</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L15<br>GOGORO-L16</td></tr>
+<tr><td class="idx">923</td><td class="mono">11122-JR2-0X01</td><td>M1.25T19W23.5L23.5</td><td>MOTOR OUTPUT GEAR</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L17</td></tr>
+<tr><td class="idx">924</td><td class="mono">11122-UC2-1000-R01</td><td>M1.252T21W23.5L23.5</td><td>MOTOR OUTPUT GEAR</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L18</td></tr>
+<tr><td class="idx">925</td><td class="mono">FRONT SHAFT</td><td>φ25L193.5</td><td>FRONT SHAFT</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L19</td></tr>
+<tr><td class="idx">926</td><td class="mono">REAR SHAFT</td><td>φ36L228.5</td><td>REAR SHAFT</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L20</td></tr>
+<tr><td class="idx">927</td><td class="mono">11211-HB2-0000-R01</td><td>M1.25W23L23</td><td>SECONDARY GEAR</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L21</td></tr>
+<tr><td class="idx">928</td><td class="mono">11211-HB2-0000-R02</td><td>M1.25W23L23</td><td>SECONDARY GEAR</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L22</td></tr>
+<tr><td class="idx">929</td><td class="mono">11122-HB2-0000-R05</td><td>DP24/48*17T*62.6L</td><td>齒輪</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L23</td></tr>
+<tr><td class="idx">930</td><td class="mono">RR BRAKE DISK HUB</td><td>Φ118*22L</td><td>齒輪</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L24</td></tr>
+<tr><td class="idx">931</td><td class="mono">RR SHAFT</td><td>Φ47L226.6</td><td>RR SHAFT</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L25</td></tr>
+<tr><td class="idx">932</td><td class="mono">RR WHEEL HUB</td><td>Φ132*28L</td><td>齒輪</td><td class="dim">GOGORO</td><td class="dim sm">GOGORO-L26</td></tr>
+<tr><td class="idx">933</td><td class="mono">3J0000080005</td><td>M2.5T54W22L54</td><td>中軸上齒</td><td class="dim">御成</td><td class="dim sm">御成-L4</td></tr>
+<tr><td class="idx">934</td><td class="mono">3K0000080002</td><td>M2.5*T72*20W</td><td>中軸中齒(大齒)</td><td class="dim">御成</td><td class="dim sm">御成-L5</td></tr>
+<tr><td class="idx">935</td><td class="mono">3I0000080001-55</td><td>無圖</td><td>電機齒輪-D55</td><td class="dim">御成</td><td class="dim sm">御成-L6</td></tr>
+<tr><td class="idx">936</td><td class="mono">3I0000080003</td><td>M2.5T30W24L118</td><td>電機軸齒輪30T</td><td class="dim">御成</td><td class="dim sm">御成-L7</td></tr>
+<tr><td class="idx">937</td><td class="mono">3I0000080004</td><td>M2T51W22L46.5</td><td>中軸齒輪</td><td class="dim">御成</td><td class="dim sm">御成-L8</td></tr>
+<tr><td class="idx">938</td><td class="mono">3I0000080005</td><td>M2.5T40W22L34</td><td>主軸齒輪40T</td><td class="dim">御成</td><td class="dim sm">御成-L9</td></tr>
+<tr><td class="idx">939</td><td class="mono">3I0000080008</td><td>M2.5T68W22L31</td><td>中軸齒輪</td><td class="dim">御成</td><td class="dim sm">御成-L10</td></tr>
+<tr><td class="idx">940</td><td class="mono">3J0000080003</td><td>M2.5T60W20L46</td><td>主軸小齒</td><td class="dim">御成</td><td class="dim sm">御成-L11</td></tr>
+<tr><td class="idx">941</td><td class="mono">3J0000080006-48</td><td>M2.5T45W24T127.5</td><td>電機齒輪</td><td class="dim">御成</td><td class="dim sm">御成-L12</td></tr>
+<tr><td class="idx">942</td><td class="mono">PH300047</td><td>M2.5*35T*W35</td><td>馬達齒輪</td><td class="dim">御成</td><td class="dim sm">御成-L13</td></tr>
+<tr><td class="idx">943</td><td class="mono">PH300043-80</td><td>M3T43W20L85</td><td>主軸小齒</td><td class="dim">御成</td><td class="dim sm">御成-L14</td></tr>
+<tr><td class="idx">944</td><td class="mono">PH300049-80</td><td>M3T76W29L57</td><td>主軸大齒</td><td class="dim">御成</td><td class="dim sm">御成-L15</td></tr>
+<tr><td class="idx">945</td><td class="mono">HA3003F</td><td>M1T30W10L27</td><td>齒輪</td><td class="dim">弘旺</td><td class="dim sm">弘旺-L4</td></tr>
+<tr><td class="idx">946</td><td class="mono">HG3005L</td><td>M2*20T*21L</td><td>螺旋齒輪</td><td class="dim">弘旺</td><td class="dim sm">弘旺-L5</td></tr>
+<tr><td class="idx">947</td><td class="mono">HG3006R</td><td>M2*20T*28L</td><td>螺旋齒輪</td><td class="dim">弘旺</td><td class="dim sm">弘旺-L6</td></tr>
+<tr><td class="idx">948</td><td class="mono">HG3007R</td><td>M2*20T*54L</td><td>螺旋齒輪</td><td class="dim">弘旺</td><td class="dim sm">弘旺-L7</td></tr>
+<tr><td class="idx">949</td><td class="mono">HG3008L</td><td>M1.5*26T10W*21L</td><td>螺旋齒輪</td><td class="dim">弘旺</td><td class="dim sm">弘旺-L8</td></tr>
+<tr><td class="idx">950</td><td class="mono">HA3011A</td><td>M1T40W10L21</td><td>正齒輪</td><td class="dim">弘旺</td><td class="dim sm">弘旺-L9</td></tr>
+<tr><td class="idx">951</td><td class="mono">CH-KP-020025038-01</td><td>Φ25*38L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L4</td></tr>
+<tr><td class="idx">952</td><td class="mono">CH-KP-020024038-01</td><td>Φ24*38L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L5</td></tr>
+<tr><td class="idx">953</td><td class="mono">CH-KP-027032050-01</td><td>Φ32*50L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L6</td></tr>
+<tr><td class="idx">954</td><td class="mono">CH-KP-028038048-01</td><td>Φ38*48L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L7</td></tr>
+<tr><td class="idx">955</td><td class="mono">CH-KP-028038048-02</td><td>Φ38*48L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L8</td></tr>
+<tr><td class="idx">956</td><td class="mono">CH-KP-028042048-01</td><td>Φ42*48L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L9</td></tr>
+<tr><td class="idx">957</td><td class="mono">CH-KP-028042048-02</td><td>Φ42*48L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L10</td></tr>
+<tr><td class="idx">958</td><td class="mono">CH-KP-024030048-01</td><td>Φ30*48L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L11</td></tr>
+<tr><td class="idx">959</td><td class="mono">CH-KP-024030048-02</td><td>Φ30*48L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L12</td></tr>
+<tr><td class="idx">960</td><td class="mono">CH-KP-060065080-01</td><td>Φ65*80L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L13</td></tr>
+<tr><td class="idx">961</td><td class="mono">CH-KP-060070080-01</td><td>Φ70*80L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L14</td></tr>
+<tr><td class="idx">962</td><td class="mono">CH-KP-082088090-01</td><td>Φ88*90L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L15</td></tr>
+<tr><td class="idx">963</td><td class="mono">CH-KP-082100090-01</td><td>Φ100*90L/IDΦ82</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L16</td></tr>
+<tr><td class="idx">964</td><td class="mono">40152040502</td><td>Φ50*60L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L17</td></tr>
+<tr><td class="idx">965</td><td class="mono">40152040402</td><td>Φ40*50L</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L18</td></tr>
+<tr><td class="idx">966</td><td class="mono">40152040901</td><td>Φ82>Φ90</td><td>膨脹心軸套筒</td><td class="dim">立翔</td><td class="dim sm">立翔-L19</td></tr>
+<tr><td class="idx">967</td><td class="mono">14-14T</td><td>M1.75T14W23.8L60.5</td><td>齒軸</td><td class="dim">板井</td><td class="dim sm">板井-L4</td></tr>
+<tr><td class="idx">968</td><td class="mono">14-37T</td><td>M1.75T37W20L20</td><td>齒輪</td><td class="dim">板井</td><td class="dim sm">板井-L5</td></tr>
+<tr><td class="idx">969</td><td class="mono">14-38T</td><td>M1.75T38W20L20</td><td>齒輪</td><td class="dim">板井</td><td class="dim sm">板井-L6</td></tr>
+<tr><td class="idx">970</td><td class="mono">14-39T</td><td>M1.75T39W20L20</td><td>齒輪</td><td class="dim">板井</td><td class="dim sm">板井-L7</td></tr>
+<tr><td class="idx">971</td><td class="mono">8-2104</td><td>M2T20W12L60</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L4</td></tr>
+<tr><td class="idx">972</td><td class="mono">9-2105A</td><td>M2T40W12L16</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L5</td></tr>
+<tr><td class="idx">973</td><td class="mono">9-2105</td><td>M2T26W12L24</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L6</td></tr>
+<tr><td class="idx">974</td><td class="mono">12-2117</td><td>M2T55W12</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L7</td></tr>
+<tr><td class="idx">975</td><td class="mono">17-2114</td><td>M2T52W12</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L8</td></tr>
+<tr><td class="idx">976</td><td class="mono">18-2115</td><td>M2T46W12</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L9</td></tr>
+<tr><td class="idx">977</td><td class="mono">18-2115A</td><td>M2T32W12L36</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L10</td></tr>
+<tr><td class="idx">978</td><td class="mono">21-2232</td><td>—</td><td>—</td><td class="dim">泳建</td><td class="dim sm">泳建-L11</td></tr>
+<tr><td class="idx">979</td><td class="mono">212133</td><td>M2T42W22</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L12</td></tr>
+<tr><td class="idx">980</td><td class="mono">23-2131</td><td>M2T45W12L36</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L13</td></tr>
+<tr><td class="idx">981</td><td class="mono">42122</td><td>M2T32L44</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L14</td></tr>
+<tr><td class="idx">982</td><td class="mono">62102</td><td>Φ30L245</td><td>齒輪心軸</td><td class="dim">泳建</td><td class="dim sm">泳建-L15</td></tr>
+<tr><td class="idx">983</td><td class="mono">72103</td><td>M2T45W12L24</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L16</td></tr>
+<tr><td class="idx">984</td><td class="mono">72125</td><td>M2T42W10L26</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L17</td></tr>
+<tr><td class="idx">985</td><td class="mono">6124</td><td>—</td><td>—</td><td class="dim">泳建</td><td class="dim sm">泳建-L18</td></tr>
+<tr><td class="idx">986</td><td class="mono">RB-21</td><td>M2T23W40L244</td><td>齒輪軸</td><td class="dim">泳建</td><td class="dim sm">泳建-L22</td></tr>
+<tr><td class="idx">987</td><td class="mono">RB-87</td><td>M2T40W10L33</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L23</td></tr>
+<tr><td class="idx">988</td><td class="mono">RB-93</td><td>2M*49T*22.2W</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L26</td></tr>
+<tr><td class="idx">989</td><td class="mono">RB-31</td><td>2M*31T*18W</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L29</td></tr>
+<tr><td class="idx">990</td><td class="mono">RB-43</td><td>2M*35T*15W</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L33</td></tr>
+<tr><td class="idx">991</td><td class="mono">RB-64</td><td>2.5M*30T*40W</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L34<br>泳建-L64</td></tr>
+<tr><td class="idx">992</td><td class="mono">RC-134</td><td>2M*43T*14W</td><td>Z軸帶動齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L35<br>泳建-L68</td></tr>
+<tr><td class="idx">993</td><td class="mono">DD-11</td><td>M2T50W10L44</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L36</td></tr>
+<tr><td class="idx">994</td><td class="mono">DB-2</td><td>2M*70T</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L37</td></tr>
+<tr><td class="idx">995</td><td class="mono">DD-3</td><td>2M*45T</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L38</td></tr>
+<tr><td class="idx">996</td><td class="mono">RB-8</td><td>M2.5T34W30L54</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L39</td></tr>
+<tr><td class="idx">997</td><td class="mono">DD-25</td><td>M2T73W10L17</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L40</td></tr>
+<tr><td class="idx">998</td><td class="mono">RB-90</td><td>M2T31W10L32.5</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L41</td></tr>
+<tr><td class="idx">999</td><td class="mono">RB-93-1</td><td>φ32*290</td><td>齒輪軸(1)</td><td class="dim">泳建</td><td class="dim sm">泳建-L42<br>泳建-L74</td></tr>
+<tr><td class="idx">1000</td><td class="mono">DD-28</td><td>M2T50W10L17</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L43</td></tr>
+<tr><td class="idx">1001</td><td class="mono">DD-29</td><td>M2T34W10L14</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L44</td></tr>
+<tr><td class="idx">1002</td><td class="mono">DD-16</td><td>φ32*253L</td><td>齒輪心軸</td><td class="dim">泳建</td><td class="dim sm">泳建-L48</td></tr>
+<tr><td class="idx">1003</td><td class="mono">DD-26</td><td>φ38*103</td><td>齒輪六巢心軸</td><td class="dim">泳建</td><td class="dim sm">泳建-L49</td></tr>
+<tr><td class="idx">1004</td><td class="mono">RB-99</td><td>M2T23W12L38</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L52</td></tr>
+<tr><td class="idx">1005</td><td class="mono">RB-77</td><td>M2.5T15W35L145</td><td>齒輪軸</td><td class="dim">泳建</td><td class="dim sm">泳建-L54<br>泳建-L79</td></tr>
+<tr><td class="idx">1006</td><td class="mono">DD-32</td><td>φ38*355</td><td>齒輪心軸</td><td class="dim">泳建</td><td class="dim sm">泳建-L55</td></tr>
+<tr><td class="idx">1007</td><td class="mono">RC-97</td><td>2M*14T*14L</td><td>X軸傳動齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L56</td></tr>
+<tr><td class="idx">1008</td><td class="mono">RB-18</td><td>外M2.5*49T+外M2*23T</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L63</td></tr>
+<tr><td class="idx">1009</td><td class="mono">DD-14</td><td>M2T50W10L23</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L66</td></tr>
+<tr><td class="idx">1010</td><td class="mono">RC-120</td><td>M2T443W14L26</td><td>Z軸傳動齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L67</td></tr>
+<tr><td class="idx">1011</td><td class="mono">RB-27</td><td>M2T40W12L24</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L69</td></tr>
+<tr><td class="idx">1012</td><td class="mono">DB-4</td><td>M2T48W10L90</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L70</td></tr>
+<tr><td class="idx">1013</td><td class="mono">DB-08</td><td>M2T80W15W22</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L71</td></tr>
+<tr><td class="idx">1014</td><td class="mono">DB-09</td><td>M2T30W15L28</td><td>齒輪</td><td class="dim">泳建</td><td class="dim sm">泳建-L78</td></tr>
+<tr><td class="idx">1015</td><td class="mono">ADAPTOR</td><td>—</td><td>adaptor</td><td class="dim">其它</td><td class="dim sm">其它-L4</td></tr>
+<tr><td class="idx">1016</td><td class="mono">P1 MASTER AHAFT</td><td>—</td><td>P1 master shaft</td><td class="dim">其它</td><td class="dim sm">其它-L5</td></tr>
+<tr><td class="idx">1017</td><td class="mono">81A239-1 AA96597 P2</td><td>—</td><td>—</td><td class="dim">其它</td><td class="dim sm">其它-L6</td></tr>
+<tr><td class="idx">1018</td><td class="mono">616D410A-1 AA96595 P3</td><td>—</td><td>—</td><td class="dim">其它</td><td class="dim sm">其它-L7</td></tr>
+<tr><td class="idx">1019</td><td class="mono">616D406-1 AA98366 P2</td><td>—</td><td>—</td><td class="dim">其它</td><td class="dim sm">其它-L8</td></tr>
+<tr><td class="idx">1020</td><td class="mono">81A238-1 AA96598 P1</td><td>—</td><td>—</td><td class="dim">其它</td><td class="dim sm">其它-L9</td></tr>
+<tr><td class="idx">1021</td><td class="mono">P2_MASTER_GEAR_T80</td><td>master_gear</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L10</td></tr>
+<tr><td class="idx">1022</td><td class="mono">SD0025-GR57BA</td><td>M2T53W27L49</td><td>右旋同步齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L11</td></tr>
+<tr><td class="idx">1023</td><td class="mono">E-ACU125J103DEX002</td><td>M1T38W12L28</td><td>A軸-傳動齒輪(小)</td><td class="dim">其它</td><td class="dim sm">其它-L12</td></tr>
+<tr><td class="idx">1024</td><td class="mono">E-ACU125J103DEX003</td><td>M1T38W12L28</td><td>A軸-傳動齒輪(大)</td><td class="dim">其它</td><td class="dim sm">其它-L13</td></tr>
+<tr><td class="idx">1025</td><td class="mono">SG_240226_TEST</td><td>M1T10W20</td><td>—</td><td class="dim">其它</td><td class="dim sm">其它-L14</td></tr>
+<tr><td class="idx">1026</td><td class="mono">SG_240226</td><td>M1T10W20內孔5.00</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L15</td></tr>
+<tr><td class="idx">1027</td><td class="mono">07923200-GO-NOGO</td><td>—</td><td>內孔檢具</td><td class="dim">其它</td><td class="dim sm">其它-L16</td></tr>
+<tr><td class="idx">1028</td><td class="mono">RM001-M2-53T</td><td>M2T53L67.5</td><td>直齒齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L17</td></tr>
+<tr><td class="idx">1029</td><td class="mono">RM001-L178.5</td><td>L178.5</td><td>六栓槽軸</td><td class="dim">其它</td><td class="dim sm">其它-L18</td></tr>
+<tr><td class="idx">1030</td><td class="mono">RM001-M2-23T</td><td>M2T23L36.9</td><td>直齒齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L19</td></tr>
+<tr><td class="idx">1031</td><td class="mono">RM001-M2-16T</td><td>M2T16L33.5</td><td>直齒齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L20</td></tr>
+<tr><td class="idx">1032</td><td class="mono">RM001-M2T15L165.5</td><td>M2T15L165.5</td><td>齒軸</td><td class="dim">其它</td><td class="dim sm">其它-L21</td></tr>
+<tr><td class="idx">1033</td><td class="mono">RM001-L165.4</td><td>L165.4</td><td>軸</td><td class="dim">其它</td><td class="dim sm">其它-L23</td></tr>
+<tr><td class="idx">1034</td><td class="mono">112EB600-4-a</td><td>M1.25T59W16.5L26.5</td><td>齒輪2-2</td><td class="dim">其它</td><td class="dim sm">其它-L29</td></tr>
+<tr><td class="idx">1035</td><td class="mono">112EB600-5-a</td><td>M0.8T28L12</td><td>轉接環內齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L30</td></tr>
+<tr><td class="idx">1036</td><td class="mono">RARM700-N01-JH</td><td>M10T18W100L125</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L31</td></tr>
+<tr><td class="idx">1037</td><td class="mono">M1.95T64PA20°LH30°</td><td>M1.94T64PA20°LH30°</td><td>大齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L32</td></tr>
+<tr><td class="idx">1038</td><td class="mono">M1.95T15PA20RH30.5</td><td>M1.95T15PA20°RH30.5°</td><td>小齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L33</td></tr>
+<tr><td class="idx">1039</td><td class="mono">P00002502-A</td><td>M5T17W50L102</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L34</td></tr>
+<tr><td class="idx">1040</td><td class="mono">CA25050702-1</td><td>M1.5T15W21.99L136.65</td><td>上軸</td><td class="dim">其它</td><td class="dim sm">其它-L35</td></tr>
+<tr><td class="idx">1041</td><td class="mono">1M19Z</td><td>M1T19W3L6.1</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L36</td></tr>
+<tr><td class="idx">1042</td><td class="mono">1M24Z</td><td>M1T24L26.8</td><td>雙齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L38</td></tr>
+<tr><td class="idx">1043</td><td class="mono">SS-0.5M50Z-1</td><td>M0.5T50W3</td><td>行星齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L39</td></tr>
+<tr><td class="idx">1044</td><td class="mono">SS-0.5M50Z-2</td><td>M0.5T50W3</td><td>行星齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L40</td></tr>
+<tr><td class="idx">1045</td><td class="mono">956303002MA4</td><td>M2T20W16L37</td><td>齒輪(20T)</td><td class="dim">其它</td><td class="dim sm">其它-L41</td></tr>
+<tr><td class="idx">1046</td><td class="mono">30521</td><td>Φ42L232</td><td>栓槽軸</td><td class="dim">其它</td><td class="dim sm">其它-L42</td></tr>
+<tr><td class="idx">1047</td><td class="mono">OD120*L50-ROLLER-A</td><td>φ50*117.63</td><td>滾輪溝槽5/6</td><td class="dim">其它</td><td class="dim sm">其它-L43</td></tr>
+<tr><td class="idx">1048</td><td class="mono">GF210N0050E01</td><td>M1.5T35W18L124</td><td>蝸桿齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L44</td></tr>
+<tr><td class="idx">1049</td><td class="mono">40301001-01</td><td>M2T36W42</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L45<br>其它-L191<br>其它-L201</td></tr>
+<tr><td class="idx">1050</td><td class="mono">GX255N0032C02</td><td>M1.5T84W19L20</td><td>蝸桿齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L46</td></tr>
+<tr><td class="idx">1051</td><td class="mono">GX125N0028A01</td><td>M1.5T54W16L16</td><td>蝸桿齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L47</td></tr>
+<tr><td class="idx">1052</td><td class="mono">GX255N0032I0T</td><td>M1.5T64W18L35</td><td>蝸桿齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L48</td></tr>
+<tr><td class="idx">1053</td><td class="mono">VRD2368-310</td><td>M4*15T*36.5W*176.5L</td><td>小齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L49</td></tr>
+<tr><td class="idx">1054</td><td class="mono">1S008513</td><td>M4.233*33T*63.5L</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L50</td></tr>
+<tr><td class="idx">1055</td><td class="mono">1S008514</td><td>M4.233*30T*36.576L</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L51</td></tr>
+<tr><td class="idx">1056</td><td class="mono">97-DE50-CHA-IS009705</td><td>M4.233T36W32.33L86</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L52</td></tr>
+<tr><td class="idx">1057</td><td class="mono">97-DE50-CHA-IS008511</td><td>M4.233T17W12.7L12.7</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L53</td></tr>
+<tr><td class="idx">1058</td><td class="mono">1200302T00</td><td>M3T66W30L204</td><td>換刀齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L54</td></tr>
+<tr><td class="idx">1059</td><td class="mono">1200303T00</td><td>M3T55W30L171</td><td>換刀齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L55</td></tr>
+<tr><td class="idx">1060</td><td class="mono">RD320J103DEX002</td><td>M2T26W16L35</td><td>傳動齒-小</td><td class="dim">其它</td><td class="dim sm">其它-L56</td></tr>
+<tr><td class="idx">1061</td><td class="mono">E-ACU125J103DEX011</td><td>M1T30W10L21</td><td>C軸-傳動齒輪(小)</td><td class="dim">其它</td><td class="dim sm">其它-L57</td></tr>
+<tr><td class="idx">1062</td><td class="mono">CF_000079(1)</td><td>M3T27W30</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L59</td></tr>
+<tr><td class="idx">1063</td><td class="mono">CF_000079(2)</td><td>M3T27W30L174</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L60</td></tr>
+<tr><td class="idx">1064</td><td class="mono">99045L-T</td><td>M4T32W85L441</td><td>齒輪軸</td><td class="dim">其它</td><td class="dim sm">其它-L61</td></tr>
+<tr><td class="idx">1065</td><td class="mono">A-21003L</td><td>M3T32W74L192</td><td>齒輪軸</td><td class="dim">其它</td><td class="dim sm">其它-L62</td></tr>
+<tr><td class="idx">1066</td><td class="mono">A-21022L</td><td>M3T32W74L192</td><td>齒輪軸</td><td class="dim">其它</td><td class="dim sm">其它-L63</td></tr>
+<tr><td class="idx">1067</td><td class="mono">EG-MF-M2T13L145</td><td>M2T13L145</td><td>主動軸(13齒)</td><td class="dim">其它</td><td class="dim sm">其它-L66</td></tr>
+<tr><td class="idx">1068</td><td class="mono">EG-MF-M2T36L49</td><td>M2T36L49</td><td>從動小齒輪(36齒)</td><td class="dim">其它</td><td class="dim sm">其它-L67<br>其它-L87</td></tr>
+<tr><td class="idx">1069</td><td class="mono">RBT2000A030</td><td>M4T30W40L45</td><td>金正達齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L68</td></tr>
+<tr><td class="idx">1070</td><td class="mono">RD252035A</td><td>M1T46W5L5</td><td>正齒輪4EC00021</td><td class="dim">其它</td><td class="dim sm">其它-L69</td></tr>
+<tr><td class="idx">1071</td><td class="mono">RA63070AC</td><td>M2T30W17L31</td><td>齒輪輸入軸</td><td class="dim">其它</td><td class="dim sm">其它-L70</td></tr>
+<tr><td class="idx">1072</td><td class="mono">RA63070BC</td><td>M2T42W17L88</td><td>齒輪輸出軸</td><td class="dim">其它</td><td class="dim sm">其它-L71</td></tr>
+<tr><td class="idx">1073</td><td class="mono">RA63030LC</td><td>M1.25T13L69</td><td>4C256KJ1/輸入齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L72</td></tr>
+<tr><td class="idx">1074</td><td class="mono">RD23B02-1A01</td><td>M1T48W8</td><td>斜齒輪AA</td><td class="dim">其它</td><td class="dim sm">其它-L73</td></tr>
+<tr><td class="idx">1075</td><td class="mono">RD23B02-1A02</td><td>M1T48W8L41.5</td><td>斜齒輪AB</td><td class="dim">其它</td><td class="dim sm">其它-L74</td></tr>
+<tr><td class="idx">1076</td><td class="mono">453400CK</td><td>M2T19W13L47</td><td>HS250馬達齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L75</td></tr>
+<tr><td class="idx">1077</td><td class="mono">4C256LE1</td><td>M1.75T28L63</td><td>RA63011NC01輸入齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L76</td></tr>
+<tr><td class="idx">1078</td><td class="mono">RA63060QC</td><td>M2T32L17</td><td>從動齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L77</td></tr>
+<tr><td class="idx">1079</td><td class="mono">RA63010KC</td><td>M1.75T28/84L78.8</td><td>J1從動齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L78</td></tr>
+<tr><td class="idx">1080</td><td class="mono">RA63060PC</td><td>M2T32L41.5</td><td>驅動齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L79</td></tr>
+<tr><td class="idx">1081</td><td class="mono">RA63010JC</td><td>M2T32L17</td><td>4C256GZ1/J1驅動齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L80</td></tr>
+<tr><td class="idx">1082</td><td class="mono">P8210901-0033</td><td>φ33.5L90</td><td>從動輪</td><td class="dim">其它</td><td class="dim sm">其它-L81</td></tr>
+<tr><td class="idx">1083</td><td class="mono">P8210901-0059</td><td>φ28.5L35</td><td>主動輪</td><td class="dim">其它</td><td class="dim sm">其它-L82<br>其它-L83</td></tr>
+<tr><td class="idx">1084</td><td class="mono">F-DH429F-5</td><td>DP16T86W31.95</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L84</td></tr>
+<tr><td class="idx">1085</td><td class="mono">58-100-914027A0M</td><td>M2T65W10L34</td><td>正齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L91</td></tr>
+<tr><td class="idx">1086</td><td class="mono">1B10981</td><td>M8T24W14L16.6</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L92</td></tr>
+<tr><td class="idx">1087</td><td class="mono">3703-3258BD</td><td>M2T58W25L49</td><td>右旋同步齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L93</td></tr>
+<tr><td class="idx">1088</td><td class="mono">3109330190</td><td>M2.5T40W35</td><td>正齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L94</td></tr>
+<tr><td class="idx">1089</td><td class="mono">3702-3248NC</td><td>M2T48W25L49</td><td>右旋同步齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L95</td></tr>
+<tr><td class="idx">1090</td><td class="mono">V2-6</td><td>M1.25T59W16.5L28.5</td><td>第二級大齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L96</td></tr>
+<tr><td class="idx">1091</td><td class="mono">112EB600-1-A</td><td>M0.8T8L71.7</td><td>馬達心軸</td><td class="dim">其它</td><td class="dim sm">其它-L97</td></tr>
+<tr><td class="idx">1092</td><td class="mono">112EB600-2-A</td><td>M0.8T48W15L16</td><td>齒輪1-2</td><td class="dim">其它</td><td class="dim sm">其它-L98</td></tr>
+<tr><td class="idx">1093</td><td class="mono">112EB600-3-A</td><td>M1.25T10W16.5L47</td><td>齒輪2-1</td><td class="dim">其它</td><td class="dim sm">其它-L99</td></tr>
+<tr><td class="idx">1094</td><td class="mono">Z080-E6151-00-P</td><td>M1.5T50W15L15</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L100</td></tr>
+<tr><td class="idx">1095</td><td class="mono">FC-BRACKET BLOCK</td><td>Φ38L9.6</td><td>墊塊</td><td class="dim">其它</td><td class="dim sm">其它-L101</td></tr>
+<tr><td class="idx">1096</td><td class="mono">FC-SHAFT</td><td>Φ15L119.3</td><td>心軸</td><td class="dim">其它</td><td class="dim sm">其它-L102</td></tr>
+<tr><td class="idx">1097</td><td class="mono">DP24PA20T10</td><td>DP24PA20T10</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L103</td></tr>
+<tr><td class="idx">1098</td><td class="mono">CT46/52-004-021-B</td><td>M1.25T30W20L25</td><td>小齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L104</td></tr>
+<tr><td class="idx">1099</td><td class="mono">290D1194P001-ID20</td><td>M1T40W15L17</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L105</td></tr>
+<tr><td class="idx">1100</td><td class="mono">ID36.81*OD29*L46.9</td><td>ID36.81*OD29*L46.9</td><td>筒夾</td><td class="dim">其它</td><td class="dim sm">其它-L106</td></tr>
+<tr><td class="idx">1101</td><td class="mono">R174</td><td>1.25M*12T*15W</td><td>齒軸</td><td class="dim">其它</td><td class="dim sm">其它-L107</td></tr>
+<tr><td class="idx">1102</td><td class="mono">0-111121101-R106-0</td><td>M1.25T9W23L69.7</td><td>馬達軸心1-1</td><td class="dim">其它</td><td class="dim sm">其它-L109</td></tr>
+<tr><td class="idx">1103</td><td class="mono">0-111121101-R107-0</td><td>M1.25T33W15L15</td><td>齒輪1-2</td><td class="dim">其它</td><td class="dim sm">其它-L110</td></tr>
+<tr><td class="idx">1104</td><td class="mono">O-112121107-R123-1</td><td>M1.25T7W23L66.6</td><td>馬達軸心</td><td class="dim">其它</td><td class="dim sm">其它-L111</td></tr>
+<tr><td class="idx">1105</td><td class="mono">O-112121107-R124-1</td><td>M1.25T25W15L15</td><td>CHC版搭110</td><td class="dim">其它</td><td class="dim sm">其它-L112</td></tr>
+<tr><td class="idx">1106</td><td class="mono">O-112121107-R126-1</td><td>M1.25T14W14L46.8</td><td>齒輪2-1</td><td class="dim">其它</td><td class="dim sm">其它-L113</td></tr>
+<tr><td class="idx">1107</td><td class="mono">O-112121107-R128-1</td><td>M1.5T15W16L65.5</td><td>齒輪3-1</td><td class="dim">其它</td><td class="dim sm">其它-L114</td></tr>
+<tr><td class="idx">1108</td><td class="mono">O-112121107-R129-1</td><td>M1.5T59W16L30</td><td>齒輪3-2</td><td class="dim">其它</td><td class="dim sm">其它-L115</td></tr>
+<tr><td class="idx">1109</td><td class="mono">O-112121107-R130-1</td><td>M0.8T28W12L13</td><td>轉接環內齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L116</td></tr>
+<tr><td class="idx">1110</td><td class="mono">DRIVE GEAR 14T-N</td><td>M18.143T14W24L165.7</td><td>軸</td><td class="dim">其它</td><td class="dim sm">其它-L117<br>其它-L128</td></tr>
+<tr><td class="idx">1111</td><td class="mono">FINAL SHAFT-N</td><td>M1T19W36.5L201.4</td><td>軸</td><td class="dim">其它</td><td class="dim sm">其它-L118<br>其它-L126</td></tr>
+<tr><td class="idx">1112</td><td class="mono">YVT-2-1</td><td>M1.25T11W13L61.9</td><td>第二級減速輸入齒輪軸</td><td class="dim">其它</td><td class="dim sm">其它-L119</td></tr>
+<tr><td class="idx">1113</td><td class="mono">YVT-2-2</td><td>M1.25T37W13L13</td><td>第二級減速輸出齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L120</td></tr>
+<tr><td class="idx">1114</td><td class="mono">YVT-3-3</td><td>φ35*L17</td><td>第三級減速輸出齒輪轉接環</td><td class="dim">其它</td><td class="dim sm">其它-L121</td></tr>
+<tr><td class="idx">1115</td><td class="mono">B-E151C-00352-00</td><td>M1T118W6L11.7</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L122</td></tr>
+<tr><td class="idx">1116</td><td class="mono">IGN-GEAR-003</td><td>M1.25T16W13.4L24.4</td><td>分電盤S1齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L123</td></tr>
+<tr><td class="idx">1117</td><td class="mono">IGN-GEAR-002</td><td>M1.25T32W6L9.1</td><td>分電盤M1齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L124</td></tr>
+<tr><td class="idx">1118</td><td class="mono">IGN-GEAR-004</td><td>M1.25T16W6L7.6</td><td>分電盤S2齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L125</td></tr>
+<tr><td class="idx">1119</td><td class="mono">FINAL GEAR 40T-N</td><td>M1.8143T40W35</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L127</td></tr>
+<tr><td class="idx">1120</td><td class="mono">FF PULLEY_22T</td><td>M1T19W28L35.3</td><td>皮帶輪</td><td class="dim">其它</td><td class="dim sm">其它-L129</td></tr>
+<tr><td class="idx">1121</td><td class="mono">TBGT-421222A1</td><td>M0.5L8Φ104</td><td>傘齒輪齒胚</td><td class="dim">其它</td><td class="dim sm">其它-L130</td></tr>
+<tr><td class="idx">1122</td><td class="mono">A160-Y01-001-A0-Y</td><td>M1T22W15L24.5</td><td>Y軸22齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L131</td></tr>
+<tr><td class="idx">1123</td><td class="mono">SW903697075090-01</td><td>M3.25T12W38.2L92.2</td><td>齒軸</td><td class="dim">其它</td><td class="dim sm">其它-L132</td></tr>
+<tr><td class="idx">1124</td><td class="mono">VTM06-532175</td><td>無圖</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L133</td></tr>
+<tr><td class="idx">1125</td><td class="mono">VTM06-532192</td><td>無圖</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L134</td></tr>
+<tr><td class="idx">1126</td><td class="mono">KA0222S100</td><td>無圖</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L135</td></tr>
+<tr><td class="idx">1127</td><td class="mono">KA0222S101</td><td>無圖</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L136</td></tr>
+<tr><td class="idx">1128</td><td class="mono">KA0222S104</td><td>無圖</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L137</td></tr>
+<tr><td class="idx">1129</td><td class="mono">KA0222S107</td><td>無圖</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L138</td></tr>
+<tr><td class="idx">1130</td><td class="mono">KA0222S108</td><td>無圖</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L139</td></tr>
+<tr><td class="idx">1131</td><td class="mono">M3.5T27W30L189</td><td>M3.5T27W30L189</td><td>齒輪 4</td><td class="dim">其它</td><td class="dim sm">其它-L140</td></tr>
+<tr><td class="idx">1132</td><td class="mono">M3.5T54W30L40</td><td>M3T81W30L50</td><td>齒輪 3</td><td class="dim">其它</td><td class="dim sm">其它-L141</td></tr>
+<tr><td class="idx">1133</td><td class="mono">M3T27W30L284</td><td>M3T27W30L284</td><td>齒輪 2</td><td class="dim">其它</td><td class="dim sm">其它-L142</td></tr>
+<tr><td class="idx">1134</td><td class="mono">F-DH416L-5</td><td>DP8T15L265.11</td><td>螺旋齒軸</td><td class="dim">其它</td><td class="dim sm">其它-L143</td></tr>
+<tr><td class="idx">1135</td><td class="mono">F-BW726934</td><td>M1.25T61W18L103.2</td><td>輸出軸</td><td class="dim">其它</td><td class="dim sm">其它-L144</td></tr>
+<tr><td class="idx">1136</td><td class="mono">ME-020.138</td><td>—</td><td>齒輪咬合儀</td><td class="dim">其它</td><td class="dim sm">其它-L145</td></tr>
+<tr><td class="idx">1137</td><td class="mono">M1.75*14T-FH001</td><td>M1.75T14W26L108</td><td>齒輪軸</td><td class="dim">其它</td><td class="dim sm">其它-L146</td></tr>
+<tr><td class="idx">1138</td><td class="mono">478-0000-052-04</td><td>M3T26W35L60</td><td>迴轉工作臺驅動1</td><td class="dim">其它</td><td class="dim sm">其它-L147</td></tr>
+<tr><td class="idx">1139</td><td class="mono">478-0000-052-08</td><td>M3T40W30L45</td><td>迴轉工作臺驅動1</td><td class="dim">其它</td><td class="dim sm">其它-L148</td></tr>
+<tr><td class="idx">1140</td><td class="mono">478-0000-052-11</td><td>M3T33W50L160</td><td>迴轉工作臺驅動1</td><td class="dim">其它</td><td class="dim sm">其它-L149</td></tr>
+<tr><td class="idx">1141</td><td class="mono">478-0000-052-30</td><td>M4T36W30L55</td><td>左旋迴轉工作臺驅動1</td><td class="dim">其它</td><td class="dim sm">其它-L150</td></tr>
+<tr><td class="idx">1142</td><td class="mono">478-0000-052-62</td><td>M3T65W30L60</td><td>迴轉工作臺驅動1</td><td class="dim">其它</td><td class="dim sm">其它-L151</td></tr>
+<tr><td class="idx">1143</td><td class="mono">478-0000-052-70</td><td>M4T20W50L66</td><td>左旋迴轉工作臺驅動1</td><td class="dim">其它</td><td class="dim sm">其它-L152</td></tr>
+<tr><td class="idx">1144</td><td class="mono">478-0000-052-71</td><td>M4T36W30L60</td><td>右旋迴轉工作臺驅動1</td><td class="dim">其它</td><td class="dim sm">其它-L153</td></tr>
+<tr><td class="idx">1145</td><td class="mono">478-0000-052-74</td><td>M4T20W50L66</td><td>右旋迴轉工作臺驅動1</td><td class="dim">其它</td><td class="dim sm">其它-L154</td></tr>
+<tr><td class="idx">1146</td><td class="mono">40G02</td><td>Φ50L337</td><td>入力軸</td><td class="dim">其它</td><td class="dim sm">其它-L155</td></tr>
+<tr><td class="idx">1147</td><td class="mono">40G06</td><td>M2T37W29L100</td><td>入力齒輪©</td><td class="dim">其它</td><td class="dim sm">其它-L156</td></tr>
+<tr><td class="idx">1148</td><td class="mono">DWG-1318</td><td>M1T29</td><td>36T Star Ratchet</td><td class="dim">其它</td><td class="dim sm">其它-L157</td></tr>
+<tr><td class="idx">1149</td><td class="mono">MYM800404101-B</td><td>φ114.08*5.2</td><td>傳動軸-盤面</td><td class="dim">其它</td><td class="dim sm">其它-L158</td></tr>
+<tr><td class="idx">1150</td><td class="mono">M3.5T81W30L50-GAUGE</td><td>M3.5T81W30L50-gauge</td><td>軌距</td><td class="dim">其它</td><td class="dim sm">其它-L159</td></tr>
+<tr><td class="idx">1151</td><td class="mono">AC080660</td><td>M5.862*29T*40W*287.6</td><td>螺旋傘齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L160</td></tr>
+<tr><td class="idx">1152</td><td class="mono">AB080070</td><td>M5.862*29T*40W197.3L</td><td>螺旋傘齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L161</td></tr>
+<tr><td class="idx">1153</td><td class="mono">MTA1700700</td><td>M2T20W15L30</td><td>馬達齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L162</td></tr>
+<tr><td class="idx">1154</td><td class="mono">MTH2550700</td><td>M2T21W15L30</td><td>馬達齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L163</td></tr>
+<tr><td class="idx">1155</td><td class="mono">MTH2550800</td><td>M2T35W20L20</td><td>蝸桿齒輪(24錐孔)</td><td class="dim">其它</td><td class="dim sm">其它-L164</td></tr>
+<tr><td class="idx">1156</td><td class="mono">D060-M0245</td><td>M2T45W20L32</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L165</td></tr>
+<tr><td class="idx">1157</td><td class="mono">1426436</td><td>PD161.95T32W7.2</td><td>鍊輪</td><td class="dim">其它</td><td class="dim sm">其它-L166<br>其它-L167</td></tr>
+<tr><td class="idx">1158</td><td class="mono">3181000298</td><td>M1.5T11W36.5L325</td><td>第一齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L168</td></tr>
+<tr><td class="idx">1159</td><td class="mono">9054051-Z05</td><td>M2*685L</td><td>齒條</td><td class="dim">其它</td><td class="dim sm">其它-L169</td></tr>
+<tr><td class="idx">1160</td><td class="mono">3181000325</td><td>M2.5T84W33L35</td><td>第二齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L170</td></tr>
+<tr><td class="idx">1161</td><td class="mono">3181000577</td><td>M2.5T84L35</td><td>第一齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L171</td></tr>
+<tr><td class="idx">1162</td><td class="mono">3183044230</td><td>M2.5T84W35L67</td><td>正齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L172</td></tr>
+<tr><td class="idx">1163</td><td class="mono">3183045230</td><td>M2.5T56W35L67</td><td>正齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L173</td></tr>
+<tr><td class="idx">1164</td><td class="mono">GF170N3023B01</td><td>M1.5T32W18</td><td>惰齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L192</td></tr>
+<tr><td class="idx">1165</td><td class="mono">GF256N3023A01</td><td>M1.5T35W22L37</td><td>馬達齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L193<br>其它-L203</td></tr>
+<tr><td class="idx">1166</td><td class="mono">3281-S050-0604A</td><td>M1T29W7L9</td><td>右旋斜齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L194</td></tr>
+<tr><td class="idx">1167</td><td class="mono">A4-CT-007</td><td>M1T22W8L8</td><td>被動齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L195</td></tr>
+<tr><td class="idx">1168</td><td class="mono">510系列</td><td>—</td><td>—</td><td class="dim">其它</td><td class="dim sm">其它-L196</td></tr>
+<tr><td class="idx">1169</td><td class="mono">40301017-01</td><td>M2T29L138</td><td>雙齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L197<br>其它-L206</td></tr>
+<tr><td class="idx">1170</td><td class="mono">2501003</td><td>—</td><td>—</td><td class="dim">其它</td><td class="dim sm">其它-L198</td></tr>
+<tr><td class="idx">1171</td><td class="mono">3181000842</td><td>M3.5T13L191</td><td>第三齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L199</td></tr>
+<tr><td class="idx">1172</td><td class="mono">40402035</td><td>M0.8T27L428</td><td>心軸</td><td class="dim">其它</td><td class="dim sm">其它-L200</td></tr>
+<tr><td class="idx">1173</td><td class="mono">3183044240</td><td>M2.5T21W35L78.8</td><td>正齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L202</td></tr>
+<tr><td class="idx">1174</td><td class="mono">GF320N3021A</td><td>M2T46W28L28</td><td>惰齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L204</td></tr>
+<tr><td class="idx">1175</td><td class="mono">40302012-01</td><td>M1.5T24W3.75L27.5</td><td>齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L205</td></tr>
+<tr><td class="idx">1176</td><td class="mono">40301011-01</td><td>M2T66W30L143</td><td>雙齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L207</td></tr>
+<tr><td class="idx">1177</td><td class="mono">50024HRE01-02-000400</td><td>M2.5T40W24L40</td><td>馬達齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L208</td></tr>
+<tr><td class="idx">1178</td><td class="mono">50040HRE02-02-000400</td><td>2.5M*40T*24W</td><td>馬達齒輪</td><td class="dim">其它</td><td class="dim sm">其它-L209</td></tr>
+</tbody>
+    </table>
+  </div>
+</div>
+
+<div class="section">
+  <div class="sec-title" style="color:var(--err)">客戶比對失敗 (0 筆)</div>
+  <div class="notice n-warn">
+    以下列的欄A客戶名稱在 <code>customer_list.customer</code> 查無對應（已 TRIM 比對）。<br>
+    SQL 中這些列的 <code>client_id</code> 與 <code>client_name</code> 均為 <code>NULL</code>。<br>
+    請修正 Excel 欄A名稱，或先在 <code>customer_list</code> 新增客戶後重新執行。
+  </div>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>#</th><th>Excel 位置</th><th>欄A原始值（比對失敗）</th><th>料號</th><th>分頁</th></tr></thead>
+      <tbody><tr><td colspan="5" class="empty">所有客戶比對成功 ✓</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="section">
+  <div class="sec-title">匯入前 ── DB 欄位確認</div>
+  <div class="notice n-info">若 <code>stock_items</code> 尚未有 <code>remark2</code> 與 <code>category_id</code> 欄位，請先執行下方 SQL。</div>
+  <div class="sql-box">
+    <div class="sql-bar"><span>alter_table.sql</span><button class="btn" onclick="cp(this)">複製</button></div>
+    <pre>-- 若欄位已存在請略過
+ALTER TABLE stock_items
+  ADD COLUMN IF NOT EXISTS remark2     VARCHAR(200) NULL COMMENT '備註2（欄J同料號位置）' AFTER remark1,
+  ADD COLUMN IF NOT EXISTS category_id INT          NULL COMMENT '品項種類ID' AFTER item_type;
+
+-- stock_locations.area 改為 INT（若尚未修改）
+ALTER TABLE stock_locations
+  MODIFY COLUMN area INT NULL COMMENT '廠區 對應stock_areas.area_id';</pre>
+  </div>
+</div>
+
+<footer>excel_import.py v3.0 ── 2026-04-15 11:10:21</footer>
+
+<script>
+function cp(btn){
+  const pre=btn.closest('.sql-box').querySelector('pre');
+  navigator.clipboard.writeText(pre.textContent).then(()=>{
+    btn.textContent='已複製 ✓';btn.classList.add('copied');
+    setTimeout(()=>{btn.textContent='複製';btn.classList.remove('copied');},2000);
+  });
+}
+</script>
+</body>
+</html>

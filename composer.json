@@ -1,0 +1,8 @@
+{
+    "require": {
+        "phpoffice/phpspreadsheet": "^1.18",
+        "minishlink/web-push": "^10.1",
+        "setasign/fpdi-tcpdf": "^2.3",
+        "phpoffice/phpword": "^1.4"
+    }
+}

@@ -1,0 +1,6570 @@
+<?php
+// quotation_list_NEW.php — 報價單管理（快速版）
+session_start();
+if (!isset($_SESSION['userName'])) { header("Location:../../index.php"); exit; }
+include '../../src/common/DBConnection.php';
+$conn = new DBConnection();
+$selectedYear = isset($_GET['year']) ? intval($_GET['year']) : date('Y');
+
+// ── RBAC 初始化 ──────────────────────────────────────────────────────────
+$_pdo     = $conn->getPDO();
+$_user_id = intval($_SESSION['id'] ?? $_SESSION['user_id'] ?? 0);
+
+try {
+    // 建立全域 RBAC 資料表（若不存在）
+    $_pdo->exec("CREATE TABLE IF NOT EXISTS roles (
+        role_id   INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        role_code VARCHAR(30) NOT NULL UNIQUE,
+        role_name VARCHAR(50) NOT NULL,
+        is_system TINYINT NOT NULL DEFAULT 0,
+        note      VARCHAR(200),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    $_pdo->exec("CREATE TABLE IF NOT EXISTS role_features (
+        role_id      INT NOT NULL,
+        feature_code VARCHAR(60) NOT NULL,
+        PRIMARY KEY (role_id, feature_code),
+        INDEX idx_rf_role (role_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    $_pdo->exec("CREATE TABLE IF NOT EXISTS user_roles (
+        user_id INT NOT NULL,
+        role_id INT NOT NULL,
+        PRIMARY KEY (user_id, role_id),
+        INDEX idx_ur_user (user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    $_pdo->exec("CREATE TABLE IF NOT EXISTS quotation_print_log (
+        id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        quote_id INT NOT NULL,
+        quote_no VARCHAR(30) NOT NULL,
+        printed_by INT NOT NULL,
+        printed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_qid (quote_id),
+        INDEX idx_printed_at (printed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    // 植入管理員角色（若不存在）
+    $_pdo->exec("INSERT IGNORE INTO roles (role_code,role_name,is_system) VALUES ('admin','管理員',1)");
+    $_adminRId = $_pdo->query("SELECT role_id FROM roles WHERE role_code='admin' LIMIT 1")->fetchColumn();
+    if ($_adminRId) {
+        $_pdo->prepare("INSERT IGNORE INTO role_features (role_id,feature_code) VALUES (?,?)")->execute([$_adminRId,'all']);
+    }
+} catch(Exception $_e) {}
+
+// ── 取得使用者的 features ─────────────────────────────────────────────────
+$_features   = [];
+$_my_roles   = [];
+$_has_roles  = false; // 此使用者是否已在新系統中指派角色
+
+try {
+    // 先確認使用者是否有指派任何角色
+    $_chkRole = $_pdo->prepare("SELECT 1 FROM user_roles WHERE user_id=? LIMIT 1");
+    $_chkRole->execute([$_user_id]);
+    $_has_roles = (bool)$_chkRole->fetchColumn();
+
+    if ($_has_roles) {
+        // 已指派角色 → 讀取角色對應的 features（若角色無勾選任何功能，$_features 維持空陣列）
+        $stmtUR = $_pdo->prepare("
+            SELECT DISTINCT r.role_name, rf.feature_code
+            FROM user_roles ur
+            JOIN roles r ON r.role_id=ur.role_id
+            JOIN role_features rf ON rf.role_id=ur.role_id
+            WHERE ur.user_id=?
+        ");
+        $stmtUR->execute([$_user_id]);
+        foreach ($stmtUR->fetchAll(PDO::FETCH_ASSOC) as $_row) {
+            $_features[] = $_row['feature_code'];
+            $_my_roles[] = $_row['role_name'];
+        }
+        $_features = array_unique($_features);
+        $_my_roles = array_unique($_my_roles);
+        // 取得角色名稱（即使無功能也要顯示角色名）
+        if (empty($_my_roles)) {
+            $stmtRN = $_pdo->prepare("SELECT DISTINCT r.role_name FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=?");
+            $stmtRN->execute([$_user_id]);
+            $_my_roles = $stmtRN->fetchAll(PDO::FETCH_COLUMN);
+        }
+    }
+} catch(Exception $_e) {}
+
+// Fallback：只有「完全未指派角色」才走舊系統 / 預設全權
+// 已指派角色但無功能 → 維持空 features（受限訪問），不觸發 fallback
+if (!$_has_roles) {
+    try {
+        $_sp2 = $_pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='quotation_list' LIMIT 1");
+        $_sp2->execute([$_user_id]);
+        $_p2 = $_sp2->fetchColumn();
+        if ($_p2) {
+            if (strpos($_p2,'A')!==false) { $_features=['all']; }
+            else {
+                if (strpos($_p2,'R')!==false) { $_features[]='quotation_view'; $_features[]='quotation_print'; }
+                if (strpos($_p2,'C')!==false) { $_features[]='quotation_create'; $_features[]='quotation_clone'; $_features[]='quotation_batch_add'; }
+                if (strpos($_p2,'U')!==false) { $_features[]='quotation_edit'; $_features[]='quotation_clone'; $_features[]='quotation_view_history'; }
+                if (strpos($_p2,'D')!==false) { $_features[]='quotation_delete'; $_features[]='quotation_view_deleted'; }
+            }
+        }
+    } catch(Exception $_e2) {}
+
+    if (empty($_features)) $_features = ['all']; // 完全無設定（新舊系統皆無）→ 全權避免鎖死
+}
+
+function _hasF(string $f): bool {
+    global $_features;
+    return in_array('all',$_features,true) || in_array($f,$_features,true);
+}
+
+$CAN_VIEW         = _hasF('quotation_view');
+$CAN_CREATE       = _hasF('quotation_create');
+$CAN_EDIT         = _hasF('quotation_edit');
+$CAN_DELETE       = _hasF('quotation_delete');
+$CAN_PRINT        = _hasF('quotation_print');
+$CAN_CLONE        = _hasF('quotation_clone');
+$CAN_BATCH_ADD    = _hasF('quotation_batch_add');
+$CAN_SIGN         = _hasF('quotation_sign');
+$CAN_VIEW_DELETED = _hasF('quotation_view_deleted');
+$CAN_RESTORE      = _hasF('quotation_restore');
+$CAN_VIEW_HISTORY = _hasF('quotation_view_history');
+$CAN_SETTINGS     = _hasF('quotation_settings');
+$IS_ADMIN         = _hasF('all');
+$_perm            = $IS_ADMIN ? 'A（管理員）' : (empty($_my_roles) ? '（未指派角色）' : implode('、',$_my_roles));
+
+// 具「簽核報價單」權限者即使沒有一般檢視權限，也必須能進本頁處理待簽核通知（比照CAR當事人例外）
+if (!$CAN_VIEW && !$CAN_SIGN) { header('HTTP/1.1 403 Forbidden'); echo '您沒有瀏覽此頁面的權限。'; exit; }
+
+// ── 本頁功能清單（供設定頁籤使用）────────────────────────────────────────
+$PAGE_FEATURES = [
+    ['group'=>'基本操作', 'code'=>'quotation_view',         'label'=>'檢視報價單'],
+    ['group'=>'基本操作', 'code'=>'quotation_create',       'label'=>'新增報價單'],
+    ['group'=>'基本操作', 'code'=>'quotation_edit',         'label'=>'編輯報價單'],
+    ['group'=>'基本操作', 'code'=>'quotation_delete',       'label'=>'刪除報價單'],
+    ['group'=>'基本操作', 'code'=>'quotation_print',        'label'=>'列印'],
+    ['group'=>'基本操作', 'code'=>'quotation_clone',        'label'=>'複製報價單'],
+    ['group'=>'基本操作', 'code'=>'quotation_batch_add',    'label'=>'批次新增料號'],
+    ['group'=>'基本操作', 'code'=>'quotation_sign',         'label'=>'簽核報價單'],
+    ['group'=>'進階功能', 'code'=>'quotation_view_deleted', 'label'=>'查看已刪除紀錄'],
+    ['group'=>'進階功能', 'code'=>'quotation_restore',      'label'=>'還原已刪除報價單'],
+    ['group'=>'進階功能', 'code'=>'quotation_view_history', 'label'=>'查看修改紀錄'],
+    ['group'=>'進階功能', 'code'=>'quotation_settings',     'label'=>'報價單設定'],
+];
+?>
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>報價單管理（快速版）</title>
+<link href="../../resource/css/bootstrap.css" rel="stylesheet">
+<link href="../../resource/css/font-awesome.css" rel="stylesheet">
+<link href="../../resource/css/custom.css" rel="stylesheet">
+<style>
+:root {
+    --primary: #2A3F54; --accent: #1ABB9C; --bg: #F4F7FC;
+    --card: #FFFFFF;    --text: #495057;   --border: #E6E9ED;
+}
+/* ── 去掉 number input 上下箭頭 ── */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+input[type=number] { -moz-appearance:textfield; appearance:textfield; }
+
+body { background:var(--bg); }
+.right_col { background:var(--bg) !important; padding:0 !important; }
+
+/* ── 標題列 ── */
+.page-title-bar {
+    padding:10px 18px; border-bottom:1px solid var(--border);
+    background:var(--card); display:flex; align-items:center;
+    justify-content:space-between; flex-shrink:0;
+}
+.page-title-bar h3 { margin:0; font-size:17px; color:var(--primary); font-weight:700; }
+
+/* ── 分割版面（高度由 JS adjustLayout 動態設定，消除外層滾動條）── */
+.split-wrap { display:flex; overflow:hidden; min-height:400px; }
+
+/* ── 左側列表 ── */
+.list-panel {
+    width:310px; min-width:260px; max-width:340px;
+    border-right:1px solid var(--border); display:flex;
+    flex-direction:column; background:var(--card); overflow:hidden;
+    flex-shrink:0;
+}
+.list-stats {
+    display:flex; gap:14px; padding:8px 12px;
+    border-bottom:1px solid var(--border); background:#f8f9fa;
+    flex-shrink:0;
+}
+.stat-chip { text-align:center; }
+.stat-chip-val { font-size:17px; font-weight:700; color:var(--primary); line-height:1.2; display:block; }
+.stat-chip-lbl { font-size:10px; color:#aaa; }
+.list-toolbar {
+    padding:8px 10px; border-bottom:1px solid var(--border);
+    background:#fafafa; flex-shrink:0; display:flex; gap:6px; align-items:center;
+}
+.list-search { padding:7px 10px; border-bottom:1px solid var(--border); flex-shrink:0; }
+#quoteListBody { flex:1; overflow-y:auto; }
+
+/* ── 報價單卡片 ── */
+.qli-card {
+    padding:9px 12px; border-bottom:1px solid var(--border);
+    cursor:pointer; transition:background .1s;
+}
+.qli-card:hover { background:#f0f7ff; }
+.qli-card.active { background:#e8f0ff; border-left:3px solid var(--primary); padding-left:9px; }
+.qli-no { font-weight:700; font-size:13px; color:var(--primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.qli-client { font-size:11px; color:#666; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.qli-foot { display:flex; justify-content:space-between; margin-top:3px; font-size:11px; }
+.qli-date { color:#bbb; }
+
+/* ── 客戶分組標頭 ── */
+.qli-group-hdr {
+    padding:5px 12px 3px;
+    background:#f0f4f8;
+    font-size:11px; font-weight:700; color:var(--primary);
+    border-bottom:1px solid var(--border);
+    border-top:1px solid var(--border);
+    letter-spacing:.3px;
+    cursor:pointer;
+    display:flex; justify-content:space-between; align-items:center;
+    user-select:none;
+}
+.qli-group-hdr:hover { background:#e5edf5; }
+.qli-group-hdr .qg-toggle { font-size:10px; color:#aaa; }
+/* 收合後隱藏卡片 */
+.qli-group-body.collapsed { display:none; }
+.qli-amt  { color:var(--accent); font-weight:600; }
+
+/* ── 右側編輯區 ── */
+.editor-wrap {
+    flex:1; overflow:hidden; display:flex; flex-direction:column;
+}
+.editor-panel { flex:1; overflow:hidden; padding:0; display:none; flex-direction:column; }
+.editor-empty {
+    flex:1; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; color:#ccc;
+}
+.editor-header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 22px 10px; border-bottom:2px solid var(--accent);
+    background:#fff; flex-shrink:0;
+    position:sticky; top:0; z-index:20;
+}
+.editor-header h4 { margin:0; font-size:15px; color:var(--primary); font-weight:700; }
+.editor-client-tag { margin-left:10px; font-size:12px; color:#666; font-weight:400; }
+
+/* ── 附件區 ── */
+.file-section {
+    background:#f8f9fa; border:1px solid var(--border); border-radius:6px;
+    padding:10px 14px; margin-bottom:14px;
+}
+.file-section-title {
+    font-size:12px; font-weight:700; color:var(--primary);
+    margin-bottom:7px; display:flex; align-items:center; gap:6px;
+}
+.file-drop-zone {
+    border:2px dashed #ccc; border-radius:5px; padding:14px;
+    text-align:center; cursor:pointer; background:#fff;
+    transition:border-color .2s, background .2s; font-size:12px; color:#aaa;
+}
+.file-drop-zone:hover, .file-drop-zone.drag-over {
+    border-color:var(--accent); background:#f0fef9; color:var(--accent);
+}
+.file-item-wrap {
+    border-bottom:1px solid #f0f0f0; margin-bottom:1px;
+}
+.file-item-wrap:last-child { border-bottom:none; }
+.file-item {
+    display:flex; align-items:center; gap:7px;
+    padding:4px 2px; font-size:12px;
+}
+.file-item-name { flex:1; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+.file-item-name:hover { color:var(--accent); text-decoration:underline; }
+.file-item-size { color:#bbb; white-space:nowrap; font-size:11px; }
+.file-item-time { color:#bbb; white-space:nowrap; font-size:11px; }
+
+/* ── 類別標籤整合在 🏷 按鈕內 ── */
+.file-tag-toggle-btn.has-cat {
+    background:#e8f0ff !important; color:#2A3F54 !important;
+    border-color:#b0c4f0 !important; font-weight:600;
+}
+
+/* ── 展開標籤面板 ── */
+.file-tag-panel {
+    padding:7px 10px 8px 26px;
+    background:#f8f9fa; border-top:1px solid var(--border);
+    font-size:12px;
+}
+.ftp-row { display:flex; align-items:flex-start; gap:6px; margin-bottom:5px; flex-wrap:wrap; }
+.ftp-row:last-child { margin-bottom:0; }
+.ftp-label { color:#888; font-size:11px; white-space:nowrap; padding-top:2px; min-width:52px; }
+.ftp-btns  { display:flex; flex-wrap:wrap; gap:4px; }
+.file-cat-btn  { font-size:11px; padding:1px 8px; }
+.file-cat-btn.active  { background:var(--primary); color:#fff; border-color:var(--primary); }
+.file-part-btn { font-size:11px; padding:1px 8px; }
+.file-part-btn.active { background:#1ABB9C; color:#fff; border-color:#1ABB9C; }
+.file-parts-all { font-size:11px; padding:1px 8px; }
+.file-parts-all.active { background:#27ae60; color:#fff; border-color:#27ae60; }
+
+/* ── 行內製程選擇 ── */
+.proc-tags { display:flex; flex-wrap:wrap; gap:3px; min-height:22px; align-items:flex-start; padding:2px 0; }
+.proc-tag {
+    display:inline-flex; align-items:center; gap:2px;
+    background:#dff0ea; color:#155724; border:1px solid #a9dfbf;
+    border-radius:3px; padding:1px 5px; font-size:11px; line-height:1.4;
+}
+.proc-tag-x { cursor:pointer; color:#999; font-size:13px; line-height:1; margin-left:2px; }
+.proc-tag-x:hover { color:#c0392b; }
+.process-cell { vertical-align:top; padding-top:5px !important; }
+/* ── 直接標籤導覽（新）── */
+.proc-direct-l1 { display:flex; flex-wrap:wrap; gap:3px; margin-bottom:3px; }
+.proc-direct-l2 { display:flex; flex-wrap:wrap; gap:3px; margin-bottom:3px; }
+.proc-l1-btn {
+    font-size:11px; padding:1px 7px; border:1px solid #ccc;
+    border-radius:3px; background:#f8f9fa; cursor:pointer; white-space:nowrap;
+}
+.proc-l1-btn:hover { background:#e8f0ff; border-color:#aac; }
+.proc-l1-btn.active { background:var(--primary); color:#fff; border-color:var(--primary); }
+.proc-l2-btn {
+    font-size:11px; padding:1px 7px; border:1px solid #b2cce0;
+    border-radius:10px; background:#eaf3fb; color:#1a6496; cursor:pointer; white-space:nowrap;
+}
+.proc-l2-btn:hover { background:#c7e2f4; }
+.proc-l2-btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+.proc-selected-chips { display:flex; flex-wrap:wrap; gap:3px; margin-top:2px; min-height:20px; }
+.note-tmpl-btn.nt-applied { background:#d4edda !important; border-color:#28a745 !important; color:#155724 !important; }
+
+/* 設定頁製程標籤三欄 */
+.pt-group-item {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:4px 6px; margin-bottom:3px; border-radius:4px;
+    background:#f8f9fa; border:1px solid #e0e0e0; font-size:12px; cursor:pointer;
+}
+.pt-group-item:hover, .pt-group-item.active { background:#e8f0ff; border-color:#aac; }
+.pt-group-item .pt-del  { color:#e74c3c; cursor:pointer; padding:0 3px; visibility:hidden; }
+.pt-group-item .pt-edit { color:#337ab7; cursor:pointer; padding:0 3px; visibility:hidden; }
+.pt-group-item:hover .pt-del, .pt-group-item:hover .pt-edit { visibility:visible; }
+.pt-drag-handle { color:#bbb; cursor:grab; padding:0 4px; font-size:13px; }
+.pt-drag-handle:active { cursor:grabbing; }
+.ui-sortable-helper { box-shadow:0 4px 12px rgba(0,0,0,.2); opacity:.95; }
+.ui-sortable-placeholder { background:#eaf3fb; border:1px dashed #aac; border-radius:4px; visibility:visible !important; }
+.pt-proc-check { display:block; padding:2px 4px; font-size:12px; font-weight:normal; cursor:pointer; }
+.pt-proc-check:hover { color:var(--accent); }
+
+/* ── 項目表格 ── */
+.items-hdr {
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:8px;
+}
+.items-hdr h4 { margin:0; font-size:14px; color:var(--primary); }
+#quoteItemsTable > tbody > tr.item-row > td {
+    vertical-align:top; padding-top:6px !important; position:relative;
+}
+.item-row input { font-size:13px; height:30px; }
+
+/* ── 階梯樣式（沿用原版）── */
+.tier-section {
+    background:#EAF6F4; border-left:3px solid var(--accent);
+    border-radius:0 0 6px 6px; padding:8px 10px 6px; margin-top:4px;
+}
+.tier-table { width:100%; border-collapse:collapse; font-size:12px; }
+.tier-table th {
+    background:#d4ede9; color:var(--primary); padding:4px 6px;
+    text-align:center; white-space:nowrap; font-weight:600;
+}
+.tier-table td { padding:3px 4px; vertical-align:middle; }
+.tier-table input, .tier-table select { font-size:12px; height:26px; padding:2px 5px; }
+.tier-table .tier-amount {
+    color:var(--accent); font-weight:600; background:transparent;
+    border:none; text-align:right; width:100%;
+}
+.btn-add-tier  { font-size:11px; padding:2px 8px; margin-top:5px; }
+.btn-del-tier  { padding:1px 5px; }
+.tier-toggle-btn { font-size:11px; padding:2px 7px; }
+.tier-toggle-btn.active { background:var(--accent); color:white; border-color:var(--accent); }
+
+/* ── 合計列 ── */
+.total-bar {
+    display:flex; justify-content:flex-end; align-items:center; gap:12px;
+    margin-top:14px; padding:10px 14px; background:#f8f9fa; border-radius:6px;
+}
+.total-val { font-size:24px; font-weight:700; color:var(--accent); }
+.total-cur { font-size:14px; color:#888; }
+
+/* ── autocomplete ── */
+.part-suggestions, .autocomplete-suggestions {
+    position:fixed !important; z-index:9999 !important;
+    background:#fff; border:1px solid var(--border); border-radius:4px;
+    max-height:200px; overflow-y:auto;
+    box-shadow:0 8px 16px rgba(42,63,84,.15);
+}
+.suggestion-item {
+    padding:7px 12px; cursor:pointer; border-bottom:1px solid #f8f9fa;
+    color:#495057; font-size:13px;
+}
+.suggestion-item:hover { background:var(--bg); color:var(--accent); font-weight:bold; }
+
+/* ── 歷史快帶入 ── */
+.hq-row td { padding:2px 0 5px 32px !important; background:transparent; }
+.hq-wrap { display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
+.hq-chip {
+    background:#f0f8ff; border:1px solid #cce; border-radius:4px;
+    padding:2px 8px; font-size:11px; cursor:pointer; transition:background .12s;
+    display:inline-block;
+}
+.hq-chip:hover { background:#ddf; border-color:#88c; }
+.hq-chip b { color:var(--primary); }
+
+/* ── 議價 badge ── */
+.nego-badge {
+    display:inline-block; font-size:10px; padding:1px 7px;
+    background:#e8f8f0; color:#1e8449; border:1px solid #a9dfbf;
+    border-radius:10px; margin-left:5px; vertical-align:middle;
+    font-weight:600; white-space:nowrap;
+}
+/* ── 草稿 badge（必備附件缺漏仍執意儲存）── */
+.draft-badge {
+    display:inline-block; font-size:10px; padding:1px 7px;
+    background:#fdf3e6; color:#c87f0a; border:1px solid #f0c987;
+    border-radius:10px; margin-left:5px; vertical-align:middle;
+    font-weight:600; white-space:nowrap;
+}
+.source-badge {
+    display:inline-block; font-size:10px; padding:1px 5px;
+    background:#e0e0e0; color:#888; border-radius:3px;
+    margin-left:4px; vertical-align:middle;
+}
+
+.form-group { margin-bottom:10px; }
+.form-group label { font-size:12px; color:#666; margin-bottom:3px; }
+
+/* ── 建立/修改資訊列 ── */
+.history-bar {
+    font-size:11px; color:#888; padding:3px 22px;
+    background:#fafafa; border-bottom:1px solid var(--border);
+    display:flex; gap:18px; flex-wrap:wrap;
+}
+.history-bar i { margin-right:3px; }
+
+/* ── SweetAlert2 內容可選取 ── */
+.swal2-html-container { user-select:text !important; -webkit-user-select:text !important; }
+
+/* ── 檢視模式 ── */
+.view-panel { flex:1; overflow:hidden; display:none; flex-direction:column; }
+.view-mode-badge {
+    padding:4px 22px; background:#d1ecf1; border-bottom:1px solid #bee5eb;
+    font-size:12px; color:#0c5460; font-weight:600; flex-shrink:0;
+}
+.view-item-table th { background:#f8f9fa; font-size:12px; }
+.view-item-table td { font-size:13px; vertical-align:middle; }
+@media print { .no-print { display:none !important; } }
+</style>
+</head>
+<body class="nav-sm">
+<div class="container body">
+<div class="main_container">
+    <?php include '../partPage/sideAndTopBarMenu.html' ?>
+    <div class="right_col" role="main">
+
+        <!-- 標題列 -->
+        <div class="page-title-bar">
+            <h3><i class="fa fa-file-text-o" style="color:var(--accent);margin-right:7px;"></i>
+                報價單管理 <small style="font-size:12px;color:#aaa;font-weight:400;">快速版</small>
+            </h3>
+            <div style="display:flex;gap:7px;">
+                <?php if ($CAN_CREATE): ?>
+                <button class="btn btn-success btn-sm" id="newQuoteBtn" onclick="openNewEditor()">
+                    <i class="fa fa-plus"></i> 新增報價單
+                </button>
+                <?php endif; ?>
+                <?php if ($CAN_VIEW_DELETED): ?>
+                <button class="btn btn-default btn-sm" onclick="openDeleteLog()" title="歷史紀錄">
+                    <i class="fa fa-history"></i>
+                </button>
+                <?php endif; ?>
+                <?php if ($CAN_SETTINGS): ?>
+                <button class="btn btn-default btn-sm" onclick="openUploadSettings()" title="設定附件儲存路徑">
+                    <i class="fa fa-cog"></i>
+                </button>
+                <?php endif; ?>
+                <button class="btn btn-default btn-sm" onclick="openPermHelp()" title="權限說明"
+                    style="border-radius:50%;width:28px;height:28px;padding:0;font-weight:700;">
+                    ?
+                </button>
+            </div>
+        </div>
+
+        <!-- 分割版面 -->
+        <div class="split-wrap">
+
+            <!-- ★ 左側：報價單列表 -->
+            <div class="list-panel">
+                <!-- 統計 -->
+                <div class="list-stats">
+                    <div class="stat-chip">
+                        <span class="stat-chip-val" id="stat-count">0</span>
+                        <span class="stat-chip-lbl">報價單數</span>
+                    </div>
+                    <div class="stat-chip">
+                        <span class="stat-chip-val" id="stat-amount" style="font-size:13px;">0</span>
+                        <span class="stat-chip-lbl">總金額</span>
+                    </div>
+                </div>
+                <!-- 工具列：年份 + 全部年份 -->
+                <div class="list-toolbar">
+                    <form method="GET" style="margin:0;" id="yearForm">
+                        <select name="year" class="form-control input-sm" style="width:75px;display:inline-block;"
+                            onchange="document.getElementById('yearForm').submit()">
+                            <?php for($y=date('Y');$y>=2024;$y--): ?>
+                            <option value="<?=$y?>" <?=$y==$selectedYear?'selected':''?>><?=$y?></option>
+                            <?php endfor; ?>
+                        </select>
+                    </form>
+                    <span style="font-size:11px;color:#aaa;">年</span>
+                    <button class="btn btn-link btn-xs" style="font-size:11px;padding:1px 4px;" onclick="loadAllYears()" title="搜尋全部年份">
+                        全部年份
+                    </button>
+                    <div id="allYearsIndicator" style="display:none;font-size:10px;color:var(--accent);padding:1px 5px;border:1px solid var(--accent);border-radius:3px;">ALL</div>
+                </div>
+                <!-- 客戶篩選下拉 -->
+                <div style="padding:6px 10px;border-bottom:1px solid var(--border);background:#fafafa;flex-shrink:0;">
+                    <select id="clientFilterSel" class="form-control input-sm"
+                        style="font-size:12px;"
+                        onchange="renderQuoteList(allQuotes, $('#listSearch').val().trim())">
+                        <option value="">全部客戶</option>
+                    </select>
+                </div>
+                <!-- 搜尋 -->
+                <div class="list-search">
+                    <input type="text" id="listSearch" class="form-control input-sm"
+                        placeholder="搜尋單號、備註...">
+                </div>
+                <!-- 列表 -->
+                <div id="quoteListBody">
+                    <div class="text-center text-muted" style="padding:30px;">
+                        <i class="fa fa-spinner fa-spin fa-lg"></i><br><small>載入中...</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ★ 右側：檢視/編輯/空白 -->
+            <div class="editor-wrap">
+
+                <!-- ★ 檢視面板 -->
+                <div class="view-panel" id="viewPanel">
+                    <div class="editor-header no-print">
+                        <h4 id="viewTitle" style="display:flex;align-items:center;">
+                            <i class="fa fa-eye" style="color:var(--accent);margin-right:6px;"></i>
+                            <span id="viewTitleText">報價單</span>
+                            <span id="viewClientTag" class="editor-client-tag"></span>
+                        </h4>
+                        <div style="display:flex;gap:6px;">
+                            <?php if ($CAN_VIEW_HISTORY): ?>
+                            <button class="btn btn-default btn-sm" id="viewChangeLogBtn" onclick="openChangeLog()" title="修改紀錄">
+                                <i class="fa fa-history"></i>
+                            </button>
+                            <?php endif; ?>
+                            <?php if ($CAN_EDIT): ?>
+                            <button class="btn btn-warning btn-sm" onclick="openEditorFromView()">
+                                <i class="fa fa-pencil"></i> 編輯
+                            </button>
+                            <?php endif; ?>
+                            <?php if ($CAN_PRINT): ?>
+                            <button class="btn btn-info btn-sm" id="printQuoteBtn" onclick="printQuote()" title="">
+                                <i class="fa fa-print"></i> 列印
+                            </button>
+                            <?php endif; ?>
+                            <button class="btn btn-default btn-sm" onclick="closeViewPanel()">
+                                <i class="fa fa-times"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <!-- 檢視畫面標識（列印時隱藏）-->
+                    <div class="view-mode-badge no-print">
+                        <i class="fa fa-eye" style="margin-right:5px;"></i>檢視畫面 — 此標識列印時不顯示
+                    </div>
+                    <!-- 歷史列 -->
+                    <div class="history-bar no-print" id="viewHistoryBar" style="display:none;">
+                        <span id="viewHistCreated"></span>
+                        <span id="viewHistUpdated" style="display:none;"></span>
+                    </div>
+                    <!-- 主管簽核狀態列（意見/駁回原因/核准駁回按鈕；列印時不顯示） -->
+                    <div class="no-print" id="viewApprovalBar" style="display:none;margin:0 22px 8px;padding:8px 12px;border-radius:5px;font-size:12px;"></div>
+                    <div id="viewBody" style="flex:1;overflow-y:auto;padding:14px 22px 16px;"></div>
+                </div>
+
+                <!-- ★ 編輯面板 -->
+                <div class="editor-panel" id="editorPanel" style="display:none;flex-direction:column;">
+                    <div class="editor-header">
+                        <h4 id="editorTitle" style="display:flex;align-items:center;"><i class="fa fa-pencil" style="margin-right:6px;"></i>新增報價單<span id="editorClientNameTag" class="editor-client-tag"></span></h4>
+                        <div style="display:flex;gap:6px;">
+                            <?php if ($CAN_VIEW_HISTORY): ?>
+                            <button class="btn btn-default btn-sm" id="changeLogBtn" style="display:none;" onclick="openChangeLog()" title="修改紀錄">
+                                <i class="fa fa-history"></i>
+                            </button>
+                            <?php endif; ?>
+                            <?php if ($CAN_DELETE): ?>
+                            <button class="btn btn-danger btn-sm" id="delQuoteBtn" style="display:none;" onclick="deleteQuote()" title="刪除">
+                                <i class="fa fa-trash"></i>
+                            </button>
+                            <?php endif; ?>
+                            <?php if ($CAN_CLONE): ?>
+                            <button class="btn btn-warning btn-sm" id="cloneQuoteBtn" style="display:none;" onclick="cloneQuote()">
+                                <i class="fa fa-copy"></i> 複製
+                            </button>
+                            <?php endif; ?>
+                            <button class="btn btn-default btn-sm" onclick="closeEditor()">
+                                <i class="fa fa-times"></i>
+                            </button>
+                            <?php if ($CAN_CREATE || $CAN_EDIT): ?>
+                            <button class="btn btn-primary btn-sm" id="saveQuoteBtn" onclick="saveQuote()">
+                                <i class="fa fa-save"></i> 儲存
+                            </button>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <!-- 鎖定警告列 -->
+                    <div id="lockWarningBar" style="display:none;padding:4px 22px;background:#fff3cd;border-bottom:1px solid #ffc107;font-size:12px;color:#856404;">
+                        <i class="fa fa-lock" style="margin-right:5px;"></i>
+                        <span id="lockWarningMsg"></span>
+                    </div>
+
+                    <!-- 建立 / 修改資訊列 -->
+                    <div class="history-bar" id="historyBar" style="display:none;">
+                        <span id="histCreated"></span>
+                        <span id="histUpdated" style="display:none;"></span>
+                        <span id="histPrint" style="display:none;color:var(--accent);"></span>
+                    </div>
+
+                    <form id="quoteForm" onsubmit="return false;" style="flex:1;overflow-y:auto;padding:14px 22px 16px;">
+                        <input type="hidden" id="quote_id">
+                        <input type="hidden" id="source_quote_id">
+                        <input type="hidden" id="last_updated_at">
+
+                        <!-- Row 1：單號 / 日期 / 有效日期 / 幣別 / 匯率 -->
+                        <div class="row">
+                            <div class="col-sm-3 form-group">
+                                <label>報價單號 <span class="text-danger">*</span></label>
+                                <div class="input-group">
+                                    <span class="input-group-addon" id="quote_no_prefix"
+                                        style="font-family:monospace;letter-spacing:1px;background:#eef2f7;color:#2A3F54;font-weight:600;font-size:13px;white-space:nowrap;"></span>
+                                    <input type="text" class="form-control" id="quote_seq" maxlength="3"
+                                        placeholder="001" title="流水號（後3碼）"
+                                        style="font-family:monospace;text-align:center;min-width:52px;">
+                                </div>
+                                <input type="hidden" id="quote_no">
+                            </div>
+                            <div class="col-sm-2 form-group">
+                                <label>報價日期 <span class="text-danger">*</span></label>
+                                <input type="date" class="form-control" id="quote_date" required>
+                            </div>
+                            <div class="col-sm-2 form-group">
+                                <label>有效日期</label>
+                                <input type="date" class="form-control" id="valid_until">
+                            </div>
+                            <div class="col-sm-2 form-group">
+                                <label>幣別</label>
+                                <select class="form-control" id="currency">
+                                    <option value="TWD">NTD</option><option>USD</option>
+                                    <option>JPY</option><option>EUR</option><option>RMB</option>
+                                </select>
+                            </div>
+                            <div class="col-sm-2 form-group">
+                                <label>匯率</label>
+                                <input type="number" class="form-control" id="exchange_rate" value="1" step="0.000001">
+                            </div>
+                        </div>
+
+                        <!-- Row 2：詢價單號 / 客戶 / 備註 / 議價 -->
+                        <div class="row">
+                            <div class="col-sm-2 form-group">
+                                <label>客戶詢價編號</label>
+                                <input type="text" class="form-control" id="inquiry_no"
+                                    placeholder="非必填" maxlength="50">
+                                <div id="client-contact-row" style="margin-top:4px;display:none;">
+                                    <label style="font-size:11px;color:#666;margin-bottom:2px;">聯絡人</label>
+                                    <select class="form-control input-sm" id="contact_select" style="font-size:12px;" onchange="$('#contact_id').val(this.value)">
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-sm-3 form-group has-feedback">
+                                <label>客戶名稱 <i class="fa fa-check-circle" id="client-bound-check" style="color:#27ae60;display:none;font-size:13px;" title="已綁定客戶資料"></i></label>
+                                <input type="text" class="form-control" id="client_name"
+                                    placeholder="輸入客戶代碼或名稱..." autocomplete="off"
+                                    ondblclick="this.value='';$('#client_id').val('');updateClientBoundCheck();">
+                                <span class="fa fa-cog form-control-feedback right"
+                                    style="cursor:pointer;color:#337ab7;pointer-events:auto;top:24px;z-index:10;"
+                                    onclick="openCustomerGear()" title="管理客戶"></span>
+                                <div id="client-suggestions" class="autocomplete-suggestions"></div>
+                                <input type="hidden" id="client_id">
+                                <input type="hidden" id="contact_id">
+                            </div>
+                            <div class="col-sm-5 form-group">
+                                <label style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
+                                    <span>備註</span>
+                                    <button type="button" class="btn btn-xs btn-default" onclick="applyProcTypeNotes()"
+                                        style="font-size:11px;" title="依訂單內製程類型自動帶入備註">
+                                        <i class="fa fa-magic"></i> 依製程帶入
+                                    </button>
+                                    <small id="note-char-count" class="text-muted" style="margin-left:auto;font-size:11px;">0/200</small>
+                                </label>
+                                <textarea class="form-control" id="note" rows="1" maxlength="200"
+                                    style="resize:none;overflow:hidden;min-height:34px;line-height:1.5;padding:6px 10px;"></textarea>
+                                <div id="note-tmpl-btns" style="margin-top:4px;line-height:1.9;"></div>
+                            </div>
+                            <div class="col-sm-2 form-group" style="padding-top:24px;">
+                                <label style="font-weight:normal;cursor:pointer;margin:0;display:flex;align-items:center;gap:6px;">
+                                    <input type="checkbox" id="is_negotiation" style="width:18px;height:18px;cursor:pointer;flex-shrink:0;">
+                                    <span style="color:#1e8449;font-weight:600;font-size:13px;">議價單</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- ★ 附件上傳 -->
+                        <div class="file-section">
+                            <div class="file-section-title">
+                                <i class="fa fa-paperclip"></i> 附件
+                                <small style="font-weight:normal;color:#888;font-size:11px;">
+                                    儲存路徑：<span id="uploadPathDisplay" style="color:var(--accent);">未設定</span>
+                                    <?php if ($CAN_SETTINGS): ?>
+                                    <button type="button" class="btn btn-link" style="font-size:10px;padding:0 3px;vertical-align:baseline;" onclick="openUploadSettings()">
+                                        <i class="fa fa-pencil"></i>
+                                    </button>
+                                    <?php endif; ?>
+                                </small>
+                            </div>
+                            <div class="file-drop-zone" id="fileDropZone"
+                                onclick="document.getElementById('fileInput').click()">
+                                <i class="fa fa-cloud-upload"></i>
+                                拖曳或點擊選擇檔案上傳（所有格式）
+                            </div>
+                            <input type="file" id="fileInput" style="display:none;" multiple>
+                            <div id="uploadedFilesList" style="margin-top:7px;"></div>
+                        </div>
+
+                        <hr style="margin:12px 0;">
+
+                        <!-- ★ 項目區 -->
+                        <div class="items-hdr">
+                            <h4><i class="fa fa-list" style="color:var(--accent);margin-right:5px;"></i>報價項目</h4>
+                            <div style="display:flex;align-items:center;gap:7px;">
+                                <small class="text-muted" style="font-size:11px;">
+                                    容差預設：<span id="defaultTolDisplay" style="color:var(--accent);font-weight:600;">載入中...</span>
+                                </small>
+                                <button type="button" class="btn btn-default btn-xs" onclick="applyDefaultTolerance()">
+                                    <i class="fa fa-magic"></i> 套用容差
+                                </button>
+                                <button type="button" class="btn btn-link btn-xs" onclick="openTolSettingModal()" style="padding:0 4px;">
+                                    <i class="fa fa-cog"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive">
+                            <table id="quoteItemsTable" class="table table-condensed" style="table-layout:fixed;font-size:13px;">
+                                <colgroup>
+                                    <col style="width:4%">   <!-- 刪除 -->
+                                    <col style="width:15%">  <!-- 料號 -->
+                                    <col style="width:33%">  <!-- 製程+製程分類 -->
+                                    <col style="width:11%">  <!-- 料號備註 -->
+                                    <col style="width:6%">   <!-- 數量 -->
+                                    <col style="width:7%">   <!-- 單位 -->
+                                    <col style="width:9%">   <!-- 單價 -->
+                                    <col style="width:9%">   <!-- 金額 -->
+                                    <col style="width:4%">   <!-- 階梯 -->
+                                    <col style="width:2%">   <!-- 佔位 -->
+                                </colgroup>
+                                <thead>
+                                    <tr>
+                                        <th></th>
+                                        <th>料號</th>
+                                        <th>製程 <small style="color:#aaa;font-weight:400;">/ 製程分類</small></th>
+                                        <th>料號備註</th>
+                                        <th>數量</th>
+                                        <th>單位</th>
+                                        <th>單價</th>
+                                        <th>金額</th>
+                                        <th title="切換階梯報價模式"><i class="fa fa-list-ol"></i></th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                        <button type="button" class="btn btn-info btn-sm" onclick="addItemRow()">
+                            <i class="fa fa-plus"></i> 新增項目
+                        </button>
+                        <button type="button" class="btn btn-default btn-sm" onclick="openBatchAddModal()" style="margin-left:6px;">
+                            <i class="fa fa-list-ul"></i> 批次新增
+                        </button>
+
+                        <!-- 合計 -->
+                        <div class="total-bar">
+                            <small class="text-muted">階梯報價以各區間「最低門檻量 × 單價」計算小計</small>
+                            <div>
+                                <span id="totalAmountDisplay" class="total-val">0</span>
+                                <span id="currencyDisplay" class="total-cur">NTD</span>
+                            </div>
+                        </div>
+                    </form>
+                </div><!-- /editor-panel -->
+
+                <!-- 空白提示 -->
+                <div class="editor-empty" id="editorEmpty">
+                    <i class="fa fa-file-text-o fa-4x"></i>
+                    <div style="margin-top:14px;font-size:14px;">點選左側報價單開始檢視</div>
+                    <?php if ($CAN_CREATE): ?>
+                    <div style="margin-top:10px;">
+                        <button class="btn btn-success" onclick="openNewEditor()">
+                            <i class="fa fa-plus"></i> 新增報價單
+                        </button>
+                    </div>
+                    <?php endif; ?>
+                </div>
+
+            </div><!-- /editor-wrap -->
+        </div><!-- /split-wrap -->
+
+    </div><!-- /right_col -->
+    <?php include '../partPage/footer.html' ?>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     報價單設定 Modal（路徑 / 附件類別 / 製程標籤）
+     ══════════════════════════════════════════════════════ -->
+<div class="modal fade" id="quoteSettingsModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:1020px;max-width:96vw;" role="document">
+    <div class="modal-content">
+      <div class="modal-header" style="background:var(--primary);color:#fff;padding:12px 18px;">
+        <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.8;"><span>&times;</span></button>
+        <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-cog" style="margin-right:7px;"></i>報價單設定</h4>
+      </div>
+      <div class="modal-body" style="padding:0;">
+        <!-- Tab 導覽 -->
+        <ul class="nav nav-tabs" style="padding:0 16px;margin:0;background:#f8f9fa;border-bottom:1px solid #ddd;">
+          <li class="active"><a href="#qs-tab-path"       data-toggle="tab"><i class="fa fa-folder-open-o"></i> 儲存路徑</a></li>
+          <li>              <a href="#qs-tab-categories"  data-toggle="tab"><i class="fa fa-tag"></i> 附件類別</a></li>
+          <li>              <a href="#qs-tab-proc-tags"   data-toggle="tab"><i class="fa fa-sitemap"></i> 製程標籤</a></li>
+          <li>              <a href="#qs-tab-note-tmpl"  data-toggle="tab"><i class="fa fa-comment-o"></i> 備註模板</a></li>
+          <?php if ($IS_ADMIN): ?>
+          <li>              <a href="#qs-tab-permissions" data-toggle="tab" onclick="loadPermissionsTab()"><i class="fa fa-key"></i> 權限設定</a></li>
+          <?php endif; ?>
+        </ul>
+        <div class="tab-content" style="padding:16px 18px;">
+
+          <!-- ── Tab 0（管理員）：角色權限設定 ── -->
+          <?php if ($IS_ADMIN): ?>
+          <div id="qs-tab-permissions" class="tab-pane">
+            <div style="display:flex;gap:0;height:400px;font-size:13px;">
+
+              <!-- 左：角色清單 -->
+              <div style="width:200px;min-width:200px;border-right:1px solid #ddd;display:flex;flex-direction:column;">
+                <div style="padding:8px 10px;background:#f8f9fa;border-bottom:1px solid #ddd;display:flex;justify-content:space-between;align-items:center;">
+                  <span style="font-weight:600;font-size:12px;">角色清單</span>
+                  <button class="btn btn-xs btn-success" onclick="addRole()"><i class="fa fa-plus"></i> 新增</button>
+                </div>
+                <div id="roles-list" style="flex:1;overflow-y:auto;padding:4px 0;">
+                  <div class="text-center text-muted" style="padding:20px;font-size:12px;">載入中...</div>
+                </div>
+              </div>
+
+              <!-- 右：功能勾選 -->
+              <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+                <div id="role-feat-header" style="padding:8px 14px;background:#f8f9fa;border-bottom:1px solid #ddd;font-weight:600;font-size:12px;color:#555;">
+                  ← 請選擇角色
+                </div>
+                <div id="role-feat-body" style="flex:1;overflow-y:auto;padding:10px 14px;">
+                  <?php
+                  $groups = [];
+                  foreach ($PAGE_FEATURES as $f) $groups[$f['group']][] = $f;
+                  foreach ($groups as $grpName => $items): ?>
+                  <div style="margin-bottom:12px;">
+                    <div style="font-weight:600;color:#555;margin-bottom:6px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;">
+                      <?= htmlspecialchars($grpName) ?>
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px 24px;">
+                    <?php foreach ($items as $feat): ?>
+                      <label style="font-weight:normal;cursor:pointer;display:flex;align-items:center;gap:5px;">
+                        <input type="checkbox" class="role-feat-cb"
+                          value="<?= htmlspecialchars($feat['code']) ?>"
+                          data-label="<?= htmlspecialchars($feat['label']) ?>">
+                        <?= htmlspecialchars($feat['label']) ?>
+                      </label>
+                    <?php endforeach; ?>
+                    </div>
+                  </div>
+                  <?php endforeach; ?>
+                </div>
+                <div id="role-feat-footer" style="padding:8px 14px;border-top:1px solid #ddd;background:#f8f9fa;display:none;">
+                  <small class="text-muted" id="role-feat-note" style="float:left;line-height:28px;"></small>
+                  <div style="display:flex;gap:6px;justify-content:flex-end;">
+                    <button class="btn btn-default btn-sm" id="btn-check-all" onclick="toggleAllFeatures(true)">
+                      <i class="fa fa-check-square-o"></i> 全選
+                    </button>
+                    <button class="btn btn-default btn-sm" id="btn-uncheck-all" onclick="toggleAllFeatures(false)">
+                      <i class="fa fa-square-o"></i> 取消全選
+                    </button>
+                    <button class="btn btn-primary btn-sm" id="btn-save-role-feat" onclick="saveRoleFeatures()">
+                      <i class="fa fa-save"></i> 儲存角色設定
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p style="font-size:11px;color:#aaa;padding:6px 10px 4px;border-top:1px solid #eee;margin:0;">
+              <i class="fa fa-info-circle"></i> 使用者指派角色請至 <strong>管理設定 → 使用者權限</strong> 頁面操作
+            </p>
+          </div>
+          <?php endif; ?>
+
+          <!-- ── Tab 1：儲存路徑 ── -->
+          <div id="qs-tab-path" class="tab-pane active">
+            <div class="form-group">
+              <label style="font-size:13px;">Z 槽附件儲存根目錄</label>
+              <div class="input-group">
+                <input type="text" id="qs-upload-path" class="form-control"
+                  placeholder="例：Z:\業務\報價資料">
+                <span class="input-group-btn">
+                  <button class="btn btn-primary" type="button" onclick="saveUploadPath()">
+                    <i class="fa fa-save"></i> 儲存
+                  </button>
+                </span>
+              </div>
+              <small class="text-muted">每張報價單的附件存入 <code>[根目錄\報價單號\]</code> 子資料夾</small>
+            </div>
+            <div class="form-group" style="margin-top:16px;">
+              <label style="font-size:13px;">列印表單編號</label>
+              <div class="input-group">
+                <input type="text" id="qs-form-number" class="form-control"
+                  placeholder="例：2-SM-01-02">
+                <span class="input-group-btn">
+                  <button class="btn btn-primary" type="button" onclick="saveFormNumber()">
+                    <i class="fa fa-save"></i> 儲存
+                  </button>
+                </span>
+              </div>
+              <small class="text-muted">顯示於列印報價單右下角</small>
+            </div>
+            <div class="form-group" style="margin-top:12px;">
+              <label style="font-size:13px;">報價有效期天數</label>
+              <div class="input-group" style="max-width:200px;">
+                <input type="text" inputmode="numeric" id="qs-valid-days" class="form-control"
+                  placeholder="例：30">
+                <span class="input-group-addon">天</span>
+                <span class="input-group-btn">
+                  <button class="btn btn-primary" type="button" onclick="saveValidDays()">
+                    <i class="fa fa-save"></i>
+                  </button>
+                </span>
+              </div>
+              <small class="text-muted">新增報價單時自動帶入有效日期（報價日 + N 天）</small>
+            </div>
+          </div>
+
+          <!-- ── Tab 2：附件類別 ── -->
+          <div id="qs-tab-categories" class="tab-pane">
+            <div class="row" style="margin-bottom:0;">
+              <div class="col-sm-6">
+                <div class="panel panel-default" style="margin-bottom:12px;">
+                  <div class="panel-heading" style="font-size:13px;"><b><i class="fa fa-filter"></i> 本頁適用的附件類別與排序</b></div>
+                  <div class="panel-body" style="padding:10px;">
+                    <div id="qs-page-cats" style="max-height:220px;overflow-y:auto;"></div>
+                    <button class="btn btn-primary btn-sm" onclick="savePageAttachCats()" style="margin-top:6px;">
+                      <i class="fa fa-save"></i> 儲存本頁類別設定
+                    </button>
+                    <small class="text-muted" style="display:block;margin-top:4px;">
+                      勾選＝此頁顯示該類別；拖曳 ☰ 調整此頁顯示順序（不影響其他頁面）。全部未勾選＝顯示全部類別。
+                    </small>
+                  </div>
+                </div>
+              </div>
+              <div class="col-sm-6">
+                <div class="panel panel-default" style="margin-bottom:12px;">
+                  <div class="panel-heading" style="font-size:13px;"><b><i class="fa fa-asterisk text-danger"></i> 每個料號必備的附件類別</b></div>
+                  <div class="panel-body" style="padding:10px;">
+                    <div id="qs-required-cats" style="line-height:2.4;"></div>
+                    <button class="btn btn-primary btn-sm" onclick="saveRequiredCats()" style="margin-top:6px;">
+                      <i class="fa fa-save"></i> 儲存必備設定
+                    </button>
+                    <small class="text-muted" style="display:block;margin-top:4px;">
+                      儲存報價單時檢查每個料號是否具備勾選的類別；必備類別附件必須連結單一料號；<b>議價單豁免</b>。
+                    </small>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="row">
+              <!-- 左：新增/修改表單 -->
+              <div class="col-sm-5">
+                <div class="panel panel-default">
+                  <div class="panel-heading" style="font-size:13px;"><b id="cat-form-title">新增類別</b></div>
+                  <div class="panel-body">
+                    <input type="hidden" id="cat-edit-id">
+                    <div class="form-group">
+                      <label>類別名稱 *</label>
+                      <input type="text" class="form-control input-sm" id="cat-name-input" placeholder="例：圖面">
+                    </div>
+                    <div class="form-group">
+                      <label>排序（數字越小越前）</label>
+                      <input type="number" class="form-control input-sm" id="cat-order-input" value="0">
+                    </div>
+                    <button class="btn btn-success btn-sm" onclick="saveCategorySettings()">
+                      <i class="fa fa-save"></i> 儲存
+                    </button>
+                    <button class="btn btn-default btn-sm" onclick="resetCategoryForm()">
+                      <i class="fa fa-refresh"></i> 清除
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <!-- 右：類別列表 -->
+              <div class="col-sm-7">
+                <table class="table table-condensed table-bordered table-striped" style="font-size:13px;">
+                  <thead><tr><th style="width:24px;"></th><th>類別名稱</th><th>操作</th></tr></thead>
+                  <tbody id="cat-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Tab 3：製程標籤（三層：群組→子標籤→製程）── -->
+          <div id="qs-tab-proc-tags" class="tab-pane">
+            <div class="row" style="margin:0;">
+
+              <!-- 群組欄 -->
+              <div class="col-sm-4" style="padding-right:8px;border-right:1px solid #e0e0e0;">
+                <div style="font-size:12px;font-weight:700;color:var(--primary);margin-bottom:6px;">
+                  <i class="fa fa-folder-open"></i> 標籤群組
+                </div>
+                <div id="pt-group-list" style="min-height:80px;margin-bottom:8px;"></div>
+                <div class="input-group input-group-sm">
+                  <input type="text" id="pt-new-group" class="form-control" placeholder="新群組名稱">
+                  <span class="input-group-btn">
+                    <button class="btn btn-success" type="button" onclick="addPtGroup()">
+                      <i class="fa fa-plus"></i>
+                    </button>
+                  </span>
+                </div>
+              </div>
+
+              <!-- 子標籤欄 -->
+              <div class="col-sm-4" style="padding:0 8px;border-right:1px solid #e0e0e0;">
+                <div style="font-size:12px;font-weight:700;color:var(--primary);margin-bottom:6px;">
+                  <i class="fa fa-tag"></i> 子標籤
+                  <small id="pt-sub-group-label" style="color:#aaa;font-weight:400;"></small>
+                </div>
+                <div id="pt-sub-list" style="min-height:80px;margin-bottom:8px;">
+                  <div class="text-muted" style="font-size:11px;">← 先選擇群組</div>
+                </div>
+                <div class="input-group input-group-sm" id="pt-sub-form" style="display:none;">
+                  <input type="text" id="pt-new-sub" class="form-control" placeholder="新子標籤">
+                  <span class="input-group-btn">
+                    <button class="btn btn-success" type="button" onclick="addPtSubTag()">
+                      <i class="fa fa-plus"></i>
+                    </button>
+                  </span>
+                </div>
+              </div>
+
+              <!-- 製程連結欄 -->
+              <div class="col-sm-4" style="padding-left:8px;">
+                <div style="font-size:12px;font-weight:700;color:var(--primary);margin-bottom:5px;">
+                  <i class="fa fa-cogs"></i> 連結製程
+                  <small id="pt-proc-sub-label" style="color:#aaa;font-weight:400;"></small>
+                </div>
+                <!-- 已選製程 chips -->
+                <div id="pt-linked-chips" style="min-height:28px;padding:3px 0 5px;border-bottom:1px solid #eee;margin-bottom:5px;line-height:1.8;display:none;">
+                  <small style="color:#888;font-size:10px;">已連結：</small>
+                </div>
+                <div id="pt-proc-search-wrap" style="display:none;margin-bottom:5px;">
+                  <input type="text" id="pt-proc-search" class="form-control input-sm" placeholder="搜尋製程...">
+                </div>
+                <div id="pt-proc-list" style="max-height:190px;overflow-y:auto;font-size:12px;">
+                  <div class="text-muted" style="font-size:11px;">← 先選擇子標籤</div>
+                </div>
+                <div id="pt-proc-save-wrap" style="display:none;margin-top:6px;">
+                  <button class="btn btn-primary btn-sm" onclick="savePtProcesses()">
+                    <i class="fa fa-save"></i> 儲存製程連結
+                  </button>
+                  <small class="text-muted" style="margin-left:6px;font-size:11px;">勾選後按儲存才會寫入資料庫</small>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Tab 4：備註模板 ── -->
+          <div id="qs-tab-note-tmpl" class="tab-pane">
+            <div class="row">
+              <!-- 左：新增/修改表單 -->
+              <div class="col-sm-5">
+                <div class="panel panel-default">
+                  <div class="panel-heading" style="font-size:13px;"><b id="ntmpl-form-title">新增備註模板</b></div>
+                  <div class="panel-body">
+                    <input type="hidden" id="ntmpl-edit-id">
+                    <div class="form-group">
+                      <label>按鈕標籤 *</label>
+                      <input type="text" class="form-control input-sm" id="ntmpl-label-input" placeholder="例：付款條件" maxlength="30">
+                    </div>
+                    <div class="form-group">
+                      <label>備註文字 *</label>
+                      <textarea class="form-control input-sm" id="ntmpl-text-input" rows="3" placeholder="例：調質HRC {下限}~{上限} 之間，報告另附" maxlength="500"></textarea>
+                      <small class="text-muted">用 <code>{變數名}</code> 作為佔位符，點按鈕時會要求填入</small>
+                    </div>
+                    <div class="form-group">
+                      <label>變數定義</label>
+                      <div id="ntmpl-vars-list" style="margin-bottom:5px;"></div>
+                      <button type="button" class="btn btn-xs btn-default" onclick="addNtmplVar()">
+                        <i class="fa fa-plus"></i> 新增變數
+                      </button>
+                      <small class="text-muted" style="margin-left:6px;">依備註文字中 {} 的順序新增</small>
+                    </div>
+                    <div class="form-group">
+                      <label>自動帶入（依製程類型）</label>
+                      <div>
+                        <label style="font-weight:normal;margin-right:14px;font-size:12px;">
+                          <input type="checkbox" id="ntmpl-auto-full" style="margin-right:4px;">全製程時自動帶入
+                        </label>
+                        <label style="font-weight:normal;font-size:12px;">
+                          <input type="checkbox" id="ntmpl-auto-single" style="margin-right:4px;">單一製程時自動帶入
+                        </label>
+                      </div>
+                    </div>
+                    <div class="form-group">
+                      <label>排序（數字越小越前）</label>
+                      <input type="text" inputmode="numeric" pattern="[0-9]*" class="form-control input-sm" id="ntmpl-order-input" value="0">
+                    </div>
+                    <button class="btn btn-success btn-sm" onclick="saveNoteTemplate()">
+                      <i class="fa fa-save"></i> 儲存
+                    </button>
+                    <button class="btn btn-default btn-sm" onclick="resetNoteTemplateForm()">
+                      <i class="fa fa-refresh"></i> 清除
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <!-- 右：列表 -->
+              <div class="col-sm-7">
+                <table class="table table-condensed table-bordered table-striped" style="font-size:13px;">
+                  <thead><tr><th style="width:24px;"></th><th>按鈕標籤</th><th>備註文字</th><th>自動</th><th>狀態</th><th>操作</th></tr></thead>
+                  <tbody id="ntmpl-table-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- /tab-content -->
+      </div>
+      <div class="modal-footer" style="padding:8px 14px;">
+        <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 客戶管理 Modal ══ -->
+<div class="modal fade" id="customerModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" role="document"><div class="modal-content">
+    <div class="modal-header">
+      <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+      <h4 class="modal-title">客戶資料管理</h4>
+    </div>
+    <div class="modal-body">
+      <div class="panel panel-default"><div class="panel-heading"><b id="customerFormTitle">新增客戶</b></div>
+        <div class="panel-body">
+          <input type="hidden" id="customer_id_modal">
+          <div class="row">
+            <div class="col-md-3 form-group"><label>客戶代碼 <span class="text-danger">*</span></label><input type="text" class="form-control" id="customer_id_new" placeholder="新增時必填"></div>
+            <div class="col-md-5 form-group"><label>客戶名稱 <span class="text-danger">*</span></label><input type="text" class="form-control" id="customer_name_modal"></div>
+            <div class="col-md-4 form-group"><label>電話</label><input type="text" class="form-control" id="customer_tel_modal"></div>
+          </div>
+          <div class="row">
+            <div class="col-md-8 form-group"><label>地址</label><input type="text" class="form-control" id="customer_address_modal"></div>
+            <div class="col-md-4 form-group"><label>傳真</label><input type="text" class="form-control" id="customer_fax_modal"></div>
+          </div>
+          <div class="row">
+            <div class="col-md-4 form-group"><label>統一編號</label><input type="text" class="form-control" id="customer_taxid_modal"></div>
+            <div class="col-md-4 form-group"><label>聯絡人</label><input type="text" class="form-control" id="customer_contact_modal"></div>
+          </div>
+          <button type="button" class="btn btn-success btn-sm" onclick="saveCustomer()"><i class="fa fa-save"></i> 儲存</button>
+          <button type="button" class="btn btn-default btn-sm" onclick="resetCustomerForm()"><i class="fa fa-refresh"></i> 清除</button>
+        </div>
+      </div>
+      <div id="customerMgmtListSection">
+        <table id="customerMgmtTable" class="table table-striped table-bordered table-condensed" style="width:100%;font-size:13px;">
+          <thead><tr><th>代碼</th><th>客戶名稱</th><th>電話</th><th>地址</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+  </div></div>
+</div>
+
+<!-- ══ 料號管理 Modal ══ -->
+<div class="modal fade" id="partModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" role="document"><div class="modal-content">
+    <div class="modal-header">
+      <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+      <h4 class="modal-title" id="partFormTitle">新增料號</h4>
+    </div>
+    <div class="modal-body">
+      <form id="part-form-main" onsubmit="return false;">
+        <input type="hidden" id="part_d_id_modal">
+        <div class="row">
+          <div class="col-md-6 form-group">
+            <label>料號 <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" id="part_no_modal" placeholder="料號" required>
+          </div>
+          <div class="col-md-6 form-group">
+            <label>工件種類</label>
+            <select class="form-control" id="part_type_modal">
+              <option value="N">一般 (General)</option>
+              <option value="G">齒輪 (Gear)</option>
+              <option value="H">滾刀 (Hob)</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>客戶</label>
+          <div class="input-group">
+            <input type="text" id="part_client_search_modal" class="form-control" placeholder="輸入代碼或名稱搜尋...">
+            <input type="hidden" id="part_customer_id_modal">
+            <span class="input-group-btn">
+              <button class="btn btn-default" type="button" onclick="$('#part_client_search_modal').trigger('input')"><i class="fa fa-search"></i></button>
+            </span>
+          </div>
+          <div id="part-customer-results" style="position:absolute;z-index:1060;background:white;border:1px solid #ccc;width:90%;max-height:150px;overflow-y:auto;display:none;border-radius:0 0 4px 4px;box-shadow:0 4px 8px rgba(0,0,0,.1);"></div>
+        </div>
+        <div class="row">
+          <div class="col-md-6 form-group">
+            <label>版次</label>
+            <input type="text" class="form-control" id="part_revision_modal">
+          </div>
+          <div class="col-md-6 form-group">
+            <label>發行日期</label>
+            <input type="date" class="form-control" id="part_issue_date_modal">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>備註</label>
+          <textarea class="form-control" id="part_remark_modal" rows="2"></textarea>
+        </div>
+        <div id="part-gear-section" style="display:none;border-top:2px solid var(--accent);padding-top:12px;margin-top:8px;">
+          <h5 style="color:var(--primary);font-weight:700;margin-bottom:10px;">
+            <i class="fa fa-cog"></i> 齒輪詳細資料
+            <button type="button" class="btn btn-xs btn-success" id="part-btn-add-gear" style="margin-left:10px;"><i class="fa fa-plus"></i> 新增齒輪</button>
+          </h5>
+          <div id="part-gear-rows-container"></div>
+        </div>
+        <div class="ln_solid" style="margin:15px 0;"></div>
+        <div style="display:flex;gap:8px;">
+          <button type="button" class="btn btn-danger" id="part-btn-delete" style="display:none;" onclick="deletePart()"><i class="fa fa-trash"></i> 刪除</button>
+          <button type="button" class="btn btn-default" onclick="resetPartForm()"><i class="fa fa-refresh"></i> 清除/新增</button>
+          <button type="button" class="btn btn-primary" onclick="savePart()"><i class="fa fa-save"></i> 儲存</button>
+        </div>
+      </form>
+      <div id="partMgmtBrowseSection" style="display:none;">
+        <hr>
+        <div class="input-group" style="margin-bottom:8px;max-width:320px;">
+          <input type="text" class="form-control input-sm" id="partMgmtSearch" placeholder="搜尋料號、客戶或版次...">
+          <span class="input-group-btn"><button class="btn btn-default btn-sm" onclick="searchPartMgmt()"><i class="fa fa-search"></i></button></span>
+        </div>
+        <div style="max-height:260px;overflow-y:auto;">
+          <table class="table table-striped table-bordered table-condensed" style="width:100%;font-size:13px;">
+            <thead><tr><th>料號</th><th>客戶</th><th>版次</th><th>工件種類</th><th>操作</th></tr></thead>
+            <tbody id="partMgmtTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+  </div></div>
+</div>
+
+<!-- ══ 歷史紀錄 Modal（已刪除 + 列印紀錄 分頁）══ -->
+<div class="modal fade" id="historyLogModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" style="width:880px;max-width:96vw;" role="document"><div class="modal-content">
+    <div class="modal-header" style="background:var(--primary);color:#fff;padding:12px 18px;">
+      <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.8;"><span>&times;</span></button>
+      <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-history" style="margin-right:7px;"></i>歷史紀錄</h4>
+    </div>
+    <div class="modal-body" style="padding:0;">
+      <ul class="nav nav-tabs" id="historyLogTabs" style="padding:0 16px;margin:0;background:#f8f9fa;border-bottom:1px solid #ddd;">
+        <li class="active" id="tab-deleted-li">
+          <a href="#hlog-deleted" data-toggle="tab" onclick="loadDeletedLog()">
+            <i class="fa fa-trash-o"></i> 已刪除報價單
+          </a>
+        </li>
+        <li id="tab-print-li">
+          <a href="#hlog-print" data-toggle="tab" onclick="loadPrintLog()">
+            <i class="fa fa-print"></i> 列印紀錄
+          </a>
+        </li>
+      </ul>
+      <div class="tab-content" style="padding:0;">
+        <!-- ── 已刪除分頁 ── -->
+        <div class="tab-pane active" id="hlog-deleted">
+          <div style="max-height:480px;overflow-y:auto;">
+            <table class="table table-condensed table-striped table-bordered" style="font-size:13px;margin:0;">
+              <thead style="position:sticky;top:0;background:#f8f9fa;z-index:1;">
+                <tr>
+                  <th style="width:120px;">報價單號</th>
+                  <th style="width:75px;">日期</th>
+                  <th style="width:90px;">客戶</th>
+                  <th style="width:80px;text-align:right;">金額</th>
+                  <th>刪除原因</th>
+                  <th style="width:70px;">刪除者</th>
+                  <th style="width:130px;">刪除時間</th>
+                  <th style="width:90px;"></th>
+                </tr>
+              </thead>
+              <tbody id="deleteLogTbody">
+                <tr><td colspan="7" class="text-center text-muted" style="padding:20px;">載入中...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <!-- ── 列印紀錄分頁 ── -->
+        <div class="tab-pane" id="hlog-print">
+          <div style="max-height:480px;overflow-y:auto;">
+            <table class="table table-condensed table-striped" style="font-size:13px;margin:0;">
+              <thead style="position:sticky;top:0;background:#f8f9fa;z-index:1;">
+                <tr>
+                  <th style="width:140px;">報價單號</th>
+                  <th>客戶</th>
+                  <th style="width:110px;">列印者</th>
+                  <th style="width:145px;">列印時間</th>
+                </tr>
+              </thead>
+              <tbody id="printLogTbody">
+                <tr><td colspan="4" class="text-center text-muted" style="padding:20px;">請切換至此頁籤載入</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="padding:8px 14px;">
+      <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+    </div>
+  </div></div>
+</div>
+
+<!-- ══ 刪除快照檢視 Modal ══ -->
+<div class="modal fade" id="snapshotModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" style="width:700px;max-width:96vw;" role="document"><div class="modal-content">
+    <div class="modal-header" style="background:var(--primary);color:#fff;padding:12px 18px;">
+      <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.8;"><span>&times;</span></button>
+      <h4 class="modal-title" id="snapshotTitle" style="font-size:15px;"><i class="fa fa-file-text-o" style="margin-right:7px;"></i>快照內容</h4>
+    </div>
+    <div class="modal-body" id="snapshotBody" style="font-size:13px;max-height:520px;overflow-y:auto;padding:14px 18px;"></div>
+    <div class="modal-footer" style="padding:8px 14px;">
+      <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+    </div>
+  </div></div>
+</div>
+
+<!-- ══ 修改紀錄 Modal ══ -->
+<div class="modal fade" id="changeLogModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:640px;max-width:96vw;" role="document"><div class="modal-content">
+    <div class="modal-header" style="background:var(--primary);color:#fff;padding:12px 18px;">
+      <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.8;"><span>&times;</span></button>
+      <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-history" style="margin-right:7px;"></i>修改紀錄</h4>
+    </div>
+    <div class="modal-body" style="padding:0;max-height:520px;overflow-y:auto;">
+      <table class="table table-condensed" style="font-size:12px;margin:0;">
+        <thead style="position:sticky;top:0;background:#f8f9fa;z-index:1;">
+          <tr><th style="width:130px;">時間</th><th style="width:90px;">修改者</th><th>變更欄位</th></tr>
+        </thead>
+        <tbody id="changeLogTbody">
+          <tr><td colspan="3" class="text-center text-muted" style="padding:20px;">載入中...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="modal-footer" style="padding:8px 14px;">
+      <small class="text-muted" id="changeLogInfo" style="float:left;line-height:30px;"></small>
+      <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+    </div>
+  </div></div>
+</div>
+
+<!-- ══ 權限說明 Modal ══ -->
+<div class="modal fade" id="permHelpModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:560px;max-width:96vw;" role="document"><div class="modal-content">
+    <div class="modal-header" style="background:var(--primary);color:#fff;padding:12px 18px;">
+      <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.8;"><span>&times;</span></button>
+      <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-key" style="margin-right:7px;"></i>報價單管理 — 權限說明</h4>
+    </div>
+    <div class="modal-body" style="padding:14px 18px;">
+      <p style="font-size:13px;color:#666;margin-bottom:10px;">您目前的角色：<strong style="color:var(--primary);"><?= htmlspecialchars($_perm) ?></strong></p>
+      <table class="table table-condensed table-bordered" style="font-size:12px;">
+        <thead style="background:#f8f9fa;"><tr><th>可使用功能</th><th style="width:60px;text-align:center;">狀態</th></tr></thead>
+        <tbody>
+          <?php foreach ($PAGE_FEATURES as $_f): ?>
+          <tr>
+            <td><?= htmlspecialchars($_f['label']) ?></td>
+            <td style="text-align:center;">
+              <?php if (_hasF($_f['code'])): ?>
+              <i class="fa fa-check" style="color:#27ae60;"></i>
+              <?php else: ?>
+              <i class="fa fa-times" style="color:#ccc;"></i>
+              <?php endif; ?>
+            </td>
+          </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+      <?php if ($IS_ADMIN): ?>
+      <p style="font-size:11px;color:#888;margin-top:6px;"><i class="fa fa-info-circle" style="color:var(--accent);"></i> 請至 <strong>報價單設定 → 權限設定</strong> 頁籤管理角色與功能。</p>
+      <?php endif; ?>
+    </div>
+    <div class="modal-footer" style="padding:8px 14px;">
+      <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+    </div>
+  </div></div>
+</div>
+
+
+<!-- ══ 批次新增料號 Modal ══ -->
+<div class="modal fade" id="batchAddModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:600px;max-width:96vw;" role="document"><div class="modal-content">
+    <div class="modal-header" style="background:var(--primary);color:#fff;padding:12px 18px;">
+      <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.8;"><span>&times;</span></button>
+      <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-list-ul" style="margin-right:7px;"></i>批次新增料號</h4>
+    </div>
+    <div class="modal-body" style="padding:14px 18px;">
+      <div class="input-group" style="margin-bottom:10px;">
+        <input type="text" id="batchPartSearch" class="form-control" placeholder="搜尋料號（輸入至少1字）...">
+        <span class="input-group-btn">
+          <button class="btn btn-default" type="button" onclick="doBatchPartSearch()"><i class="fa fa-search"></i></button>
+        </span>
+      </div>
+      <div id="batchPartResults" style="max-height:320px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:4px;font-size:13px;">
+        <div class="text-muted text-center" style="padding:20px;">請輸入關鍵字搜尋料號</div>
+      </div>
+      <div style="margin-top:8px;font-size:12px;color:#888;">
+        已選取：<span id="batchSelectedCount" style="font-weight:700;color:var(--primary);">0</span> 筆
+      </div>
+    </div>
+    <div class="modal-footer" style="padding:8px 14px;">
+      <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
+      <button type="button" class="btn btn-primary btn-sm" onclick="confirmBatchAdd()">
+        <i class="fa fa-plus"></i> 新增所選料號
+      </button>
+    </div>
+  </div></div>
+</div>
+
+<script src="../../resource/js/jquery.min.js"></script>
+<script src="../../resource/js/jquery-ui-1.10.2.custom.min.js"></script>
+<script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/eg_stamp.js"></script>
+<script src="../../resource/js/custom.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+<script>
+// ── 權限常數（由 PHP 注入）──
+const CAN_VIEW         = <?= json_encode($CAN_VIEW) ?>;
+const CAN_CREATE       = <?= json_encode($CAN_CREATE) ?>;
+const CAN_EDIT         = <?= json_encode($CAN_EDIT) ?>;
+const CAN_DELETE       = <?= json_encode($CAN_DELETE) ?>;
+const CAN_PRINT        = <?= json_encode($CAN_PRINT) ?>;
+const CAN_SETTINGS     = <?= json_encode($CAN_SETTINGS) ?>;
+const CAN_CLONE        = <?= json_encode($CAN_CLONE) ?>;
+const CAN_SIGN         = <?= json_encode($CAN_SIGN) ?>;
+const CAN_BATCH_ADD    = <?= json_encode($CAN_BATCH_ADD) ?>;
+const CAN_VIEW_DELETED = <?= json_encode($CAN_VIEW_DELETED) ?>;
+const CAN_RESTORE      = <?= json_encode($CAN_RESTORE) ?>;
+const CAN_VIEW_HISTORY = <?= json_encode($CAN_VIEW_HISTORY) ?>;
+const IS_ADMIN         = <?= json_encode($IS_ADMIN) ?>;
+const PERM_CODE        = <?= json_encode($_perm) ?>;
+const MY_USER_ID       = <?= json_encode($_user_id) ?>;
+
+const API_URL      = '../../src/store/Quotation_API.php';
+const FILE_API_URL = '../../src/store/Quotation_File_API.php';
+const ROLES_API_URL= '../../src/store/Roles_API.php';
+
+let allQuotes      = [];        // 目前年份的報價單陣列
+let fileCategories = [];        // 本頁適用的附件類別（依本頁排序；未設定時=全部啟用類別）
+let allFileCategories = [];     // 全部啟用中的附件類別（跨頁共用主檔，供名稱查找）
+let pageAttachCatIds = null;    // 本頁適用類別 ID 順序（QUOTATION/page_attach_cats；null=全部）
+let requiredAttachCats = [];    // 每個料號必備的附件類別 ID 清單
+let processTagTree = [];        // 製程標籤樹 [{group_id,group_name,sub_tags:[...]}]
+let allYearsData   = null;      // 全年份快取
+let isAllYearsMode = false;
+let allProcesses   = [];        // [{id, text}]
+let allUnits         = [];        // [{unit_id, unit_name, unit_symbol}]
+let currentEditId    = null;      // 目前編輯的 quote_id (null = 新增)
+let _lockHeartbeat   = null;      // setInterval handle for lock heartbeat
+let _editToken     = 0;         // 每次開啟編輯時遞增，捨棄過期的 async 回呼
+let _tempUploadQno = null;      // 新建報價有上傳但未儲存的 quote_no
+let defaultTolerance = { value: 5, unit: '%' };
+let currentUploadPath = '';
+
+// ══════════════════════════════════════════════════════
+// 工具函式
+// ══════════════════════════════════════════════════════
+function formatNumber(num) {
+    if (num === null || num === undefined || num === '') return '0';
+    const n = Number(num);
+    if (isNaN(n)) return '0';
+    if (Number.isInteger(n)) return n.toLocaleString('en-US');
+    return parseFloat(n.toFixed(10)).toLocaleString('en-US', { maximumFractionDigits: 10 });
+}
+function escapeHtml(t) {
+    if (t === null || t === undefined) return '';
+    return $('<div>').text(String(t)).html();
+}
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+// ── 由報價日期計算報價單號前綴（OP + 民國年3碼 + 月2碼 + 日2碼）──
+function quoteNoPrefixFromDate(dateStr) {
+    if (!dateStr) return '';
+    const dt = new Date(dateStr + 'T00:00:00');
+    const y  = String(dt.getFullYear() - 1911).padStart(3, '0');
+    const m  = String(dt.getMonth() + 1).padStart(2, '0');
+    const d  = String(dt.getDate()).padStart(2, '0');
+    return 'OP' + y + m + d;
+}
+// ── 將前綴 + 流水號合併寫入 hidden #quote_no ──
+function syncQuoteNo() {
+    const prefix = $('#quote_no_prefix').text().trim();
+    const seq    = $('#quote_seq').val().trim();
+    if (prefix && seq) $('#quote_no').val(prefix + seq.padStart(3, '0'));
+}
+
+// ══════════════════════════════════════════════════════
+// 初始化
+// ══════════════════════════════════════════════════════
+$(window).on('resize', adjustLayout);
+
+// 頁面離開（重新整理 / 關閉分頁）時，自動刪除未儲存的臨時附件資料夾
+window.addEventListener('beforeunload', function() {
+    if (!_tempUploadQno || currentEditId) return; // 已儲存或非新建，不清理
+    if (!navigator.sendBeacon) return;             // 舊版瀏覽器不支援，略過
+    const fd = new FormData();
+    fd.append('action', 'delete_folder');
+    fd.append('quote_no', _tempUploadQno);
+    navigator.sendBeacon(FILE_API_URL, fd);
+});
+
+$(document).ready(function () {
+    adjustLayout();          // ★ 初始化高度，消除外層滾動條
+    loadFileCategories();    // ★ 載入附件類別（同時自動建 DB 資料表）
+    loadPageAttachCats();    // ★ 載入本頁適用附件類別與排序
+    loadRequiredAttachCats();// ★ 載入每個料號必備的附件類別設定
+    initProcessTagTables();  // ★ 自動建立製程標籤三張資料表
+    loadProcessTagTree();    // ★ 載入製程標籤樹
+    initNoteTemplates();     // ★ 自動建立備註模板資料表並載入快選按鈕
+    loadProcesses();
+    loadUnits();
+    loadQuoteList(<?= $selectedYear ?>);
+    // 通知點擊深連結：?open_id=quote_id 直接開啟該張報價單檢視畫面（比照CAR/QA的open_id慣例）
+    (function () {
+        var openId = parseInt(new URLSearchParams(window.location.search).get('open_id'), 10);
+        if (openId > 0) openViewMode(openId);
+    })();
+    // 簽核專屬頁(quotation_approval_view.php)以 window.open 開啟時，這裡是它的 opener——
+    // 核准/駁回完成後該分頁會 postMessage 回來，這裡收到才主動重新整理清單/當前檢視畫面，
+    // 避免使用者已開著的這頁清單/檢視在另一分頁簽核完後仍顯示舊的審核狀態
+    window.addEventListener('message', function (ev) {
+        if (!ev.data || ev.data.type !== 'quotation_approval_done') return;
+        if (isAllYearsMode) loadAllYears(); else loadQuoteList(<?= $selectedYear ?>);
+        if (currentEditId && (!ev.data.quote_id || currentEditId == ev.data.quote_id)) openViewMode(currentEditId);
+    });
+    loadDefaultTolerance();
+    loadUploadPath();
+    loadValidDays();        // ★ 載入有效天數設定
+    initFileUpload();
+
+    // 備註欄自動展高 + 字數計數 + 標籤狀態同步
+    $(document).on('input', '#note', function() {
+        this.style.height = 'auto';
+        this.style.height = this.scrollHeight + 'px';
+        $('#note-char-count').text(this.value.length + '/200');
+        syncNoteTemplateBtnStates();
+    });
+
+    // 搜尋列表
+    $('#listSearch').on('input', function () {
+        renderQuoteList(allQuotes, $(this).val().trim());
+    });
+
+    // 幣別變更 → 重算
+    $('#currency').on('change', calculateTotal);
+
+    // 報價項目列：Enter / 方向鍵跨欄 / 跨列導航（類 Excel）
+    $(document).on('keydown', '#quoteItemsTable .item-row input:not([type=hidden])', function(e) {
+        const key = e.key;
+        if (!['Enter','ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(key)) return;
+
+        const $row    = $(this).closest('tr.item-row');
+        const $inputs = $row.find('input:not([type=hidden]):not([disabled]):visible');
+        const idx     = $inputs.index(this);
+
+        // 左右：只在游標位於邊界時才跨欄；Enter 等同右移
+        if (key === 'Enter' || key === 'ArrowRight') {
+            const atEnd = (key === 'Enter') || (this.selectionEnd === this.value.length);
+            if (!atEnd) return;
+            e.preventDefault();
+            const $next = $inputs.eq(idx + 1);
+            if ($next.length) { $next.focus().select(); return; }
+        }
+        if (key === 'ArrowLeft') {
+            if (this.selectionStart !== 0) return;
+            e.preventDefault();
+            const $prev = $inputs.eq(idx - 1);
+            if ($prev.length) { $prev.focus(); $prev[0].setSelectionRange($prev[0].value.length, $prev[0].value.length); return; }
+        }
+
+        // 上下：跨列，找同欄位置的 input
+        if (key === 'ArrowUp' || key === 'ArrowDown') {
+            e.preventDefault();
+            const $rows   = $('#quoteItemsTable > tbody > tr.item-row:visible');
+            const rowIdx  = $rows.index($row);
+            const adjIdx  = key === 'ArrowUp' ? rowIdx - 1 : rowIdx + 1;
+            if (adjIdx < 0 || adjIdx >= $rows.length) return;
+            const $adjRow    = $rows.eq(adjIdx);
+            const $adjInputs = $adjRow.find('input:not([type=hidden]):not([disabled]):visible');
+            const $target    = $adjInputs.eq(Math.min(idx, $adjInputs.length - 1));
+            if ($target.length) $target.focus().select();
+        }
+    });
+
+    // ── 流水號（後3碼）：只允許數字，blur 時補零 ──
+    $(document).on('input', '#quote_seq', function() {
+        this.value = this.value.replace(/\D/g, '').slice(0, 3);
+        syncQuoteNo();
+    });
+    $(document).on('blur', '#quote_seq', function() {
+        if (this.value) this.value = this.value.padStart(3, '0');
+        syncQuoteNo();
+    });
+
+    // ── 報價日：變更後更新前綴並取新流水號 ──
+    $('#quote_date').on('change', function() {
+        autoFillValidUntil();
+        const dateVal = this.value;
+        if (!dateVal) return;
+        const prefix = quoteNoPrefixFromDate(dateVal);
+        $('#quote_no_prefix').text(prefix);
+        $.get(API_URL, { action:'get_quote_no_for_date', date: dateVal }, res => {
+            if (res.success) {
+                $('#quote_seq').val(res.quote_no.slice(-3));
+                syncQuoteNo();
+            }
+        });
+    });
+
+    // 階梯 qty/price 即時計算
+    $(document).on('input', '.tier-qty-min, .tier-unit-price', function () {
+        const $r  = $(this).closest('tr');
+        const q   = Math.round(parseFloat($r.find('.tier-qty-min').val()) || 0);
+        const p   = parseFloat($r.find('.tier-unit-price').val()) || 0;
+        $r.find('.tier-amount').val(formatNumber(q * p));
+        calculateTotal();
+    });
+    $(document).on('change', '.tier-qty-min', function () {
+        autoFixTierOverlap($(this).closest('.tier-tbody'));
+        calculateTotal();
+    });
+
+    // 傳統 qty/price 即時計算
+    $(document).on('input', '.quantity, .unit-price', function () {
+        const $row = $(this).closest('tr.item-row');
+        if ($row.data('is-tiered')) return;
+        const q = parseFloat($row.find('.quantity').val()) || 0;
+        const p = parseFloat($row.find('.unit-price').val()) || 0;
+        $row.find('.amount').val(formatNumber(q * p));
+        calculateTotal();
+    });
+
+    // 點擊空白關閉 autocomplete
+    $(document).on('click', function (e) {
+        if (false) {} // 舊面板已移除
+        if (!$(e.target).closest('#client_name, #client-suggestions').length) {
+            $('#client-suggestions').hide().empty();
+        }
+        if (!$(e.target).closest('.part-search, .part-suggestions').length) {
+            $('.part-suggestions').hide().empty();
+        }
+        if (!$(e.target).closest('#part_client_search_modal, #part-customer-results').length) {
+            $('#part-customer-results').hide();
+        }
+    });
+
+    // 客戶管理 btn-edit-customer 委派
+    $(document).on('click', '.btn-edit-customer', function () {
+        editCustomer($(this).data('customer'));
+        $('html,body').animate({ scrollTop: $('#customerFormTitle').offset().top - 80 }, 200);
+    });
+    // 料號管理 btn-edit-part 委派
+    $(document).on('click', '.btn-edit-part', function () {
+        loadPartToModal($(this).data('part').d_id);
+        $('html,body').animate({ scrollTop: $('#partFormTitle').offset().top - 80 }, 200);
+    });
+    // 工件種類切換
+    $(document).on('change', '#part_type_modal', function () {
+        if ($(this).val() === 'G') {
+            $('#part-gear-section').slideDown();
+            if (!$('#part-gear-rows-container').children().length) addPartGearRow();
+        } else {
+            $('#part-gear-section').slideUp();
+        }
+    });
+    $(document).on('click', '#part-btn-add-gear', function () { addPartGearRow(); });
+    // 客戶搜尋（料號 Modal 內）
+    $(document).on('input', '#part_client_search_modal', function () {
+        const kw = $(this).val().trim();
+        if (kw.length < 1) { $('#part-customer-results').hide(); return; }
+        $.get(API_URL, { action: 'search_data', type: 'customer', term: kw }, res => {
+            if (res.success && res.data.length > 0) {
+                let html = '';
+                res.data.forEach(c => {
+                    html += `<div class="part-customer-item" data-id="${escapeHtml(c.customer_id)}" data-name="${escapeHtml(c.customer)}"
+                        style="padding:6px 10px;cursor:pointer;border-bottom:1px solid #eee;">
+                        <strong>${escapeHtml(c.customer_id)}</strong> ${escapeHtml(c.customer)}</div>`;
+                });
+                $('#part-customer-results').html(html).show();
+            } else {
+                $('#part-customer-results').hide();
+            }
+        });
+    });
+    $(document).on('click', '.part-customer-item', function () {
+        $('#part_customer_id_modal').val($(this).data('id'));
+        $('#part_client_search_modal').val($(this).data('name'));
+        $('#part-customer-results').hide();
+    });
+    // 齒輪螺旋角模式切換
+    $(document).on('click', '.btn-mode-dec', function () {
+        const $g = $(this).closest('.helix-angle-group');
+        $g.find('.mode-decimal').show(); $g.find('.mode-dms').hide();
+        $(this).addClass('active').siblings().removeClass('active');
+    });
+    $(document).on('click', '.btn-mode-dms', function () {
+        const $g = $(this).closest('.helix-angle-group');
+        $g.find('.mode-decimal').hide(); $g.find('.mode-dms').css('display', 'flex');
+        $(this).addClass('active').siblings().removeClass('active');
+    });
+    $(document).on('input', '.gear-helix-val', function () {
+        const $g = $(this).closest('.helix-angle-group');
+        $g.find('.hidden-helix-val').val($(this).val());
+        $g.find('.hidden-helix-str').val($(this).val());
+    });
+    $(document).on('input', '.dms-d, .dms-m, .dms-s', function () {
+        const $g = $(this).closest('.helix-angle-group');
+        const d = parseFloat($g.find('.dms-d').val()) || 0;
+        const m = parseFloat($g.find('.dms-m').val()) || 0;
+        const s = parseFloat($g.find('.dms-s').val()) || 0;
+        $g.find('.hidden-helix-val').val((d + m/60 + s/3600).toFixed(6));
+        $g.find('.hidden-helix-str').val(`${d}°${m}'${s}"`);
+    });
+    $(document).on('blur', '.gear-module', function () {
+        let v = $(this).val().trim().toUpperCase();
+        if (v !== '' && !isNaN(v.charAt(0))) $(this).val('M' + v);
+        else $(this).val(v);
+    });
+    $(document).on('change', '.gear-type', function () {
+        const $row = $(this).closest('.part-gear-row');
+        if ($(this).val() === '螺旋') $row.find('.helix-angle-group').slideDown();
+        else $row.find('.helix-angle-group').slideUp();
+    });
+});
+
+// ══════════════════════════════════════════════════════
+// 製程載入
+// ══════════════════════════════════════════════════════
+function loadProcesses() {
+    $.get(API_URL, { action: 'get_processes' }, res => {
+        if (res.success) {
+            allProcesses = res.data.map(p => ({
+                id: p.ProcessNo,
+                text: `${p.ProcessNo} - ${p.ProcessName}`
+            }));
+        }
+    });
+}
+function loadUnits() {
+    $.get(API_URL, { action: 'get_units' }, res => {
+        if (res.success) allUnits = res.units || [];
+    });
+}
+function buildUnitOptions(selectedUnit) {
+    const sel = selectedUnit || 'PCS';
+    let opts = '';
+    allUnits.forEach(u => {
+        const val = u.unit_symbol || u.unit_name;
+        opts += `<option value="${escapeHtml(val)}" ${val === sel ? 'selected' : ''}>${escapeHtml(val)}</option>`;
+    });
+    // 如果 allUnits 尚未載入或沒有包含 sel，補一個選項
+    if (!opts || !allUnits.some(u => (u.unit_symbol || u.unit_name) === sel)) {
+        opts = `<option value="${escapeHtml(sel)}" selected>${escapeHtml(sel)}</option>` + opts;
+    }
+    return opts;
+}
+
+// ══════════════════════════════════════════════════════
+// 列表載入 & 渲染
+// ══════════════════════════════════════════════════════
+// 動態計算 split-wrap 高度，消除外層滾動條
+// ══════════════════════════════════════════════════════
+// 載入附件類別（自動建表 + 初始資料）
+// ══════════════════════════════════════════════════════
+function loadFileCategories() {
+    $.get(FILE_API_URL, { action: 'get_categories' }, res => {
+        if (res.success) { allFileCategories = res.categories || []; applyPageCatScope(); }
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// 製程標籤 — 建表 + 載入
+// ══════════════════════════════════════════════════════
+function initProcessTagTables() {
+    $.post(API_URL, { action: 'init_process_tags' });
+}
+function loadProcessTagTree(cb) {
+    $.get(API_URL, { action: 'get_process_tag_tree' }, res => {
+        if (res.success) {
+            // PHP PDO 預設以字串回傳數字欄位，統一轉整數確保 === 比對正確
+            processTagTree = (res.tree || []).map(g => ({
+                ...g,
+                group_id:   parseInt(g.group_id),
+                sort_order: parseInt(g.sort_order) || 0,
+                sub_tags:   (g.sub_tags || []).map(st => ({
+                    ...st,
+                    sub_tag_id: parseInt(st.sub_tag_id),
+                    group_id:   parseInt(st.group_id),
+                    sort_order: parseInt(st.sort_order) || 0,
+                    process_nos: (st.process_nos || []).map(Number)
+                }))
+            }));
+        }
+        if (cb) cb();
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+// ── 備註模板 CRUD（設定頁 Tab 4）──────────────────────
+// ══════════════════════════════════════════════════════
+
+// ─ 變數列管理 ─
+// 料號標籤快取
+let _partLabels = null;
+function loadPartLabels(cb) {
+    if (_partLabels) { cb(_partLabels); return; }
+    $.get(API_URL, { action:'get_part_labels' }, res => {
+        _partLabels = res.success ? res.labels : [];
+        cb(_partLabels);
+    });
+}
+
+function buildNtmplVarRow(v) {
+    const key      = v ? escapeHtml(v.key||'') : '';
+    const hint     = v ? escapeHtml(v.hint||'') : '';
+    const vtype    = v ? (v.var_type||'text') : 'text';
+    const labelId  = v ? (v.label_id||'') : '';
+    const isLabel  = vtype === 'label_pick';
+    // 標籤選擇器 options（同步建立時可能還沒有資料，改用 data-label-id 動態載入）
+    return `<div class="ntmpl-var-row" style="display:flex;gap:4px;margin-bottom:4px;align-items:flex-start;flex-wrap:wrap;">
+        <span style="color:#888;font-size:13px;padding-top:4px;">{</span>
+        <input type="text" class="form-control input-sm ntmpl-var-key" style="width:55px;" placeholder="變數名" maxlength="20" value="${key}">
+        <span style="color:#888;font-size:13px;padding-top:4px;">}</span>
+        <select class="form-control input-sm ntmpl-var-type" style="width:100px;" onchange="onNtmplVarTypeChange(this)">
+            <option value="text"       ${vtype==='text'       ?'selected':''}>文字輸入</option>
+            <option value="label_pick" ${vtype==='label_pick' ?'selected':''}>料號標籤選</option>
+        </select>
+        <input type="text" class="form-control input-sm ntmpl-var-hint" style="flex:1;min-width:80px;${isLabel?'display:none;':''}" placeholder="提示文字" maxlength="30" value="${hint}">
+        <select class="form-control input-sm ntmpl-var-label" style="flex:1;min-width:100px;${!isLabel?'display:none;':''}" data-selected="${labelId}">
+            <option value="">載入中...</option>
+        </select>
+        <button type="button" class="btn btn-xs btn-danger" onclick="$(this).closest('.ntmpl-var-row').remove()">
+            <i class="fa fa-times"></i>
+        </button>
+    </div>`;
+}
+function onNtmplVarTypeChange(sel) {
+    const $row = $(sel).closest('.ntmpl-var-row');
+    const isLabel = $(sel).val() === 'label_pick';
+    $row.find('.ntmpl-var-hint').toggle(!isLabel);
+    const $lsel = $row.find('.ntmpl-var-label');
+    $lsel.toggle(isLabel);
+    if (isLabel && $lsel.find('option').length <= 1) {
+        loadPartLabels(labels => {
+            let html = '<option value="">選擇標籤（選填）</option>';
+            labels.forEach(l => html += `<option value="${l.label_id}">${escapeHtml(l.label_name)}</option>`);
+            $lsel.html(html);
+        });
+    }
+}
+function addNtmplVar() {
+    const $row = $(buildNtmplVarRow(null));
+    $('#ntmpl-vars-list').append($row);
+}
+function getNtmplVars() {
+    const vars = [];
+    $('.ntmpl-var-row').each(function() {
+        const key    = $(this).find('.ntmpl-var-key').val().trim();
+        const vtype  = $(this).find('.ntmpl-var-type').val();
+        const hint   = $(this).find('.ntmpl-var-hint').val().trim();
+        const lid    = $(this).find('.ntmpl-var-label').val();
+        if (key) vars.push({ key, hint, var_type: vtype || 'text', label_id: lid ? parseInt(lid) : null });
+    });
+    return vars;
+}
+function renderNtmplVarRows(vars) {
+    $('#ntmpl-vars-list').empty();
+    if (!vars || !vars.length) return;
+    // 先載入標籤清單，再繪製
+    const hasLabel = vars.some(v => v.var_type === 'label_pick');
+    if (hasLabel) {
+        loadPartLabels(labels => {
+            vars.forEach(v => {
+                const $row = $(buildNtmplVarRow(v));
+                const isLabel = v.var_type === 'label_pick';
+                if (isLabel) {
+                    let html = '<option value="">選擇標籤（選填）</option>';
+                    labels.forEach(l => {
+                        const sel = l.label_id == v.label_id ? 'selected' : '';
+                        html += `<option value="${l.label_id}" ${sel}>${escapeHtml(l.label_name)}</option>`;
+                    });
+                    $row.find('.ntmpl-var-label').html(html).show();
+                    $row.find('.ntmpl-var-hint').hide();
+                }
+                $('#ntmpl-vars-list').append($row);
+            });
+        });
+    } else {
+        vars.forEach(v => $('#ntmpl-vars-list').append(buildNtmplVarRow(v)));
+    }
+}
+
+// ─ 套用模板（含變數 Swal）─
+function applyNoteTemplate(text, vars, onApplied) {
+    if (!vars || !vars.length) {
+        const cur = $('#note').val().trim();
+        $('#note').val(cur ? cur + '　' + text : text).trigger('input');
+        if (onApplied) onApplied();
+        return;
+    }
+    // 先取得所有 label_pick 變數需要的子標籤，再建 Swal
+    const labelFetches = vars.map((v, i) => {
+        if (v.var_type !== 'label_pick') return Promise.resolve(null);
+        return new Promise(resolve => {
+            if (v.label_id) {
+                $.get(API_URL, { action:'get_part_label_subs', label_id: v.label_id }, res => {
+                    resolve(res.success ? res.subs : []);
+                });
+            } else {
+                loadPartLabels(labels => resolve(labels.map(l => ({ sub_id: l.label_id, sub_name: l.label_name }))));
+            }
+        });
+    });
+    Promise.all(labelFetches).then(subLists => {
+    let html = '<div style="text-align:left;padding:0 4px;">';
+    vars.forEach((v, i) => {
+        const prompt = v.hint ? `${v.hint}（{${escapeHtml(v.key)}}）` : `{${escapeHtml(v.key)}}`;
+        html += `<div style="margin-bottom:10px;"><label style="font-size:13px;font-weight:600;margin-bottom:3px;">${prompt}</label>`;
+        if (v.var_type === 'label_pick' && subLists[i]) {
+            html += `<select id="swal-ntvar-${i}" class="swal2-input" style="margin:0;width:100%;height:34px;">
+                <option value="">— 請選擇 —</option>`;
+            subLists[i].forEach(s => {
+                if (s.options && s.options.length) {
+                    // 有孫子標籤：用 optgroup 分群
+                    html += `<optgroup label="${escapeHtml(s.sub_name)}">`;
+                    s.options.forEach(opt => { html += `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`; });
+                    html += `</optgroup>`;
+                } else {
+                    html += `<option value="${escapeHtml(s.sub_name)}">${escapeHtml(s.sub_name)}</option>`;
+                }
+            });
+            html += `</select>`;
+        } else {
+            html += `<input id="swal-ntvar-${i}" class="swal2-input" style="margin:0;width:100%;" placeholder="請輸入 ${escapeHtml(v.hint || v.key)}">`;
+        }
+        html += `</div>`;
+    });
+    html += '</div>';
+    Swal.fire({
+        title: '請填入變數值',
+        html,
+        showCancelButton: true,
+        confirmButtonText: '確定帶入',
+        cancelButtonText: '取消',
+        focusConfirm: false,
+        didOpen: () => {
+            vars.forEach((v, i) => {
+                const el = document.getElementById('swal-ntvar-' + i);
+                if (!el) return;
+                if (v.var_type === 'label_pick') {
+                    // 下拉選單：選完後自動跳下一個欄位
+                    el.addEventListener('change', function() {
+                        if (!this.value) return;
+                        const next = document.getElementById('swal-ntvar-' + (i + 1));
+                        if (next) next.focus(); else Swal.clickConfirm();
+                    });
+                } else {
+                    el.addEventListener('keydown', function(e) {
+                        if (e.key !== 'Enter') return;
+                        e.preventDefault();
+                        const next = document.getElementById('swal-ntvar-' + (i + 1));
+                        if (next) next.focus(); else Swal.clickConfirm();
+                    });
+                }
+            });
+        },
+        preConfirm: () => {
+            const vals = {};
+            for (let i = 0; i < vars.length; i++) {
+                const v = document.getElementById('swal-ntvar-' + i).value.trim();
+                if (!v) { Swal.showValidationMessage(`請填入 ${vars[i].hint || vars[i].key}`); return false; }
+                vals[vars[i].key] = v;
+            }
+            return vals;
+        }
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        let result = text;
+        Object.entries(r.value).forEach(([k, v]) => {
+            result = result.split('{' + k + '}').join(v);
+        });
+        const cur = $('#note').val().trim();
+        $('#note').val(cur ? cur + '　' + result : result).trigger('input');
+        if (onApplied) onApplied();
+    });
+    }); // end Promise.all.then
+}
+
+// ─ 模板資料 Map（避免引號衝突）─
+let _ntmplMap = {};   // id → { label, note_text, sort_order, vars }
+
+// ─ 載入快選按鈕 ─
+function initNoteTemplates() {
+    $.post(API_URL, { action: 'init_note_templates' }, res => {
+        if (res.success) loadNoteTemplateBtns();
+    });
+}
+function loadNoteTemplateBtns() {
+    $.get(API_URL, { action: 'get_note_templates' }, res => {
+        if (!res.success) return;
+        const $wrap = $('#note-tmpl-btns');
+        if (!res.templates.length) { $wrap.empty(); return; }
+        let html = '';
+        res.templates.forEach(t => {
+            let vars = [];
+            try { vars = JSON.parse(t.variables || '[]'); } catch(e) {}
+            _ntmplMap[t.id] = {
+                label: t.label, note_text: t.note_text, sort_order: parseInt(t.sort_order) || 0,
+                vars, auto_for_full: !!+t.auto_for_full, auto_for_single: !!+t.auto_for_single
+            };
+            const icon = vars.length ? ' <i class="fa fa-pencil-square-o" style="font-size:10px;opacity:.55;"></i>' : '';
+            const autoIcon = (t.auto_for_full || t.auto_for_single)
+                ? ' <i class="fa fa-magic" style="font-size:9px;opacity:.5;" title="自動帶入"></i>' : '';
+            html += `<button type="button" class="btn btn-xs btn-default note-tmpl-btn" style="margin:0 3px 3px 0;"
+                data-ntid="${t.id}">${escapeHtml(t.label)}${icon}${autoIcon}</button>`;
+        });
+        $wrap.html(html);
+        syncNoteTemplateBtnStates();
+        $wrap.off('click', '.note-tmpl-btn').on('click', '.note-tmpl-btn', function() {
+            const $btn = $(this);
+            const tmpl = _ntmplMap[$btn.data('ntid')];
+            if (tmpl) applyNoteTemplate(tmpl.note_text, tmpl.vars, () => $btn.addClass('nt-applied'));
+        });
+    });
+}
+// 掃描備註欄，已帶入的模板按鈕標綠
+function syncNoteTemplateBtnStates() {
+    const noteVal = $('#note').val();
+    $('#note-tmpl-btns .note-tmpl-btn').each(function() {
+        const tmpl = _ntmplMap[$(this).data('ntid')];
+        if (!tmpl || tmpl.vars.length > 0) return; // 變數型模板跳過
+        $(this).toggleClass('nt-applied', noteVal.includes(tmpl.note_text));
+    });
+}
+
+// ─ 依製程類型自動帶入備註 ─
+function applyProcTypeNotes() {
+    let hasFull = false, hasSingle = false;
+    $('.item-row').each(function() {
+        const gtype  = $(this).find('.proc-group-type-hidden').val();
+        const hasProc = !!$(this).find('.process-hidden').val().trim();
+        if (!hasProc) return;
+        if (gtype === 'full_process') hasFull = true;
+        else hasSingle = true;
+    });
+    if (!hasFull && !hasSingle) {
+        Swal.fire({ toast:true, position:'top-end', icon:'info', title:'訂單內無已選製程', showConfirmButton:false, timer:2000 });
+        return;
+    }
+    // 收集符合條件的模板（依 sort_order 排序）
+    const applicable = Object.values(_ntmplMap)
+        .filter(t => (hasFull && t.auto_for_full) || (hasSingle && t.auto_for_single))
+        .sort((a, b) => a.sort_order - b.sort_order);
+    if (!applicable.length) {
+        Swal.fire({ toast:true, position:'top-end', icon:'info', title:'無設定自動帶入的備註模板', showConfirmButton:false, timer:2000 });
+        return;
+    }
+    const chinesePunct = /[。！？；，、…]/;
+    const typeHint = [hasFull ? '全製程' : '', hasSingle ? '單一製程' : ''].filter(Boolean).join('＋');
+
+    // 依序處理：有變數的模板逐一跳窗填值，全部完成後合併追加
+    function appendSegment(text) {
+        const cur = $('#note').val().trim();
+        if (!cur) { $('#note').val(text).trigger('input'); return; }
+        const lastChar = cur.slice(-1);
+        $('#note').val(cur + (chinesePunct.test(lastChar) ? '' : '；') + text).trigger('input');
+    }
+    function processNext(idx, segments) {
+        if (idx >= applicable.length) {
+            // 全部完成，末尾補句號
+            const v = $('#note').val();
+            if (v && !chinesePunct.test(v.slice(-1))) $('#note').val(v + '。').trigger('input');
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title:`已帶入 ${typeHint} 備註`, showConfirmButton:false, timer:2000 });
+            return;
+        }
+        const t = applicable[idx];
+        if (!t.vars || !t.vars.length) {
+            // 無變數，直接追加
+            appendSegment(t.note_text);
+            processNext(idx + 1, segments);
+        } else {
+            // 有變數：彈窗填值
+            let html = '<div style="text-align:left;padding:0 4px;">';
+            t.vars.forEach((v, i) => {
+                const prompt = v.hint ? `${v.hint}（{${escapeHtml(v.key)}}）` : `{${escapeHtml(v.key)}}`;
+                html += `<div style="margin-bottom:10px;"><label style="font-size:13px;font-weight:600;">${prompt}</label>
+                    <input id="swal-ntvar-${i}" class="swal2-input" style="margin:0;width:100%;" placeholder="${escapeHtml(v.hint||v.key)}"></div>`;
+            });
+            html += `</div><p style="font-size:11px;color:#888;margin-top:6px;">模板：${escapeHtml(t.label)}</p>`;
+            Swal.fire({
+                title:'請填入變數值',
+                html,
+                showCancelButton:true,
+                confirmButtonText:'帶入',
+                cancelButtonText:'跳過',
+                focusConfirm:false,
+                didOpen: () => {
+                    t.vars.forEach((v, i) => {
+                        const el = document.getElementById('swal-ntvar-'+i);
+                        if (!el) return;
+                        el.addEventListener('keydown', e => {
+                            if (e.key !== 'Enter') return;
+                            e.preventDefault();
+                            const next = document.getElementById('swal-ntvar-'+(i+1));
+                            if (next) next.focus(); else Swal.clickConfirm();
+                        });
+                    });
+                    document.getElementById('swal-ntvar-0') && document.getElementById('swal-ntvar-0').focus();
+                },
+                preConfirm: () => {
+                    const vals = {};
+                    for (let i = 0; i < t.vars.length; i++) {
+                        const v = document.getElementById('swal-ntvar-'+i).value.trim();
+                        if (!v) { Swal.showValidationMessage(`請填入 ${t.vars[i].hint||t.vars[i].key}`); return false; }
+                        vals[t.vars[i].key] = v;
+                    }
+                    return vals;
+                }
+            }).then(r => {
+                if (r.isConfirmed) {
+                    let text = t.note_text;
+                    Object.entries(r.value).forEach(([k, v]) => { text = text.split('{'+k+'}').join(v); });
+                    appendSegment(text);
+                }
+                // 無論確定或跳過都繼續下一個
+                processNext(idx + 1, segments);
+            });
+        }
+    }
+    processNext(0, []);
+}
+
+// ─ 設定頁列表 ─
+function loadAllNoteTemplates() {
+    $.get(API_URL, { action: 'get_all_note_templates' }, res => {
+        if (!res.success) return;
+        res.templates.forEach(t => {
+            let vars = [];
+            try { vars = JSON.parse(t.variables || '[]'); } catch(e) {}
+            _ntmplMap[t.id] = {
+                label: t.label, note_text: t.note_text, sort_order: parseInt(t.sort_order) || 0,
+                vars, auto_for_full: !!+t.auto_for_full, auto_for_single: !!+t.auto_for_single
+            };
+        });
+        renderNoteTemplateTable(res.templates);
+    });
+}
+function renderNoteTemplateTable(tmpls) {
+    let html = '';
+    tmpls.forEach(t => {
+        let vars = [];
+        try { vars = JSON.parse(t.variables || '[]'); } catch(e) {}
+        const badge      = t.is_active == 1 ? '<span class="label label-success">啟用</span>' : '<span class="label label-default">停用</span>';
+        const labelEsc   = escapeHtml(t.label);
+        const textEsc    = escapeHtml(t.note_text);
+        const varsBadge  = vars.length ? `<span class="label label-info" style="margin-left:3px;">${vars.length} 變數</span>` : '';
+        const autoBadges = [
+            +t.auto_for_full   ? '<span class="label label-warning" title="全製程時自動帶入">全</span>'   : '',
+            +t.auto_for_single ? '<span class="label label-primary" title="單一製程時自動帶入">單</span>' : ''
+        ].join('');
+        html += `<tr data-ntid="${t.id}" draggable="false" style="white-space:nowrap;">
+            <td style="width:20px;cursor:grab;color:#bbb;text-align:center;" class="ntmpl-drag-handle">&#9776;</td>
+            <td style="max-width:100px;overflow:hidden;text-overflow:ellipsis;" title="${labelEsc}">${labelEsc}${varsBadge}</td>
+            <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;" title="${textEsc}">${textEsc}</td>
+            <td style="text-align:center;">${autoBadges || '<span style="color:#ccc;">—</span>'}</td>
+            <td style="text-align:center;">${badge}</td>
+            <td>
+                <button class="btn btn-xs btn-warning" data-ntid="${t.id}" onclick="editNoteTemplate($(this).data('ntid'))">
+                    <i class="fa fa-pencil"></i>
+                </button>
+                <button class="btn btn-xs ${t.is_active==1?'btn-danger':'btn-default'}" onclick="toggleNoteTemplate(${t.id})" title="${t.is_active==1?'停用':'啟用'}">
+                    <i class="fa fa-${t.is_active==1?'ban':'check'}"></i>
+                </button>
+            </td>
+        </tr>`;
+    });
+    $('#ntmpl-table-body').html(html || '<tr><td colspan="6" class="text-center text-muted">無資料</td></tr>');
+    initNtmplTableDrag();
+}
+function initNtmplTableDrag() {
+    const tbody = document.querySelector('#ntmpl-table-body');
+    if (!tbody) return;
+    let dragging = null;
+    tbody.querySelectorAll('tr').forEach(tr => {
+        const handle = tr.querySelector('.ntmpl-drag-handle');
+        if (!handle) return;
+        handle.addEventListener('mousedown', () => tr.setAttribute('draggable','true'));
+        tr.addEventListener('dragend',   () => { tr.setAttribute('draggable','false'); $(tr).css('opacity',''); dragging = null; });
+        tr.addEventListener('dragstart', e => { dragging = tr; e.dataTransfer.effectAllowed='move'; setTimeout(()=>$(tr).css('opacity','0.4'),0); });
+        tr.addEventListener('dragover',  e => {
+            e.preventDefault();
+            if (!dragging || dragging===tr) return;
+            const rect = tr.getBoundingClientRect();
+            tbody.insertBefore(dragging, e.clientY < rect.top+rect.height/2 ? tr : tr.nextSibling);
+        });
+        tr.addEventListener('drop', e => {
+            e.preventDefault();
+            $(dragging).css('opacity','');
+            const ids = [...tbody.querySelectorAll('tr[data-ntid]')].map(r => r.dataset.ntid);
+            $.post(API_URL, { action:'reorder_note_templates', ids: JSON.stringify(ids) }, () => {
+                loadAllNoteTemplates();
+                loadNoteTemplateBtns();
+            });
+        });
+    });
+}
+function editNoteTemplate(id) {
+    const t = _ntmplMap[id];
+    if (!t) return;
+    $('#ntmpl-edit-id').val(id);
+    $('#ntmpl-label-input').val(t.label);
+    $('#ntmpl-text-input').val(t.note_text);
+    $('#ntmpl-order-input').val(t.sort_order);
+    $('#ntmpl-auto-full').prop('checked', !!t.auto_for_full);
+    $('#ntmpl-auto-single').prop('checked', !!t.auto_for_single);
+    renderNtmplVarRows(t.vars);
+    $('#ntmpl-form-title').text('修改備註模板');
+    $('#qs-tab-note-tmpl .panel').get(0).scrollIntoView({ behavior: 'smooth' });
+}
+function resetNoteTemplateForm() {
+    $('#ntmpl-edit-id').val('');
+    $('#ntmpl-label-input').val('');
+    $('#ntmpl-text-input').val('');
+    $('#ntmpl-order-input').val(0);
+    $('#ntmpl-auto-full').prop('checked', false);
+    $('#ntmpl-auto-single').prop('checked', false);
+    $('#ntmpl-vars-list').empty();
+    $('#ntmpl-form-title').text('新增備註模板');
+}
+function saveNoteTemplate() {
+    const id      = parseInt($('#ntmpl-edit-id').val()) || 0;
+    const label   = $('#ntmpl-label-input').val().trim();
+    const text    = $('#ntmpl-text-input').val().trim();
+    const ord     = parseInt($('#ntmpl-order-input').val()) || 0;
+    const vars    = getNtmplVars();
+    const aFull   = $('#ntmpl-auto-full').is(':checked')   ? 1 : 0;
+    const aSingle = $('#ntmpl-auto-single').is(':checked') ? 1 : 0;
+    if (!label || !text) { Swal.fire('提示','請填寫按鈕標籤與備註文字','warning'); return; }
+    const keys = vars.map(v => v.key);
+    const missing = keys.filter(k => !text.includes('{' + k + '}'));
+    if (missing.length) {
+        Swal.fire('提示', `備註文字中找不到變數 {${missing[0]}} 的佔位符`, 'warning');
+        return;
+    }
+    $.post(API_URL, {
+        action:'save_note_template', tmpl_id:id, label, note_text:text,
+        variables:JSON.stringify(vars), sort_order:ord,
+        auto_for_full: aFull, auto_for_single: aSingle
+    }, res => {
+        if (res.success) {
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title:res.message, showConfirmButton:false, timer:1800 });
+            resetNoteTemplateForm();
+            loadAllNoteTemplates();
+            loadNoteTemplateBtns();
+        } else { Swal.fire('錯誤', res.message, 'error'); }
+    });
+}
+function toggleNoteTemplate(id) {
+    $.post(API_URL, { action:'toggle_note_template', tmpl_id:id }, res => {
+        if (res.success) {
+            loadAllNoteTemplates();
+            loadNoteTemplateBtns();
+        } else { Swal.fire('錯誤', res.message, 'error'); }
+    });
+}
+
+// ── HTML5 drag-and-drop 拖移排序（jQuery UI sortable 不可用時的替代）──
+function initHtml5Drag(containerSel, handleSel, apiAction, dataKey) {
+    const $c = $(containerSel);
+    let draggingEl = null;
+    $c.find('.pt-group-item').each(function() {
+        this.setAttribute('draggable', 'false'); // 整列先關
+        $(this).find(handleSel).each(function() {
+            this.setAttribute('draggable', 'true');
+            this.addEventListener('dragstart', function(e) {
+                draggingEl = $(this).closest('.pt-group-item')[0];
+                e.dataTransfer.effectAllowed = 'move';
+                setTimeout(() => draggingEl && $(draggingEl).css('opacity','0.4'), 0);
+            });
+        });
+        this.addEventListener('dragend', function() {
+            $(this).css('opacity','');
+            draggingEl = null;
+        });
+        this.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            if (!draggingEl || draggingEl === this) return;
+            const rect = this.getBoundingClientRect();
+            const mid  = rect.top + rect.height / 2;
+            if (e.clientY < mid) this.parentNode.insertBefore(draggingEl, this);
+            else this.parentNode.insertBefore(draggingEl, this.nextSibling);
+        });
+        this.addEventListener('drop', function(e) {
+            e.preventDefault();
+            const ids = [];
+            $(containerSel + ' .pt-group-item').each(function() { ids.push($(this).data(dataKey)); });
+            $.post(API_URL, { action: apiAction, ids: JSON.stringify(ids) });
+        });
+    });
+}
+
+// ★ 設定 Modal
+// ══════════════════════════════════════════════════════
+function openSettingsModal() {
+    // 填入路徑
+    $('#qs-upload-path').val(currentUploadPath || '');
+    // 載入附件類別
+    loadSettingCategories();
+    // 載入製程標籤
+    loadProcessTagTree(() => renderPtGroupList());
+    // 載入備註模板
+    loadAllNoteTemplates();
+    // 載入表單編號 + 有效天數
+    loadFormNumber();
+    loadValidDays();
+    $('#quoteSettingsModal').modal('show');
+}
+
+// ── 路徑儲存 ──────────────────────────────────────────
+function saveUploadPath() {
+    const p = $('#qs-upload-path').val().trim();
+    if (!p) { Swal.fire('提示','路徑不可為空','warning'); return; }
+    $.post(API_URL, {
+        action: 'save_param', param_group: 'QUOTATION', param_key: 'upload_path',
+        param_value: JSON.stringify(p), description: '報價單附件儲存根目錄'
+    }, res => {
+        if (res.success) {
+            currentUploadPath = p;
+            $('#uploadPathDisplay').text(p);
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title:'路徑已儲存', showConfirmButton:false, timer:2000 });
+        } else { Swal.fire('錯誤', res.message, 'error'); }
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// ── 附件類別 CRUD（設定頁 Tab 2）──────────────────────
+// ══════════════════════════════════════════════════════
+function loadSettingCategories(refreshPanels) {
+    $.get(FILE_API_URL, { action: 'get_all_categories' }, res => {
+        if (!res.success) return;
+        allFileCategories = res.categories.filter(c => c.is_active == 1);
+        applyPageCatScope();
+        renderSettingCategoryTable(res.categories);
+        renderRequiredCatsSetting();
+        renderPageCatSetting();
+        // 同步重繪已展開的附件標籤面板
+        if (refreshPanels !== false) {
+            $('.file-tag-panel:visible').each(function() {
+                const $wrap = $(this).closest('.file-item-wrap');
+                const quoteNo = $('#quote_no').val();
+                const fid = $wrap.data('attach-id');
+                const f = { category_id: $wrap.data('cat-id') || null, linked_parts: null };
+                renderFileTagPanel($wrap, f, quoteNo);
+            });
+        }
+    });
+}
+function renderSettingCategoryTable(cats) {
+    let html = '';
+    cats.forEach(c => {
+        const badge = c.is_active == 1
+            ? '<span class="label label-success">啟用</span>'
+            : '<span class="label label-default">停用</span>';
+        html += `<tr data-cat-id="${c.id}" draggable="false">
+            <td style="width:24px;cursor:grab;color:#bbb;text-align:center;" class="cat-drag-handle">&#9776;</td>
+            <td>${escapeHtml(c.category_name)} ${badge}</td>
+            <td>
+                <button class="btn btn-xs btn-warning" onclick="editCategorySettings(${c.id},'${escapeHtml(c.category_name)}',${c.sort_order})">
+                    <i class="fa fa-pencil"></i>
+                </button>
+                ${c.is_active == 1
+                    ? `<button class="btn btn-xs btn-danger" onclick="deactivateCategorySettings(${c.id})" title="停用"><i class="fa fa-ban"></i></button>`
+                    : `<button class="btn btn-xs btn-default" onclick="reactivateCategorySettings(${c.id})" title="重新啟用"><i class="fa fa-check"></i></button>`
+                }
+            </td>
+        </tr>`;
+    });
+    $('#cat-table-body').html(html || '<tr><td colspan="3" class="text-center text-muted">無資料</td></tr>');
+    initCatTableDrag();
+}
+function initCatTableDrag() {
+    const tbody = document.querySelector('#cat-table-body');
+    if (!tbody) return;
+    let dragging = null;
+    tbody.querySelectorAll('tr').forEach(tr => {
+        const handle = tr.querySelector('.cat-drag-handle');
+        if (!handle) return;
+        handle.addEventListener('mousedown', () => { tr.setAttribute('draggable','true'); });
+        tr.addEventListener('dragend',   () => { tr.setAttribute('draggable','false'); dragging = null; });
+        tr.addEventListener('dragstart', e => { dragging = tr; e.dataTransfer.effectAllowed='move'; setTimeout(()=>$(tr).css('opacity','0.4'),0); });
+        tr.addEventListener('dragover',  e => {
+            e.preventDefault();
+            if (!dragging || dragging === tr) return;
+            const rect = tr.getBoundingClientRect();
+            if (e.clientY < rect.top + rect.height / 2) tbody.insertBefore(dragging, tr);
+            else tbody.insertBefore(dragging, tr.nextSibling);
+        });
+        tr.addEventListener('drop', e => {
+            e.preventDefault();
+            $(dragging).css('opacity','');
+            const ids = [...tbody.querySelectorAll('tr[data-cat-id]')].map(r => r.dataset.catId);
+            $.post(FILE_API_URL, { action:'reorder_categories', ids: JSON.stringify(ids) }, () => loadSettingCategories());
+        });
+    });
+}
+function saveCategorySettings() {
+    const id   = parseInt($('#cat-edit-id').val()) || 0;
+    const name = $('#cat-name-input').val().trim();
+    const ord  = parseInt($('#cat-order-input').val()) || 0;
+    if (!name) { Swal.fire('提示','請填寫類別名稱','warning'); return; }
+    $.post(FILE_API_URL, { action:'save_category', cat_id:id, category_name:name, sort_order:ord }, res => {
+        if (res.success) {
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title:res.message, showConfirmButton:false, timer:1800 });
+            resetCategoryForm();
+            loadSettingCategories();
+        } else { Swal.fire('錯誤', res.message, 'error'); }
+    });
+}
+function editCategorySettings(id, name, order) {
+    $('#cat-edit-id').val(id);
+    $('#cat-name-input').val(name);
+    $('#cat-order-input').val(order);
+    $('#cat-form-title').text('修改類別');
+}
+function resetCategoryForm() {
+    $('#cat-edit-id').val('');
+    $('#cat-name-input').val('');
+    $('#cat-order-input').val(0);
+    $('#cat-form-title').text('新增類別');
+}
+function deactivateCategorySettings(id) {
+    Swal.fire({ title:'確定停用此類別？', icon:'warning', showCancelButton:true, confirmButtonColor:'#d33',
+        confirmButtonText:'停用', cancelButtonText:'取消'
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $.post(FILE_API_URL, { action:'deactivate_category', cat_id:id }, res => {
+            if (res.success) {
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已停用', showConfirmButton:false, timer:1800 });
+                loadSettingCategories();
+            } else { Swal.fire('錯誤', res.message, 'error'); }
+        });
+    });
+}
+function reactivateCategorySettings(id) {
+    $.post(FILE_API_URL, { action:'save_category', cat_id:id, category_name:'', sort_order:0 }); // dummy, will fail
+    // Actually use a re-enable action by calling save with is_active=1 via update:
+    // Simpler: just UPDATE via save_category with existing name. But we don't have name here.
+    // Use a workaround: fetch name first, then save
+    $.get(FILE_API_URL, { action:'get_all_categories' }, res => {
+        const cat = (res.categories || []).find(c => c.id == id);
+        if (!cat) return;
+        // Directly set is_active=1 - we'll add a quick SQL via a new action
+        $.post(FILE_API_URL, { action:'save_category', cat_id:id, category_name:cat.category_name, sort_order:cat.sort_order, reactivate:1 }, res2 => {
+            if (res2.success) {
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已重新啟用', showConfirmButton:false, timer:1800 });
+                loadSettingCategories();
+            }
+        });
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// ── 製程標籤 CRUD（設定頁 Tab 3）──────────────────────
+// ══════════════════════════════════════════════════════
+let ptSelectedGroupId  = null;
+let ptSelectedSubTagId = null;
+let ptCurrentChecked   = [];   // 獨立記錄已勾選製程 ID，不依賴 DOM 避免搜尋時丟失
+
+function renderPtGroupList() {
+    let html = '';
+    processTagTree.forEach(g => {
+        const active  = ptSelectedGroupId === g.group_id;
+        const isFull  = g.group_type === 'full_process';
+        html += `<div class="pt-group-item ${active?'active':''}" data-gid="${g.group_id}">
+            <span class="pt-drag-handle" title="拖移排序">&#9776;</span>
+            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(g.group_name)}</span>
+            <span style="display:flex;gap:2px;align-items:center;flex-shrink:0;">
+                <button class="btn btn-xs ${isFull?'btn-warning':'btn-default'}" title="全製程"
+                    onclick="event.stopPropagation();setPtGroupType(${g.group_id},'full_process')"
+                    style="font-size:10px;padding:1px 5px;">全</button>
+                <button class="btn btn-xs ${!isFull?'btn-primary':'btn-default'}" title="單一製程"
+                    onclick="event.stopPropagation();setPtGroupType(${g.group_id},'single_process')"
+                    style="font-size:10px;padding:1px 5px;">單</button>
+                <span class="pt-edit" data-gid="${g.group_id}" onclick="event.stopPropagation();renamePtGroup($(this).data('gid'))" title="重新命名">
+                    <i class="fa fa-pencil"></i>
+                </span>
+                <span class="pt-del" onclick="event.stopPropagation();deletePtGroup(${g.group_id})" title="刪除群組">
+                    <i class="fa fa-times"></i>
+                </span>
+            </span>
+        </div>`;
+    });
+    $('#pt-group-list').html(html || '<div class="text-muted" style="font-size:11px;">尚無群組</div>');
+    // 事件委派取代 inline onclick（避免 jQuery UI sortable mousedown 攔截）
+    $('#pt-group-list').off('click.ptgrp').on('click.ptgrp', '.pt-group-item', function(e) {
+        if ($(e.target).closest('button, .pt-drag-handle, .pt-del, .pt-edit').length) return;
+        selectPtGroup($(this).data('gid'));
+    });
+    if (processTagTree.length > 1) {
+        if ($.fn.sortable) {
+            $('#pt-group-list').sortable({
+                handle: '.pt-drag-handle', distance: 5,
+                placeholder: 'ui-sortable-placeholder', tolerance: 'pointer',
+                stop: function() {
+                    const ids = $('#pt-group-list .pt-group-item').map(function() { return $(this).data('gid'); }).get();
+                    $.post(API_URL, { action:'reorder_process_tag_groups', ids: JSON.stringify(ids) }, res => {
+                        if (res.success) loadProcessTagTree(() => renderPtGroupList());
+                    });
+                }
+            }).disableSelection();
+        } else {
+            initHtml5Drag('#pt-group-list', '.pt-drag-handle', 'reorder_process_tag_groups', 'gid');
+        }
+    }
+}
+function setPtGroupType(gid, type) {
+    const g = processTagTree.find(x => x.group_id === gid);
+    if (!g) return;
+    $.post(API_URL, { action:'save_process_tag_group', group_id:gid, group_name:g.group_name, sort_order:g.sort_order||0, group_type:type }, res => {
+        if (res.success) loadProcessTagTree(() => renderPtGroupList());
+        else Swal.fire('錯誤', res.message, 'error');
+    });
+}
+function renamePtGroup(gid) {
+    const g = processTagTree.find(x => x.group_id === gid);
+    if (!g) return;
+    Swal.fire({
+        title: '重新命名群組',
+        input: 'text',
+        inputValue: g.group_name,
+        inputAttributes: { maxlength: 50 },
+        showCancelButton: true,
+        confirmButtonText: '儲存',
+        cancelButtonText: '取消',
+        didOpen: () => { $(document).off('focusin.modal'); Swal.getInput().focus(); },
+        preConfirm: name => {
+            name = name.trim();
+            if (!name) { Swal.showValidationMessage('名稱不可為空'); return false; }
+            return name;
+        }
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $.post(API_URL, { action:'save_process_tag_group', group_id:gid, group_name:r.value, sort_order:g.sort_order||0, group_type:g.group_type||'single_process' }, res => {
+            if (res.success) {
+                loadProcessTagTree(() => renderPtGroupList());
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已更新', showConfirmButton:false, timer:1500 });
+            } else { Swal.fire('錯誤', res.message, 'error'); }
+        });
+    });
+}
+function addPtGroup() {
+    const name = $('#pt-new-group').val().trim();
+    if (!name) return;
+    $.post(API_URL, { action:'save_process_tag_group', group_name:name, group_type:'single_process', sort_order: processTagTree.length }, res => {
+        if (res.success) {
+            $('#pt-new-group').val('');
+            loadProcessTagTree(() => renderPtGroupList());
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已新增', showConfirmButton:false, timer:1500 });
+        } else { Swal.fire('錯誤', res.message, 'error'); }
+    });
+}
+function deletePtGroup(gid) {
+    Swal.fire({ title:'刪除此群組及其所有子標籤？', icon:'warning', showCancelButton:true,
+        confirmButtonColor:'#d33', confirmButtonText:'刪除', cancelButtonText:'取消'
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $.post(API_URL, { action:'delete_process_tag_group', group_id:gid }, res => {
+            if (res.success) {
+                if (ptSelectedGroupId === gid) { ptSelectedGroupId=null; ptSelectedSubTagId=null; }
+                loadProcessTagTree(() => { renderPtGroupList(); renderPtSubTagList(); renderPtProcList(); });
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已刪除', showConfirmButton:false, timer:1500 });
+            } else { Swal.fire('錯誤', res.message, 'error'); }
+        });
+    });
+}
+function selectPtGroup(gid) {
+    ptSelectedGroupId  = gid;
+    ptSelectedSubTagId = null;
+    const g = processTagTree.find(x => x.group_id === gid);
+    $('#pt-sub-group-label').text(' — ' + (g ? g.group_name : ''));
+    $('#pt-sub-form').show();
+    renderPtGroupList();
+    renderPtSubTagList();
+    renderPtProcList();
+}
+function renderPtSubTagList() {
+    if (!ptSelectedGroupId) {
+        $('#pt-sub-list').html('<div class="text-muted" style="font-size:11px;">← 先選擇群組</div>');
+        return;
+    }
+    const g = processTagTree.find(x => x.group_id === ptSelectedGroupId);
+    const subs = g ? g.sub_tags : [];
+    let html = '';
+    subs.forEach(st => {
+        const active = ptSelectedSubTagId === st.sub_tag_id;
+        html += `<div class="pt-group-item ${active?'active':''}" data-sid="${st.sub_tag_id}">
+            <span class="pt-drag-handle" title="拖移排序">&#9776;</span>
+            <span style="flex:1;text-align:left;">${escapeHtml(st.sub_tag_name)} <small style="color:#aaa;">(${(st.process_nos||[]).length})</small></span>
+            <span style="display:flex;gap:2px;align-items:center;">
+                <span class="pt-edit" data-sid="${st.sub_tag_id}" onclick="event.stopPropagation();renamePtSubTag($(this).data('sid'))" title="重新命名">
+                    <i class="fa fa-pencil"></i>
+                </span>
+                <span class="pt-del" onclick="event.stopPropagation();deletePtSubTag(${st.sub_tag_id})" title="刪除">
+                    <i class="fa fa-times"></i>
+                </span>
+            </span>
+        </div>`;
+    });
+    $('#pt-sub-list').html(html || '<div class="text-muted" style="font-size:11px;">尚無子標籤</div>');
+    // 事件委派取代 inline onclick
+    $('#pt-sub-list').off('click.ptsub').on('click.ptsub', '.pt-group-item', function(e) {
+        if ($(e.target).closest('.pt-drag-handle, .pt-del, .pt-edit').length) return;
+        selectPtSubTag($(this).data('sid'));
+    });
+    if (subs.length > 1) {
+        if ($.fn.sortable) {
+            $('#pt-sub-list').sortable({
+                handle: '.pt-drag-handle', distance: 5,
+                placeholder: 'ui-sortable-placeholder', tolerance: 'pointer',
+                stop: function() {
+                    const ids = $('#pt-sub-list .pt-group-item').map(function() { return $(this).data('sid'); }).get();
+                    $.post(API_URL, { action:'reorder_process_sub_tags', ids: JSON.stringify(ids) }, res => {
+                        if (res.success) loadProcessTagTree(() => { renderPtGroupList(); renderPtSubTagList(); });
+                    });
+                }
+            }).disableSelection();
+        } else {
+            initHtml5Drag('#pt-sub-list', '.pt-drag-handle', 'reorder_process_sub_tags', 'sid');
+        }
+    }
+}
+function addPtSubTag() {
+    if (!ptSelectedGroupId) return;
+    const name = $('#pt-new-sub').val().trim();
+    if (!name) return;
+    $.post(API_URL, { action:'save_process_sub_tag', group_id:ptSelectedGroupId, sub_tag_name:name, sort_order:99 }, res => {
+        if (res.success) {
+            $('#pt-new-sub').val('');
+            loadProcessTagTree(() => { renderPtGroupList(); renderPtSubTagList(); });
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已新增', showConfirmButton:false, timer:1500 });
+        } else { Swal.fire('錯誤', res.message, 'error'); }
+    });
+}
+function renamePtSubTag(sid) {
+    const g  = processTagTree.find(x => x.group_id === ptSelectedGroupId);
+    const st = g ? (g.sub_tags || []).find(x => x.sub_tag_id === sid) : null;
+    const currentName = st ? st.sub_tag_name : '';
+    Swal.fire({
+        title: '重新命名子標籤',
+        input: 'text',
+        inputValue: currentName,
+        inputAttributes: { maxlength: 50 },
+        showCancelButton: true,
+        confirmButtonText: '儲存',
+        cancelButtonText: '取消',
+        didOpen: () => { $(document).off('focusin.modal'); Swal.getInput().focus(); },
+        preConfirm: name => {
+            name = name.trim();
+            if (!name) { Swal.showValidationMessage('名稱不可為空'); return false; }
+            return name;
+        }
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $.post(API_URL, { action:'save_process_sub_tag', sub_tag_id:sid, group_id:ptSelectedGroupId, sub_tag_name:r.value, sort_order:99 }, res => {
+            if (res.success) {
+                loadProcessTagTree(() => { renderPtGroupList(); renderPtSubTagList(); });
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已更新', showConfirmButton:false, timer:1500 });
+            } else { Swal.fire('錯誤', res.message, 'error'); }
+        });
+    });
+}
+function deletePtSubTag(sid) {
+    Swal.fire({ title:'刪除此子標籤及其製程連結？', icon:'warning', showCancelButton:true,
+        confirmButtonColor:'#d33', confirmButtonText:'刪除', cancelButtonText:'取消'
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $.post(API_URL, { action:'delete_process_sub_tag', sub_tag_id:sid }, res => {
+            if (res.success) {
+                if (ptSelectedSubTagId === sid) ptSelectedSubTagId = null;
+                loadProcessTagTree(() => { renderPtGroupList(); renderPtSubTagList(); renderPtProcList(); });
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已刪除', showConfirmButton:false, timer:1500 });
+            } else { Swal.fire('錯誤', res.message, 'error'); }
+        });
+    });
+}
+function selectPtSubTag(sid) {
+    ptSelectedSubTagId = sid;
+    const g   = processTagTree.find(x => x.group_id === ptSelectedGroupId);
+    const st  = g ? (g.sub_tags || []).find(x => x.sub_tag_id === sid) : null;
+    $('#pt-proc-sub-label').text(' — ' + (st ? st.sub_tag_name : ''));
+    renderPtSubTagList();
+    renderPtProcList();
+}
+function renderPtProcList() {
+    if (!ptSelectedSubTagId) {
+        $('#pt-proc-list').html('<div class="text-muted" style="font-size:11px;">← 先選擇子標籤</div>');
+        $('#pt-proc-search-wrap, #pt-proc-save-wrap, #pt-linked-chips').hide();
+        return;
+    }
+    const g      = processTagTree.find(x => x.group_id === ptSelectedGroupId);
+    const st     = g ? (g.sub_tags || []).find(x => x.sub_tag_id === ptSelectedSubTagId) : null;
+    const linked = (st ? (st.process_nos || []) : []).map(Number);
+
+    // ★ 初始化獨立 state
+    ptCurrentChecked = [...linked];
+
+    $('#pt-proc-search-wrap, #pt-proc-save-wrap, #pt-linked-chips').show();
+    $('#pt-proc-search').val('');
+
+    renderPtLinkedChips(ptCurrentChecked);
+    renderPtProcCheckList('');       // 用 ptCurrentChecked 渲染
+
+    // 搜尋過濾：不重設 state，只重繪 DOM
+    $('#pt-proc-search').off('input').on('input', function() {
+        renderPtProcCheckList($(this).val());
+    });
+}
+
+function renderPtLinkedChips(checked) {
+    if (!checked.length) {
+        $('#pt-linked-chips').html('<small style="color:#aaa;font-size:10px;">已連結：<span style="color:#ccc;">（尚未連結任何製程）</span></small>');
+        return;
+    }
+    let html = '<small style="color:#888;font-size:10px;">已連結：</small> ';
+    checked.forEach(pno => {
+        const p = allProcesses.find(x => parseInt(x.id) === pno);
+        const label = p ? p.text : String(pno);
+        html += `<span style="display:inline-flex;align-items:center;gap:2px;background:#e8f0ff;border:1px solid #b0c4f0;border-radius:3px;padding:0 5px;font-size:11px;margin:1px 2px;line-height:1.7;">
+            ${escapeHtml(label)}
+            <span onclick="removePtChip(${pno})" style="cursor:pointer;color:#999;margin-left:2px;font-size:13px;line-height:1;">&times;</span>
+        </span>`;
+    });
+    $('#pt-linked-chips').html(html);
+}
+
+// ★ 移除 chip：同步更新 state + DOM checkbox
+function removePtChip(pno) {
+    ptCurrentChecked = ptCurrentChecked.filter(x => x !== pno);
+    // 若此 checkbox 目前可見，取消勾選
+    $('#pt-proc-list input[value="' + pno + '"]').prop('checked', false);
+    renderPtLinkedChips(ptCurrentChecked);
+}
+
+// ★ 以 ptCurrentChecked 為準渲染 checkboxes（搜尋時保留狀態）
+function renderPtProcCheckList(filter) {
+    const f = (filter || '').toLowerCase();
+    let html = '';
+    allProcesses.forEach(p => {
+        if (f && p.text.toLowerCase().indexOf(f) === -1) return;
+        const isChk = ptCurrentChecked.includes(parseInt(p.id));
+        html += `<label class="pt-proc-check">
+            <input type="checkbox" value="${p.id}" ${isChk ? 'checked' : ''} style="margin-right:5px;">
+            ${escapeHtml(p.text)}
+        </label>`;
+    });
+    $('#pt-proc-list').html(html || '<span class="text-muted" style="font-size:11px;">無符合製程</span>');
+
+    // ★ 勾選/取消 → 更新獨立 state 和 chips
+    $('#pt-proc-list').off('change.ptchip').on('change.ptchip', 'input[type="checkbox"]', function() {
+        const pno = parseInt($(this).val());
+        if ($(this).is(':checked')) {
+            if (!ptCurrentChecked.includes(pno)) ptCurrentChecked.push(pno);
+        } else {
+            ptCurrentChecked = ptCurrentChecked.filter(x => x !== pno);
+        }
+        renderPtLinkedChips(ptCurrentChecked);
+    });
+}
+
+// 保留供相容（不再用 DOM 讀取）
+function getCurrentPtChecked() { return ptCurrentChecked; }
+
+function savePtProcesses() {
+    if (!ptSelectedSubTagId) return;
+    const pnos = ptCurrentChecked;
+    const $btn = $('#pt-proc-save-wrap .btn-primary').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 儲存中...');
+    $.post(API_URL, { action:'save_process_tag_processes', sub_tag_id:ptSelectedSubTagId, process_nos:JSON.stringify(pnos) }, res => {
+        $btn.prop('disabled', false).html('<i class="fa fa-save"></i> 儲存製程連結');
+        if (res.success) {
+            const savedGid = ptSelectedGroupId;
+            const savedSid = ptSelectedSubTagId;
+            loadProcessTagTree(() => {
+                renderPtGroupList();
+                ptSelectedSubTagId = savedSid;
+                renderPtSubTagList();
+                renderPtProcList();  // 重繪以反映儲存後狀態
+            });
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title:'製程連結已儲存', showConfirmButton:false, timer:1800 });
+        } else { Swal.fire('錯誤', res.message, 'error'); }
+    });
+}
+
+// ══════════════════════════════════════════════════════
+function adjustLayout() {
+    const $sw = $('.split-wrap');
+    if (!$sw.length || !$sw.offset()) return;
+    const h = $(window).height() - $sw.offset().top - 2;
+    $sw.height(Math.max(h, 380));
+}
+
+// ══════════════════════════════════════════════════════
+// 列表載入
+// ══════════════════════════════════════════════════════
+function loadQuoteList(year) {
+    $('#quoteListBody').html('<div class="text-center text-muted" style="padding:30px;"><i class="fa fa-spinner fa-spin"></i></div>');
+    $.get(API_URL, { action: 'get_list', year }, res => {
+        if (res.success) {
+            allQuotes = res.data;
+            isAllYearsMode = false;
+            $('#allYearsIndicator').hide();
+            buildClientFilter(allQuotes);
+            renderQuoteList(allQuotes, $('#listSearch').val().trim());
+            adjustLayout();  // 資料載入後重算高度
+        }
+    });
+}
+function loadAllYears() {
+    $('#quoteListBody').html('<div class="text-center text-muted" style="padding:30px;"><i class="fa fa-spinner fa-spin"></i></div>');
+    if (allYearsData) {
+        allQuotes = allYearsData;
+        isAllYearsMode = true;
+        $('#allYearsIndicator').show();
+        buildClientFilter(allQuotes);
+        renderQuoteList(allQuotes, $('#listSearch').val().trim());
+        return;
+    }
+    $.get(API_URL, { action: 'get_list_all' }, res => {
+        if (res.success) {
+            allYearsData = res.data;
+            allQuotes = allYearsData;
+            isAllYearsMode = true;
+            $('#allYearsIndicator').show();
+            buildClientFilter(allQuotes);
+            renderQuoteList(allQuotes, '');
+        }
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// ★ 客戶下拉選單（由載入的資料動態產生）
+// ══════════════════════════════════════════════════════
+function buildClientFilter(quotes) {
+    const prevVal = $('#clientFilterSel').val();
+    const clients = [...new Set(quotes.map(q => q.client_name || '').filter(Boolean))].sort();
+    let html = '<option value="">全部客戶</option>';
+    clients.forEach(c => { html += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`; });
+    $('#clientFilterSel').html(html);
+    // 恢復上次選取（若仍在清單中）
+    if (prevVal && clients.includes(prevVal)) $('#clientFilterSel').val(prevVal);
+}
+
+// ══════════════════════════════════════════════════════
+// ★ 渲染清單（支援客戶篩選 + 依客戶分組）
+// ══════════════════════════════════════════════════════
+function renderQuoteList(quotes, filter) {
+    const f       = filter.toLowerCase();
+    const clientF = $('#clientFilterSel').val();
+
+    let filtered = quotes;
+    if (clientF) filtered = filtered.filter(q => (q.client_name || '') === clientF);
+    if (f) filtered = filtered.filter(q =>
+        ((q.quote_no || '') + (q.note || '') + (q.search_keywords || '')).toLowerCase().includes(f)
+    );
+
+    let total = 0;
+    filtered.forEach(q => total += parseFloat(q.total_amount) || 0);
+    $('#stat-count').text(filtered.length);
+    $('#stat-amount').text(formatNumber(total));
+
+    if (!filtered.length) {
+        $('#quoteListBody').html('<div class="text-center text-muted" style="padding:20px;font-size:12px;">無符合資料</div>');
+        return;
+    }
+
+    // ── 依客戶分組（無客戶篩選時才分組，有篩選時同一客戶不需分組）
+    let html = '';
+    if (clientF) {
+        // 單一客戶：直接列出不加分組標頭
+        filtered.forEach(q => { html += buildQuoteCard(q); });
+    } else {
+        // 多客戶：按客戶名稱分組顯示
+        const groups = {};
+        filtered.forEach(q => {
+            const key = q.client_name || '（無客戶）';
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(q);
+        });
+        Object.entries(groups).forEach(([client, list]) => {
+            const grpId = 'grp_' + client.replace(/\W/g, '_');
+            const sum   = list.reduce((acc, q) => acc + (parseFloat(q.total_amount) || 0), 0);
+            html += `<div class="qli-group-hdr" onclick="toggleGroup('${escapeHtml(grpId)}')">
+                <span><i class="fa fa-building-o" style="margin-right:5px;opacity:.6;"></i>${escapeHtml(client)}
+                    <span style="font-weight:400;color:#888;font-size:10px;margin-left:4px;">(${list.length})</span>
+                </span>
+                <span class="qg-toggle" id="toggle_${escapeHtml(grpId)}">▲</span>
+            </div>
+            <div class="qli-group-body" id="${escapeHtml(grpId)}">`;
+            list.forEach(q => { html += buildQuoteCard(q); });
+            html += `</div>`;
+        });
+    }
+
+    $('#quoteListBody').html(html);
+}
+
+function buildQuoteCard(q) {
+    const isActive  = currentEditId && currentEditId == q.quote_id;
+    const negoBadge   = q.is_negotiation == 1 ? '<span class="nego-badge" style="font-size:9px;">議價</span>' : '';
+    const draftBadge  = q.is_draft == 1 ? '<span class="draft-badge" style="font-size:9px;" title="必備附件缺漏，儲存為草稿">草稿</span>' : '';
+    const srcBadge    = q.source_quote_id
+        ? `<span class="source-badge" title="複製自 ${escapeHtml(q.source_quote_no||'')}" style="font-size:9px;"><i class="fa fa-copy"></i></span>`
+        : '';
+    const attachCount = parseInt(q.attach_count) || 0;
+    const attachBadge = attachCount > 0
+        ? `<span title="${attachCount} 個附件" style="display:inline-flex;align-items:center;gap:2px;font-size:10px;color:#888;margin-left:5px;vertical-align:middle;"><i class="fa fa-paperclip"></i>${attachCount}</span>`
+        : '';
+    const clientF = $('#clientFilterSel').val();
+    // 有客戶篩選時不重複顯示客戶名稱
+    const clientRow = clientF ? '' : `<div class="qli-client">${escapeHtml(q.client_name || '（無客戶）')}</div>`;
+    return `<div class="qli-card ${isActive ? 'active' : ''}" onclick="openEditor(${q.quote_id})">
+        <div class="qli-no">${escapeHtml(q.quote_no)}${negoBadge}${draftBadge}${approvalBadgeHtml(q)}${srcBadge}${attachBadge}</div>
+        ${clientRow}
+        <div class="qli-foot">
+            <span class="qli-date">${escapeHtml(q.quote_date)}</span>
+            <span class="qli-amt">${formatNumber(q.total_amount)}</span>
+        </div>
+    </div>`;
+}
+
+// 折疊 / 展開客戶分組
+function toggleGroup(grpId) {
+    const $body = $('#' + grpId);
+    const $icon = $('#toggle_' + grpId);
+    $body.toggleClass('collapsed');
+    $icon.text($body.hasClass('collapsed') ? '▼' : '▲');
+}
+
+// ══════════════════════════════════════════════════════
+// 編輯器 開/關/重設
+// ══════════════════════════════════════════════════════
+function openNewEditor() {
+    // 若編輯器已開啟，提示是否先儲存
+    if ($('#editorPanel').is(':visible')) {
+        Swal.fire({
+            title: '目前有報價單尚未關閉',
+            text: '是否先儲存後再新增？',
+            icon: 'question',
+            showCancelButton: true,
+            showDenyButton: true,
+            confirmButtonText: '<i class="fa fa-save"></i> 儲存後新增',
+            denyButtonText: '放棄儲存並新增',
+            cancelButtonText: '取消',
+            denyButtonColor: '#e67e22',
+        }).then(r => {
+            if (r.isConfirmed) saveQuote(_doOpenNewEditor);
+            else if (r.isDenied) _doOpenNewEditor();
+            // 取消：不做任何動作，留在目前報價單
+        });
+        return;
+    }
+    _doOpenNewEditor();
+}
+function _doOpenNewEditor() {
+    ++_editToken; // 使任何進行中的 openEditor async 回呼失效
+    // 釋放前一張報價單的編輯鎖 + 停止心跳
+    if (currentEditId) {
+        $.post(API_URL, { action: 'release_lock', quote_id: currentEditId });
+    }
+    stopLockHeartbeat();
+    // 若前一張是未儲存新增且已上傳附件，先刪除臨時資料夾
+    if (_tempUploadQno && !currentEditId) {
+        $.post(FILE_API_URL, { action: 'delete_folder', quote_no: _tempUploadQno });
+        _tempUploadQno = null;
+    }
+    resetEditor();
+    currentEditId = null;
+    $('#viewPanel').hide();
+    $('#editorEmpty').hide();
+    $('#editorTitle').html('<i class="fa fa-plus-circle" style="color:var(--accent);margin-right:6px;"></i>新增報價單');
+    $('#changeLogBtn, #delQuoteBtn, #cloneQuoteBtn').hide();
+    const today = todayStr();
+    $('#quote_date').val(today);
+    autoFillValidUntil();
+    const prefix = quoteNoPrefixFromDate(today);
+    $('#quote_no_prefix').text(prefix);
+    $.get(API_URL, { action: 'get_new_quote_no' }, res => {
+        if (res.success) {
+            $('#quote_seq').val(res.quote_no.slice(-3));
+            syncQuoteNo();
+        }
+    });
+    addItemRow();
+    showEditor();
+    $('#uploadedFilesList').empty();
+}
+// 點選列表卡片 → 開啟檢視模式（不鎖定）
+function openEditor(quote_id) {
+    openViewMode(quote_id);
+}
+
+function openViewMode(quote_id) {
+    const token = ++_editToken;
+    stopLockHeartbeat();
+    currentEditId = quote_id;
+    renderQuoteList(allQuotes, $('#listSearch').val().trim());
+    $('#viewPanel').css('display', 'flex');
+    $('#editorPanel').hide();
+    $('#editorEmpty').hide();
+    $('#newQuoteBtn').show();  // 檢視畫面可新增
+    $('#viewBody').html('<div class="text-center text-muted" style="padding:40px;"><i class="fa fa-spinner fa-spin fa-2x"></i></div>');
+    $('#viewHistoryBar').hide();
+
+    // 同時請求 get_print_data（含齒輪規格/規格號/聯絡人）和 get_detail（含修改者資訊）
+    $.when(
+        $.get(API_URL, { action: 'get_print_data', quote_id }),
+        $.get(API_URL, { action: 'get_detail', quote_id })
+    ).done((printR, detailR) => {
+        if (token !== _editToken) return;
+        const pr = printR[0], dr = detailR[0];
+        if (!pr.success) { Swal.fire('錯誤', pr.message || '載入失敗', 'error'); return; }
+        const { quote, contact } = pr;
+        // 注入製程子標籤名稱（同列印邏輯）
+        (quote.items || []).forEach(item => {
+            const subIds = (item.process_notes || '').split(',')
+                .map(s => parseInt(s.trim())).filter(x => x > 0);
+            const names = [];
+            subIds.forEach(sid => {
+                processTagTree.forEach(g => (g.sub_tags || []).forEach(st => {
+                    if (st.sub_tag_id === sid) names.push(st.sub_tag_name);
+                }));
+            });
+            item.process_names = names.join('・');
+        });
+        renderViewPanel(quote, contact, dr.success ? dr.data : null);
+    }).fail(() => Swal.fire('錯誤', '與伺服器通訊失敗', 'error'));
+}
+
+// q = quote from get_print_data (gear_spec/spec_no/process_names injected)
+// contact = contact obj; detail = get_detail data (has updated_by_name)
+function renderViewPanel(q, contact, detail) {
+    const neg = q.is_negotiation == 1 ? '<span class="nego-badge" style="font-size:9px;">議價</span>' : '';
+    const draft = q.is_draft == 1 ? '<span class="draft-badge" style="font-size:9px;" title="必備附件缺漏，儲存為草稿">草稿</span>' : '';
+    $('#viewTitle').html(`<i class="fa fa-eye" style="color:var(--accent);margin-right:6px;"></i>${escapeHtml(q.quote_no||'')} ${neg}${draft}${approvalBadgeHtml(q)}`);
+    $('#viewClientTag').text(q.client_name ? ' — ' + q.client_name : '');
+    renderApprovalBar(q, detail);
+    updatePrintGate(q);
+    const fmt = s => s ? String(s).replace('T',' ').slice(0,16) : '';
+    const cname = (detail && detail.created_by_name) || q.created_by_name || '';
+    if (cname) {
+        $('#viewHistCreated').html(`<i class="fa fa-user-o"></i>建立：${escapeHtml(cname)}　${escapeHtml(fmt((detail||q).created_at))}`);
+        const $upd = $('#viewHistUpdated');
+        const uname = detail && detail.updated_by_name || '';
+        const uat = detail && detail.updated_at || '';
+        if (uname && uat) { $upd.html(`<i class="fa fa-pencil"></i>修改：${escapeHtml(uname)}　${escapeHtml(fmt(uat))}`).show(); }
+        else { $upd.hide(); }
+        $('#viewHistoryBar').show();
+    }
+    // 聯絡人字串
+    let contactStr = '—';
+    if (contact && contact.name) {
+        const cp = [contact.name];
+        if (contact.title) cp.push(contact.title);
+        const tel = contact.phone_ext ? '分機 ' + contact.phone_ext : (contact.mobile || '');
+        if (tel) cp.push(tel);
+        contactStr = cp.join('・');
+    }
+    const esc = s => escapeHtml(String(s||''));
+    const fmtNum = n => (parseFloat(n||0)).toLocaleString('zh-TW', {minimumFractionDigits:0, maximumFractionDigits:2});
+    const negLabel = q.is_negotiation == 1 ? '<small style="color:#c0392b;font-weight:bold;margin-right:2px;">議價</small>' : '';
+    let itemsHtml = '';
+    (q.items || []).forEach((it, i) => {
+        const isTiered = it.is_tiered == 1;
+        // 品名規格欄：Spec_No+齒輪規格 / 製程 / 料號備註
+        const leftSpec = [it.spec_no, it.gear_spec].filter(Boolean).join(' ');
+        const desc = [leftSpec, it.process_names, it.specification].filter(Boolean).join(' / ');
+        const descHtml = esc(desc);
+        if (isTiered && it.tiers && it.tiers.length) {
+            it.tiers.forEach((t, ti) => {
+                itemsHtml += `<tr>
+                    ${ti===0 ? `<td rowspan="${it.tiers.length}" style="vertical-align:middle;text-align:center;">${i+1}</td>
+                        <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:12px;">${esc(it.product_id)}</td>
+                        <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:11px;">${descHtml}</td>` : ''}
+                    <td class="text-right">${esc(t.qty_min)}+</td>
+                    <td class="text-center">${esc(it.unit||'PCS')}</td>
+                    <td class="text-right">${negLabel}${fmtNum(t.unit_price)}</td>
+                    <td class="text-right">${fmtNum(t.amount)}</td>
+                </tr>`;
+            });
+        } else {
+            const amt = parseFloat(it.amount || 0);
+            itemsHtml += `<tr>
+                <td class="text-center">${i+1}</td>
+                <td style="font-size:12px;">${esc(it.product_id)}</td>
+                <td style="font-size:11px;">${descHtml}</td>
+                <td class="text-right">${fmtNum(it.quantity)}</td>
+                <td class="text-center">${esc(it.unit||'PCS')}</td>
+                <td class="text-right">${negLabel}${fmtNum(it.unit_price)}</td>
+                <td class="text-right">${fmtNum(amt)}</td>
+            </tr>`;
+        }
+        // 組合件子件清單（勾選顯示才出現；畫面超過 2 件收合）
+        if (it.show_bom == 1 && (it.bom_children || []).length) {
+            const kids = it.bom_children;
+            const mk = c => {
+                const extra = [c.spec_no, c.Remark_Bom].filter(Boolean).join('・');
+                return `<div><b style="color:#555;">${esc(c.part_no)}</b> <span style="color:#8e44ad;">${fmtBomQty(c.standard_qty)}PCS/組</span>${extra ? ` <span style="color:#aaa;">${esc(extra)}</span>` : ''}</div>`;
+            };
+            const head = kids.slice(0, 2).map(mk).join('');
+            const rest = kids.slice(2).map(mk).join('');
+            const printBadge = it.print_bom == 1
+                ? `<span style="color:#c0392b;font-weight:normal;font-size:10px;">（列印時包含）</span>`
+                : `<span style="color:#aaa;font-weight:normal;font-size:10px;">（僅畫面顯示，不列印）</span>`;
+            itemsHtml += `<tr><td style="border-top:none;"></td><td colspan="6" style="font-size:11px;color:#666;background:#faf7fd;border-top:none;padding:4px 8px;">
+                <div style="margin-bottom:2px;"><span style="color:#8e44ad;font-weight:700;"><i class="fa fa-sitemap"></i> 組合件子件清單</span> ${printBadge}</div>
+                <div style="padding-left:6px;border-left:2px solid #d8c3ef;line-height:1.6;">
+                ${head}
+                ${rest ? `<div class="bom-more" style="display:none;">${rest}</div>
+                <a href="#" onclick="$(this).prev('.bom-more').show();$(this).remove();return false;" style="font-size:10px;color:#8e44ad;">▼ 展開全部 ${kids.length} 件</a>` : ''}
+                </div>
+            </td></tr>`;
+        }
+    });
+    const noteHtml = q.note
+        ? q.note.split(/[；;]/).map(s => s.trim()).filter(Boolean).map(esc).join('<br>') : '';
+    const html = `
+    <div class="row" style="font-size:13px;margin-bottom:10px;">
+        <div class="col-sm-6">
+            <table class="table table-condensed" style="margin:0;">
+                <tr><td style="width:80px;color:#888;white-space:nowrap;">客戶名稱</td><td>${esc(q.client_name)}</td></tr>
+                <tr><td style="color:#888;">聯絡人</td><td>${esc(contactStr)}</td></tr>
+                <tr><td style="color:#888;">詢價編號</td><td>${esc(q.inquiry_no||'—')}</td></tr>
+                <tr><td style="color:#888;">幣別/匯率</td><td>${esc(q.currency==='TWD'?'NTD':(q.currency||'NTD'))} / ${esc(q.exchange_rate||1)}</td></tr>
+            </table>
+        </div>
+        <div class="col-sm-6">
+            <table class="table table-condensed" style="margin:0;">
+                <tr><td style="width:80px;color:#888;white-space:nowrap;">報價日期</td><td>${esc(q.quote_date||'—')}</td></tr>
+                <tr><td style="color:#888;">有效日期</td><td>${esc(q.valid_until||'—')}</td></tr>
+                <tr><td style="color:#888;">業務人員</td><td>${esc(q.created_by_name||'')}</td></tr>
+                <tr><td style="color:#888;">總金額</td><td><strong style="color:var(--accent);font-size:15px;">${fmtNum(q.total_amount)}</strong></td></tr>
+            </table>
+        </div>
+    </div>
+    ${noteHtml ? `<div style="font-size:13px;margin-bottom:10px;padding:8px 12px;background:#fafafa;border-left:3px solid var(--accent);border-radius:3px;"><strong>備註：</strong><br>${noteHtml}</div>` : ''}
+    <table class="table table-condensed table-bordered view-item-table" style="margin-bottom:4px;">
+        <thead><tr>
+            <th style="width:4%;text-align:center;">#</th><th style="width:16%;">料號</th>
+            <th>品名規格／加工項目 / 備註</th>
+            <th style="width:7%;text-align:right;">數量</th><th style="width:6%;text-align:center;">單位</th>
+            <th style="width:10%;text-align:right;">單價</th><th style="width:11%;text-align:right;">金額</th>
+        </tr></thead>
+        <tbody>${itemsHtml||'<tr><td colspan="7" class="text-center text-muted">無報價項目</td></tr>'}</tbody>
+    </table>
+    <div id="viewAttachSection" style="margin-top:10px;">
+        <div style="font-size:12px;font-weight:700;color:var(--primary);margin-bottom:6px;display:flex;align-items:center;gap:5px;">
+            <i class="fa fa-paperclip"></i> 附件
+        </div>
+        <div id="viewAttachList"></div>
+    </div>`;
+    $('#viewBody').html(html);
+    loadFileList(q.quote_no, true);
+}
+
+// 主管簽核狀態徽章（放在單號旁）
+function approvalBadgeHtml(q) {
+    const st = q.approval_status || 'none';
+    if (st === 'pending')  return ' <span style="display:inline-block;font-size:9px;padding:1px 6px;background:#fff3cd;color:#8a6d1a;border:1px solid #ffe08a;border-radius:10px;font-weight:600;">待審核</span>';
+    if (st === 'approved') return ` <span style="display:inline-block;font-size:9px;padding:1px 6px;background:#e8f8f0;color:#1e8449;border:1px solid #a9dfbf;border-radius:10px;font-weight:600;" title="核准人：${escapeHtml(q.approved_by_name||'')}　${escapeHtml((q.approved_at||'').replace('T',' ').slice(0,16))}"><i class="fa fa-check-circle"></i> 已核准</span>`;
+    if (st === 'rejected') return ' <span style="display:inline-block;font-size:9px;padding:1px 6px;background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;border-radius:10px;font-weight:600;">待重新送審</span>';
+    return '';
+}
+
+// 列印按鈕閘門：只有「正式報價單」且「已核准」才能列印
+function updatePrintGate(q) {
+    const $btn = $('#printQuoteBtn');
+    if (!$btn.length) return;
+    const ok = q.is_draft != 1 && q.approval_status === 'approved';
+    $btn.prop('disabled', !ok);
+    if (ok) {
+        $btn.removeAttr('title').css({opacity:'', cursor:''});
+    } else {
+        const reason = q.is_draft == 1 ? '草稿不能列印，請先存為正式報價單' : '尚未通過主管審核，核准後才能列印';
+        $btn.attr('title', reason).css({opacity:0.5, cursor:'not-allowed'});
+    }
+}
+
+// 簽核狀態列：顯示意見/駁回原因、核准/駁回/重新送審按鈕（只在檢視/編輯畫面顯示，不列印）
+function renderApprovalBar(q, detail) {
+    const $bar = $('#viewApprovalBar');
+    const st = q.approval_status || 'none';
+    const la = (detail && detail.latest_approval) || null;
+    if (st === 'none') { $bar.hide().empty(); return; }
+
+    const fmtDT2 = s => s ? String(s).replace('T',' ').slice(0,16) : '';
+    let html = '';
+    let bg = '#f7f7f7', border = '#ddd';
+    if (st === 'pending') {
+        bg = '#fffbea'; border = '#ffe08a';
+        html += `<div><i class="fa fa-clock-o"></i> 待主管審核`;
+        if (la && la.submitted_by_name) html += `（${escapeHtml(la.submitted_by_name)} 送審 ${escapeHtml(fmtDT2(la.submitted_at))}）`;
+        html += `</div>`;
+        if (CAN_SIGN) {
+            html += `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;">
+                <button type="button" class="btn btn-success btn-xs" onclick="decideQuoteApproval('approved')"><i class="fa fa-check"></i> 核准</button>
+                <button type="button" class="btn btn-danger btn-xs" onclick="decideQuoteApproval('rejected')"><i class="fa fa-times"></i> 駁回</button>
+            </div>`;
+        }
+    } else if (st === 'approved') {
+        bg = '#eafaf1'; border = '#a9dfbf';
+        html += `<div><i class="fa fa-check-circle" style="color:#1e8449;"></i> 已核准 — ${escapeHtml(q.approved_by_name||'')}　${escapeHtml(fmtDT2(q.approved_at))}</div>`;
+        if (la && la.note) html += `<div style="margin-top:4px;color:#555;">審核意見：${escapeHtml(la.note)}</div>`;
+    } else if (st === 'rejected') {
+        bg = '#fdecea'; border = '#f5b7b1';
+        html += `<div><i class="fa fa-times-circle" style="color:#c0392b;"></i> 已駁回`;
+        if (la && la.approver_name) html += ` — ${escapeHtml(la.approver_name)}　${escapeHtml(fmtDT2(la.decided_at))}`;
+        html += `</div>`;
+        if (la && la.note) html += `<div style="margin-top:4px;color:#c0392b;">駁回原因：${escapeHtml(la.note)}</div>`;
+        html += `<div style="margin-top:6px;font-size:11px;color:#888;">請修改內容後手動重新送出審核（不會因存檔自動重送）。</div>`;
+        html += `<div style="margin-top:6px;">
+            <button type="button" class="btn btn-warning btn-xs" onclick="resubmitQuoteApproval()"><i class="fa fa-paper-plane"></i> 重新送出審核</button>
+        </div>`;
+    }
+    $bar.css({background:bg, border:'1px solid '+border}).html(html).show();
+}
+
+// 核准／駁回（駁回必填原因，核准意見選填）
+function decideQuoteApproval(decision) {
+    const quoteId = currentEditId;
+    if (!quoteId) return;
+    const doSubmit = (note) => {
+        $.post(API_URL, { action:'quotation_approval_decide', quote_id: quoteId, decision, note: note||'' }, res => {
+            if (res.success) {
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title: res.message, showConfirmButton:false, timer:2500 });
+                openViewMode(quoteId);
+                if (isAllYearsMode) loadAllYears(); else loadQuoteList(<?= $selectedYear ?>);
+            } else {
+                Swal.fire('無法處理', res.message || '請稍後再試', 'error');
+            }
+        }).fail(() => Swal.fire('錯誤', '與伺服器通訊失敗', 'error'));
+    };
+    if (decision === 'rejected') {
+        Swal.fire({
+            title: '駁回報價單', icon: 'warning',
+            html: `<textarea id="swal-reject-reason" class="swal2-textarea" placeholder="請說明駁回原因（必填）" style="height:80px;"></textarea>`,
+            showCancelButton: true, confirmButtonText: '確認駁回', confirmButtonColor: '#c0392b', cancelButtonText: '取消',
+            preConfirm: () => {
+                const v = document.getElementById('swal-reject-reason').value.trim();
+                if (!v) { Swal.showValidationMessage('請填寫駁回原因'); return false; }
+                return v;
+            }
+        }).then(r => { if (r.isConfirmed) doSubmit(r.value); });
+    } else {
+        Swal.fire({
+            title: '核准報價單', icon: 'question',
+            html: `<textarea id="swal-approve-note" class="swal2-textarea" placeholder="審核意見（選填）" style="height:70px;"></textarea>`,
+            showCancelButton: true, confirmButtonText: '確認核准', confirmButtonColor: '#27ae60', cancelButtonText: '取消',
+            preConfirm: () => document.getElementById('swal-approve-note').value.trim()
+        }).then(r => { if (r.isConfirmed) doSubmit(r.value); });
+    }
+}
+
+// 駁回後手動重新送出審核
+function resubmitQuoteApproval() {
+    const quoteId = currentEditId;
+    if (!quoteId) return;
+    Swal.fire({ title: '重新送出審核？', icon: 'question', showCancelButton: true, confirmButtonText: '確認送出', cancelButtonText: '取消' }).then(r => {
+        if (!r.isConfirmed) return;
+        $.post(API_URL, { action: 'quotation_resubmit_approval', quote_id: quoteId }, res => {
+            if (res.success) {
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title: res.message, showConfirmButton:false, timer:2500 });
+                openViewMode(quoteId);
+            } else {
+                Swal.fire('無法送出', res.message || '請稍後再試', 'error');
+            }
+        }).fail(() => Swal.fire('錯誤', '與伺服器通訊失敗', 'error'));
+    });
+}
+
+function closeViewPanel() {
+    currentEditId = null;
+    $('#viewPanel').hide();
+    $('#newQuoteBtn').show();
+    $('#editorEmpty').css('display', 'flex');
+    renderQuoteList(allQuotes, $('#listSearch').val().trim());
+}
+
+// 從檢視模式點擊「編輯」
+function openEditorFromView() {
+    if (!CAN_EDIT) { Swal.fire('權限不足', '您沒有編輯報價單的權限', 'error'); return; }
+    const quote_id = currentEditId;
+    if (!quote_id) return;
+    const token = ++_editToken;
+    $.post(API_URL, { action: 'acquire_lock', quote_id }, lockRes => {
+        if (token !== _editToken) return;
+        if (!lockRes.acquired) {
+            Swal.fire({
+                title: '報價單編輯中',
+                html: `<b>${escapeHtml(lockRes.locked_name||'其他使用者')}</b> 正在編輯此報價單（${lockRes.elapsed_min||0} 分鐘前開始）<br><small>是否強制接管編輯？</small>`,
+                icon: 'warning', showCancelButton: true,
+                confirmButtonText: '強制接管', cancelButtonText: '取消',
+            }).then(r => {
+                if (!r.isConfirmed) return;
+                $.post(API_URL, { action: 'acquire_lock', quote_id, force: 1 }, () => {
+                    _doLoadEditor(quote_id, token, lockRes.locked_name);
+                });
+            });
+            return;
+        }
+        _doLoadEditor(quote_id, token, null);
+    }).fail(() => _doLoadEditor(quote_id, token, null));
+}
+
+function _doLoadEditor(quote_id, token, forcedFromUser) {
+    // 啟動心跳（每 5 分鐘刷新鎖定）
+    stopLockHeartbeat();
+    _lockHeartbeat = setInterval(() => {
+        if (currentEditId) $.post(API_URL, { action: 'heartbeat_lock', quote_id: currentEditId });
+    }, 5 * 60 * 1000);
+
+    // 顯示編輯面板，隱藏檢視面板；編輯中不可新增
+    $('#viewPanel').hide();
+    $('#editorEmpty').hide();
+    $('#newQuoteBtn').hide();
+
+    if (forcedFromUser) {
+        $('#lockWarningMsg').text(`已強制接管 ${forcedFromUser} 的編輯`);
+        $('#lockWarningBar').show();
+    } else {
+        $('#lockWarningBar').hide();
+    }
+
+    $.get(API_URL, { action: 'get_detail', quote_id }, res => {
+        if (token !== _editToken) return;
+        if (!res.success) { Swal.fire('錯誤', res.message || '載入失敗', 'error'); return; }
+        const d = res.data;
+        $('#quote_id').val(d.quote_id);
+        $('#quote_no').val(d.quote_no);
+        const _qno = d.quote_no || '';
+        $('#quote_no_prefix').text(_qno.length >= 9 ? _qno.slice(0, 9) : quoteNoPrefixFromDate(d.quote_date));
+        $('#quote_seq').val(_qno.length >= 9 ? _qno.slice(9) : '');
+        $('#last_updated_at').val(d.updated_at || '');
+        $('#quote_date').val(d.quote_date);
+        $('#valid_until').val(d.valid_until || '');
+        $('#client_name').val(d.client_name || '');
+        $('#client_id').val(d.client_id || '');
+        updateClientBoundCheck();
+        $('#inquiry_no').val(d.inquiry_no || '');
+        if (d.client_id) loadClientContacts(d.client_id, d.contact_id || null);
+        $('#currency').val(d.currency || 'TWD');
+        $('#exchange_rate').val(d.exchange_rate || 1);
+        $('#note').val(d.note || '').trigger('input');
+        $('#is_negotiation').prop('checked', d.is_negotiation == 1);
+        (d.items || []).forEach(item => addItemRow(item));
+        calculateTotal();
+        $('#editorTitle').html(`<i class="fa fa-pencil" style="color:var(--accent);margin-right:6px;"></i>${escapeHtml(d.quote_no)}${approvalBadgeHtml(d)}`);
+        if (CAN_VIEW_HISTORY) $('#changeLogBtn').show();
+        if (CAN_DELETE)       $('#delQuoteBtn').show();
+        if (CAN_CLONE)        $('#cloneQuoteBtn').show();
+        showEditor();
+        $('#note').trigger('input');
+        updatePartSearchPlaceholders();
+        updateEditorClientTag();
+        loadFileList(d.quote_no);
+        renderHistoryBar(d);
+    }).fail(() => Swal.fire('錯誤', '與伺服器通訊失敗', 'error'));
+}
+
+function stopLockHeartbeat() {
+    if (_lockHeartbeat) { clearInterval(_lockHeartbeat); _lockHeartbeat = null; }
+}
+function closeEditor() {
+    const isNewUnsaved = !$('#quote_id').val();          // 新增且尚未儲存
+    const $files       = $('#uploadedFilesList .file-item[data-filename]');
+    const fileCount    = $files.length;
+    const qno          = getCurrentQuoteNo();
+
+    if (isNewUnsaved && fileCount > 0 && qno) {
+        // 有未儲存的附件 → 讓使用者決定
+        Swal.fire({
+            title: '已上傳附件尚未關聯',
+            html: `報價單 <b>${escapeHtml(qno)}</b> 未儲存，<br>
+                   已上傳 <b style="color:#e74c3c;">${fileCount}</b> 個附件仍保留在 Z 槽。<br>
+                   <small style="color:#aaa;margin-top:4px;display:block;">確認關閉將刪除這些附件。</small>`,
+            icon: 'warning',
+            showCancelButton:   true,
+            confirmButtonColor: '#d33',
+            confirmButtonText:  '<i class="fa fa-trash"></i> 刪除附件並關閉',
+            cancelButtonText:   '返回繼續編輯',
+        }).then(r => {
+            if (r.isConfirmed) {
+                deleteAllUploadedFilesAndClose(qno);
+            }
+            // 取消 → 留在編輯頁
+        });
+    } else {
+        doCloseEditor();
+    }
+}
+
+function doCloseEditor() {
+    const wasEditingId = $('#quote_id').val() ? currentEditId : null;
+    // 若是新增但未儲存、且曾上傳附件，關閉時一律刪除臨時資料夾
+    if (_tempUploadQno && !$('#quote_id').val()) {
+        $.post(FILE_API_URL, { action: 'delete_folder', quote_no: _tempUploadQno });
+    }
+    // 釋放編輯鎖 + 停止心跳
+    $.post(API_URL, { action: 'release_lock', quote_id: currentEditId });
+    stopLockHeartbeat();
+    $('#lockWarningBar').hide();
+    _tempUploadQno = null;
+    $('#editorPanel').hide();
+    resetEditor();
+    // 若是編輯現有報價單 → 返回檢視模式；若是新增 → 關閉回空白
+    $('#newQuoteBtn').show();
+    if (wasEditingId) {
+        openViewMode(wasEditingId);
+    } else {
+        currentEditId = null;
+        $('#editorEmpty').css('display', 'flex');
+        renderQuoteList(allQuotes, $('#listSearch').val().trim());
+    }
+}
+
+// 刪除整個報價單資料夾後關閉
+function deleteAllUploadedFilesAndClose(quoteNo) {
+    $.post(FILE_API_URL, { action: 'delete_folder', quote_no: quoteNo })
+        .always(() => doCloseEditor());
+}
+function showEditor() {
+    $('#editorPanel').css('display', 'flex'); // flex column 才能讓 header 凍結、form scroll
+    $('#editorEmpty').hide();
+    $('#quoteForm').scrollTop(0);             // 捲動區是 form，不是 panel
+}
+function resetEditor() {
+    $('#quoteForm')[0].reset();
+    // 顯式清除，確保 hidden field 不殘留上一張的值
+    $('#client_id').val('');
+    $('#client_name').val('');
+    $('#contact_id').val('');
+    $('#quote_id').val('');
+    $('#source_quote_id').val('');
+    $('#quote_no').val('');
+    $('#quote_no_prefix').text('');
+    $('#quote_seq').val('');
+    $('#last_updated_at').val('');
+    $('#quoteItemsTable > tbody').empty();
+    $('#totalAmountDisplay').text('0');
+    $('#currencyDisplay').text($('#currency').find('option:selected').text() || 'NTD');
+    $('#uploadedFilesList').empty();
+    $('#note-tmpl-btns .note-tmpl-btn').removeClass('nt-applied');
+    $('#editorClientNameTag').text('');
+    $('#historyBar').hide();
+    updateClientBoundCheck();
+    loadClientContacts(null); // 清除聯絡人下拉與隱藏列
+}
+
+// ══════════════════════════════════════════════════════
+// 儲存
+// ══════════════════════════════════════════════════════
+function saveQuote(onSuccess) {
+    if (!fixAllTiersBeforeSave()) {
+        Swal.fire('錯誤', '階梯報價中有區間最小量未填，請補齊後再儲存', 'error'); return;
+    }
+    // 備註為空時提示
+    if (!$('#note').val().trim()) {
+        Swal.fire({
+            title: '尚未輸入備註',
+            text: '備註欄位目前為空，是否仍要直接存檔？',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonText: '直接存檔',
+            cancelButtonText: '取消',
+        }).then(r => { if (r.isConfirmed) _doSaveQuote(onSuccess); });
+        return;
+    }
+    _doSaveQuote(onSuccess);
+}
+function _doSaveQuote(onSuccess) {
+    const qd = {
+        quote_id:      $('#quote_id').val(),
+        quote_no:      $('#quote_no').val().trim(),
+        quote_date:    $('#quote_date').val(),
+        valid_until:   $('#valid_until').val(),
+        client_name:   $('#client_name').val(),
+        client_id:     $('#client_id').val(),
+        contact_id:    $('#contact_id').val() || null,
+        inquiry_no:    $('#inquiry_no').val().trim(),
+        currency:      $('#currency').val(),
+        exchange_rate: $('#exchange_rate').val(),
+        note:          $('#note').val(),
+        is_negotiation:  $('#is_negotiation').is(':checked') ? 1 : 0,
+        total_amount:    parseFloat($('#totalAmountDisplay').text().replace(/,/g, '')) || 0,
+        source_quote_id: $('#source_quote_id').val() || null,
+        last_updated_at: $('#last_updated_at').val() || '',
+        items: []
+    };
+    if (!qd.quote_no || !qd.quote_date) {
+        Swal.fire('錯誤', '報價單號和報價日期為必填', 'error'); return;
+    }
+    if (!qd.client_name.trim()) {
+        Swal.fire('錯誤', '客戶名稱為必填', 'error'); return;
+    }
+    if (!String(qd.client_id || '').trim()) {
+        Swal.fire('錯誤', '客戶尚未綁定：請從建議清單選擇客戶，不可只輸入文字', 'error'); return;
+    }
+    let valid = true;
+    let validMsg = '';
+    $('#quoteItemsTable > tbody > tr.item-row').each(function () {
+        const $row     = $(this);
+        const isTiered = parseInt($row.data('is-tiered')) === 1;
+        const pid      = $row.find('.product_id_hidden').val();
+        if (!pid) { valid = false; validMsg = '請填寫所有項目的料號'; return false; }
+        if (!$row.find('.d_setting_d_id_hidden').val().trim()) {
+            valid = false;
+            validMsg = `料號「${pid}」尚未綁定：請從建議清單選擇，或使用「建立新料號」快速建立綁定`;
+            return false;
+        }
+        if (!$row.find('.proc-subtags-hidden').val().trim()) {
+            valid = false; validMsg = '所有項目的製程為必選'; return false;
+        }
+        if (!isTiered) {
+            if ($row.find('.quantity').val() === '') {
+                valid = false; validMsg = '請填寫所有項目的數量'; return false;
+            }
+            if ($row.find('.unit-price').val() === '') {
+                valid = false; validMsg = '請填寫所有項目的單價'; return false;
+            }
+        }
+        const item = {
+            item_id:            $row.data('item-id') || null,
+            product_id:         pid,
+            d_setting_d_id:     parseInt($row.find('.d_setting_d_id_hidden').val()) || null,
+            specification:      $row.find('input[name="specification"]').val(),
+            processes:          $row.find('.process-hidden').val(),
+            quantity:           isTiered ? 0 : ($row.find('.quantity').val() || 0),
+            unit:               $row.find('.item-unit').val() || 'PCS',
+            unit_price:         isTiered ? 0 : ($row.find('.unit-price').val() || 0),
+            amount:             $row.find('.amount').val().replace(/,/g, ''),
+            process_group_type: $row.find('.proc-group-type-hidden').val() || 'single_process',
+            process_notes:      $row.find('.proc-subtags-hidden').val(),
+            is_tiered:          isTiered ? 1 : 0,
+            show_bom:           $row.find('.show-bom-hidden').val() === '1' ? 1 : 0,
+            print_bom:          $row.find('.print-bom-hidden').val() === '1' ? 1 : 0,
+            tiers: []
+        };
+        if (isTiered) {
+            $row.next('tr.tier-row').find('.tier-tbody tr.tier-input-row').each(function () {
+                const $tr = $(this);
+                const qmin = $tr.find('.tier-qty-min').val();
+                if (!qmin) { valid = false; validMsg = '階梯報價中有區間最小量未填'; return false; }
+                const rawQmax = $tr.find('.tier-qty-max').val().trim();
+                item.tiers.push({
+                    qty_min:         Math.round(parseFloat(qmin)) || 0,
+                    qty_max:         rawQmax !== '' ? Math.round(parseFloat(rawQmax)) : '',
+                    unit_price:      $tr.find('.tier-unit-price').val(),
+                    tolerance_value: $tr.find('.tier-tol-value').val(),
+                    tolerance_unit:  $tr.find('.tier-tol-unit').val(),
+                    tolerance_note:  $tr.find('.tier-tol-note').val(),
+                });
+            });
+        }
+        qd.items.push(item);
+    });
+    if (!valid) { Swal.fire('錯誤', validMsg || '請檢查報價項目', 'error'); return; }
+    if (qd.items.length > MAX_QUOTE_ITEMS) {
+        Swal.fire('錯誤', `報價項目最多 ${MAX_QUOTE_ITEMS} 筆料號，目前 ${qd.items.length} 筆，請刪除多餘項目後再儲存`, 'error');
+        return;
+    }
+
+    // ── 附件未設定類別 → 擋下（僅檢查有 DB 紀錄的附件）──
+    const noCatFiles = collectAttachMeta().filter(f => f.attachId && !f.cats.length).map(f => f.name);
+    if (noCatFiles.length) {
+        Swal.fire({
+            icon: 'error', title: '附件尚未設定類別',
+            html: '下列附件請先點 <i class="fa fa-tag"></i> 設定類別：<br>' +
+                  noCatFiles.map(escapeHtml).join('<br>')
+        });
+        return;
+    }
+
+    // ── 必備附件檢查（議價單豁免）──
+    qd.is_draft = 0; // 預設非草稿；檢查通過或議價單皆存為正式單
+    if (qd.is_negotiation !== 1) {
+        // 含必備類別的附件必須連結「單一」料號（不可共用、不可多料號）
+        const reqCats = effectiveRequiredCats();
+        const badReqFiles = collectAttachMeta().filter(f =>
+            f.attachId &&
+            f.cats.some(c => reqCats.some(r => Number(r) === Number(c))) &&
+            (!Array.isArray(f.parts) || f.parts.length !== 1)
+        );
+        if (badReqFiles.length) {
+            Swal.fire({
+                icon: 'error', title: '必備附件未連結料號',
+                html: '下列附件含必備類別，必須連結<b>單一料號</b>：<br>' +
+                      badReqFiles.map(f => escapeHtml(f.name)).join('<br>')
+            });
+            return;
+        }
+        // 各料號必備附件缺漏 → 明確請使用者選擇要存草稿還是存正式報價單（不再自動預設）
+        const missing = getMissingRequiredAttach();
+        if (missing.length) {
+            Swal.fire({
+                icon: 'warning', title: '必備附件缺漏',
+                html: '下列料號缺少必備附件類別：<br><div style="text-align:left;display:inline-block;margin-top:6px;">' +
+                      missing.map(m => `<b>${escapeHtml(m.pid)}</b>：${escapeHtml(m.names.join('、'))}`).join('<br>') +
+                      '</div><p style="margin-top:12px;font-size:12px;color:#888;">' +
+                      '<b>存草稿</b>：不能列印、不會送主管審核，等補齊附件後再存檔即可轉正式。<br>' +
+                      '<b>存正式報價單</b>：忽略此提醒直接存為正式單，會依規則送出主管審核。</p>',
+                showDenyButton: true,
+                showCancelButton: true,
+                confirmButtonText: '存正式報價單',
+                confirmButtonColor: '#27ae60',
+                denyButtonText: '存草稿',
+                denyButtonColor: '#e67e22',
+                cancelButtonText: '返回補齊',
+                focusCancel: true,
+            }).then(r => {
+                if (r.isConfirmed) {
+                    qd.is_draft = 0;
+                    _postQuoteSave(qd, onSuccess);
+                } else if (r.isDenied) {
+                    qd.is_draft = 1;
+                    _postQuoteSave(qd, onSuccess);
+                }
+            });
+            return;
+        }
+    }
+
+    _postQuoteSave(qd, onSuccess);
+}
+
+// 實際送出儲存（驗證通過後呼叫）
+function _postQuoteSave(qd, onSuccess) {
+    $.post(API_URL, { action: 'save', data: JSON.stringify(qd) }, res => {
+        if (res.success) {
+            _tempUploadQno = null;
+            allYearsData = null;
+            // 若流水號因衝突被自動調整，更新前端顯示
+            if (res.quote_no && res.quote_no !== qd.quote_no) {
+                $('#quote_no').val(res.quote_no);
+                $('#quote_no_prefix').text(res.quote_no.slice(0, 9));
+                $('#quote_seq').val(res.quote_no.slice(9));
+                Swal.fire({ toast:true, position:'top-end', icon:'info',
+                    title:`流水號衝突，已自動調整為 ${res.quote_no}`,
+                    showConfirmButton:false, timer:4000 });
+            } else if (res.forced_draft) {
+                // 伺服器端重新驗證後發現附件仍不足，強制改存草稿（防止繞過/資料過期）
+                Swal.fire({ toast:true, position:'top-end', icon:'warning',
+                    title:'必備附件仍缺漏，已改存為草稿', showConfirmButton:false, timer:4000 });
+            } else {
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title: res.message, showConfirmButton:false, timer:2500 });
+            }
+            // 簽核狀態提示（草稿不進審核，不另外提示）
+            if (res.approval_status === 'pending') {
+                Swal.fire({ toast:true, position:'top-end', icon:'info', title:'已送出主管審核，待核准後才能列印',
+                    showConfirmButton:false, timer:4000 });
+            } else if (res.approval_status === 'approved') {
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已自動核准（您本身具簽核權限）',
+                    showConfirmButton:false, timer:3000 });
+            } else if (res.approval_status === 'rejected') {
+                Swal.fire({ toast:true, position:'top-end', icon:'warning', title:'狀態仍為「已駁回」，請至檢視畫面手動重新送出審核',
+                    showConfirmButton:false, timer:4500 });
+            }
+            const savedId = res.new_id;
+            if (isAllYearsMode) loadAllYears();
+            else loadQuoteList(<?= $selectedYear ?>);
+            if (onSuccess) {
+                onSuccess();
+            } else {
+                // 儲存後釋放鎖定並返回檢視模式
+                $.post(API_URL, { action: 'release_lock', quote_id: currentEditId });
+                stopLockHeartbeat();
+                $('#lockWarningBar').hide();
+                _tempUploadQno = null;
+                $('#editorPanel').hide();
+                resetEditor();
+                openViewMode(savedId);
+            }
+        } else if (res.code === 'CONFLICT') {
+            // 資料衝突：顯示誰改了什麼，詢問是否強制覆蓋
+            const modifier = res.modifier ? `<b>${escapeHtml(res.modifier)}</b> ` : '他人 ';
+            const diffHtml = (res.diffs && res.diffs.length)
+                ? '<ul style="text-align:left;margin:8px 0 0;padding-left:18px;font-size:12px;">' +
+                  res.diffs.map(d => `<li>${escapeHtml(d)}</li>`).join('') + '</ul>'
+                : '<small style="color:#888;">（項目欄位或其他欄位有變更）</small>';
+            Swal.fire({
+                title: '資料衝突',
+                html: `${modifier}已修改此報價單，變更如下：${diffHtml}<br><small style="color:#888;margin-top:6px;display:block;">是否強制覆蓋他人的修改？</small>`,
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonText: '強制覆蓋',
+                cancelButtonText: '取消',
+            }).then(r => {
+                if (!r.isConfirmed) return;
+                $('#last_updated_at').val('');
+                _doSaveQuote(onSuccess);
+            });
+        } else {
+            Swal.fire('錯誤', res.message, 'error');
+        }
+    }).fail(() => Swal.fire('錯誤', '與伺服器通訊失敗', 'error'));
+}
+
+// ══════════════════════════════════════════════════════
+// 刪除
+// ══════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+// ★ 列印功能
+// ══════════════════════════════════════════════════════
+function printQuote() {
+    if (!currentEditId) { Swal.fire('提示','請先儲存報價單再列印','warning'); return; }
+    $.get(API_URL, { action:'get_print_data', quote_id: currentEditId }, res => {
+        if (!res.success) { Swal.fire('錯誤', res.message || '無法取得資料', 'error'); return; }
+        const { quote, customer, contact, company, form_number } = res;
+        // 伺服器端資料為準的最後防線：草稿或未核准一律擋下（前端按鈕閘門可能被繞過）
+        if (quote.is_draft == 1 || quote.approval_status !== 'approved') {
+            const reason = quote.is_draft == 1 ? '草稿不能列印，請先存為正式報價單。' : '尚未通過主管審核，核准後才能列印。';
+            Swal.fire('無法列印', reason, 'warning');
+            return;
+        }
+        // 從記憶體的 processTagTree 把子標籤名稱注入 items
+        (quote.items || []).forEach(item => {
+            const subIds = (item.process_notes || '').split(',')
+                .map(s => parseInt(s.trim())).filter(x => x > 0);
+            const names = [];
+            subIds.forEach(sid => {
+                processTagTree.forEach(g => (g.sub_tags || []).forEach(st => {
+                    if (st.sub_tag_id === sid) names.push(st.sub_tag_name);
+                }));
+            });
+            item.process_names = names.join('・');
+        });
+        const win = window.open('', '_blank', 'width=900,height=700');
+        win.document.write(buildPrintHtml(quote, customer, contact, company, form_number));
+        win.document.close();
+        win.onload = () => win.print();
+        // 記錄列印
+        $.post(API_URL, { action:'log_print', quote_id: currentEditId, quote_no: quote.quote_no||'' });
+    });
+}
+
+function buildPrintHtml(q, cust, contact, co, formNo) {
+    const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const fmtNum = n => parseFloat(n||0).toLocaleString('zh-TW', {minimumFractionDigits:0, maximumFractionDigits:2});
+
+    // 公司資料
+    const coName    = co.customer_full || co.customer || '';
+    const coAddr    = co.customer_address || '';
+    // EGStamp（圖章SVG產生器）讀 window.__ownCompany 取公司全名，這裡直接用已取得的 co 資料設定，不必另外呼叫API
+    window.__ownCompany = coName;
+    const coTel     = co.customer_tel || '';
+    const coFax     = co.customer_fax || '';
+
+    // 客戶資料
+    const custName  = cust ? (cust.customer_full || cust.customer || q.client_name) : q.client_name;
+    const custTel   = cust ? (cust.customer_tel || '') : '';
+    const custFax   = cust ? (cust.customer_fax || '') : '';
+    const contactName = contact ? (() => {
+        const parts = [contact.name];
+        if (contact.title) parts.push(contact.title);
+        const tel = contact.phone_ext ? '分機 ' + contact.phone_ext : (contact.mobile || '');
+        if (tel) parts.push(tel);
+        return parts.join('・');
+    })() : '';
+
+    // 日期轉民國年顯示
+    const toRoc = d => { if (!d) return ''; const dt = new Date(d); const y = dt.getFullYear()-1911; return `${y}/${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')}`; };
+
+    // 明細列：每頁固定 20 個主料號列強制換頁（避免單頁筆數過多，印表機易卡紙），
+    // 未滿20列的最後一頁頁尾固定貼齊頁面底部（不隨內容量往上跑）
+    const PRINT_ROWS_PER_PAGE = 20;
+    const items = q.items || [];
+    let totalAmt = 0;
+    const itemRowChunks = []; // 每個元素＝一個主料號的所有列(含BOM子件續列)組成的HTML字串
+    items.forEach((it, idx) => {
+        const specNo   = it.spec_no       || '';
+        const gearSpec = it.gear_spec     || '';
+        const procStr  = it.process_names || '';
+        const specRmk  = it.specification || '';
+        // 料號規格+齒輪規格 / 製程 / 料號備註(報價單內)，無料號備註省略含分隔
+        const leftSpec = [specNo, gearSpec].filter(Boolean).join(' ');
+        const desc     = [leftSpec, procStr, specRmk].filter(Boolean).join(' / ');
+        const qty    = it.quantity || 0;
+        const price  = it.unit_price || 0;
+        const amt    = parseFloat(it.amount || (qty * price));
+        totalAmt    += amt;
+        const unit = it.unit || 'PCS';
+        const priceCell = q.is_negotiation == 1
+            ? `<span style="font-size:8.5pt;color:#c0392b;font-weight:bold;margin-right:2px;">議價</span>${fmtNum(price)}`
+            : fmtNum(price);
+        // 組合件子件清單（勾選「列印時包含」才印；併入品名規格儲存格，與母件同格顯示，全數列出、不收合）
+        // 子件過多時分段成多列（每列禁止跨頁），續列產品編號重複標示「（續）」，數量/單價等不重複
+        const BOM_PRINT_CHUNK = 12;
+        let kidChunks = [];
+        if (it.print_bom == 1 && (it.bom_children || []).length) {
+            const lines = it.bom_children.map(c => {
+                const extra = [c.spec_no, c.Remark_Bom].filter(Boolean).join('・');
+                return `<div style="font-size:9pt;">└ ${esc(c.part_no)} ${fmtBomQty(c.standard_qty)}PCS/組${extra ? `（${esc(extra)}）` : ''}</div>`;
+            });
+            for (let i = 0; i < lines.length; i += BOM_PRINT_CHUNK) {
+                kidChunks.push(lines.slice(i, i + BOM_PRINT_CHUNK).join(''));
+            }
+        }
+        let rowHtml = `<tr>
+            <td class="center">${idx+1}</td>
+            <td>${esc(it.product_id||'')}</td>
+            <td>${esc(desc)}${kidChunks[0] || ''}</td>
+            <td class="right">${fmtNum(qty)}</td>
+            <td class="center">${esc(unit)}</td>
+            <td class="right">${priceCell}</td>
+            <td class="right">${fmtNum(amt)}</td>
+        </tr>`;
+        kidChunks.slice(1).forEach(chunk => {
+            rowHtml += `<tr>
+                <td></td>
+                <td>${esc(it.product_id||'')}（續）</td>
+                <td>${chunk}</td>
+                <td></td><td></td><td></td><td></td>
+            </tr>`;
+        });
+        itemRowChunks.push(rowHtml);
+    });
+
+    // 切分成每頁固定筆數
+    const printPages = [];
+    for (let i = 0; i < itemRowChunks.length; i += PRINT_ROWS_PER_PAGE) {
+        printPages.push(itemRowChunks.slice(i, i + PRINT_ROWS_PER_PAGE));
+    }
+    if (!printPages.length) printPages.push([]); // 至少一頁（空報價單）
+
+    // 合計 / 稅額（5%）/ 總額
+    const tax   = Math.round(totalAmt * 0.05);
+    const grand = totalAmt + tax;
+    const remark = q.note || '';
+    const remarkHtml = remark.split(/[；;]/).map(s => esc(s.trim())).filter(Boolean).join('<br>');
+
+    // 製單章（無條件顯示）：修改者優先，沒有修改過就用建立者；日期比照
+    const fmtDot = s => s ? String(s).substring(0,10).replace(/-/g,'.') : '';
+    const makerName = q.updated_by_name || q.created_by_name || '';
+    const makerDate = fmtDot(q.updated_at || q.created_at);
+    const makerStampHtml = makerName ? EGStamp.stamp(makerName, makerDate) : '';
+    // 主管簽核章：只有已核准才蓋，未核准/待審核/駁回一律留白讓人工簽
+    const approverStampHtml = (q.approval_status === 'approved' && q.approved_by_name)
+        ? EGStamp.stamp(q.approved_by_name, fmtDot(q.approved_at))
+        : '';
+
+    const itemsTheadHtml = `<thead>
+        <tr>
+          <th style="width:4%">項次</th>
+          <th style="width:20%">產品編號</th>
+          <th style="width:44%">品名規格／加工項目 / 備註</th>
+          <th style="width:7%">數量</th>
+          <th style="width:5%">單位</th>
+          <th style="width:9%">單價</th>
+          <th style="width:11%">金額</th>
+        </tr>
+      </thead>`;
+
+    const sigRowHtml = `<table class="footer-area">
+        <colgroup>
+          <col class="rem"><!-- 80%: 項次+料號+品名+數量+單位 -->
+          <col class="lbl"><!-- 9%: 單價 -->
+          <col class="val"><!-- 11%: 金額 -->
+        </colgroup>
+        <tr>
+          <td class="remark-cell" rowspan="3"><p style="margin:4px 0;"><strong>●備註：</strong>${remarkHtml}</p></td>
+          <td class="total-lbl">合　計</td>
+          <td class="total-val">${fmtNum(totalAmt)}</td>
+        </tr>
+        <tr><td class="total-lbl">稅　額</td><td class="total-val">${fmtNum(tax)}</td></tr>
+        <tr><td class="total-lbl">總　額</td><td class="total-val">${fmtNum(grand)}</td></tr>
+      </table>
+      <div class="page-footer">
+        <div class="sig-row">
+          <span>製單人員：${makerStampHtml}</span>
+          <span>客戶簽收：</span>
+          <span>主管審核：${approverStampHtml}</span>
+        </div>
+      </div>
+      ${formNo ? `<div class="form-no">${esc(formNo)}</div>` : ''}`;
+
+    // 完整表頭（公司/客戶/單號等 meta-grid）：只在第1頁顯示，且必須放進第1頁的 .print-page 內，
+    // 若第1頁同時也是最後一頁（單頁報價單），.print-page-last 的 flex+min-height 版心計算才會把表頭高度算進去，
+    // 否則表頭會被排在版心box「外面」，單頁短報價單就會被多擠出一張空白頁。
+    const fullHeaderHtml = `<h2 class="co-name">${esc(coName)}</h2>
+      <p class="co-info">${esc(coAddr)}<br>電話：${esc(coTel)}　傳真：${esc(coFax)}</p>
+      <div style="text-align:center;margin:8px 0;"><h3 class="title">客戶報價單</h3></div>
+      <div class="meta-grid">
+        <div><span class="label">客戶名稱：</span>${esc(custName)}</div>
+        <div><span class="label">報價日期：</span>${esc(toRoc(q.quote_date))}</div>
+        <div><span class="label">聯絡電話：</span>${esc(custTel)}</div>
+        <div><span class="label">單　　號：</span>${esc(q.quote_no)}</div>
+        <div><span class="label">傳真號碼：</span>${esc(custFax)}</div>
+        <div><span class="label">業務人員：</span>${esc(q.created_by_name||q.created_by||'')}</div>
+        <div><span class="label">聯絡人　：</span>${esc(contactName)}</div>
+        <div><span class="label">幣　　別：</span>${esc(q.currency==='TWD'?'NTD':(q.currency||'NTD'))}</div>
+        ${q.inquiry_no ? `<div><span class="label">詢價編號：</span>${esc(q.inquiry_no)}</div>` : '<div></div>'}
+        <div><span class="label">有效日期：</span>${esc(toRoc(q.valid_until))}</div>
+      </div>`;
+
+    // 續頁重複表頭：跨頁分開後若紙本被拆散，仍能認出是哪張OP單、第幾頁 — 第1頁已有完整 meta-grid，故只在第2頁起顯示
+    const contPageHeaderHtml = `<div class="cont-page-header">單　　號：${esc(q.quote_no)}　　客戶名稱：${esc(custName)}</div>`;
+
+    let pagesHtml = '';
+    printPages.forEach((rows, pIdx) => {
+        const isLast = pIdx === printPages.length - 1;
+        let bodyRows = rows.join('');
+        if (isLast) {
+            bodyRows += `<tr><td colspan="7" class="center" style="color:#444;letter-spacing:6px;padding:4px;">─── 以下空白 ───</td></tr>`;
+        }
+        pagesHtml += `<div class="print-page${isLast ? ' print-page-last' : ''}">
+            ${pIdx === 0 ? fullHeaderHtml : contPageHeaderHtml}
+            <table class="items">${itemsTheadHtml}<tbody>${bodyRows}</tbody></table>
+            ${isLast ? sigRowHtml : `<div class="continued-note">（接下頁）</div>`}
+        </div>`;
+    });
+
+    return `<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<title>客戶報價單 - ${esc(q.quote_no)}</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  body { font-family:'標楷體','DFKai-SB',serif; font-size:11pt; margin:0; color:#000; }
+  h2.co-name { text-align:center; font-size:20pt; font-weight:bold; margin:0 0 3px; }
+  .co-info   { text-align:center; font-size:10pt; margin:0 0 6px; }
+  h3.title   { text-align:center; font-size:18pt; font-weight:bold; margin:8px 0;
+               border-bottom:3px double #000; padding-bottom:4px; display:inline-block; }
+  .meta-grid { display:grid; grid-template-columns:68% auto; gap:2px 8px; font-size:10pt; margin-bottom:6px; }
+  .meta-grid .label { color:#333; white-space:nowrap; }
+  table.items { width:97%; border-collapse:collapse; font-size:10pt; table-layout:fixed; }
+  table.items th,table.items td { border:1px solid #000; padding:3px 5px; }
+  table.items td { vertical-align: top; }
+  table.items tr { page-break-inside: avoid; }
+  table.items th { text-align:center; font-weight:bold; }
+  .center { text-align:center; }
+  .right  { text-align:right; }
+  .footer-area { display:table; width:97%; border-collapse:collapse; margin-top:6px; font-size:11pt; }
+  .footer-area colgroup col.rem  { width:80%; }
+  .footer-area colgroup col.lbl  { width:9%; }
+  .footer-area colgroup col.val  { width:11%; }
+  .remark-cell { vertical-align:top; padding-right:10px; }
+  .total-lbl { border:1px solid #000; padding:2px 5px; font-size:10pt; }
+  .total-val { border:1px solid #000; padding:2px 5px; font-size:10pt; text-align:right; }
+  .page-footer { margin-top:16px; background:#fff; padding-top:8px; page-break-inside:avoid; }
+  .sig-row { display:flex; align-items:flex-end; margin-top:8px; font-size:10pt; border-top:1px solid #000; padding-top:4px; }
+  .sig-row span { flex:1; text-align:left; }
+  .sig-row span:not(:last-child) { margin-right:16px; }
+  .form-no { margin-top:4px; text-align:right; font-size:9pt; }
+  /* 每頁固定20列強制分頁：一般頁換頁、最後一頁用flex把頁尾釘在頁面底部，避免跟著內容量往上跑 */
+  .print-page { page-break-after: always; }
+  .print-page.print-page-last { page-break-after: auto; display:flex; flex-direction:column; min-height: calc(297mm - 24mm); }
+  .print-page.print-page-last .page-footer { margin-top:auto; }
+  .continued-note { text-align:right; font-size:9pt; color:#666; margin-top:4px; padding-right:6px; }
+  .cont-page-header { font-size:9.5pt; color:#333; border-bottom:1px solid #999; padding-bottom:3px; margin-bottom:4px; }
+  svg.car-stamp { width:91px !important; height:91px !important; }
+  .sig-row .stamp-wrap { margin:0 0 0 4px; }
+  @media print { body { -webkit-print-color-adjust:exact; } }
+</style>
+</head><body>
+${pagesHtml}
+<script>
+// 內容超過一頁才顯示頁碼（單頁不顯示頁次）；已強制分頁(printPages)超過1頁時一定要顯示
+(function () {
+    var forcedMultiPage = ${printPages.length} > 1;
+    var mmToPx  = 96 / 25.4;
+    var onePage = (297 - 24) * mmToPx; // A4 高 297mm - 上下邊界各 12mm
+    if (forcedMultiPage || document.body.scrollHeight > onePage + 2) {
+        var st = document.createElement('style');
+        st.textContent = "@page { @bottom-center { content: '第 ' counter(page) ' 頁，共 ' counter(pages) ' 頁'; font-family:'標楷體','DFKai-SB',serif; font-size:9pt; color:#333; } }";
+        document.head.appendChild(st);
+    }
+})();
+<\/script>
+</body></html>`;
+}
+
+function deleteQuote() {
+    const quote_id = $('#quote_id').val();
+    if (!quote_id) return;
+    const qno = getCurrentQuoteNo() || String(quote_id);
+    $.get(API_URL, { action: 'check_quote_orders', quote_id }, res => {
+        if (!res.success) { Swal.fire('錯誤', res.message, 'error'); return; }
+        const hasOrders = res.orders && res.orders.length > 0;
+        let extraHtml = '';
+        if (hasOrders) {
+            // ── 有綁定訂單：禁止刪除，僅顯示清單 ──
+            const rows = res.orders.map(o =>
+                `<tr>
+                    <td style="padding:3px 8px;">${escapeHtml(o.order_no||o.order_id)}</td>
+                    <td style="padding:3px 8px;">${escapeHtml(o.customer_name||'-')}</td>
+                    <td style="padding:3px 8px;">${escapeHtml(o.order_date||'-')}</td>
+                    <td style="padding:3px 8px;">${escapeHtml(o.status||'-')}</td>
+                </tr>`
+            ).join('');
+            Swal.fire({
+                title: '無法刪除',
+                icon: 'error',
+                html: `<p style="color:#c0392b;margin-bottom:10px;font-size:14px;">
+                           此報價單已被以下 <b>${res.orders.length}</b> 筆訂單綁定，<b>禁止刪除</b>。
+                       </p>
+                       <div style="max-height:200px;overflow-y:auto;">
+                           <table style="width:100%;border-collapse:collapse;font-size:12px;text-align:left;">
+                               <thead>
+                                   <tr style="background:#f5f5f5;">
+                                       <th style="padding:4px 8px;border-bottom:1px solid #ddd;">訂單號</th>
+                                       <th style="padding:4px 8px;border-bottom:1px solid #ddd;">客戶</th>
+                                       <th style="padding:4px 8px;border-bottom:1px solid #ddd;">日期</th>
+                                       <th style="padding:4px 8px;border-bottom:1px solid #ddd;">狀態</th>
+                                   </tr>
+                               </thead>
+                               <tbody>${rows}</tbody>
+                           </table>
+                       </div>
+                       <p style="margin-top:12px;font-size:12px;color:#888;">如需刪除此報價單，請先至訂單管理解除相關訂單的報價單綁定。</p>`,
+                confirmButtonText: '關閉',
+                confirmButtonColor: '#6c757d',
+            });
+            return;
+        }
+        // ── 無綁定訂單：顯示確認刪除對話框 ──
+        Swal.fire({
+            title: '刪除報價單',
+            icon: 'warning',
+            html: `<div style="text-align:left;margin-bottom:10px;">
+                    <label style="font-size:13px;font-weight:600;color:#c0392b;">刪除原因（必填）</label>
+                    <textarea id="swal-del-reason" class="swal2-input" rows="3"
+                        style="height:70px;width:88%;font-size:13px;resize:vertical;"
+                        placeholder="請說明刪除此報價單的原因..."></textarea>
+                </div>
+                <p style="margin:6px 0;">請輸入大寫 <b style="color:#c0392b;">Y</b> 確認刪除 <b>${escapeHtml(qno)}</b></p>
+                <input id="swal-del-confirm" class="swal2-input" type="text" placeholder="請輸入大寫 Y" autocomplete="off" style="width:88%;">`,
+            showCancelButton: true,
+            confirmButtonColor: '#d33',
+            confirmButtonText: '確認刪除',
+            cancelButtonText: '取消',
+            focusConfirm: false,
+            didOpen: () => { $(document).off('focusin.modal'); document.getElementById('swal-del-reason').focus(); },
+            preConfirm: () => {
+                const reason  = (document.getElementById('swal-del-reason').value || '').trim();
+                const confirm = (document.getElementById('swal-del-confirm').value || '');
+                if (!reason)       { Swal.showValidationMessage('請填寫刪除原因'); return false; }
+                if (confirm !== 'Y') { Swal.showValidationMessage('請輸入大寫 Y 確認刪除'); return false; }
+                return { reason };
+            }
+        }).then(r => {
+            if (r.isConfirmed) doDeleteQuote(quote_id, false, r.value.reason);
+        });
+    }).fail(() => Swal.fire('錯誤', '與伺服器通訊失敗', 'error'));
+}
+function doDeleteQuote(quote_id, force, deleteReason) {
+    const delQno = getCurrentQuoteNo();
+    $.post(API_URL, { action: 'delete', quote_id, force_delete: force ? 1 : 0, delete_reason: deleteReason || '' }, res => {
+        if (res.success) {
+            allYearsData = null;
+            if (delQno) $.post(FILE_API_URL, { action: 'delete_folder', quote_no: delQno });
+            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: res.message, showConfirmButton: false, timer: 3000 });
+            // 刪除後完全關閉（不回檢視，因為報價單已不存在）
+            $.post(API_URL, { action: 'release_lock', quote_id: currentEditId });
+            stopLockHeartbeat();
+            resetEditor();
+            currentEditId = null;
+            $('#editorPanel, #viewPanel').hide();
+            $('#newQuoteBtn').show();
+            $('#editorEmpty').css('display', 'flex');
+            if (isAllYearsMode) loadAllYears();
+            else loadQuoteList(<?= $selectedYear ?>);
+        } else {
+            Swal.fire('錯誤', res.message, 'error');
+        }
+    }).fail(() => Swal.fire('錯誤', '與伺服器通訊失敗', 'error'));
+}
+
+// ══════════════════════════════════════════════════════
+// 複製
+// ══════════════════════════════════════════════════════
+function cloneQuote() {
+    const sourceId = currentEditId;
+    if (!sourceId) return;
+    Swal.fire({
+        title: '複製為新報價單',
+        text: '將複製所有項目（含階梯），產生新單號，日期設為今天，不複製附件。是否繼續？',
+        icon: 'question', showCancelButton: true,
+        confirmButtonColor: '#E6A817', confirmButtonText: '確認複製', cancelButtonText: '取消'
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $.get(API_URL, { action: 'get_detail', quote_id: sourceId }, res => {
+            if (!res.success) { Swal.fire('錯誤', res.message || '載入失敗', 'error'); return; }
+            const d = res.data;
+            ++_editToken;
+            resetEditor();
+            currentEditId = null;
+            $('#editorTitle').html('<i class="fa fa-plus-circle" style="color:var(--accent);margin-right:6px;"></i>新增報價單');
+            $('#changeLogBtn, #delQuoteBtn, #cloneQuoteBtn, #printQuoteBtn').hide();
+            const _today = todayStr();
+            $('#quote_date').val(_today);
+            autoFillValidUntil();
+            const _prefix = quoteNoPrefixFromDate(_today);
+            $('#quote_no_prefix').text(_prefix);
+            $.get(API_URL, { action: 'get_new_quote_no' }, qres => {
+                if (qres.success) {
+                    $('#quote_seq').val(qres.quote_no.slice(-3));
+                    syncQuoteNo();
+                }
+            });
+            $('#client_name').val(d.client_name || '');
+            $('#client_id').val(d.client_id || '');
+            updateClientBoundCheck();
+            $('#inquiry_no').val(d.inquiry_no || '');
+            if (d.client_id) loadClientContacts(d.client_id, d.contact_id || null);
+            $('#currency').val(d.currency || 'TWD');
+            $('#exchange_rate').val(d.exchange_rate || 1);
+            $('#note').val(d.note || '').trigger('input');
+            $('#is_negotiation').prop('checked', d.is_negotiation == 1);
+            $('#source_quote_id').val(sourceId);
+            const items = d.items || [];
+            items.forEach(item => addItemRow({ ...item, item_id: null }));
+            if (!items.length) addItemRow();
+            calculateTotal();
+            showEditor();
+            $('#note').trigger('input');
+            updatePartSearchPlaceholders();
+            updateEditorClientTag();
+            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: '已複製內容，請確認後儲存', showConfirmButton: false, timer: 3000 });
+        }).fail(() => Swal.fire('錯誤', '與伺服器通訊失敗', 'error'));
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// 新增/移除項目列
+// ══════════════════════════════════════════════════════
+const MAX_QUOTE_ITEMS = 30; // 報價項目上限（後端 save 同步檢查）
+
+function addItemRow(item = {}) {
+    // 上限檢查：僅擋使用者新增（載入既有明細帶 item_id，不受限）
+    if (!item.item_id) {
+        const _rowCnt = $('#quoteItemsTable > tbody > tr.item-row').length;
+        if (_rowCnt >= MAX_QUOTE_ITEMS) {
+            Swal.fire('提示', `報價項目最多 ${MAX_QUOTE_ITEMS} 筆料號`, 'warning');
+            return false;
+        }
+    }
+    const isTiered = item.is_tiered == 1;
+    const $tbody   = $('#quoteItemsTable > tbody');
+
+    const selOpt = (val, match) => val === match ? 'selected' : '';
+    const gt     = item.process_group_type || 'single_process';
+
+    const _hasBound = item.d_setting_d_id ? '' : 'display:none;';
+    const rowHtml = `
+    <tr class="item-row" data-item-id="${item.item_id || ''}" data-is-tiered="${isTiered ? 1 : 0}">
+        <td>
+            <button type="button" class="btn btn-danger btn-xs" onclick="removeItemRow(this)" title="刪除此項目">
+                <i class="fa fa-trash"></i>
+            </button>
+        </td>
+        <td>
+            <div style="position:relative;">
+                <div class="input-group input-group-sm">
+                    <span class="input-group-addon part-bound-check" style="${_hasBound}background:transparent;border-right:none;padding:0 3px;color:#27ae60;" title="已綁定料號資料">
+                        <i class="fa fa-check-circle"></i>
+                    </span>
+                    <input type="text" class="form-control part-search"
+                        placeholder="搜尋料號..." autocomplete="off"
+                        value="${escapeHtml(item.product_id || '')}"
+                        title="${escapeHtml(item.product_id || '')}"
+                        style="text-overflow:ellipsis;">
+                    <span class="input-group-btn">
+                        <button type="button" class="btn btn-default btn-xs part-cog-btn"
+                            data-d-id="${escapeHtml(String(item.d_setting_d_id || ''))}"
+                            onclick="openPartModalForRow(this)" title="開啟料號">
+                            <i class="fa fa-cog"></i>
+                        </button>
+                    </span>
+                </div>
+                <div class="part-suggestions autocomplete-suggestions" style="display:none;"></div>
+                <input type="hidden" class="product_id_hidden" value="${escapeHtml(item.product_id || '')}">
+                <input type="hidden" class="d_setting_d_id_hidden" value="${escapeHtml(String(item.d_setting_d_id || ''))}">
+                <div class="gear-spec-display" style="font-size:10px;color:#888;margin-top:3px;line-height:1.4;"></div>
+                <div class="part-attach-badges" style="margin-top:2px;line-height:1.7;"></div>
+                <input type="hidden" class="show-bom-hidden" value="${item.show_bom == 1 ? 1 : 0}">
+                <input type="hidden" class="print-bom-hidden" value="${item.print_bom == 1 ? 1 : 0}">
+                <div class="bom-info-area" style="margin-top:3px;"></div>
+            </div>
+        </td>
+        <td class="process-cell">
+            <div class="proc-direct-l1"></div>
+            <div class="proc-direct-l2"></div>
+            <div class="proc-selected-chips"></div>
+            <input type="hidden" class="process-hidden" value="${escapeHtml(item.processes || '')}">
+            <input type="hidden" class="proc-subtags-hidden" value="">
+            <input type="hidden" class="proc-group-type-hidden" value="${escapeHtml(gt)}">
+        </td>
+        <td>
+            <input type="text" class="form-control input-sm" name="specification"
+                value="${escapeHtml(item.specification || '')}" placeholder="料號備註">
+        </td>
+        <td>
+            <input type="number" class="form-control input-sm quantity"
+                value="${item.quantity != null && item.quantity !== '' ? item.quantity : ''}" step="any" min="0" ${isTiered ? 'disabled' : ''}>
+        </td>
+        <td>
+            <select class="form-control input-sm item-unit" style="font-size:12px;">
+                ${buildUnitOptions(item.unit || 'PCS')}
+            </select>
+        </td>
+        <td>
+            <input type="number" class="form-control input-sm unit-price"
+                value="${item.unit_price != null && item.unit_price !== '' ? item.unit_price : ''}" step="any" min="0" ${isTiered ? 'disabled' : ''}>
+        </td>
+        <td>
+            <input type="text" class="form-control input-sm amount"
+                value="${formatNumber(item.amount || 0)}" readonly>
+        </td>
+        <td style="text-align:center;padding-top:7px;">
+            <button type="button" class="btn btn-default btn-xs tier-toggle-btn ${isTiered ? 'active' : ''}"
+                onclick="toggleTierMode(this)" title="切換階梯報價">
+                <i class="fa fa-list-ol"></i>
+            </button>
+        </td>
+        <td></td>
+    </tr>`;
+
+    $tbody.append(rowHtml);
+    const $newRow = $tbody.find('> tr.item-row:last');
+
+    // 初始化製程標籤
+    // 初始化製程直接標籤導覽
+    const $procCell = $newRow.find('.process-cell');
+    // 優先用 process_notes 存放的 sub_tag IDs（精確）；舊資料無此欄才退回推算
+    const savedSubTagIds = (item.process_notes || '')
+        .split(',').map(s => parseInt(s.trim())).filter(x => x > 0);
+    const existingProcs  = (item.processes || '').split(',').map(s => s.trim()).filter(Boolean);
+    const initSubTags    = savedSubTagIds.length
+        ? savedSubTagIds
+        : (existingProcs.length ? inferSubTagsFromProcessIds(existingProcs) : []);
+    initProcCellNav($procCell, initSubTags);
+
+    if (isTiered) renderTierSection($newRow, item.tiers || []);
+
+    if (item.product_id) {
+        loadItemHistory($newRow, item.product_id);
+        const _gDid = item.d_setting_d_id ? parseInt(item.d_setting_d_id) : null;
+        loadGearSpecs($newRow, _gDid ? null : item.product_id, _gDid);
+        loadBomInfo($newRow, _gDid ? null : item.product_id, _gDid);
+    }
+}
+
+function removeItemRow(btn) {
+    const $row = $(btn).closest('tr.item-row');
+    $row.next('tr.tier-row').remove();
+    $row.next('tr.hq-row').remove();
+    $row.nextUntil('tr.item-row', 'tr.bom-row').remove();
+    $row.remove();
+    calculateTotal();
+}
+
+// ══════════════════════════════════════════════════════
+// ★ 製程直接標籤導覽（直接顯示，不需面板）
+// ══════════════════════════════════════════════════════
+
+// 從製程 ID 陣列推算對應子標籤（載入舊資料用）
+function inferSubTagsFromProcessIds(processIds) {
+    const result = [];
+    processTagTree.forEach(g => {
+        (g.sub_tags || []).forEach(st => {
+            const pnos = (st.process_nos || []).map(String);
+            if (pnos.length > 0 && pnos.every(p => processIds.includes(p))) result.push(st.sub_tag_id);
+        });
+    });
+    return result;
+}
+
+// 取得目前已選子標籤 ID 陣列
+function getProcSelectedSubTags($cell) {
+    const v = $cell.find('.proc-subtags-hidden').val();
+    return v ? v.split(',').map(s => parseInt(s)).filter(x => !isNaN(x)) : [];
+}
+
+// 將已選子標籤的製程 ID 同步到 .process-hidden
+function syncProcHiddenFromSubTags($cell) {
+    const selected = getProcSelectedSubTags($cell);
+    const procIds  = new Set();
+    selected.forEach(sid => {
+        processTagTree.forEach(g => {
+            (g.sub_tags || []).forEach(st => {
+                if (st.sub_tag_id === sid) (st.process_nos || []).forEach(p => procIds.add(String(p)));
+            });
+        });
+    });
+    $cell.find('.process-hidden').val([...procIds].join(','));
+}
+
+// 初始化 cell 的 L1+L2 導覽
+function initProcCellNav($cell, selectedSubTagIds) {
+    $cell.find('.proc-subtags-hidden').val(selectedSubTagIds.join(','));
+    syncProcHiddenFromSubTags($cell);
+    renderProcL1($cell);
+    if (processTagTree.length && selectedSubTagIds.length) {
+        // 展開含有已選子標籤的群組
+        let activeGid = processTagTree[0].group_id;
+        for (const g of processTagTree) {
+            if ((g.sub_tags || []).some(st => selectedSubTagIds.includes(st.sub_tag_id))) {
+                activeGid = g.group_id;
+                break;
+            }
+        }
+        renderProcL2($cell, activeGid, true);
+    } else {
+        // 無已選子標籤：不展開 L2，不預設 L1 底色
+        $cell.find('.proc-direct-l2').empty();
+    }
+    renderProcSelectedChips($cell);
+}
+
+// 渲染 L1 群組按鈕
+function renderProcL1($cell) {
+    if (!processTagTree.length) { $cell.find('.proc-direct-l1').empty(); return; }
+    let html = '';
+    processTagTree.forEach(g => {
+        html += `<button type="button" class="proc-l1-btn" data-gid="${g.group_id}"
+            onclick="renderProcL2($(this).closest('.process-cell'),${g.group_id},true)">${escapeHtml(g.group_name)}</button>`;
+    });
+    $cell.find('.proc-direct-l1').html(html);
+}
+
+// 渲染 L2 子標籤按鈕（含選取狀態）
+function renderProcL2($cell, gid, setActive) {
+    if (setActive) {
+        $cell.find('.proc-l1-btn').removeClass('active');
+        $cell.find(`.proc-l1-btn[data-gid="${gid}"]`).addClass('active');
+    }
+    const g = processTagTree.find(x => x.group_id === gid);
+    if (!g) { $cell.find('.proc-direct-l2').empty(); return; }
+    const selected = getProcSelectedSubTags($cell);
+    let html = '';
+    (g.sub_tags || []).forEach(st => {
+        const isOn = selected.includes(st.sub_tag_id);
+        html += `<button type="button" class="proc-l2-btn ${isOn ? 'active' : ''}" data-sid="${st.sub_tag_id}" data-gid="${gid}"
+            onclick="toggleProcSubTag($(this).closest('.process-cell'),${st.sub_tag_id},${gid})">${escapeHtml(st.sub_tag_name)}</button>`;
+    });
+    $cell.find('.proc-direct-l2').html(html || '<small class="text-muted" style="font-size:10px;">此群組尚無子標籤</small>');
+}
+
+// 點擊子標籤：toggle 選取
+function toggleProcSubTag($cell, subTagId, groupId) {
+    let selected = getProcSelectedSubTags($cell);
+    if (selected.includes(subTagId)) {
+        selected = selected.filter(x => x !== subTagId);
+    } else {
+        selected.push(subTagId);
+    }
+    $cell.find('.proc-subtags-hidden').val(selected.join(','));
+    // 設定 group_type（依最後選取的群組）
+    const g = processTagTree.find(x => x.group_id === groupId);
+    $cell.find('.proc-group-type-hidden').val(selected.length && g ? (g.group_type || 'single_process') : 'single_process');
+    syncProcHiddenFromSubTags($cell);
+    // 重繪 L2 active 狀態
+    const activeGid = parseInt($cell.find('.proc-l1-btn.active').data('gid')) || (processTagTree[0] && processTagTree[0].group_id);
+    if (activeGid) renderProcL2($cell, activeGid, false);
+    renderProcSelectedChips($cell);
+}
+
+// 渲染已選子標籤 chips
+function renderProcSelectedChips($cell) {
+    const selected = getProcSelectedSubTags($cell);
+    if (!selected.length) { $cell.find('.proc-selected-chips').empty(); return; }
+    let html = '';
+    selected.forEach(sid => {
+        let name = String(sid);
+        processTagTree.forEach(g => {
+            (g.sub_tags || []).forEach(st => { if (st.sub_tag_id === sid) name = st.sub_tag_name; });
+        });
+        html += `<span class="proc-tag" data-sid="${sid}">${escapeHtml(name)}<span class="proc-tag-x" onclick="removeProcSubTagChip(this)">&times;</span></span>`;
+    });
+    $cell.find('.proc-selected-chips').html(html);
+}
+
+// 移除子標籤 chip
+function removeProcSubTagChip(el) {
+    const $cell = $(el).closest('.process-cell');
+    const sid   = parseInt($(el).closest('.proc-tag').data('sid'));
+    let selected = getProcSelectedSubTags($cell);
+    selected = selected.filter(x => x !== sid);
+    $cell.find('.proc-subtags-hidden').val(selected.join(','));
+    if (!selected.length) $cell.find('.proc-group-type-hidden').val('single_process');
+    syncProcHiddenFromSubTags($cell);
+    const activeGid = parseInt($cell.find('.proc-l1-btn.active').data('gid')) || (processTagTree[0] && processTagTree[0].group_id);
+    if (activeGid) renderProcL2($cell, activeGid, false);
+    renderProcSelectedChips($cell);
+}
+
+// ══════════════════════════════════════════════════════
+// 歷史報價快帶入（選取料號後顯示）
+// ══════════════════════════════════════════════════════
+// ★ 齒輪規格自動帶入
+// ══════════════════════════════════════════════════════
+function loadGearSpecs($tr, partId, dId) {
+    const params = { action: 'get_gear_specs' };
+    if (dId) params.d_id = dId;
+    else if (partId) params.part_id = partId;
+    else return;
+    $.get(API_URL, params, res => {
+        if (!res.success || !res.gears.length) {
+            $tr.find('.gear-spec-display').empty();
+            return;
+        }
+        // 格式：M模數 T齒數 W齒寬 螺旋方向角度，多列齒型用 / 分隔
+        const texts = res.gears.map(g => {
+            const p = [];
+            const mod = String(g.Module || '').trim();
+            if (mod) p.push(/^m/i.test(mod) ? mod : 'M' + mod);
+            if (Number(g.Teeth) > 0) p.push('T' + g.Teeth);
+            if (Number(g.Face_Width) > 0) {
+                const fw = parseFloat(g.Face_Width);
+                p.push('W' + fw.toString().replace(/\.?0+$/, ''));
+            }
+            const hd = String(g.Helix_Direction || '').trim();
+            if (hd && hd !== 'N/A') p.push(hd + (g.Helix_Angle_Str || ''));
+            return p.join(' ');
+        }).filter(Boolean);
+        $tr.find('.gear-spec-display').html(
+            texts.length ? `<span style="color:#888;font-size:10px;">${escapeHtml(texts.join(' / '))}</span>` : ''
+        );
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// ★ 組合件資訊：子件清單（勾選顯示/列印）+ 子件反查母件提醒
+// ══════════════════════════════════════════════════════
+const BOM_COLLAPSE_LIMIT = 2; // 畫面上子件超過此數自動收合
+
+function loadBomInfo($tr, partId, dId) {
+    const clearBom = () => { $tr.data('bom-info', null); renderBomArea($tr); };
+    const params = { action: 'get_bom_info' };
+    if (dId) params.d_id = dId;
+    else if (partId) params.part_id = partId;
+    else { clearBom(); return; }
+    $.get(API_URL, params, res => {
+        if (!res.success) { clearBom(); return; }
+        $tr.data('bom-info', res);
+        renderBomArea($tr);
+    });
+}
+
+// 子件用量格式：小數尾 0 省略（3.50→3.5、1.00→1）
+function fmtBomQty(q) {
+    const n = parseFloat(q || 0);
+    return isNaN(n) ? '' : String(n);
+}
+
+function renderBomArea($tr) {
+    const info  = $tr.data('bom-info');
+    const $cell = $tr.find('.bom-info-area');
+    // 先移除此項目既有的組合件整列（重繪）
+    $tr.nextUntil('tr.item-row', 'tr.bom-row').remove();
+    if (!info) { $cell.empty(); return; }
+
+    // 料號欄只放「屬於組合件」反查提醒（單行截斷，滑過看全文）
+    $cell.html((info.parents || []).length
+        ? `<div style="font-size:10px;color:#8e44ad;line-height:1.5;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"
+               title="屬於組合件：${escapeHtml(info.parents.join('、'))}">
+             <i class="fa fa-level-up"></i> 屬於組合件：${info.parents.map(escapeHtml).join('、')}</div>`
+        : '');
+
+    if (info.is_assembly != 1) return;
+
+    const children = info.children || [];
+    const showBom  = $tr.find('.show-bom-hidden').val() === '1';
+    const printBom = $tr.find('.print-bom-hidden').val() === '1';
+    const colCount = $tr.find('td').length;
+    const chkLabel = 'display:inline-flex;align-items:center;gap:4px;font-weight:normal;margin:0;cursor:pointer;white-space:nowrap;font-size:11px;';
+
+    // 佔滿整列寬的橫幅：徽章(含子件數) + 勾選 + 子件籤片橫排
+    let inner = `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#faf7fd;border:1px solid #e4d7f5;border-radius:4px;padding:4px 10px;line-height:1.8;">
+        <span style="background:#8e44ad;color:#fff;padding:1px 8px;border-radius:3px;font-size:10px;white-space:nowrap;"><i class="fa fa-sitemap"></i> 組合件・含 ${children.length} 件子件</span>
+        <label style="${chkLabel}color:#555;">
+            <input type="checkbox" class="bom-show-chk" ${showBom ? 'checked' : ''} style="margin:0;"> 顯示子件清單
+        </label>`;
+    if (showBom) {
+        inner += `<label style="${chkLabel}color:#c0392b;" title="預設不列印，勾選後客戶報價單會印出子件清單">
+            <input type="checkbox" class="bom-print-chk" ${printBom ? 'checked' : ''} style="margin:0;"> 列印時包含子件清單
+        </label>`;
+        if (!children.length) {
+            inner += `<span style="font-size:10px;color:#aaa;">（料號主檔尚未建立子件清單）</span>`;
+        } else {
+            const expanded  = $tr.data('bom-expanded') === 1;
+            const collapsed = children.length > BOM_COLLAPSE_LIMIT && !expanded;
+            const list = collapsed ? children.slice(0, BOM_COLLAPSE_LIMIT) : children;
+            list.forEach(c => {
+                const extra = [c.spec_no, c.Remark_Bom].filter(Boolean).join('・');
+                inner += `<span style="background:#fff;border:1px solid #e4d7f5;border-radius:3px;padding:1px 8px;font-size:10.5px;color:#555;white-space:nowrap;"
+                    title="${escapeHtml(c.part_no)} ${fmtBomQty(c.standard_qty)}PCS/組${extra ? ' ' + escapeHtml(extra) : ''}">
+                    <b>${escapeHtml(c.part_no)}</b> <span style="color:#8e44ad;">${fmtBomQty(c.standard_qty)}PCS/組</span>${extra ? ` <span style="color:#aaa;">${escapeHtml(extra)}</span>` : ''}
+                </span>`;
+            });
+            if (collapsed) {
+                inner += `<a href="#" class="bom-expand-link" style="font-size:10.5px;color:#8e44ad;white-space:nowrap;">＋還有 ${children.length - BOM_COLLAPSE_LIMIT} 件 ▼</a>`;
+            } else if (children.length > BOM_COLLAPSE_LIMIT) {
+                inner += `<a href="#" class="bom-collapse-link" style="font-size:10.5px;color:#8e44ad;white-space:nowrap;">收合 ▲</a>`;
+            }
+        }
+    }
+    inner += `</div>`;
+
+    // 插在該項目所有輔助列（tier-row / hq-row）之後
+    const $bomTr = $(`<tr class="bom-row"><td colspan="${colCount}" style="border-top:none;padding:2px 6px 6px;">${inner}</td></tr>`);
+    const $helpers = $tr.nextUntil('tr.item-row');
+    if ($helpers.length) $helpers.last().after($bomTr);
+    else $tr.after($bomTr);
+
+    // 事件（每次重繪後重綁）
+    $bomTr.find('.bom-show-chk').on('change', function () {
+        const on = this.checked ? 1 : 0;
+        $tr.find('.show-bom-hidden').val(on);
+        if (!on) $tr.find('.print-bom-hidden').val(0); // 階層式：取消顯示時一併取消列印
+        renderBomArea($tr);
+    });
+    $bomTr.find('.bom-print-chk').on('change', function () {
+        $tr.find('.print-bom-hidden').val(this.checked ? 1 : 0);
+    });
+    $bomTr.find('.bom-expand-link').on('click', function (e) {
+        e.preventDefault(); $tr.data('bom-expanded', 1); renderBomArea($tr);
+    });
+    $bomTr.find('.bom-collapse-link').on('click', function (e) {
+        e.preventDefault(); $tr.data('bom-expanded', 0); renderBomArea($tr);
+    });
+}
+
+// ══════════════════════════════════════════════════════
+function loadItemHistory($itemRow, productId) {
+    const clientName = $('#client_name').val().trim();
+    if (!clientName || !productId) return;
+
+    // 移除舊的快帶列
+    $itemRow.next('tr.hq-row').remove();
+    const $tierRow = $itemRow.next('tr.tier-row');
+    const colCount = $itemRow.find('td').length;
+
+    $.get(API_URL, { action: 'get_price_history', client_name: clientName, product_id: productId }, res => {
+        if (!res.success || !res.data || !res.data.length) return;
+        const recent = res.data.slice(0, 5);
+        let chips = recent.map(r => {
+            let label, payload;
+            if (r.is_tiered && r.tiers && r.tiers.length) {
+                label = r.tiers.map(t => `${formatNumber(t.qty_min)}+: ${formatNumber(t.unit_price)}`).join(' / ');
+                payload = '';
+            } else {
+                label = `${escapeHtml(r.quote_date)} @ <b>${formatNumber(r.unit_price)}</b>`;
+                payload = r.unit_price;
+            }
+            const attr = payload !== '' ? `data-price="${payload}"` : '';
+            return `<span class="hq-chip" ${attr} title="${escapeHtml(r.quote_no)}">${label}</span>`;
+        }).join('');
+
+        const $hqTr = $(`<tr class="hq-row"><td colspan="${colCount}" class="hq-row">
+            <div class="hq-wrap" style="padding:3px 0 5px 0;">
+                <small style="color:#aaa;font-size:10px;white-space:nowrap;"><i class="fa fa-history"></i> 歷史</small>
+                ${chips}
+            </div>
+        </td></tr>`);
+
+        // 插在 tier-row 後方（若有），否則在 item-row 後
+        if ($tierRow.length) $tierRow.after($hqTr);
+        else $itemRow.after($hqTr);
+
+        // 點擊快帶入單價
+        $hqTr.find('.hq-chip[data-price]').on('click', function () {
+            const price = $(this).data('price');
+            if (!price && price !== 0) return;
+            const $isTiered = parseInt($itemRow.data('is-tiered'));
+            if (!$isTiered) {
+                $itemRow.find('.unit-price').val(price).trigger('input');
+            }
+        });
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// 計算合計
+// ══════════════════════════════════════════════════════
+function calculateTotal() {
+    let total = 0;
+    $('#quoteItemsTable > tbody > tr.item-row').each(function () {
+        const $row = $(this);
+        if ($row.data('is-tiered')) {
+            let sub = 0;
+            $row.next('tr.tier-row').find('.tier-amount').each(function () {
+                sub += parseFloat($(this).val().replace(/,/g, '')) || 0;
+            });
+            $row.find('.amount').val(formatNumber(sub));
+            total += sub;
+        } else {
+            total += parseFloat($row.find('.amount').val().replace(/,/g, '')) || 0;
+        }
+    });
+    $('#totalAmountDisplay').text(formatNumber(total));
+    $('#currencyDisplay').text($('#currency').find('option:selected').text());
+}
+
+// ══════════════════════════════════════════════════════
+// 階梯管理（邏輯與原版相同）
+// ══════════════════════════════════════════════════════
+function toggleTierMode(btn) {
+    const $btn = $(btn);
+    const $row = $btn.closest('tr.item-row');
+    $btn.toggleClass('active');
+    const now = $btn.hasClass('active');
+    $row.data('is-tiered', now ? 1 : 0);
+    $row.find('.quantity, .unit-price').prop('disabled', now);
+    if (now) {
+        renderTierSection($row, []);
+        $row.find('.amount').val('0');
+    } else {
+        $row.next('tr.tier-row').remove();
+        $row.find('.quantity, .unit-price').prop('disabled', false);
+        const q = parseFloat($row.find('.quantity').val()) || 0;
+        const p = parseFloat($row.find('.unit-price').val()) || 0;
+        $row.find('.amount').val(formatNumber(q * p));
+    }
+    calculateTotal();
+}
+function renderTierSection($itemRow, tiers) {
+    $itemRow.next('tr.tier-row').remove();
+    if (tiers.length === 0) tiers = [{}];
+    let tiersHtml = '';
+    tiers.forEach((t, i) => { tiersHtml += buildTierInputRow(t, i); });
+    const $tierTr = $(`
+    <tr class="tier-row">
+        <td colspan="9" style="padding:0 0 6px 40px;">
+            <div class="tier-section">
+                <small class="text-muted" style="font-size:11px;">
+                    <i class="fa fa-info-circle"></i> 階梯模式：各區間以「最低門檻量 × 單價」計算小計
+                </small>
+                <table class="tier-table" style="margin-top:6px;">
+                    <thead><tr>
+                        <th style="width:7%">排序</th>
+                        <th style="width:13%">最小量<span class="text-danger">*</span></th>
+                        <th style="width:13%">最大量<br><small>空=無上限</small></th>
+                        <th style="width:13%">單價<span class="text-danger">*</span></th>
+                        <th style="width:13%">門檻小計</th>
+                        <th style="width:8%">容差值</th>
+                        <th style="width:8%">容差單位</th>
+                        <th style="width:16%">容差備註</th>
+                        <th style="width:9%">刪除</th>
+                    </tr></thead>
+                    <tbody class="tier-tbody">${tiersHtml}</tbody>
+                </table>
+                <button type="button" class="btn btn-success btn-add-tier" onclick="addTierRow(this)">
+                    <i class="fa fa-plus"></i> 新增區間
+                </button>
+            </div>
+        </td>
+    </tr>`);
+    $itemRow.after($tierTr);
+}
+function buildTierInputRow(t, idx) {
+    const qmin  = (t.qty_min  !== undefined && t.qty_min  !== '') ? Math.round(Number(t.qty_min))  : '';
+    const qmax  = (t.qty_max  !== undefined && t.qty_max  !== null && t.qty_max !== '') ? Math.round(Number(t.qty_max)) : '';
+    const price  = (t.unit_price !== undefined && t.unit_price !== '') ? formatNumber(t.unit_price) : '';
+    const amount = t.amount !== undefined ? formatNumber(t.amount) : '0';
+    const tv = (t.tolerance_value !== undefined && t.tolerance_value !== null) ? t.tolerance_value : '';
+    const tu = t.tolerance_unit || '';
+    const tn = t.tolerance_note || '';
+    return `<tr class="tier-input-row">
+        <td style="text-align:center;color:#aaa;font-size:11px;">${idx+1}</td>
+        <td><input type="number" class="form-control tier-qty-min" value="${qmin}" step="1" min="0" placeholder="例:300"></td>
+        <td><input type="number" class="form-control tier-qty-max" value="${qmax}" step="1" min="0" placeholder="空=無上限"></td>
+        <td><input type="number" class="form-control tier-unit-price" value="${t.unit_price !== undefined && t.unit_price !== '' ? Number(t.unit_price) : ''}" step="any" min="0" placeholder="0"></td>
+        <td><input type="text" class="form-control tier-amount" value="${amount}" readonly></td>
+        <td><input type="number" class="form-control tier-tol-value" value="${escapeHtml(String(tv))}" step="any" min="0" placeholder="5"></td>
+        <td>
+            <select class="form-control tier-tol-unit">
+                <option value="" ${tu===''?'selected':''}>-</option>
+                <option value="%" ${tu==='%'?'selected':''}>%</option>
+                <option value="PCS" ${tu==='PCS'?'selected':''}>PCS</option>
+            </select>
+        </td>
+        <td><input type="text" class="form-control tier-tol-note" value="${escapeHtml(tn)}" placeholder="容差說明..."></td>
+        <td style="text-align:center;">
+            <button type="button" class="btn btn-danger btn-xs btn-del-tier" onclick="deleteTierRow(this)">
+                <i class="fa fa-times"></i>
+            </button>
+        </td>
+    </tr>`;
+}
+function addTierRow(btn) {
+    const $tbody = $(btn).closest('.tier-section').find('.tier-tbody');
+    const $rows  = $tbody.find('tr.tier-input-row');
+    const idx    = $rows.length;
+    if ($rows.length > 0) {
+        const $lastRow = $rows.last();
+        if ($lastRow.find('.tier-qty-max').val().trim() === '') {
+            $lastRow.find('.tier-qty-max').addClass('tier-qmax-pending')
+                .css({ 'background-color': '#fff8e1', 'border-color': '#ffc107' })
+                .attr('title', '新增下一區間後將自動補上限');
+        }
+    }
+    $tbody.append(buildTierInputRow({}, idx));
+    refreshTierSortOrder($tbody);
+    $tbody.find('tr.tier-input-row:last .tier-qty-min').off('input.autofill').on('input.autofill', function () {
+        const newMin   = parseFloat($(this).val());
+        const $pending = $tbody.find('.tier-qty-max.tier-qmax-pending');
+        if ($pending.length && !isNaN(newMin) && newMin > 0) {
+            $pending.val(Math.round(newMin) - 1)
+                    .removeClass('tier-qmax-pending')
+                    .css({ 'background-color': '#e8f5e9', 'border-color': '#4caf50' })
+                    .attr('title', '已自動補上限（可手動修改）');
+        }
+    });
+}
+function deleteTierRow(btn) {
+    const $tbody = $(btn).closest('.tier-tbody');
+    $(btn).closest('tr').remove();
+    refreshTierSortOrder($tbody);
+    autoFixTierOverlap($tbody);
+    calculateTotal();
+}
+function refreshTierSortOrder($tbody) {
+    $tbody.find('tr.tier-input-row').each((i, tr) => { $(tr).find('td:first').text(i + 1); });
+}
+function autoFixTierOverlap($tbody) {
+    const $rows = $tbody.find('tr.tier-input-row');
+    $rows.each(function (i) {
+        if (i === $rows.length - 1) return;
+        const $qmax    = $(this).find('.tier-qty-max');
+        const nextMin  = parseFloat($rows.eq(i + 1).find('.tier-qty-min').val());
+        const curMax   = $qmax.val().trim();
+        if (curMax === '' && !isNaN(nextMin) && nextMin > 0) {
+            $qmax.val(Math.round(nextMin) - 1)
+                 .css({ 'background-color': '#e8f5e9', 'border-color': '#4caf50' })
+                 .attr('title', '已自動補上限（可手動修改）');
+        } else if (curMax !== '') {
+            const cm = Math.round(parseFloat(curMax));
+            const nm = Math.round(nextMin);
+            if (!isNaN(nm) && cm >= nm) {
+                $qmax.val(nm - 1)
+                     .css({ 'background-color': '#fff3e0', 'border-color': '#ff9800' })
+                     .attr('title', '上限已自動修正以避免與下一區間重疊');
+            }
+        }
+    });
+}
+function fixAllTiersBeforeSave() {
+    let ok = true;
+    $('#quoteItemsTable > tbody > tr.item-row').each(function () {
+        if (parseInt($(this).data('is-tiered')) !== 1) return;
+        const $tbody = $(this).next('tr.tier-row').find('.tier-tbody');
+        autoFixTierOverlap($tbody);
+        const $rows = $tbody.find('tr.tier-input-row');
+        $rows.each(function (i) {
+            if (i === $rows.length - 1) return;
+            if ($(this).find('.tier-qty-max').val().trim() === '' &&
+                isNaN(parseFloat($rows.eq(i + 1).find('.tier-qty-min').val()))) {
+                ok = false;
+            }
+        });
+    });
+    return ok;
+}
+
+// ══════════════════════════════════════════════════════
+// 預設容差
+// ══════════════════════════════════════════════════════
+function loadDefaultTolerance() {
+    $.get(API_URL, { action: 'get_param', param_group: 'QUOTATION', param_key: 'default_tolerance' }, res => {
+        if (res.success && res.value) defaultTolerance = res.value;
+        $('#defaultTolDisplay').text(`±${defaultTolerance.value} ${defaultTolerance.unit}`);
+    });
+}
+function applyDefaultTolerance() {
+    let count = 0;
+    $('#quoteItemsTable tbody tr.tier-row .tier-tbody tr.tier-input-row').each(function () {
+        if (!$(this).find('.tier-tol-value').val()) {
+            $(this).find('.tier-tol-value').val(defaultTolerance.value);
+            $(this).find('.tier-tol-unit').val(defaultTolerance.unit);
+            count++;
+        }
+    });
+    if (count === 0) {
+        Swal.fire({ toast: true, position: 'top-end', icon: 'info', title: '所有區間已有容差設定', showConfirmButton: false, timer: 2000 });
+    } else {
+        Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `已套用至 ${count} 個區間`, showConfirmButton: false, timer: 2000 });
+    }
+}
+function openTolSettingModal() {
+    Swal.fire({
+        title: '修改預設容差',
+        html: `<div style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:10px;">
+            <input type="number" id="swal-tol-val" class="swal2-input" style="width:100px;margin:0;"
+                value="${defaultTolerance.value}" min="0" step="any">
+            <select id="swal-tol-unit" class="swal2-select" style="width:90px;margin:0;">
+                <option value="%" ${defaultTolerance.unit==='%'?'selected':''}>%</option>
+                <option value="PCS" ${defaultTolerance.unit==='PCS'?'selected':''}>PCS</option>
+            </select></div>`,
+        showCancelButton: true, confirmButtonText: '儲存', cancelButtonText: '取消',
+        preConfirm: () => {
+            const val  = parseFloat(document.getElementById('swal-tol-val').value);
+            const unit = document.getElementById('swal-tol-unit').value;
+            if (isNaN(val) || val < 0) { Swal.showValidationMessage('請輸入有效數值'); return false; }
+            return { value: val, unit };
+        }
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $.post(API_URL, {
+            action: 'save_param', param_group: 'QUOTATION', param_key: 'default_tolerance',
+            param_value: JSON.stringify(r.value), description: '報價階梯預設容差'
+        }, res => {
+            if (res.success) {
+                defaultTolerance = r.value;
+                $('#defaultTolDisplay').text(`±${r.value.value} ${r.value.unit}`);
+                Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: '預設容差已更新', showConfirmButton: false, timer: 2000 });
+            } else {
+                Swal.fire('錯誤', res.message, 'error');
+            }
+        });
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// ★ 附件上傳
+// ══════════════════════════════════════════════════════
+function loadUploadPath() {
+    $.get(API_URL, { action: 'get_param', param_group: 'QUOTATION', param_key: 'upload_path' }, res => {
+        const path = (res.success && res.value) ? (typeof res.value === 'string' ? res.value : JSON.stringify(res.value)) : '';
+        currentUploadPath = path;
+        $('#uploadPathDisplay').text(path || '未設定');
+    });
+}
+let _validDays = 0; // 報價有效天數（0=不自動帶入）
+
+function saveValidDays() {
+    const v = parseInt($('#qs-valid-days').val()) || 0;
+    $.post(API_URL, { action:'save_param', param_group:'QUOTATION', param_key:'valid_days',
+        param_value: JSON.stringify(v), description:'報價有效期天數' }, res => {
+        if (res.success) {
+            _validDays = v;
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已儲存', showConfirmButton:false, timer:1800 });
+        } else Swal.fire('錯誤', res.message, 'error');
+    });
+}
+function loadValidDays() {
+    $.get(API_URL, { action:'get_param', param_group:'QUOTATION', param_key:'valid_days' }, res => {
+        if (res.success && res.value !== null) {
+            _validDays = parseInt(res.value) || 0;
+            $('#qs-valid-days').val(_validDays || '');
+        }
+    });
+}
+function autoFillValidUntil() {
+    if (!_validDays) return;
+    const d = $('#quote_date').val();
+    if (!d) return;
+    const dt = new Date(d + 'T00:00:00');
+    dt.setDate(dt.getDate() + _validDays);
+    $('#valid_until').val(dt.toISOString().slice(0,10));
+}
+
+function saveFormNumber() {
+    const v = $('#qs-form-number').val().trim();
+    $.post(API_URL, { action:'save_param', param_group:'QUOTATION', param_key:'form_number',
+        param_value: JSON.stringify(v), description:'列印表單編號' }, res => {
+        if (res.success) Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已儲存', showConfirmButton:false, timer:1800 });
+        else Swal.fire('錯誤', res.message, 'error');
+    });
+}
+function loadFormNumber() {
+    $.get(API_URL, { action:'get_param', param_group:'QUOTATION', param_key:'form_number' }, res => {
+        if (res.success && res.value) $('#qs-form-number').val(typeof res.value === 'string' ? res.value : '');
+    });
+}
+function openUploadSettings() {
+    if (!CAN_SETTINGS) {
+        Swal.fire({ toast: true, position: 'top-end', icon: 'warning', title: '您沒有報價單設定權限', showConfirmButton: false, timer: 2000 });
+        return;
+    }
+    openSettingsModal();
+}
+
+// ══════════════════════════════════════════════════════
+// 權限相關
+// ══════════════════════════════════════════════════════
+function openPermHelp() { $('#permHelpModal').modal('show'); }
+
+// ══════════════════════════════════════════════════════
+// 角色管理
+// ══════════════════════════════════════════════════════
+let _selectedRoleId   = null;
+let _selectedRoleCode = null;
+
+function loadPermissionsTab() {
+    if (!IS_ADMIN) return;
+    loadRolesPanel();
+}
+
+function loadRolesPanel() {
+    $('#roles-list').html('<div class="text-center text-muted" style="padding:20px;font-size:12px;"><i class="fa fa-spinner fa-spin"></i></div>');
+    $.get(ROLES_API_URL, { action:'get_roles', module:'quotation' }, res => {
+        if (!res.success) { $('#roles-list').html('<div class="text-danger" style="padding:10px;">載入失敗</div>'); return; }
+        let html = '';
+        res.data.forEach(r => {
+            const isSystem = r.is_system == 1;
+            const active = _selectedRoleId == r.role_id ? 'background:#e8f0fe;font-weight:600;' : '';
+            html += `<div class="role-item" data-id="${r.role_id}" data-code="${escapeHtml(r.role_code)}"
+                style="padding:7px 10px;cursor:pointer;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between;${active}"
+                onclick="selectRole(${r.role_id},'${escapeHtml(r.role_code)}','${escapeHtml(r.role_name)}',${isSystem})">
+                <span style="flex:1;font-size:13px;">${escapeHtml(r.role_name)}${isSystem?'<span class="label label-warning" style="font-size:9px;margin-left:5px;vertical-align:middle;">系統</span>':''}</span>
+                ${!isSystem ? `<button class="btn btn-xs btn-danger" style="opacity:.6;padding:1px 5px;"
+                    onclick="event.stopPropagation();deleteRole(${r.role_id},'${escapeHtml(r.role_name)}')">
+                    <i class="fa fa-times"></i></button>` : ''}
+            </div>`;
+        });
+        $('#roles-list').html(html || '<div class="text-muted" style="padding:10px;font-size:12px;">尚無角色</div>');
+        if (_selectedRoleId) selectRole(_selectedRoleId, _selectedRoleCode, null, null);
+    });
+}
+
+function selectRole(roleId, roleCode, roleName, isSystem) {
+    _selectedRoleId   = roleId;
+    _selectedRoleCode = roleCode;
+    // 更新列表高亮
+    $('#roles-list .role-item').css('background','');
+    $(`#roles-list .role-item[data-id="${roleId}"]`).css({'background':'#e8f0fe','font-weight':'600'});
+    const displayName = roleName || $(`#roles-list .role-item[data-id="${roleId}"]`).find('span:first').text().replace('系統','').trim();
+    $('#role-feat-header').text(`設定功能：${displayName}`);
+    // 全部取消勾選
+    $('.role-feat-cb').prop('checked', false).prop('disabled', isSystem);
+    $('#role-feat-footer').show();
+    if (isSystem) {
+        // admin role → 全勾且 disabled
+        $('.role-feat-cb').prop('checked', true);
+        $('#role-feat-note').text('系統角色不可修改（擁有全部功能）');
+        $('#role-feat-footer button').prop('disabled', true);
+        $('#btn-check-all, #btn-uncheck-all').prop('disabled', true);
+        return;
+    }
+    $('#role-feat-note').text('');
+    $('#role-feat-footer button').prop('disabled', false);
+    $('#btn-check-all, #btn-uncheck-all').prop('disabled', false);
+    // 載入此角色的已有 features
+    $.get(ROLES_API_URL, { action:'get_role_features', role_id: roleId }, res => {
+        if (res.success && res.data) {
+            res.data.forEach(code => {
+                $(`.role-feat-cb[value="${code}"]`).prop('checked', true);
+            });
+        }
+    });
+}
+
+function toggleAllFeatures(checked) {
+    $('.role-feat-cb:not(:disabled)').prop('checked', checked);
+}
+
+function saveRoleFeatures() {
+    if (!_selectedRoleId) return;
+    const codes = [];
+    $('.role-feat-cb:checked').each(function(){ codes.push($(this).val()); });
+    $.post(ROLES_API_URL, { action:'save_role_features', role_id:_selectedRoleId, features: JSON.stringify(codes) }, res => {
+        if (res.success) {
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title:'角色設定已儲存', showConfirmButton:false, timer:1800 });
+        } else {
+            Swal.fire('錯誤', res.message||'儲存失敗', 'error');
+        }
+    });
+}
+
+function addRole() {
+    Swal.fire({
+        title: '新增角色',
+        input: 'text',
+        inputLabel: '角色名稱',
+        inputPlaceholder: '例：業務助理、部門主管',
+        showCancelButton: true,
+        confirmButtonText: '新增',
+        cancelButtonText: '取消',
+        didOpen: () => { $(document).off('focusin.modal'); Swal.getInput().focus(); },
+        inputValidator: v => !v.trim() ? '請輸入角色名稱' : null
+    }).then(r => {
+        if (!r.isConfirmed || !r.value.trim()) return;
+        $.post(ROLES_API_URL, { action:'save_role', role_name: r.value.trim(), module:'quotation' }, res => {
+            if (!res.success) { Swal.fire('錯誤', res.message||'新增失敗', 'error'); return; }
+            _selectedRoleId = res.role_id;
+            loadRolesPanel();
+        });
+    });
+}
+
+function deleteRole(roleId, roleName) {
+    Swal.fire({
+        title: `刪除角色「${roleName}」？`,
+        text: '此角色的功能設定將一併刪除，但不影響已套用此角色的使用者記錄。',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#e74c3c',
+        confirmButtonText: '確認刪除',
+        cancelButtonText: '取消'
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $.post(ROLES_API_URL, { action:'delete_role', role_id: roleId }, res => {
+            if (!res.success) { Swal.fire('錯誤', res.message||'刪除失敗', 'error'); return; }
+            if (_selectedRoleId == roleId) { _selectedRoleId = null; $('#role-feat-header').text('← 請選擇角色'); $('#role-feat-footer').hide(); }
+            loadRolesPanel();
+        });
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// 列印紀錄
+// ══════════════════════════════════════════════════════
+let _printLogLoaded = false;
+function loadPrintLog() {
+    if (_printLogLoaded) return;
+    _printLogLoaded = true;
+    $('#printLogTbody').html('<tr><td colspan="4" class="text-center"><i class="fa fa-spinner fa-spin"></i></td></tr>');
+    $.get(API_URL, { action:'get_print_log', limit:300 }, res => {
+        if (!res.success || !res.data.length) {
+            $('#printLogTbody').html('<tr><td colspan="4" class="text-center text-muted">無列印紀錄</td></tr>');
+            return;
+        }
+        let html = '';
+        res.data.forEach(r => {
+            html += `<tr>
+                <td style="font-weight:600;color:var(--primary);">${escapeHtml(r.quote_no)}</td>
+                <td>${escapeHtml(r.client_name||'客戶不存在')}</td>
+                <td>${escapeHtml(r.printed_by_name||'')}</td>
+                <td style="color:#888;">${escapeHtml((r.printed_at||'').slice(0,16))}</td>
+            </tr>`;
+        });
+        $('#printLogTbody').html(html);
+    });
+}
+function openPrintLog() {
+    _printLogLoaded = false;
+    $('#historyLogModal').modal('show');
+    $('#tab-print-li a').tab('show');
+    loadPrintLog();
+}
+
+// ══════════════════════════════════════════════════════
+// 還原已刪除報價單
+// ══════════════════════════════════════════════════════
+function restoreDeletedQuote(logId) {
+    if (!CAN_RESTORE) {
+        Swal.fire('權限不足', '您沒有還原已刪除報價單的權限', 'error');
+        return;
+    }
+    Swal.fire({
+        title: '還原報價單',
+        text: '將以草稿方式開啟，您可修改單號後再儲存。',
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: '確認還原',
+        cancelButtonText: '取消',
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $.post(API_URL, { action:'restore_deleted_quote', log_id:logId }, res => {
+            if (!res.success) { Swal.fire('錯誤', res.message, 'error'); return; }
+            const snap = res.data;
+            $('#historyLogModal').modal('hide');
+            // 開啟新增模式並帶入快照資料（同複製邏輯）
+            ++_editToken;
+            resetEditor();
+            currentEditId = null;
+            $('#viewPanel').hide();
+            $('#editorEmpty').hide();
+            $('#editorTitle').html('<i class="fa fa-undo" style="color:var(--accent);margin-right:6px;"></i>還原草稿');
+            $('#changeLogBtn, #delQuoteBtn, #cloneQuoteBtn').hide();
+            const today = todayStr();
+            $('#quote_date').val(today);
+            autoFillValidUntil();
+            const prefix = quoteNoPrefixFromDate(today);
+            $('#quote_no_prefix').text(prefix);
+            $.get(API_URL, { action:'get_new_quote_no' }, qres => {
+                if (qres.success) { $('#quote_seq').val(qres.quote_no.slice(-3)); syncQuoteNo(); }
+            });
+            $('#client_name').val(snap.client_name || '');
+            $('#client_id').val(snap.client_id || '');
+            $('#inquiry_no').val(snap.inquiry_no || '');
+            if (snap.client_id) loadClientContacts(snap.client_id, null);
+            $('#currency').val(snap.currency || 'TWD');
+            $('#exchange_rate').val(snap.exchange_rate || 1);
+            $('#note').val(snap.note || '').trigger('input');
+            $('#is_negotiation').prop('checked', snap.is_negotiation == 1);
+            const items = snap.items || [];
+            items.forEach(item => addItemRow({ ...item, item_id: null }));
+            if (!items.length) addItemRow();
+            calculateTotal();
+            showEditor();
+            $('#note').trigger('input');
+            updatePartSearchPlaceholders();
+            updateEditorClientTag();
+            Swal.fire({ toast:true, position:'top-end', icon:'success',
+                title:`已還原 ${escapeHtml(snap.quote_no||'')} 的資料，請確認單號後儲存`,
+                showConfirmButton:false, timer:4000 });
+        });
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// 建立 / 修改資訊列
+// ══════════════════════════════════════════════════════
+function renderHistoryBar(d) {
+    if (!d || !d.created_by_name) { $('#historyBar').hide(); return; }
+    const fmt = s => s ? s.replace('T',' ').slice(0,16) : '';
+    $('#histCreated').html(`<i class="fa fa-user-o"></i>建立：${escapeHtml(d.created_by_name)}　${escapeHtml(fmt(d.created_at))}`);
+    const $upd = $('#histUpdated');
+    if (d.updated_by_name && d.updated_at) {
+        $upd.html(`<i class="fa fa-pencil"></i>修改：${escapeHtml(d.updated_by_name)}　${escapeHtml(fmt(d.updated_at))}`).show();
+    } else {
+        $upd.hide();
+    }
+    $('#histPrint').hide();
+    $('#historyBar').show();
+    // 非同步載入列印次數
+    if (d.quote_id) {
+        $.get(API_URL, { action:'get_print_log', quote_id: d.quote_id, limit:100 }, res => {
+            if (res.success && res.data && res.data.length) {
+                const cnt = res.data.length;
+                const last = res.data[0];
+                const lastInfo = `${escapeHtml(last.printed_by_name||'')} ${escapeHtml((last.printed_at||'').slice(0,16))}`;
+                $('#histPrint').html(`<i class="fa fa-print"></i>已列印 ${cnt} 次　最後：${lastInfo}`).show();
+            }
+        });
+    }
+}
+
+// ══════════════════════════════════════════════════════
+// 已刪除報價單紀錄
+// ══════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+// 修改紀錄
+// ══════════════════════════════════════════════════════
+const _fieldNameMap = {
+    quote_date:'報價日期', valid_until:'有效日期', client_name:'客戶名稱',
+    client_id:'客戶代碼', inquiry_no:'詢價編號', currency:'幣別',
+    exchange_rate:'匯率', total_amount:'總金額', note:'備註', is_negotiation:'議價'
+};
+function openChangeLog() {
+    const qid = $('#quote_id').val();
+    if (!qid) return;
+    $('#changeLogModal').modal('show');
+    $('#changeLogTbody').html('<tr><td colspan="3" class="text-center"><i class="fa fa-spinner fa-spin"></i></td></tr>');
+    $.get(API_URL, { action: 'get_change_log', quote_id: qid, limit: 50 }, res => {
+        if (!res.success || !res.data.length) {
+            $('#changeLogTbody').html('<tr><td colspan="3" class="text-center text-muted">無修改紀錄</td></tr>');
+            $('#changeLogInfo').text('');
+            return;
+        }
+        let html = '';
+        res.data.forEach(r => {
+            let diffHtml = '';
+            try {
+                const diff = JSON.parse(r.diff_json || '{}');
+                diffHtml = Object.entries(diff).map(([k, v]) => {
+                    const label = _fieldNameMap[k] || k;
+                    const from  = v.from !== undefined ? escapeHtml(String(v.from)) : '';
+                    const to    = v.to   !== undefined ? escapeHtml(String(v.to))   : '';
+                    return `<span style="margin-right:8px;">${escapeHtml(label)}：<span style="color:#c0392b;text-decoration:line-through;">${from}</span> → <span style="color:#27ae60;">${to}</span></span>`;
+                }).join('');
+            } catch(e) { diffHtml = escapeHtml(r.summary); }
+            const dt = (r.changed_at || '').slice(0, 16);
+            html += `<tr>
+                <td style="color:#888;white-space:nowrap;">${escapeHtml(dt)}</td>
+                <td>${escapeHtml(r.changed_by_name || '')}</td>
+                <td style="font-size:11px;line-height:1.8;">${diffHtml || '—'}</td>
+            </tr>`;
+        });
+        $('#changeLogTbody').html(html);
+        $('#changeLogInfo').text(`顯示最近 ${res.data.length} 筆（最多保留 100 筆）`);
+    }).fail(() => {
+        $('#changeLogTbody').html('<tr><td colspan="3" class="text-center text-danger">載入失敗</td></tr>');
+    });
+}
+
+let _deletedLogLoaded = false;
+function loadDeletedLog() {
+    if (_deletedLogLoaded) return;
+    _deletedLogLoaded = true;
+    $('#deleteLogTbody').html('<tr><td colspan="7" class="text-center"><i class="fa fa-spinner fa-spin"></i></td></tr>');
+    $.get(API_URL, { action: 'get_delete_log', limit: 100 }, res => {
+        if (!res.success) { $('#deleteLogTbody').html('<tr><td colspan="7" class="text-center text-danger">載入失敗</td></tr>'); return; }
+        if (!res.data.length) { $('#deleteLogTbody').html('<tr><td colspan="8" class="text-center text-muted">無刪除紀錄</td></tr>'); return; }
+        let html = '';
+        res.data.forEach(r => {
+            const delAt = (r.deleted_at || '').slice(0, 16);
+            const reason = r.delete_reason ? escapeHtml(r.delete_reason) : '<span style="color:#ccc;">—</span>';
+            html += `<tr>
+                <td style="font-weight:600;color:var(--primary);">${escapeHtml(r.quote_no)}</td>
+                <td>${escapeHtml(r.quote_date || '')}</td>
+                <td>${escapeHtml(r.client_name || '—')}</td>
+                <td style="text-align:right;">${formatNumber(r.total_amount)}</td>
+                <td style="font-size:12px;color:#555;">${reason}</td>
+                <td>${escapeHtml(r.deleted_by_name || String(r.deleted_by || ''))}</td>
+                <td style="color:#888;">${escapeHtml(delAt)}</td>
+                <td style="white-space:nowrap;">
+                    <button class="btn btn-xs btn-default" onclick="showSnapshot(${r.id},'${escapeHtml(r.quote_no)}')" title="查看快照"><i class="fa fa-eye"></i></button>
+                    ${CAN_RESTORE ? `<button class="btn btn-xs btn-success" onclick="restoreDeletedQuote(${r.id})" title="還原為草稿"><i class="fa fa-undo"></i></button>` : ''}
+                </td>
+            </tr>`;
+        });
+        $('#deleteLogTbody').html(html);
+    });
+}
+function openDeleteLog() {
+    _deletedLogLoaded = false;
+    _printLogLoaded = false;
+    $('#historyLogModal').modal('show');
+    // 預設顯示已刪除分頁
+    $('#tab-deleted-li a').tab('show');
+    loadDeletedLog();
+}
+
+let _snapshotCache = {};
+function showSnapshot(logId, quoteNo) {
+    $('#snapshotTitle').html(`<i class="fa fa-file-text-o" style="margin-right:7px;"></i>快照：${escapeHtml(quoteNo)}`);
+    $('#snapshotModal').modal('show');
+    // 從 deleteLogTbody 抓快照資料（需從 API 取，這裡用 get_delete_log 再過濾）
+    $.get(API_URL, { action: 'get_delete_log', limit: 200 }, res => {
+        if (!res.success) { $('#snapshotBody').html('<p class="text-danger">無法載入快照</p>'); return; }
+        const row = (res.data || []).find(r => r.id == logId);
+        if (!row || !row.snapshot) { $('#snapshotBody').html('<p class="text-muted">無快照資料</p>'); return; }
+        let snap;
+        try { snap = JSON.parse(row.snapshot); } catch(e) { $('#snapshotBody').html('<pre>' + escapeHtml(row.snapshot) + '</pre>'); return; }
+        const fmt = s => s ? s.replace('T',' ').slice(0,16) : '—';
+        let html = `<table class="table table-condensed" style="font-size:12px;">
+            <tr><td style="width:100px;color:#888;">報價單號</td><td><strong>${escapeHtml(snap.quote_no||'')}</strong></td>
+                <td style="width:80px;color:#888;">日期</td><td>${escapeHtml(snap.quote_date||'')}</td></tr>
+            <tr><td style="color:#888;">客戶</td><td>${escapeHtml(snap.client_name||'')}</td>
+                <td style="color:#888;">幣別</td><td>${escapeHtml(snap.currency||'')}</td></tr>
+            <tr><td style="color:#888;">備註</td><td colspan="3">${escapeHtml(snap.note||'')}</td></tr>
+            <tr><td style="color:#888;">建立者</td><td>${escapeHtml(snap.created_by_name||String(snap.created_by||''))}</td>
+                <td style="color:#888;">建立時間</td><td>${escapeHtml(fmt(snap.created_at))}</td></tr>
+        </table>
+        <hr style="margin:8px 0;">
+        <strong style="font-size:12px;">報價項目</strong>
+        <table class="table table-condensed table-bordered" style="font-size:12px;margin-top:6px;">
+          <thead><tr><th>#</th><th>料號</th><th>規格/製程</th><th>數量</th><th>單位</th><th>單價</th><th>金額</th></tr></thead>
+          <tbody>`;
+        (snap.items || []).forEach((it, i) => {
+            html += `<tr>
+                <td>${i+1}</td>
+                <td>${escapeHtml(it.product_id||'')}</td>
+                <td>${escapeHtml(it.specification||'')}</td>
+                <td style="text-align:right;">${formatNumber(it.quantity)}</td>
+                <td>${escapeHtml(it.unit||'')}</td>
+                <td style="text-align:right;">${formatNumber(it.unit_price)}</td>
+                <td style="text-align:right;">${formatNumber(it.amount)}</td>
+            </tr>`;
+        });
+        html += `</tbody></table>`;
+        $('#snapshotBody').html(html);
+    });
+}
+function initFileUpload() {
+    const $zone = $('#fileDropZone');
+    $zone.on('dragover', e => { e.preventDefault(); $zone.addClass('drag-over'); });
+    $zone.on('dragleave drop', e => { e.preventDefault(); $zone.removeClass('drag-over'); });
+    $zone.on('drop', function (e) {
+        const files = e.originalEvent.dataTransfer.files;
+        for (const f of files) handleFileUpload(f);
+    });
+    $('#fileInput').on('change', function () {
+        for (const f of this.files) handleFileUpload(f);
+        this.value = '';
+    });
+}
+function getCurrentQuoteNo() {
+    return $('#quote_no').val().trim();
+}
+function handleFileUpload(file) {
+    const qno = getCurrentQuoteNo();
+    if (!qno) { Swal.fire('提示', '請先填寫報價單號再上傳附件', 'info'); return; }
+    if (!currentUploadPath) { Swal.fire('提示', '尚未設定儲存路徑，請點擊右上角 ⚙ 設定', 'info'); return; }
+
+    const fd = new FormData();
+    fd.append('action', 'upload_file');
+    fd.append('quote_no', qno);
+    fd.append('file', file);
+
+    // 暫時顯示上傳中
+    const $list = $('#uploadedFilesList');
+    const tmpId = 'tmp_' + Date.now();
+    $list.append(`<div id="${tmpId}" class="file-item">
+        <i class="fa fa-spinner fa-spin text-muted"></i>
+        <span class="file-item-name text-muted">${escapeHtml(file.name)}</span>
+        <span class="file-item-size text-muted">上傳中...</span>
+    </div>`);
+
+    $.ajax({
+        url: FILE_API_URL, type: 'POST', data: fd,
+        processData: false, contentType: false,
+        success: function (res) {
+            $(`#${tmpId}`).remove();
+            if (res.success) {
+                const $wrap = appendFileItem(res, qno);
+                // 上傳完立即展開標籤面板，當場設定類別＋連結料號
+                renderFileTagPanel($wrap, res, qno);
+                $wrap.find('.file-tag-panel').slideDown(150);
+                refreshPartAttachBadges();
+                // 新建報價（未儲存）才追蹤，用於頁面離開時清理
+                if (!currentEditId) _tempUploadQno = qno;
+            } else {
+                Swal.fire('上傳失敗', res.message, 'error');
+            }
+        },
+        error: function () {
+            $(`#${tmpId}`).remove();
+            Swal.fire('錯誤', '上傳時發生通訊錯誤', 'error');
+        }
+    });
+}
+function loadFileList(quoteNo, isViewMode) {
+    if (!quoteNo) return;
+    if (isViewMode) {
+        $('#viewAttachList').html('<div class="text-muted" style="font-size:12px;padding:4px 0;"><i class="fa fa-spinner fa-spin"></i></div>');
+        $.get(FILE_API_URL, { action: 'list_files', quote_no: quoteNo }, res => {
+            $('#viewAttachList').empty();
+            if (res.success && res.files.length > 0) {
+                res.files.forEach(f => appendFileItemView(f, quoteNo));
+            } else {
+                $('#viewAttachSection').hide();
+            }
+        });
+        return;
+    }
+    $('#uploadedFilesList').empty();
+    $.get(FILE_API_URL, { action: 'list_files', quote_no: quoteNo }, res => {
+        if (res.success) {
+            res.files.forEach(f => appendFileItem(f, quoteNo));
+        }
+        refreshPartAttachBadges();
+    });
+}
+function appendFileItem(f, quoteNo) {
+    const ext  = (f.filename.split('.').pop() || '').toLowerCase();
+    const icon = ['pdf'].includes(ext) ? 'fa-file-pdf-o text-danger'
+               : ['xls','xlsx'].includes(ext) ? 'fa-file-excel-o text-success'
+               : ['doc','docx'].includes(ext) ? 'fa-file-word-o text-primary'
+               : ['png','jpg','jpeg','gif','bmp'].includes(ext) ? 'fa-file-image-o text-warning'
+               : 'fa-file-o text-muted';
+    const dlUrl    = `${FILE_API_URL}?action=download&quote_no=${encodeURIComponent(quoteNo)}&filename=${encodeURIComponent(f.filename)}`;
+    const attachId = f.attachment_id || '';
+    const dispName = escapeHtml(f.original_name || f.filename);
+    // 解析多類別 IDs → 名稱
+    const initCatIds = (f.category_ids || (f.category_id ? String(f.category_id) : ''))
+        .split(',').map(s => s.trim()).filter(Boolean);
+    f.category_ids = initCatIds.join(',');
+    const catLabel  = initCatIds.map(id => {
+        const c = getCatById(id);
+        return c ? c.category_name : '';
+    }).filter(Boolean).map(escapeHtml).join(', ');
+    const btnHasCat = catLabel ? 'has-cat' : '';
+    // 解析已連結料號 → 徽章文字（未設定/共用附件則不顯示徽章）
+    const initLinkedParts = f.linked_parts ? JSON.parse(f.linked_parts) : null;
+    const partBadgeHtml   = filePartBadgeHtml(initLinkedParts);
+
+    const $wrap = $(`<div class="file-item-wrap" data-filename="${escapeHtml(f.filename)}" data-attach-id="${escapeHtml(String(attachId))}" data-cat-ids="${escapeHtml(f.category_ids)}">
+        <div class="file-item" style="border-bottom:none;">
+            <i class="fa ${icon}"></i>
+            <button class="btn btn-xs btn-default file-tag-toggle-btn ${btnHasCat}" title="設定類別 / 料號連結" style="padding:1px 7px;">
+                <i class="fa fa-tag"></i>
+                <span class="file-cat-label" style="margin-left:3px;">${catLabel}</span>
+            </button>
+            <span class="file-part-badge-slot">${partBadgeHtml}</span>
+            <span class="file-item-name" onclick="window.open('${dlUrl}','_blank')" title="${escapeHtml(f.original_name||f.filename)}">${dispName}</span>
+            <span class="file-item-size">${escapeHtml(f.size)}</span>
+            <span class="file-item-time">${escapeHtml(f.mtime)}</span>
+            <button class="btn btn-xs btn-danger file-del-btn" style="padding:1px 5px;" title="刪除此附件">
+                <i class="fa fa-trash"></i>
+            </button>
+        </div>
+        <div class="file-tag-panel" style="display:none;"></div>
+    </div>`);
+    // 連結料號狀態（''=共用附件；JSON 陣列=指定料號）— 供徽章與儲存檢查使用
+    $wrap.attr('data-linked-parts', f.linked_parts || '');
+
+    // 展開/收合標籤面板
+    $wrap.find('.file-tag-toggle-btn').on('click', function () {
+        const $panel = $wrap.find('.file-tag-panel');
+        if ($panel.is(':visible')) { $panel.slideUp(120); return; }
+        renderFileTagPanel($wrap, f, quoteNo);
+        $panel.slideDown(150);
+    });
+
+    // 刪除
+    $wrap.find('.file-del-btn').on('click', function () {
+        Swal.fire({
+            title: '確定刪除此附件？', text: f.original_name || f.filename,
+            icon: 'warning', showCancelButton: true,
+            confirmButtonColor: '#d33', confirmButtonText: '刪除', cancelButtonText: '取消'
+        }).then(r => {
+            if (!r.isConfirmed) return;
+            $.post(FILE_API_URL, { action: 'delete_file', quote_no: quoteNo, filename: f.filename }, res => {
+                if (res.success) {
+                    $wrap.remove();
+                    refreshPartAttachBadges();
+                    Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: '已刪除', showConfirmButton: false, timer: 1500 });
+                } else {
+                    Swal.fire('錯誤', res.message, 'error');
+                }
+            });
+        });
+    });
+
+    $('#uploadedFilesList').append($wrap);
+    return $wrap;
+}
+
+// ── 檢視模式附件項目（唯讀，可點開）────────────────────────
+function appendFileItemView(f, quoteNo) {
+    const ext  = (f.filename.split('.').pop() || '').toLowerCase();
+    const icon = ['pdf'].includes(ext) ? 'fa-file-pdf-o text-danger'
+               : ['xls','xlsx'].includes(ext) ? 'fa-file-excel-o text-success'
+               : ['doc','docx'].includes(ext) ? 'fa-file-word-o text-primary'
+               : ['png','jpg','jpeg','gif','bmp'].includes(ext) ? 'fa-file-image-o text-warning'
+               : 'fa-file-o text-muted';
+    const dlUrl    = `${FILE_API_URL}?action=download&quote_no=${encodeURIComponent(quoteNo)}&filename=${encodeURIComponent(f.filename)}`;
+    const dispName = escapeHtml(f.original_name || f.filename);
+    const initCatIds = (f.category_ids || (f.category_id ? String(f.category_id) : ''))
+        .split(',').map(s => s.trim()).filter(Boolean);
+    const catLabel  = initCatIds.map(id => {
+        const c = getCatById(id);
+        return c ? c.category_name : '';
+    }).filter(Boolean).map(escapeHtml).join(', ');
+
+    const catHtml = catLabel
+        ? `<span style="font-size:11px;color:#666;background:#f0f0f0;border-radius:3px;padding:1px 6px;white-space:nowrap;"><i class="fa fa-tag"></i> ${catLabel}</span>`
+        : '';
+    const linkedParts = f.linked_parts ? JSON.parse(f.linked_parts) : null;
+    const partHtml     = filePartBadgeHtml(linkedParts);
+
+    const $item = $(`<div class="file-item-wrap">
+        <div class="file-item">
+            <i class="fa ${icon}"></i>
+            ${catHtml}
+            ${partHtml}
+            <span class="file-item-name" onclick="window.open('${dlUrl}','_blank')" title="${escapeHtml(f.original_name||f.filename)}">${dispName}</span>
+            <span class="file-item-size">${escapeHtml(f.size)}</span>
+            <span class="file-item-time">${escapeHtml(f.mtime)}</span>
+        </div>
+    </div>`);
+    $('#viewAttachList').append($item);
+}
+
+// ── 渲染標籤面板（類別按鈕 + 料號連結）──────────────────────
+function renderFileTagPanel($wrap, f, quoteNo) {
+    const attachId     = $wrap.data('attach-id');
+    const linkedParts  = f.linked_parts ? JSON.parse(f.linked_parts) : null;
+    const allLinked    = !linkedParts;
+    const quoteParts   = getQuoteParts();
+
+    // 類別按鈕（多選）
+    const curCatIds = (f.category_ids || (f.category_id ? String(f.category_id) : ''))
+        .split(',').map(s => s.trim()).filter(Boolean);
+    let catHtml = '';
+    if (fileCategories.length) {
+        catHtml = fileCategories.map(c => {
+            const active = curCatIds.includes(String(c.id));
+            return `<button type="button" class="btn btn-xs file-cat-btn ${active ? 'active' : 'btn-default'}"
+                data-cat-id="${c.id}">${escapeHtml(c.category_name)}</button>`;
+        }).join('');
+        if (curCatIds.length) {
+            catHtml += ` <button type="button" class="btn btn-xs btn-link file-cat-clear" style="font-size:10px;padding:1px 4px;">清除全部</button>`;
+        }
+    } else {
+        catHtml = '<span class="text-muted" style="font-size:11px;">（類別載入中...）</span>';
+    }
+
+    // 含必備類別的附件：不可為「全部料號」，必須連結單一料號
+    const reqCats    = effectiveRequiredCats();
+    const hasReqCat  = curCatIds.some(id => reqCats.some(r => Number(r) === Number(id)));
+
+    // 料號按鈕
+    let partsHtml = '';
+    if (hasReqCat) {
+        partsHtml = `<span class="text-danger" style="font-size:11px;margin-right:6px;">
+            <i class="fa fa-asterisk"></i> 含必備類別，須連結單一料號</span>`;
+    } else {
+        partsHtml = `<button type="button" class="btn btn-xs file-parts-all ${allLinked ? 'active' : 'btn-default'}">
+            <i class="fa fa-check-square-o"></i> 全部料號
+        </button>`;
+    }
+    quoteParts.forEach(pid => {
+        const linked = !allLinked && linkedParts.map(String).includes(String(pid));
+        partsHtml += ` <button type="button" class="btn btn-xs file-part-btn ${linked ? 'active' : 'btn-default'}"
+            data-part-id="${escapeHtml(pid)}">${escapeHtml(pid)}</button>`;
+    });
+    if (!quoteParts.length) {
+        partsHtml += ' <span class="text-muted" style="font-size:11px;">（尚未填寫料號）</span>';
+    }
+
+    $wrap.find('.file-tag-panel').html(`
+        <div class="ftp-row">
+            <span class="ftp-label">類別：</span>
+            <div class="ftp-btns cat-btns">${catHtml}</div>
+        </div>
+        <div class="ftp-row">
+            <span class="ftp-label">連結料號：</span>
+            <div class="ftp-btns part-btns">${partsHtml}</div>
+        </div>
+    `);
+
+    // ── 類別按鈕事件（多選 toggle）──
+    $wrap.find('.file-cat-btn').off('click').on('click', function () {
+        $(this).toggleClass('active btn-default');
+        // 收集所有已選 ID
+        const selIds = [];
+        $wrap.find('.file-cat-btn.active').each(function() { selIds.push(String($(this).data('cat-id'))); });
+        const idsStr = selIds.join(',');
+        f.category_ids = idsStr;
+        f.category_id  = selIds[0] ? parseInt(selIds[0]) : null;
+        // 更新 badge
+        const names = selIds.map(id => {
+            const c = getCatById(id);
+            return c ? c.category_name : '';
+        }).filter(Boolean);
+        updateFileCatBadge($wrap, names.join(', ') || null);
+        $wrap.data('cat-ids', idsStr);
+        // 顯示/隱藏清除按鈕
+        if (selIds.length) {
+            if (!$wrap.find('.file-cat-clear').length)
+                $wrap.find('.cat-btns').append(` <button type="button" class="btn btn-xs btn-link file-cat-clear" style="font-size:10px;padding:1px 4px;">清除全部</button>`);
+        } else {
+            $wrap.find('.file-cat-clear').remove();
+        }
+        if (attachId) saveAttachmentMeta(attachId, idsStr, getLinkedPartsFromWrap($wrap));
+        refreshPartAttachBadges();
+        // 類別增減可能切換必備模式（全部料號選項顯示/隱藏），重繪面板
+        renderFileTagPanel($wrap, f, quoteNo);
+    });
+    // 初始化清除按鈕事件（用事件委派，支援動態插入的按鈕）
+    $wrap.find('.cat-btns').off('click', '.file-cat-clear').on('click', '.file-cat-clear', function () {
+        $wrap.find('.file-cat-btn.active').removeClass('active').addClass('btn-default');
+        f.category_ids = '';
+        f.category_id  = null;
+        $wrap.data('cat-ids', '');
+        updateFileCatBadge($wrap, null);
+        $wrap.find('.file-cat-clear').remove();
+        if (attachId) saveAttachmentMeta(attachId, '', getLinkedPartsFromWrap($wrap));
+        refreshPartAttachBadges();
+        renderFileTagPanel($wrap, f, quoteNo);
+    });
+
+    // ── 全部料號（必備模式下無此按鈕）──
+    $wrap.find('.file-parts-all').off('click').on('click', function () {
+        $wrap.find('.file-part-btn').removeClass('active').addClass('btn-default');
+        $(this).addClass('active').removeClass('btn-default');
+        f.linked_parts = null;
+        $wrap.data('linked-parts', '');
+        updateFilePartBadge($wrap, null);
+        if (attachId) saveAttachmentMeta(attachId, f.category_ids || '', 'all');
+        refreshPartAttachBadges();
+    });
+
+    // ── 個別料號（必備模式＝單選）──
+    $wrap.find('.file-part-btn').off('click').on('click', function () {
+        $wrap.find('.file-parts-all').removeClass('active').addClass('btn-default');
+        if (hasReqCat) {
+            $wrap.find('.file-part-btn').not(this).removeClass('active').addClass('btn-default');
+        }
+        $(this).toggleClass('active btn-default');
+        const parts = getLinkedPartsFromWrap($wrap);
+        f.linked_parts = parts === 'all' ? null : parts;
+        $wrap.data('linked-parts', parts === 'all' ? '' : parts);
+        updateFilePartBadge($wrap, parts === 'all' ? null : JSON.parse(parts));
+        if (attachId) saveAttachmentMeta(attachId, f.category_ids || '', parts);
+        refreshPartAttachBadges();
+    });
+}
+
+// 取得目前勾選的料號（回傳 JSON string 或 'all'）
+function getLinkedPartsFromWrap($wrap) {
+    if ($wrap.find('.file-parts-all').hasClass('active')) return 'all';
+    const parts = [];
+    // 用 attr 讀避免 jQuery 把純數字料號自動轉成 number（造成與字串料號比對不到）
+    $wrap.find('.file-part-btn.active').each(function() { parts.push(String($(this).attr('data-part-id'))); });
+    return parts.length ? JSON.stringify(parts) : 'all';
+}
+
+// 已連結料號徽章 HTML（parts=null/空陣列 → 共用附件，不顯示徽章）
+function filePartBadgeHtml(parts) {
+    if (!parts || !parts.length) return '';
+    const label = parts.map(escapeHtml).join(', ');
+    return `<span class="file-part-label" style="font-size:11px;color:#8e44ad;background:#f5eefc;border-radius:3px;padding:1px 6px;white-space:nowrap;" title="已連結料號"><i class="fa fa-cube"></i> ${label}</span>`;
+}
+// 更新附件項目上的已連結料號徽章
+function updateFilePartBadge($wrap, parts) {
+    $wrap.find('.file-part-badge-slot').html(filePartBadgeHtml(parts));
+}
+
+// 更新 🏷 按鈕的類別文字（只有一個地方）
+function updateFileCatBadge($wrap, catName) {
+    const $btn = $wrap.find('.file-tag-toggle-btn');
+    $btn.find('.file-cat-label').text(catName || '');
+    if (catName) {
+        $btn.addClass('has-cat')
+            .css({ background:'#e8f0ff', color:'#2A3F54', borderColor:'#b0c4f0' });
+    } else {
+        $btn.removeClass('has-cat')
+            .css({ background:'', color:'', borderColor:'' });
+    }
+}
+
+// 儲存類別（多選，逗號分隔 ID）+ 料號連結到 DB
+function saveAttachmentMeta(attachId, categoryIds, linkedParts) {
+    $.post(FILE_API_URL, {
+        action: 'update_attachment',
+        attachment_id: attachId,
+        category_ids:  categoryIds,
+        linked_parts:  linkedParts
+    }).fail(() => {
+        Swal.fire({ toast: true, position: 'top-end', icon: 'warning', title: '標籤儲存失敗', showConfirmButton: false, timer: 2000 });
+    });
+}
+
+// 取得目前報價單內的料號列表
+function getQuoteParts() {
+    const parts = [];
+    $('#quoteItemsTable > tbody > tr.item-row').each(function () {
+        // 優先讀 hidden field，若空則 fallback 到 part-search 顯示值
+        let pid = $(this).find('.product_id_hidden').val().trim();
+        if (!pid) pid = $(this).find('.part-search').val().trim();
+        if (pid) parts.push(pid);
+    });
+    return [...new Set(parts)].filter(Boolean);
+}
+
+// ══════════════════════════════════════════════════════
+// 必備附件檢查 + 料號附件徽章
+// ══════════════════════════════════════════════════════
+
+// 收集目前附件清單的類別/連結料號狀態（parts=null 表示共用附件，適用所有料號）
+function collectAttachMeta() {
+    const files = [];
+    $('#uploadedFilesList .file-item-wrap[data-filename]').each(function () {
+        const $w   = $(this);
+        const cats = String($w.data('cat-ids') || '').split(',').map(s => s.trim()).filter(Boolean).map(Number);
+        let lp = $w.data('linked-parts');
+        let parts = null;
+        if (Array.isArray(lp)) parts = lp;
+        else if (typeof lp === 'string' && lp.trim()) { try { parts = JSON.parse(lp); } catch (e) { parts = null; } }
+        if (Array.isArray(parts)) parts = parts.map(String);   // 舊資料可能存成數字陣列，統一轉字串比對
+        files.push({
+            name: $w.find('.file-item-name').first().text(),
+            attachId: String($w.data('attach-id') || ''),
+            cats, parts
+        });
+    });
+    return files;
+}
+
+// 計算某料號目前擁有的附件類別集合
+// 規則：一般類別 → 明確連結或共用附件皆算；必備類別 → 只有明確連結該料號才算（共用不算）
+function _catSetForPart(pid, files) {
+    const reqCats = effectiveRequiredCats();
+    const set = new Set();
+    files.forEach(f => {
+        const explicit = Array.isArray(f.parts) && f.parts.map(String).includes(String(pid));
+        const shared   = !f.parts;
+        f.cats.forEach(c => {
+            const isReq = reqCats.some(r => Number(r) === Number(c));
+            if (explicit || (shared && !isReq)) set.add(Number(c));
+        });
+    });
+    return set;
+}
+
+// 重繪所有項目列的附件徽章（綠=已有、紅=必備缺、灰=其他已含類別）
+function refreshPartAttachBadges() {
+    const files   = collectAttachMeta();
+    const reqCats = effectiveRequiredCats();
+    const chip = (txt, type) => {
+        const s = type === 'ok'   ? 'background:#e8f8f0;color:#1e8449;border:1px solid #a9dfbf;'
+                : type === 'lack' ? 'background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;'
+                :                   'background:#f0f0f0;color:#666;border:1px solid #ddd;';
+        return `<span style="display:inline-block;font-size:10px;padding:0 5px;border-radius:3px;margin:0 3px 2px 0;${s}">${txt}</span>`;
+    };
+    $('#quoteItemsTable > tbody > tr.item-row').each(function () {
+        const $box = $(this).find('.part-attach-badges');
+        if (!$box.length) return;
+        let pid = $(this).find('.product_id_hidden').val().trim();
+        if (!pid) pid = $(this).find('.part-search').val().trim();
+        if (!pid || (!files.length && !reqCats.length)) { $box.empty(); return; }
+        const catSet = _catSetForPart(pid, files);
+        let html = '';
+        reqCats.forEach(cid => {
+            const c = getCatById(cid);
+            if (!c) return;
+            html += catSet.has(Number(cid))
+                ? chip('✓ ' + escapeHtml(c.category_name), 'ok')
+                : chip('✕ ' + escapeHtml(c.category_name), 'lack');
+        });
+        catSet.forEach(cid => {
+            if (reqCats.some(r => Number(r) === Number(cid))) return;
+            const c = getCatById(cid);
+            if (c) html += chip(escapeHtml(c.category_name), 'other');
+        });
+        $box.html(html);
+    });
+}
+
+// 取得各料號缺少的必備附件類別 [{pid, names:[...]}]
+function getMissingRequiredAttach() {
+    const reqCats = effectiveRequiredCats();
+    if (!reqCats.length) return [];
+    const files = collectAttachMeta();
+    const missing = [];
+    getQuoteParts().forEach(pid => {
+        const catSet = _catSetForPart(pid, files);
+        const lack = reqCats
+            .filter(cid => !catSet.has(Number(cid)))
+            .map(cid => (getCatById(cid) || {}).category_name)
+            .filter(Boolean);
+        if (lack.length) missing.push({ pid, names: lack });
+    });
+    return missing;
+}
+
+// 套用「本頁適用類別」設定：fileCategories = 依 pageAttachCatIds 篩選排序後的清單
+function applyPageCatScope() {
+    if (Array.isArray(pageAttachCatIds) && pageAttachCatIds.length) {
+        fileCategories = pageAttachCatIds
+            .map(id => allFileCategories.find(c => Number(c.id) === Number(id)))
+            .filter(Boolean);
+    } else {
+        fileCategories = allFileCategories.slice();
+    }
+}
+// 依 ID 查類別（名稱顯示用主檔查找，不受本頁範圍影響）
+function getCatById(id) {
+    return allFileCategories.find(c => Number(c.id) === Number(id))
+        || fileCategories.find(c => Number(c.id) === Number(id)) || null;
+}
+// 有效必備類別 = 必備設定 ∩ 本頁適用類別（避免被移出本頁的類別卡住儲存）
+function effectiveRequiredCats() {
+    return requiredAttachCats.filter(cid => fileCategories.some(c => Number(c.id) === Number(cid)));
+}
+// 載入本頁適用類別設定
+function loadPageAttachCats() {
+    $.get(API_URL, { action: 'get_param', param_group: 'QUOTATION', param_key: 'page_attach_cats' }, res => {
+        let v = res.success ? res.value : null;
+        if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = null; } }
+        pageAttachCatIds = (Array.isArray(v) && v.length) ? v.map(Number).filter(Boolean) : null;
+        applyPageCatScope();
+        refreshPartAttachBadges();
+    });
+}
+
+// 載入必備附件類別設定
+function loadRequiredAttachCats() {
+    $.get(API_URL, { action: 'get_param', param_group: 'QUOTATION', param_key: 'required_attach_cats' }, res => {
+        let v = res.success ? res.value : null;
+        if (typeof v === 'string') { try { v = JSON.parse(v); } catch (e) { v = null; } }
+        requiredAttachCats = Array.isArray(v) ? v.map(Number).filter(Boolean) : [];
+        refreshPartAttachBadges();
+    });
+}
+
+// 設定頁：渲染必備類別切換按鈕
+function renderRequiredCatsSetting() {
+    const $box = $('#qs-required-cats');
+    if (!$box.length) return;
+    if (!fileCategories.length) { $box.html('<span class="text-muted" style="font-size:12px;">尚無啟用中的附件類別</span>'); return; }
+    $box.html(fileCategories.map(c => {
+        const active = requiredAttachCats.some(r => Number(r) === Number(c.id));
+        return `<button type="button" class="btn btn-xs qs-req-cat-btn ${active ? 'btn-danger' : 'btn-default'}"
+            data-cat-id="${c.id}" style="margin:0 4px 4px 0;">
+            ${active ? '<i class="fa fa-asterisk"></i> ' : ''}${escapeHtml(c.category_name)}</button>`;
+    }).join(''));
+}
+$(document).on('click', '.qs-req-cat-btn', function () {
+    const id = Number($(this).data('cat-id'));
+    if (requiredAttachCats.some(r => Number(r) === id)) {
+        requiredAttachCats = requiredAttachCats.filter(r => Number(r) !== id);
+    } else {
+        requiredAttachCats.push(id);
+    }
+    renderRequiredCatsSetting();
+});
+// 設定頁：本頁適用類別與排序（勾選＋拖曳排序）
+function renderPageCatSetting() {
+    const $box = $('#qs-page-cats');
+    if (!$box.length) return;
+    if (!allFileCategories.length) {
+        $box.html('<span class="text-muted" style="font-size:12px;">尚無啟用中的附件類別</span>');
+        return;
+    }
+    const ordered = [];
+    if (Array.isArray(pageAttachCatIds) && pageAttachCatIds.length) {
+        pageAttachCatIds.forEach(id => {
+            const c = allFileCategories.find(c => Number(c.id) === Number(id));
+            if (c) ordered.push({ c, on: true });
+        });
+        allFileCategories.forEach(c => {
+            if (!pageAttachCatIds.some(id => Number(id) === Number(c.id))) ordered.push({ c, on: false });
+        });
+    } else {
+        allFileCategories.forEach(c => ordered.push({ c, on: true }));
+    }
+    $box.html(ordered.map(o => `
+        <div class="qs-page-cat-row" data-cat-id="${o.c.id}" draggable="false"
+            style="display:flex;align-items:center;gap:6px;padding:3px 8px;border:1px solid #eee;border-radius:3px;margin-bottom:3px;background:#fff;">
+            <span class="qs-pc-drag" style="cursor:grab;color:#bbb;">&#9776;</span>
+            <label style="margin:0;font-weight:400;cursor:pointer;flex:1;font-size:12px;">
+                <input type="checkbox" class="qs-pc-check" ${o.on ? 'checked' : ''} style="margin-right:5px;">${escapeHtml(o.c.category_name)}
+            </label>
+        </div>`).join(''));
+    initPageCatDrag();
+}
+function initPageCatDrag() {
+    const box = document.getElementById('qs-page-cats');
+    if (!box) return;
+    let dragging = null;
+    box.querySelectorAll('.qs-page-cat-row').forEach(row => {
+        const handle = row.querySelector('.qs-pc-drag');
+        if (!handle) return;
+        handle.addEventListener('mousedown', () => row.setAttribute('draggable', 'true'));
+        row.addEventListener('dragend',   () => { row.setAttribute('draggable', 'false'); $(row).css('opacity', ''); dragging = null; });
+        row.addEventListener('dragstart', e => { dragging = row; e.dataTransfer.effectAllowed = 'move'; setTimeout(() => $(row).css('opacity', '0.4'), 0); });
+        row.addEventListener('dragover',  e => {
+            e.preventDefault();
+            if (!dragging || dragging === row) return;
+            const rect = row.getBoundingClientRect();
+            if (e.clientY < rect.top + rect.height / 2) box.insertBefore(dragging, row);
+            else box.insertBefore(dragging, row.nextSibling);
+        });
+        row.addEventListener('drop', e => e.preventDefault());
+    });
+}
+function savePageAttachCats() {
+    const ids = [];
+    $('#qs-page-cats .qs-page-cat-row').each(function () {
+        if ($(this).find('.qs-pc-check').is(':checked')) ids.push(Number($(this).data('cat-id')));
+    });
+    $.post(API_URL, {
+        action: 'save_param', param_group: 'QUOTATION', param_key: 'page_attach_cats',
+        param_value: JSON.stringify(ids), description: '報價單頁適用附件類別與排序'
+    }, res => {
+        if (res.success) {
+            pageAttachCatIds = ids.length ? ids : null;
+            applyPageCatScope();
+            renderRequiredCatsSetting();
+            renderPageCatSetting();
+            refreshPartAttachBadges();
+            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: '本頁類別設定已儲存', showConfirmButton: false, timer: 2000 });
+        } else { Swal.fire('錯誤', res.message, 'error'); }
+    });
+}
+function saveRequiredCats() {
+    $.post(API_URL, {
+        action: 'save_param', param_group: 'QUOTATION', param_key: 'required_attach_cats',
+        param_value: JSON.stringify(requiredAttachCats.map(Number)), description: '每個料號必備的附件類別ID'
+    }, res => {
+        if (res.success) {
+            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: '必備附件設定已儲存', showConfirmButton: false, timer: 2000 });
+            refreshPartAttachBadges();
+        } else { Swal.fire('錯誤', res.message, 'error'); }
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// 客戶 autocomplete
+// ══════════════════════════════════════════════════════
+$(document).on('input', '#client_name', function () {
+    const term = $(this).val();
+    // 手動輸入時解除綁定標記，避免舊 client_id 與新輸入文字不一致
+    $('#client_id').val('');
+    updateClientBoundCheck();
+    $('#client-contact-row').hide();
+    if (term.length < 1) { $('#client-suggestions').hide().empty(); return; }
+    $.get(API_URL, { action: 'search_data', type: 'customer', term }, res => {
+        const createBtnHtml = `<div class="client-create-btn" data-term="${escapeHtml(term)}"
+            style="padding:6px 12px;cursor:pointer;color:#2c7be5;font-size:12px;border-top:1px dashed #ddd;background:#f7faff;">
+            <i class="fa fa-plus-circle"></i> 建立新客戶「${escapeHtml(term)}」</div>`;
+        if (res.success && res.data.length > 0) {
+            let html = '';
+            res.data.forEach(c => {
+                html += `<div class="suggestion-item" data-id="${escapeHtml(c.customer_id)}" data-name="${escapeHtml(c.customer)}">
+                    ${escapeHtml(c.customer_id)} - ${escapeHtml(c.customer)}</div>`;
+            });
+            const hasExact = res.data.some(c =>
+                String(c.customer_id).toLowerCase() === term.toLowerCase() ||
+                String(c.customer).toLowerCase() === term.toLowerCase());
+            if (!hasExact) html += createBtnHtml;
+            $('#client-suggestions').html(html).show();
+        } else {
+            $('#client-suggestions').html(createBtnHtml).show();
+        }
+    });
+});
+$(document).on('click', '#client-suggestions .suggestion-item', function () {
+    $('#client_name').val($(this).data('name'));
+    $('#client_id').val($(this).data('id'));
+    $('#client-suggestions').hide().empty();
+    updatePartSearchPlaceholders();
+    loadClientContacts($(this).data('id'));
+    updateClientBoundCheck();
+});
+// ── 快速建立客戶並綁定回表頭 ──────────────────────
+let _pendingClientBind = false;   // 從「建立新客戶」進入時記錄，儲存後自動綁定表頭
+$(document).on('click', '#client-suggestions .client-create-btn', function () {
+    const term = String($(this).data('term') || '');
+    $('#client-suggestions').hide().empty();
+    resetCustomerForm();
+    $('#customer_name_modal').val(term);
+    _pendingClientBind = true;
+    $('#customerMgmtListSection').hide();
+    $('#customerModal').modal('show');
+});
+$(document).on('hidden.bs.modal', '#customerModal', function () {
+    _pendingClientBind = false;
+    $('#customerMgmtListSection').show();
+});
+
+// ══════════════════════════════════════════════════════
+// 料號 autocomplete（含客戶篩選）
+// ══════════════════════════════════════════════════════
+
+// 客戶變更時更新所有料號搜尋框的 placeholder
+// 載入客戶聯絡人並渲染下拉（預設聯絡人排第一）
+function loadClientContacts(customerId, selectedContactId) {
+    if (!customerId) {
+        $('#client-contact-row').hide();
+        $('#contact_select').empty();
+        $('#contact_id').val('');
+        return;
+    }
+    $.get(API_URL, { action:'get_customer_contacts', customer_id:customerId }, res => {
+        if (!res.success || !res.contacts.length) {
+            $('#client-contact-row').hide();
+            $('#contact_select').empty();
+            $('#contact_id').val('');
+            return;
+        }
+        let html = '';
+        res.contacts.forEach(c => {
+            const parts = [c.name];
+            if (c.department) parts.push(c.department);
+            if (c.title) parts.push(c.title);
+            if (c.phone_ext) parts.push('分機 ' + c.phone_ext);
+            html += `<option value="${c.contact_id}">${escapeHtml(parts.join('・'))}</option>`;
+        });
+        $('#contact_select').html(html);
+        // 回填指定聯絡人
+        if (selectedContactId) $('#contact_select').val(selectedContactId);
+        else {
+            const primary = res.contacts.find(c => c.is_primary == 1);
+            if (primary) $('#contact_select').val(primary.contact_id);
+        }
+        $('#contact_id').val($('#contact_select').val());
+        // 單一或多位聯絡人都顯示
+        $('#client-contact-row').show();
+        if (res.contacts.length === 1) {
+            // 單一聯絡人：disable select（只顯示不可更改）
+            $('#client-contact-row').show();
+            $('#contact_id').val(res.contacts[0].contact_id);
+            $('#contact_select').prop('disabled', true);
+        } else {
+            $('#contact_select').prop('disabled', false);
+        }
+    });
+}
+
+function updatePartSearchPlaceholders() {
+    const name = $('#client_name').val().trim();
+    const hint = name ? `搜尋料號（已篩選：${name}）` : '搜尋料號...';
+    $('.part-search').attr('placeholder', hint);
+}
+
+// 客戶選定後，立即更新 placeholder 和標題客戶名稱
+$(document).on('change input', '#client_name', function () {
+    updatePartSearchPlaceholders();
+    updateEditorClientTag();
+});
+
+function updateEditorClientTag() {
+    const name = $('#client_name').val().trim();
+    $('#editorClientNameTag').text(name ? '・' + name : '');
+}
+
+$(document).on('input', '.part-search', function () {
+    const $input   = $(this);
+    const $td      = $input.closest('td');
+    const $sug     = $td.find('.part-suggestions');
+    const term     = $input.val();
+    // 手動輸入時解除綁定標記
+    $td.find('.d_setting_d_id_hidden').val('');
+    $td.find('.part-cog-btn').data('d-id', '');
+    $td.find('.part-bound-check').hide();
+    refreshPartAttachBadges();
+    if (term.length < 1) { $sug.hide().empty(); return; }
+
+    const params   = { action: 'search_data', type: 'part', term };
+    const clientId = $('#client_id').val().trim();
+    if (clientId) params.customer_id = clientId;   // ★ 有客戶時加篩選
+
+    $.get(API_URL, params, res => {
+        // 「建立新料號」快捷列（查無結果或無完全相符時出現）
+        const createBtnHtml = `<div class="part-create-btn" data-term="${escapeHtml(term)}"
+            style="padding:6px 12px;cursor:pointer;color:#2c7be5;font-size:12px;border-top:1px dashed #ddd;background:#f7faff;">
+            <i class="fa fa-plus-circle"></i> 建立新料號「${escapeHtml(term)}」</div>`;
+        const positionSug = () => {
+            const r   = $input[0].getBoundingClientRect();
+            const blw = window.innerHeight - r.bottom;
+            $sug.css({
+                left:   r.left + 'px',
+                width:  Math.max(r.width, clientId ? 220 : 300) + 'px',
+                top:    blw < 200 && r.top > 200 ? 'auto'                      : r.bottom + 'px',
+                bottom: blw < 200 && r.top > 200 ? (window.innerHeight - r.top) + 'px' : 'auto'
+            }).show();
+        };
+        if (res.success && res.data.length > 0) {
+            let html = '';
+            // 有客戶篩選時：header 提示 + 不重複顯示客戶名稱
+            if (clientId) {
+                html += `<div style="padding:4px 10px 4px;background:#e8f8f0;font-size:11px;color:#1e8449;border-bottom:1px solid #a9dfbf;">
+                    <i class="fa fa-filter"></i> 篩選：${escapeHtml($('#client_name').val())}
+                </div>`;
+            }
+            res.data.forEach(p => {
+                // 有客戶篩選時只顯示料號+規格；無篩選時也顯示客戶名稱
+                const label = clientId
+                    ? `${escapeHtml(p.D_Setting_Id)}　<small style="color:#aaa;">${escapeHtml(p.Spec_No||'')}</small>`
+                    : `${escapeHtml(p.D_Setting_Id)} <small style="color:#aaa;">(${escapeHtml(p.Spec_No||'N/A')})</small> — ${escapeHtml(p.Client_Name||'無客戶')}`;
+                html += `<div class="suggestion-item"
+                    data-part-id="${escapeHtml(p.D_Setting_Id)}"
+                    data-d-id="${escapeHtml(p.d_id||'')}"
+                    data-spec-no="${escapeHtml(p.Spec_No||'')}"
+                    data-client-name="${escapeHtml(p.Client_Name||'')}"
+                    data-customer-id="${escapeHtml(p.customer_id||'')}">
+                    ${label}
+                </div>`;
+            });
+            // 無完全相符時，底部提供快速建立
+            const hasExact = res.data.some(p => String(p.D_Setting_Id).toLowerCase() === term.toLowerCase());
+            if (!hasExact) html += createBtnHtml;
+            $sug.html(html);
+            positionSug();
+        } else {
+            const noResultMsg = (clientId
+                ? `<div style="padding:8px 12px;color:#aaa;font-size:12px;">
+                       <i class="fa fa-search"></i> 此客戶下找不到符合料號
+                       <a href="#" style="margin-left:6px;font-size:11px;" onclick="clearClientFilter(event)">清除篩選</a>
+                   </div>`
+                : `<div style="padding:8px 12px;color:#aaa;font-size:12px;">
+                       <i class="fa fa-search"></i> 查無此料號
+                   </div>`) + createBtnHtml;
+            $sug.html(noResultMsg);
+            positionSug();
+        }
+    });
+});
+
+// ── 快速建立料號並綁定回原項目列 ──────────────────────
+let _pendingBindRow = null;   // 待綁定的項目列（從「建立新料號」進入時記錄）
+$(document).on('click', '.part-suggestions .part-create-btn', function () {
+    const term = String($(this).data('term') || '');
+    _pendingBindRow = $(this).closest('tr.item-row');
+    $(this).closest('.part-suggestions').hide().empty();
+    resetPartForm();
+    $('#part_no_modal').val(term);
+    // 表頭已綁定客戶時自動帶入
+    const cid = $('#client_id').val().trim();
+    if (cid) {
+        $('#part_client_search_modal').val($('#client_name').val().trim());
+        $('#part_customer_id_modal').val(cid);
+    }
+    $('#partModal').modal('show');
+});
+$(document).on('hidden.bs.modal', '#partModal', function () { _pendingBindRow = null; });
+
+// 建立成功後綁定料號到項目列（等同從建議清單點選）
+function bindPartToRow($tr, partId, dId) {
+    if (!$tr || !$tr.length) return;
+    $tr.find('.part-search').val(partId).attr('title', partId);
+    $tr.find('.product_id_hidden').val(partId);
+    $tr.find('.d_setting_d_id_hidden').val(dId);
+    $tr.find('.part-cog-btn').data('d-id', dId);
+    $tr.find('.part-bound-check').show();
+    loadItemHistory($tr, partId);
+    loadGearSpecs($tr, null, dId);
+    loadBomInfo($tr, null, dId);
+    refreshPartAttachBadges();
+}
+
+// 清除客戶篩選（從「找不到料號」的快捷連結觸發）
+function clearClientFilter(e) {
+    e.preventDefault();
+    $('#client_name').val('');
+    $('#client_id').val('');
+    updatePartSearchPlaceholders();
+    updateClientBoundCheck();
+    $('.part-suggestions').hide().empty();
+    // 重新觸發輸入以無篩選模式搜尋
+    $('.part-search:focus').trigger('input');
+}
+
+$(document).on('click', '.part-suggestions .suggestion-item', function () {
+    const $item  = $(this);
+    const partId = $item.data('part-id');
+    const $tr    = $item.closest('tr.item-row');
+    $tr.find('.part-search').val(partId).attr('title', partId);
+    $tr.find('.product_id_hidden').val(partId);
+    const dId = $item.data('d-id') || '';
+    $tr.find('.d_setting_d_id_hidden').val(dId);
+    $tr.find('.part-cog-btn').data('d-id', dId);
+    // 顯示/隱藏綁定標記
+    if (dId) { $tr.find('.part-bound-check').show(); }
+    else      { $tr.find('.part-bound-check').hide(); }
+
+    // 客戶欄位空白時自動帶入此料號的預設客戶
+    if (!$('#client_name').val().trim() && $item.data('client-name')) {
+        $('#client_name').val($item.data('client-name'));
+        $('#client_id').val($item.data('customer-id'));
+        updatePartSearchPlaceholders();
+        updateEditorClientTag();
+        loadClientContacts($item.data('customer-id'));
+        updateClientBoundCheck();
+    }
+
+    $item.closest('.part-suggestions').hide().empty();
+    loadItemHistory($tr, partId);
+    // 自動帶入齒輪規格
+    loadGearSpecs($tr, dId ? null : partId, dId || null);
+    // 更換料號時重置子件勾選再重新載入組合件資訊
+    $tr.find('.show-bom-hidden').val(0);
+    $tr.find('.print-bom-hidden').val(0);
+    loadBomInfo($tr, dId ? null : partId, dId || null);
+    refreshPartAttachBadges();
+});
+
+// ══════════════════════════════════════════════════════
+// 客戶管理
+// ══════════════════════════════════════════════════════
+function updateClientBoundCheck() {
+    if ($('#client_id').val().trim()) {
+        $('#client-bound-check').show();
+    } else {
+        $('#client-bound-check').hide();
+    }
+}
+function openCustomerGear() {
+    const clientId = $('#client_id').val().trim();
+    if (clientId) {
+        // 帶 customer_search 讓主檔頁客戶分頁同步篩選此客戶
+        const kw = $('#client_name').val().trim() || clientId;
+        window.open('../pages/master_data_management.php?customer_search=' + encodeURIComponent(kw)
+            + '#edit-customer-' + encodeURIComponent(clientId), '_blank');
+    } else {
+        window.open('../pages/master_data_management.php#open-customer', '_blank');
+    }
+}
+function openCustomerModal() { window.open('../pages/master_data_management.php#open-customer', '_blank'); }
+function loadCustomerList() {
+    $.get(API_URL, { action: 'get_all_customers' }, res => {
+        if (!res.success) return;
+        let html = '';
+        res.data.forEach(c => {
+            html += `<tr><td>${escapeHtml(c.customer_id)}</td><td>${escapeHtml(c.customer)}</td>
+            <td>${escapeHtml(c.customer_tel||'')}</td><td>${escapeHtml(c.customer_address||'')}</td>
+            <td><button class="btn btn-xs btn-warning btn-edit-customer"
+                data-customer='${JSON.stringify(c).replace(/'/g,"&#39;")}'>
+                <i class="fa fa-pencil"></i></button></td></tr>`;
+        });
+        $('#customerMgmtTable tbody').html(html);
+    });
+}
+function editCustomer(c) {
+    $('#customerFormTitle').text('修改客戶');
+    $('#customer_id_modal').val(c.customer_id);
+    $('#customer_id_new').val(c.customer_id).prop('disabled', true);
+    $('#customer_name_modal').val(c.customer);
+    $('#customer_address_modal').val(c.customer_address||'');
+    $('#customer_tel_modal').val(c.customer_tel||'');
+    $('#customer_fax_modal').val(c.customer_fax||'');
+    $('#customer_taxid_modal').val(c.tax_id||'');
+    $('#customer_contact_modal').val('');
+}
+function resetCustomerForm() {
+    $('#customerFormTitle').text('新增客戶');
+    $('#customer_id_modal').val('');
+    $('#customer_id_new').val('').prop('disabled', false);
+    $('#customer_name_modal,#customer_address_modal,#customer_tel_modal,#customer_fax_modal,#customer_taxid_modal,#customer_contact_modal').val('');
+}
+function saveCustomer() {
+    const name = $('#customer_name_modal').val().trim();
+    if (!name) { Swal.fire('錯誤', '客戶名稱不可為空', 'error'); return; }
+    if (!$('#customer_id_modal').val() && !$('#customer_id_new').val().trim()) {
+        Swal.fire('錯誤', '客戶代碼不可為空', 'error'); return;
+    }
+    $.post(API_URL, {
+        action:'save_customer',
+        customer_id_modal:    $('#customer_id_modal').val(),
+        customer_id_new:      $('#customer_id_new').val(),
+        customer_name_modal:  name,
+        customer_address_modal:$('#customer_address_modal').val(),
+        customer_tel_modal:   $('#customer_tel_modal').val(),
+        customer_fax_modal:   $('#customer_fax_modal').val(),
+        customer_taxid_modal: $('#customer_taxid_modal').val(),
+        customer_contact_modal:$('#customer_contact_modal').val()
+    }, res => {
+        if (res.success) {
+            // 從「建立新客戶」進入：直接綁定回表頭並關閉跳窗
+            if (_pendingClientBind && res.customer_id) {
+                _pendingClientBind = false;
+                $('#client_name').val(name);
+                $('#client_id').val(res.customer_id);
+                updatePartSearchPlaceholders();
+                updateEditorClientTag();
+                updateClientBoundCheck();
+                loadClientContacts(res.customer_id);
+                resetCustomerForm();
+                $('#customerModal').modal('hide');
+                Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `客戶 ${res.customer_id} 已建立並綁定`, showConfirmButton: false, timer: 2500 });
+                return;
+            }
+            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: res.message, showConfirmButton: false, timer: 2000 });
+            resetCustomerForm(); loadCustomerList();
+        } else { Swal.fire('錯誤', res.message, 'error'); }
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// 料號管理
+// ══════════════════════════════════════════════════════
+function openPartModal() { window.open('../pages/master_data_management.php#open-part', '_blank'); }
+function openPartModalForRow(btn) {
+    const dId = $(btn).data('d-id');
+    if (dId) {
+        // 帶 part_search 讓主檔頁料號分頁同步篩選此料號
+        const partNo = $(btn).closest('tr.item-row').find('.part-search').val().trim();
+        const q = partNo ? '?part_search=' + encodeURIComponent(partNo) : '';
+        window.open('../pages/master_data_management.php' + q + '#edit-part-' + encodeURIComponent(dId), '_blank');
+    } else {
+        window.open('../pages/master_data_management.php#open-part', '_blank');
+    }
+}
+
+// ══════════════════════════════════════════════════════
+// 批次新增料號
+// ══════════════════════════════════════════════════════
+let _batchSelected = {};  // { D_Setting_Id: partData }
+
+function openBatchAddModal() {
+    _batchSelected = {};
+    $('#batchPartSearch').val('');
+    $('#batchPartResults').html('<div class="text-muted text-center" style="padding:20px;">請輸入關鍵字搜尋料號</div>');
+    $('#batchSelectedCount').text(0);
+    $('#batchAddModal').modal('show');
+    setTimeout(() => $('#batchPartSearch').focus(), 400);
+}
+
+function doBatchPartSearch() {
+    const term = $('#batchPartSearch').val().trim();
+    if (!term) return;
+    const params = { action: 'search_data', type: 'part', term };
+    const clientId = $('#client_id').val().trim();
+    if (clientId) params.customer_id = clientId;
+    $.get(API_URL, params, res => {
+        if (!res.success || !res.data.length) {
+            $('#batchPartResults').html('<div class="text-muted text-center" style="padding:20px;">查無符合料號</div>');
+            return;
+        }
+        let html = '';
+        res.data.forEach(p => {
+            const isChecked = !!_batchSelected[p.D_Setting_Id];
+            const label = clientId
+                ? `${escapeHtml(p.D_Setting_Id)}　<small style="color:#aaa;">${escapeHtml(p.Spec_No||'')}</small>`
+                : `${escapeHtml(p.D_Setting_Id)} <small style="color:#aaa;">(${escapeHtml(p.Spec_No||'N/A')})</small> — ${escapeHtml(p.Client_Name||'無客戶')}`;
+            html += `<label style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #f0f0f0;cursor:pointer;margin:0;"
+                class="batch-part-item ${isChecked ? 'bg-info' : ''}"
+                data-part-id="${escapeHtml(p.D_Setting_Id)}"
+                data-d-id="${escapeHtml(p.d_id||'')}"
+                data-spec-no="${escapeHtml(p.Spec_No||'')}"
+                data-client-name="${escapeHtml(p.Client_Name||'')}">
+                <input type="checkbox" class="batch-part-chk" value="${escapeHtml(p.D_Setting_Id)}" ${isChecked ? 'checked' : ''}
+                    style="width:15px;height:15px;flex-shrink:0;">
+                <span>${label}</span>
+            </label>`;
+        });
+        $('#batchPartResults').html(html);
+        $('#batchPartResults').off('change.batch').on('change.batch', '.batch-part-chk', function() {
+            const $lbl = $(this).closest('.batch-part-item');
+            const pid  = $lbl.data('part-id');
+            if ($(this).is(':checked')) {
+                _batchSelected[pid] = {
+                    product_id: pid,
+                    d_id:       $lbl.data('d-id'),
+                    spec_no:    $lbl.data('spec-no'),
+                };
+                $lbl.css('background', '#e8f0ff');
+            } else {
+                delete _batchSelected[pid];
+                $lbl.css('background', '');
+            }
+            $('#batchSelectedCount').text(Object.keys(_batchSelected).length);
+        });
+    });
+}
+
+$(document).on('keydown', '#batchPartSearch', function(e) {
+    if (e.key === 'Enter') doBatchPartSearch();
+});
+
+function confirmBatchAdd() {
+    const parts = Object.values(_batchSelected);
+    if (!parts.length) { Swal.fire({ toast:true, position:'top-end', icon:'warning', title:'尚未勾選任何料號', showConfirmButton:false, timer:2000 }); return; }
+    // 上限控管：只加得下的筆數，超出部分提示未加入
+    const room = MAX_QUOTE_ITEMS - $('#quoteItemsTable > tbody > tr.item-row').length;
+    if (room <= 0) { Swal.fire('提示', `報價項目最多 ${MAX_QUOTE_ITEMS} 筆料號`, 'warning'); return; }
+    const toAdd = parts.slice(0, room);
+    toAdd.forEach(p => addItemRow({ product_id: p.product_id }));
+    $('#batchAddModal').modal('hide');
+    if (parts.length > toAdd.length) {
+        Swal.fire('提示', `報價項目最多 ${MAX_QUOTE_ITEMS} 筆料號：已新增前 ${toAdd.length} 筆，其餘 ${parts.length - toAdd.length} 筆未加入`, 'warning');
+    } else {
+        Swal.fire({ toast:true, position:'top-end', icon:'success', title:`已新增 ${toAdd.length} 筆料號`, showConfirmButton:false, timer:2000 });
+    }
+}
+
+function searchPartMgmt() {
+    const term = $('#partMgmtSearch').val();
+    $.get(API_URL, { action: 'search_data', type: 'part', term }, res => {
+        if (!res.success) return;
+        const typeMap = { N:'一般', G:'齒輪', H:'滾刀' };
+        let html = '';
+        res.data.forEach(p => {
+            html += `<tr style="cursor:pointer;" onclick="loadPartToModal('${p.d_id}')">
+                <td>${escapeHtml(p.D_Setting_Id)}</td><td>${escapeHtml(p.Client_Name||'')}</td>
+                <td>${escapeHtml(p.Revision||'')}</td><td>${escapeHtml(typeMap[p.Type]||p.Type||'一般')}</td>
+                <td><button class="btn btn-xs btn-warning btn-edit-part"
+                    data-part='${JSON.stringify(p).replace(/'/g,"&#39;")}'>
+                    <i class="fa fa-pencil"></i></button></td></tr>`;
+        });
+        $('#partMgmtTbody').html(html || '<tr><td colspan="5" class="text-center text-muted">無資料</td></tr>');
+    });
+}
+function loadPartToModal(d_id) {
+    $.get(API_URL, { action: 'get_part_detail', d_id }, res => {
+        if (!res.success) { Swal.fire('錯誤', res.message, 'error'); return; }
+        const p = res.data;
+        $('#partFormTitle').text('修改料號');
+        $('#part_d_id_modal').val(p.d_id);
+        $('#part_no_modal').val(p.D_Setting_Id||'');
+        $('#part_type_modal').val(p.Type||'N').trigger('change');
+        $('#part_client_search_modal').val(p.Client_Name||'');
+        $('#part_customer_id_modal').val(p.Customer_Id||'');
+        $('#part_revision_modal').val(p.Revision||'');
+        $('#part_issue_date_modal').val(p.Issue_Date||'');
+        $('#part_remark_modal').val(p.Remark||'');
+        $('#part-btn-delete').show();
+        $('#part-gear-rows-container').empty();
+        if (p.Type === 'G' && p.gears && p.gears.length > 0) p.gears.forEach(g => addPartGearRow(g));
+        $('#partModal .modal-body').scrollTop(0);
+    });
+}
+function editPart(d_id) { loadPartToModal(d_id); }
+function resetPartForm() {
+    $('#partFormTitle').text('新增料號');
+    $('#part_d_id_modal,#part_no_modal,#part_revision_modal,#part_issue_date_modal,#part_remark_modal').val('');
+    $('#part_type_modal').val('N').trigger('change');
+    $('#part_client_search_modal').val('');
+    $('#part_customer_id_modal').val('');
+    $('#part-btn-delete').hide();
+    $('#part-gear-rows-container').empty();
+    $('#part-customer-results').hide();
+}
+function savePart() {
+    const partNo = $('#part_no_modal').val().trim();
+    if (!partNo) { Swal.fire('錯誤', '料號不可為空', 'error'); return; }
+    if ($('#part_client_search_modal').val().trim() && !$('#part_customer_id_modal').val().trim()) {
+        Swal.fire('錯誤', '請從建議列表選擇客戶，或清空客戶欄位', 'error'); return;
+    }
+    const gears = [];
+    if ($('#part_type_modal').val() === 'G') {
+        $('#part-gear-rows-container .part-gear-row').each(function () {
+            gears.push({
+                Gear_Type:        $(this).find('.gear-type').val(),
+                Module:           $(this).find('.gear-module').val(),
+                Teeth:            $(this).find('.gear-teeth').val(),
+                Pressure_Angle:   $(this).find('.gear-pressure-angle').val(),
+                Face_Width:       $(this).find('.gear-face-width').val(),
+                Workpiece_Length: $(this).find('.gear-length').val(),
+                Profile_Shift_X:  $(this).find('.gear-shift-x').val(),
+                Helix_Angle:      $(this).find('.hidden-helix-val').val(),
+                Helix_Angle_Str:  $(this).find('.hidden-helix-str').val(),
+                Helix_Direction:  $(this).find('.gear-direction').val(),
+                Remark_Gear:      $(this).find('.gear-remark').val()
+            });
+        });
+    }
+    $.post(API_URL, {
+        action: 'save_part_info', d_id: $('#part_d_id_modal').val(), part_no: partNo,
+        type: $('#part_type_modal').val(), customer_id: $('#part_customer_id_modal').val(),
+        revision: $('#part_revision_modal').val(), issue_date: $('#part_issue_date_modal').val(),
+        remark: $('#part_remark_modal').val(), gears: JSON.stringify(gears)
+    }, res => {
+        if (res.success) {
+            // 從「建立新料號」進入：直接綁定回原項目列並關閉跳窗
+            if (_pendingBindRow && res.d_id) {
+                const $tr = _pendingBindRow;
+                _pendingBindRow = null;
+                bindPartToRow($tr, partNo, res.d_id);
+                resetPartForm();
+                $('#partModal').modal('hide');
+                Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `料號 ${partNo} 已建立並綁定`, showConfirmButton: false, timer: 2500 });
+                return;
+            }
+            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: res.message, showConfirmButton: false, timer: 2000 });
+            resetPartForm(); searchPartMgmt();
+        } else { Swal.fire('錯誤', res.message, 'error'); }
+    });
+}
+function deletePart() {
+    const d_id = $('#part_d_id_modal').val();
+    if (!d_id) return;
+    Swal.fire({ title: '確定要刪除此料號嗎？', icon: 'warning', showCancelButton: true,
+        confirmButtonColor: '#d33', confirmButtonText: '是的，刪除', cancelButtonText: '取消'
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $.post(API_URL, { action: 'delete_part', d_id }, res => {
+            if (res.success) {
+                Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: '刪除成功', showConfirmButton: false, timer: 2000 });
+                resetPartForm(); searchPartMgmt();
+            } else { Swal.fire('錯誤', res.message, 'error'); }
+        });
+    });
+}
+function addPartGearRow(data = {}) {
+    const gearType  = data.Gear_Type || '';
+    const module    = data.Module || '';
+    const teeth     = data.Teeth || '';
+    const pa        = data.Pressure_Angle || '';
+    const width     = data.Face_Width || '';
+    const length    = data.Workpiece_Length || '';
+    const remark    = data.Remark_Gear || '';
+    const helixVal  = (data.Helix_Angle !== undefined && data.Helix_Angle !== null && data.Helix_Angle !== '') ? parseFloat(data.Helix_Angle) : '';
+    const helixStr  = data.Helix_Angle_Str || '';
+    const direction = data.Helix_Direction || '';
+    const shiftX    = (data.Profile_Shift_X !== undefined && data.Profile_Shift_X !== null) ? parseFloat(data.Profile_Shift_X) : '';
+    const showHelix = String(gearType).includes('螺旋');
+    const html = `
+    <div class="part-gear-row" style="padding:12px;border:1px solid #ddd;border-radius:5px;margin-bottom:10px;background:#f9f9f9;">
+      <div class="row">
+        <div class="col-md-3 form-group"><label>齒輪類型</label>
+          <select class="form-control input-sm gear-type">
+            <option value="" ${gearType===''?'selected':''}>請選擇</option>
+            <option value="直齒" ${gearType==='直齒'?'selected':''}>直齒</option>
+            <option value="螺旋" ${gearType==='螺旋'?'selected':''}>螺旋</option>
+            <option value="傘齒" ${gearType==='傘齒'?'selected':''}>傘齒</option>
+            <option value="蝸桿" ${gearType==='蝸桿'?'selected':''}>蝸桿</option>
+            <option value="蝸輪" ${gearType==='蝸輪'?'selected':''}>蝸輪</option>
+          </select>
+        </div>
+        <div class="col-md-3 form-group"><label>模數</label>
+          <input type="text" class="form-control input-sm gear-module" value="${escapeHtml(String(module))}">
+        </div>
+        <div class="col-md-3 form-group"><label>齒數</label>
+          <input type="number" class="form-control input-sm gear-teeth" value="${escapeHtml(String(teeth))}">
+        </div>
+        <div class="col-md-3 form-group helix-angle-group" style="display:${showHelix?'block':'none'};background:#e9ecef;padding:8px;border-radius:4px;">
+          <label>螺旋角</label>
+          <div style="display:flex;gap:5px;margin-bottom:5px;">
+            <select class="form-control input-sm gear-direction" style="width:75px;">
+              <option value="" ${direction===''?'selected':''}>旋向</option>
+              <option value="RH" ${direction==='RH'?'selected':''}>RH(右)</option>
+              <option value="LH" ${direction==='LH'?'selected':''}>LH(左)</option>
+            </select>
+            <div class="btn-group btn-group-xs">
+              <button type="button" class="btn btn-default active btn-mode-dec">十進位</button>
+              <button type="button" class="btn btn-default btn-mode-dms">度分秒</button>
+            </div>
+          </div>
+          <div class="mode-decimal">
+            <input type="number" step="any" class="form-control input-sm gear-helix-val" value="${helixVal}" placeholder="例如 15.5">
+          </div>
+          <div class="mode-dms" style="display:none;align-items:center;gap:2px;">
+            <input type="number" class="form-control input-sm dms-d" placeholder="度" style="width:50px;">°
+            <input type="number" class="form-control input-sm dms-m" placeholder="分" style="width:50px;">'
+            <input type="number" class="form-control input-sm dms-s" placeholder="秒" style="width:50px;">"
+          </div>
+          <input type="hidden" class="hidden-helix-val" value="${helixVal}">
+          <input type="hidden" class="hidden-helix-str" value="${escapeHtml(helixStr)}">
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-3 form-group"><label>壓力角 (PA)</label>
+          <input type="text" class="form-control input-sm gear-pressure-angle" value="${escapeHtml(String(pa))}">
+        </div>
+        <div class="col-md-3 form-group"><label>齒寬 (W) mm</label>
+          <input type="number" step="0.01" class="form-control input-sm gear-face-width" value="${escapeHtml(String(width))}">
+        </div>
+        <div class="col-md-3 form-group"><label>工件總長 (L) mm</label>
+          <input type="number" step="0.01" class="form-control input-sm gear-length" value="${escapeHtml(String(length))}">
+        </div>
+        <div class="col-md-3 form-group"><label>轉位係數 X</label>
+          <input type="number" step="any" class="form-control input-sm gear-shift-x" value="${shiftX}">
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-9 form-group"><label>備註</label>
+          <input type="text" class="form-control input-sm gear-remark" value="${escapeHtml(String(remark))}">
+        </div>
+        <div class="col-md-3 form-group" style="text-align:right;padding-top:25px;">
+          <button type="button" class="btn btn-danger btn-xs" onclick="$(this).closest('.part-gear-row').remove()">
+            <i class="fa fa-trash"></i> 刪除
+          </button>
+        </div>
+      </div>
+    </div>`;
+    $('#part-gear-rows-container').append(html);
+    if (helixStr && (helixStr.includes('°') || helixStr.includes("'"))) {
+        const $lr = $('#part-gear-rows-container .part-gear-row').last();
+        $lr.find('.btn-mode-dms').trigger('click');
+        const d = helixStr.split('°')[0] || '';
+        const m = (helixStr.split('°')[1] || '').split("'")[0];
+        const s = (helixStr.split("'")[1] || '').split('"')[0];
+        $lr.find('.dms-d').val(d); $lr.find('.dms-m').val(m); $lr.find('.dms-s').val(s);
+    }
+}
+</script>
+</body>
+</html>

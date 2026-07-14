@@ -1,0 +1,4018 @@
+<?php
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+// c:\MAMP\htdocs\EGsystem\views\Sales\image_editor.php
+// 批圖編輯器（小畫家 + Figma 混合式）：獨立跳窗頁，由 NewOrder_Track222.php「批圖」按鈕開啟。
+// 純前端 Canvas 編輯（Fabric.js 本地載入），不寫入資料庫；權限採 imgedit 角色模組（見下方說明）。
+
+ini_set('session.gc_maxlifetime', 43200);
+session_set_cookie_params(43200);
+session_start();
+if (!isset($_SESSION['userName'])) {
+    header("Location:../../index.php");
+    exit;
+}
+
+include '../../src/common/DBConnection.php';
+
+$uid      = (int)($_SESSION['id'] ?? 0);
+$userName = $_SESSION['userName'] ?? '';
+
+// 保險：一律以登入帳號回查 user 表確認 id/status。
+// 原因：session 可能缺 id，或帳號曾重建導致 session 存舊 id——兩者都會讓
+// 部門查詢（user_department_position_map 以 user_id 對應）、管理者判定、印章白名單落空。
+if ($userName !== '') {
+    try {
+        $dbc0 = new DBConnection();
+        $st0 = $dbc0->getPDO()->prepare("SELECT id, user_status FROM user WHERE user_uname = ? AND state != 0 LIMIT 1");
+        $st0->execute([$userName]);
+        if ($r0 = $st0->fetch(PDO::FETCH_ASSOC)) {
+            if ((int)$r0['id'] !== $uid) {
+                $uid = (int)$r0['id'];
+                $_SESSION['id'] = $uid;   // 修正 session 舊 id
+            }
+            if (!isset($_SESSION['status'])) $_SESSION['status'] = (int)$r0['user_status'];
+        }
+    } catch (Exception $e) { /* 回查失敗維持 session 原值 */ }
+}
+$isAdmin  = in_array((int)($_SESSION['status'] ?? 0), [9, 90], true);
+
+// ── RBAC（imgedit 模組）─────────────────────────────────────────────────────
+// 規則：管理者（status 9/90 或系統 admin 角色）固定可用。
+// 其他人：若已有人被指派 imgedit 角色 → 只有被指派者可用；
+//         若整個系統尚無任何 imgedit 角色指派 → 暫時開放全部登入者（沿用本系統
+//         「資料庫未設定頁面權限時暫時允許訪問」的既有慣例）。
+$canUse    = $isAdmin;
+$roleLabel = $isAdmin ? '管理者' : '一般使用者';
+try {
+    $dbc = new DBConnection();
+    $pdo = $dbc->getPDO();
+
+    // 植入 imgedit 預設角色（供 user_permissions.php 角色指派區塊使用）
+    $pdo->exec("INSERT IGNORE INTO roles (role_code, role_name, module, is_system, note)
+                VALUES ('imgedit_user', '批圖使用者', 'imgedit', 0, '可使用批圖編輯器（views/Sales/image_editor.php）')");
+    try {
+        $rid = $pdo->query("SELECT role_id FROM roles WHERE role_code='imgedit_user' LIMIT 1")->fetchColumn();
+        if ($rid) {
+            $pdo->prepare("INSERT IGNORE INTO role_features (role_id, feature_code) VALUES (?, 'imgedit.use')")->execute([$rid]);
+        }
+    } catch (Exception $e) { /* 表不存在時靜默跳過 */ }
+
+    if (!$canUse && $uid) {
+        // 系統 admin 角色也視為管理者
+        $st = $pdo->prepare("SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
+                             WHERE ur.user_id = ? AND r.role_code = 'admin' AND r.is_system = 1");
+        $st->execute([$uid]);
+        if ((int)$st->fetchColumn() > 0) {
+            $canUse = true;
+            $roleLabel = '管理者';
+        }
+    }
+    if (!$canUse && $uid) {
+        $st = $pdo->prepare("SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
+                             WHERE r.module = 'imgedit'");
+        $st->execute();
+        $assignedTotal = (int)$st->fetchColumn();
+        if ($assignedTotal === 0) {
+            $canUse = true;
+            $roleLabel = '一般使用者（暫時開放）';
+        } else {
+            $st = $pdo->prepare("SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
+                                 WHERE ur.user_id = ? AND r.module = 'imgedit'");
+            $st->execute([$uid]);
+            if ((int)$st->fetchColumn() > 0) {
+                $canUse = true;
+                $roleLabel = '批圖使用者';
+            }
+        }
+    }
+} catch (Exception $e) {
+    error_log('image_editor RBAC check error: ' . $e->getMessage());
+    if (!$canUse) { $canUse = true; $roleLabel = '一般使用者（權限查詢失敗，暫時開放）'; }
+}
+
+if (!$canUse) {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success' => false, 'message' => '無批圖編輯器使用權限']);
+        exit;
+    }
+    echo '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>批圖編輯器</title></head><body>';
+    echo '<script>alert("您尚未被指派「批圖使用者」角色，無法使用批圖編輯器。\n請洽管理者至「使用者權限管理」指派角色。");window.close();</script>';
+    echo '<p style="font-family:sans-serif;padding:30px;">您尚未被指派「批圖使用者」角色，無法使用批圖編輯器。請洽管理者。</p></body></html>';
+    exit;
+}
+
+// ── 管理者判定（status 9/90 或系統 admin 角色，前面已計算進 $roleLabel）──
+$isMgr = ($isAdmin || $roleLabel === '管理者');
+
+// ── 標籤實體檔 NAS 儲存 ─────────────────────────────────────────────────
+// 路徑可於 使用者權限管理頁 設定（system_settings: imgedit_label_nas_dir）。
+// 子資料夾前綴避免使用者ID與部門ID衝突：U<使用者ID>＝私人、D<部門ID>＝部門、company＝公司共用。
+$labelNasBase = '\\\\excellentnas\\生產課\\BOM\\ERP\\共用資料\\標籤';
+try {
+    if (isset($pdo) && $pdo) {
+        $v = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key = 'imgedit_label_nas_dir'")->fetchColumn();
+        if ($v) $labelNasBase = rtrim(trim($v), '\\/');
+    }
+} catch (Exception $e) {}
+function imgedit_label_sub(string $scope, int $uid, int $deptId): string {
+    return $scope === 'private' ? ('U' . $uid) : ($scope === 'dept' ? ('D' . $deptId) : 'company');
+}
+function imgedit_label_dir(string $base, string $sub): string {
+    $dir = $base . DIRECTORY_SEPARATOR . $sub;
+    if (!is_dir($dir)) @mkdir($dir, 0777, true);
+    return $dir;
+}
+// 內嵌 base64 圖片 → 抽離成實體檔並改為引用網址（$urlPrefix 接檔名；控制檔案與資料庫大小）
+function imgedit_extract_images(&$node, string $dir, string $urlPrefix, &$count) {
+    if (is_array($node)) {
+        foreach ($node as &$v) imgedit_extract_images($v, $dir, $urlPrefix, $count);
+        unset($v);
+    } elseif (is_string($node) && strpos($node, 'data:image/') === 0 && strlen($node) > 512) {
+        if (preg_match('#^data:image/(png|jpe?g|gif|webp|bmp);base64,#', $node, $m)) {
+            $ext = ($m[1] === 'jpeg') ? 'jpg' : $m[1];
+            $bin = base64_decode(substr($node, strpos($node, ',') + 1));
+            if ($bin !== false && is_dir($dir)) {
+                $fn = 'img_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+                if (@file_put_contents($dir . DIRECTORY_SEPARATOR . $fn, $bin) !== false) {
+                    $node = $urlPrefix . $fn;
+                    $count++;
+                }
+            }
+        }
+    }
+}
+// 標籤搬移/複製到其他範圍時，引用的實體檔一併複製到目標資料夾並改寫網址
+function imgedit_relocate_files(string $specJson, string $base, string $targetSub): string {
+    return preg_replace_callback('#image_editor\.php\?action=label_file&f=([^"\\\\]+)#u', function ($m) use ($base, $targetSub) {
+        $rel = $m[1];
+        $fn = (strrpos($rel, '/') === false) ? $rel : substr($rel, strrpos($rel, '/') + 1);
+        $src = $base . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
+        $dst = imgedit_label_dir($base, $targetSub) . DIRECTORY_SEPARATOR . $fn;
+        if (is_file($src) && $src !== $dst) @copy($src, $dst);
+        return 'image_editor.php?action=label_file&f=' . $targetSub . '/' . $fn;
+    }, $specJson);
+}
+
+// ── 料號附件儲存路徑（沿用附件系統 part_attach_nas_dir）────────────────
+function imgedit_part_base(PDO $pdo): string {
+    try {
+        $v = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key = 'part_attach_nas_dir'")->fetchColumn();
+        return $v ? rtrim(trim($v), '\\/') : '';
+    } catch (Exception $e) { return ''; }
+}
+
+// ── GET：料號附件目錄檔案服務（工作檔內引用的底圖經此輸出）──────────────
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($_GET['action'] ?? '') === 'part_file') {
+    $dId = (int)($_GET['d'] ?? 0);
+    $f = basename((string)($_GET['f'] ?? ''));
+    if ($dId <= 0 || $f === '' || strpos($f, '..') !== false) { http_response_code(400); exit('bad path'); }
+    $pb = (isset($pdo) && $pdo) ? imgedit_part_base($pdo) : '';
+    $path = $pb ? ($pb . DIRECTORY_SEPARATOR . $dId . DIRECTORY_SEPARATOR . $f) : '';
+    if ($path === '' || !is_file($path)) { http_response_code(404); exit('not found'); }
+    $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+    $mime = ['png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif', 'webp' => 'image/webp', 'bmp' => 'image/bmp'][$ext] ?? 'application/octet-stream';
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . filesize($path));
+    header('Cache-Control: private, max-age=86400');
+    readfile($path);
+    exit;
+}
+
+// ── GET：標籤實體檔服務端點（NAS 檔案經此輸出給瀏覽器）─────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($_GET['action'] ?? '') === 'label_file') {
+    $f = (string)($_GET['f'] ?? '');
+    if ($f === '' || strpos($f, '..') !== false || strpos($f, ':') !== false) { http_response_code(400); exit('bad path'); }
+    $path = $labelNasBase . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $f);
+    if (!is_file($path)) { http_response_code(404); exit('not found'); }
+    $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+    $mime = ['png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'gif' => 'image/gif', 'webp' => 'image/webp', 'bmp' => 'image/bmp'][$ext] ?? 'application/octet-stream';
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . filesize($path));
+    header('Cache-Control: private, max-age=86400');
+    readfile($path);
+    exit;
+}
+
+// ── 使用者所屬部門（標籤庫「部門」範圍用）──────────────────────────────
+$myDepts = [];
+$myDeptIds = [];
+$myMainDeptId = 0;
+try {
+    if (isset($pdo) && $pdo && $uid) {
+        // 注意：DISTINCT 不能配未選取的 ORDER BY 欄位（MySQL 3065），改用 GROUP BY
+        $st = $pdo->prepare("SELECT d.id, d.name
+                             FROM user_department_position_map m JOIN department d ON d.id = m.department_id
+                             WHERE m.user_id = ?
+                             GROUP BY d.id, d.name, d.sort_order
+                             ORDER BY d.sort_order, d.id");
+        $st->execute([$uid]);
+        $myDepts = $st->fetchAll(PDO::FETCH_ASSOC);
+        $myDeptIds = array_map(fn($r) => (int)$r['id'], $myDepts);
+        // 主要職務部門（is_main=1）：工作檔分享範圍選「部門共用」時預設用這個
+        $mst = $pdo->prepare("SELECT department_id FROM user_department_position_map WHERE user_id = ? AND is_main = 1 LIMIT 1");
+        $mst->execute([$uid]);
+        $myMainDeptId = (int)($mst->fetchColumn() ?: 0);
+        if (!$myMainDeptId && $myDeptIds) $myMainDeptId = $myDeptIds[0];
+    }
+} catch (Exception $e) { /* 無部門資料則視為空 */ }
+
+// ── 使用者個人畫圖偏好（顏色/粗細/印章大小…用完自動記住，下次開啟沿用）──────
+$userPrefs = [];
+try {
+    if (isset($pdo) && $pdo && $uid) {
+        $st = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ?");
+        $st->execute(['imgedit_user_prefs_' . $uid]);
+        $v = $st->fetchColumn();
+        if ($v) { $d = json_decode($v, true); if (is_array($d)) $userPrefs = $d; }
+    }
+} catch (Exception $e) {}
+
+// ── 使用者個人常用「圖面像素縮放」尺寸（最多3組，可命名，其中一組可設為預設）────
+$resizePresets = [];
+$resizeDefaultIdx = 0;
+try {
+    if (isset($pdo) && $pdo && $uid) {
+        $st = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ?");
+        $st->execute(['imgedit_resize_presets_' . $uid]);
+        $v = $st->fetchColumn();
+        if ($v) {
+            $d = json_decode($v, true);
+            if (is_array($d)) {
+                $resizePresets = array_slice(is_array($d['presets'] ?? null) ? $d['presets'] : [], 0, 3);
+                $resizeDefaultIdx = (int)($d['default_index'] ?? 0);
+            }
+        }
+    }
+} catch (Exception $e) {}
+
+// ── 部門印章（技術課章/發行章）使用權：管理者恆可；其他人須在指定人員名單內 ──
+$stampUserIds = [];
+try {
+    if (isset($pdo) && $pdo) {
+        $v = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key = 'imgedit_stamp_user_ids'")->fetchColumn();
+        if ($v) $stampUserIds = array_map('intval', json_decode($v, true) ?: []);
+    }
+} catch (Exception $e) {}
+$canDeptStamp = $isMgr || in_array($uid, $stampUserIds, true);
+
+// 部門印章（技術課章/發行章）目前顏色：管理者可在「用章人員」跳窗設定，藍/紅二選一，全體共用
+$deptStampColor = 'blue';
+try {
+    if (isset($pdo) && $pdo) {
+        $v = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key = 'imgedit_dept_stamp_color'")->fetchColumn();
+        if ($v === 'red') $deptStampColor = 'red';
+    }
+} catch (Exception $e) {}
+
+// ── 工作檔刪除權限（imgedit 模組新角色）：未指派前一律只有管理者能刪，不套用「批圖使用者」那種
+//    「無人指派時暫時全體開放」的例外 ──
+$canDeleteWorkfile = $isMgr;
+try {
+    if (isset($pdo) && $pdo) {
+        $pdo->exec("INSERT IGNORE INTO roles (role_code, role_name, module, is_system, note)
+                    VALUES ('imgedit_wf_delete', '工作檔刪除', 'imgedit', 0, '可刪除批圖工作檔（views/Sales/image_editor.php 料號附件）')");
+        if (!$canDeleteWorkfile && $uid) {
+            $st = $pdo->prepare("SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
+                                 WHERE ur.user_id = ? AND r.role_code = 'imgedit_wf_delete'");
+            $st->execute([$uid]);
+            if ((int)$st->fetchColumn() > 0) $canDeleteWorkfile = true;
+        }
+    }
+} catch (Exception $e) {}
+
+// 同一料號最多保留幾份批圖工作檔（管理者可於使用者權限管理頁調整）；存檔時超過會自動砍掉最舊的
+$workfileMaxCount = 3;
+try {
+    if (isset($pdo) && $pdo) {
+        $v = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key = 'imgedit_workfile_max_count'")->fetchColumn();
+        if ($v !== false && (int)$v > 0) $workfileMaxCount = (int)$v;
+    }
+} catch (Exception $e) {}
+
+// ── AJAX：標籤庫（公司共用/部門/私人三層）＋ 印章人員設定 ─────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    // 儲存料號附件時會匯出大張 PNG＋整份 JSON 工作檔，預設 128M/60s 對大圖可能不夠；
+    // 這裡只針對這支 AJAX 端點放寬，不動全域 php.ini
+    @ini_set('memory_limit', '512M');
+    @ini_set('max_execution_time', 180);
+    // 若仍然爆掉（記憶體不足/逾時等 Fatal Error），display_errors 關閉下前端只會拿到空白內容
+    // 造成 fetch().json() 丟出「Unexpected end of JSON input」；這裡攔截 Fatal Error 改回傳有意義的 JSON 錯誤
+    register_shutdown_function(function () {
+        $err = error_get_last();
+        if ($err && in_array($err['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+            if (ob_get_level() > 0) { @ob_end_clean(); }
+            echo json_encode(['success' => false, 'message' => '伺服器處理失敗，可能是圖檔過大或處理逾時：' . $err['message']]);
+        }
+    });
+    try {
+        if (!isset($pdo) || !$pdo) throw new Exception('資料庫連線失敗');
+        $pdo->exec("CREATE TABLE IF NOT EXISTS imgedit_labels (
+            label_id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            label_name VARCHAR(100) NOT NULL,
+            category VARCHAR(50) DEFAULT NULL,
+            owner_type VARCHAR(10) NOT NULL DEFAULT 'company',
+            owner_user_id INT NULL,
+            owner_dept_id INT NULL,
+            spec_json MEDIUMTEXT NOT NULL,
+            created_by VARCHAR(50),
+            created_at DATETIME
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        try { $pdo->exec("ALTER TABLE imgedit_labels ADD COLUMN category VARCHAR(50) DEFAULT NULL AFTER label_name"); } catch (Exception $e) { /* 已存在 */ }
+        try { $pdo->exec("ALTER TABLE imgedit_labels ADD COLUMN owner_type VARCHAR(10) NOT NULL DEFAULT 'company' AFTER category"); } catch (Exception $e) {}
+        try { $pdo->exec("ALTER TABLE imgedit_labels ADD COLUMN owner_user_id INT NULL AFTER owner_type"); } catch (Exception $e) {}
+        try { $pdo->exec("ALTER TABLE imgedit_labels ADD COLUMN owner_dept_id INT NULL AFTER owner_user_id"); } catch (Exception $e) {}
+        try { $pdo->exec("ALTER TABLE imgedit_labels ADD COLUMN hide_name TINYINT NOT NULL DEFAULT 0 AFTER owner_dept_id"); } catch (Exception $e) {}
+
+        // 批圖工作檔的分享範圍（私人／部門共用／指定人員），比照標籤庫三層概念但沒有「全公司共用」；
+        // 沒有這兩張表的紀錄（舊資料）一律視為公司共用（沿用改版前的既有行為，不讓舊工作檔忽然看不到）
+        $pdo->exec("CREATE TABLE IF NOT EXISTS imgedit_workfile_meta (
+            attachment_id INT NOT NULL PRIMARY KEY,
+            owner_type VARCHAR(10) NOT NULL DEFAULT 'dept',
+            owner_dept_id INT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $pdo->exec("CREATE TABLE IF NOT EXISTS imgedit_workfile_share (
+            attachment_id INT NOT NULL,
+            user_id INT NOT NULL,
+            PRIMARY KEY (attachment_id, user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+        $act = $_POST['action'];
+        if ($act === 'list_labels') {
+            // 可見範圍：公司共用 + 自己部門的部門標籤 + 自己的私人標籤
+            $params = [':uid' => $uid];
+            $deptCond = '0';
+            if ($myDeptIds) {
+                $in = [];
+                foreach ($myDeptIds as $i => $d) { $in[] = ':d' . $i; $params[':d' . $i] = $d; }
+                $deptCond = 'owner_dept_id IN (' . implode(',', $in) . ')';
+            }
+            $st = $pdo->prepare("SELECT l.label_id, l.label_name, l.category, l.owner_type, l.owner_user_id, l.owner_dept_id,
+                                        l.hide_name, l.spec_json, l.created_by, d.name AS dept_name
+                                 FROM imgedit_labels l LEFT JOIN department d ON d.id = l.owner_dept_id
+                                 WHERE l.owner_type = 'company'
+                                    OR (l.owner_type = 'dept' AND $deptCond)
+                                    OR (l.owner_type = 'private' AND l.owner_user_id = :uid)
+                                 ORDER BY l.category ASC, l.label_id DESC");
+            $st->execute($params);
+            $allDepts = [];
+            if ($isMgr) {
+                try { $allDepts = $pdo->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC); } catch (Exception $e) {}
+            }
+            echo json_encode(['success' => true, 'labels' => $st->fetchAll(PDO::FETCH_ASSOC),
+                              'my_depts' => $myDepts, 'all_depts' => $allDepts, 'is_mgr' => $isMgr, 'uid' => $uid]);
+        } elseif ($act === 'save_label') {
+            $name  = trim($_POST['name'] ?? '');
+            $cat   = trim($_POST['category'] ?? '');
+            $scope = $_POST['scope'] ?? 'private';
+            $deptId = (int)($_POST['dept_id'] ?? 0);
+            $spec  = $_POST['spec'] ?? '';
+            if ($name === '' || $spec === '') throw new Exception('缺少標籤名稱或內容');
+            if (json_decode($spec) === null) throw new Exception('標籤內容格式錯誤');
+            if (!in_array($scope, ['private', 'dept', 'company'], true)) throw new Exception('範圍參數錯誤');
+            if ($scope === 'company' && !$isMgr) throw new Exception('只有管理者可存公司共用標籤');
+            if ($scope === 'dept') {
+                if ($deptId <= 0) throw new Exception('請選擇部門');
+                if (!$isMgr && !in_array($deptId, $myDeptIds, true)) throw new Exception('只能存到自己所屬的部門');
+            }
+            if (mb_strlen($name) > 100) $name = mb_substr($name, 0, 100);
+            if (mb_strlen($cat) > 50) $cat = mb_substr($cat, 0, 50);
+            // 內嵌圖片抽離到 NAS（U<uid>/D<dept>/company 資料夾）；NAS 不可用時保留 base64 照常運作
+            $specArr = json_decode($spec, true);
+            if (is_array($specArr)) {
+                $sub = imgedit_label_sub($scope, $uid, $deptId);
+                $dir = imgedit_label_dir($labelNasBase, $sub);
+                $n = 0;
+                if (is_dir($dir)) imgedit_extract_images($specArr, $dir, 'image_editor.php?action=label_file&f=' . $sub . '/', $n);
+                $spec = json_encode($specArr, JSON_UNESCAPED_UNICODE);
+            }
+            $pdo->beginTransaction();
+            $st = $pdo->prepare("INSERT INTO imgedit_labels (label_name, category, owner_type, owner_user_id, owner_dept_id, spec_json, created_by, created_at)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
+            $st->execute([$name, ($cat !== '' ? $cat : null), $scope, $uid, ($scope === 'dept' ? $deptId : null), $spec, $userName]);
+            $newId = $pdo->lastInsertId();
+            $pdo->commit();
+            echo json_encode(['success' => true, 'label_id' => $newId]);
+        } elseif ($act === 'delete_label') {
+            $lid = (int)($_POST['label_id'] ?? 0);
+            if ($lid <= 0) throw new Exception('缺少標籤編號');
+            $row = $pdo->prepare("SELECT owner_type, owner_user_id, owner_dept_id FROM imgedit_labels WHERE label_id = ?");
+            $row->execute([$lid]);
+            $r = $row->fetch(PDO::FETCH_ASSOC);
+            if (!$r) throw new Exception('標籤不存在');
+            $ok = $isMgr
+                || ((int)$r['owner_user_id'] === $uid)                                            // 建立者本人
+                || ($r['owner_type'] === 'dept' && in_array((int)$r['owner_dept_id'], $myDeptIds, true)); // 同部門
+            if (!$ok) throw new Exception('公司共用標籤僅管理者可刪除');
+            $pdo->beginTransaction();
+            $pdo->prepare("DELETE FROM imgedit_labels WHERE label_id = ?")->execute([$lid]);
+            $pdo->commit();
+            echo json_encode(['success' => true]);
+        } elseif ($act === 'move_labels') {
+            // 多選複製/搬移標籤到其他範圍（預設私人 → 部門）
+            $ids  = json_decode($_POST['label_ids'] ?? '[]', true);
+            $mode = $_POST['mode'] ?? 'copy';                 // copy | move
+            $scope = $_POST['scope'] ?? 'dept';               // dept | company
+            $deptId = (int)($_POST['dept_id'] ?? 0);
+            if (!is_array($ids) || !$ids) throw new Exception('未選擇標籤');
+            if (!in_array($mode, ['copy', 'move'], true)) throw new Exception('模式錯誤');
+            if (!in_array($scope, ['private', 'dept', 'company'], true)) throw new Exception('目標範圍錯誤');
+            if ($scope === 'company' && !$isMgr) throw new Exception('只有管理者可放到公司共用');
+            // scope=private：收進自己的私人標籤庫（owner 檢查同下，僅能動自己的標籤；管理者不受限）
+            // scope=dept 支援多部門（dept_ids JSON 陣列）：move=第一個部門為搬移、其餘為複製；copy=每個部門各複製一份
+            $deptIds = json_decode($_POST['dept_ids'] ?? '[]', true);
+            if (!is_array($deptIds)) $deptIds = [];
+            $deptIds = array_values(array_unique(array_filter(array_map('intval', $deptIds), fn($v) => $v > 0)));
+            if (!$deptIds && $deptId > 0) $deptIds = [$deptId];
+            if ($scope === 'dept') {
+                if (!$deptIds) throw new Exception('請至少選擇一個目標部門');
+                foreach ($deptIds as $d) {
+                    if (!$isMgr && !in_array($d, $myDeptIds, true)) throw new Exception('只能放到自己所屬的部門');
+                }
+            }
+            $ids = array_values(array_unique(array_map('intval', $ids)));
+            $pdo->beginTransaction();
+            $sel = $pdo->prepare("SELECT * FROM imgedit_labels WHERE label_id = ?");
+            $ins = $pdo->prepare("INSERT INTO imgedit_labels (label_name, category, owner_type, owner_user_id, owner_dept_id, spec_json, created_by, created_at)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
+            $upd = $pdo->prepare("UPDATE imgedit_labels SET owner_type = ?, owner_user_id = ?, owner_dept_id = ?, spec_json = ? WHERE label_id = ?");
+            $done = 0;
+            foreach ($ids as $lid) {
+                $sel->execute([$lid]);
+                $r = $sel->fetch(PDO::FETCH_ASSOC);
+                if (!$r) continue;
+                if (!$isMgr && (int)$r['owner_user_id'] !== $uid) continue;   // 只能動自己的標籤
+                if ($scope === 'dept') {
+                    $first = true;
+                    foreach ($deptIds as $d) {
+                        $sub = 'D' . $d;
+                        $newSpec = imgedit_relocate_files($r['spec_json'], $labelNasBase, $sub);
+                        if ($mode === 'move' && $first) $upd->execute(['dept', (int)$r['owner_user_id'] ?: $uid, $d, $newSpec, $lid]);
+                        else $ins->execute([$r['label_name'], $r['category'], 'dept', $uid, $d, $newSpec, $userName]);
+                        $first = false;
+                    }
+                } else {
+                    $sub = imgedit_label_sub($scope, $uid, 0);
+                    $newSpec = imgedit_relocate_files($r['spec_json'], $labelNasBase, $sub);
+                    if ($mode === 'copy') $ins->execute([$r['label_name'], $r['category'], $scope, $uid, null, $newSpec, $userName]);
+                    else $upd->execute([$scope, ($scope === 'private' ? $uid : ((int)$r['owner_user_id'] ?: $uid)), null, $newSpec, $lid]);
+                }
+                $done++;
+            }
+            $pdo->commit();
+            echo json_encode(['success' => true, 'count' => $done]);
+        } elseif ($act === 'set_label_flag') {
+            // 批次設定「不顯示標籤名稱」（標籤內容與名稱幾乎相同時使用）
+            $ids = json_decode($_POST['label_ids'] ?? '[]', true);
+            $hide = (int)($_POST['hide_name'] ?? 0) ? 1 : 0;
+            if (!is_array($ids) || !$ids) throw new Exception('未選擇標籤');
+            $ids = array_values(array_unique(array_map('intval', $ids)));
+            $pdo->beginTransaction();
+            $sel = $pdo->prepare("SELECT owner_user_id FROM imgedit_labels WHERE label_id = ?");
+            $upd = $pdo->prepare("UPDATE imgedit_labels SET hide_name = ? WHERE label_id = ?");
+            $done = 0;
+            foreach ($ids as $lid) {
+                $sel->execute([$lid]);
+                $r = $sel->fetch(PDO::FETCH_ASSOC);
+                if (!$r) continue;
+                if (!$isMgr && (int)$r['owner_user_id'] !== $uid) continue;   // 只能改自己的標籤
+                $upd->execute([$hide, $lid]);
+                $done++;
+            }
+            $pdo->commit();
+            echo json_encode(['success' => true, 'count' => $done]);
+        } elseif ($act === 'part_search') {
+            // 料號搜尋（料號/圖號）
+            $q = trim($_POST['q'] ?? '');
+            if ($q === '') throw new Exception('請輸入料號或圖號關鍵字');
+            $st = $pdo->prepare("SELECT d_id, D_Setting_Id, Drawing_No FROM d_setting
+                                 WHERE D_Setting_Id LIKE ? OR Drawing_No LIKE ?
+                                 ORDER BY d_id DESC LIMIT 20");
+            $like = '%' . $q . '%';
+            $st->execute([$like, $like]);
+            echo json_encode(['success' => true, 'parts' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+        } elseif ($act === 'save_workfile') {
+            // 存成料號附件：壓平 PNG（附件系統可見）＋ .egwork.json 工作檔（批圖編輯器可重開繼續編輯）
+            $dId = (int)($_POST['d_id'] ?? 0);
+            $name = trim($_POST['name'] ?? '') ?: ('批圖_' . date('Ymd_Hi'));
+            $png = $_POST['png'] ?? '';
+            $work = $_POST['work'] ?? '';
+            // 分享範圍：私人／部門共用（預設）／指定人員；沒有「全公司共用」，避免任何人都能改到
+            $scope = in_array($_POST['scope'] ?? 'dept', ['private', 'dept', 'custom'], true) ? $_POST['scope'] : 'dept';
+            $shareIds = json_decode($_POST['share_user_ids'] ?? '[]', true);
+            if (!is_array($shareIds)) $shareIds = [];
+            $shareIds = array_values(array_unique(array_map('intval', $shareIds)));
+            $deptId = (int)($_POST['dept_id'] ?? 0);
+            if ($scope === 'dept' && (!$deptId || !in_array($deptId, $myDeptIds, true))) $deptId = $myDeptIds[0] ?? 0;
+            if ($dId <= 0) throw new Exception('請先選擇料號');
+            if (strpos($png, 'data:image/png;base64,') !== 0) throw new Exception('圖檔資料異常');
+            if (json_decode($work) === null) throw new Exception('工作檔資料異常');
+            $pb = imgedit_part_base($pdo);
+            if ($pb === '') throw new Exception('尚未設定料號附件儲存路徑（附件系統設定）');
+            $dir = $pb . DIRECTORY_SEPARATOR . $dId;
+            if (!is_dir($dir) && !@mkdir($dir, 0777, true)) throw new Exception('無法建立料號附件目錄（NAS 權限？）');
+            $stamp = date('Ymd_His') . '_' . bin2hex(random_bytes(3));
+            $pngFile = 'egdraw_' . $stamp . '.png';
+            $bin = base64_decode(substr($png, strpos($png, ',') + 1));
+            if ($bin === false || @file_put_contents($dir . DIRECTORY_SEPARATOR . $pngFile, $bin) === false) throw new Exception('圖檔寫入失敗');
+            // 工作檔：抽離內嵌底圖 → 同目錄實體檔，JSON 只留引用
+            $workArr = json_decode($work, true);
+            $n = 0;
+            imgedit_extract_images($workArr, $dir, 'image_editor.php?action=part_file&d=' . $dId . '&f=', $n);
+            $workFile = 'egdraw_' . $stamp . '.egwork.json';
+            if (@file_put_contents($dir . DIRECTORY_SEPARATOR . $workFile, json_encode($workArr, JSON_UNESCAPED_UNICODE)) === false) throw new Exception('工作檔寫入失敗');
+            $pdo->beginTransaction();
+            $ins = $pdo->prepare("INSERT INTO part_attachments (d_id, filename, original_name, note, uploaded_by, uploaded_by_id, uploaded_at)
+                                  VALUES (?, ?, ?, ?, ?, ?, NOW())");
+            $ins->execute([$dId, $pngFile, $name . '.png', '批圖編輯器輸出圖', $userName, $uid]);
+            $pngId = $pdo->lastInsertId();
+            $ins->execute([$dId, $workFile, $name . '.egwork.json', '批圖工作檔（可用批圖編輯器重新開啟，標籤仍可編輯）', $userName, $uid]);
+            $workId = $pdo->lastInsertId();
+            $pdo->prepare("INSERT INTO imgedit_workfile_meta (attachment_id, owner_type, owner_dept_id) VALUES (?, ?, ?)")
+                ->execute([$workId, $scope, ($scope === 'dept' && $deptId) ? $deptId : null]);
+            if ($scope === 'custom' && $shareIds) {
+                $shareIns = $pdo->prepare("INSERT IGNORE INTO imgedit_workfile_share (attachment_id, user_id) VALUES (?, ?)");
+                foreach ($shareIds as $sid) { if ($sid > 0) $shareIns->execute([$workId, $sid]); }
+            }
+            // 保留上限：同一料號工作檔數量超過上限時，砍掉最舊的（絕不會刪到剛存好的這份）
+            $allIds = $pdo->prepare("SELECT id FROM part_attachments
+                                     WHERE d_id = ? AND deleted_at IS NULL AND filename LIKE '%.egwork.json'
+                                     ORDER BY id DESC");
+            $allIds->execute([$dId]);
+            $existing = $allIds->fetchAll(PDO::FETCH_COLUMN);
+            $removed = 0;
+            if (count($existing) > $workfileMaxCount) {
+                $delSt = $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE id = ?");
+                foreach (array_slice($existing, $workfileMaxCount) as $rid) {
+                    $delSt->execute([$userName . '（系統自動：超過保留上限 ' . $workfileMaxCount . ' 份）', $rid]);
+                    $removed++;
+                }
+            }
+            $pdo->commit();
+            echo json_encode(['success' => true, 'png_id' => $pngId, 'work_id' => $workId, 'extracted' => $n, 'auto_removed' => $removed]);
+        } elseif ($act === 'list_workfiles') {
+            $dId = (int)($_POST['d_id'] ?? 0);
+            if ($dId <= 0) throw new Exception('缺少料號');
+            $st = $pdo->prepare("SELECT pa.id, pa.original_name, pa.uploaded_by, pa.uploaded_by_id, pa.uploaded_at,
+                                        m.owner_type, m.owner_dept_id
+                                 FROM part_attachments pa
+                                 LEFT JOIN imgedit_workfile_meta m ON m.attachment_id = pa.id
+                                 WHERE pa.d_id = ? AND pa.deleted_at IS NULL AND pa.filename LIKE '%.egwork.json'
+                                 ORDER BY pa.id DESC LIMIT 30");
+            $st->execute([$dId]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            $shareChk = $pdo->prepare("SELECT COUNT(*) FROM imgedit_workfile_share WHERE attachment_id = ? AND user_id = ?");
+            $out = [];
+            foreach ($rows as $i => $r) {
+                // 舊資料沒有 meta 紀錄（改版前存的）→ 視為公司共用，維持改版前「大家都看得到」的行為
+                $ownerType = $r['owner_type'] ?: 'company';
+                $visible = $isMgr || (int)$r['uploaded_by_id'] === $uid || $ownerType === 'company';
+                if (!$visible && $ownerType === 'dept') $visible = in_array((int)$r['owner_dept_id'], $myDeptIds, true);
+                if (!$visible && $ownerType === 'custom') {
+                    $shareChk->execute([$r['id'], $uid]);
+                    $visible = (int)$shareChk->fetchColumn() > 0;
+                }
+                if (!$visible) continue;
+                $out[] = ['id' => $r['id'], 'original_name' => $r['original_name'], 'uploaded_by' => $r['uploaded_by'],
+                          'uploaded_at' => $r['uploaded_at'], 'scope' => $ownerType,
+                          'is_latest' => ($i === 0), 'can_delete' => ($canDeleteWorkfile && $i !== 0)];
+            }
+            echo json_encode(['success' => true, 'works' => $out]);
+        } elseif ($act === 'load_workfile') {
+            $wid = (int)($_POST['id'] ?? 0);
+            if ($wid <= 0) throw new Exception('缺少工作檔編號');
+            $st = $pdo->prepare("SELECT pa.d_id, pa.filename, pa.original_name, pa.uploaded_by_id, m.owner_type, m.owner_dept_id
+                                 FROM part_attachments pa LEFT JOIN imgedit_workfile_meta m ON m.attachment_id = pa.id
+                                 WHERE pa.id = ? AND pa.deleted_at IS NULL");
+            $st->execute([$wid]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$r) throw new Exception('找不到工作檔');
+            $ownerType = $r['owner_type'] ?: 'company';
+            $canSee = $isMgr || (int)$r['uploaded_by_id'] === $uid || $ownerType === 'company';
+            if (!$canSee && $ownerType === 'dept') $canSee = in_array((int)$r['owner_dept_id'], $myDeptIds, true);
+            if (!$canSee && $ownerType === 'custom') {
+                $chk = $pdo->prepare("SELECT COUNT(*) FROM imgedit_workfile_share WHERE attachment_id = ? AND user_id = ?");
+                $chk->execute([$wid, $uid]);
+                $canSee = (int)$chk->fetchColumn() > 0;
+            }
+            if (!$canSee) throw new Exception('沒有這份工作檔的存取權限');
+            $pb = imgedit_part_base($pdo);
+            $path = $pb . DIRECTORY_SEPARATOR . $r['d_id'] . DIRECTORY_SEPARATOR . basename($r['filename']);
+            if (!is_file($path)) throw new Exception('工作檔實體檔不存在（' . $r['filename'] . '）');
+            $content = @file_get_contents($path);
+            if ($content === false || json_decode($content) === null) throw new Exception('工作檔讀取失敗或格式異常');
+            echo json_encode(['success' => true, 'work' => $content, 'name' => $r['original_name']]);
+        } elseif ($act === 'delete_workfile') {
+            if (!$canDeleteWorkfile) throw new Exception('沒有工作檔刪除權限');
+            $wid = (int)($_POST['id'] ?? 0);
+            if ($wid <= 0) throw new Exception('缺少工作檔編號');
+            $st = $pdo->prepare("SELECT id, d_id FROM part_attachments WHERE id = ? AND deleted_at IS NULL AND filename LIKE '%.egwork.json'");
+            $st->execute([$wid]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$r) throw new Exception('找不到工作檔');
+            $latest = $pdo->prepare("SELECT id FROM part_attachments
+                                     WHERE d_id = ? AND deleted_at IS NULL AND filename LIKE '%.egwork.json'
+                                     ORDER BY id DESC LIMIT 1");
+            $latest->execute([$r['d_id']]);
+            if ((int)$latest->fetchColumn() === $wid) throw new Exception('這是目前最新的工作檔，不能刪除');
+            $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE id = ?")->execute([$userName, $wid]);
+            echo json_encode(['success' => true]);
+        } elseif ($act === 'list_users_for_share') {
+            // 只列出「目前有批圖編輯器使用權」的人：管理者（status 9/90 或系統 admin 角色）、
+            // 或已被指派 imgedit 模組角色者；若全系統尚無人被指派 imgedit 角色（頁面暫時開放全部登入者的狀態），
+            // 則不篩選，比照頁面本身現在的開放狀態
+            $assignedTotal = (int)$pdo->query("SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
+                                               WHERE r.module = 'imgedit'")->fetchColumn();
+            $where = "u.state != 0";
+            if ($assignedTotal > 0) {
+                $where .= " AND (u.user_status IN (9,90)
+                    OR EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
+                               WHERE ur.user_id = u.id AND r.role_code = 'admin' AND r.is_system = 1)
+                    OR EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
+                               WHERE ur.user_id = u.id AND r.module = 'imgedit'))";
+            }
+            $rows = $pdo->query("SELECT u.id, u.user_cname, d.name AS dept_name, p.name AS pos_name
+                                 FROM user u
+                                 LEFT JOIN user_department_position_map dp ON dp.user_id = u.id AND dp.is_main = 1
+                                 LEFT JOIN department d ON d.id = dp.department_id
+                                 LEFT JOIN position p ON p.id = dp.position_id
+                                 WHERE $where
+                                 ORDER BY u.user_cname")->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success' => true, 'users' => $rows]);
+        } elseif ($act === 'save_user_prefs') {
+            // 個人畫圖偏好（顏色/粗細/印章大小…），存到 system_settings，key 依使用者 id 區分
+            $prefs = json_decode($_POST['prefs'] ?? '{}', true);
+            if (!is_array($prefs)) $prefs = [];
+            // 白名單欄位，避免被塞進奇怪的東西
+            $allowed = ['stroke', 'width', 'lineEnds', 'fill', 'fillOn', 'textColor', 'fontSize', 'bold',
+                        'textBg', 'textBgOn', 'balloonSize', 'dcShape', 'dcSize', 'stampSize', 'maskColor', 'cropTransparent'];
+            $clean = [];
+            foreach ($allowed as $k) if (array_key_exists($k, $prefs)) $clean[$k] = $prefs[$k];
+            $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by)
+                           VALUES (?, ?, ?, ?)
+                           ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                               updated_by_id = VALUES(updated_by_id), updated_by = VALUES(updated_by)")
+                ->execute(['imgedit_user_prefs_' . $uid, json_encode($clean, JSON_UNESCAPED_UNICODE), $uid, $userName]);
+            echo json_encode(['success' => true]);
+        } elseif ($act === 'save_resize_presets') {
+            // 個人常用「圖面像素縮放」尺寸，最多3組
+            $presets = json_decode($_POST['presets'] ?? '[]', true);
+            if (!is_array($presets)) $presets = [];
+            $clean = [];
+            foreach (array_slice($presets, 0, 3) as $p) {
+                if (!is_array($p)) continue;
+                $name = trim((string)($p['name'] ?? ''));
+                $w = (int)($p['w'] ?? 0);
+                $h = (int)($p['h'] ?? 0);
+                if ($name === '' || $w < 10 || $h < 10) continue;
+                $clean[] = ['name' => mb_substr($name, 0, 30), 'w' => $w, 'h' => $h];
+            }
+            $defIdx = (int)($_POST['default_index'] ?? 0);
+            if ($defIdx < 0 || $defIdx >= count($clean)) $defIdx = 0;
+            $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by)
+                           VALUES (?, ?, ?, ?)
+                           ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                               updated_by_id = VALUES(updated_by_id), updated_by = VALUES(updated_by)")
+                ->execute(['imgedit_resize_presets_' . $uid,
+                           json_encode(['presets' => $clean, 'default_index' => $defIdx], JSON_UNESCAPED_UNICODE),
+                           $uid, $userName]);
+            echo json_encode(['success' => true]);
+        } elseif ($act === 'set_label_category') {
+            // 批次設定分類（分類名稱由使用者自訂，空字串＝未分類）
+            $ids = json_decode($_POST['label_ids'] ?? '[]', true);
+            $cat = trim($_POST['category'] ?? '');
+            if (!is_array($ids) || !$ids) throw new Exception('未選擇標籤');
+            if (mb_strlen($cat) > 50) $cat = mb_substr($cat, 0, 50);
+            $ids = array_values(array_unique(array_map('intval', $ids)));
+            $pdo->beginTransaction();
+            $sel = $pdo->prepare("SELECT owner_user_id FROM imgedit_labels WHERE label_id = ?");
+            $upd = $pdo->prepare("UPDATE imgedit_labels SET category = ? WHERE label_id = ?");
+            $done = 0;
+            foreach ($ids as $lid) {
+                $sel->execute([$lid]);
+                $r = $sel->fetch(PDO::FETCH_ASSOC);
+                if (!$r) continue;
+                if (!$isMgr && (int)$r['owner_user_id'] !== $uid) continue;   // 只能改自己的標籤
+                $upd->execute([($cat !== '' ? $cat : null), $lid]);
+                $done++;
+            }
+            $pdo->commit();
+            echo json_encode(['success' => true, 'count' => $done]);
+        } elseif ($act === 'get_stamp_users') {
+            if (!$isMgr) throw new Exception('只有管理者可設定印章使用人員');
+            $depts = $pdo->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+            $users = $pdo->query("SELECT DISTINCT m.department_id, u.id, u.user_cname
+                                  FROM user_department_position_map m JOIN user u ON u.id = m.user_id
+                                  ORDER BY m.department_id, u.id")->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success' => true, 'depts' => $depts, 'users' => $users, 'selected' => $stampUserIds, 'color' => $deptStampColor]);
+        } elseif ($act === 'save_stamp_users') {
+            if (!$isMgr) throw new Exception('只有管理者可設定印章使用人員');
+            $ids = json_decode($_POST['user_ids'] ?? '[]', true);
+            if (!is_array($ids)) throw new Exception('人員名單格式錯誤');
+            $ids = array_values(array_unique(array_map('intval', $ids)));
+            $color = (($_POST['color'] ?? 'blue') === 'red') ? 'red' : 'blue';
+            $pdo->beginTransaction();
+            $st = $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by)
+                                 VALUES ('imgedit_stamp_user_ids', ?, ?, ?)
+                                 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                                     updated_by_id = VALUES(updated_by_id), updated_by = VALUES(updated_by)");
+            $st->execute([json_encode($ids), $uid, $userName]);
+            $st2 = $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by)
+                                 VALUES ('imgedit_dept_stamp_color', ?, ?, ?)
+                                 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                                     updated_by_id = VALUES(updated_by_id), updated_by = VALUES(updated_by)");
+            $st2->execute([$color, $uid, $userName]);
+            $pdo->commit();
+            echo json_encode(['success' => true, 'count' => count($ids), 'color' => $color]);
+        } else {
+            throw new Exception('未知的動作');
+        }
+    } catch (Exception $e) {
+        if (isset($pdo) && $pdo && $pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+// ── 印章資料：公司全名（customer_list.is_own_company=1）與使用者中文名 ──
+$ownCompany = '';
+$userCname  = $userName;
+try {
+    if (isset($pdo) && $pdo) {
+        $r = $pdo->query("SELECT customer_full, customer FROM customer_list WHERE is_own_company = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        if ($r) $ownCompany = ($r['customer_full'] ?: $r['customer']) ?: '';
+        $st = $pdo->prepare("SELECT user_cname FROM user WHERE id = ? LIMIT 1");
+        $st->execute([$uid]);
+        $cn = $st->fetchColumn();
+        if ($cn) $userCname = $cn;
+    }
+} catch (Exception $e) { /* 取不到就用帳號名 */ }
+
+$safeUser  = htmlspecialchars($userCname ?: $userName, ENT_QUOTES, 'UTF-8');   // 右上角顯示中文姓名
+$safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
+?>
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>批圖編輯器 - EGsystem</title>
+<link href="../../resource/css/font-awesome.min.css" rel="stylesheet">
+<style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    body { font-family: "Microsoft JhengHei", "PingFang TC", sans-serif; font-size: 13px; background: #2c2f33; color: #e8e8e8; display: flex; flex-direction: column; }
+
+    /* ── 頂列 ── */
+    #topbar { height: 44px; background: #22252a; border-bottom: 1px solid #111; display: flex; align-items: center; gap: 6px; padding: 0 10px; flex-shrink: 0; }
+    #topbar .brand { font-weight: 700; font-size: 14px; color: #6fc3ff; margin-right: 6px; white-space: nowrap; }
+    .tb-btn { background: #34383f; color: #e8e8e8; border: 1px solid #45494f; border-radius: 4px; padding: 5px 9px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+    .tb-btn:hover { background: #43484f; }
+    .tb-btn.primary { background: #2779bd; border-color: #3a8ed1; }
+    .tb-btn.primary:hover { background: #3189d0; }
+    .tb-sep { width: 1px; height: 24px; background: #45494f; margin: 0 3px; flex-shrink: 0; }
+    #user-info { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; color: #aaa; white-space: nowrap; }
+    #help-icon { width: 20px; height: 20px; border-radius: 50%; background: #45494f; color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; font-size: 12px; }
+    #help-icon:hover { background: #2779bd; }
+
+    /* ── 主區 ── */
+    #main { flex: 1; display: flex; min-height: 0; }
+
+    /* 左側工具列 */
+    #toolbar { width: 52px; background: #22252a; border-right: 1px solid #111; display: flex; flex-direction: column; align-items: center; padding: 6px 0; gap: 3px; flex-shrink: 0; overflow-y: auto; }
+    .tool-btn { width: 40px; height: 38px; border: none; border-radius: 6px; background: transparent; color: #cfcfcf; font-size: 15px; cursor: pointer; position: relative; }
+    .tool-btn:hover { background: #34383f; }
+    .tool-btn.active { background: #2779bd; color: #fff; }
+    .tool-btn .kbd { position: absolute; bottom: 1px; right: 3px; font-size: 8px; color: #8fa4b3; }
+    .tool-group-sep { width: 30px; height: 1px; background: #3c4046; margin: 4px 0; }
+
+    /* 屬性列 */
+    #propbar { height: 40px; background: #292c31; border-bottom: 1px solid #17191c; display: flex; align-items: center; gap: 10px; padding: 0 12px; flex-shrink: 0; overflow-x: auto; }
+    #propbar label { font-size: 11.5px; color: #9aa4ad; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+    #propbar input[type=color] { width: 26px; height: 22px; border: 1px solid #45494f; border-radius: 3px; background: transparent; padding: 0 1px; cursor: pointer; }
+    #propbar input[type=range] { width: 90px; }
+    .ni { width: 54px; background: #1d2024; border: 1px solid #45494f; color: #eee; border-radius: 3px; padding: 3px 5px; font-size: 12px; text-align: center; }
+    .ni::-webkit-outer-spin-button, .ni::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    .ni[type=number] { -moz-appearance: textfield; }
+    .prop-sec { display: none; align-items: center; gap: 10px; }
+    .prop-sec.show { display: inline-flex; }
+    .pb-btn { background: #34383f; color: #ddd; border: 1px solid #45494f; border-radius: 3px; padding: 3px 7px; font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+    .pb-btn:hover { background: #43484f; }
+
+    /* 畫布 */
+    #canvas-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    #canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #3b3f45; }
+    #canvas-wrap canvas { outline: none; }
+
+    /* 底部狀態列 */
+    #statusbar { height: 26px; background: #22252a; border-top: 1px solid #111; display: flex; align-items: center; gap: 16px; padding: 0 12px; font-size: 11.5px; color: #8b949e; flex-shrink: 0; white-space: nowrap; overflow: hidden; }
+    #statusbar b { color: #c7d1da; font-weight: 600; }
+
+    /* 跳窗 */
+    .modal-mask { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 900; }
+    .modal-mask.show { display: flex; align-items: center; justify-content: center; }
+    .modal-box { background: #2c2f33; border: 1px solid #45494f; border-radius: 8px; min-width: 360px; max-width: 560px; max-height: 85vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+    .modal-box h3 { font-size: 14px; padding: 12px 16px; border-bottom: 1px solid #3c4046; color: #6fc3ff; }
+    .modal-body { padding: 14px 16px; font-size: 12.5px; line-height: 1.7; }
+    .modal-foot { padding: 10px 16px; border-top: 1px solid #3c4046; text-align: right; display: flex; gap: 8px; justify-content: flex-end; }
+    .modal-body table { width: 100%; border-collapse: collapse; }
+    .modal-body td, .modal-body th { border: 1px solid #45494f; padding: 4px 8px; font-size: 12px; }
+    .modal-body .frm-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+    .modal-body .frm-row label { min-width: 84px; color: #9aa4ad; }
+    .modal-body select, .modal-body input[type=text] { background: #1d2024; border: 1px solid #45494f; color: #eee; border-radius: 3px; padding: 4px 6px; font-size: 12px; }
+
+    /* 標籤庫面板（左緣可拖曳調寬；夠寬時標籤自動排兩列以上） */
+    #label-lib { display: none; position: absolute; top: 0; right: 0; bottom: 0; width: 250px; min-width: 220px; max-width: 70vw; background: #26292e; border-left: 1px solid #111; z-index: 600; flex-direction: column; }
+    #label-lib.show { display: flex; }
+    #lib-resizer { position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 610; }
+    #lib-resizer:hover, #lib-resizer.active { background: rgba(111,195,255,.35); }
+    #lib-presets, #lib-customs { display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start; }
+    #lib-presets .lib-sec, #lib-customs .lib-sec { width: 100%; margin-bottom: 0; }
+    #lib-presets .lib-item, #lib-customs .lib-item { flex: 1 1 180px; min-width: 180px; max-width: 100%; margin-bottom: 0; }
+    #label-lib .lib-head { padding: 9px 12px; border-bottom: 1px solid #3c4046; display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: #6fc3ff; font-weight: 700; }
+    #label-lib .lib-body { flex: 1; overflow-y: auto; padding: 8px; }
+    #label-lib .lib-sec { font-size: 11px; color: #8b949e; margin: 8px 4px 4px; }
+    .lib-item { background: #fff; border: 1px solid #45494f; border-radius: 6px; margin-bottom: 8px; cursor: pointer; position: relative; padding: 8px; text-align: center; }
+    .lib-item:hover { border-color: #6fc3ff; box-shadow: 0 0 0 2px rgba(111,195,255,.25); }
+    .lib-item img { max-width: 100%; max-height: 86px; }
+    .lib-item .lib-name { display: block; font-size: 11px; color: #555; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lib-item .lib-del { position: absolute; top: 3px; right: 5px; color: #c0392b; font-size: 13px; padding: 2px 5px; display: none; }
+    .lib-item:hover .lib-del { display: block; }
+    #label-lib .lib-foot { padding: 8px; border-top: 1px solid #3c4046; }
+
+    /* 標籤管理跳窗（框選/Ctrl多選/拖曳搬移） */
+    #libmgr-body { display: flex; gap: 10px; height: 62vh; min-width: 0; }
+    .lm-col { flex: 1; min-width: 170px; background: #1d2024; border: 1px solid #3c4046; border-radius: 6px; display: flex; flex-direction: column; min-height: 0; }
+    .lm-col-head { padding: 6px 10px; font-size: 12.5px; font-weight: 700; border-bottom: 1px solid #3c4046; display: flex; align-items: center; gap: 6px; }
+    .lm-grid { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start; }
+    .lm-item { width: 104px; background: #fff; border: 2px solid transparent; border-radius: 5px; padding: 4px; cursor: grab; user-select: none; position: relative; }
+    .lm-item img { max-width: 100%; max-height: 52px; display: block; margin: 0 auto; pointer-events: none; }
+    .lm-item .lm-name { font-size: 10px; color: #444; display: block; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lm-item.sel { border-color: #2779bd; box-shadow: 0 0 0 3px rgba(111,195,255,.85); background: #cfe6fb; }
+    .lm-item.sel::after { content: '✓'; position: absolute; top: -7px; left: -7px; width: 18px; height: 18px; border-radius: 50%; background: #2779bd; color: #fff; font-size: 12px; line-height: 18px; text-align: center; font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.5); }
+    .lm-item.lock { opacity: .5; cursor: not-allowed; }
+    .lm-col.dragover { border-color: #6fc3ff; box-shadow: inset 0 0 0 2px rgba(111,195,255,.45); }
+    .lm-chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid #45494f; color: #8b949e; cursor: pointer; user-select: none; white-space: nowrap; }
+    .lm-chip.on { background: #1abb9c; border-color: #1abb9c; color: #fff; }
+    .lm-dept-badge { position: absolute; top: 2px; right: 4px; font-size: 9px; color: #1abb9c; background: rgba(26,187,156,.12); border-radius: 3px; padding: 0 3px; }
+    #lm-rubber { position: fixed; border: 1px dashed #6fc3ff; background: rgba(39,121,189,.15); z-index: 1200; display: none; pointer-events: none; }
+
+    /* 拖放提示 */
+    #drop-hint { display: none; position: absolute; inset: 14px; border: 3px dashed #6fc3ff; border-radius: 12px; background: rgba(39,121,189,.12); z-index: 500; pointer-events: none; align-items: center; justify-content: center; font-size: 20px; color: #9fd4ff; }
+    #drop-hint.show { display: flex; }
+
+    /* toast */
+    #toast { position: fixed; left: 50%; bottom: 44px; transform: translateX(-50%); background: rgba(20,22,25,.95); color: #fff; border: 1px solid #45494f; padding: 8px 18px; border-radius: 20px; font-size: 12.5px; display: none; z-index: 999; max-width: 80vw; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+    <span class="brand"><i class="fa fa-paint-brush"></i> 批圖編輯器</span>
+    <button class="tb-btn" onclick="openImageFiles()" title="開啟圖片檔（可多選，也可直接拖檔案進來）"><i class="fa fa-folder-open-o"></i> 開啟圖檔</button>
+    <button class="tb-btn" onclick="pasteFromButton()" title="貼上剪貼簿圖片（小畫家複製後按此，或直接 Ctrl+V）"><i class="fa fa-clipboard"></i> 貼上</button>
+    <span class="tb-sep"></span>
+    <button class="tb-btn" onclick="undo()" title="復原 (Ctrl+Z)"><i class="fa fa-undo"></i></button>
+    <button class="tb-btn" onclick="redo()" title="重做 (Ctrl+Y)"><i class="fa fa-repeat"></i></button>
+    <span class="tb-sep"></span>
+    <button class="tb-btn" onclick="zoomFit()" title="縮放至整個畫布 (Ctrl+0)"><i class="fa fa-arrows-alt"></i> 適合視窗</button>
+    <button class="tb-btn" onclick="zoomToSelection()" title="放大檢視目前選取的物件">縮放至選取</button>
+    <span id="zoom-label" style="font-size:12px;color:#9aa4ad;min-width:44px;text-align:center;">100%</span>
+    <span class="tb-sep"></span>
+    <button class="tb-btn" onclick="openCanvasModal()" title="畫布尺寸與背景設定"><i class="fa fa-crop"></i> 畫布</button>
+    <button class="tb-btn" onclick="fitArtboardToContent()" title="畫布自動調整為剛好包住所有內容">適合內容</button>
+    <span class="tb-sep"></span>
+    <button class="tb-btn" onclick="openSecondWindow()" title="再開一個批圖視窗（可移到另一個螢幕；兩窗之間可用「複製選取」互貼）"><i class="fa fa-clone"></i> 開新視窗</button>
+    <button class="tb-btn" onclick="copySelectionCrossWindow()" title="把目前選取的內容複製成圖（可到另一個批圖視窗按 Ctrl+V 貼上）"><i class="fa fa-share-square-o"></i> 複製選取→他窗</button>
+    <span class="tb-sep"></span>
+    <button class="tb-btn" id="btn-label-lib" onclick="toggleLabelLib()" title="標籤庫：內建常用標籤＋自訂標籤，點一下放到圖上"><i class="fa fa-tags"></i> 標籤庫</button>
+    <button class="tb-btn" onclick="openWmModal()" title="浮水印：自訂文字/角度/單一或填滿/濃淡"><i class="fa fa-shield"></i> 浮水印</button>
+    <button class="tb-btn" onclick="openPartModal()" title="存成料號附件（壓平圖＋可再編輯的工作檔），或開啟既有工作檔繼續編輯"><i class="fa fa-archive"></i> 料號附件</button>
+    <button class="tb-btn primary" onclick="openExportModal()" title="列印或另存圖片"><i class="fa fa-download"></i> 匯出 / 列印</button>
+    <div id="user-info">
+        <span><i class="fa fa-user"></i> <?= $safeUser ?>（<?= $safeRole ?>）</span>
+        <span id="help-icon" onclick="showModal('help-modal')" title="權限與操作說明">?</span>
+    </div>
+</div>
+
+<div id="main">
+    <div id="toolbar">
+        <button class="tool-btn active" id="tool-select" onclick="setTool('select')" title="選取 / 移動 / 縮放（Figma 式物件選取）"><i class="fa fa-mouse-pointer"></i><span class="kbd">V</span></button>
+        <button class="tool-btn" id="tool-pan" onclick="setTool('pan')" title="平移畫面（或按住空白鍵拖曳）"><i class="fa fa-hand-paper-o"></i><span class="kbd">H</span></button>
+        <div class="tool-group-sep"></div>
+        <button class="tool-btn" id="tool-draw" onclick="setTool('draw')" title="畫筆（自由手繪）"><i class="fa fa-pencil"></i><span class="kbd">B</span></button>
+        <button class="tool-btn" id="tool-line" onclick="setTool('line')" title="直線"><i class="fa fa-minus" style="transform:rotate(-45deg)"></i><span class="kbd">L</span></button>
+        <button class="tool-btn" id="tool-arrow" onclick="setTool('arrow')" title="箭頭"><i class="fa fa-long-arrow-right"></i><span class="kbd">A</span></button>
+        <button class="tool-btn" id="tool-rect" onclick="setTool('rect')" title="矩形"><i class="fa fa-square-o"></i><span class="kbd">R</span></button>
+        <button class="tool-btn" id="tool-ellipse" onclick="setTool('ellipse')" title="橢圓"><i class="fa fa-circle-o"></i><span class="kbd">O</span></button>
+        <div class="tool-group-sep"></div>
+        <button class="tool-btn" id="tool-text" onclick="setTool('text')" title="文字（點畫布加入，隨時可再點選拖移、雙擊改字、拉角縮放）"><i class="fa fa-font"></i><span class="kbd">T</span></button>
+        <button class="tool-btn" id="tool-label" onclick="setTool('label')" title="標籤（有底色的文字框，適合製程/客戶標籤）"><i class="fa fa-tag"></i></button>
+        <div class="tool-group-sep"></div>
+        <button class="tool-btn" id="tool-balloon" onclick="setTool('balloon')" title="球標：連續點圖面即依 A、B、C… 自動編號（放上後仍可移動；右下角自動產生「球標A~球標F」範圍文字）" style="font-size:13px;font-weight:700;">Ⓐ</button>
+        <button class="tool-btn" id="tool-dc" onclick="setTool('dc')" title="設變標示：點圖面任意位置放標示（菱形/三角形可選），同時在圖面左上角自動產生設變列表（標示＋今日日期＋可輸入文字，越新越上面）" style="font-size:15px;font-weight:700;">◇</button>
+        <button class="tool-btn" id="tool-stamp" onclick="setTool('stamp')" title="蓋章：本人簽章（紅）/ 技術課章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）/ 發行章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）。透明背景直接蓋在圖上，日期自動帶今天" style="font-size:14px;">㊞</button>
+        <div class="tool-group-sep"></div>
+        <button class="tool-btn" id="tool-maskrect" onclick="setTool('maskrect')" title="遮蓋刪除－長方形（拖出範圍蓋掉客戶資料；顏色可改，放上後仍可移動調整）"><i class="fa fa-eraser"></i><span class="kbd">M</span></button>
+        <button class="tool-btn" id="tool-masklasso" onclick="setTool('masklasso')" title="遮蓋刪除－不規則形（按住拖曳圈出範圍）"><i class="fa fa-scissors"></i></button>
+        <div class="tool-group-sep"></div>
+        <button class="tool-btn" id="tool-cropcopy" onclick="setTool('cropcopy')" title="框選複製：拖出一個範圍，把該範圍的合成影像複製成新圖塊（可貼到別窗、可縮放）"><i class="fa fa-crop"></i><span class="kbd">C</span></button>
+        <button class="tool-btn" id="tool-cropmove" onclick="setTool('cropmove')" title="框選搬移（小畫家式）：拖出範圍後切下該區域，原處補白，直接拖到新位置"><i class="fa fa-arrows"></i><span class="kbd">X</span></button>
+        <button class="tool-btn" id="tool-cropmovelasso" onclick="setTool('cropmovelasso')" title="框選搬移（不規則，小畫家套索式）：按住拖曳圈出任意形狀後放開，切下該範圍直接拖到新位置"><i class="fa fa-object-ungroup"></i></button>
+    </div>
+
+    <div id="canvas-col">
+        <div id="propbar">
+            <!-- 通用（畫筆/形狀） -->
+            <span class="prop-sec show" id="sec-stroke">
+                <label>顏色 <input type="color" id="p-stroke" value="#e53935"></label>
+                <label>粗細 <input type="range" id="p-width" min="1" max="40" value="3"> <span id="p-width-v" style="color:#ccc;">3</span></label>
+                <label>端點
+                    <select id="p-line-ends" title="直線/箭頭工具的頭端形式" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;">
+                        <option value="none">─ 無</option>
+                        <option value="end">→ 單箭頭</option>
+                        <option value="both">↔ 雙箭頭</option>
+                    </select>
+                </label>
+                <label>填色
+                    <input type="color" id="p-fill" value="#ffffff">
+                    <input type="checkbox" id="p-fill-on" title="形狀是否填色">
+                </label>
+            </span>
+            <!-- 文字 -->
+            <span class="prop-sec" id="sec-text">
+                <label>文字色 <input type="color" id="p-textcolor" value="#d32f2f"></label>
+                <label>字級 <input type="number" class="ni" id="p-fontsize" value="28" min="6" max="400"></label>
+                <label><input type="checkbox" id="p-bold" checked> 粗體</label>
+                <label>底色
+                    <input type="color" id="p-textbg" value="#fff59d">
+                    <input type="checkbox" id="p-textbg-on" title="文字是否加底色">
+                </label>
+            </span>
+            <!-- 球標 -->
+            <span class="prop-sec" id="sec-balloon">
+                <label>下一個球標 <input type="text" class="ni" id="p-balloon-next" value="A" maxlength="3" style="width:44px;text-transform:uppercase;" title="若原圖上已印有球標（例如已有A~C），把這裡改成 D 接著編"></label>
+                <label>大小 <input type="number" class="ni" id="p-balloon-size" value="40" min="12" max="300"></label>
+                <span style="color:#8b949e;font-size:11px;">連續點圖面自動接續編號；Esc 結束。右下角範圍文字會自動更新（舊的自動刪除重建）</span>
+            </span>
+            <!-- 設變標示 -->
+            <span class="prop-sec" id="sec-dc">
+                <label>樣式
+                    <select id="p-dc-shape" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;">
+                        <option value="diamond">◇ 菱形＋號碼</option>
+                        <option value="triangle">△ 三角形＋號碼</option>
+                    </select>
+                </label>
+                <label>號碼 <input type="number" class="ni" id="p-dc-num" value="1" min="1" max="999" title="同一次設變多處都點同一號；圖面已有其他設變標示時，自行改成接續號碼"></label>
+                <label>大小 <input type="number" class="ni" id="p-dc-size" value="40" min="12" max="300"></label>
+                <span style="color:#8b949e;font-size:11px;">同號碼可連續點多處；該號第一次放置時左上角自動加一列（標示＋今日日期＋雙擊輸入文字，越新越上面）</span>
+            </span>
+            <!-- 蓋章 -->
+            <span class="prop-sec" id="sec-stamp">
+                <label>印章
+                    <select id="p-stamp-type" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;">
+                        <option value="self">本人簽章（紅）</option>
+                        <option value="tech" id="opt-stamp-tech">技術課章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）</option>
+                        <option value="issue" id="opt-stamp-issue">發行章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）</option>
+                    </select>
+                </label>
+                <label>大小 <input type="number" class="ni" id="p-stamp-size" value="110" min="40" max="600"></label>
+                <button class="pb-btn" id="btn-stamp-perm" style="display:none;" onclick="openStampPermModal()" title="設定哪些人員可使用技術課章/發行章（管理者限定）"><i class="fa fa-cog"></i> 用章人員</button>
+                <span style="color:#8b949e;font-size:11px;">點圖面蓋章（透明背景、日期自動帶今天）；Esc 結束</span>
+            </span>
+            <!-- 遮蓋 -->
+            <span class="prop-sec" id="sec-mask">
+                <label>遮蓋色 <input type="color" id="p-maskcolor" value="#ffffff"></label>
+                <span style="color:#8b949e;font-size:11px;">（白色 = 刪除效果；遮蓋後仍是可移動的物件，匯出時才壓平）</span>
+            </span>
+            <!-- 框選複製 / 框選搬移 -->
+            <span class="prop-sec" id="sec-crop">
+                <label><input type="checkbox" id="p-crop-transparent" checked> 透明選擇</label>
+                <span style="color:#8b949e;font-size:11px;">（勾選：白底視為透明，拖到新位置不會蓋住下面的東西，類似小畫家的透明選取；取消勾選＝白底也一起蓋上去）</span>
+            </span>
+            <!-- 選取到物件時 -->
+            <span class="prop-sec" id="sec-object">
+                <label>縮放% <input type="number" class="ni" id="p-scale" value="100" min="1" max="3000"></label>
+                <label>角度 <input type="number" class="ni" id="p-angle" value="0" min="-360" max="360" title="輸入角度直接旋轉（以物件中心）"></label>
+                <label>透明度 <input type="range" id="p-opacity" min="10" max="100" value="100"></label>
+                <button class="pb-btn" onclick="layerCmd('front')" title="移到最上層"><i class="fa fa-angle-double-up"></i> 置頂</button>
+                <button class="pb-btn" onclick="layerCmd('forward')" title="上移一層"><i class="fa fa-angle-up"></i></button>
+                <button class="pb-btn" onclick="layerCmd('backward')" title="下移一層"><i class="fa fa-angle-down"></i></button>
+                <button class="pb-btn" onclick="layerCmd('back')" title="移到最下層"><i class="fa fa-angle-double-down"></i> 置底</button>
+                <button class="pb-btn" onclick="groupCmd()" id="btn-group">群組</button>
+                <button class="pb-btn" onclick="mergeSelection()" title="把多個線條/圖形合併成單一物件：縮放移動不走位、雙擊不會拆開（Alt+雙擊才拆）">合併</button>
+                <button class="pb-btn" id="btn-label-bg" style="display:none;" onclick="toggleLabelBg()" title="切換這個標籤的底色（白底 ⇄ 透明）">底色</button>
+                <button class="pb-btn" onclick="lockSelection()" title="鎖定選取物件：不再被點選（適合底圖）。用右方「解鎖全部」解開"><i class="fa fa-lock"></i> 鎖定</button>
+                <button class="pb-btn" onclick="duplicateSelection()" title="複製一份 (Ctrl+D)；Alt+拖曳也可複製"><i class="fa fa-copy"></i> 複製</button>
+                <button class="pb-btn" style="color:#ff8a80;" onclick="deleteSelection()" title="刪除選取 (Delete)"><i class="fa fa-trash"></i> 刪除</button>
+            </span>
+            <!-- 鎖定資訊（有鎖定物件時恆顯示） -->
+            <span id="lock-info" style="display:none;align-items:center;gap:6px;margin-left:auto;white-space:nowrap;">
+                <span style="font-size:11.5px;color:#e6b800;"><i class="fa fa-lock"></i> 已鎖定 <b id="lock-count">0</b> 個</span>
+                <button class="pb-btn" onclick="unlockAll()" title="解除所有鎖定物件"><i class="fa fa-unlock"></i> 解鎖全部</button>
+            </span>
+        </div>
+        <div id="canvas-wrap">
+            <canvas id="c"></canvas>
+            <div id="drop-hint"><i class="fa fa-picture-o" style="margin-right:10px;"></i>放開以加入圖片</div>
+            <div id="label-lib">
+                <div id="lib-resizer" title="拖曳調整標籤庫寬度"></div>
+                <div class="lib-head"><span><i class="fa fa-tags"></i> 標籤庫</span>
+                    <span>
+                        <button class="pb-btn" id="lib-manage-btn" onclick="openLibMgr()" title="開啟標籤管理跳窗：框選/Ctrl多選，拖曳搬移（Ctrl+拖曳=複製）">管理</button>
+                        <span style="cursor:pointer;color:#8b949e;margin-left:6px;" onclick="toggleLabelLib()" title="關閉"><i class="fa fa-times"></i></span>
+                    </span>
+                </div>
+                <div style="padding:8px 8px 0;">
+                    <select id="lib-cat-filter" onchange="renderLibrary()"
+                        style="width:100%;background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:4px 6px;font-size:12px;">
+                        <option value="">— 全部分類 —</option>
+                    </select>
+                    <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:#9aa4ad;cursor:pointer;"
+                        title="勾選後插入的標籤為透明背景（不遮住圖線）；放上後也可用屬性列「底色」按鈕切換">
+                        <input type="checkbox" id="lib-transparent"> 以透明背景插入
+                    </label>
+                </div>
+                <div class="lib-body">
+                    <div class="lib-sec" style="color:#6fc3ff;">內建標籤（點一下放到圖上，雙擊圖上標籤可改字）</div>
+                    <div id="lib-presets"></div>
+                    <div class="lib-sec" style="color:#6fc3ff;margin-top:14px;">自訂標籤（全體共用）</div>
+                    <div id="lib-customs"><div style="color:#666;font-size:11px;padding:6px;">載入中…</div></div>
+                </div>
+                <div class="lib-foot" style="display:flex;gap:6px;">
+                    <button class="tb-btn" style="flex:1;" onclick="openNewLabelModal()" title="直接輸入文字建立可改字標籤（外框/純文字，之後雙擊可改內容）">
+                        <i class="fa fa-magic"></i> 建立文字標籤
+                    </button>
+                    <button class="tb-btn" style="flex:1;" onclick="saveSelectionAsLabel()" title="把畫布上目前選取的物件存進標籤庫（預設私人）">
+                        <i class="fa fa-plus"></i> 把選取存為標籤
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div id="statusbar">
+            <span>畫布 <b id="st-canvas">1600×1200</b></span>
+            <button class="tb-btn" onclick="openResizeModal()" title="圖面像素縮放設定：輸入目標寬或高，等比例縮放整張圖面；也可以在這裡設定常用尺寸"><i class="fa fa-arrows-alt"></i></button>
+            <button class="tb-btn" onclick="quickResize()" title="一鍵套用預設常用尺寸，整張圖面等比例縮放"><i class="fa fa-bolt"></i> 快速縮放</button>
+            <span id="st-sel">未選取</span>
+            <span id="st-pos"></span>
+            <span style="margin-left:auto;">Ctrl+V 貼圖｜拖檔案進來開圖｜滾輪縮放｜空白鍵拖曳平移｜Delete 刪除｜Ctrl+Z 復原</span>
+        </div>
+    </div>
+</div>
+
+<!-- 匯出 / 列印 -->
+<div class="modal-mask" id="export-modal">
+    <div class="modal-box">
+        <h3><i class="fa fa-download"></i> 匯出 / 列印</h3>
+        <div class="modal-body">
+            <div class="frm-row"><label>範圍</label>
+                <select id="ex-range">
+                    <option value="artboard">整個畫布</option>
+                    <option value="selection">目前選取的物件</option>
+                </select>
+            </div>
+            <div class="frm-row"><label>格式</label>
+                <select id="ex-format">
+                    <option value="png">PNG（無損，適合線圖）</option>
+                    <option value="jpeg">JPG（檔案較小）</option>
+                </select>
+            </div>
+            <div class="frm-row"><label>解析度倍率</label>
+                <select id="ex-mult">
+                    <option value="1">1×（原尺寸）</option>
+                    <option value="2" selected>2×（建議，列印較清晰）</option>
+                    <option value="3">3×</option>
+                    <option value="0.5">0.5×</option>
+                </select>
+            </div>
+            <div class="frm-row"><label>檔名</label>
+                <input type="text" id="ex-name" style="flex:1;" value="">
+            </div>
+            <div id="ex-fs-hint" style="font-size:11.5px;color:#8b949e;margin-top:6px;"></div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn" onclick="hideModal('export-modal')">取消</button>
+            <button class="tb-btn" onclick="doPrint()"><i class="fa fa-print"></i> 列印</button>
+            <button class="tb-btn primary" onclick="doSave()"><i class="fa fa-save"></i> 另存圖片…</button>
+        </div>
+    </div>
+</div>
+
+<!-- 畫布設定 -->
+<div class="modal-mask" id="canvas-modal">
+    <div class="modal-box">
+        <h3><i class="fa fa-crop"></i> 畫布設定</h3>
+        <div class="modal-body">
+            <div class="frm-row"><label>寬 (px)</label><input type="number" class="ni" id="cv-w" style="width:90px;"></div>
+            <div class="frm-row"><label>高 (px)</label><input type="number" class="ni" id="cv-h" style="width:90px;"></div>
+            <div class="frm-row"><label>背景色</label><input type="color" id="cv-bg" value="#ffffff"></div>
+            <div style="font-size:11.5px;color:#8b949e;">提示：開圖時若圖片比畫布大，會自動把畫布撐大。「適合內容」可一鍵讓畫布剛好包住所有物件。</div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn" onclick="hideModal('canvas-modal')">取消</button>
+            <button class="tb-btn primary" onclick="applyCanvasModal()">套用</button>
+        </div>
+    </div>
+</div>
+
+<!-- 浮水印 -->
+<div class="modal-mask" id="wm-modal">
+    <div class="modal-box">
+        <h3><i class="fa fa-shield"></i> 浮水印</h3>
+        <div class="modal-body">
+            <div class="frm-row"><label>文字</label><input type="text" id="wm-text" style="flex:1;" placeholder="例如：超正齒輪 樣本 禁止外流"></div>
+            <div class="frm-row"><label>角度</label>
+                <select id="wm-angle">
+                    <option value="-30" selected>-30°（建議：由左下往右上，最不擋線條）</option>
+                    <option value="-45">-45°（對角線）</option>
+                    <option value="0">0°（水平）</option>
+                    <option value="30">30°</option>
+                    <option value="45">45°</option>
+                </select>
+            </div>
+            <div class="frm-row"><label>重複</label>
+                <select id="wm-mode">
+                    <option value="single">單一（畫布中央一個大字）</option>
+                    <option value="fill" selected>填滿（自動間距鋪滿整張）</option>
+                </select>
+            </div>
+            <div class="frm-row"><label>濃淡</label>
+                <input type="range" id="wm-opacity" min="5" max="60" value="15" style="flex:1;" oninput="document.getElementById('wm-op-v').textContent=this.value+'%'">
+                <span id="wm-op-v" style="min-width:38px;color:#ccc;">15%</span>
+            </div>
+            <div class="frm-row"><label>字級(填滿)</label><input type="number" class="ni" id="wm-size" value="60" min="12" max="400" title="填滿模式的單字大小；單一模式字級自動撐滿畫布約七成寬"></div>
+            <div class="frm-row"><label>顏色</label><input type="color" id="wm-color" value="#888888"></div>
+            <div style="font-size:11.5px;color:#8b949e;">濃淡預設 15%，不影響閱讀圖面；浮水印會自動鎖定（不會被誤點），要調整先按「解鎖全部」。重新套用會取代舊浮水印。</div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn" onclick="removeWatermark();hideModal('wm-modal')"><i class="fa fa-trash"></i> 移除浮水印</button>
+            <button class="tb-btn" onclick="hideModal('wm-modal')">取消</button>
+            <button class="tb-btn primary" onclick="applyWatermark()"><i class="fa fa-check"></i> 套用</button>
+        </div>
+    </div>
+</div>
+
+<!-- 圖面像素縮放 -->
+<div class="modal-mask" id="resize-modal">
+    <div class="modal-box">
+        <h3><i class="fa fa-arrows-alt"></i> 圖面像素縮放</h3>
+        <div class="modal-body">
+            <div style="font-size:11.5px;color:#8b949e;margin-bottom:8px;">目前尺寸：<b id="rs-current">—</b> px。輸入寬或高，另一邊會自動依比例帶出；套用後畫面上所有物件會一起等比例縮放（可 Ctrl+Z 復原）。</div>
+            <div class="frm-row"><label>寬 (px)</label><input type="number" class="ni" id="rs-w" min="10" style="flex:1;"></div>
+            <div class="frm-row"><label>高 (px)</label><input type="number" class="ni" id="rs-h" min="10" style="flex:1;"></div>
+            <div class="frm-row"><button class="tb-btn primary" style="flex:1;" onclick="applyResize()"><i class="fa fa-check"></i> 套用縮放</button></div>
+            <hr style="border-color:#3c4046;margin:12px 0;">
+            <div style="font-weight:700;color:#6fc3ff;font-size:12.5px;margin-bottom:6px;"><i class="fa fa-star"></i> 常用尺寸（最多 3 組，可命名；勾選「預設」＝按「快速縮放」套用的那組）</div>
+            <div id="rs-presets"></div>
+            <div class="frm-row" style="margin-top:6px;">
+                <input type="text" id="rs-preset-name" placeholder="名稱（例如 A4、SOP）" style="flex:1;">
+                <input type="number" class="ni" id="rs-preset-w" placeholder="寬" style="width:70px;">
+                <input type="number" class="ni" id="rs-preset-h" placeholder="高" style="width:70px;">
+                <button class="tb-btn" onclick="addResizePreset()"><i class="fa fa-plus"></i> 新增</button>
+            </div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn" onclick="hideModal('resize-modal')">關閉</button>
+        </div>
+    </div>
+</div>
+
+<!-- 存為標籤 -->
+<div class="modal-mask" id="savelabel-modal">
+    <div class="modal-box">
+        <h3><i class="fa fa-tag"></i> 把選取存為標籤</h3>
+        <div class="modal-body">
+            <div class="frm-row"><label>標籤名稱</label><input type="text" id="sl-name" style="flex:1;" placeholder="例如：熱處理HRC50"></div>
+            <div class="frm-row"><label>分類</label><input type="text" id="sl-cat" list="lib-cat-datalist" style="flex:1;" placeholder="可留空（未分類）；輸入新名稱即新增分類"></div>
+            <datalist id="lib-cat-datalist"></datalist>
+            <div class="frm-row"><label>範圍</label>
+                <select id="sl-scope" onchange="document.getElementById('sl-dept').style.display=(this.value==='dept')?'':'none'">
+                    <option value="private" selected>私人（只有自己看得到）</option>
+                    <option value="dept">部門（同部門共用）</option>
+                </select>
+                <select id="sl-dept" style="display:none;"></select>
+            </div>
+            <div style="font-size:11.5px;color:#8b949e;">預設存為私人標籤；之後可在標籤庫用「管理」多選複製/搬移到部門。標籤放到圖上後仍可雙擊改字、縮放。</div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn" onclick="hideModal('savelabel-modal')">取消</button>
+            <button class="tb-btn primary" onclick="confirmSaveLabel()"><i class="fa fa-save"></i> 儲存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 標籤管理跳窗 -->
+<div class="modal-mask" id="libmgr-modal">
+    <div class="modal-box" style="min-width:82vw;max-width:94vw;">
+        <h3><i class="fa fa-tags"></i> 標籤管理
+            <span style="font-size:11.5px;color:#8b949e;font-weight:400;margin-left:10px;">
+                框選、Ctrl+點選、<b>Shift+點選（範圍）</b>多選 → 拖曳到目標欄＝搬移，<b>按住 Ctrl 拖曳＝複製</b>；部門欄先點亮要發佈的部門（可複選），拖入時同時放到所有亮起的部門
+            </span>
+        </h3>
+        <div class="modal-body" style="max-width:none;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <span style="font-size:12px;color:#9aa4ad;">已選 <b id="lm-sel-count" style="color:#6fc3ff;">0</b> 個</span>
+                <span style="display:flex;gap:6px;flex-wrap:wrap;">
+                    <button class="pb-btn" onclick="lmMakeGroupLabel()" title="把選取的多個標籤組成一個「群組標籤」存進庫：之後點一下整組插入圖面，不用每次自己拉再群組"><i class="fa fa-object-group"></i> 組成群組標籤</button>
+                    <button class="pb-btn" onclick="lmOpenSetCat()" title="批次設定選取標籤的分類（分類名稱自訂，輸入新名稱即新增分類）"><i class="fa fa-folder-o"></i> 設定分類</button>
+                    <button class="pb-btn" onclick="lmSetHideName(1)" title="選取的標籤在標籤庫不顯示名稱（標籤內容與名稱幾乎相同時用；滑鼠停留仍會提示）"><i class="fa fa-eye-slash"></i> 隱藏名稱</button>
+                    <button class="pb-btn" onclick="lmSetHideName(0)" title="恢復顯示標籤名稱"><i class="fa fa-eye"></i> 顯示名稱</button>
+                    <button class="pb-btn" style="color:#ff8a80;" onclick="lmDeleteSelected()"><i class="fa fa-trash"></i> 刪除選取</button>
+                </span>
+            </div>
+            <div id="libmgr-body"></div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn primary" onclick="hideModal('libmgr-modal')">完成</button>
+        </div>
+    </div>
+</div>
+<div id="lm-rubber"></div>
+
+<!-- 料號附件：儲存 / 開啟工作檔 -->
+<div class="modal-mask" id="partfile-modal">
+    <div class="modal-box" style="min-width:480px;">
+        <h3><i class="fa fa-archive"></i> 料號附件</h3>
+        <div class="modal-body">
+            <div class="frm-row"><label>料號/圖號</label>
+                <input type="text" id="pf-q" style="flex:1;" placeholder="輸入料號或圖號關鍵字後按搜尋">
+                <button class="tb-btn" onclick="pfSearch()"><i class="fa fa-search"></i> 搜尋</button>
+            </div>
+            <div class="frm-row"><label>選擇料號</label>
+                <select id="pf-part" style="flex:1;" onchange="pfLoadWorkfiles()"><option value="">— 請先搜尋 —</option></select>
+            </div>
+            <hr style="border-color:#3c4046;margin:10px 0;">
+            <div style="font-weight:700;color:#6fc3ff;font-size:12.5px;margin-bottom:6px;"><i class="fa fa-save"></i> 儲存目前畫布到此料號</div>
+            <div class="frm-row"><label>檔名</label>
+                <input type="text" id="pf-name" style="flex:1;">
+                <button class="tb-btn primary" onclick="pfSave()"><i class="fa fa-save"></i> 儲存</button>
+            </div>
+            <div class="frm-row"><label>分享範圍</label>
+                <select id="pf-scope" style="flex:1;" onchange="pfOnScopeChange()">
+                    <option value="private">私人（只有自己看得到）</option>
+                    <option value="dept" selected>部門共用（同部門看得到）</option>
+                    <option value="custom">指定人員（自選要分享給誰）</option>
+                </select>
+                <select id="pf-dept" style="display:none;"></select>
+            </div>
+            <div id="pf-share-box" style="display:none;margin:6px 0 4px;">
+                <input type="text" id="pf-share-q" placeholder="搜尋姓名篩選" style="width:100%;margin-bottom:4px;" oninput="pfRenderShareUsers()">
+                <div id="pf-share-list" style="max-height:130px;overflow-y:auto;border:1px solid #45494f;border-radius:4px;padding:6px;">載入中…</div>
+            </div>
+            <div style="font-size:11.5px;color:#8b949e;margin-bottom:10px;">
+                會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔沒有「全公司共用」，避免所有人都能改到；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。
+            </div>
+            <hr style="border-color:#3c4046;margin:10px 0;">
+            <div style="font-weight:700;color:#6fc3ff;font-size:12.5px;margin-bottom:6px;"><i class="fa fa-folder-open-o"></i> 開啟此料號的批圖工作檔</div>
+            <div id="pf-works-list" style="max-height:180px;overflow-y:auto;border:1px solid #45494f;border-radius:4px;padding:4px;font-size:12px;">選料號後自動列出</div>
+            <div style="font-size:11.5px;color:#8b949e;margin-top:6px;">開啟會<b>取代目前畫布內容</b>（會先確認）；改完再按上方「儲存」會存成新版本，不覆蓋舊檔。最新一份不能刪除。</div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn" onclick="hideModal('partfile-modal')">關閉</button>
+        </div>
+    </div>
+</div>
+
+<!-- 建立文字標籤（可改字規格標籤建立器） -->
+<div class="modal-mask" id="newlabel-modal">
+    <div class="modal-box" style="min-width:440px;">
+        <h3><i class="fa fa-magic"></i> 建立文字標籤</h3>
+        <div class="modal-body">
+            <div class="frm-row"><label>標籤文字</label>
+                <textarea id="nl-text" rows="3" style="flex:1;background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:4px 6px;font-size:12px;" placeholder="可多行（換行＝標籤內換行）"></textarea>
+            </div>
+            <div class="frm-row"><label>樣式</label>
+                <select id="nl-kind">
+                    <option value="box" selected>█ 外框標籤（粗黑框＋粗體字）</option>
+                    <option value="plain">─ 純文字（無外框）</option>
+                </select>
+                <label style="min-width:0;"><input type="checkbox" id="nl-transparent"> 透明底</label>
+            </div>
+            <div class="frm-row"><label>字級</label>
+                <input type="number" class="ni" id="nl-size" value="44" min="10" max="200">
+                <label style="min-width:0;">對齊</label>
+                <select id="nl-align">
+                    <option value="center" selected>置中</option>
+                    <option value="left">靠左</option>
+                </select>
+            </div>
+            <div class="frm-row"><label>名稱</label><input type="text" id="nl-name" style="flex:1;" placeholder="留空＝以標籤文字第一行當名稱"></div>
+            <div class="frm-row"><label>分類</label><input type="text" id="nl-cat" list="lib-cat-datalist" style="flex:1;" placeholder="可留空"></div>
+            <div class="frm-row"><label>範圍</label>
+                <select id="nl-scope" onchange="document.getElementById('nl-dept').style.display=(this.value==='dept')?'':'none'">
+                    <option value="private" selected>私人</option>
+                    <option value="dept">部門</option>
+                </select>
+                <select id="nl-dept" style="display:none;"></select>
+            </div>
+            <div style="font-size:11.5px;color:#8b949e;">建立後放到圖面仍可雙擊改字、外框自動貼合、屬性列可改文字色與底色。</div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn" onclick="hideModal('newlabel-modal')">取消</button>
+            <button class="tb-btn primary" onclick="confirmNewLabel()"><i class="fa fa-save"></i> 建立</button>
+        </div>
+    </div>
+</div>
+
+<!-- 批次設定分類 -->
+<div class="modal-mask" id="setcat-modal">
+    <div class="modal-box">
+        <h3><i class="fa fa-folder-o"></i> 設定分類</h3>
+        <div class="modal-body">
+            <div class="frm-row"><label>分類名稱</label>
+                <input type="text" id="sc-cat" list="lib-cat-datalist" style="flex:1;" placeholder="輸入新名稱即新增分類；留空＝未分類">
+            </div>
+            <div style="font-size:11.5px;color:#8b949e;">套用到目前選取的標籤（只能改自己的標籤，管理者不限）。要「改分類名稱」：篩選該分類→全選→在此輸入新名稱。</div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn" onclick="hideModal('setcat-modal')">取消</button>
+            <button class="tb-btn primary" onclick="confirmSetCat()"><i class="fa fa-check"></i> 套用</button>
+        </div>
+    </div>
+</div>
+
+<!-- 用章人員設定（管理者限定） -->
+<div class="modal-mask" id="stampperm-modal">
+    <div class="modal-box" style="min-width:420px;">
+        <h3><i class="fa fa-cog"></i> 部門印章使用人員（技術課章／發行章）</h3>
+        <div class="modal-body">
+            <div class="frm-row"><label>部門</label>
+                <select id="sp-dept" onchange="renderStampUsers()" style="flex:1;"></select>
+            </div>
+            <div id="sp-users" style="max-height:260px;overflow-y:auto;border:1px solid #45494f;border-radius:4px;padding:8px;margin-top:6px;">載入中…</div>
+            <div style="font-size:11.5px;color:#8b949e;margin-top:8px;">
+                勾選的人員可使用「技術課章」與「發行章」（跨部門勾選會一併保留）。管理者不受此限制固定可用。本人簽章人人可用。
+            </div>
+            <hr style="border-color:#3c4046;margin:12px 0;">
+            <div class="frm-row"><label>印章顏色</label>
+                <select id="sp-color" style="flex:1;">
+                    <option value="blue">藍色</option>
+                    <option value="red">紅色</option>
+                </select>
+            </div>
+            <div style="font-size:11.5px;color:#8b949e;margin-top:4px;">
+                套用到「技術課章」與「發行章」（全體共用同一個顏色）；本人簽章固定紅色不受此設定影響。
+            </div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn" onclick="hideModal('stampperm-modal')">取消</button>
+            <button class="tb-btn primary" onclick="saveStampUsers()"><i class="fa fa-save"></i> 儲存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 權限 / 操作說明 -->
+<div class="modal-mask" id="help-modal">
+    <div class="modal-box">
+        <h3><i class="fa fa-question-circle"></i> 批圖編輯器：權限與操作說明</h3>
+        <div class="modal-body">
+            <b style="color:#6fc3ff;">各角色權限</b>
+            <table style="margin:6px 0 12px;">
+                <tr><th style="width:110px;">角色</th><th>權限</th></tr>
+                <tr><td>管理者</td><td>固定擁有全部功能（系統規則）</td></tr>
+                <tr><td>批圖使用者</td><td>可使用批圖編輯器全部功能</td></tr>
+                <tr><td>未指派者</td><td>系統尚未指派任何「批圖使用者」前暫時開放；一旦有人被指派，未指派者即無法開啟本頁</td></tr>
+            </table>
+            <div style="font-size:11.5px;color:#8b949e;margin-bottom:12px;">角色指派：使用者權限管理頁 →「批圖編輯器」區塊。</div>
+            <b style="color:#6fc3ff;">① 開圖與圖片</b>
+            <ul style="padding-left:18px;margin:4px 0 10px;">
+                <li>小畫家複製 → 本視窗按 <b>Ctrl+V</b> 貼入；圖檔直接<b>拖進視窗</b>開啟（可多張，排版後匯出＝合併）</li>
+                <li>圖比畫布大會自動撐大畫布；「適合內容」讓畫布剛好包住所有東西</li>
+                <li>底圖調好後按屬性列「<b>鎖定</b>」→ 點擊穿透不誤選；屬性列右側「解鎖全部」解開</li>
+            </ul>
+            <b style="color:#6fc3ff;">② 編修與遮蓋</b>
+            <ul style="padding-left:18px;margin:4px 0 10px;">
+                <li>畫筆(B)/直線(L)/箭頭(A)/矩形(R)/橢圓(O)；所有東西都是物件，隨時可移動、縮放、刪除</li>
+                <li>遮蓋刪除客戶資料：矩形(M)或不規則套索圈選，遮蓋色可改，匯出時才壓平</li>
+                <li>框選複製(C)：框一個範圍變成新圖塊；<b>框選搬移(X)</b>＝小畫家式切下搬走（只挖空底圖，標籤/文字不受影響）；旁邊的<b>套索工具</b>是不規則形狀版，按住拖曳圈任意形狀後放開即可切下。兩者都可連續使用，Esc 或切別的工具才離開。跨視窗貼上用 <b>Ctrl+Shift+V</b>（Ctrl+V 優先貼系統剪貼簿）</li>
+                <li>遮蓋/形狀/直線等工具<b>畫完保持啟用可連續畫</b>，Esc 或 V 回選取；<b>Ctrl+A</b> 全選畫布物件；<b>方向鍵微調</b>選取物（Shift＝10px）；屬性列可輸入<b>角度</b>；直線/箭頭可選<b>端點（無/單箭頭/雙箭頭）</b>；多選一次改粗細/顏色；「合併」把多線條變單一物件（Alt+雙擊才拆）</li>
+            </ul>
+            <b style="color:#6fc3ff;">③ 文字與標籤庫</b>
+            <ul style="padding-left:18px;margin:4px 0 10px;">
+                <li>文字(T)/標籤放上後<b>永遠可再拖移、雙擊改字、拉角縮放</b>（不像小畫家會固定）</li>
+                <li>標籤庫：內建＋自訂（全體共用、可分類篩選）。點一下放到圖上；<b>雙擊改字</b>，外框自動貼合字長；「底色」按鈕或插入前勾「透明背景」可切換白底/透明</li>
+                <li>自己組好的標籤（矩形＋文字框選）按「把選取存為標籤」入庫；填分類方便日後查找</li>
+                <li><b>Alt＋拖曳</b>＝原地留一份拖走一份；Ctrl+D 原地複製</li>
+                <li>群組：框選按 <b>Ctrl+G</b>；<b>雙擊群組＝進入</b>拆成多選可調個別位置，調完 Ctrl+G 組回（標籤群組雙擊是改字，用 <b>Alt＋雙擊</b>進入）</li>
+            </ul>
+            <b style="color:#6fc3ff;">④ 球標與設變標示</b>
+            <ul style="padding-left:18px;margin:4px 0 10px;">
+                <li>球標 Ⓐ：連續點圖面自動 A、B、C…編號；右下角自動產生「球標Ⓐ～球標Ⓕ」（圓圈樣式與圖面球標一致，變動自動刪舊重建）。原圖已有球標 → 把「下一個球標」改成接續字母</li>
+                <li>設變標示 ◇/△：<b>同一次設變多處都點同一個號碼</b>（號碼欄可自訂起始，圖面已有舊設變時接續）；該號第一次放置時左上角自動加一列「標示＋今日日期」，<b>雙擊該列輸入說明文字</b>，越新越上面。下一次設變記得把號碼欄+1</li>
+                <li>蓋章 ㊞：本人簽章（紅，人人可用）／技術課章與發行章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>，<b>限管理者在「用章人員」勾選的人員</b>，顏色也在同一個跳窗設定）；透明背景直接蓋在圖上（自動去背），日期自動帶今天，可移動縮放</li>
+                <li>標籤庫分三層：公司共用（管理者管理）／部門標籤（同部門共用）／私人標籤（只有自己看得到）。新標籤<b>預設存私人</b>；面板右上「管理」開跳窗：<b>框選或 Ctrl+點選多選 → 拖曳到目標欄＝搬移、Ctrl+拖曳＝複製</b>，也可批次刪除</li>
+            </ul>
+            <b style="color:#6fc3ff;">⑤ 檢視、匯出與跨視窗</b>
+            <ul style="padding-left:18px;margin:4px 0 10px;">
+                <li>滾輪縮放；<b>按住滾輪中鍵拖移</b>或空白鍵＋拖曳平移；「縮放至選取」放大局部細修</li>
+                <li>「開新視窗」再開一個編輯器（可拖到另一個螢幕）；「複製選取→他窗」＋在另一窗 Ctrl+V 互貼</li>
+                <li>匯出/列印：整個畫布或只匯出選取；PNG/JPG、解析度倍率（列印建議2×）</li>
+                <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
+                <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本</li>
+                <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）</li>
+            </ul>
+            <b style="color:#6fc3ff;">⑥ 快捷鍵</b>
+            <table style="margin:6px 0 4px;">
+                <tr><td style="width:130px;">V / H</td><td>選取 / 平移</td><td style="width:130px;">B / L / A / R / O</td><td>畫筆/直線/箭頭/矩形/橢圓</td></tr>
+                <tr><td>T / M / C</td><td>文字 / 遮蓋矩形 / 框選複製</td><td>Delete</td><td>刪除選取</td></tr>
+                <tr><td>Ctrl+Z / Ctrl+Y</td><td>復原 / 重做</td><td>Ctrl+C / Ctrl+V</td><td>複製 / 貼上（含跨視窗、小畫家）</td></tr>
+                <tr><td>Ctrl+D</td><td>原地複製</td><td>Alt＋拖曳</td><td>拖曳複製</td></tr>
+                <tr><td>Ctrl+G</td><td>群組 / 進入群組</td><td>Ctrl+0 / Esc</td><td>適合視窗 / 回選取工具</td></tr>
+            </table>
+        </div>
+        <div class="modal-foot"><button class="tb-btn primary" onclick="hideModal('help-modal')">知道了</button></div>
+    </div>
+</div>
+
+<input type="file" id="file-input" accept="image/*" multiple style="display:none;">
+<div id="toast"></div>
+
+<script src="../../resource/js/fabric.min.js"></script>
+<script>
+'use strict';
+/* ════════════════════════════════════════════════════════════════════
+   批圖編輯器主程式（Fabric.js 5.3）
+   物件模型：所有東西（圖片/文字/形狀/遮蓋）都是可再編輯的物件（Figma 式），
+   匯出時才壓平成點陣圖（小畫家式結果）。
+   ════════════════════════════════════════════════════════════════════ */
+const USER_ID = <?= (int)$uid ?>;
+const USER_CNAME = <?= json_encode($userCname, JSON_UNESCAPED_UNICODE) ?>;
+const OWN_COMPANY = <?= json_encode($ownCompany, JSON_UNESCAPED_UNICODE) ?>;
+const IS_MGR = <?= $isMgr ? 'true' : 'false' ?>;
+const CAN_DEPT_STAMP = <?= $canDeptStamp ? 'true' : 'false' ?>;
+let deptStampColorHex = <?= json_encode($deptStampColor === 'red' ? '#cf3a2b' : '#2b4a9b') ?>;
+const CAN_DELETE_WORKFILE = <?= $canDeleteWorkfile ? 'true' : 'false' ?>;
+const WORKFILE_MAX_COUNT = <?= (int)$workfileMaxCount ?>;
+const USER_PREFS = <?= json_encode($userPrefs, JSON_UNESCAPED_UNICODE) ?>;
+const RESIZE_PRESETS = <?= json_encode($resizePresets, JSON_UNESCAPED_UNICODE) ?>;
+const RESIZE_DEFAULT_IDX = <?= (int)$resizeDefaultIdx ?>;
+const MY_DEPTS = <?= json_encode($myDepts, JSON_UNESCAPED_UNICODE) ?>;
+const MY_MAIN_DEPT_ID = <?= (int)$myMainDeptId ?>;
+const CLIP_KEY = 'eg_imgedit_clip';           // 跨視窗剪貼簿（localStorage，同網域共用）
+const DIRDB = 'eg_imgedit_fs';                // IndexedDB：預設儲存資料夾 handle
+
+let artW = 1600, artH = 1200;                 // 畫布（工作區）尺寸
+let currentTool = 'select';
+let spaceDown = false;
+
+const canvas = new fabric.Canvas('c', {
+    backgroundColor: null,
+    preserveObjectStacking: true,
+    selection: true,
+    stopContextMenu: true,
+    fireRightClick: true,
+    fireMiddleClick: true,
+    uniformScaling: true
+});
+// 擋掉瀏覽器中鍵自動捲動，讓「按住滾輪中鍵拖移畫面」可用
+const wrapForMiddle = document.getElementById('canvas-wrap');
+wrapForMiddle.addEventListener('mousedown', function (e) { if (e.button === 1) e.preventDefault(); });
+wrapForMiddle.addEventListener('auxclick', function (e) { if (e.button === 1) e.preventDefault(); });
+fabric.Object.prototype.transparentCorners = false;
+fabric.Object.prototype.cornerColor = '#2779bd';
+fabric.Object.prototype.cornerStyle = 'circle';
+fabric.Object.prototype.cornerSize = 9;
+fabric.Object.prototype.borderColor = '#4da3e8';
+
+/* ── 畫布（工作區）＝一個白色底 Rect，匯出時以它的範圍裁切 ── */
+let artboard = new fabric.Rect({
+    left: 0, top: 0, width: artW, height: artH,
+    fill: '#ffffff', selectable: false, evented: false,
+    id: '__artboard', shadow: new fabric.Shadow({ color: 'rgba(0,0,0,.45)', blur: 18, offsetX: 0, offsetY: 4 })
+});
+canvas.add(artboard);
+
+function findArtboard() {
+    const o = canvas.getObjects().find(o => o.id === '__artboard');
+    if (o) { artboard = o; artboard.selectable = false; artboard.evented = false; }
+    return artboard;
+}
+function setArtboardSize(w, h, bg) {
+    artW = Math.max(50, Math.round(w)); artH = Math.max(50, Math.round(h));
+    artboard.set({ width: artW, height: artH, scaleX: 1, scaleY: 1 });
+    if (bg) artboard.set('fill', bg);
+    canvas.sendToBack(artboard);
+    document.getElementById('st-canvas').textContent = artW + '×' + artH;
+    canvas.requestRenderAll();
+}
+
+/* ── 圖面像素縮放：輸入目標寬/高，等比例縮放整張圖面（所有物件的位置與大小一起等比例調整）── */
+function openResizeModal() {
+    document.getElementById('rs-current').textContent = Math.round(artW) + '×' + Math.round(artH);
+    document.getElementById('rs-w').value = Math.round(artW);
+    document.getElementById('rs-h').value = Math.round(artH);
+    renderResizePresets();
+    showModal('resize-modal');
+}
+document.getElementById('rs-w').addEventListener('input', function () {
+    const w = parseFloat(this.value) || 0;
+    if (w > 0 && artW > 0) document.getElementById('rs-h').value = Math.round(w * (artH / artW));
+});
+document.getElementById('rs-h').addEventListener('input', function () {
+    const h = parseFloat(this.value) || 0;
+    if (h > 0 && artH > 0) document.getElementById('rs-w').value = Math.round(h * (artW / artH));
+});
+function applyResizeTo(newW, newH) {
+    newW = Math.max(10, Math.round(newW)); newH = Math.max(10, Math.round(newH));
+    const factor = newW / artW;
+    canvas.discardActiveObject();
+    canvas.getObjects().forEach(o => {
+        if (o === artboard) return;
+        o.set({
+            left: (o.left || 0) * factor,
+            top: (o.top || 0) * factor,
+            scaleX: (o.scaleX || 1) * factor,
+            scaleY: (o.scaleY || 1) * factor
+        });
+        o.dirty = true;
+        o.setCoords();
+    });
+    setArtboardSize(newW, newH);
+    canvas.requestRenderAll();
+    zoomFit();
+    pushState();
+    toast('圖面已等比例縮放為 ' + newW + '×' + newH);
+}
+function applyResize() {
+    const w = parseFloat(document.getElementById('rs-w').value) || 0;
+    const h = parseFloat(document.getElementById('rs-h').value) || 0;
+    if (w < 10 || h < 10) { toast('尺寸太小'); return; }
+    if (!confirm('確定把整張圖面等比例縮放為 ' + Math.round(w) + '×' + Math.round(h) + '？（可 Ctrl+Z 復原）')) return;
+    applyResizeTo(w, h);
+    hideModal('resize-modal');
+}
+/* 常用尺寸：最多 3 組，可命名，其中一組可設為「快速縮放」的預設 */
+let resizePresets = JSON.parse(JSON.stringify(RESIZE_PRESETS || []));
+let resizeDefaultIdx = RESIZE_DEFAULT_IDX || 0;
+function renderResizePresets() {
+    const box = document.getElementById('rs-presets');
+    if (!resizePresets.length) { box.innerHTML = '<span style="color:#8b949e;font-size:12px;">尚未設定常用尺寸</span>'; return; }
+    box.innerHTML = resizePresets.map((p, i) =>
+        '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12.5px;">' +
+        '<label style="display:flex;align-items:center;gap:3px;white-space:nowrap;"><input type="radio" name="rs-default" ' + (i === resizeDefaultIdx ? 'checked' : '') + ' onchange="setResizeDefault(' + i + ')"> 預設</label>' +
+        '<span style="flex:1;">' + escHtml(p.name) + '（' + p.w + '×' + p.h + '）</span>' +
+        '<button class="tb-btn" onclick="applyResizeTo(' + p.w + ',' + p.h + ')" title="套用這組尺寸"><i class="fa fa-check"></i></button>' +
+        '<button class="tb-btn" style="color:#ff8a80;" onclick="deleteResizePreset(' + i + ')" title="刪除這組"><i class="fa fa-trash"></i></button>' +
+        '</div>').join('');
+}
+function addResizePreset() {
+    const name = document.getElementById('rs-preset-name').value.trim();
+    const w = parseFloat(document.getElementById('rs-preset-w').value) || 0;
+    const h = parseFloat(document.getElementById('rs-preset-h').value) || 0;
+    if (!name) { toast('請輸入名稱'); return; }
+    if (w < 10 || h < 10) { toast('請輸入寬高'); return; }
+    if (resizePresets.length >= 3) { toast('最多只能設定 3 組常用尺寸，請先刪除一組再新增'); return; }
+    resizePresets.push({ name, w: Math.round(w), h: Math.round(h) });
+    document.getElementById('rs-preset-name').value = '';
+    document.getElementById('rs-preset-w').value = '';
+    document.getElementById('rs-preset-h').value = '';
+    saveResizePresets();
+    renderResizePresets();
+}
+function deleteResizePreset(i) {
+    resizePresets.splice(i, 1);
+    if (resizeDefaultIdx >= resizePresets.length) resizeDefaultIdx = 0;
+    saveResizePresets();
+    renderResizePresets();
+}
+function setResizeDefault(i) {
+    resizeDefaultIdx = i;
+    saveResizePresets();
+}
+async function saveResizePresets() {
+    try {
+        const fd = new FormData();
+        fd.append('action', 'save_resize_presets');
+        fd.append('presets', JSON.stringify(resizePresets));
+        fd.append('default_index', resizeDefaultIdx);
+        await fetch('image_editor.php', { method: 'POST', body: fd });
+    } catch (e) {}
+}
+function quickResize() {
+    if (!resizePresets.length) { toast('尚未設定常用尺寸，請先設定'); openResizeModal(); return; }
+    const p = resizePresets[resizeDefaultIdx] || resizePresets[0];
+    if (!confirm('確定套用「' + p.name + '」（' + p.w + '×' + p.h + '）等比例縮放整張圖面？')) return;
+    applyResizeTo(p.w, p.h);
+}
+
+/* ── 視窗尺寸/縮放/平移 ── */
+const wrap = document.getElementById('canvas-wrap');
+function resizeViewport() {
+    canvas.setDimensions({ width: wrap.clientWidth, height: wrap.clientHeight });
+    canvas.requestRenderAll();
+}
+window.addEventListener('resize', resizeViewport);
+/* 換螢幕(不同DPI)/喚醒/切回分頁後，canvas 偶爾會繪圖異常（殘影、只剩選取控制點）；
+   回來時強制整張畫布連同每個物件的快取都重畫一次 */
+function forceFullRepaint() {
+    resizeViewport();
+    canvas.getObjects().forEach(o => { o.dirty = true; if (o.getObjects) o.getObjects().forEach(c => { c.dirty = true; }); });
+    canvas.requestRenderAll();
+}
+window.addEventListener('focus', forceFullRepaint);
+document.addEventListener('visibilitychange', function () { if (!document.hidden) forceFullRepaint(); });
+
+function setZoomLabel() {
+    document.getElementById('zoom-label').textContent = Math.round(canvas.getZoom() * 100) + '%';
+}
+function zoomFit() {
+    const m = 40;
+    const z = Math.min((wrap.clientWidth - m) / artW, (wrap.clientHeight - m) / artH, 4);
+    const zz = Math.max(0.02, z);
+    canvas.setViewportTransform([zz, 0, 0, zz,
+        (wrap.clientWidth - artW * zz) / 2 - artboard.left * zz,
+        (wrap.clientHeight - artH * zz) / 2 - artboard.top * zz]);
+    setZoomLabel(); canvas.requestRenderAll();
+}
+function zoomToSelection() {
+    const obj = canvas.getActiveObject();
+    if (!obj) { toast('請先選取物件'); return; }
+    const b = obj.getBoundingRect(true, true); // absolute (scene) coords
+    const m = 60;
+    const z = Math.min((wrap.clientWidth - m) / b.width, (wrap.clientHeight - m) / b.height, 8);
+    canvas.setViewportTransform([z, 0, 0, z,
+        (wrap.clientWidth - b.width * z) / 2 - b.left * z,
+        (wrap.clientHeight - b.height * z) / 2 - b.top * z]);
+    setZoomLabel(); canvas.requestRenderAll();
+}
+canvas.on('mouse:wheel', function (opt) {
+    const e = opt.e;
+    let z = canvas.getZoom() * Math.pow(0.999, e.deltaY);
+    z = Math.min(12, Math.max(0.02, z));
+    canvas.zoomToPoint({ x: e.offsetX, y: e.offsetY }, z);
+    setZoomLabel();
+    e.preventDefault(); e.stopPropagation();
+});
+
+/* ── 工具切換 ── */
+function setTool(t) {
+    currentTool = t;
+    document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById('tool-' + t);
+    if (btn) btn.classList.add('active');
+
+    canvas.isDrawingMode = (t === 'draw');
+    if (t === 'draw') {
+        canvas.freeDrawingBrush = new fabric.PencilBrush(canvas);
+        canvas.freeDrawingBrush.color = document.getElementById('p-stroke').value;
+        canvas.freeDrawingBrush.width = parseInt(document.getElementById('p-width').value, 10) || 3;
+    }
+    const isSelect = (t === 'select');
+    const isCropTool = (t === 'cropmove' || t === 'cropcopy' || t === 'cropmovelasso');
+    canvas.selection = isSelect;
+    canvas.skipTargetFind = !isSelect && !isCropTool;   // 框選複製/搬移也允許點到既有物件（例如剛切下那塊）直接拖曳，不必先切回選取
+    canvas.defaultCursor = (t === 'pan') ? 'grab' : (isSelect ? 'default' : 'crosshair');
+    if (!isSelect && !isCropTool) canvas.discardActiveObject();
+
+    // 屬性列切換
+    document.getElementById('sec-stroke').classList.toggle('show', ['draw','line','arrow','rect','ellipse','select'].includes(t));
+    document.getElementById('sec-crop').classList.toggle('show', isCropTool);
+    document.getElementById('sec-text').classList.toggle('show', ['text','label'].includes(t));
+    document.getElementById('sec-mask').classList.toggle('show', ['maskrect','masklasso'].includes(t));
+    document.getElementById('sec-balloon').classList.toggle('show', t === 'balloon');
+    document.getElementById('sec-dc').classList.toggle('show', t === 'dc');
+    document.getElementById('sec-stamp').classList.toggle('show', t === 'stamp');
+    if (t === 'balloon') document.getElementById('p-balloon-next').value = nextBalloonLetter();
+    if (t === 'dc') document.getElementById('p-dc-num').value = nextDcNumber();
+    canvas.requestRenderAll();
+}
+
+/* ── 滑鼠操作：平移 / 形狀繪製 / 遮蓋 / 框選複製 / 文字 ── */
+let isPanning = false, lastPan = null;
+let drawing = null;   // 進行中的形狀 {type, obj, startX, startY, points}
+
+function scenePoint(opt) { return canvas.getPointer(opt.e, false); } // scene coords
+
+canvas.on('mouse:down', function (opt) {
+    const e = opt.e;
+    if (currentTool === 'pan' || spaceDown || e.button === 1) {
+        isPanning = true; lastPan = { x: e.clientX, y: e.clientY };
+        canvas.defaultCursor = 'grabbing';
+        return;
+    }
+    if (canvas.isDrawingMode) return;
+    const p = scenePoint(opt);
+
+    if (currentTool === 'text' || currentTool === 'label') {
+        addText(p.x, p.y, currentTool === 'label');
+        return;
+    }
+    if (currentTool === 'balloon') { placeBalloon(p.x, p.y); return; }   // 工具保持啟用，連續點連續編
+    if (currentTool === 'dc') { placeDcMark(p.x, p.y); return; }
+    if (currentTool === 'stamp') { placeStamp(p.x, p.y); return; }
+    if (['rect','ellipse','line','arrow','maskrect','cropcopy','cropmove'].includes(currentTool)) {
+        // 框選複製/搬移：點在既有物件上（例如剛切下、還沒拖到定位的那塊）就交給 Fabric 正常拖曳，不要開新框
+        if ((currentTool === 'cropcopy' || currentTool === 'cropmove') && opt.target) return;
+        drawing = { type: currentTool, startX: p.x, startY: p.y, obj: null };
+        return;
+    }
+    if (currentTool === 'masklasso') {
+        drawing = { type: 'masklasso', points: [{ x: p.x, y: p.y }], obj: null };
+        return;
+    }
+    if (currentTool === 'cropmovelasso') {
+        if (opt.target) return;   // 點在既有物件上（例如剛切下那塊）交給 Fabric 正常拖曳
+        drawing = { type: 'cropmovelasso', points: [{ x: p.x, y: p.y }], obj: null };
+        return;
+    }
+});
+
+canvas.on('mouse:move', function (opt) {
+    const e = opt.e;
+    if (isPanning && lastPan) {
+        const vpt = canvas.viewportTransform;
+        vpt[4] += e.clientX - lastPan.x;
+        vpt[5] += e.clientY - lastPan.y;
+        lastPan = { x: e.clientX, y: e.clientY };
+        canvas.setViewportTransform(vpt);
+        return;
+    }
+    const p = scenePoint(opt);
+    document.getElementById('st-pos').textContent = Math.round(p.x) + ', ' + Math.round(p.y);
+    if (!drawing) return;
+
+    const stroke = document.getElementById('p-stroke').value;
+    const sw = parseInt(document.getElementById('p-width').value, 10) || 3;
+    const fillOn = document.getElementById('p-fill-on').checked;
+    const fill = fillOn ? document.getElementById('p-fill').value : 'transparent';
+    const maskColor = document.getElementById('p-maskcolor').value;
+
+    const x = Math.min(drawing.startX, p.x), y = Math.min(drawing.startY, p.y);
+    const w = Math.abs(p.x - drawing.startX), h = Math.abs(p.y - drawing.startY);
+
+    if (drawing.type === 'masklasso') {
+        drawing.points.push({ x: p.x, y: p.y });
+        if (drawing.obj) canvas.remove(drawing.obj);
+        drawing.obj = new fabric.Polyline(drawing.points.slice(), {
+            stroke: '#e53935', strokeWidth: 1 / canvas.getZoom(), fill: 'rgba(229,57,53,.15)',
+            selectable: false, evented: false, objectCaching: false, strokeDashArray: [4, 3]
+        });
+        canvas.add(drawing.obj); canvas.requestRenderAll();
+        return;
+    }
+    if (drawing.type === 'cropmovelasso') {
+        drawing.points.push({ x: p.x, y: p.y });
+        if (drawing.obj) canvas.remove(drawing.obj);
+        drawing.obj = new fabric.Polyline(drawing.points.slice(), {
+            stroke: '#6fc3ff', strokeWidth: 1 / canvas.getZoom(), fill: 'rgba(39,121,189,.15)',
+            selectable: false, evented: false, objectCaching: false, strokeDashArray: [5, 4]
+        });
+        canvas.add(drawing.obj); canvas.requestRenderAll();
+        return;
+    }
+
+    if (drawing.obj) canvas.remove(drawing.obj);
+    let o = null;
+    if (drawing.type === 'rect') {
+        o = new fabric.Rect({ left: x, top: y, width: w, height: h, stroke, strokeWidth: sw, fill, strokeUniform: true });
+    } else if (drawing.type === 'ellipse') {
+        o = new fabric.Ellipse({ left: x, top: y, rx: w / 2, ry: h / 2, stroke, strokeWidth: sw, fill, strokeUniform: true });
+    } else if (drawing.type === 'line' || drawing.type === 'arrow') {
+        o = new fabric.Line([drawing.startX, drawing.startY, p.x, p.y], { stroke, strokeWidth: sw, strokeUniform: true });
+    } else if (drawing.type === 'maskrect') {
+        o = new fabric.Rect({ left: x, top: y, width: w, height: h, fill: maskColor, stroke: null });
+    } else if (drawing.type === 'cropcopy' || drawing.type === 'cropmove') {
+        o = new fabric.Rect({ left: x, top: y, width: w, height: h, fill: 'rgba(39,121,189,.15)', stroke: '#6fc3ff', strokeWidth: 1 / canvas.getZoom(), strokeDashArray: [5, 4] });
+    }
+    if (o) {
+        o.set({ selectable: false, evented: false, objectCaching: false });
+        drawing.obj = o;
+        canvas.add(o); canvas.requestRenderAll();
+    }
+});
+
+canvas.on('mouse:up', function (opt) {
+    if (isPanning) { isPanning = false; lastPan = null; canvas.defaultCursor = (currentTool === 'pan') ? 'grab' : 'default'; return; }
+    if (!drawing) return;
+    const d = drawing; drawing = null;
+    const p = scenePoint(opt);
+
+    if (d.type === 'masklasso') {
+        if (d.obj) canvas.remove(d.obj);
+        if (d.points.length > 2) {
+            const poly = new fabric.Polygon(d.points, {
+                fill: document.getElementById('p-maskcolor').value, stroke: null, objectCaching: false
+            });
+            canvas.add(poly); finishNewObject(poly);
+        }
+        return;
+    }
+    if (d.type === 'cropmovelasso') {
+        if (d.obj) canvas.remove(d.obj);
+        if (d.points.length > 2) doCropMoveLasso(d.points);
+        else canvas.requestRenderAll();
+        return;   // 停留在此工具，可連續框選（同框選搬移）
+    }
+    if (!d.obj) return;
+    canvas.remove(d.obj);
+    const w = Math.abs(p.x - d.startX), h = Math.abs(p.y - d.startY);
+    if (w < 3 && h < 3) { canvas.requestRenderAll(); return; } // 誤點不建物件
+
+    if (d.type === 'cropcopy') { doCropCopy(Math.min(d.startX, p.x), Math.min(d.startY, p.y), w, h); return; }
+    if (d.type === 'cropmove') { doCropMove(Math.min(d.startX, p.x), Math.min(d.startY, p.y), w, h); return; }
+
+    let o = null;
+    const endsSel = document.getElementById('p-line-ends').value;
+    const ends = (d.type === 'arrow') ? (endsSel === 'none' ? 'end' : endsSel) : endsSel;   // 箭頭工具至少單箭頭；直線依端點設定
+    if ((d.type === 'arrow' || d.type === 'line') && ends !== 'none') {
+        o = makeArrow(d.startX, d.startY, p.x, p.y,
+            document.getElementById('p-stroke').value,
+            parseInt(document.getElementById('p-width').value, 10) || 3, ends);
+    } else {
+        o = d.obj; // 直接把預覽物件轉正式
+        o.set({ objectCaching: true });
+    }
+    o.set({ selectable: true, evented: true });
+    canvas.add(o);
+    if (o === d.obj) { /* 已在畫布上，避免重複加 */ canvas.remove(o); canvas.add(o); }
+    finishNewObject(o);
+});
+
+/* 連續工具：畫完不切回選取，可一直畫（同球標邏輯）；Esc 或 V 回選取工具 */
+const CONTINUOUS_TOOLS = ['maskrect', 'masklasso', 'rect', 'ellipse', 'line', 'arrow'];
+function finishNewObject(o) {
+    if (CONTINUOUS_TOOLS.includes(currentTool)) {
+        canvas.requestRenderAll();
+        pushState();
+        return;
+    }
+    canvas.setActiveObject(o);
+    setTool('select');
+    canvas.requestRenderAll();
+    pushState();
+}
+
+/* 箭頭 = 線 + 三角形頭端組成群組；ends: none / end(單) / both(雙) */
+function arrowHeadLen(width) { return Math.max(18, width * 5); }   // 箭頭大小公式；粗細調整時要用同一套（見 p-width 監聽）
+function makeArrow(x1, y1, x2, y2, color, width, ends) {
+    const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+    const headLen = arrowHeadLen(width);
+    const items = [new fabric.Line([x1, y1, x2, y2], { stroke: color, strokeWidth: width, strokeUniform: true })];
+    if (ends === 'end' || ends === 'both') items.push(new fabric.Triangle({
+        left: x2, top: y2, originX: 'center', originY: 'center',
+        width: headLen, height: headLen, angle: angle + 90, fill: color
+    }));
+    if (ends === 'both') items.push(new fabric.Triangle({
+        left: x1, top: y1, originX: 'center', originY: 'center',
+        width: headLen, height: headLen, angle: angle - 90, fill: color
+    }));
+    const g = new fabric.Group(items, {});
+    g.merged = true;   // 箭頭視為單一物件，雙擊不拆
+    return g;
+}
+
+/* ── 文字 / 標籤（Figma 式：隨時可移動、雙擊編輯、拉角縮放） ── */
+function addText(x, y, isLabel) {
+    const size = parseInt(document.getElementById('p-fontsize').value, 10) || 28;
+    const color = document.getElementById('p-textcolor').value;
+    const bold = document.getElementById('p-bold').checked;
+    const bgOn = isLabel ? true : document.getElementById('p-textbg-on').checked;
+    const bg = document.getElementById('p-textbg').value;
+    const t = new fabric.IText(isLabel ? '標籤文字' : '輸入文字', {
+        left: x, top: y, fontSize: size, fill: color,
+        fontFamily: '"Microsoft JhengHei", "PingFang TC", Arial, sans-serif',
+        fontWeight: bold ? 'bold' : 'normal',
+        backgroundColor: bgOn ? bg : ''
+    });
+    canvas.add(t);
+    canvas.setActiveObject(t);
+    setTool('select');
+    t.enterEditing(); t.selectAll();
+    canvas.requestRenderAll();
+    pushState();
+}
+
+/* ── 蓋章：回墨印（版式沿用 CAR 簽章：公司名兩列/日期/下段文字） ────────
+   fabric 原生物件繪製 → 天生透明背景，蓋在圖上自動去背。 */
+const STAMP_KAI = "DFKai-SB,BiauKai,KaiTi,'標楷體',serif";
+function makeStamp(bottomText, color, size, dateStr) {
+    const items = [];
+    items.push(new fabric.Circle({ left: 50, top: 50, radius: 47, fill: 'transparent', stroke: color, strokeWidth: 2.6, originX: 'center', originY: 'center' }));
+    const chord = y => { const r = 45.7, dy = y - 50, dx = Math.sqrt(Math.max(0, r * r - dy * dy)); return [50 - dx, 50 + dx]; };
+    const c1 = chord(27.5), c2 = chord(68.5);
+    items.push(new fabric.Line([c1[0], 27.5, c1[1], 27.5], { stroke: color, strokeWidth: 1.4 }));
+    items.push(new fabric.Line([c2[0], 68.5, c2[1], 68.5], { stroke: color, strokeWidth: 1.4 }));
+    const company = OWN_COMPANY || '';
+    const l1 = company.substring(0, 4), l2 = company.substring(4);
+    // 對齊 CAR 印章的 SVG baseline：fabric 用中心定位，中心 y ≈ baseline − 字級×0.35
+    const fit = (txt, baseY, fs, maxW, font) => {
+        if (!txt) return null;
+        const t = new fabric.Text(txt, {
+            left: 50, top: baseY - fs * 0.35, originX: 'center', originY: 'center',
+            fontSize: fs, fill: color, fontWeight: 'bold', fontFamily: font || STAMP_KAI
+        });
+        if (t.width > maxW) t.set('scaleX', maxW / t.width);   // 字多自動壓縮（同 textLength）
+        return t;
+    };
+    const bfs = bottomText.length > 3 ? 15 : 19;
+    [fit(l1, 15, 11, 58), fit(l2, 26, 11.5, 76),
+     fit(dateStr, 54.5, 14.5, 72, "'Times New Roman','Courier New',serif"),
+     fit(bottomText, 84.5, bfs, 56)].forEach(t => { if (t) items.push(t); });
+    const g = new fabric.Group(items, { originX: 'center', originY: 'center', opacity: 0.92 });
+    const sc = size / Math.max(g.width, g.height);
+    g.set({ scaleX: sc, scaleY: sc });
+    return g;
+}
+function placeStamp(x, y) {
+    const type = document.getElementById('p-stamp-type').value;
+    const size = Math.max(40, parseInt(document.getElementById('p-stamp-size').value, 10) || 110);
+    const conf = {
+        self:  { text: USER_CNAME || '簽章', color: '#cf3a2b' },        // 本人＝紅（同 CAR，固定）
+        tech:  { text: '技術課',             color: deptStampColorHex }, // 管理者可在「用章人員」設定藍/紅
+        issue: { text: '發行章',             color: deptStampColorHex }
+    }[type] || { text: USER_CNAME, color: '#cf3a2b' };
+    const g = makeStamp(conf.text, conf.color, size, todayStr());
+    g.set({ left: x, top: y });
+    g.setCoords();
+    canvas.add(g);
+    canvas.requestRenderAll();
+    pushState();
+}
+
+/* 部門印章權限初始化：無權者隱藏技術課章/發行章；管理者顯示設定按鈕 */
+(function initStampPerm() {
+    if (!CAN_DEPT_STAMP) {
+        const sel = document.getElementById('p-stamp-type');
+        Array.from(sel.options).slice().forEach(o => { if (o.value !== 'self') sel.removeChild(o); });
+    }
+    if (IS_MGR) document.getElementById('btn-stamp-perm').style.display = '';
+})();
+
+/* 用章人員設定（管理者限定） */
+let spData = null;
+async function openStampPermModal() {
+    showModal('stampperm-modal');
+    document.getElementById('sp-users').innerHTML = '載入中…';
+    try {
+        const fd = new FormData(); fd.append('action', 'get_stamp_users');
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        spData = { depts: res.depts, users: res.users, selected: new Set((res.selected || []).map(Number)) };
+        document.getElementById('sp-dept').innerHTML = res.depts.map(d => '<option value="' + d.id + '">' + escHtml(d.name) + '</option>').join('');
+        document.getElementById('sp-color').value = (res.color === 'red') ? 'red' : 'blue';
+        renderStampUsers();
+    } catch (e) {
+        document.getElementById('sp-users').innerHTML = '<span style="color:#ff8a80;">載入失敗：' + escHtml(e.message || '') + '</span>';
+    }
+}
+function renderStampUsers() {
+    if (!spData) return;
+    const dept = parseInt(document.getElementById('sp-dept').value, 10);
+    const list = spData.users.filter(u => u.department_id == dept);
+    const box = document.getElementById('sp-users');
+    if (!list.length) { box.innerHTML = '<span style="color:#8b949e;font-size:12px;">此部門沒有人員</span>'; return; }
+    box.innerHTML = list.map(u =>
+        '<label style="display:inline-flex;align-items:center;gap:5px;width:48%;margin:3px 0;font-size:12.5px;cursor:pointer;">' +
+        '<input type="checkbox" data-uid="' + u.id + '"' + (spData.selected.has(Number(u.id)) ? ' checked' : '') +
+        ' onchange="this.checked ? spData.selected.add(' + u.id + ') : spData.selected.delete(' + u.id + ')">' +
+        escHtml(u.user_cname || ('#' + u.id)) + '</label>').join('');
+}
+async function saveStampUsers() {
+    if (!spData) return;
+    try {
+        const fd = new FormData();
+        fd.append('action', 'save_stamp_users');
+        fd.append('user_ids', JSON.stringify(Array.from(spData.selected)));
+        fd.append('color', document.getElementById('sp-color').value);
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        deptStampColorHex = (res.color === 'red') ? '#cf3a2b' : '#2b4a9b';
+        const colorWord = (res.color === 'red') ? '紅' : '藍';
+        document.getElementById('opt-stamp-tech').textContent = '技術課章（' + colorWord + '）';
+        document.getElementById('opt-stamp-issue').textContent = '發行章（' + colorWord + '）';
+        hideModal('stampperm-modal');
+        toast('已儲存用章人員名單（共 ' + res.count + ' 人）與印章顏色；被移除者重新開啟編輯器後生效');
+    } catch (e) { toast('儲存失敗：' + (e.message || '')); }
+}
+
+/* ── 快速標籤①：球標（圓圈＋英文字母，自動接續編號） ─────────────────── */
+function lettersToNum(s) {                       // A=1, B=2 ... Z=26, AA=27
+    let n = 0;
+    for (const ch of String(s).toUpperCase()) {
+        const c = ch.charCodeAt(0);
+        if (c < 65 || c > 90) return 0;
+        n = n * 26 + (c - 64);
+    }
+    return n;
+}
+function numToLetters(n) {
+    let s = '';
+    while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+    return s || 'A';
+}
+function balloonObjects() {
+    return canvas.getObjects().filter(o => o.balloonLetter);
+}
+function nextBalloonLetter() {
+    const used = balloonObjects().map(o => lettersToNum(o.balloonLetter)).filter(n => n > 0);
+    if (used.length) return numToLetters(Math.max(...used) + 1);   // 接續畫布上既有球標
+    const m = lettersToNum((document.getElementById('p-balloon-next') || {}).value);
+    return m ? numToLetters(m) : 'A';                              // 尊重使用者手動起始字母
+}
+function makeBalloonGlyphItems(letter, size, cx, cy) {
+    return [
+        new fabric.Circle({ left: cx, top: cy, radius: size / 2, fill: '#ffffff', stroke: '#000000', strokeWidth: Math.max(1.5, size / 20), originX: 'center', originY: 'center' }),
+        new fabric.Text(letter, { left: cx, top: cy, fontSize: size * 0.62, fontFamily: 'Arial', fontWeight: 'bold', fill: '#000000', originX: 'center', originY: 'center' })
+    ];
+}
+function placeBalloon(x, y) {
+    const letter = (document.getElementById('p-balloon-next').value || 'A').toUpperCase().replace(/[^A-Z]/g, '') || nextBalloonLetter();
+    const size = Math.max(12, parseInt(document.getElementById('p-balloon-size').value, 10) || 40);
+    const g = new fabric.Group(makeBalloonGlyphItems(letter, size, 0, 0), { left: x, top: y, originX: 'center', originY: 'center' });
+    g.balloonLetter = letter;
+    canvas.add(g);
+    canvas.requestRenderAll();
+    // 下一顆自動遞增（維持球標工具，連續點連續編）
+    document.getElementById('p-balloon-next').value = numToLetters(lettersToNum(letter) + 1);
+    updateBalloonSummary();
+    pushState();
+}
+/* 右下角球標範圍：「球標Ⓐ～球標Ⓕ」——字母用真實圓圈球標樣式呈現。
+   每次變動自動刪舊建新；使用者移動過的位置會沿用。 */
+function updateBalloonSummary() {
+    const old = canvas.getObjects().find(o => o.id === '__balloonSummary');
+    const nums = balloonObjects().map(o => lettersToNum(o.balloonLetter)).filter(n => n > 0).sort((a, b) => a - b);
+    if (!nums.length) { if (old) canvas.remove(old); canvas.requestRenderAll(); return; }
+    const lo = numToLetters(nums[0]), hi = numToLetters(nums[nums.length - 1]);
+    const s = 34, fs = 26;
+    const items = []; let x = 0;
+    const addTxt = str => {
+        const t = new fabric.Text(str, { left: x, top: 0, originY: 'center', fontSize: fs, fontFamily: LABEL_FONT, fontWeight: 'bold', fill: '#000000', backgroundColor: '#ffffff' });
+        items.push(t); x += t.width + 5;
+    };
+    const addGlyph = L => { items.push(...makeBalloonGlyphItems(L, s, x + s / 2, 0)); x += s + 5; };
+    addTxt('球標'); addGlyph(lo);
+    if (hi !== lo) { addTxt('～球標'); addGlyph(hi); }
+    let left, top;
+    if (old) { left = old.left; top = old.top; canvas.remove(old); } // 已有 → 自動刪除重建，位置沿用
+    else {
+        left = artboard.left + artW - 14;   // 預設貼齊圖面右下角，可再拖移
+        top = artboard.top + artH - 14;
+    }
+    const g = new fabric.Group(items, { left, top, originX: 'right', originY: 'bottom' });
+    g.id = '__balloonSummary';
+    canvas.add(g);
+    canvas.requestRenderAll();
+}
+
+/* ── 快速標籤②：設變標示（菱形/三角形＋號碼；左上角自動設變列表） ────── */
+function dcMarkObjects() {
+    return canvas.getObjects().filter(o => o.dcNumber && o.dcRole === 'mark');
+}
+function makeDcSymbol(num, shape, size) {
+    let s;
+    if (shape === 'triangle') {
+        s = new fabric.Triangle({ width: size * 1.12, height: size, fill: '#ffffff', stroke: '#000000', strokeWidth: Math.max(1.5, size / 20), originX: 'center', originY: 'center' });
+    } else {
+        s = new fabric.Rect({ width: size * 0.74, height: size * 0.74, angle: 45, fill: '#ffffff', stroke: '#000000', strokeWidth: Math.max(1.5, size / 20), originX: 'center', originY: 'center' });
+    }
+    const txt = new fabric.Text(String(num), {
+        fontSize: size * 0.46, fontFamily: 'Arial', fontWeight: 'bold', fill: '#000000',
+        originX: 'center', originY: 'center', top: shape === 'triangle' ? size * 0.14 : 0
+    });
+    return new fabric.Group([s, txt], { originX: 'center', originY: 'center' });
+}
+function todayStr() {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '.' + p(d.getMonth() + 1) + '.' + p(d.getDate());
+}
+function nextDcNumber() {
+    const used = canvas.getObjects().filter(o => o.dcNumber).map(o => o.dcNumber);
+    return used.length ? Math.max(...used) + 1 : 1;
+}
+function placeDcMark(x, y) {
+    const shape = document.getElementById('p-dc-shape').value;
+    const size = Math.max(12, parseInt(document.getElementById('p-dc-size').value, 10) || 40);
+    // 同一次設變多處 → 每次點擊都用「號碼」欄的同一個數字；使用者可自行改起始號
+    let num = parseInt(document.getElementById('p-dc-num').value, 10);
+    if (!num || num < 1) { num = nextDcNumber(); document.getElementById('p-dc-num').value = num; }
+
+    // 圖面上的標示（工具保持啟用，同號可連續點多處）
+    const mark = makeDcSymbol(num, shape, size);
+    mark.set({ left: x, top: y });
+    mark.dcNumber = num; mark.dcShape = shape; mark.dcRole = 'mark';
+    canvas.add(mark);
+
+    // 左上角設變列表：該號碼第一次放置時才建立（標示＋今日日期＋雙擊可輸入文字）
+    const hasLegend = canvas.getObjects().some(o => o.dcRole === 'legend' && o.dcNumber === num);
+    if (!hasLegend) {
+        const legendMark = makeDcSymbol(num, shape, size * 0.9);
+        legendMark.dcNumber = num; legendMark.dcShape = shape; legendMark.dcRole = 'legend';
+        const legendText = new fabric.IText(todayStr() + '  ', {
+            fontSize: size * 0.5, fontFamily: '"Microsoft JhengHei", Arial, sans-serif',
+            fill: '#000000', backgroundColor: '#ffffff', originY: 'center'
+        });
+        legendText.dcNumber = num; legendText.dcRole = 'legendText';
+        canvas.add(legendMark); canvas.add(legendText);
+        reflowDcLegend();
+        toast('設變 ' + num + ' 已加入左上角列表（雙擊該列文字輸入說明）；同號可繼續點圖面加標示，下一次設變請改「號碼」欄');
+    }
+    canvas.requestRenderAll();
+    pushState();
+}
+/* 設變列表排版：錨定圖面左上角，號碼越大（越新）越上面；新增時自動重新判定位置 */
+function reflowDcLegend() {
+    const marks = canvas.getObjects().filter(o => o.dcRole === 'legend').sort((a, b) => b.dcNumber - a.dcNumber);
+    const texts = {};
+    canvas.getObjects().filter(o => o.dcRole === 'legendText').forEach(o => texts[o.dcNumber] = o);
+    const x0 = artboard.left + 16, y0 = artboard.top + 16;
+    let y = y0;
+    marks.forEach(m => {
+        const h = m.getBoundingRect(true, true).height;
+        m.set({ left: x0 + m.getBoundingRect(true, true).width / 2, top: y + h / 2, originX: 'center', originY: 'center' });
+        m.setCoords();
+        const t = texts[m.dcNumber];
+        if (t) {
+            t.set({ left: x0 + m.getBoundingRect(true, true).width + 10, top: y + h / 2, originY: 'center' });
+            t.setCoords();
+        }
+        y += h + 8;
+    });
+}
+
+/* ── 標籤庫：規格化標籤（雙擊改字、外框自動貼合、可存庫共用） ─────────── */
+const LABEL_FONT = '"Microsoft JhengHei", "PingFang TC", Arial, sans-serif';
+/* 內建標籤（依你提供的樣式重建成可編輯向量標籤；分類為暫定，可再調整） */
+const PRESET_LABELS = [
+    { name: '齒研附P40報告',   cat: '齒研',     spec: { kind: 'box',   text: '齒研附 P40 報告' } },
+    { name: '齒底徑說明',       cat: '齒研',     spec: { kind: 'box',   text: '齒底徑 Ø\n(齒底確定有磨到此深度即可)', align: 'left' } },
+    { name: '注意隆齒設定',     cat: '注意事項', spec: { kind: 'box',   text: '注意隆齒設定' } },
+    { name: '注意結合要壓到底', cat: '注意事項', spec: { kind: 'box',   text: '注意結合要壓到底' } },
+    { name: '粗滾圖面',         cat: '滾齒',     spec: { kind: 'box',   text: '粗滾圖面' } },
+    { name: '鎖螺絲',           cat: '組裝',     spec: { kind: 'box',   text: '鎖螺絲' } },
+    { name: '攻牙用一般絲攻',   cat: '攻牙',     spec: { kind: 'inline', segs: [{ t: '攻牙用', box: false }, { t: '一般', box: true }, { t: '絲攻', box: false }] } },
+    { name: '±0.02',            cat: '公差',     spec: { kind: 'plain', text: '±0.02' } },
+    { name: 'JIS 2',            cat: '公差',     spec: { kind: 'plain', text: 'JIS 2' } },
+    { name: '(  )齒研 滾/磨',   cat: '製程表格', spec: { kind: 'table', title: '(  )齒研', rows: ['滾', '磨'] } },
+    { name: '(  )滾齒 滾',      cat: '製程表格', spec: { kind: 'table', title: '(  )滾齒', rows: ['滾'] } }
+];
+
+let __labelInk = '#000000';   // makeLabelFromSpec 執行期間的文字色（spec.color）
+function mkLabelText(str, fs, extra) {
+    return new fabric.Text(str, Object.assign({
+        fontSize: fs, fontFamily: LABEL_FONT, fontWeight: 'bold', fill: __labelInk
+    }, extra || {}));
+}
+function makeLabelFromSpec(spec) {
+    __labelInk = spec.color || '#000000';
+    const fs = spec.fontSize || 44;
+    const bw = spec.strokeW || 4;
+    const bgFill = (spec.bg === 'transparent') ? 'transparent' : '#ffffff';   // 白底或透明可選
+    const items = [];
+    if (spec.kind === 'plain') {
+        items.push(mkLabelText(spec.text, fs, { textAlign: spec.align || 'center', backgroundColor: (spec.bg === 'transparent') ? '' : '#ffffff', specPath: 'text' }));
+    } else if (spec.kind === 'box') {
+        const t = mkLabelText(spec.text, fs, { textAlign: spec.align || 'center', originX: 'center', originY: 'center', left: 0, top: 0, specPath: 'text' });
+        const pad = spec.pad != null ? spec.pad : fs * 0.32;
+        items.push(new fabric.Rect({
+            left: 0, top: 0, originX: 'center', originY: 'center',
+            width: t.width + pad * 2, height: t.height + pad * 1.1,
+            fill: bgFill, stroke: '#000000', strokeWidth: bw
+        }));
+        items.push(t);
+    } else if (spec.kind === 'inline') {
+        const pad = fs * 0.32, gap = fs * 0.35;
+        const chunks = []; let x = 0;
+        (spec.segs || []).forEach((s, i) => {
+            const t = mkLabelText(s.t, fs, { left: x, top: 0, originY: 'center', specPath: 'segs.' + i });
+            if (s.box) {
+                chunks.push(new fabric.Rect({
+                    left: x - fs * 0.14, top: -fs * 0.66, width: t.width + fs * 0.28, height: fs * 1.32,
+                    fill: 'transparent', stroke: '#000000', strokeWidth: Math.max(2, bw - 1)
+                }));
+            }
+            chunks.push(t);
+            x += t.width + gap;
+        });
+        const total = x - gap;
+        items.push(new fabric.Rect({
+            left: -pad, top: -fs * 0.66 - pad * 0.55, width: total + pad * 2, height: fs * 1.32 + pad * 1.1,
+            fill: bgFill, stroke: '#000000', strokeWidth: bw
+        }));
+        items.push(...chunks);
+    } else if (spec.kind === 'table') {
+        const rows = spec.rows || [];
+        const cols = spec.cols || null;   // 雙欄式：title + 欄標題列 + 空白格（如 熱處理前置：防碳/鎖螺絲）
+        const pad = fs * 0.4;
+        const titleT = mkLabelText(spec.title || '', fs, { specPath: 'title' });
+        const th = fs * 1.7, rh = spec.rowH || fs * 2.8;
+        if (cols && cols.length) {
+            const colW = Math.max(fs * 4, ...cols.map(c => mkLabelText(c, fs).width + pad * 2));
+            const W = Math.max(titleT.width + pad * 2, colW * cols.length);
+            const cw = W / cols.length;
+            const bodyH = spec.bodyH || fs * 2.6;
+            items.push(new fabric.Rect({ left: 0, top: 0, width: W, height: th, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
+            titleT.set({ left: W / 2, top: th / 2, originX: 'center', originY: 'center' });
+            items.push(titleT);
+            cols.forEach((c, i) => {
+                items.push(new fabric.Rect({ left: i * cw, top: th, width: cw, height: rh * 0.7, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
+                items.push(mkLabelText(c, fs, { left: i * cw + cw / 2, top: th + rh * 0.35, originX: 'center', originY: 'center', specPath: 'cols.' + i }));
+                items.push(new fabric.Rect({ left: i * cw, top: th + rh * 0.7, width: cw, height: bodyH, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
+            });
+        } else if (!rows.length) {
+            // 標題＋空白大格（如 (  )粗滾、(  )精滾、(  )插齒）
+            const W = Math.max(titleT.width + pad * 2, fs * 6);
+            const bodyH = spec.bodyH || fs * 3.4;
+            items.push(new fabric.Rect({ left: 0, top: 0, width: W, height: th, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
+            titleT.set({ left: W / 2, top: th / 2, originX: 'center', originY: 'center' });
+            items.push(titleT);
+            items.push(new fabric.Rect({ left: 0, top: th, width: W, height: bodyH, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
+        } else {
+            let col0 = Math.max(fs, ...rows.map(r => mkLabelText(r, fs).width)) + pad * 2;
+            const W = Math.max(titleT.width + pad * 2, col0 + (spec.cellW || fs * 5.5));
+            const col1 = W - col0;
+            items.push(new fabric.Rect({ left: 0, top: 0, width: W, height: th, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
+            titleT.set({ left: W / 2, top: th / 2, originX: 'center', originY: 'center' });
+            items.push(titleT);
+            rows.forEach((r, i) => {
+                const y = th + i * rh;
+                items.push(new fabric.Rect({ left: 0, top: y, width: col0, height: rh, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
+                items.push(new fabric.Rect({ left: col0, top: y, width: col1, height: rh, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
+                items.push(mkLabelText(r, fs, { left: col0 / 2, top: y + rh / 2, originX: 'center', originY: 'center', specPath: 'rows.' + i }));
+            });
+        }
+    }
+    const g = new fabric.Group(items, {});
+    g.labelSpec = JSON.parse(JSON.stringify(spec));
+    g.labelKind = spec.kind;
+    return g;
+}
+function setSpecByPath(spec, path, val) {
+    const parts = String(path).split('.');
+    let cur = spec;
+    for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
+    const last = parts[parts.length - 1];
+    if (cur[last] !== null && typeof cur[last] === 'object' && 't' in cur[last]) cur[last].t = val;
+    else cur[last] = val;
+}
+function viewCenter() {
+    const vpt = canvas.viewportTransform;
+    return { x: (wrap.clientWidth / 2 - vpt[4]) / vpt[0], y: (wrap.clientHeight / 2 - vpt[5]) / vpt[3] };
+}
+function placeLabelObject(o) {
+    const c = viewCenter();
+    o.set({ originX: 'center', originY: 'center', left: c.x, top: c.y });
+    o.setCoords();
+    canvas.add(o);
+    canvas.setActiveObject(o);
+    setTool('select');
+    canvas.requestRenderAll();
+    pushState();
+}
+/* 由 spec 建立標籤物件（統一入口；multi＝群組標籤：多個標籤直排組成一組） */
+function buildLabelObject(spec, done) {
+    if (spec.kind === 'image') {
+        fabric.Image.fromURL(encodeURI(spec.url), function (img) {
+            if (!img || !img.width) { done(null); return; }
+            img.labelSpec = spec; img.labelKind = 'image';
+            done(img);
+        }, { crossOrigin: 'anonymous' });
+        return;
+    }
+    if (spec.kind === 'fabric') {
+        const j = JSON.parse(JSON.stringify(spec.json));
+        if (j.type === 'activeSelection') j.type = 'group';
+        fabric.util.enlivenObjects([j], function (objs) {
+            if (!objs || !objs[0]) { done(null); return; }
+            objs[0].labelSpec = spec; objs[0].labelKind = 'fabric';
+            done(objs[0]);
+        });
+        return;
+    }
+    if (spec.kind === 'multi') {
+        const parts = (spec.specs || []).slice();
+        const objs = [];
+        const next = i => {
+            if (i >= parts.length) {
+                if (!objs.length) { done(null); return; }
+                let y = 0;
+                objs.forEach(o => {
+                    o.set({ originX: 'left', originY: 'top', left: 0, top: y });
+                    o.setCoords();
+                    y += o.getScaledHeight() + 12;
+                });
+                const g = new fabric.Group(objs, {});
+                g.labelSpec = spec; g.labelKind = 'multi';
+                done(g);
+                return;
+            }
+            buildLabelObject(parts[i], o => { if (o) objs.push(o); next(i + 1); });
+        };
+        next(0);
+        return;
+    }
+    done(makeLabelFromSpec(spec));
+}
+function insertLabel(spec) {
+    const s = JSON.parse(JSON.stringify(spec));
+    const cb = document.getElementById('lib-transparent');
+    if (cb && cb.checked && !['image', 'fabric', 'multi'].includes(s.kind)) s.bg = 'transparent';
+    buildLabelObject(s, o => {
+        if (!o) { toast('標籤載入失敗'); return; }
+        placeLabelObject(o);
+    });
+}
+/* 選取中的規格標籤：白底 ⇄ 透明 切換 */
+function toggleLabelBg() {
+    const g = canvas.getActiveObject();
+    if (!g || !g.labelSpec || g.labelSpec.kind === 'fabric') { toast('請先選取一個標籤（內建/規格標籤才能切換底色）'); return; }
+    const spec = JSON.parse(JSON.stringify(g.labelSpec));
+    spec.bg = (spec.bg === 'transparent') ? 'white' : 'transparent';
+    const center = g.getCenterPoint();
+    const { scaleX, scaleY, angle } = g;
+    canvas.remove(g);
+    const ng = makeLabelFromSpec(spec);
+    ng.set({ scaleX, scaleY, angle, originX: 'center', originY: 'center' });
+    ng.setPositionByOrigin(center, 'center', 'center');
+    ng.setCoords();
+    canvas.add(ng);
+    canvas.setActiveObject(ng);
+    canvas.requestRenderAll();
+    pushState();
+    toast('標籤底色：' + (spec.bg === 'transparent' ? '透明' : '白底'));
+}
+
+/* 標籤庫面板（分類顯示＋篩選） */
+let libLoaded = false, customLabels = [];
+function toggleLabelLib() {
+    const el = document.getElementById('label-lib');
+    el.classList.toggle('show');
+    if (el.classList.contains('show') && !libLoaded) { loadLabelLibrary(); libLoaded = true; }
+}
+/* 側欄寬度：拖曳左緣調整，記住每台電腦的偏好 */
+(function initLibResizer() {
+    const panel = document.getElementById('label-lib');
+    const saved = parseInt(localStorage.getItem('eg_imgedit_lib_w') || '0', 10);
+    if (saved >= 220) panel.style.width = Math.min(saved, window.innerWidth * 0.7) + 'px';
+    const rz = document.getElementById('lib-resizer');
+    rz.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        rz.classList.add('active');
+        const move = ev => {
+            let w = wrap.getBoundingClientRect().right - ev.clientX;   // 面板右緣固定貼齊畫布右緣
+            w = Math.max(220, Math.min(window.innerWidth * 0.7, w));
+            panel.style.width = w + 'px';
+        };
+        const up = () => {
+            rz.classList.remove('active');
+            localStorage.setItem('eg_imgedit_lib_w', String(Math.round(panel.getBoundingClientRect().width)));
+            document.removeEventListener('mousemove', move);
+            document.removeEventListener('mouseup', up);
+        };
+        document.addEventListener('mousemove', move);
+        document.addEventListener('mouseup', up);
+    });
+})();
+function labelThumbHTML(dataURL, name, delId) {
+    return '<img src="' + (dataURL || '') + '" alt=""><span class="lib-name">' + escHtml(name) + '</span>' +
+        (delId ? '<span class="lib-del" title="刪除這個自訂標籤" onclick="event.stopPropagation();deleteCustomLabel(' + delId + ')"><i class="fa fa-trash"></i></span>' : '');
+}
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function allCategories() {
+    const cats = [];
+    PRESET_LABELS.forEach(p => { if (p.cat && !cats.includes(p.cat)) cats.push(p.cat); });
+    customLabels.forEach(r => { const c = r.category || '未分類'; if (!cats.includes(c)) cats.push(c); });
+    return cats;
+}
+function refreshCatControls() {
+    const sel = document.getElementById('lib-cat-filter');
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">— 全部分類 —</option>' +
+        allCategories().map(c => '<option value="' + escHtml(c) + '">' + escHtml(c) + '</option>').join('');
+    if (Array.from(sel.options).some(o => o.value === keep)) sel.value = keep;
+    document.getElementById('lib-cat-datalist').innerHTML =
+        allCategories().map(c => '<option value="' + escHtml(c) + '">').join('');
+}
+/* ── 標籤管理跳窗：框選 / Ctrl 多選 / 拖曳搬移（Ctrl+拖曳＝複製） ── */
+let LIB_UID = 0, ALL_DEPTS = [];
+const lmSel = new Set();
+async function openLibMgr() {
+    lmSel.clear();
+    lmAnchor = null; lmAnchorGrid = null;
+    showModal('libmgr-modal');
+    document.getElementById('libmgr-body').innerHTML = '<div style="color:#8b949e;padding:20px;">載入中…</div>';
+    await loadLabelLibrary();   // 取最新資料（含部門/權限資訊）
+    lmInitChips();
+    renderLibMgr();
+    if (!MY_DEPTS.length && !IS_MGR) toast('提醒：你的帳號（' + (USER_CNAME || '') + '，ID ' + LIB_UID + '）在人員部門對應表查無部門，故沒有部門欄可放；請把此訊息回報管理者');
+}
+function lmCanTouch(row) { return IS_MGR || Number(row.owner_user_id) === Number(LIB_UID); }
+/* 部門晶片：單一部門欄，頂部列出使用者的部門按鈕（可複選）。
+   拖進部門欄＝同時發佈到所有點亮的部門；顯示內容也跟著點亮的部門過濾。 */
+let lmDeptChips = [];
+let lmAnchor = null, lmAnchorGrid = null;   // Shift 範圍選取的錨點
+function lmInitChips() {
+    lmDeptChips = MY_DEPTS.map(d => ({ id: Number(d.id), name: d.name, on: true }));
+    // 管理者：把「已有部門標籤」的其他部門也列為晶片（預設不點亮）
+    if (IS_MGR) {
+        ALL_DEPTS.forEach(d => {
+            if (!lmDeptChips.some(c => c.id === Number(d.id)) &&
+                customLabels.some(r => r.owner_type === 'dept' && Number(r.owner_dept_id) === Number(d.id))) {
+                lmDeptChips.push({ id: Number(d.id), name: d.name, on: false });
+            }
+        });
+    }
+}
+function lmActiveDepts() { return lmDeptChips.filter(c => c.on).map(c => c.id); }
+function lmToggleChip(id) {
+    const c = lmDeptChips.find(c => c.id === id);
+    if (c) c.on = !c.on;
+    renderLibMgr();
+}
+function lmAddDeptChip(sel) {
+    const id = parseInt(sel.value, 10);
+    if (!id) return;
+    if (!lmDeptChips.some(c => c.id === id)) {
+        const d = ALL_DEPTS.find(d => Number(d.id) === id);
+        if (d) lmDeptChips.push({ id, name: d.name, on: true });
+    } else lmDeptChips.find(c => c.id === id).on = true;
+    renderLibMgr();
+}
+function lmCols() {
+    return [
+        { scope: 'private', title: '🔒 私人標籤', color: '#b39ddb' },
+        { scope: 'dept',    title: '👥 部門標籤', color: '#1abb9c' },
+        { scope: 'company', title: '🏢 公司共用' + (IS_MGR ? '' : '（唯讀）'), color: '#e67e22' }
+    ];
+}
+function lmUpdateCount() { document.getElementById('lm-sel-count').textContent = lmSel.size; }
+function renderLibMgr() {
+    const body = document.getElementById('libmgr-body');
+    body.innerHTML = '';
+    lmCols().forEach(col => {
+        const el = document.createElement('div');
+        el.className = 'lm-col';
+        el.dataset.scope = col.scope;
+        let head = '<span style="color:' + col.color + ';">' + escHtml(col.title) + '</span>';
+        if (col.scope === 'dept') {
+            // 部門切換鈕（可複選）：拖進此欄＝同時發佈到所有點亮的部門
+            head += '<span style="display:flex;flex-wrap:wrap;gap:4px;margin-left:4px;">'
+                + lmDeptChips.map(c => '<span class="lm-chip' + (c.on ? ' on' : '') + '" onclick="lmToggleChip(' + c.id + ')" title="點擊切換；拖進此欄會同時放到所有亮起的部門">' + escHtml(c.name) + '</span>').join('')
+                + '</span>';
+            if (IS_MGR && ALL_DEPTS.length) {
+                head += '<select onchange="lmAddDeptChip(this)" onclick="event.stopPropagation()" style="background:#14161a;border:1px solid #45494f;color:#8b949e;border-radius:3px;font-size:11px;padding:1px;max-width:70px;">'
+                    + '<option value="">＋部門</option>'
+                    + ALL_DEPTS.filter(d => !lmDeptChips.some(c => c.id === Number(d.id))).map(d => '<option value="' + d.id + '">' + escHtml(d.name) + '</option>').join('')
+                    + '</select>';
+            }
+        }
+        el.innerHTML = '<div class="lm-col-head" style="flex-wrap:wrap;">' + head + '</div>';
+        const grid = document.createElement('div');
+        grid.className = 'lm-grid';
+        // 欄內容
+        let rows = [];
+        if (col.scope === 'private') rows = customLabels.filter(r => r.owner_type === 'private');
+        else if (col.scope === 'company') rows = customLabels.filter(r => r.owner_type === 'company');
+        else if (col.scope === 'dept') {
+            const act = lmActiveDepts();
+            rows = customLabels.filter(r => r.owner_type === 'dept' && act.includes(Number(r.owner_dept_id)));
+        }
+        rows.sort((a, b) => String(a.category || '').localeCompare(String(b.category || '')));
+        rows.forEach(row => {
+            const it = document.createElement('div');
+            it.className = 'lm-item' + (lmSel.has(row.label_id) ? ' sel' : '') + (lmCanTouch(row) ? '' : ' lock');
+            it.style.position = 'relative';
+            it.dataset.id = row.label_id;
+            it.title = row.label_name + (row.category ? '（' + row.category + '）' : '') + (lmCanTouch(row) ? '' : '｜他人建立，無法移動');
+            it.innerHTML = '<img alt=""><span class="lm-name"' + (Number(row.hide_name) ? ' style="color:#bbb;font-style:italic;"' : '') + '>'
+                + escHtml(row.label_name) + (Number(row.hide_name) ? ' <i class="fa fa-eye-slash"></i>' : '') + '</span>'
+                + (col.scope === 'dept' && row.dept_name ? '<span class="lm-dept-badge">' + escHtml(row.dept_name) + '</span>' : '');
+            makeSpecThumb(row.spec, url => { const img = it.querySelector('img'); if (img && url) img.src = url; });
+            it.draggable = lmCanTouch(row);
+            it.addEventListener('click', e => {
+                e.stopPropagation();
+                const id = row.label_id;
+                if (e.shiftKey && lmAnchor != null && lmAnchorGrid === grid) {
+                    // Shift＝從錨點到此的範圍選取（同一欄內）；加 Ctrl 則保留原選取
+                    const items = Array.from(grid.querySelectorAll('.lm-item'));
+                    const i1 = items.findIndex(x => parseInt(x.dataset.id, 10) === lmAnchor);
+                    const i2 = items.findIndex(x => parseInt(x.dataset.id, 10) === id);
+                    if (i1 >= 0 && i2 >= 0) {
+                        if (!(e.ctrlKey || e.metaKey)) lmSel.clear();
+                        const a = Math.min(i1, i2), b = Math.max(i1, i2);
+                        for (let k = a; k <= b; k++) lmSel.add(parseInt(items[k].dataset.id, 10));
+                    }
+                } else if (e.ctrlKey || e.metaKey) {
+                    lmSel.has(id) ? lmSel.delete(id) : lmSel.add(id);
+                    lmAnchor = id; lmAnchorGrid = grid;
+                } else {
+                    lmSel.clear(); lmSel.add(id);
+                    lmAnchor = id; lmAnchorGrid = grid;
+                }
+                syncLmSelClass(); lmUpdateCount();
+            });
+            it.addEventListener('dragstart', e => {
+                if (!lmSel.has(row.label_id)) { lmSel.clear(); lmSel.add(row.label_id); syncLmSelClass(); lmUpdateCount(); }
+                e.dataTransfer.setData('text/plain', 'eg-labels');
+                e.dataTransfer.effectAllowed = 'copyMove';
+            });
+            grid.appendChild(it);
+        });
+        if (!rows.length) grid.innerHTML = '<div style="color:#555;font-size:11px;padding:6px;">（空）拖曳標籤到這裡</div>';
+        // 放置目標
+        el.addEventListener('dragover', e => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
+            el.classList.add('dragover');
+        });
+        el.addEventListener('dragleave', () => el.classList.remove('dragover'));
+        el.addEventListener('drop', e => {
+            e.preventDefault();
+            el.classList.remove('dragover');
+            const scope = col.scope;
+            let deptIds = [];
+            if (scope === 'dept') {
+                deptIds = lmActiveDepts();
+                if (!deptIds.length) { toast('請先點亮至少一個部門按鈕（部門欄頂部）'); return; }
+            }
+            if (scope === 'company' && !IS_MGR) { toast('只有管理者可放到公司共用'); return; }
+            lmMove(scope, deptIds, e.ctrlKey ? 'copy' : 'move');
+        });
+        // 框選（滑鼠在欄內空白處拖出選取框）
+        grid.addEventListener('mousedown', e => {
+            if (e.target.closest('.lm-item') || e.button !== 0) return;
+            const keep = e.ctrlKey || e.metaKey;
+            const rub = document.getElementById('lm-rubber');
+            const sx = e.clientX, sy = e.clientY;
+            rub.style.display = 'block';
+            const move = ev => {
+                const x = Math.min(sx, ev.clientX), y = Math.min(sy, ev.clientY);
+                const w = Math.abs(ev.clientX - sx), h = Math.abs(ev.clientY - sy);
+                Object.assign(rub.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
+                if (!keep) lmSel.clear();
+                grid.querySelectorAll('.lm-item').forEach(it => {
+                    const r = it.getBoundingClientRect();
+                    const hit = !(r.right < x || r.left > x + w || r.bottom < y || r.top > y + h);
+                    if (hit) lmSel.add(parseInt(it.dataset.id, 10));
+                });
+                syncLmSelClass(); lmUpdateCount();
+            };
+            const up = () => {
+                rub.style.display = 'none'; rub.style.width = '0'; rub.style.height = '0';
+                document.removeEventListener('mousemove', move);
+                document.removeEventListener('mouseup', up);
+            };
+            document.addEventListener('mousemove', move);
+            document.addEventListener('mouseup', up);
+            e.preventDefault();
+        });
+        el.appendChild(grid);
+        body.appendChild(el);
+    });
+    syncLmSelClass(); lmUpdateCount();
+}
+function syncLmSelClass() {
+    document.querySelectorAll('#libmgr-body .lm-item').forEach(it =>
+        it.classList.toggle('sel', lmSel.has(parseInt(it.dataset.id, 10))));
+}
+async function lmMove(scope, deptIds, mode) {
+    if (!lmSel.size) { toast('請先選取標籤'); return; }
+    try {
+        const fd = new FormData();
+        fd.append('action', 'move_labels');
+        fd.append('label_ids', JSON.stringify(Array.from(lmSel)));
+        fd.append('mode', mode);
+        fd.append('scope', scope);
+        fd.append('dept_ids', JSON.stringify(deptIds || []));
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        toast((mode === 'copy' ? '已複製 ' : '已搬移 ') + res.count + ' 個標籤');
+        lmSel.clear();
+        await loadLabelLibrary();
+        renderLibMgr();
+    } catch (e) { toast('執行失敗：' + (e.message || '')); }
+}
+/* 組成群組標籤：選取的標籤 spec 打包成 multi，存回標籤庫（點一下整組插入） */
+function lmMakeGroupLabel() {
+    if (lmSel.size < 2) { toast('請先選取兩個以上的標籤'); return; }
+    const rows = customLabels.filter(r => lmSel.has(r.label_id));   // 依顯示順序
+    if (!rows.length) return;
+    pendingLabelSpec = { kind: 'multi', specs: rows.map(r => JSON.parse(JSON.stringify(r.spec))) };
+    document.getElementById('sl-name').value = '';
+    document.getElementById('sl-cat').value = '群組';
+    document.getElementById('sl-scope').value = 'private';
+    const sd = document.getElementById('sl-dept');
+    sd.innerHTML = MY_DEPTS.map(d => '<option value="' + d.id + '">' + escHtml(d.name) + '</option>').join('');
+    sd.style.display = 'none';
+    showModal('savelabel-modal');
+    document.getElementById('sl-name').focus();
+}
+/* 批次設定分類 */
+function lmOpenSetCat() {
+    if (!lmSel.size) { toast('請先選取標籤'); return; }
+    document.getElementById('sc-cat').value = '';
+    showModal('setcat-modal');
+    document.getElementById('sc-cat').focus();
+}
+async function confirmSetCat() {
+    const cat = document.getElementById('sc-cat').value.trim();
+    try {
+        const fd = new FormData();
+        fd.append('action', 'set_label_category');
+        fd.append('label_ids', JSON.stringify(Array.from(lmSel)));
+        fd.append('category', cat);
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        hideModal('setcat-modal');
+        toast('已把 ' + res.count + ' 個標籤設為分類「' + (cat || '未分類') + '」');
+        await loadLabelLibrary();
+        renderLibMgr();
+    } catch (e) { toast('設定失敗：' + (e.message || '')); }
+}
+async function lmSetHideName(hide) {
+    if (!lmSel.size) { toast('請先選取標籤'); return; }
+    try {
+        const fd = new FormData();
+        fd.append('action', 'set_label_flag');
+        fd.append('label_ids', JSON.stringify(Array.from(lmSel)));
+        fd.append('hide_name', hide);
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        toast((hide ? '已設定 ' : '已恢復 ') + res.count + ' 個標籤' + (hide ? '不顯示名稱' : '顯示名稱'));
+        await loadLabelLibrary();
+        renderLibMgr();
+    } catch (e) { toast('設定失敗：' + (e.message || '')); }
+}
+async function lmDeleteSelected() {
+    if (!lmSel.size) { toast('請先選取要刪除的標籤'); return; }
+    if (!confirm('確定刪除選取的 ' + lmSel.size + ' 個標籤？')) return;
+    let ok = 0, fail = 0;
+    for (const id of Array.from(lmSel)) {
+        try {
+            const fd = new FormData();
+            fd.append('action', 'delete_label'); fd.append('label_id', id);
+            const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+            res.success ? ok++ : fail++;
+        } catch (e) { fail++; }
+    }
+    toast('已刪除 ' + ok + ' 個' + (fail ? '；' + fail + ' 個無權限或失敗' : ''));
+    lmSel.clear();
+    await loadLabelLibrary();
+    renderLibMgr();
+}
+
+function renderLibrary() {
+    const filter = document.getElementById('lib-cat-filter').value;
+    // 內建：依分類分組
+    const pbox = document.getElementById('lib-presets');
+    pbox.innerHTML = '';
+    const groups = {};
+    PRESET_LABELS.forEach(p => {
+        if (filter && p.cat !== filter) return;
+        (groups[p.cat || '未分類'] = groups[p.cat || '未分類'] || []).push(p);
+    });
+    Object.keys(groups).forEach(cat => {
+        const h = document.createElement('div'); h.className = 'lib-sec'; h.textContent = '▸ ' + cat;
+        pbox.appendChild(h);
+        groups[cat].forEach(p => {
+            const g = makeLabelFromSpec(p.spec);
+            const url = g.toDataURL({ format: 'png', multiplier: Math.min(1, 210 / g.width, 100 / g.height) });
+            const div = document.createElement('div');
+            div.className = 'lib-item';
+            div.innerHTML = labelThumbHTML(url, p.name, 0);
+            div.onclick = () => insertLabel(p.spec);
+            pbox.appendChild(div);
+        });
+    });
+    if (!pbox.children.length) pbox.innerHTML = '<div style="color:#666;font-size:11px;padding:6px;">此分類沒有內建標籤</div>';
+
+    // 自訂：先分範圍（公司共用/部門/私人），範圍內再依分類分組
+    const cbox = document.getElementById('lib-customs');
+    cbox.innerHTML = '';
+    const SCOPES = [
+        { key: 'company', title: '🏢 公司共用', color: '#e67e22' },
+        { key: 'dept',    title: '👥 部門標籤', color: '#1abb9c' },
+        { key: 'private', title: '🔒 私人標籤', color: '#b39ddb' }
+    ];
+    SCOPES.forEach(sc => {
+        const rows = customLabels.filter(r => (r.owner_type || 'company') === sc.key && (!filter || (r.category || '未分類') === filter));
+        if (!rows.length) return;
+        const sh = document.createElement('div');
+        sh.className = 'lib-sec';
+        sh.style.cssText = 'font-weight:700;color:' + sc.color + ';margin-top:10px;';
+        sh.textContent = sc.title;
+        cbox.appendChild(sh);
+        const cgroups = {};
+        rows.forEach(r => { const c = r.category || '未分類'; (cgroups[c] = cgroups[c] || []).push(r); });
+        Object.keys(cgroups).forEach(cat => {
+            const h = document.createElement('div'); h.className = 'lib-sec'; h.textContent = '▸ ' + cat;
+            cbox.appendChild(h);
+            cgroups[cat].forEach(row => {
+                const div = document.createElement('div');
+                div.className = 'lib-item';
+                const suffix = (sc.key === 'dept' && row.dept_name) ? '【' + row.dept_name + '】' : '';
+                const fullName = row.label_name + suffix + (row.created_by ? '（' + row.created_by + '）' : '');
+                // hide_name＝縮圖即內容，名稱不重複顯示（滑鼠停留仍看得到）
+                div.innerHTML = Number(row.hide_name) ? '<img alt="">' : labelThumbHTML('', fullName, row.label_id);
+                div.title = fullName;
+                div.onclick = () => insertLabel(row.spec);
+                cbox.appendChild(div);
+                makeSpecThumb(row.spec, url => { const img = div.querySelector('img'); if (img && url) img.src = url; });
+            });
+        });
+    });
+    if (!cbox.children.length)
+        cbox.innerHTML = '<div style="color:#666;font-size:11px;padding:6px;">' + (filter ? '此分類沒有自訂標籤' : '尚無自訂標籤。選取畫布上的物件後按下方「把選取存為標籤」。') + '</div>';
+}
+async function loadLabelLibrary() {
+    try {
+        const fd = new FormData(); fd.append('action', 'list_labels');
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        customLabels = [];
+        res.labels.forEach(row => {
+            try { row.spec = JSON.parse(row.spec_json); row.label_id = Number(row.label_id); customLabels.push(row); } catch (e) { /* 略過壞資料 */ }
+        });
+        LIB_UID = Number(res.uid || 0);
+        ALL_DEPTS = res.all_depts || [];
+        if (Array.isArray(res.my_depts)) {   // 以後端最新回傳為準（修正頁面載入時的舊資料）
+            MY_DEPTS.length = 0;
+            res.my_depts.forEach(d => MY_DEPTS.push(d));
+        }
+        refreshCatControls();
+        renderLibrary();
+    } catch (e) {
+        refreshCatControls();
+        renderLibrary();
+        document.getElementById('lib-customs').innerHTML =
+            '<div style="color:#c0392b;font-size:11px;padding:6px;">標籤庫載入失敗：' + escHtml(e.message || '') + '</div>';
+    }
+}
+function makeSpecThumb(spec, cb) {
+    if (spec.kind === 'image') { cb(encodeURI(spec.url)); return; }   // 縮圖直接用原圖
+    buildLabelObject(JSON.parse(JSON.stringify(spec)), g => {
+        if (!g) { cb(null); return; }
+        try { cb(g.toDataURL({ format: 'png', multiplier: Math.min(1, 210 / g.width, 100 / g.height) })); } catch (e) { cb(null); }
+    });
+}
+let pendingLabelSpec = null;
+function saveSelectionAsLabel() {
+    const obj = canvas.getActiveObject();
+    if (!obj) { toast('請先在畫布上選取要存成標籤的物件（可框選多個）'); return; }
+    if (obj.labelSpec && obj.labelSpec.kind !== 'fabric') pendingLabelSpec = obj.labelSpec;
+    else {
+        const j = obj.toObject(SNAP_PROPS);
+        if (j.type === 'activeSelection') j.type = 'group';
+        pendingLabelSpec = { kind: 'fabric', json: j };
+    }
+    document.getElementById('sl-name').value = '';
+    document.getElementById('sl-cat').value = document.getElementById('lib-cat-filter').value || '';
+    // 範圍：預設私人；部門下拉帶自己所屬部門
+    document.getElementById('sl-scope').value = 'private';
+    const sd = document.getElementById('sl-dept');
+    sd.innerHTML = MY_DEPTS.map(d => '<option value="' + d.id + '">' + escHtml(d.name) + '</option>').join('');
+    sd.style.display = 'none';
+    showModal('savelabel-modal');
+    document.getElementById('sl-name').focus();
+}
+async function confirmSaveLabel() {
+    const name = document.getElementById('sl-name').value.trim();
+    const cat = document.getElementById('sl-cat').value.trim();
+    if (!name) { toast('請輸入標籤名稱'); return; }
+    if (!pendingLabelSpec) { hideModal('savelabel-modal'); return; }
+    try {
+        const fd = new FormData();
+        fd.append('action', 'save_label');
+        fd.append('name', name);
+        fd.append('category', cat);
+        fd.append('scope', document.getElementById('sl-scope').value);
+        fd.append('dept_id', document.getElementById('sl-dept').value || '0');
+        fd.append('spec', JSON.stringify(pendingLabelSpec));
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        pendingLabelSpec = null;
+        hideModal('savelabel-modal');
+        toast('已存入標籤庫：' + name + (cat ? '（' + cat + '）' : ''));
+        await loadLabelLibrary();
+        if (document.getElementById('libmgr-modal').classList.contains('show')) renderLibMgr();
+    } catch (e) { toast('儲存失敗：' + (e.message || '')); }
+}
+async function deleteCustomLabel(id) {
+    if (!confirm('確定刪除這個自訂標籤？（標籤庫是全體共用的）')) return;
+    try {
+        const fd = new FormData();
+        fd.append('action', 'delete_label'); fd.append('label_id', id);
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        loadLabelLibrary();
+    } catch (e) { toast('刪除失敗：' + (e.message || '')); }
+}
+
+/* 建立文字標籤（可改字規格標籤建立器） */
+function openNewLabelModal() {
+    document.getElementById('nl-text').value = '';
+    document.getElementById('nl-name').value = '';
+    document.getElementById('nl-cat').value = document.getElementById('lib-cat-filter').value || '';
+    document.getElementById('nl-scope').value = 'private';
+    const nd = document.getElementById('nl-dept');
+    nd.innerHTML = MY_DEPTS.map(d => '<option value="' + d.id + '">' + escHtml(d.name) + '</option>').join('');
+    nd.style.display = 'none';
+    showModal('newlabel-modal');
+    document.getElementById('nl-text').focus();
+}
+async function confirmNewLabel() {
+    const text = document.getElementById('nl-text').value.replace(/\s+$/, '');
+    if (!text.trim()) { toast('請輸入標籤文字'); return; }
+    const spec = {
+        kind: document.getElementById('nl-kind').value,
+        text: text,
+        fontSize: Math.max(10, parseInt(document.getElementById('nl-size').value, 10) || 44),
+        align: document.getElementById('nl-align').value
+    };
+    if (document.getElementById('nl-transparent').checked) spec.bg = 'transparent';
+    const name = document.getElementById('nl-name').value.trim() || text.split('\n')[0].substring(0, 30);
+    try {
+        const fd = new FormData();
+        fd.append('action', 'save_label');
+        fd.append('name', name);
+        fd.append('category', document.getElementById('nl-cat').value.trim());
+        fd.append('scope', document.getElementById('nl-scope').value);
+        fd.append('dept_id', document.getElementById('nl-dept').value || '0');
+        fd.append('spec', JSON.stringify(spec));
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        hideModal('newlabel-modal');
+        toast('已建立標籤：' + name);
+        await loadLabelLibrary();
+        if (document.getElementById('libmgr-modal').classList.contains('show')) renderLibMgr();
+    } catch (e) { toast('建立失敗：' + (e.message || '')); }
+}
+
+/* 雙擊群組：
+   - 一般群組（或 Alt+雙擊任何群組）→ 進入群組：拆成多選，可個別移動，調整完 Ctrl+G 重新群組
+   - 標籤群組 → 就地編輯其中的文字（規格標籤改完外框自動貼合字長） */
+function enterGroup(g) {
+    const props = { labelSpec: g.labelSpec, labelKind: g.labelKind };
+    g.toActiveSelection();
+    const sel = canvas.getActiveObject();
+    if (sel) sel._regroupProps = props;   // Ctrl+G 重組時還原標籤屬性
+    canvas.requestRenderAll();
+    pushState();
+    toast('已進入群組（拆成多選）：點空白處取消選取後可個別移動；調整完框選物件按 Ctrl+G 重新群組');
+}
+canvas.on('mouse:dblclick', function (opt) {
+    const g = opt.target;
+    if (!g || g.type !== 'group' || currentTool !== 'select') return;
+    if (opt.e.altKey) { enterGroup(g); return; }
+    if (g.merged) return;                                        // 合併物件＝單一物件，雙擊不拆
+    if (!g.labelSpec || g.labelSpec.kind === 'multi') { enterGroup(g); return; }
+    const p = canvas.getPointer(opt.e);
+    const texts = [];
+    g.forEachObject(o => { if (o.type === 'text' || o.type === 'i-text') texts.push(o); });
+    if (!texts.length) return;
+    let best = null, bd = Infinity;
+    texts.forEach(t => {
+        const d = fabric.util.qrDecompose(t.calcTransformMatrix());
+        const dist = (d.translateX - p.x) ** 2 + (d.translateY - p.y) ** 2;
+        if (dist < bd) { bd = dist; best = t; }
+    });
+    startGroupTextEdit(g, best);
+});
+function startGroupTextEdit(group, child) {
+    const dec = fabric.util.qrDecompose(child.calcTransformMatrix());
+    child.visible = false; group.dirty = true;
+    canvas.requestRenderAll();
+    const tmp = new fabric.IText(child.text, {
+        left: dec.translateX, top: dec.translateY, originX: 'center', originY: 'center',
+        angle: dec.angle, scaleX: dec.scaleX, scaleY: dec.scaleY,
+        fontSize: child.fontSize, fontFamily: child.fontFamily, fontWeight: child.fontWeight,
+        fill: child.fill, textAlign: child.textAlign || 'center', backgroundColor: '#fff8d6'
+    });
+    canvas.add(tmp);
+    canvas.setActiveObject(tmp);
+    tmp.enterEditing(); tmp.selectAll();
+    tmp.on('editing:exited', function () {
+        const val = tmp.text;
+        canvas.remove(tmp);
+        child.visible = true;
+        finishGroupTextEdit(group, child, val);
+    });
+}
+function finishGroupTextEdit(group, child, val) {
+    const center = group.getCenterPoint();
+    if (group.labelSpec && group.labelSpec.kind !== 'fabric' && child.specPath) {
+        // 規格標籤：改 spec 後整顆重建（外框自動貼合新字長），保留使用者縮放/旋轉
+        const spec = JSON.parse(JSON.stringify(group.labelSpec));
+        setSpecByPath(spec, child.specPath, val);
+        const { scaleX, scaleY, angle } = group;
+        canvas.remove(group);
+        const ng = makeLabelFromSpec(spec);
+        ng.set({ scaleX, scaleY, angle, originX: 'center', originY: 'center' });
+        ng.setPositionByOrigin(center, 'center', 'center');
+        ng.setCoords();
+        canvas.add(ng);
+        canvas.setActiveObject(ng);
+    } else {
+        // 自由組合（fabric）標籤：改字後重組群組以重算邊界
+        child.set('text', val); child.dirty = true;
+        const props = { labelSpec: group.labelSpec, labelKind: group.labelKind };
+        const kids = group.getObjects().slice();
+        group.destroy();               // 還原子物件為絕對座標（含群組縮放）
+        canvas.remove(group);
+        const ng = new fabric.Group(kids);
+        Object.assign(ng, props);
+        canvas.add(ng);
+        canvas.setActiveObject(ng);
+    }
+    canvas.requestRenderAll();
+    pushState();
+}
+
+/* Figma 式快速複製：Alt+拖曳 = 原地留一份、拖走一份（Ctrl+D 亦可） */
+canvas.on('mouse:down', function (opt) {
+    if (currentTool !== 'select' || !opt.e.altKey || !opt.target || opt.target === artboard) return;
+    const src = opt.target;
+    src.clone(function (cl) {
+        cl.set({ left: src.left, top: src.top });
+        canvas.add(cl);
+        cl.moveTo(canvas.getObjects().indexOf(src));  // 複製品墊在原件下方，使用者拖走的是原件
+        pushState();
+    }, SNAP_PROPS);
+});
+
+/* ── 圖片載入：檔案 / 拖放 / 剪貼簿 ── */
+function openImageFiles() { document.getElementById('file-input').click(); }
+document.getElementById('file-input').addEventListener('change', function () {
+    loadFiles(Array.from(this.files)); this.value = '';
+});
+
+let addOffset = 0;
+function loadFiles(files) {
+    const imgs = files.filter(f => f.type.startsWith('image/'));
+    if (!imgs.length) { toast('沒有可用的圖片檔'); return; }
+    imgs.forEach((f, i) => {
+        const r = new FileReader();
+        r.onload = e => addImageFromURL(e.target.result, i);
+        r.readAsDataURL(f);
+    });
+}
+function addImageFromURL(url, cascade) {
+    fabric.Image.fromURL(url, function (img) {
+        // 圖比畫布大很多 → 自動撐大畫布（解決小畫家貼圖被裁掉的問題）
+        if (img.width > artW || img.height > artH) {
+            setArtboardSize(Math.max(artW, img.width + 40), Math.max(artH, img.height + 40));
+            zoomFit();
+        }
+        const off = (cascade || 0) * 30 + (addOffset % 5) * 24;
+        addOffset++;
+        img.set({
+            left: artboard.left + (artW - img.width * (img.scaleX || 1)) / 2 + off,
+            top: artboard.top + (artH - img.height * (img.scaleY || 1)) / 2 + off
+        });
+        canvas.add(img);
+        canvas.setActiveObject(img);
+        setTool('select');
+        canvas.requestRenderAll();
+        pushState();
+        toast('已加入圖片（' + img.width + '×' + img.height + '），可拖角縮放對齊');
+    }, { crossOrigin: 'anonymous' });
+}
+
+/* 拖放開圖 */
+['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => {
+    e.preventDefault();
+    if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files'))
+        document.getElementById('drop-hint').classList.add('show');
+}));
+['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => {
+    e.preventDefault();
+    if (ev === 'drop' || e.target === document.documentElement || !e.relatedTarget)
+        document.getElementById('drop-hint').classList.remove('show');
+}));
+document.addEventListener('drop', e => {
+    e.preventDefault();
+    if (e.dataTransfer && e.dataTransfer.files.length) loadFiles(Array.from(e.dataTransfer.files));
+});
+
+/* 剪貼簿貼上：優先系統圖片（小畫家）→ 內部物件複製 → 跨視窗剪貼簿 */
+let internalClip = null, internalClipTs = 0;
+document.addEventListener('paste', function (e) {
+    // 焦點在輸入欄位（例如匯出檔名）時，貼上交給瀏覽器，不動畫布
+    const tag = (document.activeElement || {}).tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    const items = (e.clipboardData || {}).items || [];
+    for (const it of items) {
+        if (it.type && it.type.startsWith('image/')) {
+            const blob = it.getAsFile();
+            const r = new FileReader();
+            r.onload = ev => addImageFromURL(ev.target.result, 0);
+            r.readAsDataURL(blob);
+            e.preventDefault();
+            return;
+        }
+    }
+    if (isTextEditing()) return; // 文字編輯中的純文字貼上交給 IText
+    pasteInternalOrCross();
+});
+async function pasteFromButton() {
+    // 按鈕觸發：嘗試 async clipboard（需 HTTPS/localhost），失敗則提示用 Ctrl+V
+    if (navigator.clipboard && navigator.clipboard.read) {
+        try {
+            const items = await navigator.clipboard.read();
+            for (const item of items) {
+                const t = item.types.find(t => t.startsWith('image/'));
+                if (t) {
+                    const blob = await item.getType(t);
+                    const r = new FileReader();
+                    r.onload = ev => addImageFromURL(ev.target.result, 0);
+                    r.readAsDataURL(blob);
+                    return;
+                }
+            }
+        } catch (err) { /* fallthrough */ }
+    }
+    if (!pasteInternalOrCross()) toast('請直接按 Ctrl+V 貼上（瀏覽器限制，按鈕無法讀取系統剪貼簿）');
+}
+function pasteInternalOrCross() {
+    let cross = null;
+    try { cross = JSON.parse(localStorage.getItem(CLIP_KEY) || 'null'); } catch (e) {}
+    if (cross && (!internalClip || cross.ts > internalClipTs)) {
+        addImageFromURL(cross.dataURL, 0);
+        return true;
+    }
+    if (internalClip) {
+        internalClip.clone(function (cl) {
+            cl.set({ left: cl.left + 20, top: cl.top + 20 });
+            if (cl.type === 'activeSelection') {
+                cl.canvas = canvas;
+                cl.forEachObject(o => canvas.add(o));
+                cl.setCoords();
+            } else canvas.add(cl);
+            canvas.setActiveObject(cl);
+            canvas.requestRenderAll();
+            pushState();
+        }, SNAP_PROPS);
+        return true;
+    }
+    return false;
+}
+
+/* Ctrl+C：內部複製 + 寫入跨視窗剪貼簿（把選取內容輸出成 PNG dataURL） */
+function copySelection() {
+    const obj = canvas.getActiveObject();
+    if (!obj) return false;
+    obj.clone(function (cl) { internalClip = cl; internalClipTs = Date.now(); }, SNAP_PROPS);
+    try {
+        const url = exportSelectionDataURL(obj, 'png', 1);
+        localStorage.setItem(CLIP_KEY, JSON.stringify({ ts: Date.now(), dataURL: url }));
+    } catch (e) { /* localStorage 容量不足時只保留內部複製 */ }
+    return true;
+}
+function copySelectionCrossWindow() {
+    if (!canvas.getActiveObject()) { toast('請先選取要複製的物件'); return; }
+    // 注意：系統剪貼簿（小畫家複製的東西）優先權在 Ctrl+V；跨窗內容請在另一視窗用 Ctrl+Shift+V 或「貼上」按鈕
+    if (copySelection()) toast('已複製。到另一個批圖視窗按 Ctrl+Shift+V（或頂列「貼上」按鈕）貼上');
+}
+function duplicateSelection() {
+    const obj = canvas.getActiveObject();
+    if (!obj) return;
+    obj.clone(function (cl) {
+        cl.set({ left: cl.left + 20, top: cl.top + 20 });
+        if (cl.type === 'activeSelection') {
+            cl.canvas = canvas;
+            cl.forEachObject(o => canvas.add(o));
+            cl.setCoords();
+        } else canvas.add(cl);
+        canvas.setActiveObject(cl);
+        canvas.requestRenderAll();
+        pushState();
+    }, SNAP_PROPS);
+}
+
+/* ── 框選複製（把區域合成影像變新圖塊；白底視為透明，貼上時不蓋住下面的東西） ── */
+function doCropCopy(x, y, w, h) {
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+    const el = exportRegionCanvasEl(x, y, w, h, 1);
+    if (document.getElementById('p-crop-transparent').checked) whiteToTransparent(el);
+    const url = el.toDataURL('image/png');
+    try { localStorage.setItem(CLIP_KEY, JSON.stringify({ ts: Date.now(), dataURL: url })); } catch (e) {}
+    fabric.Image.fromURL(url, function (img) {
+        img.set({ left: x + 24, top: y + 24 });
+        canvas.add(img);
+        canvas.setActiveObject(img);
+        setTool('select');
+        canvas.requestRenderAll();
+        pushState();
+        toast('已複製框選範圍成新圖塊（也可到另一個批圖視窗 Ctrl+V 貼上）');
+    });
+}
+
+/* ── 框選搬移（小畫家式）：只把「底圖」從選取範圍真正挖空（燒進圖片像素，不是蓋一層遮板），
+   標籤/文字等其他物件保持原樣不受影響；切下來的內容白底視為透明，拖到新位置不會蓋住下面的東西。
+   用完停留在此工具可連續框選，按 Esc 或切換其他工具才離開 ── */
+function doCropMove(x, y, w, h) {
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+    const bgObjs = backgroundImagesInRect(x, y, w, h);
+    const others = canvas.getObjects().filter(o => o.id !== '__artboard' && bgObjs.indexOf(o) === -1);
+    const prevVis = others.map(o => o.visible !== false);
+    others.forEach(o => { o.visible = false; });
+    const el = exportRegionCanvasEl(x, y, w, h, 1);
+    others.forEach((o, i) => { o.visible = prevVis[i]; });
+    if (document.getElementById('p-crop-transparent').checked) whiteToTransparent(el);
+    const url = el.toDataURL('image/png');
+    const fillColor = toHex(artboard.fill) || '#ffffff';
+    let skipped = 0;
+    bgObjs.forEach(o => {
+        if (punchHoleInImage(o, x, y, w, h, fillColor)) return;
+        skipped++;
+        // 無法真正挖空（旋轉/已裁切）的底圖，退回原本「疊一層遮板」做法，只蓋住那張圖被選到的範圍
+        const br = o.getBoundingRect(true, true);
+        const ix = Math.max(x, br.left), iy = Math.max(y, br.top);
+        const ix2 = Math.min(x + w, br.left + br.width), iy2 = Math.min(y + h, br.top + br.height);
+        if (ix2 > ix && iy2 > iy) canvas.add(new fabric.Rect({ left: ix, top: iy, width: ix2 - ix, height: iy2 - iy, fill: fillColor }));
+    });
+    canvas.requestRenderAll();
+    fabric.Image.fromURL(url, function (img) {
+        img.set({ left: x, top: y });
+        canvas.add(img);
+        canvas.setActiveObject(img);
+        canvas.requestRenderAll();
+        pushState();
+        toast(skipped
+            ? '已切下框選範圍；部分底圖因旋轉/已裁切無法真正挖空，改用底色覆蓋，直接拖到新位置'
+            : '已切下框選範圍（原底圖已真正挖空，其他標籤/文字不受影響），直接拖到新位置；不滿意可 Ctrl+Z 復原');
+    });
+}
+
+/* ── 匯出核心：以 identity viewport 座標裁切，確保所見即所得 ── */
+function exportRegionDataURL(x, y, w, h, format, mult) {
+    const vpt = canvas.viewportTransform.slice();
+    const active = canvas.getActiveObject();
+    canvas.discardActiveObject();
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    const prevShadow = artboard.shadow;
+    artboard.shadow = null;
+    canvas.requestRenderAll();
+    const url = canvas.toDataURL({
+        format: format || 'png',
+        quality: 0.92,
+        left: x, top: y, width: w, height: h,
+        multiplier: mult || 1,
+        enableRetinaScaling: false
+    });
+    artboard.shadow = prevShadow;
+    canvas.setViewportTransform(vpt);
+    if (active) canvas.setActiveObject(active);
+    canvas.requestRenderAll();
+    return url;
+}
+function exportSelectionDataURL(obj, format, mult) {
+    const b = obj.getBoundingRect(true, true);
+    return exportRegionDataURL(b.left, b.top, b.width, b.height, format, mult);
+}
+/* 同 exportRegionDataURL，但回傳實際 <canvas> 供進一步像素處理（白底轉透明用） */
+function exportRegionCanvasEl(x, y, w, h, mult) {
+    const vpt = canvas.viewportTransform.slice();
+    const active = canvas.getActiveObject();
+    canvas.discardActiveObject();
+    canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    const prevShadow = artboard.shadow;
+    artboard.shadow = null;
+    canvas.requestRenderAll();
+    const el = canvas.toCanvasElement(mult || 1, { left: x, top: y, width: w, height: h });
+    artboard.shadow = prevShadow;
+    canvas.setViewportTransform(vpt);
+    if (active) canvas.setActiveObject(active);
+    canvas.requestRenderAll();
+    return el;
+}
+/* 選取後透明選擇：白色（含接近白）像素視為透明，搬移/貼上時白底不會蓋住下面的東西 */
+function whiteToTransparent(canvasEl, threshold) {
+    threshold = threshold || 245;
+    const ctx = canvasEl.getContext('2d');
+    const id = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+    const d = id.data;
+    for (let i = 0; i < d.length; i += 4) {
+        if (d[i] >= threshold && d[i + 1] >= threshold && d[i + 2] >= threshold) d[i + 3] = 0;
+    }
+    ctx.putImageData(id, 0, 0);
+}
+/* 框選範圍內、屬於「底圖」的 fabric.Image（排除標籤/球標等其他物件與畫布本身） */
+function backgroundImagesInRect(x, y, w, h) {
+    return canvas.getObjects().filter(o => {
+        if (o.type !== 'image' || o.id === '__artboard' || o.labelSpec || o.labelKind) return false;
+        const br = o.getBoundingRect(true, true);
+        return !(br.left + br.width <= x || br.left >= x + w || br.top + br.height <= y || br.top >= y + h);
+    });
+}
+/* 把底圖在選取範圍內的部分真正挖空（燒進圖片像素填色），而不是疊一層遮板；
+   有旋轉或已裁切(cropX/cropY)的底圖座標換算太複雜且容易算錯，跳過改用底色覆蓋 */
+function punchHoleInImage(obj, x, y, w, h, fillColor, polyPoints) {
+    const ang = ((obj.angle || 0) % 360 + 360) % 360;
+    if (ang > 0.01 && ang < 359.99) return false;
+    if (obj.cropX || obj.cropY) return false;
+    const br = obj.getBoundingRect(true, true);
+    const ix = Math.max(x, br.left), iy = Math.max(y, br.top);
+    const ix2 = Math.min(x + w, br.left + br.width), iy2 = Math.min(y + h, br.top + br.height);
+    if (ix2 <= ix || iy2 <= iy) return false;
+    const natW = obj.width, natH = obj.height;
+    if (!natW || !natH || !br.width || !br.height) return false;
+    const sx = natW / br.width, sy = natH / br.height;
+    const off = document.createElement('canvas');
+    off.width = natW; off.height = natH;
+    const ctx = off.getContext('2d');
+    ctx.drawImage(obj._element, 0, 0, natW, natH);
+    ctx.fillStyle = fillColor;
+    if (polyPoints && polyPoints.length > 2) {
+        // 不規則挖空：把場景座標的套索點換算成這張圖自己的像素座標，直接照形狀填色（canvas fill 本來就能畫任意多邊形）
+        ctx.beginPath();
+        polyPoints.forEach((pt, i) => {
+            const lx = (pt.x - br.left) * sx, ly = (pt.y - br.top) * sy;
+            if (i === 0) ctx.moveTo(lx, ly); else ctx.lineTo(lx, ly);
+        });
+        ctx.closePath();
+        ctx.fill();
+    } else {
+        const lx = (ix - br.left) * sx, ly = (iy - br.top) * sy;
+        const lw = (ix2 - ix) * sx, lh = (iy2 - iy) * sy;
+        ctx.fillRect(lx, ly, lw, lh);
+    }
+    obj.setElement(off);
+    obj.dirty = true;
+    return true;
+}
+/* 框選搬移（不規則套索版）：座套索式，只把底圖依套索形狀真正挖空，其他物件不受影響，可連續使用 */
+function polyBBox(points) {
+    const xs = points.map(p => p.x), ys = points.map(p => p.y);
+    const x = Math.min(...xs), y = Math.min(...ys);
+    return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+}
+function clipCanvasToPolygon(canvasEl, points, offsetX, offsetY) {
+    const ctx = canvasEl.getContext('2d');
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.beginPath();
+    points.forEach((pt, i) => {
+        const lx = pt.x - offsetX, ly = pt.y - offsetY;
+        if (i === 0) ctx.moveTo(lx, ly); else ctx.lineTo(lx, ly);
+    });
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+}
+function doCropMoveLasso(points) {
+    const b = polyBBox(points);
+    if (b.w < 3 || b.h < 3) return;
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+    const bgObjs = backgroundImagesInRect(b.x, b.y, b.w, b.h);
+    const others = canvas.getObjects().filter(o => o.id !== '__artboard' && bgObjs.indexOf(o) === -1);
+    const prevVis = others.map(o => o.visible !== false);
+    others.forEach(o => { o.visible = false; });
+    const el = exportRegionCanvasEl(b.x, b.y, b.w, b.h, 1);
+    others.forEach((o, i) => { o.visible = prevVis[i]; });
+    clipCanvasToPolygon(el, points, b.x, b.y);   // 只留套索範圍內的內容，範圍外變透明
+    if (document.getElementById('p-crop-transparent').checked) whiteToTransparent(el);
+    const url = el.toDataURL('image/png');
+    const fillColor = toHex(artboard.fill) || '#ffffff';
+    let anySkipped = false;
+    bgObjs.forEach(o => { if (!punchHoleInImage(o, b.x, b.y, b.w, b.h, fillColor, points)) anySkipped = true; });
+    if (anySkipped) canvas.add(new fabric.Polygon(points.slice(), { fill: fillColor, selectable: false, evented: false }));
+    canvas.requestRenderAll();
+    fabric.Image.fromURL(url, function (img) {
+        img.set({ left: b.x, top: b.y });
+        canvas.add(img);
+        canvas.setActiveObject(img);
+        canvas.requestRenderAll();
+        pushState();
+        toast(anySkipped
+            ? '已切下不規則框選範圍；部分底圖因旋轉/已裁切無法真正挖空，改用色塊覆蓋，直接拖到新位置'
+            : '已切下不規則框選範圍（原底圖已真正挖空，其他標籤/文字不受影響），直接拖到新位置；不滿意可 Ctrl+Z 復原');
+    });
+}
+
+/* ── 匯出 / 列印 / 另存 ── */
+function defaultFileName() {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    return '批圖_' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' + p(d.getHours()) + p(d.getMinutes());
+}
+function openExportModal() {
+    document.getElementById('ex-name').value = defaultFileName();
+    const hint = document.getElementById('ex-fs-hint');
+    if (window.showSaveFilePicker) {
+        hint.innerHTML = '「另存圖片」會開啟儲存位置選擇視窗（會記住上次資料夾）。';
+    } else {
+        hint.innerHTML = '目前以 HTTP 連線，瀏覽器只允許存到「下載」資料夾。<br>若要每次選擇資料夾：瀏覽器設定 → 下載 → 開啟「<b>每次下載前先詢問儲存位置</b>」，即可存到各自習慣的資料夾。';
+    }
+    showModal('export-modal');
+}
+function buildExportURL() {
+    const range = document.getElementById('ex-range').value;
+    const format = document.getElementById('ex-format').value;
+    const mult = parseFloat(document.getElementById('ex-mult').value) || 1;
+    if (range === 'selection') {
+        const obj = canvas.getActiveObject();
+        if (!obj) { toast('沒有選取物件，改匯出整個畫布'); }
+        else return exportSelectionDataURL(obj, format, mult);
+    }
+    return exportRegionDataURL(artboard.left, artboard.top, artW, artH, format, mult);
+}
+function dataURLtoBlob(u) {
+    const [head, body] = u.split(',');
+    const mime = head.match(/:(.*?);/)[1];
+    const bin = atob(body);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+}
+async function doSave() {
+    const format = document.getElementById('ex-format').value;
+    const ext = format === 'jpeg' ? '.jpg' : '.png';
+    const name = (document.getElementById('ex-name').value.trim() || defaultFileName()) + ext;
+    const url = buildExportURL();
+    const blob = dataURLtoBlob(url);
+
+    if (window.showSaveFilePicker) {
+        try {
+            const opts = {
+                suggestedName: name,
+                types: [{ description: format.toUpperCase(), accept: { [blob.type]: [ext] } }]
+            };
+            const dir = await loadDirHandle();
+            if (dir) opts.startIn = dir;
+            const fh = await window.showSaveFilePicker(opts);
+            const w = await fh.createWritable();
+            await w.write(blob); await w.close();
+            hideModal('export-modal');
+            toast('已儲存：' + fh.name);
+            return;
+        } catch (e) {
+            if (e && e.name === 'AbortError') return; // 使用者取消
+            /* 失敗改走下載 fallback */
+        }
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    hideModal('export-modal');
+    toast('已送出下載：' + name);
+}
+function doPrint() {
+    const url = buildExportURL();
+    const w = window.open('', '_blank');
+    if (!w) { toast('列印視窗被瀏覽器攔截，請允許彈出視窗'); return; }
+    w.document.write('<!DOCTYPE html><html><head><title>列印 - 批圖</title>' +
+        '<style>html,body{margin:0;padding:0;}img{max-width:100%;}@media print{img{width:100%;}}</style>' +
+        '</head><body><img src="' + url + '" onload="setTimeout(function(){window.focus();window.print();},150)"></body></html>');
+    w.document.close();
+    hideModal('export-modal');
+}
+
+/* ── 料號附件：儲存（壓平PNG＋工作檔）與開啟工作檔 ── */
+function openPartModal() {
+    document.getElementById('pf-name').value = defaultFileName();
+    document.getElementById('pf-scope').value = 'dept';
+    pfShareSelected = new Set();
+    document.getElementById('pf-share-q').value = '';
+    const pd = document.getElementById('pf-dept');
+    pd.innerHTML = MY_DEPTS.map(d => '<option value="' + d.id + '">' + escHtml(d.name) + '</option>').join('');
+    if (MY_MAIN_DEPT_ID) pd.value = String(MY_MAIN_DEPT_ID);   // 預設主要職務部門
+    pfOnScopeChange();
+    showModal('partfile-modal');
+    document.getElementById('pf-q').focus();
+}
+/* 範圍切換：部門→顯示部門下拉；指定人員→顯示搜尋+勾選名單（延遲載入使用者清單） */
+let pfAllUsers = null, pfShareSelected = new Set();
+function pfOnScopeChange() {
+    const scope = document.getElementById('pf-scope').value;
+    document.getElementById('pf-dept').style.display = (scope === 'dept') ? '' : 'none';
+    document.getElementById('pf-share-box').style.display = (scope === 'custom') ? '' : 'none';
+    if (scope === 'custom' && !pfAllUsers) loadPfShareUsers();
+}
+async function loadPfShareUsers() {
+    document.getElementById('pf-share-list').innerHTML = '載入中…';
+    try {
+        const fd = new FormData(); fd.append('action', 'list_users_for_share');
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        pfAllUsers = res.users;
+        pfRenderShareUsers();
+    } catch (e) { document.getElementById('pf-share-list').innerHTML = '<span style="color:#ff8a80;">載入失敗：' + escHtml(e.message || '') + '</span>'; }
+}
+function pfRenderShareUsers() {
+    if (!pfAllUsers) return;
+    const q = document.getElementById('pf-share-q').value.trim().toLowerCase();
+    const list = q ? pfAllUsers.filter(u => (u.user_cname || '').toLowerCase().includes(q)) : pfAllUsers;
+    const box = document.getElementById('pf-share-list');
+    box.innerHTML = list.length ? list.map(u => {
+        const dp = u.dept_name ? ('<span style="color:#8b949e;">（' + escHtml(u.dept_name) + (u.pos_name ? ' ' + escHtml(u.pos_name) : '') + '）</span>') : '';
+        return '<label style="display:flex;align-items:center;gap:5px;width:100%;margin:3px 0;font-size:12.5px;cursor:pointer;">' +
+            '<input type="checkbox" data-uid="' + u.id + '"' + (pfShareSelected.has(Number(u.id)) ? ' checked' : '') +
+            ' onchange="this.checked ? pfShareSelected.add(' + u.id + ') : pfShareSelected.delete(' + u.id + ')">' +
+            escHtml(u.user_cname || ('#' + u.id)) + dp + '</label>';
+    }).join('')
+        : '<span style="color:#8b949e;font-size:12px;">查無符合的人員（可能是對方沒有批圖編輯器使用權）</span>';
+}
+async function pfSearch() {
+    const q = document.getElementById('pf-q').value.trim();
+    if (!q) { toast('請輸入料號或圖號關鍵字'); return; }
+    try {
+        const fd = new FormData();
+        fd.append('action', 'part_search'); fd.append('q', q);
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        const sel = document.getElementById('pf-part');
+        sel.innerHTML = res.parts.length
+            ? res.parts.map(p => '<option value="' + p.d_id + '">' + escHtml(p.D_Setting_Id + (p.Drawing_No ? '｜' + p.Drawing_No : '')) + '</option>').join('')
+            : '<option value="">查無符合料號</option>';
+        pfLoadWorkfiles();
+    } catch (e) { toast('搜尋失敗：' + (e.message || '')); }
+}
+const PF_SCOPE_LABEL = { private: '私人', dept: '部門共用', custom: '指定人員', company: '公司共用（舊資料）' };
+async function pfLoadWorkfiles() {
+    const d = document.getElementById('pf-part').value;
+    const box = document.getElementById('pf-works-list');
+    if (!d) { box.innerHTML = '選料號後自動列出'; return; }
+    box.innerHTML = '載入中…';
+    try {
+        const fd = new FormData();
+        fd.append('action', 'list_workfiles'); fd.append('d_id', d);
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        box.innerHTML = res.works.length ? res.works.map(w =>
+            '<div style="display:flex;align-items:center;gap:6px;padding:4px 2px;border-bottom:1px solid #333;">' +
+            '<span style="flex:1;">' + escHtml((w.original_name || '').replace('.egwork.json', '')) + '｜' + escHtml(w.uploaded_at || '') + '｜' + escHtml(w.uploaded_by || '') +
+            '　<b style="color:#6fc3ff;">' + (PF_SCOPE_LABEL[w.scope] || w.scope) + '</b>' + (w.is_latest ? ' <b style="color:#7ed957;">（最新）</b>' : '') + '</span>' +
+            '<button class="tb-btn" onclick="pfOpenWork(' + w.id + ')" title="開啟"><i class="fa fa-folder-open"></i></button>' +
+            (w.can_delete ? '<button class="tb-btn" style="color:#ff8a80;" onclick="pfDeleteWork(' + w.id + ')" title="刪除"><i class="fa fa-trash"></i></button>' : '') +
+            '</div>').join('')
+            : '<span style="color:#8b949e;">此料號尚無你看得到的批圖工作檔</span>';
+    } catch (e) { box.innerHTML = '載入失敗'; toast('工作檔列表載入失敗：' + (e.message || '')); }
+}
+async function pfSave() {
+    const d = document.getElementById('pf-part').value;
+    if (!d) { toast('請先搜尋並選擇料號'); return; }
+    const name = document.getElementById('pf-name').value.trim() || defaultFileName();
+    const scope = document.getElementById('pf-scope').value;
+    if (scope === 'custom' && !pfShareSelected.size) { toast('請至少勾選一位要分享的人員，或改選別的範圍'); return; }
+    try {
+        toast('儲存中…');
+        const png = exportRegionDataURL(artboard.left, artboard.top, artW, artH, 'png', 2);
+        const work = JSON.stringify(canvas.toJSON(SNAP_PROPS));
+        const fd = new FormData();
+        fd.append('action', 'save_workfile');
+        fd.append('d_id', d);
+        fd.append('name', name);
+        fd.append('png', png);
+        fd.append('work', work);
+        fd.append('scope', scope);
+        fd.append('dept_id', document.getElementById('pf-dept').value || '0');
+        fd.append('share_user_ids', JSON.stringify(Array.from(pfShareSelected)));
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        toast('已存入料號附件：壓平圖＋工作檔（底圖抽離 ' + (res.extracted || 0) + ' 張）' +
+            (res.auto_removed ? '，並自動清掉 ' + res.auto_removed + ' 份超過保留上限的舊工作檔' : ''));
+        pfLoadWorkfiles();
+    } catch (e) { toast('儲存失敗：' + (e.message || '')); }
+}
+async function pfOpenWork(wid) {
+    if (!confirm('開啟工作檔會取代目前畫布內容（未儲存的變更會消失），確定？')) return;
+    try {
+        const fd = new FormData();
+        fd.append('action', 'load_workfile'); fd.append('id', wid);
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        restoreState(res.work);
+        undoStack = [res.work];
+        redoStack = [];
+        hideModal('partfile-modal');
+        setTimeout(zoomFit, 200);
+        toast('已開啟工作檔：' + (res.name || '') + '（所有標籤/文字仍可編輯）');
+    } catch (e) { toast('開啟失敗：' + (e.message || '')); }
+}
+async function pfDeleteWork(wid) {
+    if (!confirm('確定刪除這份批圖工作檔？刪除後無法復原。')) return;
+    try {
+        const fd = new FormData();
+        fd.append('action', 'delete_workfile'); fd.append('id', wid);
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        toast('已刪除工作檔');
+        pfLoadWorkfiles();
+    } catch (e) { toast('刪除失敗：' + (e.message || '')); }
+}
+
+/* 預設資料夾 handle（IndexedDB，僅 HTTPS/localhost 可用；HTTP 下自動停用） */
+function idb() {
+    return new Promise((res, rej) => {
+        const rq = indexedDB.open(DIRDB, 1);
+        rq.onupgradeneeded = () => rq.result.createObjectStore('handles');
+        rq.onsuccess = () => res(rq.result);
+        rq.onerror = () => rej(rq.error);
+    });
+}
+async function loadDirHandle() {
+    if (!window.showDirectoryPicker) return null;
+    try {
+        const db = await idb();
+        return await new Promise((res) => {
+            const tx = db.transaction('handles', 'readonly').objectStore('handles').get('dir_' + USER_ID);
+            tx.onsuccess = () => res(tx.result || null);
+            tx.onerror = () => res(null);
+        });
+    } catch (e) { return null; }
+}
+
+/* ── 物件屬性列 ── */
+function isTextEditing() {
+    const o = canvas.getActiveObject();
+    return !!(o && o.isEditing);
+}
+/* 顏色/粗細列只對「真的有邊框/填色可調」的物件（含群組、多選內含的子物件）有意義；圖片/文字/群組整體本身不算 */
+function isStrokeable(o) {
+    if (!o) return false;
+    if ((o.type === 'group' || o.type === 'activeSelection') && o.getObjects) return o.getObjects().some(isStrokeable);
+    return ['rect', 'ellipse', 'line', 'path', 'polygon'].includes(o.type);
+}
+function refreshPropbar() {
+    const obj = canvas.getActiveObject();
+    const sec = document.getElementById('sec-object');
+    sec.classList.toggle('show', !!obj);
+    const st = document.getElementById('st-sel');
+    // 選取時上方顏色/粗細列改依「選到的物件類型」決定要不要出現，不是只看目前工具
+    if (currentTool === 'select') document.getElementById('sec-stroke').classList.toggle('show', isStrokeable(obj));
+    if (!obj) { st.textContent = '未選取'; return; }
+    const b = obj.getBoundingRect(true, true);
+    st.innerHTML = '選取 <b>' + (obj.type === 'activeSelection' ? obj.getObjects().length + ' 個物件' : objTypeName(obj)) +
+        '</b>（' + Math.round(b.width) + '×' + Math.round(b.height) + '）';
+    document.getElementById('p-scale').value = Math.round((obj.scaleX || 1) * 100);
+    document.getElementById('p-angle').value = Math.round(obj.angle || 0);
+    document.getElementById('p-opacity').value = Math.round((obj.opacity ?? 1) * 100);
+    document.getElementById('btn-group').textContent = (obj.type === 'group') ? '解散群組' : '群組';
+    document.getElementById('btn-label-bg').style.display = (obj.labelSpec && obj.labelSpec.kind !== 'fabric') ? '' : 'none';
+    // 選到文字時同步文字屬性區
+    if (obj.type === 'i-text' || obj.type === 'textbox') {
+        document.getElementById('sec-text').classList.add('show');
+        document.getElementById('p-textcolor').value = toHex(obj.fill) || '#d32f2f';
+        document.getElementById('p-fontsize').value = Math.round(obj.fontSize * (obj.scaleX || 1));
+        document.getElementById('p-bold').checked = (obj.fontWeight === 'bold');
+        document.getElementById('p-textbg-on').checked = !!obj.backgroundColor;
+        if (obj.backgroundColor) document.getElementById('p-textbg').value = toHex(obj.backgroundColor) || '#fff59d';
+    }
+}
+function objTypeName(o) {
+    return ({ image: '圖片', 'i-text': '文字', textbox: '文字', rect: '矩形', ellipse: '橢圓', line: '直線',
+              group: '群組', path: '手繪線', polygon: '遮蓋(不規則)' })[o.type] || o.type;
+}
+function toHex(c) {
+    if (!c || typeof c !== 'string') return null;
+    if (c[0] === '#') return c.length === 7 ? c : null;
+    const m = c.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (!m) return null;
+    return '#' + [m[1], m[2], m[3]].map(n => (+n).toString(16).padStart(2, '0')).join('');
+}
+canvas.on('selection:created', refreshPropbar);
+canvas.on('selection:updated', refreshPropbar);
+canvas.on('selection:cleared', refreshPropbar);
+canvas.on('object:modified', (e) => {
+    // 縮放結束後強制重繪快取，避免 Fabric 預設的 noScaleCache 造成放大後文字/標籤模糊
+    const t = e && e.target;
+    if (t) {
+        t.dirty = true;
+        if (t.getObjects) t.getObjects().forEach(o => { o.dirty = true; });
+    }
+    canvas.requestRenderAll();
+    refreshPropbar(); pushState();
+});
+
+/* 屬性 → 套用到選取物件 */
+document.getElementById('p-scale').addEventListener('change', function () {
+    const obj = canvas.getActiveObject(); if (!obj) return;
+    const s = Math.max(1, parseFloat(this.value) || 100) / 100;
+    obj.set({ scaleX: s, scaleY: s }); obj.setCoords();
+    canvas.requestRenderAll(); pushState();
+});
+document.getElementById('p-angle').addEventListener('change', function () {
+    const obj = canvas.getActiveObject(); if (!obj) return;
+    let v = parseFloat(this.value) || 0;
+    obj.rotate(v);   // 以物件中心旋轉
+    obj.setCoords();
+    canvas.requestRenderAll(); pushState();
+});
+document.getElementById('p-opacity').addEventListener('input', function () {
+    const obj = canvas.getActiveObject(); if (!obj) return;
+    obj.set('opacity', (parseInt(this.value, 10) || 100) / 100);
+    canvas.requestRenderAll();
+});
+/* 套用工具：把設定套到選取物（含多選 activeSelection 與群組內的子物件） */
+function eachInSelection(obj, fn) {
+    if (!obj) return 0;
+    let n = 0;
+    const visit = o => {
+        fn(o) && n++;
+        if ((o.type === 'group' || o.type === 'activeSelection') && o.getObjects) o.getObjects().forEach(visit);
+    };
+    visit(obj);
+    return n;
+}
+document.getElementById('p-width').addEventListener('input', function () {
+    document.getElementById('p-width-v').textContent = this.value;
+    const v = parseInt(this.value, 10) || 3;
+    if (canvas.isDrawingMode) canvas.freeDrawingBrush.width = v;
+    const headLen = arrowHeadLen(v);
+    const obj = canvas.getActiveObject();
+    const n = eachInSelection(obj, o => {
+        if (o.stroke && (o.type === 'line' || o.type === 'path' || o.type === 'rect' || o.type === 'ellipse' || o.type === 'polygon' || o.type === 'polyline')) {
+            o.set('strokeWidth', v); o.dirty = true; return true;
+        }
+        if (o.type === 'triangle') {   // 箭頭頭端：大小要跟著粗細一起變，不然線變粗頭還是原本那麼小
+            o.set({ width: headLen, height: headLen }); o.setCoords(); o.dirty = true; return true;
+        }
+        return false;
+    });
+    if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); }
+});
+document.getElementById('p-stroke').addEventListener('input', function () {
+    if (canvas.isDrawingMode) canvas.freeDrawingBrush.color = this.value;
+    const v = this.value;
+    const obj = canvas.getActiveObject();
+    const n = eachInSelection(obj, o => {
+        if (o.stroke || o.type === 'path') { o.set('stroke', v); o.dirty = true; return true; }
+        if (o.type === 'triangle') { o.set('fill', v); o.dirty = true; return true; }   // 箭頭頭端
+        return false;
+    });
+    if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); }
+});
+document.getElementById('p-textcolor').addEventListener('input', function () {
+    const v = this.value;
+    const obj = canvas.getActiveObject();
+    const n = eachInSelection(obj, o => {
+        if (o.type === 'i-text' || o.type === 'textbox' || o.type === 'text') { o.set('fill', v); o.dirty = true; return true; }
+        return false;
+    });
+    // 規格標籤把顏色記進 spec，之後雙擊改字重建不掉色
+    if (obj && obj.labelSpec && !['fabric', 'image', 'multi'].includes(obj.labelSpec.kind)) obj.labelSpec.color = v;
+    if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); }
+});
+document.getElementById('p-fontsize').addEventListener('change', function () {
+    const obj = canvas.getActiveObject();
+    const v = Math.max(6, parseInt(this.value, 10) || 28);
+    if (obj && (obj.type === 'i-text' || obj.type === 'textbox')) {
+        obj.set({ fontSize: v, scaleX: 1, scaleY: 1 }); obj.setCoords();
+        canvas.requestRenderAll(); pushState();
+    }
+});
+document.getElementById('p-bold').addEventListener('change', function () {
+    const obj = canvas.getActiveObject();
+    if (obj && (obj.type === 'i-text' || obj.type === 'textbox')) {
+        obj.set('fontWeight', this.checked ? 'bold' : 'normal'); canvas.requestRenderAll(); pushState();
+    }
+});
+function applyTextBg() {
+    const obj = canvas.getActiveObject();
+    if (obj && (obj.type === 'i-text' || obj.type === 'textbox')) {
+        obj.set('backgroundColor', document.getElementById('p-textbg-on').checked ? document.getElementById('p-textbg').value : '');
+        canvas.requestRenderAll(); pushState();
+    }
+}
+document.getElementById('p-textbg').addEventListener('input', applyTextBg);
+document.getElementById('p-textbg-on').addEventListener('change', applyTextBg);
+document.getElementById('p-maskcolor').addEventListener('input', function () {
+    const obj = canvas.getActiveObject();
+    if (obj && obj.type === 'polygon') { obj.set('fill', this.value); canvas.requestRenderAll(); }
+});
+
+/* ── 鎖定（Figma 式）：鎖住底圖等物件，點擊會穿透不再誤選 ── */
+function lockSelection() {
+    const obj = canvas.getActiveObject();
+    if (!obj) { toast('請先選取要鎖定的物件（例如底圖）'); return; }
+    const targets = (obj.type === 'activeSelection') ? obj.getObjects().slice() : [obj];
+    canvas.discardActiveObject();
+    targets.forEach(o => { o.locked = true; o.selectable = false; o.evented = false; });
+    canvas.requestRenderAll();
+    updateLockUI();
+    pushState();
+    toast('已鎖定 ' + targets.length + ' 個物件（點擊會穿透）。要解開請按屬性列右側「解鎖全部」');
+}
+function unlockAll() {
+    const locked = canvas.getObjects().filter(o => o.locked);
+    if (!locked.length) return;
+    locked.forEach(o => { o.locked = false; o.selectable = true; o.evented = true; });
+    canvas.requestRenderAll();
+    updateLockUI();
+    pushState();
+    toast('已解鎖 ' + locked.length + ' 個物件');
+}
+function updateLockUI() {
+    const n = canvas.getObjects().filter(o => o.locked).length;
+    document.getElementById('lock-info').style.display = n ? 'inline-flex' : 'none';
+    document.getElementById('lock-count').textContent = n;
+}
+
+/* ── 浮水印：單一或自動間距填滿，預設鎖定避免誤點 ── */
+function openWmModal() { showModal('wm-modal'); document.getElementById('wm-text').focus(); }
+function removeWatermark() {
+    const olds = canvas.getObjects().filter(o => o.wmRole);
+    olds.forEach(o => canvas.remove(o));
+    if (olds.length) { updateLockUI(); canvas.requestRenderAll(); pushState(); }
+}
+function applyWatermark() {
+    const text = document.getElementById('wm-text').value.trim();
+    if (!text) { toast('請輸入浮水印文字'); return; }
+    const angle = parseInt(document.getElementById('wm-angle').value, 10) || 0;
+    const mode = document.getElementById('wm-mode').value;
+    const opacity = (parseInt(document.getElementById('wm-opacity').value, 10) || 15) / 100;
+    const color = document.getElementById('wm-color').value;
+    removeWatermark();
+
+    const mk = (fs, x, y) => new fabric.Text(text, {
+        left: x, top: y, originX: 'center', originY: 'center',
+        fontSize: fs, fontFamily: LABEL_FONT, fontWeight: 'bold',
+        fill: color, angle: angle, selectable: false, evented: false
+    });
+    const cx = artboard.left + artW / 2, cy = artboard.top + artH / 2;
+    let wm;
+    if (mode === 'single') {
+        // 字級自動：寬度約佔畫布七成
+        const probe = mk(100, 0, 0);
+        const fs = Math.max(20, Math.min(100 * (artW * 0.7) / probe.width, artH * 0.6));
+        wm = new fabric.Group([mk(fs, cx, cy)], {});
+    } else {
+        // 填滿：依字寬自動抓間距，奇偶列錯開半格
+        const fs = Math.max(12, parseInt(document.getElementById('wm-size').value, 10) || 60);
+        const probe = mk(fs, 0, 0);
+        const dx = probe.width + fs * 1.6;
+        const dy = probe.height + fs * 2.2;
+        const items = [];
+        let row = 0;
+        for (let y = artboard.top - dy / 2; y < artboard.top + artH + dy; y += dy, row++) {
+            const off = (row % 2) ? dx / 2 : 0;
+            for (let x = artboard.left - dx / 2 + off; x < artboard.left + artW + dx; x += dx) {
+                items.push(mk(fs, x, y));
+            }
+        }
+        wm = new fabric.Group(items, {});
+        // 裁掉超出畫布的部分，列印才乾淨
+        wm.clipPath = new fabric.Rect({
+            left: artboard.left, top: artboard.top, width: artW, height: artH, absolutePositioned: true
+        });
+    }
+    wm.set({ opacity: opacity });
+    wm.wmRole = 'wm';
+    wm.locked = true; wm.selectable = false; wm.evented = false;   // 預設鎖定
+    canvas.add(wm);
+    updateLockUI();
+    canvas.requestRenderAll();
+    pushState();
+    hideModal('wm-modal');
+    toast('浮水印已套用（已自動鎖定；要調整請按屬性列右側「解鎖全部」）');
+}
+
+/* 圖層 / 群組 / 刪除 */
+function layerCmd(cmd) {
+    const obj = canvas.getActiveObject(); if (!obj) return;
+    if (cmd === 'front') canvas.bringToFront(obj);
+    if (cmd === 'forward') canvas.bringForward(obj);
+    if (cmd === 'backward') canvas.sendBackwards(obj);
+    if (cmd === 'back') canvas.sendToBack(obj);
+    canvas.sendToBack(artboard); // 畫布永遠最底
+    canvas.requestRenderAll(); pushState();
+}
+/* 合併：多物件 → 單一物件（雙擊不拆，Alt+雙擊才拆），縮放比例位置固定 */
+function mergeSelection() {
+    const obj = canvas.getActiveObject();
+    if (!obj || obj.type !== 'activeSelection') { toast('請先框選或 Shift 點選要合併的多個物件'); return; }
+    const g = obj.toGroup();
+    g.merged = true;
+    canvas.requestRenderAll();
+    refreshPropbar();
+    pushState();
+    toast('已合併為單一物件（要拆開：Alt+雙擊）');
+}
+function groupCmd() {
+    const obj = canvas.getActiveObject(); if (!obj) return;
+    if (obj.type === 'group') {
+        enterGroup(obj);
+        return;
+    } else if (obj.type === 'activeSelection') {
+        const props = obj._regroupProps;
+        const g = obj.toGroup();
+        if (props && g) Object.assign(g, props);   // 由「進入群組」拆出的，重組時還原標籤屬性
+    } else { toast('請以框選或 Shift 點選多個物件再群組'); return; }
+    canvas.requestRenderAll(); refreshPropbar(); pushState();
+}
+/* Ctrl+A：全選畫布上的物件（含畫布外，排除底板/鎖定/浮水印鎖定物） */
+function selectAllObjects() {
+    setTool('select');
+    const objs = canvas.getObjects().filter(o => o !== artboard && o.selectable !== false && !o.locked);
+    if (!objs.length) { toast('畫布上沒有可選取的物件'); return; }
+    canvas.discardActiveObject();
+    const sel = new fabric.ActiveSelection(objs, { canvas: canvas });
+    canvas.setActiveObject(sel);
+    canvas.requestRenderAll();
+    refreshPropbar();
+}
+function deleteSelection() {
+    const obj = canvas.getActiveObject(); if (!obj) return;
+    const hadBalloon = (obj.balloonLetter || (obj.type === 'activeSelection' && obj.getObjects().some(o => o.balloonLetter)));
+    if (obj.type === 'activeSelection') obj.getObjects().slice().forEach(o => canvas.remove(o));
+    else canvas.remove(obj);
+    canvas.discardActiveObject();
+    if (hadBalloon) updateBalloonSummary();  // 球標增減 → 右下角範圍文字自動重建
+    canvas.requestRenderAll(); pushState();
+}
+
+/* ── Undo / Redo（JSON 快照） ── */
+let undoStack = [], redoStack = [], restoring = false;
+const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole'];
+function pushState() {
+    if (restoring) return;
+    try {
+        undoStack.push(JSON.stringify(canvas.toJSON(SNAP_PROPS)));
+        if (undoStack.length > 60) undoStack.shift();
+        redoStack = [];
+    } catch (e) { /* 圖太大時快照失敗不影響操作 */ }
+}
+function restoreState(json) {
+    restoring = true;
+    canvas.loadFromJSON(json, function () {
+        findArtboard();
+        canvas.sendToBack(artboard);
+        artW = Math.round(artboard.width * (artboard.scaleX || 1));
+        artH = Math.round(artboard.height * (artboard.scaleY || 1));
+        document.getElementById('st-canvas').textContent = artW + '×' + artH;
+        canvas.requestRenderAll();
+        restoring = false;
+        refreshPropbar();
+        updateLockUI();
+    });
+}
+function undo() {
+    if (undoStack.length < 2) { toast('沒有可復原的步驟'); return; }
+    redoStack.push(undoStack.pop());
+    restoreState(undoStack[undoStack.length - 1]);
+}
+function redo() {
+    if (!redoStack.length) { toast('沒有可重做的步驟'); return; }
+    const s = redoStack.pop();
+    undoStack.push(s);
+    restoreState(s);
+}
+canvas.on('path:created', function () { setTimeout(pushState, 30); });
+canvas.on('object:removed', function () { if (!restoring && !drawing) { /* deleteSelection 已 pushState，避免重複 */ } });
+
+/* ── 鍵盤 ── */
+document.addEventListener('keydown', function (e) {
+    if (e.code === 'Space' && !isTextEditing()) { spaceDown = true; canvas.defaultCursor = 'grab'; }
+    const tag = (document.activeElement || {}).tagName;
+    const inInput = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || isTextEditing();
+
+    if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') { if (!inInput) { e.preventDefault(); undo(); } return; }
+    if (e.ctrlKey && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) { if (!inInput) { e.preventDefault(); redo(); } return; }
+    if (e.ctrlKey && e.key.toLowerCase() === 'c') { if (!inInput) { if (copySelection()) e.preventDefault(); } return; }
+    if (e.ctrlKey && e.key.toLowerCase() === 'd') { if (!inInput) { e.preventDefault(); duplicateSelection(); } return; }
+    if (e.ctrlKey && e.key.toLowerCase() === 'g') {
+        if (!inInput) { e.preventDefault(); groupCmd(); } return;
+    }
+    if (e.ctrlKey && e.key === '0') { e.preventDefault(); zoomFit(); return; }
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'v') {
+        if (!inInput) { e.preventDefault(); if (!pasteInternalOrCross()) toast('沒有可貼上的跨窗/內部內容'); }
+        return;
+    }
+    if (e.ctrlKey && e.key.toLowerCase() === 'a') {
+        if (!inInput) { e.preventDefault(); selectAllObjects(); }
+        return;
+    }
+    if (inInput) return;
+
+    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelection(); return; }
+    // 方向鍵微調選取物件：1px，Shift＝10px
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        const obj = canvas.getActiveObject();
+        if (obj) {
+            e.preventDefault();
+            const step = e.shiftKey ? 10 : 1;
+            if (e.key === 'ArrowUp') obj.set('top', obj.top - step);
+            if (e.key === 'ArrowDown') obj.set('top', obj.top + step);
+            if (e.key === 'ArrowLeft') obj.set('left', obj.left - step);
+            if (e.key === 'ArrowRight') obj.set('left', obj.left + step);
+            obj.setCoords();
+            canvas.requestRenderAll();
+            clearTimeout(window.__nudgeTimer);
+            window.__nudgeTimer = setTimeout(pushState, 400);   // 連按只記一次復原點
+        }
+        return;
+    }
+    if (e.key === 'Escape') { setTool('select'); canvas.discardActiveObject(); canvas.requestRenderAll(); return; }
+    const keyTool = { v: 'select', h: 'pan', b: 'draw', l: 'line', a: 'arrow', r: 'rect', o: 'ellipse', t: 'text', m: 'maskrect', c: 'cropcopy', x: 'cropmove' }[e.key.toLowerCase()];
+    if (keyTool && !e.ctrlKey && !e.altKey) setTool(keyTool);
+});
+document.addEventListener('keyup', function (e) {
+    if (e.code === 'Space') { spaceDown = false; canvas.defaultCursor = (currentTool === 'pan') ? 'grab' : 'default'; }
+});
+
+/* ── 跳窗 / 畫布設定 / 其他 ── */
+function showModal(id) { document.getElementById(id).classList.add('show'); }
+function hideModal(id) { document.getElementById(id).classList.remove('show'); }
+function openCanvasModal() {
+    document.getElementById('cv-w').value = artW;
+    document.getElementById('cv-h').value = artH;
+    document.getElementById('cv-bg').value = toHex(artboard.fill) || '#ffffff';
+    showModal('canvas-modal');
+}
+function applyCanvasModal() {
+    setArtboardSize(parseInt(document.getElementById('cv-w').value, 10) || artW,
+                    parseInt(document.getElementById('cv-h').value, 10) || artH,
+                    document.getElementById('cv-bg').value);
+    hideModal('canvas-modal');
+    zoomFit(); pushState();
+}
+function fitArtboardToContent() {
+    const objs = canvas.getObjects().filter(o => o !== artboard);
+    if (!objs.length) { toast('畫布上沒有內容'); return; }
+    let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
+    objs.forEach(o => {
+        const bb = o.getBoundingRect(true, true);
+        l = Math.min(l, bb.left); t = Math.min(t, bb.top);
+        r = Math.max(r, bb.left + bb.width); b = Math.max(b, bb.top + bb.height);
+    });
+    const pad = 10;
+    artboard.set({ left: l - pad, top: t - pad });
+    setArtboardSize(r - l + pad * 2, b - t + pad * 2);
+    zoomFit(); pushState();
+    toast('畫布已調整為剛好包住所有內容');
+}
+function openSecondWindow() {
+    window.open(location.href, 'egImgEditor_' + Date.now(),
+        'width=1280,height=860,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
+}
+let toastTimer = null;
+function toast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.style.display = 'none', 3200);
+}
+
+/* 數字輸入框 UI 規則：聚焦全選、雙擊清空、Enter 跳下一欄 */
+document.querySelectorAll('input[type=number], .ni').forEach(inp => {
+    inp.addEventListener('focus', function () { this.select(); });
+    inp.addEventListener('dblclick', function () { this.value = ''; });
+    inp.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const all = Array.from(document.querySelectorAll('input, select'));
+            const i = all.indexOf(this);
+            for (let j = i + 1; j < all.length; j++) {
+                if (all[j].offsetParent !== null) { all[j].focus(); break; }
+            }
+            this.dispatchEvent(new Event('change'));
+        }
+    });
+});
+
+/* ── 個人畫圖偏好：顏色/粗細/印章大小…改過就記住，下次開啟沿用（存在 system_settings，依使用者區分）── */
+const PREF_FIELDS = [
+    ['p-stroke', 'stroke'], ['p-width', 'width'], ['p-line-ends', 'lineEnds'],
+    ['p-fill', 'fill'], ['p-fill-on', 'fillOn', true],
+    ['p-textcolor', 'textColor'], ['p-fontsize', 'fontSize'], ['p-bold', 'bold', true],
+    ['p-textbg', 'textBg'], ['p-textbg-on', 'textBgOn', true],
+    ['p-balloon-size', 'balloonSize'], ['p-dc-shape', 'dcShape'], ['p-dc-size', 'dcSize'],
+    ['p-stamp-size', 'stampSize'], ['p-maskcolor', 'maskColor'], ['p-crop-transparent', 'cropTransparent', true]
+];
+function applyUserPrefs() {
+    PREF_FIELDS.forEach(([id, key, isCheckbox]) => {
+        const el = document.getElementById(id);
+        const v = USER_PREFS[key];
+        if (!el || v === undefined || v === null) return;
+        if (isCheckbox) el.checked = !!v; else el.value = v;
+    });
+    document.getElementById('p-width-v').textContent = document.getElementById('p-width').value;
+}
+let prefsSaveTimer = null;
+function saveUserPrefsDebounced() {
+    clearTimeout(prefsSaveTimer);
+    prefsSaveTimer = setTimeout(() => {
+        const prefs = {};
+        PREF_FIELDS.forEach(([id, key, isCheckbox]) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            prefs[key] = isCheckbox ? el.checked : el.value;
+        });
+        const fd = new FormData();
+        fd.append('action', 'save_user_prefs');
+        fd.append('prefs', JSON.stringify(prefs));
+        fetch('image_editor.php', { method: 'POST', body: fd }).catch(() => {});
+    }, 600);
+}
+PREF_FIELDS.forEach(([id]) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', saveUserPrefsDebounced);
+});
+applyUserPrefs();
+
+/* ── 初始化 ── */
+resizeViewport();
+setArtboardSize(artW, artH);
+zoomFit();
+pushState();  // 初始狀態
+setTool('select');
+</script>
+</body>
+</html>

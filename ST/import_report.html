@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Excel 庫存匯入報告</title>
+
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3347;
+    --text: #e2e8f0;
+    --text-dim: #8892a4;
+    --accent: #4f8ef7;
+    --ok: #22c55e;
+    --warn: #f59e0b;
+    --err: #ef4444;
+    --mismatch: #a855f7;
+    --seq: #fb923c;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Noto Sans TC', 'PingFang TC', '微軟正黑體', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ── 頂部 ── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  header h1 { font-size: 18px; font-weight: 700; letter-spacing: 1px; }
+  header .meta { font-size: 12px; color: var(--text-dim); }
+
+  /* ── 統計卡片 ── */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    padding: 24px 32px 16px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    cursor: pointer;
+    transition: border-color .2s, transform .15s;
+    position: relative;
+    overflow: hidden;
+  }
+  .stat-card:hover { transform: translateY(-2px); }
+  .stat-card.active { border-color: var(--accent); }
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+  .stat-card.ok::before    { background: var(--ok); }
+  .stat-card.warn::before  { background: var(--warn); }
+  .stat-card.err::before   { background: var(--err); }
+  .stat-card.mismatch::before { background: var(--mismatch); }
+  .stat-card.seq::before   { background: var(--seq); }
+
+  .stat-num { font-size: 32px; font-weight: 800; line-height: 1; }
+  .stat-card.ok    .stat-num { color: var(--ok); }
+  .stat-card.warn  .stat-num { color: var(--warn); }
+  .stat-card.err   .stat-num { color: var(--err); }
+  .stat-card.mismatch .stat-num { color: var(--mismatch); }
+  .stat-card.seq   .stat-num { color: var(--seq); }
+  .stat-label { font-size: 12px; color: var(--text-dim); margin-top: 6px; }
+
+  /* ── 篩選 Tabs ── */
+  .tabs {
+    display: flex;
+    gap: 6px;
+    padding: 0 32px 16px;
+  }
+  .tab {
+    padding: 6px 16px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all .2s;
+  }
+  .tab.active, .tab:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* ── 主內容 ── */
+  .content { padding: 0 32px 32px; }
+
+  /* ── 問題卡片 ── */
+  .issue-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 12px;
+    overflow: hidden;
+    transition: border-color .2s;
+  }
+  .issue-card:hover { border-color: #3e4560; }
+  .issue-card.has-mismatch { border-left: 3px solid var(--mismatch); }
+  .issue-card.has-error    { border-left: 3px solid var(--err); }
+  .issue-card.has-warning  { border-left: 3px solid var(--seq); }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .card-header:hover { background: var(--surface2); }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge.err      { background: rgba(239,68,68,.15);  color: var(--err); }
+  .badge.warn     { background: rgba(251,146,60,.15); color: var(--seq); }
+  .badge.mismatch { background: rgba(168,85,247,.15); color: var(--mismatch); }
+  .badge.ok       { background: rgba(34,197,94,.12);  color: var(--ok); }
+
+  .part-num  { font-weight: 700; font-size: 15px; font-family: monospace; letter-spacing: .5px; }
+  .part-loc  { color: var(--text-dim); font-size: 12px; }
+  .card-arrow { margin-left: auto; color: var(--text-dim); transition: transform .2s; }
+  .card-arrow.open { transform: rotate(180deg); }
+
+  /* ── 卡片內容展開 ── */
+  .card-body { display: none; padding: 0 18px 16px; }
+  .card-body.open { display: block; }
+
+  /* ── 數量不符區塊 ── */
+  .mismatch-block {
+    background: rgba(168,85,247,.08);
+    border: 1px solid rgba(168,85,247,.25);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+  }
+  .mismatch-block h4 { color: var(--mismatch); font-size: 13px; margin-bottom: 8px; }
+  .mismatch-row { display: flex; gap: 24px; flex-wrap: wrap; }
+  .mismatch-item label { font-size: 11px; color: var(--text-dim); display: block; }
+  .mismatch-item .val { font-size: 18px; font-weight: 700; }
+  .mismatch-item .val.excel { color: var(--accent); }
+  .mismatch-item .val.comment { color: var(--mismatch); }
+  .diff-pill {
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .diff-pill.neg { background: rgba(239,68,68,.2); color: var(--err); }
+  .diff-pill.pos { background: rgba(34,197,94,.2); color: var(--ok); }
+
+  /* ── 錯誤行列表 ── */
+  .error-list { margin-bottom: 12px; }
+  .error-list h4 { color: var(--err); font-size: 13px; margin-bottom: 8px; }
+  .error-item {
+    background: rgba(239,68,68,.06);
+    border: 1px solid rgba(239,68,68,.2);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 6px;
+  }
+  .error-item .raw-text {
+    font-family: monospace;
+    font-size: 13px;
+    color: var(--warn);
+    background: rgba(0,0,0,.3);
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin-top: 4px;
+    word-break: break-all;
+  }
+  .error-msg { color: var(--err); font-size: 12px; }
+
+  /* ── 警告行列表 ── */
+  .warning-list { margin-bottom: 12px; }
+  .warning-list h4 { color: var(--seq); font-size: 13px; margin-bottom: 8px; }
+  .warning-item {
+    background: rgba(251,146,60,.06);
+    border: 1px solid rgba(251,146,60,.2);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 6px;
+  }
+  .warning-msg { color: var(--seq); font-size: 12px; }
+  .warning-item .raw-text {
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  /* ── 異動歷程表格 ── */
+  .trans-section h4 { color: var(--text-dim); font-size: 12px; margin-bottom: 8px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  th {
+    background: var(--surface2);
+    color: var(--text-dim);
+    padding: 7px 10px;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+  }
+  td { padding: 7px 10px; border-bottom: 1px solid rgba(46,51,71,.5); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface2); }
+
+  .op-badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .op-in     { background: rgba(34,197,94,.15);  color: var(--ok); }
+  .op-out    { background: rgba(239,68,68,.15);  color: var(--err); }
+  .op-move   { background: rgba(79,142,247,.15); color: var(--accent); }
+  .op-check  { background: rgba(148,163,184,.15); color: #94a3b8; }
+  .op-loss   { background: rgba(239,68,68,.2);   color: #f87171; }
+  .op-adjust { background: rgba(251,146,60,.15); color: var(--warn); }
+
+  /* ── 空狀態 ── */
+  .empty {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-dim);
+  }
+  .empty-icon { font-size: 48px; margin-bottom: 12px; }
+
+  /* ── 搜尋 ── */
+  .search-bar {
+    padding: 0 32px 16px;
+  }
+  .search-input {
+    width: 100%;
+    max-width: 400px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 14px;
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .search-input:focus { border-color: var(--accent); }
+  .search-input::placeholder { color: var(--text-dim); }
+
+  /* ── 全展開按鈕 ── */
+  .toolbar {
+    padding: 0 32px 12px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 12px;
+    transition: all .2s;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .count-label { color: var(--text-dim); font-size: 12px; margin-left: auto; }
+
+  /* ── 頁腳說明 ── */
+  .legend {
+    padding: 0 32px;
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+</style>
+
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>📦 Excel 庫存批次匯入報告</h1>
+    <div class="meta" id="metaInfo">載入中...</div>
+  </div>
+  <div style="display:flex;gap:8px;">
+    <button class="btn" onclick="downloadSQL()" style="color:var(--ok);border-color:var(--ok)">
+      ⬇ 下載 SQL
+    </button>
+    <button class="btn" onclick="downloadJSON()">⬇ 下載 JSON</button>
+  </div>
+    <div style="margin-left: auto;">
+  <button onclick="runPython()" id="runBtn" style="background:#22c55e; color:white; border:none; padding:10px 20px; border-radius:6px; cursor:pointer; font-weight:bold; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+    🚀 讀取 NAS 最新資料
+  </button>
+</div>
+
+<script>
+async function runPython() {
+    const btn = document.getElementById('runBtn');
+    const originalText = btn.innerText;
+    btn.innerText = '⏳ 正在讀取 NAS 中...';
+    btn.style.background = '#888';
+    btn.disabled = true;
+
+    try {
+        // 因為 MAMP 是 port 80，Flask 是 port 5000，所以要寫絕對路徑
+        const response = await fetch('http://localhost:5000/api/run-import');
+        const data = await response.json();
+        if (data.status === 'success') {
+            alert('NAS 資料更新成功！網頁即將重整。');
+            location.reload(); 
+        } else {
+            alert('讀取失敗！請確認 NAS 路徑是否正確：\n' + data.message);
+        }
+    } catch (e) {
+        alert('無法連線到背景程式，請確認電腦有執行 app.py');
+    } finally {
+        btn.innerText = originalText;
+        btn.style.background = '#22c55e';
+        btn.disabled = false;
+    }
+}
+</script>
+</header>
+
+<!-- 統計卡片 -->
+<div class="stats" id="statsArea"></div>
+
+<!-- Tabs -->
+<div class="tabs" id="tabsArea"></div>
+
+<!-- 搜尋 -->
+<div class="search-bar">
+  <input class="search-input" id="searchInput" placeholder="搜尋料號或儲位..." oninput="filterCards()">
+</div>
+
+<!-- 工具列 -->
+<div class="toolbar">
+  <button class="btn" onclick="expandAll()">全部展開</button>
+  <button class="btn" onclick="collapseAll()">全部收合</button>
+  <span class="count-label" id="countLabel"></span>
+</div>
+
+<!-- 圖例 -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--err)"></div>解析錯誤：批註格式無法辨識，該行不會匯入</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--mismatch)"></div>數量不符：批註最後庫存 ≠ Excel 顯示數量</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--seq)"></div>連續異常：前後筆計算庫存與批註不一致（如盤點合併）</div>
+</div>
+
+<!-- 主內容 -->
+<div class="content" id="mainContent"></div>
+
+<script>
+// ── 報告資料（嵌入）────────────────────────────────────────────────
+// 在實際部署時，這裡換成從伺服器讀取 import_report.json
+// 或由 PHP 把 JSON 內容直接 echo 進來
+
+let REPORT = null;
+let currentTab = 'all';
+let allCards = [];
+
+// ── 初始化 ────────────────────────────────────────────────────────
+async function init() {
+  try {
+    // 嘗試從同目錄讀取 JSON（本地開啟時可能 CORS 限制，可用 PHP 提供）
+    const resp = await fetch('import_report.json');
+    REPORT = await resp.json();
+  } catch(e) {
+    // Fallback: 顯示提示
+    document.getElementById('mainContent').innerHTML = `
+      <div class="empty">
+        <div class="empty-icon">📂</div>
+        <div>請將 <code style="color:var(--accent)">import_report.json</code> 放在同目錄後重新開啟此頁面</div>
+        <div style="margin-top:8px;font-size:12px;color:var(--text-dim)">
+          或由 PHP 伺服器提供此 HTML 檔案
+        </div>
+      </div>`;
+    return;
+  }
+  render();
+}
+
+// ── 渲染 ──────────────────────────────────────────────────────────
+function render() {
+  const s = REPORT.summary;
+  document.getElementById('metaInfo').textContent =
+    `來源: ${REPORT.source_file}　產生時間: ${REPORT.generated_at}`;
+
+  // 統計卡片
+  const statsHTML = `
+    <div class="stat-card ok" onclick="setTab('all')" id="card-all">
+      <div class="stat-num">${s.total_transactions.toLocaleString()}</div>
+      <div class="stat-label">✅ 可匯入異動筆數</div>
+    </div>
+    <div class="stat-card err" onclick="setTab('error')" id="card-error">
+      <div class="stat-num">${s.parse_errors}</div>
+      <div class="stat-label">❌ 解析失敗行（不匯入）</div>
+    </div>
+    <div class="stat-card mismatch" onclick="setTab('mismatch')" id="card-mismatch">
+      <div class="stat-num">${s.quantity_mismatches}</div>
+      <div class="stat-label">⚠ 數量不符（需人工確認）</div>
+    </div>
+    <div class="stat-card seq" onclick="setTab('warning')" id="card-seq">
+      <div class="stat-num">${s.sequence_warnings}</div>
+      <div class="stat-label">🔔 連續庫存異常</div>
+    </div>
+    <div class="stat-card warn" onclick="setTab('all')">
+      <div class="stat-num">${s.total_items}</div>
+      <div class="stat-label">📦 料號總計</div>
+    </div>
+  `;
+  document.getElementById('statsArea').innerHTML = statsHTML;
+
+  // Tabs
+  document.getElementById('tabsArea').innerHTML = `
+    <button class="tab active" id="tab-all"      onclick="setTab('all')">全部問題</button>
+    <button class="tab"        id="tab-error"    onclick="setTab('error')">❌ 解析錯誤 (${s.parse_errors})</button>
+    <button class="tab"        id="tab-mismatch" onclick="setTab('mismatch')">⚠ 數量不符 (${s.quantity_mismatches})</button>
+    <button class="tab"        id="tab-warning"  onclick="setTab('warning')">🔔 連續異常 (${s.sequence_warnings})</button>
+  `;
+
+  buildCards();
+}
+
+// ── 建立卡片資料 ──────────────────────────────────────────────────
+function buildCards() {
+  // 收集有問題的 items
+  const errParts  = new Set(REPORT.errors.map(e => `${e.row}`));
+  const warnParts = new Set(REPORT.warnings.map(w => `${w.row}`));
+
+  allCards = REPORT.items
+    .filter(item => item.errors.length > 0 || item.mismatch || warnParts.has(`${item.row}`))
+    .map(item => ({
+      ...item,
+      hasError:    item.errors.length > 0,
+      hasMismatch: !!item.mismatch,
+      hasWarning:  warnParts.has(`${item.row}`),
+      warnings:    REPORT.warnings.filter(w => w.row === item.row),
+    }));
+
+  showCards();
+}
+
+// ── 顯示卡片 ──────────────────────────────────────────────────────
+function showCards() {
+  const searchVal = document.getElementById('searchInput').value.toLowerCase();
+  let filtered = allCards;
+
+  // Tab 篩選
+  if (currentTab === 'error')    filtered = filtered.filter(c => c.hasError);
+  if (currentTab === 'mismatch') filtered = filtered.filter(c => c.hasMismatch);
+  if (currentTab === 'warning')  filtered = filtered.filter(c => c.hasWarning);
+
+  // 搜尋篩選
+  if (searchVal) {
+    filtered = filtered.filter(c =>
+      String(c.part).toLowerCase().includes(searchVal) ||
+      String(c.location||'').toLowerCase().includes(searchVal)
+    );
+  }
+
+  document.getElementById('countLabel').textContent = `顯示 ${filtered.length} 項`;
+
+  if (filtered.length === 0) {
+    document.getElementById('mainContent').innerHTML = `
+      <div class="empty">
+        <div class="empty-icon">🎉</div>
+        <div>此分類沒有問題項目</div>
+      </div>`;
+    return;
+  }
+
+  const html = filtered.map(card => buildCardHTML(card)).join('');
+  document.getElementById('mainContent').innerHTML = html;
+}
+
+// ── 卡片 HTML ─────────────────────────────────────────────────────
+function buildCardHTML(card) {
+  const borderClass = card.hasMismatch ? 'has-mismatch' :
+                      card.hasError    ? 'has-error'    : 'has-warning';
+
+  const badges = [
+    card.hasError    ? `<span class="badge err">❌ 解析錯誤 ${card.errors.length}行</span>` : '',
+    card.hasMismatch ? `<span class="badge mismatch">⚠ 數量不符</span>` : '',
+    card.hasWarning  ? `<span class="badge warn">🔔 連續異常 ${card.warnings.length}筆</span>` : '',
+  ].filter(Boolean).join('');
+
+  // 數量不符區塊
+  let mismatchHTML = '';
+  if (card.hasMismatch) {
+    const m = card.mismatch;
+    const diff = m.diff;
+    const diffClass = diff > 0 ? 'pos' : 'neg';
+    const diffSign  = diff > 0 ? '+' : '';
+    mismatchHTML = `
+      <div class="mismatch-block">
+        <h4>⚠ 數量不符：需人工確認</h4>
+        <div class="mismatch-row">
+          <div class="mismatch-item">
+            <label>Excel 顯示數量</label>
+            <div class="val excel">${m.excel_qty}</div>
+          </div>
+          <div class="mismatch-item">
+            <label>批註最後庫存</label>
+            <div class="val comment">${m.comment_last_stock}</div>
+          </div>
+          <div class="mismatch-item" style="display:flex;align-items:flex-end">
+            <span class="diff-pill ${diffClass}">${diffSign}${diff}</span>
+          </div>
+          <div class="mismatch-item">
+            <label>最後批註記錄</label>
+            <div style="font-family:monospace;font-size:12px;color:var(--text-dim)">${m.last_raw}</div>
+          </div>
+        </div>
+        <div style="margin-top:10px;font-size:12px;color:var(--text-dim)">
+          可能原因：批註記錄未完整更新、Excel 手動修改後未寫批註、或批註中有解析失敗的行
+        </div>
+      </div>`;
+  }
+
+  // 解析錯誤列表
+  let errorHTML = '';
+  if (card.hasError) {
+    const items = card.errors.map(e => `
+      <div class="error-item">
+        <div class="error-msg">❌ ${e.message}</div>
+        <div class="raw-text">${escHtml(e.raw)}</div>
+      </div>`).join('');
+    errorHTML = `<div class="error-list"><h4>❌ 解析失敗（以下行不會匯入）</h4>${items}</div>`;
+  }
+
+  // 連續庫存警告
+  let warningHTML = '';
+  if (card.hasWarning) {
+    const items = card.warnings.map(w => `
+      <div class="warning-item">
+        <div class="warning-msg">🔔 ${w.message}</div>
+        <div class="raw-text">${escHtml(w.raw)}</div>
+      </div>`).join('');
+    warningHTML = `<div class="warning-list"><h4>🔔 連續庫存計算異常（可能是盤點合併，請確認）</h4>${items}</div>`;
+  }
+
+  // 異動歷程表格（前10筆預覽）
+  const transRows = card.transactions.slice(0, 20).map(t => {
+    const opCls = `op-${t.op}`;
+    const opLabel = t.op_zh;
+    const locCol = t.loc_from && t.loc_to && t.loc_from !== t.loc_to
+      ? `${t.loc_from} → ${t.loc_to}`
+      : (t.loc_from || '—');
+    return `<tr>
+      <td>${t.date}</td>
+      <td><span class="op-badge ${opCls}">${opLabel}</span></td>
+      <td>${t.qty ?? '—'}</td>
+      <td>${t.stock_after ?? '—'}</td>
+      <td style="color:var(--text-dim)">${locCol}</td>
+      <td style="color:var(--text-dim);font-size:11px">${escHtml(t.remark||'')}</td>
+    </tr>`;
+  }).join('');
+
+  const moreRows = card.transactions.length > 20
+    ? `<tr><td colspan="6" style="text-align:center;color:var(--text-dim);font-style:italic">…還有 ${card.transactions.length - 20} 筆</td></tr>`
+    : '';
+
+  const transHTML = `
+    <div class="trans-section">
+      <h4>異動歷程（共 ${card.transactions.length} 筆）</h4>
+      <table>
+        <thead><tr><th>日期</th><th>操作</th><th>數量</th><th>後庫存</th><th>儲位</th><th>附註</th></tr></thead>
+        <tbody>${transRows}${moreRows}</tbody>
+      </table>
+    </div>`;
+
+  const cardId = `card-${card.row}`;
+
+  return `
+    <div class="issue-card ${borderClass}" id="${cardId}">
+      <div class="card-header" onclick="toggleCard('${cardId}')">
+        <div>
+          <div class="part-num">${escHtml(String(card.part))}</div>
+          <div class="part-loc">📍 ${escHtml(card.location||'')}
+            ${card.category ? `　🏷 ${escHtml(card.category)}` : ''}
+            ${card.spec     ? `　📐 ${escHtml(card.spec)}` : ''}
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-left:16px">${badges}</div>
+        <div>
+          <span style="font-size:12px;color:var(--text-dim)">Excel 庫存: </span>
+          <span style="font-weight:700;color:var(--accent)">${card.excel_qty ?? '—'}</span>
+        </div>
+        <div class="card-arrow" id="arrow-${cardId}">▼</div>
+      </div>
+      <div class="card-body" id="body-${cardId}">
+        ${mismatchHTML}
+        ${errorHTML}
+        ${warningHTML}
+        ${transHTML}
+      </div>
+    </div>`;
+}
+
+// ── 互動 ──────────────────────────────────────────────────────────
+function toggleCard(cardId) {
+  const body  = document.getElementById('body-'  + cardId);
+  const arrow = document.getElementById('arrow-' + cardId);
+  const isOpen = body.classList.contains('open');
+  body.classList.toggle('open');
+  arrow.classList.toggle('open');
+}
+
+function expandAll() {
+  document.querySelectorAll('.card-body').forEach(b => b.classList.add('open'));
+  document.querySelectorAll('.card-arrow').forEach(a => a.classList.add('open'));
+}
+
+function collapseAll() {
+  document.querySelectorAll('.card-body').forEach(b => b.classList.remove('open'));
+  document.querySelectorAll('.card-arrow').forEach(a => a.classList.remove('open'));
+}
+
+function setTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  const el = document.getElementById('tab-' + tab);
+  if (el) el.classList.add('active');
+  showCards();
+}
+
+function filterCards() { showCards(); }
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function downloadSQL() {
+  alert('請將 import_transactions.sql 複製到 MySQL 執行\n（建議先在測試環境驗證後再正式匯入）');
+}
+function downloadJSON() {
+  const a = document.createElement('a');
+  a.href = 'import_report.json';
+  a.download = 'import_report.json';
+  a.click();
+}
+
+// ── 啟動 ──────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>

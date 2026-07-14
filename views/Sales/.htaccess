@@ -1,0 +1,7 @@
+# 批圖編輯器（image_editor.php）儲存大圖時，PHP 在解析超大 POST（base64 圖檔）當下
+# 就可能撞到預設 128M memory_limit——這個時間點早於腳本內的 ini_set()，寫在腳本裡來不及生效。
+# 只針對這支檔案在 Apache 層先放寬，不動全域 php.ini，也不影響本目錄其他頁面。
+<Files "image_editor.php">
+    php_value memory_limit 512M
+    php_value max_execution_time 180
+</Files>

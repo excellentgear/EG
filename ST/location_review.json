@@ -1,0 +1,2996 @@
+{
+  "generated_at": "2026-04-15 11:10:21",
+  "instruction": "INSERT IGNORE by location_code（唯一索引防重複）。area=2（二廠）。",
+  "total": 267,
+  "locations": [
+    {
+      "location_code": "1-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L4 料號:3015012540",
+        "半成品-L5 料號:1211-2"
+      ]
+    },
+    {
+      "location_code": "1-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L6 料號:BG01",
+        "半成品-L7 料號:BG04-415",
+        "半成品-L8 料號:DF-009"
+      ]
+    },
+    {
+      "location_code": "1-1-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L16 料號:2R060M06L014BA"
+      ]
+    },
+    {
+      "location_code": "1-1-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L17 料號:2094410110000"
+      ]
+    },
+    {
+      "location_code": "1-1-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L18 料號:MB32003"
+      ]
+    },
+    {
+      "location_code": "1-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L19 料號:LKGB0892603"
+      ]
+    },
+    {
+      "location_code": "1-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L20 料號:LKGB0892603"
+      ]
+    },
+    {
+      "location_code": "1-2-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L21 料號:3013002501",
+        "半成品-L22 料號:1S005504",
+        "半成品-L23 料號:1S005505"
+      ]
+    },
+    {
+      "location_code": "1-2-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L25 料號:KF-6"
+      ]
+    },
+    {
+      "location_code": "1-2-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L26 料號:70A-03"
+      ]
+    },
+    {
+      "location_code": "1-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L27 料號:3020002580"
+      ]
+    },
+    {
+      "location_code": "1-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L28 料號:6001002501"
+      ]
+    },
+    {
+      "location_code": "1-3-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L29 料號:M1*26T-M1*52T-A1",
+        "半成品-L30 料號:M1*26T-M1*52T-B"
+      ]
+    },
+    {
+      "location_code": "1-3-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L31 料號:2094410100001",
+        "半成品-L32 料號:2103340240900"
+      ]
+    },
+    {
+      "location_code": "1-3-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L230 料號:VN17015"
+      ]
+    },
+    {
+      "location_code": "11-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L135 料號:品號不明"
+      ]
+    },
+    {
+      "location_code": "11-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L136 料號:品號不明"
+      ]
+    },
+    {
+      "location_code": "11-2-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L137 料號:品號不明"
+      ]
+    },
+    {
+      "location_code": "11-2-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L138 料號:品號不明"
+      ]
+    },
+    {
+      "location_code": "11-2-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L139 料號:品號不明"
+      ]
+    },
+    {
+      "location_code": "12-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L141 料號:品號不明"
+      ]
+    },
+    {
+      "location_code": "12-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L142 料號:品號不明"
+      ]
+    },
+    {
+      "location_code": "12-1-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L143 料號:品號不明"
+      ]
+    },
+    {
+      "location_code": "12-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L145 料號:品號不明"
+      ]
+    },
+    {
+      "location_code": "12-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L146 料號:品號不明"
+      ]
+    },
+    {
+      "location_code": "12-2-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L147 料號:AR017008-A0"
+      ]
+    },
+    {
+      "location_code": "12-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L150 料號:HR032008-00"
+      ]
+    },
+    {
+      "location_code": "12-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L151 料號:FHR025012-00"
+      ]
+    },
+    {
+      "location_code": "2-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L34 料號:2094410140003"
+      ]
+    },
+    {
+      "location_code": "2-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L35 料號:10601-1252-00",
+        "半成品-L36 料號:40G04",
+        "半成品-L37 料號:DD-27"
+      ]
+    },
+    {
+      "location_code": "2-1-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L42 料號:21111L"
+      ]
+    },
+    {
+      "location_code": "2-1-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L43 料號:21002S"
+      ]
+    },
+    {
+      "location_code": "2-1-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L44 料號:A-21001S",
+        "半成品-L45 料號:21112L"
+      ]
+    },
+    {
+      "location_code": "2-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L46 料號:M1*20T*13.2L",
+        "半成品-L47 料號:M1*58T*5.37L"
+      ]
+    },
+    {
+      "location_code": "2-2-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L48 料號:21003L",
+        "半成品-L49 料號:21022L"
+      ]
+    },
+    {
+      "location_code": "2-2-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L50 料號:MSGH0100201-JIS2",
+        "半成品-L51 料號:M4*22TB*65L-42271",
+        "半成品-L52 料號:NRFP01132830"
+      ]
+    },
+    {
+      "location_code": "2-2-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L58 料號:MN32021-H"
+      ]
+    },
+    {
+      "location_code": "2-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L59 料號:MN32021-A-01",
+        "半成品-L60 料號:FINAL GEAR 40T",
+        "半成品-L61 料號:DRIVE GEAR 14T"
+      ]
+    },
+    {
+      "location_code": "2-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L64 料號:2094410320000"
+      ]
+    },
+    {
+      "location_code": "2-3-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L66 料號:21024L"
+      ]
+    },
+    {
+      "location_code": "2-3-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L67 料號:MN32021-G"
+      ]
+    },
+    {
+      "location_code": "2-3-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L68 料號:VN17016-A"
+      ]
+    },
+    {
+      "location_code": "3-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L69 料號:E2090270080000"
+      ]
+    },
+    {
+      "location_code": "3-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L70 料號:E2090270080000"
+      ]
+    },
+    {
+      "location_code": "3-1-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L71 料號:E2090270080000"
+      ]
+    },
+    {
+      "location_code": "3-1-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L72 料號:E2090270080000"
+      ]
+    },
+    {
+      "location_code": "3-1-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L73 料號:Z080-E6111-00-P",
+        "半成品-L74 料號:6010002533",
+        "半成品-L75 料號:6010002512"
+      ]
+    },
+    {
+      "location_code": "3-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L77 料號:MN32021-D"
+      ]
+    },
+    {
+      "location_code": "3-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L78 料號:LKNC152060L22"
+      ]
+    },
+    {
+      "location_code": "3-2-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L231 料號:TR54018-B"
+      ]
+    },
+    {
+      "location_code": "3-2-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L221 料號:MI32018-A"
+      ]
+    },
+    {
+      "location_code": "3-2-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L79 料號:DD-22"
+      ]
+    },
+    {
+      "location_code": "3-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L80 料號:DV-32063081"
+      ]
+    },
+    {
+      "location_code": "3-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L81 料號:DV-32063081"
+      ]
+    },
+    {
+      "location_code": "3-3-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L82 料號:2094420110001"
+      ]
+    },
+    {
+      "location_code": "4-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L83 料號:MN32021-A-01"
+      ]
+    },
+    {
+      "location_code": "4-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L84 料號:MN32021-A-01"
+      ]
+    },
+    {
+      "location_code": "4-1-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L85 料號:MN32021-A-01"
+      ]
+    },
+    {
+      "location_code": "4-1-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L86 料號:5007002511",
+        "半成品-L87 料號:1000002571",
+        "半成品-L88 料號:2103340241400"
+      ]
+    },
+    {
+      "location_code": "4-1-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L91 料號:CF_000079"
+      ]
+    },
+    {
+      "location_code": "4-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L92 料號:111-08G-07"
+      ]
+    },
+    {
+      "location_code": "4-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L93 料號:RB-103-1"
+      ]
+    },
+    {
+      "location_code": "4-2-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L94 料號:RB-1",
+        "半成品-L95 料號:RB-14"
+      ]
+    },
+    {
+      "location_code": "4-2-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L96 料號:DD-10"
+      ]
+    },
+    {
+      "location_code": "4-2-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L97 料號:RB-43-1"
+      ]
+    },
+    {
+      "location_code": "4-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L98 料號:RB-43-2"
+      ]
+    },
+    {
+      "location_code": "4-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L99 料號:RB-43-2"
+      ]
+    },
+    {
+      "location_code": "4-3-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L100 料號:RB-43-1"
+      ]
+    },
+    {
+      "location_code": "4-3-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L101 料號:RB-43-1"
+      ]
+    },
+    {
+      "location_code": "4-3-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L225 料號:RB-43-1"
+      ]
+    },
+    {
+      "location_code": "5-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L102 料號:RB-14-1"
+      ]
+    },
+    {
+      "location_code": "5-1-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L103 料號:DD-13"
+      ]
+    },
+    {
+      "location_code": "5-1-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L104 料號:DB-3"
+      ]
+    },
+    {
+      "location_code": "5-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L105 料號:RB-15"
+      ]
+    },
+    {
+      "location_code": "5-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L107 料號:RB-15"
+      ]
+    },
+    {
+      "location_code": "5-2-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L109 料號:RB-100"
+      ]
+    },
+    {
+      "location_code": "5-2-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L110 料號:RB-103-2"
+      ]
+    },
+    {
+      "location_code": "5-2-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L111 料號:DD-12"
+      ]
+    },
+    {
+      "location_code": "5-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L113 料號:RB-15"
+      ]
+    },
+    {
+      "location_code": "5-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L115 料號:RB-15"
+      ]
+    },
+    {
+      "location_code": "5-3-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L117 料號:RB-15"
+      ]
+    },
+    {
+      "location_code": "5-3-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L119 料號:RB-15"
+      ]
+    },
+    {
+      "location_code": "5-3-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L223 料號:RB-15"
+      ]
+    },
+    {
+      "location_code": "6-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L121 料號:DD-23"
+      ]
+    },
+    {
+      "location_code": "6-1-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L122 料號:DD-24"
+      ]
+    },
+    {
+      "location_code": "6-1-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L123 料號:ACL160J103DEX003"
+      ]
+    },
+    {
+      "location_code": "6-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L124 料號:RB-93-2"
+      ]
+    },
+    {
+      "location_code": "6-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L125 料號:RB-101"
+      ]
+    },
+    {
+      "location_code": "6-2-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L126 料號:RB-101"
+      ]
+    },
+    {
+      "location_code": "6-2-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L127 料號:MN25015-A"
+      ]
+    },
+    {
+      "location_code": "6-2-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L128 料號:VN17016-A"
+      ]
+    },
+    {
+      "location_code": "6-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L129 料號:HSCT-HB50040-1070000"
+      ]
+    },
+    {
+      "location_code": "6-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L130 料號:HSCT-HB50040-1070000"
+      ]
+    },
+    {
+      "location_code": "6-3-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L131 料號:CHGH0152112-Q6"
+      ]
+    },
+    {
+      "location_code": "6-3-4",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L132 料號:11122-BC2-0X01"
+      ]
+    },
+    {
+      "location_code": "6-3-5",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L133 料號:11211-BC2-0X01"
+      ]
+    },
+    {
+      "location_code": "A1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "御成"
+      ],
+      "examples": [
+        "御成-L4 料號:3J0000080005",
+        "御成-L5 料號:3K0000080002"
+      ]
+    },
+    {
+      "location_code": "A1-箱",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "寶嘉誠",
+        "旭陽"
+      ],
+      "examples": [
+        "寶嘉誠-L150 料號:3011012533",
+        "寶嘉誠-L227 料號:1015002522",
+        "寶嘉誠-L253 料號:1007002543"
+      ]
+    },
+    {
+      "location_code": "A2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L96 料號:V2-6",
+        "其它-L97 料號:112EB600-1-A",
+        "其它-L98 料號:112EB600-2-A"
+      ]
+    },
+    {
+      "location_code": "A2-3",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠",
+        "旭陽"
+      ],
+      "examples": [
+        "寶嘉誠-L151 料號:5015002504",
+        "寶嘉誠-L152 料號:2904002521",
+        "寶嘉誠-L153 料號:3015002512"
+      ]
+    },
+    {
+      "location_code": "A2-4",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L155 料號:1029002530",
+        "寶嘉誠-L156 料號:1024005400",
+        "寶嘉誠-L157 料號:1047002500"
+      ]
+    },
+    {
+      "location_code": "A2-箱",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕"
+      ],
+      "examples": [
+        "和昕-L143 料號:TR54018-G"
+      ]
+    },
+    {
+      "location_code": "A3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L248 料號:3003012590",
+        "其它-L100 料號:Z080-E6151-00-P",
+        "其它-L101 料號:FC-BRACKET BLOCK"
+      ]
+    },
+    {
+      "location_code": "A3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L158 料號:3011012533",
+        "其它-L103 料號:DP24PA20T10"
+      ]
+    },
+    {
+      "location_code": "A3-3",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L159 料號:3020002512",
+        "寶嘉誠-L160 料號:3020002580",
+        "寶嘉誠-L161 料號:3046002580"
+      ]
+    },
+    {
+      "location_code": "A3-4",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L163 料號:2005002520",
+        "寶嘉誠-L164 料號:2005002530",
+        "寶嘉誠-L165 料號:3018002580"
+      ]
+    },
+    {
+      "location_code": "A3-5",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L169 料號:5008042501",
+        "寶嘉誠-L170 料號:3052002521",
+        "寶嘉誠-L171 料號:6006002540"
+      ]
+    },
+    {
+      "location_code": "A3-6",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L173 料號:5033002561",
+        "寶嘉誠-L174 料號:6043002510",
+        "寶嘉誠-L175 料號:6006002550"
+      ]
+    },
+    {
+      "location_code": "A3-7",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L176 料號:5069002511",
+        "寶嘉誠-L177 料號:5033002570",
+        "寶嘉誠-L178 料號:7003002550"
+      ]
+    },
+    {
+      "location_code": "A4-箱 1",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L81 料號:2094400160001",
+        "旭陽-L82 料號:2094410140003",
+        "旭陽-L83 料號:2094400190001"
+      ]
+    },
+    {
+      "location_code": "A4-箱 2",
+      "area_id": 2,
+      "appeared_in": [
+        "GOGORO",
+        "其它"
+      ],
+      "examples": [
+        "GOGORO-L4 料號:SPTM-6",
+        "GOGORO-L5 料號:HELICAL GEAR-21",
+        "GOGORO-L6 料號:HELICAL GEAR-21"
+      ]
+    },
+    {
+      "location_code": "A4-箱 3",
+      "area_id": 2,
+      "appeared_in": [
+        "GOGORO",
+        "其它"
+      ],
+      "examples": [
+        "GOGORO-L15 料號:11121-BC2-0X01",
+        "GOGORO-L16 料號:11121-BC2-0X01",
+        "GOGORO-L17 料號:11122-JR2-0X01"
+      ]
+    },
+    {
+      "location_code": "A4-箱 4",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "弘旺",
+        "金豐"
+      ],
+      "examples": [
+        "金豐-L15 料號:PS2T31-0204A",
+        "金豐-L16 料號:PS2396-0207A",
+        "弘旺-L4 料號:HA3003F"
+      ]
+    },
+    {
+      "location_code": "A4-箱 5",
+      "area_id": 2,
+      "appeared_in": [
+        "板井",
+        "立翔"
+      ],
+      "examples": [
+        "立翔-L4 料號:CH-KP-020025038-01",
+        "立翔-L5 料號:CH-KP-020024038-01",
+        "立翔-L6 料號:CH-KP-027032050-01"
+      ]
+    },
+    {
+      "location_code": "B1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "崴立"
+      ],
+      "examples": [
+        "崴立-L23 料號:10601-0530-04",
+        "崴立-L24 料號:22150-0025-00",
+        "崴立-L26 料號:21436-3003-00"
+      ]
+    },
+    {
+      "location_code": "B1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "原億昌",
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L183 料號:5069002501",
+        "原億昌-L5 料號:F23383A",
+        "原億昌-L6 料號:251030030"
+      ]
+    },
+    {
+      "location_code": "B1-3",
+      "area_id": 2,
+      "appeared_in": [
+        "明暐"
+      ],
+      "examples": [
+        "明暐-L4 料號:483-08054001A",
+        "明暐-L5 料號:483-30044007A",
+        "明暐-L6 料號:462-25020001A"
+      ]
+    },
+    {
+      "location_code": "B1-4",
+      "area_id": 2,
+      "appeared_in": [
+        "御成"
+      ],
+      "examples": [
+        "御成-L6 料號:3I0000080001-55",
+        "御成-L7 料號:3I0000080003",
+        "御成-L8 料號:3I0000080004"
+      ]
+    },
+    {
+      "location_code": "B1-5",
+      "area_id": 2,
+      "appeared_in": [
+        "崴立"
+      ],
+      "examples": [
+        "崴立-L36 料號:21436-3008-00",
+        "崴立-L37 料號:21436-3009-00"
+      ]
+    },
+    {
+      "location_code": "B2-3",
+      "area_id": 2,
+      "appeared_in": [
+        "成大"
+      ],
+      "examples": [
+        "成大-L16 料號:LEGS08924"
+      ]
+    },
+    {
+      "location_code": "B2-箱",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "原億昌",
+        "寶嘉誠",
+        "旭陽",
+        "泳建"
+      ],
+      "examples": [
+        "寶嘉誠-L199 料號:3011012543",
+        "旭陽-L91 料號:2094410120000",
+        "旭陽-L92 料號:E2020010140000"
+      ]
+    },
+    {
+      "location_code": "B3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔"
+      ],
+      "examples": [
+        "吉輔-L23 料號:6P4A-LB63032-1030000"
+      ]
+    },
+    {
+      "location_code": "B3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "原億昌"
+      ],
+      "examples": [
+        "原億昌-L16 料號:75545",
+        "原億昌-L17 料號:80641",
+        "原億昌-L18 料號:251030059"
+      ]
+    },
+    {
+      "location_code": "B3-3",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L99 料號:2094400120000",
+        "旭陽-L100 料號:2094400210500",
+        "旭陽-L101 料號:2094400170001"
+      ]
+    },
+    {
+      "location_code": "B3-4",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L110 料號:2096640110001",
+        "旭陽-L111 料號:2093370160101",
+        "旭陽-L112 料號:2093370210100"
+      ]
+    },
+    {
+      "location_code": "B3-5",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L184 料號:1003022513",
+        "寶嘉誠-L185 料號:3019002550",
+        "寶嘉誠-L186 料號:3019002570"
+      ]
+    },
+    {
+      "location_code": "B3-6",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L192 料號:5003022510",
+        "寶嘉誠-L193 料號:5007002501",
+        "寶嘉誠-L194 料號:3004000001"
+      ]
+    },
+    {
+      "location_code": "B3-7",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L196 料號:1003012531",
+        "寶嘉誠-L197 料號:1027002500",
+        "寶嘉誠-L198 料號:3019012500"
+      ]
+    },
+    {
+      "location_code": "B4-箱",
+      "area_id": 2,
+      "appeared_in": [
+        "原億昌",
+        "和大",
+        "和昕",
+        "崴立"
+      ],
+      "examples": [
+        "和昕-L116 料號:MN32017-A",
+        "和昕-L118 料號:MN32018-A",
+        "原億昌-L32 料號:CSM03002011-Q8"
+      ]
+    },
+    {
+      "location_code": "C1-箱",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L140 料號:M3.5T27W30L189",
+        "其它-L141 料號:M3.5T54W30L40",
+        "其它-L142 料號:M3T27W30L284"
+      ]
+    },
+    {
+      "location_code": "C1/C2-箱",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "寶嘉誠",
+        "崴立",
+        "成大"
+      ],
+      "examples": [
+        "寶嘉誠-L200 料號:1008002521",
+        "成大-L17 料號:JKGC04719L1",
+        "成大-L62 料號:KBSH03193"
+      ]
+    },
+    {
+      "location_code": "C3-箱",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "成大"
+      ],
+      "examples": [
+        "成大-L18 料號:KBSH10493",
+        "其它-L146 料號:M1.75*14T-FH001",
+        "其它-L147 料號:478-0000-052-04"
+      ]
+    },
+    {
+      "location_code": "C4-箱",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "半成品",
+        "原億昌",
+        "泳建",
+        "立翔"
+      ],
+      "examples": [
+        "半成品-L195 料號:2103340240101",
+        "半成品-L196 料號:2103340240900",
+        "半成品-L197 料號:E2991280320000"
+      ]
+    },
+    {
+      "location_code": "D3-箱",
+      "area_id": 2,
+      "appeared_in": [
+        "原億昌"
+      ],
+      "examples": [
+        "原億昌-L42 料號:CSM0250301-99611",
+        "原億昌-L43 料號:I5034718"
+      ]
+    },
+    {
+      "location_code": "KX500前-棧板",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L202 料號:6009002014",
+        "寶嘉誠-L265 料號:6003002513",
+        "寶嘉誠-L266 料號:6009002505"
+      ]
+    },
+    {
+      "location_code": "一廠 2-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L222 料號:5008002523"
+      ]
+    },
+    {
+      "location_code": "一廠 出貨區",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L199 料號:3181000842"
+      ]
+    },
+    {
+      "location_code": "一廠 出貨區旁棧板",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔"
+      ],
+      "examples": [
+        "吉輔-L28 料號:HH02-HB50060-306000D",
+        "吉輔-L29 料號:HH02-HB50060-309000D",
+        "吉輔-L30 料號:HSE8-HB50040-2060000"
+      ]
+    },
+    {
+      "location_code": "一廠 架  2-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔"
+      ],
+      "examples": [
+        "吉輔-L42 料號:LC01-LB63020-102000D"
+      ]
+    },
+    {
+      "location_code": "一廠 架  2-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔"
+      ],
+      "examples": [
+        "吉輔-L24 料號:HSOK-HB50060-K090100",
+        "吉輔-L25 料號:15001-012L-S02"
+      ]
+    },
+    {
+      "location_code": "一廠 架  3-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔"
+      ],
+      "examples": [
+        "吉輔-L26 料號:15001-012L-S02"
+      ]
+    },
+    {
+      "location_code": "一廠 架 2-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L201 料號:6009002561"
+      ]
+    },
+    {
+      "location_code": "一廠 架 2-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "成大"
+      ],
+      "examples": [
+        "成大-L19 料號:LEGS08923",
+        "成大-L20 料號:JKKE04715R",
+        "成大-L21 料號:JKGA1624R1"
+      ]
+    },
+    {
+      "location_code": "一廠 架 3-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "原億昌"
+      ],
+      "examples": [
+        "原億昌-L44 料號:CHGH03022",
+        "原億昌-L45 料號:CC7-00-06D",
+        "原億昌-L46 料號:CC7-00-07A"
+      ]
+    },
+    {
+      "location_code": "一廠 架 4-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L165 料號:D060-M0245"
+      ]
+    },
+    {
+      "location_code": "一廠 架 4-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔"
+      ],
+      "examples": [
+        "吉輔-L27 料號:15001-012L-S02"
+      ]
+    },
+    {
+      "location_code": "一廠 架 4-2-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L209 料號:21220"
+      ]
+    },
+    {
+      "location_code": "一廠 架 5-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L197 料號:40301017-01"
+      ]
+    },
+    {
+      "location_code": "一廠 架 5-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔"
+      ],
+      "examples": [
+        "吉輔-L37 料號:HH02-HB50060-307000E",
+        "吉輔-L40 料號:HH02-HB50060-306000D",
+        "吉輔-L41 料號:HH02-HB50060-309000D"
+      ]
+    },
+    {
+      "location_code": "一廠 架 5-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L154 料號:21220"
+      ]
+    },
+    {
+      "location_code": "一廠 架 5-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L155 料號:JKGF06780L"
+      ]
+    },
+    {
+      "location_code": "一廠 架 5-3-3",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L218 料號:6009002013"
+      ]
+    },
+    {
+      "location_code": "一廠 架 5-4-1",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L166 料號:1426436",
+        "其它-L167 料號:1426436"
+      ]
+    },
+    {
+      "location_code": "一廠 架 5-4-2",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L168 料號:3181000298"
+      ]
+    },
+    {
+      "location_code": "一廠 架 5-4-3",
+      "area_id": 2,
+      "appeared_in": [
+        "成大"
+      ],
+      "examples": [
+        "成大-L48 料號:JKGB07790L"
+      ]
+    },
+    {
+      "location_code": "一廠 架1-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "半成品",
+        "新穎"
+      ],
+      "examples": [
+        "半成品-L156 料號:SC-5FH-D11",
+        "半成品-L157 料號:B003",
+        "半成品-L158 料號:ZZ024019"
+      ]
+    },
+    {
+      "location_code": "一廠 架1-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L196 料號:510系列"
+      ]
+    },
+    {
+      "location_code": "一廠 架2-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L162 料號:MTA1700700",
+        "其它-L163 料號:MTH2550700",
+        "其它-L164 料號:MTH2550800"
+      ]
+    },
+    {
+      "location_code": "一廠 架3-1-1中間",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L159 料號:5023002503",
+        "半成品-L160 料號:40301010-01"
+      ]
+    },
+    {
+      "location_code": "一廠 架3-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "成大"
+      ],
+      "examples": [
+        "成大-L55 料號:KBSH12600",
+        "成大-L56 料號:KBSH12593",
+        "成大-L57 料號:KBSH12643"
+      ]
+    },
+    {
+      "location_code": "一廠 架4-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "成大"
+      ],
+      "examples": [
+        "成大-L49 料號:JKGB07790L"
+      ]
+    },
+    {
+      "location_code": "一廠 架4-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "成大"
+      ],
+      "examples": [
+        "成大-L45 料號:KKYC58209501",
+        "成大-L46 料號:KKYM58203601"
+      ]
+    },
+    {
+      "location_code": "一廠 架5-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "成大"
+      ],
+      "examples": [
+        "成大-L47 料號:KKYC58210901"
+      ]
+    },
+    {
+      "location_code": "一廠架3-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L226 料號:整棧齒輪-料號不明"
+      ]
+    },
+    {
+      "location_code": "三廠 泡殼旁",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔"
+      ],
+      "examples": [
+        "吉輔-L47 料號:HS0W-HT10240-1120000",
+        "吉輔-L48 料號:HS05-HB50024-1240S00",
+        "吉輔-L49 料號:2GOT-LB50004-1030000"
+      ]
+    },
+    {
+      "location_code": "二廠1鐵架後(鐵架橫桿)",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L169 料號:9054051-Z05"
+      ]
+    },
+    {
+      "location_code": "二廠鐵架1前-棧板",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L170 料號:3181000325",
+        "其它-L171 料號:3181000577",
+        "其它-L206 料號:40301017-01"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L209 料號:6009002013"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L210 料號:6009002013",
+        "寶嘉誠-L237 料號:6009002505"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "半成品",
+        "東芳",
+        "泳建"
+      ],
+      "examples": [
+        "半成品-L165 料號:S2P_155_1227",
+        "半成品-L166 料號:S3P_155_1227",
+        "半成品-L167 料號:S2G_155_1227"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-2-1 前",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L32 料號:M1.95T64PA20°LH30°",
+        "其它-L33 料號:M1.95T15PA20RH30.5",
+        "其它-L34 料號:P00002502-A"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-2-1前",
+      "area_id": 2,
+      "appeared_in": [
+        "東芳"
+      ],
+      "examples": [
+        "東芳-L21 料號:107-3",
+        "東芳-L22 料號:106",
+        "東芳-L23 料號:107-1"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L4 料號:6009002560檢具",
+        "寶嘉誠-L5 料號:6013002550",
+        "寶嘉誠-L8 料號:6013002541"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-2-2 前",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L6 料號:6013002501",
+        "寶嘉誠-L7 料號:6013002501",
+        "其它-L44 料號:GF210N0050E01"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-3-1後",
+      "area_id": 2,
+      "appeared_in": [
+        "成大"
+      ],
+      "examples": [
+        "成大-L64 料號:KBSH05293"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "原億昌",
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L12 料號:2804002111-4",
+        "寶嘉誠-L14 料號:6006002503",
+        "原億昌-L4 料號:D2-1016"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-3-2 前",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L10 料號:6006002530",
+        "寶嘉誠-L11 料號:6006002530",
+        "寶嘉誠-L15 料號:2803002100-4"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-3-2 後",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L16 料號:5008042501"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-3-2前後",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L9 料號:6013002541"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-3-2後",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔"
+      ],
+      "examples": [
+        "吉輔-L4 料號:LC01-LB50024-2020000"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-4-1",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L17 料號:6018002530"
+      ]
+    },
+    {
+      "location_code": "大鐵架 1-4-2前",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔",
+        "和昕"
+      ],
+      "examples": [
+        "和昕-L4 料號:MH80010",
+        "吉輔-L39 料號:HSE8-HB50040-2060000"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L18 料號:5003002502",
+        "寶嘉誠-L19 料號:6013002560"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-1-1 前",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L20 料號:1011002510",
+        "寶嘉誠-L21 料號:2802002110-4",
+        "寶嘉誠-L22 料號:3015002544"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-1-1 後",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L27 料號:5007042501",
+        "寶嘉誠-L28 料號:5012002523",
+        "寶嘉誠-L29 料號:5012002523"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠",
+        "旭陽"
+      ],
+      "examples": [
+        "寶嘉誠-L33 料號:6023002511",
+        "寶嘉誠-L34 料號:5008002533",
+        "寶嘉誠-L35 料號:5010012523"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-1-2 前",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L36 料號:5010012523",
+        "寶嘉誠-L37 料號:5010012511",
+        "寶嘉誠-L38 料號:6006002530"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-1-2 後",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L47 料號:1005012510",
+        "寶嘉誠-L48 料號:1003012513",
+        "寶嘉誠-L49 料號:3015002570"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-1-2前",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L264 料號:6001002501"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-1-2後",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠",
+        "成大"
+      ],
+      "examples": [
+        "寶嘉誠-L254 料號:1003002522",
+        "成大-L4 料號:LKGB0892602"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L54 料號:6043002520",
+        "寶嘉誠-L55 料號:5022002521",
+        "寶嘉誠-L56 料號:5003002550"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-2-1 前",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L58 料號:3006002532",
+        "寶嘉誠-L59 料號:2005012512",
+        "寶嘉誠-L60 料號:3004002550"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-2-1 後",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L76 料號:3003022500",
+        "寶嘉誠-L77 料號:1002002571",
+        "寶嘉誠-L78 料號:1020002510"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L214 料號:1015002512"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-2-2 前",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L84 料號:1003012520",
+        "寶嘉誠-L85 料號:1004002502",
+        "寶嘉誠-L86 料號:1048002510"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-2-2 後",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L117 料號:1004002501",
+        "寶嘉誠-L118 料號:1009002510",
+        "寶嘉誠-L119 料號:6027002560"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠",
+        "崴立"
+      ],
+      "examples": [
+        "寶嘉誠-L126 料號:3012002510",
+        "寶嘉誠-L127 料號:2804002101-4",
+        "寶嘉誠-L129 料號:3019012501"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L4 料號:E2093350270001",
+        "其它-L191 料號:40301001-01"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-3-2 前",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L45 料號:40301001-01"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-3-2 後",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L5 料號:2103430230103",
+        "其它-L46 料號:GX255N0032C02",
+        "其它-L47 料號:GX125N0028A01"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-3-2前",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕",
+        "金豐"
+      ],
+      "examples": [
+        "和昕-L127 料號:TR54017",
+        "和昕-L128 料號:MN32015-A",
+        "金豐-L8 料號:PM1366-0203A"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-3-2前後",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L249 料號:6001002501"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-3-2後",
+      "area_id": 2,
+      "appeared_in": [
+        "金豐"
+      ],
+      "examples": [
+        "金豐-L10 料號:PM1618-0201A",
+        "金豐-L11 料號:PM1A03-0202A",
+        "金豐-L12 料號:PM1656-0201A"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-4-1",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "崴立",
+        "東芳",
+        "盟英"
+      ],
+      "examples": [
+        "崴立-L20 料號:10601-0531-01",
+        "崴立-L22 料號:13006-0006-00",
+        "東芳-L6 料號:21210"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-4-1前",
+      "area_id": 2,
+      "appeared_in": [
+        "泳建"
+      ],
+      "examples": [
+        "泳建-L22 料號:RB-21"
+      ]
+    },
+    {
+      "location_code": "大鐵架 2-4-2",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L6 料號:E2090220120005",
+        "旭陽-L7 料號:E2090220130002"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠",
+        "旭陽"
+      ],
+      "examples": [
+        "寶嘉誠-L130 料號:5017002503",
+        "寶嘉誠-L131 料號:3010002522",
+        "旭陽-L8 料號:E2090260130000"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-1-1 前",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L12 料號:2103430230902",
+        "旭陽-L13 料號:2103430230902"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-1-1後",
+      "area_id": 2,
+      "appeared_in": [
+        "半成品"
+      ],
+      "examples": [
+        "半成品-L227 料號:6009002504"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L14 料號:2000100220000",
+        "旭陽-L15 料號:2100880320002",
+        "旭陽-L16 料號:2103570130500"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-1-2 前",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L22 料號:2094420260001",
+        "旭陽-L23 料號:2105590150001",
+        "旭陽-L24 料號:2956260030100"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-1-2 後",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L27 料號:2172930100001",
+        "旭陽-L28 料號:2103400240600",
+        "旭陽-L29 料號:2123730070001"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕",
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L32 料號:2120020240701",
+        "旭陽-L33 料號:E2093340040001",
+        "旭陽-L34 料號:E2090260140000"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-2-1 前",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L37 料號:2000100220000",
+        "旭陽-L38 料號:21035003500300",
+        "旭陽-L39 料號:2985830120000"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-2-1 後",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L30 料號:2123730070001",
+        "旭陽-L31 料號:2124580160001",
+        "旭陽-L56 料號:2956050160000"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-2-1前",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L130 料號:2956580060000",
+        "旭陽-L131 料號:2616360130000",
+        "旭陽-L132 料號:2950250180001"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-2-1後",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L128 料號:E2991280320000",
+        "旭陽-L133 料號:2120020130002",
+        "旭陽-L134 料號:E2991280320000"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L132 料號:3013002501",
+        "寶嘉誠-L133 料號:6014002502",
+        "寶嘉誠-L134 料號:1047002500"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L60 料號:2000003780000",
+        "旭陽-L61 料號:2103430231601",
+        "旭陽-L62 料號:2103500200601"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "和昕"
+      ],
+      "examples": [
+        "和昕-L6 料號:MN25053-A-01",
+        "和昕-L7 料號:MN50021",
+        "和昕-L8 料號:GT2027-00100"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-4-1",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔",
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L67 料號:E2090330040000",
+        "旭陽-L68 料號:E2090330170000",
+        "旭陽-L69 料號:2103500210004"
+      ]
+    },
+    {
+      "location_code": "大鐵架 3-4-2",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L71 料號:E2090260120000",
+        "旭陽-L72 料號:E2090260140000"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕",
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L135 料號:5004002511",
+        "寶嘉誠-L267 料號:3010002511",
+        "和昕-L13 料號:GT2060-00201"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-1-1 前",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕"
+      ],
+      "examples": [
+        "和昕-L17 料號:MN25016",
+        "和昕-L18 料號:MN25016",
+        "和昕-L19 料號:MN25019"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-1-1 後",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕"
+      ],
+      "examples": [
+        "和昕-L20 料號:GT2036-00100",
+        "和昕-L125 料號:TR54018-H"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-1-1後",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L148 料號:E2991280320000",
+        "旭陽-L149 料號:E2991280330000",
+        "旭陽-L151 料號:E2991281020000"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-1-2",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕",
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L74 料號:44001030207",
+        "旭陽-L75 料號:2103430230902",
+        "旭陽-L76 料號:2097200140200"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕",
+        "成大"
+      ],
+      "examples": [
+        "和昕-L28 料號:HIB0006-A",
+        "和昕-L29 料號:BN32A006",
+        "和昕-L30 料號:GT2048-00200"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-2-1 前",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕"
+      ],
+      "examples": [
+        "和昕-L42 料號:PLE024-8YU00",
+        "和昕-L43 料號:PLD035-8YU00"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-2-1前",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕",
+        "成大"
+      ],
+      "examples": [
+        "和昕-L31 料號:VN17015",
+        "和昕-L32 料號:VN17015",
+        "和昕-L33 料號:VN17015"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-2-1後",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕"
+      ],
+      "examples": [
+        "和昕-L48 料號:GT2024-001A0",
+        "和昕-L49 料號:GT2027-00100",
+        "和昕-L50 料號:GT2040-00100"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕"
+      ],
+      "examples": [
+        "和昕-L61 料號:GT2024-00100",
+        "和昕-L62 料號:GT2060-00201",
+        "和昕-L63 料號:GT3049-00100"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-2-2 前",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕"
+      ],
+      "examples": [
+        "和昕-L75 料號:TR54018-G"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-2-2 後",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕"
+      ],
+      "examples": [
+        "和昕-L77 料號:MN32015-A",
+        "和昕-L132 料號:GT2027-00200",
+        "和昕-L150 料號:TR17020"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-2-2前",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕"
+      ],
+      "examples": [
+        "和昕-L69 料號:GT2027-00100",
+        "和昕-L70 料號:GT2021-00100",
+        "和昕-L71 料號:GTA020-00100"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-3-1 前",
+      "area_id": 2,
+      "appeared_in": [
+        "泳建"
+      ],
+      "examples": [
+        "泳建-L19 料號:RB-93-2"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-3-1前",
+      "area_id": 2,
+      "appeared_in": [
+        "泳建"
+      ],
+      "examples": [
+        "泳建-L23 料號:RB-87",
+        "泳建-L24 料號:RB-14",
+        "泳建-L70 料號:DB-4"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-3-1後",
+      "area_id": 2,
+      "appeared_in": [
+        "泳建"
+      ],
+      "examples": [
+        "泳建-L25 料號:RB-14",
+        "泳建-L26 料號:RB-93",
+        "泳建-L77 料號:RB-1"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-3-2",
+      "area_id": 2,
+      "appeared_in": [
+        "泳建"
+      ],
+      "examples": [
+        "泳建-L27 料號:RB-14",
+        "泳建-L28 料號:RB-14",
+        "泳建-L29 料號:RB-31"
+      ]
+    },
+    {
+      "location_code": "大鐵架 4-4-1",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L136 料號:6026002503",
+        "寶嘉誠-L255 料號:6026002503"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-1-1",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔"
+      ],
+      "examples": [
+        "吉輔-L7 料號:HS05-HB50120-3840S00",
+        "吉輔-L36 料號:HS05-HB50120-3840S00",
+        "吉輔-L38 料號:HS05-HB50120-3840S00"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-1-1前",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔",
+        "崴立"
+      ],
+      "examples": [
+        "吉輔-L8 料號:6P4A-LB63032-1020000",
+        "吉輔-L9 料號:HS05-HB50120-3840S00",
+        "崴立-L4 料號:22150-0019-01"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-1-1後",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L58 料號:CF_000079",
+        "其它-L59 料號:CF_000079(1)",
+        "其它-L60 料號:CF_000079(2)"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-1-2 前",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L137 料號:3006002542",
+        "寶嘉誠-L138 料號:1047002500",
+        "寶嘉誠-L139 料號:2804002101-4"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-1-2 後",
+      "area_id": 2,
+      "appeared_in": [
+        "寶嘉誠"
+      ],
+      "examples": [
+        "寶嘉誠-L144 料號:1003012531",
+        "寶嘉誠-L145 料號:2803002100-4",
+        "寶嘉誠-L147 料號:5020002522"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-1-2後",
+      "area_id": 2,
+      "appeared_in": [
+        "成大"
+      ],
+      "examples": [
+        "成大-L7 料號:KKYC24710021-1"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-2-1",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔"
+      ],
+      "examples": [
+        "吉輔-L10 料號:FC4S-LD63030-1100000",
+        "吉輔-L11 料號:FC4S-LD63030-1110000",
+        "吉輔-L43 料號:LC01-LB63020-102000D"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-2-1 後",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L80 料號:RA63010JC",
+        "其它-L81 料號:P8210901-0033",
+        "其它-L82 料號:P8210901-0059"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-2-1前",
+      "area_id": 2,
+      "appeared_in": [
+        "吉輔"
+      ],
+      "examples": [
+        "吉輔-L12 料號:HSCT-HB50040-1070000",
+        "吉輔-L13 料號:1G0T-LBS0012-1040000",
+        "吉輔-L14 料號:HH02-HB50060-306020A"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-2-1後",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L68 料號:RBT2000A030",
+        "其它-L69 料號:RD252035A",
+        "其它-L70 料號:RA63070AC"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-2-2",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "吉輔",
+        "新穎"
+      ],
+      "examples": [
+        "吉輔-L22 料號:1G0T-LBS0012-1040000",
+        "吉輔-L57 料號:HSAN-HB50040-1060000",
+        "新穎-L4 料號:DV-16500220"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-2-2 後",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L93 料號:3703-3258BD",
+        "其它-L94 料號:3109330190"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-2-2前",
+      "area_id": 2,
+      "appeared_in": [
+        "成大"
+      ],
+      "examples": [
+        "成大-L8 料號:KBSH05218",
+        "成大-L9 料號:LKGB0892602-A",
+        "成大-L10 料號:JKYM11001711"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-2-2後",
+      "area_id": 2,
+      "appeared_in": [
+        "其它",
+        "成大"
+      ],
+      "examples": [
+        "成大-L12 料號:JKGA01715R",
+        "成大-L13 料號:JKGASS17R2",
+        "成大-L14 料號:KBSH02162"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-3-2前",
+      "area_id": 2,
+      "appeared_in": [
+        "泳建"
+      ],
+      "examples": [
+        "泳建-L35 料號:RC-134",
+        "泳建-L36 料號:DD-11",
+        "泳建-L37 料號:DB-2"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-3-2後",
+      "area_id": 2,
+      "appeared_in": [
+        "泳建"
+      ],
+      "examples": [
+        "泳建-L39 料號:RB-8",
+        "泳建-L40 料號:DD-25",
+        "泳建-L41 料號:RB-90"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-4-2前",
+      "area_id": 2,
+      "appeared_in": [
+        "泳建"
+      ],
+      "examples": [
+        "泳建-L42 料號:RB-93-1",
+        "泳建-L43 料號:DD-28",
+        "泳建-L44 料號:DD-29"
+      ]
+    },
+    {
+      "location_code": "大鐵架 5-4-2後",
+      "area_id": 2,
+      "appeared_in": [
+        "泳建"
+      ],
+      "examples": [
+        "泳建-L50 料號:DD-24",
+        "泳建-L51 料號:DD-27",
+        "泳建-L52 料號:RB-99"
+      ]
+    },
+    {
+      "location_code": "大鐵架 A3-1",
+      "area_id": 2,
+      "appeared_in": [
+        "盟英"
+      ],
+      "examples": [
+        "盟英-L22 料號:GS-M100T58-02",
+        "盟英-L23 料號:GS-M100T59"
+      ]
+    },
+    {
+      "location_code": "大鐵架3-1-2 前",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L25 料號:2094420280001",
+        "旭陽-L26 料號:2103430230201",
+        "旭陽-L155 料號:2103400240002"
+      ]
+    },
+    {
+      "location_code": "大鐵架3-1-2 後",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L156 料號:2103340240900"
+      ]
+    },
+    {
+      "location_code": "大鐵架4-1-1 後",
+      "area_id": 2,
+      "appeared_in": [
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L73 料號:2103400240002",
+        "旭陽-L159 料號:2103400240002"
+      ]
+    },
+    {
+      "location_code": "大鐵架5-2-1後",
+      "area_id": 2,
+      "appeared_in": [
+        "金豐"
+      ],
+      "examples": [
+        "金豐-L4 料號:PS2009-1301A-1",
+        "金豐-L5 料號:PS2056-0901A",
+        "金豐-L6 料號:PS2156-0910A"
+      ]
+    },
+    {
+      "location_code": "鐵架 1 前-棧板",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕",
+        "旭陽"
+      ],
+      "examples": [
+        "旭陽-L77 料號:2103430230201",
+        "和昕-L80 料號:MN25019",
+        "和昕-L81 料號:MN32015-A"
+      ]
+    },
+    {
+      "location_code": "鐵架 3-4中間",
+      "area_id": 2,
+      "appeared_in": [
+        "和昕"
+      ],
+      "examples": [
+        "和昕-L144 料號:TR54018-H",
+        "和昕-L145 料號:TR54018-H"
+      ]
+    },
+    {
+      "location_code": "鐵架 3-4間-棧板(右)",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L207 料號:40301011-01"
+      ]
+    },
+    {
+      "location_code": "鐵架 5前-棧板",
+      "area_id": 2,
+      "appeared_in": [
+        "其它"
+      ],
+      "examples": [
+        "其它-L172 料號:3183044230",
+        "其它-L173 料號:3183045230",
+        "其它-L202 料號:3183044240"
+      ]
+    }
+  ]
+}

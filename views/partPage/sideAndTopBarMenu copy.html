@@ -1,0 +1,311 @@
+<?php
+ if (session_status() == PHP_SESSION_NONE) {
+    session_start();
+ }
+
+ if(!isset($_SESSION['id']) && !isset($_SESSION['user_password'])) {
+     header("Location:../../../index.php");
+ }
+
+@$id            = $_SESSION['id'];
+@$userid        = $_SESSION['userid'];
+@$user_cname    = $_SESSION['user_cname'];
+@$user_uname    = $_SESSION['user_uname'];
+@$user_password = $_SESSION['user_password'];
+@$user_status   = $_SESSION['status'];
+@$user_status2   = $_SESSION['status2'];
+
+$conn=new DBConnection();
+@$user_permissions = $conn->getAll("SELECT `KPI_vw` FROM `user_permissions` WHERE `user_id` = '".$id."'");
+
+@$KPI_vw = 0;
+if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
+    $KPI_vw = $user_permissions[0]['KPI_vw'];
+}
+
+@$user_status_now   = $KPI_vw;
+
+?>
+
+
+<div class="col-md-3 left_col sidebar-sticky">
+    <div class="left_col scroll-view">
+        <?php
+        
+        $conn=new DBConnection();
+        $user=$conn->getAll("SELECT * FROM `user` WHERE id=".$_SESSION['id']);
+        $event=$conn->getAll("SELECT * FROM `vw_live_event` WHERE `status`=".$user_status." and `user_id` is null or `user_id` not in(".$id.") order by eventdate desc");
+        
+        
+        ?><?php foreach ($user as $user) { ?>
+        <!--<div class="navbar nav_title" style="border: 0;">
+            <a href="../admin/dashboard.php?id=<?=$user['id']?>" class="site_title">
+                <i class="fa fa-paw"></i>
+                <span>超正齒輪</span></a>
+        </div>-->
+
+        <div class="clearfix"></div>
+
+
+        <!-- menu profile quick info -->
+        <div class="profile clearfix">
+            <div class="profile_pic">
+                <img src="../../resource/images/LOGO.svg" alt="..." class="img-circle profile_img">
+                
+            </div>
+            <div class="profile_info">
+                <span>超正齒輪</span>
+                <h2><?= $user['user_cname'] ?></h2>
+            </div>
+        </div>
+        <!-- /menu profile quick info -->
+
+        <br />
+
+        <!-- sidebar menu -->
+        <div id="sidebar-menu" class="main_menu_side hidden-print main_menu">
+            <div class="menu_section">
+                <?php 
+                // 查詢使用者部門與職稱 (含兼任)
+                $user_roles = $conn->getAll("SELECT d.name as dept_name, p.name as pos_name, udp.is_main 
+                                             FROM user_department_position_map udp
+                                             LEFT JOIN department d ON udp.department_id = d.id
+                                             LEFT JOIN position p ON udp.position_id = p.id
+                                             WHERE udp.user_id = '".$user['id']."'
+                                             ORDER BY udp.is_main DESC, udp.id ASC");
+
+                if (!empty($user_roles)) {
+                    foreach ($user_roles as $role) {
+                        $dept_name = isset($role['dept_name']) ? $role['dept_name'] : '';
+                        $pos_name = isset($role['pos_name']) ? $role['pos_name'] : '';
+                        
+                        $display_title = $dept_name;
+                        if ($dept_name != '' && $pos_name != '') {
+                            $display_title .= '-' . $pos_name;
+                        } else {
+                            $display_title .= $pos_name;
+                            
+                        }
+                        
+                        $font_size = '14px';
+                        if (isset($role['is_main']) && $role['is_main'] == 0) {
+                            $display_title .= '(兼任)';
+                            $font_size = '11px';
+                        }
+                        
+                        echo '<h3 style="font-size: ' . $font_size . ';">' . $display_title . '</h3>';
+                    }
+                }
+                ?>
+                <ul class="nav side-menu">
+                    <li>
+                        <a href="../admin/dashboard.php"><i class="fa fa-home"></i> 首頁</a>
+                    </li>
+                <?php
+                // 動態生成選單邏輯
+
+                // 1. 取得所有模組 (system_modules)
+                $modules = $conn->getAll("SELECT * FROM `system_modules` ORDER BY `sort_order` ASC");
+
+                // 2. 取得所有子頁面 (system_module_pages)
+                $pages = $conn->getAll("SELECT * FROM `system_module_pages` ORDER BY `sort_order` ASC");
+
+                // 3. 取得使用者權限 (user_module_permissions)
+                $user_perms_db = $conn->getAll("SELECT * FROM `user_module_permissions` WHERE `user_id` = '".$user['id']."'");
+
+                // 整理權限資料
+                $user_perms = ['group' => [], 'page' => []];
+                if(!empty($user_perms_db)){
+                    foreach($user_perms_db as $perm){
+                        if($perm['scope'] == 'group'){
+                            $user_perms['group'][$perm['module_code']] = $perm['permission'];
+                        } elseif($perm['scope'] == 'page'){
+                            // 當 scope 是 page, module_code 存的是 page_id
+                            $user_perms['page'][$perm['module_code']] = $perm['permission'];
+                        }
+                    }
+                }
+
+                // 將頁面依群組ID分組
+                $pages_by_group = [];
+                if(!empty($pages)){
+                    foreach($pages as $p){
+                        if (!empty($p['group_id'])) {
+                            $pages_by_group[$p['group_id']][] = $p;
+                        }
+                    }
+                }
+
+                // 建立一個以 page_id 為鍵的頁面查找表
+                $pages_by_id = [];
+                if(!empty($pages)){
+                    foreach($pages as $p){
+                        $pages_by_id[$p['page_id']] = $p;
+                    }
+                }
+
+                // 權限檢查函式
+                if (!function_exists('checkPagePerm')) {
+                    function checkPagePerm($module_code, $page_id, $perms) {
+                        // 1. 單一頁面權限優先
+                        if (isset($perms['page'][$page_id])) {
+                            return true; // 只要有設定就顯示
+                        }
+                        // 2. 群組權限
+                        if (isset($perms['group'][$module_code])) {
+                            return true; // 只要有設定就顯示
+                        }
+                        // 3. 預設無權限
+                        return false;
+                    }
+                }
+
+                // 渲染選單
+                if (!empty($modules)) {
+                    foreach ($modules as $mod) {
+                        $module_code = $mod['module_code'];
+                        $module_name = $mod['module_name'];
+                        $group_id = $mod['group_id'];
+                        $page_id_link = $mod['page_id'];
+                        
+                        // 使用預設圖示
+                        $mod_icon = 'fa-edit';
+
+                        // Case 1: Module is a single page link (page_id is set)
+                        if (!empty($page_id_link)) {
+                            // 檢查模組本身是否有權限 (scope=group)
+                            if (isset($user_perms['group'][$module_code])) {
+                                // 查找對應的頁面以獲取 URL
+                                if (isset($pages_by_id[$page_id_link])) {
+                                    $page_details = $pages_by_id[$page_id_link];
+                                    $url = $page_details['page_url'];
+                                    echo '<li><a href="'.$url.'"><i class="fa '.$mod_icon.'"></i> '.$module_name.'</a></li>';
+                                }
+                            }
+                        } 
+                        // Case 2: Module is a group (group_id is set)
+                        elseif (!empty($group_id)) {
+                            $child_pages = $pages_by_group[$group_id] ?? [];
+                            $visible_pages = [];
+                            
+                            foreach ($child_pages as $page) {
+                                // 使用新的權限檢查函式
+                                if (checkPagePerm($module_code, $page['page_id'], $user_perms)) {
+                                    $visible_pages[] = $page;
+                                }
+                            }
+                            
+                            if (count($visible_pages) > 0) {
+                                echo '<li>';
+                                echo '<a><i class="fa '.$mod_icon.'"></i> '.$module_name.' <span class="fa fa-chevron-down"></span></a>';
+                                echo '<ul class="nav child_menu">';
+                                foreach ($visible_pages as $vp) {
+                                    echo '<li><a href="'.$vp['page_url'].'">'.$vp['page_name'].'</a></li>';
+                                }
+                                echo '</ul>';
+                                echo '</li>';
+                            }
+                        }
+                    }
+                }
+                ?>
+                </ul>
+            </div>
+        </div>
+        <!-- /sidebar menu -->
+
+    </div>
+</div>
+
+<!-- top navigation -->
+<div class="top_nav">
+    <div class="nav_menu">
+        <nav>
+            <div class="nav toggle">
+                <a id="menu_toggle"><i class="fa fa-bars"></i></a>
+            </div>
+
+            <ul class="nav navbar-nav navbar-right">
+                <li class="">
+                    <a href="javascript:;" class="user-profile dropdown-toggle" data-toggle="dropdown"
+                        aria-expanded="false">
+                        <img src="../../resource/images/img.png" alt="">超正齒輪
+                        <span class=" fa fa-angle-down"></span>
+                    </a>
+                    <ul class="dropdown-menu dropdown-usermenu pull-right">
+                        <li><a href="../user/user.php"><i class="fa pull-right"></i>
+                                修改個人資料</a></li>
+                        <li><a href="../../src/store/Logout.php"><i class="fa fa-sign-out pull-right"></i> 登出</a></li>
+                    </ul>
+                </li>
+
+
+                <li role="presentation" class="dropdown">
+                    <a href="javascript:;" class="dropdown-toggle info-number" data-toggle="dropdown" aria-expanded="false">
+                        <i class="fa fa-calendar"></i>
+                        <span class="badge bg-green"><?=count($event)?></span>
+                    </a>
+                    <ul id="menu1" class="dropdown-menu list-unstyled msg_list" role="menu">
+
+                        <?php
+                           foreach ($event as $event){
+                        ?>
+                        <li>
+                            <!-- href="../liveEvent/createEvent.php?id=<?=$user['id']?>" -->
+                            <a href="../../src/store/_updateEvent_read.php?id=<?= $id?>&eventid=<?=$event['id']?>&status=<?=$user_status?>" onclick="return confirm('<?=$event['content']?>')">
+                                <span class="image"><img src="../../resource/images/LOGO.svg" alt="Profile Image" /></span>
+                                <span>
+                                    <span>超正齒輪</span>
+                                        <span class="time"><?=$event['eventdate']?></span>
+                                </span>
+                                    <span class="message"><?=$event['title'] ?></span>
+                            </a>
+                        </li>
+                        <?php
+                           }
+                        ?>
+                        <li>
+                            <div class="text-center">
+                                <a href="../liveEvent/createEvent.php">
+                                    <strong>查看所有通知</strong>
+                                    <i class="fa fa-angle-right"></i>
+                                </a>
+                            </div>
+                        </li>
+                    </ul>
+                </li>
+
+
+
+            </ul>
+            <?php } ?>
+        </nav>
+    </div>
+</div>
+<!-- /top navigation -->
+
+<style>
+    /* 初始將側邊欄設為透明，並加入過渡效果，以平滑淡入取代閃爍 */
+    #sidebar-menu {
+        opacity: 0;
+        transition: opacity 0.2s ease-in-out;
+    }
+</style>
+<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        // 使用 setTimeout 確保在 Gentelella 的 custom.js (通常在 footer 載入) 執行完畢後才執行此邏輯
+        setTimeout(function() {
+            if (typeof $ !== 'undefined') {
+                var $activeMenu = $('#sidebar-menu .nav.side-menu > li.active');
+
+                // 檢查是否有被樣板JS自動展開的主項目
+                if ($activeMenu.length) {
+                    // 強制移除 active 狀態並收合子選單，但保留子頁面的 current-page 樣式
+                    $activeMenu.removeClass('active').find('ul.child_menu').hide();
+                }
+                // 以淡入效果顯示側邊欄，避免閃爍
+                $('#sidebar-menu').css('opacity', 1);
+            }
+        }, 50); // 縮短延遲，讓選單更快出現
+    });
+</script>
