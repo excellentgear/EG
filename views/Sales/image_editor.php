@@ -1020,7 +1020,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <button class="pb-btn" onclick="layerCmd('forward')" title="上移一層"><i class="fa fa-angle-up"></i></button>
                 <button class="pb-btn" onclick="layerCmd('backward')" title="下移一層"><i class="fa fa-angle-down"></i></button>
                 <button class="pb-btn" onclick="layerCmd('back')" title="移到最下層"><i class="fa fa-angle-double-down"></i> 置底</button>
-                <button class="pb-btn" id="btn-edit-points" style="display:none;" onclick="togglePointEdit()" title="像 Excel 編輯端點：拖曳節點改形狀、點線段中間的「＋」新增節點（直線會先轉成折線）">編輯端點</button>
+                <button class="pb-btn" id="btn-edit-points" style="display:none;" onclick="togglePointEdit()" title="像 Excel 編輯端點：拖曳節點改形狀、點線段中間的「＋」新增節點（直線會轉成折線、矩形會轉成四角多邊形）">編輯端點</button>
+                <button class="pb-btn" id="btn-poly-close" style="display:none;" onclick="togglePolyClosed()" title="把折線頭尾接起來變封閉圖形（再按一次打開）">封閉</button>
+                <button class="pb-btn" id="btn-poly-smooth" style="display:none;" onclick="togglePolySmooth()" title="節點之間改用圓滑曲線連接（再按一次改回直線）">圓滑</button>
                 <button class="pb-btn" onclick="groupCmd()" id="btn-group">群組</button>
                 <button class="pb-btn" onclick="mergeSelection()" title="把多個線條/圖形合併成單一物件：縮放移動不走位、雙擊不會拆開（Alt+雙擊才拆）">合併</button>
                 <button class="pb-btn" id="btn-label-bg" style="display:none;" onclick="toggleLabelBg()" title="切換這個標籤的底色（白底 ⇄ 透明）">底色</button>
@@ -2004,7 +2006,31 @@ function rebuildArrowGroup(g, opts) {
     }
     fabric.Line.prototype.controls = { p1: mkControl(1), p2: mkControl(2) };
 })();
-/* ── Excel「編輯端點」：直線/折線/不規則遮蓋 進入節點編輯模式 ──────────
+/* 圓滑曲線渲染：curved=true 的折線/多邊形，用 Catmull-Rom 曲線通過所有節點取代直線段。
+   覆寫 Polyline.commonRender（Polygon 也共用），節點資料不變，編輯端點照常可用。 */
+(function installCurvedPolyRender() {
+    const orig = fabric.Polyline.prototype.commonRender;
+    fabric.Polyline.prototype.commonRender = function (ctx) {
+        if (!this.curved || !this.points || this.points.length < 3) return orig.call(this, ctx);
+        const pts = this.points, n = pts.length, ox = this.pathOffset.x, oy = this.pathOffset.y;
+        if (!n || isNaN(pts[n - 1].y)) return false;
+        const closed = (this.type === 'polygon');
+        const P = i => closed ? pts[((i % n) + n) % n] : pts[Math.max(0, Math.min(n - 1, i))];
+        ctx.beginPath();
+        ctx.moveTo(P(0).x - ox, P(0).y - oy);
+        const segs = closed ? n : n - 1;
+        for (let i = 0; i < segs; i++) {
+            const p0 = P(i - 1), p1 = P(i), p2 = P(i + 1), p3 = P(i + 2);
+            ctx.bezierCurveTo(
+                p1.x + (p2.x - p0.x) / 6 - ox, p1.y + (p2.y - p0.y) / 6 - oy,
+                p2.x - (p3.x - p1.x) / 6 - ox, p2.y - (p3.y - p1.y) / 6 - oy,
+                p2.x - ox, p2.y - oy);
+        }
+        return true;
+    };
+})();
+
+/* ── Excel「編輯端點」：直線/折線/矩形/不規則遮蓋 進入節點編輯模式 ──────────
    拖曳實心圓點＝移動該節點；點各線段中間的「＋」＝在該處插入新節點（直線第一次編輯會先轉成折線）。
    節點座標數學沿用 fabric 官方 custom-controls-polygon 範例（pathOffset / _setPositionDimensions / 錨定點）。 */
 function polyEditSizeWithStroke(o) {
@@ -2111,6 +2137,20 @@ function buildPolyEditControls(poly) {
 }
 function toEditablePolyline(obj) {
     if (obj.type === 'polyline' || obj.type === 'polygon') return obj;
+    if (obj.type === 'rect') {
+        // 矩形 → 四角多邊形（封閉），之後就能拖角、插入節點拉成任意形狀
+        obj.setCoords();
+        const c = obj.aCoords;
+        const poly = new fabric.Polygon([
+            { x: c.tl.x, y: c.tl.y }, { x: c.tr.x, y: c.tr.y }, { x: c.br.x, y: c.br.y }, { x: c.bl.x, y: c.bl.y }
+        ], {
+            stroke: obj.stroke, strokeWidth: obj.strokeWidth, strokeDashArray: obj.strokeDashArray || null,
+            fill: obj.fill || 'transparent', strokeUniform: true, strokeLineJoin: 'miter'
+        });
+        canvas.remove(obj);
+        canvas.add(poly);
+        return poly;
+    }
     if (obj.type !== 'line') return null;
     const pts = lineAbsEndpoints(obj);
     const poly = new fabric.Polyline([{ x: pts[0].x, y: pts[0].y }, { x: pts[1].x, y: pts[1].y }], {
@@ -2128,7 +2168,7 @@ function togglePointEdit() {
         delete obj.__pointEditing;
         delete obj.controls;          // 還原成 prototype 預設控制點
         obj.hasBorders = true;
-        obj.objectCaching = true;
+        obj.objectCaching = !obj.curved;   // 圓滑曲線可能超出節點外框，關快取避免被裁掉
         obj.setCoords();
         canvas.requestRenderAll();
         refreshPropbar();
@@ -2136,7 +2176,7 @@ function togglePointEdit() {
         return;
     }
     const poly = toEditablePolyline(obj);
-    if (!poly) { toast('只有直線、折線、不規則遮蓋可以編輯端點'); return; }
+    if (!poly) { toast('只有直線、折線、矩形、不規則遮蓋可以編輯端點'); return; }
     poly.__pointEditing = true;
     poly.objectCaching = false;       // 編輯中即時重繪，節點拖曳才不會殘影
     poly.hasBorders = false;
@@ -2145,7 +2185,43 @@ function togglePointEdit() {
     canvas.requestRenderAll();
     refreshPropbar();
     pushState();
-    toast('拖曳藍色圓點調整形狀；點線段中間的「＋」在該處新增節點；再按一次「編輯端點」完成');
+    toast('拖曳藍色圓點調整形狀；點線段中間的「＋」新增節點；屬性列可「封閉/打開」頭尾、「圓滑/取直」曲線；再按一次「編輯端點」完成');
+}
+/* 編輯端點模式的兩個附加功能：封閉/打開（折線↔多邊形）、圓滑/取直（直線段↔通過節點的曲線） */
+function togglePolyClosed() {
+    const obj = canvas.getActiveObject();
+    if (!obj || !obj.__pointEditing) return;
+    const Cls = (obj.type === 'polygon') ? fabric.Polyline : fabric.Polygon;
+    const np = new Cls(obj.points.map(p => ({ x: p.x, y: p.y })), {
+        left: obj.left, top: obj.top, angle: obj.angle, scaleX: obj.scaleX, scaleY: obj.scaleY,
+        flipX: obj.flipX, flipY: obj.flipY,
+        stroke: obj.stroke, strokeWidth: obj.strokeWidth, strokeDashArray: obj.strokeDashArray || null,
+        fill: obj.fill, strokeUniform: obj.strokeUniform,
+        strokeLineCap: obj.strokeLineCap, strokeLineJoin: obj.strokeLineJoin
+    });
+    np.curved = obj.curved;
+    const idx = canvas.getObjects().indexOf(obj);
+    canvas.remove(obj);
+    canvas.add(np);
+    if (idx >= 0) np.moveTo(idx);
+    np.__pointEditing = true;
+    np.objectCaching = false;
+    np.hasBorders = false;
+    np.controls = buildPolyEditControls(np);
+    canvas.setActiveObject(np);
+    canvas.requestRenderAll();
+    refreshPropbar();
+    pushState();
+}
+function togglePolySmooth() {
+    const obj = canvas.getActiveObject();
+    if (!obj || !obj.__pointEditing) return;
+    if (!obj.curved && obj.points.length < 3) { toast('至少要 3 個節點才能圓滑（先用「＋」加節點）'); return; }
+    obj.curved = !obj.curved;
+    obj.dirty = true;
+    canvas.requestRenderAll();
+    refreshPropbar();
+    pushState();
 }
 
 /* 雙底線：fabric 原生只有單底線(underline)。doubleUnderline=true 時沿用 fabric 自己的底線繪製流程，
@@ -3337,11 +3413,11 @@ function enterGroup(g) {
     pushState();
     toast('已進入群組（拆成多選）：點空白處取消選取後可個別移動；調整完框選物件按 Ctrl+G 重新群組');
 }
-/* 雙擊直線/折線/不規則遮蓋＝直接進入「編輯端點」模式（跟屬性列按鈕同功能，較好找） */
+/* 雙擊直線/折線/矩形/不規則遮蓋＝直接進入「編輯端點」模式（跟屬性列按鈕同功能，較好找） */
 canvas.on('mouse:dblclick', function (opt) {
     const t = opt.target;
     if (!t || currentTool !== 'select' || t.__pointEditing) return;
-    if (['line', 'polyline', 'polygon'].includes(t.type) && !t.isDimGuide) {
+    if (['line', 'polyline', 'polygon', 'rect'].includes(t.type) && !t.isDimGuide) {
         canvas.setActiveObject(t);
         togglePointEdit();
     }
@@ -4127,8 +4203,15 @@ function refreshPropbar() {
     }
     document.getElementById('btn-group').textContent = (obj.type === 'group') ? '解散群組' : '群組';
     const epBtn = document.getElementById('btn-edit-points');
-    epBtn.style.display = (['line', 'polyline', 'polygon'].includes(obj.type) && !obj.isDimGuide) ? '' : 'none';
+    epBtn.style.display = (['line', 'polyline', 'polygon', 'rect'].includes(obj.type) && !obj.isDimGuide) ? '' : 'none';
     epBtn.textContent = obj.__pointEditing ? '完成編輯' : '編輯端點';
+    const inPtEdit = !!obj.__pointEditing;
+    document.getElementById('btn-poly-close').style.display = inPtEdit ? '' : 'none';
+    document.getElementById('btn-poly-smooth').style.display = inPtEdit ? '' : 'none';
+    if (inPtEdit) {
+        document.getElementById('btn-poly-close').textContent = (obj.type === 'polygon') ? '打開' : '封閉';
+        document.getElementById('btn-poly-smooth').textContent = obj.curved ? '取直' : '圓滑';
+    }
     document.getElementById('btn-label-bg').style.display = (obj.labelSpec && obj.labelSpec.kind !== 'fabric') ? '' : 'none';
     // 選到文字（含標籤/標註等群組裡的文字）時同步並顯示文字屬性區——底線/粗體/字級/底色對已建立的文字隨時可改
     const txt = firstTextIn(obj);
@@ -4497,7 +4580,7 @@ function deleteSelection() {
    快照＝整張畫布序列化（含底圖 dataURL），大圖時很重——改成 debounce 150ms 合併連續動作，
    一連串操作只留最後一份快照，避免每個動作都當場凍結一次；undo/redo 前先 flush 未寫入的快照。 */
 let undoStack = [], redoStack = [], restoring = false, pushTimer = null;
-const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId'];
+const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved'];
 function doPushState() {
     pushTimer = null;
     if (restoring) return;
@@ -4522,6 +4605,7 @@ function restoreState(json) {
     canvas.loadFromJSON(json, function () {
         findArtboard();
         canvas.sendToBack(artboard);
+        canvas.getObjects().forEach(o => { if (o.curved) o.objectCaching = false; });   // 圓滑曲線可能超出快取框，關快取避免被裁掉
         artW = Math.round(artboard.width * (artboard.scaleX || 1));
         artH = Math.round(artboard.height * (artboard.scaleY || 1));
         document.getElementById('st-canvas').textContent = artW + '×' + artH;
