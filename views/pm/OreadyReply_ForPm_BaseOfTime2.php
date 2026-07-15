@@ -1,5 +1,5 @@
-﻿<?php
-// OreadyReply_ForPm_BaseOfTime2.php
+<?php
+// OreadyReply_ForPm_BaseOfTime.php
 $execution_start_time = microtime(true); // 開始計時
 session_start();
 
@@ -90,7 +90,7 @@ if (isset($_POST['action'])) {
 
 if (!isset($_SESSION['userName'])) //若使用者未設定，則返回登入頁
 {
-    $_SESSION['lastpage'] = "../../views/pm/OreadyReply_ForPm_BaseOfTime2.php";
+    $_SESSION['lastpage'] = "../../views/pm/OreadyReply_ForPm_BaseOfTime.php";
     header("Location:../../index.php"); //返回登入頁
     exit();
 }
@@ -376,25 +376,8 @@ $can_create = (!$_is_cru && $permission_code && (strpos($permission_code, 'A') !
 $can_update = ($permission_code && (strpos($permission_code, 'A') !== false || strpos($permission_code, 'U') !== false || strpos($permission_code, 'C') !== false));
 $can_delete = ($permission_code && (strpos($permission_code, 'A') !== false || strpos($permission_code, 'D') !== false || (!$_is_cru && strpos($permission_code, 'C') !== false)));
 
-// --- 角色功能碼（新機制，與上方舊 CRUD 規則並存：舊規則 OR 新功能碼，任一成立即可）---
-require_once '../../src/common/role_features_helper.php';
-$_oready_features = rf_load_user_features($db, $id);
-$can_manual_close = $can_manual_close || rf_has_feature($_oready_features, 'oready_manual_close');
-$can_create       = $can_create       || rf_has_feature($_oready_features, 'oready_create');
-$can_update        = $can_update       || rf_has_feature($_oready_features, 'oready_update');
-$can_delete        = $can_delete       || rf_has_feature($_oready_features, 'oready_delete');
-
 // 對應舊版 user_status (1=可編輯, 0=唯讀)
 $user_status = ($can_create || $can_update || $can_delete) ? 1 : 0;
-
-// 其餘細項功能：這些按鈕原本各自有比 can_create/can_update/user_status 更窄的排除規則
-// （例如 D+R、isCRU、特定 displayPermissionCode 組合要排除），為避免把新功能碼誤接到過寬的共用變數
-// 導致誤開權限，這裡只提供「純功能碼」旗標，實際套用時在各按鈕原本的判斷式後面加 OR，不改動原判斷式本身。
-$oready_feat_mark_returned = rf_has_feature($_oready_features, 'oready_mark_returned');
-$oready_feat_transfer      = rf_has_feature($_oready_features, 'oready_transfer');
-$oready_feat_batch         = rf_has_feature($_oready_features, 'oready_batch_split_merge');
-$oready_feat_view_price    = rf_has_feature($_oready_features, 'oready_view_price');
-$oready_feat_process_settings = rf_has_feature($_oready_features, 'oready_process_settings');
 
 // --- 修改後的 PHP 資料準備邏輯 ---
 // 1. 獲取基礎 BOM 資料 (移除 ol 的 JOIN，因為 OrderList 會單獨處理)
@@ -627,11 +610,9 @@ if (!empty($all_boms)) {
                 ? date('Y/m/d', strtotime($v)) : null;
         };
         $batch_entry = [
-            'bom_ing_fid'      => $row['bom_ing_fid'] ?? null,
             'batch_label'      => $row['batch_label'] ?? null,
             'sqty'             => $row['sqty'],
             'maker_id'         => $row['maker_id'] ?? '',
-            'maker_id_no'      => $row['maker_id_no'] ?? '',
             'outsource_date'   => $fmt_d($row['outsource_date']),
             'return_date'      => $fmt_d($row['return_date']),
             'processing_state' => $row['processing_state'] ?? '',
@@ -810,14 +791,14 @@ if (!empty($all_boms)) {
     }
 }
 
-// 2. 為每筆 BOM 資料準備 OrderList (模擬 _fetch_data2.php 的邏輯)
+// 2. 為每筆 BOM 資料準備 OrderList (模擬 _fetch_data.php 的邏輯)
 $OreadyReply_list_final = [];
 if (is_array($OreadyReply_list_base)) {
     // 確保 $db 物件存在
     if (!isset($db) || !$db instanceof PDO) {
         // 如果 $db 未被 _config.php 正確初始化，這裡會出錯
         // 您可能需要在此處添加錯誤處理或確保 _config.php 正確設定 $db
-        error_log("OreadyReply_ForPm_BaseOfTime2.php: PDO \$db object is not available.");
+        error_log("OreadyReply_ForPm_BaseOfTime.php: PDO \$db object is not available.");
     }
 
 // ✅ 1. 變更查詢主鍵：不再收集每一列的 bom_ing_fid，而是收集 bom 編號。
@@ -1329,10 +1310,10 @@ if (isset($db) && $db instanceof PDO) {
         }
 
     } catch (PDOException $e) {
-        error_log("Error fetching workdays in OreadyReply_ForPm_BaseOfTime2.php: " . $e->getMessage());
+        error_log("Error fetching workdays in OreadyReply_ForPm_BaseOfTime.php: " . $e->getMessage());
     }
 } else {
-    error_log("DB connection not available for fetching workdays in OreadyReply_ForPm_BaseOfTime2.php.");
+    error_log("DB connection not available for fetching workdays in OreadyReply_ForPm_BaseOfTime.php.");
 }
 
 // --- Fetch PTI filter button settings ---
@@ -1424,12 +1405,6 @@ echo "    window.canDelete = " . json_encode($can_delete) . ";\n";
 echo "    window.isCRU = " . json_encode((bool)$_is_cru) . "; // 業務類權限 (R+U / C+R+U / C+D+R+U) → 隱藏移轉按鈕\n";
 echo "    window.canManualClose = " . json_encode((bool)$can_manual_close) . "; // 含D或A才可人工結案\n";
 echo "    window.isRD = " . json_encode($display_permission_code === 'D+R') . "; // R+D受限業務：人工結案需二次輸入Y確認\n";
-// 純功能碼旗標（不含任何舊規則），JS端在各按鈕原本判斷式後面自行 OR，不取代原判斷式
-echo "    window.featMarkReturned = " . json_encode((bool)$oready_feat_mark_returned) . "; // 功能碼 oready_mark_returned\n";
-echo "    window.featTransfer = " . json_encode((bool)$oready_feat_transfer) . "; // 功能碼 oready_transfer\n";
-echo "    window.featBatchOp = " . json_encode((bool)$oready_feat_batch) . "; // 功能碼 oready_batch_split_merge\n";
-echo "    window.featSeePrice = " . json_encode((bool)$oready_feat_view_price) . "; // 功能碼 oready_view_price\n";
-echo "    window.oreadyIsAdmin = " . json_encode($permission_code === 'A') . "; // 目前權限=A者可開啟角色功能設定\n";
 echo "    window.globalWorkdaysList = " . json_encode($js_workdays_list_php) . "; // Workday list for JS\n";
 echo "    window.initialLightSettings = " . json_encode($light_settings_php) . ";\n";
 echo "    window.bufferModeEnabled = " . json_encode((bool)$light_settings_php['buffer_mode']) . ";\n";
@@ -2755,7 +2730,7 @@ echo "</script>\n";
     // --- 全域變數 ---
     window.userStatus = <?= json_encode($user_status ?? null); ?>;
     // 動態取得當前 PHP 檔名，讓所有 AJAX 都打到正確 handler（不管檔名是否帶數字2）
-    var _phpSelf = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime2.php';
+    var _phpSelf = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime.php';
     var fullDataset = [];
     var _rowDetailCache = {}; // 子資料按需載入快取
     var _loadRowDetailsInFlight = 0;
@@ -4019,7 +3994,7 @@ echo "</script>\n";
         var btnCreateBom = document.getElementById('btn-create-bom');
         if (btnCreateBom) btnCreateBom.addEventListener('click', openCreateBomModal);
         // --- 啟動定時刷新（預設 30 秒，失敗時指數退避至 120 秒）---
-        // 自適應退避定時刷新：_fetch_data2.php 失敗時不干擾即時搜尋
+        // 自適應退避定時刷新：_fetch_data.php 失敗時不干擾即時搜尋
         (function(){
             var _failCount=0, _timer=null, _BASE=30000, _MAX=120000;
             function _schedule(delay){
@@ -4183,7 +4158,7 @@ echo "</script>\n";
         console.log("⏳ fetchDataAndFilter 開始 " + new Date().toLocaleTimeString());
 
         // --- NEW: Modify URL based on QC sort state ---
-        let fetchUrl = new URL('../../src/store/_fetch_data2.php', window.location.href);
+        let fetchUrl = new URL('../../src/store/_fetch_data.php', window.location.href);
 
         // ⭐ 核心修正：在自動更新時，總是請求所有資料
         fetchUrl.searchParams.set('fetchAll', '1');
@@ -4286,7 +4261,7 @@ echo "</script>\n";
                     processAndRenderData(); // 更新空表格
                 }
             } else if (xhr.readyState === 4) {
-                console.warn("_fetch_data2.php 失敗（狀態碼: " + xhr.status + "），保留現有資料。");
+                console.warn("_fetch_data.php 失敗（狀態碼: " + xhr.status + "），保留現有資料。");
             }
         };
         // If a callback is provided and we want it to run *after* processAndRenderData,
@@ -4729,7 +4704,7 @@ echo "</script>\n";
             tdBom.setAttribute('name', 'BOM');
             tdBom.innerHTML = generateBomHtml(row, baseExcelUrl); // 假設 generateBomHtml 返回安全的 HTML
             // ── 批次管理按鈕（BOM 欄底部）──
-            if (window.userStatus == 1 || window.featBatchOp) {
+            if (window.userStatus == 1) {
                 var batchBtn = document.createElement('button');
                 batchBtn.type = 'button';
                 batchBtn.className = 'btn btn-xs btn-default';
@@ -4876,7 +4851,7 @@ echo "</script>\n";
             }
             tdDid.appendChild(urgencyBarDiv);
 
-            if (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R' || window.featSeePrice) {
+            if (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R') {
                 const _tpm2 = window.transferPriceMap || {};
                 let _totalPrice = 0, _noPriceCount = 0, _processCount = 0;
                 if (window.bomPSList && Array.isArray(window.bomPSList)) {
@@ -5068,10 +5043,7 @@ echo "</script>\n";
                         _ingBtn.className = 'btn btn-xs btn-warning btn-return-style';
                         _ingBtn.textContent = '加工中';
                         _ingBtn.style.marginTop = '2px';
-                        if (window.featMarkReturned) {
-                            // 有獨立功能碼授權，覆蓋下方 D+R / 業務受限的舊排除規則
-                            (function(_id, _excQc, _f) { _ingBtn.onclick = function() { markAsReturned(_id, this, _excQc, _f); }; })(_iid, _proc.is_exclude_qc ? 1 : 0, _fid);
-                        } else if (window.displayPermissionCode === 'D+R') {
+                        if (window.displayPermissionCode === 'D+R') {
                             _ingBtn.title = '無權限 (R+D 受限業務)';
                             _ingBtn.style.cursor = 'not-allowed'; _ingBtn.style.opacity = '0.6';
                             _ingBtn.onclick = function(e) { e.preventDefault(); return false; };
@@ -5080,7 +5052,7 @@ echo "</script>\n";
                             _ingBtn.style.cursor = 'not-allowed'; _ingBtn.style.opacity = '0.6';
                             _ingBtn.onclick = function(e) { e.preventDefault(); return false; };
                         } else {
-                            (function(_id, _excQc, _f) { _ingBtn.onclick = function() { if (window.userStatus == 1) markAsReturned(_id, this, _excQc, _f); }; })(_iid, _proc.is_exclude_qc ? 1 : 0, _fid);
+                            (function(_id, _excQc) { _ingBtn.onclick = function() { if (window.userStatus == 1) markAsReturned(_id, this, _excQc); }; })(_iid, _proc.is_exclude_qc ? 1 : 0);
                         }
                         var _ingBtnRow = document.createElement('div');
                         _ingBtnRow.style.cssText = 'margin-top:2px;display:flex;align-items:center;justify-content:flex-end;';
@@ -5119,12 +5091,12 @@ echo "</script>\n";
                         if (_effectiveSt === 'Q') { _aBtn.className = 'btn btn-primary btn-xs btn-return-style'; _aBtn.textContent = 'QC待驗'; }
                         else if (_effectiveSt === 'P') { _aBtn.className = 'btn btn-success btn-xs btn-return-style'; _aBtn.textContent = '待移轉'; }
                         else { _aBtn.className = 'btn btn-info btn-xs btn-return-style'; _aBtn.textContent = '已移轉'; }
-                        if (window.isCRU && !window.featTransfer) {
+                        if (window.isCRU) {
                             _aBtn.title = '無執行權限 (C+R+U 業務受限)';
                             _aBtn.style.cursor = 'not-allowed'; _aBtn.style.opacity = '0.6';
                             _aBtn.onclick = function(e) { e.preventDefault(); return false; };
                         } else if (_effectiveSt === 'P' || _effectiveSt === 'E') {
-                            (function(_cf) { _aBtn.onclick = function() { if (window.userStatus == 1 || window.featTransfer) submitFormWithBif(_cf); }; })(_fid);
+                            (function(_cf) { _aBtn.onclick = function() { if (window.userStatus == 1) submitFormWithBif(_cf); }; })(_fid);
                         } else { _aBtn.onclick = function() {}; }
                         _btnRow.appendChild(_aBtn);
                         _pDiv.appendChild(_btnRow);
@@ -5606,7 +5578,7 @@ echo "</script>\n";
 
             let buttonsHTML = '';
             if (row.oready_sqty_total || row.ng_sqty_total) {
-                buttonsHTML = '<a href="javascript:void(0);" style="margin-right:2px;" data-href="../../views/pm/OreadyReply_ForPm_BaseOfTime2.php?c_pti=' + row.pti +
+                buttonsHTML = '<a href="javascript:void(0);" style="margin-right:2px;" data-href="../../views/pm/OreadyReply_ForPm_BaseOfTime.php?c_pti=' + row.pti +
                     '&c=' + encodeURIComponent(row.Client_Name) +
                     '&or_id=' + row.OreadyReply_id +
                     '&b=' + encodeURIComponent(row.bom) +
@@ -5789,7 +5761,7 @@ echo "</script>\n";
                             }
 
                             // ── 加工單價顯示（動態製程欄，A 或 C+D+R 才可見）──────────────
-                            if (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R' || window.featSeePrice) {
+                            if (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R') {
                                 var _tpm = window.transferPriceMap || {};
                                 var _thm = window.transferHistoryMap || {};
                                 var _bsn = String(processInfo.bom_sn || '');
@@ -5884,13 +5856,8 @@ echo "</script>\n";
                             }
                             // ── /加工單價顯示 ────────────────────────────────────────────
                         }
-                        var _canTransferRole = (!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer;
-                        var _canCancelRole = (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+R+U' || window.displayPermissionCode === 'C+D+R+U');
-                        var _hasEligibleSplitForCancel = !!(_splitBatches && _splitBatches.filter(function(b){
-                            return b.processing_state !== 'E' && b.processing_state !== '1' && b.bom_ing_fid;
-                        }).length > 1);
                         if (processInfo && processInfo.bom_ing_fid &&
-                            (_canTransferRole || (_hasEligibleSplitForCancel && _canCancelRole))) {
+                            !window.isCRU && window.displayPermissionCode !== 'D+R') {
                             tdDynamicProcess.style.cursor = 'pointer';
                             tdDynamicProcess.title = '點擊快速移轉此製程';
                             tdDynamicProcess.addEventListener('click', (function(pi, rowRef) {
@@ -6578,7 +6545,7 @@ echo "</script>\n";
                         // --- CRITICAL: Update fullDataset ---
                         const itemInFullDataset = fullDataset.find(item => item.bom_ing_fid == bomIdentifier); // ⭐ 修改：使用 bom_ing_fid 查找
                         if (itemInFullDataset) {
-                            itemInFullDataset.bom_bom_ps = newBomPsValue; // Ensure this field name matches _fetch_data2.php
+                            itemInFullDataset.bom_bom_ps = newBomPsValue; // Ensure this field name matches _fetch_data.php
                             // console.log("Updated fullDataset for bom_ing_fid:", bomIdentifier, "with new single_bet_ps:", newBomPsValue);
                         } else {
                             console.warn("Could not find BOM in fullDataset to update bom_ps:", bomIdentifier);
@@ -8358,7 +8325,7 @@ echo "</script>\n";
     }
 
     // --- Function to mark item as returned (status 'Q', or 'P' if is_exclude_qc) ---
-    function markAsReturned(bomIngId, buttonElement, isExcludeQc, bomIngFid) {
+    function markAsReturned(bomIngId, buttonElement, isExcludeQc) {
         if (!bomIngId) {
             alert("錯誤：缺少 bom_ing_id！");
             return;
@@ -8420,121 +8387,17 @@ echo "</script>\n";
                     }
                 }
             };
-            xhr.send("bom_ing_id=" + encodeURIComponent(bomIngId) + "&bom_ing_fid=" + encodeURIComponent(bomIngFid || '') + "&new_status=Q");
+            xhr.send("bom_ing_id=" + encodeURIComponent(bomIngId) + "&new_status=Q");
         }
     }
 
     // 函數：顯示用於修改客戶和製程的表單
 
-    // ── 快速移轉（拆批時先選批次）────────────────────────────────────────────
-    // 取出可操作的拆分批次清單（排除已結 E/1；需 <=1 表示不算拆批，回傳 null）
-    function _getEligibleSplitBatches(processInfo) {
-        var list = (processInfo.split_batches && processInfo.split_batches.length > 1)
-            ? processInfo.split_batches
-            : (processInfo.all_split_batches && processInfo.all_split_batches.length > 1)
-            ? processInfo.all_split_batches : null;
-        if (!list) return null;
-        var eligible = list.filter(function(b){
-            return b.processing_state !== 'E' && b.processing_state !== '1' && b.bom_ing_fid;
-        });
-        return eligible.length > 1 ? eligible : null;
-    }
-
+    // ── 取消移轉 ────────────────────────────────────────────────────────────
     function openQuickTransferModal(processInfo, rowData) {
-        var _eligible = _getEligibleSplitBatches(processInfo);
-        if (_eligible) {
-            _openBatchPickerModal(processInfo, rowData, _eligible);
-            return;
-        }
-        _openQuickTransferForm(rowData, {
-            fid: String(processInfo.bom_ing_fid||''),
-            process_no: processInfo.process_no,
-            ProcessName: processInfo.ProcessName,
-            maker_id_no: processInfo.maker_id_no,
-            maker_id: processInfo.maker_id,
-            batch_label: processInfo.batch_label || null
-        });
-    }
-
-    // ── 拆批專用：先選要操作的批次（一次只能選一批）────────────────────────────
-    function _openBatchPickerModal(processInfo, rowData, batches) {
-        var bom=String(rowData.bom||''), did=String(rowData.d_display||rowData.d_id||'');
-        var procNo=String(processInfo.process_no||''), procName=String(processInfo.ProcessName||'');
-        var modalId='qbp-modal-'+String(processInfo.bom_sn||procNo);
-        var ex=document.getElementById(modalId); if(ex)ex.remove();
-
-        var canTransferRole = (!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer;
-        var canCancelRole = (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+R+U' || window.displayPermissionCode === 'C+D+R+U');
-        var stMap = {N:'待發包',P:'待移轉',ing:'加工中',Q:'QC待驗',E:'已結',1:'已結'};
-
-        var rowsHtml = batches.map(function(b, idx){
-            var lbl = escapeHtml(b.batch_label || '─');
-            var st  = stMap[b.processing_state] || (b.processing_state||'');
-            var sc  = b.processing_state==='ing'?'#1a7a1a': b.processing_state==='Q'?'#0056b3': b.processing_state==='P'?'#28a745':'#337ab7';
-            var makerTxt = b.maker_id ? escapeHtml(b.maker_id) : '<span style="color:#bbb;">未指定</span>';
-            var canCancelThis = canCancelRole && b.processing_state !== 'N' && b.processing_state !== 'P';
-            return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border:1px solid #e5e5e5;border-radius:5px;margin-bottom:6px;">'
-                 +   '<div style="font-size:12px;">'
-                 +     '<strong style="color:#337ab7;">'+lbl+'</strong>'
-                 +     ' <span style="color:#555;">'+escapeHtml(String(b.sqty||''))+' pcs</span>'
-                 +     ' <span style="color:'+sc+';margin-left:6px;">['+escapeHtml(st)+']</span>'
-                 +     '<br><small style="color:#888;">廠商：'+makerTxt+'</small>'
-                 +   '</div>'
-                 +   '<div style="display:flex;gap:6px;">'
-                 +     (canTransferRole ? '<button type="button" class="btn btn-xs btn-primary qbp-pick-btn" data-idx="'+idx+'">發單</button>' : '')
-                 +     (canCancelThis ? '<button type="button" class="btn btn-xs btn-danger qbp-cancel-btn" data-idx="'+idx+'">取消移轉</button>' : '')
-                 +   '</div>'
-                 + '</div>';
-        }).join('');
-
-        var overlay=document.createElement('div');
-        overlay.id=modalId;
-        overlay.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:10500;display:flex;align-items:center;justify-content:center;';
-        overlay.innerHTML='<div style="background:#fff;border-radius:6px;box-shadow:0 6px 32px rgba(0,0,0,0.22);width:420px;max-width:95vw;">'
-            + '<div style="padding:12px 16px;border-bottom:1px solid #e0e0e0;display:flex;justify-content:space-between;align-items:center;">'
-            +   '<strong style="font-size:13px;">'+escapeHtml(bom)+' / '+escapeHtml(did)+' '+escapeHtml(procNo)+' '+escapeHtml(procName)+'<br><small style="color:#888;font-weight:normal;">此製程已拆'+batches.length+'批，請選擇一批操作（一次僅能選一批）</small></strong>'
-            +   '<button id="qbp-close" style="border:none;background:none;font-size:20px;cursor:pointer;color:#aaa;line-height:1;padding:0 4px;">×</button>'
-            + '</div>'
-            + '<div style="padding:12px 16px;max-height:60vh;overflow-y:auto;">'+rowsHtml+'</div>'
-            + '</div>';
-        document.body.appendChild(overlay);
-
-        function _close(){ var m=document.getElementById(modalId); if(m) m.remove(); }
-        overlay.querySelector('#qbp-close').onclick=_close;
-        overlay.addEventListener('click', function(e){ if (e.target===overlay) _close(); });
-
-        overlay.querySelectorAll('.qbp-pick-btn').forEach(function(btn){
-            btn.onclick=function(){
-                var b=batches[parseInt(this.getAttribute('data-idx'))];
-                _close();
-                _openQuickTransferForm(rowData, {
-                    fid: String(b.bom_ing_fid||''),
-                    process_no: procNo,
-                    ProcessName: procName,
-                    maker_id_no: b.maker_id_no,
-                    maker_id: b.maker_id,
-                    batch_label: b.batch_label
-                });
-            };
-        });
-
-        overlay.querySelectorAll('.qbp-cancel-btn').forEach(function(btn){
-            btn.onclick=function(){
-                var b=batches[parseInt(this.getAttribute('data-idx'))];
-                var lbl=b.batch_label || '─';
-                if (!confirm('確定要取消「'+lbl+'」批次的移轉嗎？\n（此為第一次確認，取消後該批次會回歸前一狀態）')) return;
-                _close();
-                cancelTransfer(String(b.bom_ing_fid||''), procName+'（批次 '+lbl+'）');
-            };
-        });
-    }
-
-    // ── 移轉日期/廠商表單（單批次或已選定批次後顯示）────────────────────────────
-    function _openQuickTransferForm(rowData, target) {
-        const fid=String(target.fid||''), bom=String(rowData.bom||''), did=String(rowData.d_display||rowData.d_id||''), procNo=String(target.process_no||''), procName=String(target.ProcessName||'');
+        const fid=String(processInfo.bom_ing_fid||''), bom=String(rowData.bom||''), did=String(rowData.d_display||rowData.d_id||''), procNo=String(processInfo.process_no||''), procName=String(processInfo.ProcessName||'');
         const today=new Date(), todayStr=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
-        const defaultMakerNo=String(target.maker_id_no||''), defaultMakerName=String(target.maker_id||'');
-        const batchTitle = target.batch_label ? (' <span style="color:#337ab7;">[批次 '+escapeHtml(target.batch_label)+']</span>') : '';
+        const defaultMakerNo=String(processInfo.maker_id_no||''), defaultMakerName=String(processInfo.maker_id||'');
         const modalId='qtr-modal-'+fid; const ex=document.getElementById(modalId); if(ex)ex.remove();
         const overlay=document.createElement('div');
         overlay.id=modalId;
@@ -8542,7 +8405,7 @@ echo "</script>\n";
         var _initDisplay = defaultMakerNo ? defaultMakerNo + (defaultMakerName ? ' — ' + defaultMakerName : '') : '';
         overlay.innerHTML=`<div style="background:#fff;border-radius:6px;box-shadow:0 6px 32px rgba(0,0,0,0.22);width:460px;max-width:95vw;">
 <div style="padding:12px 16px;border-bottom:1px solid #e0e0e0;display:flex;justify-content:space-between;align-items:center;">
-  <strong style="font-size:13px;">${escapeHtml(bom)} / ${escapeHtml(did)} 移轉至 ${escapeHtml(procNo)} ${escapeHtml(procName)}${batchTitle}</strong>
+  <strong style="font-size:13px;">${escapeHtml(bom)} / ${escapeHtml(did)} 移轉至 ${escapeHtml(procNo)} ${escapeHtml(procName)}</strong>
   <button id="qtr-close-${fid}" style="border:none;background:none;font-size:20px;cursor:pointer;color:#aaa;line-height:1;padding:0 4px;">×</button>
 </div>
 <div style="padding:16px;">
@@ -8577,7 +8440,7 @@ echo "</script>\n";
         var _qtrInfo   = document.getElementById('qtr-maker-info-'+fid);
         var _qtrHidNo  = document.getElementById('qtr-maker-no-'+fid);
         var _qtrHidName= document.getElementById('qtr-maker-name-'+fid);
-        var _qtrSelf   = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime2.php';
+        var _qtrSelf   = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime.php';
 
         function _qtrShowInfo(m){
             var chips = '';
@@ -8819,7 +8682,7 @@ echo "</script>\n";
             return;
         }
         // 動態取得當前 PHP 檔名，確保 AJAX POST 打到正確的 handler
-        var _selfUrl = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime2.php';
+        var _selfUrl = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime.php';
         var ex = document.getElementById('create-bom-modal');
         if (ex) ex.remove();
 
@@ -9970,7 +9833,7 @@ echo "</script>\n";
             // Ensure process list in rightColProcesses is single column
             processListDiv.style.display = 'block';
             currentBOMProcesses.forEach(function(proc) {
-                var showTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer;
+                var showTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R');
                 processListDiv.appendChild(_buildProcItemDiv(proc, rowData, showTransfer));
             });
 
@@ -10008,7 +9871,7 @@ echo "</script>\n";
                 const itemsPerLeftCol = Math.ceil(currentBOMProcesses.length / 2);
 
                 currentBOMProcesses.forEach(function(proc, index) {
-                    var showTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer;
+                    var showTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R');
                     var procItemDiv = _buildProcItemDiv(proc, rowData, showTransfer);
                     if (index < itemsPerLeftCol) leftVirtualCol.appendChild(procItemDiv);
                     else rightVirtualCol.appendChild(procItemDiv);
@@ -10029,7 +9892,7 @@ echo "</script>\n";
                 console.log(`  套用右側製程列表 1 欄顯示 (內部) - BOM ${rowData.bom} 有 ${currentBOMProcesses.length} 個製程 (4-5).`);
                 processListDiv.style.display = 'block';
                 currentBOMProcesses.forEach(function(proc) {
-                    var showTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer;
+                    var showTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R');
                     processListDiv.appendChild(_buildProcItemDiv(proc, rowData, showTransfer));
                 });
             }
@@ -10556,7 +10419,7 @@ echo "</script>\n";
             return;
         }
         console.log("Attempting to delete bom_ing_id:", bomIngIdToDelete, "for BOM:", bomOfEditedItem, "main SN:", bomSnOfEditedItem, "Process Name:", processName);
-        var _delUrl = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime2.php';
+        var _delUrl = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime.php';
         $.ajax({
             url: _delUrl,
             type: 'POST',
@@ -10599,7 +10462,7 @@ echo "</script>\n";
         $container.html('<div style="padding:10px;text-align:center;color:#999;font-size:12px;">載入中...</div>');
 
         // ── DEBUG: 顯示送出的查詢參數 ──
-        var _editUrl = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime2.php';
+        var _editUrl = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime.php';
         // console.group('%c[訂單綁定] loadOrdersForEditForm 發送 AJAX', 'color:#0056b3;font-weight:bold;');
         // console.log('POST URL    :', _editUrl);
         // console.log('action      :', 'get_orders_for_edit');
@@ -11638,8 +11501,8 @@ echo "</script>\n";
         if (!processListDiv) { console.warn("Process list container not found:", processListContainerId); return; }
 
         // 權限判斷：A 或 C+R 才能看到加工單價；業務類(isCRU)或D+R不可看到移轉按鈕
-        var canSeePrice = (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R') || window.featSeePrice;
-        var canTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer;
+        var canSeePrice = (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R');
+        var canTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R');
 
         processListDiv.innerHTML = '<div style="color:#999;font-size:12px;padding:4px;">載入中...</div>';
 
@@ -13431,11 +13294,6 @@ echo "</script>\n";
                                     (權限：<?php echo htmlspecialchars($permission_display_text); ?>)
                                 </small>
                             <?php endif; ?>
-                            <?php if ($permission_code === 'A'): ?>
-                                <button type="button" class="btn btn-xs btn-default" id="btn-oready-role-setting" style="margin-left:8px;" title="角色功能設定（僅管理員可用）" onclick="openOreadyRoleSettingModal()">
-                                    <i class="fa fa-gear"></i> 角色功能設定
-                                </button>
-                            <?php endif; ?>
                             <span id="current-customer-display" style="font-size: 14px; color: #555;"></span>
                             <?php if (!empty($users_on_leave_names)): ?>
                                 <small style="color: red; font-size: 12px; margin-left: 10px;">(今日休假: <?php echo htmlspecialchars(implode(', ', $users_on_leave_names)); ?>)</small>
@@ -13443,49 +13301,6 @@ echo "</script>\n";
                             </h3>
                         </div>
                     </div>
-
-                    <?php if ($permission_code === 'A'): ?>
-                    <!-- ══ 角色功能設定 Modal（僅管理員可見的按鈕才會觸發開啟） ══ -->
-                    <div id="oreadyRoleSettingModal" class="modal fade" role="dialog" tabindex="-1">
-                        <div class="modal-dialog" style="width:520px;">
-                            <div class="modal-content">
-                                <div class="modal-header">
-                                    <button type="button" class="close" data-dismiss="modal">&times;</button>
-                                    <h4 class="modal-title"><i class="fa fa-gear"></i> 角色功能設定</h4>
-                                </div>
-                                <div class="modal-body">
-                                    <div class="form-group">
-                                        <label>選擇角色</label>
-                                        <div class="input-group">
-                                            <select id="oready-role-select" class="form-control"></select>
-                                            <span class="input-group-btn">
-                                                <button type="button" class="btn btn-default" id="oready-role-refresh" title="重新整理角色清單"><i class="fa fa-refresh"></i></button>
-                                            </span>
-                                        </div>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>新增角色</label>
-                                        <div class="input-group">
-                                            <input type="text" id="oready-new-role-name" class="form-control" placeholder="輸入新角色名稱">
-                                            <span class="input-group-btn">
-                                                <button type="button" class="btn btn-success" id="oready-role-add"><i class="fa fa-plus"></i> 新增</button>
-                                            </span>
-                                        </div>
-                                    </div>
-                                    <hr>
-                                    <label>此角色可使用的功能</label>
-                                    <div id="oready-feature-box" style="max-height:260px;overflow-y:auto;"></div>
-                                    <p style="font-size:11px;color:#888;margin-top:8px;">說明：這裡的功能碼與原本的 C/R/U/D/A 權限並存（任一成立即可使用該功能），不會取代原有權限設定。到「使用者權限管理」頁面可將角色指派給使用者。</p>
-                                </div>
-                                <div class="modal-footer">
-                                    <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
-                                    <button type="button" class="btn btn-primary" id="oready-role-save">儲存功能設定</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <?php endif; ?>
-
                     <div class="title_left">
                         <h4>
                             <?php
@@ -13630,7 +13445,7 @@ echo "</script>\n";
                                             </div>
                                             <button type="button" class="btn btn-xs btn-primary" title="移動表格至最左側" onclick="scrollToBeginning()">移至最左</button>
                                             <button type="button" class="btn btn-xs btn-primary" title="移動表格以顯示製程" onclick="scrollToProcesses()">顯示製程</button>
-                                            <?php if (($display_permission_code !== 'C+R' && $display_permission_code !== 'D+R' && $display_permission_code !== 'R') || rf_has_feature($_oready_features, 'oready_update')): ?>
+                                            <?php if ($display_permission_code !== 'C+R' && $display_permission_code !== 'D+R' && $display_permission_code !== 'R'): ?>
                                                 <button type="button" class="btn btn-xs btn-warning" title="設定燈號與製程天數" onclick="openLightSettingModal()" style="margin-left: 5px;">設定燈號</button>
                                             <?php endif; ?>
                                             <!-- Modified "日內未回" filter section -->
@@ -13648,15 +13463,15 @@ echo "</script>\n";
                                                 <!-- New "QC報工排序" Sort Button -->
                                                 <button type="button" id="toggle-qc-report-sort-btn" class="btn btn-xs btn-primary" style="margin-left: 10px; display: none;">QC報工排序</button>
                                                 <!-- 設定業務按鈕 -->
-                                                <?php if (($display_permission_code !== 'C+R' && $display_permission_code !== 'R') || rf_has_feature($_oready_features, 'oready_update')): ?>
+                                                <?php if ($display_permission_code !== 'C+R' && $display_permission_code !== 'R'): ?>
                                                     <button type="button" id="btn-sales-setting" class="btn btn-xs btn-primary" style="margin-left: 10px;">設定業務</button>
                                                 <?php endif; ?>
-                                                <!-- 製程設定按鈕：舊規則(A或C+R+D) OR 新功能碼 oready_process_settings -->
-                                                <?php if ($permission_code === 'A' || $display_permission_code === 'C+R+D' || $oready_feat_process_settings): ?>
+                                                <!-- 製程設定按鈕：只有 A 或 C+R+D 可見 -->
+                                                <?php if ($permission_code === 'A' || $display_permission_code === 'C+R+D'): ?>
                                                     <button type="button" id="btn-pti-filter-setting" class="btn btn-xs btn-warning" style="margin-left: 6px;" title="設定PTI製程篩選按鈕">製程設定</button>
                                                 <?php endif; ?>
-                                                <!-- 例外內製製程設定：舊規則(僅A) OR 新功能碼 oready_process_settings -->
-                                                <?php if ($permission_code === 'A' || $oready_feat_process_settings): ?>
+                                                <!-- 例外內製製程設定：只有 A 可見 -->
+                                                <?php if ($permission_code === 'A'): ?>
                                                     <button type="button" id="btn-internal-proc-setting" class="btn btn-xs btn-info" style="margin-left: 4px;" title="設定哪些製程類型視為廠內加工（例外設定）">內製製程</button>
                                                 <?php endif; ?>
                                                 <!-- <span id="process-not-halfway-filter-status-text" style="font-weight: bold; margin-left: 5px; display: none;"></span> -->
@@ -13909,86 +13724,6 @@ echo "</script>\n";
     <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
 
     <script>
-        <?php if ($permission_code === 'A'): ?>
-        // ══ 角色功能設定（僅權限=A者可見的按鈕會呼叫）══
-        var OREADY_FEATURES = [
-            {code:'oready_create',            label:'新增 BOM'},
-            {code:'oready_update',             label:'修改（備註 / 更新表單 / 快速綁定料號 / 設定燈號 / 設定業務）'},
-            {code:'oready_delete',             label:'刪除 BOM'},
-            {code:'oready_manual_close',       label:'人工結案'},
-            {code:'oready_mark_returned',      label:'回廠標記'},
-            {code:'oready_transfer',           label:'移轉 / 取消移轉製程'},
-            {code:'oready_batch_split_merge',  label:'拆批 / 合併'},
-            {code:'oready_view_price',         label:'查看加工單價'},
-            {code:'oready_process_settings',   label:'製程設定 / 內製製程例外設定'}
-        ];
-        var OREADY_CODES = OREADY_FEATURES.map(function(f){ return f.code; });
-        var _oreadyRoleCur = [];
-        var OREADY_ROLES_API = '../../src/store/Roles_API.php';
-
-        function openOreadyRoleSettingModal() {
-            if (!window.oreadyIsAdmin) { alert('僅管理員可使用此功能'); return; }
-            oreadyLoadRoles();
-            $('#oreadyRoleSettingModal').modal('show');
-        }
-
-        function oreadyLoadRoles() {
-            $.get(OREADY_ROLES_API, {action:'get_roles', module:'oready'}, function(res) {
-                if (!res || !res.success) { alert('讀取角色失敗：' + ((res && res.message) || '未知錯誤')); return; }
-                var $sel = $('#oready-role-select').empty();
-                (res.data || []).forEach(function(r) {
-                    $sel.append($('<option>').val(r.role_id).text(r.role_name + (r.is_system == 1 ? '（系統角色）' : '')));
-                });
-                oreadyRenderFeatureBox();
-            }, 'json');
-        }
-
-        function oreadyRenderFeatureBox() {
-            var roleId = $('#oready-role-select').val();
-            var $box = $('#oready-feature-box').empty();
-            if (!roleId) { $box.html('<div class="text-muted">尚無角色，請先於上方新增</div>'); return; }
-            $.get(OREADY_ROLES_API, {action:'get_role_features', role_id: roleId}, function(res) {
-                var cur = (res && res.success && res.data) || [];
-                _oreadyRoleCur = cur;
-                var isAll = cur.indexOf('all') !== -1;
-                var html = '';
-                OREADY_FEATURES.forEach(function(f) {
-                    var checked = isAll || cur.indexOf(f.code) !== -1;
-                    html += '<div class="checkbox"><label>' +
-                        '<input type="checkbox" class="oready-feat" value="' + f.code + '" ' +
-                        (checked ? 'checked ' : '') + (isAll ? 'disabled' : '') + '> ' + f.label + '</label></div>';
-                });
-                $box.html(html);
-            }, 'json');
-        }
-
-        $(document).on('change', '#oready-role-select', oreadyRenderFeatureBox);
-        $(document).on('click', '#oready-role-refresh', oreadyLoadRoles);
-
-        $(document).on('click', '#oready-role-add', function() {
-            var name = $('#oready-new-role-name').val().trim();
-            if (!name) { alert('請輸入角色名稱'); return; }
-            $.post(OREADY_ROLES_API, {action:'save_role', role_name:name, module:'oready'}, function(res) {
-                if (!res || !res.success) { alert('新增失敗：' + ((res && res.message) || '未知錯誤')); return; }
-                $('#oready-new-role-name').val('');
-                oreadyLoadRoles();
-            }, 'json');
-        });
-
-        $(document).on('click', '#oready-role-save', function() {
-            var roleId = $('#oready-role-select').val();
-            if (!roleId) { alert('請先選擇角色'); return; }
-            var checked = $('#oready-feature-box .oready-feat:checked').map(function(){ return this.value; }).get();
-            // 只替換 OREADY_CODES 範圍內的碼，避免洗掉其他模組（如 QC、報價單）的 feature_code
-            var merged = _oreadyRoleCur.filter(function(c){ return OREADY_CODES.indexOf(c) === -1; }).concat(checked);
-            $.post(OREADY_ROLES_API, {action:'save_role_features', role_id: roleId, features: JSON.stringify(merged)}, function(res) {
-                if (!res || !res.success) { alert('儲存失敗：' + ((res && res.message) || '未知錯誤')); return; }
-                showTemporaryMessage('角色功能已儲存', true);
-                oreadyRenderFeatureBox();
-            }, 'json');
-        });
-        <?php endif; ?>
-
         // Helper to get contrasting text color (black/white) for a given hex background color
         function getTextColor(hexcolor){
             if (!hexcolor) return '#000000';
@@ -14749,7 +14484,7 @@ echo "</script>\n";
 
     // ── 工具 ──────────────────────────────────────────────────────
     function pageUrl() {
-        return window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime2.php';
+        return window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime.php';
     }
 
     // ── 開啟主 Modal ──────────────────────────────────────────────
