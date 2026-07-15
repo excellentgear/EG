@@ -13,6 +13,8 @@ if (!isset($_SESSION['userName'])) {
     exit;
 }
 // 版本號＝本檔最後修改時間（自動產生，免手動維護）；並禁止瀏覽器快取本頁，避免改版後使用者還在跑舊版 JS
+// 先設台灣時區，否則 PHP 預設 UTC 會讓版本時間比實際少 8 小時
+date_default_timezone_set('Asia/Taipei');
 $EDITOR_VER = 'v' . date('Y.m.d-H:i', filemtime(__FILE__));
 header('Cache-Control: no-cache, must-revalidate');
 header('Pragma: no-cache');
