@@ -12,6 +12,10 @@ if (!isset($_SESSION['userName'])) {
     header("Location:../../index.php");
     exit;
 }
+// 版本號＝本檔最後修改時間（自動產生，免手動維護）；並禁止瀏覽器快取本頁，避免改版後使用者還在跑舊版 JS
+$EDITOR_VER = 'v' . date('Y.m.d-H:i', filemtime(__FILE__));
+header('Cache-Control: no-cache, must-revalidate');
+header('Pragma: no-cache');
 
 include '../../src/common/DBConnection.php';
 
@@ -872,7 +876,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <body>
 
 <div id="topbar">
-    <span class="brand"><i class="fa fa-paint-brush"></i> 批圖編輯器</span>
+    <span class="brand"><i class="fa fa-paint-brush"></i> 批圖編輯器 <span style="font-size:10px;color:#8b949e;font-weight:400;" title="版本＝程式檔最後更新時間；跟最新修改時間不符表示瀏覽器載到舊版，請按 Ctrl+F5"><?= $EDITOR_VER ?></span></span>
     <button class="tb-btn" onclick="openImageFiles()" title="開啟圖片檔（可多選，也可直接拖檔案進來）"><i class="fa fa-folder-open-o"></i> 開啟圖檔</button>
     <button class="tb-btn" onclick="pasteFromButton()" title="貼上剪貼簿圖片（小畫家複製後按此，或直接 Ctrl+V）"><i class="fa fa-clipboard"></i> 貼上</button>
     <span class="tb-sep"></span>
@@ -2059,7 +2063,13 @@ function polyPointActionHandler(i) {
         const local = poly.toLocalPoint(new fabric.Point(x, y), 'center', 'center');
         const base = polyEditSizeWithStroke(poly);
         const size = poly._getTransformedDimensions(0, 0);
-        poly.points[i] = { x: local.x * base.x / size.x + poly.pathOffset.x, y: local.y * base.y / size.y + poly.pathOffset.y };
+        // 節點全部垂直/水平共線時寬或高=0，除以0會把座標變成Infinity「毒化」整個物件
+        // （看不見、選得到、每幀渲染出錯畫面不清除→拖曳殘影），一律防呆
+        const sx = size.x || 1, sy = size.y || 1;
+        const nx = local.x * base.x / sx + poly.pathOffset.x;
+        const ny = local.y * base.y / sy + poly.pathOffset.y;
+        if (!isFinite(nx) || !isFinite(ny)) return false;
+        poly.points[i] = { x: nx, y: ny };
         return true;
     };
 }
@@ -2067,15 +2077,19 @@ function polyPointActionHandler(i) {
 function polyAnchorWrapper(anchorIndex, fn) {
     return function (eventData, transform, x, y) {
         const poly = transform.target;
+        const anchor = poly.points[anchorIndex];
+        if (!anchor) return false;
         const anchorAbs = fabric.util.transformPoint(
-            { x: poly.points[anchorIndex].x - poly.pathOffset.x, y: poly.points[anchorIndex].y - poly.pathOffset.y },
+            { x: anchor.x - poly.pathOffset.x, y: anchor.y - poly.pathOffset.y },
             poly.calcTransformMatrix());
         const done = fn(eventData, transform, x, y);
         poly._setPositionDimensions({});
         const base = polyEditSizeWithStroke(poly);
-        const nx = (poly.points[anchorIndex].x - poly.pathOffset.x) / base.x;
-        const ny = (poly.points[anchorIndex].y - poly.pathOffset.y) / base.y;
-        poly.setPositionByOrigin(anchorAbs, nx + 0.5, ny + 0.5);
+        const nx = (poly.points[anchorIndex].x - poly.pathOffset.x) / (base.x || 1);
+        const ny = (poly.points[anchorIndex].y - poly.pathOffset.y) / (base.y || 1);
+        if (isFinite(nx) && isFinite(ny) && isFinite(anchorAbs.x) && isFinite(anchorAbs.y)) {
+            poly.setPositionByOrigin(anchorAbs, nx + 0.5, ny + 0.5);
+        }
         return done;
     };
 }
@@ -4492,16 +4506,27 @@ function lockSelection() {
     pushState();
     toast('已鎖定 ' + targets.length + ' 個物件（點擊會穿透）。要解開請按屬性列右側「解鎖全部」');
 }
+/* 座標被算壞（NaN/Infinity）的物件：看不見、選得到、每幀渲染出錯造成拖曳殘影——直接移除 */
+function purgePoisonedObjects() {
+    let n = 0;
+    canvas.getObjects().slice().forEach(o => {
+        if (o === artboard) return;
+        if (!isFinite(o.left) || !isFinite(o.top) || !isFinite(o.width) || !isFinite(o.height) || !isFinite(o.scaleX) || !isFinite(o.scaleY)) {
+            canvas.remove(o); n++;
+        }
+    });
+    return n;
+}
 function unlockAll() {
-    // 除了正常鎖定的物件，也一併救回「點不到又刪不掉」的殘留物
-    // （selectable/evented 被設成 false 但沒有 locked 標記的物件，例如舊版工作檔存下來的遮板）
-    const locked = canvas.getObjects().filter(o => o !== artboard && (o.locked || o.selectable === false || o.evented === false));
-    if (!locked.length) return;
+    // 一鍵自救：解鎖正常鎖定物、救回「點不到又刪不掉」的殘留物、清掉座標壞掉的毒化物件
+    const purged = purgePoisonedObjects();
+    const locked = canvas.getObjects().filter(o => o !== artboard && (o.locked || o.selectable === false || o.evented === false) && !o.isDimGuide);
     locked.forEach(o => { o.locked = false; o.selectable = true; o.evented = true; });
+    if (!purged && !locked.length) return;
     canvas.requestRenderAll();
     updateLockUI();
     pushState();
-    toast('已解鎖 ' + locked.length + ' 個物件');
+    toast('已解鎖 ' + locked.length + ' 個物件' + (purged ? '，並清除 ' + purged + ' 個損壞殘留物' : ''));
 }
 function updateLockUI() {
     const n = canvas.getObjects().filter(o => o.locked).length;
@@ -4676,6 +4701,7 @@ function restoreDone() {
         canvas.discardActiveObject();   // 舊選取框指向已被重建取代的物件，留著會變成拖得動卻刪不掉的幽靈框
         findArtboard();
         canvas.sendToBack(artboard);
+        purgePoisonedObjects();         // 清掉座標已變成 NaN/Infinity 的毒化物件（看不見選得到、渲染出錯留殘影）
         canvas.getObjects().forEach(o => { if (o.curved) o.objectCaching = false; });   // 圓滑曲線可能超出快取框，關快取避免被裁掉
         artW = Math.round(artboard.width * (artboard.scaleX || 1));
         artH = Math.round(artboard.height * (artboard.scaleY || 1));
