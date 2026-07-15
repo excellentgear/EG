@@ -3088,6 +3088,10 @@ foreach($dCounts as $c) {
 
         /* Modal Styling */
         .modal-content { border-radius: 8px; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+        /* 新增訂單視窗：內容過高（顯示庫存後）時不再把底部按鈕擠出畫面，改為只捲動內容區、頁尾按鈕固定可見 */
+        #newOrderModal .modal-content { display: flex; flex-direction: column; max-height: calc(100vh - 40px); }
+        #newOrderModal .modal-header, #newOrderModal .modal-footer { flex: 0 0 auto; }
+        #newOrderModal .modal-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
         .modal-header {
             background: var(--primary-color);
             color: white;
