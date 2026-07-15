@@ -3557,23 +3557,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $tgt_id = intval($_POST['tgt_d_id']);
             if ($src_id <= 0 || $tgt_id <= 0) throw new Exception('料號 ID 不合法');
             if ($src_id === $tgt_id) throw new Exception('來源與目標料號不可相同');
-            $src_q = $pdo->prepare("SELECT d_id, D_Setting_Id FROM d_setting WHERE d_id=?"); $src_q->execute([$src_id]); $src = $src_q->fetch(PDO::FETCH_ASSOC);
-            $tgt_q = $pdo->prepare("SELECT d_id, D_Setting_Id FROM d_setting WHERE d_id=?"); $tgt_q->execute([$tgt_id]); $tgt = $tgt_q->fetch(PDO::FETCH_ASSOC);
+            $src_q = $pdo->prepare("SELECT d_id, D_Setting_Id, Customer_Id FROM d_setting WHERE d_id=?"); $src_q->execute([$src_id]); $src = $src_q->fetch(PDO::FETCH_ASSOC);
+            $tgt_q = $pdo->prepare("SELECT d_id, D_Setting_Id, Customer_Id FROM d_setting WHERE d_id=?"); $tgt_q->execute([$tgt_id]); $tgt = $tgt_q->fetch(PDO::FETCH_ASSOC);
             if (!$src) throw new Exception('找不到來源料號');
             if (!$tgt) throw new Exception('找不到目標料號');
+            // 客戶隨料號（使用者政策 2026-07-15）：移轉料號時，一併把受影響單據（訂單/出貨/退貨/生產）的客戶欄
+            // 改為目標料號所屬客戶；目標料號若未綁客戶(Customer_Id 空)則不動客戶欄。名稱用 COALESCE 保底，查不到名稱時保留原值。
+            $tgt_cust_id = !empty($tgt['Customer_Id']) ? $tgt['Customer_Id'] : null;
+            $tgt_cust_name = null;
+            if ($tgt_cust_id !== null) {
+                $cq = $pdo->prepare("SELECT customer FROM customer_list WHERE customer_id=? LIMIT 1");
+                $cq->execute([$tgt_cust_id]);
+                $tgt_cust_name = (($v = $cq->fetchColumn()) !== false && $v !== null) ? $v : null;
+            }
+            $sync_cust = ($tgt_cust_id !== null);
+            $tds = $tgt['D_Setting_Id'];
             $pdo->beginTransaction();
-            $pdo->prepare("UPDATE order_track    SET d_id_ID=?,      d_id=?   WHERE d_id_ID=?")->execute([$tgt_id,$tgt['D_Setting_Id'],$src_id]);
-            $pdo->prepare("UPDATE bom            SET d_setting_id=?, d_id=?   WHERE d_setting_id=?")->execute([$tgt_id,$tgt['D_Setting_Id'],$src_id]);
+            if ($sync_cust) {
+                $pdo->prepare("UPDATE order_track SET d_id_ID=?, d_id=?, Client_name_ID=?, Client_name=COALESCE(?,Client_name) WHERE d_id_ID=?")->execute([$tgt_id,$tds,$tgt_cust_id,$tgt_cust_name,$src_id]);
+                $pdo->prepare("UPDATE is_list     SET d_setting_id=?, Product_id=?, Client_id=?, Client_name=COALESCE(?,Client_name) WHERE d_setting_id=?")->execute([$tgt_id,$tds,$tgt_cust_id,$tgt_cust_name,$src_id]);
+                $pdo->prepare("UPDATE ir_track     SET d_setting_id=?, d_id=?, Client_name=COALESCE(?,Client_name) WHERE d_setting_id=?")->execute([$tgt_id,$tds,$tgt_cust_name,$src_id]);
+                $pdo->prepare("UPDATE bom          SET d_setting_id=?, d_id=?, Client_Name=COALESCE(?,Client_Name) WHERE d_setting_id=?")->execute([$tgt_id,$tds,$tgt_cust_name,$src_id]);
+            } else {
+                $pdo->prepare("UPDATE order_track SET d_id_ID=?, d_id=? WHERE d_id_ID=?")->execute([$tgt_id,$tds,$src_id]);
+                $pdo->prepare("UPDATE is_list     SET d_setting_id=?, Product_id=? WHERE d_setting_id=?")->execute([$tgt_id,$tds,$src_id]);
+                $pdo->prepare("UPDATE ir_track     SET d_setting_id=?, d_id=? WHERE d_setting_id=?")->execute([$tgt_id,$tds,$src_id]);
+                $pdo->prepare("UPDATE bom          SET d_setting_id=?, d_id=? WHERE d_setting_id=?")->execute([$tgt_id,$tds,$src_id]);
+            }
             $pdo->prepare("UPDATE d_setting_bom  SET parent_d_id=?            WHERE parent_d_id=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE d_setting_bom  SET child_d_id=?             WHERE child_d_id=?")->execute([$tgt_id,$src_id]);
-            $pdo->prepare("UPDATE is_list        SET d_setting_id=?, Product_id=? WHERE d_setting_id=?")->execute([$tgt_id,$tgt['D_Setting_Id'],$src_id]);
             $pdo->prepare("UPDATE stock_items    SET d_id=?                   WHERE d_id=?")->execute([$tgt_id,$src_id]);
-            $pdo->prepare("UPDATE quotation_item SET d_setting_d_id=?, product_id=? WHERE d_setting_d_id=?")->execute([$tgt_id,$tgt['D_Setting_Id'],$src_id]);
-            $pdo->prepare("UPDATE ir_track       SET d_setting_id=?, d_id=?   WHERE d_setting_id=?")->execute([$tgt_id,$tgt['D_Setting_Id'],$src_id]);
+            $pdo->prepare("UPDATE quotation_item SET d_setting_d_id=?, product_id=? WHERE d_setting_d_id=?")->execute([$tgt_id,$tds,$src_id]);
             $pdo->commit();
             $op_name = _get_operator($pdo, $uid);
-            _log_audit($pdo,'update','part',$src['D_Setting_Id'],null,[['field'=>'綁定移轉','old'=>$src['D_Setting_Id'],'new'=>$tgt['D_Setting_Id'].'（所有關聯資料）']],$uid,$op_name);
-            echo json_encode(['success'=>true,'message'=>'移轉完成，所有關聯資料已改為指向「'.$tgt['D_Setting_Id'].'」']);
+            $cust_note = $sync_cust ? ('，客戶一併改為「'.($tgt_cust_name ?: $tgt_cust_id).'」') : '';
+            _log_audit($pdo,'update','part',$src['D_Setting_Id'],null,[['field'=>'綁定移轉','old'=>$src['D_Setting_Id'],'new'=>$tds.'（所有關聯資料'.$cust_note.'）']],$uid,$op_name);
+            echo json_encode(['success'=>true,'message'=>'移轉完成，所有關聯資料已改為指向「'.$tds.'」'.$cust_note]);
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
