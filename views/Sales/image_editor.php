@@ -1769,24 +1769,22 @@ canvas.on('mouse:move', function (opt) {
     const x = Math.min(drawing.startX, p.x), y = Math.min(drawing.startY, p.y);
     const w = Math.abs(p.x - drawing.startX), h = Math.abs(p.y - drawing.startY);
 
-    if (drawing.type === 'masklasso') {
+    if (drawing.type === 'masklasso' || drawing.type === 'cropmovelasso') {
+        // 套索預覽：就地更新同一個 Polyline 的 points（每個 mousemove 都重建新物件會 O(n²)，長套索明顯掉幀）
         drawing.points.push({ x: p.x, y: p.y });
-        if (drawing.obj) canvas.remove(drawing.obj);
-        drawing.obj = new fabric.Polyline(drawing.points.slice(), {
-            stroke: '#e53935', strokeWidth: 1 / canvas.getZoom(), fill: 'rgba(229,57,53,.15)',
-            selectable: false, evented: false, objectCaching: false, strokeDashArray: [4, 3]
-        });
-        canvas.add(drawing.obj); canvas.requestRenderAll();
-        return;
-    }
-    if (drawing.type === 'cropmovelasso') {
-        drawing.points.push({ x: p.x, y: p.y });
-        if (drawing.obj) canvas.remove(drawing.obj);
-        drawing.obj = new fabric.Polyline(drawing.points.slice(), {
-            stroke: '#6fc3ff', strokeWidth: 1 / canvas.getZoom(), fill: 'rgba(39,121,189,.15)',
-            selectable: false, evented: false, objectCaching: false, strokeDashArray: [5, 4]
-        });
-        canvas.add(drawing.obj); canvas.requestRenderAll();
+        if (!drawing.obj) {
+            const style = (drawing.type === 'masklasso')
+                ? { stroke: '#e53935', fill: 'rgba(229,57,53,.15)', strokeDashArray: [4, 3] }
+                : { stroke: '#6fc3ff', fill: 'rgba(39,121,189,.15)', strokeDashArray: [5, 4] };
+            drawing.obj = new fabric.Polyline(drawing.points, Object.assign({
+                strokeWidth: 1 / canvas.getZoom(), selectable: false, evented: false, objectCaching: false
+            }, style));
+            canvas.add(drawing.obj);
+        } else {
+            drawing.obj._setPositionDimensions({});
+            drawing.obj.dirty = true;
+        }
+        canvas.requestRenderAll();
         return;
     }
 
@@ -2429,15 +2427,24 @@ function rebuildDimAngleArc(id) {
     canvas.add(arcGroup);
     canvas.requestRenderAll();
 }
-/* 輔助線顯示規則：只有選到同一組的角度標示（或輔助線本身）才顯示，平常自動隱藏 */
+/* 輔助線顯示規則：只有選到同一組的角度標示（或輔助線本身）才顯示，平常自動隱藏。
+   隱藏時必須同時設為「不可選取」——不然 Ctrl+A/框選會把看不見的線掃進選取，
+   變成一個拖得動、裡面卻空無一物的藍色選取框（幽靈選取）。 */
 function updateDimGuideVisibility() {
     const ao = canvas.getActiveObject();
-    const activeId = (ao && ao.dimAngleId) ? ao.dimAngleId : null;
+    const ids = new Set();
+    if (ao) {
+        if (ao.dimAngleId) ids.add(ao.dimAngleId);
+        if (ao.type === 'activeSelection' && ao.getObjects) ao.getObjects().forEach(o => { if (o.dimAngleId) ids.add(o.dimAngleId); });
+    }
     let changed = false;
     canvas.getObjects().forEach(o => {
         if (!o.isDimGuide) return;
-        const want = (o.dimAngleId === activeId);
-        if (o.visible !== want) { o.visible = want; o.dirty = true; changed = true; }
+        const want = ids.has(o.dimAngleId);
+        if (o.visible !== want || o.selectable !== want) {
+            o.visible = want; o.selectable = want; o.evented = want;
+            o.dirty = true; changed = true;
+        }
     });
     if (changed) canvas.requestRenderAll();
 }
@@ -3405,7 +3412,10 @@ async function confirmNewLabel() {
    - 一般群組（或 Alt+雙擊任何群組）→ 進入群組：拆成多選，可個別移動，調整完 Ctrl+G 重新群組
    - 標籤群組 → 就地編輯其中的文字（規格標籤改完外框自動貼合字長） */
 function enterGroup(g) {
-    const props = { labelSpec: g.labelSpec, labelKind: g.labelKind };
+    // 重組時要還原的自訂屬性：漏掉會讓標註/箭頭/快速標籤在「進入群組→重組」一趟之後失去識別，
+    // 連動刪除、角度重算、雙擊改字、外框貼字等行為全部失效
+    const props = { labelSpec: g.labelSpec, labelKind: g.labelKind, dimKind: g.dimKind, dimAngleId: g.dimAngleId,
+                    isQuickLabel: g.isQuickLabel, merged: g.merged, isArrowGroup: g.isArrowGroup, isFreehandEnds: g.isFreehandEnds };
     g.toActiveSelection();
     const sel = canvas.getActiveObject();
     if (sel) sel._regroupProps = props;   // Ctrl+G 重組時還原標籤屬性
@@ -3463,11 +3473,15 @@ function startGroupTextEdit(group, child, cursorToEnd) {
         canvas.remove(tmp);
         if (tmp.__deleteGroup) {   // 編輯中按了刪除：連同整組一起刪，不要再把群組加回來
             canvas.remove(group);
+            // 角度標註整組連動：刪弧線群組時把同 id 的隱藏輔助線一併刪掉，不留孤兒
+            if (group.dimAngleId) canvas.getObjects().slice().forEach(o => { if (o.dimAngleId === group.dimAngleId) canvas.remove(o); });
             canvas.discardActiveObject();
             canvas.requestRenderAll();
             pushState();
             return;
         }
+        // 復原/重做把畫布整個換掉了，或群組已被其他流程移除：不能再把舊群組加回去（會生出與歷史不符的幽靈物件）
+        if (restoring || canvas.getObjects().indexOf(group) === -1) { canvas.requestRenderAll(); return; }
         // 編輯期間若有改文字樣式（底色/顏色/粗體/字級/底線），要同步回真正的文字，不然編輯結束就跳回舊樣式
         child.set({ fill: tmp.fill, fontWeight: tmp.fontWeight, fontSize: tmp.fontSize, underline: tmp.underline });
         child.doubleUnderline = tmp.doubleUnderline;
@@ -3517,17 +3531,40 @@ function finishGroupTextEdit(group, child, val) {
     pushState();
 }
 
-/* Figma 式快速複製：Alt+拖曳 = 原地留一份、拖走一份（Ctrl+D 亦可） */
+/* 複製出來的物件若帶著角度標註的 dimAngleId，要換發新 id：
+   兩份標示共用同一 id 會互相干擾（重算只刪到一份、刪一份會連動刪掉另一份） */
+function reissueDimIds(root) {
+    const map = {};
+    const visit = o => {
+        if (o.dimAngleId) {
+            map[o.dimAngleId] = map[o.dimAngleId] || ('da' + Date.now() + '_' + Math.floor(Math.random() * 100000));
+            o.dimAngleId = map[o.dimAngleId];
+        }
+        if (o.getObjects) o.getObjects().forEach(visit);
+    };
+    visit(root);
+}
+/* Figma 式快速複製：Alt+拖曳 = 原地留一份、拖走一份（Ctrl+D 亦可）。
+   一定要「真的開始拖曳」才複製——Alt+單擊/雙擊（進入群組手勢）若立即複製，
+   會原地疊出看不見的重疊複本，就是「刪了又還有一個」的殘留來源。 */
+let altClonePending = null;   // { src, left, top }
 canvas.on('mouse:down', function (opt) {
     if (currentTool !== 'select' || !opt.e.altKey || !opt.target || opt.target === artboard) return;
-    const src = opt.target;
+    altClonePending = { src: opt.target, left: opt.target.left, top: opt.target.top };
+});
+canvas.on('object:moving', function (e) {
+    if (!altClonePending || !e || e.target !== altClonePending.src) return;
+    const { src, left, top } = altClonePending;
+    altClonePending = null;
     src.clone(function (cl) {
-        cl.set({ left: src.left, top: src.top });
+        cl.set({ left, top });   // 複製品留在原位（src 已經被拖走了）
+        reissueDimIds(cl);
         canvas.add(cl);
         cl.moveTo(canvas.getObjects().indexOf(src));  // 複製品墊在原件下方，使用者拖走的是原件
         pushState();
     }, SNAP_PROPS);
 });
+canvas.on('mouse:up', function () { altClonePending = null; });
 
 /* ── 圖片載入：檔案 / 拖放 / 剪貼簿 ── */
 function openImageFiles() { document.getElementById('file-input').click(); }
@@ -3634,7 +3671,7 @@ function pasteInternalOrCross() {
     if (crossIsNewer && cross.objs && cross.objs.length) {
         // 跨視窗貼上：優先還原成可編輯的向量物件（保留顏色/線型/文字內容等），不是扁平化圖片
         fabric.util.enlivenObjects(cross.objs, function (objs) {
-            objs.forEach(o => { o.set({ left: (o.left || 0) + 20, top: (o.top || 0) + 20 }); canvas.add(o); o.setCoords(); });
+            objs.forEach(o => { o.set({ left: (o.left || 0) + 20, top: (o.top || 0) + 20 }); reissueDimIds(o); canvas.add(o); o.setCoords(); });
             if (objs.length > 1) canvas.setActiveObject(new fabric.ActiveSelection(objs, { canvas }));
             else if (objs[0]) canvas.setActiveObject(objs[0]);
             canvas.requestRenderAll();
@@ -3649,6 +3686,7 @@ function pasteInternalOrCross() {
     if (internalClip) {
         internalClip.clone(function (cl) {
             cl.set({ left: cl.left + 20, top: cl.top + 20 });
+            reissueDimIds(cl);
             if (cl.type === 'activeSelection') {
                 cl.canvas = canvas;
                 cl.forEachObject(o => canvas.add(o));
@@ -3713,6 +3751,7 @@ function duplicateSelection() {
     if (!obj) return;
     obj.clone(function (cl) {
         cl.set({ left: cl.left + 20, top: cl.top + 20 });
+        reissueDimIds(cl);
         if (cl.type === 'activeSelection') {
             cl.canvas = canvas;
             cl.forEachObject(o => canvas.add(o));
@@ -3731,7 +3770,7 @@ function doCropCopy(x, y, w, h) {
     const el = exportRegionCanvasEl(x, y, w, h, 1);
     if (document.getElementById('p-crop-transparent').checked) whiteToTransparent(el);
     const url = el.toDataURL('image/png');
-    try { localStorage.setItem(CLIP_KEY, JSON.stringify({ ts: Date.now(), dataURL: url })); } catch (e) {}
+    // 不再順手寫入跨視窗剪貼簿：同步寫大字串會卡 UI、常撞 5MB 配額，要跨窗請用「複製選取→他窗」
     fabric.Image.fromURL(url, function (img) {
         img.set({ left: x + 24, top: y + 24 });
         canvas.add(img);
@@ -3739,7 +3778,7 @@ function doCropCopy(x, y, w, h) {
         setTool('select');
         canvas.requestRenderAll();
         pushState();
-        toast('已複製框選範圍成新圖塊（也可到另一個批圖視窗 Ctrl+V 貼上）');
+        toast('已複製框選範圍成新圖塊（要複製到另一個批圖視窗：選取後用「複製選取→他窗」）');
     });
 }
 
@@ -3876,6 +3915,18 @@ function punchHoleInImage(obj, x, y, w, h, fillColor, polyPoints) {
     }
     obj.setElement(off);
     obj.dirty = true;
+    // 重要：element 若一直是 canvas 元素，之後「每一次」undo 快照的 getSrc() 都會對整張底圖重做
+    // toDataURL PNG 編碼（數千像素圖一次數百ms～數秒），是「用過框選搬移後開始狂卡」的主因。
+    // 這裡一次性編碼成 dataURL 換回 <img>，之後快照直接取 src 字串，零成本。
+    const punchedUrl = off.toDataURL('image/png');
+    const imgEl = new Image();
+    imgEl.onload = function () {
+        if (canvas.getObjects().indexOf(obj) === -1) return;   // 換圖途中被刪掉就算了
+        obj.setElement(imgEl);
+        obj.dirty = true;
+        canvas.requestRenderAll();
+    };
+    imgEl.src = punchedUrl;
     return true;
 }
 /* 框選搬移（不規則套索版）：座套索式，只把底圖依套索形狀真正挖空，其他物件不受影響，可連續使用 */
@@ -4302,14 +4353,7 @@ document.getElementById('p-width').addEventListener('input', function () {
     const v = parseInt(this.value, 10) || 3;
     if (canvas.isDrawingMode) canvas.freeDrawingBrush.width = v;
     const obj = canvas.getActiveObject();
-    // 箭頭群組：整支重建（只放大三角形會讓尖端跑位、跟線沒對齊）
-    if (obj && obj.type === 'group' && obj.isArrowGroup) {
-        const no = rebuildArrowGroup(obj, { width: v });
-        canvas.setActiveObject(no);
-        canvas.requestRenderAll();
-        pushState();
-        return;
-    }
+    if (obj && obj.type === 'group' && obj.isArrowGroup) return;   // 箭頭群組要整支重建，很重，放開滑桿（change）才做
     const headLen = arrowHeadLen(v);
     const n = eachInSelection(obj, o => {
         if (o.stroke && (o.type === 'line' || o.type === 'path' || o.type === 'rect' || o.type === 'ellipse' || o.type === 'circle' || o.type === 'polygon' || o.type === 'polyline')) {
@@ -4321,6 +4365,17 @@ document.getElementById('p-width').addEventListener('input', function () {
         return false;
     });
     if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); }
+});
+document.getElementById('p-width').addEventListener('change', function () {
+    // 放開滑桿才對箭頭群組整支重建（拖動中每格都 remove+重建 會拖慢畫面）
+    const v = parseInt(this.value, 10) || 3;
+    const obj = canvas.getActiveObject();
+    if (obj && obj.type === 'group' && obj.isArrowGroup) {
+        const no = rebuildArrowGroup(obj, { width: v });
+        canvas.setActiveObject(no);
+        canvas.requestRenderAll();
+        pushState();
+    }
 });
 document.getElementById('p-line-style').addEventListener('change', function () {
     const v = this.value;
@@ -4549,7 +4604,8 @@ function groupCmd() {
 /* Ctrl+A：全選畫布上的物件（含畫布外，排除底板/鎖定/浮水印鎖定物） */
 function selectAllObjects() {
     setTool('select');
-    const objs = canvas.getObjects().filter(o => o !== artboard && o.selectable !== false && !o.locked);
+    // visible !== false：隱藏物件（例如角度標註的輔助線）不可被全選掃進來，會變成空的幽靈選取框
+    const objs = canvas.getObjects().filter(o => o !== artboard && o.selectable !== false && !o.locked && o.visible !== false);
     if (!objs.length) { toast('畫布上沒有可選取的物件'); return; }
     canvas.discardActiveObject();
     const sel = new fabric.ActiveSelection(objs, { canvas: canvas });
@@ -4588,8 +4644,14 @@ function doPushState() {
         const snap = JSON.stringify(canvas.toJSON(SNAP_PROPS));
         if (undoStack[undoStack.length - 1] === snap) return;   // 內容沒變就不疊快照
         undoStack.push(snap);
-        if (undoStack.length > 30) undoStack.shift();   // 大圖快照很吃記憶體，上限 60→30
         redoStack = [];
+        // 上限用「總位元組」控管，不只份數：大圖每份快照可達數十MB，30份就足以撐爆分頁記憶體
+        let total = 0;
+        for (let i = 0; i < undoStack.length; i++) total += undoStack[i].length;
+        while ((undoStack.length > 30 || total > 120 * 1024 * 1024) && undoStack.length > 3) {
+            total -= undoStack[0].length;
+            undoStack.shift();
+        }
     } catch (e) { /* 圖太大時快照失敗不影響操作 */ }
 }
 function pushState() {
@@ -4602,7 +4664,16 @@ function flushPendingState() {
 }
 function restoreState(json) {
     restoring = true;
-    canvas.loadFromJSON(json, function () {
+    try {
+        canvas.loadFromJSON(json, restoreDone);
+    } catch (e) {
+        restoring = false;   // JSON 壞掉時 restoring 卡在 true 會讓之後所有快照永久靜默失效
+        toast('還原失敗：資料格式有誤');
+    }
+}
+function restoreDone() {
+    try {
+        canvas.discardActiveObject();   // 舊選取框指向已被重建取代的物件，留著會變成拖得動卻刪不掉的幽靈框
         findArtboard();
         canvas.sendToBack(artboard);
         canvas.getObjects().forEach(o => { if (o.curved) o.objectCaching = false; });   // 圓滑曲線可能超出快取框，關快取避免被裁掉
@@ -4610,18 +4681,21 @@ function restoreState(json) {
         artH = Math.round(artboard.height * (artboard.scaleY || 1));
         document.getElementById('st-canvas').textContent = artW + '×' + artH;
         canvas.requestRenderAll();
-        restoring = false;
         refreshPropbar();
         updateLockUI();
-    });
+    } finally {
+        restoring = false;   // 中途出錯也一定要解除，否則之後所有快照永久靜默失效
+    }
 }
 function undo() {
+    if (restoring) return;   // 還原進行中不疊加：連按 Ctrl+Z 排隊多發全畫布重建會凍結數秒
     flushPendingState();
     if (undoStack.length < 2) { toast('沒有可復原的步驟'); return; }
     redoStack.push(undoStack.pop());
     restoreState(undoStack[undoStack.length - 1]);
 }
 function redo() {
+    if (restoring) return;
     flushPendingState();
     if (!redoStack.length) { toast('沒有可重做的步驟'); return; }
     const s = redoStack.pop();
