@@ -511,11 +511,6 @@ if ($deptPerm === 'R') {
           <span class="text-muted" style="font-size:12px;">可含中文/空格。僅存根路徑，實際檔案路徑於讀取時現場組出（不寫死於資料庫）。</span>
         </div>
         <div class="form-group">
-          <label>線上開檔工作副本路徑（限英文/數字）</label>
-          <input type="text" class="form-control" id="set_workcopy_dir">
-          <span class="text-muted" style="font-size:12px;">Office 協定不支援中文路徑，此資料夾必須純英數（預設 \\excellentnas\as9100\ERP_workcopy，系統自動建立；副本 7 天自動清除）。</span>
-        </div>
-        <div class="form-group">
           <label>AS 負責人（指定人員）</label>
           <select class="form-control" id="set_owner"><option value="">-- 未指定 --</option></select>
         </div>
@@ -570,15 +565,15 @@ $(function(){
   const canDL = !!window.asPerm.download;
   const canNA = !!window.asPerm.no_attach; // 免附件補登
 
-  // 線上開檔：建立工作副本後以 ms-office 協定開啟本機 Excel/Word
+  // 線上開檔＝下載工作副本（Office 協定對非 HTTP 路徑會硬性封鎖，實測後改此模式：零設定、每台電腦可用）
+  let onlineHintShown = false;
   $(document).on('click','.op-online', function(e){
     e.preventDefault();
-    const $b=$(this); $b.prop('disabled',true);
-    $.post(API+'?action=open_online',{version_id:$b.data('ver')}, r=>{
-      if(r.status!=='success'){ alert(r.message||'開啟失敗'); return; }
-      window.location.href = r.uri; // 觸發 ms-excel:/ms-word: 協定
-      setTimeout(()=>{ alert('已建立工作副本並嘗試開啟 Office。\n若沒有反應：請確認此電腦已安裝 Office 並可存取 NAS。\n\n若顯示「已封鎖／不安全的內容」，每台電腦設定一次（順序很重要）：\nExcel → 檔案 → 選項 → 信任中心 → 信任中心設定 → 信任位置\n步驟1：先勾選最下方「允許我的網路上信任的位置」☑（不勾的話下一步會被拒絕）\n步驟2：再按「新增位置」輸入 \\\\excellentnas\\as9100，勾「同時信任此位置的子資料夾」→ 確定\n\n副本位置：'+r.path+'\n（打完資料請直接列印或另存，7 天後自動清除，不影響正式版本檔）'); }, 1500);
-    },'json').always(()=>$b.prop('disabled',false));
+    window.location.href = API+'?action=open_online&version_id='+$(this).data('ver');
+    if(!onlineHintShown){
+      onlineHintShown = true;
+      setTimeout(()=>{ alert('已下載「工作副本」檔案（左下角/下載列）。\n開啟後若出現黃色「受保護的檢視」，按【啟用編輯】即可打字。\n打完資料直接列印或另存即可——動的是下載的副本，不影響系統內的正式版本檔。'); }, 800);
+    }
   });
   let META = {departments:[],positions:[],tags:[],users:[]};
   let DOCS = [], FILTERED = [], activeTagId = 0, curPage = 1, activeParentId = 0, activeParentNo = '';
@@ -703,13 +698,13 @@ $(function(){
       let rel = '';
       if(d.parent_doc_id) rel += `<a href="#" class="rel-parent" data-kw="${esc(d.parent_doc_no)}" title="${esc(d.parent_doc_name)}"><i class="fa fa-level-up"></i> ${esc(d.parent_doc_no)}</a>`;
       if(parseInt(d.children_count)>0) rel += ` <a href="#" class="rel-children label label-success" data-id="${d.id}" data-no="${esc(d.doc_no)}" title="展開此文件底下的表單">表單 ×${d.children_count}</a>`;
-      // 文件名稱點擊：有線上開檔權限且為 Office 檔 → 開工作副本進 Excel/Word 直接打字；
+      // 文件名稱點擊：有線上開檔權限且為 Office 檔 → 下載工作副本進 Excel/Word 直接打字；
       // 否則 → PDF 線上預覽（後端 download 均另驗權限）
       let nameCell = esc(d.doc_name);
       if(!d.current_file_name && curVer) nameCell += ' <span class="label label-default" title="補登資料，尚未上傳文件檔">無檔</span>';
       if(curVer && d.current_file_name){
         if(canEO && isOffice){
-          nameCell = `<a href="#" class="op-online" data-ver="${curVer}" title="開啟工作副本進 Excel/Word 直接打字/列印（不動正式版本檔）">${esc(d.doc_name)} <i class="fa fa-pencil text-muted" style="font-size:11px;"></i></a>`;
+          nameCell = `<a href="#" class="op-online" data-ver="${curVer}" title="下載工作副本，開啟後按「啟用編輯」即可打字/列印（不動正式版本檔）">${esc(d.doc_name)} <i class="fa fa-pencil text-muted" style="font-size:11px;"></i></a>`;
         } else {
           nameCell = `<a href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="線上預覽最新版（Office 檔自動轉 PDF，第一次需數秒轉檔）">${esc(d.doc_name)}</a>`;
         }
@@ -1218,7 +1213,7 @@ $(function(){
   $('#btnSettings').on('click', function(){
     $.getJSON(API+'?action=get_settings', r=>{
       const d=r.data;
-      $('#set_nas_dir').val(d.nas_dir); $('#set_workcopy_dir').val(d.workcopy_dir||'');
+      $('#set_nas_dir').val(d.nas_dir);
       $('#set_owner').val(d.owner_user_id||''); $('#set_deputy').val(d.deputy_user_id||'');
       if(d.apply_form_tpl){ $('#tplStatus').text('已上傳'); $('#tplDownload').show(); } else { $('#tplStatus').text('未上傳'); $('#tplDownload').hide(); }
       renderDeptCodes();
@@ -1227,7 +1222,7 @@ $(function(){
   });
   $('#tplDownload').on('click', function(e){ e.preventDefault(); window.location=API+'?action=download_template'; });
   $('#settingsSave').on('click', function(){
-    $.post(API+'?action=save_settings', {nas_dir:$('#set_nas_dir').val(),workcopy_dir:$('#set_workcopy_dir').val(),owner_user_id:$('#set_owner').val(),deputy_user_id:$('#set_deputy').val()}, r=>{
+    $.post(API+'?action=save_settings', {nas_dir:$('#set_nas_dir').val(),owner_user_id:$('#set_owner').val(),deputy_user_id:$('#set_deputy').val()}, r=>{
       if(r.status==='success'){ alert('已儲存'); $('#settingsModal').modal('hide'); loadDocs(); } else alert(r.message);
     },'json');
   });
