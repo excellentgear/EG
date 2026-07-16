@@ -100,6 +100,37 @@ try {
     if ($v !== false && (int)$v > 0) $imgeditWorkfileMax = (int)$v;
 } catch (Exception $e) {}
 
+// ── AS9100 文件管理：檔案儲存根路徑（system_settings: as_doc_nas_dir）──
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_asdoc_nas_dir'])) {
+    if (!$canEdit) {
+        $msg = '無權限修改 AS 文件儲存路徑';
+    } else {
+        $newDir = rtrim(trim($_POST['asdoc_nas_dir'] ?? ''), '\\/');
+        if ($newDir === '') {
+            $msg = '路徑不可為空';
+        } else {
+            try {
+                $conn_pdo->beginTransaction();
+                $st = $conn_pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by)
+                                          VALUES ('as_doc_nas_dir', ?, ?, ?)
+                                          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                                              updated_by_id = VALUES(updated_by_id), updated_by = VALUES(updated_by)");
+                $st->execute([$newDir, (int)$currentUser['id'], $_SESSION['userName'] ?? '']);
+                $conn_pdo->commit();
+                $msg = 'AS 文件儲存路徑已更新' . (is_dir($newDir) ? '' : '（提醒：目前伺服器無法存取此路徑，請確認 NAS 權限）');
+            } catch (Exception $e) {
+                if ($conn_pdo->inTransaction()) $conn_pdo->rollBack();
+                $msg = '儲存失敗：' . $e->getMessage();
+            }
+        }
+    }
+}
+$asdocNasDir = '';
+try {
+    $v = $conn_pdo->query("SELECT setting_value FROM system_settings WHERE setting_key = 'as_doc_nas_dir'")->fetchColumn();
+    if ($v) $asdocNasDir = $v;
+} catch (Exception $e) {}
+
 //人員
 $conn = new DBConnection();
 $admins = $conn->getAll("
@@ -283,6 +314,8 @@ $_drawRoles     = [];  $_userDrawRoles   = [];
 $_bomRenRoles   = [];  $_userBomRenRoles = [];
 $_oreadyRoles   = [];  $_userOreadyRoles = [];
 $_bomtrkRoles   = [];  $_userBomtrkRoles = [];
+$_asdocRoles    = [];  $_userAsdocRoles  = [];
+$_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
 // 各模組角色清單（含系統角色 admin）
@@ -298,6 +331,7 @@ try {
     $st->execute(['bom_rename']); $_bomRenRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['oready']);    $_oreadyRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['bom_track']); $_bomtrkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['as_doc']);    $_asdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -346,13 +380,37 @@ try {
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userBomtrkRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
+    $st->execute(['as_doc']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userAsdocRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+} catch(Exception $_e) {}
+
+// ── 職稱角色指派資料（position_roles，AS9100 文件管理用）──────────────────
+try {
+    $_asdocPositions = $conn_pdo->query("
+        SELECT p.id, p.name,
+               GROUP_CONCAT(DISTINCT d.name ORDER BY d.sort_order SEPARATOR '、') AS departments
+        FROM position p
+        LEFT JOIN department_position dp ON dp.position_id = p.id
+        LEFT JOIN department d ON d.id = dp.department_id
+        GROUP BY p.id, p.name
+        ORDER BY p.sort_order ASC, p.id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $st = $conn_pdo->prepare("
+        SELECT pr.position_id, r.role_id, r.role_name
+        FROM position_roles pr JOIN roles r ON r.role_id = pr.role_id
+        WHERE r.module = ?");
+    $st->execute(['as_doc']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_asdocPosRoles[$_r['position_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
 } catch(Exception $_e) {}
 
 // 角色指派區塊（依模組共用渲染）
 if (!function_exists('eg_render_role_section')) {
     function eg_render_role_section($prefix, $module, $title, $icon, $color, $hint, $roles, $userRoles, $admins, $depts, $canEdit) {
         ?>
-        <div class="row" style="margin-top:20px;">
+        <div class="row" style="margin-top:20px;" id="<?= $prefix ?>-role-section">
             <div class="col-md-12">
                 <div class="x_panel">
                     <div class="x_title">
@@ -503,7 +561,48 @@ $_quotDepts = array_keys($_deptSet);
             <div class="right_col" role="main">
                 <div class="">
 
+                    <!-- ══ 快速切換：跳至各設定區塊 ══ -->
+                    <div class="row" id="quick-nav-block">
+                        <div class="col-md-12">
+                            <div class="x_panel" style="padding:8px 12px;margin-bottom:10px;">
+                                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                                    <strong style="margin-right:4px;"><i class="fa fa-compass"></i> 快速切換：</strong>
+                                    <?php
+                                    $_navItems = [
+                                        'perm-matrix-section'    => '人員權限設定',
+                                        'quot-role-section'      => '報價單',
+                                        'notice-role-section'    => '公告/通知',
+                                        'home-role-section'      => '首頁設定',
+                                        'qc-role-section'        => 'QC檢驗',
+                                        'car-role-section'       => '異常矯正單',
+                                        'imgedit-role-section'   => '批圖編輯器',
+                                        'drawren-role-section'   => '圖面改檔名',
+                                        'bomren-role-section'    => '叫料改檔名',
+                                        'oready-role-section'    => '生管BOM',
+                                        'bomtrk-role-section'    => 'BOM追蹤',
+                                        'asdoc-role-section'     => 'AS文件管理',
+                                        'asdoc-pos-role-section' => 'AS文件·職稱權限',
+                                        'imgedit-label-dir-section' => '批圖標籤路徑',
+                                        'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
+                                    ];
+                                    foreach ($_navItems as $_nid => $_nlabel): ?>
+                                        <a href="#<?= $_nid ?>" class="btn btn-xs btn-default quick-nav-link" data-target="<?= $_nid ?>"><?= htmlspecialchars($_nlabel) ?></a>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- ／快速切換 ══ -->
+
+                    <?php if (!empty($msg)): ?>
                     <div class="row">
+                        <div class="col-md-12">
+                            <div class="alert alert-info" style="margin-bottom:10px;"><i class="fa fa-info-circle"></i> <?= htmlspecialchars($msg) ?></div>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+
+                    <div class="row" id="perm-matrix-section">
 
                         <div class="col-md-12 col-sm-12 col-xs-12">
                             <div class="x_panel">
@@ -821,10 +920,81 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('bomtrk', 'bom_track', 'BOM 追蹤', 'fa-crosshairs', '#8e44ad',
                         '為每位使用者指派 BOM 追蹤功能的使用權限。此功能不分細部操作，只要指派角色即可使用。',
                         $_bomtrkRoles, $_userBomtrkRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('asdoc', 'as_doc', 'AS9100 文件管理', 'fa-folder-open-o', '#c0392b',
+                        '為每位使用者指派 AS9100 文件管理頁面的操作角色：<strong>文件檢閱</strong>（檢視/下載）、<strong>文件管理</strong>（新增/改版/編輯）、<strong>文件刪除</strong>、<strong>文管設定</strong>（標籤、各文件開啟權限、NAS路徑、AS負責人、申請單範本）。亦可於下方「職稱權限」直接指派給整個職稱。',
+                        $_asdocRoles, $_userAsdocRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 
+                    <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->
+                    <div class="row" style="margin-top:20px;" id="asdoc-pos-role-section">
+                        <div class="col-md-12">
+                            <div class="x_panel">
+                                <div class="x_title">
+                                    <h2><i class="fa fa-sitemap" style="color:#c0392b;margin-right:7px;"></i>AS9100 文件管理 <small>職稱權限指派（該職稱所有人自動擁有）</small></h2>
+                                    <ul class="nav navbar-right panel_toolbox"><li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li></ul>
+                                    <div class="clearfix"></div>
+                                </div>
+                                <div class="x_content">
+                                    <p style="font-size:12px;color:#888;margin-bottom:12px;">
+                                        <i class="fa fa-info-circle"></i>
+                                        指派角色給「職稱」後，<strong>所有擁有該職稱（含兼任）的在職人員</strong>自動獲得該角色功能，之後到職/調職者也自動生效，不必逐一指派。
+                                        個人指派（上方區塊）與職稱指派可並用，權限取聯集。系統角色「管理員」不可指派給職稱。
+                                    </p>
+                                    <?php $_asdocAssignableRoles = array_values(array_filter($_asdocRoles, function($r){ return (int)$r['is_system'] === 0; })); ?>
+                                    <table class="table table-striped table-bordered table-condensed" style="font-size:13px;">
+                                        <thead style="background:#f8f9fa;">
+                                            <tr>
+                                                <th style="width:140px;">職稱</th>
+                                                <th>綁定部門</th>
+                                                <th>已指派角色</th>
+                                                <?php if ($canEdit): ?><th style="width:220px;">新增角色</th><?php endif; ?>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="asdocpos-role-tbody">
+                                        <?php foreach ($_asdocPositions as $_pos):
+                                            $_assigned = $_asdocPosRoles[$_pos['id']] ?? [];
+                                        ?>
+                                            <tr>
+                                                <td style="font-weight:600;"><?= htmlspecialchars($_pos['name']) ?></td>
+                                                <td style="color:#666;font-size:12px;"><?= htmlspecialchars($_pos['departments'] ?? '') ?: '—' ?></td>
+                                                <td id="asdocpos-tags-<?= $_pos['id'] ?>">
+                                                    <?php if (empty($_assigned)): ?>
+                                                        <span class="text-muted" style="font-size:12px;">（未指派）</span>
+                                                    <?php else: foreach ($_assigned as $_ar): ?>
+                                                        <span class="label label-primary" style="margin-right:4px;font-size:12px;padding:3px 7px;display:inline-block;">
+                                                            <?= htmlspecialchars($_ar['role_name']) ?>
+                                                            <?php if ($canEdit): ?>
+                                                                <a href="#" onclick="posRoleRemove(<?= $_pos['id'] ?>,<?= $_ar['role_id'] ?>);return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除">×</a>
+                                                            <?php endif; ?>
+                                                        </span>
+                                                    <?php endforeach; endif; ?>
+                                                </td>
+                                                <?php if ($canEdit): ?>
+                                                <td>
+                                                    <div class="input-group input-group-sm">
+                                                        <select class="form-control" id="asdocpos-sel-<?= $_pos['id'] ?>">
+                                                            <option value="">— 選擇角色 —</option>
+                                                            <?php foreach ($_asdocAssignableRoles as $_role): ?><option value="<?= $_role['role_id'] ?>"><?= htmlspecialchars($_role['role_name']) ?></option><?php endforeach; ?>
+                                                        </select>
+                                                        <span class="input-group-btn">
+                                                            <button class="btn btn-primary btn-sm" type="button" onclick="posRoleAssign(<?= $_pos['id'] ?>)"><i class="fa fa-plus"></i> 指派</button>
+                                                        </span>
+                                                    </div>
+                                                </td>
+                                                <?php endif; ?>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- ／AS 職稱權限指派 ══ -->
+
                     <!-- ══ 批圖編輯器：標籤儲存路徑 ══ -->
-                    <div class="row" style="margin-top:20px;">
+                    <div class="row" style="margin-top:20px;" id="imgedit-label-dir-section">
                         <div class="col-md-12">
                             <div class="x_panel">
                                 <div class="x_title">
@@ -886,6 +1056,42 @@ $_quotDepts = array_keys($_deptSet);
                         </div>
                     </div>
                     <!-- ／工作檔保留上限 ══ -->
+
+                    <!-- ══ AS9100 文件管理：檔案儲存根路徑 ══ -->
+                    <div class="row" style="margin-top:20px;" id="asdoc-nas-dir-section">
+                        <div class="col-md-12">
+                            <div class="x_panel">
+                                <div class="x_title">
+                                    <h2><i class="fa fa-folder-open" style="color:#c0392b;margin-right:7px;"></i>AS9100 文件管理 <small>檔案儲存根路徑（NAS）</small></h2>
+                                    <ul class="nav navbar-right panel_toolbox"><li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li></ul>
+                                    <div class="clearfix"></div>
+                                </div>
+                                <div class="x_content">
+                                    <p style="font-size:12px;color:#888;">
+                                        AS9100 文件（程序書/表單各版本檔案與制修申請單）實體存放位置。子資料夾自動分層：<code>docs\文件ID</code>＝各文件、<code>_template</code>＝申請單範本。
+                                        資料庫只存檔名，完整路徑於讀取時以此設定即時組出；修改路徑後<strong>既有檔案不會自動搬移</strong>，請先將舊資料夾整個複製到新位置再儲存。
+                                    </p>
+                                    <form method="post" style="display:flex;gap:8px;align-items:center;max-width:760px;">
+                                        <input type="text" name="asdoc_nas_dir" class="form-control input-sm" style="flex:1;font-family:Consolas,monospace;"
+                                               value="<?= htmlspecialchars($asdocNasDir, ENT_QUOTES, 'UTF-8') ?>" placeholder="\\excellentnas\as9100\ERP測試" <?= $canEdit ? '' : 'disabled' ?>>
+                                        <?php if ($canEdit): ?>
+                                        <button type="submit" name="save_asdoc_nas_dir" value="1" class="btn btn-primary btn-sm"
+                                                onclick="return confirm('確定更新 AS 文件儲存路徑？\n既有檔案不會自動搬移，請確認新位置已放妥檔案（docs 資料夾與 _template 資料夾整個複製過去）。');">
+                                            <i class="fa fa-save"></i> 儲存
+                                        </button>
+                                        <?php endif; ?>
+                                    </form>
+                                    <?php if (is_string($asdocNasDir) && $asdocNasDir !== ''): ?>
+                                    <p style="font-size:11.5px;margin-top:6px;color:<?= is_dir($asdocNasDir) ? '#26b99a' : '#e74c3c' ?>;">
+                                        <i class="fa <?= is_dir($asdocNasDir) ? 'fa-check-circle' : 'fa-exclamation-triangle' ?>"></i>
+                                        <?= is_dir($asdocNasDir) ? '目前路徑可正常存取' : '目前伺服器無法存取此路徑（NAS 離線或權限不足），上傳/下載文件會失敗' ?>
+                                    </p>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- ／AS 文件儲存路徑 ══ -->
 
                     <!-- ／角色指派 ══ -->
 
@@ -1271,11 +1477,12 @@ $_quotDepts = array_keys($_deptSet);
                 }
             );
 
-            // 部門篩選函數（供 select onchange 呼叫）
-            function filterPermTableByDept() {
+            // 部門篩選函數（供 select 的 inline onchange 呼叫，必須掛在 window 上，
+            // 否則在 ready 閉包內宣告的函式從 HTML 屬性找不到 → 篩選無作用）
+            window.filterPermTableByDept = function() {
                 filterDeptValue = $('#dept-filter-select').val();
                 $('#datatable-buttons').DataTable().draw();
-            }
+            };
 
             $('#btn-show-all').click(function() {
                 filterUnconfigured = false;
@@ -1326,11 +1533,70 @@ $_quotDepts = array_keys($_deptSet);
 
         // 頁面載入後顯示各區塊總人數
         $(document).ready(function() {
-            ['quot', 'notice', 'oready', 'bomtrk'].forEach(function(p) {
+            ['quot', 'notice', 'oready', 'bomtrk', 'asdoc'].forEach(function(p) {
                 var total = $('#' + p + '-role-tbody tr').length;
                 if (total > 0) $('#' + p + '-filter-count').text('共 ' + total + ' 人');
             });
+
+            // 快速切換：平滑捲動至各設定區塊（避開頂部導覽列）
+            $(document).on('click', '.quick-nav-link', function(e) {
+                e.preventDefault();
+                var target = $('#' + $(this).data('target'));
+                if (target.length) {
+                    $('html, body').stop().animate({ scrollTop: target.offset().top - 60 }, 500);
+                }
+            });
         });
+
+        // ══ AS9100 文件管理：職稱角色指派 ══
+        function posRoleAssign(positionId) {
+            var roleId = $('#asdocpos-sel-' + positionId).val();
+            if (!roleId) { alert('請先選擇角色'); return; }
+            var $btn = $('#asdocpos-sel-' + positionId).closest('.input-group').find('button');
+            $btn.prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i>');
+            $.post(ROLES_API, { action:'assign_position_role', position_id:positionId, role_id:roleId })
+            .done(function(res) {
+                if (!res.success) { alert('指派失敗：' + (res.message || '未知錯誤')); return; }
+                posRoleReloadRow(positionId);
+                $('#asdocpos-sel-' + positionId).val('');
+            })
+            .fail(function(xhr) { alert('連線失敗（' + xhr.status + '）：' + xhr.responseText.substring(0, 200)); })
+            .always(function() { $btn.prop('disabled', false).html('<i class="fa fa-plus"></i> 指派'); });
+        }
+
+        function posRoleRemove(positionId, roleId) {
+            if (!confirm('確認移除此職稱的這個角色？\n該職稱所有人員將同時失去此角色的功能（個人另有指派者不受影響）。')) return;
+            $.post(ROLES_API, { action:'remove_position_role', position_id:positionId, role_id:roleId })
+            .done(function(res) {
+                if (!res.success) { alert('移除失敗：' + (res.message || '未知錯誤')); return; }
+                posRoleReloadRow(positionId);
+            })
+            .fail(function(xhr) { alert('連線失敗（' + xhr.status + '）：' + xhr.responseText.substring(0, 200)); });
+        }
+
+        function posRoleReloadRow(positionId) {
+            $.get(ROLES_API, { action:'get_positions', module:'as_doc' })
+            .done(function(res) {
+                if (!res.success) return;
+                var pos = res.data.find(function(p){ return p.id == positionId; });
+                if (!pos) return;
+                var $cell = $('#asdocpos-tags-' + positionId);
+                if (!pos.roles || !pos.roles.length) {
+                    $cell.html('<span class="text-muted" style="font-size:12px;">（未指派）</span>');
+                    return;
+                }
+                var html = '';
+                pos.roles.forEach(function(r) {
+                    html += '<span class="label label-primary" style="margin-right:4px;font-size:12px;padding:3px 7px;display:inline-block;">';
+                    html += r.role_name;
+                    html += ' <a href="#" onclick="posRoleRemove(' + positionId + ',' + r.role_id + ');return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除此角色">&times;</a>';
+                    html += '</span>';
+                });
+                $cell.html(html);
+            })
+            .fail(function(xhr) { console.error('posRoleReloadRow failed:', xhr.responseText); });
+        }
+        // ══════════════════════════════════════════════════════════════
 
         function roleAssign(p, module, userId) {
             var roleId = $('#' + p + '-sel-' + userId).val();
