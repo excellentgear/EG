@@ -69,6 +69,8 @@ $asCaps = [
     'settings' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_settings', $asFeatures, true),
     'edit_online' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_edit_online', $asFeatures, true),
     'download' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_download', $asFeatures, true),
+    // 免附件補登：只認明確功能碼，管理員不自動豁免（維持改版必附申請單的管控）
+    'no_attach' => in_array('asdoc_no_attach', $asFeatures, true),
 ];
 
 if (!$asCaps['view']) {
@@ -559,6 +561,7 @@ $(function(){
   const canS = !!window.asPerm.settings;
   const canEO = !!window.asPerm.edit_online;
   const canDL = !!window.asPerm.download;
+  const canNA = !!window.asPerm.no_attach; // 免附件補登
 
   // 線上開檔：建立工作副本後以 ms-office 協定開啟本機 Excel/Word
   $(document).on('click','.op-online', function(e){
@@ -575,13 +578,44 @@ $(function(){
 
   function esc(t){ if(t===null||t===undefined) return ''; return String(t).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
 
+  // ══ 輸入欄位通用互動（ai-rules/08 三規則）══
+  // 1. Enter 逐欄前進、最後一欄送出（textarea 維持換行）
+  $(document).on('keydown', 'input:not([type=file]):not([type=checkbox]):not([type=radio]), select', function(e){
+    if(e.key !== 'Enter') return;
+    e.preventDefault();
+    if(this.id === 'searchKw'){ loadDocs(); return; } // 搜尋欄 Enter＝執行搜尋
+    const $scope = $(this).closest('form, .modal-content, .x_content');
+    const fields = $scope.find('input:visible:enabled:not([type=file]):not([type=checkbox]):not([type=radio]), select:visible:enabled, textarea:visible:enabled').toArray();
+    const idx = fields.indexOf(this);
+    if(idx >= 0 && idx < fields.length - 1){
+      fields[idx+1].focus();
+    } else {
+      // 最後一欄：送出表單（存檔）
+      const $form = $(this).closest('form');
+      if($form.length){ $form.trigger('submit'); }
+      else { $scope.find('button.btn-primary:visible').last().trigger('click'); }
+    }
+  });
+  // 2. 雙擊清空（有值才動作；篩選欄雙擊已各自綁定連動重載）
+  $(document).on('dblclick', 'input[type=text], input[type=date], input[type=number], textarea', function(){
+    if($(this).val() !== ''){ $(this).val('').trigger('input').trigger('change'); }
+  });
+  // 3. 聚焦自動全選（方便直接覆寫）
+  $(document).on('focus', 'input[type=text], input[type=number], input[type=date]', function(){
+    const el = this;
+    if($(el).val() !== '') setTimeout(()=>{ try{ el.select(); }catch(_e){} }, 0);
+  });
+
   function loadMeta(cb){
     $.getJSON(API+'?action=meta', r=>{
       if(r.status!=='success'){ alert('載入基礎資料失敗'); return; }
       META = r;
-      // 部門下拉
-      const dOpts = '<option value="">全部部門</option>' + META.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');
+      // 部門下拉（列表篩選只列「有文件」的部門；保留目前選取值）
+      const withDocs = META.depts_with_docs||[];
+      const fVal = $('#filterDept').val();
+      const dOpts = '<option value="">全部部門</option>' + META.departments.filter(d=>withDocs.includes(parseInt(d.id))).map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');
       $('#filterDept').html(dOpts);
+      if(fVal) $('#filterDept').val(fVal);
       $('#doc_department_id').html('<option value="">跨部門 / 未指定</option>' + META.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
       // 使用者下拉（負責人/代理人）——重建時保留目前選取值，避免設定跳掉
       const uOpts = META.users.map(u=>`<option value="${u.id}">${esc(u.user_cname)}</option>`).join('');
@@ -665,7 +699,8 @@ $(function(){
       // 文件名稱點擊：有線上開檔權限且為 Office 檔 → 開工作副本進 Excel/Word 直接打字；
       // 否則 → PDF 線上預覽（後端 download 均另驗權限）
       let nameCell = esc(d.doc_name);
-      if(curVer){
+      if(!d.current_file_name && curVer) nameCell += ' <span class="label label-default" title="補登資料，尚未上傳文件檔">無檔</span>';
+      if(curVer && d.current_file_name){
         if(canEO && isOffice){
           nameCell = `<a href="#" class="op-online" data-ver="${curVer}" title="開啟工作副本進 Excel/Word 直接打字/列印（不動正式版本檔）">${esc(d.doc_name)} <i class="fa fa-pencil text-muted" style="font-size:11px;"></i></a>`;
         } else {
@@ -674,7 +709,7 @@ $(function(){
       }
       ops += `<button class="btn btn-xs btn-default op-hist" data-id="${d.id}" data-name="${esc(d.doc_name)}">歷史版本</button> `;
       if(curVer && canEO && isOffice) ops += `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="PDF 預覽">預覽</a> `;
-      if(curVer && canDL) ops += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}" title="下載原檔（需下載權限）">下載</a> `;
+      if(curVer && canDL && d.current_file_name) ops += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}" title="下載原檔（需下載權限）">下載</a> `;
       if(canU){
         ops += `<button class="btn btn-xs btn-warning op-ver" data-id="${d.id}" data-name="${esc(d.doc_name)}">改版</button> `;
         ops += `<button class="btn btn-xs btn-default op-edit" data-id="${d.id}">編輯</button> `;
@@ -777,8 +812,9 @@ $(function(){
   $('#btnAddDoc').on('click', function(){
     $('#docForm')[0].reset(); $('#doc_id').val(''); $('#doc_tag_ids').val('');
     $('#docModalTitle').text('新增文件'); $('#firstVersionBlock').show();
-    $('#firstVersionTitle').text('首版資訊'); $('#firstVersionFiles').show();
-    $('#doc_file').prop('required',true); $('#doc_version').prop('required',true);
+    $('#firstVersionTitle').text('首版資訊' + (canNA ? '（你有補登免附件權限，文件檔可不附）' : ''));
+    $('#firstVersionFiles').show();
+    $('#doc_file').prop('required', !canNA); $('#doc_version').prop('required',true);
     renderDocTagPicker([]);
     fillParentSelect(0, '');
     $('#doc_code_sel').hide().empty();
@@ -829,6 +865,11 @@ $(function(){
     $('#versionForm')[0].reset();
     $('#ver_doc_id').val($(this).data('id'));
     $('#ver_doc_name').text($(this).data('name'));
+    // 免附件補登權限：新版文件檔與申請單皆可不附（後端同樣豁免）
+    $('#ver_file').prop('required', !canNA);
+    $('#ver_apply_form').prop('required', !canNA);
+    $('#naHint').remove();
+    if(canNA) $('#versionModal .apply-alert').after('<div id="naHint" class="alert alert-info" style="padding:6px 10px;">你有「補登免附件」權限：補舊資料時，新版文件檔與申請單皆可暫不上傳。</div>');
     $('#versionModal').modal('show');
   });
   $('#dlTplBtn').on('click', function(e){ e.preventDefault(); window.location = API+'?action=download_template'; });
@@ -848,8 +889,11 @@ $(function(){
       if(r.status!=='success'){ alert(r.message); return; }
       const tb=$('#historyBody').empty();
       (r.data.versions||[]).forEach(v=>{
-        let dl = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
-        if(canDL) dl += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${v.id}">下載</a>`;
+        let dl = '<span class="text-muted">無檔（補登）</span>';
+        if(v.file_name){
+          dl = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
+          if(canDL) dl += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${v.id}">下載</a>`;
+        }
         let af = '<span class="text-muted">無</span>';
         if(v.apply_form_file_name){
           af = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=apply&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
@@ -1076,7 +1120,8 @@ $(function(){
     {code:'asdoc_download',    label:'下載原檔'},
     {code:'asdoc_delete',      label:'刪除/還原'},
     {code:'asdoc_settings',    label:'文管設定'},
-    {code:'asdoc_edit_online', label:'線上開檔'}
+    {code:'asdoc_edit_online', label:'線上開檔'},
+    {code:'asdoc_no_attach',   label:'免附件補登'}
   ];
   let AS_ROLES = [];
 

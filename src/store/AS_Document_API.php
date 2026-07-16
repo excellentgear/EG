@@ -63,6 +63,10 @@ function asPagePerm(PDO $db, int $uid): string {
 }
 $asPagePerm = $currentUserId ? asPagePerm($db, $currentUserId) : '';
 
+// 免附件補登（asdoc_no_attach）：僅認「明確勾選的功能碼」，管理員不自動豁免——
+// 避免正式運作時「改版必附申請單」管控被默默弱化；補舊資料時把角色勾給自己，用完移除。
+$asNoAttach = in_array('asdoc_no_attach', $asFeatures, true);
+
 /** 能力判斷：view/create/update/delete 走「頁面ACRUD OR 角色功能碼」；settings/edit_online 只認 A 或對應功能碼 */
 function asCan(string $what): bool {
     global $asFeatures, $asIsRoleAdmin, $asPagePerm;
@@ -237,7 +241,9 @@ case 'meta':
                              AND COALESCE(doc_type,'') != '表單'
                              AND COALESCE(doc_level,'') != '四階'
                            ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
-    jout(['status'=>'success','departments'=>$depts,'dept_codes'=>$deptCodes,'positions'=>$poss,'tags'=>$tags,'users'=>$users,'parents'=>$parents]);
+    // 有文件的部門（供列表篩選下拉，只列出有資料者）
+    $deptsWithDocs = $db->query("SELECT DISTINCT department_id FROM as_document WHERE is_deleted=0 AND department_id IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
+    jout(['status'=>'success','departments'=>$depts,'dept_codes'=>$deptCodes,'depts_with_docs'=>array_map('intval',$deptsWithDocs),'positions'=>$poss,'tags'=>$tags,'users'=>$users,'parents'=>$parents]);
 
 // ══════════════ 文件清單（搜尋 / 篩選） ══════════════
 case 'list_documents':
@@ -332,10 +338,14 @@ case 'create_document':
     $dup->execute([$doc_no]);
     if ($dup->fetchColumn() > 0) jout(['status'=>'error','message'=>"文件編號 {$doc_no} 已存在"]);
     if ($pErr = asValidateParent($db, $parent)) jout(['status'=>'error','message'=>$pErr]);
-    if (!isset($_FILES['file']) || $_FILES['file']['error']!==UPLOAD_ERR_OK)
-        jout(['status'=>'error','message'=>'請上傳文件檔']);
-    $ext = asSafeExt($_FILES['file']['name']);
-    if (!$ext) jout(['status'=>'error','message'=>'不允許此文件類型']);
+    $hasFile = isset($_FILES['file']) && $_FILES['file']['error']===UPLOAD_ERR_OK;
+    if (!$hasFile && !$asNoAttach)
+        jout(['status'=>'error','message'=>'請上傳文件檔（如需補登舊資料免附件，請先取得「補登免附件」角色）']);
+    $ext = null;
+    if ($hasFile) {
+        $ext = asSafeExt($_FILES['file']['name']);
+        if (!$ext) jout(['status'=>'error','message'=>'不允許此文件類型']);
+    }
     if (asDocRoot($db)==='') jout(['status'=>'error','message'=>'尚未設定 NAS 儲存路徑（請至系統設定）']);
 
     // 申請單（首版可選）
@@ -351,11 +361,14 @@ case 'create_document':
         $docId = (int)$db->lastInsertId();
 
         $dir = asDocDir($db, $docId);
-        if (!is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
+        if (($hasFile || $hasApply) && !is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
 
-        $fname = asMakeName($ext);
-        if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$fname)) throw new Exception('文件寫入失敗');
-        $orig = basename($_FILES['file']['name']);
+        $fname = null; $orig = null;
+        if ($hasFile) {
+            $fname = asMakeName($ext);
+            if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$fname)) throw new Exception('文件寫入失敗');
+            $orig = basename($_FILES['file']['name']);
+        }
 
         $applyName = null; $applyOrig = null;
         if ($hasApply) {
@@ -398,29 +411,41 @@ case 'add_version':
     $doc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
 
-    if (!isset($_FILES['file']) || $_FILES['file']['error']!==UPLOAD_ERR_OK)
+    $hasFile  = isset($_FILES['file']) && $_FILES['file']['error']===UPLOAD_ERR_OK;
+    $hasApply = isset($_FILES['apply_form']) && $_FILES['apply_form']['error']===UPLOAD_ERR_OK;
+    if (!$hasFile && !$asNoAttach)
         jout(['status'=>'error','message'=>'請上傳新版文件檔']);
-    $ext = asSafeExt($_FILES['file']['name']);
-    if (!$ext) jout(['status'=>'error','message'=>'不允許此文件類型']);
-
-    // 改版一律需附「文件制修申請單(附件一)」
-    if (!isset($_FILES['apply_form']) || $_FILES['apply_form']['error']!==UPLOAD_ERR_OK)
+    // 改版一律需附「文件制修申請單(附件一)」；「補登免附件」角色豁免（補舊資料用）
+    if (!$hasApply && !$asNoAttach)
         jout(['status'=>'error','message'=>'改版必須一併上傳「文件制修申請單」(附件一)']);
-    $applyExt = asSafeExt($_FILES['apply_form']['name']);
-    if (!$applyExt) jout(['status'=>'error','message'=>'申請單檔案類型不允許']);
+    $ext = null; $applyExt = null;
+    if ($hasFile) {
+        $ext = asSafeExt($_FILES['file']['name']);
+        if (!$ext) jout(['status'=>'error','message'=>'不允許此文件類型']);
+    }
+    if ($hasApply) {
+        $applyExt = asSafeExt($_FILES['apply_form']['name']);
+        if (!$applyExt) jout(['status'=>'error','message'=>'申請單檔案類型不允許']);
+    }
 
     $db->beginTransaction();
     try {
         $dir = asDocDir($db, $docId);
-        if (!is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
+        if (($hasFile || $hasApply) && !is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
 
-        $fname = asMakeName($ext);
-        if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$fname)) throw new Exception('文件寫入失敗');
-        $orig = basename($_FILES['file']['name']);
+        $fname = null; $orig = null;
+        if ($hasFile) {
+            $fname = asMakeName($ext);
+            if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$fname)) throw new Exception('文件寫入失敗');
+            $orig = basename($_FILES['file']['name']);
+        }
 
-        $applyName = asMakeName($applyExt);
-        if (!move_uploaded_file($_FILES['apply_form']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$applyName)) throw new Exception('申請單寫入失敗');
-        $applyOrig = basename($_FILES['apply_form']['name']);
+        $applyName = null; $applyOrig = null;
+        if ($hasApply) {
+            $applyName = asMakeName($applyExt);
+            if (!move_uploaded_file($_FILES['apply_form']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$applyName)) throw new Exception('申請單寫入失敗');
+            $applyOrig = basename($_FILES['apply_form']['name']);
+        }
 
         // 舊版快照沿用主檔當下的階級/部門
         $db->prepare("INSERT INTO as_document_version
@@ -515,6 +540,7 @@ case 'download':
     $oname = ($which==='apply') ? ($v['apply_form_original_name'] ?: $v['apply_form_file_name'])
                                 : ($v['original_name'] ?: $v['file_name']);
     if ($which==='apply' && !$fname) { http_response_code(404); exit('此版本無申請單'); }
+    if (!$fname) { http_response_code(404); header('Content-Type: text/plain; charset=utf-8'); exit('此版本未上傳文件檔（補登資料，可用「改版」補上檔案）'); }
     // 線上預覽：Office 檔先轉 PDF 快取再 inline 串流
     if ($inline) {
         $fext = strtolower(pathinfo($fname, PATHINFO_EXTENSION));
