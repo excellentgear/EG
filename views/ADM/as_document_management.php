@@ -517,7 +517,8 @@ $(function(){
   const canEO = !!window.asPerm.edit_online;
 
   // 線上開檔：建立工作副本後以 ms-office 協定開啟本機 Excel/Word
-  $(document).on('click','.op-online', function(){
+  $(document).on('click','.op-online', function(e){
+    e.preventDefault();
     const $b=$(this); $b.prop('disabled',true);
     $.post(API+'?action=open_online',{version_id:$b.data('ver')}, r=>{
       if(r.status!=='success'){ alert(r.message||'開啟失敗'); return; }
@@ -611,14 +612,20 @@ $(function(){
       let rel = '';
       if(d.parent_doc_id) rel += `<a href="#" class="rel-parent" data-kw="${esc(d.parent_doc_no)}" title="${esc(d.parent_doc_name)}"><i class="fa fa-level-up"></i> ${esc(d.parent_doc_no)}</a>`;
       if(parseInt(d.children_count)>0) rel += ` <a href="#" class="rel-children label label-success" data-id="${d.id}" data-no="${esc(d.doc_no)}" title="展開此文件底下的表單">表單 ×${d.children_count}</a>`;
-      // 文件名稱：有最新版可點擊直接開啟（後端 download 另驗讀取權限）
-      const nameCell = curVer
-        ? `<a href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="線上開啟最新版（Excel/Word 自動轉PDF預覽，第一次開啟需數秒轉檔）">${esc(d.doc_name)}</a>`
-        : esc(d.doc_name);
+      // 文件名稱點擊：有線上開檔權限且為 Office 檔 → 開工作副本進 Excel/Word 直接打字；
+      // 否則 → PDF 線上預覽（後端 download 均另驗權限）
+      let nameCell = esc(d.doc_name);
+      if(curVer){
+        if(canEO && isOffice){
+          nameCell = `<a href="#" class="op-online" data-ver="${curVer}" title="開啟工作副本進 Excel/Word 直接打字/列印（不動正式版本檔）">${esc(d.doc_name)} <i class="fa fa-pencil text-muted" style="font-size:11px;"></i></a>`;
+        } else {
+          nameCell = `<a href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="線上預覽最新版（Office 檔自動轉 PDF，第一次需數秒轉檔）">${esc(d.doc_name)}</a>`;
+        }
+      }
       ops += `<button class="btn btn-xs btn-default op-hist" data-id="${d.id}" data-name="${esc(d.doc_name)}">歷史版本</button> `;
       const fext = (d.current_file_name||'').split('.').pop().toLowerCase();
       const isOffice = ['xls','xlsx','doc','docx','ppt','pptx'].includes(fext);
-      if(curVer && canEO && isOffice) ops += `<button class="btn btn-xs btn-success op-online" data-ver="${curVer}" title="開啟工作副本直接打字/列印（不動正式版本檔）"><i class="fa fa-pencil"></i> 線上開檔</button> `;
+      if(curVer && canEO && isOffice) ops += `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="PDF 預覽">預覽</a> `;
       if(curVer && canU) ops += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}" title="下載原檔（需修改權限）">下載</a> `;
       if(canU){
         ops += `<button class="btn btn-xs btn-warning op-ver" data-id="${d.id}" data-name="${esc(d.doc_name)}">改版</button> `;
