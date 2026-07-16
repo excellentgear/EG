@@ -2740,6 +2740,23 @@ function mkLabelText(str, fs, extra) {
         fontSize: fs, fontFamily: LABEL_FONT, fontWeight: 'bold', fill: __labelInk
     }, extra || {}));
 }
+/* 數值格文字：多行時第 2 行起自動縮小（公差慣例：基準值大字、上下公差小字）。
+   用 fabric 的 per-char styles 實作，仍是同一個文字物件，雙擊編輯/重建流程不受影響 */
+function mkValText(str, fs, extra) {
+    const t = mkLabelText(String(str), fs, extra);
+    const lines = String(str).split('\n');
+    if (lines.length > 1) {
+        const small = Math.max(10, Math.round(fs * 0.6));
+        const styles = {};
+        for (let li = 1; li < lines.length; li++) {
+            styles[li] = {};
+            for (let ci = 0; ci < lines[li].length; ci++) styles[li][ci] = { fontSize: small };
+        }
+        t.styles = styles;
+        t.initDimensions();
+    }
+    return t;
+}
 function makeLabelFromSpec(spec) {
     spec = JSON.parse(JSON.stringify(spec || {}));   // 表格空白格會就地補 vals/cellVals/body 預設值，先複製一份避免動到標籤庫共用的 spec
     __labelInk = spec.color || '#000000';
@@ -2789,7 +2806,7 @@ function makeLabelFromSpec(spec) {
         const titleT = mkLabelText(spec.title || '', fs, { specPath: 'title' });
         const th = fs * 1.7, rh = spec.rowH || fs * 2.8;
         if (cols && cols.length) {
-            const valTs = cols.map((c, i) => mkLabelText(String(spec.cellVals[i]), fs, { originX: 'center', originY: 'center', textAlign: 'center', specPath: 'cellVals.' + i }));
+            const valTs = cols.map((c, i) => mkValText(spec.cellVals[i], fs, { originX: 'center', originY: 'center', textAlign: 'center', specPath: 'cellVals.' + i }));
             const colW = Math.max(fs * 4, ...cols.map(c => mkLabelText(c, fs).width + pad * 2), ...valTs.map(t => t.width + pad * 2));
             const W = Math.max(titleT.width + pad * 2, colW * cols.length);
             const cw = W / cols.length;
@@ -2806,7 +2823,7 @@ function makeLabelFromSpec(spec) {
             });
         } else if (!rows.length) {
             // 標題＋空白大格（如 (  )粗滾、(  )精滾、(  )插齒）；大格雙擊可填數值
-            const bodyT = mkLabelText(String(spec.body), fs, { originX: 'center', originY: 'center', textAlign: 'center', specPath: 'body' });
+            const bodyT = mkValText(spec.body, fs, { originX: 'center', originY: 'center', textAlign: 'center', specPath: 'body' });
             const W = Math.max(titleT.width + pad * 2, fs * 6, bodyT.width + pad * 2);
             const bodyH = Math.max(spec.bodyH || fs * 3.4, bodyT.height + pad);
             items.push(new fabric.Rect({ left: 0, top: 0, width: W, height: th, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
@@ -2816,7 +2833,7 @@ function makeLabelFromSpec(spec) {
             bodyT.set({ left: W / 2, top: th + bodyH / 2 });
             items.push(bodyT);
         } else {
-            const valTs = rows.map((r, i) => mkLabelText(String(spec.vals[i]), fs, { originX: 'center', originY: 'center', textAlign: 'center', specPath: 'vals.' + i }));
+            const valTs = rows.map((r, i) => mkValText(spec.vals[i], fs, { originX: 'center', originY: 'center', textAlign: 'center', specPath: 'vals.' + i }));
             let col0 = Math.max(fs, ...rows.map(r => mkLabelText(r, fs).width)) + pad * 2;
             const col1Min = Math.max(spec.cellW || fs * 5.5, ...valTs.map(t => t.width + pad * 2));
             const rowH = Math.max(rh, ...valTs.map(t => t.height + pad));   // 多行數值（如上下公差）整列自動加高
@@ -4677,19 +4694,49 @@ function deleteSelection() {
 }
 
 /* ── Undo / Redo（JSON 快照） ──
-   快照＝整張畫布序列化（含底圖 dataURL），大圖時很重——改成 debounce 150ms 合併連續動作，
-   一連串操作只留最後一份快照，避免每個動作都當場凍結一次；undo/redo 前先 flush 未寫入的快照。 */
+   快照＝整張畫布序列化。debounce 150ms 合併連續動作；undo/redo 前先 flush 未寫入的快照。
+   穩定性關鍵：貼上的底圖是數 MB 的 base64 dataURL，若每份快照都內含一份，
+   每個動作都要同步 stringify 幾 MB 字串（畫面凍結），30 份快照更會撐爆分頁記憶體（整頁當掉）。
+   → dataURL 只存一份進 IMG_SRC_POOL 共用池，快照裡只放「__imgpool:索引」占位，
+     快照從數 MB 縮到幾 KB；還原時再換回原字串（同一個字串參照，不另占記憶體）。 */
 let undoStack = [], redoStack = [], restoring = false, pushTimer = null;
+const IMG_SRC_POOL = [];   // 本次開啟期間用過的大圖 dataURL，各存一份；快照/舊快照都可能引用，不做淘汰
+function snapWalk(node, fn) {
+    if (!node || typeof node !== 'object') return;
+    fn(node);
+    if (Array.isArray(node.objects)) node.objects.forEach(o => snapWalk(o, fn));
+    if (node.backgroundImage) snapWalk(node.backgroundImage, fn);
+    if (node.overlayImage) snapWalk(node.overlayImage, fn);
+}
+function snapPoolify(json) {   // 大 dataURL → 池索引占位（就地修改）
+    snapWalk(json, n => {
+        if (typeof n.src === 'string' && n.src.length > 2000 && n.src.slice(0, 5) === 'data:') {
+            let idx = IMG_SRC_POOL.indexOf(n.src);
+            if (idx === -1) { IMG_SRC_POOL.push(n.src); idx = IMG_SRC_POOL.length - 1; }
+            n.src = '__imgpool:' + idx;
+        }
+    });
+}
+function snapUnpoolify(json) {   // 池索引占位 → 原 dataURL（沒有占位的舊快照/工作檔原樣通過）
+    snapWalk(json, n => {
+        if (typeof n.src === 'string' && n.src.slice(0, 10) === '__imgpool:') {
+            const s = IMG_SRC_POOL[parseInt(n.src.slice(10), 10)];
+            if (s) n.src = s;
+        }
+    });
+}
 const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved'];
 function doPushState() {
     pushTimer = null;
     if (restoring) return;
     try {
-        const snap = JSON.stringify(canvas.toJSON(SNAP_PROPS));
+        const j = canvas.toJSON(SNAP_PROPS);
+        snapPoolify(j);   // 大圖 dataURL 抽進共用池，快照只剩幾 KB，stringify 不再凍結畫面
+        const snap = JSON.stringify(j);
         if (undoStack[undoStack.length - 1] === snap) return;   // 內容沒變就不疊快照
         undoStack.push(snap);
         redoStack = [];
-        // 上限用「總位元組」控管，不只份數：大圖每份快照可達數十MB，30份就足以撐爆分頁記憶體
+        // 上限用「總位元組」控管，不只份數（保險：載入工作檔的第一份快照仍是未池化的原始字串）
         let total = 0;
         for (let i = 0; i < undoStack.length; i++) total += undoStack[i].length;
         while ((undoStack.length > 30 || total > 120 * 1024 * 1024) && undoStack.length > 3) {
@@ -4709,7 +4756,9 @@ function flushPendingState() {
 function restoreState(json) {
     restoring = true;
     try {
-        canvas.loadFromJSON(json, restoreDone);
+        const j = (typeof json === 'string') ? JSON.parse(json) : json;
+        snapUnpoolify(j);   // 快照裡的池索引換回真正的 dataURL；未池化的舊格式原樣通過
+        canvas.loadFromJSON(j, restoreDone);
     } catch (e) {
         restoring = false;   // JSON 壞掉時 restoring 卡在 true 會讓之後所有快照永久靜默失效
         toast('還原失敗：資料格式有誤');
