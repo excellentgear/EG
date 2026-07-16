@@ -542,7 +542,7 @@ $(function(){
       if(parseInt(d.children_count)>0) rel += ` <a href="#" class="rel-children label label-success" data-id="${d.id}" data-no="${esc(d.doc_no)}" title="展開此文件底下的表單">表單 ×${d.children_count}</a>`;
       // 文件名稱：有最新版可點擊直接開啟（後端 download 另驗讀取權限）
       const nameCell = curVer
-        ? `<a href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="開啟最新版文件">${esc(d.doc_name)}</a>`
+        ? `<a href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="線上開啟最新版（Excel/Word 自動轉PDF預覽，第一次開啟需數秒轉檔）">${esc(d.doc_name)}</a>`
         : esc(d.doc_name);
       ops += `<button class="btn btn-xs btn-default op-hist" data-id="${d.id}" data-name="${esc(d.doc_name)}">歷史版本</button> `;
       if(curVer) ops += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}">下載</a> `;

@@ -125,6 +125,27 @@ function asStream(string $fullpath, string $downloadName, bool $inline = false):
     exit;
 }
 
+/**
+ * Office 檔線上預覽：轉成 PDF 快取後回傳快取路徑（失敗回 null）。
+ * 版本檔案不會變動（改版＝新檔），快取永久有效；共用 attachment_lib 的 LibreOffice 轉檔＋Chrome 備援。
+ */
+function asPreviewPdf(PDO $db, int $docId, string $fileName): ?string {
+    $dir = asDocDir($db, $docId);
+    $src = $dir . DIRECTORY_SEPARATOR . $fileName;
+    if (!is_file($src)) return null;
+    $cache = $dir . DIRECTORY_SEPARATOR . 'preview_' . pathinfo($fileName, PATHINFO_FILENAME) . '.pdf';
+    if (is_file($cache) && filesize($cache) > 0) return $cache;
+    require_once __DIR__ . '/../common/attachment_lib.php';
+    $tmpOut = rtrim(sys_get_temp_dir(), '\\/') . DIRECTORY_SEPARATOR . 'asdoc_prev_' . bin2hex(random_bytes(4));
+    @mkdir($tmpOut, 0775, true);
+    $pdf = eg_att_soffice_convert($src, $tmpOut);
+    if (!$pdf) {
+        $pdf = eg_att_fallback_convert($src, strtolower(pathinfo($fileName, PATHINFO_EXTENSION)), $tmpOut);
+    }
+    if ($pdf && @copy($pdf, $cache)) { @unlink($pdf); @rmdir($tmpOut); return $cache; }
+    return null;
+}
+
 $action = $_REQUEST['action'] ?? '';
 
 // 各 action 所需能力
@@ -429,12 +450,21 @@ case 'download':
     if (!$v) { http_response_code(404); exit('版本不存在'); }
     $dir = asDocDir($db, (int)$v['doc_id']);
     $inline = (($_GET['inline'] ?? '') === '1');
-    if ($which==='apply') {
-        if (!$v['apply_form_file_name']) { http_response_code(404); exit('此版本無申請單'); }
-        asStream($dir.DIRECTORY_SEPARATOR.$v['apply_form_file_name'], $v['apply_form_original_name'] ?: $v['apply_form_file_name'], $inline);
-    } else {
-        asStream($dir.DIRECTORY_SEPARATOR.$v['file_name'], $v['original_name'] ?: $v['file_name'], $inline);
+    $fname = ($which==='apply') ? $v['apply_form_file_name'] : $v['file_name'];
+    $oname = ($which==='apply') ? ($v['apply_form_original_name'] ?: $v['apply_form_file_name'])
+                                : ($v['original_name'] ?: $v['file_name']);
+    if ($which==='apply' && !$fname) { http_response_code(404); exit('此版本無申請單'); }
+    // 線上開啟：Office 檔先轉 PDF 快取再 inline 串流（轉檔失敗則落回原檔下載）
+    if ($inline) {
+        $fext = strtolower(pathinfo($fname, PATHINFO_EXTENSION));
+        if (in_array($fext, ['doc','docx','xls','xlsx','ppt','pptx','odt','ods'], true)) {
+            $cache = asPreviewPdf($db, (int)$v['doc_id'], $fname);
+            if ($cache) {
+                asStream($cache, preg_replace('/\.[^.]+$/', '', $oname) . '.pdf', true);
+            }
+        }
     }
+    asStream($dir.DIRECTORY_SEPARATOR.$fname, $oname, $inline);
     break;
 
 // ══════════════ 權限規則 ══════════════
