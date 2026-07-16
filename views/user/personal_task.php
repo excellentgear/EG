@@ -1,0 +1,937 @@
+<?php
+/**
+ * personal_task.php — 個人工作紀錄
+ * 每人只看得到自己的紀錄（含管理者也看不到他人內容；隱私由 API 層 WHERE user_id 把關）。
+ * 功能：狀態卡篩選(未完成/急件/暫停/已完成)、期限與急件紅底、進度流程(依序回報/拖移排序/範本)、
+ *       提醒(期限與各進度可設幾天/幾小時前，走推播不寫入公告)、CSV/PDF匯出(含表頭表尾設定)。
+ * 後端：src/store/PersonalTask_API.php ｜ 視覺設計比照 views/pm/bom_tracking.php(源自 NewOrder_Track222)
+ */
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+
+session_start();
+
+require_once __DIR__ . '/../../src/common/_config.php';
+require_once __DIR__ . '/../../src/common/DBConnection.php';
+require_once __DIR__ . '/../../src/common/role_features_helper.php';
+
+if (!isset($_SESSION['userName'])) {
+    $_SESSION['lastpage'] = "../../views/user/personal_task.php";
+    header('Location: ../../index.php');
+    exit;
+}
+
+$conn = new DBConnection();
+$pdo2 = $conn->getPDO();
+$my_id = (int)$_SESSION['id'];
+$has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
+?>
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>個人工作紀錄</title>
+    <link href="../../resource/css/bootstrap.css" rel="stylesheet">
+    <link href="../../resource/css/font-awesome.css" rel="stylesheet">
+    <link href="../../resource/css/custom.css" rel="stylesheet">
+    <style>
+        /* 數字輸入框無上下增減按鈕（UI規範） */
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+        input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
+
+        :root {
+            --primary-color: #2A3F54;
+            --accent-color: #1ABB9C;
+            --bg-color: #F4F7FC;
+            --card-bg: #FFFFFF;
+            --text-color: #495057;
+        }
+        body { background-color: var(--bg-color); font-family: "Segoe UI","Roboto","Helvetica Neue",Arial,sans-serif; color: var(--text-color); }
+        .right_col { background-color: var(--bg-color) !important; }
+
+        .stats-container { display:flex; gap:15px; margin-bottom:15px; flex-wrap:wrap; }
+        .stat-card { flex:1; min-width:150px; background:var(--card-bg); border-radius:8px; padding:15px;
+            box-shadow:0 2px 5px rgba(0,0,0,.05); border-left:4px solid transparent; position:relative; overflow:hidden;
+            cursor:pointer; transition:transform .1s, box-shadow .1s; }
+        .stat-card:hover { transform:translateY(-2px); box-shadow:0 4px 10px rgba(0,0,0,.1); }
+        .stat-card.active { outline:2px solid var(--primary-color); }
+        .stat-card .stat-icon { position:absolute; right:15px; top:15px; font-size:32px; opacity:.1; }
+        .stat-card .stat-value { font-size:24px; font-weight:800; color:var(--primary-color); }
+        .stat-card .stat-label { font-size:12px; color:#888; font-weight:600; letter-spacing:1px; }
+        .stat-card.c-open   { border-left-color:#F39C12; }
+        .stat-card.c-urgent { border-left-color:#E74C3C; background:#fff5f5; }
+        .stat-card.c-urgent .stat-value { color:#C0392B; }
+        .stat-card.c-paused { border-left-color:#95A5A6; }
+        .stat-card.c-done   { border-left-color:#1ABB9C; }
+
+        .filter-bar { background:#fff; padding:10px; border-radius:8px; margin-bottom:15px;
+            display:flex; gap:10px; align-items:center; flex-wrap:wrap; box-shadow:0 2px 5px rgba(0,0,0,.05); }
+        .main-card { background:var(--card-bg); border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,.05); padding:15px; }
+        .table-toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px; }
+
+        table.ptask-table thead th { background:#F8F9FA; color:#555; font-weight:700; border-bottom:2px solid #E9ECEF;
+            padding:10px 5px; font-size:13px; white-space:nowrap; }
+        table.ptask-table tbody td { padding:8px 5px; vertical-align:middle; border-bottom:1px solid #F1F3F5; font-size:13px; }
+        table.ptask-table tbody tr:hover { background:#FAFBFE; }
+        /* 急件：紅底整列；已逾期再加深 */
+        table.ptask-table tbody tr.row-urgent { background:#fdecea; }
+        table.ptask-table tbody tr.row-urgent:hover { background:#fbdcd8; }
+        table.ptask-table tbody tr.row-overdue { background:#f9cfc9; }
+        table.ptask-table tbody tr.row-overdue:hover { background:#f6beb6; }
+
+        /* 進度步驟(甘特式橫向流程) */
+        .step-flow { display:flex; align-items:flex-start; flex-wrap:wrap; gap:2px; }
+        .step-chip { display:inline-flex; flex-direction:column; align-items:center; padding:3px 8px; border-radius:4px;
+            font-size:12px; line-height:1.3; border:1px solid #ddd; background:#f5f5f5; color:#999; min-width:52px; text-align:center; }
+        .step-chip .step-time { font-size:10px; color:inherit; opacity:.85; white-space:nowrap; }
+        .step-chip.reached { background:#e8f8f3; border-color:#1ABB9C; color:#0e8c73; }
+        .step-chip.current { background:#fff7e8; border-color:#F39C12; color:#b9770e; cursor:pointer; font-weight:700; }
+        .step-chip.current:hover { background:#fdebc8; }
+        .step-arrow { color:#ccc; font-size:11px; align-self:center; }
+        .step-undo { cursor:pointer; color:#c0392b; font-size:10px; margin-top:1px; }
+        .step-undo:hover { text-decoration:underline; }
+
+        .deadline-urgent { color:#C0392B; font-weight:700; }
+        .bind-badge { display:inline-block; padding:1px 6px; border-radius:3px; font-size:11px; color:#fff; margin-right:4px; }
+        .bind-bom { background:#8e44ad; } .bind-part { background:#2980b9; }
+        .bind-customer { background:#16a085; } .bind-maker { background:#d35400; }
+
+        .no-access-box{ max-width:520px; margin:80px auto; text-align:center; padding:40px; background:#fff; border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,.08); }
+
+        /* 自動完成下拉 */
+        .ac-box{ position:relative; }
+        .ac-list{ position:absolute; z-index:1060; left:0; right:0; background:#fff; border:1px solid #ccc; border-top:none; max-height:220px; overflow:auto; display:none; }
+        .ac-item{ padding:6px 10px; cursor:pointer; border-bottom:1px solid #f0f0f0; font-size:13px; }
+        .ac-item:hover{ background:#f5f5f5; }
+
+        /* 編輯 modal 內的步驟列 */
+        .step-edit-row { display:flex; align-items:center; gap:6px; padding:5px 4px; border-bottom:1px dashed #eee; background:#fff; }
+        .step-edit-row .step-drag { cursor:grab; color:#aaa; padding:0 4px; }
+        .step-edit-row.reached { background:#f2fbf8; }
+        .step-edit-row.reached .step-drag { visibility:hidden; }
+        .step-edit-row .step-del { color:#d9534f; cursor:pointer; padding:0 4px; }
+        .step-edit-row input.step-name { width:150px; }
+        .step-edit-row input.step-planned { width:185px; }
+        .step-edit-row input.step-remind-val { width:58px; }
+        .step-edit-row select.step-remind-unit { width:66px; }
+        .step-reached-tag { font-size:11px; color:#0e8c73; white-space:nowrap; }
+
+        /* 底部輕量提示 toast（不需按已閱，比照 liveEvent/mobile.php） */
+        #ptToast { display:none; position:fixed; left:50%; bottom:40px; transform:translateX(-50%);
+            background:rgba(0,0,0,.78); color:#fff; padding:9px 20px; border-radius:20px; font-size:13px; z-index:2000; }
+
+        .role-hint { color:#888; font-size:12px; cursor:pointer; }
+    </style>
+</head>
+<body class="nav-sm">
+<div class="container body">
+  <div class="main_container">
+    <?php include '../partPage/sideAndTopBarMenu.html'; ?>
+
+    <div class="right_col" role="main">
+<?php if (!$has_access): ?>
+      <div class="no-access-box">
+          <i class="fa fa-lock" style="font-size:40px;color:#e74c3c;"></i>
+          <h3 style="margin-top:15px;">請先申請權限</h3>
+          <p style="color:#888;">您目前沒有「個人工作紀錄」功能的使用權限，請聯絡管理者至「使用者權限管理」頁面指派角色。</p>
+      </div>
+<?php else: ?>
+      <div class="page-title">
+        <div class="title_left"><h3>個人工作紀錄</h3></div>
+        <div class="title_right" style="text-align:right; padding-top:12px;">
+          <span class="role-hint" id="roleHint">
+            <i class="fa fa-user"></i> 個人工作紀錄使用者
+            <i class="fa fa-question-circle" style="margin-left:4px;"></i>
+          </span>
+        </div>
+      </div>
+      <div class="clearfix"></div>
+
+      <div class="stats-container">
+        <div class="stat-card c-open active" data-filter="open"><i class="fa fa-tasks stat-icon"></i><div class="stat-value" id="cntOpen">0</div><div class="stat-label">未完成</div></div>
+        <div class="stat-card c-urgent" data-filter="urgent"><i class="fa fa-exclamation-triangle stat-icon"></i><div class="stat-value" id="cntUrgent">0</div><div class="stat-label">急件（期限將至）</div></div>
+        <div class="stat-card c-paused" data-filter="paused"><i class="fa fa-pause stat-icon"></i><div class="stat-value" id="cntPaused">0</div><div class="stat-label">暫停</div></div>
+        <div class="stat-card c-done" data-filter="done"><i class="fa fa-check-circle stat-icon"></i><div class="stat-value" id="cntDone">0</div><div class="stat-label">已完成</div></div>
+      </div>
+
+      <div class="filter-bar">
+        <button class="btn btn-success btn-sm" id="btnNewTask"><i class="fa fa-plus"></i> 新增紀錄</button>
+        <input type="text" id="kwFilter" class="form-control input-sm" data-filter-field="1" placeholder="關鍵字（標題/綁定/備註）" style="width:220px;">
+        <button class="btn btn-primary btn-sm" id="btnApplyFilter">篩選</button>
+        <div style="margin-left:auto; display:flex; gap:8px;">
+          <button class="btn btn-default btn-sm" id="btnSettings"><i class="fa fa-cog"></i> 急件天數</button>
+          <button class="btn btn-default btn-sm" id="btnTemplates"><i class="fa fa-list-alt"></i> 流程範本</button>
+          <button class="btn btn-default btn-sm" id="btnExportSetting"><i class="fa fa-header"></i> 表頭表尾</button>
+          <button class="btn btn-info btn-sm" id="btnExportCsv">轉 CSV</button>
+          <button class="btn btn-info btn-sm" id="btnExportPdf">轉 PDF</button>
+        </div>
+      </div>
+
+      <div class="main-card">
+        <div class="table-toolbar">
+          <div style="color:#888;font-size:12px;">
+            進度回報方式：點列表「進度」欄中<b>橘色</b>的下一步即記錄到達時間；須依順序、不可跳過。
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div id="pageInfo" style="color:#888;font-size:12px;"></div>
+            <select id="pageSizeSelect" class="form-control input-sm" style="width:80px;">
+              <option value="5">5</option>
+              <option value="10" selected>10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+            </select>
+            <button class="btn btn-default btn-xs" id="btnPrevPage"><i class="fa fa-chevron-left"></i></button>
+            <span id="pageNum">1</span>
+            <button class="btn btn-default btn-xs" id="btnNextPage"><i class="fa fa-chevron-right"></i></button>
+          </div>
+        </div>
+        <div style="overflow-x:auto;width:100%;">
+          <table class="table ptask-table" id="ptaskTable">
+            <thead><tr>
+              <th style="width:88px;">接收日期</th>
+              <th>標題</th>
+              <th>綁定</th>
+              <th style="width:150px;">期限</th>
+              <th style="min-width:260px;">進度</th>
+              <th style="width:200px;">操作</th>
+            </tr></thead>
+            <tbody id="ptaskTbody"><tr><td colspan="6" class="text-center text-muted">載入中...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+<?php endif; ?>
+    </div>
+  </div>
+</div>
+
+<?php if ($has_access): ?>
+<!-- ══ 新增/編輯 Modal ══ -->
+<div class="modal fade" id="taskModal" role="dialog" tabindex="-1" data-backdrop="static">
+  <div class="modal-dialog" style="width:760px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title" id="taskModalTitle">新增紀錄</h4></div>
+      <div class="modal-body">
+        <input type="hidden" id="tId" value="0">
+        <div class="row">
+          <div class="col-sm-7"><div class="form-group">
+            <label>標題 <span style="color:#d9534f;">*</span></label>
+            <input type="text" id="tTitle" class="form-control" maxlength="200" placeholder="自行輸入工作標題">
+          </div></div>
+          <div class="col-sm-5"><div class="form-group">
+            <label>接收日期</label>
+            <input type="date" id="tReceived" class="form-control" max="9999-12-31">
+          </div></div>
+        </div>
+
+        <div class="form-group">
+          <label>綁定對象（擇一綁定，也可不綁定）</label>
+          <div style="display:flex; gap:8px; align-items:flex-start;">
+            <select id="tBindType" class="form-control" style="width:110px;">
+              <option value="">不綁定</option>
+              <option value="bom">BOM號碼</option>
+              <option value="part">料號</option>
+              <option value="customer">客戶</option>
+              <option value="maker">廠商</option>
+            </select>
+            <div class="ac-box" style="flex:1;">
+              <input type="text" id="tBindKw" class="form-control" placeholder="先選類型，再輸入關鍵字搜尋" disabled>
+              <div class="ac-list" id="tBindSug"></div>
+            </div>
+          </div>
+          <div id="tBindChosen" style="margin-top:6px;"></div>
+          <input type="hidden" id="tBindId"><input type="hidden" id="tBindLabel">
+        </div>
+
+        <div class="row">
+          <div class="col-sm-5"><div class="form-group">
+            <label>期限（可不設定）</label>
+            <input type="datetime-local" id="tDeadline" class="form-control" max="9999-12-31T23:59">
+          </div></div>
+          <div class="col-sm-4"><div class="form-group">
+            <label>期限提醒（空白=不提醒）</label>
+            <div style="display:flex; gap:5px; align-items:center;">
+              <input type="number" id="tRemindVal" class="form-control" min="1" style="width:70px;">
+              <select id="tRemindUnit" class="form-control" style="width:75px;">
+                <option value="1440">天</option>
+                <option value="60">小時</option>
+              </select>
+              <span style="white-space:nowrap;">前提醒</span>
+            </div>
+          </div></div>
+          <div class="col-sm-3"><div class="form-group">
+            <label>急件天數（空白=預設）</label>
+            <input type="number" id="tUrgentDays" class="form-control" min="0" placeholder="預設">
+          </div></div>
+        </div>
+
+        <div class="form-group">
+          <label>進度流程（可拖移排序；由上而下依序回報。時間與提醒都可不設定）</label>
+          <div style="display:flex; gap:8px; margin-bottom:6px; align-items:center;">
+            <button type="button" class="btn btn-default btn-xs" id="btnAddStep"><i class="fa fa-plus"></i> 新增進度</button>
+            <select id="tplApplySelect" class="form-control input-sm" style="width:180px;"><option value="">套用範本...</option></select>
+            <button type="button" class="btn btn-default btn-xs" id="btnSaveAsTpl"><i class="fa fa-save"></i> 目前流程存成範本</button>
+          </div>
+          <div style="display:flex; gap:6px; padding:0 4px 2px 26px; font-size:11px; color:#999;">
+            <span style="width:150px;">進度名稱</span><span style="width:185px;">預定時間(可空)</span><span>提醒(可空)</span>
+          </div>
+          <div id="stepEditor"></div>
+        </div>
+
+        <div class="form-group">
+          <label>備註</label>
+          <textarea id="tNote" class="form-control" rows="2"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="btnSaveTask" data-enter-submit="1">儲存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 急件天數設定 Modal ══ -->
+<div class="modal fade" id="settingModal" role="dialog" tabindex="-1">
+  <div class="modal-dialog" style="width:400px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-cog"></i> 急件天數設定</h4></div>
+      <div class="modal-body">
+        <p style="color:#888;font-size:12px;">未完成的紀錄在「期限前 N 天」起會以紅底急件顯示，並可用急件卡快速篩選。此為個人預設值，每筆紀錄也可個別覆寫。</p>
+        <div class="form-group" style="display:flex; align-items:center; gap:8px;">
+          <label style="margin:0;">期限前</label>
+          <input type="number" id="setUrgentDays" class="form-control" min="0" style="width:80px;">
+          <label style="margin:0;">天顯示急件</label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="btnSaveSetting" data-enter-submit="1">儲存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 流程範本管理 Modal ══ -->
+<div class="modal fade" id="tplModal" role="dialog" tabindex="-1">
+  <div class="modal-dialog" style="width:480px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-list-alt"></i> 流程範本管理</h4></div>
+      <div class="modal-body">
+        <p style="color:#888;font-size:12px;">範本只有自己看得到。新增範本請在「新增/編輯紀錄」視窗中把排好的流程按「存成範本」。</p>
+        <div id="tplList"></div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 表頭表尾設定 Modal（匯出用）══ -->
+<div class="modal fade" id="exportSettingModal" role="dialog" tabindex="-1">
+  <div class="modal-dialog" style="width:480px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-header"></i> 匯出表頭表尾設定</h4></div>
+      <div class="modal-body">
+        <div class="form-group"><label>表頭文字</label>
+          <input type="text" id="expHeader" class="form-control" placeholder="例如：公司名稱－個人工作紀錄"></div>
+        <div class="form-group"><label>表尾文字</label>
+          <input type="text" id="expFooter" class="form-control" placeholder="例如：僅供內部使用"></div>
+        <p style="color:#888;font-size:12px;">設定會記在這台電腦的瀏覽器，匯出 CSV / PDF 時自動帶入。</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="btnSaveExpSetting" data-enter-submit="1">儲存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 權限說明 Modal ══ -->
+<div class="modal fade" id="roleInfoModal" role="dialog" tabindex="-1">
+  <div class="modal-dialog" style="width:480px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-question-circle"></i> 權限說明</h4></div>
+      <div class="modal-body" style="font-size:13px;">
+        <ul style="padding-left:18px;">
+          <li><b>個人工作紀錄使用者</b>：可建立、編輯、刪除自己的工作紀錄與流程範本。</li>
+          <li>每個人<b>只看得到自己</b>建立的紀錄；其他使用者（包含管理者）都看不到你的內容。</li>
+          <li>權限指派：管理者可至「使用者權限管理」頁指派本功能的使用資格。</li>
+        </ul>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+    </div>
+  </div>
+</div>
+
+<div id="ptToast"></div>
+<?php endif; ?>
+
+<script src="../../resource/js/jquery.min.js"></script>
+<script src="../../resource/js/bootstrap.min.js"></script>
+<script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
+<script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/pdfmake.min.js"></script>
+<?php if ($has_access): ?>
+<script>
+var API = '../../src/store/PersonalTask_API.php';
+var state = { filter: 'open', kw: '', page: 1, pageSize: 10, total: 0, rows: [], urgentDefault: 3 };
+var templates = [];
+
+function apiGet(action, params)  { return $.get(API, Object.assign({ action: action }, params || {}), null, 'json'); }
+function apiPost(action, params) { return $.post(API, Object.assign({ action: action }, params || {}), null, 'json'); }
+
+function toast(msg) {
+    $('#ptToast').text(msg).fadeIn(120);
+    setTimeout(function () { $('#ptToast').fadeOut(300); }, 2200);
+}
+
+function esc(s) { return $('<div>').text(s == null ? '' : String(s)).html(); }
+
+// "2026-07-20 14:00:00" → 顯示 "2026-07-20 14:00"；整點 00:00 只留日期
+function fmtDt(dt) {
+    if (!dt) return '';
+    var s = String(dt).substring(0, 16);
+    return s.endsWith(' 00:00') ? s.substring(0, 10) : s;
+}
+// DB datetime → datetime-local input 值
+function dtToInput(dt) { return dt ? String(dt).substring(0, 16).replace(' ', 'T') : ''; }
+
+// 分鐘 → {val, unit}（unit: 1440=天, 60=小時）
+function minToUi(min) {
+    if (min == null || min === '') return { val: '', unit: '1440' };
+    min = parseInt(min, 10);
+    if (min % 1440 === 0) return { val: min / 1440, unit: '1440' };
+    return { val: Math.round(min / 60), unit: '60' };
+}
+
+var bindTypeName = { bom: 'BOM', part: '料號', customer: '客戶', maker: '廠商' };
+
+// ── 列表 ─────────────────────────────────────────────────────────────
+function filterParams() {
+    var p = { kw: state.kw, page: state.page, pageSize: state.pageSize };
+    if (state.filter === 'urgent') { p.urgent_only = 1; p.status = '0'; }
+    else p.status = { open: '0', paused: '2', done: '1' }[state.filter] || '0';
+    return p;
+}
+
+function loadList() {
+    apiGet('list_tasks', filterParams()).done(function (res) {
+        if (!res.success) { $('#ptaskTbody').html('<tr><td colspan="6" class="text-center text-muted">' + esc(res.message || '讀取失敗') + '</td></tr>'); return; }
+        state.rows = res.data || [];
+        state.total = res.total || 0;
+        state.urgentDefault = res.urgent_default || 3;
+        var c = res.counts || {};
+        $('#cntOpen').text(c.cnt_open || 0);
+        $('#cntUrgent').text(c.cnt_urgent || 0);
+        $('#cntPaused').text(c.cnt_paused || 0);
+        $('#cntDone').text(c.cnt_done || 0);
+        var maxPage = Math.max(1, Math.ceil(state.total / state.pageSize));
+        if (state.page > maxPage) { state.page = maxPage; loadList(); return; }
+        $('#pageInfo').text('共 ' + state.total + ' 筆，第 ' + state.page + '/' + maxPage + ' 頁');
+        $('#pageNum').text(state.page);
+        renderRows(state.rows);
+    });
+}
+
+function deadlineCell(r) {
+    if (!r.deadline) return $('<td>').html('<span style="color:#bbb;">未設定</span>');
+    var $td = $('<td>');
+    var $d = $('<div>').text(fmtDt(r.deadline));
+    if (r.status == 0) {
+        var diffMs = new Date(String(r.deadline).replace(' ', 'T')) - new Date();
+        var days = Math.floor(diffMs / 86400000);
+        var $tag = $('<div style="font-size:11px;">');
+        if (diffMs < 0) { $tag.text('已逾期 ' + Math.abs(days) + ' 天').addClass('deadline-urgent'); $d.addClass('deadline-urgent'); }
+        else if (r.is_urgent == 1) { $tag.text('剩 ' + days + ' 天').addClass('deadline-urgent'); $d.addClass('deadline-urgent'); }
+        else { $tag.text('剩 ' + days + ' 天').css('color', '#888'); }
+        $td.append($d).append($tag);
+    } else { $td.append($d); }
+    return $td;
+}
+
+function stepFlowCell(r) {
+    var $td = $('<td>');
+    var steps = r.steps || [];
+    if (!steps.length) return $td.html('<span style="color:#bbb;">—</span>');
+    var $flow = $('<div class="step-flow">');
+    var firstUnreachedId = null, lastReachedId = null;
+    steps.forEach(function (s) {
+        if (s.reached_at == null && firstUnreachedId === null) firstUnreachedId = s.id;
+        if (s.reached_at != null) lastReachedId = s.id;
+    });
+    steps.forEach(function (s, i) {
+        if (i > 0) $flow.append($('<span class="step-arrow">').html('<i class="fa fa-angle-right"></i>'));
+        var $chip = $('<span class="step-chip">');
+        $chip.append($('<span>').text(s.step_name));
+        if (s.reached_at != null) {
+            $chip.addClass('reached').attr('title', '到達：' + fmtDt(s.reached_at) + (s.planned_at ? '（預定 ' + fmtDt(s.planned_at) + '）' : ''));
+            $chip.append($('<span class="step-time">').text(fmtDt(s.reached_at)));
+            // 最後一個已到達者提供復原（僅未完成狀態）
+            if (r.status == 0 && s.id === lastReachedId) {
+                $chip.append($('<span class="step-undo">').text('復原').on('click', function (e) {
+                    e.stopPropagation();
+                    if (!confirm('取消「' + s.step_name + '」的到達回報？')) return;
+                    apiPost('unreach_step', { step_id: s.id }).done(function (res) {
+                        if (!res.success) { alert(res.message || '復原失敗'); return; }
+                        loadList();
+                    });
+                }));
+            }
+        } else if (r.status == 0 && s.id === firstUnreachedId) {
+            $chip.addClass('current').attr('title', (s.planned_at ? '預定 ' + fmtDt(s.planned_at) + '，' : '') + '點一下回報到達');
+            if (s.planned_at) $chip.append($('<span class="step-time">').text('預定 ' + fmtDt(s.planned_at)));
+            $chip.on('click', function () {
+                if (!confirm('回報到達「' + s.step_name + '」？（會記錄現在時間）')) return;
+                apiPost('reach_step', { step_id: s.id }).done(function (res) {
+                    if (!res.success) { alert(res.message || '回報失敗'); return; }
+                    toast('已到達「' + s.step_name + '」 ' + fmtDt(res.reached_at));
+                    loadList();
+                });
+            });
+        } else {
+            if (s.planned_at) { $chip.append($('<span class="step-time">').text('預定 ' + fmtDt(s.planned_at))); }
+            $chip.attr('title', '尚未輪到此進度');
+        }
+        $flow.append($chip);
+    });
+    return $td.append($flow);
+}
+
+function renderRows(rows) {
+    var $tb = $('#ptaskTbody').empty();
+    if (!rows.length) { $tb.html('<tr><td colspan="6" class="text-center text-muted">沒有符合條件的紀錄</td></tr>'); return; }
+    rows.forEach(function (r) {
+        var tr = $('<tr>');
+        if (r.status == 0) {
+            if (r.is_overdue == 1) tr.addClass('row-overdue');
+            else if (r.is_urgent == 1) tr.addClass('row-urgent');
+        }
+        tr.append($('<td>').text(r.received_at || ''));
+        var $titleTd = $('<td>');
+        $titleTd.append($('<div style="font-weight:600;">').text(r.title));
+        if (r.note) $titleTd.append($('<div style="font-size:11px;color:#888;white-space:pre-line;">').text(r.note));
+        tr.append($titleTd);
+        var $bindTd = $('<td>');
+        if (r.bind_type && r.bind_label) {
+            $bindTd.append($('<span class="bind-badge bind-' + r.bind_type + '">').text(bindTypeName[r.bind_type] || r.bind_type));
+            $bindTd.append($('<span>').text(r.bind_label));
+        } else { $bindTd.html('<span style="color:#bbb;">—</span>'); }
+        tr.append($bindTd);
+        tr.append(deadlineCell(r));
+        tr.append(stepFlowCell(r));
+
+        var $op = $('<td>');
+        var mk = function (cls, icon, label, fn) {
+            return $('<button class="btn btn-xs ' + cls + '" style="margin:1px 2px;"><i class="fa ' + icon + '"></i> ' + label + '</button>').on('click', fn);
+        };
+        $op.append(mk('btn-default', 'fa-pencil', '編輯', function () { openTaskModal(r.id); }));
+        if (r.status == 0) {
+            $op.append(mk('btn-success', 'fa-check', '完成', function () { setStatus(r, 1); }));
+            $op.append(mk('btn-warning', 'fa-pause', '暫停', function () { setStatus(r, 2); }));
+        } else if (r.status == 2) {
+            $op.append(mk('btn-primary', 'fa-play', '恢復', function () { setStatus(r, 0); }));
+            $op.append(mk('btn-success', 'fa-check', '完成', function () { setStatus(r, 1); }));
+        } else {
+            if (r.completed_at) $op.append($('<div style="font-size:11px;color:#1ABB9C;">').text('完成於 ' + fmtDt(r.completed_at)));
+            $op.append(mk('btn-primary', 'fa-undo', '恢復未完成', function () { setStatus(r, 0); }));
+        }
+        $op.append(mk('btn-danger', 'fa-trash', '', function () {
+            if (!confirm('確認刪除「' + r.title + '」？（進度紀錄會一併刪除）')) return;
+            apiPost('delete_task', { id: r.id }).done(function (res) {
+                if (!res.success) { alert(res.message || '刪除失敗'); return; }
+                toast('已刪除'); loadList();
+            });
+        }));
+        tr.append($op);
+        $tb.append(tr);
+    });
+}
+
+function setStatus(r, status) {
+    var name = { 0: '未完成', 1: '已完成', 2: '暫停' }[status];
+    apiPost('set_status', { id: r.id, status: status }).done(function (res) {
+        if (!res.success) { alert(res.message || '設定失敗'); return; }
+        toast('「' + r.title + '」已設為' + name);
+        loadList();
+    });
+}
+
+// ── 狀態卡切換 ───────────────────────────────────────────────────────
+$('.stat-card').on('click', function () {
+    $('.stat-card').removeClass('active');
+    $(this).addClass('active');
+    state.filter = $(this).data('filter');
+    state.page = 1;
+    loadList();
+});
+
+$('#btnApplyFilter').on('click', function () { state.kw = $('#kwFilter').val(); state.page = 1; loadList(); });
+$('#pageSizeSelect').on('change', function () { state.pageSize = parseInt($(this).val(), 10); state.page = 1; loadList(); });
+$('#btnPrevPage').on('click', function () { if (state.page > 1) { state.page--; loadList(); } });
+$('#btnNextPage').on('click', function () {
+    var maxPage = Math.max(1, Math.ceil(state.total / state.pageSize));
+    if (state.page < maxPage) { state.page++; loadList(); }
+});
+
+// ── 新增/編輯 Modal ──────────────────────────────────────────────────
+function stepRowHtml(s) {
+    // s: {id, step_name, planned_at, remind_before_minutes, reached_at} 或空(新步驟)
+    s = s || {};
+    var reached = s.reached_at != null;
+    var $row = $('<div class="step-edit-row' + (reached ? ' reached' : '') + '">').data('stepId', s.id || 0).data('reached', reached ? 1 : 0);
+    $row.append($('<span class="step-drag"><i class="fa fa-bars"></i></span>'));
+    $row.append($('<input type="text" class="form-control input-sm step-name" maxlength="100" placeholder="進度名稱">').val(s.step_name || ''));
+    $row.append($('<input type="datetime-local" class="form-control input-sm step-planned" max="9999-12-31T23:59">').val(dtToInput(s.planned_at)));
+    var ui = minToUi(s.remind_before_minutes);
+    $row.append($('<input type="number" class="form-control input-sm step-remind-val" min="1" placeholder="提醒">').val(ui.val));
+    var $unit = $('<select class="form-control input-sm step-remind-unit"><option value="1440">天</option><option value="60">小時</option></select>').val(ui.unit);
+    $row.append($unit).append($('<span style="font-size:11px;color:#888;white-space:nowrap;">前</span>'));
+    if (reached) {
+        $row.append($('<span class="step-reached-tag">').text('✔ ' + fmtDt(s.reached_at)));
+    } else {
+        $row.append($('<span class="step-del" title="刪除此進度"><i class="fa fa-times-circle"></i></span>').on('click', function () { $row.remove(); }));
+    }
+    return $row;
+}
+
+function initStepSortable() {
+    $('#stepEditor').sortable({
+        items: '.step-edit-row:not(.reached)',   // 已到達的固定在前，不可拖
+        handle: '.step-drag',
+        axis: 'y'
+    });
+}
+
+function openTaskModal(id) {
+    $('#tId').val(id || 0);
+    $('#taskModalTitle').text(id ? '編輯紀錄' : '新增紀錄');
+    $('#tTitle, #tBindKw, #tBindId, #tBindLabel, #tRemindVal, #tUrgentDays, #tNote, #tDeadline').val('');
+    $('#tBindType').val(''); $('#tBindKw').prop('disabled', true);
+    $('#tBindChosen').empty(); $('#tBindSug').hide().empty();
+    $('#tRemindUnit').val('1440');
+    $('#tReceived').val(new Date().toISOString().substring(0, 10));
+    $('#tUrgentDays').attr('placeholder', '預設 ' + state.urgentDefault + ' 天');
+    $('#stepEditor').empty();
+    loadTplOptions();
+    if (id) {
+        apiGet('get_task', { id: id }).done(function (res) {
+            if (!res.success) { alert(res.message || '讀取失敗'); return; }
+            var t = res.data;
+            $('#tTitle').val(t.title);
+            $('#tReceived').val(t.received_at);
+            $('#tDeadline').val(dtToInput(t.deadline));
+            var ui = minToUi(t.remind_before_minutes);
+            $('#tRemindVal').val(ui.val); $('#tRemindUnit').val(ui.unit);
+            $('#tUrgentDays').val(t.urgent_days == null ? '' : t.urgent_days);
+            $('#tNote').val(t.note || '');
+            if (t.bind_type && t.bind_id) setBind(t.bind_type, t.bind_id, t.bind_label);
+            (t.steps || []).forEach(function (s) { $('#stepEditor').append(stepRowHtml(s)); });
+            initStepSortable();
+            $('#taskModal').modal('show');
+        });
+    } else {
+        $('#stepEditor').append(stepRowHtml());
+        initStepSortable();
+        $('#taskModal').modal('show');
+    }
+}
+$('#btnNewTask').on('click', function () { openTaskModal(0); });
+$('#btnAddStep').on('click', function () { $('#stepEditor').append(stepRowHtml()); initStepSortable(); });
+
+// ── 綁定搜尋（自動完成）──────────────────────────────────────────────
+function setBind(type, id, label) {
+    $('#tBindType').val(type); $('#tBindId').val(id); $('#tBindLabel').val(label);
+    $('#tBindKw').prop('disabled', false).val('');
+    var chip = $('<span class="label label-primary" style="font-size:12px;">')
+        .text((bindTypeName[type] || '') + '：' + label);
+    chip.append($('<span style="margin-left:6px;cursor:pointer;">×</span>').on('click', clearBind));
+    $('#tBindChosen').empty().append(chip);
+}
+function clearBind() { $('#tBindId, #tBindLabel').val(''); $('#tBindChosen').empty(); }
+
+$('#tBindType').on('change', function () {
+    clearBind();
+    $('#tBindKw').prop('disabled', !$(this).val()).val('');
+    $('#tBindSug').hide().empty();
+});
+
+var bindSearchTimer = null;
+$('#tBindKw').on('input focus', function () {
+    var type = $('#tBindType').val();
+    if (!type) return;
+    var kw = $(this).val();
+    clearTimeout(bindSearchTimer);
+    bindSearchTimer = setTimeout(function () {
+        var actionMap = { bom: 'search_boms', part: 'search_parts', customer: 'search_customers', maker: 'search_makers' };
+        apiGet(actionMap[type], { kw: kw }).done(function (res) {
+            var $sug = $('#tBindSug').empty();
+            (res.data || []).forEach(function (o) {
+                var id, label, extra = '';
+                if (type === 'bom') { id = o.bom; label = o.bom; extra = o.Client_Name || ''; }
+                else if (type === 'part') { id = o.d_id; label = o.D_Setting_Id; extra = o.Drawing_No || ''; }
+                else if (type === 'customer') { id = o.customer_id; label = o.customer; extra = o.customer_id; }
+                else { id = o.maker_id_no; label = o.maker_id; extra = o.maker_id_all || ''; }
+                var $item = $('<div class="ac-item">').text(label + (extra ? '（' + extra + '）' : ''));
+                $item.on('mousedown', function (e) { e.preventDefault(); setBind(type, id, label); $sug.hide(); });
+                $sug.append($item);
+            });
+            $sug.toggle(!!(res.data || []).length);
+        });
+    }, 180);
+});
+$(document).on('click', function (e) { if (!$(e.target).closest('.ac-box').length) $('#tBindSug').hide(); });
+
+// ── 儲存 ─────────────────────────────────────────────────────────────
+function collectSteps() {
+    var steps = [];
+    var ok = true;
+    $('#stepEditor .step-edit-row').each(function () {
+        var $r = $(this);
+        var name = $r.find('.step-name').val().trim();
+        if (!name) {
+            // 已到達的步驟名稱不可清空；未到達的空白列直接略過
+            if ($r.data('reached') == 1) { alert('已到達的進度名稱不可空白'); ok = false; return false; }
+            return;
+        }
+        var rv = $r.find('.step-remind-val').val();
+        steps.push({
+            id: $r.data('stepId') || 0,
+            name: name,
+            planned_at: $r.find('.step-planned').val() || '',
+            remind_before_minutes: rv === '' ? '' : parseInt(rv, 10) * parseInt($r.find('.step-remind-unit').val(), 10)
+        });
+    });
+    return ok ? steps : null;
+}
+
+$('#btnSaveTask').on('click', function () {
+    var title = $('#tTitle').val().trim();
+    if (!title) { alert('請輸入標題'); $('#tTitle').focus(); return; }
+    var steps = collectSteps();
+    if (steps === null) return;
+    var rv = $('#tRemindVal').val();
+    var params = {
+        id: $('#tId').val(),
+        title: title,
+        received_at: $('#tReceived').val(),
+        bind_type: $('#tBindId').val() ? $('#tBindType').val() : '',
+        bind_id: $('#tBindId').val(),
+        bind_label: $('#tBindLabel').val(),
+        deadline: $('#tDeadline').val() || '',
+        remind_before_minutes: rv === '' ? '' : parseInt(rv, 10) * parseInt($('#tRemindUnit').val(), 10),
+        urgent_days: $('#tUrgentDays').val(),
+        note: $('#tNote').val(),
+        steps: JSON.stringify(steps)
+    };
+    var $btn = $(this).prop('disabled', true);
+    apiPost('save_task', params).done(function (res) {
+        $btn.prop('disabled', false);
+        if (!res.success) { alert(res.message || '儲存失敗'); return; }
+        $('#taskModal').modal('hide');
+        toast('已儲存');
+        loadList();
+    }).fail(function () { $btn.prop('disabled', false); alert('儲存失敗，請重試'); });
+});
+
+// ── 流程範本 ─────────────────────────────────────────────────────────
+function loadTplOptions() {
+    apiGet('list_templates').done(function (res) {
+        templates = res.data || [];
+        var $sel = $('#tplApplySelect').empty().append('<option value="">套用範本...</option>');
+        templates.forEach(function (t) { $sel.append($('<option>').val(t.id).text(t.template_name)); });
+    });
+}
+
+$('#tplApplySelect').on('change', function () {
+    var id = $(this).val();
+    if (!id) return;
+    var tpl = templates.find(function (t) { return String(t.id) === String(id); });
+    $(this).val('');
+    if (!tpl) return;
+    var names = [];
+    try { names = JSON.parse(tpl.steps_json) || []; } catch (e) {}
+    if (!names.length) return;
+    // 保留已到達的步驟，未到達的以範本取代
+    var $unreached = $('#stepEditor .step-edit-row:not(.reached)');
+    var hasContent = $unreached.filter(function () { return $(this).find('.step-name').val().trim() !== ''; }).length > 0;
+    if (hasContent && !confirm('套用範本會取代目前尚未到達的進度項目，確定？')) return;
+    $unreached.remove();
+    names.forEach(function (n) { $('#stepEditor').append(stepRowHtml({ step_name: n })); });
+    initStepSortable();
+});
+
+$('#btnSaveAsTpl').on('click', function () {
+    var names = [];
+    $('#stepEditor .step-edit-row .step-name').each(function () {
+        var v = $(this).val().trim();
+        if (v) names.push(v);
+    });
+    if (!names.length) { alert('請先輸入進度名稱'); return; }
+    var name = prompt('請輸入範本名稱（同名會覆蓋）：');
+    if (!name) return;
+    apiPost('save_template', { template_name: name, steps_json: JSON.stringify(names) }).done(function (res) {
+        if (!res.success) { alert(res.message || '儲存失敗'); return; }
+        toast('範本已儲存');
+        loadTplOptions();
+    });
+});
+
+$('#btnTemplates').on('click', function () {
+    apiGet('list_templates').done(function (res) {
+        var $box = $('#tplList').empty();
+        var data = res.data || [];
+        if (!data.length) { $box.html('<div class="text-muted">尚無範本</div>'); }
+        data.forEach(function (t) {
+            var names = [];
+            try { names = JSON.parse(t.steps_json) || []; } catch (e) {}
+            var $row = $('<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed #eee;">');
+            $row.append($('<b>').text(t.template_name));
+            $row.append($('<span style="color:#888;font-size:12px;flex:1;">').text(names.join(' → ')));
+            $row.append($('<span style="color:#d9534f;cursor:pointer;"><i class="fa fa-trash"></i></span>').on('click', function () {
+                if (!confirm('刪除範本「' + t.template_name + '」？')) return;
+                apiPost('delete_template', { id: t.id }).done(function () { $('#btnTemplates').click(); loadTplOptions(); });
+            }));
+            $box.append($row);
+        });
+        $('#tplModal').modal('show');
+    });
+});
+
+// ── 急件天數設定 ─────────────────────────────────────────────────────
+$('#btnSettings').on('click', function () {
+    apiGet('get_settings').done(function (res) {
+        $('#setUrgentDays').val(res.urgent_days != null ? res.urgent_days : 3);
+        $('#settingModal').modal('show');
+    });
+});
+$('#btnSaveSetting').on('click', function () {
+    apiPost('save_settings', { urgent_days: $('#setUrgentDays').val() }).done(function (res) {
+        if (!res.success) { alert(res.message || '儲存失敗'); return; }
+        $('#settingModal').modal('hide');
+        toast('已儲存急件天數');
+        loadList();
+    });
+});
+
+// ── 表頭表尾設定（存 localStorage）───────────────────────────────────
+function expSetting() {
+    try { return JSON.parse(localStorage.getItem('ptask_export_setting') || '{}'); } catch (e) { return {}; }
+}
+$('#btnExportSetting').on('click', function () {
+    var s = expSetting();
+    $('#expHeader').val(s.header || ''); $('#expFooter').val(s.footer || '');
+    $('#exportSettingModal').modal('show');
+});
+$('#btnSaveExpSetting').on('click', function () {
+    localStorage.setItem('ptask_export_setting', JSON.stringify({ header: $('#expHeader').val(), footer: $('#expFooter').val() }));
+    $('#exportSettingModal').modal('hide');
+    toast('已儲存表頭表尾設定');
+});
+
+// ── 匯出（後端抓全量：目前篩選條件下全部資料，非只當頁）───────────────
+var statusName = { 0: '未完成', 1: '已完成', 2: '暫停' };
+function stepsSummary(r) {
+    var steps = r.steps || [];
+    if (!steps.length) return '';
+    return steps.map(function (s) {
+        return s.step_name + (s.reached_at != null ? '✔' + fmtDt(s.reached_at) : '');
+    }).join(' → ');
+}
+function fetchAllForExport(cb) {
+    var p = filterParams();
+    p.export = 1;
+    apiGet('list_tasks', p).done(function (res) { cb(res.success ? (res.data || []) : []); });
+}
+
+$('#btnExportCsv').on('click', function () {
+    fetchAllForExport(function (rows) {
+        var s = expSetting();
+        var lines = [];
+        if (s.header) lines.push('"' + s.header.replace(/"/g, '""') + '"');
+        lines.push('接收日期,標題,綁定,期限,進度,狀態,備註');
+        rows.forEach(function (r) {
+            var bind = r.bind_label ? (bindTypeName[r.bind_type] || '') + '：' + r.bind_label : '';
+            var cells = [r.received_at || '', r.title, bind, fmtDt(r.deadline), stepsSummary(r), statusName[r.status] || '', r.note || ''];
+            lines.push(cells.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(','));
+        });
+        if (s.footer) lines.push('"' + s.footer.replace(/"/g, '""') + '"');
+        var blob = new Blob(["﻿" + lines.join("\n")], { type: 'text/csv;charset=utf-8;' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'personal_task.csv';
+        a.click();
+    });
+});
+
+$('#btnExportPdf').on('click', function () {
+    fetchAllForExport(function (rows) {
+        var s = expSetting();
+        var body = [['接收日期', '標題', '綁定', '期限', '進度', '狀態', '備註']];
+        rows.forEach(function (r) {
+            var bind = r.bind_label ? (bindTypeName[r.bind_type] || '') + '：' + r.bind_label : '';
+            body.push([r.received_at || '', r.title, bind, fmtDt(r.deadline), stepsSummary(r), statusName[r.status] || '', r.note || '']);
+        });
+        var content = [];
+        if (s.header) content.push({ text: s.header, fontSize: 12, margin: [0, 0, 0, 6] });
+        content.push({ text: '個人工作紀錄', fontSize: 14, margin: [0, 0, 0, 10] });
+        content.push({ table: { headerRows: 1, body: body } });
+        pdfMake.createPdf({
+            pageOrientation: 'landscape',
+            content: content,
+            footer: s.footer ? function () { return { text: s.footer, alignment: 'center', fontSize: 9 }; } : undefined,
+            defaultStyle: { fontSize: 9 }
+        }).download('personal_task.pdf');
+    });
+});
+
+// ── 權限說明 ─────────────────────────────────────────────────────────
+$('#roleHint').on('click', function () { $('#roleInfoModal').modal('show'); });
+
+// ── 輸入欄三互動（ai-rules/08：雙擊清空、聚焦全選、Enter逐欄/末欄送出）──
+(function () {
+    var sel = 'input[type=text], input[type=number], input[type=date], input[type=datetime-local], input[type=search]';
+    // 1. 雙擊清空；篩選欄雙擊同時解除該欄篩選
+    $(document).on('dblclick', sel, function () {
+        if (this.readOnly || this.disabled) return;
+        $(this).val('');
+        if ($(this).data('filter-field')) { state.kw = ''; state.page = 1; loadList(); }
+    });
+    // 2. 聚焦已有資料自動全選
+    $(document).on('focusin', sel, function () {
+        var el = this;
+        if (el.value) setTimeout(function () { try { el.select(); } catch (e) {} }, 0);
+    });
+    // 3. Enter 逐欄前進，最後一欄 Enter 送出（textarea 維持換行）
+    $(document).on('keydown', sel + ', select', function (e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        var $scope = $(this).closest('.modal:visible');
+        if (!$scope.length) {
+            // 篩選列：Enter 直接套用篩選
+            if ($(this).data('filter-field')) { $('#btnApplyFilter').click(); return; }
+            $scope = $(this).closest('.filter-bar');
+            if (!$scope.length) return;
+        }
+        var $fields = $scope.find('input:visible:enabled, select:visible:enabled, textarea:visible:enabled')
+            .not('[readonly]');
+        var idx = $fields.index(this);
+        if (idx >= 0 && idx < $fields.length - 1) {
+            $fields.eq(idx + 1).focus();
+        } else {
+            var $submit = $scope.find('[data-enter-submit]:visible');
+            if ($submit.length) $submit.first().click();
+        }
+    });
+})();
+
+$(document).ready(function () { loadList(); });
+</script>
+<?php endif; ?>
+</body>
+</html>
