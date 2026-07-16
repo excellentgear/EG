@@ -227,13 +227,19 @@ WHERE
     --   目的：不再把已跳過的較舊工序全部當待驗列出。
     --   若要還原成「每個工序各列一筆」的舊行為，移除下面這段 AND 條件即可
     --   （或直接以 _fetch_qc_data.php.bak_20260623_before_currentprocess 覆蓋回去）。
-    AND DATE(bi.outsource_date) = (
-        SELECT MAX(DATE(cur.outsource_date))
-        FROM bom_ing cur
-        WHERE cur.bom = bi.bom
-          AND cur.processing_state IN ('Q','P','ing','E')
-          AND cur.outsource_date IS NOT NULL
-          AND cur.is_schedule_split = 0
+    -- ★ 2026-07-16 例外：已檢驗完成(QC_check有值)但尚未按「確認完成」的 P 狀態資料一律顯示，
+    --   不受「目前製程」限制——否則廠內製程(outsource_date為NULL)允收後會從待驗清單消失，
+    --   永遠沒人能補按完工（完工紀錄又只列 qc_completed=1，兩邊都看不到）。
+    AND (
+        (bi.processing_state = 'P' AND bi.QC_check IS NOT NULL)
+        OR DATE(bi.outsource_date) = (
+            SELECT MAX(DATE(cur.outsource_date))
+            FROM bom_ing cur
+            WHERE cur.bom = bi.bom
+              AND cur.processing_state IN ('Q','P','ing','E')
+              AND cur.outsource_date IS NOT NULL
+              AND cur.is_schedule_split = 0
+        )
     )
     $extraWhere
 ORDER BY bi.outsource_date
@@ -265,10 +271,11 @@ try {
                   AND bi.is_consumed = 0
                   AND (bi.ps IS NULL OR bi.ps NOT LIKE '%(拆分工單)%')
                   AND pn.process_type_id IS NOT NULL
-                  AND DATE(bi.outsource_date) = (   -- ★ 2026-06-23 同步「目前製程」過濾，使篩選按鈕與清單一致
+                  AND ((bi.processing_state = 'P' AND bi.QC_check IS NOT NULL)   -- ★ 2026-07-16 例外同步主查詢：已檢驗未完工一律顯示
+                       OR DATE(bi.outsource_date) = (   -- ★ 2026-06-23 同步「目前製程」過濾，使篩選按鈕與清單一致
                         SELECT MAX(DATE(cur.outsource_date)) FROM bom_ing cur
                         WHERE cur.bom = bi.bom AND cur.processing_state IN ('Q','P','ing','E')
-                          AND cur.outsource_date IS NOT NULL AND cur.is_schedule_split = 0)
+                          AND cur.outsource_date IS NOT NULL AND cur.is_schedule_split = 0))
                 UNION
                 SELECT pm.process_type_id AS pt_id
                 FROM bom_ing bi
@@ -279,10 +286,11 @@ try {
                   AND bi.qc_completed = 0
                   AND bi.is_consumed = 0
                   AND (bi.ps IS NULL OR bi.ps NOT LIKE '%(拆分工單)%')
-                  AND DATE(bi.outsource_date) = (   -- ★ 2026-06-23 同步「目前製程」過濾，使篩選按鈕與清單一致
+                  AND ((bi.processing_state = 'P' AND bi.QC_check IS NOT NULL)   -- ★ 2026-07-16 例外同步主查詢：已檢驗未完工一律顯示
+                       OR DATE(bi.outsource_date) = (   -- ★ 2026-06-23 同步「目前製程」過濾，使篩選按鈕與清單一致
                         SELECT MAX(DATE(cur.outsource_date)) FROM bom_ing cur
                         WHERE cur.bom = bi.bom AND cur.processing_state IN ('Q','P','ing','E')
-                          AND cur.outsource_date IS NOT NULL AND cur.is_schedule_split = 0)
+                          AND cur.outsource_date IS NOT NULL AND cur.is_schedule_split = 0))
             ) t
             WHERE pt_id IS NOT NULL
         ");
