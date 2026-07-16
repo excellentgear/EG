@@ -38,6 +38,12 @@ try {
         PRIMARY KEY (user_id, role_id),
         INDEX idx_ur_user (user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS position_roles (
+        position_id INT NOT NULL,
+        role_id INT NOT NULL,
+        PRIMARY KEY (position_id, role_id),
+        INDEX idx_pr_role (role_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     // 植入管理員角色（若不存在）
     $pdo->exec("INSERT IGNORE INTO roles (role_code,role_name,is_system) VALUES ('admin','管理員',1)");
     $_aid = $pdo->query("SELECT role_id FROM roles WHERE role_code='admin' LIMIT 1")->fetchColumn();
@@ -278,6 +284,87 @@ switch ($action) {
             $stmt->execute([$uid]);
             $response = ['success'=>true, 'data'=>$stmt->fetchAll(PDO::FETCH_COLUMN)];
         } catch(Exception $_e) { $response = ['success'=>true,'data'=>[]]; }
+        break;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // 取得所有職稱（含已指派的角色；可依模組過濾）
+    // GET ?action=get_positions[&module=xxx]
+    // 回傳 { success, data: [{id, name, departments, roles:[{role_id,role_name}]}] }
+    // ──────────────────────────────────────────────────────────────────────
+    case 'get_positions': {
+        try {
+            $positions = $pdo->query("
+                SELECT p.id, p.name, p.sort_order,
+                       GROUP_CONCAT(DISTINCT d.name ORDER BY d.sort_order SEPARATOR '、') AS departments
+                FROM position p
+                LEFT JOIN department_position dp ON dp.position_id = p.id
+                LEFT JOIN department d ON d.id = dp.department_id
+                GROUP BY p.id, p.name, p.sort_order
+                ORDER BY p.sort_order ASC, p.id ASC
+            ")->fetchAll(PDO::FETCH_ASSOC);
+
+            $module = $_GET['module'] ?? $_POST['module'] ?? '';
+            if ($module !== '') {
+                $prStmt = $pdo->prepare("
+                    SELECT pr.position_id, r.role_id, r.role_name
+                    FROM position_roles pr
+                    JOIN roles r ON r.role_id = pr.role_id
+                    WHERE r.module = ?");
+                $prStmt->execute([$module]);
+                $prRows = $prStmt->fetchAll(PDO::FETCH_ASSOC);
+            } else {
+                $prRows = $pdo->query("
+                    SELECT pr.position_id, r.role_id, r.role_name
+                    FROM position_roles pr
+                    JOIN roles r ON r.role_id = pr.role_id
+                ")->fetchAll(PDO::FETCH_ASSOC);
+            }
+            $prMap = [];
+            foreach ($prRows as $row) {
+                $prMap[$row['position_id']][] = ['role_id'=>$row['role_id'],'role_name'=>$row['role_name']];
+            }
+            foreach ($positions as &$p) $p['roles'] = $prMap[$p['id']] ?? [];
+            unset($p);
+
+            $response = ['success'=>true, 'data'=>$positions];
+        } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
+        break;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // 指派角色給職稱（該職稱所有在職人員自動獲得此角色的功能）
+    // POST action=assign_position_role  position_id=N  role_id=N
+    // ──────────────────────────────────────────────────────────────────────
+    case 'assign_position_role': {
+        if (!isAdmin($pdo, $user_id)) { $response = ['success'=>false,'message'=>'無管理員權限']; break; }
+        $pid = intval($_POST['position_id'] ?? 0);
+        $rid = intval($_POST['role_id'] ?? 0);
+        if (!$pid || !$rid) { $response = ['success'=>false,'message'=>'缺少參數']; break; }
+        try {
+            // 系統角色(admin)不可指派給職稱，避免整個職稱全變全域管理員
+            $chk = $pdo->prepare("SELECT is_system FROM roles WHERE role_id=? LIMIT 1");
+            $chk->execute([$rid]);
+            if ((int)$chk->fetchColumn() === 1) { $response = ['success'=>false,'message'=>'系統角色（管理員）不可指派給職稱，請個別指派給使用者']; break; }
+            $pdo->prepare("INSERT IGNORE INTO position_roles (position_id,role_id) VALUES (?,?)")->execute([$pid,$rid]);
+            $response = ['success'=>true];
+        } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
+        break;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // 移除職稱的某個角色
+    // POST action=remove_position_role  position_id=N  role_id=N
+    // ──────────────────────────────────────────────────────────────────────
+    case 'remove_position_role': {
+        if (!isAdmin($pdo, $user_id)) { $response = ['success'=>false,'message'=>'無管理員權限']; break; }
+        $pid = intval($_POST['position_id'] ?? 0);
+        $rid = intval($_POST['role_id'] ?? 0);
+        if (!$pid || !$rid) { $response = ['success'=>false,'message'=>'缺少參數']; break; }
+        try {
+            $pdo->prepare("DELETE FROM position_roles WHERE position_id=? AND role_id=?")->execute([$pid,$rid]);
+            $response = ['success'=>true];
+        } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
         break;
     }
 

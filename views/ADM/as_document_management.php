@@ -56,7 +56,20 @@ try {
     }
 } catch (Exception $e) { error_log("Permission check error: " . $e->getMessage()); }
 
-if (empty($deptPerm)) {
+// ── as_doc 模組角色（user_permissions.php 角色指派，含職稱指派）與頁面 ACRUD 合併 ──
+include_once '../../src/common/role_features_helper.php';
+$asFeatures    = rf_load_user_features_all($conn, $id);
+$asIsRoleAdmin = in_array('all', $asFeatures, true);
+$pp = $deptPerm ?: '';
+$asCaps = [
+    'view'     => $asIsRoleAdmin || strpos($pp,'A')!==false || strpos($pp,'R')!==false || in_array('asdoc_view', $asFeatures, true),
+    'create'   => $asIsRoleAdmin || strpos($pp,'A')!==false || strpos($pp,'C')!==false || in_array('asdoc_create', $asFeatures, true),
+    'update'   => $asIsRoleAdmin || strpos($pp,'A')!==false || strpos($pp,'U')!==false || in_array('asdoc_update', $asFeatures, true),
+    'delete'   => $asIsRoleAdmin || strpos($pp,'A')!==false || strpos($pp,'D')!==false || in_array('asdoc_delete', $asFeatures, true),
+    'settings' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_settings', $asFeatures, true),
+];
+
+if (!$asCaps['view']) {
     header("Location:../../src/store/Login.php?msg=" . urlencode("無權限檢視頁面")); exit;
 }
 if ($deptPerm === 'R') {
@@ -96,7 +109,12 @@ if ($deptPerm === 'R') {
       <div class="page-title">
         <div class="title_left">
           <h3>AS9100 文件管理
-            <small>(權限：<?php echo htmlspecialchars($deptPerm); ?>)</small>
+            <small>(權限：<?php
+                $capLabels = ['view'=>'檢閱','create'=>'新增','update'=>'修改','delete'=>'刪除','settings'=>'設定'];
+                $capShow = [];
+                foreach ($capLabels as $k=>$v) { if ($asCaps[$k]) $capShow[] = $v; }
+                echo htmlspecialchars(implode('/', $capShow));
+            ?>)</small>
             <a href="#" id="rbacHelp" title="權限說明"><i class="fa fa-question-circle"></i></a>
           </h3>
         </div>
@@ -118,11 +136,11 @@ if ($deptPerm === 'R') {
               <!-- 工具列 -->
               <div class="row" style="margin-bottom:10px;">
                 <div class="col-md-8">
-                  <?php if (strpos($deptPerm,'A')!==false || strpos($deptPerm,'C')!==false): ?>
+                  <?php if ($asCaps['create']): ?>
                   <button class="btn btn-primary btn-sm" id="btnAddDoc"><i class="fa fa-plus"></i> 新增文件</button>
                   <?php endif; ?>
+                  <?php if ($asCaps['settings']): ?>
                   <button class="btn btn-default btn-sm" id="btnTags"><i class="fa fa-tags"></i> 標籤 / 分類管理</button>
-                  <?php if (strpos($deptPerm,'A')!==false): ?>
                   <button class="btn btn-warning btn-sm" id="btnSettings"><i class="fa fa-cog"></i> 系統設定（負責人 / 路徑）</button>
                   <?php endif; ?>
                 </div>
@@ -424,13 +442,13 @@ if ($deptPerm === 'R') {
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script>
-window.deptPerm = "<?php echo $deptPerm ? $deptPerm : ''; ?>";
+window.asPerm = <?php echo json_encode($asCaps); ?>;
 $(function(){
   const API = '../../src/store/AS_Document_API.php';
-  const perm = window.deptPerm || '';
-  const canC = perm.includes('A') || perm.includes('C');
-  const canU = perm.includes('A') || perm.includes('U');
-  const canD = perm.includes('A') || perm.includes('D');
+  const canC = !!window.asPerm.create;
+  const canU = !!window.asPerm.update;
+  const canD = !!window.asPerm.delete;
+  const canS = !!window.asPerm.settings;
   let META = {departments:[],positions:[],tags:[],users:[]};
   let DOCS = [], FILTERED = [], activeTagId = 0, curPage = 1;
 
@@ -493,6 +511,8 @@ $(function(){
       if(canU){
         ops += `<button class="btn btn-xs btn-warning op-ver" data-id="${d.id}" data-name="${esc(d.doc_name)}">改版</button> `;
         ops += `<button class="btn btn-xs btn-default op-edit" data-id="${d.id}">編輯</button> `;
+      }
+      if(canS){
         ops += `<button class="btn btn-xs btn-primary op-perm" data-id="${d.id}" data-name="${esc(d.doc_name)}">權限</button> `;
       }
       if(canD){
@@ -748,7 +768,7 @@ $(function(){
      .done(r=>{ if(r.status==='success'){ $('#tplStatus').text('已上傳'); $('#tplDownload').show(); alert('範本已上傳'); } else alert(r.message); });
   });
 
-  $('#rbacHelp').on('click', function(e){ e.preventDefault(); alert('權限代碼：A=全部, C=新增, R=檢閱, U=修改, D=刪除。\n此頁權限於「使用者權限設定」中依角色指派。\n文件的「開啟權限」另於各文件的「權限」按鈕設定部門/職稱可讀取/下載/更新/刪除。'); });
+  $('#rbacHelp').on('click', function(e){ e.preventDefault(); alert('此頁權限＝「權限設定頁的頁面ACRUD」或「AS文件管理角色」二者取聯集：\n・文件檢閱＝檢視/下載\n・文件管理＝新增文件/改版/編輯\n・文件刪除＝刪除/還原\n・文管設定＝標籤管理/各文件開啟權限/NAS路徑/AS負責人/申請單範本\n角色可指派給「使用者」或「職稱」（職稱指派＝該職稱所有人自動擁有），請至 權限設定（user_permissions）頁操作。\n管理員固定擁有全部權限。\n各文件的「權限」按鈕另可設定部門/職稱層級的文件開啟權限。'); });
 
   // init
   loadMeta(loadDocs);

@@ -28,6 +28,49 @@ if ($currentUserId) {
     $currentCname = (string)($st->fetchColumn() ?: $currentUserName);
 }
 
+// ── 權限（依 user_permissions.php 規則：頁面 ACRUD 矩陣 OR as_doc 模組角色，含職稱指派）──
+include_once $document_root . '/EGsystem/src/common/role_features_helper.php';
+
+$asFeatures    = $currentUserId ? rf_load_user_features_all($db, $currentUserId) : [];
+$asIsRoleAdmin = in_array('all', $asFeatures, true);
+
+/** 頁面 ACRUD 字串（user_permissions.php 權限矩陣：page scope 優先、group scope 備援） */
+function asPagePerm(PDO $db, int $uid): string {
+    try {
+        $st = $db->prepare("SELECT page_id, group_id FROM system_module_pages
+                            WHERE page_url LIKE '%views/ADM/as_document_management.php' LIMIT 1");
+        $st->execute();
+        $pg = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$pg) return '';
+        $st = $db->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='page' AND module_code=?");
+        $st->execute([$uid, $pg['page_id']]);
+        $perms = $st->fetchAll(PDO::FETCH_COLUMN);
+        if (empty($perms) && !empty($pg['group_id'])) {
+            $st = $db->prepare("SELECT module_code FROM system_modules WHERE group_id=? LIMIT 1");
+            $st->execute([$pg['group_id']]);
+            $gCode = $st->fetchColumn();
+            if ($gCode) {
+                $st = $db->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='group' AND module_code=?");
+                $st->execute([$uid, $gCode]);
+                $perms = $st->fetchAll(PDO::FETCH_COLUMN);
+            }
+        }
+        $chars = [];
+        foreach ($perms as $p) { $chars = array_merge($chars, str_split($p)); }
+        return implode('', array_unique($chars));
+    } catch (Exception $e) { return ''; }
+}
+$asPagePerm = $currentUserId ? asPagePerm($db, $currentUserId) : '';
+
+/** 能力判斷：view/create/update/delete 走「頁面ACRUD OR 角色功能碼」；settings 只認 A 或 asdoc_settings */
+function asCan(string $what): bool {
+    global $asFeatures, $asIsRoleAdmin, $asPagePerm;
+    if ($asIsRoleAdmin || strpos($asPagePerm, 'A') !== false) return true;
+    $charMap = ['view'=>'R', 'create'=>'C', 'update'=>'U', 'delete'=>'D'];
+    if (isset($charMap[$what]) && strpos($asPagePerm, $charMap[$what]) !== false) return true;
+    return in_array('asdoc_' . $what, $asFeatures, true);
+}
+
 // ── 共用工具 ───────────────────────────────────────────────────────
 function jout($arr){ echo json_encode($arr, JSON_UNESCAPED_UNICODE); exit; }
 
@@ -76,6 +119,26 @@ function asStream(string $fullpath, string $downloadName): void {
 }
 
 $action = $_REQUEST['action'] ?? '';
+
+// 各 action 所需能力
+$asGate = [
+    'list_tags'=>'view', 'meta'=>'view', 'list_documents'=>'view', 'get_document'=>'view',
+    'download'=>'view', 'download_template'=>'view',
+    'create_document'=>'create',
+    'add_version'=>'update', 'update_document_meta'=>'update',
+    'delete_document'=>'delete', 'restore_document'=>'delete',
+    'add_tag'=>'settings', 'update_tag'=>'settings', 'delete_tag'=>'settings',
+    'get_perms'=>'settings', 'save_perms'=>'settings',
+    'get_settings'=>'settings', 'save_settings'=>'settings', 'upload_template'=>'settings',
+];
+if (!$currentUserId) {
+    if ($action === 'download' || $action === 'download_template') { http_response_code(403); exit('尚未登入'); }
+    jout(['status'=>'error','message'=>'尚未登入']);
+}
+if (isset($asGate[$action]) && !asCan($asGate[$action])) {
+    if ($action === 'download' || $action === 'download_template') { http_response_code(403); header('Content-Type: text/plain; charset=utf-8'); exit('無權限'); }
+    jout(['status'=>'error','message'=>'無權限執行此操作（請至權限設定頁指派 AS 文件管理角色或頁面權限）']);
+}
 
 try {
 switch ($action) {
