@@ -6870,14 +6870,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
     <div class="col-md-4">
         <div class="form-group">
             <label>發行日</label>
-            <div style="display:flex;gap:5px;align-items:center;">
-                <input type="text" class="form-control" id="pf-Issue_Year" placeholder="年" maxlength="4" style="width:68px;">
-                <span style="line-height:34px;color:#888;">/</span>
-                <input type="text" class="form-control" id="pf-Issue_Month" placeholder="月" maxlength="2" style="width:52px;">
-                <span style="line-height:34px;color:#888;">/</span>
-                <input type="text" class="form-control" id="pf-Issue_Day" placeholder="日" maxlength="2" style="width:52px;">
-            </div>
-            <input type="hidden" id="pf-Issue_Date" name="Issue_Date">
+            <input type="date" class="form-control" id="pf-Issue_Date" name="Issue_Date" max="9999-12-31">
         </div>
     </div>
     <div class="col-md-4">
@@ -22000,7 +21993,7 @@ $(function() {
     if (sdEl) sdEl.addEventListener('input', updateSettlementDayHint);
 
     // ── 料號 modal：ENTER 自動跳下一個輸入框（跳過舊料號區）──────────
-    var _partEnterOrder = ['pf-D_Setting_Id','pf-Spec_No','pf-Revision','pf-Issue_Year','pf-Issue_Month','pf-Issue_Day','pf-customer-display','pf-Weight_Kg'];
+    var _partEnterOrder = ['pf-D_Setting_Id','pf-Spec_No','pf-Revision','pf-Issue_Date','pf-customer-display','pf-Weight_Kg'];
     document.getElementById('partForm').addEventListener('keydown', function(e) {
         if (e.key !== 'Enter') return;
         var el = e.target;
@@ -22011,11 +22004,6 @@ $(function() {
         var next = idx < _partEnterOrder.length - 1 ? document.getElementById(_partEnterOrder[idx + 1]) : null;
         if (next) { next.focus(); if (next.select) next.select(); }
     });
-
-    // ── 發行日三欄 input：同步隱藏欄位（跳欄只用 ENTER）──────────
-    document.getElementById('pf-Issue_Year').addEventListener('input',  syncIssueDateHidden);
-    document.getElementById('pf-Issue_Month').addEventListener('input', syncIssueDateHidden);
-    document.getElementById('pf-Issue_Day').addEventListener('input',   syncIssueDateHidden);
 
     // ── 規格快速按鈕初始化 ───────────────────────────────────────────
     loadSpecBtns();
@@ -22127,38 +22115,13 @@ function saveSpecBtnSettings() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 發行日三欄輸入輔助
+// 發行日回填（date input 只接受 YYYY-MM-DD，含時間的字串取前 10 碼）
 // ═══════════════════════════════════════════════════════════════════════════
-function syncIssueDateHidden() {
-    var y = (document.getElementById('pf-Issue_Year').value  || '').trim();
-    var m = (document.getElementById('pf-Issue_Month').value || '').trim();
-    var d = (document.getElementById('pf-Issue_Day').value   || '').trim();
-    var hidden = document.getElementById('pf-Issue_Date');
-    if (!hidden) return;
-    if (y && m && d) {
-        hidden.value = y.padStart(4,'0') + '-' + m.padStart(2,'0') + '-' + d.padStart(2,'0');
-    } else {
-        hidden.value = '';
-    }
-}
-
 function setIssueDateFields(dateStr) {
-    var y = '', m = '', d = '';
-    if (dateStr) {
-        var parts = String(dateStr).split('-');
-        if (parts.length === 3) {
-            y = parts[0];
-            m = String(parseInt(parts[1], 10) || '');
-            d = String(parseInt(parts[2], 10) || '');
-        }
-    }
-    var yEl = document.getElementById('pf-Issue_Year');
-    var mEl = document.getElementById('pf-Issue_Month');
-    var dEl = document.getElementById('pf-Issue_Day');
-    if (yEl) yEl.value = y;
-    if (mEl) mEl.value = m;
-    if (dEl) dEl.value = d;
-    syncIssueDateHidden();
+    var v = String(dateStr || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) v = '';
+    var el = document.getElementById('pf-Issue_Date');
+    if (el) el.value = v;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
