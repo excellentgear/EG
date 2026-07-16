@@ -572,7 +572,7 @@ $(function(){
     $.post(API+'?action=open_online',{version_id:$b.data('ver')}, r=>{
       if(r.status!=='success'){ alert(r.message||'開啟失敗'); return; }
       window.location.href = r.uri; // 觸發 ms-excel:/ms-word: 協定
-      setTimeout(()=>{ alert('已建立工作副本並嘗試開啟 Office。\n若沒有反應，請確認此電腦已安裝 Office 並可存取 NAS。\n副本位置：'+r.path+'\n（打完資料請直接列印或另存，7 天後自動清除，不影響正式版本檔）'); }, 1500);
+      setTimeout(()=>{ alert('已建立工作副本並嘗試開啟 Office。\n若沒有反應：請確認此電腦已安裝 Office 並可存取 NAS。\n若 Office 顯示「已封鎖／不安全的內容」：請開 Excel → 檔案 → 選項 → 信任中心 → 信任中心設定 → 信任位置 → 勾選「允許在我的網路上的信任位置」→ 新增位置輸入 \\\\excellentnas\\as9100（勾含子資料夾），設定一次即可。\n副本位置：'+r.path+'\n（打完資料請直接列印或另存，7 天後自動清除，不影響正式版本檔）'); }, 1500);
     },'json').always(()=>$b.prop('disabled',false));
   });
   let META = {departments:[],positions:[],tags:[],users:[]};

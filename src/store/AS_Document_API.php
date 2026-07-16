@@ -803,8 +803,10 @@ case 'open_online':
     $dst = $workDir.DIRECTORY_SEPARATOR.$copyName;
     if (!@copy($src, $dst)) jout(['status'=>'error','message'=>'建立工作副本失敗']);
 
-    // ms-office 協定：ofe=開啟編輯；路徑用 UNC，用戶端需可存取 NAS 且裝有 Office
-    $uri = $schemes[$ext].':ofe|u|'.$dst;
+    // ms-office 協定：ofe=開啟編輯。路徑需轉成合法 file: URI 並逐段百分比編碼——
+    // 含空格/括號/中文的 UNC 直接塞協定會被 Office 判為「受限制的網站區域」而封鎖（2026-07-16 實測）。
+    $fileUri = 'file:' . implode('/', array_map('rawurlencode', explode('/', str_replace('\\', '/', $dst))));
+    $uri = $schemes[$ext].':ofe|u|'.$fileUri;
     jout(['status'=>'success','uri'=>$uri,'path'=>$dst,
           'note'=>'已建立工作副本（不影響正式版本檔），打完資料請直接列印或另存；副本 7 天後自動清除']);
 
