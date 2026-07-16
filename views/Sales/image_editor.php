@@ -2746,7 +2746,7 @@ function mkValText(str, fs, extra) {
     const t = mkLabelText(String(str), fs, extra);
     const lines = String(str).split('\n');
     if (lines.length > 1) {
-        const small = Math.max(10, Math.round(fs * 0.6));
+        const small = Math.max(10, Math.round(fs * 0.75));
         const styles = {};
         for (let li = 1; li < lines.length; li++) {
             styles[li] = {};
@@ -2870,6 +2870,8 @@ function viewCenter() {
     return { x: (wrap.clientWidth / 2 - vpt[4]) / vpt[0], y: (wrap.clientHeight / 2 - vpt[5]) / vpt[3] };
 }
 function placeLabelObject(o) {
+    // 尺寸算出 NaN 的物件一旦進畫布會毒化整個渲染迴圈（殘影、卡死），寧可不插入
+    if (!o || !isFinite(o.width) || !isFinite(o.height)) { toast('標籤建立失敗（尺寸異常），未插入'); return; }
     const c = viewCenter();
     o.set({ originX: 'center', originY: 'center', left: c.x, top: c.y });
     o.setCoords();
@@ -3547,9 +3549,16 @@ function finishGroupTextEdit(group, child, val) {
         // 規格標籤：改 spec 後整顆重建（外框自動貼合新字長），保留使用者縮放/旋轉
         const spec = JSON.parse(JSON.stringify(group.labelSpec));
         setSpecByPath(spec, child.specPath, val);
+        // 先建好並驗證尺寸再替換：重建若出例外或算出 NaN（毒化物件＝殘影/卡死來源），保留原標籤不動
+        let ng = null;
+        try { ng = makeLabelFromSpec(spec); } catch (e) { console.warn('[EGdraw] 標籤重建例外：', e); }
+        if (!ng || !isFinite(ng.width) || !isFinite(ng.height)) {
+            toast('標籤重建失敗，已保留原內容（此次修改未套用）');
+            canvas.requestRenderAll();
+            return;
+        }
         const { scaleX, scaleY, angle } = group;
         canvas.remove(group);
-        const ng = makeLabelFromSpec(spec);
         ng.set({ scaleX, scaleY, angle, originX: 'center', originY: 'center' });
         ng.setPositionByOrigin(center, 'center', 'center');
         ng.setCoords();
@@ -4726,9 +4735,24 @@ function snapUnpoolify(json) {   // 池索引占位 → 原 dataURL（沒有占�
     });
 }
 const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved'];
+/* 卡頓/當機診斷：主要耗時點超過門檻就在主控台留紀錄（回報問題時請開 F12 把紅字/黃字截圖）；
+   未攔截的程式例外第一次發生時跳 toast 提醒——渲染迴圈被例外打斷正是「殘影＋卡死」的典型來源 */
+let __egErrToasted = false;
+window.addEventListener('error', function (ev) {
+    console.warn('[EGdraw] 未攔截例外：', ev.message, ev.filename, ev.lineno);
+    if (!__egErrToasted) {
+        __egErrToasted = true;
+        toast('偵測到程式例外（畫面可能出現殘影或卡頓）：' + (ev.message || '不明錯誤') + '——建議儲存後重新整理，並回報這則訊息');
+    }
+});
+function __egSlow(op, t0) {
+    const ms = Math.round(performance.now() - t0);
+    if (ms > 300) console.warn('[EGdraw] ' + op + ' 耗時 ' + ms + 'ms');
+}
 function doPushState() {
     pushTimer = null;
     if (restoring) return;
+    const __t0 = performance.now();
     try {
         const j = canvas.toJSON(SNAP_PROPS);
         snapPoolify(j);   // 大圖 dataURL 抽進共用池，快照只剩幾 KB，stringify 不再凍結畫面
@@ -4744,6 +4768,7 @@ function doPushState() {
             undoStack.shift();
         }
     } catch (e) { /* 圖太大時快照失敗不影響操作 */ }
+    __egSlow('undo快照', __t0);
 }
 function pushState() {
     if (restoring) return;
@@ -4755,10 +4780,11 @@ function flushPendingState() {
 }
 function restoreState(json) {
     restoring = true;
+    const __t0 = performance.now();
     try {
         const j = (typeof json === 'string') ? JSON.parse(json) : json;
         snapUnpoolify(j);   // 快照裡的池索引換回真正的 dataURL；未池化的舊格式原樣通過
-        canvas.loadFromJSON(j, restoreDone);
+        canvas.loadFromJSON(j, function () { restoreDone(); __egSlow('undo還原', __t0); });
     } catch (e) {
         restoring = false;   // JSON 壞掉時 restoring 卡在 true 會讓之後所有快照永久靜默失效
         toast('還原失敗：資料格式有誤');
