@@ -107,12 +107,19 @@ function asSafeExt(string $orig): ?string {
 function asMakeName(string $ext): string {
     return date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ext;
 }
-/** 串流下載一個實體檔案 */
-function asStream(string $fullpath, string $downloadName): void {
+/** 串流下載/開啟一個實體檔案（$inline=true 時 PDF/圖片直接在瀏覽器開啟） */
+function asStream(string $fullpath, string $downloadName, bool $inline = false): void {
     if (!is_file($fullpath)) { http_response_code(404); header('Content-Type: text/plain; charset=utf-8'); echo '檔案不存在或 NAS 未連線'; exit; }
+    $ext = strtolower(pathinfo($fullpath, PATHINFO_EXTENSION));
+    $inlineTypes = ['pdf'=>'application/pdf','png'=>'image/png','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','gif'=>'image/gif','txt'=>'text/plain; charset=utf-8'];
     header_remove('Content-Type');
-    header('Content-Type: application/octet-stream');
-    header('Content-Disposition: attachment; filename="' . rawurlencode($downloadName) . '"; filename*=UTF-8\'\'' . rawurlencode($downloadName));
+    if ($inline && isset($inlineTypes[$ext])) {
+        header('Content-Type: ' . $inlineTypes[$ext]);
+        header('Content-Disposition: inline; filename="' . rawurlencode($downloadName) . '"; filename*=UTF-8\'\'' . rawurlencode($downloadName));
+    } else {
+        header('Content-Type: application/octet-stream');
+        header('Content-Disposition: attachment; filename="' . rawurlencode($downloadName) . '"; filename*=UTF-8\'\'' . rawurlencode($downloadName));
+    }
     header('Content-Length: ' . filesize($fullpath));
     readfile($fullpath);
     exit;
@@ -178,7 +185,8 @@ case 'meta':
     $poss  = $db->query("SELECT p.id,p.name,pl.level FROM position p LEFT JOIN position_level pl ON p.id=pl.position_id ORDER BY p.sort_order ASC, p.id ASC")->fetchAll(PDO::FETCH_ASSOC);
     $tags  = $db->query("SELECT id,name,color FROM as_doc_tag ORDER BY sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
     $users = $db->query("SELECT id,user_cname FROM user WHERE state IN (1,90,99) OR state IS NULL ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
-    jout(['status'=>'success','departments'=>$depts,'positions'=>$poss,'tags'=>$tags,'users'=>$users]);
+    $parents = $db->query("SELECT id, doc_no, doc_name FROM as_document WHERE is_deleted=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['status'=>'success','departments'=>$depts,'positions'=>$poss,'tags'=>$tags,'users'=>$users,'parents'=>$parents]);
 
 // ══════════════ 文件清單（搜尋 / 篩選） ══════════════
 case 'list_documents':
@@ -195,13 +203,18 @@ case 'list_documents':
     if ($level!=='')  { $where[] = "d.doc_level = ?"; $params[]=$level; }
     if ($dept!=='')   { $where[] = "d.department_id = ?"; $params[]=(int)$dept; }
     if ($tag>0)       { $where[] = "d.id IN (SELECT doc_id FROM as_doc_tag_map WHERE tag_id = ?)"; $params[]=$tag; }
+    $parentId = (int)($_GET['parent_id'] ?? 0);
+    if ($parentId>0)  { $where[] = "d.parent_doc_id = ?"; $params[]=$parentId; }
     $wsql = $where ? ('WHERE '.implode(' AND ',$where)) : '';
 
     $sql = "SELECT d.*, dep.name AS dept_name,
-                   v.revised_date, v.change_status
+                   v.revised_date, v.change_status,
+                   pd.doc_no AS parent_doc_no, pd.doc_name AS parent_doc_name,
+                   (SELECT COUNT(*) FROM as_document c WHERE c.parent_doc_id = d.id AND c.is_deleted = 0) AS children_count
             FROM as_document d
             LEFT JOIN department dep ON dep.id = d.department_id
             LEFT JOIN as_document_version v ON v.id = d.current_version_id
+            LEFT JOIN as_document pd ON pd.id = d.parent_doc_id
             $wsql
             ORDER BY d.doc_level, dep.name, d.doc_no";
     $stmt = $db->prepare($sql);
@@ -224,10 +237,18 @@ case 'list_documents':
 case 'get_document':
     $id = (int)($_GET['id'] ?? 0);
     if ($id<=0) jout(['status'=>'error','message'=>'無效 ID']);
-    $st = $db->prepare("SELECT d.*, dep.name AS dept_name FROM as_document d LEFT JOIN department dep ON dep.id=d.department_id WHERE d.id=?");
+    $st = $db->prepare("SELECT d.*, dep.name AS dept_name, pd.doc_no AS parent_doc_no, pd.doc_name AS parent_doc_name
+                        FROM as_document d
+                        LEFT JOIN department dep ON dep.id=d.department_id
+                        LEFT JOIN as_document pd ON pd.id=d.parent_doc_id
+                        WHERE d.id=?");
     $st->execute([$id]);
     $doc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
+
+    $ch = $db->prepare("SELECT id, doc_no, doc_name, current_version FROM as_document WHERE parent_doc_id=? AND is_deleted=0 ORDER BY doc_no");
+    $ch->execute([$id]);
+    $doc['children'] = $ch->fetchAll(PDO::FETCH_ASSOC);
 
     $vs = $db->prepare("SELECT v.*, dep.name AS dept_name_snapshot FROM as_document_version v LEFT JOIN department dep ON dep.id=v.department_id_snapshot WHERE v.doc_id=? ORDER BY v.id DESC");
     $vs->execute([$id]);
@@ -246,6 +267,7 @@ case 'create_document':
     $doc_type= trim($_POST['doc_type'] ?? '');
     $level   = trim($_POST['doc_level'] ?? '');
     $dept    = ($_POST['department_id'] ?? '')!=='' ? (int)$_POST['department_id'] : null;
+    $parent  = ($_POST['parent_doc_id'] ?? '')!=='' ? (int)$_POST['parent_doc_id'] : null;
     $version = trim($_POST['version'] ?? '');
     $rdate   = trim($_POST['revised_date'] ?? '') ?: null;
     $rpages  = trim($_POST['revised_pages'] ?? '') ?: null;
@@ -268,9 +290,9 @@ case 'create_document':
 
     $db->beginTransaction();
     try {
-        $db->prepare("INSERT INTO as_document (doc_no,doc_name,doc_type,doc_level,department_id,current_version,created_by,created_at,updated_at)
-                      VALUES (?,?,?,?,?,?,?,NOW(),NOW())")
-           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$version,$GLOBALS['currentCname']]);
+        $db->prepare("INSERT INTO as_document (doc_no,doc_name,doc_type,doc_level,department_id,parent_doc_id,current_version,created_by,created_at,updated_at)
+                      VALUES (?,?,?,?,?,?,?,?,NOW(),NOW())")
+           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$version,$GLOBALS['currentCname']]);
         $docId = (int)$db->lastInsertId();
 
         $dir = asDocDir($db, $docId);
@@ -369,12 +391,14 @@ case 'update_document_meta':
     $doc_type= trim($_POST['doc_type'] ?? '');
     $level   = trim($_POST['doc_level'] ?? '');
     $dept    = ($_POST['department_id'] ?? '')!=='' ? (int)$_POST['department_id'] : null;
+    $parent  = ($_POST['parent_doc_id'] ?? '')!=='' ? (int)$_POST['parent_doc_id'] : null;
     $tagIds  = array_filter(array_map('intval', explode(',', $_POST['tag_ids'] ?? '')));
     if ($id<=0 || $doc_no==='' || $doc_name==='') jout(['status'=>'error','message'=>'資料不完整']);
+    if ($parent === $id) $parent = null; // 不可自己當自己的母文件
     $db->beginTransaction();
     try {
-        $db->prepare("UPDATE as_document SET doc_no=?,doc_name=?,doc_type=?,doc_level=?,department_id=?,updated_at=NOW() WHERE id=?")
-           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$id]);
+        $db->prepare("UPDATE as_document SET doc_no=?,doc_name=?,doc_type=?,doc_level=?,department_id=?,parent_doc_id=?,updated_at=NOW() WHERE id=?")
+           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$id]);
         $db->prepare("DELETE FROM as_doc_tag_map WHERE doc_id=?")->execute([$id]);
         if ($tagIds) { $ins=$db->prepare("INSERT IGNORE INTO as_doc_tag_map (doc_id,tag_id) VALUES (?,?)"); foreach($tagIds as $t) $ins->execute([$id,$t]); }
         $db->commit();
@@ -404,11 +428,12 @@ case 'download':
     $v = $st->fetch(PDO::FETCH_ASSOC);
     if (!$v) { http_response_code(404); exit('版本不存在'); }
     $dir = asDocDir($db, (int)$v['doc_id']);
+    $inline = (($_GET['inline'] ?? '') === '1');
     if ($which==='apply') {
         if (!$v['apply_form_file_name']) { http_response_code(404); exit('此版本無申請單'); }
-        asStream($dir.DIRECTORY_SEPARATOR.$v['apply_form_file_name'], $v['apply_form_original_name'] ?: $v['apply_form_file_name']);
+        asStream($dir.DIRECTORY_SEPARATOR.$v['apply_form_file_name'], $v['apply_form_original_name'] ?: $v['apply_form_file_name'], $inline);
     } else {
-        asStream($dir.DIRECTORY_SEPARATOR.$v['file_name'], $v['original_name'] ?: $v['file_name']);
+        asStream($dir.DIRECTORY_SEPARATOR.$v['file_name'], $v['original_name'] ?: $v['file_name'], $inline);
     }
     break;
 

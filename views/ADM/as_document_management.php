@@ -182,6 +182,7 @@ if ($deptPerm === 'R') {
                   <thead>
                     <tr>
                       <th>文件編號</th><th>文件名稱</th><th>類別</th><th>階級</th><th>部門</th>
+                      <th>母文件 / 表單</th>
                       <th>目前版本</th><th>修訂日期</th><th>標籤</th><th style="min-width:230px;">操作</th>
                     </tr>
                   </thead>
@@ -228,21 +229,24 @@ if ($deptPerm === 'R') {
             <div class="form-group col-md-6"><label>文件名稱 *</label><input type="text" class="form-control" name="doc_name" id="doc_name" required></div>
           </div>
           <div class="row">
-            <div class="form-group col-md-4"><label>文件類別</label>
+            <div class="form-group col-md-3"><label>文件類別</label>
               <select class="form-control" name="doc_type" id="doc_type">
                 <option value="">--</option><option>手冊</option><option>程序</option><option>標準書</option><option>表單</option>
               </select>
             </div>
-            <div class="form-group col-md-4"><label>文件階級</label>
+            <div class="form-group col-md-3"><label>文件階級</label>
               <select class="form-control" name="doc_level" id="doc_level">
                 <option value="">--</option><option value="一階">一階（品質手冊）</option><option value="二階">二階（程序書）</option><option value="三階">三階（指導書/圖面/規範）</option><option value="四階">四階（表單/紀錄）</option>
               </select>
-              <span class="text-muted" style="font-size:11px;">表單/紀錄一律屬<strong>四階</strong>；編號首碼是「母文件」的階級（如 2-TD-01-01 為隸屬二階程序書 2-TD-01 的四階表單）。</span>
             </div>
-            <div class="form-group col-md-4"><label>所屬部門</label>
+            <div class="form-group col-md-3"><label>所屬部門</label>
               <select class="form-control" name="department_id" id="doc_department_id"><option value="">跨部門 / 未指定</option></select>
             </div>
+            <div class="form-group col-md-3"><label>母文件（表單隸屬的程序書）</label>
+              <select class="form-control" name="parent_doc_id" id="doc_parent_id"><option value="">— 無 —</option></select>
+            </div>
           </div>
+          <p class="text-muted" style="font-size:11px;margin-top:-8px;">表單/紀錄一律屬<strong>四階</strong>；編號首碼是「母文件」的階級（如 2-TD-01-01 為隸屬二階程序書 2-TD-01 的四階表單）。選了母文件，列表可從程序書一鍵展開其所有表單。</p>
           <div class="form-group">
             <label>標籤 / 分類</label>
             <div id="docTagPicker" style="border:1px solid #ddd;border-radius:4px;padding:8px;min-height:40px;"></div>
@@ -451,7 +455,7 @@ $(function(){
   const canD = !!window.asPerm.delete;
   const canS = !!window.asPerm.settings;
   let META = {departments:[],positions:[],tags:[],users:[]};
-  let DOCS = [], FILTERED = [], activeTagId = 0, curPage = 1;
+  let DOCS = [], FILTERED = [], activeTagId = 0, curPage = 1, activeParentId = 0, activeParentNo = '';
 
   function esc(t){ if(t===null||t===undefined) return ''; return String(t).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
 
@@ -486,13 +490,38 @@ $(function(){
       level: $('#filterLevel').val(),
       department_id: $('#filterDept').val(),
       tag_id: activeTagId,
+      parent_id: activeParentId,
       include_deleted: $('#incDeleted').is(':checked') ? '1':'0'
     };
     $.getJSON(API+'?action=list_documents', p, r=>{
       if(r.status!=='success'){ alert(r.message||'讀取失敗'); return; }
-      DOCS = r.data; curPage = 1; renderDocs();
+      DOCS = r.data; curPage = 1; renderDocs(); renderParentIndicator();
     });
   }
+
+  // 「檢視某文件底下表單」狀態指示
+  function renderParentIndicator(){
+    $('#parentFilterBar').remove();
+    if(activeParentId>0){
+      $('<div id="parentFilterBar" class="alert alert-success" style="padding:5px 10px;margin-bottom:8px;">'
+        + '<i class="fa fa-filter"></i> 檢視 <strong>'+activeParentNo+'</strong> 底下的表單　'
+        + '<a href="#" id="clearParentFilter" style="text-decoration:underline;">回全部文件</a></div>')
+        .insertBefore($('#docTableBody').closest('.table-responsive'));
+    }
+  }
+  $(document).on('click','#clearParentFilter',function(e){ e.preventDefault(); activeParentId=0; activeParentNo=''; loadDocs(); });
+  $('#docTableBody').on('click','.rel-children',function(e){
+    e.preventDefault();
+    activeParentId = parseInt($(this).data('id'))||0;
+    activeParentNo = $(this).data('no')||'';
+    loadDocs();
+  });
+  $('#docTableBody').on('click','.rel-parent',function(e){
+    e.preventDefault();
+    activeParentId = 0; activeParentNo = '';
+    $('#searchKw').val($(this).data('kw'));
+    loadDocs();
+  });
 
   function renderDocs(){
     const size = parseInt($('#pageSize').val())||10;
@@ -502,11 +531,19 @@ $(function(){
     const start = (curPage-1)*size;
     const rows = DOCS.slice(start, start+size);
     const tb = $('#docTableBody').empty();
-    if(rows.length===0){ tb.append('<tr><td colspan="9" class="text-center text-muted">無資料</td></tr>'); }
+    if(rows.length===0){ tb.append('<tr><td colspan="10" class="text-center text-muted">無資料</td></tr>'); }
     rows.forEach(d=>{
       const tags = (d.tags||[]).map(t=>`<span class="tag-chip" style="background:${esc(t.color)};">${esc(t.name)}</span>`).join(' ');
       let ops = '';
       const curVer = d.current_version_id;
+      // 母文件 / 子表單欄
+      let rel = '';
+      if(d.parent_doc_id) rel += `<a href="#" class="rel-parent" data-kw="${esc(d.parent_doc_no)}" title="${esc(d.parent_doc_name)}"><i class="fa fa-level-up"></i> ${esc(d.parent_doc_no)}</a>`;
+      if(parseInt(d.children_count)>0) rel += ` <a href="#" class="rel-children label label-success" data-id="${d.id}" data-no="${esc(d.doc_no)}" title="展開此文件底下的表單">表單 ×${d.children_count}</a>`;
+      // 文件名稱：有最新版可點擊直接開啟（後端 download 另驗讀取權限）
+      const nameCell = curVer
+        ? `<a href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="開啟最新版文件">${esc(d.doc_name)}</a>`
+        : esc(d.doc_name);
       ops += `<button class="btn btn-xs btn-default op-hist" data-id="${d.id}" data-name="${esc(d.doc_name)}">歷史版本</button> `;
       if(curVer) ops += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}">下載</a> `;
       if(canU){
@@ -523,10 +560,11 @@ $(function(){
       const delMark = d.is_deleted==1 ? ' <span class="label label-default">已刪除</span>' : '';
       tb.append(`<tr>
         <td>${esc(d.doc_no)}${delMark}</td>
-        <td>${esc(d.doc_name)}</td>
+        <td>${nameCell}</td>
         <td>${esc(d.doc_type)||'-'}</td>
         <td>${esc(d.doc_level)||'-'}</td>
         <td>${esc(d.dept_name)||'<span class="text-muted">跨部門</span>'}</td>
+        <td class="text-nowrap">${rel||'-'}</td>
         <td><span class="label label-info">${esc(d.current_version)||'-'}</span></td>
         <td>${esc(d.revised_date)||'-'}</td>
         <td>${tags||'-'}</td>
@@ -546,7 +584,14 @@ $(function(){
   $('#pageSize').on('change', renderDocs);
   $('#searchKw').on('keyup', function(e){ if(e.key==='Enter') loadDocs(); });
   $('#filterLevel,#filterDept,#incDeleted').on('change', loadDocs);
-  $('#btnClearFilter').on('click', ()=>{ $('#searchKw').val(''); $('#filterLevel').val(''); $('#filterDept').val(''); activeTagId=0; renderTagFilter(); loadDocs(); });
+  $('#btnClearFilter').on('click', ()=>{ $('#searchKw').val(''); $('#filterLevel').val(''); $('#filterDept').val(''); activeTagId=0; activeParentId=0; activeParentNo=''; renderTagFilter(); loadDocs(); });
+
+  // 母文件下拉（excludeId=編輯中的自己不可選）
+  function fillParentSelect(excludeId, selected){
+    const opts = ['<option value="">— 無 —</option>'].concat(
+      (META.parents||[]).filter(p=>p.id!=excludeId).map(p=>`<option value="${p.id}" ${selected==p.id?'selected':''}>${esc(p.doc_no)}｜${esc(p.doc_name)}</option>`));
+    $('#doc_parent_id').html(opts.join(''));
+  }
   $('#tagFilterBar').on('click','.tag-filter', function(){ activeTagId=parseInt($(this).data('id'))||0; renderTagFilter(); loadDocs(); });
   // 雙擊清空搜尋欄
   $('#searchKw').on('dblclick', function(){ $(this).val(''); loadDocs(); });
@@ -578,6 +623,7 @@ $(function(){
     $('#docModalTitle').text('新增文件'); $('#firstVersionBlock').show();
     $('#doc_file').prop('required',true); $('#doc_version').prop('required',true);
     renderDocTagPicker([]);
+    fillParentSelect(0, '');
     $('#docModal').modal('show');
   });
 
@@ -594,6 +640,7 @@ $(function(){
       $('#firstVersionBlock').hide();
       $('#doc_file').prop('required',false); $('#doc_version').prop('required',false);
       renderDocTagPicker((d.tags||[]).map(t=>t.id));
+      fillParentSelect(d.id, d.parent_doc_id||'');
       $('#docModal').modal('show');
     });
   });
@@ -605,7 +652,7 @@ $(function(){
     const fd = new FormData(this);
     NProgress.start();
     $.ajax({url:url, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
-     .done(r=>{ if(r.status==='success'){ $('#docModal').modal('hide'); loadDocs(); } else alert(r.message||'失敗'); })
+     .done(r=>{ if(r.status==='success'){ $('#docModal').modal('hide'); loadMeta(loadDocs); } else alert(r.message||'失敗'); })
      .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
   });
 
