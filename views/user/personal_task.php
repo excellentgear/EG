@@ -118,6 +118,7 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .pt-items-badge:hover { text-decoration:underline; }
         .pt-items-badge.all-done { color:#1ABB9C; }
         .pt-items-panel { margin-top:6px; background:#F7F9FC; border:1px solid #E3E9F1; border-radius:6px; padding:6px 10px; max-width:420px; }
+        .pt-items-panel.current-step { border-color:#F5D9A8; background:#FFFDF5; }
         .pt-item-row { display:flex; align-items:center; gap:6px; font-size:12px; padding:2px 0; color:#556; margin:0; font-weight:400; cursor:pointer; }
         .pt-item-row input[type=checkbox] { margin:0; }
         .pt-item-row.done .pt-item-name { color:#9AA5B1; text-decoration:line-through; }
@@ -130,6 +131,26 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .bind-order { background:#c0392b; }
 
         .no-access-box{ max-width:520px; margin:80px auto; text-align:center; padding:40px; background:#fff; border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,.08); }
+
+        /* 可雙擊編輯的儲存格 */
+        td.cell-edit { cursor:pointer; }
+        td.cell-edit:hover { background:#F0F5FB; }
+
+        /* 新增/編輯跳窗改版：漸層標頭 + 區塊卡片 */
+        .pt-modal { border:none; border-radius:10px; overflow:hidden; box-shadow:0 12px 40px rgba(42,63,84,.35); }
+        .pt-modal-header { background:linear-gradient(135deg, #2A3F54 0%, #1ABB9C 100%); color:#fff; padding:13px 15px; border-bottom:none; }
+        .pt-modal-header .modal-title { font-weight:700; }
+        .pt-modal-header .close { color:#fff; opacity:.75; text-shadow:none; font-size:24px; margin-top:1px; }
+        .pt-modal-header .close:hover { opacity:1; }
+        .pt-header-actions { float:right; margin-right:34px; display:flex; gap:8px; margin-top:1px; }
+        .pt-modal-body { background:#F4F7FC; padding:15px; max-height:calc(100vh - 220px); overflow-y:auto; }
+        .form-section { background:#fff; border:1px solid #E8EEF5; border-radius:8px; padding:12px 15px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.04); }
+        .form-section-title { font-size:13px; font-weight:700; color:#2A3F54; margin-bottom:10px; }
+        .form-section-title > i { color:#1ABB9C; margin-right:6px; }
+        .pt-modal .form-control { border-radius:6px; box-shadow:none; border-color:#D8E0EA; }
+        .pt-modal .form-control:focus { border-color:#1ABB9C; }
+        .pt-modal label { font-size:12px; color:#7A869A; font-weight:600; margin-bottom:3px; }
+        .pt-modal-footer { background:#F4F7FC; border-top:1px solid #E8EEF5; }
 
         /* 自動完成下拉 */
         .ac-box{ position:relative; }
@@ -207,8 +228,11 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
 
       <div class="main-card">
         <div class="table-toolbar">
-          <div style="color:#888;font-size:12px;">
-            進度回報方式：點列表「進度」欄中<b>橘色</b>的下一步即記錄到達時間；須依順序、不可跳過。
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <button class="btn btn-default btn-xs" id="btnToggleAllItems"><i class="fa fa-list-ul"></i> 展開所有小項</button>
+            <span style="color:#888;font-size:12px;">
+              雙擊「接收日期／標題／期限」可開啟編輯；點「進度」<b>橘色</b>圓點回報到達（須依順序），最後的<i class="fa fa-flag-checkered"></i>「完成」＝整筆完成。
+            </span>
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
             <div id="pageInfo" style="color:#888;font-size:12px;"></div>
@@ -226,14 +250,12 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         <div style="overflow-x:auto;width:100%;">
           <table class="table ptask-table" id="ptaskTable">
             <thead><tr>
-              <th style="width:88px;">接收日期</th>
-              <th>標題</th>
-              <th>綁定</th>
-              <th style="width:150px;">期限</th>
-              <th style="min-width:260px;">進度</th>
-              <th style="width:200px;">操作</th>
+              <th style="width:92px;">接收日期</th>
+              <th style="min-width:180px;">標題</th>
+              <th style="width:130px;">期限</th>
+              <th style="min-width:300px;">進度</th>
             </tr></thead>
-            <tbody id="ptaskTbody"><tr><td colspan="6" class="text-center text-muted">載入中...</td></tr></tbody>
+            <tbody id="ptaskTbody"><tr><td colspan="4" class="text-center text-muted">載入中...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -245,89 +267,106 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
 <?php if ($has_access): ?>
 <!-- ══ 新增/編輯 Modal ══ -->
 <div class="modal fade" id="taskModal" role="dialog" tabindex="-1" data-backdrop="static">
-  <div class="modal-dialog" style="width:760px;">
-    <div class="modal-content">
-      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
-        <h4 class="modal-title" id="taskModalTitle">新增紀錄</h4></div>
-      <div class="modal-body">
+  <div class="modal-dialog" style="width:790px;">
+    <div class="modal-content pt-modal">
+      <div class="modal-header pt-modal-header">
+        <button type="button" class="close" data-dismiss="modal" title="關閉">&times;</button>
+        <div class="pt-header-actions">
+          <button type="button" class="btn btn-warning btn-xs" id="btnModalStatus" style="display:none;"><i class="fa fa-pause"></i> 暫停</button>
+          <button type="button" class="btn btn-danger btn-xs" id="btnModalDelete" style="display:none;"><i class="fa fa-trash"></i> 刪除</button>
+        </div>
+        <h4 class="modal-title" id="taskModalTitle"><i class="fa fa-pencil-square-o"></i> 新增紀錄</h4>
+      </div>
+      <div class="modal-body pt-modal-body">
         <input type="hidden" id="tId" value="0">
-        <div class="row">
-          <div class="col-sm-7"><div class="form-group">
-            <label>標題 <span style="color:#d9534f;">*</span></label>
-            <input type="text" id="tTitle" class="form-control" maxlength="200" placeholder="自行輸入工作標題">
-          </div></div>
-          <div class="col-sm-5"><div class="form-group">
-            <label>接收日期</label>
-            <input type="date" id="tReceived" class="form-control" max="9999-12-31">
-          </div></div>
-        </div>
 
-        <div class="form-group">
-          <label>綁定對象（擇一綁定，也可不綁定）</label>
-          <div style="display:flex; gap:8px; align-items:flex-start;">
-            <select id="tBindType" class="form-control" style="width:110px;">
-              <option value="">不綁定</option>
-              <option value="bom">BOM號碼</option>
-              <option value="part">料號</option>
-              <option value="customer">客戶</option>
-              <option value="maker">廠商</option>
-              <option value="order">訂單追蹤</option>
-            </select>
-            <div class="ac-box" style="flex:1;">
-              <input type="text" id="tBindKw" class="form-control" placeholder="先選類型，再輸入關鍵字搜尋" disabled>
-              <div class="ac-list" id="tBindSug"></div>
-            </div>
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa fa-info-circle"></i>基本資料</div>
+          <div class="row">
+            <div class="col-sm-7"><div class="form-group" style="margin-bottom:8px;">
+              <label>標題 <span style="color:#E74C3C;">*</span></label>
+              <input type="text" id="tTitle" class="form-control" maxlength="200" placeholder="自行輸入工作標題">
+            </div></div>
+            <div class="col-sm-5"><div class="form-group" style="margin-bottom:8px;">
+              <label>接收日期</label>
+              <input type="date" id="tReceived" class="form-control" max="9999-12-31">
+            </div></div>
           </div>
-          <div id="tBindChosen" style="margin-top:6px;"></div>
-          <input type="hidden" id="tBindId"><input type="hidden" id="tBindLabel">
-        </div>
-
-        <div class="row">
-          <div class="col-sm-5"><div class="form-group">
-            <label>期限（可不設定）</label>
-            <input type="date" id="tDeadline" class="form-control" max="9999-12-31">
-          </div></div>
-          <div class="col-sm-4"><div class="form-group">
-            <label>期限提醒（空白=不提醒）</label>
-            <div style="display:flex; gap:5px; align-items:center;">
-              <input type="number" id="tRemindVal" class="form-control" min="1" style="width:70px;">
-              <select id="tRemindUnit" class="form-control" style="width:75px;">
-                <option value="1440">天</option>
-                <option value="60">小時</option>
+          <div class="form-group" style="margin-bottom:0;">
+            <label>綁定對象（擇一綁定，也可不綁定）</label>
+            <div style="display:flex; gap:8px; align-items:flex-start;">
+              <select id="tBindType" class="form-control" style="width:115px;">
+                <option value="">不綁定</option>
+                <option value="bom">BOM號碼</option>
+                <option value="part">料號</option>
+                <option value="customer">客戶</option>
+                <option value="maker">廠商</option>
+                <option value="order">訂單追蹤</option>
               </select>
-              <span style="white-space:nowrap;">前提醒</span>
+              <div class="ac-box" style="flex:1;">
+                <input type="text" id="tBindKw" class="form-control" placeholder="先選類型，再輸入關鍵字搜尋" disabled>
+                <div class="ac-list" id="tBindSug"></div>
+              </div>
             </div>
-          </div></div>
-          <div class="col-sm-3"><div class="form-group">
-            <label>急件天數（空白=預設）</label>
-            <input type="number" id="tUrgentDays" class="form-control" min="0" placeholder="預設">
-          </div></div>
+            <div id="tBindChosen" style="margin-top:6px;"></div>
+            <input type="hidden" id="tBindId"><input type="hidden" id="tBindLabel">
+          </div>
         </div>
 
-        <div class="form-group">
-          <label>進度流程（可拖移排序；由上而下依序回報。日期與提醒都可不設定）</label>
-          <div style="display:flex; gap:8px; margin-bottom:6px; align-items:center;">
-            <button type="button" class="btn btn-default btn-xs" id="btnAddStep"><i class="fa fa-plus"></i> 新增進度</button>
-            <select id="tplApplySelect" class="form-control input-sm" style="width:180px;"><option value="">套用範本...</option></select>
-            <button type="button" class="btn btn-default btn-xs" id="btnSaveAsTpl"><i class="fa fa-save"></i> 目前流程存成範本</button>
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa fa-bell-o"></i>期限與提醒</div>
+          <div class="row">
+            <div class="col-sm-5"><div class="form-group" style="margin-bottom:0;">
+              <label>期限（可不設定）</label>
+              <input type="date" id="tDeadline" class="form-control" max="9999-12-31">
+            </div></div>
+            <div class="col-sm-4"><div class="form-group" style="margin-bottom:0;">
+              <label>期限提醒（空白=不提醒）</label>
+              <div style="display:flex; gap:5px; align-items:center;">
+                <input type="number" id="tRemindVal" class="form-control" min="1" style="width:70px;">
+                <select id="tRemindUnit" class="form-control" style="width:75px;">
+                  <option value="1440">天</option>
+                  <option value="60">小時</option>
+                </select>
+                <span style="white-space:nowrap;font-size:12px;color:#7A869A;">前提醒</span>
+              </div>
+            </div></div>
+            <div class="col-sm-3"><div class="form-group" style="margin-bottom:0;">
+              <label>急件天數（空白=預設）</label>
+              <input type="number" id="tUrgentDays" class="form-control" min="0" placeholder="預設">
+            </div></div>
           </div>
-          <div style="font-size:11px; color:#999; margin-bottom:2px;">
-            名稱欄按 <b>↓</b> 自動新增下一列、空白列按 <b>↑</b> 自動移除。「間隔」填工作天數（依行事曆，週末與休假日不算、補班日算），會自動從上一列日期（第一列從接收日期）推算預定日期。
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa fa-tasks"></i>進度流程
+            <span style="font-weight:400;color:#A8B0BA;font-size:11px;">（可拖移排序；由上而下依序回報，日期與提醒都可不設定）</span>
           </div>
-          <div style="display:flex; gap:6px; padding:0 4px 2px 26px; font-size:11px; color:#999;">
+          <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center; flex-wrap:wrap;">
+            <button type="button" class="btn btn-success btn-xs" id="btnAddStep"><i class="fa fa-plus"></i> 新增進度</button>
+            <select id="tplApplySelect" class="form-control input-sm" style="width:170px;"><option value="">套用範本...</option></select>
+            <button type="button" class="btn btn-default btn-xs" id="btnSaveAsTpl"><i class="fa fa-save"></i> 存成範本</button>
+            <span style="margin-left:auto; display:flex; align-items:center; gap:5px; font-size:12px; color:#7A869A;">
+              預設間隔 <input type="number" id="defaultInterval" class="form-control input-sm" min="0" style="width:60px;" title="填入後自動帶入所有進度的間隔並重算日期，之後可逐列手動修改"> 工作天
+            </span>
+          </div>
+          <div style="font-size:11px; color:#A8B0BA; margin-bottom:4px;">
+            名稱欄按 <b>↓</b> 自動新增下一列、空白列按 <b>↑</b> 自動移除。「間隔」填工作天數（週末與休假日不算、補班日算），自動從上一列日期（第一列從接收日期）推算預定日期。
+          </div>
+          <div style="display:flex; gap:6px; padding:0 4px 2px 26px; font-size:11px; color:#A8B0BA;">
             <span style="width:140px;">進度名稱</span><span style="width:60px;">間隔(工作天)</span><span style="width:135px;">預定日期(可空)</span><span>提醒(可空)</span>
           </div>
           <div id="stepEditor"></div>
         </div>
 
-        <div class="form-group">
-          <label>備註</label>
-          <textarea id="tNote" class="form-control" rows="2"></textarea>
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa fa-commenting-o"></i>備註</div>
+          <textarea id="tNote" class="form-control" rows="2" placeholder="選填"></textarea>
         </div>
       </div>
-      <div class="modal-footer">
+      <div class="modal-footer pt-modal-footer">
         <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
-        <button type="button" class="btn btn-primary" id="btnSaveTask" data-enter-submit="1">儲存</button>
+        <button type="button" class="btn btn-primary" id="btnSaveTask" data-enter-submit="1"><i class="fa fa-check"></i> 儲存</button>
       </div>
     </div>
   </div>
@@ -517,7 +556,7 @@ function filterParams() {
 
 function loadList() {
     apiGet('list_tasks', filterParams()).done(function (res) {
-        if (!res.success) { $('#ptaskTbody').html('<tr><td colspan="6" class="text-center text-muted">' + esc(res.message || '讀取失敗') + '</td></tr>'); return; }
+        if (!res.success) { $('#ptaskTbody').html('<tr><td colspan="4" class="text-center text-muted">' + esc(res.message || '讀取失敗') + '</td></tr>'); return; }
         state.rows = res.data || [];
         state.total = res.total || 0;
         state.urgentDefault = res.urgent_default || 3;
@@ -556,17 +595,20 @@ function deadlineCell(r) {
     return $td;
 }
 
+var expandAllItems = false;   // 「展開所有小項」開關（預設只展開目前進度的小項）
+
 function stepFlowCell(r) {
     var $td = $('<td>');
     var steps = r.steps || [];
-    if (!steps.length) return $td.html('<span style="color:#bbb;">—</span>');
     var firstUnreachedId = null, lastReachedId = null;
     steps.forEach(function (s) {
         if (s.reached_at == null && firstUnreachedId === null) firstUnreachedId = s.id;
         if (s.reached_at != null) lastReachedId = s.id;
     });
-    var $panelHolder = $('<div>');  // 小項展開面板容器（整列共用一個，一次展開一個步驟）
+    var allRealReached = steps.every(function (s) { return s.reached_at != null; });
+    var $panelsBox = $('<div>');   // 小項面板容器（可同時展開多個步驟的小項）
     var $flow = $('<div class="step-flow">');
+
     steps.forEach(function (s, i) {
         var reached = s.reached_at != null;
         var isCurrent = (r.status == 0 && s.id === firstUnreachedId);
@@ -574,14 +616,14 @@ function stepFlowCell(r) {
         if (reached) $node.addClass('reached');
         else if (isCurrent) $node.addClass('current');
 
-        // 圓點與左右連接線：與前一步之間的線，在前一步已到達時上色
+        // 圓點與左右連接線：與前一步之間的線，在前一步已到達時上色（最後永遠接到「完成」節點）
         var prevReached = i > 0 && steps[i - 1].reached_at != null;
         var $top = $('<div class="pt-step-top">');
         $top.append($('<span class="pt-line">').addClass(i === 0 ? 'edge' : (prevReached ? 'done' : '')));
         var $dot = $('<span class="pt-dot">');
         if (reached) $dot.html('<i class="fa fa-check"></i>'); else $dot.text(i + 1);
         $top.append($dot);
-        $top.append($('<span class="pt-line">').addClass(i === steps.length - 1 ? 'edge' : (reached ? 'done' : '')));
+        $top.append($('<span class="pt-line">').addClass(reached ? 'done' : ''));
         $node.append($top);
 
         $node.append($('<div class="pt-step-name">').text(s.step_name));
@@ -614,32 +656,65 @@ function stepFlowCell(r) {
             if (s.planned_at) $node.append($('<div class="pt-step-time">').text('預定 ' + fmtDateShort(s.planned_at)));
             $node.attr('title', '尚未輪到此進度');
         }
-        // 小項徽章：☑ 完成數/總數，點擊展開下方勾選面板
+
+        // 小項：徽章顯示完成數，面板展開勾選；目前進度的小項預設展開，「展開所有小項」時全開
         var items = s.items || [];
         if (items.length) {
-            var doneCnt = items.filter(function (it) { return it.done_at != null; }).length;
-            var $badge = $('<div class="pt-items-badge">').text('☑ ' + doneCnt + '/' + items.length + ' 小項')
-                .toggleClass('all-done', doneCnt === items.length);
-            $badge.on('click', function (e) {
-                e.stopPropagation();
-                toggleItemsPanel($panelHolder, s, $badge);
-            });
+            var $badge = $('<div class="pt-items-badge">');
+            var $panel = buildItemsPanel(s, $badge, isCurrent);
+            if (!(expandAllItems || isCurrent)) $panel.hide();
+            $badge.on('click', function (e) { e.stopPropagation(); $panel.toggle(); });
             $node.append($badge);
+            $panelsBox.append($panel);
         }
         $flow.append($node);
     });
-    return $td.append($flow).append($panelHolder);
+
+    // 虛擬「完成」節點：所有進度到達後點它＝整筆完成（記錄完成時間）；已完成可復原
+    var isDone = (r.status == 1);
+    var finCurrent = (r.status == 0 && allRealReached);
+    var $fin = $('<div class="pt-step">').addClass(isDone ? 'reached' : (finCurrent ? 'current' : ''));
+    var $finTop = $('<div class="pt-step-top">');
+    $finTop.append($('<span class="pt-line">').addClass(steps.length === 0 ? 'edge'
+        : (steps[steps.length - 1].reached_at != null ? 'done' : '')));
+    $finTop.append($('<span class="pt-dot">').html('<i class="fa fa-flag-checkered"></i>'));
+    $finTop.append($('<span class="pt-line edge">'));
+    $fin.append($finTop).append($('<div class="pt-step-name">').text('完成'));
+    if (isDone) {
+        $fin.attr('title', '完成於 ' + fmtDt(r.completed_at));
+        if (r.completed_at) $fin.append($('<div class="pt-step-time">').text(fmtDtShort(r.completed_at)));
+        $fin.append($('<span class="step-undo">').text('復原').on('click', function (e) {
+            e.stopPropagation();
+            if (!confirm('把「' + r.title + '」恢復為未完成？')) return;
+            setStatus(r, 0);
+        }));
+    } else if (finCurrent) {
+        $fin.attr('title', '點一下＝整筆工作完成');
+        $fin.on('click', function () {
+            if (!confirm('確認「' + r.title + '」已全部完成？')) return;
+            setStatus(r, 1);
+        });
+    } else {
+        $fin.attr('title', '全部進度到達後才可點選完成');
+    }
+    $flow.append($fin);
+
+    return $td.append($flow).append($panelsBox);
 }
 
-// 小項展開面板：勾選=完成(記錄時間、顯示 MM.DD)，可再取消；不受步驟順序限制
-function toggleItemsPanel($holder, step, $badge) {
-    var cur = $holder.data('stepId');
-    $holder.empty();
-    if (cur === step.id) { $holder.removeData('stepId'); return; }
-    $holder.data('stepId', step.id);
-    var $panel = $('<div class="pt-items-panel">');
-    $panel.append($('<div style="font-size:11px;color:#8A94A0;margin-bottom:2px;">').text('「' + step.step_name + '」小項'));
-    (step.items || []).forEach(function (it) {
+// 小項面板：勾選=完成(記MM.DD)、可取消；不受步驟順序限制
+function buildItemsPanel(step, $badge, isCurrent) {
+    var items = step.items || [];
+    function refreshBadge() {
+        var doneCnt = items.filter(function (x) { return x.done_at != null; }).length;
+        $badge.text('小項 ' + doneCnt + '/' + items.length + ' ▾')
+              .toggleClass('all-done', doneCnt === items.length);
+    }
+    refreshBadge();
+    var $panel = $('<div class="pt-items-panel">').toggleClass('current-step', !!isCurrent);
+    $panel.append($('<div style="font-size:11px;color:#8A94A0;margin-bottom:2px;font-weight:700;">')
+        .text('「' + step.step_name + '」小項'));
+    items.forEach(function (it) {
         var $row = $('<label class="pt-item-row">').toggleClass('done', it.done_at != null);
         var $cb = $('<input type="checkbox">').prop('checked', it.done_at != null);
         var $name = $('<span class="pt-item-name">').text(it.item_name);
@@ -651,66 +726,53 @@ function toggleItemsPanel($holder, step, $badge) {
                 it.done_at = res.done_at || null;
                 $row.toggleClass('done', !!it.done_at);
                 $date.text(it.done_at ? fmtMMDD(it.done_at) : '');
-                var doneCnt = (step.items || []).filter(function (x) { return x.done_at != null; }).length;
-                $badge.text('☑ ' + doneCnt + '/' + step.items.length + ' 小項')
-                      .toggleClass('all-done', doneCnt === step.items.length);
+                refreshBadge();
             });
         });
         $row.append($cb).append($name).append($date);
         $panel.append($row);
     });
-    $holder.append($panel);
+    return $panel;
 }
+
+$('#btnToggleAllItems').on('click', function () {
+    expandAllItems = !expandAllItems;
+    $(this).html('<i class="fa fa-list-ul"></i> ' + (expandAllItems ? '收合所有小項' : '展開所有小項'));
+    renderRows(state.rows);
+});
 
 function renderRows(rows) {
     var $tb = $('#ptaskTbody').empty();
-    if (!rows.length) { $tb.html('<tr><td colspan="6" class="text-center text-muted">沒有符合條件的紀錄</td></tr>'); return; }
+    if (!rows.length) { $tb.html('<tr><td colspan="4" class="text-center text-muted">沒有符合條件的紀錄</td></tr>'); return; }
     rows.forEach(function (r) {
-        var tr = $('<tr>');
+        var tr = $('<tr>').data('task', r);
         if (r.status == 0) {
             if (r.is_overdue == 1) tr.addClass('row-overdue');
             else if (r.is_urgent == 1) tr.addClass('row-urgent');
         }
-        tr.append($('<td>').text(fmtDate(r.received_at)));
-        var $titleTd = $('<td>');
+        tr.append($('<td class="cell-edit" title="雙擊編輯">').text(fmtDate(r.received_at)));
+        var $titleTd = $('<td class="cell-edit" title="雙擊編輯">');
         $titleTd.append($('<div style="font-weight:600;">').text(r.title));
+        // 綁定內容顯示在標題下方（增加閱讀性）
+        if (r.bind_type && r.bind_label) {
+            var $bind = $('<div style="margin-top:2px;">');
+            $bind.append($('<span class="bind-badge bind-' + r.bind_type + '">').text(bindTypeName[r.bind_type] || r.bind_type));
+            $bind.append($('<span style="font-size:12px;color:#667;">').text(r.bind_label));
+            $titleTd.append($bind);
+        }
         if (r.note) $titleTd.append($('<div style="font-size:11px;color:#888;white-space:pre-line;">').text(r.note));
         tr.append($titleTd);
-        var $bindTd = $('<td>');
-        if (r.bind_type && r.bind_label) {
-            $bindTd.append($('<span class="bind-badge bind-' + r.bind_type + '">').text(bindTypeName[r.bind_type] || r.bind_type));
-            $bindTd.append($('<span>').text(r.bind_label));
-        } else { $bindTd.html('<span style="color:#bbb;">—</span>'); }
-        tr.append($bindTd);
-        tr.append(deadlineCell(r));
+        tr.append(deadlineCell(r).addClass('cell-edit').attr('title', '雙擊編輯'));
         tr.append(stepFlowCell(r));
-
-        var $op = $('<td>');
-        var mk = function (cls, icon, label, fn) {
-            return $('<button class="btn btn-xs ' + cls + '" style="margin:1px 2px;"><i class="fa ' + icon + '"></i> ' + label + '</button>').on('click', fn);
-        };
-        $op.append(mk('btn-default', 'fa-pencil', '編輯', function () { openTaskModal(r.id); }));
-        if (r.status == 0) {
-            $op.append(mk('btn-success', 'fa-check', '完成', function () { setStatus(r, 1); }));
-            $op.append(mk('btn-warning', 'fa-pause', '暫停', function () { setStatus(r, 2); }));
-        } else if (r.status == 2) {
-            $op.append(mk('btn-primary', 'fa-play', '恢復', function () { setStatus(r, 0); }));
-            $op.append(mk('btn-success', 'fa-check', '完成', function () { setStatus(r, 1); }));
-        } else {
-            if (r.completed_at) $op.append($('<div style="font-size:11px;color:#1ABB9C;">').text('完成於 ' + fmtDt(r.completed_at)));
-            $op.append(mk('btn-primary', 'fa-undo', '恢復未完成', function () { setStatus(r, 0); }));
-        }
-        $op.append(mk('btn-danger', 'fa-trash', '', function () {
-            if (!confirm('確認刪除「' + r.title + '」？（進度紀錄會一併刪除）')) return;
-            apiPost('delete_task', { id: r.id }).done(function (res) {
-                if (!res.success) { alert(res.message || '刪除失敗'); return; }
-                toast('已刪除'); loadList();
-            });
-        }));
-        tr.append($op);
         $tb.append(tr);
     });
 }
+
+// 雙擊「接收日期／標題／期限」任一儲存格 → 開啟編輯跳窗
+$('#ptaskTbody').on('dblclick', 'td.cell-edit', function () {
+    var r = $(this).closest('tr').data('task');
+    if (r) openTaskModal(r.id);
+});
 
 function setStatus(r, status) {
     var name = { 0: '未完成', 1: '已完成', 2: '暫停' }[status];
@@ -873,21 +935,37 @@ $('#stepEditor').on('keydown', '.item-name', function (e) {
     }
 });
 
+var modalTask = { id: 0, status: 0, title: '' };
+
+// 右上角暫停/刪除的顯示與文案（依紀錄狀態）
+function refreshModalHeaderButtons() {
+    if (!modalTask.id) { $('#btnModalStatus, #btnModalDelete').hide(); return; }
+    var $b = $('#btnModalStatus').removeClass('btn-warning btn-primary');
+    if (modalTask.status == 0) $b.addClass('btn-warning').html('<i class="fa fa-pause"></i> 暫停');
+    else if (modalTask.status == 2) $b.addClass('btn-primary').html('<i class="fa fa-play"></i> 恢復');
+    else $b.addClass('btn-primary').html('<i class="fa fa-undo"></i> 恢復未完成');
+    $('#btnModalStatus, #btnModalDelete').show();
+}
+
 function openTaskModal(id) {
     $('#tId').val(id || 0);
-    $('#taskModalTitle').text(id ? '編輯紀錄' : '新增紀錄');
-    $('#tTitle, #tBindKw, #tBindId, #tBindLabel, #tRemindVal, #tUrgentDays, #tNote, #tDeadline').val('');
+    $('#taskModalTitle').html('<i class="fa fa-pencil-square-o"></i> ' + (id ? '編輯紀錄' : '新增紀錄'));
+    $('#tTitle, #tBindKw, #tBindId, #tBindLabel, #tRemindVal, #tUrgentDays, #tNote, #tDeadline, #defaultInterval').val('');
     $('#tBindType').val(''); $('#tBindKw').prop('disabled', true);
     $('#tBindChosen').empty(); $('#tBindSug').hide().empty();
     $('#tRemindUnit').val('1440');
     $('#tReceived').val(new Date().toISOString().substring(0, 10));
     $('#tUrgentDays').attr('placeholder', '預設 ' + state.urgentDefault + ' 天');
     $('#stepEditor').empty();
+    modalTask = { id: id || 0, status: 0, title: '' };
+    refreshModalHeaderButtons();
     loadTplOptions();
     if (id) {
         apiGet('get_task', { id: id }).done(function (res) {
             if (!res.success) { alert(res.message || '讀取失敗'); return; }
             var t = res.data;
+            modalTask = { id: t.id, status: parseInt(t.status, 10), title: t.title };
+            refreshModalHeaderButtons();
             $('#tTitle').val(t.title);
             $('#tReceived').val(t.received_at);
             $('#tDeadline').val(dtToDateInput(t.deadline));
@@ -908,6 +986,52 @@ function openTaskModal(id) {
 }
 $('#btnNewTask').on('click', function () { openTaskModal(0); });
 $('#btnAddStep').on('click', function () { $('#stepEditor').append(stepRowHtml()); initStepSortable(); });
+
+// 預設間隔(工作天)：填入後自動帶入所有未到達進度的間隔並重算日期，之後仍可逐列手動修改
+$('#defaultInterval').on('input change', function () {
+    var v = $(this).val();
+    if (v === '') return;
+    $('#stepEditor .step-edit-row').each(function () {
+        if ($(this).data('reached') == 1) return;
+        $(this).find('.step-interval').val(v);
+    });
+    recomputeStepDates();
+});
+
+// 二次確認：必須輸入大寫 OK（避免誤按）
+function confirmOK(msg) {
+    var v = prompt(msg + '\n\n此操作需要二次確認，請輸入大寫 OK：');
+    if (v === null) return false;
+    if (v !== 'OK') { alert('輸入不是 OK，已取消操作'); return false; }
+    return true;
+}
+
+$('#btnModalStatus').on('click', function () {
+    if (!modalTask.id) return;
+    var to, msg;
+    if (modalTask.status == 0) {
+        if (!confirmOK('暫停「' + modalTask.title + '」？')) return;
+        to = 2; msg = '已暫停';
+    } else {
+        if (!confirm('把「' + modalTask.title + '」恢復為未完成？')) return;
+        to = 0; msg = '已恢復未完成';
+    }
+    apiPost('set_status', { id: modalTask.id, status: to }).done(function (res) {
+        if (!res.success) { alert(res.message || '設定失敗'); return; }
+        $('#taskModal').modal('hide');
+        toast(msg); loadList();
+    });
+});
+
+$('#btnModalDelete').on('click', function () {
+    if (!modalTask.id) return;
+    if (!confirmOK('刪除「' + modalTask.title + '」？進度與小項會一併刪除，無法復原。')) return;
+    apiPost('delete_task', { id: modalTask.id }).done(function (res) {
+        if (!res.success) { alert(res.message || '刪除失敗'); return; }
+        $('#taskModal').modal('hide');
+        toast('已刪除'); loadList();
+    });
+});
 
 // ── 綁定搜尋（自動完成）──────────────────────────────────────────────
 function setBind(type, id, label) {
