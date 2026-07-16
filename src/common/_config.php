@@ -49,3 +49,12 @@ try {
 } catch (Throwable $e) {
     error_log('[telegram] tick hook failed: ' . $e->getMessage());
 }
+
+// === 個人工作紀錄提醒 順路觸發（2026-07-16 新增；做法同上，免工作排程器）===
+// 距上次檢查超過 120 秒才背景啟動提醒腳本，掃描到期的期限/進度提醒並推播（Web Push + Telegram）
+try {
+    require_once __DIR__ . '/personal_task_tick.php';
+    eg_personal_task_tick();
+} catch (Throwable $e) {
+    error_log('[ptask] tick hook failed: ' . $e->getMessage());
+}
