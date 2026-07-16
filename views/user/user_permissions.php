@@ -561,10 +561,10 @@ $_quotDepts = array_keys($_deptSet);
             <div class="right_col" role="main">
                 <div class="">
 
-                    <!-- ══ 快速切換：跳至各設定區塊 ══ -->
-                    <div class="row" id="quick-nav-block">
+                    <!-- ══ 快速切換：跳至各設定區塊（凍結頂端）══ -->
+                    <div class="row" id="quick-nav-block" style="position:sticky;top:0;z-index:999;">
                         <div class="col-md-12">
-                            <div class="x_panel" style="padding:8px 12px;margin-bottom:10px;">
+                            <div class="x_panel" style="padding:8px 12px;margin-bottom:10px;box-shadow:0 2px 6px rgba(0,0,0,.15);">
                                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                                     <strong style="margin-right:4px;"><i class="fa fa-compass"></i> 快速切換：</strong>
                                     <?php
@@ -1538,12 +1538,13 @@ $_quotDepts = array_keys($_deptSet);
                 if (total > 0) $('#' + p + '-filter-count').text('共 ' + total + ' 人');
             });
 
-            // 快速切換：平滑捲動至各設定區塊（避開頂部導覽列）
+            // 快速切換：平滑捲動至各設定區塊（避開頂部導覽列＋凍結的快速切換列本身）
             $(document).on('click', '.quick-nav-link', function(e) {
                 e.preventDefault();
                 var target = $('#' + $(this).data('target'));
                 if (target.length) {
-                    $('html, body').stop().animate({ scrollTop: target.offset().top - 60 }, 500);
+                    var stickyH = $('#quick-nav-block').outerHeight() || 50;
+                    $('html, body').stop().animate({ scrollTop: target.offset().top - stickyH - 10 }, 500);
                 }
             });
         });
