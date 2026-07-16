@@ -152,6 +152,20 @@ function asPreviewPdf(PDO $db, int $docId, string $fileName): ?string {
     return $ok ? $cache : null;
 }
 
+/** 母文件驗證：表單/四階/已刪除的文件不可作為母文件。合法回 null，不合法回錯誤訊息。 */
+function asValidateParent(PDO $db, ?int $parentId): ?string {
+    if ($parentId === null || $parentId <= 0) return null;
+    $st = $db->prepare("SELECT doc_no, doc_type, doc_level, is_deleted FROM as_document WHERE id=?");
+    $st->execute([$parentId]);
+    $p = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$p) return '母文件不存在';
+    if ((int)$p['is_deleted'] === 1) return '母文件已被刪除，不可選用';
+    if (($p['doc_type'] ?? '') === '表單' || ($p['doc_level'] ?? '') === '四階') {
+        return "「{$p['doc_no']}」是表單/四階文件，不可作為母文件（母文件應為程序書/標準書等上階文件）";
+    }
+    return null;
+}
+
 $action = $_REQUEST['action'] ?? '';
 
 // 各 action 所需能力
@@ -217,7 +231,12 @@ case 'meta':
     $poss  = $db->query("SELECT p.id,p.name,pl.level FROM position p LEFT JOIN position_level pl ON p.id=pl.position_id ORDER BY p.sort_order ASC, p.id ASC")->fetchAll(PDO::FETCH_ASSOC);
     $tags  = $db->query("SELECT id,name,color FROM as_doc_tag ORDER BY sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
     $users = $db->query("SELECT id,user_cname FROM user WHERE state IN (1,90,99) OR state IS NULL ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
-    $parents = $db->query("SELECT id, doc_no, doc_name FROM as_document WHERE is_deleted=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
+    // 母文件候選：排除表單/四階（表單不可再當母文件）
+    $parents = $db->query("SELECT id, doc_no, doc_name FROM as_document
+                           WHERE is_deleted=0
+                             AND COALESCE(doc_type,'') != '表單'
+                             AND COALESCE(doc_level,'') != '四階'
+                           ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
     jout(['status'=>'success','departments'=>$depts,'dept_codes'=>$deptCodes,'positions'=>$poss,'tags'=>$tags,'users'=>$users,'parents'=>$parents]);
 
 // ══════════════ 文件清單（搜尋 / 篩選） ══════════════
@@ -312,6 +331,7 @@ case 'create_document':
     $dup = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0");
     $dup->execute([$doc_no]);
     if ($dup->fetchColumn() > 0) jout(['status'=>'error','message'=>"文件編號 {$doc_no} 已存在"]);
+    if ($pErr = asValidateParent($db, $parent)) jout(['status'=>'error','message'=>$pErr]);
     if (!isset($_FILES['file']) || $_FILES['file']['error']!==UPLOAD_ERR_OK)
         jout(['status'=>'error','message'=>'請上傳文件檔']);
     $ext = asSafeExt($_FILES['file']['name']);
@@ -433,10 +453,29 @@ case 'update_document_meta':
     $dup = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0 AND id!=?");
     $dup->execute([$doc_no, $id]);
     if ($dup->fetchColumn() > 0) jout(['status'=>'error','message'=>"文件編號 {$doc_no} 已被其他文件使用"]);
+    if ($pErr = asValidateParent($db, $parent)) jout(['status'=>'error','message'=>$pErr]);
+
+    // 目前版本資訊修正（誤植修正用，不產生新版本）
+    $version = trim($_POST['version'] ?? '');
+    $cstat   = trim($_POST['change_status'] ?? '');
+    $rdate   = trim($_POST['revised_date'] ?? '') ?: null;
+    $rpages  = trim($_POST['revised_pages'] ?? '') ?: null;
+    $rsum    = trim($_POST['revised_summary'] ?? '') ?: null;
+
     $db->beginTransaction();
     try {
         $db->prepare("UPDATE as_document SET doc_no=?,doc_name=?,doc_type=?,doc_level=?,department_id=?,parent_doc_id=?,updated_at=NOW() WHERE id=?")
            ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$id]);
+        if ($version !== '') {
+            $cvId = $db->prepare("SELECT current_version_id FROM as_document WHERE id=?");
+            $cvId->execute([$id]);
+            $cvId = (int)$cvId->fetchColumn();
+            if ($cvId) {
+                $db->prepare("UPDATE as_document_version SET version=?, change_status=?, revised_date=?, revised_pages=?, revised_summary=?, doc_level_snapshot=?, department_id_snapshot=? WHERE id=?")
+                   ->execute([$version, ($cstat ?: null), $rdate, $rpages, $rsum, $level, $dept, $cvId]);
+                $db->prepare("UPDATE as_document SET current_version=? WHERE id=?")->execute([$version, $id]);
+            }
+        }
         $db->prepare("DELETE FROM as_doc_tag_map WHERE doc_id=?")->execute([$id]);
         if ($tagIds) { $ins=$db->prepare("INSERT IGNORE INTO as_doc_tag_map (doc_id,tag_id) VALUES (?,?)"); foreach($tagIds as $t) $ins->execute([$id,$t]); }
         $db->commit();
@@ -712,6 +751,7 @@ case 'create_documents_batch':
             $level   = trim($r['doc_level'] ?? '');
             $dept    = ($r['department_id'] ?? '')!=='' ? (int)$r['department_id'] : null;
             $parent  = ($r['parent_doc_id'] ?? '')!=='' ? (int)$r['parent_doc_id'] : null;
+            if ($pErr = asValidateParent($db, $parent)) throw new Exception($pErr);
             $cstat   = trim($r['change_status'] ?? '制訂');
             $rdate   = trim($r['revised_date'] ?? '') ?: null;
             $rpages  = trim($r['revised_pages'] ?? '') ?: null;

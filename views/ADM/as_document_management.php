@@ -265,7 +265,7 @@ if ($deptPerm === 'R') {
 
           <hr>
           <div id="firstVersionBlock">
-            <h4 style="margin-top:0;">首版資訊</h4>
+            <h4 style="margin-top:0;" id="firstVersionTitle">首版資訊</h4>
             <div class="row">
               <div class="form-group col-md-3"><label>版本號 *</label><input type="text" class="form-control" name="version" id="doc_version" placeholder="如 1.0" required></div>
               <div class="form-group col-md-3"><label>文件狀況</label>
@@ -277,7 +277,7 @@ if ($deptPerm === 'R') {
               <div class="form-group col-md-3"><label>制修訂頁次</label><input type="text" class="form-control" name="revised_pages" id="doc_revised_pages" placeholder="如 全冊 / 1-2"></div>
             </div>
             <div class="form-group"><label>制修訂摘要</label><textarea class="form-control" name="revised_summary" id="doc_revised_summary" rows="2"></textarea></div>
-            <div class="row">
+            <div class="row" id="firstVersionFiles">
               <div class="form-group col-md-6"><label>文件檔 *</label><input type="file" name="file" id="doc_file"></div>
               <div class="form-group col-md-6"><label>文件制修申請單（附件一，首版可選）</label><input type="file" name="apply_form" id="doc_apply_form"></div>
             </div>
@@ -777,6 +777,7 @@ $(function(){
   $('#btnAddDoc').on('click', function(){
     $('#docForm')[0].reset(); $('#doc_id').val(''); $('#doc_tag_ids').val('');
     $('#docModalTitle').text('新增文件'); $('#firstVersionBlock').show();
+    $('#firstVersionTitle').text('首版資訊'); $('#firstVersionFiles').show();
     $('#doc_file').prop('required',true); $('#doc_version').prop('required',true);
     renderDocTagPicker([]);
     fillParentSelect(0, '');
@@ -794,10 +795,20 @@ $(function(){
       $('#docModalTitle').text('編輯文件');
       $('#doc_id').val(d.id); $('#doc_no').val(d.doc_no); $('#doc_name').val(d.doc_name);
       $('#doc_type').val(d.doc_type||''); $('#doc_level').val(d.doc_level||''); $('#doc_department_id').val(d.department_id||'');
-      $('#firstVersionBlock').hide();
+      // 編輯模式：顯示「目前版本資訊」修正區（可改誤植的版本號等，不換檔、不產生新版本）
+      const cv = (d.versions||[]).find(v=>v.id==d.current_version_id) || {};
+      $('#firstVersionBlock').show();
+      $('#firstVersionTitle').text('目前版本資訊（修正誤植用；換檔請用「改版」）');
+      $('#firstVersionFiles').hide();
       $('#doc_file').prop('required',false); $('#doc_version').prop('required',false);
+      $('#doc_version').val(cv.version||'');
+      $('#doc_change_status').val(cv.change_status||'制訂');
+      $('#doc_revised_date').val(cv.revised_date||'');
+      $('#doc_revised_pages').val(cv.revised_pages||'');
+      $('#doc_revised_summary').val(cv.revised_summary||'');
       renderDocTagPicker((d.tags||[]).map(t=>t.id));
       fillParentSelect(d.id, d.parent_doc_id||'');
+      $('#doc_code_sel').hide().empty();
       $('#docModal').modal('show');
     });
   });
