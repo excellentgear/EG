@@ -68,6 +68,11 @@ function pt_resolve_bind_label(PDO $db, string $type, string $id): ?string {
             $st->execute([$id]);
             $v = $st->fetchColumn();
             return $v !== false ? $v : null;
+        case 'order':
+            $st = $db->prepare("SELECT Order_oo, d_id FROM order_track WHERE Order_id = ?");
+            $st->execute([(int)$id]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            return $r ? ($r['Order_oo'] . '（' . $r['d_id'] . '）') : null;
     }
     return null;
 }
@@ -77,6 +82,18 @@ function pt_get_own_task(PDO $db, int $userId, int $taskId) {
     $st = $db->prepare("SELECT * FROM personal_task WHERE id = ? AND user_id = ?");
     $st->execute([$taskId, $userId]);
     return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+
+// 把小項掛到步驟陣列上（$steps 需含 id 欄；以參考傳遞直接改寫）
+function pt_attach_step_items(PDO $db, array &$steps): void {
+    if (!$steps) return;
+    $sin = implode(',', array_map(function ($s) { return (int)$s['id']; }, $steps));
+    $items = $db->query("SELECT * FROM personal_task_step_item WHERE step_id IN ({$sin})
+                         ORDER BY step_id, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    $byStep = [];
+    foreach ($items as $it) { $byStep[$it['step_id']][] = $it; }
+    foreach ($steps as &$s) { $s['items'] = $byStep[$s['id']] ?? []; }
+    unset($s);
 }
 
 // 個人急件預設天數
@@ -114,9 +131,10 @@ try {
         $exportAll = (int)($_POST['export'] ?? $_GET['export'] ?? 0);   // 匯出時抓全量(仍套目前篩選)
 
         $defDays = pt_get_urgent_default($db, $user_id);
-        // 急件判定：未完成 + 有期限 + 已進入「期限前N天」(N=每筆自訂，未設則用個人預設)
+        // 急件判定：未完成 + 有期限 + 已進入「期限前N天」(N=每筆自訂，未設則用個人預設)。
+        // 期限只記日期(00:00)，故一律用日期比較：到期日當天整天算急件、隔天才算逾期
         $urgentExpr = "(t.status = 0 AND t.deadline IS NOT NULL
-                        AND NOW() >= DATE_SUB(t.deadline, INTERVAL COALESCE(t.urgent_days, {$defDays}) DAY))";
+                        AND CURDATE() >= DATE_SUB(DATE(t.deadline), INTERVAL COALESCE(t.urgent_days, {$defDays}) DAY))";
 
         $where = "t.user_id = ?";
         $params = [$user_id];
@@ -160,17 +178,18 @@ try {
 
         $limitSql = $exportAll ? "" : " LIMIT " . (($page - 1) * $pageSize) . ", " . $pageSize;
         $st = $db->prepare("SELECT t.*, {$urgentExpr} AS is_urgent,
-                (t.status = 0 AND t.deadline IS NOT NULL AND NOW() > t.deadline) AS is_overdue
+                (t.status = 0 AND t.deadline IS NOT NULL AND CURDATE() > DATE(t.deadline)) AS is_overdue
             FROM personal_task t WHERE {$listWhere} ORDER BY {$orderBy}{$limitSql}");
         $st->execute($listParams);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 
-        // 帶入各筆的進度步驟（依排序）
+        // 帶入各筆的進度步驟與小項（依排序）
         if ($rows) {
             $ids = array_column($rows, 'id');
             $in = implode(',', array_map('intval', $ids));
             $steps = $db->query("SELECT * FROM personal_task_step WHERE task_id IN ({$in})
                                  ORDER BY task_id, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+            pt_attach_step_items($db, $steps);
             $byTask = [];
             foreach ($steps as $s) { $byTask[$s['task_id']][] = $s; }
             foreach ($rows as &$r) { $r['steps'] = $byTask[$r['id']] ?? []; }
@@ -188,7 +207,9 @@ try {
         if (!$task) throw new Exception('找不到紀錄或無權限');
         $st = $db->prepare("SELECT * FROM personal_task_step WHERE task_id = ? ORDER BY sort_order, id");
         $st->execute([$task['id']]);
-        $task['steps'] = $st->fetchAll(PDO::FETCH_ASSOC);
+        $steps = $st->fetchAll(PDO::FETCH_ASSOC);
+        pt_attach_step_items($db, $steps);
+        $task['steps'] = $steps;
         echo json_encode(['success' => true, 'data' => $task], JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -205,7 +226,7 @@ try {
         $bindType = trim((string)($_POST['bind_type'] ?? ''));
         $bindId = trim((string)($_POST['bind_id'] ?? ''));
         $bindLabel = trim((string)($_POST['bind_label'] ?? ''));
-        if ($bindType !== '' && !in_array($bindType, ['bom', 'part', 'customer', 'maker'], true)) {
+        if ($bindType !== '' && !in_array($bindType, ['bom', 'part', 'customer', 'maker', 'order'], true)) {
             throw new Exception('綁定類型不正確');
         }
         if ($bindType === '' || $bindId === '') { $bindType = null; $bindId = null; $bindLabel = null; }
@@ -254,6 +275,31 @@ try {
             $oldSteps = [];
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $s) { $oldSteps[(int)$s['id']] = $s; }
 
+            // 小項同步（同一步驟內：保留既有id更新名稱/順序，其餘新增，未保留者刪除；done_at 不在此動）
+            $syncItems = function (int $stepId, $itemsIn) use ($db) {
+                if (!is_array($itemsIn)) $itemsIn = [];
+                $st = $db->prepare("SELECT id FROM personal_task_step_item WHERE step_id = ?");
+                $st->execute([$stepId]);
+                $oldIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+                $keep = [];
+                $ins = $db->prepare("INSERT INTO personal_task_step_item (step_id, item_name, sort_order) VALUES (?,?,?)");
+                $upd = $db->prepare("UPDATE personal_task_step_item SET item_name=?, sort_order=? WHERE id=? AND step_id=?");
+                $i = 0;
+                foreach ($itemsIn as $it) {
+                    $name = trim((string)($it['name'] ?? ''));
+                    if ($name === '') continue;
+                    $iid = (int)($it['id'] ?? 0);
+                    if ($iid > 0 && in_array($iid, $oldIds, true)) { $keep[] = $iid; $upd->execute([$name, $i, $iid, $stepId]); }
+                    else { $ins->execute([$stepId, $name, $i]); }
+                    $i++;
+                }
+                $del = array_diff($oldIds, $keep);
+                if ($del) {
+                    $db->exec("DELETE FROM personal_task_step_item WHERE step_id = {$stepId}
+                               AND id IN (" . implode(',', $del) . ")");
+                }
+            };
+
             $keepIds = [];
             $insSt = $db->prepare("INSERT INTO personal_task_step
                     (task_id, step_name, sort_order, planned_at, remind_before_minutes) VALUES (?,?,?,?,?)");
@@ -262,7 +308,7 @@ try {
                 if ($name === '') continue;
                 $plannedAt = pt_norm_dt($s['planned_at'] ?? '');
                 $sRemind = pt_norm_int($s['remind_before_minutes'] ?? '');
-                if ($sRemind !== null && $plannedAt === null) throw new Exception('進度「' . $name . '」要設定提醒須先設定預定時間');
+                if ($sRemind !== null && $plannedAt === null) throw new Exception('進度「' . $name . '」要設定提醒須先設定預定日期');
                 $sid = (int)($s['id'] ?? 0);
                 if ($sid > 0 && isset($oldSteps[$sid])) {
                     $keepIds[] = $sid;
@@ -272,15 +318,18 @@ try {
                     $st = $db->prepare("UPDATE personal_task_step SET step_name=?, sort_order=?, planned_at=?,
                             remind_before_minutes=?" . ($remindReset ? ", remind_sent=0" : "") . " WHERE id=? AND task_id=?");
                     $st->execute([$name, $i, $plannedAt, $sRemind, $sid, $id]);
+                    $syncItems($sid, $s['items'] ?? []);
                 } else {
                     $insSt->execute([$id, $name, $i, $plannedAt, $sRemind]);
+                    $syncItems((int)$db->lastInsertId(), $s['items'] ?? []);
                 }
             }
-            // 刪除此次未保留的既有步驟
+            // 刪除此次未保留的既有步驟（小項連動刪除）
             $delIds = array_diff(array_keys($oldSteps), $keepIds);
             if ($delIds) {
-                $db->exec("DELETE FROM personal_task_step WHERE task_id = " . $id .
-                          " AND id IN (" . implode(',', array_map('intval', $delIds)) . ")");
+                $delIn = implode(',', array_map('intval', $delIds));
+                $db->exec("DELETE FROM personal_task_step_item WHERE step_id IN ({$delIn})");
+                $db->exec("DELETE FROM personal_task_step WHERE task_id = " . $id . " AND id IN ({$delIn})");
             }
 
             // 順序完整性：已到達的步驟必須全部排在未到達步驟之前（進度須依序進行）
@@ -307,6 +356,9 @@ try {
         if (!pt_get_own_task($db, $user_id, $id)) throw new Exception('找不到紀錄或無權限');
         $db->beginTransaction();
         try {
+            $db->prepare("DELETE i FROM personal_task_step_item i
+                          JOIN personal_task_step s ON s.id = i.step_id
+                          WHERE s.task_id = ?")->execute([$id]);
             $db->prepare("DELETE FROM personal_task_step WHERE task_id = ?")->execute([$id]);
             $db->prepare("DELETE FROM personal_task WHERE id = ? AND user_id = ?")->execute([$id, $user_id]);
             $db->commit();
@@ -357,6 +409,24 @@ try {
         $st = $db->prepare("SELECT reached_at FROM personal_task_step WHERE id = ?");
         $st->execute([$stepId]);
         echo json_encode(['success' => true, 'reached_at' => $st->fetchColumn()]);
+        exit;
+    }
+
+    // ══ 小項勾選/取消（自由勾選，不受步驟順序限制）══════════════════════
+    if ($action === 'toggle_step_item') {
+        $itemId = (int)($_POST['item_id'] ?? 0);
+        $done = (int)($_POST['done'] ?? 0) ? 1 : 0;
+        $st = $db->prepare("SELECT i.id FROM personal_task_step_item i
+                            JOIN personal_task_step s ON s.id = i.step_id
+                            JOIN personal_task t ON t.id = s.task_id
+                            WHERE i.id = ? AND t.user_id = ?");
+        $st->execute([$itemId, $user_id]);
+        if (!$st->fetchColumn()) throw new Exception('找不到小項或無權限');
+        $db->prepare("UPDATE personal_task_step_item SET done_at = " . ($done ? "NOW()" : "NULL") . " WHERE id = ?")
+           ->execute([$itemId]);
+        $st = $db->prepare("SELECT done_at FROM personal_task_step_item WHERE id = ?");
+        $st->execute([$itemId]);
+        echo json_encode(['success' => true, 'done_at' => $st->fetchColumn()]);
         exit;
     }
 
@@ -445,6 +515,63 @@ try {
                             ORDER BY customer LIMIT 20");
         $st->execute([$like, $like]);
         echo json_encode(['success' => true, 'data' => $st->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($action === 'search_orders') {
+        // 綁定訂單追蹤(NewOrder_Track)內資料：以料號關鍵字搜尋訂單（也支援直接輸入訂單編號）
+        $st = $db->prepare("SELECT Order_id, Order_oo, d_id, Client_name, Delivery_date, Qty, Order_status
+                            FROM order_track
+                            WHERE (d_id LIKE ? OR Order_oo LIKE ?)
+                            ORDER BY Order_id DESC LIMIT 20");
+        $st->execute([$like, $like]);
+        echo json_encode(['success' => true, 'data' => $st->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // ══ 工作天資料（比照 views/pages/calendar.php 的判定：補班日('m')算上班，
+    //     週末與休假日('s')不算；供前端「進度間隔N工作天」自動推算日期）══════════
+    if ($action === 'get_workday_data') {
+        $st = $db->query("SELECT e.start, e.end, e.recurrence_type, e.recurrence_count, ec.day_type
+                          FROM evenement e
+                          JOIN event_category ec ON e.category_id = ec.id
+                          WHERE ec.day_type IN ('s','m')");
+        $holidays = []; $makeup = [];
+        // 只回傳近一年～未來兩年的日期，避免資料量無限成長
+        $winFrom = new DateTime('-370 days'); $winTo = new DateTime('+740 days');
+        $addRange = function ($startStr, $endStr, $dayType) use (&$holidays, &$makeup, $winFrom, $winTo) {
+            try {
+                $cur = new DateTime(substr($startStr, 0, 10));
+                $end = $endStr ? new DateTime(substr($endStr, 0, 10)) : clone $cur;
+            } catch (Exception $e) { return; }
+            $guard = 0;
+            while ($cur <= $end && $guard++ < 400) {
+                if ($cur >= $winFrom && $cur <= $winTo) {
+                    $d = $cur->format('Y-m-d');
+                    if ($dayType === 's') $holidays[$d] = 1; else $makeup[$d] = 1;
+                }
+                $cur->modify('+1 day');
+            }
+        };
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $ev) {
+            $addRange($ev['start'], $ev['end'], $ev['day_type']);
+            // 重複事件比照 events.php 展開（daily/weekly/monthly/yearly × recurrence_count）
+            $intervalMap = ['daily' => 'P1D', 'weekly' => 'P1W', 'monthly' => 'P1M', 'yearly' => 'P1Y'];
+            $cnt = (int)($ev['recurrence_count'] ?? 0);
+            if ($cnt > 0 && isset($intervalMap[$ev['recurrence_type']])) {
+                try {
+                    $iv = new DateInterval($intervalMap[$ev['recurrence_type']]);
+                    $s = new DateTime(substr($ev['start'], 0, 10));
+                    $e = $ev['end'] ? new DateTime(substr($ev['end'], 0, 10)) : clone $s;
+                    for ($i = 0; $i < min($cnt, 400); $i++) {
+                        $s->add($iv); $e->add($iv);
+                        $addRange($s->format('Y-m-d'), $e->format('Y-m-d'), $ev['day_type']);
+                    }
+                } catch (Exception $e2) {}
+            }
+        }
+        echo json_encode(['success' => true,
+            'holidays' => array_keys($holidays), 'makeup' => array_keys($makeup)]);
         exit;
     }
 

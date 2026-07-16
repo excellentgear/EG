@@ -55,8 +55,13 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .stat-card { flex:1; min-width:150px; background:var(--card-bg); border-radius:8px; padding:15px;
             box-shadow:0 2px 5px rgba(0,0,0,.05); border-left:4px solid transparent; position:relative; overflow:hidden;
             cursor:pointer; transition:transform .1s, box-shadow .1s; }
-        .stat-card:hover { transform:translateY(-2px); box-shadow:0 4px 10px rgba(0,0,0,.1); }
-        .stat-card.active { outline:2px solid var(--primary-color); }
+        .stat-card:hover { transform:translateY(-2px); box-shadow:0 5px 15px rgba(0,0,0,.1); }
+        /* 選取樣式比照 NewOrder_Track222：同卡色 3px 光圈 + 微放大 */
+        .stat-card.active { background-color:#fff; transform:scale(1.02); z-index:1; }
+        .stat-card.c-open.active   { box-shadow:0 0 0 3px #F39C12; }
+        .stat-card.c-urgent.active { box-shadow:0 0 0 3px #E74C3C; }
+        .stat-card.c-paused.active { box-shadow:0 0 0 3px #95A5A6; }
+        .stat-card.c-done.active   { box-shadow:0 0 0 3px #1ABB9C; }
         .stat-card .stat-icon { position:absolute; right:15px; top:15px; font-size:32px; opacity:.1; }
         .stat-card .stat-value { font-size:24px; font-weight:800; color:var(--primary-color); }
         .stat-card .stat-label { font-size:12px; color:#888; font-weight:600; letter-spacing:1px; }
@@ -81,22 +86,48 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         table.ptask-table tbody tr.row-overdue { background:#f9cfc9; }
         table.ptask-table tbody tr.row-overdue:hover { background:#f6beb6; }
 
-        /* 進度步驟(甘特式橫向流程) */
-        .step-flow { display:flex; align-items:flex-start; flex-wrap:wrap; gap:2px; }
-        .step-chip { display:inline-flex; flex-direction:column; align-items:center; padding:3px 8px; border-radius:4px;
-            font-size:12px; line-height:1.3; border:1px solid #ddd; background:#f5f5f5; color:#999; min-width:52px; text-align:center; }
-        .step-chip .step-time { font-size:10px; color:inherit; opacity:.85; white-space:nowrap; }
-        .step-chip.reached { background:#e8f8f3; border-color:#1ABB9C; color:#0e8c73; }
-        .step-chip.current { background:#fff7e8; border-color:#F39C12; color:#b9770e; cursor:pointer; font-weight:700; }
-        .step-chip.current:hover { background:#fdebc8; }
-        .step-arrow { color:#ccc; font-size:11px; align-self:center; }
+        /* 進度步驟：橫向 stepper（圓點＋連接線） */
+        .step-flow { display:flex; align-items:flex-start; flex-wrap:wrap; row-gap:8px; }
+        .pt-step { display:flex; flex-direction:column; align-items:center; min-width:66px; max-width:120px; }
+        .pt-step-top { display:flex; align-items:center; width:100%; }
+        .pt-line { flex:1; height:3px; background:#E3E7ED; border-radius:2px; min-width:10px; }
+        .pt-line.done { background:#1ABB9C; }
+        .pt-line.edge { visibility:hidden; }
+        .pt-dot { width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+            font-size:11px; font-weight:700; flex:0 0 22px; margin:0 2px;
+            background:#fff; border:2px solid #CBD3DC; color:#9AA5B1; }
+        .pt-step.reached .pt-dot { background:#1ABB9C; border-color:#1ABB9C; color:#fff; }
+        .pt-step.current .pt-dot { background:#fff; border-color:#F39C12; color:#F39C12; animation:ptPulse 1.8s infinite; }
+        @keyframes ptPulse {
+            0%   { box-shadow:0 0 0 0 rgba(243,156,18,.35); }
+            70%  { box-shadow:0 0 0 7px rgba(243,156,18,0); }
+            100% { box-shadow:0 0 0 0 rgba(243,156,18,0); }
+        }
+        .pt-step.current { cursor:pointer; }
+        .pt-step.current:hover .pt-dot { background:#FEF6E7; }
+        .pt-step-name { font-size:12px; margin-top:3px; color:#8A94A0; text-align:center; line-height:1.2; word-break:break-all; padding:0 3px; }
+        .pt-step.reached .pt-step-name { color:#0e8c73; font-weight:600; }
+        .pt-step.current .pt-step-name { color:#b9770e; font-weight:700; }
+        .pt-step-time { font-size:10px; color:#A8B0BA; margin-top:1px; white-space:nowrap; }
+        .pt-step.reached .pt-step-time { color:#17a98a; }
         .step-undo { cursor:pointer; color:#c0392b; font-size:10px; margin-top:1px; }
         .step-undo:hover { text-decoration:underline; }
+
+        /* 進度下方的小項（展開勾選） */
+        .pt-items-badge { font-size:10px; color:#5B8DEF; cursor:pointer; margin-top:2px; white-space:nowrap; user-select:none; }
+        .pt-items-badge:hover { text-decoration:underline; }
+        .pt-items-badge.all-done { color:#1ABB9C; }
+        .pt-items-panel { margin-top:6px; background:#F7F9FC; border:1px solid #E3E9F1; border-radius:6px; padding:6px 10px; max-width:420px; }
+        .pt-item-row { display:flex; align-items:center; gap:6px; font-size:12px; padding:2px 0; color:#556; margin:0; font-weight:400; cursor:pointer; }
+        .pt-item-row input[type=checkbox] { margin:0; }
+        .pt-item-row.done .pt-item-name { color:#9AA5B1; text-decoration:line-through; }
+        .pt-item-date { font-size:11px; color:#1ABB9C; margin-left:auto; white-space:nowrap; }
 
         .deadline-urgent { color:#C0392B; font-weight:700; }
         .bind-badge { display:inline-block; padding:1px 6px; border-radius:3px; font-size:11px; color:#fff; margin-right:4px; }
         .bind-bom { background:#8e44ad; } .bind-part { background:#2980b9; }
         .bind-customer { background:#16a085; } .bind-maker { background:#d35400; }
+        .bind-order { background:#c0392b; }
 
         .no-access-box{ max-width:520px; margin:80px auto; text-align:center; padding:40px; background:#fff; border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,.08); }
 
@@ -106,14 +137,19 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .ac-item{ padding:6px 10px; cursor:pointer; border-bottom:1px solid #f0f0f0; font-size:13px; }
         .ac-item:hover{ background:#f5f5f5; }
 
-        /* 編輯 modal 內的步驟列 */
-        .step-edit-row { display:flex; align-items:center; gap:6px; padding:5px 4px; border-bottom:1px dashed #eee; background:#fff; }
+        /* 編輯 modal 內的步驟列（step-main 主列 + step-items 小項區） */
+        .step-edit-row { padding:5px 4px; border-bottom:1px dashed #eee; background:#fff; }
+        .step-main { display:flex; align-items:center; gap:6px; }
         .step-edit-row .step-drag { cursor:grab; color:#aaa; padding:0 4px; }
         .step-edit-row.reached { background:#f2fbf8; }
         .step-edit-row.reached .step-drag { visibility:hidden; }
         .step-edit-row .step-del { color:#d9534f; cursor:pointer; padding:0 4px; }
-        .step-edit-row input.step-name { width:150px; }
-        .step-edit-row input.step-planned { width:185px; }
+        .step-items { padding:3px 0 3px 30px; }
+        .step-item-row { display:flex; align-items:center; gap:6px; padding:2px 0; }
+        .item-done-tag { font-size:11px; color:#0e8c73; white-space:nowrap; }
+        .step-edit-row input.step-name { width:140px; }
+        .step-edit-row input.step-interval { width:60px; }
+        .step-edit-row input.step-planned { width:135px; }
         .step-edit-row input.step-remind-val { width:58px; }
         .step-edit-row select.step-remind-unit { width:66px; }
         .step-reached-tag { font-size:11px; color:#0e8c73; white-space:nowrap; }
@@ -235,6 +271,7 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
               <option value="part">料號</option>
               <option value="customer">客戶</option>
               <option value="maker">廠商</option>
+              <option value="order">訂單追蹤</option>
             </select>
             <div class="ac-box" style="flex:1;">
               <input type="text" id="tBindKw" class="form-control" placeholder="先選類型，再輸入關鍵字搜尋" disabled>
@@ -248,7 +285,7 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         <div class="row">
           <div class="col-sm-5"><div class="form-group">
             <label>期限（可不設定）</label>
-            <input type="datetime-local" id="tDeadline" class="form-control" max="9999-12-31T23:59">
+            <input type="date" id="tDeadline" class="form-control" max="9999-12-31">
           </div></div>
           <div class="col-sm-4"><div class="form-group">
             <label>期限提醒（空白=不提醒）</label>
@@ -268,14 +305,17 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         </div>
 
         <div class="form-group">
-          <label>進度流程（可拖移排序；由上而下依序回報。時間與提醒都可不設定）</label>
+          <label>進度流程（可拖移排序；由上而下依序回報。日期與提醒都可不設定）</label>
           <div style="display:flex; gap:8px; margin-bottom:6px; align-items:center;">
             <button type="button" class="btn btn-default btn-xs" id="btnAddStep"><i class="fa fa-plus"></i> 新增進度</button>
             <select id="tplApplySelect" class="form-control input-sm" style="width:180px;"><option value="">套用範本...</option></select>
             <button type="button" class="btn btn-default btn-xs" id="btnSaveAsTpl"><i class="fa fa-save"></i> 目前流程存成範本</button>
           </div>
+          <div style="font-size:11px; color:#999; margin-bottom:2px;">
+            名稱欄按 <b>↓</b> 自動新增下一列、空白列按 <b>↑</b> 自動移除。「間隔」填工作天數（依行事曆，週末與休假日不算、補班日算），會自動從上一列日期（第一列從接收日期）推算預定日期。
+          </div>
           <div style="display:flex; gap:6px; padding:0 4px 2px 26px; font-size:11px; color:#999;">
-            <span style="width:150px;">進度名稱</span><span style="width:185px;">預定時間(可空)</span><span>提醒(可空)</span>
+            <span style="width:140px;">進度名稱</span><span style="width:60px;">間隔(工作天)</span><span style="width:135px;">預定日期(可空)</span><span>提醒(可空)</span>
           </div>
           <div id="stepEditor"></div>
         </div>
@@ -393,14 +433,69 @@ function toast(msg) {
 
 function esc(s) { return $('<div>').text(s == null ? '' : String(s)).html(); }
 
-// "2026-07-20 14:00:00" → 顯示 "2026-07-20 14:00"；整點 00:00 只留日期
-function fmtDt(dt) {
+// 日期顯示格式一律 YYYY.MM.DD；與今年同年時可用短格式 MM.DD（使用者要求 2026-07-16）
+var CUR_YEAR = String(new Date().getFullYear());
+function fmtDate(dt) { // "2026-07-20..." → "2026.07.20"
+    if (!dt) return '';
+    return String(dt).substring(0, 10).replace(/-/g, '.');
+}
+function fmtDateShort(dt) { // 同年 → "MM.DD"；跨年 → "YYYY.MM.DD"
+    if (!dt) return '';
+    var d = fmtDate(dt);
+    return String(dt).substring(0, 4) === CUR_YEAR ? d.substring(5) : d;
+}
+function fmtDt(dt) { // datetime → "YYYY.MM.DD HH:MM"（00:00 省略時間）
     if (!dt) return '';
     var s = String(dt).substring(0, 16);
-    return s.endsWith(' 00:00') ? s.substring(0, 10) : s;
+    var t = s.substring(11, 16);
+    return fmtDate(s) + ((t && t !== '00:00') ? ' ' + t : '');
 }
-// DB datetime → datetime-local input 值
-function dtToInput(dt) { return dt ? String(dt).substring(0, 16).replace(' ', 'T') : ''; }
+function fmtDtShort(dt) { // 同年省年的 datetime 短格式
+    if (!dt) return '';
+    var s = String(dt).substring(0, 16);
+    var t = s.substring(11, 16);
+    return fmtDateShort(s) + ((t && t !== '00:00') ? ' ' + t : '');
+}
+function fmtMMDD(dt) { // "2026-07-16 ..." → "07.16"
+    if (!dt) return '';
+    var s = String(dt);
+    return s.substring(5, 7) + '.' + s.substring(8, 10);
+}
+// DB datetime → date input 值（期限與進度都只用日期）
+function dtToDateInput(dt) { return dt ? String(dt).substring(0, 10) : ''; }
+
+// ── 工作天（比照 views/pages/calendar.php：補班日('m')算上班、週末與休假日('s')不算）──
+var workday = { holidays: {}, makeup: {} };
+function loadWorkdayData() {
+    return apiGet('get_workday_data').done(function (res) {
+        if (!res.success) return;
+        (res.holidays || []).forEach(function (d) { workday.holidays[d] = 1; });
+        (res.makeup || []).forEach(function (d) { workday.makeup[d] = 1; });
+    });
+}
+function dateToStr(d) { return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+function isWorkday(d) {
+    var ds = dateToStr(d);
+    if (workday.makeup[ds]) return true;
+    var dow = d.getDay();
+    return dow !== 0 && dow !== 6 && !workday.holidays[ds];
+}
+// 從 baseStr 起加 n 個工作天（n=0 回傳 baseStr 本身）
+function addWorkingDays(baseStr, n) {
+    var d = new Date(baseStr + 'T00:00:00');
+    if (isNaN(d.getTime())) return '';
+    var added = 0, guard = 0;
+    while (added < n && guard < 3700) { d.setDate(d.getDate() + 1); guard++; if (isWorkday(d)) added++; }
+    return dateToStr(d);
+}
+// fromStr(不含) ~ toStr(含) 之間的工作天數
+function workdaysBetween(fromStr, toStr) {
+    var d = new Date(fromStr + 'T00:00:00'), end = new Date(toStr + 'T00:00:00');
+    if (isNaN(d.getTime()) || isNaN(end.getTime())) return 0;
+    var c = 0, guard = 0;
+    while (d < end && guard < 3700) { d.setDate(d.getDate() + 1); guard++; if (isWorkday(d)) c++; }
+    return c;
+}
 
 // 分鐘 → {val, unit}（unit: 1440=天, 60=小時）
 function minToUi(min) {
@@ -410,7 +505,7 @@ function minToUi(min) {
     return { val: Math.round(min / 60), unit: '60' };
 }
 
-var bindTypeName = { bom: 'BOM', part: '料號', customer: '客戶', maker: '廠商' };
+var bindTypeName = { bom: 'BOM', part: '料號', customer: '客戶', maker: '廠商', order: '訂單' };
 
 // ── 列表 ─────────────────────────────────────────────────────────────
 function filterParams() {
@@ -442,14 +537,20 @@ function loadList() {
 function deadlineCell(r) {
     if (!r.deadline) return $('<td>').html('<span style="color:#bbb;">未設定</span>');
     var $td = $('<td>');
-    var $d = $('<div>').text(fmtDt(r.deadline));
+    var dl = String(r.deadline).substring(0, 10);
+    var $d = $('<div>').text(fmtDate(dl));
     if (r.status == 0) {
-        var diffMs = new Date(String(r.deadline).replace(' ', 'T')) - new Date();
-        var days = Math.floor(diffMs / 86400000);
+        var today = dateToStr(new Date());
         var $tag = $('<div style="font-size:11px;">');
-        if (diffMs < 0) { $tag.text('已逾期 ' + Math.abs(days) + ' 天').addClass('deadline-urgent'); $d.addClass('deadline-urgent'); }
-        else if (r.is_urgent == 1) { $tag.text('剩 ' + days + ' 天').addClass('deadline-urgent'); $d.addClass('deadline-urgent'); }
-        else { $tag.text('剩 ' + days + ' 天').css('color', '#888'); }
+        if (r.is_overdue == 1) {
+            $tag.text('已逾期 ' + workdaysBetween(dl, today) + ' 工作天').addClass('deadline-urgent');
+            $d.addClass('deadline-urgent');
+        } else {
+            var remain = workdaysBetween(today, dl);
+            $tag.text('剩 ' + remain + ' 工作天');
+            if (r.is_urgent == 1) { $tag.addClass('deadline-urgent'); $d.addClass('deadline-urgent'); }
+            else { $tag.css('color', '#888'); }
+        }
         $td.append($d).append($tag);
     } else { $td.append($d); }
     return $td;
@@ -459,22 +560,37 @@ function stepFlowCell(r) {
     var $td = $('<td>');
     var steps = r.steps || [];
     if (!steps.length) return $td.html('<span style="color:#bbb;">—</span>');
-    var $flow = $('<div class="step-flow">');
     var firstUnreachedId = null, lastReachedId = null;
     steps.forEach(function (s) {
         if (s.reached_at == null && firstUnreachedId === null) firstUnreachedId = s.id;
         if (s.reached_at != null) lastReachedId = s.id;
     });
+    var $panelHolder = $('<div>');  // 小項展開面板容器（整列共用一個，一次展開一個步驟）
+    var $flow = $('<div class="step-flow">');
     steps.forEach(function (s, i) {
-        if (i > 0) $flow.append($('<span class="step-arrow">').html('<i class="fa fa-angle-right"></i>'));
-        var $chip = $('<span class="step-chip">');
-        $chip.append($('<span>').text(s.step_name));
-        if (s.reached_at != null) {
-            $chip.addClass('reached').attr('title', '到達：' + fmtDt(s.reached_at) + (s.planned_at ? '（預定 ' + fmtDt(s.planned_at) + '）' : ''));
-            $chip.append($('<span class="step-time">').text(fmtDt(s.reached_at)));
+        var reached = s.reached_at != null;
+        var isCurrent = (r.status == 0 && s.id === firstUnreachedId);
+        var $node = $('<div class="pt-step">');
+        if (reached) $node.addClass('reached');
+        else if (isCurrent) $node.addClass('current');
+
+        // 圓點與左右連接線：與前一步之間的線，在前一步已到達時上色
+        var prevReached = i > 0 && steps[i - 1].reached_at != null;
+        var $top = $('<div class="pt-step-top">');
+        $top.append($('<span class="pt-line">').addClass(i === 0 ? 'edge' : (prevReached ? 'done' : '')));
+        var $dot = $('<span class="pt-dot">');
+        if (reached) $dot.html('<i class="fa fa-check"></i>'); else $dot.text(i + 1);
+        $top.append($dot);
+        $top.append($('<span class="pt-line">').addClass(i === steps.length - 1 ? 'edge' : (reached ? 'done' : '')));
+        $node.append($top);
+
+        $node.append($('<div class="pt-step-name">').text(s.step_name));
+        if (reached) {
+            $node.attr('title', '到達：' + fmtDt(s.reached_at) + (s.planned_at ? '（預定 ' + fmtDate(s.planned_at) + '）' : ''));
+            $node.append($('<div class="pt-step-time">').text(fmtDtShort(s.reached_at)));
             // 最後一個已到達者提供復原（僅未完成狀態）
             if (r.status == 0 && s.id === lastReachedId) {
-                $chip.append($('<span class="step-undo">').text('復原').on('click', function (e) {
+                $node.append($('<span class="step-undo">').text('復原').on('click', function (e) {
                     e.stopPropagation();
                     if (!confirm('取消「' + s.step_name + '」的到達回報？')) return;
                     apiPost('unreach_step', { step_id: s.id }).done(function (res) {
@@ -483,10 +599,10 @@ function stepFlowCell(r) {
                     });
                 }));
             }
-        } else if (r.status == 0 && s.id === firstUnreachedId) {
-            $chip.addClass('current').attr('title', (s.planned_at ? '預定 ' + fmtDt(s.planned_at) + '，' : '') + '點一下回報到達');
-            if (s.planned_at) $chip.append($('<span class="step-time">').text('預定 ' + fmtDt(s.planned_at)));
-            $chip.on('click', function () {
+        } else if (isCurrent) {
+            $node.attr('title', (s.planned_at ? '預定 ' + fmtDate(s.planned_at) + '，' : '') + '點一下回報到達');
+            if (s.planned_at) $node.append($('<div class="pt-step-time">').text('預定 ' + fmtDateShort(s.planned_at)));
+            $node.on('click', function () {
                 if (!confirm('回報到達「' + s.step_name + '」？（會記錄現在時間）')) return;
                 apiPost('reach_step', { step_id: s.id }).done(function (res) {
                     if (!res.success) { alert(res.message || '回報失敗'); return; }
@@ -495,12 +611,55 @@ function stepFlowCell(r) {
                 });
             });
         } else {
-            if (s.planned_at) { $chip.append($('<span class="step-time">').text('預定 ' + fmtDt(s.planned_at))); }
-            $chip.attr('title', '尚未輪到此進度');
+            if (s.planned_at) $node.append($('<div class="pt-step-time">').text('預定 ' + fmtDateShort(s.planned_at)));
+            $node.attr('title', '尚未輪到此進度');
         }
-        $flow.append($chip);
+        // 小項徽章：☑ 完成數/總數，點擊展開下方勾選面板
+        var items = s.items || [];
+        if (items.length) {
+            var doneCnt = items.filter(function (it) { return it.done_at != null; }).length;
+            var $badge = $('<div class="pt-items-badge">').text('☑ ' + doneCnt + '/' + items.length + ' 小項')
+                .toggleClass('all-done', doneCnt === items.length);
+            $badge.on('click', function (e) {
+                e.stopPropagation();
+                toggleItemsPanel($panelHolder, s, $badge);
+            });
+            $node.append($badge);
+        }
+        $flow.append($node);
     });
-    return $td.append($flow);
+    return $td.append($flow).append($panelHolder);
+}
+
+// 小項展開面板：勾選=完成(記錄時間、顯示 MM.DD)，可再取消；不受步驟順序限制
+function toggleItemsPanel($holder, step, $badge) {
+    var cur = $holder.data('stepId');
+    $holder.empty();
+    if (cur === step.id) { $holder.removeData('stepId'); return; }
+    $holder.data('stepId', step.id);
+    var $panel = $('<div class="pt-items-panel">');
+    $panel.append($('<div style="font-size:11px;color:#8A94A0;margin-bottom:2px;">').text('「' + step.step_name + '」小項'));
+    (step.items || []).forEach(function (it) {
+        var $row = $('<label class="pt-item-row">').toggleClass('done', it.done_at != null);
+        var $cb = $('<input type="checkbox">').prop('checked', it.done_at != null);
+        var $name = $('<span class="pt-item-name">').text(it.item_name);
+        var $date = $('<span class="pt-item-date">').text(it.done_at ? fmtMMDD(it.done_at) : '');
+        $cb.on('change', function () {
+            var done = this.checked ? 1 : 0;
+            apiPost('toggle_step_item', { item_id: it.id, done: done }).done(function (res) {
+                if (!res.success) { alert(res.message || '設定失敗'); $cb.prop('checked', !done); return; }
+                it.done_at = res.done_at || null;
+                $row.toggleClass('done', !!it.done_at);
+                $date.text(it.done_at ? fmtMMDD(it.done_at) : '');
+                var doneCnt = (step.items || []).filter(function (x) { return x.done_at != null; }).length;
+                $badge.text('☑ ' + doneCnt + '/' + step.items.length + ' 小項')
+                      .toggleClass('all-done', doneCnt === step.items.length);
+            });
+        });
+        $row.append($cb).append($name).append($date);
+        $panel.append($row);
+    });
+    $holder.append($panel);
 }
 
 function renderRows(rows) {
@@ -512,7 +671,7 @@ function renderRows(rows) {
             if (r.is_overdue == 1) tr.addClass('row-overdue');
             else if (r.is_urgent == 1) tr.addClass('row-urgent');
         }
-        tr.append($('<td>').text(r.received_at || ''));
+        tr.append($('<td>').text(fmtDate(r.received_at)));
         var $titleTd = $('<td>');
         $titleTd.append($('<div style="font-weight:600;">').text(r.title));
         if (r.note) $titleTd.append($('<div style="font-size:11px;color:#888;white-space:pre-line;">').text(r.note));
@@ -580,23 +739,62 @@ $('#btnNextPage').on('click', function () {
 });
 
 // ── 新增/編輯 Modal ──────────────────────────────────────────────────
+function stepItemRowHtml(it) {
+    // it: {id, item_name, done_at} 或空(新小項)
+    it = it || {};
+    var $r = $('<div class="step-item-row">').data('itemId', it.id || 0);
+    $r.append($('<span style="color:#ccc;"><i class="fa fa-angle-right"></i></span>'));
+    $r.append($('<input type="text" class="form-control input-sm item-name" maxlength="150" placeholder="小項名稱" style="width:220px;">').val(it.item_name || ''));
+    if (it.done_at) $r.append($('<span class="item-done-tag">').text('✔ ' + fmtMMDD(it.done_at)));
+    $r.append($('<span class="step-del" title="刪除小項"><i class="fa fa-times-circle"></i></span>').on('click', function () {
+        var $wrap = $r.closest('.step-edit-row');
+        $r.remove();
+        updateItemBtnCount($wrap);
+    }));
+    return $r;
+}
+
+function updateItemBtnCount($row) {
+    $row.find('.item-cnt').text($row.find('.step-item-row').length);
+}
+
 function stepRowHtml(s) {
-    // s: {id, step_name, planned_at, remind_before_minutes, reached_at} 或空(新步驟)
+    // s: {id, step_name, planned_at, remind_before_minutes, reached_at, items} 或空(新步驟)
     s = s || {};
     var reached = s.reached_at != null;
     var $row = $('<div class="step-edit-row' + (reached ? ' reached' : '') + '">').data('stepId', s.id || 0).data('reached', reached ? 1 : 0);
-    $row.append($('<span class="step-drag"><i class="fa fa-bars"></i></span>'));
-    $row.append($('<input type="text" class="form-control input-sm step-name" maxlength="100" placeholder="進度名稱">').val(s.step_name || ''));
-    $row.append($('<input type="datetime-local" class="form-control input-sm step-planned" max="9999-12-31T23:59">').val(dtToInput(s.planned_at)));
+    var $main = $('<div class="step-main">');
+    $main.append($('<span class="step-drag"><i class="fa fa-bars"></i></span>'));
+    $main.append($('<input type="text" class="form-control input-sm step-name" maxlength="100" placeholder="進度名稱">').val(s.step_name || ''));
+    $main.append($('<input type="number" class="form-control input-sm step-interval" min="0" placeholder="間隔" title="與上一列預定日期間隔的工作天數（第一列從接收日期起算）">'));
+    $main.append($('<input type="date" class="form-control input-sm step-planned" max="9999-12-31">').val(dtToDateInput(s.planned_at)));
     var ui = minToUi(s.remind_before_minutes);
-    $row.append($('<input type="number" class="form-control input-sm step-remind-val" min="1" placeholder="提醒">').val(ui.val));
+    $main.append($('<input type="number" class="form-control input-sm step-remind-val" min="1" placeholder="提醒">').val(ui.val));
     var $unit = $('<select class="form-control input-sm step-remind-unit"><option value="1440">天</option><option value="60">小時</option></select>').val(ui.unit);
-    $row.append($unit).append($('<span style="font-size:11px;color:#888;white-space:nowrap;">前</span>'));
+    $main.append($unit).append($('<span style="font-size:11px;color:#888;white-space:nowrap;">前</span>'));
+
+    // 小項區（預設收合；按鈕顯示數量）
+    var items = s.items || [];
+    var $itemsBox = $('<div class="step-items" style="display:none;">');
+    items.forEach(function (it) { $itemsBox.append(stepItemRowHtml(it)); });
+    var $itemsFooter = $('<div style="padding:2px 0;">');
+    $itemsFooter.append($('<button type="button" class="btn btn-default btn-xs"><i class="fa fa-plus"></i> 新增小項</button>').on('click', function () {
+        var $n = stepItemRowHtml();
+        $n.insertBefore($itemsFooter);
+        updateItemBtnCount($row);
+        $n.find('.item-name').focus();
+    }));
+    $itemsBox.append($itemsFooter);
+    $main.append($('<button type="button" class="btn btn-xs btn-default" title="展開/收合小項清單">')
+        .html('<i class="fa fa-list-ul"></i> 小項 <span class="item-cnt">' + items.length + '</span>')
+        .on('click', function () { $itemsBox.toggle(); }));
+
     if (reached) {
-        $row.append($('<span class="step-reached-tag">').text('✔ ' + fmtDt(s.reached_at)));
+        $main.append($('<span class="step-reached-tag">').text('✔ ' + fmtDtShort(s.reached_at)));
     } else {
-        $row.append($('<span class="step-del" title="刪除此進度"><i class="fa fa-times-circle"></i></span>').on('click', function () { $row.remove(); }));
+        $main.append($('<span class="step-del" title="刪除此進度"><i class="fa fa-times-circle"></i></span>').on('click', function () { $row.remove(); recomputeStepDates(); }));
     }
+    $row.append($main).append($itemsBox);
     return $row;
 }
 
@@ -604,9 +802,76 @@ function initStepSortable() {
     $('#stepEditor').sortable({
         items: '.step-edit-row:not(.reached)',   // 已到達的固定在前，不可拖
         handle: '.step-drag',
-        axis: 'y'
+        axis: 'y',
+        update: function () { recomputeStepDates(); }
     });
 }
+
+// 依「間隔(工作天)」自動推算各列預定日期：有填間隔的列 = 上一列日期(第一列從接收日期)加 N 個工作天；
+// 手動改日期的列會清空自己的間隔並成為後續列的新基準
+function recomputeStepDates() {
+    var prev = $('#tReceived').val() || dateToStr(new Date());
+    $('#stepEditor .step-edit-row').each(function () {
+        var $r = $(this);
+        var iv = $r.find('.step-interval').val();
+        var $d = $r.find('.step-planned');
+        if (iv !== '' && iv != null && $r.data('reached') != 1) {
+            var v = addWorkingDays(prev, Math.max(0, parseInt(iv, 10) || 0));
+            if (v) $d.val(v);
+        }
+        if ($d.val()) prev = $d.val();
+    });
+}
+$('#stepEditor').on('input change', '.step-interval', recomputeStepDates);
+$('#stepEditor').on('change', '.step-planned', function () {
+    $(this).closest('.step-edit-row').find('.step-interval').val(''); // 手動改日期＝脫離自動推算
+    recomputeStepDates();
+});
+$('#tReceived').on('change', recomputeStepDates);
+
+// 進度名稱欄鍵盤操作：↓ 移至下一列（最後一列時自動新增）；↑ 空白列自動移除並回到上一列
+$('#stepEditor').on('keydown', '.step-name', function (e) {
+    var $row = $(this).closest('.step-edit-row');
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        var $next = $row.next('.step-edit-row');
+        if (!$next.length) { $next = stepRowHtml(); $('#stepEditor').append($next); initStepSortable(); }
+        $next.find('.step-name').focus();
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        var $prev = $row.prev('.step-edit-row');
+        if ($(this).val().trim() === '' && $row.data('reached') != 1) {
+            $row.remove();
+            recomputeStepDates();
+        }
+        if ($prev.length) $prev.find('.step-name').focus();
+    }
+});
+
+// 小項名稱欄鍵盤操作：↓ 下一個小項（最後一個時自動新增）；↑ 空白小項自動移除並回到上一個
+$('#stepEditor').on('keydown', '.item-name', function (e) {
+    var $r = $(this).closest('.step-item-row');
+    var $wrap = $(this).closest('.step-edit-row');
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        var $next = $r.next('.step-item-row');
+        if (!$next.length) {
+            $next = stepItemRowHtml();
+            $next.insertAfter($r);
+            updateItemBtnCount($wrap);
+        }
+        $next.find('.item-name').focus();
+    } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        var $prev = $r.prev('.step-item-row');
+        if ($(this).val().trim() === '') {
+            $r.remove();
+            updateItemBtnCount($wrap);
+        }
+        if ($prev.length) $prev.find('.item-name').focus();
+        else $wrap.find('.step-name').focus();
+    }
+});
 
 function openTaskModal(id) {
     $('#tId').val(id || 0);
@@ -625,7 +890,7 @@ function openTaskModal(id) {
             var t = res.data;
             $('#tTitle').val(t.title);
             $('#tReceived').val(t.received_at);
-            $('#tDeadline').val(dtToInput(t.deadline));
+            $('#tDeadline').val(dtToDateInput(t.deadline));
             var ui = minToUi(t.remind_before_minutes);
             $('#tRemindVal').val(ui.val); $('#tRemindUnit').val(ui.unit);
             $('#tUrgentDays').val(t.urgent_days == null ? '' : t.urgent_days);
@@ -657,7 +922,10 @@ function clearBind() { $('#tBindId, #tBindLabel').val(''); $('#tBindChosen').emp
 
 $('#tBindType').on('change', function () {
     clearBind();
-    $('#tBindKw').prop('disabled', !$(this).val()).val('');
+    var type = $(this).val();
+    $('#tBindKw').prop('disabled', !type).val('')
+        .attr('placeholder', !type ? '先選類型，再輸入關鍵字搜尋'
+            : (type === 'order' ? '輸入料號（或訂單編號）搜尋訂單' : '輸入關鍵字搜尋'));
     $('#tBindSug').hide().empty();
 });
 
@@ -668,7 +936,7 @@ $('#tBindKw').on('input focus', function () {
     var kw = $(this).val();
     clearTimeout(bindSearchTimer);
     bindSearchTimer = setTimeout(function () {
-        var actionMap = { bom: 'search_boms', part: 'search_parts', customer: 'search_customers', maker: 'search_makers' };
+        var actionMap = { bom: 'search_boms', part: 'search_parts', customer: 'search_customers', maker: 'search_makers', order: 'search_orders' };
         apiGet(actionMap[type], { kw: kw }).done(function (res) {
             var $sug = $('#tBindSug').empty();
             (res.data || []).forEach(function (o) {
@@ -676,6 +944,11 @@ $('#tBindKw').on('input focus', function () {
                 if (type === 'bom') { id = o.bom; label = o.bom; extra = o.Client_Name || ''; }
                 else if (type === 'part') { id = o.d_id; label = o.D_Setting_Id; extra = o.Drawing_No || ''; }
                 else if (type === 'customer') { id = o.customer_id; label = o.customer; extra = o.customer_id; }
+                else if (type === 'order') {
+                    id = o.Order_id; label = o.Order_oo + '（' + o.d_id + '）';
+                    extra = (o.Client_name || '') + (o.Delivery_date ? ' 交期' + fmtDate(o.Delivery_date) : '')
+                          + (o.Order_status == 9 ? ' [已結案]' : (o.Order_status == 6 ? ' [暫停/取消]' : ''));
+                }
                 else { id = o.maker_id_no; label = o.maker_id; extra = o.maker_id_all || ''; }
                 var $item = $('<div class="ac-item">').text(label + (extra ? '（' + extra + '）' : ''));
                 $item.on('mousedown', function (e) { e.preventDefault(); setBind(type, id, label); $sug.hide(); });
@@ -699,12 +972,18 @@ function collectSteps() {
             if ($r.data('reached') == 1) { alert('已到達的進度名稱不可空白'); ok = false; return false; }
             return;
         }
+        var items = [];
+        $r.find('.step-item-row').each(function () {
+            var iname = $(this).find('.item-name').val().trim();
+            if (iname) items.push({ id: $(this).data('itemId') || 0, name: iname });
+        });
         var rv = $r.find('.step-remind-val').val();
         steps.push({
             id: $r.data('stepId') || 0,
             name: name,
             planned_at: $r.find('.step-planned').val() || '',
-            remind_before_minutes: rv === '' ? '' : parseInt(rv, 10) * parseInt($r.find('.step-remind-unit').val(), 10)
+            remind_before_minutes: rv === '' ? '' : parseInt(rv, 10) * parseInt($r.find('.step-remind-unit').val(), 10),
+            items: items
         });
     });
     return ok ? steps : null;
@@ -930,7 +1209,10 @@ $('#roleHint').on('click', function () { $('#roleInfoModal').modal('show'); });
     });
 })();
 
-$(document).ready(function () { loadList(); });
+$(document).ready(function () {
+    // 先載入行事曆工作天資料（供剩餘工作天顯示與間隔推算），失敗也照常載入列表（退化為只排除週末）
+    loadWorkdayData().always(function () { loadList(); });
+});
 </script>
 <?php endif; ?>
 </body>
