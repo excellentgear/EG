@@ -329,7 +329,22 @@ function eg_att_soffice_convert(string $src, string $outDir, int $timeoutSec = 1
         '--convert-to', 'pdf:writer_pdf_Export:{"SelectPdfVersion":{"type":"long","value":14}}',
         '--outdir', $outDir, $src,
     ];
-    $proc = @proc_open($cmd, [1 => ['pipe','w'], 2 => ['pipe','w']], $pipes);
+    // mod_fcgid 下 PHP 環境變數被剝到近乎空，soffice 啟動即失敗(2026-07-16 實測：
+    // 貧環境 exit=1、完整環境 exit=0)。補齊必要變數再啟動——既有值不動、只補缺。
+    $env = getenv();
+    $sysRoot = $env['SystemRoot'] ?? 'C:\\Windows';
+    $defaults = [
+        'SystemRoot'   => $sysRoot,
+        'windir'       => $sysRoot,
+        'TEMP'         => sys_get_temp_dir(),
+        'TMP'          => sys_get_temp_dir(),
+        'USERPROFILE'  => getenv('USERPROFILE') ?: sys_get_temp_dir(),
+        'PATH'         => $sysRoot . '\\System32;' . $sysRoot,
+    ];
+    foreach ($defaults as $k => $v) { if (empty($env[$k])) $env[$k] = $v; }
+    if (empty($env['APPDATA']))      $env['APPDATA']      = $env['USERPROFILE'] . '\\AppData\\Roaming';
+    if (empty($env['LOCALAPPDATA'])) $env['LOCALAPPDATA'] = $env['USERPROFILE'] . '\\AppData\\Local';
+    $proc = @proc_open($cmd, [1 => ['pipe','w'], 2 => ['pipe','w']], $pipes, null, $env);
     if (!is_resource($proc)) { error_log('[att_lib] proc_open soffice failed'); return null; }
     stream_set_blocking($pipes[1], false);
     stream_set_blocking($pipes[2], false);
@@ -343,10 +358,42 @@ function eg_att_soffice_convert(string $src, string $outDir, int $timeoutSec = 1
     }
     fclose($pipes[1]); fclose($pipes[2]);
     proc_close($proc);
-    // 清 profile（盡力而為）
-    eg_att_rrmdir($profile);
     $pdf = rtrim($outDir, '\\/') . DIRECTORY_SEPARATOR . pathinfo($src, PATHINFO_FILENAME) . '.pdf';
-    if (is_file($pdf) && filesize($pdf) > 0) return $pdf;
+    if (is_file($pdf) && filesize($pdf) > 0) { eg_att_rrmdir($profile); return $pdf; }
+
+    // 直接啟動失敗——Apache 行程樹的 Job UI 限制會讓 GUI 程式 DLL 初始化失敗(0xC0000142，
+    // 2026-07-16 實測連隔一層 CLI PHP 也一樣)。改經 WMI 建程序：由 WMI 服務代生、
+    // 脫離 Apache 行程樹，不受 Job 限制。CLI 情境走不到這裡（上面直接成功）。
+    if (class_exists('COM')) {
+        try {
+            $cmdline = '"' . EG_ATT_SOFFICE . '" --headless --norestore --nolockcheck'
+                     . ' -env:UserInstallation=' . $profileUrl
+                     . ' --convert-to "pdf:writer_pdf_Export:{\"SelectPdfVersion\":{\"type\":\"long\",\"value\":14}}"'
+                     . ' --outdir "' . $outDir . '" "' . $src . '"';
+            $wmi = new COM('winmgmts://./root/cimv2');
+            $wp  = $wmi->Get('Win32_Process');
+            $wmiPid = null;
+            $ret = $wp->Create($cmdline, null, null, $wmiPid);
+            if ((int)$ret === 0) {
+                $t1 = time(); $lastSize = -1;
+                while (time() - $t1 < $timeoutSec) {
+                    if (is_file($pdf)) {
+                        $sz = filesize($pdf);
+                        if ($sz > 0 && $sz === $lastSize) { eg_att_rrmdir($profile); return $pdf; } // 大小穩定=寫完
+                        $lastSize = $sz;
+                    }
+                    usleep(300000);
+                    clearstatcache(true, $pdf);
+                }
+                error_log('[att_lib] WMI soffice timeout: ' . $src);
+            } else {
+                error_log('[att_lib] WMI Win32_Process.Create ret=' . $ret);
+            }
+        } catch (Throwable $_e) {
+            error_log('[att_lib] WMI soffice fallback error: ' . $_e->getMessage());
+        }
+    }
+    eg_att_rrmdir($profile);
     error_log('[att_lib] soffice convert failed: ' . $src . ' output=' . substr($out, 0, 500));
     return null;
 }
