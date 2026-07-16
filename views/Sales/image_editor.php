@@ -1461,6 +1461,12 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <script src="../../resource/js/fabric.min.js"></script>
 <script>
 'use strict';
+/* Fabric 5.3.0 已知 bug：textBaseline 預設值誤植為 'alphabetical'（非法值），瀏覽器每個文字物件
+   每一幀渲染都拒絕賦值並印一條主控台警告，文字多時每秒噴數百條，就是「操作卡頓/當機30秒」的元兇。
+   本地 fabric.min.js 已修正該錯字；這裡再保險一層，防未來換版 fabric 把錯字帶回來。 */
+if (window.fabric && fabric.Text && fabric.Text.prototype.textBaseline === 'alphabetical') {
+    fabric.Text.prototype.textBaseline = 'alphabetic';
+}
 /* ════════════════════════════════════════════════════════════════════
    批圖編輯器主程式（Fabric.js 5.3）
    物件模型：所有東西（圖片/文字/形狀/遮蓋）都是可再編輯的物件（Figma 式），
