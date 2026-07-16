@@ -2810,6 +2810,40 @@ echo "</script>\n";
         }
     }
 
+    // ── QC/生管製程同步判斷 ─────────────────────────────────────────────
+    // 從 window.bomPSList 找出該BOM「QC有檢驗紀錄(QC_check/QC_check_date)或已按QC完工(qc_completed)」的製程，
+    // 與目前製程序號(row.bom_sn，可能為逗號字串)比對：
+    //   hasQcAtOrBeyond：存在序號 ≧ 目前製程 的QC紀錄（「QC檢驗」篩選用）
+    //   target：序號 > 目前製程、狀態尚可操作(N/ing/Q/P)的最遠QC製程（快速移轉按鈕的目標關）
+    function getQcSyncInfo(row) {
+        var result = { hasQcAtOrBeyond: false, target: null };
+        if (!row || !row.bom || !Array.isArray(window.bomPSList)) return result;
+        var curSn = -1;
+        String(row.bom_sn || '').split(',').forEach(function(s) {
+            var n = parseInt(s, 10);
+            if (!isNaN(n) && n > curSn) curSn = n;
+        });
+        if (curSn < 0) return result;
+        var bomStr = String(row.bom).trim();
+        window.bomPSList.forEach(function(p) {
+            if (!p || String(p.bom || '').trim() !== bomStr) return;
+            if (parseInt(p.is_consumed || 0, 10) === 1) return;
+            var qcDate = String(p.QC_check_date || '').trim();
+            var hasQc = (p.QC_check && String(p.QC_check).trim() !== '') ||
+                        (qcDate !== '' && qcDate.indexOf('0000') !== 0) ||
+                        (p.qc_completed == 1);
+            if (!hasQc) return;
+            var sn = parseInt(p.bom_sn, 10);
+            if (isNaN(sn) || sn < curSn) return;
+            result.hasQcAtOrBeyond = true;
+            var st = String(p.processing_state || '').trim();
+            if (sn > curSn && (st === 'N' || st === 'ing' || st === 'Q' || st === 'P')) {
+                if (!result.target || sn > (parseInt(result.target.bom_sn, 10) || 0)) result.target = p;
+            }
+        });
+        return result;
+    }
+
     // --- Date and Workday Calculation Helpers ---
     // Parses Minguo date string (e.g., "1130603") to a JS Date object
     function parseMinguoDateString(minguoDateStr) {
@@ -5694,6 +5728,9 @@ echo "</script>\n";
                     // 修改排序邏輯，使用 bom_sn 進行排序
                     matchingProcesses.sort((a, b) => (parseInt(a.bom_sn) || 0) - (parseInt(b.bom_sn) || 0));
 
+                    // QC/生管製程不同步：算出快速移轉的目標關（QC已檢驗/完工、序號>目前製程的最遠關）
+                    var _qcSyncTarget = getQcSyncInfo(row).target;
+
                     for (var i = 0; i < window.maxCount; i++) {
                         var tdDynamicProcess = document.createElement('td');
                         tdDynamicProcess.className = 'process-col';
@@ -5903,6 +5940,36 @@ echo "</script>\n";
                                     openQuickTransferModal(pi, rowRef);
                                 };
                             })(processInfo, row));
+                        }
+                        // QC/生管製程不同步：此關是QC已檢驗/完工但目前製程還在前面的目標關 → 顯示快速移轉按鈕
+                        if (processInfo && _qcSyncTarget && _canTransferRole &&
+                            String(_qcSyncTarget.bom_ing_fid) === String(processInfo.bom_ing_fid)) {
+                            var _qsBtnRow = document.createElement('div');
+                            _qsBtnRow.style.cssText = 'margin-top:3px;display:flex;justify-content:flex-end;';
+                            var _qsBtn = document.createElement('button');
+                            _qsBtn.type = 'button';
+                            _qsBtn.className = 'btn btn-xs';
+                            _qsBtn.style.cssText = 'background:#e67e22;color:#fff;font-size:10px;padding:1px 6px;';
+                            _qsBtn.innerHTML = '<i class="fa fa-bolt"></i> 快速移轉';
+                            _qsBtn.title = 'QC已檢驗到此製程但目前製程仍在前面，點擊快速移轉到此關（自動以今天回廠，QC已完工則直接跳待移轉）';
+                            _qsBtn.addEventListener('click', (function(pi, rowRef) {
+                                return function(e) {
+                                    e.stopPropagation();
+                                    _openQuickTransferForm(rowRef, {
+                                        fid: String(pi.bom_ing_fid || ''),
+                                        process_no: pi.process_no,
+                                        ProcessName: pi.ProcessName,
+                                        maker_id_no: pi.maker_id_no,
+                                        maker_id: pi.maker_id,
+                                        batch_label: null
+                                    }, {
+                                        action: 'quick_sync_transfer',
+                                        note: '將以今天作為回廠日期自動回廠；若此製程QC已完工會直接跳到「待移轉」。'
+                                    });
+                                };
+                            })(processInfo, row));
+                            _qsBtnRow.appendChild(_qsBtn);
+                            tdDynamicProcess.appendChild(_qsBtnRow);
                         }
                         tr.appendChild(tdDynamicProcess);
                     }
@@ -7243,10 +7310,8 @@ echo "</script>\n";
                     }
                 } else if (filters.status === 'has_new_process_report') { // 新增：有新製程報工
                     if (!row.has_new_process_report) show = false;
-                } else if (filters.status === 'qc_today') { // 今日QC檢驗
-                    const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '/');
-                    const rowQcDate = String(row.QC_check_date || '').trim();
-                    if (!rowQcDate || rowQcDate !== todayStr) show = false;
+                } else if (filters.status === 'qc_check_any') { // QC檢驗：QC有檢驗/完工紀錄且序號≧目前製程（原「今日QC檢驗」改版）
+                    if (!getQcSyncInfo(row).hasQcAtOrBeyond) show = false;
                 } else if (filters.status === 'qc_date_pick') { // 指定日期QC檢驗
                     const pickDate = String(filters.qcDatePick || '').trim().replace(/-/g, '/');
                     const rowQcDate2 = String(row.QC_check_date || '').trim();
@@ -8533,7 +8598,10 @@ echo "</script>\n";
     }
 
     // ── 移轉日期/廠商表單（單批次或已選定批次後顯示）────────────────────────────
-    function _openQuickTransferForm(rowData, target) {
+    function _openQuickTransferForm(rowData, target, opts) {
+        opts = opts || {};
+        const _qtrAction = opts.action || 'transfer_process'; // 'quick_sync_transfer' = QC/生管不同步快速移轉（多做今天回廠+依qc_completed跳P）
+        const _qtrNoteHtml = opts.note ? '<p style="font-size:11px;color:#e67e22;margin:6px 0 0;"><i class="fa fa-info-circle"></i> ' + escapeHtml(opts.note) + '</p>' : '';
         const fid=String(target.fid||''), bom=String(rowData.bom||''), did=String(rowData.d_display||rowData.d_id||''), procNo=String(target.process_no||''), procName=String(target.ProcessName||'');
         const today=new Date(), todayStr=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
         const defaultMakerNo=String(target.maker_id_no||''), defaultMakerName=String(target.maker_id||'');
@@ -8564,6 +8632,7 @@ echo "</script>\n";
       <input type="hidden" id="qtr-maker-name-${fid}" value="${escapeHtml(defaultMakerName)}">
     </div>
   </div>
+  ${_qtrNoteHtml}
 </div>
 <div style="padding:10px 16px;border-top:1px solid #e0e0e0;display:flex;justify-content:flex-end;gap:8px;">
   <button id="qtr-cancel-${fid}" class="btn btn-default">取消</button>
@@ -8640,11 +8709,21 @@ echo "</script>\n";
             if(!transDate){alert('請選擇移轉日期。');return;}
             if(!makerNo||!makerName){alert('請輸入並選擇有效的廠商。');return;}
             $btn.prop('disabled',true).text('處理中...');
-            $.ajax({url:_phpSelf,type:'POST',data:{action:'transfer_process',bom_ing_fid:fid,transfer_date:transDate,maker_no:makerNo,maker_name:makerName},dataType:'json',
+            $.ajax({url:_phpSelf,type:'POST',data:{action:_qtrAction,bom_ing_fid:fid,transfer_date:transDate,maker_no:makerNo,maker_name:makerName},dataType:'json',
                 success:function(response){
                     if(response.success){
                         showTemporaryMessage(response.message,true); _closeQtr();
                         var _newDate = transDate.replace(/-/g,'/');
+                        if(_qtrAction==='quick_sync_transfer'){
+                            // 快速同步移轉：目標關直接進 Q/P（伺服器回傳 new_state），更新 bomPSList 讓按鈕即刻消失、目前製程前進
+                            var _ns = response.new_state || 'Q';
+                            if(Array.isArray(window.bomPSList))window.bomPSList.forEach(function(p){
+                                if(String(p.bom_ing_fid||'')===String(fid)){
+                                    p.processing_state=_ns;p.outsource_date=_newDate;p.maker_id=makerName;p.maker_id_no=makerNo;
+                                }
+                            });
+                            delete _rowDetailCache[bom];
+                        } else {
                         // 樂觀更新 fullDataset
                         if(Array.isArray(fullDataset))fullDataset.forEach(function(item){
                             if(item&&item.bom_ing_fid&&String(item.bom_ing_fid).split(',').some(function(id){return String(id).trim()===fid;})){
@@ -8658,6 +8737,7 @@ echo "</script>\n";
                                     p.processing_state='ing';p.outsource_date=_newDate;p.maker_id=makerName;
                                 }
                             });
+                        }
                         }
                         processAndRenderData();
                         // 清除所有 focus/update flag 確保 fetchDataAndFilter 不被跳過，再背景刷新
@@ -13708,7 +13788,7 @@ echo "</script>\n";
                                                 <option value="has_bom_ing_ps">有備註</option> <!-- 新增：有製程備註 -->
                                                 <option value="has_report_data">有報工資料</option> <!-- 新增：有報工資料 -->
                                                 <option value="has_new_process_report">有新製程報工</option>
-                                                <option value="qc_today">今日QC檢驗</option>
+                                                <option value="qc_check_any">QC檢驗</option>
                                                 <option value="qc_date_pick">指定日期QC檢驗…</option>
                                                 <option value="---sep_process_remark---" disabled>&nbsp;</option> <!-- 新增分隔線 -->
                                                 <option value="is_stock">備庫</option>
