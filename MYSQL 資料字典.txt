@@ -21,6 +21,29 @@ modified_at	timestamp	是	CURRENT_TIMESTAMP
 deleted_at	timestamp	是	NULL	
 沒有已定義的索引！
 
+approval_record
+欄位	類型	無值(Null)	預設值	備註
+id (主鍵)	int	否		
+module	varchar(30)	否		
+entity_id	int	否		
+level	varchar(30)	否	manager	
+status	enum('pending', 'approved', 'rejected')	否	pending	
+submitted_by	int	否		
+submitted_by_name	varchar(50)	是	NULL	
+submitted_at	datetime	否		
+approver_id	int	是	NULL	
+approver_name	varchar(50)	是	NULL	
+note	text	是	NULL	
+decided_at	datetime	是	NULL	
+live_event_id	int	是	NULL	
+created_at	datetime	否	CURRENT_TIMESTAMP	
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	id	22	A	否	
+idx_module_entity	BTREE	否	否	module	1	A	否	
+entity_id	12	A	否
+id	22	A	否
+idx_status	BTREE	否	否	status	3	A	否	
 attachment_download_logs
 資料表備註： 附件下載/開啟紀錄
 
@@ -181,7 +204,7 @@ Modified_By	char(11)	是	NULL	最後修改事件的操作人員
 Modified_At	timestamp	是	CURRENT_TIMESTAMP	最後修改事件時間
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	event_id	8	A	否	
+PRIMARY	BTREE	是	否	event_id	46	A	否	
 bom_ing_split
 資料表備註： 拆分工單表：追蹤同一工件在多台機台或多面加工的子任務
 
@@ -274,9 +297,9 @@ operated_at	datetime	否	CURRENT_TIMESTAMP
 details_json	text	是	NULL	JSON 格式操作細節
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	612	A	否	
-idx_bol_bom	BTREE	否	否	bom	597	A	否	
-idx_bol_date	BTREE	否	否	operated_at	612	A	否	
+PRIMARY	BTREE	是	否	id	687	A	否	
+idx_bol_bom	BTREE	否	否	bom	670	A	否	
+idx_bol_date	BTREE	否	否	operated_at	687	A	否	
 idx_bol_operator	BTREE	否	否	operator_id	6	A	是	
 idx_bol_type	BTREE	否	否	operation_type	2	A	否	
 bom_order_process_map
@@ -295,6 +318,38 @@ PRIMARY	BTREE	是	否	id	1665	A	否
 uq_bopm_bom_order	BTREE	是	否	bom	1577	A	否	
 order_id	1665	A	否
 fk_bopm_order_track	BTREE	否	否	order_id	1501	A	否	
+bom_rename_archive_map
+資料表備註： 叫料文件改檔名：原始檔歸檔對應
+
+欄位	類型	無值(Null)	預設值	備註
+id (主鍵)	bigint	否		
+batch_id	varchar(40)	否		
+old_name	varchar(255)	否		
+new_name	varchar(255)	否		
+created_at	datetime	是	CURRENT_TIMESTAMP	
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	id	0	A	否	
+idx_batch	BTREE	否	否	batch_id	0	A	否	
+bom_rename_process_log
+資料表備註： 叫料文件改檔名：每份產出檔一筆
+
+欄位	類型	無值(Null)	預設值	備註
+id (主鍵)	bigint	否		
+batch_id	varchar(40)	否		
+src_name	varchar(255)	否		
+bom	char(12)	否		
+out_name	varchar(255)	否		
+out_type	varchar(20)	否		
+bom_found_in_erp	tinyint(1)	否	0	
+operator_id	int	是	NULL	
+operator	varchar(50)	是	NULL	
+created_at	datetime	是	CURRENT_TIMESTAMP	
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	id	0	A	否	
+idx_batch	BTREE	否	否	batch_id	0	A	否	
+idx_bom	BTREE	否	否	bom	0	A	否	
 bom_summary
 資料表備註： BOM 狀態摘要表（生管進度頁專用）
 
@@ -315,11 +370,91 @@ latest_qc_date	date	是	NULL	最新 QC 日期
 updated_at	datetime	否	CURRENT_TIMESTAMP	摘要最後更新時間
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	bom	1093	A	否	
-idx_did	BTREE	否	否	d_id	782	A	是	
-idx_progress	BTREE	否	否	progress_pct	58	A	否	
+PRIMARY	BTREE	是	否	bom	1362	A	否	
+idx_did	BTREE	否	否	d_id	972	A	是	
+idx_progress	BTREE	否	否	progress_pct	61	A	否	
 idx_current_sn	BTREE	否	否	current_bom_sn	20	A	否	
-idx_latest_event_date	BTREE	否	否	latest_event_date	127	A	是	
+idx_latest_event_date	BTREE	否	否	latest_event_date	162	A	是	
+bom_watch_group
+資料表備註： BOM追蹤：使用者自訂的追蹤群組
+
+欄位	類型	無值(Null)	預設值	備註
+group_id (主鍵)	int	否		追蹤群組主鍵
+group_name	varchar(100)	否		群組名稱，使用者自訂
+owner_user_id	int	否		群組擁有者 user.id
+created_at	timestamp	否	CURRENT_TIMESTAMP	
+updated_at	timestamp	否	CURRENT_TIMESTAMP	
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	group_id	2	A	否	
+idx_bwg_owner	BTREE	否	否	owner_user_id	1	A	否	
+bom_watch_notify_scope
+資料表備註： BOM追蹤：通知開放範圍(可整群組開或個別BOM開)
+
+欄位	類型	無值(Null)	預設值	備註
+scope_id (主鍵)	int	否		通知範圍主鍵
+group_id	int	否		對應 bom_watch_group.group_id
+scope_type	varchar(10)	否		group=整個群組開通知 bom=僅指定BOM開通知
+scope_bom	varchar(30)	是	NULL	僅scope_type=bom時使用，對應bom.bom
+created_at	timestamp	否	CURRENT_TIMESTAMP	
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	scope_id	0	A	否	
+uk_bwns_scope	BTREE	是	否	group_id	0	A	否	
+scope_type	0	A	否
+scope_bom	0	A	是
+idx_bwns_group	BTREE	否	否	group_id	0	A	否	
+bom_watch_rule
+資料表備註： BOM追蹤：群組內的自動追蹤規則(同群組內OR聯集)
+
+欄位	類型	無值(Null)	預設值	備註
+rule_id (主鍵)	int	否		規則主鍵
+group_id	int	否		對應 bom_watch_group.group_id
+rule_type	varchar(20)	否		part=料號 bom=BOM編號 customer=客戶 sales=業務 due_range=交期區間
+rule_value	varchar(50)	是	NULL	part存d_setting.d_id、bom存bom.bom、customer存customer_id、sales存user_id，due_range不使用
+match_mode	varchar(10)	否	exact	exact=精確比對 pattern=模糊比對(LIKE)
+is_exclude	tinyint(1)	否	0	0=納入(OR聯集) 1=排除(NOT，從已納入集合中扣除)
+due_range_type	varchar(10)	是	NULL	僅rule_type=due_range使用：fixed=固定日期 relative=相對區間
+due_from	date	是	NULL	固定區間起(含)，僅due_range_type=fixed使用
+due_to	date	是	NULL	固定區間迄(含)，僅due_range_type=fixed使用
+due_relative_from_days	int	是	NULL	相對區間起(天數，可負，相對於今天)，僅due_range_type=relative使用
+due_relative_to_days	int	是	NULL	相對區間迄(天數，可負，相對於今天)，僅due_range_type=relative使用
+created_at	timestamp	否	CURRENT_TIMESTAMP	
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	rule_id	1	A	否	
+idx_bwr_group	BTREE	否	否	group_id	1	A	否	
+bom_watch_share
+資料表備註： BOM追蹤：群組分享清單(需分享對象自己也有bom_track權限才看得到)
+
+欄位	類型	無值(Null)	預設值	備註
+share_id (主鍵)	int	否		
+group_id	int	否		對應 bom_watch_group.group_id
+target_type	varchar(10)	否	user	user=個人 dept=整個部門
+target_id	int	否		對應 user.id 或 department.id，視 target_type 而定
+shared_by	int	否		執行分享動作的使用者 user.id
+created_at	timestamp	否	CURRENT_TIMESTAMP	
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	share_id	0	A	否	
+uk_bwsh_group_target	BTREE	是	否	group_id	0	A	否	
+target_type	0	A	否
+target_id	0	A	否
+bom_watch_subscriber
+資料表備註： BOM追蹤：通知對象(多選，關聯到notify_scope)
+
+欄位	類型	無值(Null)	預設值	備註
+id (主鍵)	int	否		
+scope_id	int	否		對應 bom_watch_notify_scope.scope_id
+target_type	varchar(10)	否	user	user=個人 dept=整個部門
+user_id	int	否		收通知的使用者 user.id
+created_at	timestamp	否	CURRENT_TIMESTAMP	
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	id	0	A	否	
+uk_bws_scope_target	BTREE	是	否	scope_id	0	A	否	
+target_type	0	A	否
+user_id	0	A	否
 calendar_workday
 資料表備註： (不使用 待刪除)
 
@@ -340,7 +475,7 @@ note	varchar(255)	是	NULL
 created_at	datetime	是	CURRENT_TIMESTAMP	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	6	A	否	
+PRIMARY	BTREE	是	否	id	9	A	否	
 idx_car	BTREE	否	否	car_id	1	A	否	
 car_attachment
 欄位	類型	無值(Null)	預設值	備註
@@ -467,10 +602,10 @@ revoked	tinyint(1)	否	0
 created_at	datetime	是	CURRENT_TIMESTAMP	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	1	A	否	
+PRIMARY	BTREE	是	否	id	6	A	否	
 idx_car	BTREE	否	否	car_id	1	A	否	
 idx_car_section	BTREE	否	否	car_id	1	A	否	
-section	1	A	否
+section	6	A	否
 co_editor_preset
 資料表備註： 共同編輯者預設名單(公開/私人)
 
@@ -485,10 +620,10 @@ created_at	datetime	是	CURRENT_TIMESTAMP
 updated_at	datetime	是	CURRENT_TIMESTAMP	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	1	A	否	
-idx_module	BTREE	否	否	module	1	A	否	
-is_public	1	A	否
-owner_id	1	A	否
+PRIMARY	BTREE	是	否	id	0	A	否	
+idx_module	BTREE	否	否	module	0	A	否	
+is_public	0	A	否
+owner_id	0	A	否
 customer_account_terms
 資料表備註： 客戶帳款結帳條件表（含歷史生效期間）
 
@@ -541,8 +676,8 @@ note	varchar(200)	是	NULL	備註（帳務聯絡等）
 department	varchar(50)	是	NULL	部門
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	contact_id	24	A	否	
-idx_customer	BTREE	否	否	customer_id	9	A	否	
+PRIMARY	BTREE	是	否	contact_id	27	A	否	
+idx_customer	BTREE	否	否	customer_id	12	A	否	
 customer_industry_mapping
 資料表備註： 客戶與產業別對應表：支援一對多
 
@@ -1042,9 +1177,9 @@ Modified_By	char(11)	是	NULL	修改人員
 Modified_At	timestamp	是	CURRENT_TIMESTAMP	修改時間
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	bom_id	28	A	否	
-idx_parent	BTREE	否	否	parent_d_id	13	A	否	
-idx_child	BTREE	否	否	child_d_id	27	A	否	
+PRIMARY	BTREE	是	否	bom_id	35	A	否	
+idx_parent	BTREE	否	否	parent_d_id	15	A	否	
+idx_child	BTREE	否	否	child_d_id	33	A	否	
 d_setting_dedicated_part_map
 資料表備註： 料號↔專用料號對應，對應料號表單的專用料號欄位（來源為現有 d_setting 料號）
 
@@ -1099,8 +1234,8 @@ spec_spline_std	varchar(30)	是	NULL	花鍵標準：DIN5480/ISO4156/ANSI B92.1/J
 spec_spline_nominal_dia	decimal(10,4)	是	NULL	公稱直徑 DB (mm)，DIN5480等漸開線花鍵使用
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	gear_id	209	A	否	
-fk_d_setting_gear	BTREE	否	否	d_setting_id	206	A	否	
+PRIMARY	BTREE	是	否	gear_id	241	A	否	
+fk_d_setting_gear	BTREE	否	否	d_setting_id	228	A	否	
 d_setting_machine_map
 資料表備註： 料號↔專用機台對應，對應料號表單的專用機台欄位（來源為 machine_list）
 
@@ -1247,6 +1382,38 @@ is_exact	tinyint(1)	否	0	精確匹配(=)
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
 PRIMARY	BTREE	是	否	id	10	A	否	
+imgedit_labels
+欄位	類型	無值(Null)	預設值	備註
+label_id (主鍵)	int	否		
+label_name	varchar(100)	否		
+category	varchar(50)	是	NULL	
+owner_type	varchar(10)	否	company	
+owner_user_id	int	是	NULL	
+owner_dept_id	int	是	NULL	
+hide_name	tinyint	否	0	
+spec_json	mediumtext	否		
+created_by	varchar(50)	是	NULL	
+created_at	datetime	是	NULL	
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	label_id	82	A	否	
+imgedit_workfile_meta
+欄位	類型	無值(Null)	預設值	備註
+attachment_id (主鍵)	int	否		
+owner_type	varchar(10)	否	dept	
+owner_dept_id	int	是	NULL	
+created_at	datetime	否	CURRENT_TIMESTAMP	
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	attachment_id	17	A	否	
+imgedit_workfile_share
+欄位	類型	無值(Null)	預設值	備註
+attachment_id (主鍵)	int	否		
+user_id (主鍵)	int	否		
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	attachment_id	0	A	否	
+user_id	0	A	否
 ir_attachments
 欄位	類型	無值(Null)	預設值	備註
 id (主鍵)	int	否		
@@ -1421,9 +1588,9 @@ Content	varchar(100)	是	NULL	品名規格後半內容（ERP匯入） 出貨備�
 anomaly_confirmed	tinyint(1)	否	0	異常偵測已確認 0=未確認 1=已確認
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	IS_id	41808	A	否	
-idx_ship_stats	BTREE	否	否	Product_id	10399	A	否	
-Order_date	29601	A	否
+PRIMARY	BTREE	是	否	IS_id	38746	A	否	
+idx_ship_stats	BTREE	否	否	Product_id	7520	A	否	
+Order_date	27213	A	否
 is_sale_type
 資料表備註： 出貨性質設定表
 
@@ -1915,8 +2082,8 @@ show_attach_inline	tinyint(1)	否	0	附件2件(含)以下時檢視畫面直接�
 created_at	datetime	是	CURRENT_TIMESTAMP	建立時間
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	18	A	否	
-idx_event_no	BTREE	否	否	event_no	15	A	是	
+PRIMARY	BTREE	是	否	id	31	A	否	
+idx_event_no	BTREE	否	否	event_no	7	A	是	
 live_event_editor
 資料表備註： 公告/通知 共同編輯者(部門或人員，人員最多5)
 
@@ -1928,12 +2095,12 @@ editor_id	int	否
 created_at	datetime	是	CURRENT_TIMESTAMP	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	1	A	否	
-uk_evt_editor	BTREE	是	否	live_event_id	1	A	否	
-editor_type	1	A	否
-editor_id	1	A	否
-idx_editor	BTREE	否	否	editor_type	1	A	否	
-editor_id	1	A	否
+PRIMARY	BTREE	是	否	id	0	A	否	
+uk_evt_editor	BTREE	是	否	live_event_id	0	A	否	
+editor_type	0	A	否
+editor_id	0	A	否
+idx_editor	BTREE	否	否	editor_type	0	A	否	
+editor_id	0	A	否
 live_event_file
 資料表備註： 公告附件
 
@@ -1951,8 +2118,8 @@ preview_path	varchar(500)	是	NULL	角落標註檢視快取版
 uploaded_at	datetime	否	CURRENT_TIMESTAMP	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	5	A	否	
-idx_event	BTREE	否	否	live_event_id	3	A	否	
+PRIMARY	BTREE	是	否	id	0	A	否	
+idx_event	BTREE	否	否	live_event_id	0	A	否	
 live_event_for_user
 欄位	類型	無值(Null)	預設值	備註
 id (主鍵)	int	否		
@@ -1962,7 +2129,7 @@ oready_read	int	是	NULL
 read_at	datetime	是	NULL	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	51	A	否	
+PRIMARY	BTREE	是	否	id	77	A	否	
 live_event_history
 資料表備註： 公告/通知 修改歷史
 
@@ -1992,10 +2159,10 @@ replied_at	datetime	是	NULL
 reply_folder	varchar(600)	是	NULL	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	17	A	否	
-uq_event_user	BTREE	是	否	live_event_id	12	A	否	
-user_id	17	A	否
-idx_event	BTREE	否	否	live_event_id	12	A	否	
+PRIMARY	BTREE	是	否	id	26	A	否	
+uq_event_user	BTREE	是	否	live_event_id	18	A	否	
+user_id	26	A	否
+idx_event	BTREE	否	否	live_event_id	18	A	否	
 live_event_resp_file
 資料表備註： 回覆附件
 
@@ -2020,10 +2187,10 @@ target_id	int	否	0
 mode	varchar(10)	否	read	read/sign/reply
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	24	A	否	
-idx_event	BTREE	否	否	live_event_id	16	A	否	
-idx_match	BTREE	否	否	target_type	4	A	否	
-target_id	10	A	否
+PRIMARY	BTREE	是	否	id	53	A	否	
+idx_event	BTREE	否	否	live_event_id	31	A	否	
+idx_match	BTREE	否	否	target_type	3	A	否	
+target_id	13	A	否
 machine_list
 欄位	類型	無值(Null)	預設值	備註
 machine_id (主鍵)	int	否		
@@ -2366,31 +2533,31 @@ quote_no	varchar(30)	是	NULL	對應報價單號 [關聯 quotation_list.quote_no
 quote_item_id	int	是	NULL	
 Client_name_ID	char(11)	是	NULL	客戶ID 對應customer_list.customer_id
 d_id_ID	int	是	NULL	料號ID 對應d_setting.d_id
-last_activity_at	timestamp	否	CURRENT_TIMESTAMP
+last_activity_at	timestamp	否	CURRENT_TIMESTAMP	
 assembly_parent_order_id	int	是	NULL	組合件來源母訂單ID [新功能：由組合件訂單自動展開之子件訂單，對應 order_track.Order_id；拆批用 parent_order_id，兩者獨立]
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	Order_id	8204	A	否
-idx_assembly_parent_order_id	BTREE	否	否	assembly_parent_order_id	1	A	是
-fk_order_track_customer	BTREE	否	否	Client_name_ID	130	A	是
-fk_order_track_did	BTREE	否	否	d_id_ID	1072	A	是	
-idx_order_date	BTREE	否	否	Order_date	589	A	否	
-idx_parent_order_id	BTREE	否	否	parent_order_id	19	A	是	
+PRIMARY	BTREE	是	否	Order_id	8298	A	否	
+fk_order_track_customer	BTREE	否	否	Client_name_ID	149	A	是	
+fk_order_track_did	BTREE	否	否	d_id_ID	1379	A	是	
+idx_order_date	BTREE	否	否	Order_date	610	A	否	
+idx_parent_order_id	BTREE	否	否	parent_order_id	20	A	是	
 idx_order_status	BTREE	否	否	Order_status	3	A	是	
-idx_pmget	BTREE	否	否	pmGet	1169	A	是	
-idx_ate	BTREE	否	否	ate	4	A	是	
-idx_ategel	BTREE	否	否	ateGet	588	A	是	
-idx_modified_at	BTREE	否	否	Modified_At	1775	A	是	
-idx_last_activity_at	BTREE	否	否	last_activity_at	4640	A	否	
-idx_ate_ateGet	BTREE	否	否	ate	4	A	是	
-ateGet	1196	A	是
-ft_global_search	FULLTEXT	否	否	Client_name	8268		否	
-d_id	8268		否
-Processing_items	8268		是
-Order_ps	8268		是
-ateNote	8268		是
-Order_oo	8268		否
-C_order	8268		是
+idx_pmget	BTREE	否	否	pmGet	1191	A	是	
+idx_ate	BTREE	否	否	ate	5	A	是	
+idx_ategel	BTREE	否	否	ateGet	608	A	是	
+idx_modified_at	BTREE	否	否	Modified_At	1981	A	是	
+idx_last_activity_at	BTREE	否	否	last_activity_at	4962	A	否	
+idx_ate_ateGet	BTREE	否	否	ate	5	A	是	
+ateGet	1248	A	是
+idx_assembly_parent_order_id	BTREE	否	否	assembly_parent_order_id	1	A	是	
+ft_global_search	FULLTEXT	否	否	Client_name	8300		否	
+d_id	8300		否
+Processing_items	8300		是
+Order_ps	8300		是
+ateNote	8300		是
+Order_oo	8300		否
+C_order	8300		是
 oready_reply
 欄位	類型	無值(Null)	預設值	備註
 oready_reply_id	int	否		
@@ -2413,9 +2580,9 @@ created_at	timestamp	否	CURRENT_TIMESTAMP	建立時間
 updated_at	timestamp	否	CURRENT_TIMESTAMP	更新時間
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	177	A	否	
-idx_page	BTREE	否	否	page_name	62	A	否	
-idx_changed_at	BTREE	否	否	changed_at	131	A	否	
+PRIMARY	BTREE	是	否	id	298	A	否	
+idx_page	BTREE	否	否	page_name	83	A	否	
+idx_changed_at	BTREE	否	否	changed_at	244	A	否	
 part_attachments
 資料表備註： 料號附件
 
@@ -2437,9 +2604,9 @@ deleted_at	datetime	是	NULL	軟刪除時間，NULL=正常
 deleted_by	varchar(100)	是	NULL	刪除者
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	122	A	否	
-idx_did	BTREE	否	否	d_id	57	A	否	
-idx_deleted	BTREE	否	否	deleted_at	5	A	是	
+PRIMARY	BTREE	是	否	id	164	A	否	
+idx_did	BTREE	否	否	d_id	69	A	否	
+idx_deleted	BTREE	否	否	deleted_at	11	A	是	
 part_date_cache
 欄位	類型	無值(Null)	預設值	備註
 part_no (主鍵)	varchar(50)	否		
@@ -2741,8 +2908,8 @@ deactivated_at	datetime	是	NULL	失效時間
 fail_reason	varchar(100)	是	NULL	失效原因
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	9	A	否	
-uq_endpoint	BTREE	是	否	endpoint	9	A	否	
+PRIMARY	BTREE	是	否	id	10	A	否	
+uq_endpoint	BTREE	是	否	endpoint	10	A	否	
 idx_user	BTREE	否	否	user_id	6	A	否	
 qa_abnormal_attachments
 欄位	類型	無值(Null)	預設值	備註
@@ -3372,8 +3539,8 @@ uploaded_at	datetime	是	CURRENT_TIMESTAMP
 updated_at	datetime	是	NULL	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	4	A	否	
-idx_qn	BTREE	否	否	quote_no	2	A	否	
+PRIMARY	BTREE	是	否	id	48	A	否	
+idx_qn	BTREE	否	否	quote_no	14	A	否	
 quotation_change_log
 欄位	類型	無值(Null)	預設值	備註
 log_id (主鍵)	bigint	否		
@@ -3384,9 +3551,9 @@ summary	varchar(200)	否
 diff_json	mediumtext	否		
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	log_id	14	A	否	
-idx_qcl	BTREE	否	否	quote_id	4	A	否	
-log_id	14	A	否
+PRIMARY	BTREE	是	否	log_id	72	A	否	
+idx_qcl	BTREE	否	否	quote_id	20	A	否	
+log_id	72	A	否
 quotation_delete_log
 欄位	類型	無值(Null)	預設值	備註
 id (主鍵)	int	否		
@@ -3401,8 +3568,8 @@ delete_reason	varchar(500)	是	NULL
 snapshot	longtext	是	NULL	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	9	A	否	
-idx_del_at	BTREE	否	否	deleted_at	9	A	是	
+PRIMARY	BTREE	是	否	id	15	A	否	
+idx_del_at	BTREE	否	否	deleted_at	15	A	是	
 quotation_edit_lock
 欄位	類型	無值(Null)	預設值	備註
 quote_id (主鍵)	int	否		
@@ -3412,7 +3579,7 @@ locked_at	datetime	否
 session_id	varchar(128)	否		
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	quote_id	3	A	否	
+PRIMARY	BTREE	是	否	quote_id	5	A	否	
 quotation_file_categories
 欄位	類型	無值(Null)	預設值	備註
 id (主鍵)	int	否		
@@ -3443,11 +3610,13 @@ process_notes	varchar(255)	是	NULL	加工備註，例如特殊製程、拆分�
 is_tiered	tinyint(1)	否	0	0=傳統單一報價, 1=階梯報價
 created_at	timestamp	是	CURRENT_TIMESTAMP	建立時間
 updated_at	timestamp	是	CURRENT_TIMESTAMP	最後更新時間
+show_bom	tinyint(1)	否	0	畫面顯示組合件子件清單：0=否，1=是
+print_bom	tinyint(1)	否	0	列印時包含組合件子件清單：0=否，1=是（僅 show_bom=1 時有效）
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	item_id	10	A	否	
-idx_quote_id	BTREE	否	否	quote_id	8	A	否	
-idx_product_id	BTREE	否	否	product_id	8	A	否	
+PRIMARY	BTREE	是	否	item_id	107	A	否	
+idx_quote_id	BTREE	否	否	quote_id	22	A	否	
+idx_product_id	BTREE	否	否	product_id	49	A	否	
 quotation_item_process_map
 資料表備註： 報價明細對應製程表，每個報價明細可對應多個製程，每個製程一筆資料
 
@@ -3460,10 +3629,10 @@ created_at	datetime	是	CURRENT_TIMESTAMP	建立時間
 updated_at	datetime	是	CURRENT_TIMESTAMP	最後更新時間
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	15	A	否	
-uq_qipm_unique	BTREE	是	否	quotation_item_id	10	A	否	
-process_no	15	A	否
-idx_qipm_process_no	BTREE	否	否	process_no	5	A	否	
+PRIMARY	BTREE	是	否	id	171	A	否	
+uq_qipm_unique	BTREE	是	否	quotation_item_id	95	A	否	
+process_no	171	A	否
+idx_qipm_process_no	BTREE	否	否	process_no	8	A	否	
 quotation_item_tier
 資料表備註： 報價項目階梯價格表（方案A，無外鍵）
 
@@ -3506,9 +3675,14 @@ updated_at	timestamp	是	CURRENT_TIMESTAMP	最後更新時間
 note	varchar(255)	是	NULL	備註，可放置整張報價單備註
 source_quote_id	int	是	NULL	複製來源報價單 ID，NULL=原始單
 is_negotiation	tinyint(1)	否	0	0=一般報價, 1=議價單（業務手動標記）
+is_draft	tinyint(1)	否	0	草稿：必備附件缺漏仍執意儲存=1，補齊後儲存自動歸0
+approval_status	enum('none', 'pending', 'approved', 'rejected')	否	none	
+approved_by	int	是	NULL	
+approved_by_name	varchar(50)	是	NULL	
+approved_at	datetime	是	NULL	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	quote_id	8	A	否	
+PRIMARY	BTREE	是	否	quote_id	22	A	否	
 quotation_note_templates
 欄位	類型	無值(Null)	預設值	備註
 id (主鍵)	int	否		
@@ -3532,9 +3706,9 @@ printed_by	int	否
 printed_at	datetime	否	CURRENT_TIMESTAMP	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	9	A	否	
-idx_qid	BTREE	否	否	quote_id	3	A	否	
-idx_printed_at	BTREE	否	否	printed_at	9	A	否	
+PRIMARY	BTREE	是	否	id	93	A	否	
+idx_qid	BTREE	否	否	quote_id	21	A	否	
+idx_printed_at	BTREE	否	否	printed_at	93	A	否	
 quotation_process_sub_tag
 欄位	類型	無值(Null)	預設值	備註
 sub_tag_id (主鍵)	int	否		
@@ -3545,8 +3719,8 @@ is_active	tinyint	否	1
 created_at	datetime	是	CURRENT_TIMESTAMP	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	sub_tag_id	19	A	否	
-idx_group	BTREE	否	否	group_id	5	A	否	
+PRIMARY	BTREE	是	否	sub_tag_id	27	A	否	
+idx_group	BTREE	否	否	group_id	6	A	否	
 quotation_process_tag_group
 欄位	類型	無值(Null)	預設值	備註
 group_id (主鍵)	int	否		
@@ -3566,10 +3740,10 @@ process_no	int	否
 sort_order	int	否	0	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	27	A	否	
-uk_map	BTREE	是	否	sub_tag_id	13	A	否	
-process_no	27	A	否
-idx_sub	BTREE	否	否	sub_tag_id	13	A	否	
+PRIMARY	BTREE	是	否	id	35	A	否	
+uk_map	BTREE	是	否	sub_tag_id	21	A	否	
+process_no	35	A	否
+idx_sub	BTREE	否	否	sub_tag_id	21	A	否	
 reply
 欄位	類型	無值(Null)	預設值	備註
 reply_id (主鍵)	int	否		
@@ -3675,17 +3849,23 @@ note	varchar(200)	是	NULL
 created_at	timestamp	是	CURRENT_TIMESTAMP	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	role_id	14	A	否	
-role_code	BTREE	是	否	role_code	14	A	否	
+PRIMARY	BTREE	是	否	role_id	21	A	否	
+role_code	BTREE	是	否	role_code	21	A	否	
 role_features
 欄位	類型	無值(Null)	預設值	備註
 role_id (主鍵)	int	否		
 feature_code (主鍵)	varchar(60)	否		
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	role_id	13	A	否	
-feature_code	58	A	否
-idx_rf_role	BTREE	否	否	role_id	13	A	否	
+PRIMARY	BTREE	是	否	role_id	18	A	否	
+feature_code	77	A	否
+idx_rf_role	BTREE	否	否	role_id	18	A	否	
+role_features_test_check
+欄位	類型	無值(Null)	預設值	備註
+role_id	int	否		
+feature_code	varchar(60)	否		
+沒有已定義的索引！
+
 sales_track
 資料表備註： 業務追蹤主表：記錄業務跟催事項，含客戶/料號/負責人/狀態等資訊
 
@@ -3712,9 +3892,9 @@ updated_at	datetime	是	NULL	修改時間
 track_code	varchar(15)	是	NULL	追蹤編號 SCyyyymmddNNN
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	track_id	50	A	否	
-uk_track_code	BTREE	是	否	track_code	50	A	是	
-idx_date	BTREE	否	否	track_date	26	A	否	
+PRIMARY	BTREE	是	否	track_id	61	A	否	
+uk_track_code	BTREE	是	否	track_code	61	A	是	
+idx_date	BTREE	否	否	track_date	31	A	否	
 idx_assignee	BTREE	否	否	assignee_id	5	A	否	
 idx_customer	BTREE	否	否	customer_id	19	A	否	
 idx_status	BTREE	否	否	status	2	A	否	
@@ -3733,9 +3913,9 @@ created_by	int	是	NULL	FK→user.id
 created_at	datetime	否	CURRENT_TIMESTAMP	建立時間
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	img_id	45	A	否	
+PRIMARY	BTREE	是	否	img_id	58	A	否	
 idx_target	BTREE	否	否	target_type	2	A	否	
-target_id	45	A	否
+target_id	58	A	否
 sales_track_label
 資料表備註： 業務追蹤標籤字典：供追蹤項目多選標籤使用，可在基本設定中管理
 
@@ -3759,10 +3939,10 @@ track_id	int	否		FK→sales_track.track_id
 label_id	int	否		FK→sales_track_label.label_id
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	map_id	45	A	否	
-uk_track_label	BTREE	是	否	track_id	45	A	否	
-label_id	45	A	否
-idx_track	BTREE	否	否	track_id	45	A	否	
+PRIMARY	BTREE	是	否	map_id	56	A	否	
+uk_track_label	BTREE	是	否	track_id	56	A	否	
+label_id	56	A	否
+idx_track	BTREE	否	否	track_id	56	A	否	
 idx_label	BTREE	否	否	label_id	2	A	否	
 sales_track_note
 資料表備註： 業務追蹤進度說明：記錄每筆追蹤項目的進度更新，每條備註顯示建立人與時間
@@ -3797,10 +3977,10 @@ is_read	tinyint	否	0
 created_at	datetime	否	CURRENT_TIMESTAMP	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	notif_id	533	A	否	
+PRIMARY	BTREE	是	否	notif_id	618	A	否	
 idx_target	BTREE	否	否	target_user_id	5	A	否	
 is_read	9	A	否
-idx_track	BTREE	否	否	track_id	51	A	否	
+idx_track	BTREE	否	否	track_id	60	A	否	
 section
 欄位	類型	無值(Null)	預設值	備註
 section_id (主鍵)	int	否		
@@ -4159,8 +4339,8 @@ sort_order	int	否	0
 Created_At	timestamp	否	CURRENT_TIMESTAMP	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	req_item_id	79	A	否	
-idx_req_id	BTREE	否	否	req_id	34	A	否	
+PRIMARY	BTREE	是	否	req_item_id	90	A	否	
+idx_req_id	BTREE	否	否	req_id	35	A	否	
 stock_req_notifications
 欄位	類型	無值(Null)	預設值	備註
 notif_id (主鍵)	int	否		
@@ -4300,7 +4480,7 @@ sort_order	int	是	0	排序，越小越前面
 remark	varchar(255)	是	NULL	備註
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	group_id	16	A	否	
+PRIMARY	BTREE	是	否	group_id	18	A	否	
 system_module_pages
 資料表備註： 系統子頁面表單，權限設定用
 
@@ -4314,7 +4494,7 @@ sort_order	int	是	0	排序，越小越前面
 remark	varchar(255)	是	NULL	備註說明
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	page_id	55	A	否	
+PRIMARY	BTREE	是	否	page_id	59	A	否	
 system_parameters
 欄位	類型	無值(Null)	預設值	備註
 id (主鍵)	int	否		
@@ -4340,7 +4520,7 @@ updated_by	varchar(100)	是	NULL
 updated_at	datetime	否	CURRENT_TIMESTAMP	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	setting_key	37	A	否	
+PRIMARY	BTREE	是	否	setting_key	49	A	否	
 tag_change_logs
 資料表備註： 附件標籤/指派異動紀錄
 
@@ -4396,9 +4576,9 @@ is_active	tinyint(1)	是	1	1=啟用
 created_at	timestamp	是	CURRENT_TIMESTAMP	
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	1	A	否	
-chat_id	BTREE	是	否	chat_id	1	A	否	
-idx_user_id	BTREE	否	否	user_id	1	A	是	
+PRIMARY	BTREE	是	否	id	0	A	否	
+chat_id	BTREE	是	否	chat_id	0	A	否	
+idx_user_id	BTREE	否	否	user_id	0	A	是	
 temp_ate
 欄位	類型	無值(Null)	預設值	備註
 Order_date	varchar(20)	是	NULL	
@@ -4482,9 +4662,9 @@ updated_at	timestamp	是	CURRENT_TIMESTAMP	最後更新時間
 scope	enum('group', 'page')	否		權限層級：group=模組, page=分頁
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	id	322	A	否	
-unique_user_module	BTREE	是	否	user_id	46	A	否	
-module_code	322	A	否
+PRIMARY	BTREE	是	否	id	332	A	否	
+unique_user_module	BTREE	是	否	user_id	47	A	否	
+module_code	332	A	否
 user_page_settings
 欄位	類型	無值(Null)	預設值	備註
 id (主鍵)	int	否		
@@ -4525,9 +4705,9 @@ user_id (主鍵)	int	否
 role_id (主鍵)	int	否		
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
-PRIMARY	BTREE	是	否	user_id	13	A	否	
-role_id	23	A	否
-idx_ur_user	BTREE	否	否	user_id	13	A	否	
+PRIMARY	BTREE	是	否	user_id	14	A	否	
+role_id	27	A	否
+idx_ur_user	BTREE	否	否	user_id	14	A	否	
 user_status
 欄位	類型	無值(Null)	預設值	備註
 id (主鍵)	int	否		
