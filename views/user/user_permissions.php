@@ -314,6 +314,7 @@ $_drawRoles     = [];  $_userDrawRoles   = [];
 $_bomRenRoles   = [];  $_userBomRenRoles = [];
 $_oreadyRoles   = [];  $_userOreadyRoles = [];
 $_bomtrkRoles   = [];  $_userBomtrkRoles = [];
+$_ptaskRoles    = [];  $_userPtaskRoles  = [];
 $_asdocRoles    = [];  $_userAsdocRoles  = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
@@ -331,6 +332,7 @@ try {
     $st->execute(['bom_rename']); $_bomRenRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['oready']);    $_oreadyRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['bom_track']); $_bomtrkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['personal_task']); $_ptaskRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['as_doc']);    $_asdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
@@ -379,6 +381,10 @@ try {
     $st->execute(['bom_track']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userBomtrkRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['personal_task']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userPtaskRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
     $st->execute(['as_doc']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
@@ -580,6 +586,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'bomren-role-section'    => '叫料改檔名',
                                         'oready-role-section'    => '生管BOM',
                                         'bomtrk-role-section'    => 'BOM追蹤',
+                                        'ptask-role-section'     => '個人工作紀錄',
                                         'asdoc-role-section'     => 'AS文件管理',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
@@ -920,6 +927,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('bomtrk', 'bom_track', 'BOM 追蹤', 'fa-crosshairs', '#8e44ad',
                         '為每位使用者指派 BOM 追蹤功能的使用權限。此功能不分細部操作，只要指派角色即可使用。',
                         $_bomtrkRoles, $_userBomtrkRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('ptask', 'personal_task', '個人工作紀錄', 'fa-sticky-note-o', '#27ae60',
+                        '為每位使用者指派「個人工作紀錄」功能的使用資格。此功能不分細部操作；每人只看得到自己建立的紀錄（含管理者也看不到他人內容）。',
+                        $_ptaskRoles, $_userPtaskRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('asdoc', 'as_doc', 'AS9100 文件管理（個人指派，優先於職稱）', 'fa-folder-open-o', '#c0392b',
                         '為使用者「個人」指派 AS 文件管理角色——<strong>個人有指派時以個人為準（覆蓋職稱）</strong>；未指派者自動套用下方「職稱權限」的設定。角色定義（名稱與功能勾選）請至 <strong>AS9100 文件管理頁 → 角色設定</strong>。',
@@ -1533,7 +1544,7 @@ $_quotDepts = array_keys($_deptSet);
 
         // 頁面載入後顯示各區塊總人數
         $(document).ready(function() {
-            ['quot', 'notice', 'oready', 'bomtrk', 'asdoc'].forEach(function(p) {
+            ['quot', 'notice', 'oready', 'bomtrk', 'ptask', 'asdoc'].forEach(function(p) {
                 var total = $('#' + p + '-role-tbody tr').length;
                 if (total > 0) $('#' + p + '-filter-count').text('共 ' + total + ' 人');
             });
