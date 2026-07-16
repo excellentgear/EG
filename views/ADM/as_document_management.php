@@ -56,9 +56,9 @@ try {
     }
 } catch (Exception $e) { error_log("Permission check error: " . $e->getMessage()); }
 
-// ── as_doc 模組角色（user_permissions.php 角色指派，含職稱指派）與頁面 ACRUD 合併 ──
+// ── as_doc 模組角色（職稱為主自動套用、個人指派優先覆蓋）與頁面 ACRUD 合併 ──
 include_once '../../src/common/role_features_helper.php';
-$asFeatures    = rf_load_user_features_all($conn, $id);
+$asFeatures    = rf_load_user_features_override($conn, $id, 'as_doc');
 $asIsRoleAdmin = in_array('all', $asFeatures, true);
 $pp = $deptPerm ?: '';
 $asCaps = [
@@ -144,6 +144,7 @@ if ($deptPerm === 'R') {
                   <?php if ($asCaps['settings']): ?>
                   <button class="btn btn-default btn-sm" id="btnTags"><i class="fa fa-tags"></i> 標籤 / 分類管理</button>
                   <button class="btn btn-warning btn-sm" id="btnSettings"><i class="fa fa-cog"></i> 系統設定（負責人 / 路徑）</button>
+                  <button class="btn btn-danger btn-sm" id="btnRoles"><i class="fa fa-users"></i> 角色設定</button>
                   <?php endif; ?>
                 </div>
                 <div class="col-md-4 text-right">
@@ -232,6 +233,7 @@ if ($deptPerm === 'R') {
                 <input type="text" class="form-control" name="doc_no" id="doc_no" required placeholder="可手動輸入，或選好階級/部門/母文件後按自動">
                 <span class="input-group-btn"><button type="button" class="btn btn-default" id="btnAutoNo" title="依 階級+部門代碼（或母文件）自動產生下一個編號"><i class="fa fa-magic"></i> 自動</button></span>
               </div>
+              <select class="form-control input-sm" id="doc_code_sel" style="display:none;margin-top:4px;" title="此部門有多組代碼，請選擇"></select>
             </div>
             <div class="form-group col-md-6"><label>文件名稱 *</label><input type="text" class="form-control" name="doc_name" id="doc_name" required></div>
           </div>
@@ -289,6 +291,46 @@ if ($deptPerm === 'R') {
   </div>
 </div>
 
+<!-- ═════════ 角色設定 Modal（roles module='as_doc'，寫入需管理員） ═════════ -->
+<div class="modal fade" id="rolesModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" style="width:92%;max-width:1100px;" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title">AS 文件管理 — 角色設定</h4>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted" style="font-size:12px;">
+          權限規則：<strong>職稱為主自動套用</strong>（職稱指派請至「權限設定」頁的 AS 職稱權限區），
+          <strong>個人另有指派時以個人為準（覆蓋職稱）</strong>；管理員恆有全部權限。此處管理「角色定義」與「個人指派」。
+        </p>
+        <h4><i class="fa fa-id-badge"></i> 角色與功能</h4>
+        <table class="table table-bordered table-condensed" style="font-size:13px;">
+          <thead><tr><th style="width:160px;">角色</th><th>功能</th><th style="width:120px;">操作</th></tr></thead>
+          <tbody id="roleDefBody"></tbody>
+        </table>
+        <div class="input-group input-group-sm" style="width:300px;margin-bottom:15px;">
+          <input type="text" class="form-control" id="newRoleName" placeholder="新角色名稱">
+          <span class="input-group-btn"><button class="btn btn-success" id="btnAddRole"><i class="fa fa-plus"></i> 新增角色</button></span>
+        </div>
+        <hr>
+        <h4><i class="fa fa-user"></i> 人員角色指派（個人設定，優先於職稱）</h4>
+        <div class="input-group input-group-sm" style="width:240px;margin-bottom:8px;">
+          <span class="input-group-addon"><i class="fa fa-search"></i></span>
+          <input type="text" class="form-control" id="roleUserSearch" placeholder="搜尋姓名/帳號">
+        </div>
+        <div style="max-height:340px;overflow-y:auto;">
+          <table class="table table-striped table-condensed" style="font-size:13px;">
+            <thead><tr><th style="width:120px;">姓名</th><th style="width:100px;">帳號</th><th>已指派角色</th><th style="width:230px;">新增</th></tr></thead>
+            <tbody id="roleUserBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════ 批次上傳 Modal ═════════ -->
 <div class="modal fade" id="batchModal" tabindex="-1" role="dialog">
   <div class="modal-dialog modal-lg" style="width:96%;max-width:1200px;" role="document">
@@ -310,6 +352,10 @@ if ($deptPerm === 'R') {
           <div class="form-group col-md-2"><label>所屬部門</label><select class="form-control" id="batch_dept"><option value="">跨部門</option></select></div>
           <div class="form-group col-md-1"><label>版本號</label><input type="text" class="form-control" id="batch_version" value="A"></div>
           <div class="form-group col-md-2"><label>修訂日期</label><input type="date" class="form-control" id="batch_date"></div>
+        </div>
+        <div class="form-group" id="batchCodeWrap" style="display:none;max-width:420px;">
+          <label>此部門有多組代碼，請選擇</label>
+          <select class="form-control input-sm" id="batch_code_sel"></select>
         </div>
         <div class="form-group">
           <label>選擇多個文件檔</label>
@@ -477,10 +523,14 @@ if ($deptPerm === 'R') {
         </div>
         <hr>
         <div class="form-group">
-          <label>部門文件代碼（自動編號用，如 技術課=TD → 2-TD-01）</label>
-          <div style="max-height:220px;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:6px;">
-            <table class="table table-condensed" style="margin-bottom:0;"><tbody id="deptCodeList"></tbody></table>
+          <label>部門文件代碼（自動編號用；同部門可多組，如 資材課=PD 廠內／PH 委外）</label>
+          <div style="max-height:240px;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:6px;">
+            <table class="table table-condensed" style="margin-bottom:0;">
+              <thead><tr><th style="width:38%;">部門</th><th style="width:22%;">代碼</th><th>用途註記（選填）</th><th style="width:36px;"></th></tr></thead>
+              <tbody id="deptCodeList"></tbody>
+            </table>
           </div>
+          <button type="button" class="btn btn-sm btn-success" id="deptCodeAddRow" style="margin-top:6px;"><i class="fa fa-plus"></i> 加一組</button>
           <button type="button" class="btn btn-sm btn-info" id="deptCodeSave" style="margin-top:6px;">儲存部門代碼</button>
         </div>
         <hr>
@@ -539,10 +589,13 @@ $(function(){
       const dOpts = '<option value="">全部部門</option>' + META.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');
       $('#filterDept').html(dOpts);
       $('#doc_department_id').html('<option value="">跨部門 / 未指定</option>' + META.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
-      // 使用者下拉（負責人/代理人）
+      // 使用者下拉（負責人/代理人）——重建時保留目前選取值，避免設定跳掉
       const uOpts = META.users.map(u=>`<option value="${u.id}">${esc(u.user_cname)}</option>`).join('');
+      const ownerVal = $('#set_owner').val(), deputyVal = $('#set_deputy').val();
       $('#set_owner').html('<option value="">-- 未指定 --</option>'+uOpts);
       $('#set_deputy').html('<option value="">-- 無 --</option>'+uOpts);
+      if(ownerVal) $('#set_owner').val(ownerVal);
+      if(deputyVal) $('#set_deputy').val(deputyVal);
       renderTagFilter();
       if(cb) cb();
     });
@@ -685,14 +738,24 @@ $(function(){
   });
 
   // 自動編號：有母文件→{母編號}-{次號}；無→{階}-{部門代碼}-{次號}（可再手動修改）
+  // 一部門多組代碼（如 資材課 PD廠內/PH委外）→ 顯示代碼選擇器
   function suggestDocNo(fill){
     const p = { level: $('#doc_level').val(), department_id: $('#doc_department_id').val(), parent_doc_id: $('#doc_parent_id').val() };
+    const selCode = $('#doc_code_sel').is(':visible') ? $('#doc_code_sel').val() : '';
+    if(selCode) p.code = selCode;
     $.getJSON(API+'?action=suggest_doc_no', p, r=>{
-      if(r.status==='success'){ if(fill) $('#doc_no').val(r.doc_no); }
-      else if(fill) alert(r.message||'無法產生編號');
+      if(r.status==='success'){
+        if(!selCode) $('#doc_code_sel').hide().empty();
+        if(fill) $('#doc_no').val(r.doc_no);
+      } else if(r.status==='choose'){
+        const sel=$('#doc_code_sel').empty().show();
+        (r.options||[]).forEach(o=>sel.append(`<option value="${esc(o.code)}" data-no="${esc(o.doc_no)}">${esc(o.code)}${o.label?'（'+esc(o.label)+'）':''} → ${esc(o.doc_no)}</option>`));
+        if(fill) $('#doc_no').val(sel.find('option:first').data('no')||'');
+      } else if(fill) alert(r.message||'無法產生編號');
     });
   }
   $('#btnAutoNo').on('click', ()=>suggestDocNo(true));
+  $('#doc_code_sel').on('change', function(){ $('#doc_no').val($(this).find('option:selected').data('no')||''); });
   // 新增模式下，選擇變動且編號仍空白時自動帶入
   $('#doc_level,#doc_department_id,#doc_parent_id').on('change', function(){
     if($('#doc_id').val()==='' && $('#doc_no').val().trim()===''){
@@ -722,6 +785,7 @@ $(function(){
     $('#doc_file').prop('required',true); $('#doc_version').prop('required',true);
     renderDocTagPicker([]);
     fillParentSelect(0, '');
+    $('#doc_code_sel').hide().empty();
     $('#docModal').modal('show');
   });
 
@@ -908,37 +972,55 @@ $(function(){
   $('#btnBatchAdd').on('click', function(){
     $('#batch_parent').html('<option value="">— 無 —</option>'+(META.parents||[]).map(p=>`<option value="${p.id}">${esc(p.doc_no)}｜${esc(p.doc_name)}</option>`).join(''));
     $('#batch_dept').html('<option value="">跨部門</option>'+META.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
-    $('#batch_files').val(''); $('#batchRows').empty(); $('#batchResult').empty();
+    $('#batch_files').val(''); $('#batchRows').empty(); $('#batchResult').empty(); $('#batchCodeWrap').hide();
     $('#batchModal').modal('show');
   });
 
-  // 選檔後建立逐檔設定列，編號自動遞增建議
-  $('#batch_files').on('change', function(){
-    const files = this.files; const tb = $('#batchRows').empty();
-    if(!files.length) return;
+  // 選檔後建立逐檔設定列，編號自動遞增建議（多組代碼時顯示選擇器）
+  function batchGenRows(startNo){
+    const files = $('#batch_files')[0].files; const tb = $('#batchRows').empty();
+    let base='', num=0, pad=2;
+    if(startNo){
+      const m = startNo.match(/^(.*-)(\d+)$/);
+      if(m){ base=m[1]; num=parseInt(m[2]); pad=m[2].length; }
+    }
+    for(let i=0;i<files.length;i++){
+      const fn = files[i].name;
+      const nameNoExt = fn.replace(/\.[^.]+$/,'');
+      const sugNo = base ? base+String(num+i).padStart(pad,'0') : '';
+      tb.append(`<tr>
+        <td style="vertical-align:middle;">${esc(fn)}</td>
+        <td><input type="text" class="form-control input-sm b-no" value="${esc(sugNo)}"></td>
+        <td><input type="text" class="form-control input-sm b-name" value="${esc(nameNoExt)}"></td>
+        <td><input type="text" class="form-control input-sm b-sum" placeholder="如：新訂"></td>
+        <td><input type="file" class="b-apply"></td>
+      </tr>`);
+    }
+  }
+  function batchSuggest(){
+    const files = $('#batch_files')[0].files;
+    if(!files.length){ $('#batchRows').empty(); return; }
     const p = { level: $('#batch_level').val(), department_id: $('#batch_dept').val(), parent_doc_id: $('#batch_parent').val() };
+    const selCode = $('#batchCodeWrap').is(':visible') ? $('#batch_code_sel').val() : '';
+    if(selCode) p.code = selCode;
     $.getJSON(API+'?action=suggest_doc_no', p, r=>{
-      let base='', num=0, pad=2;
       if(r.status==='success'){
-        const m = r.doc_no.match(/^(.*-)(\d+)$/);
-        if(m){ base=m[1]; num=parseInt(m[2]); pad=m[2].length; }
-      }
-      for(let i=0;i<files.length;i++){
-        const fn = files[i].name;
-        const nameNoExt = fn.replace(/\.[^.]+$/,'');
-        const sugNo = base ? base+String(num+i).padStart(pad,'0') : '';
-        tb.append(`<tr>
-          <td style="vertical-align:middle;">${esc(fn)}</td>
-          <td><input type="text" class="form-control input-sm b-no" value="${esc(sugNo)}"></td>
-          <td><input type="text" class="form-control input-sm b-name" value="${esc(nameNoExt)}"></td>
-          <td><input type="text" class="form-control input-sm b-sum" placeholder="如：新訂"></td>
-          <td><input type="file" class="b-apply"></td>
-        </tr>`);
+        if(!selCode) $('#batchCodeWrap').hide();
+        batchGenRows(r.doc_no);
+      } else if(r.status==='choose'){
+        const sel=$('#batch_code_sel').empty();
+        (r.options||[]).forEach(o=>sel.append(`<option value="${esc(o.code)}" data-no="${esc(o.doc_no)}">${esc(o.code)}${o.label?'（'+esc(o.label)+'）':''} → ${esc(o.doc_no)} 起</option>`));
+        $('#batchCodeWrap').show();
+        batchGenRows(sel.find('option:first').data('no')||'');
+      } else {
+        batchGenRows('');
       }
     });
-  });
+  }
+  $('#batch_files').on('change', batchSuggest);
+  $('#batch_code_sel').on('change', function(){ batchGenRows($(this).find('option:selected').data('no')||''); });
   // 共同設定變動時若已選檔，重新產生編號建議
-  $('#batch_parent,#batch_level,#batch_dept').on('change', ()=>{ if($('#batch_files')[0].files.length) $('#batch_files').trigger('change'); });
+  $('#batch_parent,#batch_level,#batch_dept').on('change', ()=>{ $('#batchCodeWrap').hide(); if($('#batch_files')[0].files.length) batchSuggest(); });
 
   $('#batchSubmit').on('click', function(){
     const files = $('#batch_files')[0].files;
@@ -979,19 +1061,133 @@ $(function(){
      .fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $b.prop('disabled',false); });
   });
 
-  // ── 系統設定 ──
-  function renderDeptCodes(){
-    const tb=$('#deptCodeList').empty();
-    (META.departments||[]).forEach(d=>{
-      tb.append(`<tr><td style="width:50%;vertical-align:middle;">${esc(d.name)}</td>
-        <td><input type="text" class="form-control input-sm dept-code-input" data-id="${d.id}" value="${esc(d.code||'')}" placeholder="如 TD" maxlength="10" style="text-transform:uppercase;"></td></tr>`);
+  // ── 角色設定（Roles_API module='as_doc'；寫入需系統管理員） ──
+  const ROLES_API = '../../src/store/Roles_API.php';
+  const AS_FEATURES = [
+    {code:'asdoc_view',        label:'檢閱/預覽'},
+    {code:'asdoc_create',      label:'新增文件'},
+    {code:'asdoc_update',      label:'改版/編輯/下載'},
+    {code:'asdoc_delete',      label:'刪除/還原'},
+    {code:'asdoc_settings',    label:'文管設定'},
+    {code:'asdoc_edit_online', label:'線上開檔'}
+  ];
+  let AS_ROLES = [];
+
+  function loadRoleDefs(){
+    $.getJSON(ROLES_API, {action:'get_roles', module:'as_doc'}, r=>{
+      if(!r.success){ alert('讀取角色失敗'); return; }
+      AS_ROLES = r.data||[];
+      const tb=$('#roleDefBody').empty();
+      AS_ROLES.forEach(role=>{
+        if(parseInt(role.is_system)===1){
+          tb.append(`<tr><td><span class="label label-danger">${esc(role.role_name)}</span></td><td class="text-muted">全部功能（系統角色，不可修改）</td><td></td></tr>`);
+          return;
+        }
+        const cbs = AS_FEATURES.map(f=>`<label class="checkbox-inline" style="font-size:12px;"><input type="checkbox" class="rf-cb" value="${f.code}"> ${f.label}</label>`).join(' ');
+        tb.append(`<tr data-role="${role.role_id}">
+          <td><input type="text" class="form-control input-sm rf-name" value="${esc(role.role_name)}"></td>
+          <td class="rf-feats">${cbs}</td>
+          <td class="text-nowrap">
+            <button class="btn btn-xs btn-primary rf-save">儲存</button>
+            <button class="btn btn-xs btn-danger rf-del">刪除</button>
+          </td></tr>`);
+        // 載入該角色目前功能
+        $.getJSON(ROLES_API, {action:'get_role_features', role_id:role.role_id}, fr=>{
+          if(fr.success) (fr.data||[]).forEach(fc=>$(`#roleDefBody tr[data-role="${role.role_id}"] .rf-cb[value="${fc}"]`).prop('checked',true));
+        });
+      });
+      renderRoleUserSelects();
     });
   }
+  $('#btnAddRole').on('click', function(){
+    const name=$('#newRoleName').val().trim(); if(!name){ alert('請輸入角色名稱'); return; }
+    $.post(ROLES_API, {action:'save_role', role_name:name, module:'as_doc'}, r=>{
+      if(r.success){ $('#newRoleName').val(''); loadRoleDefs(); } else alert(r.message||'新增失敗');
+    },'json');
+  });
+  $('#roleDefBody').on('click','.rf-save', function(){
+    const tr=$(this).closest('tr'), rid=tr.data('role');
+    const name=tr.find('.rf-name').val().trim();
+    const feats=[]; tr.find('.rf-cb:checked').each(function(){ feats.push($(this).val()); });
+    $.post(ROLES_API, {action:'save_role', role_id:rid, role_name:name, module:'as_doc'}, r=>{
+      if(!r.success){ alert(r.message||'儲存失敗'); return; }
+      $.post(ROLES_API, {action:'save_role_features', role_id:rid, features:JSON.stringify(feats)}, r2=>{
+        if(r2.success){ alert('已儲存'); loadRoleDefs(); } else alert(r2.message||'功能儲存失敗');
+      },'json');
+    },'json');
+  });
+  $('#roleDefBody').on('click','.rf-del', function(){
+    if(!confirm('刪除此角色？已指派此角色的使用者/職稱將同時失去對應功能。')) return;
+    $.post(ROLES_API, {action:'delete_role', role_id:$(this).closest('tr').data('role')}, r=>{
+      if(r.success){ loadRoleDefs(); loadRoleUsers(); } else alert(r.message||'刪除失敗');
+    },'json');
+  });
+
+  function roleSelOpts(){
+    return '<option value="">— 選擇角色 —</option>'+AS_ROLES.map(x=>`<option value="${x.role_id}">${esc(x.role_name)}</option>`).join('');
+  }
+  function renderRoleUserSelects(){ $('.ru-sel').each(function(){ const v=$(this).val(); $(this).html(roleSelOpts()).val(v); }); }
+  function loadRoleUsers(){
+    $.getJSON(ROLES_API, {action:'get_users', module:'as_doc'}, r=>{
+      if(!r.success){ alert('讀取人員失敗'); return; }
+      const tb=$('#roleUserBody').empty();
+      (r.data||[]).forEach(u=>{
+        const tags=(u.roles||[]).map(ur=>`<span class="label ${ur.role_name==='管理員'?'label-danger':'label-primary'}" style="margin-right:4px;display:inline-block;">${esc(ur.role_name)} <a href="#" class="ru-rm" data-uid="${u.id}" data-rid="${ur.role_id}" style="color:#fff;">×</a></span>`).join('')||'<span class="text-muted" style="font-size:12px;">（未指派，套用職稱設定）</span>';
+        tb.append(`<tr data-search="${esc((u.user_cname+u.user_uname).toLowerCase())}">
+          <td>${esc(u.user_cname)}</td><td class="text-muted">${esc(u.user_uname)}</td>
+          <td class="ru-tags">${tags}</td>
+          <td><div class="input-group input-group-sm">
+            <select class="form-control ru-sel">${roleSelOpts()}</select>
+            <span class="input-group-btn"><button class="btn btn-primary ru-add" data-uid="${u.id}"><i class="fa fa-plus"></i></button></span>
+          </div></td></tr>`);
+      });
+    });
+  }
+  $('#roleUserSearch').on('input', function(){
+    const kw=$(this).val().toLowerCase().trim();
+    $('#roleUserBody tr').each(function(){ $(this).toggle(!kw || ($(this).data('search')||'').indexOf(kw)!==-1); });
+  });
+  $('#roleUserBody').on('click','.ru-add', function(){
+    const uid=$(this).data('uid'), rid=$(this).closest('.input-group').find('.ru-sel').val();
+    if(!rid){ alert('請先選擇角色'); return; }
+    $.post(ROLES_API, {action:'assign_user_role', user_id:uid, role_id:rid}, r=>{
+      if(r.success) loadRoleUsers(); else alert(r.message||'指派失敗');
+    },'json');
+  });
+  $('#roleUserBody').on('click','.ru-rm', function(e){
+    e.preventDefault();
+    if(!confirm('移除此角色？移除後若此人無任何個人指派，將改為套用其職稱的設定。')) return;
+    $.post(ROLES_API, {action:'remove_user_role', user_id:$(this).data('uid'), role_id:$(this).data('rid')}, r=>{
+      if(r.success) loadRoleUsers(); else alert(r.message||'移除失敗');
+    },'json');
+  });
+  $('#btnRoles').on('click', function(){ loadRoleDefs(); loadRoleUsers(); $('#rolesModal').modal('show'); });
+
+  // ── 系統設定：部門文件代碼（多列式，一部門可多組） ──
+  function deptCodeRowHtml(row){
+    row = row||{};
+    const dOpts = '<option value="">請選部門</option>'+META.departments.map(d=>`<option value="${d.id}" ${row.department_id==d.id?'selected':''}>${esc(d.name)}</option>`).join('');
+    return `<tr class="dc-row">
+      <td><select class="form-control input-sm dc-dept">${dOpts}</select></td>
+      <td><input type="text" class="form-control input-sm dc-code" value="${esc(row.code||'')}" placeholder="如 TD" maxlength="10" style="text-transform:uppercase;"></td>
+      <td><input type="text" class="form-control input-sm dc-label" value="${esc(row.label||'')}" placeholder="如 生管-廠內作業"></td>
+      <td class="text-center" style="vertical-align:middle;"><a href="#" class="dc-del text-danger"><i class="fa fa-trash"></i></a></td>
+    </tr>`;
+  }
+  function renderDeptCodes(){
+    const tb=$('#deptCodeList').empty();
+    (META.dept_codes||[]).forEach(r=>tb.append(deptCodeRowHtml(r)));
+    if(!(META.dept_codes||[]).length) tb.append(deptCodeRowHtml());
+  }
+  $('#deptCodeAddRow').on('click', ()=>$('#deptCodeList').append(deptCodeRowHtml()));
+  $('#deptCodeList').on('click','.dc-del', function(e){ e.preventDefault(); $(this).closest('tr').remove(); });
   $('#deptCodeSave').on('click', function(){
-    const codes={};
-    $('.dept-code-input').each(function(){ codes[$(this).data('id')]=$(this).val().trim(); });
-    $.post(API+'?action=save_dept_codes',{codes:JSON.stringify(codes)}, r=>{
-      if(r.status==='success'){ alert('部門代碼已儲存'); loadMeta(); } else alert(r.message);
+    const rows=[];
+    $('#deptCodeList .dc-row').each(function(){
+      rows.push({ department_id:$(this).find('.dc-dept').val(), code:$(this).find('.dc-code').val().trim(), label:$(this).find('.dc-label').val().trim() });
+    });
+    $.post(API+'?action=save_dept_codes',{rows:JSON.stringify(rows)}, r=>{
+      if(r.status==='success'){ alert('部門代碼已儲存'); loadMeta(renderDeptCodes); } else alert(r.message);
     },'json');
   });
   $('#btnSettings').on('click', function(){
@@ -1016,7 +1212,7 @@ $(function(){
      .done(r=>{ if(r.status==='success'){ $('#tplStatus').text('已上傳'); $('#tplDownload').show(); alert('範本已上傳'); } else alert(r.message); });
   });
 
-  $('#rbacHelp').on('click', function(e){ e.preventDefault(); alert('此頁權限＝「權限設定頁的頁面ACRUD」或「AS文件管理角色」二者取聯集：\n・文件檢閱＝檢視/下載\n・文件管理＝新增文件/改版/編輯\n・文件刪除＝刪除/還原\n・文管設定＝標籤管理/各文件開啟權限/NAS路徑/AS負責人/申請單範本\n角色可指派給「使用者」或「職稱」（職稱指派＝該職稱所有人自動擁有），請至 權限設定（user_permissions）頁操作。\n管理員固定擁有全部權限。\n各文件的「權限」按鈕另可設定部門/職稱層級的文件開啟權限。'); });
+  $('#rbacHelp').on('click', function(e){ e.preventDefault(); alert('權限規則（職稱為主、個人優先）：\n1. 預設依「職稱」自動套用角色（職稱指派：權限設定頁 AS 職稱權限區）\n2. 個人另有指派角色時，以個人設定為準（覆蓋職稱）——本頁「角色設定」可操作\n3. 管理員固定擁有全部權限\n\n角色功能：\n・文件檢閱＝線上預覽（不可下載原檔）\n・文件管理＝新增/改版/編輯/下載\n・文件刪除＝刪除/還原\n・文管設定＝標籤/各文件開啟權限/NAS路徑/AS負責人/範本\n・線上開檔＝開工作副本直接打字列印'); });
 
   // init
   loadMeta(loadDocs);

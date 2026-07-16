@@ -939,7 +939,7 @@ $_quotDepts = array_keys($_deptSet);
                                     <p style="font-size:12px;color:#888;margin-bottom:12px;">
                                         <i class="fa fa-info-circle"></i>
                                         指派角色給「職稱」後，<strong>所有擁有該職稱（含兼任）的在職人員</strong>自動獲得該角色功能，之後到職/調職者也自動生效，不必逐一指派。
-                                        個人指派（上方區塊）與職稱指派可並用，權限取聯集。系統角色「管理員」不可指派給職稱。
+                                        <strong>優先權：職稱為主自動套用；個人（上方區塊或 AS 頁「角色設定」）另有指派時，以個人設定為準（覆蓋職稱）。</strong>系統角色「管理員」不可指派給職稱。
                                     </p>
                                     <?php $_asdocAssignableRoles = array_values(array_filter($_asdocRoles, function($r){ return (int)$r['is_system'] === 0; })); ?>
                                     <table class="table table-striped table-bordered table-condensed" style="font-size:13px;">

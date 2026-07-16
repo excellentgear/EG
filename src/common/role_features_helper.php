@@ -42,6 +42,53 @@ if (!function_exists('rf_load_user_features_all')) {
     }
 }
 
+if (!function_exists('rf_load_user_features_override')) {
+    // 模組內「職稱為主、個人優先」規則（AS9100 文件管理 2026-07-16 定案）：
+    //   1. 使用者在該模組有「個人指派」角色 → 只用個人角色（職稱指派不再套用，個人設定覆蓋職稱）
+    //   2. 否則 → 套用其職稱（含兼任）被指派的該模組角色
+    //   3. 系統角色（管理員 'all'）永遠併入
+    function rf_load_user_features_override($pdo, $user_id, $module) {
+        $features = [];
+        try {
+            // 系統角色（全域）
+            $st = $pdo->prepare("
+                SELECT DISTINCT rf.feature_code
+                FROM user_roles ur
+                JOIN roles r ON r.role_id = ur.role_id AND r.is_system = 1
+                JOIN role_features rf ON rf.role_id = r.role_id
+                WHERE ur.user_id = ?");
+            $st->execute([$user_id]);
+            $features = $st->fetchAll(PDO::FETCH_COLUMN) ?: [];
+
+            // 個人在該模組的角色
+            $st = $pdo->prepare("
+                SELECT DISTINCT rf.feature_code
+                FROM user_roles ur
+                JOIN roles r ON r.role_id = ur.role_id AND r.is_system = 0 AND r.module = ?
+                JOIN role_features rf ON rf.role_id = r.role_id
+                WHERE ur.user_id = ?");
+            $st->execute([$module, $user_id]);
+            $personal = $st->fetchAll(PDO::FETCH_COLUMN) ?: [];
+
+            if (!empty($personal)) {
+                // 個人有設定 → 以個人為準
+                return array_values(array_unique(array_merge($features, $personal)));
+            }
+            // 個人無設定 → 套用職稱指派
+            $st = $pdo->prepare("
+                SELECT DISTINCT rf.feature_code
+                FROM user_department_position_map m
+                JOIN position_roles pr ON pr.position_id = m.position_id
+                JOIN roles r ON r.role_id = pr.role_id AND r.module = ?
+                JOIN role_features rf ON rf.role_id = pr.role_id
+                WHERE m.user_id = ?");
+            $st->execute([$module, $user_id]);
+            $pos = $st->fetchAll(PDO::FETCH_COLUMN) ?: [];
+            return array_values(array_unique(array_merge($features, $pos)));
+        } catch (Exception $e) { return $features; }
+    }
+}
+
 if (!function_exists('rf_has_module_role_all')) {
     // 二元權限判斷（含職稱指派版）：個人被指派該 module 角色、或其任一職稱被指派該 module 角色、或系統管理員
     function rf_has_module_role_all($pdo, $user_id, $module) {

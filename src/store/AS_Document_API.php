@@ -31,7 +31,8 @@ if ($currentUserId) {
 // ── 權限（依 user_permissions.php 規則：頁面 ACRUD 矩陣 OR as_doc 模組角色，含職稱指派）──
 include_once $document_root . '/EGsystem/src/common/role_features_helper.php';
 
-$asFeatures    = $currentUserId ? rf_load_user_features_all($db, $currentUserId) : [];
+// 職稱為主、個人優先：個人在 as_doc 有指派角色→以個人為準；否則套用職稱指派；管理員(all)恆有效
+$asFeatures    = $currentUserId ? rf_load_user_features_override($db, $currentUserId, 'as_doc') : [];
 $asIsRoleAdmin = in_array('all', $asFeatures, true);
 
 /** 頁面 ACRUD 字串（user_permissions.php 權限矩陣：page scope 優先、group scope 備援） */
@@ -211,14 +212,13 @@ case 'delete_tag':
 
 // ══════════════ 下拉選單資料 ══════════════
 case 'meta':
-    $depts = $db->query("SELECT d.id, d.name, d.level, c.code
-                         FROM department d LEFT JOIN as_dept_code c ON c.department_id = d.id
-                         ORDER BY d.sort_order ASC, d.level, d.name")->fetchAll(PDO::FETCH_ASSOC);
+    $depts = $db->query("SELECT id, name, level FROM department ORDER BY sort_order ASC, level, name")->fetchAll(PDO::FETCH_ASSOC);
+    $deptCodes = $db->query("SELECT id, department_id, code, label FROM as_dept_code ORDER BY department_id, id")->fetchAll(PDO::FETCH_ASSOC);
     $poss  = $db->query("SELECT p.id,p.name,pl.level FROM position p LEFT JOIN position_level pl ON p.id=pl.position_id ORDER BY p.sort_order ASC, p.id ASC")->fetchAll(PDO::FETCH_ASSOC);
     $tags  = $db->query("SELECT id,name,color FROM as_doc_tag ORDER BY sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
     $users = $db->query("SELECT id,user_cname FROM user WHERE state IN (1,90,99) OR state IS NULL ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
     $parents = $db->query("SELECT id, doc_no, doc_name FROM as_document WHERE is_deleted=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
-    jout(['status'=>'success','departments'=>$depts,'positions'=>$poss,'tags'=>$tags,'users'=>$users,'parents'=>$parents]);
+    jout(['status'=>'success','departments'=>$depts,'dept_codes'=>$deptCodes,'positions'=>$poss,'tags'=>$tags,'users'=>$users,'parents'=>$parents]);
 
 // ══════════════ 文件清單（搜尋 / 篩選） ══════════════
 case 'list_documents':
@@ -574,19 +574,19 @@ case 'download_template':
     asStream(asTplDir($db).DIRECTORY_SEPARATOR.$tpl, '文件制修申請單_範本.'.pathinfo($tpl,PATHINFO_EXTENSION));
     break;
 
-// ══════════════ 部門文件代碼（編號用，如 技術課=TD） ══════════════
+// ══════════════ 部門文件代碼（編號用；一部門可多組，如 資材課=PD廠內/PH委外） ══════════════
 case 'save_dept_codes':
-    $codes = json_decode($_POST['codes'] ?? '{}', true);
-    if (!is_array($codes)) jout(['status'=>'error','message'=>'格式錯誤']);
+    $rows = json_decode($_POST['rows'] ?? '[]', true);
+    if (!is_array($rows)) jout(['status'=>'error','message'=>'格式錯誤']);
     $db->beginTransaction();
     try {
-        $up  = $db->prepare("INSERT INTO as_dept_code (department_id, code) VALUES (?,?) ON DUPLICATE KEY UPDATE code=VALUES(code)");
-        $del = $db->prepare("DELETE FROM as_dept_code WHERE department_id=?");
-        foreach ($codes as $dId => $code) {
-            $dId = (int)$dId;
-            $code = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string)$code));
-            if ($dId <= 0) continue;
-            if ($code === '') { $del->execute([$dId]); } else { $up->execute([$dId, $code]); }
+        $db->exec("DELETE FROM as_dept_code");
+        $ins = $db->prepare("INSERT IGNORE INTO as_dept_code (department_id, code, label) VALUES (?,?,?)");
+        foreach ($rows as $r) {
+            $dId  = (int)($r['department_id'] ?? 0);
+            $code = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string)($r['code'] ?? '')));
+            $label= trim((string)($r['label'] ?? '')) ?: null;
+            if ($dId > 0 && $code !== '') $ins->execute([$dId, $code, $label]);
         }
         $db->commit();
         jout(['status'=>'success']);
@@ -616,21 +616,33 @@ case 'suggest_doc_no':
 
     $digit = $levelMap[$level] ?? '';
     if ($digit==='') jout(['status'=>'error','message'=>'請先選擇文件階級']);
-    $code = '';
-    if ($deptId > 0) {
-        $st = $db->prepare("SELECT code FROM as_dept_code WHERE department_id=?");
-        $st->execute([$deptId]);
-        $code = (string)($st->fetchColumn() ?: '');
+    if ($deptId<=0) jout(['status'=>'error','message'=>'請先選擇部門']);
+    $st = $db->prepare("SELECT code, label FROM as_dept_code WHERE department_id=? ORDER BY id");
+    $st->execute([$deptId]);
+    $codes = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (empty($codes)) jout(['status'=>'error','message'=>'此部門尚未設定文件代碼（請至 系統設定 → 部門文件代碼 設定，如 技術課=TD）']);
+
+    // 可用 code 參數指定（一部門多代碼時）
+    $codeParam = strtoupper(trim($_GET['code'] ?? ''));
+    if ($codeParam !== '') $codes = array_values(array_filter($codes, fn($c)=>$c['code']===$codeParam)) ?: $codes;
+
+    $nextFor = function(string $code) use ($db, $digit): string {
+        $prefix = $digit.'-'.$code.'-';
+        $st = $db->prepare("SELECT doc_no FROM as_document WHERE doc_no LIKE ?");
+        $st->execute([$prefix.'%']);
+        $max = 0;
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $no) {
+            if (preg_match('/^'.preg_quote($prefix,'/').'(\d+)$/', $no, $m)) $max = max($max, (int)$m[1]); // 只算直屬序號（排除 -01-01 表單）
+        }
+        return $prefix.str_pad($max+1, 2, '0', STR_PAD_LEFT);
+    };
+
+    if (count($codes) > 1) {
+        // 一部門多組代碼：回傳各代碼的下一號，由前端選擇
+        $options = array_map(fn($c)=>['code'=>$c['code'],'label'=>$c['label'],'doc_no'=>$nextFor($c['code'])], $codes);
+        jout(['status'=>'choose','options'=>$options]);
     }
-    if ($code==='') jout(['status'=>'error','message'=>'此部門尚未設定文件代碼（請至 系統設定 → 部門代碼 設定，如 技術課=TD）']);
-    $prefix = $digit.'-'.$code.'-';
-    $st = $db->prepare("SELECT doc_no FROM as_document WHERE doc_no LIKE ?");
-    $st->execute([$prefix.'%']);
-    $max = 0;
-    foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $no) {
-        if (preg_match('/^'.preg_quote($prefix,'/').'(\d+)$/', $no, $m)) $max = max($max, (int)$m[1]); // 只算直屬序號（排除 -01-01 表單）
-    }
-    jout(['status'=>'success','doc_no'=>$prefix.str_pad($max+1, 2, '0', STR_PAD_LEFT)]);
+    jout(['status'=>'success','doc_no'=>$nextFor($codes[0]['code'])]);
 
 // ══════════════ 線上開檔（工作副本，供直接打字/列印；不動已發行版本檔） ══════════════
 case 'open_online':
