@@ -50,7 +50,8 @@ if ($action === 'get_mismatch_list') {
         $kwParams[':kw2'] = '%' . $kw . '%';
     }
 
-    $baseSql = "
+    // FROM/JOIN 與 WHERE 分開組裝：主查詢還要在 WHERE 之前插入額外的 LEFT JOIN
+    $fromSql = "
         FROM bom b
         JOIN bom_ing stuck ON stuck.bom = b.bom AND stuck.processing_state IN ('ing','Q')
              AND stuck.is_consumed = 0 AND stuck.is_schedule_split = 0
@@ -60,13 +61,15 @@ if ($action === 'get_mismatch_list') {
             JOIN bom_ing bi ON bi.bom_ing_fid = qc.bom_ing_fid_ref
             GROUP BY bi.bom
         ) qc_max ON qc_max.bom = b.bom
+    ";
+    $whereSql = "
         WHERE b.processing_state IS NULL
           AND stuck.bom_sn < qc_max.max_qc_sn
           $kwSql
     ";
 
     try {
-        $cntStmt = $db->prepare("SELECT COUNT(*) $baseSql");
+        $cntStmt = $db->prepare("SELECT COUNT(*) $fromSql $whereSql");
         $cntStmt->execute($kwParams);
         $total = (int)$cntStmt->fetchColumn();
 
@@ -78,11 +81,14 @@ if ($action === 'get_mismatch_list') {
                 stuck.qc_completed AS stuck_qc_completed,
                 COALESCE(spn.ProcessName, CONCAT('製程', stuck.process_no)) AS stuck_process_name,
                 qc_max.max_qc_sn, DATE_FORMAT(qc_max.qc_date, '%Y/%m/%d %H:%i') AS qc_date,
-                COALESCE(qpn.ProcessName, CONCAT('製程', qc_row.process_no)) AS qc_process_name
-            $baseSql
+                (SELECT COALESCE(pn2.ProcessName, CONCAT('製程', bi2.process_no))
+                   FROM bom_ing bi2
+                   LEFT JOIN process_no pn2 ON pn2.ProcessNo = bi2.process_no
+                  WHERE bi2.bom = b.bom AND bi2.bom_sn = qc_max.max_qc_sn
+                  ORDER BY bi2.is_consumed ASC, bi2.bom_ing_fid DESC LIMIT 1) AS qc_process_name
+            $fromSql
             LEFT JOIN process_no spn ON spn.ProcessNo = stuck.process_no
-            LEFT JOIN bom_ing qc_row ON qc_row.bom = b.bom AND qc_row.bom_sn = qc_max.max_qc_sn AND qc_row.is_consumed = 0
-            LEFT JOIN process_no qpn ON qpn.ProcessNo = qc_row.process_no
+            $whereSql
             ORDER BY stuck.outsource_date ASC
             LIMIT $pageSize OFFSET $offset
         ";
