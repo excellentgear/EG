@@ -67,6 +67,7 @@ $asCaps = [
     'update'   => $asIsRoleAdmin || strpos($pp,'A')!==false || strpos($pp,'U')!==false || in_array('asdoc_update', $asFeatures, true),
     'delete'   => $asIsRoleAdmin || strpos($pp,'A')!==false || strpos($pp,'D')!==false || in_array('asdoc_delete', $asFeatures, true),
     'settings' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_settings', $asFeatures, true),
+    'edit_online' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_edit_online', $asFeatures, true),
 ];
 
 if (!$asCaps['view']) {
@@ -138,6 +139,7 @@ if ($deptPerm === 'R') {
                 <div class="col-md-8">
                   <?php if ($asCaps['create']): ?>
                   <button class="btn btn-primary btn-sm" id="btnAddDoc"><i class="fa fa-plus"></i> 新增文件</button>
+                  <button class="btn btn-info btn-sm" id="btnBatchAdd"><i class="fa fa-files-o"></i> 批次上傳</button>
                   <?php endif; ?>
                   <?php if ($asCaps['settings']): ?>
                   <button class="btn btn-default btn-sm" id="btnTags"><i class="fa fa-tags"></i> 標籤 / 分類管理</button>
@@ -225,7 +227,12 @@ if ($deptPerm === 'R') {
         </div>
         <div class="modal-body">
           <div class="row">
-            <div class="form-group col-md-6"><label>文件編號 *</label><input type="text" class="form-control" name="doc_no" id="doc_no" required></div>
+            <div class="form-group col-md-6"><label>文件編號 *</label>
+              <div class="input-group">
+                <input type="text" class="form-control" name="doc_no" id="doc_no" required placeholder="可手動輸入，或選好階級/部門/母文件後按自動">
+                <span class="input-group-btn"><button type="button" class="btn btn-default" id="btnAutoNo" title="依 階級+部門代碼（或母文件）自動產生下一個編號"><i class="fa fa-magic"></i> 自動</button></span>
+              </div>
+            </div>
             <div class="form-group col-md-6"><label>文件名稱 *</label><input type="text" class="form-control" name="doc_name" id="doc_name" required></div>
           </div>
           <div class="row">
@@ -278,6 +285,51 @@ if ($deptPerm === 'R') {
           <button type="submit" class="btn btn-primary">儲存</button>
         </div>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ 批次上傳 Modal ═════════ -->
+<div class="modal fade" id="batchModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" style="width:96%;max-width:1200px;" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title">批次上傳文件</h4>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted" style="font-size:12px;">選好共同設定與多個檔案後，每列可個別修改編號/名稱/摘要，並可逐檔附上申請單。編號未填時依「母文件或 階級+部門代碼」自動遞增。</p>
+        <div class="row">
+          <div class="form-group col-md-3"><label>母文件（共同）</label><select class="form-control" id="batch_parent"><option value="">— 無 —</option></select></div>
+          <div class="form-group col-md-2"><label>文件類別</label>
+            <select class="form-control" id="batch_type"><option value="">--</option><option>手冊</option><option>程序</option><option>標準書</option><option selected>表單</option></select>
+          </div>
+          <div class="form-group col-md-2"><label>文件階級</label>
+            <select class="form-control" id="batch_level"><option value="">--</option><option value="一階">一階</option><option value="二階">二階</option><option value="三階">三階</option><option value="四階" selected>四階</option></select>
+          </div>
+          <div class="form-group col-md-2"><label>所屬部門</label><select class="form-control" id="batch_dept"><option value="">跨部門</option></select></div>
+          <div class="form-group col-md-1"><label>版本號</label><input type="text" class="form-control" id="batch_version" value="A"></div>
+          <div class="form-group col-md-2"><label>修訂日期</label><input type="date" class="form-control" id="batch_date"></div>
+        </div>
+        <div class="form-group">
+          <label>選擇多個文件檔</label>
+          <input type="file" id="batch_files" multiple>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-bordered table-condensed" style="font-size:12px;">
+            <thead><tr>
+              <th style="width:18%;">檔名</th><th style="width:15%;">文件編號</th><th style="width:20%;">文件名稱</th>
+              <th style="width:22%;">制修訂摘要</th><th>申請單（逐檔對應，可不附）</th>
+            </tr></thead>
+            <tbody id="batchRows"></tbody>
+          </table>
+        </div>
+        <div id="batchResult"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+        <button type="button" class="btn btn-primary" id="batchSubmit"><i class="fa fa-upload"></i> 開始上傳</button>
+      </div>
     </div>
   </div>
 </div>
@@ -425,6 +477,14 @@ if ($deptPerm === 'R') {
         </div>
         <hr>
         <div class="form-group">
+          <label>部門文件代碼（自動編號用，如 技術課=TD → 2-TD-01）</label>
+          <div style="max-height:220px;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:6px;">
+            <table class="table table-condensed" style="margin-bottom:0;"><tbody id="deptCodeList"></tbody></table>
+          </div>
+          <button type="button" class="btn btn-sm btn-info" id="deptCodeSave" style="margin-top:6px;">儲存部門代碼</button>
+        </div>
+        <hr>
+        <div class="form-group">
           <label>文件制修申請單（附件一）範本</label>
           <div>目前範本：<span id="tplStatus" class="text-muted">未上傳</span>
             <a href="#" id="tplDownload" class="btn btn-xs btn-default" style="display:none;"><i class="fa fa-download"></i> 下載</a>
@@ -454,6 +514,17 @@ $(function(){
   const canU = !!window.asPerm.update;
   const canD = !!window.asPerm.delete;
   const canS = !!window.asPerm.settings;
+  const canEO = !!window.asPerm.edit_online;
+
+  // 線上開檔：建立工作副本後以 ms-office 協定開啟本機 Excel/Word
+  $(document).on('click','.op-online', function(){
+    const $b=$(this); $b.prop('disabled',true);
+    $.post(API+'?action=open_online',{version_id:$b.data('ver')}, r=>{
+      if(r.status!=='success'){ alert(r.message||'開啟失敗'); return; }
+      window.location.href = r.uri; // 觸發 ms-excel:/ms-word: 協定
+      setTimeout(()=>{ alert('已建立工作副本並嘗試開啟 Office。\n若沒有反應，請確認此電腦已安裝 Office 並可存取 NAS。\n副本位置：'+r.path+'\n（打完資料請直接列印或另存，7 天後自動清除，不影響正式版本檔）'); }, 1500);
+    },'json').always(()=>$b.prop('disabled',false));
+  });
   let META = {departments:[],positions:[],tags:[],users:[]};
   let DOCS = [], FILTERED = [], activeTagId = 0, curPage = 1, activeParentId = 0, activeParentNo = '';
 
@@ -545,7 +616,10 @@ $(function(){
         ? `<a href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="線上開啟最新版（Excel/Word 自動轉PDF預覽，第一次開啟需數秒轉檔）">${esc(d.doc_name)}</a>`
         : esc(d.doc_name);
       ops += `<button class="btn btn-xs btn-default op-hist" data-id="${d.id}" data-name="${esc(d.doc_name)}">歷史版本</button> `;
-      if(curVer) ops += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}">下載</a> `;
+      const fext = (d.current_file_name||'').split('.').pop().toLowerCase();
+      const isOffice = ['xls','xlsx','doc','docx','ppt','pptx'].includes(fext);
+      if(curVer && canEO && isOffice) ops += `<button class="btn btn-xs btn-success op-online" data-ver="${curVer}" title="開啟工作副本直接打字/列印（不動正式版本檔）"><i class="fa fa-pencil"></i> 線上開檔</button> `;
+      if(curVer && canU) ops += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}" title="下載原檔（需修改權限）">下載</a> `;
       if(canU){
         ops += `<button class="btn btn-xs btn-warning op-ver" data-id="${d.id}" data-name="${esc(d.doc_name)}">改版</button> `;
         ops += `<button class="btn btn-xs btn-default op-edit" data-id="${d.id}">編輯</button> `;
@@ -601,6 +675,23 @@ $(function(){
   $('#doc_type').on('change', function(){
     const lv = TYPE_LEVEL_MAP[$(this).val()];
     if(lv) $('#doc_level').val(lv);
+  });
+
+  // 自動編號：有母文件→{母編號}-{次號}；無→{階}-{部門代碼}-{次號}（可再手動修改）
+  function suggestDocNo(fill){
+    const p = { level: $('#doc_level').val(), department_id: $('#doc_department_id').val(), parent_doc_id: $('#doc_parent_id').val() };
+    $.getJSON(API+'?action=suggest_doc_no', p, r=>{
+      if(r.status==='success'){ if(fill) $('#doc_no').val(r.doc_no); }
+      else if(fill) alert(r.message||'無法產生編號');
+    });
+  }
+  $('#btnAutoNo').on('click', ()=>suggestDocNo(true));
+  // 新增模式下，選擇變動且編號仍空白時自動帶入
+  $('#doc_level,#doc_department_id,#doc_parent_id').on('change', function(){
+    if($('#doc_id').val()==='' && $('#doc_no').val().trim()===''){
+      const hasParent = $('#doc_parent_id').val()!=='';
+      if(hasParent || ($('#doc_level').val()!=='' && $('#doc_department_id').val()!=='')) suggestDocNo(true);
+    }
   });
 
   // 標籤選擇器（新增/編輯文件用）
@@ -680,8 +771,13 @@ $(function(){
       if(r.status!=='success'){ alert(r.message); return; }
       const tb=$('#historyBody').empty();
       (r.data.versions||[]).forEach(v=>{
-        const dl = `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${v.id}">下載</a>`;
-        const af = v.apply_form_file_name ? `<a class="btn btn-xs btn-default" href="${API}?action=download&which=apply&version_id=${v.id}">申請單</a>` : '<span class="text-muted">無</span>';
+        let dl = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
+        if(canU) dl += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${v.id}">下載</a>`;
+        let af = '<span class="text-muted">無</span>';
+        if(v.apply_form_file_name){
+          af = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=apply&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
+          if(canU) af += `<a class="btn btn-xs btn-default" href="${API}?action=download&which=apply&version_id=${v.id}">下載</a>`;
+        }
         tb.append(`<tr>
           <td><span class="label label-info">${esc(v.version)}</span></td>
           <td>${esc(v.change_status)||'-'}</td>
@@ -801,12 +897,102 @@ $(function(){
     $.post(API+'?action=delete_tag',{id:$(this).data('id')}, r=>{ if(r.status==='success') loadTagList(); else alert(r.message); },'json');
   });
 
+  // ── 批次上傳 ──
+  $('#btnBatchAdd').on('click', function(){
+    $('#batch_parent').html('<option value="">— 無 —</option>'+(META.parents||[]).map(p=>`<option value="${p.id}">${esc(p.doc_no)}｜${esc(p.doc_name)}</option>`).join(''));
+    $('#batch_dept').html('<option value="">跨部門</option>'+META.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
+    $('#batch_files').val(''); $('#batchRows').empty(); $('#batchResult').empty();
+    $('#batchModal').modal('show');
+  });
+
+  // 選檔後建立逐檔設定列，編號自動遞增建議
+  $('#batch_files').on('change', function(){
+    const files = this.files; const tb = $('#batchRows').empty();
+    if(!files.length) return;
+    const p = { level: $('#batch_level').val(), department_id: $('#batch_dept').val(), parent_doc_id: $('#batch_parent').val() };
+    $.getJSON(API+'?action=suggest_doc_no', p, r=>{
+      let base='', num=0, pad=2;
+      if(r.status==='success'){
+        const m = r.doc_no.match(/^(.*-)(\d+)$/);
+        if(m){ base=m[1]; num=parseInt(m[2]); pad=m[2].length; }
+      }
+      for(let i=0;i<files.length;i++){
+        const fn = files[i].name;
+        const nameNoExt = fn.replace(/\.[^.]+$/,'');
+        const sugNo = base ? base+String(num+i).padStart(pad,'0') : '';
+        tb.append(`<tr>
+          <td style="vertical-align:middle;">${esc(fn)}</td>
+          <td><input type="text" class="form-control input-sm b-no" value="${esc(sugNo)}"></td>
+          <td><input type="text" class="form-control input-sm b-name" value="${esc(nameNoExt)}"></td>
+          <td><input type="text" class="form-control input-sm b-sum" placeholder="如：新訂"></td>
+          <td><input type="file" class="b-apply"></td>
+        </tr>`);
+      }
+    });
+  });
+  // 共同設定變動時若已選檔，重新產生編號建議
+  $('#batch_parent,#batch_level,#batch_dept').on('change', ()=>{ if($('#batch_files')[0].files.length) $('#batch_files').trigger('change'); });
+
+  $('#batchSubmit').on('click', function(){
+    const files = $('#batch_files')[0].files;
+    if(!files.length){ alert('請先選擇檔案'); return; }
+    const rows=[]; let bad=0;
+    $('#batchRows tr').each(function(i){
+      const no=$(this).find('.b-no').val().trim(), nm=$(this).find('.b-name').val().trim();
+      if(!no||!nm) bad++;
+      rows.push({
+        doc_no:no, doc_name:nm,
+        doc_type:$('#batch_type').val(), doc_level:$('#batch_level').val(),
+        department_id:$('#batch_dept').val(), parent_doc_id:$('#batch_parent').val(),
+        version:$('#batch_version').val().trim(), change_status:'制訂',
+        revised_date:$('#batch_date').val(), revised_pages:'', revised_summary:$(this).find('.b-sum').val().trim(),
+        tag_ids:[]
+      });
+    });
+    if(bad){ alert(`有 ${bad} 列缺少編號或名稱`); return; }
+    if(!$('#batch_version').val().trim()){ alert('請填版本號'); return; }
+    const fd = new FormData();
+    fd.append('rows', JSON.stringify(rows));
+    for(let i=0;i<files.length;i++){
+      fd.append('file_'+i, files[i]);
+      const af = $('#batchRows tr').eq(i).find('.b-apply')[0].files[0];
+      if(af) fd.append('apply_'+i, af);
+    }
+    const $b=$(this).prop('disabled',true);
+    NProgress.start();
+    $.ajax({url:API+'?action=create_documents_batch', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+     .done(r=>{
+        if(r.status!=='success'){ alert(r.message||'失敗'); return; }
+        let html = `<div class="alert ${r.ok===r.total?'alert-success':'alert-warning'}">完成：成功 ${r.ok} / ${r.total} 筆</div>`;
+        const fails = (r.results||[]).filter(x=>!x.success);
+        if(fails.length) html += '<ul style="color:#a94442;">'+fails.map(f=>`<li>${esc(f.doc_no||('第'+(f.index+1)+'列'))}：${esc(f.message)}</li>`).join('')+'</ul>';
+        $('#batchResult').html(html);
+        loadMeta(loadDocs);
+     })
+     .fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $b.prop('disabled',false); });
+  });
+
   // ── 系統設定 ──
+  function renderDeptCodes(){
+    const tb=$('#deptCodeList').empty();
+    (META.departments||[]).forEach(d=>{
+      tb.append(`<tr><td style="width:50%;vertical-align:middle;">${esc(d.name)}</td>
+        <td><input type="text" class="form-control input-sm dept-code-input" data-id="${d.id}" value="${esc(d.code||'')}" placeholder="如 TD" maxlength="10" style="text-transform:uppercase;"></td></tr>`);
+    });
+  }
+  $('#deptCodeSave').on('click', function(){
+    const codes={};
+    $('.dept-code-input').each(function(){ codes[$(this).data('id')]=$(this).val().trim(); });
+    $.post(API+'?action=save_dept_codes',{codes:JSON.stringify(codes)}, r=>{
+      if(r.status==='success'){ alert('部門代碼已儲存'); loadMeta(); } else alert(r.message);
+    },'json');
+  });
   $('#btnSettings').on('click', function(){
     $.getJSON(API+'?action=get_settings', r=>{
       const d=r.data;
       $('#set_nas_dir').val(d.nas_dir); $('#set_owner').val(d.owner_user_id||''); $('#set_deputy').val(d.deputy_user_id||'');
       if(d.apply_form_tpl){ $('#tplStatus').text('已上傳'); $('#tplDownload').show(); } else { $('#tplStatus').text('未上傳'); $('#tplDownload').hide(); }
+      renderDeptCodes();
       $('#settingsModal').modal('show');
     });
   });

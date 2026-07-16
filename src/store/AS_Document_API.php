@@ -62,7 +62,7 @@ function asPagePerm(PDO $db, int $uid): string {
 }
 $asPagePerm = $currentUserId ? asPagePerm($db, $currentUserId) : '';
 
-/** 能力判斷：view/create/update/delete 走「頁面ACRUD OR 角色功能碼」；settings 只認 A 或 asdoc_settings */
+/** 能力判斷：view/create/update/delete 走「頁面ACRUD OR 角色功能碼」；settings/edit_online 只認 A 或對應功能碼 */
 function asCan(string $what): bool {
     global $asFeatures, $asIsRoleAdmin, $asPagePerm;
     if ($asIsRoleAdmin || strpos($asPagePerm, 'A') !== false) return true;
@@ -138,26 +138,35 @@ function asPreviewPdf(PDO $db, int $docId, string $fileName): ?string {
     require_once __DIR__ . '/../common/attachment_lib.php';
     $tmpOut = rtrim(sys_get_temp_dir(), '\\/') . DIRECTORY_SEPARATOR . 'asdoc_prev_' . bin2hex(random_bytes(4));
     @mkdir($tmpOut, 0775, true);
-    $pdf = eg_att_soffice_convert($src, $tmpOut);
+    // NAS UNC 路徑 PhpSpreadsheet/soffice 會讀取失敗（2026-07-16 實測），一律先複製到本機暫存再轉檔
+    $local = $tmpOut . DIRECTORY_SEPARATOR . $fileName;
+    if (!@copy($src, $local)) { return null; }
+    $pdf = eg_att_soffice_convert($local, $tmpOut);
     if (!$pdf) {
-        $pdf = eg_att_fallback_convert($src, strtolower(pathinfo($fileName, PATHINFO_EXTENSION)), $tmpOut);
+        $pdf = eg_att_fallback_convert($local, strtolower(pathinfo($fileName, PATHINFO_EXTENSION)), $tmpOut);
     }
-    if ($pdf && @copy($pdf, $cache)) { @unlink($pdf); @rmdir($tmpOut); return $cache; }
-    return null;
+    $ok = ($pdf && @copy($pdf, $cache));
+    // 清本機暫存（盡力而為）
+    @unlink($local); if ($pdf) @unlink($pdf); @rmdir($tmpOut);
+    return $ok ? $cache : null;
 }
 
 $action = $_REQUEST['action'] ?? '';
 
 // 各 action 所需能力
+// download 不在此表：於 case 內依 inline 分流（inline 預覽=view；下載原檔=update，「有修改權限的人才可下載」）
 $asGate = [
     'list_tags'=>'view', 'meta'=>'view', 'list_documents'=>'view', 'get_document'=>'view',
-    'download'=>'view', 'download_template'=>'view',
-    'create_document'=>'create',
+    'suggest_doc_no'=>'view',
+    'download_template'=>'update',
+    'create_document'=>'create', 'create_documents_batch'=>'create',
     'add_version'=>'update', 'update_document_meta'=>'update',
+    'open_online'=>'edit_online',
     'delete_document'=>'delete', 'restore_document'=>'delete',
     'add_tag'=>'settings', 'update_tag'=>'settings', 'delete_tag'=>'settings',
     'get_perms'=>'settings', 'save_perms'=>'settings',
     'get_settings'=>'settings', 'save_settings'=>'settings', 'upload_template'=>'settings',
+    'save_dept_codes'=>'settings',
 ];
 if (!$currentUserId) {
     if ($action === 'download' || $action === 'download_template') { http_response_code(403); exit('尚未登入'); }
@@ -202,7 +211,9 @@ case 'delete_tag':
 
 // ══════════════ 下拉選單資料 ══════════════
 case 'meta':
-    $depts = $db->query("SELECT id,name,level FROM department ORDER BY sort_order ASC, level, name")->fetchAll(PDO::FETCH_ASSOC);
+    $depts = $db->query("SELECT d.id, d.name, d.level, c.code
+                         FROM department d LEFT JOIN as_dept_code c ON c.department_id = d.id
+                         ORDER BY d.sort_order ASC, d.level, d.name")->fetchAll(PDO::FETCH_ASSOC);
     $poss  = $db->query("SELECT p.id,p.name,pl.level FROM position p LEFT JOIN position_level pl ON p.id=pl.position_id ORDER BY p.sort_order ASC, p.id ASC")->fetchAll(PDO::FETCH_ASSOC);
     $tags  = $db->query("SELECT id,name,color FROM as_doc_tag ORDER BY sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
     $users = $db->query("SELECT id,user_cname FROM user WHERE state IN (1,90,99) OR state IS NULL ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
@@ -229,7 +240,7 @@ case 'list_documents':
     $wsql = $where ? ('WHERE '.implode(' AND ',$where)) : '';
 
     $sql = "SELECT d.*, dep.name AS dept_name,
-                   v.revised_date, v.change_status,
+                   v.revised_date, v.change_status, v.file_name AS current_file_name,
                    pd.doc_no AS parent_doc_no, pd.doc_name AS parent_doc_name,
                    (SELECT COUNT(*) FROM as_document c WHERE c.parent_doc_id = d.id AND c.is_deleted = 0) AS children_count
             FROM as_document d
@@ -298,6 +309,9 @@ case 'create_document':
 
     if ($doc_no==='' || $doc_name==='' || $version==='')
         jout(['status'=>'error','message'=>'文件編號、名稱、版本號為必填']);
+    $dup = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0");
+    $dup->execute([$doc_no]);
+    if ($dup->fetchColumn() > 0) jout(['status'=>'error','message'=>"文件編號 {$doc_no} 已存在"]);
     if (!isset($_FILES['file']) || $_FILES['file']['error']!==UPLOAD_ERR_OK)
         jout(['status'=>'error','message'=>'請上傳文件檔']);
     $ext = asSafeExt($_FILES['file']['name']);
@@ -416,6 +430,9 @@ case 'update_document_meta':
     $tagIds  = array_filter(array_map('intval', explode(',', $_POST['tag_ids'] ?? '')));
     if ($id<=0 || $doc_no==='' || $doc_name==='') jout(['status'=>'error','message'=>'資料不完整']);
     if ($parent === $id) $parent = null; // 不可自己當自己的母文件
+    $dup = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0 AND id!=?");
+    $dup->execute([$doc_no, $id]);
+    if ($dup->fetchColumn() > 0) jout(['status'=>'error','message'=>"文件編號 {$doc_no} 已被其他文件使用"]);
     $db->beginTransaction();
     try {
         $db->prepare("UPDATE as_document SET doc_no=?,doc_name=?,doc_type=?,doc_level=?,department_id=?,parent_doc_id=?,updated_at=NOW() WHERE id=?")
@@ -450,17 +467,27 @@ case 'download':
     if (!$v) { http_response_code(404); exit('版本不存在'); }
     $dir = asDocDir($db, (int)$v['doc_id']);
     $inline = (($_GET['inline'] ?? '') === '1');
+    // 權限分流：inline 預覽=檢閱權；下載原檔=修改權（有修改權限的人才可下載原檔）
+    if (!asCan($inline ? 'view' : 'update')) {
+        http_response_code(403); header('Content-Type: text/plain; charset=utf-8');
+        exit($inline ? '無檢閱權限' : '無下載權限（下載原檔需「修改」權限，檢閱者請用線上預覽）');
+    }
     $fname = ($which==='apply') ? $v['apply_form_file_name'] : $v['file_name'];
     $oname = ($which==='apply') ? ($v['apply_form_original_name'] ?: $v['apply_form_file_name'])
                                 : ($v['original_name'] ?: $v['file_name']);
     if ($which==='apply' && !$fname) { http_response_code(404); exit('此版本無申請單'); }
-    // 線上開啟：Office 檔先轉 PDF 快取再 inline 串流（轉檔失敗則落回原檔下載）
+    // 線上預覽：Office 檔先轉 PDF 快取再 inline 串流
     if ($inline) {
         $fext = strtolower(pathinfo($fname, PATHINFO_EXTENSION));
         if (in_array($fext, ['doc','docx','xls','xlsx','ppt','pptx','odt','ods'], true)) {
             $cache = asPreviewPdf($db, (int)$v['doc_id'], $fname);
             if ($cache) {
                 asStream($cache, preg_replace('/\.[^.]+$/', '', $oname) . '.pdf', true);
+            }
+            // 轉檔失敗：有修改權限者落回下載原檔；純檢閱者回錯誤（不可經預覽管道取得原檔）
+            if (!asCan('update')) {
+                http_response_code(500); header('Content-Type: text/plain; charset=utf-8');
+                exit('預覽產生失敗（轉檔錯誤），請聯絡文管人員');
             }
         }
     }
@@ -546,6 +573,180 @@ case 'download_template':
     if ($tpl==='') { http_response_code(404); exit('尚未上傳申請單範本'); }
     asStream(asTplDir($db).DIRECTORY_SEPARATOR.$tpl, '文件制修申請單_範本.'.pathinfo($tpl,PATHINFO_EXTENSION));
     break;
+
+// ══════════════ 部門文件代碼（編號用，如 技術課=TD） ══════════════
+case 'save_dept_codes':
+    $codes = json_decode($_POST['codes'] ?? '{}', true);
+    if (!is_array($codes)) jout(['status'=>'error','message'=>'格式錯誤']);
+    $db->beginTransaction();
+    try {
+        $up  = $db->prepare("INSERT INTO as_dept_code (department_id, code) VALUES (?,?) ON DUPLICATE KEY UPDATE code=VALUES(code)");
+        $del = $db->prepare("DELETE FROM as_dept_code WHERE department_id=?");
+        foreach ($codes as $dId => $code) {
+            $dId = (int)$dId;
+            $code = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string)$code));
+            if ($dId <= 0) continue;
+            if ($code === '') { $del->execute([$dId]); } else { $up->execute([$dId, $code]); }
+        }
+        $db->commit();
+        jout(['status'=>'success']);
+    } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
+
+// ══════════════ 自動編號建議 ══════════════
+// 有母文件：{母文件編號}-{下一個 2 位序號}；無母文件：{階數}-{部門代碼}-{下一個 2 位序號}
+case 'suggest_doc_no':
+    $levelMap = ['一階'=>'1','二階'=>'2','三階'=>'3','四階'=>'4'];
+    $level    = trim($_GET['level'] ?? '');
+    $deptId   = (int)($_GET['department_id'] ?? 0);
+    $parentId = (int)($_GET['parent_doc_id'] ?? 0);
+
+    if ($parentId > 0) {
+        $st = $db->prepare("SELECT doc_no FROM as_document WHERE id=?");
+        $st->execute([$parentId]);
+        $pNo = $st->fetchColumn();
+        if (!$pNo) jout(['status'=>'error','message'=>'母文件不存在']);
+        $st = $db->prepare("SELECT doc_no FROM as_document WHERE parent_doc_id=?");
+        $st->execute([$parentId]);
+        $max = 0;
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $no) {
+            if (preg_match('/^'.preg_quote($pNo,'/').'-(\d+)$/', $no, $m)) $max = max($max, (int)$m[1]);
+        }
+        jout(['status'=>'success','doc_no'=>$pNo.'-'.str_pad($max+1, 2, '0', STR_PAD_LEFT)]);
+    }
+
+    $digit = $levelMap[$level] ?? '';
+    if ($digit==='') jout(['status'=>'error','message'=>'請先選擇文件階級']);
+    $code = '';
+    if ($deptId > 0) {
+        $st = $db->prepare("SELECT code FROM as_dept_code WHERE department_id=?");
+        $st->execute([$deptId]);
+        $code = (string)($st->fetchColumn() ?: '');
+    }
+    if ($code==='') jout(['status'=>'error','message'=>'此部門尚未設定文件代碼（請至 系統設定 → 部門代碼 設定，如 技術課=TD）']);
+    $prefix = $digit.'-'.$code.'-';
+    $st = $db->prepare("SELECT doc_no FROM as_document WHERE doc_no LIKE ?");
+    $st->execute([$prefix.'%']);
+    $max = 0;
+    foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $no) {
+        if (preg_match('/^'.preg_quote($prefix,'/').'(\d+)$/', $no, $m)) $max = max($max, (int)$m[1]); // 只算直屬序號（排除 -01-01 表單）
+    }
+    jout(['status'=>'success','doc_no'=>$prefix.str_pad($max+1, 2, '0', STR_PAD_LEFT)]);
+
+// ══════════════ 線上開檔（工作副本，供直接打字/列印；不動已發行版本檔） ══════════════
+case 'open_online':
+    $verId = (int)($_POST['version_id'] ?? 0);
+    if ($verId<=0) jout(['status'=>'error','message'=>'缺少版本 ID']);
+    $st = $db->prepare("SELECT * FROM as_document_version WHERE id=?");
+    $st->execute([$verId]);
+    $v = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$v) jout(['status'=>'error','message'=>'版本不存在']);
+    $src = asDocDir($db, (int)$v['doc_id']).DIRECTORY_SEPARATOR.$v['file_name'];
+    if (!is_file($src)) jout(['status'=>'error','message'=>'檔案不存在或 NAS 未連線']);
+
+    $ext = strtolower(pathinfo($v['file_name'], PATHINFO_EXTENSION));
+    $schemes = ['xls'=>'ms-excel','xlsx'=>'ms-excel','doc'=>'ms-word','docx'=>'ms-word','ppt'=>'ms-powerpoint','pptx'=>'ms-powerpoint'];
+    if (!isset($schemes[$ext])) jout(['status'=>'error','message'=>'此檔案格式不支援線上開啟（僅 Excel/Word/PPT）']);
+
+    $workDir = asDocRoot($db).DIRECTORY_SEPARATOR.'_workcopy';
+    if (!is_dir($workDir) && !mkdir($workDir, 0777, true)) jout(['status'=>'error','message'=>'無法建立工作副本資料夾']);
+
+    // 懶惰清理：刪除超過 7 天的工作副本
+    foreach ((array)@scandir($workDir) as $f) {
+        if ($f==='.'||$f==='..') continue;
+        $fp = $workDir.DIRECTORY_SEPARATOR.$f;
+        if (is_file($fp) && filemtime($fp) < time()-7*86400) @unlink($fp);
+    }
+
+    $safeOrig = preg_replace('/[\\\\\/:*?"<>|]/', '_', $v['original_name'] ?: $v['file_name']);
+    $copyName = date('Ymd_His').'_u'.$GLOBALS['currentUserId'].'_'.$safeOrig;
+    $dst = $workDir.DIRECTORY_SEPARATOR.$copyName;
+    if (!@copy($src, $dst)) jout(['status'=>'error','message'=>'建立工作副本失敗']);
+
+    // ms-office 協定：ofe=開啟編輯；路徑用 UNC，用戶端需可存取 NAS 且裝有 Office
+    $uri = $schemes[$ext].':ofe|u|'.$dst;
+    jout(['status'=>'success','uri'=>$uri,'path'=>$dst,
+          'note'=>'已建立工作副本（不影響正式版本檔），打完資料請直接列印或另存；副本 7 天後自動清除']);
+
+// ══════════════ 批次上傳（同一母文件/共同預設值，多檔一次建立，附件逐檔對應） ══════════════
+case 'create_documents_batch':
+    $rows = json_decode($_POST['rows'] ?? '[]', true);
+    if (!is_array($rows) || empty($rows)) jout(['status'=>'error','message'=>'無資料列']);
+    if (asDocRoot($db)==='') jout(['status'=>'error','message'=>'尚未設定 NAS 儲存路徑']);
+
+    $results = [];
+    foreach ($rows as $i => $r) {
+        $res = ['index'=>$i, 'doc_no'=>trim($r['doc_no'] ?? ''), 'success'=>false];
+        try {
+            $doc_no  = trim($r['doc_no'] ?? '');
+            $doc_name= trim($r['doc_name'] ?? '');
+            $version = trim($r['version'] ?? '');
+            if ($doc_no==='' || $doc_name==='' || $version==='') throw new Exception('編號/名稱/版本必填');
+
+            $dup = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0");
+            $dup->execute([$doc_no]);
+            if ($dup->fetchColumn() > 0) throw new Exception("編號 {$doc_no} 已存在");
+
+            $fkey = 'file_'.$i;
+            if (!isset($_FILES[$fkey]) || $_FILES[$fkey]['error']!==UPLOAD_ERR_OK) throw new Exception('缺少文件檔');
+            $ext = asSafeExt($_FILES[$fkey]['name']);
+            if (!$ext) throw new Exception('不允許此檔案類型');
+
+            $akey = 'apply_'.$i;   // 申請單逐檔對應（可無）
+            $hasApply = isset($_FILES[$akey]) && $_FILES[$akey]['error']===UPLOAD_ERR_OK;
+            $applyExt = $hasApply ? asSafeExt($_FILES[$akey]['name']) : null;
+            if ($hasApply && !$applyExt) throw new Exception('申請單檔案類型不允許');
+
+            $doc_type= trim($r['doc_type'] ?? '');
+            $level   = trim($r['doc_level'] ?? '');
+            $dept    = ($r['department_id'] ?? '')!=='' ? (int)$r['department_id'] : null;
+            $parent  = ($r['parent_doc_id'] ?? '')!=='' ? (int)$r['parent_doc_id'] : null;
+            $cstat   = trim($r['change_status'] ?? '制訂');
+            $rdate   = trim($r['revised_date'] ?? '') ?: null;
+            $rpages  = trim($r['revised_pages'] ?? '') ?: null;
+            $rsum    = trim($r['revised_summary'] ?? '') ?: null;
+            $tagIds  = array_filter(array_map('intval', (array)($r['tag_ids'] ?? [])));
+
+            $db->beginTransaction();
+            $db->prepare("INSERT INTO as_document (doc_no,doc_name,doc_type,doc_level,department_id,parent_doc_id,current_version,created_by,created_at,updated_at)
+                          VALUES (?,?,?,?,?,?,?,?,NOW(),NOW())")
+               ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$version,$GLOBALS['currentCname']]);
+            $docId = (int)$db->lastInsertId();
+
+            $dir = asDocDir($db, $docId);
+            if (!is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾');
+
+            $fname = asMakeName($ext);
+            if (!move_uploaded_file($_FILES[$fkey]['tmp_name'], $dir.DIRECTORY_SEPARATOR.$fname)) throw new Exception('文件寫入失敗');
+            $orig = basename($_FILES[$fkey]['name']);
+
+            $applyName = null; $applyOrig = null;
+            if ($hasApply) {
+                $applyName = asMakeName($applyExt);
+                if (!move_uploaded_file($_FILES[$akey]['tmp_name'], $dir.DIRECTORY_SEPARATOR.$applyName)) throw new Exception('申請單寫入失敗');
+                $applyOrig = basename($_FILES[$akey]['name']);
+            }
+
+            $db->prepare("INSERT INTO as_document_version
+                  (doc_id,version,change_status,revised_date,revised_pages,revised_summary,doc_level_snapshot,department_id_snapshot,file_name,original_name,apply_form_file_name,apply_form_original_name,uploaded_by,uploaded_at)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+               ->execute([$docId,$version,$cstat,$rdate,$rpages,$rsum,$level,$dept,$fname,$orig,$applyName,$applyOrig,$GLOBALS['currentCname']]);
+            $verId = (int)$db->lastInsertId();
+            $db->prepare("UPDATE as_document SET current_version_id=? WHERE id=?")->execute([$verId,$docId]);
+
+            if ($tagIds) {
+                $ins = $db->prepare("INSERT IGNORE INTO as_doc_tag_map (doc_id,tag_id) VALUES (?,?)");
+                foreach ($tagIds as $tid) $ins->execute([$docId,$tid]);
+            }
+            $db->commit();
+            $res['success'] = true; $res['id'] = $docId;
+        } catch (Exception $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            $res['message'] = $e->getMessage();
+        }
+        $results[] = $res;
+    }
+    $okCnt = count(array_filter($results, fn($r)=>$r['success']));
+    jout(['status'=>'success','ok'=>$okCnt,'total'=>count($rows),'results'=>$results]);
 
 default:
     jout(['status'=>'error','message'=>'無效的操作']);
