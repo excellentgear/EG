@@ -1479,6 +1479,21 @@ if (window.fabric && fabric.Text) {
         if (!this.canvas || !this.canvas.contextTop) return;
         return __renderCursor.call(this);
     };
+    /* 3) 已被移出畫布卻仍殘留為「作用中選取」的物件：每一幀畫控制點都因 this.canvas=undefined 拋例外
+       （drawControls → getRetinaScaling），渲染迴圈整個死掉＝殘影/凍結。物件層防呆略過，
+       畫布層順手把殘留選取清掉，讓畫面自然恢復。 */
+    const __objDrawControls = fabric.Object.prototype.drawControls;
+    fabric.Object.prototype.drawControls = function (ctx, styleOverride) {
+        if (!this.canvas) return this;
+        return __objDrawControls.call(this, ctx, styleOverride);
+    };
+    if (fabric.Canvas.prototype.drawControls) {
+        const __cvsDrawControls = fabric.Canvas.prototype.drawControls;
+        fabric.Canvas.prototype.drawControls = function (ctx) {
+            if (this._activeObject && !this._activeObject.canvas) { this._activeObject = null; return; }
+            return __cvsDrawControls.call(this, ctx);
+        };
+    }
 }
 /* ════════════════════════════════════════════════════════════════════
    批圖編輯器主程式（Fabric.js 5.3）
