@@ -786,21 +786,42 @@ case 'suggest_doc_no':
 
 // ══════════════ 線上開檔（工作副本，供直接打字/列印；不動已發行版本檔） ══════════════
 case 'open_online':
-    // 下載工作副本模式：ms-office 協定對非 HTTP 路徑會被新版 Office 判為「受限制區域」硬性封鎖
-    // （2026-07-16 實測：UNC/編碼/信任位置皆無效），改為直接下載副本檔——
-    // 使用者點開下載的檔案，按「啟用編輯」即可打字/列印；動的是本機副本，不影響正式版本檔。
+    // 線上開檔：仿 BOM 總表（OreadyReply_ForPm_BaseOfTime2.php）的做法——
+    // ms-office 協定只吃 HTTP URL（ms-excel:ofe|u|http://...，UNC/file: 會被新版 Office 判受限區域封鎖）。
+    // 工作副本複製到本機 web 目錄 uploads/as_workcopy（本機暫存，不受 NAS 路徑規範限制），以 HTTP URL 開啟。
     $verId = (int)($_REQUEST['version_id'] ?? 0);
-    if ($verId<=0) { http_response_code(400); header('Content-Type: text/plain; charset=utf-8'); exit('缺少版本 ID'); }
+    if ($verId<=0) jout(['status'=>'error','message'=>'缺少版本 ID']);
     $st = $db->prepare("SELECT v.*, d.doc_no FROM as_document_version v JOIN as_document d ON d.id=v.doc_id WHERE v.id=?");
     $st->execute([$verId]);
     $v = $st->fetch(PDO::FETCH_ASSOC);
-    if (!$v) { http_response_code(404); exit('版本不存在'); }
-    if (!$v['file_name']) { http_response_code(404); header('Content-Type: text/plain; charset=utf-8'); exit('此版本未上傳文件檔（補登資料），無檔可開'); }
+    if (!$v) jout(['status'=>'error','message'=>'版本不存在']);
+    if (!$v['file_name']) jout(['status'=>'error','message'=>'此版本未上傳文件檔（補登資料），無檔可開']);
     $src = asDocDir($db, (int)$v['doc_id']).DIRECTORY_SEPARATOR.$v['file_name'];
+    if (!is_file($src)) jout(['status'=>'error','message'=>'檔案不存在或 NAS 未連線']);
+
     $ext = strtolower(pathinfo($v['file_name'], PATHINFO_EXTENSION));
-    $dlName = '工作副本_'.($v['doc_no'] ?: ('doc'.$v['doc_id'])).'_v'.($v['version'] ?: '').'_'.date('Ymd').'.'.$ext;
-    asStream($src, $dlName);
-    break;
+    $schemes = ['xls'=>'ms-excel','xlsx'=>'ms-excel','xlsm'=>'ms-excel','doc'=>'ms-word','docx'=>'ms-word','ppt'=>'ms-powerpoint','pptx'=>'ms-powerpoint'];
+    if (!isset($schemes[$ext])) jout(['status'=>'error','message'=>'此檔案格式不支援線上開啟（僅 Excel/Word/PPT）']);
+
+    $workDir = rtrim($document_root, '/\\').'/EGsystem/uploads/as_workcopy';
+    if (!is_dir($workDir) && !mkdir($workDir, 0777, true)) jout(['status'=>'error','message'=>'無法建立工作副本資料夾']);
+
+    // 懶惰清理：刪除超過 7 天的工作副本
+    foreach ((array)@scandir($workDir) as $f) {
+        if ($f==='.'||$f==='..') continue;
+        $fp = $workDir.'/'.$f;
+        if (is_file($fp) && filemtime($fp) < time()-7*86400) @unlink($fp);
+    }
+
+    // 檔名純 ASCII（協定 URL 免編碼）＋亂數避免猜測
+    $docNoAscii = preg_replace('/[^A-Za-z0-9._-]/', '_', $v['doc_no'] ?: ('doc'.$v['doc_id']));
+    $verAscii   = preg_replace('/[^A-Za-z0-9._-]/', '_', $v['version'] ?: 'v');
+    $copyName   = date('Ymd_His').'_'.bin2hex(random_bytes(3)).'_'.$docNoAscii.'_v'.$verAscii.'.'.$ext;
+    if (!@copy($src, $workDir.'/'.$copyName)) jout(['status'=>'error','message'=>'建立工作副本失敗']);
+
+    $url = 'http://'.($_SERVER['HTTP_HOST'] ?? 'localhost').'/EGsystem/uploads/as_workcopy/'.$copyName;
+    jout(['status'=>'success','uri'=>$schemes[$ext].':ofe|u|'.$url,'url'=>$url,
+          'note'=>'已建立工作副本並以 Office 開啟（同 BOM 總表模式）；打完資料請直接列印或另存，7 天後自動清除，不影響正式版本檔']);
 
 // ══════════════ 批次上傳（同一母文件/共同預設值，多檔一次建立，附件逐檔對應） ══════════════
 case 'create_documents_batch':

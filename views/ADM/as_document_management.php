@@ -626,15 +626,14 @@ $(function(){
   const canDL = !!window.asPerm.download;
   const canNA = !!window.asPerm.no_attach; // 免附件補登
 
-  // 線上開檔＝下載工作副本（Office 協定對非 HTTP 路徑會硬性封鎖，實測後改此模式：零設定、每台電腦可用）
-  let onlineHintShown = false;
+  // 線上開檔：仿 BOM 總表模式——建立工作副本後以 ms-office 協定 + HTTP URL 直接開啟 Excel/Word
   $(document).on('click','.op-online', function(e){
     e.preventDefault();
-    window.location.href = API+'?action=open_online&version_id='+$(this).data('ver');
-    if(!onlineHintShown){
-      onlineHintShown = true;
-      setTimeout(()=>{ alert('已下載「工作副本」檔案（左下角/下載列）。\n開啟後若出現黃色「受保護的檢視」，按【啟用編輯】即可打字。\n打完資料直接列印或另存即可——動的是下載的副本，不影響系統內的正式版本檔。'); }, 800);
-    }
+    const $b=$(this);
+    $.post(API+'?action=open_online',{version_id:$b.data('ver')}, r=>{
+      if(r.status!=='success'){ alert(r.message||'開啟失敗'); return; }
+      window.location.href = r.uri; // ms-excel:ofe|u|http://...（同 BOM 總表）
+    },'json');
   });
   let META = {departments:[],positions:[],tags:[],users:[]};
   let DOCS = [], FILTERED = [], activeTagId = 0, curPage = 1, activeParentId = 0, activeParentNo = '';
