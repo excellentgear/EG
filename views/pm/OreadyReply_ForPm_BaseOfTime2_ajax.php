@@ -388,6 +388,109 @@ else if (isset($_POST['action']) && $_POST['action'] === 'transfer_process') {
     exit;
 }
 
+// AJAX QUICK SYNC TRANSFER HANDLER
+// QC檢驗製程與目前製程不同步時的快速移轉：對「QC檢驗到的那一關」寫入移轉日+廠商，
+// 並以今天作為回廠日；若QC已完工(qc_completed=1)或該關本來就是P或免驗(is_exclude_qc=1)直接跳待移轉(P)，否則回到QC待驗(Q)
+else if (isset($_POST['action']) && $_POST['action'] === 'quick_sync_transfer') {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+
+    header('Content-Type: application/json');
+    $response = ['success' => false, 'message' => ''];
+
+    if (!isset($db)) {
+        if (class_exists('DBConnection')) {
+            try {
+                $connInstance = new DBConnection();
+                $db = $connInstance->getPDO();
+            } catch (Exception $e) {
+                $response['message'] = '資料庫連接實例化失敗: ' . $e->getMessage();
+                echo json_encode($response);
+                exit;
+            }
+        }
+        if (!isset($db)) {
+            $response['message'] = '資料庫連接失敗，無法處理請求。';
+            echo json_encode($response);
+            exit;
+        }
+    }
+
+    if (empty($_POST['bom_ing_fid']) || empty($_POST['transfer_date']) || empty($_POST['maker_no']) || empty($_POST['maker_name'])) {
+        $response['message'] = '錯誤：移轉日期與廠商資訊不可為空。';
+        echo json_encode($response);
+        exit;
+    }
+
+    $qs_fid = (int)$_POST['bom_ing_fid'];
+    $qs_transfer_datetime = $_POST['transfer_date'] . ' 00:00:00';
+    $qs_maker_no = trim($_POST['maker_no']);
+    $qs_maker_name = trim($_POST['maker_name']);
+    $qs_user_id = $_SESSION['id'] ?? 'system_qsync';
+    session_write_close();
+
+    try {
+        $qs_chk = $db->prepare("SELECT bi.bom_ing_fid, bi.processing_state, bi.qc_completed, bi.sqty, pn.is_exclude_qc
+                                FROM bom_ing bi
+                                LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
+                                WHERE bi.bom_ing_fid = ? LIMIT 1");
+        $qs_chk->execute([$qs_fid]);
+        $qs_row = $qs_chk->fetch(PDO::FETCH_ASSOC);
+
+        if (!$qs_row) {
+            $response['message'] = '找不到對應的製程記錄。';
+            echo json_encode($response);
+            exit;
+        }
+        if (!in_array($qs_row['processing_state'], ['N', 'ing', 'Q', 'P'], true)) {
+            $response['message'] = '此製程狀態(' . $qs_row['processing_state'] . ')已結單或已跳過，無法快速移轉，請重新整理畫面。';
+            echo json_encode($response);
+            exit;
+        }
+
+        // 最終狀態：QC已完工 / 本來就是P(QC已驗畢待移轉) / 免驗製程 → P；否則正常回廠 → Q
+        $qs_final_state = (!empty($qs_row['qc_completed']) || $qs_row['processing_state'] === 'P' || !empty($qs_row['is_exclude_qc'])) ? 'P' : 'Q';
+
+        $db->beginTransaction();
+
+        $qs_upd = $db->prepare("UPDATE bom_ing
+                SET outsource_date = :od, maker_id_no = :mno, maker_id = :mname,
+                    return_date = NOW(), processing_state = :st, Modified_At = NOW(), Modified_By = :uid
+                WHERE bom_ing_fid = :fid");
+        $qs_upd->execute([
+            ':od' => $qs_transfer_datetime,
+            ':mno' => $qs_maker_no,
+            ':mname' => $qs_maker_name,
+            ':st' => $qs_final_state,
+            ':uid' => $qs_user_id,
+            ':fid' => $qs_fid,
+        ]);
+
+        // 稽核留痕：比照回廠(_update_bom_ing_status.php)寫入 bom_ing_event
+        $qs_note = 'QC/生管製程不同步快速移轉：移轉日=' . $_POST['transfer_date'] . '，廠商=' . $qs_maker_name . '，回廠日=今天，狀態 → ' . $qs_final_state;
+        $qs_ins = $db->prepare("INSERT INTO bom_ing_event
+            (bom_ing_fid, event_type, affected_qty, target_maker_id, event_note, Created_By)
+            VALUES (:fid, 'quick_sync_transfer', :qty, :maker, :note, :uid)");
+        $qs_ins->execute([
+            ':fid' => $qs_fid,
+            ':qty' => $qs_row['sqty'],
+            ':maker' => $qs_maker_no,
+            ':note' => $qs_note,
+            ':uid' => $qs_user_id,
+        ]);
+
+        $db->commit();
+        $response['success'] = true;
+        $response['message'] = '已快速移轉並回廠，狀態 → ' . $qs_final_state;
+        $response['new_state'] = $qs_final_state;
+    } catch (Exception $e) {
+        if ($db instanceof PDO && $db->inTransaction()) $db->rollBack();
+        $response['message'] = '資料庫操作錯誤：' . $e->getMessage();
+    }
+    echo json_encode($response);
+    exit;
+}
+
 // AJAX UPDATE BOM DELIVERY DATE HANDLER (MANUAL SETTING)
 else if (isset($_POST['action']) && $_POST['action'] === 'update_bom_delivery_date') {
     include_once '../../src/common/DBConnection.php';
