@@ -1421,6 +1421,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <ul style="padding-left:18px;margin:4px 0 10px;">
                 <li>文字(T)/標籤放上後<b>永遠可再拖移、雙擊改字、拉角縮放</b>（不像小畫家會固定）</li>
                 <li>標籤庫：內建＋自訂（全體共用、可分類篩選）。點一下放到圖上；<b>雙擊改字</b>，外框自動貼合字長；「底色」按鈕或插入前勾「透明背景」可切換白底/透明</li>
+                <li>製程表格標籤（如 (  )齒研）：<b>雙擊空白格可填數值</b>（如公差 29.91 -0.056），Enter 可換行打上下公差，格子自動加寬加高；雙擊標題可把括號填入製程序號</li>
                 <li>自己組好的標籤（矩形＋文字框選）按「把選取存為標籤」入庫；填分類方便日後查找</li>
                 <li><b>Alt＋拖曳</b>＝原地留一份拖走一份；Ctrl+D 原地複製</li>
                 <li>群組：框選按 <b>Ctrl+G</b>；<b>雙擊群組＝進入</b>拆成多選可調個別位置，調完 Ctrl+G 組回（標籤群組雙擊是改字，用 <b>Alt＋雙擊</b>進入）</li>
@@ -2740,6 +2741,7 @@ function mkLabelText(str, fs, extra) {
     }, extra || {}));
 }
 function makeLabelFromSpec(spec) {
+    spec = JSON.parse(JSON.stringify(spec || {}));   // 表格空白格會就地補 vals/cellVals/body 預設值，先複製一份避免動到標籤庫共用的 spec
     __labelInk = spec.color || '#000000';
     const fs = spec.fontSize || 44;
     const bw = spec.strokeW || 4;
@@ -2780,13 +2782,18 @@ function makeLabelFromSpec(spec) {
         const rows = spec.rows || [];
         const cols = spec.cols || null;   // 雙欄式：title + 欄標題列 + 空白格（如 熱處理前置：防碳/鎖螺絲）
         const pad = fs * 0.4;
+        // 空白格內建可填數值的文字（預設空字串）：雙擊空白格即可像公差標籤那樣填入數字，格子隨內容自動加寬加高
+        if (cols && cols.length) spec.cellVals = cols.map((c, i) => (spec.cellVals || [])[i] || '');
+        else if (rows.length) spec.vals = rows.map((r, i) => (spec.vals || [])[i] || '');
+        else if (spec.body == null) spec.body = '';
         const titleT = mkLabelText(spec.title || '', fs, { specPath: 'title' });
         const th = fs * 1.7, rh = spec.rowH || fs * 2.8;
         if (cols && cols.length) {
-            const colW = Math.max(fs * 4, ...cols.map(c => mkLabelText(c, fs).width + pad * 2));
+            const valTs = cols.map((c, i) => mkLabelText(String(spec.cellVals[i]), fs, { originX: 'center', originY: 'center', textAlign: 'center', specPath: 'cellVals.' + i }));
+            const colW = Math.max(fs * 4, ...cols.map(c => mkLabelText(c, fs).width + pad * 2), ...valTs.map(t => t.width + pad * 2));
             const W = Math.max(titleT.width + pad * 2, colW * cols.length);
             const cw = W / cols.length;
-            const bodyH = spec.bodyH || fs * 2.6;
+            const bodyH = Math.max(spec.bodyH || fs * 2.6, ...valTs.map(t => t.height + pad));
             items.push(new fabric.Rect({ left: 0, top: 0, width: W, height: th, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
             titleT.set({ left: W / 2, top: th / 2, originX: 'center', originY: 'center' });
             items.push(titleT);
@@ -2794,27 +2801,37 @@ function makeLabelFromSpec(spec) {
                 items.push(new fabric.Rect({ left: i * cw, top: th, width: cw, height: rh * 0.7, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
                 items.push(mkLabelText(c, fs, { left: i * cw + cw / 2, top: th + rh * 0.35, originX: 'center', originY: 'center', specPath: 'cols.' + i }));
                 items.push(new fabric.Rect({ left: i * cw, top: th + rh * 0.7, width: cw, height: bodyH, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
+                valTs[i].set({ left: i * cw + cw / 2, top: th + rh * 0.7 + bodyH / 2 });
+                items.push(valTs[i]);
             });
         } else if (!rows.length) {
-            // 標題＋空白大格（如 (  )粗滾、(  )精滾、(  )插齒）
-            const W = Math.max(titleT.width + pad * 2, fs * 6);
-            const bodyH = spec.bodyH || fs * 3.4;
+            // 標題＋空白大格（如 (  )粗滾、(  )精滾、(  )插齒）；大格雙擊可填數值
+            const bodyT = mkLabelText(String(spec.body), fs, { originX: 'center', originY: 'center', textAlign: 'center', specPath: 'body' });
+            const W = Math.max(titleT.width + pad * 2, fs * 6, bodyT.width + pad * 2);
+            const bodyH = Math.max(spec.bodyH || fs * 3.4, bodyT.height + pad);
             items.push(new fabric.Rect({ left: 0, top: 0, width: W, height: th, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
             titleT.set({ left: W / 2, top: th / 2, originX: 'center', originY: 'center' });
             items.push(titleT);
             items.push(new fabric.Rect({ left: 0, top: th, width: W, height: bodyH, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
+            bodyT.set({ left: W / 2, top: th + bodyH / 2 });
+            items.push(bodyT);
         } else {
+            const valTs = rows.map((r, i) => mkLabelText(String(spec.vals[i]), fs, { originX: 'center', originY: 'center', textAlign: 'center', specPath: 'vals.' + i }));
             let col0 = Math.max(fs, ...rows.map(r => mkLabelText(r, fs).width)) + pad * 2;
-            const W = Math.max(titleT.width + pad * 2, col0 + (spec.cellW || fs * 5.5));
+            const col1Min = Math.max(spec.cellW || fs * 5.5, ...valTs.map(t => t.width + pad * 2));
+            const rowH = Math.max(rh, ...valTs.map(t => t.height + pad));   // 多行數值（如上下公差）整列自動加高
+            const W = Math.max(titleT.width + pad * 2, col0 + col1Min);
             const col1 = W - col0;
             items.push(new fabric.Rect({ left: 0, top: 0, width: W, height: th, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
             titleT.set({ left: W / 2, top: th / 2, originX: 'center', originY: 'center' });
             items.push(titleT);
             rows.forEach((r, i) => {
-                const y = th + i * rh;
-                items.push(new fabric.Rect({ left: 0, top: y, width: col0, height: rh, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
-                items.push(new fabric.Rect({ left: col0, top: y, width: col1, height: rh, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
-                items.push(mkLabelText(r, fs, { left: col0 / 2, top: y + rh / 2, originX: 'center', originY: 'center', specPath: 'rows.' + i }));
+                const y = th + i * rowH;
+                items.push(new fabric.Rect({ left: 0, top: y, width: col0, height: rowH, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
+                items.push(new fabric.Rect({ left: col0, top: y, width: col1, height: rowH, fill: bgFill, stroke: '#000000', strokeWidth: bw }));
+                items.push(mkLabelText(r, fs, { left: col0 / 2, top: y + rowH / 2, originX: 'center', originY: 'center', specPath: 'rows.' + i }));
+                valTs[i].set({ left: col0 + col1 / 2, top: y + rowH / 2 });
+                items.push(valTs[i]);
             });
         }
     }
