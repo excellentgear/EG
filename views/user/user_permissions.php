@@ -561,10 +561,10 @@ $_quotDepts = array_keys($_deptSet);
             <div class="right_col" role="main">
                 <div class="">
 
-                    <!-- ══ 快速切換：跳至各設定區塊（凍結頂端）══ -->
-                    <div class="row" id="quick-nav-block" style="position:sticky;top:0;z-index:999;">
+                    <!-- ══ 快速切換：跳至各設定區塊（Excel 凍結窗格式：捲過後固定貼齊視窗頂端）══ -->
+                    <div class="row" id="quick-nav-block">
                         <div class="col-md-12">
-                            <div class="x_panel" style="padding:8px 12px;margin-bottom:10px;box-shadow:0 2px 6px rgba(0,0,0,.15);">
+                            <div class="x_panel" style="padding:8px 12px;margin-bottom:10px;">
                                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                                     <strong style="margin-right:4px;"><i class="fa fa-compass"></i> 快速切換：</strong>
                                     <?php
@@ -1538,7 +1538,7 @@ $_quotDepts = array_keys($_deptSet);
                 if (total > 0) $('#' + p + '-filter-count').text('共 ' + total + ' 人');
             });
 
-            // 快速切換：平滑捲動至各設定區塊（避開頂部導覽列＋凍結的快速切換列本身）
+            // 快速切換：平滑捲動至各設定區塊（避開凍結的快速切換列本身）
             $(document).on('click', '.quick-nav-link', function(e) {
                 e.preventDefault();
                 var target = $('#' + $(this).data('target'));
@@ -1547,6 +1547,36 @@ $_quotDepts = array_keys($_deptSet);
                     $('html, body').stop().animate({ scrollTop: target.offset().top - stickyH - 10 }, 500);
                 }
             });
+
+            // Excel 凍結窗格式固定：捲過原位置後 fixed 貼齊視窗頂端，原位放佔位元素避免內容跳動
+            var $qn = $('#quick-nav-block');
+            if ($qn.length) {
+                var $qnPh = $('<div id="quick-nav-placeholder" style="display:none;"></div>').insertAfter($qn);
+                var qnFixed = false;
+                function qnGetTop() { return (qnFixed ? $qnPh : $qn).offset().top; }
+                function qnUpdate() {
+                    var shouldFix = $(window).scrollTop() > qnGetTop();
+                    if (shouldFix && !qnFixed) {
+                        qnFixed = true;
+                        $qnPh.height($qn.outerHeight(true)).show();
+                        $qn.css({
+                            position: 'fixed', top: 0, zIndex: 1050,
+                            left: $qnPh.offset().left - $(window).scrollLeft(),
+                            width: $qnPh.outerWidth(), margin: 0
+                        }).find('.x_panel').css('box-shadow', '0 2px 8px rgba(0,0,0,.25)');
+                    } else if (!shouldFix && qnFixed) {
+                        qnFixed = false;
+                        $qn.css({ position: '', top: '', zIndex: '', left: '', width: '', margin: '' })
+                           .find('.x_panel').css('box-shadow', '');
+                        $qnPh.hide();
+                    } else if (qnFixed) {
+                        // 視窗寬度改變時跟著佔位元素調整
+                        $qn.css({ left: $qnPh.offset().left - $(window).scrollLeft(), width: $qnPh.outerWidth() });
+                    }
+                }
+                $(window).on('scroll resize', qnUpdate);
+                qnUpdate();
+            }
         });
 
         // ══ AS9100 文件管理：職稱角色指派 ══
