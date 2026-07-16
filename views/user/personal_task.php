@@ -113,22 +113,29 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .step-undo { cursor:pointer; color:#c0392b; font-size:10px; margin-top:1px; }
         .step-undo:hover { text-decoration:underline; }
 
-        /* 進度下方的小項（展開勾選） */
+        /* 進度下方的小項：就地展開在該步驟正下方（跟著橫向流程走），緊湊寬度 */
         .pt-items-badge { font-size:10px; color:#5B8DEF; cursor:pointer; margin-top:2px; white-space:nowrap; user-select:none; }
         .pt-items-badge:hover { text-decoration:underline; }
         .pt-items-badge.all-done { color:#1ABB9C; }
-        .pt-items-panel { margin-top:6px; background:#F7F9FC; border:1px solid #E3E9F1; border-radius:6px; padding:6px 10px; max-width:420px; }
+        .pt-step.items-open { max-width:none; }
+        .pt-items-panel { margin-top:4px; background:#F7F9FC; border:1px solid #E3E9F1; border-radius:6px;
+            padding:4px 8px; text-align:left; width:max-content; min-width:140px; max-width:230px; }
         .pt-items-panel.current-step { border-color:#F5D9A8; background:#FFFDF5; }
-        .pt-item-row { display:flex; align-items:center; gap:6px; font-size:12px; padding:2px 0; color:#556; margin:0; font-weight:400; cursor:pointer; }
+        .pt-item-row { display:flex; align-items:center; gap:5px; font-size:11px; padding:1px 0; color:#556; margin:0; font-weight:400; cursor:pointer; line-height:1.5; }
         .pt-item-row input[type=checkbox] { margin:0; }
         .pt-item-row.done .pt-item-name { color:#9AA5B1; text-decoration:line-through; }
-        .pt-item-date { font-size:11px; color:#1ABB9C; margin-left:auto; white-space:nowrap; }
+        .pt-item-name { word-break:break-all; }
+        .pt-item-date { font-size:10px; color:#1ABB9C; margin-left:auto; padding-left:8px; white-space:nowrap; }
 
         .deadline-urgent { color:#C0392B; font-weight:700; }
-        .bind-badge { display:inline-block; padding:1px 6px; border-radius:3px; font-size:11px; color:#fff; margin-right:4px; }
-        .bind-bom { background:#8e44ad; } .bind-part { background:#2980b9; }
-        .bind-customer { background:#16a085; } .bind-maker { background:#d35400; }
-        .bind-order { background:#c0392b; }
+        /* 綁定標籤：淡底暖色小框（低調不搶眼） */
+        .bind-badge { display:inline-block; padding:0 4px; border-radius:3px; font-size:10px; line-height:1.6;
+            margin-right:4px; border:1px solid; background:#FDFAF5; }
+        .bind-bom      { color:#9A7BB0; border-color:#E2D5EC; background:#FAF7FC; }
+        .bind-part     { color:#7FA3BC; border-color:#D8E5EE; background:#F7FAFC; }
+        .bind-customer { color:#7FB3A2; border-color:#D5EAE2; background:#F6FBF9; }
+        .bind-maker    { color:#C99A6B; border-color:#EEDFCE; background:#FCF8F3; }
+        .bind-order    { color:#C08A52; border-color:#EFDFC9; background:#FDF8F0; }
 
         .no-access-box{ max-width:520px; margin:80px auto; text-align:center; padding:40px; background:#fff; border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,.08); }
 
@@ -347,7 +354,9 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
             <select id="tplApplySelect" class="form-control input-sm" style="width:170px;"><option value="">套用範本...</option></select>
             <button type="button" class="btn btn-default btn-xs" id="btnSaveAsTpl"><i class="fa fa-save"></i> 存成範本</button>
             <span style="margin-left:auto; display:flex; align-items:center; gap:5px; font-size:12px; color:#7A869A;">
-              預設間隔 <input type="number" id="defaultInterval" class="form-control input-sm" min="0" style="width:60px;" title="填入後自動帶入所有進度的間隔並重算日期，之後可逐列手動修改"> 工作天
+              預設間隔 <input type="number" id="defaultInterval" class="form-control input-sm" min="0" style="width:58px;"> 工作天
+              <button type="button" class="btn btn-primary btn-xs" id="btnApplyInterval" title="把此天數帶入所有(未到達)進度的間隔並重算日期，之後可逐列手動修改">帶入全部</button>
+              <button type="button" class="btn btn-info btn-xs" id="btnSuggestInterval" title="依「接收日期→期限的工作天數 ÷ 進度數」自動算出建議間隔並帶入">依期限建議</button>
             </span>
           </div>
           <div style="font-size:11px; color:#A8B0BA; margin-bottom:4px;">
@@ -606,7 +615,6 @@ function stepFlowCell(r) {
         if (s.reached_at != null) lastReachedId = s.id;
     });
     var allRealReached = steps.every(function (s) { return s.reached_at != null; });
-    var $panelsBox = $('<div>');   // 小項面板容器（可同時展開多個步驟的小項）
     var $flow = $('<div class="step-flow">');
 
     steps.forEach(function (s, i) {
@@ -657,15 +665,21 @@ function stepFlowCell(r) {
             $node.attr('title', '尚未輪到此進度');
         }
 
-        // 小項：徽章顯示完成數，面板展開勾選；目前進度的小項預設展開，「展開所有小項」時全開
+        // 小項：徽章顯示完成數，面板「就地」展開在該步驟正下方；目前進度預設展開，「展開所有小項」時全開
         var items = s.items || [];
         if (items.length) {
             var $badge = $('<div class="pt-items-badge">');
             var $panel = buildItemsPanel(s, $badge, isCurrent);
-            if (!(expandAllItems || isCurrent)) $panel.hide();
-            $badge.on('click', function (e) { e.stopPropagation(); $panel.toggle(); });
-            $node.append($badge);
-            $panelsBox.append($panel);
+            $panel.on('click', function (e) { e.stopPropagation(); }); // 面板內操作不觸發步驟回報
+            var open = expandAllItems || isCurrent;
+            if (!open) $panel.hide();
+            $node.toggleClass('items-open', open);
+            $badge.on('click', function (e) {
+                e.stopPropagation();
+                $panel.toggle();
+                $node.toggleClass('items-open', $panel.is(':visible'));
+            });
+            $node.append($badge).append($panel);
         }
         $flow.append($node);
     });
@@ -699,7 +713,7 @@ function stepFlowCell(r) {
     }
     $flow.append($fin);
 
-    return $td.append($flow).append($panelsBox);
+    return $td.append($flow);
 }
 
 // 小項面板：勾選=完成(記MM.DD)、可取消；不受步驟順序限制
@@ -987,15 +1001,46 @@ function openTaskModal(id) {
 $('#btnNewTask').on('click', function () { openTaskModal(0); });
 $('#btnAddStep').on('click', function () { $('#stepEditor').append(stepRowHtml()); initStepSortable(); });
 
-// 預設間隔(工作天)：填入後自動帶入所有未到達進度的間隔並重算日期，之後仍可逐列手動修改
-$('#defaultInterval').on('input change', function () {
-    var v = $(this).val();
-    if (v === '') return;
+// 預設間隔(工作天)：帶入所有未到達進度的間隔並重算日期，之後仍可逐列手動修改
+function applyDefaultInterval(v) {
+    var n = 0;
     $('#stepEditor .step-edit-row').each(function () {
         if ($(this).data('reached') == 1) return;
         $(this).find('.step-interval').val(v);
+        n++;
     });
     recomputeStepDates();
+    return n;
+}
+// 輸入當下即時帶入（延遲綁定在 document，避免任何重繪造成事件失效）
+$(document).on('input change', '#defaultInterval', function () {
+    var v = $(this).val();
+    if (v !== '') applyDefaultInterval(v);
+});
+$(document).on('click', '#btnApplyInterval', function () {
+    var v = $('#defaultInterval').val();
+    if (v === '') { alert('請先輸入預設間隔天數'); $('#defaultInterval').focus(); return; }
+    var n = applyDefaultInterval(v);
+    if (!n) alert('目前沒有可帶入的進度列（已到達的進度不會變動）');
+});
+// 依期限自動建議：接收日期→期限的工作天數 ÷ 進度數，平均分配
+// 例：7/10 接收、7/20 期限(皆工作日)共 10 工作天，2 個進度 → 各 5 天：第1個 7/15、第2個 7/20(=期限)
+$(document).on('click', '#btnSuggestInterval', function () {
+    var received = $('#tReceived').val();
+    var deadline = $('#tDeadline').val();
+    if (!deadline) { alert('請先設定「期限」，才能依期限計算建議間隔'); $('#tDeadline').focus(); return; }
+    var count = 0;
+    $('#stepEditor .step-edit-row').each(function () {
+        if ($(this).data('reached') == 1) return;
+        if ($(this).find('.step-name').val().trim() !== '') count++;
+    });
+    if (!count) { alert('請先輸入進度名稱'); return; }
+    var total = workdaysBetween(received, deadline);
+    if (total <= 0) { alert('期限需晚於接收日期'); return; }
+    var suggest = Math.max(1, Math.floor(total / count));
+    $('#defaultInterval').val(suggest);
+    applyDefaultInterval(suggest);
+    toast('已依期限帶入建議間隔：每個進度 ' + suggest + ' 個工作天（共 ' + total + ' 工作天 ÷ ' + count + ' 個進度）');
 });
 
 // 二次確認：必須輸入大寫 OK（避免誤按）
