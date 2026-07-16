@@ -113,18 +113,21 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .step-undo { cursor:pointer; color:#c0392b; font-size:10px; margin-top:1px; }
         .step-undo:hover { text-decoration:underline; }
 
-        /* 進度下方的小項：就地展開在該步驟正下方（跟著橫向流程走），緊湊寬度 */
+        /* 進度下方的小項：面板排在流程下方的對齊帶，JS 讓左緣對齊所屬進度節點 */
         .pt-items-badge { font-size:10px; color:#5B8DEF; cursor:pointer; margin-top:2px; white-space:nowrap; user-select:none; }
         .pt-items-badge:hover { text-decoration:underline; }
         .pt-items-badge.all-done { color:#1ABB9C; }
-        .pt-step.items-open { max-width:none; }
+        .pt-panels { display:flex; align-items:flex-start; }
         .pt-items-panel { margin-top:4px; background:#F7F9FC; border:1px solid #E3E9F1; border-radius:6px;
-            padding:4px 8px; text-align:left; width:max-content; min-width:140px; max-width:230px; }
+            padding:4px 8px; text-align:left; width:max-content; min-width:130px; max-width:210px; flex:0 0 auto; }
         .pt-items-panel.current-step { border-color:#F5D9A8; background:#FFFDF5; }
-        .pt-item-row { display:flex; align-items:center; gap:5px; font-size:11px; padding:1px 0; color:#556; margin:0; font-weight:400; cursor:pointer; line-height:1.5; }
-        .pt-item-row input[type=checkbox] { margin:0; }
+        .pt-panel-title { font-size:10px; color:#8A94A0; margin-bottom:1px; font-weight:700; white-space:nowrap; }
+        .pt-item-row { display:flex; align-items:center; gap:5px; font-size:11px; padding:1px 0; color:#556; margin:0; font-weight:400; line-height:1.5; }
+        .pt-item-row input[type=checkbox] { margin:0; cursor:pointer; }
         .pt-item-row.done .pt-item-name { color:#9AA5B1; text-decoration:line-through; }
-        .pt-item-name { word-break:break-all; }
+        /* 小項文字：單行截斷，點文字展開/收合全文 */
+        .pt-item-name { max-width:130px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+        .pt-item-name.expanded { white-space:normal; word-break:break-all; }
         .pt-item-date { font-size:10px; color:#1ABB9C; margin-left:auto; padding-left:8px; white-space:nowrap; }
 
         .deadline-urgent { color:#C0392B; font-weight:700; }
@@ -615,6 +618,7 @@ function stepFlowCell(r) {
         if (s.reached_at != null) lastReachedId = s.id;
     });
     var allRealReached = steps.every(function (s) { return s.reached_at != null; });
+    var $panelsBox = $('<div class="pt-panels">');   // 小項面板對齊帶（JS 對齊到所屬節點正下方）
     var $flow = $('<div class="step-flow">');
 
     steps.forEach(function (s, i) {
@@ -665,21 +669,20 @@ function stepFlowCell(r) {
             $node.attr('title', '尚未輪到此進度');
         }
 
-        // 小項：徽章顯示完成數，面板「就地」展開在該步驟正下方；目前進度預設展開，「展開所有小項」時全開
+        // 小項：徽章顯示完成數，面板展開在流程下方、左緣對齊所屬節點；目前進度預設展開，「展開所有小項」時全開
         var items = s.items || [];
         if (items.length) {
             var $badge = $('<div class="pt-items-badge">');
             var $panel = buildItemsPanel(s, $badge, isCurrent);
-            $panel.on('click', function (e) { e.stopPropagation(); }); // 面板內操作不觸發步驟回報
-            var open = expandAllItems || isCurrent;
-            if (!open) $panel.hide();
-            $node.toggleClass('items-open', open);
+            $panel.data('nodeEl', $node);
+            if (!(expandAllItems || isCurrent)) $panel.hide();
             $badge.on('click', function (e) {
                 e.stopPropagation();
                 $panel.toggle();
-                $node.toggleClass('items-open', $panel.is(':visible'));
+                alignPanels($panelsBox);
             });
-            $node.append($badge).append($panel);
+            $node.append($badge);
+            $panelsBox.append($panel);
         }
         $flow.append($node);
     });
@@ -713,10 +716,32 @@ function stepFlowCell(r) {
     }
     $flow.append($fin);
 
-    return $td.append($flow);
+    return $td.append($flow).append($panelsBox);
 }
 
-// 小項面板：勾選=完成(記MM.DD)、可取消；不受步驟順序限制
+// 小項面板水平對齊：每個面板左緣對齊上方所屬進度節點；放不下時往右順推、不互相重疊
+function alignPanels($box) {
+    if (!$box || !$box.length) return;
+    var boxLeft = $box.offset().left;
+    var consumed = 0;
+    $box.children('.pt-items-panel').each(function () {
+        var $p = $(this);
+        if (!$p.is(':visible')) return;
+        var $node = $p.data('nodeEl');
+        var desired = $node ? Math.max(0, $node.offset().left - boxLeft) : 0;
+        var ml = Math.max(consumed === 0 ? 0 : 6, desired - consumed);
+        $p.css('margin-left', ml + 'px');
+        consumed += ml + $p.outerWidth();
+    });
+}
+function alignAllPanels() {
+    $('#ptaskTbody .pt-panels').each(function () { alignPanels($(this)); });
+}
+var _alignTimer = null;
+$(window).on('resize', function () { clearTimeout(_alignTimer); _alignTimer = setTimeout(alignAllPanels, 150); });
+
+// 小項面板：勾選=完成(記MM.DD)、可取消；不受步驟順序限制。
+// 名稱過長單行截斷(…)，點名稱展開/收合完整文字
 function buildItemsPanel(step, $badge, isCurrent) {
     var items = step.items || [];
     function refreshBadge() {
@@ -726,12 +751,13 @@ function buildItemsPanel(step, $badge, isCurrent) {
     }
     refreshBadge();
     var $panel = $('<div class="pt-items-panel">').toggleClass('current-step', !!isCurrent);
-    $panel.append($('<div style="font-size:11px;color:#8A94A0;margin-bottom:2px;font-weight:700;">')
-        .text('「' + step.step_name + '」小項'));
+    $panel.append($('<div class="pt-panel-title">').text('「' + step.step_name + '」小項'));
     items.forEach(function (it) {
-        var $row = $('<label class="pt-item-row">').toggleClass('done', it.done_at != null);
+        var $row = $('<div class="pt-item-row">').toggleClass('done', it.done_at != null);
         var $cb = $('<input type="checkbox">').prop('checked', it.done_at != null);
-        var $name = $('<span class="pt-item-name">').text(it.item_name);
+        var $name = $('<span class="pt-item-name">').text(it.item_name)
+            .attr('title', '點一下展開/收合完整文字')
+            .on('click', function () { $(this).toggleClass('expanded'); });
         var $date = $('<span class="pt-item-date">').text(it.done_at ? fmtMMDD(it.done_at) : '');
         $cb.on('change', function () {
             var done = this.checked ? 1 : 0;
@@ -780,6 +806,7 @@ function renderRows(rows) {
         tr.append(stepFlowCell(r));
         $tb.append(tr);
     });
+    alignAllPanels();  // 所有列都進 DOM 後，把小項面板對齊到各自的進度節點下方
 }
 
 // 雙擊「接收日期／標題／期限」任一儲存格 → 開啟編輯跳窗
