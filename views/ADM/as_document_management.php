@@ -275,7 +275,7 @@ if ($deptPerm === 'R') {
                   <option>制訂</option><option>修正</option><option>廢止</option><option>增發</option><option>補發</option>
                 </select>
               </div>
-              <div class="form-group col-md-3"><label>修訂日期</label><input type="date" class="form-control" name="revised_date" id="doc_revised_date"></div>
+              <div class="form-group col-md-3"><label>修訂日期 *</label><input type="date" class="form-control" name="revised_date" id="doc_revised_date" max="9999-12-31" required></div>
               <div class="form-group col-md-3"><label>制修訂頁次</label><input type="text" class="form-control" name="revised_pages" id="doc_revised_pages" placeholder="如 全冊 / 1-2"></div>
             </div>
             <div class="form-group"><label>制修訂摘要</label><textarea class="form-control" name="revised_summary" id="doc_revised_summary" rows="2"></textarea></div>
@@ -345,8 +345,8 @@ if ($deptPerm === 'R') {
             <select class="form-control" id="batch_level"><option value="">--</option><option value="一階">一階</option><option value="二階">二階</option><option value="三階">三階</option><option value="四階" selected>四階</option></select>
           </div>
           <div class="form-group col-md-2"><label>所屬部門</label><select class="form-control" id="batch_dept"><option value="">跨部門</option></select></div>
-          <div class="form-group col-md-1"><label>版本號</label><input type="text" class="form-control" id="batch_version" value="A"></div>
-          <div class="form-group col-md-2"><label>修訂日期</label><input type="date" class="form-control" id="batch_date"></div>
+          <div class="form-group col-md-1"><label>版本號 *</label><input type="text" class="form-control" id="batch_version" value="A"></div>
+          <div class="form-group col-md-2"><label>修訂日期 *</label><input type="date" class="form-control" id="batch_date" max="9999-12-31"></div>
         </div>
         <div class="form-group" id="batchCodeWrap" style="display:none;max-width:420px;">
           <label>此部門有多組代碼，請選擇</label>
@@ -401,7 +401,7 @@ if ($deptPerm === 'R') {
                 <option>修正</option><option>制訂</option><option>廢止</option><option>增發</option><option>補發</option>
               </select>
             </div>
-            <div class="form-group col-md-3"><label>修訂日期</label><input type="date" class="form-control" name="revised_date" id="ver_revised_date"></div>
+            <div class="form-group col-md-3"><label>修訂日期 *</label><input type="date" class="form-control" name="revised_date" id="ver_revised_date" max="9999-12-31" required></div>
             <div class="form-group col-md-3"><label>制修訂頁次</label><input type="text" class="form-control" name="revised_pages" id="ver_revised_pages"></div>
           </div>
           <div class="form-group"><label>制修訂摘要</label><textarea class="form-control" name="revised_summary" id="ver_revised_summary" rows="2"></textarea></div>
@@ -788,6 +788,22 @@ $(function(){
   }
   $('#btnAutoNo').on('click', ()=>suggestDocNo(true));
   $('#doc_code_sel').on('change', function(){ $('#doc_no').val($(this).find('option:selected').data('no')||''); });
+
+  // 選母文件 → 自動帶入母文件的所屬部門
+  $('#doc_parent_id').on('change', function(){
+    const p = (META.parents||[]).find(x=>x.id==$(this).val());
+    if(p && p.department_id) $('#doc_department_id').val(p.department_id);
+  });
+  // 手動輸入文件編號 → 依「階數-部門代碼」自動判定階級與所屬部門（如 2-TD-01-01 → 二階/技術部）
+  $('#doc_no').on('blur', function(){
+    const m = $(this).val().trim().match(/^([1-4])-([A-Za-z]+)-/);
+    if(!m) return;
+    const levelMap = {'1':'一階','2':'二階','3':'三階','4':'四階'};
+    // 階級只在空白時帶入（表單編號首碼=母文件階級，表單本身應為四階，不硬蓋）
+    if($('#doc_level').val()==='') $('#doc_level').val(levelMap[m[1]]||'');
+    const dc = (META.dept_codes||[]).find(c=>c.code.toUpperCase()===m[2].toUpperCase());
+    if(dc) $('#doc_department_id').val(dc.department_id);
+  });
   // 新增模式下，選擇變動且編號仍空白時自動帶入
   $('#doc_level,#doc_department_id,#doc_parent_id').on('change', function(){
     if($('#doc_id').val()==='' && $('#doc_no').val().trim()===''){
@@ -1076,6 +1092,11 @@ $(function(){
   }
   $('#batch_files').on('change', batchSuggest);
   $('#batch_code_sel').on('change', function(){ batchGenRows($(this).find('option:selected').data('no')||''); });
+  // 批次：選母文件 → 自動帶入母文件的所屬部門
+  $('#batch_parent').on('change', function(){
+    const p = (META.parents||[]).find(x=>x.id==$(this).val());
+    if(p && p.department_id) $('#batch_dept').val(p.department_id);
+  });
   // 共同設定變動時若已選檔，重新產生編號建議
   $('#batch_parent,#batch_level,#batch_dept').on('change', ()=>{ $('#batchCodeWrap').hide(); if($('#batch_files')[0].files.length) batchSuggest(); });
 
@@ -1097,6 +1118,7 @@ $(function(){
     });
     if(bad){ alert(`有 ${bad} 列缺少編號或名稱`); return; }
     if(!$('#batch_version').val().trim()){ alert('請填版本號'); return; }
+    if(!$('#batch_date').val()){ alert('請填修訂日期'); return; }
     const fd = new FormData();
     fd.append('rows', JSON.stringify(rows));
     for(let i=0;i<files.length;i++){

@@ -285,8 +285,8 @@ case 'meta':
     $poss  = $db->query("SELECT p.id,p.name,pl.level FROM position p LEFT JOIN position_level pl ON p.id=pl.position_id ORDER BY p.sort_order ASC, p.id ASC")->fetchAll(PDO::FETCH_ASSOC);
     $tags  = $db->query("SELECT id,name,color FROM as_doc_tag ORDER BY sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
     $users = $db->query("SELECT id,user_cname FROM user WHERE state IN (1,90,99) OR state IS NULL ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
-    // 母文件候選：排除表單/四階（表單不可再當母文件）
-    $parents = $db->query("SELECT id, doc_no, doc_name FROM as_document
+    // 母文件候選：排除表單/四階（表單不可再當母文件）；帶 department_id 供前端自動帶入所屬部門
+    $parents = $db->query("SELECT id, doc_no, doc_name, department_id FROM as_document
                            WHERE is_deleted=0
                              AND COALESCE(doc_type,'') != '表單'
                              AND COALESCE(doc_level,'') != '四階'
@@ -384,6 +384,7 @@ case 'create_document':
 
     if ($doc_no==='' || $doc_name==='' || $version==='')
         jout(['status'=>'error','message'=>'文件編號、名稱、版本號為必填']);
+    if (!$rdate) jout(['status'=>'error','message'=>'請填寫修訂日期']);
     $dup = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0");
     $dup->execute([$doc_no]);
     if ($dup->fetchColumn() > 0) jout(['status'=>'error','message'=>"文件編號 {$doc_no} 已存在"]);
@@ -455,6 +456,7 @@ case 'add_version':
     $rsum   = trim($_POST['revised_summary'] ?? '') ?: null;
     $cstat  = trim($_POST['change_status'] ?? '修正');
     if ($docId<=0 || $version==='') jout(['status'=>'error','message'=>'文件與版本號為必填']);
+    if (!$rdate) jout(['status'=>'error','message'=>'請填寫修訂日期']);
 
     $st = $db->prepare("SELECT * FROM as_document WHERE id=?");
     $st->execute([$docId]);
@@ -543,6 +545,7 @@ case 'update_document_meta':
     $version = trim($_POST['version'] ?? '');
     $cstat   = trim($_POST['change_status'] ?? '');
     $rdate   = trim($_POST['revised_date'] ?? '') ?: null;
+    if ($version !== '' && !$rdate) jout(['status'=>'error','message'=>'請填寫修訂日期']);
     $rpages  = trim($_POST['revised_pages'] ?? '') ?: null;
     $rsum    = trim($_POST['revised_summary'] ?? '') ?: null;
 
@@ -805,6 +808,7 @@ case 'create_documents_batch':
             $doc_name= trim($r['doc_name'] ?? '');
             $version = trim($r['version'] ?? '');
             if ($doc_no==='' || $doc_name==='' || $version==='') throw new Exception('編號/名稱/版本必填');
+            if (trim($r['revised_date'] ?? '') === '') throw new Exception('請填寫修訂日期');
 
             $dup = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0");
             $dup->execute([$doc_no]);
