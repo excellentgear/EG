@@ -21,3 +21,22 @@ if (!function_exists('rf_has_feature')) {
         return in_array('all', $features, true) || in_array($code, $features, true);
     }
 }
+
+if (!function_exists('rf_has_module_role')) {
+    // 二元權限判斷：使用者是否被指派了該 module 底下的任一角色，或本身是系統管理員(is_system=1)
+    // 用於不需要細分功能碼、只要「有沒有這個功能的使用資格」的場景（例如 BOM追蹤）
+    function rf_has_module_role($pdo, $user_id, $module) {
+        try {
+            $st = $pdo->prepare("
+                SELECT 1 FROM user_roles ur
+                JOIN roles r ON r.role_id = ur.role_id
+                WHERE ur.user_id = ? AND (r.module = ? OR r.is_system = 1)
+                LIMIT 1
+            ");
+            $st->execute([$user_id, $module]);
+            return (bool)$st->fetchColumn();
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+}
