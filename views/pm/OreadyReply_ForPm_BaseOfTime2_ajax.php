@@ -1414,12 +1414,54 @@ else if (isset($_POST['action']) && $_POST['action'] === 'cancel_transfer') {
             $new_state = 'P';
             $stmt = $db->prepare("UPDATE bom_ing SET processing_state='P', Modified_At=NOW(), Modified_By=:u WHERE bom_ing_fid=:f");
             $stmt->execute([':u'=>$uid, ':f'=>$fid]);
+        } elseif ($cur === 'skip') {
+            // 取消跳過標記，回到最初狀態(N)
+            $new_state = 'N';
+            $stmt = $db->prepare("UPDATE bom_ing SET processing_state='N', Modified_At=NOW(), Modified_By=:u WHERE bom_ing_fid=:f");
+            $stmt->execute([':u'=>$uid, ':f'=>$fid]);
+            $db->prepare("INSERT INTO bom_ing_event (bom_ing_fid, event_type, event_note, Created_By) VALUES (?,?,?,?)")
+                ->execute([$fid, 'unskip', '取消跳過標記，回到N', $uid]);
         } else {
             echo json_encode(['success'=>false,'message'=>'此狀態('.$cur.')不支援回歸。','fid'=>$fid,'current_state'=>$cur]);
             exit;
         }
         echo json_encode(['success'=>true,'message'=>'已回歸至前一狀態('.$new_state.')','rows_affected'=>$stmt->rowCount(),'fid'=>$fid,'prev_state'=>$cur,'new_state'=>$new_state]);
     } catch(PDOException $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage(),'fid'=>$fid]); }
+    exit;
+}
+
+// ── 標記跳過（僅限N狀態，尚未發包的製程；例如趕件改製程/漏送，確定本站不加工）────
+else if (isset($_POST['action']) && $_POST['action'] === 'mark_skip') {
+    session_write_close();
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $fid = trim($_POST['bom_ing_fid'] ?? '');
+    $reason = trim($_POST['reason'] ?? '');
+    $uid = $_SESSION['id'] ?? 'system';
+    if (empty($fid)) { echo json_encode(['success'=>false,'message'=>'缺少fid']); exit; }
+    if ($reason === '') { echo json_encode(['success'=>false,'message'=>'請填寫跳過原因']); exit; }
+    try {
+        $chk = $db->prepare("SELECT bom_ing_fid, processing_state FROM bom_ing WHERE bom_ing_fid = ?");
+        $chk->execute([$fid]);
+        $row = $chk->fetch(PDO::FETCH_ASSOC);
+        if (!$row) { echo json_encode(['success'=>false,'message'=>'找不到對應製程記錄 (fid='.$fid.')']); exit; }
+        if ($row['processing_state'] !== 'N') {
+            echo json_encode(['success'=>false,'message'=>'只有尚未發包(N)的製程可以標記跳過，目前狀態為 '.$row['processing_state']]);
+            exit;
+        }
+        $db->beginTransaction();
+        $stmt = $db->prepare("UPDATE bom_ing SET processing_state='skip', Modified_At=NOW(), Modified_By=:u WHERE bom_ing_fid=:f");
+        $stmt->execute([':u'=>$uid, ':f'=>$fid]);
+        $db->prepare("INSERT INTO bom_ing_event (bom_ing_fid, event_type, event_note, Created_By) VALUES (?,?,?,?)")
+            ->execute([$fid, 'skip', $reason, $uid]);
+        $db->commit();
+        echo json_encode(['success'=>true,'message'=>'已標記跳過','fid'=>$fid,'new_state'=>'skip']);
+    } catch(PDOException $e){
+        if ($db->inTransaction()) $db->rollBack();
+        echo json_encode(['success'=>false,'message'=>$e->getMessage(),'fid'=>$fid]);
+    }
     exit;
 }
 
