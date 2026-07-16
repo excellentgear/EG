@@ -1104,34 +1104,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         try {
             $part_id = trim($_POST['part_id'] ?? '');
             $cust_id = trim($_POST['cust_id'] ?? '');
-            $result  = ['part_notes' => [], 'cust_notes' => []];
+            // 供檔網址目錄與主檔管理共用同一設定值（notes_url_dir），即時讀取、不寫死
+            $nas_url = '/nas/ERP/技術/';
+            try {
+                $nu = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='notes_url_dir'")->fetchColumn();
+                if ($nu !== false && $nu !== null && $nu !== '') $nas_url = $nu;
+            } catch (Exception $e) {}
+            $result  = ['part_notes' => [], 'cust_notes' => [], 'nas_url' => $nas_url];
+            $imgStmt = $pdo->prepare("SELECT img_id, file_name, original_name FROM note_images
+                WHERE note_id=? AND note_type=? ORDER BY sort_order, img_id");
             if ($part_id) {
-                $stmt = $pdo->prepare("SELECT dn.note_id, dn.note_text, dn.created_by,
-                    DATE_FORMAT(dn.created_at,'%Y-%m-%d %H:%i') AS created_at,
-                    GROUP_CONCAT(ni.file_name ORDER BY ni.img_id SEPARATOR '\t') AS img_files
-                    FROM design_notes dn
-                    LEFT JOIN note_images ni ON ni.note_id=dn.note_id AND ni.note_type='part_design'
-                    WHERE dn.target_type='part' AND dn.target_id=?
-                    GROUP BY dn.note_id ORDER BY dn.created_at ASC");
+                $stmt = $pdo->prepare("SELECT note_id, note_text, created_by,
+                    DATE_FORMAT(created_at,'%Y-%m-%d %H:%i') AS created_at
+                    FROM design_notes WHERE target_type='part' AND target_id=? ORDER BY created_at ASC");
                 $stmt->execute([$part_id]);
                 foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                    $r['images'] = $r['img_files'] ? array_map(function($f){ return ['file_name'=>trim($f)]; }, explode("\t", $r['img_files'])) : [];
-                    unset($r['img_files']);
+                    $imgStmt->execute([$r['note_id'], 'part_design']);
+                    $r['images'] = $imgStmt->fetchAll(PDO::FETCH_ASSOC);
                     $result['part_notes'][] = $r;
                 }
             }
             if ($cust_id) {
-                $stmt2 = $pdo->prepare("SELECT dn.note_id, dn.note_text, dn.created_by,
-                    DATE_FORMAT(dn.created_at,'%Y-%m-%d %H:%i') AS created_at,
-                    GROUP_CONCAT(ni.file_name ORDER BY ni.img_id SEPARATOR '\t') AS img_files
-                    FROM design_notes dn
-                    LEFT JOIN note_images ni ON ni.note_id=dn.note_id AND ni.note_type='customer_design'
-                    WHERE dn.target_type='customer' AND dn.target_id=?
-                    GROUP BY dn.note_id ORDER BY dn.created_at ASC");
+                $stmt2 = $pdo->prepare("SELECT note_id, note_text, created_by,
+                    DATE_FORMAT(created_at,'%Y-%m-%d %H:%i') AS created_at
+                    FROM design_notes WHERE target_type='customer' AND target_id=? ORDER BY created_at ASC");
                 $stmt2->execute([$cust_id]);
                 foreach ($stmt2->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                    $r['images'] = $r['img_files'] ? array_map(function($f){ return ['file_name'=>trim($f)]; }, explode("\t", $r['img_files'])) : [];
-                    unset($r['img_files']);
+                    $imgStmt->execute([$r['note_id'], 'customer_design']);
+                    $r['images'] = $imgStmt->fetchAll(PDO::FETCH_ASSOC);
                     $result['cust_notes'][] = $r;
                 }
             }
@@ -7739,6 +7739,7 @@ foreach($dCounts as $c) {
                     return;
                 }
                 var d = res.data, html = '';
+                if (d.nas_url) _otDnNasUrl = d.nas_url;
                 if (d.part_notes && d.part_notes.length) {
                     html += '<div style="font-weight:700;color:#c0392b;font-size:12px;margin-bottom:6px;">'
                           + '<i class="fa fa-file-text-o"></i> 料號設計備註（' + escapeHtml(partId) + '）</div>';
@@ -7757,8 +7758,30 @@ foreach($dCounts as $c) {
             });
         }
 
+        var _otDnNasUrl = '/nas/ERP/技術/';  // 實際值由 get_design_notes_ot 回傳（notes_url_dir 設定）
+
+        // 附件渲染：圖片直接縮圖、PDF/Office 等顯示檔案圖示（仿主檔管理 _noteFileHtml，唯讀）
+        function _otDnFileHtml(img, url) {
+            var fname = img.file_name || '';
+            var ext   = fname.split('.').pop().toLowerCase();
+            var imgExts = ['jpg','jpeg','png','gif','webp','bmp','tif','tiff','svg'];
+            if (imgExts.indexOf(ext) >= 0) {
+                return '<a href="' + url + '" target="_blank">'
+                     + '<img src="' + url + '" style="max-width:220px;max-height:180px;width:auto;height:auto;object-fit:contain;border:1px solid #ddd;border-radius:4px;"'
+                     + ' onerror="this.parentNode.style.display=\'none\'"></a>';
+            }
+            var isPdf   = (ext === 'pdf');
+            var iconMap = { doc:'fa-file-word-o',docx:'fa-file-word-o',xls:'fa-file-excel-o',xlsx:'fa-file-excel-o',ppt:'fa-file-powerpoint-o',pptx:'fa-file-powerpoint-o',txt:'fa-file-text-o',csv:'fa-file-text-o',zip:'fa-file-zip-o',rar:'fa-file-zip-o','7z':'fa-file-zip-o',mp4:'fa-file-video-o',avi:'fa-file-video-o',mov:'fa-file-video-o',dwg:'fa-file-code-o',dxf:'fa-file-code-o',step:'fa-file-code-o',stp:'fa-file-code-o' };
+            var icon    = isPdf ? 'fa-file-pdf-o' : (iconMap[ext] || 'fa-file-o');
+            var boxCss  = isPdf ? 'border:1px solid #f5c6c6;background:#fff5f5;color:#c0392b;'
+                                : 'border:1px solid #ddd;background:#f8f9fa;color:#555;';
+            return '<a href="' + url + '" target="_blank" style="display:inline-flex;flex-direction:column;align-items:center;justify-content:center;width:90px;height:90px;border-radius:4px;text-decoration:none;padding:4px;' + boxCss + '">'
+                 + '<i class="fa ' + icon + '" style="font-size:28px;"></i>'
+                 + '<span style="font-size:9px;margin-top:5px;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center;">' + escapeHtml(img.original_name || fname) + '</span>'
+                 + '</a>';
+        }
+
         function _renderOtDnNote(n) {
-            var NAS = '/nas/';
             var html = '<div style="background:#fff;border:1px solid #f5c6cb;border-radius:6px;padding:10px;margin-bottom:8px;">';
             html += '<div style="font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;">'
                   + escapeHtml(n.note_text || '') + '</div>';
@@ -7766,11 +7789,8 @@ foreach($dCounts as $c) {
                 html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">';
                 n.images.forEach(function(img) {
                     if (!img.file_name) return;
-                    var url = NAS + encodeURIComponent(img.file_name);
-                    html += '<a href="' + url + '" target="_blank">'
-                          + '<img src="' + url + '" style="max-width:180px;max-height:140px;object-fit:contain;border:1px solid #ddd;border-radius:4px;"'
-                          + ' onerror="this.parentNode.style.display=\'none\'">'
-                          + '</a>';
+                    var url = _otDnNasUrl + encodeURIComponent(img.file_name);
+                    html += _otDnFileHtml(img, url);
                 });
                 html += '</div>';
             }
