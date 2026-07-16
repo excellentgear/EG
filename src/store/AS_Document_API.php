@@ -103,6 +103,16 @@ function asDocDir(PDO $db, int $docId): string {
 function asTplDir(PDO $db): string {
     return asDocRoot($db) . DIRECTORY_SEPARATOR . '_template';
 }
+/**
+ * 線上開檔工作副本資料夾。獨立設定鍵，預設為 NAS 分享根下的純 ASCII 路徑——
+ * ms-office 協定對 URI 中的空格會解碼、中文 %XX 卻不解（2026-07-16 實測 Excel 找不到檔），
+ * 路徑/檔名全 ASCII 才能穩定開啟，故不放在含空格括號中文的文件根目錄底下。
+ */
+function asWorkcopyDir(PDO $db): string {
+    $v = asGetSetting($db, 'as_doc_workcopy_dir');
+    if ($v !== '') return rtrim($v, "/\\");
+    return '\\\\excellentnas\\as9100\\ERP_workcopy';
+}
 function asSafeExt(string $orig): ?string {
     $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
     $blocked = ['php','php3','php4','php5','phtml','phar','exe','bat','sh','cmd','asp','aspx','jsp','py','rb','htaccess'];
@@ -671,6 +681,7 @@ case 'get_settings':
     }
     jout(['status'=>'success','data'=>[
         'nas_dir'=>asGetSetting($db,'as_doc_nas_dir'),
+        'workcopy_dir'=>asWorkcopyDir($db),
         'owner_user_id'=>$ownerId, 'owner_name'=>$ownerId!==''?($names[$ownerId]??''):'',
         'deputy_user_id'=>$deputyId, 'deputy_name'=>$deputyId!==''?($names[$deputyId]??''):'',
         'apply_form_tpl'=>asGetSetting($db,'as_doc_apply_form_tpl'),
@@ -678,9 +689,15 @@ case 'get_settings':
 
 case 'save_settings':
     $nas    = trim($_POST['nas_dir'] ?? '');
+    $wc     = trim($_POST['workcopy_dir'] ?? '');
     $owner  = trim($_POST['owner_user_id'] ?? '');
     $deputy = trim($_POST['deputy_user_id'] ?? '');
     if ($nas!=='') asSetSetting($db,'as_doc_nas_dir',$nas);
+    if ($wc!=='') {
+        // 工作副本路徑必須純 ASCII（ms-office 協定限制）
+        if (preg_match('/[^\x20-\x7E]/', $wc)) jout(['status'=>'error','message'=>'工作副本路徑只能使用英文/數字（不可含中文），否則 Office 線上開檔會失敗']);
+        asSetSetting($db,'as_doc_workcopy_dir',$wc);
+    }
     asSetSetting($db,'as_doc_owner_user_id',$owner);
     asSetSetting($db,'as_doc_deputy_user_id',$deputy);
     jout(['status'=>'success']);
@@ -777,10 +794,11 @@ case 'suggest_doc_no':
 case 'open_online':
     $verId = (int)($_POST['version_id'] ?? 0);
     if ($verId<=0) jout(['status'=>'error','message'=>'缺少版本 ID']);
-    $st = $db->prepare("SELECT * FROM as_document_version WHERE id=?");
+    $st = $db->prepare("SELECT v.*, d.doc_no FROM as_document_version v JOIN as_document d ON d.id=v.doc_id WHERE v.id=?");
     $st->execute([$verId]);
     $v = $st->fetch(PDO::FETCH_ASSOC);
     if (!$v) jout(['status'=>'error','message'=>'版本不存在']);
+    if (!$v['file_name']) jout(['status'=>'error','message'=>'此版本未上傳文件檔（補登資料），無檔可開']);
     $src = asDocDir($db, (int)$v['doc_id']).DIRECTORY_SEPARATOR.$v['file_name'];
     if (!is_file($src)) jout(['status'=>'error','message'=>'檔案不存在或 NAS 未連線']);
 
@@ -788,8 +806,8 @@ case 'open_online':
     $schemes = ['xls'=>'ms-excel','xlsx'=>'ms-excel','doc'=>'ms-word','docx'=>'ms-word','ppt'=>'ms-powerpoint','pptx'=>'ms-powerpoint'];
     if (!isset($schemes[$ext])) jout(['status'=>'error','message'=>'此檔案格式不支援線上開啟（僅 Excel/Word/PPT）']);
 
-    $workDir = asDocRoot($db).DIRECTORY_SEPARATOR.'_workcopy';
-    if (!is_dir($workDir) && !mkdir($workDir, 0777, true)) jout(['status'=>'error','message'=>'無法建立工作副本資料夾']);
+    $workDir = asWorkcopyDir($db);
+    if (!is_dir($workDir) && !mkdir($workDir, 0777, true)) jout(['status'=>'error','message'=>'無法建立工作副本資料夾：'.$workDir]);
 
     // 懶惰清理：刪除超過 7 天的工作副本
     foreach ((array)@scandir($workDir) as $f) {
@@ -798,15 +816,15 @@ case 'open_online':
         if (is_file($fp) && filemtime($fp) < time()-7*86400) @unlink($fp);
     }
 
-    $safeOrig = preg_replace('/[\\\\\/:*?"<>|]/', '_', $v['original_name'] ?: $v['file_name']);
-    $copyName = date('Ymd_His').'_u'.$GLOBALS['currentUserId'].'_'.$safeOrig;
+    // 檔名一律轉純 ASCII（中文與特殊字元→底線），確保 ms-office 協定可解析
+    $docNoAscii = preg_replace('/[^A-Za-z0-9._-]/', '_', $v['doc_no'] ?: ('doc'.$v['doc_id']));
+    $verAscii   = preg_replace('/[^A-Za-z0-9._-]/', '_', $v['version'] ?: 'v');
+    $copyName   = date('Ymd_His').'_u'.$GLOBALS['currentUserId'].'_'.$docNoAscii.'_v'.$verAscii.'.'.$ext;
     $dst = $workDir.DIRECTORY_SEPARATOR.$copyName;
-    if (!@copy($src, $dst)) jout(['status'=>'error','message'=>'建立工作副本失敗']);
+    if (!@copy($src, $dst)) jout(['status'=>'error','message'=>'建立工作副本失敗（NAS 未連線或無寫入權限：'.$workDir.'）']);
 
-    // ms-office 協定：ofe=開啟編輯。路徑需轉成合法 file: URI 並逐段百分比編碼——
-    // 含空格/括號/中文的 UNC 直接塞協定會被 Office 判為「受限制的網站區域」而封鎖（2026-07-16 實測）。
-    $fileUri = 'file:' . implode('/', array_map('rawurlencode', explode('/', str_replace('\\', '/', $dst))));
-    $uri = $schemes[$ext].':ofe|u|'.$fileUri;
+    // ms-office 協定：ofe=開啟編輯。路徑與檔名已保證純 ASCII，直接用 UNC 即可（免編碼）
+    $uri = $schemes[$ext].':ofe|u|'.$dst;
     jout(['status'=>'success','uri'=>$uri,'path'=>$dst,
           'note'=>'已建立工作副本（不影響正式版本檔），打完資料請直接列印或另存；副本 7 天後自動清除']);
 

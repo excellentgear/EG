@@ -508,7 +508,12 @@ if ($deptPerm === 'R') {
         <div class="form-group">
           <label>NAS 儲存根路徑</label>
           <input type="text" class="form-control" id="set_nas_dir">
-          <span class="text-muted" style="font-size:12px;">預設 \\excellentnas\as9100\ERP測試。僅存根路徑，實際檔案路徑於讀取時現場組出（不寫死於資料庫）。</span>
+          <span class="text-muted" style="font-size:12px;">可含中文/空格。僅存根路徑，實際檔案路徑於讀取時現場組出（不寫死於資料庫）。</span>
+        </div>
+        <div class="form-group">
+          <label>線上開檔工作副本路徑（限英文/數字）</label>
+          <input type="text" class="form-control" id="set_workcopy_dir">
+          <span class="text-muted" style="font-size:12px;">Office 協定不支援中文路徑，此資料夾必須純英數（預設 \\excellentnas\as9100\ERP_workcopy，系統自動建立；副本 7 天自動清除）。</span>
         </div>
         <div class="form-group">
           <label>AS 負責人（指定人員）</label>
@@ -1213,7 +1218,8 @@ $(function(){
   $('#btnSettings').on('click', function(){
     $.getJSON(API+'?action=get_settings', r=>{
       const d=r.data;
-      $('#set_nas_dir').val(d.nas_dir); $('#set_owner').val(d.owner_user_id||''); $('#set_deputy').val(d.deputy_user_id||'');
+      $('#set_nas_dir').val(d.nas_dir); $('#set_workcopy_dir').val(d.workcopy_dir||'');
+      $('#set_owner').val(d.owner_user_id||''); $('#set_deputy').val(d.deputy_user_id||'');
       if(d.apply_form_tpl){ $('#tplStatus').text('已上傳'); $('#tplDownload').show(); } else { $('#tplStatus').text('未上傳'); $('#tplDownload').hide(); }
       renderDeptCodes();
       $('#settingsModal').modal('show');
@@ -1221,7 +1227,7 @@ $(function(){
   });
   $('#tplDownload').on('click', function(e){ e.preventDefault(); window.location=API+'?action=download_template'; });
   $('#settingsSave').on('click', function(){
-    $.post(API+'?action=save_settings', {nas_dir:$('#set_nas_dir').val(),owner_user_id:$('#set_owner').val(),deputy_user_id:$('#set_deputy').val()}, r=>{
+    $.post(API+'?action=save_settings', {nas_dir:$('#set_nas_dir').val(),workcopy_dir:$('#set_workcopy_dir').val(),owner_user_id:$('#set_owner').val(),deputy_user_id:$('#set_deputy').val()}, r=>{
       if(r.status==='success'){ alert('已儲存'); $('#settingsModal').modal('hide'); loadDocs(); } else alert(r.message);
     },'json');
   });
