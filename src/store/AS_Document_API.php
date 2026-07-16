@@ -467,10 +467,10 @@ case 'download':
     if (!$v) { http_response_code(404); exit('版本不存在'); }
     $dir = asDocDir($db, (int)$v['doc_id']);
     $inline = (($_GET['inline'] ?? '') === '1');
-    // 權限分流：inline 預覽=檢閱權；下載原檔=修改權（有修改權限的人才可下載原檔）
-    if (!asCan($inline ? 'view' : 'update')) {
+    // 權限分流：inline 預覽=檢閱權；下載原檔=獨立「下載」權限（asdoc_download）
+    if (!asCan($inline ? 'view' : 'download')) {
         http_response_code(403); header('Content-Type: text/plain; charset=utf-8');
-        exit($inline ? '無檢閱權限' : '無下載權限（下載原檔需「修改」權限，檢閱者請用線上預覽）');
+        exit($inline ? '無檢閱權限' : '無下載權限（下載原檔需「下載」權限，檢閱者請用線上預覽）');
     }
     $fname = ($which==='apply') ? $v['apply_form_file_name'] : $v['file_name'];
     $oname = ($which==='apply') ? ($v['apply_form_original_name'] ?: $v['apply_form_file_name'])
@@ -484,8 +484,8 @@ case 'download':
             if ($cache) {
                 asStream($cache, preg_replace('/\.[^.]+$/', '', $oname) . '.pdf', true);
             }
-            // 轉檔失敗：有修改權限者落回下載原檔；純檢閱者回錯誤（不可經預覽管道取得原檔）
-            if (!asCan('update')) {
+            // 轉檔失敗：有下載權限者落回下載原檔；純檢閱者回錯誤（不可經預覽管道取得原檔）
+            if (!asCan('download')) {
                 http_response_code(500); header('Content-Type: text/plain; charset=utf-8');
                 exit('預覽產生失敗（轉檔錯誤），請聯絡文管人員');
             }

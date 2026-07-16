@@ -921,8 +921,8 @@ $_quotDepts = array_keys($_deptSet);
                         '為每位使用者指派 BOM 追蹤功能的使用權限。此功能不分細部操作，只要指派角色即可使用。',
                         $_bomtrkRoles, $_userBomtrkRoles, $admins, $_quotDepts, $canEdit);
 
-                    eg_render_role_section('asdoc', 'as_doc', 'AS9100 文件管理', 'fa-folder-open-o', '#c0392b',
-                        '為每位使用者指派 AS9100 文件管理頁面的操作角色：<strong>文件檢閱</strong>（檢視/下載）、<strong>文件管理</strong>（新增/改版/編輯）、<strong>文件刪除</strong>、<strong>文管設定</strong>（標籤、各文件開啟權限、NAS路徑、AS負責人、申請單範本）。亦可於下方「職稱權限」直接指派給整個職稱。',
+                    eg_render_role_section('asdoc', 'as_doc', 'AS9100 文件管理（個人指派，優先於職稱）', 'fa-folder-open-o', '#c0392b',
+                        '為使用者「個人」指派 AS 文件管理角色——<strong>個人有指派時以個人為準（覆蓋職稱）</strong>；未指派者自動套用下方「職稱權限」的設定。角色定義（名稱與功能勾選）請至 <strong>AS9100 文件管理頁 → 角色設定</strong>。',
                         $_asdocRoles, $_userAsdocRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 

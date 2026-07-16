@@ -68,6 +68,7 @@ $asCaps = [
     'delete'   => $asIsRoleAdmin || strpos($pp,'A')!==false || strpos($pp,'D')!==false || in_array('asdoc_delete', $asFeatures, true),
     'settings' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_settings', $asFeatures, true),
     'edit_online' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_edit_online', $asFeatures, true),
+    'download' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_download', $asFeatures, true),
 ];
 
 if (!$asCaps['view']) {
@@ -313,18 +314,10 @@ if ($deptPerm === 'R') {
           <input type="text" class="form-control" id="newRoleName" placeholder="新角色名稱">
           <span class="input-group-btn"><button class="btn btn-success" id="btnAddRole"><i class="fa fa-plus"></i> 新增角色</button></span>
         </div>
-        <hr>
-        <h4><i class="fa fa-user"></i> 人員角色指派（個人設定，優先於職稱）</h4>
-        <div class="input-group input-group-sm" style="width:240px;margin-bottom:8px;">
-          <span class="input-group-addon"><i class="fa fa-search"></i></span>
-          <input type="text" class="form-control" id="roleUserSearch" placeholder="搜尋姓名/帳號">
-        </div>
-        <div style="max-height:340px;overflow-y:auto;">
-          <table class="table table-striped table-condensed" style="font-size:13px;">
-            <thead><tr><th style="width:120px;">姓名</th><th style="width:100px;">帳號</th><th>已指派角色</th><th style="width:230px;">新增</th></tr></thead>
-            <tbody id="roleUserBody"></tbody>
-          </table>
-        </div>
+        <p class="text-muted" style="font-size:12px;">
+          <i class="fa fa-info-circle"></i> 角色「指派」（職稱與個人）請至
+          <a href="../user/user_permissions.php" target="_blank">權限設定頁</a> 的「AS9100 文件管理」區塊操作。
+        </p>
       </div>
       <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
     </div>
@@ -565,6 +558,7 @@ $(function(){
   const canD = !!window.asPerm.delete;
   const canS = !!window.asPerm.settings;
   const canEO = !!window.asPerm.edit_online;
+  const canDL = !!window.asPerm.download;
 
   // 線上開檔：建立工作副本後以 ms-office 協定開啟本機 Excel/Word
   $(document).on('click','.op-online', function(e){
@@ -661,6 +655,9 @@ $(function(){
       const tags = (d.tags||[]).map(t=>`<span class="tag-chip" style="background:${esc(t.color)};">${esc(t.name)}</span>`).join(' ');
       let ops = '';
       const curVer = d.current_version_id;
+      // 檔案類型（必須在 nameCell 之前宣告，nameCell 會用到）
+      const fext = (d.current_file_name||'').split('.').pop().toLowerCase();
+      const isOffice = ['xls','xlsx','doc','docx','ppt','pptx'].includes(fext);
       // 母文件 / 子表單欄
       let rel = '';
       if(d.parent_doc_id) rel += `<a href="#" class="rel-parent" data-kw="${esc(d.parent_doc_no)}" title="${esc(d.parent_doc_name)}"><i class="fa fa-level-up"></i> ${esc(d.parent_doc_no)}</a>`;
@@ -676,10 +673,8 @@ $(function(){
         }
       }
       ops += `<button class="btn btn-xs btn-default op-hist" data-id="${d.id}" data-name="${esc(d.doc_name)}">歷史版本</button> `;
-      const fext = (d.current_file_name||'').split('.').pop().toLowerCase();
-      const isOffice = ['xls','xlsx','doc','docx','ppt','pptx'].includes(fext);
       if(curVer && canEO && isOffice) ops += `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="PDF 預覽">預覽</a> `;
-      if(curVer && canU) ops += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}" title="下載原檔（需修改權限）">下載</a> `;
+      if(curVer && canDL) ops += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}" title="下載原檔（需下載權限）">下載</a> `;
       if(canU){
         ops += `<button class="btn btn-xs btn-warning op-ver" data-id="${d.id}" data-name="${esc(d.doc_name)}">改版</button> `;
         ops += `<button class="btn btn-xs btn-default op-edit" data-id="${d.id}">編輯</button> `;
@@ -843,11 +838,11 @@ $(function(){
       const tb=$('#historyBody').empty();
       (r.data.versions||[]).forEach(v=>{
         let dl = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
-        if(canU) dl += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${v.id}">下載</a>`;
+        if(canDL) dl += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${v.id}">下載</a>`;
         let af = '<span class="text-muted">無</span>';
         if(v.apply_form_file_name){
           af = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=apply&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
-          if(canU) af += `<a class="btn btn-xs btn-default" href="${API}?action=download&which=apply&version_id=${v.id}">下載</a>`;
+          if(canDL) af += `<a class="btn btn-xs btn-default" href="${API}?action=download&which=apply&version_id=${v.id}">下載</a>`;
         }
         tb.append(`<tr>
           <td><span class="label label-info">${esc(v.version)}</span></td>
@@ -1066,7 +1061,8 @@ $(function(){
   const AS_FEATURES = [
     {code:'asdoc_view',        label:'檢閱/預覽'},
     {code:'asdoc_create',      label:'新增文件'},
-    {code:'asdoc_update',      label:'改版/編輯/下載'},
+    {code:'asdoc_update',      label:'改版/編輯'},
+    {code:'asdoc_download',    label:'下載原檔'},
     {code:'asdoc_delete',      label:'刪除/還原'},
     {code:'asdoc_settings',    label:'文管設定'},
     {code:'asdoc_edit_online', label:'線上開檔'}
@@ -1096,7 +1092,6 @@ $(function(){
           if(fr.success) (fr.data||[]).forEach(fc=>$(`#roleDefBody tr[data-role="${role.role_id}"] .rf-cb[value="${fc}"]`).prop('checked',true));
         });
       });
-      renderRoleUserSelects();
     });
   }
   $('#btnAddRole').on('click', function(){
@@ -1119,49 +1114,11 @@ $(function(){
   $('#roleDefBody').on('click','.rf-del', function(){
     if(!confirm('刪除此角色？已指派此角色的使用者/職稱將同時失去對應功能。')) return;
     $.post(ROLES_API, {action:'delete_role', role_id:$(this).closest('tr').data('role')}, r=>{
-      if(r.success){ loadRoleDefs(); loadRoleUsers(); } else alert(r.message||'刪除失敗');
+      if(r.success){ loadRoleDefs(); } else alert(r.message||'刪除失敗');
     },'json');
   });
 
-  function roleSelOpts(){
-    return '<option value="">— 選擇角色 —</option>'+AS_ROLES.map(x=>`<option value="${x.role_id}">${esc(x.role_name)}</option>`).join('');
-  }
-  function renderRoleUserSelects(){ $('.ru-sel').each(function(){ const v=$(this).val(); $(this).html(roleSelOpts()).val(v); }); }
-  function loadRoleUsers(){
-    $.getJSON(ROLES_API, {action:'get_users', module:'as_doc'}, r=>{
-      if(!r.success){ alert('讀取人員失敗'); return; }
-      const tb=$('#roleUserBody').empty();
-      (r.data||[]).forEach(u=>{
-        const tags=(u.roles||[]).map(ur=>`<span class="label ${ur.role_name==='管理員'?'label-danger':'label-primary'}" style="margin-right:4px;display:inline-block;">${esc(ur.role_name)} <a href="#" class="ru-rm" data-uid="${u.id}" data-rid="${ur.role_id}" style="color:#fff;">×</a></span>`).join('')||'<span class="text-muted" style="font-size:12px;">（未指派，套用職稱設定）</span>';
-        tb.append(`<tr data-search="${esc((u.user_cname+u.user_uname).toLowerCase())}">
-          <td>${esc(u.user_cname)}</td><td class="text-muted">${esc(u.user_uname)}</td>
-          <td class="ru-tags">${tags}</td>
-          <td><div class="input-group input-group-sm">
-            <select class="form-control ru-sel">${roleSelOpts()}</select>
-            <span class="input-group-btn"><button class="btn btn-primary ru-add" data-uid="${u.id}"><i class="fa fa-plus"></i></button></span>
-          </div></td></tr>`);
-      });
-    });
-  }
-  $('#roleUserSearch').on('input', function(){
-    const kw=$(this).val().toLowerCase().trim();
-    $('#roleUserBody tr').each(function(){ $(this).toggle(!kw || ($(this).data('search')||'').indexOf(kw)!==-1); });
-  });
-  $('#roleUserBody').on('click','.ru-add', function(){
-    const uid=$(this).data('uid'), rid=$(this).closest('.input-group').find('.ru-sel').val();
-    if(!rid){ alert('請先選擇角色'); return; }
-    $.post(ROLES_API, {action:'assign_user_role', user_id:uid, role_id:rid}, r=>{
-      if(r.success) loadRoleUsers(); else alert(r.message||'指派失敗');
-    },'json');
-  });
-  $('#roleUserBody').on('click','.ru-rm', function(e){
-    e.preventDefault();
-    if(!confirm('移除此角色？移除後若此人無任何個人指派，將改為套用其職稱的設定。')) return;
-    $.post(ROLES_API, {action:'remove_user_role', user_id:$(this).data('uid'), role_id:$(this).data('rid')}, r=>{
-      if(r.success) loadRoleUsers(); else alert(r.message||'移除失敗');
-    },'json');
-  });
-  $('#btnRoles').on('click', function(){ loadRoleDefs(); loadRoleUsers(); $('#rolesModal').modal('show'); });
+  $('#btnRoles').on('click', function(){ loadRoleDefs(); $('#rolesModal').modal('show'); });
 
   // ── 系統設定：部門文件代碼（多列式，一部門可多組） ──
   function deptCodeRowHtml(row){
@@ -1212,7 +1169,7 @@ $(function(){
      .done(r=>{ if(r.status==='success'){ $('#tplStatus').text('已上傳'); $('#tplDownload').show(); alert('範本已上傳'); } else alert(r.message); });
   });
 
-  $('#rbacHelp').on('click', function(e){ e.preventDefault(); alert('權限規則（職稱為主、個人優先）：\n1. 預設依「職稱」自動套用角色（職稱指派：權限設定頁 AS 職稱權限區）\n2. 個人另有指派角色時，以個人設定為準（覆蓋職稱）——本頁「角色設定」可操作\n3. 管理員固定擁有全部權限\n\n角色功能：\n・文件檢閱＝線上預覽（不可下載原檔）\n・文件管理＝新增/改版/編輯/下載\n・文件刪除＝刪除/還原\n・文管設定＝標籤/各文件開啟權限/NAS路徑/AS負責人/範本\n・線上開檔＝開工作副本直接打字列印'); });
+  $('#rbacHelp').on('click', function(e){ e.preventDefault(); alert('權限規則（職稱為主、個人優先）：\n1. 預設依「職稱」自動套用角色\n2. 個人另有指派角色時，以個人設定為準（覆蓋職稱）\n3. 職稱與個人的指派都在「權限設定頁 → AS9100 文件管理」區塊操作\n4. 管理員固定擁有全部權限\n\n可勾選的角色功能（本頁「角色設定」定義角色）：\n・檢閱/預覽＝線上預覽（不可下載原檔）\n・新增文件、改版/編輯、下載原檔（各自獨立）\n・刪除/還原\n・文管設定＝標籤/各文件開啟權限/NAS路徑/AS負責人/範本\n・線上開檔＝開工作副本直接打字列印'); });
 
   // init
   loadMeta(loadDocs);
