@@ -100,6 +100,10 @@ function asDocRoot(PDO $db): string {
 function asDocDir(PDO $db, int $docId): string {
     return asDocRoot($db) . DIRECTORY_SEPARATOR . 'docs' . DIRECTORY_SEPARATOR . $docId;
 }
+/** 表單填寫紀錄的實體資料夾＝根 / records / {form_doc_id} */
+function asRecordDir(PDO $db, int $docId): string {
+    return asDocRoot($db) . DIRECTORY_SEPARATOR . 'records' . DIRECTORY_SEPARATOR . $docId;
+}
 function asTplDir(PDO $db): string {
     return asDocRoot($db) . DIRECTORY_SEPARATOR . '_template';
 }
@@ -134,8 +138,8 @@ function asStream(string $fullpath, string $downloadName, bool $inline = false):
  * Office 檔線上預覽：轉成 PDF 快取後回傳快取路徑（失敗回 null）。
  * 版本檔案不會變動（改版＝新檔），快取永久有效；共用 attachment_lib 的 LibreOffice 轉檔＋Chrome 備援。
  */
-function asPreviewPdf(PDO $db, int $docId, string $fileName): ?string {
-    $dir = asDocDir($db, $docId);
+function asPreviewPdf(PDO $db, int $docId, string $fileName, ?string $dir = null): ?string {
+    $dir = $dir ?? asDocDir($db, $docId);
     $src = $dir . DIRECTORY_SEPARATOR . $fileName;
     if (!is_file($src)) return null;
     $cache = $dir . DIRECTORY_SEPARATOR . 'preview_' . pathinfo($fileName, PATHINFO_FILENAME) . '.pdf';
@@ -236,6 +240,9 @@ $asGate = [
     'get_perms'=>'settings', 'save_perms'=>'settings',
     'get_settings'=>'settings', 'save_settings'=>'settings', 'upload_template'=>'settings',
     'save_dept_codes'=>'settings',
+    'form_records_list'=>'view', 'form_records_upload'=>'create', 'form_record_delete'=>'delete',
+    'set_linked_module'=>'settings',
+    // form_record_download 於 case 內依 inline 分流（預覽=view / 原檔=download）
 ];
 if (!$currentUserId) {
     if ($action === 'download' || $action === 'download_template') { http_response_code(403); exit('尚未登入'); }
@@ -317,7 +324,8 @@ case 'list_documents':
     $sql = "SELECT d.*, dep.name AS dept_name,
                    v.revised_date, v.change_status, v.file_name AS current_file_name,
                    pd.doc_no AS parent_doc_no, pd.doc_name AS parent_doc_name,
-                   (SELECT COUNT(*) FROM as_document c WHERE c.parent_doc_id = d.id AND c.is_deleted = 0) AS children_count
+                   (SELECT COUNT(*) FROM as_document c WHERE c.parent_doc_id = d.id AND c.is_deleted = 0) AS children_count,
+                   (SELECT COUNT(*) FROM as_form_record fr WHERE fr.form_doc_id = d.id AND fr.is_deleted = 0) AS record_count
             FROM as_document d
             LEFT JOIN department dep ON dep.id = d.department_id
             LEFT JOIN as_document_version v ON v.id = d.current_version_id
@@ -876,6 +884,112 @@ case 'create_documents_batch':
     }
     $okCnt = count(array_filter($results, fn($r)=>$r['success']));
     jout(['status'=>'success','ok'=>$okCnt,'total'=>count($rows),'results'=>$results]);
+
+// ══════════════ 表單填寫紀錄（品質紀錄：紙本掃描/檔案上傳 + 電子化模組結果） ══════════════
+case 'form_records_list':
+    $docId = (int)($_GET['doc_id'] ?? 0);
+    $page  = max(1, (int)($_GET['page'] ?? 1));
+    $size  = min(50, max(5, (int)($_GET['page_size'] ?? 10)));
+    if ($docId<=0) jout(['status'=>'error','message'=>'無效 ID']);
+    $st = $db->prepare("SELECT doc_no, doc_name, linked_module FROM as_document WHERE id=?");
+    $st->execute([$docId]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
+
+    // 紙本紀錄（後端分頁，符合 ai-rules/08）
+    $tot = $db->prepare("SELECT COUNT(*) FROM as_form_record WHERE form_doc_id=? AND is_deleted=0");
+    $tot->execute([$docId]);
+    $total = (int)$tot->fetchColumn();
+    $st = $db->prepare("SELECT r.*, COALESCE(u.user_cname, r.uploaded_by) AS uploaded_by_name
+                        FROM as_form_record r LEFT JOIN user u ON u.user_uname = r.uploaded_by
+                        WHERE r.form_doc_id=? AND r.is_deleted=0
+                        ORDER BY r.record_date DESC, r.id DESC
+                        LIMIT ".(($page-1)*$size).",".$size);
+    $st->execute([$docId]);
+    $records = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    // 電子化模組結果（最新 20 筆＋模組頁連結；完整查詢至模組頁）
+    $electronic = null;
+    if ($doc['linked_module'] === 'car') {
+        $rows = $db->query("SELECT id, car_no AS no, fill_date AS rec_date, source_desc AS title
+                            FROM car_order ORDER BY id DESC LIMIT 20")->fetchAll(PDO::FETCH_ASSOC);
+        $cnt = (int)$db->query("SELECT COUNT(*) FROM car_order")->fetchColumn();
+        $electronic = ['module'=>'car','module_name'=>'異常矯正處理單(CAR)','page_url'=>'../QA/correction_order.php','total'=>$cnt,'rows'=>$rows];
+    } elseif ($doc['linked_module'] === 'qa_abnormal') {
+        $rows = $db->query("SELECT id, abnormal_order_no AS no, occurrence_date AS rec_date, abnormal_phenomenon AS title
+                            FROM qa_abnormal_order ORDER BY id DESC LIMIT 20")->fetchAll(PDO::FETCH_ASSOC);
+        $cnt = (int)$db->query("SELECT COUNT(*) FROM qa_abnormal_order")->fetchColumn();
+        $electronic = ['module'=>'qa_abnormal','module_name'=>'品質異常處理單','page_url'=>'../QA/qa_abnormal_view.php','total'=>$cnt,'rows'=>$rows];
+    }
+    jout(['status'=>'success','doc'=>$doc,'records'=>$records,'total'=>$total,'page'=>$page,'page_size'=>$size,'electronic'=>$electronic]);
+
+case 'form_records_upload':
+    $docId = (int)($_POST['doc_id'] ?? 0);
+    $rows  = json_decode($_POST['rows'] ?? '[]', true);
+    if ($docId<=0 || !is_array($rows) || empty($rows)) jout(['status'=>'error','message'=>'無資料列']);
+    if (asDocRoot($db)==='') jout(['status'=>'error','message'=>'尚未設定 NAS 儲存路徑']);
+    $dir = asRecordDir($db, $docId);
+    if (!is_dir($dir) && !mkdir($dir, 0777, true)) jout(['status'=>'error','message'=>'無法建立紀錄資料夾（NAS 未連線？）']);
+    $results = [];
+    foreach ($rows as $i => $r) {
+        $res = ['index'=>$i, 'success'=>false];
+        try {
+            $title = trim($r['title'] ?? '');
+            if ($title==='') throw new Exception('標題必填');
+            $rdate = trim($r['record_date'] ?? '') ?: null;
+            $note  = trim($r['note'] ?? '') ?: null;
+            $fkey  = 'file_'.$i;
+            if (!isset($_FILES[$fkey]) || $_FILES[$fkey]['error']!==UPLOAD_ERR_OK) throw new Exception('缺少檔案');
+            $ext = asSafeExt($_FILES[$fkey]['name']);
+            if (!$ext) throw new Exception('不允許此檔案類型');
+            $fname = asMakeName($ext);
+            if (!move_uploaded_file($_FILES[$fkey]['tmp_name'], $dir.DIRECTORY_SEPARATOR.$fname)) throw new Exception('寫入失敗');
+            $db->prepare("INSERT INTO as_form_record (form_doc_id,title,record_date,file_name,original_name,note,uploaded_by)
+                          VALUES (?,?,?,?,?,?,?)")
+               ->execute([$docId,$title,$rdate,$fname,basename($_FILES[$fkey]['name']),$note,$currentUserName]);
+            $res['success'] = true; $res['id'] = (int)$db->lastInsertId();
+        } catch (Exception $e) { $res['message'] = $e->getMessage(); }
+        $results[] = $res;
+    }
+    $okCnt = count(array_filter($results, fn($r)=>$r['success']));
+    jout(['status'=>'success','ok'=>$okCnt,'total'=>count($rows),'results'=>$results]);
+
+case 'form_record_delete':
+    $rid = (int)($_POST['id'] ?? 0);
+    if ($rid<=0) jout(['status'=>'error','message'=>'無效 ID']);
+    $db->prepare("UPDATE as_form_record SET is_deleted=1 WHERE id=?")->execute([$rid]);
+    jout(['status'=>'success']);
+
+case 'form_record_download':
+    $rid = (int)($_GET['id'] ?? 0);
+    $inline = (($_GET['inline'] ?? '') === '1');
+    if (!asCan($inline ? 'view' : 'download')) {
+        http_response_code(403); header('Content-Type: text/plain; charset=utf-8');
+        exit($inline ? '無檢閱權限' : '無下載權限');
+    }
+    $st = $db->prepare("SELECT * FROM as_form_record WHERE id=?");
+    $st->execute([$rid]);
+    $rec = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$rec) { http_response_code(404); exit('紀錄不存在'); }
+    $dir = asRecordDir($db, (int)$rec['form_doc_id']);
+    if ($inline) {
+        $fext = strtolower(pathinfo($rec['file_name'], PATHINFO_EXTENSION));
+        if (in_array($fext, ['doc','docx','xls','xlsx','ppt','pptx','odt','ods'], true)) {
+            $cache = asPreviewPdf($db, (int)$rec['form_doc_id'], $rec['file_name'], $dir);
+            if ($cache) asStream($cache, preg_replace('/\.[^.]+$/', '', $rec['original_name'] ?: 'record') . '.pdf', true);
+            if (!asCan('download')) { http_response_code(500); header('Content-Type: text/plain; charset=utf-8'); exit('預覽產生失敗'); }
+        }
+    }
+    asStream($dir.DIRECTORY_SEPARATOR.$rec['file_name'], $rec['original_name'] ?: $rec['file_name'], $inline);
+    break;
+
+case 'set_linked_module':
+    $docId  = (int)($_POST['doc_id'] ?? 0);
+    $module = trim($_POST['module'] ?? '');
+    if ($docId<=0) jout(['status'=>'error','message'=>'無效 ID']);
+    if (!in_array($module, ['', 'car', 'qa_abnormal'], true)) jout(['status'=>'error','message'=>'不支援的模組']);
+    $db->prepare("UPDATE as_document SET linked_module=?, updated_at=NOW() WHERE id=?")->execute([$module ?: null, $docId]);
+    jout(['status'=>'success']);
 
 default:
     jout(['status'=>'error','message'=>'無效的操作']);

@@ -294,6 +294,67 @@ if ($deptPerm === 'R') {
   </div>
 </div>
 
+<!-- ═════════ 表單填寫紀錄 Modal（品質紀錄：紙本上傳＋電子化模組結果） ═════════ -->
+<div class="modal fade" id="recordModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" style="width:94%;max-width:1150px;" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title">填寫紀錄 － <span id="rec_doc_name"></span></h4>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="rec_doc_id">
+        <div id="recLinkedWrap" class="form-inline" style="margin-bottom:10px;display:none;">
+          <label style="font-weight:normal;">電子化模組連結：</label>
+          <select class="form-control input-sm" id="rec_linked_module">
+            <option value="">— 無（純紙本紀錄）—</option>
+            <option value="qa_abnormal">品質異常處理單</option>
+            <option value="car">異常矯正處理單(CAR)</option>
+          </select>
+          <button class="btn btn-xs btn-info" id="recLinkedSave">儲存連結</button>
+          <span class="text-muted" style="font-size:11px;margin-left:6px;">連結後此表單的電子化開單結果會顯示在下方</span>
+        </div>
+
+        <div id="recElectronicBlock" style="display:none;">
+          <h4 style="margin-top:0;"><i class="fa fa-bolt" style="color:#f39c12;"></i> 電子化紀錄 <small id="recElecInfo"></small>
+            <a href="#" id="recElecLink" target="_blank" class="btn btn-xs btn-primary" style="margin-left:8px;">前往模組頁</a></h4>
+          <div class="table-responsive" style="max-height:220px;overflow-y:auto;">
+            <table class="table table-condensed table-striped" style="font-size:12px;">
+              <thead><tr><th style="width:150px;">單號</th><th style="width:100px;">日期</th><th>內容摘要</th></tr></thead>
+              <tbody id="recElecBody"></tbody>
+            </table>
+          </div>
+          <hr>
+        </div>
+
+        <h4><i class="fa fa-file-text-o" style="color:#3498db;"></i> 紙本／檔案紀錄 <small id="recPaperInfo"></small></h4>
+        <div class="table-responsive">
+          <table class="table table-condensed table-striped" style="font-size:12px;">
+            <thead><tr><th>標題</th><th style="width:100px;">紀錄日期</th><th>備註</th><th style="width:90px;">上傳者</th><th style="width:150px;">操作</th></tr></thead>
+            <tbody id="recPaperBody"></tbody>
+          </table>
+        </div>
+        <div class="text-right"><ul class="pagination pagination-sm" id="recPager" style="margin:0 0 10px;"></ul></div>
+
+        <div id="recUploadBlock" style="border-top:1px solid #eee;padding-top:10px;">
+          <h5><i class="fa fa-upload"></i> 批次上傳紀錄（Excel / Word / PDF，可多選）</h5>
+          <div class="form-inline" style="margin-bottom:6px;">
+            <input type="file" id="rec_files" multiple>
+            <label style="font-weight:normal;margin-left:10px;">共同紀錄日期：</label>
+            <input type="date" class="form-control input-sm" id="rec_common_date" max="9999-12-31">
+          </div>
+          <table class="table table-condensed" style="font-size:12px;">
+            <tbody id="recUploadRows"></tbody>
+          </table>
+          <button class="btn btn-sm btn-primary" id="recUploadSubmit" style="display:none;"><i class="fa fa-upload"></i> 開始上傳</button>
+          <div id="recUploadResult"></div>
+        </div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════ 角色設定 Modal（roles module='as_doc'，寫入需管理員） ═════════ -->
 <div class="modal fade" id="rolesModal" tabindex="-1" role="dialog">
   <div class="modal-dialog modal-lg" style="width:92%;max-width:1100px;" role="document">
@@ -710,6 +771,11 @@ $(function(){
         }
       }
       ops += `<button class="btn btn-xs btn-default op-hist" data-id="${d.id}" data-name="${esc(d.doc_name)}">歷史版本</button> `;
+      // 表單類別：填寫紀錄（品質紀錄）
+      if(d.doc_type==='表單' || parseInt(d.record_count)>0 || d.linked_module){
+        const rc = parseInt(d.record_count)||0;
+        ops += `<button class="btn btn-xs ${rc>0||d.linked_module?'btn-warning':'btn-default'} op-record" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="填寫後的表單紀錄（紙本上傳/電子化結果）">紀錄${rc>0?' ×'+rc:''}</button> `;
+      }
       if(curVer && canEO && isOffice) ops += `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="PDF 預覽">預覽</a> `;
       if(curVer && canDL && d.current_file_name) ops += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}" title="下載原檔（需下載權限）">下載</a> `;
       if(canU){
@@ -1136,6 +1202,106 @@ $(function(){
         if(fails.length) html += '<ul style="color:#a94442;">'+fails.map(f=>`<li>${esc(f.doc_no||('第'+(f.index+1)+'列'))}：${esc(f.message)}</li>`).join('')+'</ul>';
         $('#batchResult').html(html);
         loadMeta(loadDocs);
+     })
+     .fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $b.prop('disabled',false); });
+  });
+
+  // ── 表單填寫紀錄（品質紀錄） ──
+  let recPage = 1;
+  function loadRecords(docId, page){
+    recPage = page||1;
+    $.getJSON(API+'?action=form_records_list', {doc_id:docId, page:recPage, page_size:10}, r=>{
+      if(r.status!=='success'){ alert(r.message||'讀取失敗'); return; }
+      $('#rec_doc_name').text(r.doc.doc_no+'｜'+r.doc.doc_name);
+      $('#rec_linked_module').val(r.doc.linked_module||'');
+      $('#recLinkedWrap').toggle(canS);
+      // 電子化區
+      if(r.electronic){
+        $('#recElectronicBlock').show();
+        $('#recElecInfo').text(`${r.electronic.module_name}｜共 ${r.electronic.total} 筆（顯示最新 20 筆）`);
+        $('#recElecLink').attr('href', r.electronic.page_url);
+        const eb=$('#recElecBody').empty();
+        (r.electronic.rows||[]).forEach(x=>eb.append(`<tr><td>${esc(x.no)}</td><td>${esc(x.rec_date)||'-'}</td><td>${esc((x.title||'').substring(0,80))}</td></tr>`));
+        if(!(r.electronic.rows||[]).length) eb.append('<tr><td colspan="3" class="text-muted text-center">尚無資料</td></tr>');
+      } else { $('#recElectronicBlock').hide(); }
+      // 紙本區
+      $('#recPaperInfo').text(`共 ${r.total} 筆`);
+      const tb=$('#recPaperBody').empty();
+      (r.records||[]).forEach(x=>{
+        let op = `<a class="btn btn-xs btn-default" href="${API}?action=form_record_download&id=${x.id}&inline=1" target="_blank">預覽</a> `;
+        if(canDL) op += `<a class="btn btn-xs btn-info" href="${API}?action=form_record_download&id=${x.id}">下載</a> `;
+        if(canD) op += `<button class="btn btn-xs btn-danger rec-del" data-id="${x.id}">刪</button>`;
+        tb.append(`<tr><td>${esc(x.title)}</td><td>${esc(x.record_date)||'-'}</td><td>${esc(x.note)||'-'}</td><td>${esc(x.uploaded_by_name)||'-'}</td><td class="text-nowrap">${op}</td></tr>`);
+      });
+      if(!(r.records||[]).length) tb.append('<tr><td colspan="5" class="text-muted text-center">尚無紙本紀錄</td></tr>');
+      // 分頁
+      const pages = Math.max(1, Math.ceil(r.total/r.page_size));
+      const pg=$('#recPager').empty();
+      for(let i=1;i<=pages;i++){
+        if(i===1||i===pages||Math.abs(i-recPage)<=2) pg.append(`<li class="${i===recPage?'active':''}"><a href="#" data-p="${i}">${i}</a></li>`);
+        else if(Math.abs(i-recPage)===3) pg.append('<li class="disabled"><a>…</a></li>');
+      }
+      // 上傳區依權限
+      $('#recUploadBlock').toggle(canC);
+    });
+  }
+  $('#docTableBody').on('click','.op-record', function(){
+    $('#rec_doc_id').val($(this).data('id'));
+    $('#rec_files').val(''); $('#recUploadRows').empty(); $('#recUploadSubmit').hide(); $('#recUploadResult').empty();
+    loadRecords($(this).data('id'), 1);
+    $('#recordModal').modal('show');
+  });
+  $('#recPager').on('click','a',function(e){ e.preventDefault(); const p=parseInt($(this).data('p')); if(p) loadRecords($('#rec_doc_id').val(), p); });
+  $('#recPaperBody').on('click','.rec-del', function(){
+    if(!confirm('刪除此筆紀錄？')) return;
+    $.post(API+'?action=form_record_delete',{id:$(this).data('id')}, r=>{
+      if(r.status==='success'){ loadRecords($('#rec_doc_id').val(), recPage); loadDocs(); } else alert(r.message);
+    },'json');
+  });
+  $('#recLinkedSave').on('click', function(){
+    $.post(API+'?action=set_linked_module',{doc_id:$('#rec_doc_id').val(), module:$('#rec_linked_module').val()}, r=>{
+      if(r.status==='success'){ loadRecords($('#rec_doc_id').val(), 1); loadDocs(); } else alert(r.message);
+    },'json');
+  });
+  // 批次上傳紀錄：選檔後逐列填標題（預設=檔名）/日期/備註
+  $('#rec_files').on('change', function(){
+    const tb=$('#recUploadRows').empty();
+    const d = $('#rec_common_date').val() || '';
+    for(let i=0;i<this.files.length;i++){
+      const nameNoExt = this.files[i].name.replace(/\.[^.]+$/,'');
+      tb.append(`<tr>
+        <td style="width:22%;vertical-align:middle;">${esc(this.files[i].name)}</td>
+        <td style="width:28%;"><input type="text" class="form-control input-sm ru-title" value="${esc(nameNoExt)}" placeholder="標題(必填)"></td>
+        <td style="width:16%;"><input type="date" class="form-control input-sm ru-date" value="${d}" max="9999-12-31"></td>
+        <td><input type="text" class="form-control input-sm ru-note" placeholder="備註(選填)"></td>
+      </tr>`);
+    }
+    $('#recUploadSubmit').toggle(this.files.length>0);
+  });
+  $('#rec_common_date').on('change', function(){ $('.ru-date').val($(this).val()); });
+  $('#recUploadSubmit').on('click', function(){
+    const files = $('#rec_files')[0].files;
+    if(!files.length) return;
+    const rows=[]; let bad=0;
+    $('#recUploadRows tr').each(function(){
+      const t=$(this).find('.ru-title').val().trim();
+      if(!t) bad++;
+      rows.push({title:t, record_date:$(this).find('.ru-date').val(), note:$(this).find('.ru-note').val().trim()});
+    });
+    if(bad){ alert(`有 ${bad} 列缺少標題`); return; }
+    const fd=new FormData();
+    fd.append('doc_id', $('#rec_doc_id').val());
+    fd.append('rows', JSON.stringify(rows));
+    for(let i=0;i<files.length;i++) fd.append('file_'+i, files[i]);
+    const $b=$(this).prop('disabled',true); NProgress.start();
+    $.ajax({url:API+'?action=form_records_upload', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+     .done(r=>{
+        if(r.status!=='success'){ alert(r.message||'失敗'); return; }
+        const fails=(r.results||[]).filter(x=>!x.success);
+        $('#recUploadResult').html(`<div class="alert ${r.ok===r.total?'alert-success':'alert-warning'}" style="margin-top:8px;">上傳完成：成功 ${r.ok} / ${r.total} 筆</div>`
+          + (fails.length? '<ul style="color:#a94442;">'+fails.map(f=>`<li>第${f.index+1}列：${esc(f.message)}</li>`).join('')+'</ul>':''));
+        $('#rec_files').val(''); $('#recUploadRows').empty(); $('#recUploadSubmit').hide();
+        loadRecords($('#rec_doc_id').val(), 1); loadDocs();
      })
      .fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $b.prop('disabled',false); });
   });
