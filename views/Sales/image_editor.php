@@ -1458,14 +1458,27 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <input type="file" id="file-input" accept="image/*" multiple style="display:none;">
 <div id="toast"></div>
 
-<script src="../../resource/js/fabric.min.js"></script>
+<script src="../../resource/js/fabric.min.js?v=<?= filemtime(__DIR__ . '/../../resource/js/fabric.min.js') ?>"></script><!-- 帶檔案時間當版本參數：修過的 fabric 才不會被瀏覽器快取的舊檔蓋掉 -->
 <script>
 'use strict';
-/* Fabric 5.3.0 已知 bug：textBaseline 預設值誤植為 'alphabetical'（非法值），瀏覽器每個文字物件
-   每一幀渲染都拒絕賦值並印一條主控台警告，文字多時每秒噴數百條，就是「操作卡頓/當機30秒」的元兇。
-   本地 fabric.min.js 已修正該錯字；這裡再保險一層，防未來換版 fabric 把錯字帶回來。 */
-if (window.fabric && fabric.Text && fabric.Text.prototype.textBaseline === 'alphabetical') {
-    fabric.Text.prototype.textBaseline = 'alphabetic';
+/* Fabric 5.3.0 已知 bug 修補（本地 fabric.min.js 已修字，這裡是多層保險）：
+   1) textBaseline 預設值誤植 'alphabetical'（非法值）→ 瀏覽器每幀、每個文字物件都印一條主控台警告，
+      警告洪流就是「操作卡頓/當機30秒」的元兇。光改 prototype 預設值不夠——舊工作檔/舊標籤/剪貼簿
+      序列化時把錯值存成了物件「自己的」屬性，載入後蓋過預設值——所以在渲染入口把每顆實例就地矯正。
+   2) IText 游標動畫在物件已被移出畫布後仍可能再跑一拍 → this.canvas undefined → getRetinaScaling
+      例外打斷渲染迴圈（殘影/卡頓來源之一），入口加防呆直接略過。 */
+if (window.fabric && fabric.Text) {
+    if (fabric.Text.prototype.textBaseline === 'alphabetical') fabric.Text.prototype.textBaseline = 'alphabetic';
+    const __setTextStyles = fabric.Text.prototype._setTextStyles;
+    fabric.Text.prototype._setTextStyles = function (ctx, charStyle, forMeasuring) {
+        if (this.textBaseline === 'alphabetical') this.textBaseline = 'alphabetic';
+        return __setTextStyles.call(this, ctx, charStyle, forMeasuring);
+    };
+    const __renderCursor = fabric.IText.prototype.renderCursorOrSelection;
+    fabric.IText.prototype.renderCursorOrSelection = function () {
+        if (!this.canvas || !this.canvas.contextTop) return;
+        return __renderCursor.call(this);
+    };
 }
 /* ════════════════════════════════════════════════════════════════════
    批圖編輯器主程式（Fabric.js 5.3）
@@ -3528,6 +3541,7 @@ function startGroupTextEdit(group, child, cursorToEnd) {
     else tmp.selectAll();
     tmp.on('editing:exited', function () {
         const val = tmp.text;
+        try { tmp.abortCursorAnimation(); } catch (e) { /* 游標動畫沒在跑就算了 */ }
         canvas.remove(tmp);
         if (tmp.__deleteGroup) {   // 編輯中按了刪除：連同整組一起刪，不要再把群組加回來
             canvas.remove(group);
