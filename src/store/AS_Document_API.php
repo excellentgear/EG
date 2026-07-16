@@ -156,6 +156,56 @@ function asPreviewPdf(PDO $db, int $docId, string $fileName): ?string {
     return $ok ? $cache : null;
 }
 
+/**
+ * 版本號格式一致性檢查：新版本號需與此文件既有版本的「型式」一致。
+ * 數字型（0.1 / 1.0 / 2.3.1）與英文字母型（A / B / C）不可混用；
+ * 既有版本全為數字型 → 新版本必須是數字型，反之亦然（既有為空或混合型則不限制）。
+ * $excludeVerId：修正現有版本號時排除自己。合法回 null，不合法回錯誤訊息。
+ */
+function asValidateVersionStyle(PDO $db, int $docId, string $newVersion, int $excludeVerId = 0): ?string {
+    $st = $db->prepare("SELECT version FROM as_document_version WHERE doc_id=? AND id!=?");
+    $st->execute([$docId, $excludeVerId]);
+    $existing = $st->fetchAll(PDO::FETCH_COLUMN);
+    if (empty($existing)) return null;
+    $isNum   = fn(string $v) => (bool)preg_match('/^\d+(\.\d+)*$/', trim($v));
+    $isAlpha = fn(string $v) => (bool)preg_match('/^[A-Za-z]+$/', trim($v));
+    $allNum   = count(array_filter($existing, $isNum))   === count($existing);
+    $allAlpha = count(array_filter($existing, $isAlpha)) === count($existing);
+    if ($allNum && !$isNum($newVersion))
+        return "此文件版本號皆為數字型（如 " . implode('、', array_slice($existing, -3)) . "），新版本「{$newVersion}」格式不一致，請沿用數字型（如 " . end($existing) . " 之後的下一版）";
+    if ($allAlpha && !$isAlpha($newVersion))
+        return "此文件版本號皆為英文字母型（如 " . implode('、', array_slice($existing, -3)) . "），新版本「{$newVersion}」格式不一致，請沿用字母型";
+    return null;
+}
+
+/**
+ * 版本號新舊比較：改版的新版本號必須「大於」此文件現行版本（B 版之後不可改成 A 版、1.2 之後不可改成 0.3）。
+ * 數字型：各段依數值比較（1.10 > 1.2）；字母型：先比長度再比字典序（Z < AA）。
+ * 型式不同或無法比較時回 null（交由型式一致性檢查把關）。合法回 null，不合法回錯誤訊息。
+ */
+function asValidateVersionOrder(string $current, string $newVersion): ?string {
+    $current = trim($current); $newVersion = trim($newVersion);
+    if ($current === '') return null;
+    $numRe = '/^\d+(\.\d+)*$/'; $alphaRe = '/^[A-Za-z]+$/';
+    if (preg_match($numRe, $current) && preg_match($numRe, $newVersion)) {
+        $a = array_map('intval', explode('.', $newVersion));
+        $b = array_map('intval', explode('.', $current));
+        for ($i = 0; $i < max(count($a), count($b)); $i++) {
+            $x = $a[$i] ?? 0; $y = $b[$i] ?? 0;
+            if ($x > $y) return null;
+            if ($x < $y) return "新版本號 {$newVersion} 比目前版本 {$current} 舊，改版版本號必須往後推進";
+        }
+        return "新版本號 {$newVersion} 與目前版本 {$current} 相同"; // 理論上被重複檢查先擋，保險
+    }
+    if (preg_match($alphaRe, $current) && preg_match($alphaRe, $newVersion)) {
+        $a = strtoupper($newVersion); $b = strtoupper($current);
+        $cmp = (strlen($a) !== strlen($b)) ? (strlen($a) <=> strlen($b)) : strcmp($a, $b);
+        if ($cmp <= 0) return "新版本號 {$newVersion} 未比目前版本 {$current} 新，改版版本號必須往後推進（如 {$current} 的下一個字母）";
+        return null;
+    }
+    return null;
+}
+
 /** 母文件驗證：表單/四階/已刪除的文件不可作為母文件。合法回 null，不合法回錯誤訊息。 */
 function asValidateParent(PDO $db, ?int $parentId): ?string {
     if ($parentId === null || $parentId <= 0) return null;
@@ -411,6 +461,15 @@ case 'add_version':
     $doc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
 
+    // 新版本號不可與此文件任何既有版本相同（含歷史版本，避免版本紀錄混淆）
+    $vdup = $db->prepare("SELECT COUNT(*) FROM as_document_version WHERE doc_id=? AND version=?");
+    $vdup->execute([$docId, $version]);
+    if ($vdup->fetchColumn() > 0) jout(['status'=>'error','message'=>"版本號 {$version} 已存在於此文件的版本紀錄（含歷史版本），請使用新的版本號"]);
+    // 版本號型式須與既有版本一致（數字型/字母型不可混用）
+    if ($vErr = asValidateVersionStyle($db, $docId, $version)) jout(['status'=>'error','message'=>$vErr]);
+    // 改版版本號必須比目前版本新（不可倒退）
+    if ($vErr = asValidateVersionOrder((string)($doc['current_version'] ?? ''), $version)) jout(['status'=>'error','message'=>$vErr]);
+
     $hasFile  = isset($_FILES['file']) && $_FILES['file']['error']===UPLOAD_ERR_OK;
     $hasApply = isset($_FILES['apply_form']) && $_FILES['apply_form']['error']===UPLOAD_ERR_OK;
     if (!$hasFile && !$asNoAttach)
@@ -496,6 +555,11 @@ case 'update_document_meta':
             $cvId->execute([$id]);
             $cvId = (int)$cvId->fetchColumn();
             if ($cvId) {
+                // 修正後的版本號不可與此文件其他（歷史）版本相同，且型式須一致
+                $vdup = $db->prepare("SELECT COUNT(*) FROM as_document_version WHERE doc_id=? AND version=? AND id!=?");
+                $vdup->execute([$id, $version, $cvId]);
+                if ($vdup->fetchColumn() > 0) throw new Exception("版本號 {$version} 已存在於此文件的歷史版本，請使用其他版本號");
+                if ($vErr = asValidateVersionStyle($db, $id, $version, $cvId)) throw new Exception($vErr);
                 $db->prepare("UPDATE as_document_version SET version=?, change_status=?, revised_date=?, revised_pages=?, revised_summary=?, doc_level_snapshot=?, department_id_snapshot=? WHERE id=?")
                    ->execute([$version, ($cstat ?: null), $rdate, $rpages, $rsum, $level, $dept, $cvId]);
                 $db->prepare("UPDATE as_document SET current_version=? WHERE id=?")->execute([$version, $id]);

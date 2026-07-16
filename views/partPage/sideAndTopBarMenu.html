@@ -146,6 +146,12 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 <?php
                 // 動態生成選單邏輯
 
+                // 新版角色機制（module_code對應roles.module），供 Case 1 單頁模組額外判斷用（見下方 rf_has_module_role）
+                if (!function_exists('rf_has_module_role')) {
+                    require_once __DIR__ . '/../../src/common/role_features_helper.php';
+                }
+                $pdo_for_menu = $conn->getPDO();
+
                 // 1. 取得所有模組 (system_modules)
                 $modules = $conn->getAll("SELECT * FROM `system_modules` ORDER BY `sort_order` ASC");
 
@@ -215,8 +221,9 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
 
                         // Case 1: Module is a single page link (page_id is set)
                         if (!empty($page_id_link)) {
-                            // 檢查模組本身是否有權限 (scope=group)
-                            if (isset($user_perms['group'][$module_code])) {
+                            // 檢查模組本身是否有權限 (scope=group)，或透過新版角色機制(user_roles/roles，module=module_code)取得權限
+                            // （例如 BOM追蹤 module_code='bom_track' 走這個新機制，未存在於舊 user_module_permissions 也能顯示選單）
+                            if (isset($user_perms['group'][$module_code]) || rf_has_module_role($pdo_for_menu, $id, $module_code)) {
                                 // 查找對應的頁面以獲取 URL
                                 if (isset($pages_by_id[$page_id_link])) {
                                     $page_details = $pages_by_id[$page_id_link];
@@ -819,4 +826,23 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             $('#sidebar-menu').css('opacity', 1);
         }
     });
+</script>
+<script>
+    // 全站日期欄位修正：西元年限 4 碼（未設 max 時瀏覽器允許 6 碼年份，導致鍵入 2026 後
+    // 不會自動跳到月份、可打出 202607 這種年）。補 max=9999-12-31 後年份滿 4 碼即自動跳月份。
+    // 規則出處：ai-rules/08-UI互動規範.md 第二節。
+    (function () {
+        function fixDateInputs(root) {
+            var list = (root.querySelectorAll ? root.querySelectorAll('input[type="date"]:not([max])') : []);
+            for (var i = 0; i < list.length; i++) list[i].setAttribute('max', '9999-12-31');
+        }
+        document.addEventListener('DOMContentLoaded', function () { fixDateInputs(document); });
+        // 動態產生的日期欄位（modal、AJAX 列表）聚焦當下補上
+        document.addEventListener('focusin', function (e) {
+            var t = e.target;
+            if (t && t.tagName === 'INPUT' && t.type === 'date' && !t.hasAttribute('max')) {
+                t.setAttribute('max', '9999-12-31');
+            }
+        });
+    })();
 </script>

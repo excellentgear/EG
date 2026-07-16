@@ -386,6 +386,8 @@ if ($deptPerm === 'R') {
           <h4 class="modal-title">文件改版 － <span id="ver_doc_name"></span></h4>
         </div>
         <div class="modal-body">
+          <p style="margin-bottom:10px;"><strong>目前版本：</strong><span class="label label-info" id="ver_cur_ver" style="font-size:13px;"></span>
+             <span class="text-muted" style="margin-left:8px;">修訂日期：<span id="ver_cur_date"></span></span></p>
           <div class="apply-alert">
             <i class="fa fa-exclamation-triangle"></i>
             文件改版依規定須檢附「<strong>文件制修申請單（附件一）</strong>」。
@@ -863,8 +865,13 @@ $(function(){
   // ── 改版 ──
   $('#docTableBody').on('click','.op-ver', function(){
     $('#versionForm')[0].reset();
-    $('#ver_doc_id').val($(this).data('id'));
+    const vid = $(this).data('id');
+    $('#ver_doc_id').val(vid);
     $('#ver_doc_name').text($(this).data('name'));
+    // 顯示目前版本號與修訂日期（取自列表資料）
+    const drow = DOCS.find(x=>x.id==vid) || {};
+    $('#ver_cur_ver').text(drow.current_version||'-');
+    $('#ver_cur_date').text(drow.revised_date||'-');
     // 免附件補登權限：新版文件檔與申請單皆可不附（後端同樣豁免）
     $('#ver_file').prop('required', !canNA);
     $('#ver_apply_form').prop('required', !canNA);
