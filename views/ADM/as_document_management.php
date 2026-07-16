@@ -157,10 +157,10 @@ if ($deptPerm === 'R') {
                 <div class="col-md-3">
                   <select class="form-control" id="filterLevel">
                     <option value="">全部階級</option>
-                    <option value="一階">一階</option>
-                    <option value="二階">二階</option>
-                    <option value="三階">三階</option>
-                    <option value="四階">四階</option>
+                    <option value="一階">一階（品質手冊）</option>
+                    <option value="二階">二階（程序書）</option>
+                    <option value="三階">三階（指導書/圖面/規範）</option>
+                    <option value="四階">四階（表單/紀錄）</option>
                   </select>
                 </div>
                 <div class="col-md-3">
@@ -235,9 +235,9 @@ if ($deptPerm === 'R') {
             </div>
             <div class="form-group col-md-4"><label>文件階級</label>
               <select class="form-control" name="doc_level" id="doc_level">
-                <option value="">--</option><option value="一階">一階</option><option value="二階">二階</option><option value="三階">三階</option><option value="四階">四階</option>
+                <option value="">--</option><option value="一階">一階（品質手冊）</option><option value="二階">二階（程序書）</option><option value="三階">三階（指導書/圖面/規範）</option><option value="四階">四階（表單/紀錄）</option>
               </select>
-              <span class="text-muted" style="font-size:11px;">階級＝文件編號首碼（如 2-TD-01-01 → 二階）；表單類別的文件依貴司制度可為二階/三階。</span>
+              <span class="text-muted" style="font-size:11px;">表單/紀錄一律屬<strong>四階</strong>；編號首碼是「母文件」的階級（如 2-TD-01-01 為隸屬二階程序書 2-TD-01 的四階表單）。</span>
             </div>
             <div class="form-group col-md-4"><label>所屬部門</label>
               <select class="form-control" name="department_id" id="doc_department_id"><option value="">跨部門 / 未指定</option></select>
@@ -550,6 +550,13 @@ $(function(){
   $('#tagFilterBar').on('click','.tag-filter', function(){ activeTagId=parseInt($(this).data('id'))||0; renderTagFilter(); loadDocs(); });
   // 雙擊清空搜尋欄
   $('#searchKw').on('dblclick', function(){ $(this).val(''); loadDocs(); });
+
+  // 文件類別 → 自動帶入對應階級（AS9100 四階架構；仍可手動改）
+  const TYPE_LEVEL_MAP = {'手冊':'一階','程序':'二階','標準書':'三階','表單':'四階'};
+  $('#doc_type').on('change', function(){
+    const lv = TYPE_LEVEL_MAP[$(this).val()];
+    if(lv) $('#doc_level').val(lv);
+  });
 
   // 標籤選擇器（新增/編輯文件用）
   function renderDocTagPicker(selected){
