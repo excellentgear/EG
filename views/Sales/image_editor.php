@@ -943,6 +943,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <div class="tool-group-sep"></div>
         <button class="tool-btn" id="tool-draw" onclick="setTool('draw')" title="畫筆（自由手繪）"><i class="fa fa-pencil"></i><span class="kbd">B</span></button>
         <button class="tool-btn" id="tool-line" onclick="setTool('line')" title="直線（可用「端點」下拉選無/單箭頭/雙箭頭）"><i class="fa fa-minus" style="transform:rotate(-45deg)"></i><span class="kbd">L</span></button>
+        <button class="tool-btn" id="tool-connect" onclick="setTool('connect')" title="兩點連線：點第一點→點第二點自動相連（屬性列可選直線/曲線與端點箭頭）。直線之後雙擊可編輯端點；曲線畫完自動進入編輯端點，拖中間圓點調曲度。Esc 取消第一點" style="font-size:15px;font-weight:700;">⤳</button>
         <button class="tool-btn" id="tool-rect" onclick="setTool('rect')" title="矩形"><i class="fa fa-square-o"></i><span class="kbd">R</span></button>
         <button class="tool-btn" id="tool-ellipse" onclick="setTool('ellipse')" title="橢圓"><i class="fa fa-circle-o"></i><span class="kbd">O</span></button>
         <div class="tool-group-sep"></div>
@@ -989,6 +990,16 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                     <input type="color" id="p-fill" value="#ffffff">
                     <input type="checkbox" id="p-fill-on" title="形狀是否填色">
                 </label>
+            </span>
+            <!-- 兩點連線 -->
+            <span class="prop-sec" id="sec-connect">
+                <label>連線方式
+                    <select id="p-connect-kind" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;">
+                        <option value="line" selected>直線</option>
+                        <option value="curve">曲線</option>
+                    </select>
+                </label>
+                <span style="color:#8b949e;font-size:11px;">點第一點→點第二點自動相連；曲線畫完拖中間圓點調曲度；Esc 取消第一點</span>
             </span>
             <!-- 文字 -->
             <span class="prop-sec" id="sec-text">
@@ -1478,6 +1489,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <b style="color:#6fc3ff;">② 編修與遮蓋</b>
             <ul style="padding-left:18px;margin:4px 0 10px;">
                 <li>畫筆(B)/直線(L)/矩形(R)/橢圓(O)；所有東西都是物件，隨時可移動、縮放、刪除；直線與畫筆都可在屬性列選<b>線型（實線/虛線/中心線）</b>與<b>端點（無/單箭頭/雙箭頭）</b></li>
+                <li><b>兩點連線（⤳）</b>：點第一點→點第二點自動相連，屬性列選<b>直線或曲線</b>（直線也可帶箭頭端點）。直線之後雙擊＝編輯端點；曲線畫完自動進入編輯端點模式，<b>拖中間圓點調曲度</b>、拖頭尾圓點改連接位置、「＋」可再加節點；Esc 取消已點的第一點</li>
                 <li>遮蓋刪除客戶資料：矩形(M)或不規則套索圈選，遮蓋色可改，匯出時才壓平</li>
                 <li>框選複製(C)：框一個範圍變成新圖塊；<b>框選搬移(X)</b>＝小畫家式切下搬走（只挖空底圖，標籤/文字不受影響）；旁邊的<b>套索工具</b>是不規則形狀版，按住拖曳圈任意形狀後放開即可切下。兩者都可連續使用，Esc 或切別的工具才離開。跨視窗貼上用 <b>Ctrl+Shift+V</b>（Ctrl+V 優先貼系統剪貼簿）</li>
                 <li>遮蓋/形狀/直線等工具<b>畫完保持啟用可連續畫</b>，Esc 或 V 回選取；<b>Ctrl+A</b> 全選畫布物件；<b>方向鍵微調</b>選取物（Shift＝10px）；屬性列可輸入<b>角度</b>（直線 0 度＝水平線）；多選一次改粗細/顏色；「合併」把多線條變單一物件（Alt+雙擊才拆）</li>
@@ -1778,6 +1790,7 @@ canvas.on('mouse:wheel', function (opt) {
 
 /* ── 工具切換 ── */
 function setTool(t) {
+    if (t !== 'connect') clearConnectDraft();   // 切走工具時清掉兩點連線的第一點/預覽
     currentTool = t;
     document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
     const btn = document.getElementById('tool-' + t);
@@ -1799,9 +1812,10 @@ function setTool(t) {
     if (!isSelect && !isCropTool) canvas.discardActiveObject();
 
     // 屬性列切換
-    document.getElementById('sec-stroke').classList.toggle('show', ['draw','line','rect','ellipse','select','dimdist','dimcircle','dimangle'].includes(t));
+    document.getElementById('sec-stroke').classList.toggle('show', ['draw','line','connect','rect','ellipse','select','dimdist','dimcircle','dimangle'].includes(t));
     // 「端點」只有直線／畫筆工具在畫新物件時真的有作用（矩形/橢圓/標註工具沒有端點可設，選取既有物件也不會回填生效，故只依工具顯示）
-    document.getElementById('wrap-line-ends').style.display = ['line', 'draw'].includes(t) ? '' : 'none';
+    document.getElementById('wrap-line-ends').style.display = ['line', 'draw', 'connect'].includes(t) ? '' : 'none';
+    document.getElementById('sec-connect').classList.toggle('show', t === 'connect');
     document.getElementById('sec-crop').classList.toggle('show', isCropTool);
     document.getElementById('sec-text').classList.toggle('show', ['text','label'].includes(t));
     document.getElementById('sec-mask').classList.toggle('show', ['maskrect','masklasso'].includes(t));
@@ -1837,6 +1851,7 @@ canvas.on('mouse:down', function (opt) {
     if (currentTool === 'dc') { placeDcMark(p.x, p.y); return; }
     if (currentTool === 'stamp') { placeStamp(p.x, p.y); return; }
     if (currentTool === 'dimangle') { startDimAngle(p.x, p.y); return; }
+    if (currentTool === 'connect') { handleConnectClick(p); return; }
     if (['rect','ellipse','line','maskrect','cropcopy','cropmove','dimdist','dimcircle'].includes(currentTool)) {
         // 框選複製/搬移：點在既有物件上（例如剛切下、還沒拖到定位的那塊）就交給 Fabric 正常拖曳，不要開新框
         if ((currentTool === 'cropcopy' || currentTool === 'cropmove') && opt.target) return;
@@ -1866,6 +1881,7 @@ canvas.on('mouse:move', function (opt) {
     }
     const p = scenePoint(opt);
     document.getElementById('st-pos').textContent = Math.round(p.x) + ', ' + Math.round(p.y);
+    if (currentTool === 'connect' && connectFirst) { updateConnectPreview(p); return; }
     if (!drawing) return;
 
     const stroke = document.getElementById('p-stroke').value;
@@ -1988,6 +2004,69 @@ function finishNewObject(o) {
     setTool('select');
     canvas.requestRenderAll();
     pushState();
+}
+
+/* ── 兩點連線：點第一點→點第二點，自動用直線或曲線相連 ──
+   直線＝跟直線工具同款（含端點箭頭選項），之後雙擊可編輯端點；
+   曲線＝三節點圓滑折線（curved=Catmull-Rom），先天帶一點弧度並自動進入
+   「編輯端點」模式，拖中間圓點即調曲度（頭尾圓點＝改連接位置）。 */
+let connectFirst = null, connectMarker = null, connectPreview = null;
+function clearConnectDraft() {
+    if (connectMarker) { canvas.remove(connectMarker); connectMarker = null; }
+    if (connectPreview) { canvas.remove(connectPreview); connectPreview = null; }
+    connectFirst = null;
+}
+function updateConnectPreview(p) {
+    if (connectPreview) canvas.remove(connectPreview);
+    connectPreview = new fabric.Line([connectFirst.x, connectFirst.y, p.x, p.y], {
+        stroke: document.getElementById('p-stroke').value,
+        strokeWidth: Math.max(1, 1 / canvas.getZoom()), strokeDashArray: [5, 4],
+        selectable: false, evented: false, objectCaching: false
+    });
+    canvas.add(connectPreview);
+    canvas.requestRenderAll();
+}
+function handleConnectClick(p) {
+    if (!connectFirst) {   // 第一點：放個小紅點提示
+        connectFirst = { x: p.x, y: p.y };
+        connectMarker = new fabric.Circle({
+            left: p.x, top: p.y, radius: 4 / canvas.getZoom(), fill: '#e53935',
+            originX: 'center', originY: 'center', selectable: false, evented: false, objectCaching: false
+        });
+        canvas.add(connectMarker);
+        canvas.requestRenderAll();
+        return;
+    }
+    const a = connectFirst, b = { x: p.x, y: p.y };
+    if (Math.hypot(b.x - a.x, b.y - a.y) < 3) { toast('兩點太近，請點遠一點的位置'); return; }
+    clearConnectDraft();
+    const stroke = document.getElementById('p-stroke').value;
+    const sw = parseInt(document.getElementById('p-width').value, 10) || 3;
+    const dash = dashArrayFor(document.getElementById('p-line-style').value, sw);
+    const kind = document.getElementById('p-connect-kind').value;
+    if (kind === 'curve') {
+        // 中間節點先往垂直方向拉出 18% 弧度，畫完直接進入編輯端點模式調曲度
+        const mid = { x: (a.x + b.x) / 2 - (b.y - a.y) * 0.18, y: (a.y + b.y) / 2 + (b.x - a.x) * 0.18 };
+        const poly = new fabric.Polyline([a, mid, b], {
+            stroke, strokeWidth: sw, fill: 'transparent', strokeUniform: true,
+            strokeDashArray: dash, strokeLineCap: 'round', strokeLineJoin: 'round', objectCaching: false
+        });
+        poly.curved = true;
+        canvas.add(poly);
+        canvas.setActiveObject(poly);
+        setTool('select');
+        canvas.requestRenderAll();
+        pushState();
+        togglePointEdit();   // 直接可拖中間圓點調曲度
+        return;
+    }
+    const ends = document.getElementById('p-line-ends').value;
+    const o = (ends !== 'none')
+        ? makeArrow(a.x, a.y, b.x, b.y, stroke, sw, ends, dash)
+        : new fabric.Line([a.x, a.y, b.x, b.y], { stroke, strokeWidth: sw, strokeUniform: true, strokeDashArray: dash });
+    canvas.add(o);
+    canvas.requestRenderAll();
+    pushState();   // 直線：工具保持啟用，可連續點下一組兩點（Esc 或 V 回選取）
 }
 
 /* 線型（實線/虛線/中心線）：dashArrayFor 依粗細等比縮放，styleFromDashArray 是反查（供屬性列同步顯示） */
