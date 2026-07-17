@@ -7,6 +7,10 @@
      header("Location:../../../index.php");
  }
 
+ // 頁面使用統計：全站唯一共同進入點在此掛載（AJAX 不渲染側欄故不會被記錄）。
+ // @include_once + logger 內部 try/catch 雙保險，任何錯誤不影響頁面。
+ @include_once __DIR__ . '/../../src/common/page_visit_logger.php';
+
 @$id            = $_SESSION['id'];
 @$userid        = $_SESSION['userid'];
 @$user_cname    = $_SESSION['user_cname'];
