@@ -920,7 +920,7 @@ if ($has_access) {
 
         /* 右側滑窗：料號 → 訂單明細 */
         .side-panel-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.25); z-index:1040; display:none; }
-        .side-panel { position:fixed; top:0; right:0; height:100vh; width:720px; max-width:92vw; background:#fff;
+        .side-panel { position:fixed; top:0; right:0; height:100vh; width:800px; max-width:94vw; background:#fff;
             box-shadow:-4px 0 18px rgba(0,0,0,.18); z-index:1050; transform:translateX(105%);
             transition:transform .22s ease; display:flex; flex-direction:column; }
         .side-panel.open { transform:translateX(0); }
@@ -928,12 +928,16 @@ if ($has_access) {
         .sp-head h4 { margin:0; font-size:16px; font-weight:700; color:var(--primary-color); }
         .sp-close { margin-left:auto; border:none; background:none; font-size:22px; color:#888; cursor:pointer; line-height:1; }
         .sp-close:hover { color:#c0392b; }
-        .sp-body { flex:1; overflow-y:auto; padding:10px 16px; }
+        .sp-body { flex:1; overflow-y:auto; overflow-x:auto; padding:10px 16px; }
         .sp-foot { padding:8px 16px; border-top:1px solid #E9ECEF; font-size:12px; color:#666; background:#FAFBFC; }
         table.sp-table { width:100%; border-collapse:collapse; }
         table.sp-table th { background:#F8F9FA; font-size:12px; padding:6px 5px; border-bottom:2px solid #E9ECEF; white-space:nowrap; }
-        table.sp-table td { font-size:12px; padding:5px; border-bottom:1px solid #F1F3F5; }
+        table.sp-table td { font-size:12px; padding:5px; border-bottom:1px solid #F1F3F5; white-space:nowrap; }
+        table.sp-table td:last-child { white-space:normal; }
         table.sp-table td.num, table.sp-table th.num { text-align:right; }
+        .sp-expand { cursor:pointer; color:#5B8DEF; padding:0 4px; }
+        .sp-expand:hover { color:#1a5cb0; }
+        tr.sp-detail-row > td { background:#FAFBFE; padding:8px 10px 10px; white-space:normal; }
 
         /* 製程流程 chips：框線盒＋箭頭；廠內=藍底、外包=黃底 */
         .sp-group { margin-bottom:16px; border-bottom:4px solid #2A3F54; padding-bottom:4px; }
@@ -1364,6 +1368,7 @@ if ($has_access) {
 
     function buildPanelTable(rows){
         var h = '<table class="sp-table"><thead><tr>'
+              + '<th style="width:22px;"></th>'
               + '<th>訂單日期</th><th>訂單號</th><th>客戶</th>'
               + '<th class="num">數量</th><th class="num">單價</th><th class="num">營收</th>'
               + '<th class="num">單顆成本</th><th class="num">毛利</th><th class="num">毛利率</th>'
@@ -1375,7 +1380,12 @@ if ($has_access) {
                   + ' data-boms="' + esc(r.boms.join(',')) + '" data-auto="' + (r.auto_matched ? 1 : 0) + '"'
                   + ' title="點擊看各製程計價明細">' + nfmt(r.cost_pc) + '</span>'
                 : '–';
+            var expander = r.boms.length
+                ? '<span class="sp-expand" data-oid="' + r.order_id + '" data-boms="' + esc(r.boms.join(',')) + '" data-auto="' + (r.auto_matched ? 1 : 0) + '"'
+                  + ' title="展開各製程加工費用與廠商"><i class="fa fa-chevron-right"></i></span>'
+                : '';
             h += '<tr>'
+              + '<td>' + expander + '</td>'
               + '<td>' + esc(r.order_date) + '</td>'
               + '<td>' + esc(r.order_oo) + '</td>'
               + '<td>' + esc(r.client) + '</td>'
@@ -1465,6 +1475,46 @@ if ($has_access) {
         .fail(function(){ $('#spBody').html('<span class="text-danger">載入失敗</span>'); });
     }
 
+    /* ── 成本明細 HTML（跳窗與滑窗列展開共用） ── */
+    function buildCostDetailHtml(res, isAuto){
+        if (!res.boms.length) return '<span class="text-muted">此訂單未綁定製令，也沒有可自動比對的批次。</span>';
+        var h = '';
+        if (res.auto || isAuto) {
+            h += '<div style="background:#FEF5E7;color:#b9770e;border-radius:4px;padding:6px 10px;font-size:12px;margin-bottom:8px;">'
+               + '<i class="fa fa-info-circle"></i> 以下製令為<b>自動比對批次</b>（未綁定）：同料號由最新出貨往前依數量分配，僅供成本估算參考。</div>';
+        }
+        res.boms.forEach(function(b){
+            h += '<div style="font-weight:700;margin:6px 0 4px;">製令 ' + esc(b.bom)
+               + ' <small style="color:#888;">數量 ' + nfmt(b.sqty, 0) + '｜已計單顆成本合計 <b>' + nfmt(b.cost_per_pc) + '</b></small></div>';
+            h += '<table class="cd-table"><thead><tr>'
+               + '<th style="width:36px;">序</th><th>製程</th><th>加工商</th>'
+               + '<th class="num" style="text-align:right;">加權平均單價</th>'
+               + '<th class="num" style="text-align:right;">計價數量</th>'
+               + '<th class="num" style="text-align:right;">筆數</th><th>採計</th>'
+               + '</tr></thead><tbody>';
+            b.processes.forEach(function(p){
+                var counted = p.avg_price !== null;
+                var why;
+                if (counted) why = '<span style="color:#0e8c73;font-weight:700;">✓</span>';
+                else if (p.is_kg) why = '<span style="color:#8a94a0;">客供料</span>';
+                else if (p.internal) why = '<span style="color:#b9770e;">廠內未計</span>';
+                else why = '<span style="color:#8a94a0;">未計價</span>';
+                h += '<tr class="' + (counted ? '' : 'cd-skip') + '">'
+                   + '<td>' + p.bom_sn + '</td>'
+                   + '<td>' + esc(p.process_name) + ' <small style="color:#aaa;">#' + p.process_no + '</small></td>'
+                   + '<td>' + esc(p.makers || '') + '</td>'
+                   + '<td style="text-align:right;">' + nfmt(p.avg_price) + '</td>'
+                   + '<td style="text-align:right;">' + nfmt(p.qty_sum, 0) + '</td>'
+                   + '<td style="text-align:right;">' + nfmt(p.cnt, 0) + '</td>'
+                   + '<td>' + why + '</td>'
+                   + '</tr>';
+            });
+            h += '</tbody></table>';
+        });
+        h += '<div style="font-size:11px;color:#8a94a0;">單價為該製程所有外包移轉紀錄的加權平均（修改後單價優先、以請款數量加權）；「廠內未計」與「未計價」製程不列入單顆成本。</div>';
+        return h;
+    }
+
     /* ── 成本明細跳窗 ── */
     function openCostDetail(oid, oo, did, boms, isAuto){
         $('#cdSub').text(oo + '｜' + did);
@@ -1473,45 +1523,35 @@ if ($has_access) {
         $.getJSON('Order_Profit_Analysis.php', {action:'cost_detail', order_id: oid, boms: (boms || '')})
         .done(function(res){
             if (!res.success) { $('#cdBody').html('<span class="text-danger">' + esc(res.error || '載入失敗') + '</span>'); return; }
-            if (!res.boms.length) { $('#cdBody').html('<span class="text-muted">此訂單未綁定製令，也沒有可自動比對的批次。</span>'); return; }
-            var h = '';
-            if (res.auto || isAuto) {
-                h += '<div style="background:#FEF5E7;color:#b9770e;border-radius:4px;padding:6px 10px;font-size:12px;margin-bottom:8px;">'
-                   + '<i class="fa fa-info-circle"></i> 以下製令為<b>自動比對批次</b>（未綁定）：同料號由最新出貨往前依數量分配，僅供成本估算參考。</div>';
-            }
-            res.boms.forEach(function(b){
-                h += '<div style="font-weight:700;margin:6px 0 4px;">製令 ' + esc(b.bom)
-                   + ' <small style="color:#888;">數量 ' + nfmt(b.sqty, 0) + '｜已計單顆成本合計 <b>' + nfmt(b.cost_per_pc) + '</b></small></div>';
-                h += '<table class="cd-table"><thead><tr>'
-                   + '<th style="width:36px;">序</th><th>製程</th><th>加工商</th>'
-                   + '<th class="num" style="text-align:right;">加權平均單價</th>'
-                   + '<th class="num" style="text-align:right;">計價數量</th>'
-                   + '<th class="num" style="text-align:right;">筆數</th><th>採計</th>'
-                   + '</tr></thead><tbody>';
-                b.processes.forEach(function(p){
-                    var counted = p.avg_price !== null;
-                    var why;
-                    if (counted) why = '<span style="color:#0e8c73;font-weight:700;">✓</span>';
-                    else if (p.is_kg) why = '<span style="color:#8a94a0;">客供料</span>';
-                    else if (p.internal) why = '<span style="color:#b9770e;">廠內未計</span>';
-                    else why = '<span style="color:#8a94a0;">未計價</span>';
-                    h += '<tr class="' + (counted ? '' : 'cd-skip') + '">'
-                       + '<td>' + p.bom_sn + '</td>'
-                       + '<td>' + esc(p.process_name) + ' <small style="color:#aaa;">#' + p.process_no + '</small></td>'
-                       + '<td>' + esc(p.makers || '') + '</td>'
-                       + '<td style="text-align:right;">' + nfmt(p.avg_price) + '</td>'
-                       + '<td style="text-align:right;">' + nfmt(p.qty_sum, 0) + '</td>'
-                       + '<td style="text-align:right;">' + nfmt(p.cnt, 0) + '</td>'
-                       + '<td>' + why + '</td>'
-                       + '</tr>';
-                });
-                h += '</tbody></table>';
-            });
-            h += '<div style="font-size:11px;color:#8a94a0;">單價為該製程所有外包移轉紀錄的加權平均（修改後單價優先、以請款數量加權）；「廠內未計」與「未計價」製程不列入單顆成本。</div>';
-            $('#cdBody').html(h);
+            $('#cdBody').html(buildCostDetailHtml(res, isAuto));
         })
         .fail(function(){ $('#cdBody').html('<span class="text-danger">載入失敗</span>'); });
     }
+
+    /* ── 滑窗訂單列展開：各製程加工費用與廠商（同成本明細內容，內嵌顯示） ── */
+    $(document).on('click', '.sp-expand', function(){
+        var btn = $(this);
+        var tr = btn.closest('tr');
+        var colCount = tr.children('td').length;
+        if (tr.next().hasClass('sp-detail-row')) {   // 已展開 → 收合
+            tr.next().remove();
+            btn.find('i').attr('class', 'fa fa-chevron-right');
+            return;
+        }
+        btn.find('i').attr('class', 'fa fa-chevron-down');
+        var det = $('<tr class="sp-detail-row"><td colspan="' + colCount + '"><i class="fa fa-spinner fa-spin"></i> 載入中...</td></tr>');
+        tr.after(det);
+        $.getJSON('Order_Profit_Analysis.php', {
+            action: 'cost_detail',
+            order_id: btn.data('oid'),
+            boms: (btn.data('auto') == 1 ? String(btn.data('boms') || '') : '')
+        })
+        .done(function(res){
+            det.children('td').html(res.success ? buildCostDetailHtml(res, btn.data('auto') == 1)
+                                                : '<span class="text-danger">' + esc(res.error || '載入失敗') + '</span>');
+        })
+        .fail(function(){ det.children('td').html('<span class="text-danger">載入失敗</span>'); });
+    });
 
     /* ── 事件 ── */
     $('#btnSearch').on('click', function(){ state.page = 1; load(); });
