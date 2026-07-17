@@ -2045,8 +2045,9 @@ function handleConnectClick(p) {
     const dash = dashArrayFor(document.getElementById('p-line-style').value, sw);
     const kind = document.getElementById('p-connect-kind').value;
     if (kind === 'curve') {
-        // 中間節點先往垂直方向拉出 18% 弧度，畫完直接進入編輯端點模式調曲度
-        const mid = { x: (a.x + b.x) / 2 - (b.y - a.y) * 0.18, y: (a.y + b.y) / 2 + (b.x - a.x) * 0.18 };
+        // 中間節點往垂直方向拉出 50% 弧度（≈半圓深勾，圖面指線慣用形），畫完直接進入編輯端點模式調曲度；
+        // 弧凸向取決於兩點點擊順序，反向可拖中間圓點過去另一側
+        const mid = { x: (a.x + b.x) / 2 - (b.y - a.y) * 0.5, y: (a.y + b.y) / 2 + (b.x - a.x) * 0.5 };
         const poly = new fabric.Polyline([a, mid, b], {
             stroke, strokeWidth: sw, fill: 'transparent', strokeUniform: true,
             strokeDashArray: dash, strokeLineCap: 'round', strokeLineJoin: 'round', objectCaching: false
