@@ -4059,13 +4059,17 @@ canvas.on('mouse:dblclick', function (opt) {
     });
     startGroupTextEdit(g, best);
 });
-/* 一般文字（文字工具）：結束編輯時若含 A^B（如 -0^-0.18）自動轉成上下公差堆疊群組 */
+/* 一般文字（文字工具）：結束編輯時若含 A^B（如 -0^-0.18）自動轉成上下公差堆疊群組。
+   注意：此事件在 fabric exitEditing() 執行到一半時同步觸發，當場移除物件會讓後續
+   this.canvas.fire('object:modified') 讀到 undefined 噴例外，所以延後一個 tick 再轉換 */
 canvas.on('text:editing:exited', function (opt) {
     const t = opt.target;
     if (!t || t.type !== 'i-text' || t.__groupEditFor || t.dcRole || t.dimKind) return;   // 暫時編輯框/設變列表/標註文字不轉
-    if (restoring || !TOL_INPUT_RE.test(t.text)) return;
-    if (canvas.getObjects().indexOf(t) === -1) return;   // 已被其他流程移除（如編輯中刪除）
-    convertToTolGroup(t);
+    if (!TOL_INPUT_RE.test(t.text)) return;
+    setTimeout(function () {
+        if (restoring || canvas.getObjects().indexOf(t) === -1) return;   // 已被其他流程移除（如編輯中刪除/復原）
+        convertToTolGroup(t);
+    }, 0);
 });
 function startGroupTextEdit(group, child, cursorToEnd) {
     const dec = fabric.util.qrDecompose(child.calcTransformMatrix());
