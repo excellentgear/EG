@@ -4384,8 +4384,9 @@ function defaultFileName() {
     const d = new Date(), p = n => String(n).padStart(2, '0');
     return '批圖_' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' + p(d.getHours()) + p(d.getMinutes());
 }
+let lastExportName = '';   // 視窗未關前記住上次輸入的匯出檔名，第二次匯出不再跳回預設
 function openExportModal() {
-    document.getElementById('ex-name').value = defaultFileName();
+    document.getElementById('ex-name').value = lastExportName || defaultFileName();
     const hint = document.getElementById('ex-fs-hint');
     if (window.showSaveFilePicker) {
         hint.innerHTML = '「另存圖片」會開啟儲存位置選擇視窗（會記住上次資料夾）。';
@@ -4416,7 +4417,8 @@ function dataURLtoBlob(u) {
 async function doSave() {
     const format = document.getElementById('ex-format').value;
     const ext = format === 'jpeg' ? '.jpg' : '.png';
-    const name = (document.getElementById('ex-name').value.trim() || defaultFileName()) + ext;
+    lastExportName = document.getElementById('ex-name').value.trim();
+    const name = (lastExportName || defaultFileName()) + ext;
     const url = buildExportURL();
     const blob = dataURLtoBlob(url);
 
