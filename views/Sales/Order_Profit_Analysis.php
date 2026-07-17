@@ -69,6 +69,9 @@ function opa_ensure_rate_columns(PDO $pdo): void {
         if (!in_array('hourly_overhead_cost', $cols, true)) {
             $pdo->exec("ALTER TABLE kpi_machine_asset ADD COLUMN hourly_overhead_cost DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT '每小時廠務分攤費率（水電/廠房等，元/時），廠內加工成本推算用' AFTER hourly_labor_cost");
         }
+        if (!in_array('annual_consumable_cost', $cols, true)) {
+            $pdo->exec("ALTER TABLE kpi_machine_asset ADD COLUMN annual_consumable_cost DECIMAL(12,2) NOT NULL DEFAULT 0 COMMENT '每年耗材費用（刀具/油品等，元/年），換算耗材時薪=年費÷12÷每月工時' AFTER hourly_overhead_cost");
+        }
     } catch (Exception $e) {}
 }
 
@@ -82,23 +85,26 @@ function opa_machine_rates(PDO $pdo): array {
         $rows = $pdo->query("
             SELECT ml.machine_id, ml.machine,
                    kma.purchase_amount, kma.residual_value, kma.depreciation_years, kma.monthly_work_hours,
-                   COALESCE(kma.hourly_labor_cost, 0) AS labor, COALESCE(kma.hourly_overhead_cost, 0) AS overhead
+                   COALESCE(kma.hourly_labor_cost, 0) AS labor, COALESCE(kma.hourly_overhead_cost, 0) AS overhead,
+                   COALESCE(kma.annual_consumable_cost, 0) AS consumable
             FROM machine_list ml
             LEFT JOIN kpi_machine_asset kma ON kma.machine_id = ml.machine_id")->fetchAll(PDO::FETCH_ASSOC);
         foreach ($rows as $r) {
-            $dep = 0;
+            $dep = 0; $cons = 0;
             $yrs = floatval($r['depreciation_years'] ?? 0);
             $mwh = floatval($r['monthly_work_hours'] ?? 0);
             if ($yrs > 0 && $mwh > 0) {
                 $dep = (floatval($r['purchase_amount']) - floatval($r['residual_value'])) / $yrs / 12 / $mwh;
                 if ($dep < 0) $dep = 0;
             }
+            if ($mwh > 0) $cons = max(0, floatval($r['consumable'])) / 12 / $mwh;   // 耗材時薪＝年耗材費÷12÷每月工時
             $map[intval($r['machine_id'])] = [
                 'name'     => $r['machine'],
                 'dep'      => round($dep, 2),
+                'cons'     => round($cons, 2),
                 'labor'    => floatval($r['labor']),
                 'overhead' => floatval($r['overhead']),
-                'rate'     => round($dep + floatval($r['labor']) + floatval($r['overhead']), 2),
+                'rate'     => round($dep + $cons + floatval($r['labor']) + floatval($r['overhead']), 2),
             ];
         }
     } catch (Exception $e) {}
@@ -690,6 +696,7 @@ if ($isAjax) {
                        kma.purchase_amount, kma.residual_value, kma.depreciation_years, kma.monthly_work_hours,
                        COALESCE(kma.hourly_labor_cost, 0) AS hourly_labor_cost,
                        COALESCE(kma.hourly_overhead_cost, 0) AS hourly_overhead_cost,
+                       COALESCE(kma.annual_consumable_cost, 0) AS annual_consumable_cost,
                        (kma.asset_id IS NOT NULL) AS has_asset
                 FROM machine_list ml
                 LEFT JOIN kpi_machine_asset kma ON kma.machine_id = ml.machine_id
@@ -709,8 +716,8 @@ if ($isAjax) {
                 $up = $pdo->prepare("
                     INSERT INTO kpi_machine_asset
                         (machine_id, purchase_date, purchase_amount, residual_value, depreciation_years,
-                         monthly_work_hours, hourly_labor_cost, hourly_overhead_cost, created_by, updated_by)
-                    VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?)
+                         monthly_work_hours, hourly_labor_cost, hourly_overhead_cost, annual_consumable_cost, created_by, updated_by)
+                    VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON DUPLICATE KEY UPDATE
                         purchase_amount = VALUES(purchase_amount),
                         residual_value = VALUES(residual_value),
@@ -718,6 +725,7 @@ if ($isAjax) {
                         monthly_work_hours = VALUES(monthly_work_hours),
                         hourly_labor_cost = VALUES(hourly_labor_cost),
                         hourly_overhead_cost = VALUES(hourly_overhead_cost),
+                        annual_consumable_cost = VALUES(annual_consumable_cost),
                         updated_by = VALUES(updated_by)");
                 $n = 0;
                 foreach ($rows as $r) {
@@ -731,6 +739,7 @@ if ($isAjax) {
                         max(1, floatval($r['monthly_work_hours'] ?? 160)),
                         max(0, floatval($r['hourly_labor_cost'] ?? 0)),
                         max(0, floatval($r['hourly_overhead_cost'] ?? 0)),
+                        max(0, floatval($r['annual_consumable_cost'] ?? 0)),
                         $my_id, $my_id,
                     ]);
                     $n++;
@@ -1261,7 +1270,7 @@ if ($has_access) {
           ．「無成本資料」多為：製令仍在進行中尚未請款、或該料號無任何可比對批次。「部分」表示尚有外包製程未計價或含廠內製程（廠內暫不計成本）。<br>
           ．未綁定製令的訂單會<b>自動比對批次</b>（標「≈」）：同料號之下，訂單由新到舊、未綁定製令由新到舊，依數量逐批往前分配；僅供計算顯示，<b>不寫入任何綁定</b>。<br>
           ．<b>拆批訂單只列母單一筆</b>（營收以母單總量計，不重複）；拆批子單綁定的製令自動併回母單算成本。組合件展開子單亦不列出。<br>
-          ．<b>廠內製程估算成本</b>（標「估」）：無外包實價的廠內製程，以 報工(架機＋加工)時數 × 機台每小時費率 ÷ 產出數 推算——架機時間攤入平均單價，小批量成本自然較高。機台費率（折舊＋人工＋廠務）由管理者在「機台費率」設定；未設費率或無報工的製程維持「未計」。客供料製程不需成本、不列入涵蓋度。<br>
+          ．<b>廠內製程估算成本</b>（標「估」）：無外包實價的廠內製程，以 報工(架機＋加工)時數 × 機台每小時費率 ÷ 產出數 推算——架機時間攤入平均單價，小批量成本自然較高。機台費率（折舊＋耗材＋人工＋廠務）由管理者在「機台費率」設定（含人工時薪試算器）；未設費率或無報工的製程維持「未計」。客供料製程不需成本、不列入涵蓋度。<br>
           ．加工類別：製令第一道製程（bom_sn 最小）為「客供料」＝<b>單製</b>，否則＝<b>全製</b>；同一料號單製/全製資料在料號彙總分開列。<br>
           ．累計佔比＝料號彙總依「查詢日期範圍內」營收由大到小排序後的累計營收百分比（柏拉圖），≤80%＝A、≤95%＝B、其餘＝C。<br>
           ．統計卡與彙總一律以「全部符合條件資料」於後端計算，非僅當前頁。
@@ -1303,11 +1312,43 @@ if ($has_access) {
 
 <!-- 機台費率設定 Modal（管理者） -->
 <div class="modal fade" id="rateModal" role="dialog" tabindex="-1" data-backdrop="static">
-  <div class="modal-dialog" style="width:860px;">
+  <div class="modal-dialog" style="width:1000px;">
     <div class="modal-content">
       <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
-        <h4 class="modal-title"><i class="fa fa-cogs"></i> 機台每小時費率設定 <small style="color:#888;">供廠內加工成本估算：費率 = 折舊時薪 + 人工時薪 + 廠務時薪</small></h4></div>
-      <div class="modal-body" id="rateBody" style="max-height:65vh;overflow-y:auto;">載入中...</div>
+        <h4 class="modal-title"><i class="fa fa-cogs"></i> 機台每小時費率設定 <small style="color:#888;">費率 = 折舊時薪 + 耗材時薪 + 人工時薪 + 廠務時薪</small></h4></div>
+      <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
+        <div style="margin-bottom:8px;">
+          <button type="button" class="btn btn-default btn-xs" id="rcToggle"><i class="fa fa-calculator"></i> 人工時薪試算器 <i class="fa fa-chevron-down"></i></button>
+        </div>
+        <div id="rateCalc" style="display:none;background:#F7F9FC;border:1px solid #E3E9F1;border-radius:6px;padding:10px 12px;margin-bottom:10px;font-size:12px;">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+            <label style="font-weight:400;">月薪<br><input type="number" id="rcSalary" class="form-control input-sm rc-in" value="40000" style="width:90px;"></label>
+            <label style="font-weight:400;">平日工作天/月<br><input type="number" id="rcDays" class="form-control input-sm rc-in" value="22" style="width:70px;"></label>
+            <label style="font-weight:400;">每日正常時數<br><input type="number" id="rcNormal" class="form-control input-sm rc-in" value="8" style="width:70px;"></label>
+            <label style="font-weight:400;">每日平日加班<br><input type="number" id="rcOt" class="form-control input-sm rc-in" value="3" style="width:70px;"></label>
+            <label style="font-weight:400;">假日加班天/月<br><input type="number" id="rcWDays" class="form-control input-sm rc-in" value="4" style="width:70px;"></label>
+            <label style="font-weight:400;">假日每天時數<br><input type="number" id="rcWHrs" class="form-control input-sm rc-in" value="12" style="width:70px;"></label>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-top:6px;">
+            <label style="font-weight:400;" title="平日加班前2小時、休息日前2小時適用">加班費率①(前2時)<br><input type="number" id="rcR1" class="form-control input-sm rc-in" value="1.33" step="0.01" style="width:70px;"></label>
+            <label style="font-weight:400;" title="平日加班第3小時起、休息日第3~8小時適用">費率②(其後)<br><input type="number" id="rcR2" class="form-control input-sm rc-in" value="1.66" step="0.01" style="width:70px;"></label>
+            <label style="font-weight:400;" title="休息日第9~12小時適用">費率③(假日9-12時)<br><input type="number" id="rcR3" class="form-control input-sm rc-in" value="2.66" step="0.01" style="width:80px;"></label>
+            <label style="font-weight:400;" title="勞保+健保+勞退6%等雇主額外負擔，一般約15%">雇主負擔加成%<br><input type="number" id="rcBurden" class="form-control input-sm rc-in" value="15" style="width:70px;"></label>
+            <label style="font-weight:400;" title="一位師傅同時顧幾台機：人工成本由這幾台分攤">一人顧機台數<br><input type="number" id="rcMach" class="form-control input-sm rc-in" value="1" style="width:70px;"></label>
+          </div>
+          <div id="rcResult" style="margin-top:8px;font-size:13px;"></div>
+          <div style="margin-top:6px;">
+            <button type="button" class="btn btn-success btn-xs" id="rcApplyEmpty">套用到「人工時薪」空白(0)的機台</button>
+            <button type="button" class="btn btn-warning btn-xs" id="rcApplyAll">套用到全部機台</button>
+            <span style="color:#8a94a0;margin-left:6px;">套用後仍可逐台修改，記得按「儲存全部」。</span>
+          </div>
+          <div style="color:#8a94a0;margin-top:6px;line-height:1.6;">
+            算法：時薪基準＝月薪÷30÷8；平日加班費＝基準×(前2時×①＋其後×②)×天數；假日加班費＝基準×(前2時×①＋3~8時×②＋9~12時×③)×天數；<br>
+            <b>平均人工時薪＝(月薪＋加班費)×(1＋雇主負擔%) ÷ 月總工時 ÷ 顧機台數</b>。法定倍率為 1⅓/1⅔（1.34/1.67 進位），可自行修改費率欄。例假日(週日)出勤算法不同，如常態發生請告知再細分。
+          </div>
+        </div>
+        <div id="rateBody">載入中...</div>
+      </div>
       <div class="modal-footer">
         <span style="float:left;color:#8a94a0;font-size:11px;text-align:left;">
           折舊時薪＝(購入−殘值)÷年限÷12÷每月工時，自動計算。費率為 0 的機台不參與估算。<br>
@@ -1952,11 +1993,13 @@ if ($has_access) {
     /* ── 機台費率設定（管理者）：折舊時薪自動算，人工/廠務可編，Enter 逐欄、末欄存檔 ── */
     function rateRowCalc(tr){
         var v = function(cls){ return parseFloat(tr.find('input.' + cls).val()) || 0; };
-        var dep = 0;
+        var dep = 0, cons = 0;
         var yrs = v('mr-years'), mwh = v('mr-mwh');
         if (yrs > 0 && mwh > 0) dep = Math.max(0, (v('mr-amt') - v('mr-res')) / yrs / 12 / mwh);
-        var total = dep + v('mr-labor') + v('mr-oh');
+        if (mwh > 0) cons = Math.max(0, v('mr-cons-in')) / 12 / mwh;   // 耗材時薪＝年耗材費÷12÷每月工時
+        var total = dep + cons + v('mr-labor') + v('mr-oh');
         tr.find('.mr-dep').text(dep > 0 ? dep.toFixed(2) : '–');
+        tr.find('.mr-cons').text(cons > 0 ? cons.toFixed(2) : '–');
         tr.find('.mr-total').text(total > 0 ? total.toFixed(2) : '–').css('color', total > 0 ? '#0e8c73' : '#c0392b');
     }
 
@@ -1970,7 +2013,9 @@ if ($has_access) {
             var h = '<table class="cd-table"><thead><tr>'
                   + '<th>機台</th><th style="text-align:right;">購入金額</th><th style="text-align:right;">殘值</th>'
                   + '<th style="text-align:right;">年限</th><th style="text-align:right;">每月工時</th>'
-                  + '<th style="text-align:right;">折舊時薪</th><th style="text-align:right;">人工時薪</th>'
+                  + '<th style="text-align:right;">折舊時薪</th>'
+                  + '<th style="text-align:right;" title="刀具/油品等每年耗材費用，自動換算耗材時薪">年耗材費</th>'
+                  + '<th style="text-align:right;">耗材時薪</th><th style="text-align:right;">人工時薪</th>'
                   + '<th style="text-align:right;">廠務時薪</th><th style="text-align:right;">合計費率/時</th>'
                   + '</tr></thead><tbody>';
             var inp = function(cls, val, w){
@@ -1985,6 +2030,8 @@ if ($has_access) {
                   + '<td style="text-align:right;">' + inp('mr-years', m.depreciation_years || 5, 55) + '</td>'
                   + '<td style="text-align:right;">' + inp('mr-mwh', m.monthly_work_hours || 160, 65) + '</td>'
                   + '<td style="text-align:right;" class="mr-dep">–</td>'
+                  + '<td style="text-align:right;">' + inp('mr-cons-in', m.annual_consumable_cost || 0, 85) + '</td>'
+                  + '<td style="text-align:right;" class="mr-cons">–</td>'
                   + '<td style="text-align:right;">' + inp('mr-labor', m.hourly_labor_cost || 0, 70) + '</td>'
                   + '<td style="text-align:right;">' + inp('mr-oh', m.hourly_overhead_cost || 0, 70) + '</td>'
                   + '<td style="text-align:right;font-weight:700;" class="mr-total">–</td>'
@@ -1997,6 +2044,46 @@ if ($has_access) {
         })
         .fail(function(){ $('#rateBody').html('<span class="text-danger">載入失敗</span>'); });
     });
+
+    /* ── 人工時薪試算器：月薪＋固定加班型態 → 平均每小時人工成本 ── */
+    var rcHourly = 0;
+    function rcCalc(){
+        var v = function(id){ return parseFloat($('#' + id).val()) || 0; };
+        var salary = v('rcSalary'), days = v('rcDays'), normal = v('rcNormal'), ot = v('rcOt');
+        var wdays = v('rcWDays'), whrs = v('rcWHrs');
+        var r1 = v('rcR1'), r2 = v('rcR2'), r3 = v('rcR3');
+        var burden = v('rcBurden') / 100, mach = Math.max(1, v('rcMach'));
+        var base = salary / 30 / 8;                                        // 時薪基準（月薪÷30÷8）
+        var otPayDay = base * (Math.min(ot, 2) * r1 + Math.max(ot - 2, 0) * r2);
+        var wUnits = Math.min(whrs, 2) * r1 + Math.min(Math.max(whrs - 2, 0), 6) * r2 + Math.max(whrs - 8, 0) * r3;
+        var wPayDay = base * wUnits;
+        var totalPay = (salary + otPayDay * days + wPayDay * wdays) * (1 + burden);
+        var totalHours = days * (normal + ot) + wdays * whrs;
+        rcHourly = totalHours > 0 ? totalPay / totalHours / mach : 0;
+        $('#rcResult').html(
+            '時薪基準 <b>' + base.toFixed(2) + '</b>｜平日加班費 ' + otPayDay.toFixed(0) + '/天 ×' + days
+            + '｜假日加班費 ' + wPayDay.toFixed(0) + '/天 ×' + wdays
+            + '｜月人事成本(含負擔) <b>' + totalPay.toFixed(0) + '</b>｜月總工時 <b>' + totalHours.toFixed(0) + '</b> 時'
+            + ' → 平均人工時薪 <b style="color:#0e8c73;font-size:15px;">' + rcHourly.toFixed(2) + '</b> 元/時'
+            + (mach > 1 ? '（已除以顧機 ' + mach + ' 台）' : '')
+        );
+    }
+    $('#rcToggle').on('click', function(){ $('#rateCalc').slideToggle(120); rcCalc(); });
+    $(document).on('input', '.rc-in', rcCalc);
+    function rcApply(onlyEmpty){
+        if (rcHourly <= 0) { $('#rateMsg').text('試算結果為 0，請先填月薪與工時'); return; }
+        var n = 0;
+        $('#rateBody tbody tr').each(function(){
+            var inp = $(this).find('input.mr-labor');
+            if (onlyEmpty && parseFloat(inp.val()) > 0) return;
+            inp.val(rcHourly.toFixed(2));
+            rateRowCalc($(this));
+            n++;
+        });
+        $('#rateMsg').css('color', '#0e8c73').text('已套用 ' + rcHourly.toFixed(2) + ' 到 ' + n + ' 台機台，請按「儲存全部」寫入');
+    }
+    $('#rcApplyEmpty').on('click', function(){ rcApply(true); });
+    $('#rcApplyAll').on('click', function(){ if (confirm('確定將試算的人工時薪覆蓋「全部」機台？（含已填值的）')) rcApply(false); });
 
     $(document).on('input', '.mr-in', function(){ rateRowCalc($(this).closest('tr')); });
     $(document).on('focus', '.mr-in', function(){ var el = this; setTimeout(function(){ try { el.select(); } catch(e){} }, 0); });
@@ -2019,7 +2106,8 @@ if ($has_access) {
                 machine_id: tr.data('mid'),
                 purchase_amount: v('mr-amt'), residual_value: v('mr-res'),
                 depreciation_years: v('mr-years'), monthly_work_hours: v('mr-mwh'),
-                hourly_labor_cost: v('mr-labor'), hourly_overhead_cost: v('mr-oh')
+                hourly_labor_cost: v('mr-labor'), hourly_overhead_cost: v('mr-oh'),
+                annual_consumable_cost: v('mr-cons-in')
             });
         });
         if (!rows.length) return;
