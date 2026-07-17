@@ -960,7 +960,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <button class="tool-btn" id="tool-text" onclick="setTool('text')" title="文字（點畫布加入，隨時可再點選拖移、雙擊改字、拉角縮放）"><i class="fa fa-font"></i><span class="kbd">T</span></button>
         <button class="tool-btn" id="tool-label" onclick="setTool('label')" title="標籤（固定有邊框的文字框，像標籤機印出來的標籤；雙擊改字，外框自動貼合新字長）"><i class="fa fa-tag"></i></button>
         <div class="tool-group-sep"></div>
-        <button class="tool-btn" id="tool-balloon" onclick="setTool('balloon')" title="球標：連續點圖面即依 A、B、C… 自動編號（放上後仍可移動；右下角自動產生「球標A~球標F」範圍文字）" style="font-size:13px;font-weight:700;">Ⓐ</button>
+        <button class="tool-btn" id="tool-balloon" onclick="setTool('balloon')" title="球標：連續點圖面即依 A、B、C… 自動編號（放上後仍可移動；右下角自動產生「Ⓐ~Ⓕ」範圍文字）" style="font-size:13px;font-weight:700;">Ⓐ</button>
         <button class="tool-btn" id="tool-dc" onclick="setTool('dc')" title="設變標示：點圖面任意位置放標示（菱形/三角形可選），同時在圖面左上角自動產生設變列表（標示＋今日日期＋可輸入文字，越新越上面）" style="font-size:15px;font-weight:700;">◇</button>
         <button class="tool-btn" id="tool-stamp" onclick="setTool('stamp')" title="蓋章：本人簽章（紅）/ 技術課章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）/ 發行章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）。透明背景直接蓋在圖上，日期自動帶今天" style="font-size:14px;">㊞</button>
         <div class="tool-group-sep"></div>
@@ -1025,6 +1025,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 </label>
                 <button class="pb-btn" id="sym-btn" onmousedown="event.preventDefault()" onclick="toggleSymPad()"
                     title="插入工程符號（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×）：正在編輯文字時插入游標處；只選取文字物件時附加到最後。另外可直接輸入 A^B 自動變上下公差小字（例如 25 -0^-0.18）">Ø± 符號</button>
+            </span>
             <!-- 球標 -->
             <span class="prop-sec" id="sec-balloon">
                 <label>下一個球標 <input type="text" class="ni" id="p-balloon-next" value="A" maxlength="3" style="width:44px;text-transform:uppercase;" title="若原圖上已印有球標（例如已有A~C），把這裡改成 D 接著編"></label>
@@ -1075,6 +1076,8 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <button class="pb-btn" onclick="layerCmd('forward')" title="上移一層"><i class="fa fa-angle-up"></i></button>
                 <button class="pb-btn" onclick="layerCmd('backward')" title="下移一層"><i class="fa fa-angle-down"></i></button>
                 <button class="pb-btn" onclick="layerCmd('back')" title="移到最下層"><i class="fa fa-angle-double-down"></i> 置底</button>
+                <button class="pb-btn" onclick="flipSelected('h')" title="水平翻轉（左右鏡射，像小畫家）"><i class="fa fa-arrows-h"></i> 水平翻轉</button>
+                <button class="pb-btn" onclick="flipSelected('v')" title="垂直翻轉（上下鏡射，像小畫家）"><i class="fa fa-arrows-v"></i> 垂直翻轉</button>
                 <button class="pb-btn" id="btn-edit-points" style="display:none;" onclick="togglePointEdit()" title="像 Excel 編輯端點：拖曳節點改形狀、點線段中間的「＋」新增節點（直線會轉成折線、矩形會轉成四角多邊形）">編輯端點</button>
                 <button class="pb-btn" id="btn-poly-close" style="display:none;" onclick="togglePolyClosed()" title="把折線頭尾接起來變封閉圖形（再按一次打開）">封閉</button>
                 <button class="pb-btn" id="btn-poly-smooth" style="display:none;" onclick="togglePolySmooth()" title="節點之間改用圓滑曲線連接（再按一次改回直線）">圓滑</button>
@@ -1514,7 +1517,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             </ul>
             <b style="color:#6fc3ff;">④ 球標與設變標示</b>
             <ul style="padding-left:18px;margin:4px 0 10px;">
-                <li>球標 Ⓐ：連續點圖面自動 A、B、C…編號；右下角自動產生「球標Ⓐ～球標Ⓕ」（圓圈樣式與圖面球標一致，變動自動刪舊重建）。原圖已有球標 → 把「下一個球標」改成接續字母</li>
+                <li>球標 Ⓐ：連續點圖面自動 A、B、C…編號；右下角自動產生「Ⓐ～Ⓕ」範圍（圓圈樣式與圖面球標一致，變動自動刪舊重建）。原圖已有球標 → 把「下一個球標」改成接續字母</li>
                 <li>設變標示 ◇/△：<b>同一次設變多處都點同一個號碼</b>（號碼欄可自訂起始，圖面已有舊設變時接續）；該號第一次放置時左上角自動加一列「標示＋今日日期」，<b>雙擊該列輸入說明文字</b>，越新越上面。下一次設變記得把號碼欄+1</li>
                 <li>蓋章 ㊞：本人簽章（紅，人人可用）／技術課章與發行章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>，<b>限管理者在「用章人員」勾選的人員</b>，顏色也在同一個跳窗設定）；透明背景直接蓋在圖上（自動去背），日期自動帶今天，可移動縮放</li>
                 <li>標籤庫分三層：公司共用（管理者管理）／部門標籤（同部門共用）／私人標籤（只有自己看得到）。新標籤<b>預設存私人</b>；面板右上「管理」開跳窗：<b>框選或 Ctrl+點選多選 → 拖曳到目標欄＝搬移、Ctrl+拖曳＝複製</b>，也可批次刪除</li>
@@ -2386,15 +2389,27 @@ function toEditablePolyline(obj) {
     canvas.add(poly);
     return poly;
 }
+/* 離開編輯端點：還原預設控制點（供切換鈕、Esc、點空白/點其他物件共用） */
+function exitPointEdit(obj) {
+    if (!obj || !obj.__pointEditing) return;
+    delete obj.__pointEditing;
+    delete obj.controls;          // 還原成 prototype 預設控制點
+    obj.hasBorders = true;
+    obj.objectCaching = !obj.curved;   // 圓滑曲線可能超出節點外框，關快取避免被裁掉
+    obj.setCoords();
+}
+/* 點空白處或點選其他物件＝自動離開編輯端點（否則物件卡在節點模式，回頭點選還是節點控制點） */
+canvas.on('selection:cleared', function (e) {
+    (e && e.deselected || []).forEach(o => { if (o.__pointEditing) { exitPointEdit(o); canvas.requestRenderAll(); } });
+});
+canvas.on('selection:updated', function (e) {
+    (e && e.deselected || []).forEach(o => { if (o.__pointEditing) { exitPointEdit(o); canvas.requestRenderAll(); } });
+});
 function togglePointEdit() {
     const obj = canvas.getActiveObject();
     if (!obj) return;
     if (obj.__pointEditing) {
-        delete obj.__pointEditing;
-        delete obj.controls;          // 還原成 prototype 預設控制點
-        obj.hasBorders = true;
-        obj.objectCaching = !obj.curved;   // 圓滑曲線可能超出節點外框，關快取避免被裁掉
-        obj.setCoords();
+        exitPointEdit(obj);
         canvas.requestRenderAll();
         refreshPropbar();
         pushState();
@@ -2536,6 +2551,8 @@ const EG_SYMBOLS = [
         '<button onclick="insertSym(\'' + s[0] + '\')" title="' + s[1] + '">' + s[0] + '</button>').join('');
     document.getElementById('float-rot').innerHTML = [45, -90, 90, 180].map(a =>
         '<button onclick="rotateQuickBy(' + a + ')" title="以目前角度為基準，再旋轉 ' + a + ' 度（物件中心）">' + (a > 0 ? '+' : '') + a + '°</button>').join('')
+        + '<button onclick="flipSelected(\'h\')" title="水平翻轉（左右鏡射）">⇋</button>'
+        + '<button onclick="flipSelected(\'v\')" title="垂直翻轉（上下鏡射）">⇵</button>'
         + '<input type="number" id="float-rot-v" min="-360" max="360" step="1" placeholder="±°"'
         + ' title="手動輸入相對角度（-360～360，以目前角度為 0 點），Enter 或離開欄位即套用"'
         + ' style="width:56px;background:rgba(255,255,255,.75);border:1px solid #cbb377;border-radius:4px;color:#5a4a20;font-size:12px;padding:3px 4px;"'
@@ -2549,6 +2566,15 @@ function rotateQuickBy(delta) {
     obj.setCoords();
     if (obj.isDimGuide && obj.dimAngleId) rebuildDimAngleArc(obj.dimAngleId);
     refreshPropbar();
+    canvas.requestRenderAll();
+    pushState();
+}
+/* 水平/垂直翻轉（小畫家式鏡射）：群組/多選整體翻 */
+function flipSelected(axis) {
+    const obj = canvas.getActiveObject(); if (!obj) return;
+    const k = (axis === 'h') ? 'flipX' : 'flipY';
+    obj.set(k, !obj[k]);
+    obj.setCoords();
     canvas.requestRenderAll();
     pushState();
 }
@@ -3047,7 +3073,7 @@ function placeBalloon(x, y) {
     updateBalloonSummary();
     pushState();
 }
-/* 右下角球標範圍：「球標Ⓐ～球標Ⓕ」——字母用真實圓圈球標樣式呈現。
+/* 右下角球標範圍：「Ⓐ～Ⓕ」——字母用真實圓圈球標樣式呈現（不帶「球標」字樣）。
    每次變動自動刪舊建新；使用者移動過的位置會沿用。 */
 function updateBalloonSummary() {
     const old = canvas.getObjects().find(o => o.id === '__balloonSummary');
@@ -3061,8 +3087,8 @@ function updateBalloonSummary() {
         items.push(t); x += t.width + 5;
     };
     const addGlyph = L => { items.push(...makeBalloonGlyphItems(L, s, x + s / 2, 0)); x += s + 5; };
-    addTxt('球標'); addGlyph(lo);
-    if (hi !== lo) { addTxt('～球標'); addGlyph(hi); }
+    addGlyph(lo);
+    if (hi !== lo) { addTxt('～'); addGlyph(hi); }
     let left, top;
     if (old) { left = old.left; top = old.top; canvas.remove(old); } // 已有 → 自動刪除重建，位置沿用
     else {
