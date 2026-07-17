@@ -1615,6 +1615,20 @@ if (window.fabric && fabric.Text) {
             return __cvsDrawControls.call(this, ctx);
         };
     }
+    /* 渲染保險絲：渲染途中拋例外會讓那一幀畫到一半就停——上層畫布殘留舊選取框（看得到卻刪不掉的
+       幽靈外框），且之後每幀重複拋＝畫面永遠卡在殘影。把整個渲染包起來：出錯跳過該幀、清掉上層
+       殘框、丟掉可疑的作用中選取讓下一幀自然恢復；錯誤限流記錄到主控台（5秒最多一則防洪流）。 */
+    let __lastRenderErr = 0;
+    const __renderCanvas = fabric.Canvas.prototype.renderCanvas;
+    fabric.Canvas.prototype.renderCanvas = function (ctx, objects) {
+        try { return __renderCanvas.call(this, ctx, objects); }
+        catch (e) {
+            const now = Date.now();
+            if (now - __lastRenderErr > 5000) { __lastRenderErr = now; console.warn('[EGdraw] 渲染例外（已自動跳過該幀並清除殘留選取）：', e); }
+            try { this.clearContext(this.contextTop); } catch (e2) { }
+            this._activeObject = null;
+        }
+    };
 }
 /* ════════════════════════════════════════════════════════════════════
    批圖編輯器主程式（Fabric.js 5.3）
@@ -4644,7 +4658,9 @@ function flattenSelection() {
     flushPendingState();   // 壓平前狀態先入復原快照
     const parts = (obj.type === 'activeSelection') ? obj.getObjects().slice() : [obj];
     const b = obj.getBoundingRect(true, true);
-    const mult = Math.min(2, 8192 / Math.max(b.width, b.height, 1));
+    // 4 倍解析度：壓平的多半是局部物件（比整張畫布小很多），拉高倍率讓線條放大檢視仍銳利；
+    // 單邊 8192px 封頂，超大選取範圍自動降倍避免超出瀏覽器 canvas 上限
+    const mult = Math.min(4, 8192 / Math.max(b.width, b.height, 1));
     // 先解散選取：多選狀態下子物件座標是「相對於選取框」的，直接複製會得到錯位座標；
     // 解散後回到畫布絕對座標，逐一複製才正確
     canvas.discardActiveObject();
