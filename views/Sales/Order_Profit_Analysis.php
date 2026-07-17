@@ -23,7 +23,7 @@ require_once __DIR__ . '/../../src/common/_config.php';
 require_once __DIR__ . '/../../src/common/DBConnection.php';
 require_once __DIR__ . '/../../src/common/role_features_helper.php';
 
-$isAjax = isset($_GET['action']);
+$isAjax = isset($_GET['action']) || isset($_POST['action']);
 
 if (!isset($_SESSION['userName'])) {
     if ($isAjax) { header('Content-Type: application/json; charset=utf-8'); echo json_encode(['success'=>false,'error'=>'未登入']); exit; }
@@ -152,10 +152,21 @@ function opa_auto_match(PDO $pdo, array $orders, array $bomsByOrder): array {
         "SELECT bom, d_id, sqty, o_order_id, Created_At FROM bom WHERE d_id IN ({IN})",
         $needDids);
 
+    // BOM總表綁定的製令不進比對池；其訂單視同已綁定
+    $bopmBoms = [];
     $boundOrderIds = [];
+    $bopmRows = opa_chunked_in($pdo,
+        "SELECT m.bom, m.order_id FROM bom_order_process_map m JOIN bom b ON b.bom = m.bom WHERE b.d_id IN ({IN})",
+        $needDids);
+    foreach ($bopmRows as $m) {
+        $bopmBoms[$m['bom']] = true;
+        $boundOrderIds[intval($m['order_id'])] = true;
+    }
+
     $poolByDid = [];
     foreach ($allBom as $b) {
         if (!empty($b['o_order_id'])) { $boundOrderIds[intval($b['o_order_id'])] = true; continue; }
+        if (isset($bopmBoms[$b['bom']])) continue;
         $poolByDid[$b['d_id']][] = $b;
     }
     // 拆批子單有綁製令 → 視同母單已綁定（母單不再參與自動比對）
@@ -252,7 +263,7 @@ function opa_build_dataset(PDO $pdo, array $f): array {
     $bomRows = opa_chunked_in($pdo,
         "SELECT bom, o_order_id, sqty FROM bom WHERE o_order_id IN ({IN})",
         array_map('strval', $lookupIds));
-    $bomsByOrder = [];   // order_id => [ [bom, sqty], ... ]
+    $bomsByOrder = [];   // 手動綁定(bom.o_order_id)：order_id => [ [bom, sqty], ... ]
     $allBoms = [];
     foreach ($bomRows as $b) {
         $boid = intval($b['o_order_id']);
@@ -260,12 +271,31 @@ function opa_build_dataset(PDO $pdo, array $f): array {
         $bomsByOrder[$boid][] = $b;
         $allBoms[$b['bom']] = true;
     }
-    // 2b. 未綁製令訂單 → 自動批次比對（僅計算，不寫入綁定）
-    $autoMatch = opa_auto_match($pdo, $orders, $bomsByOrder);
+
+    // 2b. BOM總表綁定（bom_order_process_map）——優先序最高；權重用 allocated_qty（無則製令數量）
+    $bopmByOrder = [];
+    $bopmRows = opa_chunked_in($pdo,
+        "SELECT m.bom, m.order_id, m.allocated_qty, b.sqty
+         FROM bom_order_process_map m
+         JOIN bom b ON b.bom = m.bom
+         WHERE m.order_id IN ({IN})",
+        $lookupIds);
+    foreach ($bopmRows as $m) {
+        $moid = intval($m['order_id']);
+        $moid = $childToParent[$moid] ?? $moid;
+        $w = intval($m['allocated_qty']) > 0 ? intval($m['allocated_qty']) : intval($m['sqty']);
+        $bopmByOrder[$moid][] = ['bom' => $m['bom'], 'sqty' => $w];
+        $allBoms[$m['bom']] = true;
+    }
+
+    // 2c. 未綁製令訂單 → 自動批次比對（僅計算，不寫入綁定）；總表或手動有綁者不比對
+    $boundAny = $bomsByOrder;
+    foreach ($bopmByOrder as $k => $v) if (!isset($boundAny[$k])) $boundAny[$k] = $v;
+    $autoMatch = opa_auto_match($pdo, $orders, $boundAny);
     $autoByOrder = [];   // 僅保留本次查詢範圍內、未綁定訂單的比對結果
     foreach ($orders as $o) {
         $oid = intval($o['Order_id']);
-        if (empty($bomsByOrder[$oid]) && isset($autoMatch[$oid])) {
+        if (empty($boundAny[$oid]) && isset($autoMatch[$oid])) {
             $autoByOrder[$oid] = $autoMatch[$oid];
             foreach ($autoMatch[$oid] as $ab) $allBoms[$ab['bom']] = true;
         }
@@ -347,11 +377,28 @@ function opa_build_dataset(PDO $pdo, array $f): array {
         $unitPrice = floatval($o['unit_price']);
         $revenue   = $qty * $unitPrice * $rate;
 
-        $boms = $bomsByOrder[$oid] ?? [];
+        // 綁定優先序：BOM總表(bom_order_process_map) > 手動(bom.o_order_id) > 自動比對
+        $bopm   = $bopmByOrder[$oid] ?? [];
+        $manual = $bomsByOrder[$oid] ?? [];
         $isAuto = false;
-        if (empty($boms) && !empty($autoByOrder[$oid])) {   // 自動比對批次（sqty=分配數量，作成本加權）
+        if (!empty($bopm)) {
+            $boms = $bopm;
+            $seen = array_column($bopm, 'bom');
+            $hasExtraManual = false;
+            foreach ($manual as $mb) {
+                if (!in_array($mb['bom'], $seen, true)) { $boms[] = $mb; $hasExtraManual = true; }
+            }
+            $bindSrc = $hasExtraManual ? 'mixed' : 'bopm';
+        } elseif (!empty($manual)) {
+            $boms = $manual;
+            $bindSrc = 'manual';
+        } elseif (!empty($autoByOrder[$oid])) {   // 自動比對批次（sqty=分配數量，作成本加權）
             $boms = $autoByOrder[$oid];
             $isAuto = true;
+            $bindSrc = 'auto';
+        } else {
+            $boms = [];
+            $bindSrc = 'none';
         }
         $bomNames = array_column($boms, 'bom');
 
@@ -411,6 +458,7 @@ function opa_build_dataset(PDO $pdo, array $f): array {
             'margin_rate' => $marginRate !== null ? round($marginRate, 2) : null,
             'cost_status' => $status,
             'auto_matched'=> $isAuto,
+            'bind_src'    => $bindSrc,
             'boms'        => $bomNames,
             'proc_total'  => $total,
             'proc_priced' => $priced,
@@ -501,7 +549,7 @@ if ($isAjax) {
     header('Content-Type: application/json; charset=utf-8');
     if (!$has_access) { echo json_encode(['success'=>false,'error'=>'無權限']); exit; }
 
-    $action = $_GET['action'];
+    $action = $_GET['action'] ?? ($_POST['action'] ?? '');
     $f = [
         'date_from' => trim($_GET['date_from'] ?? ''),
         'date_to'   => trim($_GET['date_to'] ?? ''),
@@ -514,6 +562,58 @@ if ($isAjax) {
     $costFilter = $_GET['cost_filter'] ?? 'all';
 
     try {
+        /* ── 製令綁定候選清單（同料號、未綁定，由新到舊） ── */
+        if ($action === 'bom_candidates') {
+            $oid = intval($_GET['order_id'] ?? 0);
+            $st = $pdo->prepare("SELECT Order_id, Order_oo, d_id, Qty FROM order_track WHERE Order_id=?");
+            $st->execute([$oid]);
+            $order = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$order) { echo json_encode(['success'=>false,'error'=>'找不到訂單']); exit; }
+            $st = $pdo->prepare("
+                SELECT b.bom, b.sqty, b.state, DATE(b.Created_At) AS created_date
+                FROM bom b
+                WHERE b.d_id = ? AND (b.o_order_id IS NULL OR b.o_order_id = '')
+                  AND b.bom NOT IN (SELECT m.bom FROM bom_order_process_map m)
+                ORDER BY b.Created_At DESC, b.bom DESC
+                LIMIT 50");
+            $st->execute([$order['d_id']]);
+            echo json_encode(['success'=>true, 'order'=>$order, 'candidates'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+            exit;
+        }
+
+        /* ── 綁定製令（寫入 bom.o_order_id，與訂單追蹤頁綁定同一欄位；transaction） ── */
+        if ($action === 'bind_boms') {
+            $oid = intval($_POST['order_id'] ?? 0);
+            $names = array_values(array_filter(array_map('trim', explode(',', $_POST['boms'] ?? ''))));
+            if ($oid <= 0 || empty($names)) { echo json_encode(['success'=>false,'error'=>'參數不足']); exit; }
+            $st = $pdo->prepare("SELECT Order_id, d_id FROM order_track WHERE Order_id=?");
+            $st->execute([$oid]);
+            $order = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$order) { echo json_encode(['success'=>false,'error'=>'找不到訂單']); exit; }
+            $pdo->beginTransaction();
+            try {
+                $chk = $pdo->prepare("SELECT bom, d_id, o_order_id FROM bom WHERE bom=? FOR UPDATE");
+                $upd = $pdo->prepare("UPDATE bom SET o_order_id=?, Modified_By=?, Modified_At=NOW() WHERE bom=?");
+                foreach ($names as $bn) {
+                    $chk->execute([$bn]);
+                    $b = $chk->fetch(PDO::FETCH_ASSOC);
+                    if (!$b) throw new Exception("製令 {$bn} 不存在");
+                    if (!empty($b['o_order_id'])) throw new Exception("製令 {$bn} 已綁定其他訂單");
+                    if ($b['d_id'] !== $order['d_id']) throw new Exception("製令 {$bn} 料號與訂單不符");
+                    $chk2 = $pdo->prepare("SELECT 1 FROM bom_order_process_map WHERE bom=? LIMIT 1");
+                    $chk2->execute([$bn]);
+                    if ($chk2->fetchColumn()) throw new Exception("製令 {$bn} 已於BOM總表綁定訂單");
+                    $upd->execute([strval($oid), strval($_SESSION['id'] ?? ''), $bn]);
+                }
+                $pdo->commit();
+                echo json_encode(['success'=>true, 'bound'=>$names]);
+            } catch (Exception $ex) {
+                $pdo->rollBack();
+                echo json_encode(['success'=>false, 'error'=>$ex->getMessage()]);
+            }
+            exit;
+        }
+
         /* ── 成本明細（單一訂單各製程計價狀況） ── */
         if ($action === 'cost_detail') {
             $oid = intval($_GET['order_id'] ?? 0);
@@ -522,12 +622,15 @@ if ($isAjax) {
             $order = $st->fetch(PDO::FETCH_ASSOC);
             if (!$order) { echo json_encode(['success'=>false,'error'=>'找不到訂單']); exit; }
 
-            // 綁定製令：含母單本身與拆批子單所綁的製令
+            // 綁定製令：BOM總表綁定＋手動綁定（含母單本身與拆批子單）
             $st = $pdo->prepare("
                 SELECT b.bom, b.sqty FROM bom b
                 WHERE b.o_order_id = ?
-                   OR b.o_order_id IN (SELECT CAST(Order_id AS CHAR) FROM order_track WHERE parent_order_id = ?)");
-            $st->execute([strval($oid), $oid]);
+                   OR b.o_order_id IN (SELECT CAST(Order_id AS CHAR) FROM order_track WHERE parent_order_id = ?)
+                   OR b.bom IN (SELECT m.bom FROM bom_order_process_map m
+                                WHERE m.order_id = ?
+                                   OR m.order_id IN (SELECT Order_id FROM order_track WHERE parent_order_id = ?))");
+            $st->execute([strval($oid), $oid, $oid, $oid]);
             $boms = $st->fetchAll(PDO::FETCH_ASSOC);
 
             // 未綁定訂單：改用前端傳來的自動比對製令清單
@@ -663,7 +766,8 @@ if ($isAjax) {
                     fputcsv($out, ['訂單日期','訂單號','客戶','料號','規格','齒輪規格','類別','數量','幣別','單價','營收','單顆成本','成本合計','毛利','毛利率%','成本狀態','製令','製令來源','總製程','已計價製程','廠內製程']);
                     $stMap = ['full'=>'完整','partial'=>'部分','none'=>'無'];
                     foreach ($data as $r) {
-                        $src = $r['auto_matched'] ? '自動比對' : (!empty($r['boms']) ? '綁定' : '無');
+                        $srcMap = ['bopm'=>'BOM總表','mixed'=>'總表+手動','manual'=>'手動綁定','auto'=>'自動比對','none'=>'無'];
+                        $src = $srcMap[$r['bind_src']] ?? '無';
                         fputcsv($out, [$r['order_date'],$r['order_oo'],$r['client'],$r['d_id'],$r['spec'],$r['gear'],$r['category'],$r['qty'],
                                        $r['currency'] ?: 'NTD',$r['unit_price'],$r['revenue'],$r['cost_pc'],$r['cost_total'],
                                        $r['margin'],$r['margin_rate'],$stMap[$r['cost_status']],implode(' ', $r['boms']),$src,
@@ -802,6 +906,22 @@ if ($has_access) {
         table.sp-table th { background:#F8F9FA; font-size:12px; padding:6px 5px; border-bottom:2px solid #E9ECEF; white-space:nowrap; }
         table.sp-table td { font-size:12px; padding:5px; border-bottom:1px solid #F1F3F5; }
         table.sp-table td.num, table.sp-table th.num { text-align:right; }
+
+        /* 製程流程 chips：框線盒＋箭頭；廠內=藍底、外包=黃底 */
+        .sp-route { padding:6px 16px 8px; border-bottom:1px solid #E9ECEF; font-size:11px; line-height:2; }
+        .proc-chip { display:inline-block; border:1px solid; border-radius:3px; padding:0 6px; font-size:11px;
+            font-weight:600; white-space:nowrap; vertical-align:middle; }
+        .proc-in  { background:#EAF2FD; border-color:#5B8DEF; color:#1a5cb0; }   /* 廠內：藍底 */
+        .proc-out { background:#FFF6DC; border-color:#E0B84C; color:#8a6d1a; }   /* 外包：黃底 */
+        .proc-arrow { color:#98A2AE; margin:0 3px; font-weight:700; vertical-align:middle; }
+
+        /* 綁定來源標籤與綁定按鈕 */
+        .src-tag { display:inline-block; border-radius:3px; padding:0 4px; font-size:10px; font-weight:700; margin-right:3px; vertical-align:middle; }
+        .src-bopm { background:#E8F8F3; color:#0e8c73; border:1px solid #1ABB9C; }
+        .src-mix  { background:#E8F8F3; color:#0e8c73; border:1px dashed #1ABB9C; }
+        .bind-btn { padding:0 5px; font-size:10px; line-height:16px; background:#fff; border:1px solid #5B8DEF; color:#1a5cb0;
+            border-radius:3px; cursor:pointer; white-space:nowrap; }
+        .bind-btn:hover { background:#EAF2FD; }
 
         table.cd-table { width:100%; border-collapse:collapse; margin-bottom:12px; }
         table.cd-table th { background:#F8F9FA; font-size:12px; padding:5px 6px; border-bottom:2px solid #E9ECEF; white-space:nowrap; }
@@ -947,8 +1067,25 @@ if ($has_access) {
     </div>
     <button type="button" class="sp-close" id="spClose" title="關閉">&times;</button>
   </div>
+  <div class="sp-route" id="spRoute" style="display:none;"></div>
   <div class="sp-body" id="spBody">載入中...</div>
   <div class="sp-foot" id="spFoot"></div>
+</div>
+
+<!-- 快速綁定製令 Modal -->
+<div class="modal fade" id="bindModal" role="dialog" tabindex="-1" data-backdrop="static" style="z-index:1060;">
+  <div class="modal-dialog" style="width:560px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-link"></i> 綁定製令 <small id="bmSub" style="color:#888;"></small></h4></div>
+      <div class="modal-body" id="bmBody" style="max-height:60vh;overflow-y:auto;">載入中...</div>
+      <div class="modal-footer">
+        <span id="bmMsg" style="float:left;color:#c0392b;font-size:12px;"></span>
+        <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary btn-sm" id="bmSubmit"><i class="fa fa-link"></i> 綁定勾選的製令</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- 成本明細 Modal -->
@@ -1046,6 +1183,23 @@ if ($has_access) {
         return '<span class="badge-st st-none" title="' + tip2 + '">無</span>';
     }
 
+    function bomsCellHtml(r){
+        // 製令欄：來源標籤（總表/總表+手動/≈自動）＋未綁或自動列附「綁定」快速鈕
+        var h = '';
+        if (r.boms.length) {
+            if (r.bind_src === 'bopm')       h = '<span class="src-tag src-bopm" title="BOM總表綁定（含分配數量）">總表</span>' + esc(r.boms.join(' '));
+            else if (r.bind_src === 'mixed') h = '<span class="src-tag src-mix" title="BOM總表＋手動綁定">總表+手動</span>' + esc(r.boms.join(' '));
+            else if (r.auto_matched)         h = '<span title="自動比對批次（未綁定，由最新出貨往前依數量分配）" style="color:#b9770e;">≈ ' + esc(r.boms.join(' ')) + '</span>';
+            else                             h = esc(r.boms.join(' '));
+        }
+        if (r.bind_src === 'auto' || r.bind_src === 'none') {
+            h += ' <button type="button" class="bind-btn" data-oid="' + r.order_id + '" data-oo="' + esc(r.order_oo) + '"'
+               + ' data-did="' + esc(r.d_id) + '" data-suggest="' + esc(r.boms.join(',')) + '"'
+               + ' title="快速綁定製令（自動勾選建議批次）"><i class="fa fa-link"></i> 綁定</button>';
+        }
+        return h;
+    }
+
     function partCell(d_id, spec, gear){
         // 料號：點擊開圖面跳窗（bom_viewer）；下方顯示齒輪規格
         return '<td title="' + esc(spec || '') + '" style="max-width:230px;">'
@@ -1070,10 +1224,7 @@ if ($has_access) {
                 } else {
                     costCell = '–';
                 }
-                var bomsCell = r.boms.length
-                    ? (r.auto_matched ? '<span title="自動比對批次（未綁定，由最新出貨往前依數量分配）" style="color:#b9770e;">≈ ' + esc(r.boms.join(' ')) + '</span>'
-                                      : esc(r.boms.join(' ')))
-                    : '';
+                var bomsCell = bomsCellHtml(r);
                 var catCell = r.auto_matched
                     ? '<span title="類別依自動比對批次判定">' + catBadge(r.category) + '<small style="color:#b9770e;">≈</small></span>'
                     : catBadge(r.category);
@@ -1172,7 +1323,40 @@ if ($has_access) {
     $('#spClose, #spBackdrop').on('click', closeSidePanel);
     $(document).on('keydown', function(e){ if (e.key === 'Escape') closeSidePanel(); });
 
+    var lastPanel = { did: '', cat: '' };
+
+    // 滑窗製程流程：取最新一筆有製令的訂單，各製程畫成框線盒＋箭頭（廠內藍底、外包黃底）
+    function renderRoute(rows){
+        $('#spRoute').hide().empty();
+        var src = null;
+        for (var i = 0; i < rows.length; i++) { if (rows[i].boms.length) { src = rows[i]; break; } }
+        if (!src) return;
+        $.getJSON('Order_Profit_Analysis.php', {
+            action: 'cost_detail', order_id: src.order_id,
+            boms: src.auto_matched ? src.boms.join(',') : ''
+        })
+        .done(function(res){
+            if (!res.success || !res.boms.length || !res.boms[0].processes.length) return;
+            var b = res.boms[0];
+            var chips = b.processes.map(function(p){
+                var cls = p.internal ? 'proc-in' : 'proc-out';
+                var tip = (p.internal ? '廠內' : '外包') + (p.makers ? '｜' + p.makers : '')
+                        + (p.avg_price !== null ? '｜均價 ' + nfmt(p.avg_price) : '');
+                return '<span class="proc-chip ' + cls + '" title="' + esc(tip) + '">' + esc(p.process_name) + '</span>';
+            }).join('<span class="proc-arrow">→</span>');
+            $('#spRoute').html(
+                '<span style="color:#888;">製程（' + esc(b.bom) + (src.auto_matched ? '，≈自動比對' : '') + '）：</span>'
+                + chips
+                + '<span style="color:#aaa;margin-left:10px;">'
+                + '<span class="proc-chip proc-in" style="font-size:10px;">藍=廠內</span> '
+                + '<span class="proc-chip proc-out" style="font-size:10px;">黃=外包</span></span>'
+            ).show();
+        });
+    }
+
     function openPartOrders(did, cat){
+        lastPanel = { did: did, cat: cat };
+        $('#spRoute').hide().empty();
         $('#spTitle').text(did);
         $('#spSub').html(catBadge(cat) + ' <span style="color:#aaa;">訂單日期 ' + ($('#fDateFrom').val() || '') + ' ～ ' + ($('#fDateTo').val() || '') + '</span>');
         $('#spBody').html('<i class="fa fa-spinner fa-spin"></i> 載入中...');
@@ -1215,11 +1399,12 @@ if ($has_access) {
                   + '<td class="num ' + mrClass(r.margin_rate) + '">' + nfmt(r.margin) + '</td>'
                   + '<td class="num ' + mrClass(r.margin_rate) + '">' + (r.margin_rate === null ? '–' : nfmt(r.margin_rate) + '%') + '</td>'
                   + '<td>' + statusBadge(r) + '</td>'
-                  + '<td style="font-size:11px;color:#8a94a0;">' + (r.auto_matched ? '≈' : '') + esc(r.boms.join(' ')) + '</td>'
+                  + '<td style="font-size:11px;color:#8a94a0;">' + bomsCellHtml(r) + '</td>'
                   + '</tr>';
             });
             h += '</tbody></table>';
             $('#spBody').html(h);
+            renderRoute(res.rows);
             var covRev = 0;
             res.rows.forEach(function(r){ if (r.cost_status !== 'none') covRev += r.revenue; });
             $('#spFoot').html('共 ' + res.rows.length + ' 筆訂單｜總數量 ' + nfmt(tQty, 0) + '｜營收合計 ' + nfmt(tRev)
@@ -1377,6 +1562,64 @@ if ($has_access) {
     });
 
     $('#roleHint').on('click', function(){ $('#roleModal').modal('show'); });
+
+    /* ── 快速綁定製令：建議批次（自動比對結果）預先勾選，一鍵綁定 ── */
+    var bindCtx = { oid: 0 };
+    $(document).on('click', '.bind-btn', function(){
+        var oid = $(this).data('oid');
+        var oo  = $(this).data('oo');
+        var did = $(this).data('did');
+        var suggest = String($(this).data('suggest') || '').split(',').filter(Boolean);
+        bindCtx = { oid: oid };
+        $('#bmSub').text(oo + '｜' + did);
+        $('#bmMsg').text('');
+        $('#bmBody').html('<i class="fa fa-spinner fa-spin"></i> 載入中...');
+        $('#bindModal').modal('show');
+        $.getJSON('Order_Profit_Analysis.php', {action: 'bom_candidates', order_id: oid})
+        .done(function(res){
+            if (!res.success) { $('#bmBody').html('<span class="text-danger">' + esc(res.error || '載入失敗') + '</span>'); return; }
+            if (!res.candidates.length) { $('#bmBody').html('<span class="text-muted">此料號沒有可綁定的製令（未綁定批次）。</span>'); return; }
+            // 建議批次排前面並預先勾選
+            var sug = [], rest = [];
+            res.candidates.forEach(function(c){ (suggest.indexOf(c.bom) >= 0 ? sug : rest).push(c); });
+            var h = '<div style="font-size:12px;color:#888;margin-bottom:6px;">'
+                  + '訂單數量 <b>' + nfmt(res.order.Qty, 0) + '</b>｜勾選要綁定的製令（可多批）。'
+                  + (sug.length ? '<span style="color:#0e8c73;">建議批次已預先勾選（依自動比對：由最新出貨往前分配）。</span>' : '')
+                  + '</div><table class="cd-table"><thead><tr>'
+                  + '<th style="width:30px;"></th><th>製令</th><th class="num" style="text-align:right;">數量</th>'
+                  + '<th>建立日</th><th>狀態</th><th></th></tr></thead><tbody>';
+            sug.concat(rest).forEach(function(c){
+                var isSug = suggest.indexOf(c.bom) >= 0;
+                h += '<tr>'
+                  + '<td><input type="checkbox" class="bm-chk" value="' + esc(c.bom) + '"' + (isSug ? ' checked' : '') + '></td>'
+                  + '<td>' + esc(c.bom) + '</td>'
+                  + '<td style="text-align:right;">' + nfmt(c.sqty, 0) + '</td>'
+                  + '<td>' + esc(c.created_date || '') + '</td>'
+                  + '<td>' + esc(c.state || '') + '</td>'
+                  + '<td>' + (isSug ? '<span class="src-tag src-bopm">建議</span>' : '') + '</td>'
+                  + '</tr>';
+            });
+            h += '</tbody></table>'
+               + '<div style="font-size:11px;color:#8a94a0;">綁定會寫入製令的訂單欄位（與訂單追蹤頁綁定同一機制）；綁定後成本改以綁定製令計算，不再使用自動比對。</div>';
+            $('#bmBody').html(h);
+        })
+        .fail(function(){ $('#bmBody').html('<span class="text-danger">載入失敗</span>'); });
+    });
+
+    $('#bmSubmit').on('click', function(){
+        var picked = $('.bm-chk:checked').map(function(){ return this.value; }).get();
+        if (!picked.length) { $('#bmMsg').text('請至少勾選一批製令'); return; }
+        var btn = $(this).prop('disabled', true);
+        $.post('Order_Profit_Analysis.php', {action: 'bind_boms', order_id: bindCtx.oid, boms: picked.join(',')}, null, 'json')
+        .done(function(res){
+            if (!res.success) { $('#bmMsg').text(res.error || '綁定失敗'); return; }
+            $('#bindModal').modal('hide');
+            load();   // 重新計算列表
+            if ($('#sidePanel').hasClass('open') && lastPanel.did) openPartOrders(lastPanel.did, lastPanel.cat);
+        })
+        .fail(function(){ $('#bmMsg').text('綁定失敗（連線錯誤）'); })
+        .always(function(){ btn.prop('disabled', false); });
+    });
 
     /* ── 即時篩選：輸入停頓 400ms 自動查詢（客戶/料號/訂單號/規格）；日期變更即查 ── */
     var liveTimer = null;
