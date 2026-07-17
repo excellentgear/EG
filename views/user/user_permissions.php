@@ -315,6 +315,7 @@ $_bomRenRoles   = [];  $_userBomRenRoles = [];
 $_oreadyRoles   = [];  $_userOreadyRoles = [];
 $_bomtrkRoles   = [];  $_userBomtrkRoles = [];
 $_ptaskRoles    = [];  $_userPtaskRoles  = [];
+$_profitRoles   = [];  $_userProfitRoles = [];
 $_asdocRoles    = [];  $_userAsdocRoles  = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
@@ -333,6 +334,7 @@ try {
     $st->execute(['oready']);    $_oreadyRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['bom_track']); $_bomtrkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['personal_task']); $_ptaskRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['order_profit']); $_profitRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['as_doc']);    $_asdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
@@ -385,6 +387,10 @@ try {
     $st->execute(['personal_task']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userPtaskRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['order_profit']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userProfitRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
     $st->execute(['as_doc']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
@@ -927,6 +933,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('bomtrk', 'bom_track', 'BOM 追蹤', 'fa-crosshairs', '#8e44ad',
                         '為每位使用者指派 BOM 追蹤功能的使用權限。此功能不分細部操作，只要指派角色即可使用。',
                         $_bomtrkRoles, $_userBomtrkRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('profit', 'order_profit', '訂單毛利分析', 'fa-line-chart', '#c0392b',
+                        '為每位使用者指派「訂單毛利分析」頁的檢視資格。<strong>毛利屬敏感資料</strong>，未被指派角色者無法開啟本頁；此功能不分細部操作。管理者固定可用。',
+                        $_profitRoles, $_userProfitRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('ptask', 'personal_task', '個人工作紀錄', 'fa-sticky-note-o', '#27ae60',
                         '為每位使用者指派「個人工作紀錄」功能的使用資格。此功能不分細部操作；每人只看得到自己建立的紀錄（含管理者也看不到他人內容）。',
