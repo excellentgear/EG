@@ -1995,7 +1995,7 @@ if ($has_access) {
         var v = function(cls){ return parseFloat(tr.find('input.' + cls).val()) || 0; };
         var dep = 0, cons = 0;
         var yrs = v('mr-years'), mwh = v('mr-mwh');
-        if (yrs > 0 && mwh > 0) dep = Math.max(0, (v('mr-amt') - v('mr-res')) / yrs / 12 / mwh);
+        if (yrs > 0 && mwh > 0) dep = Math.max(0, (v('mr-amt') - v('mr-res')) * 10000 / yrs / 12 / mwh);   // 購入/殘值以萬元輸入
         if (mwh > 0) cons = Math.max(0, v('mr-cons-in')) / 12 / mwh;   // 耗材時薪＝年耗材費÷12÷每月工時
         var total = dep + cons + v('mr-labor') + v('mr-oh');
         tr.find('.mr-dep').text(dep > 0 ? dep.toFixed(2) : '–');
@@ -2010,13 +2010,20 @@ if ($has_access) {
         $.getJSON('Order_Profit_Analysis.php', {action: 'machine_rates'})
         .done(function(res){
             if (!res.success) { $('#rateBody').html('<span class="text-danger">' + esc(res.error || '載入失敗') + '</span>'); return; }
+            var colFill = function(cls){
+                return ' <i class="fa fa-arrow-circle-down col-fill" data-cls="' + cls + '" title="以第一台的值套用到整欄" style="color:#5B8DEF;cursor:pointer;"></i>';
+            };
             var h = '<table class="cd-table"><thead><tr>'
-                  + '<th>機台</th><th style="text-align:right;">購入金額</th><th style="text-align:right;">殘值</th>'
-                  + '<th style="text-align:right;">年限</th><th style="text-align:right;">每月工時</th>'
+                  + '<th>機台</th><th style="text-align:right;" title="單位：萬元（資料庫仍以元儲存）">購入金額(萬)' + colFill('mr-amt') + '</th>'
+                  + '<th style="text-align:right;" title="單位：萬元">殘值(萬)' + colFill('mr-res') + '</th>'
+                  + '<th style="text-align:right;">年限' + colFill('mr-years') + '</th>'
+                  + '<th style="text-align:right;">每月工時' + colFill('mr-mwh') + '</th>'
                   + '<th style="text-align:right;">折舊時薪</th>'
-                  + '<th style="text-align:right;" title="刀具/油品等每年耗材費用，自動換算耗材時薪">年耗材費</th>'
-                  + '<th style="text-align:right;">耗材時薪</th><th style="text-align:right;">人工時薪</th>'
-                  + '<th style="text-align:right;">廠務時薪</th><th style="text-align:right;">合計費率/時</th>'
+                  + '<th style="text-align:right;" title="刀具/油品等每年耗材費用，自動換算耗材時薪">年耗材費' + colFill('mr-cons-in') + '</th>'
+                  + '<th style="text-align:right;">耗材時薪</th>'
+                  + '<th style="text-align:right;">人工時薪' + colFill('mr-labor') + '</th>'
+                  + '<th style="text-align:right;">廠務時薪' + colFill('mr-oh') + '</th>'
+                  + '<th style="text-align:right;">合計費率/時</th>'
                   + '</tr></thead><tbody>';
             var inp = function(cls, val, w){
                 return '<input type="number" class="form-control input-sm mr-in ' + cls + '" value="' + (val === null || val === undefined ? '' : parseFloat(val)) + '"'
@@ -2025,8 +2032,8 @@ if ($has_access) {
             res.machines.forEach(function(m){
                 h += '<tr data-mid="' + m.machine_id + '">'
                   + '<td>' + esc(m.machine) + (parseInt(m.has_asset) ? '' : ' <small style="color:#e67e22;" title="尚未建立資產資料，儲存後建立">新</small>') + '</td>'
-                  + '<td style="text-align:right;">' + inp('mr-amt', m.purchase_amount || 0, 95) + '</td>'
-                  + '<td style="text-align:right;">' + inp('mr-res', m.residual_value || 0) + '</td>'
+                  + '<td style="text-align:right;">' + inp('mr-amt', (m.purchase_amount || 0) / 10000, 80) + '</td>'
+                  + '<td style="text-align:right;">' + inp('mr-res', (m.residual_value || 0) / 10000, 70) + '</td>'
                   + '<td style="text-align:right;">' + inp('mr-years', m.depreciation_years || 5, 55) + '</td>'
                   + '<td style="text-align:right;">' + inp('mr-mwh', m.monthly_work_hours || 160, 65) + '</td>'
                   + '<td style="text-align:right;" class="mr-dep">–</td>'
@@ -2088,7 +2095,35 @@ if ($has_access) {
     $(document).on('input', '.mr-in', function(){ rateRowCalc($(this).closest('tr')); });
     $(document).on('focus', '.mr-in', function(){ var el = this; setTimeout(function(){ try { el.select(); } catch(e){} }, 0); });
     $(document).on('dblclick', '.mr-in', function(){ this.value = ''; rateRowCalc($(this).closest('tr')); });
+
+    // 整欄套用：以第一台的值填滿該欄（年限/月工時/人工時薪等快速統一）
+    $(document).on('click', '.col-fill', function(){
+        var cls = $(this).data('cls');
+        var rows = $('#rateBody tbody tr');
+        if (!rows.length) return;
+        var val = rows.first().find('input.' + cls).val();
+        rows.each(function(){
+            $(this).find('input.' + cls).val(val);
+            rateRowCalc($(this));
+        });
+        $('#rateMsg').css('color', '#0e8c73').text('已將第一台的值（' + val + '）套用到整欄，請按「儲存全部」寫入');
+    });
+
     $(document).on('keydown', '.mr-in', function(e){
+        // 方向鍵＝移動到相鄰輸入框（上下＝同欄跨列、左右＝同列跨欄；上下鍵不再增減數字）
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault();
+            var tr = $(this).closest('tr');
+            var rowInputs = tr.find('input.mr-in');
+            var colIdx = rowInputs.index(this);
+            var target = null;
+            if (e.key === 'ArrowLeft' && colIdx > 0)                     target = rowInputs.eq(colIdx - 1);
+            if (e.key === 'ArrowRight' && colIdx < rowInputs.length - 1) target = rowInputs.eq(colIdx + 1);
+            if (e.key === 'ArrowUp')   target = tr.prev('tr').find('input.mr-in').eq(colIdx);
+            if (e.key === 'ArrowDown') target = tr.next('tr').find('input.mr-in').eq(colIdx);
+            if (target && target.length) target.focus();
+            return;
+        }
         if (e.key !== 'Enter') return;
         e.preventDefault();
         var ins = $('.mr-in:visible');
@@ -2104,7 +2139,8 @@ if ($has_access) {
             var v = function(cls){ return parseFloat(tr.find('input.' + cls).val()) || 0; };
             rows.push({
                 machine_id: tr.data('mid'),
-                purchase_amount: v('mr-amt'), residual_value: v('mr-res'),
+                purchase_amount: v('mr-amt') * 10000, residual_value: v('mr-res') * 10000,   // 萬元 → 元
+
                 depreciation_years: v('mr-years'), monthly_work_hours: v('mr-mwh'),
                 hourly_labor_cost: v('mr-labor'), hourly_overhead_cost: v('mr-oh'),
                 annual_consumable_cost: v('mr-cons-in')
