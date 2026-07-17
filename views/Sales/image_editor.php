@@ -1529,6 +1529,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
                 <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋</li>
                 <li>工程符號與公差：屬性列「文字」區有符號鈕（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×），編輯文字時點一下插到游標處（研磨＝連按▽）；文字輸入 <b>A^B</b>（如 25 -0^-0.18）結束編輯自動變成上下公差小字，雙擊可還原 ^ 字串重編</li>
+                <li>研磨/粗糙度記號：標籤庫內建「<b>加工符號</b>」分類有「研磨記號 G＋▽▽▽」與「粗糙度記號 0.8＋G」，點一下放到圖上（預設透明底、可移動縮放旋轉），<b>雙擊 G 或 0.8 即可改字</b></li>
             </ul>
             <b style="color:#6fc3ff;">⑥ 快捷鍵</b>
             <table style="margin:6px 0 4px;">
@@ -3146,6 +3147,8 @@ const PRESET_LABELS = [
     { name: '粗滾圖面',         cat: '滾齒',     spec: { kind: 'box',   text: '粗滾圖面' } },
     { name: '鎖螺絲',           cat: '組裝',     spec: { kind: 'box',   text: '鎖螺絲' } },
     { name: '攻牙用一般絲攻',   cat: '攻牙',     spec: { kind: 'inline', segs: [{ t: '攻牙用', box: false }, { t: '一般', box: true }, { t: '絲攻', box: false }] } },
+    { name: '研磨記號 G＋▽▽▽', cat: '加工符號', spec: { kind: 'grind3', text: 'G', bg: 'transparent' } },
+    { name: '粗糙度記號 0.8＋G', cat: '加工符號', spec: { kind: 'rough', text: 'G', val: '0.8', bg: 'transparent' } },
     { name: '±0.02',            cat: '公差',     spec: { kind: 'plain', text: '±0.02' } },
     { name: 'JIS 2',            cat: '公差',     spec: { kind: 'plain', text: 'JIS 2' } },
     { name: '(  )齒研 滾/磨',   cat: '製程表格', spec: { kind: 'table', title: '(  )齒研', rows: ['滾', '磨'] } },
@@ -3213,6 +3216,38 @@ function makeLabelFromSpec(spec) {
             fill: bgFill, stroke: '#000000', strokeWidth: bw
         }));
         items.push(...chunks);
+    } else if (spec.kind === 'grind3') {
+        // 研磨記號：n 個倒三角形並排＋上方文字（預設 G）；文字雙擊可改
+        const t = fs * 1.15, th = t * 0.866, n = Math.max(1, spec.count || 3);
+        items.push(mkLabelText(spec.text != null ? spec.text : 'G', fs, {
+            originX: 'center', originY: 'bottom', left: n * t / 2, top: -fs * 0.12,
+            backgroundColor: (spec.bg === 'transparent') ? '' : '#ffffff', specPath: 'text'
+        }));
+        for (let i = 0; i < n; i++) {
+            items.push(new fabric.Polygon(
+                [{ x: i * t, y: 0 }, { x: (i + 1) * t, y: 0 }, { x: i * t + t / 2, y: th }],
+                { fill: bgFill, stroke: __labelInk, strokeWidth: Math.max(2, bw * 0.75), strokeUniform: true, strokeLineJoin: 'round' }
+            ));
+        }
+    } else if (spec.kind === 'rough') {
+        // 表面粗糙度記號：倒三角＋斜線＋水平尾線；左側數值（0.8）與尾線上文字（G）雙擊都可改
+        const t = fs * 1.15, th = t * 0.866, sw2 = Math.max(2, bw * 0.75);
+        const B = { x: t, y: 0 }, C = { x: t / 2, y: th };
+        const k = 2.1;   // 斜線＝三角形右邊沿 C→B 方向延伸
+        const E = { x: C.x + (B.x - C.x) * k, y: C.y + (B.y - C.y) * k };
+        const tail = t * 1.35;
+        items.push(new fabric.Polygon([{ x: 0, y: 0 }, B, C],
+            { fill: bgFill, stroke: __labelInk, strokeWidth: sw2, strokeUniform: true, strokeLineJoin: 'round' }));
+        items.push(new fabric.Polyline([B, E, { x: E.x + tail, y: E.y }],
+            { fill: 'transparent', stroke: __labelInk, strokeWidth: sw2, strokeUniform: true, strokeLineJoin: 'round' }));
+        items.push(mkLabelText(spec.val != null ? spec.val : '0.8', fs * 0.85, {
+            originX: 'right', originY: 'center', left: t * 0.95, top: -th * 0.5,
+            backgroundColor: (spec.bg === 'transparent') ? '' : '#ffffff', specPath: 'val'
+        }));
+        items.push(mkLabelText(spec.text != null ? spec.text : 'G', fs, {
+            originX: 'center', originY: 'bottom', left: E.x + tail * 0.5, top: E.y - fs * 0.08,
+            backgroundColor: (spec.bg === 'transparent') ? '' : '#ffffff', specPath: 'text'
+        }));
     } else if (spec.kind === 'table') {
         const rows = spec.rows || [];
         const cols = spec.cols || null;   // 雙欄式：title + 欄標題列 + 空白格（如 熱處理前置：防碳/鎖螺絲）
