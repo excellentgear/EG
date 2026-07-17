@@ -5,7 +5,7 @@
  * 資料來源：page_visit_stats（由 sideAndTopBarMenu.html 掛載的 page_visit_logger.php 依「頁 × 日 × 人」彙總）。
  * 內容：每個 page_path 的近30天次數、近90天次數、90天使用人數、最後使用時間；
  *       LEFT JOIN system_module_pages 標出「掛在選單上但 90 天零使用」的頁面（核心產出）。
- * 預設排序：近90天次數由小到大（沒人用的排最前面）。
+ * 預設排序：近90天次數由大到小（有使用紀錄的排最前面）；「選單零使用」清單以卡片點選篩選檢視。
  * 權限：僅管理者（rbac 'all' 功能碼，is_system=1 角色）可見；不建獨立 RBAC 模組（比照「項目控制」等管理者群組頁）。
  * 依 UI 規範：後端算完全部資料才分頁/排序/總計；分頁 5/10/20/50（右上）；CSV 匯出；PDF 用列印視窗。
  */
@@ -150,7 +150,7 @@ if ($isAjax) {
     $scope  = $_GET['scope'] ?? 'all';
     if (!in_array($scope, ['all','menu','dead'], true)) $scope = 'all';
     $sort   = $_GET['sort'] ?? 'c90';
-    $dir    = ($_GET['dir'] ?? 'asc') === 'desc' ? 'desc' : 'asc';
+    $dir    = ($_GET['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
     $allowed = ['page_path','menu_name','group_name','c30','c90','users90','users_str','c_all','last_visit','on_menu','dead_menu'];
     if (!in_array($sort, $allowed, true)) $sort = 'c90';
 
@@ -283,7 +283,6 @@ if ($isAjax) {
             background:#E8F8F3; color:#0e8c73; white-space:nowrap; }
         .badge-off  { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;
             background:#F0F2F4; color:#8a94a0; white-space:nowrap; }
-        .scope-toggle .btn.active { background:var(--primary-color); color:#fff; }
         .user-link { color:#1a7abf; cursor:pointer; border-bottom:1px dashed #5B8DEF; }
         .user-link:hover { color:#5B8DEF; }
         .role-hint { color:#888; font-size:12px; cursor:pointer; }
@@ -347,11 +346,6 @@ if ($isAjax) {
 
       <div class="filter-bar">
         <input type="text" id="fKw" class="form-control input-sm eg-in eg-live" placeholder="頁面路徑 / 選單名稱 / 群組 / 使用者（即時篩選）" style="width:270px;">
-        <div class="btn-group scope-toggle" style="margin-left:6px;">
-          <button class="btn btn-default btn-sm active" data-scope="all">全部頁面</button>
-          <button class="btn btn-default btn-sm" data-scope="menu">僅選單頁</button>
-          <button class="btn btn-default btn-sm" data-scope="dead">選單零使用</button>
-        </div>
         <div style="margin-left:auto; display:flex; gap:8px;">
           <button class="btn btn-info btn-sm" id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 轉 CSV</button>
           <button class="btn btn-info btn-sm" id="btnPrint"><i class="fa fa-print"></i> 列印 / PDF</button>
@@ -361,7 +355,7 @@ if ($isAjax) {
       <div class="main-card">
         <div class="table-toolbar">
           <div style="color:#888;font-size:12px;">
-            預設依<b>近90天次數由小到大</b>排——沒人用的排最前面；<span class="badge-dead">選單零使用</span>列標紅。點欄位標題可排序。
+            預設依<b>近90天次數由大到小</b>排——有使用紀錄的排最前面；<span class="badge-dead">選單零使用</span>列標紅，點「選單零使用」卡片可只看該清單。點欄位標題可排序。
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
             <div id="pageInfo" style="color:#888;font-size:12px;"></div>
@@ -438,7 +432,7 @@ if ($isAjax) {
 <?php if ($has_access): ?>
 <script>
 (function(){
-    var state = { scope:'all', sort:'c90', dir:'asc', page:1, size:10 };
+    var state = { scope:'all', sort:'c90', dir:'desc', page:1, size:10 };
 
     function esc(s){ return $('<div>').text(s == null ? '' : String(s)).html(); }
 
@@ -500,14 +494,12 @@ if ($isAjax) {
         state.page = 1; load();
     });
 
-    /* 範圍切換（按鈕與統計卡雙向連動） */
+    /* 範圍切換（點統計卡篩選） */
     function setScope(s){
         state.scope = s; state.page = 1;
-        $('.scope-toggle .btn').removeClass('active').filter('[data-scope="' + s + '"]').addClass('active');
         $('.stat-card[data-scope]').removeClass('active').filter('[data-scope="' + s + '"]').addClass('active');
         load();
     }
-    $('.scope-toggle .btn').on('click', function(){ setScope($(this).data('scope')); });
     $('.stat-card[data-scope]').on('click', function(){ setScope($(this).data('scope')); });
 
     /* 使用者明細：每人次數＋最初～最後使用區間 */
