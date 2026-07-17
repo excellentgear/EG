@@ -937,6 +937,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <button class="tb-btn" onclick="openWmModal()" title="浮水印：自訂文字/角度/單一或填滿/濃淡"><i class="fa fa-shield"></i> 浮水印</button>
     <button class="tb-btn" onclick="openPartModal()" title="存成料號附件（壓平圖＋可再編輯的工作檔），或開啟既有工作檔繼續編輯"><i class="fa fa-archive"></i> 料號附件</button>
     <button class="tb-btn" onclick="saveDraft(true)" title="把目前畫布暫存在這台電腦的瀏覽器裡（依使用者區分，只保留一份）：下次開啟批圖編輯器會詢問是否接續編輯；選「不開啟」的暫存檔會在該次關閉後自動移除。內容有變動時每 60 秒也會自動暫存。要長期保存或跨電腦請用「料號附件」存工作檔"><i class="fa fa-clock-o"></i> 暫存</button>
+    <button class="tb-btn" onclick="flattenAll()" title="把底圖＋所有標籤/文字/形狀燒成單一張圖（效果同存成圖片後重新開啟）。壓平後可用「框選搬移／套索」對任何圖形直接切缺口；可 Ctrl+Z 復原"><i class="fa fa-compress"></i> 壓平成圖</button>
     <button class="tb-btn primary" onclick="openExportModal()" title="列印或另存圖片"><i class="fa fa-download"></i> 匯出 / 列印</button>
     <div id="user-info">
         <span><i class="fa fa-user"></i> <?= $safeUser ?>（<?= $safeRole ?>）</span>
@@ -1516,6 +1517,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li><b>兩點連線（⤳）</b>：點第一點→點第二點自動相連、可連續一直連，屬性列選<b>直線或曲線</b>（直線也可帶箭頭端點；選擇會記住）。曲線＝沿真圓弧生成的圓潤勾線；連好後切回選取(V)<b>雙擊該線＝編輯端點</b>，拖節點調曲度/改位置、「＋」加節點；Esc 取消已點的第一點</li>
                 <li>遮蓋刪除客戶資料：矩形(M)或不規則套索圈選，遮蓋色可改，匯出時才壓平</li>
                 <li>框選複製(C)：框一個範圍變成新圖塊；<b>框選搬移(X)</b>＝小畫家式切下搬走，所見即所得——底圖挖空、<b>完整落在框內的物件（圓/矩形/線條/標籤/文字…）一起烙進切塊搬走</b>；只壓到框線一部分的物件不動。旁邊的<b>套索工具</b>是不規則形狀版，按住拖曳圈任意形狀後放開即可切下。兩者都可連續使用，Esc 或切別的工具才離開。跨視窗貼上用 <b>Ctrl+Shift+V</b>（Ctrl+V 優先貼系統剪貼簿）</li>
+                <li><b>壓平成圖</b>（工具列右上）：把底圖＋所有物件燒成一張圖，效果同存成圖片後重新開啟。想對畫上去的圓形/線條/標籤<b>切缺口、挖洞</b>時先壓平，之後框選搬移／套索就對它們有效；可 Ctrl+Z 復原</li>
                 <li>遮蓋/形狀/直線等工具<b>畫完保持啟用可連續畫</b>，Esc 或 V 回選取；<b>Ctrl+A</b> 全選畫布物件；<b>方向鍵微調</b>選取物（Shift＝10px）；屬性列可輸入<b>角度</b>（直線 0 度＝水平線）；多選一次改粗細/顏色；「合併」把多線條變單一物件（Alt+雙擊才拆）</li>
             </ul>
             <b style="color:#6fc3ff;">③ 文字與標籤庫</b>
@@ -4603,6 +4605,28 @@ function exportRegionDataURL(x, y, w, h, format, mult) {
 function exportSelectionDataURL(obj, format, mult) {
     const b = obj.getBoundingRect(true, true);
     return exportRegionDataURL(b.left, b.top, b.width, b.height, format, mult);
+}
+/* ── 壓平成圖：把底圖＋所有物件燒成單一張圖重新放上（效果同「存成圖片後重新開啟」）。
+   壓平後整張都是底圖像素，框選搬移／套索就能對原本的向量圖形（圓、線、標籤）真正挖空切缺口。
+   新圖 angle=0、無裁切、縮放1，符合 punchHoleInImage 的可挖空條件。可 Ctrl+Z 復原。 */
+function flattenAll() {
+    const others = canvas.getObjects().filter(o => o !== artboard);
+    if (!others.length) { toast('畫布上沒有東西可壓平'); return; }
+    if (!confirm('把底圖與所有物件（含文字、標籤、形狀、浮水印）壓平成一張圖？\n壓平後就不能再個別編輯這些物件（可 Ctrl+Z 復原）。')) return;
+    flushPendingState();   // 先把壓平前的狀態寫進復原快照，Ctrl+Z 才回得來
+    const br = artboard.getBoundingRect(true, true);
+    const url = exportRegionDataURL(br.left, br.top, br.width, br.height, 'png', 1);
+    fabric.Image.fromURL(url, function (img) {
+        if (!img || !img.width) { toast('壓平失敗：畫布轉圖時發生問題'); return; }
+        canvas.discardActiveObject();
+        canvas.getObjects().slice().forEach(o => { if (o !== artboard) canvas.remove(o); });
+        img.set({ left: br.left, top: br.top, scaleX: br.width / img.width, scaleY: br.height / img.height });
+        img.setCoords();
+        canvas.add(img);
+        canvas.requestRenderAll();
+        pushState();
+        toast('已壓平成單一圖片：可用「框選搬移／套索」直接切缺口；不滿意可 Ctrl+Z 復原');
+    });
 }
 /* 同 exportRegionDataURL，但回傳實際 <canvas> 供進一步像素處理（白底轉透明用） */
 function exportRegionCanvasEl(x, y, w, h, mult) {
