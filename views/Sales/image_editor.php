@@ -2391,6 +2391,60 @@ function buildPolyEditControls(poly) {
     }
     return controls;
 }
+/* ── 直線選取＝直接出現頭尾兩個端點圓點，拖曳即改線段長短/方向（不再是一般物件的整體縮放）──
+   拖端點時把線攤平回 angle=0/scale=1 再用絕對座標重設 x1..y2（fabric.Line 的 _set 會自動重算外框），
+   不改物件型別，端點箭頭下拉/角度欄等 isLineLike 相關功能全部不受影響。 */
+function lineEndPositionHandler(which) {
+    return function (dim, finalMatrix, o) {
+        if (!o.canvas) return new fabric.Point(-99999, -99999);   // 已被移出畫布的殘留選取
+        const p = lineAbsEndpoints(o)[which];
+        return fabric.util.transformPoint(new fabric.Point(p.x, p.y), o.canvas.viewportTransform);
+    };
+}
+function lineEndActionHandler(which) {
+    return function (eventData, transform, x, y) {
+        const o = transform.target;
+        const other = lineAbsEndpoints(o)[which === 0 ? 1 : 0];
+        const a = (which === 0) ? { x, y } : other;
+        const b = (which === 0) ? other : { x, y };
+        if (!isFinite(a.x) || !isFinite(a.y) || !isFinite(b.x) || !isFinite(b.y)) return false;   // 防 NaN 毒化
+        o.set({ angle: 0, scaleX: 1, scaleY: 1, flipX: false, flipY: false });
+        o.set({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+        o.setCoords();
+        return true;
+    };
+}
+function buildLineEndControls() {
+    const controls = {};
+    [0, 1].forEach(i => {
+        controls['e' + i] = new fabric.Control({
+            positionHandler: lineEndPositionHandler(i),
+            actionHandler: lineEndActionHandler(i),
+            actionName: 'modifyLine',
+            cursorStyle: 'crosshair',
+            render: function (ctx, left, top) {
+                ctx.save();
+                ctx.fillStyle = '#2779bd'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+                ctx.beginPath(); ctx.arc(left, top, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                ctx.restore();
+            }
+        });
+    });
+    return controls;
+}
+function refreshLineEndControls(e) {
+    ((e && e.deselected) || []).forEach(o => { if (o.__lineEndCtrls) { delete o.controls; delete o.__lineEndCtrls; } });
+    const obj = canvas.getActiveObject();
+    if (obj && obj.type === 'line' && !obj.isDimGuide && !obj.__pointEditing && !obj.locked && !obj.__lineEndCtrls) {
+        obj.controls = buildLineEndControls();
+        obj.__lineEndCtrls = true;
+    }
+}
+canvas.on('selection:created', refreshLineEndControls);
+canvas.on('selection:updated', refreshLineEndControls);
+canvas.on('selection:cleared', function (e) {
+    ((e && e.deselected) || []).forEach(o => { if (o.__lineEndCtrls) { delete o.controls; delete o.__lineEndCtrls; } });
+});
 function toEditablePolyline(obj) {
     if (obj.type === 'polyline' || obj.type === 'polygon') return obj;
     if (obj.type === 'rect') {
@@ -5155,9 +5209,18 @@ document.getElementById('p-bold').addEventListener('change', function () {
 function applyTextBg() {
     const obj = canvas.getActiveObject();
     const on = document.getElementById('p-textbg-on').checked;
-    const bg = document.getElementById('p-textbg').value;
+    let bg = document.getElementById('p-textbg').value;
+    // 勾選加底色時色票若是白色且文字原本沒底色，改用預設黃色：白色色票多半是先前
+    // 點選過標註文字（內建白底）被同步留下的，白底疊在白圖紙上看不出來，使用者會以為勾了沒效
+    if (on && bg.toLowerCase() === '#ffffff') {
+        const t = firstTextIn(obj);
+        if (t && !t.backgroundColor) {
+            bg = '#fff59d';
+            document.getElementById('p-textbg').value = bg;
+        }
+    }
     const n = eachInSelection(obj, o => {
-        if (o.type === 'i-text' || o.type === 'textbox') { o.set('backgroundColor', on ? bg : ''); o.dirty = true; return true; }
+        if (o.type === 'i-text' || o.type === 'textbox' || o.type === 'text') { o.set('backgroundColor', on ? bg : ''); o.dirty = true; return true; }
         return false;
     });
     if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); pushState(); }
