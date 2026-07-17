@@ -86,12 +86,21 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
                         if (in_array($ext, ['jpg','jpeg','png','pdf'])) {
                             $label = $bname . ($sqty !== null ? ' (Qty:'.$sqty.')' : '');
                             $files[] = ['path'=>$url_dir.$fn, 'type'=>$ext, 'name'=>$fn,
-                                        'label'=>$label, 'tags'=>$applyTags($fn), 'is_plus'=>false];
+                                        'label'=>$label, 'tags'=>$applyTags($fn), 'is_plus'=>false,
+                                        'bom'=>$bname];
                         }
                     }
                 }
             }
-            usort($files, function($a,$b){ return strcmp($a['name'],$b['name']); });
+            // 排序：BOM 號碼新到舊；同一 BOM 內，檔名恰為純 BOM 號碼者最上（視為最新版），
+            // 其後才是帶後綴的變體（如 B-xxx++、B-xxx ++）
+            usort($files, function($a,$b){
+                if ($a['bom'] !== $b['bom']) return strcmp($b['bom'], $a['bom']);
+                $aPlain = (pathinfo($a['name'], PATHINFO_FILENAME) === $a['bom']) ? 0 : 1;
+                $bPlain = (pathinfo($b['name'], PATHINFO_FILENAME) === $b['bom']) ? 0 : 1;
+                if ($aPlain !== $bPlain) return $aPlain - $bPlain;
+                return strcmp($a['name'], $b['name']);
+            });
         }
         echo json_encode(['success'=>true, 'files'=>$files, 'erp_files'=>[]]);
     } catch (Exception $e) {
