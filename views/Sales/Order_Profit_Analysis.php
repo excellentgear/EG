@@ -145,7 +145,8 @@ function opa_auto_match(PDO $pdo, array $orders, array $bomsByOrder): array {
 
     // 該料號「全部歷史」訂單與製令（不限查詢區間，分配結果才不會隨查詢範圍漂移）
     $allOrd = opa_chunked_in($pdo,
-        "SELECT Order_id, d_id, Qty, Order_date FROM order_track WHERE Qty > 0 AND d_id IN ({IN})",
+        "SELECT Order_id, d_id, Qty, Order_date, parent_order_id, assembly_parent_order_id
+         FROM order_track WHERE Qty > 0 AND d_id IN ({IN})",
         $needDids);
     $allBom = opa_chunked_in($pdo,
         "SELECT bom, d_id, sqty, o_order_id, Created_At FROM bom WHERE d_id IN ({IN})",
@@ -157,8 +158,16 @@ function opa_auto_match(PDO $pdo, array $orders, array $bomsByOrder): array {
         if (!empty($b['o_order_id'])) { $boundOrderIds[intval($b['o_order_id'])] = true; continue; }
         $poolByDid[$b['d_id']][] = $b;
     }
+    // 拆批子單有綁製令 → 視同母單已綁定（母單不再參與自動比對）
+    foreach ($allOrd as $o) {
+        if (!empty($o['parent_order_id']) && isset($boundOrderIds[intval($o['Order_id'])])) {
+            $boundOrderIds[intval($o['parent_order_id'])] = true;
+        }
+    }
     $ordByDid = [];
     foreach ($allOrd as $o) {
+        // 只有頂層訂單參與分配：拆批/組合件子單的數量已由母單代表，納入會重複扣批次
+        if (!empty($o['parent_order_id']) || !empty($o['assembly_parent_order_id'])) continue;
         if (isset($boundOrderIds[intval($o['Order_id'])])) continue;
         $ordByDid[$o['d_id']][] = $o;
     }
@@ -200,7 +209,9 @@ function opa_auto_match(PDO $pdo, array $orders, array $bomsByOrder): array {
 
 function opa_build_dataset(PDO $pdo, array $f): array {
     // 1. 訂單（有單價者才有毛利可算）
-    $where  = ["ot.unit_price > 0", "ot.Qty > 0"];
+    // 排除拆批子單(parent_order_id)與組合件展開子單(assembly_parent_order_id)，避免營收重複計算：
+    // 拆批母單保留原始總量(如6300)，子單(3×2100)只是交期拆分；子單綁的製令會併回母單算成本。
+    $where  = ["ot.unit_price > 0", "ot.Qty > 0", "ot.parent_order_id IS NULL", "ot.assembly_parent_order_id IS NULL"];
     $params = [];
     if (!empty($f['date_from'])) { $where[] = "ot.Order_date >= ?"; $params[] = $f['date_from']; }
     if (!empty($f['date_to']))   { $where[] = "ot.Order_date <= ?"; $params[] = $f['date_to']; }
@@ -226,14 +237,23 @@ function opa_build_dataset(PDO $pdo, array $f): array {
 
     $orderIds = array_column($orders, 'Order_id');
 
-    // 2. 綁定製令
+    // 2. 綁定製令（含拆批子單所綁製令 → 併回母單）
+    $childToParent = [];   // 拆批子單 Order_id => 母單 Order_id
+    $childRows = opa_chunked_in($pdo,
+        "SELECT Order_id, parent_order_id FROM order_track WHERE parent_order_id IN ({IN})",
+        $orderIds);
+    foreach ($childRows as $c) $childToParent[intval($c['Order_id'])] = intval($c['parent_order_id']);
+
+    $lookupIds = array_merge($orderIds, array_keys($childToParent));
     $bomRows = opa_chunked_in($pdo,
         "SELECT bom, o_order_id, sqty FROM bom WHERE o_order_id IN ({IN})",
-        array_map('strval', $orderIds));
+        array_map('strval', $lookupIds));
     $bomsByOrder = [];   // order_id => [ [bom, sqty], ... ]
     $allBoms = [];
     foreach ($bomRows as $b) {
-        $bomsByOrder[intval($b['o_order_id'])][] = $b;
+        $boid = intval($b['o_order_id']);
+        $boid = $childToParent[$boid] ?? $boid;   // 子單綁的製令歸到母單
+        $bomsByOrder[$boid][] = $b;
         $allBoms[$b['bom']] = true;
     }
     // 2b. 未綁製令訂單 → 自動批次比對（僅計算，不寫入綁定）
@@ -496,8 +516,12 @@ if ($isAjax) {
             $order = $st->fetch(PDO::FETCH_ASSOC);
             if (!$order) { echo json_encode(['success'=>false,'error'=>'找不到訂單']); exit; }
 
-            $st = $pdo->prepare("SELECT bom, sqty FROM bom WHERE o_order_id=?");
-            $st->execute([strval($oid)]);
+            // 綁定製令：含母單本身與拆批子單所綁的製令
+            $st = $pdo->prepare("
+                SELECT b.bom, b.sqty FROM bom b
+                WHERE b.o_order_id = ?
+                   OR b.o_order_id IN (SELECT CAST(Order_id AS CHAR) FROM order_track WHERE parent_order_id = ?)");
+            $st->execute([strval($oid), $oid]);
             $boms = $st->fetchAll(PDO::FETCH_ASSOC);
 
             // 未綁定訂單：改用前端傳來的自動比對製令清單
@@ -861,6 +885,7 @@ if ($has_access) {
           ．單顆成本＝該訂單綁定製令的各製程(bom_sn)發包單價（修改後單價優先）以請款數量加權平均後加總；排除廠內加工商。<br>
           ．「無成本資料」多為：製令仍在進行中尚未請款、或該料號無任何可比對批次。「部分」表示尚有外包製程未計價或含廠內製程（廠內暫不計成本）。<br>
           ．未綁定製令的訂單會<b>自動比對批次</b>（標「≈」）：同料號之下，訂單由新到舊、未綁定製令由新到舊，依數量逐批往前分配；僅供計算顯示，<b>不寫入任何綁定</b>。<br>
+          ．<b>拆批訂單只列母單一筆</b>（營收以母單總量計，不重複）；拆批子單綁定的製令自動併回母單算成本。組合件展開子單亦不列出。<br>
           ．加工類別：製令第一道製程（bom_sn 最小）為「客供料」＝<b>單製</b>，否則＝<b>全製</b>；同一料號單製/全製資料在料號彙總分開列。<br>
           ．累計佔比＝料號彙總依「查詢日期範圍內」營收由大到小排序後的累計營收百分比（柏拉圖），≤80%＝A、≤95%＝B、其餘＝C。<br>
           ．統計卡與彙總一律以「全部符合條件資料」於後端計算，非僅當前頁。
