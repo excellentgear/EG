@@ -37,16 +37,118 @@ $pdo  = $conn->getPDO();
 $my_id = (int)$_SESSION['id'];
 $has_access = rf_has_module_role($pdo, $my_id, 'order_profit');
 
+// 管理者（is_system 角色）才可編輯機台費率設定
+$is_admin = false;
+try {
+    $st = $pdo->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=? AND r.is_system=1 LIMIT 1");
+    $st->execute([$my_id]);
+    $is_admin = (bool)$st->fetchColumn();
+} catch (Exception $e) {}
+
 /* ══════════════════════ 資料計算（後端算完全部再分頁） ══════════════════════ */
 
-function opa_chunked_in(PDO $pdo, string $sqlTpl, array $ids, int $chunk = 500): array {
-    // $sqlTpl 內以 {IN} 佔位；回傳所有 chunk 的列合併
+function opa_chunked_in(PDO $pdo, string $sqlTpl, array $ids, int $chunk = 500, array $extraBefore = [], array $extraAfter = []): array {
+    // $sqlTpl 內以 {IN} 佔位；$extraBefore/$extraAfter 為 SQL 中位於 {IN} 之前/之後的固定參數；回傳所有 chunk 的列合併
     $out = [];
     foreach (array_chunk($ids, $chunk) as $part) {
         $ph = implode(',', array_fill(0, count($part), '?'));
         $st = $pdo->prepare(str_replace('{IN}', $ph, $sqlTpl));
-        $st->execute($part);
+        $st->execute(array_merge($extraBefore, $part, $extraAfter));
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[] = $r;
+    }
+    return $out;
+}
+
+function opa_ensure_rate_columns(PDO $pdo): void {
+    // 費率欄位自動補齊（比照 stock.php 慣例：缺欄位才 ALTER，包 try/catch 不影響頁面）
+    try {
+        $cols = $pdo->query("SHOW COLUMNS FROM kpi_machine_asset")->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('hourly_labor_cost', $cols, true)) {
+            $pdo->exec("ALTER TABLE kpi_machine_asset ADD COLUMN hourly_labor_cost DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT '每小時人工費率（元/時），廠內加工成本推算用' AFTER monthly_work_hours");
+        }
+        if (!in_array('hourly_overhead_cost', $cols, true)) {
+            $pdo->exec("ALTER TABLE kpi_machine_asset ADD COLUMN hourly_overhead_cost DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT '每小時廠務分攤費率（水電/廠房等，元/時），廠內加工成本推算用' AFTER hourly_labor_cost");
+        }
+    } catch (Exception $e) {}
+}
+
+function opa_machine_rates(PDO $pdo): array {
+    // machine_id => ['name','rate','dep','labor','overhead']；費率=折舊時薪+人工時薪+廠務時薪
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    opa_ensure_rate_columns($pdo);
+    $map = [];
+    try {
+        $rows = $pdo->query("
+            SELECT ml.machine_id, ml.machine,
+                   kma.purchase_amount, kma.residual_value, kma.depreciation_years, kma.monthly_work_hours,
+                   COALESCE(kma.hourly_labor_cost, 0) AS labor, COALESCE(kma.hourly_overhead_cost, 0) AS overhead
+            FROM machine_list ml
+            LEFT JOIN kpi_machine_asset kma ON kma.machine_id = ml.machine_id")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) {
+            $dep = 0;
+            $yrs = floatval($r['depreciation_years'] ?? 0);
+            $mwh = floatval($r['monthly_work_hours'] ?? 0);
+            if ($yrs > 0 && $mwh > 0) {
+                $dep = (floatval($r['purchase_amount']) - floatval($r['residual_value'])) / $yrs / 12 / $mwh;
+                if ($dep < 0) $dep = 0;
+            }
+            $map[intval($r['machine_id'])] = [
+                'name'     => $r['machine'],
+                'dep'      => round($dep, 2),
+                'labor'    => floatval($r['labor']),
+                'overhead' => floatval($r['overhead']),
+                'rate'     => round($dep + floatval($r['labor']) + floatval($r['overhead']), 2),
+            ];
+        }
+    } catch (Exception $e) {}
+    return $cache = $map;
+}
+
+function opa_inhouse_estimates(PDO $pdo, array $boms, array $skipSet, array $rates): array {
+    // 廠內報工推算成本：單顆=Σ機台費率×(架機+加工時數)÷產出總數。
+    // $skipSet["bom|bom_sn"]=true 表該製程已有外包實價（實價優先，不估）。
+    // 回傳 [bom => ['cost'=>估算單顆合計, 'cnt'=>估算製程數, 'detail'=>["bom|sn"=>[...]]]]
+    if (empty($boms) || empty($rates)) return [];
+    $rows = opa_chunked_in($pdo,
+        "SELECT bi.bom, bi.bom_sn, r.machine_id,
+                SUM(GREATEST(COALESCE(TIMESTAMPDIFF(MINUTE, r.setup_start_time, r.setup_end_time), 0), 0)) AS setup_min,
+                SUM(GREATEST(COALESCE(TIMESTAMPDIFF(MINUTE, r.production_start_time, r.production_end_time), 0), 0)) AS prod_min,
+                SUM(GREATEST(COALESCE(r.produced_qty, 0), 0)) AS qty
+         FROM pm_process_daily_report r
+         JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
+         WHERE bi.bom IN ({IN})
+         GROUP BY bi.bom, bi.bom_sn, r.machine_id", $boms);
+    $agg = [];
+    foreach ($rows as $r) {
+        $key = $r['bom'] . '|' . $r['bom_sn'];
+        if (isset($skipSet[$key])) continue;                       // 外包實價優先
+        $mid = intval($r['machine_id']);
+        if (!isset($rates[$mid]) || $rates[$mid]['rate'] <= 0) continue;   // 無費率的機台不估
+        $hours = (floatval($r['setup_min']) + floatval($r['prod_min'])) / 60;
+        if ($hours <= 0) continue;
+        if (!isset($agg[$key])) $agg[$key] = ['bom'=>$r['bom'], 'cost'=>0, 'qty'=>0, 'setup_min'=>0, 'prod_min'=>0, 'machines'=>[]];
+        $agg[$key]['cost']      += $hours * $rates[$mid]['rate'];
+        $agg[$key]['qty']       += intval($r['qty']);
+        $agg[$key]['setup_min'] += floatval($r['setup_min']);
+        $agg[$key]['prod_min']  += floatval($r['prod_min']);
+        $agg[$key]['machines'][] = $rates[$mid]['name'];
+    }
+    $out = [];
+    foreach ($agg as $key => $a) {
+        if ($a['qty'] <= 0 || $a['cost'] <= 0) continue;
+        $price = $a['cost'] / $a['qty'];
+        $b = $a['bom'];
+        if (!isset($out[$b])) $out[$b] = ['cost'=>0, 'cnt'=>0, 'detail'=>[]];
+        $out[$b]['cost'] += $price;
+        $out[$b]['cnt']++;
+        $out[$b]['detail'][$key] = [
+            'price'    => round($price, 4),
+            'setup_hr' => round($a['setup_min'] / 60, 2),
+            'prod_hr'  => round($a['prod_min'] / 60, 2),
+            'qty'      => $a['qty'],
+            'machines' => implode('、', array_values(array_unique($a['machines']))),
+        ];
     }
     return $out;
 }
@@ -306,24 +408,27 @@ function opa_build_dataset(PDO $pdo, array $f): array {
     $inhouse = [];
     try { $inhouse = $pdo->query("SELECT maker_id_no FROM maker_list WHERE internal=1")->fetchAll(PDO::FETCH_COLUMN) ?: []; } catch (Exception $e) {}
 
-    // 4. 各製令製程數（總數 / 廠內數）
-    $procInfo = [];      // bom => ['total'=>n,'inhouse'=>n]
+    $kgSet = opa_kg_set($pdo);
+
+    // 4. 各製令製程數（總數 / 廠內數 / 客供料數——客供料不列入成本涵蓋計算）
+    $procInfo = [];      // bom => ['total'=>n,'inhouse'=>n,'kg'=>n]
     if (!empty($allBoms)) {
+        $kgPh = implode(',', array_fill(0, count($kgSet), '?'));
         $rows = opa_chunked_in($pdo,
             "SELECT bi.bom,
                     COUNT(DISTINCT bi.bom_sn) AS total_proc,
-                    COUNT(DISTINCT CASE WHEN COALESCE(m.internal,0)=1 THEN bi.bom_sn END) AS inhouse_proc
+                    COUNT(DISTINCT CASE WHEN COALESCE(m.internal,0)=1 THEN bi.bom_sn END) AS inhouse_proc,
+                    COUNT(DISTINCT CASE WHEN bi.process_no IN ($kgPh) THEN bi.bom_sn END) AS kg_proc
              FROM bom_ing bi
              LEFT JOIN maker_list m ON m.maker_id_no = bi.maker_id_no
              WHERE bi.bom IN ({IN})
-             GROUP BY bi.bom", $allBoms);
-        foreach ($rows as $r) $procInfo[$r['bom']] = ['total'=>intval($r['total_proc']), 'inhouse'=>intval($r['inhouse_proc'])];
+             GROUP BY bi.bom", $allBoms, 500, $kgSet);
+        foreach ($rows as $r) $procInfo[$r['bom']] = ['total'=>intval($r['total_proc']), 'inhouse'=>intval($r['inhouse_proc']), 'kg'=>intval($r['kg_proc'])];
     }
 
     // 5. 各製令加工類別：bom_sn 最小的製程為客供料 → 單製，否則全製
     $bomCat = [];        // bom => '單製'|'全製'
     if (!empty($allBoms)) {
-        $kgSet = opa_kg_set($pdo);
         $rows = opa_chunked_in($pdo,
             "SELECT bom, process_no FROM (
                 SELECT bi.bom, bi.process_no,
@@ -333,8 +438,9 @@ function opa_build_dataset(PDO $pdo, array $f): array {
         foreach ($rows as $r) $bomCat[$r['bom']] = in_array(intval($r['process_no']), $kgSet, true) ? '單製' : '全製';
     }
 
-    // 6. 各製令實際外包成本：各製程(bom_sn)加權平均單價 → 加總
-    $costInfo = [];      // bom => ['cost'=>x,'priced'=>n]
+    // 6. 各製令實際外包成本：各製程(bom_sn)加權平均單價 → 加總（保留逐製程集合供廠內估算判斷）
+    $costInfo = [];      // bom => ['cost'=>外包合計,'priced'=>n]
+    $extPricedSet = [];  // "bom|bom_sn" => true（已有外包實價的製程，不再估算）
     if (!empty($allBoms)) {
         $notIn = '';
         if (!empty($inhouse)) {
@@ -343,25 +449,32 @@ function opa_build_dataset(PDO $pdo, array $f): array {
         foreach (array_chunk($allBoms, 500) as $part) {
             $ph = implode(',', array_fill(0, count($part), '?'));
             $sql = "
-                SELECT s.bom, SUM(s.avg_p) AS cost_per_pc, COUNT(*) AS priced_proc
-                FROM (
-                    SELECT t.bom, t.bom_sn,
-                           SUM( IF(t.modified_unit_price>0, t.modified_unit_price, t.price)
-                                * COALESCE(NULLIF(t.paid_qty,0), NULLIF(t.transfer_qty,0), NULLIF(t.sqty,0), 1) )
-                         / SUM( COALESCE(NULLIF(t.paid_qty,0), NULLIF(t.transfer_qty,0), NULLIF(t.sqty,0), 1) ) AS avg_p
-                    FROM bom_ing_transfer_log t
-                    WHERE t.bom IN ($ph)
-                      AND IF(t.modified_unit_price>0, t.modified_unit_price, COALESCE(t.price,0)) > 0
-                      $notIn
-                    GROUP BY t.bom, t.bom_sn
-                ) s GROUP BY s.bom";
+                SELECT t.bom, t.bom_sn,
+                       SUM( IF(t.modified_unit_price>0, t.modified_unit_price, t.price)
+                            * COALESCE(NULLIF(t.paid_qty,0), NULLIF(t.transfer_qty,0), NULLIF(t.sqty,0), 1) )
+                     / SUM( COALESCE(NULLIF(t.paid_qty,0), NULLIF(t.transfer_qty,0), NULLIF(t.sqty,0), 1) ) AS avg_p
+                FROM bom_ing_transfer_log t
+                WHERE t.bom IN ($ph)
+                  AND IF(t.modified_unit_price>0, t.modified_unit_price, COALESCE(t.price,0)) > 0
+                  $notIn
+                GROUP BY t.bom, t.bom_sn";
             $st2 = $pdo->prepare($sql);
             $st2->execute(array_merge($part, $inhouse));
             foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                $costInfo[$r['bom']] = ['cost'=>floatval($r['cost_per_pc']), 'priced'=>intval($r['priced_proc'])];
+                $p = floatval($r['avg_p']);
+                if ($p <= 0) continue;
+                $bn = $r['bom'];
+                if (!isset($costInfo[$bn])) $costInfo[$bn] = ['cost'=>0, 'priced'=>0];
+                $costInfo[$bn]['cost'] += $p;
+                $costInfo[$bn]['priced']++;
+                $extPricedSet[$bn . '|' . $r['bom_sn']] = true;
             }
         }
     }
+
+    // 6b. 廠內報工推算成本（外包實價優先；無實價的製程用 報工時數×機台費率÷產出數 估算）
+    $rates   = opa_machine_rates($pdo);
+    $estInfo = opa_inhouse_estimates($pdo, $allBoms, $extPricedSet, $rates);
 
     // 7. 齒輪規格（依料號主檔 d_setting_id）
     $didIds = array_values(array_unique(array_filter(array_map(function($o){ return intval($o['d_id_ID'] ?? 0); }, $orders))));
@@ -410,27 +523,32 @@ function opa_build_dataset(PDO $pdo, array $f): array {
             $category = count($cats) === 1 ? $cats[0] : '混合';
         }
 
-        // 成本：多製令以 bom.sqty 加權平均單顆成本
-        $wSum = 0; $wCost = 0; $priced = 0; $total = 0; $inh = 0; $hasAnyCost = false;
+        // 成本：多製令以 bom.sqty 加權平均單顆成本＝外包實價＋廠內報工估算；客供料製程不列入涵蓋計算
+        $wSum = 0; $wCost = 0; $priced = 0; $est = 0; $total = 0; $inh = 0; $kg = 0; $hasAnyCost = false;
         foreach ($boms as $b) {
             $bn = $b['bom'];
             $w  = max(1, intval($b['sqty']));
             $total += $procInfo[$bn]['total']   ?? 0;
             $inh   += $procInfo[$bn]['inhouse'] ?? 0;
-            if (isset($costInfo[$bn])) {
+            $kg    += $procInfo[$bn]['kg']      ?? 0;
+            $extC  = $costInfo[$bn]['cost'] ?? 0;
+            $estC  = $estInfo[$bn]['cost'] ?? 0;
+            if ($extC > 0 || $estC > 0) {
                 $hasAnyCost = true;
-                $wCost += $costInfo[$bn]['cost'] * $w;
+                $wCost += ($extC + $estC) * $w;
                 $wSum  += $w;
-                $priced += $costInfo[$bn]['priced'];
+                $priced += $costInfo[$bn]['priced'] ?? 0;
+                $est    += $estInfo[$bn]['cnt'] ?? 0;
             }
         }
         $costPc = ($hasAnyCost && $wSum > 0) ? $wCost / $wSum : null;
 
-        $external = max(0, $total - $inh);
+        $effTotal  = max(0, $total - $kg);              // 客供料不需成本
+        $uncovered = max(0, $effTotal - $priced - $est);
         if ($costPc === null) {
-            $status = 'none';       // 無製令或無任何計價資料
-        } elseif ($inh > 0 || $priced < $external) {
-            $status = 'partial';    // 有成本但不完整（廠內未計 或 外包尚有製程未計價）
+            $status = 'none';       // 無製令或無任何成本資料
+        } elseif ($uncovered > 0) {
+            $status = 'partial';    // 尚有製程沒有外包實價也沒有報工估算
         } else {
             $status = 'full';
         }
@@ -460,8 +578,10 @@ function opa_build_dataset(PDO $pdo, array $f): array {
             'auto_matched'=> $isAuto,
             'bind_src'    => $bindSrc,
             'boms'        => $bomNames,
-            'proc_total'  => $total,
+            'proc_total'  => $effTotal,
             'proc_priced' => $priced,
+            'proc_est'    => $est,
+            'proc_kg'     => $kg,
             'proc_inhouse'=> $inh,
         ];
     }
@@ -562,6 +682,68 @@ if ($isAjax) {
     $costFilter = $_GET['cost_filter'] ?? 'all';
 
     try {
+        /* ── 機台費率清單（折舊時薪自動計算；人工/廠務時薪可編輯） ── */
+        if ($action === 'machine_rates') {
+            opa_ensure_rate_columns($pdo);
+            $rows = $pdo->query("
+                SELECT ml.machine_id, ml.machine,
+                       kma.purchase_amount, kma.residual_value, kma.depreciation_years, kma.monthly_work_hours,
+                       COALESCE(kma.hourly_labor_cost, 0) AS hourly_labor_cost,
+                       COALESCE(kma.hourly_overhead_cost, 0) AS hourly_overhead_cost,
+                       (kma.asset_id IS NOT NULL) AS has_asset
+                FROM machine_list ml
+                LEFT JOIN kpi_machine_asset kma ON kma.machine_id = ml.machine_id
+                ORDER BY ml.position ASC, ml.machine_id ASC")->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success'=>true, 'machines'=>$rows, 'can_edit'=>$is_admin]);
+            exit;
+        }
+
+        /* ── 機台費率儲存（管理者限定；UPSERT kpi_machine_asset） ── */
+        if ($action === 'machine_rates_save') {
+            if (!$is_admin) { echo json_encode(['success'=>false,'error'=>'僅管理者可編輯費率設定']); exit; }
+            opa_ensure_rate_columns($pdo);
+            $rows = json_decode($_POST['rows'] ?? '[]', true);
+            if (!is_array($rows) || empty($rows)) { echo json_encode(['success'=>false,'error'=>'無資料']); exit; }
+            $pdo->beginTransaction();
+            try {
+                $up = $pdo->prepare("
+                    INSERT INTO kpi_machine_asset
+                        (machine_id, purchase_date, purchase_amount, residual_value, depreciation_years,
+                         monthly_work_hours, hourly_labor_cost, hourly_overhead_cost, created_by, updated_by)
+                    VALUES (?, CURDATE(), ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                        purchase_amount = VALUES(purchase_amount),
+                        residual_value = VALUES(residual_value),
+                        depreciation_years = VALUES(depreciation_years),
+                        monthly_work_hours = VALUES(monthly_work_hours),
+                        hourly_labor_cost = VALUES(hourly_labor_cost),
+                        hourly_overhead_cost = VALUES(hourly_overhead_cost),
+                        updated_by = VALUES(updated_by)");
+                $n = 0;
+                foreach ($rows as $r) {
+                    $mid = intval($r['machine_id'] ?? 0);
+                    if ($mid <= 0) continue;
+                    $up->execute([
+                        $mid,
+                        max(0, floatval($r['purchase_amount'] ?? 0)),
+                        max(0, floatval($r['residual_value'] ?? 0)),
+                        max(1, intval($r['depreciation_years'] ?? 5)),
+                        max(1, floatval($r['monthly_work_hours'] ?? 160)),
+                        max(0, floatval($r['hourly_labor_cost'] ?? 0)),
+                        max(0, floatval($r['hourly_overhead_cost'] ?? 0)),
+                        $my_id, $my_id,
+                    ]);
+                    $n++;
+                }
+                $pdo->commit();
+                echo json_encode(['success'=>true, 'saved'=>$n]);
+            } catch (Exception $ex) {
+                $pdo->rollBack();
+                echo json_encode(['success'=>false, 'error'=>$ex->getMessage()]);
+            }
+            exit;
+        }
+
         /* ── 製令綁定候選清單（同料號、未綁定，由新到舊） ── */
         if ($action === 'bom_candidates') {
             $oid = intval($_GET['order_id'] ?? 0);
@@ -721,6 +903,12 @@ if ($isAjax) {
                 $tMap = [];
                 foreach ($ts->fetchAll(PDO::FETCH_ASSOC) as $tr) $tMap[$tr['bom_sn']] = $tr;
 
+                // 廠內報工估算（外包實價優先）
+                $skip = [];
+                foreach ($tMap as $tsn => $tv) if (floatval($tv['avg_p']) > 0) $skip[$bn . '|' . $tsn] = true;
+                $estB = opa_inhouse_estimates($pdo, [$bn], $skip, opa_machine_rates($pdo));
+                $estDetail = $estB[$bn]['detail'] ?? [];
+
                 $plist = [];
                 $costSum = 0;
                 foreach ($procs as $p) {
@@ -728,6 +916,8 @@ if ($isAjax) {
                     $t  = $tMap[$sn] ?? null;
                     $avg = $t ? round(floatval($t['avg_p']), 4) : null;
                     if ($avg !== null) $costSum += $avg;
+                    $ed = $estDetail[$bn . '|' . $sn] ?? null;
+                    if ($avg === null && $ed) $costSum += $ed['price'];
                     $plist[] = [
                         'bom_sn'      => intval($sn),
                         'process_no'  => intval($p['process_no']),
@@ -738,6 +928,7 @@ if ($isAjax) {
                         'avg_price'   => $avg,
                         'qty_sum'     => $t ? intval($t['qty_sum']) : null,
                         'cnt'         => $t ? intval($t['cnt']) : 0,
+                        'est'         => $ed,   // {price, setup_hr, prod_hr, qty, machines} 或 null
                     ];
                 }
                 $detail[] = ['bom'=>$bn, 'sqty'=>intval($b['sqty']), 'cost_per_pc'=>round($costSum, 4), 'processes'=>$plist];
@@ -791,15 +982,16 @@ if ($isAjax) {
                                        $p['avg_price'],$p['costed_orders'],$p['costed_revenue'],$p['costed_cost'],$p['margin'],$p['margin_rate']]);
                     }
                 } else {
-                    fputcsv($out, ['訂單日期','訂單號','客戶','料號','規格','齒輪規格','類別','數量','幣別','單價','營收','單顆成本','成本合計','毛利','毛利率%','成本狀態','製令','製令來源','總製程','已計價製程','廠內製程']);
+                    fputcsv($out, ['訂單日期','訂單號','客戶','料號','規格','齒輪規格','類別','數量','幣別','單價','營收','單顆成本','成本合計','毛利','毛利率%','成本狀態','製令','製令來源','總製程(不含客供)','外包計價製程','廠內估算製程','客供料製程','廠內製程']);
                     $stMap = ['full'=>'完整','partial'=>'部分','none'=>'無'];
                     foreach ($data as $r) {
                         $srcMap = ['bopm'=>'BOM總表','mixed'=>'總表+手動','manual'=>'手動綁定','auto'=>'自動比對','none'=>'無'];
                         $src = $srcMap[$r['bind_src']] ?? '無';
+                        $stTxt = $stMap[$r['cost_status']] . ($r['proc_est'] > 0 ? '(含估)' : '');
                         fputcsv($out, [$r['order_date'],$r['order_oo'],$r['client'],$r['d_id'],$r['spec'],$r['gear'],$r['category'],$r['qty'],
                                        $r['currency'] ?: 'NTD',$r['unit_price'],$r['revenue'],$r['cost_pc'],$r['cost_total'],
-                                       $r['margin'],$r['margin_rate'],$stMap[$r['cost_status']],implode(' ', $r['boms']),$src,
-                                       $r['proc_total'],$r['proc_priced'],$r['proc_inhouse']]);
+                                       $r['margin'],$r['margin_rate'],$stTxt,implode(' ', $r['boms']),$src,
+                                       $r['proc_total'],$r['proc_priced'],$r['proc_est'],$r['proc_kg'],$r['proc_inhouse']]);
                     }
                 }
                 fclose($out);
@@ -1031,6 +1223,9 @@ if ($has_access) {
           <button class="btn btn-default btn-sm" data-view="part">料號彙總（ABC）</button>
         </div>
         <div style="margin-left:auto; display:flex; gap:8px;">
+          <?php if ($is_admin): ?>
+          <button class="btn btn-default btn-sm" id="btnMachineRates" title="機台每小時費率（折舊/人工/廠務），供廠內加工成本估算"><i class="fa fa-cogs"></i> 機台費率</button>
+          <?php endif; ?>
           <button class="btn btn-info btn-sm" id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 轉 CSV</button>
           <button class="btn btn-info btn-sm" id="btnPrint"><i class="fa fa-print"></i> 列印 / PDF</button>
         </div>
@@ -1066,6 +1261,7 @@ if ($has_access) {
           ．「無成本資料」多為：製令仍在進行中尚未請款、或該料號無任何可比對批次。「部分」表示尚有外包製程未計價或含廠內製程（廠內暫不計成本）。<br>
           ．未綁定製令的訂單會<b>自動比對批次</b>（標「≈」）：同料號之下，訂單由新到舊、未綁定製令由新到舊，依數量逐批往前分配；僅供計算顯示，<b>不寫入任何綁定</b>。<br>
           ．<b>拆批訂單只列母單一筆</b>（營收以母單總量計，不重複）；拆批子單綁定的製令自動併回母單算成本。組合件展開子單亦不列出。<br>
+          ．<b>廠內製程估算成本</b>（標「估」）：無外包實價的廠內製程，以 報工(架機＋加工)時數 × 機台每小時費率 ÷ 產出數 推算——架機時間攤入平均單價，小批量成本自然較高。機台費率（折舊＋人工＋廠務）由管理者在「機台費率」設定；未設費率或無報工的製程維持「未計」。客供料製程不需成本、不列入涵蓋度。<br>
           ．加工類別：製令第一道製程（bom_sn 最小）為「客供料」＝<b>單製</b>，否則＝<b>全製</b>；同一料號單製/全製資料在料號彙總分開列。<br>
           ．累計佔比＝料號彙總依「查詢日期範圍內」營收由大到小排序後的累計營收百分比（柏拉圖），≤80%＝A、≤95%＝B、其餘＝C。<br>
           ．統計卡與彙總一律以「全部符合條件資料」於後端計算，非僅當前頁。
@@ -1103,6 +1299,26 @@ if ($has_access) {
   </div>
   <div class="sp-body" id="spBody">載入中...</div>
   <div class="sp-foot" id="spFoot"></div>
+</div>
+
+<!-- 機台費率設定 Modal（管理者） -->
+<div class="modal fade" id="rateModal" role="dialog" tabindex="-1" data-backdrop="static">
+  <div class="modal-dialog" style="width:860px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-cogs"></i> 機台每小時費率設定 <small style="color:#888;">供廠內加工成本估算：費率 = 折舊時薪 + 人工時薪 + 廠務時薪</small></h4></div>
+      <div class="modal-body" id="rateBody" style="max-height:65vh;overflow-y:auto;">載入中...</div>
+      <div class="modal-footer">
+        <span style="float:left;color:#8a94a0;font-size:11px;text-align:left;">
+          折舊時薪＝(購入−殘值)÷年限÷12÷每月工時，自動計算。費率為 0 的機台不參與估算。<br>
+          購入/殘值/年限/每月工時與「KPI 生產效率分析」頁的機台資產設定為同一份資料。
+        </span>
+        <span id="rateMsg" style="color:#c0392b;font-size:12px;margin-right:8px;"></span>
+        <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary btn-sm" id="rateSave"><i class="fa fa-save"></i> 儲存全部</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- 快速綁定製令 Modal -->
@@ -1208,11 +1424,13 @@ if ($has_access) {
     }
 
     function statusBadge(r){
-        var tip = '外包製程 ' + r.proc_priced + '/' + Math.max(0, r.proc_total - r.proc_inhouse) + ' 已計價'
-                + (r.proc_inhouse > 0 ? '；廠內 ' + r.proc_inhouse + ' 製程未計成本' : '');
-        if (r.cost_status === 'full')    return '<span class="badge-st st-full" title="' + tip + '">完整</span>';
-        if (r.cost_status === 'partial') return '<span class="badge-st st-partial" title="' + tip + '">部分</span>';
-        var tip2 = r.boms.length ? '製令進行中，尚無計價資料' : '訂單未綁定製令，且無可自動比對的批次';
+        var covered = (r.proc_priced || 0) + (r.proc_est || 0);
+        var tip = '已計成本 ' + covered + '/' + r.proc_total + ' 道製程（外包實價 ' + r.proc_priced + '、廠內報工估算 ' + (r.proc_est || 0) + '）'
+                + (r.proc_kg > 0 ? '；客供料 ' + r.proc_kg + ' 道不計' : '');
+        var estMark = (r.proc_est || 0) > 0 ? '<small style="font-weight:400;">·估</small>' : '';
+        if (r.cost_status === 'full')    return '<span class="badge-st st-full" title="' + tip + '">完整' + estMark + '</span>';
+        if (r.cost_status === 'partial') return '<span class="badge-st st-partial" title="' + tip + '">部分' + estMark + '</span>';
+        var tip2 = r.boms.length ? '製令尚無外包計價，也沒有可估算的報工資料' : '訂單未綁定製令，且無可自動比對的批次';
         return '<span class="badge-st st-none" title="' + tip2 + '">無</span>';
     }
 
@@ -1379,6 +1597,7 @@ if ($has_access) {
                 ? '<span class="cost-link" data-oid="' + r.order_id + '" data-oo="' + esc(r.order_oo) + '" data-did="' + esc(r.d_id) + '"'
                   + ' data-boms="' + esc(r.boms.join(',')) + '" data-auto="' + (r.auto_matched ? 1 : 0) + '"'
                   + ' title="點擊看各製程計價明細">' + nfmt(r.cost_pc) + '</span>'
+                  + ((r.proc_est || 0) > 0 ? ' <small style="color:#6c3fb5;" title="含廠內報工估算 ' + r.proc_est + ' 道製程">估</small>' : '')
                 : '–';
             var expander = r.boms.length
                 ? '<span class="sp-expand" data-oid="' + r.order_id + '" data-boms="' + esc(r.boms.join(',')) + '" data-auto="' + (r.auto_matched ? 1 : 0) + '"'
@@ -1494,24 +1713,42 @@ if ($has_access) {
                + '</tr></thead><tbody>';
             b.processes.forEach(function(p){
                 var counted = p.avg_price !== null;
-                var why;
-                if (counted) why = '<span style="color:#0e8c73;font-weight:700;">✓</span>';
-                else if (p.is_kg) why = '<span style="color:#8a94a0;">客供料</span>';
-                else if (p.internal) why = '<span style="color:#b9770e;">廠內未計</span>';
-                else why = '<span style="color:#8a94a0;">未計價</span>';
-                h += '<tr class="' + (counted ? '' : 'cd-skip') + '">'
+                var isEst = !counted && p.est;
+                var why, priceCell, qtyCell, cntCell, makerCell = esc(p.makers || '');
+                if (counted) {
+                    why = '<span style="color:#0e8c73;font-weight:700;">✓</span>';
+                    priceCell = nfmt(p.avg_price);
+                    qtyCell = nfmt(p.qty_sum, 0);
+                    cntCell = nfmt(p.cnt, 0);
+                } else if (isEst) {
+                    var etip = '報工估算：架機 ' + p.est.setup_hr + ' 時＋加工 ' + p.est.prod_hr + ' 時 × 機台費率 ÷ 產出 ' + p.est.qty + ' 顆'
+                             + (p.est.machines ? '；機台：' + p.est.machines : '');
+                    why = '<span style="color:#6c3fb5;font-weight:700;" title="' + esc(etip) + '">估(報工)</span>';
+                    priceCell = '<span style="color:#6c3fb5;" title="' + esc(etip) + '">≈' + nfmt(p.est.price) + '</span>';
+                    qtyCell = nfmt(p.est.qty, 0);
+                    cntCell = '<span style="color:#6c3fb5;">報工</span>';
+                    if (p.est.machines) makerCell = esc(p.est.machines);
+                } else {
+                    if (p.is_kg) why = '<span style="color:#8a94a0;">客供料</span>';
+                    else if (p.internal) why = '<span style="color:#b9770e;">廠內未計</span>';
+                    else why = '<span style="color:#8a94a0;">未計價</span>';
+                    priceCell = '–'; qtyCell = '–'; cntCell = '–';
+                }
+                h += '<tr class="' + (counted || isEst ? '' : 'cd-skip') + '">'
                    + '<td>' + p.bom_sn + '</td>'
                    + '<td>' + esc(p.process_name) + ' <small style="color:#aaa;">#' + p.process_no + '</small></td>'
-                   + '<td>' + esc(p.makers || '') + '</td>'
-                   + '<td style="text-align:right;">' + nfmt(p.avg_price) + '</td>'
-                   + '<td style="text-align:right;">' + nfmt(p.qty_sum, 0) + '</td>'
-                   + '<td style="text-align:right;">' + nfmt(p.cnt, 0) + '</td>'
+                   + '<td>' + makerCell + '</td>'
+                   + '<td style="text-align:right;">' + priceCell + '</td>'
+                   + '<td style="text-align:right;">' + qtyCell + '</td>'
+                   + '<td style="text-align:right;">' + cntCell + '</td>'
                    + '<td>' + why + '</td>'
                    + '</tr>';
             });
             h += '</tbody></table>';
         });
-        h += '<div style="font-size:11px;color:#8a94a0;">單價為該製程所有外包移轉紀錄的加權平均（修改後單價優先、以請款數量加權）；「廠內未計」與「未計價」製程不列入單顆成本。</div>';
+        h += '<div style="font-size:11px;color:#8a94a0;">外包單價＝該製程移轉紀錄加權平均（修改後單價優先、以請款數量加權）；'
+           + '<span style="color:#6c3fb5;">≈估(報工)</span>＝廠內製程無外包實價時，以 報工(架機＋加工)時數 × 機台費率 ÷ 產出數 推算（架機攤入單價）；'
+           + '「廠內未計」＝無報工資料或機台未設費率。</div>';
         return h;
     }
 
@@ -1709,6 +1946,91 @@ if ($has_access) {
             if ($('#sidePanel').hasClass('open') && lastPanel.did) openPartOrders(lastPanel.did, lastPanel.cat);
         })
         .fail(function(){ $('#bmMsg').text('綁定失敗（連線錯誤）'); })
+        .always(function(){ btn.prop('disabled', false); });
+    });
+
+    /* ── 機台費率設定（管理者）：折舊時薪自動算，人工/廠務可編，Enter 逐欄、末欄存檔 ── */
+    function rateRowCalc(tr){
+        var v = function(cls){ return parseFloat(tr.find('input.' + cls).val()) || 0; };
+        var dep = 0;
+        var yrs = v('mr-years'), mwh = v('mr-mwh');
+        if (yrs > 0 && mwh > 0) dep = Math.max(0, (v('mr-amt') - v('mr-res')) / yrs / 12 / mwh);
+        var total = dep + v('mr-labor') + v('mr-oh');
+        tr.find('.mr-dep').text(dep > 0 ? dep.toFixed(2) : '–');
+        tr.find('.mr-total').text(total > 0 ? total.toFixed(2) : '–').css('color', total > 0 ? '#0e8c73' : '#c0392b');
+    }
+
+    $('#btnMachineRates').on('click', function(){
+        $('#rateMsg').text('');
+        $('#rateBody').html('<i class="fa fa-spinner fa-spin"></i> 載入中...');
+        $('#rateModal').modal('show');
+        $.getJSON('Order_Profit_Analysis.php', {action: 'machine_rates'})
+        .done(function(res){
+            if (!res.success) { $('#rateBody').html('<span class="text-danger">' + esc(res.error || '載入失敗') + '</span>'); return; }
+            var h = '<table class="cd-table"><thead><tr>'
+                  + '<th>機台</th><th style="text-align:right;">購入金額</th><th style="text-align:right;">殘值</th>'
+                  + '<th style="text-align:right;">年限</th><th style="text-align:right;">每月工時</th>'
+                  + '<th style="text-align:right;">折舊時薪</th><th style="text-align:right;">人工時薪</th>'
+                  + '<th style="text-align:right;">廠務時薪</th><th style="text-align:right;">合計費率/時</th>'
+                  + '</tr></thead><tbody>';
+            var inp = function(cls, val, w){
+                return '<input type="number" class="form-control input-sm mr-in ' + cls + '" value="' + (val === null || val === undefined ? '' : parseFloat(val)) + '"'
+                     + ' style="width:' + (w || 80) + 'px;text-align:right;display:inline-block;padding:2px 5px;height:24px;">';
+            };
+            res.machines.forEach(function(m){
+                h += '<tr data-mid="' + m.machine_id + '">'
+                  + '<td>' + esc(m.machine) + (parseInt(m.has_asset) ? '' : ' <small style="color:#e67e22;" title="尚未建立資產資料，儲存後建立">新</small>') + '</td>'
+                  + '<td style="text-align:right;">' + inp('mr-amt', m.purchase_amount || 0, 95) + '</td>'
+                  + '<td style="text-align:right;">' + inp('mr-res', m.residual_value || 0) + '</td>'
+                  + '<td style="text-align:right;">' + inp('mr-years', m.depreciation_years || 5, 55) + '</td>'
+                  + '<td style="text-align:right;">' + inp('mr-mwh', m.monthly_work_hours || 160, 65) + '</td>'
+                  + '<td style="text-align:right;" class="mr-dep">–</td>'
+                  + '<td style="text-align:right;">' + inp('mr-labor', m.hourly_labor_cost || 0, 70) + '</td>'
+                  + '<td style="text-align:right;">' + inp('mr-oh', m.hourly_overhead_cost || 0, 70) + '</td>'
+                  + '<td style="text-align:right;font-weight:700;" class="mr-total">–</td>'
+                  + '</tr>';
+            });
+            h += '</tbody></table>';
+            $('#rateBody').html(h);
+            if (!res.can_edit) { $('#rateBody input').prop('disabled', true); $('#rateSave').hide(); } else { $('#rateSave').show(); }
+            $('#rateBody tbody tr').each(function(){ rateRowCalc($(this)); });
+        })
+        .fail(function(){ $('#rateBody').html('<span class="text-danger">載入失敗</span>'); });
+    });
+
+    $(document).on('input', '.mr-in', function(){ rateRowCalc($(this).closest('tr')); });
+    $(document).on('focus', '.mr-in', function(){ var el = this; setTimeout(function(){ try { el.select(); } catch(e){} }, 0); });
+    $(document).on('dblclick', '.mr-in', function(){ this.value = ''; rateRowCalc($(this).closest('tr')); });
+    $(document).on('keydown', '.mr-in', function(e){
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        var ins = $('.mr-in:visible');
+        var idx = ins.index(this);
+        if (idx >= 0 && idx < ins.length - 1) ins.eq(idx + 1).focus();
+        else $('#rateSave').click();   // 最後一欄 Enter＝存檔
+    });
+
+    $('#rateSave').on('click', function(){
+        var rows = [];
+        $('#rateBody tbody tr').each(function(){
+            var tr = $(this);
+            var v = function(cls){ return parseFloat(tr.find('input.' + cls).val()) || 0; };
+            rows.push({
+                machine_id: tr.data('mid'),
+                purchase_amount: v('mr-amt'), residual_value: v('mr-res'),
+                depreciation_years: v('mr-years'), monthly_work_hours: v('mr-mwh'),
+                hourly_labor_cost: v('mr-labor'), hourly_overhead_cost: v('mr-oh')
+            });
+        });
+        if (!rows.length) return;
+        var btn = $(this).prop('disabled', true);
+        $.post('Order_Profit_Analysis.php', {action: 'machine_rates_save', rows: JSON.stringify(rows)}, null, 'json')
+        .done(function(res){
+            if (!res.success) { $('#rateMsg').text(res.error || '儲存失敗'); return; }
+            $('#rateModal').modal('hide');
+            load();   // 費率改了 → 重算
+        })
+        .fail(function(){ $('#rateMsg').text('儲存失敗（連線錯誤）'); })
         .always(function(){ btn.prop('disabled', false); });
     });
 
