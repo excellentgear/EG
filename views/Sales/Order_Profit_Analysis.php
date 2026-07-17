@@ -111,6 +111,28 @@ function opa_machine_rates(PDO $pdo): array {
     return $cache = $map;
 }
 
+function opa_process_settings(PDO $pdo): array {
+    // 製程成本例外設定：process_no => ['mode'=>'ignore'|'fixed', 'price'=>x]
+    // ignore=暫不計此製程成本（不列涵蓋度）；fixed=無實價/估算時帶入固定單價
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $map = [];
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS opa_process_cost_setting (
+            process_no INT NOT NULL PRIMARY KEY,
+            mode ENUM('ignore','fixed') NOT NULL DEFAULT 'ignore' COMMENT 'ignore=暫不計此製程成本；fixed=以固定單價計',
+            fixed_price DECIMAL(12,4) NOT NULL DEFAULT 0 COMMENT '固定單價（元/顆），mode=fixed 時使用',
+            note VARCHAR(100) NULL,
+            updated_by INT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='訂單毛利分析：製程成本例外設定（不計/固定單價）'");
+        foreach ($pdo->query("SELECT process_no, mode, fixed_price FROM opa_process_cost_setting")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $map[intval($r['process_no'])] = ['mode' => $r['mode'], 'price' => floatval($r['fixed_price'])];
+        }
+    } catch (Exception $e) {}
+    return $cache = $map;
+}
+
 function opa_inhouse_estimates(PDO $pdo, array $boms, array $skipSet, array $rates): array {
     // 廠內報工推算成本：單顆=Σ機台費率×(架機+加工時數)÷產出總數。
     // $skipSet["bom|bom_sn"]=true 表該製程已有外包實價（實價優先，不估）。
@@ -482,6 +504,31 @@ function opa_build_dataset(PDO $pdo, array $f): array {
     $rates   = opa_machine_rates($pdo);
     $estInfo = opa_inhouse_estimates($pdo, $allBoms, $extPricedSet, $rates);
 
+    // 6c. 製程成本例外設定：無實價也無估算的製程 → 帶固定單價 或 設定不計（不列涵蓋度）
+    $pcs = opa_process_settings($pdo);
+    $fixInfo = [];   // bom => ['cost'=>固定單價合計,'cnt'=>n]
+    $ignInfo = [];   // bom => 設定不計的製程數（無其他成本來源者）
+    if (!empty($allBoms) && !empty($pcs)) {
+        $rows = opa_chunked_in($pdo,
+            "SELECT bom, bom_sn, MIN(process_no) AS process_no FROM bom_ing WHERE bom IN ({IN}) GROUP BY bom, bom_sn",
+            $allBoms);
+        foreach ($rows as $r) {
+            $pn = intval($r['process_no']);
+            if (!isset($pcs[$pn])) continue;
+            if (in_array($pn, $kgSet, true)) continue;                        // 客供料已另行排除
+            $key = $r['bom'] . '|' . $r['bom_sn'];
+            if (isset($extPricedSet[$key])) continue;                         // 已有外包實價
+            if (isset($estInfo[$r['bom']]['detail'][$key])) continue;         // 已有報工估算
+            if ($pcs[$pn]['mode'] === 'fixed' && $pcs[$pn]['price'] > 0) {
+                if (!isset($fixInfo[$r['bom']])) $fixInfo[$r['bom']] = ['cost'=>0, 'cnt'=>0];
+                $fixInfo[$r['bom']]['cost'] += $pcs[$pn]['price'];
+                $fixInfo[$r['bom']]['cnt']++;
+            } else {   // ignore（或 fixed 但單價 0）＝暫不計
+                $ignInfo[$r['bom']] = ($ignInfo[$r['bom']] ?? 0) + 1;
+            }
+        }
+    }
+
     // 7. 齒輪規格（依料號主檔 d_setting_id）
     $didIds = array_values(array_unique(array_filter(array_map(function($o){ return intval($o['d_id_ID'] ?? 0); }, $orders))));
     $gearMap = opa_gear_map($pdo, $didIds);
@@ -529,28 +576,32 @@ function opa_build_dataset(PDO $pdo, array $f): array {
             $category = count($cats) === 1 ? $cats[0] : '混合';
         }
 
-        // 成本：多製令以 bom.sqty 加權平均單顆成本＝外包實價＋廠內報工估算；客供料製程不列入涵蓋計算
-        $wSum = 0; $wCost = 0; $priced = 0; $est = 0; $total = 0; $inh = 0; $kg = 0; $hasAnyCost = false;
+        // 成本：多製令以 bom.sqty 加權平均單顆成本＝外包實價＋廠內報工估算＋固定單價設定；
+        // 客供料與「設定不計」的製程不列入涵蓋計算
+        $wSum = 0; $wCost = 0; $priced = 0; $est = 0; $fx = 0; $ign = 0; $total = 0; $inh = 0; $kg = 0; $hasAnyCost = false;
         foreach ($boms as $b) {
             $bn = $b['bom'];
             $w  = max(1, intval($b['sqty']));
             $total += $procInfo[$bn]['total']   ?? 0;
             $inh   += $procInfo[$bn]['inhouse'] ?? 0;
             $kg    += $procInfo[$bn]['kg']      ?? 0;
+            $ign   += $ignInfo[$bn] ?? 0;
             $extC  = $costInfo[$bn]['cost'] ?? 0;
             $estC  = $estInfo[$bn]['cost'] ?? 0;
-            if ($extC > 0 || $estC > 0) {
+            $fixC  = $fixInfo[$bn]['cost'] ?? 0;
+            if ($extC > 0 || $estC > 0 || $fixC > 0) {
                 $hasAnyCost = true;
-                $wCost += ($extC + $estC) * $w;
+                $wCost += ($extC + $estC + $fixC) * $w;
                 $wSum  += $w;
                 $priced += $costInfo[$bn]['priced'] ?? 0;
                 $est    += $estInfo[$bn]['cnt'] ?? 0;
+                $fx     += $fixInfo[$bn]['cnt'] ?? 0;
             }
         }
         $costPc = ($hasAnyCost && $wSum > 0) ? $wCost / $wSum : null;
 
-        $effTotal  = max(0, $total - $kg);              // 客供料不需成本
-        $uncovered = max(0, $effTotal - $priced - $est);
+        $effTotal  = max(0, $total - $kg - $ign);       // 客供料與設定不計的製程不需成本
+        $uncovered = max(0, $effTotal - $priced - $est - $fx);
         if ($costPc === null) {
             $status = 'none';       // 無製令或無任何成本資料
         } elseif ($uncovered > 0) {
@@ -587,6 +638,8 @@ function opa_build_dataset(PDO $pdo, array $f): array {
             'proc_total'  => $effTotal,
             'proc_priced' => $priced,
             'proc_est'    => $est,
+            'proc_fixed'  => $fx,
+            'proc_ign'    => $ign,
             'proc_kg'     => $kg,
             'proc_inhouse'=> $inh,
         ];
@@ -753,6 +806,47 @@ if ($isAjax) {
             exit;
         }
 
+        /* ── 製程成本例外設定清單（全部製程＋目前設定） ── */
+        if ($action === 'process_settings') {
+            opa_process_settings($pdo);   // 確保表存在
+            $rows = $pdo->query("
+                SELECT p.ProcessNo AS process_no, p.ProcessName AS process_name,
+                       s.mode, s.fixed_price,
+                       (SELECT COUNT(*) FROM bom_ing bi WHERE bi.process_no = p.ProcessNo) AS usage_cnt
+                FROM process_no p
+                LEFT JOIN opa_process_cost_setting s ON s.process_no = p.ProcessNo
+                ORDER BY (s.mode IS NOT NULL) DESC, usage_cnt DESC, p.ProcessNo ASC")->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success'=>true, 'processes'=>$rows, 'can_edit'=>$is_admin]);
+            exit;
+        }
+
+        /* ── 製程成本例外設定儲存（管理者限定；整份取代） ── */
+        if ($action === 'process_settings_save') {
+            if (!$is_admin) { echo json_encode(['success'=>false,'error'=>'僅管理者可編輯製程成本設定']); exit; }
+            opa_process_settings($pdo);
+            $rows = json_decode($_POST['rows'] ?? '[]', true);
+            if (!is_array($rows)) { echo json_encode(['success'=>false,'error'=>'資料格式錯誤']); exit; }
+            $pdo->beginTransaction();
+            try {
+                $pdo->exec("DELETE FROM opa_process_cost_setting");   // 整份取代（僅例外清單，設定筆數少）
+                $ins = $pdo->prepare("INSERT INTO opa_process_cost_setting (process_no, mode, fixed_price, updated_by) VALUES (?,?,?,?)");
+                $n = 0;
+                foreach ($rows as $r) {
+                    $pn = intval($r['process_no'] ?? 0);
+                    $mode = ($r['mode'] ?? '') === 'fixed' ? 'fixed' : (($r['mode'] ?? '') === 'ignore' ? 'ignore' : '');
+                    if ($pn <= 0 || $mode === '') continue;
+                    $ins->execute([$pn, $mode, max(0, floatval($r['fixed_price'] ?? 0)), $my_id]);
+                    $n++;
+                }
+                $pdo->commit();
+                echo json_encode(['success'=>true, 'saved'=>$n]);
+            } catch (Exception $ex) {
+                $pdo->rollBack();
+                echo json_encode(['success'=>false, 'error'=>$ex->getMessage()]);
+            }
+            exit;
+        }
+
         /* ── 製令綁定候選清單（同料號、未綁定，由新到舊） ── */
         if ($action === 'bom_candidates') {
             $oid = intval($_GET['order_id'] ?? 0);
@@ -869,6 +963,7 @@ if ($isAjax) {
             $inhouse = [];
             try { $inhouse = $pdo->query("SELECT maker_id_no FROM maker_list WHERE internal=1")->fetchAll(PDO::FETCH_COLUMN) ?: []; } catch (Exception $e) {}
             $kgSet = opa_kg_set($pdo);
+            $pcs = opa_process_settings($pdo);
 
             $detail = [];
             foreach ($boms as $b) {
@@ -927,6 +1022,18 @@ if ($isAjax) {
                     if ($avg !== null) $costSum += $avg;
                     $ed = $estDetail[$bn . '|' . $sn] ?? null;
                     if ($avg === null && $ed) $costSum += $ed['price'];
+                    // 製程成本例外設定（無實價也無估算時）：固定單價 或 設定不計
+                    $pnInt = intval($p['process_no']);
+                    $setting = $pcs[$pnInt] ?? null;
+                    $fxPrice = null; $ignored = false;
+                    if ($avg === null && !$ed && $setting && !in_array($pnInt, $kgSet, true)) {
+                        if ($setting['mode'] === 'fixed' && $setting['price'] > 0) {
+                            $fxPrice = round($setting['price'], 4);
+                            $costSum += $fxPrice;
+                        } else {
+                            $ignored = true;
+                        }
+                    }
                     $plist[] = [
                         'bom_sn'      => intval($sn),
                         'process_no'  => intval($p['process_no']),
@@ -938,6 +1045,8 @@ if ($isAjax) {
                         'qty_sum'     => $t ? intval($t['qty_sum']) : null,
                         'cnt'         => $t ? intval($t['cnt']) : 0,
                         'est'         => $ed,   // {price, setup_hr, prod_hr, qty, machines} 或 null
+                        'fixed_price' => $fxPrice,   // 固定單價設定（元/顆）或 null
+                        'ignored'     => $ignored,   // 設定不計此製程成本
                     ];
                 }
                 $detail[] = ['bom'=>$bn, 'sqty'=>intval($b['sqty']), 'cost_per_pc'=>round($costSum, 4), 'processes'=>$plist];
@@ -991,7 +1100,7 @@ if ($isAjax) {
                                        $p['avg_price'],$p['costed_orders'],$p['costed_revenue'],$p['costed_cost'],$p['margin'],$p['margin_rate']]);
                     }
                 } else {
-                    fputcsv($out, ['訂單日期','訂單號','客戶','料號','規格','齒輪規格','類別','數量','幣別','單價','營收','單顆成本','成本合計','毛利','毛利率%','成本狀態','製令','製令來源','總製程(不含客供)','外包計價製程','廠內估算製程','客供料製程','廠內製程']);
+                    fputcsv($out, ['訂單日期','訂單號','客戶','料號','規格','齒輪規格','類別','數量','幣別','單價','營收','單顆成本','成本合計','毛利','毛利率%','成本狀態','製令','製令來源','總製程(不含客供/不計)','外包計價製程','廠內估算製程','固定單價製程','設定不計製程','客供料製程','廠內製程']);
                     $stMap = ['full'=>'完整','partial'=>'部分','none'=>'無'];
                     foreach ($data as $r) {
                         $srcMap = ['bopm'=>'BOM總表','mixed'=>'總表+手動','manual'=>'手動綁定','auto'=>'自動比對','none'=>'無'];
@@ -1000,7 +1109,7 @@ if ($isAjax) {
                         fputcsv($out, [$r['order_date'],$r['order_oo'],$r['client'],$r['d_id'],$r['spec'],$r['gear'],$r['category'],$r['qty'],
                                        $r['currency'] ?: 'NTD',$r['unit_price'],$r['revenue'],$r['cost_pc'],$r['cost_total'],
                                        $r['margin'],$r['margin_rate'],$stTxt,implode(' ', $r['boms']),$src,
-                                       $r['proc_total'],$r['proc_priced'],$r['proc_est'],$r['proc_kg'],$r['proc_inhouse']]);
+                                       $r['proc_total'],$r['proc_priced'],$r['proc_est'],$r['proc_fixed'],$r['proc_ign'],$r['proc_kg'],$r['proc_inhouse']]);
                     }
                 }
                 fclose($out);
@@ -1233,7 +1342,8 @@ if ($has_access) {
         </div>
         <div style="margin-left:auto; display:flex; gap:8px;">
           <?php if ($is_admin): ?>
-          <button class="btn btn-default btn-sm" id="btnMachineRates" title="機台每小時費率（折舊/人工/廠務），供廠內加工成本估算"><i class="fa fa-cogs"></i> 機台費率</button>
+          <button class="btn btn-default btn-sm" id="btnMachineRates" title="機台每小時費率（折舊/耗材/人工/廠務），供廠內加工成本估算"><i class="fa fa-cogs"></i> 機台費率</button>
+          <button class="btn btn-default btn-sm" id="btnProcSettings" title="沒報工/沒計價的製程：設定暫不計成本或帶入固定單價"><i class="fa fa-sliders"></i> 製程成本設定</button>
           <?php endif; ?>
           <button class="btn btn-info btn-sm" id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 轉 CSV</button>
           <button class="btn btn-info btn-sm" id="btnPrint"><i class="fa fa-print"></i> 列印 / PDF</button>
@@ -1270,7 +1380,8 @@ if ($has_access) {
           ．「無成本資料」多為：製令仍在進行中尚未請款、或該料號無任何可比對批次。「部分」表示尚有外包製程未計價或含廠內製程（廠內暫不計成本）。<br>
           ．未綁定製令的訂單會<b>自動比對批次</b>（標「≈」）：同料號之下，訂單由新到舊、未綁定製令由新到舊，依數量逐批往前分配；僅供計算顯示，<b>不寫入任何綁定</b>。<br>
           ．<b>拆批訂單只列母單一筆</b>（營收以母單總量計，不重複）；拆批子單綁定的製令自動併回母單算成本。組合件展開子單亦不列出。<br>
-          ．<b>廠內製程估算成本</b>（標「估」）：無外包實價的廠內製程，以 報工(架機＋加工)時數 × 機台每小時費率 ÷ 產出數 推算——架機時間攤入平均單價，小批量成本自然較高。機台費率（折舊＋耗材＋人工＋廠務）由管理者在「機台費率」設定（含人工時薪試算器）；未設費率或無報工的製程維持「未計」。客供料製程不需成本、不列入涵蓋度。<br>
+          ．<b>廠內製程估算成本</b>（標「估」）：無外包實價的廠內製程，以 報工(架機＋加工)時數 × 機台每小時費率 ÷ 產出數 推算——架機時間攤入平均單價，小批量成本自然較高。機台費率（折舊＋耗材＋人工＋廠務）由管理者在「機台費率」設定（含人工時薪試算器）。<br>
+          ．<b>製程成本例外設定</b>：沒報工/沒計價的製程可在「製程成本設定」指定<b>暫不計</b>（不列涵蓋度，狀態不再卡「部分」）或<b>固定單價</b>（標「定」計入成本）；優先序＝外包實價＞報工估算＞固定單價。客供料製程一律不需成本。<br>
           ．加工類別：製令第一道製程（bom_sn 最小）為「客供料」＝<b>單製</b>，否則＝<b>全製</b>；同一料號單製/全製資料在料號彙總分開列。<br>
           ．累計佔比＝料號彙總依「查詢日期範圍內」營收由大到小排序後的累計營收百分比（柏拉圖），≤80%＝A、≤95%＝B、其餘＝C。<br>
           ．統計卡與彙總一律以「全部符合條件資料」於後端計算，非僅當前頁。
@@ -1308,6 +1419,29 @@ if ($has_access) {
   </div>
   <div class="sp-body" id="spBody">載入中...</div>
   <div class="sp-foot" id="spFoot"></div>
+</div>
+
+<!-- 製程成本例外設定 Modal（管理者） -->
+<div class="modal fade" id="procModal" role="dialog" tabindex="-1" data-backdrop="static">
+  <div class="modal-dialog" style="width:640px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-sliders"></i> 製程成本例外設定 <small style="color:#888;">沒報工/沒計價的製程 → 暫不計 或 固定單價</small></h4></div>
+      <div class="modal-body" style="max-height:65vh;overflow-y:auto;">
+        <input type="text" id="pcFilter" class="form-control input-sm" placeholder="輸入製程名稱或編號即時過濾" style="width:240px;margin-bottom:8px;">
+        <div id="procBody">載入中...</div>
+      </div>
+      <div class="modal-footer">
+        <span style="float:left;color:#8a94a0;font-size:11px;text-align:left;">
+          優先序：外包實價 &gt; 廠內報工估算 &gt; <b>固定單價</b>；「暫不計」的製程不列入成本涵蓋度（不再讓狀態卡在「部分」）。<br>
+          設定為全域（所有料號適用），之後隨時可回來改或改回「正常計算」。
+        </span>
+        <span id="procMsg" style="color:#c0392b;font-size:12px;margin-right:8px;"></span>
+        <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary btn-sm" id="procSave"><i class="fa fa-save"></i> 儲存設定</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- 機台費率設定 Modal（管理者） -->
@@ -1465,9 +1599,11 @@ if ($has_access) {
     }
 
     function statusBadge(r){
-        var covered = (r.proc_priced || 0) + (r.proc_est || 0);
-        var tip = '已計成本 ' + covered + '/' + r.proc_total + ' 道製程（外包實價 ' + r.proc_priced + '、廠內報工估算 ' + (r.proc_est || 0) + '）'
-                + (r.proc_kg > 0 ? '；客供料 ' + r.proc_kg + ' 道不計' : '');
+        var covered = (r.proc_priced || 0) + (r.proc_est || 0) + (r.proc_fixed || 0);
+        var tip = '已計成本 ' + covered + '/' + r.proc_total + ' 道製程（外包實價 ' + r.proc_priced + '、廠內報工估算 ' + (r.proc_est || 0)
+                + ((r.proc_fixed || 0) > 0 ? '、固定單價 ' + r.proc_fixed : '') + '）'
+                + (r.proc_kg > 0 ? '；客供料 ' + r.proc_kg + ' 道不計' : '')
+                + ((r.proc_ign || 0) > 0 ? '；設定不計 ' + r.proc_ign + ' 道' : '');
         var estMark = (r.proc_est || 0) > 0 ? '<small style="font-weight:400;">·估</small>' : '';
         if (r.cost_status === 'full')    return '<span class="badge-st st-full" title="' + tip + '">完整' + estMark + '</span>';
         if (r.cost_status === 'partial') return '<span class="badge-st st-partial" title="' + tip + '">部分' + estMark + '</span>';
@@ -1769,13 +1905,21 @@ if ($has_access) {
                     qtyCell = nfmt(p.est.qty, 0);
                     cntCell = '<span style="color:#6c3fb5;">報工</span>';
                     if (p.est.machines) makerCell = esc(p.est.machines);
+                } else if (p.fixed_price !== null && p.fixed_price !== undefined) {
+                    why = '<span style="color:#1a5cb0;font-weight:700;" title="製程成本設定的固定單價">固定價(設定)</span>';
+                    priceCell = '<span style="color:#1a5cb0;">定 ' + nfmt(p.fixed_price) + '</span>';
+                    qtyCell = '–'; cntCell = '<span style="color:#1a5cb0;">設定</span>';
+                } else if (p.ignored) {
+                    why = '<span style="color:#8a94a0;" title="製程成本設定為暫不計，不列入涵蓋度">設定不計</span>';
+                    priceCell = '–'; qtyCell = '–'; cntCell = '–';
                 } else {
                     if (p.is_kg) why = '<span style="color:#8a94a0;">客供料</span>';
                     else if (p.internal) why = '<span style="color:#b9770e;">廠內未計</span>';
                     else why = '<span style="color:#8a94a0;">未計價</span>';
                     priceCell = '–'; qtyCell = '–'; cntCell = '–';
                 }
-                h += '<tr class="' + (counted || isEst ? '' : 'cd-skip') + '">'
+                var hasFx = (p.fixed_price !== null && p.fixed_price !== undefined);
+                h += '<tr class="' + (counted || isEst || hasFx ? '' : 'cd-skip') + '">'
                    + '<td>' + p.bom_sn + '</td>'
                    + '<td>' + esc(p.process_name) + ' <small style="color:#aaa;">#' + p.process_no + '</small></td>'
                    + '<td>' + makerCell + '</td>'
@@ -2050,6 +2194,75 @@ if ($has_access) {
             $('#rateBody tbody tr').each(function(){ rateRowCalc($(this)); });
         })
         .fail(function(){ $('#rateBody').html('<span class="text-danger">載入失敗</span>'); });
+    });
+
+    /* ── 製程成本例外設定：正常計算 / 暫不計 / 固定單價 ── */
+    $('#btnProcSettings').on('click', function(){
+        $('#procMsg').text('');
+        $('#pcFilter').val('');
+        $('#procBody').html('<i class="fa fa-spinner fa-spin"></i> 載入中...');
+        $('#procModal').modal('show');
+        $.getJSON('Order_Profit_Analysis.php', {action: 'process_settings'})
+        .done(function(res){
+            if (!res.success) { $('#procBody').html('<span class="text-danger">' + esc(res.error || '載入失敗') + '</span>'); return; }
+            var h = '<table class="cd-table"><thead><tr>'
+                  + '<th style="width:60px;">編號</th><th>製程</th><th style="width:70px;text-align:right;" title="bom_ing 使用次數">使用數</th>'
+                  + '<th style="width:130px;">成本計算方式</th><th style="width:110px;text-align:right;">固定單價/顆</th>'
+                  + '</tr></thead><tbody>';
+            res.processes.forEach(function(p){
+                var mode = p.mode || 'normal';
+                h += '<tr class="pc-row" data-pn="' + p.process_no + '" data-name="' + esc(p.process_name || '') + '">'
+                  + '<td>' + p.process_no + '</td>'
+                  + '<td>' + esc(p.process_name || '') + '</td>'
+                  + '<td style="text-align:right;color:#8a94a0;">' + nfmt(p.usage_cnt, 0) + '</td>'
+                  + '<td><select class="form-control input-sm pc-mode" style="height:24px;padding:2px 5px;">'
+                  +   '<option value="normal"' + (mode === 'normal' ? ' selected' : '') + '>正常計算</option>'
+                  +   '<option value="ignore"' + (mode === 'ignore' ? ' selected' : '') + '>暫不計成本</option>'
+                  +   '<option value="fixed"'  + (mode === 'fixed'  ? ' selected' : '') + '>固定單價</option>'
+                  + '</select></td>'
+                  + '<td style="text-align:right;"><input type="number" class="form-control input-sm pc-price" value="' + (parseFloat(p.fixed_price) || 0) + '"'
+                  +   ' style="width:90px;text-align:right;display:inline-block;padding:2px 5px;height:24px;"' + (mode === 'fixed' ? '' : ' disabled') + '></td>'
+                  + '</tr>';
+            });
+            h += '</tbody></table>';
+            $('#procBody').html(h);
+            if (!res.can_edit) { $('#procBody select, #procBody input').prop('disabled', true); $('#procSave').hide(); } else { $('#procSave').show(); }
+        })
+        .fail(function(){ $('#procBody').html('<span class="text-danger">載入失敗</span>'); });
+    });
+
+    $(document).on('change', '.pc-mode', function(){
+        var tr = $(this).closest('tr');
+        tr.find('.pc-price').prop('disabled', this.value !== 'fixed');
+        tr.css('background', this.value === 'normal' ? '' : '#FEF9EC');   // 有例外設定的列淡黃提示
+    });
+
+    $('#pcFilter').on('input', function(){
+        var kw = $.trim(this.value).toLowerCase();
+        $('#procBody .pc-row').each(function(){
+            var tr = $(this);
+            var hit = !kw || String(tr.data('pn')).indexOf(kw) >= 0 || String(tr.data('name')).toLowerCase().indexOf(kw) >= 0;
+            tr.toggle(hit);
+        });
+    });
+
+    $('#procSave').on('click', function(){
+        var rows = [];
+        $('#procBody .pc-row').each(function(){
+            var tr = $(this);
+            var mode = tr.find('.pc-mode').val();
+            if (mode === 'normal') return;
+            rows.push({ process_no: tr.data('pn'), mode: mode, fixed_price: parseFloat(tr.find('.pc-price').val()) || 0 });
+        });
+        var btn = $(this).prop('disabled', true);
+        $.post('Order_Profit_Analysis.php', {action: 'process_settings_save', rows: JSON.stringify(rows)}, null, 'json')
+        .done(function(res){
+            if (!res.success) { $('#procMsg').text(res.error || '儲存失敗'); return; }
+            $('#procModal').modal('hide');
+            load();   // 設定改了 → 重算
+        })
+        .fail(function(){ $('#procMsg').text('儲存失敗（連線錯誤）'); })
+        .always(function(){ btn.prop('disabled', false); });
     });
 
     /* ── 人工時薪試算器：月薪＋固定加班型態 → 平均每小時人工成本 ── */
