@@ -1005,7 +1005,8 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                     <input type="color" id="p-textbg" value="#fff59d">
                     <input type="checkbox" id="p-textbg-on" title="文字是否加底色">
                 </label>
-            </span>
+                <span id="sym-strip" onmousedown="event.preventDefault()" style="display:inline-flex;gap:2px;align-items:center;flex-wrap:wrap;"
+                    title="快速插入工程符號：正在編輯文字時插入游標處；只選取文字物件時附加到最後。另外可直接輸入 A^B 自動變上下公差小字（例如 25 -0^-0.18）"></span>
             <!-- 球標 -->
             <span class="prop-sec" id="sec-balloon">
                 <label>下一個球標 <input type="text" class="ni" id="p-balloon-next" value="A" maxlength="3" style="width:44px;text-transform:uppercase;" title="若原圖上已印有球標（例如已有A~C），把這裡改成 D 接著編"></label>
@@ -1348,6 +1349,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <div class="frm-row"><label>標籤文字</label>
                 <textarea id="nl-text" rows="3" style="flex:1;background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:4px 6px;font-size:12px;" placeholder="可多行（換行＝標籤內換行）"></textarea>
             </div>
+            <div class="frm-row"><label>符號</label>
+                <span id="nl-sym-strip" style="display:inline-flex;gap:2px;align-items:center;flex-wrap:wrap;" title="點一下插入到標籤文字的游標處"></span>
+            </div>
             <div class="frm-row"><label>樣式</label>
                 <select id="nl-kind">
                     <option value="box" selected>█ 外框標籤（粗黑框＋粗體字）</option>
@@ -1497,6 +1501,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
                 <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋</li>
+                <li>工程符號與公差：屬性列「文字」區有符號鈕（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×），編輯文字時點一下插到游標處（研磨＝連按▽）；文字輸入 <b>A^B</b>（如 25 -0^-0.18）結束編輯自動變成上下公差小字，雙擊可還原 ^ 字串重編</li>
             </ul>
             <b style="color:#6fc3ff;">⑥ 快捷鍵</b>
             <table style="margin:6px 0 4px;">
@@ -2395,6 +2400,164 @@ function addLabelBox(x, y) {
     canvas.requestRenderAll();
     pushState();
     startGroupTextEdit(g, text);   // 放上後直接進入編輯，跟文字工具手感一致
+}
+
+/* ── 工程符號快速插入 ＋ ^ 上下公差堆疊文字（Inventor 式） ─────────────
+   符號：屬性列「文字」區與「建立文字標籤」跳窗各有一條符號鈕，點一下插到游標處。
+   公差：一般文字輸入 A^B（如 25 -0^-0.18），結束編輯自動變成「-0 疊在 -0.18 上」
+   的小字（0.55 倍），雙擊可還原成含 ^ 的原始字串整串重編。 */
+const EG_SYMBOLS = [
+    ['Ø', '直徑'], ['°', '度'], ['±', '正負公差'], ['▽', '加工符號（研磨＝連按多個）'],
+    ['↧', '深度'], ['⌴', '沉頭孔／柱坑'], ['⌵', '錐坑'], ['□', '正方形'],
+    ['⌒', '圓弧'], ['Ra', '表面粗糙度'], ['×', '乘號']
+];
+(function initSymStrips() {
+    const mk = fn => EG_SYMBOLS.map(s =>
+        '<button class="pb-btn" style="min-width:26px;padding:3px 5px;" onclick="' + fn + '(\'' + s[0] + '\')" title="' + s[1] + '">' + s[0] + '</button>').join('');
+    document.getElementById('sym-strip').innerHTML = mk('insertSym');
+    document.getElementById('nl-sym-strip').innerHTML = mk('nlInsertSym');
+})();
+function insertSym(s) {
+    const obj = canvas.getActiveObject();
+    if (obj && obj.isEditing) {   // IText 編輯中（含標籤/群組文字的暫時編輯框）：插入游標處
+        const st = obj.selectionStart || 0, en = obj.selectionEnd || 0;
+        obj.insertChars(s, null, st, en);
+        obj.selectionStart = obj.selectionEnd = st + s.length;
+        if (obj.hiddenTextarea) {   // 同步隱藏 textarea，接著打字才不會吃掉剛插入的符號
+            obj.hiddenTextarea.value = obj.text;
+            obj.hiddenTextarea.selectionStart = obj.hiddenTextarea.selectionEnd = obj.selectionStart;
+        }
+        obj.dirty = true;
+        canvas.requestRenderAll();
+        return;
+    }
+    if (obj && (obj.type === 'i-text' || obj.type === 'text') && !obj.merged) {   // 只選取未進編輯：附加到最後
+        obj.set('text', obj.text + s);
+        obj.dirty = true; obj.setCoords();
+        canvas.requestRenderAll(); pushState();
+        return;
+    }
+    toast('請先雙擊要編輯的文字（或用文字工具點畫布）再按符號');
+}
+function nlInsertSym(s) {
+    const ta = document.getElementById('nl-text');
+    const st = ta.selectionStart || 0, en = ta.selectionEnd || 0;
+    ta.value = ta.value.slice(0, st) + s + ta.value.slice(en);
+    ta.selectionStart = ta.selectionEnd = st + s.length;
+    ta.focus();
+}
+/* ^ 公差：兩側限「數字/字母/±.,°」的短字串，避免把 25-0^-0.18 的基準值 25 一起吃進堆疊 */
+const TOL_INPUT_RE = /([+\-±]?[\w.,°]+)\^([+\-±]?[\w.,°]+)/;
+function makeTolGroup(raw, style) {
+    const fs = style.fontSize || 28;
+    const small = Math.max(8, Math.round(fs * 0.55));
+    const base = {
+        fontFamily: style.fontFamily || '"Microsoft JhengHei", "PingFang TC", Arial, sans-serif',
+        fontWeight: style.fontWeight || 'normal', fill: style.fill || '#d32f2f',
+        backgroundColor: style.backgroundColor || ''
+    };
+    const items = [];
+    const lineH = fs * 1.16;
+    String(raw).split('\n').forEach((line, li) => {
+        const cy = li * lineH;   // 該行的垂直中線
+        let x = 0, last = 0, m;
+        const re = new RegExp(TOL_INPUT_RE.source, 'g');
+        const put = str => {   // 一般（大字）片段
+            if (!str) return;
+            const t = new fabric.Text(str, Object.assign({}, base, { fontSize: fs, left: x, top: cy, originY: 'center' }));
+            items.push(t); x += t.width;
+        };
+        while ((m = re.exec(line))) {
+            put(line.slice(last, m.index));
+            // 上排底貼中線、下排頂貼中線＝整疊高度約等於基準字高
+            const up = new fabric.Text(m[1], Object.assign({}, base, { fontSize: small, left: x, top: cy - fs * 0.02, originY: 'bottom' }));
+            const dn = new fabric.Text(m[2], Object.assign({}, base, { fontSize: small, left: x, top: cy + fs * 0.02, originY: 'top' }));
+            items.push(up, dn);
+            x += Math.max(up.width, dn.width);
+            last = m.index + m[0].length;
+        }
+        put(line.slice(last));
+    });
+    if (!items.length) return null;
+    const g = new fabric.Group(items, {});
+    g.labelSpec = { kind: 'tol', text: String(raw), fontSize: fs, fill: base.fill,
+                    fontWeight: base.fontWeight, fontFamily: base.fontFamily, backgroundColor: base.backgroundColor };
+    g.labelKind = 'tol';
+    return g;
+}
+function convertToTolGroup(t) {
+    let g = null;
+    try {
+        g = makeTolGroup(t.text, { fontSize: t.fontSize, fill: t.fill, fontWeight: t.fontWeight,
+                                   fontFamily: t.fontFamily, backgroundColor: t.backgroundColor });
+    } catch (e) { console.warn('[EGdraw] 公差文字建立例外：', e); }
+    if (!g || !isFinite(g.width) || !isFinite(g.height)) return;   // 建失敗就保留原文字，不毒化畫布
+    const c = t.getCenterPoint();
+    g.set({ angle: t.angle, scaleX: t.scaleX, scaleY: t.scaleY, originX: 'center', originY: 'center' });
+    g.setPositionByOrigin(c, 'center', 'center');
+    g.setCoords();
+    canvas.remove(t);
+    canvas.add(g);
+    canvas.setActiveObject(g);
+    canvas.requestRenderAll();
+    pushState();
+}
+/* 雙擊 ^ 公差群組：還原成含 ^ 的原始字串整串重編（比照 startGroupTextEdit 的暫時編輯框機制） */
+function startTolEdit(group) {
+    const spec = group.labelSpec;
+    const c = group.getCenterPoint();
+    const tmp = new fabric.IText(spec.text, {
+        left: c.x, top: c.y, originX: 'center', originY: 'center',
+        angle: group.angle, scaleX: group.scaleX, scaleY: group.scaleY,
+        fontSize: spec.fontSize || 28,
+        fontFamily: spec.fontFamily || '"Microsoft JhengHei", "PingFang TC", Arial, sans-serif',
+        fontWeight: spec.fontWeight || 'normal', fill: spec.fill || '#d32f2f',
+        backgroundColor: '#fff8d6'
+    });
+    tmp.__groupEditFor = group;   // 讓「刪除」知道使用者要刪的是整組
+    group.visible = false;
+    canvas.add(tmp);
+    canvas.setActiveObject(tmp);
+    tmp.enterEditing();
+    tmp.selectAll();
+    tmp.on('editing:exited', function () {
+        const val = tmp.text;
+        try { tmp.abortCursorAnimation(); } catch (e) { /* 游標動畫沒在跑就算了 */ }
+        canvas.remove(tmp);
+        if (tmp.__deleteGroup) {
+            canvas.remove(group);
+            canvas.discardActiveObject();
+            canvas.requestRenderAll();
+            pushState();
+            return;
+        }
+        if (restoring || canvas.getObjects().indexOf(group) === -1) { canvas.requestRenderAll(); return; }
+        group.visible = true;
+        const style = { fontSize: tmp.fontSize, fill: tmp.fill, fontWeight: tmp.fontWeight, fontFamily: tmp.fontFamily,
+                        backgroundColor: (tmp.backgroundColor !== '#fff8d6') ? tmp.backgroundColor : (spec.backgroundColor || '') };
+        const center = group.getCenterPoint();
+        const { scaleX, scaleY, angle } = group;
+        let ng = null;
+        if (TOL_INPUT_RE.test(val)) {
+            try { ng = makeTolGroup(val, style); } catch (e) { console.warn('[EGdraw] 公差文字重建例外：', e); }
+        } else {   // 改到沒有 ^ 了：變回一般文字
+            ng = new fabric.IText(val, { fontSize: style.fontSize, fill: style.fill, fontWeight: style.fontWeight,
+                                         fontFamily: style.fontFamily, backgroundColor: style.backgroundColor });
+        }
+        if (!ng || !isFinite(ng.width) || !isFinite(ng.height)) {
+            toast('公差文字重建失敗，已保留原內容（此次修改未套用）');
+            canvas.requestRenderAll();
+            return;
+        }
+        canvas.remove(group);
+        ng.set({ scaleX, scaleY, angle, originX: 'center', originY: 'center' });
+        ng.setPositionByOrigin(center, 'center', 'center');
+        ng.setCoords();
+        canvas.add(ng);
+        canvas.setActiveObject(ng);
+        canvas.requestRenderAll();
+        pushState();
+    });
 }
 
 /* ── 快速標註（CAD 風格）：距離 / 直徑 / 角度 ──────────────────────────
@@ -3657,6 +3820,7 @@ canvas.on('mouse:dblclick', function (opt) {
     if (!g || g.type !== 'group' || currentTool !== 'select') return;
     if (opt.e.altKey) { enterGroup(g); return; }
     if (g.merged) return;                                        // 合併物件＝單一物件，雙擊不拆
+    if (g.labelSpec && g.labelSpec.kind === 'tol') { startTolEdit(g); return; }   // ^公差堆疊：整串重編
     if (!g.labelSpec || g.labelSpec.kind === 'multi') { enterGroup(g); return; }
     const p = canvas.getPointer(opt.e);
     const texts = [];
@@ -3669,6 +3833,14 @@ canvas.on('mouse:dblclick', function (opt) {
         if (dist < bd) { bd = dist; best = t; }
     });
     startGroupTextEdit(g, best);
+});
+/* 一般文字（文字工具）：結束編輯時若含 A^B（如 -0^-0.18）自動轉成上下公差堆疊群組 */
+canvas.on('text:editing:exited', function (opt) {
+    const t = opt.target;
+    if (!t || t.type !== 'i-text' || t.__groupEditFor || t.dcRole || t.dimKind) return;   // 暫時編輯框/設變列表/標註文字不轉
+    if (restoring || !TOL_INPUT_RE.test(t.text)) return;
+    if (canvas.getObjects().indexOf(t) === -1) return;   // 已被其他流程移除（如編輯中刪除）
+    convertToTolGroup(t);
 });
 function startGroupTextEdit(group, child, cursorToEnd) {
     const dec = fabric.util.qrDecompose(child.calcTransformMatrix());
