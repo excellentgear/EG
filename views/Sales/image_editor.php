@@ -1096,6 +1096,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <button class="pb-btn" id="btn-poly-smooth" style="display:none;" onclick="togglePolySmooth()" title="節點之間改用圓滑曲線連接（再按一次改回直線）">圓滑</button>
                 <button class="pb-btn" onclick="groupCmd()" id="btn-group">群組</button>
                 <button class="pb-btn" onclick="mergeSelection()" title="把多個線條/圖形合併成單一物件：縮放移動不走位、雙擊不會拆開（Alt+雙擊才拆）">合併</button>
+                <button class="pb-btn" onclick="flattenSelection()" title="只把選取的物件燒成一張圖（透明背景，其他物件不受影響）：之後可用框選搬移／套索對它切缺口、挖洞；可 Ctrl+Z 復原">壓平選取</button>
                 <button class="pb-btn" id="btn-label-bg" style="display:none;" onclick="toggleLabelBg()" title="切換這個標籤的底色（白底 ⇄ 透明）">底色</button>
                 <button class="pb-btn" onclick="lockSelection()" title="鎖定選取物件：不再被點選（適合底圖）。用右方「解鎖全部」解開"><i class="fa fa-lock"></i> 鎖定</button>
                 <button class="pb-btn" onclick="duplicateSelection()" title="複製一份 (Ctrl+D)；Alt+拖曳也可複製"><i class="fa fa-copy"></i> 複製</button>
@@ -1517,7 +1518,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li><b>兩點連線（⤳）</b>：點第一點→點第二點自動相連、可連續一直連，屬性列選<b>直線或曲線</b>（直線也可帶箭頭端點；選擇會記住）。曲線＝沿真圓弧生成的圓潤勾線；連好後切回選取(V)<b>雙擊該線＝編輯端點</b>，拖節點調曲度/改位置、「＋」加節點；Esc 取消已點的第一點</li>
                 <li>遮蓋刪除客戶資料：矩形(M)或不規則套索圈選，遮蓋色可改，匯出時才壓平</li>
                 <li>框選複製(C)：框一個範圍變成新圖塊；<b>框選搬移(X)</b>＝小畫家式切下搬走，所見即所得——底圖挖空、<b>完整落在框內的物件（圓/矩形/線條/標籤/文字…）一起烙進切塊搬走</b>；只壓到框線一部分的物件不動。旁邊的<b>套索工具</b>是不規則形狀版，按住拖曳圈任意形狀後放開即可切下。兩者都可連續使用，Esc 或切別的工具才離開。跨視窗貼上用 <b>Ctrl+Shift+V</b>（Ctrl+V 優先貼系統剪貼簿）</li>
-                <li><b>壓平成圖</b>（工具列右上）：把底圖＋所有物件燒成一張圖，效果同存成圖片後重新開啟。想對畫上去的圓形/線條/標籤<b>切缺口、挖洞</b>時先壓平，之後框選搬移／套索就對它們有效；可 Ctrl+Z 復原</li>
+                <li><b>壓平成圖</b>（工具列右上）：把底圖＋所有物件以 2 倍解析度燒成一張圖，效果同存成圖片後重新開啟。想對畫上去的圓形/線條/標籤<b>切缺口、挖洞</b>時先壓平，之後框選搬移／套索就對它們有效；可 Ctrl+Z 復原。只想壓平部分物件→選取後按屬性列<b>「壓平選取」</b>（透明背景，其他物件不受影響），例如選圓形壓平後即可用套索切出缺口圓</li>
                 <li>遮蓋/形狀/直線等工具<b>畫完保持啟用可連續畫</b>，Esc 或 V 回選取；<b>Ctrl+A</b> 全選畫布物件；<b>方向鍵微調</b>選取物（Shift＝10px）；屬性列可輸入<b>角度</b>（直線 0 度＝水平線）；多選一次改粗細/顏色；「合併」把多線條變單一物件（Alt+雙擊才拆）</li>
             </ul>
             <b style="color:#6fc3ff;">③ 文字與標籤庫</b>
@@ -4615,7 +4616,9 @@ function flattenAll() {
     if (!confirm('把底圖與所有物件（含文字、標籤、形狀、浮水印）壓平成一張圖？\n壓平後就不能再個別編輯這些物件（可 Ctrl+Z 復原）。')) return;
     flushPendingState();   // 先把壓平前的狀態寫進復原快照，Ctrl+Z 才回得來
     const br = artboard.getBoundingRect(true, true);
-    const url = exportRegionDataURL(br.left, br.top, br.width, br.height, 'png', 1);
+    // 2 倍解析度壓平（放大檢視不糊）；超大畫布封頂在單邊 8192px，避免超出瀏覽器 canvas 上限
+    const mult = Math.min(2, 8192 / Math.max(br.width, br.height, 1));
+    const url = exportRegionDataURL(br.left, br.top, br.width, br.height, 'png', mult);
     fabric.Image.fromURL(url, function (img) {
         if (!img || !img.width) { toast('壓平失敗：畫布轉圖時發生問題'); return; }
         canvas.discardActiveObject();
@@ -4626,6 +4629,36 @@ function flattenAll() {
         canvas.requestRenderAll();
         pushState();
         toast('已壓平成單一圖片：可用「框選搬移／套索」直接切缺口；不滿意可 Ctrl+Z 復原');
+    });
+}
+/* ── 壓平選取：只把選取的物件（單一或多選）燒成一張透明背景的圖，其他物件不受影響。
+   跟「合併」的差別：合併後仍是向量群組；壓平後變成圖片像素，框選搬移／套索可對它真正挖空。 */
+function flattenSelection() {
+    const obj = canvas.getActiveObject();
+    if (!obj || obj === artboard) { toast('請先選取要壓平的物件'); return; }
+    flushPendingState();   // 壓平前狀態先入復原快照
+    const parts = (obj.type === 'activeSelection') ? obj.getObjects().slice() : [obj];
+    const b = obj.getBoundingRect(true, true);
+    const mult = Math.min(2, 8192 / Math.max(b.width, b.height, 1));
+    let url;
+    try {
+        url = obj.toDataURL({ format: 'png', multiplier: mult });   // 只渲染選取物件本身，背景透明
+    } catch (e) {
+        toast('壓平選取失敗：物件轉圖時發生問題');
+        return;
+    }
+    fabric.Image.fromURL(url, function (img) {
+        if (!img || !img.width) { toast('壓平選取失敗'); return; }
+        if (parts.some(o => canvas.getObjects().indexOf(o) === -1)) { return; }   // 轉圖期間物件被刪就中止（多選的子物件本來就在畫布清單裡，此檢查兩種情況都適用）
+        canvas.discardActiveObject();
+        parts.forEach(o => canvas.remove(o));
+        img.set({ left: b.left, top: b.top, scaleX: b.width / img.width, scaleY: b.height / img.height });
+        img.setCoords();
+        canvas.add(img);
+        canvas.setActiveObject(img);
+        canvas.requestRenderAll();
+        pushState();
+        toast('已把選取物件壓平成一張圖（透明背景）：可用「框選搬移／套索」對它切缺口；不滿意可 Ctrl+Z 復原');
     });
 }
 /* 同 exportRegionDataURL，但回傳實際 <canvas> 供進一步像素處理（白底轉透明用） */
