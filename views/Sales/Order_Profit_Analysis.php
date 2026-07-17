@@ -1,0 +1,815 @@
+<?php
+/**
+ * Order_Profit_Analysis.php — 訂單毛利分析（試作版）
+ *
+ * 成本口徑（由上往下回推，零人工建檔）：
+ *   單顆成本 = 該訂單綁定製令(bom.o_order_id=order_track.Order_id) 的
+ *              bom_ing_transfer_log 各製程(bom_sn)實際發包單價加權平均後加總
+ *              （modified_unit_price 優先，權重 paid_qty→transfer_qty→sqty；排除廠內加工商）
+ *   廠內製程不計成本（報工時間未必準確，使用者定案先不計），以「部分」狀態標示。
+ * 營收 = 訂單數量 × 單價 ×（匯率>0 則乘匯率）。
+ * 檢視：訂單明細 / 料號彙總（含 ABC 柏拉圖分級：累計營收 ≤80%=A、≤95%=B、其餘=C）。
+ * 依 UI 規範：後端算完全部資料才分頁/排序/總計；分頁 5/10/20/50；CSV 匯出＋列印(PDF)。
+ * 權限：RBAC module='order_profit'（rf_has_module_role），管理者固定可用。
+ */
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+
+session_start();
+
+require_once __DIR__ . '/../../src/common/_config.php';
+require_once __DIR__ . '/../../src/common/DBConnection.php';
+require_once __DIR__ . '/../../src/common/role_features_helper.php';
+
+$isAjax = isset($_GET['action']);
+
+if (!isset($_SESSION['userName'])) {
+    if ($isAjax) { header('Content-Type: application/json; charset=utf-8'); echo json_encode(['success'=>false,'error'=>'未登入']); exit; }
+    $_SESSION['lastpage'] = "../../views/Sales/Order_Profit_Analysis.php";
+    header('Location: ../../index.php');
+    exit;
+}
+
+$conn = new DBConnection();
+$pdo  = $conn->getPDO();
+$my_id = (int)$_SESSION['id'];
+$has_access = rf_has_module_role($pdo, $my_id, 'order_profit');
+
+/* ══════════════════════ 資料計算（後端算完全部再分頁） ══════════════════════ */
+
+function opa_chunked_in(PDO $pdo, string $sqlTpl, array $ids, int $chunk = 500): array {
+    // $sqlTpl 內以 {IN} 佔位；回傳所有 chunk 的列合併
+    $out = [];
+    foreach (array_chunk($ids, $chunk) as $part) {
+        $ph = implode(',', array_fill(0, count($part), '?'));
+        $st = $pdo->prepare(str_replace('{IN}', $ph, $sqlTpl));
+        $st->execute($part);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[] = $r;
+    }
+    return $out;
+}
+
+function opa_build_dataset(PDO $pdo, array $f): array {
+    // 1. 訂單（有單價者才有毛利可算）
+    $where  = ["ot.unit_price > 0", "ot.Qty > 0"];
+    $params = [];
+    if (!empty($f['date_from'])) { $where[] = "ot.Order_date >= ?"; $params[] = $f['date_from']; }
+    if (!empty($f['date_to']))   { $where[] = "ot.Order_date <= ?"; $params[] = $f['date_to']; }
+    if (!empty($f['client']))    { $where[] = "ot.Client_name LIKE ?"; $params[] = '%'.$f['client'].'%'; }
+    if (!empty($f['kw'])) {
+        $where[] = "(ot.d_id LIKE ? OR ot.Order_oo LIKE ? OR ot.Specification LIKE ?)";
+        $kw = '%'.$f['kw'].'%';
+        array_push($params, $kw, $kw, $kw);
+    }
+    $st = $pdo->prepare("
+        SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.Specification, ot.Client_name,
+               ot.Qty, ot.Order_date, ot.unit_price, ot.currency, ot.exchange_rate
+        FROM order_track ot
+        WHERE " . implode(' AND ', $where) . "
+        ORDER BY ot.Order_date DESC, ot.Order_id DESC");
+    $st->execute($params);
+    $orders = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (empty($orders)) return ['rows'=>[]];
+
+    $orderIds = array_column($orders, 'Order_id');
+
+    // 2. 綁定製令
+    $bomRows = opa_chunked_in($pdo,
+        "SELECT bom, o_order_id, sqty FROM bom WHERE o_order_id IN ({IN})",
+        array_map('strval', $orderIds));
+    $bomsByOrder = [];   // order_id => [ [bom, sqty], ... ]
+    $allBoms = [];
+    foreach ($bomRows as $b) {
+        $bomsByOrder[intval($b['o_order_id'])][] = $b;
+        $allBoms[$b['bom']] = true;
+    }
+    $allBoms = array_keys($allBoms);
+
+    // 3. 廠內加工商清單
+    $inhouse = [];
+    try { $inhouse = $pdo->query("SELECT maker_id_no FROM maker_list WHERE internal=1")->fetchAll(PDO::FETCH_COLUMN) ?: []; } catch (Exception $e) {}
+
+    // 4. 各製令製程數（總數 / 廠內數）
+    $procInfo = [];      // bom => ['total'=>n,'inhouse'=>n]
+    if (!empty($allBoms)) {
+        $rows = opa_chunked_in($pdo,
+            "SELECT bi.bom,
+                    COUNT(DISTINCT bi.bom_sn) AS total_proc,
+                    COUNT(DISTINCT CASE WHEN COALESCE(m.internal,0)=1 THEN bi.bom_sn END) AS inhouse_proc
+             FROM bom_ing bi
+             LEFT JOIN maker_list m ON m.maker_id_no = bi.maker_id_no
+             WHERE bi.bom IN ({IN})
+             GROUP BY bi.bom", $allBoms);
+        foreach ($rows as $r) $procInfo[$r['bom']] = ['total'=>intval($r['total_proc']), 'inhouse'=>intval($r['inhouse_proc'])];
+    }
+
+    // 5. 各製令實際外包成本：各製程(bom_sn)加權平均單價 → 加總
+    $costInfo = [];      // bom => ['cost'=>x,'priced'=>n]
+    if (!empty($allBoms)) {
+        $notIn = '';
+        $extraParams = [];
+        if (!empty($inhouse)) {
+            $notIn = " AND (t.maker_from IS NULL OR t.maker_from NOT IN (" . implode(',', array_fill(0, count($inhouse), '?')) . "))";
+        }
+        foreach (array_chunk($allBoms, 500) as $part) {
+            $ph = implode(',', array_fill(0, count($part), '?'));
+            $sql = "
+                SELECT s.bom, SUM(s.avg_p) AS cost_per_pc, COUNT(*) AS priced_proc
+                FROM (
+                    SELECT t.bom, t.bom_sn,
+                           SUM( IF(t.modified_unit_price>0, t.modified_unit_price, t.price)
+                                * COALESCE(NULLIF(t.paid_qty,0), NULLIF(t.transfer_qty,0), NULLIF(t.sqty,0), 1) )
+                         / SUM( COALESCE(NULLIF(t.paid_qty,0), NULLIF(t.transfer_qty,0), NULLIF(t.sqty,0), 1) ) AS avg_p
+                    FROM bom_ing_transfer_log t
+                    WHERE t.bom IN ($ph)
+                      AND IF(t.modified_unit_price>0, t.modified_unit_price, COALESCE(t.price,0)) > 0
+                      $notIn
+                    GROUP BY t.bom, t.bom_sn
+                ) s GROUP BY s.bom";
+            $st2 = $pdo->prepare($sql);
+            $st2->execute(array_merge($part, $inhouse));
+            foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $costInfo[$r['bom']] = ['cost'=>floatval($r['cost_per_pc']), 'priced'=>intval($r['priced_proc'])];
+            }
+        }
+    }
+
+    // 6. 組每筆訂單列
+    $rows = [];
+    foreach ($orders as $o) {
+        $oid  = intval($o['Order_id']);
+        $qty  = intval($o['Qty']);
+        $rate = floatval($o['exchange_rate'] ?? 0);
+        if ($rate <= 0) $rate = 1;
+        $unitPrice = floatval($o['unit_price']);
+        $revenue   = $qty * $unitPrice * $rate;
+
+        $boms = $bomsByOrder[$oid] ?? [];
+        $bomNames = array_column($boms, 'bom');
+
+        // 成本：多製令以 bom.sqty 加權平均單顆成本
+        $wSum = 0; $wCost = 0; $priced = 0; $total = 0; $inh = 0; $hasAnyCost = false;
+        foreach ($boms as $b) {
+            $bn = $b['bom'];
+            $w  = max(1, intval($b['sqty']));
+            $total += $procInfo[$bn]['total']   ?? 0;
+            $inh   += $procInfo[$bn]['inhouse'] ?? 0;
+            if (isset($costInfo[$bn])) {
+                $hasAnyCost = true;
+                $wCost += $costInfo[$bn]['cost'] * $w;
+                $wSum  += $w;
+                $priced += $costInfo[$bn]['priced'];
+            }
+        }
+        $costPc = ($hasAnyCost && $wSum > 0) ? $wCost / $wSum : null;
+
+        $external = max(0, $total - $inh);
+        if ($costPc === null) {
+            $status = 'none';       // 無製令或無任何計價資料
+        } elseif ($inh > 0 || $priced < $external) {
+            $status = 'partial';    // 有成本但不完整（廠內未計 或 外包尚有製程未計價）
+        } else {
+            $status = 'full';
+        }
+
+        $costTotal = $costPc !== null ? $costPc * $qty : null;
+        $margin    = $costTotal !== null ? $revenue - $costTotal : null;
+        $marginRate = ($margin !== null && $revenue > 0) ? $margin / $revenue * 100 : null;
+
+        $rows[] = [
+            'order_id'    => $oid,
+            'order_oo'    => $o['Order_oo'],
+            'order_date'  => $o['Order_date'],
+            'client'      => $o['Client_name'],
+            'd_id'        => $o['d_id'],
+            'spec'        => $o['Specification'],
+            'qty'         => $qty,
+            'currency'    => $o['currency'],
+            'unit_price'  => $unitPrice,
+            'revenue'     => round($revenue, 2),
+            'cost_pc'     => $costPc !== null ? round($costPc, 4) : null,
+            'cost_total'  => $costTotal !== null ? round($costTotal, 2) : null,
+            'margin'      => $margin !== null ? round($margin, 2) : null,
+            'margin_rate' => $marginRate !== null ? round($marginRate, 2) : null,
+            'cost_status' => $status,
+            'boms'        => $bomNames,
+            'proc_total'  => $total,
+            'proc_priced' => $priced,
+            'proc_inhouse'=> $inh,
+        ];
+    }
+    return ['rows'=>$rows];
+}
+
+function opa_summary(array $rows): array {
+    $s = ['orders'=>0,'revenue'=>0,'full'=>0,'partial'=>0,'none'=>0,
+          'costed_orders'=>0,'costed_revenue'=>0,'costed_cost'=>0,'costed_margin'=>0,'avg_margin_rate'=>null,'loss_orders'=>0];
+    foreach ($rows as $r) {
+        $s['orders']++;
+        $s['revenue'] += $r['revenue'];
+        $s[$r['cost_status']]++;
+        if ($r['cost_status'] !== 'none') {
+            $s['costed_orders']++;
+            $s['costed_revenue'] += $r['revenue'];
+            $s['costed_cost']    += $r['cost_total'];
+            $s['costed_margin']  += $r['margin'];
+            if ($r['margin'] < 0) $s['loss_orders']++;
+        }
+    }
+    if ($s['costed_revenue'] > 0) $s['avg_margin_rate'] = round($s['costed_margin'] / $s['costed_revenue'] * 100, 2);
+    foreach (['revenue','costed_revenue','costed_cost','costed_margin'] as $k) $s[$k] = round($s[$k], 2);
+    return $s;
+}
+
+function opa_part_view(array $rows): array {
+    // 料號彙總 + ABC 柏拉圖分級（以全部符合條件資料計算）
+    $parts = [];
+    foreach ($rows as $r) {
+        $k = $r['d_id'];
+        if (!isset($parts[$k])) {
+            $parts[$k] = ['d_id'=>$k,'spec'=>$r['spec'],'clients'=>[],'orders'=>0,'qty'=>0,'revenue'=>0,
+                          'costed_orders'=>0,'costed_revenue'=>0,'costed_cost'=>0];
+        }
+        $p = &$parts[$k];
+        $p['orders']++;
+        $p['qty']     += $r['qty'];
+        $p['revenue'] += $r['revenue'];
+        if ($r['client'] && !in_array($r['client'], $p['clients'], true)) $p['clients'][] = $r['client'];
+        if ($r['cost_status'] !== 'none') {
+            $p['costed_orders']++;
+            $p['costed_revenue'] += $r['revenue'];
+            $p['costed_cost']    += $r['cost_total'];
+        }
+        unset($p);
+    }
+    $parts = array_values($parts);
+    // ABC：依營收由大到小累計
+    usort($parts, function($a,$b){ return $b['revenue'] <=> $a['revenue']; });
+    $totalRev = array_sum(array_column($parts, 'revenue'));
+    $cum = 0;
+    foreach ($parts as $i => &$p) {
+        $cum += $p['revenue'];
+        $p['cum_pct'] = $totalRev > 0 ? round($cum / $totalRev * 100, 2) : 0;
+        $p['abc'] = $p['cum_pct'] <= 80 ? 'A' : ($p['cum_pct'] <= 95 ? 'B' : 'C');
+        $p['rank'] = $i + 1;
+        $p['avg_price'] = $p['qty'] > 0 ? round($p['revenue'] / $p['qty'], 4) : null;
+        $p['margin'] = $p['costed_revenue'] > 0 ? round($p['costed_revenue'] - $p['costed_cost'], 2) : null;
+        $p['margin_rate'] = $p['costed_revenue'] > 0 ? round(($p['costed_revenue'] - $p['costed_cost']) / $p['costed_revenue'] * 100, 2) : null;
+        $p['revenue'] = round($p['revenue'], 2);
+        $p['costed_revenue'] = round($p['costed_revenue'], 2);
+        $p['costed_cost'] = round($p['costed_cost'], 2);
+        $p['clients'] = implode('、', array_slice($p['clients'], 0, 3)) . (count($p['clients']) > 3 ? '…' : '');
+    }
+    unset($p);
+    return $parts;
+}
+
+function opa_sort(array &$rows, string $sort, string $dir): void {
+    $desc = ($dir === 'desc');
+    usort($rows, function($a, $b) use ($sort, $desc) {
+        $va = $a[$sort] ?? null; $vb = $b[$sort] ?? null;
+        if ($va === null && $vb === null) return 0;
+        if ($va === null) return 1;   // null 一律排最後
+        if ($vb === null) return -1;
+        $c = is_numeric($va) && is_numeric($vb) ? ($va <=> $vb) : strcmp(strval($va), strval($vb));
+        return $desc ? -$c : $c;
+    });
+}
+
+if ($isAjax) {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!$has_access) { echo json_encode(['success'=>false,'error'=>'無權限']); exit; }
+
+    $action = $_GET['action'];
+    $f = [
+        'date_from' => trim($_GET['date_from'] ?? ''),
+        'date_to'   => trim($_GET['date_to'] ?? ''),
+        'client'    => trim($_GET['client'] ?? ''),
+        'kw'        => trim($_GET['kw'] ?? ''),
+    ];
+    $view       = ($_GET['view'] ?? 'order') === 'part' ? 'part' : 'order';
+    $costFilter = $_GET['cost_filter'] ?? 'all';
+
+    try {
+        $ds   = opa_build_dataset($pdo, $f);
+        $rows = $ds['rows'];
+
+        if ($action === 'list' || $action === 'export_csv') {
+            $summary = opa_summary($rows);   // 統計卡永遠以「全部符合日期/客戶/關鍵字」為準
+
+            if ($view === 'part') {
+                $data = opa_part_view($rows);
+                $sort = $_GET['sort'] ?? 'revenue';
+                $dir  = $_GET['dir']  ?? 'desc';
+                $allowed = ['rank','d_id','orders','qty','revenue','cum_pct','avg_price','margin','margin_rate','abc','costed_orders'];
+                if (!in_array($sort, $allowed, true)) $sort = 'revenue';
+                if (!($sort === 'revenue' && $dir === 'desc')) opa_sort($data, $sort, $dir === 'asc' ? 'asc' : 'desc');
+            } else {
+                if ($costFilter !== 'all') {
+                    if ($costFilter === 'costed') {
+                        $rows = array_values(array_filter($rows, fn($r) => $r['cost_status'] !== 'none'));
+                    } else {
+                        $rows = array_values(array_filter($rows, fn($r) => $r['cost_status'] === $costFilter));
+                    }
+                }
+                $sort = $_GET['sort'] ?? 'order_date';
+                $dir  = $_GET['dir']  ?? 'desc';
+                $allowed = ['order_date','order_oo','client','d_id','qty','unit_price','revenue','cost_pc','margin','margin_rate','cost_status'];
+                if (!in_array($sort, $allowed, true)) $sort = 'order_date';
+                opa_sort($rows, $sort, $dir === 'asc' ? 'asc' : 'desc');
+                $data = $rows;
+            }
+
+            if ($action === 'export_csv') {
+                // 匯出：全部符合條件資料（不分頁）
+                header('Content-Type: text/csv; charset=utf-8');
+                header('Content-Disposition: attachment; filename="order_profit_' . ($view === 'part' ? 'part_' : '') . date('Ymd_His') . '.csv"');
+                $out = fopen('php://output', 'w');
+                fwrite($out, "\xEF\xBB\xBF");   // UTF-8 BOM 讓 Excel 正確顯示中文
+                if ($view === 'part') {
+                    fputcsv($out, ['排名','ABC','料號','主要客戶','訂單數','總數量','營收合計','累計營收佔比%','平均售價','有成本訂單數','涵蓋營收','涵蓋成本','毛利','毛利率%']);
+                    foreach ($data as $p) {
+                        fputcsv($out, [$p['rank'],$p['abc'],$p['d_id'],$p['clients'],$p['orders'],$p['qty'],$p['revenue'],$p['cum_pct'],
+                                       $p['avg_price'],$p['costed_orders'],$p['costed_revenue'],$p['costed_cost'],$p['margin'],$p['margin_rate']]);
+                    }
+                } else {
+                    fputcsv($out, ['訂單日期','訂單號','客戶','料號','規格','數量','幣別','單價','營收','單顆成本','成本合計','毛利','毛利率%','成本狀態','製令','總製程','已計價製程','廠內製程']);
+                    $stMap = ['full'=>'完整','partial'=>'部分','none'=>'無'];
+                    foreach ($data as $r) {
+                        fputcsv($out, [$r['order_date'],$r['order_oo'],$r['client'],$r['d_id'],$r['spec'],$r['qty'],
+                                       $r['currency'] ?: 'NTD',$r['unit_price'],$r['revenue'],$r['cost_pc'],$r['cost_total'],
+                                       $r['margin'],$r['margin_rate'],$stMap[$r['cost_status']],implode(' ', $r['boms']),
+                                       $r['proc_total'],$r['proc_priced'],$r['proc_inhouse']]);
+                    }
+                }
+                fclose($out);
+                exit;
+            }
+
+            // 分頁（後端切頁；統計已於上方以全量算完）
+            $page = max(1, intval($_GET['page'] ?? 1));
+            $size = intval($_GET['size'] ?? 10);
+            if (!in_array($size, [5,10,20,50,100000], true)) $size = 10;
+            $totalRows = count($data);
+            $paged = array_slice($data, ($page - 1) * $size, $size);
+
+            echo json_encode([
+                'success' => true,
+                'view'    => $view,
+                'summary' => $summary,
+                'total'   => $totalRows,
+                'page'    => $page,
+                'size'    => $size,
+                'rows'    => $paged,
+            ]);
+            exit;
+        }
+
+        echo json_encode(['success'=>false,'error'=>'未知動作']);
+    } catch (Exception $e) {
+        echo json_encode(['success'=>false,'error'=>$e->getMessage()]);
+    }
+    exit;
+}
+?>
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>訂單毛利分析</title>
+    <link href="../../resource/css/bootstrap.css" rel="stylesheet">
+    <link href="../../resource/css/font-awesome.css" rel="stylesheet">
+    <link href="../../resource/css/custom.css" rel="stylesheet">
+    <style>
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+        input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
+
+        :root { --primary-color:#2A3F54; --accent-color:#1ABB9C; --bg-color:#F4F7FC; --card-bg:#FFF; }
+        body { background-color:var(--bg-color); font-family:"Segoe UI","Roboto",Arial,sans-serif; color:#495057; }
+        .right_col { background-color:var(--bg-color) !important; }
+
+        .stats-container { display:flex; gap:12px; margin-bottom:15px; flex-wrap:wrap; }
+        .stat-card { flex:1; min-width:150px; background:var(--card-bg); border-radius:8px; padding:13px 15px;
+            box-shadow:0 2px 5px rgba(0,0,0,.05); border-left:4px solid transparent; cursor:pointer;
+            transition:transform .1s, box-shadow .1s; position:relative; }
+        .stat-card:hover { transform:translateY(-2px); box-shadow:0 5px 15px rgba(0,0,0,.1); }
+        .stat-card.active { transform:scale(1.02); z-index:1; }
+        .stat-card .stat-value { font-size:21px; font-weight:800; color:var(--primary-color); white-space:nowrap; }
+        .stat-card .stat-label { font-size:12px; color:#888; font-weight:600; }
+        .stat-card .stat-sub { font-size:11px; color:#aaa; }
+        .stat-card.c-all    { border-left-color:#5B8DEF; }
+        .stat-card.c-all.active { box-shadow:0 0 0 3px #5B8DEF; }
+        .stat-card.c-full   { border-left-color:#1ABB9C; }
+        .stat-card.c-full.active { box-shadow:0 0 0 3px #1ABB9C; }
+        .stat-card.c-part   { border-left-color:#F39C12; }
+        .stat-card.c-part.active { box-shadow:0 0 0 3px #F39C12; }
+        .stat-card.c-none   { border-left-color:#95A5A6; }
+        .stat-card.c-none.active { box-shadow:0 0 0 3px #95A5A6; }
+        .stat-card.c-rate   { border-left-color:#8e44ad; cursor:default; }
+
+        .filter-bar { background:#fff; padding:10px; border-radius:8px; margin-bottom:15px;
+            display:flex; gap:8px; align-items:center; flex-wrap:wrap; box-shadow:0 2px 5px rgba(0,0,0,.05); }
+        .main-card { background:var(--card-bg); border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,.05); padding:15px; }
+        .table-toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px; }
+
+        table.opa-table thead th { background:#F8F9FA; color:#555; font-weight:700; border-bottom:2px solid #E9ECEF;
+            padding:9px 6px; font-size:13px; white-space:nowrap; cursor:pointer; user-select:none; }
+        table.opa-table thead th.no-sort { cursor:default; }
+        table.opa-table thead th .sort-ind { color:#5B8DEF; margin-left:2px; }
+        table.opa-table tbody td { padding:7px 6px; vertical-align:middle; border-bottom:1px solid #F1F3F5; font-size:13px; }
+        table.opa-table tbody tr:hover { background:#FAFBFE; }
+        td.num, th.num { text-align:right; }
+
+        .badge-st { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700; cursor:help; }
+        .st-full    { background:#E8F8F3; color:#0e8c73; }
+        .st-partial { background:#FEF5E7; color:#b9770e; }
+        .st-none    { background:#F0F2F4; color:#8a94a0; }
+        .mr-pos  { color:#0e8c73; font-weight:700; }
+        .mr-warn { color:#d68910; font-weight:700; }
+        .mr-neg  { color:#c0392b; font-weight:700; }
+        .abc-badge { display:inline-block; width:22px; height:22px; line-height:22px; text-align:center;
+            border-radius:50%; color:#fff; font-weight:800; font-size:12px; }
+        .abc-A { background:#E74C3C; } .abc-B { background:#F39C12; } .abc-C { background:#95A5A6; }
+
+        .view-toggle .btn.active { background:var(--primary-color); color:#fff; }
+        .role-hint { color:#888; font-size:12px; cursor:pointer; }
+        .no-access-box { background:#fff; border-radius:8px; padding:60px 20px; text-align:center; margin-top:40px; }
+        .note-box { font-size:12px; color:#8a94a0; margin-top:8px; line-height:1.7; }
+    </style>
+</head>
+<body class="nav-sm">
+<div class="container body">
+  <div class="main_container">
+    <?php include '../partPage/sideAndTopBarMenu.html'; ?>
+
+    <div class="right_col" role="main">
+<?php if (!$has_access): ?>
+      <div class="no-access-box">
+          <i class="fa fa-lock" style="font-size:40px;color:#e74c3c;"></i>
+          <h3 style="margin-top:15px;">請先申請權限</h3>
+          <p style="color:#888;">您目前沒有「訂單毛利分析」功能的使用權限，請聯絡管理者至「使用者權限管理」頁面指派角色。</p>
+      </div>
+<?php else: ?>
+      <div class="page-title">
+        <div class="title_left"><h3>訂單毛利分析 <small style="font-size:13px;color:#aaa;">試作版</small></h3></div>
+        <div class="title_right" style="text-align:right; padding-top:12px;">
+          <span class="role-hint" id="roleHint">
+            <i class="fa fa-user"></i> 訂單毛利分析使用者
+            <i class="fa fa-question-circle" style="margin-left:4px;"></i>
+          </span>
+        </div>
+      </div>
+      <div class="clearfix"></div>
+
+      <div class="stats-container">
+        <div class="stat-card c-all active" data-costfilter="all">
+          <div class="stat-value" id="cardOrders">–</div>
+          <div class="stat-label">訂單數（全部）</div>
+          <div class="stat-sub" id="cardRevenue">營收 –</div>
+        </div>
+        <div class="stat-card c-full" data-costfilter="full">
+          <div class="stat-value" id="cardFull">–</div>
+          <div class="stat-label">成本完整</div>
+          <div class="stat-sub">外包製程全數已計價</div>
+        </div>
+        <div class="stat-card c-part" data-costfilter="partial">
+          <div class="stat-value" id="cardPartial">–</div>
+          <div class="stat-label">成本部分</div>
+          <div class="stat-sub">尚有製程未計價/廠內未計</div>
+        </div>
+        <div class="stat-card c-none" data-costfilter="none">
+          <div class="stat-value" id="cardNone">–</div>
+          <div class="stat-label">無成本資料</div>
+          <div class="stat-sub">未綁製令或尚未請款</div>
+        </div>
+        <div class="stat-card c-rate">
+          <div class="stat-value" id="cardMarginRate">–</div>
+          <div class="stat-label">平均毛利率（有成本訂單）</div>
+          <div class="stat-sub" id="cardLoss">虧損訂單 –</div>
+        </div>
+      </div>
+
+      <div class="filter-bar">
+        <label style="margin:0;font-size:12px;color:#888;">訂單日期</label>
+        <input type="date" id="fDateFrom" class="form-control input-sm eg-in" style="width:135px;" max="9999-12-31">
+        <span style="color:#aaa;">～</span>
+        <input type="date" id="fDateTo" class="form-control input-sm eg-in" style="width:135px;" max="9999-12-31">
+        <input type="text" id="fClient" class="form-control input-sm eg-in" placeholder="客戶" style="width:130px;">
+        <input type="text" id="fKw" class="form-control input-sm eg-in" placeholder="料號 / 訂單號 / 規格" style="width:170px;">
+        <button class="btn btn-primary btn-sm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
+        <div class="btn-group view-toggle" style="margin-left:6px;">
+          <button class="btn btn-default btn-sm active" data-view="order">訂單明細</button>
+          <button class="btn btn-default btn-sm" data-view="part">料號彙總（ABC）</button>
+        </div>
+        <div style="margin-left:auto; display:flex; gap:8px;">
+          <button class="btn btn-info btn-sm" id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 轉 CSV</button>
+          <button class="btn btn-info btn-sm" id="btnPrint"><i class="fa fa-print"></i> 列印 / PDF</button>
+        </div>
+      </div>
+
+      <div class="main-card">
+        <div class="table-toolbar">
+          <div style="color:#888;font-size:12px;" id="viewHint">
+            成本口徑：各製程<b>實際發包單價</b>加權平均加總（外包實績）；廠內製程不計成本、以「部分」標示。點欄位標題可排序。
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div id="pageInfo" style="color:#888;font-size:12px;"></div>
+            <select id="pageSizeSelect" class="form-control input-sm" style="width:80px;">
+              <option value="5">5</option>
+              <option value="10" selected>10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+            </select>
+            <button class="btn btn-default btn-xs" id="btnPrevPage"><i class="fa fa-chevron-left"></i></button>
+            <span id="pageNum">1</span>
+            <button class="btn btn-default btn-xs" id="btnNextPage"><i class="fa fa-chevron-right"></i></button>
+          </div>
+        </div>
+        <div style="overflow-x:auto;width:100%;">
+          <table class="table opa-table" id="opaTable">
+            <thead id="opaThead"></thead>
+            <tbody id="opaTbody"><tr><td colspan="12" class="text-center text-muted">載入中...</td></tr></tbody>
+          </table>
+        </div>
+        <div class="note-box">
+          ．單顆成本＝該訂單綁定製令的各製程(bom_sn)發包單價（修改後單價優先）以請款數量加權平均後加總；排除廠內加工商。<br>
+          ．「無成本資料」多為：訂單未綁製令、或製令仍在進行中尚未請款。「部分」表示尚有外包製程未計價或含廠內製程（廠內暫不計成本）。<br>
+          ．料號彙總的 ABC 分級：依查詢範圍內營收由大到小累計，≤80%＝A、≤95%＝B、其餘＝C（柏拉圖 80/20）。<br>
+          ．統計卡與彙總一律以「全部符合條件資料」於後端計算，非僅當前頁。
+        </div>
+      </div>
+<?php endif; ?>
+    </div>
+  </div>
+</div>
+
+<!-- 權限說明 Modal -->
+<div class="modal fade" id="roleModal" role="dialog" tabindex="-1">
+  <div class="modal-dialog" style="width:520px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-question-circle"></i> 訂單毛利分析 — 角色權限說明</h4></div>
+      <div class="modal-body" style="font-size:13px;line-height:1.9;">
+        <p><b>訂單毛利分析使用者</b>：可檢視毛利分析、切換檢視、匯出 CSV / 列印。</p>
+        <p><b>管理者</b>：固定擁有全部權限。</p>
+        <p style="color:#888;">毛利屬敏感資料，未被指派角色者無法開啟本頁。角色指派請至「權限設定」頁的「訂單毛利分析」區塊。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="../../resource/js/jquery.min.js"></script>
+<script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/custom.min.js"></script>
+<?php if ($has_access): ?>
+<script>
+(function(){
+    var state = {
+        view: 'order', costFilter: 'all',
+        sort: 'order_date', dir: 'desc',
+        page: 1, size: 10,
+        lastSummary: null
+    };
+
+    // 預設查詢近 12 個月
+    function fmtD(d){ return d.toISOString().slice(0,10); }
+    var today = new Date(), yearAgo = new Date();
+    yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+    $('#fDateFrom').val(fmtD(yearAgo));
+    $('#fDateTo').val(fmtD(today));
+
+    function nfmt(v, dec){
+        if (v === null || v === undefined || v === '' || isNaN(v)) return '–';
+        var n = parseFloat(v);
+        var s = n.toLocaleString('zh-TW', {minimumFractionDigits:0, maximumFractionDigits:(dec===undefined?2:dec)});
+        return s;
+    }
+    function esc(s){ return $('<span>').text(s == null ? '' : s).html(); }
+    function mrClass(r){ if (r === null || r === undefined) return ''; return r < 0 ? 'mr-neg' : (r < 15 ? 'mr-warn' : 'mr-pos'); }
+
+    function params(extra){
+        var p = {
+            date_from: $('#fDateFrom').val(), date_to: $('#fDateTo').val(),
+            client: $.trim($('#fClient').val()), kw: $.trim($('#fKw').val()),
+            view: state.view, cost_filter: state.costFilter,
+            sort: state.sort, dir: state.dir, page: state.page, size: state.size
+        };
+        return $.extend(p, extra || {});
+    }
+
+    var HEADS = {
+        order: [
+            ['order_date','訂單日期'], ['order_oo','訂單號'], ['client','客戶'], ['d_id','料號'],
+            ['qty','數量','num'], ['unit_price','單價','num'], ['revenue','營收','num'],
+            ['cost_pc','單顆成本','num'], ['margin','毛利','num'], ['margin_rate','毛利率','num'],
+            ['cost_status','成本狀態'], [null,'製令']
+        ],
+        part: [
+            ['rank','#','num'], ['abc','ABC'], ['d_id','料號'], [null,'主要客戶'],
+            ['orders','訂單數','num'], ['qty','總數量','num'], ['revenue','營收合計','num'],
+            ['cum_pct','累計佔比','num'], ['avg_price','平均售價','num'],
+            ['margin','毛利(涵蓋)','num'], ['margin_rate','毛利率','num'], ['costed_orders','成本資料','num']
+        ]
+    };
+
+    function renderHead(){
+        var h = '<tr>';
+        HEADS[state.view].forEach(function(c){
+            var cls = (c[2] ? c[2] : '') + (c[0] ? '' : ' no-sort');
+            var ind = (c[0] && c[0] === state.sort) ? ' <span class="sort-ind">' + (state.dir === 'asc' ? '▲' : '▼') + '</span>' : '';
+            h += '<th class="' + cls + '" data-sort="' + (c[0] || '') + '">' + c[1] + ind + '</th>';
+        });
+        $('#opaThead').html(h + '</tr>');
+    }
+
+    function statusBadge(r){
+        var tip = '外包製程 ' + r.proc_priced + '/' + Math.max(0, r.proc_total - r.proc_inhouse) + ' 已計價'
+                + (r.proc_inhouse > 0 ? '；廠內 ' + r.proc_inhouse + ' 製程未計成本' : '');
+        if (r.cost_status === 'full')    return '<span class="badge-st st-full" title="' + tip + '">完整</span>';
+        if (r.cost_status === 'partial') return '<span class="badge-st st-partial" title="' + tip + '">部分</span>';
+        var tip2 = r.boms.length ? '製令進行中，尚無計價資料' : '訂單未綁定製令';
+        return '<span class="badge-st st-none" title="' + tip2 + '">無</span>';
+    }
+
+    function renderRows(rows){
+        var h = '';
+        if (!rows.length) {
+            $('#opaTbody').html('<tr><td colspan="12" class="text-center text-muted">查無資料</td></tr>');
+            return;
+        }
+        if (state.view === 'order') {
+            rows.forEach(function(r){
+                h += '<tr>'
+                  + '<td>' + esc(r.order_date) + '</td>'
+                  + '<td>' + esc(r.order_oo) + '</td>'
+                  + '<td>' + esc(r.client) + '</td>'
+                  + '<td title="' + esc(r.spec || '') + '">' + esc(r.d_id) + '</td>'
+                  + '<td class="num">' + nfmt(r.qty, 0) + '</td>'
+                  + '<td class="num">' + nfmt(r.unit_price) + (r.currency ? ' <small style="color:#aaa;">' + esc(r.currency) + '</small>' : '') + '</td>'
+                  + '<td class="num">' + nfmt(r.revenue) + '</td>'
+                  + '<td class="num">' + nfmt(r.cost_pc) + '</td>'
+                  + '<td class="num ' + mrClass(r.margin_rate) + '">' + nfmt(r.margin) + '</td>'
+                  + '<td class="num ' + mrClass(r.margin_rate) + '">' + (r.margin_rate === null ? '–' : nfmt(r.margin_rate) + '%') + '</td>'
+                  + '<td>' + statusBadge(r) + '</td>'
+                  + '<td style="font-size:11px;color:#8a94a0;">' + esc(r.boms.join(' ')) + '</td>'
+                  + '</tr>';
+            });
+        } else {
+            rows.forEach(function(p){
+                h += '<tr>'
+                  + '<td class="num">' + p.rank + '</td>'
+                  + '<td><span class="abc-badge abc-' + p.abc + '">' + p.abc + '</span></td>'
+                  + '<td title="' + esc(p.spec || '') + '">' + esc(p.d_id) + '</td>'
+                  + '<td style="font-size:12px;">' + esc(p.clients) + '</td>'
+                  + '<td class="num">' + nfmt(p.orders, 0) + '</td>'
+                  + '<td class="num">' + nfmt(p.qty, 0) + '</td>'
+                  + '<td class="num">' + nfmt(p.revenue) + '</td>'
+                  + '<td class="num">' + nfmt(p.cum_pct) + '%</td>'
+                  + '<td class="num">' + nfmt(p.avg_price) + '</td>'
+                  + '<td class="num ' + mrClass(p.margin_rate) + '">' + nfmt(p.margin) + '</td>'
+                  + '<td class="num ' + mrClass(p.margin_rate) + '">' + (p.margin_rate === null ? '–' : nfmt(p.margin_rate) + '%') + '</td>'
+                  + '<td class="num" title="有成本資料的訂單數/總訂單數">' + p.costed_orders + '/' + p.orders + '</td>'
+                  + '</tr>';
+            });
+        }
+        $('#opaTbody').html(h);
+    }
+
+    function renderSummary(s){
+        state.lastSummary = s;
+        $('#cardOrders').text(nfmt(s.orders, 0));
+        $('#cardRevenue').text('營收 ' + nfmt(s.revenue));
+        $('#cardFull').text(nfmt(s.full, 0));
+        $('#cardPartial').text(nfmt(s.partial, 0));
+        $('#cardNone').text(nfmt(s.none, 0));
+        $('#cardMarginRate').text(s.avg_margin_rate === null ? '–' : nfmt(s.avg_margin_rate) + '%')
+            .attr('class', 'stat-value ' + mrClass(s.avg_margin_rate));
+        $('#cardLoss').text('虧損訂單 ' + nfmt(s.loss_orders, 0) + '｜涵蓋營收 ' + nfmt(s.costed_revenue));
+    }
+
+    var loading = false;
+    function load(){
+        if (loading) return;
+        loading = true;
+        $('#opaTbody').html('<tr><td colspan="12" class="text-center text-muted"><i class="fa fa-spinner fa-spin"></i> 計算中...</td></tr>');
+        $.getJSON('Order_Profit_Analysis.php', params({action:'list'}))
+        .done(function(res){
+            if (!res.success) { alert(res.error || '載入失敗'); return; }
+            renderHead();
+            renderRows(res.rows);
+            renderSummary(res.summary);
+            var totalPages = Math.max(1, Math.ceil(res.total / state.size));
+            if (state.page > totalPages) state.page = totalPages;
+            $('#pageNum').text(state.page + ' / ' + totalPages);
+            $('#pageInfo').text('共 ' + res.total + ' 筆');
+        })
+        .fail(function(){ $('#opaTbody').html('<tr><td colspan="12" class="text-center text-danger">載入失敗</td></tr>'); })
+        .always(function(){ loading = false; });
+    }
+
+    /* ── 事件 ── */
+    $('#btnSearch').on('click', function(){ state.page = 1; load(); });
+
+    $('.stat-card[data-costfilter]').on('click', function(){
+        $('.stat-card[data-costfilter]').removeClass('active');
+        $(this).addClass('active');
+        state.costFilter = $(this).data('costfilter');
+        state.page = 1;
+        if (state.view !== 'order') {   // 料號彙總不分成本狀態，切回訂單明細
+            state.view = 'order'; state.sort = 'order_date'; state.dir = 'desc';
+            $('.view-toggle .btn').removeClass('active').filter('[data-view=order]').addClass('active');
+        }
+        load();
+    });
+
+    $('.view-toggle .btn').on('click', function(){
+        $('.view-toggle .btn').removeClass('active');
+        $(this).addClass('active');
+        state.view = $(this).data('view');
+        state.page = 1;
+        if (state.view === 'part') { state.sort = 'revenue'; state.dir = 'desc'; }
+        else { state.sort = 'order_date'; state.dir = 'desc'; }
+        load();
+    });
+
+    $('#opaThead').on('click', 'th', function(){
+        var s = $(this).data('sort');
+        if (!s) return;
+        if (state.sort === s) state.dir = (state.dir === 'asc' ? 'desc' : 'asc');
+        else { state.sort = s; state.dir = (s === 'd_id' || s === 'client' || s === 'order_oo' || s === 'abc') ? 'asc' : 'desc'; }
+        state.page = 1;
+        load();
+    });
+
+    $('#pageSizeSelect').on('change', function(){ state.size = parseInt(this.value, 10); state.page = 1; load(); });
+    $('#btnPrevPage').on('click', function(){ if (state.page > 1) { state.page--; load(); } });
+    $('#btnNextPage').on('click', function(){ state.page++; load(); });
+
+    $('#btnExportCsv').on('click', function(){
+        window.location = 'Order_Profit_Analysis.php?' + $.param(params({action:'export_csv'}));
+    });
+
+    $('#btnPrint').on('click', function(){
+        // 抓全量資料開列印視窗（瀏覽器另存 PDF）
+        $.getJSON('Order_Profit_Analysis.php', params({action:'list', page:1, size:100000}))
+        .done(function(res){
+            if (!res.success) { alert(res.error || '載入失敗'); return; }
+            var w = window.open('', '_blank');
+            var title = '訂單毛利分析（' + (state.view === 'part' ? '料號彙總' : '訂單明細') + '）';
+            var range = ($('#fDateFrom').val() || '') + ' ～ ' + ($('#fDateTo').val() || '');
+            var head = HEADS[state.view].map(function(c){ return '<th>' + c[1] + '</th>'; }).join('');
+            var body = '';
+            if (state.view === 'order') {
+                var stMap = {full:'完整', partial:'部分', none:'無'};
+                res.rows.forEach(function(r){
+                    body += '<tr><td>' + [r.order_date, r.order_oo, r.client, r.d_id].map(esc).join('</td><td>') + '</td>'
+                          + '<td class="n">' + [nfmt(r.qty,0), nfmt(r.unit_price), nfmt(r.revenue), nfmt(r.cost_pc), nfmt(r.margin),
+                              (r.margin_rate===null?'–':nfmt(r.margin_rate)+'%')].join('</td><td class="n">') + '</td>'
+                          + '<td>' + stMap[r.cost_status] + '</td><td>' + esc(r.boms.join(' ')) + '</td></tr>';
+                });
+            } else {
+                res.rows.forEach(function(p){
+                    body += '<tr><td class="n">' + p.rank + '</td><td>' + p.abc + '</td><td>' + esc(p.d_id) + '</td><td>' + esc(p.clients) + '</td>'
+                          + '<td class="n">' + [nfmt(p.orders,0), nfmt(p.qty,0), nfmt(p.revenue), nfmt(p.cum_pct)+'%', nfmt(p.avg_price),
+                              nfmt(p.margin), (p.margin_rate===null?'–':nfmt(p.margin_rate)+'%')].join('</td><td class="n">') + '</td>'
+                          + '<td class="n">' + p.costed_orders + '/' + p.orders + '</td></tr>';
+                });
+            }
+            var s = res.summary;
+            w.document.write('<html><head><title>' + title + '</title><meta charset="utf-8"><style>'
+                + 'body{font-family:"Microsoft JhengHei",Arial;font-size:11px;margin:20px;}'
+                + 'h3{margin:0 0 4px;} .sub{color:#666;margin-bottom:10px;}'
+                + 'table{border-collapse:collapse;width:100%;} th,td{border:1px solid #999;padding:3px 5px;} th{background:#eee;} td.n{text-align:right;}'
+                + '</style></head><body><h3>' + title + '</h3>'
+                + '<div class="sub">訂單日期：' + range + '｜訂單 ' + s.orders + ' 筆｜營收 ' + nfmt(s.revenue)
+                + '｜平均毛利率(有成本) ' + (s.avg_margin_rate===null?'–':nfmt(s.avg_margin_rate)+'%') + '｜列印時間：' + new Date().toLocaleString('zh-TW') + '</div>'
+                + '<table><thead><tr>' + head + '</tr></thead><tbody>' + body + '</tbody></table></body></html>');
+            w.document.close();
+            setTimeout(function(){ w.print(); }, 300);
+        });
+    });
+
+    $('#roleHint').on('click', function(){ $('#roleModal').modal('show'); });
+
+    /* ── UI 規範：雙擊清空 / 聚焦全選 / Enter 逐欄與末欄送出 ── */
+    $(document).on('focus', '.eg-in', function(){ var el = this; setTimeout(function(){ try { el.select(); } catch(e){} }, 0); });
+    $(document).on('dblclick', '.eg-in', function(){
+        if (this.value !== '') { this.value = ''; state.page = 1; load(); }   // 篩選欄雙擊＝清空並解除該欄篩選
+    });
+    $(document).on('keydown', '.eg-in', function(e){
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        var ins = $('.eg-in:visible');
+        var idx = ins.index(this);
+        if (idx >= 0 && idx < ins.length - 1) ins.eq(idx + 1).focus();
+        else { state.page = 1; load(); }   // 最後一欄 Enter＝送出查詢
+    });
+
+    load();
+})();
+</script>
+<?php endif; ?>
+</body>
+</html>
