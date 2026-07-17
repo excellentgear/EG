@@ -1396,7 +1396,8 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <h3><i class="fa fa-folder-o"></i> 設定分類</h3>
         <div class="modal-body">
             <div class="frm-row"><label>分類名稱</label>
-                <input type="text" id="sc-cat" list="lib-cat-datalist" style="flex:1;" placeholder="輸入新名稱即新增分類；留空＝未分類">
+                <input type="text" id="sc-cat" list="lib-cat-datalist" style="flex:1;" placeholder="輸入新名稱即新增分類；留空＝未分類"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();confirmSetCat();}">
             </div>
             <div style="font-size:11.5px;color:#8b949e;">套用到目前選取的標籤（只能改自己的標籤，管理者不限）。要「改分類名稱」：篩選該分類→全選→在此輸入新名稱。</div>
         </div>
@@ -1413,7 +1414,8 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <h3><i class="fa fa-hashtag"></i> 設定#標示</h3>
         <div class="modal-body">
             <div class="frm-row"><label>#標示</label>
-                <input type="text" id="st-tags" list="lib-tag-datalist" style="flex:1;" placeholder="空格分隔多個（#可省略）；留空＝清除標示">
+                <input type="text" id="st-tags" list="lib-tag-datalist" style="flex:1;" placeholder="空格分隔多個（#可省略）；留空＝清除標示"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();confirmSetTags();}">
             </div>
             <div style="font-size:11.5px;color:#8b949e;">套用到目前選取的標籤（只能改自己的標籤，管理者不限）。#標示會以藍底小徽章固定顯示在標籤縮圖左上角，標籤庫搜尋框輸入「#關鍵字」可只搜尋標示。</div>
         </div>
