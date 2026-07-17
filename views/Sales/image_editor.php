@@ -936,6 +936,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <button class="tb-btn" id="btn-label-lib" onclick="toggleLabelLib()" title="標籤庫：內建常用標籤＋自訂標籤，點一下放到圖上"><i class="fa fa-tags"></i> 標籤庫</button>
     <button class="tb-btn" onclick="openWmModal()" title="浮水印：自訂文字/角度/單一或填滿/濃淡"><i class="fa fa-shield"></i> 浮水印</button>
     <button class="tb-btn" onclick="openPartModal()" title="存成料號附件（壓平圖＋可再編輯的工作檔），或開啟既有工作檔繼續編輯"><i class="fa fa-archive"></i> 料號附件</button>
+    <button class="tb-btn" onclick="saveDraft(true)" title="把目前畫布暫存在這台電腦的瀏覽器裡（依使用者區分，只保留一份）：下次開啟批圖編輯器會詢問是否接續編輯；選「不開啟」的暫存檔會在該次關閉後自動移除。內容有變動時每 60 秒也會自動暫存。要長期保存或跨電腦請用「料號附件」存工作檔"><i class="fa fa-clock-o"></i> 暫存</button>
     <button class="tb-btn primary" onclick="openExportModal()" title="列印或另存圖片"><i class="fa fa-download"></i> 匯出 / 列印</button>
     <div id="user-info">
         <span><i class="fa fa-user"></i> <?= $safeUser ?>（<?= $safeRole ?>）</span>
@@ -5302,11 +5303,16 @@ function unlockAll() {
     const purged = purgePoisonedObjects();
     const locked = canvas.getObjects().filter(o => o !== artboard && (o.locked || o.selectable === false || o.evented === false) && !o.isDimGuide);
     locked.forEach(o => { o.locked = false; o.selectable = true; o.evented = true; });
-    if (!purged && !locked.length) return;
+    // 順手救回卡在隱形狀態的一般物件（框選搬移等流程暫時隱藏後若中途出錯沒還原，物件會看不見但佔位）
+    let unhidden = 0;
+    canvas.getObjects().forEach(o => {
+        if (o !== artboard && !o.isDimGuide && o.visible === false) { o.visible = true; o.dirty = true; unhidden++; }
+    });
+    if (!purged && !locked.length && !unhidden) return;
     canvas.requestRenderAll();
     updateLockUI();
     pushState();
-    toast('已解鎖 ' + locked.length + ' 個物件' + (purged ? '，並清除 ' + purged + ' 個損壞殘留物' : ''));
+    toast('已解鎖 ' + locked.length + ' 個物件' + (purged ? '，並清除 ' + purged + ' 個損壞殘留物' : '') + (unhidden ? '，救回 ' + unhidden + ' 個隱形物件' : ''));
 }
 function updateLockUI() {
     const n = canvas.getObjects().filter(o => o.locked).length;
@@ -5495,6 +5501,7 @@ function doPushState() {
         if (undoStack[undoStack.length - 1] === snap) return;   // 內容沒變就不疊快照
         undoStack.push(snap);
         redoStack = [];
+        draftDirty = true;   // 內容有變＝下一輪自動暫存要重存
         // 上限用「總位元組」控管，不只份數（保險：載入工作檔的第一份快照仍是未池化的原始字串）
         let total = 0;
         for (let i = 0; i < undoStack.length; i++) total += undoStack[i].length;
@@ -5504,6 +5511,78 @@ function doPushState() {
         }
     } catch (e) { /* 圖太大時快照失敗不影響操作 */ }
     __egSlow('undo快照', __t0);
+}
+
+/* ── 暫存檔（IndexedDB，這台電腦、依使用者區分）──
+   暫存＝最新 undo 快照＋圖片池（快照本來就池化，存檔零額外編碼成本）。
+   手動「暫存」鈕＋內容有變每 60 秒自動暫存＋關窗前盡力補存；
+   下次開啟詢問是否接續編輯，選「不開啟」的暫存檔在該次關閉視窗後自動移除。 */
+let draftDirty = false, draftDeclined = false, draftSavedThisSession = false;
+function draftDb() {
+    return new Promise((res, rej) => {
+        const rq = indexedDB.open('egdraw_drafts', 1);
+        rq.onupgradeneeded = () => rq.result.createObjectStore('draft');
+        rq.onsuccess = () => res(rq.result);
+        rq.onerror = () => rej(rq.error);
+    });
+}
+function draftPut(val) {
+    return draftDb().then(db => new Promise((res, rej) => {
+        const tx = db.transaction('draft', 'readwrite');
+        tx.objectStore('draft').put(val, 'u' + USER_ID);
+        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    }));
+}
+function draftGet() {
+    return draftDb().then(db => new Promise((res, rej) => {
+        const rq = db.transaction('draft').objectStore('draft').get('u' + USER_ID);
+        rq.onsuccess = () => res(rq.result || null); rq.onerror = () => rej(rq.error);
+    }));
+}
+function draftDelete() {
+    return draftDb().then(db => new Promise((res, rej) => {
+        const tx = db.transaction('draft', 'readwrite');
+        tx.objectStore('draft').delete('u' + USER_ID);
+        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    })).catch(() => {});
+}
+function saveDraft(manual) {
+    if (restoring) { if (manual) toast('還原進行中，請稍後再按一次暫存'); return; }
+    if (canvas.getObjects().filter(o => o.id !== '__artboard').length === 0) { if (manual) toast('畫布是空的，沒有東西可暫存'); return; }
+    flushPendingState();   // 確保最新內容已進快照
+    const snap = undoStack[undoStack.length - 1];
+    if (!snap) { if (manual) toast('暫存失敗：目前沒有可用的內容快照'); return; }
+    draftPut({ snap: snap, pool: IMG_SRC_POOL.slice(), ts: Date.now() }).then(() => {
+        draftDirty = false; draftSavedThisSession = true;
+        if (manual) toast('已暫存到這台電腦（下次開啟批圖編輯器會詢問是否接續編輯）');
+    }).catch(e => { if (manual) toast('暫存失敗：' + ((e && e.message) || '瀏覽器儲存空間不足')); });
+}
+setInterval(() => { if (draftDirty) saveDraft(false); }, 60000);
+window.addEventListener('pagehide', function () {
+    if (draftDirty) saveDraft(false);                                // 關窗前盡力補存（存不完就靠 60 秒自動暫存的那份）
+    if (draftDeclined && !draftSavedThisSession) draftDelete();      // 「不開啟」的暫存＝本次關閉後自動移除
+});
+function offerDraftRestore() {
+    draftGet().then(d => {
+        if (!d || !d.snap) return;
+        const dt = new Date(d.ts || Date.now()), p = n => String(n).padStart(2, '0');
+        const when = dt.getFullYear() + '/' + p(dt.getMonth() + 1) + '/' + p(dt.getDate()) + ' ' + p(dt.getHours()) + ':' + p(dt.getMinutes());
+        if (confirm('偵測到暫存檔（' + when + ' 暫存）。\n\n要開啟接續編輯嗎？\n選「取消」＝不開啟，此暫存檔會在本次關閉視窗後自動移除。')) {
+            // 圖片池必須在快照還原前先接回（快照裡是 __imgpool:索引 占位）；此時是頁面初始，池必為空
+            if (IMG_SRC_POOL.length === 0 && Array.isArray(d.pool)) d.pool.forEach(s => IMG_SRC_POOL.push(s));
+            restoreState(d.snap);
+            const wait = setInterval(() => {
+                if (restoring) return;
+                clearInterval(wait);
+                zoomFit();
+                pushState();
+                toast('已還原暫存檔，繼續編輯；要長期保存請用「料號附件」存工作檔');
+            }, 150);
+            draftSavedThisSession = true;   // 暫存內容已被採用，關閉時不清掉
+        } else {
+            draftDeclined = true;
+        }
+    }).catch(() => {});
 }
 function pushState() {
     if (restoring) return;
@@ -5754,6 +5833,7 @@ resizeViewport();
 setArtboardSize(artW, artH);
 zoomFit();
 pushState();  // 初始狀態
+offerDraftRestore();   // 有暫存檔時詢問是否接續編輯（選「不開啟」＝本次關閉後自動移除）
 setTool('select');
 </script>
 </body>
