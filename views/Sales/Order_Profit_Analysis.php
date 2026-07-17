@@ -614,6 +614,34 @@ if ($isAjax) {
             exit;
         }
 
+        /* ── 批次製程路線（滑窗分區塊用）：一次回多個製令的製程清單 ── */
+        if ($action === 'bom_routes') {
+            $names = array_slice(array_values(array_filter(array_map('trim', explode(',', $_GET['boms'] ?? '')))), 0, 300);
+            $routes = [];
+            if (!empty($names)) {
+                $rows = opa_chunked_in($pdo,
+                    "SELECT bi.bom, bi.bom_sn,
+                            MIN(bi.process_no) AS process_no,
+                            MIN(pn.ProcessName) AS process_name,
+                            MAX(COALESCE(m.internal,0)) AS internal
+                     FROM bom_ing bi
+                     LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                     LEFT JOIN maker_list m ON m.maker_id_no = bi.maker_id_no
+                     WHERE bi.bom IN ({IN})
+                     GROUP BY bi.bom, bi.bom_sn
+                     ORDER BY bi.bom, bi.bom_sn", $names);
+                foreach ($rows as $r) {
+                    $routes[$r['bom']][] = [
+                        'bom_sn'       => intval($r['bom_sn']),
+                        'process_name' => $r['process_name'] ?: ('#' . $r['process_no']),
+                        'internal'     => intval($r['internal']) === 1,
+                    ];
+                }
+            }
+            echo json_encode(['success'=>true, 'routes'=>$routes]);
+            exit;
+        }
+
         /* ── 成本明細（單一訂單各製程計價狀況） ── */
         if ($action === 'cost_detail') {
             $oid = intval($_GET['order_id'] ?? 0);
@@ -908,7 +936,9 @@ if ($has_access) {
         table.sp-table td.num, table.sp-table th.num { text-align:right; }
 
         /* 製程流程 chips：框線盒＋箭頭；廠內=藍底、外包=黃底 */
-        .sp-route { padding:6px 16px 8px; border-bottom:1px solid #E9ECEF; font-size:11px; line-height:2; }
+        .sp-group { margin-bottom:16px; border-bottom:4px solid #2A3F54; padding-bottom:4px; }
+        .sp-group:last-child { border-bottom:none; margin-bottom:0; }
+        .sp-group-route { padding:8px 0 6px; line-height:2.1; }
         .proc-chip { display:inline-block; border:1px solid; border-radius:3px; padding:0 6px; font-size:11px;
             font-weight:600; white-space:nowrap; vertical-align:middle; }
         .proc-in  { background:#EAF2FD; border-color:#5B8DEF; color:#1a5cb0; }   /* 廠內：藍底 */
@@ -1067,7 +1097,6 @@ if ($has_access) {
     </div>
     <button type="button" class="sp-close" id="spClose" title="關閉">&times;</button>
   </div>
-  <div class="sp-route" id="spRoute" style="display:none;"></div>
   <div class="sp-body" id="spBody">載入中...</div>
   <div class="sp-foot" id="spFoot"></div>
 </div>
@@ -1325,40 +1354,83 @@ if ($has_access) {
 
     var lastPanel = { did: '', cat: '' };
 
-    // 滑窗製程流程：取最新一筆有製令的訂單，各製程畫成框線盒＋箭頭（廠內藍底、外包黃底）
-    function renderRoute(rows){
-        $('#spRoute').hide().empty();
-        var src = null;
-        for (var i = 0; i < rows.length; i++) { if (rows[i].boms.length) { src = rows[i]; break; } }
-        if (!src) return;
-        $.getJSON('Order_Profit_Analysis.php', {
-            action: 'cost_detail', order_id: src.order_id,
-            boms: src.auto_matched ? src.boms.join(',') : ''
-        })
-        .done(function(res){
-            if (!res.success || !res.boms.length || !res.boms[0].processes.length) return;
-            var b = res.boms[0];
-            var chips = b.processes.map(function(p){
-                var cls = p.internal ? 'proc-in' : 'proc-out';
-                var tip = (p.internal ? '廠內' : '外包') + (p.makers ? '｜' + p.makers : '')
-                        + (p.avg_price !== null ? '｜均價 ' + nfmt(p.avg_price) : '');
-                return '<span class="proc-chip ' + cls + '" title="' + esc(tip) + '">' + esc(p.process_name) + '</span>';
-            }).join('<span class="proc-arrow">→</span>');
-            $('#spRoute').html(
-                '<span style="color:#888;">製程（' + esc(b.bom) + (src.auto_matched ? '，≈自動比對' : '') + '）：</span>'
-                + chips
-                + '<span style="color:#aaa;margin-left:10px;">'
-                + '<span class="proc-chip proc-in" style="font-size:10px;">藍=廠內</span> '
-                + '<span class="proc-chip proc-out" style="font-size:10px;">黃=外包</span></span>'
-            ).show();
+    // 製程路線 chips：框線盒＋箭頭（廠內藍底、外包黃底）
+    function routeChips(procs){
+        return procs.map(function(p){
+            var cls = p.internal ? 'proc-in' : 'proc-out';
+            return '<span class="proc-chip ' + cls + '" title="' + (p.internal ? '廠內' : '外包') + '">' + esc(p.process_name) + '</span>';
+        }).join('<span class="proc-arrow">→</span>');
+    }
+
+    function buildPanelTable(rows){
+        var h = '<table class="sp-table"><thead><tr>'
+              + '<th>訂單日期</th><th>訂單號</th><th>客戶</th>'
+              + '<th class="num">數量</th><th class="num">單價</th><th class="num">營收</th>'
+              + '<th class="num">單顆成本</th><th class="num">毛利</th><th class="num">毛利率</th>'
+              + '<th>狀態</th><th>製令</th>'
+              + '</tr></thead><tbody>';
+        rows.forEach(function(r){
+            var costCell = r.boms.length
+                ? '<span class="cost-link" data-oid="' + r.order_id + '" data-oo="' + esc(r.order_oo) + '" data-did="' + esc(r.d_id) + '"'
+                  + ' data-boms="' + esc(r.boms.join(',')) + '" data-auto="' + (r.auto_matched ? 1 : 0) + '"'
+                  + ' title="點擊看各製程計價明細">' + nfmt(r.cost_pc) + '</span>'
+                : '–';
+            h += '<tr>'
+              + '<td>' + esc(r.order_date) + '</td>'
+              + '<td>' + esc(r.order_oo) + '</td>'
+              + '<td>' + esc(r.client) + '</td>'
+              + '<td class="num">' + nfmt(r.qty, 0) + '</td>'
+              + '<td class="num">' + nfmt(r.unit_price) + '</td>'
+              + '<td class="num">' + nfmt(r.revenue) + '</td>'
+              + '<td class="num">' + costCell + '</td>'
+              + '<td class="num ' + mrClass(r.margin_rate) + '">' + nfmt(r.margin) + '</td>'
+              + '<td class="num ' + mrClass(r.margin_rate) + '">' + (r.margin_rate === null ? '–' : nfmt(r.margin_rate) + '%') + '</td>'
+              + '<td>' + statusBadge(r) + '</td>'
+              + '<td style="font-size:11px;color:#8a94a0;">' + bomsCellHtml(r) + '</td>'
+              + '</tr>';
         });
+        return h + '</tbody></table>';
+    }
+
+    // 依製程路線分區塊：同路線的訂單放同一塊，每塊上方顯示該路線的製程流程
+    function renderPanelGroups(rows, routes){
+        var groups = [], gmap = {};
+        rows.forEach(function(r){
+            var procs = (r.boms.length && routes[r.boms[0]]) ? routes[r.boms[0]] : null;
+            var key = procs
+                ? procs.map(function(p){ return p.process_name + '|' + (p.internal ? 1 : 0); }).join('>')
+                : '__none';
+            if (!(key in gmap)) { gmap[key] = groups.length; groups.push({ procs: procs, rows: [] }); }
+            groups[gmap[key]].rows.push(r);
+        });
+        var h = '';
+        groups.forEach(function(g){
+            h += '<div class="sp-group">'
+               + '<div class="sp-group-route">'
+               + (g.procs ? routeChips(g.procs) : '<span style="color:#aaa;font-size:12px;">無製程資料（未綁製令或製令尚無製程）</span>')
+               + '</div>'
+               + buildPanelTable(g.rows)
+               + '</div>';
+        });
+        $('#spBody').html(h);
+    }
+
+    function renderPanelFoot(rows){
+        var tQty = 0, tRev = 0, tCost = 0, tMargin = 0, costed = 0, covRev = 0;
+        rows.forEach(function(r){
+            tQty += r.qty; tRev += r.revenue;
+            if (r.cost_status !== 'none') { tCost += r.cost_total; tMargin += r.margin; covRev += r.revenue; costed++; }
+        });
+        $('#spFoot').html('共 ' + rows.length + ' 筆訂單｜總數量 ' + nfmt(tQty, 0) + '｜營收合計 ' + nfmt(tRev)
+            + '｜有成本 ' + costed + ' 筆（涵蓋營收 ' + nfmt(covRev) + '、成本 ' + nfmt(tCost) + '、毛利 <b class="' + mrClass(covRev > 0 ? tMargin / covRev * 100 : null) + '">' + nfmt(tMargin) + '</b>'
+            + (covRev > 0 ? '、毛利率 ' + nfmt(tMargin / covRev * 100) + '%' : '') + '）');
     }
 
     function openPartOrders(did, cat){
         lastPanel = { did: did, cat: cat };
-        $('#spRoute').hide().empty();
         $('#spTitle').text(did);
-        $('#spSub').html(catBadge(cat) + ' <span style="color:#aaa;">訂單日期 ' + ($('#fDateFrom').val() || '') + ' ～ ' + ($('#fDateTo').val() || '') + '</span>');
+        $('#spSub').html(catBadge(cat) + ' <span style="color:#aaa;">訂單日期 ' + ($('#fDateFrom').val() || '') + ' ～ ' + ($('#fDateTo').val() || '') + '</span>'
+            + ' <span class="proc-chip proc-in" style="font-size:10px;">藍=廠內</span> <span class="proc-chip proc-out" style="font-size:10px;">黃=外包</span>');
         $('#spBody').html('<i class="fa fa-spinner fa-spin"></i> 載入中...');
         $('#spFoot').text('');
         $('#spBackdrop').fadeIn(150);
@@ -1373,43 +1445,22 @@ if ($has_access) {
         .done(function(res){
             if (!res.success) { $('#spBody').html('<span class="text-danger">' + esc(res.error || '載入失敗') + '</span>'); return; }
             if (!res.rows.length) { $('#spBody').html('<span class="text-muted">查無訂單。</span>'); return; }
-            var h = '<table class="sp-table"><thead><tr>'
-                  + '<th>訂單日期</th><th>訂單號</th><th>客戶</th>'
-                  + '<th class="num">數量</th><th class="num">單價</th><th class="num">營收</th>'
-                  + '<th class="num">單顆成本</th><th class="num">毛利</th><th class="num">毛利率</th>'
-                  + '<th>狀態</th><th>製令</th>'
-                  + '</tr></thead><tbody>';
-            var tQty = 0, tRev = 0, tCost = 0, tMargin = 0, costed = 0;
+            // 抓各訂單第一張製令的製程路線，依路線分區塊
+            var firstBoms = [];
             res.rows.forEach(function(r){
-                tQty += r.qty; tRev += r.revenue;
-                if (r.cost_status !== 'none') { tCost += r.cost_total; tMargin += r.margin; costed++; }
-                var costCell = r.boms.length
-                    ? '<span class="cost-link" data-oid="' + r.order_id + '" data-oo="' + esc(r.order_oo) + '" data-did="' + esc(r.d_id) + '"'
-                      + ' data-boms="' + esc(r.boms.join(',')) + '" data-auto="' + (r.auto_matched ? 1 : 0) + '"'
-                      + ' title="點擊看各製程計價明細">' + nfmt(r.cost_pc) + '</span>'
-                    : '–';
-                h += '<tr>'
-                  + '<td>' + esc(r.order_date) + '</td>'
-                  + '<td>' + esc(r.order_oo) + '</td>'
-                  + '<td>' + esc(r.client) + '</td>'
-                  + '<td class="num">' + nfmt(r.qty, 0) + '</td>'
-                  + '<td class="num">' + nfmt(r.unit_price) + '</td>'
-                  + '<td class="num">' + nfmt(r.revenue) + '</td>'
-                  + '<td class="num">' + costCell + '</td>'
-                  + '<td class="num ' + mrClass(r.margin_rate) + '">' + nfmt(r.margin) + '</td>'
-                  + '<td class="num ' + mrClass(r.margin_rate) + '">' + (r.margin_rate === null ? '–' : nfmt(r.margin_rate) + '%') + '</td>'
-                  + '<td>' + statusBadge(r) + '</td>'
-                  + '<td style="font-size:11px;color:#8a94a0;">' + bomsCellHtml(r) + '</td>'
-                  + '</tr>';
+                if (r.boms.length && firstBoms.indexOf(r.boms[0]) < 0) firstBoms.push(r.boms[0]);
             });
-            h += '</tbody></table>';
-            $('#spBody').html(h);
-            renderRoute(res.rows);
-            var covRev = 0;
-            res.rows.forEach(function(r){ if (r.cost_status !== 'none') covRev += r.revenue; });
-            $('#spFoot').html('共 ' + res.rows.length + ' 筆訂單｜總數量 ' + nfmt(tQty, 0) + '｜營收合計 ' + nfmt(tRev)
-                + '｜有成本 ' + costed + ' 筆（涵蓋營收 ' + nfmt(covRev) + '、成本 ' + nfmt(tCost) + '、毛利 <b class="' + mrClass(covRev > 0 ? tMargin / covRev * 100 : null) + '">' + nfmt(tMargin) + '</b>'
-                + (covRev > 0 ? '、毛利率 ' + nfmt(tMargin / covRev * 100) + '%' : '') + '）');
+            var finish = function(routes){
+                renderPanelGroups(res.rows, routes || {});
+                renderPanelFoot(res.rows);
+            };
+            if (firstBoms.length) {
+                $.getJSON('Order_Profit_Analysis.php', {action: 'bom_routes', boms: firstBoms.join(',')})
+                    .done(function(r2){ finish(r2.success ? r2.routes : {}); })
+                    .fail(function(){ finish({}); });
+            } else {
+                finish({});
+            }
         })
         .fail(function(){ $('#spBody').html('<span class="text-danger">載入失敗</span>'); });
     }
