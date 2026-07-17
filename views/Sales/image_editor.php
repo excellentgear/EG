@@ -1005,8 +1005,8 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                     <input type="color" id="p-textbg" value="#fff59d">
                     <input type="checkbox" id="p-textbg-on" title="文字是否加底色">
                 </label>
-                <span id="sym-strip" onmousedown="event.preventDefault()" style="display:inline-flex;gap:2px;align-items:center;flex-wrap:wrap;"
-                    title="快速插入工程符號：正在編輯文字時插入游標處；只選取文字物件時附加到最後。另外可直接輸入 A^B 自動變上下公差小字（例如 25 -0^-0.18）"></span>
+                <button class="pb-btn" id="sym-btn" onmousedown="event.preventDefault()" onclick="toggleSymPad()"
+                    title="插入工程符號（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×）：正在編輯文字時插入游標處；只選取文字物件時附加到最後。另外可直接輸入 A^B 自動變上下公差小字（例如 25 -0^-0.18）">Ø± 符號</button>
             <!-- 球標 -->
             <span class="prop-sec" id="sec-balloon">
                 <label>下一個球標 <input type="text" class="ni" id="p-balloon-next" value="A" maxlength="3" style="width:44px;text-transform:uppercase;" title="若原圖上已印有球標（例如已有A~C），把這裡改成 D 接著編"></label>
@@ -1296,6 +1296,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     </div>
 </div>
 <div id="lm-rubber"></div>
+<!-- 工程符號浮動面板（屬性列「Ø± 符號」按鈕點開；mousedown preventDefault＝插入時不中斷文字編輯） -->
+<div id="sym-pad" onmousedown="event.preventDefault()"
+    style="display:none;position:fixed;z-index:900;background:#26292e;border:1px solid #45494f;border-radius:6px;padding:6px;box-shadow:0 4px 14px rgba(0,0,0,.5);gap:4px;flex-wrap:wrap;width:212px;"></div>
 
 <!-- 料號附件：儲存 / 開啟工作檔 -->
 <div class="modal-mask" id="partfile-modal">
@@ -2413,10 +2416,23 @@ const EG_SYMBOLS = [
 ];
 (function initSymStrips() {
     const mk = fn => EG_SYMBOLS.map(s =>
-        '<button class="pb-btn" style="min-width:26px;padding:3px 5px;" onclick="' + fn + '(\'' + s[0] + '\')" title="' + s[1] + '">' + s[0] + '</button>').join('');
-    document.getElementById('sym-strip').innerHTML = mk('insertSym');
+        '<button class="pb-btn" style="min-width:30px;padding:4px 6px;font-size:13px;" onclick="' + fn + '(\'' + s[0] + '\')" title="' + s[1] + '">' + s[0] + '</button>').join('');
+    document.getElementById('sym-pad').innerHTML = mk('insertSym');
     document.getElementById('nl-sym-strip').innerHTML = mk('nlInsertSym');
 })();
+/* 符號浮動面板：開在按鈕正下方；點面板/按鈕以外的地方自動收起 */
+function toggleSymPad() {
+    const pad = document.getElementById('sym-pad');
+    if (pad.style.display === 'flex') { pad.style.display = 'none'; return; }
+    const r = document.getElementById('sym-btn').getBoundingClientRect();
+    pad.style.left = Math.max(4, Math.min(r.left, window.innerWidth - 220)) + 'px';
+    pad.style.top = (r.bottom + 4) + 'px';
+    pad.style.display = 'flex';
+}
+document.addEventListener('mousedown', function (e) {
+    const pad = document.getElementById('sym-pad');
+    if (pad.style.display === 'flex' && !e.target.closest('#sym-pad, #sym-btn')) pad.style.display = 'none';
+});
 function insertSym(s) {
     const obj = canvas.getActiveObject();
     if (obj && obj.isEditing) {   // IText 編輯中（含標籤/群組文字的暫時編輯框）：插入游標處
