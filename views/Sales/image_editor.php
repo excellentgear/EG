@@ -898,6 +898,11 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     .lm-cat-head:hover { color: #f0c04a; }
     #lm-rubber { position: fixed; border: 1px dashed #6fc3ff; background: rgba(39,121,189,.15); z-index: 1200; display: none; pointer-events: none; }
 
+    /* 浮動快捷列（半透明暖色）：編輯文字時＝符號鍵浮在輸入框上方；選取物件時＝旋轉角度鍵浮在物件上方 */
+    .obj-float { display: none; position: fixed; z-index: 950; background: rgba(255,241,203,.88); border: 1px solid #d9b96a; border-radius: 6px; padding: 4px; box-shadow: 0 3px 10px rgba(0,0,0,.35); gap: 3px; flex-wrap: wrap; max-width: 250px; }
+    .obj-float button { background: rgba(255,255,255,.75); color: #5a4a20; border: 1px solid #cbb377; border-radius: 4px; min-width: 30px; padding: 3px 6px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+    .obj-float button:hover { background: #fff; }
+
     /* 拖放提示 */
     #drop-hint { display: none; position: absolute; inset: 14px; border: 3px dashed #6fc3ff; border-radius: 12px; background: rgba(39,121,189,.12); z-index: 500; pointer-events: none; align-items: center; justify-content: center; font-size: 20px; color: #9fd4ff; }
     #drop-hint.show { display: flex; }
@@ -1311,6 +1316,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <!-- 工程符號浮動面板（屬性列「Ø± 符號」按鈕點開；mousedown preventDefault＝插入時不中斷文字編輯） -->
 <div id="sym-pad" onmousedown="event.preventDefault()"
     style="display:none;position:fixed;z-index:900;background:#26292e;border:1px solid #45494f;border-radius:6px;padding:6px;box-shadow:0 4px 14px rgba(0,0,0,.5);gap:4px;flex-wrap:wrap;width:212px;"></div>
+<!-- 浮動快捷列：編輯文字＝符號鍵（mousedown preventDefault＝插入不中斷編輯）；選取物件＝旋轉角度鍵 -->
+<div id="float-syms" class="obj-float" onmousedown="event.preventDefault()"></div>
+<div id="float-rot" class="obj-float"></div>
 
 <!-- 料號附件：儲存 / 開啟工作檔 -->
 <div class="modal-mask" id="partfile-modal">
@@ -2502,7 +2510,45 @@ const EG_SYMBOLS = [
         '<button class="pb-btn" style="min-width:30px;padding:4px 6px;font-size:13px;" onclick="' + fn + '(\'' + s[0] + '\')" title="' + s[1] + '">' + s[0] + '</button>').join('');
     document.getElementById('sym-pad').innerHTML = mk('insertSym');
     document.getElementById('nl-sym-strip').innerHTML = mk('nlInsertSym');
+    // 浮動快捷列：符號（編輯文字時浮在輸入框上方）＋ 旋轉角度（選取物件時浮在物件上方）
+    document.getElementById('float-syms').innerHTML = EG_SYMBOLS.map(s =>
+        '<button onclick="insertSym(\'' + s[0] + '\')" title="' + s[1] + '">' + s[0] + '</button>').join('');
+    document.getElementById('float-rot').innerHTML = [0, 45, 90, -90, 180].map(a =>
+        '<button onclick="setAngleQuick(' + a + ')" title="以物件中心旋轉至 ' + a + ' 度（直線＝相對水平的角度）">' + a + '°</button>').join('');
 })();
+/* 旋轉快捷鍵：同屬性列「角度」欄位邏輯（絕對角度、以物件中心；直線＝相對水平） */
+function setAngleQuick(v) {
+    const obj = canvas.getActiveObject(); if (!obj) return;
+    if (isLineLike(obj)) obj.rotate((obj.angle || 0) + (v - trueLineAngle(obj)));
+    else obj.rotate(v);
+    obj.setCoords();
+    if (obj.isDimGuide && obj.dimAngleId) rebuildDimAngleArc(obj.dimAngleId);
+    document.getElementById('p-angle').value = v;
+    canvas.requestRenderAll();
+    pushState();
+}
+/* 浮動快捷列定位：跟著選取物/編輯框走（每次畫布重繪時更新，移動/縮放/捲動都會跟上） */
+function positionFloatBars() {
+    const symEl = document.getElementById('float-syms');
+    const rotEl = document.getElementById('float-rot');
+    const obj = canvas.getActiveObject();
+    const editing = !!(obj && obj.isEditing);
+    const showRot = !!(obj && !editing && !obj.__pointEditing && currentTool === 'select');
+    symEl.style.display = editing ? 'flex' : 'none';
+    rotEl.style.display = showRot ? 'flex' : 'none';
+    const el = editing ? symEl : (showRot ? rotEl : null);
+    if (!el || !obj) return;
+    const br = obj.getBoundingRect();   // 含視圖縮放/平移＝畫布像素座標
+    const cr = canvas.upperCanvasEl.getBoundingClientRect();
+    const w = el.offsetWidth, h = el.offsetHeight;
+    let left = cr.left + br.left + br.width / 2 - w / 2;
+    let top = cr.top + br.top - h - 10;
+    left = Math.max(4, Math.min(left, window.innerWidth - w - 4));
+    if (top < cr.top + 4) top = cr.top + br.top + br.height + 10;   // 上方放不下改物件下方
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+}
+canvas.on('after:render', positionFloatBars);
 /* 符號浮動面板：開在按鈕正下方；點面板/按鈕以外的地方自動收起 */
 function toggleSymPad() {
     const pad = document.getElementById('sym-pad');
