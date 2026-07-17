@@ -4643,19 +4643,28 @@ function flattenSelection() {
     const parts = (obj.type === 'activeSelection') ? obj.getObjects().slice() : [obj];
     const b = obj.getBoundingRect(true, true);
     const mult = Math.min(2, 8192 / Math.max(b.width, b.height, 1));
+    // 先解散選取：多選狀態下子物件座標是「相對於選取框」的，直接複製會得到錯位座標；
+    // 解散後回到畫布絕對座標，逐一複製才正確
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
     // 一定要用「複製品」轉圖（跟標籤縮圖同一招）：對畫布上的原件直接 toDataURL，fabric 會把原件
     // 暫時搬進暫存畫布再搬回，中途一出錯原件就壞在半路（canvas 參照斷掉→本體不畫、只剩選取框線）。
     // 複製品在畫布外，轉圖怎麼失敗都不傷原件。
-    obj.clone(function (cl) {
+    let done = 0;
+    const clones = new Array(parts.length);
+    parts.forEach((o, i) => o.clone(function (cl) {
+        clones[i] = cl;
+        if (++done < parts.length) return;
+        const usable = clones.filter(Boolean);
+        if (!usable.length) { toast('壓平選取失敗：物件複製異常，原物件未受影響'); return; }
+        const g = (usable.length === 1) ? usable[0] : new fabric.Group(usable);
         let url = null;
-        try { url = cl.toDataURL({ format: 'png', multiplier: mult }); }
+        try { url = g.toDataURL({ format: 'png', multiplier: mult }); }
         catch (e) { console.warn('[EGdraw] 壓平選取轉圖失敗：', e); }
         if (!url || url.length < 100) { toast('壓平選取失敗：物件轉圖時發生問題（F12 主控台有詳情），原物件未受影響'); return; }
         fabric.Image.fromURL(url, function (img) {
             if (!img || !img.width) { toast('壓平選取失敗：圖片載入異常，原物件未受影響'); return; }
-            if (parts.some(o => canvas.getObjects().indexOf(o) === -1)) { toast('壓平選取中止：原物件已不在畫布上'); return; }
-            canvas.discardActiveObject();
-            parts.forEach(o => canvas.remove(o));
+            parts.forEach(o => canvas.remove(o));   // 還在畫布上的移除；期間被刪掉的自動略過
             img.set({ left: b.left, top: b.top, scaleX: b.width / img.width, scaleY: b.height / img.height });
             img.setCoords();
             canvas.add(img);
@@ -4664,7 +4673,7 @@ function flattenSelection() {
             pushState();
             toast('已把選取物件壓平成一張圖（透明背景）：可用「框選搬移／套索」對它切缺口；不滿意可 Ctrl+Z 復原');
         });
-    }, SNAP_PROPS);
+    }, SNAP_PROPS));
 }
 /* 同 exportRegionDataURL，但回傳實際 <canvas> 供進一步像素處理（白底轉透明用） */
 function exportRegionCanvasEl(x, y, w, h, mult) {
