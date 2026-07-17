@@ -2534,19 +2534,31 @@ const EG_SYMBOLS = [
     // 浮動快捷列：符號（編輯文字時浮在輸入框上方）＋ 旋轉角度（選取物件時浮在物件上方）
     document.getElementById('float-syms').innerHTML = EG_SYMBOLS.map(s =>
         '<button onclick="insertSym(\'' + s[0] + '\')" title="' + s[1] + '">' + s[0] + '</button>').join('');
-    document.getElementById('float-rot').innerHTML = [0, 45, 90, -90, 180].map(a =>
-        '<button onclick="setAngleQuick(' + a + ')" title="以物件中心旋轉至 ' + a + ' 度（直線＝相對水平的角度）">' + a + '°</button>').join('');
+    document.getElementById('float-rot').innerHTML = [45, -90, 90, 180].map(a =>
+        '<button onclick="rotateQuickBy(' + a + ')" title="以目前角度為基準，再旋轉 ' + a + ' 度（物件中心）">' + (a > 0 ? '+' : '') + a + '°</button>').join('')
+        + '<input type="number" id="float-rot-v" min="-360" max="360" step="1" placeholder="±°"'
+        + ' title="手動輸入相對角度（-360～360，以目前角度為 0 點），Enter 或離開欄位即套用"'
+        + ' style="width:56px;background:rgba(255,255,255,.75);border:1px solid #cbb377;border-radius:4px;color:#5a4a20;font-size:12px;padding:3px 4px;"'
+        + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();applyFloatRotInput();}" onchange="applyFloatRotInput()">';
 })();
-/* 旋轉快捷鍵：同屬性列「角度」欄位邏輯（絕對角度、以物件中心；直線＝相對水平） */
-function setAngleQuick(v) {
+/* 旋轉快捷鍵：以「目前角度」為 0 點的相對旋轉（圖塊/圖片看不出原始 0 度方向，相對轉比較直覺；
+   屬性列「角度」欄位維持絕對角度，會同步更新） */
+function rotateQuickBy(delta) {
     const obj = canvas.getActiveObject(); if (!obj) return;
-    if (isLineLike(obj)) obj.rotate((obj.angle || 0) + (v - trueLineAngle(obj)));
-    else obj.rotate(v);
+    obj.rotate(normDeg((obj.angle || 0) + delta));   // normDeg 正規化到 ±180，避免角度無限累積
     obj.setCoords();
     if (obj.isDimGuide && obj.dimAngleId) rebuildDimAngleArc(obj.dimAngleId);
-    document.getElementById('p-angle').value = v;
+    refreshPropbar();
     canvas.requestRenderAll();
     pushState();
+}
+function applyFloatRotInput() {
+    const inp = document.getElementById('float-rot-v');
+    let v = parseFloat(inp.value);
+    if (isNaN(v) || v === 0) { inp.value = ''; return; }
+    v = Math.max(-360, Math.min(360, v));   // 限制 ±360 度，避免計算錯誤
+    inp.value = '';
+    rotateQuickBy(v);
 }
 /* 浮動快捷列定位：跟著選取物/編輯框走（每次畫布重繪時更新，移動/縮放/捲動都會跟上） */
 function positionFloatBars() {
@@ -2554,7 +2566,9 @@ function positionFloatBars() {
     const rotEl = document.getElementById('float-rot');
     const obj = canvas.getActiveObject();
     const editing = !!(obj && obj.isEditing);
-    const showRot = !!(obj && !editing && !obj.__pointEditing && currentTool === 'select');
+    // 框選搬移/複製切下的圖塊也要能就地旋轉，所以這幾個工具選取中也顯示旋轉快捷列
+    const showRot = !!(obj && !editing && !obj.__pointEditing
+        && ['select', 'cropmove', 'cropcopy', 'cropmovelasso'].includes(currentTool));
     symEl.style.display = editing ? 'flex' : 'none';
     rotEl.style.display = showRot ? 'flex' : 'none';
     const el = editing ? symEl : (showRot ? rotEl : null);
