@@ -1781,19 +1781,24 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         $whereClauses[] = "(ot.pmGet IS NULL AND ot.in_review IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6))";
     }
     if (!empty($global)) {
-        if (mb_strlen($global, 'UTF-8') < 2) {
-            // 搜尋詞 < 2 字，ngram FULLTEXT 不支援，退回全 LIKE
+        // 每個空白分隔詞包成必要片語 +"詞"：片語內特殊字元（如 -）是字面值、每個詞都必須出現。
+        // 不可把 - 換成空格再丟進 BOOLEAN MODE——805-01-107 會拆成 805/01/107 任一命中即符合，等於沒篩。
+        $ft_parts = [];
+        foreach (preg_split('/\s+/u', trim(str_replace(['"', '\\'], ' ', $global)), -1, PREG_SPLIT_NO_EMPTY) as $ft_tk) {
+            if (mb_strlen($ft_tk, 'UTF-8') >= 2) $ft_parts[] = '+"' . $ft_tk . '"';
+        }
+        if (empty($ft_parts)) {
+            // 沒有任何 >= 2 字的詞（ngram FULLTEXT 不支援），退回全 LIKE
             $whereClauses[] = "(ot.Order_date LIKE :g1 OR cl.customer LIKE :g2 OR ot.Client_name LIKE :g2b OR ot.d_id LIKE :g3 OR ot.Processing_items LIKE :g4 OR ot.Order_ps LIKE :g5 OR ot.ateNote LIKE :g6 OR u.user_cname LIKE :g7 OR ot.Order_oo LIKE :g8 OR ot.C_order LIKE :g9)";
             for ($i=1; $i<=9; $i++) $params[":g$i"] = "%$global%";
             $params[":g2b"] = "%$global%";
         } else {
             // order_track 欄位用 ngram FULLTEXT，跨表欄位仍 LIKE
-            $ft_term = trim(preg_replace('/[+\-~*@<>()"\\\\]+/', ' ', $global));
             $whereClauses[] = "(ot.Order_date LIKE :g1 OR cl.customer LIKE :g2 OR u.user_cname LIKE :g7 OR MATCH(ot.Client_name, ot.d_id, ot.Processing_items, ot.Order_ps, ot.ateNote, ot.Order_oo, ot.C_order) AGAINST(:g_ft IN BOOLEAN MODE))";
             $params[':g1']   = "%$global%";
             $params[':g2']   = "%$global%";
             $params[':g7']   = "%$global%";
-            $params[':g_ft'] = $ft_term;
+            $params[':g_ft'] = implode(' ', $ft_parts);
         }
     }
 
