@@ -658,7 +658,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 白名單欄位，避免被塞進奇怪的東西
             $allowed = ['stroke', 'width', 'lineEnds', 'fill', 'fillOn', 'textColor', 'fontSize', 'bold',
                         'textBg', 'textBgOn', 'balloonSize', 'dcShape', 'dcSize', 'stampSize', 'maskColor', 'cropTransparent',
-                        'connectKind'];
+                        'connectKind', 'dimStyle'];
             $clean = [];
             foreach ($allowed as $k) if (array_key_exists($k, $prefs)) $clean[$k] = $prefs[$k];
             $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by)
@@ -1006,6 +1006,16 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                     </select>
                 </label>
                 <span style="color:#8b949e;font-size:11px;">點第一點→點第二點自動相連，可連續；切回選取(V)雙擊該線＝編輯端點調曲度；Esc 取消第一點</span>
+            </span>
+            <!-- 直徑標註樣式 -->
+            <span class="prop-sec" id="sec-dimstyle">
+                <label>標註樣式
+                    <select id="p-dim-style" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;">
+                        <option value="center" selected>置中（文字在線中間）</option>
+                        <option value="extend">延伸（文字在線外側）</option>
+                    </select>
+                </label>
+                <span style="color:#8b949e;font-size:11px;">延伸式：線越過拖曳結束端往外延伸，尺寸文字沿斜線顯示在外側（如 (Ø61.12)）</span>
             </span>
             <!-- 文字 -->
             <span class="prop-sec" id="sec-text">
@@ -1579,10 +1589,24 @@ if (window.fabric && fabric.Text) {
         if (!this.canvas) return this;
         return __objDrawControls.call(this, ctx, styleOverride);
     };
+    // 多選(activeSelection)裡的子物件畫框線走 drawBordersInGroup（不經過 drawControls），
+    // 子物件被移出畫布後 this.canvas.getZoom 一樣會拋，這裡同樣略過
+    const __objDrawBIG = fabric.Object.prototype.drawBordersInGroup;
+    if (__objDrawBIG) {
+        fabric.Object.prototype.drawBordersInGroup = function () {
+            if (!this.canvas) return this;
+            return __objDrawBIG.apply(this, arguments);
+        };
+    }
     if (fabric.Canvas.prototype.drawControls) {
         const __cvsDrawControls = fabric.Canvas.prototype.drawControls;
         fabric.Canvas.prototype.drawControls = function (ctx) {
-            if (this._activeObject && !this._activeObject.canvas) { this._activeObject = null; return; }
+            const ao = this._activeObject;
+            // 殘留選取：本體被移出畫布，或多選裡任一子物件已被移出（undo 重建後常見）→ 清掉不畫
+            if (ao && (!ao.canvas || (ao.type === 'activeSelection' && ao.getObjects && ao.getObjects().some(o => !o.canvas)))) {
+                this._activeObject = null;
+                return;
+            }
             return __cvsDrawControls.call(this, ctx);
         };
     }
@@ -1829,6 +1853,7 @@ function setTool(t) {
     // 「端點」只有直線／畫筆工具在畫新物件時真的有作用（矩形/橢圓/標註工具沒有端點可設，選取既有物件也不會回填生效，故只依工具顯示）
     document.getElementById('wrap-line-ends').style.display = ['line', 'draw', 'connect'].includes(t) ? '' : 'none';
     document.getElementById('sec-connect').classList.toggle('show', t === 'connect');
+    document.getElementById('sec-dimstyle').classList.toggle('show', t === 'dimcircle');
     document.getElementById('sec-crop').classList.toggle('show', isCropTool);
     document.getElementById('sec-text').classList.toggle('show', ['text','label'].includes(t));
     document.getElementById('sec-mask').classList.toggle('show', ['maskrect','masklasso'].includes(t));
@@ -1982,7 +2007,8 @@ canvas.on('mouse:up', function (opt) {
 
     if (d.type === 'dimdist' || d.type === 'dimcircle') {
         const isDia = (d.type === 'dimcircle');
-        const shape = makeDimDistanceShape(d.startX, d.startY, p.x, p.y, color, width, dash, !isDia, isDia ? '⌀' : '');
+        const extendOut = isDia && document.getElementById('p-dim-style').value === 'extend';
+        const shape = makeDimDistanceShape(d.startX, d.startY, p.x, p.y, color, width, dash, !isDia, isDia ? '⌀' : '', extendOut);
         shape.dimKind = isDia ? 'diameter' : 'distance';
         canvas.add(shape);
         finishNewObject(shape);
@@ -2258,7 +2284,8 @@ function polyEditSizeWithStroke(o) {
 function polyPointPositionHandler(i) {
     return function (dim, finalMatrix, poly) {
         const p = poly.points[i];
-        if (!p) return new fabric.Point(-99999, -99999);   // 節點數變動後的殘留控制點：移到畫面外，不讓它把渲染搞掛
+        // 節點數變動後的殘留控制點、或物件已被移出畫布（undo 重建後的殘留選取）：移到畫面外，不讓它把渲染搞掛
+        if (!p || !poly.canvas) return new fabric.Point(-99999, -99999);
         const pt = { x: p.x - poly.pathOffset.x, y: p.y - poly.pathOffset.y };
         return fabric.util.transformPoint(pt,
             fabric.util.multiplyTransformMatrices(poly.canvas.viewportTransform, poly.calcTransformMatrix()));
@@ -2267,7 +2294,7 @@ function polyPointPositionHandler(i) {
 function polyMidPositionHandler(i) {
     return function (dim, finalMatrix, poly) {
         const a = poly.points[i], b = poly.points[(i + 1) % poly.points.length];
-        if (!a || !b) return new fabric.Point(-99999, -99999);
+        if (!a || !b || !poly.canvas) return new fabric.Point(-99999, -99999);
         const pt = { x: (a.x + b.x) / 2 - poly.pathOffset.x, y: (a.y + b.y) / 2 - poly.pathOffset.y };
         return fabric.util.transformPoint(pt,
             fabric.util.multiplyTransformMatrices(poly.canvas.viewportTransform, poly.calcTransformMatrix()));
@@ -2792,7 +2819,7 @@ function makeDimText(x, y, str, angleDeg) {
     return t;
 }
 /* withTicks：距離標註兩端有垂直小刻度線（CAD 尺寸界線收尾），直徑標註不要（會看起來像多出兩條線） */
-function makeDimDistanceShape(x1, y1, x2, y2, color, width, dash, withTicks, textPrefix) {
+function makeDimDistanceShape(x1, y1, x2, y2, color, width, dash, withTicks, textPrefix, extendOut) {
     const angle = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
     const headLen = arrowHeadLen(width);
     const rad0 = angle * Math.PI / 180, ux = Math.cos(rad0), uy = Math.sin(rad0);
@@ -2810,8 +2837,23 @@ function makeDimDistanceShape(x1, y1, x2, y2, color, width, dash, withTicks, tex
         items.push(new fabric.Line([x1 - nx * tick, y1 - ny * tick, x1 + nx * tick, y1 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) }));
         items.push(new fabric.Line([x2 - nx * tick, y2 - ny * tick, x2 + nx * tick, y2 + ny * tick], { stroke: color, strokeWidth: Math.max(1, width * 0.6) }));
     }
-    const pose = dimTextPose(x1, y1, x2, y2, width);
-    items.push(makeDimText(pose.x, pose.y, textPrefix || '', pose.angle));
+    if (extendOut) {
+        // 延伸式（直徑標註第二種樣式）：線越過第二點往外延伸，文字沿斜線放在延伸段上方（拖曳結束端＝文字端）
+        const fs = parseInt(document.getElementById('p-fontsize').value, 10) || 28;
+        const extLen = fs * 2.2 + headLen;
+        items.push(new fabric.Line([x2, y2, x2 + ux * extLen, y2 + uy * extLen],
+            { stroke: color, strokeWidth: width, strokeUniform: true, strokeDashArray: dash || null }));
+        let a2 = angle;                            // 角度正規化到 ±90，字不會上下顛倒
+        if (a2 > 90) a2 -= 180;
+        if (a2 < -90) a2 += 180;
+        const mx = x2 + ux * extLen * 0.55, my = y2 + uy * extLen * 0.55;
+        const k = fs * 0.75 + width;
+        const rad2 = a2 * Math.PI / 180;
+        items.push(makeDimText(mx + Math.sin(rad2) * k, my - Math.cos(rad2) * k, textPrefix || '', a2));
+    } else {
+        const pose = dimTextPose(x1, y1, x2, y2, width);
+        items.push(makeDimText(pose.x, pose.y, textPrefix || '', pose.angle));
+    }
     const g = new fabric.Group(items, {});
     g.labelSpec = { kind: 'fabric' };   // 讓雙擊走「群組內文字編輯」而不是拆群組
     g.dimKind = 'distance';
@@ -5380,6 +5422,9 @@ function restoreState(json) {
     restoring = true;
     const __t0 = performance.now();
     try {
+        // 先清掉目前選取再重建：等 loadFromJSON 換掉全部物件後才清，舊多選裡的物件 canvas 已是
+        // undefined，destroy→setCoords→控制點 positionHandler 會連環拋例外（殘影/卡頓來源）
+        try { canvas.discardActiveObject(); } catch (e) { /* 選取已壞掉就算了，下面照樣重建 */ }
         const j = (typeof json === 'string') ? JSON.parse(json) : json;
         snapUnpoolify(j);   // 快照裡的池索引換回真正的 dataURL；未池化的舊格式原樣通過
         canvas.loadFromJSON(j, function () { restoreDone(); __egSlow('undo還原', __t0); });
@@ -5576,7 +5621,7 @@ const PREF_FIELDS = [
     ['p-textbg', 'textBg'], ['p-textbg-on', 'textBgOn', true],
     ['p-balloon-size', 'balloonSize'], ['p-dc-shape', 'dcShape'], ['p-dc-size', 'dcSize'],
     ['p-stamp-size', 'stampSize'], ['p-maskcolor', 'maskColor'], ['p-crop-transparent', 'cropTransparent', true],
-    ['p-connect-kind', 'connectKind']
+    ['p-connect-kind', 'connectKind'], ['p-dim-style', 'dimStyle']
 ];
 function applyUserPrefs() {
     PREF_FIELDS.forEach(([id, key, isCheckbox]) => {
