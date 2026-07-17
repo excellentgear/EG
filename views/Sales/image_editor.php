@@ -356,7 +356,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 foreach ($myDeptIds as $i => $d) { $in[] = ':d' . $i; $params[':d' . $i] = $d; }
                 $deptCond = 'owner_dept_id IN (' . implode(',', $in) . ')';
             }
-            $st = $pdo->prepare("SELECT l.label_id, l.label_name, l.category, l.owner_type, l.owner_user_id, l.owner_dept_id,
+            $st = $pdo->prepare("SELECT l.label_id, l.label_name, l.category, l.tags, l.owner_type, l.owner_user_id, l.owner_dept_id,
                                         l.hide_name, l.spec_json, l.created_by, d.name AS dept_name
                                  FROM imgedit_labels l LEFT JOIN department d ON d.id = l.owner_dept_id
                                  WHERE l.owner_type = 'company'
@@ -373,6 +373,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         } elseif ($act === 'save_label') {
             $name  = trim($_POST['name'] ?? '');
             $cat   = trim($_POST['category'] ?? '');
+            // #標示：空白/逗號分隔多個，#可省略；統一存成「無#、空格分隔」
+            $tags  = implode(' ', array_values(array_unique(array_filter(preg_split('/[\s,，#]+/u', trim($_POST['tags'] ?? ''))))));
+            if (mb_strlen($tags) > 100) $tags = mb_substr($tags, 0, 100);
             $scope = $_POST['scope'] ?? 'private';
             $deptId = (int)($_POST['dept_id'] ?? 0);
             $spec  = $_POST['spec'] ?? '';
@@ -396,9 +399,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $spec = json_encode($specArr, JSON_UNESCAPED_UNICODE);
             }
             $pdo->beginTransaction();
-            $st = $pdo->prepare("INSERT INTO imgedit_labels (label_name, category, owner_type, owner_user_id, owner_dept_id, spec_json, created_by, created_at)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
-            $st->execute([$name, ($cat !== '' ? $cat : null), $scope, $uid, ($scope === 'dept' ? $deptId : null), $spec, $userName]);
+            $st = $pdo->prepare("INSERT INTO imgedit_labels (label_name, category, tags, owner_type, owner_user_id, owner_dept_id, spec_json, created_by, created_at)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+            $st->execute([$name, ($cat !== '' ? $cat : null), ($tags !== '' ? $tags : null), $scope, $uid, ($scope === 'dept' ? $deptId : null), $spec, $userName]);
             $newId = $pdo->lastInsertId();
             $pdo->commit();
             echo json_encode(['success' => true, 'label_id' => $newId]);
@@ -442,8 +445,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $ids = array_values(array_unique(array_map('intval', $ids)));
             $pdo->beginTransaction();
             $sel = $pdo->prepare("SELECT * FROM imgedit_labels WHERE label_id = ?");
-            $ins = $pdo->prepare("INSERT INTO imgedit_labels (label_name, category, owner_type, owner_user_id, owner_dept_id, spec_json, created_by, created_at)
-                                  VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
+            $ins = $pdo->prepare("INSERT INTO imgedit_labels (label_name, category, tags, owner_type, owner_user_id, owner_dept_id, spec_json, created_by, created_at)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
             $upd = $pdo->prepare("UPDATE imgedit_labels SET owner_type = ?, owner_user_id = ?, owner_dept_id = ?, spec_json = ? WHERE label_id = ?");
             $done = 0;
             foreach ($ids as $lid) {
@@ -457,13 +460,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         $sub = 'D' . $d;
                         $newSpec = imgedit_relocate_files($r['spec_json'], $labelNasBase, $sub);
                         if ($mode === 'move' && $first) $upd->execute(['dept', (int)$r['owner_user_id'] ?: $uid, $d, $newSpec, $lid]);
-                        else $ins->execute([$r['label_name'], $r['category'], 'dept', $uid, $d, $newSpec, $userName]);
+                        else $ins->execute([$r['label_name'], $r['category'], $r['tags'], 'dept', $uid, $d, $newSpec, $userName]);
                         $first = false;
                     }
                 } else {
                     $sub = imgedit_label_sub($scope, $uid, 0);
                     $newSpec = imgedit_relocate_files($r['spec_json'], $labelNasBase, $sub);
-                    if ($mode === 'copy') $ins->execute([$r['label_name'], $r['category'], $scope, $uid, null, $newSpec, $userName]);
+                    if ($mode === 'copy') $ins->execute([$r['label_name'], $r['category'], $r['tags'], $scope, $uid, null, $newSpec, $userName]);
                     else $upd->execute([$scope, ($scope === 'private' ? $uid : ((int)$r['owner_user_id'] ?: $uid)), null, $newSpec, $lid]);
                 }
                 $done++;
@@ -707,6 +710,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             $pdo->commit();
             echo json_encode(['success' => true, 'count' => $done]);
+        } elseif ($act === 'set_label_tags') {
+            // 批次設定 #標示（空白/逗號分隔多個，#可省略；空字串＝清除）
+            $ids = json_decode($_POST['label_ids'] ?? '[]', true);
+            $tags = implode(' ', array_values(array_unique(array_filter(preg_split('/[\s,，#]+/u', trim($_POST['tags'] ?? ''))))));
+            if (!is_array($ids) || !$ids) throw new Exception('未選擇標籤');
+            if (mb_strlen($tags) > 100) $tags = mb_substr($tags, 0, 100);
+            $ids = array_values(array_unique(array_map('intval', $ids)));
+            $pdo->beginTransaction();
+            $sel = $pdo->prepare("SELECT owner_user_id FROM imgedit_labels WHERE label_id = ?");
+            $upd = $pdo->prepare("UPDATE imgedit_labels SET tags = ? WHERE label_id = ?");
+            $done = 0;
+            foreach ($ids as $lid) {
+                $sel->execute([$lid]);
+                $r = $sel->fetch(PDO::FETCH_ASSOC);
+                if (!$r) continue;
+                if (!$isMgr && (int)$r['owner_user_id'] !== $uid) continue;   // 只能改自己的標籤
+                $upd->execute([($tags !== '' ? $tags : null), $lid]);
+                $done++;
+            }
+            $pdo->commit();
+            echo json_encode(['success' => true, 'count' => $done]);
         } elseif ($act === 'get_stamp_users') {
             if (!$isMgr) throw new Exception('只有管理者可設定印章使用人員');
             $depts = $pdo->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
@@ -848,6 +872,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     .lib-item .lib-name { display: block; font-size: 11px; color: #555; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .lib-item .lib-del { position: absolute; top: 3px; right: 5px; color: #c0392b; font-size: 13px; padding: 2px 5px; display: none; }
     .lib-item:hover .lib-del { display: block; }
+    /* #標示：固定在縮圖左上角的有底色小徽章（標籤庫面板與管理跳窗共用） */
+    .lib-tags { position: absolute; top: 3px; left: 4px; display: flex; gap: 3px; max-width: 72%; overflow: hidden; pointer-events: none; z-index: 2; }
+    .lib-tags .lib-tag { font-size: 9.5px; line-height: 15px; font-weight: 700; background: #2779bd; color: #fff; border-radius: 3px; padding: 0 4px; white-space: nowrap; }
     #label-lib .lib-foot { padding: 8px; border-top: 1px solid #3c4046; }
 
     /* 標籤管理跳窗（框選/Ctrl多選/拖曳搬移） */
@@ -865,6 +892,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     .lm-chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid #45494f; color: #8b949e; cursor: pointer; user-select: none; white-space: nowrap; }
     .lm-chip.on { background: #1abb9c; border-color: #1abb9c; color: #fff; }
     .lm-dept-badge { position: absolute; top: 2px; right: 4px; font-size: 9px; color: #1abb9c; background: rgba(26,187,156,.12); border-radius: 3px; padding: 0 3px; }
+    /* 管理跳窗：欄內分類標題列（點擊＝整組選取） */
+    .lm-cat-head { width: 100%; font-size: 11px; font-weight: 700; color: #d29922; padding: 5px 2px 2px; border-bottom: 1px dashed #4a4f56; cursor: pointer; user-select: none; }
+    .lm-cat-head:hover { color: #f0c04a; }
     #lm-rubber { position: fixed; border: 1px dashed #6fc3ff; background: rgba(39,121,189,.15); z-index: 1200; display: none; pointer-events: none; }
 
     /* 拖放提示 */
@@ -1058,6 +1088,10 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                         style="width:100%;background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:4px 6px;font-size:12px;">
                         <option value="">— 全部分類 —</option>
                     </select>
+                    <input type="text" id="lib-search" oninput="renderLibrary()" onfocus="this.select()" ondblclick="this.value='';renderLibrary()"
+                        placeholder="🔍 搜尋名稱 / #標示 / 分類（模糊）"
+                        title="輸入即時篩選（名稱、#標示、分類都比對）；「#關鍵字」只找#標示；空格分隔多個關鍵字＝全部都要符合；雙擊清空"
+                        style="width:100%;margin-top:6px;background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:4px 6px;font-size:12px;">
                     <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:#9aa4ad;cursor:pointer;"
                         title="勾選後插入的標籤為透明背景（不遮住圖線）；放上後也可用屬性列「底色」按鈕切換">
                         <input type="checkbox" id="lib-transparent"> 以透明背景插入
@@ -1214,7 +1248,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <div class="modal-body">
             <div class="frm-row"><label>標籤名稱</label><input type="text" id="sl-name" style="flex:1;" placeholder="例如：熱處理HRC50"></div>
             <div class="frm-row"><label>分類</label><input type="text" id="sl-cat" list="lib-cat-datalist" style="flex:1;" placeholder="可留空（未分類）；輸入新名稱即新增分類"></div>
+            <div class="frm-row"><label>#標示</label><input type="text" id="sl-tags" list="lib-tag-datalist" style="flex:1;" placeholder="選填；空格分隔多個，例如：出貨 急件（#可省略）"></div>
             <datalist id="lib-cat-datalist"></datalist>
+            <datalist id="lib-tag-datalist"></datalist>
             <div class="frm-row"><label>範圍</label>
                 <select id="sl-scope" onchange="document.getElementById('sl-dept').style.display=(this.value==='dept')?'':'none'">
                     <option value="private" selected>私人（只有自己看得到）</option>
@@ -1236,7 +1272,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <div class="modal-box" style="min-width:82vw;max-width:94vw;">
         <h3><i class="fa fa-tags"></i> 標籤管理
             <span style="font-size:11.5px;color:#8b949e;font-weight:400;margin-left:10px;">
-                框選、Ctrl+點選、<b>Shift+點選（範圍）</b>多選 → 拖曳到目標欄＝搬移，<b>按住 Ctrl 拖曳＝複製</b>；部門欄先點亮要發佈的部門（可複選），拖入時同時放到所有亮起的部門
+                框選、Ctrl+點選、<b>Shift+點選（範圍）</b>多選 → 拖曳到目標欄＝搬移，<b>按住 Ctrl 拖曳＝複製</b>；部門欄先點亮要發佈的部門（可複選），拖入時同時放到所有亮起的部門；欄內已依分類分組，<b>點分類標題＝整組選取</b>，選好按「設定分類」即可整批改分類
             </span>
         </h3>
         <div class="modal-body" style="max-width:none;">
@@ -1245,6 +1281,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <span style="display:flex;gap:6px;flex-wrap:wrap;">
                     <button class="pb-btn" onclick="lmMakeGroupLabel()" title="把選取的多個標籤組成一個「群組標籤」存進庫：之後點一下整組插入圖面，不用每次自己拉再群組"><i class="fa fa-object-group"></i> 組成群組標籤</button>
                     <button class="pb-btn" onclick="lmOpenSetCat()" title="批次設定選取標籤的分類（分類名稱自訂，輸入新名稱即新增分類）"><i class="fa fa-folder-o"></i> 設定分類</button>
+                    <button class="pb-btn" onclick="lmOpenSetTags()" title="批次設定選取標籤的 #標示：以有底色小徽章固定顯示在縮圖左上角，標籤庫搜尋框可用「#關鍵字」快速找到"><i class="fa fa-hashtag"></i> 設定#標示</button>
                     <button class="pb-btn" onclick="lmSetHideName(1)" title="選取的標籤在標籤庫不顯示名稱（標籤內容與名稱幾乎相同時用；滑鼠停留仍會提示）"><i class="fa fa-eye-slash"></i> 隱藏名稱</button>
                     <button class="pb-btn" onclick="lmSetHideName(0)" title="恢復顯示標籤名稱"><i class="fa fa-eye"></i> 顯示名稱</button>
                     <button class="pb-btn" style="color:#ff8a80;" onclick="lmDeleteSelected()"><i class="fa fa-trash"></i> 刪除選取</button>
@@ -1328,6 +1365,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             </div>
             <div class="frm-row"><label>名稱</label><input type="text" id="nl-name" style="flex:1;" placeholder="留空＝以標籤文字第一行當名稱"></div>
             <div class="frm-row"><label>分類</label><input type="text" id="nl-cat" list="lib-cat-datalist" style="flex:1;" placeholder="可留空"></div>
+            <div class="frm-row"><label>#標示</label><input type="text" id="nl-tags" list="lib-tag-datalist" style="flex:1;" placeholder="選填；空格分隔多個（#可省略）"></div>
             <div class="frm-row"><label>範圍</label>
                 <select id="nl-scope" onchange="document.getElementById('nl-dept').style.display=(this.value==='dept')?'':'none'">
                     <option value="private" selected>私人</option>
@@ -1357,6 +1395,23 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <div class="modal-foot">
             <button class="tb-btn" onclick="hideModal('setcat-modal')">取消</button>
             <button class="tb-btn primary" onclick="confirmSetCat()"><i class="fa fa-check"></i> 套用</button>
+        </div>
+    </div>
+</div>
+
+<!-- 批次設定 #標示 -->
+<div class="modal-mask" id="settags-modal">
+    <div class="modal-box">
+        <h3><i class="fa fa-hashtag"></i> 設定#標示</h3>
+        <div class="modal-body">
+            <div class="frm-row"><label>#標示</label>
+                <input type="text" id="st-tags" list="lib-tag-datalist" style="flex:1;" placeholder="空格分隔多個（#可省略）；留空＝清除標示">
+            </div>
+            <div style="font-size:11.5px;color:#8b949e;">套用到目前選取的標籤（只能改自己的標籤，管理者不限）。#標示會以藍底小徽章固定顯示在標籤縮圖左上角，標籤庫搜尋框輸入「#關鍵字」可只搜尋標示。</div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn" onclick="hideModal('settags-modal')">取消</button>
+            <button class="tb-btn primary" onclick="confirmSetTags()"><i class="fa fa-check"></i> 套用</button>
         </div>
     </div>
 </div>
@@ -1440,7 +1495,8 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>匯出/列印：整個畫布或只匯出選取；PNG/JPG、解析度倍率（列印建議2×）</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
                 <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本</li>
-                <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）</li>
+                <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
+                <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋</li>
             </ul>
             <b style="color:#6fc3ff;">⑥ 快捷鍵</b>
             <table style="margin:6px 0 4px;">
@@ -3024,6 +3080,17 @@ function labelThumbHTML(dataURL, name, delId) {
         (delId ? '<span class="lib-del" title="刪除這個自訂標籤" onclick="event.stopPropagation();deleteCustomLabel(' + delId + ')"><i class="fa fa-trash"></i></span>' : '');
 }
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+/* #標示：縮圖左上角有底色小徽章（面板與管理跳窗共用） */
+function tagChipsHTML(tags) {
+    const arr = String(tags || '').trim().split(/\s+/).filter(Boolean);
+    if (!arr.length) return '';
+    return '<span class="lib-tags">' + arr.map(t => '<span class="lib-tag">#' + escHtml(t) + '</span>').join('') + '</span>';
+}
+function allTags() {
+    const set = new Set();
+    customLabels.forEach(r => String(r.tags || '').trim().split(/\s+/).filter(Boolean).forEach(t => set.add(t)));
+    return Array.from(set);
+}
 function allCategories() {
     const cats = [];
     PRESET_LABELS.forEach(p => { if (p.cat && !cats.includes(p.cat)) cats.push(p.cat); });
@@ -3038,6 +3105,8 @@ function refreshCatControls() {
     if (Array.from(sel.options).some(o => o.value === keep)) sel.value = keep;
     document.getElementById('lib-cat-datalist').innerHTML =
         allCategories().map(c => '<option value="' + escHtml(c) + '">').join('');
+    document.getElementById('lib-tag-datalist').innerHTML =
+        allTags().map(t => '<option value="' + escHtml(t) + '">').join('');
 }
 /* ── 標籤管理跳窗：框選 / Ctrl 多選 / 拖曳搬移（Ctrl+拖曳＝複製） ── */
 let LIB_UID = 0, ALL_DEPTS = [];
@@ -3123,16 +3192,41 @@ function renderLibMgr() {
             const act = lmActiveDepts();
             rows = customLabels.filter(r => r.owner_type === 'dept' && act.includes(Number(r.owner_dept_id)));
         }
-        rows.sort((a, b) => String(a.category || '').localeCompare(String(b.category || '')));
+        rows.sort((a, b) => String(a.category || '').localeCompare(String(b.category || ''))
+            || String(a.label_name || '').localeCompare(String(b.label_name || '')));
+        let lastCat = null;
         rows.forEach(row => {
+            // 分類標題列：一眼看出哪些標籤屬於哪一類；點標題＝整組選取（Ctrl+點＝保留原選取加減這一組）
+            const catName = row.category || '未分類';
+            if (catName !== lastCat) {
+                lastCat = catName;
+                const groupIds = rows.filter(r => (r.category || '未分類') === catName).map(r => r.label_id);
+                const ch = document.createElement('div');
+                ch.className = 'lm-cat-head';
+                ch.textContent = '▸ ' + catName + '（' + groupIds.length + '）';
+                ch.title = '點擊＝選取這一分類的全部標籤（已全選時再點＝取消）；Ctrl+點擊＝保留原選取再加減這一組';
+                ch.addEventListener('click', e => {
+                    e.stopPropagation();
+                    const allIn = groupIds.every(id => lmSel.has(id));
+                    if (!(e.ctrlKey || e.metaKey)) lmSel.clear();
+                    if (allIn) groupIds.forEach(id => lmSel.delete(id));
+                    else groupIds.forEach(id => lmSel.add(id));
+                    lmAnchor = null; lmAnchorGrid = null;
+                    syncLmSelClass(); lmUpdateCount();
+                });
+                grid.appendChild(ch);
+            }
             const it = document.createElement('div');
             it.className = 'lm-item' + (lmSel.has(row.label_id) ? ' sel' : '') + (lmCanTouch(row) ? '' : ' lock');
             it.style.position = 'relative';
             it.dataset.id = row.label_id;
-            it.title = row.label_name + (row.category ? '（' + row.category + '）' : '') + (lmCanTouch(row) ? '' : '｜他人建立，無法移動');
+            it.title = row.label_name + (row.category ? '（' + row.category + '）' : '')
+                + (row.tags ? '｜#' + String(row.tags).trim().split(/\s+/).join(' #') : '')
+                + (lmCanTouch(row) ? '' : '｜他人建立，無法移動');
             it.innerHTML = '<img alt=""><span class="lm-name"' + (Number(row.hide_name) ? ' style="color:#bbb;font-style:italic;"' : '') + '>'
                 + escHtml(row.label_name) + (Number(row.hide_name) ? ' <i class="fa fa-eye-slash"></i>' : '') + '</span>'
-                + (col.scope === 'dept' && row.dept_name ? '<span class="lm-dept-badge">' + escHtml(row.dept_name) + '</span>' : '');
+                + (col.scope === 'dept' && row.dept_name ? '<span class="lm-dept-badge">' + escHtml(row.dept_name) + '</span>' : '')
+                + tagChipsHTML(row.tags);
             makeSpecThumb(row.spec, url => { const img = it.querySelector('img'); if (img && url) img.src = url; });
             it.draggable = lmCanTouch(row);
             it.addEventListener('click', e => {
@@ -3186,7 +3280,7 @@ function renderLibMgr() {
         });
         // 框選（滑鼠在欄內空白處拖出選取框）
         grid.addEventListener('mousedown', e => {
-            if (e.target.closest('.lm-item') || e.button !== 0) return;
+            if (e.target.closest('.lm-item, .lm-cat-head') || e.button !== 0) return;
             const keep = e.ctrlKey || e.metaKey;
             const rub = document.getElementById('lm-rubber');
             const sx = e.clientX, sy = e.clientY;
@@ -3246,6 +3340,7 @@ function lmMakeGroupLabel() {
     pendingLabelSpec = { kind: 'multi', specs: rows.map(r => JSON.parse(JSON.stringify(r.spec))) };
     document.getElementById('sl-name').value = '';
     document.getElementById('sl-cat').value = '群組';
+    document.getElementById('sl-tags').value = '';
     document.getElementById('sl-scope').value = 'private';
     const sd = document.getElementById('sl-dept');
     sd.innerHTML = MY_DEPTS.map(d => '<option value="' + d.id + '">' + escHtml(d.name) + '</option>').join('');
@@ -3271,6 +3366,33 @@ async function confirmSetCat() {
         if (!res.success) throw new Error(res.message || '');
         hideModal('setcat-modal');
         toast('已把 ' + res.count + ' 個標籤設為分類「' + (cat || '未分類') + '」');
+        await loadLabelLibrary();
+        renderLibMgr();
+    } catch (e) { toast('設定失敗：' + (e.message || '')); }
+}
+/* 批次設定 #標示 */
+function lmOpenSetTags() {
+    if (!lmSel.size) { toast('請先選取標籤'); return; }
+    let pre = '';
+    if (lmSel.size === 1) {   // 只選一個時帶入現值方便修改
+        const r = customLabels.find(r => lmSel.has(r.label_id));
+        pre = (r && r.tags) ? r.tags : '';
+    }
+    document.getElementById('st-tags').value = pre;
+    showModal('settags-modal');
+    document.getElementById('st-tags').focus();
+}
+async function confirmSetTags() {
+    const tags = document.getElementById('st-tags').value.trim();
+    try {
+        const fd = new FormData();
+        fd.append('action', 'set_label_tags');
+        fd.append('label_ids', JSON.stringify(Array.from(lmSel)));
+        fd.append('tags', tags);
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        hideModal('settags-modal');
+        toast(tags ? ('已把 ' + res.count + ' 個標籤設定#標示「' + tags + '」') : ('已清除 ' + res.count + ' 個標籤的#標示'));
         await loadLabelLibrary();
         renderLibMgr();
     } catch (e) { toast('設定失敗：' + (e.message || '')); }
@@ -3309,12 +3431,18 @@ async function lmDeleteSelected() {
 
 function renderLibrary() {
     const filter = document.getElementById('lib-cat-filter').value;
+    // 模糊搜尋：名稱/#標示/分類都比對；「#xx」只比對#標示；空格分隔多關鍵字＝全部都要符合
+    const q = (document.getElementById('lib-search').value || '').trim().toLowerCase();
+    const words = q ? q.split(/\s+/) : [];
+    const hitQ = hay => !words.length || words.every(w => hay.includes(w));
+    const tagHay = tags => String(tags || '').trim().split(/\s+/).filter(Boolean).map(t => '#' + t).join(' ');
     // 內建：依分類分組
     const pbox = document.getElementById('lib-presets');
     pbox.innerHTML = '';
     const groups = {};
     PRESET_LABELS.forEach(p => {
         if (filter && p.cat !== filter) return;
+        if (!hitQ((p.name + ' ' + (p.cat || '')).toLowerCase())) return;
         (groups[p.cat || '未分類'] = groups[p.cat || '未分類'] || []).push(p);
     });
     Object.keys(groups).forEach(cat => {
@@ -3330,7 +3458,7 @@ function renderLibrary() {
             pbox.appendChild(div);
         });
     });
-    if (!pbox.children.length) pbox.innerHTML = '<div style="color:#666;font-size:11px;padding:6px;">此分類沒有內建標籤</div>';
+    if (!pbox.children.length) pbox.innerHTML = '<div style="color:#666;font-size:11px;padding:6px;">' + (q ? '沒有符合搜尋的內建標籤' : '此分類沒有內建標籤') + '</div>';
 
     // 自訂：先分範圍（公司共用/部門/私人），範圍內再依分類分組
     const cbox = document.getElementById('lib-customs');
@@ -3341,7 +3469,9 @@ function renderLibrary() {
         { key: 'private', title: '🔒 私人標籤', color: '#b39ddb' }
     ];
     SCOPES.forEach(sc => {
-        const rows = customLabels.filter(r => (r.owner_type || 'company') === sc.key && (!filter || (r.category || '未分類') === filter));
+        const rows = customLabels.filter(r => (r.owner_type || 'company') === sc.key
+            && (!filter || (r.category || '未分類') === filter)
+            && hitQ((r.label_name + ' ' + (r.category || '') + ' ' + tagHay(r.tags)).toLowerCase()));
         if (!rows.length) return;
         const sh = document.createElement('div');
         sh.className = 'lib-sec';
@@ -3359,8 +3489,8 @@ function renderLibrary() {
                 const suffix = (sc.key === 'dept' && row.dept_name) ? '【' + row.dept_name + '】' : '';
                 const fullName = row.label_name + suffix + (row.created_by ? '（' + row.created_by + '）' : '');
                 // hide_name＝縮圖即內容，名稱不重複顯示（滑鼠停留仍看得到）
-                div.innerHTML = Number(row.hide_name) ? '<img alt="">' : labelThumbHTML('', fullName, row.label_id);
-                div.title = fullName;
+                div.innerHTML = (Number(row.hide_name) ? '<img alt="">' : labelThumbHTML('', fullName, row.label_id)) + tagChipsHTML(row.tags);
+                div.title = fullName + (row.tags ? '｜#' + String(row.tags).trim().split(/\s+/).join(' #') : '');
                 div.onclick = () => insertLabel(row.spec);
                 cbox.appendChild(div);
                 makeSpecThumb(row.spec, url => { const img = div.querySelector('img'); if (img && url) img.src = url; });
@@ -3368,7 +3498,7 @@ function renderLibrary() {
         });
     });
     if (!cbox.children.length)
-        cbox.innerHTML = '<div style="color:#666;font-size:11px;padding:6px;">' + (filter ? '此分類沒有自訂標籤' : '尚無自訂標籤。選取畫布上的物件後按下方「把選取存為標籤」。') + '</div>';
+        cbox.innerHTML = '<div style="color:#666;font-size:11px;padding:6px;">' + ((filter || q) ? '沒有符合篩選/搜尋的自訂標籤' : '尚無自訂標籤。選取畫布上的物件後按下方「把選取存為標籤」。') + '</div>';
 }
 async function loadLabelLibrary() {
     try {
@@ -3413,6 +3543,7 @@ function saveSelectionAsLabel() {
     }
     document.getElementById('sl-name').value = '';
     document.getElementById('sl-cat').value = document.getElementById('lib-cat-filter').value || '';
+    document.getElementById('sl-tags').value = '';
     // 範圍：預設私人；部門下拉帶自己所屬部門
     document.getElementById('sl-scope').value = 'private';
     const sd = document.getElementById('sl-dept');
@@ -3431,6 +3562,7 @@ async function confirmSaveLabel() {
         fd.append('action', 'save_label');
         fd.append('name', name);
         fd.append('category', cat);
+        fd.append('tags', document.getElementById('sl-tags').value.trim());
         fd.append('scope', document.getElementById('sl-scope').value);
         fd.append('dept_id', document.getElementById('sl-dept').value || '0');
         fd.append('spec', JSON.stringify(pendingLabelSpec));
@@ -3459,6 +3591,7 @@ function openNewLabelModal() {
     document.getElementById('nl-text').value = '';
     document.getElementById('nl-name').value = '';
     document.getElementById('nl-cat').value = document.getElementById('lib-cat-filter').value || '';
+    document.getElementById('nl-tags').value = '';
     document.getElementById('nl-scope').value = 'private';
     const nd = document.getElementById('nl-dept');
     nd.innerHTML = MY_DEPTS.map(d => '<option value="' + d.id + '">' + escHtml(d.name) + '</option>').join('');
@@ -3482,6 +3615,7 @@ async function confirmNewLabel() {
         fd.append('action', 'save_label');
         fd.append('name', name);
         fd.append('category', document.getElementById('nl-cat').value.trim());
+        fd.append('tags', document.getElementById('nl-tags').value.trim());
         fd.append('scope', document.getElementById('nl-scope').value);
         fd.append('dept_id', document.getElementById('nl-dept').value || '0');
         fd.append('spec', JSON.stringify(spec));
