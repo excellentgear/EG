@@ -1515,7 +1515,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>畫筆(B)/直線(L)/矩形(R)/橢圓(O)；所有東西都是物件，隨時可移動、縮放、刪除；直線與畫筆都可在屬性列選<b>線型（實線/虛線/中心線）</b>與<b>端點（無/單箭頭/雙箭頭）</b></li>
                 <li><b>兩點連線（⤳）</b>：點第一點→點第二點自動相連、可連續一直連，屬性列選<b>直線或曲線</b>（直線也可帶箭頭端點；選擇會記住）。曲線＝沿真圓弧生成的圓潤勾線；連好後切回選取(V)<b>雙擊該線＝編輯端點</b>，拖節點調曲度/改位置、「＋」加節點；Esc 取消已點的第一點</li>
                 <li>遮蓋刪除客戶資料：矩形(M)或不規則套索圈選，遮蓋色可改，匯出時才壓平</li>
-                <li>框選複製(C)：框一個範圍變成新圖塊；<b>框選搬移(X)</b>＝小畫家式切下搬走（底圖挖空；<b>完整落在框內的標籤/文字物件會跟切塊一起移動</b>，且保持可編輯不壓平）；旁邊的<b>套索工具</b>是不規則形狀版，按住拖曳圈任意形狀後放開即可切下。兩者都可連續使用，Esc 或切別的工具才離開。跨視窗貼上用 <b>Ctrl+Shift+V</b>（Ctrl+V 優先貼系統剪貼簿）</li>
+                <li>框選複製(C)：框一個範圍變成新圖塊；<b>框選搬移(X)</b>＝小畫家式切下搬走，所見即所得——底圖挖空、<b>完整落在框內的物件（圓/矩形/線條/標籤/文字…）一起烙進切塊搬走</b>；只壓到框線一部分的物件不動。旁邊的<b>套索工具</b>是不規則形狀版，按住拖曳圈任意形狀後放開即可切下。兩者都可連續使用，Esc 或切別的工具才離開。跨視窗貼上用 <b>Ctrl+Shift+V</b>（Ctrl+V 優先貼系統剪貼簿）</li>
                 <li>遮蓋/形狀/直線等工具<b>畫完保持啟用可連續畫</b>，Esc 或 V 回選取；<b>Ctrl+A</b> 全選畫布物件；<b>方向鍵微調</b>選取物（Shift＝10px）；屬性列可輸入<b>角度</b>（直線 0 度＝水平線）；多選一次改粗細/顏色；「合併」把多線條變單一物件（Alt+雙擊才拆）</li>
             </ul>
             <b style="color:#6fc3ff;">③ 文字與標籤庫</b>
@@ -4535,20 +4535,22 @@ function doCropCopy(x, y, w, h) {
     });
 }
 
-/* ── 框選搬移（小畫家式）：只把「底圖」從選取範圍真正挖空（燒進圖片像素，不是蓋一層遮板）；
-   完整落在框內的標籤/文字等物件用多選跟切塊一起移動（保持物件可編輯，不壓成點陣圖）；
+/* ── 框選搬移（小畫家式，所見即所得）：跟框選複製一樣把框內看得到的東西（底圖＋畫上去的物件）
+   一起烙進切塊圖搬走——底圖從範圍真正挖空、完整落在框內的物件烙進切塊後從原處移除；
+   只壓到框線一部分的物件無法切一半，保持原樣不動（也不會烙進切塊）。
    切下來的內容白底視為透明，拖到新位置不會蓋住下面的東西。
    用完停留在此工具可連續框選，按 Esc 或切換其他工具才離開 ── */
 function doCropMove(x, y, w, h) {
     canvas.discardActiveObject();
     canvas.requestRenderAll();
     const bgObjs = backgroundImagesInRect(x, y, w, h);
-    const moved = contentObjectsInRect(x, y, w, h);   // 框內物件跟著一起搬
-    const others = canvas.getObjects().filter(o => o.id !== '__artboard' && bgObjs.indexOf(o) === -1);
+    const moved = contentObjectsInRect(x, y, w, h);   // 完整落在框內：烙進切塊並從原處移除
+    const others = canvas.getObjects().filter(o => o.id !== '__artboard' && bgObjs.indexOf(o) === -1 && moved.indexOf(o) === -1);
     const prevVis = others.map(o => o.visible !== false);
-    others.forEach(o => { o.visible = false; });
+    others.forEach(o => { o.visible = false; });   // 只藏「部分壓框」與框外的物件；框內物件留著＝跟複製一樣烙進圖
     const el = exportRegionCanvasEl(x, y, w, h, 1);
     others.forEach((o, i) => { o.visible = prevVis[i]; });
+    moved.forEach(o => canvas.remove(o));   // 已烙進切塊，原件移除（Ctrl+Z 可整批復原）
     if (document.getElementById('p-crop-transparent').checked) whiteToTransparent(el);
     const url = el.toDataURL('image/png');
     const fillColor = toHex(artboard.fill) || '#ffffff';
@@ -4566,15 +4568,13 @@ function doCropMove(x, y, w, h) {
     fabric.Image.fromURL(url, function (img) {
         img.set({ left: x, top: y });
         canvas.add(img);
-        // 完整落在框內的標籤/文字等物件＝跟切塊組成多選一起拖（物件保持可編輯）
-        if (moved.length) canvas.setActiveObject(new fabric.ActiveSelection([img].concat(moved), { canvas: canvas }));
-        else canvas.setActiveObject(img);
+        canvas.setActiveObject(img);
         canvas.requestRenderAll();
         pushState();
         toast((skipped
             ? '已切下框選範圍；部分底圖因旋轉/已裁切無法真正挖空，改用底色覆蓋，直接拖到新位置'
             : '已切下框選範圍（原底圖已真正挖空），直接拖到新位置；不滿意可 Ctrl+Z 復原')
-            + (moved.length ? '；框內 ' + moved.length + ' 個標籤/文字物件會一起移動' : ''));
+            + (moved.length ? '；框內 ' + moved.length + ' 個物件已一起切進圖塊' : ''));
     });
 }
 
@@ -4730,17 +4730,18 @@ function doCropMoveLasso(points) {
     canvas.discardActiveObject();
     canvas.requestRenderAll();
     const bgObjs = backgroundImagesInRect(b.x, b.y, b.w, b.h);
-    // 四個角都在套索形狀內＝完整落在框內的物件，跟著切塊一起搬
+    // 四個角都在套索形狀內＝完整落在框內的物件：烙進切塊並從原處移除（跟複製一樣所見即所得）
     const moved = contentObjectsInRect(b.x, b.y, b.w, b.h).filter(o => {
         const br = o.getBoundingRect(true, true);
         return pointInPoly(br.left, br.top, points) && pointInPoly(br.left + br.width, br.top, points)
             && pointInPoly(br.left, br.top + br.height, points) && pointInPoly(br.left + br.width, br.top + br.height, points);
     });
-    const others = canvas.getObjects().filter(o => o.id !== '__artboard' && bgObjs.indexOf(o) === -1);
+    const others = canvas.getObjects().filter(o => o.id !== '__artboard' && bgObjs.indexOf(o) === -1 && moved.indexOf(o) === -1);
     const prevVis = others.map(o => o.visible !== false);
     others.forEach(o => { o.visible = false; });
     const el = exportRegionCanvasEl(b.x, b.y, b.w, b.h, 1);
     others.forEach((o, i) => { o.visible = prevVis[i]; });
+    moved.forEach(o => canvas.remove(o));   // 已烙進切塊，原件移除（Ctrl+Z 可整批復原）
     clipCanvasToPolygon(el, points, b.x, b.y);   // 只留套索範圍內的內容，範圍外變透明
     if (document.getElementById('p-crop-transparent').checked) whiteToTransparent(el);
     const url = el.toDataURL('image/png');
@@ -4752,14 +4753,13 @@ function doCropMoveLasso(points) {
     fabric.Image.fromURL(url, function (img) {
         img.set({ left: b.x, top: b.y });
         canvas.add(img);
-        if (moved.length) canvas.setActiveObject(new fabric.ActiveSelection([img].concat(moved), { canvas: canvas }));
-        else canvas.setActiveObject(img);
+        canvas.setActiveObject(img);
         canvas.requestRenderAll();
         pushState();
         toast((anySkipped
             ? '已切下不規則框選範圍；部分底圖因旋轉/已裁切無法真正挖空，改用色塊覆蓋，直接拖到新位置'
             : '已切下不規則框選範圍（原底圖已真正挖空），直接拖到新位置；不滿意可 Ctrl+Z 復原')
-            + (moved.length ? '；框內 ' + moved.length + ' 個標籤/文字物件會一起移動' : ''));
+            + (moved.length ? '；框內 ' + moved.length + ' 個物件已一起切進圖塊' : ''));
     });
 }
 
