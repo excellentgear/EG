@@ -2281,6 +2281,27 @@ LBLSQL;
         exit;
     }
 
+    // ── 庫齡明細清單（個別品項停滯日數）──────────
+    if ($_POST['action'] === 'get_aging_detail') {
+        try {
+            $cols=$pdo->query("SHOW COLUMNS FROM stock_items")->fetchAll(PDO::FETCH_COLUMN);
+            $hasCat=in_array('item_type',$cols);
+            $hasSDate=in_array('stock_date',$cols);
+            if (!$hasSDate) { echo json_encode(['success'=>true,'data'=>[]]); exit; }
+            $group = trim($_POST['age_group'] ?? '');
+            $catJoin=$hasCat?"LEFT JOIN stock_item_categories c ON c.category_id=si.item_type":"";
+            $catCol=$hasCat?"COALESCE(c.category_name,'未分類') AS category_name,":"NULL AS category_name,";
+            $ageExpr="CASE WHEN si.stock_date>=DATE_SUB(CURDATE(),INTERVAL 30 DAY) THEN '30天內' WHEN si.stock_date>=DATE_SUB(CURDATE(),INTERVAL 90 DAY) THEN '31~90天' WHEN si.stock_date>=DATE_SUB(CURDATE(),INTERVAL 180 DAY) THEN '91~180天' WHEN si.stock_date IS NOT NULL THEN '180天以上' ELSE '未知' END";
+            $sql="SELECT si.d_id,$catCol si.client_name,si.storage_location,si.qty,si.stock_date,DATEDIFF(CURDATE(),si.stock_date) AS idle_days,$ageExpr AS age_group FROM stock_items si $catJoin WHERE si.is_active=1";
+            $p=[];
+            if ($group!=='' && $group!=='全部') { $sql.=" AND $ageExpr=:g"; $p[':g']=$group; }
+            $sql.=" ORDER BY (si.stock_date IS NULL), idle_days DESC, si.d_id";
+            $st=$pdo->prepare($sql); $st->execute($p);
+            echo json_encode(['success'=>true,'data'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
     // ── 檢查組合件料號是否存在 (含模糊搜尋) ────────
     if ($_POST['action'] === 'check_group_did') {
         try {
@@ -4075,7 +4096,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
         <h5><i class="fa fa-line-chart" style="color:var(--warn);margin-right:6px;"></i>異動趨勢 <span id="an-trend-label" style="font-size:11px;color:#aaa;font-weight:400;"></span></h5>
         <canvas id="chart-trend" height="150"></canvas>
       </div>
-      <div class="chart-card"><h5><i class="fa fa-clock-o" style="color:var(--purple);margin-right:6px;"></i>庫齡分析</h5><div id="aging-list"></div></div>
+      <div class="chart-card"><h5><i class="fa fa-clock-o" style="color:var(--purple);margin-right:6px;"></i>庫齡分析<button class="btn btn-xs btn-default" style="float:right;" onclick="openAgingDetail('')" title="開啟個別品項停滯日數清單"><i class="fa fa-list"></i> 查看清單</button></h5><div id="aging-list"></div></div>
     </div>
   </div>
 </div>
@@ -5334,6 +5355,43 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
 <div class="modal-footer">
   <button class="btn btn-default" data-dismiss="modal">取消</button>
   <button class="btn btn-danger" onclick="confirmPurge()"><i class="fa fa-trash"></i> 確認永久刪除</button>
+</div>
+</div></div></div>
+
+<!-- ══ Modal: 庫齡明細清單 ══ -->
+<div class="modal fade" id="agingDetailModal" tabindex="-1">
+<div class="modal-dialog modal-lg" style="width:90%;max-width:1100px;"><div class="modal-content">
+<div class="modal-header" style="background:var(--purple,#9B59B6);"><button class="close" data-dismiss="modal"><span style="color:#fff;">&times;</span></button><h4 class="modal-title" style="color:#fff;"><i class="fa fa-clock-o"></i> 庫齡明細清單（個別品項停滯日數）</h4></div>
+<div class="modal-body">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="margin:0;font-size:12px;font-weight:700;">庫齡區間</label>
+      <select id="aging-group-filter" class="form-control input-sm" style="width:130px;display:inline-block;" onchange="G_agingGroup=this.value;_loadAgingDetail();">
+        <option value="">全部</option>
+        <option value="30天內">30天內</option>
+        <option value="31~90天">31~90天</option>
+        <option value="91~180天">91~180天</option>
+        <option value="180天以上">180天以上</option>
+        <option value="未知">未知</option>
+      </select>
+      <span id="aging-detail-summary" style="font-size:12px;color:#888;"></span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <select id="aging-page-size" class="form-control input-sm" style="width:90px;" onchange="G_agingPS=parseInt(this.value);G_agingPage=1;_renderAgingDetail();">
+        <option value="5">5筆/頁</option>
+        <option value="10" selected>10筆/頁</option>
+        <option value="20">20筆/頁</option>
+        <option value="50">50筆/頁</option>
+      </select>
+      <span id="aging-pager"></span>
+    </div>
+  </div>
+  <div id="aging-detail-body" style="max-height:60vh;overflow:auto;"></div>
+</div>
+<div class="modal-footer">
+  <button class="btn btn-default" style="float:left;" onclick="exportAgingCSV()"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
+  <button class="btn btn-info" style="float:left;" onclick="printAgingDetail()"><i class="fa fa-print"></i> 列印 / PDF</button>
+  <button class="btn btn-default" data-dismiss="modal">關閉</button>
 </div>
 </div></div></div>
 
@@ -8070,9 +8128,9 @@ function _renderAnalysisCharts(r){
         agOrder.forEach(function(label,i){
             var row=aging.find(function(x){return x.age_group===label;}); if(!row) return;
             var cnt=parseInt(row.cnt||0), pct=aTot>0?Math.round(cnt/aTot*100):0;
-            ah+='<div style="margin-bottom:10px;">'
+            ah+='<div style="margin-bottom:10px;cursor:pointer;" onclick="openAgingDetail(\''+label+'\')" title="點擊查看「'+label+'」個別品項停滯日數">'
               +'<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;">'
-              +'<span>'+label+'</span><span style="color:'+agColors[i]+';font-weight:700;">'+cnt+'筆 ('+pct+'%)</span></div>'
+              +'<span>'+label+' <i class="fa fa-search" style="color:#ccc;font-size:10px;"></i></span><span style="color:'+agColors[i]+';font-weight:700;">'+cnt+'筆 ('+pct+'%)</span></div>'
               +'<div style="background:#eee;border-radius:3px;height:6px;">'
               +'<div style="width:'+pct+'%;background:'+agColors[i]+';border-radius:3px;height:100%;"></div></div></div>';
         });
@@ -8080,6 +8138,109 @@ function _renderAnalysisCharts(r){
         ah='<div class="text-muted text-center" style="font-size:12px;padding:20px;">暫無庫齡資料<br><small>請確認入庫日期是否已設定</small></div>';
     }
     $('#aging-list').html(ah);
+}
+// ── 庫齡明細清單 ────────────────────────────────
+var G_agingRows=[], G_agingPage=1, G_agingPS=10, G_agingGroup='';
+var G_agingColors={'30天內':'#1ABB9C','31~90天':'#F39C12','91~180天':'#E67E22','180天以上':'#E74C3C','未知':'#bbb'};
+function openAgingDetail(group){
+    G_agingGroup=group||'';
+    $('#aging-group-filter').val(G_agingGroup);
+    $('#agingDetailModal').modal('show');
+    _loadAgingDetail();
+}
+function _loadAgingDetail(){
+    $('#aging-detail-body').html('<div class="text-center text-muted" style="padding:30px;"><i class="fa fa-spinner fa-spin"></i> 載入中...</div>');
+    $('#aging-detail-summary').text(''); $('#aging-pager').html('');
+    ajx({action:'get_aging_detail',age_group:G_agingGroup},function(r){
+        if(!r.success){ $('#aging-detail-body').html('<div class="text-danger text-center" style="padding:20px;">載入失敗：'+esc(r.message||'')+'</div>'); return; }
+        G_agingRows=r.data||[]; G_agingPage=1;
+        _renderAgingDetail();
+    });
+}
+function _agingPageTo(p){ G_agingPage=p; _renderAgingDetail(); }
+function _renderAgingDetail(){
+    var rows=G_agingRows, total=rows.length;
+    if(!total){
+        $('#aging-detail-body').html('<div class="text-muted text-center" style="padding:30px;font-size:13px;">此區間無庫存資料</div>');
+        $('#aging-detail-summary').text('共 0 筆'); $('#aging-pager').html('');
+        return;
+    }
+    var pages=Math.max(1,Math.ceil(total/G_agingPS));
+    if(G_agingPage>pages) G_agingPage=pages;
+    var start=(G_agingPage-1)*G_agingPS, pageRows=rows.slice(start,start+G_agingPS);
+    var totQty=rows.reduce(function(s,x){return s+(parseInt(x.qty)||0);},0);
+    var avgDays=0, dCnt=0;
+    rows.forEach(function(x){ if(x.idle_days!==null && x.idle_days!==undefined){ avgDays+=parseInt(x.idle_days); dCnt++; } });
+    avgDays=dCnt>0?Math.round(avgDays/dCnt):0;
+    $('#aging-detail-summary').text('共 '+total+' 筆、總量 '+totQty+'、平均停滯 '+avgDays+' 天');
+    var h='<table class="table table-striped table-hover" style="font-size:12px;margin-bottom:0;">'
+      +'<thead><tr style="background:#f8f8f8;"><th style="width:36px;">#</th><th>料號</th><th>類別</th><th>客戶</th><th>儲位</th><th class="text-right">數量</th><th>入庫日期</th><th class="text-right">停滯日數</th><th>庫齡區間</th></tr></thead><tbody>';
+    pageRows.forEach(function(x,i){
+        var gc=G_agingColors[x.age_group]||'#bbb';
+        var days=(x.idle_days===null||x.idle_days===undefined)?'-':x.idle_days;
+        h+='<tr><td style="color:#aaa;">'+(start+i+1)+'</td>'
+          +'<td><strong>'+esc(x.d_id||'')+'</strong></td>'
+          +'<td>'+esc(x.category_name||'-')+'</td>'
+          +'<td>'+esc(x.client_name||'-')+'</td>'
+          +'<td>'+esc(x.storage_location||'-')+'</td>'
+          +'<td class="text-right">'+(x.qty||0)+'</td>'
+          +'<td>'+esc(x.stock_date||'未設定')+'</td>'
+          +'<td class="text-right" style="font-weight:700;color:'+gc+';">'+days+'</td>'
+          +'<td><span style="font-size:11px;background:'+gc+'22;color:'+gc+';padding:2px 8px;border-radius:20px;font-weight:700;">'+esc(x.age_group||'')+'</span></td></tr>';
+    });
+    h+='</tbody></table>';
+    $('#aging-detail-body').html(h);
+    // 分頁鈕
+    var ph='';
+    if(pages>1){
+        ph+='<button class="btn btn-xs btn-default" '+(G_agingPage<=1?'disabled':'')+' onclick="_agingPageTo('+(G_agingPage-1)+')">&laquo;</button> ';
+        ph+='<span style="font-size:12px;">'+G_agingPage+' / '+pages+'</span> ';
+        ph+='<button class="btn btn-xs btn-default" '+(G_agingPage>=pages?'disabled':'')+' onclick="_agingPageTo('+(G_agingPage+1)+')">&raquo;</button>';
+    }
+    $('#aging-pager').html(ph);
+}
+function printAgingDetail(){
+    var rows=G_agingRows;
+    if(!rows.length){ toast('無資料可列印','error'); return; }
+    var gLabel=G_agingGroup||'全部';
+    var totQty=rows.reduce(function(s,x){return s+(parseInt(x.qty)||0);},0);
+    var w=window.open('','_blank','width=900,height=700');
+    var h='<!DOCTYPE html><html><head><meta charset="utf-8"><title>庫齡明細清單</title>'
+      +'<style>body{font-family:Arial,"Microsoft JhengHei",sans-serif;margin:20px;}h2{color:#2c3e50;border-bottom:2px solid #9B59B6;padding-bottom:8px;font-size:20px;}'
+      +'table{width:100%;border-collapse:collapse;font-size:11px;}th,td{border:1px solid #ccc;padding:4px 6px;text-align:left;}'
+      +'th{background:#f0f0f0;}td.num,th.num{text-align:right;}thead{display:table-header-group;}tr{page-break-inside:avoid;}'
+      +'@media print{.no-print{display:none;}}'
+      +'</style></head><body>'
+      +'<h2>庫齡明細清單（個別品項停滯日數）</h2>'
+      +'<p style="color:#888;font-size:12px;">產出時間：'+new Date().toLocaleString('zh-TW')+'&nbsp;&nbsp;庫齡區間：'+gLabel+'&nbsp;&nbsp;共 '+rows.length+' 筆、總量 '+totQty+'</p>'
+      +'<table><thead><tr><th>#</th><th>料號</th><th>類別</th><th>客戶</th><th>儲位</th><th class="num">數量</th><th>入庫日期</th><th class="num">停滯日數</th><th>庫齡區間</th></tr></thead><tbody>';
+    rows.forEach(function(x,i){
+        var days=(x.idle_days===null||x.idle_days===undefined)?'-':x.idle_days;
+        h+='<tr><td>'+(i+1)+'</td><td>'+esc(x.d_id||'')+'</td><td>'+esc(x.category_name||'-')+'</td><td>'+esc(x.client_name||'-')+'</td><td>'+esc(x.storage_location||'-')+'</td>'
+          +'<td class="num">'+(x.qty||0)+'</td><td>'+esc(x.stock_date||'未設定')+'</td><td class="num"><strong>'+days+'</strong></td><td>'+esc(x.age_group||'')+'</td></tr>';
+    });
+    h+='</tbody></table>'
+      +'<div class="no-print" style="margin-top:20px;text-align:center;"><button onclick="window.print()" style="padding:10px 30px;background:#9B59B6;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">🖨️ 列印 / 儲存PDF</button></div>'
+      +'</body></html>';
+    w.document.write(h);
+    w.document.close();
+    w.onload=function(){ setTimeout(function(){ w.focus(); },300); };
+}
+function exportAgingCSV(){
+    var rows=G_agingRows;
+    if(!rows.length){ toast('無資料可匯出','error'); return; }
+    var lines=['#,料號,類別,客戶,儲位,數量,入庫日期,停滯日數,庫齡區間'];
+    rows.forEach(function(x,i){
+        var days=(x.idle_days===null||x.idle_days===undefined)?'':x.idle_days;
+        var vals=[i+1,x.d_id||'',x.category_name||'',x.client_name||'',x.storage_location||'',x.qty||0,x.stock_date||'',days,x.age_group||''];
+        lines.push(vals.map(function(v){ v=String(v); return (v.indexOf(',')>=0||v.indexOf('"')>=0)?'"'+v.replace(/"/g,'""')+'"':v; }).join(','));
+    });
+    var blob=new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv;charset=utf-8;'});
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='庫齡明細_'+(G_agingGroup||'全部')+'_'+new Date().toISOString().split('T')[0]+'.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
 }
 // ── 盤點 ────────────────────────────────────────
 function loadCountSessions(){
