@@ -4529,6 +4529,7 @@ function doCropCopy(x, y, w, h) {
     // 不再順手寫入跨視窗剪貼簿：同步寫大字串會卡 UI、常撞 5MB 配額，要跨窗請用「複製選取→他窗」
     fabric.Image.fromURL(url, function (img) {
         img.set({ left: x + 24, top: y + 24 });
+        img.transparentBg = document.getElementById('p-crop-transparent').checked;   // 透明切塊之後挖空用擦除
         canvas.add(img);
         canvas.setActiveObject(img);
         setTool('select');
@@ -4570,6 +4571,7 @@ function doCropMove(x, y, w, h) {
     canvas.requestRenderAll();
     fabric.Image.fromURL(url, function (img) {
         img.set({ left: x, top: y });
+        img.transparentBg = document.getElementById('p-crop-transparent').checked;   // 透明切塊之後挖空用擦除
         canvas.add(img);
         canvas.setActiveObject(img);
         canvas.requestRenderAll();
@@ -4665,6 +4667,7 @@ function flattenSelection() {
         fabric.Image.fromURL(url, function (img) {
             if (!img || !img.width) { toast('壓平選取失敗：圖片載入異常，原物件未受影響'); return; }
             parts.forEach(o => canvas.remove(o));   // 還在畫布上的移除；期間被刪掉的自動略過
+            img.transparentBg = true;   // 透明背景圖：之後挖空/切除改用擦除變透明，不填白色
             img.set({ left: b.left, top: b.top, scaleX: b.width / img.width, scaleY: b.height / img.height });
             img.setCoords();
             canvas.add(img);
@@ -4729,7 +4732,8 @@ function backgroundImagesInRect(x, y, w, h) {
     });
 }
 /* 把底圖在選取範圍內的部分真正挖空（燒進圖片像素填色），而不是疊一層遮板；
-   有旋轉或已裁切(cropX/cropY)的底圖座標換算太複雜且容易算錯，跳過改用底色覆蓋 */
+   有旋轉或已裁切(cropX/cropY)的底圖座標換算太複雜且容易算錯，跳過改用底色覆蓋。
+   transparentBg 的圖（壓平選取／透明切塊）：挖空範圍改用「擦除」讓像素變透明，不填白色 */
 function punchHoleInImage(obj, x, y, w, h, fillColor, polyPoints) {
     const ang = ((obj.angle || 0) % 360 + 360) % 360;
     if (ang > 0.01 && ang < 359.99) return false;
@@ -4745,7 +4749,8 @@ function punchHoleInImage(obj, x, y, w, h, fillColor, polyPoints) {
     off.width = natW; off.height = natH;
     const ctx = off.getContext('2d');
     ctx.drawImage(obj._element, 0, 0, natW, natH);
-    ctx.fillStyle = fillColor;
+    if (obj.transparentBg) { ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = '#000000'; }
+    else ctx.fillStyle = fillColor;
     if (polyPoints && polyPoints.length > 2) {
         // 不規則挖空：把場景座標的套索點換算成這張圖自己的像素座標，直接照形狀填色（canvas fill 本來就能畫任意多邊形）
         ctx.beginPath();
@@ -4823,6 +4828,7 @@ function doCropMoveLasso(points) {
     canvas.requestRenderAll();
     fabric.Image.fromURL(url, function (img) {
         img.set({ left: b.x, top: b.y });
+        img.transparentBg = true;   // 套索切塊範圍外一定是透明像素，之後挖空一律用擦除
         canvas.add(img);
         canvas.setActiveObject(img);
         canvas.requestRenderAll();
@@ -5546,7 +5552,7 @@ function snapUnpoolify(json) {   // 池索引占位 → 原 dataURL（沒有占�
         }
     });
 }
-const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved'];
+const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved', 'transparentBg'];
 /* 卡頓/當機診斷：主要耗時點超過門檻就在主控台留紀錄（回報問題時請開 F12 把紅字/黃字截圖）；
    未攔截的程式例外第一次發生時跳 toast 提醒——渲染迴圈被例外打斷正是「殘影＋卡死」的典型來源 */
 let __egErrToasted = false;
