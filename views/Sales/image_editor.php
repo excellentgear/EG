@@ -3345,6 +3345,12 @@ function lmCols() {
 function lmUpdateCount() { document.getElementById('lm-sel-count').textContent = lmSel.size; }
 function renderLibMgr() {
     const body = document.getElementById('libmgr-body');
+    // 記住各欄捲動位置：設定分類/#標示/隱藏名稱等操作後重繪，不要跳回最上面
+    const scrollPos = {};
+    body.querySelectorAll('.lm-col').forEach(col => {
+        const g = col.querySelector('.lm-grid');
+        if (g) scrollPos[col.dataset.scope] = g.scrollTop;
+    });
     body.innerHTML = '';
     lmCols().forEach(col => {
         const el = document.createElement('div');
@@ -3490,6 +3496,11 @@ function renderLibMgr() {
         });
         el.appendChild(grid);
         body.appendChild(el);
+    });
+    // 還原各欄捲動位置
+    body.querySelectorAll('.lm-col').forEach(col => {
+        const g = col.querySelector('.lm-grid');
+        if (g && scrollPos[col.dataset.scope]) g.scrollTop = scrollPos[col.dataset.scope];
     });
     syncLmSelClass(); lmUpdateCount();
 }
