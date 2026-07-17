@@ -51,7 +51,7 @@ function pvr_build_dataset(PDO $pdo): array {
             'menu_name' => null, 'group_name' => null, 'on_menu' => 0,
             'c30' => (int)$s['c30'], 'c90' => (int)$s['c90'],
             'users90' => (int)$s['users90'], 'c_all' => (int)$s['c_all'],
-            'last_visit' => $s['last_visit'],
+            'last_visit' => $s['last_visit'], 'users' => [],
         ];
     }
 
@@ -71,7 +71,7 @@ function pvr_build_dataset(PDO $pdo): array {
             $byPath[$url] = [
                 'page_path' => $url,
                 'menu_name' => $m['page_name'], 'group_name' => $m['group_name'], 'on_menu' => 1,
-                'c30' => 0, 'c90' => 0, 'users90' => 0, 'c_all' => 0, 'last_visit' => null,
+                'c30' => 0, 'c90' => 0, 'users90' => 0, 'c_all' => 0, 'last_visit' => null, 'users' => [],
             ];
         } else {
             $byPath[$url]['on_menu']    = 1;
@@ -80,12 +80,39 @@ function pvr_build_dataset(PDO $pdo): array {
         }
     }
 
+    // 3. 近90天各頁使用者名單（量小，抓回 PHP 組名字；user 表為 latin1 欄位，避免在 SQL 內混用定序）
+    $names = pvr_user_names($pdo);
+    $uRows = $pdo->query("
+        SELECT DISTINCT page_path, user_id
+        FROM page_visit_stats
+        WHERE visit_date >= CURDATE() - INTERVAL 89 DAY")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($uRows as $u) {
+        if (isset($byPath[$u['page_path']])) {
+            $byPath[$u['page_path']]['users'][] = $names[(int)$u['user_id']] ?? ('#' . $u['user_id']);
+        }
+    }
+
     $rows = array_values($byPath);
     foreach ($rows as &$r) {
         $r['dead_menu'] = ($r['on_menu'] === 1 && $r['c90'] === 0) ? 1 : 0;   // 掛選單但90天零使用（核心產出）
+        sort($r['users']);
+        $r['users_str'] = implode('、', $r['users']);
     }
     unset($r);
     return $rows;
+}
+
+function pvr_user_names(PDO $pdo): array {
+    // user_id → 顯示名稱（中文名優先，其次帳號）
+    $names = [];
+    try {
+        foreach ($pdo->query("SELECT id, user_cname, user_uname FROM `user`") as $u) {
+            $n = trim((string)$u['user_cname']);
+            if ($n === '') $n = trim((string)$u['user_uname']);
+            if ($n !== '') $names[(int)$u['id']] = $n;
+        }
+    } catch (Exception $e) {}
+    return $names;
 }
 
 function pvr_filter(array $rows, string $kw, string $scope): array {
@@ -93,7 +120,8 @@ function pvr_filter(array $rows, string $kw, string $scope): array {
         $rows = array_values(array_filter($rows, function ($r) use ($kw) {
             return stripos($r['page_path'], $kw) !== false
                 || ($r['menu_name'] !== null && stripos($r['menu_name'], $kw) !== false)
-                || ($r['group_name'] !== null && stripos($r['group_name'], $kw) !== false);
+                || ($r['group_name'] !== null && stripos($r['group_name'], $kw) !== false)
+                || ($r['users_str'] !== '' && stripos($r['users_str'], $kw) !== false);
         }));
     }
     if ($scope === 'menu')      $rows = array_values(array_filter($rows, fn($r) => $r['on_menu'] === 1));
@@ -123,10 +151,38 @@ if ($isAjax) {
     if (!in_array($scope, ['all','menu','dead'], true)) $scope = 'all';
     $sort   = $_GET['sort'] ?? 'c90';
     $dir    = ($_GET['dir'] ?? 'asc') === 'desc' ? 'desc' : 'asc';
-    $allowed = ['page_path','menu_name','group_name','c30','c90','users90','c_all','last_visit','on_menu','dead_menu'];
+    $allowed = ['page_path','menu_name','group_name','c30','c90','users90','users_str','c_all','last_visit','on_menu','dead_menu'];
     if (!in_array($sort, $allowed, true)) $sort = 'c90';
 
     try {
+        /* ── 單一頁面的使用者明細（每人次數＋最初～最後使用區間） ── */
+        if ($action === 'user_detail') {
+            header('Content-Type: application/json; charset=utf-8');
+            $pp = trim($_GET['page_path'] ?? '');
+            $st = $pdo->prepare("
+                SELECT user_id,
+                       SUM(CASE WHEN visit_date >= CURDATE() - INTERVAL 29 DAY THEN visit_count ELSE 0 END) AS c30,
+                       SUM(CASE WHEN visit_date >= CURDATE() - INTERVAL 89 DAY THEN visit_count ELSE 0 END) AS c90,
+                       SUM(visit_count) AS c_all,
+                       MIN(visit_date) AS first_date,
+                       MAX(last_visit_at) AS last_visit,
+                       COUNT(DISTINCT visit_date) AS days_used
+                FROM page_visit_stats
+                WHERE page_path = ?
+                GROUP BY user_id
+                ORDER BY c90 DESC, c_all DESC");
+            $st->execute([$pp]);
+            $list = $st->fetchAll(PDO::FETCH_ASSOC);
+            $names = pvr_user_names($pdo);
+            foreach ($list as &$l) {
+                $l['name'] = $names[(int)$l['user_id']] ?? ('#' . $l['user_id']);
+                foreach (['c30','c90','c_all','days_used'] as $k) $l[$k] = (int)$l[$k];
+            }
+            unset($l);
+            echo json_encode(['success'=>true, 'page_path'=>$pp, 'rows'=>$list]);
+            exit;
+        }
+
         $all  = pvr_build_dataset($pdo);
 
         // 統計卡：一律以「全部資料」計，非僅當前頁/篩選
@@ -147,10 +203,10 @@ if ($isAjax) {
             header('Content-Disposition: attachment; filename="page_visit_report_' . date('Ymd_His') . '.csv"');
             $out = fopen('php://output', 'w');
             fwrite($out, "\xEF\xBB\xBF");   // UTF-8 BOM 讓 Excel 正確顯示中文
-            fputcsv($out, ['頁面路徑','選單名稱','選單群組','是否在選單','近30天次數','近90天次數','90天使用人數','累計次數','最後使用時間','選單頁90天零使用']);
+            fputcsv($out, ['頁面路徑','選單名稱','選單群組','是否在選單','近30天次數','近90天次數','90天使用人數','使用者（近90天）','累計次數','最後使用時間','選單頁90天零使用']);
             foreach ($rows as $r) {
                 fputcsv($out, [$r['page_path'], $r['menu_name'], $r['group_name'], $r['on_menu'] ? '是' : '否',
-                               $r['c30'], $r['c90'], $r['users90'], $r['c_all'],
+                               $r['c30'], $r['c90'], $r['users90'], $r['users_str'], $r['c_all'],
                                $r['last_visit'] ?: '（從未使用）', $r['dead_menu'] ? '★' : '']);
             }
             fclose($out);
@@ -194,6 +250,11 @@ if ($isAjax) {
         .stats-container { display:flex; gap:12px; margin-bottom:15px; flex-wrap:wrap; }
         .stat-card { flex:1; min-width:150px; background:var(--card-bg); border-radius:8px; padding:13px 15px;
             box-shadow:0 2px 5px rgba(0,0,0,.05); border-left:4px solid transparent; }
+        .stat-card[data-scope] { cursor:pointer; transition:transform .1s, box-shadow .1s; }
+        .stat-card[data-scope]:hover { transform:translateY(-2px); box-shadow:0 5px 15px rgba(0,0,0,.1); }
+        .stat-card.c-pages.active { box-shadow:0 0 0 3px #5B8DEF; }
+        .stat-card.c-menu.active  { box-shadow:0 0 0 3px #1ABB9C; }
+        .stat-card.c-dead.active  { box-shadow:0 0 0 3px #E74C3C; }
         .stat-card .stat-value { font-size:21px; font-weight:800; color:var(--primary-color); white-space:nowrap; }
         .stat-card .stat-label { font-size:12px; color:#888; font-weight:600; }
         .stat-card .stat-sub { font-size:11px; color:#aaa; }
@@ -223,6 +284,8 @@ if ($isAjax) {
         .badge-off  { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;
             background:#F0F2F4; color:#8a94a0; white-space:nowrap; }
         .scope-toggle .btn.active { background:var(--primary-color); color:#fff; }
+        .user-link { color:#1a7abf; cursor:pointer; border-bottom:1px dashed #5B8DEF; }
+        .user-link:hover { color:#5B8DEF; }
         .role-hint { color:#888; font-size:12px; cursor:pointer; }
         .no-access-box { background:#fff; border-radius:8px; padding:60px 20px; text-align:center; margin-top:40px; }
         .note-box { font-size:12px; color:#8a94a0; margin-top:8px; line-height:1.7; }
@@ -260,19 +323,19 @@ if ($isAjax) {
       <div class="clearfix"></div>
 
       <div class="stats-container">
-        <div class="stat-card c-pages">
+        <div class="stat-card c-pages active" data-scope="all">
           <div class="stat-value" id="cardPages">–</div>
-          <div class="stat-label">追蹤中頁面數</div>
+          <div class="stat-label">追蹤中頁面數（點我看全部）</div>
           <div class="stat-sub" id="cardSince">統計起算日 –</div>
         </div>
-        <div class="stat-card c-menu">
+        <div class="stat-card c-menu" data-scope="menu">
           <div class="stat-value" id="cardMenu">–</div>
-          <div class="stat-label">選單頁面數</div>
+          <div class="stat-label">選單頁面數（點我篩選）</div>
           <div class="stat-sub">system_module_pages 掛載中</div>
         </div>
-        <div class="stat-card c-dead">
+        <div class="stat-card c-dead" data-scope="dead">
           <div class="stat-value" id="cardDead">–</div>
-          <div class="stat-label">選單頁 90 天零使用</div>
+          <div class="stat-label">選單頁 90 天零使用（點我篩選）</div>
           <div class="stat-sub">下架/改良候選（核心指標）</div>
         </div>
         <div class="stat-card c-vis">
@@ -283,7 +346,7 @@ if ($isAjax) {
       </div>
 
       <div class="filter-bar">
-        <input type="text" id="fKw" class="form-control input-sm eg-in eg-live" placeholder="頁面路徑 / 選單名稱 / 群組（即時篩選）" style="width:250px;">
+        <input type="text" id="fKw" class="form-control input-sm eg-in eg-live" placeholder="頁面路徑 / 選單名稱 / 群組 / 使用者（即時篩選）" style="width:270px;">
         <div class="btn-group scope-toggle" style="margin-left:6px;">
           <button class="btn btn-default btn-sm active" data-scope="all">全部頁面</button>
           <button class="btn btn-default btn-sm" data-scope="menu">僅選單頁</button>
@@ -323,12 +386,13 @@ if ($isAjax) {
                 <th class="num" data-sort="c30">近30天<span class="sort-ind"></span></th>
                 <th class="num" data-sort="c90">近90天<span class="sort-ind"></span></th>
                 <th class="num" data-sort="users90">90天人數<span class="sort-ind"></span></th>
+                <th data-sort="users_str">使用者（近90天）<span class="sort-ind"></span></th>
                 <th class="num" data-sort="c_all">累計<span class="sort-ind"></span></th>
                 <th data-sort="last_visit">最後使用<span class="sort-ind"></span></th>
                 <th data-sort="dead_menu">狀態<span class="sort-ind"></span></th>
               </tr>
             </thead>
-            <tbody id="pvrTbody"><tr><td colspan="9" class="text-center text-muted">載入中...</td></tr></tbody>
+            <tbody id="pvrTbody"><tr><td colspan="10" class="text-center text-muted">載入中...</td></tr></tbody>
           </table>
         </div>
         <div class="note-box">
@@ -339,6 +403,17 @@ if ($isAjax) {
         </div>
       </div>
 <?php endif; ?>
+    </div>
+  </div>
+</div>
+
+<!-- 使用者明細 Modal -->
+<div class="modal fade" id="userModal" role="dialog" tabindex="-1">
+  <div class="modal-dialog" style="width:680px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-users"></i> 使用者明細 <small id="umSub" style="color:#888;word-break:break-all;"></small></h4></div>
+      <div class="modal-body" id="umBody" style="max-height:70vh;overflow-y:auto;">載入中...</div>
     </div>
   </div>
 </div>
@@ -375,7 +450,7 @@ if ($isAjax) {
     function load(){
         var p = params(); p.action = 'list';
         $.getJSON('page_visit_report.php', p, function(res){
-            if (!res.success) { $('#pvrTbody').html('<tr><td colspan="9" class="text-center text-danger">' + esc(res.error) + '</td></tr>'); return; }
+            if (!res.success) { $('#pvrTbody').html('<tr><td colspan="10" class="text-center text-danger">' + esc(res.error) + '</td></tr>'); return; }
 
             $('#cardPages').text(res.summary.pages);
             $('#cardMenu').text(res.summary.menu_pages);
@@ -388,11 +463,14 @@ if ($isAjax) {
             $('#pageNum').text(state.page + ' / ' + totalPages);
             $('#pageInfo').text('共 ' + res.total + ' 筆');
 
-            if (!res.rows.length) { $('#pvrTbody').html('<tr><td colspan="9" class="text-center text-muted">無符合資料</td></tr>'); return; }
+            if (!res.rows.length) { $('#pvrTbody').html('<tr><td colspan="10" class="text-center text-muted">無符合資料</td></tr>'); return; }
             var html = '';
-            res.rows.forEach(function(r){
+            res.rows.forEach(function(r, i){
                 var badge = r.dead_menu == 1 ? '<span class="badge-dead">選單零使用</span>'
                           : (r.on_menu == 1 ? '<span class="badge-menu">選單頁</span>' : '<span class="badge-off">未掛選單</span>');
+                var users = r.users90 > 0
+                          ? '<span class="user-link" data-idx="' + i + '" title="點我看每人使用次數與期間">' + esc(r.users_str) + '</span>'
+                          : '<span style="color:#c5ccd3;">—</span>';
                 html += '<tr' + (r.dead_menu == 1 ? ' class="dead-row"' : '') + '>'
                      +  '<td style="word-break:break-all;">' + esc(r.page_path) + '</td>'
                      +  '<td>' + esc(r.menu_name || '') + '</td>'
@@ -400,11 +478,13 @@ if ($isAjax) {
                      +  '<td class="num">' + r.c30 + '</td>'
                      +  '<td class="num"><b>' + r.c90 + '</b></td>'
                      +  '<td class="num">' + r.users90 + '</td>'
+                     +  '<td style="max-width:220px;">' + users + '</td>'
                      +  '<td class="num">' + r.c_all + '</td>'
                      +  '<td>' + esc(r.last_visit || '（從未使用）') + '</td>'
                      +  '<td>' + badge + '</td>'
                      +  '</tr>';
             });
+            state.lastRows = res.rows;
             $('#pvrTbody').html(html);
 
             $('#pvrTable thead th .sort-ind').text('');
@@ -416,14 +496,47 @@ if ($isAjax) {
     $('#pvrTable thead').on('click', 'th[data-sort]', function(){
         var s = $(this).data('sort');
         if (state.sort === s) state.dir = (state.dir === 'asc' ? 'desc' : 'asc');
-        else { state.sort = s; state.dir = (s === 'page_path' || s === 'menu_name' || s === 'group_name') ? 'asc' : 'desc'; }
+        else { state.sort = s; state.dir = (s === 'page_path' || s === 'menu_name' || s === 'group_name' || s === 'users_str') ? 'asc' : 'desc'; }
         state.page = 1; load();
     });
 
-    /* 範圍切換 */
-    $('.scope-toggle .btn').on('click', function(){
-        $('.scope-toggle .btn').removeClass('active'); $(this).addClass('active');
-        state.scope = $(this).data('scope'); state.page = 1; load();
+    /* 範圍切換（按鈕與統計卡雙向連動） */
+    function setScope(s){
+        state.scope = s; state.page = 1;
+        $('.scope-toggle .btn').removeClass('active').filter('[data-scope="' + s + '"]').addClass('active');
+        $('.stat-card[data-scope]').removeClass('active').filter('[data-scope="' + s + '"]').addClass('active');
+        load();
+    }
+    $('.scope-toggle .btn').on('click', function(){ setScope($(this).data('scope')); });
+    $('.stat-card[data-scope]').on('click', function(){ setScope($(this).data('scope')); });
+
+    /* 使用者明細：每人次數＋最初～最後使用區間 */
+    $('#pvrTbody').on('click', '.user-link', function(){
+        var r = (state.lastRows || [])[$(this).data('idx')];
+        if (!r) return;
+        $('#umSub').text(r.page_path + (r.menu_name ? '（' + r.menu_name + '）' : ''));
+        $('#umBody').html('載入中...');
+        $('#userModal').modal('show');
+        $.getJSON('page_visit_report.php', { action:'user_detail', page_path: r.page_path }, function(res){
+            if (!res.success) { $('#umBody').html('<span class="text-danger">' + esc(res.error) + '</span>'); return; }
+            if (!res.rows.length) { $('#umBody').html('<span class="text-muted">尚無使用紀錄</span>'); return; }
+            var h = '<table class="table" style="margin-bottom:0;">'
+                  + '<thead><tr><th>使用者</th><th class="num" style="text-align:right;">近30天</th>'
+                  + '<th class="num" style="text-align:right;">近90天</th><th class="num" style="text-align:right;">累計</th>'
+                  + '<th class="num" style="text-align:right;">使用天數</th><th>使用期間（最初～最後）</th></tr></thead><tbody>';
+            res.rows.forEach(function(u){
+                var range = (u.first_date || '?') + ' ～ ' + (u.last_visit ? String(u.last_visit).slice(0, 16) : '?');
+                h += '<tr><td>' + esc(u.name) + '</td>'
+                   + '<td style="text-align:right;">' + u.c30 + '</td>'
+                   + '<td style="text-align:right;"><b>' + u.c90 + '</b></td>'
+                   + '<td style="text-align:right;">' + u.c_all + '</td>'
+                   + '<td style="text-align:right;">' + u.days_used + '</td>'
+                   + '<td>' + esc(range) + '</td></tr>';
+            });
+            h += '</tbody></table>'
+               + '<div style="font-size:12px;color:#8a94a0;margin-top:8px;">使用天數＝有開啟過本頁的不同日數；期間為統計起算日後的最初～最後使用時間。</div>';
+            $('#umBody').html(h);
+        });
     });
 
     /* 分頁 */
