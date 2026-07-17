@@ -822,8 +822,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     /* 屬性列 */
     /* 固定保留兩列的高度：控制項多寡改變時（選取/取消選取）畫布位置才不會上上下下跳動；
        適合視窗/適合內容用的是畫布容器當下尺寸，容器高度固定後自然一起正確 */
-    /* 高度自動：欄位超過頁寬自動換列並全部顯示（畫布區自動讓出空間），不固定高度、不出現捲軸 */
-    #propbar { min-height: 36px; background: #292c31; border-bottom: 1px solid #17191c; display: flex; flex-wrap: wrap; align-content: flex-start; align-items: center; gap: 6px 10px; padding: 6px 12px; flex-shrink: 0; }
+    /* 覆蓋式屬性列：版面固定只佔一列高（畫布不因選取物件多長一列而上下跳動），
+       欄位超過頁寬自動換列全部顯示，第二列起「浮」在畫布上方（absolute 覆蓋，不推擠版面）、不出現捲軸 */
+    #propbar { position: absolute; top: 0; left: 0; right: 0; z-index: 650; min-height: 36px; background: #292c31; border-bottom: 1px solid #17191c; box-shadow: 0 2px 6px rgba(0,0,0,.35); display: flex; flex-wrap: wrap; align-content: flex-start; align-items: center; gap: 6px 10px; padding: 6px 12px; }
     #propbar label { font-size: 11.5px; color: #9aa4ad; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
     #propbar input[type=color] { width: 26px; height: 22px; border: 1px solid #45494f; border-radius: 3px; background: transparent; padding: 0 1px; cursor: pointer; }
     #propbar input[type=range] { width: 90px; }
@@ -836,8 +837,8 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     .pb-btn:hover { background: #43484f; }
 
     /* 畫布 */
-    #canvas-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-    #canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #3b3f45; }
+    #canvas-col { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+    #canvas-wrap { flex: 1; position: relative; overflow: hidden; background: #3b3f45; margin-top: 36px; }   /* 固定保留屬性列一列高，多出的列以覆蓋方式出現 */
     #canvas-wrap canvas { outline: none; }
 
     /* 底部狀態列 */
