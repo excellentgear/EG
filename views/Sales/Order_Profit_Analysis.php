@@ -8,7 +8,9 @@
  *              （modified_unit_price 優先，權重 paid_qty→transfer_qty→sqty；排除廠內加工商）
  *   廠內製程不計成本（報工時間未必準確，使用者定案先不計），以「部分」狀態標示。
  * 營收 = 訂單數量 × 單價 ×（匯率>0 則乘匯率）。
- * 檢視：訂單明細 / 料號彙總（含 ABC 柏拉圖分級：累計營收 ≤80%=A、≤95%=B、其餘=C）。
+ * 加工類別：製令 bom_ing 中 bom_sn 最小的製程若為客供料(ProcessNo 138 或名稱含「客供料」)＝單製，否則全製。
+ * 檢視：訂單明細 / 料號彙總（依 料號×加工類別 分組；含 ABC 柏拉圖分級：查詢範圍內營收由大到小
+ *       累計佔比 ≤80%=A、≤95%=B、其餘=C）。
  * 依 UI 規範：後端算完全部資料才分頁/排序/總計；分頁 5/10/20/50；CSV 匯出＋列印(PDF)。
  * 權限：RBAC module='order_profit'（rf_has_module_role），管理者固定可用。
  */
@@ -49,20 +51,105 @@ function opa_chunked_in(PDO $pdo, string $sqlTpl, array $ids, int $chunk = 500):
     return $out;
 }
 
+function opa_kg_set(PDO $pdo): array {
+    // 客供料製程集合：ProcessNo 138 或名稱含「客供料」
+    $kg = [];
+    try { $kg = $pdo->query("SELECT ProcessNo FROM process_no WHERE ProcessNo=138 OR ProcessName LIKE '%客供料%'")->fetchAll(PDO::FETCH_COLUMN) ?: []; } catch (Exception $e) {}
+    $kg = array_map('intval', $kg);
+    return empty($kg) ? [138] : $kg;
+}
+
+function opa_gear_map(PDO $pdo, array $dSettingIds): array {
+    // 齒輪規格字串（邏輯同 NewOrder_Track.php / master_data_management.php 的批次查詢）
+    if (empty($dSettingIds)) return [];
+    $map = [];
+    try {
+        $tmpl_replacements = [
+            '{Module}'               => "COALESCE(NULLIF(g.module_display,''), IF(g.Module IS NOT NULL AND g.Module<>'', IF(LEFT(UPPER(g.Module),1)='M', g.Module, CONCAT('M',g.Module)), ''))",
+            '{Teeth}'                => "COALESCE(CAST(NULLIF(g.Teeth,0) AS CHAR),'')",
+            '{Face_Width}'           => "IF(g.Face_Width IS NOT NULL AND g.Face_Width>0, TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Face_Width AS CHAR))), '')",
+            '{Pressure_Angle}'       => "TRIM(TRAILING '°' FROM TRIM(COALESCE(g.Pressure_Angle,'')))",
+            '{Helix_Direction}'      => "COALESCE(NULLIF(g.Helix_Direction,''),'')",
+            '{Helix_Angle_Str}'      => "COALESCE(NULLIF(g.Helix_Angle_Str,''), IF(g.Helix_Angle IS NOT NULL AND g.Helix_Angle>0, TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Helix_Angle AS CHAR))), ''))",
+            '{spec_starts}'          => "COALESCE(CAST(NULLIF(g.spec_starts,0) AS CHAR),'')",
+            '{X_PART}'               => "IF(g.Profile_Shift_X IS NOT NULL AND g.Profile_Shift_X<>0, CONCAT('X',TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Profile_Shift_X AS CHAR)))), '')",
+            '{GRADE}'                => "IF(g.gear_quality_std IS NOT NULL AND g.gear_quality_std<>'', CONCAT(g.gear_quality_std,COALESCE(CAST(g.gear_quality_grade AS CHAR),'')), '')",
+            '{spec_chain_size}'      => "COALESCE(g.spec_chain_size,'')",
+            '{spec_pitch}'           => "IF(g.spec_pitch IS NOT NULL AND g.spec_pitch>0, TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.spec_pitch AS CHAR))), '')",
+            '{spec_roller_dia}'      => "IF(g.spec_roller_dia IS NOT NULL AND g.spec_roller_dia>0, TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.spec_roller_dia AS CHAR))), '')",
+            '{spec_spline_type}'     => "COALESCE(g.spec_spline_type,'')",
+            '{spec_spline_major_dia}'=> "IF(g.spec_spline_major_dia IS NOT NULL AND g.spec_spline_major_dia>0, TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.spec_spline_major_dia AS CHAR))), '')",
+            '{spec_spline_minor_dia}'=> "IF(g.spec_spline_minor_dia IS NOT NULL AND g.spec_spline_minor_dia>0, TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.spec_spline_minor_dia AS CHAR))), '')",
+            '{spec_spline_width}'    => "IF(g.spec_spline_width IS NOT NULL AND g.spec_spline_width>0, TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.spec_spline_width AS CHAR))), '')",
+            '{spec_pulley_profile}'  => "COALESCE(g.spec_pulley_profile,'')",
+            '{Remark_Gear}'          => "COALESCE(NULLIF(g.Remark_Gear,''),'')",
+        ];
+        $tmpl_expr = 'dt.display_template';
+        foreach ($tmpl_replacements as $token => $expr) {
+            $tmpl_expr = "REPLACE($tmpl_expr, '$token', $expr)";
+        }
+        foreach (array_chunk($dSettingIds, 500) as $part) {
+            $ph = implode(',', array_fill(0, count($part), '?'));
+            $gq = $pdo->prepare("SELECT g.d_setting_id,
+                GROUP_CONCAT(
+                    CASE
+                      WHEN dt.display_template IS NOT NULL AND dt.display_template<>'' THEN
+                        $tmpl_expr
+                      WHEN dt.spec_category='spline' AND g.spec_spline_type='矩形' THEN
+                        CONCAT(IF(g.Teeth>0, CONCAT(g.Teeth,'鍵 '),''), COALESCE(CAST(g.spec_spline_minor_dia AS CHAR),'?'), ' × ', COALESCE(CAST(g.spec_spline_major_dia AS CHAR),'?'), ' × ', COALESCE(CAST(g.spec_spline_width AS CHAR),'?'))
+                      ELSE
+                        CONCAT(
+                            IF(g.Module IS NOT NULL AND g.Module != '',
+                               IF(LEFT(UPPER(g.Module),1)='M', g.Module, CONCAT('M', g.Module)), ''),
+                            IF(dt.spec_category='worm_gear' AND g.spec_starts IS NOT NULL AND g.spec_starts > 0,
+                               CONCAT('×', g.spec_starts, '條'),
+                               IF(g.Teeth IS NOT NULL AND g.Teeth > 0, CONCAT('×', g.Teeth, 'T'), '')),
+                            IF(g.Face_Width IS NOT NULL AND g.Face_Width > 0,
+                               CONCAT(' W', TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Face_Width AS CHAR)))), ''),
+                            IF(g.Pressure_Angle IS NOT NULL AND g.Pressure_Angle != '',
+                               CONCAT(' PA', g.Pressure_Angle, '°'), ''),
+                            IF(g.Helix_Direction IS NOT NULL AND g.Helix_Direction != '',
+                               CONCAT(' ', g.Helix_Direction), ''),
+                            IF(g.Helix_Angle IS NOT NULL AND g.Helix_Angle > 0,
+                               CONCAT(' ', COALESCE(NULLIF(g.Helix_Angle_Str,''),
+                               TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Helix_Angle AS CHAR)))), '°'), ''),
+                            IF(g.Profile_Shift_X IS NOT NULL AND g.Profile_Shift_X != 0,
+                               CONCAT(' X', TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Profile_Shift_X AS CHAR)))), '')
+                        )
+                    END
+                    ORDER BY g.gear_id SEPARATOR ' / '
+                ) AS gear_str
+                FROM d_setting_gear g
+                LEFT JOIN dict_gear_type dt ON dt.gear_type_id = g.Gear_Type
+                WHERE g.d_setting_id IN ($ph)
+                GROUP BY g.d_setting_id");
+            $gq->execute($part);
+            foreach ($gq->fetchAll(PDO::FETCH_ASSOC) as $gr) {
+                $map[(int)$gr['d_setting_id']] = $gr['gear_str'];
+            }
+        }
+    } catch (Exception $e) {}
+    return $map;
+}
+
 function opa_build_dataset(PDO $pdo, array $f): array {
     // 1. 訂單（有單價者才有毛利可算）
     $where  = ["ot.unit_price > 0", "ot.Qty > 0"];
     $params = [];
     if (!empty($f['date_from'])) { $where[] = "ot.Order_date >= ?"; $params[] = $f['date_from']; }
     if (!empty($f['date_to']))   { $where[] = "ot.Order_date <= ?"; $params[] = $f['date_to']; }
-    if (!empty($f['client']))    { $where[] = "ot.Client_name LIKE ?"; $params[] = '%'.$f['client'].'%'; }
+    if (!empty($f['client'])) {   // 客戶：中文名稱或客戶ID皆可模糊比對
+        $where[] = "(ot.Client_name LIKE ? OR ot.Client_name_ID LIKE ?)";
+        $ck = '%'.$f['client'].'%';
+        array_push($params, $ck, $ck);
+    }
     if (!empty($f['kw'])) {
         $where[] = "(ot.d_id LIKE ? OR ot.Order_oo LIKE ? OR ot.Specification LIKE ?)";
         $kw = '%'.$f['kw'].'%';
         array_push($params, $kw, $kw, $kw);
     }
     $st = $pdo->prepare("
-        SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.Specification, ot.Client_name,
+        SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.d_id_ID, ot.Specification, ot.Client_name,
                ot.Qty, ot.Order_date, ot.unit_price, ot.currency, ot.exchange_rate
         FROM order_track ot
         WHERE " . implode(' AND ', $where) . "
@@ -103,11 +190,23 @@ function opa_build_dataset(PDO $pdo, array $f): array {
         foreach ($rows as $r) $procInfo[$r['bom']] = ['total'=>intval($r['total_proc']), 'inhouse'=>intval($r['inhouse_proc'])];
     }
 
-    // 5. 各製令實際外包成本：各製程(bom_sn)加權平均單價 → 加總
+    // 5. 各製令加工類別：bom_sn 最小的製程為客供料 → 單製，否則全製
+    $bomCat = [];        // bom => '單製'|'全製'
+    if (!empty($allBoms)) {
+        $kgSet = opa_kg_set($pdo);
+        $rows = opa_chunked_in($pdo,
+            "SELECT bom, process_no FROM (
+                SELECT bi.bom, bi.process_no,
+                       ROW_NUMBER() OVER (PARTITION BY bi.bom ORDER BY bi.bom_sn ASC, bi.bom_ing_fid ASC) AS rn
+                FROM bom_ing bi WHERE bi.bom IN ({IN})
+             ) t WHERE t.rn = 1", $allBoms);
+        foreach ($rows as $r) $bomCat[$r['bom']] = in_array(intval($r['process_no']), $kgSet, true) ? '單製' : '全製';
+    }
+
+    // 6. 各製令實際外包成本：各製程(bom_sn)加權平均單價 → 加總
     $costInfo = [];      // bom => ['cost'=>x,'priced'=>n]
     if (!empty($allBoms)) {
         $notIn = '';
-        $extraParams = [];
         if (!empty($inhouse)) {
             $notIn = " AND (t.maker_from IS NULL OR t.maker_from NOT IN (" . implode(',', array_fill(0, count($inhouse), '?')) . "))";
         }
@@ -134,7 +233,11 @@ function opa_build_dataset(PDO $pdo, array $f): array {
         }
     }
 
-    // 6. 組每筆訂單列
+    // 7. 齒輪規格（依料號主檔 d_setting_id）
+    $didIds = array_values(array_unique(array_filter(array_map(function($o){ return intval($o['d_id_ID'] ?? 0); }, $orders))));
+    $gearMap = opa_gear_map($pdo, $didIds);
+
+    // 8. 組每筆訂單列
     $rows = [];
     foreach ($orders as $o) {
         $oid  = intval($o['Order_id']);
@@ -146,6 +249,14 @@ function opa_build_dataset(PDO $pdo, array $f): array {
 
         $boms = $bomsByOrder[$oid] ?? [];
         $bomNames = array_column($boms, 'bom');
+
+        // 加工類別：全部製令同類別→該類別；不同→混合；無製令→未綁製令
+        if (empty($boms)) {
+            $category = '未綁製令';
+        } else {
+            $cats = array_values(array_unique(array_map(function($b) use ($bomCat) { return $bomCat[$b['bom']] ?? '全製'; }, $boms)));
+            $category = count($cats) === 1 ? $cats[0] : '混合';
+        }
 
         // 成本：多製令以 bom.sqty 加權平均單顆成本
         $wSum = 0; $wCost = 0; $priced = 0; $total = 0; $inh = 0; $hasAnyCost = false;
@@ -183,6 +294,8 @@ function opa_build_dataset(PDO $pdo, array $f): array {
             'client'      => $o['Client_name'],
             'd_id'        => $o['d_id'],
             'spec'        => $o['Specification'],
+            'gear'        => $gearMap[intval($o['d_id_ID'] ?? 0)] ?? '',
+            'category'    => $category,
             'qty'         => $qty,
             'currency'    => $o['currency'],
             'unit_price'  => $unitPrice,
@@ -222,18 +335,20 @@ function opa_summary(array $rows): array {
 }
 
 function opa_part_view(array $rows): array {
-    // 料號彙總 + ABC 柏拉圖分級（以全部符合條件資料計算）
+    // 料號×加工類別 彙總 + ABC 柏拉圖分級（以全部符合條件資料計算；同料號單製/全製分開列）
     $parts = [];
     foreach ($rows as $r) {
-        $k = $r['d_id'];
+        $k = $r['d_id'] . '|' . $r['category'];
         if (!isset($parts[$k])) {
-            $parts[$k] = ['d_id'=>$k,'spec'=>$r['spec'],'clients'=>[],'orders'=>0,'qty'=>0,'revenue'=>0,
+            $parts[$k] = ['d_id'=>$r['d_id'],'category'=>$r['category'],'spec'=>$r['spec'],'gear'=>$r['gear'],
+                          'clients'=>[],'orders'=>0,'qty'=>0,'revenue'=>0,
                           'costed_orders'=>0,'costed_revenue'=>0,'costed_cost'=>0];
         }
         $p = &$parts[$k];
         $p['orders']++;
         $p['qty']     += $r['qty'];
         $p['revenue'] += $r['revenue'];
+        if ($r['gear'] && !$p['gear']) $p['gear'] = $r['gear'];
         if ($r['client'] && !in_array($r['client'], $p['clients'], true)) $p['clients'][] = $r['client'];
         if ($r['cost_status'] !== 'none') {
             $p['costed_orders']++;
@@ -291,6 +406,89 @@ if ($isAjax) {
     $costFilter = $_GET['cost_filter'] ?? 'all';
 
     try {
+        /* ── 成本明細（單一訂單各製程計價狀況） ── */
+        if ($action === 'cost_detail') {
+            $oid = intval($_GET['order_id'] ?? 0);
+            $st = $pdo->prepare("SELECT Order_id, Order_oo, d_id, Qty, unit_price FROM order_track WHERE Order_id=?");
+            $st->execute([$oid]);
+            $order = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$order) { echo json_encode(['success'=>false,'error'=>'找不到訂單']); exit; }
+
+            $st = $pdo->prepare("SELECT bom, sqty FROM bom WHERE o_order_id=?");
+            $st->execute([strval($oid)]);
+            $boms = $st->fetchAll(PDO::FETCH_ASSOC);
+
+            $inhouse = [];
+            try { $inhouse = $pdo->query("SELECT maker_id_no FROM maker_list WHERE internal=1")->fetchAll(PDO::FETCH_COLUMN) ?: []; } catch (Exception $e) {}
+            $kgSet = opa_kg_set($pdo);
+
+            $detail = [];
+            foreach ($boms as $b) {
+                $bn = $b['bom'];
+                // 製程清單（依 bom_sn 分組）
+                $ps = $pdo->prepare("
+                    SELECT bi.bom_sn,
+                           MIN(bi.process_no) AS process_no,
+                           MIN(pn.ProcessName) AS process_name,
+                           GROUP_CONCAT(DISTINCT COALESCE(NULLIF(bi.maker_id,''),'?') SEPARATOR '、') AS makers,
+                           MAX(COALESCE(m.internal,0)) AS internal
+                    FROM bom_ing bi
+                    LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                    LEFT JOIN maker_list m ON m.maker_id_no = bi.maker_id_no
+                    WHERE bi.bom = ?
+                    GROUP BY bi.bom_sn
+                    ORDER BY bi.bom_sn ASC");
+                $ps->execute([$bn]);
+                $procs = $ps->fetchAll(PDO::FETCH_ASSOC);
+
+                // 外包計價彙總
+                $notIn = '';
+                $extra = [];
+                if (!empty($inhouse)) {
+                    $notIn = " AND (t.maker_from IS NULL OR t.maker_from NOT IN (" . implode(',', array_fill(0, count($inhouse), '?')) . "))";
+                    $extra = $inhouse;
+                }
+                $ts = $pdo->prepare("
+                    SELECT t.bom_sn,
+                           SUM( IF(t.modified_unit_price>0, t.modified_unit_price, t.price)
+                                * COALESCE(NULLIF(t.paid_qty,0), NULLIF(t.transfer_qty,0), NULLIF(t.sqty,0), 1) )
+                         / SUM( COALESCE(NULLIF(t.paid_qty,0), NULLIF(t.transfer_qty,0), NULLIF(t.sqty,0), 1) ) AS avg_p,
+                           SUM( COALESCE(NULLIF(t.paid_qty,0), NULLIF(t.transfer_qty,0), NULLIF(t.sqty,0), 1) ) AS qty_sum,
+                           COUNT(*) AS cnt
+                    FROM bom_ing_transfer_log t
+                    WHERE t.bom = ?
+                      AND IF(t.modified_unit_price>0, t.modified_unit_price, COALESCE(t.price,0)) > 0
+                      $notIn
+                    GROUP BY t.bom_sn");
+                $ts->execute(array_merge([$bn], $extra));
+                $tMap = [];
+                foreach ($ts->fetchAll(PDO::FETCH_ASSOC) as $tr) $tMap[$tr['bom_sn']] = $tr;
+
+                $plist = [];
+                $costSum = 0;
+                foreach ($procs as $p) {
+                    $sn = $p['bom_sn'];
+                    $t  = $tMap[$sn] ?? null;
+                    $avg = $t ? round(floatval($t['avg_p']), 4) : null;
+                    if ($avg !== null) $costSum += $avg;
+                    $plist[] = [
+                        'bom_sn'      => intval($sn),
+                        'process_no'  => intval($p['process_no']),
+                        'process_name'=> $p['process_name'] ?: ('#' . $p['process_no']),
+                        'makers'      => $p['makers'],
+                        'internal'    => intval($p['internal']) === 1,
+                        'is_kg'       => in_array(intval($p['process_no']), $kgSet, true),
+                        'avg_price'   => $avg,
+                        'qty_sum'     => $t ? intval($t['qty_sum']) : null,
+                        'cnt'         => $t ? intval($t['cnt']) : 0,
+                    ];
+                }
+                $detail[] = ['bom'=>$bn, 'sqty'=>intval($b['sqty']), 'cost_per_pc'=>round($costSum, 4), 'processes'=>$plist];
+            }
+            echo json_encode(['success'=>true, 'order'=>$order, 'boms'=>$detail]);
+            exit;
+        }
+
         $ds   = opa_build_dataset($pdo, $f);
         $rows = $ds['rows'];
 
@@ -301,7 +499,7 @@ if ($isAjax) {
                 $data = opa_part_view($rows);
                 $sort = $_GET['sort'] ?? 'revenue';
                 $dir  = $_GET['dir']  ?? 'desc';
-                $allowed = ['rank','d_id','orders','qty','revenue','cum_pct','avg_price','margin','margin_rate','abc','costed_orders'];
+                $allowed = ['rank','d_id','category','orders','qty','revenue','cum_pct','avg_price','margin','margin_rate','abc','costed_orders'];
                 if (!in_array($sort, $allowed, true)) $sort = 'revenue';
                 if (!($sort === 'revenue' && $dir === 'desc')) opa_sort($data, $sort, $dir === 'asc' ? 'asc' : 'desc');
             } else {
@@ -314,7 +512,7 @@ if ($isAjax) {
                 }
                 $sort = $_GET['sort'] ?? 'order_date';
                 $dir  = $_GET['dir']  ?? 'desc';
-                $allowed = ['order_date','order_oo','client','d_id','qty','unit_price','revenue','cost_pc','margin','margin_rate','cost_status'];
+                $allowed = ['order_date','order_oo','client','d_id','category','qty','unit_price','revenue','cost_pc','margin','margin_rate','cost_status'];
                 if (!in_array($sort, $allowed, true)) $sort = 'order_date';
                 opa_sort($rows, $sort, $dir === 'asc' ? 'asc' : 'desc');
                 $data = $rows;
@@ -327,16 +525,16 @@ if ($isAjax) {
                 $out = fopen('php://output', 'w');
                 fwrite($out, "\xEF\xBB\xBF");   // UTF-8 BOM 讓 Excel 正確顯示中文
                 if ($view === 'part') {
-                    fputcsv($out, ['排名','ABC','料號','主要客戶','訂單數','總數量','營收合計','累計營收佔比%','平均售價','有成本訂單數','涵蓋營收','涵蓋成本','毛利','毛利率%']);
+                    fputcsv($out, ['排名','ABC','料號','類別','齒輪規格','主要客戶','訂單數','總數量','營收合計','累計營收佔比%','平均售價','有成本訂單數','涵蓋營收','涵蓋成本','毛利','毛利率%']);
                     foreach ($data as $p) {
-                        fputcsv($out, [$p['rank'],$p['abc'],$p['d_id'],$p['clients'],$p['orders'],$p['qty'],$p['revenue'],$p['cum_pct'],
+                        fputcsv($out, [$p['rank'],$p['abc'],$p['d_id'],$p['category'],$p['gear'],$p['clients'],$p['orders'],$p['qty'],$p['revenue'],$p['cum_pct'],
                                        $p['avg_price'],$p['costed_orders'],$p['costed_revenue'],$p['costed_cost'],$p['margin'],$p['margin_rate']]);
                     }
                 } else {
-                    fputcsv($out, ['訂單日期','訂單號','客戶','料號','規格','數量','幣別','單價','營收','單顆成本','成本合計','毛利','毛利率%','成本狀態','製令','總製程','已計價製程','廠內製程']);
+                    fputcsv($out, ['訂單日期','訂單號','客戶','料號','規格','齒輪規格','類別','數量','幣別','單價','營收','單顆成本','成本合計','毛利','毛利率%','成本狀態','製令','總製程','已計價製程','廠內製程']);
                     $stMap = ['full'=>'完整','partial'=>'部分','none'=>'無'];
                     foreach ($data as $r) {
-                        fputcsv($out, [$r['order_date'],$r['order_oo'],$r['client'],$r['d_id'],$r['spec'],$r['qty'],
+                        fputcsv($out, [$r['order_date'],$r['order_oo'],$r['client'],$r['d_id'],$r['spec'],$r['gear'],$r['category'],$r['qty'],
                                        $r['currency'] ?: 'NTD',$r['unit_price'],$r['revenue'],$r['cost_pc'],$r['cost_total'],
                                        $r['margin'],$r['margin_rate'],$stMap[$r['cost_status']],implode(' ', $r['boms']),
                                        $r['proc_total'],$r['proc_priced'],$r['proc_inhouse']]);
@@ -370,6 +568,12 @@ if ($isAjax) {
         echo json_encode(['success'=>false,'error'=>$e->getMessage()]);
     }
     exit;
+}
+
+// 客戶下拉清單（供篩選欄 datalist）
+$clientList = [];
+if ($has_access) {
+    try { $clientList = $pdo->query("SELECT DISTINCT Client_name FROM order_track WHERE Client_name IS NOT NULL AND Client_name<>'' ORDER BY Client_name")->fetchAll(PDO::FETCH_COLUMN) ?: []; } catch (Exception $e) {}
 }
 ?>
 <!DOCTYPE html>
@@ -422,6 +626,14 @@ if ($isAjax) {
         table.opa-table tbody tr:hover { background:#FAFBFE; }
         td.num, th.num { text-align:right; }
 
+        .part-link { color:#1a7abf; cursor:pointer; }
+        .part-link:hover { text-decoration:underline; }
+        .gear-line { font-size:10px; color:#8e44ad; line-height:1.2; margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:220px; }
+        .cost-link { cursor:pointer; border-bottom:1px dashed #5B8DEF; }
+        .cost-link:hover { color:#5B8DEF; }
+        .drill-link { cursor:pointer; border-bottom:1px dashed #5B8DEF; }
+        .drill-link:hover { color:#5B8DEF; }
+
         .badge-st { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700; cursor:help; }
         .st-full    { background:#E8F8F3; color:#0e8c73; }
         .st-partial { background:#FEF5E7; color:#b9770e; }
@@ -433,10 +645,21 @@ if ($isAjax) {
             border-radius:50%; color:#fff; font-weight:800; font-size:12px; }
         .abc-A { background:#E74C3C; } .abc-B { background:#F39C12; } .abc-C { background:#95A5A6; }
 
+        .cat-badge { display:inline-block; padding:2px 7px; border-radius:3px; font-size:11px; font-weight:700; white-space:nowrap; }
+        .cat-full   { background:#EAF2FD; color:#1a5cb0; }      /* 全製 */
+        .cat-single { background:#FDF0E7; color:#c05f10; }      /* 單製 */
+        .cat-mix    { background:#F3EAFD; color:#7d3cb5; }      /* 混合 */
+        .cat-none   { background:#F0F2F4; color:#8a94a0; }      /* 未綁製令 */
+
         .view-toggle .btn.active { background:var(--primary-color); color:#fff; }
         .role-hint { color:#888; font-size:12px; cursor:pointer; }
         .no-access-box { background:#fff; border-radius:8px; padding:60px 20px; text-align:center; margin-top:40px; }
         .note-box { font-size:12px; color:#8a94a0; margin-top:8px; line-height:1.7; }
+
+        table.cd-table { width:100%; border-collapse:collapse; margin-bottom:12px; }
+        table.cd-table th { background:#F8F9FA; font-size:12px; padding:5px 6px; border-bottom:2px solid #E9ECEF; white-space:nowrap; }
+        table.cd-table td { font-size:12px; padding:4px 6px; border-bottom:1px solid #F1F3F5; }
+        table.cd-table tr.cd-skip td { color:#b0b8c0; }
     </style>
 </head>
 <body class="nav-sm">
@@ -496,8 +719,11 @@ if ($isAjax) {
         <input type="date" id="fDateFrom" class="form-control input-sm eg-in" style="width:135px;" max="9999-12-31">
         <span style="color:#aaa;">～</span>
         <input type="date" id="fDateTo" class="form-control input-sm eg-in" style="width:135px;" max="9999-12-31">
-        <input type="text" id="fClient" class="form-control input-sm eg-in" placeholder="客戶" style="width:130px;">
-        <input type="text" id="fKw" class="form-control input-sm eg-in" placeholder="料號 / 訂單號 / 規格" style="width:170px;">
+        <input type="text" id="fClient" list="clientList" class="form-control input-sm eg-in eg-live" placeholder="客戶名稱/ID（即時篩選）" style="width:160px;">
+        <datalist id="clientList">
+          <?php foreach ($clientList as $c): ?><option value="<?= htmlspecialchars($c, ENT_QUOTES) ?>"></option><?php endforeach; ?>
+        </datalist>
+        <input type="text" id="fKw" class="form-control input-sm eg-in eg-live" placeholder="料號 / 訂單號 / 規格（即時篩選）" style="width:190px;">
         <button class="btn btn-primary btn-sm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
         <div class="btn-group view-toggle" style="margin-left:6px;">
           <button class="btn btn-default btn-sm active" data-view="order">訂單明細</button>
@@ -512,7 +738,8 @@ if ($isAjax) {
       <div class="main-card">
         <div class="table-toolbar">
           <div style="color:#888;font-size:12px;" id="viewHint">
-            成本口徑：各製程<b>實際發包單價</b>加權平均加總（外包實績）；廠內製程不計成本、以「部分」標示。點欄位標題可排序。
+            成本口徑：各製程<b>實際發包單價</b>加權平均加總（外包實績）；廠內製程不計成本、以「部分」標示。
+            點<b>料號</b>開圖面、點<b>單顆成本</b>看各製程計價明細、點欄位標題排序。
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
             <div id="pageInfo" style="color:#888;font-size:12px;"></div>
@@ -530,13 +757,14 @@ if ($isAjax) {
         <div style="overflow-x:auto;width:100%;">
           <table class="table opa-table" id="opaTable">
             <thead id="opaThead"></thead>
-            <tbody id="opaTbody"><tr><td colspan="12" class="text-center text-muted">載入中...</td></tr></tbody>
+            <tbody id="opaTbody"><tr><td colspan="13" class="text-center text-muted">載入中...</td></tr></tbody>
           </table>
         </div>
         <div class="note-box">
           ．單顆成本＝該訂單綁定製令的各製程(bom_sn)發包單價（修改後單價優先）以請款數量加權平均後加總；排除廠內加工商。<br>
           ．「無成本資料」多為：訂單未綁製令、或製令仍在進行中尚未請款。「部分」表示尚有外包製程未計價或含廠內製程（廠內暫不計成本）。<br>
-          ．料號彙總的 ABC 分級：依查詢範圍內營收由大到小累計，≤80%＝A、≤95%＝B、其餘＝C（柏拉圖 80/20）。<br>
+          ．加工類別：製令第一道製程（bom_sn 最小）為「客供料」＝<b>單製</b>，否則＝<b>全製</b>；同一料號單製/全製資料在料號彙總分開列。<br>
+          ．累計佔比＝料號彙總依「查詢日期範圍內」營收由大到小排序後的累計營收百分比（柏拉圖），≤80%＝A、≤95%＝B、其餘＝C。<br>
           ．統計卡與彙總一律以「全部符合條件資料」於後端計算，非僅當前頁。
         </div>
       </div>
@@ -556,6 +784,17 @@ if ($isAjax) {
         <p><b>管理者</b>：固定擁有全部權限。</p>
         <p style="color:#888;">毛利屬敏感資料，未被指派角色者無法開啟本頁。角色指派請至「權限設定」頁的「訂單毛利分析」區塊。</p>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- 成本明細 Modal -->
+<div class="modal fade" id="costModal" role="dialog" tabindex="-1">
+  <div class="modal-dialog" style="width:720px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-calculator"></i> 成本明細 <small id="cdSub" style="color:#888;"></small></h4></div>
+      <div class="modal-body" id="cdBody" style="max-height:70vh;overflow-y:auto;">載入中...</div>
     </div>
   </div>
 </div>
@@ -589,6 +828,11 @@ if ($isAjax) {
     function esc(s){ return $('<span>').text(s == null ? '' : s).html(); }
     function mrClass(r){ if (r === null || r === undefined) return ''; return r < 0 ? 'mr-neg' : (r < 15 ? 'mr-warn' : 'mr-pos'); }
 
+    var CAT_CLS = {'全製':'cat-full','單製':'cat-single','混合':'cat-mix','未綁製令':'cat-none'};
+    function catBadge(c){
+        return '<span class="cat-badge ' + (CAT_CLS[c] || 'cat-none') + '">' + esc(c || '–') + '</span>';
+    }
+
     function params(extra){
         var p = {
             date_from: $('#fDateFrom').val(), date_to: $('#fDateTo').val(),
@@ -602,12 +846,13 @@ if ($isAjax) {
     var HEADS = {
         order: [
             ['order_date','訂單日期'], ['order_oo','訂單號'], ['client','客戶'], ['d_id','料號'],
+            ['category','類別'],
             ['qty','數量','num'], ['unit_price','單價','num'], ['revenue','營收','num'],
             ['cost_pc','單顆成本','num'], ['margin','毛利','num'], ['margin_rate','毛利率','num'],
             ['cost_status','成本狀態'], [null,'製令']
         ],
         part: [
-            ['rank','#','num'], ['abc','ABC'], ['d_id','料號'], [null,'主要客戶'],
+            ['rank','#','num'], ['abc','ABC'], ['d_id','料號'], ['category','類別'], [null,'主要客戶'],
             ['orders','訂單數','num'], ['qty','總數量','num'], ['revenue','營收合計','num'],
             ['cum_pct','累計佔比','num'], ['avg_price','平均售價','num'],
             ['margin','毛利(涵蓋)','num'], ['margin_rate','毛利率','num'], ['costed_orders','成本資料','num']
@@ -633,23 +878,38 @@ if ($isAjax) {
         return '<span class="badge-st st-none" title="' + tip2 + '">無</span>';
     }
 
+    function partCell(d_id, spec, gear){
+        // 料號：點擊開圖面跳窗（bom_viewer）；下方顯示齒輪規格
+        return '<td title="' + esc(spec || '') + '" style="max-width:230px;">'
+             + '<span class="part-link" data-did="' + esc(d_id) + '" title="點擊開啟圖面">' + esc(d_id) + '</span>'
+             + (gear ? '<div class="gear-line" title="' + esc(gear) + '"><i class="fa fa-gear" style="font-size:9px;"></i> ' + esc(gear) + '</div>' : '')
+             + '</td>';
+    }
+
     function renderRows(rows){
         var h = '';
         if (!rows.length) {
-            $('#opaTbody').html('<tr><td colspan="12" class="text-center text-muted">查無資料</td></tr>');
+            $('#opaTbody').html('<tr><td colspan="13" class="text-center text-muted">查無資料</td></tr>');
             return;
         }
         if (state.view === 'order') {
             rows.forEach(function(r){
+                var costCell;
+                if (r.boms.length) {
+                    costCell = '<span class="cost-link" data-oid="' + r.order_id + '" data-oo="' + esc(r.order_oo) + '" data-did="' + esc(r.d_id) + '" title="點擊看各製程計價明細">' + nfmt(r.cost_pc) + '</span>';
+                } else {
+                    costCell = '–';
+                }
                 h += '<tr>'
                   + '<td>' + esc(r.order_date) + '</td>'
                   + '<td>' + esc(r.order_oo) + '</td>'
                   + '<td>' + esc(r.client) + '</td>'
-                  + '<td title="' + esc(r.spec || '') + '">' + esc(r.d_id) + '</td>'
+                  + partCell(r.d_id, r.spec, r.gear)
+                  + '<td>' + catBadge(r.category) + '</td>'
                   + '<td class="num">' + nfmt(r.qty, 0) + '</td>'
                   + '<td class="num">' + nfmt(r.unit_price) + (r.currency ? ' <small style="color:#aaa;">' + esc(r.currency) + '</small>' : '') + '</td>'
                   + '<td class="num">' + nfmt(r.revenue) + '</td>'
-                  + '<td class="num">' + nfmt(r.cost_pc) + '</td>'
+                  + '<td class="num">' + costCell + '</td>'
                   + '<td class="num ' + mrClass(r.margin_rate) + '">' + nfmt(r.margin) + '</td>'
                   + '<td class="num ' + mrClass(r.margin_rate) + '">' + (r.margin_rate === null ? '–' : nfmt(r.margin_rate) + '%') + '</td>'
                   + '<td>' + statusBadge(r) + '</td>'
@@ -661,7 +921,8 @@ if ($isAjax) {
                 h += '<tr>'
                   + '<td class="num">' + p.rank + '</td>'
                   + '<td><span class="abc-badge abc-' + p.abc + '">' + p.abc + '</span></td>'
-                  + '<td title="' + esc(p.spec || '') + '">' + esc(p.d_id) + '</td>'
+                  + partCell(p.d_id, p.spec, p.gear)
+                  + '<td>' + catBadge(p.category) + '</td>'
                   + '<td style="font-size:12px;">' + esc(p.clients) + '</td>'
                   + '<td class="num">' + nfmt(p.orders, 0) + '</td>'
                   + '<td class="num">' + nfmt(p.qty, 0) + '</td>'
@@ -670,7 +931,7 @@ if ($isAjax) {
                   + '<td class="num">' + nfmt(p.avg_price) + '</td>'
                   + '<td class="num ' + mrClass(p.margin_rate) + '">' + nfmt(p.margin) + '</td>'
                   + '<td class="num ' + mrClass(p.margin_rate) + '">' + (p.margin_rate === null ? '–' : nfmt(p.margin_rate) + '%') + '</td>'
-                  + '<td class="num" title="有成本資料的訂單數/總訂單數">' + p.costed_orders + '/' + p.orders + '</td>'
+                  + '<td class="num"><span class="drill-link" data-did="' + esc(p.d_id) + '" title="點擊切到訂單明細看這個料號的訂單">' + p.costed_orders + '/' + p.orders + '</span></td>'
                   + '</tr>';
             });
         }
@@ -693,7 +954,7 @@ if ($isAjax) {
     function load(){
         if (loading) return;
         loading = true;
-        $('#opaTbody').html('<tr><td colspan="12" class="text-center text-muted"><i class="fa fa-spinner fa-spin"></i> 計算中...</td></tr>');
+        $('#opaTbody').html('<tr><td colspan="13" class="text-center text-muted"><i class="fa fa-spinner fa-spin"></i> 計算中...</td></tr>');
         $.getJSON('Order_Profit_Analysis.php', params({action:'list'}))
         .done(function(res){
             if (!res.success) { alert(res.error || '載入失敗'); return; }
@@ -705,12 +966,86 @@ if ($isAjax) {
             $('#pageNum').text(state.page + ' / ' + totalPages);
             $('#pageInfo').text('共 ' + res.total + ' 筆');
         })
-        .fail(function(){ $('#opaTbody').html('<tr><td colspan="12" class="text-center text-danger">載入失敗</td></tr>'); })
+        .fail(function(){ $('#opaTbody').html('<tr><td colspan="13" class="text-center text-danger">載入失敗</td></tr>'); })
         .always(function(){ loading = false; });
+    }
+
+    /* ── 圖面跳窗（同 NewOrder_Track.php 的 openPartDrawing）── */
+    function openPartDrawing(pid){
+        if (!pid) return;
+        var w = screen.availWidth, h = screen.availHeight;
+        var pw = Math.min(1400, Math.round(w * 0.85));
+        var ph = Math.min(900,  Math.round(h * 0.88));
+        var pl = Math.round((w - pw) / 2);
+        var pt = Math.round((h - ph) / 2);
+        window.open(
+            '../../views/pm/bom_viewer.php?d_id=' + encodeURIComponent(pid),
+            'drawing_' + pid,
+            'width=' + pw + ',height=' + ph + ',left=' + pl + ',top=' + pt
+                + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no'
+        );
+    }
+
+    /* ── 成本明細跳窗 ── */
+    function openCostDetail(oid, oo, did){
+        $('#cdSub').text(oo + '｜' + did);
+        $('#cdBody').html('<i class="fa fa-spinner fa-spin"></i> 載入中...');
+        $('#costModal').modal('show');
+        $.getJSON('Order_Profit_Analysis.php', {action:'cost_detail', order_id: oid})
+        .done(function(res){
+            if (!res.success) { $('#cdBody').html('<span class="text-danger">' + esc(res.error || '載入失敗') + '</span>'); return; }
+            if (!res.boms.length) { $('#cdBody').html('<span class="text-muted">此訂單未綁定製令。</span>'); return; }
+            var h = '';
+            res.boms.forEach(function(b){
+                h += '<div style="font-weight:700;margin:6px 0 4px;">製令 ' + esc(b.bom)
+                   + ' <small style="color:#888;">數量 ' + nfmt(b.sqty, 0) + '｜已計單顆成本合計 <b>' + nfmt(b.cost_per_pc) + '</b></small></div>';
+                h += '<table class="cd-table"><thead><tr>'
+                   + '<th style="width:36px;">序</th><th>製程</th><th>加工商</th>'
+                   + '<th class="num" style="text-align:right;">加權平均單價</th>'
+                   + '<th class="num" style="text-align:right;">計價數量</th>'
+                   + '<th class="num" style="text-align:right;">筆數</th><th>採計</th>'
+                   + '</tr></thead><tbody>';
+                b.processes.forEach(function(p){
+                    var counted = p.avg_price !== null;
+                    var why;
+                    if (counted) why = '<span style="color:#0e8c73;font-weight:700;">✓</span>';
+                    else if (p.is_kg) why = '<span style="color:#8a94a0;">客供料</span>';
+                    else if (p.internal) why = '<span style="color:#b9770e;">廠內未計</span>';
+                    else why = '<span style="color:#8a94a0;">未計價</span>';
+                    h += '<tr class="' + (counted ? '' : 'cd-skip') + '">'
+                       + '<td>' + p.bom_sn + '</td>'
+                       + '<td>' + esc(p.process_name) + ' <small style="color:#aaa;">#' + p.process_no + '</small></td>'
+                       + '<td>' + esc(p.makers || '') + '</td>'
+                       + '<td style="text-align:right;">' + nfmt(p.avg_price) + '</td>'
+                       + '<td style="text-align:right;">' + nfmt(p.qty_sum, 0) + '</td>'
+                       + '<td style="text-align:right;">' + nfmt(p.cnt, 0) + '</td>'
+                       + '<td>' + why + '</td>'
+                       + '</tr>';
+                });
+                h += '</tbody></table>';
+            });
+            h += '<div style="font-size:11px;color:#8a94a0;">單價為該製程所有外包移轉紀錄的加權平均（修改後單價優先、以請款數量加權）；「廠內未計」與「未計價」製程不列入單顆成本。</div>';
+            $('#cdBody').html(h);
+        })
+        .fail(function(){ $('#cdBody').html('<span class="text-danger">載入失敗</span>'); });
     }
 
     /* ── 事件 ── */
     $('#btnSearch').on('click', function(){ state.page = 1; load(); });
+
+    $('#opaTbody').on('click', '.part-link', function(){ openPartDrawing($(this).data('did')); });
+    $('#opaTbody').on('click', '.cost-link', function(){
+        openCostDetail($(this).data('oid'), $(this).data('oo'), $(this).data('did'));
+    });
+    $('#opaTbody').on('click', '.drill-link', function(){
+        // 料號彙總 → 點成本資料鑽取到該料號的訂單明細
+        $('#fKw').val($(this).data('did'));
+        state.view = 'order'; state.costFilter = 'all';
+        state.sort = 'order_date'; state.dir = 'desc'; state.page = 1;
+        $('.view-toggle .btn').removeClass('active').filter('[data-view=order]').addClass('active');
+        $('.stat-card[data-costfilter]').removeClass('active').filter('[data-costfilter=all]').addClass('active');
+        load();
+    });
 
     $('.stat-card[data-costfilter]').on('click', function(){
         $('.stat-card[data-costfilter]').removeClass('active');
@@ -738,7 +1073,7 @@ if ($isAjax) {
         var s = $(this).data('sort');
         if (!s) return;
         if (state.sort === s) state.dir = (state.dir === 'asc' ? 'desc' : 'asc');
-        else { state.sort = s; state.dir = (s === 'd_id' || s === 'client' || s === 'order_oo' || s === 'abc') ? 'asc' : 'desc'; }
+        else { state.sort = s; state.dir = (s === 'd_id' || s === 'client' || s === 'order_oo' || s === 'abc' || s === 'category') ? 'asc' : 'desc'; }
         state.page = 1;
         load();
     });
@@ -764,14 +1099,18 @@ if ($isAjax) {
             if (state.view === 'order') {
                 var stMap = {full:'完整', partial:'部分', none:'無'};
                 res.rows.forEach(function(r){
-                    body += '<tr><td>' + [r.order_date, r.order_oo, r.client, r.d_id].map(esc).join('</td><td>') + '</td>'
+                    body += '<tr><td>' + [r.order_date, r.order_oo, r.client].map(esc).join('</td><td>') + '</td>'
+                          + '<td>' + esc(r.d_id) + (r.gear ? '<br><small>' + esc(r.gear) + '</small>' : '') + '</td>'
+                          + '<td>' + esc(r.category) + '</td>'
                           + '<td class="n">' + [nfmt(r.qty,0), nfmt(r.unit_price), nfmt(r.revenue), nfmt(r.cost_pc), nfmt(r.margin),
                               (r.margin_rate===null?'–':nfmt(r.margin_rate)+'%')].join('</td><td class="n">') + '</td>'
                           + '<td>' + stMap[r.cost_status] + '</td><td>' + esc(r.boms.join(' ')) + '</td></tr>';
                 });
             } else {
                 res.rows.forEach(function(p){
-                    body += '<tr><td class="n">' + p.rank + '</td><td>' + p.abc + '</td><td>' + esc(p.d_id) + '</td><td>' + esc(p.clients) + '</td>'
+                    body += '<tr><td class="n">' + p.rank + '</td><td>' + p.abc + '</td>'
+                          + '<td>' + esc(p.d_id) + (p.gear ? '<br><small>' + esc(p.gear) + '</small>' : '') + '</td>'
+                          + '<td>' + esc(p.category) + '</td><td>' + esc(p.clients) + '</td>'
                           + '<td class="n">' + [nfmt(p.orders,0), nfmt(p.qty,0), nfmt(p.revenue), nfmt(p.cum_pct)+'%', nfmt(p.avg_price),
                               nfmt(p.margin), (p.margin_rate===null?'–':nfmt(p.margin_rate)+'%')].join('</td><td class="n">') + '</td>'
                           + '<td class="n">' + p.costed_orders + '/' + p.orders + '</td></tr>';
@@ -792,6 +1131,14 @@ if ($isAjax) {
     });
 
     $('#roleHint').on('click', function(){ $('#roleModal').modal('show'); });
+
+    /* ── 即時篩選：輸入停頓 400ms 自動查詢（客戶/料號/訂單號/規格）；日期變更即查 ── */
+    var liveTimer = null;
+    $(document).on('input', '.eg-live', function(){
+        clearTimeout(liveTimer);
+        liveTimer = setTimeout(function(){ state.page = 1; load(); }, 400);
+    });
+    $('#fDateFrom, #fDateTo').on('change', function(){ state.page = 1; load(); });
 
     /* ── UI 規範：雙擊清空 / 聚焦全選 / Enter 逐欄與末欄送出 ── */
     $(document).on('focus', '.eg-in', function(){ var el = this; setTimeout(function(){ try { el.select(); } catch(e){} }, 0); });
