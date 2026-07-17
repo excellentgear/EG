@@ -657,7 +657,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!is_array($prefs)) $prefs = [];
             // 白名單欄位，避免被塞進奇怪的東西
             $allowed = ['stroke', 'width', 'lineEnds', 'fill', 'fillOn', 'textColor', 'fontSize', 'bold',
-                        'textBg', 'textBgOn', 'balloonSize', 'dcShape', 'dcSize', 'stampSize', 'maskColor', 'cropTransparent'];
+                        'textBg', 'textBgOn', 'balloonSize', 'dcShape', 'dcSize', 'stampSize', 'maskColor', 'cropTransparent',
+                        'connectKind'];
             $clean = [];
             foreach ($allowed as $k) if (array_key_exists($k, $prefs)) $clean[$k] = $prefs[$k];
             $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by)
@@ -948,7 +949,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <div class="tool-group-sep"></div>
         <button class="tool-btn" id="tool-draw" onclick="setTool('draw')" title="畫筆（自由手繪）"><i class="fa fa-pencil"></i><span class="kbd">B</span></button>
         <button class="tool-btn" id="tool-line" onclick="setTool('line')" title="直線（可用「端點」下拉選無/單箭頭/雙箭頭）"><i class="fa fa-minus" style="transform:rotate(-45deg)"></i><span class="kbd">L</span></button>
-        <button class="tool-btn" id="tool-connect" onclick="setTool('connect')" title="兩點連線：點第一點→點第二點自動相連（屬性列可選直線/曲線與端點箭頭）。直線之後雙擊可編輯端點；曲線畫完自動進入編輯端點，拖中間圓點調曲度。Esc 取消第一點" style="font-size:15px;font-weight:700;">⤳</button>
+        <button class="tool-btn" id="tool-connect" onclick="setTool('connect')" title="兩點連線：點第一點→點第二點自動相連，可連續一直連（屬性列選直線/曲線與端點箭頭，選擇會記住）。連好後切回選取(V)雙擊該線＝編輯端點、拖節點調曲度。Esc 取消第一點" style="font-size:15px;font-weight:700;">⤳</button>
         <button class="tool-btn" id="tool-rect" onclick="setTool('rect')" title="矩形"><i class="fa fa-square-o"></i><span class="kbd">R</span></button>
         <button class="tool-btn" id="tool-ellipse" onclick="setTool('ellipse')" title="橢圓"><i class="fa fa-circle-o"></i><span class="kbd">O</span></button>
         <div class="tool-group-sep"></div>
@@ -1004,7 +1005,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                         <option value="curve">曲線</option>
                     </select>
                 </label>
-                <span style="color:#8b949e;font-size:11px;">點第一點→點第二點自動相連；曲線畫完拖中間圓點調曲度；Esc 取消第一點</span>
+                <span style="color:#8b949e;font-size:11px;">點第一點→點第二點自動相連，可連續；切回選取(V)雙擊該線＝編輯端點調曲度；Esc 取消第一點</span>
             </span>
             <!-- 文字 -->
             <span class="prop-sec" id="sec-text">
@@ -1497,7 +1498,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <b style="color:#6fc3ff;">② 編修與遮蓋</b>
             <ul style="padding-left:18px;margin:4px 0 10px;">
                 <li>畫筆(B)/直線(L)/矩形(R)/橢圓(O)；所有東西都是物件，隨時可移動、縮放、刪除；直線與畫筆都可在屬性列選<b>線型（實線/虛線/中心線）</b>與<b>端點（無/單箭頭/雙箭頭）</b></li>
-                <li><b>兩點連線（⤳）</b>：點第一點→點第二點自動相連，屬性列選<b>直線或曲線</b>（直線也可帶箭頭端點）。直線之後雙擊＝編輯端點；曲線畫完自動進入編輯端點模式，<b>拖中間圓點調曲度</b>、拖頭尾圓點改連接位置、「＋」可再加節點；Esc 取消已點的第一點</li>
+                <li><b>兩點連線（⤳）</b>：點第一點→點第二點自動相連、可連續一直連，屬性列選<b>直線或曲線</b>（直線也可帶箭頭端點；選擇會記住）。曲線＝沿真圓弧生成的圓潤勾線；連好後切回選取(V)<b>雙擊該線＝編輯端點</b>，拖節點調曲度/改位置、「＋」加節點；Esc 取消已點的第一點</li>
                 <li>遮蓋刪除客戶資料：矩形(M)或不規則套索圈選，遮蓋色可改，匯出時才壓平</li>
                 <li>框選複製(C)：框一個範圍變成新圖塊；<b>框選搬移(X)</b>＝小畫家式切下搬走（只挖空底圖，標籤/文字不受影響）；旁邊的<b>套索工具</b>是不規則形狀版，按住拖曳圈任意形狀後放開即可切下。兩者都可連續使用，Esc 或切別的工具才離開。跨視窗貼上用 <b>Ctrl+Shift+V</b>（Ctrl+V 優先貼系統剪貼簿）</li>
                 <li>遮蓋/形狀/直線等工具<b>畫完保持啟用可連續畫</b>，Esc 或 V 回選取；<b>Ctrl+A</b> 全選畫布物件；<b>方向鍵微調</b>選取物（Shift＝10px）；屬性列可輸入<b>角度</b>（直線 0 度＝水平線）；多選一次改粗細/顏色；「合併」把多線條變單一物件（Alt+雙擊才拆）</li>
@@ -2034,6 +2035,29 @@ function updateConnectPreview(p) {
     canvas.add(connectPreview);
     canvas.requestRenderAll();
 }
+/* 兩點間圓弧取樣：bulge＝弧高/弦長，n 段（回傳 n+1 個落在同一圓上的點） */
+function connectArcPoints(a, b, bulge, n) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const d = Math.hypot(dx, dy);
+    const h = d * bulge;
+    const ux = -dy / d, uy = dx / d;                       // 垂直單位向量（凸向側）
+    const R = h / 2 + d * d / (8 * h);
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    const cx = mx + ux * (h - R), cy = my + uy * (h - R);  // 圓心
+    const sx = mx + ux * h, sy = my + uy * h;              // 弧頂
+    const a0 = Math.atan2(a.y - cy, a.x - cx);
+    let sweep = Math.atan2(b.y - cy, b.x - cx) - a0;
+    sweep = ((sweep % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    // 兩個掃掠方向，取「會經過弧頂」的那一個
+    const pm = { x: cx + R * Math.cos(a0 + sweep / 2), y: cy + R * Math.sin(a0 + sweep / 2) };
+    if (Math.hypot(pm.x - sx, pm.y - sy) > R * 0.2) sweep -= 2 * Math.PI;
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+        const t = a0 + sweep * i / n;
+        pts.push({ x: cx + R * Math.cos(t), y: cy + R * Math.sin(t) });
+    }
+    return pts;
+}
 function handleConnectClick(p) {
     if (!connectFirst) {   // 第一點：放個小紅點提示
         connectFirst = { x: p.x, y: p.y };
@@ -2053,20 +2077,16 @@ function handleConnectClick(p) {
     const dash = dashArrayFor(document.getElementById('p-line-style').value, sw);
     const kind = document.getElementById('p-connect-kind').value;
     if (kind === 'curve') {
-        // 中間節點往垂直方向拉出 50% 弧度（≈半圓深勾，圖面指線慣用形），畫完直接進入編輯端點模式調曲度；
-        // 弧凸向取決於兩點點擊順序，反向可拖中間圓點過去另一側
-        const mid = { x: (a.x + b.x) / 2 - (b.y - a.y) * 0.5, y: (a.y + b.y) / 2 + (b.x - a.x) * 0.5 };
-        const poly = new fabric.Polyline([a, mid, b], {
+        // 沿真正的圓弧取 5 個節點（弧高＝弦長 50%≈半圓），圓滑曲線通過圓上的點＝視覺圓潤；
+        // 弧凸向取決於兩點點擊順序；工具保持啟用可連續連線，之後雙擊曲線＝編輯端點拖節點調曲度
+        const poly = new fabric.Polyline(connectArcPoints(a, b, 0.5, 4), {
             stroke, strokeWidth: sw, fill: 'transparent', strokeUniform: true,
             strokeDashArray: dash, strokeLineCap: 'round', strokeLineJoin: 'round', objectCaching: false
         });
         poly.curved = true;
         canvas.add(poly);
-        canvas.setActiveObject(poly);
-        setTool('select');
         canvas.requestRenderAll();
         pushState();
-        togglePointEdit();   // 直接可拖中間圓點調曲度
         return;
     }
     const ends = document.getElementById('p-line-ends').value;
@@ -5476,7 +5496,8 @@ const PREF_FIELDS = [
     ['p-textcolor', 'textColor'], ['p-fontsize', 'fontSize'], ['p-bold', 'bold', true], ['p-underline', 'underline'],
     ['p-textbg', 'textBg'], ['p-textbg-on', 'textBgOn', true],
     ['p-balloon-size', 'balloonSize'], ['p-dc-shape', 'dcShape'], ['p-dc-size', 'dcSize'],
-    ['p-stamp-size', 'stampSize'], ['p-maskcolor', 'maskColor'], ['p-crop-transparent', 'cropTransparent', true]
+    ['p-stamp-size', 'stampSize'], ['p-maskcolor', 'maskColor'], ['p-crop-transparent', 'cropTransparent', true],
+    ['p-connect-kind', 'connectKind']
 ];
 function applyUserPrefs() {
     PREF_FIELDS.forEach(([id, key, isCheckbox]) => {
