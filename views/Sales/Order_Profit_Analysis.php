@@ -225,6 +225,10 @@ function opa_build_dataset(PDO $pdo, array $f): array {
         $kw = '%'.$f['kw'].'%';
         array_push($params, $kw, $kw, $kw);
     }
+    if (!empty($f['d_id_exact'])) {   // 料號精確比對（料號彙總滑窗用，避免 LIKE 誤含其他料號）
+        $where[] = "ot.d_id = ?";
+        $params[] = $f['d_id_exact'];
+    }
     $st = $pdo->prepare("
         SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.d_id_ID, ot.Specification, ot.Client_name,
                ot.Qty, ot.Order_date, ot.unit_price, ot.currency, ot.exchange_rate
@@ -503,7 +507,9 @@ if ($isAjax) {
         'date_to'   => trim($_GET['date_to'] ?? ''),
         'client'    => trim($_GET['client'] ?? ''),
         'kw'        => trim($_GET['kw'] ?? ''),
+        'd_id_exact'=> trim($_GET['d_id_exact'] ?? ''),
     ];
+    $categoryF = trim($_GET['category'] ?? '');   // 加工類別過濾（滑窗用）
     $view       = ($_GET['view'] ?? 'order') === 'part' ? 'part' : 'order';
     $costFilter = $_GET['cost_filter'] ?? 'all';
 
@@ -623,6 +629,9 @@ if ($isAjax) {
                 if (!in_array($sort, $allowed, true)) $sort = 'revenue';
                 if (!($sort === 'revenue' && $dir === 'desc')) opa_sort($data, $sort, $dir === 'asc' ? 'asc' : 'desc');
             } else {
+                if ($categoryF !== '') {
+                    $rows = array_values(array_filter($rows, fn($r) => $r['category'] === $categoryF));
+                }
                 if ($costFilter !== 'all') {
                     if ($costFilter === 'costed') {
                         $rows = array_values(array_filter($rows, fn($r) => $r['cost_status'] !== 'none'));
@@ -777,6 +786,23 @@ if ($has_access) {
         .no-access-box { background:#fff; border-radius:8px; padding:60px 20px; text-align:center; margin-top:40px; }
         .note-box { font-size:12px; color:#8a94a0; margin-top:8px; line-height:1.7; }
 
+        /* 右側滑窗：料號 → 訂單明細 */
+        .side-panel-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.25); z-index:1040; display:none; }
+        .side-panel { position:fixed; top:0; right:0; height:100vh; width:720px; max-width:92vw; background:#fff;
+            box-shadow:-4px 0 18px rgba(0,0,0,.18); z-index:1050; transform:translateX(105%);
+            transition:transform .22s ease; display:flex; flex-direction:column; }
+        .side-panel.open { transform:translateX(0); }
+        .sp-head { padding:12px 16px; border-bottom:2px solid #E9ECEF; display:flex; align-items:flex-start; gap:8px; }
+        .sp-head h4 { margin:0; font-size:16px; font-weight:700; color:var(--primary-color); }
+        .sp-close { margin-left:auto; border:none; background:none; font-size:22px; color:#888; cursor:pointer; line-height:1; }
+        .sp-close:hover { color:#c0392b; }
+        .sp-body { flex:1; overflow-y:auto; padding:10px 16px; }
+        .sp-foot { padding:8px 16px; border-top:1px solid #E9ECEF; font-size:12px; color:#666; background:#FAFBFC; }
+        table.sp-table { width:100%; border-collapse:collapse; }
+        table.sp-table th { background:#F8F9FA; font-size:12px; padding:6px 5px; border-bottom:2px solid #E9ECEF; white-space:nowrap; }
+        table.sp-table td { font-size:12px; padding:5px; border-bottom:1px solid #F1F3F5; }
+        table.sp-table td.num, table.sp-table th.num { text-align:right; }
+
         table.cd-table { width:100%; border-collapse:collapse; margin-bottom:12px; }
         table.cd-table th { background:#F8F9FA; font-size:12px; padding:5px 6px; border-bottom:2px solid #E9ECEF; white-space:nowrap; }
         table.cd-table td { font-size:12px; padding:4px 6px; border-bottom:1px solid #F1F3F5; }
@@ -911,6 +937,20 @@ if ($has_access) {
   </div>
 </div>
 
+<!-- 右側滑窗：料號 → 訂單明細 -->
+<div class="side-panel-backdrop" id="spBackdrop"></div>
+<div class="side-panel" id="sidePanel">
+  <div class="sp-head">
+    <div>
+      <h4 id="spTitle">料號訂單明細</h4>
+      <div id="spSub" style="font-size:12px;color:#888;margin-top:2px;"></div>
+    </div>
+    <button type="button" class="sp-close" id="spClose" title="關閉">&times;</button>
+  </div>
+  <div class="sp-body" id="spBody">載入中...</div>
+  <div class="sp-foot" id="spFoot"></div>
+</div>
+
 <!-- 成本明細 Modal -->
 <div class="modal fade" id="costModal" role="dialog" tabindex="-1">
   <div class="modal-dialog" style="width:720px;">
@@ -932,7 +972,12 @@ if ($has_access) {
         view: 'order', costFilter: 'all',
         sort: 'order_date', dir: 'desc',
         page: 1, size: 10,
-        lastSummary: null
+        lastSummary: null,
+        // 各檢視各自記住頁碼/排序，切換檢視不重置
+        viewState: {
+            order: { page: 1, sort: 'order_date', dir: 'desc' },
+            part:  { page: 1, sort: 'revenue',    dir: 'desc' }
+        }
     };
 
     // 預設查詢近 12 個月
@@ -1064,7 +1109,7 @@ if ($has_access) {
                   + '<td class="num">' + nfmt(p.avg_price) + '</td>'
                   + '<td class="num ' + mrClass(p.margin_rate) + '">' + nfmt(p.margin) + '</td>'
                   + '<td class="num ' + mrClass(p.margin_rate) + '">' + (p.margin_rate === null ? '–' : nfmt(p.margin_rate) + '%') + '</td>'
-                  + '<td class="num"><span class="drill-link" data-did="' + esc(p.d_id) + '" title="點擊切到訂單明細看這個料號的訂單">' + p.costed_orders + '/' + p.orders + '</span></td>'
+                  + '<td class="num"><span class="drill-link" data-did="' + esc(p.d_id) + '" data-cat="' + esc(p.category) + '" title="點擊開啟右側滑窗看這個料號的訂單明細">' + p.costed_orders + '/' + p.orders + '</span></td>'
                   + '</tr>';
             });
         }
@@ -1119,6 +1164,71 @@ if ($has_access) {
         );
     }
 
+    /* ── 右側滑窗：料號×類別 → 訂單明細 ── */
+    function closeSidePanel(){
+        $('#sidePanel').removeClass('open');
+        $('#spBackdrop').fadeOut(150);
+    }
+    $('#spClose, #spBackdrop').on('click', closeSidePanel);
+    $(document).on('keydown', function(e){ if (e.key === 'Escape') closeSidePanel(); });
+
+    function openPartOrders(did, cat){
+        $('#spTitle').text(did);
+        $('#spSub').html(catBadge(cat) + ' <span style="color:#aaa;">訂單日期 ' + ($('#fDateFrom').val() || '') + ' ～ ' + ($('#fDateTo').val() || '') + '</span>');
+        $('#spBody').html('<i class="fa fa-spinner fa-spin"></i> 載入中...');
+        $('#spFoot').text('');
+        $('#spBackdrop').fadeIn(150);
+        $('#sidePanel').addClass('open');
+        $.getJSON('Order_Profit_Analysis.php', {
+            action: 'list', view: 'order',
+            date_from: $('#fDateFrom').val(), date_to: $('#fDateTo').val(),
+            client: $.trim($('#fClient').val()),
+            d_id_exact: did, category: cat,
+            sort: 'order_date', dir: 'desc', page: 1, size: 100000
+        })
+        .done(function(res){
+            if (!res.success) { $('#spBody').html('<span class="text-danger">' + esc(res.error || '載入失敗') + '</span>'); return; }
+            if (!res.rows.length) { $('#spBody').html('<span class="text-muted">查無訂單。</span>'); return; }
+            var h = '<table class="sp-table"><thead><tr>'
+                  + '<th>訂單日期</th><th>訂單號</th><th>客戶</th>'
+                  + '<th class="num">數量</th><th class="num">單價</th><th class="num">營收</th>'
+                  + '<th class="num">單顆成本</th><th class="num">毛利</th><th class="num">毛利率</th>'
+                  + '<th>狀態</th><th>製令</th>'
+                  + '</tr></thead><tbody>';
+            var tQty = 0, tRev = 0, tCost = 0, tMargin = 0, costed = 0;
+            res.rows.forEach(function(r){
+                tQty += r.qty; tRev += r.revenue;
+                if (r.cost_status !== 'none') { tCost += r.cost_total; tMargin += r.margin; costed++; }
+                var costCell = r.boms.length
+                    ? '<span class="cost-link" data-oid="' + r.order_id + '" data-oo="' + esc(r.order_oo) + '" data-did="' + esc(r.d_id) + '"'
+                      + ' data-boms="' + esc(r.boms.join(',')) + '" data-auto="' + (r.auto_matched ? 1 : 0) + '"'
+                      + ' title="點擊看各製程計價明細">' + nfmt(r.cost_pc) + '</span>'
+                    : '–';
+                h += '<tr>'
+                  + '<td>' + esc(r.order_date) + '</td>'
+                  + '<td>' + esc(r.order_oo) + '</td>'
+                  + '<td>' + esc(r.client) + '</td>'
+                  + '<td class="num">' + nfmt(r.qty, 0) + '</td>'
+                  + '<td class="num">' + nfmt(r.unit_price) + '</td>'
+                  + '<td class="num">' + nfmt(r.revenue) + '</td>'
+                  + '<td class="num">' + costCell + '</td>'
+                  + '<td class="num ' + mrClass(r.margin_rate) + '">' + nfmt(r.margin) + '</td>'
+                  + '<td class="num ' + mrClass(r.margin_rate) + '">' + (r.margin_rate === null ? '–' : nfmt(r.margin_rate) + '%') + '</td>'
+                  + '<td>' + statusBadge(r) + '</td>'
+                  + '<td style="font-size:11px;color:#8a94a0;">' + (r.auto_matched ? '≈' : '') + esc(r.boms.join(' ')) + '</td>'
+                  + '</tr>';
+            });
+            h += '</tbody></table>';
+            $('#spBody').html(h);
+            var covRev = 0;
+            res.rows.forEach(function(r){ if (r.cost_status !== 'none') covRev += r.revenue; });
+            $('#spFoot').html('共 ' + res.rows.length + ' 筆訂單｜總數量 ' + nfmt(tQty, 0) + '｜營收合計 ' + nfmt(tRev)
+                + '｜有成本 ' + costed + ' 筆（涵蓋營收 ' + nfmt(covRev) + '、成本 ' + nfmt(tCost) + '、毛利 <b class="' + mrClass(covRev > 0 ? tMargin / covRev * 100 : null) + '">' + nfmt(tMargin) + '</b>'
+                + (covRev > 0 ? '、毛利率 ' + nfmt(tMargin / covRev * 100) + '%' : '') + '）');
+        })
+        .fail(function(){ $('#spBody').html('<span class="text-danger">載入失敗</span>'); });
+    }
+
     /* ── 成本明細跳窗 ── */
     function openCostDetail(oid, oo, did, boms, isAuto){
         $('#cdSub').text(oo + '｜' + did);
@@ -1171,18 +1281,13 @@ if ($has_access) {
     $('#btnSearch').on('click', function(){ state.page = 1; load(); });
 
     $('#opaTbody').on('click', '.part-link', function(){ openPartDrawing($(this).data('did')); });
-    $('#opaTbody').on('click', '.cost-link', function(){
+    $(document).on('click', '.cost-link', function(){   // 主表與滑窗內都可點
         openCostDetail($(this).data('oid'), $(this).data('oo'), $(this).data('did'),
                        String($(this).data('boms') || ''), $(this).data('auto') == 1);
     });
     $('#opaTbody').on('click', '.drill-link', function(){
-        // 料號彙總 → 點成本資料鑽取到該料號的訂單明細
-        $('#fKw').val($(this).data('did'));
-        state.view = 'order'; state.costFilter = 'all';
-        state.sort = 'order_date'; state.dir = 'desc'; state.page = 1;
-        $('.view-toggle .btn').removeClass('active').filter('[data-view=order]').addClass('active');
-        $('.stat-card[data-costfilter]').removeClass('active').filter('[data-costfilter=all]').addClass('active');
-        load();
+        // 料號彙總 → 右側滑窗顯示該料號×類別的訂單明細（不切換檢視、不動目前頁面狀態）
+        openPartOrders(String($(this).data('did')), String($(this).data('cat') || ''));
     });
 
     $('.stat-card[data-costfilter]').on('click', function(){
@@ -1198,12 +1303,15 @@ if ($has_access) {
     });
 
     $('.view-toggle .btn').on('click', function(){
+        var target = $(this).data('view');
+        if (target === state.view) return;
+        // 存目前檢視的頁碼/排序，還原目標檢視上次的狀態（切回不再跳第一頁）
+        state.viewState[state.view] = { page: state.page, sort: state.sort, dir: state.dir };
         $('.view-toggle .btn').removeClass('active');
         $(this).addClass('active');
-        state.view = $(this).data('view');
-        state.page = 1;
-        if (state.view === 'part') { state.sort = 'revenue'; state.dir = 'desc'; }
-        else { state.sort = 'order_date'; state.dir = 'desc'; }
+        state.view = target;
+        var vs = state.viewState[target];
+        state.page = vs.page; state.sort = vs.sort; state.dir = vs.dir;
         load();
     });
 
