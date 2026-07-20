@@ -473,7 +473,7 @@ try {
                 "SELECT o.id, o.car_no, o.group_no, o.source_type, o.source_no,
                         o.counterparty_type, o.customer_id, o.maker_id_no,
                         o.d_id, o.drawing_no, o.resp_type, o.resp_dept_id, o.resp_display,
-                        o.status, o.fill_date, o.created_by_name, o.reissue_of, o.reissue_seq,
+                        o.status, o.fill_date, o.created_by, o.created_by_name, o.reissue_of, o.reissue_seq,
                         o.assigned_to_name, o.assigned_at, o.created_at,
                         d.name AS resp_dept_name,
                         cc.customer AS customer_name, mk.maker_id AS maker_name
@@ -590,7 +590,8 @@ try {
             else foreach (car_dept_supervisors($pdo, (int)$o['opener_dept_id']) as $s) if ((int)$s['id'] === $meId) { $canApprove = true; break; }
         }
         $isCreator = ((int)$o['created_by'] === $meId);
-        $canEditHeader = (_carHas('car_edit') || $isCreator)
+        // 非開立人不可修改他人開立之單據（car_edit 不放行；唯系統管理員 all 例外）
+        $canEditHeader = ($isCreator || _carHas('all'))
                          && in_array($o['status'], ['draft', 'applying', 'app_rejected', 'open'], true);
         $canResubmit = $isCreator && in_array($o['status'], ['app_rejected', 'draft'], true);
         $canWithdraw = $isCreator && $o['status'] === 'applying';
@@ -1135,14 +1136,14 @@ try {
         jout(['success' => true, 'message' => '已完成扣款判定']);
     }
 
-    // ── 修改表頭（car_edit 或 填表人本人；限 申請中/申請退回/待指派）───────
+    // ── 修改表頭（僅開立人本人；系統管理員例外；限 申請中/申請退回/待指派）───
     case 'update_order': {
         $id = (int)($_POST['car_id'] ?? 0);
         $st = $pdo->prepare("SELECT * FROM car_order WHERE id = ?"); $st->execute([$id]);
         $o = $st->fetch(PDO::FETCH_ASSOC);
         if (!$o) jfail('查無此單');
         $isCreator = ((int)$o['created_by'] === (int)$me['id']);
-        if (!_carHas('car_edit') && !$isCreator) jerr('您沒有修改權限', 403);
+        if (!$isCreator && !_carHas('all')) jerr('非開立人不可修改他人開立之單據', 403);
         if (!in_array($o['status'], ['draft', 'applying', 'app_rejected', 'open'], true))
             jfail('此單已進入回覆/簽核流程，表頭不可修改');
 
@@ -1221,7 +1222,7 @@ try {
         $st = $pdo->prepare("SELECT created_by, status FROM car_order WHERE id = ?"); $st->execute([$id]);
         $o = $st->fetch(PDO::FETCH_ASSOC);
         if (!$o) jfail('查無此單');
-        if ((int)$o['created_by'] !== (int)$me['id'] && !_carHas('car_edit')) jerr('您不是本單申請人', 403);
+        if ((int)$o['created_by'] !== (int)$me['id'] && !_carHas('all')) jerr('您不是本單申請人', 403);
         if ($o['status'] !== 'app_rejected' && $o['status'] !== 'draft') jfail('僅「申請退回」或「已撤回」狀態可重新送出');
         $pdo->prepare("UPDATE car_order SET status='applying', open_applied_at=NOW(),
                          open_reject_reason=NULL, open_approved_by=NULL, open_approved_by_name=NULL, open_approved_at=NULL
@@ -1242,15 +1243,16 @@ try {
         jout(['success' => true, 'message' => '已重新送出申請，待主管核准']);
     }
 
-    // ── 刪除單據（需 car_delete；連同簽章/軌跡/附件記錄一併刪除）───────────
+    // ── 刪除單據（需 car_delete 且為開立人本人；系統管理員例外；連同簽章/軌跡/附件記錄一併刪除）
     case 'delete_order': {
         if (!_carHas('car_delete')) jerr('您沒有刪除權限', 403);
         $id = (int)($_POST['car_id'] ?? 0);
         if (!$id) jfail('缺少 car_id');
-        $st = $pdo->prepare("SELECT car_no, source_type, source_ref_id FROM car_order WHERE id = ?");
+        $st = $pdo->prepare("SELECT car_no, source_type, source_ref_id, created_by FROM car_order WHERE id = ?");
         $st->execute([$id]);
         $o = $st->fetch(PDO::FETCH_ASSOC);
         if (!$o) jfail('查無此單（可能已刪除）');
+        if ((int)$o['created_by'] !== (int)$me['id'] && !_carHas('all')) jerr('非開立人不可刪除他人開立之單據', 403);
 
         $pdo->beginTransaction();
         try {
@@ -1372,7 +1374,7 @@ try {
             if (!$o) jfail('查無此單');
             $uid = (int)$me['id']; $ok = _carHas('all');
             if (!$ok) {
-                if ($section === 'desc') $ok = ((int)$o['created_by'] === $uid) || _carHas('car_edit');
+                if ($section === 'desc') $ok = ((int)$o['created_by'] === $uid);   // 非開立人不可修改他人單據（含附件）
                 elseif ($section === 'result') $ok = _carHas('car_sign_primary') || _carHas('car_sign_final') || _carHas('car_manage_settings')
                                                     || car_is_primary_candidate($pdo, $o, $uid) || car_is_final_decider($pdo, $uid);
                 else $ok = ((int)$o['assigned_to'] === $uid);
@@ -1430,14 +1432,14 @@ try {
         exit;
     }
 
-    // ── 附件刪除（上傳者本人或管理權限）─────────────────────────────────────
+    // ── 附件刪除（僅上傳者本人；系統管理員例外）─────────────────────────────
     case 'delete_attachment': {
         $aid = (int)($_POST['id'] ?? 0);
         $st = $pdo->prepare("SELECT * FROM car_attachment WHERE id = ?"); $st->execute([$aid]);
         $a = $st->fetch(PDO::FETCH_ASSOC);
         if (!$a) jfail('附件不存在');
-        if ((int)$a['created_by'] !== (int)$me['id'] && !_carHas('car_delete') && !_carHas('all'))
-            jerr('僅上傳者本人或具刪除權限者可刪除附件', 403);
+        if ((int)$a['created_by'] !== (int)$me['id'] && !_carHas('all'))
+            jerr('僅上傳者本人可刪除附件', 403);
         $fullPath = carAttResolvePath($pdo, $a);
         if (is_file($fullPath)) @unlink($fullPath);
         $pdo->prepare("DELETE FROM car_attachment WHERE id = ?")->execute([$aid]);
