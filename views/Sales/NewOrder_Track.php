@@ -8854,13 +8854,16 @@ foreach($dCounts as $c) {
                             <div class="gear-out-row"><span class="gear-out-label" id="go-dp-lbl">使用球徑 dp</span><span class="gear-output-val" id="go-dp-used">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label" id="go-m-lbl">標準跨珠值 M</span><span class="gear-output-val val-ok" id="go-m">—</span></div>
                             <div class="gear-out-row" id="go-row-rechob-m"><span class="gear-out-label">建議滾齒 M（公稱）</span><span class="gear-output-val val-ok" id="go-rechob-m" style="font-weight:700;">—</span></div>
-                            <div class="gear-out-row"><span class="gear-out-label" id="go-rechob-m-range-lbl">建議滾齒 M 下/上限</span>
+                            <div class="gear-out-row"><span class="gear-out-label" id="go-rechob-m-range-lbl">建議滾齒 M 下/上限（依標準跨珠值 M 換算）</span>
                                 <span class="gear-output-val" id="go-rechob-m-range">—</span>
                             </div>
                             <div class="gear-out-row" id="go-row-cust-m" style="display:none;border-top:1px dashed #a5d6b5;padding-top:5px;margin-top:2px;">
                                 <span class="gear-out-label" style="color:#6a1b9a;">客戶規格→我方球徑 M 下/上限</span>
                                 <span class="gear-output-val val-ok" id="go-cust-m-range" style="font-weight:700;color:#6a1b9a;">—</span>
                             </div>
+                            <div class="gear-out-row" id="go-row-cust-rh-wk" style="display:none;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒跨齒厚 Wk</span><span class="gear-output-val" id="go-cust-rh-wk" style="color:#6a1b9a;">—</span></div>
+                            <div class="gear-out-row" id="go-row-cust-rh-m" style="display:none;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒 M（公稱）</span><span class="gear-output-val val-ok" id="go-cust-rh-m" style="font-weight:700;color:#6a1b9a;">—</span></div>
+                            <div class="gear-out-row" id="go-row-cust-rh-range" style="display:none;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒 M 下/上限</span><span class="gear-output-val val-ok" id="go-cust-rh-m-range" style="font-weight:700;color:#6a1b9a;">—</span></div>
                         </div>
                         <div id="go-cust-m-note" style="display:none;margin-top:4px;font-size:10px;color:#8e6aa0;line-height:1.5;"></div>
                     </div>
@@ -9970,15 +9973,16 @@ foreach($dCounts as $c) {
         gSetText('go-dp-lbl', _gearInternal ? '使用測棒 dp（跨銷徑）' : '使用球徑 dp');
         gSetText('go-m-lbl',  _gearInternal ? '跨銷值 M（內量 dc−dp）' : '標準跨珠值 M');
         gSetText('go-m-title',_gearInternal ? '跨銷值 M（內齒）' : '跨珠值 M');
-        gSetText('go-rechob-m-range-lbl', _gearInternal ? '跨銷值 M 下/上限' : '建議滾齒 M 下/上限');
+        gSetText('go-rechob-m-range-lbl', _gearInternal ? '跨銷值 M 下/上限' : '建議滾齒 M 下/上限（依標準跨珠值 M 換算）');
         var blk = document.getElementById('go-block-wk'); if (blk) blk.style.display = _gearInternal ? 'none' : '';
         var rm  = document.getElementById('go-row-rechob-m'); if (rm) rm.style.display = _gearInternal ? 'none' : '';
         ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-rechob-wk','go-allow-info','go-dp-used','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range'].forEach(function(id){ setOut(id,''); });
         // 客戶數據輸出：換齒型後屬舊模式結果，一併隱藏
         var _cwRow = document.getElementById('go-row-cust-wk'); if (_cwRow) _cwRow.style.display = 'none';
         var _cxOut = document.getElementById('g-cust-x-out'); if (_cxOut) _cxOut.style.display = 'none';
-        var _cmRow = document.getElementById('go-row-cust-m'); if (_cmRow) _cmRow.style.display = 'none';
-        var _cmNote = document.getElementById('go-cust-m-note'); if (_cmNote) _cmNote.style.display = 'none';
+        ['go-row-cust-m','go-cust-m-note','go-row-cust-rh-wk','go-row-cust-rh-m','go-row-cust-rh-range'].forEach(function(id){
+            var e = document.getElementById(id); if (e) e.style.display = 'none';
+        });
         ['g-cust-x-up','g-cust-x-dn','g-cust-x-mid'].forEach(function(id){ gSetText(id,'—'); });
         showWarn('g-m1-warn','');
     };
@@ -10201,9 +10205,11 @@ foreach($dCounts as $c) {
 
         showWarn('g-m1-warn', warns.length ? warns.join('；') : '');
 
-        // 客戶提供 M（選填）→ 右側顯示換算為我方球徑後的 M 上/下限
-        if (_cb && !_cb.err) showCustMineM(_cb, mn, z, alpha_n, beta, dp_used);
-        else hideCustOutputs();
+        // 客戶提供 M（選填）→ 右側顯示換算為我方球徑後的 M 上/下限，及依客戶規格計算的建議滾齒尺寸
+        if (_cb && !_cb.err) {
+            showCustMineM(_cb, mn, z, alpha_n, beta, dp_used);
+            showCustRecHob(_cb, mn, z, alpha_n, beta, inv_alpha_t, k_val, dp_used, allow_val, is_boss, mtol_up, mtol_dn);
+        } else hideCustOutputs();
 
         // 啟用 M2~M4 分頁
         ['m2','m3','m4','m5','rx'].forEach(function(t) {
@@ -10239,11 +10245,51 @@ foreach($dCounts as $c) {
         gSetText('g-cust-x-mid', fmtNum(gRound(cb.x_mid, 5), 5));
         var box = document.getElementById('g-cust-x-out'); if (box) box.style.display = 'block';
     }
-    // 隱藏客戶回推明細與右側換算列
+    // 隱藏客戶回推明細與右側換算列（含客戶規格建議滾齒列）
     function hideCustOutputs() {
-        var b = document.getElementById('g-cust-x-out'); if (b) b.style.display = 'none';
-        var r = document.getElementById('go-row-cust-m'); if (r) r.style.display = 'none';
-        var n = document.getElementById('go-cust-m-note'); if (n) n.style.display = 'none';
+        ['g-cust-x-out','go-row-cust-m','go-cust-m-note',
+         'go-row-cust-rh-wk','go-row-cust-rh-m','go-row-cust-rh-range'].forEach(function(id){
+            var e = document.getElementById(id); if (e) e.style.display = 'none';
+        });
+    }
+    // 右側顯示「客戶規格 建議滾齒」：依客戶 M 上限 → 我方跨齒厚 + 預留量 → 我方球徑 M（外齒專用，邏輯同 M5/基本計算）
+    //    參數 allowVal/isBoss 由基本計算的預留量查表結果帶入；k、dp 皆用我方（基本計算）值
+    function showCustRecHob(cb, mn, z, alpha_n, beta, inv_alpha_t, k, ourDp, allowVal, isBoss, mtolUp, mtolDn) {
+        var ids = ['go-row-cust-rh-wk','go-row-cust-rh-m','go-row-cust-rh-range'];
+        // 內齒無「建議滾齒（跨齒厚）」概念 → 不顯示
+        if (_gearInternal) { ids.forEach(function(i){ var e=document.getElementById(i); if(e) e.style.display='none'; }); return; }
+        // 以客戶 M 上限回推的 x 為基準（無上限則退用下限）
+        var xBase = (cb.x_up !== null) ? cb.x_up : cb.x_dn;
+        var A = mn * Math.cos(alpha_n) * (PI * (k - 0.5) + z * inv_alpha_t);
+        var B = 2 * mn * Math.sin(alpha_n);
+        if (isBoss) {
+            setOut('go-cust-rh-wk', '需詢問BOSS', 'val-boss');
+            setOut('go-cust-rh-m', '需詢問BOSS', 'val-boss');
+            setOut('go-cust-rh-m-range', '需詢問BOSS', 'val-boss');
+        } else if (allowVal > 0 && Math.abs(B) > 1e-10) {
+            // 客戶 M 上限 → 我方跨齒厚 Wk(上限) → 加上公差偏移(0−(−0.02)=0.02) → 加預留量
+            var Wk_custmax = A + B * xBase;
+            var rh_Wk = gRound(Wk_custmax + 0.02 + allowVal, 5);
+            var x_rh = (rh_Wk - A) / B;
+            var M_rh = calcM(x_rh, mn, z, alpha_n, beta, ourDp);  // 我方球徑
+            setOut('go-cust-rh-wk', fmtNum(rh_Wk, 5), '');
+            var wkEl = document.getElementById('go-cust-rh-wk'); if (wkEl) wkEl.style.color = '#6a1b9a';
+            if (typeof M_rh === 'number') {
+                setOut('go-cust-rh-m', fmtNum(M_rh, 5), 'val-ok');
+                setOut('go-cust-rh-m-range',
+                    fmtNum(gRound(M_rh + mtolDn, 5), 5) + '  ~  ' + fmtNum(gRound(M_rh + mtolUp, 5), 5), 'val-ok');
+            } else {
+                setOut('go-cust-rh-m', String(M_rh), 'val-err');
+                setOut('go-cust-rh-m-range', '—');
+            }
+            var mEl = document.getElementById('go-cust-rh-m'); if (mEl) mEl.style.color = '#6a1b9a';
+            var rEl = document.getElementById('go-cust-rh-m-range'); if (rEl) rEl.style.color = '#6a1b9a';
+        } else {
+            setOut('go-cust-rh-wk', '（待查表）', 'val-warn');
+            setOut('go-cust-rh-m', '（待查表）', 'val-warn');
+            setOut('go-cust-rh-m-range', '—');
+        }
+        ids.forEach(function(i){ var e=document.getElementById(i); if(e) e.style.display=''; });
     }
     // 右側顯示「客戶規格→我方球徑 M 上/下限」：以客戶回推 x 套用我方球徑重算 M
     function showCustMineM(cb, mn, z, alpha_n, beta, ourDp) {
@@ -10257,8 +10303,9 @@ foreach($dCounts as $c) {
         var row = document.getElementById('go-row-cust-m'); if (row) row.style.display = '';
         var note = document.getElementById('go-cust-m-note');
         if (note) {
-            note.textContent = '依客戶球徑 dp=' + fmtNum(cb.custDp, 3) + ' 回推轉位 → 換用我方球徑 dp='
-                + fmtNum(ourDp, 3) + ' 的' + (_gearInternal ? '跨銷' : '跨珠') + '值';
+            note.innerHTML = '客戶規格→我方球徑：依客戶球徑 dp=' + fmtNum(cb.custDp, 3) + ' 回推轉位 → 換用我方球徑 dp='
+                + fmtNum(ourDp, 3) + ' 的' + (_gearInternal ? '跨銷' : '跨珠') + '值。'
+                + (_gearInternal ? '' : '<br>客戶規格 建議滾齒：依客戶 M 上限 → 我方跨齒厚 + 預留量（模數/外徑取大）→ 我方球徑 M；M 公差沿用上方設定。');
             note.style.display = 'block';
         }
     }
@@ -10685,6 +10732,7 @@ foreach($dCounts as $c) {
         document.querySelectorAll('.gear-preset-btn').forEach(function(b){ b.classList.remove('active'); });
         ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-dp-used',
          'go-allow-info','go-rechob-wk','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range','go-cust-m-range',
+         'go-cust-rh-wk','go-cust-rh-m','go-cust-rh-m-range',
          // M2~M5、跨齒轉換 各分頁計算結果
          'm2-m-up','m2-m-dn','m2-wk-up-chk','m2-wk-dn-chk',
          'm3-k-out','m3-x','m3-wk','m3-wk-tol','m3-wk-up','m3-wk-dn',
@@ -10699,8 +10747,9 @@ foreach($dCounts as $c) {
         // 隱藏客戶數據相關輸出列
         var custWkRow = document.getElementById('go-row-cust-wk'); if (custWkRow) custWkRow.style.display = 'none';
         var custXOut = document.getElementById('g-cust-x-out'); if (custXOut) custXOut.style.display = 'none';
-        var custMRow = document.getElementById('go-row-cust-m'); if (custMRow) custMRow.style.display = 'none';
-        var custMNote = document.getElementById('go-cust-m-note'); if (custMNote) custMNote.style.display = 'none';
+        ['go-row-cust-m','go-cust-m-note','go-row-cust-rh-wk','go-row-cust-rh-m','go-row-cust-rh-range'].forEach(function(id){
+            var e = document.getElementById(id); if (e) e.style.display = 'none';
+        });
         showWarn('g-m1-warn','');
         _baseParams = null;
         setGearMode('ext'); // 清除後一律回到預設「外齒」模式
