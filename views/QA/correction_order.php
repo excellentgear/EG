@@ -223,11 +223,12 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
               <th style="width:110px;">料號</th>
               <th style="width:110px;">責任單位</th>
               <th style="width:95px;">目前狀態</th>
+              <th style="width:72px;" title="開立至今工作天（進行中單據；達提醒門檻標紅）">已歷工作天</th>
               <th style="width:300px;">最新動態</th>
-              <th style="width:85px;">填表人</th>
+              <th style="width:85px;">開立人員</th>
               <th style="width:70px;">操作</th>
             </tr></thead>
-            <tbody id="carBody"><tr><td colspan="9" class="text-center text-muted">載入中…</td></tr></tbody>
+            <tbody id="carBody"><tr><td colspan="10" class="text-center text-muted">載入中…</td></tr></tbody>
           </table>
         </div>
       </div></div></div></div>
@@ -405,6 +406,14 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
           <label>列印表尾文字 <small class="text-muted">(顯示於列印頁最下方)</small></label>
           <input type="text" id="fs-print-footer" class="form-control input-sm" placeholder="例：2-QA-01-04">
         </div>
+        <div class="form-group">
+          <label>逾期提醒 <small class="text-muted">(卡在同一關卡超過設定工作天數，依狀態自動通知相關人員)</small></label>
+          <div class="form-inline">
+            <label style="font-weight:normal;margin-right:8px;"><input type="checkbox" id="fs-remind-enabled"> 啟用</label>
+            超過 <input type="number" id="fs-remind-wd" class="form-control input-sm" style="width:70px;" min="1" max="60" value="5"> 個工作天提醒
+          </div>
+          <div class="text-muted" style="font-size:12px;">週六日與行事曆休假日不計、補班日計入；進入下一關卡即重新計算。</div>
+        </div>
       </div>
       <div class="col-md-6">
         <div class="form-group">
@@ -493,11 +502,32 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     <ol style="padding-left:18px;line-height:1.9;">
       <li><b>開立</b>：主管職（依「簽核流程設定」的職稱層級門檻，兼任者以所選職務判定）直接開立並產生單號；一般職送出<b>開立申請</b>，待所屬部門主管核准後才成立配號（核准前申請人可<b>撤回</b>，退回/撤回可修改後重送）。責任單位可多選，將自動拆成多張同事件單。</li>
       <li><b>指派回覆人</b>：責任單位為部門→該部門主管其中一人指派回覆人（一人指派後其他主管即不可再指派）；開單時已指定人員者，該人員直接為回覆人免指派；責任單位為廠商→由生管代填、簽章壓廠商名。</li>
-      <li><b>回覆填寫</b>：回覆人填「異常原因分析、矯正措施、預防措施」三段，各段簽章（修改需取消簽章重簽），三段皆簽後<b>送出</b>。回覆人本人不可由代理人代填。送出前可隨時由置頂欄通知回來修改。</li>
-      <li><b>主管簽核</b>：責任單位主管（廠商責任＝生管主管）簽核通過後送總經理。</li>
-      <li><b>總經理裁決</b>：<b>結案</b>（自動簽章、押今日結案日，並一併判定扣款金額，未填＝不扣款）或 <b>不可結案</b>（必填原因，自動產生退件 R 單，表頭帶入、三段需重填）。</li>
-      <li><b>通知</b>：各節點自動通知相關人員；「指派您回覆」通知在填寫送出前持續顯示；同單舊進度通知自動已讀只留最新。</li>
+      <li><b>回覆填寫</b>：回覆人填「異常原因分析、矯正措施、預防措施」三段，各段簽章（修改需取消簽章重簽），三段皆簽後<b>送出</b>。回覆人本人不可由代理人代填。送出前可隨時由置頂欄通知回來修改。若開立申請被主管退回，開立人可修改後重送，或按<b>放棄申請</b>（轉為「已撤回」保留紀錄、停止提醒，日後仍可重送）。</li>
+      <li><b>主管簽核</b>：責任單位主管（廠商責任＝生管主管）可<b>簽核通過</b>送總經理，或填原因<b>退回重改</b>（退回責任人重新填寫）。</li>
+      <li><b>總經理裁決</b>：<b>結案</b>（自動簽章、押今日結案日，並一併判定扣款金額，未填＝不扣款）或 <b>不可結案</b>（＝退回，必填原因，自動產生退件 R 單，表頭帶入、三段需重填）。</li>
     </ol>
+
+    <h5 style="margin-top:12px;"><b><i class="fa fa-bell"></i> 誰會收到通知、什麼時候收到</b></h5>
+    <p style="margin-bottom:6px;">通知分兩種：<b>待你處理</b>＝留在畫面上方「待處理」列，做完才消失（如待你簽核、待你填寫）；<b>知會你</b>＝看過即消，只是讓你知道進度。</p>
+    <p style="margin-bottom:6px;">另外，只要<b>卡在同一關卡超過設定工作天數</b>（預設 5 天，管理員可於「簽核流程設定」調整）還沒往下走，系統會<b>再提醒一次</b>（之後每滿一次再提醒），催相關人員處理；進到下一關就重新計算。<span class="text-muted">工作天＝扣除週六日與行事曆休假日，補班日算上班。</span></p>
+    <div class="table-responsive">
+    <table class="table table-bordered table-condensed" style="font-size:12.5px;">
+      <thead><tr><th style="width:34%;">目前卡在哪一關</th><th style="width:33%;">待處理（要動作的人）</th><th style="width:33%;">知會（讓他知道）</th></tr></thead>
+      <tbody>
+        <tr><td>開立申請中（等主管核准）</td><td>開單部門主管</td><td>開單人</td></tr>
+        <tr><td>申請被退回（等開單人重送）</td><td>開單人</td><td>—</td></tr>
+        <tr><td>待指派回覆人</td><td>責任單位主管</td><td>開單人、最終決策者</td></tr>
+        <tr><td>填寫中（等責任人填三段）</td><td>責任人員</td><td>責任單位主管、最終決策者</td></tr>
+        <tr><td>待主管簽核</td><td>責任單位主管</td><td>最終決策者</td></tr>
+        <tr><td>待總經理裁決</td><td>最終決策者</td><td>開單人</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p style="margin-bottom:4px;"><b>結案／退件當下的通知：</b></p>
+    <ul style="padding-left:18px;line-height:1.7;margin-bottom:6px;">
+      <li><b>結案</b>：知會 責任單位主管、回覆人、開單人；扣款結果另發給管理課（機密）。</li>
+      <li><b>不可結案（退件）</b>：知會 責任單位主管、責任人員、開單人；自動產生退件 R 單，回到責任人重新填寫。</li>
+    </ul>
     <p class="text-muted" style="font-size:12px;">※ 扣款判定與不可結案原因為機密，僅扣款判定人員與最終決策者本人可見。</p>
   </div>
 </div></div></div>
@@ -517,6 +547,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
   var CAN_VIEW   = <?php echo $CAN_VIEW ? 'true':'false'; ?>;
   var OPEN_ID    = <?php echo (int)($_GET['open_id'] ?? 0); ?>;   // 通知直開的單據 id（當事人無 car_view 也可開）
   var state = { card:'all', page:1, size:10 };
+  var REMIND_WD = 5;   // 逾期提醒工作天門檻（load_page_data 回傳後覆蓋）
   var resp = [];            // 責任單位選擇陣列
   var sel = {};             // 表單暫存綁定
   var myPositions = [];     // 目前使用者的(部門,職務)身分
@@ -548,9 +579,10 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       card: state.card, page: state.page, size: state.size,
       resp: $('#f-dept').val()||'', source_type: $('#f-source').val()||'', kw: $('#f-kw').val()||''
     }).done(function(r){
-      if(!r || !r.success){ $('#carBody').html('<tr><td colspan="9" class="text-danger text-center">'+esc(r&&r.message||'載入失敗')+'</td></tr>'); return; }
+      if(!r || !r.success){ $('#carBody').html('<tr><td colspan="10" class="text-danger text-center">'+esc(r&&r.message||'載入失敗')+'</td></tr>'); return; }
+      if(r.remind_working_days) REMIND_WD = r.remind_working_days|0;
       renderStats(r.stats); renderRows(r.rows); renderPager(r);
-    }).fail(function(){ $('#carBody').html('<tr><td colspan="9" class="text-danger text-center">連線失敗</td></tr>'); });
+    }).fail(function(){ $('#carBody').html('<tr><td colspan="10" class="text-danger text-center">連線失敗</td></tr>'); });
   }
   function renderStats(s){ s=s||{}; $('#stat-all').text(s.all||0); $('#stat-pending').text(s.pending||0); $('#stat-unclosed').text(s.unclosed||0); $('#stat-rejected').text(s.rejected||0); $('#stat-closed').text(s.closed||0); }
   // 簽章印章 SVG 產生（carStamp/stampRow）已抽成共用檔 resource/js/eg_stamp.js（EGStamp.stamp/.row）
@@ -661,8 +693,13 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     var m={applying:'st-applying',app_rejected:'st-apprej',open:'st-open',assigned:'st-assigned',replying:'st-replying',pending_primary:'st-primary',pending_final:'st-final',closed:'st-closed',rejected:'st-rejected',draft:'st-open'};
     return '<span class="st-badge '+(m[st]||'st-open')+'">'+esc(lbl)+'</span>';
   }
+  function wdCell(o){
+    if(o.open_wd===null || o.open_wd===undefined) return '<span class="text-muted">—</span>';
+    var over = (REMIND_WD>0 && o.open_wd>=REMIND_WD);
+    return '<span'+(over?' style="color:#c0392b;font-weight:bold;" title="已達逾期提醒門檻"':'')+'>'+o.open_wd+' 天</span>';
+  }
   function renderRows(rows){
-    if(!rows || !rows.length){ $('#carBody').html('<tr><td colspan="9" class="text-center text-muted">查無資料</td></tr>'); return; }
+    if(!rows || !rows.length){ $('#carBody').html('<tr><td colspan="10" class="text-center text-muted">查無資料</td></tr>'); return; }
     var h='';
     rows.forEach(function(o){
       var reissue = o.reissue_of ? ' <span class="label label-warning">退件R'+(o.reissue_seq||'')+'</span>' : '';
@@ -680,6 +717,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         + '<td>'+esc(o.drawing_no||'')+'</td>'
         + '<td>'+esc(o.resp_show||'—')+'</td>'
         + '<td>'+stBadge(o.status,o.status_label)+'</td>'
+        + '<td class="text-center">'+wdCell(o)+'</td>'
         + '<td>'+(latest||'<span class="text-muted">—</span>')+'</td>'
         + '<td>'+esc(o.created_by_name||'')+'</td>'
         + '<td><button class="btn btn-xs btn-default v-btn" data-id="'+o.id+'" title="檢視"><i class="fa fa-eye"></i></button>'
@@ -972,7 +1010,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         actions+='<div style="margin-top:8px;">'
           +(perm.can_edit_header?'<button class="btn btn-warning btn-sm" id="btn-edit-header"><i class="fa fa-pencil"></i> 修改</button> ':'')
           +(perm.can_resubmit?'<button class="btn btn-primary btn-sm" id="btn-resubmit"><i class="fa fa-paper-plane"></i> 重新送出申請</button> ':'')
-          +(perm.can_withdraw?'<button class="btn btn-default btn-sm" id="btn-withdraw"><i class="fa fa-undo"></i> 撤回申請</button>':'')
+          +(perm.can_withdraw?'<button class="btn btn-default btn-sm" id="btn-withdraw"><i class="fa fa-undo"></i> 撤回申請</button> ':'')
+          +((o.status==='app_rejected' && (o.created_by|0)===perm.me_id)?'<button class="btn btn-default btn-sm" id="btn-abandon" title="不再送出，保留紀錄並停止逾期提醒"><i class="fa fa-ban"></i> 放棄申請</button>':'')
           +'</div>';
       }
 
@@ -1012,6 +1051,11 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       if(perm.can_resubmit){ $('#btn-resubmit').on('click', function(){
         if(!confirm('確定重新送出申請？將重新通知部門主管核准。')) return;
         api('resubmit_application',{car_id:o.id}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ $('#viewModal').modal('hide'); fetchPage(state.page);} }); }); }
+      $('#btn-abandon').on('click', function(){
+        if(!confirm('確定放棄此申請？\n單據將轉為「已撤回」保留紀錄、停止逾期提醒，日後仍可重新送出。')) return;
+        var reason=prompt('放棄原因（選填）')||'';
+        api('abandon_application',{car_id:o.id, reason:reason}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ $('#viewModal').modal('hide'); fetchPage(state.page);} })
+          .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'放棄失敗'); }); });
       if(perm.can_withdraw){ $('#btn-withdraw').on('click', function(){
         var reason=prompt('撤回原因（必填）'); if(!reason) return;
         api('withdraw_application',{car_id:o.id, reason:reason}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ openView(o.id); fetchPage(state.page);} })
@@ -1061,6 +1105,9 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       $('#btn-primary-sign').on('click', function(){ if(!confirm('確認簽核通過？將送交總經理裁決。')) return;
         api('primary_sign',{car_id:id}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ openView(id); fetchPage(state.page);} })
           .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'簽核失敗'); }); });
+      $('#btn-primary-reject').on('click', function(){ var reason=prompt('退回原因（必填）——將退回責任人依此原因重新填寫'); if(!reason) return;
+        api('primary_reject',{car_id:id, reason:reason}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ $('#viewModal').modal('hide'); fetchPage(state.page);} })
+          .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'退回失敗'); }); });
       $('#btn-final-close').on('click', function(){
         var amt=$('#final-deduct-amount').val(), note=$('#final-deduct-note').val();
         var amtTxt = (amt!=='' && parseFloat(amt)>0) ? ('扣款 '+amt+' 元') : '不扣款';
@@ -1140,7 +1187,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     h+='<div style="flex:1;border-right:1px solid #eee;display:flex;flex-direction:column;">';
     h+='<div style="padding:10px 12px;flex:1;display:flex;flex-direction:column;">'
       +'<b>主管簽核：</b>'
-      +(perm.can_sign_primary?'<div style="margin-top:6px;"><button class="btn btn-success btn-xs" id="btn-primary-sign"><i class="fa fa-pencil"></i> 簽核通過</button></div>':'')
+      +(perm.can_sign_primary?'<div style="margin-top:6px;"><button class="btn btn-success btn-xs" id="btn-primary-sign"><i class="fa fa-pencil"></i> 簽核通過</button> <button class="btn btn-warning btn-xs" id="btn-primary-reject"><i class="fa fa-undo"></i> 退回重改</button></div>':'')
       +'<div style="flex:1;"></div>'+sigLine(sigMap['primary'])
       +'</div>';
     // 左下：扣款判定（機密——僅扣款判定人員/最終決策者本人可見；欄位加高容納圖章）
@@ -1414,6 +1461,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       $('#fs-attach-path').val(r.attach_root_path||'');
       $('#fs-print-header').val(r.print_header||'');
       $('#fs-print-footer').val(r.print_footer||'');
+      $('#fs-remind-wd').val(r.remind_working_days||5);
+      $('#fs-remind-enabled').prop('checked', (r.remind_enabled|0)!==0);
       var posH='<option value="">請選擇職位…</option>';
       (r.positions||[]).forEach(function(p){ posH+='<option value="'+esc(p.name)+'"'+(p.name===r.final_decider_position?' selected':'')+'>'+esc(p.name)+'</option>'; });
       $('#fs-final-pos').html(posH);
@@ -1449,7 +1498,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       api('save_flow_settings',{ supervisor_min_level:$('#fs-level').val(), pm_dept_ids:JSON.stringify(pm),
         admin_dept_ids:JSON.stringify(ad), admin_user_ids:JSON.stringify(au),
         final_decider_position:$('#fs-final-pos').val()||'', attach_root_path:$('#fs-attach-path').val()||'',
-        print_header:$('#fs-print-header').val()||'', print_footer:$('#fs-print-footer').val()||'' })
+        print_header:$('#fs-print-header').val()||'', print_footer:$('#fs-print-footer').val()||'',
+        remind_working_days:$('#fs-remind-wd').val()||5, remind_enabled:$('#fs-remind-enabled').prop('checked')?'1':'0' })
       .done(function(r){ $('#fs-msg').text(r&&r.message||''); if(r&&r.success) setTimeout(function(){ $('#flowModal').modal('hide'); },500); })
       .fail(function(xhr){ $('#fs-msg').text((xhr.responseJSON&&xhr.responseJSON.message)||'儲存失敗'); });
     });
