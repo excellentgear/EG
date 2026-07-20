@@ -103,6 +103,18 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         .att-chip a{ color:#2980b9; text-decoration:none; }
         .att-chip a:hover{ text-decoration:underline; }
         .att-chip .att-del{ color:#d9534f; cursor:pointer; font-weight:bold; }
+        /* 附件逐列顯示：附件N + 檔名 + 說明；可拖曳排序 */
+        .att-line{ display:flex; align-items:center; gap:6px; background:#f7fafc; border:1px solid #e3ebf1; border-radius:6px; padding:2px 8px; font-size:12px; margin:0 0 3px 0; }
+        .att-line a{ color:#2980b9; text-decoration:none; white-space:nowrap; }
+        .att-line a:hover{ text-decoration:underline; }
+        .att-line .att-no{ background:#5b7d99; color:#fff; border-radius:4px; padding:0 6px; font-size:11px; white-space:nowrap; }
+        .att-line .att-desc{ color:#333; }
+        .att-line .att-del{ color:#d9534f; cursor:pointer; font-weight:bold; margin-left:auto; }
+        .att-line .att-grip{ color:#bbb; cursor:move; }
+        .att-line.dragging{ opacity:.4; }
+        /* 列表底色：我是責任人員=暖淺粉紅、我開立=暖淺藍、已結案不上色 */
+        #carBody tr.row-me-resp>td{ background-color:#fdeceb !important; }
+        #carBody tr.row-me-open>td{ background-color:#e8f2fb !important; }
         .st-badge{ border-radius:10px; padding:2px 9px; font-size:11px; font-weight:600; white-space:nowrap; display:inline-block; }
         .st-applying{background:#FCF3CF;color:#7D6608;border:1px solid #F9E79F;}
         .st-apprej{background:#F6DDCC;color:#A04000;border:1px solid #EDBB99;}
@@ -197,6 +209,11 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
           </div>
         </div>
 
+        <div style="font-size:11px;color:#888;margin:2px 0 4px;">
+          底色說明：<span style="background:#fdeceb;border:1px solid #f0d5d3;padding:0 8px;border-radius:3px;">我是責任人員</span>
+          <span style="background:#e8f2fb;border:1px solid #d3e2f0;padding:0 8px;border-radius:3px;">我開立的單</span>
+          （已結案不上色）
+        </div>
         <div class="table-responsive">
           <table class="table table-bordered table-hover" id="carTable">
             <thead><tr>
@@ -330,7 +347,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       <div style="margin-top:6px;">
         <label class="btn btn-default btn-xs" style="margin:0;"><i class="fa fa-upload"></i> 上傳附件
           <input type="file" id="create-att-input" style="display:none;"></label>
-        <span class="text-muted" style="font-size:12px;">（jpg/png/pdf/office，20MB 內；多選責任單位拆單時每張單都會帶附件）</span>
+        <span class="text-muted" style="font-size:12px;">（jpg/png/pdf/office，20MB 內；每個附件都需填寫說明，將以「附件N：說明」顯示；多選責任單位拆單時每張單都會帶附件）</span>
         <div id="create-att-list" style="margin-top:4px;"></div>
       </div>
     </div>
@@ -543,30 +560,46 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
 
   // ---------- 附件 ----------
   var curViewId = 0;   // 目前開啟檢視的單據 id（附件上傳/刪除用）
-  function attList(atts, sec, canUp){
+  // 附件清單：逐列「附件N + 檔名 + 說明」；canUp=可上傳(同時可拖曳排序)；lockDel=鎖定刪除(如核准後的異常說明附件)
+  function attList(atts, sec, canUp, lockDel){
     var items=(atts||[]).filter(function(a){ return a.field_type===sec; });
-    var h='<div class="att-box">';
-    items.forEach(function(a){
-      var delBtn = ((a.created_by|0)===ME_ID) ? '<span class="att-del" data-id="'+a.id+'" title="刪除">&times;</span>' : '';
-      h+='<span class="att-chip"><a href="'+API+'?action=download_attachment&id='+a.id+'" target="_blank"><i class="fa fa-paperclip"></i> '+esc(a.original_filename||a.file_name)+'</a>'+delBtn+'</span>';
+    var h='<div class="att-box" data-sec="'+sec+'">';
+    items.forEach(function(a, i){
+      var delBtn = (!lockDel && (a.created_by|0)===ME_ID) ? '<span class="att-del" data-id="'+a.id+'" title="刪除">&times;</span>' : '';
+      h+='<div class="att-line" data-id="'+a.id+'"'+(canUp?' draggable="true"':'')+'>'
+        +(canUp?'<i class="fa fa-bars att-grip" title="拖曳調整順序"></i>':'')
+        +'<span class="att-no">附件'+(i+1)+'</span>'
+        +'<a href="'+API+'?action=download_attachment&id='+a.id+'" target="_blank"><i class="fa fa-paperclip"></i> '+esc(a.original_filename||a.file_name)+'</a>'
+        +'<span class="att-desc">'+esc(a.description||'')+'</span>'
+        +delBtn+'</div>';
     });
     if(canUp) h+='<label class="btn btn-default btn-xs" style="margin:0;"><i class="fa fa-upload"></i> 上傳附件<input type="file" class="att-up" data-sec="'+sec+'" style="display:none;"></label>';
     if(!items.length && !canUp) h+='<span class="text-muted" style="font-size:12px;">（無附件）</span>';
     h+='</div>'; return h;
   }
-  function uploadAttachment(file, sec, carId, tempKey, done){
+  function uploadAttachment(file, sec, carId, tempKey, desc, done){
     var fd=new FormData();
     fd.append('action','upload_attachment'); fd.append('field_type',sec); fd.append('file',file);
+    fd.append('description', desc||'');
     if(carId) fd.append('car_id',carId); else fd.append('temp_key',tempKey);
     $.ajax({url:API,method:'POST',data:fd,processData:false,contentType:false,dataType:'json'})
       .done(function(r){ if(!r||!r.success){ alert(r&&r.message||'上傳失敗'); } done&&done(r); })
       .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'上傳失敗'); done&&done(null); });
   }
+  // 每個附件都必須填寫說明（取消或留空即中止上傳）
+  function askAttDesc(){
+    var d = prompt('請填寫此附件的說明（必填，將以「附件N：說明」顯示於單據）','');
+    if(d===null) return null;
+    d = $.trim(d);
+    if(!d){ alert('每個附件都需填寫說明，已取消上傳'); return null; }
+    return d;
+  }
   $(function(){
     // 檢視 Modal 內：分區上傳 / 刪除（事件委派一次綁定）
     $('#view-body').on('change','.att-up',function(){
       var f=this.files[0]; if(!f) return; var sec=$(this).data('sec');
-      uploadAttachment(f, sec, curViewId, '', function(r){ if(r&&r.success) openView(curViewId); });
+      var d=askAttDesc(); if(d===null){ $(this).val(''); return; }
+      uploadAttachment(f, sec, curViewId, '', d, function(r){ if(r&&r.success) openView(curViewId); });
       $(this).val('');
     });
     $('#view-body').on('click','.att-del',function(){
@@ -574,11 +607,42 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       api('delete_attachment',{id:aid}).done(function(r){ if(r&&r.success) openView(curViewId); else alert(r&&r.message||'刪除失敗'); })
         .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'刪除失敗'); });
     });
+    // 附件拖曳排序（同一區段內；放開後存檔並重整編號）
+    var _dragEl=null, _dragOrder='';
+    $('#view-body').on('dragstart','.att-line[draggable]',function(e){
+      _dragEl=this;
+      _dragOrder=$(this).closest('.att-box').find('.att-line').map(function(){ return $(this).data('id'); }).get().join(',');
+      $(this).addClass('dragging');
+      try{ e.originalEvent.dataTransfer.effectAllowed='move'; e.originalEvent.dataTransfer.setData('text/plain',''); }catch(_e){}
+    });
+    $('#view-body').on('dragover','.att-line[draggable]',function(e){
+      if(!_dragEl||_dragEl===this) return;
+      if($(this).closest('.att-box')[0]!==$(_dragEl).closest('.att-box')[0]) return;   // 不可跨區段
+      e.preventDefault();
+      var rect=this.getBoundingClientRect();
+      if((e.originalEvent.clientY-rect.top) < rect.height/2) $(this).before(_dragEl); else $(this).after(_dragEl);
+    });
+    $('#view-body').on('dragover','.att-box',function(e){ e.preventDefault(); });
+    $('#view-body').on('drop','.att-box,.att-line',function(e){ e.preventDefault(); });
+    $('#view-body').on('dragend','.att-line[draggable]',function(){
+      $(this).removeClass('dragging');
+      if(!_dragEl) return;
+      var $box=$(_dragEl).closest('.att-box'); _dragEl=null;
+      var ids=$box.find('.att-line').map(function(){ return $(this).data('id'); }).get();
+      if(ids.join(',')===_dragOrder) return;   // 順序沒變
+      api('reorder_attachments',{car_id:curViewId, field_type:$box.data('sec'), ids:JSON.stringify(ids)})
+        .done(function(r){ if(!r||!r.success){ alert(r&&r.message||'排序失敗'); } openView(curViewId); })
+        .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'排序失敗'); openView(curViewId); });
+    });
     // 開單 Modal：異常說明附件（temp_key 暫存，建立時自動綁定；拆多單各複製一份）
     $('#create-att-input').on('change', function(){
       var f=this.files[0]; if(!f) return;
-      uploadAttachment(f, 'desc', 0, sel.temp_key, function(r){
-        if(r&&r.success){ $('#create-att-list').append('<span class="att-chip"><i class="fa fa-paperclip"></i> '+esc(r.original_filename)+'</span>'); }
+      var d=askAttDesc(); if(d===null){ $(this).val(''); return; }
+      uploadAttachment(f, 'desc', 0, sel.temp_key, d, function(r){
+        if(r&&r.success){
+          var n=$('#create-att-list .att-line').length+1;
+          $('#create-att-list').append('<div class="att-line"><span class="att-no">附件'+n+'</span> <i class="fa fa-paperclip"></i> '+esc(r.original_filename)+' <span class="att-desc">'+esc(d)+'</span></div>');
+        }
       });
       $(this).val('');
     });
@@ -603,7 +667,12 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       var reissue = o.reissue_of ? ' <span class="label label-warning">退件R'+(o.reissue_seq||'')+'</span>' : '';
       var latest = o.latest ? ('<div class="timeline-mini">'+esc((o.latest.created_at||'').substring(5,16).replace(/-/g,'.'))+' '+esc(o.latest.actor_name||'')+'：'+esc(o.latest.note||o.latest.action||'')+'</div>') : '';
       var noCell = o.car_no ? ('<b>'+esc(o.car_no)+'</b>') : '<span class="text-muted">（未配號）</span>';
-      h += '<tr>'
+      var rowCls = '';
+      if(o.status !== 'closed'){
+        if((o.assigned_to|0) === ME_ID) rowCls = 'row-me-resp';
+        else if((o.created_by|0) === ME_ID) rowCls = 'row-me-open';
+      }
+      h += '<tr'+(rowCls?' class="'+rowCls+'"':'')+'>'
         + '<td>'+noCell+reissue+'</td>'
         + '<td>'+esc(o.source_label)+(o.source_no?'<br><small class="text-muted">'+esc(o.source_no)+'</small>':'')+'</td>'
         + '<td>'+cpShow(o.counterparty_type, o.counterparty_display)+'</td>'
@@ -926,7 +995,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         + '<tr><th>填表人</th><td>'+fillerShow+'</td><th>製程</th><td>'+esc(o.process_name||'')+'</td></tr>'
         + appInfo
         + '<tr><th>異常說明</th><td colspan="3">'+esc(o.abnormal_desc||'').replace(/\n/g,'<br>')
-        + attList(r.attachments,'desc', perm.can_edit_header || ((o.created_by|0)===perm.me_id))
+        + attList(r.attachments,'desc', perm.can_edit_header || ((o.created_by|0)===perm.me_id),
+                  ['draft','applying','app_rejected'].indexOf(o.status)<0)   /* 核准成立後不可刪 */
         + EGStamp.row(descSig)+'</td></tr>'
         + '</tbody></table>'
         + actions + assignHtml + renderReply(o, perm, sigMap, L, r.attachments)
@@ -1167,6 +1237,19 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         return h;
       }
       var ciKeys=(o.cause_investigation||'').split(',').filter(Boolean);
+      // 各區段附件「附件N：說明」逐列清單（列印於該區段文字下方）
+      function attNote(sec){
+        var items=(r.attachments||[]).filter(function(a){ return a.field_type===sec; });
+        if(!items.length) return '';
+        var t='<div style="font-size:11px;margin-top:3px;border-top:1px dashed #999;padding-top:2px;">';
+        items.forEach(function(a,i){ t+='附件'+(i+1)+'：'+esc(a.description||(a.original_filename||a.file_name))+'<br>'; });
+        return t+'</div>';
+      }
+      // 是否一併列印附件（圖片嵌入；PDF/Office 列清單註記）
+      var withAtt = false;
+      if((r.attachments||[]).length){
+        withAtt = confirm('是否一併列印附件？\n（圖片附件將接續於表單後方；PDF/Office 附件無法嵌入，僅列出清單）');
+      }
       var h='<h2 style="text-align:center;margin:0 0 6px;">異常矯正處理單</h2>'
         +'<table><tr><th style="width:90px;">表單編號</th><td>'+esc(o.car_no||'（未配號）')+'</td>'
         +'<th style="width:90px;">異常來源</th><td>'+ckList(L.source_type,[o.source_type])+(o.source_no?('　對應單號：'+esc(o.source_no)):'')+'</td></tr>'
@@ -1175,12 +1258,12 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         +'<tr><th>填表日期</th><td>'+esc(o.fill_date||'')+'</td><th>發現日期</th><td>'+esc(o.found_date||'')+'</td></tr>'
         +'<tr><th>填表人</th><td>'+esc(o.created_by_name||'')+'</td><th>製程</th><td>'+esc(o.process_name||'')+'</td></tr>'
         +'<tr><th>責任單位</th><td colspan="3">'+esc(o.resp_display||'')+'</td></tr></table>'
-        +'<table><tr><th style="width:90px;">異常說明</th><td><div class="sec">'+esc(o.abnormal_desc||'')+'</div>'+pStamp(sm['desc'])+'</td></tr>'
+        +'<table><tr><th style="width:90px;">異常說明</th><td><div class="sec">'+esc(o.abnormal_desc||'')+'</div>'+attNote('desc')+pStamp(sm['desc'])+'</td></tr>'
         +'<tr><th>異常原因分析</th><td>原因調查：'+ckList(L.cause, ciKeys, o.cause_other)
-          +'<div class="sec">'+esc(o.cause_detail||'')+'</div>'+pStamp(sm['cause'])+'</td></tr>'
+          +'<div class="sec">'+esc(o.cause_detail||'')+'</div>'+attNote('cause')+pStamp(sm['cause'])+'</td></tr>'
         +'<tr><th>矯正措施</th><td>處置方式：'+ckList(L.disposition, [o.disposition], o.disposition_other)
-          +'<div class="sec">'+esc(o.correction_measure||'')+'</div>'+pStampRow('預定完成日：'+(o.correction_due?esc(o.correction_due).replace(/-/g,'.'):'未填寫'), sm['correction'])+'</td></tr>'
-        +'<tr><th>預防措施</th><td><div class="sec">'+esc(o.prevention_measure||'')+'</div>'+pStampRow('預定完成日：'+(o.prevention_due?esc(o.prevention_due).replace(/-/g,'.'):'未填寫'), sm['prevention'])+'</td></tr></table>'
+          +'<div class="sec">'+esc(o.correction_measure||'')+'</div>'+attNote('correction')+pStampRow('預定完成日：'+(o.correction_due?esc(o.correction_due).replace(/-/g,'.'):'未填寫'), sm['correction'])+'</td></tr>'
+        +'<tr><th>預防措施</th><td><div class="sec">'+esc(o.prevention_measure||'')+'</div>'+attNote('prevention')+pStampRow('預定完成日：'+(o.prevention_due?esc(o.prevention_due).replace(/-/g,'.'):'未填寫'), sm['prevention'])+'</td></tr></table>'
         // 效果確認 2×2 格（同前端跳窗版面）：左上=主管簽核、左下=扣款判定、右上=效果確認、右下=總經理核准
         +(function(){
           var resultTxt = (o.result==='close') ? ('☑ 結案，結案日期：'+esc((o.close_date||'').replace(/-/g,'.')))
@@ -1199,6 +1282,23 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
           return t;
         })()
         +'<div style="font-size:11px;">表單流程：申請人員(填寫)→責任單位(回覆異常原因分析、異常處理情形)→主管簽核→總經理(核准)→管理課(扣款判定)</div>';
+      if(withAtt){
+        var secNames={desc:'異常說明',cause:'異常原因分析',correction:'矯正措施',prevention:'預防措施',result:'效果確認'};
+        h+='<div style="page-break-before:always;"></div><h2 style="text-align:center;margin:0 0 6px;">附件（'+esc(o.car_no||'')+'）</h2>';
+        ['desc','cause','correction','prevention','result'].forEach(function(sec){
+          var items=(r.attachments||[]).filter(function(a){ return a.field_type===sec; });
+          items.forEach(function(a,i){
+            var label=secNames[sec]+'－附件'+(i+1)+'：'+esc(a.description||'')+'　<span style="color:#666;">('+esc(a.original_filename||a.file_name)+')</span>';
+            var ext=String(a.file_name||'').split('.').pop().toLowerCase();
+            if(ext==='jpg'||ext==='jpeg'||ext==='png'){
+              h+='<div style="page-break-inside:avoid;margin-bottom:8px;"><div style="font-size:11px;margin-bottom:2px;">'+label+'</div>'
+                +'<img src="'+API+'?action=download_attachment&id='+a.id+'" style="max-width:100%;max-height:240mm;border:1px solid #ccc;"></div>';
+            } else {
+              h+='<div style="font-size:11px;margin-bottom:4px;">'+label+'　<i>（PDF/文件附件無法嵌入列印，請另行開啟列印）</i></div>';
+            }
+          });
+        });
+      }
       printShell('異常矯正處理單 '+(o.car_no||''), h, r.print_header||'', r.print_footer||'');
     });
   }
