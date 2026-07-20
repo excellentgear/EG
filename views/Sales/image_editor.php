@@ -4921,9 +4921,9 @@ function openExportModal() {
     }
     showModal('export-modal');
 }
-function buildExportURL() {
+function buildExportURL(formatOverride) {
     const range = document.getElementById('ex-range').value;
-    const format = document.getElementById('ex-format').value;
+    const format = formatOverride || document.getElementById('ex-format').value;
     const mult = parseFloat(document.getElementById('ex-mult').value) || 1;
     if (range === 'selection') {
         const obj = canvas.getActiveObject();
@@ -4976,7 +4976,10 @@ async function doSave() {
     toast('已送出下載：' + name);
 }
 function doPrint() {
-    const url = buildExportURL();
+    // 列印一律用 JPEG：批圖底圖多為照片，PNG×2 的 dataURL 常達數 MB，
+    // 生成與列印預覽都很慢。列印透過瀏覽器輸出，JPEG 已足夠且大幅加快。
+    // （無損 PNG 需求請走「另存圖片」，仍依格式下拉決定）
+    const url = buildExportURL('jpeg');
     const w = window.open('', '_blank');
     if (!w) { toast('列印視窗被瀏覽器攔截，請允許彈出視窗'); return; }
     w.document.write('<!DOCTYPE html><html><head><title>列印 - 批圖</title>' +
