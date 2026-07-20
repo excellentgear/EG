@@ -389,6 +389,11 @@ try {
                             car_notify_title('🔧', $row, '指派您回覆'),
                             car_notify_body($pdo, $row, '您已被指定為回覆人，請填寫異常原因分析與處理情形。'),
                             [(int)$row['assigned_to']], (int)$me['id'], 'reply');   // 行動型：填寫送出前通知持續顯示
+                        // 一併知會責任單位主管（依被開立部門查主管，兼任主管以該部門身分納入；回覆人已另收行動通知故排除）
+                        car_notify($pdo, (int)$c['id'],
+                            car_notify_title('📣', $row, '貴單位被開立矯正單'),
+                            car_notify_body($pdo, $row, "已成立，貴單位人員「{$row['assigned_to_name']}」已指定為回覆人。"),
+                            array_diff(car_primary_recipients($pdo, $row), [(int)$row['assigned_to']]), (int)$me['id']);
                     } else {
                         car_notify($pdo, (int)$c['id'],
                             car_notify_title('🔧', $row, '待指派回覆人'),
@@ -700,6 +705,11 @@ try {
                         car_notify_title('🔧', $row, '指派您回覆'),
                         car_notify_body($pdo, $row, '您已被指定為回覆人，請填寫異常原因分析與處理情形。'),
                         [(int)$row['assigned_to']], (int)$me['id'], 'reply');   // 行動型
+                    // 一併知會責任單位主管（依被開立部門查主管，兼任主管以該部門身分納入；回覆人已另收行動通知故排除）
+                    car_notify($pdo, (int)$r['id'],
+                        car_notify_title('📣', $row, '貴單位被開立矯正單'),
+                        car_notify_body($pdo, $row, "已核准成立，貴單位人員「{$row['assigned_to_name']}」已指定為回覆人。"),
+                        array_diff(car_primary_recipients($pdo, $row), [(int)$row['assigned_to']]), (int)$me['id']);
                 } else {
                     car_notify($pdo, (int)$r['id'],
                         car_notify_title('🔧', $row, '待指派回覆人'),
