@@ -2382,3 +2382,269 @@ if ($_GET['but'] == 'transfer_log') {
         exit;
     }
 }
+
+// 加工單價匯入-ERP 原始檔直接匯入 (bom_ing_transfer_log)
+// 免先用 VBA 轉成 22 欄格式：直接吃 ERP「移轉紀錄」原始報表（64 欄，A1 起含標頭）。
+// 欄位對應一律「認標頭名稱」而非固定欄位位置（ERP 版面加減欄不會錯位），民國年日期自動 +1911 轉西元。
+// 對應關係（已用既有 DB 資料反查驗證）：
+//   bom=移出製令, bom_sn=移轉類別(第1個), maker_from=移出單位, maker_to=移入單位,
+//   sqty/transfer_qty=移轉數量, transfer_date=日期, transfer_no=單號, product_id=PRODUCTID,
+//   loss_qty=損耗量, price=Price, process_amount=加工金額, tax_amount=稅金, paid_qty=付款數量,
+//   invoice_date=發票日期, invoice_ym=發票年月, note=備註, note2=備註二, changed_by=異動人員(查user.id),
+//   created_at=建檔日期時間, modified_at=異動日期時間
+if ($_GET['but'] == 'transfer_log_raw') {
+
+    set_time_limit(600);
+    ini_set('memory_limit', '1024M');
+
+    // 民國(或西元)日期/日期時間字串 → 'Y-m-d H:i:s'；解析失敗回 null
+    // 支援：115/03/19、115/3/9、2026/03/19、115/03/19 上午 08:31:35、115/03/19 下午 01:02:03、Excel 日期序號
+    if (!function_exists('rocDateTimeConvert')) {
+        function rocDateTimeConvert($v) {
+            if ($v === null) return null;
+            $v = trim((string)$v);
+            if ($v === '') return null;
+            if (is_numeric($v) && $v > 25569) { // Excel 日期序號
+                try {
+                    return \PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($v)->format('Y-m-d H:i:s');
+                } catch (Exception $e) {}
+            }
+            if (preg_match('/^(\d{2,4})\/(\d{1,2})\/(\d{1,2})(?:\s*(上午|下午)\s*(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/u', $v, $m)) {
+                $y = (int)$m[1];
+                if ($y < 1000) $y += 1911; // 民國年轉西元
+                $mo = (int)$m[2]; $d = (int)$m[3];
+                $h = isset($m[5]) && $m[5] !== '' ? (int)$m[5] : 0;
+                $i = isset($m[6]) && $m[6] !== '' ? (int)$m[6] : 0;
+                $s = isset($m[7]) && $m[7] !== '' ? (int)$m[7] : 0;
+                if (isset($m[4]) && $m[4] === '下午' && $h < 12)  $h += 12;
+                if (isset($m[4]) && $m[4] === '上午' && $h == 12) $h = 0;
+                if (!checkdate($mo, $d, $y) || $h > 23 || $i > 59 || $s > 59) return null;
+                return sprintf('%04d-%02d-%02d %02d:%02d:%02d', $y, $mo, $d, $h, $i, $s);
+            }
+            foreach (['Y-m-d H:i:s', 'Y-m-d', 'Y/m/d H:i:s'] as $fmt) {
+                $dt = DateTime::createFromFormat($fmt, $v);
+                if ($dt) return $dt->format('Y-m-d H:i:s');
+            }
+            return null;
+        }
+    }
+
+    if (!isset($_FILES['file']['name']) || $_FILES['file']['name'] === '') {
+        header("Location: Upload_List.php?message=oth&msg=" . urlencode("請上傳檔案"));
+        exit;
+    }
+
+    $file    = $_FILES['file']['tmp_name'];
+    $fileExt = strtolower(pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION));
+    if (!in_array($fileExt, ['xls', 'xlsx'])) {
+        header("Location: Upload_List.php?message=oth&msg=" . urlencode("原始檔匯入只接受 .xls / .xlsx 檔案"));
+        exit;
+    }
+
+    try {
+        $reader = IOFactory::createReaderForFile($file);
+        $reader->setReadDataOnly(true);
+        $sheet = $reader->load($file)->getActiveSheet();
+        $data  = $sheet->toArray(null, true, false, false);
+        if (count($data) < 2) throw new Exception("檔案沒有資料列");
+
+        // 依標頭名稱找欄位位置（取第一個出現的；「移轉類別」原始檔會出現兩次，第 1 個才是製程序號）
+        $colIdx = [];
+        foreach ($data[0] as $i => $h) {
+            $h = trim((string)$h);
+            if ($h !== '' && !isset($colIdx[$h])) $colIdx[$h] = $i;
+        }
+        $needCols = ['日期','單號','移轉類別','移出單位','移出製令','移入單位','備註','異動人員',
+                     '加工金額','稅金','Price','移轉數量','損耗量','PRODUCTID','發票日期','發票年月',
+                     '建檔日期時間','異動日期時間','付款數量','備註二'];
+        $missing = array_diff($needCols, array_keys($colIdx));
+        if (!empty($missing)) {
+            throw new Exception("這不是 ERP 移轉紀錄原始檔：第 1 列找不到必要欄位標題【" . implode('、', $missing) . "】，請確認上傳的檔案是否正確");
+        }
+
+        // ── 第一階段：全檔驗證與整理（不動 DB，有錯直接擋下） ──
+        $rows = [];              // 通過驗證待寫入的列
+        $rowErrors = [];         // 格式錯誤（會擋下整個匯入）
+        $skippedNoTransferNo = 0;
+        $skippedNoBomSn = [];    // 缺製程序號被跳過的單號（與舊功能相同：跳過並警告）
+        $numFields = ['加工金額','稅金','Price','移轉數量','損耗量','付款數量'];
+
+        for ($r = 1; $r < count($data); $r++) {
+            $row = $data[$r];
+            $g = function ($name) use ($row, $colIdx) {
+                $v = $row[$colIdx[$name]] ?? null;
+                if ($v === null) return null;
+                $v = trim((string)$v);
+                return ($v === '' || strtoupper($v) === 'NULL') ? null : $v;
+            };
+            $rowNo = $r + 1; // Excel 實際列號
+
+            $transfer_no = $g('單號');
+            if ($transfer_no === null) { $skippedNoTransferNo++; continue; }
+
+            $bom_sn = $g('移轉類別');
+            if ($bom_sn === null) { $skippedNoBomSn[] = $transfer_no; continue; }
+            if (!is_numeric($bom_sn)) { $rowErrors[] = "第{$rowNo}列 {$transfer_no}：移轉類別(製程序號)不是數字 [{$bom_sn}]"; continue; }
+
+            $bom = $g('移出製令');
+            if ($bom === null) { $rowErrors[] = "第{$rowNo}列 {$transfer_no}：移出製令(BOM)空白"; continue; }
+
+            foreach ($numFields as $nf) {
+                $v = $g($nf);
+                if ($v !== null && !is_numeric($v)) {
+                    $rowErrors[] = "第{$rowNo}列 {$transfer_no}：{$nf} 不是數字 [{$v}]";
+                    continue 2;
+                }
+            }
+
+            $transfer_date = rocDateTimeConvert($g('日期'));
+            if ($g('日期') !== null && $transfer_date === null) {
+                $rowErrors[] = "第{$rowNo}列 {$transfer_no}：日期格式無法解析 [" . $g('日期') . "]";
+                continue;
+            }
+            $invoice_date = rocDateTimeConvert($g('發票日期'));
+            if ($g('發票日期') !== null && $invoice_date === null) {
+                $rowErrors[] = "第{$rowNo}列 {$transfer_no}：發票日期格式無法解析 [" . $g('發票日期') . "]";
+                continue;
+            }
+
+            $invoice_ym = $g('發票年月');
+            if ($invoice_ym !== null && !preg_match('/^\d{6}$/', $invoice_ym)) {
+                $rowErrors[] = "第{$rowNo}列 {$transfer_no}：發票年月不是 6 碼年月 [{$invoice_ym}]";
+                continue;
+            }
+
+            $rows[] = [
+                'bom'            => $bom,
+                'bom_sn'         => $bom_sn,
+                'maker_from'     => $g('移出單位'),
+                'maker_to'       => $g('移入單位'),
+                'sqty'           => $g('移轉數量'),
+                'transfer_date'  => $transfer_date,
+                'transfer_no'    => $transfer_no,
+                'product_id'     => $g('PRODUCTID'),
+                'transfer_qty'   => $g('移轉數量'),
+                'loss_qty'       => $g('損耗量'),
+                'price'          => $g('Price'),
+                'process_amount' => $g('加工金額'),
+                'tax_amount'     => $g('稅金'),
+                'paid_qty'       => $g('付款數量'),
+                'invoice_date'   => $invoice_date,
+                'invoice_ym'     => $invoice_ym,
+                'note'           => $g('備註'),
+                'note2'          => $g('備註二'),
+                'changer_name'   => $g('異動人員'),
+                'created_at'     => rocDateTimeConvert($g('建檔日期時間')) ?: date('Y-m-d H:i:s'),
+                'modified_at'    => rocDateTimeConvert($g('異動日期時間')) ?: date('Y-m-d H:i:s'),
+            ];
+        }
+
+        if (!empty($rowErrors)) {
+            $show = array_slice($rowErrors, 0, 10);
+            $more = count($rowErrors) > 10 ? "…等共 " . count($rowErrors) . " 個錯誤" : "";
+            throw new Exception("資料驗證失敗，未匯入任何資料：\n" . implode("\n", $show) . $more);
+        }
+        if (empty($rows)) throw new Exception("沒有可匯入的資料列");
+
+        // ── 第二階段：寫入 DB（單一 transaction，全部成功才生效） ──
+        $db->beginTransaction();
+
+        // 預先查出已存在的單號（避免逐列 SELECT）
+        $existingNos = [];
+        $allNos = array_column($rows, 'transfer_no');
+        foreach (array_chunk(array_unique($allNos), 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT transfer_no FROM bom_ing_transfer_log WHERE transfer_no IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $n) $existingNos[$n] = true;
+        }
+
+        $insertStmt = $db->prepare("INSERT INTO `bom_ing_transfer_log`
+            (`bom`, `bom_sn`, `maker_from`, `maker_to`, `sqty`, `transfer_date`, `transfer_no`, `product_id`, `transfer_qty`, `loss_qty`, `price`, `process_amount`, `tax_amount`, `paid_qty`, `invoice_date`, `invoice_ym`, `note`, `note2`, `changed_by`, `created_at`, `modified_at`)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        $updateStmt = $db->prepare("UPDATE `bom_ing_transfer_log` SET
+            `sqty` = ?, `transfer_date` = ?, `transfer_qty` = ?, `loss_qty` = ?, `price` = ?,
+            `process_amount` = ?, `tax_amount` = ?, `paid_qty` = ?, `invoice_date` = ?,
+            `invoice_ym` = ?, `note` = ?, `note2` = ?, `changed_by` = ?, `modified_at` = ?
+            WHERE `transfer_no` = ?");
+        $userStmt = $db->prepare("SELECT id FROM user WHERE user_cname = ?");
+
+        $userCache = [];        // 異動人員姓名 → user.id（查不到 = 99991，同舊功能）
+        $unknownChangers = [];
+        $insertCount = 0;
+        $updateCount = 0;
+
+        foreach ($rows as $row) {
+            $cname = $row['changer_name'];
+            if ($cname === null) {
+                $changed_by_id = 99991;
+            } elseif (isset($userCache[$cname])) {
+                $changed_by_id = $userCache[$cname];
+            } else {
+                $userStmt->execute([$cname]);
+                $u = $userStmt->fetch(PDO::FETCH_ASSOC);
+                $changed_by_id = ($u && isset($u['id'])) ? $u['id'] : 99991;
+                if ($changed_by_id == 99991) $unknownChangers[$cname] = true;
+                $userCache[$cname] = $changed_by_id;
+            }
+
+            if (isset($existingNos[$row['transfer_no']])) {
+                $updateStmt->execute([
+                    $row['sqty'], $row['transfer_date'], $row['transfer_qty'], $row['loss_qty'], $row['price'],
+                    $row['process_amount'], $row['tax_amount'], $row['paid_qty'], $row['invoice_date'],
+                    $row['invoice_ym'], $row['note'], $row['note2'], $changed_by_id, $row['modified_at'],
+                    $row['transfer_no'],
+                ]);
+                $updateCount++;
+            } else {
+                $insertStmt->execute([
+                    $row['bom'], $row['bom_sn'], $row['maker_from'], $row['maker_to'], $row['sqty'],
+                    $row['transfer_date'], $row['transfer_no'], $row['product_id'], $row['transfer_qty'],
+                    $row['loss_qty'], $row['price'], $row['process_amount'], $row['tax_amount'], $row['paid_qty'],
+                    $row['invoice_date'], $row['invoice_ym'], $row['note'], $row['note2'], $changed_by_id,
+                    $row['created_at'], $row['modified_at'],
+                ]);
+                $insertCount++;
+                $existingNos[$row['transfer_no']] = true; // 同檔重複單號時第二筆改走更新
+            }
+        }
+
+        // 備註清理（與舊功能同邏輯，但只針對本次匯入的單號，不動其他資料）：
+        // O- 開頭：拆出訂單號寫入 from_order/order_no，note 留下訂單號之後的文字
+        // T--000 開頭：去掉 T--000 前綴留下說明文字
+        foreach (array_chunk(array_unique($allNos), 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $stO = $db->prepare("UPDATE bom_ing_transfer_log SET
+                    from_order = 1,
+                    order_no = SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING(note, 3), ' ', 1), '-', 1),
+                    note = NULLIF(TRIM(SUBSTRING(note, LENGTH(SUBSTRING_INDEX(note, ' ', 1)) + 1)), '')
+                WHERE note LIKE 'O-%' AND transfer_no IN ($ph)");
+            $stO->execute($chunk);
+            $stT = $db->prepare("UPDATE bom_ing_transfer_log SET
+                    note = NULLIF(TRIM(SUBSTRING(note, 8)), '')
+                WHERE note LIKE 'T--000%' AND transfer_no IN ($ph)");
+            $stT->execute($chunk);
+        }
+
+        recordUploadLog($db, 'upload_transfer_log_raw');
+        $db->commit();
+
+        $msg = "加工單價原始檔匯入完成：新增 {$insertCount} 筆，更新 {$updateCount} 筆。";
+        if ($skippedNoTransferNo > 0) $msg .= "\n單號空白跳過 {$skippedNoTransferNo} 列。";
+        if (!empty($skippedNoBomSn)) {
+            $msg .= "\n⚠️ 注意：單號 [" . implode(', ', $skippedNoBomSn) . "] 因缺少製程序號(移轉類別)未匯入。";
+        }
+        if (!empty($unknownChangers)) {
+            $msg .= "\n⚠️ 異動人員 [" . implode(', ', array_keys($unknownChangers)) . "] 在系統查無此人，已用預設人員(99991)記錄。";
+        }
+        $_SESSION['upload_message'] = $msg;
+        header("Location: Upload_List.php?message=oth");
+        exit;
+
+    } catch (Exception $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        $_SESSION['upload_message'] = "匯入失敗（資料未寫入）：" . $e->getMessage();
+        header("Location: Upload_List.php?message=oth");
+        exit;
+    }
+}
