@@ -2905,8 +2905,10 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
                                         (bom_ing_id, bom, process_no, maker_id_no, maker_id, sqty, bom_sn,
                                          processing_state, ps, Created_By, Created_At, Modified_By, Modified_At)
                                         VALUES (?, ?, ?, ?, ?, ?, ?, 'N', ?, ?, NOW(), ?, NOW())");
+        // Phase A：BOM 匯入不寫廠商（讓「maker 空＝未移轉」成立，實際廠商由當天移轉才填）。
+        // UPDATE 既有列不碰 maker（保護已被移轉填過的列），也不動 processing_state。
         $ingUpdateStmt = $db->prepare("UPDATE bom_ing SET
-                                        maker_id_no = ?, maker_id = ?, sqty = ?, ps = ?,
+                                        sqty = ?, ps = ?,
                                         Modified_By = ?, Modified_At = NOW()
                                         WHERE bom_ing_fid = ?");
 
@@ -2931,20 +2933,26 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
 
             foreach ($grp['rows'] as $row) {
                 $makerId  = $row['maker_id_no'] !== null ? ($makerNames[$row['maker_id_no']] ?? null) : null;
+                // bom_ing_id 格式不變（仍用 N.xlsx 生產單位組字串，此鍵廣用於34+檔案不可改格式）
                 $bomIngId = $right9 . '-' . $row['process_no'] . '-' . $row['bom_sn'] . '-' . $row['sqty'] . '-' . $row['maker_id_no'];
                 $ps       = bomErpCleanPs($row['ps']);
+
+                // Phase A：只有客供料(138)例外把廠商寫進 maker 欄位（其廠商=客戶、開BOM即知、不走委外移轉）；
+                // 其餘製程 maker 欄位一律留 NULL，等當天移轉才填 → 「maker 空＝未移轉」成立。
+                $isCustSupplied = ((int)$row['process_no'] === 138);
+                $storeMakerNo   = $isCustSupplied ? $row['maker_id_no'] : null;
+                $storeMakerId   = $isCustSupplied ? $makerId : null;
 
                 $ingExistsStmt->execute([$bom, $row['bom_sn']]);
                 $existingFid = $ingExistsStmt->fetchColumn();
                 if ($existingFid) {
                     $ingUpdateStmt->execute([
-                        $row['maker_id_no'], $makerId, $row['sqty'], $ps,
-                        $userId, $existingFid,
+                        $row['sqty'], $ps, $userId, $existingFid,
                     ]);
                     $updatedIngCount++;
                 } else {
                     $ingInsertStmt->execute([
-                        $bomIngId, $bom, $row['process_no'], $row['maker_id_no'], $makerId, $row['sqty'], $row['bom_sn'],
+                        $bomIngId, $bom, $row['process_no'], $storeMakerNo, $storeMakerId, $row['sqty'], $row['bom_sn'],
                         $ps, $userId, $userId,
                     ]);
                     $newIngCount++;
