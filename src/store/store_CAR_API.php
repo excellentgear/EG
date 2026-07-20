@@ -288,7 +288,7 @@ try {
                     fill_date, found_date, created_by, created_by_name,
                     opener_dept_id, opener_position_id, opener_position_name, open_applied_at,
                     resp_type, resp_dept_id, resp_maker_id, resp_own_customer_id, resp_person_id, resp_display,
-                    process_no, process_name, abnormal_desc, status)
+                    process_no, process_name, abnormal_desc, status, stage_since)
                  VALUES
                    (:car_no, :group_no, :source_type, :source_ref_id, :source_no, :source_desc,
                     :counterparty_type, :customer_id, :maker_id_no,
@@ -296,7 +296,7 @@ try {
                     CURDATE(), :found_date, :created_by, :created_by_name,
                     :opener_dept_id, :opener_position_id, :opener_position_name, :open_applied_at,
                     :resp_type, :resp_dept_id, :resp_maker_id, :resp_own_customer_id, :resp_person_id, :resp_display,
-                    :process_no, :process_name, :abnormal_desc, :status)");
+                    :process_no, :process_name, :abnormal_desc, :status, NOW())");
 
             $created = [];
             foreach ($targets as $i => $t) {
@@ -345,7 +345,7 @@ try {
                     $pnSt = $pdo->prepare("SELECT user_cname FROM user WHERE id = ?");
                     $pnSt->execute([$r_person]); $pn = (string)($pnSt->fetchColumn() ?: '');
                     $pdo->prepare("UPDATE car_order SET status='assigned', assigned_to=?, assigned_to_name=?,
-                                     assigned_by=?, assigned_by_name=?, assigned_at=NOW() WHERE id=?")
+                                     assigned_by=?, assigned_by_name=?, assigned_at=NOW(), stage_since=NOW() WHERE id=?")
                         ->execute([$r_person, $pn, $me['id'], $me['name'], $carId]);
                     car_log($pdo, $carId, 'assign', (int)$me['id'], $me['name'], "責任單位已指定人員「{$pn}」，直接為回覆人（免指派）");
                 }
@@ -666,10 +666,10 @@ try {
             $nn = count($rows);
             $nos = car_alloc_numbers($pdo, $nn);
             $first = $nos[0];
-            $up = $pdo->prepare("UPDATE car_order SET car_no=?, group_no=?, status=?,
+            $up = $pdo->prepare("UPDATE car_order SET car_no=?, group_no=?, status=?, stage_since=NOW(),
                                    open_approved_by=?, open_approved_by_name=?, open_approved_at=NOW() WHERE id=?");
             $upAssign = $pdo->prepare("UPDATE car_order SET assigned_to=?, assigned_to_name=?,
-                                         assigned_by=?, assigned_by_name=?, assigned_at=NOW() WHERE id=?");
+                                         assigned_by=?, assigned_by_name=?, assigned_at=NOW(), stage_since=NOW() WHERE id=?");
             $pnSt = $pdo->prepare("SELECT user_cname FROM user WHERE id = ?");
             foreach ($rows as $i => $r) {
                 $rowStatus = !empty($r['resp_person_id']) ? 'assigned' : 'open';
@@ -742,7 +742,7 @@ try {
         $pdo->beginTransaction();
         try {
             $up = $pdo->prepare("UPDATE car_order SET status='app_rejected', open_reject_reason=?,
-                                   open_approved_by=?, open_approved_by_name=?, open_approved_at=NOW() WHERE id=?");
+                                   open_approved_by=?, open_approved_by_name=?, open_approved_at=NOW(), stage_since=NOW() WHERE id=?");
             foreach ($rows as $r) {
                 $up->execute([$reason, $me['id'], $me['name'], $r['id']]);
                 car_log($pdo, (int)$r['id'], 'reject_open', (int)$me['id'], $me['name'], "退回開立申請：{$reason}");
@@ -809,7 +809,7 @@ try {
         $un = $pdo->prepare("SELECT user_cname FROM user WHERE id = ?"); $un->execute([$assignee]);
         $aname = $un->fetchColumn() ?: '';
         $pdo->prepare("UPDATE car_order SET assigned_to=?, assigned_to_name=?, assigned_by=?, assigned_by_name=?,
-                        assigned_at=NOW(), status='assigned' WHERE id=?")
+                        assigned_at=NOW(), status='assigned', stage_since=NOW() WHERE id=?")
             ->execute([$assignee, $aname, $me['id'], $me['name'], $id]);
         car_log($pdo, $id, 'assign', (int)$me['id'], $me['name'], "指派「{$aname}」為回覆人");
         // 通知被指派者
@@ -858,6 +858,7 @@ try {
             $sets[] = 'prevention_due=:pdue';   $p[':pdue'] = (trim($_POST['prevention_due'] ?? '') ?: null);
         }
         $sets[] = "status='replying'";
+        if ($o['status'] !== 'replying') $sets[] = "stage_since=NOW()";   // 進入「填寫中」起算逾期
         $pdo->prepare("UPDATE car_order SET " . implode(',', $sets) . " WHERE id=:id")->execute($p);
         jout(['success' => true, 'message' => '已儲存']);
     }
@@ -918,7 +919,7 @@ try {
         foreach (['cause', 'correction', 'prevention'] as $s) {
             if (empty($signed[$s])) jfail(car_section_name($s) . ' 尚未簽章，無法送出');
         }
-        $pdo->prepare("UPDATE car_order SET status='pending_primary', submitted_at=NOW() WHERE id=?")->execute([$id]);
+        $pdo->prepare("UPDATE car_order SET status='pending_primary', submitted_at=NOW(), stage_since=NOW() WHERE id=?")->execute([$id]);
         car_log($pdo, $id, 'submit_reply', (int)$me['id'], $me['name'], '回覆完成送出，待主管簽核');
         car_notify_done($pdo, $id, (int)$me['id']);   // 完成填寫送出 → 清除本人的行動型通知
         // 通知首要決策者（責任單位主管／廠商→生管主管）簽核
@@ -948,7 +949,7 @@ try {
             $pdo->prepare("INSERT INTO car_signature (car_id, section, signed_by, signed_name, signed_at, signed_date_label)
                            VALUES (?, 'primary', ?, ?, NOW(), ?)")
                 ->execute([$id, $me['id'], $me['name'], car_sign_date_label()]);
-            $pdo->prepare("UPDATE car_order SET status='pending_final', primary_by=?, primary_at=NOW() WHERE id=?")
+            $pdo->prepare("UPDATE car_order SET status='pending_final', primary_by=?, primary_at=NOW(), stage_since=NOW() WHERE id=?")
                 ->execute([$me['id'], $id]);
             car_log($pdo, $id, 'primary_sign', (int)$me['id'], $me['name'], '主管簽核通過，待總經理裁決');
             $pdo->commit();
@@ -995,7 +996,7 @@ try {
                 $amt  = ($amtRaw === '') ? 0.0 : (float)$amtRaw;
                 $note = trim($_POST['deduct_note'] ?? '');
                 $pdo->prepare("UPDATE car_order SET status='closed', result='close', close_date=CURDATE(),
-                                 final_by=?, final_at=NOW(),
+                                 final_by=?, final_at=NOW(), stage_since=NOW(),
                                  deduct_by=?, deduct_by_name=?, deduct_at=NOW(), deduct_amount=?, deduct_note=? WHERE id=?")
                     ->execute([$me['id'], $me['id'], $me['name'], $amt, ($note ?: null), $id]);
                 car_log($pdo, $id, 'final_close', (int)$me['id'], $me['name'], '總經理核准結案（結案日 ' . date('Y.m.d') . '）');
@@ -1021,7 +1022,7 @@ try {
 
             // 不可結案：原單標記 rejected + 產生 R 單（表頭帶入、三段重填）
             $pdo->prepare("UPDATE car_order SET status='rejected', result='not_close', not_close_reason=?,
-                             final_by=?, final_at=NOW() WHERE id=?")->execute([$reason, $me['id'], $id]);
+                             final_by=?, final_at=NOW(), stage_since=NOW() WHERE id=?")->execute([$reason, $me['id'], $id]);
 
             list($rNo, $rSeq) = car_next_reissue_no($pdo, (string)$o['car_no']);
             $newStatus = !empty($o['resp_person_id']) ? 'assigned' : 'open';
@@ -1032,13 +1033,13 @@ try {
                     fill_date, found_date, created_by, created_by_name,
                     opener_dept_id, opener_position_id, opener_position_name,
                     resp_type, resp_dept_id, resp_maker_id, resp_own_customer_id, resp_person_id, resp_display,
-                    process_no, process_name, abnormal_desc, status)
+                    process_no, process_name, abnormal_desc, status, stage_since)
                  SELECT ?, group_no, id, ?, source_type, source_ref_id, source_no, source_desc,
                     counterparty_type, customer_id, maker_id_no, d_id, drawing_no, bom_no, work_order, bom_ing_fid, qty,
                     CURDATE(), found_date, created_by, created_by_name,
                     opener_dept_id, opener_position_id, opener_position_name,
                     resp_type, resp_dept_id, resp_maker_id, resp_own_customer_id, resp_person_id, resp_display,
-                    process_no, process_name, abnormal_desc, ?
+                    process_no, process_name, abnormal_desc, ?, NOW()
                  FROM car_order WHERE id = ?")
                 ->execute([$rNo, $rSeq, $newStatus, $id]);
             $newId = (int)$pdo->lastInsertId();
@@ -1054,7 +1055,7 @@ try {
                 $pnSt = $pdo->prepare("SELECT user_cname FROM user WHERE id = ?");
                 $pnSt->execute([(int)$o['resp_person_id']]);
                 $pn = (string)($pnSt->fetchColumn() ?: '');
-                $pdo->prepare("UPDATE car_order SET assigned_to=?, assigned_to_name=?, assigned_by=?, assigned_by_name=?, assigned_at=NOW() WHERE id=?")
+                $pdo->prepare("UPDATE car_order SET assigned_to=?, assigned_to_name=?, assigned_by=?, assigned_by_name=?, assigned_at=NOW(), stage_since=NOW() WHERE id=?")
                     ->execute([(int)$o['resp_person_id'], $pn, $me['id'], $me['name'], $newId]);
             }
 
@@ -1215,7 +1216,7 @@ try {
         if (!$o) jfail('查無此單');
         if ((int)$o['created_by'] !== (int)$me['id']) jerr('僅申請人本人可撤回', 403);
         if ($o['status'] !== 'applying') jfail('僅「申請中」（主管尚未核准）可撤回');
-        $pdo->prepare("UPDATE car_order SET status='draft', open_reject_reason=? WHERE id=?")
+        $pdo->prepare("UPDATE car_order SET status='draft', open_reject_reason=?, stage_since=NOW() WHERE id=?")
             ->execute(['撤回：' . $reason, $id]);
         car_log($pdo, $id, 'withdraw', (int)$me['id'], $me['name'], "撤回開立申請：{$reason}");
         // 通知原收到申請的主管：已撤回
@@ -1237,7 +1238,7 @@ try {
         if (!$o) jfail('查無此單');
         if ((int)$o['created_by'] !== (int)$me['id'] && !_carHas('all')) jerr('您不是本單申請人', 403);
         if ($o['status'] !== 'app_rejected' && $o['status'] !== 'draft') jfail('僅「申請退回」或「已撤回」狀態可重新送出');
-        $pdo->prepare("UPDATE car_order SET status='applying', open_applied_at=NOW(),
+        $pdo->prepare("UPDATE car_order SET status='applying', open_applied_at=NOW(), stage_since=NOW(),
                          open_reject_reason=NULL, open_approved_by=NULL, open_approved_by_name=NULL, open_approved_at=NULL
                        WHERE id=?")->execute([$id]);
         car_log($pdo, $id, 'reapply', (int)$me['id'], $me['name'], '修改後重新送出開立申請');
