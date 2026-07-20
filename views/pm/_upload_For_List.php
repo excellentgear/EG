@@ -9,6 +9,7 @@ ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
 
 require '../../vendor/autoload.php'; // 確認引用正確路徑
+require_once '../../src/common/qc_form_generator.php'; // QC 檢驗紀錄表 .xlsm 產生器（BOM ERP匯入用）
 use PhpOffice\PhpSpreadsheet\IOFactory; // 使用 PhpSpreadsheet 的 IOFactory 來載入 Excel 檔案
 
 // 開啟輸出緩衝，避免 header() 前有輸出導致錯誤
@@ -2886,6 +2887,12 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) $makerNames[$row['maker_id_no']] = $row['maker_id'];
         }
 
+        // 製程主檔（QC 檢驗表分頁命名用）
+        $processNames = [];
+        foreach ($db->query("SELECT ProcessNo, ProcessName FROM process_no")->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $processNames[(int)$row['ProcessNo']] = $row['ProcessName'];
+        }
+
         // bom：只更新這次真正握有資料的欄位，不動 o_order_id/processing_state/Delivery_date 等其他流程維護的欄位
         $bomExistsStmt = $db->prepare("SELECT bom FROM bom WHERE bom = ?");
         $bomInsertStmt = $db->prepare("INSERT INTO bom (bom, d_id, sqty, Client_Name, state, Created_By, Created_At, Modified_By, Modified_At)
@@ -2904,6 +2911,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
                                         WHERE bom_ing_fid = ?");
 
         $newBomCount = 0; $updatedBomCount = 0; $newIngCount = 0; $updatedIngCount = 0;
+        $newBoms = []; // 新建的 BOM，供 commit 後產生 QC 檢驗表
 
         foreach ($groups as $bom => $grp) {
             $clientName = $customerByDId[$grp['d_id']] ?? null;
@@ -2916,6 +2924,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
             } else {
                 $bomInsertStmt->execute([$bom, $grp['d_id'], $sqty, $clientName, $userId, $userId]);
                 $newBomCount++;
+                $newBoms[$bom] = ['d_id' => $grp['d_id'], 'sqty' => $sqty, 'client' => $clientName];
             }
 
             $right9 = substr($bom, -9); // 比照原巨集 RIGHT(bom,9)
@@ -2946,13 +2955,66 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
         recordUploadLog($db, 'upload_bom_erp');
         $db->commit();
 
+        // ── commit 後：對新建的 BOM 產生 QC 檢驗紀錄表 .xlsm 到 NAS（同舊 VBA）──
+        // 非阻斷：DB 已提交，此步失敗只回報警告不影響匯入結果；檔案已存在則跳過（同 VBA）。
+        // NAS 路徑一律即時從 system_settings 組出（遵鐵律5，不寫死）。
+        $qcGenerated = 0; $qcSkipped = 0; $qcErrors = [];
+        if (!empty($newBoms)) {
+            try {
+                $stCfg = $db->prepare("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ('qc_form_nas_dir','qc_form_template_name')");
+                $stCfg->execute();
+                $cfg = [];
+                foreach ($stCfg->fetchAll(PDO::FETCH_ASSOC) as $c) $cfg[$c['setting_key']] = $c['setting_value'];
+                $nasDir   = rtrim($cfg['qc_form_nas_dir'] ?? '', "\\/");
+                $tmplName = $cfg['qc_form_template_name'] ?? '2-QA-01-06-檢驗記錄表 V04.xlsm';
+
+                if ($nasDir === '') {
+                    $qcErrors[] = '未設定 qc_form_nas_dir，略過 QC 檢驗表產生';
+                } else {
+                    $tmplPath = $nasDir . DIRECTORY_SEPARATOR . $tmplName;
+                    foreach ($newBoms as $bom => $meta) {
+                        $outPath = $nasDir . DIRECTORY_SEPARATOR . $bom . '.xlsm';
+                        if (is_file($outPath)) { $qcSkipped++; continue; } // 已存在跳過（同 VBA）
+                        // 組製程清單（排除材料/包裝/客供料，同 VBA），依 bom_sn 排序
+                        $procs = [];
+                        $rows = $groups[$bom]['rows'];
+                        usort($rows, fn($a, $b) => $a['bom_sn'] <=> $b['bom_sn']);
+                        foreach ($rows as $row) {
+                            $pname = $processNames[$row['process_no']] ?? '';
+                            if (qcFormExcludedProcess($pname)) continue;
+                            $procs[] = ['name' => $pname, 'ps1' => bomErpCleanPs($row['ps']) ?? '', 'ps2' => ''];
+                        }
+                        try {
+                            qcFormGenerate($tmplPath, $outPath, [
+                                'bom' => $bom, 'd_id' => $meta['d_id'], 'sqty' => $meta['sqty'],
+                                'client' => $meta['client'] ?? '', 'delivery' => '', 'pack_ps2' => '',
+                                'processes' => $procs,
+                            ]);
+                            $qcGenerated++;
+                        } catch (Exception $ge) {
+                            $qcErrors[] = "{$bom}：" . $ge->getMessage();
+                        }
+                    }
+                }
+            } catch (Exception $ce) {
+                $qcErrors[] = 'QC 檢驗表產生流程異常：' . $ce->getMessage();
+            }
+        }
+
+        $msg = "匯入完成！新增 BOM {$newBomCount} 筆、更新 {$updatedBomCount} 筆；新增製程 {$newIngCount} 筆、更新 {$updatedIngCount} 筆";
+        if ($qcGenerated > 0 || $qcSkipped > 0) $msg .= "；QC檢驗表 產生 {$qcGenerated} 份" . ($qcSkipped > 0 ? "、已存在跳過 {$qcSkipped} 份" : '');
+        if (!empty($qcErrors)) $msg .= "。⚠ QC檢驗表 部分未產生：" . implode('；', array_slice($qcErrors, 0, 5));
+
         echo json_encode([
             'success'            => true,
             'new_bom_count'      => $newBomCount,
             'updated_bom_count'  => $updatedBomCount,
             'new_ing_count'      => $newIngCount,
             'updated_ing_count'  => $updatedIngCount,
-            'message'            => "匯入完成！新增 BOM {$newBomCount} 筆、更新 {$updatedBomCount} 筆；新增製程 {$newIngCount} 筆、更新 {$updatedIngCount} 筆",
+            'qc_generated'       => $qcGenerated,
+            'qc_skipped'         => $qcSkipped,
+            'qc_errors'          => $qcErrors,
+            'message'            => $msg,
         ]);
     } catch (Exception $e) {
         if ($db->inTransaction()) $db->rollBack();
