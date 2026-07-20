@@ -13,6 +13,7 @@ if ($action !== 'download') {
 }
 
 include '../common/DBConnection.php';
+require_once __DIR__ . '/../common/imgedit_visibility.php';
 $db  = new DBConnection();
 $pdo = $db->getPDO();
 
@@ -161,6 +162,8 @@ switch ($action) {
             WHERE pa.d_id=? AND pa.deleted_at IS NULL");
         $partStmt->execute([$dId]);
         $data = $partStmt->fetchAll(PDO::FETCH_ASSOC);
+        // 批圖編輯器檔案依分享範圍過濾（私人/部門/指定人員，成對 PNG 跟隨工作檔）
+        $data = imgedit_filter_attachment_rows($pdo, $data, $uploadedById, $dId);
 
         // 2. 報價單附件（明確 linked 或 linked_parts IS NULL 的「全部料號」附件）
         try {
@@ -222,6 +225,8 @@ switch ($action) {
             WHERE pa.d_id IN ($ph) AND pa.deleted_at IS NULL ORDER BY pa.d_id, pa.uploaded_at DESC");
         $pStmt->execute($dIds);
         $allRows = $pStmt->fetchAll(PDO::FETCH_ASSOC);
+        // 批圖編輯器檔案依分享範圍過濾（避免私人檔成為列表顯示的「最新附件」）
+        $allRows = imgedit_filter_attachment_rows($pdo, $allRows, $uploadedById);
 
         // 報價單附件：先取各 d_id 對應的 D_Setting_Id
         try {
