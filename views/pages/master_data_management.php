@@ -213,20 +213,21 @@ try { $pdo->exec("CREATE TABLE IF NOT EXISTS dict_timing_belt_profile (
     belt_standard VARCHAR(20)  NULL,
     sort_order    INT NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='皮帶輪齒型字典'");
+// PLD 一律存單邊值，計算式 OD = PD − 2×PLD（數值經 Pfeifer PD/OD 表與 BRECOflex 原廠表交叉驗證，2026-07-20）
 $pdo->exec("INSERT IGNORE INTO dict_timing_belt_profile (profile_code,pitch_mm,pld_mm,belt_standard,sort_order) VALUES
-    ('MXL',2.032,0.508,'Imperial',10),('XL',5.080,1.270,'Imperial',20),
-    ('L',9.525,1.905,'Imperial',30),('H',12.700,2.794,'Imperial',40),
-    ('XH',22.225,6.350,'Imperial',50),('XXH',31.750,9.525,'Imperial',60),
-    ('3M',3.000,0.381,'HTD',110),('5M',5.000,0.686,'HTD',120),
-    ('8M',8.000,1.372,'HTD',130),('14M',14.000,2.794,'HTD',140),
-    ('S2M',2.000,0.150,'STS',150),('S3M',3.000,0.381,'STS',160),
-    ('S5M',5.000,0.571,'STS',170),('S8M',8.000,0.686,'STS',180),
+    ('MXL',2.032,0.254,'Imperial',10),('XL',5.080,0.254,'Imperial',20),
+    ('L',9.525,0.381,'Imperial',30),('H',12.700,0.686,'Imperial',40),
+    ('XH',22.225,1.397,'Imperial',50),('XXH',31.750,1.524,'Imperial',60),
+    ('3M',3.000,0.381,'HTD',110),('5M',5.000,0.5715,'HTD',120),
+    ('8M',8.000,0.686,'HTD',130),('14M',14.000,1.397,'HTD',140),
+    ('S2M',2.000,0.254,'STS',150),('S3M',3.000,0.381,'STS',160),
+    ('S5M',5.000,0.483,'STS',170),('S8M',8.000,0.686,'STS',180),
     ('S14M',14.000,1.397,'STS',190),
     ('8YU',8.000,0.686,'YU',195),
-    ('T2.5',2.500,0.700,'Metric',210),('T5',5.000,1.200,'Metric',220),
-    ('T10',10.000,2.500,'Metric',230),('T20',20.000,5.000,'Metric',240),
-    ('AT3',3.000,0.800,'Metric',310),('AT5',5.000,1.100,'Metric',320),
-    ('AT10',10.000,2.500,'Metric',330),('AT20',20.000,5.000,'Metric',340)"); } catch(Exception $_e){}
+    ('T2.5',2.500,0.300,'Metric',210),('T5',5.000,0.500,'Metric',220),
+    ('T10',10.000,1.000,'Metric',230),('T20',20.000,1.500,'Metric',240),
+    ('AT3',3.000,0.205,'Metric',310),('AT5',5.000,0.610,'Metric',320),
+    ('AT10',10.000,0.910,'Metric',330),('AT20',20.000,1.410,'Metric',340)"); } catch(Exception $_e){}
 try {
     $pdo->exec("CREATE TABLE IF NOT EXISTS quotation_file_categories (
         id            INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
