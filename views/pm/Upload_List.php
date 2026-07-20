@@ -23,7 +23,7 @@ try {
                      FROM system_settings
                      WHERE setting_key IN (
                          'upload_bom_nb','upload_bom_ing_new','upload_bom_ing_s',
-                         'upload_bom_nb_ok','upload_transfer_log',
+                         'upload_bom_nb_ok','upload_transfer_log','upload_transfer_log_raw',
                          'upload_is_erp','upload_ir_erp'
                      )");
     while ($row = $r->fetch(PDO::FETCH_ASSOC)) {
@@ -37,6 +37,7 @@ $bomNbOkLastUpdate     = $uploadLogs['upload_bom_nb_ok']    ?? null;
 $bomIngLastUpdate      = $uploadLogs['upload_bom_ing_new']  ?? null;
 $bomIngSLastUpdate     = $uploadLogs['upload_bom_ing_s']    ?? null;
 $transferLogLastUpdate = $uploadLogs['upload_transfer_log'] ?? null;
+$transferLogRawLastUpdate = $uploadLogs['upload_transfer_log_raw'] ?? null;
 $isLastImport          = $uploadLogs['upload_is_erp']       ?? null;
 $irLastImport          = $uploadLogs['upload_ir_erp']       ?? null;
 
@@ -425,6 +426,28 @@ function lastUpdateBadge($info, $color = '#555') {
                                             <div class="col-md-5 col-sm-5 hidden-xs" style="padding-top:7px"><?= lastUpdateBadge($transferLogLastUpdate) ?></div>
                                         </div>
                                     </form>
+
+                                    <!-- 上傳-加工單價 ERP原始檔直接匯入 (transfer_log_raw) -->
+                                    <div style="background:#e8eaf6;border:2px solid #7986cb;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+                                    <form action="_upload_For_List.php?but=transfer_log_raw" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
+                                        <div class="item form-group" style="margin-bottom:0">
+                                            <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file_transfer_log_raw">
+                                                更新加工單價 <b>ERP原始檔直接匯入</b><small>(只接受.xls/.xlsx)</small><br>
+                                                <span class="required">*</span>
+                                                <span class="text-muted" style="font-size:11px;">直接上傳 ERP 移轉紀錄原始檔<br>免 VBA 轉檔，民國年自動轉西元</span>
+                                            </label>
+                                            <div class="col-md-4 col-sm-4 col-xs-8">
+                                                <div class="input-group">
+                                                    <input type="file" id="file_transfer_log_raw" name="file" accept=".xls,.xlsx" class="form-control short-input">
+                                                    <span class="input-group-btn">
+                                                        <button type="submit" id="btn_upload_transfer_log_raw" class="btn btn-warning">原始檔匯入</button>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-5 col-sm-5 hidden-xs" style="padding-top:7px"><?= lastUpdateBadge($transferLogRawLastUpdate, '#283593') ?></div>
+                                        </div>
+                                    </form>
+                                    </div><!-- /藍紫底 -->
                                 </div>
                             </div>
                         </div>
@@ -486,7 +509,8 @@ document.addEventListener('DOMContentLoaded', function() {
         { inputId: 'file_is_list_erp', buttonId: 'btn_upload_is_list_erp' },
         { inputId: 'file_ir_list_erp', buttonId: 'btn_upload_ir_list_erp' },
         { inputId: 'file_is_list', buttonId: 'btn_upload_is_list' },
-        { inputId: 'file_transfer_log', buttonId: 'btn_upload_transfer_log' }
+        { inputId: 'file_transfer_log', buttonId: 'btn_upload_transfer_log' },
+        { inputId: 'file_transfer_log_raw', buttonId: 'btn_upload_transfer_log_raw' }
     ];
 
     fileConfig.forEach(config => {
