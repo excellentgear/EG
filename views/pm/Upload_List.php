@@ -1057,8 +1057,10 @@ $(document).ready(function() {
 
                 var html = '<table class="table table-condensed table-bordered" style="font-size:13px">';
                 html += '<tr><td>有效移轉列數</td><td><strong>' + res.total_rows + ' 筆</strong></td></tr>';
-                html += '<tr><td>將更新的既有製程</td><td>' + res.update_count + ' 筆</td></tr>';
                 html += '<tr><td>將新增的製程列</td><td>' + res.insert_count + ' 筆</td></tr>';
+                html += '<tr><td>將覆蓋更新</td><td>' + res.write_count + ' 筆</td></tr>';
+                if (res.skip_dup_count > 0)   html += '<tr><td>重複跳過(同加工單號)</td><td>' + res.skip_dup_count + ' 筆</td></tr>';
+                if (res.skip_stale_count > 0) html += '<tr class="danger"><td>舊檔保護跳過</td><td>' + res.skip_stale_count + ' 筆</td></tr>';
                 html += '</table>';
 
                 if (res.warnings && res.warnings.length) {
@@ -1083,7 +1085,8 @@ $(document).ready(function() {
                         html += '<td>' + (r.maker_id_no || '') + (r.maker_name ? '(' + r.maker_name + ')' : '') + '</td>';
                         html += '<td>' + (r.sqty || '') + '</td>';
                         html += '<td>' + (r.move_date || '') + '</td>';
-                        html += '<td>' + (r.is_update ? '<span class="label label-default">更新</span>' : '<span class="label label-success">新增</span>') + '</td>';
+                        var lblCls = {'新增':'label-success','覆蓋更新':'label-primary','重複跳過':'label-default','舊檔跳過':'label-danger'}[r.action] || 'label-default';
+                        html += '<td><span class="label ' + lblCls + '">' + (r.action || '') + '</span></td>';
                         html += '</tr>';
                     });
                     html += '</tbody></table></div></div>';
