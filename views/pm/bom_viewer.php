@@ -141,6 +141,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
             ORDER BY pa.uploaded_at DESC");
         $stmt->execute($dids);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        // 批圖編輯器檔案依分享範圍過濾（私人/部門/指定人員）
+        require_once __DIR__ . '/../../src/common/imgedit_visibility.php';
+        $rows = imgedit_filter_attachment_rows($pdo2, $rows, intval($_SESSION['id'] ?? 0));
         // 類別名稱對照
         $cats = [];
         try {
