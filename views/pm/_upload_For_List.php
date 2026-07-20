@@ -3063,6 +3063,18 @@ if (!function_exists('transferErpRocDate')) {
     }
 }
 
+// 移轉日期是否為合理的真實業務日期（排除無效資料）：
+//  - 1911/1/1：ERP 空值佔位（民國0年），代表「尚未移入」，非真實移轉 → 無效
+//  - 民國年異常（如 180/05/17 = 西元2091）→ 無效
+// 合理範圍：西元 2000 ~ 明年（民國89以後、且不超過現在明年）
+if (!function_exists('transferErpValidBizDate')) {
+    function transferErpValidBizDate($ymd) {
+        if ($ymd === null) return false;
+        $y = (int)substr($ymd, 0, 4);
+        return $y >= 2000 && $y <= ((int)date('Y') + 1);
+    }
+}
+
 // 解析移轉原始檔 → 過濾有效列＋同(bom,bom_sn)去重(留異動時間最新) → 回傳列陣列
 if (!function_exists('parseTransferErpRows')) {
     function parseTransferErpRows($allRows, &$stats) {
@@ -3079,7 +3091,7 @@ if (!function_exists('parseTransferErpRows')) {
             throw new Exception('這不是 ERP 移轉原始檔：第1列找不到必要欄位標題【' . implode('、', $missing) . '】，請確認上傳的檔案是否正確');
         }
 
-        $stats = ['skip_no_process' => 0, 'skip_no_maker' => 0, 'skip_date_diff' => 0, 'dedup_dropped' => 0];
+        $stats = ['skip_no_process' => 0, 'skip_no_maker' => 0, 'skip_invalid_date' => 0, 'skip_date_diff' => 0, 'dedup_dropped' => 0];
         $byKey = []; // "bom|bom_sn" => row（留異動時間最新）
         for ($r = 1; $r < count($allRows); $r++) {
             $row = $allRows[$r];
@@ -3101,7 +3113,10 @@ if (!function_exists('parseTransferErpRows')) {
 
             $inDate  = transferErpRocDate($g('預移入日'));
             $outDate = transferErpRocDate($g('預移出日'));
-            if ($inDate === null || $inDate !== $outDate) { $stats['skip_date_diff']++; continue; }
+            // 無效資料排除：預移入/出日為 1911/1/1 空值佔位、或民國年異常（如 180）→ 直接擋掉
+            if (!transferErpValidBizDate($inDate) || !transferErpValidBizDate($outDate)) { $stats['skip_invalid_date']++; continue; }
+            // 非當天移送：移入≠移出（同 VBA「移入移出日期不同者刪除」）
+            if ($inDate !== $outDate) { $stats['skip_date_diff']++; continue; }
 
             $item = [
                 'bom'          => $bom,
@@ -3175,9 +3190,10 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Preview') {
         }
 
         $warnings = [];
-        if ($stats['skip_no_process'] > 0) $warnings[] = "製程代號空白跳過 {$stats['skip_no_process']} 列";
-        if ($stats['skip_no_maker'] > 0)   $warnings[] = "生產單位空白跳過 {$stats['skip_no_maker']} 列";
-        if ($stats['skip_date_diff'] > 0)  $warnings[] = "預移入/移出日不同(未完成移轉)跳過 {$stats['skip_date_diff']} 列";
+        if ($stats['skip_no_process'] > 0)   $warnings[] = "製程代號空白跳過 {$stats['skip_no_process']} 列";
+        if ($stats['skip_no_maker'] > 0)     $warnings[] = "生產單位空白跳過 {$stats['skip_no_maker']} 列";
+        if ($stats['skip_invalid_date'] > 0) $warnings[] = "無效日期資料(1911/1/1空值或民國年異常)跳過 {$stats['skip_invalid_date']} 列";
+        if ($stats['skip_date_diff'] > 0)    $warnings[] = "預移入/移出日不同(未完成移轉)跳過 {$stats['skip_date_diff']} 列";
         if ($stats['dedup_dropped'] > 0)   $warnings[] = "同製令+序號重複 {$stats['dedup_dropped']} 列，只取異動時間最新一筆";
         if (!empty($unknownMakers))        $warnings[] = '生產單位查無廠商主檔（' . implode('、', array_keys($unknownMakers)) . '），maker_id 簡稱將留空';
         if (!empty($missingBoms))          $warnings[] = 'BOM 主檔不存在（' . implode('、', $missingBoms) . '），製程列仍會建立，建議先執行 BOM ERP匯入';
