@@ -388,4 +388,56 @@ function car_counterparty_display(PDO $pdo, ?string $type, ?string $id): string 
     return '';
 }
 
+/**
+ * 取行事曆「休假日(s)／補班日(m)」日期集合（靜態快取，整批載入一次）。
+ * 資料來源同 views/pages/calendar.php：evenement JOIN event_category.day_type。
+ * @return array ['holidays' => [Y-m-d=>true...], 'makeups' => [Y-m-d=>true...]]
+ */
+function car_holiday_sets(PDO $pdo): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $holidays = []; $makeups = [];
+    try {
+        $rows = $pdo->query(
+            "SELECT DATE(e.start) AS d1, DATE(COALESCE(e.end, e.start)) AS d2, ec.day_type
+             FROM evenement e JOIN event_category ec ON e.category_id = ec.id
+             WHERE ec.day_type IN ('s','m')")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) {
+            $d = strtotime((string)$r['d1']); $end = strtotime((string)$r['d2']);
+            if ($d === false || $end === false || $end < $d) continue;
+            $guard = 0;   // 防呆：單一事件跨距上限約一年
+            while ($d <= $end && $guard++ < 400) {
+                $key = date('Y-m-d', $d);
+                if ($r['day_type'] === 's') $holidays[$key] = true; else $makeups[$key] = true;
+                $d = strtotime('+1 day', $d);
+            }
+        }
+    } catch (Throwable $e) {}
+    $cache = ['holidays' => $holidays, 'makeups' => $makeups];
+    return $cache;
+}
+
+/**
+ * 兩日期之間的「工作天數」（不含起算日、含迄日）。
+ * 規則同行事曆：週六、週日與休假日(s)不算；補班日(m)算（補班優先於週末）。
+ * @param string      $fromDate 進入狀態日（Y-m-d，可含時間，只取日期）
+ * @param string|null $toDate   迄日，預設今日
+ * @return int toDate <= fromDate 時回傳 0
+ */
+function car_working_days_between(PDO $pdo, string $fromDate, ?string $toDate = null): int {
+    $from = strtotime(substr($fromDate, 0, 10));
+    $to   = strtotime(substr(($toDate ?: date('Y-m-d')), 0, 10));
+    if ($from === false || $to === false || $to <= $from) return 0;
+    $sets = car_holiday_sets($pdo);
+    $count = 0; $cur = strtotime('+1 day', $from); $guard = 0;
+    while ($cur <= $to && $guard++ < 4000) {
+        $key = date('Y-m-d', $cur);
+        $dow = (int)date('w', $cur);   // 0=週日, 6=週六
+        $isWeekend = ($dow === 0 || $dow === 6);
+        if (isset($sets['makeups'][$key]) || (!$isWeekend && !isset($sets['holidays'][$key]))) $count++;
+        $cur = strtotime('+1 day', $cur);
+    }
+    return $count;
+}
+
 } // end function_exists guard
