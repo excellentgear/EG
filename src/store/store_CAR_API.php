@@ -551,7 +551,7 @@ try {
                              WHERE l.car_id = ? ORDER BY l.id");
         $lg->execute([$id]); $acts = $lg->fetchAll(PDO::FETCH_ASSOC);
         foreach ($acts as &$_a) { $_a['title'] = car_user_title($pdo, $_a['actor_id'] ? (int)$_a['actor_id'] : null); } unset($_a);
-        $at = $pdo->prepare("SELECT id, field_type, file_name, original_filename, file_size, tag_id
+        $at = $pdo->prepare("SELECT id, field_type, file_name, original_filename, file_size, tag_id, created_by
                              FROM car_attachment WHERE car_id = ? ORDER BY id");
         $at->execute([$id]); $atts = $at->fetchAll(PDO::FETCH_ASSOC);
 
@@ -1432,13 +1432,13 @@ try {
         exit;
     }
 
-    // ── 附件刪除（僅上傳者本人；系統管理員例外）─────────────────────────────
+    // ── 附件刪除（嚴格僅上傳者本人，無任何例外）─────────────────────────────
     case 'delete_attachment': {
         $aid = (int)($_POST['id'] ?? 0);
         $st = $pdo->prepare("SELECT * FROM car_attachment WHERE id = ?"); $st->execute([$aid]);
         $a = $st->fetch(PDO::FETCH_ASSOC);
         if (!$a) jfail('附件不存在');
-        if ((int)$a['created_by'] !== (int)$me['id'] && !_carHas('all'))
+        if ((int)$a['created_by'] !== (int)$me['id'])
             jerr('僅上傳者本人可刪除附件', 403);
         $fullPath = carAttResolvePath($pdo, $a);
         if (is_file($fullPath)) @unlink($fullPath);

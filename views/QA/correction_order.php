@@ -547,7 +547,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     var items=(atts||[]).filter(function(a){ return a.field_type===sec; });
     var h='<div class="att-box">';
     items.forEach(function(a){
-      h+='<span class="att-chip"><a href="'+API+'?action=download_attachment&id='+a.id+'" target="_blank"><i class="fa fa-paperclip"></i> '+esc(a.original_filename||a.file_name)+'</a><span class="att-del" data-id="'+a.id+'" title="刪除">&times;</span></span>';
+      var delBtn = ((a.created_by|0)===ME_ID) ? '<span class="att-del" data-id="'+a.id+'" title="刪除">&times;</span>' : '';
+      h+='<span class="att-chip"><a href="'+API+'?action=download_attachment&id='+a.id+'" target="_blank"><i class="fa fa-paperclip"></i> '+esc(a.original_filename||a.file_name)+'</a>'+delBtn+'</span>';
     });
     if(canUp) h+='<label class="btn btn-default btn-xs" style="margin:0;"><i class="fa fa-upload"></i> 上傳附件<input type="file" class="att-up" data-sec="'+sec+'" style="display:none;"></label>';
     if(!items.length && !canUp) h+='<span class="text-muted" style="font-size:12px;">（無附件）</span>';
