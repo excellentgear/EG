@@ -106,6 +106,7 @@ try {
             $status = 'read';
         }
         $readers[] = [
+            'user_id'       => (int)$u['user_id'],
             'name'          => $u['name'],
             'status'        => $status,
             'read_at'       => $u['read_at'],
