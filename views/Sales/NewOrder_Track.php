@@ -8707,30 +8707,40 @@ foreach($dCounts as $c) {
                     </div>
                     <div style="display:flex;gap:10px;">
                         <div class="gear-field-group" style="flex:1;">
-                            <label>法向模數 mn <span style="color:#e74c3c">*</span></label>
-                            <input type="number" id="g-mn" class="gear-input" placeholder="例：2" step="any">
+                            <label>法向模數 mn <span style="color:#e74c3c">*</span> <small style="color:#999;font-weight:400;">可選 M/CP/DP</small></label>
+                            <div style="display:flex;gap:4px;align-items:center;">
+                                <select id="g-mn-unit" class="gear-input" style="width:58px;flex-shrink:0;padding:4px 2px;" onchange="updateGearMnDisplay()" title="模數輸入單位：M=模數、CP=周節、DP=徑節">
+                                    <option value="M" selected>M</option>
+                                    <option value="CP">CP</option>
+                                    <option value="DP">DP</option>
+                                </select>
+                                <input type="number" id="g-mn" class="gear-input" placeholder="例：2" step="any" style="flex:1;min-width:0;" oninput="updateGearMnDisplay()">
+                            </div>
+                            <div id="g-mn-m-display" style="display:none;font-size:11px;color:#2980b9;font-weight:600;margin-top:2px;"></div>
                         </div>
                         <div class="gear-field-group" style="flex:1;">
                             <label>齒數 z <span style="color:#e74c3c">*</span></label>
                             <input type="number" id="g-z" class="gear-input" placeholder="例：30" step="1" min="2">
                         </div>
                     </div>
-                    <div class="gear-field-group">
-                        <label>法向壓力角 α_n <span style="color:#e74c3c">*</span></label>
-                        <div style="display:flex;align-items:center;gap:6px;">
-                            <div style="display:flex;align-items:center;gap:3px;">
-                                <input type="number" id="g-an" class="gear-input" placeholder="空白=20°" style="width:90px;" step="any" min="0" max="89" value="20">
-                                <span style="color:#555;font-size:14px;">°</span>
+                    <div style="display:flex;gap:10px;">
+                        <div class="gear-field-group" style="flex:1.25;min-width:0;">
+                            <label>法向壓力角 α_n <span style="color:#e74c3c">*</span></label>
+                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                                <div style="display:flex;align-items:center;gap:3px;">
+                                    <input type="number" id="g-an" class="gear-input" placeholder="空白=20°" style="width:90px;" step="any" min="0" max="89" value="20">
+                                    <span style="color:#555;font-size:14px;">°</span>
+                                </div>
+                                <button type="button" class="gear-preset-btn active" id="g-an-btn-20" onclick="setAlphaN(20)">20°（預設）</button>
+                                <button type="button" class="gear-preset-btn" id="g-an-btn-30" onclick="setAlphaN(30)">30°</button>
                             </div>
-                            <button type="button" class="gear-preset-btn active" id="g-an-btn-20" onclick="setAlphaN(20)">20°（預設）</button>
-                            <button type="button" class="gear-preset-btn" id="g-an-btn-30" onclick="setAlphaN(30)">30°</button>
                         </div>
-                    </div>
-                    <div class="gear-field-group">
-                        <label>轉位係數 x <span style="color:#e74c3c">*</span></label>
-                        <div style="display:flex;gap:5px;align-items:center;">
-                            <input type="number" id="g-x" class="gear-input" placeholder="空白=0" step="any" style="flex:1;min-width:0;">
-                            <button class="btn-gear-clr" style="padding:4px 9px;font-size:11px;white-space:nowrap;flex-shrink:0;" onclick="gotoRxTab()" title="由外徑或跨齒厚反推轉位係數 x"><i class="fa fa-undo"></i> 回推</button>
+                        <div class="gear-field-group" style="flex:1;min-width:0;">
+                            <label>轉位係數 x <span style="color:#e74c3c">*</span></label>
+                            <div style="display:flex;gap:5px;align-items:center;">
+                                <input type="number" id="g-x" class="gear-input" placeholder="空白=0" step="any" style="flex:1;min-width:0;">
+                                <button class="btn-gear-clr" style="padding:4px 9px;font-size:11px;white-space:nowrap;flex-shrink:0;" onclick="gotoRxTab()" title="由外徑或跨齒厚反推轉位係數 x"><i class="fa fa-undo"></i> 回推</button>
+                            </div>
                         </div>
                     </div>
                     <div class="gear-field-group">
@@ -8782,6 +8792,36 @@ foreach($dCounts as $c) {
                             </div>
                         </div>
                     </div>
+                    <!-- 客戶提供數據（選填）：跨齒厚公差顯示上下限；跨銷徑/球徑＋M 上下限回推轉位 x -->
+                    <div style="margin-top:8px;padding:8px 10px;background:#f3e5f5;border:1px solid #ce93d8;border-radius:5px;">
+                        <div style="font-size:11px;font-weight:700;color:#6a1b9a;margin-bottom:6px;"><i class="fa fa-user"></i> 客戶提供數據（選填）</div>
+                        <div class="gear-field-group">
+                            <label>客戶跨齒厚公差 上/下 <small style="color:#999;font-weight:400;">填寫後計算結果顯示跨齒厚上下限</small></label>
+                            <div style="display:flex;gap:4px;">
+                                <input type="number" id="g-cust-wtol-up" class="gear-input" placeholder="上公差 例：0" step="any">
+                                <input type="number" id="g-cust-wtol-dn" class="gear-input" placeholder="下公差 例：-0.05" step="any">
+                            </div>
+                        </div>
+                        <div style="display:flex;gap:8px;align-items:flex-end;">
+                            <div class="gear-field-group" style="flex:1;margin-bottom:0;">
+                                <label>客戶跨銷徑/球徑 dp <small style="color:#999;font-weight:400;">空白=1.68×mn</small></label>
+                                <input type="number" id="g-cust-dp" class="gear-input" placeholder="自動" step="any">
+                            </div>
+                            <div class="gear-field-group" style="flex:1;margin-bottom:0;">
+                                <label>客戶 M 上限</label>
+                                <input type="number" id="g-cust-m-up" class="gear-input" placeholder="例：58.341" step="any">
+                            </div>
+                            <div class="gear-field-group" style="flex:1;margin-bottom:0;">
+                                <label>客戶 M 下限</label>
+                                <input type="number" id="g-cust-m-dn" class="gear-input" placeholder="例：58.301" step="any">
+                            </div>
+                            <button class="btn-gear-m3" style="flex-shrink:0;white-space:nowrap;" onclick="calcCustM2X()" title="由客戶跨銷徑/球徑與 M 上下限反推轉位係數 x，自動代入上方轉位係數欄並執行計算"><i class="fa fa-undo"></i> 回推轉位</button>
+                        </div>
+                        <div id="g-cust-x-out" style="display:none;margin-top:6px;font-size:11px;color:#4a148c;font-family:'Consolas','Courier New',monospace;">
+                            回推 x：上限 <span id="g-cust-x-up" style="font-weight:700;">—</span>　下限 <span id="g-cust-x-dn" style="font-weight:700;">—</span>　中值 <span id="g-cust-x-mid" style="font-weight:700;color:#1e7e34;">—</span>（已代入轉位係數 x）
+                        </div>
+                        <div id="g-cust-warn" style="display:none;margin-top:6px;padding:5px 9px;background:#fffbea;border:1px solid #f39c12;border-radius:4px;font-size:11px;color:#856404;"></div>
+                    </div>
                     <div style="margin-top:10px;display:flex;gap:8px;">
                         <button class="btn-gear-calc" onclick="calcGearM1()"><i class="fa fa-calculator"></i> 計算齒輪</button>
                         <button class="btn-gear-clr"  onclick="clearGearAll()">清除</button>
@@ -8803,6 +8843,7 @@ foreach($dCounts as $c) {
                         <div class="gear-out-grid">
                             <div class="gear-out-row"><span class="gear-out-label">跨幾齒 k（自動/輸入）</span><span class="gear-output-val" id="go-k">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label">理論跨齒厚 Wk</span><span class="gear-output-val" id="go-wk">—</span></div>
+                            <div class="gear-out-row" id="go-row-cust-wk" style="display:none;"><span class="gear-out-label">客戶跨齒厚上限 / 下限</span><span class="gear-output-val" id="go-cust-wk-range">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label">建議滾齒跨齒厚</span><span class="gear-output-val val-ok" id="go-rechob-wk" style="font-weight:700;">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label">預留量（模數/外徑取大）</span><span class="gear-output-val" id="go-allow-info">—</span></div>
                         </div>
@@ -8816,7 +8857,12 @@ foreach($dCounts as $c) {
                             <div class="gear-out-row"><span class="gear-out-label" id="go-rechob-m-range-lbl">建議滾齒 M 上/下限</span>
                                 <span class="gear-output-val" id="go-rechob-m-range">—</span>
                             </div>
+                            <div class="gear-out-row" id="go-row-cust-m" style="display:none;border-top:1px dashed #a5d6b5;padding-top:5px;margin-top:2px;">
+                                <span class="gear-out-label" style="color:#6a1b9a;">客戶規格→我方球徑 M 上/下限</span>
+                                <span class="gear-output-val val-ok" id="go-cust-m-range" style="font-weight:700;color:#6a1b9a;">—</span>
+                            </div>
                         </div>
+                        <div id="go-cust-m-note" style="display:none;margin-top:4px;font-size:10px;color:#8e6aa0;line-height:1.5;"></div>
                     </div>
                 </div><!-- /right -->
             </div><!-- /two-col -->
@@ -9847,6 +9893,19 @@ foreach($dCounts as $c) {
         return (xlo + xhi) / 2;
     }
 
+    // ── 內齒：由跨銷值 M 反推 x（內齒 M 隨 x 增大而減小，二分方向與外齒相反）──
+    function solveXfromMInt(M_target, mn, z, alpha_n, beta, dp_val) {
+        var xlo = -2, xhi = 5;
+        for (var i = 0; i < 200; i++) {
+            var xm = (xlo + xhi) / 2;
+            var Mm = calcMInt(xm, mn, z, alpha_n, beta, dp_val);
+            if (typeof Mm === 'string') { xhi = xm; continue; }
+            if (Mm > M_target) xlo = xm; else xhi = xm;
+            if ((xhi - xlo) < 1e-9) break;
+        }
+        return (xlo + xhi) / 2;
+    }
+
     // ── 預留量查表 ───────────────────────────────────────────────────────────
     function lookupMn(mn_val) {
         // 優先：精確匹配（is_exact=1）
@@ -9876,6 +9935,28 @@ foreach($dCounts as $c) {
     }
 
     // ══ 模組一：基本計算 ═════════════════════════════════════════════════════
+    // ── 法向模數輸入單位 M/CP/DP（換算邏輯同 master_data_management：CP→M=值/π、DP→M=25.4/值）──
+    function gearMnToM() {
+        var v = gFloat('g-mn');
+        if (v === null || v <= 0) return null;
+        var s = document.getElementById('g-mn-unit');
+        var u = s ? s.value : 'M';
+        if (u === 'CP') return v / Math.PI;
+        if (u === 'DP') return 25.4 / v;
+        return v;
+    }
+    window.updateGearMnDisplay = function() {
+        var disp = document.getElementById('g-mn-m-display'); if (!disp) return;
+        var s = document.getElementById('g-mn-unit');
+        var u = s ? s.value : 'M';
+        var m = gearMnToM();
+        if (u !== 'M' && m !== null) {
+            disp.textContent = '= M' + fmtNum(m, 6);
+            disp.style.display = 'block';
+        } else {
+            disp.style.display = 'none';
+        }
+    };
     // ── 齒型模式：外齒 / 內齒 ──────────────────────────────────────────────
     var _gearInternal = false;
     function gSetText(id, t){ var el = document.getElementById(id); if (el) el.textContent = t; }
@@ -9892,7 +9973,13 @@ foreach($dCounts as $c) {
         gSetText('go-rechob-m-range-lbl', _gearInternal ? '跨銷值 M 上/下限' : '建議滾齒 M 上/下限');
         var blk = document.getElementById('go-block-wk'); if (blk) blk.style.display = _gearInternal ? 'none' : '';
         var rm  = document.getElementById('go-row-rechob-m'); if (rm) rm.style.display = _gearInternal ? 'none' : '';
-        ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-rechob-wk','go-allow-info','go-dp-used','go-m','go-rechob-m','go-rechob-m-range'].forEach(function(id){ setOut(id,''); });
+        ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-rechob-wk','go-allow-info','go-dp-used','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range'].forEach(function(id){ setOut(id,''); });
+        // 客戶數據輸出：換齒型後屬舊模式結果，一併隱藏
+        var _cwRow = document.getElementById('go-row-cust-wk'); if (_cwRow) _cwRow.style.display = 'none';
+        var _cxOut = document.getElementById('g-cust-x-out'); if (_cxOut) _cxOut.style.display = 'none';
+        var _cmRow = document.getElementById('go-row-cust-m'); if (_cmRow) _cmRow.style.display = 'none';
+        var _cmNote = document.getElementById('go-cust-m-note'); if (_cmNote) _cmNote.style.display = 'none';
+        ['g-cust-x-up','g-cust-x-dn','g-cust-x-mid'].forEach(function(id){ gSetText(id,'—'); });
         showWarn('g-m1-warn','');
     };
     // 內齒基本計算：使用跨銷徑/跨銷值（M = dc − dp），不計跨齒厚與建議滾齒
@@ -9931,12 +10018,17 @@ foreach($dCounts as $c) {
 
         showWarn('g-m1-warn', warns.length ? warns.join('；') : '');
 
+        // 客戶提供 M（選填）→ 右側顯示換算為我方測棒 dp 後的跨銷值上/下限
+        var _cbI = readCustBackX(mn, z, alpha_n, beta);
+        if (_cbI && !_cbI.err) showCustMineM(_cbI, mn, z, alpha_n, beta, dp_used);
+        else hideCustOutputs();
+
         ['m2','m3','m4','m5','rx'].forEach(function(t){ var b = document.getElementById('gtab-'+t); if (b) b.disabled = false; });
         var ico = document.getElementById('gear-hdr-icon'); if (ico) { ico.className = 'fa fa-cog'; setTimeout(function(){ ico.className = 'fa fa-cog fa-spin'; }, 200); }
     }
 
     window.calcGearM1 = function() {
-        var mn = gFloat('g-mn'), z = gInt('g-z');
+        var mn = gearMnToM(), z = gInt('g-z');  // CP/DP 已換算為 M
         if (!mn || !z || mn <= 0 || z < 2) { alert('請填寫法向模數 mn 和齒數 z（z≥2）'); return; }
 
         // 法向壓力角（空白預設 20°）
@@ -9963,6 +10055,20 @@ foreach($dCounts as $c) {
             beta_dec = parseFloat(gVal('g-bt')) || 0;
         }
         var beta = beta_dec * PI / 180;
+
+        // 客戶提供 M 上下限（選填）→ 自動回推轉位並帶入轉位係數 x（外/內齒共用）
+        var _cb = readCustBackX(mn, z, alpha_n, beta);
+        if (_cb && _cb.err) {
+            showWarn('g-cust-warn', _cb.err); hideCustOutputs();
+        } else if (_cb) {
+            showCustBackXBreakdown(_cb);
+            showWarn('g-cust-warn', (_cb.x_mid <= -2 + 1e-6 || _cb.x_mid >= 5 - 1e-6)
+                ? '回推 x 逼近求解邊界 (−2~5)，請確認 M 值、dp 與齒型（外齒/內齒）是否正確' : '');
+            var _gx = document.getElementById('g-x');
+            if (_gx) _gx.value = fmtNum(gRound(_cb.x_mid, 5), 5);
+        } else {
+            hideCustOutputs(); showWarn('g-cust-warn', '');
+        }
 
         var x_in   = gFloat('g-x') !== null ? gFloat('g-x') : 0;  // 空白預設 0
         var tol_up = gFloat('g-tol-up') !== null ? gFloat('g-tol-up') : -0.02;
@@ -10056,6 +10162,19 @@ foreach($dCounts as $c) {
         setOut('go-h',  fmtNum(h,  4));
         setOut('go-k',  k_val);
         setOut('go-wk', fmtNum(Wk, 5));
+        // 客戶提供跨齒厚公差（選填）：有填才顯示上下限列
+        var cwu = gFloat('g-cust-wtol-up'), cwd = gFloat('g-cust-wtol-dn');
+        var custWkRow = document.getElementById('go-row-cust-wk');
+        if (custWkRow) {
+            if (cwu !== null || cwd !== null) {
+                custWkRow.style.display = '';
+                setOut('go-cust-wk-range',
+                    (cwu !== null ? fmtNum(gRound(Wk + cwu, 5), 5) : '—') + '  /  ' +
+                    (cwd !== null ? fmtNum(gRound(Wk + cwd, 5), 5) : '—'), 'val-ok');
+            } else {
+                custWkRow.style.display = 'none';
+            }
+        }
         setOut('go-dp-used', fmtNum(dp_used, 2));
         setOut('go-allow-info', allow_src, is_boss ? 'val-boss' : '');
 
@@ -10082,6 +10201,10 @@ foreach($dCounts as $c) {
 
         showWarn('g-m1-warn', warns.length ? warns.join('；') : '');
 
+        // 客戶提供 M（選填）→ 右側顯示換算為我方球徑後的 M 上/下限
+        if (_cb && !_cb.err) showCustMineM(_cb, mn, z, alpha_n, beta, dp_used);
+        else hideCustOutputs();
+
         // 啟用 M2~M4 分頁
         ['m2','m3','m4','m5','rx'].forEach(function(t) {
             var btn = document.getElementById('gtab-'+t);
@@ -10091,6 +10214,62 @@ foreach($dCounts as $c) {
         var ico = document.getElementById('gear-hdr-icon');
         if (ico) ico.className = 'fa fa-cog';
         setTimeout(function(){ if(ico) ico.className='fa fa-cog fa-spin'; },200);
+    };
+
+    // ── 客戶提供數據：由跨銷徑/球徑與 M 上下限回推我方轉位 x ────────────────────
+    //    回傳 null=未填 M；{err}=輸入有誤；否則含 x_up/x_dn/x_mid 與客戶球徑 custDp
+    function readCustBackX(mn, z, alpha_n, beta) {
+        var M_up = gFloat('g-cust-m-up'), M_dn = gFloat('g-cust-m-dn');
+        if (M_up === null && M_dn === null) return null;
+        if (M_up !== null && M_dn !== null && M_dn > M_up) return { err: '客戶 M 下限大於上限，請確認輸入' };
+        var dp_c = gFloat('g-cust-dp');
+        var custDp = (dp_c && dp_c > 0) ? dp_c : gRound(1.68 * mn, 2);
+        var solve = _gearInternal ? solveXfromMInt : solveXfromM;
+        var x_up = (M_up !== null) ? solve(M_up, mn, z, alpha_n, beta, custDp) : null;
+        var x_dn = (M_dn !== null) ? solve(M_dn, mn, z, alpha_n, beta, custDp) : null;
+        var x_mid = (x_up !== null && x_dn !== null)
+            ? solve((M_up + M_dn) / 2, mn, z, alpha_n, beta, custDp)
+            : (x_up !== null ? x_up : x_dn);
+        return { M_up:M_up, M_dn:M_dn, custDp:custDp, x_up:x_up, x_dn:x_dn, x_mid:x_mid };
+    }
+    // 顯示「回推 x 上/下/中值」明細
+    function showCustBackXBreakdown(cb) {
+        gSetText('g-cust-x-up', cb.x_up !== null ? fmtNum(gRound(cb.x_up, 5), 5) : '—');
+        gSetText('g-cust-x-dn', cb.x_dn !== null ? fmtNum(gRound(cb.x_dn, 5), 5) : '—');
+        gSetText('g-cust-x-mid', fmtNum(gRound(cb.x_mid, 5), 5));
+        var box = document.getElementById('g-cust-x-out'); if (box) box.style.display = 'block';
+    }
+    // 隱藏客戶回推明細與右側換算列
+    function hideCustOutputs() {
+        var b = document.getElementById('g-cust-x-out'); if (b) b.style.display = 'none';
+        var r = document.getElementById('go-row-cust-m'); if (r) r.style.display = 'none';
+        var n = document.getElementById('go-cust-m-note'); if (n) n.style.display = 'none';
+    }
+    // 右側顯示「客戶規格→我方球徑 M 上/下限」：以客戶回推 x 套用我方球徑重算 M
+    function showCustMineM(cb, mn, z, alpha_n, beta, ourDp) {
+        var mfn = _gearInternal ? calcMInt : calcM;
+        var Mup = (cb.x_up !== null) ? mfn(cb.x_up, mn, z, alpha_n, beta, ourDp) : null;
+        var Mdn = (cb.x_dn !== null) ? mfn(cb.x_dn, mn, z, alpha_n, beta, ourDp) : null;
+        var upStr = (Mup === null) ? '—' : (typeof Mup === 'string' ? Mup : fmtNum(Mup, 5));
+        var dnStr = (Mdn === null) ? '—' : (typeof Mdn === 'string' ? Mdn : fmtNum(Mdn, 5));
+        setOut('go-cust-m-range', upStr + '  /  ' + dnStr, 'val-ok');
+        var el = document.getElementById('go-cust-m-range'); if (el) el.style.color = '#6a1b9a';
+        var row = document.getElementById('go-row-cust-m'); if (row) row.style.display = '';
+        var note = document.getElementById('go-cust-m-note');
+        if (note) {
+            note.textContent = '依客戶球徑 dp=' + fmtNum(cb.custDp, 3) + ' 回推轉位 → 換用我方球徑 dp='
+                + fmtNum(ourDp, 3) + ' 的' + (_gearInternal ? '跨銷' : '跨珠') + '值';
+            note.style.display = 'block';
+        }
+    }
+
+    // ── 客戶提供數據：由跨銷徑/球徑與 M 上下限回推轉位係數 x，代入後自動計算 ──
+    //    計算齒輪本身已會自動回推帶入，此按鈕為便捷入口（先驗證有填 M 再觸發計算）
+    window.calcCustM2X = function() {
+        if (gFloat('g-cust-m-up') === null && gFloat('g-cust-m-dn') === null) {
+            alert('請填寫客戶 M 上限或下限（至少一項）'); return;
+        }
+        calcGearM1();  // calcGearM1 內含自動回推轉位、帶入 x、右側顯示我方球徑 M 換算
     };
 
     // ══ 模組二：跨齒厚 → 跨珠值 ════════════════════════════════════════════
@@ -10487,20 +10666,47 @@ foreach($dCounts as $c) {
     // ── 清除全部 ────────────────────────────────────────────────────────────
     window.clearGearAll = function() {
         ['g-mn','g-z','g-an','g-x','g-bt','g-bt-d','g-bt-m','g-bt-s',
-         'g-tol-up','g-k-in','g-dp','g-mtol-up','g-mtol-dn'].forEach(function(id){
+         'g-tol-up','g-k-in','g-dp','g-mtol-up','g-mtol-dn',
+         'g-cust-wtol-up','g-cust-wtol-dn','g-cust-dp','g-cust-m-up','g-cust-m-dn',
+         // 依附基本計算的各分頁輸入欄（M2~M5、跨齒轉換、回推x）也一併清空
+         'm2-k','m2-wk','m2-tol-up','m2-tol-dn','m2-dp',
+         'm3-dp','m3-m','m3-tol-up','m3-tol-dn','m3-k-in',
+         'm4-k','m4-wk','m4-tol-up','m4-tol-dn','m4-dp','m4-mtol-up','m4-mtol-dn',
+         'm5-dp-cust','m5-dp-mine','m5-m-up','m5-m-dn',
+         'm5w-k-cust','m5w-k-mine','m5w-wk','m5w-tol-up','m5w-tol-dn',
+         'rx-da','rx-k','rx-wk'].forEach(function(id){
             var el = document.getElementById(id); if(el) el.value = '';
         });
         var btdec = document.getElementById('g-bt-dec'); if(btdec) btdec.textContent = '0°';
+        // 模數單位還原為 M、隱藏換算顯示
+        var mnUnit = document.getElementById('g-mn-unit'); if (mnUnit) mnUnit.value = 'M';
+        updateGearMnDisplay();
         // 還原法向壓力角預設按鈕
         document.querySelectorAll('.gear-preset-btn').forEach(function(b){ b.classList.remove('active'); });
         ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-dp-used',
-         'go-allow-info','go-rechob-wk','go-m','go-rechob-m','go-rechob-m-range'].forEach(function(id){ setOut(id,''); });
+         'go-allow-info','go-rechob-wk','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range','go-cust-m-range',
+         // M2~M5、跨齒轉換 各分頁計算結果
+         'm2-m-up','m2-m-dn','m2-wk-up-chk','m2-wk-dn-chk',
+         'm3-k-out','m3-x','m3-wk','m3-wk-tol','m3-wk-up','m3-wk-dn',
+         'm4-dp-used','m4-allow-info','m4-rechob-wk','m4-rechob-m','m4-rechob-m-range','m4-cust-m-up','m4-cust-m-dn',
+         'm5-out-dp-mine','m5-m-mine-up','m5-m-mine-dn','m5-out-dp-cust','m5-m-cust-up','m5-m-cust-dn',
+         'm5-rh-allow','m5-rh-wk','m5-rh-m','m5-rh-m-range',
+         'm5w-out-std','m5w-out-range','m5w-rh-allow','m5w-rh-wk','m5w-rh-m','m5w-rh-m-range'].forEach(function(id){ setOut(id,''); });
+        // 非 gear-output-val 樣式的純文字輸出（避免 setOut 改動 class）
+        ['m5-x-up','m5-x-dn','g-cust-x-up','g-cust-x-dn','g-cust-x-mid'].forEach(function(id){ gSetText(id, '—'); });
+        ['m5-rh-k','m5w-out-k'].forEach(function(id){ gSetText(id, '—'); });
+        ['m2-dp-hint','m5-dp-hint','m4-cust-m-dp-label'].forEach(function(id){ gSetText(id, ''); });
+        // 隱藏客戶數據相關輸出列
+        var custWkRow = document.getElementById('go-row-cust-wk'); if (custWkRow) custWkRow.style.display = 'none';
+        var custXOut = document.getElementById('g-cust-x-out'); if (custXOut) custXOut.style.display = 'none';
+        var custMRow = document.getElementById('go-row-cust-m'); if (custMRow) custMRow.style.display = 'none';
+        var custMNote = document.getElementById('go-cust-m-note'); if (custMNote) custMNote.style.display = 'none';
         showWarn('g-m1-warn','');
         _baseParams = null;
         setGearMode('ext'); // 清除後一律回到預設「外齒」模式
         ['m2','m3','m4','m5','rx'].forEach(function(t){ var b=document.getElementById('gtab-'+t); if(b) b.disabled=true; });
         setOut('rx-da-x',''); setOut('rx-da-verify',''); setOut('rx-wk-x',''); setOut('rx-wk-verify','');
-        ['g-rx-da-warn','g-rx-wk-warn'].forEach(function(id){ var e=document.getElementById(id); if(e) e.style.display='none'; });
+        ['g-rx-da-warn','g-rx-wk-warn','g-m2-warn','g-m3-warn','g-m4-warn','g-m5-warn','g-m5w-warn','g-cust-warn'].forEach(function(id){ var e=document.getElementById(id); if(e) e.style.display='none'; });
         setTimeout(function(){ var el=document.getElementById('g-mn'); if(el) el.focus(); }, 50);
     };
 
@@ -10625,6 +10831,9 @@ foreach($dCounts as $c) {
         bindSeqEnter(['rx-da'], window.calcGearDa2X);
         bindSeqEnter(['rx-k','rx-wk'], window.calcGearWk2X);
 
+        // 模組一：客戶提供數據（選填）區塊，末欄 Enter = 回推轉位並計算
+        bindSeqEnter(['g-cust-wtol-up','g-cust-wtol-dn','g-cust-dp','g-cust-m-up','g-cust-m-dn'], window.calcCustM2X);
+
         // 花鍵 外（mn/pd 只有一個可見，offsetParent 會自動跳過隱藏那個）
         bindSeqEnter(['sp-ext-mn','sp-ext-pd','sp-ext-z','sp-ext-an','sp-ext-bt',
                       'sp-ext-x','sp-ext-q','sp-ext-dp','sp-ext-k'], window.calcSplineExt);
@@ -10662,6 +10871,25 @@ foreach($dCounts as $c) {
         initEnterTab();
         initAnBtnHighlight();
         initDrag();
+        initGearSelectOnFocus();
+    }
+
+    // ── 聚焦已有資料的欄位自動全選（齒輪工具視窗全部輸入欄一體適用）──────────
+    function initGearSelectOnFocus() {
+        var win = document.getElementById('gear-tool-window');
+        if (!win) return;
+        win.addEventListener('focusin', function(e) {
+            var t = e.target;
+            if (t && t.tagName === 'INPUT' && (t.type === 'number' || t.type === 'text') && t.value !== '') {
+                try { t.select(); } catch(err) {}
+                t.__gearSelAll = true;
+            }
+        });
+        // 滑鼠點入時瀏覽器會在 mouseup 取消選取，攔截一次以保住全選
+        win.addEventListener('mouseup', function(e) {
+            var t = e.target;
+            if (t && t.__gearSelAll) { t.__gearSelAll = false; e.preventDefault(); }
+        });
     }
 
     window.openGearTool = function() {
