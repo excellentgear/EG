@@ -547,16 +547,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 foreach ($shareIds as $sid) { if ($sid > 0) $shareIns->execute([$workId, $sid]); }
             }
             // 保留上限：同一料號工作檔數量超過上限時，砍掉最舊的（絕不會刪到剛存好的這份）
-            $allIds = $pdo->prepare("SELECT id FROM part_attachments
+            // 輸出圖 PNG 與工作檔成對（同 egdraw_ 檔名主幹），工作檔被清理時 PNG 一併軟刪除，
+            // 避免歷次儲存的過程圖永遠堆在附件列表
+            $allIds = $pdo->prepare("SELECT id, filename FROM part_attachments
                                      WHERE d_id = ? AND deleted_at IS NULL AND filename LIKE '%.egwork.json'
                                      ORDER BY id DESC");
             $allIds->execute([$dId]);
-            $existing = $allIds->fetchAll(PDO::FETCH_COLUMN);
+            $existing = $allIds->fetchAll(PDO::FETCH_ASSOC);
             $removed = 0;
             if (count($existing) > $workfileMaxCount) {
-                $delSt = $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE id = ?");
-                foreach (array_slice($existing, $workfileMaxCount) as $rid) {
-                    $delSt->execute([$userName . '（系統自動：超過保留上限 ' . $workfileMaxCount . ' 份）', $rid]);
+                $delSt  = $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE id = ?");
+                $delPng = $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE d_id = ? AND filename = ? AND deleted_at IS NULL");
+                foreach (array_slice($existing, $workfileMaxCount) as $old) {
+                    $delSt->execute([$userName . '（系統自動：超過保留上限 ' . $workfileMaxCount . ' 份）', $old['id']]);
+                    $delPng->execute([$userName . '（系統自動：隨工作檔清理）', $dId,
+                                      preg_replace('/\.egwork\.json$/', '.png', $old['filename'])]);
                     $removed++;
                 }
             }
@@ -618,7 +623,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$canDeleteWorkfile) throw new Exception('沒有工作檔刪除權限');
             $wid = (int)($_POST['id'] ?? 0);
             if ($wid <= 0) throw new Exception('缺少工作檔編號');
-            $st = $pdo->prepare("SELECT id, d_id FROM part_attachments WHERE id = ? AND deleted_at IS NULL AND filename LIKE '%.egwork.json'");
+            $st = $pdo->prepare("SELECT id, d_id, filename FROM part_attachments WHERE id = ? AND deleted_at IS NULL AND filename LIKE '%.egwork.json'");
             $st->execute([$wid]);
             $r = $st->fetch(PDO::FETCH_ASSOC);
             if (!$r) throw new Exception('找不到工作檔');
@@ -628,6 +633,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $latest->execute([$r['d_id']]);
             if ((int)$latest->fetchColumn() === $wid) throw new Exception('這是目前最新的工作檔，不能刪除');
             $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE id = ?")->execute([$userName, $wid]);
+            // 成對的輸出圖 PNG 一併軟刪除（30 天內可從附件刪除紀錄還原）
+            $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE d_id = ? AND filename = ? AND deleted_at IS NULL")
+                ->execute([$userName . '（隨工作檔刪除）', $r['d_id'], preg_replace('/\.egwork\.json$/', '.png', $r['filename'])]);
             echo json_encode(['success' => true]);
         } elseif ($act === 'list_users_for_share') {
             // 只列出「目前有批圖編輯器使用權」的人：管理者（status 9/90 或系統 admin 角色）、
