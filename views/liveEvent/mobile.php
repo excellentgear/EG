@@ -157,6 +157,8 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             var rt = $(this).data('reftype');
             // 品質異常單通知 → 開異常單檢視頁（含異常單資訊與回覆回簽）
             if (rt === 'QA'){ location.href = '../QA/qa_abnormal_view.php?event=' + $(this).data('id'); return; }
+            // 異常矯正處理單 → 開單據頁並自動彈出該單填寫（當事人無檢閱權限也可開，open_id=ref_id=car_id）
+            if (rt === 'CAR'){ location.href = '../QA/correction_order.php?open_id=' + $(this).data('refid'); return; }
             // 處置判定/最終裁決 → 決策畫面（判定完成前不標已讀，任一決策者判定後全員自動消失）
             if (rt === 'QA_DECIDE' || rt === 'QA_DECIDE_F'){ location.href = '../QC/inspection_combined_prototype.php?decide_abnormal=' + $(this).data('refid'); return; }
             // 異常單修改請求（主管）→ 核准畫面；已開放修改（請求者）→ 修改畫面
@@ -186,6 +188,7 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             var e = res.event, h = '';
             // 品質異常單通知（如舊推播連到本頁）→ 導向異常單檢視頁；修改請求/開放修改 → 品管合併檢驗頁
             if (e.ref_type === 'QA'){ location.href = '../QA/qa_abnormal_view.php?event=' + e.id; return; }
+            if (e.ref_type === 'CAR'){ location.href = '../QA/correction_order.php?open_id=' + (e.ref_id || 0); return; }
             if (e.ref_type === 'QA_DECIDE' || e.ref_type === 'QA_DECIDE_F'){ location.href = '../QC/inspection_combined_prototype.php?decide_abnormal=' + (e.ref_id || 0); return; }
             if (e.ref_type === 'QA_EDIT_REQ'){ location.href = '../QC/inspection_combined_prototype.php?edit_request=' + (e.ref_id || 0); return; }
             if (e.ref_type === 'QA_EDIT_OK'){ location.href = '../QC/inspection_combined_prototype.php?edit_abnormal=' + (e.ref_id || 0); return; }
