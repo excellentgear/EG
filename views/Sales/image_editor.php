@@ -373,8 +373,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         } elseif ($act === 'save_label') {
             $name  = trim($_POST['name'] ?? '');
             $cat   = trim($_POST['category'] ?? '');
-            // #標示：空白/逗號分隔多個，#可省略；統一存成「無#、空格分隔」
-            $tags  = implode(' ', array_values(array_unique(array_filter(preg_split('/[\s,，#]+/u', trim($_POST['tags'] ?? ''))))));
+            // #標示：空白/逗號分隔多個，#可省略；統一存成「無#、空格分隔」，最多 3 個
+            $tags  = implode(' ', array_slice(array_values(array_unique(array_filter(preg_split('/[\s,，#]+/u', trim($_POST['tags'] ?? ''))))), 0, 3));
             if (mb_strlen($tags) > 100) $tags = mb_substr($tags, 0, 100);
             $scope = $_POST['scope'] ?? 'private';
             $deptId = (int)($_POST['dept_id'] ?? 0);
@@ -712,9 +712,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $pdo->commit();
             echo json_encode(['success' => true, 'count' => $done]);
         } elseif ($act === 'set_label_tags') {
-            // 批次設定 #標示（空白/逗號分隔多個，#可省略；空字串＝清除）
+            // 批次設定 #標示（空白/逗號分隔多個，#可省略；空字串＝清除；最多 3 個）
             $ids = json_decode($_POST['label_ids'] ?? '[]', true);
-            $tags = implode(' ', array_values(array_unique(array_filter(preg_split('/[\s,，#]+/u', trim($_POST['tags'] ?? ''))))));
+            $tags = implode(' ', array_slice(array_values(array_unique(array_filter(preg_split('/[\s,，#]+/u', trim($_POST['tags'] ?? ''))))), 0, 3));
             if (!is_array($ids) || !$ids) throw new Exception('未選擇標籤');
             if (mb_strlen($tags) > 100) $tags = mb_substr($tags, 0, 100);
             $ids = array_values(array_unique(array_map('intval', $ids)));
@@ -876,7 +876,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     .lib-item .lib-del { position: absolute; top: 3px; right: 5px; color: #c0392b; font-size: 13px; padding: 2px 5px; display: none; }
     .lib-item:hover .lib-del { display: block; }
     /* #標示：固定在縮圖左上角的有底色小徽章（標籤庫面板與管理跳窗共用） */
-    .lib-tags { position: absolute; top: 3px; left: 4px; display: flex; gap: 3px; max-width: 72%; overflow: hidden; pointer-events: none; z-index: 2; }
+    .lib-tags { position: absolute; top: 3px; left: 4px; display: flex; flex-wrap: wrap; gap: 3px; max-width: 90%; overflow: hidden; pointer-events: none; z-index: 2; }
     .lib-tags .lib-tag { font-size: 9.5px; line-height: 15px; font-weight: 700; background: #2779bd; color: #fff; border-radius: 3px; padding: 0 4px; white-space: nowrap; }
     #label-lib .lib-foot { padding: 8px; border-top: 1px solid #3c4046; }
 
@@ -1136,7 +1136,13 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <div class="lib-body">
                     <div class="lib-sec" style="color:#6fc3ff;">內建標籤（點一下放到圖上，雙擊圖上標籤可改字）</div>
                     <div id="lib-presets"></div>
-                    <div class="lib-sec" style="color:#6fc3ff;margin-top:14px;">自訂標籤（全體共用）</div>
+                    <div class="lib-sec" style="color:#6fc3ff;margin-top:14px;display:flex;align-items:center;justify-content:space-between;">
+                        <span>自訂標籤（全體共用）</span>
+                        <span style="display:flex;gap:8px;font-weight:400;color:#8b949e;" title="不勾＝這一區在你的標籤庫隱藏（只影響你自己，別人不受影響）">
+                            <label style="cursor:pointer;display:flex;align-items:center;gap:3px;"><input type="checkbox" id="lib-show-company" checked onchange="setScopeShow('company', this.checked)">公司</label>
+                            <label style="cursor:pointer;display:flex;align-items:center;gap:3px;"><input type="checkbox" id="lib-show-dept" checked onchange="setScopeShow('dept', this.checked)">部門</label>
+                        </span>
+                    </div>
                     <div id="lib-customs"><div style="color:#666;font-size:11px;padding:6px;">載入中…</div></div>
                 </div>
                 <div class="lib-foot" style="display:flex;gap:6px;">
@@ -1451,7 +1457,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <h3><i class="fa fa-hashtag"></i> 設定#標示</h3>
         <div class="modal-body">
             <div class="frm-row"><label>#標示</label>
-                <input type="text" id="st-tags" list="lib-tag-datalist" style="flex:1;" placeholder="空格分隔多個（#可省略）；留空＝清除標示"
+                <input type="text" id="st-tags" list="lib-tag-datalist" style="flex:1;" placeholder="空格分隔，最多 3 個（#可省略）；留空＝清除標示"
                     onkeydown="if(event.key==='Enter'){event.preventDefault();confirmSetTags();}">
             </div>
             <div style="font-size:11.5px;color:#8b949e;">套用到目前選取的標籤（只能改自己的標籤，管理者不限）。#標示會以藍底小徽章固定顯示在標籤縮圖左上角，標籤庫搜尋框輸入「#關鍵字」可只搜尋標示。</div>
@@ -3600,7 +3606,7 @@ function labelThumbHTML(dataURL, name, delId) {
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 /* #標示：縮圖左上角有底色小徽章（面板與管理跳窗共用） */
 function tagChipsHTML(tags) {
-    const arr = String(tags || '').trim().split(/\s+/).filter(Boolean);
+    const arr = String(tags || '').trim().split(/\s+/).filter(Boolean).slice(0, 3);   // 最多顯示 3 個徽章
     if (!arr.length) return '';
     return '<span class="lib-tags">' + arr.map(t => '<span class="lib-tag">#' + escHtml(t) + '</span>').join('') + '</span>';
 }
@@ -3958,6 +3964,21 @@ async function lmDeleteSelected() {
     renderLibMgr();
 }
 
+/* 公司/部門標籤區塊顯示開關：只影響自己看到的標籤庫（依使用者存在瀏覽器 localStorage，別人不受影響） */
+const SCOPE_SHOW_KEY = 'egdraw_scope_show_' + USER_ID;
+let scopeShow = { company: true, dept: true };
+try { Object.assign(scopeShow, JSON.parse(localStorage.getItem(SCOPE_SHOW_KEY) || '{}')); } catch (e) { }
+function scopeShown(key) { return (key in scopeShow) ? !!scopeShow[key] : true; }
+function setScopeShow(key, on) {
+    scopeShow[key] = !!on;
+    try { localStorage.setItem(SCOPE_SHOW_KEY, JSON.stringify(scopeShow)); } catch (e) { }
+    renderLibrary();
+}
+(function initScopeShowUI() {
+    const c = document.getElementById('lib-show-company'), d = document.getElementById('lib-show-dept');
+    if (c) c.checked = scopeShown('company');
+    if (d) d.checked = scopeShown('dept');
+})();
 function renderLibrary() {
     const filter = document.getElementById('lib-cat-filter').value;
     // 模糊搜尋：名稱/#標示/分類都比對；「#xx」只比對#標示；空格分隔多關鍵字＝全部都要符合
@@ -3997,7 +4018,7 @@ function renderLibrary() {
         { key: 'dept',    title: '👥 部門標籤', color: '#1abb9c' },
         { key: 'private', title: '🔒 私人標籤', color: '#b39ddb' }
     ];
-    SCOPES.forEach(sc => {
+    SCOPES.filter(sc => scopeShown(sc.key)).forEach(sc => {
         const rows = customLabels.filter(r => (r.owner_type || 'company') === sc.key
             && (!filter || (r.category || '未分類') === filter)
             && hitQ((r.label_name + ' ' + (r.category || '') + ' ' + tagHay(r.tags)).toLowerCase()));
@@ -5026,7 +5047,10 @@ async function pfSave() {
     if (scope === 'custom' && !pfShareSelected.size) { toast('請至少勾選一位要分享的人員，或改選別的範圍'); return; }
     try {
         toast('儲存中…');
-        const png = exportRegionDataURL(artboard.left, artboard.top, artW, artH, 'png', 2);
+        // 壓平圖解析度：一般畫布用 3 倍（小畫家貼圖縮小擺放後，存檔的圖與文字仍清晰）；
+        // 超大圖面自動降回 2 倍（單邊超過 8192px 的 PNG 上傳體積會爆量，2 倍已相當於掃描原檔解析度）
+        const pngMult = Math.max(2, Math.min(3, 8192 / Math.max(artW, artH, 1)));
+        const png = exportRegionDataURL(artboard.left, artboard.top, artW, artH, 'png', pngMult);
         const work = JSON.stringify(canvas.toJSON(SNAP_PROPS));
         const fd = new FormData();
         fd.append('action', 'save_workfile');
