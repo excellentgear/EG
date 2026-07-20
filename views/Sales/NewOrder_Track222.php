@@ -8849,6 +8849,7 @@ foreach($dCounts as $c) {
                         <div class="gear-out-grid">
                             <div class="gear-out-row"><span class="gear-out-label">跨幾齒 k（自動/輸入）</span><span class="gear-output-val" id="go-k">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label">理論跨齒厚 Wk</span><span class="gear-output-val" id="go-wk">—</span></div>
+                            <div class="gear-out-row" id="go-row-wk-bmin"><span class="gear-out-label">最小可量測齒寬 b<small style="color:#999;font-weight:400;">（跨此齒數所需工件厚度）</small></span><span class="gear-output-val" id="go-wk-bmin">—</span></div>
                             <div class="gear-out-row" id="go-row-cust-wk" style="display:none;"><span class="gear-out-label">客戶跨齒厚下限 / 上限</span><span class="gear-output-val" id="go-cust-wk-range">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label">建議滾齒跨齒厚（依標準）</span><span class="gear-output-val val-ok" id="go-rechob-wk" style="font-weight:700;">—</span></div>
                             <div class="gear-out-row" id="go-row-cust-rh-wk" style="display:none;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒跨齒厚 Wk</span><span class="gear-output-val" id="go-cust-rh-wk" style="font-weight:700;color:#6a1b9a;">—</span></div>
@@ -10002,7 +10003,7 @@ foreach($dCounts as $c) {
         gSetText('go-rechob-m-range-lbl', _gearInternal ? '跨銷值 M 下/上限' : '建議滾齒 M 下/上限（依標準跨珠值 M 換算）');
         var blk = document.getElementById('go-block-wk'); if (blk) blk.style.display = _gearInternal ? 'none' : '';
         var rm  = document.getElementById('go-row-rechob-m'); if (rm) rm.style.display = _gearInternal ? 'none' : '';
-        ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-rechob-wk','go-allow-info','go-dp-used','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range'].forEach(function(id){ setOut(id,''); });
+        ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-wk-bmin','go-rechob-wk','go-allow-info','go-dp-used','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range'].forEach(function(id){ setOut(id,''); });
         // 客戶數據輸出：換齒型後屬舊模式結果，一併隱藏
         var _cwRow = document.getElementById('go-row-cust-wk'); if (_cwRow) _cwRow.style.display = 'none';
         var _cxOut = document.getElementById('g-cust-x-out'); if (_cxOut) _cxOut.style.display = 'none';
@@ -10195,6 +10196,16 @@ foreach($dCounts as $c) {
         setOut('go-h',  fmtNum(h,  4));
         setOut('go-k',  k_val);
         setOut('go-wk', fmtNum(Wk, 5));
+        // 最小可量測齒寬（工件厚度）：螺旋齒量跨齒厚時，量測面沿基圓螺旋角傾斜，
+        // 兩量測點在軸向偏移 b_min = Wk·sin(βb)，βb=基圓螺旋角（sinβb=sinβ·cosαn）。
+        // 工件齒寬需大於此值才量得到；直齒(β=0)不受此限。實務再加量測餘裕。
+        var sin_bb = Math.sin(beta) * Math.cos(alpha_n);
+        var b_min  = Math.abs(Wk * sin_bb);
+        if (Math.abs(beta) < 1e-9) {
+            setOut('go-wk-bmin', '直齒不受此限', 'val-ok');
+        } else {
+            setOut('go-wk-bmin', '≥ ' + fmtNum(gRound(b_min, 3), 3) + ' mm', 'val-ok');
+        }
         // 客戶提供跨齒厚（選填）：有填客戶跨齒厚 Wk 或公差才顯示上下限列
         // 基準值：有填「客戶跨齒厚 Wk」用之，否則用理論跨齒厚 Wk
         var cwu = gFloat('g-cust-wtol-up'), cwd = gFloat('g-cust-wtol-dn');
@@ -10767,7 +10778,7 @@ foreach($dCounts as $c) {
         updateGearMnDisplay();
         // 還原法向壓力角預設按鈕
         document.querySelectorAll('.gear-preset-btn').forEach(function(b){ b.classList.remove('active'); });
-        ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-dp-used',
+        ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-wk-bmin','go-dp-used',
          'go-allow-info','go-rechob-wk','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range','go-cust-m-range',
          'go-cust-rh-wk','go-cust-rh-m','go-cust-rh-m-range',
          // M2~M5、跨齒轉換 各分頁計算結果
@@ -10903,15 +10914,20 @@ foreach($dCounts as $c) {
             });
         }
 
-        // 齒研跨齒厚上公差有值時，自動帶入「客戶跨齒厚公差 上公差」（客戶欄為空時才帶，不覆蓋手動輸入）
+        // 齒研跨齒厚上公差有值時，自動帶入「客戶跨齒厚公差 上公差」
+        // 僅在「客戶跨齒厚 Wk 有填」時才帶入（客戶欄為空時才帶，不覆蓋手動輸入）；
+        // 客戶跨齒厚 Wk 沒有資料時，不把齒研跨齒厚上公差帶入客戶跨齒厚公差上公差
         (function(){
             var src = document.getElementById('g-tol-up');
             var dst = document.getElementById('g-cust-wtol-up');
-            if (!src || !dst) return;
-            function sync(){ if (src.value !== '' && dst.value === '') dst.value = src.value; }
+            var wk  = document.getElementById('g-cust-wk');
+            if (!src || !dst || !wk) return;
+            function sync(){ if (wk.value !== '' && src.value !== '' && dst.value === '') dst.value = src.value; }
             src.addEventListener('input', sync);
             src.addEventListener('change', sync);
-            sync(); // 初始若已有值即帶入
+            wk.addEventListener('input', sync);   // 客戶跨齒厚 Wk 填入後才觸發帶入
+            wk.addEventListener('change', sync);
+            sync(); // 初始若客戶Wk與齒研上公差皆已有值即帶入
         })();
 
         // 模組二
