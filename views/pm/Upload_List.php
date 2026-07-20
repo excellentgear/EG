@@ -24,7 +24,7 @@ try {
                      WHERE setting_key IN (
                          'upload_bom_nb','upload_bom_ing_new','upload_bom_ing_s',
                          'upload_bom_nb_ok','upload_transfer_log','upload_transfer_log_raw',
-                         'upload_is_erp','upload_ir_erp'
+                         'upload_is_erp','upload_ir_erp','upload_bom_erp'
                      )");
     while ($row = $r->fetch(PDO::FETCH_ASSOC)) {
         $uploadLogs[$row['setting_key']] = $row;
@@ -40,6 +40,7 @@ $transferLogLastUpdate = $uploadLogs['upload_transfer_log'] ?? null;
 $transferLogRawLastUpdate = $uploadLogs['upload_transfer_log_raw'] ?? null;
 $isLastImport          = $uploadLogs['upload_is_erp']       ?? null;
 $irLastImport          = $uploadLogs['upload_ir_erp']       ?? null;
+$bomErpLastImport      = $uploadLogs['upload_bom_erp']      ?? null;
 
 function lastUpdateBadge($info, $color = '#555') {
     if (!$info || empty($info['ts'])) return '<span style="font-size:11px;color:#aaa">尚無記錄</span>';
@@ -275,6 +276,28 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
                                     
+                                    <!-- 上傳-BOM ERP直接匯入 (N.xlsx，2026-07-20新增，取代下方新BOM+新BOM製程兩步驟) -->
+                                    <div style="background:#e3f2fd;border:2px solid #64b5f6;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+                                    <form id="form_bom_erp" action="_upload_For_List.php?but=BOM_ERP" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
+                                        <div class="item form-group" style="margin-bottom:0">
+                                            <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file_bom_erp">
+                                                BOM/BOM製程 <b>ERP直接匯入</b><small>(只接受.xls/.xlsx)</small><br>
+                                                <span class="required">*</span>
+                                                <span class="text-muted" style="font-size:11px;">直接上傳 ERP 匯出的 N.xlsx<br>免先跑VBA轉檔，自動建立/更新BOM+製程</span>
+                                            </label>
+                                            <div class="col-md-4 col-sm-4 col-xs-8">
+                                                <div class="input-group">
+                                                    <input type="file" id="file_bom_erp" name="file" accept=".xls,.xlsx" class="form-control short-input">
+                                                    <span class="input-group-btn">
+                                                        <button type="submit" id="btn_upload_bom_erp" class="btn btn-warning">ERP匯入</button>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-5 col-sm-5 hidden-xs" style="padding-top:7px"><?= lastUpdateBadge($bomErpLastImport, '#1565c0') ?></div>
+                                        </div>
+                                    </form>
+                                    </div><!-- /淺藍底 -->
+
                                     <!-- 上傳-新bom(新增bom) 2025.02.27 ok-->
                                     <form action="_upload_For_List.php?but=nb" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
                                         <div class="item form-group" style="margin-bottom:6px">
@@ -860,8 +883,139 @@ $(document).ready(function() {
             }
         });
     });
+
+    // ── BOM ERP直接匯入：兩步驟 AJAX（預覽 → 確認）──────────────────────
+    $('#form_bom_erp').on('submit', function(e) {
+        e.preventDefault();
+
+        var fileInput = document.getElementById('file_bom_erp');
+        if (!fileInput || !fileInput.files.length) {
+            alert('請選擇檔案');
+            return;
+        }
+
+        $('#bomErpModalBody').html(
+            '<div class="text-center" style="padding:20px">' +
+            '<i class="fa fa-spinner fa-spin fa-3x"></i>' +
+            '<p style="margin-top:15px">正在解析檔案，請稍候...</p>' +
+            '</div>'
+        );
+        $('#btnBomErpConfirm').hide();
+        $('#bomErpImportModal').modal('show');
+
+        var fd = new FormData();
+        fd.append('file', fileInput.files[0]);
+
+        $.ajax({
+            url: '_upload_For_List.php?but=BOM_ERP_Preview',
+            type: 'POST',
+            data: fd,
+            processData: false,
+            contentType: false,
+            dataType: 'json',
+            success: function(res) {
+                if (!res.success) {
+                    $('#bomErpModalBody').html('<div class="alert alert-danger"><strong>無法匯入，驗證失敗</strong><br>' + res.message + '</div>');
+                    return;
+                }
+
+                var html = '<table class="table table-condensed table-bordered" style="font-size:13px">';
+                html += '<tr><td>解析到的 BOM 數</td><td><strong>' + res.bom_count + ' 筆</strong></td></tr>';
+                html += '<tr><td>將新增的 BOM</td><td>' + res.new_bom_count + ' 筆</td></tr>';
+                html += '<tr><td>將更新的既有 BOM</td><td>' + res.existing_bom_count + ' 筆</td></tr>';
+                html += '<tr><td>製程資料列（bom_ing）</td><td>' + res.total_ing_rows + ' 筆</td></tr>';
+                html += '</table>';
+
+                if (res.warnings && res.warnings.length) {
+                    html += '<div class="alert alert-warning" style="font-size:13px"><strong>⚠ 注意事項</strong><ul style="margin:5px 0 0 0;padding-left:18px">';
+                    res.warnings.forEach(function(w) { html += '<li>' + w + '</li>'; });
+                    html += '</ul></div>';
+                }
+
+                if (res.preview_rows && res.preview_rows.length) {
+                    html += '<div class="panel panel-default" style="margin-top:8px">';
+                    html += '<div class="panel-heading" style="padding:6px 10px;cursor:pointer;font-size:12px;background:#e3f2fd" onclick="$(this).next().toggle()">' +
+                            '▶ DEBUG：前 5 筆 BOM 預覽（點擊展開/收合）</div>';
+                    html += '<div class="panel-body" style="padding:5px;display:block;overflow-x:auto">';
+                    html += '<table class="table table-condensed table-striped" style="font-size:11px;white-space:nowrap;margin:0">';
+                    html += '<thead><tr><th>#</th><th>BOM</th><th>料號</th><th>數量</th><th>客戶</th><th>新/舊</th><th>製程數</th><th>製程</th></tr></thead><tbody>';
+                    res.preview_rows.forEach(function(r, i) {
+                        html += '<tr>';
+                        html += '<td>' + (i + 1) + '</td>';
+                        html += '<td>' + (r.bom || '') + '</td>';
+                        html += '<td>' + (r.d_id || '') + '</td>';
+                        html += '<td>' + (r.sqty || '') + '</td>';
+                        html += '<td>' + (r.client_name || '<em style="color:#999">查無</em>') + '</td>';
+                        html += '<td>' + (r.is_new ? '<span class="label label-success">新增</span>' : '<span class="label label-default">更新</span>') + '</td>';
+                        html += '<td>' + (r.process_count || 0) + '</td>';
+                        html += '<td>' + (r.processes || '') + '</td>';
+                        html += '</tr>';
+                    });
+                    html += '</tbody></table></div></div>';
+                }
+
+                html += '<div class="alert alert-danger" style="font-size:12px;margin-bottom:0">' +
+                        '<strong>此操作無法復原！</strong>確認後將立即寫入/更新 BOM 與製程資料。' +
+                        '</div>';
+
+                $('#bomErpModalBody').html(html);
+                $('#btnBomErpConfirm').show();
+            },
+            error: function() {
+                $('#bomErpModalBody').html('<div class="alert alert-danger">伺服器錯誤，請稍後再試</div>');
+            }
+        });
+    });
+
+    $('#btnBomErpConfirm').on('click', function() {
+        $(this).prop('disabled', true).text('匯入中...');
+        $('#bomErpModalBody').html(
+            '<div class="text-center" style="padding:20px">' +
+            '<i class="fa fa-spinner fa-spin fa-3x"></i>' +
+            '<p style="margin-top:15px">正在匯入資料，請勿關閉視窗...</p>' +
+            '</div>'
+        );
+
+        $.ajax({
+            url: '_upload_For_List.php?but=BOM_ERP_Commit',
+            type: 'POST',
+            dataType: 'json',
+            success: function(res) {
+                if (res.success) {
+                    $('#bomErpModalBody').html('<div class="alert alert-success"><strong>匯入成功！</strong><br>' + res.message + '</div>');
+                    $('#btnBomErpConfirm').hide();
+                    setTimeout(function() { window.location.reload(); }, 2000);
+                } else {
+                    $('#bomErpModalBody').html('<div class="alert alert-danger"><strong>匯入失敗</strong><br>' + res.message + '</div>');
+                    $('#btnBomErpConfirm').prop('disabled', false).text('確認匯入');
+                }
+            },
+            error: function() {
+                $('#bomErpModalBody').html('<div class="alert alert-danger">伺服器錯誤，請稍後再試</div>');
+                $('#btnBomErpConfirm').prop('disabled', false).text('確認匯入');
+            }
+        });
+    });
 });
 </script>
+
+<!-- BOM ERP匯入預覽 Modal -->
+<div class="modal fade" id="bomErpImportModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document" style="width:640px">
+        <div class="modal-content">
+            <div class="modal-header" style="background:#1565c0;color:#fff;padding:12px 15px">
+                <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:1">&times;</button>
+                <h4 class="modal-title"><strong>BOM ERP直接匯入確認</strong></h4>
+            </div>
+            <div class="modal-body" id="bomErpModalBody" style="padding:15px;max-height:70vh;overflow-y:auto">
+            </div>
+            <div class="modal-footer" style="padding:10px 15px">
+                <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-danger" id="btnBomErpConfirm" style="display:none">確認匯入</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- ERP 匯入預覽 Modal -->
 <div class="modal fade" id="erpImportModal" tabindex="-1" role="dialog">
