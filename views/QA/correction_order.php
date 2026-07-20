@@ -560,14 +560,15 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
 
   // ---------- 附件 ----------
   var curViewId = 0;   // 目前開啟檢視的單據 id（附件上傳/刪除用）
-  // 附件清單：逐列「附件N + 檔名 + 說明」；canUp=可上傳(同時可拖曳排序)；lockDel=鎖定刪除(如核准後的異常說明附件)
+  // 附件清單：逐列「附件N + 檔名 + 說明」；canUp=可上傳；lockDel=鎖定刪除與排序(核准後的異常說明附件)
   function attList(atts, sec, canUp, lockDel){
     var items=(atts||[]).filter(function(a){ return a.field_type===sec; });
+    var canDrag = canUp && !lockDel;
     var h='<div class="att-box" data-sec="'+sec+'">';
     items.forEach(function(a, i){
       var delBtn = (!lockDel && (a.created_by|0)===ME_ID) ? '<span class="att-del" data-id="'+a.id+'" title="刪除">&times;</span>' : '';
-      h+='<div class="att-line" data-id="'+a.id+'"'+(canUp?' draggable="true"':'')+'>'
-        +(canUp?'<i class="fa fa-bars att-grip" title="拖曳調整順序"></i>':'')
+      h+='<div class="att-line" data-id="'+a.id+'"'+(canDrag?' draggable="true"':'')+'>'
+        +(canDrag?'<i class="fa fa-bars att-grip" title="拖曳調整順序"></i>':'')
         +'<span class="att-no">附件'+(i+1)+'</span>'
         +'<a href="'+API+'?action=download_attachment&id='+a.id+'" target="_blank"><i class="fa fa-paperclip"></i> '+esc(a.original_filename||a.file_name)+'</a>'
         +'<span class="att-desc">'+esc(a.description||'')+'</span>'

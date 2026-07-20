@@ -1500,6 +1500,9 @@ try {
             else $ok = ((int)$o['assigned_to'] === $uid);
         }
         if (!$ok) jerr('您沒有此區段的附件排序權限', 403);
+        // 主管核准成立後，異常說明區附件順序鎖定（編號已隨單據成立，不可再變動）
+        if ($section === 'desc' && !in_array($o['status'], ['draft', 'applying', 'app_rejected'], true))
+            jfail('主管已核准成立，異常說明附件順序不可再變更');
         // 驗證 ids 皆屬本單本區段，避免竄改
         $chk = $pdo->prepare("SELECT id FROM car_attachment WHERE car_id = ? AND field_type = ?");
         $chk->execute([$carId, $section]);
