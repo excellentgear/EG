@@ -10779,9 +10779,11 @@ foreach($dCounts as $c) {
 
     // ── Enter = Tab（模組一輸入區）────────────────────────────────────────────
     function initEnterTab() {
-        // 依序排列 M1 輸入欄位 ID（beta 兩種模式的欄位都列入）
+        // 依序排列 M1 輸入欄位 ID（beta 兩種模式的欄位都列入；末段接續「客戶提供數據」欄位，
+        // 使建議滾齒 M 公差按 Enter 續往下跳客戶欄，最後一欄才觸發計算）
         var m1Seq = ['g-mn','g-z','g-an','g-x','g-bt','g-bt-d','g-bt-m','g-bt-s',
-                     'g-tol-up','g-k-in','g-dp','g-mtol-up','g-mtol-dn'];
+                     'g-tol-up','g-k-in','g-dp','g-mtol-up','g-mtol-dn',
+                     'g-cust-wtol-up','g-cust-wtol-dn','g-cust-dp','g-cust-m-dn','g-cust-m-up'];
         m1Seq.forEach(function(id, idx) {
             var el = document.getElementById(id); if (!el) return;
             el.addEventListener('keydown', function(e) {
@@ -10830,9 +10832,6 @@ foreach($dCounts as $c) {
         // 回推 x
         bindSeqEnter(['rx-da'], window.calcGearDa2X);
         bindSeqEnter(['rx-k','rx-wk'], window.calcGearWk2X);
-
-        // 模組一：客戶提供數據（選填）區塊，末欄 Enter = 回推轉位並計算
-        bindSeqEnter(['g-cust-wtol-up','g-cust-wtol-dn','g-cust-dp','g-cust-m-dn','g-cust-m-up'], window.calcCustM2X);
 
         // 花鍵 外（mn/pd 只有一個可見，offsetParent 會自動跳過隱藏那個）
         bindSeqEnter(['sp-ext-mn','sp-ext-pd','sp-ext-z','sp-ext-an','sp-ext-bt',
