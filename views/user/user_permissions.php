@@ -197,6 +197,25 @@ foreach ($all_pages as $p) {
     $pages_by_id[$p['page_id']] = $p;
 }
 
+// ── 底下已有「角色指派」區塊的頁面：人員權限設定僅保留「R 開啟」單一選項，
+//    細部功能（新增/修改/刪除…）一律由本頁下方各模組的角色指派決定（過渡期規則，2026-07-20）──
+$rbacManagedPageIds = [
+    84,  // 報價單 (quotation_list_NEW)
+    95,  // 報價_TEST (quotation_list_test)
+    51,  // 公告/通知管理 (createEvent)
+    88, 89, // 首頁設定 (home_page_setting)
+    86,  // QC檢驗_NEW_TEST (inspection_combined_prototype)
+    93,  // 異常矯正處理單 (correction_order)
+    96,  // 圖面自動改檔名工具 (drawing_rename)
+    97,  // 叫料文件自動改檔名工具 (bom_rename)
+    33, 26, // BOM 總表 / bom_TEST (OreadyReply oready)
+    98,  // BOM追蹤 (bom_tracking)
+    101, // 個人工作紀錄 (personal_task)
+    102, // 訂單毛利分析_TEST (Order_Profit_Analysis)
+    100, // AS9100文件管理 (as_document_management)
+];
+$rbacManagedModuleCodes = ['bom_track', 'personal_task'];  // 模組本身直連 RBAC 頁面者
+
 // Fetch User Module Permissions
 $user_module_perms_data = $conn->getAll("SELECT * FROM user_module_permissions");
 $user_module_perms = [];
@@ -655,6 +674,7 @@ $_quotDepts = array_keys($_deptSet);
                                         <span class="label label-success">R: 檢視</span>
                                         <span class="label label-warning">U: 修改</span>
                                         <span class="label label-danger">D: 刪除</span>
+                                        <span class="text-muted" style="font-size:11px;margin-left:8px;">※ 下方已有「角色指派」的頁面僅需勾 R(開啟)，細部權限由角色指派決定</span>
                                     </div>
 
                                     <table id="datatable-buttons" class="table table-striped table-bordered">
@@ -849,6 +869,15 @@ $_quotDepts = array_keys($_deptSet);
                                                                                 <strong><?= htmlspecialchars($module['module_name']) ?></strong>
                                                                             </td>
                                                                             <td>
+                                                                                <?php
+                                                                                $isRbacManagedModule = in_array($mCode, $rbacManagedModuleCodes, true)
+                                                                                    || (!empty($module['page_id']) && in_array((int)$module['page_id'], $rbacManagedPageIds, true));
+                                                                                if ($isRbacManagedModule): ?>
+                                                                                    <label class="checkbox-inline">
+                                                                                        <input type="checkbox" name="permissions[group][<?= $mCode ?>][]" value="R" <?= (strpos($currPerm, 'R') !== false || strpos($currPerm, 'A') !== false) ? 'checked' : '' ?>> R 開啟
+                                                                                    </label>
+                                                                                    <div class="text-muted" style="font-size:11px;">細部權限由下方「角色指派」設定</div>
+                                                                                <?php else: ?>
                                                                                 <?php foreach ($acrudMap as $char => $label):
                                                                                     // 針對 hr_permissions 模組，只顯示 A, R, U
                                                                                     if (($mCode === 'hr_permissions' || $module['module_name'] === 'hr_permissions') && !in_array($char, ['A', 'R', 'U'])) continue;
@@ -857,6 +886,7 @@ $_quotDepts = array_keys($_deptSet);
                                                                                         <input type="checkbox" name="permissions[group][<?= $mCode ?>][]" value="<?= $char ?>" <?= strpos($currPerm, $char) !== false ? 'checked' : '' ?>> <?= $char . ' ' . $label ?>
                                                                                     </label>
                                                                                 <?php endforeach; ?>
+                                                                                <?php endif; ?>
                                                                             </td>
                                                                         </tr>
                                                                         <?php if (!empty($modulePages)): ?>
@@ -869,11 +899,18 @@ $_quotDepts = array_keys($_deptSet);
                                                                                     <i class="fa fa-angle-right"></i> <?= htmlspecialchars($page['page_name']) ?>
                                                                                 </td>
                                                                                 <td>
+                                                                                    <?php if (in_array((int)$pId, $rbacManagedPageIds, true)): ?>
+                                                                                        <label class="checkbox-inline">
+                                                                                            <input type="checkbox" name="permissions[page][<?= $pId ?>][]" value="R" <?= (strpos($currPagePerm, 'R') !== false || strpos($currPagePerm, 'A') !== false) ? 'checked' : '' ?>> R 開啟
+                                                                                        </label>
+                                                                                        <span class="text-muted" style="font-size:11px;">（細部權限由下方「角色指派」設定）</span>
+                                                                                    <?php else: ?>
                                                                                     <?php foreach ($acrudMap as $char => $label): ?>
                                                                                         <label class="checkbox-inline">
                                                                                             <input type="checkbox" name="permissions[page][<?= $pId ?>][]" value="<?= $char ?>" <?= strpos($currPagePerm, $char) !== false ? 'checked' : '' ?>> <?= $char . ' ' . $label ?>
                                                                                         </label>
                                                                                     <?php endforeach; ?>
+                                                                                    <?php endif; ?>
                                                                                 </td>
                                                                             </tr>
                                                                             <?php endforeach; ?>
@@ -1434,8 +1471,13 @@ $_quotDepts = array_keys($_deptSet);
                 if (permsData.group) {
                     $.each(permsData.group, function(mCode, pStr) {
                         if (pStr) {
+                            var $boxes = form.find('input[name="permissions[group][' + mCode + '][]"]');
                             for (var i = 0; i < pStr.length; i++) {
-                                form.find('input[name="permissions[group][' + mCode + '][]"][value="' + pStr.charAt(i) + '"]').prop('checked', true);
+                                $boxes.filter('[value="' + pStr.charAt(i) + '"]').prop('checked', true);
+                            }
+                            // RBAC 簡化列（僅 R 選項）：來源含 A(完整) 視同開啟
+                            if (pStr.indexOf('A') !== -1 && $boxes.filter('[value="A"]').length === 0) {
+                                $boxes.filter('[value="R"]').prop('checked', true);
                             }
                         }
                     });
@@ -1443,8 +1485,12 @@ $_quotDepts = array_keys($_deptSet);
                 if (permsData.page) {
                     $.each(permsData.page, function(pId, pStr) {
                         if (pStr) {
+                            var $boxes = form.find('input[name="permissions[page][' + pId + '][]"]');
                             for (var i = 0; i < pStr.length; i++) {
-                                form.find('input[name="permissions[page][' + pId + '][]"][value="' + pStr.charAt(i) + '"]').prop('checked', true);
+                                $boxes.filter('[value="' + pStr.charAt(i) + '"]').prop('checked', true);
+                            }
+                            if (pStr.indexOf('A') !== -1 && $boxes.filter('[value="A"]').length === 0) {
+                                $boxes.filter('[value="R"]').prop('checked', true);
                             }
                         }
                     });
