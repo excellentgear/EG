@@ -222,6 +222,7 @@ $pdo->exec("INSERT IGNORE INTO dict_timing_belt_profile (profile_code,pitch_mm,p
     ('S2M',2.000,0.150,'STS',150),('S3M',3.000,0.381,'STS',160),
     ('S5M',5.000,0.571,'STS',170),('S8M',8.000,0.686,'STS',180),
     ('S14M',14.000,1.397,'STS',190),
+    ('8YU',8.000,0.686,'YU',195),
     ('T2.5',2.500,0.700,'Metric',210),('T5',5.000,1.200,'Metric',220),
     ('T10',10.000,2.500,'Metric',230),('T20',20.000,5.000,'Metric',240),
     ('AT3',3.000,0.800,'Metric',310),('AT5',5.000,1.100,'Metric',320),
@@ -3901,6 +3902,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         try {
             $rows = $pdo->query("SELECT profile_code, pitch_mm, pld_mm, belt_standard FROM dict_timing_belt_profile ORDER BY sort_order, profile_code")->fetchAll(PDO::FETCH_ASSOC);
             echo json_encode(['success'=>true,'data'=>$rows]);
+        } catch(Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // ── 規格快速按鈕（存 DB 全站共用，取代僅存瀏覽器 localStorage 會被清除的問題）──
+    if ($_POST['action'] === 'get_spec_quick_btns') {
+        try {
+            $v = _get_setting($pdo, 'spec_quick_btns', '');
+            $labels = $v !== '' ? json_decode($v, true) : null;
+            echo json_encode(['success'=>true,'data'=>is_array($labels) ? $labels : null]);
+        } catch(Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+    if ($_POST['action'] === 'save_spec_quick_btns') {
+        try {
+            $labels = json_decode($_POST['labels'] ?? '[]', true);
+            if (!is_array($labels)) $labels = [];
+            $labels = array_slice(array_map(function($s){ return mb_substr(trim((string)$s), 0, 12); }, $labels), 0, 12);
+            $uid = $_SESSION['id'] ?? $_SESSION['user_id'] ?? 0;
+            _save_setting($pdo, 'spec_quick_btns', json_encode($labels, JSON_UNESCAPED_UNICODE), $uid, _get_operator($pdo, $uid));
+            echo json_encode(['success'=>true]);
         } catch(Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
     }
@@ -22053,12 +22075,25 @@ var _SPEC_BTN_KEY = 'eg_spec_quick_btns';
 var _specBtnLabels = [];
 
 function loadSpecBtns() {
+    // localStorage 僅當快取先畫一次；DB 才是正本（避免瀏覽器清資料後按鈕消失）
     try {
         var stored = localStorage.getItem(_SPEC_BTN_KEY);
         _specBtnLabels = stored ? JSON.parse(stored) : [];
     } catch(e) { _specBtnLabels = []; }
     while (_specBtnLabels.length < 12) _specBtnLabels.push('');
     renderSpecBtns();
+    api({ action:'get_spec_quick_btns' }).done(function(r) {
+        if (!r.success) return;
+        if (r.data && r.data.length) {
+            _specBtnLabels = r.data;
+            while (_specBtnLabels.length < 12) _specBtnLabels.push('');
+            try { localStorage.setItem(_SPEC_BTN_KEY, JSON.stringify(_specBtnLabels)); } catch(e) {}
+            renderSpecBtns();
+        } else if (_specBtnLabels.some(function(l){ return l && l.trim(); })) {
+            // DB 尚無設定但本機有舊設定 → 一次性遷移上 DB
+            api({ action:'save_spec_quick_btns', labels: JSON.stringify(_specBtnLabels) });
+        }
+    });
 }
 
 function renderSpecBtns() {
@@ -22110,6 +22145,9 @@ function saveSpecBtnSettings() {
     }
     _specBtnLabels = labels;
     try { localStorage.setItem(_SPEC_BTN_KEY, JSON.stringify(labels)); } catch(e) {}
+    api({ action:'save_spec_quick_btns', labels: JSON.stringify(labels) }).done(function(r) {
+        if (!r.success) showToast('快速按鈕儲存到資料庫失敗：' + (r.message||''), 'error');
+    }).fail(function() { showToast('快速按鈕儲存到資料庫失敗（連線錯誤）', 'error'); });
     renderSpecBtns();
     $('#specBtnSettingsModal').modal('hide');
 }
