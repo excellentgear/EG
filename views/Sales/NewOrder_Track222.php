@@ -8707,30 +8707,40 @@ foreach($dCounts as $c) {
                     </div>
                     <div style="display:flex;gap:10px;">
                         <div class="gear-field-group" style="flex:1;">
-                            <label>法向模數 mn <span style="color:#e74c3c">*</span></label>
-                            <input type="number" id="g-mn" class="gear-input" placeholder="例：2" step="any">
+                            <label>法向模數 mn <span style="color:#e74c3c">*</span> <small style="color:#999;font-weight:400;">可選 M/CP/DP</small></label>
+                            <div style="display:flex;gap:4px;align-items:center;">
+                                <select id="g-mn-unit" class="gear-input" style="width:58px;flex-shrink:0;padding:4px 2px;" onchange="updateGearMnDisplay()" title="模數輸入單位：M=模數、CP=周節、DP=徑節">
+                                    <option value="M" selected>M</option>
+                                    <option value="CP">CP</option>
+                                    <option value="DP">DP</option>
+                                </select>
+                                <input type="number" id="g-mn" class="gear-input" placeholder="例：2" step="any" style="flex:1;min-width:0;" oninput="updateGearMnDisplay()">
+                            </div>
+                            <div id="g-mn-m-display" style="display:none;font-size:11px;color:#2980b9;font-weight:600;margin-top:2px;"></div>
                         </div>
                         <div class="gear-field-group" style="flex:1;">
                             <label>齒數 z <span style="color:#e74c3c">*</span></label>
                             <input type="number" id="g-z" class="gear-input" placeholder="例：30" step="1" min="2">
                         </div>
                     </div>
-                    <div class="gear-field-group">
-                        <label>法向壓力角 α_n <span style="color:#e74c3c">*</span></label>
-                        <div style="display:flex;align-items:center;gap:6px;">
-                            <div style="display:flex;align-items:center;gap:3px;">
-                                <input type="number" id="g-an" class="gear-input" placeholder="空白=20°" style="width:90px;" step="any" min="0" max="89" value="20">
-                                <span style="color:#555;font-size:14px;">°</span>
+                    <div style="display:flex;gap:10px;">
+                        <div class="gear-field-group" style="flex:1.25;min-width:0;">
+                            <label>法向壓力角 α_n <span style="color:#e74c3c">*</span></label>
+                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                                <div style="display:flex;align-items:center;gap:3px;">
+                                    <input type="number" id="g-an" class="gear-input" placeholder="空白=20°" style="width:90px;" step="any" min="0" max="89" value="20">
+                                    <span style="color:#555;font-size:14px;">°</span>
+                                </div>
+                                <button type="button" class="gear-preset-btn active" id="g-an-btn-20" onclick="setAlphaN(20)">20°（預設）</button>
+                                <button type="button" class="gear-preset-btn" id="g-an-btn-30" onclick="setAlphaN(30)">30°</button>
                             </div>
-                            <button type="button" class="gear-preset-btn active" id="g-an-btn-20" onclick="setAlphaN(20)">20°（預設）</button>
-                            <button type="button" class="gear-preset-btn" id="g-an-btn-30" onclick="setAlphaN(30)">30°</button>
                         </div>
-                    </div>
-                    <div class="gear-field-group">
-                        <label>轉位係數 x <span style="color:#e74c3c">*</span></label>
-                        <div style="display:flex;gap:5px;align-items:center;">
-                            <input type="number" id="g-x" class="gear-input" placeholder="空白=0" step="any" style="flex:1;min-width:0;">
-                            <button class="btn-gear-clr" style="padding:4px 9px;font-size:11px;white-space:nowrap;flex-shrink:0;" onclick="gotoRxTab()" title="由外徑或跨齒厚反推轉位係數 x"><i class="fa fa-undo"></i> 回推</button>
+                        <div class="gear-field-group" style="flex:1;min-width:0;">
+                            <label>轉位係數 x <span style="color:#e74c3c">*</span></label>
+                            <div style="display:flex;gap:5px;align-items:center;">
+                                <input type="number" id="g-x" class="gear-input" placeholder="空白=0" step="any" style="flex:1;min-width:0;">
+                                <button class="btn-gear-clr" style="padding:4px 9px;font-size:11px;white-space:nowrap;flex-shrink:0;" onclick="gotoRxTab()" title="由外徑或跨齒厚反推轉位係數 x"><i class="fa fa-undo"></i> 回推</button>
+                            </div>
                         </div>
                     </div>
                     <div class="gear-field-group">
@@ -9920,6 +9930,28 @@ foreach($dCounts as $c) {
     }
 
     // ══ 模組一：基本計算 ═════════════════════════════════════════════════════
+    // ── 法向模數輸入單位 M/CP/DP（換算邏輯同 master_data_management：CP→M=值/π、DP→M=25.4/值）──
+    function gearMnToM() {
+        var v = gFloat('g-mn');
+        if (v === null || v <= 0) return null;
+        var s = document.getElementById('g-mn-unit');
+        var u = s ? s.value : 'M';
+        if (u === 'CP') return v / Math.PI;
+        if (u === 'DP') return 25.4 / v;
+        return v;
+    }
+    window.updateGearMnDisplay = function() {
+        var disp = document.getElementById('g-mn-m-display'); if (!disp) return;
+        var s = document.getElementById('g-mn-unit');
+        var u = s ? s.value : 'M';
+        var m = gearMnToM();
+        if (u !== 'M' && m !== null) {
+            disp.textContent = '= M' + fmtNum(m, 6);
+            disp.style.display = 'block';
+        } else {
+            disp.style.display = 'none';
+        }
+    };
     // ── 齒型模式：外齒 / 內齒 ──────────────────────────────────────────────
     var _gearInternal = false;
     function gSetText(id, t){ var el = document.getElementById(id); if (el) el.textContent = t; }
@@ -9984,7 +10016,7 @@ foreach($dCounts as $c) {
     }
 
     window.calcGearM1 = function() {
-        var mn = gFloat('g-mn'), z = gInt('g-z');
+        var mn = gearMnToM(), z = gInt('g-z');  // CP/DP 已換算為 M
         if (!mn || !z || mn <= 0 || z < 2) { alert('請填寫法向模數 mn 和齒數 z（z≥2）'); return; }
 
         // 法向壓力角（空白預設 20°）
@@ -10156,7 +10188,7 @@ foreach($dCounts as $c) {
 
     // ── 客戶提供數據：由跨銷徑/球徑與 M 上下限回推轉位係數 x，代入後自動計算 ──
     window.calcCustM2X = function() {
-        var mn = gFloat('g-mn'), z = gInt('g-z');
+        var mn = gearMnToM(), z = gInt('g-z');  // CP/DP 已換算為 M
         if (!mn || !z || mn <= 0 || z < 2) { alert('請先填寫法向模數 mn 和齒數 z（z≥2）'); return; }
         var M_up = gFloat('g-cust-m-up'), M_dn = gFloat('g-cust-m-dn');
         if (M_up === null && M_dn === null) { alert('請填寫客戶 M 上限或下限（至少一項）'); return; }
@@ -10607,6 +10639,9 @@ foreach($dCounts as $c) {
             var el = document.getElementById(id); if(el) el.value = '';
         });
         var btdec = document.getElementById('g-bt-dec'); if(btdec) btdec.textContent = '0°';
+        // 模數單位還原為 M、隱藏換算顯示
+        var mnUnit = document.getElementById('g-mn-unit'); if (mnUnit) mnUnit.value = 'M';
+        updateGearMnDisplay();
         // 還原法向壓力角預設按鈕
         document.querySelectorAll('.gear-preset-btn').forEach(function(b){ b.classList.remove('active'); });
         ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-dp-used',
