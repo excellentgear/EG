@@ -754,8 +754,11 @@ $transfer_price_map = [];
 if (!empty($current_page_boms)) {
     $ph_tp = implode(',', array_fill(0, count($current_page_boms), '?'));
     try {
+        // 欄位需與頁面初載查詢一致（含日期/廠商/數量/備註），否則 AJAX 更新後「加工單價歷史」彈窗的本 BOM 列只剩單價
         $stmt_tp = $db->prepare("
-            SELECT tl.bom, tl.bom_sn, tl.price, tl.modified_unit_price
+            SELECT tl.bom, tl.bom_sn, tl.maker_from, tl.sqty, tl.transfer_date,
+                   tl.price, tl.modified_unit_price, tl.note,
+                   ml.maker_id AS maker_name
             FROM bom_ing_transfer_log tl
             INNER JOIN (
                 SELECT bom, bom_sn, MAX(transfer_id) AS max_id
@@ -763,6 +766,7 @@ if (!empty($current_page_boms)) {
                 WHERE bom IN ($ph_tp)
                 GROUP BY bom, bom_sn
             ) latest ON tl.bom = latest.bom AND tl.bom_sn = latest.bom_sn AND tl.transfer_id = latest.max_id
+            LEFT JOIN maker_list ml ON ml.maker_id_no = tl.maker_from
             WHERE tl.bom IN ($ph_tp)
         ");
         $stmt_tp->execute(array_merge(array_values($current_page_boms), array_values($current_page_boms)));
