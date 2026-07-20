@@ -1032,7 +1032,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         + '<tr><th>異常來源</th><td>'+esc(o.source_label)+' '+esc(o.source_no||'')+'</td><th>客戶/供應商</th><td>'+cpShow(o.counterparty_type, o.counterparty_display)+'</td></tr>'
         + '<tr><th>料號</th><td>'+esc(o.drawing_no||'')+'</td><th>製令BOM</th><td>'+esc(o.work_order||'')+'</td></tr>'
         + '<tr><th>責任單位</th><td>'+esc(o.resp_display||'')+'</td><th>發現 / 填表日期</th><td>'+esc(o.found_date||'—')+' / '+esc(o.fill_date||'')+'</td></tr>'
-        + '<tr><th>填表人</th><td>'+fillerShow+'</td><th>製程</th><td>'+esc(o.process_name||'')+'</td></tr>'
+        + '<tr><th>開立人員</th><td>'+fillerShow+'</td><th>製程</th><td>'+esc(o.process_name||'')+'</td></tr>'
         + appInfo
         + '<tr><th>異常說明</th><td colspan="3">'+esc(o.abnormal_desc||'').replace(/\n/g,'<br>')
         + attList(r.attachments,'desc', perm.can_edit_header || ((o.created_by|0)===perm.me_id),
@@ -1304,7 +1304,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         +'<tr><th>客戶/供應商</th><td>'+esc(String(o.counterparty_display||'').replace(/^\[.\]\s*/,''))+'</td><th>料號</th><td>'+esc(o.drawing_no||'')+'</td></tr>'
         +'<tr><th>廠內製令單號</th><td>'+esc(o.work_order||'')+'</td><th>數量</th><td>'+esc(o.qty!=null?parseFloat(o.qty):'')+'</td></tr>'
         +'<tr><th>填表日期</th><td>'+esc(o.fill_date||'')+'</td><th>發現日期</th><td>'+esc(o.found_date||'')+'</td></tr>'
-        +'<tr><th>填表人</th><td>'+esc(o.created_by_name||'')+'</td><th>製程</th><td>'+esc(o.process_name||'')+'</td></tr>'
+        +'<tr><th>開立人員</th><td>'+esc(o.created_by_name||'')+'</td><th>製程</th><td>'+esc(o.process_name||'')+'</td></tr>'
         +'<tr><th>責任單位</th><td colspan="3">'+esc(o.resp_display||'')+'</td></tr></table>'
         +'<table><tr><th style="width:90px;">異常說明</th><td><div class="sec">'+esc(o.abnormal_desc||'')+'</div>'+attNote('desc')+pStamp(sm['desc'])+'</td></tr>'
         +'<tr><th>異常原因分析</th><td>原因調查：'+ckList(L.cause, ciKeys, o.cause_other)
@@ -1357,7 +1357,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       if(!r||!r.success){ alert(r&&r.message||'載入失敗'); return; }
       var h='<h2 style="text-align:center;margin:0 0 6px;">異常矯正處理單 總表</h2>'
         +'<div style="font-size:11px;margin-bottom:4px;">列印時間：'+new Date().toLocaleString()+'　共 '+(r.total||0)+' 筆</div>'
-        +'<table><tr><th>表單編號</th><th>來源</th><th>客戶/供應商</th><th>料號</th><th>責任單位</th><th>狀態</th><th>狀態日期</th><th>填表人</th><th>填表日期</th></tr>';
+        +'<table><tr><th>表單編號</th><th>來源</th><th>客戶/供應商</th><th>料號</th><th>責任單位</th><th>狀態</th><th>狀態日期</th><th>開立人員</th><th>填表日期</th></tr>';
       (r.rows||[]).forEach(function(o){
         var stDate = o.latest ? fmtDT(o.latest.created_at) : '';   // 狀態日期＝最近一次處理時間
         h+='<tr><td>'+esc(o.car_no||'（未配號）')+'</td><td>'+esc(o.source_label)+'</td>'
