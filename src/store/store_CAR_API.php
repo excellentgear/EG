@@ -482,7 +482,7 @@ try {
                         o.counterparty_type, o.customer_id, o.maker_id_no,
                         o.d_id, o.drawing_no, o.resp_type, o.resp_dept_id, o.resp_display,
                         o.status, o.fill_date, o.created_by, o.created_by_name, o.reissue_of, o.reissue_seq,
-                        o.assigned_to, o.assigned_to_name, o.assigned_at, o.created_at,
+                        o.assigned_to, o.assigned_to_name, o.assigned_at, o.created_at, o.stage_since,
                         d.name AS resp_dept_name,
                         cc.customer AS customer_name, mk.maker_id AS maker_name
                  FROM car_order o
@@ -513,6 +513,8 @@ try {
             }
 
             $L = car_labels();
+            $today = date('Y-m-d');
+            $activeStatuses = ['applying','app_rejected','open','assigned','replying','pending_primary','pending_final'];
             foreach ($rows as &$r) {
                 $r['status_label'] = $L['status'][$r['status']] ?? $r['status'];
                 $r['source_label'] = $L['source_type'][$r['source_type']] ?? $r['source_type'];
@@ -520,12 +522,21 @@ try {
                     $r['counterparty_type'] === 'maker' ? $r['maker_id_no'] : $r['customer_id']);
                 $r['resp_show'] = $r['resp_display'] ?: ($r['resp_dept_name'] ?? '');
                 $r['latest'] = $latest[$r['id']] ?? null;
+                // 開立至今已歷工作天（僅未結案/未撤回/未退件之進行中單據；終態不計）
+                $r['open_wd'] = in_array($r['status'], $activeStatuses, true)
+                    ? car_working_days_between($pdo, (string)($r['fill_date'] ?: $r['created_at']), $today)
+                    : null;
+                // 目前關卡已停留工作天（供逾期判讀）
+                $r['stage_wd'] = in_array($r['status'], $activeStatuses, true)
+                    ? car_working_days_between($pdo, (string)($r['stage_since'] ?: $r['created_at']), $today)
+                    : null;
             }
             unset($r);
         }
 
         jout(['success' => true, 'rows' => $rows, 'total' => $total, 'page' => $page,
               'size' => $size, 'pages' => (int)ceil($total / $size), 'stats' => $stats,
+              'remind_working_days' => (int)(car_setting($pdo, 'car_remind_working_days', '5') ?: 5),
               'print_header' => car_setting($pdo, 'car_print_header', ''),
               'print_footer' => car_setting($pdo, 'car_print_footer', '')]);
     }
@@ -968,6 +979,32 @@ try {
         jout(['success' => true, 'message' => '已簽核，待總經理裁決']);
     }
 
+    // ── 首要決策者：退回重改（填原因，退回責任人重新填寫）──────────────────
+    case 'primary_reject': {
+        $id     = (int)($_POST['car_id'] ?? 0);
+        $reason = trim($_POST['reason'] ?? '');
+        if ($reason === '') jfail('請填寫退回原因');
+        $st = $pdo->prepare("SELECT * FROM car_order WHERE id = ?"); $st->execute([$id]);
+        $o = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$o) jfail('查無此單');
+        if ($o['status'] !== 'pending_primary') jfail('目前狀態不在「待主管簽核」');
+        if (!car_is_primary_candidate($pdo, $o, (int)$me['id']) && !_carHas('car_sign_primary'))
+            jerr('您不是本單責任單位的主管，無法退回', 403);
+        if (!$o['assigned_to']) jfail('本單無回覆人可退回');
+
+        // 退回「填寫中」，責任人可取消簽章修改後重新送出（不作廢三段簽章，讓責任人自行決定改哪段）
+        $pdo->prepare("UPDATE car_order SET status='replying', stage_since=NOW() WHERE id=?")->execute([$id]);
+        car_log($pdo, $id, 'primary_reject', (int)$me['id'], $me['name'], "主管退回重改：{$reason}");
+        // 通知責任人：退回重改（行動型，重送前持續顯示；submit_reply 時 car_notify_done 銷單）
+        try {
+            car_notify($pdo, $id,
+                car_notify_title('↩️', $o, '主管退回，請重新填寫'),
+                car_notify_body($pdo, $o, "退回原因：{$reason}\n退 回 人：{$me['name']}\n請依原因修改後重新簽章送出。"),
+                [(int)$o['assigned_to']], (int)$me['id'], 'reply');
+        } catch (Throwable $e) {}
+        jout(['success' => true, 'message' => '已退回責任人重新填寫']);
+    }
+
     // ── 最終決策者（總經理）裁決：結案 或 不可結案→退件產生 R 單 ────────────
     case 'final_decide': {
         $id     = (int)($_POST['car_id'] ?? 0);
@@ -1099,6 +1136,8 @@ try {
               'admin_users' => $adminUsers,
               'print_header' => car_setting($pdo, 'car_print_header', ''),
               'print_footer' => car_setting($pdo, 'car_print_footer', ''),
+              'remind_working_days' => (int)(car_setting($pdo, 'car_remind_working_days', '5') ?: 5),
+              'remind_enabled' => (car_setting($pdo, 'car_remind_enabled', '1') !== '0') ? 1 : 0,
               'depts' => $depts, 'positions' => $positions]);
     }
 
@@ -1126,6 +1165,10 @@ try {
         if ($path !== '') car_setting_set($pdo, 'car_attach_root_path', $path, (int)$me['id']);
         car_setting_set($pdo, 'car_print_header', trim($_POST['print_header'] ?? ''), (int)$me['id']);
         car_setting_set($pdo, 'car_print_footer', trim($_POST['print_footer'] ?? ''), (int)$me['id']);
+        $rwd = (int)($_POST['remind_working_days'] ?? 5);
+        if ($rwd < 1) $rwd = 1; if ($rwd > 60) $rwd = 60;   // 逾期提醒工作天數 1~60
+        car_setting_set($pdo, 'car_remind_working_days', (string)$rwd, (int)$me['id']);
+        car_setting_set($pdo, 'car_remind_enabled', (($_POST['remind_enabled'] ?? '1') === '0') ? '0' : '1', (int)$me['id']);
         jout(['success' => true, 'message' => '設定已儲存']);
     }
 
@@ -1257,6 +1300,20 @@ try {
         jout(['success' => true, 'message' => '已重新送出申請，待主管核准']);
     }
 
+    // ── 放棄申請（申請退回後開立人決定不再送出）→ 轉「已撤回」保留紀錄、停止逾期提醒 ─
+    case 'abandon_application': {
+        $id = (int)($_POST['car_id'] ?? 0);
+        $reason = trim($_POST['reason'] ?? '');
+        $st = $pdo->prepare("SELECT created_by, status, car_no FROM car_order WHERE id = ?"); $st->execute([$id]);
+        $o = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$o) jfail('查無此單');
+        if ((int)$o['created_by'] !== (int)$me['id'] && !_carHas('all')) jerr('僅開立人本人可放棄申請', 403);
+        if ($o['status'] !== 'app_rejected') jfail('僅「申請退回」狀態可放棄申請');
+        $pdo->prepare("UPDATE car_order SET status='draft', stage_since=NOW() WHERE id=?")->execute([$id]);
+        car_log($pdo, $id, 'abandon', (int)$me['id'], $me['name'], '放棄申請（轉為已撤回，保留紀錄，停止提醒）' . ($reason ? "：{$reason}" : ''));
+        jout(['success' => true, 'message' => '已放棄申請（保留紀錄、停止提醒，日後仍可重新送出）']);
+    }
+
     // ── 刪除單據（需 car_delete 且為開立人本人；系統管理員例外；連同簽章/軌跡/附件記錄一併刪除）
     case 'delete_order': {
         if (!_carHas('car_delete')) jerr('您沒有刪除權限', 403);
@@ -1320,17 +1377,22 @@ try {
         $canSeeDeduct = car_is_admin_deduct($pdo, (int)$me['id']) || car_is_final_decider($pdo, (int)$me['id']) || _carHas('all');
 
         $L = car_labels();
+        $today = date('Y-m-d');
+        $activeStatuses = ['applying','app_rejected','open','assigned','replying','pending_primary','pending_final'];
         header_remove('Content-Type');
         header('Content-Type: text/csv; charset=utf-8');
         header("Content-Disposition: attachment; filename*=UTF-8''" . rawurlencode('異常矯正處理單_' . date('Ymd_Hi') . '.csv'));
         $out = fopen('php://output', 'w');
         fwrite($out, "\xEF\xBB\xBF");   // BOM
-        fputcsv($out, ['表單編號','狀態','異常來源','來源單號','客戶/供應商','料號','製令BOM','數量',
-                       '責任單位','填表人','填表日期','發現日期','回覆人','結案日期','不可結案原因','扣款金額','扣款備註']);
+        fputcsv($out, ['表單編號','狀態','已歷工作天','異常來源','來源單號','客戶/供應商','料號','製令BOM','數量',
+                       '責任單位','開立人員','填表日期','發現日期','回覆人','結案日期','不可結案原因','扣款金額','扣款備註']);
         foreach ($rows as $r) {
+            $owd = in_array($r['status'], $activeStatuses, true)
+                ? car_working_days_between($pdo, (string)($r['fill_date'] ?: $r['created_at']), $today) : '';
             fputcsv($out, [
                 $r['car_no'] ?: '（未配號）',
                 $L['status'][$r['status']] ?? $r['status'],
+                $owd,
                 $L['source_type'][$r['source_type']] ?? $r['source_type'],
                 $r['source_no'], $r['cp_name'], $r['drawing_no'], $r['work_order'], $r['qty'],
                 $r['resp_display'] ?: $r['resp_dept_name'],
