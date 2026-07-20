@@ -2665,14 +2665,16 @@ if ($_GET['but'] == 'transfer_log_raw') {
 // 兩階段流程比照 IS_List_ERP_Preview/Commit。
 // ══════════════════════════════════════════════════════════════════════════════
 
-// 備註欄清理：N.xlsx「備註」開頭常帶「O-訂單號」前綴（如 O-OO1150716015-001 SCM415...），
-// 真實資料只留訂單號後面的文字（已用既有真實 bom_ing.ps 資料核對，規則同 transfer_log_raw 的備註清理）
+// 備註欄清理：ERP「備註」開頭常帶「O-訂單號」前綴（如 O-OO1150716015-001 SCM415...）或「T--000」前綴，
+// 真實資料只留前綴後面的文字（已用既有真實 bom_ing.ps 資料核對，規則同 transfer_log_raw/VBA 的備註清理）
 if (!function_exists('bomErpCleanPs')) {
     function bomErpCleanPs($ps) {
         if ($ps === null) return null;
         if (strpos($ps, 'O-') === 0) {
             $sp = strpos($ps, ' ');
             $ps = $sp === false ? '' : trim(substr($ps, $sp + 1));
+        } elseif (strpos($ps, 'T--000') === 0) {
+            $ps = trim(substr($ps, 6));
         }
         return $ps === '' ? null : $ps;
     }
@@ -2955,6 +2957,284 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
     } catch (Exception $e) {
         if ($db->inTransaction()) $db->rollBack();
         echo json_encode(['success' => false, 'message' => '匯入失敗：' . $e->getMessage()]);
+    }
+    exit;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 移轉紀錄 ERP直接匯入 (SupQuery.xls.xlsx，2026-07-20新增)
+// 取代「更新_當天移送」VBA巨集＋人工上傳 s-OK 檔（but=u5）的流程：直接讀 ERP 匯出的移轉原始檔。
+// 對照規則由 BOM.xlsm VBA 原始碼（olevba抽出「更新_移送」）＋欄位剪貼模擬＋真實資料三重驗證定案：
+//   有效列＝製程代號非空 且 生產單位非空 且 預移入日==預移出日（VBA註解：判定製程為空者、移入移出日期不同者刪除）
+//   同(bom,bom_sn)多筆時，只取異動日期時間最新的一筆（VBA依異動時間排序後取最後一筆）
+//   更新語意鏡像既有 u5：以(bom,bom_sn)找到既有 bom_ing 列→ processing_state='ing'、
+//   outsource_date=Created_At=預移入日、Created_By=異動人員→user.id、maker/sqty/process_no/ps 帶入本列值、
+//   其餘 QC_check/QC_check_date/return_date/Delivery_date/PS2/1_side/machine_id/processing_sequence/
+//   Modified_By/Modified_At 一律清為 NULL（與 u5 既有行為一致，已用 DB 既有 ing 列驗證 Modified_At=NULL 等特徵）；
+//   查無(bom,bom_sn)則 INSERT（bom_ing_id 公式同 BOM 建檔）。
+// ══════════════════════════════════════════════════════════════════════════════
+
+// 民國日期(115/07/17)或含上午/下午時間(115/04/22 下午 05:32:35)→'Y-m-d H:i:s'；解析失敗回 null
+if (!function_exists('transferErpRocDate')) {
+    function transferErpRocDate($v) {
+        if ($v === null) return null;
+        $v = trim((string)$v);
+        if ($v === '') return null;
+        if (is_numeric($v) && $v > 25569) {
+            try {
+                return \PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($v)->format('Y-m-d H:i:s');
+            } catch (Exception $e) {}
+        }
+        if (preg_match('/^(\d{2,4})\/(\d{1,2})\/(\d{1,2})(?:\s*(上午|下午)\s*(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/u', $v, $m)) {
+            $y = (int)$m[1];
+            if ($y < 1000) $y += 1911;
+            $mo = (int)$m[2]; $d = (int)$m[3];
+            $h = isset($m[5]) && $m[5] !== '' ? (int)$m[5] : 0;
+            $i = isset($m[6]) && $m[6] !== '' ? (int)$m[6] : 0;
+            $sec = isset($m[7]) && $m[7] !== '' ? (int)$m[7] : 0;
+            if (isset($m[4]) && $m[4] === '下午' && $h < 12)  $h += 12;
+            if (isset($m[4]) && $m[4] === '上午' && $h == 12) $h = 0;
+            if (!checkdate($mo, $d, $y) || $h > 23 || $i > 59 || $sec > 59) return null;
+            return sprintf('%04d-%02d-%02d %02d:%02d:%02d', $y, $mo, $d, $h, $i, $sec);
+        }
+        return null;
+    }
+}
+
+// 解析移轉原始檔 → 過濾有效列＋同(bom,bom_sn)去重(留異動時間最新) → 回傳列陣列
+if (!function_exists('parseTransferErpRows')) {
+    function parseTransferErpRows($allRows, &$stats) {
+        if (count($allRows) < 2) throw new Exception('檔案沒有資料列');
+
+        $colIdx = [];
+        foreach ($allRows[0] as $i => $h) {
+            $h = trim((string)$h);
+            if ($h !== '' && !isset($colIdx[$h])) $colIdx[$h] = $i;
+        }
+        $needCols = ['製令單號', '製程代號', '生產單位', '生產數量', '預移入日', '預移出日', '備註', '生產序號', '異動人員', '異動日期時間'];
+        $missing = array_diff($needCols, array_keys($colIdx));
+        if (!empty($missing)) {
+            throw new Exception('這不是 ERP 移轉原始檔：第1列找不到必要欄位標題【' . implode('、', $missing) . '】，請確認上傳的檔案是否正確');
+        }
+
+        $stats = ['skip_no_process' => 0, 'skip_no_maker' => 0, 'skip_date_diff' => 0, 'dedup_dropped' => 0];
+        $byKey = []; // "bom|bom_sn" => row（留異動時間最新）
+        for ($r = 1; $r < count($allRows); $r++) {
+            $row = $allRows[$r];
+            $g = function ($name) use ($row, $colIdx) {
+                $v = $row[$colIdx[$name]] ?? null;
+                if ($v === null) return null;
+                $v = trim((string)$v);
+                return ($v === '' || strtoupper($v) === 'NULL') ? null : $v;
+            };
+
+            $bom    = $g('製令單號');
+            $bom_sn = $g('生產序號');
+            if ($bom === null || !is_numeric($bom_sn)) continue; // 空白/小計列
+
+            $process_no = $g('製程代號');
+            if ($process_no === null || !is_numeric($process_no)) { $stats['skip_no_process']++; continue; }
+            $maker_id_no = $g('生產單位');
+            if ($maker_id_no === null) { $stats['skip_no_maker']++; continue; }
+
+            $inDate  = transferErpRocDate($g('預移入日'));
+            $outDate = transferErpRocDate($g('預移出日'));
+            if ($inDate === null || $inDate !== $outDate) { $stats['skip_date_diff']++; continue; }
+
+            $item = [
+                'bom'          => $bom,
+                'bom_sn'       => (int)$bom_sn,
+                'process_no'   => (int)$process_no,
+                'maker_id_no'  => $maker_id_no,
+                'sqty'         => is_numeric($g('生產數量')) ? (int)$g('生產數量') : null,
+                'move_date'    => $inDate,               // 預移入日＝實際移入日（進 outsource_date/Created_At）
+                'ps'           => bomErpCleanPs($g('備註')),
+                'changer_name' => $g('異動人員'),
+                'changed_ts'   => transferErpRocDate($g('異動日期時間')) ?? '0000-00-00 00:00:00',
+            ];
+            $key = $bom . '|' . $item['bom_sn'];
+            if (isset($byKey[$key])) {
+                $stats['dedup_dropped']++;
+                if ($item['changed_ts'] > $byKey[$key]['changed_ts']) $byKey[$key] = $item;
+            } else {
+                $byKey[$key] = $item;
+            }
+        }
+        return array_values($byKey);
+    }
+}
+
+// ── 入口①：AJAX 預覽 ──────────────────────────────────────────────────────
+if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Preview') {
+    header('Content-Type: application/json; charset=utf-8');
+    set_time_limit(120);
+    ini_set('memory_limit', '512M');
+
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+        echo json_encode(['success' => false, 'message' => '請選擇要上傳的檔案']); exit;
+    }
+
+    try {
+        $spreadsheet = IOFactory::load($_FILES['file']['tmp_name']);
+        $allRows     = $spreadsheet->getActiveSheet()->toArray();
+        $stats       = [];
+        $rows        = parseTransferErpRows($allRows, $stats);
+
+        if (empty($rows)) {
+            echo json_encode(['success' => false, 'message' => '沒有符合條件的移轉列（需製程/生產單位非空、預移入日=預移出日），請確認是否為 ERP 移轉原始檔']); exit;
+        }
+
+        // 既有 bom_ing 檢查（決定更新/新增）＋ bom 主檔存在檢查
+        $updateCount = 0; $insertCount = 0;
+        $missingBoms = [];
+        $ingChk = $db->prepare("SELECT bom_ing_fid FROM bom_ing WHERE bom = ? AND bom_sn = ?");
+        $bomChk = $db->prepare("SELECT bom FROM bom WHERE bom = ?");
+        $bomSeen = [];
+        foreach ($rows as &$row) {
+            $ingChk->execute([$row['bom'], $row['bom_sn']]);
+            $row['exists'] = (bool)$ingChk->fetchColumn();
+            $row['exists'] ? $updateCount++ : $insertCount++;
+            if (!isset($bomSeen[$row['bom']])) {
+                $bomChk->execute([$row['bom']]);
+                $bomSeen[$row['bom']] = (bool)$bomChk->fetchColumn();
+                if (!$bomSeen[$row['bom']]) $missingBoms[] = $row['bom'];
+            }
+        }
+        unset($row);
+
+        // 廠商/使用者對照（顯示用）
+        $makerNames = [];
+        foreach ($db->query("SELECT maker_id_no, maker_id FROM maker_list")->fetchAll(PDO::FETCH_ASSOC) as $m) {
+            $makerNames[$m['maker_id_no']] = $m['maker_id'];
+        }
+        $unknownMakers = [];
+        foreach ($rows as $row) {
+            if (!isset($makerNames[$row['maker_id_no']])) $unknownMakers[$row['maker_id_no']] = true;
+        }
+
+        $warnings = [];
+        if ($stats['skip_no_process'] > 0) $warnings[] = "製程代號空白跳過 {$stats['skip_no_process']} 列";
+        if ($stats['skip_no_maker'] > 0)   $warnings[] = "生產單位空白跳過 {$stats['skip_no_maker']} 列";
+        if ($stats['skip_date_diff'] > 0)  $warnings[] = "預移入/移出日不同(未完成移轉)跳過 {$stats['skip_date_diff']} 列";
+        if ($stats['dedup_dropped'] > 0)   $warnings[] = "同製令+序號重複 {$stats['dedup_dropped']} 列，只取異動時間最新一筆";
+        if (!empty($unknownMakers))        $warnings[] = '生產單位查無廠商主檔（' . implode('、', array_keys($unknownMakers)) . '），maker_id 簡稱將留空';
+        if (!empty($missingBoms))          $warnings[] = 'BOM 主檔不存在（' . implode('、', $missingBoms) . '），製程列仍會建立，建議先執行 BOM ERP匯入';
+
+        $previewRows = [];
+        foreach (array_slice($rows, 0, 10) as $row) {
+            $previewRows[] = [
+                'bom'         => $row['bom'],
+                'bom_sn'      => $row['bom_sn'],
+                'process_no'  => $row['process_no'],
+                'maker_id_no' => $row['maker_id_no'],
+                'maker_name'  => $makerNames[$row['maker_id_no']] ?? null,
+                'sqty'        => $row['sqty'],
+                'move_date'   => substr($row['move_date'], 0, 10),
+                'is_update'   => $row['exists'],
+            ];
+        }
+
+        $_SESSION['transfer_erp_rows'] = $rows;
+        $_SESSION['transfer_erp_ts']   = time();
+
+        echo json_encode([
+            'success'      => true,
+            'total_rows'   => count($rows),
+            'update_count' => $updateCount,
+            'insert_count' => $insertCount,
+            'warnings'     => $warnings,
+            'preview_rows' => $previewRows,
+        ]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => '解析失敗：' . $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── 入口②：AJAX 確認匯入 — 鏡像 u5 更新語意，transaction 全有全無 ────────
+if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
+    header('Content-Type: application/json; charset=utf-8');
+    set_time_limit(300);
+    ini_set('memory_limit', '512M');
+
+    if (!isset($_SESSION['transfer_erp_rows']) || time() - (int)($_SESSION['transfer_erp_ts'] ?? 0) > 1800) {
+        echo json_encode(['success' => false, 'message' => '預覽資料已過期（超過30分鐘），請重新上傳檔案']); exit;
+    }
+
+    $rows = $_SESSION['transfer_erp_rows'];
+    unset($_SESSION['transfer_erp_rows'], $_SESSION['transfer_erp_ts']);
+
+    try {
+        $db->beginTransaction();
+
+        $makerNames = [];
+        foreach ($db->query("SELECT maker_id_no, maker_id FROM maker_list")->fetchAll(PDO::FETCH_ASSOC) as $m) {
+            $makerNames[$m['maker_id_no']] = $m['maker_id'];
+        }
+
+        // 異動人員姓名 → user.id（查無→99991，同 transfer_log_raw；取代 VBA 寫死的三位人名替換）
+        $userStmt  = $db->prepare("SELECT id FROM user WHERE user_cname = ?");
+        $userCache = [];
+        $unknownChangers = [];
+        $lookupUser = function ($cname) use ($userStmt, &$userCache, &$unknownChangers) {
+            if ($cname === null) return 99991;
+            if (!isset($userCache[$cname])) {
+                $userStmt->execute([$cname]);
+                $uid = $userStmt->fetchColumn();
+                $userCache[$cname] = $uid ?: 99991;
+                if (!$uid) $unknownChangers[$cname] = true;
+            }
+            return $userCache[$cname];
+        };
+
+        $ingChk = $db->prepare("SELECT bom_ing_fid FROM bom_ing WHERE bom = ? AND bom_sn = ?");
+        // 鏡像 u5：UPDATE 連未帶值欄位一併清 NULL（machine_id/processing_sequence/QC_check/QC_check_date/
+        // return_date/Delivery_date/PS2/1_side/Modified_By/Modified_At），QC_ps 不動
+        $updStmt = $db->prepare("UPDATE bom_ing SET
+                machine_id = NULL, process_no = ?, maker_id_no = ?, maker_id = ?, sqty = ?,
+                processing_sequence = NULL, processing_state = 'ing', QC_check = NULL, QC_check_date = NULL,
+                ps = ?, outsource_date = ?, return_date = NULL, Delivery_date = NULL, PS2 = NULL, 1_side = NULL,
+                Created_By = ?, Created_At = ?, Modified_By = NULL, Modified_At = NULL
+                WHERE bom_ing_fid = ?");
+        $insStmt = $db->prepare("INSERT INTO bom_ing
+                (bom_ing_id, bom, process_no, maker_id_no, maker_id, sqty, bom_sn,
+                 processing_state, ps, outsource_date, Created_By, Created_At)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'ing', ?, ?, ?, ?)");
+
+        $updated = 0; $inserted = 0;
+        foreach ($rows as $row) {
+            $makerId = $makerNames[$row['maker_id_no']] ?? null;
+            $userId  = $lookupUser($row['changer_name']);
+
+            $ingChk->execute([$row['bom'], $row['bom_sn']]);
+            $fid = $ingChk->fetchColumn();
+            if ($fid) {
+                $updStmt->execute([
+                    $row['process_no'], $row['maker_id_no'], $makerId, $row['sqty'],
+                    $row['ps'], $row['move_date'], $userId, $row['move_date'], $fid,
+                ]);
+                $updated++;
+            } else {
+                $bomIngId = substr($row['bom'], -9) . '-' . $row['process_no'] . '-' . $row['bom_sn'] . '-' . $row['sqty'] . '-' . $row['maker_id_no'];
+                $insStmt->execute([
+                    $bomIngId, $row['bom'], $row['process_no'], $row['maker_id_no'], $makerId,
+                    $row['sqty'], $row['bom_sn'], $row['ps'], $row['move_date'], $userId, $row['move_date'],
+                ]);
+                $inserted++;
+            }
+        }
+
+        recordUploadLog($db, 'upload_bom_ing_s_erp');
+        $db->commit();
+
+        $msg = "移轉匯入完成！更新 {$updated} 筆、新增 {$inserted} 筆製程資料";
+        if (!empty($unknownChangers)) {
+            $msg .= "。⚠ 異動人員 [" . implode('、', array_keys($unknownChangers)) . "] 查無此人，以預設人員(99991)記錄";
+        }
+        echo json_encode(['success' => true, 'updated' => $updated, 'inserted' => $inserted, 'message' => $msg]);
+    } catch (Exception $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        echo json_encode(['success' => false, 'message' => '匯入失敗（資料未寫入）：' . $e->getMessage()]);
     }
     exit;
 }
