@@ -2467,6 +2467,7 @@ if ($_GET['but'] == 'transfer_log_raw') {
         $rowErrors = [];         // 格式錯誤（會擋下整個匯入）
         $skippedNoTransferNo = 0;
         $skippedNoBomSn = [];    // 缺製程序號被跳過的單號（與舊功能相同：跳過並警告）
+        $skippedZeroPrice = 0;   // 單價 0/空白/負數：整列不寫入（生管/成本頁取「最新一筆」單價，0 價列會蓋掉正確單價）
         $numFields = ['加工金額','稅金','Price','移轉數量','損耗量','付款數量'];
 
         for ($r = 1; $r < count($data); $r++) {
@@ -2514,6 +2515,10 @@ if ($_GET['but'] == 'transfer_log_raw') {
                 continue;
             }
 
+            // 單價 0/空白/負數的列整筆跳過（不新增也不更新）——尚未計價的移轉不進系統
+            $priceVal = $g('Price');
+            if ($priceVal === null || (float)$priceVal <= 0) { $skippedZeroPrice++; continue; }
+
             $rows[] = [
                 'bom'            => $bom,
                 'bom_sn'         => $bom_sn,
@@ -2544,7 +2549,7 @@ if ($_GET['but'] == 'transfer_log_raw') {
             $more = count($rowErrors) > 10 ? "…等共 " . count($rowErrors) . " 個錯誤" : "";
             throw new Exception("資料驗證失敗，未匯入任何資料：\n" . implode("\n", $show) . $more);
         }
-        if (empty($rows)) throw new Exception("沒有可匯入的資料列");
+        if (empty($rows)) throw new Exception("沒有可匯入的資料列" . ($skippedZeroPrice > 0 ? "（單價為 0 跳過 {$skippedZeroPrice} 列）" : ""));
 
         // ── 第二階段：寫入 DB（單一 transaction，全部成功才生效） ──
         $db->beginTransaction();
@@ -2630,6 +2635,7 @@ if ($_GET['but'] == 'transfer_log_raw') {
         $db->commit();
 
         $msg = "加工單價原始檔匯入完成：新增 {$insertCount} 筆，更新 {$updateCount} 筆。";
+        if ($skippedZeroPrice > 0) $msg .= "\n單價為 0（尚未計價）跳過 {$skippedZeroPrice} 列未寫入。";
         if ($skippedNoTransferNo > 0) $msg .= "\n單號空白跳過 {$skippedNoTransferNo} 列。";
         if (!empty($skippedNoBomSn)) {
             $msg .= "\n⚠️ 注意：單號 [" . implode(', ', $skippedNoBomSn) . "] 因缺少製程序號(移轉類別)未匯入。";
@@ -2647,4 +2653,308 @@ if ($_GET['but'] == 'transfer_log_raw') {
         header("Location: Upload_List.php?message=oth");
         exit;
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BOM／BOM_ING ERP直接匯入 (N.xlsx，2026-07-20新增)
+// 取代「建立更新_BOM」VBA巨集的建檔部分：直接讀 ERP 匯出的 N.xlsx，免先跑巨集轉檔。
+// 欄位對照規則以真實資料核對定案（見 page_change_log）：
+//   bom.bom=製令單號、bom.d_id=半成品編號、Client_Name 查 d_setting.Customer_Id→customer_list.customer（不查Excel客戶表）
+//   bom_ing.process_no=製程代號 直接對應 process_no.ProcessNo（不查Excel交期試算）、bom_sn=生產序號(ERP已排序，免自算)
+//   bom_ing_id = RIGHT(bom,9)-process_no-bom_sn-sqty-maker_id_no（比照原巨集公式）
+// 兩階段流程比照 IS_List_ERP_Preview/Commit。
+// ══════════════════════════════════════════════════════════════════════════════
+
+// 備註欄清理：N.xlsx「備註」開頭常帶「O-訂單號」前綴（如 O-OO1150716015-001 SCM415...），
+// 真實資料只留訂單號後面的文字（已用既有真實 bom_ing.ps 資料核對，規則同 transfer_log_raw 的備註清理）
+if (!function_exists('bomErpCleanPs')) {
+    function bomErpCleanPs($ps) {
+        if ($ps === null) return null;
+        if (strpos($ps, 'O-') === 0) {
+            $sp = strpos($ps, ' ');
+            $ps = $sp === false ? '' : trim(substr($ps, $sp + 1));
+        }
+        return $ps === '' ? null : $ps;
+    }
+}
+
+// 解析 N.xlsx → 依製令單號(bom)分組，每組＝一個 bom + 多筆 bom_ing
+// 注意：N.xlsx 的「預移入日/預移出日」是ERP排程的「預計」日期，跟 bom_ing.outsource_date/return_date
+// （實際委外日/實際回廠日）語意不同（已用既有真實資料核對：VBA建檔當下這兩欄一律留null，由另一支每日
+// 移送流程回填實際日期），所以這裡不解析、也不寫入這兩欄，避免把「預計」誤植為「實際」。
+if (!function_exists('parseBomErpRows')) {
+    function parseBomErpRows($allRows) {
+        if (count($allRows) < 2) throw new Exception('檔案沒有資料列');
+
+        // 依標頭名稱找欄位位置（比照 transfer_log_raw，避免欄位順序跟舊 VBA 假設的固定位置不符）
+        $colIdx = [];
+        foreach ($allRows[0] as $i => $h) {
+            $h = trim((string)$h);
+            if ($h !== '' && !isset($colIdx[$h])) $colIdx[$h] = $i;
+        }
+        $needCols = ['製令單號', '製程代號', '生產單位', '生產數量', '預移入日', '預移出日', '備註', '生產序號', '半成品編號'];
+        $missing = array_diff($needCols, array_keys($colIdx));
+        if (!empty($missing)) {
+            throw new Exception('這不是 ERP BOM 原始檔：第1列找不到必要欄位標題【' . implode('、', $missing) . '】，請確認上傳的檔案是否正確');
+        }
+
+        $groups = []; // bom => ['d_id'=>, 'sqty'=>, 'rows'=>[...]]
+        for ($r = 1; $r < count($allRows); $r++) {
+            $row = $allRows[$r];
+            $g = function ($name) use ($row, $colIdx) {
+                $v = $row[$colIdx[$name]] ?? null;
+                if ($v === null) return null;
+                $v = trim((string)$v);
+                return ($v === '' || strtoupper($v) === 'NULL') ? null : $v;
+            };
+
+            $bom  = $g('製令單號');
+            $d_id = $g('半成品編號');
+            if ($bom === null || $d_id === null) continue; // 缺關鍵欄位（如小計/空白列）跳過
+
+            $process_no = $g('製程代號');
+            $bom_sn     = $g('生產序號');
+            if (!is_numeric($process_no) || !is_numeric($bom_sn)) continue; // 非資料列跳過
+
+            $sqty = $g('生產數量');
+
+            if (!isset($groups[$bom])) {
+                $groups[$bom] = ['d_id' => $d_id, 'sqty' => $sqty, 'rows' => []];
+            }
+            $groups[$bom]['rows'][] = [
+                'process_no'     => (int)$process_no,
+                'maker_id_no'    => $g('生產單位'),
+                'sqty'           => is_numeric($sqty) ? (int)$sqty : null,
+                'bom_sn'         => (int)$bom_sn,
+                'ps'             => $g('備註'),
+            ];
+        }
+        return $groups;
+    }
+}
+
+// ── 入口①：AJAX 預覽 — 解析 + 分組 + 對照查找 + 暫存 Session（30分鐘）────
+if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Preview') {
+    header('Content-Type: application/json; charset=utf-8');
+    set_time_limit(120);
+    ini_set('memory_limit', '512M');
+
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+        echo json_encode(['success' => false, 'message' => '請選擇要上傳的檔案']); exit;
+    }
+
+    try {
+        $spreadsheet = IOFactory::load($_FILES['file']['tmp_name']);
+        $allRows     = $spreadsheet->getActiveSheet()->toArray();
+        $groups      = parseBomErpRows($allRows);
+
+        if (empty($groups)) {
+            echo json_encode(['success' => false, 'message' => '未找到有效資料列，請確認是否為 ERP BOM 原始檔']); exit;
+        }
+
+        // 既有 BOM 檢查
+        $bomList = array_keys($groups);
+        $existingBoms = [];
+        foreach (array_chunk($bomList, 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT bom FROM bom WHERE bom IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $b) $existingBoms[$b] = true;
+        }
+
+        // 客戶查詢：d_id(半成品編號=料號) → d_setting.Customer_Id → customer_list.customer
+        $dIds = array_values(array_unique(array_column($groups, 'd_id')));
+        $customerByDId = [];
+        foreach (array_chunk($dIds, 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT ds.D_Setting_Id, cl.customer
+                                 FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
+                                 WHERE ds.D_Setting_Id IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) $customerByDId[$row['D_Setting_Id']] = $row['customer'];
+        }
+
+        // 製程主檔（顯示用）
+        $processNames = [];
+        foreach ($db->query("SELECT ProcessNo, ProcessName FROM process_no")->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $processNames[(int)$row['ProcessNo']] = $row['ProcessName'];
+        }
+
+        // 廠商主檔
+        $makerIdNoSet = [];
+        foreach ($groups as $grp) foreach ($grp['rows'] as $row) if ($row['maker_id_no'] !== null) $makerIdNoSet[$row['maker_id_no']] = true;
+        $makerNames = [];
+        foreach (array_chunk(array_keys($makerIdNoSet), 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT maker_id_no, maker_id FROM maker_list WHERE maker_id_no IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) $makerNames[$row['maker_id_no']] = $row['maker_id'];
+        }
+
+        // 統計與警告
+        $newBomCount = 0; $existingBomCount = 0; $totalIngRows = 0;
+        $unknownProcess = []; $unknownMaker = []; $unknownCustomer = [];
+        foreach ($groups as $bom => $grp) {
+            if (isset($existingBoms[$bom])) $existingBomCount++; else $newBomCount++;
+            if (empty($customerByDId[$grp['d_id']])) $unknownCustomer[$grp['d_id']] = true;
+            foreach ($grp['rows'] as $row) {
+                $totalIngRows++;
+                if (!isset($processNames[$row['process_no']])) $unknownProcess[$row['process_no']] = true;
+                if ($row['maker_id_no'] !== null && !isset($makerNames[$row['maker_id_no']])) $unknownMaker[$row['maker_id_no']] = true;
+            }
+        }
+
+        $warnings = [];
+        if (!empty($unknownProcess)) $warnings[] = '製程代號查無 process_no 主檔對應（' . implode('、', array_keys($unknownProcess)) . '），該筆製程名稱將顯示空白，不影響匯入';
+        if (!empty($unknownMaker)) $warnings[] = '生產單位查無 maker_list 廠商主檔（' . implode('、', array_keys($unknownMaker)) . '），maker_id 簡稱將留空';
+        if (!empty($unknownCustomer)) {
+            $sample = array_slice(array_keys($unknownCustomer), 0, 10);
+            $warnings[] = '料號查無客戶綁定（' . implode('、', $sample) . (count($unknownCustomer) > 10 ? '…等共' . count($unknownCustomer) . '筆' : '') . '），Client_Name 將留空';
+        }
+
+        // 預覽樣本（前5個BOM）
+        $previewRows = [];
+        foreach (array_slice($groups, 0, 5, true) as $bom => $grp) {
+            $previewRows[] = [
+                'bom'           => $bom,
+                'd_id'          => $grp['d_id'],
+                'sqty'          => $grp['sqty'],
+                'client_name'   => $customerByDId[$grp['d_id']] ?? null,
+                'is_new'        => !isset($existingBoms[$bom]),
+                'process_count' => count($grp['rows']),
+                'processes'     => implode('、', array_map(fn($row) => $processNames[$row['process_no']] ?? ('#' . $row['process_no']), $grp['rows'])),
+            ];
+        }
+
+        $_SESSION['bom_erp_import_groups'] = $groups;
+        $_SESSION['bom_erp_import_ts']     = time();
+
+        echo json_encode([
+            'success'             => true,
+            'bom_count'           => count($groups),
+            'new_bom_count'       => $newBomCount,
+            'existing_bom_count'  => $existingBomCount,
+            'total_ing_rows'      => $totalIngRows,
+            'warnings'            => $warnings,
+            'preview_rows'        => $previewRows,
+        ]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => '解析失敗：' . $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── 入口②：AJAX 確認匯入 — 讀 Session → transaction 寫入 bom + bom_ing ────
+if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
+    header('Content-Type: application/json; charset=utf-8');
+    set_time_limit(300);
+    ini_set('memory_limit', '512M');
+
+    if (!isset($_SESSION['bom_erp_import_groups']) || time() - (int)($_SESSION['bom_erp_import_ts'] ?? 0) > 1800) {
+        echo json_encode(['success' => false, 'message' => '預覽資料已過期（超過30分鐘），請重新上傳檔案']); exit;
+    }
+
+    $groups = $_SESSION['bom_erp_import_groups'];
+    $userId = $_SESSION['id'] ?? 'excel_import';
+    unset($_SESSION['bom_erp_import_groups'], $_SESSION['bom_erp_import_ts']);
+
+    try {
+        $db->beginTransaction();
+
+        // 客戶查詢（同 Preview，重新查一次確保資料最新）
+        $dIds = array_values(array_unique(array_column($groups, 'd_id')));
+        $customerByDId = [];
+        foreach (array_chunk($dIds, 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT ds.D_Setting_Id, cl.customer
+                                 FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
+                                 WHERE ds.D_Setting_Id IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) $customerByDId[$row['D_Setting_Id']] = $row['customer'];
+        }
+
+        // 廠商主檔
+        $makerIdNoSet = [];
+        foreach ($groups as $grp) foreach ($grp['rows'] as $row) if ($row['maker_id_no'] !== null) $makerIdNoSet[$row['maker_id_no']] = true;
+        $makerNames = [];
+        foreach (array_chunk(array_keys($makerIdNoSet), 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT maker_id_no, maker_id FROM maker_list WHERE maker_id_no IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) $makerNames[$row['maker_id_no']] = $row['maker_id'];
+        }
+
+        // bom：只更新這次真正握有資料的欄位，不動 o_order_id/processing_state/Delivery_date 等其他流程維護的欄位
+        $bomExistsStmt = $db->prepare("SELECT bom FROM bom WHERE bom = ?");
+        $bomInsertStmt = $db->prepare("INSERT INTO bom (bom, d_id, sqty, Client_Name, state, Created_By, Created_At, Modified_By, Modified_At)
+                                        VALUES (?, ?, ?, ?, 'ing', ?, NOW(), ?, NOW())");
+        $bomUpdateStmt = $db->prepare("UPDATE bom SET d_id = ?, sqty = ?, Client_Name = ?, Modified_By = ?, Modified_At = NOW() WHERE bom = ?");
+
+        // bom_ing：以 (bom, bom_sn) 判斷是否已存在（比照 u5_NEW 既有邏輯，資料庫無 bom_ing_id 唯一鍵）
+        $ingExistsStmt = $db->prepare("SELECT bom_ing_fid FROM bom_ing WHERE bom = ? AND bom_sn = ?");
+        $ingInsertStmt = $db->prepare("INSERT INTO bom_ing
+                                        (bom_ing_id, bom, process_no, maker_id_no, maker_id, sqty, bom_sn,
+                                         processing_state, ps, Created_By, Created_At, Modified_By, Modified_At)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, 'N', ?, ?, NOW(), ?, NOW())");
+        $ingUpdateStmt = $db->prepare("UPDATE bom_ing SET
+                                        maker_id_no = ?, maker_id = ?, sqty = ?, ps = ?,
+                                        Modified_By = ?, Modified_At = NOW()
+                                        WHERE bom_ing_fid = ?");
+
+        $newBomCount = 0; $updatedBomCount = 0; $newIngCount = 0; $updatedIngCount = 0;
+
+        foreach ($groups as $bom => $grp) {
+            $clientName = $customerByDId[$grp['d_id']] ?? null;
+            $sqty       = is_numeric($grp['sqty']) ? (int)$grp['sqty'] : null;
+
+            $bomExistsStmt->execute([$bom]);
+            if ($bomExistsStmt->fetch()) {
+                $bomUpdateStmt->execute([$grp['d_id'], $sqty, $clientName, $userId, $bom]);
+                $updatedBomCount++;
+            } else {
+                $bomInsertStmt->execute([$bom, $grp['d_id'], $sqty, $clientName, $userId, $userId]);
+                $newBomCount++;
+            }
+
+            $right9 = substr($bom, -9); // 比照原巨集 RIGHT(bom,9)
+
+            foreach ($grp['rows'] as $row) {
+                $makerId  = $row['maker_id_no'] !== null ? ($makerNames[$row['maker_id_no']] ?? null) : null;
+                $bomIngId = $right9 . '-' . $row['process_no'] . '-' . $row['bom_sn'] . '-' . $row['sqty'] . '-' . $row['maker_id_no'];
+                $ps       = bomErpCleanPs($row['ps']);
+
+                $ingExistsStmt->execute([$bom, $row['bom_sn']]);
+                $existingFid = $ingExistsStmt->fetchColumn();
+                if ($existingFid) {
+                    $ingUpdateStmt->execute([
+                        $row['maker_id_no'], $makerId, $row['sqty'], $ps,
+                        $userId, $existingFid,
+                    ]);
+                    $updatedIngCount++;
+                } else {
+                    $ingInsertStmt->execute([
+                        $bomIngId, $bom, $row['process_no'], $row['maker_id_no'], $makerId, $row['sqty'], $row['bom_sn'],
+                        $ps, $userId, $userId,
+                    ]);
+                    $newIngCount++;
+                }
+            }
+        }
+
+        recordUploadLog($db, 'upload_bom_erp');
+        $db->commit();
+
+        echo json_encode([
+            'success'            => true,
+            'new_bom_count'      => $newBomCount,
+            'updated_bom_count'  => $updatedBomCount,
+            'new_ing_count'      => $newIngCount,
+            'updated_ing_count'  => $updatedIngCount,
+            'message'            => "匯入完成！新增 BOM {$newBomCount} 筆、更新 {$updatedBomCount} 筆；新增製程 {$newIngCount} 筆、更新 {$updatedIngCount} 筆",
+        ]);
+    } catch (Exception $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        echo json_encode(['success' => false, 'message' => '匯入失敗：' . $e->getMessage()]);
+    }
+    exit;
 }
