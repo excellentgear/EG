@@ -1,0 +1,80 @@
+<?php
+// imgedit_visibility.php — 批圖編輯器檔案在「附件清單」的可見性過濾（共用）
+//
+// 批圖編輯器（views/Sales/image_editor.php）每次儲存會在 part_attachments 寫入成對兩筆：
+//   egdraw_<stamp>.png（輸出圖）＋ egdraw_<stamp>.egwork.json（工作檔），
+// 工作檔的分享範圍存在 imgedit_workfile_meta（private=私人／dept=部門共用／custom=指定人員；
+// 無 meta＝改版前舊資料，視為全員可見）。
+// 本函式讓任何列出 part_attachments 的端點，依同一套規則過濾掉目前使用者無權看的批圖檔
+// （成對的 PNG 跟隨其工作檔的範圍）。管理者（user_status 9/90 或系統 admin 角色）全可見。
+function imgedit_filter_attachment_rows(PDO $pdo, array $rows, int $uid, int $dIdFallback = 0): array {
+    $dIds = [];
+    foreach ($rows as $r) {
+        if (strpos((string)($r['filename'] ?? ''), 'egdraw_') !== 0) continue;
+        $dId = (int)($r['d_id'] ?? $dIdFallback);
+        if ($dId) $dIds[$dId] = true;
+    }
+    if (!$dIds) return $rows;
+    $dIds = array_keys($dIds);
+    $ph = implode(',', array_fill(0, count($dIds), '?'));
+    $metaByKey = [];
+    try {
+        // 含已軟刪除的工作檔：配對 PNG 可能還存活，範圍仍應沿用
+        $st = $pdo->prepare("SELECT wf.id, wf.d_id, wf.filename, wf.uploaded_by_id, m.owner_type, m.owner_dept_id
+                             FROM part_attachments wf
+                             JOIN imgedit_workfile_meta m ON m.attachment_id = wf.id
+                             WHERE wf.d_id IN ($ph) AND wf.filename LIKE 'egdraw\\_%.egwork.json'");
+        $st->execute($dIds);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $w) {
+            $stem = preg_replace('/\.egwork\.json$/', '', $w['filename']);
+            $metaByKey[$w['d_id'] . '|' . $stem] = $w;
+        }
+    } catch (Exception $_e) { return $rows; }   // meta 表不存在（舊環境）＝不過濾
+    if (!$metaByKey) return $rows;
+    $hasScoped = false;
+    foreach ($metaByKey as $w) {
+        if (($w['owner_type'] ?: 'company') !== 'company') { $hasScoped = true; break; }
+    }
+    if (!$hasScoped) return $rows;
+    // 身分：管理者全可見；否則需要部門與指定名單
+    $isMgr = false; $myDeptIds = [];
+    try {
+        $st = $pdo->prepare("SELECT user_status FROM user WHERE id = ?");
+        $st->execute([$uid]);
+        $isMgr = in_array((int)$st->fetchColumn(), [9, 90], true);
+        if (!$isMgr) {
+            $st = $pdo->prepare("SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
+                                 WHERE ur.user_id = ? AND r.role_code = 'admin' AND r.is_system = 1");
+            $st->execute([$uid]);
+            $isMgr = (int)$st->fetchColumn() > 0;
+        }
+        if (!$isMgr) {
+            $st = $pdo->prepare("SELECT DISTINCT department_id FROM user_department_position_map WHERE user_id = ?");
+            $st->execute([$uid]);
+            $myDeptIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+        }
+    } catch (Exception $_e) {}
+    if ($isMgr) return $rows;
+    $shareChk = null;
+    $out = [];
+    foreach ($rows as $r) {
+        $fn = (string)($r['filename'] ?? '');
+        if (strpos($fn, 'egdraw_') !== 0) { $out[] = $r; continue; }
+        $dId = (int)($r['d_id'] ?? $dIdFallback);
+        $stem = preg_replace('/\.(egwork\.json|png)$/', '', $fn);
+        $w = $metaByKey[$dId . '|' . $stem] ?? null;
+        if (!$w) { $out[] = $r; continue; }   // 無 meta＝改版前舊資料，維持可見
+        $type = $w['owner_type'] ?: 'company';
+        $visible = $type === 'company' || (int)$w['uploaded_by_id'] === $uid;
+        if (!$visible && $type === 'dept') $visible = in_array((int)$w['owner_dept_id'], $myDeptIds, true);
+        if (!$visible && $type === 'custom') {
+            if ($shareChk === null) {
+                $shareChk = $pdo->prepare("SELECT COUNT(*) FROM imgedit_workfile_share WHERE attachment_id = ? AND user_id = ?");
+            }
+            try { $shareChk->execute([(int)$w['id'], $uid]); $visible = (int)$shareChk->fetchColumn() > 0; }
+            catch (Exception $_e) { $visible = false; }
+        }
+        if ($visible) $out[] = $r;
+    }
+    return $out;
+}
