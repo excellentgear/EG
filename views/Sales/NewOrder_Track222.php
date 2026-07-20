@@ -8864,12 +8864,12 @@ foreach($dCounts as $c) {
                             <div class="gear-out-row"><span class="gear-out-label" id="go-rechob-m-range-lbl">建議滾齒 M 下/上限（依標準跨珠值 M 換算）</span>
                                 <span class="gear-output-val" id="go-rechob-m-range">—</span>
                             </div>
-                            <div class="gear-out-row" id="go-row-cust-m" style="display:none;border-top:1px dashed #a5d6b5;padding-top:5px;margin-top:2px;">
+                            <div class="gear-out-row" id="go-row-cust-m" style="display:none;grid-column:1/-1;border-top:1px dashed #a5d6b5;padding-top:5px;margin-top:2px;">
                                 <span class="gear-out-label" style="color:#6a1b9a;">客戶規格→我方球徑 M 下/上限</span>
                                 <span class="gear-output-val val-ok" id="go-cust-m-range" style="font-weight:700;color:#6a1b9a;">—</span>
                             </div>
-                            <div class="gear-out-row" id="go-row-cust-rh-m" style="display:none;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒 M（公稱）</span><span class="gear-output-val val-ok" id="go-cust-rh-m" style="font-weight:700;color:#6a1b9a;">—</span></div>
-                            <div class="gear-out-row" id="go-row-cust-rh-range" style="display:none;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒 M 下/上限</span><span class="gear-output-val val-ok" id="go-cust-rh-m-range" style="font-weight:700;color:#6a1b9a;">—</span></div>
+                            <div class="gear-out-row" id="go-row-cust-rh-m" style="display:none;grid-column:1/-1;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒 M（公稱）</span><span class="gear-output-val val-ok" id="go-cust-rh-m" style="font-weight:700;color:#6a1b9a;">—</span></div>
+                            <div class="gear-out-row" id="go-row-cust-rh-range" style="display:none;grid-column:1/-1;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒 M 下/上限</span><span class="gear-output-val val-ok" id="go-cust-rh-m-range" style="font-weight:700;color:#6a1b9a;">—</span></div>
                         </div>
                         <div id="go-cust-m-note" style="display:none;margin-top:4px;font-size:10px;color:#8e6aa0;line-height:1.5;"></div>
                     </div>
