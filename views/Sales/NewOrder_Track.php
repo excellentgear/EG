@@ -8808,12 +8808,12 @@ foreach($dCounts as $c) {
                                 <input type="number" id="g-cust-dp" class="gear-input" placeholder="自動" step="any">
                             </div>
                             <div class="gear-field-group" style="flex:1;margin-bottom:0;">
-                                <label>客戶 M 上限</label>
-                                <input type="number" id="g-cust-m-up" class="gear-input" placeholder="例：58.341" step="any">
-                            </div>
-                            <div class="gear-field-group" style="flex:1;margin-bottom:0;">
                                 <label>客戶 M 下限</label>
                                 <input type="number" id="g-cust-m-dn" class="gear-input" placeholder="例：58.301" step="any">
+                            </div>
+                            <div class="gear-field-group" style="flex:1;margin-bottom:0;">
+                                <label>客戶 M 上限</label>
+                                <input type="number" id="g-cust-m-up" class="gear-input" placeholder="例：58.341" step="any">
                             </div>
                             <button class="btn-gear-m3" style="flex-shrink:0;white-space:nowrap;" onclick="calcCustM2X()" title="由客戶跨銷徑/球徑與 M 上下限反推轉位係數 x，自動代入上方轉位係數欄並執行計算"><i class="fa fa-undo"></i> 回推轉位</button>
                         </div>
@@ -8843,7 +8843,7 @@ foreach($dCounts as $c) {
                         <div class="gear-out-grid">
                             <div class="gear-out-row"><span class="gear-out-label">跨幾齒 k（自動/輸入）</span><span class="gear-output-val" id="go-k">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label">理論跨齒厚 Wk</span><span class="gear-output-val" id="go-wk">—</span></div>
-                            <div class="gear-out-row" id="go-row-cust-wk" style="display:none;"><span class="gear-out-label">客戶跨齒厚上限 / 下限</span><span class="gear-output-val" id="go-cust-wk-range">—</span></div>
+                            <div class="gear-out-row" id="go-row-cust-wk" style="display:none;"><span class="gear-out-label">客戶跨齒厚下限 / 上限</span><span class="gear-output-val" id="go-cust-wk-range">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label">建議滾齒跨齒厚</span><span class="gear-output-val val-ok" id="go-rechob-wk" style="font-weight:700;">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label">預留量（模數/外徑取大）</span><span class="gear-output-val" id="go-allow-info">—</span></div>
                         </div>
@@ -8854,11 +8854,11 @@ foreach($dCounts as $c) {
                             <div class="gear-out-row"><span class="gear-out-label" id="go-dp-lbl">使用球徑 dp</span><span class="gear-output-val" id="go-dp-used">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label" id="go-m-lbl">標準跨珠值 M</span><span class="gear-output-val val-ok" id="go-m">—</span></div>
                             <div class="gear-out-row" id="go-row-rechob-m"><span class="gear-out-label">建議滾齒 M（公稱）</span><span class="gear-output-val val-ok" id="go-rechob-m" style="font-weight:700;">—</span></div>
-                            <div class="gear-out-row"><span class="gear-out-label" id="go-rechob-m-range-lbl">建議滾齒 M 上/下限</span>
+                            <div class="gear-out-row"><span class="gear-out-label" id="go-rechob-m-range-lbl">建議滾齒 M 下/上限</span>
                                 <span class="gear-output-val" id="go-rechob-m-range">—</span>
                             </div>
                             <div class="gear-out-row" id="go-row-cust-m" style="display:none;border-top:1px dashed #a5d6b5;padding-top:5px;margin-top:2px;">
-                                <span class="gear-out-label" style="color:#6a1b9a;">客戶規格→我方球徑 M 上/下限</span>
+                                <span class="gear-out-label" style="color:#6a1b9a;">客戶規格→我方球徑 M 下/上限</span>
                                 <span class="gear-output-val val-ok" id="go-cust-m-range" style="font-weight:700;color:#6a1b9a;">—</span>
                             </div>
                         </div>
@@ -9015,7 +9015,7 @@ foreach($dCounts as $c) {
                         <div class="gear-out-row"><span class="gear-out-label">使用預留量（來源）</span><span class="gear-output-val" id="m4-allow-info">—</span></div>
                         <div class="gear-out-row" style="grid-column:1/-1;"><span class="gear-out-label">建議滾齒跨齒厚</span><span class="gear-output-val val-ok" id="m4-rechob-wk" style="font-weight:700;">—</span></div>
                         <div class="gear-out-row"><span class="gear-out-label">建議滾齒 M（公稱）</span><span class="gear-output-val val-ok" id="m4-rechob-m" style="font-weight:700;">—</span></div>
-                        <div class="gear-out-row"><span class="gear-out-label">M 上/下限</span><span class="gear-output-val" id="m4-rechob-m-range">—</span></div>
+                        <div class="gear-out-row"><span class="gear-out-label">M 下/上限</span><span class="gear-output-val" id="m4-rechob-m-range">—</span></div>
                     </div>
                     <div style="margin-top:8px;padding:8px 10px;background:#f5f5f5;border-radius:4px;border:1px solid #ddd;">
                         <div class="gear-section-title" style="margin-bottom:6px;color:#555;">客戶規格對應 M 值（參考）<span id="m4-cust-m-dp-label" style="font-weight:400;color:#999;font-size:10px;margin-left:4px;"></span></div>
@@ -9048,12 +9048,12 @@ foreach($dCounts as $c) {
                     </div>
                     <div style="display:flex;gap:10px;">
                         <div class="gear-field-group" style="flex:1;">
-                            <label>客戶 M 上限 <span style="color:#e74c3c">*</span></label>
-                            <input type="number" id="m5-m-up" class="gear-input" placeholder="例：58.341" step="any">
-                        </div>
-                        <div class="gear-field-group" style="flex:1;">
                             <label>客戶 M 下限 <span style="color:#e74c3c">*</span></label>
                             <input type="number" id="m5-m-dn" class="gear-input" placeholder="例：58.301" step="any">
+                        </div>
+                        <div class="gear-field-group" style="flex:1;">
+                            <label>客戶 M 上限 <span style="color:#e74c3c">*</span></label>
+                            <input type="number" id="m5-m-up" class="gear-input" placeholder="例：58.341" step="any">
                         </div>
                     </div>
                     <button class="btn-gear-m2" style="margin-top:8px;background:#16a085;" onclick="calcGearM5()"><i class="fa fa-refresh"></i> 換算</button>
@@ -9065,7 +9065,7 @@ foreach($dCounts as $c) {
                             <div class="gear-out-row"><span class="gear-out-label">使用預留量（來源）</span><span class="gear-output-val" id="m5-rh-allow">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label">建議滾齒跨齒厚 Wk</span><span class="gear-output-val" id="m5-rh-wk">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label">建議滾齒 M（公稱）</span><span class="gear-output-val val-ok" id="m5-rh-m" style="font-weight:700;">—</span></div>
-                            <div class="gear-out-row"><span class="gear-out-label">建議滾齒 M 上/下限</span><span class="gear-output-val val-ok" id="m5-rh-m-range" style="font-weight:700;">—</span></div>
+                            <div class="gear-out-row"><span class="gear-out-label">建議滾齒 M 下/上限</span><span class="gear-output-val val-ok" id="m5-rh-m-range" style="font-weight:700;">—</span></div>
                         </div>
                         <div style="margin-top:5px;font-size:10px;color:#a0762e;line-height:1.5;">
                             依客戶 M 上限（上公差=0）→ 跨齒厚（跨 <span id="m5-rh-k">—</span> 齒）→ 加預留量（模數/外徑取大）→ 我方球徑 M；上下限套用基本計算之 M 公差
@@ -9145,7 +9145,7 @@ foreach($dCounts as $c) {
                             <div class="gear-section-title" style="margin-bottom:6px;color:#1e7e34;">轉換後跨齒厚（跨 <span id="m5w-out-k">—</span> 齒）</div>
                             <div class="gear-out-grid">
                                 <div class="gear-out-row"><span class="gear-out-label">標準值</span><span class="gear-output-val val-ok" id="m5w-out-std" style="font-weight:700;">—</span></div>
-                                <div class="gear-out-row"><span class="gear-out-label">上限 / 下限</span><span class="gear-output-val val-ok" id="m5w-out-range">—</span></div>
+                                <div class="gear-out-row"><span class="gear-out-label">下限 / 上限</span><span class="gear-output-val val-ok" id="m5w-out-range">—</span></div>
                             </div>
                         </div>
                         <div style="padding:8px 10px;background:#fff8f0;border-radius:5px;border:1px solid #f0c891;">
@@ -9154,7 +9154,7 @@ foreach($dCounts as $c) {
                                 <div class="gear-out-row"><span class="gear-out-label">使用預留量（來源）</span><span class="gear-output-val" id="m5w-rh-allow">—</span></div>
                                 <div class="gear-out-row"><span class="gear-out-label">建議滾齒跨齒厚</span><span class="gear-output-val val-ok" id="m5w-rh-wk" style="font-weight:700;">—</span></div>
                                 <div class="gear-out-row"><span class="gear-out-label">建議滾齒 M（公稱）</span><span class="gear-output-val val-ok" id="m5w-rh-m">—</span></div>
-                                <div class="gear-out-row"><span class="gear-out-label">建議滾齒 M 上/下限</span><span class="gear-output-val" id="m5w-rh-m-range">—</span></div>
+                                <div class="gear-out-row"><span class="gear-out-label">建議滾齒 M 下/上限</span><span class="gear-output-val" id="m5w-rh-m-range">—</span></div>
                             </div>
                             <div style="margin-top:5px;font-size:10px;color:#a0762e;line-height:1.5;">
                                 與基本計算相同邏輯：轉換後標準值＋（上公差−(−0.02) 偏移）＋預留量（模數/外徑取大）→ 反推 x → 球徑 M；M 公差沿用基本計算設定
@@ -9970,7 +9970,7 @@ foreach($dCounts as $c) {
         gSetText('go-dp-lbl', _gearInternal ? '使用測棒 dp（跨銷徑）' : '使用球徑 dp');
         gSetText('go-m-lbl',  _gearInternal ? '跨銷值 M（內量 dc−dp）' : '標準跨珠值 M');
         gSetText('go-m-title',_gearInternal ? '跨銷值 M（內齒）' : '跨珠值 M');
-        gSetText('go-rechob-m-range-lbl', _gearInternal ? '跨銷值 M 上/下限' : '建議滾齒 M 上/下限');
+        gSetText('go-rechob-m-range-lbl', _gearInternal ? '跨銷值 M 下/上限' : '建議滾齒 M 下/上限');
         var blk = document.getElementById('go-block-wk'); if (blk) blk.style.display = _gearInternal ? 'none' : '';
         var rm  = document.getElementById('go-row-rechob-m'); if (rm) rm.style.display = _gearInternal ? 'none' : '';
         ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-rechob-wk','go-allow-info','go-dp-used','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range'].forEach(function(id){ setOut(id,''); });
@@ -10014,7 +10014,7 @@ foreach($dCounts as $c) {
         setOut('go-h',  fmtNum(h,4));
         setOut('go-dp-used', fmtNum(dp_used,2));
         setOut('go-m', typeof M_int === 'number' ? fmtNum(M_int,5) : M_int, typeof M_int === 'number' ? 'val-ok' : 'val-err');
-        setOut('go-rechob-m-range', (M_up !== null) ? (fmtNum(M_up,5) + '  /  ' + fmtNum(M_dn,5)) : '—', M_up !== null ? 'val-ok' : '');
+        setOut('go-rechob-m-range', (M_up !== null) ? (fmtNum(M_dn,5) + '  ~  ' + fmtNum(M_up,5)) : '—', M_up !== null ? 'val-ok' : '');
 
         showWarn('g-m1-warn', warns.length ? warns.join('；') : '');
 
@@ -10169,8 +10169,8 @@ foreach($dCounts as $c) {
             if (cwu !== null || cwd !== null) {
                 custWkRow.style.display = '';
                 setOut('go-cust-wk-range',
-                    (cwu !== null ? fmtNum(gRound(Wk + cwu, 5), 5) : '—') + '  /  ' +
-                    (cwd !== null ? fmtNum(gRound(Wk + cwd, 5), 5) : '—'), 'val-ok');
+                    (cwd !== null ? fmtNum(gRound(Wk + cwd, 5), 5) : '—') + '  ~  ' +
+                    (cwu !== null ? fmtNum(gRound(Wk + cwu, 5), 5) : '—'), 'val-ok');
             } else {
                 custWkRow.style.display = 'none';
             }
@@ -10189,7 +10189,7 @@ foreach($dCounts as $c) {
             if (M_rec !== null && typeof M_rec === 'number') {
                 setOut('go-rechob-m', fmtNum(M_rec, 5), 'val-ok');
                 setOut('go-rechob-m-range',
-                    fmtNum(M_rec_up, 5) + '  /  ' + fmtNum(M_rec_dn, 5));
+                    fmtNum(M_rec_dn, 5) + '  ~  ' + fmtNum(M_rec_up, 5));
             } else if (M_rec !== null) {
                 setOut('go-rechob-m', String(M_rec), 'val-err');
                 setOut('go-rechob-m-range', '—');
@@ -10252,7 +10252,7 @@ foreach($dCounts as $c) {
         var Mdn = (cb.x_dn !== null) ? mfn(cb.x_dn, mn, z, alpha_n, beta, ourDp) : null;
         var upStr = (Mup === null) ? '—' : (typeof Mup === 'string' ? Mup : fmtNum(Mup, 5));
         var dnStr = (Mdn === null) ? '—' : (typeof Mdn === 'string' ? Mdn : fmtNum(Mdn, 5));
-        setOut('go-cust-m-range', upStr + '  /  ' + dnStr, 'val-ok');
+        setOut('go-cust-m-range', dnStr + '  ~  ' + upStr, 'val-ok');
         var el = document.getElementById('go-cust-m-range'); if (el) el.style.color = '#6a1b9a';
         var row = document.getElementById('go-row-cust-m'); if (row) row.style.display = '';
         var note = document.getElementById('go-cust-m-note');
@@ -10332,7 +10332,7 @@ foreach($dCounts as $c) {
         setOut('m3-x',     fmtNum(x_nom, 6));
         setOut('m3-wk',    fmtNum(Wk_nom, 5), 'val-ok');
         var tolStr = (tol_up_out >= 0 ? '+' : '') + fmtNum(tol_up_out, 5)
-                   + '  /  ' + (tol_dn_out >= 0 ? '+' : '') + fmtNum(tol_dn_out, 5);
+                   + '  ~  ' + (tol_dn_out >= 0 ? '+' : '') + fmtNum(tol_dn_out, 5);
         setOut('m3-wk-tol', tolStr);
         setOut('m3-wk-up', fmtNum(Wk_up, 5));
         setOut('m3-wk-dn', fmtNum(Wk_dn, 5));
@@ -10398,7 +10398,7 @@ foreach($dCounts as $c) {
         setOut('m4-allow-info', src4, boss4 ? 'val-boss' : '');
         setOut('m4-rechob-wk', boss4 ? '需詢問BOSS' : (rec4_Wk !== null ? fmtNum(rec4_Wk, 5) : '（待查表）'), boss4 ? 'val-boss' : 'val-ok');
         setOut('m4-rechob-m',  boss4 ? '需詢問BOSS' : (M_rec4 !== null && typeof M_rec4 === 'number' ? fmtNum(M_rec4, 5) : (M_rec4 || '（待查表）')), boss4 ? 'val-boss' : 'val-ok');
-        setOut('m4-rechob-m-range', (M_rec4_up !== null) ? fmtNum(M_rec4_up,5) + '  /  ' + fmtNum(M_rec4_dn,5) : '—');
+        setOut('m4-rechob-m-range', (M_rec4_up !== null) ? fmtNum(M_rec4_dn,5) + '  ~  ' + fmtNum(M_rec4_up,5) : '—');
         setOut('m4-cust-m-up', typeof M_cust_up === 'string' ? M_cust_up : fmtNum(M_cust_up, 5), typeof M_cust_up === 'string' ? 'val-err' : '');
         setOut('m4-cust-m-dn', typeof M_cust_dn === 'string' ? M_cust_dn : fmtNum(M_cust_dn, 5), typeof M_cust_dn === 'string' ? 'val-err' : '');
         var dpLbl = document.getElementById('m4-cust-m-dp-label');
@@ -10481,7 +10481,7 @@ foreach($dCounts as $c) {
             if (typeof M_rh === 'number') {
                 setOut('m5-rh-m', fmtNum(M_rh, 5), 'val-ok');
                 setOut('m5-rh-m-range',
-                    fmtNum(gRound(M_rh + mtup5, 5), 5) + '  /  ' + fmtNum(gRound(M_rh + mtdn5, 5), 5), 'val-ok');
+                    fmtNum(gRound(M_rh + mtdn5, 5), 5) + '  ~  ' + fmtNum(gRound(M_rh + mtup5, 5), 5), 'val-ok');
             } else {
                 setOut('m5-rh-m', String(M_rh), 'val-err');
                 setOut('m5-rh-m-range', '—');
@@ -10527,7 +10527,7 @@ foreach($dCounts as $c) {
 
         setOut('m5w-out-k', km);
         setOut('m5w-out-std', fmtNum(Wm_std, 5), 'val-ok');
-        setOut('m5w-out-range', fmtNum(Wm_up, 5) + '  /  ' + fmtNum(Wm_dn, 5), 'val-ok');
+        setOut('m5w-out-range', fmtNum(Wm_dn, 5) + '  ~  ' + fmtNum(Wm_up, 5), 'val-ok');
 
         // 建議滾齒：與 M1/M4 相同邏輯 → 轉換後標準值 + (上公差 − (−0.02)) 偏移 + 預留量
         var wk_off = tu - (-0.02);
@@ -10561,7 +10561,7 @@ foreach($dCounts as $c) {
             setOut('m5w-rh-wk', fmtNum(rh_Wk, 5), 'val-ok');
             if (typeof M_rh === 'number') {
                 setOut('m5w-rh-m', fmtNum(M_rh, 5), 'val-ok');
-                setOut('m5w-rh-m-range', fmtNum(gRound(M_rh + mtup, 5), 5) + '  /  ' + fmtNum(gRound(M_rh + mtdn, 5), 5));
+                setOut('m5w-rh-m-range', fmtNum(gRound(M_rh + mtdn, 5), 5) + '  ~  ' + fmtNum(gRound(M_rh + mtup, 5), 5));
             } else {
                 setOut('m5w-rh-m', String(M_rh), 'val-err');
                 setOut('m5w-rh-m-range', '—');
@@ -10822,7 +10822,7 @@ foreach($dCounts as $c) {
         // 模組四
         bindSeqEnter(['m4-k','m4-wk','m4-tol-up','m4-tol-dn','m4-dp','m4-mtol-up','m4-mtol-dn'], window.calcGearM4);
         // 模組五
-        bindSeqEnter(['m5-dp-cust','m5-dp-mine','m5-m-up','m5-m-dn'], window.calcGearM5);
+        bindSeqEnter(['m5-dp-cust','m5-dp-mine','m5-m-dn','m5-m-up'], window.calcGearM5);
         // 預留量新增表單
         bindSeqEnter(['mn-f-gt','mn-f-lte','mn-f-allow'], window.saveMnRow);
         bindSeqEnter(['da-f-gt','da-f-lte','da-f-allow'], window.saveDaRow);
@@ -10832,7 +10832,7 @@ foreach($dCounts as $c) {
         bindSeqEnter(['rx-k','rx-wk'], window.calcGearWk2X);
 
         // 模組一：客戶提供數據（選填）區塊，末欄 Enter = 回推轉位並計算
-        bindSeqEnter(['g-cust-wtol-up','g-cust-wtol-dn','g-cust-dp','g-cust-m-up','g-cust-m-dn'], window.calcCustM2X);
+        bindSeqEnter(['g-cust-wtol-up','g-cust-wtol-dn','g-cust-dp','g-cust-m-dn','g-cust-m-up'], window.calcCustM2X);
 
         // 花鍵 外（mn/pd 只有一個可見，offsetParent 會自動跳過隱藏那個）
         bindSeqEnter(['sp-ext-mn','sp-ext-pd','sp-ext-z','sp-ext-an','sp-ext-bt',
