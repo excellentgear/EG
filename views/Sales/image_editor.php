@@ -936,7 +936,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <button class="tb-btn" id="btn-label-lib" onclick="toggleLabelLib()" title="標籤庫：內建常用標籤＋自訂標籤，點一下放到圖上"><i class="fa fa-tags"></i> 標籤庫</button>
     <button class="tb-btn" onclick="openWmModal()" title="浮水印：自訂文字/角度/單一或填滿/濃淡"><i class="fa fa-shield"></i> 浮水印</button>
     <button class="tb-btn" onclick="openPartModal()" title="存成料號附件（壓平圖＋可再編輯的工作檔），或開啟既有工作檔繼續編輯"><i class="fa fa-archive"></i> 料號附件</button>
-    <button class="tb-btn" onclick="saveDraft(true)" title="把目前畫布暫存在這台電腦的瀏覽器裡（依使用者區分，只保留一份）：下次開啟批圖編輯器會詢問是否接續編輯；選「不開啟」的暫存檔會在該次關閉後自動移除。內容有變動時每 60 秒也會自動暫存。要長期保存或跨電腦請用「料號附件」存工作檔"><i class="fa fa-clock-o"></i> 暫存</button>
+    <button class="tb-btn" onclick="openDraftModal()" title="暫存檔管理（這台電腦、依使用者區分）：暫存目前畫布（需命名，最多 5 件）、開啟先前的暫存、個別刪除或清除全部。內容有變動時每 60 秒自動更新「自動暫存」。要長期保存或跨電腦請用「料號附件」存工作檔"><i class="fa fa-clock-o"></i> 暫存</button>
     <button class="tb-btn" onclick="flattenAll()" title="把底圖＋所有標籤/文字/形狀燒成單一張圖（效果同存成圖片後重新開啟）。壓平後可用「框選搬移／套索」對任何圖形直接切缺口；可 Ctrl+Z 復原"><i class="fa fa-compress"></i> 壓平成圖</button>
     <button class="tb-btn primary" onclick="openExportModal()" title="列印或另存圖片"><i class="fa fa-download"></i> 匯出 / 列印</button>
     <div id="user-info">
@@ -1447,6 +1447,26 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <div class="modal-foot">
             <button class="tb-btn" onclick="hideModal('setcat-modal')">取消</button>
             <button class="tb-btn primary" onclick="confirmSetCat()"><i class="fa fa-check"></i> 套用</button>
+        </div>
+    </div>
+</div>
+
+<!-- 暫存檔管理（這台電腦、依使用者區分） -->
+<div class="modal-mask" id="draft-modal">
+    <div class="modal-box">
+        <h3><i class="fa fa-clock-o"></i> 暫存檔（這台電腦）</h3>
+        <div class="modal-body">
+            <div class="frm-row"><label>名稱</label>
+                <input type="text" id="dr-name" style="flex:1;" placeholder="輸入暫存名稱（同名＝覆蓋更新）"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();draftManualSave();}">
+                <button class="tb-btn primary" style="margin-left:6px;white-space:nowrap;" onclick="draftManualSave()"><i class="fa fa-save"></i> 暫存目前畫布</button>
+            </div>
+            <div style="font-size:11.5px;color:#8b949e;margin:4px 0 8px;">手動暫存最多 5 件（依使用者、只存在這台電腦的瀏覽器）；「自動暫存」是內容有變每 60 秒自動更新的還原點。要長期保存或跨電腦請用「料號附件」存工作檔。</div>
+            <div id="dr-list" style="max-height:46vh;overflow-y:auto;"></div>
+        </div>
+        <div class="modal-foot" style="display:flex;justify-content:space-between;">
+            <button class="tb-btn" style="color:#ff8a80;" onclick="draftClearAllConfirm()"><i class="fa fa-trash"></i> 清除全部暫存</button>
+            <button class="tb-btn" onclick="hideModal('draft-modal')">關閉</button>
         </div>
     </div>
 </div>
@@ -5632,9 +5652,9 @@ function doPushState() {
 
 /* ── 暫存檔（IndexedDB，這台電腦、依使用者區分）──
    暫存＝最新 undo 快照＋圖片池（快照本來就池化，存檔零額外編碼成本）。
-   手動「暫存」鈕＋內容有變每 60 秒自動暫存＋關窗前盡力補存；
-   下次開啟詢問是否接續編輯，選「不開啟」的暫存檔在該次關閉視窗後自動移除。 */
-let draftDirty = false, draftDeclined = false, draftSavedThisSession = false;
+   每人最多 5 件手動暫存（需命名，同名＝覆蓋更新）＋1 件「自動暫存」（內容有變每 60 秒與關窗前自動更新）。
+   開啟編輯器不再自動詢問；按頂列「暫存」開跳窗：暫存目前畫布／開啟／個別刪除／清除全部。 */
+let draftDirty = false;
 function draftDb() {
     return new Promise((res, rej) => {
         const rq = indexedDB.open('egdraw_drafts', 1);
@@ -5656,50 +5676,115 @@ function draftGet() {
         rq.onsuccess = () => res(rq.result || null); rq.onerror = () => rej(rq.error);
     }));
 }
-function draftDelete() {
+function draftClearAll() {
     return draftDb().then(db => new Promise((res, rej) => {
         const tx = db.transaction('draft', 'readwrite');
         tx.objectStore('draft').delete('u' + USER_ID);
         tx.oncomplete = res; tx.onerror = () => rej(tx.error);
     })).catch(() => {});
 }
-function saveDraft(manual) {
-    if (restoring) { if (manual) toast('還原進行中，請稍後再按一次暫存'); return; }
-    if (canvas.getObjects().filter(o => o.id !== '__artboard').length === 0) { if (manual) toast('畫布是空的，沒有東西可暫存'); return; }
+function draftLoadList() {
+    return draftGet().then(d => {
+        if (!d) return [];
+        if (Array.isArray(d.list)) return d.list;
+        if (d.snap) return [{ id: 'legacy', name: '先前的暫存', ts: d.ts || Date.now(), snap: d.snap, pool: d.pool || [] }];   // 舊版單一暫存自動升級成清單
+        return [];
+    });
+}
+function draftSaveList(list) { return draftPut({ list: list }); }
+function currentDraftSnapEntry(quiet) {
+    if (restoring) { if (!quiet) toast('還原進行中，請稍後再試'); return null; }
+    if (canvas.getObjects().filter(o => o.id !== '__artboard').length === 0) { if (!quiet) toast('畫布是空的，沒有東西可暫存'); return null; }
     flushPendingState();   // 確保最新內容已進快照
     const snap = undoStack[undoStack.length - 1];
-    if (!snap) { if (manual) toast('暫存失敗：目前沒有可用的內容快照'); return; }
-    draftPut({ snap: snap, pool: IMG_SRC_POOL.slice(), ts: Date.now() }).then(() => {
-        draftDirty = false; draftSavedThisSession = true;
-        if (manual) toast('已暫存到這台電腦（下次開啟批圖編輯器會詢問是否接續編輯）');
-    }).catch(e => { if (manual) toast('暫存失敗：' + ((e && e.message) || '瀏覽器儲存空間不足')); });
+    if (!snap) { if (!quiet) toast('暫存失敗：目前沒有可用的內容快照'); return null; }
+    return { snap: snap, pool: IMG_SRC_POOL.slice(), ts: Date.now() };
 }
-setInterval(() => { if (draftDirty) saveDraft(false); }, 60000);
-window.addEventListener('pagehide', function () {
-    if (draftDirty) saveDraft(false);                                // 關窗前盡力補存（存不完就靠 60 秒自動暫存的那份）
-    if (draftDeclined && !draftSavedThisSession) draftDelete();      // 「不開啟」的暫存＝本次關閉後自動移除
-});
-function offerDraftRestore() {
-    draftGet().then(d => {
-        if (!d || !d.snap) return;
-        const dt = new Date(d.ts || Date.now()), p = n => String(n).padStart(2, '0');
-        const when = dt.getFullYear() + '/' + p(dt.getMonth() + 1) + '/' + p(dt.getDate()) + ' ' + p(dt.getHours()) + ':' + p(dt.getMinutes());
-        if (confirm('偵測到暫存檔（' + when + ' 暫存）。\n\n要開啟接續編輯嗎？\n選「取消」＝不開啟，此暫存檔會在本次關閉視窗後自動移除。')) {
-            // 圖片池必須在快照還原前先接回（快照裡是 __imgpool:索引 占位）；此時是頁面初始，池必為空
-            if (IMG_SRC_POOL.length === 0 && Array.isArray(d.pool)) d.pool.forEach(s => IMG_SRC_POOL.push(s));
-            restoreState(d.snap);
-            const wait = setInterval(() => {
-                if (restoring) return;
-                clearInterval(wait);
-                zoomFit();
-                pushState();
-                toast('已還原暫存檔，繼續編輯；要長期保存請用「料號附件」存工作檔');
-            }, 150);
-            draftSavedThisSession = true;   // 暫存內容已被採用，關閉時不清掉
-        } else {
-            draftDeclined = true;
+function autoSaveDraft() {
+    const base = currentDraftSnapEntry(true);
+    if (!base) return;
+    draftLoadList().then(list => {
+        const e = Object.assign({ id: 'auto', name: '自動暫存' }, base);
+        const i = list.findIndex(x => x.id === 'auto');
+        if (i >= 0) list[i] = e; else list.unshift(e);
+        return draftSaveList(list);
+    }).then(() => { draftDirty = false; }).catch(() => { /* 空間不足等，60 秒後自然重試 */ });
+}
+setInterval(() => { if (draftDirty) autoSaveDraft(); }, 60000);
+window.addEventListener('pagehide', function () { if (draftDirty) autoSaveDraft(); });   // 關窗前盡力補存
+function openDraftModal() {
+    document.getElementById('dr-name').value = defaultFileName();
+    renderDraftList();
+    showModal('draft-modal');
+}
+function renderDraftList() {
+    const box = document.getElementById('dr-list');
+    box.innerHTML = '載入中…';
+    draftLoadList().then(list => {
+        if (!list.length) { box.innerHTML = '<span style="color:#8b949e;font-size:12px;">目前沒有暫存檔。輸入名稱後按「暫存目前畫布」。</span>'; return; }
+        const p = n => String(n).padStart(2, '0');
+        box.innerHTML = list.map(e => {
+            const d = new Date(e.ts || 0);
+            const when = d.getFullYear() + '/' + p(d.getMonth() + 1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+            const mb = Math.round(((e.snap || '').length + (e.pool || []).reduce((s, x) => s + (x ? x.length : 0), 0)) / 1048576 * 10) / 10;
+            return '<div style="display:flex;align-items:center;gap:6px;padding:5px 2px;border-bottom:1px solid #333;">' +
+                '<span style="flex:1;">' + (e.id === 'auto' ? '<i class="fa fa-refresh" style="color:#8b949e;margin-right:4px;" title="內容有變每60秒自動更新"></i>' : '') +
+                escHtml(e.name || '未命名') + '<span style="color:#8b949e;font-size:11.5px;">｜' + when + '｜約 ' + (mb || 0.1) + 'MB</span></span>' +
+                '<button class="tb-btn" onclick="draftOpen(\'' + e.id + '\')" title="開啟這份暫存（會取代目前畫布內容）"><i class="fa fa-folder-open"></i></button>' +
+                '<button class="tb-btn" style="color:#ff8a80;" onclick="draftRemove(\'' + e.id + '\')" title="刪除這份暫存"><i class="fa fa-trash"></i></button></div>';
+        }).join('');
+    }).catch(() => { box.innerHTML = '<span style="color:#ff8a80;">暫存清單載入失敗</span>'; });
+}
+function draftManualSave() {
+    const name = document.getElementById('dr-name').value.trim();
+    if (!name) { toast('請先輸入暫存名稱'); return; }
+    const base = currentDraftSnapEntry(false);
+    if (!base) return;
+    draftLoadList().then(list => {
+        const i = list.findIndex(x => x.id !== 'auto' && x.name === name);
+        if (i >= 0) list[i] = Object.assign({ id: list[i].id, name: name }, base);   // 同名＝覆蓋更新
+        else {
+            if (list.filter(x => x.id !== 'auto').length >= 5) { toast('手動暫存最多 5 件，請先刪除不需要的再存'); return null; }
+            list.unshift(Object.assign({ id: 'm' + Date.now(), name: name }, base));
         }
-    }).catch(() => {});
+        return draftSaveList(list).then(() => {
+            draftDirty = false;
+            toast('已暫存「' + name + '」（只存在這台電腦的瀏覽器）');
+            renderDraftList();
+        });
+    }).catch(e => toast('暫存失敗：' + ((e && e.message) || '瀏覽器儲存空間不足')));
+}
+function draftOpen(id) {
+    draftLoadList().then(list => {
+        const e = list.find(x => String(x.id) === String(id));
+        if (!e || !e.snap) { toast('找不到這份暫存'); return; }
+        if (!confirm('開啟暫存「' + (e.name || '') + '」會取代目前畫布內容（未儲存的變更會消失），確定？')) return;
+        // 快照裡是 __imgpool:索引 占位，指向「這份暫存自己的圖片池」；
+        // 中途開啟時目前的池可能已有東西，必須先併入目前池並改寫快照索引，否則會張冠李戴
+        const map = (e.pool || []).map(s => { let i = IMG_SRC_POOL.indexOf(s); if (i === -1) { IMG_SRC_POOL.push(s); i = IMG_SRC_POOL.length - 1; } return i; });
+        const snap = String(e.snap).replace(/"__imgpool:(\d+)"/g, (m, n) => (map[+n] !== undefined) ? '"__imgpool:' + map[+n] + '"' : m);
+        hideModal('draft-modal');
+        restoreState(snap);
+        const wait = setInterval(() => {
+            if (restoring) return;
+            clearInterval(wait);
+            zoomFit();
+            pushState();
+            toast('已開啟暫存「' + (e.name || '') + '」；要長期保存請用「料號附件」存工作檔');
+        }, 150);
+    }).catch(() => toast('開啟暫存失敗'));
+}
+function draftRemove(id) {
+    draftLoadList().then(list => {
+        const e = list.find(x => String(x.id) === String(id));
+        if (!e) return;
+        if (!confirm('刪除暫存「' + (e.name || '') + '」？（無法復原）')) return;
+        return draftSaveList(list.filter(x => String(x.id) !== String(id))).then(renderDraftList);
+    }).catch(() => toast('刪除失敗'));
+}
+function draftClearAllConfirm() {
+    if (!confirm('清除你在這台電腦上的全部暫存檔（含自動暫存）？無法復原。')) return;
+    draftClearAll().then(() => { renderDraftList(); toast('已清除全部暫存'); });
 }
 function pushState() {
     if (restoring) return;
@@ -5950,7 +6035,7 @@ resizeViewport();
 setArtboardSize(artW, artH);
 zoomFit();
 pushState();  // 初始狀態
-offerDraftRestore();   // 有暫存檔時詢問是否接續編輯（選「不開啟」＝本次關閉後自動移除）
+// 開啟編輯器不再自動詢問暫存檔（使用者要求取消）；要接續編輯請按頂列「暫存」自行選擇開啟
 setTool('select');
 </script>
 </body>
