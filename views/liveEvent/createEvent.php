@@ -1415,10 +1415,14 @@ if (isset($_POST['btn_go_events'])) {
                             reply += '</div>';
                         }
                         if (!reply) reply = dash;
+                        // (系統管理員/測試用) 純「已閱」者旁附「改未閱」小按鈕；已回簽/回覆者不提供（後端亦會擋）
+                        var unreadBtn = (EG.isAdmin && r.status === 'read' && r.user_id)
+                            ? ' <a href="javascript:;" class="rd-unread-btn" data-eid="' + eid + '" data-uid="' + r.user_id + '" title="測試用：把此人的已閱重設為未閱" style="font-size:11px;color:#e67e22;white-space:nowrap;"><i class="fa fa-undo"></i> 改未閱</a>'
+                            : '';
                         h += '<tr>'
                            + '<td>' + (i + 1) + '</td>'
                            + '<td>' + $('<i>').text(r.name).html() + '</td>'
-                           + '<td>' + (badge[r.status] || badge.read) + '</td>'
+                           + '<td>' + (badge[r.status] || badge.read) + unreadBtn + '</td>'
                            + '<td class="rd-time">' + (r.read_at || dash) + '</td>'
                            + '<td class="rd-time">' + (r.signed_at || dash) + '</td>'
                            + '<td class="rd-time">' + (r.replied_at || dash) + '</td>'
@@ -1430,6 +1434,29 @@ if (isset($_POST['btn_go_events'])) {
                 }, 'json').fail(function() { $body.html('<div class="rd-empty">連線失敗</div>'); });
             });
             $(document).on('click', '.eg-readers-close', function() { $(this).closest('.eg-readers-tr').remove(); });
+
+            // (系統管理員/測試用) 已讀人員清單「改未閱」：把該人此公告的已閱重設為未閱（後端 _eventReadReset.php 限管理員）
+            $(document).on('click', '.rd-unread-btn', function() {
+                var $a = $(this), eid = $a.data('eid'), uid = $a.data('uid');
+                var name = ($a.closest('tr').find('td').eq(1).text() || '').trim();
+                if (!confirm('確定將「' + name + '」的已閱改回未閱？（測試用，該人員會重新收到未讀通知）')) return;
+                $a.css('pointer-events', 'none');
+                $.post('../../src/store/_eventReadReset.php', { eventid: eid, userid: uid }, function(res) {
+                    if (!res || !res.ok) { $a.css('pointer-events', ''); alert(res && res.msg ? res.msg : '重設失敗'); return; }
+                    var $panel = $('#eg-readers-tr-' + eid);
+                    $a.closest('tr').remove();
+                    // 清單已空 → 顯示「尚無人閱讀」
+                    if ($panel.length && !$panel.find('.rd-table tbody tr').length) {
+                        $panel.find('.eg-readers-body').html('<div class="rd-empty"><i class="fa fa-eye-slash"></i> 尚無人閱讀</div>');
+                    }
+                    // 同步把列表「已讀」數字減 1
+                    var $link = $('.eg-read-link[data-eid="' + eid + '"]');
+                    if ($link.length) {
+                        var n = parseInt($link.text().replace(/[^0-9]/g, ''), 10);
+                        if (!isNaN(n) && n > 0) $link.html('<i class="fa fa-eye"></i> ' + (n - 1));
+                    }
+                }, 'json').fail(function() { $a.css('pointer-events', ''); alert('連線失敗'); });
+            });
 
             // 刪除回覆附件（上傳者本人或最高管理者；權限由後端 _respFileDelete.php 把關）
             $(document).on('click', '.rd-rf-del', function() {
@@ -1517,6 +1544,7 @@ if (isset($_POST['btn_go_events'])) {
             // ===== AJAX 分頁列表（進頁只載第 1 頁；搜尋/篩選/換頁/換筆數都向後端要該頁）=====
             var EG = {
                 canManage: <?= $can_manage ? 'true' : 'false' ?>,
+                isAdmin:   <?= $IS_ADMIN ? 'true' : 'false' ?>,
                 canEdit:   <?= $CAN_EDIT ? 'true' : 'false' ?>,
                 canDelete: <?= $CAN_DELETE ? 'true' : 'false' ?>,
                 uid: <?= (int)$id ?>
