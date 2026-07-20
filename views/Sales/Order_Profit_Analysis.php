@@ -741,6 +741,21 @@ if ($isAjax) {
     $costFilter = $_GET['cost_filter'] ?? 'all';
 
     try {
+        /* ── 結帳日儲存（與 Shipping_Analysis_new 同一設定鍵 billing_cutoff_day，互相連動） ── */
+        if ($action === 'save_cutoff') {
+            if (!$is_admin) { echo json_encode(['success'=>false,'error'=>'僅管理者可修改結帳日']); exit; }
+            $day = intval($_POST['cutoff_day'] ?? 0);
+            if ($day < 0 || $day > 31) { echo json_encode(['success'=>false,'error'=>'結帳日必須介於 0~31']); exit; }
+            $by = $_SESSION['user_cname'] ?? $_SESSION['userName'] ?? 'system';
+            $pdo->prepare(
+                "INSERT INTO system_settings (setting_key, setting_value, updated_by, updated_at)
+                 VALUES ('billing_cutoff_day', ?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                     updated_by = VALUES(updated_by), updated_at = NOW()")->execute([$day, $by]);
+            echo json_encode(['success'=>true, 'cutoff'=>$day]);
+            exit;
+        }
+
         /* ── 機台費率清單（折舊時薪自動計算；人工/廠務時薪可編輯） ── */
         if ($action === 'machine_rates') {
             opa_ensure_rate_columns($pdo);
@@ -1144,8 +1159,13 @@ if ($isAjax) {
 
 // 客戶下拉清單（供篩選欄 datalist）
 $clientList = [];
+$billing_cutoff_day = 0;   // 結帳日（與出貨分析頁共用 system_settings.billing_cutoff_day；0=自然月）
 if ($has_access) {
     try { $clientList = $pdo->query("SELECT DISTINCT Client_name FROM order_track WHERE Client_name IS NOT NULL AND Client_name<>'' ORDER BY Client_name")->fetchAll(PDO::FETCH_COLUMN) ?: []; } catch (Exception $e) {}
+    try {
+        $v = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='billing_cutoff_day' LIMIT 1")->fetchColumn();
+        if ($v !== false) $billing_cutoff_day = intval($v);
+    } catch (Exception $e) {}
 }
 ?>
 <!DOCTYPE html>
@@ -1187,6 +1207,10 @@ if ($has_access) {
 
         .filter-bar { background:#fff; padding:10px; border-radius:8px; margin-bottom:15px;
             display:flex; gap:8px; align-items:center; flex-wrap:wrap; box-shadow:0 2px 5px rgba(0,0,0,.05); }
+        .fb-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+        .qd-wrap { display:inline-flex; gap:6px; margin-left:6px; }
+        .qd-group .qd-cur { min-width:58px; font-weight:600; }
+        .qd-group.active .qd-cur { background:var(--primary-color); color:#fff; border-color:var(--primary-color); }
         .main-card { background:var(--card-bg); border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,.05); padding:15px; }
         .table-toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px; }
 
@@ -1325,28 +1349,59 @@ if ($has_access) {
         </div>
       </div>
 
-      <div class="filter-bar">
-        <label style="margin:0;font-size:12px;color:#888;">訂單日期</label>
-        <input type="date" id="fDateFrom" class="form-control input-sm eg-in" style="width:135px;" max="9999-12-31">
-        <span style="color:#aaa;">～</span>
-        <input type="date" id="fDateTo" class="form-control input-sm eg-in" style="width:135px;" max="9999-12-31">
-        <input type="text" id="fClient" list="clientList" class="form-control input-sm eg-in eg-live" placeholder="客戶名稱/ID（即時篩選）" style="width:160px;">
-        <datalist id="clientList">
-          <?php foreach ($clientList as $c): ?><option value="<?= htmlspecialchars($c, ENT_QUOTES) ?>"></option><?php endforeach; ?>
-        </datalist>
-        <input type="text" id="fKw" class="form-control input-sm eg-in eg-live" placeholder="料號 / 訂單號 / 規格（即時篩選）" style="width:190px;">
-        <button class="btn btn-primary btn-sm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
-        <div class="btn-group view-toggle" style="margin-left:6px;">
-          <button class="btn btn-default btn-sm active" data-view="order">訂單明細</button>
-          <button class="btn btn-default btn-sm" data-view="part">料號彙總（ABC）</button>
+      <div class="filter-bar" style="flex-direction:column;align-items:stretch;">
+        <!-- 第一列：日期區間＋快速切換（◀ 期間 ▶）＋結帳日 -->
+        <div class="fb-row">
+          <label style="margin:0;font-size:12px;color:#888;">訂單日期</label>
+          <input type="date" id="fDateFrom" class="form-control input-sm eg-in" style="width:135px;" max="9999-12-31">
+          <span style="color:#aaa;">～</span>
+          <input type="date" id="fDateTo" class="form-control input-sm eg-in" style="width:135px;" max="9999-12-31">
+          <span class="qd-wrap">
+            <span class="btn-group qd-group" data-unit="day">
+              <button type="button" class="btn btn-default btn-xs qd-prev" title="前一日"><i class="fa fa-chevron-left"></i></button>
+              <button type="button" class="btn btn-default btn-xs qd-cur" title="今日">今日</button>
+              <button type="button" class="btn btn-default btn-xs qd-next" title="後一日"><i class="fa fa-chevron-right"></i></button>
+            </span>
+            <span class="btn-group qd-group" data-unit="month">
+              <button type="button" class="btn btn-default btn-xs qd-prev" title="上一個帳款月"><i class="fa fa-chevron-left"></i></button>
+              <button type="button" class="btn btn-default btn-xs qd-cur" title="本帳款月（依結帳日）">本月</button>
+              <button type="button" class="btn btn-default btn-xs qd-next" title="下一個帳款月"><i class="fa fa-chevron-right"></i></button>
+            </span>
+            <span class="btn-group qd-group" data-unit="quarter">
+              <button type="button" class="btn btn-default btn-xs qd-prev" title="上一季"><i class="fa fa-chevron-left"></i></button>
+              <button type="button" class="btn btn-default btn-xs qd-cur" title="本季（依結帳日的帳款月組成）">本季</button>
+              <button type="button" class="btn btn-default btn-xs qd-next" title="下一季"><i class="fa fa-chevron-right"></i></button>
+            </span>
+            <span class="btn-group qd-group" data-unit="year">
+              <button type="button" class="btn btn-default btn-xs qd-prev" title="上一年度"><i class="fa fa-chevron-left"></i></button>
+              <button type="button" class="btn btn-default btn-xs qd-cur" title="本年度（依結帳日的帳款月組成）">本年</button>
+              <button type="button" class="btn btn-default btn-xs qd-next" title="下一年度"><i class="fa fa-chevron-right"></i></button>
+            </span>
+          </span>
+          <label style="margin:0 0 0 6px;font-size:12px;color:#888;" title="與出貨分析頁共用設定，互相連動；0=自然月。日>結帳日歸入下個帳款月。">結帳日</label>
+          <input type="number" id="cutoffDay" class="form-control input-sm" value="<?= intval($billing_cutoff_day) ?>"
+                 min="0" max="31" style="width:55px;text-align:center;" <?= $is_admin ? '' : 'disabled title="僅管理者可修改"' ?>>
         </div>
-        <div style="margin-left:auto; display:flex; gap:8px;">
-          <?php if ($is_admin): ?>
-          <button class="btn btn-default btn-sm" id="btnMachineRates" title="機台每小時費率（折舊/耗材/人工/廠務），供廠內加工成本估算"><i class="fa fa-cogs"></i> 機台費率</button>
-          <button class="btn btn-default btn-sm" id="btnProcSettings" title="沒報工/沒計價的製程：設定暫不計成本或帶入固定單價"><i class="fa fa-sliders"></i> 製程成本設定</button>
-          <?php endif; ?>
-          <button class="btn btn-info btn-sm" id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 轉 CSV</button>
-          <button class="btn btn-info btn-sm" id="btnPrint"><i class="fa fa-print"></i> 列印 / PDF</button>
+        <!-- 第二列：篩選＋檢視切換｜右側工具 -->
+        <div class="fb-row">
+          <input type="text" id="fClient" list="clientList" class="form-control input-sm eg-in eg-live" placeholder="客戶名稱/ID（即時篩選）" style="width:160px;">
+          <datalist id="clientList">
+            <?php foreach ($clientList as $c): ?><option value="<?= htmlspecialchars($c, ENT_QUOTES) ?>"></option><?php endforeach; ?>
+          </datalist>
+          <input type="text" id="fKw" class="form-control input-sm eg-in eg-live" placeholder="料號 / 訂單號 / 規格（即時篩選）" style="width:190px;">
+          <button class="btn btn-primary btn-sm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
+          <div class="btn-group view-toggle" style="margin-left:6px;">
+            <button class="btn btn-default btn-sm active" data-view="order">訂單明細</button>
+            <button class="btn btn-default btn-sm" data-view="part">料號彙總（ABC）</button>
+          </div>
+          <div style="margin-left:auto; display:flex; gap:8px;">
+            <?php if ($is_admin): ?>
+            <button class="btn btn-default btn-sm" id="btnMachineRates" title="機台每小時費率（折舊/耗材/人工/廠務），供廠內加工成本估算"><i class="fa fa-cogs"></i> 機台費率</button>
+            <button class="btn btn-default btn-sm" id="btnProcSettings" title="沒報工/沒計價的製程：設定暫不計成本或帶入固定單價"><i class="fa fa-sliders"></i> 製程成本設定</button>
+            <?php endif; ?>
+            <button class="btn btn-info btn-sm" id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 轉 CSV</button>
+            <button class="btn btn-info btn-sm" id="btnPrint"><i class="fa fa-print"></i> 列印 / PDF</button>
+          </div>
         </div>
       </div>
 
@@ -1547,6 +1602,91 @@ if ($has_access) {
     yearAgo.setFullYear(yearAgo.getFullYear() - 1);
     $('#fDateFrom').val(fmtD(yearAgo));
     $('#fDateTo').val(fmtD(today));
+
+    /* ── 快速日期區間：今日/本月/本季/本年＋前後箭頭（月/季/年為「帳款期間」，依結帳日劃分） ── */
+    var CUTOFF = <?= intval($billing_cutoff_day) ?>;
+    var quick = { unit: null, offset: 0 };
+    var QD_DEF = { day: '今日', month: '本月', quarter: '本季', year: '本年' };
+    function fmtLocal(d){
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    function daysInMonth(y, m){ return new Date(y, m, 0).getDate(); }   // m: 1-12
+    function billingMonthRange(y, m){
+        // 帳款月 m ＝ 前月(結帳日+1) ～ 本月(結帳日)；結帳日 0 ＝ 自然月
+        if (CUTOFF <= 0) return [new Date(y, m - 1, 1), new Date(y, m, 0)];
+        return [new Date(y, m - 2, CUTOFF + 1), new Date(y, m - 1, Math.min(CUTOFF, daysInMonth(y, m)))];
+    }
+    function currentBillingYM(){
+        // 今天所屬帳款月：日 > 結帳日 → 歸入下個月
+        var t = new Date(), y = t.getFullYear(), m = t.getMonth() + 1;
+        if (CUTOFF > 0 && t.getDate() > CUTOFF) { m++; if (m > 12) { m = 1; y++; } }
+        return { y: y, m: m };
+    }
+    function resetQuickLabels(){
+        $('.qd-group').removeClass('active').each(function(){
+            $(this).find('.qd-cur').text(QD_DEF[$(this).data('unit')]);
+        });
+    }
+    function clearQuick(){ quick.unit = null; quick.offset = 0; resetQuickLabels(); }
+    function applyQuick(unit, offset){
+        quick.unit = unit; quick.offset = offset;
+        var from, to, label;
+        if (unit === 'day') {
+            var d = new Date(); d.setDate(d.getDate() + offset);
+            from = to = d;
+            label = offset === 0 ? '今日' : (d.getMonth() + 1) + '/' + d.getDate();
+        } else if (unit === 'month') {
+            var c = currentBillingYM();
+            var idx = c.y * 12 + (c.m - 1) + offset;
+            var y = Math.floor(idx / 12), m = idx - y * 12 + 1;
+            var r = billingMonthRange(y, m); from = r[0]; to = r[1];
+            label = offset === 0 ? '本月' : (y % 100) + '/' + m + '月';
+        } else if (unit === 'quarter') {
+            var c2 = currentBillingYM();
+            var qi = c2.y * 4 + Math.floor((c2.m - 1) / 3) + offset;
+            var y2 = Math.floor(qi / 4), q = qi - y2 * 4;   // 0~3
+            from = billingMonthRange(y2, q * 3 + 1)[0];
+            to   = billingMonthRange(y2, q * 3 + 3)[1];
+            label = offset === 0 ? '本季' : (y2 % 100) + 'Q' + (q + 1);
+        } else {
+            var c3 = currentBillingYM();
+            var y3 = c3.y + offset;
+            from = billingMonthRange(y3, 1)[0];
+            to   = billingMonthRange(y3, 12)[1];
+            label = offset === 0 ? '本年' : String(y3);
+        }
+        $('#fDateFrom').val(fmtLocal(from));
+        $('#fDateTo').val(fmtLocal(to));
+        resetQuickLabels();
+        $('.qd-group[data-unit=' + unit + ']').addClass('active').find('.qd-cur').text(label);
+        state.page = 1;
+        load();
+    }
+    $('.qd-group .qd-cur').on('click', function(){ applyQuick($(this).closest('.qd-group').data('unit'), 0); });
+    $('.qd-group .qd-prev').on('click', function(){
+        var u = $(this).closest('.qd-group').data('unit');
+        applyQuick(u, quick.unit === u ? quick.offset - 1 : -1);
+    });
+    $('.qd-group .qd-next').on('click', function(){
+        var u = $(this).closest('.qd-group').data('unit');
+        applyQuick(u, quick.unit === u ? quick.offset + 1 : 1);
+    });
+
+    /* ── 結帳日：改了即儲存（與出貨分析頁連動），作用中的快速區間跟著重算 ── */
+    var cutoffTimer = null;
+    $('#cutoffDay').on('input change', function(){
+        var v = parseInt(this.value, 10);
+        if (isNaN(v) || v < 0 || v > 31) return;
+        clearTimeout(cutoffTimer);
+        cutoffTimer = setTimeout(function(){
+            $.post('Order_Profit_Analysis.php', {action: 'save_cutoff', cutoff_day: v}, null, 'json')
+            .done(function(res){
+                if (!res.success) { alert(res.error || '結帳日儲存失敗'); return; }
+                CUTOFF = v;
+                if (quick.unit && quick.unit !== 'day') applyQuick(quick.unit, quick.offset);
+            });
+        }, 500);
+    });
 
     function nfmt(v, dec){
         if (v === null || v === undefined || v === '' || isNaN(v)) return '–';
@@ -2377,7 +2517,7 @@ if ($has_access) {
         clearTimeout(liveTimer);
         liveTimer = setTimeout(function(){ state.page = 1; load(); }, 400);
     });
-    $('#fDateFrom, #fDateTo').on('change', function(){ state.page = 1; load(); });
+    $('#fDateFrom, #fDateTo').on('change', function(){ clearQuick(); state.page = 1; load(); });   // 手動改日期＝解除快速區間
 
     /* ── UI 規範：雙擊清空 / 聚焦全選 / Enter 逐欄與末欄送出 ── */
     $(document).on('focus', '.eg-in', function(){ var el = this; setTimeout(function(){ try { el.select(); } catch(e){} }, 0); });
