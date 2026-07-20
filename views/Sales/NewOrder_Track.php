@@ -10094,13 +10094,14 @@ foreach($dCounts as $c) {
         var alpha_t   = Math.atan(Math.tan(alpha_n) / cos_b);
         var inv_alpha_t = inv(alpha_t);
 
-        // 自動推算 k
+        // 自動推算跨齒數 k：標準公式 k = round(z·αn/180 + 0.5)，以實際齒數與法向壓力角計算
+        // （直齒 β=0 時與虛擬齒數公式結果相同；螺旋角大時改用虛擬齒數 z/cos³β 會高估 k，
+        //   使量測平面過斜、量趾點跑到齒頂而不可量，故一律採實際齒數版本，與外部齒輪軟體一致）
         var k_val;
         if (k_in && k_in >= 1) {
             k_val = k_in;
         } else {
-            var zv = z / Math.pow(cos_b, 3);
-            k_val = Math.round(zv * an_dec / 180 + 0.5);
+            k_val = Math.round(z * an_dec / 180 + 0.5);
             if (k_val < 1) k_val = 1;
         }
 
