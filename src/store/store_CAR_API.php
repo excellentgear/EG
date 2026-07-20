@@ -46,6 +46,9 @@ $me       = car_current_user($pdo);
 $features = rbac_user_features($pdo, (int)$me['id']);
 function _carHas($f) { global $features; return rbac_has($features, $f); }
 
+// 附件排序欄位（既有環境自動補欄；已存在時靜默略過）
+try { $pdo->exec("ALTER TABLE car_attachment ADD COLUMN sort_order INT NOT NULL DEFAULT 0 AFTER description"); } catch (Throwable $_e) {}
+
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 
 try {
@@ -479,7 +482,7 @@ try {
                         o.counterparty_type, o.customer_id, o.maker_id_no,
                         o.d_id, o.drawing_no, o.resp_type, o.resp_dept_id, o.resp_display,
                         o.status, o.fill_date, o.created_by, o.created_by_name, o.reissue_of, o.reissue_seq,
-                        o.assigned_to_name, o.assigned_at, o.created_at,
+                        o.assigned_to, o.assigned_to_name, o.assigned_at, o.created_at,
                         d.name AS resp_dept_name,
                         cc.customer AS customer_name, mk.maker_id AS maker_name
                  FROM car_order o
@@ -556,8 +559,8 @@ try {
                              WHERE l.car_id = ? ORDER BY l.id");
         $lg->execute([$id]); $acts = $lg->fetchAll(PDO::FETCH_ASSOC);
         foreach ($acts as &$_a) { $_a['title'] = car_user_title($pdo, $_a['actor_id'] ? (int)$_a['actor_id'] : null); } unset($_a);
-        $at = $pdo->prepare("SELECT id, field_type, file_name, original_filename, file_size, tag_id, created_by
-                             FROM car_attachment WHERE car_id = ? ORDER BY id");
+        $at = $pdo->prepare("SELECT id, field_type, file_name, original_filename, file_size, tag_id, created_by, description, sort_order
+                             FROM car_attachment WHERE car_id = ? ORDER BY sort_order, id");
         $at->execute([$id]); $atts = $at->fetchAll(PDO::FETCH_ASSOC);
 
         // 各區段目前是否已簽（同區段取最後一筆，未作廢才算已簽）
@@ -1392,6 +1395,9 @@ try {
             if (!$ok) jerr('您沒有此區段的附件上傳權限', 403);
         }
 
+        $descTxt = trim($_POST['description'] ?? '');
+        if ($descTxt === '') jfail('請填寫附件說明（每個附件都需填寫說明）');
+
         $v = eg_att_validate_upload($_FILES['file']);
         if (!$v['ok']) jfail($v['msg']);
         $ext  = $v['ext'];
@@ -1407,11 +1413,21 @@ try {
         $dest  = $dir . DIRECTORY_SEPARATOR . $fname;
         if (!@move_uploaded_file($_FILES['file']['tmp_name'], $dest)) jfail('檔案寫入失敗（請確認 NAS 路徑可存取）');
 
+        // 排序值：同單(或同暫存鍵)同區段最大值 +1，新附件排在最後
+        if ($carId) {
+            $soSt = $pdo->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM car_attachment WHERE car_id = ? AND field_type = ?");
+            $soSt->execute([$carId, $section]);
+        } else {
+            $soSt = $pdo->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM car_attachment WHERE temp_key = ? AND field_type = ? AND car_id IS NULL");
+            $soSt->execute([$tempKey, $section]);
+        }
+        $sortOrder = (int)$soSt->fetchColumn();
+
         $pdo->prepare(
-            "INSERT INTO car_attachment (car_id, temp_key, field_type, file_name, file_path, description, original_filename, file_size, created_by)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            "INSERT INTO car_attachment (car_id, temp_key, field_type, file_name, file_path, description, sort_order, original_filename, file_size, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
             ->execute([($carId ?: null), ($carId ? null : $tempKey), $section, $fname, $dest,
-                       (trim($_POST['description'] ?? '') ?: null), $orig, (int)$_FILES['file']['size'], (int)$me['id']]);
+                       $descTxt, $sortOrder, $orig, (int)$_FILES['file']['size'], (int)$me['id']]);
         $attId = (int)$pdo->lastInsertId();
         if ($carId) car_log($pdo, $carId, 'attach', (int)$me['id'], $me['name'], car_section_name($section) . " 上傳附件「{$orig}」");
         jout(['success' => true, 'id' => $attId, 'file_name' => $fname, 'original_filename' => $orig,
@@ -1450,12 +1466,56 @@ try {
         if (!$a) jfail('附件不存在');
         if ((int)$a['created_by'] !== (int)$me['id'])
             jerr('僅上傳者本人可刪除附件', 403);
+        // 主管核准成立後，開立人不可再刪除異常說明區附件（申請中/退回/草稿階段仍可）
+        if ($a['field_type'] === 'desc' && !empty($a['car_id'])) {
+            $so = $pdo->prepare("SELECT status FROM car_order WHERE id = ?");
+            $so->execute([(int)$a['car_id']]);
+            $ost = (string)$so->fetchColumn();
+            if (!in_array($ost, ['draft', 'applying', 'app_rejected'], true))
+                jfail('主管已核准成立，異常說明附件不可再刪除');
+        }
         $fullPath = carAttResolvePath($pdo, $a);
         if (is_file($fullPath)) @unlink($fullPath);
         $pdo->prepare("DELETE FROM car_attachment WHERE id = ?")->execute([$aid]);
         if ($a['car_id']) car_log($pdo, (int)$a['car_id'], 'attach_del', (int)$me['id'], $me['name'],
             car_section_name($a['field_type']) . " 刪除附件「" . ($a['original_filename'] ?: $a['file_name']) . '」');
         jout(['success' => true, 'message' => '附件已刪除']);
+    }
+
+    // ── 附件拖曳排序（權限同該區段的附件上傳權；編號「附件N」依此順序）────────
+    case 'reorder_attachments': {
+        $carId   = (int)($_POST['car_id'] ?? 0);
+        $section = $_POST['field_type'] ?? '';
+        $ids     = json_decode((string)($_POST['ids'] ?? '[]'), true);
+        if (!$carId || !is_array($ids) || !$ids) jfail('缺少參數');
+        if (!in_array($section, ['desc', 'cause', 'correction', 'prevention', 'result'], true)) jfail('附件區段錯誤');
+        $st = $pdo->prepare("SELECT * FROM car_order WHERE id = ?"); $st->execute([$carId]);
+        $o = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$o) jfail('查無此單');
+        $uid = (int)$me['id']; $ok = _carHas('all');
+        if (!$ok) {
+            if ($section === 'desc') $ok = ((int)$o['created_by'] === $uid);
+            elseif ($section === 'result') $ok = _carHas('car_sign_primary') || _carHas('car_sign_final') || _carHas('car_manage_settings')
+                                                || car_is_primary_candidate($pdo, $o, $uid) || car_is_final_decider($pdo, $uid);
+            else $ok = ((int)$o['assigned_to'] === $uid);
+        }
+        if (!$ok) jerr('您沒有此區段的附件排序權限', 403);
+        // 驗證 ids 皆屬本單本區段，避免竄改
+        $chk = $pdo->prepare("SELECT id FROM car_attachment WHERE car_id = ? AND field_type = ?");
+        $chk->execute([$carId, $section]);
+        $valid = array_map('intval', $chk->fetchAll(PDO::FETCH_COLUMN));
+        $ids = array_values(array_unique(array_map('intval', $ids)));
+        foreach ($ids as $aid2) if (!in_array($aid2, $valid, true)) jfail('附件不屬於此單據區段');
+        $pdo->beginTransaction();
+        try {
+            $up = $pdo->prepare("UPDATE car_attachment SET sort_order = ? WHERE id = ?");
+            foreach ($ids as $pos => $aid2) $up->execute([$pos + 1, $aid2]);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            jerr('排序失敗：' . $e->getMessage(), 500);
+        }
+        jout(['success' => true, 'message' => '已更新附件順序']);
     }
 
     default:
@@ -1469,16 +1529,16 @@ try {
 /** desc 區暫存附件 → 綁定到某 car_id（拆多單時每單各複製一列連結） */
 function car_link_desc_attachments(PDO $pdo, string $tempKey, int $carId, $uid): void {
     // 找出此 temp_key 的 desc 暫存列，複製給本單（保留暫存以供其他拆單複製）
-    $st = $pdo->prepare("SELECT file_name, file_path, tag_id, description, original_filename, file_size, preview_path
+    $st = $pdo->prepare("SELECT file_name, file_path, tag_id, description, sort_order, original_filename, file_size, preview_path
                          FROM car_attachment WHERE temp_key = ? AND field_type = 'desc' AND car_id IS NULL");
     $st->execute([$tempKey]);
     // temp_key 一併複製進新紀錄：實體檔案仍留在暫存資料夾（未搬動），路徑解析須靠 temp_key 才能找到正確位置
     $ins = $pdo->prepare(
         "INSERT INTO car_attachment
-           (car_id, temp_key, field_type, file_name, file_path, tag_id, description, original_filename, file_size, preview_path, created_by)
-         VALUES (?, ?, 'desc', ?, ?, ?, ?, ?, ?, ?, ?)");
+           (car_id, temp_key, field_type, file_name, file_path, tag_id, description, sort_order, original_filename, file_size, preview_path, created_by)
+         VALUES (?, ?, 'desc', ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $a) {
-        $ins->execute([$carId, $tempKey, $a['file_name'], $a['file_path'], $a['tag_id'], $a['description'],
+        $ins->execute([$carId, $tempKey, $a['file_name'], $a['file_path'], $a['tag_id'], $a['description'], (int)$a['sort_order'],
                        $a['original_filename'], $a['file_size'], $a['preview_path'], $uid]);
     }
 }
