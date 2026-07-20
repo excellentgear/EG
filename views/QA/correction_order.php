@@ -466,8 +466,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     <ul>
       <li><b>檢閱</b>：可查看列表與單據內容。</li>
       <li><b>開立</b>：可開立新的異常矯正處理單。</li>
-      <li><b>修改</b>：可修改單據內容。</li>
-      <li><b>刪除</b>：可刪除單據。</li>
+      <li><b>修改</b>：可修改單據內容（限自己開立之單據；非開立人不可修改他人單據，唯系統管理員例外）。</li>
+      <li><b>刪除</b>：可刪除單據（限自己開立之單據；非開立人不可刪除他人單據，唯系統管理員例外）。</li>
       <li><b>設定</b>：可管理主管職稱層級、生管部門、最終決策者、附件路徑等。</li>
     </ul>
     <p class="text-muted">簽核流程之權限（指派、主管簽核、總經理裁決）另依責任單位主管 / 職位設定判定。</p>
@@ -495,6 +495,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
   var API = '../../src/store/store_CAR_API.php';
   var CAN_CREATE = <?php echo $CAN_CREATE ? 'true':'false'; ?>;
   var CAN_DELETE = <?php echo $CAN_DELETE ? 'true':'false'; ?>;
+  var IS_ADMIN   = <?php echo rbac_has($features, 'all') ? 'true':'false'; ?>;
+  var ME_ID      = <?php echo (int)$me['id']; ?>;
   var CAN_VIEW   = <?php echo $CAN_VIEW ? 'true':'false'; ?>;
   var OPEN_ID    = <?php echo (int)($_GET['open_id'] ?? 0); ?>;   // 通知直開的單據 id（當事人無 car_view 也可開）
   var state = { card:'all', page:1, size:10 };
@@ -610,7 +612,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         + '<td>'+(latest||'<span class="text-muted">—</span>')+'</td>'
         + '<td>'+esc(o.created_by_name||'')+'</td>'
         + '<td><button class="btn btn-xs btn-default v-btn" data-id="'+o.id+'" title="檢視"><i class="fa fa-eye"></i></button>'
-        + (CAN_DELETE ? ' <button class="btn btn-xs btn-danger d-btn" data-id="'+o.id+'" data-no="'+esc(o.car_no||'（未配號）')+'" title="刪除"><i class="fa fa-trash"></i></button>' : '')
+        + ((CAN_DELETE && (IS_ADMIN || (o.created_by|0)===ME_ID)) ? ' <button class="btn btn-xs btn-danger d-btn" data-id="'+o.id+'" data-no="'+esc(o.car_no||'（未配號）')+'" title="刪除"><i class="fa fa-trash"></i></button>' : '')
         + '</td>'
         + '</tr>';
     });
@@ -1258,8 +1260,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
   var CAR_FEATURES = [
     ['car_view','檢閱（查看列表與單據）'],
     ['car_create','開立新單'],
-    ['car_edit','修改單據'],
-    ['car_delete','刪除單據'],
+    ['car_edit','修改單據（限自己開立）'],
+    ['car_delete','刪除單據（限自己開立）'],
     ['car_manage_settings','管理設定（主管層級/生管/總經理/附件路徑）'],
     ['car_assign','指派回覆人（主管）'],
     ['car_reply','回覆填寫（被指派者）'],
