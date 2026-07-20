@@ -8857,7 +8857,12 @@ foreach($dCounts as $c) {
                             <div class="gear-out-row"><span class="gear-out-label" id="go-rechob-m-range-lbl">建議滾齒 M 上/下限</span>
                                 <span class="gear-output-val" id="go-rechob-m-range">—</span>
                             </div>
+                            <div class="gear-out-row" id="go-row-cust-m" style="display:none;border-top:1px dashed #a5d6b5;padding-top:5px;margin-top:2px;">
+                                <span class="gear-out-label" style="color:#6a1b9a;">客戶規格→我方球徑 M 上/下限</span>
+                                <span class="gear-output-val val-ok" id="go-cust-m-range" style="font-weight:700;color:#6a1b9a;">—</span>
+                            </div>
                         </div>
+                        <div id="go-cust-m-note" style="display:none;margin-top:4px;font-size:10px;color:#8e6aa0;line-height:1.5;"></div>
                     </div>
                 </div><!-- /right -->
             </div><!-- /two-col -->
@@ -9972,6 +9977,8 @@ foreach($dCounts as $c) {
         // 客戶數據輸出：換齒型後屬舊模式結果，一併隱藏
         var _cwRow = document.getElementById('go-row-cust-wk'); if (_cwRow) _cwRow.style.display = 'none';
         var _cxOut = document.getElementById('g-cust-x-out'); if (_cxOut) _cxOut.style.display = 'none';
+        var _cmRow = document.getElementById('go-row-cust-m'); if (_cmRow) _cmRow.style.display = 'none';
+        var _cmNote = document.getElementById('go-cust-m-note'); if (_cmNote) _cmNote.style.display = 'none';
         ['g-cust-x-up','g-cust-x-dn','g-cust-x-mid'].forEach(function(id){ gSetText(id,'—'); });
         showWarn('g-m1-warn','');
     };
@@ -10011,6 +10018,11 @@ foreach($dCounts as $c) {
 
         showWarn('g-m1-warn', warns.length ? warns.join('；') : '');
 
+        // 客戶提供 M（選填）→ 右側顯示換算為我方測棒 dp 後的跨銷值上/下限
+        var _cbI = readCustBackX(mn, z, alpha_n, beta);
+        if (_cbI && !_cbI.err) showCustMineM(_cbI, mn, z, alpha_n, beta, dp_used);
+        else hideCustOutputs();
+
         ['m2','m3','m4','m5','rx'].forEach(function(t){ var b = document.getElementById('gtab-'+t); if (b) b.disabled = false; });
         var ico = document.getElementById('gear-hdr-icon'); if (ico) { ico.className = 'fa fa-cog'; setTimeout(function(){ ico.className = 'fa fa-cog fa-spin'; }, 200); }
     }
@@ -10043,6 +10055,20 @@ foreach($dCounts as $c) {
             beta_dec = parseFloat(gVal('g-bt')) || 0;
         }
         var beta = beta_dec * PI / 180;
+
+        // 客戶提供 M 上下限（選填）→ 自動回推轉位並帶入轉位係數 x（外/內齒共用）
+        var _cb = readCustBackX(mn, z, alpha_n, beta);
+        if (_cb && _cb.err) {
+            showWarn('g-cust-warn', _cb.err); hideCustOutputs();
+        } else if (_cb) {
+            showCustBackXBreakdown(_cb);
+            showWarn('g-cust-warn', (_cb.x_mid <= -2 + 1e-6 || _cb.x_mid >= 5 - 1e-6)
+                ? '回推 x 逼近求解邊界 (−2~5)，請確認 M 值、dp 與齒型（外齒/內齒）是否正確' : '');
+            var _gx = document.getElementById('g-x');
+            if (_gx) _gx.value = fmtNum(gRound(_cb.x_mid, 5), 5);
+        } else {
+            hideCustOutputs(); showWarn('g-cust-warn', '');
+        }
 
         var x_in   = gFloat('g-x') !== null ? gFloat('g-x') : 0;  // 空白預設 0
         var tol_up = gFloat('g-tol-up') !== null ? gFloat('g-tol-up') : -0.02;
@@ -10175,6 +10201,10 @@ foreach($dCounts as $c) {
 
         showWarn('g-m1-warn', warns.length ? warns.join('；') : '');
 
+        // 客戶提供 M（選填）→ 右側顯示換算為我方球徑後的 M 上/下限
+        if (_cb && !_cb.err) showCustMineM(_cb, mn, z, alpha_n, beta, dp_used);
+        else hideCustOutputs();
+
         // 啟用 M2~M4 分頁
         ['m2','m3','m4','m5','rx'].forEach(function(t) {
             var btn = document.getElementById('gtab-'+t);
@@ -10186,51 +10216,60 @@ foreach($dCounts as $c) {
         setTimeout(function(){ if(ico) ico.className='fa fa-cog fa-spin'; },200);
     };
 
-    // ── 客戶提供數據：由跨銷徑/球徑與 M 上下限回推轉位係數 x，代入後自動計算 ──
-    window.calcCustM2X = function() {
-        var mn = gearMnToM(), z = gInt('g-z');  // CP/DP 已換算為 M
-        if (!mn || !z || mn <= 0 || z < 2) { alert('請先填寫法向模數 mn 和齒數 z（z≥2）'); return; }
+    // ── 客戶提供數據：由跨銷徑/球徑與 M 上下限回推我方轉位 x ────────────────────
+    //    回傳 null=未填 M；{err}=輸入有誤；否則含 x_up/x_dn/x_mid 與客戶球徑 custDp
+    function readCustBackX(mn, z, alpha_n, beta) {
         var M_up = gFloat('g-cust-m-up'), M_dn = gFloat('g-cust-m-dn');
-        if (M_up === null && M_dn === null) { alert('請填寫客戶 M 上限或下限（至少一項）'); return; }
-        if (M_up !== null && M_dn !== null && M_dn > M_up) { showWarn('g-cust-warn', '客戶 M 下限大於上限，請確認輸入'); return; }
-
-        // 與 calcGearM1 相同方式取得壓力角/螺旋角（不動既有欄位）
-        var an_raw = parseFloat(gVal('g-an'));
-        var an_dec = (!isNaN(an_raw) && an_raw > 0) ? an_raw : 20;
-        if (an_dec >= 90) { alert('法向壓力角需小於 90°'); return; }
-        var alpha_n = an_dec * PI / 180;
-        var beta_dec = 0;
-        var btMode = document.getElementById('g-bt-mode-dms');
-        if (btMode && btMode.checked) {
-            beta_dec = dmsToDecDeg(parseFloat(gVal('g-bt-d')) || 0, parseFloat(gVal('g-bt-m')) || 0, parseFloat(gVal('g-bt-s')) || 0);
-        } else {
-            beta_dec = parseFloat(gVal('g-bt')) || 0;
-        }
-        var beta = beta_dec * PI / 180;
-
+        if (M_up === null && M_dn === null) return null;
+        if (M_up !== null && M_dn !== null && M_dn > M_up) return { err: '客戶 M 下限大於上限，請確認輸入' };
         var dp_c = gFloat('g-cust-dp');
-        var dp_used = (dp_c && dp_c > 0) ? dp_c : gRound(1.68 * mn, 2);
+        var custDp = (dp_c && dp_c > 0) ? dp_c : gRound(1.68 * mn, 2);
         var solve = _gearInternal ? solveXfromMInt : solveXfromM;
-
-        var x_up = (M_up !== null) ? solve(M_up, mn, z, alpha_n, beta, dp_used) : null;
-        var x_dn = (M_dn !== null) ? solve(M_dn, mn, z, alpha_n, beta, dp_used) : null;
+        var x_up = (M_up !== null) ? solve(M_up, mn, z, alpha_n, beta, custDp) : null;
+        var x_dn = (M_dn !== null) ? solve(M_dn, mn, z, alpha_n, beta, custDp) : null;
         var x_mid = (x_up !== null && x_dn !== null)
-            ? solve((M_up + M_dn) / 2, mn, z, alpha_n, beta, dp_used)
+            ? solve((M_up + M_dn) / 2, mn, z, alpha_n, beta, custDp)
             : (x_up !== null ? x_up : x_dn);
-
-        var warns = [];
-        if (x_mid <= -2 + 1e-6 || x_mid >= 5 - 1e-6) warns.push('回推 x 逼近求解邊界 (−2~5)，請確認 M 值、dp 與齒型（外齒/內齒）是否正確');
-
-        gSetText('g-cust-x-up', x_up !== null ? fmtNum(gRound(x_up, 5), 5) : '—');
-        gSetText('g-cust-x-dn', x_dn !== null ? fmtNum(gRound(x_dn, 5), 5) : '—');
-        gSetText('g-cust-x-mid', fmtNum(gRound(x_mid, 5), 5));
+        return { M_up:M_up, M_dn:M_dn, custDp:custDp, x_up:x_up, x_dn:x_dn, x_mid:x_mid };
+    }
+    // 顯示「回推 x 上/下/中值」明細
+    function showCustBackXBreakdown(cb) {
+        gSetText('g-cust-x-up', cb.x_up !== null ? fmtNum(gRound(cb.x_up, 5), 5) : '—');
+        gSetText('g-cust-x-dn', cb.x_dn !== null ? fmtNum(gRound(cb.x_dn, 5), 5) : '—');
+        gSetText('g-cust-x-mid', fmtNum(gRound(cb.x_mid, 5), 5));
         var box = document.getElementById('g-cust-x-out'); if (box) box.style.display = 'block';
-        showWarn('g-cust-warn', warns.length ? warns.join('；') : '');
+    }
+    // 隱藏客戶回推明細與右側換算列
+    function hideCustOutputs() {
+        var b = document.getElementById('g-cust-x-out'); if (b) b.style.display = 'none';
+        var r = document.getElementById('go-row-cust-m'); if (r) r.style.display = 'none';
+        var n = document.getElementById('go-cust-m-note'); if (n) n.style.display = 'none';
+    }
+    // 右側顯示「客戶規格→我方球徑 M 上/下限」：以客戶回推 x 套用我方球徑重算 M
+    function showCustMineM(cb, mn, z, alpha_n, beta, ourDp) {
+        var mfn = _gearInternal ? calcMInt : calcM;
+        var Mup = (cb.x_up !== null) ? mfn(cb.x_up, mn, z, alpha_n, beta, ourDp) : null;
+        var Mdn = (cb.x_dn !== null) ? mfn(cb.x_dn, mn, z, alpha_n, beta, ourDp) : null;
+        var upStr = (Mup === null) ? '—' : (typeof Mup === 'string' ? Mup : fmtNum(Mup, 5));
+        var dnStr = (Mdn === null) ? '—' : (typeof Mdn === 'string' ? Mdn : fmtNum(Mdn, 5));
+        setOut('go-cust-m-range', upStr + '  /  ' + dnStr, 'val-ok');
+        var el = document.getElementById('go-cust-m-range'); if (el) el.style.color = '#6a1b9a';
+        var row = document.getElementById('go-row-cust-m'); if (row) row.style.display = '';
+        var note = document.getElementById('go-cust-m-note');
+        if (note) {
+            note.textContent = '依客戶球徑 dp=' + fmtNum(cb.custDp, 3) + ' 回推轉位 → 換用我方球徑 dp='
+                + fmtNum(ourDp, 3) + ' 的' + (_gearInternal ? '跨銷' : '跨珠') + '值';
+            note.style.display = 'block';
+        }
+    }
 
-        // 自動代入轉位係數 x（中值）並直接執行基本計算，方便直接轉換
-        var gx = document.getElementById('g-x');
-        if (gx) gx.value = fmtNum(gRound(x_mid, 5), 5);
-        calcGearM1();
+    // ── 客戶提供數據：由跨銷徑/球徑與 M 上下限回推轉位係數 x，代入後自動計算 ──
+    //    計算齒輪本身已會自動回推帶入，此按鈕為便捷入口（先驗證有填 M 再觸發計算）
+    window.calcCustM2X = function() {
+        if (gFloat('g-cust-m-up') === null && gFloat('g-cust-m-dn') === null) {
+            alert('請填寫客戶 M 上限或下限（至少一項）'); return;
+        }
+        calcGearM1();  // calcGearM1 內含自動回推轉位、帶入 x、右側顯示我方球徑 M 換算
     };
 
     // ══ 模組二：跨齒厚 → 跨珠值 ════════════════════════════════════════════
@@ -10645,7 +10684,7 @@ foreach($dCounts as $c) {
         // 還原法向壓力角預設按鈕
         document.querySelectorAll('.gear-preset-btn').forEach(function(b){ b.classList.remove('active'); });
         ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-dp-used',
-         'go-allow-info','go-rechob-wk','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range',
+         'go-allow-info','go-rechob-wk','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range','go-cust-m-range',
          // M2~M5、跨齒轉換 各分頁計算結果
          'm2-m-up','m2-m-dn','m2-wk-up-chk','m2-wk-dn-chk',
          'm3-k-out','m3-x','m3-wk','m3-wk-tol','m3-wk-up','m3-wk-dn',
@@ -10660,6 +10699,8 @@ foreach($dCounts as $c) {
         // 隱藏客戶數據相關輸出列
         var custWkRow = document.getElementById('go-row-cust-wk'); if (custWkRow) custWkRow.style.display = 'none';
         var custXOut = document.getElementById('g-cust-x-out'); if (custXOut) custXOut.style.display = 'none';
+        var custMRow = document.getElementById('go-row-cust-m'); if (custMRow) custMRow.style.display = 'none';
+        var custMNote = document.getElementById('go-cust-m-note'); if (custMNote) custMNote.style.display = 'none';
         showWarn('g-m1-warn','');
         _baseParams = null;
         setGearMode('ext'); // 清除後一律回到預設「外齒」模式
