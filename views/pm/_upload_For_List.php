@@ -3328,6 +3328,15 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
                  processing_state, ps, outsource_date, transfer_no, transfer_changed_at, Created_By, Created_At)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'ing', ?, ?, ?, ?, ?, ?)");
 
+        // Phase C：當天移轉順手把「有發包單價(>0)」的列寫進 bom_ing_transfer_log（用加工單號當鍵），
+        // 讓成本判斷早一個月準；月結檔之後校正最終價。單價規則：現有 price 空/0 才填（daily 不覆蓋既有非零，
+        // 月結才是權威覆蓋層）。movement 欄位僅 insert 時建、重複時不動。
+        $priceStmt = $db->prepare("INSERT INTO bom_ing_transfer_log
+                (transfer_no, bom, bom_sn, maker_to, sqty, transfer_date, price, changed_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                ON DUPLICATE KEY UPDATE price = IF(price IS NULL OR price = 0, VALUES(price), price)");
+        $pricedCount = 0;
+
         $inserted = 0; $written = 0; $skippedDup = 0; $skippedStale = 0;
         $staleSamples = [];
         foreach ($rows as $row) {
@@ -3354,10 +3363,19 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
                 ]);
                 $written++;
             } elseif ($action === 'skip_dup') {
-                $skippedDup++;   // 同加工單號、已匯入過：bom_ing 不動（Phase C 另補價格）
+                $skippedDup++;   // 同加工單號、已匯入過：bom_ing 不動（價格仍下方補）
             } else { // skip_stale
                 $skippedStale++;
                 if (count($staleSamples) < 5) $staleSamples[] = $row['bom'] . '-' . $row['bom_sn'];
+            }
+
+            // Phase C：有發包單價就寫進 transfer_log（與 bom_ing 動作無關，價格屬於該筆移轉事件）
+            if ($row['transfer_no'] !== null && !empty($row['unit_price']) && $row['unit_price'] > 0) {
+                $priceStmt->execute([
+                    $row['transfer_no'], $row['bom'], $row['bom_sn'], $row['maker_id_no'],
+                    $row['sqty'], substr($row['move_date'], 0, 10), $row['unit_price'], $userId,
+                ]);
+                $pricedCount++;
             }
         }
 
@@ -3367,6 +3385,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
         $msg = "移轉匯入完成！新增 {$inserted} 筆、覆蓋更新 {$written} 筆";
         if ($skippedDup > 0)   $msg .= "、重複跳過 {$skippedDup} 筆";
         if ($skippedStale > 0) $msg .= "、舊檔保護跳過 {$skippedStale} 筆" . (!empty($staleSamples) ? '（例：' . implode('、', $staleSamples) . '）' : '');
+        if ($pricedCount > 0)  $msg .= "；發包單價寫入 {$pricedCount} 筆";
         if (!empty($unknownChangers)) {
             $msg .= "。⚠ 異動人員 [" . implode('、', array_keys($unknownChangers)) . "] 查無此人，以預設人員(99991)記錄";
         }
