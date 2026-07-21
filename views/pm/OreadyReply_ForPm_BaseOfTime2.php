@@ -13725,6 +13725,7 @@ echo "</script>\n";
                                             <a><input type="button" id="btn-delete-bom" class="btn btn-xs btn-danger" value="刪除BOM" style="margin-left: 5px;" onclick="promptDeleteBom()"></a>
                                             <?php endif; ?>
                                             <a><input type="button" id="btn-pm-daily-report" class="btn btn-xs btn-primary" value="生管每日報表" style="margin-left: 70px;" title="匯出Excel：QC待驗逾2天者一分頁，其餘未回廠(ing)依廠商分頁" onclick="window.location.href='pm_daily_report_export.php'"></a>
+                                            <a><input type="button" id="btn-capacity-gantt" class="btn btn-xs btn-primary" value="外包產能" style="margin-left: 5px; background:#5a3d8a; border-color:#4a3072;" title="外包產能甘特圖：依廠商/製程看自訂期間內的移轉→回廠重疊(產能排擠)狀態" onclick="openCapacityGantt()"></a>
                                         </h2>
                                         <ul class="nav navbar-right panel_toolbox">
                                             <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a>
@@ -15513,6 +15514,7 @@ echo "</script>\n";
 
 })();
 </script>
+<script src="capacity_gantt.js?v=<?=$_av?>"></script>
 </body>
 
 </html>
