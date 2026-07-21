@@ -4976,16 +4976,22 @@ async function doSave() {
     toast('已送出下載：' + name);
 }
 function doPrint() {
-    // 列印一律用 JPEG：批圖底圖多為照片，PNG×2 的 dataURL 常達數 MB，
-    // 生成與列印預覽都很慢。列印透過瀏覽器輸出，JPEG 已足夠且大幅加快。
-    // （無損 PNG 需求請走「另存圖片」，仍依格式下拉決定）
-    const url = buildExportURL('jpeg');
+    // 列印一律用 PNG（無損）：文字/線條邊緣才不會被 JPEG 壓縮糊掉。
+    // 但 PNG×2 的 base64 常達數 MB，過去用 document.write 塞進列印視窗會很卡；
+    // 這裡改用 Blob 網址（URL.createObjectURL），瀏覽器直接讀二進位、不必解析巨大 base64，
+    // 兼顧「清晰（PNG）」與「快（Blob）」。列印完成後再釋放網址。
+    const url = buildExportURL('png');
+    const blob = dataURLtoBlob(url);
+    const objUrl = URL.createObjectURL(blob);
     const w = window.open('', '_blank');
-    if (!w) { toast('列印視窗被瀏覽器攔截，請允許彈出視窗'); return; }
+    if (!w) { URL.revokeObjectURL(objUrl); toast('列印視窗被瀏覽器攔截，請允許彈出視窗'); return; }
     w.document.write('<!DOCTYPE html><html><head><title>列印 - 批圖</title>' +
         '<style>html,body{margin:0;padding:0;}img{max-width:100%;}@media print{img{width:100%;}}</style>' +
-        '</head><body><img src="' + url + '" onload="setTimeout(function(){window.focus();window.print();},150)"></body></html>');
+        '</head><body><img src="' + objUrl + '" onload="setTimeout(function(){window.focus();window.print();},150)"></body></html>');
     w.document.close();
+    const revoke = function () { URL.revokeObjectURL(objUrl); };
+    try { w.addEventListener('afterprint', function () { setTimeout(revoke, 1000); }); } catch (e) {}
+    setTimeout(revoke, 120000);   // 保底：afterprint 未觸發也會釋放
     hideModal('export-modal');
 }
 
