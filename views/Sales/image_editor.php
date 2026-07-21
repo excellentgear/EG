@@ -5044,38 +5044,59 @@ function doPrintPDF() {
     let settled = false;
     const watchdog = setTimeout(function () {
         if (settled) return; settled = true;
-        toast('PDF 產生逾時，改用快速列印'); doPrint();
+        toast('PDF 產生逾時，改用快速列印'); printFallback();
     }, 10000);
     try {
         doc.getBlob(function (blob) {
             if (settled) return; settled = true; clearTimeout(watchdog);
-            if (!blob) { toast('PDF 產生失敗，改用快速列印'); doPrint(); return; }
+            if (!blob) { toast('PDF 產生失敗，改用快速列印'); printFallback(); return; }
             try { printPdfBlob(blob); }
-            catch (e) { toast('列印 PDF 失敗，改用快速列印'); doPrint(); }
+            catch (e) { toast('列印 PDF 失敗，改用快速列印'); printFallback(); }
         });
     } catch (err) {
         if (settled) return; settled = true; clearTimeout(watchdog);
-        toast('產生列印 PDF 失敗，改用快速列印'); doPrint();
+        toast('產生列印 PDF 失敗，改用快速列印'); printFallback();
     }
 }
 
-/* 把 pdfmake 產生的 PDF Blob 以隱藏 iframe 送印：不動到編輯畫面、不會被彈窗攔截。 */
-function printPdfBlob(blob) {
-    const objUrl = URL.createObjectURL(blob);
+// 隱藏 iframe 建立小工具：不呼叫 window.open，所以在 bom_viewer 用 window.open 開出的彈出視窗裡
+// 也不會被瀏覽器攔截（彈窗內再開彈窗、或逾時後失去使用者手勢，最容易被擋而變成「按了沒反應」）。
+function makeHiddenPrintFrame(cleanup) {
     const ifr = document.createElement('iframe');
     ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
-    ifr.src = objUrl;
-    ifr.onload = function () {
-        setTimeout(function () {
-            try { ifr.contentWindow.focus(); ifr.contentWindow.print(); } catch (e) {}
-        }, 200);
-    };
     document.body.appendChild(ifr);
-    // 保底清理：afterprint 未必觸發，逾時後釋放網址並移除 iframe（0 尺寸，避免重複列印累積）
-    setTimeout(function () {
-        URL.revokeObjectURL(objUrl);
+    setTimeout(function () {                 // 保底清理：afterprint 未必觸發
+        if (cleanup) cleanup();
         if (ifr.parentNode) ifr.parentNode.removeChild(ifr);
     }, 120000);
+    return ifr;
+}
+
+/* 把 pdfmake 產生的 PDF Blob 以隱藏 iframe 送印：PDF 載入完成(onload)才送印。 */
+function printPdfBlob(blob) {
+    const objUrl = URL.createObjectURL(blob);
+    const ifr = makeHiddenPrintFrame(function () { URL.revokeObjectURL(objUrl); });
+    ifr.onload = function () {
+        setTimeout(function () { try { ifr.contentWindow.focus(); ifr.contentWindow.print(); } catch (e) {} }, 200);
+    };
+    ifr.src = objUrl;
+}
+
+/* 後備列印：把畫布直接輸出成 PNG，一樣走隱藏 iframe（不呼叫 window.open），確保彈出視窗內也印得出來。
+   靠 <img onload> 等圖真的載入完才送印，避免印出空白。 */
+function printFallback() {
+    let url;
+    try { url = buildExportURL('png'); }
+    catch (e) { toast('列印失敗：畫布轉圖發生問題（F12 有詳情）'); return; }
+    const blob = dataURLtoBlob(url);
+    const objUrl = URL.createObjectURL(blob);
+    const ifr = makeHiddenPrintFrame(function () { URL.revokeObjectURL(objUrl); });
+    const d = ifr.contentWindow.document;
+    d.open();
+    d.write('<!DOCTYPE html><html><head><title>列印 - 批圖</title>' +
+        '<style>html,body{margin:0;padding:0;}img{max-width:100%;}@media print{img{width:100%;}}</style>' +
+        '</head><body><img src="' + objUrl + '" onload="setTimeout(function(){window.focus();window.print();},150)"></body></html>');
+    d.close();
 }
 
 /* 清晰列印：以向量 SVG 輸出。文字/線條在 SVG 內仍是向量，列印時瀏覽器直接以印表機解析度描繪，
