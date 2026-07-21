@@ -71,6 +71,8 @@ $asCaps = [
     'download' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_download', $asFeatures, true),
     // 免附件補登：只認明確功能碼，管理員不自動豁免（維持改版必附申請單的管控）
     'no_attach' => in_array('asdoc_no_attach', $asFeatures, true),
+    // 管理員（系統角色或頁面A權）：批次補建版本/程序書快速建檔 專用
+    'admin' => $asIsRoleAdmin || strpos($pp,'A')!==false,
 ];
 
 if (!$asCaps['view']) {
@@ -143,6 +145,9 @@ if ($deptPerm === 'R') {
                   <?php if ($asCaps['create']): ?>
                   <button class="btn btn-primary btn-sm" id="btnAddDoc"><i class="fa fa-plus"></i> 新增文件</button>
                   <button class="btn btn-info btn-sm" id="btnBatchAdd"><i class="fa fa-files-o"></i> 批次上傳</button>
+                  <?php endif; ?>
+                  <?php if ($asCaps['admin']): ?>
+                  <button class="btn btn-success btn-sm" id="btnFullCreate" title="一次建立程序書＋全部歷史版本＋底下表單（前期補件用，免申請單）"><i class="fa fa-magic"></i> 程序書快速建檔</button>
                   <?php endif; ?>
                   <?php if ($asCaps['settings']): ?>
                   <button class="btn btn-default btn-sm" id="btnTags"><i class="fa fa-tags"></i> 標籤 / 分類管理</button>
@@ -292,6 +297,90 @@ if ($deptPerm === 'R') {
           <button type="submit" class="btn btn-primary">儲存</button>
         </div>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ 批次補建版本 Modal（管理員；既有文件一次補多版） ═════════ -->
+<div class="modal fade" id="verBatchModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" style="width:94%;max-width:1150px;" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title">批次補建版本 － <span id="vb_doc_name"></span></h4>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="vb_doc_id">
+        <p class="text-muted" style="font-size:12px;">由上到下＝由舊到新依序建立（版本號必須遞增），最後一列會成為目前版本。前期補件用：免制修申請單；檔案可附可不附（之後可在歷史版本「補檔」）。</p>
+        <div class="table-responsive">
+          <table class="table table-condensed table-bordered" style="font-size:12px;">
+            <thead><tr><th style="width:10%;">版本 *</th><th style="width:9%;">狀況</th><th style="width:13%;">修訂日期 *</th><th style="width:12%;">頁次</th><th>摘要</th><th style="width:20%;">文件檔（可不附）</th><th style="width:36px;"></th></tr></thead>
+            <tbody id="vbRows"></tbody>
+          </table>
+        </div>
+        <button class="btn btn-sm btn-success" id="vbAddRow"><i class="fa fa-plus"></i> 加一版</button>
+        <div id="vbResult"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="vbSubmit"><i class="fa fa-upload"></i> 依序建立</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ 程序書快速建檔 Modal（管理員；文件＋全部版本＋底下表單一次建） ═════════ -->
+<div class="modal fade" id="fullModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" style="width:96%;max-width:1250px;" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-magic"></i> 程序書快速建檔（前期補件用，免申請單）</h4>
+      </div>
+      <div class="modal-body">
+        <h4 style="margin-top:0;">1️⃣ 文件基本資料</h4>
+        <div class="row">
+          <div class="form-group col-md-3"><label>文件編號 *</label>
+            <div class="input-group">
+              <input type="text" class="form-control" id="fc_doc_no">
+              <span class="input-group-btn"><button type="button" class="btn btn-default" id="fcAutoNo" title="依類別+部門自動產生"><i class="fa fa-magic"></i></button></span>
+            </div>
+          </div>
+          <div class="form-group col-md-4"><label>文件名稱 *</label><input type="text" class="form-control" id="fc_doc_name"></div>
+          <div class="form-group col-md-2"><label>文件類別</label>
+            <select class="form-control" id="fc_doc_type"><option>手冊</option><option selected>程序</option><option>標準書</option></select>
+          </div>
+          <div class="form-group col-md-3"><label>所屬部門</label><select class="form-control" id="fc_dept"><option value="">跨部門</option></select></div>
+        </div>
+        <select class="form-control input-sm" id="fc_code_sel" style="display:none;max-width:420px;margin-bottom:8px;"></select>
+
+        <h4>2️⃣ 全部版本（由舊到新）</h4>
+        <div class="table-responsive">
+          <table class="table table-condensed table-bordered" style="font-size:12px;">
+            <thead><tr><th style="width:10%;">版本 *</th><th style="width:9%;">狀況</th><th style="width:13%;">修訂日期 *</th><th style="width:12%;">頁次</th><th>摘要</th><th style="width:20%;">文件檔（可不附）</th><th style="width:36px;"></th></tr></thead>
+            <tbody id="fcVerRows"></tbody>
+          </table>
+        </div>
+        <button class="btn btn-sm btn-success" id="fcVerAddRow"><i class="fa fa-plus"></i> 加一版</button>
+
+        <h4 style="margin-top:15px;">3️⃣ 底下表單（每張表單一個版本；檔名如「2-GM-02-01-名稱」會自動拆解）</h4>
+        <div class="form-inline" style="margin-bottom:6px;">
+          <input type="file" id="fc_form_files" multiple>
+          <label style="font-weight:normal;margin-left:10px;">共同日期：</label>
+          <input type="date" class="form-control input-sm" id="fc_form_date" max="9999-12-31">
+        </div>
+        <div class="table-responsive">
+          <table class="table table-condensed table-bordered" style="font-size:12px;">
+            <thead><tr><th style="width:14%;">檔名</th><th style="width:13%;">編號 *</th><th style="width:20%;">名稱 *</th><th style="width:8%;">版本</th><th style="width:13%;">日期 *</th><th>摘要</th></tr></thead>
+            <tbody id="fcFormRows"></tbody>
+          </table>
+        </div>
+        <div id="fcResult"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="fcSubmit"><i class="fa fa-magic"></i> 一次建立</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1084,8 +1173,10 @@ $(function(){
   });
 
   // ── 歷史版本 ──
-  $('#docTableBody').on('click','.op-hist', function(){
-    const id=$(this).data('id'); $('#his_doc_name').text($(this).data('name'));
+  let curHistDocId = 0, curHistDocName = '';
+  function openHistory(id, name){
+    curHistDocId = id; curHistDocName = name;
+    $('#his_doc_name').text(name);
     $.getJSON(API+'?action=get_document',{id:id}, r=>{
       if(r.status!=='success'){ alert(r.message); return; }
       const tb=$('#historyBody').empty();
@@ -1094,11 +1185,16 @@ $(function(){
         if(v.file_name){
           dl = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
           if(canDL) dl += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${v.id}">下載</a>`;
+        } else if(canU){
+          // 補登缺檔 → 可補上傳（只允許補空缺，不可替換）
+          dl = `<label class="btn btn-xs btn-primary" style="margin:0;" title="補上傳此版本的文件檔">補檔<input type="file" class="ver-attach" data-ver="${v.id}" data-which="file" style="display:none;"></label>`;
         }
         let af = '<span class="text-muted">無</span>';
         if(v.apply_form_file_name){
           af = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=apply&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
           if(canDL) af += `<a class="btn btn-xs btn-default" href="${API}?action=download&which=apply&version_id=${v.id}">下載</a>`;
+        } else if(canU){
+          af = `<label class="btn btn-xs btn-default" style="margin:0;" title="補上傳此版本的制修申請單">補申請單<input type="file" class="ver-attach" data-ver="${v.id}" data-which="apply" style="display:none;"></label>`;
         }
         tb.append(`<tr>
           <td><span class="label label-info">${esc(v.version)}</span></td>
@@ -1113,8 +1209,181 @@ $(function(){
         </tr>`);
       });
       if((r.data.versions||[]).length===0) tb.append('<tr><td colspan="10" class="text-center text-muted">無版本</td></tr>');
+      // 管理員：批次補建版本入口
+      $('#hisBatchBtn').remove();
+      if(window.asPerm.admin){
+        $('#historyModal .modal-footer').prepend(`<button type="button" class="btn btn-warning pull-left" id="hisBatchBtn"><i class="fa fa-plus-square"></i> 批次補建版本（管理員）</button>`);
+      }
       $('#historyModal').modal('show');
     });
+  }
+  $('#docTableBody').on('click','.op-hist', function(){
+    openHistory($(this).data('id'), $(this).data('name'));
+  });
+
+  // 版本補檔：選檔即上傳（只允許補空缺）
+  $(document).on('change','.ver-attach', function(){
+    const f = this.files[0]; if(!f) return;
+    const fd = new FormData();
+    fd.append('version_id', $(this).data('ver'));
+    fd.append('which', $(this).data('which'));
+    fd.append('file', f);
+    NProgress.start();
+    $.ajax({url:API+'?action=version_attach_file', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+     .done(r=>{
+        if(r.status==='success'){ showToast('補檔完成'); openHistory(curHistDocId, curHistDocName); loadDocs(); }
+        else alert(r.message||'失敗');
+     })
+     .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
+  });
+
+  // ══ 批次補建版本（管理員）══
+  function vbRowHtml(){
+    return `<tr>
+      <td><input type="text" class="form-control input-sm vb-ver" placeholder="0.0 / A"></td>
+      <td><select class="form-control input-sm vb-st"><option>制訂</option><option selected>修正</option><option>增發</option><option>補發</option></select></td>
+      <td><input type="date" class="form-control input-sm vb-date" max="9999-12-31"></td>
+      <td><input type="text" class="form-control input-sm vb-pages"></td>
+      <td><input type="text" class="form-control input-sm vb-sum"></td>
+      <td><input type="file" class="vb-file"></td>
+      <td class="text-center" style="vertical-align:middle;"><a href="javascript:void(0)" class="vb-del text-danger"><i class="fa fa-trash"></i></a></td>
+    </tr>`;
+  }
+  $(document).on('click','#hisBatchBtn', function(){
+    $('#vb_doc_id').val(curHistDocId);
+    $('#vb_doc_name').text(curHistDocName);
+    $('#vbRows').empty().append(vbRowHtml());
+    $('#vbResult').empty();
+    $('#historyModal').modal('hide');
+    $('#verBatchModal').modal('show');
+  });
+  $('#vbAddRow').on('click', ()=>$('#vbRows').append(vbRowHtml()));
+  $(document).on('click','.vb-del', function(){ $(this).closest('tr').remove(); });
+  $('#vbSubmit').on('click', function(){
+    const rows=[]; const files=[]; let bad=0;
+    $('#vbRows tr').each(function(){
+      const ver=$(this).find('.vb-ver').val().trim(), dt=$(this).find('.vb-date').val();
+      if(!ver||!dt) bad++;
+      rows.push({version:ver, change_status:$(this).find('.vb-st').val(),
+        revised_date:dt, revised_pages:$(this).find('.vb-pages').val().trim(),
+        revised_summary:$(this).find('.vb-sum').val().trim()});
+      files.push($(this).find('.vb-file')[0].files[0]||null);
+    });
+    if(!rows.length){ alert('請至少加一版'); return; }
+    if(bad){ alert(`有 ${bad} 列缺少版本號或日期`); return; }
+    const fd=new FormData();
+    fd.append('doc_id', $('#vb_doc_id').val());
+    fd.append('rows', JSON.stringify(rows));
+    files.forEach((f,i)=>{ if(f) fd.append('file_'+i, f); });
+    const $b=$(this).prop('disabled',true); NProgress.start();
+    $.ajax({url:API+'?action=add_versions_batch', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+     .done(r=>{
+        if(r.status==='success'){
+          $('#verBatchModal').modal('hide');
+          showToast(`已依序建立 ${r.count} 個版本（目前版本 ${r.current_version}）`);
+          loadDocs();
+        } else { $('#vbResult').html(`<div class="alert alert-danger" style="margin-top:8px;">${esc(r.message)}（全部未寫入，修正後重送）</div>`); }
+     })
+     .fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $b.prop('disabled',false); });
+  });
+
+  // ══ 程序書快速建檔（管理員：文件＋全部版本＋底下表單一次建）══
+  $('#btnFullCreate').on('click', function(){
+    $('#fc_doc_no').val(''); $('#fc_doc_name').val(''); $('#fc_doc_type').val('程序');
+    $('#fc_dept').html('<option value="">跨部門</option>'+META.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
+    $('#fc_code_sel').hide().empty();
+    $('#fcVerRows').empty().append(vbRowHtml());
+    $('#fc_form_files').val(''); $('#fcFormRows').empty(); $('#fc_form_date').val('');
+    $('#fcResult').empty();
+    $('#fullModal').modal('show');
+  });
+  $('#fcVerAddRow').on('click', ()=>$('#fcVerRows').append(vbRowHtml()));
+  // 自動編號（依類別對應階級＋部門；多組代碼顯示選擇器）
+  function fcSuggest(){
+    const lvMap = {'手冊':'一階','程序':'二階','標準書':'三階'};
+    const p = { level: lvMap[$('#fc_doc_type').val()]||'', department_id: $('#fc_dept').val() };
+    const selCode = $('#fc_code_sel').is(':visible') ? $('#fc_code_sel').val() : '';
+    if(selCode) p.code = selCode;
+    if(!p.level || !p.department_id){ alert('請先選類別與部門'); return; }
+    $.getJSON(API+'?action=suggest_doc_no', p, r=>{
+      if(r.status==='success'){ if(!selCode) $('#fc_code_sel').hide().empty(); $('#fc_doc_no').val(r.doc_no); }
+      else if(r.status==='choose'){
+        const sel=$('#fc_code_sel').empty().show();
+        (r.options||[]).forEach(o=>sel.append(`<option value="${esc(o.code)}" data-no="${esc(o.doc_no)}">${esc(o.code)}${o.label?'（'+esc(o.label)+'）':''} → ${esc(o.doc_no)}</option>`));
+        $('#fc_doc_no').val(sel.find('option:first').data('no')||'');
+      } else alert(r.message||'無法產生編號');
+    });
+  }
+  $('#fcAutoNo').on('click', fcSuggest);
+  $('#fc_code_sel').on('change', function(){ $('#fc_doc_no').val($(this).find('option:selected').data('no')||''); });
+  // 表單檔案選取 → 逐列（檔名拆解優先；編號拆不出時 = 程序書編號-01 遞增）
+  $('#fc_form_files').on('change', function(){
+    const tb=$('#fcFormRows').empty();
+    const d = $('#fc_form_date').val()||'';
+    const baseNo = $('#fc_doc_no').val().trim();
+    let seq = 1;
+    for(let i=0;i<this.files.length;i++){
+      const fn = this.files[i].name;
+      const nameNoExt = fn.replace(/\.[^.]+$/,'');
+      const parsed = parseDocFilename(nameNoExt);
+      const no = parsed ? parsed.doc_no : (baseNo ? baseNo+'-'+String(seq++).padStart(2,'0') : '');
+      const nm = parsed ? parsed.doc_name : nameNoExt;
+      tb.append(`<tr>
+        <td style="vertical-align:middle;">${esc(fn)}${parsed?' <i class="fa fa-magic text-success" title="已由檔名拆解"></i>':''}</td>
+        <td><input type="text" class="form-control input-sm fcf-no" value="${esc(no)}"></td>
+        <td><input type="text" class="form-control input-sm fcf-name" value="${esc(nm)}"></td>
+        <td><input type="text" class="form-control input-sm fcf-ver" placeholder="可空"></td>
+        <td><input type="date" class="form-control input-sm fcf-date" value="${d}" max="9999-12-31"></td>
+        <td><input type="text" class="form-control input-sm fcf-sum" placeholder="如：新訂"></td>
+      </tr>`);
+    }
+  });
+  $('#fc_form_date').on('change', function(){ $('.fcf-date').val($(this).val()); });
+  $('#fcSubmit').on('click', function(){
+    const docNo=$('#fc_doc_no').val().trim(), docName=$('#fc_doc_name').val().trim();
+    if(!docNo||!docName){ alert('文件編號與名稱必填'); return; }
+    const vers=[]; const vfiles=[]; let badV=0;
+    $('#fcVerRows tr').each(function(){
+      const ver=$(this).find('.vb-ver').val().trim(), dt=$(this).find('.vb-date').val();
+      if(!ver||!dt) badV++;
+      vers.push({version:ver, change_status:$(this).find('.vb-st').val(),
+        revised_date:dt, revised_pages:$(this).find('.vb-pages').val().trim(),
+        revised_summary:$(this).find('.vb-sum').val().trim()});
+      vfiles.push($(this).find('.vb-file')[0].files[0]||null);
+    });
+    if(!vers.length){ alert('至少要有一個版本'); return; }
+    if(badV){ alert(`版本有 ${badV} 列缺少版本號或日期`); return; }
+    const forms=[]; const ffiles=$('#fc_form_files')[0].files; let badF=0;
+    $('#fcFormRows tr').each(function(){
+      const no=$(this).find('.fcf-no').val().trim(), nm=$(this).find('.fcf-name').val().trim(), dt=$(this).find('.fcf-date').val();
+      if(!no||!nm||!dt) badF++;
+      forms.push({doc_no:no, doc_name:nm, version:$(this).find('.fcf-ver').val().trim(),
+        revised_date:dt, revised_summary:$(this).find('.fcf-sum').val().trim()});
+    });
+    if(badF){ alert(`表單有 ${badF} 列缺少編號/名稱/日期`); return; }
+    const fd=new FormData();
+    fd.append('doc_no', docNo); fd.append('doc_name', docName);
+    fd.append('doc_type', $('#fc_doc_type').val());
+    fd.append('doc_level', {'手冊':'一階','程序':'二階','標準書':'三階'}[$('#fc_doc_type').val()]||'二階');
+    fd.append('department_id', $('#fc_dept').val());
+    fd.append('versions', JSON.stringify(vers));
+    fd.append('forms', JSON.stringify(forms));
+    vfiles.forEach((f,i)=>{ if(f) fd.append('vfile_'+i, f); });
+    for(let i=0;i<ffiles.length;i++) fd.append('ffile_'+i, ffiles[i]);
+    const $b=$(this).prop('disabled',true); NProgress.start();
+    $.ajax({url:API+'?action=create_document_full', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+     .done(r=>{
+        if(r.status==='success'){
+          $('#fullModal').modal('hide');
+          showToast(`已建立 ${r.doc_no}：${r.versions} 個版本＋${r.forms} 張表單`);
+          // 直接進入該程序書的表單檢視
+          $('#searchKw').val(''); $('#filterLevel').val(''); $('#filterDept').val('');
+          activeTagId = 0; renderTagFilter();
+          activeParentId = r.doc_id; activeParentNo = r.doc_no;
+          loadMeta(loadDocs);
+        } else { $('#fcResult').html(`<div class="alert alert-danger" style="margin-top:8px;">${esc(r.message)}（整批未寫入，修正後重送）</div>`); }
+     })
+     .fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $b.prop('disabled',false); });
   });
 
   // ── 刪除 / 還原 ──

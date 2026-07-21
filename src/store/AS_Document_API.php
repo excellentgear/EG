@@ -248,6 +248,8 @@ $asGate = [
     'form_records_list'=>'view', 'form_records_upload'=>'create', 'form_record_delete'=>'delete',
     'set_linked_module'=>'settings',
     'phrase_add'=>'update', 'phrase_delete'=>'update',
+    'version_attach_file'=>'update',
+    // add_versions_batch 於 case 內另行檢查（僅限管理員）
     // form_record_download 於 case 內依 inline 分流（預覽=view / 原檔=download）
 ];
 if (!$currentUserId) {
@@ -339,7 +341,7 @@ case 'list_documents':
             LEFT JOIN as_document_version v ON v.id = d.current_version_id
             LEFT JOIN as_document pd ON pd.id = d.parent_doc_id
             $wsql
-            ORDER BY d.doc_level, dep.name, d.doc_no";
+            ORDER BY d.doc_no ASC";
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
     $docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -1015,6 +1017,202 @@ case 'form_record_download':
     }
     asStream($dir.DIRECTORY_SEPARATOR.$rec['file_name'], $rec['original_name'] ?: $rec['file_name'], $inline);
     break;
+
+// ══════════════ 版本補檔（補登資料忘了附檔時；只允許補「空缺」，不可替換既有檔案） ══════════════
+case 'version_attach_file':
+    $verId = (int)($_POST['version_id'] ?? 0);
+    $which = ($_POST['which'] ?? 'file') === 'apply' ? 'apply' : 'file';
+    if ($verId<=0) jout(['status'=>'error','message'=>'缺少版本 ID']);
+    $st = $db->prepare("SELECT * FROM as_document_version WHERE id=?");
+    $st->execute([$verId]);
+    $v = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$v) jout(['status'=>'error','message'=>'版本不存在']);
+    $col  = $which==='apply' ? 'apply_form_file_name' : 'file_name';
+    $colO = $which==='apply' ? 'apply_form_original_name' : 'original_name';
+    if (!empty($v[$col])) jout(['status'=>'error','message'=>'此版本已有檔案，不可替換（版本檔案為發行紀錄）；內容有誤請走「改版」']);
+    if (!isset($_FILES['file']) || $_FILES['file']['error']!==UPLOAD_ERR_OK) jout(['status'=>'error','message'=>'請選擇檔案']);
+    $ext = asSafeExt($_FILES['file']['name']);
+    if (!$ext) jout(['status'=>'error','message'=>'不允許此檔案類型']);
+    $dir = asDocDir($db, (int)$v['doc_id']);
+    if (!is_dir($dir) && !mkdir($dir, 0777, true)) jout(['status'=>'error','message'=>'無法建立資料夾（NAS 未連線？）']);
+    $fname = asMakeName($ext);
+    if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$fname)) jout(['status'=>'error','message'=>'檔案寫入失敗']);
+    $db->prepare("UPDATE as_document_version SET $col=?, $colO=? WHERE id=?")
+       ->execute([$fname, basename($_FILES['file']['name']), $verId]);
+    jout(['status'=>'success']);
+
+// ══════════════ 批次補建版本（管理員限定；前期補件用，免制修申請單，逐列可附檔） ══════════════
+case 'add_versions_batch':
+    if (!($asIsRoleAdmin || strpos($asPagePerm,'A')!==false))
+        jout(['status'=>'error','message'=>'此功能僅限管理員使用']);
+    $docId = (int)($_POST['doc_id'] ?? 0);
+    $rows  = json_decode($_POST['rows'] ?? '[]', true);
+    if ($docId<=0 || !is_array($rows) || empty($rows)) jout(['status'=>'error','message'=>'無資料列']);
+    $st = $db->prepare("SELECT * FROM as_document WHERE id=?");
+    $st->execute([$docId]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
+    if (asDocRoot($db)==='') jout(['status'=>'error','message'=>'尚未設定 NAS 儲存路徑']);
+
+    $dir = asDocDir($db, $docId);
+    $movedFiles = [];
+    $db->beginTransaction();
+    try {
+        $prevVersion = (string)($doc['current_version'] ?? '');
+        $lastVerId = null; $lastVer = null;
+        foreach ($rows as $i => $r) {
+            $rowNo = $i + 1;
+            $version = trim($r['version'] ?? '');
+            $rdate   = trim($r['revised_date'] ?? '') ?: null;
+            if ($version==='') throw new Exception("第{$rowNo}列：版本號必填");
+            if (!$rdate) throw new Exception("第{$rowNo}列：修訂日期必填");
+            // 重複（含既有版本與本批前列）
+            $dup = $db->prepare("SELECT COUNT(*) FROM as_document_version WHERE doc_id=? AND version=?");
+            $dup->execute([$docId, $version]);
+            if ($dup->fetchColumn() > 0) throw new Exception("第{$rowNo}列：版本號 {$version} 已存在");
+            if ($vErr = asValidateVersionStyle($db, $docId, $version)) throw new Exception("第{$rowNo}列：".$vErr);
+            if ($vErr = asValidateVersionOrder($prevVersion, $version)) throw new Exception("第{$rowNo}列：".$vErr);
+
+            $fname = null; $orig = null;
+            $fkey = 'file_'.$i;
+            if (isset($_FILES[$fkey]) && $_FILES[$fkey]['error']===UPLOAD_ERR_OK) {
+                $ext = asSafeExt($_FILES[$fkey]['name']);
+                if (!$ext) throw new Exception("第{$rowNo}列：不允許此檔案類型");
+                if (!is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
+                $fname = asMakeName($ext);
+                if (!move_uploaded_file($_FILES[$fkey]['tmp_name'], $dir.DIRECTORY_SEPARATOR.$fname)) throw new Exception("第{$rowNo}列：檔案寫入失敗");
+                $movedFiles[] = $dir.DIRECTORY_SEPARATOR.$fname;
+                $orig = basename($_FILES[$fkey]['name']);
+            }
+            $db->prepare("INSERT INTO as_document_version
+                  (doc_id,version,change_status,revised_date,revised_pages,revised_summary,doc_level_snapshot,department_id_snapshot,file_name,original_name,uploaded_by,uploaded_at)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())")
+               ->execute([$docId,$version,trim($r['change_status'] ?? '修正') ?: '修正',$rdate,
+                          trim($r['revised_pages'] ?? '') ?: null, trim($r['revised_summary'] ?? '') ?: null,
+                          $doc['doc_level'],$doc['department_id'],$fname,$orig,$GLOBALS['currentCname']]);
+            $lastVerId = (int)$db->lastInsertId();
+            $lastVer = $version;
+            $prevVersion = $version;
+        }
+        if ($lastVerId) {
+            $db->prepare("UPDATE as_document SET current_version=?, current_version_id=?, updated_at=NOW() WHERE id=?")
+               ->execute([$lastVer, $lastVerId, $docId]);
+        }
+        $db->commit();
+        jout(['status'=>'success','count'=>count($rows),'current_version'=>$lastVer]);
+    } catch (Exception $e) {
+        $db->rollBack();
+        foreach ($movedFiles as $f) @unlink($f); // 交易失敗，清掉已搬入的檔案
+        jout(['status'=>'error','message'=>$e->getMessage()]);
+    }
+
+// ══════════════ 程序書快速建檔（管理員限定；一次建立：文件＋全部版本＋底下表單各一版；免申請單） ══════════════
+case 'create_document_full':
+    if (!($asIsRoleAdmin || strpos($asPagePerm,'A')!==false))
+        jout(['status'=>'error','message'=>'此功能僅限管理員使用']);
+    $doc_no  = trim($_POST['doc_no'] ?? '');
+    $doc_name= trim($_POST['doc_name'] ?? '');
+    $doc_type= trim($_POST['doc_type'] ?? '程序');
+    $level   = trim($_POST['doc_level'] ?? '二階');
+    $dept    = ($_POST['department_id'] ?? '')!=='' ? (int)$_POST['department_id'] : null;
+    $versions= json_decode($_POST['versions'] ?? '[]', true);
+    $forms   = json_decode($_POST['forms'] ?? '[]', true);
+    if ($doc_no==='' || $doc_name==='') jout(['status'=>'error','message'=>'文件編號、名稱為必填']);
+    if (!is_array($versions) || empty($versions)) jout(['status'=>'error','message'=>'至少要有一個版本']);
+    if (!is_array($forms)) $forms = [];
+    $dup = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0");
+    $dup->execute([$doc_no]);
+    if ($dup->fetchColumn() > 0) jout(['status'=>'error','message'=>"文件編號 {$doc_no} 已存在"]);
+    if (asDocRoot($db)==='') jout(['status'=>'error','message'=>'尚未設定 NAS 儲存路徑']);
+
+    $movedFiles = [];
+    $db->beginTransaction();
+    try {
+        // 1. 建程序書主檔
+        $db->prepare("INSERT INTO as_document (doc_no,doc_name,doc_type,doc_level,department_id,created_by,created_at,updated_at)
+                      VALUES (?,?,?,?,?,?,NOW(),NOW())")
+           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$GLOBALS['currentCname']]);
+        $docId = (int)$db->lastInsertId();
+        $dir = asDocDir($db, $docId);
+
+        // 2. 依序建立全部版本（重複/型式/順序檢查）
+        $prevVersion = ''; $lastVerId = null; $lastVer = null;
+        foreach ($versions as $i => $r) {
+            $rowNo = $i + 1;
+            $version = trim($r['version'] ?? '');
+            $rdate   = trim($r['revised_date'] ?? '') ?: null;
+            if ($version==='') throw new Exception("版本第{$rowNo}列：版本號必填");
+            if (!$rdate) throw new Exception("版本第{$rowNo}列：修訂日期必填");
+            if ($vErr = asValidateVersionStyle($db, $docId, $version)) throw new Exception("版本第{$rowNo}列：".$vErr);
+            if ($vErr = asValidateVersionOrder($prevVersion, $version)) throw new Exception("版本第{$rowNo}列：".$vErr);
+            $fname = null; $orig = null;
+            $fkey = 'vfile_'.$i;
+            if (isset($_FILES[$fkey]) && $_FILES[$fkey]['error']===UPLOAD_ERR_OK) {
+                $ext = asSafeExt($_FILES[$fkey]['name']);
+                if (!$ext) throw new Exception("版本第{$rowNo}列：不允許此檔案類型");
+                if (!is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
+                $fname = asMakeName($ext);
+                if (!move_uploaded_file($_FILES[$fkey]['tmp_name'], $dir.DIRECTORY_SEPARATOR.$fname)) throw new Exception("版本第{$rowNo}列：檔案寫入失敗");
+                $movedFiles[] = $dir.DIRECTORY_SEPARATOR.$fname;
+                $orig = basename($_FILES[$fkey]['name']);
+            }
+            $db->prepare("INSERT INTO as_document_version
+                  (doc_id,version,change_status,revised_date,revised_pages,revised_summary,doc_level_snapshot,department_id_snapshot,file_name,original_name,uploaded_by,uploaded_at)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())")
+               ->execute([$docId,$version,trim($r['change_status'] ?? ($i===0?'制訂':'修正')) ?: '修正',$rdate,
+                          trim($r['revised_pages'] ?? '') ?: null, trim($r['revised_summary'] ?? '') ?: null,
+                          $level,$dept,$fname,$orig,$GLOBALS['currentCname']]);
+            $lastVerId = (int)$db->lastInsertId(); $lastVer = $version; $prevVersion = $version;
+        }
+        $db->prepare("UPDATE as_document SET current_version=?, current_version_id=? WHERE id=?")
+           ->execute([$lastVer, $lastVerId, $docId]);
+
+        // 3. 底下表單（各一版，parent=此程序書，四階/表單，部門承襲）
+        $formCnt = 0;
+        foreach ($forms as $i => $f) {
+            $rowNo = $i + 1;
+            $fNo   = trim($f['doc_no'] ?? '');
+            $fName = trim($f['doc_name'] ?? '');
+            $fVer  = trim($f['version'] ?? '');
+            $fDate = trim($f['revised_date'] ?? '') ?: null;
+            if ($fNo==='' || $fName==='') throw new Exception("表單第{$rowNo}列：編號/名稱必填");
+            if (!$fDate) throw new Exception("表單第{$rowNo}列：修訂日期必填");
+            $dup2 = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0");
+            $dup2->execute([$fNo]);
+            if ($dup2->fetchColumn() > 0) throw new Exception("表單第{$rowNo}列：編號 {$fNo} 已存在");
+
+            $db->prepare("INSERT INTO as_document (doc_no,doc_name,doc_type,doc_level,department_id,parent_doc_id,current_version,created_by,created_at,updated_at)
+                          VALUES (?,?,?,?,?,?,?,?,NOW(),NOW())")
+               ->execute([$fNo,$fName,'表單','四階',$dept,$docId,$fVer,$GLOBALS['currentCname']]);
+            $fDocId = (int)$db->lastInsertId();
+            $fDir = asDocDir($db, $fDocId);
+
+            $fname = null; $orig = null;
+            $fkey = 'ffile_'.$i;
+            if (isset($_FILES[$fkey]) && $_FILES[$fkey]['error']===UPLOAD_ERR_OK) {
+                $ext = asSafeExt($_FILES[$fkey]['name']);
+                if (!$ext) throw new Exception("表單第{$rowNo}列：不允許此檔案類型");
+                if (!is_dir($fDir) && !mkdir($fDir, 0777, true)) throw new Exception('無法建立表單資料夾');
+                $fname = asMakeName($ext);
+                if (!move_uploaded_file($_FILES[$fkey]['tmp_name'], $fDir.DIRECTORY_SEPARATOR.$fname)) throw new Exception("表單第{$rowNo}列：檔案寫入失敗");
+                $movedFiles[] = $fDir.DIRECTORY_SEPARATOR.$fname;
+                $orig = basename($_FILES[$fkey]['name']);
+            }
+            $db->prepare("INSERT INTO as_document_version
+                  (doc_id,version,change_status,revised_date,revised_pages,revised_summary,doc_level_snapshot,department_id_snapshot,file_name,original_name,uploaded_by,uploaded_at)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())")
+               ->execute([$fDocId,$fVer,'制訂',$fDate,null,trim($f['revised_summary'] ?? '') ?: null,'四階',$dept,$fname,$orig,$GLOBALS['currentCname']]);
+            $fVerId = (int)$db->lastInsertId();
+            $db->prepare("UPDATE as_document SET current_version_id=? WHERE id=?")->execute([$fVerId,$fDocId]);
+            $formCnt++;
+        }
+        $db->commit();
+        jout(['status'=>'success','doc_id'=>$docId,'doc_no'=>$doc_no,'versions'=>count($versions),'forms'=>$formCnt]);
+    } catch (Exception $e) {
+        $db->rollBack();
+        foreach ($movedFiles as $f) @unlink($f);
+        jout(['status'=>'error','message'=>$e->getMessage()]);
+    }
 
 // ══════════════ 制修訂頁次/摘要 常用文字（存 DB，重啟不消失） ══════════════
 case 'phrase_add':
