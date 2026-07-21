@@ -25,8 +25,9 @@
   var LABEL_W = 158, AXIS_H = 34, BAR_H = 15, LANE_STEP = 17, LOAD_H = 17;
 
   var state = {
-    makers: [], procs: [],
-    selMakers: new Set(), selProcs: new Set(),
+    makers: [], procs: [], types: [],
+    selMakers: new Set(), selProcs: new Set(), selTypes: new Set(),
+    prioOn: { n: true, u: true, e: true },   // 燈號篩選（點圖例切換），預設全選
     rows: [], meta: { start: '', end: '', today: '' },
     groupBy: 'maker', hideStale: false, showLoad: true, _capped: false
   };
@@ -122,11 +123,12 @@
       '     <label style="font-weight:400"><input type="radio" name="cg-group" value="maker" checked> 依廠商</label>' +
       '     <label style="font-weight:400"><input type="radio" name="cg-group" value="process"> 依製程</label>' +
       '     <div class="cg-ms" id="cg-ms-maker"></div>' +
+      '     <div class="cg-ms" id="cg-ms-type"></div>' +
       '     <div class="cg-ms" id="cg-ms-proc"></div>' +
       '     <button id="cg-go">查詢</button>' +
       '     <button id="cg-clear" title="清除廠商/製程篩選與分組">清除篩選</button>' +
       '     <label style="font-weight:400"><input type="checkbox" id="cg-hidestale"> 隱藏逾期在廠中(&gt;60天)</label>' +
-      '     <label style="font-weight:400"><input type="checkbox" id="cg-showload" checked> 每日負載</label>' +
+      '     <label style="font-weight:400"><input type="checkbox" id="cg-showload" checked> 每日負荷</label>' +
       '     <span style="flex:1"></span>' +
       '     <button class="cg-mini img" id="cg-img">轉圖片</button>' +
       '     <button class="cg-mini csv" id="cg-csv">轉 CSV</button>' +
@@ -224,13 +226,21 @@
       function (m) { return (m.maker_id + ' ' + m.maker_id_no).toLowerCase(); },
       '可打廠商名稱或代號(部分即可)');
   }
+  function buildTypeMS() {
+    buildMultiSelect('cg-ms-type', '全部製程大類', state.types,
+      function (t) { return t.process_type_id; },
+      function (t) { return t.process_type_id + '　' + t.process_type; },
+      state.selTypes,
+      function (t) { return (t.process_type_id + ' ' + t.process_type).toLowerCase(); },
+      '製程大類（可打名稱或編號）');
+  }
   function buildProcMS() {
-    buildMultiSelect('cg-ms-proc', '全部製程', state.procs,
+    buildMultiSelect('cg-ms-proc', '全部製程(小類)', state.procs,
       function (p) { return p.process_no; },
       function (p) { return '[' + (p.process_type || '未分類') + '] ' + p.process_no + '　' + (p.ProcessName || ''); },
       state.selProcs,
       function (p) { return (p.process_no + ' ' + (p.ProcessName || '') + ' ' + (p.process_type || '') + ' 類別' + (p.process_type_id || '')).toLowerCase(); },
-      '可打製程編號、名稱，或製程類別(名稱/編號)後按「全選(目前結果)」');
+      '單一製程（小類）：可打製程編號或名稱');
   }
 
   // ---- 開啟 / 清除 -----------------------------------------------------------
@@ -247,13 +257,16 @@
   function closeModal() { document.getElementById('cg-overlay').style.display = 'none'; hideTip(); }
 
   function clearFilters() {
-    state.selMakers.clear(); state.selProcs.clear();
+    state.selMakers.clear(); state.selProcs.clear(); state.selTypes.clear();
     state.groupBy = 'maker'; state.hideStale = false;
+    state.prioOn = { n: true, u: true, e: true };
     var mk = document.querySelector('input[name=cg-group][value=maker]'); if (mk) mk.checked = true;
     document.getElementById('cg-hidestale').checked = false;
     if (state.makers.length) buildMakerMS();
+    if (state.types.length) buildTypeMS();
     if (state.procs.length) buildProcMS();
-    if (state.rows.length) render();
+    // 已查詢過就重新以「無篩選」查一次，讓圖表也跟著清空篩選
+    if (state.rows.length) runQuery();
   }
 
   function loadFilters() {
@@ -261,7 +274,9 @@
       if (!res || !res.success) return;
       state.makers = res.makers || [];
       state.procs = res.processes || [];
+      state.types = res.types || [];
       buildMakerMS();
+      buildTypeMS();
       buildProcMS();
     }, 'json');
   }
@@ -276,7 +291,8 @@
     $.post(PAGE, {
       action: 'get_capacity_gantt', start: start, end: end,
       maker_ids: Array.from(state.selMakers).join(','),
-      process_nos: Array.from(state.selProcs).join(',')
+      process_nos: Array.from(state.selProcs).join(','),
+      process_type_ids: Array.from(state.selTypes).join(',')
     }, function (res) {
       if (!res || !res.success) { body.innerHTML = '<div style="padding:30px;color:#c00;">查詢失敗：' + esc(res && res.message) + '</div>'; return; }
       state.rows = res.rows || [];
@@ -291,6 +307,7 @@
     var meta = state.meta;
     var rows = state.rows.slice();
     if (state.hideStale) rows = rows.filter(function (r) { return !r.is_stale; });
+    rows = rows.filter(function (r) { return state.prioOn[r.prio || 'n']; });   // 燈號篩選
     if (!meta.start || rows.length === 0) return null;
 
     var start = meta.start, end = meta.end, today = meta.today;
@@ -337,12 +354,14 @@
   }
 
   function barLabel(r, w) {
-    if (w < 42) return '';
+    if (w < 38) return '';
+    // 由左到右資訊量遞增，寬度不夠時由 CSS/clip 自動截斷（BOM 一定看得到）
     var ret = r.ret_date ? (r.ret_label + fmtMD(r.ret_date)) : '在廠中';
-    var s = r.bom;                         // 直接顯示 BOM
-    if (w >= 150) s += '　' + r.proc_name + ' ' + ret;
-    else if (w >= 96) s += '　' + ret;
-    return s;
+    var parts = [r.bom, '×' + r.sqty, ret];
+    if (r.client) parts.push(r.client);
+    if (r.d_id) parts.push(r.d_id);
+    parts.push(r.proc_name);
+    return parts.join('　');
   }
 
   // ---- 繪製（DOM）------------------------------------------------------------
@@ -389,13 +408,13 @@
 
       if (state.showLoad) {
         var mx = Math.max.apply(null, g.cnt) || 1;
-        html += '<div class="cg-loadrow"><div class="cg-labelcol" style="height:' + LOAD_H + 'px;font-weight:400;color:#a08a6f;font-size:11px;">每日在廠</div>' +
+        html += '<div class="cg-loadrow"><div class="cg-labelcol" style="height:' + LOAD_H + 'px;font-weight:400;color:#a08a6f;font-size:11px;">每日負荷</div>' +
           '<div class="cg-loadcells" style="width:' + trackW + 'px;">';
         for (var i2 = 0; i2 < totalDays; i2++) {
           if (g.cnt[i2] === 0) continue;
           var alpha = (0.18 + 0.72 * (g.cnt[i2] / mx)).toFixed(2);
           html += '<div class="cg-lc" style="left:' + (i2 * pxDay) + 'px;width:' + pxDay + 'px;background:rgba(' + LOAD_RGB + ',' + alpha + ');" ' +
-            'data-tip="' + esc(fmtMD(addDays(start, i2)) + '　在廠 ' + g.cnt[i2] + ' 件 / ' + g.qty[i2] + ' pcs') + '">' + (pxDay >= 16 ? g.cnt[i2] : '') + '</div>';
+            'data-tip="' + esc(fmtMD(addDays(start, i2)) + '　負荷 ' + g.cnt[i2] + ' 件 / ' + g.qty[i2] + ' pcs') + '">' + (pxDay >= 16 ? g.cnt[i2] : '') + '</div>';
         }
         html += '</div></div>';
       }
@@ -405,14 +424,26 @@
     body.innerHTML = html;
     bindTips(body);
 
-    document.getElementById('cg-legend').innerHTML =
-      '<span style="font-weight:700;color:#5a4632;">燈號：</span>' +
-      '<span><i style="background:' + PRIO.n.bg + ';border-color:' + PRIO.n.bd + '"></i>一般件</span>' +
-      '<span><i style="background:' + PRIO.u.bg + ';border-color:' + PRIO.u.bd + '"></i>急件(U)</span>' +
-      '<span><i style="background:' + PRIO.e.bg + ';border-color:' + PRIO.e.bd + '"></i>特急件(E)</span>' +
+    function legItem(code, txt) {
+      var p = PRIO[code], on = state.prioOn[code];
+      return '<span class="cg-prio" data-prio="' + code + '" title="點選切換顯示此燈號" style="cursor:pointer;user-select:none;' + (on ? '' : 'opacity:.35;text-decoration:line-through;') + '">' +
+        '<i style="background:' + p.bg + ';border-color:' + p.bd + '"></i>' + txt + '</span>';
+    }
+    var leg = document.getElementById('cg-legend');
+    leg.innerHTML =
+      '<span style="font-weight:700;color:#5a4632;">燈號(可點選篩選)：</span>' +
+      legItem('n', '一般件') + legItem('u', '急件(U)') + legItem('e', '特急件(E)') +
       '<span><i style="background:' + PRIO.n.bg + ';border-style:dashed;opacity:.45"></i>逾60天在廠中(可能忘記回廠)</span>' +
-      '<span><i style="background:rgba(' + LOAD_RGB + ',.7)"></i>每日在廠負載</span>' +
+      '<span><i style="background:rgba(' + LOAD_RGB + ',.7)"></i>每日負荷</span>' +
       '<span style="color:' + TODAY_COL + ';">┋ 今天</span>';
+    Array.prototype.forEach.call(leg.querySelectorAll('.cg-prio'), function (el) {
+      el.onclick = function () {
+        var c = this.dataset.prio;
+        state.prioOn[c] = !state.prioOn[c];
+        if (!state.prioOn.n && !state.prioOn.u && !state.prioOn.e) state.prioOn[c] = true; // 至少留一個
+        render();
+      };
+    });
 
     setStatus(L.nBar, L.groups.length);
   }
@@ -420,6 +451,8 @@
   function tipText(r) {
     var ret = r.ret_date ? (r.ret_label + ' ' + r.ret_date) : ('在廠中（未回廠）' + (r.is_stale ? '｜逾60天' : ''));
     return 'BOM ' + r.bom + '　【' + r.prio_label + '】' +
+      (r.client ? '\n客戶：' + r.client : '') +
+      (r.d_id ? '\n料號：' + r.d_id : '') +
       '\n製程：' + r.proc_name + '（' + r.process_no + '）' +
       '\n廠商：' + r.maker_name +
       '\n數量：' + r.sqty +
@@ -452,10 +485,10 @@
   // ---- 匯出 CSV（純資料；圖表請用「轉圖片」或「列印」）--------------------------
   function exportCsv() {
     if (!state.rows.length) { alert('沒有資料可匯出'); return; }
-    var head = ['廠商', '廠內', '燈號', '製程', '製程碼', 'BOM', '數量', '移轉日', '回廠判定', '回廠日', '狀態'];
+    var head = ['廠商', '廠內', '燈號', '客戶', '料號', '製程', '製程碼', 'BOM', '數量', '移轉日', '回廠判定', '回廠日', '狀態'];
     var lines = [head.join(',')];
     state.rows.forEach(function (r) {
-      var cells = [r.maker_name, (String(r.internal) === '1' ? '是' : ''), r.prio_label, r.proc_name, r.process_no, r.bom, r.sqty,
+      var cells = [r.maker_name, (String(r.internal) === '1' ? '是' : ''), r.prio_label, r.client, r.d_id, r.proc_name, r.process_no, r.bom, r.sqty,
         r.out_date, (r.ret_date ? r.ret_label : '在廠中' + (r.is_stale ? '(逾60天)' : '')), (r.ret_date || ''), r.state];
       lines.push(cells.map(function (c) { c = String(c == null ? '' : c); return /[",\n]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c; }).join(','));
     });
@@ -538,7 +571,7 @@
           ctx.fillRect(xOff + i * pxDay, ty + 1, pxDay, LOAD_H - 2);
           if (pxDay >= 16) { ctx.fillStyle = '#3a2a18'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('' + g.cnt[i], xOff + i * pxDay + pxDay / 2, ty + LOAD_H / 2); ctx.textAlign = 'left'; }
         }
-        ctx.fillStyle = '#a08a6f'; ctx.font = '11px sans-serif'; ctx.fillText('每日在廠', 8, ty + LOAD_H / 2);
+        ctx.fillStyle = '#a08a6f'; ctx.font = '11px sans-serif'; ctx.fillText('每日負荷', 8, ty + LOAD_H / 2);
         ty += LOAD_H;
       }
       ctx.strokeStyle = '#efe7db'; ctx.beginPath(); ctx.moveTo(0, ty + .5); ctx.lineTo(W, ty + .5); ctx.stroke();
