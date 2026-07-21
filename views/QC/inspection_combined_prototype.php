@@ -1055,6 +1055,9 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
         .okng-btn { cursor:pointer; user-select:none; font-weight:bold; }
         /* 實測值：每 PCS 一格（固定寬度，讓表頭編號/實測值/判定結果垂直對齊） */
         .s-slot { display:inline-block; width:70px; margin:0 4px 4px 0; text-align:center; vertical-align:top; }
+        /* 表頭 PCS 編號列與輸入格/判定格一律靠左，三列對齊(不受 thead 置中影響) */
+        #sample-nums, #items-table td.sample-cell, #items-table td#verdict-cells { text-align:left; }
+        #sample-nums { padding:0; }
         .s-slot .num-cell { width:66px; }
         /* 判定結果列（每 PCS 一格，可點擊手動切換） */
         .pcs-verdict { cursor:pointer; user-select:none; font-weight:bold; display:inline-block; min-width:44px; }
