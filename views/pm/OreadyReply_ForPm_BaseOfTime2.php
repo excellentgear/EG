@@ -15566,7 +15566,7 @@ echo "</script>\n";
 
 })();
 </script>
-<script src="capacity_gantt.js?v=<?=$_av?>"></script>
+<script src="capacity_gantt.js?v=<?= @filemtime(__DIR__ . '/capacity_gantt.js') ?>"></script>
 </body>
 
 </html>
