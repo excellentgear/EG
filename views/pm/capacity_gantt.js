@@ -31,7 +31,8 @@
     selMakers: new Set(), selProcs: new Set(), selTypes: new Set(),
     prioOn: { n: true, u: true, e: true },   // 燈號篩選（點圖例切換），預設全選
     rows: [], meta: { start: '', end: '', today: '' },
-    groupBy: 'maker', hideStale: false, showLoad: true, _capped: false
+    groupBy: 'maker', hideStale: false, showLoad: true, showDash: true, _capped: false,
+    dashSort: 'peak', dashDesc: true, overloadPeak: 8
   };
 
   // ---- 小工具 ----------------------------------------------------------------
@@ -79,6 +80,17 @@
       '#cg-clear:hover{background:#f3e7d8;}',
       '.cg-mini{background:#b5762f;color:#fff;border:none;border-radius:4px;padding:3px 10px;cursor:pointer;height:28px;}',
       '.cg-mini.csv{background:#c98a3a;}.cg-mini.img{background:#a2703a;}.cg-mini.print{background:#8c7a63;}',
+      '#cg-dashwrap{flex:0 0 auto;}',
+      '.cg-dash-head{display:flex;align-items:center;gap:10px;padding:5px 12px 2px;font-weight:700;color:#5a4632;font-size:12px;}',
+      '.cg-dash-head input{width:52px;height:22px;padding:1px 4px;border:1px solid #ccc;border-radius:3px;}',
+      '.cg-dash{margin:0 12px 6px;border:1px solid #e4c293;border-radius:6px;overflow:auto;max-height:190px;}',
+      '.cg-dash table{border-collapse:collapse;width:100%;font-size:12px;}',
+      '.cg-dash th,.cg-dash td{padding:3px 10px;border-bottom:1px solid #f0e6d6;text-align:right;white-space:nowrap;}',
+      '.cg-dash th{position:sticky;top:0;background:#faf1e4;color:#5a4632;cursor:pointer;user-select:none;}',
+      '.cg-dash th.l,.cg-dash td.l{text-align:left;}',
+      '.cg-dash tbody tr:hover{background:#fbf4ea;}',
+      '.cg-dash tr.over{background:#fdece7;}',
+      '.cg-dash tr.over td.l{font-weight:700;color:#c0392b;}',
       '#cg-body{flex:1 1 auto;overflow:auto;position:relative;}',
       '#cg-status{padding:6px 14px;color:#6b5a45;flex:0 0 auto;border-top:1px solid #eee;background:#faf6f0;}',
       '.cg-grid{position:relative;min-width:100%;}',
@@ -97,6 +109,7 @@
       '.cg-bar.p-u{background:' + PRIO.u.bg + ';border-color:' + PRIO.u.bd + ';color:' + PRIO.u.tx + ';}',
       '.cg-bar.p-e{background:' + PRIO.e.bg + ';border-color:' + PRIO.e.bd + ';color:' + PRIO.e.tx + ';}',
       '.cg-bar:hover{outline:2px solid #5a4632;outline-offset:-1px;filter:brightness(1.06);}',
+      '.cg-bar.due-over{box-shadow:inset 0 3px 0 #c0392b;}',   // 交期已過卻仍在廠：頂部紅條
       '.cg-bar.stale{opacity:.42;border-style:dashed;}',
       '.cg-bar .cg-ov{position:absolute;top:0;font-weight:700;}',
       '.cg-loadrow{display:flex;border-bottom:1px solid #efe7db;background:#fbf7f1;}',
@@ -126,7 +139,10 @@
       '     <span style="width:6px"></span>' +
       '     <label>分組</label>' +
       '     <label style="font-weight:400"><input type="radio" name="cg-group" value="maker" checked> 依廠商</label>' +
-      '     <label style="font-weight:400"><input type="radio" name="cg-group" value="process"> 依製程</label>' +
+      '     <label style="font-weight:400"><input type="radio" name="cg-group" value="ptype"> 依製程大類</label>' +
+      '     <label style="font-weight:400"><input type="radio" name="cg-group" value="process"> 依製程小類</label>' +
+      '     <label style="font-weight:400"><input type="radio" name="cg-group" value="client"> 依客戶</label>' +
+      '     <label style="font-weight:400"><input type="radio" name="cg-group" value="part"> 依料號</label>' +
       '     <div class="cg-ms" id="cg-ms-maker"></div>' +
       '     <div class="cg-ms" id="cg-ms-type"></div>' +
       '     <div class="cg-ms" id="cg-ms-proc"></div>' +
@@ -134,11 +150,13 @@
       '     <button id="cg-clear" title="清除廠商/製程篩選與分組">清除篩選</button>' +
       '     <label style="font-weight:400"><input type="checkbox" id="cg-hidestale"> 隱藏逾期在廠中(&gt;60天)</label>' +
       '     <label style="font-weight:400"><input type="checkbox" id="cg-showload" checked> 每日負荷</label>' +
+      '     <label style="font-weight:400"><input type="checkbox" id="cg-showdash" checked> 廠商負荷看板</label>' +
       '     <span style="flex:1"></span>' +
       '     <button class="cg-mini img" id="cg-img">轉圖片</button>' +
       '     <button class="cg-mini csv" id="cg-csv">轉 CSV</button>' +
       '     <button class="cg-mini print" id="cg-print">列印</button>' +
       '  </div>' +
+      '  <div id="cg-dashwrap"></div>' +
       '  <div id="cg-body"><div style="padding:30px;color:#a08a6f;">請設定條件後按「查詢」。</div></div>' +
       '  <div class="cg-legend" id="cg-legend"></div>' +
       '  <div id="cg-status"></div>' +
@@ -156,6 +174,7 @@
     document.getElementById('cg-print').onclick = printView;
     document.getElementById('cg-hidestale').onchange = function () { state.hideStale = this.checked; render(); };
     document.getElementById('cg-showload').onchange = function () { state.showLoad = this.checked; render(); };
+    document.getElementById('cg-showdash').onchange = function () { state.showDash = this.checked; render(); };
     Array.prototype.forEach.call(ov.querySelectorAll('input[name=cg-group]'), function (r) {
       r.onchange = function () { state.groupBy = this.value; render(); };
     });
@@ -359,12 +378,13 @@
     var groupBy = state.groupBy;
     var gmap = {};
     rows.forEach(function (r) {
-      var key = groupBy === 'maker' ? (r.maker_no || '_') : ('p' + r.process_no);
-      if (!gmap[key]) gmap[key] = {
-        label: groupBy === 'maker' ? r.maker_name : r.proc_name,
-        sub: groupBy === 'maker' ? (String(r.internal) === '1' ? '廠內' : '外包') : ('製程 ' + r.process_no),
-        bars: []
-      };
+      var key, label, sub;
+      if (groupBy === 'ptype') { key = 't' + r.ptype_id; label = r.ptype_name || '未分類'; sub = '製程大類'; }
+      else if (groupBy === 'process') { key = 'p' + r.process_no; label = r.proc_name; sub = '製程小類 ' + r.process_no; }
+      else if (groupBy === 'client') { key = 'c' + (r.client || '_'); label = r.client || '(無客戶)'; sub = '客戶'; }
+      else if (groupBy === 'part') { key = 'd' + (r.d_id || '_'); label = r.d_id || '(無料號)'; sub = '料號'; }
+      else { key = r.maker_no || '_'; label = r.maker_name; sub = (String(r.internal) === '1' ? '廠內' : '外包'); }
+      if (!gmap[key]) gmap[key] = { label: label, sub: sub, bars: [] };
       gmap[key].bars.push(r);
     });
     var keys = Object.keys(gmap).sort(function (a, b) { return gmap[a].label.localeCompare(gmap[b].label, 'zh-Hant'); });
@@ -386,10 +406,81 @@
       // 每日負載
       var cnt = new Array(totalDays).fill(0), qty = new Array(totalDays).fill(0);
       segs.forEach(function (x) { for (var i = x.cs; i <= x.ce; i++) { cnt[i]++; qty[i] += (x.r.sqty || 0); } });
-      return { label: g.label, sub: g.sub, segs: segs, laneCount: Math.max(1, lanes.length), cnt: cnt, qty: qty };
+      // 平均回廠加工日（僅計已回廠/結案等有回廠日者）
+      var wSum = 0, wN = 0;
+      segs.forEach(function (x) { if (x.r.ret_src !== 'ongoing') { wSum += (x.r.work_days || 0); wN++; } });
+      var avgWork = wN ? Math.round(wSum / wN * 10) / 10 : null;
+      return { label: g.label, sub: g.sub, segs: segs, laneCount: Math.max(1, lanes.length), cnt: cnt, qty: qty, avgWork: avgWork, retN: wN };
     });
 
-    return { start: start, end: end, today: today, totalDays: totalDays, todayIdx: todayIdx, pxDay: pxDay, trackW: trackW, groups: groups, nBar: rows.length };
+    return { start: start, end: end, today: today, totalDays: totalDays, todayIdx: todayIdx, pxDay: pxDay, trackW: trackW, groups: groups, nBar: rows.length, flatRows: rows };
+  }
+
+  // ---- 廠商負荷看板 ----------------------------------------------------------
+  function peakConcurrent(segs, totalDays) {
+    var cnt = new Array(totalDays).fill(0), mx = 0;
+    segs.forEach(function (x) { for (var i = x.cs; i <= x.ce; i++) { cnt[i]++; if (cnt[i] > mx) mx = cnt[i]; } });
+    return mx;
+  }
+  function renderDashboard(L) {
+    var start = L.start, totalDays = L.totalDays, today = L.today, byV = {};
+    L.flatRows.forEach(function (r) {
+      var k = r.maker_no || '_';
+      if (!byV[k]) byV[k] = { name: r.maker_name, internal: r.internal, rows: [] };
+      byV[k].rows.push(r);
+    });
+    var stats = Object.keys(byV).map(function (k) {
+      var v = byV[k], segs = [], wSum = 0, wN = 0, qty = 0, overdue = 0, stale = 0;
+      v.rows.forEach(function (r) {
+        var bEnd = r.ret_date || today, s = dayIdx(r.out_date, start), e = dayIdx(bEnd, start);
+        var cs = Math.max(0, s), ce = Math.min(totalDays - 1, e);
+        if (ce >= cs) segs.push({ cs: cs, ce: ce });
+        qty += r.sqty || 0;
+        if (r.ret_src !== 'ongoing') { wSum += (r.work_days || 0); wN++; }
+        if (r.ret_src === 'ongoing' && r.delivery && r.delivery < today) overdue++;
+        if (r.is_stale) stale++;
+      });
+      return { name: v.name, internal: v.internal, pieces: v.rows.length, qty: qty,
+        peak: peakConcurrent(segs, totalDays), avg: (wN ? Math.round(wSum / wN * 10) / 10 : null), overdue: overdue, stale: stale };
+    });
+    var key = state.dashSort, desc = state.dashDesc;
+    stats.sort(function (a, b) {
+      if (key === 'name') return (desc ? -1 : 1) * String(a.name).localeCompare(String(b.name), 'zh-Hant');
+      var va = a[key] == null ? -1 : a[key], vb = b[key] == null ? -1 : b[key];
+      return desc ? (vb - va) : (va - vb);
+    });
+    function th(k, txt, cls) { var ar = state.dashSort === k ? (state.dashDesc ? ' ▼' : ' ▲') : ''; return '<th class="' + (cls || '') + '" data-sort="' + k + '">' + txt + ar + '</th>'; }
+    var h = '<div class="cg-dash-head">廠商負荷看板（' + stats.length + ' 家）　峰值≥ <input type="number" id="cg-ol" value="' + state.overloadPeak + '" min="1"> 標紅' +
+      '　<span style="font-weight:400;color:#a08a6f">點標題排序</span></div>' +
+      '<div class="cg-dash"><table><thead><tr>' +
+      th('name', '廠商', 'l') + th('pieces', '件數') + th('qty', '數量') + th('peak', '峰值同時') +
+      th('avg', '平均回廠加工日') + th('overdue', '逾期未回') + th('stale', '逾60天在廠') +
+      '</tr></thead><tbody>';
+    stats.forEach(function (s) {
+      var over = s.peak >= state.overloadPeak;
+      h += '<tr class="' + (over ? 'over' : '') + '"><td class="l">' + esc(s.name) + (String(s.internal) === '1' ? ' <span style="color:#a08a6f">(廠內)</span>' : '') + '</td>' +
+        '<td>' + s.pieces + '</td><td>' + s.qty + '</td><td>' + s.peak + '</td>' +
+        '<td>' + (s.avg == null ? '—' : s.avg) + '</td>' +
+        '<td' + (s.overdue ? ' style="color:#c0392b;font-weight:700"' : '') + '>' + s.overdue + '</td>' +
+        '<td' + (s.stale ? ' style="color:#b5762f"' : '') + '>' + s.stale + '</td></tr>';
+    });
+    return h + '</tbody></table></div>';
+  }
+  function paintDashboard(L) {
+    var wrap = document.getElementById('cg-dashwrap');
+    if (!wrap) return;
+    if (!L || !state.showDash) { wrap.innerHTML = ''; return; }
+    wrap.innerHTML = renderDashboard(L);
+    Array.prototype.forEach.call(wrap.querySelectorAll('th[data-sort]'), function (thEl) {
+      thEl.onclick = function () {
+        var k = this.dataset.sort;
+        if (state.dashSort === k) state.dashDesc = !state.dashDesc;
+        else { state.dashSort = k; state.dashDesc = (k !== 'name'); }
+        render();
+      };
+    });
+    var ol = document.getElementById('cg-ol');
+    if (ol) ol.onchange = function () { var v = parseInt(this.value, 10); state.overloadPeak = (v > 0 ? v : 1); render(); };
   }
 
   function barLabel(r, w) {
@@ -408,7 +499,7 @@
     var body = document.getElementById('cg-body');
     if (!state.meta.start) return;
     var L = computeLayout(body.clientWidth);
-    if (!L) { body.innerHTML = '<div style="padding:30px;color:#a08a6f;">此條件下沒有外包紀錄。</div>'; setStatus(0, 0); document.getElementById('cg-legend').innerHTML = ''; return; }
+    if (!L) { body.innerHTML = '<div style="padding:30px;color:#a08a6f;">此條件下沒有外包紀錄。</div>'; setStatus(0, 0); document.getElementById('cg-legend').innerHTML = ''; paintDashboard(null); return; }
 
     var pxDay = L.pxDay, totalDays = L.totalDays, trackW = L.trackW, start = L.start;
     var html = '<div class="cg-grid" style="width:' + (LABEL_W + trackW + 4) + 'px;">';
@@ -428,8 +519,9 @@
 
     L.groups.forEach(function (g) {
       var rowH = g.laneCount * LANE_STEP + 4;
+      var avgTxt = (g.avgWork != null) ? ('｜平均回廠 ' + g.avgWork + ' 加工日(' + g.retN + ')') : '｜平均回廠 —';
       html += '<div class="cg-row"><div class="cg-labelcol" style="height:' + rowH + 'px;">' +
-        esc(g.label) + '<span class="cg-sub">' + esc(g.sub) + '｜峰值 ' + g.laneCount + ' 件</span></div>' +
+        esc(g.label) + '<span class="cg-sub">' + esc(g.sub) + '｜峰值 ' + g.laneCount + ' 件' + esc(avgTxt) + '</span></div>' +
         '<div class="cg-track" style="width:' + trackW + 'px;height:' + rowH + 'px;">';
       for (var dd = 0; dd < totalDays; dd++) {
         var wd2 = weekday(addDays(start, dd));
@@ -439,7 +531,8 @@
       g.segs.forEach(function (x) {
         var r = x.r, left = x.cs * pxDay, w = (x.ce - x.cs + 1) * pxDay - 2; if (w < 3) w = 3;
         var top = x.lane * LANE_STEP + 2;
-        html += '<div class="cg-bar p-' + (r.prio || 'n') + (r.is_stale ? ' stale' : '') + '" style="left:' + left + 'px;top:' + top + 'px;width:' + w + 'px;" title="點此在下方頁面篩選：' + esc(r.maker_name + ' / ' + r.bom) + '" data-bom="' + esc(r.bom) + '" data-maker="' + esc(r.maker_name) + '" data-tip="' + esc(tipText(r)) + '">' +
+        var overdue = (r.ret_src === 'ongoing' && r.delivery && r.delivery < L.today);
+        html += '<div class="cg-bar p-' + (r.prio || 'n') + (r.is_stale ? ' stale' : '') + (overdue ? ' due-over' : '') + '" style="left:' + left + 'px;top:' + top + 'px;width:' + w + 'px;" title="點此在下方頁面篩選：' + esc(r.maker_name + ' / ' + r.bom) + '" data-bom="' + esc(r.bom) + '" data-maker="' + esc(r.maker_name) + '" data-tip="' + esc(tipText(r)) + '">' +
           (x.ovL ? '<span class="cg-ov" style="left:1px;">‹</span>' : '') + esc(barLabel(r, w)) +
           (x.ovR ? '<span class="cg-ov" style="right:1px;">›</span>' : '') + '</div>';
       });
@@ -462,6 +555,7 @@
     html += '</div>';
     body.innerHTML = html;
     bindTips(body);
+    paintDashboard(L);
 
     function legItem(code, txt) {
       var p = PRIO[code], on = state.prioOn[code];
@@ -473,6 +567,7 @@
       '<span style="font-weight:700;color:#5a4632;">燈號(可點選篩選)：</span>' +
       legItem('n', '一般件') + legItem('u', '急件(U)') + legItem('e', '特急件(E)') +
       '<span><i style="background:' + PRIO.n.bg + ';border-style:dashed;opacity:.45"></i>逾60天在廠中(可能忘記回廠)</span>' +
+      '<span><i style="background:' + PRIO.n.bg + ';box-shadow:inset 0 3px 0 #c0392b"></i>交期已過卻未回廠</span>' +
       '<span><i style="background:rgba(' + LOAD_RGB + ',.7)"></i>每日負荷</span>' +
       '<span style="color:' + TODAY_COL + ';">┋ 今天</span>';
     Array.prototype.forEach.call(leg.querySelectorAll('.cg-prio'), function (el) {
@@ -492,11 +587,12 @@
     return 'BOM ' + r.bom + '　【' + r.prio_label + '】' +
       (r.client ? '\n客戶：' + r.client : '') +
       (r.d_id ? '\n料號：' + r.d_id : '') +
-      '\n製程：' + r.proc_name + '（' + r.process_no + '）' +
+      '\n製程：' + r.proc_name + '（' + r.process_no + '／' + (r.ptype_name || '未分類') + '）' +
       '\n廠商：' + r.maker_name +
       '\n數量：' + r.sqty +
+      (r.delivery ? '\n交期：' + r.delivery + ((r.ret_src === 'ongoing' && r.delivery < state.meta.today) ? '（已逾期未回廠）' : '') : '') +
       '\n移轉：' + r.out_date +
-      '\n回廠判定：' + ret;
+      '\n回廠判定：' + ret + (r.ret_src !== 'ongoing' ? '（在廠 ' + r.work_days + ' 加工日）' : '');
   }
   function setStatus(nBar, nLane) {
     var s = '共 ' + nBar + ' 筆製程、' + nLane + ' 個泳道　｜　區間 ' + state.meta.start + ' ~ ' + state.meta.end + '（' + TODAY_COL_TXT() + '＝今天）';
@@ -591,7 +687,7 @@
       ctx.fillStyle = '#3a2a18'; ctx.font = '600 12px sans-serif';
       ctx.fillText(cut(ctx, g.label, LABEL_W - 12), 8, ty + 12);
       ctx.fillStyle = '#a08a6f'; ctx.font = '11px sans-serif';
-      ctx.fillText(g.sub + '｜峰值 ' + g.laneCount, 8, ty + 26);
+      ctx.fillText(g.sub + '｜峰值 ' + g.laneCount + (g.avgWork != null ? '｜回廠均 ' + g.avgWork + '工日' : ''), 8, ty + 26);
       // 長條
       g.segs.forEach(function (x) {
         var r = x.r, bx = xOff + x.cs * pxDay, bw = (x.ce - x.cs + 1) * pxDay - 2; if (bw < 3) bw = 3;
