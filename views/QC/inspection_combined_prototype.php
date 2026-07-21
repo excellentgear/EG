@@ -1053,12 +1053,12 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
         #items-table td { vertical-align:middle; }
         .num-cell { width:90px; }
         .okng-btn { cursor:pointer; user-select:none; font-weight:bold; }
-        /* 實測值：每 PCS 一格（固定寬度，讓表頭編號/實測值/判定結果垂直對齊） */
-        .s-slot { display:inline-block; width:70px; margin:0 4px 4px 0; text-align:center; vertical-align:top; }
-        /* 表頭 PCS 編號列與輸入格/判定格一律靠左，三列對齊(不受 thead 置中影響) */
-        #sample-nums, #items-table td.sample-cell, #items-table td#verdict-cells { text-align:left; }
-        #sample-nums { padding:0; }
-        .s-slot .num-cell { width:66px; }
+        /* 實測值：每 PCS 一格，格子上方自帶抽驗序號(P1、P2…)，換列也看得出是第幾格 */
+        .s-slot { display:inline-block; width:60px; margin:0 3px 4px 0; text-align:center; vertical-align:top; }
+        .s-slot .num-cell { width:56px; padding-left:2px; padding-right:2px; }
+        .s-num { display:block; font-size:10px; color:#999; line-height:1.1; margin-bottom:1px; }
+        /* 輸入格/判定格靠左排(格子自帶序號,不需與表頭數字對齊) */
+        #items-table td.sample-cell, #items-table td#verdict-cells { text-align:left; }
         /* 判定結果列（每 PCS 一格，可點擊手動切換） */
         .pcs-verdict { cursor:pointer; user-select:none; font-weight:bold; display:inline-block; min-width:44px; }
         .pcs-verdict.manual { outline:2px dashed #f0ad4e; }
@@ -2402,21 +2402,21 @@ $(function(){
         var h='';
         for (var i=0;i<state.sampleN;i++){
             var sv = samples[i] || null;
+            var numTag = '<span class="s-num">'+(i+1)+'</span>';
             if (type==='OKNG'){
                 var ng = sv && (sv.r==='NG' || sv.v==='NG');
-                h += '<span class="s-slot"><span class="label okng-btn '+(ng?'ng-value':'label-default')+'" tabindex="0" data-s="'+(i+1)+'">'+(ng?'NG':'OK')+'</span></span>';
+                h += '<span class="s-slot">'+numTag+'<span class="label okng-btn '+(ng?'ng-value':'label-default')+'" tabindex="0" data-s="'+(i+1)+'">'+(ng?'NG':'OK')+'</span></span>';
             } else {
                 var val = (sv && sv.v!=null) ? String(sv.v) : '';
                 var cls = (val!=='') ? ((sv && sv.r==='NG') ? ' ng-value' : ' ok-value') : '';
-                h += '<span class="s-slot"><input type="number" inputmode="decimal" class="table-input num-cell'+cls+'" value="'+esc(val)+'" data-s="'+(i+1)+'"></span>';
+                h += '<span class="s-slot">'+numTag+'<input type="number" inputmode="decimal" class="table-input num-cell'+cls+'" value="'+esc(val)+'" data-s="'+(i+1)+'"></span>';
             }
         }
         return h;
     }
-    // 實測值表頭：標示第幾 PCS（1、2、3…）
+    // 每格已自帶抽驗序號，表頭不再重複整排數字，改放簡短提示
     function renderSampleNums(){
-        var h=''; for(var i=1;i<=state.sampleN;i++) h+='<span class="s-slot">'+i+'</span>';
-        $('#sample-nums').html(h);
+        $('#sample-nums').html('<span style="font-weight:normal;font-size:11px;color:#999;">（每格上方數字＝抽驗序號，共 '+state.sampleN+' 件）</span>');
     }
     function itemRow(it, idx){
         var isNum = it.type!=='OKNG';
@@ -2479,7 +2479,7 @@ $(function(){
 
     // ---- 判定結果列：每 PCS 一格；垂直任一項目 NG 即自動 NG，可點擊手動修改（雙擊恢復自動）----
     function renderVerdictRow(){
-        var h=''; for(var i=1;i<=state.sampleN;i++) h+='<span class="s-slot"><span class="label label-default pcs-verdict" tabindex="0" data-s="'+i+'" title="點擊手動切換 OK/NG，雙擊恢復自動判定">OK</span></span>';
+        var h=''; for(var i=1;i<=state.sampleN;i++) h+='<span class="s-slot"><span class="s-num">'+i+'</span><span class="label label-default pcs-verdict" tabindex="0" data-s="'+i+'" title="點擊手動切換 OK/NG，雙擊恢復自動判定">OK</span></span>';
         $('#verdict-cells').html(h);
         updateAutoVerdicts();
     }
