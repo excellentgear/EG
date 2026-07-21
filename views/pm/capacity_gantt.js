@@ -113,7 +113,8 @@
       '.cg-bar.p-u{background:' + PRIO.u.bg + ';border-color:' + PRIO.u.bd + ';color:' + PRIO.u.tx + ';}',
       '.cg-bar.p-e{background:' + PRIO.e.bg + ';border-color:' + PRIO.e.bd + ';color:' + PRIO.e.tx + ';}',
       '.cg-bar:hover{outline:2px solid #5a4632;outline-offset:-1px;filter:brightness(1.06);}',
-      '.cg-bar.due-over{box-shadow:0 0 0 2px #fff,0 0 0 4px #7a0000,0 0 8px 3px rgba(122,0,0,.75);z-index:5;}',   // 已超預測回廠(P80)未回：白圈+濃紅圈+紅光，紅底(特急)上也看得出
+      // 已超預測回廠(P80)未回：黑色斜線陰影紋 + 黑框，任何底色/轉圖片(PNG)都看得出
+      '.cg-bar.due-over{background-image:repeating-linear-gradient(45deg,rgba(0,0,0,.45) 0 3px,transparent 3px 7px);border-color:#111;box-shadow:0 0 0 2px #111;z-index:5;}',
       '.cg-bar.stale{opacity:.42;border-style:dashed;}',
       '.cg-bar .cg-ov{position:absolute;top:0;font-weight:700;}',
       '.cg-loadrow{display:flex;border-bottom:1px solid #efe7db;background:#fbf7f1;}',
@@ -608,7 +609,7 @@
       '<span style="font-weight:700;color:#5a4632;">燈號(可點選篩選)：</span>' +
       legItem('n', '一般件') + legItem('u', '急件(U)') + legItem('e', '特急件(E)') +
       '<span><i style="background:' + PRIO.n.bg + ';border-style:dashed;opacity:.45"></i>逾60天在廠中(可能忘記回廠)</span>' +
-      '<span><i style="background:' + PRIO.n.bg + ';box-shadow:0 0 0 1px #fff,0 0 0 2px #7a0000"></i>⚠已超預測回廠(P80)未回</span>' +
+      '<span><i style="background:' + PRIO.n.bg + ';background-image:repeating-linear-gradient(45deg,rgba(0,0,0,.45) 0 2px,transparent 2px 5px);box-shadow:0 0 0 1px #111"></i>⚠已超預測回廠(P80)未回</span>' +
       '<span><i style="background:rgba(' + LOAD_RGB + ',.7)"></i>每日負荷</span>' +
       '<span style="color:' + TODAY_COL + ';">┋ 今天</span>';
     Array.prototype.forEach.call(leg.querySelectorAll('.cg-prio'), function (el) {
@@ -740,8 +741,12 @@
         if (r.is_stale) ctx.setLineDash([3, 2]); roundRect(ctx, bx, by, bw, BAR_H, 3); ctx.stroke(); ctx.setLineDash([]);
         ctx.globalAlpha = 1;
         if (isOverdue(r)) {
-          ctx.lineWidth = 3; ctx.strokeStyle = '#7a0000'; roundRect(ctx, bx - 1, by - 1, bw + 2, BAR_H + 2, 3); ctx.stroke();
-          ctx.lineWidth = 1; ctx.strokeStyle = '#fff'; roundRect(ctx, bx, by, bw, BAR_H, 3); ctx.stroke();
+          ctx.save();
+          roundRect(ctx, bx, by, bw, BAR_H, 3); ctx.clip();
+          ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.lineWidth = 2;
+          for (var hx = bx - BAR_H; hx < bx + bw; hx += 7) { ctx.beginPath(); ctx.moveTo(hx, by + BAR_H); ctx.lineTo(hx + BAR_H, by); ctx.stroke(); }
+          ctx.restore();
+          ctx.lineWidth = 2; ctx.strokeStyle = '#111'; roundRect(ctx, bx, by, bw, BAR_H, 3); ctx.stroke();
         }
         var lab = barLabel(r, bw);
         if (lab) { ctx.fillStyle = pc.tx; ctx.font = '10px sans-serif'; ctx.save(); ctx.beginPath(); ctx.rect(bx + 2, by, bw - 4, BAR_H); ctx.clip(); ctx.fillText(lab, bx + 4, by + BAR_H / 2 + 1); ctx.restore(); }
