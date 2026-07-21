@@ -336,6 +336,7 @@ $_bomtrkRoles   = [];  $_userBomtrkRoles = [];
 $_ptaskRoles    = [];  $_userPtaskRoles  = [];
 $_profitRoles   = [];  $_userProfitRoles = [];
 $_asdocRoles    = [];  $_userAsdocRoles  = [];
+$_mdataRoles    = [];  $_userMdataRoles  = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -355,6 +356,7 @@ try {
     $st->execute(['personal_task']); $_ptaskRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['order_profit']); $_profitRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['as_doc']);    $_asdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['master_data']); $_mdataRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -414,6 +416,10 @@ try {
     $st->execute(['as_doc']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userAsdocRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['master_data']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userMdataRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -606,6 +612,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'home-role-section'      => '首頁設定',
                                         'qc-role-section'        => 'QC檢驗',
                                         'car-role-section'       => '異常矯正單',
+                                        'mdata-role-section'     => '主檔管理',
                                         'imgedit-role-section'   => '批圖編輯器',
                                         'drawren-role-section'   => '圖面改檔名',
                                         'bomren-role-section'    => '叫料改檔名',
@@ -950,6 +957,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('car', 'car', '異常矯正處理單', 'fa-wrench', '#16a085',
                         '為每位使用者指派異常矯正處理單頁面的操作角色（檢閱、開立、修改、刪除、管理設定）。角色與功能定義請至 <strong>異常矯正處理單 → 設定（齒輪圖示）→ 權限設定（角色）</strong>。',
                         $_carRoles, $_userCarRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('mdata', 'master_data', '主檔管理（附件 / 圖面查閱）', 'fa-database', '#d4761a',
+                        '為每位使用者指派主檔管理頁「其他附件」分頁的操作角色（檢視、上傳、刪除、編輯標籤/浮水印）。「報價資料」分頁沿用報價單「檢視」權限（quotation_view）；「圖面查閱」對所有登入者開放。<strong>過渡期：尚未指派 master_data 角色前，暫時沿用主檔管理頁原有附件權限，不會鎖住任何人；一旦指派了第一位，未被指派者即改以角色為準。</strong>角色與功能定義請至 <strong>主檔管理頁 → 角色設定（僅管理員可見）</strong>。管理者固定可用。',
+                        $_mdataRoles, $_userMdataRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('imgedit', 'imgedit', '批圖編輯器', 'fa-paint-brush', '#ab47bc',
                         '為每位使用者指派「批圖使用者」角色（批圖編輯器：訂單追蹤頁「批圖」按鈕開啟的圖面編輯跳窗）。<strong>尚未指派任何人之前，暫時開放所有登入者使用；一旦指派了第一位，未被指派者即無法開啟。</strong>管理者固定可用。',
