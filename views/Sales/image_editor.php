@@ -1199,6 +1199,12 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                     <option value="0.5">0.5×</option>
                 </select>
             </div>
+            <div class="frm-row"><label>列印紙張</label>
+                <select id="ex-paper" title="列印時自動等比例縮放置中成一頁；方向依圖面長寬自動直/橫">
+                    <option value="A4" selected>A4（預設）</option>
+                    <option value="A3">A3</option>
+                </select>
+            </div>
             <div class="frm-row"><label>檔名</label>
                 <input type="text" id="ex-name" style="flex:1;" value="">
             </div>
@@ -5014,10 +5020,11 @@ function doPrintPDF() {
         if (sel) { const b = sel.getBoundingRect(true, true); x = b.left; y = b.top; w = b.width; h = b.height; }
         else toast('沒有選取物件，改列印整個畫布');
     }
-    // A4 版面：依長寬決定直/橫，內縮邊界後等比例縮放置中
-    const A4 = { w: 595.28, h: 841.89 };
+    // 紙張版面(點,1/72吋)：依長寬決定直/橫，內縮邊界後等比例縮放置中＝一律縮成一頁
+    const PAPERS = { A4: { w: 595.28, h: 841.89 }, A3: { w: 841.89, h: 1190.55 } };
+    const paper = PAPERS[(document.getElementById('ex-paper') || {}).value] || PAPERS.A4;
     const landscape = w >= h;
-    const pageW = landscape ? A4.h : A4.w, pageH = landscape ? A4.w : A4.h;
+    const pageW = landscape ? paper.h : paper.w, pageH = landscape ? paper.w : paper.h;
     const margin = 18;                                  // 約 0.25 吋
     const scale = Math.min((pageW - margin * 2) / w, (pageH - margin * 2) / h);
     const dispW = w * scale, dispH = h * scale;         // PDF 點(1/72吋)＝紙上顯示尺寸
@@ -5095,11 +5102,14 @@ function printFallback() {
     catch (e) { toast('列印失敗：畫布轉圖發生問題（F12 有詳情）'); return; }
     const blob = dataURLtoBlob(url);
     const objUrl = URL.createObjectURL(blob);
+    const paper = ((document.getElementById('ex-paper') || {}).value === 'A3') ? 'A3' : 'A4';
     const ifr = makeHiddenPrintFrame(function () { URL.revokeObjectURL(objUrl); });
     const d = ifr.contentWindow.document;
     d.open();
+    // @page 指定紙張＋方向 auto；圖片同時限制寬高不超過一頁可列印範圍(max-height:96vh)＝自動縮成一頁
     d.write('<!DOCTYPE html><html><head><title>列印 - 批圖</title>' +
-        '<style>html,body{margin:0;padding:0;}img{max-width:100%;}@media print{img{width:100%;}}</style>' +
+        '<style>@page{size:' + paper + '; margin:8mm;}html,body{margin:0;padding:0;height:100%;}' +
+        'img{display:block;margin:0 auto;max-width:100%;max-height:96vh;width:auto;height:auto;}</style>' +
         '</head><body><img src="' + objUrl + '" onload="setTimeout(function(){window.focus();window.print();},150)"></body></html>');
     d.close();
 }
@@ -5144,12 +5154,14 @@ function doPrintVector() {
     // 去掉 XML 宣告與 DOCTYPE 前綴，只留 svg 標籤內嵌進列印文件（內嵌才會被當向量列印）
     const i = svg.indexOf('<svg');
     if (i > 0) svg = svg.slice(i);
+    const paper = ((document.getElementById('ex-paper') || {}).value === 'A3') ? 'A3' : 'A4';
     const win = window.open('', '_blank');
     if (!win) { toast('列印視窗被瀏覽器攔截，請允許彈出視窗'); return; }
     // body onload 會等 SVG 內嵌照片載入完再列印；不放 <script> 以免污染外層頁面解析
+    // @page 指定紙張＋方向 auto；svg 限制寬高不超過一頁(max-height:96vh)＝自動縮成一頁
     win.document.write('<!DOCTYPE html><html><head><title>列印 - 批圖</title>' +
-        '<style>html,body{margin:0;padding:0;}svg{display:block;width:100%;height:auto;}' +
-        '@media print{@page{margin:0;}svg{width:100%;height:auto;}}</style>' +
+        '<style>@page{size:' + paper + '; margin:8mm;}html,body{margin:0;padding:0;height:100%;}' +
+        'svg{display:block;margin:0 auto;max-width:100%;max-height:96vh;width:auto;height:auto;}</style>' +
         '</head><body onload="setTimeout(function(){window.focus();window.print();},250)">' +
         svg + '</body></html>');
     win.document.close();
