@@ -118,6 +118,9 @@ if ($has_access) {
         table.bomtrk-table tbody td { padding:6px 5px; vertical-align:middle; border-bottom:1px solid #F1F3F5; font-size:13px; }
         table.bomtrk-table tbody tr:hover { background:#FAFBFE; }
         table.bomtrk-table.hide-select-col .col-select { display:none; }
+        /* 進行中(未結案)整列淡橘底色，讓仍需追蹤的BOM一眼跳出來；已結案維持白底(斑馬紋) */
+        table.bomtrk-table tbody tr.row-open > td { background-color:#FFF7E6; }
+        table.bomtrk-table tbody tr.row-open:hover > td { background-color:#FFEFCC; }
 
         /* 追蹤規則(料號/BOM/客戶/業務)搜尋用：保留 chip + 關鍵字搜尋 */
         .ac-box{ position:relative; }
@@ -429,6 +432,11 @@ function fmtProgress(r) {
     if (r.processing_state == 1) return '100%';
     return r.progress_pct != null ? (parseFloat(r.progress_pct) + '%') : '—';
 }
+// 已結案：製程一律顯示「結案」(此時目前製程對追蹤已無意義)；進行中才顯示實際製程。empty=空值時的替代字
+function fmtProcess(r, empty) {
+    if (r.processing_state == 1) return '結案';
+    return r.latest_process_name || (empty != null ? empty : '');
+}
 
 function renderRows(rows) {
     var $tb = $('#bomTrackTbody').empty();
@@ -440,6 +448,7 @@ function renderRows(rows) {
         var statusText = r.processing_state == 1 ? '已結案' : '進行中';
         var progress = fmtProgress(r);
         var tr = $('<tr>');
+        if (r.processing_state != 1) tr.addClass('row-open'); // 進行中整列淡橘底色
         var $cb = $('<input type="checkbox">').on('change', function () {
             if (this.checked) state.selected[r.bom] = true; else delete state.selected[r.bom];
             updateBulkNotifyButton();
@@ -456,7 +465,7 @@ function renderRows(rows) {
         var $dueTd = $('<td>').text(r.Delivery_date || '無交期');
         if (r.order_no) $dueTd.append($('<div style="font-size:11px;color:#888;">').text('單號：' + r.order_no));
         tr.append($dueTd);
-        tr.append($('<td>').text(r.latest_process_name || '—'));
+        tr.append($('<td>').text(fmtProcess(r, '—')));
         tr.append($('<td>').text(progress));
         tr.append($('<td>').text(statusText));
         var opTd = $('<td>');
@@ -495,7 +504,7 @@ $('#btnExportCsv').on('click', function () {
         var lines = ['BOM,負責業務,料號,客戶,交期,訂單編號,目前製程,進度,狀態'];
         rows.forEach(function (r) {
             var statusText = r.processing_state == 1 ? '已結案' : '進行中';
-            var cells = [r.bom, r.sales_name || '', r.d_id || '', r.Client_Name || '', r.Delivery_date || '無交期', r.order_no || '', r.latest_process_name || '', fmtProgress(r), statusText];
+            var cells = [r.bom, r.sales_name || '', r.d_id || '', r.Client_Name || '', r.Delivery_date || '無交期', r.order_no || '', fmtProcess(r), fmtProgress(r), statusText];
             lines.push(cells.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(','));
         });
         var blob = new Blob(["﻿" + lines.join("\n")], { type: 'text/csv;charset=utf-8;' });
@@ -512,7 +521,7 @@ $('#btnExportPdf').on('click', function () {
         var body = [['BOM', '負責業務', '料號', '客戶', '交期', '訂單編號', '目前製程', '進度', '狀態']];
         rows.forEach(function (r) {
             var statusText = r.processing_state == 1 ? '已結案' : '進行中';
-            body.push([r.bom, r.sales_name || '', r.d_id || '', r.Client_Name || '', r.Delivery_date || '無交期', r.order_no || '', r.latest_process_name || '', fmtProgress(r), statusText]);
+            body.push([r.bom, r.sales_name || '', r.d_id || '', r.Client_Name || '', r.Delivery_date || '無交期', r.order_no || '', fmtProcess(r), fmtProgress(r), statusText]);
         });
         pdfMake.createPdf({
             pageOrientation: 'landscape',
@@ -877,8 +886,10 @@ $('#btnBulkNotify').on('click', function () {
 
     $wrap.on('mousedown', function (e) {
         if (!state.isOwnerOrAdmin) return;
-        // 點在checkbox/連結/按鈕上維持原本點擊行為，不要啟動框選
-        if ($(e.target).is('input, a, button, i') || $(e.target).closest('a, button').length) return;
+        // 只從最左「勾選欄」開始拖曳才啟動框選；其餘欄位(交期/單號/料號等)保留原生選字，可反白複製。
+        // 點在checkbox本身維持勾選行為。
+        if (!$(e.target).closest('td.col-select, th.col-select').length) return;
+        if ($(e.target).is('input')) return;
         dragging = true;
         var offset = $wrap.offset();
         startX = e.pageX - offset.left + $wrap.scrollLeft();
