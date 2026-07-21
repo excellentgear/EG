@@ -17,6 +17,11 @@ include_once '../../src/common/rbac.php'; // #1 fail-closed：共用 RBAC bootst
 // 權限不足專用例外：讓 catch 統一回 HTTP 403（前端可據此禁用/提示）
 if (!class_exists('QcPermException')) { class QcPermException extends Exception {} }
 
+// #3 CSRF：以 session token 保護所有寫入型 POST（本專案無既有 CSRF 機制，故自建）
+// 於 GET 載入時產生並嵌入頁面；AJAX 寫入時後端比對。
+if (empty($_SESSION['qc_csrf'])) { $_SESSION['qc_csrf'] = bin2hex(random_bytes(16)); }
+$CSRF = $_SESSION['qc_csrf'];
+
 // -----------------------------------------------------------------------------
 // 後端 API（僅在 AJAX POST 時執行，GET 載入完全不進入此區塊）
 // -----------------------------------------------------------------------------
@@ -100,6 +105,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     try {
+        // #3 CSRF：寫入型 action 一律比對 session token（前端經 ajaxPrefilter 自動夾帶 csrf）
+        $WRITE_ACTIONS = ['save_inspection','update_inspection','set_ncr_decision','unlock_record','relock_record',
+            'save_tool_category','delete_tool_category','save_tool_instance','delete_tool_instance','replace_tool_category',
+            'save_special_item','delete_special_item','manage_templates','manage_sampling_rules'];
+        if (in_array($_POST['action'], $WRITE_ACTIONS, true)) {
+            $tok = $_POST['csrf'] ?? '';
+            if (!is_string($tok) || $tok === '' || !hash_equals((string)($_SESSION['qc_csrf'] ?? ''), $tok)) {
+                throw new QcPermException('連線憑證失效或不符，請重新整理頁面後再試 (CSRF)');
+            }
+        }
+
         // =====================================================================
         // 0) 查詢本人 QC 權限（頁面載入時呼叫，決定設定選單/按鈕顯示）
         // =====================================================================
@@ -1730,6 +1746,19 @@ $(function(){
 $(function(){
     'use strict';
     var API = location.pathname; // 後端就是本檔
+    // #3 CSRF：自動把 session token 夾帶進本頁所有 POST（含 $.post 物件型 data 與字串型 data）
+    var CSRF = <?php echo json_encode($CSRF, JSON_UNESCAPED_SLASHES); ?>;
+    $.ajaxPrefilter(function(opts){
+        var m = (opts.type || opts.method || 'GET').toUpperCase();
+        if (m !== 'POST') return;
+        if (typeof opts.data === 'string'){
+            if (opts.data.indexOf('csrf=') === -1) opts.data += (opts.data ? '&' : '') + 'csrf=' + encodeURIComponent(CSRF);
+        } else if (opts.data && typeof opts.data === 'object' && !(opts.data instanceof FormData)){
+            if (opts.data.csrf === undefined) opts.data.csrf = CSRF;
+        } else if (opts.data == null){
+            opts.data = { csrf: CSRF };
+        }
+    });
     var TOOLS = ['卡尺','分厘卡','投影機','三次元','針規','目視'];
     var MOCK_TPL = [
         { name:'一般車件 5 項', items:[
