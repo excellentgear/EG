@@ -1176,24 +1176,29 @@ $(function(){
   });
   function tagPickIds(sel){ const ids=[]; $(sel+' .tag-pick.active').each(function(){ ids.push($(this).data('id')); }); return ids; }
 
-  // ══ 結構總覽（樹狀圖） ══
+  // ══ 結構總覽（樹狀圖：依部門代碼分組＋表格式欄位對齊） ══
   const TYPE_ICON = {'手冊':'📕','程序':'📘','標準書':'📗','表單':'📄'};
   function treeNodeHtml(d, depth, hasKids){
     const icon = TYPE_ICON[d.doc_type] || '📄';
     const caret = hasKids ? `<a href="javascript:void(0)" class="tree-toggle" style="display:inline-block;width:14px;color:#888;text-decoration:none;">▾</a>` : `<span style="display:inline-block;width:14px;"></span>`;
-    const ver = d.current_version ? ` <span class="label label-info" style="font-size:10px;">${esc(d.current_version)}</span>` : '';
     const rc  = parseInt(d.record_count)||0;
-    const recBadge = rc>0 ? ` <span class="label label-warning" style="font-size:10px;">${d.doc_type==='表單'?'紀錄':'附件'}×${rc}</span>` : '';
-    const del = d.is_deleted==1 ? ' <span class="label label-default" style="font-size:10px;">已刪除</span>' : '';
-    const dept = d.dept_name ? ` <span class="text-muted" style="font-size:11px;">(${esc(d.dept_name)})</span>` : '';
-    return `<div style="margin-left:${depth*22}px;">${caret}${icon}
-      <a href="javascript:void(0)" class="tree-doc" data-no="${esc(d.doc_no)}" title="跳至此文件"><strong>${esc(d.doc_no)}</strong> ${esc(d.doc_name)}</a>${ver}${recBadge}${dept}${del}</div>`;
+    const recBadge = rc>0 ? `<span class="label label-warning" style="font-size:10px;">${d.doc_type==='表單'?'紀錄':'附件'}×${rc}</span>` : '';
+    const del = d.is_deleted==1 ? '<span class="label label-default" style="font-size:10px;">刪</span>' : '';
+    // 表格式欄位：名稱欄吃縮排，版本/紀錄/部門固定寬度＝虛擬框線對齊
+    return `<div class="tree-row" style="display:flex;align-items:center;border-bottom:1px dashed #eee;padding:1px 0;">
+      <div style="flex:1;min-width:0;padding-left:${depth*22}px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        ${caret}${icon} <a href="javascript:void(0)" class="tree-doc" data-no="${esc(d.doc_no)}" title="${esc(d.doc_no)} ${esc(d.doc_name)}｜點擊跳至此文件"><strong>${esc(d.doc_no)}</strong> ${esc(d.doc_name)}</a>
+      </div>
+      <div style="flex:0 0 56px;text-align:center;">${d.current_version?`<span class="label label-info" style="font-size:10px;">${esc(d.current_version)}</span>`:''}</div>
+      <div style="flex:0 0 72px;text-align:center;">${recBadge}</div>
+      <div style="flex:0 0 110px;font-size:11px;color:#888;white-space:nowrap;overflow:hidden;">${esc(d.dept_name)||'-'}</div>
+      <div style="flex:0 0 30px;text-align:center;">${del}</div>
+    </div>`;
   }
   function renderTree(docs){
     const kids = {};
     docs.forEach(d=>{ const p=d.parent_doc_id||0; (kids[p]=kids[p]||[]).push(d); });
     Object.values(kids).forEach(a=>a.sort((x,y)=>String(x.doc_no).localeCompare(String(y.doc_no))));
-    const box=$('#treeBody').empty();
     let count=0;
     function walk(list, depth){
       let html='';
@@ -1206,7 +1211,37 @@ $(function(){
       });
       return html;
     }
-    box.html(walk(kids[0], 0) || '<div class="text-muted">尚無文件</div>');
+    // 依「文件編號中的部門代碼」分組（如 GM/TD…）；無法解析者歸入「其他」
+    const groups = {};
+    (kids[0]||[]).forEach(d=>{
+      const m = String(d.doc_no||'').match(/^\d-([A-Za-z]+)-/);
+      const key = m ? m[1].toUpperCase() : '其他';
+      (groups[key]=groups[key]||[]).push(d);
+    });
+    const keys = Object.keys(groups).sort((a,b)=>{ if(a==='其他') return 1; if(b==='其他') return -1; return a.localeCompare(b); });
+    let html = '';
+    keys.forEach(k=>{
+      // 群組標題：代碼＋對應部門名稱（多部門全列）
+      const deptNames = [...new Set((META.dept_codes||[]).filter(c=>c.code.toUpperCase()===k)
+        .map(c=>{ const dep=(META.departments||[]).find(x=>x.id==c.department_id); return dep?dep.name:''; }).filter(Boolean))];
+      const label = k==='其他' ? '其他（編號無部門代碼）' : k + (deptNames.length?'｜'+deptNames.join('、'):'');
+      html += `<div class="tree-node" style="margin-top:8px;">
+        <div class="tree-row" style="background:#f5f7fa;border-left:3px solid #3498db;padding:3px 6px;font-weight:bold;">
+          <a href="javascript:void(0)" class="tree-toggle" style="display:inline-block;width:14px;color:#888;text-decoration:none;">▾</a>
+          <i class="fa fa-folder-open" style="color:#3498db;"></i> ${esc(label)}
+          <span class="text-muted" style="font-weight:normal;font-size:11px;">（${groups[k].length} 份頂層文件）</span>
+        </div>
+        <div class="tree-kids">${walk(groups[k], 1)}</div>
+      </div>`;
+    });
+    const header = `<div style="display:flex;font-weight:bold;font-size:11px;color:#888;border-bottom:1px solid #ddd;padding-bottom:2px;">
+      <div style="flex:1;">文件</div>
+      <div style="flex:0 0 56px;text-align:center;">版本</div>
+      <div style="flex:0 0 72px;text-align:center;">紀錄/附件</div>
+      <div style="flex:0 0 110px;">部門</div>
+      <div style="flex:0 0 30px;"></div>
+    </div>`;
+    $('#treeBody').html(html ? header+html : '<div class="text-muted">尚無文件</div>');
     $('#treeInfo').text(`共 ${count} 份文件`);
   }
   function loadTree(){
@@ -1442,20 +1477,29 @@ $(function(){
     if(fi && fi.files.length) has = true;
     return !has;
   }
-  $(document).on('keydown', '#vbRows input, #vbRows select, #fcVerRows input, #fcVerRows select', function(e){
+  // 通用：多列表格內 ↑↓＝切換上下列同欄（ai-rules/08 規範）。
+  // vb 版本表格（有「加一版」按鈕）另支援：末列↓自動加列、↑離開全空列自動移除。
+  $(document).on('keydown',
+    '#vbRows input, #vbRows select, #fcVerRows input, #fcVerRows select, ' +
+    '#fcFormRows input, #batchRows input, #recUploadRows input, #deptCodeList input, #deptCodeList select',
+    function(e){
     if(e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     e.preventDefault();
     const $tr = $(this).closest('tr'), $tbody = $tr.closest('tbody');
+    const isVb = $tbody.is('#vbRows, #fcVerRows'); // 可增刪列的表格
     const colIdx = $(this).closest('td').index();
     if(e.key === 'ArrowDown'){
       let $next = $tr.next();
-      if(!$next.length){ $tbody.append(vbRowHtml()); $next = $tr.next(); }
+      if(!$next.length){
+        if(!isVb) return;
+        $tbody.append(vbRowHtml()); $next = $tr.next();
+      }
       $next.find('td').eq(colIdx).find('input,select').first().trigger('focus');
     } else {
       const $prev = $tr.prev();
       if(!$prev.length) return;
       $prev.find('td').eq(colIdx).find('input,select').first().trigger('focus');
-      if($tr.index() > 0 && vbRowEmpty($tr)) $tr.remove();
+      if(isVb && $tr.index() > 0 && vbRowEmpty($tr)) $tr.remove();
     }
   });
   // 版本列選檔 → 自動以檔案「修改日期」帶入日期欄（已填則不動）
@@ -1905,7 +1949,10 @@ $(function(){
         let op = `<a class="btn btn-xs btn-default" href="${API}?action=form_record_download&id=${x.id}&inline=1" target="_blank">預覽</a> `;
         if(canDL) op += `<a class="btn btn-xs btn-info" href="${API}?action=form_record_download&id=${x.id}">下載</a> `;
         if(canD) op += `<button class="btn btn-xs btn-danger rec-del" data-id="${x.id}">刪</button>`;
-        tb.append(`<tr><td>${esc(x.title)}</td><td>${esc(x.record_date)||'-'}</td><td>${esc(x.note)||'-'}</td><td>${esc(x.uploaded_by_name)||'-'}</td><td class="text-nowrap">${op}</td></tr>`);
+        // 備註中的 #文字 顯示為可點擊標籤（點了＝以 #標籤 全域搜尋，找出所有含此標籤的文件）
+        const noteHtml = esc(x.note||'-').replace(/#([^\s#<]+)/g,
+          '<a href="javascript:void(0)" class="note-hashtag label label-primary" data-tag="#$1" style="font-weight:normal;font-size:11px;">#$1</a>');
+        tb.append(`<tr><td>${esc(x.title)}</td><td>${esc(x.record_date)||'-'}</td><td>${noteHtml}</td><td>${esc(x.uploaded_by_name)||'-'}</td><td class="text-nowrap">${op}</td></tr>`);
       });
       if(!(r.records||[]).length) tb.append('<tr><td colspan="5" class="text-muted text-center">尚無紙本紀錄</td></tr>');
       // 分頁
@@ -1926,6 +1973,15 @@ $(function(){
     $('#recordModal').modal('show');
   });
   $('#recPager').on('click','a',function(e){ e.preventDefault(); const p=parseInt($(this).data('p')); if(p) loadRecords($('#rec_doc_id').val(), p); });
+  // 點備註中的 #標籤 → 關閉跳窗，以該標籤全域搜尋（搜尋已涵蓋紀錄標題/備註）
+  $('#recPaperBody').on('click','.note-hashtag', function(){
+    const tag = $(this).data('tag');
+    $('#recordModal').modal('hide');
+    $('#filterLevel').val(''); $('#filterDept').val('');
+    activeTagId=0; activeParentId=0; activeParentNo=''; renderTagFilter();
+    $('#searchKw').val(tag);
+    loadDocs();
+  });
   $('#recPaperBody').on('click','.rec-del', function(){
     if(!confirm('刪除此筆紀錄？')) return;
     $.post(API+'?action=form_record_delete',{id:$(this).data('id')}, r=>{
@@ -1943,11 +1999,12 @@ $(function(){
     const d = $('#rec_common_date').val() || '';
     for(let i=0;i<this.files.length;i++){
       const nameNoExt = this.files[i].name.replace(/\.[^.]+$/,'');
+      const rowDate = d || fileDate(this.files[i]); // 共同日期優先，否則用檔案修改日期
       tb.append(`<tr>
         <td style="width:22%;vertical-align:middle;">${esc(this.files[i].name)}</td>
         <td style="width:28%;"><input type="text" class="form-control input-sm ru-title" value="${esc(nameNoExt)}" placeholder="標題(必填)"></td>
-        <td style="width:16%;"><input type="date" class="form-control input-sm ru-date" value="${d}" max="9999-12-31"></td>
-        <td><input type="text" class="form-control input-sm ru-note" placeholder="備註(選填)"></td>
+        <td style="width:16%;"><input type="date" class="form-control input-sm ru-date" value="${rowDate}" max="9999-12-31"></td>
+        <td><input type="text" class="form-control input-sm ru-note" placeholder="備註(選填，可打 #標籤 供搜尋)"></td>
       </tr>`);
     }
     $('#recUploadSubmit').toggle(this.files.length>0);

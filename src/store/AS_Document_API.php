@@ -323,7 +323,14 @@ case 'list_documents':
     $where = [];
     $params = [];
     if (!$incDeleted) $where[] = "d.is_deleted = 0";
-    if ($kw !== '')   { $where[] = "(d.doc_no LIKE ? OR d.doc_name LIKE ?)"; $params[]="%$kw%"; $params[]="%$kw%"; }
+    if ($kw !== '')   {
+        // 搜尋範圍：文件編號/名稱＋底下紀錄(附件)的標題/備註（備註可打 #標籤 供搜尋）
+        $where[] = "(d.doc_no LIKE ? OR d.doc_name LIKE ?
+                     OR EXISTS (SELECT 1 FROM as_form_record fr2
+                                WHERE fr2.form_doc_id = d.id AND fr2.is_deleted = 0
+                                  AND (fr2.title LIKE ? OR fr2.note LIKE ?)))";
+        $params[]="%$kw%"; $params[]="%$kw%"; $params[]="%$kw%"; $params[]="%$kw%";
+    }
     if ($level!=='')  { $where[] = "d.doc_level = ?"; $params[]=$level; }
     if ($dept!=='')   { $where[] = "d.department_id = ?"; $params[]=(int)$dept; }
     if ($tag>0)       { $where[] = "d.id IN (SELECT doc_id FROM as_doc_tag_map WHERE tag_id = ?)"; $params[]=$tag; }
