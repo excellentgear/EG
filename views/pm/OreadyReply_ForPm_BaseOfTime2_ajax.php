@@ -3223,10 +3223,10 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                         WHEN y.return_date   IS NOT NULL THEN 'return'
                         WHEN y.QC_check_date IS NOT NULL THEN 'qc'
                         WHEN y.next_out_date IS NOT NULL THEN 'next'
-                        WHEN y.closed_at     IS NOT NULL THEN 'closed'
+                        WHEN y.close_date    IS NOT NULL THEN 'closed'
                         ELSE 'ongoing'
                     END AS ret_src,
-                    COALESCE(y.return_date, y.QC_check_date, y.next_out_date, y.closed_at) AS eff_return
+                    COALESCE(y.return_date, y.QC_check_date, y.next_out_date, y.close_date) AS eff_return
                 FROM (
                     SELECT
                         bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.process_no, pn.ProcessName,
@@ -3234,7 +3234,13 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                         COALESCE(ml.internal,0) AS internal,
                         bi.sqty, bi.processing_state, b.priority_type,
                         b.Client_Name, b.d_id,
-                        bi.outsource_date, bi.return_date, bi.QC_check_date, b.closed_at,
+                        bi.outsource_date, bi.return_date, bi.QC_check_date,
+                        -- 結案日：優先 closed_at；若 BOM 已結案(processing_state='1')但無 closed_at，
+                        -- 依序退回 bom.Modified_At→bom_ing.Modified_At→回廠→QC→移轉日(必為非空)，確保已結案者不會被當成在廠中延到今天
+                        CASE WHEN b.closed_at IS NOT NULL THEN b.closed_at
+                             WHEN b.processing_state = '1'
+                                  THEN COALESCE(b.Modified_At, bi.Modified_At, bi.return_date, bi.QC_check_date, bi.outsource_date)
+                             ELSE NULL END AS close_date,
                         (SELECT MIN(bi2.outsource_date) FROM bom_ing bi2
                            WHERE bi2.bom = bi.bom AND bi2.bom_sn > bi.bom_sn
                              AND bi2.outsource_date IS NOT NULL
