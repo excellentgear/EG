@@ -454,7 +454,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $sel->execute([$lid]);
                 $r = $sel->fetch(PDO::FETCH_ASSOC);
                 if (!$r) continue;
-                if (!$isMgr && (int)$r['owner_user_id'] !== $uid) continue;   // 只能動自己的標籤
+                // 複製＝非破壞性，看得到（公司共用／自己部門的部門標籤／自己的私人）就能複製一份到目標範圍；
+                // 搬移＝會動到原標籤，仍限本人或管理者。
+                $ot = $r['owner_type'];
+                $canSee = $isMgr || $ot === 'company'
+                    || ($ot === 'dept' && in_array((int)$r['owner_dept_id'], $myDeptIds, true))
+                    || ($ot === 'private' && (int)$r['owner_user_id'] === $uid);
+                $isOwner = $isMgr || (int)$r['owner_user_id'] === $uid;
+                if ($mode === 'copy') { if (!$canSee) continue; }
+                else { if (!$isOwner) continue; }
                 if ($scope === 'dept') {
                     $first = true;
                     foreach ($deptIds as $d) {
@@ -3744,7 +3752,14 @@ async function openLibMgr() {
     renderLibMgr();
     if (!MY_DEPTS.length && !IS_MGR) toast('提醒：你的帳號（' + (USER_CNAME || '') + '，ID ' + LIB_UID + '）在人員部門對應表查無部門，故沒有部門欄可放；請把此訊息回報管理者');
 }
-function lmCanTouch(row) { return IS_MGR || Number(row.owner_user_id) === Number(LIB_UID); }
+function lmIsOwn(row) { return IS_MGR || Number(row.owner_user_id) === Number(LIB_UID); }
+function lmCanSee(row) {
+    return lmIsOwn(row)
+        || row.owner_type === 'company'
+        || (row.owner_type === 'dept' && MY_DEPTS.some(d => Number(d.id) === Number(row.owner_dept_id)));
+}
+// 拖曳權限：看得到就能拖（非本人的公司/部門標籤一律以「複製」語意處理，見 drop 判斷；搬移仍限本人）
+function lmCanTouch(row) { return lmCanSee(row); }
 /* 部門晶片：單一部門欄，頂部列出使用者的部門按鈕（可複選）。
    拖進部門欄＝同時發佈到所有點亮的部門；顯示內容也跟著點亮的部門過濾。 */
 let lmDeptChips = [];
@@ -3904,7 +3919,13 @@ function renderLibMgr() {
                 deptIds = lmActiveDepts();
                 if (!deptIds.length) { toast('請先點亮至少一個部門按鈕（部門欄頂部）'); return; }
             }
-            lmMove(scope, deptIds, e.ctrlKey ? 'copy' : 'move');
+            // 選取中若含非本人擁有的標籤（公司共用／別人建立的部門標籤，如技術部內建）→ 強制以複製處理，
+            // 不會動到原標籤（搬移只對自己的標籤有效，否則後端會略過，造成「拖了沒反應」的錯覺）
+            const notOwned = Array.from(lmSel).some(id => {
+                const r = customLabels.find(x => Number(x.label_id) === Number(id));
+                return r && !lmIsOwn(r);
+            });
+            lmMove(scope, deptIds, (e.ctrlKey || notOwned) ? 'copy' : 'move');
         });
         // 框選（滑鼠在欄內空白處拖出選取框）
         grid.addEventListener('mousedown', e => {
