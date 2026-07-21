@@ -9,7 +9,9 @@
 (function () {
   'use strict';
 
-  var PAGE = 'OreadyReply_ForPm_BaseOfTime2.php';
+  // 以「目前所在頁面」為 AJAX 端點與篩選對象：
+  // 測試版嵌在 OreadyReply_ForPm_BaseOfTime2.php、正式版嵌在 OreadyReply_ForPm_BaseOfTime.php，皆自動對應
+  var PAGE = (location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime2.php');
   var built = false;
 
   // 急件燈號暖色系（bg 底色 / bd 邊框 / tx 文字，皆已確認對比足夠可讀）
@@ -49,9 +51,10 @@
 
     var style = document.createElement('style');
     style.textContent = [
-      '#cg-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:20000;display:none;}',
-      '#cg-modal{position:absolute;top:2.5vh;left:2.5vw;width:95vw;height:95vh;background:#fff;border-radius:6px;box-shadow:0 6px 30px rgba(0,0,0,.4);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#333;}',
-      '#cg-head{display:flex;align-items:center;gap:10px;padding:8px 14px;background:#8a5a2b;color:#fff;flex:0 0 auto;}',
+      // overlay 不擋事件、無深色底 → 甘特圖為可移動的浮動視窗，底下 OreadyReply 頁面仍可操作
+      '#cg-overlay{position:fixed;inset:0;background:transparent;z-index:20000;display:none;pointer-events:none;}',
+      '#cg-modal{position:fixed;top:3vh;left:3vw;width:94vw;height:92vh;background:#fff;border:1px solid #cbb08f;border-radius:6px;box-shadow:0 8px 34px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#333;pointer-events:auto;}',
+      '#cg-head{display:flex;align-items:center;gap:10px;padding:8px 14px;background:#8a5a2b;color:#fff;flex:0 0 auto;cursor:move;user-select:none;}',
       '#cg-head h3{margin:0;font-size:16px;font-weight:700;flex:1;}',
       '#cg-head .cg-x{cursor:pointer;font-size:22px;line-height:1;border:none;background:none;color:#fff;}',
       '#cg-tools{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 14px;border-bottom:1px solid #e2e2e2;background:#faf6f0;flex:0 0 auto;}',
@@ -93,6 +96,7 @@
       '.cg-bar.p-n{background:' + PRIO.n.bg + ';border-color:' + PRIO.n.bd + ';color:' + PRIO.n.tx + ';}',
       '.cg-bar.p-u{background:' + PRIO.u.bg + ';border-color:' + PRIO.u.bd + ';color:' + PRIO.u.tx + ';}',
       '.cg-bar.p-e{background:' + PRIO.e.bg + ';border-color:' + PRIO.e.bd + ';color:' + PRIO.e.tx + ';}',
+      '.cg-bar:hover{outline:2px solid #5a4632;outline-offset:-1px;filter:brightness(1.06);}',
       '.cg-bar.stale{opacity:.42;border-style:dashed;}',
       '.cg-bar .cg-ov{position:absolute;top:0;font-weight:700;}',
       '.cg-loadrow{display:flex;border-bottom:1px solid #efe7db;background:#fbf7f1;}',
@@ -110,6 +114,7 @@
     ov.innerHTML =
       '<div id="cg-modal">' +
       '  <div id="cg-head"><h3><i class="fa fa-bar-chart"></i> 外包產能甘特圖</h3>' +
+      '     <span style="font-size:11px;font-weight:400;opacity:.85;">（拖曳標題可移動視窗；點長條＝在下方頁面篩選該廠商該件）</span>' +
       '     <button class="cg-x" title="關閉">&times;</button></div>' +
       '  <div id="cg-tools">' +
       '     <label>區間</label>' +
@@ -143,7 +148,7 @@
     var tip = document.createElement('div'); tip.id = 'cg-tip'; document.body.appendChild(tip);
 
     ov.querySelector('.cg-x').onclick = closeModal;
-    ov.addEventListener('mousedown', function (e) { if (e.target === ov) closeModal(); });
+    setupDrag();
     document.getElementById('cg-go').onclick = runQuery;
     document.getElementById('cg-clear').onclick = clearFilters;
     document.getElementById('cg-csv').onclick = exportCsv;
@@ -255,6 +260,40 @@
     if (state.makers.length === 0) loadFilters();
   };
   function closeModal() { document.getElementById('cg-overlay').style.display = 'none'; hideTip(); }
+
+  // ---- 拖曳移動視窗 ----------------------------------------------------------
+  function setupDrag() {
+    var head = document.getElementById('cg-head');
+    var modal = document.getElementById('cg-modal');
+    var dragging = false, ox = 0, oy = 0;
+    head.addEventListener('mousedown', function (e) {
+      if (e.target.closest('.cg-x')) return;
+      var r = modal.getBoundingClientRect();
+      modal.style.left = r.left + 'px'; modal.style.top = r.top + 'px';
+      modal.style.width = r.width + 'px'; modal.style.height = r.height + 'px';
+      dragging = true; ox = e.clientX - r.left; oy = e.clientY - r.top; e.preventDefault();
+    });
+    document.addEventListener('mousemove', function (e) {
+      if (!dragging) return;
+      var x = Math.max(-modal.offsetWidth + 120, Math.min(window.innerWidth - 120, e.clientX - ox));
+      var y = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - oy));
+      modal.style.left = x + 'px'; modal.style.top = y + 'px';
+    });
+    document.addEventListener('mouseup', function () { dragging = false; });
+  }
+
+  // ---- 點長條 → 篩選下方 OreadyReply 頁面（本廠商 + 本 BOM）--------------------
+  function filterHostPage(bom, maker) {
+    var venIn = document.getElementById('vendor-filter');
+    var bomIn = document.getElementById('bom-filter');
+    if (!bomIn) { alert('找不到頁面的 BOM 篩選欄（此頁可能非 OreadyReply 主頁）'); return; }
+    if (venIn) venIn.value = maker || '';
+    bomIn.value = bom;
+    // 觸發頁面既有的篩選（兩頁皆綁定 input 事件 → processAndRenderData）
+    if (venIn) venIn.dispatchEvent(new Event('input', { bubbles: true }));
+    bomIn.dispatchEvent(new Event('input', { bubbles: true }));
+    closeModal();   // 關閉視窗以便看到篩選後的清單
+  }
 
   function clearFilters() {
     state.selMakers.clear(); state.selProcs.clear(); state.selTypes.clear();
@@ -400,7 +439,7 @@
       g.segs.forEach(function (x) {
         var r = x.r, left = x.cs * pxDay, w = (x.ce - x.cs + 1) * pxDay - 2; if (w < 3) w = 3;
         var top = x.lane * LANE_STEP + 2;
-        html += '<div class="cg-bar p-' + (r.prio || 'n') + (r.is_stale ? ' stale' : '') + '" style="left:' + left + 'px;top:' + top + 'px;width:' + w + 'px;" data-tip="' + esc(tipText(r)) + '">' +
+        html += '<div class="cg-bar p-' + (r.prio || 'n') + (r.is_stale ? ' stale' : '') + '" style="left:' + left + 'px;top:' + top + 'px;width:' + w + 'px;" title="點此在下方頁面篩選：' + esc(r.maker_name + ' / ' + r.bom) + '" data-bom="' + esc(r.bom) + '" data-maker="' + esc(r.maker_name) + '" data-tip="' + esc(tipText(r)) + '">' +
           (x.ovL ? '<span class="cg-ov" style="left:1px;">‹</span>' : '') + esc(barLabel(r, w)) +
           (x.ovR ? '<span class="cg-ov" style="right:1px;">›</span>' : '') + '</div>';
       });
@@ -479,6 +518,11 @@
       tip.style.left = x + 'px'; tip.style.top = y + 'px';
     });
     scope.addEventListener('mouseleave', hideTip);
+    scope.addEventListener('click', function (e) {
+      var el = e.target.closest('.cg-bar');
+      if (!el || !el.dataset.bom) return;
+      filterHostPage(el.dataset.bom, el.dataset.maker);
+    });
   }
   function hideTip() { var t = document.getElementById('cg-tip'); if (t) t.style.display = 'none'; }
 
