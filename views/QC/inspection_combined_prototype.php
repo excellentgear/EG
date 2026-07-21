@@ -1214,7 +1214,7 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
                                             <th width="104">量具</th>
                                             <th width="52">結果型態</th>
                                             <th>實測值<div id="sample-nums" style="font-weight:normal;"></div></th>
-                                            <th width="28"></th>
+                                            <th width="50" title="備註 / 刪除"></th>
                                         </tr></thead>
                                         <tbody id="items-body"></tbody>
                                         <tfoot><tr id="verdict-row">
