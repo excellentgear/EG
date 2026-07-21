@@ -5119,18 +5119,39 @@ function doPrintPDF() {
         if (settled) return; settled = true;
         toast('PDF 產生逾時，改用快速列印'); printFallback();
     }, 10000);
-    try {
-        doc.getBlob(function (blob) {
+    pdfToBlob(doc,
+        function (blob) {
             if (settled) return; settled = true; clearTimeout(watchdog);
             if (!blob) { toast('PDF 產生失敗，改用快速列印'); printFallback(); return; }
             try { printPdfBlob(blob); }
             catch (e) { toast('列印 PDF 失敗，改用快速列印'); printFallback(); }
-        });
-    } catch (err) {
-        if (settled) return; settled = true; clearTimeout(watchdog);
-        console.warn('[EGdraw] PDF getBlob 失敗：', err);
-        toast('產生列印 PDF 失敗(' + ((err && err.message) || err) + ')，改用快速列印'); printFallback();
-    }
+        },
+        function (err) {
+            if (settled) return; settled = true; clearTimeout(watchdog);
+            console.warn('[EGdraw] PDF 產生失敗：', err);
+            toast('產生列印 PDF 失敗(' + ((err && err.message) || err) + ')，改用快速列印'); printFallback();
+        }
+    );
+}
+
+/* 取得 pdfmake 產生的 PDF Blob，相容不同版本的 pdfmake：新版有 getBlob，舊版(本專案打包的版本)
+   沒有 getBlob 只有 getBuffer / getBase64。依序挑一個可用的把 PDF 轉成 Blob 回呼，全都沒有才報錯。 */
+function pdfToBlob(doc, cb, errCb) {
+    try {
+        if (typeof doc.getBlob === 'function') {
+            doc.getBlob(function (b) { cb(b); });
+        } else if (typeof doc.getBuffer === 'function') {
+            doc.getBuffer(function (buf) { cb(new Blob([buf], { type: 'application/pdf' })); });
+        } else if (typeof doc.getBase64 === 'function') {
+            doc.getBase64(function (b64) {
+                const bin = atob(b64), arr = new Uint8Array(bin.length);
+                for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+                cb(new Blob([arr], { type: 'application/pdf' }));
+            });
+        } else {
+            errCb(new Error('pdfmake 無可用輸出方法(getBlob/getBuffer/getBase64)'));
+        }
+    } catch (e) { errCb(e); }
 }
 
 // 隱藏 iframe 建立小工具：不呼叫 window.open，所以在 bom_viewer 用 window.open 開出的彈出視窗裡
