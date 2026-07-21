@@ -5033,13 +5033,49 @@ function doPrintPDF() {
         pageMargins: [margin, margin, margin, margin],
         content: [{ image: dataURL, width: dispW, height: dispH, alignment: 'center' }]
     };
-    try {
-        pdfMake.createPdf(docDef).print();   // 用隱藏 iframe 列印，不會有彈窗攔截、也不會動到編輯畫面
-    } catch (err) {
-        try { pdfMake.createPdf(docDef).open(); }   // 退而求其次：開新分頁顯示 PDF，讓使用者自行列印
-        catch (e2) { toast('PDF 列印失敗，改用向量列印'); doPrintVector(); return; }
-    }
+    // 不直接用 pdfmake 內建的 .print()：它是「非同步產生 PDF」，若這張圖太大／記憶體不足／
+    // 影像嵌入失敗，錯誤是在 pdfmake 內部的非同步流程裡丟出，外層 try/catch 完全攔不到，結果就是
+    // 「按了列印沒反應」(有 toast 也不會出現)。改用 getBlob(callback)：能攔到同步例外，並用看門狗
+    // 逾時偵測非同步卡死，任何一種失敗都退回可正常運作的快速(PNG)列印，絕不留下「沒反應」。
+    let doc;
+    try { doc = pdfMake.createPdf(docDef); }
+    catch (err) { toast('產生列印 PDF 失敗，改用快速列印'); doPrint(); return; }
     hideModal('export-modal');
+    let settled = false;
+    const watchdog = setTimeout(function () {
+        if (settled) return; settled = true;
+        toast('PDF 產生逾時，改用快速列印'); doPrint();
+    }, 10000);
+    try {
+        doc.getBlob(function (blob) {
+            if (settled) return; settled = true; clearTimeout(watchdog);
+            if (!blob) { toast('PDF 產生失敗，改用快速列印'); doPrint(); return; }
+            try { printPdfBlob(blob); }
+            catch (e) { toast('列印 PDF 失敗，改用快速列印'); doPrint(); }
+        });
+    } catch (err) {
+        if (settled) return; settled = true; clearTimeout(watchdog);
+        toast('產生列印 PDF 失敗，改用快速列印'); doPrint();
+    }
+}
+
+/* 把 pdfmake 產生的 PDF Blob 以隱藏 iframe 送印：不動到編輯畫面、不會被彈窗攔截。 */
+function printPdfBlob(blob) {
+    const objUrl = URL.createObjectURL(blob);
+    const ifr = document.createElement('iframe');
+    ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+    ifr.src = objUrl;
+    ifr.onload = function () {
+        setTimeout(function () {
+            try { ifr.contentWindow.focus(); ifr.contentWindow.print(); } catch (e) {}
+        }, 200);
+    };
+    document.body.appendChild(ifr);
+    // 保底清理：afterprint 未必觸發，逾時後釋放網址並移除 iframe（0 尺寸，避免重複列印累積）
+    setTimeout(function () {
+        URL.revokeObjectURL(objUrl);
+        if (ifr.parentNode) ifr.parentNode.removeChild(ifr);
+    }, 120000);
 }
 
 /* 清晰列印：以向量 SVG 輸出。文字/線條在 SVG 內仍是向量，列印時瀏覽器直接以印表機解析度描繪，
