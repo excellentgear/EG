@@ -2526,7 +2526,7 @@ echo "</script>\n";
         pointer-events: none;
     }
     /* ── 已結案通知 toast ── */
-    #gs-closed-notice {
+    #gs-closed-notice, #bomf-closed-notice {
         display: none;
         position: fixed;
         bottom: 28px; left: 50%;
@@ -3583,6 +3583,58 @@ echo "</script>\n";
                         }, 'json');
                     }
                 }, 200);
+            });
+        })();
+
+        // ── BOM / 料號 搜索：活躍資料查無結果時，提示已結案有無符合（邏輯同全域搜索）──
+        (function() {
+            var _nt = document.createElement('div'); _nt.id = 'bomf-closed-notice';
+            _nt.style.cursor = 'pointer'; _nt.title = '點擊開啟已完工查詢';
+            document.body.appendChild(_nt);
+            var _timer = null, _lastQT = '';
+
+            // 點擊通知 → 清除 BOM 篩選 → 開啟已完工查詢 modal 並預填關鍵字
+            _nt.addEventListener('click', function(e) {
+                e.stopPropagation();
+                _nt.style.display = 'none'; clearTimeout(_nt._hideTimer);
+                var _bf = document.getElementById('bom-filter');
+                if (_bf && _bf.value.trim() !== '') { _bf.value = ''; processAndRenderData(); }
+                openSearchCompletedModal();
+                setTimeout(function() {
+                    var _inp = document.getElementById('completed-bom-search-term');
+                    var _btn = document.getElementById('execute-completed-search-btn');
+                    if (_inp) { _inp.value = _lastQT; }
+                    if (_btn) { _btn.click(); }
+                }, 150);
+            });
+            document.addEventListener('click', function() {
+                if (_nt.style.display !== 'none') { _nt.style.display = 'none'; clearTimeout(_nt._hideTimer); }
+            });
+
+            var _bf = document.getElementById('bom-filter');
+            if (_bf) _bf.addEventListener('input', function() {
+                _nt.style.display = 'none';
+                clearTimeout(_timer);
+                var _q = this.value;
+                // 既有的 input 監聽已同步呼叫 processAndRenderData 完成篩選，這裡只補「查無結果→查已結案」
+                _timer = setTimeout(function() {
+                    var _qt = (_q || '').trim();
+                    if (_qt && fullDataset && fullDataset.length > 0
+                            && !document.querySelector('#table-DOWN tbody tr')) {
+                        $.post('', { action: 'check_closed_bom', q: _qt }, function(res) {
+                            if (res && res.count > 0) {
+                                _lastQT = _qt;
+                                _nt.innerHTML = '<i class="fa fa-info-circle" style="margin-right:6px;"></i>'
+                                    + '未結案中查無「<strong>' + escapeHtml(_qt) + '</strong>」，'
+                                    + '已結案資料有 <strong>' + res.count + '</strong> 筆符合。'
+                                    + ' <span style="opacity:.7;font-size:12px;">點擊查詢 &rsaquo;</span>';
+                                _nt.style.display = 'block';
+                                clearTimeout(_nt._hideTimer);
+                                _nt._hideTimer = setTimeout(function() { _nt.style.display = 'none'; }, 10000);
+                            }
+                        }, 'json');
+                    }
+                }, 250);
             });
         })();
 
