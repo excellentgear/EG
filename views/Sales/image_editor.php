@@ -1206,8 +1206,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         </div>
         <div class="modal-foot">
             <button class="tb-btn" onclick="hideModal('export-modal')">取消</button>
-            <button class="tb-btn" onclick="doPrint()" title="快速：把畫布烙成點陣圖列印，什麼都能印、速度快，但文字/線條放大後會略糊"><i class="fa fa-print"></i> 快速列印</button>
-            <button class="tb-btn" onclick="doPrintVector()" title="清晰：以向量(SVG)列印，文字/線條無限銳利、照片維持原解析度；極少數自訂圖形若顯示異常請改用快速列印"><i class="fa fa-magic"></i> 清晰列印</button>
+            <button class="tb-btn" onclick="doPrintVector()" title="以向量(SVG)列印，文字/線條無限銳利、照片維持原解析度；極少數自訂圖形若顯示異常會自動改用點陣列印"><i class="fa fa-print"></i> 列印</button>
             <button class="tb-btn primary" onclick="doSave()"><i class="fa fa-save"></i> 另存圖片…</button>
         </div>
     </div>
