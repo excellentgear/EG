@@ -1169,6 +1169,13 @@ case 'create_document_full':
         $db->prepare("UPDATE as_document SET current_version=?, current_version_id=? WHERE id=?")
            ->execute([$lastVer, $lastVerId, $docId]);
 
+        // 程序書標籤
+        $mainTags = array_filter(array_map('intval', explode(',', $_POST['tag_ids'] ?? '')));
+        if ($mainTags) {
+            $insTag = $db->prepare("INSERT IGNORE INTO as_doc_tag_map (doc_id,tag_id) VALUES (?,?)");
+            foreach ($mainTags as $tid) $insTag->execute([$docId, $tid]);
+        }
+
         // 3. 底下表單（各一版，parent=此程序書，四階/表單，部門承襲）
         $formCnt = 0;
         foreach ($forms as $i => $f) {
@@ -1206,6 +1213,12 @@ case 'create_document_full':
                ->execute([$fDocId,$fVer,'制訂',$fDate,null,trim($f['revised_summary'] ?? '') ?: null,'四階',$dept,$fname,$orig,$GLOBALS['currentCname']]);
             $fVerId = (int)$db->lastInsertId();
             $db->prepare("UPDATE as_document SET current_version_id=? WHERE id=?")->execute([$fVerId,$fDocId]);
+            // 表單標籤
+            $fTags = array_filter(array_map('intval', (array)($f['tag_ids'] ?? [])));
+            if ($fTags) {
+                $insTag2 = $db->prepare("INSERT IGNORE INTO as_doc_tag_map (doc_id,tag_id) VALUES (?,?)");
+                foreach ($fTags as $tid) $insTag2->execute([$fDocId, $tid]);
+            }
             $formCnt++;
         }
         $db->commit();

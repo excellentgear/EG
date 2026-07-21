@@ -357,8 +357,9 @@ if ($deptPerm === 'R') {
           <div class="form-group col-md-3"><label>所屬部門</label><select class="form-control" id="fc_dept"><option value="">跨部門</option></select></div>
         </div>
         <select class="form-control input-sm" id="fc_code_sel" style="display:none;max-width:420px;margin-bottom:8px;"></select>
+        <div class="form-group"><label style="font-weight:normal;">程序書標籤：</label> <span id="fcTagPicker"></span></div>
 
-        <h4>2️⃣ 全部版本（由舊到新）</h4>
+        <h4>2️⃣ 全部版本（由舊到新）<small class="text-muted">（版本號自動檢查：不可重複/不可倒退/數字字母不可混用，任一列錯整批不寫入）</small></h4>
         <div class="table-responsive">
           <table class="table table-condensed table-bordered" style="font-size:12px;">
             <thead><tr><th style="width:10%;">版本 *</th><th style="width:9%;">狀況</th><th style="width:13%;">修訂日期 *</th><th style="width:12%;">頁次</th><th>摘要</th><th style="width:20%;">文件檔（可不附）</th><th style="width:36px;"></th></tr></thead>
@@ -373,6 +374,7 @@ if ($deptPerm === 'R') {
           <label style="font-weight:normal;margin-left:10px;">共同日期：</label>
           <input type="date" class="form-control input-sm" id="fc_form_date" max="9999-12-31">
         </div>
+        <div class="form-group"><label style="font-weight:normal;">表單標籤（套用到全部表單）：</label> <span id="fcFormTagPicker"></span></div>
         <div class="table-responsive">
           <table class="table table-condensed table-bordered" style="font-size:12px;">
             <thead><tr><th style="width:14%;">檔名</th><th style="width:13%;">編號 *</th><th style="width:20%;">名稱 *</th><th style="width:8%;">版本</th><th style="width:13%;">日期 *</th><th>摘要</th></tr></thead>
@@ -508,6 +510,7 @@ if ($deptPerm === 'R') {
           <label>此部門有多組代碼，請選擇</label>
           <select class="form-control input-sm" id="batch_code_sel"></select>
         </div>
+        <div class="form-group"><label style="font-weight:normal;">標籤（套用到全部文件）：</label> <span id="batchTagPicker"></span></div>
         <div class="form-group">
           <label>選擇多個文件檔</label>
           <input type="file" id="batch_files" multiple>
@@ -1111,6 +1114,19 @@ $(function(){
   $('#docTagPicker').on('click','.tag-filter', function(){ $(this).toggleClass('active'); syncDocTagIds(); });
   function syncDocTagIds(){ const ids=[]; $('#docTagPicker .tag-filter.active').each(function(){ ids.push($(this).data('id')); }); $('#doc_tag_ids').val(ids.join(',')); }
 
+  // 通用標籤選取器（快速建檔/批次上傳）：未選=灰色，點選=亮起原色
+  function renderTagPickBox(sel){
+    const box=$(sel).empty();
+    if(!(META.tags||[]).length){ box.append('<span class="text-muted" style="font-size:12px;">尚無標籤（可於「標籤/分類管理」建立）</span>'); return; }
+    META.tags.forEach(t=>box.append(`<span class="tag-chip tag-pick" data-id="${t.id}" style="background:#bbb;cursor:pointer;">${esc(t.name)}</span>`));
+  }
+  $(document).on('click','.tag-pick', function(){
+    const t=(META.tags||[]).find(x=>x.id==$(this).data('id'));
+    $(this).toggleClass('active');
+    $(this).css('background', $(this).hasClass('active') ? (t?t.color:'#1ABB9C') : '#bbb');
+  });
+  function tagPickIds(sel){ const ids=[]; $(sel+' .tag-pick.active').each(function(){ ids.push($(this).data('id')); }); return ids; }
+
   // ── 新增文件 ──
   $('#btnAddDoc').on('click', function(){
     $('#docForm')[0].reset(); $('#doc_id').val(''); $('#doc_tag_ids').val('');
@@ -1360,6 +1376,8 @@ $(function(){
     $('#fcVerRows').empty().append(vbRowHtml());
     $('#fc_form_files').val(''); $('#fcFormRows').empty(); $('#fc_form_date').val('');
     $('#fcResult').empty();
+    renderTagPickBox('#fcTagPicker');
+    renderTagPickBox('#fcFormTagPicker');
     $('#fullModal').modal('show');
   });
   $('#fcVerAddRow').on('click', ()=>$('#fcVerRows').append(vbRowHtml()));
@@ -1429,7 +1447,8 @@ $(function(){
       const no=$(this).find('.fcf-no').val().trim(), nm=$(this).find('.fcf-name').val().trim(), dt=$(this).find('.fcf-date').val();
       if(!no||!nm||!dt) badF++;
       forms.push({doc_no:no, doc_name:nm, version:$(this).find('.fcf-ver').val().trim(),
-        revised_date:dt, revised_summary:$(this).find('.fcf-sum').val().trim()});
+        revised_date:dt, revised_summary:$(this).find('.fcf-sum').val().trim(),
+        tag_ids: tagPickIds('#fcFormTagPicker')});
     });
     if(badF){ alert(`表單有 ${badF} 列缺少編號/名稱/日期`); return; }
     const fd=new FormData();
@@ -1437,6 +1456,7 @@ $(function(){
     fd.append('doc_type', $('#fc_doc_type').val());
     fd.append('doc_level', {'手冊':'一階','程序':'二階','標準書':'三階'}[$('#fc_doc_type').val()]||'二階');
     fd.append('department_id', $('#fc_dept').val());
+    fd.append('tag_ids', tagPickIds('#fcTagPicker').join(','));
     fd.append('versions', JSON.stringify(vers));
     fd.append('forms', JSON.stringify(forms));
     vfiles.forEach((f,i)=>{ if(f) fd.append('vfile_'+i, f); });
@@ -1564,6 +1584,7 @@ $(function(){
     $('#batch_parent').html('<option value="">— 無 —</option>'+(META.parents||[]).map(p=>`<option value="${p.id}">${esc(p.doc_no)}｜${esc(p.doc_name)}</option>`).join(''));
     $('#batch_dept').html('<option value="">跨部門</option>'+META.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
     $('#batch_files').val(''); $('#batchRows').empty(); $('#batchResult').empty(); $('#batchCodeWrap').hide();
+    renderTagPickBox('#batchTagPicker');
     syncLevelFromType($('#batch_type'), $('#batch_level'));
     syncParentByType($('#batch_type'), $('#batch_parent'), $('#batch_dept'));
     $('#batchModal').modal('show');
@@ -1666,7 +1687,7 @@ $(function(){
         department_id:$('#batch_dept').val(), parent_doc_id:$('#batch_parent').val(),
         version:ver, change_status:'制訂',
         revised_date:dt, revised_pages:'', revised_summary:$(this).find('.b-sum').val().trim(),
-        tag_ids:[]
+        tag_ids: tagPickIds('#batchTagPicker')
       });
     });
     if(bad){ alert(`有 ${bad} 列缺少編號或名稱`); return; }
