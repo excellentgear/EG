@@ -1206,7 +1206,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         </div>
         <div class="modal-foot">
             <button class="tb-btn" onclick="hideModal('export-modal')">取消</button>
-            <button class="tb-btn" onclick="doPrintVector()" title="以向量(SVG)列印，文字/線條無限銳利、照片維持原解析度；極少數自訂圖形若顯示異常會自動改用點陣列印"><i class="fa fa-print"></i> 列印</button>
+            <button class="tb-btn" onclick="doPrintPDF()" title="以 PDF 列印(約300DPI)：畫質最接近『另存圖片後用本機看圖程式列印』，比瀏覽器直接列印清晰；若PDF元件異常會自動退回向量列印"><i class="fa fa-print"></i> 列印</button>
             <button class="tb-btn primary" onclick="doSave()"><i class="fa fa-save"></i> 另存圖片…</button>
         </div>
     </div>
@@ -1600,6 +1600,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <div id="toast"></div>
 
 <script src="../../resource/js/fabric.min.js?v=<?= filemtime(__DIR__ . '/../../resource/js/fabric.min.js') ?>"></script><!-- 帶檔案時間當版本參數：修過的 fabric 才不會被瀏覽器快取的舊檔蓋掉 -->
+<script src="../../resource/js/pdfmake.min.js"></script><!-- 列印走 PDF 管線用（已含字型 vfs）：把畫布高解析影像包成 PDF 再列印，畫質最接近「存檔後本機列印」 -->
 <script>
 'use strict';
 /* Fabric 5.3.0 已知 bug 修補（本地 fabric.min.js 已修字，這裡是多層保險）：
@@ -4992,6 +4993,48 @@ function doPrint() {
     const revoke = function () { URL.revokeObjectURL(objUrl); };
     try { w.addEventListener('afterprint', function () { setTimeout(revoke, 1000); }); } catch (e) {}
     setTimeout(revoke, 120000);   // 保底：afterprint 未觸發也會釋放
+    hideModal('export-modal');
+}
+
+/* 列印：走 PDF 管線。把畫布（或選取範圍）以約 300 DPI 產成高解析 PNG，用 pdfmake 包成單頁 PDF
+   後直接列印。相較瀏覽器 HTML/SVG 列印會多墊一層自家低解析光柵化，PDF 由瀏覽器的 PDF 引擎以印表機
+   解析度輸出，畫質最接近「另存圖片後用看圖程式/本機列印」。pdfmake 未載入或產圖失敗時退回向量(SVG)列印。 */
+function doPrintPDF() {
+    if (typeof pdfMake === 'undefined') { toast('PDF 元件未載入，改用向量列印'); doPrintVector(); return; }
+    const range = document.getElementById('ex-range').value;
+    let x = artboard.left || 0, y = artboard.top || 0, w = artW, h = artH, sel = null;
+    if (range === 'selection') {
+        sel = canvas.getActiveObject();
+        if (sel) { const b = sel.getBoundingRect(true, true); x = b.left; y = b.top; w = b.width; h = b.height; }
+        else toast('沒有選取物件，改列印整個畫布');
+    }
+    // A4 版面：依長寬決定直/橫，內縮邊界後等比例縮放置中
+    const A4 = { w: 595.28, h: 841.89 };
+    const landscape = w >= h;
+    const pageW = landscape ? A4.h : A4.w, pageH = landscape ? A4.w : A4.h;
+    const margin = 18;                                  // 約 0.25 吋
+    const scale = Math.min((pageW - margin * 2) / w, (pageH - margin * 2) / h);
+    const dispW = w * scale, dispH = h * scale;         // PDF 點(1/72吋)＝紙上顯示尺寸
+    // 目標約 300 DPI：算出來源需要的倍率（上限 3 以免記憶體爆掉、下限 1）
+    let mult = (dispW / 72 * 300) / w;
+    mult = Math.max(1, Math.min(3, mult));
+    let dataURL;
+    try {
+        dataURL = (range === 'selection' && sel)
+            ? exportSelectionDataURL(sel, 'png', mult)
+            : exportRegionDataURL(x, y, w, h, 'png', mult);
+    } catch (err) { toast('產生列印影像失敗，改用向量列印'); doPrintVector(); return; }
+    const docDef = {
+        pageSize: { width: pageW, height: pageH },
+        pageMargins: [margin, margin, margin, margin],
+        content: [{ image: dataURL, width: dispW, height: dispH, alignment: 'center' }]
+    };
+    try {
+        pdfMake.createPdf(docDef).print();   // 用隱藏 iframe 列印，不會有彈窗攔截、也不會動到編輯畫面
+    } catch (err) {
+        try { pdfMake.createPdf(docDef).open(); }   // 退而求其次：開新分頁顯示 PDF，讓使用者自行列印
+        catch (e2) { toast('PDF 列印失敗，改用向量列印'); doPrintVector(); return; }
+    }
     hideModal('export-modal');
 }
 
