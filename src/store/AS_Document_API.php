@@ -296,7 +296,7 @@ case 'delete_tag':
 // ══════════════ 下拉選單資料 ══════════════
 case 'meta':
     $depts = $db->query("SELECT id, name, level FROM department ORDER BY sort_order ASC, level, name")->fetchAll(PDO::FETCH_ASSOC);
-    $deptCodes = $db->query("SELECT id, department_id, code, label FROM as_dept_code ORDER BY department_id, id")->fetchAll(PDO::FETCH_ASSOC);
+    $deptCodes = $db->query("SELECT id, department_id, code, label FROM as_dept_code ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     $poss  = $db->query("SELECT p.id,p.name,pl.level FROM position p LEFT JOIN position_level pl ON p.id=pl.position_id ORDER BY p.sort_order ASC, p.id ASC")->fetchAll(PDO::FETCH_ASSOC);
     $tags  = $db->query("SELECT id,name,color FROM as_doc_tag ORDER BY sort_order ASC, id ASC")->fetchAll(PDO::FETCH_ASSOC);
     $users = $db->query("SELECT id,user_cname FROM user WHERE state IN (1,90,99) OR state IS NULL ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
@@ -734,12 +734,14 @@ case 'save_dept_codes':
     $db->beginTransaction();
     try {
         $db->exec("DELETE FROM as_dept_code");
-        $ins = $db->prepare("INSERT IGNORE INTO as_dept_code (department_id, code, label) VALUES (?,?,?)");
+        // sort_order=列表順序。同代碼對應多部門時，排序最前者＝由編號反查部門的「預設」
+        $ins = $db->prepare("INSERT IGNORE INTO as_dept_code (department_id, code, label, sort_order) VALUES (?,?,?,?)");
+        $sort = 0;
         foreach ($rows as $r) {
             $dId  = (int)($r['department_id'] ?? 0);
             $code = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', (string)($r['code'] ?? '')));
             $label= trim((string)($r['label'] ?? '')) ?: null;
-            if ($dId > 0 && $code !== '') $ins->execute([$dId, $code, $label]);
+            if ($dId > 0 && $code !== '') $ins->execute([$dId, $code, $label, ($sort += 10)]);
         }
         $db->commit();
         jout(['status'=>'success']);
@@ -770,7 +772,7 @@ case 'suggest_doc_no':
     $digit = $levelMap[$level] ?? '';
     if ($digit==='') jout(['status'=>'error','message'=>'請先選擇文件階級']);
     if ($deptId<=0) jout(['status'=>'error','message'=>'請先選擇部門']);
-    $st = $db->prepare("SELECT code, label FROM as_dept_code WHERE department_id=? ORDER BY id");
+    $st = $db->prepare("SELECT code, label FROM as_dept_code WHERE department_id=? ORDER BY sort_order, id");
     $st->execute([$deptId]);
     $codes = $st->fetchAll(PDO::FETCH_ASSOC);
     if (empty($codes)) jout(['status'=>'error','message'=>'此部門尚未設定文件代碼（請至 系統設定 → 部門文件代碼 設定，如 技術課=TD）']);

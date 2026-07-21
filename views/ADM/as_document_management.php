@@ -680,6 +680,7 @@ if ($deptPerm === 'R') {
         <hr>
         <div class="form-group">
           <label>部門文件代碼（自動編號用；同部門可多組，如 資材課=PD 廠內／PH 委外）</label>
+          <p class="text-muted" style="font-size:11px;margin:0 0 4px;">同一代碼掛多個部門時（如 SM＝業務部/倉管組），<strong>清單中排較前者＝由編號反查部門時的預設</strong>（該情況下部門欄不鎖定、可下拉更改）。</p>
           <div style="max-height:240px;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:6px;">
             <table class="table table-condensed" style="margin-bottom:0;">
               <thead><tr><th style="width:38%;">部門</th><th style="width:22%;">代碼</th><th>用途註記（選填）</th><th style="width:36px;"></th></tr></thead>
@@ -1059,12 +1060,20 @@ $(function(){
   $('#doc_parent_id').on('change', function(){
     syncDeptFromParent($('#doc_parent_id'), $('#doc_department_id'));
   });
-  // 編號含部門代碼 → 自動判定部門並反灰（回傳是否有判定到）；無代碼且無母文件時解鎖
+  // 編號含部門代碼 → 自動判定部門：代碼對應「唯一」部門＝帶入並反灰；
+  // 對應「多個」部門（如 SM＝業務部/倉管組）＝帶入預設（部門代碼設定中排最前者）但保留下拉可改。
   function syncDeptFromDocNo(noVal, $dept, $parent){
     const m = String(noVal||'').trim().match(/^([1-4])-([A-Za-z]+)-/);
-    const dc = m ? (META.dept_codes||[]).find(c=>c.code.toUpperCase()===m[2].toUpperCase()) : null;
-    if(dc){
-      $dept.val(dc.department_id).prop('disabled', true).attr('title','部門由文件編號的部門代碼自動決定');
+    const matches = m ? (META.dept_codes||[]).filter(c=>c.code.toUpperCase()===m[2].toUpperCase()) : [];
+    if(matches.length === 1){
+      $dept.val(matches[0].department_id).prop('disabled', true).attr('title','部門由文件編號的部門代碼自動決定');
+      return true;
+    }
+    if(matches.length > 1){
+      // 只在目前選的部門「不屬於」此代碼的任一部門時，才帶入預設（避免覆蓋使用者已改的選擇）
+      const curOk = matches.some(c=>String(c.department_id)===String($dept.val()));
+      if(!curOk) $dept.val(matches[0].department_id);
+      $dept.prop('disabled', false).attr('title','代碼 '+m[2].toUpperCase()+' 對應多個部門，已帶入預設，請確認或下拉更改');
       return true;
     }
     if(!$parent || $parent.val()===''){ $dept.prop('disabled', false).attr('title',''); }
