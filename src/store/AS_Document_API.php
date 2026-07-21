@@ -235,7 +235,7 @@ $action = $_REQUEST['action'] ?? '';
 // download 不在此表：於 case 內依 inline 分流（inline 預覽=view；下載原檔=update，「有修改權限的人才可下載」）
 $asGate = [
     'list_tags'=>'view', 'meta'=>'view', 'list_documents'=>'view', 'get_document'=>'view',
-    'suggest_doc_no'=>'view',
+    'suggest_doc_no'=>'view', 'hashtag_list'=>'view',
     'download_template'=>'update',
     'create_document'=>'create', 'create_documents_batch'=>'create',
     'add_version'=>'update', 'update_document_meta'=>'update',
@@ -1041,6 +1041,20 @@ case 'form_record_download':
     }
     asStream($dir.DIRECTORY_SEPARATOR.$rec['file_name'], $rec['original_name'] ?: $rec['file_name'], $inline);
     break;
+
+// ══════════════ 附件 #標籤 總覽（掃描紀錄備註中的 #文字，供瀏覽點選篩選） ══════════════
+case 'hashtag_list':
+    $rows = $db->query("SELECT note FROM as_form_record WHERE is_deleted=0 AND note LIKE '%#%'")->fetchAll(PDO::FETCH_COLUMN);
+    $tags = [];
+    foreach ($rows as $note) {
+        if (preg_match_all('/#([^\s#]+)/u', (string)$note, $m)) {
+            foreach ($m[1] as $t) { $t = '#'.$t; $tags[$t] = ($tags[$t] ?? 0) + 1; }
+        }
+    }
+    arsort($tags);
+    $out = [];
+    foreach ($tags as $t => $c) $out[] = ['tag'=>$t, 'cnt'=>$c];
+    jout(['status'=>'success','data'=>$out]);
 
 // ══════════════ 批次加標籤（勾選多份文件一次加上標籤；只加不移除） ══════════════
 case 'docs_add_tags':

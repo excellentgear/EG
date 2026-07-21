@@ -167,7 +167,10 @@ if ($deptPerm === 'R') {
               <!-- 搜尋 / 篩選 -->
               <div class="row" style="margin-bottom:8px;">
                 <div class="col-md-4">
-                  <input type="text" class="form-control" id="searchKw" placeholder="搜尋 文件編號 / 文件名稱…">
+                  <div class="input-group">
+                    <input type="text" class="form-control" id="searchKw" placeholder="即時搜尋 編號 / 名稱 / 附件標題 / 備註#標籤…">
+                    <span class="input-group-btn"><button type="button" class="btn btn-default" id="btnHashtags" title="附件 #標籤 總覽（點選即篩選）"><strong>#</strong></button></span>
+                  </div>
                 </div>
                 <div class="col-md-3">
                   <select class="form-control" id="filterLevel">
@@ -302,6 +305,23 @@ if ($deptPerm === 'R') {
           <button type="submit" class="btn btn-primary">儲存</button>
         </div>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ 附件 #標籤 總覽 Modal ═════════ -->
+<div class="modal fade" id="hashtagModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><strong>#</strong> 附件標籤總覽</h4>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted" style="font-size:12px;">來源＝所有紀錄/附件備註中的 #文字。點選＝以該標籤篩選（清單會直接展開命中的附件）。</p>
+        <div id="hashtagCloud" style="line-height:2.2;"></div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
     </div>
   </div>
 </div>
@@ -1014,7 +1034,33 @@ $(function(){
 
   $('#pager').on('click','a',function(e){ e.preventDefault(); const p=parseInt($(this).data('page')); if(!isNaN(p)&&p>=1){ curPage=p; renderDocs(); }});
   $('#pageSize').on('change', renderDocs);
-  $('#searchKw').on('keyup', function(e){ if(e.key==='Enter') loadDocs(); });
+  // 即時搜尋（350ms 防抖動）；Enter＝立即搜尋
+  let kwTimer = null;
+  $('#searchKw').on('input', function(){
+    clearTimeout(kwTimer);
+    kwTimer = setTimeout(loadDocs, 350);
+  });
+  $('#searchKw').on('keyup', function(e){ if(e.key==='Enter'){ clearTimeout(kwTimer); loadDocs(); } });
+
+  // ── 附件 #標籤 總覽 ──
+  $('#btnHashtags').on('click', function(){
+    $.getJSON(API+'?action=hashtag_list', r=>{
+      if(r.status!=='success'){ alert(r.message||'讀取失敗'); return; }
+      const box=$('#hashtagCloud').empty();
+      if(!(r.data||[]).length){ box.html('<span class="text-muted">尚無 #標籤——在附件/紀錄的備註中打「#文字」即可建立</span>'); }
+      (r.data||[]).forEach(t=>{
+        box.append(`<a href="javascript:void(0)" class="hashtag-go label label-primary" data-tag="${esc(t.tag)}" style="font-size:${Math.min(15, 11+t.cnt)}px;font-weight:normal;margin:0 6px 4px 0;display:inline-block;">${esc(t.tag)} <span style="opacity:.7;">×${t.cnt}</span></a>`);
+      });
+      $('#hashtagModal').modal('show');
+    });
+  });
+  $('#hashtagCloud').on('click','.hashtag-go', function(){
+    $('#hashtagModal').modal('hide');
+    $('#filterLevel').val(''); $('#filterDept').val('');
+    activeTagId=0; activeParentId=0; activeParentNo=''; renderTagFilter();
+    $('#searchKw').val($(this).data('tag'));
+    loadDocs();
+  });
   $('#filterLevel,#filterDept,#incDeleted').on('change', loadDocs);
   $('#btnClearFilter').on('click', ()=>{ $('#searchKw').val(''); $('#filterLevel').val(''); $('#filterDept').val(''); activeTagId=0; activeParentId=0; activeParentNo=''; renderTagFilter(); loadDocs(); });
 
