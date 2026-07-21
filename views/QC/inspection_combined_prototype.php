@@ -1062,6 +1062,9 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
         .add-reading:hover { text-decoration:underline; }
         tr.reading-sub > td { background:#f3f9f7; border-top:1px dashed #cfe6df; }
         tr.reading-sub .f-tool2 { border-color:#9ccebf; }
+        /* 量具下拉：依內容加寬，避免「類型 / 量具編號」被遮掉 */
+        #items-table select.f-tool, #items-table select.f-tool2 { width:auto; min-width:150px; max-width:240px; }
+        #items-table td.tool-col { min-width:158px; }
         /* #5 逐項備註圖示 */
         .item-note { cursor:pointer; color:#aaa; }
         .item-note:hover { color:#26b99a; }
@@ -2410,7 +2413,7 @@ $(function(){
             '<td><input class="table-input f-std" value="'+esc(stdVal)+'"></td>'+
             '<td><input class="table-input f-up" value="'+esc(it.up||'')+'" '+(isNum?'':'readonly')+'></td>'+
             '<td><input class="table-input f-lo" value="'+esc(it.lo||'')+'" '+(isNum?'':'readonly')+'></td>'+
-            '<td><select class="table-input f-tool" data-tid="'+esc(it.tool_id||'')+'" data-tcat="'+esc(it.tool||'')+'">'+toolInstOptions(resolvePrimaryToolId(it))+'</select>'+
+            '<td class="tool-col"><select class="table-input f-tool" data-tid="'+esc(it.tool_id||'')+'" data-tcat="'+esc(it.tool||'')+'">'+toolInstOptions(resolvePrimaryToolId(it))+'</select>'+
                 '<a href="#" class="add-reading small" title="同尺寸再用其他量具/方法量一次（如三次元＋投影機）"><i class="fa fa-plus"></i> 加量測</a></td>'+
             '<td><select class="table-input sel-type">'+
                 '<option value="NUM" '+(isNum?'selected':'')+'>數值</option>'+
