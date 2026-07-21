@@ -195,7 +195,7 @@ if ($deptPerm === 'R') {
                 <table class="table table-striped table-hover doc-table">
                   <thead>
                     <tr>
-                      <th style="width:24px;"><input type="checkbox" id="chkAllDocs" title="全選本頁（批次加標籤用）"></th>
+                      <?php if ($asCaps['update']): ?><th style="width:24px;"><input type="checkbox" id="chkAllDocs" title="全選本頁（批次加標籤用）"></th><?php endif; ?>
                       <th>文件編號</th><th>文件名稱</th><th>類別</th><th>階級</th><th>部門</th>
                       <th>母文件 / 表單</th>
                       <th>目前版本</th><th>修訂日期</th><th>標籤</th><th style="min-width:245px;">操作</th>
@@ -940,7 +940,7 @@ $(function(){
     const start = (curPage-1)*size;
     const rows = DOCS.slice(start, start+size);
     const tb = $('#docTableBody').empty();
-    if(rows.length===0){ tb.append('<tr><td colspan="11" class="text-center text-muted">無資料</td></tr>'); }
+    if(rows.length===0){ tb.append(`<tr><td colspan="${canU?11:10}" class="text-center text-muted">無資料</td></tr>`); }
     rows.forEach(d=>{
       const tags = (d.tags||[]).map(t=>`<span class="tag-chip" style="background:${esc(t.color)};">${esc(t.name)}</span>`).join(' ');
       let ops = '';
@@ -991,7 +991,7 @@ $(function(){
       ops = slot(sPrev,32)+slot(sDl,32)+slot(sHist,32)+slot(sVer,46)+slot(sRec,60)+slot(sGear,44);
       const delMark = d.is_deleted==1 ? ' <span class="label label-default">已刪除</span>' : '';
       tb.append(`<tr>
-        <td><input type="checkbox" class="doc-chk" value="${d.id}"></td>
+        ${canU?`<td><input type="checkbox" class="doc-chk" value="${d.id}"></td>`:''}
         <td>${esc(d.doc_no)}${delMark}</td>
         <td>${nameCell}</td>
         <td>${esc(d.doc_type)||'-'}</td>
@@ -1009,6 +1009,7 @@ $(function(){
         if(canDL) mop += `<a class="btn btn-xs btn-info" href="${API}?action=form_record_download&id=${mr.id}">下載</a>`;
         const mnote = esc(mr.note||'').replace(/#([^\s#<]+)/g,'<span class="label label-primary" style="font-weight:normal;font-size:10px;">#$1</span>');
         tb.append(`<tr style="background:#fffbe6;">
+          ${canU?'<td></td>':''}
           <td></td>
           <td colspan="8" style="padding-left:30px;">
             <i class="fa fa-paperclip text-warning"></i> <strong>${esc(mr.title)}</strong>
