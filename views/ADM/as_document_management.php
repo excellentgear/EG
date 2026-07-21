@@ -812,6 +812,7 @@ $(function(){
   });
   let META = {departments:[],positions:[],tags:[],users:[]};
   let DOCS = [], FILTERED = [], activeTagId = 0, curPage = 1, activeParentId = 0, activeParentNo = '';
+  let editOrigNo = '', editChildCount = 0; // 編輯時的原編號與子文件數（換編號連動用）
 
   function esc(t){ if(t===null||t===undefined) return ''; return String(t).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
 
@@ -1396,6 +1397,8 @@ $(function(){
       const d=r.data;
       $('#docForm')[0].reset();
       $('#docModalTitle').text('編輯文件');
+      editOrigNo = d.doc_no || '';                 // 原編號（判斷是否換編號）
+      editChildCount = (d.children||[]).length;    // 底下子文件數（換編號時提示連動）
       $('#doc_id').val(d.id); $('#doc_no').val(d.doc_no); $('#doc_name').val(d.doc_name);
       setDeptOptions($('#doc_department_id'), null); // 復原完整部門清單
       $('#doc_type').val(d.doc_type||''); $('#doc_level').val(d.doc_level||''); $('#doc_department_id').val(d.department_id||'');
@@ -1429,9 +1432,23 @@ $(function(){
     fd.set('doc_level', $('#doc_level').val()||'');
     fd.set('department_id', $('#doc_department_id').val()||'');
     fd.set('parent_doc_id', $('#doc_parent_id').val()||'');
+    // 編輯時換了編號且底下有子文件 → 詢問是否同步更新子文件編號（如換負責部門）
+    if(isEdit){
+      const newNo = ($('#doc_no').val()||'').trim();
+      if(newNo!==editOrigNo && editChildCount>0){
+        const yes = confirm(`此文件底下有 ${editChildCount} 份子文件（表單等）。\n編號由「${editOrigNo}」改為「${newNo}」，要一併把子文件編號的前綴「${editOrigNo}-」換成「${newNo}-」嗎？\n\n[確定]＝連動更新　[取消]＝只改本文件（子文件編號維持不變）`);
+        if(yes) fd.set('cascade_children','1');
+      }
+    }
     NProgress.start();
     $.ajax({url:url, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
-     .done(r=>{ if(r.status==='success'){ $('#docModal').modal('hide'); loadMeta(()=>loadDocs(true)); } else alert(r.message||'失敗'); })
+     .done(r=>{
+        if(r.status==='success'){
+          $('#docModal').modal('hide');
+          if(r.cascade_renumbered>0) showToast(`已連動更新 ${r.cascade_renumbered} 份子文件編號`);
+          loadMeta(()=>loadDocs(true));
+        } else alert(r.message||'失敗');
+     })
      .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
   });
 

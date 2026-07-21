@@ -218,6 +218,35 @@ function asValidateVersionOrder(string $current, string $newVersion): ?string {
     return null;
 }
 
+/**
+ * 換編號連動：把 $parentId 底下所有子孫文件的編號前綴，由「$oldNo-」改成「$newNo-」（遞迴）。
+ * 只換「以舊母文件編號＋連字號」為開頭的子文件（如母 2-MM-01 → 子 2-MM-01-01）。回傳實際更新筆數。
+ * 需在呼叫端的 transaction 內執行；碰到編號衝突丟 Exception 讓整批回滾。
+ */
+function asCascadeRenumber(PDO $db, int $parentId, string $oldNo, string $newNo): int {
+    $st = $db->prepare("SELECT id, doc_no FROM as_document WHERE parent_doc_id=? AND is_deleted=0");
+    $st->execute([$parentId]);
+    $children = $st->fetchAll(PDO::FETCH_ASSOC);
+    $cnt = 0;
+    $upd = $db->prepare("UPDATE as_document SET doc_no=?, updated_at=NOW() WHERE id=?");
+    $dupChk = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0 AND id!=?");
+    foreach ($children as $c) {
+        $childOld = (string)$c['doc_no'];
+        $childNew = $childOld;
+        // 子編號＝舊母編號＋「-…」→ 換成新母編號＋「-…」；不符前綴者不動（仍遞迴其子孫）
+        if (strpos($childOld, $oldNo . '-') === 0) {
+            $childNew = $newNo . substr($childOld, strlen($oldNo));
+            $dupChk->execute([$childNew, (int)$c['id']]);
+            if ($dupChk->fetchColumn() > 0) throw new Exception("連動換編號衝突：{$childNew} 已被其他文件使用");
+            $upd->execute([$childNew, (int)$c['id']]);
+            $cnt++;
+        }
+        // 遞迴處理孫層（以「該子文件」的舊→新編號為前綴）
+        $cnt += asCascadeRenumber($db, (int)$c['id'], $childOld, $childNew);
+    }
+    return $cnt;
+}
+
 /** 母文件驗證：表單/四階/已刪除的文件不可作為母文件。合法回 null，不合法回錯誤訊息。 */
 function asValidateParent(PDO $db, ?int $parentId): ?string {
     if ($parentId === null || $parentId <= 0) return null;
@@ -595,10 +624,23 @@ case 'update_document_meta':
     $rpages  = trim($_POST['revised_pages'] ?? '') ?: null;
     $rsum    = trim($_POST['revised_summary'] ?? '') ?: null;
 
+    // 取更新前的編號（供子表單編號連動用）
+    $oldNoStmt = $db->prepare("SELECT doc_no FROM as_document WHERE id=?");
+    $oldNoStmt->execute([$id]);
+    $oldNo = (string)$oldNoStmt->fetchColumn();
+    $cascade = ($_POST['cascade_children'] ?? '') === '1';
+
     $db->beginTransaction();
     try {
         $db->prepare("UPDATE as_document SET doc_no=?,doc_name=?,doc_type=?,doc_level=?,department_id=?,parent_doc_id=?,updated_at=NOW() WHERE id=?")
            ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$id]);
+
+        // 換編號時連動更新底下表單編號：舊前綴「oldNo-」換成「新編號-」（含遞迴子孫）
+        $cascadeCnt = 0;
+        if ($cascade && $oldNo !== '' && $oldNo !== $doc_no) {
+            $cascadeCnt = asCascadeRenumber($db, $id, $oldNo, $doc_no);
+        }
+
         if ($version !== '') {
             $cvId = $db->prepare("SELECT current_version_id FROM as_document WHERE id=?");
             $cvId->execute([$id]);
@@ -617,7 +659,7 @@ case 'update_document_meta':
         $db->prepare("DELETE FROM as_doc_tag_map WHERE doc_id=?")->execute([$id]);
         if ($tagIds) { $ins=$db->prepare("INSERT IGNORE INTO as_doc_tag_map (doc_id,tag_id) VALUES (?,?)"); foreach($tagIds as $t) $ins->execute([$id,$t]); }
         $db->commit();
-        jout(['status'=>'success']);
+        jout(['status'=>'success','cascade_renumbered'=>$cascadeCnt]);
     } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
 
 // ══════════════ 刪除文件（主檔軟刪除；版本與檔案仍留存可查） ══════════════
