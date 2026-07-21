@@ -1069,7 +1069,7 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
         tr.reading-sub > td { background:#f3f9f7; border-top:1px dashed #cfe6df; }
         tr.reading-sub .f-tool2 { border-color:#9ccebf; }
         /* 量具欄：下拉維持固定窄寬(不撐寬、不擠壓實測值欄)；量具編號在下方自動換列完整顯示 */
-        #items-table td.tool-col { width:128px; min-width:128px; max-width:128px; }
+        #items-table td.tool-col { width:120px; min-width:120px; max-width:120px; }
         #items-table select.f-tool, #items-table select.f-tool2 { width:100%; }
         .tool-sel-label { font-size:11px; color:#555; word-break:break-all; line-height:1.25; margin-top:2px; }
         /* #5 逐項備註圖示 */
@@ -1203,16 +1203,16 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
                                     後微調。<b>勾選下方「同步更新標準」存檔後即成此料號標準，下次自動帶出。</b>
                                 </div>
 
-                                <div class="table-responsive" style="max-height:55vh; overflow:auto;">
+                                <div class="table-responsive" style="max-height:55vh; overflow-y:auto; overflow-x:hidden;">
                                     <table class="table table-bordered table-striped" id="items-table">
                                         <thead><tr>
                                             <th width="56">編號<br><a href="#" id="btn-code-mode" style="font-weight:normal;font-size:11px;white-space:nowrap;" title="切換編號顯示方式（A、B、C… ↔ 1、2、3…）"></a></th>
-                                            <th width="150">檢驗項目</th>
-                                            <th width="80">標準值</th>
-                                            <th width="70">上公差</th>
-                                            <th width="70">下公差</th>
-                                            <th width="128">量具</th>
-                                            <th width="80">結果型態</th>
+                                            <th width="118">檢驗項目</th>
+                                            <th width="64">標準值</th>
+                                            <th width="52">上公差</th>
+                                            <th width="52">下公差</th>
+                                            <th width="120">量具</th>
+                                            <th width="60">結果型態</th>
                                             <th>實測值<div id="sample-nums" style="font-weight:normal;"></div></th>
                                             <th width="34"></th>
                                         </tr></thead>
