@@ -842,11 +842,21 @@ $(function(){
   // 雙擊清空搜尋欄
   $('#searchKw').on('dblclick', function(){ $(this).val(''); loadDocs(); });
 
-  // 文件類別 → 自動帶入對應階級（AS9100 四階架構；仍可手動改）
+  // 文件類別 → 自動設定階級並鎖定（一階手冊/二階程序書/三階標準書·指導書/四階表單）；
+  // 未選類別時階級開放手動選（歷史資料相容）。disabled 欄位送出時由 JS 手動補值。
   const TYPE_LEVEL_MAP = {'手冊':'一階','程序':'二階','標準書':'三階','表單':'四階'};
+  function syncLevelFromType($type, $level){
+    const lv = TYPE_LEVEL_MAP[$type.val()];
+    if(lv){ $level.val(lv).prop('disabled', true).attr('title','階級由文件類別自動決定'); }
+    else { $level.prop('disabled', false).attr('title',''); }
+  }
   $('#doc_type').on('change', function(){
-    const lv = TYPE_LEVEL_MAP[$(this).val()];
-    if(lv) $('#doc_level').val(lv);
+    syncLevelFromType($('#doc_type'), $('#doc_level'));
+    // 新增模式且編號空白時，類別選定（＝階級確定）就自動帶編號
+    if($('#doc_id').val()==='' && $('#doc_no').val().trim()===''){
+      const hasParent = $('#doc_parent_id').val()!=='';
+      if(hasParent || ($('#doc_level').val()!=='' && $('#doc_department_id').val()!=='')) suggestDocNo(true);
+    }
   });
 
   // 自動編號：有母文件→{母編號}-{次號}；無→{階}-{部門代碼}-{次號}（可再手動修改）
@@ -916,6 +926,7 @@ $(function(){
     renderDocTagPicker([]);
     fillParentSelect(0, '');
     $('#doc_code_sel').hide().empty();
+    syncLevelFromType($('#doc_type'), $('#doc_level'));
     $('#docModal').modal('show');
   });
 
@@ -929,6 +940,7 @@ $(function(){
       $('#docModalTitle').text('編輯文件');
       $('#doc_id').val(d.id); $('#doc_no').val(d.doc_no); $('#doc_name').val(d.doc_name);
       $('#doc_type').val(d.doc_type||''); $('#doc_level').val(d.doc_level||''); $('#doc_department_id').val(d.department_id||'');
+      syncLevelFromType($('#doc_type'), $('#doc_level'));
       // 編輯模式：顯示「目前版本資訊」修正區（可改誤植的版本號等，不換檔、不產生新版本）
       const cv = (d.versions||[]).find(v=>v.id==d.current_version_id) || {};
       $('#firstVersionBlock').show();
@@ -952,6 +964,7 @@ $(function(){
     const isEdit = $('#doc_id').val()!=='';
     const url = API + '?action=' + (isEdit?'update_document_meta':'create_document');
     const fd = new FormData(this);
+    fd.set('doc_level', $('#doc_level').val()||''); // 階級被類別鎖定(disabled)時不會進 FormData，手動補
     NProgress.start();
     $.ajax({url:url, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
      .done(r=>{ if(r.status==='success'){ $('#docModal').modal('hide'); loadMeta(loadDocs); } else alert(r.message||'失敗'); })
@@ -1134,7 +1147,13 @@ $(function(){
     $('#batch_parent').html('<option value="">— 無 —</option>'+(META.parents||[]).map(p=>`<option value="${p.id}">${esc(p.doc_no)}｜${esc(p.doc_name)}</option>`).join(''));
     $('#batch_dept').html('<option value="">跨部門</option>'+META.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
     $('#batch_files').val(''); $('#batchRows').empty(); $('#batchResult').empty(); $('#batchCodeWrap').hide();
+    syncLevelFromType($('#batch_type'), $('#batch_level'));
     $('#batchModal').modal('show');
+  });
+  $('#batch_type').on('change', function(){
+    syncLevelFromType($('#batch_type'), $('#batch_level'));
+    $('#batchCodeWrap').hide();
+    if($('#batch_files')[0].files.length) batchSuggest(); // 階級變了，編號建議重算
   });
 
   // 選檔後建立逐檔設定列，編號自動遞增建議（多組代碼時顯示選擇器）
