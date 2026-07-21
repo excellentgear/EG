@@ -377,7 +377,7 @@ if ($deptPerm === 'R') {
         <div class="form-group"><label style="font-weight:normal;">表單標籤（套用到全部表單）：</label> <span id="fcFormTagPicker"></span></div>
         <div class="table-responsive">
           <table class="table table-condensed table-bordered" style="font-size:12px;">
-            <thead><tr><th style="width:14%;">檔名</th><th style="width:13%;">編號 *</th><th style="width:20%;">名稱 *</th><th style="width:8%;">版本</th><th style="width:13%;">日期 *</th><th>摘要</th></tr></thead>
+            <thead><tr><th style="width:14%;">檔名</th><th style="width:13%;">編號 *</th><th style="width:20%;">名稱 *</th><th style="width:8%;">版本</th><th style="width:13%;">日期 *</th><th>摘要</th><th style="width:36px;"></th></tr></thead>
             <tbody id="fcFormRows"></tbody>
           </table>
         </div>
@@ -520,7 +520,7 @@ if ($deptPerm === 'R') {
             <thead><tr>
               <th style="width:14%;">檔名</th><th style="width:13%;">文件編號</th><th style="width:17%;">文件名稱</th>
               <th style="width:7%;">版本</th><th style="width:11%;">修訂日期</th>
-              <th style="width:16%;">制修訂摘要</th><th>申請單（逐檔對應，可不附）</th>
+              <th style="width:16%;">制修訂摘要</th><th>申請單（逐檔對應，可不附）</th><th style="width:36px;"></th>
             </tr></thead>
             <tbody id="batchRows"></tbody>
           </table>
@@ -1417,17 +1417,19 @@ $(function(){
       const no = parsed ? parsed.doc_no : (baseNo ? baseNo+'-'+String(seq++).padStart(2,'0') : '');
       const nm = parsed ? parsed.doc_name : nameNoExt;
       const rowDate = d || fileDate(this.files[i]); // 共同日期優先，否則用檔案修改日期
-      tb.append(`<tr>
+      tb.append(`<tr data-fidx="${i}">
         <td style="vertical-align:middle;">${esc(fn)}${parsed?' <i class="fa fa-magic text-success" title="已由檔名拆解"></i>':''}</td>
         <td><input type="text" class="form-control input-sm fcf-no" value="${esc(no)}"></td>
         <td><input type="text" class="form-control input-sm fcf-name" value="${esc(nm)}"></td>
         <td><input type="text" class="form-control input-sm fcf-ver" placeholder="可空"></td>
         <td><input type="date" class="form-control input-sm fcf-date" value="${rowDate}" max="9999-12-31"></td>
         <td><input type="text" class="form-control input-sm fcf-sum" list="dlSummary" placeholder="如：新訂"></td>
+        <td class="text-center" style="vertical-align:middle;"><a href="javascript:void(0)" class="fcf-del text-danger" title="移除此列（選錯的附件）"><i class="fa fa-trash"></i></a></td>
       </tr>`);
     }
   });
   $('#fc_form_date').on('change', function(){ $('.fcf-date').val($(this).val()); });
+  $(document).on('click','.fcf-del', function(){ $(this).closest('tr').remove(); });
   $('#fcSubmit').on('click', function(){
     const docNo=$('#fc_doc_no').val().trim(), docName=$('#fc_doc_name').val().trim();
     if(!docNo||!docName){ alert('文件編號與名稱必填'); return; }
@@ -1442,13 +1444,14 @@ $(function(){
     });
     if(!vers.length){ alert('至少要有一個版本'); return; }
     if(badV){ alert(`版本有 ${badV} 列缺少版本號或日期`); return; }
-    const forms=[]; const ffiles=$('#fc_form_files')[0].files; let badF=0;
+    const forms=[]; const formFidx=[]; const ffiles=$('#fc_form_files')[0].files; let badF=0;
     $('#fcFormRows tr').each(function(){
       const no=$(this).find('.fcf-no').val().trim(), nm=$(this).find('.fcf-name').val().trim(), dt=$(this).find('.fcf-date').val();
       if(!no||!nm||!dt) badF++;
       forms.push({doc_no:no, doc_name:nm, version:$(this).find('.fcf-ver').val().trim(),
         revised_date:dt, revised_summary:$(this).find('.fcf-sum').val().trim(),
         tag_ids: tagPickIds('#fcFormTagPicker')});
+      formFidx.push($(this).data('fidx')); // 對應原始選檔索引（刪列後仍正確）
     });
     if(badF){ alert(`表單有 ${badF} 列缺少編號/名稱/日期`); return; }
     const fd=new FormData();
@@ -1460,7 +1463,7 @@ $(function(){
     fd.append('versions', JSON.stringify(vers));
     fd.append('forms', JSON.stringify(forms));
     vfiles.forEach((f,i)=>{ if(f) fd.append('vfile_'+i, f); });
-    for(let i=0;i<ffiles.length;i++) fd.append('ffile_'+i, ffiles[i]);
+    formFidx.forEach((fi,i)=>{ const f=ffiles[fi]; if(f) fd.append('ffile_'+i, f); });
     const $b=$(this).prop('disabled',true); NProgress.start();
     $.ajax({url:API+'?action=create_document_full', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
      .done(r=>{
@@ -1627,7 +1630,7 @@ $(function(){
       const sugNo = parsed ? parsed.doc_no : (base ? base+String(num+seq++).padStart(pad,'0') : '');
       const sugName = parsed ? parsed.doc_name : nameNoExt;
       const rowDate = defDate || fileDate(files[i]); // 共同日期優先，否則用檔案修改日期
-      tb.append(`<tr>
+      tb.append(`<tr data-fidx="${i}">
         <td style="vertical-align:middle;">${esc(fn)}${parsed?' <i class="fa fa-magic text-success" title="已由檔名自動拆解編號/名稱"></i>':''}</td>
         <td><input type="text" class="form-control input-sm b-no" value="${esc(sugNo)}"></td>
         <td><input type="text" class="form-control input-sm b-name" value="${esc(sugName)}"></td>
@@ -1635,6 +1638,7 @@ $(function(){
         <td><input type="date" class="form-control input-sm b-date" value="${rowDate}" max="9999-12-31"></td>
         <td><input type="text" class="form-control input-sm b-sum" list="dlSummary" placeholder="如：新訂"></td>
         <td><input type="file" class="b-apply"></td>
+        <td class="text-center" style="vertical-align:middle;"><a href="javascript:void(0)" class="b-del text-danger" title="移除此列（選錯的附件）"><i class="fa fa-trash"></i></a></td>
       </tr>`);
     }
   }
@@ -1670,12 +1674,13 @@ $(function(){
   // 共同設定變動時若已選檔，重新產生編號建議
   $('#batch_parent,#batch_level,#batch_dept').on('change', ()=>{ $('#batchCodeWrap').hide(); if($('#batch_files')[0].files.length) batchSuggest(); });
 
+  $(document).on('click','.b-del', function(){ $(this).closest('tr').remove(); });
   $('#batchSubmit').on('click', function(){
     const files = $('#batch_files')[0].files;
-    if(!files.length){ alert('請先選擇檔案'); return; }
+    if(!$('#batchRows tr').length){ alert('請先選擇檔案'); return; }
     const isForm = $('#batch_type').val()==='表單';
-    const rows=[]; let bad=0, badVer=0, badDate=0;
-    $('#batchRows tr').each(function(i){
+    const rows=[]; const applies=[]; const fidxs=[]; let bad=0, badVer=0, badDate=0;
+    $('#batchRows tr').each(function(){
       const no=$(this).find('.b-no').val().trim(), nm=$(this).find('.b-name').val().trim();
       const ver=$(this).find('.b-ver').val().trim(), dt=$(this).find('.b-date').val();
       if(!no||!nm) bad++;
@@ -1689,17 +1694,18 @@ $(function(){
         revised_date:dt, revised_pages:'', revised_summary:$(this).find('.b-sum').val().trim(),
         tag_ids: tagPickIds('#batchTagPicker')
       });
+      fidxs.push($(this).data('fidx'));                          // 對應原始選檔索引（刪列後仍正確）
+      applies.push($(this).find('.b-apply')[0].files[0]||null);  // 逐列申請單
     });
     if(bad){ alert(`有 ${bad} 列缺少編號或名稱`); return; }
     if(badVer){ alert(`有 ${badVer} 列缺少版本號（僅表單類別可不填）`); return; }
     if(badDate){ alert(`有 ${badDate} 列缺少修訂日期`); return; }
     const fd = new FormData();
     fd.append('rows', JSON.stringify(rows));
-    for(let i=0;i<files.length;i++){
-      fd.append('file_'+i, files[i]);
-      const af = $('#batchRows tr').eq(i).find('.b-apply')[0].files[0];
-      if(af) fd.append('apply_'+i, af);
-    }
+    fidxs.forEach((fi,i)=>{
+      const f=files[fi]; if(f) fd.append('file_'+i, f);
+      if(applies[i]) fd.append('apply_'+i, applies[i]);
+    });
     const $b=$(this).prop('disabled',true);
     NProgress.start();
     $.ajax({url:API+'?action=create_documents_batch', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
