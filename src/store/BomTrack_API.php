@@ -468,7 +468,15 @@ switch ($action) {
             // 公式比照原本 rebuild_bom_summary.php 的邏輯(目前所在關卡序位÷總關卡數)，
             // 差別是排除 processing_state='skip'（生管明確標記不加工的製程）不計入分子分母
             $sql = "
-                SELECT bom.bom, bom.d_id, bom.Client_Name, bom.Delivery_date, bom.processing_state,
+                SELECT bom.bom, bom.d_id, bom.Client_Name, bom.processing_state,
+                       -- 交期優先取 bom 自身，若空(常見)則回退到所屬訂單(order_track)的交期，與 order_no 取法一致。
+                       COALESCE(
+                         bom.Delivery_date,
+                         ot_due.Delivery_date,
+                         (SELECT ot_d.Delivery_date
+                            FROM bom_order_process_map bopm_d JOIN order_track ot_d ON ot_d.Order_id = bopm_d.order_id
+                            WHERE bopm_d.bom = bom.bom ORDER BY ot_d.Delivery_date ASC LIMIT 1)
+                       ) AS Delivery_date,
                        (SELECT COUNT(DISTINCT bi.bom_sn) FROM bom_ing bi WHERE bi.bom = bom.bom AND bi.processing_state != 'skip') AS process_count,
                        (SELECT COUNT(DISTINCT bi.bom_sn) FROM bom_ing bi WHERE bi.bom = bom.bom AND bi.processing_state != 'skip' AND bi.bom_sn <= (
                            SELECT bi2.bom_sn FROM bom_ing bi2 WHERE bi2.bom = bom.bom AND bi2.processing_state != 'skip'
@@ -490,8 +498,10 @@ switch ($action) {
                             JOIN user u2 ON u2.id = cs2.user_id WHERE ot2.Order_id = bom.o_order_id LIMIT 1)
                        ) AS sales_name
                 FROM bom
+                LEFT JOIN order_track ot_due ON ot_due.Order_id = bom.o_order_id
                 $whereSql
-                ORDER BY bom.Delivery_date ASC
+                ORDER BY COALESCE(bom.Delivery_date, ot_due.Delivery_date) IS NULL,
+                         COALESCE(bom.Delivery_date, ot_due.Delivery_date) ASC
                 LIMIT $pageSize OFFSET $offset
             ";
             $st = $db->prepare($sql);
