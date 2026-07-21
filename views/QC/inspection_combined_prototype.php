@@ -13,6 +13,7 @@
 include_once '../../src/common/_config.php';
 include_once '../../src/common/DBConnection.php';
 include_once '../../src/common/rbac.php'; // #1 fail-closed：共用 RBAC bootstrap 判定
+include_once '../../src/common/qc_inspection_lib.php'; // #3/#10/#12：後端重算/多量具/共用寫入
 
 // 權限不足專用例外：讓 catch 統一回 HTTP 403（前端可據此禁用/提示）
 if (!class_exists('QcPermException')) { class QcPermException extends Exception {} }
@@ -370,50 +371,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $itemIds[$idx] = (int)$iid;
             }
 
-            // --- 2b. 彙總：不良數 = 判定結果為 NG 的 PCS 數（垂直判定，任一項目NG即該PCS為NG）---
-            $ng_qty = 0; $aod_qty = 0;
-            foreach ($pcs as $p) { if (($p['v'] ?? '') === 'NG') $ng_qty++; }
-            if (!$pcs) { // 相容：未傳 PCS 判定時沿用項目判定加總
-                foreach ($items as $it) { if (($it['verdict'] ?? 'OK') === 'NG') $ng_qty++; }
-            }
-            foreach ($items as $it) { if (($it['verdict'] ?? '') === 'AOD') $aod_qty++; }
-            $check_result = $ng_qty > 0 ? 'NG' : 'OK';
-
-            // --- 2c. 寫入檢驗表頭 ---
+            // --- 2c. 先寫入檢驗表頭（ng/判定先給預設值，寫完明細再由後端彙總回填）---
             $insForm = $pdo->prepare(
                 "INSERT INTO qc_check_form
                  (bom_ing_fid, d_id, version_id, form_type_id, process_name, batch_no, round_no,
                   incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date, created_by, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', ?, ?, NOW(), ?, NOW())");
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, NOW(), ?, NOW())");
             $insForm->execute([
                 $fid, $d_id, $version_id, (string)$form_type_id, $process, $batch_no, $round_no,
-                $incoming_qty, $sample_qty, $ng_qty, $check_result, $main_remark,
+                $incoming_qty, $sample_qty, $main_remark,
                 json_encode($pcs, JSON_UNESCAPED_UNICODE), $user_id,
             ]);
             $qc_form_id = (int)$pdo->lastInsertId();
 
-            // --- 2d. 寫入實測明細（每項每抽）---
-            $insMeas = $pdo->prepare(
-                "INSERT INTO qc_measurement
-                 (qc_form_id, item_id, sample_no, measured_value, result, item_verdict, remark, created_by, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
-            foreach ($items as $idx => $it) {
-                $iid = $itemIds[$idx] ?? null;
-                if (!$iid) continue;
-                $verdict = $it['verdict'] ?? 'OK';
-                $samples = $it['samples'] ?? [];
-                if (!is_array($samples) || count($samples) === 0) {
-                    // 無逐抽值也至少留一筆判定列
-                    $insMeas->execute([$qc_form_id, $iid, 0, '', $verdict === 'NG' ? 'NG' : 'OK', $verdict, ($it['remark'] ?? null), $user_id]);
-                    continue;
-                }
-                foreach ($samples as $sno => $sv) {
-                    $val = is_array($sv) ? ($sv['v'] ?? '') : $sv;
-                    $res = is_array($sv) ? ($sv['r'] ?? 'OK') : ((string)$sv === 'NG' ? 'NG' : 'OK');
-                    $res = ($res === 'NG') ? 'NG' : 'OK';
-                    $insMeas->execute([$qc_form_id, $iid, (int)$sno + 1, (string)$val, $res, $verdict, null, $user_id]);
-                }
-            }
+            // --- 2d. 寫入實測明細 + 後端重算判定/彙總（#3 後端為準；#10 多量具/多次量測）---
+            $tot = qc_persist_readings($pdo, $qc_form_id, $items, $itemIds, $pcs, $user_id);
+            $ng_qty = $tot['ng_qty']; $aod_qty = $tot['aod_qty']; $check_result = $tot['check_result'];
+            $pdo->prepare("UPDATE qc_check_form SET ng_qty=?, check_result=? WHERE qc_form_id=?")
+                ->execute([$ng_qty, $check_result, $qc_form_id]);
 
             $pdo->commit();
 
@@ -450,27 +425,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$form) throw new Exception('查無此檢驗紀錄');
 
             $fmt = function($v){ if ($v === null) return ''; $s = rtrim(rtrim((string)$v, '0'), '.'); return ($s === '' || $s === '-') ? '0' : $s; };
-            $mq = "SELECT m.item_id, m.sample_no, m.measured_value, m.result, m.item_verdict,
+            $sampleN = max(1, (int)$form['sample_qty']);
+            // #10：帶回 measure_method/tool_id/Tool_No，依 (方法,量具) 分組還原「主讀值 + 加量測」
+            $mq = "SELECT m.item_id, m.sample_no, m.measured_value, m.result, m.item_verdict, m.remark,
+                          m.measure_method, m.tool_id, m.reading_seq, t.Tool_No,
                           i.item_name, i.standard_text, i.plus_tolerance, i.minus_tolerance, i.result_type,
                           (SELECT tl.QC_Tool FROM qc_inspection_item_tool_type itt JOIN qc_tool_list tl ON itt.QC_Tool_List_id=tl.QC_Tool_List_id WHERE itt.item_id=i.item_id ORDER BY itt.is_primary DESC LIMIT 1) AS tool_name
                    FROM qc_measurement m JOIN qc_inspection_item i ON m.item_id=i.item_id
-                   WHERE m.qc_form_id=? ORDER BY i.sort_order ASC, m.item_id ASC, m.sample_no ASC";
+                   LEFT JOIN qc_tool t ON m.tool_id=t.Tool_id
+                   WHERE m.qc_form_id=? ORDER BY i.sort_order ASC, m.item_id ASC, m.measurement_id ASC";
             $ms = $pdo->prepare($mq); $ms->execute([$qid]);
-            $byItem = [];
+            $blank = function($n){ $a=[]; for($i=0;$i<$n;$i++) $a[]=['v'=>'','r'=>'OK']; return $a; };
+            $byItem = [];   // iid => 基本欄位 + _groups
             foreach ($ms->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                $iid = $r['item_id'];
+                $iid = (int)$r['item_id'];
                 if (!isset($byItem[$iid])) {
                     $byItem[$iid] = [
-                        'item_id'=>(int)$iid, 'name'=>$r['item_name'], 'std'=>$r['standard_text'],
+                        'item_id'=>$iid, 'name'=>$r['item_name'], 'std'=>$r['standard_text'],
                         'up'=>$fmt($r['plus_tolerance']), 'lo'=>$fmt($r['minus_tolerance']),
                         'tool'=>$r['tool_name'] ?: '', 'type'=>$r['result_type']==='OKNG'?'OKNG':'NUM',
-                        'verdict'=>$r['item_verdict'] ?: 'OK', 'samples'=>[],
+                        'verdict'=>$r['item_verdict'] ?: 'OK', 'remark'=>($r['remark'] ?? ''),
+                        '_groups'=>[],
                     ];
                 }
-                if ((int)$r['sample_no'] > 0) {
-                    $byItem[$iid]['samples'][] = ['v'=>$r['measured_value'], 'r'=>$r['result']];
+                if ((int)$r['sample_no'] <= 0) continue; // 純判定列(無實測)
+                $key = ($r['measure_method'] ?? '') . '|' . ($r['tool_id'] ?? '');
+                if (!isset($byItem[$iid]['_groups'][$key])) {
+                    $byItem[$iid]['_groups'][$key] = [
+                        'tool_id'=>isset($r['tool_id'])?(int)$r['tool_id']:null,
+                        'tool_no'=>$r['Tool_No'] ?? '', 'method'=>$r['measure_method'] ?? '',
+                        'samples'=>$blank($sampleN),
+                    ];
+                }
+                $pos = (int)$r['sample_no'] - 1;
+                if ($pos >= 0 && $pos < $sampleN) {
+                    $byItem[$iid]['_groups'][$key]['samples'][$pos] = ['v'=>$r['measured_value'], 'r'=>$r['result']];
                 }
             }
+            // 分組收斂：第一組=主讀值(samples/tool_id)，其餘=加量測(extra[])
+            foreach ($byItem as $iid => &$row) {
+                $groups = array_values($row['_groups']); unset($row['_groups']);
+                if ($groups) {
+                    $g0 = $groups[0];
+                    $row['samples'] = $g0['samples'];
+                    $row['tool_id'] = $g0['tool_id'];
+                    if (($row['tool'] === '' || $row['tool'] === null) && $g0['method'] !== '') $row['tool'] = $g0['method'];
+                    $row['extra'] = [];
+                    for ($gi = 1; $gi < count($groups); $gi++) {
+                        $row['extra'][] = [
+                            'tool_id'=>$groups[$gi]['tool_id'], 'tool_no'=>$groups[$gi]['tool_no'],
+                            'method'=>$groups[$gi]['method'], 'samples'=>$groups[$gi]['samples'],
+                        ];
+                    }
+                } else {
+                    $row['samples'] = []; $row['extra'] = []; $row['tool_id'] = null;
+                }
+            }
+            unset($row);
             $featsH = loadUserFeatures($pdo, $user_id);
             $is_sup = hasFeature($featsH, 'qc_edit_history');
             $can_fill_h = hasFeature($featsH, 'qc_fill_inspection');
@@ -596,30 +607,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 $itemIds[$idx] = (int)$iid;
             }
-            // 重算不良數：判定結果為 NG 的 PCS 數（未傳 PCS 判定時沿用項目判定加總）
-            $ng_qty = 0; $aod_qty = 0;
-            foreach ($pcs as $p) { if (($p['v'] ?? '') === 'NG') $ng_qty++; }
-            if (!$pcs) { foreach ($items as $it) { if (($it['verdict'] ?? 'OK') === 'NG') $ng_qty++; } }
-            foreach ($items as $it) { if (($it['verdict'] ?? '') === 'AOD') $aod_qty++; }
-            $check_result = $ng_qty > 0 ? 'NG' : 'OK';
+            // 重寫明細 + 後端重算判定/彙總（#3 後端為準；#10 多量具/多次量測；#12 與存檔共用同一函式）
+            $tot = qc_persist_readings($pdo, $qid, $items, $itemIds, $pcs, $user_id);
+            $ng_qty = $tot['ng_qty']; $aod_qty = $tot['aod_qty']; $check_result = $tot['check_result'];
 
-            // 重寫明細
-            $pdo->prepare("DELETE FROM qc_measurement WHERE qc_form_id=?")->execute([$qid]);
-            $insMeas = $pdo->prepare("INSERT INTO qc_measurement (qc_form_id, item_id, sample_no, measured_value, result, item_verdict, remark, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
-            foreach ($items as $idx => $it) {
-                $iid = $itemIds[$idx] ?? null; if (!$iid) continue;
-                $verdict = $it['verdict'] ?? 'OK'; $samples = $it['samples'] ?? [];
-                if (!is_array($samples) || count($samples)===0) {
-                    $insMeas->execute([$qid, $iid, 0, '', $verdict==='NG'?'NG':'OK', $verdict, null, $user_id]);
-                    continue;
-                }
-                foreach ($samples as $sno => $sv) {
-                    $val = is_array($sv) ? ($sv['v'] ?? '') : $sv;
-                    $res = is_array($sv) ? ($sv['r'] ?? 'OK') : ((string)$sv==='NG'?'NG':'OK');
-                    $res = ($res==='NG') ? 'NG' : 'OK';
-                    $insMeas->execute([$qid, $iid, (int)$sno+1, (string)$val, $res, $verdict, null, $user_id]);
-                }
-            }
             // 更新表頭 + 自動回鎖
             $pdo->prepare("UPDATE qc_check_form SET incoming_qty=?, sample_qty=?, ng_qty=?, check_result=?, main_remark=?, pcs_verdicts=?, edit_unlocked=0, last_edited_by=?, last_edited_at=NOW() WHERE qc_form_id=?")
                 ->execute([$incoming_qty, $sample_qty, $ng_qty, $check_result, $main_remark, json_encode($pcs, JSON_UNESCAPED_UNICODE), $user_id, $qid]);
