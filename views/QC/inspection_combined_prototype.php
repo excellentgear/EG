@@ -2263,8 +2263,11 @@ $(function(){
         $el.toggleClass('ng-value', ng).toggleClass('label-default', !ng).text(ng?'NG':'OK');
     }
     function updateAutoVerdicts(){
+        // 尚未建立任何檢驗項目 → 判定結果顯示「—」，不預設合格（避免「還沒驗就顯示 OK」的誤導）
+        var hasItems = $('#items-body tr:not(.reading-sub)').length > 0;
         $('#verdict-cells .pcs-verdict').each(function(){
             var $c=$(this);
+            if(!hasItems){ $c.removeData('manual').removeClass('manual ng-value').addClass('label-default').text('—'); return; }
             if($c.data('manual')) return; // 手動修改過的不覆蓋
             var s=$c.data('s'), ng=false;
             $('#items-body tr').each(function(){
@@ -2273,10 +2276,12 @@ $(function(){
             });
             setPcsCell($c, ng?'NG':'OK');
         });
-        recalcNG();
+        recalcNG(hasItems);
     }
-    // 不良數 = 判定結果為 NG 的 PCS 數
-    function recalcNG(){
+    // 不良數 = 判定結果為 NG 的 PCS 數；無檢驗項目時不良數留空、整體判定不預設
+    function recalcNG(hasItems){
+        if(hasItems===undefined) hasItems = $('#items-body tr:not(.reading-sub)').length > 0;
+        if(!hasItems){ $('#inp-ng').val(''); $('input[name=judge]').prop('checked', false); return; }
         var ng = $('#verdict-cells .pcs-verdict.ng-value').length;
         $('#inp-ng').val(ng);
         $('input[name=judge][value="'+(ng>0?'NG':'OK')+'"]').prop('checked', true);
