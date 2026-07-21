@@ -127,7 +127,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     try {
         // #3 CSRF：寫入型 action 一律比對 session token（前端經 ajaxPrefilter 自動夾帶 csrf）
-        $WRITE_ACTIONS = ['save_inspection','update_inspection','set_ncr_decision','unlock_record','relock_record',
+        $WRITE_ACTIONS = ['save_inspection','save_draft','discard_draft','update_inspection','set_ncr_decision','unlock_record','relock_record',
             'save_tool_category','delete_tool_category','save_tool_instance','delete_tool_instance','replace_tool_category',
             'save_special_item','delete_special_item','manage_templates','manage_sampling_rules'];
         if (in_array($_POST['action'], $WRITE_ACTIONS, true)) {
@@ -244,13 +244,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                               (SELECT COUNT(*) FROM qc_inspection_edit_log el WHERE el.qc_form_id = f.qc_form_id) AS edit_log_count
                        FROM qc_check_form f
                        LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id
-                       WHERE f.bom_ing_fid=? ORDER BY f.batch_no ASC, f.round_no ASC, f.qc_form_id ASC";
+                       WHERE f.bom_ing_fid=? AND f.status <> 'DRAFT' ORDER BY f.batch_no ASC, f.round_no ASC, f.qc_form_id ASC";
                 $hs = $pdo->prepare($hq); $hs->execute([$fid]);
                 $history = $hs->fetchAll(PDO::FETCH_ASSOC);
                 // #6：標記每筆「本人是否於寬限期內可自改」
                 foreach ($history as &$hr) { $hr['self_grace'] = qcOwnerWithinGrace($pdo, $hr, $user_id) ? 1 : 0; }
                 unset($hr);
             } catch (Exception $e) { /* 欄位可能尚未建立 */ }
+
+            // #4：本人未送出的草稿（若有）→ 供前端提示載回
+            $draftFid = 0;
+            try {
+                $dq = $pdo->prepare("SELECT qc_form_id FROM qc_check_form WHERE bom_ing_fid=? AND status='DRAFT' AND created_by=? ORDER BY qc_form_id DESC LIMIT 1");
+                $dq->execute([$fid, $user_id]);
+                $draftFid = (int)$dq->fetchColumn();
+            } catch (Exception $e) {}
 
             echo json_encode([
                 'success' => true,
@@ -269,6 +277,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'items'   => $items,
                 'tools'   => $tools,
                 'history' => $history,
+                'draft_form_id' => $draftFid,
                 'has_std' => count($items) > 0,
                 'is_supervisor' => $is_sup,
                 'is_admin'      => hasFeature($feats, 'all'),
@@ -423,6 +432,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $pdo->prepare("UPDATE qc_check_form SET ng_qty=?, check_result=? WHERE qc_form_id=?")
                 ->execute([$ng_qty, $check_result, $qc_form_id]);
 
+            // --- #4：正式存檔後，清掉同(批次,複驗)的本人草稿(含其明細)，避免殘留/重複 ---
+            $dq = $pdo->prepare("SELECT qc_form_id FROM qc_check_form WHERE bom_ing_fid=? AND batch_no=? AND round_no=? AND status='DRAFT' AND created_by=?");
+            $dq->execute([$fid, $batch_no, $round_no, $user_id]);
+            foreach ($dq->fetchAll(PDO::FETCH_COLUMN) as $did) {
+                $pdo->prepare("DELETE FROM qc_measurement WHERE qc_form_id=?")->execute([$did]);
+                $pdo->prepare("DELETE FROM qc_check_form WHERE qc_form_id=?")->execute([$did]);
+            }
+
             $pdo->commit();
 
             echo json_encode([
@@ -441,6 +458,78 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'check_result' => $check_result,
                 ],
             ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // =====================================================================
+        // 2.5) #4 草稿自動存檔：以 status=DRAFT upsert（同 bom_ing_fid+批次+複驗+本人一份）
+        //      填寫過程背景保存，關掉視窗不流失；正式存檔後草稿自動清除。
+        // =====================================================================
+        if ($_POST['action'] === 'save_draft') {
+            if (!hasFeature(loadUserFeatures($pdo, $user_id), 'qc_fill_inspection')) {
+                throw new QcPermException('您沒有「填寫檢驗表單」權限');
+            }
+            $fid        = (int)($_POST['bom_ing_fid'] ?? 0);
+            $d_id       = (int)($_POST['d_id'] ?? 0);
+            $process    = $_POST['process_name'] ?? null;
+            $batch_no   = (int)($_POST['batch_no'] ?? 1);
+            $round_no   = (int)($_POST['round_no'] ?? 1);
+            $incoming_qty = (int)($_POST['incoming_qty'] ?? 0);
+            $sample_qty   = (int)($_POST['sample_qty'] ?? 0);
+            $main_remark  = trim($_POST['main_remark'] ?? '');
+            if (!$fid || $d_id <= 0) throw new Exception('缺少草稿必要參數');
+            $version_id   = getDefaultVersionId($pdo, $d_id);
+            $form_type_id = getDefaultFormTypeId($pdo);
+
+            // 草稿以「整包 JSON」保存前端填寫內容，不建立標準項目、不寫 qc_measurement（避免污染標準）
+            $draftJson = json_encode([
+                'items'        => (json_decode($_POST['items'] ?? '[]', true) ?: []),
+                'pcs'          => (json_decode($_POST['pcs_verdicts'] ?? '[]', true) ?: []),
+                'incoming_qty' => $incoming_qty, 'sample_qty' => $sample_qty, 'main_remark' => $main_remark,
+            ], JSON_UNESCAPED_UNICODE);
+
+            $f = $pdo->prepare("SELECT qc_form_id FROM qc_check_form WHERE bom_ing_fid=? AND batch_no=? AND round_no=? AND status='DRAFT' AND created_by=? ORDER BY qc_form_id DESC LIMIT 1");
+            $f->execute([$fid, $batch_no, $round_no, $user_id]);
+            $draftId = (int)$f->fetchColumn();
+            if ($draftId) {
+                $pdo->prepare("UPDATE qc_check_form SET incoming_qty=?, sample_qty=?, main_remark=?, process_name=?, draft_json=?, last_edited_at=NOW() WHERE qc_form_id=?")
+                    ->execute([$incoming_qty, $sample_qty, $main_remark, $process, $draftJson, $draftId]);
+            } else {
+                $pdo->prepare("INSERT INTO qc_check_form (bom_ing_fid, d_id, version_id, form_type_id, process_name, batch_no, round_no, incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, draft_json, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'OK', 'DRAFT', ?, ?, ?, NOW())")
+                    ->execute([$fid, $d_id, $version_id, (string)$form_type_id, $process, $batch_no, $round_no, $incoming_qty, $sample_qty, $main_remark, $draftJson, $user_id]);
+                $draftId = (int)$pdo->lastInsertId();
+            }
+            echo json_encode(['success'=>true, 'draft_form_id'=>$draftId], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // #4：取回草稿內容（整包 JSON）
+        if ($_POST['action'] === 'get_draft') {
+            requireViewPerm($pdo, $user_id);
+            $qid = (int)($_POST['qc_form_id'] ?? 0);
+            $s = $pdo->prepare("SELECT draft_json FROM qc_check_form WHERE qc_form_id=? AND status='DRAFT' AND created_by=?");
+            $s->execute([$qid, $user_id]);
+            $j = $s->fetchColumn();
+            echo json_encode(['success'=>true, 'draft'=>($j ? json_decode($j, true) : null)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // #4：捨棄本人草稿（含明細）
+        if ($_POST['action'] === 'discard_draft') {
+            if (!hasFeature(loadUserFeatures($pdo, $user_id), 'qc_fill_inspection')) {
+                throw new QcPermException('您沒有「填寫檢驗表單」權限');
+            }
+            $qid = (int)($_POST['qc_form_id'] ?? 0);
+            $fid = (int)($_POST['bom_ing_fid'] ?? 0);
+            $pdo->beginTransaction();
+            $sel = $pdo->prepare("SELECT qc_form_id FROM qc_check_form WHERE status='DRAFT' AND created_by=? AND (qc_form_id=? OR (?>0 AND bom_ing_fid=?))");
+            $sel->execute([$user_id, $qid, $fid, $fid]);
+            foreach ($sel->fetchAll(PDO::FETCH_COLUMN) as $did) {
+                $pdo->prepare("DELETE FROM qc_measurement WHERE qc_form_id=?")->execute([$did]);
+                $pdo->prepare("DELETE FROM qc_check_form WHERE qc_form_id=?")->execute([$did]);
+            }
+            $pdo->commit();
+            echo json_encode(['success'=>true], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
@@ -1796,6 +1885,8 @@ $(function(){
             opts.data = { csrf: CSRF };
         }
     });
+    // #4 自動存草稿狀態指示（右下角）
+    $('body').append('<span id="draft-status" style="position:fixed;right:14px;bottom:12px;background:#5cb85c;color:#fff;padding:4px 12px;border-radius:14px;font-size:12px;z-index:9999;display:none;box-shadow:0 1px 4px rgba(0,0,0,.3);"></span>');
     var TOOLS = ['卡尺','分厘卡','投影機','三次元','針規','目視'];
     // #10：量具實例(Tool_No)清單，供「量具下拉」與「＋加量測」使用。measure_method 由類型自動帶。
     var TOOL_INSTANCES = []; // [{id:'7', no:'CMM-01', cat:'三次元'}]
@@ -1925,10 +2016,66 @@ $(function(){
             $('#no-part-hint').toggle(noPart);
             $('#no-perm-hint').toggle(!state.can_fill);
             $('#btn-save,#btn-redo').prop('disabled', noPart || !state.can_fill);
+            maybeOfferDraft(res.draft_form_id||0); // #4 未送出草稿提示
         }, 'json').fail(function(x){ alert('載入錯誤：'+x.responseText); });
     }
 
     function reloadContext(){ if(ctx) loadContext(ctx.bom_ing_fid); }
+
+    // ============ #4 草稿 / 自動存檔 ============
+    var draftTimer=null, draftDirty=false;
+    function draftEligible(){ return ctx && !state.demo && !state.editFormId && state.can_fill && ctx.d_id>0; }
+    function scheduleDraftSave(){ if(!draftEligible()) return; draftDirty=true; if(draftTimer) clearTimeout(draftTimer); draftTimer=setTimeout(saveDraftNow, 2500); }
+    function saveDraftNow(){
+        if(!draftEligible() || !draftDirty) return;
+        var items=collectItems(); if(!items.length){ draftDirty=false; return; }
+        var b=state.batches[state.curBatch]||{no:1,rounds:[]};
+        $.post(API,{ action:'save_draft', bom_ing_fid:ctx.bom_ing_fid, d_id:ctx.d_id, process_name:ctx.process,
+            batch_no:b.no, round_no:(b.rounds.length+1),
+            incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
+            main_remark:$('#inp-remark').val(), items:JSON.stringify(items), pcs_verdicts:JSON.stringify(collectPcsVerdicts())
+        }, function(res){
+            if(res && res.success){ draftDirty=false; state.draftFormId=res.draft_form_id;
+                var t=new Date(), p=function(n){return('0'+n).slice(-2);};
+                $('#draft-status').text('已自動存草稿 '+p(t.getHours())+':'+p(t.getMinutes())+':'+p(t.getSeconds())).stop(true,true).show();
+            }
+        }, 'json');
+    }
+    // 綁定：任何輸入/操作即排程存草稿
+    $('#items-body').on('input change','input,select', scheduleDraftSave);
+    $('#items-body').on('click','.okng-btn,.remove-row,.remove-sub,.add-reading,.item-note', function(){ setTimeout(scheduleDraftSave,60); });
+    $('#inp-qty,#inp-sample,#inp-remark').on('input', scheduleDraftSave);
+    $('#verdict-cells').on('click dblclick','.pcs-verdict', function(){ setTimeout(scheduleDraftSave,60); });
+    $(window).on('beforeunload', function(){ if(draftEligible() && draftDirty){ try{ saveDraftNow(); }catch(e){} } });
+
+    function maybeOfferDraft(draftId){
+        if(!draftId || state.editFormId){ $('#draft-banner').hide(); return; }
+        state.draftFormId=draftId;
+        if(!$('#draft-banner').length){
+            $('#mode-banner').after('<div id="draft-banner" class="proto-banner" style="background:#d9edf7;border-color:#bce8f1;color:#31708f;"></div>');
+        }
+        $('#draft-banner').html('<i class="fa fa-clock-o"></i> 偵測到您先前<b>未送出的草稿</b>（關掉視窗前自動保存的內容）。'+
+            '<button class="btn btn-xs btn-info" id="btn-restore-draft" style="margin-left:8px;"><i class="fa fa-download"></i> 載回草稿</button> '+
+            '<button class="btn btn-xs btn-default" id="btn-discard-draft"><i class="fa fa-trash"></i> 捨棄</button>').show();
+    }
+    $(document).on('click','#btn-restore-draft', function(){
+        var did=state.draftFormId; if(!did) return;
+        $.post(API,{action:'get_draft',qc_form_id:did}, function(res){
+            if(!res.success || !res.draft){ alert('載回失敗或草稿已不存在'); $('#draft-banner').hide(); return; }
+            var d=res.draft;
+            state.sampleN=parseInt(d.sample_qty)||state.sampleN;
+            $('#inp-qty').val(d.incoming_qty||0); $('#inp-sample').val(state.sampleN); $('#inp-remark').val(d.main_remark||'');
+            renderItems((d.items||[]).slice());
+            applyPcsVerdicts(d.pcs||[]);
+            $('#no-std-hint').hide(); $('#draft-banner').hide();
+        }, 'json');
+    });
+    $(document).on('click','#btn-discard-draft', function(){
+        if(!confirm('確定捨棄此草稿？此動作無法復原。')) return;
+        $.post(API,{action:'discard_draft',bom_ing_fid:(ctx?ctx.bom_ing_fid:0),qc_form_id:(state.draftFormId||0)}, function(){
+            state.draftFormId=0; $('#draft-banner').hide();
+        }, 'json');
+    });
 
     // 進入修改模式：載入該筆歷程的項目與數值
     function openEditRecord(qcFormId){

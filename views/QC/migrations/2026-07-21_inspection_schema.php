@@ -41,6 +41,8 @@ $addCol('qc_check_form', 'pcs_verdicts',    "pcs_verdicts TEXT NULL COMMENT '各
 $addCol('qc_check_form', 'ncr_decision',    "ncr_decision VARCHAR(10) NULL COMMENT 'NG後決定：OPEN=已開異常單/SKIP=不開單'");
 $addCol('qc_check_form', 'ncr_skip_reason', "ncr_skip_reason VARCHAR(255) NULL COMMENT '不開異常單的原因'");
 $addCol('qc_check_form', 'abnormal_order_id', "abnormal_order_id INT NULL COMMENT '對應 qa_abnormal_order.id'");
+// #4 草稿：整包保存前端填寫內容(items+pcs+數量+備註)的 JSON，僅 status=DRAFT 用；避免把草稿品名寫成標準項目
+$addCol('qc_check_form', 'draft_json', "draft_json MEDIUMTEXT NULL COMMENT '草稿內容JSON(僅status=DRAFT)'");
 
 // ---- qc_measurement：逐列判定 + 【多量具/多次量測】新顆粒度欄位（實作說明 §多量具 (a)）----
 $addCol('qc_measurement', 'item_verdict',   "item_verdict VARCHAR(10) NULL COMMENT '項目判定 OK/NG/AOD'");
