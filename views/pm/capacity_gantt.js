@@ -113,7 +113,7 @@
       '.cg-bar.p-u{background:' + PRIO.u.bg + ';border-color:' + PRIO.u.bd + ';color:' + PRIO.u.tx + ';}',
       '.cg-bar.p-e{background:' + PRIO.e.bg + ';border-color:' + PRIO.e.bd + ';color:' + PRIO.e.tx + ';}',
       '.cg-bar:hover{outline:2px solid #5a4632;outline-offset:-1px;filter:brightness(1.06);}',
-      '.cg-bar.due-over{border:2px solid #b3231a;box-shadow:0 0 5px 1px rgba(179,35,26,.9);z-index:4;}',   // 已超預測回廠(P80)未回：紅框+紅光突顯
+      '.cg-bar.due-over{box-shadow:0 0 0 2px #fff,0 0 0 4px #7a0000,0 0 8px 3px rgba(122,0,0,.75);z-index:5;}',   // 已超預測回廠(P80)未回：白圈+濃紅圈+紅光，紅底(特急)上也看得出
       '.cg-bar.stale{opacity:.42;border-style:dashed;}',
       '.cg-bar .cg-ov{position:absolute;top:0;font-weight:700;}',
       '.cg-loadrow{display:flex;border-bottom:1px solid #efe7db;background:#fbf7f1;}',
@@ -470,7 +470,7 @@
       h += '<tr class="' + (over ? 'over' : '') + '" data-mk="' + esc(s.mk) + '" title="點此跳到甘特圖此廠商列"><td class="l">' + esc(s.name) + (String(s.internal) === '1' ? ' <span style="color:#a08a6f">(廠內)</span>' : '') + '</td>' +
         '<td>' + s.pieces + '</td><td>' + s.qty + '</td><td>' + s.peak + '</td>' +
         '<td>' + (s.avg == null ? '—' : s.avg) + '</td>' +
-        '<td' + (s.overdue ? ' style="color:#c0392b;font-weight:700"' : '') + '>' + s.overdue + '</td>' +
+        '<td' + (s.overdue ? ' data-ovmk="' + esc(s.mk) + '" title="點此只看此廠商的逾期未回" style="color:#c0392b;font-weight:700;cursor:pointer;text-decoration:underline"' : '') + '>' + s.overdue + '</td>' +
         '<td' + (s.stale ? ' style="color:#b5762f"' : '') + '>' + s.stale + '</td></tr>';
     });
     return h + '</tbody></table></div>';
@@ -492,6 +492,17 @@
     if (ol) ol.onchange = function () { var v = parseInt(this.value, 10); state.overloadPeak = (v > 0 ? v : 1); render(); };
     Array.prototype.forEach.call(wrap.querySelectorAll('tbody tr[data-mk]'), function (tr) {
       tr.onclick = function () { scrollToVendor(this.getAttribute('data-mk')); };
+    });
+    // 點「逾期未回」數字 → 開啟只看逾期 + 跳到該廠商
+    Array.prototype.forEach.call(wrap.querySelectorAll('td[data-ovmk]'), function (td) {
+      td.onclick = function (e) {
+        e.stopPropagation();
+        var mk = this.getAttribute('data-ovmk');
+        state.onlyOverdue = true;
+        var cb = document.getElementById('cg-onlyover'); if (cb) cb.checked = true;
+        render();
+        scrollToVendor(mk);
+      };
     });
   }
   // 點看板某廠商 → 甘特圖捲動並高亮該廠商列（非依廠商分組時先切回依廠商）
@@ -597,7 +608,7 @@
       '<span style="font-weight:700;color:#5a4632;">燈號(可點選篩選)：</span>' +
       legItem('n', '一般件') + legItem('u', '急件(U)') + legItem('e', '特急件(E)') +
       '<span><i style="background:' + PRIO.n.bg + ';border-style:dashed;opacity:.45"></i>逾60天在廠中(可能忘記回廠)</span>' +
-      '<span><i style="background:' + PRIO.n.bg + ';border:2px solid #b3231a;box-shadow:0 0 3px #b3231a"></i>⚠已超預測回廠(P80)未回</span>' +
+      '<span><i style="background:' + PRIO.n.bg + ';box-shadow:0 0 0 1px #fff,0 0 0 2px #7a0000"></i>⚠已超預測回廠(P80)未回</span>' +
       '<span><i style="background:rgba(' + LOAD_RGB + ',.7)"></i>每日負荷</span>' +
       '<span style="color:' + TODAY_COL + ';">┋ 今天</span>';
     Array.prototype.forEach.call(leg.querySelectorAll('.cg-prio'), function (el) {
@@ -728,7 +739,10 @@
         ctx.lineWidth = 1; ctx.strokeStyle = pc.bd;
         if (r.is_stale) ctx.setLineDash([3, 2]); roundRect(ctx, bx, by, bw, BAR_H, 3); ctx.stroke(); ctx.setLineDash([]);
         ctx.globalAlpha = 1;
-        if (isOverdue(r)) { ctx.lineWidth = 2; ctx.strokeStyle = '#b3231a'; roundRect(ctx, bx, by, bw, BAR_H, 3); ctx.stroke(); }
+        if (isOverdue(r)) {
+          ctx.lineWidth = 3; ctx.strokeStyle = '#7a0000'; roundRect(ctx, bx - 1, by - 1, bw + 2, BAR_H + 2, 3); ctx.stroke();
+          ctx.lineWidth = 1; ctx.strokeStyle = '#fff'; roundRect(ctx, bx, by, bw, BAR_H, 3); ctx.stroke();
+        }
         var lab = barLabel(r, bw);
         if (lab) { ctx.fillStyle = pc.tx; ctx.font = '10px sans-serif'; ctx.save(); ctx.beginPath(); ctx.rect(bx + 2, by, bw - 4, BAR_H); ctx.clip(); ctx.fillText(lab, bx + 4, by + BAR_H / 2 + 1); ctx.restore(); }
       });
