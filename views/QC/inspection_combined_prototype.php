@@ -975,6 +975,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // 角色↔功能：本頁「設定→權限設定」透過 Roles_API.php 指派 qc_edit_history。
         // 人員↔角色：於 views/user/user_permissions.php 設定。
 
+        // =====================================================================
+        // #8 同料號歷次檢驗（跨 BOM）：列出同一料號(d_id)歷來檢驗表，點入看逐項實測
+        // =====================================================================
+        if ($_POST['action'] === 'history_by_part') {
+            requireViewPerm($pdo, $user_id);
+            $d_id = (int)($_POST['d_id'] ?? 0);
+            if (!$d_id) throw new Exception('缺少料號 d_id');
+            $q = $pdo->prepare(
+                "SELECT f.qc_form_id, f.bom_ing_fid, f.batch_no, f.round_no, f.process_name,
+                        f.check_date, f.created_at, f.check_result, f.ng_qty, f.incoming_qty, f.sample_qty,
+                        f.created_by, u.user_cname, bi.bom
+                 FROM qc_check_form f
+                 LEFT JOIN bom_ing bi ON bi.bom_ing_fid = f.bom_ing_fid
+                 LEFT JOIN user u ON TRIM(f.created_by) = u.id
+                 WHERE f.d_id = ? AND f.status <> 'DRAFT'
+                 ORDER BY f.qc_form_id DESC LIMIT 300");
+            $q->execute([$d_id]);
+            echo json_encode(['success'=>true, 'rows'=>$q->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
         throw new Exception('未知的 action: ' . $_POST['action']);
     } catch (QcPermException $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -3177,7 +3198,68 @@ $(function(){
         },'json');
     });
 
-    $('#btn-history').on('click', function(){ alert('歷史紀錄查詢，正式版會接上。'); });
+    // ============ #8 同料號歷次檢驗查詢 ============
+    $('#btn-history').on('click', function(){
+        if(!ctx || !ctx.d_id){ alert('請先由待驗清單開啟一筆檢驗（需有料號）再查詢歷史。'); return; }
+        openPartHistory();
+    });
+    function ensureHistoryModal(){
+        if($('#partHistModal').length) return;
+        $('body').append(
+          '<div class="modal fade" id="partHistModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content">'+
+          '<div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>'+
+          '<h4 class="modal-title"><i class="fa fa-history"></i> 同料號歷次檢驗</h4></div>'+
+          '<div class="modal-body"><div id="partHistList">載入中…</div><div id="partHistDetail" style="margin-top:12px;"></div></div>'+
+          '<div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">關閉</button></div>'+
+          '</div></div></div>');
+    }
+    function openPartHistory(){
+        ensureHistoryModal();
+        $('#partHistDetail').empty(); $('#partHistList').html('載入中…');
+        $('#partHistModal').modal('show');
+        $.post(API,{action:'history_by_part', d_id:ctx.d_id}, function(res){
+            if(!res.success){ $('#partHistList').html('查詢失敗：'+esc(res.message||'')); return; }
+            var rows=res.rows||[];
+            if(!rows.length){ $('#partHistList').html('<div class="text-muted">此料號尚無歷史檢驗紀錄。</div>'); return; }
+            var h='<div class="text-muted" style="margin-bottom:6px;">料號 <b>'+esc(ctx.part_no||'')+'</b>　共 '+rows.length+' 筆（點「檢視」看逐項實測與同尺寸落點）</div>'+
+              '<div style="max-height:230px;overflow:auto;"><table class="table table-condensed table-bordered"><thead><tr>'+
+              '<th>日期</th><th>製令</th><th>製程</th><th>批/複</th><th>判定</th><th>不良</th><th>檢驗人</th><th></th></tr></thead><tbody>';
+            rows.forEach(function(r){
+                var d=String(r.check_date||r.created_at||'').substring(0,16);
+                h+='<tr><td>'+esc(d)+'</td><td>'+esc(r.bom||'')+'</td><td>'+esc(r.process_name||'')+'</td>'+
+                   '<td>'+(r.batch_no||1)+'/'+(r.round_no||1)+'</td><td>'+statusLabel(r.check_result)+'</td>'+
+                   '<td>'+(r.ng_qty||0)+'</td><td>'+esc(r.user_cname||r.created_by||'')+'</td>'+
+                   '<td><button class="btn btn-xs btn-primary ph-view" data-id="'+r.qc_form_id+'">檢視</button></td></tr>';
+            });
+            h+='</tbody></table></div>';
+            $('#partHistList').html(h);
+        }, 'json');
+    }
+    $(document).on('click','.ph-view', function(){
+        var id=$(this).data('id');
+        $('#partHistDetail').html('載入中…');
+        $.post(API,{action:'get_history_record',qc_form_id:id}, function(res){
+            if(!res.success){ $('#partHistDetail').html('載入失敗：'+esc(res.message||'')); return; }
+            $('#partHistDetail').html(renderHistDetail(res));
+        }, 'json');
+    });
+    function renderHistDetail(res){
+        var h=res.header, its=res.items||[];
+        var out='<div class="well well-sm" style="margin-bottom:8px;"><b>逐項實測</b>（單號 '+h.qc_form_id+'；送驗 '+(h.incoming_qty||0)+'／抽驗 '+(h.sample_qty||0)+'；整體 '+(h.check_result==='NG'?'<span class="text-danger">不良</span>':'合格')+'）</div>';
+        out+='<div style="max-height:300px;overflow:auto;"><table class="table table-condensed table-bordered"><thead><tr><th>項目</th><th>標準</th><th>量具</th><th>實測（各PCS）</th><th>判定</th></tr></thead><tbody>';
+        its.forEach(function(it){
+            var readings=[{tool:(it.tool||''), samples:it.samples}];
+            (it.extra||[]).forEach(function(ex){ readings.push({tool:(ex.method||ex.tool_no||''), samples:ex.samples}); });
+            readings.forEach(function(rd,ri){
+                var vals=(rd.samples||[]).map(function(s){ return (s&&s.v!==''&&s.v!=null)?('<span class="'+((s.r==='NG')?'text-danger':'')+'">'+esc(s.v)+'</span>'):'·'; }).join('　');
+                out+='<tr>'+(ri===0?('<td rowspan="'+readings.length+'">'+esc(it.name)+'</td><td rowspan="'+readings.length+'">'+esc(it.std||'')+((it.up||it.lo)?(' ('+esc(it.up||'')+'/'+esc(it.lo||'')+')'):'')+'</td>'):'')+
+                    '<td>'+esc(rd.tool||'')+'</td><td>'+vals+'</td>'+(ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'<span class="text-danger">NG</span>':(it.verdict==='AOD'?'特採':'OK'))+'</td>'):'')+'</tr>';
+            });
+            if(it.remark) out+='<tr><td colspan="5" class="text-muted" style="font-size:12px">備註：'+esc(it.remark)+'</td></tr>';
+        });
+        out+='</tbody></table></div>';
+        return out;
+    }
 });
 </script>
 </body>
