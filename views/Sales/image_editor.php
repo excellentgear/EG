@@ -224,11 +224,6 @@ try {
     }
 } catch (Exception $e) { /* 無部門資料則視為空 */ }
 
-// ── 內建標籤（PRESET_LABELS）可見範圍：只給技術課（技術部，名稱含「技術」）與管理者 ──
-//    內建標籤多為技術／工程圖用途，不需要全體都看到，故限制在技術課部門底下顯示。
-$isTechDept = $isMgr;
-foreach ($myDepts as $__d) { if (mb_strpos($__d['name'] ?? '', '技術') !== false) { $isTechDept = true; break; } }
-
 // ── 使用者個人畫圖偏好（顏色/粗細/印章大小…用完自動記住，下次開啟沿用）──────
 $userPrefs = [];
 try {
@@ -387,7 +382,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($name === '' || $spec === '') throw new Exception('缺少標籤名稱或內容');
             if (json_decode($spec) === null) throw new Exception('標籤內容格式錯誤');
             if (!in_array($scope, ['private', 'dept', 'company'], true)) throw new Exception('範圍參數錯誤');
-            if ($scope === 'company' && !$isMgr) throw new Exception('只有管理者可存公司共用標籤');
+            // 公司共用：有批圖使用權者皆可放入（刪除才限管理者，見 delete_label）
             if ($scope === 'dept') {
                 if ($deptId <= 0) throw new Exception('請選擇部門');
                 if (!$isMgr && !in_array($deptId, $myDeptIds, true)) throw new Exception('只能存到自己所屬的部門');
@@ -417,8 +412,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $row->execute([$lid]);
             $r = $row->fetch(PDO::FETCH_ASSOC);
             if (!$r) throw new Exception('標籤不存在');
+            // 公司共用標籤一律只有管理者可刪（連建立者本人也不行）；私人＝本人、部門＝同部門可刪
             $ok = $isMgr
-                || ((int)$r['owner_user_id'] === $uid)                                            // 建立者本人
+                || ($r['owner_type'] !== 'company' && (int)$r['owner_user_id'] === $uid)           // 非公司共用的建立者本人
                 || ($r['owner_type'] === 'dept' && in_array((int)$r['owner_dept_id'], $myDeptIds, true)); // 同部門
             if (!$ok) throw new Exception('公司共用標籤僅管理者可刪除');
             $pdo->beginTransaction();
@@ -434,7 +430,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!is_array($ids) || !$ids) throw new Exception('未選擇標籤');
             if (!in_array($mode, ['copy', 'move'], true)) throw new Exception('模式錯誤');
             if (!in_array($scope, ['private', 'dept', 'company'], true)) throw new Exception('目標範圍錯誤');
-            if ($scope === 'company' && !$isMgr) throw new Exception('只有管理者可放到公司共用');
+            // 公司共用：有批圖使用權者皆可搬移/複製進來（刪除才限管理者）
             // scope=private：收進自己的私人標籤庫（owner 檢查同下，僅能動自己的標籤；管理者不受限）
             // scope=dept 支援多部門（dept_ids JSON 陣列）：move=第一個部門為搬移、其餘為複製；copy=每個部門各複製一份
             $deptIds = json_decode($_POST['dept_ids'] ?? '[]', true);
@@ -958,7 +954,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <span class="tb-sep"></span>
     <button class="tb-btn" onclick="openSecondWindow()" title="再開一個批圖視窗（可移到另一個螢幕；兩窗之間互貼：選取後 Ctrl+C，到另一窗按 Ctrl+Shift+V）"><i class="fa fa-clone"></i> 開新視窗</button>
     <span class="tb-sep"></span>
-    <button class="tb-btn" id="btn-label-lib" onclick="toggleLabelLib()" title="標籤庫：內建常用標籤＋自訂標籤，點一下放到圖上"><i class="fa fa-tags"></i> 標籤庫</button>
+    <button class="tb-btn" id="btn-label-lib" onclick="toggleLabelLib()" title="標籤庫：常用標籤（分公司共用／部門／私人），點一下放到圖上"><i class="fa fa-tags"></i> 標籤庫</button>
     <button class="tb-btn" onclick="openWmModal()" title="浮水印：自訂文字/角度/單一或填滿/濃淡"><i class="fa fa-shield"></i> 浮水印</button>
     <button class="tb-btn" onclick="openPartModal()" title="存成料號附件（壓平圖＋可再編輯的工作檔），或開啟既有工作檔繼續編輯"><i class="fa fa-archive"></i> 料號附件</button>
     <button class="tb-btn" onclick="openDraftModal()" title="暫存檔管理（這台電腦、依使用者區分）：暫存目前畫布（需命名，最多 5 件）、開啟先前的暫存、個別刪除或清除全部。內容有變動時每 60 秒自動更新「自動暫存」。要長期保存或跨電腦請用「料號附件」存工作檔"><i class="fa fa-clock-o"></i> 暫存</button>
@@ -1159,11 +1155,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                     </label>
                 </div>
                 <div class="lib-body">
-                    <?php if ($isTechDept): ?>
-                    <div class="lib-sec" style="color:#6fc3ff;">內建標籤（點一下放到圖上，雙擊圖上標籤可改字）</div>
-                    <div id="lib-presets"></div>
-                    <?php endif; ?>
-                    <div class="lib-sec" style="color:#6fc3ff;margin-top:14px;display:flex;align-items:center;justify-content:space-between;">
+                    <div class="lib-sec" style="color:#6fc3ff;margin-top:2px;display:flex;align-items:center;justify-content:space-between;">
                         <span>自訂標籤（全體共用）</span>
                         <span style="display:flex;gap:8px;font-weight:400;color:#8b949e;" title="不勾＝這一區在你的標籤庫隱藏（只影響你自己，別人不受影響）">
                             <label style="cursor:pointer;display:flex;align-items:center;gap:3px;"><input type="checkbox" id="lib-show-company" checked onchange="setScopeShow('company', this.checked)">公司</label>
@@ -1330,10 +1322,11 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <select id="sl-scope" onchange="document.getElementById('sl-dept').style.display=(this.value==='dept')?'':'none'">
                     <option value="private" selected>私人（只有自己看得到）</option>
                     <option value="dept">部門（同部門共用）</option>
+                    <option value="company">公司共用（全體共用）</option>
                 </select>
                 <select id="sl-dept" style="display:none;"></select>
             </div>
-            <div style="font-size:11.5px;color:#8b949e;">預設存為私人標籤；之後可在標籤庫用「管理」多選複製/搬移到部門。標籤放到圖上後仍可雙擊改字、縮放。</div>
+            <div style="font-size:11.5px;color:#8b949e;">預設存為私人標籤；之後可在標籤庫用「管理」多選複製/搬移到部門或公司共用。公司共用有使用權者皆可放入，但只有管理者可刪除。標籤放到圖上後仍可雙擊改字、縮放。</div>
         </div>
         <div class="modal-foot">
             <button class="tb-btn" onclick="hideModal('savelabel-modal')">取消</button>
@@ -1583,7 +1576,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <b style="color:#6fc3ff;">③ 文字與標籤庫</b>
             <ul style="padding-left:18px;margin:4px 0 10px;">
                 <li>文字(T)/標籤放上後<b>永遠可再拖移、雙擊改字、拉角縮放</b>（不像小畫家會固定）</li>
-                <li>標籤庫：內建＋自訂（全體共用、可分類篩選）。點一下放到圖上；<b>雙擊改字</b>，外框自動貼合字長；「底色」按鈕或插入前勾「透明背景」可切換白底/透明</li>
+                <li>標籤庫：分公司共用／部門／私人（可分類篩選）。點一下放到圖上；<b>雙擊改字</b>，外框自動貼合字長；「底色」按鈕或插入前勾「透明背景」可切換白底/透明（原內建常用標籤已改為技術部的部門標籤）</li>
                 <li>製程表格標籤（如 (  )齒研）：<b>雙擊空白格可填數值</b>（如公差 29.91 -0.056），Enter 可換行打上下公差，格子自動加寬加高；雙擊標題可把括號填入製程序號</li>
                 <li>自己組好的標籤（矩形＋文字框選）按「把選取存為標籤」入庫；填分類方便日後查找</li>
                 <li><b>Alt＋拖曳</b>＝原地留一份拖走一份；Ctrl+D 原地複製</li>
@@ -1594,7 +1587,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>球標 Ⓐ：連續點圖面自動 A、B、C…編號；右下角自動產生「Ⓐ～Ⓕ」範圍（圓圈樣式與圖面球標一致，變動自動刪舊重建）。原圖已有球標 → 把「下一個球標」改成接續字母</li>
                 <li>設變標示 ◇/△：<b>同一次設變多處都點同一個號碼</b>（號碼欄可自訂起始，圖面已有舊設變時接續）；該號第一次放置時左上角自動加一列「標示＋今日日期」，<b>雙擊該列輸入說明文字</b>，越新越上面。下一次設變記得把號碼欄+1</li>
                 <li>蓋章 ㊞：本人簽章（紅，人人可用）／技術課章與發行章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>，<b>限管理者在「用章人員」勾選的人員</b>，顏色也在同一個跳窗設定）；透明背景直接蓋在圖上（自動去背），日期自動帶今天，可移動縮放</li>
-                <li>標籤庫分三層：公司共用（管理者管理）／部門標籤（同部門共用）／私人標籤（只有自己看得到）。新標籤<b>預設存私人</b>；面板右上「管理」開跳窗：<b>框選或 Ctrl+點選多選 → 拖曳到目標欄＝搬移、Ctrl+拖曳＝複製</b>，也可批次刪除</li>
+                <li>標籤庫分三層：公司共用（<b>有使用權者皆可放入，僅管理者可刪</b>）／部門標籤（同部門共用）／私人標籤（只有自己看得到）。新標籤<b>預設存私人</b>；面板右上「管理」開跳窗：<b>框選或 Ctrl+點選多選 → 拖曳到目標欄＝搬移、Ctrl+拖曳＝複製</b>，也可批次刪除</li>
             </ul>
             <b style="color:#6fc3ff;">⑤ 檢視、匯出與跨視窗</b>
             <ul style="padding-left:18px;margin:4px 0 10px;">
@@ -1606,7 +1599,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
                 <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋</li>
                 <li>工程符號與公差：屬性列「文字」區有符號鈕（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×），編輯文字時點一下插到游標處（研磨＝連按▽）；文字輸入 <b>A^B</b>（如 25 -0^-0.18）結束編輯自動變成上下公差小字，雙擊可還原 ^ 字串重編</li>
-                <li>研磨/粗糙度記號：標籤庫內建「<b>加工符號</b>」分類有「研磨記號 G＋▽▽▽」與「粗糙度記號 0.8＋G」，點一下放到圖上（預設透明底、可移動縮放旋轉），<b>雙擊 G 或 0.8 即可改字</b></li>
+                <li>研磨/粗糙度記號：標籤庫「<b>加工符號</b>」分類（技術部部門標籤）有「研磨記號 G＋▽▽▽」與「粗糙度記號 0.8＋G」，點一下放到圖上（預設透明底、可移動縮放旋轉），<b>雙擊 G 或 0.8 即可改字</b></li>
             </ul>
             <b style="color:#6fc3ff;">⑥ 快捷鍵</b>
             <table style="margin:6px 0 4px;">
@@ -3420,23 +3413,9 @@ function reflowDcLegend() {
 
 /* ── 標籤庫：規格化標籤（雙擊改字、外框自動貼合、可存庫共用） ─────────── */
 const LABEL_FONT = '"Microsoft JhengHei", "PingFang TC", Arial, sans-serif';
-/* 內建標籤（依你提供的樣式重建成可編輯向量標籤；分類為暫定，可再調整） */
-const PRESET_LABELS = [
-    { name: '齒研附P40報告',   cat: '齒研',     spec: { kind: 'box',   text: '齒研附 P40 報告' } },
-    { name: '齒底徑說明',       cat: '齒研',     spec: { kind: 'box',   text: '齒底徑 Ø\n(齒底確定有磨到此深度即可)', align: 'left' } },
-    { name: '注意隆齒設定',     cat: '注意事項', spec: { kind: 'box',   text: '注意隆齒設定' } },
-    { name: '注意結合要壓到底', cat: '注意事項', spec: { kind: 'box',   text: '注意結合要壓到底' } },
-    { name: '粗滾圖面',         cat: '滾齒',     spec: { kind: 'box',   text: '粗滾圖面' } },
-    { name: '鎖螺絲',           cat: '組裝',     spec: { kind: 'box',   text: '鎖螺絲' } },
-    { name: '攻牙用一般絲攻',   cat: '攻牙',     spec: { kind: 'inline', segs: [{ t: '攻牙用', box: false }, { t: '一般', box: true }, { t: '絲攻', box: false }] } },
-    { name: '研磨記號 G＋▽▽▽', cat: '加工符號', spec: { kind: 'grind3', text: 'G', bg: 'transparent' } },
-    { name: '粗糙度記號 0.8＋G', cat: '加工符號', spec: { kind: 'rough', text: 'G', val: '0.8', bg: 'transparent' } },
-    { name: '±0.02',            cat: '公差',     spec: { kind: 'plain', text: '±0.02' } },
-    { name: 'JIS 2',            cat: '公差',     spec: { kind: 'plain', text: 'JIS 2' } },
-    { name: '(  )齒研 滾/磨',   cat: '製程表格', spec: { kind: 'table', title: '(  )齒研', rows: ['滾', '磨'] } },
-    { name: '(  )滾齒 滾',      cat: '製程表格', spec: { kind: 'table', title: '(  )滾齒', rows: ['滾'] } }
-];
-
+/* 內建常用標籤已改為「技術部」部門標籤（存在 imgedit_labels，owner_type=dept、owner_dept_id=1），
+   由技術部成員在標籤庫「管理」跳窗維護；種子資料見 ai-rules/tools/imgedit_seed_builtin_labels.php。
+   此處不再硬寫 PRESET_LABELS，標籤一律走 customLabels（DB）渲染。 */
 let __labelInk = '#000000';   // makeLabelFromSpec 執行期間的文字色（spec.color）
 function mkLabelText(str, fs, extra) {
     return new fabric.Text(str, Object.assign({
@@ -3738,7 +3717,6 @@ function allTags() {
 }
 function allCategories() {
     const cats = [];
-    PRESET_LABELS.forEach(p => { if (p.cat && !cats.includes(p.cat)) cats.push(p.cat); });
     customLabels.forEach(r => { const c = r.category || '未分類'; if (!cats.includes(c)) cats.push(c); });
     return cats;
 }
@@ -3802,7 +3780,7 @@ function lmCols() {
     return [
         { scope: 'private', title: '🔒 私人標籤', color: '#b39ddb' },
         { scope: 'dept',    title: '👥 部門標籤', color: '#1abb9c' },
-        { scope: 'company', title: '🏢 公司共用' + (IS_MGR ? '' : '（唯讀）'), color: '#e67e22' }
+        { scope: 'company', title: '🏢 公司共用' + (IS_MGR ? '' : '（可放入，僅管理者可刪）'), color: '#e67e22' }
     ];
 }
 function lmUpdateCount() { document.getElementById('lm-sel-count').textContent = lmSel.size; }
@@ -3926,7 +3904,6 @@ function renderLibMgr() {
                 deptIds = lmActiveDepts();
                 if (!deptIds.length) { toast('請先點亮至少一個部門按鈕（部門欄頂部）'); return; }
             }
-            if (scope === 'company' && !IS_MGR) { toast('只有管理者可放到公司共用'); return; }
             lmMove(scope, deptIds, e.ctrlKey ? 'copy' : 'move');
         });
         // 框選（滑鼠在欄內空白處拖出選取框）
@@ -4107,33 +4084,7 @@ function renderLibrary() {
     const words = q ? q.split(/\s+/) : [];
     const hitQ = hay => !words.length || words.every(w => hay.includes(w));
     const tagHay = tags => String(tags || '').trim().split(/\s+/).filter(Boolean).map(t => '#' + t).join(' ');
-    // 內建：依分類分組（限技術課部門/管理者才有此區塊；非技術課時 lib-presets 容器不存在，整段跳過）
-    const pbox = document.getElementById('lib-presets');
-    if (pbox) {
-    pbox.innerHTML = '';
-    const groups = {};
-    PRESET_LABELS.forEach(p => {
-        if (filter && p.cat !== filter) return;
-        if (!hitQ((p.name + ' ' + (p.cat || '')).toLowerCase())) return;
-        (groups[p.cat || '未分類'] = groups[p.cat || '未分類'] || []).push(p);
-    });
-    Object.keys(groups).forEach(cat => {
-        const h = document.createElement('div'); h.className = 'lib-sec'; h.textContent = '▸ ' + cat;
-        pbox.appendChild(h);
-        groups[cat].forEach(p => {
-            const g = makeLabelFromSpec(p.spec);
-            const url = g.toDataURL({ format: 'png', multiplier: Math.min(1, 210 / g.width, 100 / g.height) });
-            const div = document.createElement('div');
-            div.className = 'lib-item';
-            div.innerHTML = labelThumbHTML(url, p.name, 0);
-            div.onclick = () => insertLabel(p.spec);
-            pbox.appendChild(div);
-        });
-    });
-    if (!pbox.children.length) pbox.innerHTML = '<div style="color:#666;font-size:11px;padding:6px;">' + (q ? '沒有符合搜尋的內建標籤' : '此分類沒有內建標籤') + '</div>';
-    }
-
-    // 自訂：先分範圍（公司共用/部門/私人），範圍內再依分類分組
+    // 標籤：先分範圍（公司共用/部門/私人），範圍內再依分類分組（原「內建標籤」已改為技術部部門標籤，一併走這裡）
     const cbox = document.getElementById('lib-customs');
     cbox.innerHTML = '';
     const SCOPES = [
