@@ -31,7 +31,7 @@
     selMakers: new Set(), selProcs: new Set(), selTypes: new Set(),
     prioOn: { n: true, u: true, e: true },   // 燈號篩選（點圖例切換），預設全選
     rows: [], meta: { start: '', end: '', today: '' }, nonwork: new Set(), holidays: {},
-    groupBy: 'maker', hideStale: false, showLoad: true, showDash: true, _capped: false,
+    groupBy: 'maker', hideStale: false, onlyOverdue: false, showLoad: true, showDash: true, _capped: false,
     dashSort: 'peak', dashDesc: true, overloadPeak: 8
   };
 
@@ -113,7 +113,7 @@
       '.cg-bar.p-u{background:' + PRIO.u.bg + ';border-color:' + PRIO.u.bd + ';color:' + PRIO.u.tx + ';}',
       '.cg-bar.p-e{background:' + PRIO.e.bg + ';border-color:' + PRIO.e.bd + ';color:' + PRIO.e.tx + ';}',
       '.cg-bar:hover{outline:2px solid #5a4632;outline-offset:-1px;filter:brightness(1.06);}',
-      '.cg-bar.due-over{box-shadow:inset 0 3px 0 #c0392b;}',   // 交期已過卻仍在廠：頂部紅條
+      '.cg-bar.due-over{border:2px solid #b3231a;box-shadow:0 0 5px 1px rgba(179,35,26,.9);z-index:4;}',   // 已超預測回廠(P80)未回：紅框+紅光突顯
       '.cg-bar.stale{opacity:.42;border-style:dashed;}',
       '.cg-bar .cg-ov{position:absolute;top:0;font-weight:700;}',
       '.cg-loadrow{display:flex;border-bottom:1px solid #efe7db;background:#fbf7f1;}',
@@ -153,6 +153,7 @@
       '     <button id="cg-go">查詢</button>' +
       '     <button id="cg-clear" title="清除廠商/製程篩選與分組">清除篩選</button>' +
       '     <label style="font-weight:400"><input type="checkbox" id="cg-hidestale"> 隱藏逾期在廠中(&gt;60天)</label>' +
+      '     <label style="font-weight:400;color:#b3231a;"><input type="checkbox" id="cg-onlyover"> 只看逾期未回</label>' +
       '     <label style="font-weight:400"><input type="checkbox" id="cg-showload" checked> 每日負荷</label>' +
       '     <label style="font-weight:400"><input type="checkbox" id="cg-showdash" checked> 廠商負荷看板</label>' +
       '     <span style="flex:1"></span>' +
@@ -177,6 +178,7 @@
     document.getElementById('cg-img').onclick = exportImage;
     document.getElementById('cg-print').onclick = printView;
     document.getElementById('cg-hidestale').onchange = function () { state.hideStale = this.checked; render(); };
+    document.getElementById('cg-onlyover').onchange = function () { state.onlyOverdue = this.checked; render(); };
     document.getElementById('cg-showload').onchange = function () { state.showLoad = this.checked; render(); };
     document.getElementById('cg-showdash').onchange = function () { state.showDash = this.checked; render(); };
     Array.prototype.forEach.call(ov.querySelectorAll('input[name=cg-group]'), function (r) {
@@ -371,6 +373,7 @@
     var meta = state.meta;
     var rows = state.rows.slice();
     if (state.hideStale) rows = rows.filter(function (r) { return !r.is_stale; });
+    if (state.onlyOverdue) rows = rows.filter(isOverdue);   // 只看逾期未回(超預測P80)
     rows = rows.filter(function (r) { return state.prioOn[r.prio || 'n']; });   // 燈號篩選
     if (!meta.start || rows.length === 0) return null;
 
@@ -517,6 +520,7 @@
     if (r.client) parts.push(r.client);
     if (r.d_id) parts.push(r.d_id);
     parts.push(r.proc_name);
+    if (isOverdue(r)) parts.unshift('⚠');   // 逾期(超預測)在最前面標示
     return parts.join('　');
   }
 
@@ -593,7 +597,7 @@
       '<span style="font-weight:700;color:#5a4632;">燈號(可點選篩選)：</span>' +
       legItem('n', '一般件') + legItem('u', '急件(U)') + legItem('e', '特急件(E)') +
       '<span><i style="background:' + PRIO.n.bg + ';border-style:dashed;opacity:.45"></i>逾60天在廠中(可能忘記回廠)</span>' +
-      '<span><i style="background:' + PRIO.n.bg + ';box-shadow:inset 0 3px 0 #c0392b"></i>已超預測回廠(P80)未回</span>' +
+      '<span><i style="background:' + PRIO.n.bg + ';border:2px solid #b3231a;box-shadow:0 0 3px #b3231a"></i>⚠已超預測回廠(P80)未回</span>' +
       '<span><i style="background:rgba(' + LOAD_RGB + ',.7)"></i>每日負荷</span>' +
       '<span style="color:' + TODAY_COL + ';">┋ 今天</span>';
     Array.prototype.forEach.call(leg.querySelectorAll('.cg-prio'), function (el) {
@@ -724,6 +728,7 @@
         ctx.lineWidth = 1; ctx.strokeStyle = pc.bd;
         if (r.is_stale) ctx.setLineDash([3, 2]); roundRect(ctx, bx, by, bw, BAR_H, 3); ctx.stroke(); ctx.setLineDash([]);
         ctx.globalAlpha = 1;
+        if (isOverdue(r)) { ctx.lineWidth = 2; ctx.strokeStyle = '#b3231a'; roundRect(ctx, bx, by, bw, BAR_H, 3); ctx.stroke(); }
         var lab = barLabel(r, bw);
         if (lab) { ctx.fillStyle = pc.tx; ctx.font = '10px sans-serif'; ctx.save(); ctx.beginPath(); ctx.rect(bx + 2, by, bw - 4, BAR_H); ctx.clip(); ctx.fillText(lab, bx + 4, by + BAR_H / 2 + 1); ctx.restore(); }
       });
