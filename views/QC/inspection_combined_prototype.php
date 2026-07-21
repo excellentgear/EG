@@ -105,6 +105,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         return (int)$pdo->lastInsertId();
     }
 
+    // ---- 讀取系統設定（找不到回預設）----
+    function qcSetting($pdo, $key, $default) {
+        try {
+            $s = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key=? LIMIT 1");
+            $s->execute([$key]);
+            $v = $s->fetchColumn();
+            return ($v === false || $v === null || $v === '') ? $default : $v;
+        } catch (Exception $e) { return $default; }
+    }
+    // ---- #6 本人寬限期：同一 created_by 於存檔後 N 小時內可自改（不需主管解鎖）----
+    // 回傳 true 代表「此人可在寬限期內自行修改此筆」。
+    function qcOwnerWithinGrace($pdo, $form, $user_id) {
+        if (!$form || trim((string)$form['created_by']) !== trim((string)$user_id)) return false;
+        $graceH = (float)qcSetting($pdo, 'qc_self_edit_grace_hours', 8);
+        if ($graceH <= 0) return false;
+        $ct = strtotime((string)($form['created_at'] ?? ''));
+        if (!$ct) return false;
+        return time() < ($ct + (int)round($graceH * 3600));
+    }
+
     try {
         // #3 CSRF：寫入型 action 一律比對 session token（前端經 ajaxPrefilter 自動夾帶 csrf）
         $WRITE_ACTIONS = ['save_inspection','update_inspection','set_ncr_decision','unlock_record','relock_record',
@@ -227,6 +247,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                        WHERE f.bom_ing_fid=? ORDER BY f.batch_no ASC, f.round_no ASC, f.qc_form_id ASC";
                 $hs = $pdo->prepare($hq); $hs->execute([$fid]);
                 $history = $hs->fetchAll(PDO::FETCH_ASSOC);
+                // #6：標記每筆「本人是否於寬限期內可自改」
+                foreach ($history as &$hr) { $hr['self_grace'] = qcOwnerWithinGrace($pdo, $hr, $user_id) ? 1 : 0; }
+                unset($hr);
             } catch (Exception $e) { /* 欄位可能尚未建立 */ }
 
             echo json_encode([
@@ -519,7 +542,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'items'=>array_values($byItem),
                 'is_supervisor'=>$is_sup,
                 // 唯讀檢閱者即使該筆已開放修改也不可編輯（需填寫或主管權限）
-                'can_edit'=>($is_sup || ($can_fill_h && (int)$form['edit_unlocked'] === 1)),
+                // #6：本人寬限期內可自改（不需主管解鎖）
+                'can_edit'=>($is_sup || ($can_fill_h && ((int)$form['edit_unlocked'] === 1 || qcOwnerWithinGrace($pdo, $form, $user_id)))),
+                'self_grace'=>qcOwnerWithinGrace($pdo, $form, $user_id),
             ], JSON_UNESCAPED_UNICODE);
             exit;
         }
@@ -586,7 +611,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$form) throw new Exception('查無此檢驗紀錄');
 
             $is_sup = isSupervisor($pdo, $user_id);
-            if ((int)$form['edit_unlocked'] !== 1 && !$is_sup) throw new Exception('此筆已鎖定，請主管先開放修改');
+            // #6：主管、已解鎖、或本人寬限期內 → 可改；否則需主管先開放
+            $own_grace = qcOwnerWithinGrace($pdo, $form, $user_id);
+            if ((int)$form['edit_unlocked'] !== 1 && !$is_sup && !$own_grace) throw new Exception('此筆已鎖定，請主管先開放修改（本人可自改的寬限時間已過）');
 
             // 修改前快照
             $bm = $pdo->prepare("SELECT item_id, sample_no, measured_value, result, item_verdict FROM qc_measurement WHERE qc_form_id=? ORDER BY item_id, sample_no");
@@ -1977,6 +2004,7 @@ $(function(){
                 date:(h.check_date||h.created_at||''), status:(h.check_result==='NG'?'NG':'OK'),
                 qc_form_id:h.qc_form_id, round_no:(h.round_no||1), ng_qty:(h.ng_qty||0),
                 edit_unlocked:(parseInt(h.edit_unlocked)||0),
+                self_grace:(parseInt(h.self_grace)||0),
                 edit_log_count:(parseInt(h.edit_log_count)||0),
                 last_edited_by:h.last_edited_by, last_edited_at:h.last_edited_at,
                 ncr_decision:h.ncr_decision, ncr_skip_reason:h.ncr_skip_reason,
@@ -2065,14 +2093,16 @@ $(function(){
             var act = '';
             if (r.qc_form_id) {
                 var locked = !r.edit_unlocked;
-                if (locked && !state.is_supervisor) {
+                // #6：本人寬限期內即使鎖定也可自改
+                var selfGrace = !!r.self_grace && state.can_fill;
+                if (locked && !state.is_supervisor && !selfGrace) {
                     act += '<span class="text-muted" title="已鎖定，需主管開放"><i class="fa fa-lock"></i> 鎖定</span> ';
                 }
                 if (locked && state.is_supervisor) {
                     act += '<button class="btn btn-xs btn-warning act-unlock" data-id="'+r.qc_form_id+'"><i class="fa fa-unlock-alt"></i> 開放修改</button> ';
                 }
-                if ((!locked && state.can_fill) || state.is_supervisor) {
-                    act += '<button class="btn btn-xs btn-primary act-edit" data-id="'+r.qc_form_id+'"><i class="fa fa-pencil"></i> 修改</button> ';
+                if ((!locked && state.can_fill) || state.is_supervisor || selfGrace) {
+                    act += '<button class="btn btn-xs btn-primary act-edit" data-id="'+r.qc_form_id+'"'+(locked&&selfGrace?' title="本人寬限期內可自改（免主管解鎖）"':'')+'><i class="fa fa-pencil"></i> 修改'+(locked&&selfGrace?'（本人）':'')+'</button> ';
                 }
                 // 僅此筆有修改紀錄（開放/修改稽核）時才顯示「紀錄」按鈕
                 if (r.edit_log_count > 0) {
