@@ -3141,10 +3141,12 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_gantt_filters') {
             ORDER BY ml.internal ASC, ml.maker_id ASC
         ")->fetchAll(PDO::FETCH_ASSOC);
         $procs = $db->query("
-            SELECT pn.ProcessNo AS process_no, pn.ProcessName
+            SELECT pn.ProcessNo AS process_no, pn.ProcessName,
+                   pn.process_type_id, pt.process_type
             FROM process_no pn
-            WHERE EXISTS (SELECT 1 FROM bom_ing bi WHERE bi.process_no = pn.ProcessNo AND bi.outsource_date IS NOT NULL)
-            ORDER BY pn.ProcessName ASC
+            LEFT JOIN process_type pt ON pn.process_type_id = pt.process_type_id
+            WHERE EXISTS (SELECT 1 FROM bom_ing bi WHERE bi.process_no = pn.ProcessNo AND bi.outsource_date IS NOT NULL AND bi.maker_id_no IS NOT NULL)
+            ORDER BY pn.process_type_id ASC, pn.ProcessName ASC
         ")->fetchAll(PDO::FETCH_ASSOC);
         echo json_encode(['success'=>true, 'makers'=>$makers, 'processes'=>$procs]);
     } catch (PDOException $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
@@ -3209,8 +3211,9 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 FROM (
                     SELECT
                         bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.process_no, pn.ProcessName,
-                        bi.maker_id_no, ml.maker_id AS maker_name, COALESCE(ml.internal,0) AS internal,
-                        bi.sqty, bi.processing_state,
+                        bi.maker_id_no, COALESCE(ml.maker_id, bi.maker_id, bi.maker_id_no) AS maker_name,
+                        COALESCE(ml.internal,0) AS internal,
+                        bi.sqty, bi.processing_state, b.priority_type,
                         bi.outsource_date, bi.return_date, bi.QC_check_date, b.closed_at,
                         (SELECT MIN(bi2.outsource_date) FROM bom_ing bi2
                            WHERE bi2.bom = bi.bom AND bi2.bom_sn > bi.bom_sn
@@ -3221,6 +3224,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                     LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
                     LEFT JOIN maker_list ml ON bi.maker_id_no = ml.maker_id_no
                     WHERE bi.outsource_date IS NOT NULL
+                      AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no <> ''
                       AND bi.outsource_date < :endp1
                       $where_extra
                 ) y
@@ -3243,6 +3247,10 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
             $eff_d = $r['eff_return'] ? substr($r['eff_return'], 0, 10) : null;
             $src   = $r['ret_src'];
             $is_stale = ($src === 'ongoing' && strtotime($out_d) < $ts60) ? 1 : 0;
+            // 急件燈號：E=特急件、U=急件、其餘=一般件（對應本頁 getPriorityColor 邏輯）
+            $pt = $r['priority_type'] ?? null;
+            $prio_code  = ($pt === 'E') ? 'e' : (($pt === 'U') ? 'u' : 'n');
+            $prio_label = ($pt === 'E') ? '特急件' : (($pt === 'U') ? '急件' : '一般件');
             $rows[] = [
                 'fid'        => (int)$r['bom_ing_fid'],
                 'bom'        => $r['bom'],
@@ -3258,6 +3266,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 'ret_src'    => $src,
                 'ret_label'  => $label_map[$src] ?? $src,
                 'is_stale'   => $is_stale,
+                'prio'       => $prio_code,
+                'prio_label' => $prio_label,
             ];
         }
 
