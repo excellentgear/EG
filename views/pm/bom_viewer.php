@@ -185,6 +185,80 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
     exit;
 }
 
+// ── AJAX：取得報價單附件（報價資料分頁，唯讀；需 quotation_view 權限）──────
+if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_did') {
+    header('Content-Type: application/json');
+    try {
+        $partNo = trim($_POST['d_id'] ?? '');
+        if (!$partNo) throw new Exception('缺少料號');
+        include_once '../../src/common/DBConnection.php';
+        require_once __DIR__ . '/../../src/common/rbac.php';
+        $pdo2 = (new DBConnection())->getPDO();
+        // 權限守門：報價資料查閱沿用報價單「檢視」權限（quotation_view）；無權限一律回空
+        $feats = rbac_user_features($pdo2, (int)($_SESSION['id'] ?? 0));
+        if (!rbac_has($feats, 'quotation_view')) {
+            echo json_encode(['success' => true, 'attachments' => [], 'no_perm' => true]);
+            exit;
+        }
+        // 找出所有符合此料號的 d_setting.d_id（可能多筆，不同客戶）
+        $dsStmt = $pdo2->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id = ?");
+        $dsStmt->execute([$partNo]);
+        $dids = $dsStmt->fetchAll(PDO::FETCH_COLUMN);
+        if (empty($dids)) { echo json_encode(['success' => true, 'attachments' => []]); exit; }
+        $ph = implode(',', array_fill(0, count($dids), '?'));
+        // 報價附件：linked_parts JSON 含此料號，或 linked_parts NULL 且該報價單包含此料號
+        $sql = "SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size, a.quote_no,
+                       COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, a.uploaded_at
+                FROM quotation_attachments a
+                LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
+                WHERE (a.linked_parts IS NOT NULL AND JSON_CONTAINS(a.linked_parts, ?))
+                   OR (a.linked_parts IS NULL AND a.quote_no IN (
+                        SELECT ql.quote_no FROM quotation_item qi
+                        JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                        WHERE qi.d_setting_d_id IN ($ph)))
+                ORDER BY a.uploaded_at DESC";
+        $stmt = $pdo2->prepare($sql);
+        $stmt->execute(array_merge([json_encode($partNo)], $dids));
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        // 類別名稱對照
+        $cats = [];
+        try {
+            foreach ($pdo2->query("SELECT id, category_name FROM quotation_file_categories WHERE is_active=1")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+                $cats[(int)$c['id']] = $c['category_name'];
+            }
+        } catch (Exception $_e) {}
+        $qDlBase = '../../src/store/Quotation_File_API.php';
+        $result = [];
+        foreach ($rows as $r) {
+            $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
+            $catNames = [];
+            if ($r['category_ids']) {
+                foreach (explode(',', $r['category_ids']) as $cid) {
+                    $cid = (int)trim($cid);
+                    if (isset($cats[$cid])) $catNames[] = $cats[$cid];
+                }
+            }
+            $result[] = [
+                'id'             => (int)$r['id'],
+                'filename'       => $r['filename'],
+                'display_name'   => $r['original_name'] ?: $r['filename'],
+                'url'            => $qDlBase . '?action=download&quote_no=' . urlencode($r['quote_no']) . '&filename=' . urlencode($r['filename']),
+                'ext'            => $ext,
+                'file_size'      => $r['file_size'] ?: '',
+                'note'           => '',
+                'uploaded_by'    => $r['uploaded_by'] ?: '',
+                'uploaded_at'    => substr($r['uploaded_at'] ?: '', 0, 16),
+                'category_names' => $catNames,
+                'quote_no'       => $r['quote_no'],
+            ];
+        }
+        echo json_encode(['success' => true, 'attachments' => $result]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // ── 模式判斷：?bom=… 或 ?d_id=… ─────────────────────────────────────────
 $bom  = trim($_GET['bom']  ?? '');
 $d_id = trim($_GET['d_id'] ?? '');
@@ -222,6 +296,31 @@ try {
 } catch (Exception $e) {
     $imgeditCanUse = false;
 }
+
+// ── 分頁權限（僅 did 模式有「報價資料 / 其他附件」分頁；唯讀查閱）────────────
+// 圖面：一律開放。報價：需 quotation_view（沿用報價單檢視權限）。
+// 其他附件：過渡期 — 未指派 master_data 角色者維持開放；已指派則需 md_attach_view。
+$canQuoteView = false;
+$canOtherView = true;
+try {
+    require_once __DIR__ . '/../../src/common/rbac.php';
+    if (empty($pdoPerm)) {
+        include_once __DIR__ . '/../../src/common/DBConnection.php';
+        $pdoPerm = (new DBConnection())->getPDO();
+    }
+    $uidF = (int)($permUid ?? ($_SESSION['id'] ?? 0));
+    $featsF = rbac_user_features($pdoPerm, $uidF);
+    $isAdminF = rbac_has($featsF, 'all');
+    $canQuoteView = $isAdminF || rbac_has($featsF, 'quotation_view');
+    $rq = $pdoPerm->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=? AND r.module='master_data' LIMIT 1");
+    $rq->execute([$uidF]);
+    $hasMdRole = (bool)$rq->fetchColumn();
+    $canOtherView = $isAdminF || !$hasMdRole || rbac_has($featsF, 'md_attach_view');
+} catch (Exception $_e) { $canQuoteView = false; $canOtherView = true; }
+
+// 開啟時預選分頁：?tab=drawing|quote|other（預設自動挑第一個有資料的分頁）
+$initTab = trim($_GET['tab'] ?? '');
+if (!in_array($initTab, ['drawing','quote','other'], true)) $initTab = '';
 ?>
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -304,6 +403,19 @@ try {
         #save-dialog .btn-row { text-align: right; margin-top: 16px; }
         #save-dialog .btn-row .btn { min-width: 72px; }
 
+        /* ── 三分頁切換列（僅 did 模式：圖面查閱 / 報價資料 / 其他附件）── */
+        #bom-tabbar { display: flex; border-bottom: 1px solid #e0d3c0; background: #faf5ec; }
+        .bom-tab {
+            flex: 1; text-align: center; padding: 8px 4px; font-size: 12.5px; cursor: pointer;
+            color: #8a6a3f; border-bottom: 3px solid transparent; user-select: none; white-space: nowrap;
+        }
+        .bom-tab:hover { background: #f3e7d3; }
+        .bom-tab.active { color: #8a4b0f; font-weight: bold; border-bottom-color: #d4761a; background: #fff; }
+        .bom-tab .tab-count {
+            display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 3px;
+            font-size: 10px; line-height: 15px; border-radius: 8px; background: #e6c9a0; color: #6b4a1f;
+        }
+        .bom-tab.active .tab-count { background: #d4761a; color: #fff; }
     </style>
 </head>
 <body>
@@ -312,6 +424,7 @@ try {
     <!-- 左側：檔案清單 -->
     <div id="file-panel">
         <div id="file-panel-heading"><i class="fa fa-folder-open-o"></i> <?= $bom_safe ?></div>
+        <div id="bom-tabbar" style="display:none;"></div>
         <div id="bom-file-list">
             <p class="text-center" style="margin-top:24px; color:#999;">
                 <i class="fa fa-spinner fa-spin"></i> 載入中...
@@ -411,6 +524,9 @@ try {
 var _bom        = <?= json_encode($bom) ?>;
 var _mode       = <?= json_encode($mode) ?>;   // 'bom' | 'did'
 var _d_id       = <?= json_encode($d_id) ?>;   // only in did mode
+var _canQuote   = <?= $canQuoteView ? 'true' : 'false' ?>;   // 報價資料分頁權限（quotation_view）
+var _canOther   = <?= $canOtherView ? 'true' : 'false' ?>;   // 其他附件分頁權限（md_attach_view，過渡期開放）
+var _initTab    = <?= json_encode($initTab) ?>;              // 預選分頁 drawing|quote|other
 var _sc         = 1, _tx = 0, _ty = 0;
 var _currentType = '';
 var _currentPath = '';
@@ -615,101 +731,193 @@ $(document).on('click', '.bom-file-item', function(e) {
     }
 });
 
-// ── 載入檔案清單（依模式選擇後端）───────────────────────────────────────
-var _fetchUrl    = (_mode === 'did') ? '' : 'OreadyReply_ForPm_BaseOfTime.php';
-var _fetchParams = (_mode === 'did')
-    ? { action: 'get_files_by_did', d_id: _d_id }
-    : { action: 'get_bom_files', bom: _bom };
-$.post(_fetchUrl, _fetchParams, function(res) {
-    var listHtml = '';
-    var hasFiles = false;
-    var firstItem = null;
+// ── 三分頁：資料桶、渲染與切換（did 模式）；bom 模式維持單清單 ─────────────
+var _tabData    = { drawing: null, other: [], quote: [] };
+var _tabEnabled = { drawing: true, other: (_mode === 'did' && _canOther), quote: (_mode === 'did' && _canQuote) };
+var _activeTab  = 'drawing';
+var _tabMeta = {
+    drawing: { label: '圖面查閱', icon: 'fa-picture-o' },
+    quote:   { label: '報價資料', icon: 'fa-usd' },
+    other:   { label: '其他附件', icon: 'fa-paperclip' }
+};
 
-    function makeItem(f, active) {
-        if (!firstItem && active) firstItem = f;
-        var label = '';
-        if (f.is_plus) {
-            label = '<span class="label label-warning" style="margin-right:4px;">加工圖</span>';
-        }
-        if (f.tags && f.tags.length > 0) {
-            f.tags.forEach(function(t) {
-                label += '<span class="label" style="background:'+escapeHtml(t.color||'#777')+';color:#fff;margin-right:3px;">'+escapeHtml(t.label)+'</span>';
-            });
-        }
-        // d_id 模式下 f.label 帶有 bom+qty 標題；一般模式沿用 f.name
-        var displayName = (f.label && _mode === 'did') ? f.label + ' / ' + f.name : f.name;
-        return '<a href="#" class="list-group-item bom-file-item'+(active?' active':'')+'"'
-            +' data-path="'+escapeHtml(f.path)+'"'
-            +' data-type="'+escapeHtml(f.type)+'"'
-            +' data-name="'+escapeHtml(f.name)+'">'
-            +'<p class="list-group-item-text">'+label+escapeHtml(displayName)+'</p></a>';
+function tabCount(tab) {
+    if (tab === 'drawing') {
+        var d = _tabData.drawing || {};
+        return (d.files ? d.files.length : 0) + (d.erp_files ? d.erp_files.length : 0);
     }
+    return (_tabData[tab] || []).length;
+}
 
-    if (res && res.success) {
-        if (res.files && res.files.length > 0) {
-            hasFiles = true;
-            listHtml += '<li class="list-group-item list-group-item-info"><strong>BOM 圖檔</strong></li>';
-            res.files.forEach(function(f, i) { listHtml += makeItem(f, i === 0); });
-        }
-        if (res.erp_files && res.erp_files.length > 0) {
-            hasFiles = true;
-            var bomM = res.erp_files.filter(function(f) { return f.match_type === 'bom' || !f.match_type; });
-            var didM = res.erp_files.filter(function(f) { return f.match_type === 'did'; });
-            if (bomM.length > 0) {
-                listHtml += '<li class="list-group-item list-group-item-warning" style="margin-top:6px;"><strong>ERP/資材報告</strong></li>';
-                bomM.forEach(function(f, i) { listHtml += makeItem(f, !res.files.length && i === 0); });
-            }
-            if (didM.length > 0) {
-                listHtml += '<li class="list-group-item list-group-item-danger" style="margin-top:6px;"><strong>不確定批號 (僅匹配料號)</strong></li>';
-                didM.forEach(function(f, i) { listHtml += makeItem(f, !res.files.length && !bomM.length && i === 0); });
-            }
-        }
-    }
+function renderTabbar() {
+    if (_mode !== 'did') return;
+    var html = '';
+    ['drawing','quote','other'].forEach(function(t) {
+        if (!_tabEnabled[t]) return;
+        html += '<div class="bom-tab'+(t===_activeTab?' active':'')+'" data-tab="'+t+'">'
+             +  '<i class="fa '+_tabMeta[t].icon+'"></i> '+_tabMeta[t].label
+             +  '<span class="tab-count">'+tabCount(t)+'</span></div>';
+    });
+    $('#bom-tabbar').html(html).show();
+}
 
-    if (hasFiles && listHtml) {
-        $('#bom-file-list').html(listHtml);
-        if (firstItem) showFile(firstItem.path, firstItem.type, firstItem.name);
-    } else {
-        $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">無相關圖檔</div>');
-        $('#viewer-placeholder').text('無相關圖檔').show();
+// 圖面/ERP 檔案項目
+function makeItem(f, active) {
+    var label = '';
+    if (f.is_plus) label = '<span class="label label-warning" style="margin-right:4px;">加工圖</span>';
+    if (f.tags && f.tags.length > 0) {
+        f.tags.forEach(function(t) {
+            label += '<span class="label" style="background:'+escapeHtml(t.color||'#777')+';color:#fff;margin-right:3px;">'+escapeHtml(t.label)+'</span>';
+        });
     }
+    var displayName = (f.label && _mode === 'did') ? f.label + ' / ' + f.name : f.name;
+    return '<a href="#" class="list-group-item bom-file-item'+(active?' active':'')+'"'
+        +' data-path="'+escapeHtml(f.path)+'"'
+        +' data-type="'+escapeHtml(f.type)+'"'
+        +' data-name="'+escapeHtml(f.name)+'">'
+        +'<p class="list-group-item-text">'+label+escapeHtml(displayName)+'</p></a>';
+}
 
-    // ── 附件區塊（did 模式才載入）─────────────────────────────────────────
-    if (_mode === 'did' && _d_id) {
-        $.post('', { action: 'get_attachments_by_did', d_id: _d_id }, function(attRes) {
-            if (!attRes.success || !attRes.attachments || attRes.attachments.length === 0) return;
-            var attHtml = '<li class="list-group-item att-section-header">'
-                + '<strong><i class="fa fa-paperclip"></i> 料號附件</strong>'
-                + '<small style="float:right;font-weight:normal;color:#5d6d7e;">' + attRes.attachments.length + ' 個</small>'
-                + '</li>';
-            attRes.attachments.forEach(function(att) {
-                var catBadges = '';
-                (att.category_names || []).forEach(function(cn) {
-                    if (cn === '作廢') return; // 已由紅色 badge 顯示，不重複
-                    catBadges += '<span class="label label-info" style="margin-right:2px;font-size:10px;">' + escapeHtml(cn) + '</span>';
-                });
-                var extBadge = '<span class="label label-default" style="margin-right:4px;font-size:10px;">' + escapeHtml((att.ext || '').toUpperCase()) + '</span>';
-                var info = [att.uploaded_at, att.uploaded_by, att.file_size, att.note].filter(Boolean).join(' · ');
-                var isObs = (att.category_names || []).indexOf('作廢') >= 0;
-                var attItemStyle = isObs ? 'background:#fff0f0;border-left:3px solid #e74c3c;' : '';
-                attHtml += '<a href="#" class="list-group-item bom-file-item att-file-item"'
-                    + ' data-path="' + escapeHtml(att.url) + '"'
-                    + ' data-type="' + escapeHtml(att.ext) + '"'
-                    + ' data-name="' + escapeHtml(att.display_name) + '"'
-                    + ' data-obsolete="' + (isObs ? '1' : '0') + '"'
-                    + ' style="' + attItemStyle + '">'
-                    + (isObs ? '<div style="display:inline-block;background:#e74c3c;color:#fff;font-size:10px;font-weight:700;padding:0 7px;border-radius:3px;letter-spacing:1px;margin-bottom:3px;">⊘ 作廢</div><br>' : '')
-                    + '<p class="list-group-item-text" style="' + (isObs ? 'color:#c0392b;text-decoration:line-through;' : '') + '">'
-                    + extBadge + catBadges + escapeHtml(att.display_name)
-                    + (info ? '<br><small style="color:#aaa;font-size:10px;">' + escapeHtml(info) + '</small>' : '')
-                    + '</p></a>';
-            });
-            $('#bom-file-list').append(attHtml);
-        }, 'json');
+// 附件（報價/其他）項目
+function makeAttItem(att) {
+    var catBadges = '';
+    (att.category_names || []).forEach(function(cn) {
+        if (cn === '作廢') return;
+        catBadges += '<span class="label label-info" style="margin-right:2px;font-size:10px;">'+escapeHtml(cn)+'</span>';
+    });
+    var extBadge = '<span class="label label-default" style="margin-right:4px;font-size:10px;">'+escapeHtml((att.ext||'').toUpperCase())+'</span>';
+    var info = [att.uploaded_at, att.uploaded_by, att.file_size, att.note].filter(Boolean).join(' · ');
+    var isObs = (att.category_names || []).indexOf('作廢') >= 0;
+    var st = isObs ? 'background:#fff0f0;border-left:3px solid #e74c3c;' : '';
+    return '<a href="#" class="list-group-item bom-file-item att-file-item"'
+        + ' data-path="'+escapeHtml(att.url)+'"'
+        + ' data-type="'+escapeHtml(att.ext)+'"'
+        + ' data-name="'+escapeHtml(att.display_name)+'"'
+        + ' data-obsolete="'+(isObs?'1':'0')+'"'
+        + ' style="'+st+'">'
+        + (isObs ? '<div style="display:inline-block;background:#e74c3c;color:#fff;font-size:10px;font-weight:700;padding:0 7px;border-radius:3px;letter-spacing:1px;margin-bottom:3px;">⊘ 作廢</div><br>' : '')
+        + '<p class="list-group-item-text" style="'+(isObs?'color:#c0392b;text-decoration:line-through;':'')+'">'
+        + extBadge + catBadges + escapeHtml(att.display_name)
+        + (info ? '<br><small style="color:#aaa;font-size:10px;">'+escapeHtml(info)+'</small>' : '')
+        + '</p></a>';
+}
+
+function showEmpty(msg) {
+    $('#img-zoom-wrap, #bom-pdf-frame').hide();
+    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
+    $('#viewer-content .bom-obsolete-overlay').remove();
+    $('#viewer-title').text('');
+    $('#viewer-placeholder').text(msg).show();
+}
+function applyObsoleteOverlay(isObs) {
+    $('#viewer-content .bom-obsolete-overlay').remove();
+    if (isObs) {
+        $('#viewer-content').css('position','relative').append(
+            '<div class="bom-obsolete-overlay" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;z-index:10;">'
+            + '<div style="color:rgba(220,53,69,0.45);font-size:88px;font-weight:900;letter-spacing:12px;text-shadow:0 2px 16px rgba(220,53,69,.15);user-select:none;transform:rotate(-20deg);">作廢</div>'
+            + '</div>'
+        );
     }
-}, 'json').fail(function() {
-    $('#bom-file-list').html('<div class="alert alert-danger" style="margin:10px;">載入失敗，請重試</div>');
-});
+}
+
+function renderDrawingList() {
+    var d = _tabData.drawing || {};
+    var listHtml = '', first = null;
+    if (d.files && d.files.length > 0) {
+        listHtml += '<li class="list-group-item list-group-item-info"><strong>BOM 圖檔</strong></li>';
+        d.files.forEach(function(f, i) { if (i === 0 && !first) first = f; listHtml += makeItem(f, i === 0); });
+    }
+    if (d.erp_files && d.erp_files.length > 0) {
+        var bomM = d.erp_files.filter(function(f) { return f.match_type === 'bom' || !f.match_type; });
+        var didM = d.erp_files.filter(function(f) { return f.match_type === 'did'; });
+        var noBom = !(d.files && d.files.length);
+        if (bomM.length > 0) {
+            listHtml += '<li class="list-group-item list-group-item-warning" style="margin-top:6px;"><strong>ERP/資材報告</strong></li>';
+            bomM.forEach(function(f, i) { var a = (noBom && i === 0); if (a && !first) first = f; listHtml += makeItem(f, a); });
+        }
+        if (didM.length > 0) {
+            listHtml += '<li class="list-group-item list-group-item-danger" style="margin-top:6px;"><strong>不確定批號 (僅匹配料號)</strong></li>';
+            didM.forEach(function(f, i) { var a = (noBom && !bomM.length && i === 0); if (a && !first) first = f; listHtml += makeItem(f, a); });
+        }
+    }
+    if (!listHtml) { $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">無相關圖檔</div>'); showEmpty('無相關圖檔'); return; }
+    $('#bom-file-list').html(listHtml);
+    if (first) showFile(first.path, first.type, first.name);
+}
+
+function renderAttList(tab) {
+    var arr = _tabData[tab] || [];
+    if (arr.length === 0) {
+        var msg = (tab === 'quote') ? '無報價資料' : '無其他附件';
+        $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">'+msg+'</div>');
+        showEmpty(msg); return;
+    }
+    var html = '';
+    arr.forEach(function(att) { html += makeAttItem(att); });
+    $('#bom-file-list').html(html);
+    var f0 = arr[0];
+    $('#bom-file-list .bom-file-item').first().addClass('active');
+    showFile(f0.url, f0.ext, f0.display_name);
+    applyObsoleteOverlay((f0.category_names || []).indexOf('作廢') >= 0);
+}
+
+function switchTab(tab) {
+    if (!_tabEnabled[tab]) return;
+    _activeTab = tab;
+    $('#bom-tabbar .bom-tab').removeClass('active').filter('[data-tab="'+tab+'"]').addClass('active');
+    if (tab === 'drawing') renderDrawingList(); else renderAttList(tab);
+}
+$(document).on('click', '#bom-tabbar .bom-tab', function() { switchTab($(this).data('tab')); });
+
+// ── 載入 ───────────────────────────────────────────────────────────────
+function loadBomMode() {
+    $.post('OreadyReply_ForPm_BaseOfTime.php', { action: 'get_bom_files', bom: _bom }, function(res) {
+        _tabData.drawing = {
+            files:     (res && res.success && res.files)     ? res.files     : [],
+            erp_files: (res && res.success && res.erp_files) ? res.erp_files : []
+        };
+        renderDrawingList();
+    }, 'json').fail(function() {
+        $('#bom-file-list').html('<div class="alert alert-danger" style="margin:10px;">載入失敗，請重試</div>');
+    });
+}
+
+function loadDidMode() {
+    var pending = 1 + (_tabEnabled.other ? 1 : 0) + (_tabEnabled.quote ? 1 : 0);
+    var done = function() { if (--pending <= 0) finishDidLoad(); };
+    // 圖面（一律載入）
+    $.post('', { action: 'get_files_by_did', d_id: _d_id }, function(res) {
+        _tabData.drawing = {
+            files:     (res && res.success && res.files)     ? res.files     : [],
+            erp_files: (res && res.success && res.erp_files) ? res.erp_files : []
+        };
+    }, 'json').always(function() { renderTabbar(); done(); });
+    // 其他附件
+    if (_tabEnabled.other) {
+        $.post('', { action: 'get_attachments_by_did', d_id: _d_id }, function(res) {
+            _tabData.other = (res && res.success && res.attachments) ? res.attachments : [];
+        }, 'json').always(function() { renderTabbar(); done(); });
+    }
+    // 報價資料
+    if (_tabEnabled.quote) {
+        $.post('', { action: 'get_quote_attachments_by_did', d_id: _d_id }, function(res) {
+            _tabData.quote = (res && res.success && res.attachments) ? res.attachments : [];
+        }, 'json').always(function() { renderTabbar(); done(); });
+    }
+    renderTabbar();
+}
+
+function finishDidLoad() {
+    renderTabbar();
+    // 預選：指定 tab 優先；否則第一個「啟用且有資料」的分頁；再否則圖面
+    var order = ['drawing','quote','other'], pick = '';
+    if (_initTab && _tabEnabled[_initTab]) pick = _initTab;
+    if (!pick) { for (var i = 0; i < order.length; i++) { if (_tabEnabled[order[i]] && tabCount(order[i]) > 0) { pick = order[i]; break; } } }
+    if (!pick) pick = 'drawing';
+    switchTab(pick);
+}
+
+if (_mode === 'bom') loadBomMode(); else loadDidMode();
 
 // ── 設定標籤 ──────────────────────────────────────────────────────────────
 var _colorMap = { 'default':'#777777','primary':'#337ab7','success':'#5cb85c','info':'#5bc0de','warning':'#f0ad4e','danger':'#d9534f' };
