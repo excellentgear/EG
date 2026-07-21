@@ -95,7 +95,7 @@ if ($deptPerm === 'R') {
     <link href="../../resource/css/nprogress.css" rel="stylesheet">
     <link href="../../resource/css/custom.css" rel="stylesheet">
     <style>
-        .tag-chip{display:inline-block;padding:2px 8px;border-radius:10px;color:#fff;font-size:12px;margin:1px 2px;white-space:nowrap;}
+        .tag-chip{display:inline-block;padding:0 8px;border-radius:9px;color:#fff;font-size:11px;line-height:17px;margin:1px 2px;white-space:nowrap;}
         .tag-filter{cursor:pointer;border:1px solid transparent;opacity:.55;}
         .tag-filter.active{opacity:1;border-color:#333;box-shadow:0 0 0 2px rgba(0,0,0,.15);}
         .perm-row td{vertical-align:middle;}
@@ -189,7 +189,7 @@ if ($deptPerm === 'R') {
                     <tr>
                       <th>文件編號</th><th>文件名稱</th><th>類別</th><th>階級</th><th>部門</th>
                       <th>母文件 / 表單</th>
-                      <th>目前版本</th><th>修訂日期</th><th>標籤</th><th style="min-width:230px;">操作</th>
+                      <th>目前版本</th><th>修訂日期</th><th>標籤</th><th style="min-width:245px;">操作</th>
                     </tr>
                   </thead>
                   <tbody id="docTableBody"></tbody>
@@ -626,6 +626,14 @@ $(function(){
   const canDL = !!window.asPerm.download;
   const canNA = !!window.asPerm.no_attach; // 免附件補登
 
+  // 操作欄 ⚙ 下拉在 .table-responsive 內會被裁切：展開時暫時放開 overflow
+  $(document).on('show.bs.dropdown', '#docTableBody .btn-group', function(){
+    $(this).closest('.table-responsive').css('overflow','visible');
+  });
+  $(document).on('hide.bs.dropdown', '#docTableBody .btn-group', function(){
+    $(this).closest('.table-responsive').css('overflow','');
+  });
+
   // 線上開檔：仿 BOM 總表模式——建立工作副本後以 ms-office 協定 + HTTP URL 直接開啟 Excel/Word
   $(document).on('click','.op-online', function(e){
     e.preventDefault();
@@ -769,25 +777,32 @@ $(function(){
           nameCell = `<a href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="線上預覽最新版（Office 檔自動轉 PDF，第一次需數秒轉檔）">${esc(d.doc_name)}</a>`;
         }
       }
-      ops += `<button class="btn btn-xs btn-default op-hist" data-id="${d.id}" data-name="${esc(d.doc_name)}">歷史版本</button> `;
-      // 表單類別：填寫紀錄（品質紀錄）
+      // 操作欄：固定欄位（每列同寬對齊）＋常用圖示鈕＋管理動作收進 ⚙ 下拉
+      const hasFile = !!d.current_file_name;
+      const slot = (html, w)=>`<span style="display:inline-block;min-width:${w}px;text-align:center;">${html||''}</span>`;
+      const sPrev = (curVer && hasFile)
+        ? `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="線上預覽（PDF）"><i class="fa fa-eye"></i></a>` : '';
+      const sDl = (curVer && hasFile && canDL)
+        ? `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}" title="下載原檔"><i class="fa fa-download"></i></a>` : '';
+      let sRec = '';
       if(d.doc_type==='表單' || parseInt(d.record_count)>0 || d.linked_module){
         const rc = parseInt(d.record_count)||0;
-        ops += `<button class="btn btn-xs ${rc>0||d.linked_module?'btn-warning':'btn-default'} op-record" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="填寫後的表單紀錄（紙本上傳/電子化結果）">紀錄${rc>0?' ×'+rc:''}</button> `;
+        sRec = `<button class="btn btn-xs ${rc>0||d.linked_module?'btn-warning':'btn-default'} op-record" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="填寫後的表單紀錄（紙本上傳/電子化結果）">紀錄${rc>0?'×'+rc:''}</button>`;
       }
-      if(curVer && canEO && isOffice) ops += `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="PDF 預覽">預覽</a> `;
-      if(curVer && canDL && d.current_file_name) ops += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}" title="下載原檔（需下載權限）">下載</a> `;
-      if(canU){
-        ops += `<button class="btn btn-xs btn-warning op-ver" data-id="${d.id}" data-name="${esc(d.doc_name)}">改版</button> `;
-        ops += `<button class="btn btn-xs btn-default op-edit" data-id="${d.id}">編輯</button> `;
-      }
-      if(canS){
-        ops += `<button class="btn btn-xs btn-primary op-perm" data-id="${d.id}" data-name="${esc(d.doc_name)}">權限</button> `;
-      }
+      const sHist = `<button class="btn btn-xs btn-default op-hist" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="歷史版本"><i class="fa fa-history"></i></button>`;
+      const sVer = canU ? `<button class="btn btn-xs btn-warning op-ver" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="改版（上傳新版本）"><i class="fa fa-level-up"></i></button>` : '';
+      let mgmt = '';
+      if(canU) mgmt += `<li><a href="javascript:void(0)" class="op-edit" data-id="${d.id}"><i class="fa fa-pencil-square-o"></i> 編輯資料 / 修正版本資訊</a></li>`;
+      if(canS) mgmt += `<li><a href="javascript:void(0)" class="op-perm" data-id="${d.id}" data-name="${esc(d.doc_name)}"><i class="fa fa-lock"></i> 文件開啟權限</a></li>`;
       if(canD){
-        if(d.is_deleted==1) ops += `<button class="btn btn-xs btn-success op-restore" data-id="${d.id}">還原</button>`;
-        else ops += `<button class="btn btn-xs btn-danger op-del" data-id="${d.id}">刪除</button>`;
+        if(mgmt) mgmt += '<li class="divider"></li>';
+        mgmt += d.is_deleted==1
+          ? `<li><a href="javascript:void(0)" class="op-restore" data-id="${d.id}"><i class="fa fa-undo"></i> 還原文件</a></li>`
+          : `<li><a href="javascript:void(0)" class="op-del" data-id="${d.id}" style="color:#d9534f;"><i class="fa fa-trash"></i> 刪除文件</a></li>`;
       }
+      const sGear = mgmt
+        ? `<div class="btn-group"><button class="btn btn-xs btn-default dropdown-toggle" data-toggle="dropdown" title="管理（編輯/權限/刪除）"><i class="fa fa-cog"></i> <span class="caret"></span></button><ul class="dropdown-menu dropdown-menu-right">${mgmt}</ul></div>` : '';
+      ops = slot(sPrev,32)+slot(sDl,32)+slot(sHist,32)+slot(sVer,32)+slot(sRec,60)+slot(sGear,44);
       const delMark = d.is_deleted==1 ? ' <span class="label label-default">已刪除</span>' : '';
       tb.append(`<tr>
         <td>${esc(d.doc_no)}${delMark}</td>
@@ -968,6 +983,14 @@ $(function(){
     $.ajax({url:API+'?action=add_version', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
      .done(r=>{ if(r.status==='success'){ $('#versionModal').modal('hide'); loadDocs(); } else alert(r.message||'失敗'); })
      .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
+  });
+
+  // 操作欄 ⚙ 下拉在 .table-responsive 內會被裁切：展開時暫時放開 overflow
+  $(document).on('show.bs.dropdown', '#docTableBody .btn-group', function(){
+    $(this).closest('.table-responsive').css('overflow','visible');
+  });
+  $(document).on('hide.bs.dropdown', '#docTableBody .btn-group', function(){
+    $(this).closest('.table-responsive').css('overflow','');
   });
 
   // ── 歷史版本 ──
