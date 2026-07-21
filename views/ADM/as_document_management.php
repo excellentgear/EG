@@ -301,6 +301,10 @@ if ($deptPerm === 'R') {
   </div>
 </div>
 
+<!-- 常用文字 datalist（頁次/摘要 欄位原生下拉建議，來源同 as_doc_phrase） -->
+<datalist id="dlPages"></datalist>
+<datalist id="dlSummary"></datalist>
+
 <!-- ═════════ 批次補建版本 Modal（管理員；既有文件一次補多版） ═════════ -->
 <div class="modal fade" id="verBatchModal" tabindex="-1" role="dialog">
   <div class="modal-dialog modal-lg" style="width:94%;max-width:1150px;" role="document">
@@ -996,7 +1000,17 @@ $(function(){
   $('#doc_code_sel').on('change', function(){ $('#doc_no').val($(this).find('option:selected').data('no')||''); });
 
   // ══ 制修訂頁次/摘要 常用文字（存 DB） ══
+  // 檔案的「修改日期」→ yyyy-MM-dd（附件選檔自動帶入日期欄用）
+  function fileDate(f){
+    if(!f || !f.lastModified) return '';
+    const d = new Date(f.lastModified), p = n=>String(n).padStart(2,'0');
+    return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+  }
+
   function renderPhraseBars(){
+    // 同步填 datalist（頁次/摘要欄位的原生下拉建議）
+    $('#dlPages').html((META.phrases||[]).filter(p=>p.field==='pages').map(p=>`<option value="${esc(p.phrase)}">`).join(''));
+    $('#dlSummary').html((META.phrases||[]).filter(p=>p.field==='summary').map(p=>`<option value="${esc(p.phrase)}">`).join(''));
     $('.phrase-bar').each(function(){
       const f=$(this).data('field'), t=$(this).data('t');
       const list=(META.phrases||[]).filter(p=>p.field===f);
@@ -1045,15 +1059,26 @@ $(function(){
   $('#doc_parent_id').on('change', function(){
     syncDeptFromParent($('#doc_parent_id'), $('#doc_department_id'));
   });
-  // 手動輸入文件編號 → 依「階數-部門代碼」自動判定階級與所屬部門（如 2-TD-01-01 → 二階/技術部）
+  // 編號含部門代碼 → 自動判定部門並反灰（回傳是否有判定到）；無代碼且無母文件時解鎖
+  function syncDeptFromDocNo(noVal, $dept, $parent){
+    const m = String(noVal||'').trim().match(/^([1-4])-([A-Za-z]+)-/);
+    const dc = m ? (META.dept_codes||[]).find(c=>c.code.toUpperCase()===m[2].toUpperCase()) : null;
+    if(dc){
+      $dept.val(dc.department_id).prop('disabled', true).attr('title','部門由文件編號的部門代碼自動決定');
+      return true;
+    }
+    if(!$parent || $parent.val()===''){ $dept.prop('disabled', false).attr('title',''); }
+    return false;
+  }
+  // 手動輸入文件編號 → 依「階數-部門代碼」自動判定階級與所屬部門（如 2-TD-01-01 → 二階/技術部）並反灰
   $('#doc_no').on('blur', function(){
     const m = $(this).val().trim().match(/^([1-4])-([A-Za-z]+)-/);
-    if(!m) return;
-    const levelMap = {'1':'一階','2':'二階','3':'三階','4':'四階'};
-    // 階級只在空白時帶入（表單編號首碼=母文件階級，表單本身應為四階，不硬蓋）
-    if($('#doc_level').val()==='') $('#doc_level').val(levelMap[m[1]]||'');
-    const dc = (META.dept_codes||[]).find(c=>c.code.toUpperCase()===m[2].toUpperCase());
-    if(dc) $('#doc_department_id').val(dc.department_id);
+    if(m){
+      const levelMap = {'1':'一階','2':'二階','3':'三階','4':'四階'};
+      // 階級只在空白時帶入（表單編號首碼=母文件階級，表單本身應為四階，不硬蓋）
+      if($('#doc_level').val()==='' && !$('#doc_level').prop('disabled')) $('#doc_level').val(levelMap[m[1]]||'');
+    }
+    syncDeptFromDocNo($(this).val(), $('#doc_department_id'), $('#doc_parent_id'));
   });
   // 新增模式下，選擇變動且編號仍空白時自動帶入
   $('#doc_level,#doc_department_id,#doc_parent_id').on('change', function(){
@@ -1243,12 +1268,43 @@ $(function(){
       <td><input type="text" class="form-control input-sm vb-ver" placeholder="0.0 / A"></td>
       <td><select class="form-control input-sm vb-st"><option>制訂</option><option selected>修正</option><option>增發</option><option>補發</option></select></td>
       <td><input type="date" class="form-control input-sm vb-date" max="9999-12-31"></td>
-      <td><input type="text" class="form-control input-sm vb-pages"></td>
-      <td><input type="text" class="form-control input-sm vb-sum"></td>
+      <td><input type="text" class="form-control input-sm vb-pages" list="dlPages" placeholder="點選常用"></td>
+      <td><input type="text" class="form-control input-sm vb-sum" list="dlSummary" placeholder="點選常用"></td>
       <td><input type="file" class="vb-file"></td>
       <td class="text-center" style="vertical-align:middle;"><a href="javascript:void(0)" class="vb-del text-danger"><i class="fa fa-trash"></i></a></td>
     </tr>`;
   }
+
+  // 版本表格鍵盤導航：↓＝下一列同欄（最後一列自動加一列）；↑＝上一列同欄，
+  // 離開的列若未輸入任何資料且非第一列則自動移除。date 欄攔截原生↑↓改「日」的行為。
+  function vbRowEmpty($tr){
+    let has = false;
+    $tr.find('input[type=text], input[type=date]').each(function(){ if($(this).val() !== '') has = true; });
+    const fi = $tr.find('input[type=file]')[0];
+    if(fi && fi.files.length) has = true;
+    return !has;
+  }
+  $(document).on('keydown', '#vbRows input, #vbRows select, #fcVerRows input, #fcVerRows select', function(e){
+    if(e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const $tr = $(this).closest('tr'), $tbody = $tr.closest('tbody');
+    const colIdx = $(this).closest('td').index();
+    if(e.key === 'ArrowDown'){
+      let $next = $tr.next();
+      if(!$next.length){ $tbody.append(vbRowHtml()); $next = $tr.next(); }
+      $next.find('td').eq(colIdx).find('input,select').first().trigger('focus');
+    } else {
+      const $prev = $tr.prev();
+      if(!$prev.length) return;
+      $prev.find('td').eq(colIdx).find('input,select').first().trigger('focus');
+      if($tr.index() > 0 && vbRowEmpty($tr)) $tr.remove();
+    }
+  });
+  // 版本列選檔 → 自動以檔案「修改日期」帶入日期欄（已填則不動）
+  $(document).on('change', '.vb-file', function(){
+    const $d = $(this).closest('tr').find('.vb-date');
+    if(this.files[0] && !$d.val()) $d.val(fileDate(this.files[0]));
+  });
   $(document).on('click','#hisBatchBtn', function(){
     $('#vb_doc_id').val(curHistDocId);
     $('#vb_doc_name').text(curHistDocName);
@@ -1316,6 +1372,11 @@ $(function(){
   }
   $('#fcAutoNo').on('click', fcSuggest);
   $('#fc_code_sel').on('change', function(){ $('#fc_doc_no').val($(this).find('option:selected').data('no')||''); });
+  // 快速建檔：編號含部門代碼 → 自動設定部門並反灰（如 2-GM-06 → 總經理室）
+  $('#fc_doc_no').on('blur', function(){ syncDeptFromDocNo($(this).val(), $('#fc_dept'), null); });
+  // 快速建檔：版本首列或單筆選檔 → 檔案修改日期帶入
+  $('#doc_file').on('change', function(){ if(this.files[0] && !$('#doc_revised_date').val()) $('#doc_revised_date').val(fileDate(this.files[0])); });
+  $('#ver_file').on('change', function(){ if(this.files[0] && !$('#ver_revised_date').val()) $('#ver_revised_date').val(fileDate(this.files[0])); });
   // 表單檔案選取 → 逐列（檔名拆解優先；編號拆不出時 = 程序書編號-01 遞增）
   $('#fc_form_files').on('change', function(){
     const tb=$('#fcFormRows').empty();
@@ -1328,13 +1389,14 @@ $(function(){
       const parsed = parseDocFilename(nameNoExt);
       const no = parsed ? parsed.doc_no : (baseNo ? baseNo+'-'+String(seq++).padStart(2,'0') : '');
       const nm = parsed ? parsed.doc_name : nameNoExt;
+      const rowDate = d || fileDate(this.files[i]); // 共同日期優先，否則用檔案修改日期
       tb.append(`<tr>
         <td style="vertical-align:middle;">${esc(fn)}${parsed?' <i class="fa fa-magic text-success" title="已由檔名拆解"></i>':''}</td>
         <td><input type="text" class="form-control input-sm fcf-no" value="${esc(no)}"></td>
         <td><input type="text" class="form-control input-sm fcf-name" value="${esc(nm)}"></td>
         <td><input type="text" class="form-control input-sm fcf-ver" placeholder="可空"></td>
-        <td><input type="date" class="form-control input-sm fcf-date" value="${d}" max="9999-12-31"></td>
-        <td><input type="text" class="form-control input-sm fcf-sum" placeholder="如：新訂"></td>
+        <td><input type="date" class="form-control input-sm fcf-date" value="${rowDate}" max="9999-12-31"></td>
+        <td><input type="text" class="form-control input-sm fcf-sum" list="dlSummary" placeholder="如：新訂"></td>
       </tr>`);
     }
   });
@@ -1534,13 +1596,14 @@ $(function(){
       const parsed = parseDocFilename(nameNoExt);
       const sugNo = parsed ? parsed.doc_no : (base ? base+String(num+seq++).padStart(pad,'0') : '');
       const sugName = parsed ? parsed.doc_name : nameNoExt;
+      const rowDate = defDate || fileDate(files[i]); // 共同日期優先，否則用檔案修改日期
       tb.append(`<tr>
         <td style="vertical-align:middle;">${esc(fn)}${parsed?' <i class="fa fa-magic text-success" title="已由檔名自動拆解編號/名稱"></i>':''}</td>
         <td><input type="text" class="form-control input-sm b-no" value="${esc(sugNo)}"></td>
         <td><input type="text" class="form-control input-sm b-name" value="${esc(sugName)}"></td>
         <td><input type="text" class="form-control input-sm b-ver" value="${esc(defVer)}" placeholder="表單可空"></td>
-        <td><input type="date" class="form-control input-sm b-date" value="${defDate}" max="9999-12-31"></td>
-        <td><input type="text" class="form-control input-sm b-sum" placeholder="如：新訂"></td>
+        <td><input type="date" class="form-control input-sm b-date" value="${rowDate}" max="9999-12-31"></td>
+        <td><input type="text" class="form-control input-sm b-sum" list="dlSummary" placeholder="如：新訂"></td>
         <td><input type="file" class="b-apply"></td>
       </tr>`);
     }
