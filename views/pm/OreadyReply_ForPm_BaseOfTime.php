@@ -2526,7 +2526,7 @@ echo "</script>\n";
         pointer-events: none;
     }
     /* ── 已結案通知 toast ── */
-    #gs-closed-notice {
+    #gs-closed-notice, #bomf-closed-notice {
         display: none;
         position: fixed;
         bottom: 28px; left: 50%;
@@ -3583,6 +3583,56 @@ echo "</script>\n";
                         }, 'json');
                     }
                 }, 200);
+            });
+        })();
+
+        // ── BOM / 料號 搜索：活躍資料查無結果時，提示已結案有無符合（邏輯同全域搜索）──
+        (function() {
+            var _nt = document.createElement('div'); _nt.id = 'bomf-closed-notice';
+            _nt.style.cursor = 'pointer'; _nt.title = '點擊開啟已完工查詢';
+            document.body.appendChild(_nt);
+            var _timer = null, _lastQT = '';
+
+            _nt.addEventListener('click', function(e) {
+                e.stopPropagation();
+                _nt.style.display = 'none'; clearTimeout(_nt._hideTimer);
+                var _bf = document.getElementById('bom-filter');
+                if (_bf && _bf.value.trim() !== '') { _bf.value = ''; processAndRenderData(); }
+                openSearchCompletedModal();
+                setTimeout(function() {
+                    var _inp = document.getElementById('completed-bom-search-term');
+                    var _btn = document.getElementById('execute-completed-search-btn');
+                    if (_inp) { _inp.value = _lastQT; }
+                    if (_btn) { _btn.click(); }
+                }, 150);
+            });
+            document.addEventListener('click', function() {
+                if (_nt.style.display !== 'none') { _nt.style.display = 'none'; clearTimeout(_nt._hideTimer); }
+            });
+
+            var _bf = document.getElementById('bom-filter');
+            if (_bf) _bf.addEventListener('input', function() {
+                _nt.style.display = 'none';
+                clearTimeout(_timer);
+                var _q = this.value;
+                _timer = setTimeout(function() {
+                    var _qt = (_q || '').trim();
+                    if (_qt && fullDataset && fullDataset.length > 0
+                            && !document.querySelector('#table-DOWN tbody tr')) {
+                        $.post('', { action: 'check_closed_bom', q: _qt }, function(res) {
+                            if (res && res.count > 0) {
+                                _lastQT = _qt;
+                                _nt.innerHTML = '<i class="fa fa-info-circle" style="margin-right:6px;"></i>'
+                                    + '未結案中查無「<strong>' + escapeHtml(_qt) + '</strong>」，'
+                                    + '已結案資料有 <strong>' + res.count + '</strong> 筆符合。'
+                                    + ' <span style="opacity:.7;font-size:12px;">點擊查詢 &rsaquo;</span>';
+                                _nt.style.display = 'block';
+                                clearTimeout(_nt._hideTimer);
+                                _nt._hideTimer = setTimeout(function() { _nt.style.display = 'none'; }, 10000);
+                            }
+                        }, 'json');
+                    }
+                }, 250);
             });
         })();
 
@@ -13725,6 +13775,7 @@ echo "</script>\n";
                                             <a><input type="button" id="btn-delete-bom" class="btn btn-xs btn-danger" value="刪除BOM" style="margin-left: 5px;" onclick="promptDeleteBom()"></a>
                                             <?php endif; ?>
                                             <a><input type="button" id="btn-pm-daily-report" class="btn btn-xs btn-primary" value="生管每日報表" style="margin-left: 70px;" title="匯出Excel：QC待驗逾2天者一分頁，其餘未回廠(ing)依廠商分頁" onclick="window.location.href='pm_daily_report_export.php'"></a>
+                                            <a><input type="button" id="btn-capacity-gantt" class="btn btn-xs btn-primary" value="外包產能" style="margin-left: 5px; background:#5a3d8a; border-color:#4a3072;" title="外包產能甘特圖：依廠商/製程看自訂期間內的移轉→回廠重疊(產能排擠)狀態" onclick="openCapacityGantt()"></a>
                                         </h2>
                                         <ul class="nav navbar-right panel_toolbox">
                                             <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a>
@@ -15513,6 +15564,7 @@ echo "</script>\n";
 
 })();
 </script>
+<script src="capacity_gantt.js?v=<?=$_av?>"></script>
 </body>
 
 </html>
