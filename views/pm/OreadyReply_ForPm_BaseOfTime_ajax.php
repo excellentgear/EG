@@ -3123,3 +3123,253 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_order_urgent_level
     } catch (PDOException $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
     exit;
 }
+
+// ── 外包產能甘特圖：篩選清單（廠商 / 製程，僅列出真的有外包紀錄者）───────────────
+else if (isset($_POST['action']) && $_POST['action'] === 'get_gantt_filters') {
+    include_once '../../src/common/DBConnection.php';
+    if (!isset($db)) {
+        if (class_exists('DBConnection')) { $connInstance = new DBConnection(); $db = $connInstance->getPDO(); }
+        if (!isset($db)) { echo json_encode(['success'=>false,'message'=>'資料庫連接失敗']); exit; }
+    }
+    header('Content-Type: application/json');
+    try {
+        $makers = $db->query("
+            SELECT ml.maker_id_no, ml.maker_id, COALESCE(ml.internal,0) AS internal
+            FROM maker_list ml
+            WHERE ml.maker_id_no IS NOT NULL
+              AND EXISTS (SELECT 1 FROM bom_ing bi WHERE bi.maker_id_no = ml.maker_id_no AND bi.outsource_date IS NOT NULL)
+            ORDER BY ml.internal ASC, ml.maker_id ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+        $procs = $db->query("
+            SELECT pn.ProcessNo AS process_no, pn.ProcessName,
+                   pn.process_type_id, pt.process_type
+            FROM process_no pn
+            LEFT JOIN process_type pt ON pn.process_type_id = pt.process_type_id
+            WHERE EXISTS (SELECT 1 FROM bom_ing bi WHERE bi.process_no = pn.ProcessNo AND bi.outsource_date IS NOT NULL AND bi.maker_id_no IS NOT NULL)
+            ORDER BY pn.process_type_id ASC, pn.ProcessName ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+        // 製程大類（process_type）：只列出底下有外包紀錄者
+        $types = $db->query("
+            SELECT pt.process_type_id, pt.process_type
+            FROM process_type pt
+            WHERE pt.process_type IS NOT NULL
+              AND EXISTS (
+                    SELECT 1 FROM process_no pn2
+                    JOIN bom_ing bi ON bi.process_no = pn2.ProcessNo
+                    WHERE pn2.process_type_id = pt.process_type_id
+                      AND bi.outsource_date IS NOT NULL AND bi.maker_id_no IS NOT NULL)
+            ORDER BY pt.process_type_id ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+        echo json_encode(['success'=>true, 'makers'=>$makers, 'processes'=>$procs, 'types'=>$types]);
+    } catch (PDOException $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
+// ── 外包產能甘特圖：主查詢 ─────────────────────────────────────────────────────
+// 每筆製程 = 一條長條（移轉日 → 有效回廠日）。有效回廠日判定順位：
+//   1) return_date（實際回廠）        → ret_src='return' 顯示「回廠MM/DD」
+//   2) QC_check_date（本關QC檢驗）     → ret_src='qc'     顯示「QC驗MM/DD」
+//   3) 下關移轉日(同bom、bom_sn較大且移轉晚於本關) → ret_src='next' 顯示「下關MM/DD」
+//   4) bom.closed_at（結案日）         → ret_src='closed' 顯示「結案MM/DD」
+//   5) 皆無 → 在廠中(ongoing)，長條延到今天；移轉逾60天者標記 is_stale（可能忘記回廠）
+else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
+    include_once '../../src/common/DBConnection.php';
+    if (!isset($db)) {
+        if (class_exists('DBConnection')) { $connInstance = new DBConnection(); $db = $connInstance->getPDO(); }
+        if (!isset($db)) { echo json_encode(['success'=>false,'message'=>'資料庫連接失敗']); exit; }
+    }
+    header('Content-Type: application/json');
+    try {
+        $start = trim($_POST['start'] ?? '');
+        $end   = trim($_POST['end'] ?? '');
+        $d1 = DateTime::createFromFormat('Y-m-d', $start);
+        $d2 = DateTime::createFromFormat('Y-m-d', $end);
+        if (!$d1 || !$d2) { echo json_encode(['success'=>false,'message'=>'日期格式錯誤（需 YYYY-MM-DD）']); exit; }
+        if ($start > $end) { $t = $start; $start = $end; $end = $t; }
+        $end_plus1 = (new DateTime($end))->modify('+1 day')->format('Y-m-d');
+        $today     = date('Y-m-d');
+
+        $params = [
+            ':start'      => $start,
+            ':endp1'      => $end_plus1,
+            ':stalebefore'=> date('Y-m-d', strtotime($today . ' -60 days')),
+        ];
+        $where_extra = '';
+
+        $maker_ids = array_values(array_filter(array_map('trim', explode(',', $_POST['maker_ids'] ?? '')), 'strlen'));
+        if ($maker_ids) {
+            $ph = [];
+            foreach ($maker_ids as $i => $m) { $k = ":mk$i"; $ph[] = $k; $params[$k] = $m; }
+            $where_extra .= " AND bi.maker_id_no IN (" . implode(',', $ph) . ")";
+        }
+        $proc_nos = array_values(array_filter(array_map('trim', explode(',', $_POST['process_nos'] ?? '')), 'strlen'));
+        if ($proc_nos) {
+            $ph = [];
+            foreach ($proc_nos as $i => $p) { $k = ":pr$i"; $ph[] = $k; $params[$k] = (int)$p; }
+            $where_extra .= " AND bi.process_no IN (" . implode(',', $ph) . ")";
+        }
+        // 製程大類（process_type）篩選
+        $type_ids = array_values(array_filter(array_map('trim', explode(',', $_POST['process_type_ids'] ?? '')), 'strlen'));
+        if ($type_ids) {
+            $ph = [];
+            foreach ($type_ids as $i => $t) { $k = ":pt$i"; $ph[] = $k; $params[$k] = (int)$t; }
+            $where_extra .= " AND pn.process_type_id IN (" . implode(',', $ph) . ")";
+        }
+
+        $sql = "
+            SELECT * FROM (
+                SELECT y.*,
+                    CASE
+                        WHEN y.return_date   IS NOT NULL THEN 'return'
+                        WHEN y.QC_check_date IS NOT NULL THEN 'qc'
+                        WHEN y.next_out_date IS NOT NULL THEN 'next'
+                        WHEN y.close_date    IS NOT NULL THEN 'closed'
+                        ELSE 'ongoing'
+                    END AS ret_src,
+                    COALESCE(y.return_date, y.QC_check_date, y.next_out_date, y.close_date) AS eff_return
+                FROM (
+                    SELECT
+                        bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.process_no, pn.ProcessName,
+                        pn.process_type_id, pt.process_type,
+                        bi.maker_id_no, COALESCE(ml.maker_id, bi.maker_id, bi.maker_id_no) AS maker_name,
+                        COALESCE(ml.internal,0) AS internal,
+                        bi.sqty, bi.processing_state, b.priority_type,
+                        b.Client_Name, b.d_id, b.Delivery_date,
+                        bi.outsource_date, bi.return_date, bi.QC_check_date,
+                        CASE WHEN b.closed_at IS NOT NULL THEN b.closed_at
+                             WHEN b.processing_state = '1'
+                                  THEN COALESCE(b.Modified_At, bi.Modified_At, bi.return_date, bi.QC_check_date, bi.outsource_date)
+                             ELSE NULL END AS close_date,
+                        (SELECT MIN(bi2.outsource_date) FROM bom_ing bi2
+                           WHERE bi2.bom = bi.bom AND bi2.bom_sn > bi.bom_sn
+                             AND bi2.outsource_date IS NOT NULL
+                             AND bi2.outsource_date > bi.outsource_date) AS next_out_date
+                    FROM bom_ing bi
+                    JOIN bom b ON bi.bom = b.bom
+                    LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
+                    LEFT JOIN process_type pt ON pn.process_type_id = pt.process_type_id
+                    LEFT JOIN maker_list ml ON bi.maker_id_no = ml.maker_id_no
+                    WHERE bi.outsource_date IS NOT NULL
+                      AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no <> ''
+                      AND bi.outsource_date < :endp1
+                      $where_extra
+                ) y
+            ) z
+            WHERE (eff_return IS NULL OR eff_return >= :start)
+            ORDER BY (CASE WHEN eff_return IS NULL AND outsource_date < :stalebefore THEN 1 ELSE 0 END) ASC,
+                     maker_name ASC, outsource_date ASC
+        ";
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+
+        $CAP = 4000;
+        $label_map = ['return'=>'回廠','qc'=>'QC驗','next'=>'下關','closed'=>'結案','ongoing'=>'在廠中'];
+        $rows = [];
+        $capped = false;
+        $ts60 = strtotime($today . ' -60 days');
+        while ($r = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            if (count($rows) >= $CAP) { $capped = true; break; }
+            $out_d = substr($r['outsource_date'], 0, 10);
+            $eff_d = $r['eff_return'] ? substr($r['eff_return'], 0, 10) : null;
+            $src   = $r['ret_src'];
+            $is_stale = ($src === 'ongoing' && strtotime($out_d) < $ts60) ? 1 : 0;
+            $pt = $r['priority_type'] ?? null;
+            $prio_code  = ($pt === 'E') ? 'e' : (($pt === 'U') ? 'u' : 'n');
+            $prio_label = ($pt === 'E') ? '特急件' : (($pt === 'U') ? '急件' : '一般件');
+            $rows[] = [
+                'fid'        => (int)$r['bom_ing_fid'],
+                'bom'        => $r['bom'],
+                'process_no' => (int)$r['process_no'],
+                'proc_name'  => $r['ProcessName'] ?? ('製程' . $r['process_no']),
+                'ptype_id'   => $r['process_type_id'] ? (int)$r['process_type_id'] : 0,
+                'ptype_name' => $r['process_type'] ?? '未分類',
+                'maker_no'   => $r['maker_id_no'],
+                'maker_name' => $r['maker_name'] ?? '(未設廠商)',
+                'internal'   => (int)$r['internal'],
+                'sqty'       => (int)$r['sqty'],
+                'state'      => $r['processing_state'],
+                'client'     => $r['Client_Name'] ?? '',
+                'd_id'       => $r['d_id'] ?? '',
+                'delivery'   => $r['Delivery_date'] ? substr($r['Delivery_date'], 0, 10) : null,
+                'out_date'   => $out_d,
+                'ret_date'   => $eff_d,
+                'ret_src'    => $src,
+                'ret_label'  => $label_map[$src] ?? $src,
+                'is_stale'   => $is_stale,
+                'prio'       => $prio_code,
+                'prio_label' => $prio_label,
+                'work_days'  => 0,
+            ];
+        }
+
+        // ── 工作日/加工日：完全依 calendar.php 邏輯（休假 day_type='s'、補班 day_type='m'）──
+        //    工作日 = 補班日 OR (非週末 AND 非休假日)。資料源 evenement + event_category（非 calendar_workday 表，該表有誤）。
+        $nonwork = [];
+        $holidays_win = [];
+        if ($rows) {
+            $min_out = $today; $max_end = $today;
+            foreach ($rows as $rr) {
+                if ($rr['out_date'] < $min_out) $min_out = $rr['out_date'];
+                $e = $rr['ret_date'] ?? $today;
+                if ($e > $max_end) $max_end = $e;
+            }
+            $span_start = min($min_out, $start);
+            $span_end   = max($max_end, $end);
+
+            $hol = []; $mk = []; $holname = [];
+            $est = $db->prepare("
+                SELECT DATE(e.start) AS s, DATE(e.end) AS e, e.title, ec.day_type
+                FROM evenement e JOIN event_category ec ON e.category_id = ec.id
+                WHERE ec.day_type IN ('s','m') AND DATE(e.start) <= ? AND DATE(e.end) >= ?");
+            $est->execute([$span_end, $span_start]);
+            foreach ($est->fetchAll(PDO::FETCH_ASSOC) as $ev) {
+                $cur = strtotime($ev['s']); $endts = strtotime($ev['e']);
+                while ($cur <= $endts) {
+                    $ds = date('Y-m-d', $cur);
+                    if ($ev['day_type'] === 's') { $hol[$ds] = 1; if (!isset($holname[$ds])) $holname[$ds] = $ev['title']; }
+                    else { $mk[$ds] = 1; }
+                    $cur += 86400;
+                }
+            }
+            $isWork = function ($ds, $w) use ($hol, $mk) {
+                $isWeekend = ($w === 0 || $w === 6);
+                return isset($mk[$ds]) || (!$isWeekend && !isset($hol[$ds]));
+            };
+            $cum = []; $run = 0; $cur = strtotime($span_start); $endts = strtotime($span_end);
+            while ($cur <= $endts) {
+                $ds = date('Y-m-d', $cur);
+                if ($isWork($ds, (int)date('w', $cur))) $run++;
+                $cum[$ds] = $run;
+                $cur += 86400;
+            }
+            foreach ($rows as &$rr) {
+                $endd = $rr['ret_date'] ?? $today;
+                $ca = $cum[$rr['out_date']] ?? 0;
+                $cb = $cum[$endd] ?? $ca;
+                $rr['work_days'] = max(0, $cb - $ca);
+            }
+            unset($rr);
+            $cur = strtotime($start); $endts = strtotime($end);
+            while ($cur <= $endts) {
+                $ds = date('Y-m-d', $cur);
+                if (!$isWork($ds, (int)date('w', $cur))) $nonwork[] = $ds;
+                if (isset($holname[$ds])) $holidays_win[$ds] = $holname[$ds];
+                $cur += 86400;
+            }
+        }
+
+        echo json_encode([
+            'success'  => true,
+            'start'    => $start,
+            'end'      => $end,
+            'today'    => $today,
+            'capped'   => $capped,
+            'cap'      => $CAP,
+            'count'    => count($rows),
+            'nonwork'  => $nonwork,
+            'holidays' => $holidays_win,
+            'rows'     => $rows,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
