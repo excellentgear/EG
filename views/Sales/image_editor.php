@@ -2737,8 +2737,13 @@ function positionFloatBars() {
     const br = obj.getBoundingRect();   // 含視圖縮放/平移＝畫布像素座標
     const cr = canvas.upperCanvasEl.getBoundingClientRect();
     const w = el.offsetWidth, h = el.offsetHeight;
+    // 旋轉快捷列要再往上讓開 fabric 的旋轉控制點(在物件上緣正中央約 40px 處)＋控制點角尺寸，
+    // 否則快捷列剛好蓋住旋轉點，使用者按不到。文字編輯中的符號列不會有旋轉點，維持小間距即可。
+    const rotHandleClear = (el === rotEl && obj.hasRotatingPoint !== false && obj.lockRotation !== true)
+        ? 40 + (fabric.Object.prototype.cornerSize || 9) + 6 : 0;
+    const gap = 10 + rotHandleClear;
     let left = cr.left + br.left + br.width / 2 - w / 2;
-    let top = cr.top + br.top - h - 10;
+    let top = cr.top + br.top - h - gap;
     left = Math.max(4, Math.min(left, window.innerWidth - w - 4));
     if (top < cr.top + 4) top = cr.top + br.top + br.height + 10;   // 上方放不下改物件下方
     el.style.left = left + 'px';
