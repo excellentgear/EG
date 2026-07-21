@@ -448,7 +448,7 @@ if ($deptPerm === 'R') {
           <hr>
         </div>
 
-        <h4><i class="fa fa-file-text-o" style="color:#3498db;"></i> 紙本／檔案紀錄 <small id="recPaperInfo"></small></h4>
+        <h4><i class="fa fa-file-text-o" style="color:#3498db;"></i> <span id="recPaperTitle">紙本／檔案紀錄</span> <small id="recPaperInfo"></small></h4>
         <div class="table-responsive">
           <table class="table table-condensed table-striped" style="font-size:12px;">
             <thead><tr><th>標題</th><th style="width:100px;">紀錄日期</th><th>備註</th><th style="width:90px;">上傳者</th><th style="width:150px;">操作</th></tr></thead>
@@ -932,11 +932,11 @@ $(function(){
         ? `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="線上預覽（PDF）"><i class="fa fa-eye"></i></a>` : '';
       const sDl = (curVer && hasFile && canDL)
         ? `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}" title="下載原檔"><i class="fa fa-download"></i></a>` : '';
-      let sRec = '';
-      if(d.doc_type==='表單' || parseInt(d.record_count)>0 || d.linked_module){
-        const rc = parseInt(d.record_count)||0;
-        sRec = `<button class="btn btn-xs ${rc>0||d.linked_module?'btn-warning':'btn-default'} op-record" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="填寫後的表單紀錄（紙本上傳/電子化結果）">紀錄${rc>0?'×'+rc:''}</button>`;
-      }
+      // 表單=「紀錄」（填寫後的表單）；其他文件=「附件」（無編號、僅留存的相關檔案）
+      const rc = parseInt(d.record_count)||0;
+      const recLabel = d.doc_type==='表單' ? '紀錄' : '附件';
+      const recTitle = d.doc_type==='表單' ? '填寫後的表單紀錄（紙本上傳/電子化結果）' : '無編號的留存檔案（僅保存，掛在此文件底下）';
+      const sRec = `<button class="btn btn-xs ${rc>0||d.linked_module?'btn-warning':'btn-default'} op-record" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="${recTitle}">${recLabel}${rc>0?'×'+rc:''}</button>`;
       const sHist = `<button class="btn btn-xs btn-default op-hist" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="歷史版本"><i class="fa fa-history"></i></button>`;
       const sVer = canU ? `<button class="btn btn-xs btn-warning op-ver" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="上傳新版本（附制修申請單）">改版</button>` : '';
       let mgmt = '';
@@ -1808,8 +1808,12 @@ $(function(){
     $.getJSON(API+'?action=form_records_list', {doc_id:docId, page:recPage, page_size:10}, r=>{
       if(r.status!=='success'){ alert(r.message||'讀取失敗'); return; }
       $('#rec_doc_name').text(r.doc.doc_no+'｜'+r.doc.doc_name);
+      const isForm = r.doc.doc_type==='表單';
+      // 表單=填寫紀錄；其他文件=留存附件（無編號僅保存）。電子化連結僅表單適用。
+      $('#recordModal .modal-title').contents().first()[0].textContent = (isForm?'填寫紀錄':'留存附件（無編號）')+' － ';
+      $('#recPaperTitle').text(isForm ? '紙本／檔案紀錄' : '留存檔案（無編號，僅保存）');
       $('#rec_linked_module').val(r.doc.linked_module||'');
-      $('#recLinkedWrap').toggle(canS);
+      $('#recLinkedWrap').toggle(canS && isForm);
       // 電子化區
       if(r.electronic){
         $('#recElectronicBlock').show();

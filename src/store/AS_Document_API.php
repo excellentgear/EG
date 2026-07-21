@@ -928,7 +928,7 @@ case 'form_records_list':
     $page  = max(1, (int)($_GET['page'] ?? 1));
     $size  = min(50, max(5, (int)($_GET['page_size'] ?? 10)));
     if ($docId<=0) jout(['status'=>'error','message'=>'無效 ID']);
-    $st = $db->prepare("SELECT doc_no, doc_name, linked_module FROM as_document WHERE id=?");
+    $st = $db->prepare("SELECT doc_no, doc_name, doc_type, linked_module FROM as_document WHERE id=?");
     $st->execute([$docId]);
     $doc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
