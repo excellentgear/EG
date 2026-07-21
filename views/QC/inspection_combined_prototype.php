@@ -1044,6 +1044,9 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
 
         #proc-tabs > li > a { padding:6px 14px; font-weight:bold; }
 
+        /* 固定表格版面：實測值欄取剩餘寬度，PCS 格子自動換列全部顯示、免左右拉桿 */
+        #items-table { table-layout:fixed; width:100%; }
+        #items-table > thead th, #items-table > tbody td, #items-table > tfoot td { word-break:break-word; }
         .table-input { width:100%; border:1px solid #ccc; padding:3px 5px; border-radius:3px; }
         .table-input[readonly] { background:#eee; color:#555; }
         #items-table thead th { background:#f5f5f5; position:sticky; top:0; z-index:2; white-space:nowrap; text-align:center; }
@@ -1062,9 +1065,10 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
         .add-reading:hover { text-decoration:underline; }
         tr.reading-sub > td { background:#f3f9f7; border-top:1px dashed #cfe6df; }
         tr.reading-sub .f-tool2 { border-color:#9ccebf; }
-        /* 量具下拉：依內容加寬，避免「類型 / 量具編號」被遮掉 */
-        #items-table select.f-tool, #items-table select.f-tool2 { width:auto; min-width:150px; max-width:240px; }
-        #items-table td.tool-col { min-width:158px; }
+        /* 量具欄：下拉維持固定窄寬(不撐寬、不擠壓實測值欄)；量具編號在下方自動換列完整顯示 */
+        #items-table td.tool-col { width:128px; min-width:128px; max-width:128px; }
+        #items-table select.f-tool, #items-table select.f-tool2 { width:100%; }
+        .tool-sel-label { font-size:11px; color:#555; word-break:break-all; line-height:1.25; margin-top:2px; }
         /* #5 逐項備註圖示 */
         .item-note { cursor:pointer; color:#aaa; }
         .item-note:hover { color:#26b99a; }
@@ -1204,7 +1208,7 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
                                             <th width="80">標準值</th>
                                             <th width="70">上公差</th>
                                             <th width="70">下公差</th>
-                                            <th width="110">量具</th>
+                                            <th width="128">量具</th>
                                             <th width="80">結果型態</th>
                                             <th>實測值<div id="sample-nums" style="font-weight:normal;"></div></th>
                                             <th width="34"></th>
@@ -1986,8 +1990,16 @@ $(function(){
             var want=$s.attr('data-tid') || ($s.val()||'');
             if(!want){ var cat=$s.attr('data-tcat'); if(cat) want=firstInstOfCat(cat); }
             $s.html(toolInstOptions(want)).val(want);
+            updateToolLabel($s);
         });
     }
+    // 把選到的量具「類型 / 編號」顯示在下拉下方(自動換列)，避免撐寬欄位或被遮
+    function updateToolLabel($sel){
+        var txt=$sel.find('option:selected').text();
+        if(txt==='—') txt='';
+        $sel.closest('td').find('.tool-sel-label').first().text(txt);
+    }
+    $('#items-body').on('change','.f-tool,.f-tool2', function(){ updateToolLabel($(this)); });
     var MOCK_TPL = [
         { name:'一般車件 5 項', items:[
             {name:'外徑 ⌀', std:'12.00', up:'0.02', lo:'-0.02', tool:'分厘卡', type:'NUM'},
@@ -2414,6 +2426,7 @@ $(function(){
             '<td><input class="table-input f-up" value="'+esc(it.up||'')+'" '+(isNum?'':'readonly')+'></td>'+
             '<td><input class="table-input f-lo" value="'+esc(it.lo||'')+'" '+(isNum?'':'readonly')+'></td>'+
             '<td class="tool-col"><select class="table-input f-tool" data-tid="'+esc(it.tool_id||'')+'" data-tcat="'+esc(it.tool||'')+'">'+toolInstOptions(resolvePrimaryToolId(it))+'</select>'+
+                '<div class="tool-sel-label"></div>'+
                 '<a href="#" class="add-reading small" title="同尺寸再用其他量具/方法量一次（如三次元＋投影機）"><i class="fa fa-plus"></i> 加量測</a></td>'+
             '<td><select class="table-input sel-type">'+
                 '<option value="NUM" '+(isNum?'selected':'')+'>數值</option>'+
@@ -2430,7 +2443,7 @@ $(function(){
         return '<tr class="reading-sub" data-type="'+type+'">'+
             '<td></td>'+
             '<td colspan="4" class="text-right"><span class="text-muted" style="font-size:12px">↳ 加量測（其他量具/方法）</span></td>'+
-            '<td><select class="table-input f-tool2" data-tid="'+esc(ex.tool_id||'')+'" data-tcat="'+esc(ex.method||'')+'">'+toolInstOptions(ex.tool_id)+'</select></td>'+
+            '<td class="tool-col"><select class="table-input f-tool2" data-tid="'+esc(ex.tool_id||'')+'" data-tcat="'+esc(ex.method||'')+'">'+toolInstOptions(ex.tool_id)+'</select><div class="tool-sel-label"></div></td>'+
             '<td></td>'+
             '<td class="sample-cell">'+sampleInputs(type, ex.samples)+'</td>'+
             '<td class="text-center"><i class="fa fa-trash remove-sub" title="移除此加量測列"></i></td></tr>';
