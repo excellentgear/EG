@@ -5033,7 +5033,7 @@ function doPrintVector() {
     artboard.shadow = prevShadow;
     if (active) canvas.setActiveObject(active);
     canvas.requestRenderAll();
-    // 去掉 <?xml?>/<!DOCTYPE> 前綴，只留 <svg> 內嵌進列印文件（內嵌才會被當向量列印）
+    // 去掉 XML 宣告與 DOCTYPE 前綴，只留 svg 標籤內嵌進列印文件（內嵌才會被當向量列印）
     const i = svg.indexOf('<svg');
     if (i > 0) svg = svg.slice(i);
     const win = window.open('', '_blank');
