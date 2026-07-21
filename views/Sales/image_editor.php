@@ -933,6 +933,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <span class="tb-sep"></span>
     <button class="tb-btn" onclick="zoomFit()" title="縮放至整個畫布 (Ctrl+0)"><i class="fa fa-arrows-alt"></i> 適合視窗</button>
     <button class="tb-btn" onclick="zoomToSelection()" title="放大檢視目前選取的物件">縮放至選取</button>
+    <button class="tb-btn" id="btn-zoomrect" onclick="startZoomRect()" title="框選放大：拖出一個範圍，畫面就放大到剛好顯示該範圍（Esc 取消）"><i class="fa fa-search-plus"></i> 框選放大</button>
     <span id="zoom-label" style="font-size:12px;color:#9aa4ad;min-width:44px;text-align:center;">100%</span>
     <span class="tb-sep"></span>
     <button class="tb-btn" onclick="openCanvasModal()" title="畫布尺寸與背景設定"><i class="fa fa-crop"></i> 畫布</button>
@@ -1876,6 +1877,35 @@ function zoomToSelection() {
         (wrap.clientHeight - b.height * z) / 2 - b.top * z]);
     setZoomLabel(); canvas.requestRenderAll();
 }
+/* 框選放大：拖出一個場景矩形，把畫面等比例縮放到剛好顯示該範圍並置中（CAD window-zoom）。 */
+function zoomToRect(x, y, w, h) {
+    const m = 20;
+    const z = Math.max(0.02, Math.min((wrap.clientWidth - m) / w, (wrap.clientHeight - m) / h, 16));
+    canvas.setViewportTransform([z, 0, 0, z,
+        (wrap.clientWidth - w * z) / 2 - x * z,
+        (wrap.clientHeight - h * z) / 2 - y * z]);
+    setZoomLabel(); canvas.requestRenderAll();
+}
+/* 進入/離開「框選放大」一次性模式：期間暫停選取與命中判定，拖完自動還原成目前工具設定。 */
+function startZoomRect() {
+    zoomRectMode = true;
+    canvas.discardActiveObject();
+    canvas.selection = false;
+    canvas.skipTargetFind = true;
+    canvas.defaultCursor = 'zoom-in';
+    canvas.setCursor('zoom-in');
+    const b = document.getElementById('btn-zoomrect'); if (b) b.classList.add('active');
+    canvas.requestRenderAll();
+    toast('框選放大：拖出要放大的範圍（Esc 取消）');
+}
+function exitZoomRect() {
+    if (!zoomRectMode) return;
+    zoomRectMode = false;
+    if (zoomRectDraw && zoomRectDraw.obj) canvas.remove(zoomRectDraw.obj);
+    zoomRectDraw = null;
+    const b = document.getElementById('btn-zoomrect'); if (b) b.classList.remove('active');
+    setTool(currentTool);   // 還原目前工具的 selection / 命中判定 / 游標
+}
 canvas.on('mouse:wheel', function (opt) {
     const e = opt.e;
     let z = canvas.getZoom() * Math.pow(0.999, e.deltaY);
@@ -1928,6 +1958,7 @@ function setTool(t) {
 /* ── 滑鼠操作：平移 / 形狀繪製 / 遮蓋 / 框選複製 / 文字 ── */
 let isPanning = false, lastPan = null;
 let drawing = null;   // 進行中的形狀 {type, obj, startX, startY, points}
+let zoomRectMode = false, zoomRectDraw = null;   // 框選放大：模式旗標與進行中的框
 
 function scenePoint(opt) { return canvas.getPointer(opt.e, false); } // scene coords
 
@@ -1936,6 +1967,11 @@ canvas.on('mouse:down', function (opt) {
     if (currentTool === 'pan' || spaceDown || e.button === 1) {
         isPanning = true; lastPan = { x: e.clientX, y: e.clientY };
         canvas.defaultCursor = 'grabbing';
+        return;
+    }
+    if (zoomRectMode) {   // 框選放大：起點
+        const zp = scenePoint(opt);
+        zoomRectDraw = { startX: zp.x, startY: zp.y, obj: null };
         return;
     }
     if (canvas.isDrawingMode) return;
@@ -1975,6 +2011,22 @@ canvas.on('mouse:move', function (opt) {
         vpt[5] += e.clientY - lastPan.y;
         lastPan = { x: e.clientX, y: e.clientY };
         canvas.setViewportTransform(vpt);
+        return;
+    }
+    if (zoomRectMode) {   // 框選放大：拖曳中的橘色虛線框（暖色系）
+        if (!zoomRectDraw) return;
+        const zp = scenePoint(opt);
+        const zx = Math.min(zoomRectDraw.startX, zp.x), zy = Math.min(zoomRectDraw.startY, zp.y);
+        const zw = Math.abs(zp.x - zoomRectDraw.startX), zh = Math.abs(zp.y - zoomRectDraw.startY);
+        if (zoomRectDraw.obj) canvas.remove(zoomRectDraw.obj);
+        zoomRectDraw.obj = new fabric.Rect({
+            left: zx, top: zy, width: zw, height: zh,
+            fill: 'rgba(240,162,75,.12)', stroke: '#f0a24b',
+            strokeWidth: 1 / canvas.getZoom(), strokeDashArray: [5, 4],
+            selectable: false, evented: false, objectCaching: false
+        });
+        canvas.add(zoomRectDraw.obj);
+        canvas.requestRenderAll();
         return;
     }
     const p = scenePoint(opt);
@@ -2033,6 +2085,16 @@ canvas.on('mouse:move', function (opt) {
 
 canvas.on('mouse:up', function (opt) {
     if (isPanning) { isPanning = false; lastPan = null; canvas.defaultCursor = (currentTool === 'pan') ? 'grab' : 'default'; return; }
+    if (zoomRectMode) {   // 框選放大：放開＝縮放到該範圍（一次性，用完即還原工具）
+        const d = zoomRectDraw; zoomRectDraw = null;
+        if (d && d.obj) canvas.remove(d.obj);
+        const zp = scenePoint(opt);
+        const zw = d ? Math.abs(zp.x - d.startX) : 0, zh = d ? Math.abs(zp.y - d.startY) : 0;
+        exitZoomRect();
+        if (d && zw >= 5 && zh >= 5) zoomToRect(Math.min(d.startX, zp.x), Math.min(d.startY, zp.y), zw, zh);
+        else canvas.requestRenderAll();   // 太小＝誤點，僅取消
+        return;
+    }
     if (!drawing) return;
     const d = drawing; drawing = null;
     const p = scenePoint(opt);
@@ -6108,6 +6170,7 @@ document.addEventListener('keydown', function (e) {
         return;
     }
     if (e.key === 'Escape') {
+        if (zoomRectMode) { exitZoomRect(); return; }   // 先取消框選放大模式
         const ao = canvas.getActiveObject();
         if (ao && ao.__pointEditing) { togglePointEdit(); return; }   // 第一下 Esc 先離開編輯端點模式，第二下才取消選取
         setTool('select'); canvas.discardActiveObject(); canvas.requestRenderAll(); return;
