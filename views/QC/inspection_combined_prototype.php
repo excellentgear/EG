@@ -1066,6 +1066,30 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
         .item-note { cursor:pointer; color:#aaa; }
         .item-note:hover { color:#26b99a; }
         .item-note.has-note { color:#f0ad4e; } /* 已有備註 */
+
+        /* #7 列印/匯出：正式檢驗表版面（A4，交瀏覽器原生分頁；不用 JS 量高度） */
+        #print-area { display:none; }
+        @media print {
+            @page { size:A4 portrait; margin:12mm 10mm; }
+            body { background:#fff !important; }
+            body * { visibility:hidden; }
+            #print-area, #print-area * { visibility:visible; }
+            #print-area { display:block; position:absolute; left:0; top:0; width:100%; color:#000; font-size:12px; }
+            #print-area .pr-title { text-align:center; font-size:18px; font-weight:bold; margin-bottom:2px; }
+            #print-area .pr-sub { text-align:center; font-size:12px; margin-bottom:8px; }
+            #print-area .pr-meta { width:100%; border-collapse:collapse; margin-bottom:6px; }
+            #print-area .pr-meta td { border:1px solid #000; padding:3px 6px; }
+            #print-area .pr-meta .k { background:#f0f0f0; font-weight:bold; white-space:nowrap; width:70px; }
+            #print-area table.pr-items { width:100%; border-collapse:collapse; }
+            #print-area table.pr-items th, #print-area table.pr-items td { border:1px solid #000; padding:3px 4px; text-align:center; }
+            #print-area table.pr-items thead th { background:#eee; }
+            #print-area table.pr-items thead { display:table-header-group; } /* 每頁重複表頭 */
+            #print-area table.pr-items tr { page-break-inside:avoid; }
+            #print-area .pr-ng { color:#000; font-weight:bold; text-decoration:underline; }
+            #print-area .pr-sign { margin-top:14px; width:100%; border-collapse:collapse; }
+            #print-area .pr-sign td { border:1px solid #000; padding:14px 6px 4px; text-align:center; vertical-align:bottom; height:46px; }
+            #print-area .pr-sign .lbl { font-size:11px; color:#333; }
+        }
         .ng-value { background:#f2dede !important; color:#a94442; font-weight:bold; }
         .ok-value { color:#3c763d; }
         .remove-row { color:#d9534f; cursor:pointer; }
@@ -1087,6 +1111,8 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
                 <div class="title_left"><h3>品管檢驗 <small>檢驗結果輸入（設定＋輸入合一）</small></h3></div>
                 <div class="title_right">
                     <div class="pull-right">
+                        <button class="btn btn-default btn-sm" id="btn-print"><i class="fa fa-print"></i> 列印</button>
+                        <button class="btn btn-default btn-sm" id="btn-csv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
                         <button class="btn btn-default btn-sm" id="btn-history"><i class="fa fa-history"></i> 歷史紀錄</button>
                         <div class="btn-group">
                             <button class="btn btn-default btn-sm dropdown-toggle" data-toggle="dropdown"><i class="fa fa-cog"></i> 設定 <span class="caret"></span></button>
@@ -3260,6 +3286,81 @@ $(function(){
         out+='</tbody></table></div>';
         return out;
     }
+
+    // ============ #7 列印 / 匯出 CSV ============
+    $('body').append('<div id="print-area"></div>');
+    function toolLabelById(id){
+        if(!id) return '';
+        for(var i=0;i<TOOL_INSTANCES.length;i++){ if(TOOL_INSTANCES[i].id===String(id)) return (TOOL_INSTANCES[i].cat?TOOL_INSTANCES[i].cat+' / ':'')+TOOL_INSTANCES[i].no; }
+        return '';
+    }
+    function currentMeta(){
+        return {
+            part:(ctx&&ctx.part_no)||'', client:(ctx&&ctx.client)||'', bom:(ctx&&ctx.bom)||'',
+            process:(ctx&&ctx.process)||'',
+            incoming:parseInt($('#inp-qty').val())||0, sample:parseInt($('#inp-sample').val())||0,
+            remark:$('#inp-remark').val()||'',
+            judge:($('#verdict-cells .pcs-verdict.ng-value').length>0?'不良':'合格'), ng:($('#inp-ng').val()||'0')
+        };
+    }
+    function buildPrintHtml(){
+        var m=currentMeta(), items=collectItems(), n=state.sampleN;
+        var now=new Date(), pad=function(x){return('0'+x).slice(-2);};
+        var dateStr=now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate());
+        var head='<div class="pr-title">品管檢驗記錄表</div><div class="pr-sub">表單編號 2-QA-01-06（線上檢驗系統列印）</div>'+
+            '<table class="pr-meta"><tr>'+
+            '<td class="k">料號</td><td>'+esc(m.part)+'</td><td class="k">客戶</td><td>'+esc(m.client)+'</td><td class="k">製令/BOM</td><td>'+esc(m.bom)+'</td></tr>'+
+            '<tr><td class="k">製程</td><td>'+esc(m.process)+'</td><td class="k">送驗數</td><td>'+m.incoming+'</td><td class="k">抽驗數</td><td>'+m.sample+'</td></tr>'+
+            '<tr><td class="k">日期</td><td>'+dateStr+'</td><td class="k">整體判定</td><td>'+m.judge+'（不良 '+m.ng+'）</td><td class="k">備註</td><td>'+esc(m.remark)+'</td></tr></table>';
+        var pcsHead=''; for(var i=1;i<=n;i++) pcsHead+='<th>'+i+'</th>';
+        var body='';
+        items.forEach(function(it,idx){
+            var readings=[{tool:toolLabelById(it.tool_id), samples:it.samples}];
+            (it.extra||[]).forEach(function(ex){ readings.push({tool:toolLabelById(ex.tool_id), samples:ex.samples}); });
+            readings.forEach(function(rd,ri){
+                var cells='';
+                for(var i=0;i<n;i++){ var s=(rd.samples||[])[i]; var v=(s&&s.v!=null&&s.v!=='')?s.v:''; cells+='<td'+((s&&s.r==='NG')?' class="pr-ng"':'')+'>'+esc(v)+'</td>'; }
+                body+='<tr>'+
+                    (ri===0?('<td rowspan="'+readings.length+'">'+(idx+1)+'</td><td rowspan="'+readings.length+'" style="text-align:left">'+esc(it.name)+'</td><td rowspan="'+readings.length+'">'+esc(it.std||'')+'</td><td rowspan="'+readings.length+'">'+esc((it.up||'')+(it.lo?(' / '+it.lo):''))+'</td>'):'')+
+                    '<td>'+esc(rd.tool||'')+'</td>'+cells+
+                    (ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'NG':(it.verdict==='AOD'?'特採':'OK'))+'</td>'):'')+'</tr>';
+                if(ri===0 && it.remark){ body+='<tr><td colspan="'+(5+n)+'" style="text-align:left;font-size:11px">備註：'+esc(it.remark)+'</td></tr>'; }
+            });
+        });
+        var tbl='<table class="pr-items"><thead><tr><th>編號</th><th>檢驗項目</th><th>標準</th><th>公差</th><th>量具</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>'+body+'</tbody></table>';
+        var sign='<table class="pr-sign"><tr><td>檢驗員<div class="lbl">Inspector</div></td><td>主管審核<div class="lbl">Approved</div></td><td>日期<div class="lbl">Date</div></td></tr></table>';
+        return head+tbl+sign;
+    }
+    $('#btn-print').on('click', function(){
+        if(!ctx){ alert('請先由待驗清單開啟一筆檢驗再列印。'); return; }
+        if(!collectItems().length){ alert('尚無檢驗項目可列印。'); return; }
+        $('#print-area').html(buildPrintHtml());
+        window.print();
+    });
+    // CSV：每筆讀值一列（含加量測），UTF-8 BOM 讓 Excel 正確顯示中文
+    $('#btn-csv').on('click', function(){
+        if(!ctx){ alert('請先開啟一筆檢驗再匯出。'); return; }
+        var items=collectItems(); if(!items.length){ alert('尚無檢驗項目可匯出。'); return; }
+        var n=state.sampleN, m=currentMeta();
+        var head=['編號','檢驗項目','標準','上公差','下公差','量具']; for(var i=1;i<=n;i++) head.push('PCS'+i); head.push('判定','備註');
+        var q=function(s){ s=(s==null?'':String(s)); return '"'+s.replace(/"/g,'""')+'"'; };
+        var lines=[head.map(q).join(',')];
+        items.forEach(function(it,idx){
+            var readings=[{tool:toolLabelById(it.tool_id), samples:it.samples}];
+            (it.extra||[]).forEach(function(ex){ readings.push({tool:toolLabelById(ex.tool_id), samples:ex.samples}); });
+            readings.forEach(function(rd,ri){
+                var row=[ri===0?(idx+1):'', ri===0?it.name:'', ri===0?(it.std||''):'', ri===0?(it.up||''):'', ri===0?(it.lo||''):'', rd.tool||''];
+                for(var i=0;i<n;i++){ var s=(rd.samples||[])[i]; row.push((s&&s.v!=null)?s.v:''); }
+                row.push(ri===0?(it.verdict||''):'', ri===0?(it.remark||''):'');
+                lines.push(row.map(q).join(','));
+            });
+        });
+        var csv='﻿'+lines.join('\r\n');
+        var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+        var a=document.createElement('a'), url=URL.createObjectURL(blob);
+        a.href=url; a.download='檢驗記錄_'+(m.part||'')+'_'+m.process+'.csv';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    });
 });
 </script>
 </body>
