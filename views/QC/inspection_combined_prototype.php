@@ -1044,18 +1044,18 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
 
         #proc-tabs > li > a { padding:6px 14px; font-weight:bold; }
 
-        /* 固定表格版面：實測值欄取剩餘寬度，PCS 格子自動換列全部顯示、免左右拉桿 */
-        #items-table { table-layout:fixed; width:100%; }
-        #items-table > thead th, #items-table > tbody td, #items-table > tfoot td { word-break:break-word; }
-        .table-input { width:100%; border:1px solid #ccc; padding:3px 5px; border-radius:3px; }
+        /* 固定表格版面：欄寬固定，實測值欄取剩餘寬度，PCS 格子自動換列；
+           table-layout:fixed + input min-width:0 讓表格永遠不超出容器(既不出現左右拉桿、也不會遮擋右側欄位) */
+        #items-table { table-layout:fixed; width:100%; max-width:100%; }
+        #items-table > thead th, #items-table > tbody td, #items-table > tfoot td { word-break:break-word; overflow:hidden; }
+        .table-input { width:100%; min-width:0; border:1px solid #ccc; padding:3px 5px; border-radius:3px; }
         .table-input[readonly] { background:#eee; color:#555; }
         #items-table thead th { background:#f5f5f5; position:sticky; top:0; z-index:2; white-space:nowrap; text-align:center; }
         #items-table td { vertical-align:middle; }
-        .num-cell { width:90px; }
         .okng-btn { cursor:pointer; user-select:none; font-weight:bold; }
         /* 實測值：每 PCS 一格，格子上方自帶抽驗序號(P1、P2…)，換列也看得出是第幾格 */
-        .s-slot { display:inline-block; width:60px; margin:0 3px 4px 0; text-align:center; vertical-align:top; }
-        .s-slot .num-cell { width:56px; padding-left:2px; padding-right:2px; }
+        .s-slot { display:inline-block; width:52px; margin:0 3px 4px 0; text-align:center; vertical-align:top; }
+        .s-slot .num-cell { width:50px; padding-left:2px; padding-right:2px; }
         .s-num { display:block; font-size:10px; color:#999; line-height:1.1; margin-bottom:1px; }
         /* 輸入格/判定格靠左排(格子自帶序號,不需與表頭數字對齊) */
         #items-table td.sample-cell, #items-table td#verdict-cells { text-align:left; }
@@ -1069,7 +1069,7 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
         tr.reading-sub > td { background:#f3f9f7; border-top:1px dashed #cfe6df; }
         tr.reading-sub .f-tool2 { border-color:#9ccebf; }
         /* 量具欄：下拉維持固定窄寬(不撐寬、不擠壓實測值欄)；量具編號在下方自動換列完整顯示 */
-        #items-table td.tool-col { width:120px; min-width:120px; max-width:120px; }
+        #items-table td.tool-col { width:104px; min-width:104px; max-width:104px; }
         #items-table select.f-tool, #items-table select.f-tool2 { width:100%; }
         .tool-sel-label { font-size:11px; color:#555; word-break:break-all; line-height:1.25; margin-top:2px; }
         /* #5 逐項備註圖示 */
@@ -1103,9 +1103,9 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
 
         /* #9 平板友善：觸控裝置/較窄螢幕加大點擊目標與輸入框，不影響桌機格狀輸入效率 */
         @media (max-width:1024px), (pointer:coarse) {
-            .table-input { padding:8px 6px; font-size:15px; }
-            .s-slot { width:84px; margin:0 5px 6px 0; }
-            .s-slot .num-cell { width:80px; }
+            .table-input { padding:6px 4px; font-size:15px; }
+            .s-slot { width:60px; margin:0 4px 6px 0; }
+            .s-slot .num-cell { width:58px; }
             .okng-btn { display:inline-block; min-width:54px; padding:8px 4px; }
             .pcs-verdict { min-width:54px; padding:8px 4px; }
             #items-table td, #items-table th { padding:6px 4px; }
@@ -1203,18 +1203,18 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
                                     後微調。<b>勾選下方「同步更新標準」存檔後即成此料號標準，下次自動帶出。</b>
                                 </div>
 
-                                <div class="table-responsive" style="max-height:55vh; overflow-y:auto; overflow-x:hidden;">
+                                <div class="table-responsive" style="max-height:55vh; overflow-y:auto; overflow-x:auto;">
                                     <table class="table table-bordered table-striped" id="items-table">
                                         <thead><tr>
-                                            <th width="56">編號<br><a href="#" id="btn-code-mode" style="font-weight:normal;font-size:11px;white-space:nowrap;" title="切換編號顯示方式（A、B、C… ↔ 1、2、3…）"></a></th>
-                                            <th width="118">檢驗項目</th>
-                                            <th width="64">標準值</th>
-                                            <th width="52">上公差</th>
-                                            <th width="52">下公差</th>
-                                            <th width="120">量具</th>
-                                            <th width="60">結果型態</th>
+                                            <th width="42">編號<br><a href="#" id="btn-code-mode" style="font-weight:normal;font-size:11px;white-space:nowrap;" title="切換編號顯示方式（A、B、C… ↔ 1、2、3…）"></a></th>
+                                            <th width="96">檢驗項目</th>
+                                            <th width="54">標準值</th>
+                                            <th width="44">上公差</th>
+                                            <th width="44">下公差</th>
+                                            <th width="104">量具</th>
+                                            <th width="52">結果型態</th>
                                             <th>實測值<div id="sample-nums" style="font-weight:normal;"></div></th>
-                                            <th width="34"></th>
+                                            <th width="28"></th>
                                         </tr></thead>
                                         <tbody id="items-body"></tbody>
                                         <tfoot><tr id="verdict-row">
