@@ -3305,7 +3305,10 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
             ];
         }
 
-        // ── 加工日：以 calendar_workday(is_workday) 計算 (移轉日, 有效回廠日/今天] 之間的工作日數 ──
+        // ── 工作日/加工日：完全依 calendar.php 邏輯（休假 day_type='s'、補班 day_type='m'）──
+        //    工作日 = 補班日 OR (非週末 AND 非休假日)。資料源 evenement + event_category（非 calendar_workday 表，該表 6/19 等有誤）。
+        $nonwork = [];        // [start,end] 內的非工作日（供甘特圖底色）
+        $holidays_win = [];   // [start,end] 內的休假日 date=>title（供 tooltip）
         if ($rows) {
             $min_out = $today; $max_end = $today;
             foreach ($rows as $rr) {
@@ -3313,10 +3316,37 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 $e = $rr['ret_date'] ?? $today;
                 if ($e > $max_end) $max_end = $e;
             }
-            $cst = $db->prepare("SELECT `date`, is_workday FROM calendar_workday WHERE `date` BETWEEN ? AND ? ORDER BY `date`");
-            $cst->execute([$min_out, $max_end]);
-            $cum = []; $run = 0;
-            foreach ($cst->fetchAll(PDO::FETCH_ASSOC) as $cr) { $run += (int)$cr['is_workday']; $cum[$cr['date']] = $run; }
+            // 涵蓋 加工日計算範圍 與 顯示區間 兩者
+            $span_start = min($min_out, $start);
+            $span_end   = max($max_end, $end);
+
+            $hol = []; $mk = []; $holname = [];
+            $est = $db->prepare("
+                SELECT DATE(e.start) AS s, DATE(e.end) AS e, e.title, ec.day_type
+                FROM evenement e JOIN event_category ec ON e.category_id = ec.id
+                WHERE ec.day_type IN ('s','m') AND DATE(e.start) <= ? AND DATE(e.end) >= ?");
+            $est->execute([$span_end, $span_start]);
+            foreach ($est->fetchAll(PDO::FETCH_ASSOC) as $ev) {
+                $cur = strtotime($ev['s']); $endts = strtotime($ev['e']);
+                while ($cur <= $endts) {
+                    $ds = date('Y-m-d', $cur);
+                    if ($ev['day_type'] === 's') { $hol[$ds] = 1; if (!isset($holname[$ds])) $holname[$ds] = $ev['title']; }
+                    else { $mk[$ds] = 1; }
+                    $cur += 86400;
+                }
+            }
+            $isWork = function ($ds, $w) use ($hol, $mk) {
+                $isWeekend = ($w === 0 || $w === 6);
+                return isset($mk[$ds]) || (!$isWeekend && !isset($hol[$ds]));
+            };
+            // 累計工作日（span 內）
+            $cum = []; $run = 0; $cur = strtotime($span_start); $endts = strtotime($span_end);
+            while ($cur <= $endts) {
+                $ds = date('Y-m-d', $cur);
+                if ($isWork($ds, (int)date('w', $cur))) $run++;
+                $cum[$ds] = $run;
+                $cur += 86400;
+            }
             foreach ($rows as &$rr) {
                 $endd = $rr['ret_date'] ?? $today;
                 $ca = $cum[$rr['out_date']] ?? 0;
@@ -3324,17 +3354,27 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 $rr['work_days'] = max(0, $cb - $ca);
             }
             unset($rr);
+            // 顯示區間內的非工作日 + 休假名稱
+            $cur = strtotime($start); $endts = strtotime($end);
+            while ($cur <= $endts) {
+                $ds = date('Y-m-d', $cur);
+                if (!$isWork($ds, (int)date('w', $cur))) $nonwork[] = $ds;
+                if (isset($holname[$ds])) $holidays_win[$ds] = $holname[$ds];
+                $cur += 86400;
+            }
         }
 
         echo json_encode([
-            'success' => true,
-            'start'   => $start,
-            'end'     => $end,
-            'today'   => $today,
-            'capped'  => $capped,
-            'cap'     => $CAP,
-            'count'   => count($rows),
-            'rows'    => $rows,
+            'success'  => true,
+            'start'    => $start,
+            'end'      => $end,
+            'today'    => $today,
+            'capped'   => $capped,
+            'cap'      => $CAP,
+            'count'    => count($rows),
+            'nonwork'  => $nonwork,
+            'holidays' => $holidays_win,
+            'rows'     => $rows,
         ], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
     exit;
