@@ -3123,3 +3123,154 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_order_urgent_level
     } catch (PDOException $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
     exit;
 }
+
+// ── 外包產能甘特圖：篩選清單（廠商 / 製程，僅列出真的有外包紀錄者）───────────────
+else if (isset($_POST['action']) && $_POST['action'] === 'get_gantt_filters') {
+    include_once '../../src/common/DBConnection.php';
+    if (!isset($db)) {
+        if (class_exists('DBConnection')) { $connInstance = new DBConnection(); $db = $connInstance->getPDO(); }
+        if (!isset($db)) { echo json_encode(['success'=>false,'message'=>'資料庫連接失敗']); exit; }
+    }
+    header('Content-Type: application/json');
+    try {
+        $makers = $db->query("
+            SELECT ml.maker_id_no, ml.maker_id, COALESCE(ml.internal,0) AS internal
+            FROM maker_list ml
+            WHERE ml.maker_id_no IS NOT NULL
+              AND EXISTS (SELECT 1 FROM bom_ing bi WHERE bi.maker_id_no = ml.maker_id_no AND bi.outsource_date IS NOT NULL)
+            ORDER BY ml.internal ASC, ml.maker_id ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+        $procs = $db->query("
+            SELECT pn.ProcessNo AS process_no, pn.ProcessName
+            FROM process_no pn
+            WHERE EXISTS (SELECT 1 FROM bom_ing bi WHERE bi.process_no = pn.ProcessNo AND bi.outsource_date IS NOT NULL)
+            ORDER BY pn.ProcessName ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+        echo json_encode(['success'=>true, 'makers'=>$makers, 'processes'=>$procs]);
+    } catch (PDOException $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
+// ── 外包產能甘特圖：主查詢 ─────────────────────────────────────────────────────
+// 每筆製程 = 一條長條（移轉日 → 有效回廠日）。有效回廠日判定順位：
+//   1) return_date（實際回廠）        → ret_src='return' 顯示「回廠MM/DD」
+//   2) QC_check_date（本關QC檢驗）     → ret_src='qc'     顯示「QC驗MM/DD」
+//   3) 下關移轉日(同bom、bom_sn較大且移轉晚於本關) → ret_src='next' 顯示「下關MM/DD」
+//   4) bom.closed_at（結案日）         → ret_src='closed' 顯示「結案MM/DD」
+//   5) 皆無 → 在廠中(ongoing)，長條延到今天；移轉逾60天者標記 is_stale（可能忘記回廠）
+else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
+    include_once '../../src/common/DBConnection.php';
+    if (!isset($db)) {
+        if (class_exists('DBConnection')) { $connInstance = new DBConnection(); $db = $connInstance->getPDO(); }
+        if (!isset($db)) { echo json_encode(['success'=>false,'message'=>'資料庫連接失敗']); exit; }
+    }
+    header('Content-Type: application/json');
+    try {
+        $start = trim($_POST['start'] ?? '');
+        $end   = trim($_POST['end'] ?? '');
+        $d1 = DateTime::createFromFormat('Y-m-d', $start);
+        $d2 = DateTime::createFromFormat('Y-m-d', $end);
+        if (!$d1 || !$d2) { echo json_encode(['success'=>false,'message'=>'日期格式錯誤（需 YYYY-MM-DD）']); exit; }
+        if ($start > $end) { $t = $start; $start = $end; $end = $t; }
+        $end_plus1 = (new DateTime($end))->modify('+1 day')->format('Y-m-d');
+        $today     = date('Y-m-d');
+
+        $params = [
+            ':start'      => $start,
+            ':endp1'      => $end_plus1,
+            ':stalebefore'=> date('Y-m-d', strtotime($today . ' -60 days')),
+        ];
+        $where_extra = '';
+
+        $maker_ids = array_values(array_filter(array_map('trim', explode(',', $_POST['maker_ids'] ?? '')), 'strlen'));
+        if ($maker_ids) {
+            $ph = [];
+            foreach ($maker_ids as $i => $m) { $k = ":mk$i"; $ph[] = $k; $params[$k] = $m; }
+            $where_extra .= " AND bi.maker_id_no IN (" . implode(',', $ph) . ")";
+        }
+        $proc_nos = array_values(array_filter(array_map('trim', explode(',', $_POST['process_nos'] ?? '')), 'strlen'));
+        if ($proc_nos) {
+            $ph = [];
+            foreach ($proc_nos as $i => $p) { $k = ":pr$i"; $ph[] = $k; $params[$k] = (int)$p; }
+            $where_extra .= " AND bi.process_no IN (" . implode(',', $ph) . ")";
+        }
+
+        $sql = "
+            SELECT * FROM (
+                SELECT y.*,
+                    CASE
+                        WHEN y.return_date   IS NOT NULL THEN 'return'
+                        WHEN y.QC_check_date IS NOT NULL THEN 'qc'
+                        WHEN y.next_out_date IS NOT NULL THEN 'next'
+                        WHEN y.closed_at     IS NOT NULL THEN 'closed'
+                        ELSE 'ongoing'
+                    END AS ret_src,
+                    COALESCE(y.return_date, y.QC_check_date, y.next_out_date, y.closed_at) AS eff_return
+                FROM (
+                    SELECT
+                        bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.process_no, pn.ProcessName,
+                        bi.maker_id_no, ml.maker_id AS maker_name, COALESCE(ml.internal,0) AS internal,
+                        bi.sqty, bi.processing_state,
+                        bi.outsource_date, bi.return_date, bi.QC_check_date, b.closed_at,
+                        (SELECT MIN(bi2.outsource_date) FROM bom_ing bi2
+                           WHERE bi2.bom = bi.bom AND bi2.bom_sn > bi.bom_sn
+                             AND bi2.outsource_date IS NOT NULL
+                             AND bi2.outsource_date > bi.outsource_date) AS next_out_date
+                    FROM bom_ing bi
+                    JOIN bom b ON bi.bom = b.bom
+                    LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
+                    LEFT JOIN maker_list ml ON bi.maker_id_no = ml.maker_id_no
+                    WHERE bi.outsource_date IS NOT NULL
+                      AND bi.outsource_date < :endp1
+                      $where_extra
+                ) y
+            ) z
+            WHERE (eff_return IS NULL OR eff_return >= :start)
+            ORDER BY (CASE WHEN eff_return IS NULL AND outsource_date < :stalebefore THEN 1 ELSE 0 END) ASC,
+                     maker_name ASC, outsource_date ASC
+        ";
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+
+        $CAP = 4000;
+        $label_map = ['return'=>'回廠','qc'=>'QC驗','next'=>'下關','closed'=>'結案','ongoing'=>'在廠中'];
+        $rows = [];
+        $capped = false;
+        $ts60 = strtotime($today . ' -60 days');
+        while ($r = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            if (count($rows) >= $CAP) { $capped = true; break; }
+            $out_d = substr($r['outsource_date'], 0, 10);
+            $eff_d = $r['eff_return'] ? substr($r['eff_return'], 0, 10) : null;
+            $src   = $r['ret_src'];
+            $is_stale = ($src === 'ongoing' && strtotime($out_d) < $ts60) ? 1 : 0;
+            $rows[] = [
+                'fid'        => (int)$r['bom_ing_fid'],
+                'bom'        => $r['bom'],
+                'process_no' => (int)$r['process_no'],
+                'proc_name'  => $r['ProcessName'] ?? ('製程' . $r['process_no']),
+                'maker_no'   => $r['maker_id_no'],
+                'maker_name' => $r['maker_name'] ?? '(未設廠商)',
+                'internal'   => (int)$r['internal'],
+                'sqty'       => (int)$r['sqty'],
+                'state'      => $r['processing_state'],
+                'out_date'   => $out_d,
+                'ret_date'   => $eff_d,          // null = 在廠中，前端延到今天
+                'ret_src'    => $src,
+                'ret_label'  => $label_map[$src] ?? $src,
+                'is_stale'   => $is_stale,
+            ];
+        }
+
+        echo json_encode([
+            'success' => true,
+            'start'   => $start,
+            'end'     => $end,
+            'today'   => $today,
+            'capped'  => $capped,
+            'cap'     => $CAP,
+            'count'   => count($rows),
+            'rows'    => $rows,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
