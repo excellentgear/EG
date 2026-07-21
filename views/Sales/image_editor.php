@@ -932,7 +932,6 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <button class="tb-btn" onclick="redo()" title="重做 (Ctrl+Y)"><i class="fa fa-repeat"></i></button>
     <span class="tb-sep"></span>
     <button class="tb-btn" onclick="zoomFit()" title="縮放至整個畫布 (Ctrl+0)"><i class="fa fa-arrows-alt"></i> 適合視窗</button>
-    <button class="tb-btn" onclick="zoomToSelection()" title="放大檢視目前選取的物件">縮放至選取</button>
     <button class="tb-btn" id="btn-zoomrect" onclick="startZoomRect()" title="框選放大：拖出一個範圍，畫面就放大到剛好顯示該範圍（Esc 取消）"><i class="fa fa-search-plus"></i> 框選放大</button>
     <span id="zoom-label" style="font-size:12px;color:#9aa4ad;min-width:44px;text-align:center;">100%</span>
     <span class="tb-sep"></span>
