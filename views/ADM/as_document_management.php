@@ -986,6 +986,22 @@ $(function(){
         <td>${tags||'-'}</td>
         <td class="text-nowrap">${ops}</td>
       </tr>`);
+      // 搜尋命中此文件的附件/紀錄 → 直接掛在文件列下方顯示（免點開跳窗）
+      (d.matched_records||[]).forEach(mr=>{
+        let mop = `<a class="btn btn-xs btn-default" href="${API}?action=form_record_download&id=${mr.id}&inline=1" target="_blank">預覽</a> `;
+        if(canDL) mop += `<a class="btn btn-xs btn-info" href="${API}?action=form_record_download&id=${mr.id}">下載</a>`;
+        const mnote = esc(mr.note||'').replace(/#([^\s#<]+)/g,'<span class="label label-primary" style="font-weight:normal;font-size:10px;">#$1</span>');
+        tb.append(`<tr style="background:#fffbe6;">
+          <td></td>
+          <td colspan="8" style="padding-left:30px;">
+            <i class="fa fa-paperclip text-warning"></i> <strong>${esc(mr.title)}</strong>
+            <span class="text-muted" style="font-size:11px;">${esc(mr.record_date)||''}</span>
+            ${mnote?'<span style="font-size:11px;margin-left:6px;">'+mnote+'</span>':''}
+            <span class="text-muted" style="font-size:11px;margin-left:6px;">（${esc(d.doc_type)==='表單'?'紀錄':'附件'}命中搜尋）</span>
+          </td>
+          <td class="text-nowrap">${mop}</td>
+        </tr>`);
+      });
     });
     $('#totalInfo').text(`共 ${total} 筆`);
     // 分頁列

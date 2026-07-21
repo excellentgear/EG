@@ -353,6 +353,21 @@ case 'list_documents':
     $stmt->execute($params);
     $docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // 關鍵字有命中「紀錄/附件」時，隨列回傳命中的附件明細（清單直接顯示，免點開跳窗）
+    if ($docs && $kw !== '') {
+        $ids = array_column($docs,'id');
+        $ph = implode(',', array_fill(0,count($ids),'?'));
+        $mr = $db->prepare("SELECT id, form_doc_id, title, record_date, note
+                            FROM as_form_record
+                            WHERE form_doc_id IN ($ph) AND is_deleted=0 AND (title LIKE ? OR note LIKE ?)
+                            ORDER BY record_date DESC, id DESC");
+        $mr->execute(array_merge($ids, ["%$kw%", "%$kw%"]));
+        $byDocR = [];
+        foreach ($mr->fetchAll(PDO::FETCH_ASSOC) as $r) { $byDocR[$r['form_doc_id']][] = $r; }
+        foreach ($docs as &$d) { $d['matched_records'] = $byDocR[$d['id']] ?? []; }
+        unset($d);
+    }
+
     // 附上標籤
     if ($docs) {
         $ids = array_column($docs,'id');
