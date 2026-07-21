@@ -1204,6 +1204,24 @@ $can_proc_edit       = ($permission_code === 'A' || strpos($permission_code,'D')
 $can_attach_cat_edit = ($permission_code === 'A' || strpos($permission_code,'D')!==false); // 附件類別標籤編輯（A/CDR/CDRU）
 $can_part_attach     = ($permission_code === 'A' || strpos($permission_code,'C')!==false || strpos($permission_code,'U')!==false); // 上傳/刪除料號附件（A/CDR/CRU/CDRU）
 $disp_perm      = $permission_code;
+$is_admin       = ($permission_code === 'A');   // 本頁等效管理員（全權）
+
+// ── 三分頁查閱權限（合併圖面/報價/其他附件；沿用 rbac；過渡期不鎖死既有使用者）──
+// 圖面：一律開放。報價：需 quotation_view（沿用報價單檢視權限）。
+// 其他附件：過渡期 — 未指派 master_data 角色者維持開放；已指派則需 md_attach_view。
+require_once __DIR__ . '/../../src/common/rbac.php';
+$_mdFeats = [];
+try { $_mdFeats = rbac_user_features($pdo, (int)$user_id); } catch (Exception $_e) {}
+$_mdRbacAll = in_array('all', $_mdFeats, true);
+$can_view_quote = $is_admin || $_mdRbacAll || in_array('quotation_view', $_mdFeats, true);
+$_hasMdRole = false;
+try {
+    $_stMd = $pdo->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=? AND r.module='master_data' LIMIT 1");
+    $_stMd->execute([(int)$user_id]);
+    $_hasMdRole = (bool)$_stMd->fetchColumn();
+} catch (Exception $_e) {}
+$can_view_other = $is_admin || $_mdRbacAll || !$_hasMdRole || in_array('md_attach_view', $_mdFeats, true);
+
 define('PART_ATTACH_API_URL', '../../src/store/Part_Attachment_API.php');
 
 // =============================================================================
@@ -1678,6 +1696,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         WHERE m.d_id=d.d_id AND l.is_active=1) AS labels_str,
                        (SELECT EXISTS(SELECT 1 FROM bom WHERE d_id=d.D_Setting_Id)) AS has_drawing,
                        (SELECT EXISTS(SELECT 1 FROM part_attachments WHERE d_id=d.d_id)) AS has_attach,
+                       (SELECT EXISTS(
+                           SELECT 1 FROM quotation_attachments qa
+                           WHERE (qa.linked_parts IS NOT NULL AND JSON_CONTAINS(qa.linked_parts, JSON_QUOTE(d.D_Setting_Id)))
+                              OR (qa.linked_parts IS NULL AND qa.quote_no IN (
+                                   SELECT ql.quote_no FROM quotation_item qi
+                                   JOIN quotation_list ql ON ql.quote_id=qi.quote_id
+                                   WHERE qi.d_setting_d_id=d.d_id))
+                       )) AS has_quote,
                        COALESCE(ss.ship_cy_count,0) AS ship_cy_count,
                        COALESCE(ss.ship_cy_qty,0)   AS ship_cy_qty,
                        COALESCE(ss.ship_py_count,0) AS ship_py_count,
@@ -6441,9 +6467,99 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
             </div>
             <div class="title_right text-right">
                 <button class="btn btn-info btn-sm" onclick="openDictModal()"><i class="fa fa-book"></i> 類別字典設定</button>
+                <?php if ($is_admin): ?>
+                <button class="btn btn-warning btn-sm" id="btn-role-setting" title="設定主檔管理（附件）操作角色與功能"><i class="fa fa-key"></i> 角色設定</button>
+                <?php endif; ?>
             </div>
         </div>
         <div class="clearfix"></div>
+
+        <?php if ($is_admin): ?>
+        <!-- 角色設定 Modal（主檔管理 module=master_data；僅管理員可見，仿異常矯正單） -->
+        <div class="modal fade" id="roleModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content">
+          <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title"><i class="fa fa-key"></i> 主檔管理 — 角色設定</h4></div>
+          <div class="modal-body">
+            <p class="text-muted" style="font-size:12px;">在此建立/命名角色並勾選其功能；使用者與角色的對應請至 <b>人員權限設定（user_permissions）→ 主檔管理</b>。系統管理員角色(admin)固定擁有全部權限，不可修改。<br>
+              註：<b>「報價資料」分頁</b>沿用報價單「檢視」權限（quotation_view，於報價單角色設定）；<b>「圖面查閱」分頁</b>對所有登入者開放，不需權限。</p>
+            <div class="row">
+              <div class="col-md-5">
+                <div class="input-group input-group-sm" style="margin-bottom:6px;">
+                  <input type="text" id="new-role-name" class="form-control" placeholder="新角色名稱…">
+                  <span class="input-group-btn"><button class="btn btn-success" id="btn-add-role">新增</button></span>
+                </div>
+                <div class="list-group" id="role-list" style="max-height:320px;overflow:auto;"></div>
+              </div>
+              <div class="col-md-7">
+                <div id="role-feat-area" style="display:none;">
+                  <h5>角色「<span id="rf-role-name"></span>」的功能</h5>
+                  <div id="rf-checks"></div>
+                  <div style="margin-top:10px;">
+                    <button class="btn btn-primary btn-sm" id="btn-save-feats"><i class="fa fa-check"></i> 儲存功能</button>
+                    <button class="btn btn-default btn-sm" id="btn-rename-role">改名</button>
+                    <button class="btn btn-danger btn-sm pull-right" id="btn-del-role"><i class="fa fa-trash"></i> 刪除角色</button>
+                    <span class="text-muted" id="rf-msg" style="margin-left:8px;"></span>
+                  </div>
+                </div>
+                <div id="role-feat-empty" class="text-muted">← 請於左側選擇一個角色</div>
+              </div>
+            </div>
+          </div>
+        </div></div></div>
+        <script>
+        (function initMdRoleSetting(){
+          if (typeof jQuery === 'undefined') { return setTimeout(initMdRoleSetting, 50); }
+          var $ = jQuery;
+          var ROLES_API = '../../src/store/Roles_API.php';
+          var escR = function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+          var MASTERDATA_FEATURES = [
+            ['md_open','開啟主檔管理頁'],
+            ['md_attach_view','其他附件—檢視分頁'],
+            ['md_attach_upload','其他附件—上傳'],
+            ['md_attach_delete','其他附件—刪除'],
+            ['md_attach_edit','其他附件—編輯（標籤/浮水印）']
+          ];
+          var curRole = null;
+          function loadRoles(){
+            $.get(ROLES_API, {action:'get_roles', module:'master_data'}, function(r){
+              if(!r||!r.success){ $('#role-list').html('<div class="text-danger">'+escR(r&&r.message||'載入失敗')+'</div>'); return; }
+              var h=''; r.data.forEach(function(ro){
+                var sys = parseInt(ro.is_system,10)===1;
+                h += '<a href="#" class="list-group-item role-item" data-id="'+ro.role_id+'" data-name="'+escR(ro.role_name)+'" data-sys="'+(sys?1:0)+'">'
+                   + escR(ro.role_name) + (sys?' <span class="label label-info pull-right">系統(全權)</span>':'') + '</a>';
+              });
+              $('#role-list').html(h||'<div class="text-muted">尚無角色</div>');
+              $('.role-item').on('click', function(e){ e.preventDefault(); $('.role-item').removeClass('active'); $(this).addClass('active');
+                selectRole($(this).data('id'), $(this).data('name'), $(this).data('sys')==1); });
+            }, 'json');
+          }
+          function selectRole(rid, rname, isSys){
+            curRole = {id:rid, name:rname, sys:isSys};
+            $('#role-feat-empty').hide(); $('#role-feat-area').show(); $('#rf-role-name').text(rname); $('#rf-msg').text('');
+            $.get(ROLES_API, {action:'get_role_features', role_id:rid}, function(r){
+              var have = (r&&r.success)? r.data : [];
+              if(isSys) have = MASTERDATA_FEATURES.map(function(f){return f[0];});
+              var h=''; MASTERDATA_FEATURES.forEach(function(f){
+                h += '<div class="checkbox"><label><input type="checkbox" class="rf-chk" value="'+f[0]+'" '
+                   + (have.indexOf(f[0])>=0?'checked':'') + (isSys?' disabled':'') + '> '+escR(f[1])+' <code>'+f[0]+'</code></label></div>';
+              });
+              $('#rf-checks').html(h);
+              $('#btn-save-feats,#btn-del-role,#btn-rename-role').prop('disabled', isSys);
+            }, 'json');
+          }
+          $('#btn-role-setting').on('click', function(e){ e.preventDefault(); $('#role-feat-area').hide(); $('#role-feat-empty').show(); loadRoles(); $('#roleModal').modal('show'); });
+          $('#btn-add-role').on('click', function(){ var n=$('#new-role-name').val().trim(); if(!n){ alert('請輸入角色名稱'); return; }
+            $.post(ROLES_API, {action:'save_role', role_name:n, module:'master_data'}, function(r){ if(r&&r.success){ $('#new-role-name').val(''); loadRoles(); } else alert(r&&r.message||'新增失敗'); }, 'json'); });
+          $('#btn-rename-role').on('click', function(){ if(!curRole||curRole.sys) return; var n=prompt('新角色名稱', curRole.name); if(!n) return;
+            $.post(ROLES_API, {action:'save_role', role_id:curRole.id, role_name:n.trim(), module:'master_data'}, function(r){ if(r&&r.success){ loadRoles(); } else alert(r&&r.message||'改名失敗'); }, 'json'); });
+          $('#btn-del-role').on('click', function(){ if(!curRole||curRole.sys) return; if(!confirm('確定刪除角色「'+curRole.name+'」？此角色的功能與使用者指派都會移除。')) return;
+            $.post(ROLES_API, {action:'delete_role', role_id:curRole.id}, function(r){ if(r&&r.success){ $('#role-feat-area').hide(); $('#role-feat-empty').show(); loadRoles(); } else alert(r&&r.message||'刪除失敗'); }, 'json'); });
+          $('#btn-save-feats').on('click', function(){ if(!curRole||curRole.sys) return;
+            var feats=[]; $('.rf-chk:checked').each(function(){ feats.push($(this).val()); });
+            $.post(ROLES_API, {action:'save_role_features', role_id:curRole.id, features:JSON.stringify(feats)}, function(r){ $('#rf-msg').text(r&&r.success?'已儲存':(r&&r.message||'儲存失敗')); }, 'json'); });
+        })();
+        </script>
+        <?php endif; ?>
 
         <!-- Tab Switcher -->
         <div class="master-tabs">
@@ -8896,6 +9012,9 @@ var SELF_URL   = '<?= basename(__FILE__) ?>';
 var PART_ATTACH_API_URL = '../../src/store/Part_Attachment_API.php';
 var CAN_ATTACH_CAT_EDIT = <?= json_encode($can_attach_cat_edit) ?>;
 var CAN_PART_ATTACH     = <?= json_encode($can_part_attach) ?>;
+var MD_CAN_QUOTE        = <?= json_encode($can_view_quote) ?>;   // 報價資料分頁（quotation_view）
+var MD_CAN_OTHER        = <?= json_encode($can_view_other) ?>;   // 其他附件分頁（md_attach_view，過渡期開放）
+var MD_IS_ADMIN         = <?= json_encode($is_admin) ?>;
 var NAS_URL_DIR = <?= json_encode(_get_setting($pdo, 'notes_url_dir', '/nas/ERP/技術/')) ?>;
 var SYS_VENDOR_DEFAULT_SETTLEMENT_MODE = <?= json_encode(_get_setting($pdo, 'vendor_default_settlement_mode', 'FIXED')) ?>;
 var SYS_VENDOR_DEFAULT_SETTLEMENT_DAY  = <?= json_encode(_get_setting($pdo, 'vendor_default_settlement_day', '25')) ?>;
@@ -11029,7 +11148,7 @@ function renderPartsTable(rows, total, pg, pages) {
             var dIdBadge = '<span style="font-size:10px;color:#bbb;font-family:Consolas,monospace;letter-spacing:.3px;display:block;line-height:1.2;margin-top:1px;">id:'+r.d_id+'</span>';
             var drawingBadge = (r.Drawing_No && r.Drawing_No !== r.D_Setting_Id)
                 ? '<span style="font-size:10px;color:#1a7abf;display:block;line-height:1.2;margin-top:1px;" title="圖面代號">代：'+escHtml(r.Drawing_No)+'</span>' : '';
-            if (r.has_drawing || r.has_attach) {
+            if (r.has_drawing || (MD_CAN_OTHER && r.has_attach) || (MD_CAN_QUOTE && r.has_quote)) {
                 html += '<td style="max-width:160px;line-height:1.3;"><strong class="part-drawing-link" onclick="openPartDrawing(\''+escHtml(r.D_Setting_Id)+'\')" title="點擊開啟圖面 / 附件">'+escHtml(r.D_Setting_Id)+'</strong>'+dIdBadge+drawingBadge+gearSpec+'</td>';
             } else {
                 html += '<td style="max-width:160px;line-height:1.3;"><strong style="font-family:Consolas,monospace;">'+escHtml(r.D_Setting_Id)+'</strong>'+dIdBadge+drawingBadge+gearSpec+'</td>';
@@ -18233,7 +18352,7 @@ function _buildAttachCellHtml(dId, partNo, data) {
 
     // 無附件且無報價 → 僅顯示小圖示（若有權限可點擊上傳）
     if (!data || (data.total === 0 && !hasQuoteFlag)) {
-        if (!CAN_PART_ATTACH) return '<span style="color:#ddd;font-size:10px;">—</span>';
+        if (!CAN_PART_ATTACH || !MD_CAN_OTHER) return '<span style="color:#ddd;font-size:10px;">—</span>';
         return '<button class="btn btn-xs" onclick="openAttachAllView('+dId+',\''+escAttr(pno)+'\')" style="font-size:10px;color:#bbb;background:none;border:none;padding:1px 4px;" title="無附件，點擊新增"><i class="fa fa-paperclip"></i></button>';
     }
 
@@ -18249,6 +18368,7 @@ function _buildAttachCellHtml(dId, partNo, data) {
             return f.category_ids && f.category_ids.split(',').map(function(x){ return x.trim(); }).indexOf(String(cat.id)) >= 0;
         });
         if (!hasFile) return;
+        if (!MD_CAN_OTHER) return;   // 無其他附件檢視權限：不顯示標籤分頁入口
         anyShowTag = true;
         html += '<button class="btn btn-xs" onclick="openAttachTagView('+dId+',\''+escAttr(pno)+'\','+cat.id+',\''+escAttr(cat.category_name)+'\')" '
               + 'style="font-size:10px;color:#1a5276;background:#ddeeff;border:1px solid #aed6f1;border-radius:10px;padding:1px 7px;" '
@@ -18257,14 +18377,14 @@ function _buildAttachCellHtml(dId, partNo, data) {
 
     // ── 有報價單（含無附件的情況）→ 顯示「報價」按鈕
     var hasQuote = hasQuoteFlag || files.some(function(f){ return f.source === 'quote'; });
-    if (hasQuote) {
+    if (hasQuote && MD_CAN_QUOTE) {   // 無報價查閱權限：隱藏「報價」入口
         html += '<button class="btn btn-xs" onclick="openAttachQuoteView('+dId+',\''+escAttr(pno)+'\')" '
               + 'style="font-size:10px;color:#6e2fa3;background:#f3e8ff;border:1px solid #d4a8f0;border-radius:10px;padding:1px 7px;" '
               + 'title="報價單"><i class="fa fa-file-text-o" style="margin-right:2px;"></i>報價</button>';
     }
 
     // ── + 號按鈕 → 所有附件（非顯示標籤的、或無標籤）
-    if (data.total > 0) {
+    if (MD_CAN_OTHER && data.total > 0) {
         var nonShowCount = files.filter(function(f){
             if (f.source === 'quote') return false;
             if (!f.category_ids) return true;
@@ -18278,7 +18398,7 @@ function _buildAttachCellHtml(dId, partNo, data) {
                   + 'style="font-size:10px;color:#555;background:#f5f5f5;border:1px solid #ddd;border-radius:10px;padding:1px 7px;" '
                   + 'title="全部附件 ('+data.total+')">'+plusLabel+'</button>';
         }
-    } else if (CAN_PART_ATTACH) {
+    } else if (MD_CAN_OTHER && CAN_PART_ATTACH) {
         // 有報價但無一般附件 → 顯示新增按鈕
         html += '<button class="btn btn-xs" onclick="openAttachAllView('+dId+',\''+escAttr(pno)+'\')" style="font-size:10px;color:#bbb;background:none;border:none;padding:1px 4px;" title="無附件，點擊新增"><i class="fa fa-paperclip"></i></button>';
     }
