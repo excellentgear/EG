@@ -406,8 +406,8 @@ if ($deptPerm === 'R') {
             <select class="form-control" id="batch_level"><option value="">--</option><option value="一階">一階</option><option value="二階">二階</option><option value="三階">三階</option><option value="四階" selected>四階</option></select>
           </div>
           <div class="form-group col-md-2"><label>所屬部門</label><select class="form-control" id="batch_dept"><option value="">跨部門</option></select></div>
-          <div class="form-group col-md-1"><label>版本號 *</label><input type="text" class="form-control" id="batch_version" value="A"></div>
-          <div class="form-group col-md-2"><label>修訂日期 *</label><input type="date" class="form-control" id="batch_date" max="9999-12-31"></div>
+          <div class="form-group col-md-1"><label>版本(預設)</label><input type="text" class="form-control" id="batch_version" value="" placeholder="表單可不填"></div>
+          <div class="form-group col-md-2"><label>修訂日期(預設)</label><input type="date" class="form-control" id="batch_date" max="9999-12-31"></div>
         </div>
         <div class="form-group" id="batchCodeWrap" style="display:none;max-width:420px;">
           <label>此部門有多組代碼，請選擇</label>
@@ -420,8 +420,9 @@ if ($deptPerm === 'R') {
         <div class="table-responsive">
           <table class="table table-bordered table-condensed" style="font-size:12px;">
             <thead><tr>
-              <th style="width:18%;">檔名</th><th style="width:15%;">文件編號</th><th style="width:20%;">文件名稱</th>
-              <th style="width:22%;">制修訂摘要</th><th>申請單（逐檔對應，可不附）</th>
+              <th style="width:14%;">檔名</th><th style="width:13%;">文件編號</th><th style="width:17%;">文件名稱</th>
+              <th style="width:7%;">版本</th><th style="width:11%;">修訂日期</th>
+              <th style="width:16%;">制修訂摘要</th><th>申請單（逐檔對應，可不附）</th>
             </tr></thead>
             <tbody id="batchRows"></tbody>
           </table>
@@ -852,6 +853,8 @@ $(function(){
   }
   $('#doc_type').on('change', function(){
     syncLevelFromType($('#doc_type'), $('#doc_level'));
+    // 表單首建可無版本號（改版才給號）；其他類別維持必填
+    if($('#doc_id').val()==='') $('#doc_version').prop('required', $(this).val()!=='表單');
     // 新增模式且編號空白時，類別選定（＝階級確定）就自動帶編號
     if($('#doc_id').val()==='' && $('#doc_no').val().trim()===''){
       const hasParent = $('#doc_parent_id').val()!=='';
@@ -879,10 +882,14 @@ $(function(){
   $('#btnAutoNo').on('click', ()=>suggestDocNo(true));
   $('#doc_code_sel').on('change', function(){ $('#doc_no').val($(this).find('option:selected').data('no')||''); });
 
-  // 選母文件 → 自動帶入母文件的所屬部門
+  // 選母文件 → 自動帶入母文件的所屬部門並鎖定（未選母文件時開放）
+  function syncDeptFromParent($parent, $dept){
+    const p = (META.parents||[]).find(x=>x.id==$parent.val());
+    if(p && p.department_id){ $dept.val(p.department_id).prop('disabled', true).attr('title','部門由母文件自動決定'); }
+    else { $dept.prop('disabled', false).attr('title',''); }
+  }
   $('#doc_parent_id').on('change', function(){
-    const p = (META.parents||[]).find(x=>x.id==$(this).val());
-    if(p && p.department_id) $('#doc_department_id').val(p.department_id);
+    syncDeptFromParent($('#doc_parent_id'), $('#doc_department_id'));
   });
   // 手動輸入文件編號 → 依「階數-部門代碼」自動判定階級與所屬部門（如 2-TD-01-01 → 二階/技術部）
   $('#doc_no').on('blur', function(){
@@ -927,6 +934,7 @@ $(function(){
     fillParentSelect(0, '');
     $('#doc_code_sel').hide().empty();
     syncLevelFromType($('#doc_type'), $('#doc_level'));
+    syncDeptFromParent($('#doc_parent_id'), $('#doc_department_id'));
     $('#docModal').modal('show');
   });
 
@@ -954,6 +962,7 @@ $(function(){
       $('#doc_revised_summary').val(cv.revised_summary||'');
       renderDocTagPicker((d.tags||[]).map(t=>t.id));
       fillParentSelect(d.id, d.parent_doc_id||'');
+      syncDeptFromParent($('#doc_parent_id'), $('#doc_department_id'));
       $('#doc_code_sel').hide().empty();
       $('#docModal').modal('show');
     });
@@ -964,7 +973,9 @@ $(function(){
     const isEdit = $('#doc_id').val()!=='';
     const url = API + '?action=' + (isEdit?'update_document_meta':'create_document');
     const fd = new FormData(this);
-    fd.set('doc_level', $('#doc_level').val()||''); // 階級被類別鎖定(disabled)時不會進 FormData，手動補
+    // 被鎖定(disabled)的欄位不會進 FormData，手動補值
+    fd.set('doc_level', $('#doc_level').val()||'');
+    fd.set('department_id', $('#doc_department_id').val()||'');
     NProgress.start();
     $.ajax({url:url, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
      .done(r=>{ if(r.status==='success'){ $('#docModal').modal('hide'); loadMeta(loadDocs); } else alert(r.message||'失敗'); })
@@ -1148,6 +1159,7 @@ $(function(){
     $('#batch_dept').html('<option value="">跨部門</option>'+META.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
     $('#batch_files').val(''); $('#batchRows').empty(); $('#batchResult').empty(); $('#batchCodeWrap').hide();
     syncLevelFromType($('#batch_type'), $('#batch_level'));
+    syncDeptFromParent($('#batch_parent'), $('#batch_dept'));
     $('#batchModal').modal('show');
   });
   $('#batch_type').on('change', function(){
@@ -1156,7 +1168,20 @@ $(function(){
     if($('#batch_files')[0].files.length) batchSuggest(); // 階級變了，編號建議重算
   });
 
-  // 選檔後建立逐檔設定列，編號自動遞增建議（多組代碼時顯示選擇器）
+  // 檔名自動拆解：「2-GM-02-01-專案計劃需求表」→ 編號 2-GM-02-01 + 名稱 專案計劃需求表。
+  // 規則：首段=階數(1碼數字)、次段=部門代碼(英文)、後續連續數字段皆屬編號；
+  // 第一個非純數字段起=文件名稱。拆不出來回 null（改用順序遞增建議號、名稱=整個檔名）。
+  function parseDocFilename(nameNoExt){
+    const segs = nameNoExt.split('-');
+    if(segs.length < 3) return null;
+    if(!/^\d$/.test(segs[0]) || !/^[A-Za-z]+$/.test(segs[1])) return null;
+    let i = 2;
+    while(i < segs.length && /^\d+$/.test(segs[i])) i++;
+    if(i === 2 || i >= segs.length) return null; // 沒有流水號、或整串都是編號沒名稱
+    return { doc_no: segs.slice(0,i).join('-'), doc_name: segs.slice(i).join('-') };
+  }
+
+  // 選檔後建立逐檔設定列：優先用檔名拆解；拆不出的才用自動遞增建議號。逐列可改 版本/日期。
   function batchGenRows(startNo){
     const files = $('#batch_files')[0].files; const tb = $('#batchRows').empty();
     let base='', num=0, pad=2;
@@ -1164,19 +1189,29 @@ $(function(){
       const m = startNo.match(/^(.*-)(\d+)$/);
       if(m){ base=m[1]; num=parseInt(m[2]); pad=m[2].length; }
     }
+    const defVer = $('#batch_version').val().trim();
+    const defDate = $('#batch_date').val() || '';
+    let seq = 0; // 只有「拆不出編號」的檔案才消耗遞增序號
     for(let i=0;i<files.length;i++){
       const fn = files[i].name;
       const nameNoExt = fn.replace(/\.[^.]+$/,'');
-      const sugNo = base ? base+String(num+i).padStart(pad,'0') : '';
+      const parsed = parseDocFilename(nameNoExt);
+      const sugNo = parsed ? parsed.doc_no : (base ? base+String(num+seq++).padStart(pad,'0') : '');
+      const sugName = parsed ? parsed.doc_name : nameNoExt;
       tb.append(`<tr>
-        <td style="vertical-align:middle;">${esc(fn)}</td>
+        <td style="vertical-align:middle;">${esc(fn)}${parsed?' <i class="fa fa-magic text-success" title="已由檔名自動拆解編號/名稱"></i>':''}</td>
         <td><input type="text" class="form-control input-sm b-no" value="${esc(sugNo)}"></td>
-        <td><input type="text" class="form-control input-sm b-name" value="${esc(nameNoExt)}"></td>
+        <td><input type="text" class="form-control input-sm b-name" value="${esc(sugName)}"></td>
+        <td><input type="text" class="form-control input-sm b-ver" value="${esc(defVer)}" placeholder="表單可空"></td>
+        <td><input type="date" class="form-control input-sm b-date" value="${defDate}" max="9999-12-31"></td>
         <td><input type="text" class="form-control input-sm b-sum" placeholder="如：新訂"></td>
         <td><input type="file" class="b-apply"></td>
       </tr>`);
     }
   }
+  // 共同預設值變更 → 套用到所有列
+  $('#batch_version').on('change', function(){ $('.b-ver').val($(this).val().trim()); });
+  $('#batch_date').on('change', function(){ $('.b-date').val($(this).val()); });
   function batchSuggest(){
     const files = $('#batch_files')[0].files;
     if(!files.length){ $('#batchRows').empty(); return; }
@@ -1199,10 +1234,9 @@ $(function(){
   }
   $('#batch_files').on('change', batchSuggest);
   $('#batch_code_sel').on('change', function(){ batchGenRows($(this).find('option:selected').data('no')||''); });
-  // 批次：選母文件 → 自動帶入母文件的所屬部門
+  // 批次：選母文件 → 自動帶入母文件的所屬部門並鎖定（未選時開放）
   $('#batch_parent').on('change', function(){
-    const p = (META.parents||[]).find(x=>x.id==$(this).val());
-    if(p && p.department_id) $('#batch_dept').val(p.department_id);
+    syncDeptFromParent($('#batch_parent'), $('#batch_dept'));
   });
   // 共同設定變動時若已選檔，重新產生編號建議
   $('#batch_parent,#batch_level,#batch_dept').on('change', ()=>{ $('#batchCodeWrap').hide(); if($('#batch_files')[0].files.length) batchSuggest(); });
@@ -1210,22 +1244,26 @@ $(function(){
   $('#batchSubmit').on('click', function(){
     const files = $('#batch_files')[0].files;
     if(!files.length){ alert('請先選擇檔案'); return; }
-    const rows=[]; let bad=0;
+    const isForm = $('#batch_type').val()==='表單';
+    const rows=[]; let bad=0, badVer=0, badDate=0;
     $('#batchRows tr').each(function(i){
       const no=$(this).find('.b-no').val().trim(), nm=$(this).find('.b-name').val().trim();
+      const ver=$(this).find('.b-ver').val().trim(), dt=$(this).find('.b-date').val();
       if(!no||!nm) bad++;
+      if(!ver && !isForm) badVer++;
+      if(!dt) badDate++;
       rows.push({
         doc_no:no, doc_name:nm,
         doc_type:$('#batch_type').val(), doc_level:$('#batch_level').val(),
         department_id:$('#batch_dept').val(), parent_doc_id:$('#batch_parent').val(),
-        version:$('#batch_version').val().trim(), change_status:'制訂',
-        revised_date:$('#batch_date').val(), revised_pages:'', revised_summary:$(this).find('.b-sum').val().trim(),
+        version:ver, change_status:'制訂',
+        revised_date:dt, revised_pages:'', revised_summary:$(this).find('.b-sum').val().trim(),
         tag_ids:[]
       });
     });
     if(bad){ alert(`有 ${bad} 列缺少編號或名稱`); return; }
-    if(!$('#batch_version').val().trim()){ alert('請填版本號'); return; }
-    if(!$('#batch_date').val()){ alert('請填修訂日期'); return; }
+    if(badVer){ alert(`有 ${badVer} 列缺少版本號（僅表單類別可不填）`); return; }
+    if(badDate){ alert(`有 ${badDate} 列缺少修訂日期`); return; }
     const fd = new FormData();
     fd.append('rows', JSON.stringify(rows));
     for(let i=0;i<files.length;i++){

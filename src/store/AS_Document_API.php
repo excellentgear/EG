@@ -169,10 +169,12 @@ function asPreviewPdf(PDO $db, int $docId, string $fileName, ?string $dir = null
 function asValidateVersionStyle(PDO $db, int $docId, string $newVersion, int $excludeVerId = 0): ?string {
     $st = $db->prepare("SELECT version FROM as_document_version WHERE doc_id=? AND id!=?");
     $st->execute([$docId, $excludeVerId]);
-    $existing = $st->fetchAll(PDO::FETCH_COLUMN);
+    // 表單首建可無版本號（空字串）——空版本不列入型式判斷
+    $existing = array_values(array_filter($st->fetchAll(PDO::FETCH_COLUMN), fn($v) => trim((string)$v) !== ''));
     if (empty($existing)) return null;
     $isNum   = fn(string $v) => (bool)preg_match('/^\d+(\.\d+)*$/', trim($v));
-    $isAlpha = fn(string $v) => (bool)preg_match('/^[A-Za-z]+$/', trim($v));
+    // 字母型兩種並行：A/B/C… 與 A-1/A-2…（字母加流水修訂號）
+    $isAlpha = fn(string $v) => (bool)preg_match('/^[A-Za-z]+(-\d+)?$/', trim($v));
     $allNum   = count(array_filter($existing, $isNum))   === count($existing);
     $allAlpha = count(array_filter($existing, $isAlpha)) === count($existing);
     if ($allNum && !$isNum($newVersion))
@@ -190,7 +192,7 @@ function asValidateVersionStyle(PDO $db, int $docId, string $newVersion, int $ex
 function asValidateVersionOrder(string $current, string $newVersion): ?string {
     $current = trim($current); $newVersion = trim($newVersion);
     if ($current === '') return null;
-    $numRe = '/^\d+(\.\d+)*$/'; $alphaRe = '/^[A-Za-z]+$/';
+    $numRe = '/^\d+(\.\d+)*$/'; $alphaRe = '/^([A-Za-z]+)(?:-(\d+))?$/';
     if (preg_match($numRe, $current) && preg_match($numRe, $newVersion)) {
         $a = array_map('intval', explode('.', $newVersion));
         $b = array_map('intval', explode('.', $current));
@@ -201,10 +203,13 @@ function asValidateVersionOrder(string $current, string $newVersion): ?string {
         }
         return "新版本號 {$newVersion} 與目前版本 {$current} 相同"; // 理論上被重複檢查先擋，保險
     }
-    if (preg_match($alphaRe, $current) && preg_match($alphaRe, $newVersion)) {
-        $a = strtoupper($newVersion); $b = strtoupper($current);
-        $cmp = (strlen($a) !== strlen($b)) ? (strlen($a) <=> strlen($b)) : strcmp($a, $b);
-        if ($cmp <= 0) return "新版本號 {$newVersion} 未比目前版本 {$current} 新，改版版本號必須往後推進（如 {$current} 的下一個字母）";
+    // 字母型（A/B/C… 與 A-1/A-2… 並行）：先比字母（長度再字典序），同字母再比修訂號（無=0）
+    // 順序：A < A-1 < A-2 < B < B-1 < … < Z < AA
+    if (preg_match($alphaRe, $current, $mc) && preg_match($alphaRe, $newVersion, $mn)) {
+        $la = strtoupper($mn[1]); $lb = strtoupper($mc[1]);
+        $cmp = (strlen($la) !== strlen($lb)) ? (strlen($la) <=> strlen($lb)) : strcmp($la, $lb);
+        if ($cmp === 0) $cmp = ((int)($mn[2] ?? 0)) <=> ((int)($mc[2] ?? 0));
+        if ($cmp <= 0) return "新版本號 {$newVersion} 未比目前版本 {$current} 新，改版版本號必須往後推進（如 {$current} 之後可用下一字母或加修訂號，例：A→A-1→B）";
         return null;
     }
     return null;
@@ -390,8 +395,11 @@ case 'create_document':
     $cstat   = trim($_POST['change_status'] ?? '制訂');
     $tagIds  = array_filter(array_map('intval', explode(',', $_POST['tag_ids'] ?? '')));
 
-    if ($doc_no==='' || $doc_name==='' || $version==='')
-        jout(['status'=>'error','message'=>'文件編號、名稱、版本號為必填']);
+    if ($doc_no==='' || $doc_name==='')
+        jout(['status'=>'error','message'=>'文件編號、名稱為必填']);
+    // 表單首建可無版本號（改版才給號 A / A-1…）；其他類別維持必填
+    if ($version==='' && $doc_type!=='表單')
+        jout(['status'=>'error','message'=>'版本號為必填（僅表單類別首次建立可不填）']);
     if (!$rdate) jout(['status'=>'error','message'=>'請填寫修訂日期']);
     $dup = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0");
     $dup->execute([$doc_no]);
@@ -836,7 +844,8 @@ case 'create_documents_batch':
             $doc_no  = trim($r['doc_no'] ?? '');
             $doc_name= trim($r['doc_name'] ?? '');
             $version = trim($r['version'] ?? '');
-            if ($doc_no==='' || $doc_name==='' || $version==='') throw new Exception('編號/名稱/版本必填');
+            if ($doc_no==='' || $doc_name==='') throw new Exception('編號/名稱必填');
+            if ($version==='' && trim($r['doc_type'] ?? '')!=='表單') throw new Exception('版本號必填（僅表單首建可不填）');
             if (trim($r['revised_date'] ?? '') === '') throw new Exception('請填寫修訂日期');
 
             $dup = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0");
