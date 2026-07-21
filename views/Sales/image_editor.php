@@ -224,6 +224,11 @@ try {
     }
 } catch (Exception $e) { /* 無部門資料則視為空 */ }
 
+// ── 內建標籤（PRESET_LABELS）可見範圍：只給技術課（技術部，名稱含「技術」）與管理者 ──
+//    內建標籤多為技術／工程圖用途，不需要全體都看到，故限制在技術課部門底下顯示。
+$isTechDept = $isMgr;
+foreach ($myDepts as $__d) { if (mb_strpos($__d['name'] ?? '', '技術') !== false) { $isTechDept = true; break; } }
+
 // ── 使用者個人畫圖偏好（顏色/粗細/印章大小…用完自動記住，下次開啟沿用）──────
 $userPrefs = [];
 try {
@@ -623,10 +628,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$canDeleteWorkfile) throw new Exception('沒有工作檔刪除權限');
             $wid = (int)($_POST['id'] ?? 0);
             if ($wid <= 0) throw new Exception('缺少工作檔編號');
-            $st = $pdo->prepare("SELECT id, d_id, filename FROM part_attachments WHERE id = ? AND deleted_at IS NULL AND filename LIKE '%.egwork.json'");
+            // 一併帶出分享範圍，做可見性檢查（與 load_workfile 同一套）：看不到的工作檔就不能刪，
+            // 避免「有刪除權限者直接對端點送別人的私人檔/別部門檔的 id 也刪得掉」（原本只擋非最新版）
+            $st = $pdo->prepare("SELECT pa.id, pa.d_id, pa.filename, pa.uploaded_by_id, m.owner_type, m.owner_dept_id
+                                 FROM part_attachments pa LEFT JOIN imgedit_workfile_meta m ON m.attachment_id = pa.id
+                                 WHERE pa.id = ? AND pa.deleted_at IS NULL AND pa.filename LIKE '%.egwork.json'");
             $st->execute([$wid]);
             $r = $st->fetch(PDO::FETCH_ASSOC);
             if (!$r) throw new Exception('找不到工作檔');
+            $ownerType = $r['owner_type'] ?: 'company';   // 舊資料無 meta → 視為公司共用
+            $canSee = $isMgr || (int)$r['uploaded_by_id'] === $uid || $ownerType === 'company';
+            if (!$canSee && $ownerType === 'dept') $canSee = in_array((int)$r['owner_dept_id'], $myDeptIds, true);
+            if (!$canSee && $ownerType === 'custom') {
+                $chk = $pdo->prepare("SELECT COUNT(*) FROM imgedit_workfile_share WHERE attachment_id = ? AND user_id = ?");
+                $chk->execute([$wid, $uid]);
+                $canSee = (int)$chk->fetchColumn() > 0;
+            }
+            if (!$canSee) throw new Exception('沒有這份工作檔的存取權限，不能刪除');
             $latest = $pdo->prepare("SELECT id FROM part_attachments
                                      WHERE d_id = ? AND deleted_at IS NULL AND filename LIKE '%.egwork.json'
                                      ORDER BY id DESC LIMIT 1");
@@ -938,8 +956,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <button class="tb-btn" onclick="openCanvasModal()" title="畫布尺寸與背景設定"><i class="fa fa-crop"></i> 畫布</button>
     <button class="tb-btn" onclick="fitArtboardToContent()" title="畫布自動調整為剛好包住所有內容">適合內容</button>
     <span class="tb-sep"></span>
-    <button class="tb-btn" onclick="openSecondWindow()" title="再開一個批圖視窗（可移到另一個螢幕；兩窗之間可用「複製選取」互貼）"><i class="fa fa-clone"></i> 開新視窗</button>
-    <button class="tb-btn" onclick="copySelectionCrossWindow()" title="把目前選取的內容複製成圖（可到另一個批圖視窗按 Ctrl+V 貼上）"><i class="fa fa-share-square-o"></i> 複製選取→他窗</button>
+    <button class="tb-btn" onclick="openSecondWindow()" title="再開一個批圖視窗（可移到另一個螢幕；兩窗之間互貼：選取後 Ctrl+C，到另一窗按 Ctrl+Shift+V）"><i class="fa fa-clone"></i> 開新視窗</button>
     <span class="tb-sep"></span>
     <button class="tb-btn" id="btn-label-lib" onclick="toggleLabelLib()" title="標籤庫：內建常用標籤＋自訂標籤，點一下放到圖上"><i class="fa fa-tags"></i> 標籤庫</button>
     <button class="tb-btn" onclick="openWmModal()" title="浮水印：自訂文字/角度/單一或填滿/濃淡"><i class="fa fa-shield"></i> 浮水印</button>
@@ -1142,8 +1159,10 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                     </label>
                 </div>
                 <div class="lib-body">
+                    <?php if ($isTechDept): ?>
                     <div class="lib-sec" style="color:#6fc3ff;">內建標籤（點一下放到圖上，雙擊圖上標籤可改字）</div>
                     <div id="lib-presets"></div>
+                    <?php endif; ?>
                     <div class="lib-sec" style="color:#6fc3ff;margin-top:14px;display:flex;align-items:center;justify-content:space-between;">
                         <span>自訂標籤（全體共用）</span>
                         <span style="display:flex;gap:8px;font-weight:400;color:#8b949e;" title="不勾＝這一區在你的標籤庫隱藏（只影響你自己，別人不受影響）">
@@ -1580,7 +1599,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <b style="color:#6fc3ff;">⑤ 檢視、匯出與跨視窗</b>
             <ul style="padding-left:18px;margin:4px 0 10px;">
                 <li>滾輪縮放；<b>按住滾輪中鍵拖移</b>或空白鍵＋拖曳平移；「縮放至選取」放大局部細修</li>
-                <li>「開新視窗」再開一個編輯器（可拖到另一個螢幕）；「複製選取→他窗」＋在另一窗 Ctrl+V 互貼</li>
+                <li>「開新視窗」再開一個編輯器（可拖到另一個螢幕）；兩窗互貼＝選取後 <b>Ctrl+C</b>，到另一窗按 <b>Ctrl+Shift+V</b>（他窗貼上）</li>
                 <li>匯出/列印：整個畫布或只匯出選取；PNG/JPG、解析度倍率（列印建議2×）</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
                 <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本</li>
@@ -1596,6 +1615,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <tr><td>Ctrl+Z / Ctrl+Y</td><td>復原 / 重做</td><td>Ctrl+C / Ctrl+V</td><td>複製 / 貼上（含跨視窗、小畫家）</td></tr>
                 <tr><td>Ctrl+D</td><td>原地複製</td><td>Alt＋拖曳</td><td>拖曳複製</td></tr>
                 <tr><td>Ctrl+G</td><td>群組 / 進入群組</td><td>Ctrl+0 / Esc</td><td>適合視窗 / 回選取工具</td></tr>
+                <tr><td>Ctrl+Shift+V</td><td><b>他窗貼上</b>（貼上另一個批圖視窗 Ctrl+C 複製的內容）</td><td>Ctrl+A</td><td>全選畫布物件</td></tr>
             </table>
         </div>
         <div class="modal-foot"><button class="tb-btn primary" onclick="hideModal('help-modal')">知道了</button></div>
@@ -4087,8 +4107,9 @@ function renderLibrary() {
     const words = q ? q.split(/\s+/) : [];
     const hitQ = hay => !words.length || words.every(w => hay.includes(w));
     const tagHay = tags => String(tags || '').trim().split(/\s+/).filter(Boolean).map(t => '#' + t).join(' ');
-    // 內建：依分類分組
+    // 內建：依分類分組（限技術課部門/管理者才有此區塊；非技術課時 lib-presets 容器不存在，整段跳過）
     const pbox = document.getElementById('lib-presets');
+    if (pbox) {
     pbox.innerHTML = '';
     const groups = {};
     PRESET_LABELS.forEach(p => {
@@ -4110,6 +4131,7 @@ function renderLibrary() {
         });
     });
     if (!pbox.children.length) pbox.innerHTML = '<div style="color:#666;font-size:11px;padding:6px;">' + (q ? '沒有符合搜尋的內建標籤' : '此分類沒有內建標籤') + '</div>';
+    }
 
     // 自訂：先分範圍（公司共用/部門/私人），範圍內再依分類分組
     const cbox = document.getElementById('lib-customs');
@@ -4634,11 +4656,6 @@ function copySelection() {
     });
     return true;
 }
-function copySelectionCrossWindow() {
-    if (!canvas.getActiveObject()) { toast('請先選取要複製的物件'); return; }
-    // 注意：系統剪貼簿（小畫家複製的東西）優先權在 Ctrl+V；跨窗內容請在另一視窗用 Ctrl+Shift+V 或「貼上」按鈕
-    if (copySelection()) toast('已複製。到另一個批圖視窗按 Ctrl+Shift+V（或頂列「貼上」按鈕）貼上');
-}
 function duplicateSelection() {
     const obj = canvas.getActiveObject();
     if (!obj) return;
@@ -4663,7 +4680,7 @@ function doCropCopy(x, y, w, h) {
     const el = exportRegionCanvasEl(x, y, w, h, 1);
     if (document.getElementById('p-crop-transparent').checked) whiteToTransparent(el);
     const url = el.toDataURL('image/png');
-    // 不再順手寫入跨視窗剪貼簿：同步寫大字串會卡 UI、常撞 5MB 配額，要跨窗請用「複製選取→他窗」
+    // 不再順手寫入跨視窗剪貼簿：同步寫大字串會卡 UI、常撞 5MB 配額，要跨窗請選取後按 Ctrl+C（自動寫入跨窗剪貼簿）
     fabric.Image.fromURL(url, function (img) {
         img.set({ left: x + 24, top: y + 24 });
         img.transparentBg = document.getElementById('p-crop-transparent').checked;   // 透明切塊之後挖空用擦除
@@ -4672,7 +4689,7 @@ function doCropCopy(x, y, w, h) {
         setTool('select');
         canvas.requestRenderAll();
         pushState();
-        toast('已複製框選範圍成新圖塊（要複製到另一個批圖視窗：選取後用「複製選取→他窗」）');
+        toast('已複製框選範圍成新圖塊（要複製到另一個批圖視窗：選取後按 Ctrl+C，到另一窗 Ctrl+Shift+V 貼上）');
     });
 }
 
