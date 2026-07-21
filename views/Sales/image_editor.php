@@ -1206,7 +1206,8 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         </div>
         <div class="modal-foot">
             <button class="tb-btn" onclick="hideModal('export-modal')">取消</button>
-            <button class="tb-btn" onclick="doPrint()"><i class="fa fa-print"></i> 列印</button>
+            <button class="tb-btn" onclick="doPrint()" title="快速：把畫布烙成點陣圖列印，什麼都能印、速度快，但文字/線條放大後會略糊"><i class="fa fa-print"></i> 快速列印</button>
+            <button class="tb-btn" onclick="doPrintVector()" title="清晰：以向量(SVG)列印，文字/線條無限銳利、照片維持原解析度；極少數自訂圖形若顯示異常請改用快速列印"><i class="fa fa-magic"></i> 清晰列印</button>
             <button class="tb-btn primary" onclick="doSave()"><i class="fa fa-save"></i> 另存圖片…</button>
         </div>
     </div>
@@ -4992,6 +4993,58 @@ function doPrint() {
     const revoke = function () { URL.revokeObjectURL(objUrl); };
     try { w.addEventListener('afterprint', function () { setTimeout(revoke, 1000); }); } catch (e) {}
     setTimeout(revoke, 120000);   // 保底：afterprint 未觸發也會釋放
+    hideModal('export-modal');
+}
+
+/* 清晰列印：以向量 SVG 輸出。文字/線條在 SVG 內仍是向量，列印時瀏覽器直接以印表機解析度描繪，
+   放大到 A4 也不會像點陣圖那樣糊；只有底圖照片是嵌入的點陣（維持原始解析度＝已是最佳）。
+   相容性保險：極少數自訂圖形若 toSVG 失敗或顯示異常，攔截例外後退回快速（點陣）列印。 */
+function doPrintVector() {
+    const range = document.getElementById('ex-range').value;
+    let x = artboard.left || 0, y = artboard.top || 0, w = artW, h = artH;
+    if (range === 'selection') {
+        const obj = canvas.getActiveObject();
+        if (obj) { const b = obj.getBoundingRect(true, true); x = b.left; y = b.top; w = b.width; h = b.height; }
+        else toast('沒有選取物件，改列印整個畫布');
+    }
+    const active = canvas.getActiveObject();
+    canvas.discardActiveObject();
+    const prevShadow = artboard.shadow;
+    artboard.shadow = null;   // 陰影是編輯畫面用的，列印不要
+    // 隱藏中的輔助線/物件（visible=false）暫時排除，避免被 toSVG 帶進列印
+    const hidden = canvas.getObjects().filter(o => o.visible === false && !o.excludeFromExport);
+    hidden.forEach(o => o.excludeFromExport = true);
+    let svg;
+    try {
+        svg = canvas.toSVG({
+            viewBox: { x: x, y: y, width: w, height: h },
+            width: w, height: h, suppressPreamble: true
+        });
+    } catch (err) {
+        hidden.forEach(o => o.excludeFromExport = false);
+        artboard.shadow = prevShadow;
+        if (active) canvas.setActiveObject(active);
+        canvas.requestRenderAll();
+        toast('此圖含無法向量化的圖形，改用快速列印');
+        doPrint();
+        return;
+    }
+    hidden.forEach(o => o.excludeFromExport = false);
+    artboard.shadow = prevShadow;
+    if (active) canvas.setActiveObject(active);
+    canvas.requestRenderAll();
+    // 去掉 <?xml?>/<!DOCTYPE> 前綴，只留 <svg> 內嵌進列印文件（內嵌才會被當向量列印）
+    const i = svg.indexOf('<svg');
+    if (i > 0) svg = svg.slice(i);
+    const win = window.open('', '_blank');
+    if (!win) { toast('列印視窗被瀏覽器攔截，請允許彈出視窗'); return; }
+    // body onload 會等 SVG 內嵌照片載入完再列印；不放 <script> 以免污染外層頁面解析
+    win.document.write('<!DOCTYPE html><html><head><title>列印 - 批圖</title>' +
+        '<style>html,body{margin:0;padding:0;}svg{display:block;width:100%;height:auto;}' +
+        '@media print{@page{margin:0;}svg{width:100%;height:auto;}}</style>' +
+        '</head><body onload="setTimeout(function(){window.focus();window.print();},250)">' +
+        svg + '</body></html>');
+    win.document.close();
     hideModal('export-modal');
 }
 
