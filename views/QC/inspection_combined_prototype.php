@@ -12,6 +12,10 @@
 // =============================================================================
 include_once '../../src/common/_config.php';
 include_once '../../src/common/DBConnection.php';
+include_once '../../src/common/rbac.php'; // #1 fail-closed：共用 RBAC bootstrap 判定
+
+// 權限不足專用例外：讓 catch 統一回 HTTP 403（前端可據此禁用/提示）
+if (!class_exists('QcPermException')) { class QcPermException extends Exception {} }
 
 // -----------------------------------------------------------------------------
 // 後端 API（僅在 AJAX POST 時執行，GET 載入完全不進入此區塊）
@@ -32,18 +36,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     function ensureSchema($pdo) { /* no-op：見 migrations/2026-07-21_inspection_schema.php */ }
 
     // ---- 沿用既有角色/權限框架(roles/role_features/user_roles)讀取使用者功能 ----
-    // 與 Sales/quotation_list_NEW.php 同邏輯：已指派角色→取其 features；完全未指派→給全權避免鎖死
+    // #1 fail-closed：委派 src/common/rbac.php 的共用判定(bootstrap)——
+    //   已被指派角色者：嚴格以其角色功能聯集為準（即使無任何功能＝無權限）；
+    //   完全未指派角色者：僅在系統「尚無管理員」時暫時全權(供初始設定)，一旦有管理員即無權限。
+    //   → 修掉原本「無角色一律回 ['all']」的安全漏洞（含存檔/改設定全權）。
     function loadUserFeatures($pdo, $user_id) {
-        try {
-            $chk = $pdo->prepare("SELECT 1 FROM user_roles WHERE user_id=? LIMIT 1");
-            $chk->execute([$user_id]);
-            if ((bool)$chk->fetchColumn()) {
-                $st = $pdo->prepare("SELECT DISTINCT rf.feature_code FROM user_roles ur JOIN role_features rf ON rf.role_id=ur.role_id WHERE ur.user_id=?");
-                $st->execute([$user_id]);
-                return $st->fetchAll(PDO::FETCH_COLUMN) ?: [];
-            }
-        } catch (Exception $e) { /* 表可能不存在 */ }
-        return ['all']; // 完全未指派角色 → 全權，避免鎖死
+        return rbac_user_features($pdo, (int)$user_id);
     }
     function hasFeature($features, $code) {
         return in_array('all', $features, true) || in_array($code, $features, true);
@@ -61,13 +59,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     function requireViewPerm($pdo, $user_id) {
         if (!canViewInspection(loadUserFeatures($pdo, $user_id))) {
-            throw new Exception('您沒有檢閱檢驗表的權限，請洽管理員於 設定 → 權限設定（角色 → QC 功能）開通「唯讀檢閱」');
+            throw new QcPermException('您沒有檢閱檢驗表的權限，請洽管理員於 設定 → 權限設定（角色 → QC 功能）開通「唯讀檢閱」');
         }
     }
     // 管理檢驗設定（量具/幾何公差/通用樣板）權限
     function requireSettingPerm($pdo, $user_id) {
         if (!hasFeature(loadUserFeatures($pdo, $user_id), 'qc_manage_settings')) {
-            throw new Exception('您沒有「管理檢驗設定」權限，請洽管理員於 設定 → 權限設定（角色 → QC 功能）開通');
+            throw new QcPermException('您沒有「管理檢驗設定」權限，請洽管理員於 設定 → 權限設定（角色 → QC 功能）開通');
         }
     }
     // 抽樣規則獨立權限：主管(qc_edit_history)固定可修改，亦可用 qc_manage_sampling 單獨授權
@@ -76,7 +74,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     function requireSamplingPerm($pdo, $user_id) {
         if (!canManageSampling(loadUserFeatures($pdo, $user_id))) {
-            throw new Exception('抽樣規則僅主管可修改，請洽管理員於 設定 → 權限設定（角色 → QC 功能）開通「抽樣規則設定」');
+            throw new QcPermException('抽樣規則僅主管可修改，請洽管理員於 設定 → 權限設定（角色 → QC 功能）開通「抽樣規則設定」');
         }
     }
 
@@ -266,8 +264,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // =====================================================================
         if ($_POST['action'] === 'save_inspection') {
             ensureSchema($pdo);
-            if (!hasFeature(loadUserFeatures($pdo, $user_id), 'qc_fill_inspection')) {
-                throw new Exception('您沒有「填寫檢驗表單」權限，請洽管理員於 權限設定（角色 → QC 功能）開通');
+            $featsS = loadUserFeatures($pdo, $user_id);
+            if (!hasFeature($featsS, 'qc_fill_inspection')) {
+                throw new QcPermException('您沒有「填寫檢驗表單」權限，請洽管理員於 權限設定（角色 → QC 功能）開通');
             }
 
             $fid          = (int)($_POST['bom_ing_fid'] ?? 0);
@@ -279,6 +278,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sample_qty   = (int)($_POST['sample_qty'] ?? 0);
             $main_remark  = trim($_POST['main_remark'] ?? '');
             $update_std   = ($_POST['update_std'] ?? '0') === '1';
+            // 改寫料號標準(update_std)屬設定層級 → 需「管理檢驗設定」權限
+            if ($update_std && !hasFeature($featsS, 'qc_manage_settings')) {
+                throw new QcPermException('修改檢驗標準需「管理檢驗設定」權限；如僅要記錄本次實測，請取消「同步更新標準」後再存檔');
+            }
             $items        = json_decode($_POST['items'] ?? '[]', true);
             if (!is_array($items)) $items = [];
             $pcs = json_decode($_POST['pcs_verdicts'] ?? '[]', true);
@@ -489,7 +492,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // =====================================================================
         if ($_POST['action'] === 'unlock_record') {
             ensureSchema($pdo);
-            if (!isSupervisor($pdo, $user_id)) throw new Exception('需主管權限才能開放修改');
+            if (!isSupervisor($pdo, $user_id)) throw new QcPermException('需主管權限才能開放修改');
             $qid = (int)($_POST['qc_form_id'] ?? 0);
             $reason = trim($_POST['reason'] ?? '');
             if (!$qid) throw new Exception('缺少 qc_form_id');
@@ -526,7 +529,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ensureSchema($pdo);
             $featsU = loadUserFeatures($pdo, $user_id);
             if (!hasFeature($featsU, 'qc_fill_inspection') && !hasFeature($featsU, 'qc_edit_history')) {
-                throw new Exception('您沒有「填寫檢驗表單」權限，請洽管理員於 權限設定（角色 → QC 功能）開通');
+                throw new QcPermException('您沒有「填寫檢驗表單」權限，請洽管理員於 權限設定（角色 → QC 功能）開通');
             }
             $qid    = (int)($_POST['qc_form_id'] ?? 0);
             $reason = trim($_POST['reason'] ?? '');
@@ -625,7 +628,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ensureSchema($pdo);
             $featsN = loadUserFeatures($pdo, $user_id);
             if (!hasFeature($featsN, 'qc_fill_inspection') && !hasFeature($featsN, 'qc_edit_history')) {
-                throw new Exception('您沒有記錄異常單決定的權限（需「填寫檢驗表單」或主管權限）');
+                throw new QcPermException('您沒有記錄異常單決定的權限（需「填寫檢驗表單」或主管權限）');
             }
             $qid    = (int)($_POST['qc_form_id'] ?? 0);
             $dec    = ($_POST['decision'] ?? '') === 'OPEN' ? 'OPEN' : 'SKIP';
@@ -840,6 +843,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // 人員↔角色：於 views/user/user_permissions.php 設定。
 
         throw new Exception('未知的 action: ' . $_POST['action']);
+    } catch (QcPermException $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        http_response_code(403); // #1：權限不足統一回 403，前端據此禁用/提示
+        echo json_encode(['success' => false, 'message' => $e->getMessage(), 'code' => 403], JSON_UNESCAPED_UNICODE);
+        exit;
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
