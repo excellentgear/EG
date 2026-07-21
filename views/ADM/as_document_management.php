@@ -276,9 +276,11 @@ if ($deptPerm === 'R') {
                 </select>
               </div>
               <div class="form-group col-md-3"><label>修訂日期 *</label><input type="date" class="form-control" name="revised_date" id="doc_revised_date" max="9999-12-31" required></div>
-              <div class="form-group col-md-3"><label>制修訂頁次</label><input type="text" class="form-control" name="revised_pages" id="doc_revised_pages" placeholder="如 全冊 / 1-2"></div>
+              <div class="form-group col-md-3"><label>制修訂頁次</label><input type="text" class="form-control" name="revised_pages" id="doc_revised_pages" placeholder="如 全冊 / 1-2">
+                <div class="phrase-bar" data-field="pages" data-t="#doc_revised_pages" style="margin-top:3px;"></div></div>
             </div>
-            <div class="form-group"><label>制修訂摘要</label><textarea class="form-control" name="revised_summary" id="doc_revised_summary" rows="2"></textarea></div>
+            <div class="form-group"><label>制修訂摘要</label><textarea class="form-control" name="revised_summary" id="doc_revised_summary" rows="2"></textarea>
+              <div class="phrase-bar" data-field="summary" data-t="#doc_revised_summary" style="margin-top:3px;"></div></div>
             <div class="row" id="firstVersionFiles">
               <div class="form-group col-md-6"><label>文件檔 *</label><input type="file" name="file" id="doc_file"></div>
               <div class="form-group col-md-6"><label>文件制修申請單（附件一，首版可選）</label><input type="file" name="apply_form" id="doc_apply_form"></div>
@@ -464,9 +466,11 @@ if ($deptPerm === 'R') {
               </select>
             </div>
             <div class="form-group col-md-3"><label>修訂日期 *</label><input type="date" class="form-control" name="revised_date" id="ver_revised_date" max="9999-12-31" required></div>
-            <div class="form-group col-md-3"><label>制修訂頁次</label><input type="text" class="form-control" name="revised_pages" id="ver_revised_pages"></div>
+            <div class="form-group col-md-3"><label>制修訂頁次</label><input type="text" class="form-control" name="revised_pages" id="ver_revised_pages">
+              <div class="phrase-bar" data-field="pages" data-t="#ver_revised_pages" style="margin-top:3px;"></div></div>
           </div>
-          <div class="form-group"><label>制修訂摘要</label><textarea class="form-control" name="revised_summary" id="ver_revised_summary" rows="2"></textarea></div>
+          <div class="form-group"><label>制修訂摘要</label><textarea class="form-control" name="revised_summary" id="ver_revised_summary" rows="2"></textarea>
+            <div class="phrase-bar" data-field="summary" data-t="#ver_revised_summary" style="margin-top:3px;"></div></div>
           <div class="row">
             <div class="form-group col-md-6"><label>新版文件檔 *</label><input type="file" name="file" id="ver_file" required></div>
             <div class="form-group col-md-6"><label>文件制修申請單（附件一）* <span class="req-note">改版必附</span></label><input type="file" name="apply_form" id="ver_apply_form" required></div>
@@ -707,6 +711,7 @@ $(function(){
       if(ownerVal) $('#set_owner').val(ownerVal);
       if(deputyVal) $('#set_deputy').val(deputyVal);
       renderTagFilter();
+      renderPhraseBars();
       if(cb) cb();
     });
   }
@@ -871,6 +876,7 @@ $(function(){
   }
   $('#doc_type').on('change', function(){
     syncLevelFromType($('#doc_type'), $('#doc_level'));
+    syncParentByType($('#doc_type'), $('#doc_parent_id'), $('#doc_department_id'));
     // 表單首建可無版本號（改版才給號）；其他類別維持必填
     if($('#doc_id').val()==='') $('#doc_version').prop('required', $(this).val()!=='表單');
     // 新增模式且編號空白時，類別選定（＝階級確定）就自動帶編號
@@ -899,6 +905,47 @@ $(function(){
   }
   $('#btnAutoNo').on('click', ()=>suggestDocNo(true));
   $('#doc_code_sel').on('change', function(){ $('#doc_no').val($(this).find('option:selected').data('no')||''); });
+
+  // ══ 制修訂頁次/摘要 常用文字（存 DB） ══
+  function renderPhraseBars(){
+    $('.phrase-bar').each(function(){
+      const f=$(this).data('field'), t=$(this).data('t');
+      const list=(META.phrases||[]).filter(p=>p.field===f);
+      let html = list.map(p=>
+        `<span class="label label-default phrase-chip" data-t="${t}" data-text="${esc(p.phrase)}" title="點選帶入欄位" style="cursor:pointer;margin:0 4px 2px 0;display:inline-block;font-weight:normal;font-size:11px;line-height:16px;">${esc(p.phrase.length>24?p.phrase.substring(0,24)+'…':p.phrase)}${canU?` <a href="javascript:void(0)" class="phrase-del" data-id="${p.id}" title="刪除此常用文字" style="color:#fff;opacity:.7;">×</a>`:''}</span>`
+      ).join('');
+      if(canU) html += `<a href="javascript:void(0)" class="phrase-add" data-field="${f}" data-t="${t}" style="font-size:11px;white-space:nowrap;" title="把目前欄位的內容存成常用文字"><i class="fa fa-plus-circle"></i> 存常用</a>`;
+      $(this).html(html);
+    });
+  }
+  $(document).on('click','.phrase-chip', function(e){
+    if($(e.target).hasClass('phrase-del')) return;
+    $($(this).data('t')).val($(this).data('text')).trigger('change');
+  });
+  $(document).on('click','.phrase-del', function(e){
+    e.stopPropagation();
+    if(!confirm('刪除此常用文字？')) return;
+    $.post(API+'?action=phrase_delete',{id:$(this).data('id')}, r=>{
+      if(r.status==='success'){ loadMeta(renderPhraseBars); } else alert(r.message);
+    },'json');
+  });
+  $(document).on('click','.phrase-add', function(){
+    const v=$($(this).data('t')).val().trim();
+    if(!v){ alert('欄位目前是空的，先輸入內容再按「存常用」'); return; }
+    $.post(API+'?action=phrase_add',{field:$(this).data('field'), phrase:v}, r=>{
+      if(r.status==='success'){ showToast('已存為常用文字'); loadMeta(renderPhraseBars); } else alert(r.message);
+    },'json');
+  });
+
+  // 類別=手冊/程序書 → 頂層文件，母文件清空並鎖定
+  function syncParentByType($type, $parent, $dept){
+    if(['手冊','程序'].includes($type.val())){
+      $parent.val('').prop('disabled', true).attr('title','手冊/程序書為頂層文件，無母文件');
+    } else {
+      $parent.prop('disabled', false).attr('title','');
+    }
+    syncDeptFromParent($parent, $dept); // 母文件被清掉時同步解鎖部門
+  }
 
   // 選母文件 → 自動帶入母文件的所屬部門並鎖定（未選母文件時開放）
   function syncDeptFromParent($parent, $dept){
@@ -952,7 +999,7 @@ $(function(){
     fillParentSelect(0, '');
     $('#doc_code_sel').hide().empty();
     syncLevelFromType($('#doc_type'), $('#doc_level'));
-    syncDeptFromParent($('#doc_parent_id'), $('#doc_department_id'));
+    syncParentByType($('#doc_type'), $('#doc_parent_id'), $('#doc_department_id'));
     $('#docModal').modal('show');
   });
 
@@ -980,7 +1027,7 @@ $(function(){
       $('#doc_revised_summary').val(cv.revised_summary||'');
       renderDocTagPicker((d.tags||[]).map(t=>t.id));
       fillParentSelect(d.id, d.parent_doc_id||'');
-      syncDeptFromParent($('#doc_parent_id'), $('#doc_department_id'));
+      syncParentByType($('#doc_type'), $('#doc_parent_id'), $('#doc_department_id'));
       $('#doc_code_sel').hide().empty();
       $('#docModal').modal('show');
     });
@@ -994,6 +1041,7 @@ $(function(){
     // 被鎖定(disabled)的欄位不會進 FormData，手動補值
     fd.set('doc_level', $('#doc_level').val()||'');
     fd.set('department_id', $('#doc_department_id').val()||'');
+    fd.set('parent_doc_id', $('#doc_parent_id').val()||'');
     NProgress.start();
     $.ajax({url:url, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
      .done(r=>{ if(r.status==='success'){ $('#docModal').modal('hide'); loadMeta(loadDocs); } else alert(r.message||'失敗'); })
@@ -1177,11 +1225,12 @@ $(function(){
     $('#batch_dept').html('<option value="">跨部門</option>'+META.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
     $('#batch_files').val(''); $('#batchRows').empty(); $('#batchResult').empty(); $('#batchCodeWrap').hide();
     syncLevelFromType($('#batch_type'), $('#batch_level'));
-    syncDeptFromParent($('#batch_parent'), $('#batch_dept'));
+    syncParentByType($('#batch_type'), $('#batch_parent'), $('#batch_dept'));
     $('#batchModal').modal('show');
   });
   $('#batch_type').on('change', function(){
     syncLevelFromType($('#batch_type'), $('#batch_level'));
+    syncParentByType($('#batch_type'), $('#batch_parent'), $('#batch_dept'));
     $('#batchCodeWrap').hide();
     if($('#batch_files')[0].files.length) batchSuggest(); // 階級變了，編號建議重算
   });

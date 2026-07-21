@@ -247,6 +247,7 @@ $asGate = [
     'save_dept_codes'=>'settings',
     'form_records_list'=>'view', 'form_records_upload'=>'create', 'form_record_delete'=>'delete',
     'set_linked_module'=>'settings',
+    'phrase_add'=>'update', 'phrase_delete'=>'update',
     // form_record_download 於 case 內依 inline 分流（預覽=view / 原檔=download）
 ];
 if (!$currentUserId) {
@@ -305,7 +306,9 @@ case 'meta':
                            ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
     // 有文件的部門（供列表篩選下拉，只列出有資料者）
     $deptsWithDocs = $db->query("SELECT DISTINCT department_id FROM as_document WHERE is_deleted=0 AND department_id IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
-    jout(['status'=>'success','departments'=>$depts,'dept_codes'=>$deptCodes,'depts_with_docs'=>array_map('intval',$deptsWithDocs),'positions'=>$poss,'tags'=>$tags,'users'=>$users,'parents'=>$parents]);
+    // 制修訂頁次/摘要 常用文字
+    $phrases = $db->query("SELECT id, field, phrase FROM as_doc_phrase ORDER BY field, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['status'=>'success','departments'=>$depts,'dept_codes'=>$deptCodes,'depts_with_docs'=>array_map('intval',$deptsWithDocs),'positions'=>$poss,'tags'=>$tags,'users'=>$users,'parents'=>$parents,'phrases'=>$phrases]);
 
 // ══════════════ 文件清單（搜尋 / 篩選） ══════════════
 case 'list_documents':
@@ -1012,6 +1015,28 @@ case 'form_record_download':
     }
     asStream($dir.DIRECTORY_SEPARATOR.$rec['file_name'], $rec['original_name'] ?: $rec['file_name'], $inline);
     break;
+
+// ══════════════ 制修訂頁次/摘要 常用文字（存 DB，重啟不消失） ══════════════
+case 'phrase_add':
+    $field  = trim($_POST['field'] ?? '');
+    $phrase = trim($_POST['phrase'] ?? '');
+    if (!in_array($field, ['pages','summary'], true)) jout(['status'=>'error','message'=>'欄位類型錯誤']);
+    if ($phrase==='') jout(['status'=>'error','message'=>'內容不可為空']);
+    if (mb_strlen($phrase) > 500) jout(['status'=>'error','message'=>'內容過長（上限500字）']);
+    try {
+        $db->prepare("INSERT INTO as_doc_phrase (field, phrase, created_by) VALUES (?,?,?)")
+           ->execute([$field, $phrase, $currentCname]);
+        jout(['status'=>'success','id'=>(int)$db->lastInsertId()]);
+    } catch (Exception $e) {
+        if ($e->getCode()==23000) jout(['status'=>'error','message'=>'此常用文字已存在']);
+        jout(['status'=>'error','message'=>$e->getMessage()]);
+    }
+
+case 'phrase_delete':
+    $pid = (int)($_POST['id'] ?? 0);
+    if ($pid<=0) jout(['status'=>'error','message'=>'無效 ID']);
+    $db->prepare("DELETE FROM as_doc_phrase WHERE id=?")->execute([$pid]);
+    jout(['status'=>'success']);
 
 case 'set_linked_module':
     $docId  = (int)($_POST['doc_id'] ?? 0);
