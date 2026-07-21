@@ -1361,6 +1361,10 @@ $(function(){
     },'json');
   });
 
+  // 版本號英文一律大寫（後端也會轉，這裡讓使用者送出前即見一致結果）
+  $(document).on('blur','#doc_version,#ver_version,.vb-ver,.b-ver,.fcf-ver', function(){
+    const u=$(this).val().toUpperCase(); if($(this).val()!==u) $(this).val(u);
+  });
   // 版本號 0.0＝首次制訂 → 文件狀況自動帶「制訂」
   $(document).on('blur change','.vb-ver', function(){
     if($(this).val().trim()==='0.0') $(this).closest('tr').find('.vb-st').val('制訂');

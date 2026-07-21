@@ -79,6 +79,9 @@ function asCan(string $what): bool {
 // ── 共用工具 ───────────────────────────────────────────────────────
 function jout($arr){ echo json_encode($arr, JSON_UNESCAPED_UNICODE); exit; }
 
+/** 版本號正規化：去空白＋英文一律轉大寫（a→A、a-1→A-1；數字與中文不受影響）。所有寫入版本號的入口統一套用。 */
+function asNormVer($v): string { return mb_strtoupper(trim((string)$v), 'UTF-8'); }
+
 function asGetSetting(PDO $db, string $key): string {
     try {
         $s = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ?");
@@ -415,7 +418,7 @@ case 'create_document':
     $level   = trim($_POST['doc_level'] ?? '');
     $dept    = ($_POST['department_id'] ?? '')!=='' ? (int)$_POST['department_id'] : null;
     $parent  = ($_POST['parent_doc_id'] ?? '')!=='' ? (int)$_POST['parent_doc_id'] : null;
-    $version = trim($_POST['version'] ?? '');
+    $version = asNormVer($_POST['version'] ?? '');
     $rdate   = trim($_POST['revised_date'] ?? '') ?: null;
     $rpages  = trim($_POST['revised_pages'] ?? '') ?: null;
     $rsum    = trim($_POST['revised_summary'] ?? '') ?: null;
@@ -493,7 +496,7 @@ case 'create_document':
 // ══════════════ 改版（新版本，舊版保留） ══════════════
 case 'add_version':
     $docId  = (int)($_POST['doc_id'] ?? 0);
-    $version= trim($_POST['version'] ?? '');
+    $version= asNormVer($_POST['version'] ?? '');
     $rdate  = trim($_POST['revised_date'] ?? '') ?: null;
     $rpages = trim($_POST['revised_pages'] ?? '') ?: null;
     $rsum   = trim($_POST['revised_summary'] ?? '') ?: null;
@@ -585,7 +588,7 @@ case 'update_document_meta':
     if ($pErr = asValidateParent($db, $parent)) jout(['status'=>'error','message'=>$pErr]);
 
     // 目前版本資訊修正（誤植修正用，不產生新版本）
-    $version = trim($_POST['version'] ?? '');
+    $version = asNormVer($_POST['version'] ?? '');
     $cstat   = trim($_POST['change_status'] ?? '');
     $rdate   = trim($_POST['revised_date'] ?? '') ?: null;
     if ($version !== '' && !$rdate) jout(['status'=>'error','message'=>'請填寫修訂日期']);
@@ -872,7 +875,7 @@ case 'create_documents_batch':
         try {
             $doc_no  = trim($r['doc_no'] ?? '');
             $doc_name= trim($r['doc_name'] ?? '');
-            $version = trim($r['version'] ?? '');
+            $version = asNormVer($r['version'] ?? '');
             if ($doc_no==='' || $doc_name==='') throw new Exception('編號/名稱必填');
             if ($version==='' && trim($r['doc_type'] ?? '')!=='表單') throw new Exception('版本號必填（僅表單首建可不填）');
             if (trim($r['revised_date'] ?? '') === '') throw new Exception('請填寫修訂日期');
@@ -1110,7 +1113,7 @@ case 'add_versions_batch':
         $lastVerId = null; $lastVer = null;
         foreach ($rows as $i => $r) {
             $rowNo = $i + 1;
-            $version = trim($r['version'] ?? '');
+            $version = asNormVer($r['version'] ?? '');
             $rdate   = trim($r['revised_date'] ?? '') ?: null;
             if ($version==='') throw new Exception("第{$rowNo}列：版本號必填");
             if (!$rdate) throw new Exception("第{$rowNo}列：修訂日期必填");
@@ -1187,7 +1190,7 @@ case 'create_document_full':
         $prevVersion = ''; $lastVerId = null; $lastVer = null;
         foreach ($versions as $i => $r) {
             $rowNo = $i + 1;
-            $version = trim($r['version'] ?? '');
+            $version = asNormVer($r['version'] ?? '');
             $rdate   = trim($r['revised_date'] ?? '') ?: null;
             if ($version==='') throw new Exception("版本第{$rowNo}列：版本號必填");
             if (!$rdate) throw new Exception("版本第{$rowNo}列：修訂日期必填");
@@ -1228,7 +1231,7 @@ case 'create_document_full':
             $rowNo = $i + 1;
             $fNo   = trim($f['doc_no'] ?? '');
             $fName = trim($f['doc_name'] ?? '');
-            $fVer  = trim($f['version'] ?? '');
+            $fVer  = asNormVer($f['version'] ?? '');
             $fDate = trim($f['revised_date'] ?? '') ?: null;
             if ($fNo==='' || $fName==='') throw new Exception("表單第{$rowNo}列：編號/名稱必填");
             if (!$fDate) throw new Exception("表單第{$rowNo}列：修訂日期必填");
