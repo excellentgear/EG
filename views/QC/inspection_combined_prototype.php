@@ -24,40 +24,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     $user_id = trim($_SESSION['id'] ?? $_SESSION['user_id'] ?? 'QC');
 
-    // ---- 確保新制表的欄位與輔助資料表存在（編輯鎖定/稽核/主管設定）----
-    function ensureSchema($pdo) {
-        $add = function($table, $col, $ddl) use ($pdo) {
-            $c = $pdo->query("SHOW COLUMNS FROM `$table` LIKE '$col'");
-            if ($c->rowCount() == 0) $pdo->exec("ALTER TABLE `$table` ADD COLUMN $ddl");
-        };
-        try {
-            $add('qc_check_form', 'batch_no', "batch_no INT DEFAULT 1 COMMENT '到貨批次序'");
-            $add('qc_check_form', 'round_no', "round_no INT DEFAULT 1 COMMENT '複驗次數(退回重做)'");
-            // 編輯鎖定：預設鎖定，主管逐筆開放
-            $add('qc_check_form', 'edit_unlocked', "edit_unlocked TINYINT(1) DEFAULT 0 COMMENT '主管是否已開放此筆修改(1=可改)'");
-            $add('qc_check_form', 'unlocked_by', "unlocked_by CHAR(11) NULL COMMENT '開放修改的主管'");
-            $add('qc_check_form', 'unlocked_at', "unlocked_at DATETIME NULL COMMENT '開放修改時間'");
-            $add('qc_check_form', 'last_edited_by', "last_edited_by CHAR(11) NULL COMMENT '最後修改人'");
-            $add('qc_check_form', 'last_edited_at', "last_edited_at DATETIME NULL COMMENT '最後修改時間'");
-            $add('qc_measurement', 'item_verdict', "item_verdict VARCHAR(10) NULL COMMENT '項目判定 OK/NG/AOD'");
-            // NG 後是否開立品質異常單的決定與關聯
-            $add('qc_check_form', 'pcs_verdicts', "pcs_verdicts TEXT NULL COMMENT '各PCS判定結果JSON [{v:OK/NG, m:是否手動0/1}]'");
-            $add('qc_check_form', 'ncr_decision', "ncr_decision VARCHAR(10) NULL COMMENT 'NG後決定：OPEN=已開異常單/SKIP=不開單'");
-            $add('qc_check_form', 'ncr_skip_reason', "ncr_skip_reason VARCHAR(255) NULL COMMENT '不開異常單的原因'");
-            $add('qc_check_form', 'abnormal_order_id', "abnormal_order_id INT NULL COMMENT '對應 qa_abnormal_order.id'");
-        } catch (Exception $e) { /* 忽略 */ }
-        // 稽核紀錄表
-        $pdo->exec("CREATE TABLE IF NOT EXISTS qc_inspection_edit_log (
-            log_id INT AUTO_INCREMENT PRIMARY KEY,
-            qc_form_id INT NOT NULL COMMENT '對應 qc_check_form.qc_form_id',
-            action ENUM('UNLOCK','EDIT','RELOCK') NOT NULL COMMENT '行為',
-            reason VARCHAR(255) NULL COMMENT '原因/說明',
-            changes_json LONGTEXT NULL COMMENT '改前→改後快照(JSON)',
-            changed_by CHAR(11) NOT NULL,
-            changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            INDEX(qc_form_id)
-        ) COMMENT='QC 檢驗歷程修改稽核'");
-    }
+    // ---- schema 已移出熱路徑（#2）----
+    // 所有欄位/輔助表改由一次性 migration 建置：
+    //   views/QC/migrations/2026-07-21_inspection_schema.php
+    // 正式請求路徑不再跑 SHOW COLUMNS / ALTER / CREATE，效能佳且免 web 帳號 ALTER 權限。
+    // 保留同名空函式，讓既有呼叫點無痛（no-op）。新增欄位請改 migration，勿加回熱路徑。
+    function ensureSchema($pdo) { /* no-op：見 migrations/2026-07-21_inspection_schema.php */ }
 
     // ---- 沿用既有角色/權限框架(roles/role_features/user_roles)讀取使用者功能 ----
     // 與 Sales/quotation_list_NEW.php 同邏輯：已指派角色→取其 features；完全未指派→給全權避免鎖死
