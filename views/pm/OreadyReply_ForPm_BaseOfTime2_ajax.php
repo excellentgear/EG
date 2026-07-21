@@ -3148,7 +3148,19 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_gantt_filters') {
             WHERE EXISTS (SELECT 1 FROM bom_ing bi WHERE bi.process_no = pn.ProcessNo AND bi.outsource_date IS NOT NULL AND bi.maker_id_no IS NOT NULL)
             ORDER BY pn.process_type_id ASC, pn.ProcessName ASC
         ")->fetchAll(PDO::FETCH_ASSOC);
-        echo json_encode(['success'=>true, 'makers'=>$makers, 'processes'=>$procs]);
+        // 製程大類（process_type）：只列出底下有外包紀錄者
+        $types = $db->query("
+            SELECT pt.process_type_id, pt.process_type
+            FROM process_type pt
+            WHERE pt.process_type IS NOT NULL
+              AND EXISTS (
+                    SELECT 1 FROM process_no pn2
+                    JOIN bom_ing bi ON bi.process_no = pn2.ProcessNo
+                    WHERE pn2.process_type_id = pt.process_type_id
+                      AND bi.outsource_date IS NOT NULL AND bi.maker_id_no IS NOT NULL)
+            ORDER BY pt.process_type_id ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+        echo json_encode(['success'=>true, 'makers'=>$makers, 'processes'=>$procs, 'types'=>$types]);
     } catch (PDOException $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
     exit;
 }
@@ -3196,6 +3208,13 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
             foreach ($proc_nos as $i => $p) { $k = ":pr$i"; $ph[] = $k; $params[$k] = (int)$p; }
             $where_extra .= " AND bi.process_no IN (" . implode(',', $ph) . ")";
         }
+        // 製程大類（process_type）篩選
+        $type_ids = array_values(array_filter(array_map('trim', explode(',', $_POST['process_type_ids'] ?? '')), 'strlen'));
+        if ($type_ids) {
+            $ph = [];
+            foreach ($type_ids as $i => $t) { $k = ":pt$i"; $ph[] = $k; $params[$k] = (int)$t; }
+            $where_extra .= " AND pn.process_type_id IN (" . implode(',', $ph) . ")";
+        }
 
         $sql = "
             SELECT * FROM (
@@ -3214,6 +3233,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                         bi.maker_id_no, COALESCE(ml.maker_id, bi.maker_id, bi.maker_id_no) AS maker_name,
                         COALESCE(ml.internal,0) AS internal,
                         bi.sqty, bi.processing_state, b.priority_type,
+                        b.Client_Name, b.d_id,
                         bi.outsource_date, bi.return_date, bi.QC_check_date, b.closed_at,
                         (SELECT MIN(bi2.outsource_date) FROM bom_ing bi2
                            WHERE bi2.bom = bi.bom AND bi2.bom_sn > bi.bom_sn
@@ -3261,6 +3281,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 'internal'   => (int)$r['internal'],
                 'sqty'       => (int)$r['sqty'],
                 'state'      => $r['processing_state'],
+                'client'     => $r['Client_Name'] ?? '',
+                'd_id'       => $r['d_id'] ?? '',
                 'out_date'   => $out_d,
                 'ret_date'   => $eff_d,          // null = 在廠中，前端延到今天
                 'ret_src'    => $src,
