@@ -3315,13 +3315,15 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
             }
             $span_start = min($min_out, $start);
             $span_end   = max($max_end, $end);
+            $pred_floor = min($span_start, date('Y-m-d', strtotime($today . ' -800 days')));
+            $cum_floor  = date('Y-m-d', strtotime($pred_floor . ' -180 days'));
 
             $hol = []; $mk = []; $holname = [];
             $est = $db->prepare("
                 SELECT DATE(e.start) AS s, DATE(e.end) AS e, e.title, ec.day_type
                 FROM evenement e JOIN event_category ec ON e.category_id = ec.id
                 WHERE ec.day_type IN ('s','m') AND DATE(e.start) <= ? AND DATE(e.end) >= ?");
-            $est->execute([$span_end, $span_start]);
+            $est->execute([$span_end, $cum_floor]);
             foreach ($est->fetchAll(PDO::FETCH_ASSOC) as $ev) {
                 $cur = strtotime($ev['s']); $endts = strtotime($ev['e']);
                 while ($cur <= $endts) {
@@ -3335,7 +3337,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 $isWeekend = ($w === 0 || $w === 6);
                 return isset($mk[$ds]) || (!$isWeekend && !isset($hol[$ds]));
             };
-            $cum = []; $run = 0; $cur = strtotime($span_start); $endts = strtotime($span_end);
+            $cum = []; $run = 0; $cur = strtotime($cum_floor); $endts = strtotime($span_end);
             while ($cur <= $endts) {
                 $ds = date('Y-m-d', $cur);
                 if ($isWork($ds, (int)date('w', $cur))) $run++;
@@ -3356,6 +3358,49 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 if (isset($holname[$ds])) $holidays_win[$ds] = $holname[$ds];
                 $cur += 86400;
             }
+
+            // ── 預測回廠加工日 (P80)：依「廠商 + 製程大類」歷史回廠週轉(以工作日計)，邏輯同 get_outsource_predict 但改用加工日 ──
+            $pairs = [];
+            foreach ($rows as $rr) { if ($rr['maker_no'] && $rr['ptype_id']) $pairs[$rr['maker_no'] . '|' . $rr['ptype_id']] = 1; }
+            $predict = [];
+            if ($pairs) {
+                $makerSet = []; $typeSet = [];
+                foreach (array_keys($pairs) as $key) { list($mkn, $tpn) = explode('|', $key); $makerSet[$mkn] = 1; $typeSet[(int)$tpn] = 1; }
+                $mk_ph = implode(',', array_fill(0, count($makerSet), '?'));
+                $tp_ph = implode(',', array_fill(0, count($typeSet), '?'));
+                $hst = $db->prepare("
+                    SELECT bi.maker_id_no AS mk, pn.process_type_id AS tp,
+                           DATE(bi.outsource_date) AS o, DATE(bi.return_date) AS r
+                    FROM bom_ing bi JOIN process_no pn ON bi.process_no = pn.ProcessNo
+                    WHERE bi.return_date IS NOT NULL AND bi.outsource_date IS NOT NULL
+                      AND DATEDIFF(bi.return_date, bi.outsource_date) BETWEEN 1 AND 179
+                      AND bi.maker_id_no IN ($mk_ph) AND pn.process_type_id IN ($tp_ph)
+                      AND DATE(bi.return_date) >= ?
+                    ORDER BY bi.return_date DESC");
+                $hst->execute(array_merge(array_keys($makerSet), array_map('intval', array_keys($typeSet)), [$pred_floor]));
+                $byPair = [];
+                foreach ($hst->fetchAll(PDO::FETCH_ASSOC) as $h) {
+                    $key = $h['mk'] . '|' . $h['tp'];
+                    if (!isset($pairs[$key])) continue;
+                    if (isset($byPair[$key]) && count($byPair[$key]) >= 50) continue;
+                    $ca = $cum[$h['o']] ?? null; $cb = $cum[$h['r']] ?? null;
+                    if ($ca === null || $cb === null) continue;
+                    $wd = $cb - $ca;
+                    if ($wd > 0) { if (!isset($byPair[$key])) $byPair[$key] = []; $byPair[$key][] = $wd; }
+                }
+                foreach ($byPair as $key => $list) {
+                    $n = count($list); if (!$n) continue;
+                    sort($list);
+                    $p80 = ($n >= 3) ? $list[(int)ceil($n * 0.8) - 1] : $list[$n - 1];
+                    $predict[$key] = ['p80' => $p80, 'n' => $n];
+                }
+            }
+            foreach ($rows as &$rr) {
+                $key = $rr['maker_no'] . '|' . $rr['ptype_id'];
+                $rr['predict_days'] = isset($predict[$key]) ? (int)$predict[$key]['p80'] : null;
+                $rr['predict_n']    = isset($predict[$key]) ? (int)$predict[$key]['n'] : 0;
+            }
+            unset($rr);
         }
 
         echo json_encode([
