@@ -925,6 +925,10 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
         .add-reading:hover { text-decoration:underline; }
         tr.reading-sub > td { background:#f3f9f7; border-top:1px dashed #cfe6df; }
         tr.reading-sub .f-tool2 { border-color:#9ccebf; }
+        /* #5 逐項備註圖示 */
+        .item-note { cursor:pointer; color:#aaa; }
+        .item-note:hover { color:#26b99a; }
+        .item-note.has-note { color:#f0ad4e; } /* 已有備註 */
         .ng-value { background:#f2dede !important; color:#a94442; font-weight:bold; }
         .ok-value { color:#3c763d; }
         .remove-row { color:#d9534f; cursor:pointer; }
@@ -2163,7 +2167,8 @@ $(function(){
     function itemRow(it, idx){
         var isNum = it.type!=='OKNG';
         var stdVal = (it.std!==undefined && it.std!==null && it.std!=='') ? it.std : (isNum ? '' : 'OK');
-        return '<tr data-type="'+(it.type||'NUM')+'" data-itemid="'+(it.item_id||'')+'">'+
+        var rmk=it.remark||'';
+        return '<tr data-type="'+(it.type||'NUM')+'" data-itemid="'+(it.item_id||'')+'" data-remark="'+esc(rmk)+'">'+
             '<td class="text-center">'+codeLabel(idx)+'</td>'+
             '<td><input class="table-input f-name" value="'+esc(it.name||'')+'"></td>'+
             '<td><input class="table-input f-std" value="'+esc(stdVal)+'"></td>'+
@@ -2175,7 +2180,9 @@ $(function(){
                 '<option value="NUM" '+(isNum?'selected':'')+'>數值</option>'+
                 '<option value="OKNG" '+(isNum?'':'selected')+'>OK/NG</option></select></td>'+
             '<td class="sample-cell">'+sampleInputs(it.type, it.samples)+'</td>'+
-            '<td class="text-center"><i class="fa fa-trash remove-row"></i></td></tr>';
+            '<td class="text-center" style="white-space:nowrap">'+
+                '<i class="fa fa-comment-o item-note'+(rmk?' has-note':'')+'" title="逐項備註（點擊填寫，如「毛邊已修」）"></i> '+
+                '<i class="fa fa-trash remove-row"></i></td></tr>';
     }
     // #10：加量測子列（同尺寸的第二/三筆讀值，量具實例可不同、每 PCS 可留空＝未量測）
     function readingSubRow(parentIt, ex){
@@ -2317,6 +2324,16 @@ $(function(){
         $after.after($sub);
     });
     $('#items-body').on('click','.remove-sub', function(){ $(this).closest('tr').remove(); updateAutoVerdicts(); });
+    // #5 逐列（單項）備註：點筆記圖示填寫，預設收合不佔空間
+    $('#items-body').on('click','.item-note', function(){
+        var $tr=$(this).closest('tr');
+        var cur=$tr.attr('data-remark')||'';
+        var v=prompt('本項目備註（處置/狀況，如「毛邊已修」）：', cur);
+        if(v===null) return;
+        v=String(v).slice(0,255);
+        $tr.attr('data-remark', v);
+        $(this).toggleClass('has-note', v.trim()!=='');
+    });
 
     // ============ 鍵盤導航：上下左右移動游標、Enter 跳下一格 ============
     // 每列的可導航控制項（欄位對齊：名稱/標準/上/下/量具/型態/各抽/判定）
@@ -2423,7 +2440,8 @@ $(function(){
                 item_id:$tr.attr('data-itemid')||'', name:name, std:$tr.find('.f-std').val(),
                 up:$tr.find('.f-up').val(), lo:$tr.find('.f-lo').val(),
                 tool_id:$tr.find('.f-tool').val()||'', tool:'',
-                type:type, verdict:(anyNG?'NG':'OK'), samples:samples, extra:extra
+                type:type, verdict:(anyNG?'NG':'OK'), samples:samples, extra:extra,
+                remark:$tr.attr('data-remark')||''
             });
         });
         return out;
