@@ -3230,10 +3230,11 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 FROM (
                     SELECT
                         bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.process_no, pn.ProcessName,
+                        pn.process_type_id, pt.process_type,
                         bi.maker_id_no, COALESCE(ml.maker_id, bi.maker_id, bi.maker_id_no) AS maker_name,
                         COALESCE(ml.internal,0) AS internal,
                         bi.sqty, bi.processing_state, b.priority_type,
-                        b.Client_Name, b.d_id,
+                        b.Client_Name, b.d_id, b.Delivery_date,
                         bi.outsource_date, bi.return_date, bi.QC_check_date,
                         -- 結案日：優先 closed_at；若 BOM 已結案(processing_state='1')但無 closed_at，
                         -- 依序退回 bom.Modified_At→bom_ing.Modified_At→回廠→QC→移轉日(必為非空)，確保已結案者不會被當成在廠中延到今天
@@ -3248,6 +3249,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                     FROM bom_ing bi
                     JOIN bom b ON bi.bom = b.bom
                     LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
+                    LEFT JOIN process_type pt ON pn.process_type_id = pt.process_type_id
                     LEFT JOIN maker_list ml ON bi.maker_id_no = ml.maker_id_no
                     WHERE bi.outsource_date IS NOT NULL
                       AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no <> ''
@@ -3282,6 +3284,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 'bom'        => $r['bom'],
                 'process_no' => (int)$r['process_no'],
                 'proc_name'  => $r['ProcessName'] ?? ('製程' . $r['process_no']),
+                'ptype_id'   => $r['process_type_id'] ? (int)$r['process_type_id'] : 0,
+                'ptype_name' => $r['process_type'] ?? '未分類',
                 'maker_no'   => $r['maker_id_no'],
                 'maker_name' => $r['maker_name'] ?? '(未設廠商)',
                 'internal'   => (int)$r['internal'],
@@ -3289,6 +3293,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 'state'      => $r['processing_state'],
                 'client'     => $r['Client_Name'] ?? '',
                 'd_id'       => $r['d_id'] ?? '',
+                'delivery'   => $r['Delivery_date'] ? substr($r['Delivery_date'], 0, 10) : null,
                 'out_date'   => $out_d,
                 'ret_date'   => $eff_d,          // null = 在廠中，前端延到今天
                 'ret_src'    => $src,
@@ -3296,7 +3301,29 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 'is_stale'   => $is_stale,
                 'prio'       => $prio_code,
                 'prio_label' => $prio_label,
+                'work_days'  => 0,   // 下方以 calendar_workday 回填「加工日」
             ];
+        }
+
+        // ── 加工日：以 calendar_workday(is_workday) 計算 (移轉日, 有效回廠日/今天] 之間的工作日數 ──
+        if ($rows) {
+            $min_out = $today; $max_end = $today;
+            foreach ($rows as $rr) {
+                if ($rr['out_date'] < $min_out) $min_out = $rr['out_date'];
+                $e = $rr['ret_date'] ?? $today;
+                if ($e > $max_end) $max_end = $e;
+            }
+            $cst = $db->prepare("SELECT `date`, is_workday FROM calendar_workday WHERE `date` BETWEEN ? AND ? ORDER BY `date`");
+            $cst->execute([$min_out, $max_end]);
+            $cum = []; $run = 0;
+            foreach ($cst->fetchAll(PDO::FETCH_ASSOC) as $cr) { $run += (int)$cr['is_workday']; $cum[$cr['date']] = $run; }
+            foreach ($rows as &$rr) {
+                $endd = $rr['ret_date'] ?? $today;
+                $ca = $cum[$rr['out_date']] ?? 0;
+                $cb = $cum[$endd] ?? $ca;
+                $rr['work_days'] = max(0, $cb - $ca);
+            }
+            unset($rr);
         }
 
         echo json_encode([
