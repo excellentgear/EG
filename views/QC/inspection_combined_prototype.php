@@ -341,6 +341,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $v = $s->fetchColumn();
                 return $v ? (int)$v : null;
             };
+            // #10：由量具「實例」(Tool_id) 反查其類型(QC_Tool_List_id)，供 update_std 存標準量具類型
+            $catByToolId = function($toolId) use ($pdo) {
+                if (!$toolId) return null;
+                $s = $pdo->prepare("SELECT QC_Tool_List_id FROM qc_tool WHERE Tool_id=? LIMIT 1");
+                $s->execute([(int)$toolId]);
+                $v = $s->fetchColumn();
+                return $v ? (int)$v : null;
+            };
 
             foreach ($items as $idx => $it) {
                 $name = trim($it['name'] ?? '');
@@ -364,7 +372,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     ]);
                     $iid = (int)$pdo->lastInsertId();
                     if ($update_std) {
-                        $tid = $toolIdByName($it['tool'] ?? '');
+                        // 優先由選定的量具實例反查類型；無則回退舊的類型名稱對應
+                        $tid = $catByToolId($it['tool_id'] ?? null);
+                        if (!$tid) $tid = $toolIdByName($it['tool'] ?? '');
                         if ($tid) { try { $insTool->execute([$iid, $tid]); } catch (Exception $e) {} }
                     }
                 }
@@ -910,6 +920,11 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
         .pcs-verdict { cursor:pointer; user-select:none; font-weight:bold; display:inline-block; min-width:44px; }
         .pcs-verdict.manual { outline:2px dashed #f0ad4e; }
         #items-table tfoot td { position:sticky; bottom:0; background:#f5f5f5; z-index:2; }
+        /* #10 加量測：同尺寸多量具/多次量測 */
+        .add-reading { display:inline-block; margin-top:3px; font-size:12px; color:#26b99a; cursor:pointer; }
+        .add-reading:hover { text-decoration:underline; }
+        tr.reading-sub > td { background:#f3f9f7; border-top:1px dashed #cfe6df; }
+        tr.reading-sub .f-tool2 { border-color:#9ccebf; }
         .ng-value { background:#f2dede !important; color:#a94442; font-weight:bold; }
         .ok-value { color:#3c763d; }
         .remove-row { color:#d9534f; cursor:pointer; }
@@ -1751,6 +1766,44 @@ $(function(){
         }
     });
     var TOOLS = ['卡尺','分厘卡','投影機','三次元','針規','目視'];
+    // #10：量具實例(Tool_No)清單，供「量具下拉」與「＋加量測」使用。measure_method 由類型自動帶。
+    var TOOL_INSTANCES = []; // [{id:'7', no:'CMM-01', cat:'三次元'}]
+    function loadToolInstances(){
+        $.post(API, { action:'get_tool_manage_data' }, function(res){
+            if(!res || !res.success) return;
+            var cats={}; (res.categories||[]).forEach(function(c){ cats[c.QC_Tool_List_id]=c.QC_Tool; });
+            TOOL_INSTANCES = (res.tools||[]).map(function(t){ return { id:String(t.Tool_id), no:t.Tool_No, cat:cats[t.QC_Tool_List_id]||'' }; });
+            refreshToolSelects();
+        }, 'json');
+    }
+    // 量具實例下拉（值=Tool_id；顯示「類型 / Tool_No」）
+    function toolInstOptions(selId){
+        var h='<option value="">—</option>';
+        TOOL_INSTANCES.forEach(function(t){
+            h+='<option value="'+t.id+'" '+(String(selId)===t.id?'selected':'')+'>'+esc((t.cat?t.cat+' / ':'')+t.no)+'</option>';
+        });
+        return h;
+    }
+    // 依「類型名稱」找該類型的第一支實例(供舊資料/標準以類型名帶入時預選)
+    function firstInstOfCat(catName){
+        if(!catName) return '';
+        for(var i=0;i<TOOL_INSTANCES.length;i++){ if(TOOL_INSTANCES[i].cat===catName) return TOOL_INSTANCES[i].id; }
+        return '';
+    }
+    function resolvePrimaryToolId(it){
+        if(it && it.tool_id!=null && it.tool_id!=='') return String(it.tool_id);
+        if(it && it.tool) return firstInstOfCat(it.tool);
+        return '';
+    }
+    // 實例載入後，重繪所有量具下拉並回填原本要選的量具(先看 data-tid 實例，其次 data-tcat 類型首支)
+    function refreshToolSelects(){
+        $('#items-body').find('select.f-tool, select.f-tool2').each(function(){
+            var $s=$(this);
+            var want=$s.attr('data-tid') || ($s.val()||'');
+            if(!want){ var cat=$s.attr('data-tcat'); if(cat) want=firstInstOfCat(cat); }
+            $s.html(toolInstOptions(want)).val(want);
+        });
+    }
     var MOCK_TPL = [
         { name:'一般車件 5 項', items:[
             {name:'外徑 ⌀', std:'12.00', up:'0.02', lo:'-0.02', tool:'分厘卡', type:'NUM'},
@@ -1792,6 +1845,7 @@ $(function(){
             $('#step-search').hide();
         }
     }, 'json');
+    loadToolInstances(); // #10：載入量具實例供量具下拉/加量測
 
     var fid = getFid();
     if (fid) {
@@ -2115,18 +2169,38 @@ $(function(){
             '<td><input class="table-input f-std" value="'+esc(stdVal)+'"></td>'+
             '<td><input class="table-input f-up" value="'+esc(it.up||'')+'" '+(isNum?'':'readonly')+'></td>'+
             '<td><input class="table-input f-lo" value="'+esc(it.lo||'')+'" '+(isNum?'':'readonly')+'></td>'+
-            '<td><select class="table-input f-tool">'+toolOptions(it.tool)+'</select></td>'+
+            '<td><select class="table-input f-tool" data-tid="'+esc(it.tool_id||'')+'" data-tcat="'+esc(it.tool||'')+'">'+toolInstOptions(resolvePrimaryToolId(it))+'</select>'+
+                '<a href="#" class="add-reading small" title="同尺寸再用其他量具/方法量一次（如三次元＋投影機）"><i class="fa fa-plus"></i> 加量測</a></td>'+
             '<td><select class="table-input sel-type">'+
                 '<option value="NUM" '+(isNum?'selected':'')+'>數值</option>'+
                 '<option value="OKNG" '+(isNum?'':'selected')+'>OK/NG</option></select></td>'+
             '<td class="sample-cell">'+sampleInputs(it.type, it.samples)+'</td>'+
             '<td class="text-center"><i class="fa fa-trash remove-row"></i></td></tr>';
     }
-    function renderItems(items){ $('#items-body').html((items||[]).map(itemRow).join('')); reindex(); renderSampleNums(); renderVerdictRow(); }
+    // #10：加量測子列（同尺寸的第二/三筆讀值，量具實例可不同、每 PCS 可留空＝未量測）
+    function readingSubRow(parentIt, ex){
+        var type=(parentIt.type==='OKNG')?'OKNG':'NUM';
+        ex=ex||{};
+        return '<tr class="reading-sub" data-type="'+type+'">'+
+            '<td></td>'+
+            '<td colspan="4" class="text-right"><span class="text-muted" style="font-size:12px">↳ 加量測（其他量具/方法）</span></td>'+
+            '<td><select class="table-input f-tool2" data-tid="'+esc(ex.tool_id||'')+'" data-tcat="'+esc(ex.method||'')+'">'+toolInstOptions(ex.tool_id)+'</select></td>'+
+            '<td></td>'+
+            '<td class="sample-cell">'+sampleInputs(type, ex.samples)+'</td>'+
+            '<td class="text-center"><i class="fa fa-trash remove-sub" title="移除此加量測列"></i></td></tr>';
+    }
+    function renderItems(items){
+        var html=(items||[]).map(function(it,idx){
+            var h=itemRow(it,idx);
+            (it.extra||[]).forEach(function(ex){ h+=readingSubRow(it, ex); });
+            return h;
+        }).join('');
+        $('#items-body').html(html); reindex(); renderSampleNums(); renderVerdictRow();
+    }
     // 編號重排時，檢驗項目自動帶入最左側編號；
     // 只有「空白或仍等於先前自動帶入編號」的欄位才連動，使用者自訂的名稱不覆蓋
     function reindex(){
-        $('#items-body tr').each(function(i){
+        $('#items-body tr:not(.reading-sub)').each(function(i){
             var label = codeLabel(i);
             $(this).find('td:first').text(label);
             var $name = $(this).find('.f-name');
@@ -2199,7 +2273,11 @@ $(function(){
     }
 
     $('#btn-add-row').on('click', function(){ $('#items-body').append(itemRow({type:'NUM'}, $('#items-body tr').length)); reindex(); $('#no-std-hint').hide(); });
-    $('#items-body').on('click','.remove-row', function(){ $(this).closest('tr').remove(); reindex(); updateAutoVerdicts(); });
+    $('#items-body').on('click','.remove-row', function(){
+        var $tr=$(this).closest('tr');
+        $tr.nextUntil('tr:not(.reading-sub)').remove(); // 連同其加量測子列一起移除
+        $tr.remove(); reindex(); updateAutoVerdicts();
+    });
     $('#items-body').on('change','.sel-type', function(){
         var $tr=$(this).closest('tr'), type=$(this).val(); $tr.attr('data-type',type);
         var isNum=type==='NUM';
@@ -2208,6 +2286,8 @@ $(function(){
         var $std=$tr.find('.f-std');
         if(!isNum){ $std.val('OK'); } else if($std.val()==='OK'){ $std.val(''); }
         $tr.find('.sample-cell').html(sampleInputs(type));
+        // 該項目底下的加量測子列同步改型態並清空
+        $tr.nextUntil('tr:not(.reading-sub)').each(function(){ $(this).attr('data-type',type).find('.sample-cell').html(sampleInputs(type)); });
         updateAutoVerdicts();
     });
     $('#items-body').on('click','.okng-btn', function(){
@@ -2217,19 +2297,32 @@ $(function(){
     });
     $('#items-body').on('input','.num-cell', function(){
         var $tr=$(this).closest('tr');
-        var base=parseFloat($tr.find('.f-std').val());
-        var up=parseFloat($tr.find('.f-up').val()), lo=parseFloat($tr.find('.f-lo').val());
+        // 加量測子列沿用其上方主項目的公差判定
+        var $ref=$tr.hasClass('reading-sub') ? $tr.prevAll('tr:not(.reading-sub)').first() : $tr;
+        var base=parseFloat($ref.find('.f-std').val());
+        var up=parseFloat($ref.find('.f-up').val()), lo=parseFloat($ref.find('.f-lo').val());
         var v=parseFloat($(this).val());
         if(isNaN(v)||isNaN(base)){ $(this).removeClass('ng-value ok-value'); }
         else { var hi=base+(isNaN(up)?0:up), low=base+(isNaN(lo)?0:lo); var ng=(v>hi||v<low); $(this).toggleClass('ng-value',ng).toggleClass('ok-value',!ng); }
         updateAutoVerdicts();
     });
+    // #10：＋加量測 → 於該項目下方插入一筆加量測子列；移除子列
+    $('#items-body').on('click','.add-reading', function(e){
+        e.preventDefault();
+        var $tr=$(this).closest('tr');
+        var it={ type:$tr.attr('data-type') };
+        var $sub=$(readingSubRow(it, {}));
+        // 插到該主列與其現有子列之後
+        var $after=$tr; while($after.next('.reading-sub').length){ $after=$after.next('.reading-sub'); }
+        $after.after($sub);
+    });
+    $('#items-body').on('click','.remove-sub', function(){ $(this).closest('tr').remove(); updateAutoVerdicts(); });
 
     // ============ 鍵盤導航：上下左右移動游標、Enter 跳下一格 ============
     // 每列的可導航控制項（欄位對齊：名稱/標準/上/下/量具/型態/各抽/判定）
     function navGrid(){
         var rows=[];
-        $('#items-body tr').each(function(){
+        $('#items-body tr:not(.reading-sub)').each(function(){
             var $tr=$(this), c=[];
             ['.f-name','.f-std','.f-up','.f-lo','.f-tool','.sel-type'].forEach(function(s){ var el=$tr.find(s)[0]; if(el) c.push(el); });
             $tr.find('.sample-cell').find('.num-cell, .okng-btn').each(function(){ c.push(this); });
@@ -2302,21 +2395,35 @@ $(function(){
         renderSampleNums(); renderVerdictRow();
     });
 
-    // ============ 收集表格資料 ============
+    // ============ 收集表格資料（含 #10 加量測子列）============
+    function readRowSamples($row, type){
+        var s=[];
+        if(type==='OKNG'){ $row.find('.okng-btn').each(function(){ var ng=$(this).hasClass('ng-value'); s.push({v:(ng?'NG':'OK'), r:(ng?'NG':'OK')}); }); }
+        else { $row.find('.num-cell').each(function(){ var v=$(this).val(); if(v!=='') s.push({v:v, r:($(this).hasClass('ng-value')?'NG':'OK')}); }); }
+        return s;
+    }
     function collectItems(){
         var out=[];
-        $('#items-body tr').each(function(){
+        $('#items-body tr:not(.reading-sub)').each(function(){
             var $tr=$(this);
             var name=$tr.find('.f-name').val().trim();
             if(!name) return;
             var type=$tr.attr('data-type')==='OKNG'?'OKNG':'NUM';
-            var samples=[];
-            if(type==='OKNG'){ $tr.find('.okng-btn').each(function(){ samples.push({v:($(this).hasClass('ng-value')?'NG':'OK'), r:($(this).hasClass('ng-value')?'NG':'OK')}); }); }
-            else { $tr.find('.num-cell').each(function(){ var v=$(this).val(); if(v!=='') samples.push({v:v, r:($(this).hasClass('ng-value')?'NG':'OK')}); }); }
+            var samples=readRowSamples($tr, type);
+            // 加量測子列 → extra[]
+            var extra=[], anyNG=$tr.find('.sample-cell .ng-value').length>0;
+            $tr.nextUntil('tr:not(.reading-sub)').each(function(){
+                var $sub=$(this);
+                var es=readRowSamples($sub, type);
+                var etid=$sub.find('.f-tool2').val()||'';
+                if($sub.find('.sample-cell .ng-value').length) anyNG=true;
+                if(es.length || etid) extra.push({ tool_id:etid, samples:es });
+            });
             out.push({
                 item_id:$tr.attr('data-itemid')||'', name:name, std:$tr.find('.f-std').val(),
-                up:$tr.find('.f-up').val(), lo:$tr.find('.f-lo').val(), tool:$tr.find('.f-tool').val(),
-                type:type, verdict:($tr.find('.sample-cell .ng-value').length>0?'NG':'OK'), samples:samples
+                up:$tr.find('.f-up').val(), lo:$tr.find('.f-lo').val(),
+                tool_id:$tr.find('.f-tool').val()||'', tool:'',
+                type:type, verdict:(anyNG?'NG':'OK'), samples:samples, extra:extra
             });
         });
         return out;
