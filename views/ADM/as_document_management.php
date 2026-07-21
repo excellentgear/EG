@@ -140,8 +140,7 @@ if ($deptPerm === 'R') {
             <div class="x_content">
 
               <!-- 工具列 -->
-              <div class="row" style="margin-bottom:10px;">
-                <div class="col-md-8">
+              <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:10px;">
                   <?php if ($asCaps['create']): ?>
                   <button class="btn btn-primary btn-sm" id="btnAddDoc"><i class="fa fa-plus"></i> 新增文件</button>
                   <button class="btn btn-info btn-sm" id="btnBatchAdd"><i class="fa fa-files-o"></i> 批次上傳</button>
@@ -155,13 +154,10 @@ if ($deptPerm === 'R') {
                   <button class="btn btn-default btn-sm" id="btnTree" title="一眼檢視全部文件的階層結構"><i class="fa fa-sitemap"></i> 結構總覽</button>
                   <?php if ($asCaps['settings']): ?>
                   <button class="btn btn-default btn-sm" id="btnTags"><i class="fa fa-tags"></i> 標籤 / 分類管理</button>
-                  <button class="btn btn-warning btn-sm" id="btnSettings"><i class="fa fa-cog"></i> 系統設定（負責人 / 路徑）</button>
+                  <button class="btn btn-warning btn-sm" id="btnSettings"><i class="fa fa-cog"></i> 系統設定</button>
                   <button class="btn btn-danger btn-sm" id="btnRoles"><i class="fa fa-users"></i> 角色設定</button>
                   <?php endif; ?>
-                </div>
-                <div class="col-md-4 text-right">
-                  <label style="font-weight:normal;"><input type="checkbox" id="incDeleted"> 顯示已刪除</label>
-                </div>
+                  <label style="font-weight:normal;margin:0 0 0 auto;white-space:nowrap;"><input type="checkbox" id="incDeleted"> 顯示已刪除</label>
               </div>
 
               <!-- 搜尋 / 篩選 -->
@@ -812,7 +808,7 @@ $(function(){
   });
   let META = {departments:[],positions:[],tags:[],users:[]};
   let DOCS = [], FILTERED = [], activeTagId = 0, curPage = 1, activeParentId = 0, activeParentNo = '';
-  let editOrigNo = '', editChildCount = 0; // 編輯時的原編號與子文件數（換編號連動用）
+  let editOrigNo = '', editOrigDept = '', editChildCount = 0; // 編輯時的原編號/原部門/子文件數（換編號連動用）
 
   function esc(t){ if(t===null||t===undefined) return ''; return String(t).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
 
@@ -1256,7 +1252,7 @@ $(function(){
     const icon = TYPE_ICON[d.doc_type] || '📄';
     const caret = hasKids ? `<a href="javascript:void(0)" class="tree-toggle" style="display:inline-block;width:14px;color:#888;text-decoration:none;">▾</a>` : `<span style="display:inline-block;width:14px;"></span>`;
     const rc  = parseInt(d.record_count)||0;
-    const recBadge = rc>0 ? `<span class="label label-warning" style="font-size:10px;">${d.doc_type==='表單'?'紀錄':'附件'}×${rc}</span>` : '';
+    const recBadge = rc>0 ? `<a href="javascript:void(0)" class="tree-recbadge label label-warning" data-id="${d.id}" data-type="${esc(d.doc_type)}" title="點擊展開附件清單（可預覽/下載）" style="font-size:10px;cursor:pointer;">${d.doc_type==='表單'?'紀錄':'附件'}×${rc} <i class="fa fa-caret-down"></i></a>` : '';
     const del = d.is_deleted==1 ? '<span class="label label-default" style="font-size:10px;">刪</span>' : '';
     // 表格式欄位：名稱欄吃縮排，版本/紀錄/部門固定寬度＝虛擬框線對齊
     return `<div class="tree-row" style="display:flex;align-items:center;border-bottom:1px dashed #eee;padding:1px 0;">
@@ -1338,6 +1334,32 @@ $(function(){
     $('#searchKw').val($(this).data('no'));
     loadDocs();
   });
+  // 樹狀圖點附件徽章 → 就地展開/收合該文件的附件清單（含預覽/下載，權限沿用後端驗證）
+  $('#treeBody').on('click','.tree-recbadge', function(){
+    const $badge=$(this), id=$badge.data('id');
+    const $row=$badge.closest('.tree-row');
+    const $existing=$row.next('.tree-reclist');
+    if($existing.length){ $existing.remove(); return; } // 再點一次＝收合
+    const $panel=$(`<div class="tree-reclist" style="margin-left:40px;padding:4px 8px;background:#fffbe6;border-left:2px solid #f0ad4e;font-size:12px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>`);
+    $row.after($panel);
+    $.getJSON(API+'?action=form_records_list', {doc_id:id, page:1, page_size:50}, r=>{
+      if(r.status!=='success'){ $panel.html('讀取失敗'); return; }
+      let html='';
+      (r.records||[]).forEach(x=>{
+        let op = `<a class="btn btn-xs btn-default" href="${API}?action=form_record_download&id=${x.id}&inline=1" target="_blank">預覽</a> `;
+        if(canDL) op += `<a class="btn btn-xs btn-info" href="${API}?action=form_record_download&id=${x.id}">下載</a>`;
+        html += `<div style="padding:2px 0;border-bottom:1px dashed #eee;">
+          <i class="fa fa-paperclip text-warning"></i> <strong>${esc(x.title)}</strong>
+          <span class="text-muted">${esc(x.record_date)||''}</span>
+          ${x.note?'<span class="text-muted" style="margin-left:4px;">'+esc(x.note)+'</span>':''}
+          <span class="pull-right">${op}</span></div>`;
+      });
+      if(r.electronic && (r.electronic.rows||[]).length){
+        html += `<div style="margin-top:4px;color:#888;"><i class="fa fa-bolt"></i> 另有電子化紀錄 ${r.electronic.total} 筆 <a href="${r.electronic.page_url}" target="_blank">前往模組頁</a></div>`;
+      }
+      $panel.html(html || '<span class="text-muted">無紙本附件</span>');
+    });
+  });
 
   // ══ 批次加標籤 ══
   $('#chkAllDocs').on('change', function(){ $('.doc-chk').prop('checked', this.checked); });
@@ -1398,6 +1420,7 @@ $(function(){
       $('#docForm')[0].reset();
       $('#docModalTitle').text('編輯文件');
       editOrigNo = d.doc_no || '';                 // 原編號（判斷是否換編號）
+      editOrigDept = d.department_id || '';         // 原部門（判斷是否換部門）
       editChildCount = (d.children||[]).length;    // 底下子文件數（換編號時提示連動）
       $('#doc_id').val(d.id); $('#doc_no').val(d.doc_no); $('#doc_name').val(d.doc_name);
       setDeptOptions($('#doc_department_id'), null); // 復原完整部門清單
@@ -1435,9 +1458,15 @@ $(function(){
     // 編輯時換了編號且底下有子文件 → 詢問是否同步更新子文件編號（如換負責部門）
     if(isEdit){
       const newNo = ($('#doc_no').val()||'').trim();
+      const newDept = ($('#doc_department_id').val()||'');
+      const deptChanged = String(newDept)!==String(editOrigDept);
       if(newNo!==editOrigNo && editChildCount>0){
-        const yes = confirm(`此文件底下有 ${editChildCount} 份子文件（表單等）。\n編號由「${editOrigNo}」改為「${newNo}」，要一併把子文件編號的前綴「${editOrigNo}-」換成「${newNo}-」嗎？\n\n[確定]＝連動更新　[取消]＝只改本文件（子文件編號維持不變）`);
-        if(yes) fd.set('cascade_children','1');
+        const deptNote = deptChanged ? '（部門也已變更，子文件所屬部門會一併改為新部門）' : '';
+        const yes = confirm(`此文件底下有 ${editChildCount} 份子文件（表單等）。\n編號由「${editOrigNo}」改為「${newNo}」，要一併把子文件編號的前綴「${editOrigNo}-」換成「${newNo}-」嗎？${deptNote}\n\n[確定]＝連動更新　[取消]＝只改本文件`);
+        if(yes){
+          fd.set('cascade_children','1');
+          if(deptChanged) fd.set('cascade_dept','1'); // 部門也變→子文件部門一併連動
+        }
       }
     }
     NProgress.start();
