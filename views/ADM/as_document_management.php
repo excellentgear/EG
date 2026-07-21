@@ -736,12 +736,19 @@ $(function(){
   $(document).on('click','#clearParentFilter',function(e){ e.preventDefault(); activeParentId=0; activeParentNo=''; loadDocs(); });
   $('#docTableBody').on('click','.rel-children',function(e){
     e.preventDefault();
+    // 展開母文件底下的表單＝檢視全部子表單：先清掉其他篩選（階級/部門/關鍵字/標籤），
+    // 否則例如「二階」篩選會把四階子表單全部擋掉，變成點進去卻無資料
+    $('#searchKw').val(''); $('#filterLevel').val(''); $('#filterDept').val('');
+    activeTagId = 0; renderTagFilter();
     activeParentId = parseInt($(this).data('id'))||0;
     activeParentNo = $(this).data('no')||'';
     loadDocs();
   });
   $('#docTableBody').on('click','.rel-parent',function(e){
     e.preventDefault();
+    // 跳去看母文件：同樣清掉會擋住母文件的篩選
+    $('#filterLevel').val(''); $('#filterDept').val('');
+    activeTagId = 0; renderTagFilter();
     activeParentId = 0; activeParentNo = '';
     $('#searchKw').val($(this).data('kw'));
     loadDocs();
