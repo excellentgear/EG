@@ -17,6 +17,13 @@ include '../common/DBConnection.php';
 $db  = new DBConnection();
 $pdo = $db->getPDO();
 
+// 報價查閱權限（沿用報價單 quotation_view；判定失敗採寬鬆，避免鎖死既有功能）
+require_once __DIR__ . '/../common/rbac.php';
+function _quotCanView(PDO $pdo): bool {
+    try { return rbac_has(rbac_user_features($pdo, (int)($_SESSION['id'] ?? 0)), 'quotation_view'); }
+    catch (Exception $_e) { return true; }
+}
+
 // ════════════════════════════════════════════════════
 // 工具函式
 // ════════════════════════════════════════════════════
@@ -332,6 +339,7 @@ switch ($action) {
 
     // ── 下載 / 預覽檔案 ─────────────────────────────────────
     case 'download':
+        if (!_quotCanView($pdo)) { http_response_code(403); echo '無報價查閱權限'; exit; }
         $quoteNo  = safeQuoteNo($_GET['quote_no'] ?? '');
         $filename = basename($_GET['filename'] ?? '');
         $base     = getUploadBase($pdo);

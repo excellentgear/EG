@@ -17,6 +17,13 @@ require_once __DIR__ . '/../common/imgedit_visibility.php';
 $db  = new DBConnection();
 $pdo = $db->getPDO();
 
+// 報價查閱權限（沿用報價單 quotation_view；判定失敗採寬鬆，避免鎖死既有功能）
+require_once __DIR__ . '/../common/rbac.php';
+function _paQuotCanView(PDO $pdo): bool {
+    try { return rbac_has(rbac_user_features($pdo, (int)($_SESSION['id'] ?? 0)), 'quotation_view'); }
+    catch (Exception $_e) { return true; }
+}
+
 $uploadedById   = intval($_SESSION['id'] ?? 0);
 $uploadedByName = $_SESSION['userName'] ?? '';
 
@@ -170,7 +177,8 @@ switch ($action) {
             $dsStmt = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
             $dsStmt->execute([$dId]);
             $dSettingId = $dsStmt->fetchColumn();
-            if ($dSettingId) {
+            // 報價附件需 quotation_view 權限才併入清單（無權限則此料號不回傳報價檔）
+            if ($dSettingId && _paQuotCanView($pdo)) {
                 $qStmt = $pdo->prepare("
                     SELECT a.id,'quote' AS source,a.filename,a.original_name,a.category_ids,
                            NULL AS tag_var_values,a.file_size,NULL AS note,
@@ -371,6 +379,7 @@ switch ($action) {
 
     // ── 取得報價單摘要（for 料號附件瀏覽器的報價模式）────────────────
     case 'get_quote_summaries':
+        if (!_paQuotCanView($pdo)) { echo json_encode(['success'=>true,'data'=>[]]); exit; }
         $quoteNos = json_decode($_POST['quote_nos'] ?? '[]', true);
         $dId = intval($_POST['d_id'] ?? 0);
         if (!is_array($quoteNos)) $quoteNos = [];
