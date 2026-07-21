@@ -30,7 +30,7 @@
     makers: [], procs: [], types: [],
     selMakers: new Set(), selProcs: new Set(), selTypes: new Set(),
     prioOn: { n: true, u: true, e: true },   // 燈號篩選（點圖例切換），預設全選
-    rows: [], meta: { start: '', end: '', today: '' },
+    rows: [], meta: { start: '', end: '', today: '' }, nonwork: new Set(), holidays: {},
     groupBy: 'maker', hideStale: false, showLoad: true, showDash: true, _capped: false,
     dashSort: 'peak', dashDesc: true, overloadPeak: 8
   };
@@ -88,7 +88,9 @@
       '.cg-dash th,.cg-dash td{padding:3px 10px;border-bottom:1px solid #f0e6d6;text-align:right;white-space:nowrap;}',
       '.cg-dash th{position:sticky;top:0;background:#faf1e4;color:#5a4632;cursor:pointer;user-select:none;}',
       '.cg-dash th.l,.cg-dash td.l{text-align:left;}',
+      '.cg-dash tbody tr{cursor:pointer;}',
       '.cg-dash tbody tr:hover{background:#fbf4ea;}',
+      '.cg-row.cg-flash>.cg-labelcol{background:#fff2cc;} .cg-row.cg-flash{background:#fff7e6;transition:background .3s;}',
       '.cg-dash tr.over{background:#fdece7;}',
       '.cg-dash tr.over td.l{font-weight:700;color:#c0392b;}',
       '#cg-body{flex:1 1 auto;overflow:auto;position:relative;}',
@@ -355,6 +357,8 @@
       if (!res || !res.success) { body.innerHTML = '<div style="padding:30px;color:#c00;">查詢失敗：' + esc(res && res.message) + '</div>'; return; }
       state.rows = res.rows || [];
       state.meta = { start: res.start, end: res.end, today: res.today };
+      state.nonwork = new Set(res.nonwork || []);   // 非工作日(依 calendar.php：休假/週末，扣除補班)
+      state.holidays = res.holidays || {};          // date -> 休假名稱
       state._capped = res.capped;
       render();
     }, 'json').fail(function () { body.innerHTML = '<div style="padding:30px;color:#c00;">連線失敗</div>'; });
@@ -410,7 +414,7 @@
       var wSum = 0, wN = 0;
       segs.forEach(function (x) { if (x.r.ret_src !== 'ongoing') { wSum += (x.r.work_days || 0); wN++; } });
       var avgWork = wN ? Math.round(wSum / wN * 10) / 10 : null;
-      return { label: g.label, sub: g.sub, segs: segs, laneCount: Math.max(1, lanes.length), cnt: cnt, qty: qty, avgWork: avgWork, retN: wN };
+      return { key: k, label: g.label, sub: g.sub, segs: segs, laneCount: Math.max(1, lanes.length), cnt: cnt, qty: qty, avgWork: avgWork, retN: wN };
     });
 
     return { start: start, end: end, today: today, totalDays: totalDays, todayIdx: todayIdx, pxDay: pxDay, trackW: trackW, groups: groups, nBar: rows.length, flatRows: rows };
@@ -440,7 +444,7 @@
         if (r.ret_src === 'ongoing' && r.delivery && r.delivery < today) overdue++;
         if (r.is_stale) stale++;
       });
-      return { name: v.name, internal: v.internal, pieces: v.rows.length, qty: qty,
+      return { mk: k, name: v.name, internal: v.internal, pieces: v.rows.length, qty: qty,
         peak: peakConcurrent(segs, totalDays), avg: (wN ? Math.round(wSum / wN * 10) / 10 : null), overdue: overdue, stale: stale };
     });
     var key = state.dashSort, desc = state.dashDesc;
@@ -458,7 +462,7 @@
       '</tr></thead><tbody>';
     stats.forEach(function (s) {
       var over = s.peak >= state.overloadPeak;
-      h += '<tr class="' + (over ? 'over' : '') + '"><td class="l">' + esc(s.name) + (String(s.internal) === '1' ? ' <span style="color:#a08a6f">(廠內)</span>' : '') + '</td>' +
+      h += '<tr class="' + (over ? 'over' : '') + '" data-mk="' + esc(s.mk) + '" title="點此跳到甘特圖此廠商列"><td class="l">' + esc(s.name) + (String(s.internal) === '1' ? ' <span style="color:#a08a6f">(廠內)</span>' : '') + '</td>' +
         '<td>' + s.pieces + '</td><td>' + s.qty + '</td><td>' + s.peak + '</td>' +
         '<td>' + (s.avg == null ? '—' : s.avg) + '</td>' +
         '<td' + (s.overdue ? ' style="color:#c0392b;font-weight:700"' : '') + '>' + s.overdue + '</td>' +
@@ -481,6 +485,26 @@
     });
     var ol = document.getElementById('cg-ol');
     if (ol) ol.onchange = function () { var v = parseInt(this.value, 10); state.overloadPeak = (v > 0 ? v : 1); render(); };
+    Array.prototype.forEach.call(wrap.querySelectorAll('tbody tr[data-mk]'), function (tr) {
+      tr.onclick = function () { scrollToVendor(this.getAttribute('data-mk')); };
+    });
+  }
+  // 點看板某廠商 → 甘特圖捲動並高亮該廠商列（非依廠商分組時先切回依廠商）
+  function scrollToVendor(mk) {
+    if (state.groupBy !== 'maker') {
+      state.groupBy = 'maker';
+      var rb = document.querySelector('input[name=cg-group][value=maker]'); if (rb) rb.checked = true;
+      render();
+    }
+    var body = document.getElementById('cg-body'), target = null;
+    Array.prototype.forEach.call(body.querySelectorAll('.cg-row[data-gkey]'), function (el) {
+      if (el.getAttribute('data-gkey') === String(mk)) target = el;
+    });
+    if (target) {
+      body.scrollTop = Math.max(0, target.offsetTop - AXIS_H - 6);
+      target.classList.add('cg-flash');
+      setTimeout(function () { target.classList.remove('cg-flash'); }, 1800);
+    }
   }
 
   function barLabel(r, w) {
@@ -507,10 +531,11 @@
     // 時間軸
     html += '<div class="cg-row cg-axis"><div class="cg-labelcol">廠商 / 製程</div><div class="cg-track" style="width:' + trackW + 'px;">';
     for (var d = 0; d < totalDays; d++) {
-      var ds = addDays(start, d), wd = weekday(ds);
+      var ds = addDays(start, d);
       var isMonth = ds.slice(8) === '01' || d === 0;
-      var cls = 'cg-tick' + (wd === 0 || wd === 6 ? ' weekend' : '') + (isMonth ? ' month' : '');
-      html += '<div class="' + cls + '" style="left:' + (d * pxDay) + 'px;width:' + pxDay + 'px;"></div>';
+      var cls = 'cg-tick' + (state.nonwork.has(ds) ? ' weekend' : '') + (isMonth ? ' month' : '');
+      var htitle = state.holidays[ds] ? ' title="' + esc(state.holidays[ds]) + '"' : '';
+      html += '<div class="' + cls + '" style="left:' + (d * pxDay) + 'px;width:' + pxDay + 'px;"' + htitle + '></div>';
       if (isMonth) html += '<div class="cg-ticklabel" style="left:' + (d * pxDay) + 'px;">' + ds.slice(0, 7) + '</div>';
       else if (pxDay >= 22) html += '<div class="cg-ticklabel" style="left:' + (d * pxDay) + 'px;">' + (+ds.slice(8)) + '</div>';
     }
@@ -520,12 +545,11 @@
     L.groups.forEach(function (g) {
       var rowH = g.laneCount * LANE_STEP + 4;
       var avgTxt = (g.avgWork != null) ? ('｜平均回廠 ' + g.avgWork + ' 加工日(' + g.retN + ')') : '｜平均回廠 —';
-      html += '<div class="cg-row"><div class="cg-labelcol" style="height:' + rowH + 'px;">' +
+      html += '<div class="cg-row" data-gkey="' + esc(g.key) + '"><div class="cg-labelcol" style="height:' + rowH + 'px;">' +
         esc(g.label) + '<span class="cg-sub">' + esc(g.sub) + '｜峰值 ' + g.laneCount + ' 件' + esc(avgTxt) + '</span></div>' +
         '<div class="cg-track" style="width:' + trackW + 'px;height:' + rowH + 'px;">';
       for (var dd = 0; dd < totalDays; dd++) {
-        var wd2 = weekday(addDays(start, dd));
-        if (wd2 === 0 || wd2 === 6) html += '<div class="cg-tick weekend" style="left:' + (dd * pxDay) + 'px;width:' + pxDay + 'px;"></div>';
+        if (state.nonwork.has(addDays(start, dd))) html += '<div class="cg-tick weekend" style="left:' + (dd * pxDay) + 'px;width:' + pxDay + 'px;"></div>';
       }
       if (L.todayIdx >= 0) html += '<div class="cg-today" style="left:' + (L.todayIdx * pxDay) + 'px;"></div>';
       g.segs.forEach(function (x) {
@@ -668,7 +692,7 @@
     var gridTop = topPad, gridBot = H - 46;
     for (var d = 0; d < totalDays; d++) {
       var ds = addDays(start, d), wd = weekday(ds), x = xOff + d * pxDay;
-      if (wd === 0 || wd === 6) { ctx.fillStyle = 'rgba(140,110,70,.06)'; ctx.fillRect(x, gridTop + AXIS_H, pxDay, gridBot - gridTop - AXIS_H); }
+      if (state.nonwork.has(ds)) { ctx.fillStyle = 'rgba(140,110,70,.06)'; ctx.fillRect(x, gridTop + AXIS_H, pxDay, gridBot - gridTop - AXIS_H); }
       if (ds.slice(8) === '01' || d === 0) { ctx.strokeStyle = '#ddcdb5'; ctx.beginPath(); ctx.moveTo(x + .5, gridTop); ctx.lineTo(x + .5, gridBot); ctx.stroke(); }
     }
     // 軸標籤
