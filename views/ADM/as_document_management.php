@@ -149,6 +149,9 @@ if ($deptPerm === 'R') {
                   <?php if ($asCaps['admin']): ?>
                   <button class="btn btn-success btn-sm" id="btnFullCreate" title="一次建立程序書＋全部歷史版本＋底下表單（前期補件用，免申請單）"><i class="fa fa-magic"></i> 程序書快速建檔</button>
                   <?php endif; ?>
+                  <?php if ($asCaps['update']): ?>
+                  <button class="btn btn-default btn-sm" id="btnBulkTag" title="勾選多份文件一次加上標籤"><i class="fa fa-tags"></i> 批次加標籤</button>
+                  <?php endif; ?>
                   <?php if ($asCaps['settings']): ?>
                   <button class="btn btn-default btn-sm" id="btnTags"><i class="fa fa-tags"></i> 標籤 / 分類管理</button>
                   <button class="btn btn-warning btn-sm" id="btnSettings"><i class="fa fa-cog"></i> 系統設定（負責人 / 路徑）</button>
@@ -192,6 +195,7 @@ if ($deptPerm === 'R') {
                 <table class="table table-striped table-hover doc-table">
                   <thead>
                     <tr>
+                      <th style="width:24px;"><input type="checkbox" id="chkAllDocs" title="全選本頁（批次加標籤用）"></th>
                       <th>文件編號</th><th>文件名稱</th><th>類別</th><th>階級</th><th>部門</th>
                       <th>母文件 / 表單</th>
                       <th>目前版本</th><th>修訂日期</th><th>標籤</th><th style="min-width:245px;">操作</th>
@@ -297,6 +301,26 @@ if ($deptPerm === 'R') {
           <button type="submit" class="btn btn-primary">儲存</button>
         </div>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ 批次加標籤 Modal ═════════ -->
+<div class="modal fade" id="bulkTagModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title">批次加標籤（已勾選 <span id="bulkTagCount">0</span> 份文件）</h4>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted" style="font-size:12px;">點選要「加上」的標籤（只新增、不會移除文件既有標籤）。</p>
+        <div id="bulkTagPicker"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="bulkTagSubmit"><i class="fa fa-tags"></i> 加上標籤</button>
+      </div>
     </div>
   </div>
 </div>
@@ -821,7 +845,7 @@ $(function(){
     });
   }
 
-  function loadDocs(){
+  function loadDocs(keepPage){
     const p = {
       keyword: $('#searchKw').val().trim(),
       level: $('#filterLevel').val(),
@@ -832,7 +856,9 @@ $(function(){
     };
     $.getJSON(API+'?action=list_documents', p, r=>{
       if(r.status!=='success'){ alert(r.message||'讀取失敗'); return; }
-      DOCS = r.data; curPage = 1; renderDocs(); renderParentIndicator();
+      DOCS = r.data;
+      if(!keepPage) curPage = 1; // 編輯/改版等操作後傳 true＝留在原頁；篩選/搜尋則回第一頁
+      renderDocs(); renderParentIndicator();
     });
   }
 
@@ -871,11 +897,12 @@ $(function(){
     const size = parseInt($('#pageSize').val())||10;
     const total = DOCS.length;
     const pages = Math.max(1, Math.ceil(total/size));
+    if(curPage > pages) curPage = pages; // 留在原頁但該頁已不存在時退到最後一頁
     if(curPage>pages) curPage=pages;
     const start = (curPage-1)*size;
     const rows = DOCS.slice(start, start+size);
     const tb = $('#docTableBody').empty();
-    if(rows.length===0){ tb.append('<tr><td colspan="10" class="text-center text-muted">無資料</td></tr>'); }
+    if(rows.length===0){ tb.append('<tr><td colspan="11" class="text-center text-muted">無資料</td></tr>'); }
     rows.forEach(d=>{
       const tags = (d.tags||[]).map(t=>`<span class="tag-chip" style="background:${esc(t.color)};">${esc(t.name)}</span>`).join(' ');
       let ops = '';
@@ -926,6 +953,7 @@ $(function(){
       ops = slot(sPrev,32)+slot(sDl,32)+slot(sHist,32)+slot(sVer,46)+slot(sRec,60)+slot(sGear,44);
       const delMark = d.is_deleted==1 ? ' <span class="label label-default">已刪除</span>' : '';
       tb.append(`<tr>
+        <td><input type="checkbox" class="doc-chk" value="${d.id}"></td>
         <td>${esc(d.doc_no)}${delMark}</td>
         <td>${nameCell}</td>
         <td>${esc(d.doc_type)||'-'}</td>
@@ -1127,6 +1155,36 @@ $(function(){
   });
   function tagPickIds(sel){ const ids=[]; $(sel+' .tag-pick.active').each(function(){ ids.push($(this).data('id')); }); return ids; }
 
+  // ══ 批次加標籤 ══
+  $('#chkAllDocs').on('change', function(){ $('.doc-chk').prop('checked', this.checked); });
+  $('#btnBulkTag').on('click', function(){
+    const ids = $('.doc-chk:checked').map(function(){ return this.value; }).get();
+    if(!ids.length){ alert('請先在清單左側勾選要加標籤的文件'); return; }
+    $('#bulkTagCount').text(ids.length);
+    renderTagPickBox('#bulkTagPicker');
+    $('#bulkTagModal').modal('show');
+  });
+  $('#bulkTagSubmit').on('click', function(){
+    const ids = $('.doc-chk:checked').map(function(){ return this.value; }).get();
+    const tags = tagPickIds('#bulkTagPicker');
+    if(!tags.length){ alert('請點選至少一個標籤'); return; }
+    $.post(API+'?action=docs_add_tags', {doc_ids:JSON.stringify(ids), tag_ids:JSON.stringify(tags)}, r=>{
+      if(r.status==='success'){
+        $('#bulkTagModal').modal('hide');
+        showToast(`已為 ${r.docs} 份文件加上 ${r.tags} 個標籤`);
+        $('#chkAllDocs').prop('checked', false);
+        loadDocs(true);
+      } else alert(r.message||'失敗');
+    },'json');
+  });
+
+  // 版本號 0.0＝首次制訂 → 文件狀況自動帶「制訂」
+  $(document).on('blur change','.vb-ver', function(){
+    if($(this).val().trim()==='0.0') $(this).closest('tr').find('.vb-st').val('制訂');
+  });
+  $('#doc_version').on('blur', function(){ if($(this).val().trim()==='0.0') $('#doc_change_status').val('制訂'); });
+  $('#ver_version').on('blur', function(){ if($(this).val().trim()==='0.0') $('#ver_change_status').val('制訂'); });
+
   // ── 新增文件 ──
   $('#btnAddDoc').on('click', function(){
     $('#docForm')[0].reset(); $('#doc_id').val(''); $('#doc_tag_ids').val('');
@@ -1183,7 +1241,7 @@ $(function(){
     fd.set('parent_doc_id', $('#doc_parent_id').val()||'');
     NProgress.start();
     $.ajax({url:url, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
-     .done(r=>{ if(r.status==='success'){ $('#docModal').modal('hide'); loadMeta(loadDocs); } else alert(r.message||'失敗'); })
+     .done(r=>{ if(r.status==='success'){ $('#docModal').modal('hide'); loadMeta(()=>loadDocs(true)); } else alert(r.message||'失敗'); })
      .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
   });
 
@@ -1210,7 +1268,7 @@ $(function(){
     const fd = new FormData(this);
     NProgress.start();
     $.ajax({url:API+'?action=add_version', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
-     .done(r=>{ if(r.status==='success'){ $('#versionModal').modal('hide'); loadDocs(); } else alert(r.message||'失敗'); })
+     .done(r=>{ if(r.status==='success'){ $('#versionModal').modal('hide'); loadDocs(true); } else alert(r.message||'失敗'); })
      .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
   });
 
@@ -1281,7 +1339,7 @@ $(function(){
     NProgress.start();
     $.ajax({url:API+'?action=version_attach_file', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
      .done(r=>{
-        if(r.status==='success'){ showToast('補檔完成'); openHistory(curHistDocId, curHistDocName); loadDocs(); }
+        if(r.status==='success'){ showToast('補檔完成'); openHistory(curHistDocId, curHistDocName); loadDocs(true); }
         else alert(r.message||'失敗');
      })
      .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
@@ -1362,7 +1420,7 @@ $(function(){
         if(r.status==='success'){
           $('#verBatchModal').modal('hide');
           showToast(`已依序建立 ${r.count} 個版本（目前版本 ${r.current_version}）`);
-          loadDocs();
+          loadDocs(true);
         } else { $('#vbResult').html(`<div class="alert alert-danger" style="margin-top:8px;">${esc(r.message)}（全部未寫入，修正後重送）</div>`); }
      })
      .fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $b.prop('disabled',false); });
@@ -1483,10 +1541,10 @@ $(function(){
   // ── 刪除 / 還原 ──
   $('#docTableBody').on('click','.op-del', function(){
     if(!confirm('確定刪除此文件？（舊版與檔案仍會保留，可於「顯示已刪除」中還原）')) return;
-    $.post(API+'?action=delete_document',{id:$(this).data('id')}, r=>{ if(r.status==='success') loadDocs(); else alert(r.message); },'json');
+    $.post(API+'?action=delete_document',{id:$(this).data('id')}, r=>{ if(r.status==='success') loadDocs(true); else alert(r.message); },'json');
   });
   $('#docTableBody').on('click','.op-restore', function(){
-    $.post(API+'?action=restore_document',{id:$(this).data('id')}, r=>{ if(r.status==='success') loadDocs(); else alert(r.message); },'json');
+    $.post(API+'?action=restore_document',{id:$(this).data('id')}, r=>{ if(r.status==='success') loadDocs(true); else alert(r.message); },'json');
   });
 
   // ── 權限設定 ──
@@ -1792,12 +1850,12 @@ $(function(){
   $('#recPaperBody').on('click','.rec-del', function(){
     if(!confirm('刪除此筆紀錄？')) return;
     $.post(API+'?action=form_record_delete',{id:$(this).data('id')}, r=>{
-      if(r.status==='success'){ loadRecords($('#rec_doc_id').val(), recPage); loadDocs(); } else alert(r.message);
+      if(r.status==='success'){ loadRecords($('#rec_doc_id').val(), recPage); loadDocs(true); } else alert(r.message);
     },'json');
   });
   $('#recLinkedSave').on('click', function(){
     $.post(API+'?action=set_linked_module',{doc_id:$('#rec_doc_id').val(), module:$('#rec_linked_module').val()}, r=>{
-      if(r.status==='success'){ loadRecords($('#rec_doc_id').val(), 1); loadDocs(); } else alert(r.message);
+      if(r.status==='success'){ loadRecords($('#rec_doc_id').val(), 1); loadDocs(true); } else alert(r.message);
     },'json');
   });
   // 批次上傳紀錄：選檔後逐列填標題（預設=檔名）/日期/備註
@@ -1838,7 +1896,7 @@ $(function(){
         $('#recUploadResult').html(`<div class="alert ${r.ok===r.total?'alert-success':'alert-warning'}" style="margin-top:8px;">上傳完成：成功 ${r.ok} / ${r.total} 筆</div>`
           + (fails.length? '<ul style="color:#a94442;">'+fails.map(f=>`<li>第${f.index+1}列：${esc(f.message)}</li>`).join('')+'</ul>':''));
         $('#rec_files').val(''); $('#recUploadRows').empty(); $('#recUploadSubmit').hide();
-        loadRecords($('#rec_doc_id').val(), 1); loadDocs();
+        loadRecords($('#rec_doc_id').val(), 1); loadDocs(true);
      })
      .fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $b.prop('disabled',false); });
   });
@@ -1948,7 +2006,7 @@ $(function(){
   $('#tplDownload').on('click', function(e){ e.preventDefault(); window.location=API+'?action=download_template'; });
   $('#settingsSave').on('click', function(){
     $.post(API+'?action=save_settings', {nas_dir:$('#set_nas_dir').val(),owner_user_id:$('#set_owner').val(),deputy_user_id:$('#set_deputy').val()}, r=>{
-      if(r.status==='success'){ alert('已儲存'); $('#settingsModal').modal('hide'); loadDocs(); } else alert(r.message);
+      if(r.status==='success'){ alert('已儲存'); $('#settingsModal').modal('hide'); loadDocs(true); } else alert(r.message);
     },'json');
   });
   $('#tplUpload').on('click', function(){

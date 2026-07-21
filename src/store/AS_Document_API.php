@@ -248,7 +248,7 @@ $asGate = [
     'form_records_list'=>'view', 'form_records_upload'=>'create', 'form_record_delete'=>'delete',
     'set_linked_module'=>'settings',
     'phrase_add'=>'update', 'phrase_delete'=>'update',
-    'version_attach_file'=>'update',
+    'version_attach_file'=>'update', 'docs_add_tags'=>'update',
     // add_versions_batch 於 case 內另行檢查（僅限管理員）
     // form_record_download 於 case 內依 inline 分流（預覽=view / 原檔=download）
 ];
@@ -1019,6 +1019,16 @@ case 'form_record_download':
     }
     asStream($dir.DIRECTORY_SEPARATOR.$rec['file_name'], $rec['original_name'] ?: $rec['file_name'], $inline);
     break;
+
+// ══════════════ 批次加標籤（勾選多份文件一次加上標籤；只加不移除） ══════════════
+case 'docs_add_tags':
+    $docIds = array_filter(array_map('intval', (array)json_decode($_POST['doc_ids'] ?? '[]', true)));
+    $tagIds = array_filter(array_map('intval', (array)json_decode($_POST['tag_ids'] ?? '[]', true)));
+    if (empty($docIds)) jout(['status'=>'error','message'=>'未勾選任何文件']);
+    if (empty($tagIds)) jout(['status'=>'error','message'=>'未選擇任何標籤']);
+    $ins = $db->prepare("INSERT IGNORE INTO as_doc_tag_map (doc_id, tag_id) VALUES (?,?)");
+    foreach ($docIds as $dId) foreach ($tagIds as $tId) $ins->execute([$dId, $tId]);
+    jout(['status'=>'success','docs'=>count($docIds),'tags'=>count($tagIds)]);
 
 // ══════════════ 版本補檔（補登資料忘了附檔時；只允許補「空缺」，不可替換既有檔案） ══════════════
 case 'version_attach_file':
