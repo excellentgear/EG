@@ -1174,22 +1174,33 @@ $(function(){
   $('#doc_parent_id').on('change', function(){
     syncDeptFromParent($('#doc_parent_id'), $('#doc_department_id'));
   });
+  // 部門下拉重建：deptIds=null 顯示全部；給陣列＝只顯示這些部門（保留第一個「跨部門」選項與目前選取值）
+  function setDeptOptions($dept, deptIds){
+    const first = $dept.find('option:first').prop('outerHTML') || '<option value="">跨部門</option>';
+    const cur = $dept.val();
+    const list = (META.departments||[]).filter(d=>!deptIds || deptIds.includes(parseInt(d.id)));
+    $dept.html(first + list.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
+    if(cur && $dept.find('option[value="'+cur+'"]').length) $dept.val(cur);
+  }
   // 編號含部門代碼 → 自動判定部門：代碼對應「唯一」部門＝帶入並反灰；
-  // 對應「多個」部門（如 SM＝業務部/倉管組）＝帶入預設（部門代碼設定中排最前者）但保留下拉可改。
+  // 對應「多個」部門（如 SM＝業務部/倉管組）＝下拉「只列出這幾個部門」二選一，帶入預設（排最前者）。
   function syncDeptFromDocNo(noVal, $dept, $parent){
     const m = String(noVal||'').trim().match(/^([1-4])-([A-Za-z]+)-/);
     const matches = m ? (META.dept_codes||[]).filter(c=>c.code.toUpperCase()===m[2].toUpperCase()) : [];
     if(matches.length === 1){
+      setDeptOptions($dept, null);
       $dept.val(matches[0].department_id).prop('disabled', true).attr('title','部門由文件編號的部門代碼自動決定');
       return true;
     }
     if(matches.length > 1){
-      // 只在目前選的部門「不屬於」此代碼的任一部門時，才帶入預設（避免覆蓋使用者已改的選擇）
-      const curOk = matches.some(c=>String(c.department_id)===String($dept.val()));
-      if(!curOk) $dept.val(matches[0].department_id);
-      $dept.prop('disabled', false).attr('title','代碼 '+m[2].toUpperCase()+' 對應多個部門，已帶入預設，請確認或下拉更改');
+      const ids = matches.map(c=>parseInt(c.department_id));
+      setDeptOptions($dept, ids); // 只列出此代碼對應的部門
+      const curOk = ids.includes(parseInt($dept.val()));
+      if(!curOk) $dept.val(matches[0].department_id); // 預設＝部門代碼設定中排最前者
+      $dept.prop('disabled', false).attr('title','代碼 '+m[2].toUpperCase()+' 對應多個部門，下拉僅列出這些選項，請確認');
       return true;
     }
+    setDeptOptions($dept, null); // 無代碼 → 恢復完整部門清單
     if(!$parent || $parent.val()===''){ $dept.prop('disabled', false).attr('title',''); }
     return false;
   }
@@ -1367,6 +1378,7 @@ $(function(){
     renderDocTagPicker([]);
     fillParentSelect(0, '');
     $('#doc_code_sel').hide().empty();
+    setDeptOptions($('#doc_department_id'), null); // 復原完整部門清單（清除上次多部門代碼的限制）
     syncLevelFromType($('#doc_type'), $('#doc_level'));
     syncParentByType($('#doc_type'), $('#doc_parent_id'), $('#doc_department_id'));
     $('#docModal').modal('show');
@@ -1381,6 +1393,7 @@ $(function(){
       $('#docForm')[0].reset();
       $('#docModalTitle').text('編輯文件');
       $('#doc_id').val(d.id); $('#doc_no').val(d.doc_no); $('#doc_name').val(d.doc_name);
+      setDeptOptions($('#doc_department_id'), null); // 復原完整部門清單
       $('#doc_type').val(d.doc_type||''); $('#doc_level').val(d.doc_level||''); $('#doc_department_id').val(d.department_id||'');
       syncLevelFromType($('#doc_type'), $('#doc_level'));
       // 編輯模式：顯示「目前版本資訊」修正區（可改誤植的版本號等，不換檔、不產生新版本）
@@ -1397,6 +1410,7 @@ $(function(){
       renderDocTagPicker((d.tags||[]).map(t=>t.id));
       fillParentSelect(d.id, d.parent_doc_id||'');
       syncParentByType($('#doc_type'), $('#doc_parent_id'), $('#doc_department_id'));
+      syncDeptFromDocNo(d.doc_no, $('#doc_department_id'), $('#doc_parent_id')); // 編號部門代碼最終決定部門(多部門→限縮下拉)
       $('#doc_code_sel').hide().empty();
       $('#docModal').modal('show');
     });
