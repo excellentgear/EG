@@ -5112,7 +5112,7 @@ function doPrintPDF() {
     // 逾時偵測非同步卡死，任何一種失敗都退回可正常運作的快速(PNG)列印，絕不留下「沒反應」。
     let doc;
     try { doc = pdfMake.createPdf(docDef); }
-    catch (err) { toast('產生列印 PDF 失敗，改用快速列印'); doPrint(); return; }
+    catch (err) { console.warn('[EGdraw] createPdf 失敗：', err); toast('產生列印 PDF 失敗(' + ((err && err.message) || err) + ')，改用快速列印'); printFallback(); return; }
     hideModal('export-modal');
     let settled = false;
     const watchdog = setTimeout(function () {
@@ -5128,7 +5128,8 @@ function doPrintPDF() {
         });
     } catch (err) {
         if (settled) return; settled = true; clearTimeout(watchdog);
-        toast('產生列印 PDF 失敗，改用快速列印'); printFallback();
+        console.warn('[EGdraw] PDF getBlob 失敗：', err);
+        toast('產生列印 PDF 失敗(' + ((err && err.message) || err) + ')，改用快速列印'); printFallback();
     }
 }
 
@@ -5155,6 +5156,18 @@ function printPdfBlob(blob) {
     ifr.src = objUrl;
 }
 
+/* 依目前列印範圍(整個畫布或選取物件)的長寬，回傳紙張方向字串：寬>=高＝橫向 landscape。
+   讓後備(PNG/向量)列印跟 PDF 路徑一樣自動判定直/橫，不會把橫圖硬塞進直式頁。 */
+function currentPaperSize() {
+    const base = ((document.getElementById('ex-paper') || {}).value === 'A3') ? 'A3' : 'A4';
+    let w = artW, h = artH;
+    if ((document.getElementById('ex-range') || {}).value === 'selection') {
+        const obj = canvas.getActiveObject();
+        if (obj) { const b = obj.getBoundingRect(true, true); w = b.width; h = b.height; }
+    }
+    return base + (w >= h ? ' landscape' : ' portrait');
+}
+
 /* 後備列印：把畫布直接輸出成 PNG，一樣走隱藏 iframe（不呼叫 window.open），確保彈出視窗內也印得出來。
    靠 <img onload> 等圖真的載入完才送印，避免印出空白。 */
 function printFallback() {
@@ -5163,7 +5176,7 @@ function printFallback() {
     catch (e) { toast('列印失敗：畫布轉圖發生問題（F12 有詳情）'); return; }
     const blob = dataURLtoBlob(url);
     const objUrl = URL.createObjectURL(blob);
-    const paper = ((document.getElementById('ex-paper') || {}).value === 'A3') ? 'A3' : 'A4';
+    const paper = currentPaperSize();
     const ifr = makeHiddenPrintFrame(function () { URL.revokeObjectURL(objUrl); });
     const d = ifr.contentWindow.document;
     d.open();
@@ -5205,7 +5218,7 @@ function doPrintVector() {
         if (active) canvas.setActiveObject(active);
         canvas.requestRenderAll();
         toast('此圖含無法向量化的圖形，改用快速列印');
-        doPrint();
+        printFallback();
         return;
     }
     hidden.forEach(o => o.excludeFromExport = false);
@@ -5215,7 +5228,7 @@ function doPrintVector() {
     // 去掉 XML 宣告與 DOCTYPE 前綴，只留 svg 標籤內嵌進列印文件（內嵌才會被當向量列印）
     const i = svg.indexOf('<svg');
     if (i > 0) svg = svg.slice(i);
-    const paper = ((document.getElementById('ex-paper') || {}).value === 'A3') ? 'A3' : 'A4';
+    const paper = currentPaperSize();
     const win = window.open('', '_blank');
     if (!win) { toast('列印視窗被瀏覽器攔截，請允許彈出視窗'); return; }
     // body onload 會等 SVG 內嵌照片載入完再列印；不放 <script> 以免污染外層頁面解析
