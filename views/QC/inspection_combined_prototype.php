@@ -1090,6 +1090,18 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
             #print-area .pr-sign td { border:1px solid #000; padding:14px 6px 4px; text-align:center; vertical-align:bottom; height:46px; }
             #print-area .pr-sign .lbl { font-size:11px; color:#333; }
         }
+
+        /* #9 平板友善：觸控裝置/較窄螢幕加大點擊目標與輸入框，不影響桌機格狀輸入效率 */
+        @media (max-width:1024px), (pointer:coarse) {
+            .table-input { padding:8px 6px; font-size:15px; }
+            .s-slot { width:84px; margin:0 5px 6px 0; }
+            .s-slot .num-cell { width:80px; }
+            .okng-btn { display:inline-block; min-width:54px; padding:8px 4px; }
+            .pcs-verdict { min-width:54px; padding:8px 4px; }
+            #items-table td, #items-table th { padding:6px 4px; }
+            .add-reading, .item-note, .remove-row, .remove-sub { font-size:15px; padding:2px 4px; }
+            .btn-sm, .btn-xs { padding:7px 12px; font-size:14px; }
+        }
         .ng-value { background:#f2dede !important; color:#a94442; font-weight:bold; }
         .ok-value { color:#3c763d; }
         .remove-row { color:#d9534f; cursor:pointer; }
@@ -2378,7 +2390,7 @@ $(function(){
             } else {
                 var val = (sv && sv.v!=null) ? String(sv.v) : '';
                 var cls = (val!=='') ? ((sv && sv.r==='NG') ? ' ng-value' : ' ok-value') : '';
-                h += '<span class="s-slot"><input type="number" class="table-input num-cell'+cls+'" value="'+esc(val)+'" data-s="'+(i+1)+'"></span>';
+                h += '<span class="s-slot"><input type="number" inputmode="decimal" class="table-input num-cell'+cls+'" value="'+esc(val)+'" data-s="'+(i+1)+'"></span>';
             }
         }
         return h;
