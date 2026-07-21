@@ -1206,13 +1206,13 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
                                 <div class="table-responsive" style="max-height:55vh; overflow-y:auto; overflow-x:auto;">
                                     <table class="table table-bordered table-striped" id="items-table">
                                         <thead><tr>
-                                            <th width="42">編號<br><a href="#" id="btn-code-mode" style="font-weight:normal;font-size:11px;white-space:nowrap;" title="切換編號顯示方式（A、B、C… ↔ 1、2、3…）"></a></th>
-                                            <th width="96">檢驗項目</th>
-                                            <th width="54">標準值</th>
-                                            <th width="44">上公差</th>
-                                            <th width="44">下公差</th>
+                                            <th width="44">編號<br><a href="#" id="btn-code-mode" style="font-weight:normal;font-size:11px;white-space:nowrap;" title="切換編號顯示方式（A、B、C… ↔ 1、2、3…）"></a></th>
+                                            <th width="104">檢驗項目</th>
+                                            <th width="66">標準值</th>
+                                            <th width="58">上公差</th>
+                                            <th width="58">下公差</th>
                                             <th width="104">量具</th>
-                                            <th width="52">結果型態</th>
+                                            <th width="60">結果型態</th>
                                             <th>實測值<div id="sample-nums" style="font-weight:normal;"></div></th>
                                             <th width="50" title="備註 / 刪除"></th>
                                         </tr></thead>
