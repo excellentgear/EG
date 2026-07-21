@@ -44,6 +44,8 @@
   function todayStr() { var d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
   function addDays(dateStr, n) { var d = new Date(toUTC(dateStr) + n * 86400000); return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate()); }
   function weekday(dateStr) { return new Date(toUTC(dateStr)).getUTCDay(); }
+  // 逾期未回：在廠中(未回廠) 且 已在廠加工日 已超過「預測回廠加工日(P80)」
+  function isOverdue(r) { return r.ret_src === 'ongoing' && r.predict_days && r.work_days > r.predict_days; }
 
   // ---- 建立 DOM（僅一次）------------------------------------------------------
   function build() {
@@ -441,7 +443,7 @@
         if (ce >= cs) segs.push({ cs: cs, ce: ce });
         qty += r.sqty || 0;
         if (r.ret_src !== 'ongoing') { wSum += (r.work_days || 0); wN++; }
-        if (r.ret_src === 'ongoing' && r.delivery && r.delivery < today) overdue++;
+        if (isOverdue(r)) overdue++;
         if (r.is_stale) stale++;
       });
       return { mk: k, name: v.name, internal: v.internal, pieces: v.rows.length, qty: qty,
@@ -455,7 +457,7 @@
     });
     function th(k, txt, cls) { var ar = state.dashSort === k ? (state.dashDesc ? ' ▼' : ' ▲') : ''; return '<th class="' + (cls || '') + '" data-sort="' + k + '">' + txt + ar + '</th>'; }
     var h = '<div class="cg-dash-head">廠商負荷看板（' + stats.length + ' 家）　峰值≥ <input type="number" id="cg-ol" value="' + state.overloadPeak + '" min="1"> 標紅' +
-      '　<span style="font-weight:400;color:#a08a6f">點標題排序</span></div>' +
+      '　<span style="font-weight:400;color:#a08a6f">點標題排序｜逾期未回＝在廠加工日已超過預測回廠(P80)仍未回廠</span></div>' +
       '<div class="cg-dash"><table><thead><tr>' +
       th('name', '廠商', 'l') + th('pieces', '件數') + th('qty', '數量') + th('peak', '峰值同時') +
       th('avg', '平均回廠加工日') + th('overdue', '逾期未回') + th('stale', '逾60天在廠') +
@@ -555,7 +557,7 @@
       g.segs.forEach(function (x) {
         var r = x.r, left = x.cs * pxDay, w = (x.ce - x.cs + 1) * pxDay - 2; if (w < 3) w = 3;
         var top = x.lane * LANE_STEP + 2;
-        var overdue = (r.ret_src === 'ongoing' && r.delivery && r.delivery < L.today);
+        var overdue = isOverdue(r);
         html += '<div class="cg-bar p-' + (r.prio || 'n') + (r.is_stale ? ' stale' : '') + (overdue ? ' due-over' : '') + '" style="left:' + left + 'px;top:' + top + 'px;width:' + w + 'px;" title="點此在下方頁面篩選：' + esc(r.maker_name + ' / ' + r.bom) + '" data-bom="' + esc(r.bom) + '" data-maker="' + esc(r.maker_name) + '" data-tip="' + esc(tipText(r)) + '">' +
           (x.ovL ? '<span class="cg-ov" style="left:1px;">‹</span>' : '') + esc(barLabel(r, w)) +
           (x.ovR ? '<span class="cg-ov" style="right:1px;">›</span>' : '') + '</div>';
@@ -591,7 +593,7 @@
       '<span style="font-weight:700;color:#5a4632;">燈號(可點選篩選)：</span>' +
       legItem('n', '一般件') + legItem('u', '急件(U)') + legItem('e', '特急件(E)') +
       '<span><i style="background:' + PRIO.n.bg + ';border-style:dashed;opacity:.45"></i>逾60天在廠中(可能忘記回廠)</span>' +
-      '<span><i style="background:' + PRIO.n.bg + ';box-shadow:inset 0 3px 0 #c0392b"></i>交期已過卻未回廠</span>' +
+      '<span><i style="background:' + PRIO.n.bg + ';box-shadow:inset 0 3px 0 #c0392b"></i>已超預測回廠(P80)未回</span>' +
       '<span><i style="background:rgba(' + LOAD_RGB + ',.7)"></i>每日負荷</span>' +
       '<span style="color:' + TODAY_COL + ';">┋ 今天</span>';
     Array.prototype.forEach.call(leg.querySelectorAll('.cg-prio'), function (el) {
@@ -614,9 +616,10 @@
       '\n製程：' + r.proc_name + '（' + r.process_no + '／' + (r.ptype_name || '未分類') + '）' +
       '\n廠商：' + r.maker_name +
       '\n數量：' + r.sqty +
-      (r.delivery ? '\n交期：' + r.delivery + ((r.ret_src === 'ongoing' && r.delivery < state.meta.today) ? '（已逾期未回廠）' : '') : '') +
+      (r.delivery ? '\n交期：' + r.delivery : '') +
       '\n移轉：' + r.out_date +
-      '\n回廠判定：' + ret + (r.ret_src !== 'ongoing' ? '（在廠 ' + r.work_days + ' 加工日）' : '');
+      '\n回廠判定：' + ret + (r.ret_src !== 'ongoing' ? '（在廠 ' + r.work_days + ' 加工日）' : '（已在廠 ' + r.work_days + ' 加工日）') +
+      (r.predict_days ? '\n預測回廠：' + r.predict_days + ' 加工日 (P80／' + r.predict_n + '筆)' + (isOverdue(r) ? '　⚠ 已超預測未回' : '') : '\n預測回廠：無足夠歷史');
   }
   function setStatus(nBar, nLane) {
     var s = '共 ' + nBar + ' 筆製程、' + nLane + ' 個泳道　｜　區間 ' + state.meta.start + ' ~ ' + state.meta.end + '（' + TODAY_COL_TXT() + '＝今天）';
