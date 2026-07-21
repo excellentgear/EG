@@ -649,6 +649,17 @@ $(function(){
 
   function esc(t){ if(t===null||t===undefined) return ''; return String(t).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
 
+  // 頂部浮動提示（自動淡出）
+  function showToast(msg, ok=true){
+    const $t = $('<div></div>').text(msg).css({
+      position:'fixed', top:'20px', left:'50%', transform:'translateX(-50%)',
+      padding:'10px 25px', borderRadius:'5px', color:'#fff', zIndex:99999,
+      background: ok ? '#26B99A' : '#E74C3C', display:'none', fontSize:'14px'
+    });
+    $('body').append($t);
+    $t.fadeIn(300).delay(2500).fadeOut(400, function(){ $(this).remove(); });
+  }
+
   // ══ 輸入欄位通用互動（ai-rules/08 三規則）══
   // 1. Enter 逐欄前進、最後一欄送出（textarea 維持換行）
   $(document).on('keydown', 'input:not([type=file]):not([type=checkbox]):not([type=radio]), select', function(e){
@@ -798,7 +809,7 @@ $(function(){
         sRec = `<button class="btn btn-xs ${rc>0||d.linked_module?'btn-warning':'btn-default'} op-record" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="填寫後的表單紀錄（紙本上傳/電子化結果）">紀錄${rc>0?'×'+rc:''}</button>`;
       }
       const sHist = `<button class="btn btn-xs btn-default op-hist" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="歷史版本"><i class="fa fa-history"></i></button>`;
-      const sVer = canU ? `<button class="btn btn-xs btn-warning op-ver" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="改版（上傳新版本）"><i class="fa fa-level-up"></i></button>` : '';
+      const sVer = canU ? `<button class="btn btn-xs btn-warning op-ver" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="上傳新版本（附制修申請單）">改版</button>` : '';
       let mgmt = '';
       if(canU) mgmt += `<li><a href="javascript:void(0)" class="op-edit" data-id="${d.id}"><i class="fa fa-pencil-square-o"></i> 編輯資料 / 修正版本資訊</a></li>`;
       if(canS) mgmt += `<li><a href="javascript:void(0)" class="op-perm" data-id="${d.id}" data-name="${esc(d.doc_name)}"><i class="fa fa-lock"></i> 文件開啟權限</a></li>`;
@@ -810,7 +821,7 @@ $(function(){
       }
       const sGear = mgmt
         ? `<div class="btn-group"><button class="btn btn-xs btn-default dropdown-toggle" data-toggle="dropdown" title="管理（編輯/權限/刪除）"><i class="fa fa-cog"></i> <span class="caret"></span></button><ul class="dropdown-menu dropdown-menu-right">${mgmt}</ul></div>` : '';
-      ops = slot(sPrev,32)+slot(sDl,32)+slot(sHist,32)+slot(sVer,32)+slot(sRec,60)+slot(sGear,44);
+      ops = slot(sPrev,32)+slot(sDl,32)+slot(sHist,32)+slot(sVer,46)+slot(sRec,60)+slot(sGear,44);
       const delMark = d.is_deleted==1 ? ' <span class="label label-default">已刪除</span>' : '';
       tb.append(`<tr>
         <td>${esc(d.doc_no)}${delMark}</td>
@@ -1283,11 +1294,34 @@ $(function(){
     $.ajax({url:API+'?action=create_documents_batch', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
      .done(r=>{
         if(r.status!=='success'){ alert(r.message||'失敗'); return; }
-        let html = `<div class="alert ${r.ok===r.total?'alert-success':'alert-warning'}">完成：成功 ${r.ok} / ${r.total} 筆</div>`;
         const fails = (r.results||[]).filter(x=>!x.success);
-        if(fails.length) html += '<ul style="color:#a94442;">'+fails.map(f=>`<li>${esc(f.doc_no||('第'+(f.index+1)+'列'))}：${esc(f.message)}</li>`).join('')+'</ul>';
-        $('#batchResult').html(html);
-        loadMeta(loadDocs);
+        if(fails.length===0){
+          // 全部成功：關窗 + 提示 + 自動篩選出剛上傳的文件
+          $('#batchModal').modal('hide');
+          showToast(`批次上傳完成：成功 ${r.ok} 筆`);
+          $('#searchKw').val(''); $('#filterLevel').val(''); $('#filterDept').val('');
+          activeTagId = 0; renderTagFilter();
+          const pid = $('#batch_parent').val();
+          if(pid){
+            // 有母文件 → 直接進入該母文件的表單檢視
+            activeParentId = parseInt(pid)||0;
+            activeParentNo = $('#batch_parent option:selected').text().split('｜')[0]||'';
+          } else {
+            // 無母文件 → 用這批編號的共同前綴當搜尋條件
+            activeParentId = 0; activeParentNo = '';
+            const okNos = rows.filter((x,i)=>r.results[i] && r.results[i].success).map(x=>x.doc_no);
+            let lcp = okNos[0]||'';
+            for(const n of okNos){ while(lcp && !n.startsWith(lcp)) lcp = lcp.slice(0,-1); }
+            if(lcp.length >= 4) $('#searchKw').val(lcp);
+          }
+          loadMeta(loadDocs);
+        } else {
+          // 部分失敗：留在跳窗顯示明細供補救
+          let html = `<div class="alert alert-warning">完成：成功 ${r.ok} / ${r.total} 筆，失敗列請修正後重新上傳</div>`;
+          html += '<ul style="color:#a94442;">'+fails.map(f=>`<li>${esc(f.doc_no||('第'+(f.index+1)+'列'))}：${esc(f.message)}</li>`).join('')+'</ul>';
+          $('#batchResult').html(html);
+          loadMeta(loadDocs);
+        }
      })
      .fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $b.prop('disabled',false); });
   });
