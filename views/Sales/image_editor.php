@@ -4648,7 +4648,7 @@ function doCropMove(x, y, w, h) {
 }
 
 /* ── 匯出核心：以 identity viewport 座標裁切，確保所見即所得 ── */
-function exportRegionDataURL(x, y, w, h, format, mult) {
+function exportRegionDataURL(x, y, w, h, format, mult, quality) {
     const vpt = canvas.viewportTransform.slice();
     const active = canvas.getActiveObject();
     canvas.discardActiveObject();
@@ -4658,7 +4658,7 @@ function exportRegionDataURL(x, y, w, h, format, mult) {
     canvas.requestRenderAll();
     const url = canvas.toDataURL({
         format: format || 'png',
-        quality: 0.92,
+        quality: (quality != null ? quality : 0.92),
         left: x, top: y, width: w, height: h,
         multiplier: mult || 1,
         enableRetinaScaling: false
@@ -4669,9 +4669,9 @@ function exportRegionDataURL(x, y, w, h, format, mult) {
     canvas.requestRenderAll();
     return url;
 }
-function exportSelectionDataURL(obj, format, mult) {
+function exportSelectionDataURL(obj, format, mult, quality) {
     const b = obj.getBoundingRect(true, true);
-    return exportRegionDataURL(b.left, b.top, b.width, b.height, format, mult);
+    return exportRegionDataURL(b.left, b.top, b.width, b.height, format, mult, quality);
 }
 /* ── 壓平成圖：把底圖＋所有物件燒成單一張圖重新放上（效果同「存成圖片後重新開啟」）。
    壓平後整張都是底圖像素，框選搬移／套索就能對原本的向量圖形（圓、線、標籤）真正挖空切缺口。
@@ -5018,11 +5018,14 @@ function doPrintPDF() {
     // 目標約 300 DPI：算出來源需要的倍率（上限 3 以免記憶體爆掉、下限 1）
     let mult = (dispW / 72 * 300) / w;
     mult = Math.max(1, Math.min(3, mult));
+    // 影像格式用 JPEG(高品質0.95)而非 PNG：pdfmake 嵌 PNG 會把像素重新 deflate 壓縮，高解析大圖
+    // 會踩到內建 zlib 的緩衝溢位(RangeError: offset is out of bounds)整個列印失敗;JPEG 已是壓縮格式,
+    // pdfmake 直接以 DCTDecode 嵌入不再 deflate,可完全避開該崩潰。底圖為白色 artboard,JPEG 無透明也不會變黑。
     let dataURL;
     try {
         dataURL = (range === 'selection' && sel)
-            ? exportSelectionDataURL(sel, 'png', mult)
-            : exportRegionDataURL(x, y, w, h, 'png', mult);
+            ? exportSelectionDataURL(sel, 'jpeg', mult, 0.95)
+            : exportRegionDataURL(x, y, w, h, 'jpeg', mult, 0.95);
     } catch (err) { toast('產生列印影像失敗，改用向量列印'); doPrintVector(); return; }
     const docDef = {
         pageSize: { width: pageW, height: pageH },
