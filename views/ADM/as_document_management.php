@@ -152,6 +152,7 @@ if ($deptPerm === 'R') {
                   <?php if ($asCaps['update']): ?>
                   <button class="btn btn-default btn-sm" id="btnBulkTag" title="勾選多份文件一次加上標籤"><i class="fa fa-tags"></i> 批次加標籤</button>
                   <?php endif; ?>
+                  <button class="btn btn-default btn-sm" id="btnTree" title="一眼檢視全部文件的階層結構"><i class="fa fa-sitemap"></i> 結構總覽</button>
                   <?php if ($asCaps['settings']): ?>
                   <button class="btn btn-default btn-sm" id="btnTags"><i class="fa fa-tags"></i> 標籤 / 分類管理</button>
                   <button class="btn btn-warning btn-sm" id="btnSettings"><i class="fa fa-cog"></i> 系統設定（負責人 / 路徑）</button>
@@ -301,6 +302,26 @@ if ($deptPerm === 'R') {
           <button type="submit" class="btn btn-primary">儲存</button>
         </div>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ 結構總覽 Modal（全部文件樹狀圖） ═════════ -->
+<div class="modal fade" id="treeModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" style="width:92%;max-width:1000px;" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-sitemap"></i> AS 文件結構總覽 <small id="treeInfo"></small></h4>
+      </div>
+      <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
+        <p class="text-muted" style="font-size:12px;margin-bottom:8px;">
+          📕手冊　📘程序書　📗標準書　📄表單｜點文件名稱＝跳至該文件；▸/▾ 可收合展開。
+          <label style="font-weight:normal;margin-left:10px;"><input type="checkbox" id="treeShowDeleted"> 含已刪除</label>
+        </p>
+        <div id="treeBody" style="font-size:13px;line-height:1.9;"></div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
     </div>
   </div>
 </div>
@@ -1154,6 +1175,60 @@ $(function(){
     $(this).css('background', $(this).hasClass('active') ? (t?t.color:'#1ABB9C') : '#bbb');
   });
   function tagPickIds(sel){ const ids=[]; $(sel+' .tag-pick.active').each(function(){ ids.push($(this).data('id')); }); return ids; }
+
+  // ══ 結構總覽（樹狀圖） ══
+  const TYPE_ICON = {'手冊':'📕','程序':'📘','標準書':'📗','表單':'📄'};
+  function treeNodeHtml(d, depth, hasKids){
+    const icon = TYPE_ICON[d.doc_type] || '📄';
+    const caret = hasKids ? `<a href="javascript:void(0)" class="tree-toggle" style="display:inline-block;width:14px;color:#888;text-decoration:none;">▾</a>` : `<span style="display:inline-block;width:14px;"></span>`;
+    const ver = d.current_version ? ` <span class="label label-info" style="font-size:10px;">${esc(d.current_version)}</span>` : '';
+    const rc  = parseInt(d.record_count)||0;
+    const recBadge = rc>0 ? ` <span class="label label-warning" style="font-size:10px;">${d.doc_type==='表單'?'紀錄':'附件'}×${rc}</span>` : '';
+    const del = d.is_deleted==1 ? ' <span class="label label-default" style="font-size:10px;">已刪除</span>' : '';
+    const dept = d.dept_name ? ` <span class="text-muted" style="font-size:11px;">(${esc(d.dept_name)})</span>` : '';
+    return `<div style="margin-left:${depth*22}px;">${caret}${icon}
+      <a href="javascript:void(0)" class="tree-doc" data-no="${esc(d.doc_no)}" title="跳至此文件"><strong>${esc(d.doc_no)}</strong> ${esc(d.doc_name)}</a>${ver}${recBadge}${dept}${del}</div>`;
+  }
+  function renderTree(docs){
+    const kids = {};
+    docs.forEach(d=>{ const p=d.parent_doc_id||0; (kids[p]=kids[p]||[]).push(d); });
+    Object.values(kids).forEach(a=>a.sort((x,y)=>String(x.doc_no).localeCompare(String(y.doc_no))));
+    const box=$('#treeBody').empty();
+    let count=0;
+    function walk(list, depth){
+      let html='';
+      (list||[]).forEach(d=>{
+        count++;
+        const c = kids[d.id]||[];
+        html += `<div class="tree-node">` + treeNodeHtml(d, depth, c.length>0);
+        if(c.length) html += `<div class="tree-kids">` + walk(c, depth+1) + `</div>`;
+        html += `</div>`;
+      });
+      return html;
+    }
+    box.html(walk(kids[0], 0) || '<div class="text-muted">尚無文件</div>');
+    $('#treeInfo').text(`共 ${count} 份文件`);
+  }
+  function loadTree(){
+    $.getJSON(API+'?action=list_documents', {include_deleted: $('#treeShowDeleted').is(':checked')?'1':'0'}, r=>{
+      if(r.status!=='success'){ alert(r.message||'讀取失敗'); return; }
+      renderTree(r.data||[]);
+    });
+  }
+  $('#btnTree').on('click', function(){ loadTree(); $('#treeModal').modal('show'); });
+  $('#treeShowDeleted').on('change', loadTree);
+  $('#treeBody').on('click','.tree-toggle', function(){
+    const $kids = $(this).closest('.tree-node').children('.tree-kids');
+    $kids.toggle();
+    $(this).text($kids.is(':visible') ? '▾' : '▸');
+  });
+  $('#treeBody').on('click','.tree-doc', function(){
+    $('#treeModal').modal('hide');
+    $('#filterLevel').val(''); $('#filterDept').val('');
+    activeTagId=0; activeParentId=0; activeParentNo=''; renderTagFilter();
+    $('#searchKw').val($(this).data('no'));
+    loadDocs();
+  });
 
   // ══ 批次加標籤 ══
   $('#chkAllDocs').on('change', function(){ $('.doc-chk').prop('checked', this.checked); });
