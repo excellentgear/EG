@@ -4404,6 +4404,7 @@ function loadFiles(files) {
 }
 function addImageFromURL(url, cascade) {
     fabric.Image.fromURL(url, function (img) {
+        if (!img || !img.width) { toast('圖檔載入失敗'); return; }
         // 圖比畫布大很多 → 自動撐大畫布（解決小畫家貼圖被裁掉的問題）
         if (img.width > artW || img.height > artH) {
             setArtboardSize(Math.max(artW, img.width + 40), Math.max(artH, img.height + 40));
@@ -6152,6 +6153,17 @@ zoomFit();
 pushState();  // 初始狀態
 // 開啟編輯器不再自動詢問暫存檔（使用者要求取消）；要接續編輯請按頂列「暫存」自行選擇開啟
 setTool('select');
+
+/* ── 由 BOM 檢視器等頁面帶入圖檔：?preload=<絕對URL> 則自動載入該圖 ── */
+(function () {
+    var qs = new URLSearchParams(window.location.search);
+    var preload = qs.get('preload');
+    if (!preload) return;
+    var name = qs.get('preload_name') || '';
+    // 同源圖檔，直接載入畫布（addImageFromURL 內含載入失敗提示）
+    if (name) toast('帶入圖檔：' + name);
+    addImageFromURL(preload, 0);
+})();
 </script>
 </body>
 </html>

@@ -199,6 +199,29 @@ if (!empty($bom)) {
     die('缺少 BOM 或 d_id 參數');
 }
 $bom_safe = htmlspecialchars($bom, ENT_QUOTES, 'UTF-8');
+
+// ── 批圖編輯器按鈕權限（imgedit 模組；與 image_editor.php 進入時同一套判定）──
+// 未被指派「批圖使用者」角色者不顯示按鈕；判定失敗預設不顯示（editor 進入時仍有自身閘門）。
+$imgeditCanUse = false;
+try {
+    include_once __DIR__ . '/../../src/common/DBConnection.php';
+    require_once __DIR__ . '/../../src/common/imgedit_permission.php';
+    $pdoPerm    = (new DBConnection())->getPDO();
+    $permUid    = (int)($_SESSION['id'] ?? 0);
+    $permStatus = (int)($_SESSION['status'] ?? 0);
+    // session 缺 status/id 時回查 user 表補上，避免管理者判定落空
+    if (($permStatus === 0 || $permUid === 0) && ($_SESSION['userName'] ?? '') !== '') {
+        $stS = $pdoPerm->prepare("SELECT id, user_status FROM user WHERE user_uname = ? AND state != 0 LIMIT 1");
+        $stS->execute([$_SESSION['userName']]);
+        if ($rS = $stS->fetch(PDO::FETCH_ASSOC)) {
+            if ($permUid === 0)    $permUid    = (int)$rS['id'];
+            if ($permStatus === 0) $permStatus = (int)$rS['user_status'];
+        }
+    }
+    $imgeditCanUse = imgedit_can_use($pdoPerm, $permUid, in_array($permStatus, [9, 90], true));
+} catch (Exception $e) {
+    $imgeditCanUse = false;
+}
 ?>
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -307,6 +330,13 @@ $bom_safe = htmlspecialchars($bom, ENT_QUOTES, 'UTF-8');
             <button id="btn-save"       class="btn btn-success btn-xs" style="display:none;" title="儲存檔案"><i class="fa fa-floppy-o"></i> 儲存</button>
             <button id="btn-print"      class="btn btn-default btn-xs" style="display:none;" title="列印"><i class="fa fa-print"></i> 列印</button>
             <button id="btn-tags-setting" class="btn btn-info btn-xs" onclick="openFileTagsSetting()" title="設定檔名標籤"><i class="fa fa-tags"></i> 設定標籤</button>
+            <?php if ($imgeditCanUse): ?>
+            <!-- 批圖編輯器：獨立跳窗（未被指派 imgedit 角色者不顯示此鈕，見上方 $imgeditCanUse） -->
+            <button id="btn-image-editor" type="button"
+                onclick="openImageEditor()"
+                title="批圖編輯器（貼上/拖入圖面、遮蓋客戶資料、加標籤文字、球標與設變標示、多圖合併、列印/另存）——開啟時自動帶入目前預覽的圖檔"
+                class="btn btn-xs" style="background:linear-gradient(135deg,#6a1b9a,#ab47bc);color:#fff;border:none;font-weight:600;"><i class="fa fa-paint-brush"></i> 批圖編輯器</button>
+            <?php endif; ?>
         </div>
         <!-- 小畫家提示列（每次點擊都顯示，讓使用者可視需要重新安裝） -->
         <div id="paint-install-hint" style="display:none; background:#fff3cd; color:#856404; padding:7px 12px; font-size:12px; border-bottom:2px solid #ffc107; flex-shrink:0;">
@@ -428,6 +458,21 @@ function showFile(path, type, name) {
         $('#btn-save').show();
     }
     if (_isPaintable) { $('#btn-paint').show(); }
+}
+
+// ── 開啟批圖編輯器（自動帶入目前預覽的圖檔）────────────────────────────────
+function openImageEditor() {
+    var url = '../Sales/image_editor.php';
+    // 目前預覽的是圖片才帶入；PDF／其他格式則開空白編輯器
+    var _imgTypes = ['jpg','jpeg','png','gif','bmp'];
+    if (_currentPath && _imgTypes.indexOf((_currentType||'').toLowerCase()) !== -1) {
+        // 本頁在 views/pm/，編輯器在 views/Sales/，相對路徑無法共用；一律換算成絕對 URL 再傳
+        var absSrc = new URL(_currentPath, window.location.href).href;
+        url += '?preload=' + encodeURIComponent(absSrc)
+             + '&preload_name=' + encodeURIComponent(_currentName || '');
+    }
+    window.open(url, 'egImgEditor_' + Date.now(),
+        'width=1280,height=860,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
 }
 
 // ── 圖片縮放與拖曳 ────────────────────────────────────────────────────────
