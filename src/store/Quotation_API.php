@@ -577,6 +577,13 @@ try {
 
             $pdo->commit();
             if ($lockName) @$pdo->query("SELECT RELEASE_LOCK('{$lockName}')");
+
+            // 存檔後若已不是待審（自己簽自己→自動核准、或退回草稿→none），必須結束該單既有的待簽核通知——
+            // 否則其他簽核者的置頂欄會永遠掛著已審完的通知（漏洞：先前只有核准/駁回按鈕那條路才關通知）
+            if ($newApprovalStatus !== 'pending') {
+                eg_quotation_close_approval_notice($pdo, $quote_id, $user_id);
+            }
+
             $response = ['success' => true, 'message' => '報價單儲存成功。',
                          'new_id' => $quote_id, 'quote_no' => $mf['quote_no'],
                          'forced_draft' => $forcedDraft,
