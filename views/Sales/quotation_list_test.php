@@ -972,6 +972,25 @@ body { background:var(--bg); }
               </div>
               <small class="text-muted">勾選＝正式報價單須核准後才可列印（預設）；取消勾選＝存成正式報價單即可列印，不需等審核。草稿一律不能列印。</small>
             </div>
+            <div class="form-group" style="margin-top:12px;">
+              <label style="font-size:13px;">附件自動清除天數</label>
+              <div style="display:flex;gap:14px;flex-wrap:wrap;">
+                <div class="input-group" style="max-width:230px;">
+                  <span class="input-group-addon" style="font-size:12px;">未存檔暫存</span>
+                  <input type="text" inputmode="numeric" id="qs-temp-days" class="form-control" placeholder="2">
+                  <span class="input-group-addon">天</span>
+                </div>
+                <div class="input-group" style="max-width:230px;">
+                  <span class="input-group-addon" style="font-size:12px;">補件被否決</span>
+                  <input type="text" inputmode="numeric" id="qs-trash-days" class="form-control" placeholder="7">
+                  <span class="input-group-addon">天</span>
+                  <span class="input-group-btn">
+                    <button class="btn btn-primary" type="button" onclick="saveAttachDays()"><i class="fa fa-save"></i></button>
+                  </span>
+                </div>
+              </div>
+              <small class="text-muted">附件上傳後未存檔＝暫存，逾「未存檔暫存」天數自動刪除；補件被否決的附件先進暫存區，逾「補件被否決」天數自動刪除（預設 2 天／7 天）。</small>
+            </div>
           </div>
 
           <!-- ── Tab 2：附件類別 ── -->
@@ -1626,6 +1645,7 @@ $(document).ready(function () {
     loadDefaultTolerance();
     loadUploadPath();
     loadValidDays();        // ★ 載入有效天數設定
+    loadAttachDays();       // ★ 載入附件暫存/垃圾自動清除天數設定
     loadPrintApprovalSetting();  // ★ 載入「需審核通過才能列印」開關（列印閘門用）
     initFileUpload();
 
@@ -5140,6 +5160,28 @@ function loadValidDays() {
             $('#qs-valid-days').val(_validDays || '');
         }
     });
+}
+// 附件暫存/垃圾自動清除天數（後端 getQuotAttachDays 讀同名 param，預設 2/7）
+function loadAttachDays() {
+    $.get(API_URL, { action:'get_param', param_group:'QUOTATION', param_key:'temp_attach_days' }, res => {
+        const v = (res.success && res.value !== null) ? parseInt(res.value) : 0;
+        $('#qs-temp-days').val(v > 0 ? v : '');
+    });
+    $.get(API_URL, { action:'get_param', param_group:'QUOTATION', param_key:'trash_attach_days' }, res => {
+        const v = (res.success && res.value !== null) ? parseInt(res.value) : 0;
+        $('#qs-trash-days').val(v > 0 ? v : '');
+    });
+}
+function saveAttachDays() {
+    const t = parseInt($('#qs-temp-days').val()) || 2;
+    const r = parseInt($('#qs-trash-days').val()) || 7;
+    $.when(
+        $.post(API_URL, { action:'save_param', param_group:'QUOTATION', param_key:'temp_attach_days',  param_value: JSON.stringify(t), description:'未存檔暫存附件自動刪除天數' }),
+        $.post(API_URL, { action:'save_param', param_group:'QUOTATION', param_key:'trash_attach_days', param_value: JSON.stringify(r), description:'補件被否決附件自動刪除天數' })
+    ).done(() => {
+        $('#qs-temp-days').val(t); $('#qs-trash-days').val(r);
+        Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已儲存', showConfirmButton:false, timer:1800 });
+    }).fail(() => Swal.fire('錯誤','儲存失敗','error'));
 }
 function autoFillValidUntil() {
     if (!_validDays) return;
