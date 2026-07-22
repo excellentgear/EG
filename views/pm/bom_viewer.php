@@ -207,15 +207,17 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
         if (empty($dids)) { echo json_encode(['success' => true, 'attachments' => []]); exit; }
         $ph = implode(',', array_fill(0, count($dids), '?'));
         // 報價附件：linked_parts JSON 含此料號，或 linked_parts NULL 且該報價單包含此料號
+        // status='active'：只顯示正式附件，隱藏 temp(未存檔)/pending(補件待審)/trash(已否決)
         $sql = "SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size, a.quote_no,
                        COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, a.uploaded_at
                 FROM quotation_attachments a
                 LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
-                WHERE (a.linked_parts IS NOT NULL AND JSON_CONTAINS(a.linked_parts, ?))
+                WHERE a.status = 'active' AND (
+                      (a.linked_parts IS NOT NULL AND JSON_CONTAINS(a.linked_parts, ?))
                    OR (a.linked_parts IS NULL AND a.quote_no IN (
                         SELECT ql.quote_no FROM quotation_item qi
                         JOIN quotation_list ql ON ql.quote_id = qi.quote_id
-                        WHERE qi.d_setting_d_id IN ($ph)))
+                        WHERE qi.d_setting_d_id IN ($ph))))
                 ORDER BY a.uploaded_at DESC";
         $stmt = $pdo2->prepare($sql);
         $stmt->execute(array_merge([json_encode($partNo)], $dids));

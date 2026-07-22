@@ -49,6 +49,44 @@ function fmtSize(int $bytes): string {
     if ($bytes < 1024*1024)  return round($bytes/1024, 1) . ' KB';
     return round($bytes/1024/1024, 1) . ' MB';
 }
+// 暫存/垃圾附件自動刪除天數（可於報價設定調整；system_parameters QUOTATION group，值為 json_encode 的數字）
+function getQuotAttachDays(PDO $pdo, string $key, int $default): int {
+    try {
+        $stmt = $pdo->prepare("SELECT param_value FROM system_parameters WHERE param_group='QUOTATION' AND param_key=? LIMIT 1");
+        $stmt->execute([$key]);
+        $v = $stmt->fetchColumn();
+        if ($v === false || $v === null || $v === '') return $default;
+        $d = json_decode($v, true);
+        $n = is_numeric($d) ? (int)$d : (is_numeric($v) ? (int)$v : $default);
+        return $n > 0 ? $n : $default;
+    } catch (Exception $e) { return $default; }
+}
+// 垃圾桶實體資料夾（被否決補件先搬到這裡，7天後 purge；「先進暫存檔」）
+function trashDir(string $base, string $quoteNo): string {
+    return rtrim($base, '/\\') . DIRECTORY_SEPARATOR . '_att_trash' . DIRECTORY_SEPARATOR . $quoteNo . DIRECTORY_SEPARATOR;
+}
+// 懶惰清除：永久刪除已到期的暫存(temp)/垃圾(trash)附件（實體檔＋DB列）。tick 與 list 皆呼叫。
+function purgeExpiredQuotAttachments(PDO $pdo, string $base): int {
+    if (empty($base)) return 0;
+    try {
+        $rows = $pdo->query(
+            "SELECT id, quote_no, filename, status FROM quotation_attachments
+             WHERE status IN ('temp','trash') AND expire_at IS NOT NULL AND expire_at < NOW()"
+        )->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) { return 0; }
+    if (!$rows) return 0;
+    $expBase = realpath(rtrim($base, '/\\'));
+    $del = $pdo->prepare("DELETE FROM quotation_attachments WHERE id=?");
+    $n = 0;
+    foreach ($rows as $r) {
+        $qn  = safeQuoteNo($r['quote_no']);
+        $dir = ($r['status'] === 'trash') ? trashDir($base, $qn) : quoteDir($base, $qn);
+        $real = realpath($dir . $r['filename']);
+        if ($real && $expBase && strpos($real, $expBase) === 0 && is_file($real)) { @unlink($real); }
+        try { $del->execute([$r['id']]); $n++; } catch (Exception $e) {}
+    }
+    return $n;
+}
 
 // ── 自動建立資料表（首次使用時執行）──────────────────────────
 function initTables(PDO $pdo): void {
@@ -89,6 +127,11 @@ function initTables(PDO $pdo): void {
     // 附件類別標籤擴充欄位
     try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN show_in_list TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否在料號列表顯示最新附件'"); } catch(PDOException $e){}
     try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN tag_variables TEXT NULL COMMENT '標籤變數定義 JSON [{key,hint,var_type}]'"); } catch(PDOException $e){}
+    // 暫存/補件/垃圾狀態機（2026-07-22）：temp=未存檔暫存 active=正式 pending=補件待審 trash=已否決待清
+    try { $pdo->exec("ALTER TABLE quotation_attachments ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'active' COMMENT 'temp/active/pending/trash' AFTER linked_parts"); } catch(PDOException $e){}
+    try { $pdo->exec("ALTER TABLE quotation_attachments ADD COLUMN expire_at DATETIME NULL COMMENT 'temp/trash 自動清除到期時間，NULL=不清' AFTER updated_at"); } catch(PDOException $e){}
+    try { $pdo->exec("ALTER TABLE quotation_attachments ADD COLUMN trashed_reason VARCHAR(500) NULL COMMENT '補件被否決原因' AFTER expire_at"); } catch(PDOException $e){}
+    try { $pdo->exec("ALTER TABLE quotation_attachments ADD INDEX idx_status_expire (status, expire_at)"); } catch(PDOException $e){}
 }
 
 $uploadedBy = $_SESSION['id'] ?? $_SESSION['userName'] ?? '';
@@ -192,12 +235,14 @@ switch ($action) {
         }
         $sizeStr = fmtSize((int)$_FILES['file']['size']);
         if (move_uploaded_file($_FILES['file']['tmp_name'], $dir . $safeName)) {
-            // 寫入元數據
+            // 寫入元數據——一律先存為暫存(temp)，存檔/存草稿後才由 promote 轉正式(active)；
+            // 逾期(預設2天)未存檔則自動清除。存檔前不對外顯示（外部查閱一律只讀 active）。
+            $tempDays = getQuotAttachDays($pdo, 'temp_attach_days', 2);
             $ins = $pdo->prepare("
-                INSERT INTO quotation_attachments (quote_no, filename, original_name, file_size, uploaded_by)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO quotation_attachments (quote_no, filename, original_name, file_size, uploaded_by, status, expire_at)
+                VALUES (?, ?, ?, ?, ?, 'temp', DATE_ADD(NOW(), INTERVAL ? DAY))
             ");
-            $ins->execute([$quoteNo, $safeName, $originalName, $sizeStr, $uploadedBy]);
+            $ins->execute([$quoteNo, $safeName, $originalName, $sizeStr, $uploadedBy, $tempDays]);
             $attachId = (int)$pdo->lastInsertId();
             echo json_encode([
                 'success'       => true,
@@ -210,6 +255,7 @@ switch ($action) {
                 'category_ids'  => null,
                 'category_name' => null,
                 'linked_parts'  => null,
+                'status'        => 'temp',
             ]);
         } else {
             echo json_encode(['success' => false, 'message' => '移動檔案失敗，請確認路徑權限']);
@@ -221,19 +267,21 @@ switch ($action) {
         initTables($pdo);
         $quoteNo = safeQuoteNo($_GET['quote_no'] ?? '');
         $base    = getUploadBase($pdo);
+        purgeExpiredQuotAttachments($pdo, $base); // 順帶清除已到期的暫存/垃圾附件
         $files   = [];
         if (!empty($base) && !empty($quoteNo)) {
             $dir = quoteDir($base, $quoteNo);
             if (is_dir($dir)) {
-                // 讀 DB 元數據（JOIN 類別名稱）
+                // 讀 DB 元數據（JOIN 類別名稱）。編輯畫面為擁有者工作區，顯示 temp/active/pending，
+                // 但不顯示 trash（已否決，實體檔已搬到 _att_trash）。
                 $stmt = $pdo->prepare("
                     SELECT a.id, a.filename, a.original_name, a.category_id, a.category_ids,
-                           a.linked_parts, a.file_size,
+                           a.linked_parts, a.file_size, a.status,
                            DATE_FORMAT(a.uploaded_at,'%Y-%m-%d %H:%i') AS mtime,
                            c.category_name
                     FROM quotation_attachments a
                     LEFT JOIN quotation_file_categories c ON c.id = a.category_id
-                    WHERE a.quote_no = ?
+                    WHERE a.quote_no = ? AND a.status <> 'trash'
                 ");
                 $stmt->execute([$quoteNo]);
                 $dbMap = [];
@@ -254,6 +302,7 @@ switch ($action) {
                         'category_id'   => $db ? $db['category_id']   : null,
                         'category_name' => $db ? $db['category_name'] : null,
                         'linked_parts'  => $db ? $db['linked_parts']  : null,
+                        'status'        => $db ? ($db['status'] ?? 'active') : 'active',
                     ];
                 }
             }

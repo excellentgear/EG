@@ -1698,11 +1698,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                        (SELECT EXISTS(SELECT 1 FROM part_attachments WHERE d_id=d.d_id)) AS has_attach,
                        (SELECT EXISTS(
                            SELECT 1 FROM quotation_attachments qa
-                           WHERE (qa.linked_parts IS NOT NULL AND JSON_CONTAINS(qa.linked_parts, JSON_QUOTE(d.D_Setting_Id)))
+                           WHERE qa.status='active' AND (
+                                 (qa.linked_parts IS NOT NULL AND JSON_CONTAINS(qa.linked_parts, JSON_QUOTE(d.D_Setting_Id)))
                               OR (qa.linked_parts IS NULL AND qa.quote_no IN (
                                    SELECT ql.quote_no FROM quotation_item qi
                                    JOIN quotation_list ql ON ql.quote_id=qi.quote_id
-                                   WHERE qi.d_setting_d_id=d.d_id))
+                                   WHERE qi.d_setting_d_id=d.d_id)))
                        )) AS has_quote,
                        COALESCE(ss.ship_cy_count,0) AS ship_cy_count,
                        COALESCE(ss.ship_cy_qty,0)   AS ship_cy_qty,

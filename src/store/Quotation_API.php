@@ -245,7 +245,7 @@ try {
                     COALESCE(u.user_cname, ql.created_by) AS created_by_name,
                     src.quote_no AS source_quote_no,
                     (SELECT COUNT(*) FROM quotation_item WHERE quote_id = ql.quote_id) AS item_count,
-                    (SELECT COUNT(*) FROM quotation_attachments WHERE quote_no = ql.quote_no) AS attach_count,
+                    (SELECT COUNT(*) FROM quotation_attachments WHERE quote_no = ql.quote_no AND status = 'active') AS attach_count,
                     (SELECT GROUP_CONCAT(CONCAT_WS(' ', product_id, IFNULL(specification,'')) SEPARATOR ' ')
                      FROM quotation_item WHERE quote_id = ql.quote_id) AS search_keywords
                 FROM quotation_list ql
@@ -267,7 +267,7 @@ try {
                     COALESCE(u.user_cname, ql.created_by) AS created_by_name,
                     src.quote_no AS source_quote_no,
                     (SELECT COUNT(*) FROM quotation_item WHERE quote_id = ql.quote_id) AS item_count,
-                    (SELECT COUNT(*) FROM quotation_attachments WHERE quote_no = ql.quote_no) AS attach_count,
+                    (SELECT COUNT(*) FROM quotation_attachments WHERE quote_no = ql.quote_no AND status = 'active') AS attach_count,
                     (SELECT GROUP_CONCAT(CONCAT_WS(' ', product_id, IFNULL(specification,'')) SEPARATOR ' ')
                      FROM quotation_item WHERE quote_id = ql.quote_id) AS search_keywords
                 FROM quotation_list ql
@@ -567,6 +567,13 @@ try {
                 $selfApprovalId = eg_approval_submit($pdo, 'quotation', $quote_id, 'manager', $user_id, $signerName);
                 eg_approval_decide($pdo, $selfApprovalId, $user_id, $signerName, 'approved', null);
             }
+
+            // 7. 附件轉正式：存檔/存草稿後，把此報價單的暫存(temp)附件一律轉為正式(active)並解除自動清除。
+            //    存檔前上傳的附件只是暫存、對外不可見；存檔才「正式上傳」。補件重審是獨立流程，不走這裡。
+            try {
+                $pdo->prepare("UPDATE quotation_attachments SET status='active', expire_at=NULL WHERE quote_no=? AND status='temp'")
+                    ->execute([$mf['quote_no']]);
+            } catch (Exception $_e) {}
 
             $pdo->commit();
             if ($lockName) @$pdo->query("SELECT RELEASE_LOCK('{$lockName}')");

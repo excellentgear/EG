@@ -59,7 +59,8 @@ if (!function_exists('eg_quotation_missing_required_attach')) {
         }
         if (empty($reqCats)) return [];
 
-        $atts = $pdo->prepare("SELECT category_ids, linked_parts FROM quotation_attachments WHERE quote_no = ?");
+        // 必備附件檢查：計入本張單自己的暫存(temp，存檔當下)與正式(active)附件，排除補件待審(pending)與已否決(trash)
+        $atts = $pdo->prepare("SELECT category_ids, linked_parts FROM quotation_attachments WHERE quote_no = ? AND status IN ('temp','active')");
         $atts->execute([$quoteNo]);
         $files = [];
         foreach ($atts->fetchAll(PDO::FETCH_ASSOC) as $a) {

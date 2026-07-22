@@ -186,7 +186,7 @@ switch ($action) {
                            a.uploaded_at, a.quote_no
                     FROM quotation_attachments a
                     LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
-                    WHERE
+                    WHERE a.status = 'active' AND (
                         /* 明確 linked 此料號 */
                         (a.linked_parts IS NOT NULL AND JSON_CONTAINS(a.linked_parts, ?))
                         OR
@@ -196,7 +196,7 @@ switch ($action) {
                             FROM quotation_item qi
                             JOIN quotation_list ql ON ql.quote_id = qi.quote_id
                             WHERE qi.d_setting_d_id = ?
-                        ))
+                        )))
                 ");
                 $qStmt->execute([json_encode($dSettingId), $dId]);
                 foreach ($qStmt->fetchAll(PDO::FETCH_ASSOC) as $qr) { $data[] = $qr; }
@@ -257,7 +257,7 @@ switch ($action) {
                           COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, a.uploaded_at, a.quote_no, a.linked_parts
                           FROM quotation_attachments a
                           LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
-                          WHERE a.linked_parts IS NOT NULL AND (".implode(' OR ', $orClauses).")";
+                          WHERE a.status = 'active' AND a.linked_parts IS NOT NULL AND (".implode(' OR ', $orClauses).")";
                 $qRes  = $pdo->prepare($qSql);
                 $qRes->execute($qParams);
                 foreach ($qRes->fetchAll(PDO::FETCH_ASSOC) as $qr) {
@@ -290,7 +290,7 @@ switch ($action) {
                             JOIN quotation_list ql ON ql.quote_no = a.quote_no
                             JOIN quotation_item qi ON qi.quote_id = ql.quote_id
                                 AND qi.d_setting_d_id IN ($phDids)
-                            WHERE a.linked_parts IS NULL";
+                            WHERE a.status = 'active' AND a.linked_parts IS NULL";
                 $nullRes = $pdo->prepare($nullSql);
                 $nullRes->execute($dIds);
                 // 去除重複（同一附件對應多個料號時已用 joined d_setting_d_id 區分）

@@ -68,6 +68,15 @@ try {
     error_log('[car_remind] tick hook failed: ' . $e->getMessage());
 }
 
+// === 報價單暫存/垃圾附件自動清除 順路觸發（2026-07-22 新增；做法同上，免工作排程器）===
+// 距上次清除超過 3600 秒才執行，永久刪除逾期未存檔(temp)與補件被否決(trash)的附件（實體檔＋DB列）
+try {
+    require_once __DIR__ . '/quotation_attach_tick.php';
+    eg_quotation_attach_tick($db);
+} catch (Throwable $e) {
+    error_log('[quot_attach] tick hook failed: ' . $e->getMessage());
+}
+
 // === 資料庫自動備份 順路觸發（2026-07-22 新增；做法同上，免工作排程器）===
 // 距上次檢查超過 600 秒才背景啟動備份工人；是否真的執行備份由工人依 interval_days 判斷
 try {
