@@ -24,6 +24,30 @@ if ($template_id) {
 $tpl = $st->fetch(PDO::FETCH_ASSOC);
 if (!$tpl) { echo "找不到表單模板。請先於設計器建立或種入樣本。"; exit; }
 $schema = $tpl['current_schema'] ?: '{}';
+
+// ── 表頭／表尾一律即時取值（隨本公司設定、文件版次變動，不寫死進 schema）──
+// 表頭＝master_data 標記為「本公司」的客戶全名（發票用）
+$companyName = '';
+try {
+    $cs = $db->query("SELECT customer_full, customer FROM customer_list WHERE is_own_company=1 LIMIT 1");
+    if ($cr = $cs->fetch(PDO::FETCH_ASSOC)) { $companyName = $cr['customer_full'] ?: ($cr['customer'] ?? ''); }
+} catch (Throwable $e) {}
+// 表尾＝文件編號＋版次（取自所屬 as_document；版次無則退回模板發布版）
+$footDocNo = '';
+$footVer   = $tpl['published_version'] ? ('Ver.' . $tpl['published_version']) : '';
+if (!empty($tpl['form_doc_id'])) {
+    $ds = $db->prepare("SELECT doc_no, current_version FROM as_document WHERE id=?");
+    $ds->execute([$tpl['form_doc_id']]);
+    if ($dr = $ds->fetch(PDO::FETCH_ASSOC)) {
+        $footDocNo = $dr['doc_no'] ?? '';
+        if (!empty($dr['current_version'])) $footVer = $dr['current_version'];
+    }
+}
+$renderCtx = json_encode([
+    'company' => $companyName,
+    'docNo'   => $footDocNo,
+    'version' => $footVer,
+], JSON_UNESCAPED_UNICODE);
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -43,6 +67,11 @@ $schema = $tpl['current_schema'] ?: '{}';
   .form-sheet{max-width:820px;margin:12px auto 40px;background:#fff;padding:26px 30px;box-shadow:0 2px 10px rgba(90,61,30,.18);}
   table.eg-form{width:100%;border-collapse:collapse;table-layout:fixed;}
   table.eg-form td{border:1px solid var(--warm-line);padding:5px 7px;vertical-align:middle;font-size:13px;word-break:break-word;}
+  /* 表頭：本公司名（放大，letterhead；列印每頁重複） */
+  table.eg-form thead th.cell-letterhead{border:1px solid var(--warm-line);border-bottom:none;background:#fff;text-align:center;font-size:27px;font-weight:bold;letter-spacing:5px;color:#4a2c0a;padding:14px 8px;}
+  /* 表尾：文件編號＋版次（列印每頁重複） */
+  table.eg-form tfoot td.cell-footer{border:1px solid var(--warm-line);background:#faf3e6;color:#6b4e2a;font-size:12px;padding:5px 9px;}
+  tfoot .ft-left{float:left;} tfoot .ft-right{float:right;}
   td.cell-title{background:var(--warm-title);color:var(--warm-title-text);font-size:19px;font-weight:bold;text-align:center;letter-spacing:3px;padding:10px;}
   td.cell-label{background:var(--warm-label);color:var(--warm-label-text);font-weight:bold;text-align:center;white-space:nowrap;}
   td.cell-label.align-left{text-align:left;}
@@ -82,11 +111,16 @@ $schema = $tpl['current_schema'] ?: '{}';
 <script src="../../resource/js/jquery.min.js"></script>
 <script>
 const SCHEMA = <?php echo $schema; ?>;
+const RENDER_CTX = <?php echo $renderCtx; ?>;  // 表頭/表尾即時值 {company,docNo,version}
 
 // ── 格狀渲染器：schema → 單一 <table>（colspan/rowspan）──────────────
 // 供設計器預覽 / 填寫頁 / 列印共用。mode: 'fill'(可填) | 'view'(唯讀)
 function renderForm(schema, opts){
   opts = opts || {}; const mode = opts.mode || 'fill'; const data = opts.data || {};
+  const ctx = opts.ctx || {};
+  const meta = schema.meta || {};
+  const header = meta.header || {};   // {show} 預設顯示
+  const footer = meta.footer || {};   // {show} 預設顯示
   const cols = (schema.grid && schema.grid.cols) || 6;
   const cells = (schema.cells || []).slice();
   // 占用圖：標記被 colspan/rowspan 覆蓋的格子，避免重複輸出
@@ -96,21 +130,36 @@ function renderForm(schema, opts){
   const at = {};
   cells.forEach(c=>{ at[c.r+'_'+c.c] = c; });
 
-  let html = '<table class="eg-form">';
-  // 欄寬：等寬（設計器之後可自訂 colWidths）
-  html += '<colgroup>' + Array.from({length:cols}, ()=>`<col style="width:${(100/cols).toFixed(4)}%">`).join('') + '</colgroup>';
+  // 表身
+  let body = '';
   for(let r=0;r<maxR;r++){
-    html += '<tr>';
+    body += '<tr>';
     for(let c=0;c<cols;c++){
       if(occ[r][c]) continue;
       const cell = at[r+'_'+c];
-      if(!cell){ occ[r][c]=true; html += '<td></td>'; continue; }
+      if(!cell){ occ[r][c]=true; body += '<td></td>'; continue; }
       const cs = cell.cs||1, rs = cell.rs||1;
       for(let dr=0;dr<rs;dr++) for(let dc=0;dc<cs;dc++){ if(occ[r+dr]) occ[r+dr][c+dc]=true; }
       const span = (cs>1?` colspan="${cs}"`:'') + (rs>1?` rowspan="${rs}"`:'');
-      html += `<td${span} class="${cellClass(cell)}">${cellInner(cell, mode, data)}</td>`;
+      body += `<td${span} class="${cellClass(cell)}">${cellInner(cell, mode, data)}</td>`;
     }
-    html += '</tr>';
+    body += '</tr>';
+  }
+
+  let html = '<table class="eg-form">';
+  // 欄寬：等寬（設計器之後可自訂 colWidths）
+  html += '<colgroup>' + Array.from({length:cols}, ()=>`<col style="width:${(100/cols).toFixed(4)}%">`).join('') + '</colgroup>';
+  // 表頭（本公司名，放大；置於 thead → 列印每頁重複）
+  if(header.show!==false && ctx.company){
+    html += `<thead><tr><th colspan="${cols}" class="cell-letterhead">${esc(ctx.company)}</th></tr></thead>`;
+  }
+  html += '<tbody>' + body + '</tbody>';
+  // 表尾（文件編號＋版次；置於 tfoot → 列印每頁重複）
+  if(footer.show!==false && (ctx.docNo || ctx.version)){
+    html += `<tfoot><tr><td colspan="${cols}" class="cell-footer">`
+          + `<span class="ft-left">文件編號：${esc(ctx.docNo||'')}</span>`
+          + `<span class="ft-right">版次：${esc(ctx.version||'')}</span>`
+          + `<span style="clear:both;display:block;"></span></td></tr></tfoot>`;
   }
   html += '</table>';
   return html;
@@ -181,7 +230,7 @@ function bindFormUX($host){
 
 $(function(){
   const $host = $('#formHost');
-  $host.html(renderForm(SCHEMA, {mode:'fill'}));
+  $host.html(renderForm(SCHEMA, {mode:'fill', ctx:RENDER_CTX}));
   bindFormUX($host);
 });
 </script>
