@@ -482,6 +482,12 @@ body { background:var(--bg); }
                     <i class="fa fa-cog"></i>
                 </button>
                 <?php endif; ?>
+                <?php if ($CAN_SIGN): ?>
+                <button class="btn btn-default btn-sm" id="suppReviewBtn" onclick="openSupplementReview()" title="補件待審" style="position:relative;">
+                    <i class="fa fa-hourglass-half"></i> 補件待審
+                    <span id="suppReviewBadge" style="display:none;position:absolute;top:-7px;right:-7px;background:#DD5138;color:#fff;border-radius:10px;font-size:10px;padding:0 5px;font-weight:700;">0</span>
+                </button>
+                <?php endif; ?>
                 <button class="btn btn-default btn-sm" onclick="openPermHelp()" title="權限說明"
                     style="border-radius:50%;width:28px;height:28px;padding:0;font-weight:700;">
                     ?
@@ -966,6 +972,25 @@ body { background:var(--bg); }
               </div>
               <small class="text-muted">勾選＝正式報價單須核准後才可列印（預設）；取消勾選＝存成正式報價單即可列印，不需等審核。草稿一律不能列印。</small>
             </div>
+            <div class="form-group" style="margin-top:12px;">
+              <label style="font-size:13px;">附件自動清除天數</label>
+              <div style="display:flex;gap:14px;flex-wrap:wrap;">
+                <div class="input-group" style="max-width:230px;">
+                  <span class="input-group-addon" style="font-size:12px;">未存檔暫存</span>
+                  <input type="text" inputmode="numeric" id="qs-temp-days" class="form-control" placeholder="2">
+                  <span class="input-group-addon">天</span>
+                </div>
+                <div class="input-group" style="max-width:230px;">
+                  <span class="input-group-addon" style="font-size:12px;">補件被否決</span>
+                  <input type="text" inputmode="numeric" id="qs-trash-days" class="form-control" placeholder="7">
+                  <span class="input-group-addon">天</span>
+                  <span class="input-group-btn">
+                    <button class="btn btn-primary" type="button" onclick="saveAttachDays()"><i class="fa fa-save"></i></button>
+                  </span>
+                </div>
+              </div>
+              <small class="text-muted">附件上傳後未存檔＝暫存，逾「未存檔暫存」天數自動刪除；補件被否決的附件先進暫存區，逾「補件被否決」天數自動刪除（預設 2 天／7 天）。</small>
+            </div>
           </div>
 
           <!-- ── Tab 2：附件類別 ── -->
@@ -1371,6 +1396,44 @@ body { background:var(--bg); }
   </div></div>
 </div>
 
+<!-- ══ 補件 Modal（功能2）══ -->
+<div class="modal fade" id="supplementModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" style="width:640px;max-width:96vw;" role="document"><div class="modal-content">
+    <div class="modal-header" style="background:#F0A24B;color:#fff;padding:12px 18px;">
+      <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.85;"><span>&times;</span></button>
+      <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-plus" style="margin-right:7px;"></i>補件 — <span id="suppModalQno"></span></h4>
+    </div>
+    <div class="modal-body" style="font-size:13px;max-height:70vh;overflow-y:auto;padding:14px 18px;">
+      <div style="font-size:12px;color:#7a4a00;background:#F7E0BD;border-radius:4px;padding:8px 10px;margin-bottom:10px;">
+        追加的附件會先存為暫存，送出後由簽核者審核「是否允許放入此報價單」；通過才正式放入、否決則刪除並通知您。
+      </div>
+      <div id="suppDrop" style="border:2px dashed #F0A24B;border-radius:6px;padding:18px;text-align:center;color:#a86a1e;cursor:pointer;margin-bottom:10px;">
+        <i class="fa fa-cloud-upload" style="font-size:22px;"></i><br>點此選擇檔案，或拖曳到這裡
+        <input type="file" id="suppFileInput" multiple style="display:none;">
+      </div>
+      <div id="suppFileList"></div>
+    </div>
+    <div class="modal-footer" style="padding:8px 14px;">
+      <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
+      <button type="button" class="btn btn-sm" id="suppSubmitBtn" style="background:#F0A24B;color:#fff;font-weight:600;" onclick="submitSupplement()"><i class="fa fa-paper-plane"></i> 送出補件審核</button>
+    </div>
+  </div></div>
+</div>
+
+<!-- ══ 補件待審 Modal（簽核者，功能2）══ -->
+<div class="modal fade" id="supplementReviewModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" style="width:760px;max-width:96vw;" role="document"><div class="modal-content">
+    <div class="modal-header" style="background:var(--primary);color:#fff;padding:12px 18px;">
+      <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.85;"><span>&times;</span></button>
+      <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-hourglass-half" style="margin-right:7px;"></i>補件待審</h4>
+    </div>
+    <div class="modal-body" id="suppReviewBody" style="font-size:13px;max-height:70vh;overflow-y:auto;padding:14px 18px;"></div>
+    <div class="modal-footer" style="padding:8px 14px;">
+      <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+    </div>
+  </div></div>
+</div>
+
 <!-- ══ 修改紀錄 Modal ══ -->
 <div class="modal fade" id="changeLogModal" tabindex="-1" role="dialog">
   <div class="modal-dialog" style="width:640px;max-width:96vw;" role="document"><div class="modal-content">
@@ -1482,6 +1545,7 @@ const CAN_BATCH_ADD    = <?= json_encode($CAN_BATCH_ADD) ?>;
 const CAN_VIEW_DELETED = <?= json_encode($CAN_VIEW_DELETED) ?>;
 const CAN_RESTORE      = <?= json_encode($CAN_RESTORE) ?>;
 const CAN_VIEW_HISTORY = <?= json_encode($CAN_VIEW_HISTORY) ?>;
+const CURRENT_UID      = <?= json_encode((int)($_SESSION['id'] ?? 0)) ?>;
 const IS_ADMIN         = <?= json_encode($IS_ADMIN) ?>;
 const PERM_CODE        = <?= json_encode($_perm) ?>;
 const MY_USER_ID       = <?= json_encode($_user_id) ?>;
@@ -1574,13 +1638,22 @@ $(document).ready(function () {
     // 核准/駁回完成後該分頁會 postMessage 回來，這裡收到才主動重新整理清單/當前檢視畫面，
     // 避免使用者已開著的這頁清單/檢視在另一分頁簽核完後仍顯示舊的審核狀態
     window.addEventListener('message', function (ev) {
-        if (!ev.data || ev.data.type !== 'quotation_approval_done') return;
+        if (!ev.data) return;
+        // 補件審核頁(quotation_supplement_view.php)完成核准/駁回 → 更新補件待審徽章與清單、刷新檢視附件
+        if (ev.data.type === 'quotation_supplement_done') {
+            if (CAN_SIGN) refreshSuppReviewBadge();
+            if ($('#supplementReviewModal').hasClass('in')) openSupplementReview();
+            if (currentEditId) openViewMode(currentEditId);
+            return;
+        }
+        if (ev.data.type !== 'quotation_approval_done') return;
         if (isAllYearsMode) loadAllYears(); else loadQuoteList(<?= $selectedYear ?>);
         if (currentEditId && (!ev.data.quote_id || currentEditId == ev.data.quote_id)) openViewMode(currentEditId);
     });
     loadDefaultTolerance();
     loadUploadPath();
     loadValidDays();        // ★ 載入有效天數設定
+    loadAttachDays();       // ★ 載入附件暫存/垃圾自動清除天數設定
     loadPrintApprovalSetting();  // ★ 載入「需審核通過才能列印」開關（列印閘門用）
     initFileUpload();
 
@@ -3136,7 +3209,7 @@ function renderViewPanel(q, contact, detail) {
             it.tiers.forEach((t, ti) => {
                 itemsHtml += `<tr>
                     ${ti===0 ? `<td rowspan="${it.tiers.length}" style="vertical-align:middle;text-align:center;">${i+1}</td>
-                        <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:12px;">${esc(it.product_id)}</td>
+                        <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:12px;">${qlDrawingSpan(it.product_id)}</td>
                         <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:11px;">${descHtml}</td>` : ''}
                     <td class="text-right">${esc(t.qty_min)}+</td>
                     <td class="text-center">${esc(it.unit||'PCS')}</td>
@@ -3148,7 +3221,7 @@ function renderViewPanel(q, contact, detail) {
             const amt = parseFloat(it.amount || 0);
             itemsHtml += `<tr>
                 <td class="text-center">${i+1}</td>
-                <td style="font-size:12px;">${esc(it.product_id)}</td>
+                <td style="font-size:12px;">${qlDrawingSpan(it.product_id)}</td>
                 <td style="font-size:11px;">${descHtml}</td>
                 <td class="text-right">${fmtNum(it.quantity)}</td>
                 <td class="text-center">${esc(it.unit||'PCS')}</td>
@@ -3214,8 +3287,17 @@ function renderViewPanel(q, contact, detail) {
             <i class="fa fa-paperclip"></i> 附件
         </div>
         <div id="viewAttachList"></div>
-    </div>`;
+    </div>
+    ${(q.approval_status==='approved' && (CAN_EDIT || (q.created_by!=null && Number(q.created_by)===CURRENT_UID))) ? `
+    <div id="viewSupplementBar" style="margin-top:8px;">
+        <button class="btn btn-xs" style="background:#F0A24B;color:#fff;font-weight:600;" onclick="openSupplementModal('${esc(q.quote_no)}')">
+            <i class="fa fa-plus"></i> 補件（追加附件送審）
+        </button>
+        <span style="font-size:11px;color:#999;margin-left:6px;">已核准報價單追加附件，需經簽核者審核通過才會正式放入此報價單</span>
+    </div>` : ''}`;
     $('#viewBody').html(html);
+    // 記住目前檢視單的料號清單（product_id，與 linked_parts 儲存格式一致；供補件 modal 下拉使用）
+    _viewQuoteParts = [...new Set((q.items || []).map(it => it.product_id).filter(Boolean))];
     loadFileList(q.quote_no, true);
 }
 
@@ -3768,6 +3850,206 @@ function _postQuoteSave(qd, onSuccess) {
 // ══════════════════════════════════════════════════════
 // ★ 列印功能
 // ══════════════════════════════════════════════════════
+// 料號查閱圖面（頁內用；比照 NewOrder_Track.php，圖面對所有登入者開放）
+function qlDrawingSpan(pid) {
+    if (pid === undefined || pid === null || pid === '') return '';
+    const arg = encodeURIComponent(String(pid));
+    return `<span style="cursor:pointer;color:#8a5a00;text-decoration:underline dotted;" title="點擊查閱圖面" onclick="window.open('../pm/bom_viewer.php?d_id=${arg}','drawing_${arg}','width=1100,height=800,resizable=yes,scrollbars=yes')">${escapeHtml(pid)}</span>`;
+}
+
+// ══════════════════════════════════════════════════════════════
+// 補件重審（功能2）前端：已核准報價單追加附件 → 送簽核者審核
+// ══════════════════════════════════════════════════════════════
+let _viewQuoteParts = [];   // 目前檢視報價單的料號(product_id)清單
+let _suppQno = '';          // 補件中的報價單號
+let _suppUploaded = [];     // 本次已上傳的暫存附件 [{attachment_id, filename, original_name}]
+
+function openSupplementModal(quoteNo) {
+    _suppQno = quoteNo;
+    _suppUploaded = [];
+    $('#suppModalQno').text(quoteNo);
+    $('#suppFileList').empty();
+    $('#suppFileInput').val('');
+    $('#suppSubmitBtn').prop('disabled', false);
+    $('#supplementModal').modal('show');
+}
+
+function _suppHandleFiles(fileList) {
+    Array.from(fileList).forEach(file => {
+        const fd = new FormData();
+        fd.append('action', 'upload_file');
+        fd.append('quote_no', _suppQno);
+        fd.append('file', file);
+        const rowId = 'supprow_' + Math.random().toString(36).slice(2);
+        $('#suppFileList').append(`<div id="${rowId}" style="border:1px solid #eee;border-radius:4px;padding:8px;margin-bottom:6px;"><i class="fa fa-spinner fa-spin"></i> 上傳中：${escapeHtml(file.name)}</div>`);
+        $.ajax({ url: FILE_API_URL, type:'POST', data:fd, processData:false, contentType:false, dataType:'json' })
+          .done(res => {
+            if (!res || !res.success) { $('#'+rowId).html(`<span class="text-danger">上傳失敗：${escapeHtml((res&&res.message)||'')}（${escapeHtml(file.name)}）</span>`); return; }
+            _suppUploaded.push({ attachment_id: res.attachment_id, filename: res.filename, original_name: res.original_name });
+            $('#'+rowId).html(_suppFileRowHtml(res.attachment_id, res.original_name || res.filename));
+          })
+          .fail(() => { $('#'+rowId).html(`<span class="text-danger">上傳失敗（${escapeHtml(file.name)}）</span>`); });
+    });
+}
+
+function _suppFileRowHtml(attId, name) {
+    const reqCats = (typeof effectiveRequiredCats === 'function') ? effectiveRequiredCats() : [];
+    const catOpts = fileCategories.length
+        ? fileCategories.map(c => {
+            const req = reqCats.some(r => Number(r) === Number(c.id));
+            return `<label style="margin-right:8px;font-weight:400;"><input type="checkbox" class="supp-cat" value="${c.id}" data-req="${req?1:0}" onchange="_suppSyncPart(this)"> ${escapeHtml(c.category_name)}${req ? ' <span style="color:#DD5138;" title="必備類別，需連結單一料號">*</span>' : ''}</label>`;
+          }).join('')
+        : '<span class="text-muted">尚無啟用類別</span>';
+    const partOpts = ['<option value="all">共用（此報價單全部料號）</option>']
+        .concat(_viewQuoteParts.map(pid => `<option value="${escapeHtml(pid)}">${escapeHtml(pid)}</option>`)).join('');
+    return `<div class="supp-file" data-att-id="${attId}">
+        <div style="font-weight:600;color:#333;margin-bottom:4px;"><i class="fa fa-file-o"></i> ${escapeHtml(name)}
+            <button class="btn btn-xs btn-link text-danger" style="float:right;padding:0;" onclick="_suppRemove(${attId}, this)"><i class="fa fa-trash"></i> 移除</button></div>
+        <div style="font-size:12px;margin-bottom:4px;"><span style="color:#888;">類別（必選）：</span>${catOpts}
+            ${reqCats.length ? '<span style="color:#DD5138;font-size:11px;margin-left:4px;">（* 必備類別，須連結單一料號）</span>' : ''}</div>
+        <div style="font-size:12px;"><span style="color:#888;">連結料號：</span><select class="supp-part form-control input-sm" style="display:inline-block;width:auto;">${partOpts}</select></div>
+    </div>`;
+}
+// 勾選到必備類別時，若目前料號為「共用」則自動改選第一個料號（沒有料號可選則維持，送出時擋下）
+function _suppSyncPart(chk) {
+    const $row = $(chk).closest('.supp-file');
+    const anyReq = $row.find('.supp-cat:checked').filter((i,el)=>String($(el).data('req'))==='1').length > 0;
+    const $part = $row.find('.supp-part');
+    if (anyReq && $part.val() === 'all') {
+        const $firstReal = $part.find('option').filter((i,o)=>o.value!=='all').first();
+        if ($firstReal.length) $part.val($firstReal.val());
+    }
+}
+
+function _suppRemove(attId, btn) {
+    const rec = _suppUploaded.find(u => Number(u.attachment_id) === Number(attId));
+    if (rec) $.post(FILE_API_URL, { action:'delete_file', quote_no:_suppQno, filename: rec.filename });
+    _suppUploaded = _suppUploaded.filter(u => Number(u.attachment_id) !== Number(attId));
+    $(btn).closest('.supp-file').remove();
+}
+
+function submitSupplement() {
+    const $rows = $('#suppFileList .supp-file');
+    if (!$rows.length) { Swal.fire('提示','請先上傳要補的附件','info'); return; }
+    const reqCats = (typeof effectiveRequiredCats === 'function') ? effectiveRequiredCats() : [];
+    const plan = [];
+    let noCat = false, needPart = false;
+    $rows.each(function () {
+        const attId = $(this).data('att-id');
+        const cats  = $(this).find('.supp-cat:checked').map((i,el)=>el.value).get();
+        const part  = $(this).find('.supp-part').val();
+        if (!cats.length) { noCat = true; return; }
+        const hasReq = cats.some(c => reqCats.some(r => Number(r) === Number(c)));
+        if (hasReq && part === 'all') { needPart = true; }
+        plan.push({ attId, cats, linked: (part === 'all') ? 'all' : JSON.stringify([part]) });
+    });
+    if (noCat)    { Swal.fire('請設定類別','每個補件附件都必須至少選一個類別','warning'); return; }
+    if (needPart) { Swal.fire('必備類別需連結料號','所選類別含必備附件類別，必須連結單一料號（不可設為「共用」）','warning'); return; }
+    const ids = plan.map(p => p.attId);
+    const savers = plan.map(p => $.post(FILE_API_URL, { action:'update_attachment', attachment_id:p.attId, category_ids:p.cats.join(','), linked_parts:p.linked }));
+    $('#suppSubmitBtn').prop('disabled', true);
+    $.when.apply($, savers).always(() => {
+        $.post(FILE_API_URL, { action:'submit_supplement', quote_no:_suppQno, attachment_ids: JSON.stringify(ids) }, res => {
+            $('#suppSubmitBtn').prop('disabled', false);
+            if (res && res.success) {
+                _suppUploaded = [];   // 已送審者為 pending，勿在關閉 modal 時被當殘留刪除
+                $('#supplementModal').modal('hide');
+                let msg = res.message || '已送出補件審核';
+                if (res.skipped && res.skipped.length) msg += '（略過：' + res.skipped.join('、') + '）';
+                Swal.fire('已送出', msg, 'success');
+                if (typeof loadFileList === 'function') loadFileList(_suppQno, true);
+            } else {
+                Swal.fire('送出失敗', (res && res.message) || '請稍後再試', 'error');
+            }
+        }, 'json').fail(() => { $('#suppSubmitBtn').prop('disabled', false); Swal.fire('錯誤','與伺服器通訊失敗','error'); });
+    });
+}
+
+// ── 簽核者：補件待審清單 ──
+function openSupplementReview() {
+    $('#suppReviewBody').html('<div class="text-center text-muted" style="padding:20px;"><i class="fa fa-spinner fa-spin"></i></div>');
+    $('#supplementReviewModal').modal('show');
+    $.get(FILE_API_URL, { action:'list_pending_supplements' }, res => {
+        if (!res || !res.success) { $('#suppReviewBody').html('<p class="text-danger">載入失敗</p>'); return; }
+        if (!res.items.length) { $('#suppReviewBody').html('<p class="text-muted text-center" style="padding:20px;">目前沒有待審核的補件</p>'); refreshSuppReviewBadge(); return; }
+        $('#suppReviewBody').html(res.items.map(_suppReviewRow).join(''));
+        refreshSuppReviewBadge();
+    }, 'json');
+}
+
+function _suppReviewRow(it) {
+    const dlUrl = `${FILE_API_URL}?action=download&quote_no=${encodeURIComponent(it.quote_no)}&filename=${encodeURIComponent(it.filename)}`;
+    return `<div class="supp-review-item" data-att-id="${it.id}" style="border:1px solid #eee;border-radius:5px;padding:10px 12px;margin-bottom:8px;">
+        <div style="margin-bottom:4px;"><strong>${escapeHtml(it.quote_no)}</strong>
+            <span style="color:#888;">${escapeHtml(it.client_name||'')}</span>
+            <span style="float:right;color:#999;font-size:11px;">${escapeHtml(it.uploaded_at||'')} · ${escapeHtml(it.uploader_name||'')}</span></div>
+        <div style="font-size:12px;margin-bottom:6px;">
+            <i class="fa fa-file-o"></i> <a href="${dlUrl}" target="_blank">${escapeHtml(it.original_name||it.filename)}</a>
+            <span style="margin-left:8px;color:#8a5a00;">類別：${escapeHtml(it.category_label||'—')}</span>
+            <span style="margin-left:8px;color:#8e44ad;">料號：${escapeHtml(it.part_label||'—')}</span>
+        </div>
+        <div style="text-align:right;">
+            <button class="btn btn-xs btn-default" onclick="window.open('quotation_supplement_view.php?att=${it.id}')" title="檢視報價單原內容/原附件後再審核"><i class="fa fa-eye"></i> 詳情</button>
+            <button class="btn btn-xs btn-success" onclick="decideSupplement(${it.id}, 'approve', this)"><i class="fa fa-check"></i> 核准</button>
+            <button class="btn btn-xs btn-danger" onclick="decideSupplement(${it.id}, 'reject', this)"><i class="fa fa-times"></i> 駁回</button>
+        </div>
+    </div>`;
+}
+
+function decideSupplement(attId, decision, btn) {
+    const doPost = (note) => {
+        $(btn).closest('.supp-review-item').find('button').prop('disabled', true);
+        $.post(FILE_API_URL, { action:'decide_supplement', attachment_id:attId, decision, note: note||'' }, res => {
+            if (res && res.success) {
+                $(btn).closest('.supp-review-item').slideUp(150, function () {
+                    $(this).remove();
+                    if (!$('#suppReviewBody .supp-review-item').length) $('#suppReviewBody').html('<p class="text-muted text-center" style="padding:20px;">目前沒有待審核的補件</p>');
+                });
+                refreshSuppReviewBadge();
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title:res.message, showConfirmButton:false, timer:1800 });
+            } else {
+                $(btn).closest('.supp-review-item').find('button').prop('disabled', false);
+                Swal.fire('處理失敗', (res && res.message) || '請稍後再試', 'error');
+            }
+        }, 'json').fail(() => { $(btn).closest('.supp-review-item').find('button').prop('disabled', false); Swal.fire('錯誤','與伺服器通訊失敗','error'); });
+    };
+    if (decision === 'reject') {
+        Swal.fire({ title:'駁回原因（必填）', input:'textarea', inputPlaceholder:'請說明不通過原因，將通知上傳者', showCancelButton:true, confirmButtonText:'駁回', cancelButtonText:'取消',
+            inputValidator: v => (!v || !v.trim()) ? '請填寫駁回原因' : undefined })
+          .then(r => { if (r.isConfirmed) doPost(r.value.trim()); });
+    } else {
+        doPost('');
+    }
+}
+
+function refreshSuppReviewBadge() {
+    if (!CAN_SIGN) return;
+    $.get(FILE_API_URL, { action:'list_pending_supplements' }, res => {
+        const n = (res && res.success && res.items) ? res.items.length : 0;
+        const $b = $('#suppReviewBadge');
+        if (n > 0) $b.text(n).show(); else $b.hide();
+    }, 'json');
+}
+
+// 補件 modal 上傳區事件綁定 + 待審徽章初始化
+$(function () {
+    // 注意：#suppFileInput 巢狀在 #suppDrop 內，input 的 click 會冒泡回 suppDrop，
+    // 若無條件再 .click() 會無限遞迴（Maximum call stack）→ 只在點擊來源非 input 時才觸發
+    $('#suppDrop').on('click', function (e) { if (e.target.id !== 'suppFileInput') $('#suppFileInput').click(); });
+    $('#suppFileInput').on('change', function () { if (this.files.length) _suppHandleFiles(this.files); this.value=''; });
+    $('#suppDrop')
+        .on('dragover', e => { e.preventDefault(); $('#suppDrop').css('background','#fdf2e2'); })
+        .on('dragleave', () => $('#suppDrop').css('background',''))
+        .on('drop', e => { e.preventDefault(); $('#suppDrop').css('background',''); const dt = e.originalEvent.dataTransfer; if (dt && dt.files.length) _suppHandleFiles(dt.files); });
+    // 補件 modal 關閉但未送審 → 刪除本次上傳的暫存檔，避免殘留（已送審者已從清單清空，不受影響）
+    $('#supplementModal').on('hidden.bs.modal', function () {
+        const leftover = _suppUploaded.slice();
+        _suppUploaded = [];
+        leftover.forEach(u => $.post(FILE_API_URL, { action:'delete_file', quote_no:_suppQno, filename:u.filename }));
+    });
+    if (CAN_SIGN) refreshSuppReviewBadge();
+});
+
 function printQuote() {
     if (!currentEditId) { Swal.fire('提示','請先儲存報價單再列印','warning'); return; }
     $.get(API_URL, { action:'get_print_data', quote_id: currentEditId }, res => {
@@ -3804,6 +4086,14 @@ function printQuote() {
 function buildPrintHtml(q, cust, contact, co, formNo) {
     const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     const fmtNum = n => parseFloat(n||0).toLocaleString('zh-TW', {minimumFractionDigits:0, maximumFractionDigits:2});
+    // 料號可點擊查閱圖面（比照 NewOrder_Track.php）。此為獨立 about:blank 列印視窗，需用絕對網址，
+    // 圖面查閱對所有登入者開放故不設權限閘門（bom_viewer 自帶登入驗證）。
+    const _bomViewerUrl = new URL('../pm/bom_viewer.php', location.href).href;
+    const pnCell = pid => {
+        if (pid === undefined || pid === null || pid === '') return '';
+        const arg = encodeURIComponent(String(pid));
+        return `<span class="pn-link" title="點擊查閱圖面" onclick="window.open('${_bomViewerUrl}?d_id=${arg}','drawing_${arg}','width=1100,height=800,resizable=yes,scrollbars=yes')">${esc(pid)}</span>`;
+    };
 
     // 公司資料
     const coName    = co.customer_full || co.customer || '';
@@ -3865,7 +4155,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         }
         let rowHtml = `<tr>
             <td class="center">${idx+1}</td>
-            <td>${esc(it.product_id||'')}</td>
+            <td>${pnCell(it.product_id)}</td>
             <td>${esc(desc)}${kidChunks[0] || ''}</td>
             <td class="right">${fmtNum(qty)}</td>
             <td class="center">${esc(unit)}</td>
@@ -3875,7 +4165,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         kidChunks.slice(1).forEach(chunk => {
             rowHtml += `<tr>
                 <td></td>
-                <td>${esc(it.product_id||'')}（續）</td>
+                <td>${pnCell(it.product_id)}（續）</td>
                 <td>${chunk}</td>
                 <td></td><td></td><td></td><td></td>
             </tr>`;
@@ -4000,7 +4290,8 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
   .sig-block { page-break-inside: avoid; }
   svg.car-stamp { width:91px !important; height:91px !important; }
   .sig-row .stamp-wrap { margin:0 0 0 4px; }
-  @media print { body { -webkit-print-color-adjust:exact; } }
+  .pn-link { cursor:pointer; color:#8a5a00; text-decoration:underline dotted; }
+  @media print { body { -webkit-print-color-adjust:exact; } .pn-link { color:inherit; text-decoration:none; } }
 </style>
 </head><body>
 ${fullHeaderHtml}
@@ -4900,6 +5191,28 @@ function loadValidDays() {
         }
     });
 }
+// 附件暫存/垃圾自動清除天數（後端 getQuotAttachDays 讀同名 param，預設 2/7）
+function loadAttachDays() {
+    $.get(API_URL, { action:'get_param', param_group:'QUOTATION', param_key:'temp_attach_days' }, res => {
+        const v = (res.success && res.value !== null) ? parseInt(res.value) : 0;
+        $('#qs-temp-days').val(v > 0 ? v : '');
+    });
+    $.get(API_URL, { action:'get_param', param_group:'QUOTATION', param_key:'trash_attach_days' }, res => {
+        const v = (res.success && res.value !== null) ? parseInt(res.value) : 0;
+        $('#qs-trash-days').val(v > 0 ? v : '');
+    });
+}
+function saveAttachDays() {
+    const t = parseInt($('#qs-temp-days').val()) || 2;
+    const r = parseInt($('#qs-trash-days').val()) || 7;
+    $.when(
+        $.post(API_URL, { action:'save_param', param_group:'QUOTATION', param_key:'temp_attach_days',  param_value: JSON.stringify(t), description:'未存檔暫存附件自動刪除天數' }),
+        $.post(API_URL, { action:'save_param', param_group:'QUOTATION', param_key:'trash_attach_days', param_value: JSON.stringify(r), description:'補件被否決附件自動刪除天數' })
+    ).done(() => {
+        $('#qs-temp-days').val(t); $('#qs-trash-days').val(r);
+        Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已儲存', showConfirmButton:false, timer:1800 });
+    }).fail(() => Swal.fire('錯誤','儲存失敗','error'));
+}
 function autoFillValidUntil() {
     if (!_validDays) return;
     const d = $('#quote_date').val();
@@ -5320,7 +5633,7 @@ function showSnapshot(logId, quoteNo) {
         (snap.items || []).forEach((it, i) => {
             html += `<tr>
                 <td>${i+1}</td>
-                <td>${escapeHtml(it.product_id||'')}</td>
+                <td>${qlDrawingSpan(it.product_id)}</td>
                 <td>${escapeHtml(it.specification||'')}</td>
                 <td style="text-align:right;">${formatNumber(it.quantity)}</td>
                 <td>${escapeHtml(it.unit||'')}</td>
@@ -5434,8 +5747,15 @@ function appendFileItem(f, quoteNo) {
     // 解析已連結料號 → 徽章文字（未設定/共用附件則不顯示徽章）
     const initLinkedParts = f.linked_parts ? JSON.parse(f.linked_parts) : null;
     const partBadgeHtml   = filePartBadgeHtml(initLinkedParts);
+    // 狀態徽章：暫存(未存檔)/補件審核中。active 不顯示。
+    const _st = f.status || 'active';
+    const statusBadge = _st === 'temp'
+        ? `<span class="file-status-badge" style="font-size:10px;padding:1px 6px;border-radius:3px;background:#F7E0BD;color:#7a4a00;margin-left:4px;white-space:nowrap;" title="尚未存檔，目前僅為暫存檔；存檔或存草稿後才正式上傳、才會出現在料號報價附件中。逾期未存檔會自動刪除。"><i class="fa fa-clock-o"></i> 暫存·未存檔</span>`
+      : _st === 'pending'
+        ? `<span class="file-status-badge" style="font-size:10px;padding:1px 6px;border-radius:3px;background:#F0A24B;color:#fff;margin-left:4px;white-space:nowrap;" title="補件審核中，通過後才正式放入此報價單"><i class="fa fa-hourglass-half"></i> 補件審核中</span>`
+      : '';
 
-    const $wrap = $(`<div class="file-item-wrap" data-filename="${escapeHtml(f.filename)}" data-attach-id="${escapeHtml(String(attachId))}" data-cat-ids="${escapeHtml(f.category_ids)}">
+    const $wrap = $(`<div class="file-item-wrap" data-filename="${escapeHtml(f.filename)}" data-attach-id="${escapeHtml(String(attachId))}" data-status="${escapeHtml(_st)}" data-cat-ids="${escapeHtml(f.category_ids)}">
         <div class="file-item" style="border-bottom:none;">
             <i class="fa ${icon}"></i>
             <button class="btn btn-xs btn-default file-tag-toggle-btn ${btnHasCat}" title="設定類別 / 料號連結" style="padding:1px 7px;">
@@ -5443,6 +5763,7 @@ function appendFileItem(f, quoteNo) {
                 <span class="file-cat-label" style="margin-left:3px;">${catLabel}</span>
             </button>
             <span class="file-part-badge-slot">${partBadgeHtml}</span>
+            ${statusBadge}
             <span class="file-item-name" onclick="window.open('${dlUrl}','_blank')" title="${escapeHtml(f.original_name||f.filename)}">${dispName}</span>
             <span class="file-item-size">${escapeHtml(f.size)}</span>
             <span class="file-item-time">${escapeHtml(f.mtime)}</span>
