@@ -463,6 +463,7 @@ if (!in_array($initTab, ['drawing','quote','other'], true)) $initTab = '';
         <div id="viewer-content">
             <div id="img-zoom-wrap"><img id="bom-zoom-img" src="" alt=""></div>
             <iframe id="bom-pdf-frame" src="" allowfullscreen></iframe>
+            <div id="bom-quote-detail" style="display:none;position:absolute;inset:0;overflow:auto;background:#fff;"></div>
             <div id="viewer-placeholder"><i class="fa fa-arrow-left"></i> 從左側選擇檔案</div>
         </div>
     </div>
@@ -552,7 +553,7 @@ function showFile(path, type, name) {
     var _isImg = ['jpg','jpeg','png','gif','bmp'].indexOf(_currentType) !== -1;
 
     $('#viewer-title').text(_currentName);
-    $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder').hide();
+    $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder, #bom-quote-detail').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
     resetTransform();
 
@@ -732,7 +733,7 @@ $(document).on('click', '.bom-file-item', function(e) {
 });
 
 // ── 三分頁：資料桶、渲染與切換（did 模式）；bom 模式維持單清單 ─────────────
-var _tabData    = { drawing: null, other: [], quote: [] };
+var _tabData    = { drawing: null, other: [], quote: [], quoteSummaries: {} };
 var _tabEnabled = { drawing: true, other: (_mode === 'did' && _canOther), quote: (_mode === 'did' && _canQuote) };
 var _activeTab  = 'drawing';
 var _tabMeta = {
@@ -745,6 +746,10 @@ function tabCount(tab) {
     if (tab === 'drawing') {
         var d = _tabData.drawing || {};
         return (d.files ? d.files.length : 0) + (d.erp_files ? d.erp_files.length : 0);
+    }
+    if (tab === 'quote') {
+        var qc = _tabData.quoteSummaries ? Object.keys(_tabData.quoteSummaries).length : 0;
+        return qc || (_tabData.quote || []).length;
     }
     return (_tabData[tab] || []).length;
 }
@@ -803,7 +808,7 @@ function makeAttItem(att) {
 }
 
 function showEmpty(msg) {
-    $('#img-zoom-wrap, #bom-pdf-frame').hide();
+    $('#img-zoom-wrap, #bom-pdf-frame, #bom-quote-detail').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
     $('#viewer-content .bom-obsolete-overlay').remove();
     $('#viewer-title').text('');
@@ -861,13 +866,123 @@ function renderAttList(tab) {
     applyObsoleteOverlay((f0.category_names || []).indexOf('作廢') >= 0);
 }
 
+// ── 報價資料分頁：報價明細（明細＋附件，最新在上，仿附件二報價跳窗）──────────
+function renderQuoteTab() {
+    var atts = _tabData.quote || [];
+    var summaries = _tabData.quoteSummaries || {};
+    var groups = {};
+    atts.forEach(function(f) { var q = f.quote_no || '__unknown__'; (groups[q] = groups[q] || []).push(f); });
+    Object.keys(summaries).forEach(function(q) { if (!groups[q]) groups[q] = []; });
+    var qnos = Object.keys(groups).filter(function(q) { return q !== '__unknown__'; }).sort(function(a, b) {
+        var ad = (summaries[a] && summaries[a].quote_date) || '';
+        var bd = (summaries[b] && summaries[b].quote_date) || '';
+        groups[a].forEach(function(f) { if (f.uploaded_at > ad) ad = f.uploaded_at; });
+        groups[b].forEach(function(f) { if (f.uploaded_at > bd) bd = f.uploaded_at; });
+        return bd > ad ? 1 : (bd < ad ? -1 : b.localeCompare(a));
+    });
+    if (groups['__unknown__'] && groups['__unknown__'].length) qnos.push('__unknown__');
+    if (!qnos.length) { $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">無報價資料</div>'); showEmpty('無報價資料'); return; }
+
+    var html = '';
+    qnos.forEach(function(qno) {
+        var qs = summaries[qno] || null;
+        var grpFiles = groups[qno];
+        // 製程標籤（彙整品項）
+        var qProcs = [];
+        if (qs && qs.items) {
+            qs.items.forEach(function(it) {
+                var procParts = (it.processes || []).map(function(p) { return p.name; });
+                var subParts  = (it.subtags || []);
+                if (!procParts.length && !subParts.length) return;
+                var key = procParts.concat(subParts).join('|');
+                var label = procParts.map(escapeHtml).join('・');
+                if (subParts.length) label += '<span style="color:#555;">・' + subParts.map(escapeHtml).join('・') + '</span>';
+                if (qProcs.filter(function(x) { return x.key === key; }).length === 0) qProcs.push({ key: key, label: label });
+            });
+        }
+        html += '<div class="bom-quote-head" data-qno="' + escapeHtml(qno) + '" style="background:#faf1e0;border-bottom:2px solid #e6c9a0;padding:8px 10px;cursor:pointer;">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">';
+        html += '<span style="font-size:12px;font-weight:700;color:#8a4b0f;font-family:Consolas,monospace;">' + escapeHtml(qno) + '</span>';
+        if (qs && qs.total_amount) html += '<span style="font-size:11px;color:#c0392b;font-weight:600;white-space:nowrap;">$' + Number(qs.total_amount).toLocaleString() + '</span>';
+        html += '</div>';
+        if (qProcs.length) {
+            html += '<div style="margin-top:2px;display:flex;flex-direction:column;gap:1px;">';
+            qProcs.forEach(function(p) { html += '<span style="font-size:10px;font-weight:600;color:#1b5e20;background:#e8f5e9;border-radius:3px;padding:0 5px;line-height:1.7;align-self:flex-start;">' + p.label + '</span>'; });
+            html += '</div>';
+        }
+        if (qs) {
+            html += '<div style="font-size:11px;color:#666;margin-top:2px;display:flex;gap:8px;flex-wrap:wrap;">';
+            if (qs.quote_date)  html += '<span><i class="fa fa-calendar" style="color:#bbb;margin-right:2px;"></i>' + escapeHtml(qs.quote_date) + '</span>';
+            if (qs.client_name) html += '<span><i class="fa fa-building-o" style="color:#bbb;margin-right:2px;"></i>' + escapeHtml(qs.client_name) + '</span>';
+            html += '</div>';
+        }
+        html += '<div style="font-size:10px;color:#b5793a;margin-top:3px;"><i class="fa fa-eye"></i> 點此看報價明細</div>';
+        html += '</div>';
+        grpFiles.forEach(function(f) { html += makeAttItem(f); });
+    });
+    $('#bom-file-list').html(html);
+    showQuoteDetail(qnos[0]);
+}
+
+function showQuoteDetail(qno) {
+    var qs = (_tabData.quoteSummaries || {})[qno] || null;
+    $('#bom-file-list .bom-file-item').removeClass('active');
+    $('#bom-file-list .bom-quote-head').css('background', '#faf1e0');
+    $('#bom-file-list .bom-quote-head[data-qno="' + qno + '"]').css('background', '#f2dcb8');
+    $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder').hide();
+    $('#viewer-content .bom-obsolete-overlay').remove();
+    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
+    $('#viewer-title').text(qno === '__unknown__' ? '（未知報價單）' : qno);
+
+    var html = '<div style="width:100%;height:100%;overflow-y:auto;padding:16px;background:#fff;">';
+    html += '<div style="font-size:15px;font-weight:700;color:#8a4b0f;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #e6c9a0;"><i class="fa fa-file-text-o" style="margin-right:6px;"></i>' + escapeHtml(qno === '__unknown__' ? '（未知報價單）' : qno) + '</div>';
+    if (!qs) {
+        html += '<div style="color:#aaa;font-size:12px;">此報價單無明細資料（可能僅有附件）。</div>';
+    } else {
+        html += '<table style="font-size:12px;width:100%;max-width:480px;margin-bottom:16px;border-collapse:collapse;">';
+        var rows = [['報價日期', qs.quote_date], ['客戶名稱', qs.client_name], ['有效日期', qs.valid_date], ['負責人員', qs.handler_name], ['總金額', qs.total_amount ? '$' + Number(qs.total_amount).toLocaleString() : '']];
+        rows.forEach(function(r) { if (!r[1]) return; html += '<tr><td style="color:#888;padding:3px 8px 3px 0;white-space:nowrap;">' + escapeHtml(r[0]) + '</td><td style="padding:3px 0;font-weight:600;color:#2c3e50;">' + escapeHtml(String(r[1])) + '</td></tr>'; });
+        if (qs.quote_note) html += '<tr><td style="color:#888;padding:3px 8px 3px 0;white-space:nowrap;">報價單備註</td><td style="padding:3px 0;color:#7d3c98;">' + escapeHtml(qs.quote_note) + '</td></tr>';
+        html += '</table>';
+        if (qs.items && qs.items.length) {
+            html += '<div style="font-size:12px;font-weight:700;color:#2c3e50;margin-bottom:6px;">報價品項</div>';
+            html += '<table style="width:100%;font-size:11px;border-collapse:collapse;"><thead><tr style="background:#f7efe2;">';
+            html += '<th style="padding:4px 6px;text-align:left;border-bottom:1px solid #e6d3b3;">料號</th><th style="padding:4px 6px;text-align:left;border-bottom:1px solid #e6d3b3;">製程／備註</th><th style="padding:4px 6px;text-align:right;border-bottom:1px solid #e6d3b3;">數量</th><th style="padding:4px 6px;text-align:right;border-bottom:1px solid #e6d3b3;">單價</th></tr></thead><tbody>';
+            qs.items.forEach(function(it) {
+                var procParts = (it.processes || []).map(function(p) { return escapeHtml(p.name); });
+                var subParts  = (it.subtags || []).map(escapeHtml);
+                var combined = '';
+                if (procParts.length || subParts.length) {
+                    var mainLine = procParts.join('・');
+                    if (subParts.length) mainLine += '<span style="color:#555;">・' + subParts.join('・') + '</span>';
+                    combined += '<div style="color:#1b5e20;font-weight:600;">' + mainLine + '</div>';
+                }
+                if (it.specification) combined += '<div style="color:#7d3c98;font-size:10px;">' + escapeHtml(it.specification) + '</div>';
+                if (!combined) combined = '<span style="color:#ccc;">—</span>';
+                html += '<tr style="border-bottom:1px solid #f0f0f0;">';
+                html += '<td style="padding:4px 6px;color:#1a5276;font-weight:600;">' + escapeHtml(it.product_id || '') + '</td>';
+                html += '<td style="padding:4px 6px;line-height:1.6;">' + combined + '</td>';
+                html += '<td style="padding:4px 6px;text-align:right;">' + escapeHtml(String(it.quantity || '')) + ' ' + (it.unit || '') + '</td>';
+                html += '<td style="padding:4px 6px;text-align:right;color:' + (it.is_tiered ? '#888' : '#c0392b') + ';">' + (it.is_tiered ? '(階梯)' : (it.unit_price ? '$' + Number(it.unit_price).toLocaleString() : '—')) + '</td>';
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+        }
+    }
+    html += '</div>';
+    $('#bom-quote-detail').html(html).show();
+}
+
 function switchTab(tab) {
     if (!_tabEnabled[tab]) return;
     _activeTab = tab;
     $('#bom-tabbar .bom-tab').removeClass('active').filter('[data-tab="'+tab+'"]').addClass('active');
-    if (tab === 'drawing') renderDrawingList(); else renderAttList(tab);
+    if (tab === 'drawing') renderDrawingList();
+    else if (tab === 'quote') renderQuoteTab();
+    else renderAttList(tab);
 }
 $(document).on('click', '#bom-tabbar .bom-tab', function() { switchTab($(this).data('tab')); });
+$(document).on('click', '.bom-quote-head', function() { showQuoteDetail($(this).data('qno')); });
 
 // ── 載入 ───────────────────────────────────────────────────────────────
 function loadBomMode() {
@@ -898,11 +1013,15 @@ function loadDidMode() {
             _tabData.other = (res && res.success && res.attachments) ? res.attachments : [];
         }, 'json').always(function() { renderTabbar(); done(); });
     }
-    // 報價資料
+    // 報價資料：附件檔 + 報價明細（get_quote_summaries 以文字料號跨客戶查）
     if (_tabEnabled.quote) {
-        $.post('', { action: 'get_quote_attachments_by_did', d_id: _d_id }, function(res) {
+        var pQAtt = $.post('', { action: 'get_quote_attachments_by_did', d_id: _d_id }, function(res) {
             _tabData.quote = (res && res.success && res.attachments) ? res.attachments : [];
-        }, 'json').always(function() { renderTabbar(); done(); });
+        }, 'json');
+        var pQSum = $.post('../../src/store/Part_Attachment_API.php', { action: 'get_quote_summaries', part_no: _d_id }, function(res) {
+            _tabData.quoteSummaries = (res && res.success && res.data && typeof res.data === 'object' && !Array.isArray(res.data)) ? res.data : {};
+        }, 'json');
+        $.when(pQAtt, pQSum).always(function() { renderTabbar(); done(); });
     }
     renderTabbar();
 }

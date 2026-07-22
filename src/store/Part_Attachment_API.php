@@ -382,13 +382,26 @@ switch ($action) {
         if (!_paQuotCanView($pdo)) { echo json_encode(['success'=>true,'data'=>[]]); exit; }
         $quoteNos = json_decode($_POST['quote_nos'] ?? '[]', true);
         $dId = intval($_POST['d_id'] ?? 0);
+        $partNo = trim($_POST['part_no'] ?? '');   // 文字料號（bom_viewer 用；一料號可對多客戶 d_id）
         if (!is_array($quoteNos)) $quoteNos = [];
         $quoteNos = array_values(array_unique(array_filter(array_map('trim', $quoteNos))));
-        // quote_nos 為空但有 d_id → 直接撈此料號所有報價單號
-        if (empty($quoteNos) && $dId > 0) {
+        // 解析要過濾的整數 d_id 清單：優先 part_no（可多筆，跨客戶），否則單一 d_id
+        $dIds = [];
+        if ($partNo !== '') {
             try {
-                $qnStmt = $pdo->prepare("SELECT DISTINCT ql.quote_no FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id = qi.quote_id WHERE qi.d_setting_d_id = ?");
-                $qnStmt->execute([$dId]);
+                $dsP = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id = ?");
+                $dsP->execute([$partNo]);
+                $dIds = array_map('intval', $dsP->fetchAll(PDO::FETCH_COLUMN));
+            } catch(Throwable $_e) {}
+        } elseif ($dId > 0) {
+            $dIds = [$dId];
+        }
+        // quote_nos 為空但有 d_id → 直接撈此料號所有報價單號
+        if (empty($quoteNos) && !empty($dIds)) {
+            try {
+                $phD = implode(',', array_fill(0, count($dIds), '?'));
+                $qnStmt = $pdo->prepare("SELECT DISTINCT ql.quote_no FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id = qi.quote_id WHERE qi.d_setting_d_id IN ($phD)");
+                $qnStmt->execute($dIds);
                 $quoteNos = $qnStmt->fetchAll(PDO::FETCH_COLUMN);
             } catch(Throwable $e) {}
         }
@@ -407,8 +420,8 @@ switch ($action) {
             $headers = [];
             foreach ($qlStmt->fetchAll(PDO::FETCH_ASSOC) as $h) { $headers[$h['quote_no']] = $h; }
 
-            // 報價品項（含製程，依 d_id 過濾）
-            $dFilter = $dId ? "AND qi.d_setting_d_id = ?" : "";
+            // 報價品項（含製程，依 d_id 過濾；part_no 模式可多個 d_id）
+            $dFilter = !empty($dIds) ? ("AND qi.d_setting_d_id IN (" . implode(',', array_fill(0, count($dIds), '?')) . ")") : "";
             $qiStmt = $pdo->prepare("SELECT qi.item_id, qi.quote_id, ql2.quote_no, qi.product_id,
                     qi.specification, qi.quantity, qi.unit, qi.unit_price, qi.is_tiered,
                     qi.process_group_type, qi.process_notes,
@@ -426,7 +439,7 @@ switch ($action) {
                 GROUP BY qi.item_id
                 ORDER BY qi.item_id");
             $qiParams = $quoteNos;
-            if ($dId) $qiParams[] = $dId;
+            if (!empty($dIds)) $qiParams = array_merge($qiParams, $dIds);
             $qiStmt->execute($qiParams);
             $items = [];
             foreach ($qiStmt->fetchAll(PDO::FETCH_ASSOC) as $it) {
