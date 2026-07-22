@@ -276,8 +276,8 @@ function fillSectionSelect(cur){
   $('#pSection').html(opts||'<option value="">（尚無簽核區，請先於下方新增）</option>');
 }
 
-// 套用屬性
-$('#btnApply').on('click',function(){
+// 套用屬性（withSpan=true 才套跨欄/列——打字中途不套，避免誤刪被覆蓋的格）
+function applyProp(withSpan){
   if(!sel) return;
   const [r,c]=sel.split('_').map(Number);
   const cell=cellAt(r,c); if(!cell) return;
@@ -293,9 +293,33 @@ $('#btnApply').on('click',function(){
     if($('#pRequired').prop('checked')) cell.required=true;
   }
   if(t==='signature'){ cell.section=$('#pSection').val(); }
-  const cs=Math.max(1,parseInt($('#pCs').val())||1), rs=Math.max(1,parseInt($('#pRs').val())||1);
-  setSpan(cell,cs,rs);
+  if(withSpan!==false){
+    const cs=Math.max(1,parseInt($('#pCs').val())||1), rs=Math.max(1,parseInt($('#pRs').val())||1);
+    setSpan(cell,cs,rs);
+  }
   recalcRows(); renderEdit();
+}
+$('#btnApply').on('click',()=>applyProp(true));
+// 即時反映：打字/變動立刻更新左側格子（跨欄/列只在 change 時套，見上）
+$('#pText,#pKey,#pOptions').on('input',()=>applyProp(false));
+$('#pType,#pFtype,#pAlign,#pRequired,#pSection').on('change',()=>applyProp(false));
+$('#pCs,#pRs').on('change',()=>applyProp(true));
+
+// ── 輸入欄位通用互動（ai-rules/08）：聚焦全選、雙擊清空、Enter 跳下一欄 ──
+const UX_INPUTS='.side input[type=text], .side input[type=number], .topbar input[type=text], .topbar input[type=number], #secTable input[type=text], #secTable input[type=number]';
+$(document).on('focus',UX_INPUTS,function(){ if(this.select) this.select(); });
+$(document).on('dblclick',UX_INPUTS,function(){
+  this.value=''; $(this).trigger('input').trigger('change').trigger('focus');
+});
+$(document).on('keydown',UX_INPUTS+', .side select, #secTable select',function(e){
+  if(e.key!=='Enter') return;
+  e.preventDefault();
+  // 同一容器（屬性面板/頂欄/簽核區）內可見的輸入欄依序跳
+  const $scope=$(this).closest('.side,.topbar,#secTable');
+  const $fields=$scope.find('input:visible:enabled, select:visible:enabled').not('[type=checkbox]');
+  const idx=$fields.index(this);
+  if(idx>=0 && idx<$fields.length-1) $fields.eq(idx+1).trigger('focus');
+  else if($scope.hasClass('side')) applyProp(true);   // 面板最後一欄 Enter＝套用（含跨欄/列）
 });
 
 // 設定跨欄/列，清掉被覆蓋區的其他格
