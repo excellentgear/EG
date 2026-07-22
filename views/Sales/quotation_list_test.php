@@ -3279,14 +3279,14 @@ function renderViewPanel(q, contact, detail) {
             <i class="fa fa-paperclip"></i> 附件
         </div>
         <div id="viewAttachList"></div>
-        ${(q.approval_status==='approved' && (CAN_EDIT || (q.created_by!=null && Number(q.created_by)===CURRENT_UID))) ? `
-        <div style="margin-top:8px;">
-            <button class="btn btn-xs" style="background:#F0A24B;color:#fff;font-weight:600;" onclick="openSupplementModal('${esc(q.quote_no)}')">
-                <i class="fa fa-plus"></i> 補件（追加附件送審）
-            </button>
-            <span style="font-size:11px;color:#999;margin-left:6px;">已核准報價單追加附件，需經簽核者審核通過才會正式放入此報價單</span>
-        </div>` : ''}
-    </div>`;
+    </div>
+    ${(q.approval_status==='approved' && (CAN_EDIT || (q.created_by!=null && Number(q.created_by)===CURRENT_UID))) ? `
+    <div id="viewSupplementBar" style="margin-top:8px;">
+        <button class="btn btn-xs" style="background:#F0A24B;color:#fff;font-weight:600;" onclick="openSupplementModal('${esc(q.quote_no)}')">
+            <i class="fa fa-plus"></i> 補件（追加附件送審）
+        </button>
+        <span style="font-size:11px;color:#999;margin-left:6px;">已核准報價單追加附件，需經簽核者審核通過才會正式放入此報價單</span>
+    </div>` : ''}`;
     $('#viewBody').html(html);
     // 記住目前檢視單的料號清單（product_id，與 linked_parts 儲存格式一致；供補件 modal 下拉使用）
     _viewQuoteParts = [...new Set((q.items || []).map(it => it.product_id).filter(Boolean))];
@@ -3885,17 +3885,32 @@ function _suppHandleFiles(fileList) {
 }
 
 function _suppFileRowHtml(attId, name) {
+    const reqCats = (typeof effectiveRequiredCats === 'function') ? effectiveRequiredCats() : [];
     const catOpts = fileCategories.length
-        ? fileCategories.map(c => `<label style="margin-right:8px;font-weight:400;"><input type="checkbox" class="supp-cat" value="${c.id}"> ${escapeHtml(c.category_name)}</label>`).join('')
+        ? fileCategories.map(c => {
+            const req = reqCats.some(r => Number(r) === Number(c.id));
+            return `<label style="margin-right:8px;font-weight:400;"><input type="checkbox" class="supp-cat" value="${c.id}" data-req="${req?1:0}" onchange="_suppSyncPart(this)"> ${escapeHtml(c.category_name)}${req ? ' <span style="color:#DD5138;" title="必備類別，需連結單一料號">*</span>' : ''}</label>`;
+          }).join('')
         : '<span class="text-muted">尚無啟用類別</span>';
     const partOpts = ['<option value="all">共用（此報價單全部料號）</option>']
         .concat(_viewQuoteParts.map(pid => `<option value="${escapeHtml(pid)}">${escapeHtml(pid)}</option>`)).join('');
     return `<div class="supp-file" data-att-id="${attId}">
         <div style="font-weight:600;color:#333;margin-bottom:4px;"><i class="fa fa-file-o"></i> ${escapeHtml(name)}
             <button class="btn btn-xs btn-link text-danger" style="float:right;padding:0;" onclick="_suppRemove(${attId}, this)"><i class="fa fa-trash"></i> 移除</button></div>
-        <div style="font-size:12px;margin-bottom:4px;"><span style="color:#888;">類別（必選）：</span>${catOpts}</div>
+        <div style="font-size:12px;margin-bottom:4px;"><span style="color:#888;">類別（必選）：</span>${catOpts}
+            ${reqCats.length ? '<span style="color:#DD5138;font-size:11px;margin-left:4px;">（* 必備類別，須連結單一料號）</span>' : ''}</div>
         <div style="font-size:12px;"><span style="color:#888;">連結料號：</span><select class="supp-part form-control input-sm" style="display:inline-block;width:auto;">${partOpts}</select></div>
     </div>`;
+}
+// 勾選到必備類別時，若目前料號為「共用」則自動改選第一個料號（沒有料號可選則維持，送出時擋下）
+function _suppSyncPart(chk) {
+    const $row = $(chk).closest('.supp-file');
+    const anyReq = $row.find('.supp-cat:checked').filter((i,el)=>String($(el).data('req'))==='1').length > 0;
+    const $part = $row.find('.supp-part');
+    if (anyReq && $part.val() === 'all') {
+        const $firstReal = $part.find('option').filter((i,o)=>o.value!=='all').first();
+        if ($firstReal.length) $part.val($firstReal.val());
+    }
 }
 
 function _suppRemove(attId, btn) {
@@ -3908,18 +3923,22 @@ function _suppRemove(attId, btn) {
 function submitSupplement() {
     const $rows = $('#suppFileList .supp-file');
     if (!$rows.length) { Swal.fire('提示','請先上傳要補的附件','info'); return; }
-    const ids = [], savers = [];
-    let bad = false;
+    const reqCats = (typeof effectiveRequiredCats === 'function') ? effectiveRequiredCats() : [];
+    const plan = [];
+    let noCat = false, needPart = false;
     $rows.each(function () {
         const attId = $(this).data('att-id');
         const cats  = $(this).find('.supp-cat:checked').map((i,el)=>el.value).get();
-        if (!cats.length) bad = true;
-        const part   = $(this).find('.supp-part').val();
-        const linked = (part === 'all') ? 'all' : JSON.stringify([part]);
-        ids.push(attId);
-        savers.push($.post(FILE_API_URL, { action:'update_attachment', attachment_id:attId, category_ids:cats.join(','), linked_parts:linked }));
+        const part  = $(this).find('.supp-part').val();
+        if (!cats.length) { noCat = true; return; }
+        const hasReq = cats.some(c => reqCats.some(r => Number(r) === Number(c)));
+        if (hasReq && part === 'all') { needPart = true; }
+        plan.push({ attId, cats, linked: (part === 'all') ? 'all' : JSON.stringify([part]) });
     });
-    if (bad) { Swal.fire('請設定類別','每個補件附件都必須至少選一個類別','warning'); return; }
+    if (noCat)    { Swal.fire('請設定類別','每個補件附件都必須至少選一個類別','warning'); return; }
+    if (needPart) { Swal.fire('必備類別需連結料號','所選類別含必備附件類別，必須連結單一料號（不可設為「共用」）','warning'); return; }
+    const ids = plan.map(p => p.attId);
+    const savers = plan.map(p => $.post(FILE_API_URL, { action:'update_attachment', attachment_id:p.attId, category_ids:p.cats.join(','), linked_parts:p.linked }));
     $('#suppSubmitBtn').prop('disabled', true);
     $.when.apply($, savers).always(() => {
         $.post(FILE_API_URL, { action:'submit_supplement', quote_no:_suppQno, attachment_ids: JSON.stringify(ids) }, res => {
@@ -4005,7 +4024,9 @@ function refreshSuppReviewBadge() {
 
 // 補件 modal 上傳區事件綁定 + 待審徽章初始化
 $(function () {
-    $('#suppDrop').on('click', () => $('#suppFileInput').click());
+    // 注意：#suppFileInput 巢狀在 #suppDrop 內，input 的 click 會冒泡回 suppDrop，
+    // 若無條件再 .click() 會無限遞迴（Maximum call stack）→ 只在點擊來源非 input 時才觸發
+    $('#suppDrop').on('click', function (e) { if (e.target.id !== 'suppFileInput') $('#suppFileInput').click(); });
     $('#suppFileInput').on('change', function () { if (this.files.length) _suppHandleFiles(this.files); this.value=''; });
     $('#suppDrop')
         .on('dragover', e => { e.preventDefault(); $('#suppDrop').css('background','#fdf2e2'); })
