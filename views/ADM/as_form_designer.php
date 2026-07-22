@@ -16,9 +16,11 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
 <title>表單設計器 | 線上表單</title>
 <link href="../../resource/css/bootstrap.css" rel="stylesheet">
 <link href="../../resource/css/font-awesome.css" rel="stylesheet">
+<link href="../../resource/css/nprogress.css" rel="stylesheet">
+<link href="../../resource/css/custom.css" rel="stylesheet">
 <link href="../../resource/css/as_form.css?v=<?php echo @filemtime(__DIR__.'/../../resource/css/as_form.css'); ?>" rel="stylesheet">
 <style>
-  body{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;}
+  .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;min-height:100vh;}
   .wrap{display:flex;gap:14px;padding:12px 16px;align-items:flex-start;}
   .canvas{flex:1;min-width:0;}
   .side{width:300px;flex:none;background:#fff;border:1px solid #d8c19a;border-radius:6px;padding:12px;box-shadow:0 2px 8px rgba(90,61,30,.12);position:sticky;top:10px;}
@@ -47,7 +49,11 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
   .btn-xs2{padding:1px 6px;font-size:11px;}
 </style>
 </head>
-<body>
+<body class="nav-sm">
+<div class="container body">
+<div class="main_container">
+<?php include '../partPage/sideAndTopBarMenu.html' ?>
+<div class="right_col" role="main" style="padding:10px 14px;">
 <div class="topbar">
   <strong style="color:#7a4e17;"><i class="fa fa-th"></i> 表單設計器</strong>
   <input type="text" class="form-control input-sm" id="tplName" placeholder="表單名稱" style="width:200px;">
@@ -69,6 +75,7 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
 <div class="wrap">
   <div class="canvas">
     <div id="editHost"></div>
+    <p class="muted" style="margin-top:4px;"><i class="fa fa-keyboard-o"></i> 選取格子後 <strong>Ctrl+方向鍵</strong>＝把目前格的屬性與內容複製到相鄰格（同 Excel 填滿；欄位代號自動加流水號避免重複）</p>
     <div style="margin-top:14px;">
       <h4 style="font-size:14px;color:#7a4e17;border-bottom:2px solid #f0a24b;padding-bottom:5px;">簽核區（section）</h4>
       <p class="muted" style="font-size:11px;">每個「簽名格」綁一個簽核區；step 相同＝平行、遞增＝依序。規則：submitter=填表本人、position=指定職稱、level=N階主管以上。</p>
@@ -112,7 +119,13 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
           <option value="user_name">使用者姓名（自動帶入）</option>
           <option value="user_dept">使用者部門（自動帶入）</option>
           <option value="user_position">使用者職稱（自動帶入）</option>
+          <option value="fixed_dept">固定部門（綁部門ID）</option>
         </select>
+      </div>
+      <div class="form-group prop-fixeddept" style="display:none;">
+        <label>選擇部門</label>
+        <select class="form-control input-sm" id="pFixedDept"></select>
+        <span class="muted">存部門ID，之後部門改名會自動連動顯示新名稱</span>
       </div>
       <div class="form-group prop-options" style="display:none;">
         <label>選項（逗號分隔）</label>
@@ -158,8 +171,14 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
   <div class="modal-body" style="background:#efe7da;"><div class="preview-host"><div id="previewHost"></div></div></div>
 </div></div></div>
 
+</div><!-- /right_col -->
+</div><!-- /main_container -->
+</div><!-- /container body -->
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/fastclick.js"></script>
+<script src="../../resource/js/nprogress.js"></script>
+<script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/as_form_render.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/as_form_render.js'); ?>"></script>
 <script>
 const API = '../../src/store/AS_Form_API.php';
@@ -185,7 +204,8 @@ function load(){
     $('#gridCols').val(schema.grid.cols||6);
     $('#chkHeader').prop('checked', schema.meta.header.show!==false);
     $('#chkFooter').prop('checked', schema.meta.footer.show!==false);
-    $('#statusBadge').text('狀態：'+r.template.status+'（發布版 '+r.template.published_version+'）'+(r.canDesign?'':'　⚠ 唯讀（無設計權）'));
+    const docInfo=(r.ctx&&r.ctx.docNo)?('｜文件編號 '+r.ctx.docNo+(r.ctx.version||'')):'｜未綁定文件（入口頁可綁定）';
+    $('#statusBadge').text('狀態：'+r.template.status+'（發布版 '+r.template.published_version+'）'+docInfo+(r.canDesign?'':'　⚠ 唯讀（無設計權）'));
     if(!r.canDesign){ $('.topbar button,.side button,.topbar input,.side input,.side select').prop('disabled',true); }
     recalcRows();
     renderEdit(); renderSections();
@@ -240,7 +260,8 @@ function editInner(cell){
   if(cell.type==='title'||cell.type==='label'||cell.type==='static') return esc(cell.text||'（空）');
   if(cell.type==='signature') return `<span class="celltag">簽</span>${esc(cell.section||'?')}`;
   if(cell.type==='blank') return '';
-  const ft={text:'文字',textarea:'多行',number:'數字',date:'日期',select:'下拉',checkbox:'勾選',user_name:'姓名',user_dept:'部門',user_position:'職稱'}[cell.ftype]||'文字';
+  const ft={text:'文字',textarea:'多行',number:'數字',date:'日期',select:'下拉',checkbox:'勾選',user_name:'姓名',user_dept:'部門',user_position:'職稱',fixed_dept:'固定部門'}[cell.ftype]||'文字';
+  if(cell.ftype==='fixed_dept') return `<span class="celltag">${ft}</span>${esc(cell.dept||'未選')}`;
   return `<span class="celltag">${ft}</span>${esc(cell.key||'未命名')}`;
 }
 
@@ -269,6 +290,9 @@ function fillProp(){
   $('#pRequired').prop('checked',!!cell.required);
   $('#pToday').prop('checked',!!cell.today);
   $('#pPattern').val(cell.pattern||'');
+  // 固定部門下拉（META.departments 帶出，選中既有 dept_id）
+  $('#pFixedDept').html('<option value="">請選擇部門</option>'+META.departments.map(d=>
+    `<option value="${d.id}"${String(cell.dept_id||'')===String(d.id)?' selected':''}>${esc(d.name)}</option>`).join(''));
   $('#pAlign').val(cell.align||'center');
   $('#pCs').val(cell.cs||1);
   $('#pRs').val(cell.rs||1);
@@ -284,6 +308,7 @@ function syncPropVisibility(){
   $('.prop-options').toggle(t==='field' && ['select','checkbox'].includes(ft));
   $('.prop-today').toggle(t==='field' && ft==='date');
   $('.prop-pattern').toggle(t==='field' && ft==='text');
+  $('.prop-fixeddept').toggle(t==='field' && ft==='fixed_dept');
 }
 $('#pType,#pFtype').on('change',syncPropVisibility);
 
@@ -299,7 +324,7 @@ function applyProp(withSpan){
   const cell=cellAt(r,c); if(!cell) return;
   const t=$('#pType').val();
   cell.type=t;
-  ['text','key','ftype','options','required','align','section','rows','today','pattern'].forEach(k=>delete cell[k]);
+  ['text','key','ftype','options','required','align','section','rows','today','pattern','dept_id','dept'].forEach(k=>delete cell[k]);
   if(t==='title'||t==='label'||t==='static'){ cell.text=$('#pText').val(); if(t!=='title'){const a=$('#pAlign').val(); if(a==='left')cell.align='left';} }
   if(t==='field'){
     cell.key=$('#pKey').val().trim();
@@ -308,6 +333,10 @@ function applyProp(withSpan){
     if(cell.ftype==='textarea'){ cell.rows=6; }
     if(cell.ftype==='date' && $('#pToday').prop('checked')) cell.today=true;
     if(cell.ftype==='text'){ const p=$('#pPattern').val().trim(); if(p) cell.pattern=p; }
+    if(cell.ftype==='fixed_dept'){
+      const did=parseInt($('#pFixedDept').val())||0;
+      if(did){ cell.dept_id=did; cell.dept=$('#pFixedDept option:selected').text(); }   // dept 僅設計器顯示備援，正式顯示以 ID 即時解析
+    }
     if($('#pRequired').prop('checked')) cell.required=true;
   }
   if(t==='signature'){ cell.section=$('#pSection').val(); }
@@ -368,6 +397,35 @@ $('#btnDelCell').on('click',function(){
   if(!sel) return; const [r,c]=sel.split('_').map(Number);
   schema.cells=schema.cells.filter(x=>!(x.r===r&&x.c===c));
   sel=null; renderEdit(); $('#propPanel').hide(); $('#propEmpty').show();
+});
+
+// ── Ctrl+方向鍵：把目前格複製到相鄰格（同 Excel 填滿）──
+function uniqueKey(base){
+  base=String(base||'').replace(/_\d+$/,'');
+  const keys=new Set(schema.cells.map(x=>x.key).filter(Boolean));
+  if(!keys.has(base)) return base;
+  let i=2, k=base+'_2';
+  while(keys.has(k)) k=base+'_'+(++i);
+  return k;
+}
+$(document).on('keydown',function(e){
+  if(!sel || !e.ctrlKey) return;
+  const dir={ArrowUp:[-1,0],ArrowDown:[1,0],ArrowLeft:[0,-1],ArrowRight:[0,1]}[e.key];
+  if(!dir) return;
+  if($(e.target).is('input,select,textarea')) return;   // 打字中不攔截
+  e.preventDefault();
+  const [r,c]=sel.split('_').map(Number);
+  const src=cellAt(r,c); if(!src) return;
+  const nr=r+dir[0], nc=c+dir[1];
+  if(nr<0||nc<0||nc>=schema.grid.cols) return;
+  const {covered}=occupancy();
+  if(covered[nr] && covered[nr][nc]){ alert('目標格被合併儲存格覆蓋，無法複製過去'); return; }
+  const clone=JSON.parse(JSON.stringify(src));
+  clone.r=nr; clone.c=nc; clone.cs=1; clone.rs=1;      // 跨欄/列不隨複製帶過去
+  if(clone.key) clone.key=uniqueKey(clone.key);        // 欄位代號自動流水號避免重複
+  schema.cells=schema.cells.filter(x=>!(x.r===nr&&x.c===nc));
+  schema.cells.push(clone);
+  sel=nr+'_'+nc; recalcRows(); renderEdit(); fillProp();
 });
 
 // ── 結構 ──

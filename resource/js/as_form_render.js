@@ -53,6 +53,11 @@
     var u = ctx.user || {};
     var upos = u.positions || [];
     switch (cell.ftype) {
+      // ── 固定部門（綁部門ID，顯示時即時解析名稱→改名自動連動）──
+      case 'fixed_dept': {
+        var dname = (ctx.deptMap && ctx.deptMap[String(cell.dept_id)]) || cell.dept || val || '';
+        return '<input type="text" data-key="' + esc(key) + '" value="' + esc(dname) + '" readonly' + req + '>';
+      }
       // ── 自動帶入使用者身分（姓名固定；部門/職稱兼職者下拉可改，預設主要身分）──
       case 'user_name':
         return '<input type="text" data-key="' + esc(key) + '" value="' + esc(val || u.name || '') + '" readonly' + req + '>';

@@ -25,9 +25,11 @@ try {
 <title>表單填寫 | 線上表單</title>
 <link href="../../resource/css/bootstrap.css" rel="stylesheet">
 <link href="../../resource/css/font-awesome.css" rel="stylesheet">
+<link href="../../resource/css/nprogress.css" rel="stylesheet">
+<link href="../../resource/css/custom.css" rel="stylesheet">
 <link href="../../resource/css/as_form.css?v=<?php echo @filemtime(__DIR__.'/../../resource/css/as_form.css'); ?>" rel="stylesheet">
 <style>
-  body{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;}
+  .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;min-height:100vh;}
   .form-toolbar{max-width:820px;margin:14px auto 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
   .form-sheet{max-width:820px;margin:12px auto 16px;background:#fff;padding:26px 30px;box-shadow:0 2px 10px rgba(90,61,30,.18);}
   .status-chip{display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;font-weight:bold;}
@@ -40,13 +42,19 @@ try {
   .fs-rejected{background:#dd5138;color:#fff;}
   @media print{
     body{background:#fff;}
-    .form-toolbar,.sign-panel{display:none;}
+    .form-toolbar,.sign-panel,.left_col,.top_nav,footer{display:none !important;}
+    .right_col{margin:0 !important;padding:0 !important;background:#fff;min-height:0;}
+    .container.body,.main_container{margin:0;padding:0;background:#fff;}
     .form-sheet{box-shadow:none;margin:0;max-width:none;padding:0;}
     .eg-form td{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   }
 </style>
 </head>
-<body>
+<body class="nav-sm">
+<div class="container body">
+<div class="main_container">
+<?php include '../partPage/sideAndTopBarMenu.html' ?>
+<div class="right_col" role="main">
   <div class="form-toolbar">
     <span id="formTitle" style="font-weight:bold;color:#7a4e17;"></span>
     <span id="statusChip"></span>
@@ -64,7 +72,14 @@ try {
     <div id="myActions"></div>
   </div>
 
+</div><!-- /right_col -->
+</div><!-- /main_container -->
+</div><!-- /container body -->
 <script src="../../resource/js/jquery.min.js"></script>
+<script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/fastclick.js"></script>
+<script src="../../resource/js/nprogress.js"></script>
+<script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/as_form_render.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/as_form_render.js'); ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_stamp.js'); ?>"></script>
 <script>

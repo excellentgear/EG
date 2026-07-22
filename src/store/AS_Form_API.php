@@ -84,7 +84,14 @@ function buildCtx(PDO $db, array $tpl): array {
             $version = trim((string)($dr['current_version'] ?? ''));
         }
     }
-    return ['company'=>$company, 'docNo'=>$docNo, 'version'=>$version];
+    // 部門 id→名稱對照（固定部門欄位顯示時即時解析，改名自動連動）
+    $deptMap = [];
+    try {
+        foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d2) {
+            $deptMap[(string)$d2['id']] = $d2['name'];
+        }
+    } catch (Exception $e) {}
+    return ['company'=>$company, 'docNo'=>$docNo, 'version'=>$version, 'deptMap'=>$deptMap];
 }
 
 /** 目前使用者身分（自動帶入欄位用）：姓名＋全部(部門,職稱)身分，主要(is_main)排最前 */
@@ -111,15 +118,36 @@ switch ($action) {
 case 'meta': {
     $positions = $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     $departments = $db->query("SELECT id, name FROM department ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
-    jout(['ok'=>true, 'positions'=>$positions, 'departments'=>$departments]);
+    // 可綁定的四階表單文件（表尾文件編號由此連動）
+    $formDocs = $db->query("SELECT id, doc_no, doc_name FROM as_document WHERE doc_type='表單' AND is_deleted=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['ok'=>true, 'positions'=>$positions, 'departments'=>$departments, 'form_docs'=>$formDocs]);
+}
+
+// ── 綁定/改綁文件編號（form_doc_id=0 解除綁定）──
+case 'bind_doc': {
+    $tid = (int)($_POST['template_id'] ?? 0);
+    $fdid = (int)($_POST['form_doc_id'] ?? 0);
+    if (!$tid) jerr('缺 template_id');
+    if (!canDesignTemplate($db, $uid, $canBuild, $tid)) jerr('無權設定此表單', 403);
+    if ($fdid) {
+        $d = $db->prepare("SELECT id FROM as_document WHERE id=? AND doc_type='表單' AND is_deleted=0");
+        $d->execute([$fdid]);
+        if (!$d->fetchColumn()) jerr('文件不存在或非表單類');
+    }
+    $db->prepare("UPDATE as_form_template SET form_doc_id=?, updated_at=NOW() WHERE id=?")
+       ->execute([$fdid ?: null, $tid]);
+    jout(['ok'=>true]);
 }
 
 // ── 列出模板（可選 form_doc_id 篩選）──
 case 'list': {
-    $where = "is_deleted=0";
+    $where = "t.is_deleted=0";
     $args = [];
-    if (!empty($_GET['form_doc_id'])) { $where .= " AND form_doc_id=?"; $args[] = (int)$_GET['form_doc_id']; }
-    $q = $db->prepare("SELECT id, form_doc_id, name, status, published_version, updated_at FROM as_form_template WHERE $where ORDER BY updated_at DESC, id DESC");
+    if (!empty($_GET['form_doc_id'])) { $where .= " AND t.form_doc_id=?"; $args[] = (int)$_GET['form_doc_id']; }
+    $q = $db->prepare("SELECT t.id, t.form_doc_id, t.name, t.status, t.published_version, t.updated_at,
+                              d.doc_no, d.current_version AS doc_version
+                       FROM as_form_template t LEFT JOIN as_document d ON d.id=t.form_doc_id
+                       WHERE $where ORDER BY t.updated_at DESC, t.id DESC");
     $q->execute($args);
     jout(['ok'=>true, 'rows'=>$q->fetchAll(PDO::FETCH_ASSOC), 'canBuild'=>$canBuild, 'isAdmin'=>$isAdmin]);
 }

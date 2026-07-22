@@ -15,8 +15,10 @@ $db = (new DBConnection())->getPDO();
 <title>線上表單清單 | AS9100</title>
 <link href="../../resource/css/bootstrap.css" rel="stylesheet">
 <link href="../../resource/css/font-awesome.css" rel="stylesheet">
+<link href="../../resource/css/nprogress.css" rel="stylesheet">
+<link href="../../resource/css/custom.css" rel="stylesheet">
 <style>
-  body{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;padding:16px;}
+  .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;padding:16px;min-height:100vh;}
   .panel-warm{max-width:1000px;margin:0 auto 16px;background:#fff;border:1px solid #d8c19a;border-radius:6px;padding:14px 18px;box-shadow:0 2px 8px rgba(90,61,30,.12);}
   .panel-warm h4{margin:0 0 10px;font-size:15px;color:#7a4e17;border-bottom:2px solid #f0a24b;padding-bottom:6px;}
   table.list{width:100%;border-collapse:collapse;font-size:13px;}
@@ -28,17 +30,22 @@ $db = (new DBConnection())->getPDO();
   .st-rejected{background:#dd5138;color:#fff;}
 </style>
 </head>
-<body>
+<body class="nav-sm">
+<div class="container body">
+<div class="main_container">
+<?php include '../partPage/sideAndTopBarMenu.html' ?>
+<div class="right_col" role="main">
 <div class="panel-warm">
   <h4><i class="fa fa-file-text-o"></i> 線上表單模板
     <span style="float:right;">
-      <input type="text" id="newName" class="form-control input-sm" placeholder="新表單名稱" style="width:220px;display:inline-block;">
+      <input type="text" id="newName" class="form-control input-sm" placeholder="新表單名稱" style="width:180px;display:inline-block;">
+      <select id="newBindDoc" class="form-control input-sm" style="width:230px;display:inline-block;" title="綁定四階表單文件（表尾自動顯示其編號＋版次）"><option value="">綁定文件編號（選填）</option></select>
       <button class="btn btn-primary btn-sm" id="btnCreate"><i class="fa fa-plus"></i> 建立表單</button>
     </span>
   </h4>
   <table class="list"><thead><tr>
-    <th style="width:50px;">ID</th><th>表單名稱</th><th style="width:90px;">狀態</th><th style="width:70px;">發布版</th>
-    <th style="width:130px;">最後更新</th><th style="width:330px;">操作</th>
+    <th style="width:50px;">ID</th><th>表單名稱</th><th style="width:120px;">文件編號</th><th style="width:90px;">狀態</th><th style="width:70px;">發布版</th>
+    <th style="width:130px;">最後更新</th><th style="width:380px;">操作</th>
   </tr></thead><tbody id="tplBody"></tbody></table>
 </div>
 
@@ -49,6 +56,19 @@ $db = (new DBConnection())->getPDO();
     <th style="width:130px;">建立時間</th><th style="width:100px;">操作</th>
   </tr></thead><tbody id="recBody"></tbody></table>
 </div>
+
+<!-- 綁定文件編號 Modal -->
+<div class="modal fade" id="bindModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title">綁定文件編號：<span id="bindTplName"></span></h4></div>
+  <div class="modal-body">
+    <p class="text-muted" style="font-size:12px;">綁定四階表單文件後，表單表尾會自動顯示該文件的編號＋版次（文件改版自動連動）。</p>
+    <select id="bindDocSel" class="form-control input-sm"></select>
+    <div style="margin-top:10px;text-align:right;">
+      <button class="btn btn-primary btn-sm" id="btnBindSave"><i class="fa fa-check"></i> 儲存綁定</button>
+    </div>
+  </div>
+</div></div></div>
 
 <!-- 授權 Modal -->
 <div class="modal fade" id="grantModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
@@ -65,38 +85,72 @@ $db = (new DBConnection())->getPDO();
   </div>
 </div></div></div>
 
+</div><!-- /right_col -->
+</div><!-- /main_container -->
+</div><!-- /container body -->
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/fastclick.js"></script>
+<script src="../../resource/js/nprogress.js"></script>
+<script src="../../resource/js/custom.min.js"></script>
 <script>
 const API='../../src/store/AS_Form_API.php';
-let canBuild=false, curGrantTpl=0;
+let canBuild=false, curGrantTpl=0, FORM_DOCS=[];
 function esc(s){return $('<div>').text(s==null?'':s).html();}
 function chip(st){const lb={draft:'草稿',published:'已發布',in_review:'簽核中',approved:'已完成',rejected:'已駁回',void:'作廢'}[st]||st;return `<span class="status-chip st-${st}">${lb}</span>`;}
+
+function loadMeta(){
+  $.getJSON(API+'?action=meta',m=>{
+    if(!m.ok) return;
+    FORM_DOCS=m.form_docs||[];
+    const opts=FORM_DOCS.map(d=>`<option value="${d.id}">${esc(d.doc_no)}｜${esc(d.doc_name)}</option>`).join('');
+    $('#newBindDoc').append(opts);
+    $('#bindDocSel').html('<option value="">（不綁定）</option>'+opts);
+  });
+}
 
 function loadTpl(){
   $.getJSON(API+'?action=list',r=>{
     if(!r.ok){alert(r.error||'載入失敗');return;}
     canBuild=r.canBuild;
-    if(!canBuild) $('#newName,#btnCreate').hide();
+    if(!canBuild) $('#newName,#newBindDoc,#btnCreate').hide();
     $('#tplBody').html(r.rows.map(t=>`<tr>
-      <td>${t.id}</td><td>${esc(t.name)}</td><td>${chip(t.status)}</td>
+      <td>${t.id}</td><td>${esc(t.name)}</td>
+      <td>${t.doc_no?esc(t.doc_no)+esc(t.doc_version||''):'<span class="text-muted">未綁定</span>'}</td>
+      <td>${chip(t.status)}</td>
       <td style="text-align:center;">${t.published_version||'—'}</td>
       <td>${esc((t.updated_at||'').substring(0,16))}</td>
       <td>
         <a class="btn btn-default btn-xs" href="as_form_designer.php?template_id=${t.id}"><i class="fa fa-th"></i> 設計</a>
         ${t.published_version>0?`<a class="btn btn-success btn-xs" href="as_form_fill.php?template_id=${t.id}"><i class="fa fa-pencil"></i> 新填一張</a>`:''}
         <button class="btn btn-info btn-xs rec-btn" data-id="${t.id}" data-name="${esc(t.name)}"><i class="fa fa-files-o"></i> 紀錄</button>
+        ${canBuild?`<button class="btn btn-default btn-xs bind-btn" data-id="${t.id}" data-name="${esc(t.name)}" data-fdid="${t.form_doc_id||''}" title="綁定/改綁四階表單文件（表尾自動顯示其編號＋版次）"><i class="fa fa-link"></i> 綁定</button>`:''}
         ${canBuild?`<button class="btn btn-warning btn-xs grant-btn" data-id="${t.id}" data-name="${esc(t.name)}"><i class="fa fa-user-plus"></i> 授權</button>`:''}
-      </td></tr>`).join('')||'<tr><td colspan="6" class="text-muted">尚無表單，請先建立。</td></tr>');
+      </td></tr>`).join('')||'<tr><td colspan="7" class="text-muted">尚無表單，請先建立。</td></tr>');
   });
 }
 
 $('#btnCreate').on('click',function(){
   const name=$('#newName').val().trim();
   if(!name){alert('請輸入表單名稱');return;}
-  $.post(API+'?action=create',{name},r=>{
+  $.post(API+'?action=create',{name, form_doc_id:$('#newBindDoc').val()||''},r=>{
     if(!r.ok){alert(r.error||'建立失敗');return;}
     location.href='as_form_designer.php?template_id='+r.template_id;
+  },'json');
+});
+
+// ── 綁定文件編號 ──
+$('#tplBody').on('click','.bind-btn',function(){
+  curBindTpl=$(this).data('id');
+  $('#bindTplName').text($(this).data('name'));
+  $('#bindDocSel').val(String($(this).data('fdid')||''));
+  $('#bindModal').modal('show');
+});
+let curBindTpl=0;
+$('#btnBindSave').on('click',function(){
+  $.post(API+'?action=bind_doc',{template_id:curBindTpl, form_doc_id:$('#bindDocSel').val()||0},r=>{
+    if(!r.ok){alert(r.error||'綁定失敗');return;}
+    $('#bindModal').modal('hide'); loadTpl();
   },'json');
 });
 
@@ -151,6 +205,7 @@ $('#grantBody').on('click','.g-rev',function(){
   },'json');
 });
 
+loadMeta();
 loadTpl();
 </script>
 </body>
