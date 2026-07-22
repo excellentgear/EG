@@ -133,6 +133,61 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
       </div>
     </div>
 
+    <!-- 誤刪救援（部分還原）Phase 2 -->
+    <div class="bk-card" id="partialCard" style="display:none;">
+      <h4><i class="fa fa-life-ring"></i> 誤刪救援（部分還原）
+        <small style="color:#9a7b4f;font-weight:400;">不確定資料在哪張表也能找：先把某個備份載入檢視區，再搜尋或掃描差異，勾選要救回的列</small></h4>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+        <span style="font-size:13px;color:#6b5638;">檢視區狀態：</span>
+        <span id="vwStatus" class="st-badge st-running">未載入</span>
+        <span id="vwInfo" style="font-size:12px;color:#9a7b4f;"></span>
+        <span style="font-size:12px;color:#9a7b4f;">（在下方備份列表按「載入救援」選擇要用哪個備份）</span>
+      </div>
+      <div id="vwTools" style="display:none;">
+        <ul class="nav nav-tabs" style="margin-bottom:10px;">
+          <li class="active"><a href="#vw-tab-search" data-toggle="tab">值搜尋</a></li>
+          <li><a href="#vw-tab-diff" data-toggle="tab" onclick="if(!scanDone)doScan()">誤刪掃描</a></li>
+        </ul>
+        <div class="tab-content">
+          <div class="tab-pane active" id="vw-tab-search">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <input type="text" id="vwQ" class="form-control" style="width:280px;" placeholder="輸入關鍵字（客戶名/單號/料號…至少2字）">
+              <button class="btn btn-sm btn-amber" onclick="doSearch()"><i class="fa fa-search"></i> 跨全部資料表搜尋</button>
+              <span id="vwSearchHint" style="font-size:12px;color:#9a7b4f;"></span>
+            </div>
+          </div>
+          <div class="tab-pane" id="vw-tab-diff">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+              <button class="btn btn-sm btn-amber" onclick="doScan()"><i class="fa fa-search-minus"></i> 重新掃描（備份有、現在沒有的列）</button>
+              <span id="vwScanHint" style="font-size:12px;color:#9a7b4f;"></span>
+            </div>
+            <div id="vwScanList" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+          </div>
+        </div>
+        <!-- 結果列表 -->
+        <div id="vwResultWrap" style="display:none;margin-top:12px;">
+          <div style="overflow-x:auto;max-height:380px;overflow-y:auto;border:1px solid #e6d8c3;border-radius:6px;">
+            <table class="bk-tbl">
+              <thead><tr>
+                <th style="width:30px;"><input type="checkbox" id="vwCkAll" onclick="$('.vwck').prop('checked',this.checked)"></th>
+                <th>資料表</th><th>主鍵</th><th>狀態</th><th>資料預覽</th>
+              </tr></thead>
+              <tbody id="vwResultBody"></tbody>
+            </table>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px;">
+            <select id="vwMode" class="form-control" style="width:230px;">
+              <option value="insert">補回已刪除的列（現存列不動）</option>
+              <option value="replace">覆蓋成備份版本（含現存列）</option>
+            </select>
+            <input type="password" id="vwPw" class="form-control" style="width:180px;" placeholder="部分還原密碼">
+            <button class="btn btn-sm btn-coral" onclick="restoreSelected()"><i class="fa fa-undo"></i> 還原勾選的列</button>
+            <span style="font-size:12px;color:#9a7b4f;">還原前會自動快照現況；一次上限 500 列</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 備份列表 -->
     <div class="bk-card">
       <h4><i class="fa fa-history"></i> 備份紀錄</h4>
@@ -268,6 +323,7 @@ function loadList(){
   $.getJSON(API, {action:'list'}, function(res){
     if(!res.success){ alert(res.message||'讀取失敗'); return; }
     PERM = res.perm||{};
+    if(PERM.restore_partial){ $('#partialCard').show(); pollViewStatus(); }
     const c = res.config||{};
     $('#stInterval').text(c.interval_days);
     $('#stKeep').text(c.keep_count);
@@ -292,6 +348,7 @@ function loadList(){
       let act='';
       if(r.status==='success'){
         act += '<a class="btn btn-xs btn-default" href="'+API+'?action=download&id='+r.id+'"><i class="fa fa-download"></i></a> ';
+        if(PERM.restore_partial) act += '<button class="btn btn-xs btn-default" onclick="viewLoad('+r.id+')" title="載入此備份到誤刪救援檢視區"><i class="fa fa-life-ring"></i> 載入救援</button> ';
         if(PERM.restore_table) act += '<button class="btn btn-xs btn-default" onclick="openRestoreTable('+r.id+',\''+esc(r.filename)+'\',\''+esc(r.created_at)+'\')">整表還原</button> ';
         if(PERM.restore_full)  act += '<button class="btn btn-xs btn-coral" onclick="openRestoreFull('+r.id+',\''+esc(r.filename)+'\',\''+esc(r.created_at)+'\')">整庫還原</button>';
       }
@@ -425,6 +482,104 @@ function delRole(){ if(!curRoleId) return; if(!confirm('確定刪除此角色？
 function saveFeats(){ if(!curRoleId) return;
   const feats=$('.featcb:checked').map(function(){return this.value;}).get();
   $.post(RAPI,{action:'save_role_features',role_id:curRoleId,features:JSON.stringify(feats)},function(r){ alert(r.success?'已儲存功能':r.message); },'json'); }
+
+// ═══════════ 誤刪救援（部分還原）Phase 2 ═══════════
+let scanDone=false, vwPollTimer=null, vwRows=[];
+
+function pollViewStatus(){
+  $.getJSON(API,{action:'view_status'},function(res){
+    if(!res.success) return;
+    const d=res.data||{};
+    const map={none:['st-running','未載入'],loading:['st-running','載入中…約20秒'],ready:['st-success','已就緒'],fail:['st-fail','載入失敗']};
+    const m=map[d.status]||map.none;
+    $('#vwStatus').attr('class','st-badge '+m[0]).text(m[1]);
+    $('#vwInfo').text(d.status==='ready'||d.status==='loading' ? ((d.filename||'')+(d.backup_time?'（備份時間 '+d.backup_time+'）':'')) : (d.status==='fail'?(d.error||''):''));
+    if(d.status==='ready'){ $('#vwTools').show(); }
+    if(d.status==='loading'){ clearTimeout(vwPollTimer); vwPollTimer=setTimeout(pollViewStatus,3000); }
+  });
+}
+function viewLoad(id){
+  if(!confirm('把這個備份載入誤刪救援檢視區？（會取代目前檢視區內容，約需 20 秒）')) return;
+  scanDone=false; $('#vwScanList').empty(); $('#vwResultWrap').hide(); $('#vwResultBody').empty();
+  $.post(API,{action:'view_load',id:id},function(res){
+    alert(res.message||'');
+    if(res.success){ $('#vwTools').hide(); pollViewStatus(); $('html,body').animate({scrollTop:$('#partialCard').offset().top-70},300); }
+  },'json');
+}
+function renderRows(rows){
+  vwRows=rows||[];
+  if(!vwRows.length){ $('#vwResultWrap').hide(); return; }
+  let h='';
+  vwRows.forEach(function(r,i){
+    const pv=Object.entries(r.preview||{}).map(([k,v])=>'<b>'+esc(k)+'</b>='+esc(v)).join('、');
+    const st = r.exists_live===false ? '<span class="st-badge st-fail">已不存在（可補回）</span>'
+             : r.exists_live===true  ? '<span class="st-badge st-success">現存（覆蓋才會動）</span>'
+             : '<span class="st-badge st-running">無法判斷</span>';
+    h+='<tr>'
+      +'<td><input type="checkbox" class="vwck" data-i="'+i+'" '+(r.exists_live===false?'checked':'')+'></td>'
+      +'<td style="font-family:monospace;">'+esc(r.table)+'</td>'
+      +'<td style="font-family:monospace;font-size:12px;">'+esc((r.pk_cols||[]).join(','))+'=('+esc((r.pk_vals||[]).join(','))+')</td>'
+      +'<td>'+st+'</td>'
+      +'<td style="font-size:11px;max-width:520px;">'+pv+'</td>'
+      +'</tr>';
+  });
+  $('#vwResultBody').html(h);
+  $('#vwCkAll').prop('checked',false);
+  $('#vwResultWrap').show();
+}
+function doSearch(){
+  const q=$('#vwQ').val().trim();
+  if(q.length<2){ alert('關鍵字至少 2 個字'); return; }
+  $('#vwSearchHint').text('搜尋中…');
+  $.getJSON(API,{action:'view_search',q:q},function(res){
+    if(!res.success){ alert(res.message||''); $('#vwSearchHint').text(''); return; }
+    $('#vwSearchHint').text('命中 '+(res.data||[]).length+' 列（每表最多20列、總數上限300）');
+    renderRows(res.data);
+  }).fail(function(){ $('#vwSearchHint').text('搜尋失敗'); });
+}
+function doScan(){
+  scanDone=true;
+  $('#vwScanHint').text('掃描中…');
+  $.getJSON(API,{action:'view_diff_overview'},function(res){
+    if(!res.success){ alert(res.message||''); $('#vwScanHint').text(''); return; }
+    const d=res.data||[];
+    $('#vwScanHint').text(d.length? d.length+' 張資料表有「備份有、現在沒有」的列，點表名看明細：' : '沒有發現任何缺列（備份之後沒有資料被刪除）');
+    let h='';
+    d.forEach(function(o){ h+='<button class="btn btn-xs btn-default" onclick="loadDiffTable(\''+esc(o.table)+'\')" style="font-family:monospace;">'+esc(o.table)+' <span class="st-badge st-fail">'+o.missing+'</span></button>'; });
+    $('#vwScanList').html(h);
+  }).fail(function(){ $('#vwScanHint').text('掃描失敗'); });
+}
+function loadDiffTable(t){
+  $.getJSON(API,{action:'view_diff_table',table:t},function(res){
+    if(!res.success){ alert(res.message||''); return; }
+    renderRows(res.data);
+  });
+}
+function restoreSelected(){
+  // 依表分組收集勾選列
+  const byTable={};
+  $('.vwck:checked').each(function(){
+    const r=vwRows[$(this).data('i')]; if(!r) return;
+    (byTable[r.table]=byTable[r.table]||[]).push(r.pk_vals);
+  });
+  const tables=Object.keys(byTable);
+  if(!tables.length){ alert('未勾選任何列'); return; }
+  const pw=$('#vwPw').val(); if(!pw){ alert('請輸入部分還原密碼'); return; }
+  const mode=$('#vwMode').val();
+  const total=tables.reduce((s,t)=>s+byTable[t].length,0);
+  if(!confirm('將還原 '+tables.length+' 張表共 '+total+' 列（模式：'+(mode==='replace'?'覆蓋成備份版本':'補回已刪除列')+'）。還原前會自動快照，確定？')) return;
+  // 逐表送出（多表時串行處理）
+  let idx=0, msgs=[];
+  function next(){
+    if(idx>=tables.length){ alert(msgs.join('\n')); $('#vwPw').val(''); return; }
+    const t=tables[idx++];
+    $.post(API,{action:'view_restore_rows',table:t,pk_list:JSON.stringify(byTable[t]),mode:mode,password:pw},function(res){
+      msgs.push(t+'：'+(res.message||res.msg||''));
+      next();
+    },'json').fail(function(){ msgs.push(t+'：請求失敗'); next(); });
+  }
+  next();
+}
 
 loadList();
 </script>
