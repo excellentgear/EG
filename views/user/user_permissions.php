@@ -337,6 +337,7 @@ $_ptaskRoles    = [];  $_userPtaskRoles  = [];
 $_profitRoles   = [];  $_userProfitRoles = [];
 $_asdocRoles    = [];  $_userAsdocRoles  = [];
 $_mdataRoles    = [];  $_userMdataRoles  = [];
+$_dbbkRoles     = [];  $_userDbbkRoles   = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -357,6 +358,7 @@ try {
     $st->execute(['order_profit']); $_profitRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['as_doc']);    $_asdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['master_data']); $_mdataRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['db_backup']);   $_dbbkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -420,6 +422,10 @@ try {
     $st->execute(['master_data']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userMdataRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['db_backup']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userDbbkRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -620,6 +626,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'bomtrk-role-section'    => 'BOM追蹤',
                                         'ptask-role-section'     => '個人工作紀錄',
                                         'asdoc-role-section'     => 'AS文件管理',
+                                        'dbbk-role-section'      => '資料庫備份',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -993,6 +1000,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('asdoc', 'as_doc', 'AS9100 文件管理（個人指派，優先於職稱）', 'fa-folder-open-o', '#c0392b',
                         '為使用者「個人」指派 AS 文件管理角色——<strong>個人有指派時以個人為準（覆蓋職稱）</strong>；未指派者自動套用下方「職稱權限」的設定。角色定義（名稱與功能勾選）請至 <strong>AS9100 文件管理頁 → 角色設定</strong>。',
                         $_asdocRoles, $_userAsdocRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('dbbk', 'db_backup', '資料庫備份管理', 'fa-database', '#b06f27',
+                        '為每位使用者指派「資料庫備份管理」頁的操作角色（檢視/下載、立即備份、整表還原）。<strong>未被指派角色者無法進入本頁</strong>；整庫還原、備份設定與還原密碼一律僅限管理員；整表/部分還原另需輸入管理員設定的還原密碼。角色與功能定義請至 <strong>資料庫備份管理頁 → 角色權限（僅管理員可見）</strong>。',
+                        $_dbbkRoles, $_userDbbkRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 
                     <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->
