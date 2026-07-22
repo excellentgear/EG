@@ -349,7 +349,11 @@ case 'instance_submit': {
     foreach (($schemaArr['cells'] ?? []) as $cell) {
         if (($cell['type'] ?? '')==='field' && !empty($cell['required'])) {
             $k = $cell['key'] ?? '';
-            if ($k !== '' && (!isset($data[$k]) || trim((string)$data[$k])==='')) $missing[] = $k;
+            if ($k === '') continue;
+            $val = $data[$k] ?? null;
+            // 勾選群組的值是陣列（至少勾一項才算有填）
+            $empty = is_array($val) ? count($val)===0 : trim((string)$val)==='';
+            if ($empty) $missing[] = $k;
         }
     }
     if ($missing) jerr('必填欄位未填：'.implode('、', $missing));

@@ -57,8 +57,19 @@
         })).join('');
         return '<select data-key="' + esc(key) + '"' + req + ro + '>' + opts + '</select>' + star;
       }
-      case 'checkbox':
+      case 'checkbox': {
+        var copts = cell.options || [];
+        if (copts.length) {
+          // 勾選群組：一格內多個選項（值＝勾選項目的陣列）
+          var selVals = Array.isArray(val) ? val.map(String) : String(val || '').split(',').filter(Boolean);
+          return '<span style="display:flex;flex-wrap:wrap;gap:2px 12px;">' + copts.map(function (o) {
+            var on = selVals.indexOf(String(o)) >= 0;
+            return '<label style="font-weight:normal;margin:0;white-space:nowrap;"><input type="checkbox" data-key="' + esc(key) + '" value="' + esc(o) + '"' + (on ? ' checked' : '') + ro + '> ' + esc(o) + '</label>';
+          }).join('') + '</span>';
+        }
+        // 未設選項：單一勾選（相容舊資料）
         return '<label style="font-weight:normal;"><input type="checkbox" data-key="' + esc(key) + '"' + (val ? ' checked' : '') + ro + '> ' + esc(cell.text || '') + '</label>';
+      }
       default:
         return '<input type="text" data-key="' + esc(key) + '" value="' + esc(val) + '"' + req + ro + '>' + star;
     }

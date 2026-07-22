@@ -267,7 +267,7 @@ function syncPropVisibility(){
   $('.prop-field').toggle(t==='field');
   $('.prop-sig').toggle(t==='signature');
   $('.prop-align').toggle(t==='label'||t==='static');
-  $('.prop-options').toggle(t==='field' && $('#pFtype').val()==='select');
+  $('.prop-options').toggle(t==='field' && ['select','checkbox'].includes($('#pFtype').val()));
 }
 $('#pType,#pFtype').on('change',syncPropVisibility);
 
@@ -288,7 +288,7 @@ function applyProp(withSpan){
   if(t==='field'){
     cell.key=$('#pKey').val().trim();
     cell.ftype=$('#pFtype').val();
-    if(cell.ftype==='select'){ cell.options=$('#pOptions').val().split(',').map(s=>s.trim()).filter(Boolean); }
+    if(cell.ftype==='select'||cell.ftype==='checkbox'){ cell.options=$('#pOptions').val().split(',').map(s=>s.trim()).filter(Boolean); }
     if(cell.ftype==='textarea'){ cell.rows=6; }
     if($('#pRequired').prop('checked')) cell.required=true;
   }

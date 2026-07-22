@@ -78,7 +78,17 @@ function collectData(){
   const data={};
   $('#formHost').find('input[data-key],select[data-key],textarea[data-key]').each(function(){
     const k=$(this).data('key');
-    data[k] = this.type==='checkbox' ? (this.checked?1:'') : this.value;
+    if(this.type==='checkbox'){
+      if(this.getAttribute('value')!==null){
+        // 勾選群組成員：收集成陣列
+        if(!Array.isArray(data[k])) data[k]=[];
+        if(this.checked) data[k].push(this.value);
+      } else {
+        data[k]=this.checked?1:'';   // 單一勾選（未設選項）
+      }
+    } else {
+      data[k]=this.value;
+    }
   });
   return data;
 }
