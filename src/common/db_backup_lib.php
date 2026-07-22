@@ -133,15 +133,15 @@ function eg_bk_run(PDO $pdo, string $trigger, string $by): array {
         }
         $size = filesize($absPath);
 
-        // ── 複製到 NAS（best-effort）──
+        // ── 複製到 NAS（best-effort；不可用 is_writable 預檢——Windows UNC 上會誤報，直接嘗試複製）──
         $nas = trim(eg_bk_cfg_get($pdo, 'nas_path', ''));
         $nasNote = '';
         if ($nas !== '') {
             $nasDir = rtrim($nas, "\\/");
-            if (@is_dir($nasDir) && @is_writable($nasDir)) {
+            if (@is_dir($nasDir)) {
                 if (!@copy($absPath, $nasDir . DIRECTORY_SEPARATOR . $filename)) $nasNote = 'NAS 複製失敗';
             } else {
-                $nasNote = 'NAS 路徑不存在或不可寫';
+                $nasNote = 'NAS 路徑不存在';
             }
         }
 

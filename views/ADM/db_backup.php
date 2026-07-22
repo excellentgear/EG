@@ -91,7 +91,7 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
 #rolesList .r-item.sys{color:#b06f27;font-weight:600;}
 </style>
 </head>
-<body class="nav-md">
+<body class="nav-sm">
 <div class="container body"><div class="main_container">
 <?php include '../partPage/sideAndTopBarMenu.html' ?>
 <div class="right_col" role="main">
@@ -211,7 +211,7 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
     <div class="form-inline-row"><label>自動備份間隔（天）</label><input type="number" min="1" max="365" id="cfInterval" class="form-control" style="width:120px;"></div>
     <div class="form-inline-row"><label>工作區保留份數</label><input type="number" min="1" max="200" id="cfKeep" class="form-control" style="width:120px;">
       <span style="font-size:12px;color:#9a7b4f;">超過的舊備份會從工作區移除，但仍留在 Git 歷史可還原</span></div>
-    <div class="form-inline-row"><label>NAS 複製路徑</label><input type="text" id="cfNas" class="form-control" style="flex:1;min-width:200px;" placeholder="例：Z:\\DBbackup（受限資料夾；留空=不複製）"></div>
+    <div class="form-inline-row"><label>NAS 複製路徑</label><input type="text" id="cfNas" class="form-control" style="flex:1;min-width:200px;" placeholder="例：\\excellentnas\資料夾 或 Z:\DBbackup（留空=不複製）"></div>
     <div class="form-inline-row"><label>雲端自動 push</label>
       <label style="min-width:auto;"><input type="checkbox" id="cfPush"> 每次備份後自動 push 到私有 GitHub</label></div>
     <hr>

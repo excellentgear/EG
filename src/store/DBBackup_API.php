@@ -104,9 +104,20 @@ switch ($action) {
         $keep     = max(1, min(200, (int)($_POST['keep_count'] ?? 10)));
         $nas      = trim((string)($_POST['nas_path'] ?? ''));
         $push     = (($_POST['auto_push'] ?? '1') === '1') ? '1' : '0';
-        // NAS 路徑若有填，檢查是否存在可寫（僅提示，不強制）
+        // NAS 路徑若有填，用「實際寫入探測檔」驗證（is_writable 在 Windows UNC 網路共享上會誤報，不可信）
         $nasWarn = '';
-        if ($nas !== '' && !(@is_dir($nas) && @is_writable($nas))) $nasWarn = '（注意：此 NAS 路徑目前不存在或不可寫，備份時會略過複製）';
+        if ($nas !== '') {
+            if (!@is_dir($nas)) {
+                $nasWarn = '（注意：此 NAS 路徑目前不存在，備份時會略過複製）';
+            } else {
+                $probe = rtrim($nas, "\\/") . DIRECTORY_SEPARATOR . '.egbk_write_test_' . getmypid() . '.tmp';
+                if (@file_put_contents($probe, 'test') === false) {
+                    $nasWarn = '（注意：此 NAS 路徑實際寫入失敗，備份時會略過複製）';
+                } else {
+                    @unlink($probe);
+                }
+            }
+        }
         eg_bk_cfg_set($pdo, 'interval_days', (string)$interval, $by);
         eg_bk_cfg_set($pdo, 'keep_count',    (string)$keep, $by);
         eg_bk_cfg_set($pdo, 'nas_path',      $nas, $by);
