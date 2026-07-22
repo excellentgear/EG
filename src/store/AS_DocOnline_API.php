@@ -160,15 +160,20 @@ case 'get': {
     $draft  = odGetOrCreateDraft($db, $docId, $tplKey);
     $tplKey = $draft['template_key'] ?: $tplKey;
 
-    // 現有段落內容
+    // 現有段落內容 → 合併為單一內文 HTML（單一 TinyMCE 編輯）
     $st = $db->prepare("SELECT section_key, title, sort_order, content_html FROM as_doc_content_section WHERE doc_id=? ORDER BY sort_order, id");
     $st->execute([$docId]);
-    $sections = $st->fetchAll(PDO::FETCH_ASSOC);
-    if (!$sections) {
-        // 尚無內容 → 用模板生出空段落（不落庫，等使用者存檔才寫）
-        foreach (odTemplateSections($db, $tplKey) as $t) {
-            $sections[] = ['section_key'=>$t['section_key'],'title'=>$t['title'],'sort_order'=>$t['sort_order'],'content_html'=>''];
-        }
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $bodyHtml = '';
+    if (count($rows)===1 && $rows[0]['section_key']==='body') {
+        // 已是單一內文模型：直接用
+        $bodyHtml = $rows[0]['content_html'];
+    } elseif ($rows) {
+        // 舊多段資料 → 併成內文，段落標題轉 H4
+        foreach ($rows as $r) { $bodyHtml .= '<h4>'.htmlspecialchars($r['title'],ENT_QUOTES,'UTF-8').'</h4>'.($r['content_html'] ?: '<p><br></p>'); }
+    } else {
+        // 尚無內容 → 用模板標題生出空白骨架，供使用者填寫或匯入時整份取代
+        foreach (odTemplateSections($db, $tplKey) as $t) { $bodyHtml .= '<h4>'.htmlspecialchars($t['title'],ENT_QUOTES,'UTF-8').'</h4><p><br></p>'; }
     }
 
     // 目前版本 metadata（封面用）
@@ -184,7 +189,7 @@ case 'get': {
     $lockedByOther = $draft['locked_by'] && (int)$draft['locked_by']!==$currentUserId && !$lockStale;
 
     jout(['status'=>'success','doc'=>$doc,'current_version'=>$cv,'template_key'=>$tplKey,
-          'sections'=>$sections,'draft_status'=>$draft['status'],
+          'body_html'=>$bodyHtml,'draft_status'=>$draft['status'],
           'locked_by'=>$draft['locked_by'],'locked_by_name'=>$draft['locked_by_name'],
           'locked_by_other'=>$lockedByOther,'can_edit'=>$canEdit,'can_publish'=>$canPublish]);
 }
@@ -301,12 +306,14 @@ case 'suggest_version': {
     $doc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
 
-    // 草稿目前段落
+    // 草稿目前內文（合併為單一 body）
     $st = $db->prepare("SELECT section_key, title, content_html FROM as_doc_content_section WHERE doc_id=? ORDER BY sort_order, id");
     $st->execute([$docId]);
-    $cur = $st->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $curBody = odRowsToBody($rows);
+    $curMap  = odSplitHeadings($curBody);
 
-    // 基準版本內容
+    // 基準版本內文
     $baseMap = [];
     $baseVer = $doc['current_version'] ?: '';
     $hasBase = false;
@@ -317,23 +324,21 @@ case 'suggest_version': {
             $baseVer = $bv['version'];
             if (!empty($bv['content_json'])) {
                 $arr = json_decode($bv['content_json'], true);
-                if (is_array($arr)) { foreach ($arr as $s) { $baseMap[$s['section_key']] = odPlain($s['content_html'] ?? ''); } $hasBase = true; }
+                if (is_array($arr)) { $baseMap = odSplitHeadings(odRowsToBody($arr)); $hasBase = true; }
             }
         }
     }
 
+    // 依「標題（H4）」逐節比對純文字
     $changed = []; $added = []; $removed = [];
-    $curKeys = [];
-    foreach ($cur as $s) {
-        $k = $s['section_key']; $curKeys[$k]=true;
-        $curPlain = odPlain($s['content_html'] ?? '');
+    foreach ($curMap as $title=>$txt) {
         if (!$hasBase) continue;
-        if (!array_key_exists($k, $baseMap)) { if ($curPlain!=='') $added[] = $s['title']; }
-        elseif ($curPlain !== $baseMap[$k]) { $changed[] = $s['title']; }
+        if (!array_key_exists($title, $baseMap)) { if ($txt!=='') $added[] = $title; }
+        elseif ($txt !== $baseMap[$title]) { $changed[] = $title; }
     }
-    if ($hasBase) { foreach ($baseMap as $k=>$v) { if (empty($curKeys[$k]) && $v!=='') $removed[] = $k; } }
+    if ($hasBase) { foreach ($baseMap as $title=>$txt) { if (!array_key_exists($title,$curMap) && $txt!=='') $removed[] = $title; } }
 
-    // 版次建議：基準版 +0.1；無基準（首次電子化）→ 沿用目前版或建議制訂
+    // 版次建議：基準版 +0.1；無基準（首次電子化）→ 沿用目前版、狀況制訂
     $suggestVer = odBumpVersion($baseVer);
     $status = $hasBase ? '修訂' : '制訂';
     if (!$hasBase) {
@@ -344,10 +349,10 @@ case 'suggest_version': {
         $parts = [];
         if ($changed) $parts[] = '修訂：'.implode('、', $changed);
         if ($added)   $parts[] = '新增：'.implode('、', $added);
-        if ($removed) $parts[] = '刪除：'.count($removed).' 段';
+        if ($removed) $parts[] = '刪除：'.implode('、', $removed);
         $summary = $parts ? implode('；', $parts) : '內容無實質變更（僅排版調整）';
         $touched = count($changed)+count($added)+count($removed);
-        $totalSec = max(1, count($cur));
+        $totalSec = max(1, count($curMap));
         $pages = ($touched >= $totalSec*0.5) ? '全冊' : implode('、', array_slice(array_merge($changed,$added), 0, 6));
         if ($pages==='') $pages='—';
     }
@@ -439,10 +444,49 @@ case 'render': {
         .'@media print{.noprint{display:none;}body{max-width:none;}}</style></head><body>';
     echo '<div class="ashd"><div><b>文件編號：</b>'.$e($doc['doc_no']).'</div><div><b>版次：</b>'.$e($verLabel).($rdate?'　<b>制修訂日期：</b>'.$e($rdate):'').'</div></div>';
     echo '<h3 class="doctitle">'.$e($doc['doc_name']).'</h3>';
-    $n=0;
-    foreach ($sections as $s) { $n++; echo '<h4>'.$n.'. '.$e($s['title']).'</h4><div>'.($s['content_html']?:'<p style="color:#aaa">（未填）</p>').'</div>'; }
+    // 單一內文模型：body 直接輸出（自帶 H4 標題）；舊多段資料則併成內文
+    echo '<div>'.(odRowsToBody($sections) ?: '<p style="color:#aaa">（尚無內容）</p>').'</div>';
     echo '<div class="noprint" style="margin-top:24px;text-align:center;"><button onclick="window.print()">列印 / 匯出 PDF</button></div>';
     echo '</body></html>';
+    exit;
+}
+
+// ── 圖片上傳（TinyMCE images_upload_handler；存 NAS/online_img/{doc_id}，DB/內容只留檔名）──
+case 'upload_image': {
+    if (!$canEdit) { http_response_code(403); jout(['error'=>'無編輯權限']); }
+    $docId = (int)($_POST['doc_id'] ?? $_GET['doc_id'] ?? 0);
+    if ($docId<=0 || empty($_FILES['file'])) { http_response_code(400); jout(['error'=>'缺少檔案或 doc_id']); }
+    $f = $_FILES['file'];
+    if ($f['error'] !== UPLOAD_ERR_OK) { http_response_code(400); jout(['error'=>'上傳失敗（錯誤碼 '.$f['error'].'）']); }
+    $ext = strtolower(pathinfo($f['name'], PATHINFO_EXTENSION));
+    if (!in_array($ext, ['png','jpg','jpeg','gif','webp','bmp'], true)) { http_response_code(400); jout(['error'=>'僅允許圖片格式']); }
+    // 內容型別再驗一次，擋改副檔名的偽圖
+    $info = @getimagesize($f['tmp_name']);
+    if ($info === false) { http_response_code(400); jout(['error'=>'非有效圖片']); }
+    $root = odNasRoot($db);
+    if ($root==='') { http_response_code(500); jout(['error'=>'尚未設定 AS 文件根路徑']); }
+    $dir = $root.DIRECTORY_SEPARATOR.'online_img'.DIRECTORY_SEPARATOR.$docId;
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true)) { http_response_code(500); jout(['error'=>'無法建立圖片資料夾（NAS 未連線？）']); }
+    $name = date('Ymd_His').'_'.bin2hex(random_bytes(4)).'.'.$ext;
+    if (!@move_uploaded_file($f['tmp_name'], $dir.DIRECTORY_SEPARATOR.$name)) { http_response_code(500); jout(['error'=>'寫入失敗']); }
+    // 回根相對 URL（只帶檔名參數，完整路徑讀取時現場組，符合鐵律5）
+    echo json_encode(['location'=>'/EGsystem/src/store/AS_DocOnline_API.php?action=img&doc_id='.$docId.'&f='.rawurlencode($name)], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// ── 圖片 serve ──
+case 'img': {
+    $docId = (int)($_GET['doc_id'] ?? 0);
+    $f = basename((string)($_GET['f'] ?? '')); // 防目錄穿越
+    if ($docId<=0 || $f==='') { http_response_code(404); exit; }
+    $path = odNasRoot($db).DIRECTORY_SEPARATOR.'online_img'.DIRECTORY_SEPARATOR.$docId.DIRECTORY_SEPARATOR.$f;
+    if (!is_file($path)) { http_response_code(404); exit; }
+    $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
+    $mime = ['png'=>'image/png','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','gif'=>'image/gif','webp'=>'image/webp','bmp'=>'image/bmp'][$ext] ?? 'application/octet-stream';
+    header('Content-Type: '.$mime);
+    header('Content-Length: '.filesize($path));
+    header('Cache-Control: private, max-age=86400');
+    readfile($path);
     exit;
 }
 
@@ -451,6 +495,35 @@ default:
 }
 
 // ── 輔助函式 ──────────────────────────────────────
+/** AS 文件 NAS 根路徑（去尾斜線）；唯一存 DB 的路徑資訊，其餘現場組（鐵律5） */
+function odNasRoot(PDO $db): string {
+    $s = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key='as_doc_nas_dir'");
+    $s->execute();
+    return rtrim((string)$s->fetchColumn(), "/\\");
+}
+/** 段落列 → 單一內文 HTML（單一 body 直接用；舊多段則以 H4 標題串接） */
+function odRowsToBody(array $rows): string {
+    if (count($rows)===1 && ($rows[0]['section_key'] ?? '')==='body') return (string)($rows[0]['content_html'] ?? '');
+    $b='';
+    foreach ($rows as $r) {
+        $t = trim((string)($r['title'] ?? ''));
+        if ($t!=='') $b .= '<h4>'.htmlspecialchars($t, ENT_QUOTES, 'UTF-8').'</h4>';
+        $b .= (string)($r['content_html'] ?? '');
+    }
+    return $b;
+}
+/** 內文依 H4 標題切成 {標題 => 純文字}，供逐節 diff */
+function odSplitHeadings(string $html): array {
+    $parts = preg_split('/<h4[^>]*>(.*?)<\/h4>/is', $html, -1, PREG_SPLIT_DELIM_CAPTURE);
+    $map = [];
+    $pre = odPlain($parts[0] ?? '');
+    if ($pre!=='') $map['（前言）'] = $pre;
+    for ($i=1; $i+1<count($parts); $i+=2) {
+        $title = trim(strip_tags($parts[$i]));
+        if ($title!=='') $map[$title] = odPlain($parts[$i+1] ?? '');
+    }
+    return $map;
+}
 /** 遞迴抽 PhpWord 元素文字 */
 function odExtractText($el): string {
     $out = '';
