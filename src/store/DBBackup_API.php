@@ -1,0 +1,192 @@
+<?php
+/**
+ * DBBackup_API.php — 資料庫備份/還原後端（模組 db_backup）
+ *
+ * 權限（各頁分開、不連動；未指派角色者一律擋下，無 fallback-to-all）：
+ *   - 進入/列表/下載 ： db_backup_view
+ *   - 立即備份       ： db_backup_run
+ *   - 整庫還原       ： 僅管理員 + 整表還原密碼
+ *   - 整表還原       ： db_restore_table + 整表還原密碼
+ *   - 部分還原(Phase2)： db_restore_partial + 部分還原密碼
+ *   - 設定/設密碼    ： 僅管理員
+ * 角色 CRUD/指派沿用 Roles_API.php（前端另呼叫），本檔只處理備份專屬動作。
+ */
+session_start();
+header('Content-Type: application/json; charset=utf-8');
+mb_internal_encoding('UTF-8');
+
+require_once __DIR__ . '/../common/DBConnection.php';
+require_once __DIR__ . '/../common/role_features_helper.php';
+require_once __DIR__ . '/../common/db_backup_lib.php';
+
+if (!isset($_SESSION['id'])) { echo json_encode(['success'=>false,'message'=>'尚未登入']); exit; }
+
+$db  = new DBConnection();
+$pdo = $db->getPDO();
+$uid = (int)$_SESSION['id'];
+$by  = (string)($_SESSION['userName'] ?? $_SESSION['user_cname'] ?? ('uid' . $uid));
+
+// ── 權限 ────────────────────────────────────────────────────────────────
+$features            = rf_load_user_features_all($pdo, $uid);
+$IS_ADMIN            = rf_has_feature($features, 'all');
+$CAN_VIEW            = $IS_ADMIN || rf_has_feature($features, 'db_backup_view');
+$CAN_RUN             = $IS_ADMIN || rf_has_feature($features, 'db_backup_run');
+$CAN_RESTORE_FULL    = $IS_ADMIN; // 整庫還原：僅管理員
+$CAN_RESTORE_TABLE   = $IS_ADMIN || rf_has_feature($features, 'db_restore_table');
+$CAN_RESTORE_PARTIAL = $IS_ADMIN || rf_has_feature($features, 'db_restore_partial');
+
+$action = $_POST['action'] ?? $_GET['action'] ?? '';
+
+function out($arr){ echo json_encode($arr, JSON_UNESCAPED_UNICODE); exit; }
+function deny(){ out(['success'=>false,'message'=>'您沒有執行此操作的權限']); }
+
+// 進入本頁的最低門檻
+if (!$CAN_VIEW) deny();
+
+// 驗證還原密碼（$type：'table' | 'partial'）
+function verify_restore_pw(PDO $pdo, string $type, string $input): array {
+    $key  = ($type === 'partial') ? 'pw_partial_restore' : 'pw_table_restore';
+    $hash = eg_bk_cfg_get($pdo, $key, '');
+    if ($hash === '') return ['ok'=>false,'msg'=>'管理員尚未設定此還原密碼，請先於設定中設定'];
+    if ($input === '' || !password_verify($input, $hash)) return ['ok'=>false,'msg'=>'還原密碼錯誤'];
+    return ['ok'=>true,'msg'=>''];
+}
+
+switch ($action) {
+
+    // ── 列表 + 設定摘要 + 權限旗標 ──────────────────────────────────────────
+    case 'list': {
+        $rows = $pdo->query("
+            SELECT id, filename, size_bytes, git_commit, trigger_type, status, pushed, note, created_by, created_at, finished_at
+            FROM db_backup_log ORDER BY id DESC LIMIT 200
+        ")->fetchAll(PDO::FETCH_ASSOC);
+
+        $cfg = eg_bk_cfg_all($pdo);
+        out([
+            'success' => true,
+            'data'    => $rows,
+            'config'  => [
+                'interval_days' => (int)($cfg['interval_days'] ?? 7),
+                'keep_count'    => (int)($cfg['keep_count'] ?? 10),
+                'nas_path'      => $cfg['nas_path'] ?? '',
+                'auto_push'     => ($cfg['auto_push'] ?? '1') === '1',
+                'last_error'    => $cfg['last_error'] ?? '',
+                'pw_table_set'  => !empty($cfg['pw_table_restore']),
+                'pw_partial_set'=> !empty($cfg['pw_partial_restore']),
+                'repo_dir'      => BK_REPO,
+            ],
+            'perm'    => [
+                'is_admin'        => $IS_ADMIN,
+                'run'             => $CAN_RUN,
+                'restore_full'    => $CAN_RESTORE_FULL,
+                'restore_table'   => $CAN_RESTORE_TABLE,
+                'restore_partial' => $CAN_RESTORE_PARTIAL,
+            ],
+        ]);
+    }
+
+    // ── 立即備份（背景執行 manual）──────────────────────────────────────────
+    case 'run_now': {
+        if (!$CAN_RUN) deny();
+        $php = BK_PHP;
+        $script = realpath(__DIR__ . '/../common/db_backup_run.php');
+        if (!is_file($php) || !$script) out(['success'=>false,'message'=>'找不到備份工人程式']);
+        // start /B 背景啟動，立即返回；由參數帶入觸發者
+        $cmd = 'start /B "" "' . $php . '" "' . $script . '" manual "' . str_replace('"', '', $by) . '" >NUL 2>&1';
+        $h = @popen($cmd, 'r'); if ($h) @pclose($h);
+        out(['success'=>true,'message'=>'已開始備份，稍候重新整理列表即可看到結果']);
+    }
+
+    // ── 儲存設定（管理員）──────────────────────────────────────────────────
+    case 'save_settings': {
+        if (!$IS_ADMIN) deny();
+        $interval = max(1, min(365, (int)($_POST['interval_days'] ?? 7)));
+        $keep     = max(1, min(200, (int)($_POST['keep_count'] ?? 10)));
+        $nas      = trim((string)($_POST['nas_path'] ?? ''));
+        $push     = (($_POST['auto_push'] ?? '1') === '1') ? '1' : '0';
+        // NAS 路徑若有填，檢查是否存在可寫（僅提示，不強制）
+        $nasWarn = '';
+        if ($nas !== '' && !(@is_dir($nas) && @is_writable($nas))) $nasWarn = '（注意：此 NAS 路徑目前不存在或不可寫，備份時會略過複製）';
+        eg_bk_cfg_set($pdo, 'interval_days', (string)$interval, $by);
+        eg_bk_cfg_set($pdo, 'keep_count',    (string)$keep, $by);
+        eg_bk_cfg_set($pdo, 'nas_path',      $nas, $by);
+        eg_bk_cfg_set($pdo, 'auto_push',     $push, $by);
+        out(['success'=>true,'message'=>'設定已儲存' . $nasWarn]);
+    }
+
+    // ── 設定還原密碼（管理員）──────────────────────────────────────────────
+    case 'set_password': {
+        if (!$IS_ADMIN) deny();
+        $type = ($_POST['type'] ?? '') === 'partial' ? 'partial' : 'table';
+        $pw   = (string)($_POST['password'] ?? '');
+        $key  = ($type === 'partial') ? 'pw_partial_restore' : 'pw_table_restore';
+        if ($pw === '') { // 清空＝停用該還原（還原將被擋）
+            eg_bk_cfg_set($pdo, $key, '', $by);
+            out(['success'=>true,'message'=>'已清除該還原密碼（該還原功能將被停用直到重新設定）']);
+        }
+        if (mb_strlen($pw) < 4) out(['success'=>false,'message'=>'密碼至少 4 碼']);
+        eg_bk_cfg_set($pdo, $key, password_hash($pw, PASSWORD_DEFAULT), $by);
+        out(['success'=>true,'message'=>'密碼已設定']);
+    }
+
+    // ── 下載備份檔 ──────────────────────────────────────────────────────────
+    case 'download': {
+        $id = (int)($_GET['id'] ?? 0);
+        $r = eg_bk_resolve_sql($pdo, $id);
+        if (!$r['ok']) { http_response_code(404); header('Content-Type:text/plain; charset=utf-8'); echo $r['msg']; exit; }
+        $st = $pdo->prepare("SELECT filename FROM db_backup_log WHERE id=?"); $st->execute([$id]);
+        $fname = $st->fetchColumn() ?: ('backup_' . $id . '.sql');
+        header('Content-Type: application/sql; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $fname . '"');
+        header('Content-Length: ' . filesize($r['path']));
+        header('X-Content-Type-Options: nosniff');
+        readfile($r['path']);
+        if ($r['temp']) @unlink($r['path']);
+        exit;
+    }
+
+    // ── 列出某備份含哪些資料表（整表還原下拉）───────────────────────────────
+    case 'list_tables': {
+        if (!$CAN_RESTORE_TABLE) deny();
+        $id = (int)($_GET['id'] ?? 0);
+        out(['success'=>true,'data'=>eg_bk_list_tables_in_backup($pdo, $id)]);
+    }
+
+    // ── 整庫還原（管理員 + 整表還原密碼）────────────────────────────────────
+    case 'restore_full': {
+        if (!$CAN_RESTORE_FULL) deny();
+        $v = verify_restore_pw($pdo, 'table', (string)($_POST['password'] ?? ''));
+        if (!$v['ok']) out(['success'=>false,'message'=>$v['msg']]);
+        $id = (int)($_POST['id'] ?? 0);
+        $r  = eg_bk_resolve_sql($pdo, $id);
+        if (!$r['ok']) out(['success'=>false,'message'=>$r['msg']]);
+        // 還原前先自動快照現況
+        $snap = eg_bk_run($pdo, 'pre-restore', $by);
+        $res  = eg_bk_import_file($r['path']);
+        if ($r['temp']) @unlink($r['path']);
+        $res['message'] = ($res['ok'] ? '整庫還原完成。' : '整庫還原失敗：' . $res['msg'])
+                        . '（還原前已自動快照：' . ($snap['ok'] ? $snap['filename'] : ('快照未成功-' . $snap['msg'])) . '）';
+        $res['success'] = $res['ok'];
+        out($res);
+    }
+
+    // ── 整表還原（db_restore_table + 整表還原密碼）──────────────────────────
+    case 'restore_table': {
+        if (!$CAN_RESTORE_TABLE) deny();
+        $v = verify_restore_pw($pdo, 'table', (string)($_POST['password'] ?? ''));
+        if (!$v['ok']) out(['success'=>false,'message'=>$v['msg']]);
+        $id    = (int)($_POST['id'] ?? 0);
+        $table = trim((string)($_POST['table'] ?? ''));
+        if ($table === '') out(['success'=>false,'message'=>'請指定資料表']);
+        // 還原前先自動快照現況
+        $snap = eg_bk_run($pdo, 'pre-restore', $by);
+        $res  = eg_bk_restore_table($pdo, $id, $table);
+        $res['message'] = ($res['ok'] ? "資料表 {$table} 還原完成。" : '整表還原失敗：' . $res['msg'])
+                        . '（還原前已自動快照：' . ($snap['ok'] ? $snap['filename'] : ('快照未成功-' . $snap['msg'])) . '）';
+        $res['success'] = $res['ok'];
+        out($res);
+    }
+
+    default:
+        out(['success'=>false,'message'=>'未知的 action: ' . $action]);
+}
