@@ -169,6 +169,63 @@ case 'publish': {
     } catch (Exception $e) { $db->rollBack(); jerr('發布失敗：'.$e->getMessage(), 500); }
 }
 
+// ═══════════ 單一表單授權（as_form_grant）═══════════
+// 有建表權者可把「某一張表單」授權給同部門組員設計/編輯；頁面顯示誰於何時授權給誰。
+
+// ── 某表單的授權清單＋可授權的同部門人員 ──
+case 'grant_list': {
+    $tid = (int)($_GET['template_id'] ?? 0);
+    if (!$tid) jerr('缺 template_id');
+    $g = $db->prepare("SELECT g.*, u.user_cname AS grantee_cname FROM as_form_grant g LEFT JOIN user u ON u.id=g.grantee_id WHERE g.template_id=? ORDER BY g.id DESC");
+    $g->execute([$tid]);
+    // 可授權對象＝授權人（目前使用者）主部門的在職人員
+    $dept = asf_user_main_dept($db, $uid);
+    $members = [];
+    if ($dept) {
+        $m = $db->prepare("SELECT DISTINCT u.id, u.user_cname FROM user_department_position_map m JOIN user u ON u.id=m.user_id
+                           WHERE m.department_id=? AND u.state IN (1,99) AND u.id<>? ORDER BY u.user_cname");
+        $m->execute([$dept, $uid]);
+        $members = $m->fetchAll(PDO::FETCH_ASSOC);
+    }
+    jout(['ok'=>true, 'rows'=>$g->fetchAll(PDO::FETCH_ASSOC), 'members'=>$members, 'canGrant'=>$canBuild]);
+}
+
+// ── 授權（僅具建表權者；對象限同部門）──
+case 'grant_add': {
+    if (!$canBuild) jerr('僅具建表權限者可授權', 403);
+    $tid = (int)($_POST['template_id'] ?? 0);
+    $gid = (int)($_POST['grantee_id'] ?? 0);
+    if (!$tid || !$gid) jerr('缺 template_id / grantee_id');
+    // 表單須已存在（先建表名才可授權）
+    $t = $db->prepare("SELECT id FROM as_form_template WHERE id=? AND is_deleted=0");
+    $t->execute([$tid]);
+    if (!$t->fetchColumn()) jerr('表單不存在（須先建立表單名稱）', 404);
+    // 對象限授權人同部門
+    $dept = asf_user_main_dept($db, $uid);
+    $chk = $db->prepare("SELECT COUNT(*) FROM user_department_position_map WHERE user_id=? AND department_id=?");
+    $chk->execute([$gid, $dept]);
+    if (!$isAdmin && !(int)$chk->fetchColumn()) jerr('僅能授權給同部門人員', 403);
+    // 已有生效授權則不重複
+    $dup = $db->prepare("SELECT id FROM as_form_grant WHERE template_id=? AND grantee_id=? AND revoked_at IS NULL");
+    $dup->execute([$tid, $gid]);
+    if ($dup->fetchColumn()) jerr('此人已有此表單的生效授權');
+    $gn = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+    $gn->execute([$gid]);
+    $granteeName = (string)($gn->fetchColumn() ?: $gid);
+    $db->prepare("INSERT INTO as_form_grant (template_id, grantee_id, grantee_name, granted_by, granted_by_name) VALUES (?,?,?,?,?)")
+       ->execute([$tid, $gid, $granteeName, $uid, $cname]);
+    jout(['ok'=>true]);
+}
+
+// ── 撤銷授權 ──
+case 'grant_revoke': {
+    if (!$canBuild) jerr('僅具建表權限者可撤銷', 403);
+    $gid = (int)($_POST['grant_id'] ?? 0);
+    if (!$gid) jerr('缺 grant_id');
+    $db->prepare("UPDATE as_form_grant SET revoked_at=NOW() WHERE id=? AND revoked_at IS NULL")->execute([$gid]);
+    jout(['ok'=>true]);
+}
+
 // ═══════════ 填寫紀錄（instance）與簽核 ═══════════
 
 // ── 建立/儲存草稿（未送出前可反覆改）──
