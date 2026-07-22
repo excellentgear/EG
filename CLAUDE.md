@@ -1,12 +1,13 @@
 # EGsystem — AI 工作規範（每次 session 必讀）
 
-> 最後修改：2026-07-21 — 新增配色規範：一律暖色系、禁亂數/HSL 上色、燈號固定三色、文字對比要夠，詳見 ai-rules/10。（前次）UI 規則第 4 條：多列表格 ↑↓ 鍵切換上下列同欄，詳見 ai-rules/08。
+> 最後修改：2026-07-22 — 新增「本機同時裝 3 套 MySQL，EGsystem 固定用 port 3306」環境速查（詳見 ai-rules/00-診斷.md）。（前次）新增配色規範：一律暖色系、禁亂數/HSL 上色、燈號固定三色、文字對比要夠，詳見 ai-rules/10。
 
 PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**已用 git 版本控管**（GitHub private repo `ellentravel1003/EGsystem`，分支 `master`），改壞可用 git 復原——但前提是每個檔案改完都有立刻 commit+push（見鐵律6），沒 push 的部分一樣救不回來。
 
 ## 環境速查
 - 網址 http://192.168.2.128/EGsystem ｜ PHP 8.3.1 ｜ MySQL 9.4.0（utf8mb4）｜ Apache 2.4.33 ｜ phpMyAdmin 5.2.3
 - 資料庫名 `EGsystem`；資料字典：`MYSQL 資料字典.txt`（196KB，用 Grep 查，勿整讀）
+- **本機同時裝了 3 套 MySQL/MariaDB**：EGsystem 固定連 **port 3306**（官方 MySQL 9.4 服務 `MySQL94`，datadir=`C:\ProgramData\MySQL\MySQL Server 9.4\Data\`）；port 3307=MAMP 內建、3308=MariaDB 11.8，皆與 EGsystem 無關。系統層級操作 DB（非透過 sql.php）務必指定 3306，別接錯，詳見 `ai-rules/00-診斷.md` 陷阱表。
 - 執行 SQL 唯一正道：`& C:\MAMP\bin\php\php8.3.1\php.exe C:\MAMP\htdocs\EGsystem\ai-rules\tools\sql.php "SQL語句"`（中文 SQL 改用 `--file`；一次一句）。**勿用 mysql.exe**（舊 client 連不上 MySQL 9.4）。
 - PHP 語法檢查：`& C:\MAMP\bin\php\php8.3.1\php.exe -l 檔案路徑`
 
