@@ -145,7 +145,6 @@ if ($deptPerm === 'R') {
                   <button class="btn btn-primary btn-sm" id="btnAddDoc"><i class="fa fa-plus"></i> 新增文件</button>
                   <button class="btn btn-info btn-sm" id="btnBatchAdd"><i class="fa fa-files-o"></i> 批次上傳</button>
                   <?php endif; ?>
-                  <a class="btn btn-warning btn-sm" href="as_document_online.php" title="程序書/手冊線上結構化編輯（試作）：網頁直接編修內容，發布自動建議版本"><i class="fa fa-pencil-square-o"></i> 線上編輯（試作）</a>
                   <?php if ($asCaps['admin']): ?>
                   <button class="btn btn-success btn-sm" id="btnFullCreate" title="一次建立程序書＋全部歷史版本＋底下表單（前期補件用，免申請單）"><i class="fa fa-magic"></i> 程序書快速建檔</button>
                   <?php endif; ?>
@@ -2175,7 +2174,6 @@ $(function(){
     {code:'asdoc_delete',      label:'刪除/還原'},
     {code:'asdoc_settings',    label:'文管設定'},
     {code:'asdoc_edit_online', label:'線上開檔'},
-    {code:'asdoc_online_edit', label:'線上結構化編輯'},
     {code:'asdoc_no_attach',   label:'免附件補登'}
   ];
   let AS_ROLES = [];
