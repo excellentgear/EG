@@ -155,6 +155,7 @@ const API = '../../src/store/AS_Form_API.php';
 const TEMPLATE_ID = <?php echo (int)$template_id; ?>;
 let schema = {meta:{header:{},footer:{}}, grid:{cols:6}, cells:[], sections:[]};
 let ctx = {};
+let META = {positions:[], departments:[]};   // 職稱/部門下拉選項（用選的避免手打錯字）
 let editRows = 6;               // 編輯畫布列數（可增）
 let sel = null;                 // 選取格 "r_c"
 const esc = EGForm.esc;
@@ -162,6 +163,7 @@ const esc = EGForm.esc;
 // ── 載入 ──
 function load(){
   if(!TEMPLATE_ID){ $('#statusBadge').text('未指定 template_id'); return; }
+  $.getJSON(API+'?action=meta', m=>{ if(m.ok){ META=m; } renderSections(); });
   $.getJSON(API+'?action=load&template_id='+TEMPLATE_ID, r=>{
     if(!r.ok){ alert(r.error||'載入失敗'); return; }
     schema = r.schema && typeof r.schema==='object' ? r.schema : {};
@@ -341,13 +343,22 @@ const RULE_TYPES={submitter:'填表本人',position:'指定職稱',level:'N階�
 function renderSections(){
   const rows=(schema.sections||[]).map((s,i)=>{
     const rt=(s.rule&&s.rule.type)||'position';
+    // 職稱下拉（position 表帶出；相容舊資料：有 position_id 用 id 對、否則用名稱對）
+    const curPid=(s.rule&&s.rule.position_id)||'';
+    const curPname=(s.rule&&s.rule.position)||'';
+    const posOpts='<option value="">請選擇職稱</option>'+META.positions.map(p=>
+      `<option value="${p.id}"${(String(curPid)===String(p.id)||(!curPid&&curPname===p.name))?' selected':''}>${esc(p.name)}</option>`).join('');
+    // 階下拉（固定 1~3 階主管以上，同 AS 文件權限設定慣例）
+    const curLvl=(s.rule&&s.rule.min_level)||'';
+    const lvlOpts='<option value="">請選擇</option>'+[1,2,3].map(l=>
+      `<option value="${l}"${String(curLvl)===String(l)?' selected':''}>${l} 階主管以上</option>`).join('');
     return `<tr data-i="${i}">
       <td><input class="s-key" value="${esc(s.key||'')}" placeholder="key" style="width:80px;"></td>
       <td><input class="s-label" value="${esc(s.label||'')}" placeholder="標籤" style="width:90px;"></td>
       <td><input class="s-step" type="number" value="${s.step!=null?s.step:1}" style="width:50px;"></td>
       <td><select class="s-rtype">${Object.keys(RULE_TYPES).map(k=>`<option value="${k}"${k===rt?' selected':''}>${RULE_TYPES[k]}</option>`).join('')}</select></td>
-      <td><input class="s-pos" value="${esc((s.rule&&s.rule.position)||'')}" placeholder="職稱如 課長" style="width:90px;"></td>
-      <td><input class="s-lvl" type="number" value="${(s.rule&&s.rule.min_level)||''}" placeholder="階" style="width:45px;"></td>
+      <td><select class="s-pos" style="width:110px;${rt==='position'?'':'display:none;'}">${posOpts}</select></td>
+      <td><select class="s-lvl" style="width:110px;${rt==='level'?'':'display:none;'}">${lvlOpts}</select></td>
       <td><button class="btn btn-danger btn-xs2 s-del">刪</button></td>
     </tr>`;
   }).join('');
@@ -361,18 +372,31 @@ $('#btnAddSec').on('click',function(){
 $('#secTable').on('click','.s-del',function(){
   const i=+$(this).closest('tr').data('i'); schema.sections.splice(i,1); renderSections();
 });
-// 簽核區欄位即時回寫
+// 簽核區欄位即時回寫（職稱/階皆為下拉，存 position_id＋名稱，避免手打錯字）
 $('#secTable').on('change','input,select',function(){
   $('#secTable tr[data-i]').each(function(){
-    const i=+$(this).data('i'); const s=schema.sections[i]; if(!s) return;
-    s.key=$(this).closest('tr').find('.s-key').val().trim();
-    s.label=$(this).closest('tr').find('.s-label').val().trim();
-    s.step=parseInt($(this).closest('tr').find('.s-step').val())||0;
-    const rt=$(this).closest('tr').find('.s-rtype').val();
+    const $tr=$(this);
+    const i=+$tr.data('i'); const s=schema.sections[i]; if(!s) return;
+    s.key=$tr.find('.s-key').val().trim();
+    s.label=$tr.find('.s-label').val().trim();
+    s.step=parseInt($tr.find('.s-step').val())||0;
+    const rt=$tr.find('.s-rtype').val();
     s.rule=s.rule||{}; s.rule.type=rt;
-    if(rt==='position'){ s.rule.position=$(this).closest('tr').find('.s-pos').val().trim(); delete s.rule.min_level; }
-    else if(rt==='level'){ s.rule.min_level=parseInt($(this).closest('tr').find('.s-lvl').val())||1; delete s.rule.position; }
-    else { delete s.rule.position; delete s.rule.min_level; }
+    if(rt==='position'){
+      const pid=parseInt($tr.find('.s-pos').val())||0;
+      const pname=$tr.find('.s-pos option:selected').text();
+      if(pid){ s.rule.position_id=pid; s.rule.position=pname; }
+      else { delete s.rule.position_id; delete s.rule.position; }
+      delete s.rule.min_level;
+    } else if(rt==='level'){
+      s.rule.min_level=parseInt($tr.find('.s-lvl').val())||1;
+      delete s.rule.position; delete s.rule.position_id;
+    } else {
+      delete s.rule.position; delete s.rule.position_id; delete s.rule.min_level;
+    }
+    // 規則型別切換 → 顯示對應下拉
+    $tr.find('.s-pos').toggle(rt==='position');
+    $tr.find('.s-lvl').toggle(rt==='level');
   });
 });
 

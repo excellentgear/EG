@@ -92,6 +92,13 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 try {
 switch ($action) {
 
+// ── 下拉選項 meta（職稱/部門，設計器簽核區用選的避免手打錯字）──
+case 'meta': {
+    $positions = $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    $departments = $db->query("SELECT id, name FROM department ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['ok'=>true, 'positions'=>$positions, 'departments'=>$departments]);
+}
+
 // ── 列出模板（可選 form_doc_id 篩選）──
 case 'list': {
     $where = "is_deleted=0";
