@@ -1,6 +1,6 @@
 # EGsystem — AI 工作規範（每次 session 必讀）
 
-> 最後修改：2026-07-22 — 新增「本機同時裝 3 套 MySQL，EGsystem 固定用 port 3306」環境速查（詳見 ai-rules/00-診斷.md）。（前次）新增配色規範：一律暖色系、禁亂數/HSL 上色、燈號固定三色、文字對比要夠，詳見 ai-rules/10。
+> 最後修改：2026-07-22 — 鐵律6「若新增頁面」補：一律登記進選單（system_module_pages INSERT＋group_id 綁「測試功能」主項目，只登記入口頁）。（前次）新增「本機同時裝 3 套 MySQL，EGsystem 固定用 port 3306」環境速查（詳見 ai-rules/00-診斷.md）。
 
 PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**已用 git 版本控管**（GitHub private repo `ellentravel1003/EGsystem`，分支 `master`），改壞可用 git 復原——但前提是每個檔案改完都有立刻 commit+push（見鐵律6），沒 push 的部分一樣救不回來。
 
@@ -21,7 +21,7 @@ PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**�
    - `php -l` 通過每個改過的檔案
    - `git add <改過的檔案>` → `git commit -m "一句話說明"` → `git push`（單一檔案改完驗證通過就立刻推，不要累積多檔一起 commit，才能保證每個 commit 都是可回復的獨立檢查點）
    - 寫入 page_change_log（範本見下）
-   - 若新增頁面：到 `views/user/user_permissions.php` 仿照報價單加上該頁角色設定區塊
+   - 若新增頁面：到 `views/user/user_permissions.php` 仿照報價單加上該頁角色設定區塊；並登記進選單＝`system_module_pages` INSERT 一列（page_name＋page_url 格式 `/EGsystem/views/...`、sort_order=MAX+1）再把 group_id 綁到「測試功能」主項目（system_module_groups.group_name='測試功能'），等同 `views/admin/system_module_setting.php` 的「子頁面設定＋主項目綁定」操作；帶參數才能開的子頁（設計器/填寫頁等）不登記，只登記入口頁
 
 ## page_change_log 寫入範本
 ```
