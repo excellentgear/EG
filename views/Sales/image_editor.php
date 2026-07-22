@@ -346,6 +346,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             PRIMARY KEY (attachment_id, user_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
+        // 標籤「個人化」分類/#標示：公司共用與部門標籤是全體共用的一份 row，若讓每個人都能改它的
+        // 分類/#標示會互相干擾。所以非管理者對「共用標籤」設定分類/#標示時，改存到這張個人覆蓋表
+        // （只影響自己）；管理者才是改到 imgedit_labels 本身（全體共同的基準值）。私人標籤本來就只有自己
+        // 看得到，直接改本身。NULL＝沒有覆蓋（沿用基準值），空字串＝使用者刻意清成未分類/無標示。
+        $pdo->exec("CREATE TABLE IF NOT EXISTS imgedit_label_user_meta (
+            user_id INT NOT NULL,
+            label_id INT NOT NULL,
+            category VARCHAR(50) NULL,
+            tags VARCHAR(100) NULL,
+            PRIMARY KEY (user_id, label_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
         $act = $_POST['action'];
         if ($act === 'list_labels') {
             // 可見範圍：公司共用 + 自己部門的部門標籤 + 自己的私人標籤
@@ -356,13 +368,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 foreach ($myDeptIds as $i => $d) { $in[] = ':d' . $i; $params[':d' . $i] = $d; }
                 $deptCond = 'owner_dept_id IN (' . implode(',', $in) . ')';
             }
-            $st = $pdo->prepare("SELECT l.label_id, l.label_name, l.category, l.tags, l.owner_type, l.owner_user_id, l.owner_dept_id,
+            // 分類/#標示套用個人覆蓋（有覆蓋用覆蓋，否則用標籤本身的基準值）
+            $params[':uid2'] = $uid;
+            $st = $pdo->prepare("SELECT l.label_id, l.label_name,
+                                        COALESCE(um.category, l.category) AS category,
+                                        COALESCE(um.tags, l.tags) AS tags,
+                                        l.owner_type, l.owner_user_id, l.owner_dept_id,
                                         l.hide_name, l.spec_json, l.created_by, d.name AS dept_name
-                                 FROM imgedit_labels l LEFT JOIN department d ON d.id = l.owner_dept_id
+                                 FROM imgedit_labels l
+                                 LEFT JOIN department d ON d.id = l.owner_dept_id
+                                 LEFT JOIN imgedit_label_user_meta um ON um.label_id = l.label_id AND um.user_id = :uid2
                                  WHERE l.owner_type = 'company'
                                     OR (l.owner_type = 'dept' AND $deptCond)
                                     OR (l.owner_type = 'private' AND l.owner_user_id = :uid)
-                                 ORDER BY l.category ASC, l.label_id DESC");
+                                 ORDER BY category ASC, l.label_id DESC");
             $st->execute($params);
             $allDepts = [];
             if ($isMgr) {
@@ -419,6 +438,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$ok) throw new Exception('公司共用標籤僅管理者可刪除');
             $pdo->beginTransaction();
             $pdo->prepare("DELETE FROM imgedit_labels WHERE label_id = ?")->execute([$lid]);
+            $pdo->prepare("DELETE FROM imgedit_label_user_meta WHERE label_id = ?")->execute([$lid]);  // 一併清個人覆蓋
             $pdo->commit();
             echo json_encode(['success' => true]);
         } elseif ($act === 'move_labels') {
@@ -445,13 +465,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             $ids = array_values(array_unique(array_map('intval', $ids)));
             $pdo->beginTransaction();
-            $sel = $pdo->prepare("SELECT * FROM imgedit_labels WHERE label_id = ?");
+            // 複製時帶入「本人看到的」分類/#標示（個人覆蓋優先），複製出來的新標籤才符合使用者的整理習慣
+            $sel = $pdo->prepare("SELECT l.*, COALESCE(um.category, l.category) AS eff_category, COALESCE(um.tags, l.tags) AS eff_tags
+                                  FROM imgedit_labels l
+                                  LEFT JOIN imgedit_label_user_meta um ON um.label_id = l.label_id AND um.user_id = ?
+                                  WHERE l.label_id = ?");
             $ins = $pdo->prepare("INSERT INTO imgedit_labels (label_name, category, tags, owner_type, owner_user_id, owner_dept_id, spec_json, created_by, created_at)
                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
             $upd = $pdo->prepare("UPDATE imgedit_labels SET owner_type = ?, owner_user_id = ?, owner_dept_id = ?, spec_json = ? WHERE label_id = ?");
             $done = 0;
             foreach ($ids as $lid) {
-                $sel->execute([$lid]);
+                $sel->execute([$uid, $lid]);
                 $r = $sel->fetch(PDO::FETCH_ASSOC);
                 if (!$r) continue;
                 // 複製＝非破壞性，看得到（公司共用／自己部門的部門標籤／自己的私人）就能複製一份到目標範圍；
@@ -469,13 +493,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         $sub = 'D' . $d;
                         $newSpec = imgedit_relocate_files($r['spec_json'], $labelNasBase, $sub);
                         if ($mode === 'move' && $first) $upd->execute(['dept', (int)$r['owner_user_id'] ?: $uid, $d, $newSpec, $lid]);
-                        else $ins->execute([$r['label_name'], $r['category'], $r['tags'], 'dept', $uid, $d, $newSpec, $userName]);
+                        else $ins->execute([$r['label_name'], $r['eff_category'], $r['eff_tags'], 'dept', $uid, $d, $newSpec, $userName]);
                         $first = false;
                     }
                 } else {
                     $sub = imgedit_label_sub($scope, $uid, 0);
                     $newSpec = imgedit_relocate_files($r['spec_json'], $labelNasBase, $sub);
-                    if ($mode === 'copy') $ins->execute([$r['label_name'], $r['category'], $r['tags'], $scope, $uid, null, $newSpec, $userName]);
+                    if ($mode === 'copy') $ins->execute([$r['label_name'], $r['eff_category'], $r['eff_tags'], $scope, $uid, null, $newSpec, $userName]);
                     else $upd->execute([$scope, ($scope === 'private' ? $uid : ((int)$r['owner_user_id'] ?: $uid)), null, $newSpec, $lid]);
                 }
                 $done++;
@@ -728,15 +752,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (mb_strlen($cat) > 50) $cat = mb_substr($cat, 0, 50);
             $ids = array_values(array_unique(array_map('intval', $ids)));
             $pdo->beginTransaction();
-            $sel = $pdo->prepare("SELECT owner_user_id FROM imgedit_labels WHERE label_id = ?");
-            $upd = $pdo->prepare("UPDATE imgedit_labels SET category = ? WHERE label_id = ?");
+            $sel = $pdo->prepare("SELECT owner_type, owner_user_id, owner_dept_id FROM imgedit_labels WHERE label_id = ?");
+            $updRow = $pdo->prepare("UPDATE imgedit_labels SET category = ? WHERE label_id = ?");
+            $upOverlay = $pdo->prepare("INSERT INTO imgedit_label_user_meta (user_id, label_id, category) VALUES (?, ?, ?)
+                                        ON DUPLICATE KEY UPDATE category = VALUES(category)");
             $done = 0;
             foreach ($ids as $lid) {
                 $sel->execute([$lid]);
                 $r = $sel->fetch(PDO::FETCH_ASSOC);
                 if (!$r) continue;
-                if (!$isMgr && (int)$r['owner_user_id'] !== $uid) continue;   // 只能改自己的標籤
-                $upd->execute([($cat !== '' ? $cat : null), $lid]);
+                $ot = $r['owner_type'];
+                $isOwnPrivate = ($ot === 'private' && (int)$r['owner_user_id'] === $uid);
+                $canSee = $isMgr || $ot === 'company'
+                    || ($ot === 'dept' && in_array((int)$r['owner_dept_id'], $myDeptIds, true)) || $isOwnPrivate;
+                if (!$canSee) continue;
+                if ($isMgr || $isOwnPrivate) $updRow->execute([($cat !== '' ? $cat : null), $lid]);  // 全體基準值／自己的私人標籤
+                else $upOverlay->execute([$uid, $lid, $cat]);                                          // 共用標籤的非管理者＝個人覆蓋
                 $done++;
             }
             $pdo->commit();
@@ -749,15 +780,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (mb_strlen($tags) > 100) $tags = mb_substr($tags, 0, 100);
             $ids = array_values(array_unique(array_map('intval', $ids)));
             $pdo->beginTransaction();
-            $sel = $pdo->prepare("SELECT owner_user_id FROM imgedit_labels WHERE label_id = ?");
-            $upd = $pdo->prepare("UPDATE imgedit_labels SET tags = ? WHERE label_id = ?");
+            $sel = $pdo->prepare("SELECT owner_type, owner_user_id, owner_dept_id FROM imgedit_labels WHERE label_id = ?");
+            $updRow = $pdo->prepare("UPDATE imgedit_labels SET tags = ? WHERE label_id = ?");
+            $upOverlay = $pdo->prepare("INSERT INTO imgedit_label_user_meta (user_id, label_id, tags) VALUES (?, ?, ?)
+                                        ON DUPLICATE KEY UPDATE tags = VALUES(tags)");
             $done = 0;
             foreach ($ids as $lid) {
                 $sel->execute([$lid]);
                 $r = $sel->fetch(PDO::FETCH_ASSOC);
                 if (!$r) continue;
-                if (!$isMgr && (int)$r['owner_user_id'] !== $uid) continue;   // 只能改自己的標籤
-                $upd->execute([($tags !== '' ? $tags : null), $lid]);
+                $ot = $r['owner_type'];
+                $isOwnPrivate = ($ot === 'private' && (int)$r['owner_user_id'] === $uid);
+                $canSee = $isMgr || $ot === 'company'
+                    || ($ot === 'dept' && in_array((int)$r['owner_dept_id'], $myDeptIds, true)) || $isOwnPrivate;
+                if (!$canSee) continue;
+                if ($isMgr || $isOwnPrivate) $updRow->execute([($tags !== '' ? $tags : null), $lid]);   // 全體基準值／自己的私人標籤
+                else $upOverlay->execute([$uid, $lid, $tags]);                                           // 共用標籤的非管理者＝個人覆蓋
                 $done++;
             }
             $pdo->commit();
@@ -1326,7 +1364,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <div class="frm-row"><label>#標示</label><input type="text" id="sl-tags" list="lib-tag-datalist" style="flex:1;" placeholder="選填；空格分隔多個，例如：出貨 急件（#可省略）"></div>
             <datalist id="lib-cat-datalist"></datalist>
             <datalist id="lib-tag-datalist"></datalist>
-            <div class="frm-row"><label>範圍</label>
+            <div class="frm-row" id="sl-scope-row"><label>範圍</label>
                 <select id="sl-scope" onchange="document.getElementById('sl-dept').style.display=(this.value==='dept')?'':'none'">
                     <option value="private" selected>私人（只有自己看得到）</option>
                     <option value="dept">部門（同部門共用）</option>
@@ -1334,7 +1372,8 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 </select>
                 <select id="sl-dept" style="display:none;"></select>
             </div>
-            <div style="font-size:11.5px;color:#8b949e;">預設存為私人標籤；之後可在標籤庫用「管理」多選複製/搬移到部門或公司共用。公司共用有使用權者皆可放入，但只有管理者可刪除。標籤放到圖上後仍可雙擊改字、縮放。</div>
+            <div id="sl-group-hint" style="display:none;font-size:11.5px;color:#8b949e;">群組標籤存為<b>私人</b>（只有自己看得到），避免影響其他人的標籤庫。</div>
+            <div id="sl-scope-hint" style="font-size:11.5px;color:#8b949e;">預設存為私人標籤；之後可在標籤庫用「管理」多選複製/搬移到部門或公司共用。公司共用有使用權者皆可放入，但只有管理者可刪除。標籤放到圖上後仍可雙擊改字、縮放。</div>
         </div>
         <div class="modal-foot">
             <button class="tb-btn" onclick="hideModal('savelabel-modal')">取消</button>
@@ -3987,6 +4026,12 @@ async function lmMove(scope, deptIds, mode) {
     } catch (e) { toast('執行失敗：' + (e.message || '')); }
 }
 /* 組成群組標籤：選取的標籤 spec 打包成 multi，存回標籤庫（點一下整組插入） */
+// 切換「存標籤」跳窗的範圍區塊：一般存標籤＝可選範圍；非管理者組群組＝鎖定私人（綁定使用者，不影響別人）
+function setSaveLabelGroupMode(isGroupByNonMgr) {
+    document.getElementById('sl-scope-row').style.display  = isGroupByNonMgr ? 'none' : '';
+    document.getElementById('sl-scope-hint').style.display = isGroupByNonMgr ? 'none' : '';
+    document.getElementById('sl-group-hint').style.display = isGroupByNonMgr ? '' : 'none';
+}
 function lmMakeGroupLabel() {
     if (lmSel.size < 2) { toast('請先選取兩個以上的標籤'); return; }
     const rows = customLabels.filter(r => lmSel.has(r.label_id));   // 依顯示順序
@@ -3999,6 +4044,7 @@ function lmMakeGroupLabel() {
     const sd = document.getElementById('sl-dept');
     sd.innerHTML = MY_DEPTS.map(d => '<option value="' + d.id + '">' + escHtml(d.name) + '</option>').join('');
     sd.style.display = 'none';
+    setSaveLabelGroupMode(!IS_MGR);   // 非管理者：群組標籤鎖定私人
     showModal('savelabel-modal');
     document.getElementById('sl-name').focus();
 }
@@ -4194,6 +4240,7 @@ function saveSelectionAsLabel() {
     const sd = document.getElementById('sl-dept');
     sd.innerHTML = MY_DEPTS.map(d => '<option value="' + d.id + '">' + escHtml(d.name) + '</option>').join('');
     sd.style.display = 'none';
+    setSaveLabelGroupMode(false);   // 一般存標籤：範圍可選（還原群組模式可能隱藏的區塊）
     showModal('savelabel-modal');
     document.getElementById('sl-name').focus();
 }
@@ -4203,12 +4250,15 @@ async function confirmSaveLabel() {
     if (!name) { toast('請輸入標籤名稱'); return; }
     if (!pendingLabelSpec) { hideModal('savelabel-modal'); return; }
     try {
+        // 非管理者的群組標籤一律綁定使用者（私人），不讓群組進到公司共用/部門干擾別人
+        const isGroup = pendingLabelSpec && pendingLabelSpec.kind === 'multi';
+        const scope = (isGroup && !IS_MGR) ? 'private' : document.getElementById('sl-scope').value;
         const fd = new FormData();
         fd.append('action', 'save_label');
         fd.append('name', name);
         fd.append('category', cat);
         fd.append('tags', document.getElementById('sl-tags').value.trim());
-        fd.append('scope', document.getElementById('sl-scope').value);
+        fd.append('scope', scope);
         fd.append('dept_id', document.getElementById('sl-dept').value || '0');
         fd.append('spec', JSON.stringify(pendingLabelSpec));
         const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
