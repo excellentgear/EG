@@ -25,3 +25,4 @@
 # 順路觸發機制的狀態檔（執行時自動產生，記錄上次檢查時間）
 /src/common/personal_task_last_check.txt
 /src/common/car_remind_last_check.txt
+/src/common/db_backup_last_check.txt

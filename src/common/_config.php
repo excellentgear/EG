@@ -67,3 +67,12 @@ try {
 } catch (Throwable $e) {
     error_log('[car_remind] tick hook failed: ' . $e->getMessage());
 }
+
+// === 資料庫自動備份 順路觸發（2026-07-22 新增；做法同上，免工作排程器）===
+// 距上次檢查超過 600 秒才背景啟動備份工人；是否真的執行備份由工人依 interval_days 判斷
+try {
+    require_once __DIR__ . '/db_backup_tick.php';
+    eg_db_backup_tick();
+} catch (Throwable $e) {
+    error_log('[db_backup] tick hook failed: ' . $e->getMessage());
+}
