@@ -247,9 +247,10 @@ function editInner(cell){
 // ── 選取 & 屬性面板 ──
 $('#editHost').on('click','td',function(){
   const r=+$(this).data('r'), c=+$(this).data('c');
-  if($(this).hasClass('dz')){ // 新增格
+  if($(this).hasClass('dz')){ // 新增格 → 焦點自動移至「文字」欄並全選，直接打字即可
     schema.cells.push({r,c,type:'label',text:'新欄位'});
     sel=r+'_'+c; recalcRows(); renderEdit(); fillProp();
+    $('#pText').trigger('focus');   // focus 時已有全選行為
     return;
   }
   sel=r+'_'+c; renderEdit(); fillProp();
