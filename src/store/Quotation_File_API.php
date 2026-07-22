@@ -23,6 +23,11 @@ function _quotCanView(PDO $pdo): bool {
     try { return rbac_has(rbac_user_features($pdo, (int)($_SESSION['id'] ?? 0)), 'quotation_view'); }
     catch (Exception $_e) { return true; }
 }
+// 補件相關權限：edit=可補件（另允許報價單建立者本人）、sign=可審核補件（沿用報價單簽核者）；管理者(all)全權。
+function _quotUid(): int { return (int)($_SESSION['id'] ?? 0); }
+function _quotFeats(PDO $pdo): array {
+    try { return rbac_user_features($pdo, _quotUid()); } catch (Exception $_e) { return []; }
+}
 
 // ════════════════════════════════════════════════════
 // 工具函式
@@ -419,6 +424,163 @@ switch ($action) {
         readfile($realPath);
         exit;
 
+    // ══════════════════════════════════════════════════════════
+    // 補件重審（功能2）：已核准報價單追加附件，需經簽核者審核「是否允許放入此報價單」
+    // ══════════════════════════════════════════════════════════
+
+    // ── 送出補件審核：把剛上傳的暫存(temp)附件轉為待審(pending)並通知簽核者 ──
+    case 'submit_supplement': {
+        initTables($pdo);
+        require_once __DIR__ . '/../common/quotation_supplement.php';
+        $quoteNo = safeQuoteNo($_POST['quote_no'] ?? '');
+        $rawIds  = $_POST['attachment_ids'] ?? '';
+        $ids     = is_array($rawIds) ? $rawIds : (json_decode($rawIds, true) ?: explode(',', (string)$rawIds));
+        $ids     = array_values(array_filter(array_map('intval', (array)$ids)));
+        if ($quoteNo === '' || empty($ids)) { echo json_encode(['success'=>false,'message'=>'參數不足']); break; }
+
+        // 報價單須存在且已核准
+        $qStmt = $pdo->prepare("SELECT quote_id, created_by, approval_status FROM quotation_list WHERE quote_no=? LIMIT 1");
+        $qStmt->execute([$quoteNo]);
+        $quote = $qStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$quote) { echo json_encode(['success'=>false,'message'=>'找不到此報價單']); break; }
+        if (($quote['approval_status'] ?? '') !== 'approved') {
+            echo json_encode(['success'=>false,'message'=>'此報價單尚未核准，附件請直接編輯報價單並存檔即可，毋須補件審核']); break;
+        }
+        // 權限：報價單建立者本人，或具 quotation_edit（管理者全權）
+        $feats = _quotFeats($pdo);
+        $isAdmin = rbac_has($feats, 'all');
+        $canEdit = $isAdmin || rbac_has($feats, 'quotation_edit');
+        $isOwner = ((int)$quote['created_by'] === _quotUid());
+        if (!$canEdit && !$isOwner) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'無補件權限']); break; }
+
+        $uid  = _quotUid();
+        $name = eg_quotation_current_user_name($pdo, $uid);
+        $ph   = implode(',', array_fill(0, count($ids), '?'));
+        $sel  = $pdo->prepare("SELECT id, original_name, category_ids, linked_parts FROM quotation_attachments
+                               WHERE quote_no=? AND status='temp' AND id IN ($ph)");
+        $sel->execute(array_merge([$quoteNo], $ids));
+        $targets = $sel->fetchAll(PDO::FETCH_ASSOC);
+        if (empty($targets)) { echo json_encode(['success'=>false,'message'=>'沒有可送審的補件附件（需先上傳並設定類別）']); break; }
+
+        $done = 0; $skipped = [];
+        foreach ($targets as $t) {
+            if (empty($t['category_ids'])) { $skipped[] = ($t['original_name'] ?: ('#'.$t['id'])) . '（未設類別）'; continue; }
+            $attId = (int)$t['id'];
+            $pdo->prepare("UPDATE quotation_attachments SET status='pending', expire_at=NULL WHERE id=? AND status='temp'")->execute([$attId]);
+            $apId  = eg_approval_submit($pdo, 'quotation_attach', $attId, 'manager', $uid, $name);
+            $label = _quotPartLabel($t['linked_parts']);
+            $evId  = eg_quot_supp_notify_request($pdo, $attId, $quoteNo, $label, $uid, $name);
+            if ($evId) eg_approval_set_live_event($pdo, $apId, $evId);
+            $done++;
+        }
+        echo json_encode(['success'=>$done>0, 'submitted'=>$done, 'skipped'=>$skipped,
+                          'message'=>$done>0 ? "已送出 {$done} 件補件審核" : '沒有附件送審（請先設定類別）']);
+        break;
+    }
+
+    // ── 簽核者：列出待我審核的補件附件 ──
+    case 'list_pending_supplements': {
+        initTables($pdo);
+        $feats = _quotFeats($pdo);
+        $canSign = rbac_has($feats, 'all') || rbac_has($feats, 'quotation_sign');
+        if (!$canSign) { echo json_encode(['success'=>true,'items'=>[],'can_sign'=>false]); break; }
+        $rows = $pdo->query("
+            SELECT a.id, a.quote_no, a.original_name, a.filename, a.category_ids, a.linked_parts,
+                   DATE_FORMAT(a.uploaded_at,'%Y-%m-%d %H:%i') AS uploaded_at,
+                   COALESCE(u.user_cname, a.uploaded_by) AS uploader_name,
+                   ql.client_name, ar.submitted_at
+            FROM quotation_attachments a
+            JOIN approval_record ar ON ar.module='quotation_attach' AND ar.entity_id=a.id AND ar.status='pending'
+                 AND ar.id = (SELECT MAX(id) FROM approval_record WHERE module='quotation_attach' AND entity_id=a.id)
+            LEFT JOIN quotation_list ql ON ql.quote_no=a.quote_no
+            LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
+            WHERE a.status='pending'
+            ORDER BY ar.submitted_at DESC, a.id DESC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+        // 類別名稱對照
+        $catMap = [];
+        foreach ($pdo->query("SELECT id, category_name FROM quotation_file_categories")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+            $catMap[(int)$c['id']] = $c['category_name'];
+        }
+        foreach ($rows as &$r) {
+            $cids = array_values(array_filter(array_map('intval', explode(',', (string)$r['category_ids']))));
+            $r['category_label'] = implode('、', array_map(fn($i)=>$catMap[$i] ?? ('#'.$i), $cids));
+            $r['part_label']     = _quotPartLabel($r['linked_parts']);
+        }
+        unset($r);
+        echo json_encode(['success'=>true, 'items'=>$rows, 'can_sign'=>true]);
+        break;
+    }
+
+    // ── 簽核者：核准 / 駁回一件補件附件 ──
+    case 'decide_supplement': {
+        initTables($pdo);
+        require_once __DIR__ . '/../common/quotation_supplement.php';
+        $feats = _quotFeats($pdo);
+        $canSign = rbac_has($feats, 'all') || rbac_has($feats, 'quotation_sign');
+        if (!$canSign) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'無簽核權限']); break; }
+        $attId    = intval($_POST['attachment_id'] ?? 0);
+        $decision = ($_POST['decision'] ?? '') === 'approve' ? 'approved' : (($_POST['decision'] ?? '') === 'reject' ? 'rejected' : '');
+        $note     = trim($_POST['note'] ?? '');
+        if (!$attId || $decision === '') { echo json_encode(['success'=>false,'message'=>'參數錯誤']); break; }
+        if ($decision === 'rejected' && $note === '') { echo json_encode(['success'=>false,'message'=>'駁回必須填寫原因']); break; }
+
+        $aStmt = $pdo->prepare("SELECT id, quote_no, filename, original_name, uploaded_by, status FROM quotation_attachments WHERE id=? LIMIT 1");
+        $aStmt->execute([$attId]);
+        $att = $aStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$att || $att['status'] !== 'pending') { echo json_encode(['success'=>false,'message'=>'此附件不存在或已處理']); break; }
+        $latest = eg_approval_latest($pdo, 'quotation_attach', $attId, 'manager');
+        if (!$latest || $latest['status'] !== 'pending') { echo json_encode(['success'=>false,'message'=>'查無待審紀錄或已處理']); break; }
+
+        $uid   = _quotUid();
+        $name  = eg_quotation_current_user_name($pdo, $uid);
+        $qno   = safeQuoteNo($att['quote_no']);
+        $base  = getUploadBase($pdo);
+        $fileLabel = $att['original_name'] ?: $att['filename'];
+
+        $pdo->beginTransaction();
+        try {
+            $res = eg_approval_decide($pdo, (int)$latest['id'], $uid, $name, $decision, $note ?: null);
+            if (!$res['success']) { $pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$res['message']]); break; }
+            if ($decision === 'approved') {
+                $pdo->prepare("UPDATE quotation_attachments SET status='active', expire_at=NULL, trashed_reason=NULL WHERE id=?")->execute([$attId]);
+            } else {
+                // 先進暫存檔：實體檔搬到 _att_trash，狀態 trash，設定天數後由 tick 永久刪除
+                if ($base !== '') {
+                    $src = quoteDir($base, $qno) . $att['filename'];
+                    $realSrc = realpath($src);
+                    $expBase = realpath(rtrim($base, '/\\'));
+                    if ($realSrc && $expBase && strpos($realSrc, $expBase) === 0 && is_file($realSrc)) {
+                        $tdir = trashDir($base, $qno);
+                        if (!is_dir($tdir)) @mkdir($tdir, 0755, true);
+                        @rename($realSrc, $tdir . $att['filename']);
+                    }
+                }
+                $trashDays = getQuotAttachDays($pdo, 'trash_attach_days', 7);
+                $pdo->prepare("UPDATE quotation_attachments SET status='trash', trashed_reason=?, expire_at=DATE_ADD(NOW(), INTERVAL ? DAY) WHERE id=?")
+                    ->execute([$note, $trashDays, $attId]);
+            }
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            echo json_encode(['success'=>false,'message'=>'處理失敗：'.$e->getMessage()]); break;
+        }
+
+        // 交易外：解除其他簽核者通知（OR-gate）＋通知上傳者結果
+        eg_quot_supp_close_notice($pdo, $attId, $uid);
+        $uploaderUid = is_numeric($att['uploaded_by']) ? (int)$att['uploaded_by'] : 0;
+        eg_quot_supp_notify_result($pdo, $attId, $att['quote_no'], $uploaderUid, $fileLabel, $decision, $note ?: null);
+        echo json_encode(['success'=>true, 'message'=>$decision==='approved' ? '已核准，附件已正式放入報價單' : '已駁回，附件已刪除並通知上傳者']);
+        break;
+    }
+
     default:
         echo json_encode(['success' => false, 'message' => '未知操作：' . $action]);
+}
+
+// 補件顯示用：把 linked_parts(JSON of D_Setting_Id) 轉為可讀料號標籤；NULL/空=共用附件
+function _quotPartLabel(?string $lp): string {
+    if ($lp === null || $lp === '') return '共用附件';
+    $ids = json_decode($lp, true);
+    return (is_array($ids) && $ids) ? implode('、', array_map('strval', $ids)) : '共用附件';
 }
