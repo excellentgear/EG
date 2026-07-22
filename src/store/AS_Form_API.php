@@ -87,6 +87,21 @@ function buildCtx(PDO $db, array $tpl): array {
     return ['company'=>$company, 'docNo'=>$docNo, 'version'=>$version];
 }
 
+/** 目前使用者身分（自動帶入欄位用）：姓名＋全部(部門,職稱)身分，主要(is_main)排最前 */
+function buildUserCtx(PDO $db, int $uid, string $cname): array {
+    $rows = [];
+    try {
+        $st = $db->prepare("SELECT d.name AS dept, p.name AS position, m.is_main
+                            FROM user_department_position_map m
+                            JOIN department d ON d.id=m.department_id
+                            JOIN position p ON p.id=m.position_id
+                            WHERE m.user_id=? ORDER BY m.is_main DESC, m.id");
+        $st->execute([$uid]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+    return ['name'=>$cname, 'positions'=>$rows];
+}
+
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 try {
@@ -118,10 +133,12 @@ case 'load': {
     $tpl = $q->fetch(PDO::FETCH_ASSOC);
     if (!$tpl) jerr('模板不存在', 404);
     $canDesign = canDesignTemplate($db, $uid, $canBuild, $tid);
+    $ctx = buildCtx($db, $tpl);
+    $ctx['user'] = buildUserCtx($db, $uid, $cname);   // 自動帶入欄位（姓名/部門/職稱）用
     jout(['ok'=>true, 'template'=>[
         'id'=>(int)$tpl['id'], 'form_doc_id'=>$tpl['form_doc_id'], 'name'=>$tpl['name'],
         'status'=>$tpl['status'], 'published_version'=>(int)$tpl['published_version'],
-    ], 'schema'=>json_decode($tpl['current_schema'] ?: '{}'), 'ctx'=>buildCtx($db, $tpl),
+    ], 'schema'=>json_decode($tpl['current_schema'] ?: '{}'), 'ctx'=>$ctx,
        'canDesign'=>$canDesign]);
 }
 
@@ -306,8 +323,9 @@ case 'instance_load': {
             $data['__sig_'.$ap['section_key']] = ['name'=>$ap['approver_name'], 'at'=>$ap['decided_at'] ? date('Y.m.d', strtotime($ap['decided_at'])) : ''];
         }
     }
-    // ctx（表頭表尾即時）
+    // ctx（表頭表尾即時＋使用者身分）
     $ctx = buildCtx($db, ['form_doc_id'=>$inst['tpl_doc_id'], 'published_version'=>$inst['template_version']]);
+    $ctx['user'] = buildUserCtx($db, $uid, $cname);
     $canEdit = in_array($inst['status'], ['draft','rejected'], true) && ($inst['created_by']===$cname || $isAdmin);
     jout(['ok'=>true,
         'instance'=>['id'=>(int)$inst['id'], 'template_id'=>(int)$inst['template_id'], 'title'=>$inst['title'],
@@ -357,6 +375,20 @@ case 'instance_submit': {
         }
     }
     if ($missing) jerr('必填欄位未填：'.implode('、', $missing));
+    // 格式規則驗證（編號等；設計器設定 cell.pattern＝regex，前後端都檢查）
+    $badFmt = [];
+    foreach (($schemaArr['cells'] ?? []) as $cell) {
+        if (($cell['type'] ?? '')!=='field' || empty($cell['pattern'])) continue;
+        $k = $cell['key'] ?? '';
+        $val = $data[$k] ?? '';
+        if ($k==='' || is_array($val) || trim((string)$val)==='') continue;   // 空值交給必填規則管
+        $re = '/'.addcslashes((string)$cell['pattern'], '/').'/u';
+        $m = @preg_match($re, (string)$val);
+        if ($m === 0) $badFmt[] = $k.'（規則 '.$cell['pattern'].'）';
+        // regex 本身無效（$m===false）不擋單，僅記錄
+        if ($m === false) error_log('[AS_Form] invalid pattern for '.$k.': '.$cell['pattern']);
+    }
+    if ($badFmt) jerr('欄位格式不符：'.implode('、', $badFmt));
     $sections = $schemaArr['sections'] ?? [];
     if (empty($sections)) jerr('此表單未設定簽核區，無法送出簽核');
     usort($sections, fn($a2,$b2)=>($a2['step']??0)<=>($b2['step']??0));

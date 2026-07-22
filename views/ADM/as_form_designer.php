@@ -108,12 +108,23 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
           <option value="number">數字</option>
           <option value="date">日期</option>
           <option value="select">下拉選單</option>
-          <option value="checkbox">勾選</option>
+          <option value="checkbox">勾選（多選項）</option>
+          <option value="user_name">使用者姓名（自動帶入）</option>
+          <option value="user_dept">使用者部門（自動帶入）</option>
+          <option value="user_position">使用者職稱（自動帶入）</option>
         </select>
       </div>
       <div class="form-group prop-options" style="display:none;">
         <label>選項（逗號分隔）</label>
         <input type="text" class="form-control input-sm" id="pOptions" placeholder="制定,修訂,廢止">
+      </div>
+      <div class="form-group prop-today" style="display:none;">
+        <label class="req-mini"><input type="checkbox" id="pToday"> 預設帶入今日日期</label>
+      </div>
+      <div class="form-group prop-pattern" style="display:none;">
+        <label>格式規則（regex，留空不檢查）</label>
+        <input type="text" class="form-control input-sm" id="pPattern" placeholder="例：^2-[A-Z]{2}-\d{2}-\d{2}$">
+        <span class="muted">編號類欄位用：填寫時不符規則會紅底提示，送出時後端再驗一次</span>
       </div>
       <div class="form-group prop-field">
         <label class="req-mini"><input type="checkbox" id="pRequired"> 必填</label>
@@ -229,7 +240,7 @@ function editInner(cell){
   if(cell.type==='title'||cell.type==='label'||cell.type==='static') return esc(cell.text||'（空）');
   if(cell.type==='signature') return `<span class="celltag">簽</span>${esc(cell.section||'?')}`;
   if(cell.type==='blank') return '';
-  const ft={text:'文字',textarea:'多行',number:'數字',date:'日期',select:'下拉',checkbox:'勾選'}[cell.ftype]||'文字';
+  const ft={text:'文字',textarea:'多行',number:'數字',date:'日期',select:'下拉',checkbox:'勾選',user_name:'姓名',user_dept:'部門',user_position:'職稱'}[cell.ftype]||'文字';
   return `<span class="celltag">${ft}</span>${esc(cell.key||'未命名')}`;
 }
 
@@ -255,6 +266,8 @@ function fillProp(){
   $('#pFtype').val(cell.ftype||'text');
   $('#pOptions').val((cell.options||[]).join(','));
   $('#pRequired').prop('checked',!!cell.required);
+  $('#pToday').prop('checked',!!cell.today);
+  $('#pPattern').val(cell.pattern||'');
   $('#pAlign').val(cell.align||'center');
   $('#pCs').val(cell.cs||1);
   $('#pRs').val(cell.rs||1);
@@ -262,12 +275,14 @@ function fillProp(){
   syncPropVisibility();
 }
 function syncPropVisibility(){
-  const t=$('#pType').val();
+  const t=$('#pType').val(), ft=$('#pFtype').val();
   $('.prop-text').toggle(t==='title'||t==='label'||t==='static');
   $('.prop-field').toggle(t==='field');
   $('.prop-sig').toggle(t==='signature');
   $('.prop-align').toggle(t==='label'||t==='static');
-  $('.prop-options').toggle(t==='field' && ['select','checkbox'].includes($('#pFtype').val()));
+  $('.prop-options').toggle(t==='field' && ['select','checkbox'].includes(ft));
+  $('.prop-today').toggle(t==='field' && ft==='date');
+  $('.prop-pattern').toggle(t==='field' && ft==='text');
 }
 $('#pType,#pFtype').on('change',syncPropVisibility);
 
@@ -283,13 +298,15 @@ function applyProp(withSpan){
   const cell=cellAt(r,c); if(!cell) return;
   const t=$('#pType').val();
   cell.type=t;
-  ['text','key','ftype','options','required','align','section','rows'].forEach(k=>delete cell[k]);
+  ['text','key','ftype','options','required','align','section','rows','today','pattern'].forEach(k=>delete cell[k]);
   if(t==='title'||t==='label'||t==='static'){ cell.text=$('#pText').val(); if(t!=='title'){const a=$('#pAlign').val(); if(a==='left')cell.align='left';} }
   if(t==='field'){
     cell.key=$('#pKey').val().trim();
     cell.ftype=$('#pFtype').val();
     if(cell.ftype==='select'||cell.ftype==='checkbox'){ cell.options=$('#pOptions').val().split(',').map(s=>s.trim()).filter(Boolean); }
     if(cell.ftype==='textarea'){ cell.rows=6; }
+    if(cell.ftype==='date' && $('#pToday').prop('checked')) cell.today=true;
+    if(cell.ftype==='text'){ const p=$('#pPattern').val().trim(); if(p) cell.pattern=p; }
     if($('#pRequired').prop('checked')) cell.required=true;
   }
   if(t==='signature'){ cell.section=$('#pSection').val(); }
@@ -301,8 +318,8 @@ function applyProp(withSpan){
 }
 $('#btnApply').on('click',()=>applyProp(true));
 // 即時反映：打字/變動立刻更新左側格子（跨欄/列只在 change 時套，見上）
-$('#pText,#pKey,#pOptions').on('input',()=>applyProp(false));
-$('#pType,#pFtype,#pAlign,#pRequired,#pSection').on('change',()=>applyProp(false));
+$('#pText,#pKey,#pOptions,#pPattern').on('input',()=>applyProp(false));
+$('#pType,#pFtype,#pAlign,#pRequired,#pSection,#pToday').on('change',()=>applyProp(false));
 $('#pCs,#pRs').on('change',()=>applyProp(true));
 
 // ── 輸入欄位通用互動（ai-rules/08）：聚焦全選、雙擊清空、Enter 跳下一欄 ──

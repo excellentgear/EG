@@ -29,7 +29,13 @@
     }
   }
 
-  function cellInner(cell, mode, data) {
+  function localToday() {
+    var d = new Date();   // 用本地時區組今日（勿用 toISOString，UTC 會差 8 小時跨日）
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function cellInner(cell, mode, data, ctx) {
+    ctx = ctx || {};
     var type = cell.type;
     if (type === 'title') return esc(cell.text);
     if (type === 'label') return esc(cell.text) + (cell.required ? '<span class="req-star">*</span>' : '');
@@ -44,12 +50,31 @@
     var req = cell.required ? ' data-req="1"' : '';
     var ro = (mode === 'view') ? ' readonly disabled' : '';
     var star = cell.required ? '<span class="req-star">*</span>' : '';
+    var u = ctx.user || {};
+    var upos = u.positions || [];
     switch (cell.ftype) {
+      // ── 自動帶入使用者身分（姓名固定；部門/職稱兼職者下拉可改，預設主要身分）──
+      case 'user_name':
+        return '<input type="text" data-key="' + esc(key) + '" value="' + esc(val || u.name || '') + '" readonly' + req + '>';
+      case 'user_dept': case 'user_position': {
+        var f = (cell.ftype === 'user_dept') ? 'dept' : 'position';
+        var names = [];
+        upos.forEach(function (p) { if (names.indexOf(p[f]) < 0) names.push(p[f]); });   // 去重、主要在前
+        var cur = val || names[0] || '';
+        if (mode === 'view' || !names.length) {
+          return '<input type="text" data-key="' + esc(key) + '" value="' + esc(cur) + '" readonly' + req + '>';
+        }
+        var opts2 = names.map(function (n) {
+          return '<option' + (String(cur) === String(n) ? ' selected' : '') + '>' + esc(n) + '</option>';
+        }).join('');
+        return '<select data-key="' + esc(key) + '"' + req + '>' + opts2 + '</select>' + star;
+      }
       case 'textarea':
         return '<textarea data-key="' + esc(key) + '"' + req + ro + ' rows="' + (cell.rows || 4) + '">' + esc(val) + '</textarea>';
       case 'number':
         return '<input type="number" data-key="' + esc(key) + '" value="' + esc(val) + '"' + req + ro + '>';
       case 'date':
+        if (!val && cell.today && mode === 'fill') val = localToday();   // 預設帶入今日
         return '<input type="date" data-key="' + esc(key) + '" value="' + esc(val) + '"' + req + ro + '>';
       case 'select': {
         var opts = ['<option value=""></option>'].concat((cell.options || []).map(function (o) {
@@ -70,8 +95,10 @@
         // 未設選項：單一勾選（相容舊資料）
         return '<label style="font-weight:normal;"><input type="checkbox" data-key="' + esc(key) + '"' + (val ? ' checked' : '') + ro + '> ' + esc(cell.text || '') + '</label>';
       }
-      default:
-        return '<input type="text" data-key="' + esc(key) + '" value="' + esc(val) + '"' + req + ro + '>' + star;
+      default: {
+        var pat = cell.pattern ? ' data-pattern="' + esc(cell.pattern) + '"' : '';   // 格式規則（編號等，blur 時檢查）
+        return '<input type="text" data-key="' + esc(key) + '" value="' + esc(val) + '"' + req + pat + ro + '>' + star;
+      }
     }
   }
 
@@ -100,7 +127,7 @@
         var cs = cell.cs || 1, rs = cell.rs || 1;
         for (var dr = 0; dr < rs; dr++) for (var dc = 0; dc < cs; dc++) { if (occ[r + dr]) occ[r + dr][c + dc] = true; }
         var span = (cs > 1 ? ' colspan="' + cs + '"' : '') + (rs > 1 ? ' rowspan="' + rs + '"' : '');
-        body += '<td' + span + ' class="' + cellClass(cell) + '">' + cellInner(cell, mode, data) + '</td>';
+        body += '<td' + span + ' class="' + cellClass(cell) + '">' + cellInner(cell, mode, data, ctx) + '</td>';
       }
       body += '</tr>';
     }
@@ -137,6 +164,16 @@
     });
     $host.find('input[type=number]').on('blur', function () {
       if (this.value !== '' && !isNaN(this.value)) this.value = String(parseFloat(this.value));
+    });
+    // 格式規則（編號等）：blur 即時檢查，不符→紅底提示（送出時後端再驗一次）
+    $host.find('input[data-pattern]').on('blur input', function () {
+      var p = this.getAttribute('data-pattern');
+      if (!p || this.value === '') { this.style.background = ''; this.title = ''; return; }
+      try {
+        var ok = new RegExp(p).test(this.value);
+        this.style.background = ok ? '' : '#f6c9bc';
+        this.title = ok ? '' : ('格式不符，規則：' + p);
+      } catch (e) { /* regex 無效不干擾填寫 */ }
     });
   }
 
