@@ -434,19 +434,51 @@ case 'render': {
         $st->execute([$docId]);
         $sections = $st->fetchAll(PDO::FETCH_ASSOC);
     }
+    // 受控外框設定（可於文管設定調整；先給合理預設，公司中文名待補）
+    $coEn   = odSetting($db, 'as_doc_company_en', 'EXCELLENT GEAR TECHNOLOGY CO., LTD');
+    $coZh   = odSetting($db, 'as_doc_company_zh', '');
+    $footer = odSetting($db, 'as_doc_footer_note', '本文件不得擅自塗改或影印');
+
     header('Content-Type: text/html; charset=utf-8');
     $e = fn($s)=>htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+    $body = odRowsToBody($sections) ?: '<p style="color:#aaa">（尚無內容）</p>';
     echo '<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'.$e($doc['doc_no'].' '.$doc['doc_name']).'</title>';
-    echo '<style>body{font-family:"Microsoft JhengHei",sans-serif;color:#3a2c1a;max-width:820px;margin:0 auto;padding:24px;line-height:1.7;}'
-        .'.ashd{border:1px solid #b98a4b;padding:8px 12px;margin-bottom:18px;display:flex;justify-content:space-between;background:#faf3e7;}'
-        .'h3.doctitle{text-align:center;margin:6px 0 20px;}h4{border-left:5px solid #d99a4e;padding-left:8px;margin:18px 0 6px;color:#8a5a1a;}'
-        .'table{border-collapse:collapse;width:100%;}td,th{border:1px solid #c9a978;padding:4px 6px;}'
-        .'@media print{.noprint{display:none;}body{max-width:none;}}</style></head><body>';
-    echo '<div class="ashd"><div><b>文件編號：</b>'.$e($doc['doc_no']).'</div><div><b>版次：</b>'.$e($verLabel).($rdate?'　<b>制修訂日期：</b>'.$e($rdate):'').'</div></div>';
-    echo '<h3 class="doctitle">'.$e($doc['doc_name']).'</h3>';
-    // 單一內文模型：body 直接輸出（自帶 H4 標題）；舊多段資料則併成內文
-    echo '<div>'.(odRowsToBody($sections) ?: '<p style="color:#aaa">（尚無內容）</p>').'</div>';
-    echo '<div class="noprint" style="margin-top:24px;text-align:center;"><button onclick="window.print()">列印 / 匯出 PDF</button></div>';
+    echo '<style>
+      @page{ size:A4; margin:26mm 16mm 18mm 16mm; }
+      *{box-sizing:border-box;}
+      body{font-family:"Microsoft JhengHei","新細明體",serif;color:#111;line-height:1.7;font-size:12pt;margin:0;}
+      .sheet{max-width:186mm;margin:0 auto;padding:8mm 6mm;}
+      /* 受控頁首（固定，列印時每頁重複——Chrome/Edge position:fixed 會逐頁重印）*/
+      .frame-hd{position:fixed;top:0;left:0;right:0;border-collapse:collapse;width:100%;background:#fff;}
+      .frame-hd td{border:1.2px solid #000;padding:2px 6px;font-size:10.5pt;vertical-align:middle;}
+      .frame-hd .co{width:66%;text-align:center;}
+      .frame-hd .co .en{font-weight:700;font-size:11pt;letter-spacing:.3px;}
+      .frame-hd .co .zh{font-size:11pt;}
+      .frame-hd .co .dn{border-top:1.2px solid #000;margin-top:2px;padding-top:2px;text-align:left;}
+      .frame-hd .lbl{width:12%;text-align:center;background:#f4f4f4;letter-spacing:3px;}
+      .frame-hd .val{width:22%;text-align:center;}
+      .frame-ft{position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:space-between;font-size:9.5pt;padding:2px 4px;}
+      h3.doctitle{text-align:center;margin:4px 0 16px;font-size:15pt;}
+      h4{margin:16px 0 6px;font-size:12.5pt;font-weight:700;}
+      table.ct{border-collapse:collapse;} table.ct td,table.ct th{border:1px solid #333;padding:3px 6px;}
+      .content table{border-collapse:collapse;} .content td,.content th{border:1px solid #333;padding:3px 6px;}
+      .content img{max-width:100%;}
+      .noprint{margin:20px 0;text-align:center;}
+      @media print{ .noprint{display:none;} .sheet{padding:0;max-width:none;} }
+    </style></head><body>';
+    // 頁首外框
+    echo '<table class="frame-hd"><tr>'
+        .'<td class="co" rowspan="3"><div class="en">'.$e($coEn).'</div>'.($coZh?'<div class="zh">'.$e($coZh).'</div>':'')
+        .'<div class="dn">文件名稱：'.$e($doc['doc_name']).'</div></td>'
+        .'<td class="lbl">文件編號</td><td class="val">'.$e($doc['doc_no']).'</td></tr>'
+        .'<tr><td class="lbl">頁　次</td><td class="val">&nbsp;</td></tr>'
+        .'<tr><td class="lbl">版　次</td><td class="val">'.$e($verLabel).'</td></tr></table>';
+    // 頁尾外框
+    echo '<div class="frame-ft"><span>（'.$e($footer).'）</span><span>'.$e($doc['doc_no']).'</span></div>';
+    // 內文
+    echo '<div class="sheet"><h3 class="doctitle">'.$e($doc['doc_name']).'</h3><div class="content">'.$body.'</div></div>';
+    echo '<div class="noprint"><button onclick="window.print()" style="padding:6px 18px;font-size:14px;">列印 / 匯出 PDF</button>'
+        .' <span style="color:#999;font-size:12px;">（頁次逐頁精確與逐頁保真，將由下一階段 Word 範本→PDF 產出）</span></div>';
     echo '</body></html>';
     exit;
 }
@@ -495,6 +527,13 @@ default:
 }
 
 // ── 輔助函式 ──────────────────────────────────────
+/** 讀 system_settings 單值，無則回預設 */
+function odSetting(PDO $db, string $key, string $default=''): string {
+    $s = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key=?");
+    $s->execute([$key]);
+    $v = $s->fetchColumn();
+    return ($v!==false && $v!==null && trim((string)$v)!=='') ? (string)$v : $default;
+}
 /** AS 文件 NAS 根路徑（去尾斜線）；唯一存 DB 的路徑資訊，其餘現場組（鐵律5） */
 function odNasRoot(PDO $db): string {
     $s = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key='as_doc_nas_dir'");

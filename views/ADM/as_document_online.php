@@ -66,7 +66,7 @@ if (!$canView) { header("Location:../../src/store/Login.php?msg=".urlencode("無
 .od-cover .t{font-size:16px;font-weight:700;color:var(--ink);}
 .od-cover .m{font-size:12px;color:#7a5f38;}
 .readonly-note{background:#fdf0dc;border:1px solid #e9c98f;color:#8a5a1a;padding:5px 10px;border-radius:5px;font-size:12px;margin-bottom:8px;}
-.od-actbar{background:#fff8ee;border:1px solid #e6d8c3;border-radius:6px;padding:8px 10px;display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;}
+.od-actbar{position:sticky;bottom:0;z-index:30;background:#fff8ee;border:1px solid #e6d8c3;border-radius:6px;padding:8px 10px;display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;box-shadow:0 -3px 10px rgba(0,0,0,.08);}
 .od-actbar .spacer{flex:1;}
 .btn-amber{background:var(--amber);border-color:var(--amber-d);color:#fff;}
 .btn-amber:hover{background:var(--amber-d);color:#fff;}
@@ -104,6 +104,7 @@ if (!$canView) { header("Location:../../src/store/Login.php?msg=".urlencode("無
         <div class="od-actbar">
           <button class="btn btn-sm btn-default" id="btnEnable"><i class="fa fa-pencil"></i> 啟用編輯</button>
           <button class="btn btn-sm btn-amber" id="btnSave" style="display:none;"><i class="fa fa-save"></i> 存草稿</button>
+          <button class="btn btn-sm btn-default" id="btnAutoFmt" style="display:none;" title="統一字級/清多餘空行/可辨識段落標題自動轉H4"><i class="fa fa-magic"></i> 自動排版</button>
           <span id="saveHint" style="color:#7a5f38;font-size:12px;"></span>
           <span class="spacer"></span>
           <button class="btn btn-sm btn-default" id="btnPreview"><i class="fa fa-eye"></i> 預覽/列印</button>
@@ -156,6 +157,7 @@ tinymce.init({
   license_key:'gpl',
   base_url:'../../resource/js/tinymce',
   height:560, menubar:false, language:'zh_TW',
+  toolbar_sticky:true, toolbar_sticky_offset:57,
   plugins:'lists table image link autoresize autolink searchreplace visualblocks code fullscreen',
   toolbar:'undo redo | blocks fontsizeinput | bold italic underline forecolor | alignleft aligncenter alignjustify | bullist numlist outdent indent | table image link | removeformat code fullscreen',
   block_formats:'內文=p; 標題4(段落標題)=h4; 標題5=h5; 標題6=h6',
@@ -220,7 +222,7 @@ function openDoc(docId){
     $('#cvVer').text(r.doc.current_version||'—');
     $('#cvStatus').text(r.current_version?((r.current_version.change_status||'')+' '+(r.current_version.revised_date||'')):'');
     whenEdReady(()=>{ ED.setContent(r.body_html||''); ED.mode.set('readonly'); });
-    $('#btnSave,#btnPublish').hide(); $('#btnEnable').show().prop('disabled',false); $('#saveHint').text('');
+    $('#btnSave,#btnPublish,#btnAutoFmt').hide(); $('#btnEnable').show().prop('disabled',false); $('#saveHint').text('');
     if(!window.CAN_EDIT){ $('#btnEnable').hide(); showRO('你只有檢視權限（唯讀）。'); }
     else if(r.locked_by_other){ $('#btnEnable').prop('disabled',true); showRO('文件正由「'+esc(r.locked_by_name)+'」編輯中，暫無法編輯。'); }
     else $('#roNote').hide();
@@ -234,7 +236,7 @@ $('#btnEnable').on('click',function(){
   $.post(API+'?action=lock',{doc_id:CUR.doc.id}, r=>{
     if(r.status!=='success'){ alert(r.message||'無法取得編輯權'); if(r.locked) showRO(r.message); return; }
     EDITING=true; $('#roNote').hide();
-    $('#btnEnable').hide(); $('#btnSave').show();
+    $('#btnEnable').hide(); $('#btnSave,#btnAutoFmt').show();
     if(window.CAN_PUB) $('#btnPublish').show();
     whenEdReady(()=>ED.mode.set('design'));
   },'json');
@@ -252,6 +254,31 @@ $('#btnSave').on('click',function(){
     if(r.status!=='success'){ alert(r.message||'存檔失敗'); return; }
     DIRTY=false; $('#saveHint').text('已存 '+r.saved_at); loadList(CUR.doc.id);
   },'json');
+});
+
+// ── 自動快速排版：統一字級/顏色、清多餘空行、可辨識段落標題→H4 ──
+const AS_SECTIONS=['目的與範圍','目的','適用範圍','範圍','權責','權責與定義','定義','名詞定義','作業內容','作業程序','作業流程','管理內容','相關文件','參考文件','使用表單','使用表單/紀錄','使用表單/記錄','紀錄','記錄','過程輸入','過程輸出','附件','品質政策','組織與權責','品質管理系統'];
+$('#btnAutoFmt').on('click',function(){
+  if(!ED) return;
+  if(!confirm('自動排版會：統一字體大小、清除多餘空行、把可辨識的段落標題轉為標題4。要繼續嗎？（可用 Ctrl+Z 復原）')) return;
+  const doc=new DOMParser().parseFromString('<div id="r">'+ED.getContent()+'</div>','text/html');
+  const root=doc.getElementById('r');
+  // 1) 去除雜亂 inline 樣式（字級/字體/顏色/行高/背景）與 <font> 屬性
+  root.querySelectorAll('*').forEach(el=>{
+    if(el.style){ ['font-size','font-family','line-height','color','background-color','background'].forEach(p=>el.style.removeProperty(p)); if(el.getAttribute('style')==='') el.removeAttribute('style'); }
+    if(el.tagName==='FONT'){ el.removeAttribute('size'); el.removeAttribute('face'); el.removeAttribute('color'); }
+  });
+  // 2) 段落標題偵測 → h4（只認白名單，避免誤判內文/子項）
+  root.querySelectorAll('p,div').forEach(p=>{
+    const txt=(p.textContent||'').replace(/ /g,' ').trim();
+    if(!txt||txt.length>20) return;
+    const bare=txt.replace(/^[\d一二三四五六七八九十]+[\.、\s]*/,'').replace(/[:：\s]+$/,'').trim();
+    if(AS_SECTIONS.includes(bare)){ const h=doc.createElement('h4'); h.textContent=txt; p.replaceWith(h); }
+  });
+  let html=root.innerHTML;
+  // 3) 收合連續空段落
+  html=html.replace(/(<p>(?:\s|&nbsp;|<br\s*\/?>)*<\/p>\s*){2,}/gi,'<p><br></p>');
+  ED.setContent(html); DIRTY=true; $('#saveHint').text('● 已自動排版，未儲存');
 });
 
 // ── 預覽 ──
