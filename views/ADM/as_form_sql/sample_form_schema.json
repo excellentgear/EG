@@ -1,0 +1,45 @@
+{
+  "meta": { "title": "文件制、修申請單", "doc_no": "2-DC-01-01", "paper": "A4", "orientation": "portrait" },
+  "grid": { "cols": 6 },
+  "cells": [
+    { "r": 0, "c": 0, "cs": 6, "type": "title", "text": "文件制、修申請單" },
+
+    { "r": 1, "c": 0, "type": "label", "text": "申請部門" },
+    { "r": 1, "c": 1, "cs": 2, "type": "field", "key": "apply_dept", "ftype": "text" },
+    { "r": 1, "c": 3, "type": "label", "text": "申請日期" },
+    { "r": 1, "c": 4, "cs": 2, "type": "field", "key": "apply_date", "ftype": "date" },
+
+    { "r": 2, "c": 0, "type": "label", "text": "申請人" },
+    { "r": 2, "c": 1, "cs": 2, "type": "field", "key": "apply_person", "ftype": "text" },
+    { "r": 2, "c": 3, "type": "label", "text": "申請類別" },
+    { "r": 2, "c": 4, "cs": 2, "type": "field", "key": "apply_type", "ftype": "select", "options": ["制定", "修訂", "廢止"], "required": true },
+
+    { "r": 3, "c": 0, "type": "label", "text": "文件編號" },
+    { "r": 3, "c": 1, "cs": 2, "type": "field", "key": "target_no", "ftype": "text" },
+    { "r": 3, "c": 3, "type": "label", "text": "文件名稱" },
+    { "r": 3, "c": 4, "cs": 2, "type": "field", "key": "target_name", "ftype": "text" },
+
+    { "r": 4, "c": 0, "type": "label", "text": "版本" },
+    { "r": 4, "c": 1, "type": "field", "key": "target_ver", "ftype": "text" },
+    { "r": 4, "c": 2, "type": "label", "text": "頁數" },
+    { "r": 4, "c": 3, "type": "field", "key": "target_pages", "ftype": "number" },
+    { "r": 4, "c": 4, "type": "label", "text": "生效日" },
+    { "r": 4, "c": 5, "type": "field", "key": "effect_date", "ftype": "date" },
+
+    { "r": 5, "c": 0, "cs": 6, "type": "label", "text": "制修原因／內容說明", "align": "left" },
+    { "r": 6, "c": 0, "cs": 6, "type": "field", "key": "reason", "ftype": "textarea", "rows": 6 },
+
+    { "r": 7, "c": 0, "cs": 2, "type": "label", "text": "申請人" },
+    { "r": 7, "c": 2, "cs": 2, "type": "label", "text": "審核" },
+    { "r": 7, "c": 4, "cs": 2, "type": "label", "text": "核准" },
+    { "r": 8, "c": 0, "cs": 2, "type": "signature", "key": "sig_apply", "section": "apply" },
+    { "r": 8, "c": 2, "cs": 2, "type": "signature", "key": "sig_review", "section": "review" },
+    { "r": 8, "c": 4, "cs": 2, "type": "signature", "key": "sig_approve", "section": "approve" }
+  ],
+  "sections": [
+    { "key": "apply", "label": "申請人", "step": 0, "rule": { "type": "submitter" } },
+    { "key": "review", "label": "審核", "step": 1, "rule": { "type": "position", "position_id": 8, "position": "課長", "scope": "apply_dept" } },
+    { "key": "approve", "label": "核准", "step": 2, "rule": { "type": "position", "position_id": 6, "position": "經理", "dept_id": 14 } }
+  ],
+  "crosscheck": []
+}
