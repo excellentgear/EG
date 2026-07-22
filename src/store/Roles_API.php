@@ -74,6 +74,35 @@ function isAdmin(PDO $pdo, int $uid): bool {
     } catch(Exception $_e) { return false; }
 }
 
+// ── 權限異動稽核：寫入 audit_log（靜默，失敗不影響操作本身）──────────────
+function rbacAudit(PDO $pdo, int $uid, string $act, string $ttype, $tid, ?string $tname, $changes = null): void {
+    try {
+        $op = '';
+        try {
+            $s = $pdo->prepare("SELECT user_cname, user_uname FROM `user` WHERE id=? LIMIT 1");
+            $s->execute([$uid]);
+            if ($r = $s->fetch(PDO::FETCH_ASSOC)) $op = trim((string)$r['user_cname']) !== '' ? trim((string)$r['user_cname']) : trim((string)$r['user_uname']);
+        } catch (Exception $_e) {}
+        $pdo->prepare("INSERT INTO audit_log (action_type,target_type,target_id,target_name,changes,user_id,operator)
+                       VALUES (?,?,?,?,?,?,?)")
+            ->execute([$act, $ttype, (string)$tid, $tname,
+                       is_array($changes) ? json_encode($changes, JSON_UNESCAPED_UNICODE) : null,
+                       $uid, $op]);
+    } catch (Exception $_e) {}
+}
+function rbacRoleName(PDO $pdo, int $rid): string {
+    try { $s = $pdo->prepare("SELECT role_name FROM roles WHERE role_id=?"); $s->execute([$rid]); $n = $s->fetchColumn(); return $n !== false ? (string)$n : ('#'.$rid); } catch (Exception $_e) { return '#'.$rid; }
+}
+function rbacUserName(PDO $pdo, int $uid): string {
+    try { $s = $pdo->prepare("SELECT user_cname, user_uname FROM `user` WHERE id=? LIMIT 1"); $s->execute([$uid]);
+          if ($r = $s->fetch(PDO::FETCH_ASSOC)) { $n = trim((string)$r['user_cname']); return $n !== '' ? $n : trim((string)$r['user_uname']); }
+    } catch (Exception $_e) {}
+    return '#'.$uid;
+}
+function rbacPositionName(PDO $pdo, int $pid): string {
+    try { $s = $pdo->prepare("SELECT name FROM position WHERE id=?"); $s->execute([$pid]); $n = $s->fetchColumn(); return $n !== false ? (string)$n : ('#'.$pid); } catch (Exception $_e) { return '#'.$pid; }
+}
+
 switch ($action) {
 
     // ──────────────────────────────────────────────────────────────────────
@@ -119,13 +148,21 @@ switch ($action) {
         try {
             if ($rid) {
                 // 改名（不更動所屬模組）
+                $oldName = rbacRoleName($pdo, $rid);
                 $pdo->prepare("UPDATE roles SET role_name=? WHERE role_id=? AND is_system=0")->execute([$rname, $rid]);
+                if ($oldName !== $rname) {
+                    rbacAudit($pdo, $user_id, 'update', 'rbac_role', $rid, $rname,
+                              [['field'=>'role_name','old'=>$oldName,'new'=>$rname]]);
+                }
                 $response = ['success'=>true, 'role_id'=>$rid];
             } else {
                 $rcode = 'role_' . time() . '_' . rand(100,999);
                 $pdo->prepare("INSERT INTO roles (role_code,role_name,module) VALUES (?,?,?)")
                     ->execute([$rcode, $rname, ($module !== '' ? $module : null)]);
-                $response = ['success'=>true, 'role_id'=>(int)$pdo->lastInsertId()];
+                $newId = (int)$pdo->lastInsertId();
+                rbacAudit($pdo, $user_id, 'create', 'rbac_role', $newId, $rname,
+                          ($module !== '' ? [['field'=>'module','old'=>null,'new'=>$module]] : null));
+                $response = ['success'=>true, 'role_id'=>$newId];
             }
         } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
         break;
@@ -143,9 +180,11 @@ switch ($action) {
             $chk = $pdo->prepare("SELECT is_system FROM roles WHERE role_id=? LIMIT 1");
             $chk->execute([$rid]);
             if ((int)$chk->fetchColumn() === 1) { $response = ['success'=>false,'message'=>'系統角色不可刪除']; break; }
+            $delName = rbacRoleName($pdo, $rid);
             $pdo->prepare("DELETE FROM role_features WHERE role_id=?")->execute([$rid]);
             $pdo->prepare("DELETE FROM user_roles    WHERE role_id=?")->execute([$rid]);
             $pdo->prepare("DELETE FROM roles         WHERE role_id=? AND is_system=0")->execute([$rid]);
+            rbacAudit($pdo, $user_id, 'delete', 'rbac_role', $rid, $delName);
             $response = ['success'=>true];
         } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
         break;
@@ -181,11 +220,20 @@ switch ($action) {
             $chk = $pdo->prepare("SELECT is_system FROM roles WHERE role_id=? LIMIT 1");
             $chk->execute([$rid]);
             if ((int)$chk->fetchColumn() === 1) { $response = ['success'=>false,'message'=>'系統角色不可修改']; break; }
+            $oldFeat = [];
+            try { $of = $pdo->prepare("SELECT feature_code FROM role_features WHERE role_id=? ORDER BY feature_code");
+                  $of->execute([$rid]); $oldFeat = $of->fetchAll(PDO::FETCH_COLUMN); } catch (Exception $_e) {}
             $pdo->prepare("DELETE FROM role_features WHERE role_id=?")->execute([$rid]);
             $ins = $pdo->prepare("INSERT IGNORE INTO role_features (role_id,feature_code) VALUES (?,?)");
+            $newFeat = [];
             foreach ($feat as $fc) {
                 $fc = preg_replace('/[^a-z0-9_]/', '', strval($fc));
-                if ($fc) $ins->execute([$rid, $fc]);
+                if ($fc) { $ins->execute([$rid, $fc]); $newFeat[] = $fc; }
+            }
+            sort($newFeat);
+            if ($oldFeat !== $newFeat) {
+                rbacAudit($pdo, $user_id, 'update', 'rbac_role', $rid, rbacRoleName($pdo, $rid),
+                          [['field'=>'features','old'=>implode(',', $oldFeat),'new'=>implode(',', $newFeat)]]);
             }
             $response = ['success'=>true];
         } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
@@ -245,7 +293,12 @@ switch ($action) {
         $rid = intval($_POST['role_id'] ?? 0);
         if (!$uid || !$rid) { $response = ['success'=>false,'message'=>'缺少參數']; break; }
         try {
-            $pdo->prepare("INSERT IGNORE INTO user_roles (user_id,role_id) VALUES (?,?)")->execute([$uid,$rid]);
+            $st = $pdo->prepare("INSERT IGNORE INTO user_roles (user_id,role_id) VALUES (?,?)");
+            $st->execute([$uid,$rid]);
+            if ($st->rowCount() > 0) {
+                rbacAudit($pdo, $user_id, 'assign', 'rbac_user', $uid, rbacUserName($pdo, $uid),
+                          [['field'=>'role','old'=>null,'new'=>rbacRoleName($pdo, $rid)]]);
+            }
             $response = ['success'=>true];
         } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
         break;
@@ -261,7 +314,12 @@ switch ($action) {
         $rid = intval($_POST['role_id'] ?? 0);
         if (!$uid || !$rid) { $response = ['success'=>false,'message'=>'缺少參數']; break; }
         try {
-            $pdo->prepare("DELETE FROM user_roles WHERE user_id=? AND role_id=?")->execute([$uid,$rid]);
+            $st = $pdo->prepare("DELETE FROM user_roles WHERE user_id=? AND role_id=?");
+            $st->execute([$uid,$rid]);
+            if ($st->rowCount() > 0) {
+                rbacAudit($pdo, $user_id, 'remove', 'rbac_user', $uid, rbacUserName($pdo, $uid),
+                          [['field'=>'role','old'=>rbacRoleName($pdo, $rid),'new'=>null]]);
+            }
             $response = ['success'=>true];
         } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
         break;
@@ -346,7 +404,12 @@ switch ($action) {
             $chk = $pdo->prepare("SELECT is_system FROM roles WHERE role_id=? LIMIT 1");
             $chk->execute([$rid]);
             if ((int)$chk->fetchColumn() === 1) { $response = ['success'=>false,'message'=>'系統角色（管理員）不可指派給職稱，請個別指派給使用者']; break; }
-            $pdo->prepare("INSERT IGNORE INTO position_roles (position_id,role_id) VALUES (?,?)")->execute([$pid,$rid]);
+            $st = $pdo->prepare("INSERT IGNORE INTO position_roles (position_id,role_id) VALUES (?,?)");
+            $st->execute([$pid,$rid]);
+            if ($st->rowCount() > 0) {
+                rbacAudit($pdo, $user_id, 'assign', 'rbac_position', $pid, rbacPositionName($pdo, $pid),
+                          [['field'=>'role','old'=>null,'new'=>rbacRoleName($pdo, $rid)]]);
+            }
             $response = ['success'=>true];
         } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
         break;
@@ -362,7 +425,12 @@ switch ($action) {
         $rid = intval($_POST['role_id'] ?? 0);
         if (!$pid || !$rid) { $response = ['success'=>false,'message'=>'缺少參數']; break; }
         try {
-            $pdo->prepare("DELETE FROM position_roles WHERE position_id=? AND role_id=?")->execute([$pid,$rid]);
+            $st = $pdo->prepare("DELETE FROM position_roles WHERE position_id=? AND role_id=?");
+            $st->execute([$pid,$rid]);
+            if ($st->rowCount() > 0) {
+                rbacAudit($pdo, $user_id, 'remove', 'rbac_position', $pid, rbacPositionName($pdo, $pid),
+                          [['field'=>'role','old'=>rbacRoleName($pdo, $rid),'new'=>null]]);
+            }
             $response = ['success'=>true];
         } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
         break;
