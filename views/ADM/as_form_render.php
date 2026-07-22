@@ -109,129 +109,15 @@ $renderCtx = json_encode([
   </div>
 
 <script src="../../resource/js/jquery.min.js"></script>
+<script src="../../resource/js/as_form_render.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/as_form_render.js'); ?>"></script>
 <script>
 const SCHEMA = <?php echo $schema; ?>;
 const RENDER_CTX = <?php echo $renderCtx; ?>;  // 表頭/表尾即時值 {company,docNo,version}
 
-// ── 格狀渲染器：schema → 單一 <table>（colspan/rowspan）──────────────
-// 供設計器預覽 / 填寫頁 / 列印共用。mode: 'fill'(可填) | 'view'(唯讀)
-function renderForm(schema, opts){
-  opts = opts || {}; const mode = opts.mode || 'fill'; const data = opts.data || {};
-  const ctx = opts.ctx || {};
-  const meta = schema.meta || {};
-  const header = meta.header || {};   // {show} 預設顯示
-  const footer = meta.footer || {};   // {show} 預設顯示
-  const cols = (schema.grid && schema.grid.cols) || 6;
-  const cells = (schema.cells || []).slice();
-  // 占用圖：標記被 colspan/rowspan 覆蓋的格子，避免重複輸出
-  const maxR = cells.reduce((m,c)=>Math.max(m, c.r + (c.rs||1)), 0);
-  const occ = Array.from({length:maxR}, ()=>new Array(cols).fill(false));
-  // 以 (r,c) 建索引
-  const at = {};
-  cells.forEach(c=>{ at[c.r+'_'+c.c] = c; });
-
-  // 表身
-  let body = '';
-  for(let r=0;r<maxR;r++){
-    body += '<tr>';
-    for(let c=0;c<cols;c++){
-      if(occ[r][c]) continue;
-      const cell = at[r+'_'+c];
-      if(!cell){ occ[r][c]=true; body += '<td></td>'; continue; }
-      const cs = cell.cs||1, rs = cell.rs||1;
-      for(let dr=0;dr<rs;dr++) for(let dc=0;dc<cs;dc++){ if(occ[r+dr]) occ[r+dr][c+dc]=true; }
-      const span = (cs>1?` colspan="${cs}"`:'') + (rs>1?` rowspan="${rs}"`:'');
-      body += `<td${span} class="${cellClass(cell)}">${cellInner(cell, mode, data)}</td>`;
-    }
-    body += '</tr>';
-  }
-
-  let html = '<table class="eg-form">';
-  // 欄寬：等寬（設計器之後可自訂 colWidths）
-  html += '<colgroup>' + Array.from({length:cols}, ()=>`<col style="width:${(100/cols).toFixed(4)}%">`).join('') + '</colgroup>';
-  // 表頭（本公司名，放大；置於 thead → 列印每頁重複）
-  if(header.show!==false && ctx.company){
-    html += `<thead><tr><th colspan="${cols}" class="cell-letterhead">${esc(ctx.company)}</th></tr></thead>`;
-  }
-  html += '<tbody>' + body + '</tbody>';
-  // 表尾（文件編號＋版次；置於 tfoot → 列印每頁重複）
-  if(footer.show!==false && (ctx.docNo || ctx.version)){
-    html += `<tfoot><tr><td colspan="${cols}" class="cell-footer">`
-          + `<span class="ft-left">文件編號：${esc(ctx.docNo||'')}</span>`
-          + `<span class="ft-right">版次：${esc(ctx.version||'')}</span>`
-          + `<span style="clear:both;display:block;"></span></td></tr></tfoot>`;
-  }
-  html += '</table>';
-  return html;
-}
-
-function cellClass(cell){
-  switch(cell.type){
-    case 'title': return 'cell-title';
-    case 'label': return 'cell-label' + (cell.align==='left'?' align-left':'');
-    case 'signature': return 'cell-sig';
-    default: return 'cell-field';
-  }
-}
-
-function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
-
-function cellInner(cell, mode, data){
-  const type = cell.type;
-  if(type==='title') return esc(cell.text);
-  if(type==='label')  return esc(cell.text) + (cell.required?'<span class="req-star">*</span>':'');
-  if(type==='static') return esc(cell.text);
-  if(type==='signature'){
-    const v = data['__sig_'+(cell.section||cell.key)];
-    if(v) return `<div>${esc(v.name)}</div><div class="sig-hint">${esc(v.at||'')}</div>`;
-    return '<span class="sig-hint">（待簽核）</span>';
-  }
-  // field
-  const key = cell.key, val = data[key]!=null ? data[key] : '';
-  const req = cell.required ? ' data-req="1"' : '';
-  const ro  = (mode==='view') ? ' readonly disabled' : '';
-  const star = cell.required ? '<span class="req-star">*</span>' : '';
-  switch(cell.ftype){
-    case 'textarea':
-      return `<textarea data-key="${esc(key)}"${req}${ro} rows="${cell.rows||4}">${esc(val)}</textarea>`;
-    case 'number':
-      return `<input type="number" data-key="${esc(key)}" value="${esc(val)}"${req}${ro}>`;
-    case 'date':
-      return `<input type="date" data-key="${esc(key)}" value="${esc(val)}"${req}${ro}>`;
-    case 'select':{
-      const opts = ['<option value=""></option>'].concat((cell.options||[]).map(o=>
-        `<option${String(val)===String(o)?' selected':''}>${esc(o)}</option>`)).join('');
-      return `<select data-key="${esc(key)}"${req}${ro}>${opts}</select>${star}`;
-    }
-    case 'checkbox':
-      return `<label style="font-weight:normal;"><input type="checkbox" data-key="${esc(key)}"${val?' checked':''}${ro}> ${esc(cell.text||'')}</label>`;
-    default:
-      return `<input type="text" data-key="${esc(key)}" value="${esc(val)}"${req}${ro}>${star}`;
-  }
-}
-
-// ── UI 互動規範（ai-rules/08）：雙擊清空、聚焦全選、Enter 跳欄、數字尾0省略 ──
-function bindFormUX($host){
-  const $fields = $host.find('input[data-key],select[data-key],textarea[data-key]');
-  $fields.on('focus', function(){ if(this.type!=='date' && this.select) this.select(); });
-  $fields.on('dblclick', function(){ if(this.type!=='checkbox'){ this.value=''; $(this).trigger('focus'); } });
-  $fields.on('keydown', function(e){
-    if(e.key!=='Enter' || this.tagName==='TEXTAREA') return;
-    e.preventDefault();
-    const idx = $fields.index(this);
-    if(idx < $fields.length-1) $fields.eq(idx+1).trigger('focus');
-    else $(this).closest('form,.form-sheet').find('[data-submit]').trigger('click');
-  });
-  // 數字尾 0 省略（3.50→3.5、3.00→3）
-  $host.find('input[type=number]').on('blur', function(){
-    if(this.value!=='' && !isNaN(this.value)) this.value = String(parseFloat(this.value));
-  });
-}
-
 $(function(){
   const $host = $('#formHost');
-  $host.html(renderForm(SCHEMA, {mode:'fill', ctx:RENDER_CTX}));
-  bindFormUX($host);
+  $host.html(EGForm.renderForm(SCHEMA, {mode:'fill', ctx:RENDER_CTX}));
+  EGForm.bindFormUX($host);
 });
 </script>
 </body>
