@@ -679,9 +679,14 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
         border-radius: 9px;
         box-shadow: 0 0 0 2px #fff;
     }
+    /* 注意：主題 custom.min.css 有 `.navbar-nav .open .dropdown-menu{...;width:220px}`（三層class權重較高），
+       單寫 .notice-dropdown 的 width 在下拉「打開時」會被蓋掉、永遠只有 220px——先前多次加寬都因此無效。
+       這裡用同等以上權重＋!important 確保生效；寬度=原實際寬 220px 的兩倍。 */
+    .navbar-nav .open .dropdown-menu.notice-dropdown,
     .notice-dropdown {
-        width: 1320px;                      /* 加寬兩倍，避免標題/預覽文字被截 */
-        max-width: calc(100vw - 60px);      /* 小螢幕自動縮 */
+        width: 440px !important;            /* 220px（主題實際值）的兩倍 */
+        max-width: calc(100vw - 60px) !important;  /* 小螢幕自動縮 */
+        right: 0; left: auto;               /* 靠右展開，避免超出畫面右緣被裁 */
         padding: 0;
         border: none;
         border-radius: 8px;
