@@ -1046,7 +1046,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <div id="propbar">
             <!-- 通用（畫筆/形狀） -->
             <span class="prop-sec show" id="sec-stroke">
-                <label>顏色 <input type="color" id="p-stroke" value="#e53935"></label>
+                <label title="線條/邊框的顏色：畫筆、直線、箭頭，以及矩形/橢圓的外框">顏色 <input type="color" id="p-stroke" value="#e53935" title="線條/邊框顏色"></label>
                 <label>粗細 <input type="range" id="p-width" min="1" max="40" value="3"> <span id="p-width-v" style="color:#ccc;">3</span></label>
                 <label id="wrap-line-ends">端點
                     <select id="p-line-ends" title="直線/畫筆工具的頭端形式" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;">
@@ -1062,9 +1062,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                         <option value="dashdot">─‧─ 中心線</option>
                     </select>
                 </label>
-                <label>填色
-                    <input type="color" id="p-fill" value="#ffffff">
-                    <input type="checkbox" id="p-fill-on" title="形狀是否填色">
+                <label title="形狀內部的填滿顏色（矩形/橢圓/多邊形）；打勾才填色，不勾＝中空只有外框">填色
+                    <input type="color" id="p-fill" value="#ffffff" title="形狀內部填滿的顏色">
+                    <input type="checkbox" id="p-fill-on" title="形狀是否填色（不勾＝中空）">
                 </label>
             </span>
             <!-- 兩點連線 -->
@@ -1089,7 +1089,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             </span>
             <!-- 文字 -->
             <span class="prop-sec" id="sec-text">
-                <label>文字色 <input type="color" id="p-textcolor" value="#d32f2f"></label>
+                <label title="文字本身的顏色">文字色 <input type="color" id="p-textcolor" value="#d32f2f" title="文字顏色"></label>
                 <label>字級 <input type="number" class="ni" id="p-fontsize" value="28" min="6" max="400"></label>
                 <label><input type="checkbox" id="p-bold" checked> 粗體</label>
                 <label>底線
@@ -1099,9 +1099,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                         <option value="double">雙底線</option>
                     </select>
                 </label>
-                <label>底色
-                    <input type="color" id="p-textbg" value="#fff59d">
-                    <input type="checkbox" id="p-textbg-on" title="文字是否加底色">
+                <label title="文字/標籤背後墊的底色：一般文字＝文字底色；標籤＝標籤框內的底色。不勾＝透明">底色
+                    <input type="color" id="p-textbg" value="#fff59d" title="文字/標籤的底色">
+                    <input type="checkbox" id="p-textbg-on" title="是否加底色（不勾＝透明）">
                 </label>
                 <button class="pb-btn" id="sym-btn" onmousedown="event.preventDefault()" onclick="toggleSymPad()"
                     title="插入工程符號（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×）：正在編輯文字時插入游標處；只選取文字物件時附加到最後。另外可直接輸入 A^B 自動變上下公差小字（例如 25 -0^-0.18）">Ø± 符號</button>
@@ -1362,6 +1362,15 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <div class="frm-row"><label>標籤名稱</label><input type="text" id="sl-name" style="flex:1;" placeholder="例如：熱處理HRC50"></div>
             <div class="frm-row"><label>分類</label><input type="text" id="sl-cat" list="lib-cat-datalist" style="flex:1;" placeholder="可留空（未分類）；輸入新名稱即新增分類"></div>
             <div class="frm-row"><label>#標示</label><input type="text" id="sl-tags" list="lib-tag-datalist" style="flex:1;" placeholder="選填；空格分隔多個，例如：出貨 急件（#可省略）"></div>
+            <div class="frm-row"><label>背景</label>
+                <select id="sl-bg" onchange="document.getElementById('sl-bg-color').style.display=(this.value==='custom')?'':'none'"
+                    title="插入圖面時標籤墊的底色；透明＝不遮住圖線。插入前勾標籤庫的「以透明背景插入」一樣可臨時改為透明">
+                    <option value="white" selected>白底（預設）</option>
+                    <option value="transparent">透明（不遮圖線）</option>
+                    <option value="custom">自訂顏色…</option>
+                </select>
+                <input type="color" id="sl-bg-color" value="#ffffff" style="display:none;">
+            </div>
             <datalist id="lib-cat-datalist"></datalist>
             <datalist id="lib-tag-datalist"></datalist>
             <div class="frm-row" id="sl-scope-row"><label>範圍</label>
@@ -1625,7 +1634,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>文字(T)/標籤放上後<b>永遠可再拖移、雙擊改字、拉角縮放</b>（不像小畫家會固定）</li>
                 <li>標籤庫：分公司共用／部門／私人（可分類篩選）。點一下放到圖上；<b>雙擊改字</b>，外框自動貼合字長；「底色」按鈕或插入前勾「透明背景」可切換白底/透明（原內建常用標籤已改為技術部的部門標籤）</li>
                 <li>製程表格標籤（如 (  )齒研）：<b>雙擊空白格可填數值</b>（如公差 29.91 -0.056），Enter 可換行打上下公差，格子自動加寬加高；雙擊標題可把括號填入製程序號</li>
-                <li>自己組好的標籤（矩形＋文字框選）按「把選取存為標籤」入庫；填分類方便日後查找</li>
+                <li>自己組好的標籤（矩形＋文字框選）按「把選取存為標籤」入庫；填分類方便日後查找。存檔時可選<b>背景</b>（白底/透明/自訂色）；沒特別選＝插入時自動墊白底，插入前勾「以透明背景插入」則不墊</li>
                 <li><b>Alt＋拖曳</b>＝原地留一份拖走一份；Ctrl+D 原地複製</li>
                 <li>群組：框選按 <b>Ctrl+G</b>；<b>雙擊群組＝進入</b>拆成多選可調個別位置，調完 Ctrl+G 組回（標籤群組雙擊是改字，用 <b>Alt＋雙擊</b>進入）</li>
             </ul>
@@ -1645,7 +1654,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
                 <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋</li>
-                <li>工程符號與公差：屬性列「文字」區有符號鈕（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×），編輯文字時點一下插到游標處（研磨＝連按▽）；文字輸入 <b>A^B</b>（如 25 -0^-0.18）結束編輯自動變成上下公差小字，雙擊可還原 ^ 字串重編</li>
+                <li>工程符號與公差：屬性列「文字」區有符號鈕（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×），編輯文字時點一下插到游標處（研磨＝連按▽）；文字輸入 <b>A^B</b>（如 25 -0^-0.18）結束編輯自動變成上下公差小字，雙擊可還原 ^ 字串重編；<b>標籤（含快速標籤/自組標籤）內改字同樣適用</b></li>
                 <li>研磨/粗糙度記號：標籤庫「<b>加工符號</b>」分類（技術部部門標籤）有「研磨記號 G＋▽▽▽」與「粗糙度記號 0.8＋G」，點一下放到圖上（預設透明底、可移動縮放旋轉），<b>雙擊 G 或 0.8 即可改字</b></li>
             </ul>
             <b style="color:#6fc3ff;">⑥ 快捷鍵</b>
@@ -3491,10 +3500,10 @@ function makeLabelFromSpec(spec) {
     __labelInk = spec.color || '#000000';
     const fs = spec.fontSize || 44;
     const bw = spec.strokeW || 4;
-    const bgFill = (spec.bg === 'transparent') ? 'transparent' : '#ffffff';   // 白底或透明可選
+    const bgFill = specBg(spec, 'transparent', '#ffffff');   // 白底（預設）/透明/自訂色
     const items = [];
     if (spec.kind === 'plain') {
-        items.push(mkLabelText(spec.text, fs, { textAlign: spec.align || 'center', backgroundColor: (spec.bg === 'transparent') ? '' : '#ffffff', specPath: 'text' }));
+        items.push(mkLabelText(spec.text, fs, { textAlign: spec.align || 'center', backgroundColor: specBg(spec, '', '#ffffff'), specPath: 'text' }));
     } else if (spec.kind === 'box') {
         const t = mkLabelText(spec.text, fs, { textAlign: spec.align || 'center', originX: 'center', originY: 'center', left: 0, top: 0, specPath: 'text' });
         const pad = spec.pad != null ? spec.pad : fs * 0.32;
@@ -3529,7 +3538,7 @@ function makeLabelFromSpec(spec) {
         const t = fs * 1.15, th = t * 0.866, n = Math.max(1, spec.count || 3);
         items.push(mkLabelText(spec.text != null ? spec.text : 'G', fs, {
             originX: 'center', originY: 'bottom', left: n * t / 2, top: -fs * 0.12,
-            backgroundColor: (spec.bg === 'transparent') ? '' : '#ffffff', specPath: 'text'
+            backgroundColor: specBg(spec, '', '#ffffff'), specPath: 'text'
         }));
         for (let i = 0; i < n; i++) {
             items.push(new fabric.Polygon(
@@ -3550,11 +3559,11 @@ function makeLabelFromSpec(spec) {
             { fill: 'transparent', stroke: __labelInk, strokeWidth: sw2, strokeUniform: true, strokeLineJoin: 'round' }));
         items.push(mkLabelText(spec.val != null ? spec.val : '0.8', fs * 0.85, {
             originX: 'right', originY: 'center', left: t * 0.95, top: -th * 0.5,
-            backgroundColor: (spec.bg === 'transparent') ? '' : '#ffffff', specPath: 'val'
+            backgroundColor: specBg(spec, '', '#ffffff'), specPath: 'val'
         }));
         items.push(mkLabelText(spec.text != null ? spec.text : 'G', fs, {
             originX: 'center', originY: 'bottom', left: E.x + tail * 0.5, top: E.y - fs * 0.08,
-            backgroundColor: (spec.bg === 'transparent') ? '' : '#ffffff', specPath: 'text'
+            backgroundColor: specBg(spec, '', '#ffffff'), specPath: 'text'
         }));
     } else if (spec.kind === 'table') {
         const rows = spec.rows || [];
@@ -3642,6 +3651,33 @@ function placeLabelObject(o) {
     canvas.requestRenderAll();
     pushState();
 }
+/* 標籤底色統一判讀：transparent→offVal；自訂色(#hex)→原色；white/未設定→defVal（預設白底） */
+function specBg(spec, offVal, defVal) {
+    if (spec.bg === 'transparent') return offVal;
+    if (spec.bg && spec.bg !== 'white') return spec.bg;
+    return defVal;
+}
+/* 在標籤物件最底層墊一塊底色矩形（自組 fabric 標籤用；矩形帶 isLabelBgRect 供之後切換底色辨識） */
+function addLabelBgRect(o, bgFill) {
+    const pad = 8;
+    const rect = new fabric.Rect({ fill: bgFill, strokeWidth: 0 });
+    rect.isLabelBgRect = true;
+    if (o.type === 'group') {
+        // 群組：以群組中心座標塞進最底層，寬高各外擴 pad（不用 addWithUpdate，座標已是群組相對值）
+        rect.set({ left: -o.width / 2 - pad, top: -o.height / 2 - pad, width: o.width + pad * 2, height: o.height + pad * 2 });
+        o.add(rect);
+        o._objects.pop(); o._objects.unshift(rect);
+        o.set({ width: o.width + pad * 2, height: o.height + pad * 2 });
+        o.dirty = true;
+        return o;
+    }
+    // 單一物件：量絕對邊界後包成群組
+    o.set({ left: 0, top: 0, originX: 'left', originY: 'top' });
+    o.setCoords();
+    const br = o.getBoundingRect(true, true);
+    rect.set({ left: br.left - pad, top: br.top - pad, width: br.width + pad * 2, height: br.height + pad * 2 });
+    return new fabric.Group([rect, o], {});
+}
 /* 由 spec 建立標籤物件（統一入口；multi＝群組標籤：多個標籤直排組成一組） */
 function buildLabelObject(spec, done) {
     if (spec.kind === 'image') {
@@ -3657,13 +3693,22 @@ function buildLabelObject(spec, done) {
         if (j.type === 'activeSelection') j.type = 'group';
         fabric.util.enlivenObjects([j], function (objs) {
             if (!objs || !objs[0]) { done(null); return; }
-            objs[0].labelSpec = spec; objs[0].labelKind = 'fabric';
-            done(objs[0]);
+            let o = objs[0];
+            // 自組（fabric）標籤預設墊白底，插入時勾「以透明背景插入」或存標籤時選透明才不墊；也可存自訂色
+            const bgFill = specBg(spec, '', '#ffffff');
+            if (bgFill) o = addLabelBgRect(o, bgFill);
+            o.labelSpec = spec; o.labelKind = 'fabric';
+            done(o);
         });
         return;
     }
     if (spec.kind === 'multi') {
-        const parts = (spec.specs || []).slice();
+        // 群組標籤：整組的底色設定（透明插入/自訂色）往下傳給各子標籤
+        const parts = (spec.specs || []).map(p => {
+            const q = JSON.parse(JSON.stringify(p));
+            if (spec.bg && q.kind !== 'image') q.bg = spec.bg;
+            return q;
+        });
         const objs = [];
         const next = i => {
             if (i >= parts.length) {
@@ -3689,30 +3734,57 @@ function buildLabelObject(spec, done) {
 function insertLabel(spec) {
     const s = JSON.parse(JSON.stringify(spec));
     const cb = document.getElementById('lib-transparent');
-    if (cb && cb.checked && !['image', 'fabric', 'multi'].includes(s.kind)) s.bg = 'transparent';
+    if (cb && cb.checked && s.kind !== 'image') s.bg = 'transparent';   // 透明插入對自組(fabric)/群組(multi)標籤也生效
     buildLabelObject(s, o => {
         if (!o) { toast('標籤載入失敗'); return; }
         placeLabelObject(o);
     });
 }
-/* 選取中的規格標籤：白底 ⇄ 透明 切換 */
+/* 選取中的標籤：底色切換（規格標籤＝白底⇄透明重建；自組fabric/快速標籤＝就地切換底色矩形，保留改過的字） */
 function toggleLabelBg() {
     const g = canvas.getActiveObject();
-    if (!g || !g.labelSpec || g.labelSpec.kind === 'fabric') { toast('請先選取一個標籤（內建/規格標籤才能切換底色）'); return; }
+    if (!g || !g.labelSpec || ['image', 'tol'].includes(g.labelSpec.kind)) { toast('請先選取一個標籤（公差文字請用屬性列「底色」欄）'); return; }
+    if (g.labelSpec.kind === 'fabric' && g.type === 'group') {
+        // 自組標籤/快速標籤：直接切換底色矩形，不重建（重建會把插入後改過的字洗掉）
+        const onColor = specBg(g.labelSpec, '', '') || document.getElementById('p-textbg').value || '#ffffff';
+        let bgRect = g.getObjects().find(o => o.isLabelBgRect) || (g.isQuickLabel ? g.getObjects().find(o => o.type === 'rect') : null);
+        if (bgRect) {
+            const nowOn = bgRect.fill && bgRect.fill !== 'transparent';
+            bgRect.set('fill', nowOn ? 'transparent' : onColor);
+            bgRect.dirty = true;
+            g.labelSpec.bg = nowOn ? 'transparent' : (onColor === '#ffffff' ? 'white' : onColor);
+        } else {
+            // 以透明插入、沒有底色矩形：補墊一塊在最底層
+            const pad = 8;
+            const rect = new fabric.Rect({ left: -g.width / 2 - pad, top: -g.height / 2 - pad, width: g.width + pad * 2, height: g.height + pad * 2, fill: onColor, strokeWidth: 0 });
+            rect.isLabelBgRect = true;
+            g.add(rect);
+            g._objects.pop(); g._objects.unshift(rect);
+            g.set({ width: g.width + pad * 2, height: g.height + pad * 2 });
+            g.labelSpec.bg = (onColor === '#ffffff') ? 'white' : onColor;
+        }
+        g.dirty = true;
+        canvas.requestRenderAll();
+        pushState();
+        toast('標籤底色：' + (g.labelSpec.bg === 'transparent' ? '透明' : '有底色'));
+        return;
+    }
     const spec = JSON.parse(JSON.stringify(g.labelSpec));
     spec.bg = (spec.bg === 'transparent') ? 'white' : 'transparent';
     const center = g.getCenterPoint();
     const { scaleX, scaleY, angle } = g;
-    canvas.remove(g);
-    const ng = makeLabelFromSpec(spec);
-    ng.set({ scaleX, scaleY, angle, originX: 'center', originY: 'center' });
-    ng.setPositionByOrigin(center, 'center', 'center');
-    ng.setCoords();
-    canvas.add(ng);
-    canvas.setActiveObject(ng);
-    canvas.requestRenderAll();
-    pushState();
-    toast('標籤底色：' + (spec.bg === 'transparent' ? '透明' : '白底'));
+    buildLabelObject(spec, ng => {   // multi 群組標籤 makeLabelFromSpec 做不出來，統一走 buildLabelObject
+        if (!ng || !isFinite(ng.width) || !isFinite(ng.height)) { toast('標籤重建失敗，底色未變更'); return; }
+        canvas.remove(g);
+        ng.set({ scaleX, scaleY, angle, originX: 'center', originY: 'center' });
+        ng.setPositionByOrigin(center, 'center', 'center');
+        ng.setCoords();
+        canvas.add(ng);
+        canvas.setActiveObject(ng);
+        canvas.requestRenderAll();
+        pushState();
+        toast('標籤底色：' + (spec.bg === 'transparent' ? '透明' : '白底'));
+    });
 }
 
 /* 標籤庫面板（分類顯示＋篩選） */
@@ -4037,6 +4109,7 @@ function lmMakeGroupLabel() {
     const rows = customLabels.filter(r => lmSel.has(r.label_id));   // 依顯示順序
     if (!rows.length) return;
     pendingLabelSpec = { kind: 'multi', specs: rows.map(r => JSON.parse(JSON.stringify(r.spec))) };
+    syncSlBg('');   // 群組標籤背景預設白底（同各子標籤預設），要整組透明/自訂色再自行選
     document.getElementById('sl-name').value = '';
     document.getElementById('sl-cat').value = '群組';
     document.getElementById('sl-tags').value = '';
@@ -4226,12 +4299,13 @@ let pendingLabelSpec = null;
 function saveSelectionAsLabel() {
     const obj = canvas.getActiveObject();
     if (!obj) { toast('請先在畫布上選取要存成標籤的物件（可框選多個）'); return; }
-    if (obj.labelSpec && obj.labelSpec.kind !== 'fabric') pendingLabelSpec = obj.labelSpec;
+    if (obj.labelSpec && obj.labelSpec.kind !== 'fabric') pendingLabelSpec = JSON.parse(JSON.stringify(obj.labelSpec));
     else {
         const j = obj.toObject(SNAP_PROPS);
         if (j.type === 'activeSelection') j.type = 'group';
         pendingLabelSpec = { kind: 'fabric', json: j };
     }
+    syncSlBg(pendingLabelSpec.bg);
     document.getElementById('sl-name').value = '';
     document.getElementById('sl-cat').value = document.getElementById('lib-cat-filter').value || '';
     document.getElementById('sl-tags').value = '';
@@ -4244,11 +4318,22 @@ function saveSelectionAsLabel() {
     showModal('savelabel-modal');
     document.getElementById('sl-name').focus();
 }
+/* 存標籤跳窗「背景」選項回填：white/transparent/自訂色（undefined 視為白底預設） */
+function syncSlBg(bg) {
+    const sel = document.getElementById('sl-bg'), clr = document.getElementById('sl-bg-color');
+    sel.value = (bg === 'transparent') ? 'transparent' : ((bg && bg !== 'white') ? 'custom' : 'white');
+    clr.value = /^#[0-9a-fA-F]{6}$/.test(bg || '') ? bg : '#ffffff';
+    clr.style.display = (sel.value === 'custom') ? '' : 'none';
+}
 async function confirmSaveLabel() {
     const name = document.getElementById('sl-name').value.trim();
     const cat = document.getElementById('sl-cat').value.trim();
     if (!name) { toast('請輸入標籤名稱'); return; }
     if (!pendingLabelSpec) { hideModal('savelabel-modal'); return; }
+    if (pendingLabelSpec.kind !== 'image') {
+        const bgSel = document.getElementById('sl-bg').value;
+        pendingLabelSpec.bg = (bgSel === 'custom') ? (document.getElementById('sl-bg-color').value || '#ffffff') : bgSel;
+    }
     try {
         // 非管理者的群組標籤一律綁定使用者（私人），不讓群組進到公司共用/部門干擾別人
         const isGroup = pendingLabelSpec && pendingLabelSpec.kind === 'multi';
@@ -4356,7 +4441,8 @@ canvas.on('mouse:dblclick', function (opt) {
     if (!g.labelSpec || g.labelSpec.kind === 'multi') { enterGroup(g); return; }
     const p = canvas.getPointer(opt.e);
     const texts = [];
-    g.forEachObject(o => { if (o.type === 'text' || o.type === 'i-text') texts.push(o); });
+    // 標籤內的 ^ 公差堆疊小組也算「可雙擊改字」的對象（還原成含 ^ 的原始字串整串重編）
+    g.forEachObject(o => { if (o.type === 'text' || o.type === 'i-text' || (o.type === 'group' && o.labelSpec && o.labelSpec.kind === 'tol')) texts.push(o); });
     if (!texts.length) return;
     let best = null, bd = Infinity;
     texts.forEach(t => {
@@ -4379,14 +4465,17 @@ canvas.on('text:editing:exited', function (opt) {
     }, 0);
 });
 function startGroupTextEdit(group, child, cursorToEnd) {
+    // child 也可能是標籤內的 ^ 公差堆疊小組：編輯時還原原始字串，字體樣式記在它的 labelSpec
+    const isTolChild = (child.type === 'group' && child.labelSpec && child.labelSpec.kind === 'tol');
+    const st = isTolChild ? child.labelSpec : child;
     const dec = fabric.util.qrDecompose(child.calcTransformMatrix());
     child.visible = false; group.dirty = true;
     canvas.requestRenderAll();
-    const tmp = new fabric.IText(child.text, {
+    const tmp = new fabric.IText(isTolChild ? String(st.text || '') : child.text, {
         left: dec.translateX, top: dec.translateY, originX: 'center', originY: 'center',
         angle: dec.angle, scaleX: dec.scaleX, scaleY: dec.scaleY,
-        fontSize: child.fontSize, fontFamily: child.fontFamily, fontWeight: child.fontWeight,
-        fill: child.fill, textAlign: child.textAlign || 'center', backgroundColor: '#fff8d6',
+        fontSize: st.fontSize, fontFamily: st.fontFamily, fontWeight: st.fontWeight,
+        fill: st.fill, textAlign: child.textAlign || 'center', backgroundColor: '#fff8d6',
         underline: !!child.underline
     });
     tmp.doubleUnderline = !!child.doubleUnderline;
@@ -4412,9 +4501,14 @@ function startGroupTextEdit(group, child, cursorToEnd) {
         // 復原/重做把畫布整個換掉了，或群組已被其他流程移除：不能再把舊群組加回去（會生出與歷史不符的幽靈物件）
         if (restoring || canvas.getObjects().indexOf(group) === -1) { canvas.requestRenderAll(); return; }
         // 編輯期間若有改文字樣式（底色/顏色/粗體/字級/底線），要同步回真正的文字，不然編輯結束就跳回舊樣式
-        child.set({ fill: tmp.fill, fontWeight: tmp.fontWeight, fontSize: tmp.fontSize, underline: tmp.underline });
-        child.doubleUnderline = tmp.doubleUnderline;
-        if (tmp.backgroundColor !== '#fff8d6') child.set('backgroundColor', tmp.backgroundColor);   // #fff8d6=編輯中的提示底色，沒被使用者改過就不帶回去
+        if (isTolChild) {
+            Object.assign(child.labelSpec, { fill: tmp.fill, fontWeight: tmp.fontWeight, fontSize: tmp.fontSize });
+            if (tmp.backgroundColor !== '#fff8d6') child.labelSpec.backgroundColor = tmp.backgroundColor;
+        } else {
+            child.set({ fill: tmp.fill, fontWeight: tmp.fontWeight, fontSize: tmp.fontSize, underline: tmp.underline });
+            child.doubleUnderline = tmp.doubleUnderline;
+            if (tmp.backgroundColor !== '#fff8d6') child.set('backgroundColor', tmp.backgroundColor);   // #fff8d6=編輯中的提示底色，沒被使用者改過就不帶回去
+        }
         child.dirty = true;
         child.visible = true;
         finishGroupTextEdit(group, child, val);
@@ -4443,17 +4537,39 @@ function finishGroupTextEdit(group, child, val) {
         canvas.setActiveObject(ng);
     } else {
         // 自由組合（fabric）標籤／快速標註群組：改字後重組群組以重算邊界
-        child.set('text', val); child.dirty = true;
         const props = { labelSpec: group.labelSpec, labelKind: group.labelKind, isQuickLabel: group.isQuickLabel, dimKind: group.dimKind, dimAngleId: group.dimAngleId };
         const kids = group.getObjects().slice();
         const wasQuickLabel = group.isQuickLabel;
         group.destroy();               // 還原子物件為絕對座標（含群組縮放）
+        // 標籤內也支援 ^ 公差堆疊：字串含 A^B → 文字換成堆疊小組；堆疊小組改到沒 ^ → 換回一般文字
+        const wasTol = (child.type === 'group' && child.labelSpec && child.labelSpec.kind === 'tol');
+        let textObj = child;
+        if (TOL_INPUT_RE.test(val) || wasTol) {
+            const st = wasTol ? child.labelSpec : child;
+            const style = { fontSize: st.fontSize || 28, fill: st.fill, fontWeight: st.fontWeight,
+                            fontFamily: st.fontFamily, backgroundColor: st.backgroundColor || '' };
+            let no = null;
+            try {
+                no = TOL_INPUT_RE.test(val) ? makeTolGroup(val, style) : new fabric.IText(val, style);
+            } catch (e) { console.warn('[EGdraw] 標籤內公差文字建立例外：', e); }
+            if (no && isFinite(no.width) && isFinite(no.height)) {
+                const c0 = child.getCenterPoint();
+                no.set({ originX: 'center', originY: 'center', angle: child.angle || 0 });
+                no.setPositionByOrigin(c0, 'center', 'center');
+                no.setCoords();
+                const idx = kids.indexOf(child);
+                if (idx >= 0) kids[idx] = no; else kids.push(no);
+                textObj = no;
+            } else if (!wasTol) { child.set('text', val); child.dirty = true; }
+        } else {
+            child.set('text', val); child.dirty = true;
+        }
         if (wasQuickLabel) {
             // 快速標籤（文字工具的「標籤」）：邊框自動貼合新字長，中心點不變
             const box = kids.find(k => k.type === 'rect');
-            if (box) {
-                const pad = labelBoxPadding(child.fontSize);
-                box.set({ width: child.width + pad * 2, height: child.height + pad * 2 });
+            if (box && box !== textObj) {
+                const pad = labelBoxPadding((wasTol ? (child.labelSpec.fontSize || 28) : child.fontSize) || 28);
+                box.set({ width: textObj.getScaledWidth() + pad * 2, height: textObj.getScaledHeight() + pad * 2 });
                 box.setCoords();
             }
         }
@@ -5510,7 +5626,7 @@ function refreshPropbar() {
         document.getElementById('btn-poly-close').textContent = (obj.type === 'polygon') ? '打開' : '封閉';
         document.getElementById('btn-poly-smooth').textContent = obj.curved ? '取直' : '圓滑';
     }
-    document.getElementById('btn-label-bg').style.display = (obj.labelSpec && obj.labelSpec.kind !== 'fabric') ? '' : 'none';
+    document.getElementById('btn-label-bg').style.display = (obj.labelSpec && !['image', 'tol'].includes(obj.labelSpec.kind)) ? '' : 'none';
     // 選到文字（含標籤/標註等群組裡的文字）時同步並顯示文字屬性區——底線/粗體/字級/底色對已建立的文字隨時可改
     const txt = firstTextIn(obj);
     if (currentTool === 'select') document.getElementById('sec-text').classList.toggle('show', !!txt);
@@ -5519,8 +5635,18 @@ function refreshPropbar() {
         document.getElementById('p-fontsize').value = Math.round(txt.fontSize * (txt.scaleX || 1));
         document.getElementById('p-bold').checked = (txt.fontWeight === 'bold');
         document.getElementById('p-underline').value = txt.underline ? (txt.doubleUnderline ? 'double' : 'single') : 'none';
-        document.getElementById('p-textbg-on').checked = !!txt.backgroundColor;
-        if (txt.backgroundColor) document.getElementById('p-textbg').value = toHex(txt.backgroundColor) || '#fff59d';
+        // 快速標籤/自組標籤：底色看的是底色矩形（邊框矩形）的填色，不是文字底色
+        const bgBox = (obj.type === 'group' && obj.getObjects)
+            ? (obj.getObjects().find(k => k.isLabelBgRect) || (obj.isQuickLabel ? obj.getObjects().find(k => k.type === 'rect') : null))
+            : null;
+        if (bgBox) {
+            const onNow = !!(bgBox.fill && bgBox.fill !== 'transparent');
+            document.getElementById('p-textbg-on').checked = onNow;
+            if (onNow) document.getElementById('p-textbg').value = toHex(bgBox.fill) || '#fff59d';
+        } else {
+            document.getElementById('p-textbg-on').checked = !!txt.backgroundColor;
+            if (txt.backgroundColor) document.getElementById('p-textbg').value = toHex(txt.backgroundColor) || '#fff59d';
+        }
     }
 }
 /* 選取物件（含群組/多選遞迴）裡的第一個文字物件 */
@@ -5705,7 +5831,8 @@ function applyTextBg() {
     let bg = document.getElementById('p-textbg').value;
     // 勾選加底色時色票若是白色且文字原本沒底色，改用預設黃色：白色色票多半是先前
     // 點選過標註文字（內建白底）被同步留下的，白底疊在白圖紙上看不出來，使用者會以為勾了沒效
-    if (on && bg.toLowerCase() === '#ffffff') {
+    if (on && bg.toLowerCase() === '#ffffff' && !(obj && (obj.isQuickLabel || obj.labelKind === 'fabric'))) {
+        // 快速標籤/自組標籤有邊框或底色矩形，白底看得出來，不需要改黃
         const t = firstTextIn(obj);
         if (t && !t.backgroundColor) {
             bg = '#fff59d';
@@ -5713,7 +5840,28 @@ function applyTextBg() {
         }
     }
     const n = eachInSelection(obj, o => {
-        if (o.type === 'i-text' || o.type === 'textbox' || o.type === 'text') { o.set('backgroundColor', on ? bg : ''); o.dirty = true; return true; }
+        // 快速標籤（文字工具的「標籤」）：底色＝邊框矩形的填色，不是文字底色（改文字底色看起來像沒反應）
+        if (o.isQuickLabel && o.type === 'group' && o.getObjects) {
+            const box = o.getObjects().find(k => k.type === 'rect');
+            const t = o.getObjects().find(k => k.type === 'i-text' || k.type === 'text');
+            if (box) {
+                box.set('fill', on ? bg : 'transparent'); box.dirty = true;
+                if (t && t.backgroundColor) { t.set('backgroundColor', ''); t.dirty = true; }   // 清掉先前誤設在文字上的底色
+                o.dirty = true;
+                if (o.labelSpec) o.labelSpec.bg = on ? bg : 'transparent';
+                return true;
+            }
+        }
+        // 自組（fabric）標籤的底色矩形
+        if (o.isLabelBgRect) {
+            o.set('fill', on ? bg : 'transparent'); o.dirty = true;
+            if (o.group) { o.group.dirty = true; if (o.group.labelSpec) o.group.labelSpec.bg = on ? bg : 'transparent'; }
+            return true;
+        }
+        if (o.isQuickLabel) return false;   // 已在上面整組處理，別再讓遞迴改到裡面的文字
+        if ((o.type === 'i-text' || o.type === 'textbox' || o.type === 'text') && !(o.group && o.group.isQuickLabel)) {
+            o.set('backgroundColor', on ? bg : ''); o.dirty = true; return true;
+        }
         return false;
     });
     if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); pushState(); }
@@ -5936,7 +6084,7 @@ function snapUnpoolify(json) {   // 池索引占位 → 原 dataURL（沒有占�
         }
     });
 }
-const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved', 'transparentBg'];
+const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved', 'transparentBg', 'isLabelBgRect'];
 /* 卡頓/當機診斷：主要耗時點超過門檻就在主控台留紀錄（回報問題時請開 F12 把紅字/黃字截圖）；
    未攔截的程式例外第一次發生時跳 toast 提醒——渲染迴圈被例外打斷正是「殘影＋卡死」的典型來源 */
 let __egErrToasted = false;
@@ -6255,8 +6403,15 @@ document.addEventListener('keyup', function (e) {
 });
 
 /* ── 跳窗 / 畫布設定 / 其他 ── */
-function showModal(id) { document.getElementById(id).classList.add('show'); }
-function hideModal(id) { document.getElementById(id).classList.remove('show'); }
+function showModal(id) {
+    // 後開的跳窗要疊在已開跳窗上方（例：標籤管理 → 組成群組標籤），不然會被壓在下面要先關掉才能用
+    const el = document.getElementById(id);
+    let z = 900;
+    document.querySelectorAll('.modal-mask.show').forEach(m => { z = Math.max(z, parseInt(m.style.zIndex, 10) || 900); });
+    el.style.zIndex = (z + 1);
+    el.classList.add('show');
+}
+function hideModal(id) { const el = document.getElementById(id); el.classList.remove('show'); el.style.zIndex = ''; }
 function openCanvasModal() {
     document.getElementById('cv-w').value = artW;
     document.getElementById('cv-h').value = artH;
