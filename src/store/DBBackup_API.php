@@ -187,6 +187,81 @@ switch ($action) {
         out($res);
     }
 
+    // ═════════════════ Phase 2：誤刪救援（部分還原） ═════════════════
+
+    // ── 載入備份到檢視暫存庫（背景，約 20 秒）──
+    case 'view_load': {
+        if (!$CAN_RESTORE_PARTIAL) deny();
+        $id = (int)($_POST['id'] ?? 0);
+        $st = $pdo->prepare("SELECT status FROM db_backup_log WHERE id=?"); $st->execute([$id]);
+        if ($st->fetchColumn() !== 'success') out(['success'=>false,'message'=>'請選擇一筆成功的備份']);
+        $vs = eg_bk_view_status($pdo);
+        if ($vs['status'] === 'loading') out(['success'=>false,'message'=>'另一個載入正在進行中，請稍候']);
+        eg_bk_cfg_set($pdo, 'view_status', 'loading', $by);
+        eg_bk_cfg_set($pdo, 'view_backup_id', (string)$id, $by);
+        $script = realpath(__DIR__ . '/../common/db_backup_view_load.php');
+        if (!is_file(BK_PHP) || !$script) out(['success'=>false,'message'=>'找不到載入工人程式']);
+        $cmd = 'start /B "" "' . BK_PHP . '" "' . $script . '" ' . $id . ' >NUL 2>&1';
+        $h = @popen($cmd, 'r'); if ($h) @pclose($h);
+        out(['success'=>true,'message'=>'開始載入檢視庫（約 20 秒），完成後即可搜尋/比對']);
+    }
+
+    // ── 檢視庫狀態（輪詢用）──
+    case 'view_status': {
+        if (!$CAN_RESTORE_PARTIAL) deny();
+        $vs = eg_bk_view_status($pdo);
+        if ($vs['backup_id']) {
+            $st = $pdo->prepare("SELECT filename, created_at FROM db_backup_log WHERE id=?");
+            $st->execute([$vs['backup_id']]);
+            if ($row = $st->fetch(PDO::FETCH_ASSOC)) { $vs['filename'] = $row['filename']; $vs['backup_time'] = $row['created_at']; }
+        }
+        out(['success'=>true,'data'=>$vs]);
+    }
+
+    // ── 值搜尋（跨全部表找關鍵字）──
+    case 'view_search': {
+        if (!$CAN_RESTORE_PARTIAL) deny();
+        if (eg_bk_view_status($pdo)['status'] !== 'ready') out(['success'=>false,'message'=>'檢視庫尚未載入']);
+        $q = trim((string)($_GET['q'] ?? $_POST['q'] ?? ''));
+        if (mb_strlen($q) < 2) out(['success'=>false,'message'=>'關鍵字至少 2 個字']);
+        set_time_limit(120);
+        out(['success'=>true,'data'=>eg_bk_view_search($pdo, $q)]);
+    }
+
+    // ── 差異概覽（各表誤刪列數）──
+    case 'view_diff_overview': {
+        if (!$CAN_RESTORE_PARTIAL) deny();
+        if (eg_bk_view_status($pdo)['status'] !== 'ready') out(['success'=>false,'message'=>'檢視庫尚未載入']);
+        set_time_limit(300);
+        out(['success'=>true,'data'=>eg_bk_view_diff_overview($pdo)]);
+    }
+
+    // ── 差異明細（某表被刪的列）──
+    case 'view_diff_table': {
+        if (!$CAN_RESTORE_PARTIAL) deny();
+        if (eg_bk_view_status($pdo)['status'] !== 'ready') out(['success'=>false,'message'=>'檢視庫尚未載入']);
+        $t = trim((string)($_GET['table'] ?? ''));
+        out(['success'=>true,'data'=>eg_bk_view_diff_table($pdo, $t)]);
+    }
+
+    // ── 逐列還原（db_restore_partial + 部分還原密碼 + 還原前自動快照）──
+    case 'view_restore_rows': {
+        if (!$CAN_RESTORE_PARTIAL) deny();
+        $v = verify_restore_pw($pdo, 'partial', (string)($_POST['password'] ?? ''));
+        if (!$v['ok']) out(['success'=>false,'message'=>$v['msg']]);
+        if (eg_bk_view_status($pdo)['status'] !== 'ready') out(['success'=>false,'message'=>'檢視庫尚未載入']);
+        $table  = trim((string)($_POST['table'] ?? ''));
+        $pkList = json_decode((string)($_POST['pk_list'] ?? '[]'), true);
+        $mode   = (($_POST['mode'] ?? 'insert') === 'replace') ? 'replace' : 'insert';
+        if (!is_array($pkList) || !$pkList) out(['success'=>false,'message'=>'未選取任何列']);
+        // 還原前自動快照
+        $snap = eg_bk_run($pdo, 'pre-restore', $by);
+        $res  = eg_bk_view_restore_rows($pdo, $table, $pkList, $mode);
+        $res['message'] = $res['msg'] . '（還原前已自動快照：' . ($snap['ok'] ? $snap['filename'] : ('快照未成功-' . $snap['msg'])) . '）';
+        $res['success'] = $res['ok'];
+        out($res);
+    }
+
     default:
         out(['success'=>false,'message'=>'未知的 action: ' . $action]);
 }
