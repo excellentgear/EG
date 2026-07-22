@@ -74,13 +74,13 @@ function buildCtx(PDO $db, array $tpl): array {
             $company = $cr['customer_full'] ?: ($cr['customer'] ?? '');
         }
     } catch (Exception $e) {}
-    $docNo = ''; $version = $tpl['published_version'] ? ('Ver.'.$tpl['published_version']) : '';
+    $docNo = ''; $version = '';   // 版次不猜：僅取文件實際版次，無則留空
     if (!empty($tpl['form_doc_id'])) {
         $d = $db->prepare("SELECT doc_no, current_version FROM as_document WHERE id=?");
         $d->execute([$tpl['form_doc_id']]);
         if ($dr = $d->fetch(PDO::FETCH_ASSOC)) {
             $docNo = $dr['doc_no'] ?? '';
-            if (!empty($dr['current_version'])) $version = $dr['current_version'];
+            $version = trim((string)($dr['current_version'] ?? ''));
         }
     }
     return ['company'=>$company, 'docNo'=>$docNo, 'version'=>$version];

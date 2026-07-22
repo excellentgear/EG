@@ -100,10 +100,11 @@
       html += '<thead><tr><th colspan="' + cols + '" class="cell-letterhead">' + esc(ctx.company) + '</th></tr></thead>';
     }
     html += '<tbody>' + body + '</tbody>';
-    if (footer.show !== false && (ctx.docNo || ctx.version)) {
+    // 表尾：文件編號＋版次直接串接（無標籤），置右下角；無版次則只顯示編號
+    var footText = (ctx.docNo || '') + (ctx.version || '');
+    if (footer.show !== false && footText) {
       html += '<tfoot><tr><td colspan="' + cols + '" class="cell-footer">'
-        + '<span class="ft-left">文件編號：' + esc(ctx.docNo || '') + '</span>'
-        + '<span class="ft-right">版次：' + esc(ctx.version || '') + '</span>'
+        + '<span class="ft-right">' + esc(footText) + '</span>'
         + '<span style="clear:both;display:block;"></span></td></tr></tfoot>';
     }
     html += '</table>';

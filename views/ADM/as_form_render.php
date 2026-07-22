@@ -34,13 +34,13 @@ try {
 } catch (Throwable $e) {}
 // 表尾＝文件編號＋版次（取自所屬 as_document；版次無則退回模板發布版）
 $footDocNo = '';
-$footVer   = $tpl['published_version'] ? ('Ver.' . $tpl['published_version']) : '';
+$footVer   = '';   // 版次不猜：僅取文件實際版次，無則留空（不退回發布版號）
 if (!empty($tpl['form_doc_id'])) {
     $ds = $db->prepare("SELECT doc_no, current_version FROM as_document WHERE id=?");
     $ds->execute([$tpl['form_doc_id']]);
     if ($dr = $ds->fetch(PDO::FETCH_ASSOC)) {
         $footDocNo = $dr['doc_no'] ?? '';
-        if (!empty($dr['current_version'])) $footVer = $dr['current_version'];
+        $footVer   = trim((string)($dr['current_version'] ?? ''));
     }
 }
 $renderCtx = json_encode([
