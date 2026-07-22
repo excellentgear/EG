@@ -2175,6 +2175,7 @@ $(function(){
     {code:'asdoc_delete',      label:'刪除/還原'},
     {code:'asdoc_settings',    label:'文管設定'},
     {code:'asdoc_edit_online', label:'線上開檔'},
+    {code:'asdoc_online_edit', label:'線上結構化編輯'},
     {code:'asdoc_no_attach',   label:'免附件補登'}
   ];
   let AS_ROLES = [];
