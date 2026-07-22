@@ -434,9 +434,9 @@ case 'render': {
         $st->execute([$docId]);
         $sections = $st->fetchAll(PDO::FETCH_ASSOC);
     }
-    // 受控外框設定（可於文管設定調整；先給合理預設，公司中文名待補）
+    // 受控外框設定：英文名用設定值；中文名自動抓本公司(customer_list.is_own_company=1)，設定值可覆寫
     $coEn   = odSetting($db, 'as_doc_company_en', 'EXCELLENT GEAR TECHNOLOGY CO., LTD');
-    $coZh   = odSetting($db, 'as_doc_company_zh', '');
+    $coZh   = odSetting($db, 'as_doc_company_zh', '') ?: odOwnCompany($db);
     $footer = odSetting($db, 'as_doc_footer_note', '本文件不得擅自塗改或影印');
 
     header('Content-Type: text/html; charset=utf-8');
@@ -444,41 +444,42 @@ case 'render': {
     $body = odRowsToBody($sections) ?: '<p style="color:#aaa">（尚無內容）</p>';
     echo '<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'.$e($doc['doc_no'].' '.$doc['doc_name']).'</title>';
     echo '<style>
-      @page{ size:A4; margin:26mm 16mm 18mm 16mm; }
+      @page{ size:A4; margin:14mm 14mm 14mm 14mm; }
       *{box-sizing:border-box;}
-      body{font-family:"Microsoft JhengHei","新細明體",serif;color:#111;line-height:1.7;font-size:12pt;margin:0;}
-      .sheet{max-width:186mm;margin:0 auto;padding:8mm 6mm;}
-      /* 受控頁首（固定，列印時每頁重複——Chrome/Edge position:fixed 會逐頁重印）*/
-      .frame-hd{position:fixed;top:0;left:0;right:0;border-collapse:collapse;width:100%;background:#fff;}
-      .frame-hd td{border:1.2px solid #000;padding:2px 6px;font-size:10.5pt;vertical-align:middle;}
-      .frame-hd .co{width:66%;text-align:center;}
-      .frame-hd .co .en{font-weight:700;font-size:11pt;letter-spacing:.3px;}
-      .frame-hd .co .zh{font-size:11pt;}
-      .frame-hd .co .dn{border-top:1.2px solid #000;margin-top:2px;padding-top:2px;text-align:left;}
-      .frame-hd .lbl{width:12%;text-align:center;background:#f4f4f4;letter-spacing:3px;}
-      .frame-hd .val{width:22%;text-align:center;}
-      .frame-ft{position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:space-between;font-size:9.5pt;padding:2px 4px;}
-      h3.doctitle{text-align:center;margin:4px 0 16px;font-size:15pt;}
+      body{font-family:"Microsoft JhengHei","新細明體",serif;color:#111;line-height:1.7;font-size:12pt;margin:0;background:#f2f2f2;}
+      .sheet{max-width:186mm;margin:14px auto;background:#fff;padding:16px 20px;box-shadow:0 1px 6px rgba(0,0,0,.15);}
+      /* 受控頁首（置頂表格，正常流排、不遮內文）*/
+      .frame-hd{border-collapse:collapse;width:100%;margin-bottom:2px;}
+      .frame-hd td{border:1px solid #000;padding:3px 8px;font-size:10.5pt;vertical-align:middle;}
+      .frame-hd .co{width:64%;text-align:center;}
+      .frame-hd .co .en{font-weight:700;font-size:11.5pt;letter-spacing:.3px;}
+      .frame-hd .co .zh{font-size:11pt;margin-top:1px;}
+      .frame-hd .co .dn{border-top:1px solid #000;margin-top:4px;padding-top:3px;text-align:left;font-size:11pt;}
+      .frame-hd .lbl{width:12%;text-align:center;background:#f6f6f6;letter-spacing:2px;white-space:nowrap;}
+      .frame-hd .val{width:24%;text-align:center;}
+      .frame-ft{display:flex;justify-content:space-between;font-size:9.5pt;padding:4px 2px 0;border-top:1px solid #000;margin-top:14px;color:#333;}
+      h3.doctitle{text-align:center;margin:10px 0 16px;font-size:15pt;}
       h4{margin:16px 0 6px;font-size:12.5pt;font-weight:700;}
-      table.ct{border-collapse:collapse;} table.ct td,table.ct th{border:1px solid #333;padding:3px 6px;}
       .content table{border-collapse:collapse;} .content td,.content th{border:1px solid #333;padding:3px 6px;}
-      .content img{max-width:100%;}
-      .noprint{margin:20px 0;text-align:center;}
-      @media print{ .noprint{display:none;} .sheet{padding:0;max-width:none;} }
+      .content img{max-width:100%;height:auto;}
+      .noprint{max-width:186mm;margin:6px auto 24px;text-align:center;}
+      @media print{ body{background:#fff;} .sheet{box-shadow:none;margin:0;max-width:none;padding:0;} .noprint{display:none;} }
     </style></head><body>';
-    // 頁首外框
+    echo '<div class="sheet">';
+    // 頁首外框（置頂，逐頁重複與逐頁頁碼待 Word 範本→PDF 階段）
     echo '<table class="frame-hd"><tr>'
         .'<td class="co" rowspan="3"><div class="en">'.$e($coEn).'</div>'.($coZh?'<div class="zh">'.$e($coZh).'</div>':'')
         .'<div class="dn">文件名稱：'.$e($doc['doc_name']).'</div></td>'
         .'<td class="lbl">文件編號</td><td class="val">'.$e($doc['doc_no']).'</td></tr>'
         .'<tr><td class="lbl">頁　次</td><td class="val">&nbsp;</td></tr>'
         .'<tr><td class="lbl">版　次</td><td class="val">'.$e($verLabel).'</td></tr></table>';
+    // 內文
+    echo '<h3 class="doctitle">'.$e($doc['doc_name']).'</h3><div class="content">'.$body.'</div>';
     // 頁尾外框
     echo '<div class="frame-ft"><span>（'.$e($footer).'）</span><span>'.$e($doc['doc_no']).'</span></div>';
-    // 內文
-    echo '<div class="sheet"><h3 class="doctitle">'.$e($doc['doc_name']).'</h3><div class="content">'.$body.'</div></div>';
+    echo '</div>'; // .sheet
     echo '<div class="noprint"><button onclick="window.print()" style="padding:6px 18px;font-size:14px;">列印 / 匯出 PDF</button>'
-        .' <span style="color:#999;font-size:12px;">（頁次逐頁精確與逐頁保真，將由下一階段 Word 範本→PDF 產出）</span></div>';
+        .' <span style="color:#999;font-size:12px;">（逐頁頁首重複＋精確頁碼將由下一階段 Word 範本→PDF 產出）</span></div>';
     echo '</body></html>';
     exit;
 }
@@ -533,6 +534,13 @@ function odSetting(PDO $db, string $key, string $default=''): string {
     $s->execute([$key]);
     $v = $s->fetchColumn();
     return ($v!==false && $v!==null && trim((string)$v)!=='') ? (string)$v : $default;
+}
+/** 本公司中文全名（customer_list.is_own_company=1 之 customer_full；同 AS_Form_API 慣例） */
+function odOwnCompany(PDO $db): string {
+    try {
+        $v = $db->query("SELECT customer_full FROM customer_list WHERE is_own_company=1 AND (is_inactive IS NULL OR is_inactive=0) LIMIT 1")->fetchColumn();
+        return $v ? (string)$v : '';
+    } catch (Exception $e) { return ''; }
 }
 /** AS 文件 NAS 根路徑（去尾斜線）；唯一存 DB 的路徑資訊，其餘現場組（鐵律5） */
 function odNasRoot(PDO $db): string {

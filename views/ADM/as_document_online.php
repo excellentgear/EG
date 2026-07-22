@@ -66,13 +66,13 @@ if (!$canView) { header("Location:../../src/store/Login.php?msg=".urlencode("無
 .od-cover .t{font-size:16px;font-weight:700;color:var(--ink);}
 .od-cover .m{font-size:12px;color:#7a5f38;}
 .readonly-note{background:#fdf0dc;border:1px solid #e9c98f;color:#8a5a1a;padding:5px 10px;border-radius:5px;font-size:12px;margin-bottom:8px;}
-.od-actbar{position:sticky;bottom:0;z-index:30;background:#fff8ee;border:1px solid #e6d8c3;border-radius:6px;padding:8px 10px;display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;box-shadow:0 -3px 10px rgba(0,0,0,.08);}
+.od-actbar{position:sticky;top:52px;z-index:31;background:#fff8ee;border:1px solid #e6d8c3;border-radius:6px;padding:8px 10px;display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;box-shadow:0 3px 10px rgba(0,0,0,.08);}
 .od-actbar .spacer{flex:1;}
 .btn-amber{background:var(--amber);border-color:var(--amber-d);color:#fff;}
 .btn-amber:hover{background:var(--amber-d);color:#fff;}
 </style>
 </head>
-<body class="nav-md">
+<body class="nav-sm">
 <div class="container body"><div class="main_container">
 <?php include '../partPage/sideAndTopBarMenu.html' ?>
 <div class="right_col" role="main">
@@ -99,8 +99,6 @@ if (!$canView) { header("Location:../../src/store/Login.php?msg=".urlencode("無
         </div>
         <div id="roNote" class="readonly-note" style="display:none;"><i class="fa fa-lock"></i> <span id="roMsg"></span></div>
 
-        <textarea id="odBody"></textarea>
-
         <div class="od-actbar">
           <button class="btn btn-sm btn-default" id="btnEnable"><i class="fa fa-pencil"></i> 啟用編輯</button>
           <button class="btn btn-sm btn-amber" id="btnSave" style="display:none;"><i class="fa fa-save"></i> 存草稿</button>
@@ -110,6 +108,9 @@ if (!$canView) { header("Location:../../src/store/Login.php?msg=".urlencode("無
           <button class="btn btn-sm btn-default" id="btnPreview"><i class="fa fa-eye"></i> 預覽/列印</button>
           <button class="btn btn-sm btn-success" id="btnPublish" style="display:none;"><i class="fa fa-check-circle"></i> 發布新版本</button>
         </div>
+
+        <textarea id="odBody"></textarea>
+
         <p class="text-muted" style="font-size:12px;margin-top:6px;">
           圖片：工具列「插入圖片」上傳，或從電腦直接貼上（<b>從 Word 複製的圖片瀏覽器無法帶入，需另存成圖片再上傳</b>）。段落標題請用「標題4（H4）」，系統依標題自動判定改版。
         </p>
@@ -157,7 +158,7 @@ tinymce.init({
   license_key:'gpl',
   base_url:'../../resource/js/tinymce',
   height:560, menubar:false, language:'zh_TW',
-  toolbar_sticky:true, toolbar_sticky_offset:57,
+  toolbar_sticky:true, toolbar_sticky_offset:100,
   plugins:'lists table image link autoresize autolink searchreplace visualblocks code fullscreen',
   toolbar:'undo redo | blocks fontsizeinput | bold italic underline forecolor | alignleft aligncenter alignjustify | bullist numlist outdent indent | table image link | removeformat code fullscreen',
   block_formats:'內文=p; 標題4(段落標題)=h4; 標題5=h5; 標題6=h6',
