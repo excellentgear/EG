@@ -1638,7 +1638,15 @@ $(document).ready(function () {
     // 核准/駁回完成後該分頁會 postMessage 回來，這裡收到才主動重新整理清單/當前檢視畫面，
     // 避免使用者已開著的這頁清單/檢視在另一分頁簽核完後仍顯示舊的審核狀態
     window.addEventListener('message', function (ev) {
-        if (!ev.data || ev.data.type !== 'quotation_approval_done') return;
+        if (!ev.data) return;
+        // 補件審核頁(quotation_supplement_view.php)完成核准/駁回 → 更新補件待審徽章與清單、刷新檢視附件
+        if (ev.data.type === 'quotation_supplement_done') {
+            if (CAN_SIGN) refreshSuppReviewBadge();
+            if ($('#supplementReviewModal').hasClass('in')) openSupplementReview();
+            if (currentEditId) openViewMode(currentEditId);
+            return;
+        }
+        if (ev.data.type !== 'quotation_approval_done') return;
         if (isAllYearsMode) loadAllYears(); else loadQuoteList(<?= $selectedYear ?>);
         if (currentEditId && (!ev.data.quote_id || currentEditId == ev.data.quote_id)) openViewMode(currentEditId);
     });
@@ -3981,6 +3989,7 @@ function _suppReviewRow(it) {
             <span style="margin-left:8px;color:#8e44ad;">料號：${escapeHtml(it.part_label||'—')}</span>
         </div>
         <div style="text-align:right;">
+            <button class="btn btn-xs btn-default" onclick="window.open('quotation_supplement_view.php?att=${it.id}')" title="檢視報價單原內容/原附件後再審核"><i class="fa fa-eye"></i> 詳情</button>
             <button class="btn btn-xs btn-success" onclick="decideSupplement(${it.id}, 'approve', this)"><i class="fa fa-check"></i> 核准</button>
             <button class="btn btn-xs btn-danger" onclick="decideSupplement(${it.id}, 'reject', this)"><i class="fa fa-times"></i> 駁回</button>
         </div>

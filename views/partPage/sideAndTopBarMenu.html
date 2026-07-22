@@ -323,7 +323,8 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                                         $_evRt = $ev['ref_type'] ?? '';
                                         $_evIco = $_evRt === 'QA' ? 'fa-exclamation-triangle'
                                                 : ($_evRt === 'CAR' ? 'fa-wrench'
-                                                : ((strpos($_evRt, 'QUOTATION_APPROVAL') === 0) ? 'fa-file-text-o' : 'fa-bullhorn'));
+                                                : ((strpos($_evRt, 'QUOTATION_SUPP') === 0) ? 'fa-paperclip'
+                                                : ((strpos($_evRt, 'QUOTATION_APPROVAL') === 0) ? 'fa-file-text-o' : 'fa-bullhorn')));
                                         ?>
                                         <span class="notice-ico"><i class="fa <?= $_evIco ?>"></i></span>
                                         <span class="notice-body">
@@ -448,6 +449,23 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             if (refType === 'QUOTATION_APPROVAL_RESULT') {
                 // 核准/駁回結果通知（給原送審人）：純資訊型，開同一審核頁檢視結果後直接標記已讀移除
                 window.open('../Sales/quotation_approval_view.php?event=' + nmId);
+                $.post('../../src/store/_markEventRead.php', { eventid: nmId });
+                nmRemoveFromList();
+                return;
+            }
+            if (refType === 'QUOTATION_SUPP') {
+                // 報價單補件待審：開補件專屬審核頁(左=報價單原內容+原附件/右=本次補件+核准駁回)。
+                // 任一簽核人核准/駁回完成前不移除(mode=sign)。
+                window.open('../Sales/quotation_supplement_view.php?event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) {
+                    $.post('../../src/store/_markEventRead.php', { eventid: nmId });
+                    nmRemoveFromList();
+                }
+                return;
+            }
+            if (refType === 'QUOTATION_SUPP_RESULT') {
+                // 補件核准/駁回結果通知（給上傳者）：純資訊型，開同一頁檢視結果後標記已讀移除
+                window.open('../Sales/quotation_supplement_view.php?event=' + nmId);
                 $.post('../../src/store/_markEventRead.php', { eventid: nmId });
                 nmRemoveFromList();
                 return;

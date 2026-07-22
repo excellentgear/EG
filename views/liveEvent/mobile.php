@@ -166,6 +166,8 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             if (rt === 'QA_EDIT_OK'){ $.post('../../src/store/_markEventRead.php', { eventid: $(this).data('id') }); location.href = '../QC/inspection_combined_prototype.php?edit_abnormal=' + $(this).data('refid'); return; }
             // 報價單待簽核／簽核結果 → 專屬審核頁（左右分欄RWD，手機自動改上下堆疊）
             if (rt === 'QUOTATION_APPROVAL' || rt === 'QUOTATION_APPROVAL_RESULT'){ location.href = '../Sales/quotation_approval_view.php?event=' + $(this).data('id'); return; }
+            // 報價單補件待審／補件結果 → 補件專屬審核頁
+            if (rt === 'QUOTATION_SUPP' || rt === 'QUOTATION_SUPP_RESULT'){ location.href = '../Sales/quotation_supplement_view.php?event=' + $(this).data('id'); return; }
             openDetail($(this).data('id'));
         });
 
@@ -193,6 +195,7 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             if (e.ref_type === 'QA_EDIT_REQ'){ location.href = '../QC/inspection_combined_prototype.php?edit_request=' + (e.ref_id || 0); return; }
             if (e.ref_type === 'QA_EDIT_OK'){ location.href = '../QC/inspection_combined_prototype.php?edit_abnormal=' + (e.ref_id || 0); return; }
             if (e.ref_type === 'QUOTATION_APPROVAL' || e.ref_type === 'QUOTATION_APPROVAL_RESULT'){ location.href = '../Sales/quotation_approval_view.php?event=' + e.id; return; }
+            if (e.ref_type === 'QUOTATION_SUPP' || e.ref_type === 'QUOTATION_SUPP_RESULT'){ location.href = '../Sales/quotation_supplement_view.php?event=' + e.id; return; }
             h += '<div class="d-title">' + esc(e.title) + '</div>';
             var meta = [];
             if (e.source) meta.push('來源：' + esc(e.source));
