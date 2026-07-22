@@ -914,7 +914,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     #statusbar b { color: #c7d1da; font-weight: 600; }
 
     /* 跳窗 */
-    .modal-mask { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 900; }
+    .modal-mask { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 960; }   /* 要壓過浮動快捷列(.obj-float z=950)，避免旋轉鍵擋住跳窗 */
     .modal-mask.show { display: flex; align-items: center; justify-content: center; }
     .modal-box { background: #2c2f33; border: 1px solid #45494f; border-radius: 8px; min-width: 360px; max-width: 560px; max-height: 85vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
     .modal-box h3 { font-size: 14px; padding: 12px 16px; border-bottom: 1px solid #3c4046; color: #6fc3ff; }
@@ -1046,7 +1046,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <div id="propbar">
             <!-- 通用（畫筆/形狀） -->
             <span class="prop-sec show" id="sec-stroke">
-                <label title="線條/邊框的顏色：畫筆、直線、箭頭，以及矩形/橢圓的外框">顏色 <input type="color" id="p-stroke" value="#e53935" title="線條/邊框顏色"></label>
+                <label title="外框/線條的顏色：矩形、橢圓的外框，以及畫筆、直線、箭頭的線色">外框色 <input type="color" id="p-stroke" value="#e53935" title="外框/線條顏色"></label>
                 <label>粗細 <input type="range" id="p-width" min="1" max="40" value="3"> <span id="p-width-v" style="color:#ccc;">3</span></label>
                 <label id="wrap-line-ends">端點
                     <select id="p-line-ends" title="直線/畫筆工具的頭端形式" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;">
@@ -1666,6 +1666,13 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <tr><td>Ctrl+G</td><td>群組 / 進入群組</td><td>Ctrl+0 / Esc</td><td>適合視窗 / 回選取工具</td></tr>
                 <tr><td>Ctrl+Shift+V</td><td><b>他窗貼上</b>（貼上另一個批圖視窗 Ctrl+C 複製的內容）</td><td>Ctrl+A</td><td>全選畫布物件</td></tr>
             </table>
+            <b style="color:#6fc3ff;">⑦ ^ 堆疊功能（上下公差小字）</b>
+            <ul style="padding-left:18px;margin:4px 0 10px;">
+                <li>輸入方式：在文字中打 <b>A^B</b>，結束編輯後自動變成「A 疊在 B 上」的小字（0.55 倍），例如 <b>25 -0^-0.18</b> → 25 加上「-0 / -0.18」上下公差；^ 前後接受數字/字母/±.,° 的短字串，同一行可放多組</li>
+                <li>適用範圍：一般文字（文字工具）、<b>標籤（左側標籤工具的快速標籤）與自組標籤內改字</b>都支援；標籤邊框會自動貼合堆疊後的寬高</li>
+                <li>修改：<b>雙擊</b>堆疊文字＝還原成含 ^ 的原始字串整串重編；改到沒有 ^ 就變回一般文字</li>
+                <li>入庫：堆疊文字選取後可「把選取存為標籤」，插入後一樣可雙擊重編；背景（白底/透明/自訂色）依存標籤時的設定</li>
+            </ul>
         </div>
         <div class="modal-foot"><button class="tb-btn primary" onclick="hideModal('help-modal')">知道了</button></div>
     </div>
@@ -3702,6 +3709,15 @@ function buildLabelObject(spec, done) {
         });
         return;
     }
+    if (spec.kind === 'tol') {
+        // ^公差堆疊存成的標籤：makeLabelFromSpec 做不出來（會變空白標籤），要用 makeTolGroup 重建
+        let g = null;
+        try {
+            g = makeTolGroup(spec.text, Object.assign({}, spec, { backgroundColor: specBg(spec, '', spec.backgroundColor || '#ffffff') }));
+        } catch (e) { console.warn('[EGdraw] 公差標籤重建例外：', e); }
+        done((g && isFinite(g.width) && isFinite(g.height)) ? g : null);
+        return;
+    }
     if (spec.kind === 'multi') {
         // 群組標籤：整組的底色設定（透明插入/自訂色）往下傳給各子標籤
         const parts = (spec.specs || []).map(p => {
@@ -5614,6 +5630,14 @@ function refreshPropbar() {
         const strokedChild = (obj.type === 'group' || obj.type === 'activeSelection') && obj.getObjects
             ? (obj.getObjects().find(isStrokeable) || obj) : obj;
         document.getElementById('p-line-style').value = styleFromDashArray(strokedChild.strokeDashArray);
+        // 回填「填色」目前狀態（拿選取內第一個有填色概念的形狀）
+        let fillChild = null;
+        eachInSelection(obj, o => { if (!fillChild && ['rect', 'ellipse', 'circle', 'polygon'].includes(o.type)) fillChild = o; return false; });
+        if (fillChild) {
+            const onNow = !!(fillChild.fill && fillChild.fill !== 'transparent');
+            document.getElementById('p-fill-on').checked = onNow;
+            if (onNow) { const hx = toHex(fillChild.fill); if (hx) document.getElementById('p-fill').value = hx; }
+        }
     }
     document.getElementById('btn-group').textContent = (obj.type === 'group') ? '解散群組' : '群組';
     const epBtn = document.getElementById('btn-edit-points');
@@ -5796,6 +5820,26 @@ document.getElementById('p-stroke').addEventListener('input', function () {
     });
     if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); }
 });
+/* 填色：原本只在「畫新形狀」當下取值，選取既有形狀改填色沒反應——補上套用到選取物（含標籤框） */
+function applyFillToSelection(withHistory) {
+    const on = document.getElementById('p-fill-on').checked;
+    const v = on ? document.getElementById('p-fill').value : 'transparent';
+    const obj = canvas.getActiveObject();
+    const n = eachInSelection(obj, o => {
+        if (o.type === 'triangle') return false;   // 箭頭頭端填色跟線色連動，由「顏色」欄管
+        if (['rect', 'ellipse', 'circle', 'polygon'].includes(o.type)) {
+            o.set('fill', v); o.dirty = true;
+            if (o.group) o.group.dirty = true;
+            if (o.group && o.group.labelSpec && (o.isLabelBgRect || o.group.isQuickLabel)) o.group.labelSpec.bg = on ? v : 'transparent';   // 標籤框＝底色，記回 spec
+            return true;
+        }
+        return false;
+    });
+    if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); if (withHistory) pushState(); }
+}
+document.getElementById('p-fill').addEventListener('input', function () { applyFillToSelection(false); });
+document.getElementById('p-fill').addEventListener('change', function () { applyFillToSelection(true); });
+document.getElementById('p-fill-on').addEventListener('change', function () { applyFillToSelection(true); });
 document.getElementById('p-textcolor').addEventListener('input', function () {
     const v = this.value;
     const obj = canvas.getActiveObject();
@@ -6405,9 +6449,10 @@ document.addEventListener('keyup', function (e) {
 /* ── 跳窗 / 畫布設定 / 其他 ── */
 function showModal(id) {
     // 後開的跳窗要疊在已開跳窗上方（例：標籤管理 → 組成群組標籤），不然會被壓在下面要先關掉才能用
+    // 基準 960＝壓過浮動快捷列（旋轉/符號鍵 .obj-float z=950、sym-pad z=900），但仍低於 toast(999)
     const el = document.getElementById(id);
-    let z = 900;
-    document.querySelectorAll('.modal-mask.show').forEach(m => { z = Math.max(z, parseInt(m.style.zIndex, 10) || 900); });
+    let z = 960;
+    document.querySelectorAll('.modal-mask.show').forEach(m => { z = Math.max(z, parseInt(m.style.zIndex, 10) || 960); });
     el.style.zIndex = (z + 1);
     el.classList.add('show');
 }
