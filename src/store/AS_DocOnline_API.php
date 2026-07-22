@@ -478,9 +478,40 @@ case 'render': {
     // 頁尾外框
     echo '<div class="frame-ft"><span>（'.$e($footer).'）</span><span>'.$e($doc['doc_no']).'</span></div>';
     echo '</div>'; // .sheet
-    echo '<div class="noprint"><button onclick="window.print()" style="padding:6px 18px;font-size:14px;">列印 / 匯出 PDF</button>'
-        .' <span style="color:#999;font-size:12px;">（逐頁頁首重複＋精確頁碼將由下一階段 Word 範本→PDF 產出）</span></div>';
+    echo '<div class="noprint">'
+        .'<button onclick="window.location=\''.$e('?action=export_pdf&doc_id='.$docId.($verId>0?'&version_id='.$verId:'')).'\'" style="padding:6px 18px;font-size:14px;font-weight:bold;">匯出 PDF（每頁頁首＋真頁碼，約 10 秒）</button> '
+        .'<button onclick="window.print()" style="padding:6px 18px;font-size:14px;">瀏覽器直接列印（簡易）</button>'
+        .'</div>';
     echo '</body></html>';
+    exit;
+}
+
+// ── 匯出 PDF（Word 範本→LibreOffice；逐頁頁首頁尾+真頁碼+表格不切列）──
+case 'export_pdf': {
+    $docId = (int)($_GET['doc_id'] ?? 0);
+    $verId = (int)($_GET['version_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM as_document WHERE id=?");
+    $st->execute([$docId]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) { http_response_code(404); header('Content-Type:text/plain; charset=utf-8'); echo '文件不存在'; exit; }
+
+    $verLabel = $doc['current_version']; $sections=[];
+    if ($verId>0) {
+        $st = $db->prepare("SELECT version, content_json FROM as_document_version WHERE id=? AND doc_id=?");
+        $st->execute([$verId,$docId]);
+        if ($vr=$st->fetch(PDO::FETCH_ASSOC)) { $verLabel=$vr['version']; $sections=json_decode($vr['content_json']?:'[]',true)?:[]; }
+    } else {
+        $st = $db->prepare("SELECT section_key,title,content_html FROM as_doc_content_section WHERE doc_id=? ORDER BY sort_order,id");
+        $st->execute([$docId]);
+        $sections = $st->fetchAll(PDO::FETCH_ASSOC);
+    }
+    $pdf = odExportPdf($db, $doc, $sections, $verLabel, $document_root);
+    if (!$pdf || !is_file($pdf)) { http_response_code(500); header('Content-Type:text/plain; charset=utf-8'); echo 'PDF 產生失敗（LibreOffice 未啟動或內容轉檔錯誤），請改用「預覽」或稍後再試'; exit; }
+    header('Content-Type: application/pdf');
+    header('Content-Disposition: inline; filename="'.rawurlencode($doc['doc_no']).'_v'.rawurlencode($verLabel).'.pdf"');
+    header('Content-Length: '.filesize($pdf));
+    readfile($pdf);
+    @unlink($pdf);
     exit;
 }
 
@@ -534,6 +565,126 @@ function odSetting(PDO $db, string $key, string $default=''): string {
     $s->execute([$key]);
     $v = $s->fetchColumn();
     return ($v!==false && $v!==null && trim((string)$v)!=='') ? (string)$v : $default;
+}
+/** 內文 img 的 action=img URL → 本機檔案 base64 data URI（供 PhpWord 內嵌；讀不到則移除該 img） */
+function odInlineImages(PDO $db, string $html): string {
+    $root = odNasRoot($db);
+    return preg_replace_callback(
+        '/<img\b[^>]*\bsrc=["\']([^"\']*action=img[^"\']*)["\'][^>]*>/i',
+        function($m) use ($root) {
+            $url = html_entity_decode($m[1], ENT_QUOTES, 'UTF-8');
+            $q = [];
+            parse_str((string)parse_url($url, PHP_URL_QUERY), $q);
+            $docId = (int)($q['doc_id'] ?? 0); $f = basename((string)($q['f'] ?? ''));
+            if ($docId<=0 || $f==='') return '';
+            $path = $root.DIRECTORY_SEPARATOR.'online_img'.DIRECTORY_SEPARATOR.$docId.DIRECTORY_SEPARATOR.$f;
+            if (!is_file($path)) return '';
+            $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
+            $mime = ['png'=>'image/png','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','gif'=>'image/gif','webp'=>'image/webp','bmp'=>'image/bmp'][$ext] ?? 'image/png';
+            $data = @file_get_contents($path);
+            if ($data===false) return '';
+            return '<img src="data:'.$mime.';base64,'.base64_encode($data).'"/>';
+        }, $html) ?? $html;
+}
+/** PhpWord Html::addHtml 內部走 XML 解析：void 標籤(br/img/hr…)未自閉會整段解析失敗→內文全空。
+ *  TinyMCE 與 DOM saveHTML 輸出皆為 HTML5 未自閉格式，匯出前必須先自閉。 */
+function odXmlSafe(string $h): string {
+    return preg_replace('/<(img|br|hr|col|input)((?:[^>"\']|"[^"]*"|\'[^\']*\')*?)(?<!\/)>/i', '<$1$2/>', $h);
+}
+/** 為內文表格補上框線（PhpWord Html 依 table border 屬性與 td/th style 才畫格線） */
+function odTableBorders(string $html): string {
+    if (stripos($html, '<table') === false) return $html;
+    $d = new DOMDocument();
+    libxml_use_internal_errors(true);
+    $d->loadHTML('<?xml encoding="UTF-8"><div id="odroot">'.$html.'</div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+    libxml_clear_errors();
+    foreach ($d->getElementsByTagName('table') as $tb) {
+        $tb->setAttribute('border', '1');
+        $st = $tb->getAttribute('style');
+        if (stripos($st, 'border-collapse') === false) $tb->setAttribute('style', rtrim($st, ';').';border-collapse:collapse;');
+    }
+    foreach (['td','th'] as $tag) {
+        foreach (iterator_to_array($d->getElementsByTagName($tag)) as $c) {
+            $st = $c->getAttribute('style');
+            if (stripos($st, 'border') === false) $c->setAttribute('style', rtrim($st, ';').';border:1px solid #000000;');
+        }
+    }
+    $root = $d->getElementById('odroot');
+    if (!$root) return $html;
+    $out = '';
+    foreach ($root->childNodes as $n) { $out .= $d->saveHTML($n); }
+    return $out;
+}
+/** 組出 AS 程序書 Word（含逐頁頁首頁尾+真頁碼）→ LibreOffice 轉 PDF，回傳 PDF 路徑或 null */
+function odExportPdf(PDO $db, array $doc, array $sections, string $verLabel, string $documentRoot): ?string {
+    require_once $documentRoot.'/EGsystem/vendor/autoload.php';
+    require_once $documentRoot.'/EGsystem/src/common/attachment_lib.php';
+    if (!class_exists('\\PhpOffice\\PhpWord\\PhpWord') || !function_exists('eg_att_soffice_convert')) return null;
+
+    $coEn   = odSetting($db, 'as_doc_company_en', 'EXCELLENT GEAR TECHNOLOGY CO., LTD');
+    $coZh   = odSetting($db, 'as_doc_company_zh', '') ?: odOwnCompany($db);
+    $footer = odSetting($db, 'as_doc_footer_note', '本文件不得擅自塗改或影印');
+    $docNo  = (string)$doc['doc_no']; $docName = (string)$doc['doc_name'];
+    $body   = odXmlSafe(odTableBorders(odInlineImages($db, odRowsToBody($sections))));
+
+    \PhpOffice\PhpWord\Settings::setOutputEscapingEnabled(true);
+    $pw = new \PhpOffice\PhpWord\PhpWord();
+    $pw->getSettings()->setUpdateFields(true); // 讓 NUMPAGES/PAGE 開檔即更新
+    $pw->setDefaultFontName('Microsoft JhengHei');
+    $pw->setDefaultFontSize(12);
+    $sec = $pw->addSection(['marginTop'=>900,'marginBottom'=>800,'marginLeft'=>900,'marginRight'=>900,
+                            'headerHeight'=>200,'footerHeight'=>200]);
+
+    // ── 頁首（每頁重複）：公司抬頭 + 文件編號/頁次/版次 ──
+    $hd = $sec->addHeader();
+    $t  = $hd->addTable(['borderSize'=>6,'borderColor'=>'000000','cellMargin'=>30,'alignment'=>'center']);
+    $cwCo=6600; $cwL=1400; $cwV=2318;
+    $t->addRow();
+    $co = $t->addCell($cwCo, ['vMerge'=>'restart','valign'=>'center']);
+    $co->addText($coEn, ['bold'=>true,'size'=>11], ['alignment'=>'center','spaceAfter'=>0,'spaceBefore'=>0]);
+    if ($coZh) $co->addText($coZh, ['size'=>11], ['alignment'=>'center','spaceAfter'=>0,'spaceBefore'=>0]);
+    $co->addText('文件名稱：'.$docName, ['size'=>11], ['spaceBefore'=>60,'spaceAfter'=>0]);
+    $t->addCell($cwL,['valign'=>'center'])->addText('文件編號',['size'=>10],['alignment'=>'center']);
+    $t->addCell($cwV,['valign'=>'center'])->addText($docNo,['size'=>10],['alignment'=>'center']);
+    $t->addRow();
+    $t->addCell($cwCo,['vMerge'=>'continue']);
+    $t->addCell($cwL,['valign'=>'center'])->addText('頁　次',['size'=>10],['alignment'=>'center']);
+    $pc = $t->addCell($cwV,['valign'=>'center']); $ptr = $pc->addTextRun(['alignment'=>'center']);
+    $ptr->addField('PAGE'); $ptr->addText(' / ', ['size'=>10]); $ptr->addField('NUMPAGES');
+    $t->addRow();
+    $t->addCell($cwCo,['vMerge'=>'continue']);
+    $t->addCell($cwL,['valign'=>'center'])->addText('版　次',['size'=>10],['alignment'=>'center']);
+    $t->addCell($cwV,['valign'=>'center'])->addText($verLabel,['size'=>10],['alignment'=>'center']);
+
+    // ── 頁尾（每頁重複）──
+    $ft = $sec->addFooter();
+    $ftt = $ft->addTable(['cellMargin'=>0]);
+    $ftt->addRow();
+    $ftt->addCell(7000)->addText('（'.$footer.'）',['size'=>9],['spaceAfter'=>0]);
+    $ftt->addCell(3318)->addText($docNo,['size'=>9],['alignment'=>'right','spaceAfter'=>0]);
+
+    // ── 標題 + 內文 ──
+    $sec->addText($docName, ['bold'=>true,'size'=>15], ['alignment'=>'center','spaceAfter'=>200]);
+    try {
+        \PhpOffice\PhpWord\Shared\Html::addHtml($sec, $body, false, false);
+    } catch (Throwable $e) {
+        error_log('[as_online] Html::addHtml 失敗，改用純文字：'.$e->getMessage());
+        $sec->addText(trim(strip_tags(str_replace(['</p>','<br>','<br/>','</h4>'], "\n", $body))), ['size'=>12]);
+    }
+
+    // ── 存 docx → LibreOffice 轉 PDF ──
+    $tmp = rtrim(sys_get_temp_dir(),'\\/').DIRECTORY_SEPARATOR.'as_pdf_'.bin2hex(random_bytes(5));
+    if (!@mkdir($tmp,0775,true)) return null;
+    $docx = $tmp.DIRECTORY_SEPARATOR.'doc.docx';
+    try { \PhpOffice\PhpWord\IOFactory::createWriter($pw,'Word2007')->save($docx); }
+    catch (Throwable $e) { error_log('[as_online] docx 存檔失敗：'.$e->getMessage()); @eg_att_rrmdir($tmp); return null; }
+
+    $pdf = eg_att_soffice_convert($docx, $tmp, 150);
+    if (!$pdf || !is_file($pdf)) { @eg_att_rrmdir($tmp); return null; }
+    // 搬到獨立暫存名（呼叫端讀完即刪），再清工作夾
+    $out = rtrim(sys_get_temp_dir(),'\\/').DIRECTORY_SEPARATOR.'asout_'.bin2hex(random_bytes(5)).'.pdf';
+    @copy($pdf, $out); @eg_att_rrmdir($tmp);
+    return is_file($out) ? $out : null;
 }
 /** 本公司中文全名（customer_list.is_own_company=1 之 customer_full；同 AS_Form_API 慣例） */
 function odOwnCompany(PDO $db): string {

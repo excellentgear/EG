@@ -105,7 +105,8 @@ if (!$canView) { header("Location:../../src/store/Login.php?msg=".urlencode("無
           <button class="btn btn-sm btn-default" id="btnAutoFmt" style="display:none;" title="統一字級/清多餘空行/可辨識段落標題自動轉H4"><i class="fa fa-magic"></i> 自動排版</button>
           <span id="saveHint" style="color:#7a5f38;font-size:12px;"></span>
           <span class="spacer"></span>
-          <button class="btn btn-sm btn-default" id="btnPreview"><i class="fa fa-eye"></i> 預覽/列印</button>
+          <button class="btn btn-sm btn-default" id="btnPreview"><i class="fa fa-eye"></i> 預覽</button>
+          <button class="btn btn-sm btn-default" id="btnPdf" title="Word 引擎排版：頁首頁尾每頁重複+真頁碼+表格不切列（約需 10 秒）"><i class="fa fa-file-pdf-o"></i> 匯出 PDF</button>
           <button class="btn btn-sm btn-success" id="btnPublish" style="display:none;"><i class="fa fa-check-circle"></i> 發布新版本</button>
         </div>
 
@@ -282,8 +283,15 @@ $('#btnAutoFmt').on('click',function(){
   ED.setContent(html); DIRTY=true; $('#saveHint').text('● 已自動排版，未儲存');
 });
 
-// ── 預覽 ──
+// ── 預覽 / 匯出 PDF ──
 $('#btnPreview').on('click',function(){ if(CUR) window.open(API+'?action=render&doc_id='+CUR.doc.id,'_blank'); });
+$('#btnPdf').on('click',function(){
+  if(!CUR) return;
+  if(DIRTY){ alert('尚有未存草稿，PDF 以「已存草稿」內容產生。請先存草稿。'); return; }
+  const $b=$(this).prop('disabled',true).find('i').removeClass('fa-file-pdf-o').addClass('fa-spinner fa-spin').end();
+  const w=window.open(API+'?action=export_pdf&doc_id='+CUR.doc.id,'_blank');
+  setTimeout(()=>{ $b.prop('disabled',false).find('i').removeClass('fa-spinner fa-spin').addClass('fa-file-pdf-o'); }, 12000);
+});
 
 // ── 發布 ──
 $('#btnPublish').on('click',function(){
