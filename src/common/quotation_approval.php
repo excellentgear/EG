@@ -97,6 +97,11 @@ if (!function_exists('eg_quotation_notify_approval')) {
         $signers = eg_quotation_signers($pdo);
         if (empty($signers)) return 0;
         try {
+            // 防重複：同一張單只能有一則活著的待簽核通知——發新通知前先結束舊的
+            // （歷史上曾因重複送審累積多則，簽核者置頂欄看到同單多則通知）
+            $pdo->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                           WHERE ref_type='QUOTATION_APPROVAL' AND ref_id=? AND (enddate IS NULL OR enddate >= CURDATE())")
+                ->execute([$quoteId]);
             $title   = '報價單待簽核：' . $quoteNo;
             $content = $submittedByName . ' 送出報價單 ' . $quoteNo . '，請簽核。';
             $pdo->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)

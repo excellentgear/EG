@@ -13,6 +13,10 @@ if (!function_exists('eg_quot_supp_notify_request')) {
         $signers = eg_quotation_signers($pdo);
         if (empty($signers)) return 0;
         try {
+            // 防重複：同一件補件附件只能有一則活著的待審通知
+            $pdo->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                           WHERE ref_type='QUOTATION_SUPP' AND ref_id=? AND (enddate IS NULL OR enddate >= CURDATE())")
+                ->execute([$attId]);
             $title   = '報價單附件補件待審：' . $quoteNo;
             $content = $uploaderName . ' 為已核准報價單 ' . $quoteNo . ' 補上附件'
                      . ($partLabel !== '' ? '（' . $partLabel . '）' : '') . '，請審核是否允許放入此報價單。';
