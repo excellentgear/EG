@@ -115,7 +115,9 @@ function statusChip(st){
 
 function render(mode, data){
   $('#formHost').html(EGForm.renderForm(schema,{mode,data,ctx}));
-  if(mode==='fill') EGForm.bindFormUX($('#formHost'));
+  if(mode==='fill') EGForm.bindFormUX($('#formHost'));   // 內含首次重算
+  else EGForm.updateComputed($('#formHost'));            // 檢視模式也要畫圖表/公式
+
   // 已簽區換成圖章
   Object.keys(data||{}).forEach(k=>{
     if(k.indexOf('__sig_')!==0) return;
@@ -132,15 +134,17 @@ function render(mode, data){
   });
 }
 
-// ── 新填模式 ──
+// ── 新填模式（支援 ?prefill=JSON 預填，例：發布改版建議自動帶入目標文件）──
 function loadTemplate(){
+  let prefill={};
+  try{ prefill=JSON.parse(new URLSearchParams(location.search).get('prefill')||'{}')||{}; }catch(e){}
   $.getJSON(API+'?action=load&template_id='+TEMPLATE_ID, r=>{
     if(!r.ok){ alert(r.error||'載入失敗'); return; }
     schema=r.schema; ctx=r.ctx;
     $('#formTitle').text(r.template.name);
     $('#statusChip').html(statusChip('draft'));
     canEdit=true;
-    render('fill',{});
+    render('fill',prefill);
     $('#btnSaveDraft,#btnSubmit').show();
   });
 }

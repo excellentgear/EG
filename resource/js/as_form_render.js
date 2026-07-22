@@ -29,6 +29,108 @@
     }
   }
 
+  // ══ 公式引擎（同 Excel 概念：引用欄位代號；SUM/AVG/MIN/MAX/COUNT＋四則運算）══
+  // 安全求值：先展開函式與欄位值，再驗證只剩數字運算子才計算——不對使用者輸入裸 eval
+  function evalFormula(expr, getVal) {
+    try {
+      expr = String(expr || '').replace(/^\s*=/, '');
+      expr = expr.replace(/(SUM|AVG|MIN|MAX|COUNT)\s*\(([^()]*)\)/gi, function (_, fn, args) {
+        var vs = args.split(',').map(function (s) { return parseFloat(getVal(s.trim())); })
+                     .filter(function (v) { return !isNaN(v); });
+        fn = fn.toUpperCase();
+        if (fn === 'COUNT') return String(vs.length);
+        if (!vs.length) return '0';
+        if (fn === 'SUM') return String(vs.reduce(function (a, b) { return a + b; }, 0));
+        if (fn === 'AVG') return String(vs.reduce(function (a, b) { return a + b; }, 0) / vs.length);
+        if (fn === 'MIN') return String(Math.min.apply(null, vs));
+        return String(Math.max.apply(null, vs));
+      });
+      expr = expr.replace(/[A-Za-z_][A-Za-z0-9_]*/g, function (k) {
+        var v = parseFloat(getVal(k)); return isNaN(v) ? '0' : String(v);
+      });
+      if (expr.trim() === '' || !/^[-+*/(). 0-9eE]*$/.test(expr)) return '';
+      var v = Function('"use strict";return (' + expr + ')')();
+      if (typeof v !== 'number' || !isFinite(v)) return '';
+      return String(Math.round(v * 1e6) / 1e6);   // 去浮點雜訊；尾0自動省略
+    } catch (e) { return ''; }
+  }
+
+  // ══ SVG 圖表（雷達/長條/折線；暖色系固定調色盤，禁外部圖表庫）══
+  var CH = { fill: 'rgba(240,162,75,.45)', stroke: '#DD8A3A', grid: '#E0CBA0', text: '#5A3D1E', bar: '#F0A24B', barLine: '#C9782A' };
+
+  function radarSVG(labels, vals, max) {
+    var cx = 110, cy = 85, R = 56, n = vals.length;
+    function pt(i, r) { var a = -Math.PI / 2 + i * 2 * Math.PI / n; return [(cx + r * Math.cos(a)).toFixed(1), (cy + r * Math.sin(a)).toFixed(1)]; }
+    var s = '<svg viewBox="0 0 220 170" style="width:100%;max-width:320px;display:block;margin:0 auto;">';
+    [0.33, 0.66, 1].forEach(function (f) {
+      var ps = []; for (var i = 0; i < n; i++) ps.push(pt(i, R * f).join(','));
+      s += '<polygon points="' + ps.join(' ') + '" fill="none" stroke="' + CH.grid + '" stroke-width="1"/>';
+    });
+    for (var i = 0; i < n; i++) { var p = pt(i, R); s += '<line x1="' + cx + '" y1="' + cy + '" x2="' + p[0] + '" y2="' + p[1] + '" stroke="' + CH.grid + '" stroke-width="1"/>'; }
+    var dp = []; for (i = 0; i < n; i++) { var f2 = Math.max(0, Math.min(1, vals[i] / max)); dp.push(pt(i, R * f2).join(',')); }
+    s += '<polygon points="' + dp.join(' ') + '" fill="' + CH.fill + '" stroke="' + CH.stroke + '" stroke-width="2"/>';
+    for (i = 0; i < n; i++) { var lp = pt(i, R + 13); s += '<text x="' + lp[0] + '" y="' + lp[1] + '" text-anchor="middle" font-size="9" fill="' + CH.text + '">' + esc(labels[i]) + '（' + vals[i] + '）</text>'; }
+    return s + '</svg>';
+  }
+
+  function barSVG(labels, vals, max) {
+    var n = vals.length, H = n * 20 + 8;
+    var s = '<svg viewBox="0 0 220 ' + H + '" style="width:100%;max-width:320px;display:block;margin:0 auto;">';
+    for (var i = 0; i < n; i++) {
+      var y = 4 + i * 20;
+      var w = Math.max(1, 118 * Math.max(0, Math.min(1, vals[i] / max)));
+      s += '<text x="58" y="' + (y + 10) + '" text-anchor="end" font-size="9" fill="' + CH.text + '">' + esc(labels[i]) + '</text>'
+         + '<rect x="64" y="' + y + '" width="' + w + '" height="13" fill="' + CH.bar + '" stroke="' + CH.barLine + '" stroke-width="1"/>'
+         + '<text x="' + (68 + w) + '" y="' + (y + 10) + '" font-size="9" fill="' + CH.text + '">' + vals[i] + '</text>';
+    }
+    return s + '</svg>';
+  }
+
+  function lineSVG(labels, vals, max) {
+    var n = vals.length, W = 220, H = 120, padL = 18, padR = 10, padT = 8, padB = 18;
+    var iw = W - padL - padR, ih = H - padT - padB;
+    function px(i) { return (padL + (n === 1 ? iw / 2 : i * iw / (n - 1))).toFixed(1); }
+    function py(v) { return (padT + ih * (1 - Math.max(0, Math.min(1, v / max)))).toFixed(1); }
+    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-width:320px;display:block;margin:0 auto;">';
+    [0, 0.5, 1].forEach(function (f) {
+      var y = (padT + ih * f).toFixed(1);
+      s += '<line x1="' + padL + '" y1="' + y + '" x2="' + (W - padR) + '" y2="' + y + '" stroke="' + CH.grid + '" stroke-width="1"/>';
+    });
+    var pts = []; for (var i = 0; i < n; i++) pts.push(px(i) + ',' + py(vals[i]));
+    s += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + CH.stroke + '" stroke-width="2"/>';
+    for (i = 0; i < n; i++) {
+      s += '<circle cx="' + px(i) + '" cy="' + py(vals[i]) + '" r="2.5" fill="' + CH.stroke + '"/>'
+         + '<text x="' + px(i) + '" y="' + (H - 5) + '" text-anchor="middle" font-size="8" fill="' + CH.text + '">' + esc(labels[i]) + '</text>';
+    }
+    return s + '</svg>';
+  }
+
+  function chartSVG(kind, labels, vals, max) {
+    if (!vals.length) return '<span style="color:#b7a488;font-size:11px;">（圖表：未設定數據來源欄位）</span>';
+    if (!max || max <= 0) max = Math.max.apply(null, vals.concat([1]));
+    if (kind === 'radar' && vals.length >= 3) return radarSVG(labels, vals, max);
+    if (kind === 'line') return lineSVG(labels, vals, max);
+    return barSVG(labels, vals, max);   // 長條為預設；雷達不足3軸退回長條
+  }
+
+  // 重算所有計算欄與圖表（欄位值變動時呼叫；順序＝先公式後圖表，圖表可吃公式結果）
+  function updateComputed($host) {
+    function getVal(k) {
+      var el = $host.find('[data-key="' + k + '"]').first();
+      return el.length ? el.val() : '';
+    }
+    $host.find('input[data-formula]').each(function () {
+      this.value = evalFormula(this.getAttribute('data-formula'), getVal);
+    });
+    $host.find('.eg-chart').each(function () {
+      var fields = (this.getAttribute('data-fields') || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+      var labels = (this.getAttribute('data-labels') || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+      var vals = fields.map(function (k) { var v = parseFloat(getVal(k)); return isNaN(v) ? 0 : v; });
+      var labs = fields.map(function (k, i) { return labels[i] || k; });
+      this.innerHTML = chartSVG(this.getAttribute('data-kind') || 'radar', labs, vals, parseFloat(this.getAttribute('data-max')) || 0);
+    });
+  }
+
   function localToday() {
     var d = new Date();   // 用本地時區組今日（勿用 toISOString，UTC 會差 8 小時跨日）
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -44,6 +146,11 @@
       var v = data['__sig_' + (cell.section || cell.key)];
       if (v) return '<div>' + esc(v.name) + '</div><div class="sig-hint">' + esc(v.at || '') + '</div>';
       return '<span class="sig-hint">（待簽核）</span>';
+    }
+    if (type === 'chart') {
+      // 圖表格：數據來源＝表內欄位代號，updateComputed 時繪製/重繪
+      var ch = cell.chart || {};
+      return '<div class="eg-chart" data-kind="' + esc(ch.kind || 'radar') + '" data-fields="' + esc((ch.fields || []).join(',')) + '" data-labels="' + esc((ch.labels || []).join(',')) + '" data-max="' + esc(ch.max || '') + '"></div>';
     }
     // field
     var key = cell.key, val = data[key] != null ? data[key] : '';
@@ -74,6 +181,9 @@
         }).join('');
         return '<select data-key="' + esc(key) + '"' + req + '>' + opts2 + '</select>' + star;
       }
+      // ── 計算欄（公式）：唯讀，值由 updateComputed 依公式即時算出 ──
+      case 'formula':
+        return '<input type="text" data-key="' + esc(key) + '" data-formula="' + esc(cell.formula || '') + '" value="' + esc(val) + '" readonly title="公式：' + esc(cell.formula || '') + '">';
       case 'textarea':
         return '<textarea data-key="' + esc(key) + '"' + req + ro + ' rows="' + (cell.rows || 4) + '">' + esc(val) + '</textarea>';
       case 'number':
@@ -180,7 +290,11 @@
         this.title = ok ? '' : ('格式不符，規則：' + p);
       } catch (e) { /* regex 無效不干擾填寫 */ }
     });
+    // 任何欄位變動 → 重算計算欄與圖表
+    $fields.on('input change', function () { updateComputed($host); });
+    updateComputed($host);
   }
 
-  global.EGForm = { renderForm: renderForm, cellClass: cellClass, cellInner: cellInner, esc: esc, bindFormUX: bindFormUX };
+  global.EGForm = { renderForm: renderForm, cellClass: cellClass, cellInner: cellInner, esc: esc,
+                    bindFormUX: bindFormUX, updateComputed: updateComputed, evalFormula: evalFormula };
 })(window);

@@ -96,8 +96,32 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
           <option value="title">大標題（title）</option>
           <option value="static">固定文字（static）</option>
           <option value="signature">簽名格（signature）</option>
+          <option value="chart">圖表格（chart）</option>
           <option value="blank">空白</option>
         </select>
+      </div>
+      <div class="prop-chart" style="display:none;">
+        <div class="form-group">
+          <label>圖表類型</label>
+          <select class="form-control input-sm" id="pChartKind">
+            <option value="radar">雷達圖（至少3個數據）</option>
+            <option value="bar">長條圖</option>
+            <option value="line">折線圖</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>數據來源欄位代號（逗號分隔）</label>
+          <input type="text" class="form-control input-sm" id="pChartFields" placeholder="s1,s2,s3,s4,s5">
+          <span class="muted">填表內數字欄/計算欄的代號，值變動圖表即時重繪</span>
+        </div>
+        <div class="form-group">
+          <label>顯示名稱（選填，逗號分隔對應）</label>
+          <input type="text" class="form-control input-sm" id="pChartLabels" placeholder="外觀,尺寸,材質,硬度,包裝">
+        </div>
+        <div class="form-group">
+          <label>刻度上限（選填，留空自動）</label>
+          <input type="number" class="form-control input-sm" id="pChartMax">
+        </div>
       </div>
       <div class="form-group prop-text">
         <label>文字</label>
@@ -120,7 +144,13 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
           <option value="user_dept">使用者部門（自動帶入）</option>
           <option value="user_position">使用者職稱（自動帶入）</option>
           <option value="fixed_dept">固定部門（綁部門ID）</option>
+          <option value="formula">計算欄（公式）</option>
         </select>
+      </div>
+      <div class="form-group prop-formula" style="display:none;">
+        <label>公式（同 Excel，引用欄位代號）</label>
+        <input type="text" class="form-control input-sm" id="pFormula" placeholder="=qty*price 或 SUM(w1,w2,w3)">
+        <span class="muted">支援 + - * / ()、SUM/AVG/MIN/MAX/COUNT(欄位代號逗號分隔)；結果唯讀自動計算</span>
       </div>
       <div class="form-group prop-fixeddept" style="display:none;">
         <label>選擇部門</label>
@@ -206,6 +236,7 @@ function load(){
     $('#chkFooter').prop('checked', schema.meta.footer.show!==false);
     const docInfo=(r.ctx&&r.ctx.docNo)?('｜文件編號 '+r.ctx.docNo+(r.ctx.version||'')):'｜未綁定文件（入口頁可綁定）';
     $('#statusBadge').text('狀態：'+r.template.status+'（發布版 '+r.template.published_version+'）'+docInfo+(r.canDesign?'':'　⚠ 唯讀（無設計權）'));
+    CAN_DESIGN=!!r.canDesign;
     if(!r.canDesign){ $('.topbar button,.side button,.topbar input,.side input,.side select').prop('disabled',true); }
     recalcRows();
     renderEdit(); renderSections();
@@ -259,6 +290,7 @@ function editClass(cell){
 function editInner(cell){
   if(cell.type==='title'||cell.type==='label'||cell.type==='static') return esc(cell.text||'（空）');
   if(cell.type==='signature') return `<span class="celltag">簽</span>${esc(cell.section||'?')}`;
+  if(cell.type==='chart') return `<span class="celltag">圖表</span>${({radar:'雷達',bar:'長條',line:'折線'})[(cell.chart&&cell.chart.kind)||'radar']}｜${esc((cell.chart&&cell.chart.fields||[]).join(','))||'未設數據'}`;
   if(cell.type==='blank') return '';
   const ft={text:'文字',textarea:'多行',number:'數字',date:'日期',select:'下拉',checkbox:'勾選',user_name:'姓名',user_dept:'部門',user_position:'職稱',fixed_dept:'固定部門'}[cell.ftype]||'文字';
   if(cell.ftype==='fixed_dept') return `<span class="celltag">${ft}</span>${esc(cell.dept||'未選')}`;
@@ -272,6 +304,7 @@ $('#editHost').on('click','td',function(){
     schema.cells.push({r,c,type:'label',text:'新欄位'});
     sel=r+'_'+c; recalcRows(); renderEdit(); fillProp();
     $('#pText').trigger('focus');   // focus 時已有全選行為
+    scheduleSave();
     return;
   }
   sel=r+'_'+c; renderEdit(); fillProp();
@@ -290,6 +323,12 @@ function fillProp(){
   $('#pRequired').prop('checked',!!cell.required);
   $('#pToday').prop('checked',!!cell.today);
   $('#pPattern').val(cell.pattern||'');
+  $('#pFormula').val(cell.formula||'');
+  const ch=cell.chart||{};
+  $('#pChartKind').val(ch.kind||'radar');
+  $('#pChartFields').val((ch.fields||[]).join(','));
+  $('#pChartLabels').val((ch.labels||[]).join(','));
+  $('#pChartMax').val(ch.max||'');
   // 固定部門下拉（META.departments 帶出，選中既有 dept_id）
   $('#pFixedDept').html('<option value="">請選擇部門</option>'+META.departments.map(d=>
     `<option value="${d.id}"${String(cell.dept_id||'')===String(d.id)?' selected':''}>${esc(d.name)}</option>`).join(''));
@@ -309,6 +348,8 @@ function syncPropVisibility(){
   $('.prop-today').toggle(t==='field' && ft==='date');
   $('.prop-pattern').toggle(t==='field' && ft==='text');
   $('.prop-fixeddept').toggle(t==='field' && ft==='fixed_dept');
+  $('.prop-formula').toggle(t==='field' && ft==='formula');
+  $('.prop-chart').toggle(t==='chart');
 }
 $('#pType,#pFtype').on('change',syncPropVisibility);
 
@@ -324,7 +365,7 @@ function applyProp(withSpan){
   const cell=cellAt(r,c); if(!cell) return;
   const t=$('#pType').val();
   cell.type=t;
-  ['text','key','ftype','options','required','align','section','rows','today','pattern','dept_id','dept'].forEach(k=>delete cell[k]);
+  ['text','key','ftype','options','required','align','section','rows','today','pattern','dept_id','dept','formula','chart'].forEach(k=>delete cell[k]);
   if(t==='title'||t==='label'||t==='static'){ cell.text=$('#pText').val(); if(t!=='title'){const a=$('#pAlign').val(); if(a==='left')cell.align='left';} }
   if(t==='field'){
     cell.key=$('#pKey').val().trim();
@@ -337,20 +378,36 @@ function applyProp(withSpan){
       const did=parseInt($('#pFixedDept').val())||0;
       if(did){ cell.dept_id=did; cell.dept=$('#pFixedDept option:selected').text(); }   // dept 僅設計器顯示備援，正式顯示以 ID 即時解析
     }
+    if(cell.ftype==='formula'){ const fx=$('#pFormula').val().trim(); if(fx) cell.formula=fx; }
     if($('#pRequired').prop('checked')) cell.required=true;
   }
   if(t==='signature'){ cell.section=$('#pSection').val(); }
+  if(t==='chart'){
+    cell.chart={ kind:$('#pChartKind').val()||'radar',
+      fields:$('#pChartFields').val().split(',').map(s=>s.trim()).filter(Boolean),
+      labels:$('#pChartLabels').val().split(',').map(s=>s.trim()).filter(Boolean) };
+    const mx=parseFloat($('#pChartMax').val()); if(mx>0) cell.chart.max=mx;
+  }
   if(withSpan!==false){
     const cs=Math.max(1,parseInt($('#pCs').val())||1), rs=Math.max(1,parseInt($('#pRs').val())||1);
     setSpan(cell,cs,rs);
   }
   recalcRows(); renderEdit();
+  scheduleSave();   // 屬性修改 → 自動儲存（debounce）
 }
 $('#btnApply').on('click',()=>applyProp(true));
 // 即時反映：打字/變動立刻更新左側格子（跨欄/列只在 change 時套，見上）
-$('#pText,#pKey,#pOptions,#pPattern').on('input',()=>applyProp(false));
-$('#pType,#pFtype,#pAlign,#pRequired,#pSection,#pToday').on('change',()=>applyProp(false));
+$('#pText,#pKey,#pOptions,#pPattern,#pFormula,#pChartFields,#pChartLabels').on('input',()=>applyProp(false));
+$('#pType,#pFtype,#pAlign,#pRequired,#pSection,#pToday,#pFixedDept,#pChartKind,#pChartMax').on('change',()=>applyProp(false));
 $('#pCs,#pRs').on('change',()=>applyProp(true));
+
+// ── 自動儲存（debounce 1.2 秒；任何 schema 變動後自動存草稿）──
+let saveTimer=null, CAN_DESIGN=true;
+function scheduleSave(){
+  if(!CAN_DESIGN || !TEMPLATE_ID) return;
+  clearTimeout(saveTimer);
+  saveTimer=setTimeout(()=>doSave(null,true),1200);
+}
 
 // ── 輸入欄位通用互動（ai-rules/08）：聚焦全選、雙擊清空、Enter 跳下一欄 ──
 const UX_INPUTS='.side input[type=text], .side input[type=number], .topbar input[type=text], .topbar input[type=number], #secTable input[type=text], #secTable input[type=number]';
@@ -388,15 +445,18 @@ $('#btnMergeD').on('click',()=>spanBtn(0,1));
 function spanBtn(dcs,drs){
   if(!sel) return; const [r,c]=sel.split('_').map(Number); const cell=cellAt(r,c); if(!cell) return;
   setSpan(cell,(cell.cs||1)+dcs,(cell.rs||1)+drs); recalcRows(); renderEdit(); fillProp();
+  scheduleSave();
 }
 $('#btnUnmerge').on('click',function(){
   if(!sel) return; const [r,c]=sel.split('_').map(Number); const cell=cellAt(r,c); if(!cell) return;
   cell.cs=1; cell.rs=1; renderEdit(); fillProp();
+  scheduleSave();
 });
 $('#btnDelCell').on('click',function(){
   if(!sel) return; const [r,c]=sel.split('_').map(Number);
   schema.cells=schema.cells.filter(x=>!(x.r===r&&x.c===c));
   sel=null; renderEdit(); $('#propPanel').hide(); $('#propEmpty').show();
+  scheduleSave();
 });
 
 // ── Ctrl+方向鍵：把目前格複製到相鄰格（同 Excel 填滿）──
@@ -426,17 +486,19 @@ $(document).on('keydown',function(e){
   schema.cells=schema.cells.filter(x=>!(x.r===nr&&x.c===nc));
   schema.cells.push(clone);
   sel=nr+'_'+nc; recalcRows(); renderEdit(); fillProp();
+  scheduleSave();
 });
 
 // ── 結構 ──
 $('#gridCols').on('change',function(){
   const v=Math.max(1,Math.min(16,parseInt(this.value)||6));
-  schema.grid.cols=v; this.value=v; renderEdit();
+  schema.grid.cols=v; this.value=v; renderEdit(); scheduleSave();
 });
 $('#btnAddRow').on('click',()=>{ editRows++; renderEdit(); });
-$('#btnAddCol').on('click',()=>{ schema.grid.cols++; $('#gridCols').val(schema.grid.cols); renderEdit(); });
-$('#chkHeader').on('change',function(){ schema.meta.header.show=this.checked; });
-$('#chkFooter').on('change',function(){ schema.meta.footer.show=this.checked; });
+$('#btnAddCol').on('click',()=>{ schema.grid.cols++; $('#gridCols').val(schema.grid.cols); renderEdit(); scheduleSave(); });
+$('#chkHeader').on('change',function(){ schema.meta.header.show=this.checked; scheduleSave(); });
+$('#chkFooter').on('change',function(){ schema.meta.footer.show=this.checked; scheduleSave(); });
+$('#tplName').on('input',scheduleSave);
 
 // ── 簽核區 ──
 const RULE_TYPES={submitter:'填表本人',position:'指定職稱',level:'N階主管以上'};
@@ -467,10 +529,10 @@ function renderSections(){
 }
 $('#btnAddSec').on('click',function(){
   schema.sections.push({key:'sec'+(schema.sections.length+1),label:'簽核',step:schema.sections.length+1,rule:{type:'position'}});
-  renderSections();
+  renderSections(); scheduleSave();
 });
 $('#secTable').on('click','.s-del',function(){
-  const i=+$(this).closest('tr').data('i'); schema.sections.splice(i,1); renderSections();
+  const i=+$(this).closest('tr').data('i'); schema.sections.splice(i,1); renderSections(); scheduleSave();
 });
 // 簽核區欄位即時回寫（職稱/階皆為下拉，存 position_id＋名稱，避免手打錯字）
 $('#secTable').on('change','input,select',function(){
@@ -498,12 +560,14 @@ $('#secTable').on('change','input,select',function(){
     $tr.find('.s-pos').toggle(rt==='position');
     $tr.find('.s-lvl').toggle(rt==='level');
   });
+  scheduleSave();
 });
 
 // ── 預覽 / 存 / 發布 ──
 $('#btnPreview').on('click',function(){
   syncMeta();
   $('#previewHost').html(EGForm.renderForm(schema,{mode:'fill',ctx}));
+  EGForm.bindFormUX($('#previewHost'));   // 預覽可實際輸入試算公式/圖表
   $('#previewModal').modal('show');
 });
 function syncMeta(){
@@ -511,13 +575,13 @@ function syncMeta(){
   schema.meta.header=schema.meta.header||{}; schema.meta.header.show=$('#chkHeader').prop('checked');
   schema.meta.footer=schema.meta.footer||{}; schema.meta.footer.show=$('#chkFooter').prop('checked');
 }
-function doSave(cb){
+function doSave(cb,silent){
   syncMeta();
   $.post(API+'?action=save_schema',{template_id:TEMPLATE_ID, name:$('#tplName').val(), schema_json:JSON.stringify(schema)}, r=>{
-    if(!r.ok){ alert(r.error||'儲存失敗'); return; }
-    $('#statusBadge').text('已存草稿 '+new Date().toLocaleTimeString());
+    if(!r.ok){ if(!silent) alert(r.error||'儲存失敗'); return; }
+    $('#statusBadge').text((silent?'已自動儲存 ':'已存草稿 ')+new Date().toLocaleTimeString());
     if(cb) cb();
-  },'json').fail(x=>alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)));
+  },'json').fail(x=>{ if(!silent) alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 $('#btnSave').on('click',()=>doSave());
 $('#btnPublish').on('click',function(){
@@ -525,7 +589,16 @@ $('#btnPublish').on('click',function(){
   doSave(()=>{
     $.post(API+'?action=publish',{template_id:TEMPLATE_ID}, r=>{
       if(!r.ok){ alert(r.error||'發布失敗'); return; }
-      alert('已發布為第 '+r.version+' 版'); load();
+      // 發布自動建議文件改版：綁定文件的模板再發布 → 建議開「文件制修申請單」（預填目標文件與原因）
+      if(r.suggest_revision){
+        const s=r.suggest_revision;
+        if(confirm('已發布為第 '+r.version+' 版。\n\n此表單綁定文件「'+s.doc_no+' '+s.doc_name+'」，依文件管制程序，設計改版建議開立「文件制修申請單」。\n\n要現在開單嗎？（會自動預填目標文件與原因）')){
+          window.open('as_form_fill.php?template_id='+s.template_id+'&prefill='+encodeURIComponent(JSON.stringify(s.prefill)),'_blank');
+        }
+      } else {
+        alert('已發布為第 '+r.version+' 版');
+      }
+      load();
     },'json').fail(x=>alert('發布失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)));
   });
 });

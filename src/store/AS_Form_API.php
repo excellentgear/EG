@@ -217,7 +217,39 @@ case 'publish': {
         $db->prepare("UPDATE as_form_template SET published_version=?, status='published', updated_at=NOW() WHERE id=?")
            ->execute([$newVer, $tid]);
         $db->commit();
-        jout(['ok'=>true, 'version'=>$newVer]);
+
+        // ── 發布自動建議文件改版：綁定文件的模板再發布（非首版）→ 建議開「文件制修申請單」
+        //    制修申請單模板＝綁定 doc_no='2-DC-01-01' 的已發布線上表單（動態查，不寫死 id）
+        $suggest = null;
+        try {
+            $ti = $db->prepare("SELECT t.form_doc_id, d.doc_no, d.doc_name, d.current_version
+                                FROM as_form_template t JOIN as_document d ON d.id=t.form_doc_id
+                                WHERE t.id=?");
+            $ti->execute([$tid]);
+            $bound = $ti->fetch(PDO::FETCH_ASSOC);
+            if ($bound && $newVer > 1) {
+                $rv = $db->prepare("SELECT t.id FROM as_form_template t JOIN as_document d ON d.id=t.form_doc_id
+                                    WHERE d.doc_no='2-DC-01-01' AND t.status='published' AND t.is_deleted=0
+                                    ORDER BY t.id LIMIT 1");
+                $rv->execute();
+                if ($revTid = (int)$rv->fetchColumn()) {
+                    $suggest = [
+                        'template_id' => $revTid,
+                        'doc_no'      => $bound['doc_no'],
+                        'doc_name'    => $bound['doc_name'],
+                        'doc_version' => $bound['current_version'],
+                        'prefill'     => [
+                            'apply_type'  => '修訂',
+                            'target_no'   => $bound['doc_no'],
+                            'target_name' => $bound['doc_name'],
+                            'target_ver'  => $bound['current_version'],
+                            'reason'      => '線上表單設計改版（發布第 '.$newVer.' 版），申請文件改版。',
+                        ],
+                    ];
+                }
+            }
+        } catch (Exception $e) { /* 建議失敗不影響發布 */ }
+        jout(['ok'=>true, 'version'=>$newVer, 'suggest_revision'=>$suggest]);
     } catch (Exception $e) { $db->rollBack(); jerr('發布失敗：'.$e->getMessage(), 500); }
 }
 
