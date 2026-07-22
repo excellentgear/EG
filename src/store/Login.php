@@ -2,6 +2,7 @@
 session_start();
 include('../../src/common/DBConnection.php');
 include('../../src/common/homepage.php');
+@include_once('../../src/common/login_log.php');   // 登入紀錄（靜默，失敗不影響登入）
 
     if (isset($_SESSION['status']) && !isset($_POST['login'])) {
         $status = (int)$_SESSION['status']; // 強制轉型為整數，避免字串比較問題
@@ -47,9 +48,11 @@ include('../../src/common/homepage.php');
     
         if ($_POST['userName'] == $admin['user_uname'] && $_POST['password'] == $admin['user_password']) {
             if ($admin['state'] == 0) {
+                if (function_exists('eg_login_log')) eg_login_log($conn->getPDO(), (int)$admin['id'], (string)$_POST['userName'], false, '帳號停用');
                 header("Location:../../index.php?msg=此使用者已離職，帳號無法使用");
                 exit();
             }
+            if (function_exists('eg_login_log')) eg_login_log($conn->getPDO(), (int)$admin['id'], (string)$_POST['userName'], true);
             //測試掃條碼用 1/1
             setcookie("userName", $userName);
             if (isset($_SESSION['lastpage'])) //若前頁已設定，則返回前頁
@@ -170,6 +173,14 @@ include('../../src/common/homepage.php');
             }
 
         } else {
+            if (function_exists('eg_login_log')) {
+                $isRealUser = is_array($admin) && isset($admin['id']);
+                eg_login_log($conn->getPDO(),
+                    $isRealUser ? (int)$admin['id'] : null,
+                    (string)($_POST['userName'] ?? ''),
+                    false,
+                    $isRealUser ? '密碼錯誤' : '帳號不存在');
+            }
             header("Location:../../index.php?msg=使用者名稱或密碼錯誤");
         }
 
