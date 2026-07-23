@@ -2,7 +2,8 @@
 // PersonalTask_API.php — 個人工作紀錄後端 API
 // 每筆紀錄僅擁有者本人可見/可操作（所有查詢與寫入一律 WHERE user_id = 登入者）。
 // 功能：紀錄CRUD、狀態切換(未完成/已完成/暫停)、進度步驟(依序回報/拖移排序/到達時間)、
-//       流程範本、個人急件天數設定、綁定搜尋(BOM/料號/客戶/廠商)。
+//       流程範本、個人急件天數設定、綁定搜尋(BOM/料號/客戶/廠商)、
+//       附件圖片(存NAS只記檔名，路徑由管理員在 system_settings ptask_nas_dir/ptask_url_dir 統一設定)。
 // 前端：views/user/personal_task.php ｜ 提醒發送：src/common/personal_task_notify.php(順路觸發)
 session_start();
 header('Content-Type: application/json; charset=utf-8');
@@ -104,10 +105,72 @@ function pt_get_urgent_default(PDO $db, int $userId): int {
     return $v !== false ? (int)$v : 3;
 }
 
+// 是否為系統管理員（RBAC roles.is_system=1；附件路徑為全系統設定，僅管理員可改）
+function pt_is_admin(PDO $db, int $userId): bool {
+    try {
+        $st = $db->prepare("SELECT 1 FROM user_roles ur
+                            JOIN roles r ON r.role_id = ur.role_id
+                            WHERE ur.user_id = ? AND r.is_system = 1 LIMIT 1");
+        $st->execute([$userId]);
+        return (bool)$st->fetchColumn();
+    } catch (Exception $e) { return false; }
+}
+
+// 附件路徑設定：DB 只存目錄設定值與檔名，完整路徑一律讀取當下組出（鐵律5）
+// 回傳 [NAS實體路徑(寫檔用), URL前綴(前端顯示用)]，皆保證以 / 結尾
+function pt_attach_dirs(PDO $db): array {
+    $nas = 'Z:/BOM/ERP/個人工作/';
+    $url = '/nas/ERP/個人工作/';
+    try {
+        $rows = $db->query("SELECT setting_key, setting_value FROM system_settings
+                            WHERE setting_key IN ('ptask_nas_dir','ptask_url_dir')")->fetchAll(PDO::FETCH_KEY_PAIR);
+        if (!empty($rows['ptask_nas_dir'])) $nas = trim($rows['ptask_nas_dir']);
+        if (!empty($rows['ptask_url_dir'])) $url = trim($rows['ptask_url_dir']);
+    } catch (Exception $e) {}
+    if (!preg_match('#[/\\\\]$#', $nas)) $nas .= '/';
+    return [$nas, rtrim($url, '/') . '/'];
+}
+
+// 取多筆紀錄的附圖（task_id => 附圖陣列，url 即時組出）
+function pt_task_images(PDO $db, array $taskIds, string $urlDir): array {
+    $taskIds = array_values(array_filter(array_map('intval', $taskIds)));
+    if (!$taskIds) return [];
+    $in = implode(',', $taskIds);
+    $rows = $db->query("SELECT img_id, task_id, file_name, original_name FROM personal_task_image
+                        WHERE task_id IN ({$in}) ORDER BY task_id, sort_order, img_id")->fetchAll(PDO::FETCH_ASSOC);
+    $map = [];
+    foreach ($rows as $r) {
+        $r['url'] = $urlDir . $r['file_name'];
+        $map[(int)$r['task_id']][] = $r;
+    }
+    return $map;
+}
+
 try {
     // ══ 個人設定 ══════════════════════════════════════════════════════
     if ($action === 'get_settings') {
-        echo json_encode(['success' => true, 'urgent_days' => pt_get_urgent_default($db, $user_id)]);
+        $isAdmin = pt_is_admin($db, $user_id);
+        $resp = ['success' => true, 'urgent_days' => pt_get_urgent_default($db, $user_id), 'is_admin' => $isAdmin];
+        if ($isAdmin) {
+            list($nasDir, $urlDir) = pt_attach_dirs($db);
+            $resp['attach_nas_dir'] = $nasDir;
+            $resp['attach_url_dir'] = $urlDir;
+        }
+        echo json_encode($resp, JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // ══ 附件儲存路徑（全系統設定，僅管理員）════════════════════════════
+    if ($action === 'save_attach_path') {
+        if (!pt_is_admin($db, $user_id)) throw new Exception('僅管理員可修改附件儲存路徑');
+        $nasDir = trim((string)($_POST['nas_dir'] ?? ''));
+        $urlDir = trim((string)($_POST['url_dir'] ?? ''));
+        if ($nasDir === '' || $urlDir === '') throw new Exception('路徑不可為空');
+        $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
+                            ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)");
+        $st->execute(['ptask_nas_dir', $nasDir]);
+        $st->execute(['ptask_url_dir', $urlDir]);
+        echo json_encode(['success' => true]);
         exit;
     }
 
@@ -183,7 +246,7 @@ try {
         $st->execute($listParams);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 
-        // 帶入各筆的進度步驟與小項（依排序）
+        // 帶入各筆的進度步驟與小項（依排序）＋附圖
         if ($rows) {
             $ids = array_column($rows, 'id');
             $in = implode(',', array_map('intval', $ids));
@@ -192,7 +255,12 @@ try {
             pt_attach_step_items($db, $steps);
             $byTask = [];
             foreach ($steps as $s) { $byTask[$s['task_id']][] = $s; }
-            foreach ($rows as &$r) { $r['steps'] = $byTask[$r['id']] ?? []; }
+            list(, $urlDir) = pt_attach_dirs($db);
+            $imgMap = pt_task_images($db, $ids, $urlDir);
+            foreach ($rows as &$r) {
+                $r['steps'] = $byTask[$r['id']] ?? [];
+                $r['images'] = $imgMap[(int)$r['id']] ?? [];
+            }
             unset($r);
         }
 
@@ -210,6 +278,9 @@ try {
         $steps = $st->fetchAll(PDO::FETCH_ASSOC);
         pt_attach_step_items($db, $steps);
         $task['steps'] = $steps;
+        list(, $urlDir) = pt_attach_dirs($db);
+        $imgMap = pt_task_images($db, [$task['id']], $urlDir);
+        $task['images'] = $imgMap[(int)$task['id']] ?? [];
         echo json_encode(['success' => true, 'data' => $task], JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -354,19 +425,77 @@ try {
     if ($action === 'delete_task') {
         $id = (int)($_POST['id'] ?? 0);
         if (!pt_get_own_task($db, $user_id, $id)) throw new Exception('找不到紀錄或無權限');
+        // 附圖實體檔先取出檔名，DB 交易成功後才刪檔（刪檔失敗不影響資料一致性）
+        $st = $db->prepare("SELECT file_name FROM personal_task_image WHERE task_id = ?");
+        $st->execute([$id]);
+        $imgFiles = $st->fetchAll(PDO::FETCH_COLUMN);
         $db->beginTransaction();
         try {
             $db->prepare("DELETE i FROM personal_task_step_item i
                           JOIN personal_task_step s ON s.id = i.step_id
                           WHERE s.task_id = ?")->execute([$id]);
             $db->prepare("DELETE FROM personal_task_step WHERE task_id = ?")->execute([$id]);
+            $db->prepare("DELETE FROM personal_task_image WHERE task_id = ?")->execute([$id]);
             $db->prepare("DELETE FROM personal_task WHERE id = ? AND user_id = ?")->execute([$id, $user_id]);
             $db->commit();
-            echo json_encode(['success' => true]);
         } catch (Exception $e) {
             if ($db->inTransaction()) $db->rollBack();
             throw $e;
         }
+        if ($imgFiles) {
+            list($nasDir) = pt_attach_dirs($db);
+            foreach ($imgFiles as $fn) {
+                $fp = $nasDir . $fn;
+                if (is_file($fp)) @unlink($fp);
+            }
+        }
+        echo json_encode(['success' => true]);
+        exit;
+    }
+
+    // ══ 附件圖片（僅本人的紀錄可操作；縮圖/點擊邏輯比照 Sales_Track）══
+    if ($action === 'list_task_images') {
+        $taskId = (int)($_POST['task_id'] ?? $_GET['task_id'] ?? 0);
+        if (!pt_get_own_task($db, $user_id, $taskId)) throw new Exception('找不到紀錄或無權限');
+        list(, $urlDir) = pt_attach_dirs($db);
+        $imgMap = pt_task_images($db, [$taskId], $urlDir);
+        echo json_encode(['success' => true, 'data' => $imgMap[$taskId] ?? []], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($action === 'upload_task_image') {
+        $taskId = (int)($_POST['task_id'] ?? 0);
+        if (!pt_get_own_task($db, $user_id, $taskId)) throw new Exception('找不到紀錄或無權限');
+        if (!isset($_FILES['image']) || $_FILES['image']['error'] !== UPLOAD_ERR_OK) throw new Exception('上傳失敗');
+        $allowedExt = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
+        $orig = basename($_FILES['image']['name']);
+        $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+        if (!in_array($ext, $allowedExt, true)) throw new Exception('僅支援圖片格式（jpg/png/gif/webp/bmp）');
+        list($nasDir, $urlDir) = pt_attach_dirs($db);
+        if (!is_dir($nasDir) && !mkdir($nasDir, 0777, true)) throw new Exception('無法建立附件目錄，請確認路徑設定：' . $nasDir);
+        $fname = date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ext;
+        if (!move_uploaded_file($_FILES['image']['tmp_name'], $nasDir . $fname)) throw new Exception('檔案寫入失敗');
+        $db->prepare("INSERT INTO personal_task_image (task_id, file_name, original_name, file_size)
+                      VALUES (?,?,?,?)")
+           ->execute([$taskId, $fname, $orig, (int)$_FILES['image']['size']]);
+        echo json_encode(['success' => true, 'img_id' => (int)$db->lastInsertId(),
+            'file_name' => $fname, 'original_name' => $orig, 'url' => $urlDir . $fname], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($action === 'delete_task_image') {
+        $imgId = (int)($_POST['img_id'] ?? 0);
+        $st = $db->prepare("SELECT i.file_name FROM personal_task_image i
+                            JOIN personal_task t ON t.id = i.task_id
+                            WHERE i.img_id = ? AND t.user_id = ?");
+        $st->execute([$imgId, $user_id]);
+        $fn = $st->fetchColumn();
+        if ($fn === false) throw new Exception('找不到附圖或無權限');
+        $db->prepare("DELETE FROM personal_task_image WHERE img_id = ?")->execute([$imgId]);
+        list($nasDir) = pt_attach_dirs($db);
+        $fp = $nasDir . $fn;
+        if (is_file($fp)) @unlink($fp);
+        echo json_encode(['success' => true]);
         exit;
     }
 
