@@ -4,6 +4,7 @@
 // 簽名格：已簽區顯示 EGStamp 圖章；具資格者看到「核准/駁回」按鈕。
 session_start();
 if (!isset($_SESSION['userName'])) { header("Location:../../index.php"); exit; }
+header('Cache-Control: no-store, no-cache, must-revalidate');   // 防瀏覽器/SW 殘留舊版頁面
 include_once '../../src/common/_config.php';
 include ("../../src/common/DBConnection.php");
 $db = (new DBConnection())->getPDO();
@@ -32,7 +33,9 @@ try {
   html,body{overflow-x:hidden;}
   .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;min-height:100vh;}
   .form-toolbar,.form-sheet,.sign-panel{width:auto;max-width:820px;}
-  .form-toolbar{max-width:820px;margin:14px auto 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .form-toolbar{max-width:820px;margin:0 auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+    position:sticky;top:0;z-index:60;background:#efe7da;padding:10px 0 8px;}   /* 置頂固定，捲動不消失 */
+  .form-toolbar-bottom{position:static;padding:0 0 8px;}                        /* 底部那排不置頂 */
   .form-sheet{max-width:820px;margin:12px auto 16px;background:#fff;padding:26px 30px;box-shadow:0 2px 10px rgba(90,61,30,.18);}
   .status-chip{display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;font-weight:bold;}
   .st-draft{background:#f7e0bd;color:#5a3d1e;} .st-in_review{background:#f0a24b;color:#4a2c0a;}
@@ -59,13 +62,20 @@ try {
 <div class="right_col" role="main">
   <div class="form-toolbar">
     <a class="btn btn-default btn-sm" href="as_form_list.php" title="回表單清單"><i class="fa fa-list"></i> 返回清單</a>
-    <button class="btn btn-default btn-sm" id="btnSaveDraft"><i class="fa fa-save"></i> 存草稿</button>
-    <button class="btn btn-success btn-sm" id="btnSubmit" data-submit><i class="fa fa-paper-plane"></i> 送出簽核</button>
-    <button class="btn btn-warning btn-sm" onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
+    <button class="btn btn-default btn-sm act-save" id="btnSaveDraft"><i class="fa fa-save"></i> 存草稿</button>
+    <button class="btn btn-success btn-sm act-submit" id="btnSubmit" data-submit><i class="fa fa-paper-plane"></i> 送出簽核</button>
+    <button class="btn btn-warning btn-sm" onclick="window.print()"><i class="fa fa-print"></i> 列印(預覽)</button>
     <span id="statusChip"></span>
     <span id="formTitle" style="font-weight:bold;color:#7a4e17;"></span>
   </div>
   <div class="form-sheet"><div id="formHost"></div></div>
+
+  <!-- 底部動作列：填完表單就在手邊，不必捲回頂端 -->
+  <div class="form-toolbar form-toolbar-bottom">
+    <button class="btn btn-default btn-sm act-save"><i class="fa fa-save"></i> 存草稿</button>
+    <button class="btn btn-success btn-sm act-submit" data-submit><i class="fa fa-paper-plane"></i> 送出簽核</button>
+    <button class="btn btn-warning btn-sm" onclick="window.print()"><i class="fa fa-print"></i> 列印(預覽)</button>
+  </div>
 
   <div class="sign-panel" id="signPanel" style="display:none;">
     <h4><i class="fa fa-pencil-square-o"></i> 簽核</h4>
@@ -139,7 +149,7 @@ function loadTemplate(){
     $('#formTitle').text(r.template.name);
     $('#statusChip').html(statusChip('draft'));
     canEdit=true;
-    $('#btnSaveDraft,#btnSubmit').show();   // 先顯示按鈕，渲染出錯也不影響操作
+    $('.act-save,.act-submit').show();   // 先顯示按鈕，渲染出錯也不影響操作
     try{ render('fill',prefill); }
     catch(e){ console.error(e); alert('表單渲染發生錯誤：'+e.message+'\n請回設計器檢查此表單設定'); }
   }).fail(x=>alert('載入失敗：'+x.status));
@@ -154,7 +164,7 @@ function loadInstance(){
     $('#statusChip').html(statusChip(r.instance.status));
     // 會簽：我可簽的區若帶部門(@deptid)，該部門的區塊欄位開放我填寫
     const editDepts=(r.my_sections||[]).map(m=>String(m.section_key||'')).filter(k=>k.indexOf('@')>=0).map(k=>k.split('@')[1]);
-    $('#btnSaveDraft,#btnSubmit').toggle(canEdit);   // 先切換按鈕，渲染出錯也不影響操作
+    $('.act-save,.act-submit').toggle(canEdit);   // 先切換按鈕（上下兩排），渲染出錯也不影響操作
     renderSignPanel(r);
     try{ render(canEdit?'fill':'view', r.data, editDepts); }
     catch(e){ console.error(e); alert('表單渲染發生錯誤：'+e.message+'\n請回設計器檢查此表單設定'); }
@@ -215,8 +225,8 @@ function saveDraft(cb){
     if(cb) cb(); else alert('已存草稿');
   },'json').fail(x=>alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)));
 }
-$('#btnSaveDraft').on('click',()=>saveDraft());
-$('#btnSubmit').on('click',function(){
+$(document).on('click','.act-save',()=>saveDraft());
+$(document).on('click','.act-submit',function(){
   if(!confirm('送出後將進入簽核流程，期間不可修改。確定送出？')) return;
   saveDraft(()=>{
     $.post(API+'?action=instance_submit',{instance_id:INSTANCE_ID}, r=>{

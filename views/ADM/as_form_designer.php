@@ -37,6 +37,7 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
   table.eg-edit td.dz:hover{background:#f6e8cd;}
   table.eg-edit td.sel{outline:3px solid #dd8a3a;outline-offset:-3px;background:#fff3df !important;}
   table.eg-edit td.fill-target{outline:2px dashed #dd8a3a;outline-offset:-2px;background:#fdeed7 !important;}
+  table.eg-edit td.multi-sel{outline:2px solid #dd8a3a;outline-offset:-2px;background:#fbe3c4 !important;}
   table.eg-edit .fill-handle{position:absolute;right:-1px;bottom:-1px;width:9px;height:9px;background:#dd8a3a;border:1px solid #fff;cursor:crosshair;z-index:4;}
   table.eg-edit .fill-handle:hover{transform:scale(1.3);}
   td.e-title{background:#f0a24b;color:#4a2c0a;font-weight:bold;text-align:center;}
@@ -82,7 +83,7 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
 <div class="wrap">
   <div class="canvas">
     <div id="editHost"></div>
-    <p class="muted" style="margin-top:4px;"><i class="fa fa-mouse-pointer"></i> 選取格子後，抓住右下角<strong>橘色小方塊往下／右／上／左拖曳</strong>＝把此格複製到經過的格（同 Excel 填滿；保留跨欄跨列、欄位代號自動加流水號）</p>
+    <p class="muted" style="margin-top:4px;"><i class="fa fa-mouse-pointer"></i> 選取格子後，抓住右下角<strong>橘色小方塊拖曳</strong>＝複製此格到經過的格（同 Excel 填滿）；<strong>左鍵拖過多格＝框選</strong>，按 <strong>Delete</strong> 或「清空」鈕一次清除框選範圍（Esc 取消框選）</p>
     <div style="margin-top:14px;">
       <h4 style="font-size:14px;color:#7a4e17;border-bottom:2px solid #f0a24b;padding-bottom:5px;">簽核區（section）</h4>
       <p class="muted" style="font-size:11px;">每個「簽名格」綁一個簽核區；step 相同＝平行、遞增＝依序。規則：submitter=填表本人、position=指定職稱、level=N階主管以上。</p>
@@ -363,8 +364,45 @@ function editInner(cell){
   return `<span class="celltag">${ft}</span>${esc(cell.key||'未命名')}`;
 }
 
+// ── 框選多格（左鍵拖過多格）→ Delete 鍵或「清空」鈕一次清除 ──
+let mqStart=null, mqRect=null, suppressClick=false;
+$('#editHost').on('mousedown','td',function(e){
+  if(e.which!==1 || $(e.target).hasClass('fill-handle')) return;
+  const r=+$(this).data('r'), c=+$(this).data('c');
+  if(isNaN(r)||isNaN(c)) return;
+  mqStart={r,c};
+});
+$('#editHost').on('mouseover','td',function(){
+  if(!mqStart || dragSrc) return;   // 填滿拖曳（控制點）優先，互不干擾
+  const r=+$(this).data('r'), c=+$(this).data('c');
+  if(isNaN(r)||isNaN(c) || (r===mqStart.r && c===mqStart.c && !mqRect)) return;
+  mqRect={r1:Math.min(mqStart.r,r), c1:Math.min(mqStart.c,c), r2:Math.max(mqStart.r,r), c2:Math.max(mqStart.c,c)};
+  $('body').css('user-select','none');
+  $('#editHost td').removeClass('multi-sel').each(function(){
+    const tr=+$(this).data('r'), tc=+$(this).data('c');
+    if(tr>=mqRect.r1&&tr<=mqRect.r2&&tc>=mqRect.c1&&tc<=mqRect.c2) $(this).addClass('multi-sel');
+  });
+});
+$(document).on('mouseup',function(){
+  if(mqStart && mqRect){ suppressClick=true; setTimeout(()=>{suppressClick=false;},80); }
+  mqStart=null; $('body').css('user-select','');
+});
+function clearRect(){
+  if(!mqRect) return false;
+  schema.cells=schema.cells.filter(x=>!(x.r>=mqRect.r1&&x.r<=mqRect.r2&&x.c>=mqRect.c1&&x.c<=mqRect.c2));
+  mqRect=null; sel=null;
+  renderEdit(); $('#propPanel').hide(); $('#propEmpty').show(); scheduleSave();
+  return true;
+}
+$(document).on('keydown',function(e){
+  if($(e.target).is('input,select,textarea')) return;
+  if(e.key==='Delete' && mqRect){ e.preventDefault(); clearRect(); }
+  if(e.key==='Escape' && mqRect){ mqRect=null; $('#editHost td').removeClass('multi-sel'); }
+});
+
 // ── 選取 & 屬性面板 ──
 $('#editHost').on('click','td',function(){
+  if(suppressClick){ suppressClick=false; return; }   // 剛完成框選，這次 click 不當成單選
   const r=+$(this).data('r'), c=+$(this).data('c');
   if($(this).hasClass('dz')){ // 新增格 → 焦點自動移至「文字」欄並全選，直接打字即可
     schema.cells.push({r,c,type:'label',text:'新欄位'});
@@ -555,6 +593,7 @@ $('#btnUnmerge').on('click',function(){
   scheduleSave();
 });
 $('#btnDelCell').on('click',function(){
+  if(clearRect()) return;   // 有框選範圍 → 一次清除框選的格
   if(!sel) return; const [r,c]=sel.split('_').map(Number);
   schema.cells=schema.cells.filter(x=>!(x.r===r&&x.c===c));
   sel=null; renderEdit(); $('#propPanel').hide(); $('#propEmpty').show();
