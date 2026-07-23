@@ -21,7 +21,7 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
 <link href="../../resource/css/as_form.css?v=<?php echo @filemtime(__DIR__.'/../../resource/css/as_form.css'); ?>" rel="stylesheet">
 <style>
   html,body{overflow-x:hidden;}
-  .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;min-height:100vh;overflow-x:hidden;}
+  .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;min-height:100vh;}
   .wrap{display:flex;gap:14px;padding:12px 16px;align-items:flex-start;}
   .canvas{flex:1;min-width:0;}
   .side{width:300px;flex:none;background:#fff;border:1px solid #d8c19a;border-radius:6px;padding:12px;box-shadow:0 2px 8px rgba(90,61,30,.12);position:sticky;top:10px;}
