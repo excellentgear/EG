@@ -110,6 +110,8 @@ function eg_bk_run(PDO $pdo, string $trigger, string $by): array {
         $logId = (int)$pdo->lastInsertId();
 
         // ── mysqldump（保留註解標記，供整表還原時定位表區塊）──
+        // stderr 一律導到獨立檔案（勿用 2>&1——會混進 dump 檔，失敗時看不到錯誤原因）
+        $errPath = $absPath . '.stderr.txt';
         putenv('MYSQL_PWD=' . BK_DB_PASS);
         $cmd = escapeshellarg(BK_MYSQLDUMP)
              . ' --host=' . escapeshellarg(BK_DB_HOST)
@@ -118,12 +120,19 @@ function eg_bk_run(PDO $pdo, string $trigger, string $by): array {
              . ' --single-transaction --default-character-set=utf8mb4 --set-gtid-purged=OFF'
              . ' --no-tablespaces --routines --triggers --events --hex-blob'
              . ' ' . escapeshellarg(BK_DB_NAME)
-             . ' > ' . escapeshellarg($absPath);
-        [$code, $out] = eg_bk_exec($cmd);
+             . ' > ' . escapeshellarg($absPath)
+             . ' 2> ' . escapeshellarg($errPath);
+        $out = [];
+        $code = 1;
+        exec($cmd, $out, $code); // 不再附加 2>&1（stderr 已導檔）
         putenv('MYSQL_PWD');
+        $errTxt = is_file($errPath) ? trim((string)@file_get_contents($errPath)) : '';
 
         if ($code !== 0 || !is_file($absPath) || filesize($absPath) < 1024) {
-            $err = '匯出失敗：' . mb_substr($out, 0, 500);
+            // 診斷輔助：記錄實際執行身分與 dump 檔大小，錯誤檔保留供調查（.stderr.txt 不會被 git add）
+            $who = trim((string)@shell_exec('whoami 2>&1'));
+            $sz  = is_file($absPath) ? filesize($absPath) : -1;
+            $err = "匯出失敗(exit=$code,size=$sz,run_as=$who)：" . mb_substr($errTxt, 0, 400);
             @unlink($absPath);
             $pdo->prepare("UPDATE db_backup_log SET status='fail', note=?, finished_at=NOW() WHERE id=?")
                 ->execute([$err, $logId]);
@@ -131,6 +140,7 @@ function eg_bk_run(PDO $pdo, string $trigger, string $by): array {
             @unlink($lock);
             return ['ok'=>false,'skipped'=>false,'msg'=>$err,'log_id'=>$logId,'filename'=>$filename,'commit'=>''];
         }
+        @unlink($errPath); // 成功時清掉空的 stderr 檔
         $size = filesize($absPath);
 
         // ── 複製到 NAS（best-effort；不可用 is_writable 預檢——Windows UNC 上會誤報，直接嘗試複製）──
@@ -272,6 +282,60 @@ function eg_bk_restore_table(PDO $pdo, int $logId, string $table): array {
     $res = eg_bk_import_file($tmp);
     @unlink($tmp);
     return $res;
+}
+
+// ── 刪除單筆備份（工作區檔 + git rm + commit + push；NAS 上的複本不動）──
+// 注意：git rm 只移除最新版，檔案仍留在 git 歷史；要連歷史一併清除須用 eg_bk_purge_history()
+function eg_bk_delete_backup(PDO $pdo, int $logId, string $by): array {
+    $st = $pdo->prepare("SELECT rel_path, filename, status FROM db_backup_log WHERE id=? LIMIT 1");
+    $st->execute([$logId]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return ['ok'=>false,'msg'=>'找不到該筆備份'];
+    if ($row['status'] === 'deleted') return ['ok'=>false,'msg'=>'該備份已刪除'];
+
+    $abs = BK_REPO . '\\' . str_replace('/', '\\', $row['rel_path']);
+    $inGit = false;
+    if (is_file($abs)) {
+        [$rc] = eg_bk_git(['rm', '-q', '--', $row['rel_path']]);   // git rm 會一併刪工作區檔
+        if ($rc !== 0) { @unlink($abs); }                            // 不在 git 索引就直接刪檔
+        else $inGit = true;
+    } else {
+        // 工作區已被 prune,但可能仍在 git 歷史（僅能靠 purge 清除）
+    }
+    if ($inGit) {
+        eg_bk_git(['commit', '-m', "delete: {$row['filename']}（{$by} 手動刪除）"]);
+        // 刪除的目的是防資料外流 → 不看 auto_push 設定,一律立即推送雲端
+        eg_bk_git(['push', 'origin', 'HEAD']);
+    }
+    $pdo->prepare("UPDATE db_backup_log SET status='deleted', note=CONCAT(COALESCE(note,''),' [', ?, ' 刪除;歷史仍在git,徹底清除請用清除歷史]') WHERE id=?")
+        ->execute([$by, $logId]);
+    return ['ok'=>true,'msg'=>'已刪除備份 ' . $row['filename'] . '（Git 歷史中仍有殘留，要徹底清除請執行「徹底清除Git歷史」）'];
+}
+
+// ── 徹底清除 Git 歷史：把備份庫壓縮成「只含目前工作區」的單一新版本並強制推送 ──
+// 原理：orphan branch squash——舊 commit 全數變成無法到達,本地 gc 立即回收,
+// GitHub 端舊資料失去參照後由其垃圾回收清除（非即時,一般數週內;急件需向 GitHub 客服申請）。
+function eg_bk_purge_history(PDO $pdo, string $by): array {
+    // 先確認工作區乾淨（避免壓縮時把未提交狀態弄丟）
+    [$sc, $sout] = eg_bk_git(['status', '--porcelain']);
+    if (trim($sout) !== '') {
+        eg_bk_git(['add', '-A']);
+        eg_bk_git(['commit', '-m', 'auto: 清除歷史前先提交工作區']);
+    }
+    [$c1, $o1] = eg_bk_git(['checkout', '--orphan', '_purge_tmp']);
+    if ($c1 !== 0) return ['ok'=>false,'msg'=>'建立壓縮分支失敗：' . mb_substr($o1, 0, 300)];
+    eg_bk_git(['add', '-A']);
+    [$c2, $o2] = eg_bk_git(['commit', '-m', "purge: 歷史壓縮為單一版本（{$by} 執行,防資料外流）"]);
+    if ($c2 !== 0) { eg_bk_git(['checkout', 'master']); eg_bk_git(['branch', '-D', '_purge_tmp']); return ['ok'=>false,'msg'=>'壓縮提交失敗：' . mb_substr($o2, 0, 300)]; }
+    eg_bk_git(['branch', '-M', 'master']);                            // 取代 master
+    [$c3, $o3] = eg_bk_git(['push', '-f', 'origin', 'master']);       // 強制推送(清雲端歷史一定要推,不看 auto_push)
+    // 本地立即回收舊物件
+    eg_bk_git(['reflog', 'expire', '--expire=now', '--all']);
+    eg_bk_git(['gc', '--prune=now', '--aggressive']);
+    // 歷史沒了 → 已 prune 的備份無法再從歷史取回,把 log 上的 git_commit 全部清空並註記
+    $pdo->exec("UPDATE db_backup_log SET git_commit=NULL WHERE status IN ('success','deleted')");
+    $pushMsg = ($c3 === 0) ? '雲端歷史已強制覆蓋' : ('雲端推送失敗(' . mb_substr($o3, 0, 200) . '),本地歷史已清');
+    return ['ok'=>true,'msg'=>'Git 歷史已壓縮成單一版本。' . $pushMsg . '。GitHub 端舊資料將由其垃圾回收機制清除(非即時)。'];
 }
 
 // ═════════════════════════ Phase 2：誤刪救援（部分還原） ═════════════════════════
