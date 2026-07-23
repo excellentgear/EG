@@ -490,8 +490,14 @@ case 'instance_submit': {
                 $secKey = $s['key'] ?? 'cs';
                 $ordered = [];
                 if ($csBlock && ($csBlock['section'] ?? 'cs')===$secKey || $csBlock && !$csCell) {
-                    // 會簽區塊：dept_ids 全部參與，依設計順序（filler 排序欄僅舊欄有）
-                    foreach (($csBlock['dept_ids'] ?? []) as $idx=>$did) $ordered[] = ['dept'=>(int)$did, 'seq'=>$idx];
+                    // 會簽區塊：每列勾選(bk_use@dept)有勾的部門才建簽核關卡（沒勾＝只是不必填、不簽）
+                    $bkc = $csBlock['key'] ?? 'cs';
+                    foreach (($csBlock['dept_ids'] ?? []) as $idx=>$did) {
+                        $uv = $data[$bkc.'_use@'.$did] ?? '';
+                        $part = is_array($uv) ? count($uv)>0 : ($uv==='1' || $uv===1 || $uv===true);
+                        if (!$part) continue;
+                        $ordered[] = ['dept'=>(int)$did, 'seq'=>$idx];
+                    }
                 } elseif ($csCell) {
                     $ckRaw = $data[$csCell['key']] ?? [];
                     $checked = array_values(array_filter(array_map('intval', is_array($ckRaw) ? $ckRaw : explode(',', (string)$ckRaw))));

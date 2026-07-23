@@ -261,14 +261,23 @@
 
     function unit(id) {
       var dname = (ctx.deptMap && ctx.deptMap[String(id)]) || id;
-      var dis = edit[String(id)] ? '' : ' disabled';   // 僅該部門輪到的簽核人可填
+      var dis = edit[String(id)] ? '' : ' disabled';   // 決定/意見：僅該部門輪到的簽核人可填
       var kd = bk + '_dec@' + id, kn = bk + '_note@' + id, sigK = bsec + '@' + id, sig = data['__sig_' + sigK];
+      // 參與勾選（部門名左側）：填表人於填寫階段勾選，有勾選才需簽；沒勾選只是不必填
+      var useKey = bk + '_use@' + id, useVal = data[useKey];
+      var participating = Array.isArray(useVal) ? useVal.length > 0 : !!useVal;
+      var chkDis = (mode === 'fill') ? '' : ' disabled';   // 只有填表階段可改勾選
+      var chk = '<label style="font-weight:normal;margin:0 5px 0 0;"><input type="checkbox" data-key="' + esc(useKey) + '" value="1"' + (participating ? ' checked' : '') + chkDis + '></label>';
+      var decReq = (participating && cell.dec_required) ? '<span class="req-star">*</span>' : '';
       return {
-        name: esc(dname),
-        dec: '<select data-key="' + esc(kd) + '" data-cs-dept="' + esc(id) + '"' + dis + '><option value=""></option><option' + (data[kd] === '同意' ? ' selected' : '') + '>同意</option><option' + (data[kd] === '不同意' ? ' selected' : '') + '>不同意</option></select>',
+        part: participating,
+        name: chk + esc(dname),
+        dec: '<select data-key="' + esc(kd) + '" data-cs-dept="' + esc(id) + '"' + dis + '><option value=""></option><option' + (data[kd] === '同意' ? ' selected' : '') + '>同意</option><option' + (data[kd] === '不同意' ? ' selected' : '') + '>不同意</option></select>' + decReq,
         note: '<input type="text" data-key="' + esc(kn) + '" data-cs-dept="' + esc(id) + '" value="' + esc(data[kn] || '') + '" placeholder="意見"' + dis + '>',
-        sig: sig ? '<span class="sig-slot" data-sig="' + esc(sigK) + '"><span>' + esc(sig.name) + '</span><span class="sig-hint"> ' + esc(sig.at || '') + '</span></span>'
-                 : '<span class="sig-slot" data-sig="' + esc(sigK) + '"><span class="sig-hint">（待簽核）</span></span>'
+        sig: participating
+              ? (sig ? '<span class="sig-slot" data-sig="' + esc(sigK) + '"><span>' + esc(sig.name) + '</span><span class="sig-hint"> ' + esc(sig.at || '') + '</span></span>'
+                     : '<span class="sig-slot" data-sig="' + esc(sigK) + '"><span class="sig-hint">（待簽核）</span></span>')
+              : '<span class="sig-hint">免簽</span>'
       };
     }
     var out = '';
@@ -309,9 +318,14 @@
         var v = data[c.key];
         (Array.isArray(v) ? v : String(v || '').split(',').filter(Boolean)).forEach(function (id) { csInfo.checked[String(id)] = true; });
       }
-      if (c.type === 'cs_block') {    // 會簽區塊：部門在區塊上選定，全部參與
+      if (c.type === 'cs_block') {    // 會簽區塊：候選部門在區塊選定，實際參與看每列勾選(bk_use@dept)
         csInfo.hasCs = true;
-        (c.dept_ids || []).forEach(function (id) { csInfo.checked[String(id)] = true; if (csInfo.candidates.indexOf(id) < 0) csInfo.candidates.push(id); });
+        var bkc = c.key || 'cs';
+        (c.dept_ids || []).forEach(function (id) {
+          if (csInfo.candidates.indexOf(id) < 0) csInfo.candidates.push(id);
+          var uv = data[bkc + '_use@' + id];
+          if (Array.isArray(uv) ? uv.length > 0 : !!uv) csInfo.checked[String(id)] = true;
+        });
       }
     });
     (opts.editDepts || []).forEach(function (id) { csInfo.edit[String(id)] = true; });
