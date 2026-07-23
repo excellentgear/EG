@@ -126,6 +126,7 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
         <?php if ($IS_ADMIN): ?>
         <button class="btn btn-sm btn-default" onclick="openSettings()"><i class="fa fa-cog"></i> 設定</button>
         <button class="btn btn-sm btn-default" onclick="openPerm()"><i class="fa fa-key"></i> 角色權限</button>
+        <button class="btn btn-sm btn-default" onclick="purgeHistory()" title="把Git備份庫壓縮成只剩目前檔案的單一版本,雲端舊歷史一併覆蓋(防資料外流)"><i class="fa fa-eraser"></i> 徹底清除Git歷史</button>
         <?php endif; ?>
       </div>
       <div style="font-size:12px;color:#9a7b4f;margin-top:8px;">
@@ -350,7 +351,8 @@ function loadList(){
         act += '<a class="btn btn-xs btn-default" href="'+API+'?action=download&id='+r.id+'"><i class="fa fa-download"></i></a> ';
         if(PERM.restore_partial) act += '<button class="btn btn-xs btn-default" onclick="viewLoad('+r.id+')" title="載入此備份到誤刪救援檢視區"><i class="fa fa-life-ring"></i> 載入救援</button> ';
         if(PERM.restore_table) act += '<button class="btn btn-xs btn-default" onclick="openRestoreTable('+r.id+',\''+esc(r.filename)+'\',\''+esc(r.created_at)+'\')">整表還原</button> ';
-        if(PERM.restore_full)  act += '<button class="btn btn-xs btn-coral" onclick="openRestoreFull('+r.id+',\''+esc(r.filename)+'\',\''+esc(r.created_at)+'\')">整庫還原</button>';
+        if(PERM.restore_full)  act += '<button class="btn btn-xs btn-coral" onclick="openRestoreFull('+r.id+',\''+esc(r.filename)+'\',\''+esc(r.created_at)+'\')">整庫還原</button> ';
+        if(PERM.is_admin)      act += '<button class="btn btn-xs btn-default" onclick="deleteBackup('+r.id+',\''+esc(r.filename)+'\')" title="刪除此備份(git rm+推送;NAS複本不動)"><i class="fa fa-trash-o"></i></button>';
       }
       const trigMap={auto:'自動',manual:'手動','pre-restore':'還原前快照'};
       h += '<tr>'
@@ -482,6 +484,17 @@ function delRole(){ if(!curRoleId) return; if(!confirm('確定刪除此角色？
 function saveFeats(){ if(!curRoleId) return;
   const feats=$('.featcb:checked').map(function(){return this.value;}).get();
   $.post(RAPI,{action:'save_role_features',role_id:curRoleId,features:JSON.stringify(feats)},function(r){ alert(r.success?'已儲存功能':r.message); },'json'); }
+
+// ── 刪除備份 / 徹底清除Git歷史（僅管理員）──
+function deleteBackup(id, name){
+  if(!confirm('刪除備份「'+name+'」?\n\n・工作區與Git最新版會移除並推送雲端\n・NAS上的複本不會動\n・Git歷史仍有殘留,要連歷史清掉請再執行「徹底清除Git歷史」')) return;
+  $.post(API,{action:'delete_backup',id:id},function(res){ alert(res.message||''); if(res.success) loadList(); },'json');
+}
+function purgeHistory(){
+  const w = prompt('這會把Git備份庫的「所有歷史版本」壓縮成只剩目前檔案的單一版本,並強制覆蓋雲端(GitHub)——已刪除備份與已被汰換的舊備份將無法再從歷史找回。\n\nNAS複本與現行工作區檔案不受影響。\n\n確定請輸入「清除歷史」四字:');
+  if(w===null) return;
+  $.post(API,{action:'purge_history',confirm:w},function(res){ alert(res.message||''); if(res.success) loadList(); },'json');
+}
 
 // ═══════════ 誤刪救援（部分還原）Phase 2 ═══════════
 let scanDone=false, vwPollTimer=null, vwRows=[];
