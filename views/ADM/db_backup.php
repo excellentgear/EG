@@ -134,6 +134,61 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
       </div>
     </div>
 
+    <!-- 路徑遷移工具（換NAS/換機;僅管理員）-->
+    <?php if ($IS_ADMIN): ?>
+    <div class="bk-card" id="pmCard">
+      <h4 style="cursor:pointer;" onclick="$('#pmBody').toggle(); if($('#pmBody').is(':visible')&&!pmLoaded)pmLoad();">
+        <i class="fa fa-exchange"></i> 路徑遷移工具（換 NAS / 換主機 / 測試機用）
+        <small style="color:#9a7b4f;font-weight:400;">點此展開——盤點全系統 NAS 路徑,一鍵把舊位置對應到新位置,並可搬移檔案</small></h4>
+      <div id="pmBody" style="display:none;">
+        <!-- 批次前綴替換 -->
+        <div style="border:1px solid #e6d8c3;border-radius:6px;padding:10px;margin-bottom:10px;background:#fffaf2;">
+          <b style="color:var(--amber-d);">① 批次前綴替換</b>
+          <span style="font-size:12px;color:#9a7b4f;">把所有「以舊前綴開頭」的設定值與資料庫路徑,一口氣換成新前綴（不分大小寫比對）</span>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+            <input type="text" id="pmOld" class="form-control" style="width:280px;" placeholder="舊前綴 例:\\excellentnas 或 Z:">
+            <i class="fa fa-long-arrow-right" style="color:var(--amber);"></i>
+            <input type="text" id="pmNew" class="form-control" style="width:280px;" placeholder="新前綴 例:\\newnas 或 D:\nasdata">
+            <button class="btn btn-sm btn-default" onclick="pmBulk(true)"><i class="fa fa-eye"></i> 預覽影響範圍</button>
+            <button class="btn btn-sm btn-coral" onclick="pmBulk(false)"><i class="fa fa-bolt"></i> 執行替換</button>
+          </div>
+          <div id="pmBulkResult" style="margin-top:8px;font-size:12px;"></div>
+        </div>
+        <!-- 檔案搬運 -->
+        <div style="border:1px solid #e6d8c3;border-radius:6px;padding:10px;margin-bottom:10px;background:#fffaf2;">
+          <b style="color:var(--amber-d);">② 檔案搬運</b>
+          <span style="font-size:12px;color:#9a7b4f;">把舊位置的附件實體檔複製到新位置（背景 robocopy,含子資料夾;只新增不刪除目的地既有檔）</span>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+            <input type="text" id="pmSrc" class="form-control" style="width:300px;" placeholder="來源 例:E:\USB帶來的NAS備份\BOM">
+            <i class="fa fa-long-arrow-right" style="color:var(--amber);"></i>
+            <input type="text" id="pmDst" class="form-control" style="width:300px;" placeholder="目的 例:D:\nasdata\BOM">
+            <button class="btn btn-sm btn-amber" onclick="pmCopyStart()"><i class="fa fa-copy"></i> 開始複製</button>
+          </div>
+          <div id="pmCopyStatus" style="margin-top:8px;font-size:12px;white-space:pre-wrap;font-family:monospace;"></div>
+        </div>
+        <!-- 盤點清單 -->
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:420px;">
+            <b style="color:var(--amber-d);font-size:13px;">③ 路徑設定值盤點</b>
+            <div style="overflow-x:auto;max-height:300px;overflow-y:auto;border:1px solid #e6d8c3;border-radius:6px;margin-top:4px;">
+              <table class="bk-tbl"><thead><tr><th>模組</th><th>設定鍵</th><th>目前值</th><th>狀態</th><th></th></tr></thead>
+              <tbody id="pmSettingsBody"><tr><td colspan="5" style="color:#999;padding:10px;">展開後載入…</td></tr></tbody></table>
+            </div>
+          </div>
+          <div style="flex:1;min-width:380px;">
+            <b style="color:var(--amber-d);font-size:13px;">④ 資料庫存完整路徑的表（批次替換會一併處理）</b>
+            <div style="overflow-x:auto;max-height:140px;overflow-y:auto;border:1px solid #e6d8c3;border-radius:6px;margin-top:4px;">
+              <table class="bk-tbl"><thead><tr><th>模組</th><th>欄位</th><th>路徑前綴</th><th>筆數</th></tr></thead>
+              <tbody id="pmTablesBody"><tr><td colspan="4" style="color:#999;padding:10px;">展開後載入…</td></tr></tbody></table>
+            </div>
+            <div style="font-size:12px;color:#8a5a1a;background:#fdf0dc;border:1px solid #e9c98f;border-radius:5px;padding:6px 10px;margin-top:8px;" id="pmHardcoded">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <?php endif; ?>
+
     <!-- 誤刪救援（部分還原）Phase 2 -->
     <div class="bk-card" id="partialCard" style="display:none;">
       <h4><i class="fa fa-life-ring"></i> 誤刪救援（部分還原）
@@ -484,6 +539,78 @@ function delRole(){ if(!curRoleId) return; if(!confirm('確定刪除此角色？
 function saveFeats(){ if(!curRoleId) return;
   const feats=$('.featcb:checked').map(function(){return this.value;}).get();
   $.post(RAPI,{action:'save_role_features',role_id:curRoleId,features:JSON.stringify(feats)},function(r){ alert(r.success?'已儲存功能':r.message); },'json'); }
+
+// ── 路徑遷移工具（僅管理員）──
+let pmLoaded=false, pmCopyTimer=null;
+function pmLoad(){
+  pmLoaded=true;
+  $.getJSON(API,{action:'path_inventory'},function(res){
+    if(!res.success){ alert(res.message||'盤點失敗'); return; }
+    const d=res.data||{};
+    let h='';
+    (d.settings||[]).forEach(function(s){
+      const st = s.kind==='url' ? '<span class="pill">網頁別名</span>'
+               : s.exists===true ? '<span class="st-badge st-success">可連</span>'
+               : s.exists===false ? '<span class="st-badge st-fail">連不到</span>'
+               : '<span class="pill">未設定</span>';
+      h+='<tr><td>'+esc(s.label)+'</td><td style="font-family:monospace;font-size:11px;">'+esc(s.key)+'</td>'
+        +'<td style="font-family:monospace;font-size:11px;max-width:260px;word-break:break-all;">'+esc(s.value||'（空）')+'</td>'
+        +'<td>'+st+'</td>'
+        +'<td><button class="btn btn-xs btn-default" onclick="pmEdit(\''+esc(s.scope)+'\',\''+esc(s.key)+'\',\''+esc((s.value||'').replace(/\\/g,'\\\\'))+'\')"><i class="fa fa-pencil"></i></button></td></tr>';
+    });
+    $('#pmSettingsBody').html(h||'<tr><td colspan="5" style="color:#999;">無</td></tr>');
+    let h2='';
+    (d.fullpath||[]).forEach(function(t){
+      h2+='<tr><td>'+esc(t.label)+'</td><td style="font-family:monospace;font-size:11px;">'+esc(t.column)+'</td>'
+        +'<td style="font-family:monospace;font-size:11px;max-width:220px;word-break:break-all;">'+esc(t.prefix)+'…</td><td>'+t.cnt+'</td></tr>';
+    });
+    $('#pmTablesBody').html(h2||'<tr><td colspan="4" style="color:#999;">目前沒有任何存完整路徑的資料（都是空表）</td></tr>');
+    $('#pmHardcoded').html('<b>⑤ 程式碼寫死路徑的頁面('+(d.hardcoded||[]).length+'頁,本工具管不到):</b> '
+      +'bom_viewer、part_viewer、訂單追蹤圖檔掃描等。<b>最穩解法:新機沿用相同的 Z: 磁碟機對應與 excellentnas 主機名稱</b>(net use Z: 新位置;NAS主機名/分享名照舊),程式一行都不用改。清單詳見遷移包README。');
+  });
+  pmCopyPoll();
+}
+function pmEdit(scope,key,cur){
+  const v = prompt('修改設定「'+key+'」的路徑值:', cur.replace(/\\\\/g,'\\'));
+  if(v===null) return;
+  $.post(API,{action:'path_set_setting',scope:scope,key:key,value:v},function(res){
+    alert(res.message||''); if(res.success){ pmLoaded=false; pmLoad(); }
+  },'json');
+}
+function pmBulk(dry){
+  const o=$('#pmOld').val().trim(), n=$('#pmNew').val().trim();
+  if(!o||!n){ alert('舊前綴與新前綴都要填'); return; }
+  if(!dry && !confirm('確定把所有以「'+o+'」開頭的路徑替換成「'+n+'」?\n(建議先按「預覽影響範圍」)')) return;
+  $.post(API,{action:'path_bulk_prefix',old:o,new:n,dry:dry?'1':'0'},function(res){
+    if(!res.success){ alert(res.message||''); return; }
+    let h='<b>'+esc(res.message)+'</b><ul style="margin:4px 0 0 18px;">';
+    (res.items||[]).forEach(function(it){
+      h+='<li>'+esc(it.label||it.key||it.table)+'：<code>'+esc(it.from)+'</code> → <code>'+esc(it.to)+'</code>（'+it.cnt+'筆）</li>';
+    });
+    h+='</ul>';
+    if(!(res.items||[]).length) h='<b>'+esc(res.message)+'</b>（沒有任何項目以此前綴開頭）';
+    $('#pmBulkResult').html(h);
+    if(!dry){ pmLoaded=false; pmLoad(); }
+  },'json');
+}
+function pmCopyStart(){
+  const s=$('#pmSrc').val().trim(), d=$('#pmDst').val().trim();
+  if(!s||!d){ alert('來源與目的都要填'); return; }
+  if(!confirm('開始把\n'+s+'\n複製到\n'+d+'\n?(背景執行,只新增不刪除)')) return;
+  $.post(API,{action:'path_copy_start',src:s,dst:d},function(res){
+    alert(res.message||''); if(res.success) pmCopyPoll();
+  },'json');
+}
+function pmCopyPoll(){
+  $.getJSON(API,{action:'path_copy_status'},function(res){
+    if(!res.success) return;
+    const d=res.data||{};
+    if(d.status==='idle'){ $('#pmCopyStatus').text(''); return; }
+    const map={running:'⏳ 複製中…',done:'✅ 完成',fail:'❌ 失敗'};
+    $('#pmCopyStatus').text((map[d.status]||d.status)+'  '+d.src+' → '+d.dst+(d.log?'\n'+d.log:''));
+    if(d.status==='running'){ clearTimeout(pmCopyTimer); pmCopyTimer=setTimeout(pmCopyPoll,5000); }
+  });
+}
 
 // ── 刪除備份 / 徹底清除Git歷史（僅管理員）──
 function deleteBackup(id, name){
