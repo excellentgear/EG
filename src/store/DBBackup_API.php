@@ -147,11 +147,18 @@ switch ($action) {
         if (!$r['ok']) { http_response_code(404); header('Content-Type:text/plain; charset=utf-8'); echo $r['msg']; exit; }
         $st = $pdo->prepare("SELECT filename FROM db_backup_log WHERE id=?"); $st->execute([$id]);
         $fname = $st->fetchColumn() ?: ('backup_' . $id . '.sql');
+        // 加固：清空所有輸出緩衝、關閉壓縮,避免大檔下載被緩衝/壓縮干擾成空檔或截斷
+        while (ob_get_level() > 0) { @ob_end_clean(); }
+        @ini_set('zlib.output_compression', '0');
+        $fsize = filesize($r['path']);
+        if ($fsize === false || $fsize <= 0) { http_response_code(500); header('Content-Type:text/plain; charset=utf-8'); echo '備份檔讀取失敗'; exit; }
+        set_time_limit(0);
         header('Content-Type: application/sql; charset=utf-8');
         header('Content-Disposition: attachment; filename="' . $fname . '"');
-        header('Content-Length: ' . filesize($r['path']));
+        header('Content-Length: ' . $fsize);
         header('X-Content-Type-Options: nosniff');
-        readfile($r['path']);
+        $fh = fopen($r['path'], 'rb');
+        if ($fh) { while (!feof($fh)) { echo fread($fh, 1048576); flush(); } fclose($fh); }
         if ($r['temp']) @unlink($r['path']);
         exit;
     }
@@ -196,6 +203,23 @@ switch ($action) {
                         . '（還原前已自動快照：' . ($snap['ok'] ? $snap['filename'] : ('快照未成功-' . $snap['msg'])) . '）';
         $res['success'] = $res['ok'];
         out($res);
+    }
+
+    // ── 刪除備份（僅管理員；git rm+commit+push,NAS複本不動,歷史殘留需另清）──
+    case 'delete_backup': {
+        if (!$IS_ADMIN) deny();
+        $id = (int)($_POST['id'] ?? 0);
+        $res = eg_bk_delete_backup($pdo, $id, $by);
+        out(['success'=>$res['ok'],'message'=>$res['msg']]);
+    }
+
+    // ── 徹底清除 Git 歷史（僅管理員；歷史壓縮為單一版本+強制推送雲端）──
+    case 'purge_history': {
+        if (!$IS_ADMIN) deny();
+        if (trim((string)($_POST['confirm'] ?? '')) !== '清除歷史') out(['success'=>false,'message'=>'請輸入「清除歷史」四字確認']);
+        set_time_limit(600);
+        $res = eg_bk_purge_history($pdo, $by);
+        out(['success'=>$res['ok'],'message'=>$res['msg']]);
     }
 
     // ═════════════════ Phase 2：誤刪救援（部分還原） ═════════════════
