@@ -118,6 +118,7 @@ function statusChip(st){
 
 function render(mode, data, editDepts){
   $('#formHost').html(EGForm.renderForm(schema,{mode,data,ctx,editDepts:editDepts||[]}));
+  EGForm.applyPrintSettings(schema);                     // 依表單設定套用列印紙張/縮放
   if(mode==='fill') EGForm.bindFormUX($('#formHost'));   // 內含首次重算
   else EGForm.updateComputed($('#formHost'));            // 檢視模式也要畫圖表/公式
 

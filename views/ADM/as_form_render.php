@@ -92,6 +92,7 @@ const RENDER_CTX = <?php echo $renderCtx; ?>;  // 表頭/表尾即時值 {compan
 $(function(){
   const $host = $('#formHost');
   $host.html(EGForm.renderForm(SCHEMA, {mode:'fill', ctx:RENDER_CTX}));
+  EGForm.applyPrintSettings(SCHEMA);
   EGForm.bindFormUX($host);
 });
 </script>

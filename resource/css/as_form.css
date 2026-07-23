@@ -18,7 +18,13 @@
 .eg-form td.cell-sig{background:#fffdf8;height:70px;vertical-align:bottom;text-align:center;color:#9a8b73;}
 .eg-form td.cell-sig .sig-hint{color:#b7a488;font-size:11px;}
 .eg-form input[type=text],.eg-form input[type=number],.eg-form input[type=date],.eg-form select,.eg-form textarea{
-  width:100%;border:none;background:transparent;font-size:13px;color:#3a2a17;padding:2px 3px;outline:none;}
+  width:100%;border:none;background:transparent;font-size:13px;line-height:1.5;color:#3a2a17;padding:2px 3px;outline:none;
+  font-family:inherit;vertical-align:middle;height:24px;box-sizing:border-box;}
+.eg-form textarea{height:auto;}
+/* 下拉：字級/行高/對齊比照文字欄，選後顯示值與標題一致 */
+.eg-form select{-webkit-appearance:none;-moz-appearance:none;appearance:none;
+  background-image:url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D'http%3A//www.w3.org/2000/svg'%20viewBox%3D'0%200%2010%206'%3E%3Cpath%20fill%3D'%23c9a877'%20d%3D'M0%200l5%206%205-6z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 4px center;background-size:8px;padding-right:16px;}
 .eg-form input:focus,.eg-form select:focus,.eg-form textarea:focus{background:#fdf4e6;box-shadow:inset 0 -2px 0 var(--warm-focus);}
 .eg-form textarea{resize:vertical;min-height:120px;line-height:1.6;}
 .eg-form input[type=number]::-webkit-outer-spin-button,

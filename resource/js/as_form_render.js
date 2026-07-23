@@ -381,6 +381,24 @@
     updateComputed($host);
   }
 
+  // ══ 列印設定：依 schema.meta.print 注入 @page（紙張/方向/邊界）＋縮放，列印時自動套用 ══
+  // 遵守列印分頁鐵則：只設紙張與縮放，分頁仍交瀏覽器原生處理（不量高度自算）
+  function applyPrintSettings(schema) {
+    var p = (schema && schema.meta && schema.meta.print) || {};
+    var paper = p.paper || 'A4';
+    var orient = p.orientation === 'landscape' ? 'landscape' : 'portrait';
+    var margin = (p.margin != null && p.margin !== '') ? p.margin : 10;
+    var scale = (p.scale != null && p.scale !== '') ? p.scale : 100;
+    var css = '@media print{'
+      + '@page{ size:' + paper + ' ' + orient + '; margin:' + margin + 'mm; }'
+      + (Number(scale) !== 100 ? '.form-sheet,.preview-host{ zoom:' + (Number(scale) / 100) + '; }' : '')
+      + '}';
+    var el = document.getElementById('egPrintStyle');
+    if (!el) { el = document.createElement('style'); el.id = 'egPrintStyle'; document.head.appendChild(el); }
+    el.textContent = css;
+  }
+
   global.EGForm = { renderForm: renderForm, cellClass: cellClass, cellInner: cellInner, esc: esc,
-                    bindFormUX: bindFormUX, updateComputed: updateComputed, evalFormula: evalFormula };
+                    bindFormUX: bindFormUX, updateComputed: updateComputed, evalFormula: evalFormula,
+                    applyPrintSettings: applyPrintSettings };
 })(window);

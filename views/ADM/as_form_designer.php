@@ -67,6 +67,7 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
   <label class="req-mini" style="margin:0;"><input type="checkbox" id="chkHeader" checked> 表頭</label>
   <label class="req-mini" style="margin:0;"><input type="checkbox" id="chkFooter" checked> 表尾</label>
   <span class="sep"></span>
+  <button class="btn btn-default btn-sm" id="btnPrintSet"><i class="fa fa-print"></i> 列印設定</button>
   <button class="btn btn-info btn-sm" id="btnPreview"><i class="fa fa-eye"></i> 預覽</button>
   <button class="btn btn-success btn-sm" id="btnSave"><i class="fa fa-save"></i> 存草稿</button>
   <button class="btn btn-warning btn-sm" id="btnPublish"><i class="fa fa-upload"></i> 發布</button>
@@ -231,6 +232,24 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
     </div>
   </div>
 </div>
+
+<!-- 列印設定 Modal -->
+<div class="modal fade" id="printModal" tabindex="-1"><div class="modal-dialog" style="width:440px;"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-print"></i> 列印設定</h4></div>
+  <div class="modal-body">
+    <p class="muted" style="font-size:12px;">設定後，填寫頁/預覽按「列印」會自動套用此紙張與縮放；分頁仍由瀏覽器依內容原生換頁。</p>
+    <div class="form-group"><label>紙張大小</label>
+      <select class="form-control input-sm" id="prPaper"><option>A4</option><option>A5</option><option>B4</option><option>B5</option><option>Letter</option><option>Legal</option></select></div>
+    <div class="form-group"><label>方向</label>
+      <select class="form-control input-sm" id="prOrient"><option value="portrait">直向</option><option value="landscape">橫向</option></select></div>
+    <div class="row">
+      <div class="form-group col-xs-6"><label>邊界（mm）</label><input type="number" class="form-control input-sm" id="prMargin" min="0" max="40"></div>
+      <div class="form-group col-xs-6"><label>縮放（%）</label><input type="number" class="form-control input-sm" id="prScale" min="30" max="200">
+        <span class="muted">內容超過一頁想擠回少頁時調小（如 85）</span></div>
+    </div>
+  </div>
+  <div class="modal-footer"><button class="btn btn-primary btn-sm" id="prSave" data-dismiss="modal"><i class="fa fa-check"></i> 套用</button></div>
+</div></div></div>
 
 <!-- 預覽 Modal -->
 <div class="modal fade" id="previewModal" tabindex="-1"><div class="modal-dialog" style="width:860px;"><div class="modal-content">
@@ -674,10 +693,28 @@ $('#secTable').on('change','input,select',function(){
 });
 
 // ── 預覽 / 存 / 發布 ──
+// ── 列印設定 ──
+$('#btnPrintSet').on('click',function(){
+  const p=(schema.meta&&schema.meta.print)||{};
+  $('#prPaper').val(p.paper||'A4');
+  $('#prOrient').val(p.orientation||'portrait');
+  $('#prMargin').val(p.margin!=null?p.margin:10);
+  $('#prScale').val(p.scale!=null?p.scale:100);
+  $('#printModal').modal('show');
+});
+$('#prSave').on('click',function(){
+  schema.meta=schema.meta||{};
+  schema.meta.print={ paper:$('#prPaper').val(), orientation:$('#prOrient').val(),
+    margin:parseInt($('#prMargin').val())||0, scale:parseInt($('#prScale').val())||100 };
+  EGForm.applyPrintSettings(schema);
+  scheduleSave();
+});
+
 $('#btnPreview').on('click',function(){
   syncMeta();
   $('#previewHost').html(EGForm.renderForm(schema,{mode:'fill',ctx}));
   EGForm.bindFormUX($('#previewHost'));   // 預覽可實際輸入試算公式/圖表
+  EGForm.applyPrintSettings(schema);
   $('#previewModal').modal('show');
 });
 function syncMeta(){
