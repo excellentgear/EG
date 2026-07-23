@@ -110,12 +110,16 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
       </div>
       <div class="prop-csblock" style="display:none;">
         <div class="form-group">
+          <label>參與會簽的部門（在此直接勾選）</label>
+          <div id="pCsbDeptList" style="max-height:150px;overflow-y:auto;border:1px solid #e0cba0;border-radius:3px;padding:4px 6px;"></div>
+          <span class="muted">勾選的部門會直接展開成主表格的列（或欄），一部門一組</span>
+        </div>
+        <div class="form-group">
           <label>展開方向</label>
           <select class="form-control input-sm" id="pCsbDir">
             <option value="down">往下併（一部門一列）</option>
             <option value="right">往右併（一部門一欄）</option>
           </select>
-          <span class="muted">依「會簽部門勾選」欄位選定的部門數自動展開，一部門一組（部門名/同意不同意/意見/簽章）；未勾選部門灰掛「免會簽」</span>
         </div>
         <div class="form-group">
           <label>區塊代號</label>
@@ -352,7 +356,7 @@ function editInner(cell){
   if(cell.type==='title'||cell.type==='label'||cell.type==='static') return esc(cell.text||'（空）');
   if(cell.type==='signature') return `<span class="celltag">簽</span>${esc(cell.section||'?')}`;
   if(cell.type==='chart') return `<span class="celltag">圖表</span>${({radar:'雷達',bar:'長條',line:'折線'})[(cell.chart&&cell.chart.kind)||'radar']}｜${esc((cell.chart&&cell.chart.fields||[]).join(','))||'未設數據'}`;
-  if(cell.type==='cs_block') return `<span class="celltag">會簽區塊</span>${cell.direction==='right'?'往右併':'往下併'}｜${esc(cell.section||'cs')}`;
+  if(cell.type==='cs_block') return `<span class="celltag">會簽區塊</span>${cell.direction==='right'?'往右併':'往下併'}｜${(cell.dept_ids||[]).length}部門`;
   if(cell.type==='blank') return '';
   const ft={text:'文字',textarea:'多行',number:'數字',date:'日期',select:'下拉',checkbox:'勾選',user_name:'姓名',user_dept:'部門',user_position:'職稱',fixed_dept:'固定部門'}[cell.ftype]||'文字';
   if(cell.ftype==='fixed_dept') return `<span class="celltag">${ft}</span>${esc(cell.dept||'未選')}`;
@@ -392,6 +396,9 @@ function fillProp(){
     `<label style="font-weight:normal;display:inline-block;margin:0 10px 2px 0;white-space:nowrap;"><input type="checkbox" class="csdept-chk" value="${d.id}"${cdids.includes(String(d.id))?' checked':''}> ${esc(d.name)}</label>`).join(''));
   $('#pCsOrder').prop('checked',!!cell.show_order);
   // 會簽區塊屬性
+  const csbDids=(cell.dept_ids||[]).map(String);
+  $('#pCsbDeptList').html(META.departments.map(d=>
+    `<label style="font-weight:normal;display:inline-block;margin:0 10px 2px 0;white-space:nowrap;"><input type="checkbox" class="csbdept-chk" value="${d.id}"${csbDids.includes(String(d.id))?' checked':''}> ${esc(d.name)}</label>`).join(''));
   $('#pCsbDir').val(cell.direction||'down');
   $('#pCsbKey').val(cell.key||'cs');
   $('#pCsbSection').html((schema.sections||[]).filter(s=>(s.rule&&s.rule.type)==='countersign').map(s=>
@@ -469,6 +476,7 @@ function applyProp(withSpan){
     cell.key=$('#pCsbKey').val().trim()||'cs';
     cell.section=$('#pCsbSection').val()||'cs';
     cell.direction=$('#pCsbDir').val()||'down';
+    cell.dept_ids=$('#pCsbDeptList .csbdept-chk:checked').map(function(){return parseInt(this.value);}).get();
     if(!$('#pCsbDec').prop('checked')) cell.show_dec=false;
     else if($('#pCsbDecReq').prop('checked')) cell.dec_required=true;
     if(!$('#pCsbNote').prop('checked')) cell.show_note=false;
@@ -492,6 +500,7 @@ $('#btnApply').on('click',()=>applyProp(true));
 $('#pText,#pKey,#pOptions,#pPattern,#pFormula,#pChartFields,#pChartLabels,#pCsbKey').on('input',()=>applyProp(false));
 $('#pType,#pFtype,#pAlign,#pRequired,#pSection,#pToday,#pFixedDept,#pChartKind,#pChartMax,#pCsOrder,#pCsbDir,#pCsbSection,#pCsbDec,#pCsbDecReq,#pCsbNote,#pCsbNoteReq').on('change',()=>applyProp(false));
 $('#pCsDeptList').on('change','.csdept-chk',()=>applyProp(false));
+$('#pCsbDeptList').on('change','.csbdept-chk',()=>applyProp(false));
 $('#pCs,#pRs').on('change',()=>applyProp(true));
 
 // ── 自動儲存（debounce 1.2 秒；任何 schema 變動後自動存草稿）──

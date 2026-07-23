@@ -34,9 +34,4 @@
 /* 會簽：未被勾選的部門區塊灰掛（免會簽），列印仍呈現與紙本一致 */
 .eg-form td.cs-skip{background:#f3efe8 !important;color:#b7ab97;}
 .eg-form td.cs-skip input,.eg-form td.cs-skip select,.eg-form td.cs-skip textarea{color:#b7ab97;}
-/* 會簽區塊（cs_block）：格內自動展開的內層表，一部門一組 */
-.eg-form table.eg-csb{width:100%;border-collapse:collapse;}
-.eg-form .eg-csb td{border:1px solid #e0cba0;padding:3px 6px;font-size:12px;vertical-align:middle;}
-.eg-form .eg-csb td.csb-hd{background:#f7e0bd;color:#5a3d1e;font-weight:bold;text-align:center;white-space:nowrap;width:1%;}
-.eg-form .eg-csb td.csb-sig{min-height:56px;height:56px;text-align:center;}
-.eg-form .eg-csb td.csb-skip,.eg-form .eg-csb tr.csb-skip td{background:#f3efe8;color:#b7ab97;}
+/* 會簽區塊（cs_block）：於 renderForm 展開為主表格真實列，共用 .cell-label/.cell-field/.cell-sig 樣式，無需獨立 CSS */

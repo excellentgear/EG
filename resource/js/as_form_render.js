@@ -154,46 +154,7 @@
       if (v) return '<span class="sig-slot" data-sig="' + esc(sigKey) + '"><span>' + esc(v.name) + '</span><span class="sig-hint"> ' + esc(v.at || '') + '</span></span>';
       return '<span class="sig-slot" data-sig="' + esc(sigKey) + '"><span class="sig-hint">（待簽核）</span></span>';
     }
-    // ── 會簽區塊：依「會簽部門勾選」的候選部門自動展開，一個部門一組（部門名/同意不同意/意見/簽章）──
-    if (type === 'cs_block') {
-      var cands = cs.candidates || [];
-      if (!cands.length) return '<span class="sig-hint">（會簽區塊：請先在表上放「會簽部門勾選」欄位並選定參與部門）</span>';
-      var bk = cell.key || 'cs';
-      var bsec = cell.section || 'cs';
-      var showDec = cell.show_dec !== false, showNote = cell.show_note !== false;
-      var units = cands.map(function (id) {
-        var dname = (ctx.deptMap && ctx.deptMap[String(id)]) || id;
-        var isCk = !!cs.checked[String(id)];
-        var canEd = isCk && !!cs.edit[String(id)];
-        var dis = canEd ? '' : ' disabled';
-        var kd = bk + '_dec@' + id, kn = bk + '_note@' + id;
-        var sigK = bsec + '@' + id, sig = data['__sig_' + sigK];
-        return {
-          skip: !isCk,
-          name: esc(dname) + (isCk ? '' : '<div class="sig-hint">免會簽</div>'),
-          dec: !isCk ? '' : '<select data-key="' + esc(kd) + '" data-cs-dept="' + esc(id) + '"' + dis + '><option value=""></option><option' + (data[kd] === '同意' ? ' selected' : '') + '>同意</option><option' + (data[kd] === '不同意' ? ' selected' : '') + '>不同意</option></select>',
-          note: !isCk ? '' : '<input type="text" data-key="' + esc(kn) + '" data-cs-dept="' + esc(id) + '" value="' + esc(data[kn] || '') + '" placeholder="意見"' + dis + '>',
-          sig: !isCk ? '<span class="sig-hint">免會簽</span>'
-              : (sig ? '<span class="sig-slot" data-sig="' + esc(sigK) + '"><span>' + esc(sig.name) + '</span><span class="sig-hint"> ' + esc(sig.at || '') + '</span></span>'
-                     : '<span class="sig-slot" data-sig="' + esc(sigK) + '"><span class="sig-hint">（待簽核）</span></span>')
-        };
-      });
-      var h2 = '<table class="eg-csb">';
-      if (cell.direction === 'right') {
-        // 往右併：一部門一欄
-        h2 += '<tr><td class="csb-hd">會簽部門</td>' + units.map(function (u) { return '<td class="' + (u.skip ? 'csb-skip' : '') + '">' + u.name + '</td>'; }).join('') + '</tr>';
-        if (showDec) h2 += '<tr><td class="csb-hd">同意/不同意</td>' + units.map(function (u) { return '<td class="' + (u.skip ? 'csb-skip' : '') + '">' + u.dec + '</td>'; }).join('') + '</tr>';
-        if (showNote) h2 += '<tr><td class="csb-hd">意見</td>' + units.map(function (u) { return '<td class="' + (u.skip ? 'csb-skip' : '') + '">' + u.note + '</td>'; }).join('') + '</tr>';
-        h2 += '<tr><td class="csb-hd">簽章</td>' + units.map(function (u) { return '<td class="csb-sig ' + (u.skip ? 'csb-skip' : '') + '">' + u.sig + '</td>'; }).join('') + '</tr>';
-      } else {
-        // 往下併：一部門一列
-        h2 += '<tr><td class="csb-hd">會簽部門</td>' + (showDec ? '<td class="csb-hd">同意/不同意</td>' : '') + (showNote ? '<td class="csb-hd">意見</td>' : '') + '<td class="csb-hd">簽章</td></tr>';
-        units.forEach(function (u) {
-          h2 += '<tr class="' + (u.skip ? 'csb-skip' : '') + '"><td>' + u.name + '</td>' + (showDec ? '<td>' + u.dec + '</td>' : '') + (showNote ? '<td>' + u.note + '</td>' : '') + '<td class="csb-sig">' + u.sig + '</td></tr>';
-        });
-      }
-      return h2 + '</table>';
-    }
+    // cs_block 於 renderForm 列層級展開為真實表格列（見 renderCsBlockRows），不在此輸出
     if (type === 'chart') {
       // 圖表格：數據來源＝表內欄位代號，updateComputed 時繪製/重繪
       var ch = cell.chart || {};
@@ -290,6 +251,50 @@
     }
   }
 
+  // 會簽區塊 → 主表格真實列（部門在區塊上選定；一部門一列或一欄；同 eg-form 邊框，非巢狀表）
+  function renderCsBlockRows(cell, cols, mode, data, ctx, csInfo) {
+    var depts = cell.dept_ids || [];
+    var edit = (csInfo && csInfo.edit) || {};
+    var bk = cell.key || 'cs', bsec = cell.section || 'cs';
+    var showDec = cell.show_dec !== false, showNote = cell.show_note !== false;
+    if (!depts.length) return '<tr><td colspan="' + cols + '" class="cell-field"><span class="sig-hint">（會簽區塊：請在設計器的「會簽區塊」屬性選擇參與部門）</span></td></tr>';
+
+    function unit(id) {
+      var dname = (ctx.deptMap && ctx.deptMap[String(id)]) || id;
+      var dis = edit[String(id)] ? '' : ' disabled';   // 僅該部門輪到的簽核人可填
+      var kd = bk + '_dec@' + id, kn = bk + '_note@' + id, sigK = bsec + '@' + id, sig = data['__sig_' + sigK];
+      return {
+        name: esc(dname),
+        dec: '<select data-key="' + esc(kd) + '" data-cs-dept="' + esc(id) + '"' + dis + '><option value=""></option><option' + (data[kd] === '同意' ? ' selected' : '') + '>同意</option><option' + (data[kd] === '不同意' ? ' selected' : '') + '>不同意</option></select>',
+        note: '<input type="text" data-key="' + esc(kn) + '" data-cs-dept="' + esc(id) + '" value="' + esc(data[kn] || '') + '" placeholder="意見"' + dis + '>',
+        sig: sig ? '<span class="sig-slot" data-sig="' + esc(sigK) + '"><span>' + esc(sig.name) + '</span><span class="sig-hint"> ' + esc(sig.at || '') + '</span></span>'
+                 : '<span class="sig-slot" data-sig="' + esc(sigK) + '"><span class="sig-hint">（待簽核）</span></span>'
+      };
+    }
+    var out = '';
+    if (cell.direction === 'right') {
+      // 一部門一欄：標題欄(1) + 每部門一欄，用 colspan 填滿 cols
+      var N = depts.length, per = Math.max(1, Math.floor((cols - 1) / N));
+      var span = function (i) { return i === N - 1 ? Math.max(1, cols - 1 - per * (N - 1)) : per; };
+      var us = depts.map(unit);
+      out += '<tr><td class="cell-label">會簽部門</td>' + us.map(function (u, i) { return '<td class="cell-label" colspan="' + span(i) + '">' + u.name + '</td>'; }).join('') + '</tr>';
+      if (showDec) out += '<tr><td class="cell-label">同意/不同意</td>' + us.map(function (u, i) { return '<td class="cell-field" colspan="' + span(i) + '">' + u.dec + '</td>'; }).join('') + '</tr>';
+      if (showNote) out += '<tr><td class="cell-label">意見</td>' + us.map(function (u, i) { return '<td class="cell-field" colspan="' + span(i) + '">' + u.note + '</td>'; }).join('') + '</tr>';
+      out += '<tr><td class="cell-label">簽章</td>' + us.map(function (u, i) { return '<td class="cell-sig" colspan="' + span(i) + '">' + u.sig + '</td>'; }).join('') + '</tr>';
+    } else {
+      // 一部門一列：部門 / 同意不同意 / 意見 / 簽章，用 colspan 填滿 cols
+      var wSign = 1, wDec = showDec ? 1 : 0, wNote = 0, wDept;
+      if (showNote) { wDept = 1; wNote = Math.max(1, cols - wDept - wDec - wSign); }
+      else { wDept = Math.max(1, cols - wDec - wSign); }
+      out += '<tr><td class="cell-label" colspan="' + wDept + '">會簽部門</td>' + (showDec ? '<td class="cell-label" colspan="' + wDec + '">同意/不同意</td>' : '') + (showNote ? '<td class="cell-label" colspan="' + wNote + '">意見</td>' : '') + '<td class="cell-label" colspan="' + wSign + '">簽章</td></tr>';
+      depts.forEach(function (id) {
+        var u = unit(id);
+        out += '<tr><td class="cell-label" colspan="' + wDept + '">' + u.name + '</td>' + (showDec ? '<td class="cell-field" colspan="' + wDec + '">' + u.dec + '</td>' : '') + (showNote ? '<td class="cell-field" colspan="' + wNote + '">' + u.note + '</td>' : '') + '<td class="cell-sig" colspan="' + wSign + '">' + u.sig + '</td></tr>';
+      });
+    }
+    return out;
+  }
+
   // schema → HTML table 字串
   // opts: { mode:'fill'|'view', data:{}, ctx:{company,docNo,version} }
   function renderForm(schema, opts) {
@@ -298,11 +303,15 @@
     // 會簽狀態：checked=被勾選部門(從 cs_depts 欄位值)；edit=目前使用者可填寫的會簽部門(opts.editDepts)
     var csInfo = { checked: {}, edit: {}, hasCs: false, candidates: [] };
     (schema.cells || []).forEach(function (c) {
-      if (c.ftype === 'cs_depts') {
+      if (c.ftype === 'cs_depts') {   // 相容：獨立勾選欄（動態勾選參與部門）
         csInfo.hasCs = true;
         csInfo.candidates = c.dept_ids || [];
         var v = data[c.key];
         (Array.isArray(v) ? v : String(v || '').split(',').filter(Boolean)).forEach(function (id) { csInfo.checked[String(id)] = true; });
+      }
+      if (c.type === 'cs_block') {    // 會簽區塊：部門在區塊上選定，全部參與
+        csInfo.hasCs = true;
+        (c.dept_ids || []).forEach(function (id) { csInfo.checked[String(id)] = true; if (csInfo.candidates.indexOf(id) < 0) csInfo.candidates.push(id); });
       }
     });
     (opts.editDepts || []).forEach(function (id) { csInfo.edit[String(id)] = true; });
@@ -319,6 +328,14 @@
 
     var body = '';
     for (var r = 0; r < maxR; r++) {
+      // 會簽區塊：整列展開成多個真實 <tr>（與主表格同一套邊框，非巢狀表）
+      var csb = null;
+      for (var cc = 0; cc < cols; cc++) { var cx = at[r + '_' + cc]; if (cx && cx.type === 'cs_block') { csb = cx; break; } }
+      if (csb) {
+        body += renderCsBlockRows(csb, cols, mode, data, ctx, csInfo);
+        for (var oc = 0; oc < cols; oc++) occ[r][oc] = true;
+        continue;
+      }
       body += '<tr>';
       for (var c = 0; c < cols; c++) {
         if (occ[r][c]) continue;

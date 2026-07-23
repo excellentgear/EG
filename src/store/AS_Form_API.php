@@ -463,9 +463,11 @@ case 'instance_submit': {
     usort($sections, fn($a2,$b2)=>($a2['step']??0)<=>($b2['step']??0));
 
     // 會簽來源欄位（cs_depts）：候選部門＋被勾選部門＋填表時順序
-    $csCell = null;
+    // 會簽參與部門來源：優先「會簽區塊」(cs_block，部門在區塊上選定，全部參與)；否則相容舊「會簽部門勾選」欄(cs_depts，動態勾選)
+    $csBlock = null; $csCell = null;
     foreach (($schemaArr['cells'] ?? []) as $cell) {
-        if (($cell['ftype'] ?? '')==='cs_depts') { $csCell = $cell; break; }
+        if (($cell['type'] ?? '')==='cs_block' && $csBlock===null) $csBlock = $cell;
+        if (($cell['ftype'] ?? '')==='cs_depts' && $csCell===null) $csCell = $cell;
     }
     $deptNames = [];
     try { foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $dn) $deptNames[(int)$dn['id']] = $dn['name']; } catch (Exception $e) {}
@@ -484,20 +486,26 @@ case 'instance_submit': {
             $rule = $s['rule'] ?? [];
             $baseStep = (int)($s['step'] ?? 1) * 100;
             if (($rule['type'] ?? '')==='countersign') {
-                // 條件式會簽：被勾選的部門才建簽核區
-                if (!$csCell) throw new Exception('會簽簽核區需要表上有「會簽部門勾選」欄位');
-                $ckRaw = $data[$csCell['key']] ?? [];
-                $checked = array_values(array_filter(array_map('intval', is_array($ckRaw) ? $ckRaw : explode(',', (string)$ckRaw))));
-                // 順序：parallel=同step；preset=依設計列出順序；filler=依填表順序欄
+                // 參與部門：會簽區塊(cs_block)全部選定部門；或相容舊「會簽部門勾選」欄的被勾選部門
+                $secKey = $s['key'] ?? 'cs';
                 $ordered = [];
-                foreach (($csCell['dept_ids'] ?? []) as $idx=>$did) {
-                    if (!in_array((int)$did, $checked, true)) continue;
-                    $seq = $idx;
-                    if (($rule['order'] ?? '')==='filler') {
-                        $ov = $data[$csCell['key'].'_ord_'.$did] ?? '';
-                        $seq = ($ov!=='' && is_numeric($ov)) ? (int)$ov : 999;
+                if ($csBlock && ($csBlock['section'] ?? 'cs')===$secKey || $csBlock && !$csCell) {
+                    // 會簽區塊：dept_ids 全部參與，依設計順序（filler 排序欄僅舊欄有）
+                    foreach (($csBlock['dept_ids'] ?? []) as $idx=>$did) $ordered[] = ['dept'=>(int)$did, 'seq'=>$idx];
+                } elseif ($csCell) {
+                    $ckRaw = $data[$csCell['key']] ?? [];
+                    $checked = array_values(array_filter(array_map('intval', is_array($ckRaw) ? $ckRaw : explode(',', (string)$ckRaw))));
+                    foreach (($csCell['dept_ids'] ?? []) as $idx=>$did) {
+                        if (!in_array((int)$did, $checked, true)) continue;
+                        $seq = $idx;
+                        if (($rule['order'] ?? '')==='filler') {
+                            $ov = $data[$csCell['key'].'_ord_'.$did] ?? '';
+                            $seq = ($ov!=='' && is_numeric($ov)) ? (int)$ov : 999;
+                        }
+                        $ordered[] = ['dept'=>(int)$did, 'seq'=>$seq];
                     }
-                    $ordered[] = ['dept'=>(int)$did, 'seq'=>$seq];
+                } else {
+                    throw new Exception('會簽簽核區需要表上有「會簽區塊」並選定部門');
                 }
                 usort($ordered, fn($x,$y)=>$x['seq']<=>$y['seq']);
                 foreach ($ordered as $i2=>$od) {
