@@ -14,28 +14,50 @@ include_once '../../src/common/_config.php';
 //     exit;
 // }
 
-@$userId = $_SESSION['userid'];
+// 登入使用者 id：正式登入 (Login.php) 存於 $_SESSION['id']；相容舊鍵 userid
+@$userId = $_SESSION['id'] ?? ($_SESSION['userid'] ?? null);
 
-// 2. 權限檢查：確認使用者是否有 position_id = 99
-@$hasPermission = true; // 暫時取消驗證，強制允許進入
-/*
-try {
-    $permSql = "SELECT COUNT(*) FROM user_department_position_map WHERE user_id = ? AND position_id = 99";
-    $permStmt = $db->prepare($permSql);
-    $permStmt->execute([$userId]);
-    if ($permStmt->fetchColumn() > 0) {
-        $hasPermission = true;
+// 本頁的權限鍵值（供 page_operator_acl 白名單使用）
+$PAGE_KEY = 'system_module_setting';
+
+// 2. 權限檢查：
+//    - 超級管理員（固定 user_id = 1，登入帳號 e）恆有全部權限
+//    - 其餘使用者須被超級管理員加入本頁「操作名單」(page_operator_acl，最多 2 位) 才可進入
+$isSuper = ((int)$userId === 1);
+$hasPermission = $isSuper;
+if (!$hasPermission && !empty($userId)) {
+    try {
+        $permStmt = $db->prepare("SELECT COUNT(*) FROM page_operator_acl WHERE page_key = ? AND user_id = ?");
+        $permStmt->execute([$PAGE_KEY, $userId]);
+        $hasPermission = ($permStmt->fetchColumn() > 0);
+    } catch (PDOException $e) {
+        $hasPermission = false;
     }
-} catch (PDOException $e) {
-    // 錯誤處理：顯示詳細錯誤以便除錯 (正式上線後建議改為 error_log)
-    die("權限檢查 SQL 錯誤: " . $e->getMessage());
 }
-*/
 
 if (!$hasPermission) {
     // 無權限，跳回登入畫面或首頁
-    echo "<script>alert('您無權限存取此頁面 (Debug: UserID={$userId})'); window.location.href = '../../index.php';</script>";
+    echo "<script>alert('您無權限存取此頁面'); window.location.href = '../../index.php';</script>";
     exit;
+}
+
+// 取得本頁操作名單（含部門/職稱/姓名），user_cname 為 latin1 需 CONVERT
+function eg_fetch_acl_list($db, $pageKey) {
+    $sql = "
+        SELECT a.user_id,
+               u.user_uname AS login,
+               CONVERT(CAST(u.user_cname AS BINARY) USING utf8mb4) AS user_name,
+               (SELECT d.name FROM user_department_position_map m JOIN department d ON d.id = m.department_id
+                  WHERE m.user_id = u.id ORDER BY m.is_main DESC, m.id ASC LIMIT 1) AS dept_name,
+               (SELECT p.name FROM user_department_position_map m JOIN position p ON p.id = m.position_id
+                  WHERE m.user_id = u.id ORDER BY m.is_main DESC, m.id ASC LIMIT 1) AS pos_name
+        FROM page_operator_acl a
+        JOIN user u ON u.id = a.user_id
+        WHERE a.page_key = ?
+        ORDER BY a.id ASC";
+    $stmt = $db->prepare($sql);
+    $stmt->execute([$pageKey]);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
 // --- 處理表單提交 (CRUD) ---
@@ -46,6 +68,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     try {
         $action = $_POST['action'] ?? '';
+
+        // --- 本頁操作名單 (page_operator_acl) 相關操作，僅超級管理員(id=1)可執行 ---
+        if ($action === 'add_acl_user' || $action === 'remove_acl_user') {
+            header('Content-Type: application/json');
+            if (!$isSuper) {
+                http_response_code(403);
+                echo json_encode(['status' => 'error', 'message' => '僅超級管理員可設定本頁操作名單']);
+                exit;
+            }
+
+            if ($action === 'add_acl_user') {
+                $target_uid = (int)($_POST['user_id'] ?? 0);
+                if ($target_uid <= 0) {
+                    throw new Exception('請選擇有效的使用者');
+                }
+                if ($target_uid === 1) {
+                    throw new Exception('超級管理員本身已擁有權限，無須加入名單');
+                }
+                // 名單上限 2 位
+                $cntStmt = $db->prepare("SELECT COUNT(*) FROM page_operator_acl WHERE page_key = ?");
+                $cntStmt->execute([$PAGE_KEY]);
+                if ($cntStmt->fetchColumn() >= 2) {
+                    throw new Exception('操作名單已達上限（最多 2 位），請先移除再新增');
+                }
+                // 防重複（有唯一鍵，這裡先友善提示）
+                $dupStmt = $db->prepare("SELECT COUNT(*) FROM page_operator_acl WHERE page_key = ? AND user_id = ?");
+                $dupStmt->execute([$PAGE_KEY, $target_uid]);
+                if ($dupStmt->fetchColumn() > 0) {
+                    throw new Exception('此使用者已在名單中');
+                }
+                $insStmt = $db->prepare("INSERT INTO page_operator_acl (page_key, user_id, created_by) VALUES (?, ?, ?)");
+                $insStmt->execute([$PAGE_KEY, $target_uid, (string)$userId]);
+                echo json_encode(['status' => 'success', 'message' => '已加入操作名單', 'acl' => eg_fetch_acl_list($db, $PAGE_KEY)]);
+                exit;
+            } else { // remove_acl_user
+                $target_uid = (int)($_POST['user_id'] ?? 0);
+                $delStmt = $db->prepare("DELETE FROM page_operator_acl WHERE page_key = ? AND user_id = ?");
+                $delStmt->execute([$PAGE_KEY, $target_uid]);
+                echo json_encode(['status' => 'success', 'message' => '已移除操作名單', 'acl' => eg_fetch_acl_list($db, $PAGE_KEY)]);
+                exit;
+            }
+        }
 
         // --- 排序操作 (AJAX) ---
         if ($action === 'reorder_items') {
@@ -345,6 +409,29 @@ try {
 } catch (PDOException $e) {
     // Handle error
 }
+
+// --- 本頁操作名單 + 使用者候選清單（供超級管理員設定用）---
+@$aclList = [];
+@$aclUserOptions = [];
+try {
+    $aclList = eg_fetch_acl_list($db, $PAGE_KEY);
+
+    // 候選使用者：未離職者，帶主要部門/職稱，供前端模糊篩選挑選
+    $aclUserOptions = $db->query("
+        SELECT u.id AS user_id,
+               u.user_uname AS login,
+               CONVERT(CAST(u.user_cname AS BINARY) USING utf8mb4) AS user_name,
+               (SELECT d.name FROM user_department_position_map m JOIN department d ON d.id = m.department_id
+                  WHERE m.user_id = u.id ORDER BY m.is_main DESC, m.id ASC LIMIT 1) AS dept_name,
+               (SELECT p.name FROM user_department_position_map m JOIN position p ON p.id = m.position_id
+                  WHERE m.user_id = u.id ORDER BY m.is_main DESC, m.id ASC LIMIT 1) AS pos_name
+        FROM user u
+        WHERE u.leave_date IS NULL AND u.id <> 1
+        ORDER BY u.id ASC
+    ")->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    // Handle error
+}
 ?>
 
 <!DOCTYPE html>
@@ -426,11 +513,49 @@ try {
                     </div>
                     <?php endif; ?>
 
+                    <?php if ($isSuper): ?>
+                    <!-- 本頁操作名單設定（僅超級管理員 id=1 / 帳號 e 可見） -->
+                    <div class="row">
+                        <div class="col-md-12 col-sm-12 col-xs-12">
+                            <div class="x_panel" style="border-top: 3px solid #F0A24B;">
+                                <div class="x_title">
+                                    <h2><i class="fa fa-user-secret"></i> 本頁操作權限名單 <small>（限超級管理員設定）</small></h2>
+                                    <div class="clearfix"></div>
+                                </div>
+                                <div class="x_content">
+                                    <p class="text-muted" style="margin-bottom:10px;">
+                                        超級管理員（帳號 <strong>e</strong>）恆可操作本頁；另可指定 <strong>最多 2 位</strong> 使用者一同擁有本頁操作權限。
+                                    </p>
+                                    <div style="display:flex; flex-wrap:wrap; gap:20px; align-items:flex-start;">
+                                        <!-- 目前名單 -->
+                                        <div style="flex:1; min-width:260px;">
+                                            <label style="color:#8a5a1a;">目前操作名單（<span id="acl_count"><?= count($aclList) ?></span>/2）</label>
+                                            <div id="acl_list_container" style="border:1px solid #ccc; border-radius:4px; padding:8px; background:#fff; min-height:60px;">
+                                                <!-- 由 JS 依 aclData 繪製 -->
+                                            </div>
+                                        </div>
+                                        <!-- 新增名單 -->
+                                        <div style="flex:1; min-width:260px; position:relative;">
+                                            <label style="color:#8a5a1a;">新增使用者（可輸入部門／職稱／姓名模糊篩選）</label>
+                                            <input type="text" id="acl_user_search" class="form-control" autocomplete="off"
+                                                   placeholder="輸入關鍵字後點選下方清單…（雙擊清空）">
+                                            <div id="acl_user_dropdown" style="display:none; position:absolute; z-index:1000; left:0; right:0; max-height:260px; overflow-y:auto; border:1px solid #ccc; border-top:0; background:#fff; box-shadow:0 4px 8px rgba(0,0,0,0.12);">
+                                                <!-- 由 JS 依 aclUserOptions 繪製 -->
+                                            </div>
+                                            <p class="text-muted" style="font-size:0.85em; margin-top:6px;">名單已滿 2 位時，需先移除才能新增。</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+
                     <div class="row">
                         <div class="col-md-12 col-sm-12 col-xs-12">
                             <div class="x_panel">
                                 <div class="x_content">
-                                    
+
                                     <!-- Tabs -->
                                     <ul class="nav nav-tabs bar_tabs" id="myTab" role="tablist">
                                         <li role="presentation" class="active"><a href="#tab_groups" role="tab" data-toggle="tab" aria-expanded="true">主項目設定 (Groups)</a></li>
@@ -688,12 +813,16 @@ try {
     <!-- DataTables -->
     <script src="../../resource/js/jquery.dataTables.min.js"></script>
     <script src="../../resource/js/dataTables.bootstrap.min.js"></script>
-    <!-- jQuery UI for Sortable -->
-    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.min.js"></script>
+    <!-- jQuery UI for Sortable（改用本地檔，避免內網無外網時排序失效）-->
+    <script src="../../resource/js/jquery-ui.min.js"></script>
 
     <script>
         // 將 PHP 的 pages 資料傳給 JS 使用
         var allPages = <?= json_encode($pages) ?>;
+        // 本頁操作名單相關資料（僅超級管理員頁面會用到）
+        var aclData = <?= json_encode($aclList) ?>;
+        var aclUserOptions = <?= json_encode($aclUserOptions) ?>;
+        var IS_SUPER = <?= $isSuper ? 'true' : 'false' ?>;
 
         $(document).ready(function() {
             $('.datatable-custom').DataTable({
@@ -822,9 +951,9 @@ try {
 
             // --- AJAX Handlers ---
 
-            // Delete Buttons
+            // Delete Buttons（刪除一律需手動輸入大寫 Y 二次確認）
             $('#btn_delete_group').click(function() {
-                if (confirm('確定刪除此主項目？')) {
+                if (confirmDeleteHard('確定刪除此「主項目」？')) {
                     var group_id = $('#group_id').val();
                     ajaxRequest({ action: 'delete_group', group_id: group_id }, function(response) {
                         $('#groupModal').modal('hide');
@@ -833,7 +962,7 @@ try {
             });
 
             $('#btn_delete_page').click(function() {
-                if (confirm('確定刪除此子頁面？')) {
+                if (confirmDeleteHard('確定刪除此「子頁面」？')) {
                     var page_id = $('#page_id').val();
                     ajaxRequest({ action: 'delete_page', page_id: page_id }, function(response) {
                         $('#pageModal').modal('hide');
@@ -842,7 +971,7 @@ try {
             });
 
             $('#btn_delete_module').click(function() {
-                if (confirm('確定刪除此模組設定？')) {
+                if (confirmDeleteHard('確定刪除此「模組設定」？')) {
                     var module_code = $('#module_code').val();
                     ajaxRequest({ action: 'delete_module', module_code: module_code }, function(response) {
                         $('#moduleModal').modal('hide');
@@ -932,7 +1061,156 @@ try {
                     $('#module_group_id').prop('disabled', false);
                 }
             });
+
+            // --- 本頁操作名單設定（僅超級管理員頁面存在此區塊）---
+            if (IS_SUPER && $('#acl_list_container').length) {
+                renderAclList();
+
+                // 輸入即時模糊篩選 → 顯示候選清單
+                $('#acl_user_search').on('input focus', function() {
+                    renderAclDropdown($(this).val());
+                });
+                // 雙擊清空（比照 UI 規範）
+                $('#acl_user_search').on('dblclick', function() {
+                    $(this).val('').trigger('input');
+                });
+                // Enter 不送出
+                $('#acl_user_search').on('keydown', function(e) {
+                    if (e.key === 'Enter') { e.preventDefault(); }
+                });
+                // 點選候選項目 → 新增
+                $('#acl_user_dropdown').on('click', '.acl-option', function() {
+                    var uid = $(this).data('uid');
+                    addAclUser(uid);
+                });
+                // 移除名單（需輸入大寫 Y 二次確認）
+                $('#acl_list_container').on('click', '.acl-remove', function() {
+                    var uid = $(this).data('uid');
+                    var name = $(this).data('name') || '';
+                    if (confirmDeleteHard('確定將「' + name + '」移出本頁操作名單？')) {
+                        removeAclUser(uid);
+                    }
+                });
+                // 點擊他處收起候選清單
+                $(document).on('click', function(e) {
+                    if (!$(e.target).closest('#acl_user_search, #acl_user_dropdown').length) {
+                        $('#acl_user_dropdown').hide();
+                    }
+                });
+            }
         });
+
+        // 刪除／移除的硬性二次確認：需手動輸入大寫 Y
+        function confirmDeleteHard(msg) {
+            var ans = prompt(msg + '\n\n此操作無法復原。若確定，請手動輸入大寫「Y」後按確定：');
+            if (ans === null) return false; // 取消
+            if (ans === 'Y') return true;
+            alert('輸入不符（需為大寫 Y），已取消操作。');
+            return false;
+        }
+
+        // ---------- 本頁操作名單 相關函式 ----------
+        function escapeHtml(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function aclUserLabel(u) {
+            var meta = [u.dept_name, u.pos_name].filter(function(x){ return x; }).join('／');
+            return escapeHtml(u.user_name || u.login) + (meta ? ' <small class="text-muted">(' + escapeHtml(meta) + ')</small>' : '');
+        }
+
+        function renderAclList() {
+            var c = $('#acl_list_container');
+            c.empty();
+            $('#acl_count').text(aclData.length);
+            if (!aclData.length) {
+                c.html('<p class="text-muted" style="margin:0;">目前僅超級管理員可操作，尚未加入其他使用者。</p>');
+                return;
+            }
+            aclData.forEach(function(u) {
+                var row = $('<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 4px; border-bottom:1px solid #f0e2cf;">' +
+                    '<span>' + aclUserLabel(u) + '</span>' +
+                    '<button type="button" class="btn btn-danger btn-xs acl-remove" data-uid="' + u.user_id + '" data-name="' + escapeHtml(u.user_name || u.login) + '">移除</button>' +
+                    '</div>');
+                c.append(row);
+            });
+        }
+
+        function renderAclDropdown(keyword) {
+            var dd = $('#acl_user_dropdown');
+            var kw = (keyword || '').toLowerCase().trim();
+            // 排除已在名單中的人
+            var chosen = {};
+            aclData.forEach(function(u){ chosen[u.user_id] = true; });
+
+            var matched = aclUserOptions.filter(function(u) {
+                if (chosen[u.user_id]) return false;
+                if (kw === '') return true;
+                var hay = ((u.user_name||'') + ' ' + (u.login||'') + ' ' + (u.dept_name||'') + ' ' + (u.pos_name||'')).toLowerCase();
+                return hay.indexOf(kw) !== -1;
+            });
+
+            dd.empty();
+            if (aclData.length >= 2) {
+                dd.html('<div class="text-muted" style="padding:8px;">名單已滿（2/2），請先移除再新增。</div>').show();
+                return;
+            }
+            if (!matched.length) {
+                dd.html('<div class="text-muted" style="padding:8px;">查無符合的使用者</div>').show();
+                return;
+            }
+            matched.slice(0, 50).forEach(function(u) {
+                dd.append('<div class="acl-option" data-uid="' + u.user_id + '" style="padding:7px 10px; cursor:pointer; border-bottom:1px solid #eee;">' + aclUserLabel(u) + '</div>');
+            });
+            // hover 暖色
+            dd.find('.acl-option').hover(
+                function(){ $(this).css('background', '#FCEFD9'); },
+                function(){ $(this).css('background', ''); }
+            );
+            dd.show();
+        }
+
+        function addAclUser(uid) {
+            $.ajax({
+                type: 'POST', url: 'system_module_setting.php', dataType: 'json',
+                data: { action: 'add_acl_user', user_id: uid },
+                success: function(res) {
+                    if (res.status === 'success') {
+                        aclData = res.acl || [];
+                        renderAclList();
+                        $('#acl_user_search').val('');
+                        $('#acl_user_dropdown').hide();
+                        showNotification('success', res.message);
+                    } else {
+                        showNotification('error', res.message || '新增失敗');
+                    }
+                },
+                error: function(xhr) {
+                    showNotification('error', (xhr.responseJSON && xhr.responseJSON.message) || '新增失敗');
+                }
+            });
+        }
+
+        function removeAclUser(uid) {
+            $.ajax({
+                type: 'POST', url: 'system_module_setting.php', dataType: 'json',
+                data: { action: 'remove_acl_user', user_id: uid },
+                success: function(res) {
+                    if (res.status === 'success') {
+                        aclData = res.acl || [];
+                        renderAclList();
+                        showNotification('success', res.message);
+                    } else {
+                        showNotification('error', res.message || '移除失敗');
+                    }
+                },
+                error: function(xhr) {
+                    showNotification('error', (xhr.responseJSON && xhr.responseJSON.message) || '移除失敗');
+                }
+            });
+        }
 
         function ajaxRequest(data, successCallback, errorCallback) {
             $.ajax({
