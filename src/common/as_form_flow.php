@@ -114,6 +114,13 @@ if (!function_exists('asf_resolve_approvers')) {
     }
 }
 
+if (!function_exists('asf_is_test_form')) {
+    /** 測試表單判定：名稱以雙底線包夾（如 __會簽區塊測試__）＝自動化測試用，不發真實推播（live_event 照建，供測試驗證與事後清理）。 */
+    function asf_is_test_form(string $formName): bool {
+        return (bool)preg_match('/^__.+__$/u', trim($formName));
+    }
+}
+
 if (!function_exists('asf_notify_sign')) {
     /** 建立「待簽核」通知（mode=sign，動作完成前不消失）。回傳 live_event id（失敗 0）。 */
     function asf_notify_sign(PDO $pdo, int $instanceId, string $formName, string $sectionLabel, array $approverUids, int $submitterUid, string $submitterName): int {
@@ -127,11 +134,13 @@ if (!function_exists('asf_notify_sign')) {
             $eventId = (int)$pdo->lastInsertId();
             $ins = $pdo->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'sign')");
             foreach ($approverUids as $uid2) $ins->execute([$eventId, (int)$uid2]);
-            try {
-                require_once __DIR__ . '/../push/push_send.php';
-                $recipients = eg_push_event_recipients($pdo, $eventId);
-                eg_push_send_to_users($pdo, $recipients, ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
-            } catch (Throwable $e) { /* 推播失敗不影響簽核流程 */ }
+            if (!asf_is_test_form($formName)) { // 測試表單不發真實推播（避免自動化測試轟炸使用者通知）
+                try {
+                    require_once __DIR__ . '/../push/push_send.php';
+                    $recipients = eg_push_event_recipients($pdo, $eventId);
+                    eg_push_send_to_users($pdo, $recipients, ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
+                } catch (Throwable $e) { /* 推播失敗不影響簽核流程 */ }
+            }
             return $eventId;
         } catch (Throwable $e) { error_log('[as_form_flow] notify_sign failed: '.$e->getMessage()); return 0; }
     }
@@ -172,11 +181,13 @@ if (!function_exists('asf_notify_result')) {
             $eventId = (int)$pdo->lastInsertId();
             $pdo->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'read')")
                 ->execute([$eventId, $submitterUid]);
-            try {
-                require_once __DIR__ . '/../push/push_send.php';
-                $recipients = eg_push_event_recipients($pdo, $eventId);
-                eg_push_send_to_users($pdo, $recipients, ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
-            } catch (Throwable $e) {}
+            if (!asf_is_test_form($formName)) { // 測試表單不發真實推播（避免自動化測試轟炸使用者通知）
+                try {
+                    require_once __DIR__ . '/../push/push_send.php';
+                    $recipients = eg_push_event_recipients($pdo, $eventId);
+                    eg_push_send_to_users($pdo, $recipients, ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
+                } catch (Throwable $e) {}
+            }
         } catch (Throwable $e) { error_log('[as_form_flow] notify_result failed: '.$e->getMessage()); }
     }
 }
