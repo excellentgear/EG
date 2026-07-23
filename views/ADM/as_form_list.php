@@ -43,6 +43,7 @@ $db = (new DBConnection())->getPDO();
       <button class="btn btn-primary btn-sm" id="btnCreate"><i class="fa fa-plus"></i> 建立表單</button>
     </span>
   </h4>
+  <p class="text-muted" style="font-size:12px;margin:0 0 8px;">測試動線：建立表單 → <strong>設計</strong>（設定欄位/簽核區）→ 設計器按<strong>發布</strong> → 回此清單按 <strong>新填一張</strong>（或設計器的「填寫測試」）→ 填寫 → 送出簽核 → 簽核人由通知或「紀錄」開啟簽核。</p>
   <table class="list"><thead><tr>
     <th style="width:50px;">ID</th><th>表單名稱</th><th style="width:120px;">文件編號</th><th style="width:90px;">狀態</th><th style="width:70px;">發布版</th>
     <th style="width:130px;">最後更新</th><th style="width:380px;">操作</th>
@@ -126,9 +127,20 @@ function loadTpl(){
         <button class="btn btn-info btn-xs rec-btn" data-id="${t.id}" data-name="${esc(t.name)}"><i class="fa fa-files-o"></i> 紀錄</button>
         ${canBuild?`<button class="btn btn-default btn-xs bind-btn" data-id="${t.id}" data-name="${esc(t.name)}" data-fdid="${t.form_doc_id||''}" title="綁定/改綁四階表單文件（表尾自動顯示其編號＋版次）"><i class="fa fa-link"></i> 綁定</button>`:''}
         ${canBuild?`<button class="btn btn-warning btn-xs grant-btn" data-id="${t.id}" data-name="${esc(t.name)}"><i class="fa fa-user-plus"></i> 授權</button>`:''}
+        ${canBuild?`<button class="btn btn-danger btn-xs del-btn" data-id="${t.id}" data-name="${esc(t.name)}"><i class="fa fa-trash"></i></button>`:''}
       </td></tr>`).join('')||'<tr><td colspan="7" class="text-muted">尚無表單，請先建立。</td></tr>');
   });
 }
+
+// ── 刪除模板（軟刪除；既有填寫紀錄保留）──
+$('#tplBody').on('click','.del-btn',function(){
+  const tid=$(this).data('id'), name=$(this).data('name');
+  if(!confirm('確定刪除表單模板「'+name+'」？\n\n已填寫的紀錄會保留可查，但此模板將從清單移除、不可再新填。')) return;
+  $.post(API+'?action=template_delete',{template_id:tid},r=>{
+    if(!r.ok){alert(r.error||'刪除失敗');return;}
+    loadTpl();
+  },'json');
+});
 
 $('#btnCreate').on('click',function(){
   const name=$('#newName').val().trim();

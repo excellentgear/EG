@@ -34,12 +34,45 @@ if (!function_exists('asf_user_title')) {
 if (!function_exists('asf_resolve_approvers')) {
     /**
      * 規則 → 有資格簽核的在職使用者 id 清單。
-     * $submitterUid 供 submitter 與 scope='apply_dept' 解析。空清單＝規則解不出人（呼叫端要擋）。
+     * $submitterUid 供 submitter 與 scope='apply_dept' 解析；$data＝填寫值（dept_manager 依表上部門欄位解析用）。
+     * 空清單＝規則解不出人（呼叫端要擋）。
      */
-    function asf_resolve_approvers(PDO $pdo, array $rule, int $submitterUid): array {
+    function asf_resolve_approvers(PDO $pdo, array $rule, int $submitterUid, array $data = []): array {
         $type = $rule['type'] ?? '';
         try {
             if ($type === 'submitter') return $submitterUid ? [$submitterUid] : [];
+
+            if ($type === 'dept_manager') {
+                // 單位主管：依「表上選定的部門欄位值」決定單位——申請人兼職時以表上所選為準
+                $src  = (string)($rule['dept_source'] ?? '');
+                $dval = trim((string)($data[$src] ?? ''));
+                if ($dval === '') return [];
+                $st = $pdo->prepare("SELECT id FROM department WHERE name=? LIMIT 1");
+                $st->execute([$dval]);
+                $deptId = (int)($st->fetchColumn() ?: 0);
+                if (!$deptId && ctype_digit($dval)) $deptId = (int)$dval;   // 欄位存的是 id 也通
+                if (!$deptId) return [];
+                // 門檻：mode=position（指定職稱以上→取該職稱層級當門檻）/ level（N階以上）
+                $min = null;
+                if (($rule['mode'] ?? 'level') === 'position') {
+                    $pid = (int)($rule['position_id'] ?? 0);
+                    if ($pid) {
+                        $st = $pdo->prepare("SELECT level FROM position_level WHERE position_id=? LIMIT 1");
+                        $st->execute([$pid]);
+                        $lv = $st->fetchColumn();
+                        if ($lv !== false && $lv !== null) $min = (int)$lv;
+                    }
+                } else {
+                    $min = max(1, (int)($rule['min_level'] ?? 2));
+                }
+                if ($min === null) return [];
+                $st = $pdo->prepare("SELECT DISTINCT u.id FROM user_department_position_map m
+                        JOIN user u ON u.id=m.user_id
+                        JOIN position_level pl ON pl.position_id=m.position_id
+                        WHERE pl.level IS NOT NULL AND pl.level<=? AND u.state IN (1,99) AND m.department_id=?");
+                $st->execute([$min, $deptId]);
+                return array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+            }
 
             // 部門限定：明給 dept_id > scope=apply_dept（填表人主部門）> 不限
             $deptId = 0;

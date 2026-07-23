@@ -123,6 +123,15 @@ case 'meta': {
     jout(['ok'=>true, 'positions'=>$positions, 'departments'=>$departments, 'form_docs'=>$formDocs]);
 }
 
+// ── 刪除模板（軟刪除；既有填寫紀錄保留可查）──
+case 'template_delete': {
+    if (!$canBuild) jerr('無刪除權限', 403);
+    $tid = (int)($_POST['template_id'] ?? 0);
+    if (!$tid) jerr('缺 template_id');
+    $db->prepare("UPDATE as_form_template SET is_deleted=1, updated_at=NOW() WHERE id=?")->execute([$tid]);
+    jout(['ok'=>true]);
+}
+
 // ── 綁定/改綁文件編號（form_doc_id=0 解除綁定）──
 case 'bind_doc': {
     $tid = (int)($_POST['template_id'] ?? 0);
@@ -361,6 +370,8 @@ case 'instance_load': {
     $a = $db->prepare("SELECT * FROM as_form_approval WHERE instance_id=? ORDER BY step_no, id");
     $a->execute([$iid]);
     $approvals = $a->fetchAll(PDO::FETCH_ASSOC);
+    // 填寫值（規則解析 dept_manager 需要；簽名格顯示也用）
+    $data = json_decode($inst['data_json'] ?: '{}', true) ?: [];
     // 目前 step（最小尚有 pending 的 step）；使用者可簽哪些區
     $curStep = null;
     foreach ($approvals as $ap) if ($ap['status']==='pending') { $curStep = (int)$ap['step_no']; break; }
@@ -373,11 +384,9 @@ case 'instance_load': {
     foreach ($approvals as $ap) {
         if ($ap['status']!=='pending' || (int)$ap['step_no']!==$curStep) continue;
         $rule = json_decode($ap['approver_rule_json'] ?: '{}', true) ?: [];
-        $eligible = asf_resolve_approvers($db, $rule, $subUid);
+        $eligible = asf_resolve_approvers($db, $rule, $subUid, $data);
         if (in_array($uid, $eligible, true) || $isAdmin) $mySections[] = ['approval_id'=>(int)$ap['id'], 'section_key'=>$ap['section_key'], 'section_label'=>$ap['section_label']];
     }
-    // 簽名格顯示資料（__sig_<section>）
-    $data = json_decode($inst['data_json'] ?: '{}', true) ?: [];
     foreach ($approvals as $ap) {
         if ($ap['status']==='approved') {
             $data['__sig_'.$ap['section_key']] = ['name'=>$ap['approver_name'], 'at'=>$ap['decided_at'] ? date('Y.m.d', strtotime($ap['decided_at'])) : ''];
@@ -453,6 +462,14 @@ case 'instance_submit': {
     if (empty($sections)) jerr('此表單未設定簽核區，無法送出簽核');
     usort($sections, fn($a2,$b2)=>($a2['step']??0)<=>($b2['step']??0));
 
+    // 會簽來源欄位（cs_depts）：候選部門＋被勾選部門＋填表時順序
+    $csCell = null;
+    foreach (($schemaArr['cells'] ?? []) as $cell) {
+        if (($cell['ftype'] ?? '')==='cs_depts') { $csCell = $cell; break; }
+    }
+    $deptNames = [];
+    try { foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $dn) $deptNames[(int)$dn['id']] = $dn['name']; } catch (Exception $e) {}
+
     $db->beginTransaction();
     try {
         // 重送（rejected）：清掉舊簽核列重建
@@ -462,9 +479,38 @@ case 'instance_submit': {
                                  VALUES (?,?,?,?,?,'approved',?,?,NOW())");
         $insPend = $db->prepare("INSERT INTO as_form_approval (instance_id, section_key, section_label, step_no, approver_rule_json, status)
                                  VALUES (?,?,?,?,?,'pending')");
+        // step 一律 ×100 留空間給會簽排序（preset/filler 在同 step 內 +序號）
         foreach ($sections as $s) {
             $rule = $s['rule'] ?? [];
-            $common = [$iid, $s['key'] ?? 'main', $s['label'] ?? '', (int)($s['step'] ?? 1), json_encode($rule, JSON_UNESCAPED_UNICODE)];
+            $baseStep = (int)($s['step'] ?? 1) * 100;
+            if (($rule['type'] ?? '')==='countersign') {
+                // 條件式會簽：被勾選的部門才建簽核區
+                if (!$csCell) throw new Exception('會簽簽核區需要表上有「會簽部門勾選」欄位');
+                $ckRaw = $data[$csCell['key']] ?? [];
+                $checked = array_values(array_filter(array_map('intval', is_array($ckRaw) ? $ckRaw : explode(',', (string)$ckRaw))));
+                // 順序：parallel=同step；preset=依設計列出順序；filler=依填表順序欄
+                $ordered = [];
+                foreach (($csCell['dept_ids'] ?? []) as $idx=>$did) {
+                    if (!in_array((int)$did, $checked, true)) continue;
+                    $seq = $idx;
+                    if (($rule['order'] ?? '')==='filler') {
+                        $ov = $data[$csCell['key'].'_ord_'.$did] ?? '';
+                        $seq = ($ov!=='' && is_numeric($ov)) ? (int)$ov : 999;
+                    }
+                    $ordered[] = ['dept'=>(int)$did, 'seq'=>$seq];
+                }
+                usort($ordered, fn($x,$y)=>$x['seq']<=>$y['seq']);
+                foreach ($ordered as $i2=>$od) {
+                    $step2 = (($rule['order'] ?? 'parallel')==='parallel') ? $baseStep : $baseStep + $i2;
+                    $ruleJson = json_encode(['type'=>'level', 'min_level'=>(int)($rule['min_level'] ?? 2),
+                                             'dept_id'=>$od['dept'], 'disagree'=>$rule['disagree'] ?? 'continue'], JSON_UNESCAPED_UNICODE);
+                    $insPend->execute([$iid, ($s['key'] ?? 'cs').'@'.$od['dept'],
+                                       ($s['label'] ?? '會簽').'-'.($deptNames[$od['dept']] ?? $od['dept']),
+                                       $step2, $ruleJson]);
+                }
+                continue;
+            }
+            $common = [$iid, $s['key'] ?? 'main', $s['label'] ?? '', $baseStep, json_encode($rule, JSON_UNESCAPED_UNICODE)];
             if (($rule['type'] ?? '')==='submitter') $insDone->execute([...$common, $uid, $cname]);
             else $insPend->execute($common);
         }
@@ -481,7 +527,7 @@ case 'instance_submit': {
         foreach ($pend as $ap) {
             if ((int)$ap['step_no'] !== $curStep) break;
             $rule = json_decode($ap['approver_rule_json'] ?: '{}', true) ?: [];
-            $appr = asf_resolve_approvers($db, $rule, $uid);
+            $appr = asf_resolve_approvers($db, $rule, $uid, $data);
             $le = asf_notify_sign($db, $iid, $inst['tpl_name'], $ap['section_label'] ?: $ap['section_key'], $appr, $uid, $cname);
             if ($le) $db->prepare("UPDATE as_form_approval SET live_event_id=? WHERE id=?")->execute([$le, (int)$ap['id']]);
         }
@@ -501,26 +547,82 @@ case 'decide': {
     if (!in_array($decision, ['approved','rejected'], true)) jerr('無效決定');
     if ($decision==='rejected' && !$note) jerr('駁回必須填寫原因');
 
-    $q = $db->prepare("SELECT a.*, i.created_by AS inst_creator, i.template_id, t.name AS tpl_name
+    $q = $db->prepare("SELECT a.*, i.created_by AS inst_creator, i.template_id, i.template_version, i.data_json, i.status AS inst_status, t.name AS tpl_name
                        FROM as_form_approval a JOIN as_form_instance i ON i.id=a.instance_id
                        JOIN as_form_template t ON t.id=i.template_id WHERE a.id=?");
     $q->execute([$aid]);
     $ap = $q->fetch(PDO::FETCH_ASSOC);
     if (!$ap) jerr('簽核紀錄不存在', 404);
     if ($ap['status'] !== 'pending') jerr('此區已被 '.($ap['approver_name'] ?: '其他人').' 處理過');
+    if ($ap['inst_status'] !== 'in_review') jerr('此表單已'.($ap['inst_status']==='rejected'?'被駁回':'結案').'，不可再簽');
     $iid = (int)$ap['instance_id'];
 
+    // 填寫值（資格解析 dept_manager／會簽合併都要用）
+    $dataArr = json_decode($ap['data_json'] ?: '{}', true) ?: [];
     // 資格：解析規則（管理員恆可）
     $su = $db->prepare("SELECT id FROM user WHERE user_cname=? LIMIT 1");
     $su->execute([$ap['inst_creator']]);
     $subUid = (int)($su->fetchColumn() ?: 0);
     $rule = json_decode($ap['approver_rule_json'] ?: '{}', true) ?: [];
-    $eligible = asf_resolve_approvers($db, $rule, $subUid);
+    $eligible = asf_resolve_approvers($db, $rule, $subUid, $dataArr);
     if (!in_array($uid, $eligible, true) && !$isAdmin) jerr('您不具此區簽核資格', 403);
     // 順序：前面 step 還有 pending 不可先簽
     $pmin = $db->prepare("SELECT MIN(step_no) FROM as_form_approval WHERE instance_id=? AND status='pending'");
     $pmin->execute([$iid]);
     if ((int)$pmin->fetchColumn() < (int)$ap['step_no']) jerr('前面關卡尚未完成，還不能簽此區');
+
+    // ── 會簽區：收簽核人填寫的區塊欄位（同意/不同意＋意見等）──
+    $sectionDept = 0;
+    if (strpos($ap['section_key'], '@') !== false) $sectionDept = (int)substr($ap['section_key'], strpos($ap['section_key'], '@') + 1);
+    $mergedCs = false;
+    if ($sectionDept) {
+        $sd = json_decode($_POST['section_data'] ?? '{}', true);
+        $sd = is_array($sd) ? $sd : [];
+        // 凍結版 schema：只收「屬於此會簽部門」的欄位（防越權寫入他區）
+        $vq = $db->prepare("SELECT schema_json FROM as_form_template_version WHERE template_id=? AND version=?");
+        $vq->execute([(int)$ap['template_id'], (int)$ap['template_version']]);
+        $schemaCs = json_decode($vq->fetchColumn() ?: '{}', true) ?: [];
+        $allowed = []; $requiredKeys = []; $decisionKey = null;
+        foreach (($schemaCs['cells'] ?? []) as $cell) {
+            // 會簽區塊（cs_block）：每部門一組 <key>_dec@<dept>／<key>_note@<dept>
+            if (($cell['type'] ?? '')==='cs_block') {
+                $bk = ($cell['key'] ?? '') ?: 'cs';
+                if (($cell['show_dec'] ?? true) !== false) {
+                    $k = $bk.'_dec@'.$sectionDept;
+                    $allowed[$k] = true; $decisionKey = $k;
+                    if (!empty($cell['dec_required'])) $requiredKeys[] = $k;
+                }
+                if (($cell['show_note'] ?? true) !== false) {
+                    $k = $bk.'_note@'.$sectionDept;
+                    $allowed[$k] = true;
+                    if (!empty($cell['note_required'])) $requiredKeys[] = $k;
+                }
+                continue;
+            }
+            // 舊式：個別欄位標 cs_dept
+            if (($cell['type'] ?? '')!=='field' || (int)($cell['cs_dept'] ?? 0)!==$sectionDept) continue;
+            $k = $cell['key'] ?? ''; if ($k==='') continue;
+            $allowed[$k] = true;
+            if (!empty($cell['required'])) $requiredKeys[] = $k;
+            if (($cell['ftype'] ?? '')==='cs_decision') $decisionKey = $k;
+        }
+        foreach ($sd as $k=>$v) { if (isset($allowed[$k])) { $dataArr[$k] = $v; $mergedCs = true; } }
+        if ($decision === 'approved') {
+            // 內容必填檢查（設計器設 required 的會簽欄位）
+            $miss = [];
+            foreach ($requiredKeys as $k) {
+                $v = $dataArr[$k] ?? '';
+                if (is_array($v) ? count($v)===0 : trim((string)$v)==='') $miss[] = $k;
+            }
+            if ($miss) jerr('會簽必填欄位未填：'.implode('、', $miss));
+            // 不同意效果（每張表單可設）：return=退回填表人（轉為駁回）；continue=記錄意見繼續流程
+            $ruleCs = json_decode($ap['approver_rule_json'] ?: '{}', true) ?: [];
+            if ($decisionKey && trim((string)($dataArr[$decisionKey] ?? ''))==='不同意' && ($ruleCs['disagree'] ?? 'continue')==='return') {
+                $decision = 'rejected';
+                if (!$note) $note = '會簽不同意（'.($ap['section_label'] ?: $ap['section_key']).'）';
+            }
+        }
+    }
 
     $db->beginTransaction();
     try {
@@ -528,6 +630,11 @@ case 'decide': {
         $upd = $db->prepare("UPDATE as_form_approval SET status=?, approver_id=?, approver_name=?, note=?, decided_at=NOW() WHERE id=? AND status='pending'");
         $upd->execute([$decision, $uid, $cname, $note, $aid]);
         if ($upd->rowCount()===0) { $db->rollBack(); jerr('此區剛被其他人處理，請重新整理'); }
+        // 會簽欄位值併入填寫資料
+        if ($mergedCs) {
+            $db->prepare("UPDATE as_form_instance SET data_json=?, updated_at=NOW() WHERE id=?")
+               ->execute([json_encode($dataArr, JSON_UNESCAPED_UNICODE), $iid]);
+        }
         if ($decision==='rejected') {
             $db->prepare("UPDATE as_form_instance SET status='rejected', updated_at=NOW() WHERE id=?")->execute([$iid]);
         } else {
@@ -556,7 +663,7 @@ case 'decide': {
                 if ((int)$nx['step_no'] !== $curStep) break;
                 if (!empty($nx['live_event_id'])) continue;   // 已通知過（平行區）
                 $rule2 = json_decode($nx['approver_rule_json'] ?: '{}', true) ?: [];
-                $appr2 = asf_resolve_approvers($db, $rule2, $subUid);
+                $appr2 = asf_resolve_approvers($db, $rule2, $subUid, $dataArr);
                 $le2 = asf_notify_sign($db, $iid, $ap['tpl_name'], $nx['section_label'] ?: $nx['section_key'], $appr2, $subUid, $ap['inst_creator']);
                 if ($le2) $db->prepare("UPDATE as_form_approval SET live_event_id=? WHERE id=?")->execute([$le2, (int)$nx['id']]);
             }

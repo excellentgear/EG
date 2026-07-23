@@ -142,10 +142,57 @@
     if (type === 'title') return esc(cell.text);
     if (type === 'label') return esc(cell.text) + (cell.required ? '<span class="req-star">*</span>' : '');
     if (type === 'static') return esc(cell.text);
+    var cs = ctx.__cs || { checked: {}, edit: {}, hasCs: false };
+    // 會簽歸屬格：未被勾選的部門 → 免會簽（灰掛）
+    var csSkip = cell.cs_dept != null && cs.hasCs && !cs.checked[String(cell.cs_dept)];
+    // 會簽欄位可否編輯：僅該部門「輪到簽核的簽核人」可填（filler 與其他人一律鎖定）
+    var csLock = cell.cs_dept != null && !cs.edit[String(cell.cs_dept)];
     if (type === 'signature') {
-      var v = data['__sig_' + (cell.section || cell.key)];
-      if (v) return '<div>' + esc(v.name) + '</div><div class="sig-hint">' + esc(v.at || '') + '</div>';
-      return '<span class="sig-hint">（待簽核）</span>';
+      var sigKey = (cell.section || cell.key) + (cell.cs_dept != null ? '@' + cell.cs_dept : '');
+      if (csSkip) return '<span class="sig-hint">免會簽</span>';
+      var v = data['__sig_' + sigKey];
+      if (v) return '<span class="sig-slot" data-sig="' + esc(sigKey) + '"><span>' + esc(v.name) + '</span><span class="sig-hint"> ' + esc(v.at || '') + '</span></span>';
+      return '<span class="sig-slot" data-sig="' + esc(sigKey) + '"><span class="sig-hint">（待簽核）</span></span>';
+    }
+    // ── 會簽區塊：依「會簽部門勾選」的候選部門自動展開，一個部門一組（部門名/同意不同意/意見/簽章）──
+    if (type === 'cs_block') {
+      var cands = cs.candidates || [];
+      if (!cands.length) return '<span class="sig-hint">（會簽區塊：請先在表上放「會簽部門勾選」欄位並選定參與部門）</span>';
+      var bk = cell.key || 'cs';
+      var bsec = cell.section || 'cs';
+      var showDec = cell.show_dec !== false, showNote = cell.show_note !== false;
+      var units = cands.map(function (id) {
+        var dname = (ctx.deptMap && ctx.deptMap[String(id)]) || id;
+        var isCk = !!cs.checked[String(id)];
+        var canEd = isCk && !!cs.edit[String(id)];
+        var dis = canEd ? '' : ' disabled';
+        var kd = bk + '_dec@' + id, kn = bk + '_note@' + id;
+        var sigK = bsec + '@' + id, sig = data['__sig_' + sigK];
+        return {
+          skip: !isCk,
+          name: esc(dname) + (isCk ? '' : '<div class="sig-hint">免會簽</div>'),
+          dec: !isCk ? '' : '<select data-key="' + esc(kd) + '" data-cs-dept="' + esc(id) + '"' + dis + '><option value=""></option><option' + (data[kd] === '同意' ? ' selected' : '') + '>同意</option><option' + (data[kd] === '不同意' ? ' selected' : '') + '>不同意</option></select>',
+          note: !isCk ? '' : '<input type="text" data-key="' + esc(kn) + '" data-cs-dept="' + esc(id) + '" value="' + esc(data[kn] || '') + '" placeholder="意見"' + dis + '>',
+          sig: !isCk ? '<span class="sig-hint">免會簽</span>'
+              : (sig ? '<span class="sig-slot" data-sig="' + esc(sigK) + '"><span>' + esc(sig.name) + '</span><span class="sig-hint"> ' + esc(sig.at || '') + '</span></span>'
+                     : '<span class="sig-slot" data-sig="' + esc(sigK) + '"><span class="sig-hint">（待簽核）</span></span>')
+        };
+      });
+      var h2 = '<table class="eg-csb">';
+      if (cell.direction === 'right') {
+        // 往右併：一部門一欄
+        h2 += '<tr><td class="csb-hd">會簽部門</td>' + units.map(function (u) { return '<td class="' + (u.skip ? 'csb-skip' : '') + '">' + u.name + '</td>'; }).join('') + '</tr>';
+        if (showDec) h2 += '<tr><td class="csb-hd">同意/不同意</td>' + units.map(function (u) { return '<td class="' + (u.skip ? 'csb-skip' : '') + '">' + u.dec + '</td>'; }).join('') + '</tr>';
+        if (showNote) h2 += '<tr><td class="csb-hd">意見</td>' + units.map(function (u) { return '<td class="' + (u.skip ? 'csb-skip' : '') + '">' + u.note + '</td>'; }).join('') + '</tr>';
+        h2 += '<tr><td class="csb-hd">簽章</td>' + units.map(function (u) { return '<td class="csb-sig ' + (u.skip ? 'csb-skip' : '') + '">' + u.sig + '</td>'; }).join('') + '</tr>';
+      } else {
+        // 往下併：一部門一列
+        h2 += '<tr><td class="csb-hd">會簽部門</td>' + (showDec ? '<td class="csb-hd">同意/不同意</td>' : '') + (showNote ? '<td class="csb-hd">意見</td>' : '') + '<td class="csb-hd">簽章</td></tr>';
+        units.forEach(function (u) {
+          h2 += '<tr class="' + (u.skip ? 'csb-skip' : '') + '"><td>' + u.name + '</td>' + (showDec ? '<td>' + u.dec + '</td>' : '') + (showNote ? '<td>' + u.note + '</td>' : '') + '<td class="csb-sig">' + u.sig + '</td></tr>';
+        });
+      }
+      return h2 + '</table>';
     }
     if (type === 'chart') {
       // 圖表格：數據來源＝表內欄位代號，updateComputed 時繪製/重繪
@@ -159,7 +206,33 @@
     var star = cell.required ? '<span class="req-star">*</span>' : '';
     var u = ctx.user || {};
     var upos = u.positions || [];
+    // 會簽歸屬欄位：標記部門；被勾選且輪到該部門簽核人 → 解鎖，否則鎖定
+    var csAttr = '';
+    if (cell.cs_dept != null) {
+      csAttr = ' data-cs-dept="' + esc(cell.cs_dept) + '"';
+      ro = csLock ? ' readonly disabled' : '';
+    }
+    req += csAttr;
     switch (cell.ftype) {
+      // ── 會簽部門勾選（填表人勾選需要會簽的部門；值＝部門id陣列）──
+      case 'cs_depts': {
+        var cids = cell.dept_ids || [];
+        var ckd = Array.isArray(val) ? val.map(String) : String(val || '').split(',').filter(Boolean);
+        var roF = (mode === 'view') ? ' disabled' : '';
+        return '<span style="display:flex;flex-wrap:wrap;gap:2px 12px;">' + cids.map(function (id) {
+          var nm = (ctx.deptMap && ctx.deptMap[String(id)]) || id;
+          var on = ckd.indexOf(String(id)) >= 0;
+          var ordIn = cell.show_order ? ('<input type="number" data-key="' + esc(key) + '_ord_' + esc(id) + '" value="' + esc(data[key + '_ord_' + id] || '') + '" placeholder="序"' + roF + ' style="width:34px;border:1px solid #e0cba0;background:#fff;font-size:11px;margin-left:2px;">') : '';
+          return '<label style="font-weight:normal;margin:0;white-space:nowrap;"><input type="checkbox" data-key="' + esc(key) + '" value="' + esc(id) + '"' + (on ? ' checked' : '') + roF + '> ' + esc(nm) + ordIn + '</label>';
+        }).join('') + '</span>';
+      }
+      // ── 會簽同意/不同意（由該部門簽核人選擇）──
+      case 'cs_decision': {
+        var dopts = ['<option value=""></option>'].concat(['同意', '不同意'].map(function (o) {
+          return '<option' + (String(val) === o ? ' selected' : '') + '>' + o + '</option>';
+        })).join('');
+        return '<select data-key="' + esc(key) + '"' + req + ro + '>' + dopts + '</select>' + star;
+      }
       // ── 固定部門（綁部門ID，顯示時即時解析名稱→改名自動連動）──
       case 'fixed_dept': {
         var dname = (ctx.deptMap && ctx.deptMap[String(cell.dept_id)]) || cell.dept || val || '';
@@ -222,6 +295,18 @@
   function renderForm(schema, opts) {
     opts = opts || {};
     var mode = opts.mode || 'fill', data = opts.data || {}, ctx = opts.ctx || {};
+    // 會簽狀態：checked=被勾選部門(從 cs_depts 欄位值)；edit=目前使用者可填寫的會簽部門(opts.editDepts)
+    var csInfo = { checked: {}, edit: {}, hasCs: false, candidates: [] };
+    (schema.cells || []).forEach(function (c) {
+      if (c.ftype === 'cs_depts') {
+        csInfo.hasCs = true;
+        csInfo.candidates = c.dept_ids || [];
+        var v = data[c.key];
+        (Array.isArray(v) ? v : String(v || '').split(',').filter(Boolean)).forEach(function (id) { csInfo.checked[String(id)] = true; });
+      }
+    });
+    (opts.editDepts || []).forEach(function (id) { csInfo.edit[String(id)] = true; });
+    ctx = Object.assign({}, ctx, { __cs: csInfo });
     var meta = schema.meta || {};
     var header = meta.header || {};   // {show} 預設顯示
     var footer = meta.footer || {};   // {show} 預設顯示
@@ -242,7 +327,8 @@
         var cs = cell.cs || 1, rs = cell.rs || 1;
         for (var dr = 0; dr < rs; dr++) for (var dc = 0; dc < cs; dc++) { if (occ[r + dr]) occ[r + dr][c + dc] = true; }
         var span = (cs > 1 ? ' colspan="' + cs + '"' : '') + (rs > 1 ? ' rowspan="' + rs + '"' : '');
-        body += '<td' + span + ' class="' + cellClass(cell) + '">' + cellInner(cell, mode, data, ctx) + '</td>';
+        var skipCls = (cell.cs_dept != null && csInfo.hasCs && !csInfo.checked[String(cell.cs_dept)]) ? ' cs-skip' : '';
+        body += '<td' + span + ' class="' + cellClass(cell) + skipCls + '">' + cellInner(cell, mode, data, ctx) + '</td>';
       }
       body += '</tr>';
     }

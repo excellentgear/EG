@@ -69,6 +69,8 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
   <button class="btn btn-info btn-sm" id="btnPreview"><i class="fa fa-eye"></i> 預覽</button>
   <button class="btn btn-success btn-sm" id="btnSave"><i class="fa fa-save"></i> 存草稿</button>
   <button class="btn btn-warning btn-sm" id="btnPublish"><i class="fa fa-upload"></i> 發布</button>
+  <a class="btn btn-primary btn-sm" id="btnTestFill" target="_blank" style="display:none;" title="開新分頁實際填寫→送出簽核"><i class="fa fa-pencil"></i> 填寫測試</a>
+  <a class="btn btn-default btn-sm" href="as_form_list.php" title="回表單清單（紀錄/授權/綁定在此）"><i class="fa fa-list"></i> 清單</a>
   <span id="statusBadge" style="font-size:12px;color:#7a5a2d;margin-left:6px;"></span>
 </div>
 
@@ -96,9 +98,36 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
           <option value="title">大標題（title）</option>
           <option value="static">固定文字（static）</option>
           <option value="signature">簽名格（signature）</option>
+          <option value="cs_block">會簽區塊（依勾選部門自動展開）</option>
           <option value="chart">圖表格（chart）</option>
           <option value="blank">空白</option>
         </select>
+      </div>
+      <div class="prop-csblock" style="display:none;">
+        <div class="form-group">
+          <label>展開方向</label>
+          <select class="form-control input-sm" id="pCsbDir">
+            <option value="down">往下併（一部門一列）</option>
+            <option value="right">往右併（一部門一欄）</option>
+          </select>
+          <span class="muted">依「會簽部門勾選」欄位選定的部門數自動展開，一部門一組（部門名/同意不同意/意見/簽章）；未勾選部門灰掛「免會簽」</span>
+        </div>
+        <div class="form-group">
+          <label>區塊代號</label>
+          <input type="text" class="form-control input-sm" id="pCsbKey" placeholder="cs">
+        </div>
+        <div class="form-group">
+          <label>綁定簽核區（規則須為「會簽」）</label>
+          <select class="form-control input-sm" id="pCsbSection"></select>
+        </div>
+        <div class="form-group">
+          <label class="req-mini"><input type="checkbox" id="pCsbDec" checked> 顯示「同意/不同意」</label>
+          <label class="req-mini" style="margin-left:10px;"><input type="checkbox" id="pCsbDecReq"> 必填</label>
+        </div>
+        <div class="form-group">
+          <label class="req-mini"><input type="checkbox" id="pCsbNote" checked> 顯示「意見」欄</label>
+          <label class="req-mini" style="margin-left:10px;"><input type="checkbox" id="pCsbNoteReq"> 必填</label>
+        </div>
       </div>
       <div class="prop-chart" style="display:none;">
         <div class="form-group">
@@ -145,7 +174,14 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
           <option value="user_position">使用者職稱（自動帶入）</option>
           <option value="fixed_dept">固定部門（綁部門ID）</option>
           <option value="formula">計算欄（公式）</option>
+          <option value="cs_depts">會簽部門勾選</option>
+          <option value="cs_decision">會簽同意/不同意</option>
         </select>
+      </div>
+      <div class="form-group prop-csdepts" style="display:none;">
+        <label>參與會簽的部門（可多選）</label>
+        <div id="pCsDeptList" style="max-height:130px;overflow-y:auto;border:1px solid #e0cba0;border-radius:3px;padding:4px 6px;"></div>
+        <label class="req-mini" style="margin-top:4px;"><input type="checkbox" id="pCsOrder"> 填表時可指定會簽順序（勾選旁出現順序欄）</label>
       </div>
       <div class="form-group prop-formula" style="display:none;">
         <label>公式（同 Excel，引用欄位代號）</label>
@@ -237,6 +273,8 @@ function load(){
     const docInfo=(r.ctx&&r.ctx.docNo)?('｜文件編號 '+r.ctx.docNo+(r.ctx.version||'')):'｜未綁定文件（入口頁可綁定）';
     $('#statusBadge').text('狀態：'+r.template.status+'（發布版 '+r.template.published_version+'）'+docInfo+(r.canDesign?'':'　⚠ 唯讀（無設計權）'));
     CAN_DESIGN=!!r.canDesign;
+    // 已發布 → 顯示「填寫測試」入口
+    if(r.template.published_version>0){ $('#btnTestFill').attr('href','as_form_fill.php?template_id='+TEMPLATE_ID).show(); }
     if(!r.canDesign){ $('.topbar button,.side button,.topbar input,.side input,.side select').prop('disabled',true); }
     recalcRows();
     renderEdit(); renderSections();
@@ -291,6 +329,7 @@ function editInner(cell){
   if(cell.type==='title'||cell.type==='label'||cell.type==='static') return esc(cell.text||'（空）');
   if(cell.type==='signature') return `<span class="celltag">簽</span>${esc(cell.section||'?')}`;
   if(cell.type==='chart') return `<span class="celltag">圖表</span>${({radar:'雷達',bar:'長條',line:'折線'})[(cell.chart&&cell.chart.kind)||'radar']}｜${esc((cell.chart&&cell.chart.fields||[]).join(','))||'未設數據'}`;
+  if(cell.type==='cs_block') return `<span class="celltag">會簽區塊</span>${cell.direction==='right'?'往右併':'往下併'}｜${esc(cell.section||'cs')}`;
   if(cell.type==='blank') return '';
   const ft={text:'文字',textarea:'多行',number:'數字',date:'日期',select:'下拉',checkbox:'勾選',user_name:'姓名',user_dept:'部門',user_position:'職稱',fixed_dept:'固定部門'}[cell.ftype]||'文字';
   if(cell.ftype==='fixed_dept') return `<span class="celltag">${ft}</span>${esc(cell.dept||'未選')}`;
@@ -324,6 +363,21 @@ function fillProp(){
   $('#pToday').prop('checked',!!cell.today);
   $('#pPattern').val(cell.pattern||'');
   $('#pFormula').val(cell.formula||'');
+  // 會簽部門多選（cs_depts）與會簽歸屬
+  const cdids=(cell.dept_ids||[]).map(String);
+  $('#pCsDeptList').html(META.departments.map(d=>
+    `<label style="font-weight:normal;display:inline-block;margin:0 10px 2px 0;white-space:nowrap;"><input type="checkbox" class="csdept-chk" value="${d.id}"${cdids.includes(String(d.id))?' checked':''}> ${esc(d.name)}</label>`).join(''));
+  $('#pCsOrder').prop('checked',!!cell.show_order);
+  // 會簽區塊屬性
+  $('#pCsbDir').val(cell.direction||'down');
+  $('#pCsbKey').val(cell.key||'cs');
+  $('#pCsbSection').html((schema.sections||[]).filter(s=>(s.rule&&s.rule.type)==='countersign').map(s=>
+    `<option value="${esc(s.key)}"${cell.section===s.key?' selected':''}>${esc(s.label||s.key)}</option>`).join('')
+    ||'<option value="">（請先在下方新增「會簽」規則的簽核區）</option>');
+  $('#pCsbDec').prop('checked',cell.show_dec!==false);
+  $('#pCsbDecReq').prop('checked',!!cell.dec_required);
+  $('#pCsbNote').prop('checked',cell.show_note!==false);
+  $('#pCsbNoteReq').prop('checked',!!cell.note_required);
   const ch=cell.chart||{};
   $('#pChartKind').val(ch.kind||'radar');
   $('#pChartFields').val((ch.fields||[]).join(','));
@@ -350,6 +404,8 @@ function syncPropVisibility(){
   $('.prop-fixeddept').toggle(t==='field' && ft==='fixed_dept');
   $('.prop-formula').toggle(t==='field' && ft==='formula');
   $('.prop-chart').toggle(t==='chart');
+  $('.prop-csdepts').toggle(t==='field' && ft==='cs_depts');
+  $('.prop-csblock').toggle(t==='cs_block');
 }
 $('#pType,#pFtype').on('change',syncPropVisibility);
 
@@ -365,7 +421,7 @@ function applyProp(withSpan){
   const cell=cellAt(r,c); if(!cell) return;
   const t=$('#pType').val();
   cell.type=t;
-  ['text','key','ftype','options','required','align','section','rows','today','pattern','dept_id','dept','formula','chart'].forEach(k=>delete cell[k]);
+  ['text','key','ftype','options','required','align','section','rows','today','pattern','dept_id','dept','formula','chart','dept_ids','show_order','cs_dept','direction','show_dec','dec_required','show_note','note_required'].forEach(k=>delete cell[k]);
   if(t==='title'||t==='label'||t==='static'){ cell.text=$('#pText').val(); if(t!=='title'){const a=$('#pAlign').val(); if(a==='left')cell.align='left';} }
   if(t==='field'){
     cell.key=$('#pKey').val().trim();
@@ -379,9 +435,22 @@ function applyProp(withSpan){
       if(did){ cell.dept_id=did; cell.dept=$('#pFixedDept option:selected').text(); }   // dept 僅設計器顯示備援，正式顯示以 ID 即時解析
     }
     if(cell.ftype==='formula'){ const fx=$('#pFormula').val().trim(); if(fx) cell.formula=fx; }
+    if(cell.ftype==='cs_depts'){
+      cell.dept_ids=$('#pCsDeptList .csdept-chk:checked').map(function(){return parseInt(this.value);}).get();
+      if($('#pCsOrder').prop('checked')) cell.show_order=true;
+    }
     if($('#pRequired').prop('checked')) cell.required=true;
   }
   if(t==='signature'){ cell.section=$('#pSection').val(); }
+  if(t==='cs_block'){
+    cell.key=$('#pCsbKey').val().trim()||'cs';
+    cell.section=$('#pCsbSection').val()||'cs';
+    cell.direction=$('#pCsbDir').val()||'down';
+    if(!$('#pCsbDec').prop('checked')) cell.show_dec=false;
+    else if($('#pCsbDecReq').prop('checked')) cell.dec_required=true;
+    if(!$('#pCsbNote').prop('checked')) cell.show_note=false;
+    else if($('#pCsbNoteReq').prop('checked')) cell.note_required=true;
+  }
   if(t==='chart'){
     cell.chart={ kind:$('#pChartKind').val()||'radar',
       fields:$('#pChartFields').val().split(',').map(s=>s.trim()).filter(Boolean),
@@ -397,8 +466,9 @@ function applyProp(withSpan){
 }
 $('#btnApply').on('click',()=>applyProp(true));
 // 即時反映：打字/變動立刻更新左側格子（跨欄/列只在 change 時套，見上）
-$('#pText,#pKey,#pOptions,#pPattern,#pFormula,#pChartFields,#pChartLabels').on('input',()=>applyProp(false));
-$('#pType,#pFtype,#pAlign,#pRequired,#pSection,#pToday,#pFixedDept,#pChartKind,#pChartMax').on('change',()=>applyProp(false));
+$('#pText,#pKey,#pOptions,#pPattern,#pFormula,#pChartFields,#pChartLabels,#pCsbKey').on('input',()=>applyProp(false));
+$('#pType,#pFtype,#pAlign,#pRequired,#pSection,#pToday,#pFixedDept,#pChartKind,#pChartMax,#pCsOrder,#pCsbDir,#pCsbSection,#pCsbDec,#pCsbDecReq,#pCsbNote,#pCsbNoteReq').on('change',()=>applyProp(false));
+$('#pCsDeptList').on('change','.csdept-chk',()=>applyProp(false));
 $('#pCs,#pRs').on('change',()=>applyProp(true));
 
 // ── 自動儲存（debounce 1.2 秒；任何 schema 變動後自動存草稿）──
@@ -501,7 +571,10 @@ $('#chkFooter').on('change',function(){ schema.meta.footer.show=this.checked; sc
 $('#tplName').on('input',scheduleSave);
 
 // ── 簽核區 ──
-const RULE_TYPES={submitter:'填表本人',position:'指定職稱',level:'N階主管以上'};
+const RULE_TYPES={submitter:'填表本人',position:'指定職稱',level:'N階主管以上',dept_manager:'單位主管(依表上部門欄)',countersign:'會簽(勾選部門)'};
+const DM_MODES={level:'N階以上',position:'指定職稱以上'};
+const CS_ORDER={parallel:'平行同時簽',preset:'依部門列出順序',filler:'填表時定順序'};
+const CS_DIS={continue:'不同意→記錄繼續',return:'不同意→退回填表人'};
 function renderSections(){
   const rows=(schema.sections||[]).map((s,i)=>{
     const rt=(s.rule&&s.rule.type)||'position';
@@ -514,13 +587,27 @@ function renderSections(){
     const curLvl=(s.rule&&s.rule.min_level)||'';
     const lvlOpts='<option value="">請選擇</option>'+[1,2,3].map(l=>
       `<option value="${l}"${String(curLvl)===String(l)?' selected':''}>${l} 階主管以上</option>`).join('');
+    // 會簽設定（順序模式/不同意效果）
+    const curOrd=(s.rule&&s.rule.order)||'parallel';
+    const curDis=(s.rule&&s.rule.disagree)||'continue';
+    const csOpts=`<select class="s-csorder" style="width:120px;">${Object.keys(CS_ORDER).map(k=>`<option value="${k}"${k===curOrd?' selected':''}>${CS_ORDER[k]}</option>`).join('')}</select>
+      <select class="s-csdis" style="width:150px;">${Object.keys(CS_DIS).map(k=>`<option value="${k}"${k===curDis?' selected':''}>${CS_DIS[k]}</option>`).join('')}</select>`;
+    // 單位主管：來源部門欄位（表上 user_dept/fixed_dept 欄）＋門檻模式
+    const dmSrcCands=(schema.cells||[]).filter(c=>c.type==='field'&&['user_dept','fixed_dept'].includes(c.ftype)&&c.key);
+    const curSrc=(s.rule&&s.rule.dept_source)||'';
+    const curMode=(s.rule&&s.rule.mode)||'level';
+    const dmOpts=`<select class="s-dmsrc" style="width:130px;" title="部門依表上哪個欄位的值決定（兼職者以表上所選為準）">
+        ${dmSrcCands.length?dmSrcCands.map(c=>`<option value="${esc(c.key)}"${c.key===curSrc?' selected':''}>欄位:${esc(c.key)}</option>`).join(''):'<option value="">（表上先放「使用者部門」或「固定部門」欄位）</option>'}</select>
+      <select class="s-dmmode" style="width:110px;">${Object.keys(DM_MODES).map(k=>`<option value="${k}"${k===curMode?' selected':''}>${DM_MODES[k]}</option>`).join('')}</select>`;
     return `<tr data-i="${i}">
       <td><input class="s-key" value="${esc(s.key||'')}" placeholder="key" style="width:80px;"></td>
       <td><input class="s-label" value="${esc(s.label||'')}" placeholder="標籤" style="width:90px;"></td>
       <td><input class="s-step" type="number" value="${s.step!=null?s.step:1}" style="width:50px;"></td>
       <td><select class="s-rtype">${Object.keys(RULE_TYPES).map(k=>`<option value="${k}"${k===rt?' selected':''}>${RULE_TYPES[k]}</option>`).join('')}</select></td>
-      <td><select class="s-pos" style="width:110px;${rt==='position'?'':'display:none;'}">${posOpts}</select></td>
-      <td><select class="s-lvl" style="width:110px;${rt==='level'?'':'display:none;'}">${lvlOpts}</select></td>
+      <td><select class="s-pos" style="width:110px;${(rt==='position'||(rt==='dept_manager'&&curMode==='position'))?'':'display:none;'}">${posOpts}</select>
+          <span class="s-csopts" style="${rt==='countersign'?'':'display:none;'}">${csOpts}</span>
+          <span class="s-dmopts" style="${rt==='dept_manager'?'':'display:none;'}">${dmOpts}</span></td>
+      <td><select class="s-lvl" style="width:110px;${(rt==='level'||rt==='countersign'||(rt==='dept_manager'&&curMode==='level'))?'':'display:none;'}">${lvlOpts}</select></td>
       <td><button class="btn btn-danger btn-xs2 s-del">刪</button></td>
     </tr>`;
   }).join('');
@@ -549,16 +636,38 @@ $('#secTable').on('change','input,select',function(){
       const pname=$tr.find('.s-pos option:selected').text();
       if(pid){ s.rule.position_id=pid; s.rule.position=pname; }
       else { delete s.rule.position_id; delete s.rule.position; }
-      delete s.rule.min_level;
+      delete s.rule.min_level; delete s.rule.order; delete s.rule.disagree;
     } else if(rt==='level'){
       s.rule.min_level=parseInt($tr.find('.s-lvl').val())||1;
-      delete s.rule.position; delete s.rule.position_id;
+      delete s.rule.position; delete s.rule.position_id; delete s.rule.order; delete s.rule.disagree;
+    } else if(rt==='countersign'){
+      // 會簽：各被勾選部門的 N階主管以上簽；順序模式與不同意效果每張表單可設
+      s.rule.min_level=parseInt($tr.find('.s-lvl').val())||2;
+      s.rule.order=$tr.find('.s-csorder').val()||'parallel';
+      s.rule.disagree=$tr.find('.s-csdis').val()||'continue';
+      delete s.rule.position; delete s.rule.position_id; delete s.rule.dept_source; delete s.rule.mode;
+    } else if(rt==='dept_manager'){
+      // 單位主管：依表上部門欄位值決定單位（兼職以表上為準）；門檻＝N階以上或指定職稱以上
+      s.rule.dept_source=$tr.find('.s-dmsrc').val()||'';
+      s.rule.mode=$tr.find('.s-dmmode').val()||'level';
+      if(s.rule.mode==='position'){
+        const pid=parseInt($tr.find('.s-pos').val())||0;
+        if(pid){ s.rule.position_id=pid; s.rule.position=$tr.find('.s-pos option:selected').text(); }
+        delete s.rule.min_level;
+      } else {
+        s.rule.min_level=parseInt($tr.find('.s-lvl').val())||2;
+        delete s.rule.position_id; delete s.rule.position;
+      }
+      delete s.rule.order; delete s.rule.disagree;
     } else {
-      delete s.rule.position; delete s.rule.position_id; delete s.rule.min_level;
+      delete s.rule.position; delete s.rule.position_id; delete s.rule.min_level; delete s.rule.order; delete s.rule.disagree; delete s.rule.dept_source; delete s.rule.mode;
     }
     // 規則型別切換 → 顯示對應下拉
-    $tr.find('.s-pos').toggle(rt==='position');
-    $tr.find('.s-lvl').toggle(rt==='level');
+    const dmMode=$tr.find('.s-dmmode').val()||'level';
+    $tr.find('.s-pos').toggle(rt==='position'||(rt==='dept_manager'&&dmMode==='position'));
+    $tr.find('.s-csopts').toggle(rt==='countersign');
+    $tr.find('.s-dmopts').toggle(rt==='dept_manager');
+    $tr.find('.s-lvl').toggle(rt==='level'||rt==='countersign'||(rt==='dept_manager'&&dmMode==='level'));
   });
   scheduleSave();
 });

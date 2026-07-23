@@ -113,24 +113,17 @@ function statusChip(st){
   return `<span class="status-chip st-${st}">${label}</span>`;
 }
 
-function render(mode, data){
-  $('#formHost').html(EGForm.renderForm(schema,{mode,data,ctx}));
+function render(mode, data, editDepts){
+  $('#formHost').html(EGForm.renderForm(schema,{mode,data,ctx,editDepts:editDepts||[]}));
   if(mode==='fill') EGForm.bindFormUX($('#formHost'));   // 內含首次重算
   else EGForm.updateComputed($('#formHost'));            // 檢視模式也要畫圖表/公式
 
-  // 已簽區換成圖章
+  // 已簽區換成圖章（渲染器輸出 .sig-slot[data-sig=區key]，含會簽區塊內簽章）
   Object.keys(data||{}).forEach(k=>{
     if(k.indexOf('__sig_')!==0) return;
     const sec=k.substring(6), v=data[k];
-    $('#formHost td.cell-sig').each(function(){
-      // 由 schema 找此格對應 section
-      const cell=(schema.cells||[]).find(c=>c.type==='signature'&&(c.section||c.key)===sec);
-      if(!cell) return;
-      // 比對格內容（渲染器已放入名字）→ 換圖章
-      if($(this).text().indexOf(v.name)>=0){
-        $(this).html(EGStamp.stamp(v.name, v.at||'', false));
-      }
-    });
+    $('#formHost .sig-slot').filter(function(){ return $(this).data('sig')===sec; })
+      .html(EGStamp.stamp(v.name, v.at||'', false));
   });
 }
 
@@ -156,7 +149,9 @@ function loadInstance(){
     schema=r.schema; ctx=r.ctx; canEdit=r.can_edit;
     $('#formTitle').text(r.instance.name+(r.instance.title?('｜'+r.instance.title):''));
     $('#statusChip').html(statusChip(r.instance.status));
-    render(canEdit?'fill':'view', r.data);
+    // 會簽：我可簽的區若帶部門(@deptid)，該部門的區塊欄位開放我填寫
+    const editDepts=(r.my_sections||[]).map(m=>String(m.section_key||'')).filter(k=>k.indexOf('@')>=0).map(k=>k.split('@')[1]);
+    render(canEdit?'fill':'view', r.data, editDepts);
     $('#btnSaveDraft,#btnSubmit').toggle(canEdit);
     renderSignPanel(r);
   });
@@ -173,13 +168,15 @@ function renderSignPanel(r){
   }).join('<i class="fa fa-angle-right" style="color:#c9a877;"></i> ');
   $('#flowSteps').html(steps);
   // 我可簽的區
-  const acts=(r.my_sections||[]).map(m=>
-    `<div style="margin-top:6px;padding:8px;background:#fdf6ea;border:1px solid #e6cfa4;border-radius:4px;">
+  const acts=(r.my_sections||[]).map(m=>{
+    const isCs=String(m.section_key||'').indexOf('@')>=0;
+    return `<div style="margin-top:6px;padding:8px;background:#fdf6ea;border:1px solid #e6cfa4;border-radius:4px;">
        <strong>${m.section_label||m.section_key}</strong>
+       ${isCs?'<span class="text-muted" style="font-size:11px;margin-left:6px;">請先在上方表單填寫貴部門的會簽欄位（同意/不同意、意見），再按核准送出</span>':''}
        <input type="text" class="form-control input-sm dec-note" data-aid="${m.approval_id}" placeholder="意見（駁回必填）" style="width:280px;display:inline-block;margin:0 6px;">
-       <button class="btn btn-success btn-sm dec-btn" data-aid="${m.approval_id}" data-d="approved"><i class="fa fa-check"></i> 核准</button>
-       <button class="btn btn-danger btn-sm dec-btn" data-aid="${m.approval_id}" data-d="rejected"><i class="fa fa-times"></i> 駁回</button>
-     </div>`).join('');
+       <button class="btn btn-success btn-sm dec-btn" data-aid="${m.approval_id}" data-seckey="${m.section_key}" data-d="approved"><i class="fa fa-check"></i> 核准</button>
+       <button class="btn btn-danger btn-sm dec-btn" data-aid="${m.approval_id}" data-seckey="${m.section_key}" data-d="rejected"><i class="fa fa-times"></i> 駁回</button>
+     </div>`;}).join('');
   $('#myActions').html(acts||'<span class="text-muted" style="font-size:12px;">目前無您需要簽核的區塊。</span>');
 }
 
@@ -188,7 +185,17 @@ $('#signPanel').on('click','.dec-btn',function(){
   const note=$('.dec-note[data-aid="'+aid+'"]').val().trim();
   if(d==='rejected' && !note){ alert('駁回必須填寫原因'); return; }
   if(!confirm(d==='approved'?'確定核准此區？':'確定駁回？駁回後整張表單退回填表人。')) return;
-  $.post(API+'?action=decide',{approval_id:aid, decision:d, note:note}, r=>{
+  const payload={approval_id:aid, decision:d, note:note};
+  // 會簽區：一併送出我在表上填寫的區塊欄位（同意/不同意、意見）
+  const sk=String($(this).data('seckey')||'');
+  if(sk.indexOf('@')>=0){
+    const dept=sk.split('@')[1], sd={};
+    $('#formHost [data-cs-dept="'+dept+'"]').each(function(){
+      const k=$(this).data('key'); if(k) sd[k]=this.value;
+    });
+    payload.section_data=JSON.stringify(sd);
+  }
+  $.post(API+'?action=decide', payload, r=>{
     if(!r.ok){ alert(r.error||'簽核失敗'); return; }
     loadInstance();
   },'json').fail(x=>alert('簽核失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)));
