@@ -29,7 +29,9 @@ try {
 <link href="../../resource/css/custom.css" rel="stylesheet">
 <link href="../../resource/css/as_form.css?v=<?php echo @filemtime(__DIR__.'/../../resource/css/as_form.css'); ?>" rel="stylesheet">
 <style>
-  .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;min-height:100vh;}
+  html,body{overflow-x:hidden;}
+  .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;min-height:100vh;overflow-x:hidden;}
+  .form-toolbar,.form-sheet,.sign-panel{width:auto;max-width:820px;}
   .form-toolbar{max-width:820px;margin:14px auto 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
   .form-sheet{max-width:820px;margin:12px auto 16px;background:#fff;padding:26px 30px;box-shadow:0 2px 10px rgba(90,61,30,.18);}
   .status-chip{display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;font-weight:bold;}
@@ -56,6 +58,7 @@ try {
 <?php include '../partPage/sideAndTopBarMenu.html' ?>
 <div class="right_col" role="main">
   <div class="form-toolbar">
+    <a class="btn btn-default btn-sm" href="as_form_list.php" title="回表單清單"><i class="fa fa-list"></i> 返回清單</a>
     <span id="formTitle" style="font-weight:bold;color:#7a4e17;"></span>
     <span id="statusChip"></span>
     <span style="margin-left:auto;display:flex;gap:6px;">
@@ -137,9 +140,10 @@ function loadTemplate(){
     $('#formTitle').text(r.template.name);
     $('#statusChip').html(statusChip('draft'));
     canEdit=true;
-    render('fill',prefill);
-    $('#btnSaveDraft,#btnSubmit').show();
-  });
+    $('#btnSaveDraft,#btnSubmit').show();   // 先顯示按鈕，渲染出錯也不影響操作
+    try{ render('fill',prefill); }
+    catch(e){ console.error(e); alert('表單渲染發生錯誤：'+e.message+'\n請回設計器檢查此表單設定'); }
+  }).fail(x=>alert('載入失敗：'+x.status));
 }
 
 // ── 既有紀錄模式 ──
@@ -151,10 +155,11 @@ function loadInstance(){
     $('#statusChip').html(statusChip(r.instance.status));
     // 會簽：我可簽的區若帶部門(@deptid)，該部門的區塊欄位開放我填寫
     const editDepts=(r.my_sections||[]).map(m=>String(m.section_key||'')).filter(k=>k.indexOf('@')>=0).map(k=>k.split('@')[1]);
-    render(canEdit?'fill':'view', r.data, editDepts);
-    $('#btnSaveDraft,#btnSubmit').toggle(canEdit);
+    $('#btnSaveDraft,#btnSubmit').toggle(canEdit);   // 先切換按鈕，渲染出錯也不影響操作
     renderSignPanel(r);
-  });
+    try{ render(canEdit?'fill':'view', r.data, editDepts); }
+    catch(e){ console.error(e); alert('表單渲染發生錯誤：'+e.message+'\n請回設計器檢查此表單設定'); }
+  }).fail(x=>alert('載入失敗：'+x.status));
 }
 
 function renderSignPanel(r){
