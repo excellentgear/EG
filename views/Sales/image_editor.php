@@ -4581,11 +4581,19 @@ function finishGroupTextEdit(group, child, val) {
             child.set('text', val); child.dirty = true;
         }
         if (wasQuickLabel) {
-            // 快速標籤（文字工具的「標籤」）：邊框自動貼合新字長，中心點不變
+            // 快速標籤（左側「標籤」工具）：邊框自動貼合新字長，中心點不變。
+            // 用文字的「原生(未縮放)」寬高＋和文字相同的縮放/角度來算邊框——若直接用 getScaledWidth，
+            // 而邊框自身又已帶著群組縮放，改字後會被重複套一次縮放，導致邊框過大/過小、看起來像沒依內容貼合。
             const box = kids.find(k => k.type === 'rect');
             if (box && box !== textObj) {
+                if (typeof textObj.initDimensions === 'function') textObj.initDimensions();  // 先確保新字的寬高已重算
                 const pad = labelBoxPadding((wasTol ? (child.labelSpec.fontSize || 28) : child.fontSize) || 28);
-                box.set({ width: textObj.getScaledWidth() + pad * 2, height: textObj.getScaledHeight() + pad * 2 });
+                box.set({
+                    width: textObj.width + pad * 2,
+                    height: textObj.height + pad * 2,
+                    scaleX: textObj.scaleX, scaleY: textObj.scaleY, angle: textObj.angle || 0
+                });
+                box.setPositionByOrigin(textObj.getCenterPoint(), 'center', 'center');
                 box.setCoords();
             }
         }
