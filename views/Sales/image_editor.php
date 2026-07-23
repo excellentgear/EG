@@ -1161,6 +1161,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <button class="pb-btn" id="btn-edit-points" style="display:none;" onclick="togglePointEdit()" title="像 Excel 編輯端點：拖曳節點改形狀、點線段中間的「＋」新增節點（直線會轉成折線、矩形會轉成四角多邊形）">編輯端點</button>
                 <button class="pb-btn" id="btn-poly-close" style="display:none;" onclick="togglePolyClosed()" title="把折線頭尾接起來變封閉圖形（再按一次打開）">封閉</button>
                 <button class="pb-btn" id="btn-poly-smooth" style="display:none;" onclick="togglePolySmooth()" title="節點之間改用圓滑曲線連接（再按一次改回直線）">圓滑</button>
+                <label id="wrap-corner" style="display:none;" title="折彎處圓角程度（Figma 式）：矩形與封閉/折線圖形的轉角改成圓弧。0＝直角">圓角
+                    <input type="range" id="p-corner" min="0" max="200" value="0" style="width:78px;vertical-align:middle;">
+                    <span id="p-corner-v" style="color:#ccc;">0</span></label>
                 <button class="pb-btn" onclick="groupCmd()" id="btn-group">群組</button>
                 <button class="pb-btn" onclick="mergeSelection()" title="把多個線條/圖形合併成單一物件：縮放移動不走位、雙擊不會拆開（Alt+雙擊才拆）">合併</button>
                 <button class="pb-btn" onclick="flattenSelection()" title="只把選取的物件燒成一張圖（透明背景，其他物件不受影響）：之後可用框選搬移／套索對它切缺口、挖洞；可 Ctrl+Z 復原">壓平選取</button>
@@ -2452,6 +2455,12 @@ function rebuildArrowGroup(g, opts) {
 (function installCurvedPolyRender() {
     const orig = fabric.Polyline.prototype.commonRender;
     fabric.Polyline.prototype.commonRender = function (ctx) {
+        // 圓角（Figma 式）：cornerRadius>0 時把每個轉角改成圓弧（節點資料不變，編輯端點照常可用）。
+        // 與「圓滑(curved)」互斥：圓滑已是通過節點的曲線，不再另外倒圓角。
+        if (this.cornerRadius > 0 && !this.curved && this.points && this.points.length >= 3
+            && !isNaN(this.points[this.points.length - 1].y)) {
+            return renderRoundedPoly(this, ctx);
+        }
         if (!this.curved || !this.points || this.points.length < 3) return orig.call(this, ctx);
         const pts = this.points, n = pts.length, ox = this.pathOffset.x, oy = this.pathOffset.y;
         if (!n || isNaN(pts[n - 1].y)) return false;
@@ -2470,6 +2479,50 @@ function rebuildArrowGroup(g, opts) {
         return true;
     };
 })();
+/* 倒圓角描繪：把折線/多邊形的每個轉角切成半徑 r 的圓弧（用二次貝茲曲線，控制點＝原本的尖角）。
+   r 會被夾在相鄰兩邊長度一半以內，避免相鄰圓角互相吃掉。開放折線的頭尾端點維持尖角不倒。 */
+function renderRoundedPoly(poly, ctx) {
+    const pts = poly.points, n = pts.length, ox = poly.pathOffset.x, oy = poly.pathOffset.y;
+    const closed = (poly.type === 'polygon');
+    const R = poly.cornerRadius || 0;
+    const A = new Array(n), B = new Array(n), sharp = new Array(n);
+    for (let i = 0; i < n; i++) {
+        const cur = pts[i];
+        // 開放折線的頭尾沒有可倒圓的完整轉角，維持尖角
+        if (!closed && (i === 0 || i === n - 1)) { sharp[i] = true; A[i] = B[i] = cur; continue; }
+        const prev = pts[(i - 1 + n) % n], next = pts[(i + 1) % n];
+        const d1x = prev.x - cur.x, d1y = prev.y - cur.y, l1 = Math.hypot(d1x, d1y);
+        const d2x = next.x - cur.x, d2y = next.y - cur.y, l2 = Math.hypot(d2x, d2y);
+        const r = Math.min(R, l1 / 2, l2 / 2);
+        if (!(r > 0) || l1 === 0 || l2 === 0) { sharp[i] = true; A[i] = B[i] = cur; continue; }
+        A[i] = { x: cur.x + d1x / l1 * r, y: cur.y + d1y / l1 * r };   // 靠前一段邊的切點
+        B[i] = { x: cur.x + d2x / l2 * r, y: cur.y + d2y / l2 * r };   // 靠後一段邊的切點
+        sharp[i] = false;
+    }
+    ctx.beginPath();
+    const start = closed ? A[0] : pts[0];
+    ctx.moveTo(start.x - ox, start.y - oy);
+    const last = closed ? n : n - 1;   // 封閉：走完 n 個角回到起點；開放：走到最後一點
+    for (let k = 0; k <= last; k++) {
+        const i = k % n;
+        if (k === 0) {   // 起點已 moveTo（封閉＝A[0]，開放＝pts[0]），先倒第 0 角
+            if (closed && !sharp[0]) ctx.quadraticCurveTo(pts[0].x - ox, pts[0].y - oy, B[0].x - ox, B[0].y - oy);
+            continue;
+        }
+        if (closed && k === n) {   // 收尾：連回起點角 A[0]
+            ctx.lineTo(A[0].x - ox, A[0].y - oy);
+            break;
+        }
+        if (sharp[i]) {
+            ctx.lineTo(pts[i].x - ox, pts[i].y - oy);
+        } else {
+            ctx.lineTo(A[i].x - ox, A[i].y - oy);
+            ctx.quadraticCurveTo(pts[i].x - ox, pts[i].y - oy, B[i].x - ox, B[i].y - oy);
+        }
+    }
+    if (closed) ctx.closePath();
+    return true;
+}
 
 /* ── Excel「編輯端點」：直線/折線/矩形/不規則遮蓋 進入節點編輯模式 ──────────
    拖曳實心圓點＝移動該節點；點各線段中間的「＋」＝在該處插入新節點（直線第一次編輯會先轉成折線）。
@@ -2760,13 +2813,17 @@ function togglePolySmooth() {
    文字＝單一 IText，底色可選；標籤＝固定有邊框的文字框（像標籤機印出來的標籤），是「邊框 Rect + IText」
    的小群組，雙擊比照標籤庫的群組內文字編輯機制（startGroupTextEdit／finishGroupTextEdit），改完字邊框
    自動貼合新字長（finishGroupTextEdit 內 isQuickLabel 分支處理，不影響標籤庫既有的規格標籤重建邏輯）。 */
+/* 新文字/標籤的預設底色：與「改選取物件底色」分離存放，改既有物件的底色不會污染這個預設，
+   之後新畫的文字/標籤才不會跟著沿用上一個被改過的顏色（每個物件底色各自獨立）。
+   要改新物件預設＝先點空白處取消選取，再調底色色票（見 applyTextBg 的 !obj 分支）。 */
+let newTextBg = { on: false, color: '#fff59d' };
 function addText(x, y, isLabel) {
     if (isLabel) { addLabelBox(x, y); return; }
     const size = parseInt(document.getElementById('p-fontsize').value, 10) || 28;
     const color = document.getElementById('p-textcolor').value;
     const bold = document.getElementById('p-bold').checked;
-    const bgOn = document.getElementById('p-textbg-on').checked;
-    const bg = document.getElementById('p-textbg').value;
+    const bgOn = newTextBg.on;
+    const bg = newTextBg.color;
     const ul = document.getElementById('p-underline').value;
     const t = new fabric.IText('輸入文字', {
         left: x, top: y, fontSize: size, fill: color,
@@ -2787,7 +2844,7 @@ function labelBoxPadding(fontSize) { return Math.max(6, fontSize * 0.28); }
 function addLabelBox(x, y) {
     const size = parseInt(document.getElementById('p-fontsize').value, 10) || 28;
     const color = document.getElementById('p-textcolor').value;
-    const bg = document.getElementById('p-textbg-on').checked ? document.getElementById('p-textbg').value : '#fff59d';
+    const bg = newTextBg.on ? newTextBg.color : '#fff59d';
     const text = new fabric.IText('標籤文字', {
         fontSize: size, fill: color, fontWeight: 'bold',
         fontFamily: '"Microsoft JhengHei", "PingFang TC", Arial, sans-serif',
@@ -5627,7 +5684,12 @@ function refreshPropbar() {
                 : (obj.getObjects().filter(c => c.type === 'triangle').length >= 2 ? 'both' : 'end');
         }
     }
-    if (!obj) { st.textContent = '未選取'; return; }
+    if (!obj) {
+        // 沒選取＝色票顯示「新文字/標籤」的預設底色，讓使用者知道下一個要畫的物件會是什麼底色
+        document.getElementById('p-textbg-on').checked = newTextBg.on;
+        document.getElementById('p-textbg').value = newTextBg.color;
+        st.textContent = '未選取'; return;
+    }
     const b = obj.getBoundingRect(true, true);
     st.innerHTML = '選取 <b>' + (obj.type === 'activeSelection' ? obj.getObjects().length + ' 個物件' : objTypeName(obj)) +
         '</b>（' + Math.round(b.width) + '×' + Math.round(b.height) + '）';
@@ -5651,6 +5713,14 @@ function refreshPropbar() {
     const epBtn = document.getElementById('btn-edit-points');
     epBtn.style.display = (['line', 'polyline', 'polygon', 'rect'].includes(obj.type) && !obj.isDimGuide) ? '' : 'none';
     epBtn.textContent = obj.__pointEditing ? '完成編輯' : '編輯端點';
+    // 圓角滑桿：矩形（native rx/ry）與封閉/折線圖形（cornerRadius）可倒圓角
+    const canCorner = ['rect', 'polygon', 'polyline'].includes(obj.type) && !obj.isDimGuide;
+    document.getElementById('wrap-corner').style.display = canCorner ? '' : 'none';
+    if (canCorner) {
+        const cr = (obj.type === 'rect') ? Math.round(obj.rx || 0) : Math.round(obj.cornerRadius || 0);
+        document.getElementById('p-corner').value = cr;
+        document.getElementById('p-corner-v').textContent = cr;
+    }
     const inPtEdit = !!obj.__pointEditing;
     document.getElementById('btn-poly-close').style.display = inPtEdit ? '' : 'none';
     document.getElementById('btn-poly-smooth').style.display = inPtEdit ? '' : 'none';
@@ -5707,6 +5777,16 @@ canvas.on('selection:cleared', refreshPropbar);
 canvas.on('object:modified', (e) => {
     // 縮放結束後強制重繪快取，避免 Fabric 預設的 noScaleCache 造成放大後文字/標籤模糊
     const t = e && e.target;
+    if (t && t.type === 'group' && t.isArrowGroup &&
+        (Math.abs((t.scaleX || 1) - 1) > 1e-4 || Math.abs((t.scaleY || 1) - 1) > 1e-4)) {
+        // 箭頭被四角控制點縮放：整支依縮放後的頭尾座標重建，粗細維持不變（只改長度/方向），
+        // 避免箭頭頭端被非等比拉扯而歪斜變形（trueArrowEndpoints 已含縮放矩陣，重建後 scale 歸零）
+        const no = rebuildArrowGroup(t, {});
+        canvas.setActiveObject(no);
+        canvas.requestRenderAll();
+        refreshPropbar(); pushState();
+        return;
+    }
     if (t) {
         t.dirty = true;
         if (t.getObjects) t.getObjects().forEach(o => { o.dirty = true; });
@@ -5762,7 +5842,12 @@ document.getElementById('p-width').addEventListener('input', function () {
     const headLen = arrowHeadLen(v);
     const n = eachInSelection(obj, o => {
         if (o.stroke && (o.type === 'line' || o.type === 'path' || o.type === 'rect' || o.type === 'ellipse' || o.type === 'circle' || o.type === 'polygon' || o.type === 'polyline')) {
-            o.set('strokeWidth', v); o.dirty = true; return true;
+            o.set('strokeWidth', v);
+            // 虛線/中心線的間距是依粗細等比算的，改粗細時要一起重算，否則間距還停在舊粗細的比例
+            if (o.strokeDashArray && o.strokeDashArray.length) {
+                o.set('strokeDashArray', dashArrayFor(styleFromDashArray(o.strokeDashArray), v));
+            }
+            o.dirty = true; return true;
         }
         if (o.type === 'triangle') {   // 箭頭頭端：大小要跟著粗細一起變，不然線變粗頭還是原本那麼小
             o.set({ width: headLen, height: headLen }); o.setCoords(); o.dirty = true; return true;
@@ -5776,12 +5861,38 @@ document.getElementById('p-width').addEventListener('change', function () {
     const v = parseInt(this.value, 10) || 3;
     const obj = canvas.getActiveObject();
     if (obj && obj.type === 'group' && obj.isArrowGroup) {
-        const no = rebuildArrowGroup(obj, { width: v });
+        // 箭頭虛線也要依新粗細重算間距（否則變粗後虛線間距不跟著變）
+        const aline = obj.getObjects().find(c => c.type === 'line');
+        const dash = (aline && aline.strokeDashArray && aline.strokeDashArray.length)
+            ? dashArrayFor(styleFromDashArray(aline.strokeDashArray), v) : (aline ? aline.strokeDashArray || null : null);
+        const no = rebuildArrowGroup(obj, { width: v, dash: dash });
         canvas.setActiveObject(no);
         canvas.requestRenderAll();
         pushState();
     }
 });
+/* 圓角滑桿：矩形用 native rx/ry；封閉/折線圖形設 cornerRadius（由 renderRoundedPoly 描繪，
+   節點資料不變仍可「編輯端點」）。拖動即時預覽（input），放開才記錄一步復原（change）。 */
+(function () {
+    const slider = document.getElementById('p-corner');
+    function apply(commit) {
+        const obj = canvas.getActiveObject();
+        if (!obj) return;
+        const v = parseInt(slider.value, 10) || 0;
+        document.getElementById('p-corner-v').textContent = v;
+        if (obj.type === 'rect') {
+            const r = Math.min(v, Math.min(obj.width, obj.height) / 2);   // 夾在半個短邊內，避免溢出變形
+            obj.set({ rx: r, ry: r });
+        } else if (obj.type === 'polygon' || obj.type === 'polyline') {
+            obj.set('cornerRadius', v);   // 每個角的實際半徑在 renderRoundedPoly 內再依邊長夾限
+        } else return;
+        obj.dirty = true;
+        canvas.requestRenderAll();
+        if (commit) pushState();
+    }
+    slider.addEventListener('input', function () { apply(false); });
+    slider.addEventListener('change', function () { apply(true); });
+})();
 document.getElementById('p-line-style').addEventListener('change', function () {
     const v = this.value;
     if (canvas.isDrawingMode) canvas.freeDrawingBrush.strokeDashArray = dashArrayFor(v, canvas.freeDrawingBrush.width || 3);
@@ -5881,6 +5992,10 @@ function applyTextBg() {
     const obj = canvas.getActiveObject();
     const on = document.getElementById('p-textbg-on').checked;
     let bg = document.getElementById('p-textbg').value;
+    if (!obj) {   // 沒選取物件＝設定「新文字/標籤」的預設底色，不動任何既有物件
+        newTextBg = { on: on, color: bg };
+        return;
+    }
     // 勾選加底色時色票若是白色且文字原本沒底色，改用預設黃色：白色色票多半是先前
     // 點選過標註文字（內建白底）被同步留下的，白底疊在白圖紙上看不出來，使用者會以為勾了沒效
     if (on && bg.toLowerCase() === '#ffffff' && !(obj && (obj.isQuickLabel || obj.labelKind === 'fabric'))) {
@@ -6136,7 +6251,7 @@ function snapUnpoolify(json) {   // 池索引占位 → 原 dataURL（沒有占�
         }
     });
 }
-const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved', 'transparentBg', 'isLabelBgRect'];
+const SNAP_PROPS = ['id', 'selectable', 'evented', 'locked', 'merged', 'balloonLetter', 'dcNumber', 'dcShape', 'dcRole', 'labelSpec', 'labelKind', 'specPath', 'wmRole', 'isArrowGroup', 'dimKind', 'isFreehandEnds', 'isQuickLabel', 'doubleUnderline', 'isDimGuide', 'dimAngleId', 'curved', 'cornerRadius', 'transparentBg', 'isLabelBgRect'];
 /* 卡頓/當機診斷：主要耗時點超過門檻就在主控台留紀錄（回報問題時請開 F12 把紅字/黃字截圖）；
    未攔截的程式例外第一次發生時跳 toast 提醒——渲染迴圈被例外打斷正是「殘影＋卡死」的典型來源 */
 let __egErrToasted = false;
