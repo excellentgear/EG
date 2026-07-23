@@ -1049,8 +1049,8 @@ function openTaskModal(id) {
     $('#tUrgentDays').attr('placeholder', '預設 ' + state.urgentDefault + ' 天');
     $('#stepEditor').empty();
     $('#tImgsList').empty();
-    $('#tImgUploadBtn').toggle(!!id);
-    $('#tImgHint').text(id ? '' : '儲存紀錄後即可上傳圖片');
+    tempImgs = [];
+    $('#tImgHint').text(id ? '' : '尚未儲存前圖片先暫存，按「儲存」時自動綁定到這筆紀錄');
     modalTask = { id: id || 0, status: 0, title: '' };
     refreshModalHeaderButtons();
     loadTplOptions();
@@ -1211,6 +1211,8 @@ $('#tBindKw').on('input focus', function () {
 $(document).on('click', function (e) { if (!$(e.target).closest('.ac-box').length) $('#tBindSug').hide(); });
 
 // ── 附件圖片（縮圖點擊另開原圖、×刪除；比照 Sales_Track_test）────────
+// 新增紀錄尚未存檔時：先上傳為暫存(temp)記在 tempImgs，儲存時把 img_id 一併送出綁定轉正
+var tempImgs = [];
 function renderModalImages(imgs) {
     var $list = $('#tImgsList').empty();
     (imgs || []).forEach(function (img) {
@@ -1222,8 +1224,11 @@ function renderModalImages(imgs) {
             if (!confirm('確認刪除此圖片？')) return;
             apiPost('delete_task_image', { img_id: img.img_id }).done(function (res) {
                 if (!res.success) { alert(res.message || '刪除失敗'); return; }
-                loadTaskImages(modalTask.id);
-                loadList();
+                if (modalTask.id) { loadTaskImages(modalTask.id); loadList(); }
+                else {
+                    tempImgs = tempImgs.filter(function (x) { return x.img_id !== img.img_id; });
+                    renderModalImages(tempImgs);
+                }
             });
         }));
         $list.append($el);
@@ -1238,8 +1243,8 @@ function loadTaskImages(taskId) {
 $('#tImgUpload').on('change', function () {
     var files = Array.prototype.slice.call(this.files || []);
     $(this).val('');
-    var taskId = parseInt($('#tId').val(), 10) || 0;
-    if (!taskId || !files.length) return;
+    if (!files.length) return;
+    var taskId = parseInt($('#tId').val(), 10) || 0;   // 0=新增未存檔 → 暫存上傳
     var pending = files.length;
     files.forEach(function (file) {
         var fd = new FormData();
@@ -1247,9 +1252,17 @@ $('#tImgUpload').on('change', function () {
         fd.append('task_id', taskId);
         fd.append('image', file);
         $.ajax({ url: API, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
-            .done(function (res) { if (!res.success) alert((file.name || '圖片') + ' 上傳失敗：' + (res.message || '')); })
+            .done(function (res) {
+                if (!res.success) { alert((file.name || '圖片') + ' 上傳失敗：' + (res.message || '')); return; }
+                if (!taskId) tempImgs.push(res);
+            })
             .fail(function () { alert((file.name || '圖片') + ' 上傳失敗，請重試'); })
-            .always(function () { if (--pending === 0) { loadTaskImages(taskId); loadList(); } });
+            .always(function () {
+                if (--pending === 0) {
+                    if (taskId) { loadTaskImages(taskId); loadList(); }
+                    else renderModalImages(tempImgs);
+                }
+            });
     });
 });
 
@@ -1299,7 +1312,8 @@ $('#btnSaveTask').on('click', function () {
         remind_before_minutes: rv === '' ? '' : parseInt(rv, 10) * parseInt($('#tRemindUnit').val(), 10),
         urgent_days: $('#tUrgentDays').val(),
         note: $('#tNote').val(),
-        steps: JSON.stringify(steps)
+        steps: JSON.stringify(steps),
+        temp_img_ids: JSON.stringify(tempImgs.map(function (x) { return x.img_id; }))
     };
     var $btn = $(this).prop('disabled', true);
     apiPost('save_task', params).done(function (res) {
