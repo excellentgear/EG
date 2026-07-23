@@ -222,6 +222,37 @@ switch ($action) {
         out(['success'=>$res['ok'],'message'=>$res['msg']]);
     }
 
+    // ═════════════════ 路徑遷移工具（換NAS/換機;僅管理員）═════════════════
+    case 'path_inventory': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/path_migration_lib.php';
+        out(['success'=>true,'data'=>eg_pm_inventory($pdo)]);
+    }
+    case 'path_set_setting': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/path_migration_lib.php';
+        $r = eg_pm_set_setting($pdo, (string)($_POST['scope'] ?? ''), (string)($_POST['key'] ?? ''), (string)($_POST['value'] ?? ''), $by);
+        out(['success'=>$r['ok'],'message'=>$r['msg']]);
+    }
+    case 'path_bulk_prefix': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/path_migration_lib.php';
+        $dry = (($_POST['dry'] ?? '1') === '1');
+        $r = eg_pm_bulk_prefix($pdo, (string)($_POST['old'] ?? ''), (string)($_POST['new'] ?? ''), $dry, $by);
+        out(['success'=>$r['ok'],'message'=>$r['msg'],'items'=>$r['items']]);
+    }
+    case 'path_copy_start': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/path_migration_lib.php';
+        $r = eg_pm_copy_start($pdo, (string)($_POST['src'] ?? ''), (string)($_POST['dst'] ?? ''), $by);
+        out(['success'=>$r['ok'],'message'=>$r['msg']]);
+    }
+    case 'path_copy_status': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/path_migration_lib.php';
+        out(['success'=>true,'data'=>eg_pm_copy_status($pdo)]);
+    }
+
     // ═════════════════ Phase 2：誤刪救援（部分還原） ═════════════════
 
     // ── 載入備份到檢視暫存庫（背景，約 20 秒）──
