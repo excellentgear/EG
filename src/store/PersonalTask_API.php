@@ -20,6 +20,11 @@ $user_id = (int)$_SESSION['id'];
 $conn = new DBConnection();
 $db = $conn->getPDO();
 
+// ── 欄位升級（附件暫存機制 2026-07-23）：舊表補欄，已存在時略過 ─────────
+try { $db->exec("ALTER TABLE personal_task_image ADD COLUMN user_id INT NULL COMMENT '上傳者/擁有者 FK→user.id（temp列以此判定擁有者）' AFTER task_id"); } catch (Exception $e) {}
+try { $db->exec("ALTER TABLE personal_task_image ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'active' COMMENT 'temp=未存檔暫存 active=正式' AFTER file_size"); } catch (Exception $e) {}
+try { $db->exec("ALTER TABLE personal_task_image ADD COLUMN expire_at DATETIME NULL COMMENT 'temp 自動清除到期時間，NULL=不清' AFTER status"); } catch (Exception $e) {}
+
 // 全站二元權限：module='personal_task'（比照 BOM追蹤，不分CRUD）
 if (!rf_has_module_role($db, $user_id, 'personal_task')) {
     echo json_encode(['success' => false, 'message' => '請先申請權限', 'no_access' => true]);
@@ -131,19 +136,36 @@ function pt_attach_dirs(PDO $db): array {
     return [$nas, rtrim($url, '/') . '/'];
 }
 
-// 取多筆紀錄的附圖（task_id => 附圖陣列，url 即時組出）
+// 取多筆紀錄的附圖（task_id => 附圖陣列，url 即時組出；只取正式 active）
 function pt_task_images(PDO $db, array $taskIds, string $urlDir): array {
     $taskIds = array_values(array_filter(array_map('intval', $taskIds)));
     if (!$taskIds) return [];
     $in = implode(',', $taskIds);
     $rows = $db->query("SELECT img_id, task_id, file_name, original_name FROM personal_task_image
-                        WHERE task_id IN ({$in}) ORDER BY task_id, sort_order, img_id")->fetchAll(PDO::FETCH_ASSOC);
+                        WHERE task_id IN ({$in}) AND status = 'active'
+                        ORDER BY task_id, sort_order, img_id")->fetchAll(PDO::FETCH_ASSOC);
     $map = [];
     foreach ($rows as $r) {
         $r['url'] = $urlDir . $r['file_name'];
         $map[(int)$r['task_id']][] = $r;
     }
     return $map;
+}
+
+// 懶惰清除：永久刪除已到期的暫存(temp)附圖（實體檔＋DB列）。list_tasks 順路呼叫。
+function pt_purge_expired_temp_images(PDO $db): void {
+    try {
+        $rows = $db->query("SELECT img_id, file_name FROM personal_task_image
+                            WHERE status = 'temp' AND expire_at IS NOT NULL AND expire_at < NOW()")->fetchAll(PDO::FETCH_ASSOC);
+        if (!$rows) return;
+        list($nasDir) = pt_attach_dirs($db);
+        foreach ($rows as $r) {
+            $fp = $nasDir . $r['file_name'];
+            if (is_file($fp)) @unlink($fp);
+        }
+        $in = implode(',', array_map(function ($r) { return (int)$r['img_id']; }, $rows));
+        $db->exec("DELETE FROM personal_task_image WHERE img_id IN ({$in})");
+    } catch (Exception $e) {}
 }
 
 try {
@@ -192,6 +214,8 @@ try {
         $pageSize = (int)($_POST['pageSize'] ?? $_GET['pageSize'] ?? 10);
         if (!in_array($pageSize, [5, 10, 20, 50], true)) $pageSize = 10;
         $exportAll = (int)($_POST['export'] ?? $_GET['export'] ?? 0);   // 匯出時抓全量(仍套目前篩選)
+
+        pt_purge_expired_temp_images($db);   // 順路清除過期的暫存附圖
 
         $defDays = pt_get_urgent_default($db, $user_id);
         // 急件判定：未完成 + 有期限 + 已進入「期限前N天」(N=每筆自訂，未設則用個人預設)。
@@ -412,6 +436,18 @@ try {
                 elseif ($seenUnreached) { throw new Exception('已到達的進度必須排在未到達的進度之前，請調整順序'); }
             }
 
+            // 存檔前上傳的暫存附圖：綁定到本紀錄並轉正式（僅限本人上傳的 temp 列）
+            $tempIds = json_decode($_POST['temp_img_ids'] ?? '[]', true);
+            if (is_array($tempIds)) {
+                $tempIds = array_values(array_filter(array_map('intval', $tempIds)));
+                if ($tempIds) {
+                    $in = implode(',', $tempIds);
+                    $db->prepare("UPDATE personal_task_image SET task_id = ?, status = 'active', expire_at = NULL
+                                  WHERE img_id IN ({$in}) AND user_id = ? AND status = 'temp'")
+                       ->execute([$id, $user_id]);
+                }
+            }
+
             $db->commit();
             echo json_encode(['success' => true, 'id' => $id]);
         } catch (Exception $e) {
@@ -464,8 +500,9 @@ try {
     }
 
     if ($action === 'upload_task_image') {
+        // task_id=0＝新增紀錄尚未存檔：先存暫存(temp，2天到期)，save_task 帶 temp_img_ids 轉正式
         $taskId = (int)($_POST['task_id'] ?? 0);
-        if (!pt_get_own_task($db, $user_id, $taskId)) throw new Exception('找不到紀錄或無權限');
+        if ($taskId > 0 && !pt_get_own_task($db, $user_id, $taskId)) throw new Exception('找不到紀錄或無權限');
         if (!isset($_FILES['image']) || $_FILES['image']['error'] !== UPLOAD_ERR_OK) throw new Exception('上傳失敗');
         $allowedExt = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
         $orig = basename($_FILES['image']['name']);
@@ -475,20 +512,27 @@ try {
         if (!is_dir($nasDir) && !mkdir($nasDir, 0777, true)) throw new Exception('無法建立附件目錄，請確認路徑設定：' . $nasDir);
         $fname = date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ext;
         if (!move_uploaded_file($_FILES['image']['tmp_name'], $nasDir . $fname)) throw new Exception('檔案寫入失敗');
-        $db->prepare("INSERT INTO personal_task_image (task_id, file_name, original_name, file_size)
-                      VALUES (?,?,?,?)")
-           ->execute([$taskId, $fname, $orig, (int)$_FILES['image']['size']]);
+        if ($taskId > 0) {
+            $db->prepare("INSERT INTO personal_task_image (task_id, user_id, file_name, original_name, file_size, status)
+                          VALUES (?,?,?,?,?,'active')")
+               ->execute([$taskId, $user_id, $fname, $orig, (int)$_FILES['image']['size']]);
+        } else {
+            $db->prepare("INSERT INTO personal_task_image (task_id, user_id, file_name, original_name, file_size, status, expire_at)
+                          VALUES (0,?,?,?,?,'temp', DATE_ADD(NOW(), INTERVAL 2 DAY))")
+               ->execute([$user_id, $fname, $orig, (int)$_FILES['image']['size']]);
+        }
         echo json_encode(['success' => true, 'img_id' => (int)$db->lastInsertId(),
             'file_name' => $fname, 'original_name' => $orig, 'url' => $urlDir . $fname], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
     if ($action === 'delete_task_image') {
+        // 可刪：自己紀錄上的正式附圖，或自己上傳、尚未綁定的暫存附圖
         $imgId = (int)($_POST['img_id'] ?? 0);
         $st = $db->prepare("SELECT i.file_name FROM personal_task_image i
-                            JOIN personal_task t ON t.id = i.task_id
-                            WHERE i.img_id = ? AND t.user_id = ?");
-        $st->execute([$imgId, $user_id]);
+                            LEFT JOIN personal_task t ON t.id = i.task_id
+                            WHERE i.img_id = ? AND (t.user_id = ? OR (i.status = 'temp' AND i.user_id = ?))");
+        $st->execute([$imgId, $user_id, $user_id]);
         $fn = $st->fetchColumn();
         if ($fn === false) throw new Exception('找不到附圖或無權限');
         $db->prepare("DELETE FROM personal_task_image WHERE img_id = ?")->execute([$imgId]);
