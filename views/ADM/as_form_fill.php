@@ -59,13 +59,11 @@ try {
 <div class="right_col" role="main">
   <div class="form-toolbar">
     <a class="btn btn-default btn-sm" href="as_form_list.php" title="回表單清單"><i class="fa fa-list"></i> 返回清單</a>
-    <span id="formTitle" style="font-weight:bold;color:#7a4e17;"></span>
+    <button class="btn btn-default btn-sm" id="btnSaveDraft"><i class="fa fa-save"></i> 存草稿</button>
+    <button class="btn btn-success btn-sm" id="btnSubmit" data-submit><i class="fa fa-paper-plane"></i> 送出簽核</button>
+    <button class="btn btn-warning btn-sm" onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
     <span id="statusChip"></span>
-    <span style="margin-left:auto;display:flex;gap:6px;">
-      <button class="btn btn-default btn-sm" id="btnSaveDraft" style="display:none;"><i class="fa fa-save"></i> 存草稿</button>
-      <button class="btn btn-success btn-sm" id="btnSubmit" data-submit style="display:none;"><i class="fa fa-paper-plane"></i> 送出簽核</button>
-      <button class="btn btn-warning btn-sm" onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
-    </span>
+    <span id="formTitle" style="font-weight:bold;color:#7a4e17;"></span>
   </div>
   <div class="form-sheet"><div id="formHost"></div></div>
 
