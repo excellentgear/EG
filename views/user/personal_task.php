@@ -3,7 +3,8 @@
  * personal_task.php — 個人工作紀錄
  * 每人只看得到自己的紀錄（含管理者也看不到他人內容；隱私由 API 層 WHERE user_id 把關）。
  * 功能：狀態卡篩選(未完成/急件/暫停/已完成)、期限與急件紅底、進度流程(依序回報/拖移排序/範本)、
- *       提醒(期限與各進度可設幾天/幾小時前，走推播不寫入公告)、CSV/PDF匯出(含表頭表尾設定)。
+ *       提醒(期限與各進度可設幾天/幾小時前，走推播不寫入公告)、CSV/PDF匯出(含表頭表尾設定)、
+ *       附件圖片(列表與編輯窗縮圖/點擊另開原圖，儲存路徑由管理員在「設定」統一設定)。
  * 後端：src/store/PersonalTask_API.php ｜ 視覺設計比照 views/pm/bom_tracking.php(源自 NewOrder_Track222)
  */
 ini_set('display_errors', 1);
@@ -190,6 +191,16 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
             background:rgba(0,0,0,.78); color:#fff; padding:9px 20px; border-radius:20px; font-size:13px; z-index:2000; }
 
         .role-hint { color:#888; font-size:12px; cursor:pointer; }
+
+        /* 附件圖片縮圖（比照 Sales_Track：點擊另開原圖、×刪除） */
+        .pt-img-wrap { position:relative; display:inline-block; }
+        .pt-img-wrap img { max-height:110px; max-width:200px; width:auto; height:auto; border-radius:5px; border:1px solid #ddd; display:block; }
+        .pt-img-del { position:absolute; top:-6px; right:-6px; width:17px; height:17px; border-radius:9px; background:#e74c3c;
+            color:#fff; border:none; font-size:11px; cursor:pointer; line-height:17px; padding:0; text-align:center; }
+        .pt-row-imgs { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+        .pt-row-imgs img { max-height:48px; max-width:90px; width:auto; height:auto; border-radius:3px; border:1px solid #ddd; display:block; }
+        .pt-img-more { display:inline-flex; align-items:center; justify-content:center; min-width:30px; height:48px;
+            background:#f0f4f8; border:1px solid #ccd; border-radius:3px; font-size:11px; color:#555; font-weight:600; cursor:pointer; }
     </style>
 </head>
 <body class="nav-sm">
@@ -228,7 +239,7 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         <input type="text" id="kwFilter" class="form-control input-sm" data-filter-field="1" placeholder="關鍵字（標題/綁定/備註）" style="width:220px;">
         <button class="btn btn-primary btn-sm" id="btnApplyFilter">篩選</button>
         <div style="margin-left:auto; display:flex; gap:8px;">
-          <button class="btn btn-default btn-sm" id="btnSettings"><i class="fa fa-cog"></i> 急件天數</button>
+          <button class="btn btn-default btn-sm" id="btnSettings"><i class="fa fa-cog"></i> 設定</button>
           <button class="btn btn-default btn-sm" id="btnTemplates"><i class="fa fa-list-alt"></i> 流程範本</button>
           <button class="btn btn-default btn-sm" id="btnExportSetting"><i class="fa fa-header"></i> 表頭表尾</button>
           <button class="btn btn-info btn-sm" id="btnExportCsv">轉 CSV</button>
@@ -375,6 +386,18 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
           <div class="form-section-title"><i class="fa fa-commenting-o"></i>備註</div>
           <textarea id="tNote" class="form-control" rows="2" placeholder="選填"></textarea>
         </div>
+
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa fa-image"></i>附件圖片
+            <span style="font-weight:400;color:#A8B0BA;font-size:11px;">（點縮圖另開原圖）</span>
+          </div>
+          <div id="tImgsList" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;"></div>
+          <label class="btn btn-default btn-sm" id="tImgUploadBtn" style="cursor:pointer;margin-bottom:0;">
+            <i class="fa fa-upload"></i> 上傳圖片
+            <input type="file" id="tImgUpload" accept="image/*" multiple style="display:none;">
+          </label>
+          <span id="tImgHint" style="font-size:11px;color:#A8B0BA;margin-left:6px;"></span>
+        </div>
       </div>
       <div class="modal-footer pt-modal-footer">
         <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
@@ -389,13 +412,25 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
   <div class="modal-dialog" style="width:400px;">
     <div class="modal-content">
       <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
-        <h4 class="modal-title"><i class="fa fa-cog"></i> 急件天數設定</h4></div>
+        <h4 class="modal-title"><i class="fa fa-cog"></i> 設定</h4></div>
       <div class="modal-body">
         <p style="color:#888;font-size:12px;">未完成的紀錄在「期限前 N 天」起會以紅底急件顯示，並可用急件卡快速篩選。此為個人預設值，每筆紀錄也可個別覆寫。</p>
         <div class="form-group" style="display:flex; align-items:center; gap:8px;">
           <label style="margin:0;">期限前</label>
           <input type="number" id="setUrgentDays" class="form-control" min="0" style="width:80px;">
           <label style="margin:0;">天顯示急件</label>
+        </div>
+        <div id="attachPathBox" style="display:none; border-top:1px dashed #ddd; margin-top:12px; padding-top:10px;">
+          <div style="font-weight:700; font-size:13px; margin-bottom:6px;"><i class="fa fa-folder-open-o"></i> 附件儲存路徑（全系統設定，僅管理員可見）</div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <label style="font-size:12px; margin-bottom:2px;">NAS 實體路徑（後端寫檔）</label>
+            <input type="text" id="setNasDir" class="form-control input-sm" placeholder="例：Z:/BOM/ERP/個人工作/">
+          </div>
+          <div class="form-group" style="margin-bottom:6px;">
+            <label style="font-size:12px; margin-bottom:2px;">URL 前綴（前端顯示）</label>
+            <input type="text" id="setUrlDir" class="form-control input-sm" placeholder="例：/nas/ERP/個人工作/">
+          </div>
+          <p style="color:#888;font-size:11px;margin:0;">資料庫只存檔名，顯示時用此設定即時組出路徑；修改後所有附件（含既有）一律改讀新路徑，搬移 NAS 資料夾時請把既有檔案一併搬過去。</p>
         </div>
       </div>
       <div class="modal-footer">
@@ -801,6 +836,21 @@ function renderRows(rows) {
             $titleTd.append($bind);
         }
         if (r.note) $titleTd.append($('<div style="font-size:11px;color:#888;white-space:pre-line;">').text(r.note));
+        // 附件縮圖：最多顯示 3 張，點縮圖另開原圖；「+N」開啟編輯視窗看全部（比照 Sales_Track）
+        var imgs = r.images || [];
+        if (imgs.length) {
+            var $imgs = $('<div class="pt-row-imgs">');
+            imgs.slice(0, 3).forEach(function (img) {
+                $imgs.append($('<a target="_blank">').attr('href', img.url)
+                    .attr('title', img.original_name || img.file_name)
+                    .append($('<img>').attr('src', img.url).on('error', function () { $(this).closest('a').hide(); })));
+            });
+            if (imgs.length > 3) {
+                $imgs.append($('<span class="pt-img-more" title="開啟編輯視窗看全部圖片">').text('+' + (imgs.length - 3))
+                    .on('click', function (e) { e.stopPropagation(); openTaskModal(r.id); }));
+            }
+            $titleTd.append($imgs);
+        }
         tr.append($titleTd);
         tr.append(deadlineCell(r).addClass('cell-edit').attr('title', '雙擊編輯'));
         tr.append(stepFlowCell(r));
@@ -998,6 +1048,9 @@ function openTaskModal(id) {
     $('#tReceived').val(new Date().toISOString().substring(0, 10));
     $('#tUrgentDays').attr('placeholder', '預設 ' + state.urgentDefault + ' 天');
     $('#stepEditor').empty();
+    $('#tImgsList').empty();
+    $('#tImgUploadBtn').toggle(!!id);
+    $('#tImgHint').text(id ? '' : '儲存紀錄後即可上傳圖片');
     modalTask = { id: id || 0, status: 0, title: '' };
     refreshModalHeaderButtons();
     loadTplOptions();
@@ -1017,6 +1070,7 @@ function openTaskModal(id) {
             if (t.bind_type && t.bind_id) setBind(t.bind_type, t.bind_id, t.bind_label);
             (t.steps || []).forEach(function (s) { $('#stepEditor').append(stepRowHtml(s)); });
             initStepSortable();
+            renderModalImages(t.images || []);
             $('#taskModal').modal('show');
         });
     } else {
@@ -1156,6 +1210,49 @@ $('#tBindKw').on('input focus', function () {
 });
 $(document).on('click', function (e) { if (!$(e.target).closest('.ac-box').length) $('#tBindSug').hide(); });
 
+// ── 附件圖片（縮圖點擊另開原圖、×刪除；比照 Sales_Track_test）────────
+function renderModalImages(imgs) {
+    var $list = $('#tImgsList').empty();
+    (imgs || []).forEach(function (img) {
+        var $el = $('<div class="pt-img-wrap">');
+        $el.append($('<a target="_blank">').attr('href', img.url)
+            .attr('title', img.original_name || img.file_name)
+            .append($('<img>').attr('src', img.url).on('error', function () { $el.hide(); })));
+        $el.append($('<button type="button" class="pt-img-del" title="刪除此圖片">').html('&times;').on('click', function () {
+            if (!confirm('確認刪除此圖片？')) return;
+            apiPost('delete_task_image', { img_id: img.img_id }).done(function (res) {
+                if (!res.success) { alert(res.message || '刪除失敗'); return; }
+                loadTaskImages(modalTask.id);
+                loadList();
+            });
+        }));
+        $list.append($el);
+    });
+}
+function loadTaskImages(taskId) {
+    if (!taskId) return;
+    apiGet('list_task_images', { task_id: taskId }).done(function (res) {
+        if (res.success) renderModalImages(res.data || []);
+    });
+}
+$('#tImgUpload').on('change', function () {
+    var files = Array.prototype.slice.call(this.files || []);
+    $(this).val('');
+    var taskId = parseInt($('#tId').val(), 10) || 0;
+    if (!taskId || !files.length) return;
+    var pending = files.length;
+    files.forEach(function (file) {
+        var fd = new FormData();
+        fd.append('action', 'upload_task_image');
+        fd.append('task_id', taskId);
+        fd.append('image', file);
+        $.ajax({ url: API, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
+            .done(function (res) { if (!res.success) alert((file.name || '圖片') + ' 上傳失敗：' + (res.message || '')); })
+            .fail(function () { alert((file.name || '圖片') + ' 上傳失敗，請重試'); })
+            .always(function () { if (--pending === 0) { loadTaskImages(taskId); loadList(); } });
+    });
+});
+
 // ── 儲存 ─────────────────────────────────────────────────────────────
 function collectSteps() {
     var steps = [];
@@ -1278,19 +1375,30 @@ $('#btnTemplates').on('click', function () {
     });
 });
 
-// ── 急件天數設定 ─────────────────────────────────────────────────────
+// ── 設定（急件天數；管理員另可設定附件儲存路徑）──────────────────────
 $('#btnSettings').on('click', function () {
     apiGet('get_settings').done(function (res) {
         $('#setUrgentDays').val(res.urgent_days != null ? res.urgent_days : 3);
+        if (res.is_admin) {
+            $('#attachPathBox').show();
+            $('#setNasDir').val(res.attach_nas_dir || '');
+            $('#setUrlDir').val(res.attach_url_dir || '');
+        } else {
+            $('#attachPathBox').hide();
+        }
         $('#settingModal').modal('show');
     });
 });
 $('#btnSaveSetting').on('click', function () {
     apiPost('save_settings', { urgent_days: $('#setUrgentDays').val() }).done(function (res) {
         if (!res.success) { alert(res.message || '儲存失敗'); return; }
-        $('#settingModal').modal('hide');
-        toast('已儲存急件天數');
-        loadList();
+        var finish = function () { $('#settingModal').modal('hide'); toast('已儲存設定'); loadList(); };
+        if ($('#attachPathBox').is(':visible')) {
+            apiPost('save_attach_path', { nas_dir: $('#setNasDir').val(), url_dir: $('#setUrlDir').val() }).done(function (r2) {
+                if (!r2.success) { alert(r2.message || '附件路徑儲存失敗'); return; }
+                finish();
+            });
+        } else finish();
     });
 });
 
