@@ -388,6 +388,17 @@ try {
         .datatable-custom tbody tr:hover > td {
             background-color: #FFFFCC !important;
         }
+        /* 綁定子頁面清單：勾選中的項目暖色高亮 */
+        #group_pages_container .checkbox {
+            padding: 3px 6px;
+            border-radius: 3px;
+        }
+        #group_pages_container .checkbox.eg-checked {
+            background-color: #F7E0BD;
+        }
+        #group_pages_container .checkbox:hover {
+            background-color: #FCEFD9;
+        }
     </style>
 </head>
 
@@ -531,7 +542,7 @@ try {
     
     <!-- Group Modal -->
     <div class="modal fade" id="groupModal" tabindex="-1" role="dialog">
-        <div class="modal-dialog" role="document">
+        <div class="modal-dialog modal-lg" role="document">
             <div class="modal-content">
                 <form method="POST">
                     <div class="modal-header">
@@ -550,8 +561,19 @@ try {
                             <input type="text" class="form-control" name="remark" id="group_remark">
                         </div>
                         <div class="form-group">
-                            <label>綁定子頁面 (Bound Pages)</label>
-                            <div id="group_pages_container" style="max-height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; background: #f9f9f9;">
+                            <label>綁定子頁面 (Bound Pages) <small class="text-muted">（勾選要納入此主項目的子頁面）</small></label>
+                            <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px;">
+                                <input type="text" id="group_pages_search" class="form-control input-sm" placeholder="輸入關鍵字篩選（頁面名稱／網址，可打部分字）…" style="flex:1; min-width:180px;" autocomplete="off">
+                                <button type="button" class="btn btn-default btn-sm" id="btn_select_filtered">全選（篩選結果）</button>
+                                <button type="button" class="btn btn-default btn-sm" id="btn_clear_filtered">全不選（篩選結果）</button>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                                <span style="font-size:0.9em; color:#8a5a1a;">已勾選 <strong id="group_pages_count">0</strong> 個</span>
+                                <label style="font-size:0.9em; color:#8a5a1a; font-weight:normal; margin:0; cursor:pointer;">
+                                    <input type="checkbox" id="group_pages_only_checked" style="vertical-align:middle;"> 只顯示已勾選
+                                </label>
+                            </div>
+                            <div id="group_pages_container" style="max-height: 45vh; overflow-y: auto; border: 1px solid #ccc; padding: 10px; background: #f9f9f9;">
                                 <!-- Checkboxes will be populated by JS -->
                             </div>
                         </div>
@@ -850,6 +872,41 @@ try {
                 });
             });
 
+            // --- 綁定子頁面：即時篩選 / 全選 / 計數 ---
+            $('#group_pages_search').on('input', filterGroupPages);
+            // 雙擊清空搜尋（比照 UI 規範）
+            $('#group_pages_search').on('dblclick', function() {
+                if ($(this).val() !== '') { $(this).val(''); filterGroupPages(); }
+            });
+            // 搜尋框按 Enter 不送出表單（避免誤存），只維持篩選
+            $('#group_pages_search').on('keydown', function(e) {
+                if (e.key === 'Enter') { e.preventDefault(); }
+            });
+            $('#group_pages_only_checked').on('change', filterGroupPages);
+
+            $('#btn_select_filtered').click(function() {
+                $('#group_pages_container .checkbox:visible input[type=checkbox]').prop('checked', true)
+                    .closest('.checkbox').addClass('eg-checked');
+                updateGroupPagesCount();
+            });
+            $('#btn_clear_filtered').click(function() {
+                $('#group_pages_container .checkbox:visible input[type=checkbox]').prop('checked', false)
+                    .closest('.checkbox').removeClass('eg-checked');
+                updateGroupPagesCount();
+                if ($('#group_pages_only_checked').prop('checked')) { filterGroupPages(); }
+            });
+
+            // 勾選變動：更新暖色高亮與計數
+            $('#group_pages_container').on('change', 'input[type=checkbox]', function() {
+                $(this).closest('.checkbox').toggleClass('eg-checked', $(this).prop('checked'));
+                updateGroupPagesCount();
+            });
+
+            // 打開弾窗後自動聚焦搜尋框
+            $('#groupModal').on('shown.bs.modal', function() {
+                $('#group_pages_search').focus();
+            });
+
             // 雙擊搜尋框清除內容
             $(document).on('dblclick', '.dataTables_filter input', function() {
                 var table = $(this).closest('.dataTables_wrapper').find('table').DataTable();
@@ -1001,8 +1058,12 @@ try {
                 if (page.group_id && page.group_id != groupId) {
                     groupInfo = ' <span class="text-danger" style="font-size: 0.85em;">(目前屬於: ' + (page.current_group_name || '未知') + ')</span>';
                 }
-                
-                var html = '<div class="checkbox" style="margin-top: 5px; margin-bottom: 5px;">';
+
+                // 供即時篩選用的搜尋文字（頁面名稱＋網址，轉小寫）
+                var searchText = ((page.page_name || '') + ' ' + (page.page_url || '')).toLowerCase()
+                    .replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+
+                var html = '<div class="checkbox' + (isChecked ? ' eg-checked' : '') + '" style="margin-top: 4px; margin-bottom: 4px;" data-search="' + searchText + '">';
                 html += '<label>';
                 html += '<input type="checkbox" name="bound_pages[]" value="' + page.page_id + '" ' + (isChecked ? 'checked' : '') + '>';
                 html += ' ' + page.page_name + ' <small class="text-muted">(' + (page.page_url || '無網址') + ')</small>' + groupInfo;
@@ -1010,6 +1071,29 @@ try {
                 html += '</div>';
                 container.append(html);
             });
+
+            // 重繪後重設篩選與計數
+            $('#group_pages_search').val('');
+            $('#group_pages_only_checked').prop('checked', false);
+            filterGroupPages();
+            updateGroupPagesCount();
+        }
+
+        // 即時篩選綁定子頁面清單（部分字元 + 只顯示已勾選）
+        function filterGroupPages() {
+            var kw = ($('#group_pages_search').val() || '').toLowerCase().trim();
+            var onlyChecked = $('#group_pages_only_checked').prop('checked');
+            $('#group_pages_container .checkbox').each(function() {
+                var $box = $(this);
+                var matchKw = kw === '' || (($box.data('search') || '') + '').indexOf(kw) !== -1;
+                var matchChecked = !onlyChecked || $box.find('input[type=checkbox]').prop('checked');
+                $box.toggle(matchKw && matchChecked);
+            });
+        }
+
+        function updateGroupPagesCount() {
+            var n = $('#group_pages_container input[type=checkbox]:checked').length;
+            $('#group_pages_count').text(n);
         }
 
         // --- Page Functions ---
