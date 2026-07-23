@@ -13368,7 +13368,7 @@ echo "</script>\n";
             const packagingTypeVal = $modal.find('.packaging-type option:selected').text();
             const userInputTotalBoxes = parseFloat($modal.find('.qty-per-unit').val()) || 0;
 
-            const qrUrlForPrint = `http://192.168.2.128/EGsystem/views/pm/schedule_T5.php?b=${encodeURIComponent(bomForQr)}`;
+            const qrUrlForPrint = `${location.origin}/EGsystem/views/pm/schedule_T5.php?b=${encodeURIComponent(bomForQr)}`;
             const generateQrCodePhpUrlForPrint = `../../views/QC/generate_qrcode.php?text=${encodeURIComponent(qrUrlForPrint)}`;
             const qrCodeForPrintHtml = `<img src="${generateQrCodePhpUrlForPrint}" alt="QR Code" class="qr-code-image">`;
 

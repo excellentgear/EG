@@ -3510,7 +3510,7 @@ if ($reply_id != "") {
                 // Button visibility handled by direct-print-qrcode-button logic
 
                 // Construct QR Code URL
-                const qrUrl = `http://192.168.2.128/EGsystem/views/pm/schedule_T5.php?b=${encodeURIComponent(bomForQr)}`;
+                const qrUrl = `${location.origin}/EGsystem/views/pm/schedule_T5.php?b=${encodeURIComponent(bomForQr)}`;
 
                 // Construct URL for the generate_qrcode.php script
                 const generateQrCodePhpUrl = `../../views/QC/generate_qrcode.php?text=${encodeURIComponent(qrUrl)}`;
@@ -3542,7 +3542,7 @@ if ($reply_id != "") {
                 const userInputTotalBoxes = parseFloat($modal.find('.qty-per-unit').val()) || 0; // Total boxes from user input
 
                 // Construct QR Code URL for printing
-                const qrUrlForPrint = `http://192.168.2.128/EGsystem/views/pm/schedule_T5.php?b=${encodeURIComponent(bomForQr)}`;
+                const qrUrlForPrint = `${location.origin}/EGsystem/views/pm/schedule_T5.php?b=${encodeURIComponent(bomForQr)}`;
                 const generateQrCodePhpUrlForPrint = `../../views/QC/generate_qrcode.php?text=${encodeURIComponent(qrUrlForPrint)}`;
                 const qrCodeForPrintHtml = `<img src="${generateQrCodePhpUrlForPrint}" alt="QR Code" class="qr-code-image">`;
 
