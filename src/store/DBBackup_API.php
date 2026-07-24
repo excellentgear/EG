@@ -245,8 +245,57 @@ switch ($action) {
         if (!$IS_ADMIN) deny();
         require_once __DIR__ . '/../common/path_migration_lib.php';
         $dry = (($_POST['dry'] ?? '1') === '1');
-        $r = eg_pm_bulk_prefix($pdo, (string)($_POST['old'] ?? ''), (string)($_POST['new'] ?? ''), $dry, $by);
+        $sel = null;
+        if (isset($_POST['selected'])) {
+            $selArr = json_decode((string)$_POST['selected'], true);
+            if (is_array($selArr)) $sel = array_map('strval', $selArr);
+        }
+        $r = eg_pm_bulk_prefix($pdo, (string)($_POST['old'] ?? ''), (string)($_POST['new'] ?? ''), $dry, $by, $sel);
         out(['success'=>$r['ok'],'message'=>$r['msg'],'items'=>$r['items']]);
+    }
+    case 'path_changelog': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/path_migration_lib.php';
+        out(['success'=>true,'data'=>eg_pm_changelog($pdo, 100)]);
+    }
+
+    // ═════════════════ 移機快速備份（僅管理員）═════════════════
+    case 'migbk_get': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/mig_backup_lib.php';
+        require_once __DIR__ . '/../common/path_migration_lib.php';
+        // 可勾選的 NAS 文件來源=盤點中 kind=fs 且有值的設定
+        $opts = [];
+        foreach (eg_pm_inventory($pdo)['settings'] as $s) {
+            if ($s['kind'] === 'fs' && $s['value'] !== '') {
+                $opts[] = ['key'=>$s['key'], 'label'=>$s['label'], 'path'=>$s['value'], 'exists'=>$s['exists']];
+            }
+        }
+        out(['success'=>true, 'settings'=>eg_migbk_settings($pdo), 'status'=>eg_migbk_status($pdo), 'doc_options'=>$opts]);
+    }
+    case 'migbk_save': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/mig_backup_lib.php';
+        $keys = json_decode((string)($_POST['include_keys'] ?? '[]'), true);
+        eg_migbk_save_settings($pdo, [
+            'dest'            => (string)($_POST['dest'] ?? ''),
+            'include_docs'    => (($_POST['include_docs'] ?? '1') === '1'),
+            'include_keys'    => is_array($keys) ? $keys : [],
+            'include_uploads' => (($_POST['include_uploads'] ?? '1') === '1'),
+            'interval_days'   => (int)($_POST['interval_days'] ?? 0),
+        ], $by);
+        out(['success'=>true,'message'=>'移機備份設定已儲存']);
+    }
+    case 'migbk_start': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/mig_backup_lib.php';
+        $r = eg_migbk_start($pdo, $by, 'manual');
+        out(['success'=>$r['ok'],'message'=>$r['msg']]);
+    }
+    case 'migbk_status': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/mig_backup_lib.php';
+        out(['success'=>true,'data'=>eg_migbk_status($pdo)]);
     }
     case 'path_copy_start': {
         if (!$IS_ADMIN) deny();
