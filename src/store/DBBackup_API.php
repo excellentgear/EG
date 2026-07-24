@@ -259,6 +259,49 @@ switch ($action) {
         out(['success'=>true,'data'=>eg_pm_changelog($pdo, 100)]);
     }
 
+    // ═════════════════ GitHub 帳號綁定 / 雲端下載（僅管理員）═════════════════
+    case 'git_get': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/git_account_lib.php';
+        out(['success'=>true,'data'=>eg_git_cfg($pdo)]);
+    }
+    case 'git_verify': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/git_account_lib.php';
+        $v = eg_git_verify_token((string)($_POST['token'] ?? ''));
+        out(['success'=>$v['ok'],'message'=>$v['msg'],'login'=>$v['login'] ?? '','scopes'=>$v['scopes'] ?? '']);
+    }
+    case 'git_bind': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/git_account_lib.php';
+        $r = eg_git_bind($pdo, (string)($_POST['token'] ?? ''), $by);
+        if ($r['ok'] && (($_POST['upload_full'] ?? '') === '1')) {
+            $u = eg_git_upload_full_site($pdo, $by);
+            $r['msg'] .= '｜整站上傳:' . $u['msg'];
+        }
+        out(['success'=>$r['ok'],'message'=>$r['msg']]);
+    }
+    case 'git_unbind': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/git_account_lib.php';
+        $r = eg_git_unbind($pdo, $by);
+        out(['success'=>$r['ok'],'message'=>$r['msg']]);
+    }
+    case 'git_upload_full': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/git_account_lib.php';
+        set_time_limit(600);
+        $r = eg_git_upload_full_site($pdo, $by);
+        out(['success'=>$r['ok'],'message'=>$r['msg']]);
+    }
+    case 'git_pull_backups': {
+        if (!$IS_ADMIN) deny();
+        require_once __DIR__ . '/../common/git_account_lib.php';
+        set_time_limit(600);
+        $r = eg_git_pull_backups($pdo, $by);
+        out(['success'=>$r['ok'],'message'=>$r['msg']]);
+    }
+
     // ═════════════════ 移機快速備份（僅管理員）═════════════════
     case 'migbk_get': {
         if (!$IS_ADMIN) deny();
