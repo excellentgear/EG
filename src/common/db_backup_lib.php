@@ -334,6 +334,10 @@ function eg_bk_purge_history(PDO $pdo, string $by): array {
     eg_bk_git(['gc', '--prune=now', '--aggressive']);
     // 歷史沒了 → 已 prune 的備份無法再從歷史取回,把 log 上的 git_commit 全部清空並註記
     $pdo->exec("UPDATE db_backup_log SET git_commit=NULL WHERE status IN ('success','deleted')");
+    // 已刪除列的備註同步更新（不再顯示「歷史仍在git」的過期提示）
+    $pdo->exec("UPDATE db_backup_log
+                SET note = REPLACE(note, '刪除;歷史仍在git,徹底清除請用清除歷史]', '刪除;歷史已徹底清除]')
+                WHERE status='deleted' AND note LIKE '%歷史仍在git%'");
     $pushMsg = ($c3 === 0) ? '雲端歷史已強制覆蓋' : ('雲端推送失敗(' . mb_substr($o3, 0, 200) . '),本地歷史已清');
     return ['ok'=>true,'msg'=>'Git 歷史已壓縮成單一版本。' . $pushMsg . '。GitHub 端舊資料將由其垃圾回收機制清除(非即時)。'];
 }

@@ -24,7 +24,14 @@ if (!isset($_SESSION['id'])) { echo json_encode(['success'=>false,'message'=>'�
 $db  = new DBConnection();
 $pdo = $db->getPDO();
 $uid = (int)$_SESSION['id'];
-$by  = (string)($_SESSION['userName'] ?? $_SESSION['user_cname'] ?? ('uid' . $uid));
+// 顯示用一律使用者「中文姓名」,不用登入帳號（2026-07-24 使用者要求）
+$by = '';
+try {
+    $st = $pdo->prepare("SELECT user_cname FROM user WHERE id=? LIMIT 1");
+    $st->execute([$uid]);
+    $by = trim((string)$st->fetchColumn());
+} catch (Throwable $e) {}
+if ($by === '') $by = (string)($_SESSION['userName'] ?? ('uid' . $uid));
 
 // ── 權限 ────────────────────────────────────────────────────────────────
 $features            = rf_load_user_features_all($pdo, $uid);
@@ -91,8 +98,8 @@ switch ($action) {
         $php = BK_PHP;
         $script = realpath(__DIR__ . '/../common/db_backup_run.php');
         if (!is_file($php) || !$script) out(['success'=>false,'message'=>'找不到備份工人程式']);
-        // start /B 背景啟動，立即返回；由參數帶入觸發者
-        $cmd = 'start /B "" "' . $php . '" "' . $script . '" manual "' . str_replace('"', '', $by) . '" >NUL 2>&1';
+        // start /B 背景啟動，立即返回。觸發者以 uid 傳遞（中文名經 cmd 命令列會亂碼,由工人自行查中文名）
+        $cmd = 'start /B "" "' . $php . '" "' . $script . '" manual "uid' . $uid . '" >NUL 2>&1';
         $h = @popen($cmd, 'r'); if ($h) @pclose($h);
         out(['success'=>true,'message'=>'已開始備份，稍候重新整理列表即可看到結果']);
     }

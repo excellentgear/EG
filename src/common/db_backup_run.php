@@ -25,6 +25,16 @@ try {
     exit(1);
 }
 
+// 觸發者若以 uid 形式傳入（避免中文經 cmd 命令列亂碼）,在此換成使用者中文姓名
+if (preg_match('/^uid(\d+)$/', $by, $m)) {
+    try {
+        $st = $pdo->prepare("SELECT user_cname FROM user WHERE id=? LIMIT 1");
+        $st->execute([(int)$m[1]]);
+        $cname = trim((string)$st->fetchColumn());
+        if ($cname !== '') $by = $cname;
+    } catch (Throwable $e) {}
+}
+
 $r = eg_bk_run($pdo, $trigger, $by);
 fwrite(STDOUT, json_encode($r, JSON_UNESCAPED_UNICODE) . "\n");
 exit(($r['ok'] || !empty($r['skipped'])) ? 0 : 1);
