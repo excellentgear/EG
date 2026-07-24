@@ -235,6 +235,7 @@ try {
           <strong style="color:#7a4e17;font-size:13px;">分割列（由上而下；高度為比例）</strong>
           <span class="text-muted" style="font-size:11.5px;">　點內容框後按變數鈕插入：</span>
           <span id="tokenBtns">
+            <button class="btn btn-default btn-xs tok" data-t="{公司}">公司</button>
             <button class="btn btn-default btn-xs tok" data-t="{部門}">部門</button>
             <button class="btn btn-default btn-xs tok" data-t="{職稱}">職稱</button>
             <button class="btn btn-default btn-xs tok" data-t="{姓名}">姓名</button>
@@ -624,7 +625,7 @@ $('#btnBandSave').on('click',function(){
 // ── 線上圖章模板（設計器）──
 let TPLS=[], curTplId=0, lastTokInput=null;
 function sampleCtx(){
-  return {dept:'品保課',position:'課長',name:'王小明',date:dot(today()),
+  return {company:window.__ownCompany||'公司全名',dept:'品保課',position:'課長',name:'王小明',date:dot(today()),
           serial:($('#serPrefix').val()||'')+String(+$('#serStart').val()||1).padStart(+$('#serDigits').val()||3,'0')};
 }
 function tplRowHtml(h,text,fs,mode){
@@ -717,7 +718,7 @@ function loadTpls(){
     $('#tplBody').html(TPLS.map(t=>{
       let sc={}; try{sc=JSON.parse(t.schema_json||'{}');}catch(e){}
       const prev=EGStampTpl.render(Object.assign({},sc,{size:76}),
-        {dept:'品保課',position:'課長',name:'王小明',date:dot(today()),
+        {company:window.__ownCompany||'公司全名',dept:'品保課',position:'課長',name:'王小明',date:dot(today()),
          serial:(t.serial_prefix||'')+String(t.serial_start||1).padStart(+t.serial_digits||3,'0')});
       return `<tr>
         <td style="text-align:center;">${prev}</td>

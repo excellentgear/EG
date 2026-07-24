@@ -18,6 +18,7 @@
     function fill(text, ctx) {
         ctx = ctx || {};
         return String(text || '')
+            .replace(/\{公司\}/g,  ctx.company == null ? '' : ctx.company)
             .replace(/\{部門\}/g,  ctx.dept    == null ? '' : ctx.dept)
             .replace(/\{職稱\}/g,  ctx.position== null ? '' : ctx.position)
             .replace(/\{姓名\}/g,  ctx.name    == null ? '' : ctx.name)

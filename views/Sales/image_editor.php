@@ -3377,6 +3377,7 @@ async function placeTplStamp(x, y, size) {
     const h = (hsel._list || [])[parseInt(hsel.value, 10)];
     const ctx = h ? { name: h.holder_name, dept: h.dept || '', position: h.position || '' }
                   : { name: USER_CNAME || '', dept: '', position: '' };
+    ctx.company = OWN_COMPANY || '';
     ctx.date = todayStr();
     if (EGStampTpl.hasSerial(schema)) {   // 有 {編號} 才取號（依模板跳號規則遞增，取了就算用掉）
         try {
