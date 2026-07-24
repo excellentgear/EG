@@ -242,7 +242,11 @@ try {
             <button class="btn btn-default btn-xs tok" data-t="{編號}">編號</button>
           </span>
         </div>
-        <table class="list" id="tplRowsTbl"><thead><tr><th style="width:70px;">高度比</th><th>內容（固定字樣＋變數）</th><th style="width:40px;"></th></tr></thead>
+        <table class="list" id="tplRowsTbl"><thead><tr>
+          <th style="width:62px;">高度比</th><th>內容（固定字樣＋變數）</th>
+          <th style="width:64px;" title="字的大小（相對單位，章寬=100）；留空=依列高自動">字級</th>
+          <th style="width:82px;" title="文字超過章寬時的處理：縮小=壓縮字距擠在一行；換列=自動折成多行">超寬時</th>
+          <th style="width:34px;"></th></tr></thead>
           <tbody id="tplRows"></tbody></table>
         <button class="btn btn-default btn-xs" id="btnTplRowAdd" style="margin-top:4px;"><i class="fa fa-plus"></i> 加一列</button>
         <div style="margin-top:10px;padding:8px;background:#fdf6ea;border:1px solid #e8d9b8;border-radius:4px;">
@@ -253,6 +257,12 @@ try {
           間隔 <input type="number" id="serStep" class="form-control input-sm" style="width:56px;display:inline-block;" value="1" min="1">
           歸零 <select id="serReset" class="form-control input-sm" style="width:90px;display:inline-block;">
             <option value="none">不歸零</option><option value="year">每年</option><option value="month">每月</option></select>
+          <div id="serExplain" style="font-size:12.5px;color:#7a4e17;margin-top:6px;"></div>
+          <div class="text-muted" style="font-size:11.5px;margin-top:3px;line-height:1.6;">
+            範例：前綴「QA-」＋位數 3＋起始 1＋間隔 1 → 蓋章依序取 <code>QA-001、QA-002、QA-003…</code>；
+            間隔 2 → <code>QA-001、QA-003、QA-005…</code>（跳號）。
+            「歸零」＝編號重新起算的週期：選<strong>每年</strong>，隔年第一顆章又從 QA-001 開始；選<strong>不歸零</strong>則一直累加。
+          </div>
         </div>
       </div>
       <div style="width:280px;text-align:center;">
@@ -617,20 +627,39 @@ function sampleCtx(){
   return {dept:'品保課',position:'課長',name:'王小明',date:dot(today()),
           serial:($('#serPrefix').val()||'')+String(+$('#serStart').val()||1).padStart(+$('#serDigits').val()||3,'0')};
 }
-function tplRowHtml(h,text){
+function tplRowHtml(h,text,fs,mode){
   return `<tr><td><input type="number" class="form-control input-sm tpl-h" value="${h}" min="1" max="100" step="1"></td>
     <td><input type="text" class="form-control input-sm tpl-text" value="${esc(text)}"></td>
+    <td><input type="number" class="form-control input-sm tpl-fs" value="${fs>0?fs:''}" placeholder="自動" min="4" max="60" step="0.5"></td>
+    <td><select class="form-control input-sm tpl-mode">
+      <option value="shrink" ${mode!=='wrap'?'selected':''}>縮小</option>
+      <option value="wrap" ${mode==='wrap'?'selected':''}>換列</option></select></td>
     <td style="text-align:center;"><button class="btn btn-danger btn-xs tpl-row-del"><i class="fa fa-times"></i></button></td></tr>`;
 }
 function tplSchemaFromUI(){
   const rows=[];
   $('#tplRows tr').each(function(){
-    rows.push({h:+$(this).find('.tpl-h').val()||1, text:$(this).find('.tpl-text').val()||''});
+    rows.push({h:+$(this).find('.tpl-h').val()||1, text:$(this).find('.tpl-text').val()||'',
+               fs:+$(this).find('.tpl-fs').val()||0, mode:$(this).find('.tpl-mode').val()||'shrink'});
   });
   return {shape:$('#tplShape').val(), color:$('#tplColor').val(), size:+$('#tplSize').val()||100,
           ratio:+$('#tplRatio').val()||1, stroke:+$('#tplStroke').val()||2.6, font:$('#tplFont').val(), rows};
 }
-function tplPreview(){ $('#tplPreview').html(EGStampTpl.render(tplSchemaFromUI(), sampleCtx())); }
+function tplPreview(){
+  $('#tplPreview').html(EGStampTpl.render(tplSchemaFromUI(), sampleCtx()));
+  updateSerExplain();
+}
+// 跳號規則即時試算說明：依目前設定列出前三個號與歸零說明，設定當下就看得懂會怎麼跳
+function updateSerExplain(){
+  const pre=$('#serPrefix').val()||'', dg=+$('#serDigits').val()||3;
+  const st=+$('#serStart').val()||1, sp=+$('#serStep').val()||1;
+  const pad=n=>pre+String(n).padStart(dg,'0');
+  const seq=[st,st+sp,st+sp*2].map(pad).join('　→　');
+  const rs={none:'不歸零：編號一直連續累加',
+            year:'每年歸零：每年第一次蓋章重新從 '+pad(st)+' 開始（各年度流水獨立）',
+            month:'每月歸零：每月第一次蓋章重新從 '+pad(st)+' 開始'}[$('#serReset').val()]||'';
+  $('#serExplain').html('目前規則試算：<strong>'+esc(seq)+'　→　…</strong>｜'+esc(rs));
+}
 $('#tplModal').on('input change','input,select',tplPreview);
 $('#tplModal').on('focusin','.tpl-text',function(){ lastTokInput=this; });
 $('#tokenBtns').on('click','.tok',function(e){
@@ -645,7 +674,7 @@ $('#tplModal').on('click','.tpl-row-del',function(){
   if($('#tplRows tr').length<=1){alert('至少保留一列');return;}
   $(this).closest('tr').remove(); tplPreview();
 });
-$('#btnTplRowAdd').on('click',function(){ $('#tplRows').append(tplRowHtml(30,'')); tplPreview(); });
+$('#btnTplRowAdd').on('click',function(){ $('#tplRows').append(tplRowHtml(30,'',0,'shrink')); tplPreview(); });
 $('#tplModal').on('click','.tpl-color',function(e){ e.preventDefault(); $('#tplColor').val($(this).data('c')); tplPreview(); });
 
 function openTplModal(t){
@@ -657,7 +686,7 @@ function openTplModal(t){
   $('#tplShape').val(sc.shape||'circle'); $('#tplColor').val(sc.color||'#cf3a2b');
   $('#tplSize').val(sc.size||100); $('#tplRatio').val(sc.ratio||1);
   $('#tplStroke').val(sc.stroke||2.6); $('#tplFont').val(sc.font||'kai');
-  $('#tplRows').html((sc.rows&&sc.rows.length?sc.rows:[{h:100,text:''}]).map(r=>tplRowHtml(r.h,r.text)).join(''));
+  $('#tplRows').html((sc.rows&&sc.rows.length?sc.rows:[{h:100,text:''}]).map(r=>tplRowHtml(r.h,r.text,+r.fs||0,r.mode||'shrink')).join(''));
   $('#serPrefix').val(t?t.serial_prefix:''); $('#serDigits').val(t?t.serial_digits:3);
   $('#serStart').val(t?t.serial_start:1); $('#serStep').val(t?t.serial_step:1);
   $('#serReset').val(t?t.serial_reset:'none');

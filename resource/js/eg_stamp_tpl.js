@@ -1,7 +1,8 @@
 // eg_stamp_tpl.js — 線上圖章「模板」渲染器（圖章管理頁設計器與批圖編輯器蓋章共用）
 // 與 eg_stamp.js（簽核回墨章）互不相依。schema 由 stamp_template.schema_json 儲存：
 // { shape:'circle|ellipse|rect|roundrect', color:'#cf3a2b', size:100, ratio:1, stroke:2.6, font:'kai|ming|hei',
-//   rows:[ {h:30, text:'{部門}'}, {h:40, text:'{日期}'}, {h:30, text:'{姓名}'} ] }   // h=高度%（自動正規化）
+//   rows:[ {h:30, text:'{部門}', fs:0, mode:'shrink'}, ... ] }   // h=高度%（自動正規化）
+//   fs=字級（viewBox 單位，章寬=100；0/未填=自動）；mode='shrink' 超寬時壓縮字距（預設）｜'wrap' 超寬時自動換列
 // text 內可混用固定字樣與變數 token：{部門} {職稱} {姓名} {日期} {編號}
 // ctx = { dept, position, name, date, serial }（date/serial 由呼叫端先算好字串）
 (function (global) {
@@ -73,12 +74,37 @@
             if (txt) {
                 var cy = (y + y2) / 2;
                 var maxW = 2 * halfWidthAt(schema, cy, W, H) - 4;
-                var fs = Math.min(rh * 0.62, maxW / Math.max(1, txt.length) * 1.15);
-                fs = Math.max(5, fs);
-                var needFit = txt.length * fs > maxW;
-                svg += '<text x="' + (W/2) + '" y="' + (cy + fs * 0.36).toFixed(1) + '" text-anchor="middle" font-size="' + fs.toFixed(1) + '" fill="' + color + '" font-weight="bold" font-family="' + font + '"'
-                     + (needFit ? ' textLength="' + maxW.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : '')
-                     + '>' + esc(txt) + '</text>';
+                var userFs = +rows[i].fs > 0 ? +rows[i].fs : 0;
+                if (rows[i].mode === 'wrap') {
+                    // 自動換列：超過可用寬度就折行；未指定字級時從單行高度起算，行數放不下再逐步縮小
+                    var fs = userFs || rh * 0.62, lines = [txt], n = 1;
+                    for (var it = 0; it < 6; it++) {
+                        var cpl = Math.max(1, Math.floor(maxW / fs));
+                        lines = [];
+                        for (var p = 0; p < txt.length; p += cpl) lines.push(txt.substr(p, cpl));
+                        n = lines.length;
+                        if (n * fs * 1.08 <= rh || fs <= 5) break;
+                        fs = Math.max(5, Math.min(fs * 0.85, (rh / n) / 1.08));
+                    }
+                    var lh = Math.min(fs * 1.08, rh / n);
+                    var startY = cy - lh * (n - 1) / 2;
+                    for (var li = 0; li < n; li++) {
+                        var ly = startY + li * lh;
+                        var lw = 2 * halfWidthAt(schema, ly, W, H) - 4;
+                        var lFit = lines[li].length * fs > lw;
+                        svg += '<text x="' + (W/2) + '" y="' + (ly + fs * 0.36).toFixed(1) + '" text-anchor="middle" font-size="' + fs.toFixed(1) + '" fill="' + color + '" font-weight="bold" font-family="' + font + '"'
+                             + (lFit ? ' textLength="' + lw.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : '')
+                             + '>' + esc(lines[li]) + '</text>';
+                    }
+                } else {
+                    // 自動縮小（預設）：單行置中，超寬時以 textLength 壓縮字距
+                    var fs2 = userFs || Math.min(rh * 0.62, maxW / Math.max(1, txt.length) * 1.15);
+                    fs2 = Math.max(5, Math.min(fs2, rh * 0.92));
+                    var needFit = txt.length * fs2 > maxW;
+                    svg += '<text x="' + (W/2) + '" y="' + (cy + fs2 * 0.36).toFixed(1) + '" text-anchor="middle" font-size="' + fs2.toFixed(1) + '" fill="' + color + '" font-weight="bold" font-family="' + font + '"'
+                         + (needFit ? ' textLength="' + maxW.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : '')
+                         + '>' + esc(txt) + '</text>';
+                }
             }
             y = y2;
         }
