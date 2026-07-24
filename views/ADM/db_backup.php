@@ -141,24 +141,55 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
         <i class="fa fa-exchange"></i> 路徑遷移工具（換 NAS / 換主機 / 測試機用）
         <small style="color:#9a7b4f;font-weight:400;">點此展開——盤點全系統 NAS 路徑,一鍵把舊位置對應到新位置,並可搬移檔案</small></h4>
       <div id="pmBody" style="display:none;">
-        <!-- 批次前綴替換 -->
-        <div style="border:1px solid #e6d8c3;border-radius:6px;padding:10px;margin-bottom:10px;background:#fffaf2;">
-          <b style="color:var(--amber-d);">① 批次前綴替換</b>
-          <span style="font-size:12px;color:#9a7b4f;">把所有「以舊前綴開頭」的設定值與資料庫路徑,一口氣換成新前綴（不分大小寫比對）</span>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+        <!-- 頁內分頁（仿 stock.php tab-sw）-->
+        <div style="display:flex;gap:4px;background:#f3ead9;border-radius:8px;padding:4px;margin-bottom:10px;flex-wrap:wrap;">
+          <button class="pm-tab-btn active" data-t="overview" onclick="pmTab('overview',this)">📋 路徑總覽</button>
+          <button class="pm-tab-btn" data-t="bulk" onclick="pmTab('bulk',this)">🔁 批次替換</button>
+          <button class="pm-tab-btn" data-t="copy" onclick="pmTab('copy',this)">📂 檔案搬運</button>
+          <button class="pm-tab-btn" data-t="log" onclick="pmTab('log',this);pmLoadLog()">🕘 變更紀錄</button>
+          <button class="pm-tab-btn" data-t="migbk" onclick="pmTab('migbk',this);migbkLoad()">🚚 移機快速備份</button>
+        </div>
+
+        <!-- Tab1 路徑總覽 -->
+        <div class="pm-tab" id="pm-tab-overview">
+          <div style="font-size:12px;color:#9a7b4f;margin-bottom:6px;">
+            全系統跟 NAS/磁碟位置有關的設定都在這裡。「存放位置」= 這個路徑值本身存在哪(改設定就是改那裡);「使用頁面」= 哪些網頁會用到它。
+          </div>
+          <div style="overflow-x:auto;max-height:380px;overflow-y:auto;border:1px solid #e6d8c3;border-radius:6px;">
+            <table class="bk-tbl"><thead><tr><th>用途</th><th>使用頁面</th><th>目前路徑值</th><th>路徑值存放位置</th><th>狀態</th><th>修改</th></tr></thead>
+            <tbody id="pmSettingsBody"><tr><td colspan="6" style="color:#999;padding:10px;">載入中…</td></tr></tbody></table>
+          </div>
+          <div style="margin-top:10px;">
+            <b style="color:var(--amber-d);font-size:13px;">資料庫存了完整路徑的表（批次替換會一併處理）</b>
+            <div style="overflow-x:auto;max-height:130px;overflow-y:auto;border:1px solid #e6d8c3;border-radius:6px;margin-top:4px;">
+              <table class="bk-tbl"><thead><tr><th>模組</th><th>欄位</th><th>路徑前綴</th><th>筆數</th></tr></thead>
+              <tbody id="pmTablesBody"></tbody></table>
+            </div>
+          </div>
+          <div style="font-size:12px;color:#8a5a1a;background:#fdf0dc;border:1px solid #e9c98f;border-radius:5px;padding:6px 10px;margin-top:8px;" id="pmHardcoded"></div>
+        </div>
+
+        <!-- Tab2 批次替換 -->
+        <div class="pm-tab" id="pm-tab-bulk" style="display:none;">
+          <div style="font-size:12px;color:#9a7b4f;margin-bottom:6px;">
+            把所有「以舊前綴開頭」的路徑一口氣換掉(不分大小寫)。流程:①預覽 → ②勾選要套用的項目(預設全勾) → ③執行勾選項。每次執行都會寫入「變更紀錄」。
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <input type="text" id="pmOld" class="form-control" style="width:280px;" placeholder="舊前綴 例:\\excellentnas 或 Z:">
             <i class="fa fa-long-arrow-right" style="color:var(--amber);"></i>
             <input type="text" id="pmNew" class="form-control" style="width:280px;" placeholder="新前綴 例:\\newnas 或 D:\nasdata">
-            <button class="btn btn-sm btn-default" onclick="pmBulk(true)"><i class="fa fa-eye"></i> 預覽影響範圍</button>
-            <button class="btn btn-sm btn-coral" onclick="pmBulk(false)"><i class="fa fa-bolt"></i> 執行替換</button>
+            <button class="btn btn-sm btn-amber" onclick="pmBulkPreview()"><i class="fa fa-eye"></i> ① 預覽影響範圍</button>
           </div>
           <div id="pmBulkResult" style="margin-top:8px;font-size:12px;"></div>
+          <button class="btn btn-sm btn-coral" id="pmBulkExec" style="display:none;margin-top:6px;" onclick="pmBulkExecute()"><i class="fa fa-bolt"></i> ③ 執行勾選的替換</button>
         </div>
-        <!-- 檔案搬運 -->
-        <div style="border:1px solid #e6d8c3;border-radius:6px;padding:10px;margin-bottom:10px;background:#fffaf2;">
-          <b style="color:var(--amber-d);">② 檔案搬運</b>
-          <span style="font-size:12px;color:#9a7b4f;">把舊位置的附件實體檔複製到新位置（背景 robocopy,含子資料夾;只新增不刪除目的地既有檔）</span>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+
+        <!-- Tab3 檔案搬運 -->
+        <div class="pm-tab" id="pm-tab-copy" style="display:none;">
+          <div style="font-size:12px;color:#9a7b4f;margin-bottom:6px;">
+            把舊位置的附件實體檔複製到新位置（背景 robocopy,含子資料夾;只新增不刪除目的地既有檔）。改完設定值別忘了把檔案也搬過去,兩者都做完舊資料才讀得到。
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <input type="text" id="pmSrc" class="form-control" style="width:300px;" placeholder="來源 例:E:\USB帶來的NAS備份\BOM">
             <i class="fa fa-long-arrow-right" style="color:var(--amber);"></i>
             <input type="text" id="pmDst" class="form-control" style="width:300px;" placeholder="目的 例:D:\nasdata\BOM">
@@ -166,27 +197,60 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
           </div>
           <div id="pmCopyStatus" style="margin-top:8px;font-size:12px;white-space:pre-wrap;font-family:monospace;"></div>
         </div>
-        <!-- 盤點清單 -->
-        <div style="display:flex;gap:12px;flex-wrap:wrap;">
-          <div style="flex:1;min-width:420px;">
-            <b style="color:var(--amber-d);font-size:13px;">③ 路徑設定值盤點</b>
-            <div style="overflow-x:auto;max-height:300px;overflow-y:auto;border:1px solid #e6d8c3;border-radius:6px;margin-top:4px;">
-              <table class="bk-tbl"><thead><tr><th>模組</th><th>設定鍵</th><th>目前值</th><th>狀態</th><th></th></tr></thead>
-              <tbody id="pmSettingsBody"><tr><td colspan="5" style="color:#999;padding:10px;">展開後載入…</td></tr></tbody></table>
-            </div>
+
+        <!-- Tab4 變更紀錄 -->
+        <div class="pm-tab" id="pm-tab-log" style="display:none;">
+          <div style="font-size:12px;color:#9a7b4f;margin-bottom:6px;">本頁所有路徑修改的歷史(誰、何時、把哪個路徑從什麼改成什麼)。最近 100 筆。</div>
+          <div style="overflow-x:auto;max-height:400px;overflow-y:auto;border:1px solid #e6d8c3;border-radius:6px;">
+            <table class="bk-tbl"><thead><tr><th>時間</th><th>對象</th><th>變更前</th><th>變更後</th><th>筆數</th><th>操作者</th></tr></thead>
+            <tbody id="pmLogBody"><tr><td colspan="6" style="color:#999;padding:10px;">載入中…</td></tr></tbody></table>
           </div>
-          <div style="flex:1;min-width:380px;">
-            <b style="color:var(--amber-d);font-size:13px;">④ 資料庫存完整路徑的表（批次替換會一併處理）</b>
-            <div style="overflow-x:auto;max-height:140px;overflow-y:auto;border:1px solid #e6d8c3;border-radius:6px;margin-top:4px;">
-              <table class="bk-tbl"><thead><tr><th>模組</th><th>欄位</th><th>路徑前綴</th><th>筆數</th></tr></thead>
-              <tbody id="pmTablesBody"><tr><td colspan="4" style="color:#999;padding:10px;">展開後載入…</td></tr></tbody></table>
+        </div>
+
+        <!-- Tab5 移機快速備份 -->
+        <div class="pm-tab" id="pm-tab-migbk" style="display:none;">
+          <div style="font-size:12px;color:#9a7b4f;margin-bottom:8px;">
+            換主機前一鍵打包:資料庫 + 環境設定快照 + uploads 附件 + 勾選的 NAS 文件,並自動附上「使用說明.txt」。
+            <b>備份期間網頁可正常使用</b>(資料庫用不鎖表方式匯出、檔案只讀取;僅磁碟/網路較忙,尖峰時可能略慢)。
+          </div>
+          <div style="border:1px solid #e6d8c3;border-radius:6px;padding:10px;background:#fffaf2;margin-bottom:10px;">
+            <div class="form-inline-row"><label>備份存放位置</label>
+              <input type="text" id="mbDest" class="form-control" style="flex:1;min-width:280px;" placeholder="例:D:\EGsystem移機備份 或 外接硬碟 E:\..."></div>
+            <div class="form-inline-row"><label>備份 uploads 附件</label>
+              <label style="min-width:auto;"><input type="checkbox" id="mbUploads" checked> 網站內上傳附件(小,建議勾)</label></div>
+            <div class="form-inline-row" style="align-items:flex-start;"><label>備份 NAS 文件</label>
+              <div style="flex:1;">
+                <label style="min-width:auto;"><input type="checkbox" id="mbDocs" checked> 連 NAS 上的文件一起備份(勾選要備份哪些路徑)</label>
+                <div id="mbDocList" style="margin-top:6px;padding:6px 10px;background:#fff;border:1px solid #f0e7d7;border-radius:5px;max-height:160px;overflow-y:auto;font-size:12px;"></div>
+              </div></div>
+            <div class="form-inline-row"><label>順路自動備份</label>
+              <select id="mbInterval" class="form-control" style="width:220px;">
+                <option value="0">不自動(只手動備份)</option>
+                <option value="7">每 7 天(只建議在不含NAS文件時)</option>
+                <option value="30">每 30 天(建議值,含NAS文件)</option>
+                <option value="90">每 90 天</option>
+              </select>
+              <span style="font-size:12px;color:#9a7b4f;">建議:含 NAS 文件選每月;資料庫本身已有每週自動備份鏈,這裡不用太密</span></div>
+            <button class="btn btn-sm btn-default" onclick="migbkSave()"><i class="fa fa-save"></i> 儲存設定</button>
+            <button class="btn btn-sm btn-amber" onclick="migbkStart()"><i class="fa fa-truck"></i> 立即快速備份</button>
+          </div>
+          <!-- 進度 -->
+          <div id="mbProgWrap" style="display:none;border:1px solid #e6d8c3;border-radius:6px;padding:10px;background:#fffdf9;">
+            <div style="display:flex;justify-content:space-between;font-size:12px;color:#6b5638;margin-bottom:4px;">
+              <span id="mbProgLabel">—</span><span id="mbProgTime">—</span>
             </div>
-            <div style="font-size:12px;color:#8a5a1a;background:#fdf0dc;border:1px solid #e9c98f;border-radius:5px;padding:6px 10px;margin-top:8px;" id="pmHardcoded">
+            <div style="background:#f3ead9;border-radius:8px;height:18px;overflow:hidden;">
+              <div id="mbProgBar" style="height:100%;width:0%;background:linear-gradient(90deg,#d99a4e,#b06f27);border-radius:8px;transition:width .6s;"></div>
             </div>
+            <div id="mbProgMsg" style="font-size:12px;color:#8a5a1a;margin-top:6px;white-space:pre-wrap;"></div>
           </div>
         </div>
       </div>
     </div>
+    <style>
+    .pm-tab-btn{border:none;background:transparent;padding:6px 14px;border-radius:6px;font-size:13px;font-weight:600;color:#9a7b4f;cursor:pointer;transition:all .2s;}
+    .pm-tab-btn.active{background:#fffdf9;color:var(--amber-d);box-shadow:0 2px 5px rgba(0,0,0,.08);}
+    </style>
     <?php endif; ?>
 
     <!-- 誤刪救援（部分還原）Phase 2 -->
@@ -541,7 +605,11 @@ function saveFeats(){ if(!curRoleId) return;
   $.post(RAPI,{action:'save_role_features',role_id:curRoleId,features:JSON.stringify(feats)},function(r){ alert(r.success?'已儲存功能':r.message); },'json'); }
 
 // ── 路徑遷移工具（僅管理員）──
-let pmLoaded=false, pmCopyTimer=null;
+let pmLoaded=false, pmCopyTimer=null, mbTimer=null;
+function pmTab(t,btn){
+  $('.pm-tab').hide(); $('#pm-tab-'+t).show();
+  $('.pm-tab-btn').removeClass('active'); $(btn).addClass('active');
+}
 function pmLoad(){
   pmLoaded=true;
   $.getJSON(API,{action:'path_inventory'},function(res){
@@ -553,19 +621,22 @@ function pmLoad(){
                : s.exists===true ? '<span class="st-badge st-success">可連</span>'
                : s.exists===false ? '<span class="st-badge st-fail">連不到</span>'
                : '<span class="pill">未設定</span>';
-      h+='<tr><td>'+esc(s.label)+'</td><td style="font-family:monospace;font-size:11px;">'+esc(s.key)+'</td>'
-        +'<td style="font-family:monospace;font-size:11px;max-width:260px;word-break:break-all;">'+esc(s.value||'（空）')+'</td>'
+      const pages=(s.pages||[]).join('、')||'—';
+      h+='<tr><td><b>'+esc(s.label)+'</b><div style="font-family:monospace;font-size:10px;color:#b09a78;">'+esc(s.key)+'</div></td>'
+        +'<td style="font-size:11px;max-width:220px;">'+esc(pages)+'</td>'
+        +'<td style="font-family:monospace;font-size:11px;max-width:240px;word-break:break-all;">'+esc(s.value||'（空）')+'</td>'
+        +'<td style="font-size:11px;color:#9a7b4f;">'+esc(s.store||'')+'</td>'
         +'<td>'+st+'</td>'
         +'<td><button class="btn btn-xs btn-default" onclick="pmEdit(\''+esc(s.scope)+'\',\''+esc(s.key)+'\',\''+esc((s.value||'').replace(/\\/g,'\\\\'))+'\')"><i class="fa fa-pencil"></i></button></td></tr>';
     });
-    $('#pmSettingsBody').html(h||'<tr><td colspan="5" style="color:#999;">無</td></tr>');
+    $('#pmSettingsBody').html(h||'<tr><td colspan="6" style="color:#999;">無</td></tr>');
     let h2='';
     (d.fullpath||[]).forEach(function(t){
       h2+='<tr><td>'+esc(t.label)+'</td><td style="font-family:monospace;font-size:11px;">'+esc(t.column)+'</td>'
         +'<td style="font-family:monospace;font-size:11px;max-width:220px;word-break:break-all;">'+esc(t.prefix)+'…</td><td>'+t.cnt+'</td></tr>';
     });
     $('#pmTablesBody').html(h2||'<tr><td colspan="4" style="color:#999;">目前沒有任何存完整路徑的資料（都是空表）</td></tr>');
-    $('#pmHardcoded').html('<b>⑤ 程式碼寫死路徑的頁面('+(d.hardcoded||[]).length+'頁,本工具管不到):</b> '
+    $('#pmHardcoded').html('<b>程式碼寫死路徑的頁面('+(d.hardcoded||[]).length+'頁,本工具管不到):</b> '
       +'bom_viewer、part_viewer、訂單追蹤圖檔掃描等。<b>最穩解法:新機沿用相同的 Z: 磁碟機對應與 excellentnas 主機名稱</b>(net use Z: 新位置;NAS主機名/分享名照舊),程式一行都不用改。清單詳見遷移包README。');
   });
   pmCopyPoll();
@@ -577,21 +648,113 @@ function pmEdit(scope,key,cur){
     alert(res.message||''); if(res.success){ pmLoaded=false; pmLoad(); }
   },'json');
 }
-function pmBulk(dry){
+// 批次替換:①預覽(帶勾選框) ②執行勾選項
+function pmBulkPreview(){
   const o=$('#pmOld').val().trim(), n=$('#pmNew').val().trim();
   if(!o||!n){ alert('舊前綴與新前綴都要填'); return; }
-  if(!dry && !confirm('確定把所有以「'+o+'」開頭的路徑替換成「'+n+'」?\n(建議先按「預覽影響範圍」)')) return;
-  $.post(API,{action:'path_bulk_prefix',old:o,new:n,dry:dry?'1':'0'},function(res){
+  $.post(API,{action:'path_bulk_prefix',old:o,new:n,dry:'1'},function(res){
     if(!res.success){ alert(res.message||''); return; }
-    let h='<b>'+esc(res.message)+'</b><ul style="margin:4px 0 0 18px;">';
-    (res.items||[]).forEach(function(it){
-      h+='<li>'+esc(it.label||it.key||it.table)+'：<code>'+esc(it.from)+'</code> → <code>'+esc(it.to)+'</code>（'+it.cnt+'筆）</li>';
+    const items=res.items||[];
+    if(!items.length){ $('#pmBulkResult').html('<b>'+esc(res.message)+'</b>（沒有任何項目以此前綴開頭）'); $('#pmBulkExec').hide(); return; }
+    let h='<b>'+esc(res.message)+'</b> ② 勾選要套用的項目:'
+      +'<label style="margin-left:10px;font-weight:400;"><input type="checkbox" checked onclick="$(\'.pmbulk-ck\').prop(\'checked\',this.checked)"> 全選</label>'
+      +'<div style="border:1px solid #e6d8c3;border-radius:5px;padding:6px 10px;margin-top:4px;max-height:220px;overflow-y:auto;background:#fff;">';
+    items.forEach(function(it){
+      h+='<label style="display:block;font-weight:400;"><input type="checkbox" class="pmbulk-ck" value="'+esc(it.id)+'" checked> '
+        +esc(it.label||it.key||it.table)+'：<code>'+esc(it.from)+'</code> → <code>'+esc(it.to)+'</code>（'+it.cnt+'筆）</label>';
     });
-    h+='</ul>';
-    if(!(res.items||[]).length) h='<b>'+esc(res.message)+'</b>（沒有任何項目以此前綴開頭）';
+    h+='</div>';
     $('#pmBulkResult').html(h);
-    if(!dry){ pmLoaded=false; pmLoad(); }
+    $('#pmBulkExec').show();
   },'json');
+}
+function pmBulkExecute(){
+  const o=$('#pmOld').val().trim(), n=$('#pmNew').val().trim();
+  const sel=$('.pmbulk-ck:checked').map(function(){return this.value;}).get();
+  if(!sel.length){ alert('未勾選任何項目'); return; }
+  if(!confirm('確定把勾選的 '+sel.length+' 項路徑前綴「'+o+'」替換成「'+n+'」?')) return;
+  $.post(API,{action:'path_bulk_prefix',old:o,new:n,dry:'0',selected:JSON.stringify(sel)},function(res){
+    alert(res.message||'');
+    if(res.success){ $('#pmBulkExec').hide(); $('#pmBulkResult').append('<div style="color:#4d6b2e;margin-top:4px;"><b>✔ 已執行,詳見「變更紀錄」分頁</b></div>'); pmLoaded=false; pmLoad(); }
+  },'json');
+}
+// 變更紀錄
+function pmLoadLog(){
+  $.getJSON(API,{action:'path_changelog'},function(res){
+    if(!res.success) return;
+    let h='';
+    (res.data||[]).forEach(function(r){
+      const scopeMap={system_settings:'設定',db_backup_config:'備份設定',table_prefix:'資料表前綴'};
+      h+='<tr><td style="white-space:nowrap;">'+esc(r.changed_at)+'</td>'
+        +'<td><span class="pill">'+(scopeMap[r.scope]||r.scope)+'</span> <span style="font-family:monospace;font-size:11px;">'+esc(r.target)+'</span></td>'
+        +'<td style="font-family:monospace;font-size:11px;max-width:220px;word-break:break-all;">'+esc(r.old_value||'')+'</td>'
+        +'<td style="font-family:monospace;font-size:11px;max-width:220px;word-break:break-all;">'+esc(r.new_value||'')+'</td>'
+        +'<td>'+r.affected_rows+'</td><td>'+esc(r.changed_by||'')+'</td></tr>';
+    });
+    $('#pmLogBody').html(h||'<tr><td colspan="6" style="color:#999;padding:10px;">尚無變更紀錄</td></tr>');
+  });
+}
+// ── 移機快速備份 ──
+function migbkLoad(){
+  $.getJSON(API,{action:'migbk_get'},function(res){
+    if(!res.success) return;
+    const s=res.settings||{};
+    $('#mbDest').val(s.dest||'');
+    $('#mbUploads').prop('checked',!!s.include_uploads);
+    $('#mbDocs').prop('checked',!!s.include_docs);
+    $('#mbInterval').val(String(s.interval_days||0));
+    let h='';
+    (res.doc_options||[]).forEach(function(o){
+      const on=(s.include_keys||[]).includes(o.key);
+      const warn=o.exists===false?' <span class="st-badge st-fail">連不到</span>':'';
+      h+='<label style="display:block;font-weight:400;"><input type="checkbox" class="mbdoc-ck" value="'+esc(o.key)+'" '+(on?'checked':'')+'> '
+        +esc(o.label)+' <span style="font-family:monospace;color:#b09a78;">'+esc(o.path)+'</span>'+warn+'</label>';
+    });
+    $('#mbDocList').html(h||'<span style="color:#999;">目前沒有任何已設定的 NAS 路徑</span>');
+    migbkPoll(res.status||{});
+  });
+}
+function migbkSave(cb){
+  const keys=$('.mbdoc-ck:checked').map(function(){return this.value;}).get();
+  $.post(API,{action:'migbk_save',dest:$('#mbDest').val(),include_docs:$('#mbDocs').is(':checked')?'1':'0',
+    include_uploads:$('#mbUploads').is(':checked')?'1':'0',include_keys:JSON.stringify(keys),
+    interval_days:$('#mbInterval').val()},function(res){
+    if(typeof cb==='function'){ cb(res); } else alert(res.message||'');
+  },'json');
+}
+function migbkStart(){
+  if(!$('#mbDest').val().trim()){ alert('請先填備份存放位置'); return; }
+  migbkSave(function(sv){
+    if(!sv.success){ alert(sv.message||'設定儲存失敗'); return; }
+    $.post(API,{action:'migbk_start'},function(res){
+      alert(res.message||'');
+      if(res.success){ $('#mbProgWrap').show(); setTimeout(function(){ migbkPollFetch(); },1500); }
+    },'json');
+  });
+}
+function migbkPollFetch(){
+  $.getJSON(API,{action:'migbk_status'},function(res){ if(res.success) migbkPoll(res.data||{}); });
+}
+function fmtDur(sec){ sec=Math.max(0,Math.round(sec)); const m=Math.floor(sec/60), s=sec%60; return (m? m+'分':'')+s+'秒'; }
+function migbkPoll(d){
+  if(!d.state){ $('#mbProgWrap').hide(); return; }
+  $('#mbProgWrap').show();
+  const total=+d.total_bytes||0, done=+d.done_bytes||0, elapsed=+d.elapsed_sec||0;
+  let pct = d.state==='done'?100 : (total>0? Math.min(99,Math.round(done/total*100)) : (d.state==='scanning'?3:10));
+  $('#mbProgBar').css('width',pct+'%');
+  const stMap={scanning:'🔍 估算大小中',running:'🚚 備份中',done:'✅ 完成',fail:'❌ 失敗'};
+  $('#mbProgLabel').text((stMap[d.state]||d.state)+'：'+(d.current||'')+'  '+pct+'%'
+    +(total?('（'+(done/1048576).toFixed(0)+' / '+(total/1048576).toFixed(0)+' MB）'):''));
+  let eta='';
+  if(d.state==='running' && done>0 && total>done && elapsed>3){
+    eta='　預計剩餘 '+fmtDur(elapsed*(total-done)/done);
+  }
+  $('#mbProgTime').text('已經過 '+fmtDur(elapsed)+eta);
+  let msg=d.msg||'';
+  if(d.state==='done') msg='備份完成!存放位置:'+(d.dest||$('#mbDest').val())+'\n內含「使用說明.txt」,換機時照說明還原。'+(msg?'\n警告:'+msg:'');
+  if(d.state==='fail') msg='失敗原因:'+msg;
+  $('#mbProgMsg').text(msg);
+  if(d.state==='scanning'||d.state==='running'){ clearTimeout(mbTimer); mbTimer=setTimeout(migbkPollFetch,3000); }
 }
 function pmCopyStart(){
   const s=$('#pmSrc').val().trim(), d=$('#pmDst').val().trim();
