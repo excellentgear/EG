@@ -66,10 +66,10 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
   <span class="sep"></span>
   <label class="req-mini" style="margin:0;">欄數</label>
   <input type="number" class="form-control input-sm" id="gridCols" style="width:60px;" min="1" max="16">
-  <button class="btn btn-default btn-sm" id="btnAddRow"><i class="fa fa-plus"></i> 列</button>
-  <button class="btn btn-default btn-sm" id="btnAddCol"><i class="fa fa-plus"></i> 欄</button>
-  <button class="btn btn-default btn-sm" id="btnDelRow" title="刪除選取/框選的整列，下方列自動上移補位（仿 Excel）"><i class="fa fa-minus"></i> 列</button>
-  <button class="btn btn-default btn-sm" id="btnDelCol" title="刪除選取/框選的整欄，右側欄自動左移補位（仿 Excel）"><i class="fa fa-minus"></i> 欄</button>
+  <button class="btn btn-default btn-sm" id="btnAddRow" title="在選取列的上方插入一整列（未選取＝最下方加一列）"><i class="fa fa-plus"></i> 插列</button>
+  <button class="btn btn-default btn-sm" id="btnAddCol" title="在選取欄的左側插入一整欄（未選取＝最右側加一欄）"><i class="fa fa-plus"></i> 插欄</button>
+  <button class="btn btn-default btn-sm" id="btnDelRow" title="刪除「整列」（選取/框選的列），下方列自動上移補位"><i class="fa fa-minus"></i> 刪整列</button>
+  <button class="btn btn-default btn-sm" id="btnDelCol" title="刪除「整欄」（選取/框選的欄），右側欄自動左移補位"><i class="fa fa-minus"></i> 刪整欄</button>
   <button class="btn btn-default btn-sm" id="btnUndo" title="復原（Ctrl+Z）" disabled><i class="fa fa-undo"></i></button>
   <button class="btn btn-default btn-sm" id="btnRedo" title="重做（Ctrl+Y）" disabled><i class="fa fa-repeat"></i></button>
   <button class="btn btn-default btn-sm" id="btnRestoreManual" title="放棄目前變動，回到最後一次「手動」存草稿的內容" style="display:none;"><i class="fa fa-history"></i> 回手動存檔</button>
@@ -246,7 +246,13 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
         <button class="btn btn-default btn-xs2" id="btnMergeR" title="與右邊合併">合併右</button>
         <button class="btn btn-default btn-xs2" id="btnMergeD" title="與下方合併">合併下</button>
         <button class="btn btn-default btn-xs2" id="btnUnmerge">取消合併</button>
-        <button class="btn btn-danger btn-xs2" id="btnDelCell"><i class="fa fa-trash"></i> 清空</button>
+        <button class="btn btn-danger btn-xs2" id="btnDelCell" title="清除格子內容（格子位置保留；框選時清整個範圍）"><i class="fa fa-trash"></i> 清空</button>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap;" title="單格插入/刪除（仿 Excel 儲存格；只動同一列/同一欄）">
+        <button class="btn btn-default btn-xs2" id="btnCellInsR" title="在此插入一格，本列右側的格往右移">插格→右移</button>
+        <button class="btn btn-default btn-xs2" id="btnCellDelL" title="刪除此格，本列右側的格往左移補位">刪格←左移</button>
+        <button class="btn btn-default btn-xs2" id="btnCellInsD" title="在此插入一格，本欄下方的格往下移">插格↓下移</button>
+        <button class="btn btn-default btn-xs2" id="btnCellDelU" title="刪除此格，本欄下方的格往上移補位">刪格↑上移</button>
       </div>
     </div>
   </div>
@@ -755,6 +761,36 @@ $(document).on('mouseup',function(){
   recalcRows(); renderEdit(); scheduleSave();
 });
 
+// ── 單格插入/刪除（仿 Excel 儲存格：只動同一列/同一欄）──
+$('#btnCellInsR').on('click',function(){
+  if(!sel) return; const [r,c]=sel.split('_').map(Number);
+  let maxEnd=0; schema.cells.forEach(x=>{ if(x.r===r) maxEnd=Math.max(maxEnd,x.c+(x.cs||1)); });
+  if(maxEnd>=schema.grid.cols){ alert('本列右側已無空位，請先用頂欄「插欄」增加欄數'); return; }
+  schema.cells.forEach(x=>{ if(x.r===r && x.c>=c) x.c+=1; });
+  renderEdit(); scheduleSave();
+});
+$('#btnCellDelL').on('click',function(){
+  if(!sel) return; const [r,c]=sel.split('_').map(Number);
+  const cell=cellAt(r,c); if(!cell) return;
+  const w=cell.cs||1;
+  schema.cells=schema.cells.filter(x=>x!==cell);
+  schema.cells.forEach(x=>{ if(x.r===r && x.c>c) x.c-=w; });
+  sel=null; renderEdit(); $('#propPanel').hide(); $('#propEmpty').show(); scheduleSave();
+});
+$('#btnCellInsD').on('click',function(){
+  if(!sel) return; const [r,c]=sel.split('_').map(Number);
+  schema.cells.forEach(x=>{ if(x.c===c && x.r>=r) x.r+=1; });
+  recalcRows(); renderEdit(); scheduleSave();
+});
+$('#btnCellDelU').on('click',function(){
+  if(!sel) return; const [r,c]=sel.split('_').map(Number);
+  const cell=cellAt(r,c); if(!cell) return;
+  const h=cell.rs||1;
+  schema.cells=schema.cells.filter(x=>x!==cell);
+  schema.cells.forEach(x=>{ if(x.c===c && x.r>r) x.r-=h; });
+  sel=null; renderEdit(); $('#propPanel').hide(); $('#propEmpty').show(); scheduleSave();
+});
+
 // ── 刪除整列/整欄，後面的自動補位（仿 Excel）──
 function selRange(){
   if(mqRect) return mqRect;
@@ -815,8 +851,32 @@ $('#gridCols').on('change',function(){
   const v=Math.max(1,Math.min(16,parseInt(this.value)||6));
   schema.grid.cols=v; this.value=v; renderEdit(); scheduleSave();
 });
-$('#btnAddRow').on('click',()=>{ editRows++; renderEdit(); });
-$('#btnAddCol').on('click',()=>{ schema.grid.cols++; $('#gridCols').val(schema.grid.cols); renderEdit(); scheduleSave(); });
+// 插列：選取列上方插入整列（跨列跨過插入點的格自動加大跨距）；未選取＝尾端加列
+$('#btnAddRow').on('click',function(){
+  const rg=selRange();
+  if(!rg){ editRows++; renderEdit(); return; }
+  const at=rg.r1;
+  schema.cells.forEach(x=>{
+    const rs=x.rs||1;
+    if(x.r>=at) x.r+=1;
+    else if(x.r+rs>at) x.rs=rs+1;
+  });
+  editRows++; recalcRows(); renderEdit(); scheduleSave();
+});
+// 插欄：選取欄左側插入整欄；未選取＝最右側加欄
+$('#btnAddCol').on('click',function(){
+  if(schema.grid.cols>=16){ alert('欄數上限 16'); return; }
+  const rg=selRange();
+  if(!rg){ schema.grid.cols++; $('#gridCols').val(schema.grid.cols); renderEdit(); scheduleSave(); return; }
+  const at=rg.c1;
+  schema.cells.forEach(x=>{
+    const cs=x.cs||1;
+    if(x.c>=at) x.c+=1;
+    else if(x.c+cs>at) x.cs=cs+1;
+  });
+  schema.grid.cols++; $('#gridCols').val(schema.grid.cols);
+  renderEdit(); scheduleSave();
+});
 $('#chkHeader').on('change',function(){ schema.meta.header.show=this.checked; scheduleSave(); });
 $('#chkFooter').on('change',function(){ schema.meta.footer.show=this.checked; scheduleSave(); });
 $('#tplName').on('input',scheduleSave);
