@@ -176,7 +176,8 @@ case 'load': {
         'id'=>(int)$tpl['id'], 'form_doc_id'=>$tpl['form_doc_id'], 'name'=>$tpl['name'],
         'status'=>$tpl['status'], 'published_version'=>(int)$tpl['published_version'],
     ], 'schema'=>json_decode($tpl['current_schema'] ?: '{}'), 'ctx'=>$ctx,
-       'canDesign'=>$canDesign]);
+       'canDesign'=>$canDesign,
+       'manual_saved_at'=>$tpl['manual_saved_at'] ?? null]);
 }
 
 // ── 新建模板（可繫結四階表單 form_doc_id；須先有表名）──
@@ -205,7 +206,24 @@ case 'save_schema': {
     } else {
         $db->prepare("UPDATE as_form_template SET current_schema=?, updated_at=NOW() WHERE id=?")->execute([$raw, $tid]);
     }
+    // 手動存草稿（按鈕/發布）→ 另存手動快照，供「回手動存檔」還原（自動儲存不覆蓋此快照）
+    if (($_POST['manual'] ?? '') == '1') {
+        $db->prepare("UPDATE as_form_template SET manual_schema=?, manual_saved_at=NOW() WHERE id=?")->execute([$raw, $tid]);
+    }
     jout(['ok'=>true]);
+}
+
+// ── 回到最後一次手動存草稿（放棄之後的自動儲存變動）──
+case 'restore_manual': {
+    $tid = (int)($_POST['template_id'] ?? 0);
+    if (!$tid) jerr('缺 template_id');
+    if (!canDesignTemplate($db, $uid, $canBuild, $tid)) jerr('無權操作此表單', 403);
+    $q = $db->prepare("SELECT manual_schema, manual_saved_at FROM as_form_template WHERE id=? AND is_deleted=0");
+    $q->execute([$tid]);
+    $row = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$row || $row['manual_schema']===null || $row['manual_schema']==='') jerr('尚無手動存檔快照（先按一次「存草稿」）');
+    $db->prepare("UPDATE as_form_template SET current_schema=manual_schema, updated_at=NOW() WHERE id=?")->execute([$tid]);
+    jout(['ok'=>true, 'schema'=>json_decode($row['manual_schema']), 'saved_at'=>$row['manual_saved_at']]);
 }
 
 // ── 發布：版號+1、凍結快照、狀態轉 published ──
@@ -490,6 +508,14 @@ case 'instance_submit': {
                 $secKey = $s['key'] ?? 'cs';
                 $ordered = [];
                 if ($csBlock && ($csBlock['section'] ?? 'cs')===$secKey || $csBlock && !$csCell) {
+                    // 啟用條件欄位（如「是否需會簽」）：值不含「是」→ 整個會簽區不建關卡
+                    $enk = $csBlock['enable_key'] ?? '';
+                    if ($enk !== '') {
+                        $ev = $data[$enk] ?? '';
+                        $enOn = is_array($ev) ? (in_array('是',$ev,true)||in_array('1',$ev,true))
+                                              : ($ev==='是'||$ev==='1'||$ev===1||$ev===true);
+                        if (!$enOn) continue;
+                    }
                     // 會簽區塊：每列勾選(bk_use@dept)有勾的部門才建簽核關卡（沒勾＝只是不必填、不簽）
                     $bkc = $csBlock['key'] ?? 'cs';
                     foreach (($csBlock['dept_ids'] ?? []) as $idx=>$did) {

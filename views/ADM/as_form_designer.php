@@ -70,6 +70,9 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
   <button class="btn btn-default btn-sm" id="btnAddCol"><i class="fa fa-plus"></i> 欄</button>
   <button class="btn btn-default btn-sm" id="btnDelRow" title="刪除選取/框選的整列，下方列自動上移補位（仿 Excel）"><i class="fa fa-minus"></i> 列</button>
   <button class="btn btn-default btn-sm" id="btnDelCol" title="刪除選取/框選的整欄，右側欄自動左移補位（仿 Excel）"><i class="fa fa-minus"></i> 欄</button>
+  <button class="btn btn-default btn-sm" id="btnUndo" title="復原（Ctrl+Z）" disabled><i class="fa fa-undo"></i></button>
+  <button class="btn btn-default btn-sm" id="btnRedo" title="重做（Ctrl+Y）" disabled><i class="fa fa-repeat"></i></button>
+  <button class="btn btn-default btn-sm" id="btnRestoreManual" title="放棄目前變動，回到最後一次「手動」存草稿的內容" style="display:none;"><i class="fa fa-history"></i> 回手動存檔</button>
   <span class="sep"></span>
   <label class="req-mini" style="margin:0;"><input type="checkbox" id="chkHeader" checked> 表頭</label>
   <label class="req-mini" style="margin:0;"><input type="checkbox" id="chkFooter" checked> 表尾</label>
@@ -132,6 +135,11 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
         <div class="form-group">
           <label>綁定簽核區（規則須為「會簽」）</label>
           <select class="form-control input-sm" id="pCsbSection"></select>
+        </div>
+        <div class="form-group">
+          <label>啟用條件欄位（選填，例：是否需會簽）</label>
+          <select class="form-control input-sm" id="pCsbEnable"></select>
+          <span class="muted">選表上的勾選/下拉欄位：其值含「是」才開放勾選會簽部門；否則整塊免會簽、送簽不建會簽關卡</span>
         </div>
         <div class="form-group">
           <label class="req-mini"><input type="checkbox" id="pCsbDec" checked> 顯示「同意/不同意」</label>
@@ -311,6 +319,9 @@ function load(){
     if(!r.canDesign){ $('.topbar button,.side button,.topbar input,.side input,.side select').prop('disabled',true); }
     recalcRows();
     renderEdit(); renderSections();
+    // 復原歷史起點＝載入狀態；有手動存檔快照 → 顯示「回手動存檔」
+    hist=[JSON.stringify(schema)]; hIdx=0; updateUndoBtns();
+    if(r.manual_saved_at){ $('#btnRestoreManual').show().data('at', r.manual_saved_at); }
   });
 }
 
@@ -447,6 +458,10 @@ function fillProp(){
   $('#pCsbSection').html((schema.sections||[]).filter(s=>(s.rule&&s.rule.type)==='countersign').map(s=>
     `<option value="${esc(s.key)}"${cell.section===s.key?' selected':''}>${esc(s.label||s.key)}</option>`).join('')
     ||'<option value="">（請先在下方新增「會簽」規則的簽核區）</option>');
+  // 啟用條件欄位：列出表上的勾選/下拉欄位
+  $('#pCsbEnable').html('<option value="">（不設，永遠開放勾選）</option>'+(schema.cells||[])
+    .filter(c=>c.type==='field'&&c.key&&['checkbox','select'].includes(c.ftype))
+    .map(c=>`<option value="${esc(c.key)}"${cell.enable_key===c.key?' selected':''}>${esc(c.key)}（${(c.options||[]).join('/')||c.ftype}）</option>`).join(''));
   $('#pCsbDec').prop('checked',cell.show_dec!==false);
   $('#pCsbDecReq').prop('checked',!!cell.dec_required);
   $('#pCsbNote').prop('checked',cell.show_note!==false);
@@ -494,7 +509,7 @@ function applyProp(withSpan){
   const cell=cellAt(r,c); if(!cell) return;
   const t=$('#pType').val();
   cell.type=t;
-  ['text','key','ftype','options','required','align','section','rows','today','pattern','dept_id','dept','formula','chart','dept_ids','show_order','cs_dept','direction','show_dec','dec_required','show_note','note_required'].forEach(k=>delete cell[k]);
+  ['text','key','ftype','options','required','align','section','rows','today','pattern','dept_id','dept','formula','chart','dept_ids','show_order','cs_dept','direction','show_dec','dec_required','show_note','note_required','enable_key'].forEach(k=>delete cell[k]);
   if(t==='title'||t==='label'||t==='static'){ cell.text=$('#pText').val(); if(t!=='title'){const a=$('#pAlign').val(); if(a==='left')cell.align='left';} }
   if(t==='field'){
     cell.key=$('#pKey').val().trim();
@@ -520,6 +535,7 @@ function applyProp(withSpan){
     cell.section=$('#pCsbSection').val()||'cs';
     cell.direction=$('#pCsbDir').val()||'down';
     cell.dept_ids=$('#pCsbDeptList .csbdept-chk:checked').map(function(){return parseInt(this.value);}).get();
+    const enk=$('#pCsbEnable').val(); if(enk) cell.enable_key=enk;
     if(!$('#pCsbDec').prop('checked')) cell.show_dec=false;
     else if($('#pCsbDecReq').prop('checked')) cell.dec_required=true;
     if(!$('#pCsbNote').prop('checked')) cell.show_note=false;
@@ -541,18 +557,88 @@ function applyProp(withSpan){
 $('#btnApply').on('click',()=>applyProp(true));
 // 即時反映：打字/變動立刻更新左側格子（跨欄/列只在 change 時套，見上）
 $('#pText,#pKey,#pOptions,#pPattern,#pFormula,#pChartFields,#pChartLabels,#pCsbKey').on('input',()=>applyProp(false));
-$('#pType,#pFtype,#pAlign,#pRequired,#pSection,#pToday,#pFixedDept,#pChartKind,#pChartMax,#pCsOrder,#pCsbDir,#pCsbSection,#pCsbDec,#pCsbDecReq,#pCsbNote,#pCsbNoteReq').on('change',()=>applyProp(false));
+$('#pType,#pFtype,#pAlign,#pRequired,#pSection,#pToday,#pFixedDept,#pChartKind,#pChartMax,#pCsOrder,#pCsbDir,#pCsbSection,#pCsbDec,#pCsbDecReq,#pCsbNote,#pCsbNoteReq,#pCsbEnable').on('change',()=>applyProp(false));
 $('#pCsDeptList').on('change','.csdept-chk',()=>applyProp(false));
 $('#pCsbDeptList').on('change','.csbdept-chk',()=>applyProp(false));
 $('#pCs,#pRs').on('change',()=>applyProp(true));
 
 // ── 自動儲存（debounce 1.2 秒；任何 schema 變動後自動存草稿）──
-let saveTimer=null, CAN_DESIGN=true;
+let saveTimer=null, CAN_DESIGN=true, dirty=false;
 function scheduleSave(){
   if(!CAN_DESIGN || !TEMPLATE_ID) return;
+  syncMeta(); recordHist();          // 每次變動記入復原歷史
+  dirty=true;
   clearTimeout(saveTimer);
   saveTimer=setTimeout(()=>doSave(null,true),1200);
 }
+
+// ── 復原/重做（Ctrl+Z / Ctrl+Y；歷史存整份 schema 快照，上限 60 步）──
+let hist=[], hIdx=-1, restoring=false;
+function recordHist(){
+  if(restoring) return;
+  const snap=JSON.stringify(schema);
+  if(hist[hIdx]===snap) return;
+  hist.splice(hIdx+1); hist.push(snap);
+  if(hist.length>60){ hist.shift(); }
+  hIdx=hist.length-1; updateUndoBtns();
+}
+function updateUndoBtns(){
+  $('#btnUndo').prop('disabled', hIdx<=0);
+  $('#btnRedo').prop('disabled', hIdx>=hist.length-1);
+}
+function refreshFromSchema(){
+  schema.meta=schema.meta||{}; schema.meta.header=schema.meta.header||{}; schema.meta.footer=schema.meta.footer||{};
+  schema.grid=schema.grid||{cols:6}; schema.cells=schema.cells||[]; schema.sections=schema.sections||[];
+  $('#tplName').val((schema.meta&&schema.meta.title)||$('#tplName').val());
+  $('#gridCols').val(schema.grid.cols||6);
+  $('#chkHeader').prop('checked', schema.meta.header.show!==false);
+  $('#chkFooter').prop('checked', schema.meta.footer.show!==false);
+  sel=null; mqRect=null;
+  recalcRows(); renderEdit(); renderSections();
+  $('#propPanel').hide(); $('#propEmpty').show();
+}
+function restoreHist(i){
+  if(i<0||i>=hist.length) return;
+  restoring=true;
+  schema=JSON.parse(hist[i]); hIdx=i;
+  refreshFromSchema();
+  restoring=false; updateUndoBtns();
+  dirty=true;
+  clearTimeout(saveTimer); saveTimer=setTimeout(()=>doSave(null,true),600);   // 復原結果也自動存
+}
+$('#btnUndo').on('click',()=>restoreHist(hIdx-1));
+$('#btnRedo').on('click',()=>restoreHist(hIdx+1));
+$(document).on('keydown',function(e){
+  if(!e.ctrlKey || $(e.target).is('input,select,textarea')) return;
+  if(e.key==='z'||e.key==='Z'){ e.preventDefault(); e.shiftKey?restoreHist(hIdx+1):restoreHist(hIdx-1); }
+  if(e.key==='y'||e.key==='Y'){ e.preventDefault(); restoreHist(hIdx+1); }
+});
+
+// ── 離開頁面前搶存（自動存 debounce 未到就跳頁，用 sendBeacon 同步送出，不掉變動）──
+window.addEventListener('beforeunload',function(){
+  if(!dirty || !CAN_DESIGN || !TEMPLATE_ID) return;
+  try{
+    syncMeta();
+    const fd=new FormData();
+    fd.append('template_id',TEMPLATE_ID);
+    fd.append('name',$('#tplName').val());
+    fd.append('schema_json',JSON.stringify(schema));
+    navigator.sendBeacon(API+'?action=save_schema',fd);
+    dirty=false;
+  }catch(e){}
+});
+
+// ── 回到最後一次「手動」存草稿 ──
+$('#btnRestoreManual').on('click',function(){
+  const at=$(this).data('at')||'';
+  if(!confirm('放棄目前的變動，回到最後一次手動存草稿'+(at?('（'+at+'）'):'')+'的內容？')) return;
+  $.post(API+'?action=restore_manual',{template_id:TEMPLATE_ID}, r=>{
+    if(!r.ok){ alert(r.error||'還原失敗'); return; }
+    restoring=true; schema=r.schema; refreshFromSchema(); restoring=false;
+    recordHist();   // 還原點也進復原歷史（可 Ctrl+Z 回到還原前）
+    $('#statusBadge').text('已回到手動存檔 '+(r.saved_at||''));
+  },'json');
+});
 
 // ── 輸入欄位通用互動（ai-rules/08）：聚焦全選、雙擊清空、Enter 跳下一欄 ──
 const UX_INPUTS='.side input[type=text], .side input[type=number], .topbar input[type=text], .topbar input[type=number], #secTable input[type=text], #secTable input[type=number]';
@@ -870,15 +956,17 @@ function syncMeta(){
   schema.meta.header=schema.meta.header||{}; schema.meta.header.show=$('#chkHeader').prop('checked');
   schema.meta.footer=schema.meta.footer||{}; schema.meta.footer.show=$('#chkFooter').prop('checked');
 }
-function doSave(cb,silent){
+function doSave(cb,silent,manual){
   syncMeta();
-  $.post(API+'?action=save_schema',{template_id:TEMPLATE_ID, name:$('#tplName').val(), schema_json:JSON.stringify(schema)}, r=>{
+  $.post(API+'?action=save_schema',{template_id:TEMPLATE_ID, name:$('#tplName').val(), schema_json:JSON.stringify(schema), manual:manual?1:0}, r=>{
     if(!r.ok){ if(!silent) alert(r.error||'儲存失敗'); return; }
+    dirty=false;
     $('#statusBadge').text((silent?'已自動儲存 ':'已存草稿 ')+new Date().toLocaleTimeString());
+    if(manual){ $('#btnRestoreManual').show().data('at', new Date().toLocaleString()); }
     if(cb) cb();
   },'json').fail(x=>{ if(!silent) alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
-$('#btnSave').on('click',()=>doSave());
+$('#btnSave').on('click',()=>doSave(null,false,true));   // 手動存草稿＝另存手動快照（可用「回手動存檔」還原）
 $('#btnPublish').on('click',function(){
   if(!confirm('發布會凍結目前設計為新版本，供填寫使用。確定發布？')) return;
   doSave(()=>{
@@ -895,7 +983,7 @@ $('#btnPublish').on('click',function(){
       }
       load();
     },'json').fail(x=>alert('發布失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)));
-  });
+  }, false, true);   // 發布前的儲存也算手動快照
 });
 
 load();

@@ -122,6 +122,18 @@
     $host.find('input[data-formula]').each(function () {
       this.value = evalFormula(this.getAttribute('data-formula'), getVal);
     });
+    // 會簽啟用條件即時連動：如「是否需會簽」勾「是」才開放勾選會簽部門
+    $host.find('input[data-cs-enable]').each(function () {
+      var ek = this.getAttribute('data-cs-enable');
+      var on = false;
+      var els = $host.find('[data-key="' + ek + '"]');
+      els.each(function () {
+        if (this.type === 'checkbox') { if (this.checked && (this.value === '是' || this.value === '1' || this.getAttribute('value') === null)) on = true; }
+        else if (this.value === '是' || this.value === '1') on = true;
+      });
+      this.disabled = !on;
+      if (!on) this.checked = false;   // 條件關閉時取消已勾（免會簽）
+    });
     $host.find('.eg-chart').each(function () {
       var fields = (this.getAttribute('data-fields') || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
       var labels = (this.getAttribute('data-labels') || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
@@ -140,7 +152,8 @@
     ctx = ctx || {};
     var type = cell.type;
     if (type === 'title') return esc(cell.text);
-    if (type === 'label') return esc(cell.text) + (cell.required ? '<span class="req-star">*</span>' : '');
+    // 必填 * 顯示在標題（自動：右鄰/上方必填欄位的標題會標星，見 renderForm 的 __stars）
+    if (type === 'label') return esc(cell.text) + ((cell.required || (ctx.__stars && ctx.__stars[cell.r + '_' + cell.c])) ? '<span class="req-star">*</span>' : '');
     if (type === 'static') return esc(cell.text);
     var cs = ctx.__cs || { checked: {}, edit: {}, hasCs: false };
     // 會簽歸屬格：未被勾選的部門 → 免會簽（灰掛）
@@ -164,7 +177,7 @@
     var key = cell.key, val = data[key] != null ? data[key] : '';
     var req = cell.required ? ' data-req="1"' : '';
     var ro = (mode === 'view') ? ' readonly disabled' : '';
-    var star = cell.required ? '<span class="req-star">*</span>' : '';
+    var star = '';   // 必填星號一律標在標題（__stars），不放欄位內（會擠壓輸入元件排版）
     var u = ctx.user || {};
     var upos = u.positions || [];
     // 會簽歸屬欄位：標記部門；被勾選且輪到該部門簽核人 → 解鎖，否則鎖定
@@ -251,11 +264,20 @@
     }
   }
 
+  // 值是否代表「是」（會簽啟用條件判定：勾選群組含「是」、下拉＝是、或 1/true）
+  function csEnableOn(v) {
+    if (Array.isArray(v)) return v.indexOf('是') >= 0 || v.indexOf('1') >= 0;
+    return v === '是' || v === '1' || v === 1 || v === true;
+  }
+
   // 會簽區塊 → 主表格真實列（部門在區塊上選定；一部門一列或一欄；同 eg-form 邊框，非巢狀表）
   function renderCsBlockRows(cell, cols, mode, data, ctx, csInfo) {
     var depts = cell.dept_ids || [];
     var edit = (csInfo && csInfo.edit) || {};
     var bk = cell.key || 'cs', bsec = cell.section || 'cs';
+    // 啟用條件欄位（如「是否需會簽」）：值含「是」才開放勾選會簽部門
+    var enKey = cell.enable_key || '';
+    var enOn = !enKey || csEnableOn(data[enKey]);
     var showDec = cell.show_dec !== false, showNote = cell.show_note !== false;
     if (!depts.length) return '<tr><td colspan="' + cols + '" class="cell-field"><span class="sig-hint">（會簽區塊：請在設計器的「會簽區塊」屬性選擇參與部門）</span></td></tr>';
 
@@ -266,13 +288,13 @@
       // 參與勾選（部門名左側）：填表人於填寫階段勾選，有勾選才需簽；沒勾選只是不必填
       var useKey = bk + '_use@' + id, useVal = data[useKey];
       var participating = Array.isArray(useVal) ? useVal.length > 0 : !!useVal;
-      var chkDis = (mode === 'fill') ? '' : ' disabled';   // 只有填表階段可改勾選
-      var chk = '<label style="font-weight:normal;margin:0 5px 0 0;"><input type="checkbox" data-key="' + esc(useKey) + '" value="1"' + (participating ? ' checked' : '') + chkDis + '></label>';
-      var decReq = (participating && cell.dec_required) ? '<span class="req-star">*</span>' : '';
+      var chkDis = (mode === 'fill' && enOn) ? '' : ' disabled';   // 填表階段＋啟用條件成立才可勾
+      var enAttr = enKey ? ' data-cs-enable="' + esc(enKey) + '"' : '';
+      var chk = '<label style="font-weight:normal;margin:0 5px 0 0;"><input type="checkbox" data-key="' + esc(useKey) + '" value="1"' + enAttr + (participating ? ' checked' : '') + chkDis + '></label>';
       return {
         part: participating,
         name: chk + esc(dname),
-        dec: '<select data-key="' + esc(kd) + '" data-cs-dept="' + esc(id) + '"' + dis + '><option value=""></option><option' + (data[kd] === '同意' ? ' selected' : '') + '>同意</option><option' + (data[kd] === '不同意' ? ' selected' : '') + '>不同意</option></select>' + decReq,
+        dec: '<select data-key="' + esc(kd) + '" data-cs-dept="' + esc(id) + '"' + dis + '><option value=""></option><option' + (data[kd] === '同意' ? ' selected' : '') + '>同意</option><option' + (data[kd] === '不同意' ? ' selected' : '') + '>不同意</option></select>',
         note: '<input type="text" data-key="' + esc(kn) + '" data-cs-dept="' + esc(id) + '" value="' + esc(data[kn] || '') + '" placeholder="意見"' + dis + '>',
         sig: participating
               ? (sig ? '<span class="sig-slot" data-sig="' + esc(sigK) + '"><span>' + esc(sig.name) + '</span><span class="sig-hint"> ' + esc(sig.at || '') + '</span></span>'
@@ -287,7 +309,7 @@
       var span = function (i) { return i === N - 1 ? Math.max(1, cols - 1 - per * (N - 1)) : per; };
       var us = depts.map(unit);
       out += '<tr><td class="cell-label">會簽部門</td>' + us.map(function (u, i) { return '<td class="cell-label" colspan="' + span(i) + '">' + u.name + '</td>'; }).join('') + '</tr>';
-      if (showDec) out += '<tr><td class="cell-label">同意/不同意</td>' + us.map(function (u, i) { return '<td class="cell-field" colspan="' + span(i) + '">' + u.dec + '</td>'; }).join('') + '</tr>';
+      if (showDec) out += '<tr><td class="cell-label">同意/不同意' + (cell.dec_required ? '<span class="req-star">*</span>' : '') + '</td>' + us.map(function (u, i) { return '<td class="cell-field" colspan="' + span(i) + '">' + u.dec + '</td>'; }).join('') + '</tr>';
       if (showNote) out += '<tr><td class="cell-label">意見</td>' + us.map(function (u, i) { return '<td class="cell-field" colspan="' + span(i) + '">' + u.note + '</td>'; }).join('') + '</tr>';
       out += '<tr><td class="cell-label">簽章</td>' + us.map(function (u, i) { return '<td class="cell-sig" colspan="' + span(i) + '">' + u.sig + '</td>'; }).join('') + '</tr>';
     } else {
@@ -295,7 +317,7 @@
       var wSign = 1, wDec = showDec ? 1 : 0, wNote = 0, wDept;
       if (showNote) { wDept = 1; wNote = Math.max(1, cols - wDept - wDec - wSign); }
       else { wDept = Math.max(1, cols - wDec - wSign); }
-      out += '<tr><td class="cell-label" colspan="' + wDept + '">會簽部門</td>' + (showDec ? '<td class="cell-label" colspan="' + wDec + '">同意/不同意</td>' : '') + (showNote ? '<td class="cell-label" colspan="' + wNote + '">意見</td>' : '') + '<td class="cell-label" colspan="' + wSign + '">簽章</td></tr>';
+      out += '<tr><td class="cell-label" colspan="' + wDept + '">會簽部門</td>' + (showDec ? '<td class="cell-label" colspan="' + wDec + '">同意/不同意' + (cell.dec_required ? '<span class=\"req-star\">*</span>' : '') + '</td>' : '') + (showNote ? '<td class="cell-label" colspan="' + wNote + '">意見</td>' : '') + '<td class="cell-label" colspan="' + wSign + '">簽章</td></tr>';
       depts.forEach(function (id) {
         var u = unit(id);
         out += '<tr><td class="cell-label" colspan="' + wDept + '">' + u.name + '</td>' + (showDec ? '<td class="cell-field" colspan="' + wDec + '">' + u.dec + '</td>' : '') + (showNote ? '<td class="cell-field" colspan="' + wNote + '">' + u.note + '</td>' : '') + '<td class="cell-sig" colspan="' + wSign + '">' + u.sig + '</td></tr>';
@@ -329,7 +351,22 @@
       }
     });
     (opts.editDepts || []).forEach(function (id) { csInfo.edit[String(id)] = true; });
-    ctx = Object.assign({}, ctx, { __cs: csInfo });
+    // 必填欄位 → 對應標題自動標 *（同列往左最近的標題欄；沒有則同欄往上最近）
+    var stars = {};
+    (schema.cells || []).forEach(function (f) {
+      if (f.type !== 'field' || !f.required) return;
+      var best = null;
+      (schema.cells || []).forEach(function (l) {
+        if (l.type !== 'label') return;
+        if (l.r === f.r && l.c < f.c && (!best || l.c > best.c)) best = l;
+      });
+      if (!best) (schema.cells || []).forEach(function (l) {
+        if (l.type !== 'label') return;
+        if (l.c === f.c && l.r < f.r && (!best || l.r > best.r)) best = l;
+      });
+      if (best) stars[best.r + '_' + best.c] = true;
+    });
+    ctx = Object.assign({}, ctx, { __cs: csInfo, __stars: stars });
     var meta = schema.meta || {};
     var header = meta.header || {};   // {show} 預設顯示
     var footer = meta.footer || {};   // {show} 預設顯示
