@@ -85,3 +85,12 @@ try {
 } catch (Throwable $e) {
     error_log('[db_backup] tick hook failed: ' . $e->getMessage());
 }
+
+// === 移機快速備份 順路觸發（2026-07-24 新增；做法同上，免工作排程器）===
+// 距上次檢查超過 3600 秒才背景啟動；是否執行由工人依 migbk_interval_days 判斷(0=未啟用)
+try {
+    require_once __DIR__ . '/mig_backup_tick.php';
+    eg_migbk_tick();
+} catch (Throwable $e) {
+    error_log('[mig_backup] tick hook failed: ' . $e->getMessage());
+}
