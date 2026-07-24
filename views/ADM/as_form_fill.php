@@ -30,12 +30,11 @@ try {
 <link href="../../resource/css/custom.css" rel="stylesheet">
 <link href="../../resource/css/as_form.css?v=<?php echo @filemtime(__DIR__.'/../../resource/css/as_form.css'); ?>" rel="stylesheet">
 <style>
-  html,body{overflow-x:hidden;}
+  html{overflow-x:hidden;}   /* 只設 html：html+body 同設會讓 body 變成第二個捲動容器（內頁多一支捲軸） */
   .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;min-height:100vh;}
   /* clear:both＋width:100% 必要：top_nav 有未清除的 float，shrink-to-fit 的 flex 工具列會被擠成 0 寬細條（按鈕全部消失） */
   .form-toolbar{clear:both;width:100%;max-width:820px;margin:0 auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;
     position:sticky;top:0;z-index:60;background:#efe7da;padding:10px 0 8px;}   /* 置頂固定，捲動不消失 */
-  .form-toolbar-bottom{position:static;padding:0 0 8px;}                        /* 底部那排不置頂 */
   .form-sheet,.sign-panel{width:100%;max-width:820px;}
   .form-sheet{max-width:820px;margin:12px auto 16px;background:#fff;padding:26px 30px;box-shadow:0 2px 10px rgba(90,61,30,.18);}
   .status-chip{display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;font-weight:bold;}
@@ -70,13 +69,6 @@ try {
     <span id="formTitle" style="font-weight:bold;color:#7a4e17;"></span>
   </div>
   <div class="form-sheet"><div id="formHost"></div></div>
-
-  <!-- 底部動作列：填完表單就在手邊，不必捲回頂端 -->
-  <div class="form-toolbar form-toolbar-bottom">
-    <button class="btn btn-default btn-sm act-save"><i class="fa fa-save"></i> 存草稿</button>
-    <button class="btn btn-success btn-sm act-submit" data-submit><i class="fa fa-paper-plane"></i> 送出簽核</button>
-    <button class="btn btn-warning btn-sm" onclick="window.print()"><i class="fa fa-print"></i> 列印(預覽)</button>
-  </div>
 
   <div class="sign-panel" id="signPanel" style="display:none;">
     <h4><i class="fa fa-pencil-square-o"></i> 簽核</h4>

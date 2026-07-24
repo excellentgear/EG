@@ -438,19 +438,17 @@
     if (!global.__egPrintHooked) {
       global.__egPrintHooked = true;
       window.addEventListener('beforeprint', egPrintFit);
-      window.addEventListener('afterprint', function () {
-        var s = document.querySelector('.form-sheet') || document.querySelector('.preview-host');
-        if (s) s.style.zoom = '';
-      });
+      window.addEventListener('afterprint', function () { document.body.style.zoom = ''; });
     }
   }
 
   // 依紙張可印區與內容實際寬高算縮放：一律不超過一頁寬；fit_pages>0 再壓進 N 頁高
+  // zoom 套在 body（整體一起縮）：只縮 .form-sheet 會有外層容器以未縮尺寸撐出空白頁
   function egPrintFit() {
     var cfg = global.__egPrintCfg || {};
     var sheet = document.querySelector('.form-sheet') || document.querySelector('.preview-host');
     if (!sheet) return;
-    sheet.style.zoom = '';                                   // 先還原再量測
+    document.body.style.zoom = '';                           // 先還原再量測
     var host = sheet.querySelector('#formHost') || sheet;
     var w = host.scrollWidth, h = host.scrollHeight;
     if (!w || !h) return;
@@ -459,10 +457,11 @@
     var pxPerMm = 96 / 25.4;
     var availW = Math.max(50, (pw - 2 * (cfg.margin || 0)) * pxPerMm);
     var availH = Math.max(50, (ph - 2 * (cfg.margin || 0)) * pxPerMm);
-    var scale = Math.min(availW / w, 1);                     // 自動一頁寬
-    if (cfg.fit_pages > 0) scale = Math.min(scale, (cfg.fit_pages * availH) / h);   // 限制 N 頁高
+    // 安全係數：螢幕量測與列印渲染有邊框取整/分頁累積誤差，不留餘裕會多出一小條到下一頁
+    var scale = Math.min(availW * 0.995 / w, 1);             // 自動一頁寬
+    if (cfg.fit_pages > 0) scale = Math.min(scale, (cfg.fit_pages * availH * 0.96) / h);   // 限制 N 頁高
     if (cfg.scale && cfg.scale !== 100) scale = Math.min(scale, cfg.scale / 100);   // 手動縮放上限
-    if (scale < 1) sheet.style.zoom = String(Math.max(0.3, Math.round(scale * 1000) / 1000));
+    if (scale < 1) document.body.style.zoom = String(Math.max(0.3, Math.round(scale * 1000) / 1000));
   }
 
   global.EGForm = { renderForm: renderForm, cellClass: cellClass, cellInner: cellInner, esc: esc,

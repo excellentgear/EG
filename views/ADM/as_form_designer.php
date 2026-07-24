@@ -20,7 +20,7 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
 <link href="../../resource/css/custom.css" rel="stylesheet">
 <link href="../../resource/css/as_form.css?v=<?php echo @filemtime(__DIR__.'/../../resource/css/as_form.css'); ?>" rel="stylesheet">
 <style>
-  html,body{overflow-x:hidden;}
+  html{overflow-x:hidden;}   /* 只設 html：html+body 同設會讓 body 變第二個捲動容器 */
   .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;min-height:100vh;}
   .wrap{clear:both;width:100%;display:flex;gap:14px;padding:12px 16px;align-items:flex-start;}
   .canvas{flex:1;min-width:0;}
@@ -67,6 +67,8 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
   <input type="number" class="form-control input-sm" id="gridCols" style="width:60px;" min="1" max="16">
   <button class="btn btn-default btn-sm" id="btnAddRow"><i class="fa fa-plus"></i> 列</button>
   <button class="btn btn-default btn-sm" id="btnAddCol"><i class="fa fa-plus"></i> 欄</button>
+  <button class="btn btn-default btn-sm" id="btnDelRow" title="刪除選取/框選的整列，下方列自動上移補位（仿 Excel）"><i class="fa fa-minus"></i> 列</button>
+  <button class="btn btn-default btn-sm" id="btnDelCol" title="刪除選取/框選的整欄，右側欄自動左移補位（仿 Excel）"><i class="fa fa-minus"></i> 欄</button>
   <span class="sep"></span>
   <label class="req-mini" style="margin:0;"><input type="checkbox" id="chkHeader" checked> 表頭</label>
   <label class="req-mini" style="margin:0;"><input type="checkbox" id="chkFooter" checked> 表尾</label>
@@ -83,7 +85,7 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
 <div class="wrap">
   <div class="canvas">
     <div id="editHost"></div>
-    <p class="muted" style="margin-top:4px;"><i class="fa fa-mouse-pointer"></i> 選取格子後，抓住右下角<strong>橘色小方塊拖曳</strong>＝複製此格到經過的格（同 Excel 填滿）；<strong>左鍵拖過多格＝框選</strong>，按 <strong>Delete</strong> 或「清空」鈕一次清除框選範圍（Esc 取消框選）</p>
+    <p class="muted" style="margin-top:4px;"><i class="fa fa-mouse-pointer"></i> 選取格子後，抓住右下角<strong>橘色小方塊拖曳</strong>＝複製此格到經過的格（同 Excel 填滿）；<strong>左鍵拖過多格＝框選</strong>→ <strong>Delete</strong>/「清空」清內容、頂欄「<strong>−列/−欄</strong>」刪整列整欄並自動補位（Esc 取消框選）</p>
     <div style="margin-top:14px;">
       <h4 style="font-size:14px;color:#7a4e17;border-bottom:2px solid #f0a24b;padding-bottom:5px;">簽核區（section）</h4>
       <p class="muted" style="font-size:11px;">每個「簽名格」綁一個簽核區；step 相同＝平行、遞增＝依序。規則：submitter=填表本人、position=指定職稱、level=N階主管以上。</p>
@@ -664,6 +666,61 @@ $(document).on('mouseup',function(){
   const src=cellAt(s.r,s.c); if(!src) return;
   fillPath(s.r,s.c,t.r,t.c).forEach(([r,c])=>cloneCellTo(src,r,c));
   recalcRows(); renderEdit(); scheduleSave();
+});
+
+// ── 刪除整列/整欄，後面的自動補位（仿 Excel）──
+function selRange(){
+  if(mqRect) return mqRect;
+  if(sel){ const [r,c]=sel.split('_').map(Number); return {r1:r,r2:r,c1:c,c2:c}; }
+  return null;
+}
+$('#btnDelRow').on('click',function(){
+  const rg=selRange(); if(!rg){ alert('請先點選（或框選）要刪除的列'); return; }
+  const n=rg.r2-rg.r1+1;
+  if(!confirm(`刪除第 ${rg.r1+1}～${rg.r2+1} 列（共 ${n} 列）？下方列會自動上移補位。`)) return;
+  const out=[];
+  schema.cells.forEach(x=>{
+    const rs=x.rs||1, top=x.r, bot=top+rs-1;
+    if(top>=rg.r1 && top<=rg.r2){
+      const below=bot-rg.r2;                       // 起點在刪除範圍內：跨列延伸到範圍外→保留剩餘
+      if(below>0){ x.r=rg.r1; x.rs=below; out.push(x); }
+      return;                                       // 完全在範圍內→刪除
+    }
+    if(top<rg.r1 && bot>=rg.r1){                    // 起點在上方、跨進範圍→縮跨列
+      const ov=Math.min(bot,rg.r2)-rg.r1+1;
+      x.rs=Math.max(1,rs-ov); out.push(x); return;
+    }
+    if(top>rg.r2){ x.r-=n; }                        // 在下方→上移補位
+    out.push(x);
+  });
+  schema.cells=out; editRows=Math.max(3,editRows-n);
+  sel=null; mqRect=null;
+  recalcRows(); renderEdit(); $('#propPanel').hide(); $('#propEmpty').show(); scheduleSave();
+});
+$('#btnDelCol').on('click',function(){
+  const rg=selRange(); if(!rg){ alert('請先點選（或框選）要刪除的欄'); return; }
+  const n=rg.c2-rg.c1+1;
+  if(n>=schema.grid.cols){ alert('不能刪除全部欄位'); return; }
+  if(!confirm(`刪除第 ${rg.c1+1}～${rg.c2+1} 欄（共 ${n} 欄）？右側欄會自動左移補位。`)) return;
+  const out=[];
+  schema.cells.forEach(x=>{
+    const cs=x.cs||1, left=x.c, right=left+cs-1;
+    if(left>=rg.c1 && left<=rg.c2){
+      const rest=right-rg.c2;
+      if(rest>0){ x.c=rg.c1; x.cs=rest; out.push(x); }
+      return;
+    }
+    if(left<rg.c1 && right>=rg.c1){
+      const ov=Math.min(right,rg.c2)-rg.c1+1;
+      x.cs=Math.max(1,cs-ov); out.push(x); return;
+    }
+    if(left>rg.c2){ x.c-=n; }
+    out.push(x);
+  });
+  schema.cells=out;
+  schema.grid.cols=Math.max(1,schema.grid.cols-n); $('#gridCols').val(schema.grid.cols);
+  sel=null; mqRect=null;
+  recalcRows(); renderEdit(); $('#propPanel').hide(); $('#propEmpty').show(); scheduleSave();
 });
 
 // ── 結構 ──
