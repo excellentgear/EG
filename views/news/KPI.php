@@ -36,6 +36,9 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
     <link href="../../resource/css/custom.css" rel="stylesheet">
     <style>
         #sidebar-menu { visibility: hidden; }
+        .right_col .page-title { margin:8px 0 4px; overflow:hidden; }
+        .right_col .page-title h2 { margin:6px 0; }
+        .kpi-toolbar { clear:both; }
         /* ===== 暖色系配色（ai-rules/10）===== */
         .kpi-toolbar { display:flex; flex-wrap:wrap; gap:6px; align-items:center;
             border:1.5px solid #E8D5B5; border-radius:8px; padding:8px 10px; margin-bottom:10px; background:#FDF8EF; }

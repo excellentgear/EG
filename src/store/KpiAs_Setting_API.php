@@ -57,6 +57,23 @@ case 'get_all': {
     $rtypes = [];
     try { $rtypes = $db->query("SELECT type_id, type_name FROM ir_return_type ORDER BY type_id")->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) {}
 
+    // 部門→人員(含職稱/主管階級)：擔當者「先選部門再選人」用
+    $deptMembers = [];
+    $st = $db->query("SELECT m.department_id, m.user_id, u.user_cname, m.is_main,
+                             p.name AS position_name, pl.level AS mgr_level
+                      FROM user_department_position_map m
+                      JOIN user u ON u.id=m.user_id
+                      LEFT JOIN position p ON p.id=m.position_id
+                      LEFT JOIN position_level pl ON pl.position_id=m.position_id
+                      WHERE u.user_cname IS NOT NULL AND u.user_cname<>''
+                      ORDER BY m.department_id, m.is_main DESC, (pl.level IS NULL), pl.level, m.user_id");
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $deptMembers[(int)$r['department_id']][] = [
+            'user_id'=>(int)$r['user_id'], 'cname'=>$r['user_cname'],
+            'position_name'=>$r['position_name'],
+            'mgr_level'=>$r['mgr_level']===null ? null : (int)$r['mgr_level']];
+    }
+
     jout([
         'year'=>$year, 'years'=>range(2025, $curY),
         'indicators'=>$indicators,
@@ -69,7 +86,7 @@ case 'get_all': {
             'attach_max'=>kpi_as_attach_max($db),
         ],
         'dicts'=>['departments'=>$depts, 'users'=>$users, 'process_types'=>$ptypes,
-                  'machines'=>$machines, 'return_types'=>$rtypes],
+                  'machines'=>$machines, 'return_types'=>$rtypes, 'dept_members'=>$deptMembers],
     ]);
 }
 

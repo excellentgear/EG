@@ -33,6 +33,12 @@ $kpiPerms = kpi_as_perms($db, $kpiUser);
     <link href="../../resource/css/custom.css" rel="stylesheet">
     <style>
         #sidebar-menu { visibility: hidden; }
+        .right_col .page-title { margin:8px 0 4px; overflow:hidden; }
+        .right_col .page-title h2 { margin:6px 0; }
+        .ks-toolbar { clear:both; margin-top:6px; }
+        #ksToast { position:fixed; top:70px; left:50%; transform:translateX(-50%); z-index:2000;
+            background:#7a9c3f; color:#fff; padding:8px 20px; border-radius:20px; font-size:14px;
+            box-shadow:0 3px 10px rgba(0,0,0,.25); display:none; }
         .ks-panel { border:1.5px solid #E8D5B5; border-radius:8px; background:#fff; margin-bottom:14px; }
         .ks-panel .p-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:8px 12px;
             border-radius:8px 8px 0 0; font-size:14px; }
@@ -81,6 +87,7 @@ $kpiPerms = kpi_as_perms($db, $kpiUser);
     </style>
 </head>
 <body class="nav-sm">
+<div id="ksToast"></div>
 <div class="container body">
 <div class="main_container">
     <?php include '../partPage/sideAndTopBarMenu.html' ?>
@@ -242,6 +249,65 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function freqName(f){ return {monthly:'每月',quarterly:'每季',halfyear:'半年',yearly:'每年'}[f] || f; }
 function vtName(v){ return {percent:'%',count:'件',score:'分',rate:'比率',yesno:'Y/N'}[v] || v; }
+function toast(msg){ var $t=$('#ksToast').text(msg).fadeIn(120); clearTimeout(window._kst);
+    window._kst=setTimeout(function(){ $t.fadeOut(300); }, 1600); }
+
+/* 擔當者：先選部門→帶出部門內人員(含職稱) */
+var DEPT_OF_USER = {}, DEPT_NAME = {};
+function buildOwnerMaps(){
+    DEPT_OF_USER = {}; DEPT_NAME = {};
+    (DATA.dicts.departments||[]).forEach(function(d){ DEPT_NAME[d.id] = d.name; });
+    var dm = DATA.dicts.dept_members || {};
+    Object.keys(dm).forEach(function(did){
+        dm[did].forEach(function(m){ if (DEPT_OF_USER[m.user_id] === undefined) DEPT_OF_USER[m.user_id] = +did; });
+    });
+}
+function deptOptsHtml(){
+    return (DATA.dicts.departments||[]).map(function(d){
+        return '<option value="'+d.id+'">'+esc(d.name)+'</option>'; }).join('');
+}
+function fillOwnerPeople(sel){
+    var did = +$(sel).val();
+    var $p = $(sel).closest('td').find('.f-owner').empty().append('<option value="0">（未指定）</option>');
+    ((DATA.dicts.dept_members||{})[did] || []).forEach(function(m){
+        $p.append('<option value="'+m.user_id+'">'+esc(m.cname)+(m.position_name?'（'+esc(m.position_name)+'）':'')+'</option>');
+    });
+}
+function ownerChanged(sel){
+    var $td = $(sel).closest('td');
+    var uid = $(sel).val();
+    var deptName = $td.find('.f-odept option:selected').text();
+    var personName = ($(sel).find('option:selected').text() || '').replace(/（.*$/, '');
+    var disp = (uid && uid !== '0') ? (personName + (deptName && deptName !== '選部門' ? '/' + deptName : '')) : '';
+    $td.find('.f-ownerdisp').val(disp);
+}
+function setOwners(){
+    DATA.indicators.forEach(function(r, i){
+        var $tr = $('tr[data-i="'+i+'"]');
+        var did = DEPT_OF_USER[r.owner_user_id] || 0;
+        var $dept = $tr.find('.f-odept'), $own = $tr.find('.f-owner');
+        $dept.val(did);
+        fillOwnerPeople($dept[0]);
+        // 若擔當者所屬部門查不到，仍補一個單獨選項避免掉資料
+        if ((!did || $own.find('option[value="'+r.owner_user_id+'"]').length===0) && r.owner_user_id) {
+            var nm = (r.owner_display||'').split('/')[0] || ('user#'+r.owner_user_id);
+            $own.append('<option value="'+r.owner_user_id+'">'+esc(nm)+'</option>');
+        }
+        $own.val(r.owner_user_id || 0);
+    });
+}
+function hasConfiguredParams(r){
+    try {
+        var pj = JSON.parse(r.params_json || '{}');
+        return Object.keys(pj).some(function(k){
+            var x = pj[k]; var v = (x && typeof x==='object' && 'v' in x) ? x.v : x;
+            if (v === null || v === undefined || v === '') return false;
+            if (Array.isArray(v)) return v.length > 0;
+            if (typeof v === 'object') return Object.keys(v).length > 0;
+            return true;
+        });
+    } catch(e){ return false; }
+}
 
 function loadAll(){
     NProgress.start();
@@ -252,7 +318,9 @@ function loadAll(){
         $('#yearLabel').text(YEAR);
         var $y = $('#yearSel').empty();
         res.years.forEach(function(y){ $y.append('<option value="'+y+'"'+(y===YEAR?' selected':'')+'>'+y+'</option>'); });
+        buildOwnerMaps();
         renderIndicators();
+        setOwners();
         renderRules();
         renderDicts();
         $('#setBase').val(res.settings.attach_base);
@@ -273,7 +341,18 @@ function renderIndicators(){
         h += '<td style="text-align:center;">'+r.item_no+'</td>';
         h += '<td><a href="javascript:void(0)" onclick="openIndModal('+i+')" title="編輯主檔(名稱/頻率/型態)" style="color:#b5762a;">'+esc(r.name)+'</a>'
            + (r.ind_active==1?'':' <span class="rule-tag" style="background:#eee;">主檔停用</span>')+'</td>';
-        h += '<td style="text-align:center;white-space:nowrap;">'+freqName(r.freq)+'/'+vtName(r.value_type)+'</td>';
+        h += '<td style="white-space:nowrap;">'
+           + '<select class="f-freq" style="width:62px;">'
+           + '<option value="monthly"'+(r.freq==='monthly'?' selected':'')+'>每月</option>'
+           + '<option value="quarterly"'+(r.freq==='quarterly'?' selected':'')+'>每季</option>'
+           + '<option value="halfyear"'+(r.freq==='halfyear'?' selected':'')+'>半年</option>'
+           + '<option value="yearly"'+(r.freq==='yearly'?' selected':'')+'>每年</option></select>'
+           + '<select class="f-vt" style="width:72px;">'
+           + '<option value="percent"'+(r.value_type==='percent'?' selected':'')+'>百分比%</option>'
+           + '<option value="count"'+(r.value_type==='count'?' selected':'')+'>件數</option>'
+           + '<option value="score"'+(r.value_type==='score'?' selected':'')+'>分數</option>'
+           + '<option value="rate"'+(r.value_type==='rate'?' selected':'')+'>比率</option>'
+           + '<option value="yesno"'+(r.value_type==='yesno'?' selected':'')+'>Yes/No</option></select></td>';
         h += '<td style="white-space:nowrap;">'
            + '<select class="f-dir" style="width:58px;">'
            + '<option value="gte"'+(r.target_direction==='gte'?' selected':'')+'>≥達標</option>'
@@ -283,11 +362,10 @@ function renderIndicators(){
            + '<input type="text" class="f-tunit" style="width:44px;" placeholder="單位" value="'+esc(r.target_unit||'')+'">'
            + '<input type="text" class="f-ttext" style="width:100px;" placeholder="目標原文" value="'+esc(r.target_text||'')+'">'
            + '</td>';
-        h += '<td style="white-space:nowrap;"><select class="f-owner" style="width:90px;"><option value="0">（未指定）</option>';
-        DATA.dicts.users.forEach(function(u2){
-            h += '<option value="'+u2.id+'"'+(+r.owner_user_id===+u2.id?' selected':'')+'>'+esc(u2.user_cname)+'</option>';
-        });
-        h += '</select> <input type="text" class="f-ownerdisp" style="width:90px;" placeholder="顯示文字" value="'+esc(r.owner_display||'')+'"></td>';
+        h += '<td style="white-space:nowrap;">'
+           + '<select class="f-odept" style="width:86px;" onchange="fillOwnerPeople(this)"><option value="0">選部門</option>'+deptOptsHtml()+'</select>'
+           + '<select class="f-owner" style="width:118px;" onchange="ownerChanged(this)"></select>'
+           + '<input type="hidden" class="f-ownerdisp" value="'+esc(r.owner_display||'')+'"></td>';
         h += '<td style="text-align:center;"><select class="f-mode" onchange="modeChanged(this,'+i+')">'
            + '<option value="manual"'+(r.source_mode==='manual'?' selected':'')+'>手動</option>'
            + '<option value="auto"'+(r.source_mode==='auto'?' selected':'')+'>自動</option></select></td>';
@@ -297,7 +375,8 @@ function renderIndicators(){
         });
         h += '</select>'+(reg?'<div class="param-hint">'+esc(reg.page)+'</div>':'')+'</td>';
         h += '<td style="text-align:center;"><button class="ks-btn gray" onclick="openParams('+i+')"'
-           + (r.source_mode==='manual'?' disabled style="opacity:.4;"':'')+'>參數</button></td>';
+           + (r.source_mode==='manual'?' disabled style="opacity:.4;"':'')+'>參數'
+           + (hasConfiguredParams(r)?' <span style="color:#7a9c3f;" title="已設定參數">●</span>':'')+'</button></td>';
         h += '<td style="text-align:center;"><input type="checkbox" class="f-active"'+(r.year_active==1?' checked':'')+'></td>';
         h += '<td style="text-align:center;"><button class="ks-btn" onclick="saveRow('+i+')">儲存</button></td>';
         h += '</tr>';
@@ -321,15 +400,26 @@ function saveRow(i){
         target_value: $tr.find('.f-tval').val(),
         target_unit: $tr.find('.f-tunit').val(),
         target_text: $tr.find('.f-ttext').val(),
-        owner_user_id: $tr.find('.f-owner').val(),
+        owner_user_id: $tr.find('.f-owner').val() || 0,
         owner_display: $tr.find('.f-ownerdisp').val(),
         is_active: $tr.find('.f-active').is(':checked') ? 1 : 0
     };
     if (post.source_mode==='auto' && !post.calculator_key) { alert('自動模式請選擇資料來源'); return; }
-    $.post(API, post, function(res){
-        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
-        loadAll();
-    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    // 主檔(頻率/型態)另存；名稱等沿用原值
+    var mpost = {
+        action:'save_indicator', indicator_id:r.indicator_id,
+        name: r.name, clause: r.clause || '', stat_desc: r.stat_desc || '',
+        freq: $tr.find('.f-freq').val(), value_type: $tr.find('.f-vt').val(),
+        sort_order: r.sort_order, is_active: (r.ind_active==1?1:0)
+    };
+    $.post(API, mpost, function(mr){
+        if (!mr.ok) { alert(mr.error||'主檔儲存失敗'); return; }
+        $.post(API, post, function(res){
+            if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+            toast('第 '+r.item_no+' 項已儲存');
+            loadAll();
+        }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    }, 'json').fail(function(x){ alert('主檔儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
 /* ---------- 參數 modal（依 registry schema 動態欄位＋開放前端勾選） ---------- */
@@ -376,26 +466,43 @@ function renderParamInput(pm, v, pi){
             return h + '</div><div class="param-hint">留空月份=未設定</div>';
         }
         case 'typedays_map': {
-            var lines = [];
-            if (v && typeof v === 'object') Object.keys(v).forEach(function(k){ lines.push(k + ':' + v[k]); });
-            var ref = (DATA.dicts.process_types||[]).map(function(p){ return p.process_type_id+'='+p.process_type; }).join('、');
-            return '<textarea id="'+id+'" class="p-in" data-key="'+esc(pm.key)+'" data-type="typedays_map" rows="3" placeholder="製程類別id:天數（一行一筆）&#10;例 4:5">'
-                 + esc(lines.join('\n')) + '</textarea><div class="param-hint">製程類別對照：' + esc(ref) + '</div>';
+            var mp = (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+            var h = '<div class="typedays" data-key="'+esc(pm.key)+'" style="max-height:230px;overflow:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px;">';
+            (DATA.dicts.process_types||[]).forEach(function(p){
+                var dv = mp[p.process_type_id]!==undefined ? mp[p.process_type_id]
+                       : (mp[String(p.process_type_id)]!==undefined ? mp[String(p.process_type_id)] : '');
+                h += '<div style="display:flex;gap:8px;align-items:center;margin:2px 0;">'
+                   + '<span style="flex:1;">'+esc(p.process_type)+'</span>'
+                   + '<input type="number" class="p-td" data-tid="'+p.process_type_id+'" style="width:80px;" min="0" placeholder="天" value="'+dv+'"></div>';
+            });
+            return h + '</div><div class="param-hint">只填需要「不同於預設天數」的製程；留空=用上方預設約定工作天數</div>';
         }
         case 'process_type_ids': case 'machine_type_ids': {
             var sel = Array.isArray(v) ? v.map(Number) : [];
-            var h = '<div class="chk-list" data-key="'+esc(pm.key)+'" data-type="idlist">';
+            var h = '<div class="chk-list" data-key="'+esc(pm.key)+'" data-type="idlist" style="max-height:200px;overflow:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px;">';
             (DATA.dicts.process_types||[]).forEach(function(p){
                 h += '<label><input type="checkbox" class="p-chk" value="'+p.process_type_id+'"'
                    + (sel.indexOf(+p.process_type_id)>=0?' checked':'')+' style="width:auto;"> '
-                   + p.process_type_id + '.' + esc(p.process_type) + '</label>';
+                   + esc(p.process_type) + '</label>';
             });
-            return h + '</div>';
+            return h + '</div><div class="param-hint">勾選要納入計算的' + (pm.type==='machine_type_ids'?'機台種類':'製程類別') + '</div>';
         }
         case 'machine_ids': {
-            var ref2 = (DATA.dicts.machines||[]).map(function(m2){ return m2.machine_id+'='+m2.machine; }).join('、');
-            return '<input type="text" id="'+id+'" class="p-in" data-key="'+esc(pm.key)+'" data-type="intlist" value="'+esc(listVal)+'" placeholder="機台id,逗號分隔,可留空">'
-                 + '<div class="param-hint">機台對照：' + esc(ref2) + '</div>';
+            var selM = Array.isArray(v) ? v.map(Number) : [];
+            var byType = {};
+            (DATA.dicts.machines||[]).forEach(function(m2){ (byType[m2.machine_type_id] = byType[m2.machine_type_id] || []).push(m2); });
+            var typeName = {};
+            (DATA.dicts.process_types||[]).forEach(function(p){ typeName[p.process_type_id] = p.process_type; });
+            var h = '<div class="chk-list" data-key="'+esc(pm.key)+'" data-type="idlist" style="display:block;max-height:220px;overflow:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px;">';
+            Object.keys(byType).forEach(function(t){
+                h += '<div style="font-weight:bold;color:#8a6d45;margin:4px 0 2px;">'+esc(typeName[t]||('種類'+t))+'</div><div style="display:flex;flex-wrap:wrap;gap:2px 12px;">';
+                byType[t].forEach(function(m2){
+                    h += '<label style="font-weight:normal;"><input type="checkbox" class="p-chk" value="'+m2.machine_id+'"'
+                       + (selM.indexOf(+m2.machine_id)>=0?' checked':'')+' style="width:auto;"> '+esc(m2.machine)+'</label>';
+                });
+                h += '</div>';
+            });
+            return h + '</div><div class="param-hint">直接點選要納入的機台（可留空＝用上方機台種類全部）</div>';
         }
         case 'statuslist':
             return '<input type="text" id="'+id+'" class="p-in" data-key="'+esc(pm.key)+'" data-type="textlist" value="'+esc(listVal)+'" placeholder="ng,QQ,AOD">'
@@ -418,14 +525,13 @@ function saveParams(){
             $('.months-grid[data-key="'+pm.key+'"] .p-month').each(function(){
                 if ($.trim(this.value) !== '') v[$(this).data('m')] = +this.value;
             });
-        } else if (pm.type === 'process_type_ids' || pm.type === 'machine_type_ids') {
+        } else if (pm.type === 'process_type_ids' || pm.type === 'machine_type_ids' || pm.type === 'machine_ids') {
             v = [];
             $('.chk-list[data-key="'+pm.key+'"] .p-chk:checked').each(function(){ v.push(+this.value); });
         } else if (pm.type === 'typedays_map') {
             v = {};
-            $.trim($('.p-in[data-key="'+pm.key+'"]').val()).split(/\n+/).forEach(function(line){
-                var mm = line.match(/^(\d+)\s*[:：]\s*(\d+)/);
-                if (mm) v[mm[1]] = +mm[2];
+            $('.typedays[data-key="'+pm.key+'"] .p-td').each(function(){
+                if ($.trim(this.value) !== '') v[$(this).data('tid')] = +this.value;
             });
         } else {
             var $in = $('.p-in[data-key="'+pm.key+'"]');
@@ -554,8 +660,25 @@ function loadLog(){
 }
 $('#btnLogReload').on('click', loadLog);
 $('#yearSel').on('change', function(){ YEAR = +this.value; loadAll(); });
-$('.kpi-modal-mask').on('click', function(e){ if (e.target === this) this.style.display='none'; });
+// 資料輸入視窗只用 ✕／取消／儲存 關閉；不因點背景或複製(Ctrl+C)誤關
 $(document).on('focus', 'input[type=text], input[type=number]', function(){ this.select(); });
+// Enter 跳下一欄；最後一欄 Enter＝送出
+$(document).on('keydown', '#pBody input', function(e){
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    var ins = $('#pBody input:visible');
+    var idx = ins.index(this);
+    if (idx > -1 && idx < ins.length - 1) ins.eq(idx + 1).focus().select();
+    else saveParams();
+});
+$(document).on('keydown', '#iMask input', function(e){
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    var ins = $('#iMask input:visible, #iMask select');
+    var idx = ins.index(this);
+    if (idx > -1 && idx < ins.length - 1) ins.eq(idx + 1).focus();
+    else saveIndicator();
+});
 
 if (canAdmin) loadAll();
 </script>
