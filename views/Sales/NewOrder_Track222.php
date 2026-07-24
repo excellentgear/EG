@@ -1862,7 +1862,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         DATE_FORMAT(ot.Modified_At, '%c/%e') AS Modified_At_formatted
         FROM order_track ot LEFT JOIN user u ON u.id = ot.ate LEFT JOIN user AS creator ON creator.id = ot.Created_By
         LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID
-        $whereSql ORDER BY ot.last_activity_at DESC LIMIT $limit OFFSET $offset";
+        $whereSql ORDER BY ot.Created_At DESC LIMIT $limit OFFSET $offset";
     $stmtData = $pdo->prepare($dataSql);
     $stmtData->execute($params);
     $order_list = $stmtData->fetchAll(PDO::FETCH_ASSOC);
@@ -2730,7 +2730,7 @@ FROM order_track ot
 LEFT JOIN user u ON u.id = ot.ate 
 LEFT JOIN user AS creator ON creator.id = ot.Created_By 
 WHERE (ot.parent_order_id IS NULL OR ot.parent_order_id = 0) " . ($selectedYear !== 'ALL' ? "AND YEAR(ot.Order_date) = " . intval($selectedYear) : "") . " 
-ORDER BY ot.last_activity_at DESC LIMIT 0, 50";
+ORDER BY ot.Created_At DESC LIMIT 0, 50";
 
 $order_list = $conn->getPDO()->query($dataSql)->fetchAll(PDO::FETCH_ASSOC);
 
