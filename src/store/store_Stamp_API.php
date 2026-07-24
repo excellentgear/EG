@@ -391,6 +391,111 @@ case 'asset_map': {
     jout(['ok'=>true, 'map'=>eg_stamp_asset_map($db)]);
 }
 
+// ══════════ 線上圖章設計模板（stamp_template）＋編號流水 ══════════
+
+// ── 模板清單（圖章管理頁）──
+case 'tpl_list': {
+    needView($canView);
+    $rows = $db->query("SELECT p.id, p.type_id, t.type_name, p.tpl_name, p.schema_json,
+                               p.serial_prefix, p.serial_digits, p.serial_start, p.serial_step, p.serial_reset, p.is_active
+                        FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
+                        ORDER BY p.is_active DESC, p.id")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['ok'=>true, 'rows'=>$rows]);
+}
+
+// ── 模板儲存（新增/修改）──
+case 'tpl_save': {
+    needManage($canManage);
+    $tid  = (int)($_POST['id'] ?? 0);
+    $name = trim((string)($_POST['tpl_name'] ?? ''));
+    $typeId = (int)($_POST['type_id'] ?? 0) ?: null;
+    $schemaRaw = (string)($_POST['schema'] ?? '');
+    if ($name === '' || mb_strlen($name) > 50) jerr('請輸入模板名稱（50字內）');
+    $schema = json_decode($schemaRaw, true);
+    if (!is_array($schema) || empty($schema['rows']) || !is_array($schema['rows'])) jerr('模板內容格式錯誤（至少一列）');
+    if ($typeId !== null) {
+        $st = $db->prepare("SELECT 1 FROM stamp_type WHERE id=?");
+        $st->execute([$typeId]);
+        if (!$st->fetchColumn()) jerr('印章種類不存在');
+    }
+    $prefix = trim((string)($_POST['serial_prefix'] ?? ''));
+    $digits = max(1, min(10, (int)($_POST['serial_digits'] ?? 3)));
+    $start  = max(0, (int)($_POST['serial_start'] ?? 1));
+    $step   = max(1, (int)($_POST['serial_step'] ?? 1));
+    $reset  = in_array($_POST['serial_reset'] ?? 'none', ['none','year','month'], true) ? $_POST['serial_reset'] : 'none';
+    if ($tid > 0) {
+        $st = $db->prepare("UPDATE stamp_template SET type_id=?, tpl_name=?, schema_json=?, serial_prefix=?, serial_digits=?, serial_start=?, serial_step=?, serial_reset=?, modified_at=NOW() WHERE id=?");
+        $st->execute([$typeId, $name, json_encode($schema, JSON_UNESCAPED_UNICODE), $prefix, $digits, $start, $step, $reset, $tid]);
+    } else {
+        $st = $db->prepare("INSERT INTO stamp_template (type_id, tpl_name, schema_json, serial_prefix, serial_digits, serial_start, serial_step, serial_reset, created_by) VALUES (?,?,?,?,?,?,?,?,?)");
+        $st->execute([$typeId, $name, json_encode($schema, JSON_UNESCAPED_UNICODE), $prefix, $digits, $start, $step, $reset, $cname]);
+        $tid = (int)$db->lastInsertId();
+    }
+    jout(['ok'=>true, 'id'=>$tid]);
+}
+case 'tpl_toggle': {
+    needManage($canManage);
+    $tid = (int)($_POST['id'] ?? 0);
+    if ($tid <= 0) jerr('參數錯誤');
+    $db->prepare("UPDATE stamp_template SET is_active = 1 - is_active, modified_at=NOW() WHERE id=?")->execute([$tid]);
+    jout(['ok'=>true]);
+}
+case 'tpl_delete': {
+    needManage($canManage);
+    $tid = (int)($_POST['id'] ?? 0);
+    if ($tid <= 0) jerr('參數錯誤');
+    $db->beginTransaction();
+    $db->prepare("DELETE FROM stamp_serial WHERE template_id=?")->execute([$tid]);
+    $db->prepare("DELETE FROM stamp_template WHERE id=?")->execute([$tid]);
+    $db->commit();
+    jout(['ok'=>true]);
+}
+
+// ── 批圖蓋章挑選 meta（依種類→模板→持有對象；含變數 ctx）──
+// 所有登入者可用：蓋章是在圖面上作業的人做的，模板是參數化設計（非掃描原圖），姓名/部門/職稱本系統各頁本就可見。
+case 'pick_meta': {
+    $tpls = $db->query("SELECT p.id, p.type_id, t.type_name, p.tpl_name, p.schema_json,
+                               p.serial_prefix, p.serial_digits, p.serial_reset
+                        FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
+                        WHERE p.is_active=1 ORDER BY t.sort_order, p.id")->fetchAll(PDO::FETCH_ASSOC);
+    // 各種類「使用中」持有對象＋變數 ctx（個人章：主要部門/職稱；部門章：部門名）
+    $holders = $db->query("
+        SELECT r.type_id, r.user_id, r.dept_id,
+               COALESCE(u.user_cname, d.name) AS holder_name,
+               COALESCE(d.name, md.name, '')  AS dept,
+               COALESCE(mp.name, '')          AS position
+        FROM stamp_register r
+        LEFT JOIN user u ON u.id = r.user_id
+        LEFT JOIN department d ON d.id = r.dept_id
+        LEFT JOIN user_department_position_map m ON m.user_id = r.user_id AND m.is_main = 1
+        LEFT JOIN department md ON md.id = m.department_id
+        LEFT JOIN position mp ON mp.id = m.position_id
+        WHERE r.status = 'active'
+        ORDER BY r.type_id, holder_name")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['ok'=>true, 'templates'=>$tpls, 'holders'=>$holders]);
+}
+
+// ── 取下一個編號（依模板跳號規則；交易併發安全）──
+case 'next_serial': {
+    $tid = (int)($_POST['template_id'] ?? 0);
+    if ($tid <= 0) jerr('參數錯誤');
+    $st = $db->prepare("SELECT serial_prefix, serial_digits, serial_start, serial_step, serial_reset FROM stamp_template WHERE id=? AND is_active=1");
+    $st->execute([$tid]);
+    $tpl = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$tpl) jerr('模板不存在或已停用');
+    $period = $tpl['serial_reset'] === 'year' ? date('Y') : ($tpl['serial_reset'] === 'month' ? date('Y-m') : '');
+    $db->beginTransaction();
+    $st = $db->prepare("SELECT last_no FROM stamp_serial WHERE template_id=? AND period=? FOR UPDATE");
+    $st->execute([$tid, $period]);
+    $last = $st->fetchColumn();
+    $next = ($last === false || (int)$last === 0) ? max(1, (int)$tpl['serial_start']) : (int)$last + (int)$tpl['serial_step'];
+    $db->prepare("INSERT INTO stamp_serial (template_id, period, last_no) VALUES (?,?,?)
+                  ON DUPLICATE KEY UPDATE last_no=VALUES(last_no)")->execute([$tid, $period, $next]);
+    $db->commit();
+    $serial = $tpl['serial_prefix'] . str_pad((string)$next, (int)$tpl['serial_digits'], '0', STR_PAD_LEFT);
+    jout(['ok'=>true, 'serial'=>$serial, 'no'=>$next, 'period'=>$period]);
+}
+
 default: jerr('未知的 action');
 }
 } catch (Exception $e) {

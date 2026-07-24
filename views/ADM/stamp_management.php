@@ -103,6 +103,17 @@ try {
   </div><!-- /mainArea -->
 </div>
 
+<div class="panel-warm" id="tplPanel" style="display:none;">
+  <h4><i class="fa fa-magic"></i> 線上圖章設計（模板）
+    <span style="float:right;"><button class="btn btn-primary btn-sm" id="btnTplNew" style="display:none;"><i class="fa fa-plus"></i> 新增模板</button></span>
+  </h4>
+  <p class="text-muted" style="font-size:12px;margin:0 0 8px;">設計參數化圖章（外框/分割/固定字樣/變數/日期/編號）。批圖編輯器的「蓋章」功能會依<strong>種類</strong>列出模板，變數（部門/職稱/姓名）帶入被登記者資料，編號依跳號規則自動遞增。</p>
+  <table class="list"><thead><tr>
+    <th style="width:120px;">預覽</th><th>模板名稱</th><th style="width:110px;">種類</th><th style="width:170px;">編號規則</th>
+    <th style="width:70px;">狀態</th><th style="width:150px;">操作</th>
+  </tr></thead><tbody id="tplBody"></tbody></table>
+</div>
+
 <div class="panel-warm" id="basePanel" style="display:none;">
   <h4><i class="fa fa-folder-open-o"></i> 掃描章儲存路徑（僅管理者）</h4>
   <div style="display:flex;gap:8px;align-items:center;">
@@ -160,6 +171,64 @@ try {
   </div>
 </div></div></div>
 
+<!-- 圖章模板設計 Modal -->
+<div class="modal fade" id="tplModal" tabindex="-1" data-backdrop="static"><div class="modal-dialog" style="width:860px;"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title"><i class="fa fa-magic"></i> 圖章模板設計</h4></div>
+  <div class="modal-body">
+    <div style="display:flex;gap:16px;flex-wrap:wrap;">
+      <div style="flex:1;min-width:430px;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <span>名稱 <input type="text" id="tplName" class="form-control input-sm" style="width:150px;display:inline-block;"></span>
+          <span>種類 <select id="tplType" class="form-control input-sm" style="width:120px;display:inline-block;"></select></span>
+          <span>外框 <select id="tplShape" class="form-control input-sm" style="width:100px;display:inline-block;">
+            <option value="circle">圓形</option><option value="ellipse">橢圓</option>
+            <option value="rect">方形</option><option value="roundrect">圓角方形</option></select></span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <span>顏色 <input type="color" id="tplColor" value="#cf3a2b" style="width:44px;height:28px;vertical-align:middle;border:1px solid #d8c19a;">
+            <button class="btn btn-default btn-xs tpl-color" data-c="#cf3a2b">紅</button>
+            <button class="btn btn-default btn-xs tpl-color" data-c="#1a4f9c">藍</button></span>
+          <span>大小(px) <input type="number" id="tplSize" class="form-control input-sm" style="width:70px;display:inline-block;" value="100" min="24" max="600"></span>
+          <span>高/寬比 <input type="number" id="tplRatio" class="form-control input-sm" style="width:64px;display:inline-block;" value="1" min="0.3" max="3" step="0.1"></span>
+          <span>線寬 <input type="number" id="tplStroke" class="form-control input-sm" style="width:60px;display:inline-block;" value="2.6" min="0.5" max="8" step="0.1"></span>
+          <span>字體 <select id="tplFont" class="form-control input-sm" style="width:80px;display:inline-block;">
+            <option value="kai">楷體</option><option value="ming">明體</option><option value="hei">黑體</option></select></span>
+        </div>
+        <div style="margin-bottom:6px;">
+          <strong style="color:#7a4e17;font-size:13px;">分割列（由上而下；高度為比例）</strong>
+          <span class="text-muted" style="font-size:11.5px;">　點內容框後按變數鈕插入：</span>
+          <span id="tokenBtns">
+            <button class="btn btn-default btn-xs tok" data-t="{部門}">部門</button>
+            <button class="btn btn-default btn-xs tok" data-t="{職稱}">職稱</button>
+            <button class="btn btn-default btn-xs tok" data-t="{姓名}">姓名</button>
+            <button class="btn btn-default btn-xs tok" data-t="{日期}">日期</button>
+            <button class="btn btn-default btn-xs tok" data-t="{編號}">編號</button>
+          </span>
+        </div>
+        <table class="list" id="tplRowsTbl"><thead><tr><th style="width:70px;">高度比</th><th>內容（固定字樣＋變數）</th><th style="width:40px;"></th></tr></thead>
+          <tbody id="tplRows"></tbody></table>
+        <button class="btn btn-default btn-xs" id="btnTplRowAdd" style="margin-top:4px;"><i class="fa fa-plus"></i> 加一列</button>
+        <div style="margin-top:10px;padding:8px;background:#fdf6ea;border:1px solid #e8d9b8;border-radius:4px;">
+          <strong style="color:#7a4e17;font-size:13px;">編號跳號規則</strong>（內容有 {編號} 才會用到）<br>
+          前綴 <input type="text" id="serPrefix" class="form-control input-sm" style="width:80px;display:inline-block;" placeholder="如 QA-">
+          位數 <input type="number" id="serDigits" class="form-control input-sm" style="width:56px;display:inline-block;" value="3" min="1" max="10">
+          起始 <input type="number" id="serStart" class="form-control input-sm" style="width:64px;display:inline-block;" value="1" min="0">
+          間隔 <input type="number" id="serStep" class="form-control input-sm" style="width:56px;display:inline-block;" value="1" min="1">
+          歸零 <select id="serReset" class="form-control input-sm" style="width:90px;display:inline-block;">
+            <option value="none">不歸零</option><option value="year">每年</option><option value="month">每月</option></select>
+        </div>
+      </div>
+      <div style="width:280px;text-align:center;">
+        <p style="font-size:12px;color:#7a4e17;margin-bottom:4px;">即時預覽（示意資料）</p>
+        <div id="tplPreview" style="padding:10px;border:1px dashed #d8c19a;border-radius:4px;min-height:140px;background:#fff;"></div>
+        <p class="text-muted" style="font-size:11.5px;margin-top:4px;">示意：品保課／課長／王小明／今日／編號依規則</p>
+        <button class="btn btn-primary btn-sm" id="btnTplSave" style="margin-top:8px;"><i class="fa fa-check"></i> 儲存模板</button>
+      </div>
+    </div>
+  </div>
+</div></div></div>
+
 <!-- 種類管理 Modal -->
 <div class="modal fade" id="typeModal" tabindex="-1"><div class="modal-dialog" style="width:460px;"><div class="modal-content">
   <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
@@ -212,6 +281,7 @@ try {
 <script src="../../resource/js/custom.min.js"></script>
 <script>window.__ownCompany = <?= json_encode($ownCompany, JSON_UNESCAPED_UNICODE) ?>;</script>
 <script src="../../resource/js/eg_stamp.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_stamp.js'); ?>"></script>
+<script src="../../resource/js/eg_stamp_tpl.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js'); ?>"></script>
 <script>
 const API='../../src/store/store_Stamp_API.php';
 let canManage=false, isAdmin=false, USERS=[], page=1, per=10, total=0, curScanUid=0, curScanName='', curAsset=null, curEditId=0;
@@ -255,6 +325,9 @@ function loadMeta(){
       renderTypeMng();
     }
     if(isAdmin){ $('#basePanel').show(); $('#baseDir').val(m.base||''); baseState(m.base,m.base_ok); }
+    $('#tplPanel').show();
+    if(canManage) $('#btnTplNew').show();
+    loadTpls();
     loadList(1);
   });
 }
@@ -504,6 +577,110 @@ $('#btnBandSave').on('click',function(){
     if(!r.ok){alert(r.error||'儲存失敗');return;}
     alert('已儲存日期帶位置'); refreshScanUI(); loadList();
   },'json');
+});
+
+// ── 線上圖章模板（設計器）──
+let TPLS=[], curTplId=0, lastTokInput=null;
+function sampleCtx(){
+  return {dept:'品保課',position:'課長',name:'王小明',date:dot(today()),
+          serial:($('#serPrefix').val()||'')+String(+$('#serStart').val()||1).padStart(+$('#serDigits').val()||3,'0')};
+}
+function tplRowHtml(h,text){
+  return `<tr><td><input type="number" class="form-control input-sm tpl-h" value="${h}" min="1" max="100" step="1"></td>
+    <td><input type="text" class="form-control input-sm tpl-text" value="${esc(text)}"></td>
+    <td style="text-align:center;"><button class="btn btn-danger btn-xs tpl-row-del"><i class="fa fa-times"></i></button></td></tr>`;
+}
+function tplSchemaFromUI(){
+  const rows=[];
+  $('#tplRows tr').each(function(){
+    rows.push({h:+$(this).find('.tpl-h').val()||1, text:$(this).find('.tpl-text').val()||''});
+  });
+  return {shape:$('#tplShape').val(), color:$('#tplColor').val(), size:+$('#tplSize').val()||100,
+          ratio:+$('#tplRatio').val()||1, stroke:+$('#tplStroke').val()||2.6, font:$('#tplFont').val(), rows};
+}
+function tplPreview(){ $('#tplPreview').html(EGStampTpl.render(tplSchemaFromUI(), sampleCtx())); }
+$('#tplModal').on('input change','input,select',tplPreview);
+$('#tplModal').on('focusin','.tpl-text',function(){ lastTokInput=this; });
+$('#tokenBtns').on('click','.tok',function(e){
+  e.preventDefault();
+  if(!lastTokInput){alert('請先點選要插入的內容框');return;}
+  const t=$(this).data('t'), el=lastTokInput, s=el.selectionStart||el.value.length;
+  el.value=el.value.slice(0,s)+t+el.value.slice(el.selectionEnd||s);
+  el.focus(); el.selectionStart=el.selectionEnd=s+t.length;
+  tplPreview();
+});
+$('#tplModal').on('click','.tpl-row-del',function(){
+  if($('#tplRows tr').length<=1){alert('至少保留一列');return;}
+  $(this).closest('tr').remove(); tplPreview();
+});
+$('#btnTplRowAdd').on('click',function(){ $('#tplRows').append(tplRowHtml(30,'')); tplPreview(); });
+$('#tplModal').on('click','.tpl-color',function(e){ e.preventDefault(); $('#tplColor').val($(this).data('c')); tplPreview(); });
+
+function openTplModal(t){
+  curTplId=t?t.id:0;
+  $('#tplType').html(typeOpts(t?t.type_id:'',false).replace('（未分類）','（不綁種類）'));
+  $('#tplName').val(t?t.tpl_name:'');
+  const sc=t?JSON.parse(t.schema_json||'{}'):{shape:'circle',color:'#cf3a2b',size:100,ratio:1,stroke:2.6,font:'kai',
+    rows:[{h:30,text:'{部門}'},{h:40,text:'{日期}'},{h:30,text:'{姓名}'}]};
+  $('#tplShape').val(sc.shape||'circle'); $('#tplColor').val(sc.color||'#cf3a2b');
+  $('#tplSize').val(sc.size||100); $('#tplRatio').val(sc.ratio||1);
+  $('#tplStroke').val(sc.stroke||2.6); $('#tplFont').val(sc.font||'kai');
+  $('#tplRows').html((sc.rows&&sc.rows.length?sc.rows:[{h:100,text:''}]).map(r=>tplRowHtml(r.h,r.text)).join(''));
+  $('#serPrefix').val(t?t.serial_prefix:''); $('#serDigits').val(t?t.serial_digits:3);
+  $('#serStart').val(t?t.serial_start:1); $('#serStep').val(t?t.serial_step:1);
+  $('#serReset').val(t?t.serial_reset:'none');
+  tplPreview();
+  $('#tplModal').modal('show');
+}
+$('#btnTplNew').on('click',()=>openTplModal(null));
+$('#btnTplSave').on('click',function(){
+  const name=$('#tplName').val().trim();
+  if(!name){alert('請輸入模板名稱');return;}
+  $.post(API+'?action=tpl_save',{id:curTplId,tpl_name:name,type_id:$('#tplType').val()||'',
+    schema:JSON.stringify(tplSchemaFromUI()),
+    serial_prefix:$('#serPrefix').val().trim(),serial_digits:$('#serDigits').val(),
+    serial_start:$('#serStart').val(),serial_step:$('#serStep').val(),serial_reset:$('#serReset').val()},r=>{
+    if(!r.ok){alert(r.error||'儲存失敗');return;}
+    $('#tplModal').modal('hide'); loadTpls();
+  },'json');
+});
+function serialRuleText(t){
+  return esc(t.serial_prefix||'')+'#'.repeat(Math.min(10,+t.serial_digits||3))
+    +'　起'+t.serial_start+' 跳'+t.serial_step
+    +({none:'',year:' 每年歸零',month:' 每月歸零'}[t.serial_reset]||'');
+}
+function loadTpls(){
+  $.getJSON(API+'?action=tpl_list',r=>{
+    if(!r.ok) return;
+    TPLS=r.rows||[];
+    $('#tplBody').html(TPLS.map(t=>{
+      let sc={}; try{sc=JSON.parse(t.schema_json||'{}');}catch(e){}
+      const prev=EGStampTpl.render(Object.assign({},sc,{size:76}),
+        {dept:'品保課',position:'課長',name:'王小明',date:dot(today()),
+         serial:(t.serial_prefix||'')+String(t.serial_start||1).padStart(+t.serial_digits||3,'0')});
+      return `<tr>
+        <td style="text-align:center;">${prev}</td>
+        <td>${esc(t.tpl_name)}</td>
+        <td>${t.type_name?esc(t.type_name):'<span class="text-muted">（不綁種類）</span>'}</td>
+        <td style="font-size:12px;">${serialRuleText(t)}</td>
+        <td>${+t.is_active?'<span style="color:#3c763d;">啟用</span>':'<span class="text-muted">停用</span>'}</td>
+        <td>${canManage?`
+          <button class="btn btn-default btn-xs tplrow-edit" data-id="${t.id}"><i class="fa fa-pencil"></i> 設計</button>
+          <button class="btn btn-warning btn-xs tplrow-toggle" data-id="${t.id}">${+t.is_active?'停用':'啟用'}</button>
+          <button class="btn btn-danger btn-xs tplrow-del" data-id="${t.id}"><i class="fa fa-trash"></i></button>`:'<span class="text-muted">—</span>'}
+        </td></tr>`;}).join('')||'<tr><td colspan="6" class="text-muted">尚無模板，請新增。</td></tr>');
+  });
+}
+$('#tplBody').on('click','.tplrow-edit',function(){
+  const t=TPLS.find(x=>String(x.id)===String($(this).data('id')));
+  if(t) openTplModal(t);
+});
+$('#tplBody').on('click','.tplrow-toggle',function(){
+  $.post(API+'?action=tpl_toggle',{id:$(this).data('id')},r=>{ if(!r.ok){alert(r.error||'失敗');return;} loadTpls(); },'json');
+});
+$('#tplBody').on('click','.tplrow-del',function(){
+  if(!confirm('確定刪除此模板？（編號流水紀錄將一併刪除，不可復原）')) return;
+  $.post(API+'?action=tpl_delete',{id:$(this).data('id')},r=>{ if(!r.ok){alert(r.error||'失敗');return;} loadTpls(); },'json');
 });
 
 loadMeta();
