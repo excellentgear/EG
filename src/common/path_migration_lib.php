@@ -10,24 +10,45 @@
 
 require_once __DIR__ . '/db_backup_lib.php'; // 共用 eg_bk_cfg_*、eg_bk_exec、BK_PHP
 
-// ── 已知設定鍵的中文說明（自動探索到但不在表上的,標「其他」）─────────────────
-function eg_pm_setting_labels(): array {
+// ── 已知設定鍵的完整說明:中文名/使用頁面/存放位置（自動探索到但不在表上的,標「其他」）──
+function eg_pm_setting_meta(): array {
+    $ss = 'system_settings 資料表';
     return [
-        'sales_nas_dir'            => '業務追蹤圖片(NAS實體路徑)',
-        'sales_url_dir'            => '業務追蹤圖片(網頁別名,對應Apache alias)',
-        'part_attach_nas_dir'      => '料號附件(NAS實體路徑)',
-        'part_attach_url_dir'      => '料號附件(網頁別名)',
-        'notes_nas_dir'            => '技術備註圖片(NAS實體路徑)',
-        'notes_url_dir'            => '技術備註圖片(網頁別名)',
-        'order_change_attach_dir'  => '訂單變更單附件',
-        'ptask_nas_dir'            => '個人工作紀錄附圖(NAS實體路徑)',
-        'ptask_url_dir'            => '個人工作紀錄附圖(網頁別名)',
-        'as_doc_nas_dir'           => 'AS9100文件庫',
-        'imgedit_label_nas_dir'    => '批圖編輯器標籤庫',
-        'qc_form_nas_dir'          => 'QC線上表單',
-        'drawingrename_source_dir' => '圖面改檔名-來源資料夾',
-        'drawingrename_output_dir' => '圖面改檔名-輸出資料夾',
+        'sales_nas_dir'            => ['label'=>'業務追蹤圖片(NAS實體路徑)', 'store'=>$ss, 'pages'=>['Sales/NewOrder_Track.php 訂單追蹤']],
+        'sales_url_dir'            => ['label'=>'業務追蹤圖片(網頁別名)',    'store'=>$ss.'(對應Apache /nas別名)', 'pages'=>['Sales/NewOrder_Track.php 訂單追蹤']],
+        'part_attach_nas_dir'      => ['label'=>'料號附件(NAS實體路徑)',     'store'=>$ss, 'pages'=>['pages/master_data_management.php 主檔管理','pm/bom_viewer.php 附件三分頁','Sales/quotation_list_NEW.php 報價附件']],
+        'part_attach_url_dir'      => ['label'=>'料號附件(網頁別名)',        'store'=>$ss.'(對應Apache /nas別名)', 'pages'=>['同上']],
+        'notes_nas_dir'            => ['label'=>'技術備註圖片(NAS實體路徑)', 'store'=>$ss, 'pages'=>['pages/master_data_management.php 技術備註']],
+        'notes_url_dir'            => ['label'=>'技術備註圖片(網頁別名)',    'store'=>$ss.'(對應Apache /nas別名)', 'pages'=>['同上']],
+        'order_change_attach_dir'  => ['label'=>'訂單變更單附件',           'store'=>$ss, 'pages'=>['Sales/NewOrder_Track.php 訂單變更']],
+        'ptask_nas_dir'            => ['label'=>'個人工作紀錄附圖(NAS實體路徑)','store'=>$ss, 'pages'=>['個人工作紀錄頁']],
+        'ptask_url_dir'            => ['label'=>'個人工作紀錄附圖(網頁別名)','store'=>$ss.'(對應Apache /nas別名)', 'pages'=>['同上']],
+        'as_doc_nas_dir'           => ['label'=>'AS9100文件庫',             'store'=>$ss, 'pages'=>['ADM/as_document_management.php','ADM/as_document_online.php']],
+        'imgedit_label_nas_dir'    => ['label'=>'批圖編輯器標籤庫',          'store'=>$ss, 'pages'=>['Sales/image_editor.php 批圖編輯器']],
+        'qc_form_nas_dir'          => ['label'=>'QC線上表單',               'store'=>$ss, 'pages'=>['QC 線上檢驗各頁']],
+        'drawingrename_source_dir' => ['label'=>'圖面改檔名-來源資料夾',     'store'=>$ss, 'pages'=>['pm/drawing_rename.php']],
+        'drawingrename_output_dir' => ['label'=>'圖面改檔名-輸出資料夾',     'store'=>$ss, 'pages'=>['pm/drawing_rename.php']],
     ];
+}
+// 相容舊介面
+function eg_pm_setting_labels(): array {
+    $out = [];
+    foreach (eg_pm_setting_meta() as $k => $m) $out[$k] = $m['label'];
+    return $out;
+}
+
+// ── 路徑變更紀錄 ─────────────────────────────────────────────────────────────
+function eg_pm_log_change(PDO $pdo, string $scope, string $target, ?string $old, ?string $new, int $rows, string $by): void {
+    try {
+        $pdo->prepare("INSERT INTO path_change_log (scope,target,old_value,new_value,affected_rows,changed_by) VALUES (?,?,?,?,?,?)")
+            ->execute([$scope, $target, $old, $new, $rows, $by]);
+    } catch (Throwable $e) {}
+}
+function eg_pm_changelog(PDO $pdo, int $limit = 100): array {
+    try {
+        return $pdo->query("SELECT scope,target,old_value,new_value,affected_rows,changed_by,changed_at
+                            FROM path_change_log ORDER BY id DESC LIMIT " . (int)$limit)->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
 }
 
 // ── 存「完整路徑」的資料表白名單（未合規模組,遷移時要批次改前綴）──────────────
@@ -52,7 +73,7 @@ function eg_pm_hardcoded_pages(): array {
 
 // ── 盤點 ────────────────────────────────────────────────────────────────────
 function eg_pm_inventory(PDO $pdo): array {
-    $labels = eg_pm_setting_labels();
+    $meta = eg_pm_setting_meta();
     $settings = [];
     // system_settings 全部路徑類（已知的 + 自動探索）
     try {
@@ -62,10 +83,13 @@ function eg_pm_inventory(PDO $pdo): array {
         foreach ($rows as $r) {
             $v = (string)$r['setting_value'];
             $isUrl = (strpos($r['setting_key'], 'url') !== false) || (strlen($v) > 0 && $v[0] === '/');
+            $m = $meta[$r['setting_key']] ?? null;
             $settings[] = [
                 'scope'  => 'system_settings',
                 'key'    => $r['setting_key'],
-                'label'  => $labels[$r['setting_key']] ?? '（其他）',
+                'label'  => $m['label'] ?? '（其他）',
+                'store'  => $m['store'] ?? 'system_settings 資料表',
+                'pages'  => $m['pages'] ?? [],
                 'value'  => $v,
                 'kind'   => $isUrl ? 'url' : 'fs',
                 'exists' => $isUrl ? null : ($v !== '' ? @is_dir($v) : null),
@@ -75,6 +99,7 @@ function eg_pm_inventory(PDO $pdo): array {
     // 備份模組自己的 NAS 路徑
     $bk = eg_bk_cfg_get($pdo, 'nas_path', '');
     $settings[] = ['scope'=>'db_backup_config','key'=>'nas_path','label'=>'資料庫備份NAS複本',
+                   'store'=>'db_backup_config 資料表','pages'=>['ADM/db_backup.php 資料庫備份管理'],
                    'value'=>$bk,'kind'=>'fs','exists'=>($bk !== '' ? @is_dir($bk) : null)];
 
     // 存完整路徑的表:前綴分布
@@ -97,49 +122,58 @@ function eg_pm_inventory(PDO $pdo): array {
     return ['settings'=>$settings, 'fullpath'=>$tables, 'hardcoded'=>eg_pm_hardcoded_pages()];
 }
 
-// ── 改單一設定值 ─────────────────────────────────────────────────────────────
+// ── 改單一設定值（含變更紀錄）───────────────────────────────────────────────
 function eg_pm_set_setting(PDO $pdo, string $scope, string $key, string $newValue, string $by): array {
     if ($scope === 'db_backup_config') {
         if ($key !== 'nas_path') return ['ok'=>false,'msg'=>'不允許的設定鍵'];
+        $old = eg_bk_cfg_get($pdo, 'nas_path', '');
         eg_bk_cfg_set($pdo, 'nas_path', $newValue, $by);
+        if ($old !== $newValue) eg_pm_log_change($pdo, 'db_backup_config', 'nas_path', $old, $newValue, 1, $by);
         return ['ok'=>true,'msg'=>'已更新 db_backup_config.nas_path'];
     }
     if ($scope !== 'system_settings') return ['ok'=>false,'msg'=>'不允許的範圍'];
     if (!preg_match('/^[A-Za-z0-9_]+$/', $key)) return ['ok'=>false,'msg'=>'設定鍵不合法'];
+    $chk = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key=?");
+    $chk->execute([$key]);
+    $old = $chk->fetchColumn();
+    if ($old === false) return ['ok'=>false,'msg'=>'找不到該設定鍵'];
     $st = $pdo->prepare("UPDATE system_settings SET setting_value=? WHERE setting_key=?");
     $st->execute([$newValue, $key]);
-    if ($st->rowCount() === 0) {
-        // 該鍵可能不存在 → 不主動新增（避免打錯鍵名還以為成功）
-        $chk = $pdo->prepare("SELECT 1 FROM system_settings WHERE setting_key=?");
-        $chk->execute([$key]);
-        if (!$chk->fetchColumn()) return ['ok'=>false,'msg'=>'找不到該設定鍵'];
-    }
+    if ((string)$old !== $newValue) eg_pm_log_change($pdo, 'system_settings', $key, (string)$old, $newValue, 1, $by);
     return ['ok'=>true,'msg'=>"已更新 {$key}"];
 }
 
-// ── 批次前綴替換（dry-run 預覽 / 實際執行）──────────────────────────────────
+// ── 批次前綴替換（dry-run 預覽 / 實際執行;$selected=只套用勾選項,null=全部）────
 // 對「所有以 $old 開頭」的:system_settings 路徑值、db_backup_config.nas_path、
 // 未合規表的 file_path/preview_path 進行前綴替換。Windows 路徑不分大小寫比對。
-function eg_pm_bulk_prefix(PDO $pdo, string $old, string $new, bool $dryRun, string $by): array {
+// 每個項目有唯一 id（setting:scope:key / table:表:欄）,前端預覽勾選後把 id 陣列傳回執行。
+function eg_pm_bulk_prefix(PDO $pdo, string $old, string $new, bool $dryRun, string $by, ?array $selected = null): array {
     if (mb_strlen($old) < 3) return ['ok'=>false,'msg'=>'舊前綴太短(至少3字,避免誤傷)','items'=>[]];
     $items = [];
     $lowOld = mb_strtolower($old);
     $oldLen = mb_strlen($old);
+    $pick = function(string $id) use ($selected): bool {
+        return $selected === null || in_array($id, $selected, true);
+    };
 
     // 1) 設定值
     $inv = eg_pm_inventory($pdo);
     foreach ($inv['settings'] as $s) {
         if ($s['value'] === '' ) continue;
         if (mb_strtolower(mb_substr($s['value'], 0, $oldLen)) !== $lowOld) continue;
+        $id = 'setting:' . $s['scope'] . ':' . $s['key'];
+        if (!$pick($id)) continue;
         $newVal = $new . mb_substr($s['value'], $oldLen);
-        $items[] = ['type'=>'setting','scope'=>$s['scope'],'key'=>$s['key'],'label'=>$s['label'],
+        $items[] = ['id'=>$id,'type'=>'setting','scope'=>$s['scope'],'key'=>$s['key'],'label'=>$s['label'],
                     'from'=>$s['value'],'to'=>$newVal,'cnt'=>1];
-        if (!$dryRun) eg_pm_set_setting($pdo, $s['scope'], $s['key'], $newVal, $by);
+        if (!$dryRun) eg_pm_set_setting($pdo, $s['scope'], $s['key'], $newVal, $by); // set_setting 內含變更紀錄
     }
 
     // 2) 未合規表（UPDATE 用 LEFT()=? 比對,避免 LIKE 反斜線跳脫地雷;collation 不分大小寫）
     foreach (eg_pm_fullpath_targets() as $t) {
         foreach ($t['columns'] as $col) {
+            $id = 'table:' . $t['table'] . ':' . $col;
+            if (!$pick($id)) continue;
             try {
                 $chk = $pdo->query("SHOW COLUMNS FROM `{$t['table']}` LIKE " . $pdo->quote($col))->fetch();
                 if (!$chk) continue;
@@ -147,19 +181,20 @@ function eg_pm_bulk_prefix(PDO $pdo, string $old, string $new, bool $dryRun, str
                 $cntSt->execute([$old, $old]);
                 $cnt = (int)$cntSt->fetchColumn();
                 if ($cnt === 0) continue;
-                $items[] = ['type'=>'table','table'=>$t['table'],'label'=>$t['label'],'column'=>$col,
+                $items[] = ['id'=>$id,'type'=>'table','table'=>$t['table'],'label'=>$t['label'],'column'=>$col,
                             'from'=>$old.'…','to'=>$new.'…','cnt'=>$cnt];
                 if (!$dryRun) {
                     $up = $pdo->prepare("UPDATE `{$t['table']}`
                                          SET `$col` = CONCAT(?, SUBSTRING(`$col`, CHAR_LENGTH(?)+1))
                                          WHERE LEFT(`$col`, CHAR_LENGTH(?)) = ?");
                     $up->execute([$new, $old, $old, $old]);
+                    eg_pm_log_change($pdo, 'table_prefix', $t['table'] . '.' . $col, $old, $new, $cnt, $by);
                 }
             } catch (Throwable $e) {}
         }
     }
     $total = array_sum(array_column($items, 'cnt'));
-    $msg = $dryRun ? "預覽:共 " . count($items) . " 項、$total 筆會被替換（尚未執行）"
+    $msg = $dryRun ? "預覽:共 " . count($items) . " 項、$total 筆會被替換（尚未執行,可勾選要套用的項目）"
                    : "已替換 " . count($items) . " 項、共 $total 筆";
     return ['ok'=>true,'msg'=>$msg,'items'=>$items];
 }
