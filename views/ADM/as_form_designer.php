@@ -24,11 +24,12 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
   .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;min-height:100vh;}
   .wrap{clear:both;width:100%;display:flex;gap:14px;padding:12px 16px;align-items:flex-start;}
   .canvas{flex:1;min-width:0;}
-  .side{width:300px;flex:none;background:#fff;border:1px solid #d8c19a;border-radius:6px;padding:12px;box-shadow:0 2px 8px rgba(90,61,30,.12);position:sticky;top:10px;}
+  .side{width:300px;flex:none;background:#fff;border:1px solid #d8c19a;border-radius:6px;padding:12px;box-shadow:0 2px 8px rgba(90,61,30,.12);position:sticky;top:70px;max-height:calc(100vh - 84px);overflow-y:auto;}   /* top 讓開凍結的操作列；過高時面板內自捲 */
   .side h4{margin:0 0 8px;font-size:14px;color:#7a4e17;border-bottom:2px solid #f0a24b;padding-bottom:5px;}
   .side .form-group{margin-bottom:8px;}
   .side label{font-size:12px;font-weight:600;color:#6b4e2a;margin-bottom:2px;}
-  .topbar{clear:both;width:100%;background:#fff;border:1px solid #d8c19a;border-radius:6px;padding:10px 12px;margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;box-shadow:0 2px 8px rgba(90,61,30,.12);}   /* clear+width 防 top_nav float 擠壓 */
+  .topbar{clear:both;width:100%;background:#fff;border:1px solid #d8c19a;border-radius:6px;padding:10px 12px;margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;box-shadow:0 2px 8px rgba(90,61,30,.12);
+    position:sticky;top:0;z-index:80;}   /* clear+width 防 top_nav float 擠壓；sticky 凍結操作列，捲到下方仍可點 */
   .topbar .sep{width:1px;height:24px;background:#e0cba0;margin:0 4px;}
   /* 編輯格 */
   table.eg-edit{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff;}
