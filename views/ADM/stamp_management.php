@@ -46,6 +46,13 @@ try {
   .band-shade{position:absolute;left:0;right:0;background:rgba(240,162,75,.18);pointer-events:none;}
   #roleBadge{float:right;font-size:12px;color:#7a4e17;font-weight:normal;}
   #roleBadge .fa-question-circle{cursor:pointer;color:#f0a24b;font-size:14px;}
+  /* 內頁頁籤（暖色系） */
+  .warm-tabs{list-style:none;margin:0 0 12px;padding:0;display:flex;gap:4px;border-bottom:2px solid #f0a24b;}
+  .warm-tabs li{padding:6px 16px;font-size:13.5px;font-weight:bold;color:#8a7455;background:#f3ece0;border:1px solid #e0cba0;border-bottom:none;border-radius:6px 6px 0 0;cursor:pointer;user-select:none;}
+  .warm-tabs li.active{background:#f0a24b;color:#4a2c0a;}
+  .warm-tabs li:hover:not(.active){background:#f7e0bd;color:#5a3d1e;}
+  /* 新增登記＋篩選列凍結（捲動清冊時固定在上方） */
+  #stickyBar{position:sticky;top:0;z-index:30;background:#fff;padding-top:2px;box-shadow:0 4px 6px -4px rgba(90,61,30,.25);}
 </style>
 </head>
 <body class="nav-sm">
@@ -55,8 +62,10 @@ try {
 <div class="right_col" role="main">
 
 <div class="panel-warm">
-  <h4><i class="fa fa-certificate"></i> 圖章清冊（核發/停用登記）
-    <span id="roleBadge">目前角色：<strong id="myRole">…</strong>　<i class="fa fa-question-circle" data-toggle="modal" data-target="#permModal" title="權限說明"></i></span>
+  <h4><i class="fa fa-certificate"></i> 圖章管理
+    <span id="roleBadge">
+      <button class="btn btn-default btn-xs" id="btnSettings" style="display:none;" data-toggle="modal" data-target="#settingsModal"><i class="fa fa-cog"></i> 設定</button>
+      　目前角色：<strong id="myRole">…</strong>　<i class="fa fa-question-circle" data-toggle="modal" data-target="#permModal" title="權限說明"></i></span>
   </h4>
   <div id="noPermMsg" style="display:none;padding:18px;text-align:center;color:#8a7455;font-size:14px;">
     <i class="fa fa-lock" style="font-size:26px;color:#f0a24b;"></i><br>
@@ -64,10 +73,16 @@ try {
     <span style="font-size:12px;">為避免圖章被瀏覽轉存，清冊僅開放「圖章檢閱」「圖章管理員」角色與管理者。如有需要請洽管理者至「人員權限設定 → 圖章管理」指派。</span>
   </div>
   <div id="mainArea">
+  <ul class="warm-tabs">
+    <li class="active" data-tab="reg"><i class="fa fa-list-alt"></i> 圖章清冊（核發/停用登記）</li>
+    <li data-tab="tpl"><i class="fa fa-magic"></i> 線上圖章設計（模板）</li>
+  </ul>
+  <div id="tab-reg">
+  <div id="stickyBar">
   <div id="addBar" style="display:none;margin-bottom:10px;padding:8px;background:#fdf6ea;border:1px solid #e8d9b8;border-radius:4px;">
     <strong style="color:#7a4e17;"><i class="fa fa-plus-circle"></i> 新增登記：</strong>
-    <select id="addKind" class="form-control input-sm" style="width:90px;display:inline-block;" title="個人章或部門章">
-      <option value="user">個人章</option><option value="dept">部門章</option>
+    <select id="addKind" class="form-control input-sm" style="width:96px;display:inline-block;" title="持有對象別：個人持有或部門持有">
+      <option value="user">個人持有</option><option value="dept">部門持有</option>
     </select>
     <select id="addUser" class="form-control input-sm" style="width:150px;display:inline-block;"></select>
     <select id="addDept" class="form-control input-sm" style="width:150px;display:none;"></select>
@@ -75,8 +90,7 @@ try {
     <input type="date" id="addDate" class="form-control input-sm" style="width:150px;display:inline-block;" max="9999-12-31">
     <input type="text" id="addNote" class="form-control input-sm" style="width:200px;display:inline-block;" placeholder="備註（選填）">
     <button class="btn btn-primary btn-sm" id="btnAdd"><i class="fa fa-plus"></i> 登記核發</button>
-    <button class="btn btn-default btn-sm" id="btnTypeMng" data-toggle="modal" data-target="#typeModal"><i class="fa fa-tags"></i> 種類管理</button>
-    <span class="text-muted" style="font-size:12px;">同一人＋同一種類，同時只能有一筆「使用中」。</span>
+    <span class="text-muted" style="font-size:12px;">同一持有對象＋同一種類，同時只能有一筆「使用中」。種類維護請按右上「設定」。</span>
   </div>
   <div class="pager">
     <span style="font-size:12.5px;">
@@ -95,34 +109,56 @@ try {
       <span id="pageBtns"></span>
     </span>
   </div>
+  </div><!-- /stickyBar -->
   <table class="list"><thead><tr>
     <th style="width:90px;">印模</th><th style="width:100px;">持有人</th><th style="width:100px;">種類</th><th style="width:95px;">核發日期</th>
     <th style="width:100px;">停用/繳回日</th><th style="width:75px;">狀態</th><th>備註</th>
     <th style="width:85px;">掃描實體章</th><th style="width:190px;">操作</th>
   </tr></thead><tbody id="regBody"></tbody></table>
+  </div><!-- /tab-reg -->
+
+  <div id="tab-tpl" style="display:none;">
+    <div style="margin-bottom:8px;">
+      <span class="text-muted" style="font-size:12px;">設計參數化圖章（外框/分割/固定字樣/變數/日期/編號）。批圖編輯器的「蓋章」功能會依<strong>種類</strong>列出模板，變數（部門/職稱/姓名）帶入被登記者資料，編號依跳號規則自動遞增。</span>
+      <button class="btn btn-primary btn-sm" id="btnTplNew" style="display:none;float:right;"><i class="fa fa-plus"></i> 新增模板</button>
+      <div style="clear:both;"></div>
+    </div>
+    <table class="list"><thead><tr>
+      <th style="width:120px;">預覽</th><th>模板名稱</th><th style="width:110px;">種類</th><th style="width:170px;">編號規則</th>
+      <th style="width:70px;">狀態</th><th style="width:150px;">操作</th>
+    </tr></thead><tbody id="tplBody"></tbody></table>
+  </div><!-- /tab-tpl -->
   </div><!-- /mainArea -->
 </div>
 
-<div class="panel-warm" id="tplPanel" style="display:none;">
-  <h4><i class="fa fa-magic"></i> 線上圖章設計（模板）
-    <span style="float:right;"><button class="btn btn-primary btn-sm" id="btnTplNew" style="display:none;"><i class="fa fa-plus"></i> 新增模板</button></span>
-  </h4>
-  <p class="text-muted" style="font-size:12px;margin:0 0 8px;">設計參數化圖章（外框/分割/固定字樣/變數/日期/編號）。批圖編輯器的「蓋章」功能會依<strong>種類</strong>列出模板，變數（部門/職稱/姓名）帶入被登記者資料，編號依跳號規則自動遞增。</p>
-  <table class="list"><thead><tr>
-    <th style="width:120px;">預覽</th><th>模板名稱</th><th style="width:110px;">種類</th><th style="width:170px;">編號規則</th>
-    <th style="width:70px;">狀態</th><th style="width:150px;">操作</th>
-  </tr></thead><tbody id="tplBody"></tbody></table>
-</div>
-
-<div class="panel-warm" id="basePanel" style="display:none;">
-  <h4><i class="fa fa-folder-open-o"></i> 掃描章儲存路徑（僅管理者）</h4>
-  <div style="display:flex;gap:8px;align-items:center;">
-    <input type="text" id="baseDir" class="form-control input-sm" style="flex:1;font-family:Consolas,monospace;" placeholder="\\excellentnas\...\圖章（留空＝專案內 uploads\stamps）">
-    <button class="btn btn-primary btn-sm" id="btnBaseSave"><i class="fa fa-save"></i> 儲存</button>
+<!-- 設定 Modal（種類管理／掃描章儲存路徑，跳窗內分頁） -->
+<div class="modal fade" id="settingsModal" tabindex="-1"><div class="modal-dialog" style="width:540px;"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title"><i class="fa fa-cog"></i> 圖章管理設定</h4></div>
+  <div class="modal-body">
+    <ul class="warm-tabs">
+      <li class="active" data-stab="type"><i class="fa fa-tags"></i> 印章種類管理</li>
+      <li data-stab="base" id="stabBase" style="display:none;"><i class="fa fa-folder-open-o"></i> 掃描章儲存路徑</li>
+    </ul>
+    <div id="stab-type">
+      <p class="text-muted" style="font-size:12px;">種類做成主檔統一下拉選擇，避免備註各打各的；停用後新登記選不到、舊資料照常顯示。</p>
+      <table class="list"><thead><tr><th>種類名稱</th><th style="width:70px;">狀態</th><th style="width:150px;">操作</th></tr></thead>
+        <tbody id="typeBody"></tbody></table>
+      <div style="margin-top:10px;display:flex;gap:6px;">
+        <input type="text" id="newTypeName" class="form-control input-sm" placeholder="新種類名稱（如：檢驗章）">
+        <button class="btn btn-primary btn-sm" id="btnTypeAdd" style="white-space:nowrap;"><i class="fa fa-plus"></i> 新增</button>
+      </div>
+    </div>
+    <div id="stab-base" style="display:none;">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input type="text" id="baseDir" class="form-control input-sm" style="flex:1;font-family:Consolas,monospace;" placeholder="\\excellentnas\...\圖章（留空＝專案內 uploads\stamps）">
+        <button class="btn btn-primary btn-sm" id="btnBaseSave"><i class="fa fa-save"></i> 儲存</button>
+      </div>
+      <p id="baseState" style="font-size:11.5px;margin:6px 0 0;"></p>
+      <p class="text-muted" style="font-size:11.5px;margin:4px 0 0;">DB 只存檔名，路徑讀取時即時組出（鐵律5）；更換路徑後請自行把既有 PNG 檔搬到新資料夾。僅管理者可見此分頁。</p>
+    </div>
   </div>
-  <p id="baseState" style="font-size:11.5px;margin:6px 0 0;"></p>
-  <p class="text-muted" style="font-size:11.5px;margin:4px 0 0;">DB 只存檔名，路徑讀取時即時組出（鐵律5）；更換路徑後請自行把既有 PNG 檔搬到新資料夾。</p>
-</div>
+</div></div></div>
 
 <!-- 掃描章管理 Modal -->
 <div class="modal fade" id="scanModal" tabindex="-1"><div class="modal-dialog" style="width:720px;"><div class="modal-content">
@@ -229,21 +265,6 @@ try {
   </div>
 </div></div></div>
 
-<!-- 種類管理 Modal -->
-<div class="modal fade" id="typeModal" tabindex="-1"><div class="modal-dialog" style="width:460px;"><div class="modal-content">
-  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
-    <h4 class="modal-title"><i class="fa fa-tags"></i> 印章種類管理</h4></div>
-  <div class="modal-body">
-    <p class="text-muted" style="font-size:12px;">種類做成主檔統一下拉選擇，避免備註各打各的；停用後新登記選不到、舊資料照常顯示。</p>
-    <table class="list"><thead><tr><th>種類名稱</th><th style="width:70px;">狀態</th><th style="width:150px;">操作</th></tr></thead>
-      <tbody id="typeBody"></tbody></table>
-    <div style="margin-top:10px;display:flex;gap:6px;">
-      <input type="text" id="newTypeName" class="form-control input-sm" placeholder="新種類名稱（如：檢驗章）">
-      <button class="btn btn-primary btn-sm" id="btnTypeAdd" style="white-space:nowrap;"><i class="fa fa-plus"></i> 新增</button>
-    </div>
-  </div>
-</div></div></div>
-
 <!-- 停用/繳回 Modal -->
 <div class="modal fade" id="revModal" tabindex="-1"><div class="modal-dialog" style="width:380px;"><div class="modal-content">
   <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
@@ -324,13 +345,24 @@ function loadMeta(){
       $('#addDate').val(today());
       renderTypeMng();
     }
-    if(isAdmin){ $('#basePanel').show(); $('#baseDir').val(m.base||''); baseState(m.base,m.base_ok); }
-    $('#tplPanel').show();
-    if(canManage) $('#btnTplNew').show();
+    if(isAdmin){ $('#stabBase').show(); $('#baseDir').val(m.base||''); baseState(m.base,m.base_ok); }
+    if(canManage){ $('#btnSettings').show(); $('#btnTplNew').show(); }
     loadTpls();
     loadList(1);
   });
 }
+
+// ── 內頁頁籤（清冊/模板）與設定跳窗分頁 ──
+$('.warm-tabs [data-tab]').on('click',function(){
+  $(this).addClass('active').siblings().removeClass('active');
+  const t=$(this).data('tab');
+  $('#tab-reg').toggle(t==='reg'); $('#tab-tpl').toggle(t==='tpl');
+});
+$('#settingsModal .warm-tabs [data-stab]').on('click',function(){
+  $(this).addClass('active').siblings().removeClass('active');
+  const t=$(this).data('stab');
+  $('#stab-type').toggle(t==='type'); $('#stab-base').toggle(t==='base');
+});
 function baseState(base,ok){
   $('#baseState').html(base?('目前路徑：<code>'+esc(base)+'</code> '+(ok?'<span style="color:#26b99a;">✔ 可存取</span>':'<span style="color:#dd5138;">✘ 資料夾不存在（上傳時會嘗試自動建立）</span>')):'');
 }
