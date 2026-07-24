@@ -45,9 +45,11 @@ function alr_user_names(PDO $pdo): array {
     return $names;
 }
 
-function alr_hostnames(PDO $pdo, array $ips): array {
-    // ip → 電腦名稱（或 null）。走 ip_hostname_cache（7 天有效）；
-    // 每次請求最多反查 3 個新 IP，避免 DNS 反查慢拖住頁面，其餘留待下次載入補齊。
+function alr_hostnames(PDO $pdo, array $ips, int $budget = 0): array {
+    // ip → 電腦名稱（或 null）。走 ip_hostname_cache（7 天有效）。
+    // 反查 gethostbyaddr 對「同網段但無回應」的死 IP 在 Windows 會卡到 ~9 秒/次（NetBIOS 逾時），
+    // 故列表請求一律 $budget=0＝只讀快取、絕不即時反查（避免整頁卡在載入中）；
+    // 未命中的 IP 由前端另發 resolve_hosts 非阻塞請求補齊，CSV 匯出才給少量即時反查額度。
     $out = [];
     $ips = array_values(array_unique(array_filter($ips)));
     if (!$ips) return $out;
@@ -58,7 +60,6 @@ function alr_hostnames(PDO $pdo, array $ips): array {
         $st->execute($ips);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $cached[$r['ip']] = $r;
     } catch (Exception $e) {}
-    $budget = 3;
     foreach ($ips as $ip) {
         $c = $cached[$ip] ?? null;
         if ($c && strtotime((string)$c['resolved_at']) > time() - 7 * 86400) { $out[$ip] = $c['hostname']; continue; }
@@ -127,6 +128,18 @@ if ($isAjax) {
     $kw   = trim($_GET['kw'] ?? '');
 
     try {
+        /* ── 反查電腦名稱（前端渲染後非阻塞補齊；與列表分離避免卡住整頁） ── */
+        if ($action === 'resolve_hosts') {
+            header('Content-Type: application/json; charset=utf-8');
+            $ipsRaw = explode(',', (string)($_GET['ips'] ?? ''));
+            $ips = array_slice(array_values(array_unique(array_filter(array_map('trim', $ipsRaw)))), 0, 5); // 一次最多 5 個
+            $hosts = alr_hostnames($pdo, $ips, count($ips));
+            $out = [];
+            foreach ($ips as $ip) $out[$ip] = $hosts[$ip] ?? null;
+            echo json_encode(['success'=>true, 'hosts'=>$out]);
+            exit;
+        }
+
         /* ── 登入紀錄 ── */
         if ($action === 'login_list' || $action === 'export_login_csv') {
             $status = $_GET['status'] ?? 'all';                       // all / ok / fail
@@ -165,7 +178,7 @@ if ($isAjax) {
                 $st = $pdo->prepare("SELECT * FROM login_log$w ORDER BY $sort $dir, id DESC");
                 $st->execute($args);
                 $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-                $hosts = alr_hostnames($pdo, array_column($rows, 'ip'));
+                $hosts = alr_hostnames($pdo, array_column($rows, 'ip'), 8); // 匯出可接受少量即時反查
                 header('Content-Type: text/csv; charset=utf-8');
                 header('Content-Disposition: attachment; filename="login_log_' . date('Ymd_His') . '.csv"');
                 $out = fopen('php://output', 'w');
@@ -566,14 +579,35 @@ if ($isAjax) {
                      +  '<td>' + esc(r.name || '') + '</td>'
                      +  '<td>' + badge + '</td>'
                      +  '<td>' + esc(r.ip) + '</td>'
-                     +  '<td>' + (r.hostname ? esc(r.hostname) : '<span style="color:#c9bba8;">—</span>') + '</td>'
+                     +  '<td class="host-cell" data-ip="' + esc(r.ip) + '">'
+                     +      (r.hostname ? esc(r.hostname) : '<span class="host-pending" style="color:#c9bba8;">—</span>') + '</td>'
                      +  '<td>' + esc(r.browser || '') + '</td>'
                      +  '</tr>';
             });
             $('#lTbody').html(html);
             $('#lTable thead th .sort-ind').text('');
             $('#lTable thead th[data-sort="' + lState.sort + '"] .sort-ind').text(lState.dir === 'asc' ? '▲' : '▼');
+            resolvePendingHosts();
+        }).fail(function(xhr){
+            $('#lTbody').html('<tr><td colspan="7" class="text-center text-danger">載入失敗（' + xhr.status + '）：請重新整理或稍後再試</td></tr>');
         });
+    }
+
+    /* 反查電腦名稱：列表渲染後才發、非阻塞、每次最多 5 個；死 IP 反查慢也不會拖住表格顯示 */
+    function resolvePendingHosts(){
+        var ips = [];
+        $('#lTbody .host-cell').has('.host-pending').each(function(){
+            var ip = $(this).data('ip');
+            if (ip && ips.indexOf(ip) < 0) ips.push(ip);
+        });
+        if (!ips.length) return;
+        $.getJSON('audit_log_report.php', { action:'resolve_hosts', ips: ips.slice(0, 5).join(',') }, function(res){
+            if (!res || !res.success || !res.hosts) return;
+            $('#lTbody .host-cell').each(function(){
+                var ip = $(this).data('ip');
+                if (ip in res.hosts && res.hosts[ip]) $(this).text(res.hosts[ip]);
+            });
+        }); // 反查失敗保持「—」，不打擾使用者
     }
 
     $('#lTable thead').on('click', 'th[data-sort]', function(){
@@ -625,6 +659,8 @@ if ($isAjax) {
             $('#pTbody').html(html);
             $('#pTable thead th .sort-ind').text('');
             $('#pTable thead th[data-sort="' + pState.sort + '"] .sort-ind').text(pState.dir === 'asc' ? '▲' : '▼');
+        }).fail(function(xhr){
+            $('#pTbody').html('<tr><td colspan="6" class="text-center text-danger">載入失敗（' + xhr.status + '）：請重新整理或稍後再試</td></tr>');
         });
     }
 
