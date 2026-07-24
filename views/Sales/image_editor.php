@@ -54,6 +54,10 @@ try {
     $dbc = new DBConnection();
     $pdo = $dbc->getPDO();
 
+    // 頁面使用統計：本頁為全螢幕跳窗、未含共用側欄，logger 不會自動掛載，故此處手動記一筆
+    //（沿用現有 $pdo；記錄器全程靜默，失敗絕不影響本頁）。見 views/admin/page_visit_report.php。
+    @include_once __DIR__ . '/../../src/common/page_visit_logger.php';
+
     // 植入 imgedit 預設角色（供 user_permissions.php 角色指派區塊使用）
     $pdo->exec("INSERT IGNORE INTO roles (role_code, role_name, module, is_system, note)
                 VALUES ('imgedit_user', '批圖使用者', 'imgedit', 0, '可使用批圖編輯器（views/Sales/image_editor.php）')");
