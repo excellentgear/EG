@@ -2003,6 +2003,22 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                 }
             } catch (Exception $e) {}
         }
+
+        // 批次查詢本頁訂單的BOM綁定狀態（bom_order_process_map：多BOM對多訂單，依allocated_qty加總判斷全/部分綁定）
+        $bomBindMap = []; // Order_id => ['sum'=>N, 'boms'=>[bom1,bom2,...]]
+        if (!empty($orderIds)) {
+            try {
+                $phBom = implode(',', array_fill(0, count($orderIds), '?'));
+                $stmtBom = $pdo->prepare("SELECT order_id, bom, allocated_qty FROM bom_order_process_map WHERE order_id IN ($phBom)");
+                $stmtBom->execute($orderIds);
+                foreach ($stmtBom->fetchAll(PDO::FETCH_ASSOC) as $br) {
+                    $oid = (int)$br['order_id'];
+                    if (!isset($bomBindMap[$oid])) { $bomBindMap[$oid] = ['sum' => 0, 'boms' => []]; }
+                    $bomBindMap[$oid]['sum'] += (int)$br['allocated_qty'];
+                    $bomBindMap[$oid]['boms'][] = $br['bom'];
+                }
+            } catch (Exception $e) {}
+        }
     }
 
     // ── 批次查詢：設計備註 / 標籤 / 圖面狀態 / 庫存 ─────────────────────────
@@ -2303,8 +2319,22 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     ob_start();
     if(count($order_list) > 0) {
         foreach ($order_list as $order) {
+            // BOM綁定狀態圖示：依 bom_order_process_map 加總 allocated_qty 與訂單Qty比較，全綁定/部分綁定才顯示
+            // 存成 $_bomIconHtml 供狀態欄使用，同時存進 <tr data-bom-icon> 供JS更新狀態欄後補回（見 updatePmGet 等函式）
+            $_bomIconHtml = '';
+            $_bomBindRow = $bomBindMap[intval($order['Order_id'])] ?? null;
+            $_bomSumRow  = $_bomBindRow['sum'] ?? 0;
+            if ($_bomSumRow > 0) {
+                $_bomQtyRow   = intval($order['Qty'] ?? 0);
+                $_bomFullRow  = ($_bomSumRow >= $_bomQtyRow);
+                $_bomColorRow = $_bomFullRow ? '#1ABB9C' : '#F0A24B';
+                $_bomIconRow  = $_bomFullRow ? 'fa-check-circle' : 'fa-exclamation-triangle';
+                $_bomTitleRow = ($_bomFullRow ? '生管已開立BOM（全部綁定 ' : '生管已開立BOM（部分綁定 ') . $_bomSumRow . '/' . $_bomQtyRow . '），點擊查看BOM';
+                $_bomIconHtml = ' <a href="../pm/OreadyReply_ForPm_BaseOfTime.php?order_id_filter=' . intval($order['Order_id']) . '" target="_blank" title="' . safe_html($_bomTitleRow) . '" style="text-decoration:none;">'
+                               . '<i class="fa ' . $_bomIconRow . '" style="color:' . $_bomColorRow . ';font-size:12px;margin-left:4px;"></i></a>';
+            }
 ?>
-            <tr data-orderid="<?= safe_html($order['Order_id']) ?>">
+            <tr data-orderid="<?= safe_html($order['Order_id']) ?>" data-bom-icon="<?= htmlspecialchars($_bomIconHtml, ENT_QUOTES, 'UTF-8') ?>">
                 <?php if ($show_op_col): ?>
                 <td style="text-align: center;">
                     <div style="display: flex; flex-direction: column; align-items: center; gap: 3px;">
@@ -2571,6 +2601,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                             echo '<div style="font-size:11px;color:#8e44ad;margin-top:2px;"><i class="fa fa-check-circle"></i> 已結案</div>';
                         }
                     }
+                    echo $_bomIconHtml;
                     ?>
                 </td>
                 <td>
@@ -6314,7 +6345,7 @@ foreach($dCounts as $c) {
                         html += `<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="cancelInReview('${orderId}')">X</button>
                                  <button type="button" class="btn btn-warning btn-xs" style="padding: 2px 6px; font-size: 11px;" onclick="updatePmGet('${orderId}')">轉生管</button>`;
                     }
-                    cell.html(html);
+                    cell.html(html + (cell.closest('tr').attr('data-bom-icon') || ''));
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
@@ -6339,7 +6370,7 @@ foreach($dCounts as $c) {
                     } else {
                         html = '<span style="font-size: 12px; color: #999;">批圖中</span>';
                     }
-                    cell.html(html);
+                    cell.html(html + (cell.closest('tr').attr('data-bom-icon') || ''));
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
@@ -6362,7 +6393,7 @@ foreach($dCounts as $c) {
                         html += `<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="cancelPmGet('${orderId}')">X</button> `;
                     }
                     html += `<span style="font-size: 12px;">${data.pmGet_date}</span>`;
-                    cell.html(html);
+                    cell.html(html + (cell.closest('tr').attr('data-bom-icon') || ''));
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
@@ -6387,7 +6418,7 @@ foreach($dCounts as $c) {
                     } else {
                         html = '<span style="font-size: 12px; color: #999;">批圖中</span>';
                     }
-                    cell.html(html);
+                    cell.html(html + (cell.closest('tr').attr('data-bom-icon') || ''));
                 } else {
                     alert('Error: ' + data.message);
                     location.reload();
