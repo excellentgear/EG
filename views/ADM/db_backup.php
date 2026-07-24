@@ -135,6 +135,7 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
         <button class="btn btn-sm btn-default" id="btnReload"><i class="fa fa-refresh"></i> 重新整理</button>
         <span style="flex:1;"></span>
         <?php if ($IS_ADMIN): ?>
+        <button class="btn btn-sm btn-default" onclick="pullBackups()" title="從 GitHub 私有備份庫下載最新備份(換機或本機遺失時用)"><i class="fa fa-cloud-download"></i> 從雲端下載備份</button>
         <button class="btn btn-sm btn-default" onclick="openSettings()"><i class="fa fa-cog"></i> 設定</button>
         <button class="btn btn-sm btn-default" onclick="openPerm()"><i class="fa fa-key"></i> 角色權限</button>
         <button class="btn btn-sm btn-default" onclick="purgeHistory()" title="把Git備份庫壓縮成只剩目前檔案的單一版本,雲端舊歷史一併覆蓋(防資料外流)"><i class="fa fa-eraser"></i> 徹底清除Git歷史</button>
@@ -144,6 +145,35 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
         <i class="fa fa-info-circle"></i> 備份由「有人開啟頁面」順路觸發：距上次備份達設定間隔才會自動跑；半夜無人使用不備份。備份檔存放在網站目錄之外的私有 Git 備份庫，僅能透過本頁下載。
       </div>
     </div>
+
+    <!-- GitHub 帳號綁定（僅管理員）-->
+    <?php if ($IS_ADMIN): ?>
+    <div class="bk-card">
+      <h4><i class="fa fa-github"></i> GitHub 帳號綁定 <small style="color:#9a7b4f;font-weight:400;">備份上雲/換機下載都用這個帳號的 Token(不再依賴本機 gh 登入)</small></h4>
+      <div id="gitBound" style="display:none;">
+        <div style="font-size:13px;color:#4d6b2e;"><i class="fa fa-check-circle"></i> 已綁定:<b id="gitLogin">—</b>　<span style="color:#9a7b4f;font-size:12px;">綁定於 <span id="gitBoundAt">—</span></span></div>
+        <div style="font-size:11px;color:#9a7b4f;font-family:monospace;margin-top:4px;">程式碼庫 origin:<span id="gitCodeRemote">—</span>　｜　備份庫 origin:<span id="gitBackupRemote">—</span></div>
+        <div style="margin-top:8px;">
+          <button class="btn btn-xs btn-amber" onclick="uploadFull()"><i class="fa fa-cloud-upload"></i> 上傳整站到 GitHub</button>
+          <button class="btn btn-xs btn-default" onclick="gitUnbind()">解除綁定</button>
+        </div>
+      </div>
+      <div id="gitUnbound" style="display:none;">
+        <div style="font-size:12px;color:#9a7b4f;margin-bottom:6px;">
+          尚未綁定。請到 GitHub → Settings → Developer settings → Personal access tokens 產生一組**勾選 repo 權限**的 Token 貼入。
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input type="password" id="gitToken" class="form-control" style="width:340px;" placeholder="貼上 GitHub Personal Access Token(ghp_… 或 github_pat_…)">
+          <button class="btn btn-sm btn-default" onclick="gitVerify()"><i class="fa fa-search"></i> 驗證</button>
+          <span id="gitVerifyMsg" style="font-size:12px;"></span>
+        </div>
+        <div style="margin-top:8px;">
+          <label style="font-weight:400;font-size:13px;"><input type="checkbox" id="gitUploadFull"> 初次綁定時,同時把「整個網站檔案」上傳到 GitHub 程式碼庫(含目前未加入版控的檔案;.gitignore 排除的機密檔不會上傳)</label>
+        </div>
+        <button class="btn btn-sm btn-amber" style="margin-top:8px;" onclick="gitBind()"><i class="fa fa-link"></i> 綁定</button>
+      </div>
+    </div>
+    <?php endif; ?>
 
     <!-- 備份列表 -->
     <div class="bk-card">
@@ -615,6 +645,49 @@ function saveFeats(){ if(!curRoleId) return;
   const feats=$('.featcb:checked').map(function(){return this.value;}).get();
   $.post(RAPI,{action:'save_role_features',role_id:curRoleId,features:JSON.stringify(feats)},function(r){ alert(r.success?'已儲存功能':r.message); },'json'); }
 
+// ── GitHub 帳號綁定 / 雲端下載（僅管理員）──
+function gitLoad(){
+  if(!IS_ADMIN) return;
+  $.getJSON(API,{action:'git_get'},function(res){
+    if(!res.success) return;
+    const d=res.data||{};
+    if(d.bound){
+      $('#gitBound').show(); $('#gitUnbound').hide();
+      $('#gitLogin').text(d.login||d.owner||'—'); $('#gitBoundAt').text(d.bound_at||'—');
+      $('#gitCodeRemote').text(' '+(d.code_remote||'—')); $('#gitBackupRemote').text(' '+(d.backup_remote||'—'));
+    } else { $('#gitBound').hide(); $('#gitUnbound').show(); }
+  });
+}
+function gitVerify(){
+  const t=$('#gitToken').val().trim(); if(!t){ alert('請貼上 Token'); return; }
+  $('#gitVerifyMsg').text('驗證中…');
+  $.post(API,{action:'git_verify',token:t},function(res){
+    $('#gitVerifyMsg').html(res.success
+      ? '<span style="color:#4d6b2e;">✔ '+esc(res.login)+(res.scopes?'（'+esc(res.scopes)+'）':'')+'</span>'
+      : '<span style="color:#a3341f;">'+esc(res.message)+'</span>');
+  },'json');
+}
+function gitBind(){
+  const t=$('#gitToken').val().trim(); if(!t){ alert('請貼上 Token'); return; }
+  const full=$('#gitUploadFull').is(':checked');
+  if(full && !confirm('綁定後將把「整個網站檔案」上傳到 GitHub 程式碼庫。\n(含目前未加入版控的檔案;機密檔已由 .gitignore 排除)\n確定?')) return;
+  $.post(API,{action:'git_bind',token:t,upload_full:full?'1':'0'},function(res){
+    alert(res.message||''); if(res.success){ $('#gitToken').val(''); gitLoad(); }
+  },'json');
+}
+function gitUnbind(){
+  if(!confirm('解除綁定?兩個 repo 的 remote 會清掉 Token(之後 push/pull 需重新綁定或用 gh 登入)')) return;
+  $.post(API,{action:'git_unbind'},function(res){ alert(res.message||''); gitLoad(); },'json');
+}
+function uploadFull(){
+  if(!confirm('把目前整個網站檔案 commit 並推送到 GitHub 程式碼庫?\n(含未加入版控的檔案;機密檔已排除)')) return;
+  $.post(API,{action:'git_upload_full'},function(res){ alert(res.message||''); },'json');
+}
+function pullBackups(){
+  if(!confirm('從 GitHub 私有備份庫下載最新備份到本機?\n(換機或本機備份遺失時使用;下載後會出現在下方列表可還原)')) return;
+  $.post(API,{action:'git_pull_backups'},function(res){ alert(res.message||''); if(res.success) loadList(); },'json');
+}
+
 // ── 第一層分頁切換 ──
 function topTab(t,btn){
   $('.top-tab').hide(); $('#top-tab-'+t).show();
@@ -903,5 +976,6 @@ function restoreSelected(){
 }
 
 loadList();
+gitLoad();
 </script>
 </body></html>
