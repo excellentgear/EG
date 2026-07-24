@@ -117,7 +117,7 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
         .swatch.on{ box-shadow:0 0 0 2px var(--warm-head); }
     </style>
 </head>
-<body class="nav-md">
+<body class="nav-sm">
 <div class="container body"><div class="main_container">
     <?php include '../partPage/sideAndTopBarMenu.html'; ?>
     <div class="right_col" role="main">
