@@ -339,6 +339,7 @@ $_asdocRoles    = [];  $_userAsdocRoles  = [];
 $_mdataRoles    = [];  $_userMdataRoles  = [];
 $_dbbkRoles     = [];  $_userDbbkRoles   = [];
 $_stampRoles    = [];  $_userStampRoles  = [];
+$_kpiRoles      = [];  $_userKpiRoles    = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -361,6 +362,7 @@ try {
     $st->execute(['master_data']); $_mdataRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['db_backup']);   $_dbbkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['stamp']);       $_stampRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['kpi']);         $_kpiRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -432,6 +434,10 @@ try {
     $st->execute(['stamp']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userStampRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['kpi']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userKpiRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -634,6 +640,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'asdoc-role-section'     => 'AS文件管理',
                                         'dbbk-role-section'      => '資料庫備份',
                                         'stamp-role-section'     => '圖章管理',
+                                        'kpi-role-section'        => 'KPI績效指標',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -1003,6 +1010,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('stamp', 'stamp', '圖章管理', 'fa-certificate', '#c0762c',
                         '圖章管理頁角色：「圖章檢閱」＝唯讀（檢閱清冊/匯出）；「圖章管理員」＝登記核發（個人章/部門章）、種類管理、掃描實體章上傳。<strong>未被指派任何角色者看不到清冊內容</strong>（避免圖章被瀏覽轉存惡意複製）；簽核單據上的印章顯示不受此限。管理者固定可管理。',
                         $_stampRoles, $_userStampRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('kpi', 'kpi', 'KPI 關鍵績效指標', 'fa-tachometer', '#c0762c',
+                        'KPI 總覽頁角色：「KPI檢閱」＝檢視總覽/趨勢圖/附件；「KPI填報」＝檢閱＋重算自動指標、擔當者填寫本人負責的手動指標與上傳佐證；「KPI管理員」＝填報＋手動覆寫(需原因)、舊年度重算、KPI設定頁(指標/公式/目標/權限規則/NAS路徑)。此處指派與 KPI 設定頁的「部門×主管階級/指定人員」規則<strong>為聯集</strong>；管理者固定全權。',
+                        $_kpiRoles, $_userKpiRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('ptask', 'personal_task', '個人工作紀錄', 'fa-sticky-note-o', '#27ae60',
                         '為每位使用者指派「個人工作紀錄」功能的使用資格。此功能不分細部操作；每人只看得到自己建立的紀錄（含管理者也看不到他人內容）。',
