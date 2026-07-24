@@ -1,8 +1,9 @@
 // eg_stamp_tpl.js — 線上圖章「模板」渲染器（圖章管理頁設計器與批圖編輯器蓋章共用）
 // 與 eg_stamp.js（簽核回墨章）互不相依。schema 由 stamp_template.schema_json 儲存：
 // { shape:'circle|ellipse|rect|roundrect', color:'#cf3a2b', size:100, ratio:1, stroke:2.6, font:'kai|ming|hei',
-//   rows:[ {h:30, text:'{部門}', fs:0, mode:'shrink'}, ... ] }   // h=高度%（自動正規化）
+//   rows:[ {h:30, text:'{部門}', fs:0, mode:'shrink', wrapn:0}, ... ] }   // h=高度%（自動正規化）
 //   fs=字級（viewBox 單位，章寬=100；0/未填=自動）；mode='shrink' 超寬時壓縮字距（預設）｜'wrap' 超寬時自動換列
+//   wrapn=換列模式的「第一列字數」：前 N 字放第一列、其餘放第二列（超寬壓縮），字級依列數自動放大填滿；0/未填=依寬度自動折行
 // text 內可混用固定字樣與變數 token：{部門} {職稱} {姓名} {日期} {編號}
 // ctx = { dept, position, name, date, serial }（date/serial 由呼叫端先算好字串）
 (function (global) {
@@ -77,17 +78,26 @@
                 var maxW = 2 * halfWidthAt(schema, cy, W, H) - 4;
                 var userFs = +rows[i].fs > 0 ? +rows[i].fs : 0;
                 if (rows[i].mode === 'wrap') {
-                    // 自動換列：超過可用寬度就折行；未指定字級時從單行高度起算，行數放不下再逐步縮小
-                    var fs = userFs || rh * 0.62, lines = [txt], n = 1;
-                    for (var it = 0; it < 6; it++) {
-                        var cpl = Math.max(1, Math.floor(maxW / fs));
-                        lines = [];
-                        for (var p = 0; p < txt.length; p += cpl) lines.push(txt.substr(p, cpl));
+                    var wrapn = Math.max(0, Math.floor(+rows[i].wrapn || 0));
+                    var lines, n, fs;
+                    if (wrapn > 0) {
+                        // 指定第一列字數：前 N 字第一列、其餘第二列（超寬以 textLength 壓縮）；字級依列數自動放大填滿（同現有回墨章公司名排法）
+                        lines = txt.length > wrapn ? [txt.substr(0, wrapn), txt.substr(wrapn)] : [txt];
                         n = lines.length;
-                        if (n * fs * 1.08 <= rh || fs <= 5) break;
-                        fs = Math.max(5, Math.min(fs * 0.85, (rh / n) / 1.08));
+                        fs = userFs || Math.max(5, (rh / n) * 0.9);
+                    } else {
+                        // 未指定：依可用寬度自動折行，行數放不下再逐步縮小
+                        fs = userFs || rh * 0.62; lines = [txt]; n = 1;
+                        for (var it = 0; it < 6; it++) {
+                            var cpl = Math.max(1, Math.floor(maxW / fs));
+                            lines = [];
+                            for (var p = 0; p < txt.length; p += cpl) lines.push(txt.substr(p, cpl));
+                            n = lines.length;
+                            if (n * fs * 1.08 <= rh || fs <= 5) break;
+                            fs = Math.max(5, Math.min(fs * 0.85, (rh / n) / 1.08));
+                        }
                     }
-                    var lh = Math.min(fs * 1.08, rh / n);
+                    var lh = Math.min(fs * 1.15, rh / n);
                     var startY = cy - lh * (n - 1) / 2;
                     for (var li = 0; li < n; li++) {
                         var ly = startY + li * lh;
@@ -98,8 +108,8 @@
                              + '>' + esc(lines[li]) + '</text>';
                     }
                 } else {
-                    // 自動縮小（預設）：單行置中，超寬時以 textLength 壓縮字距
-                    var fs2 = userFs || Math.min(rh * 0.62, maxW / Math.max(1, txt.length) * 1.15);
+                    // 自動縮小（預設）：單行置中，超寬時以 textLength 壓縮字距；自動字級取列高 0.68 盡量填滿（同現有回墨章比例）
+                    var fs2 = userFs || Math.min(rh * 0.68, maxW / Math.max(1, txt.length) * 1.15);
                     fs2 = Math.max(5, Math.min(fs2, rh * 0.92));
                     var needFit = txt.length * fs2 > maxW;
                     svg += '<text x="' + (W/2) + '" y="' + (cy + fs2 * 0.36).toFixed(1) + '" text-anchor="middle" font-size="' + fs2.toFixed(1) + '" fill="' + color + '" font-weight="bold" font-family="' + font + '"'

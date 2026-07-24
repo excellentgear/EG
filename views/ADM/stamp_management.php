@@ -244,9 +244,10 @@ try {
           </span>
         </div>
         <table class="list" id="tplRowsTbl"><thead><tr>
-          <th style="width:62px;">高度比</th><th>內容（固定字樣＋變數）</th>
-          <th style="width:64px;" title="字的大小（相對單位，章寬=100）；留空=依列高自動">字級</th>
-          <th style="width:82px;" title="文字超過章寬時的處理：縮小=壓縮字距擠在一行；換列=自動折成多行">超寬時</th>
+          <th style="width:58px;">高度比</th><th>內容（固定字樣＋變數）</th>
+          <th style="width:60px;" title="字的大小（相對單位，章寬=100）；留空=依列高自動放大填滿">字級</th>
+          <th style="width:78px;" title="文字超過章寬時的處理：縮小=壓縮字距擠在一行；換列=分成多行">超寬時</th>
+          <th style="width:74px;" title="換列模式專用：第一列固定放前N個字，其餘自動放第二列；留空=改依可用寬度自動折行">首列字數</th>
           <th style="width:34px;"></th></tr></thead>
           <tbody id="tplRows"></tbody></table>
         <button class="btn btn-default btn-xs" id="btnTplRowAdd" style="margin-top:4px;"><i class="fa fa-plus"></i> 加一列</button>
@@ -628,20 +629,26 @@ function sampleCtx(){
   return {company:window.__ownCompany||'公司全名',dept:'品保課',position:'課長',name:'王小明',date:dot(today()),
           serial:($('#serPrefix').val()||'')+String(+$('#serStart').val()||1).padStart(+$('#serDigits').val()||3,'0')};
 }
-function tplRowHtml(h,text,fs,mode){
+function tplRowHtml(h,text,fs,mode,wrapn){
+  const isWrap=mode==='wrap';
   return `<tr><td><input type="number" class="form-control input-sm tpl-h" value="${h}" min="1" max="100" step="1"></td>
     <td><input type="text" class="form-control input-sm tpl-text" value="${esc(text)}"></td>
     <td><input type="number" class="form-control input-sm tpl-fs" value="${fs>0?fs:''}" placeholder="自動" min="4" max="60" step="0.5"></td>
     <td><select class="form-control input-sm tpl-mode">
-      <option value="shrink" ${mode!=='wrap'?'selected':''}>縮小</option>
-      <option value="wrap" ${mode==='wrap'?'selected':''}>換列</option></select></td>
+      <option value="shrink" ${!isWrap?'selected':''}>縮小</option>
+      <option value="wrap" ${isWrap?'selected':''}>換列</option></select></td>
+    <td><input type="number" class="form-control input-sm tpl-wrapn" value="${wrapn>0?wrapn:''}" placeholder="自動" min="1" max="20" step="1" ${isWrap?'':'disabled'}></td>
     <td style="text-align:center;"><button class="btn btn-danger btn-xs tpl-row-del"><i class="fa fa-times"></i></button></td></tr>`;
 }
+$('#tplRows').on('change','.tpl-mode',function(){
+  $(this).closest('tr').find('.tpl-wrapn').prop('disabled', $(this).val()!=='wrap').val('');
+});
 function tplSchemaFromUI(){
   const rows=[];
   $('#tplRows tr').each(function(){
     rows.push({h:+$(this).find('.tpl-h').val()||1, text:$(this).find('.tpl-text').val()||'',
-               fs:+$(this).find('.tpl-fs').val()||0, mode:$(this).find('.tpl-mode').val()||'shrink'});
+               fs:+$(this).find('.tpl-fs').val()||0, mode:$(this).find('.tpl-mode').val()||'shrink',
+               wrapn:+$(this).find('.tpl-wrapn').val()||0});
   });
   return {shape:$('#tplShape').val(), color:$('#tplColor').val(), size:+$('#tplSize').val()||100,
           ratio:+$('#tplRatio').val()||1, stroke:+$('#tplStroke').val()||2.6, font:$('#tplFont').val(), rows};
@@ -675,7 +682,7 @@ $('#tplModal').on('click','.tpl-row-del',function(){
   if($('#tplRows tr').length<=1){alert('至少保留一列');return;}
   $(this).closest('tr').remove(); tplPreview();
 });
-$('#btnTplRowAdd').on('click',function(){ $('#tplRows').append(tplRowHtml(30,'',0,'shrink')); tplPreview(); });
+$('#btnTplRowAdd').on('click',function(){ $('#tplRows').append(tplRowHtml(30,'',0,'shrink',0)); tplPreview(); });
 $('#tplModal').on('click','.tpl-color',function(e){ e.preventDefault(); $('#tplColor').val($(this).data('c')); tplPreview(); });
 
 function openTplModal(t){
@@ -687,7 +694,7 @@ function openTplModal(t){
   $('#tplShape').val(sc.shape||'circle'); $('#tplColor').val(sc.color||'#cf3a2b');
   $('#tplSize').val(sc.size||100); $('#tplRatio').val(sc.ratio||1);
   $('#tplStroke').val(sc.stroke||2.6); $('#tplFont').val(sc.font||'kai');
-  $('#tplRows').html((sc.rows&&sc.rows.length?sc.rows:[{h:100,text:''}]).map(r=>tplRowHtml(r.h,r.text,+r.fs||0,r.mode||'shrink')).join(''));
+  $('#tplRows').html((sc.rows&&sc.rows.length?sc.rows:[{h:100,text:''}]).map(r=>tplRowHtml(r.h,r.text,+r.fs||0,r.mode||'shrink',+r.wrapn||0)).join(''));
   $('#serPrefix').val(t?t.serial_prefix:''); $('#serDigits').val(t?t.serial_digits:3);
   $('#serStart').val(t?t.serial_start:1); $('#serStep').val(t?t.serial_step:1);
   $('#serReset').val(t?t.serial_reset:'none');
