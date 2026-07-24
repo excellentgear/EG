@@ -535,7 +535,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
 <?php if (!$isPopup) include '../partPage/footer.html'; ?>
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
-<script src="../../resource/js/eg_stamp.js"></script>
+<script src="../../resource/js/eg_stamp.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_stamp.js'); ?>"></script>
 <?php if (!$isPopup): ?><script src="../../resource/js/custom.min.js"></script><?php endif; ?>
 <script>
 (function(){

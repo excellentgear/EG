@@ -1528,7 +1528,7 @@ body { background:var(--bg); }
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/jquery-ui-1.10.2.custom.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
-<script src="../../resource/js/eg_stamp.js"></script>
+<script src="../../resource/js/eg_stamp.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_stamp.js'); ?>"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script>
