@@ -339,6 +339,7 @@ $_asdocRoles    = [];  $_userAsdocRoles  = [];
 $_mdataRoles    = [];  $_userMdataRoles  = [];
 $_dbbkRoles     = [];  $_userDbbkRoles   = [];
 $_stampRoles    = [];  $_userStampRoles  = [];
+$_rosterRoles   = [];  $_userRosterRoles = [];
 $_kpiRoles      = [];  $_userKpiRoles    = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
@@ -363,6 +364,7 @@ try {
     $st->execute(['db_backup']);   $_dbbkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['stamp']);       $_stampRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['kpi']);         $_kpiRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['roster']);      $_rosterRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -438,6 +440,10 @@ try {
     $st->execute(['kpi']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userKpiRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['roster']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userRosterRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -640,6 +646,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'asdoc-role-section'     => 'AS文件管理',
                                         'dbbk-role-section'      => '資料庫備份',
                                         'stamp-role-section'     => '圖章管理',
+                                        'roster-role-section'    => '輪值排班',
                                         'kpi-role-section'        => 'KPI績效指標',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
@@ -1018,6 +1025,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('ptask', 'personal_task', '個人工作紀錄', 'fa-sticky-note-o', '#27ae60',
                         '為每位使用者指派「個人工作紀錄」功能的使用資格。此功能不分細部操作；每人只看得到自己建立的紀錄（含管理者也看不到他人內容）。',
                         $_ptaskRoles, $_userPtaskRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('roster', 'roster', '輪值排班表', 'fa-calendar-check-o', '#c0762c',
+                        '通用輪值排班（掃地/值日/現場班別皆共用）角色：「排班唯讀」＝只能檢閱自己建立或被設為公開對象的表；「排班一般使用者」＝可建立/編輯/刪除自己的排班表；「排班管理者」＝可檢視所有表、代他人補簽、對任何表調班。值勤本人可對自己的班別簽核；公開對象名單內的人才看得到該表。管理者固定全權。',
+                        $_rosterRoles, $_userRosterRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('asdoc', 'as_doc', 'AS9100 文件管理（個人指派，優先於職稱）', 'fa-folder-open-o', '#c0392b',
                         '為使用者「個人」指派 AS 文件管理角色——<strong>個人有指派時以個人為準（覆蓋職稱）</strong>；未指派者自動套用下方「職稱權限」的設定。角色定義（名稱與功能勾選）請至 <strong>AS9100 文件管理頁 → 角色設定</strong>。',
