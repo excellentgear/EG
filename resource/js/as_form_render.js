@@ -412,21 +412,57 @@
     updateComputed($host);
   }
 
-  // ══ 列印設定：依 schema.meta.print 注入 @page（紙張/方向/邊界）＋縮放，列印時自動套用 ══
-  // 遵守列印分頁鐵則：只設紙張與縮放，分頁仍交瀏覽器原生處理（不量高度自算）
+  // ══ 列印設定：依 schema.meta.print 注入 @page（紙張/方向/邊界）＋自動縮放 ══
+  // 自動縮放＝一頁寬必縮、可設幾頁高（fit_pages）；只算縮放比例，分頁仍交瀏覽器原生處理（守列印分頁鐵則）
+  var PAPER_MM = { A4:[210,297], A5:[148,210], B4:[250,353], B5:[176,250], Letter:[215.9,279.4], Legal:[215.9,355.6] };
+
   function applyPrintSettings(schema) {
     var p = (schema && schema.meta && schema.meta.print) || {};
-    var paper = p.paper || 'A4';
+    var paper = PAPER_MM[p.paper] ? p.paper : 'A4';
     var orient = p.orientation === 'landscape' ? 'landscape' : 'portrait';
-    var margin = (p.margin != null && p.margin !== '') ? p.margin : 10;
-    var scale = (p.scale != null && p.scale !== '') ? p.scale : 100;
+    var margin = (p.margin != null && p.margin !== '') ? Number(p.margin) : 10;
     var css = '@media print{'
       + '@page{ size:' + paper + ' ' + orient + '; margin:' + margin + 'mm; }'
-      + (Number(scale) !== 100 ? '.form-sheet,.preview-host{ zoom:' + (Number(scale) / 100) + '; }' : '')
+      // 列印裁切修正：螢幕版 overflow-x:hidden／容器高度會讓列印只印可視區，列印時全部還原
+      + 'html,body{overflow:visible !important;height:auto !important;}'
+      + '.container.body,.main_container,.right_col{overflow:visible !important;height:auto !important;float:none !important;}'
       + '}';
     var el = document.getElementById('egPrintStyle');
     if (!el) { el = document.createElement('style'); el.id = 'egPrintStyle'; document.head.appendChild(el); }
     el.textContent = css;
+
+    // 記住設定，beforeprint 時計算縮放（要等版面量得到實際寬高）
+    global.__egPrintCfg = { paper: paper, orient: orient, margin: margin,
+                            scale: (p.scale != null && p.scale !== '') ? Number(p.scale) : 100,
+                            fit_pages: (p.fit_pages != null && p.fit_pages !== '') ? Number(p.fit_pages) : 0 };
+    if (!global.__egPrintHooked) {
+      global.__egPrintHooked = true;
+      window.addEventListener('beforeprint', egPrintFit);
+      window.addEventListener('afterprint', function () {
+        var s = document.querySelector('.form-sheet') || document.querySelector('.preview-host');
+        if (s) s.style.zoom = '';
+      });
+    }
+  }
+
+  // 依紙張可印區與內容實際寬高算縮放：一律不超過一頁寬；fit_pages>0 再壓進 N 頁高
+  function egPrintFit() {
+    var cfg = global.__egPrintCfg || {};
+    var sheet = document.querySelector('.form-sheet') || document.querySelector('.preview-host');
+    if (!sheet) return;
+    sheet.style.zoom = '';                                   // 先還原再量測
+    var host = sheet.querySelector('#formHost') || sheet;
+    var w = host.scrollWidth, h = host.scrollHeight;
+    if (!w || !h) return;
+    var mm = PAPER_MM[cfg.paper] || PAPER_MM.A4;
+    var pw = (cfg.orient === 'landscape' ? mm[1] : mm[0]), ph = (cfg.orient === 'landscape' ? mm[0] : mm[1]);
+    var pxPerMm = 96 / 25.4;
+    var availW = Math.max(50, (pw - 2 * (cfg.margin || 0)) * pxPerMm);
+    var availH = Math.max(50, (ph - 2 * (cfg.margin || 0)) * pxPerMm);
+    var scale = Math.min(availW / w, 1);                     // 自動一頁寬
+    if (cfg.fit_pages > 0) scale = Math.min(scale, (cfg.fit_pages * availH) / h);   // 限制 N 頁高
+    if (cfg.scale && cfg.scale !== 100) scale = Math.min(scale, cfg.scale / 100);   // 手動縮放上限
+    if (scale < 1) sheet.style.zoom = String(Math.max(0.3, Math.round(scale * 1000) / 1000));
   }
 
   global.EGForm = { renderForm: renderForm, cellClass: cellClass, cellInner: cellInner, esc: esc,

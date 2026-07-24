@@ -22,13 +22,13 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
 <style>
   html,body{overflow-x:hidden;}
   .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;min-height:100vh;}
-  .wrap{display:flex;gap:14px;padding:12px 16px;align-items:flex-start;}
+  .wrap{clear:both;width:100%;display:flex;gap:14px;padding:12px 16px;align-items:flex-start;}
   .canvas{flex:1;min-width:0;}
   .side{width:300px;flex:none;background:#fff;border:1px solid #d8c19a;border-radius:6px;padding:12px;box-shadow:0 2px 8px rgba(90,61,30,.12);position:sticky;top:10px;}
   .side h4{margin:0 0 8px;font-size:14px;color:#7a4e17;border-bottom:2px solid #f0a24b;padding-bottom:5px;}
   .side .form-group{margin-bottom:8px;}
   .side label{font-size:12px;font-weight:600;color:#6b4e2a;margin-bottom:2px;}
-  .topbar{background:#fff;border:1px solid #d8c19a;border-radius:6px;padding:10px 12px;margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;box-shadow:0 2px 8px rgba(90,61,30,.12);}
+  .topbar{clear:both;width:100%;background:#fff;border:1px solid #d8c19a;border-radius:6px;padding:10px 12px;margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;box-shadow:0 2px 8px rgba(90,61,30,.12);}   /* clear+width 防 top_nav float 擠壓 */
   .topbar .sep{width:1px;height:24px;background:#e0cba0;margin:0 4px;}
   /* 編輯格 */
   table.eg-edit{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff;}
@@ -252,9 +252,11 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
       <select class="form-control input-sm" id="prOrient"><option value="portrait">直向</option><option value="landscape">橫向</option></select></div>
     <div class="row">
       <div class="form-group col-xs-6"><label>邊界（mm）</label><input type="number" class="form-control input-sm" id="prMargin" min="0" max="40"></div>
-      <div class="form-group col-xs-6"><label>縮放（%）</label><input type="number" class="form-control input-sm" id="prScale" min="30" max="200">
-        <span class="muted">內容超過一頁想擠回少頁時調小（如 85）</span></div>
+      <div class="form-group col-xs-6"><label>頁數上限（高）</label><input type="number" class="form-control input-sm" id="prFitPages" min="1" max="20" placeholder="不限">
+        <span class="muted">設 1＝整張縮進一頁；空＝不限頁數。寬度一律自動縮成一頁寬</span></div>
     </div>
+    <div class="form-group"><label>手動縮放上限（%）</label><input type="number" class="form-control input-sm" id="prScale" min="30" max="100" placeholder="100">
+      <span class="muted">一般留空即可；要整體再縮小才填（如 85）</span></div>
   </div>
   <div class="modal-footer"><button class="btn btn-primary btn-sm" id="prSave" data-dismiss="modal"><i class="fa fa-check"></i> 套用</button></div>
 </div></div></div>
@@ -784,13 +786,16 @@ $('#btnPrintSet').on('click',function(){
   $('#prPaper').val(p.paper||'A4');
   $('#prOrient').val(p.orientation||'portrait');
   $('#prMargin').val(p.margin!=null?p.margin:10);
-  $('#prScale').val(p.scale!=null?p.scale:100);
+  $('#prFitPages').val(p.fit_pages||'');
+  $('#prScale').val(p.scale&&p.scale!==100?p.scale:'');
   $('#printModal').modal('show');
 });
 $('#prSave').on('click',function(){
   schema.meta=schema.meta||{};
   schema.meta.print={ paper:$('#prPaper').val(), orientation:$('#prOrient').val(),
-    margin:parseInt($('#prMargin').val())||0, scale:parseInt($('#prScale').val())||100 };
+    margin:parseInt($('#prMargin').val())||0 };
+  const fp=parseInt($('#prFitPages').val())||0; if(fp>0) schema.meta.print.fit_pages=fp;
+  const sc=parseInt($('#prScale').val())||0; if(sc>0&&sc<100) schema.meta.print.scale=sc;
   EGForm.applyPrintSettings(schema);
   scheduleSave();
 });

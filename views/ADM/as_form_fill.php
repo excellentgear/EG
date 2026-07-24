@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 // AS 線上表單 — 填寫/簽核頁
 // ?template_id=N 新填一張；?instance_id=N 開既有紀錄（可續填草稿/檢視/簽核）。
 // 簽名格：已簽區顯示 EGStamp 圖章；具資格者看到「核准/駁回」按鈕。
@@ -32,10 +32,11 @@ try {
 <style>
   html,body{overflow-x:hidden;}
   .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;min-height:100vh;}
-  .form-toolbar,.form-sheet,.sign-panel{width:auto;max-width:820px;}
-  .form-toolbar{max-width:820px;margin:0 auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+  /* clear:both＋width:100% 必要：top_nav 有未清除的 float，shrink-to-fit 的 flex 工具列會被擠成 0 寬細條（按鈕全部消失） */
+  .form-toolbar{clear:both;width:100%;max-width:820px;margin:0 auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;
     position:sticky;top:0;z-index:60;background:#efe7da;padding:10px 0 8px;}   /* 置頂固定，捲動不消失 */
   .form-toolbar-bottom{position:static;padding:0 0 8px;}                        /* 底部那排不置頂 */
+  .form-sheet,.sign-panel{width:100%;max-width:820px;}
   .form-sheet{max-width:820px;margin:12px auto 16px;background:#fff;padding:26px 30px;box-shadow:0 2px 10px rgba(90,61,30,.18);}
   .status-chip{display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;font-weight:bold;}
   .st-draft{background:#f7e0bd;color:#5a3d1e;} .st-in_review{background:#f0a24b;color:#4a2c0a;}
