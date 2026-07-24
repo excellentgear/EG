@@ -238,6 +238,26 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
         <label>對齊</label>
         <select class="form-control input-sm" id="pAlign"><option value="center">置中</option><option value="left">靠左</option></select>
       </div>
+      <div class="form-group prop-wrap">
+        <label>文字換行方式</label>
+        <select class="form-control input-sm" id="pWrap">
+          <option value="wrap">自動換行</option>
+          <option value="nowrap">不換行（超寬自動縮小字）</option>
+          <option value="shrink">換行＋超出自動縮小字</option>
+        </select>
+      </div>
+      <div class="form-group prop-purpose" style="display:none;">
+        <label>特殊用途（自動帶入用，選填）</label>
+        <select class="form-control input-sm" id="pPurpose">
+          <option value="">（一般欄位）</option>
+          <option value="rev_reason">制修申請單：修改原因</option>
+          <option value="rev_target_no">制修申請單：目標文件編號</option>
+          <option value="rev_target_name">制修申請單：目標文件名稱</option>
+          <option value="rev_target_ver">制修申請單：目標版本</option>
+          <option value="rev_type">制修申請單：申請類別（制定/修訂/廢止）</option>
+        </select>
+        <span class="muted">在「文件制修申請單」模板把欄位標上用途，發布其他表單自動開單時就會精準帶入</span>
+      </div>
       <div class="row" style="margin:0 -4px;">
         <div class="col-xs-6" style="padding:0 4px;"><label class="req-mini">橫跨欄</label><input type="number" class="form-control input-sm" id="pCs" min="1"></div>
         <div class="col-xs-6" style="padding:0 4px;"><label class="req-mini">縱跨列</label><input type="number" class="form-control input-sm" id="pRs" min="1"></div>
@@ -485,6 +505,8 @@ function fillProp(){
   $('#pFixedDept').html('<option value="">請選擇部門</option>'+META.departments.map(d=>
     `<option value="${d.id}"${String(cell.dept_id||'')===String(d.id)?' selected':''}>${esc(d.name)}</option>`).join(''));
   $('#pAlign').val(cell.align||'center');
+  $('#pWrap').val(cell.wrap||'wrap');
+  $('#pPurpose').val(cell.purpose||'');
   $('#pCs').val(cell.cs||1);
   $('#pRs').val(cell.rs||1);
   fillSectionSelect(cell.section);
@@ -496,6 +518,8 @@ function syncPropVisibility(){
   $('.prop-field').toggle(t==='field');
   $('.prop-sig').toggle(t==='signature');
   $('.prop-align').toggle(t==='label'||t==='static');
+  $('.prop-wrap').toggle(t==='title'||t==='label'||t==='static');
+  $('.prop-purpose').toggle(t==='field');
   $('.prop-options').toggle(t==='field' && ['select','checkbox'].includes(ft));
   $('.prop-today').toggle(t==='field' && ft==='date');
   $('.prop-pattern').toggle(t==='field' && ft==='text');
@@ -519,9 +543,10 @@ function applyProp(withSpan){
   const cell=cellAt(r,c); if(!cell) return;
   const t=$('#pType').val();
   cell.type=t;
-  ['text','key','ftype','options','required','align','section','rows','today','pattern','dept_id','dept','formula','chart','dept_ids','show_order','cs_dept','direction','show_dec','dec_required','show_note','note_required','enable_key'].forEach(k=>delete cell[k]);
-  if(t==='title'||t==='label'||t==='static'){ cell.text=$('#pText').val(); if(t!=='title'){const a=$('#pAlign').val(); if(a==='left')cell.align='left';} }
+  ['text','key','ftype','options','required','align','wrap','purpose','section','rows','today','pattern','dept_id','dept','formula','chart','dept_ids','show_order','cs_dept','direction','show_dec','dec_required','show_note','note_required','enable_key'].forEach(k=>delete cell[k]);
+  if(t==='title'||t==='label'||t==='static'){ cell.text=$('#pText').val(); if(t!=='title'){const a=$('#pAlign').val(); if(a==='left')cell.align='left';} const w=$('#pWrap').val(); if(w&&w!=='wrap')cell.wrap=w; }
   if(t==='field'){
+    const pp=$('#pPurpose').val(); if(pp) cell.purpose=pp;
     cell.key=$('#pKey').val().trim();
     cell.ftype=$('#pFtype').val();
     if(cell.ftype==='select'||cell.ftype==='checkbox'){ cell.options=$('#pOptions').val().split(',').map(s=>s.trim()).filter(Boolean); }
@@ -567,7 +592,7 @@ function applyProp(withSpan){
 $('#btnApply').on('click',()=>applyProp(true));
 // 即時反映：打字/變動立刻更新左側格子（跨欄/列只在 change 時套，見上）
 $('#pText,#pKey,#pOptions,#pPattern,#pFormula,#pChartFields,#pChartLabels,#pCsbKey').on('input',()=>applyProp(false));
-$('#pType,#pFtype,#pAlign,#pRequired,#pSection,#pToday,#pFixedDept,#pChartKind,#pChartMax,#pCsOrder,#pCsbDir,#pCsbSection,#pCsbDec,#pCsbDecReq,#pCsbNote,#pCsbNoteReq,#pCsbEnable').on('change',()=>applyProp(false));
+$('#pType,#pFtype,#pAlign,#pWrap,#pPurpose,#pRequired,#pSection,#pToday,#pFixedDept,#pChartKind,#pChartMax,#pCsOrder,#pCsbDir,#pCsbSection,#pCsbDec,#pCsbDecReq,#pCsbNote,#pCsbNoteReq,#pCsbEnable').on('change',()=>applyProp(false));
 $('#pCsDeptList').on('change','.csdept-chk',()=>applyProp(false));
 $('#pCsbDeptList').on('change','.csbdept-chk',()=>applyProp(false));
 $('#pCs,#pRs').on('change',()=>applyProp(true));
@@ -1012,7 +1037,7 @@ $('#prSave').on('click',function(){
 $('#btnPreview').on('click',function(){
   syncMeta();
   $('#previewHost').html(EGForm.renderForm(schema,{mode:'fill',ctx}));
-  EGForm.bindFormUX($('#previewHost'));   // 預覽可實際輸入試算公式/圖表
+  EGForm.bindFormUX($('#previewHost'));   // 預覽可實際輸入試算公式/圖表（含超寬縮字）
   EGForm.applyPrintSettings(schema);
   $('#previewModal').modal('show');
 });
@@ -1040,10 +1065,15 @@ $('#btnPublish').on('click',function(){
       // 發布自動建議文件改版：綁定文件的模板再發布 → 建議開「文件制修申請單」（預填目標文件與原因）
       if(r.suggest_revision){
         const s=r.suggest_revision;
-        if(confirm('已發布為第 '+r.version+' 版。\n\n此表單綁定文件「'+s.doc_no+' '+s.doc_name+'」，依文件管制程序，設計改版建議開立「文件制修申請單」。\n\n要現在開單嗎？（會自動預填目標文件與原因）')){
-          // 修改原因可在此輸入，自動帶入申請單（取消＝用預設文字）
-          const reason=prompt('修改原因（會自動填入申請單的原因欄）：', s.prefill.reason||'');
-          if(reason!==null && reason.trim()!=='') s.prefill.reason=reason.trim();
+        const noMap=!s.prefill||Object.keys(s.prefill).length===0;
+        const tip=noMap?'\n\n（提醒：制修申請單模板尚未用「特殊用途」標記欄位，暫無法自動帶入；請到該模板把原因/目標文件等欄位標上用途）':'';
+        if(confirm('已發布為第 '+r.version+' 版。\n\n此表單綁定文件「'+s.doc_no+' '+s.doc_name+'」，依文件管制程序，設計改版建議開立「文件制修申請單」。'+tip+'\n\n要現在開單嗎？')){
+          // 修改原因可在此輸入，帶入申請單「標為修改原因用途」的欄位（取消＝用預設文字）
+          const reason=prompt('修改原因（會填入申請單標為「修改原因」的欄位）：', s.reason||'');
+          const useReason=(reason!==null && reason.trim()!=='')?reason.trim():(s.reason||'');
+          // 找出制修申請單裡 purpose=rev_reason 對應的 key（後端已放進 prefill 值，這裡覆蓋文字）
+          const rk=Object.keys(s.prefill||{}).find(k=>s.prefill[k]===s.reason);
+          if(rk) s.prefill[rk]=useReason;
           window.open('as_form_fill.php?template_id='+s.template_id+'&prefill='+encodeURIComponent(JSON.stringify(s.prefill)),'_blank');
         }
       } else {

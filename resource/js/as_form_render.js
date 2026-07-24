@@ -23,7 +23,8 @@
   function cellClass(cell) {
     switch (cell.type) {
       case 'title': return 'cell-title';
-      case 'label': return 'cell-label' + (cell.align === 'left' ? ' align-left' : '');
+      case 'label': return 'cell-label' + (cell.align === 'left' ? ' align-left' : '') + (cell.wrap === 'shrink' ? ' cell-fit' : '');
+      case 'static': return 'cell-field' + (cell.wrap === 'shrink' ? ' cell-fit' : '');
       case 'signature': return 'cell-sig';
       default: return 'cell-field';
     }
@@ -113,8 +114,25 @@
     return barSVG(labels, vals, max);   // 長條為預設；雷達不足3軸退回長條
   }
 
+  // 超出格寬/格高的標題文字自動縮小字級（.cell-txt 逐步降到 8px 直到裝得下）
+  function fitCellText(root) {
+    var spans = (root.querySelectorAll ? root.querySelectorAll('.cell-txt') : []);
+    for (var i = 0; i < spans.length; i++) {
+      var el = spans[i], td = el.parentNode;
+      if (!td) continue;
+      el.style.fontSize = '';                              // 還原再量
+      var base = parseFloat(getComputedStyle(el).fontSize) || 13, fs = base;
+      var guard = 0;
+      while (guard++ < 30 && fs > 8 &&
+             (el.scrollWidth > td.clientWidth - 6 || el.scrollHeight > td.clientHeight - 4)) {
+        fs -= 0.5; el.style.fontSize = fs + 'px';
+      }
+    }
+  }
+
   // 重算所有計算欄與圖表（欄位值變動時呼叫；順序＝先公式後圖表，圖表可吃公式結果）
   function updateComputed($host) {
+    fitCellText($host[0] || $host);
     function getVal(k) {
       var el = $host.find('[data-key="' + k + '"]').first();
       return el.length ? el.val() : '';
@@ -151,10 +169,12 @@
   function cellInner(cell, mode, data, ctx) {
     ctx = ctx || {};
     var type = cell.type;
-    if (type === 'title') return esc(cell.text);
+    // wrap: 'wrap'(自動換行,預設) | 'nowrap'(不換行,超寬自動縮字) | 'shrink'(允許換行且超高也縮)
+    var wrapCls = cell.wrap === 'nowrap' ? ' style="white-space:nowrap;"' : '';
+    if (type === 'title') return '<span class="cell-txt"' + wrapCls + '>' + esc(cell.text) + '</span>';
     // 必填 * 顯示在標題（自動：右鄰/上方必填欄位的標題會標星，見 renderForm 的 __stars）
-    if (type === 'label') return esc(cell.text) + ((cell.required || (ctx.__stars && ctx.__stars[cell.r + '_' + cell.c])) ? '<span class="req-star">*</span>' : '');
-    if (type === 'static') return esc(cell.text);
+    if (type === 'label') return '<span class="cell-txt"' + wrapCls + '>' + esc(cell.text) + ((cell.required || (ctx.__stars && ctx.__stars[cell.r + '_' + cell.c])) ? '<span class="req-star">*</span>' : '') + '</span>';
+    if (type === 'static') return '<span class="cell-txt"' + wrapCls + '>' + esc(cell.text) + '</span>';
     var cs = ctx.__cs || { checked: {}, edit: {}, hasCs: false };
     // 會簽歸屬格：未被勾選的部門 → 免會簽（灰掛）
     var csSkip = cell.cs_dept != null && cs.hasCs && !cs.checked[String(cell.cs_dept)];
@@ -447,6 +467,7 @@
     // 任何欄位變動 → 重算計算欄與圖表
     $fields.on('input change', function () { updateComputed($host); });
     updateComputed($host);
+    fitCellText($host[0] || $host);
   }
 
   // ══ 列印設定：依 schema.meta.print 注入 @page（紙張/方向/邊界）＋自動縮放 ══
@@ -503,5 +524,5 @@
 
   global.EGForm = { renderForm: renderForm, cellClass: cellClass, cellInner: cellInner, esc: esc,
                     bindFormUX: bindFormUX, updateComputed: updateComputed, evalFormula: evalFormula,
-                    applyPrintSettings: applyPrintSettings };
+                    applyPrintSettings: applyPrintSettings, fitCellText: fitCellText };
 })(window);

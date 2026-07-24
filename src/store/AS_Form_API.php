@@ -255,23 +255,32 @@ case 'publish': {
             $ti->execute([$tid]);
             $bound = $ti->fetch(PDO::FETCH_ASSOC);
             if ($bound && $newVer > 1) {
-                $rv = $db->prepare("SELECT t.id FROM as_form_template t JOIN as_document d ON d.id=t.form_doc_id
+                $rv = $db->prepare("SELECT t.id, t.current_schema FROM as_form_template t JOIN as_document d ON d.id=t.form_doc_id
                                     WHERE d.doc_no='2-DC-01-01' AND t.status='published' AND t.is_deleted=0
                                     ORDER BY t.id LIMIT 1");
                 $rv->execute();
-                if ($revTid = (int)$rv->fetchColumn()) {
+                if ($rvRow = $rv->fetch(PDO::FETCH_ASSOC)) {
+                    // 依制修申請單模板上「特殊用途(purpose)」標記的欄位，動態組 prefill（不寫死欄位代號）
+                    $vals = [
+                        'rev_type'        => '修訂',
+                        'rev_target_no'   => $bound['doc_no'],
+                        'rev_target_name' => $bound['doc_name'],
+                        'rev_target_ver'  => $bound['current_version'],
+                        'rev_reason'      => '線上表單設計改版（發布第 '.$newVer.' 版），申請文件改版。',
+                    ];
+                    $prefill = [];
+                    $revSchema = json_decode($rvRow['current_schema'] ?: '{}', true) ?: [];
+                    foreach (($revSchema['cells'] ?? []) as $c) {
+                        $pp = $c['purpose'] ?? ''; $ck = $c['key'] ?? '';
+                        if ($pp !== '' && $ck !== '' && isset($vals[$pp])) $prefill[$ck] = $vals[$pp];
+                    }
                     $suggest = [
-                        'template_id' => $revTid,
+                        'template_id' => (int)$rvRow['id'],
                         'doc_no'      => $bound['doc_no'],
                         'doc_name'    => $bound['doc_name'],
                         'doc_version' => $bound['current_version'],
-                        'prefill'     => [
-                            'apply_type'  => '修訂',
-                            'target_no'   => $bound['doc_no'],
-                            'target_name' => $bound['doc_name'],
-                            'target_ver'  => $bound['current_version'],
-                            'reason'      => '線上表單設計改版（發布第 '.$newVer.' 版），申請文件改版。',
-                        ],
+                        'prefill'     => $prefill,                       // 依 purpose 對應（可能為空＝未標記）
+                        'reason'      => $vals['rev_reason'],            // 供前端 prompt 預設
                     ];
                 }
             }
