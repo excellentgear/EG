@@ -12,7 +12,7 @@
 .eg-form tfoot td.cell-footer{border:1px solid var(--warm-line);background:#faf3e6;color:#6b4e2a;font-size:12px;padding:5px 9px;}
 .eg-form tfoot .ft-left{float:left;} .eg-form tfoot .ft-right{float:right;}
 .eg-form td.cell-title{background:var(--warm-title);color:var(--warm-title-text);font-size:19px;font-weight:bold;text-align:center;letter-spacing:3px;padding:10px;}
-.eg-form td.cell-label{background:var(--warm-label);color:var(--warm-label-text);font-weight:bold;text-align:center;white-space:nowrap;}
+.eg-form td.cell-label{background:var(--warm-label);color:var(--warm-label-text);font-weight:bold;text-align:center;}   /* 不設 nowrap：窄格長標題自動換行，不被裁切 */
 .eg-form td.cell-label.align-left{text-align:left;}
 .eg-form td.cell-field{background:#fff;}
 .eg-form td.cell-sig{background:#fffdf8;height:70px;vertical-align:bottom;text-align:center;color:#9a8b73;}

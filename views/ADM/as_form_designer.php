@@ -43,6 +43,7 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
   table.eg-edit .fill-handle:hover{transform:scale(1.3);}
   td.e-title{background:#f0a24b;color:#4a2c0a;font-weight:bold;text-align:center;}
   td.e-label{background:#f7e0bd;color:#5a3d1e;font-weight:bold;text-align:center;}
+  table.eg-edit td.align-left{text-align:left;}
   td.e-field{background:#fff;}
   td.e-sig{background:#fffdf8;color:#9a8b73;text-align:center;}
   .celltag{display:inline-block;font-size:10px;color:#a06a28;background:#fbe7cd;border-radius:3px;padding:0 4px;margin-right:3px;}
@@ -373,7 +374,8 @@ function renderEdit(){
   $('#editHost').html(h);
 }
 function editClass(cell){
-  return {title:'e-title',label:'e-label',signature:'e-sig'}[cell.type]||'e-field';
+  return ({title:'e-title',label:'e-label',signature:'e-sig'}[cell.type]||'e-field')
+       + (cell.align==='left'?' align-left':'');
 }
 function editInner(cell){
   if(cell.type==='title'||cell.type==='label'||cell.type==='static') return esc(cell.text||'（空）');
@@ -464,10 +466,12 @@ function fillProp(){
   $('#pCsbSection').html((schema.sections||[]).filter(s=>(s.rule&&s.rule.type)==='countersign').map(s=>
     `<option value="${esc(s.key)}"${cell.section===s.key?' selected':''}>${esc(s.label||s.key)}</option>`).join('')
     ||'<option value="">（請先在下方新增「會簽」規則的簽核區）</option>');
-  // 啟用條件欄位：列出表上的勾選/下拉欄位
+  // 啟用條件欄位：列出表上的勾選/下拉欄位；沒有欄位代號的列出但不可選（提示先命名）
   $('#pCsbEnable').html('<option value="">（不設，永遠開放勾選）</option>'+(schema.cells||[])
-    .filter(c=>c.type==='field'&&c.key&&['checkbox','select'].includes(c.ftype))
-    .map(c=>`<option value="${esc(c.key)}"${cell.enable_key===c.key?' selected':''}>${esc(c.key)}（${(c.options||[]).join('/')||c.ftype}）</option>`).join(''));
+    .filter(c=>c.type==='field'&&['checkbox','select'].includes(c.ftype))
+    .map(c=>c.key
+      ? `<option value="${esc(c.key)}"${cell.enable_key===c.key?' selected':''}>${esc(c.key)}（${(c.options||[]).join('/')||c.ftype}）</option>`
+      : `<option value="" disabled>（未命名的${c.ftype==='checkbox'?'勾選':'下拉'}欄：請先在該格屬性填「欄位代號」才能選）</option>`).join(''));
   $('#pCsbDec').prop('checked',cell.show_dec!==false);
   $('#pCsbDecReq').prop('checked',!!cell.dec_required);
   $('#pCsbNote').prop('checked',cell.show_note!==false);
@@ -1037,6 +1041,9 @@ $('#btnPublish').on('click',function(){
       if(r.suggest_revision){
         const s=r.suggest_revision;
         if(confirm('已發布為第 '+r.version+' 版。\n\n此表單綁定文件「'+s.doc_no+' '+s.doc_name+'」，依文件管制程序，設計改版建議開立「文件制修申請單」。\n\n要現在開單嗎？（會自動預填目標文件與原因）')){
+          // 修改原因可在此輸入，自動帶入申請單（取消＝用預設文字）
+          const reason=prompt('修改原因（會自動填入申請單的原因欄）：', s.prefill.reason||'');
+          if(reason!==null && reason.trim()!=='') s.prefill.reason=reason.trim();
           window.open('as_form_fill.php?template_id='+s.template_id+'&prefill='+encodeURIComponent(JSON.stringify(s.prefill)),'_blank');
         }
       } else {
