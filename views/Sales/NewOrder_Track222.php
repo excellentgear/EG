@@ -3444,7 +3444,7 @@ foreach($dCounts as $c) {
                                             <th>業務備註</th>
                                             <th style="white-space:nowrap;">設計/日期</th>
                                             <th>設計備註</th>
-                                            <th class="col-status">轉生管</th>
+                                            <th class="col-status">轉生管日<br>BOM開立</th>
                                             <th>其他資訊</th>
                                         </tr>
                                     </thead>
