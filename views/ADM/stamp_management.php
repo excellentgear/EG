@@ -81,16 +81,17 @@ try {
   <div id="stickyBar">
   <div id="addBar" style="display:none;margin-bottom:10px;padding:8px;background:#fdf6ea;border:1px solid #e8d9b8;border-radius:4px;">
     <strong style="color:#7a4e17;"><i class="fa fa-plus-circle"></i> 新增登記：</strong>
-    <select id="addKind" class="form-control input-sm" style="width:96px;display:inline-block;" title="持有對象別：個人持有或部門持有">
-      <option value="user">個人持有</option><option value="dept">部門持有</option>
-    </select>
-    <select id="addUser" class="form-control input-sm" style="width:150px;display:inline-block;"></select>
-    <select id="addDept" class="form-control input-sm" style="width:150px;display:none;"></select>
-    <select id="addType" class="form-control input-sm" style="width:130px;display:inline-block;" title="印章種類"></select>
+    種類 <select id="addType" class="form-control input-sm" style="width:120px;display:inline-block;" title="先選種類，決定可綁定的持有對象"></select>
+    <span id="addKindWrap">
+      對象別 <select id="addKind" class="form-control input-sm" style="width:96px;display:inline-block;" title="此種類允許的持有對象"></select>
+    </span>
+    <select id="addUser" class="form-control input-sm" style="width:140px;display:none;"></select>
+    <select id="addDept" class="form-control input-sm" style="width:140px;display:none;"></select>
+    <select id="addPosition" class="form-control input-sm" style="width:120px;display:none;" title="該部門的職稱（現任者異動蓋章自動帶新任者）"></select>
     <input type="date" id="addDate" class="form-control input-sm" style="width:150px;display:inline-block;" max="9999-12-31">
-    <input type="text" id="addNote" class="form-control input-sm" style="width:200px;display:inline-block;" placeholder="備註（選填）">
+    <input type="text" id="addNote" class="form-control input-sm" style="width:180px;display:inline-block;" placeholder="備註（選填）">
     <button class="btn btn-primary btn-sm" id="btnAdd"><i class="fa fa-plus"></i> 登記核發</button>
-    <span class="text-muted" style="font-size:12px;">同一持有對象＋同一種類，同時只能有一筆「使用中」。種類維護請按右上「設定」。</span>
+    <div class="text-muted" style="font-size:12px;margin-top:4px;">同一持有對象＋同一種類，同時只能有一筆「使用中」。各種類可綁定的持有對象請按右上「設定」維護。</div>
   </div>
   <div class="pager">
     <span style="font-size:12.5px;">
@@ -141,11 +142,15 @@ try {
       <li data-stab="base" id="stabBase" style="display:none;"><i class="fa fa-folder-open-o"></i> 掃描章儲存路徑</li>
     </ul>
     <div id="stab-type">
-      <p class="text-muted" style="font-size:12px;">種類做成主檔統一下拉選擇，避免備註各打各的；停用後新登記選不到、舊資料照常顯示。</p>
-      <table class="list"><thead><tr><th>種類名稱</th><th style="width:70px;">狀態</th><th style="width:150px;">操作</th></tr></thead>
+      <p class="text-muted" style="font-size:12px;">種類做成主檔統一下拉選擇，避免備註各打各的；停用後新登記選不到、舊資料照常顯示。<br>
+        <strong>綁定對象</strong>：勾選此種類的登記只能綁哪些持有對象（個人/課室/職稱可複選）；<strong>都不勾＝不綁定（不限制，登記時三種都可選）</strong>。</p>
+      <table class="list"><thead><tr><th>種類名稱</th><th style="width:150px;">綁定對象</th><th style="width:60px;">狀態</th><th style="width:150px;">操作</th></tr></thead>
         <tbody id="typeBody"></tbody></table>
-      <div style="margin-top:10px;display:flex;gap:6px;">
-        <input type="text" id="newTypeName" class="form-control input-sm" placeholder="新種類名稱（如：檢驗章）">
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="text" id="newTypeName" class="form-control input-sm" style="flex:1;min-width:140px;" placeholder="新種類名稱（如：檢驗章）">
+        <label style="font-size:12px;font-weight:normal;"><input type="checkbox" class="newType-bt" value="user"> 個人</label>
+        <label style="font-size:12px;font-weight:normal;"><input type="checkbox" class="newType-bt" value="dept"> 課室</label>
+        <label style="font-size:12px;font-weight:normal;"><input type="checkbox" class="newType-bt" value="position"> 職稱</label>
         <button class="btn btn-primary btn-sm" id="btnTypeAdd" style="white-space:nowrap;"><i class="fa fa-plus"></i> 新增</button>
       </div>
     </div>
@@ -321,21 +326,43 @@ let canManage=false, isAdmin=false, USERS=[], page=1, per=10, total=0, curScanUi
 function esc(s){return $('<div>').text(s==null?'':s).html();}
 function dot(d){return (d||'').substring(0,10).replace(/-/g,'.');}
 function today(){const t=new Date();return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');}
+const KIND_LABEL={user:'個人持有',dept:'課室持有',position:'職稱持有'};
 
 // ── 通用輸入互動（雙擊清空/聚焦全選/Enter 逐欄）──
 $(document).on('dblclick','input[type=text],input[type=date]',function(){ $(this).val(''); if(this.id==='fltName'){loadList(1);} });
 $(document).on('focus','input[type=text]',function(){ this.select(); });
-$('#addKind,#addUser,#addDept,#addType,#addDate,#addNote').on('keydown',function(e){
+$('#addKind,#addUser,#addDept,#addPosition,#addType,#addDate,#addNote').on('keydown',function(e){
   if(e.key!=='Enter') return; e.preventDefault();
-  const seq=['addKind',($('#addKind').val()==='dept'?'addDept':'addUser'),'addType','addDate','addNote'], i=seq.indexOf(this.id);
-  if(i>-1&&i<seq.length-1) $('#'+seq[i+1]).focus(); else $('#btnAdd').click();
+  const order=['addType','addKind','addUser','addDept','addPosition','addDate','addNote'];
+  const visible=order.filter(id=>$('#'+id).is(':visible'));
+  const i=visible.indexOf(this.id);
+  if(i>-1&&i<visible.length-1) $('#'+visible[i+1]).focus(); else $('#btnAdd').click();
 });
 
-let TYPES=[], DEPTS=[];
-$('#addKind').on('change',function(){
-  const isDept=this.value==='dept';
-  $('#addUser').toggle(!isDept); $('#addDept').toggle(isDept);
-});
+let TYPES=[], DEPTS=[], POSITIONS=[];
+// 依印章種類的 bind_targets 決定新增登記可選的持有對象別；未選種類或無限制＝三種都可選（沿用舊行為）
+function allowedKinds(){
+  const tid=$('#addType').val();
+  const t=TYPES.find(x=>String(x.id)===String(tid));
+  const bt=t&&t.bind_targets?t.bind_targets.split(',').filter(Boolean):[];
+  return bt.length?bt:['user','dept','position'];
+}
+function updateAddKindUI(){
+  const kinds=allowedKinds();
+  const cur=$('#addKind').val();
+  $('#addKind').html(kinds.map(k=>`<option value="${k}">${KIND_LABEL[k]}</option>`).join(''));
+  $('#addKind').val(kinds.includes(cur)?cur:kinds[0]);
+  $('#addKindWrap').toggle(kinds.length>1);
+  updateAddTargetSelects();
+}
+function updateAddTargetSelects(){
+  const k=$('#addKind').val();
+  $('#addUser').toggle(k==='user');
+  $('#addDept').toggle(k==='dept'||k==='position');
+  $('#addPosition').toggle(k==='position');
+}
+$('#addType').on('change',updateAddKindUI);
+$('#addKind').on('change',updateAddTargetSelects);
 function typeOpts(sel,withAll){
   const act=TYPES.filter(t=>+t.is_active===1);
   return (withAll?'<option value="">全部種類</option>':'<option value="">（未分類）</option>')
@@ -350,11 +377,13 @@ function loadMeta(){
     $('#fltType').html(typeOpts('',true));
     if(canManage){
       $('#addBar').show();
-      DEPTS=m.depts||[];
+      DEPTS=m.depts||[]; POSITIONS=m.positions||[];
       $('#addUser').html('<option value="">— 選擇人員 —</option>'+USERS.map(u=>`<option value="${u.id}">${esc(u.user_cname)}</option>`).join(''));
       $('#addDept').html('<option value="">— 選擇部門 —</option>'+DEPTS.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
+      $('#addPosition').html('<option value="">— 選擇職稱 —</option>'+POSITIONS.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join(''));
       $('#addType').html(typeOpts('',false));
       $('#addDate').val(today());
+      updateAddKindUI();
       renderTypeMng();
     }
     if(isAdmin){ $('#stabBase').show(); $('#baseDir').val(m.base||''); baseState(m.base,m.base_ok); }
@@ -395,9 +424,11 @@ function loadList(p){
     $('#sumInfo').text(`使用中 ${r.summary.active} 顆／已停用 ${r.summary.revoked} 顆，共 ${total} 筆`);
     $('#regBody').html(r.rows.map(x=>{
       const stampHtml=EGStamp.stamp(x.holder_name, dot(x.issue_date), false);
+      const kindBadge=x.holder_kind==='position'?' <span class="status-chip" style="background:#dcd0e8;color:#3a2c4a;">職稱章</span>'
+        :x.holder_kind==='dept'?' <span class="status-chip" style="background:#e8dcc3;color:#4a3a20;">課室章</span>':'';
       return `<tr>
       <td style="text-align:center;">${stampHtml}</td>
-      <td>${esc(x.holder_name)}${x.dept_id?' <span class="status-chip" style="background:#e8dcc3;color:#4a3a20;">部門章</span>':''}</td>
+      <td>${esc(x.holder_name)}${kindBadge}</td>
       <td>${x.type_name?esc(x.type_name):'<span class="text-muted">（未分類）</span>'}</td>
       <td>${esc(x.issue_date||'')}</td>
       <td>${esc(x.revoke_date||'—')}</td>
@@ -429,14 +460,21 @@ $('#fltStatus,#fltType').on('change',()=>loadList(1));
 
 // ── 新增/編輯/停用/刪除 ──
 $('#btnAdd').on('click',function(){
-  const isDept=$('#addKind').val()==='dept';
-  const hid=isDept?$('#addDept').val():$('#addUser').val();
-  if(!hid){alert(isDept?'請選擇部門':'請選擇人員');return;}
-  const p={issue_date:$('#addDate').val(),type_id:$('#addType').val()||'',note:$('#addNote').val().trim()};
-  if(isDept) p.dept_id=hid; else p.user_id=hid;
+  const kind=$('#addKind').val();
+  const p={holder_kind:kind,issue_date:$('#addDate').val(),type_id:$('#addType').val()||'',note:$('#addNote').val().trim()};
+  if(kind==='user'){
+    if(!$('#addUser').val()){alert('請選擇人員');return;}
+    p.user_id=$('#addUser').val();
+  }else if(kind==='dept'){
+    if(!$('#addDept').val()){alert('請選擇部門');return;}
+    p.dept_id=$('#addDept').val();
+  }else{ // position：該部門的該職稱
+    if(!$('#addDept').val()||!$('#addPosition').val()){alert('請選擇部門與職稱');return;}
+    p.dept_id=$('#addDept').val(); p.position_id=$('#addPosition').val();
+  }
   $.post(API+'?action=add',p,r=>{
     if(!r.ok){alert(r.error||'登記失敗');return;}
-    $('#addUser').val(''); $('#addDept').val(''); $('#addNote').val(''); $('#addDate').val(today()); loadList(1);
+    $('#addUser,#addDept,#addPosition').val(''); $('#addNote').val(''); $('#addDate').val(today()); loadList(1);
   },'json');
 });
 $('#regBody').on('click','.edit-btn',function(){
@@ -454,15 +492,22 @@ $('#btnEditSave').on('click',function(){
 });
 
 // ── 種類管理 ──
+function bindChecks(cls,bt){
+  const on=(bt||'').split(',');
+  return ['user','dept','position'].map(k=>
+    `<label style="font-size:12px;font-weight:normal;margin-right:6px;"><input type="checkbox" class="${cls}" value="${k}" ${on.includes(k)?'checked':''}> ${KIND_LABEL[k].replace('持有','')}</label>`
+  ).join('');
+}
 function renderTypeMng(){
   $('#typeBody').html(TYPES.map(t=>`<tr>
     <td><input type="text" class="form-control input-sm type-name" data-id="${t.id}" value="${esc(t.type_name)}"></td>
+    <td>${bindChecks('type-bt',t.bind_targets)}</td>
     <td style="text-align:center;">${+t.is_active?'<span style="color:#3c763d;">啟用</span>':'<span class="text-muted">已停用</span>'}</td>
     <td>
       <button class="btn btn-default btn-xs type-save" data-id="${t.id}"><i class="fa fa-check"></i> 存</button>
       <button class="btn btn-warning btn-xs type-toggle" data-id="${t.id}">${+t.is_active?'停用':'啟用'}</button>
       <button class="btn btn-danger btn-xs type-del" data-id="${t.id}"><i class="fa fa-trash"></i></button>
-    </td></tr>`).join('')||'<tr><td colspan="3" class="text-muted">尚無種類，請於下方新增。</td></tr>');
+    </td></tr>`).join('')||'<tr><td colspan="4" class="text-muted">尚無種類，請於下方新增。</td></tr>');
 }
 function reloadTypes(cb){
   $.getJSON(API+'?action=meta',m=>{
@@ -470,6 +515,7 @@ function reloadTypes(cb){
     TYPES=m.types||[];
     $('#fltType').html(typeOpts($('#fltType').val(),true));
     $('#addType').html(typeOpts($('#addType').val(),false));
+    updateAddKindUI();
     renderTypeMng();
     if(cb)cb();
   });
@@ -477,15 +523,18 @@ function reloadTypes(cb){
 $('#btnTypeAdd').on('click',function(){
   const name=$('#newTypeName').val().trim();
   if(!name){alert('請輸入種類名稱');return;}
-  $.post(API+'?action=type_save',{id:0,type_name:name},r=>{
+  const bt=$('.newType-bt:checked').map((i,el)=>el.value).get().join(',');
+  $.post(API+'?action=type_save',{id:0,type_name:name,bind_targets:bt},r=>{
     if(!r.ok){alert(r.error||'新增失敗');return;}
-    $('#newTypeName').val(''); reloadTypes();
+    $('#newTypeName').val(''); $('.newType-bt').prop('checked',false); reloadTypes();
   },'json');
 });
 $('#typeBody').on('click','.type-save',function(){
-  const id=$(this).data('id'), name=$('.type-name[data-id="'+id+'"]').val().trim();
+  const id=$(this).data('id'), row=$(this).closest('tr');
+  const name=row.find('.type-name').val().trim();
   if(!name){alert('請輸入種類名稱');return;}
-  $.post(API+'?action=type_save',{id,type_name:name},r=>{
+  const bt=row.find('.type-bt:checked').map((i,el)=>el.value).get().join(',');
+  $.post(API+'?action=type_save',{id,type_name:name,bind_targets:bt},r=>{
     if(!r.ok){alert(r.error||'儲存失敗');return;}
     reloadTypes(()=>loadList());
   },'json');

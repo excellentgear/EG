@@ -3379,7 +3379,7 @@ async function placeTplStamp(x, y, size) {
     let schema = {}; try { schema = JSON.parse(t.schema_json || '{}'); } catch (e) {}
     const hsel = document.getElementById('p-stamp-holder');
     const h = (hsel._list || [])[parseInt(hsel.value, 10)];
-    const ctx = h ? { name: h.holder_name, dept: h.dept || '', position: h.position || '' }
+    const ctx = h ? { name: h.name || '', dept: h.dept || '', position: h.position || '' }
                   : { name: USER_CNAME || '', dept: '', position: '' };
     ctx.company = OWN_COMPANY || '';
     ctx.date = todayStr();

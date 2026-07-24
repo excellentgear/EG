@@ -73,28 +73,36 @@ case 'meta': {
         $users = $db->query("SELECT id, user_cname FROM user WHERE (state IS NULL OR state <> 0)
                              ORDER BY CONVERT(user_cname USING utf8mb4) COLLATE utf8mb4_unicode_ci")->fetchAll(PDO::FETCH_ASSOC);
     }
-    $types = $db->query("SELECT id, type_name, sort_order, is_active FROM stamp_type ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    $types = $db->query("SELECT id, type_name, bind_targets, sort_order, is_active FROM stamp_type ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     $depts = $canManage ? $db->query("SELECT id, name FROM department ORDER BY id")->fetchAll(PDO::FETCH_ASSOC) : [];
+    $positions = $canManage ? $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC) : [];
     $base = '';
     if ($canManage) $base = eg_stamp_base($db);
     jout(['ok'=>true, 'canView'=>true, 'canManage'=>$canManage, 'isAdmin'=>$isAdmin, 'me'=>$cname,
-          'users'=>$users, 'types'=>$types, 'depts'=>$depts, 'base'=>$base, 'base_ok'=>$canManage ? is_dir($base) : null]);
+          'users'=>$users, 'types'=>$types, 'depts'=>$depts, 'positions'=>$positions,
+          'base'=>$base, 'base_ok'=>$canManage ? is_dir($base) : null]);
 }
 
 // ── 印章種類主檔維護 ──
+// bind_targets：逗號分隔 user/dept/position 子集；空字串=不綁定(不限制，新增登記三種持有對象皆可選)
 case 'type_save': {
     needManage($canManage);
     $tid  = (int)($_POST['id'] ?? 0);
     $name = trim((string)($_POST['type_name'] ?? ''));
     if ($name === '' || mb_strlen($name) > 50) jerr('請輸入種類名稱（50字內）');
+    $bt = array_values(array_intersect(
+        array_filter(array_map('trim', explode(',', (string)($_POST['bind_targets'] ?? '')))),
+        ['user','dept','position']
+    ));
+    $bindTargets = implode(',', $bt);
     $st = $db->prepare("SELECT id FROM stamp_type WHERE type_name=? AND id<>? LIMIT 1");
     $st->execute([$name, $tid]);
     if ($st->fetchColumn()) jerr('已有同名種類');
     if ($tid > 0) {
-        $db->prepare("UPDATE stamp_type SET type_name=? WHERE id=?")->execute([$name, $tid]);
+        $db->prepare("UPDATE stamp_type SET type_name=?, bind_targets=? WHERE id=?")->execute([$name, $bindTargets, $tid]);
     } else {
-        $db->prepare("INSERT INTO stamp_type (type_name, sort_order, created_by)
-                      VALUES (?, (SELECT IFNULL(MAX(t2.sort_order),0)+1 FROM stamp_type t2), ?)")->execute([$name, $cname]);
+        $db->prepare("INSERT INTO stamp_type (type_name, bind_targets, sort_order, created_by)
+                      VALUES (?, ?, (SELECT IFNULL(MAX(t2.sort_order),0)+1 FROM stamp_type t2), ?)")->execute([$name, $bindTargets, $cname]);
         $tid = (int)$db->lastInsertId();
     }
     jout(['ok'=>true, 'id'=>$tid]);
@@ -139,13 +147,14 @@ case 'list': {
     $all    = ($_GET['all'] ?? '') === '1';
 
     $where = []; $args = [];
-    if ($q !== '')      { $where[] = "(CONVERT(u.user_cname USING utf8mb4) LIKE ? OR d.name LIKE ?)"; $args[] = "%$q%"; $args[] = "%$q%"; }
+    if ($q !== '')      { $where[] = "(CONVERT(u.user_cname USING utf8mb4) LIKE ? OR d.name LIKE ? OR p.name LIKE ?)"; $args[] = "%$q%"; $args[] = "%$q%"; $args[] = "%$q%"; }
     if ($status !== '') { $where[] = "r.status = ?"; $args[] = $status; }
     if ($typeId > 0)    { $where[] = "r.type_id = ?"; $args[] = $typeId; }
     $w = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
     $joins = "FROM stamp_register r
               LEFT JOIN user u ON u.id = r.user_id
-              LEFT JOIN department d ON d.id = r.dept_id";
+              LEFT JOIN department d ON d.id = r.dept_id
+              LEFT JOIN position p ON p.id = r.position_id";
 
     $stc = $db->prepare("SELECT COUNT(*) $joins $w");
     $stc->execute($args); $total = (int)$stc->fetchColumn();
@@ -157,8 +166,11 @@ case 'list': {
     $sts->execute($args); $sum = $sts->fetch(PDO::FETCH_ASSOC) ?: ['active_cnt'=>0,'revoked_cnt'=>0];
 
     $limit = $all ? '' : ('LIMIT ' . (($page-1)*$per) . ',' . $per);
-    $st = $db->prepare("SELECT r.id, r.user_id, r.dept_id, u.user_cname, d.name AS dept_name,
-                               COALESCE(u.user_cname, d.name) AS holder_name,
+    $st = $db->prepare("SELECT r.id, r.user_id, r.dept_id, r.position_id, u.user_cname, d.name AS dept_name, p.name AS position_name,
+                               CASE WHEN r.position_id IS NOT NULL THEN CONCAT(d.name,'／',p.name)
+                                    ELSE COALESCE(u.user_cname, d.name) END AS holder_name,
+                               CASE WHEN r.position_id IS NOT NULL THEN 'position'
+                                    WHEN r.dept_id IS NOT NULL THEN 'dept' ELSE 'user' END AS holder_kind,
                                r.type_id, t.type_name,
                                r.issue_date, r.revoke_date, r.status, r.note,
                                r.created_by, r.created_at,
@@ -174,32 +186,47 @@ case 'list': {
 }
 
 // ── 新增登記 ──
+// holder_kind：'user'（個人）｜'dept'（部門）｜'position'（職稱＝該部門的該職稱，dept_id+position_id併用）
 case 'add': {
     needManage($canManage);
-    $tuid   = (int)($_POST['user_id'] ?? 0) ?: null;    // 個人章
-    $deptId = (int)($_POST['dept_id'] ?? 0) ?: null;    // 部門章（與 user_id 二擇一）
+    $kind = (string)($_POST['holder_kind'] ?? 'user');
+    if (!in_array($kind, ['user','dept','position'], true)) jerr('持有對象類型錯誤');
+    $tuid     = $kind === 'user'     ? ((int)($_POST['user_id'] ?? 0) ?: null) : null;
+    $deptId   = in_array($kind, ['dept','position'], true) ? ((int)($_POST['dept_id'] ?? 0) ?: null) : null;
+    $posId    = $kind === 'position' ? ((int)($_POST['position_id'] ?? 0) ?: null) : null;
     $typeId = (int)($_POST['type_id'] ?? 0) ?: null;
     $issue = trim((string)($_POST['issue_date'] ?? ''));
     $note  = trim((string)($_POST['note'] ?? ''));
-    if (($tuid === null) === ($deptId === null)) jerr('請選擇持有對象（人員或部門，擇一）');
+    if ($kind === 'user'     && $tuid === null) jerr('請選擇人員');
+    if ($kind === 'dept'     && $deptId === null) jerr('請選擇部門');
+    if ($kind === 'position' && ($deptId === null || $posId === null)) jerr('請選擇部門與職稱');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $issue)) jerr('核發日期格式錯誤');
+    if ($typeId !== null) {
+        $st = $db->prepare("SELECT bind_targets FROM stamp_type WHERE id=? AND is_active=1");
+        $st->execute([$typeId]);
+        $bt = $st->fetchColumn();
+        if ($bt === false) jerr('印章種類不存在或已停用');
+        if ($bt !== '' && $bt !== null && !in_array($kind, explode(',', $bt), true)) {
+            jerr('此種類限定綁定對象為：' . str_replace(['user','dept','position'], ['個人','部門','職稱'], $bt));
+        }
+    }
     if ($deptId !== null) {
         $st = $db->prepare("SELECT 1 FROM department WHERE id=?");
         $st->execute([$deptId]);
         if (!$st->fetchColumn()) jerr('部門不存在');
     }
-    if ($typeId !== null) {
-        $st = $db->prepare("SELECT 1 FROM stamp_type WHERE id=? AND is_active=1");
-        $st->execute([$typeId]);
-        if (!$st->fetchColumn()) jerr('印章種類不存在或已停用');
+    if ($posId !== null) {
+        $st = $db->prepare("SELECT 1 FROM position WHERE id=?");
+        $st->execute([$posId]);
+        if (!$st->fetchColumn()) jerr('職稱不存在');
     }
     $db->beginTransaction();
-    // 同一持有對象（人員或部門）＋同一種類 同時僅一筆使用中；不同種類可同時持有
-    $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND status='active' AND type_id <=> ? LIMIT 1 FOR UPDATE");
-    $st->execute([$tuid, $deptId, $typeId]);
+    // 同一持有對象（人員/部門/部門+職稱）＋同一種類 同時僅一筆使用中；不同種類可同時持有
+    $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND position_id <=> ? AND status='active' AND type_id <=> ? LIMIT 1 FOR UPDATE");
+    $st->execute([$tuid, $deptId, $posId, $typeId]);
     if ($st->fetchColumn()) { $db->rollBack(); jerr('該持有對象此種類已有一筆「使用中」圖章，請先停用舊登記再核發'); }
-    $st = $db->prepare("INSERT INTO stamp_register (user_id, dept_id, type_id, issue_date, status, note, created_by) VALUES (?,?,?,?,'active',?,?)");
-    $st->execute([$tuid, $deptId, $typeId, $issue, $note, $cname]);
+    $st = $db->prepare("INSERT INTO stamp_register (user_id, dept_id, position_id, type_id, issue_date, status, note, created_by) VALUES (?,?,?,?,?,'active',?,?)");
+    $st->execute([$tuid, $deptId, $posId, $typeId, $issue, $note, $cname]);
     $newId = (int)$db->lastInsertId();
     $db->commit();
     jout(['ok'=>true, 'id'=>$newId]);
@@ -214,13 +241,13 @@ case 'update': {
     $note  = trim((string)($_POST['note'] ?? ''));
     if ($id <= 0) jerr('參數錯誤');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $issue)) jerr('核發日期格式錯誤');
-    $cur = $db->prepare("SELECT user_id, dept_id, status FROM stamp_register WHERE id=?");
+    $cur = $db->prepare("SELECT user_id, dept_id, position_id, status FROM stamp_register WHERE id=?");
     $cur->execute([$id]);
     $curRow = $cur->fetch(PDO::FETCH_ASSOC);
     if (!$curRow) jerr('登記不存在');
     if ($curRow['status'] === 'active') {
-        $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND status='active' AND type_id <=> ? AND id<>? LIMIT 1");
-        $st->execute([$curRow['user_id'], $curRow['dept_id'], $typeId, $id]);
+        $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND position_id <=> ? AND status='active' AND type_id <=> ? AND id<>? LIMIT 1");
+        $st->execute([$curRow['user_id'], $curRow['dept_id'], $curRow['position_id'], $typeId, $id]);
         if ($st->fetchColumn()) jerr('該持有對象此種類已有另一筆「使用中」圖章');
     }
     $st = $db->prepare("UPDATE stamp_register SET type_id=?, issue_date=?, note=?, modified_by=?, modified_at=NOW() WHERE id=?");
@@ -258,17 +285,20 @@ case 'csv': {
     $status = trim((string)($_GET['status'] ?? ''));
     $typeId = (int)($_GET['type_id'] ?? 0);
     $where = []; $args = [];
-    if ($q !== '')      { $where[] = "CONVERT(u.user_cname USING utf8mb4) LIKE ?"; $args[] = "%$q%"; }
+    if ($q !== '')      { $where[] = "(CONVERT(u.user_cname USING utf8mb4) LIKE ? OR d.name LIKE ? OR p.name LIKE ?)"; $args[] = "%$q%"; $args[] = "%$q%"; $args[] = "%$q%"; }
     if ($status !== '') { $where[] = "r.status = ?"; $args[] = $status; }
     if ($typeId > 0)    { $where[] = "r.type_id = ?"; $args[] = $typeId; }
     $w = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
-    $st = $db->prepare("SELECT COALESCE(u.user_cname, d.name) AS holder_name,
-                               CASE WHEN r.dept_id IS NULL THEN '個人章' ELSE '部門章' END AS holder_kind,
+    $st = $db->prepare("SELECT CASE WHEN r.position_id IS NOT NULL THEN CONCAT(d.name,'／',p.name)
+                                     ELSE COALESCE(u.user_cname, d.name) END AS holder_name,
+                               CASE WHEN r.position_id IS NOT NULL THEN '職稱章'
+                                    WHEN r.dept_id IS NOT NULL THEN '部門章' ELSE '個人章' END AS holder_kind,
                                t.type_name, r.issue_date, r.revoke_date, r.status, r.note, r.created_by, r.created_at,
                                a.file_name IS NOT NULL AS has_asset
                         FROM stamp_register r
                         LEFT JOIN user u ON u.id=r.user_id
                         LEFT JOIN department d ON d.id=r.dept_id
+                        LEFT JOIN position p ON p.id=r.position_id
                         LEFT JOIN stamp_type t ON t.id=r.type_id
                         LEFT JOIN stamp_asset a ON a.user_id=r.user_id
                         $w ORDER BY r.status='active' DESC, r.issue_date DESC, r.id DESC");
@@ -458,10 +488,13 @@ case 'pick_meta': {
                                p.serial_prefix, p.serial_digits, p.serial_reset
                         FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
                         WHERE p.is_active=1 ORDER BY t.sort_order, p.id")->fetchAll(PDO::FETCH_ASSOC);
-    // 各種類「使用中」持有對象＋變數 ctx（個人章：主要部門/職稱；部門章：部門名）
+    // 各種類「使用中」持有對象＋變數 ctx。個人章：name=本人、dept/position=主要部門職稱。
+    // 部門章：name=部門名(相容既有無{姓名}的模板)、dept=部門名。職稱章(dept_id+position_id)：即時查該部門該職稱「現任者」，
+    // 人員異動時蓋章自動帶新任者，不需重新登記——name=現任者姓名(無人在任則空)、dept/position=登記當下的部門/職稱名。
     $holders = $db->query("
-        SELECT r.type_id, r.user_id, r.dept_id,
+        SELECT r.type_id, r.user_id, r.dept_id, r.position_id,
                COALESCE(u.user_cname, d.name) AS holder_name,
+               COALESCE(u.user_cname, d.name) AS name,
                COALESCE(d.name, md.name, '')  AS dept,
                COALESCE(mp.name, '')          AS position
         FROM stamp_register r
@@ -470,8 +503,20 @@ case 'pick_meta': {
         LEFT JOIN user_department_position_map m ON m.user_id = r.user_id AND m.is_main = 1
         LEFT JOIN department md ON md.id = m.department_id
         LEFT JOIN position mp ON mp.id = m.position_id
-        WHERE r.status = 'active'
-        ORDER BY r.type_id, holder_name")->fetchAll(PDO::FETCH_ASSOC);
+        WHERE r.status = 'active' AND r.position_id IS NULL
+        UNION ALL
+        SELECT r.type_id, r.user_id, r.dept_id, r.position_id,
+               CASE WHEN u2.user_cname IS NOT NULL THEN CONCAT(d2.name,'／',p2.name,'（',u2.user_cname,'）')
+                    ELSE CONCAT(d2.name,'／',p2.name,'（尚無人員）') END AS holder_name,
+               COALESCE(u2.user_cname, '') AS name,
+               d2.name AS dept, p2.name AS position
+        FROM stamp_register r
+        JOIN department d2 ON d2.id = r.dept_id
+        JOIN position p2 ON p2.id = r.position_id
+        LEFT JOIN user_department_position_map m2 ON m2.department_id = r.dept_id AND m2.position_id = r.position_id
+        LEFT JOIN user u2 ON u2.id = m2.user_id
+        WHERE r.status = 'active' AND r.position_id IS NOT NULL
+        ORDER BY type_id, holder_name")->fetchAll(PDO::FETCH_ASSOC);
     jout(['ok'=>true, 'templates'=>$tpls, 'holders'=>$holders]);
 }
 
