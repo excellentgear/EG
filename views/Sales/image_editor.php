@@ -1032,7 +1032,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <div class="tool-group-sep"></div>
         <button class="tool-btn" id="tool-balloon" onclick="setTool('balloon')" title="球標：連續點圖面即依 A、B、C… 自動編號（放上後仍可移動；右下角自動產生「Ⓐ~Ⓕ」範圍文字）" style="font-size:13px;font-weight:700;">Ⓐ</button>
         <button class="tool-btn" id="tool-dc" onclick="setTool('dc')" title="設變標示：點圖面任意位置放標示（菱形/三角形可選），同時在圖面左上角自動產生設變列表（標示＋今日日期＋可輸入文字，越新越上面）" style="font-size:15px;font-weight:700;">◇</button>
-        <button class="tool-btn" id="tool-stamp" onclick="setTool('stamp')" title="蓋章：本人簽章（紅）/ 技術課章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）/ 發行章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）。透明背景直接蓋在圖上，日期自動帶今天" style="font-size:14px;">㊞</button>
+        <button class="tool-btn" id="tool-stamp" onclick="setTool('stamp')" title="蓋章：本人簽章（紅）/ 技術課章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）/ 發行章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）/ 模板章（圖章管理頁設計的參數化圖章，變數帶被登記者、編號自動跳號）。透明背景直接蓋在圖上，日期自動帶今天" style="font-size:14px;">㊞</button>
         <div class="tool-group-sep"></div>
         <button class="tool-btn" id="tool-maskrect" onclick="setTool('maskrect')" title="遮蓋刪除－長方形（拖出範圍蓋掉客戶資料；顏色可改，放上後仍可移動調整）"><i class="fa fa-eraser"></i><span class="kbd">M</span></button>
         <button class="tool-btn" id="tool-masklasso" onclick="setTool('masklasso')" title="遮蓋刪除－不規則形（按住拖曳圈出範圍）"><i class="fa fa-scissors"></i></button>
@@ -1131,7 +1131,14 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                         <option value="self">本人簽章（紅）</option>
                         <option value="tech" id="opt-stamp-tech">技術課章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）</option>
                         <option value="issue" id="opt-stamp-issue">發行章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）</option>
+                        <option value="tpl">模板章（圖章管理）</option>
                     </select>
+                </label>
+                <label id="wrap-stamp-tpl" style="display:none;">模板
+                    <select id="p-stamp-tpl" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;max-width:190px;"></select>
+                </label>
+                <label id="wrap-stamp-holder" style="display:none;" title="被登記者：變數{部門}{職稱}{姓名}帶入此對象的資料（來自圖章清冊「使用中」登記）">對象
+                    <select id="p-stamp-holder" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;max-width:150px;"></select>
                 </label>
                 <label>大小 <input type="number" class="ni" id="p-stamp-size" value="110" min="40" max="600"></label>
                 <button class="pb-btn" id="btn-stamp-perm" style="display:none;" onclick="openStampPermModal()" title="設定哪些人員可使用技術課章/發行章（管理者限定）"><i class="fa fa-cog"></i> 用章人員</button>
@@ -1645,7 +1652,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <ul style="padding-left:18px;margin:4px 0 10px;">
                 <li>球標 Ⓐ：連續點圖面自動 A、B、C…編號；右下角自動產生「Ⓐ～Ⓕ」範圍（圓圈樣式與圖面球標一致，變動自動刪舊重建）。原圖已有球標 → 把「下一個球標」改成接續字母</li>
                 <li>設變標示 ◇/△：<b>同一次設變多處都點同一個號碼</b>（號碼欄可自訂起始，圖面已有舊設變時接續）；該號第一次放置時左上角自動加一列「標示＋今日日期」，<b>雙擊該列輸入說明文字</b>，越新越上面。下一次設變記得把號碼欄+1</li>
-                <li>蓋章 ㊞：本人簽章（紅，人人可用）／技術課章與發行章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>，<b>限管理者在「用章人員」勾選的人員</b>，顏色也在同一個跳窗設定）；透明背景直接蓋在圖上（自動去背），日期自動帶今天，可移動縮放</li>
+                <li>蓋章 ㊞：本人簽章（紅，人人可用）／技術課章與發行章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>，<b>限管理者在「用章人員」勾選的人員</b>，顏色也在同一個跳窗設定）／<b>模板章</b>（「圖章管理」頁設計的參數化圖章：依種類選模板→選被登記對象（個人/部門章），變數自動帶部門/職稱/姓名、日期帶今天、{編號} 依跳號規則自動遞增）；透明背景直接蓋在圖上（自動去背），日期自動帶今天，可移動縮放</li>
                 <li>標籤庫分三層：公司共用（<b>有使用權者皆可放入，僅管理者可刪</b>）／部門標籤（同部門共用）／私人標籤（只有自己看得到）。新標籤<b>預設存私人</b>；面板右上「管理」開跳窗：<b>框選或 Ctrl+點選多選 → 拖曳到目標欄＝搬移、Ctrl+拖曳＝複製</b>，也可批次刪除</li>
             </ul>
             <b style="color:#6fc3ff;">⑤ 檢視、匯出與跨視窗</b>
@@ -1685,6 +1692,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <div id="toast"></div>
 
 <script src="../../resource/js/fabric.min.js?v=<?= filemtime(__DIR__ . '/../../resource/js/fabric.min.js') ?>"></script><!-- 帶檔案時間當版本參數：修過的 fabric 才不會被瀏覽器快取的舊檔蓋掉 -->
+<script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_stamp_tpl.js') ?>"></script><!-- 圖章模板渲染器（蓋章工具「模板章」用，與圖章管理頁共用） -->
 <script src="../../resource/js/pdfmake.min.js"></script><!-- 列印走 PDF 管線用（已含字型 vfs）：把畫布高解析影像包成 PDF 再列印，畫質最接近「存檔後本機列印」 -->
 <script>
 'use strict';
@@ -3317,6 +3325,7 @@ function makeStamp(bottomText, color, size, dateStr) {
 function placeStamp(x, y) {
     const type = document.getElementById('p-stamp-type').value;
     const size = Math.max(40, parseInt(document.getElementById('p-stamp-size').value, 10) || 110);
+    if (type === 'tpl') { placeTplStamp(x, y, size); return; }
     const conf = {
         self:  { text: USER_CNAME || '簽章', color: '#cf3a2b' },        // 本人＝紅（同 CAR，固定）
         tech:  { text: '技術課',             color: deptStampColorHex }, // 管理者可在「用章人員」設定藍/紅
@@ -3330,11 +3339,70 @@ function placeStamp(x, y) {
     pushState();
 }
 
+/* ── 模板章：圖章管理頁設計的參數化圖章（stamp_template），依種類選模板、變數帶被登記者資料 ── */
+const STAMP_API = '/EGsystem/src/store/store_Stamp_API.php';
+let TPL_STAMPS = [], TPL_HOLDERS = [];
+function initTplStamps() {
+    fetch(STAMP_API + '?action=pick_meta').then(r => r.json()).then(res => {
+        if (!res.ok) return;
+        TPL_STAMPS = res.templates || []; TPL_HOLDERS = res.holders || [];
+        const sel = document.getElementById('p-stamp-tpl');
+        sel.innerHTML = TPL_STAMPS.map(t =>
+            `<option value="${t.id}">${(t.type_name ? t.type_name + '｜' : '') + t.tpl_name}</option>`).join('')
+            || '<option value="">（無啟用模板，請先到圖章管理頁建立）</option>';
+        onTplStampChange();
+    }).catch(() => {});
+}
+function onTplStampChange() {
+    const t = TPL_STAMPS.find(x => String(x.id) === document.getElementById('p-stamp-tpl').value);
+    // 對象清單＝該模板綁定種類的「使用中」登記（個人章/部門章）；未綁種類的模板列出全部登記
+    const hs = t ? TPL_HOLDERS.filter(h => !t.type_id || String(h.type_id || '') === String(t.type_id || '')) : [];
+    const hsel = document.getElementById('p-stamp-holder');
+    hsel.innerHTML = '<option value="">本人（' + (USER_CNAME || '') + '）</option>' +
+        hs.map((h, i) => `<option value="${i}">${h.holder_name}${h.dept_id ? '（部門章）' : ''}</option>`).join('');
+    hsel._list = hs;
+}
+document.getElementById('p-stamp-type').addEventListener('change', function () {
+    const isTpl = this.value === 'tpl';
+    document.getElementById('wrap-stamp-tpl').style.display = isTpl ? '' : 'none';
+    document.getElementById('wrap-stamp-holder').style.display = isTpl ? '' : 'none';
+    if (isTpl && !TPL_STAMPS.length) initTplStamps();
+});
+document.getElementById('p-stamp-tpl').addEventListener('change', onTplStampChange);
+async function placeTplStamp(x, y, size) {
+    const t = TPL_STAMPS.find(o => String(o.id) === document.getElementById('p-stamp-tpl').value);
+    if (!t) { toast('尚無可用模板，請先到「圖章管理」頁設計並啟用'); return; }
+    let schema = {}; try { schema = JSON.parse(t.schema_json || '{}'); } catch (e) {}
+    const hsel = document.getElementById('p-stamp-holder');
+    const h = (hsel._list || [])[parseInt(hsel.value, 10)];
+    const ctx = h ? { name: h.holder_name, dept: h.dept || '', position: h.position || '' }
+                  : { name: USER_CNAME || '', dept: '', position: '' };
+    ctx.date = todayStr();
+    if (EGStampTpl.hasSerial(schema)) {   // 有 {編號} 才取號（依模板跳號規則遞增，取了就算用掉）
+        try {
+            const fd = new FormData(); fd.append('template_id', t.id);
+            const res = await fetch(STAMP_API + '?action=next_serial', { method: 'POST', body: fd }).then(r => r.json());
+            if (!res.ok) { toast(res.error || '取編號失敗'); return; }
+            ctx.serial = res.serial;
+        } catch (e) { toast('取編號失敗'); return; }
+    }
+    // 以 3 倍尺寸算圖再縮回，蓋大章也不糊；走 <img> 光柵化避免 fabric 解析 SVG 文字的相容性問題
+    const hiSize = Math.max(300, size * 3);
+    const svg = EGStampTpl.render(Object.assign({}, schema, { size: hiSize }), ctx);
+    fabric.Image.fromURL('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg), function (img) {
+        if (!img || !img.width) { toast('圖章產生失敗'); return; }
+        const sc = size / Math.max(img.width, img.height);
+        img.set({ left: x, top: y, originX: 'center', originY: 'center', scaleX: sc, scaleY: sc, opacity: 0.92 });
+        img.setCoords(); canvas.add(img); canvas.setActiveObject(img);
+        canvas.requestRenderAll(); pushState();
+    });
+}
+
 /* 部門印章權限初始化：無權者隱藏技術課章/發行章；管理者顯示設定按鈕 */
 (function initStampPerm() {
     if (!CAN_DEPT_STAMP) {
         const sel = document.getElementById('p-stamp-type');
-        Array.from(sel.options).slice().forEach(o => { if (o.value !== 'self') sel.removeChild(o); });
+        Array.from(sel.options).slice().forEach(o => { if (o.value !== 'self' && o.value !== 'tpl') sel.removeChild(o); });   // 模板章人人可選（模板/對象本就來自圖章管理的公開登記）
     }
     if (IS_MGR) document.getElementById('btn-stamp-perm').style.display = '';
 })();
