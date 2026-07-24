@@ -104,7 +104,8 @@ case 'save_iy': {
     $sourceMode = ($_POST['source_mode'] ?? 'manual') === 'auto' ? 'auto' : 'manual';
     $calc = trim((string)($_POST['calculator_key'] ?? ''));
     if ($sourceMode === 'auto') {
-        if ($calc === '' || !isset(kpi_as_registry()[$calc])) jerr('自動模式必須選擇有效的資料來源');
+        if ($calc !== '__builder__' && ($calc === '' || !isset(kpi_as_registry()[$calc])))
+            jerr('自動模式必須選擇有效的資料來源');
     } else { $calc = null; }
     $paramsJson = trim((string)($_POST['params_json'] ?? ''));
     if ($paramsJson !== '') {
@@ -284,6 +285,116 @@ case 'log_list': {
     $st = $db->prepare($sql);
     $st->execute($bind);
     jout(['list'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+/* ---------- 資料來源目錄 no-code builder ---------- */
+case 'get_catalog': {
+    jout([
+        'catalog'=>kpi_as_catalog($db),
+        'ops'=>kpi_as_builder_ops(),
+        'is_sysadmin'=>$perms['isAdmin'],   // 目錄增修(需知道表名)僅系統管理者
+    ]);
+}
+
+// 取某篩選欄位的現有值（供值選單，非IT免手打）
+case 'get_field_values': {
+    $fid = (int)($_GET['field_id'] ?? 0);
+    $st = $db->prepare("SELECT f.column_name, c.table_name
+                        FROM kpi_ds_field f JOIN kpi_ds_catalog c ON c.ds_id=f.ds_id
+                        WHERE f.field_id=? AND f.is_active=1 AND c.is_active=1");
+    $st->execute([$fid]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) jerr('欄位不存在');
+    if (!kpi_as_ident_ok($r['column_name']) || !kpi_as_ident_ok($r['table_name'])) jerr('欄位名不合法');
+    $col = '`' . $r['column_name'] . '`'; $tbl = '`' . $r['table_name'] . '`';
+    $rows = $db->query("SELECT DISTINCT $col AS v FROM $tbl WHERE $col IS NOT NULL AND $col<>'' ORDER BY v LIMIT 300")
+               ->fetchAll(PDO::FETCH_COLUMN);
+    jout(['values'=>$rows]);
+}
+
+// 試算 builder（存檔前預覽某月結果）
+case 'preview_builder': {
+    $spec = json_decode((string)($_POST['spec'] ?? '{}'), true);
+    if (!is_array($spec)) jerr('spec 格式錯誤');
+    $year = max(2025, min($curY, (int)($_POST['year'] ?? $curY)));
+    $month = (int)($_POST['month'] ?? (int)date('n'));
+    $res = kpi_as_builder_compute($db, $year, $month, $spec);
+    jout(['result'=>$res]);
+}
+
+case 'catalog_save': {
+    if (!$perms['isAdmin']) jerr('資料表登記僅系統管理者可操作（需了解資料庫結構）', 403);
+    $dsId = (int)($_POST['ds_id'] ?? 0);
+    $label = mb_substr(trim((string)($_POST['ds_label'] ?? '')), 0, 60);
+    $table = trim((string)($_POST['table_name'] ?? ''));
+    $dateCol = trim((string)($_POST['date_column'] ?? ''));
+    $note = mb_substr(trim((string)($_POST['note'] ?? '')), 0, 200);
+    $active = (int)($_POST['is_active'] ?? 1) ? 1 : 0;
+    if ($label === '' || !kpi_as_ident_ok($table) || !kpi_as_ident_ok($dateCol))
+        jerr('名稱必填；資料表與日期欄需為合法識別字');
+    // 驗證表與日期欄真的存在
+    $chk = $db->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?");
+    $chk->execute([$table, $dateCol]);
+    if (!$chk->fetchColumn()) jerr("資料表 {$table} 或日期欄 {$dateCol} 不存在");
+    if ($dsId > 0) {
+        $st = $db->prepare("UPDATE kpi_ds_catalog SET ds_label=?, table_name=?, date_column=?, note=?, is_active=? WHERE ds_id=?");
+        $st->execute([$label, $table, $dateCol, $note, $active, $dsId]);
+    } else {
+        $mx = (int)$db->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM kpi_ds_catalog")->fetchColumn();
+        $st = $db->prepare("INSERT INTO kpi_ds_catalog (ds_label, table_name, date_column, note, is_active, sort_order, Created_By) VALUES (?,?,?,?,?,?,?)");
+        $st->execute([$label, $table, $dateCol, $note, $active, $mx, $u['user_cname']]);
+        $dsId = (int)$db->lastInsertId();
+    }
+    kpi_as_log($db, null, null, null, 'catalog', 'save_ds', null, $label, $table, $u);
+    jout(['ds_id'=>$dsId]);
+}
+
+case 'catalog_del': {
+    if (!$perms['isAdmin']) jerr('僅系統管理者可刪除', 403);
+    $dsId = (int)($_POST['ds_id'] ?? 0);
+    $db->prepare("DELETE FROM kpi_ds_field WHERE ds_id=?")->execute([$dsId]);
+    $db->prepare("DELETE FROM kpi_ds_catalog WHERE ds_id=?")->execute([$dsId]);
+    kpi_as_log($db, null, null, null, 'catalog', 'del_ds', $dsId, null, null, $u);
+    jout([]);
+}
+
+case 'field_save': {
+    if (!$perms['isAdmin']) jerr('欄位登記僅系統管理者可操作', 403);
+    $fid = (int)($_POST['field_id'] ?? 0);
+    $dsId = (int)($_POST['ds_id'] ?? 0);
+    $label = mb_substr(trim((string)($_POST['field_label'] ?? '')), 0, 60);
+    $col = trim((string)($_POST['column_name'] ?? ''));
+    $role = in_array($_POST['role'] ?? '', ['filter','measure'], true) ? $_POST['role'] : 'filter';
+    $dtype = in_array($_POST['data_type'] ?? '', ['text','number','date'], true) ? $_POST['data_type'] : 'text';
+    $active = (int)($_POST['is_active'] ?? 1) ? 1 : 0;
+    if ($label === '' || !kpi_as_ident_ok($col)) jerr('欄位中文名必填；欄位名需為合法識別字');
+    // 驗證欄位存在於該來源的表
+    $st = $db->prepare("SELECT table_name FROM kpi_ds_catalog WHERE ds_id=?");
+    $st->execute([$dsId]);
+    $tbl = $st->fetchColumn();
+    if (!$tbl) jerr('資料來源不存在');
+    $chk = $db->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?");
+    $chk->execute([$tbl, $col]);
+    if (!$chk->fetchColumn()) jerr("欄位 {$col} 不存在於資料表 {$tbl}");
+    if ($fid > 0) {
+        $st = $db->prepare("UPDATE kpi_ds_field SET field_label=?, column_name=?, role=?, data_type=?, is_active=? WHERE field_id=?");
+        $st->execute([$label, $col, $role, $dtype, $active, $fid]);
+    } else {
+        $mx = (int)$db->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM kpi_ds_field WHERE ds_id=" . (int)$dsId)->fetchColumn();
+        $st = $db->prepare("INSERT INTO kpi_ds_field (ds_id, field_label, column_name, role, data_type, sort_order) VALUES (?,?,?,?,?,?)");
+        $st->execute([$dsId, $label, $col, $role, $dtype, $mx]);
+        $fid = (int)$db->lastInsertId();
+    }
+    kpi_as_log($db, null, null, null, 'catalog', 'save_field', null, $label, $col, $u);
+    jout(['field_id'=>$fid]);
+}
+
+case 'field_del': {
+    if (!$perms['isAdmin']) jerr('僅系統管理者可刪除', 403);
+    $fid = (int)($_POST['field_id'] ?? 0);
+    $db->prepare("DELETE FROM kpi_ds_field WHERE field_id=?")->execute([$fid]);
+    kpi_as_log($db, null, null, null, 'catalog', 'del_field', $fid, null, null, $u);
+    jout([]);
 }
 
 default:
