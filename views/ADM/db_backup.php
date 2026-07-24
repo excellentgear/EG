@@ -61,6 +61,8 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
 <style>
 :root{--amber:#d99a4e;--amber-d:#b06f27;--sand:#faf3e7;--ink:#3a2c1a;--coral:#dd5138;}
 .bk-wrap{padding:0 16px 40px;}
+.pm-tab-btn{border:none;background:transparent;padding:7px 16px;border-radius:6px;font-size:14px;font-weight:600;color:#9a7b4f;cursor:pointer;transition:all .2s;}
+.pm-tab-btn.active{background:#fffdf9;color:var(--amber-d);box-shadow:0 2px 5px rgba(0,0,0,.08);}
 .bk-card{border:1px solid #e6d8c3;border-radius:8px;background:#fffdf9;padding:14px 16px;margin-bottom:14px;}
 .bk-card h4{margin:0 0 10px;color:var(--amber-d);font-size:15px;}
 .bk-stat{display:flex;flex-wrap:wrap;gap:20px;}
@@ -104,6 +106,15 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
   <div class="clearfix"></div>
 
   <div class="bk-wrap">
+    <!-- ═══ 第一層分頁 ═══ -->
+    <div style="display:flex;gap:4px;background:#f3ead9;border-radius:8px;padding:4px;margin-bottom:12px;flex-wrap:wrap;">
+      <button class="pm-tab-btn active" id="ttbBackup" onclick="topTab('backup',this)">💾 備份管理</button>
+      <button class="pm-tab-btn" id="ttbRescue" style="display:none;" onclick="topTab('rescue',this)">🛟 誤刪救援</button>
+      <?php if ($IS_ADMIN): ?><button class="pm-tab-btn" id="ttbMigrate" onclick="topTab('migrate',this);if(!pmLoaded)pmLoad();">🔁 路徑遷移工具</button><?php endif; ?>
+    </div>
+
+    <!-- ═══ Tab: 備份管理 ═══ -->
+    <div class="top-tab" id="top-tab-backup">
     <!-- 狀態卡 -->
     <div class="bk-card">
       <h4><i class="fa fa-dashboard"></i> 目前狀態</h4>
@@ -134,13 +145,27 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
       </div>
     </div>
 
-    <!-- 路徑遷移工具（換NAS/換機;僅管理員）-->
+    <!-- 備份列表 -->
+    <div class="bk-card">
+      <h4><i class="fa fa-history"></i> 備份紀錄</h4>
+      <div style="overflow-x:auto;">
+        <table class="bk-tbl">
+          <thead><tr>
+            <th>時間</th><th>檔名</th><th>大小</th><th>觸發</th><th>狀態</th><th>雲端</th><th>備註</th><th>操作</th>
+          </tr></thead>
+          <tbody id="bkBody"><tr><td colspan="8" style="padding:20px;color:#999;">載入中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    </div><!-- /top-tab-backup -->
+
+    <!-- ═══ Tab: 路徑遷移工具（換NAS/換機;僅管理員）═══ -->
     <?php if ($IS_ADMIN): ?>
+    <div class="top-tab" id="top-tab-migrate" style="display:none;">
     <div class="bk-card" id="pmCard">
-      <h4 style="cursor:pointer;" onclick="$('#pmBody').toggle(); if($('#pmBody').is(':visible')&&!pmLoaded)pmLoad();">
-        <i class="fa fa-exchange"></i> 路徑遷移工具（換 NAS / 換主機 / 測試機用）
-        <small style="color:#9a7b4f;font-weight:400;">點此展開——盤點全系統 NAS 路徑,一鍵把舊位置對應到新位置,並可搬移檔案</small></h4>
-      <div id="pmBody" style="display:none;">
+      <h4><i class="fa fa-exchange"></i> 路徑遷移工具（換 NAS / 換主機 / 測試機用）
+        <small style="color:#9a7b4f;font-weight:400;">盤點全系統 NAS 路徑,一鍵把舊位置對應到新位置,並可搬移檔案</small></h4>
+      <div id="pmBody">
         <!-- 頁內分頁（仿 stock.php tab-sw）-->
         <div style="display:flex;gap:4px;background:#f3ead9;border-radius:8px;padding:4px;margin-bottom:10px;flex-wrap:wrap;">
           <button class="pm-tab-btn active" data-t="overview" onclick="pmTab('overview',this)">📋 路徑總覽</button>
@@ -247,14 +272,12 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
         </div>
       </div>
     </div>
-    <style>
-    .pm-tab-btn{border:none;background:transparent;padding:6px 14px;border-radius:6px;font-size:13px;font-weight:600;color:#9a7b4f;cursor:pointer;transition:all .2s;}
-    .pm-tab-btn.active{background:#fffdf9;color:var(--amber-d);box-shadow:0 2px 5px rgba(0,0,0,.08);}
-    </style>
+    </div><!-- /top-tab-migrate -->
     <?php endif; ?>
 
-    <!-- 誤刪救援（部分還原）Phase 2 -->
-    <div class="bk-card" id="partialCard" style="display:none;">
+    <!-- ═══ Tab: 誤刪救援（部分還原）Phase 2 ═══ -->
+    <div class="top-tab" id="top-tab-rescue" style="display:none;">
+    <div class="bk-card" id="partialCard">
       <h4><i class="fa fa-life-ring"></i> 誤刪救援（部分還原）
         <small style="color:#9a7b4f;font-weight:400;">不確定資料在哪張表也能找：先把某個備份載入檢視區，再搜尋或掃描差異，勾選要救回的列</small></h4>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
@@ -307,19 +330,7 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
         </div>
       </div>
     </div>
-
-    <!-- 備份列表 -->
-    <div class="bk-card">
-      <h4><i class="fa fa-history"></i> 備份紀錄</h4>
-      <div style="overflow-x:auto;">
-        <table class="bk-tbl">
-          <thead><tr>
-            <th>時間</th><th>檔名</th><th>大小</th><th>觸發</th><th>狀態</th><th>雲端</th><th>備註</th><th>操作</th>
-          </tr></thead>
-          <tbody id="bkBody"><tr><td colspan="8" style="padding:20px;color:#999;">載入中…</td></tr></tbody>
-        </table>
-      </div>
-    </div>
+    </div><!-- /top-tab-rescue -->
   </div>
 </div></div></div>
 
@@ -443,7 +454,7 @@ function loadList(){
   $.getJSON(API, {action:'list'}, function(res){
     if(!res.success){ alert(res.message||'讀取失敗'); return; }
     PERM = res.perm||{};
-    if(PERM.restore_partial){ $('#partialCard').show(); pollViewStatus(); }
+    if(PERM.restore_partial){ $('#ttbRescue').show(); pollViewStatus(); }
     const c = res.config||{};
     $('#stInterval').text(c.interval_days);
     $('#stKeep').text(c.keep_count);
@@ -603,6 +614,13 @@ function delRole(){ if(!curRoleId) return; if(!confirm('確定刪除此角色？
 function saveFeats(){ if(!curRoleId) return;
   const feats=$('.featcb:checked').map(function(){return this.value;}).get();
   $.post(RAPI,{action:'save_role_features',role_id:curRoleId,features:JSON.stringify(feats)},function(r){ alert(r.success?'已儲存功能':r.message); },'json'); }
+
+// ── 第一層分頁切換 ──
+function topTab(t,btn){
+  $('.top-tab').hide(); $('#top-tab-'+t).show();
+  $('#ttbBackup,#ttbRescue,#ttbMigrate').removeClass('active');
+  if(btn) $(btn).addClass('active');
+}
 
 // ── 路徑遷移工具（僅管理員）──
 let pmLoaded=false, pmCopyTimer=null, mbTimer=null;
@@ -806,7 +824,7 @@ function viewLoad(id){
   scanDone=false; $('#vwScanList').empty(); $('#vwResultWrap').hide(); $('#vwResultBody').empty();
   $.post(API,{action:'view_load',id:id},function(res){
     alert(res.message||'');
-    if(res.success){ $('#vwTools').hide(); pollViewStatus(); $('html,body').animate({scrollTop:$('#partialCard').offset().top-70},300); }
+    if(res.success){ $('#vwTools').hide(); pollViewStatus(); topTab('rescue',document.getElementById('ttbRescue')); $('html,body').animate({scrollTop:0},300); }
   },'json');
 }
 function renderRows(rows){
