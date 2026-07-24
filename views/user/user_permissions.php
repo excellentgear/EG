@@ -338,6 +338,7 @@ $_profitRoles   = [];  $_userProfitRoles = [];
 $_asdocRoles    = [];  $_userAsdocRoles  = [];
 $_mdataRoles    = [];  $_userMdataRoles  = [];
 $_dbbkRoles     = [];  $_userDbbkRoles   = [];
+$_stampRoles    = [];  $_userStampRoles  = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -359,6 +360,7 @@ try {
     $st->execute(['as_doc']);    $_asdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['master_data']); $_mdataRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['db_backup']);   $_dbbkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['stamp']);       $_stampRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -426,6 +428,10 @@ try {
     $st->execute(['db_backup']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userDbbkRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['stamp']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userStampRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -627,6 +633,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'ptask-role-section'     => '個人工作紀錄',
                                         'asdoc-role-section'     => 'AS文件管理',
                                         'dbbk-role-section'      => '資料庫備份',
+                                        'stamp-role-section'     => '圖章管理',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -992,6 +999,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('profit', 'order_profit', '訂單毛利分析', 'fa-line-chart', '#c0392b',
                         '為每位使用者指派「訂單毛利分析」頁的檢視資格。<strong>毛利屬敏感資料</strong>，未被指派角色者無法開啟本頁；此功能不分細部操作。管理者固定可用。',
                         $_profitRoles, $_userProfitRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('stamp', 'stamp', '圖章管理', 'fa-certificate', '#c0762c',
+                        '為每位使用者指派「圖章管理員」角色（圖章清冊登記核發/停用、掃描實體章上傳與日期帶設定，頁面：圖章管理）。未被指派者仍可檢閱清冊與匯出；管理者固定可管理。',
+                        $_stampRoles, $_userStampRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('ptask', 'personal_task', '個人工作紀錄', 'fa-sticky-note-o', '#27ae60',
                         '為每位使用者指派「個人工作紀錄」功能的使用資格。此功能不分細部操作；每人只看得到自己建立的紀錄（含管理者也看不到他人內容）。',
