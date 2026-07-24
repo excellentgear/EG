@@ -118,6 +118,105 @@ function alr_perm_changes(?string $json): string {
     return implode('；', $parts);
 }
 
+/* ══════════════════════ 頁面使用統計（第三分頁；資料量小，後端一次算完全部） ══════════════════════ */
+
+function pvr_build_dataset(PDO $pdo): array {
+    // 1. 統計彙總（近30/90天以「今天含當日往前推」計）
+    $stats = $pdo->query("
+        SELECT page_path,
+               SUM(CASE WHEN visit_date >= CURDATE() - INTERVAL 29 DAY THEN visit_count ELSE 0 END) AS c30,
+               SUM(CASE WHEN visit_date >= CURDATE() - INTERVAL 89 DAY THEN visit_count ELSE 0 END) AS c90,
+               COUNT(DISTINCT CASE WHEN visit_date >= CURDATE() - INTERVAL 89 DAY THEN user_id END) AS users90,
+               SUM(visit_count) AS c_all,
+               MAX(last_visit_at) AS last_visit
+        FROM page_visit_stats
+        GROUP BY page_path")->fetchAll(PDO::FETCH_ASSOC);
+
+    $byPath = [];
+    foreach ($stats as $s) {
+        $byPath[$s['page_path']] = [
+            'page_path' => $s['page_path'],
+            'menu_name' => null, 'group_name' => null, 'on_menu' => 0,
+            'c30' => (int)$s['c30'], 'c90' => (int)$s['c90'],
+            'users90' => (int)$s['users90'], 'c_all' => (int)$s['c_all'],
+            'last_visit' => $s['last_visit'], 'users' => [],
+        ];
+    }
+
+    // 2. 選單頁對照：page_url 去掉 /EGsystem 前綴後與 page_path 比對；選單上沒統計的頁補零列
+    $menu = $pdo->query("
+        SELECT p.page_name, p.page_url, g.group_name
+        FROM system_module_pages p
+        LEFT JOIN system_module_groups g ON g.group_id = p.group_id
+        WHERE p.page_url IS NOT NULL AND p.page_url <> ''")->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($menu as $m) {
+        $url = str_replace('\\', '/', trim($m['page_url']));
+        $url = preg_replace('/[?#].*$/', '', $url);              // 去 query string
+        if (stripos($url, '/EGsystem/') === 0) $url = substr($url, strlen('/EGsystem'));
+        if ($url === '' || substr($url, -4) !== '.php') continue; // 外部連結等不比對
+        if (!isset($byPath[$url])) {
+            $byPath[$url] = [
+                'page_path' => $url,
+                'menu_name' => $m['page_name'], 'group_name' => $m['group_name'], 'on_menu' => 1,
+                'c30' => 0, 'c90' => 0, 'users90' => 0, 'c_all' => 0, 'last_visit' => null, 'users' => [],
+            ];
+        } else {
+            $byPath[$url]['on_menu']    = 1;
+            $byPath[$url]['menu_name']  = $m['page_name'];
+            $byPath[$url]['group_name'] = $m['group_name'];
+        }
+    }
+
+    // 3. 近90天各頁使用者名單（量小，抓回 PHP 組名字；user 表為 latin1 欄位，避免在 SQL 內混用定序）
+    $names = alr_user_names($pdo);
+    $uRows = $pdo->query("
+        SELECT DISTINCT page_path, user_id
+        FROM page_visit_stats
+        WHERE visit_date >= CURDATE() - INTERVAL 89 DAY")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($uRows as $u) {
+        if (isset($byPath[$u['page_path']])) {
+            $byPath[$u['page_path']]['users'][] = $names[(int)$u['user_id']] ?? ('#' . $u['user_id']);
+        }
+    }
+
+    $rows = array_values($byPath);
+    foreach ($rows as &$r) {
+        $r['dead_menu'] = ($r['on_menu'] === 1 && $r['c90'] === 0) ? 1 : 0;   // 掛選單但90天零使用（核心產出）
+        sort($r['users']);
+        $r['users_str'] = implode('、', $r['users']);
+    }
+    unset($r);
+    return $rows;
+}
+
+function pvr_filter(array $rows, string $kw, string $scope): array {
+    if ($kw !== '') {
+        $rows = array_values(array_filter($rows, function ($r) use ($kw) {
+            return stripos($r['page_path'], $kw) !== false
+                || ($r['menu_name'] !== null && stripos($r['menu_name'], $kw) !== false)
+                || ($r['group_name'] !== null && stripos($r['group_name'], $kw) !== false)
+                || ($r['users_str'] !== '' && stripos($r['users_str'], $kw) !== false);
+        }));
+    }
+    if ($scope === 'menu')      $rows = array_values(array_filter($rows, fn($r) => $r['on_menu'] === 1));
+    elseif ($scope === 'dead')  $rows = array_values(array_filter($rows, fn($r) => $r['dead_menu'] === 1));
+    return $rows;
+}
+
+function pvr_sort(array &$rows, string $sort, string $dir): void {
+    $desc = ($dir === 'desc');
+    usort($rows, function ($a, $b) use ($sort, $desc) {
+        $va = $a[$sort] ?? null; $vb = $b[$sort] ?? null;
+        if ($va === null && $vb === null) $c = 0;
+        elseif ($va === null) return 1;          // null 一律排最後
+        elseif ($vb === null) return -1;
+        else $c = (is_numeric($va) && is_numeric($vb)) ? ($va <=> $vb) : strcmp(strval($va), strval($vb));
+        if ($c === 0) $c = strcmp($a['page_path'], $b['page_path']);  // 穩定排序
+        return $desc ? -$c : $c;
+    });
+}
+
 /* ══════════════════════ AJAX ══════════════════════ */
 
 if ($isAjax) {
@@ -137,6 +236,82 @@ if ($isAjax) {
             $out = [];
             foreach ($ips as $ip) $out[$ip] = $hosts[$ip] ?? null;
             echo json_encode(['success'=>true, 'hosts'=>$out]);
+            exit;
+        }
+
+        /* ── 頁面使用統計：單一頁面的使用者明細（每人次數＋最初～最後使用區間） ── */
+        if ($action === 'pv_detail') {
+            header('Content-Type: application/json; charset=utf-8');
+            $pp = trim($_GET['page_path'] ?? '');
+            $st = $pdo->prepare("
+                SELECT user_id,
+                       SUM(CASE WHEN visit_date >= CURDATE() - INTERVAL 29 DAY THEN visit_count ELSE 0 END) AS c30,
+                       SUM(CASE WHEN visit_date >= CURDATE() - INTERVAL 89 DAY THEN visit_count ELSE 0 END) AS c90,
+                       SUM(visit_count) AS c_all,
+                       MIN(visit_date) AS first_date,
+                       MAX(last_visit_at) AS last_visit,
+                       COUNT(DISTINCT visit_date) AS days_used
+                FROM page_visit_stats
+                WHERE page_path = ?
+                GROUP BY user_id
+                ORDER BY c90 DESC, c_all DESC");
+            $st->execute([$pp]);
+            $list = $st->fetchAll(PDO::FETCH_ASSOC);
+            $names = alr_user_names($pdo);
+            foreach ($list as &$l) {
+                $l['name'] = $names[(int)$l['user_id']] ?? ('#' . $l['user_id']);
+                foreach (['c30','c90','c_all','days_used'] as $k) $l[$k] = (int)$l[$k];
+            }
+            unset($l);
+            echo json_encode(['success'=>true, 'page_path'=>$pp, 'rows'=>$list]);
+            exit;
+        }
+
+        /* ── 頁面使用統計：清單 / CSV 匯出 ── */
+        if ($action === 'pv_list' || $action === 'pv_export') {
+            $scope  = $_GET['scope'] ?? 'all';
+            if (!in_array($scope, ['all','menu','dead'], true)) $scope = 'all';
+            $sort   = $_GET['sort'] ?? 'c90';
+            $dir    = ($_GET['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
+            $allowed = ['page_path','menu_name','group_name','c30','c90','users90','users_str','c_all','last_visit','on_menu','dead_menu'];
+            if (!in_array($sort, $allowed, true)) $sort = 'c90';
+
+            $all = pvr_build_dataset($pdo);
+            // 統計卡：一律以「全部資料」計，非僅當前頁/篩選
+            $summary = [
+                'pages'      => count($all),
+                'menu_pages' => count(array_filter($all, fn($r) => $r['on_menu'] === 1)),
+                'dead_menu'  => count(array_filter($all, fn($r) => $r['dead_menu'] === 1)),
+                'visits90'   => array_sum(array_column($all, 'c90')),
+                'first_date' => null,
+            ];
+            try { $summary['first_date'] = $pdo->query("SELECT MIN(visit_date) FROM page_visit_stats")->fetchColumn() ?: null; } catch (Exception $e) {}
+
+            $rows = pvr_filter($all, $kw, $scope);
+            pvr_sort($rows, $sort, $dir);
+
+            if ($action === 'pv_export') {
+                header('Content-Type: text/csv; charset=utf-8');
+                header('Content-Disposition: attachment; filename="page_visit_report_' . date('Ymd_His') . '.csv"');
+                $out = fopen('php://output', 'w');
+                fwrite($out, "\xEF\xBB\xBF");
+                fputcsv($out, ['頁面路徑','選單名稱','選單群組','是否在選單','近30天次數','近90天次數','90天使用人數','使用者（近90天）','累計次數','最後使用時間','選單頁90天零使用']);
+                foreach ($rows as $r) {
+                    fputcsv($out, [$r['page_path'], $r['menu_name'], $r['group_name'], $r['on_menu'] ? '是' : '否',
+                                   $r['c30'], $r['c90'], $r['users90'], $r['users_str'], $r['c_all'],
+                                   $r['last_visit'] ?: '（從未使用）', $r['dead_menu'] ? '★' : '']);
+                }
+                fclose($out);
+                exit;
+            }
+
+            $page = max(1, intval($_GET['page'] ?? 1));
+            $size = intval($_GET['size'] ?? 10);
+            if (!in_array($size, [5,10,20,50], true)) $size = 10;
+            $total = count($rows);
+            $paged = array_slice($rows, ($page - 1) * $size, $size);
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['success'=>true, 'summary'=>$summary, 'total'=>$total, 'page'=>$page, 'size'=>$size, 'rows'=>$paged]);
             exit;
         }
 
@@ -334,6 +509,24 @@ if ($isAjax) {
             background:#DD5138; color:#fff; white-space:nowrap; }
         .badge-act  { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;
             background:#F5EBDD; color:#8B5E3C; white-space:nowrap; }
+
+        /* 頁面使用統計分頁：可點的統計卡（切換篩選範圍）＋狀態徽章（暖色盤，同語意同色） */
+        .stat-card[data-scope] { cursor:pointer; transition:transform .1s, box-shadow .1s; }
+        .stat-card[data-scope]:hover { transform:translateY(-2px); box-shadow:0 5px 15px rgba(0,0,0,.1); }
+        .stat-card.c-amber.active { box-shadow:0 0 0 3px #F0A24B; }
+        .stat-card.c-sand.active  { box-shadow:0 0 0 3px #C89B6D; }
+        .stat-card.c-coral.active { box-shadow:0 0 0 3px #DD5138; }
+        td.num, th.num { text-align:right; }
+        table.alr-table tbody tr.dead-row { background:#FDF0EE; }
+        table.alr-table tbody tr.dead-row:hover { background:#FBE5E1; }
+        .badge-dead { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;
+            background:#DD5138; color:#fff; white-space:nowrap; }
+        .badge-menu { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;
+            background:#F7E0BD; color:#5B4636; white-space:nowrap; }
+        .badge-off  { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;
+            background:#F0EAE0; color:#8a7a66; white-space:nowrap; }
+        .user-link { color:#B25E1F; cursor:pointer; border-bottom:1px dashed #C89B6D; }
+        .user-link:hover { color:#8B5E3C; }
         .role-hint { color:#8a7a66; font-size:12px; cursor:pointer; }
         .no-access-box { background:#fff; border-radius:8px; padding:60px 20px; text-align:center; margin-top:40px; }
         .note-box { font-size:12px; color:#a08e78; margin-top:8px; line-height:1.7; }
@@ -373,6 +566,7 @@ if ($isAjax) {
       <div class="alr-tabs">
         <div class="alr-tab active" data-tab="login"><i class="fa fa-sign-in"></i> 登入紀錄</div>
         <div class="alr-tab" data-tab="perm"><i class="fa fa-key"></i> 權限異動</div>
+        <div class="alr-tab" data-tab="pv"><i class="fa fa-bar-chart"></i> 頁面使用統計</div>
       </div>
 
       <!-- ══════════ 分頁一：登入紀錄 ══════════ -->
@@ -508,7 +702,95 @@ if ($isAjax) {
           </div>
         </div>
       </div>
+
+      <!-- ══════════ 分頁三：頁面使用統計 ══════════ -->
+      <div id="tab-pv" style="display:none;">
+        <div class="stats-container">
+          <div class="stat-card c-brown active" data-scope="all">
+            <div class="stat-value" id="vCardPages">–</div>
+            <div class="stat-label">追蹤中頁面數（點我看全部）</div>
+            <div class="stat-sub" id="vCardSince">統計起算日 –</div>
+          </div>
+          <div class="stat-card c-sand" data-scope="menu">
+            <div class="stat-value" id="vCardMenu">–</div>
+            <div class="stat-label">選單頁面數（點我篩選）</div>
+            <div class="stat-sub">system_module_pages 掛載中</div>
+          </div>
+          <div class="stat-card c-coral" data-scope="dead">
+            <div class="stat-value" id="vCardDead">–</div>
+            <div class="stat-label">選單頁 90 天零使用（點我篩選）</div>
+            <div class="stat-sub">下架/改良候選（核心指標）</div>
+          </div>
+          <div class="stat-card c-amber">
+            <div class="stat-value" id="vCardVisits">–</div>
+            <div class="stat-label">近 90 天總開啟次數</div>
+            <div class="stat-sub">全站合計</div>
+          </div>
+        </div>
+
+        <div class="filter-bar">
+          <input type="text" id="vKw" class="form-control input-sm eg-in eg-v eg-live" placeholder="頁面路徑 / 選單名稱 / 群組 / 使用者（即時篩選）" style="width:270px;">
+          <div style="margin-left:auto; display:flex; gap:8px;">
+            <button class="btn btn-info btn-sm" id="btnPvCsv"><i class="fa fa-file-excel-o"></i> 轉 CSV</button>
+            <button class="btn btn-info btn-sm" id="btnPvPrint"><i class="fa fa-print"></i> 列印 / PDF</button>
+          </div>
+        </div>
+
+        <div class="main-card">
+          <div class="table-toolbar">
+            <div style="color:#8a7a66;font-size:12px;">
+              預設依<b>近90天次數由大到小</b>排；<span class="badge-dead">選單零使用</span>列標紅，點「選單零使用」卡片可只看該清單。點欄位標題可排序。
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <div id="vPageInfo" style="color:#8a7a66;font-size:12px;"></div>
+              <select id="vSize" class="form-control input-sm" style="width:80px;">
+                <option value="5">5</option><option value="10" selected>10</option>
+                <option value="20">20</option><option value="50">50</option>
+              </select>
+              <button class="btn btn-default btn-xs" id="vPrev"><i class="fa fa-chevron-left"></i></button>
+              <span id="vPageNum">1</span>
+              <button class="btn btn-default btn-xs" id="vNext"><i class="fa fa-chevron-right"></i></button>
+            </div>
+          </div>
+          <div style="overflow-x:auto;width:100%;">
+            <table class="table alr-table" id="vTable">
+              <thead>
+                <tr>
+                  <th data-sort="page_path">頁面路徑<span class="sort-ind"></span></th>
+                  <th data-sort="menu_name">選單名稱<span class="sort-ind"></span></th>
+                  <th data-sort="group_name">選單群組<span class="sort-ind"></span></th>
+                  <th class="num" data-sort="c30">近30天<span class="sort-ind"></span></th>
+                  <th class="num" data-sort="c90">近90天<span class="sort-ind"></span></th>
+                  <th class="num" data-sort="users90">90天人數<span class="sort-ind"></span></th>
+                  <th data-sort="users_str">使用者（近90天）<span class="sort-ind"></span></th>
+                  <th class="num" data-sort="c_all">累計<span class="sort-ind"></span></th>
+                  <th data-sort="last_visit">最後使用<span class="sort-ind"></span></th>
+                  <th data-sort="dead_menu">狀態<span class="sort-ind"></span></th>
+                </tr>
+              </thead>
+              <tbody id="vTbody"><tr><td colspan="10" class="text-center text-muted">載入中...</td></tr></tbody>
+            </table>
+          </div>
+          <div class="note-box">
+            ．記錄方式：所有走共用側欄的頁面每次「開啟」記一筆（頁 × 日 × 人 彙總）；AJAX 請求不計。統計自起算日起累積，<b>累積 2–3 個月後的近90天數字才有代表性</b>。<br>
+            ．「選單零使用」＝掛在 system_module_pages 選單上、但近 90 天沒有任何人開啟過——為下架或改良的頭號候選。<br>
+            ．未掛選單但有使用紀錄的頁面（直接輸入網址、由其他頁跳轉，如批圖編輯器）也會列出，選單名稱為空。<br>
+            ．統計卡與總筆數一律以「全部資料」於後端計算，非僅當前頁。
+          </div>
+        </div>
+      </div>
 <?php endif; ?>
+    </div>
+  </div>
+</div>
+
+<!-- 使用者明細 Modal（頁面使用統計分頁） -->
+<div class="modal fade" id="userModal" role="dialog" tabindex="-1">
+  <div class="modal-dialog" style="width:680px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-users"></i> 使用者明細 <small id="umSub" style="color:#8a7a66;word-break:break-all;"></small></h4></div>
+      <div class="modal-body" id="umBody" style="max-height:70vh;overflow-y:auto;">載入中...</div>
     </div>
   </div>
 </div>
@@ -520,8 +802,8 @@ if ($isAjax) {
       <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
         <h4 class="modal-title"><i class="fa fa-question-circle"></i> 系統稽核紀錄 — 角色權限說明</h4></div>
       <div class="modal-body" style="font-size:13px;line-height:1.9;">
-        <p><b>管理者</b>（is_system=1 系統管理員角色）：可檢視登入紀錄與權限異動、篩選排序、匯出 CSV / 列印。</p>
-        <p style="color:#8a7a66;">本頁屬管理者群組頁面（比照「頁面使用統計」），不設獨立角色；非管理者無法開啟。</p>
+        <p><b>管理者</b>（is_system=1 系統管理員角色）：可檢視登入紀錄、權限異動、頁面使用統計三個分頁，並篩選排序、匯出 CSV / 列印。</p>
+        <p style="color:#8a7a66;">本頁屬管理者群組頁面，不設獨立角色；非管理者無法開啟。</p>
       </div>
     </div>
   </div>
@@ -535,13 +817,15 @@ if ($isAjax) {
 (function(){
     function esc(s){ return $('<div>').text(s == null ? '' : String(s)).html(); }
 
-    /* ── 分頁切換 ── */
+    /* ── 分頁切換（各分頁首次開啟才載入） ── */
     $('.alr-tab').on('click', function(){
         $('.alr-tab').removeClass('active'); $(this).addClass('active');
         var t = $(this).data('tab');
         $('#tab-login').toggle(t === 'login');
         $('#tab-perm').toggle(t === 'perm');
+        $('#tab-pv').toggle(t === 'pv');
         if (t === 'perm' && !pState.loaded) loadPerm();
+        if (t === 'pv'   && !vState.loaded) loadPv();
     });
 
     /* ══════════ 登入紀錄 ══════════ */
@@ -680,38 +964,149 @@ if ($isAjax) {
     });
     $('#btnPermPrint').on('click', function(){ window.print(); });
 
+    /* ══════════ 頁面使用統計 ══════════ */
+    var vState = { scope:'all', sort:'c90', dir:'desc', page:1, size:10, loaded:false, lastRows:[] };
+
+    function vParams(){
+        return { kw: $('#vKw').val().trim(), scope: vState.scope,
+                 sort: vState.sort, dir: vState.dir, page: vState.page, size: vState.size };
+    }
+
+    function loadPv(){
+        vState.loaded = true;
+        var p = vParams(); p.action = 'pv_list';
+        $.getJSON('audit_log_report.php', p, function(res){
+            if (!res.success) { $('#vTbody').html('<tr><td colspan="10" class="text-center text-danger">' + esc(res.error) + '</td></tr>'); return; }
+            $('#vCardPages').text(res.summary.pages);
+            $('#vCardMenu').text(res.summary.menu_pages);
+            $('#vCardDead').text(res.summary.dead_menu);
+            $('#vCardVisits').text(res.summary.visits90);
+            $('#vCardSince').text('統計起算日 ' + (res.summary.first_date || '（尚無資料）'));
+
+            var totalPages = Math.max(1, Math.ceil(res.total / vState.size));
+            if (vState.page > totalPages) { vState.page = totalPages; loadPv(); return; }
+            $('#vPageNum').text(vState.page + ' / ' + totalPages);
+            $('#vPageInfo').text('共 ' + res.total + ' 筆');
+
+            if (!res.rows.length) { $('#vTbody').html('<tr><td colspan="10" class="text-center text-muted">無符合資料</td></tr>'); return; }
+            var html = '';
+            res.rows.forEach(function(r, i){
+                var badge = r.dead_menu == 1 ? '<span class="badge-dead">選單零使用</span>'
+                          : (r.on_menu == 1 ? '<span class="badge-menu">選單頁</span>' : '<span class="badge-off">未掛選單</span>');
+                var users = r.users90 > 0
+                          ? '<span class="user-link" data-idx="' + i + '" title="點我看每人使用次數與期間">' + esc(r.users_str) + '</span>'
+                          : '<span style="color:#c9bba8;">—</span>';
+                html += '<tr' + (r.dead_menu == 1 ? ' class="dead-row"' : '') + '>'
+                     +  '<td style="word-break:break-all;">' + esc(r.page_path) + '</td>'
+                     +  '<td>' + esc(r.menu_name || '') + '</td>'
+                     +  '<td>' + esc(r.group_name || '') + '</td>'
+                     +  '<td class="num">' + r.c30 + '</td>'
+                     +  '<td class="num"><b>' + r.c90 + '</b></td>'
+                     +  '<td class="num">' + r.users90 + '</td>'
+                     +  '<td style="max-width:220px;">' + users + '</td>'
+                     +  '<td class="num">' + r.c_all + '</td>'
+                     +  '<td>' + esc(r.last_visit || '（從未使用）') + '</td>'
+                     +  '<td>' + badge + '</td>'
+                     +  '</tr>';
+            });
+            vState.lastRows = res.rows;
+            $('#vTbody').html(html);
+            $('#vTable thead th .sort-ind').text('');
+            $('#vTable thead th[data-sort="' + vState.sort + '"] .sort-ind').text(vState.dir === 'asc' ? '▲' : '▼');
+        }).fail(function(xhr){
+            $('#vTbody').html('<tr><td colspan="10" class="text-center text-danger">載入失敗（' + xhr.status + '）：請重新整理或稍後再試</td></tr>');
+        });
+    }
+
+    $('#vTable thead').on('click', 'th[data-sort]', function(){
+        var s = $(this).data('sort');
+        if (vState.sort === s) vState.dir = (vState.dir === 'asc' ? 'desc' : 'asc');
+        else { vState.sort = s; vState.dir = (s === 'page_path' || s === 'menu_name' || s === 'group_name' || s === 'users_str') ? 'asc' : 'desc'; }
+        vState.page = 1; loadPv();
+    });
+
+    /* 範圍切換（點統計卡篩選） */
+    $('#tab-pv .stat-card[data-scope]').on('click', function(){
+        vState.scope = $(this).data('scope'); vState.page = 1;
+        $('#tab-pv .stat-card[data-scope]').removeClass('active').filter('[data-scope="' + vState.scope + '"]').addClass('active');
+        loadPv();
+    });
+
+    /* 使用者明細：每人次數＋最初～最後使用區間 */
+    $('#vTbody').on('click', '.user-link', function(){
+        var r = (vState.lastRows || [])[$(this).data('idx')];
+        if (!r) return;
+        $('#umSub').text(r.page_path + (r.menu_name ? '（' + r.menu_name + '）' : ''));
+        $('#umBody').html('載入中...');
+        $('#userModal').modal('show');
+        $.getJSON('audit_log_report.php', { action:'pv_detail', page_path: r.page_path }, function(res){
+            if (!res.success) { $('#umBody').html('<span class="text-danger">' + esc(res.error) + '</span>'); return; }
+            if (!res.rows.length) { $('#umBody').html('<span class="text-muted">尚無使用紀錄</span>'); return; }
+            var h = '<table class="table" style="margin-bottom:0;">'
+                  + '<thead><tr><th>使用者</th><th style="text-align:right;">近30天</th>'
+                  + '<th style="text-align:right;">近90天</th><th style="text-align:right;">累計</th>'
+                  + '<th style="text-align:right;">使用天數</th><th>使用期間（最初～最後）</th></tr></thead><tbody>';
+            res.rows.forEach(function(u){
+                var range = (u.first_date || '?') + ' ～ ' + (u.last_visit ? String(u.last_visit).slice(0, 16) : '?');
+                h += '<tr><td>' + esc(u.name) + '</td>'
+                   + '<td style="text-align:right;">' + u.c30 + '</td>'
+                   + '<td style="text-align:right;"><b>' + u.c90 + '</b></td>'
+                   + '<td style="text-align:right;">' + u.c_all + '</td>'
+                   + '<td style="text-align:right;">' + u.days_used + '</td>'
+                   + '<td>' + esc(range) + '</td></tr>';
+            });
+            h += '</tbody></table>'
+               + '<div style="font-size:12px;color:#a08e78;margin-top:8px;">使用天數＝有開啟過本頁的不同日數；期間為統計起算日後的最初～最後使用時間。</div>';
+            $('#umBody').html(h);
+        }).fail(function(xhr){ $('#umBody').html('<span class="text-danger">載入失敗（' + xhr.status + '）</span>'); });
+    });
+
+    $('#vSize').on('change', function(){ vState.size = parseInt(this.value, 10); vState.page = 1; loadPv(); });
+    $('#vPrev').on('click', function(){ if (vState.page > 1) { vState.page--; loadPv(); } });
+    $('#vNext').on('click', function(){ vState.page++; loadPv(); });
+    $('#btnPvCsv').on('click', function(){
+        var p = vParams(); p.action = 'pv_export'; delete p.page; delete p.size;
+        location.href = 'audit_log_report.php?' + $.param(p);
+    });
+    $('#btnPvPrint').on('click', function(){ window.print(); });
+
     $('#roleHint').on('click', function(){ $('#roleModal').modal('show'); });
+
+    /* 依篩選欄所屬分頁決定重載哪個表 */
+    function reloadByScope($el){
+        if ($el.hasClass('eg-l')) { lState.page = 1; loadLogin(); }
+        else if ($el.hasClass('eg-v')) { vState.page = 1; loadPv(); }
+        else { pState.page = 1; loadPerm(); }
+    }
 
     /* 即時篩選：輸入停頓 400ms 自動查詢（依所屬分頁） */
     var liveTimer = null;
     $(document).on('input', '.eg-live', function(){
-        var isL = $(this).hasClass('eg-l');
+        var $el = $(this);
         clearTimeout(liveTimer);
-        liveTimer = setTimeout(function(){
-            if (isL) { lState.page = 1; loadLogin(); } else { pState.page = 1; loadPerm(); }
-        }, 400);
+        liveTimer = setTimeout(function(){ reloadByScope($el); }, 400);
     });
 
     /* UI 規範：雙擊清空（篩選欄＝同時解除篩選）/ 聚焦全選 / Enter 逐欄與末欄送出 */
     $(document).on('focus', '.eg-in', function(){ var el = this; setTimeout(function(){ try { el.select(); } catch(e){} }, 0); });
     $(document).on('dblclick', '.eg-in', function(){
-        if (this.value !== '') {
-            this.value = '';
-            if ($(this).hasClass('eg-l')) { lState.page = 1; loadLogin(); } else { pState.page = 1; loadPerm(); }
-        }
+        if (this.value !== '') { this.value = ''; reloadByScope($(this)); }
     });
     $(document).on('keydown', '.eg-in', function(e){
         if (e.key !== 'Enter') return;
         e.preventDefault();
-        var scope = $(this).hasClass('eg-l') ? '.eg-in.eg-l:visible' : '.eg-in.eg-p:visible';
-        var ins = $(scope);
+        var cls = $(this).hasClass('eg-l') ? '.eg-in.eg-l:visible' : ($(this).hasClass('eg-v') ? '.eg-in.eg-v:visible' : '.eg-in.eg-p:visible');
+        var ins = $(cls);
         var idx = ins.index(this);
         if (idx >= 0 && idx < ins.length - 1) ins.eq(idx + 1).focus();
-        else if ($(this).hasClass('eg-l')) { lState.page = 1; loadLogin(); }
-        else { pState.page = 1; loadPerm(); }
+        else reloadByScope($(this));
     });
 
     loadLogin();
+
+    /* 深層連結：?tab=pv / ?tab=perm 直接開對應分頁（供選單與舊 page_visit_report 轉址落點） */
+    var initTab = (new URLSearchParams(location.search)).get('tab');
+    if (initTab === 'pv' || initTab === 'perm') $('.alr-tab[data-tab="' + initTab + '"]').trigger('click');
 })();
 </script>
 <?php endif; ?>
