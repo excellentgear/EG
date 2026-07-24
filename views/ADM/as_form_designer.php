@@ -66,8 +66,8 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
   <span class="sep"></span>
   <label class="req-mini" style="margin:0;">欄數</label>
   <input type="number" class="form-control input-sm" id="gridCols" style="width:60px;" min="1" max="16">
-  <button class="btn btn-default btn-sm" id="btnAddRow" title="在選取列的上方插入一整列（未選取＝最下方加一列）"><i class="fa fa-plus"></i> 插列</button>
-  <button class="btn btn-default btn-sm" id="btnAddCol" title="在選取欄的左側插入一整欄（未選取＝最右側加一欄）"><i class="fa fa-plus"></i> 插欄</button>
+  <button class="btn btn-default btn-sm" id="btnAddRow" title="在選取列的上方插入整列；框選幾列＝插入幾列（未選取＝最下方加一列）"><i class="fa fa-plus"></i> 插列</button>
+  <button class="btn btn-default btn-sm" id="btnAddCol" title="在選取欄的左側插入整欄；框選幾欄＝插入幾欄（未選取＝最右側加一欄）"><i class="fa fa-plus"></i> 插欄</button>
   <button class="btn btn-default btn-sm" id="btnDelRow" title="刪除「整列」（選取/框選的列），下方列自動上移補位"><i class="fa fa-minus"></i> 刪整列</button>
   <button class="btn btn-default btn-sm" id="btnDelCol" title="刪除「整欄」（選取/框選的欄），右側欄自動左移補位"><i class="fa fa-minus"></i> 刪整欄</button>
   <button class="btn btn-default btn-sm" id="btnUndo" title="復原（Ctrl+Z）" disabled><i class="fa fa-undo"></i></button>
@@ -851,30 +851,31 @@ $('#gridCols').on('change',function(){
   const v=Math.max(1,Math.min(16,parseInt(this.value)||6));
   schema.grid.cols=v; this.value=v; renderEdit(); scheduleSave();
 });
-// 插列：選取列上方插入整列（跨列跨過插入點的格自動加大跨距）；未選取＝尾端加列
+// 插列：選取列上方插入（框選幾列＝插入幾列，同 Excel；跨過插入點的合併格自動加大跨距）；未選取＝尾端加一列
 $('#btnAddRow').on('click',function(){
   const rg=selRange();
   if(!rg){ editRows++; renderEdit(); return; }
-  const at=rg.r1;
+  const at=rg.r1, n=rg.r2-rg.r1+1;
   schema.cells.forEach(x=>{
     const rs=x.rs||1;
-    if(x.r>=at) x.r+=1;
-    else if(x.r+rs>at) x.rs=rs+1;
+    if(x.r>=at) x.r+=n;
+    else if(x.r+rs>at) x.rs=rs+n;
   });
-  editRows++; recalcRows(); renderEdit(); scheduleSave();
+  editRows+=n; recalcRows(); renderEdit(); scheduleSave();
 });
-// 插欄：選取欄左側插入整欄；未選取＝最右側加欄
+// 插欄：選取欄左側插入（框選幾欄＝插入幾欄，同 Excel）；未選取＝最右側加一欄
 $('#btnAddCol').on('click',function(){
-  if(schema.grid.cols>=16){ alert('欄數上限 16'); return; }
   const rg=selRange();
+  const n=rg?(rg.c2-rg.c1+1):1;
+  if(schema.grid.cols+n>16){ alert('欄數上限 16（目前 '+schema.grid.cols+'，要插入 '+n+'）'); return; }
   if(!rg){ schema.grid.cols++; $('#gridCols').val(schema.grid.cols); renderEdit(); scheduleSave(); return; }
   const at=rg.c1;
   schema.cells.forEach(x=>{
     const cs=x.cs||1;
-    if(x.c>=at) x.c+=1;
-    else if(x.c+cs>at) x.cs=cs+1;
+    if(x.c>=at) x.c+=n;
+    else if(x.c+cs>at) x.cs=cs+n;
   });
-  schema.grid.cols++; $('#gridCols').val(schema.grid.cols);
+  schema.grid.cols+=n; $('#gridCols').val(schema.grid.cols);
   renderEdit(); scheduleSave();
 });
 $('#chkHeader').on('change',function(){ schema.meta.header.show=this.checked; scheduleSave(); });
