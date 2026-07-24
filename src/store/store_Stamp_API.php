@@ -37,22 +37,84 @@ if (!$isAdmin) {
         $isAdmin = (bool)$st->fetchColumn();
     } catch (Exception $e) {}
 }
-$canManage = $isAdmin || rf_has_module_role_all($db, $uid, 'stamp');
+// 角色判定（module=stamp）：stamp_manage=圖章管理員、stamp_view=圖章檢閱（唯讀）。
+// 清冊/匯出 fail-closed：未被指派角色者（含一般登入者）一律看不到清冊內容，防止圖章被瀏覽轉存惡意複製（2026-07-24 使用者要求）。
+// 例外：asset_map / asset_img 維持所有登入者可讀——簽核章顯示在報價單/CAR/AS表單上，看得到單據的人本來就看得到章，鎖了會讓簽核顯示直接壞掉。
+function hasStampRole(PDO $db, int $uid, array $codes): bool {
+    try {
+        $in = implode(',', array_fill(0, count($codes), '?'));
+        $st = $db->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
+                            WHERE ur.user_id = ? AND r.module = 'stamp' AND r.role_code IN ($in) LIMIT 1");
+        $st->execute(array_merge([$uid], $codes));
+        if ($st->fetchColumn()) return true;
+        $st = $db->prepare("SELECT 1 FROM user_department_position_map m
+                            JOIN position_roles pr ON pr.position_id = m.position_id
+                            JOIN roles r ON r.role_id = pr.role_id
+                            WHERE m.user_id = ? AND r.module = 'stamp' AND r.role_code IN ($in) LIMIT 1");
+        $st->execute(array_merge([$uid], $codes));
+        return (bool)$st->fetchColumn();
+    } catch (Exception $e) { return false; }
+}
+$canManage = $isAdmin || hasStampRole($db, $uid, ['stamp_manage']);
+$canView   = $canManage || hasStampRole($db, $uid, ['stamp_view']);
 function needManage(bool $canManage){ if (!$canManage) jerr('無圖章管理權限（需管理者或「圖章管理員」角色）', 403); }
+function needView(bool $canView){ if (!$canView) jerr('無圖章清冊檢閱權限（需「圖章檢閱」或「圖章管理員」角色，請洽管理者至人員權限設定指派）', 403); }
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 try {
 switch ($action) {
 
-// ── 下拉/權限 meta ──
+// ── 下拉/權限 meta（無檢閱權者只回權限旗標，不外洩人員/種類清單）──
 case 'meta': {
-    $users = $db->query("SELECT id, user_cname FROM user WHERE (state IS NULL OR state <> 0)
-                         ORDER BY CONVERT(user_cname USING utf8mb4) COLLATE utf8mb4_unicode_ci")->fetchAll(PDO::FETCH_ASSOC);
+    if (!$canView) jout(['ok'=>true, 'canView'=>false, 'canManage'=>false, 'isAdmin'=>false, 'me'=>$cname]);
+    $users = [];
+    if ($canManage) {
+        $users = $db->query("SELECT id, user_cname FROM user WHERE (state IS NULL OR state <> 0)
+                             ORDER BY CONVERT(user_cname USING utf8mb4) COLLATE utf8mb4_unicode_ci")->fetchAll(PDO::FETCH_ASSOC);
+    }
+    $types = $db->query("SELECT id, type_name, sort_order, is_active FROM stamp_type ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    $depts = $canManage ? $db->query("SELECT id, name FROM department ORDER BY id")->fetchAll(PDO::FETCH_ASSOC) : [];
     $base = '';
     if ($canManage) $base = eg_stamp_base($db);
-    jout(['ok'=>true, 'canManage'=>$canManage, 'isAdmin'=>$isAdmin, 'me'=>$cname,
-          'users'=>$users, 'base'=>$base, 'base_ok'=>$canManage ? is_dir($base) : null]);
+    jout(['ok'=>true, 'canView'=>true, 'canManage'=>$canManage, 'isAdmin'=>$isAdmin, 'me'=>$cname,
+          'users'=>$users, 'types'=>$types, 'depts'=>$depts, 'base'=>$base, 'base_ok'=>$canManage ? is_dir($base) : null]);
+}
+
+// ── 印章種類主檔維護 ──
+case 'type_save': {
+    needManage($canManage);
+    $tid  = (int)($_POST['id'] ?? 0);
+    $name = trim((string)($_POST['type_name'] ?? ''));
+    if ($name === '' || mb_strlen($name) > 50) jerr('請輸入種類名稱（50字內）');
+    $st = $db->prepare("SELECT id FROM stamp_type WHERE type_name=? AND id<>? LIMIT 1");
+    $st->execute([$name, $tid]);
+    if ($st->fetchColumn()) jerr('已有同名種類');
+    if ($tid > 0) {
+        $db->prepare("UPDATE stamp_type SET type_name=? WHERE id=?")->execute([$name, $tid]);
+    } else {
+        $db->prepare("INSERT INTO stamp_type (type_name, sort_order, created_by)
+                      VALUES (?, (SELECT IFNULL(MAX(t2.sort_order),0)+1 FROM stamp_type t2), ?)")->execute([$name, $cname]);
+        $tid = (int)$db->lastInsertId();
+    }
+    jout(['ok'=>true, 'id'=>$tid]);
+}
+case 'type_toggle': {
+    needManage($canManage);
+    $tid = (int)($_POST['id'] ?? 0);
+    if ($tid <= 0) jerr('參數錯誤');
+    $db->prepare("UPDATE stamp_type SET is_active = 1 - is_active WHERE id=?")->execute([$tid]);
+    jout(['ok'=>true]);
+}
+case 'type_delete': {
+    needManage($canManage);
+    $tid = (int)($_POST['id'] ?? 0);
+    if ($tid <= 0) jerr('參數錯誤');
+    $st = $db->prepare("SELECT COUNT(*) FROM stamp_register WHERE type_id=?");
+    $st->execute([$tid]);
+    if ((int)$st->fetchColumn() > 0) jerr('此種類已有登記資料使用中，不可刪除（可改用「停用」讓新登記選不到）');
+    $db->prepare("DELETE FROM stamp_type WHERE id=?")->execute([$tid]);
+    jout(['ok'=>true]);
 }
 
 // ── 儲存路徑設定（僅管理者）──
@@ -68,32 +130,41 @@ case 'set_base': {
 
 // ── 清冊列表（後端分頁＋彙總，匯出/列印用 all=1 回全部）──
 case 'list': {
+    needView($canView);
     $q      = trim((string)($_GET['q'] ?? ''));
     $status = trim((string)($_GET['status'] ?? ''));
+    $typeId = (int)($_GET['type_id'] ?? 0);
     $per    = (int)($_GET['per'] ?? 10); if (!in_array($per, [5,10,20,50], true)) $per = 10;
     $page   = max(1, (int)($_GET['page'] ?? 1));
     $all    = ($_GET['all'] ?? '') === '1';
 
     $where = []; $args = [];
-    if ($q !== '')      { $where[] = "CONVERT(u.user_cname USING utf8mb4) LIKE ?"; $args[] = "%$q%"; }
+    if ($q !== '')      { $where[] = "(CONVERT(u.user_cname USING utf8mb4) LIKE ? OR d.name LIKE ?)"; $args[] = "%$q%"; $args[] = "%$q%"; }
     if ($status !== '') { $where[] = "r.status = ?"; $args[] = $status; }
+    if ($typeId > 0)    { $where[] = "r.type_id = ?"; $args[] = $typeId; }
     $w = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+    $joins = "FROM stamp_register r
+              LEFT JOIN user u ON u.id = r.user_id
+              LEFT JOIN department d ON d.id = r.dept_id";
 
-    $stc = $db->prepare("SELECT COUNT(*) FROM stamp_register r JOIN user u ON u.id=r.user_id $w");
+    $stc = $db->prepare("SELECT COUNT(*) $joins $w");
     $stc->execute($args); $total = (int)$stc->fetchColumn();
 
     $sts = $db->prepare("SELECT
                            SUM(CASE WHEN r.status='active' THEN 1 ELSE 0 END) AS active_cnt,
                            SUM(CASE WHEN r.status='revoked' THEN 1 ELSE 0 END) AS revoked_cnt
-                         FROM stamp_register r JOIN user u ON u.id=r.user_id $w");
+                         $joins $w");
     $sts->execute($args); $sum = $sts->fetch(PDO::FETCH_ASSOC) ?: ['active_cnt'=>0,'revoked_cnt'=>0];
 
     $limit = $all ? '' : ('LIMIT ' . (($page-1)*$per) . ',' . $per);
-    $st = $db->prepare("SELECT r.id, r.user_id, u.user_cname, r.issue_date, r.revoke_date, r.status, r.note,
+    $st = $db->prepare("SELECT r.id, r.user_id, r.dept_id, u.user_cname, d.name AS dept_name,
+                               COALESCE(u.user_cname, d.name) AS holder_name,
+                               r.type_id, t.type_name,
+                               r.issue_date, r.revoke_date, r.status, r.note,
                                r.created_by, r.created_at,
                                a.file_name IS NOT NULL AS has_asset, a.band_top, a.band_bottom
-                        FROM stamp_register r
-                        JOIN user u ON u.id = r.user_id
+                        $joins
+                        LEFT JOIN stamp_type t ON t.id = r.type_id
                         LEFT JOIN stamp_asset a ON a.user_id = r.user_id
                         $w ORDER BY r.status='active' DESC, r.issue_date DESC, r.id DESC $limit");
     $st->execute($args);
@@ -105,32 +176,55 @@ case 'list': {
 // ── 新增登記 ──
 case 'add': {
     needManage($canManage);
-    $tuid = (int)($_POST['user_id'] ?? 0);
+    $tuid   = (int)($_POST['user_id'] ?? 0) ?: null;    // 個人章
+    $deptId = (int)($_POST['dept_id'] ?? 0) ?: null;    // 部門章（與 user_id 二擇一）
+    $typeId = (int)($_POST['type_id'] ?? 0) ?: null;
     $issue = trim((string)($_POST['issue_date'] ?? ''));
     $note  = trim((string)($_POST['note'] ?? ''));
-    if ($tuid <= 0) jerr('請選擇人員');
+    if (($tuid === null) === ($deptId === null)) jerr('請選擇持有對象（人員或部門，擇一）');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $issue)) jerr('核發日期格式錯誤');
+    if ($deptId !== null) {
+        $st = $db->prepare("SELECT 1 FROM department WHERE id=?");
+        $st->execute([$deptId]);
+        if (!$st->fetchColumn()) jerr('部門不存在');
+    }
+    if ($typeId !== null) {
+        $st = $db->prepare("SELECT 1 FROM stamp_type WHERE id=? AND is_active=1");
+        $st->execute([$typeId]);
+        if (!$st->fetchColumn()) jerr('印章種類不存在或已停用');
+    }
     $db->beginTransaction();
-    $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id=? AND status='active' LIMIT 1 FOR UPDATE");
-    $st->execute([$tuid]);
-    if ($st->fetchColumn()) { $db->rollBack(); jerr('該人員已有一筆「使用中」圖章，請先停用舊登記再核發'); }
-    $st = $db->prepare("INSERT INTO stamp_register (user_id, issue_date, status, note, created_by) VALUES (?,?,'active',?,?)");
-    $st->execute([$tuid, $issue, $note, $cname]);
+    // 同一持有對象（人員或部門）＋同一種類 同時僅一筆使用中；不同種類可同時持有
+    $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND status='active' AND type_id <=> ? LIMIT 1 FOR UPDATE");
+    $st->execute([$tuid, $deptId, $typeId]);
+    if ($st->fetchColumn()) { $db->rollBack(); jerr('該持有對象此種類已有一筆「使用中」圖章，請先停用舊登記再核發'); }
+    $st = $db->prepare("INSERT INTO stamp_register (user_id, dept_id, type_id, issue_date, status, note, created_by) VALUES (?,?,?,?,'active',?,?)");
+    $st->execute([$tuid, $deptId, $typeId, $issue, $note, $cname]);
     $newId = (int)$db->lastInsertId();
     $db->commit();
     jout(['ok'=>true, 'id'=>$newId]);
 }
 
-// ── 修改登記（核發日/備註）──
+// ── 修改登記（種類/核發日/備註）──
 case 'update': {
     needManage($canManage);
     $id = (int)($_POST['id'] ?? 0);
+    $typeId = (int)($_POST['type_id'] ?? 0) ?: null;
     $issue = trim((string)($_POST['issue_date'] ?? ''));
     $note  = trim((string)($_POST['note'] ?? ''));
     if ($id <= 0) jerr('參數錯誤');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $issue)) jerr('核發日期格式錯誤');
-    $st = $db->prepare("UPDATE stamp_register SET issue_date=?, note=?, modified_by=?, modified_at=NOW() WHERE id=?");
-    $st->execute([$issue, $note, $cname, $id]);
+    $cur = $db->prepare("SELECT user_id, dept_id, status FROM stamp_register WHERE id=?");
+    $cur->execute([$id]);
+    $curRow = $cur->fetch(PDO::FETCH_ASSOC);
+    if (!$curRow) jerr('登記不存在');
+    if ($curRow['status'] === 'active') {
+        $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND status='active' AND type_id <=> ? AND id<>? LIMIT 1");
+        $st->execute([$curRow['user_id'], $curRow['dept_id'], $typeId, $id]);
+        if ($st->fetchColumn()) jerr('該持有對象此種類已有另一筆「使用中」圖章');
+    }
+    $st = $db->prepare("UPDATE stamp_register SET type_id=?, issue_date=?, note=?, modified_by=?, modified_at=NOW() WHERE id=?");
+    $st->execute([$typeId, $issue, $note, $cname, $id]);
     jout(['ok'=>true]);
 }
 
@@ -159,15 +253,23 @@ case 'delete': {
 
 // ── CSV 匯出（目前篩選條件下全部資料，後端重查）──
 case 'csv': {
+    needView($canView);
     $q      = trim((string)($_GET['q'] ?? ''));
     $status = trim((string)($_GET['status'] ?? ''));
+    $typeId = (int)($_GET['type_id'] ?? 0);
     $where = []; $args = [];
     if ($q !== '')      { $where[] = "CONVERT(u.user_cname USING utf8mb4) LIKE ?"; $args[] = "%$q%"; }
     if ($status !== '') { $where[] = "r.status = ?"; $args[] = $status; }
+    if ($typeId > 0)    { $where[] = "r.type_id = ?"; $args[] = $typeId; }
     $w = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
-    $st = $db->prepare("SELECT u.user_cname, r.issue_date, r.revoke_date, r.status, r.note, r.created_by, r.created_at,
+    $st = $db->prepare("SELECT COALESCE(u.user_cname, d.name) AS holder_name,
+                               CASE WHEN r.dept_id IS NULL THEN '個人章' ELSE '部門章' END AS holder_kind,
+                               t.type_name, r.issue_date, r.revoke_date, r.status, r.note, r.created_by, r.created_at,
                                a.file_name IS NOT NULL AS has_asset
-                        FROM stamp_register r JOIN user u ON u.id=r.user_id
+                        FROM stamp_register r
+                        LEFT JOIN user u ON u.id=r.user_id
+                        LEFT JOIN department d ON d.id=r.dept_id
+                        LEFT JOIN stamp_type t ON t.id=r.type_id
                         LEFT JOIN stamp_asset a ON a.user_id=r.user_id
                         $w ORDER BY r.status='active' DESC, r.issue_date DESC, r.id DESC");
     $st->execute($args);
@@ -175,9 +277,9 @@ case 'csv': {
     header('Content-Disposition: attachment; filename="stamp_register_' . date('Ymd_His') . '.csv"');
     echo "\xEF\xBB\xBF";
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['持有人','核發日期','停用/繳回日期','狀態','備註','掃描章','登記人','登記時間']);
+    fputcsv($out, ['持有對象','對象別','種類','核發日期','停用/繳回日期','狀態','備註','掃描章','登記人','登記時間']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        fputcsv($out, [$r['user_cname'], $r['issue_date'], $r['revoke_date'] ?: '',
+        fputcsv($out, [$r['holder_name'], $r['holder_kind'], $r['type_name'] ?: '', $r['issue_date'], $r['revoke_date'] ?: '',
                        $r['status']==='active' ? '使用中' : '已停用', $r['note'] ?: '',
                        $r['has_asset'] ? '已上傳' : '—', $r['created_by'] ?: '', $r['created_at'] ?: '']);
     }

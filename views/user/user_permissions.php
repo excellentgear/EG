@@ -1001,7 +1001,7 @@ $_quotDepts = array_keys($_deptSet);
                         $_profitRoles, $_userProfitRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('stamp', 'stamp', '圖章管理', 'fa-certificate', '#c0762c',
-                        '為每位使用者指派「圖章管理員」角色（圖章清冊登記核發/停用、掃描實體章上傳與日期帶設定，頁面：圖章管理）。未被指派者仍可檢閱清冊與匯出；管理者固定可管理。',
+                        '圖章管理頁角色：「圖章檢閱」＝唯讀（檢閱清冊/匯出）；「圖章管理員」＝登記核發（個人章/部門章）、種類管理、掃描實體章上傳。<strong>未被指派任何角色者看不到清冊內容</strong>（避免圖章被瀏覽轉存惡意複製）；簽核單據上的印章顯示不受此限。管理者固定可管理。',
                         $_stampRoles, $_userStampRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('ptask', 'personal_task', '個人工作紀錄', 'fa-sticky-note-o', '#27ae60',
