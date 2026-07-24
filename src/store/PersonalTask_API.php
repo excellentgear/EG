@@ -10,6 +10,7 @@ header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/../common/DBConnection.php';
 require_once __DIR__ . '/../common/role_features_helper.php';
+require_once __DIR__ . '/../common/personal_task_notify.php';  // 分享通知沿用 personal_task_remind_user（Push＋Telegram，不寫 live_event）
 
 if (!isset($_SESSION['id'])) {
     echo json_encode(['success' => false, 'message' => '尚未登入']);
@@ -24,6 +25,45 @@ $db = $conn->getPDO();
 try { $db->exec("ALTER TABLE personal_task_image ADD COLUMN user_id INT NULL COMMENT '上傳者/擁有者 FK→user.id（temp列以此判定擁有者）' AFTER task_id"); } catch (Exception $e) {}
 try { $db->exec("ALTER TABLE personal_task_image ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'active' COMMENT 'temp=未存檔暫存 active=正式' AFTER file_size"); } catch (Exception $e) {}
 try { $db->exec("ALTER TABLE personal_task_image ADD COLUMN expire_at DATETIME NULL COMMENT 'temp 自動清除到期時間，NULL=不清' AFTER status"); } catch (Exception $e) {}
+
+// ── 資料表升級（分享 + 多重綁定 2026-07-24）：沿用本模組慣例（sql.php 拒絕 DDL，改在 API 內建）─
+// 多重綁定：一筆工作可綁多個對象（bom/part/customer/maker/order）
+try {
+    $db->exec("CREATE TABLE IF NOT EXISTS personal_task_bind (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        task_id INT NOT NULL COMMENT 'FK→personal_task.id',
+        bind_type VARCHAR(10) NOT NULL COMMENT 'bom/part/customer/maker/order',
+        bind_id VARCHAR(100) NOT NULL,
+        bind_label VARCHAR(200) NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        INDEX idx_task (task_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='個人工作多重綁定對象'");
+} catch (Exception $e) {}
+// 分享：view=唯讀看進度、edit=共同進度（協作者只能回報進度）
+try {
+    $db->exec("CREATE TABLE IF NOT EXISTS personal_task_share (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        task_id INT NOT NULL COMMENT 'FK→personal_task.id',
+        owner_id INT NOT NULL COMMENT '分享當下的擁有者 user.id',
+        shared_with_user_id INT NOT NULL COMMENT '被分享者 user.id',
+        mode VARCHAR(10) NOT NULL DEFAULT 'view' COMMENT 'view=唯讀 edit=共同進度',
+        created_by INT NULL,
+        created_at DATETIME NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_task_user (task_id, shared_with_user_id),
+        INDEX idx_shared_with (shared_with_user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='個人工作分享對象'");
+} catch (Exception $e) {}
+// 一次性遷移：把既有單欄綁定灌進 personal_task_bind（旗標防重跑；舊欄保留不刪）
+try {
+    $mig = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='ptask_bind_migrated'")->fetchColumn();
+    if ($mig != '1') {
+        $db->exec("INSERT INTO personal_task_bind (task_id, bind_type, bind_id, bind_label, sort_order)
+                   SELECT id, bind_type, bind_id, bind_label, 0 FROM personal_task
+                   WHERE bind_type IS NOT NULL AND bind_type <> '' AND bind_id IS NOT NULL AND bind_id <> ''");
+        $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('ptask_bind_migrated','1')
+                      ON DUPLICATE KEY UPDATE setting_value='1'")->execute();
+    }
+} catch (Exception $e) {}
 
 // 全站二元權限：module='personal_task'（比照 BOM追蹤，不分CRUD）
 if (!rf_has_module_role($db, $user_id, 'personal_task')) {
@@ -88,6 +128,49 @@ function pt_get_own_task(PDO $db, int $userId, int $taskId) {
     $st = $db->prepare("SELECT * FROM personal_task WHERE id = ? AND user_id = ?");
     $st->execute([$taskId, $userId]);
     return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+
+// 取得可存取的紀錄與存取層級：回傳 [紀錄陣列|null, 'owner'|'edit'|'view'|null]
+//   owner = 本人擁有；edit = 被分享「共同進度」；view = 被分享「唯讀看進度」
+function pt_get_accessible_task(PDO $db, int $userId, int $taskId): array {
+    $st = $db->prepare("SELECT * FROM personal_task WHERE id = ?");
+    $st->execute([$taskId]);
+    $task = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$task) return [null, null];
+    if ((int)$task['user_id'] === $userId) return [$task, 'owner'];
+    $st = $db->prepare("SELECT mode FROM personal_task_share WHERE task_id = ? AND shared_with_user_id = ?");
+    $st->execute([$taskId, $userId]);
+    $mode = $st->fetchColumn();
+    if ($mode === 'edit') return [$task, 'edit'];
+    if ($mode === 'view') return [$task, 'view'];
+    return [null, null];
+}
+
+// 可回報進度（owner 或 edit 協作者）→ 回傳紀錄，否則丟例外
+function pt_require_progress_access(PDO $db, int $userId, int $taskId): array {
+    list($task, $access) = pt_get_accessible_task($db, $userId, $taskId);
+    if (!$task || !in_array($access, ['owner', 'edit'], true)) throw new Exception('找不到紀錄或無權限');
+    return $task;
+}
+
+// 取多筆紀錄的綁定對象（task_id => 綁定陣列，依 sort_order）
+function pt_task_binds(PDO $db, array $taskIds): array {
+    $taskIds = array_values(array_filter(array_map('intval', $taskIds)));
+    if (!$taskIds) return [];
+    $in = implode(',', $taskIds);
+    $rows = $db->query("SELECT id, task_id, bind_type, bind_id, bind_label FROM personal_task_bind
+                        WHERE task_id IN ({$in}) ORDER BY task_id, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    $map = [];
+    foreach ($rows as $r) { $map[(int)$r['task_id']][] = $r; }
+    return $map;
+}
+
+// 使用者顯示名（找不到回傳空字串）
+function pt_user_name(PDO $db, int $userId): string {
+    $st = $db->prepare("SELECT user_cname FROM user WHERE id = ?");
+    $st->execute([$userId]);
+    $v = $st->fetchColumn();
+    return $v !== false ? (string)$v : '';
 }
 
 // 把小項掛到步驟陣列上（$steps 需含 id 欄；以參考傳遞直接改寫）
@@ -209,6 +292,7 @@ try {
     if ($action === 'list_tasks') {
         $status = $_POST['status'] ?? $_GET['status'] ?? '0';           // 0/1/2
         $urgentOnly = (int)($_POST['urgent_only'] ?? $_GET['urgent_only'] ?? 0);
+        $sharedOnly = (int)($_POST['shared_only'] ?? $_GET['shared_only'] ?? 0);  // 只看他人分享給我
         $kw = trim((string)($_POST['kw'] ?? $_GET['kw'] ?? ''));
         $page = max(1, (int)($_POST['page'] ?? $_GET['page'] ?? 1));
         $pageSize = (int)($_POST['pageSize'] ?? $_GET['pageSize'] ?? 10);
@@ -223,28 +307,37 @@ try {
         $urgentExpr = "(t.status = 0 AND t.deadline IS NOT NULL
                         AND CURDATE() >= DATE_SUB(DATE(t.deadline), INTERVAL COALESCE(t.urgent_days, {$defDays}) DAY))";
 
-        $where = "t.user_id = ?";
-        $params = [$user_id];
+        // 可存取範圍：自己擁有 ∪ 別人分享給我（分享是本模組刻意開的例外）
+        $accessSql = "(t.user_id = ? OR EXISTS(SELECT 1 FROM personal_task_share sh
+                        WHERE sh.task_id = t.id AND sh.shared_with_user_id = ?))";
+        $where = $accessSql;
+        $params = [$user_id, $user_id];
         if ($kw !== '') {
-            $where .= " AND (t.title LIKE ? OR t.bind_label LIKE ? OR t.note LIKE ?)";
+            $where .= " AND (t.title LIKE ? OR t.note LIKE ?
+                        OR EXISTS(SELECT 1 FROM personal_task_bind b WHERE b.task_id = t.id AND b.bind_label LIKE ?))";
             $like = '%' . $kw . '%';
             array_push($params, $like, $like, $like);
         }
 
-        // 統計卡：對全部符合關鍵字的資料計算（不受狀態/分頁影響）
+        // 統計卡：對全部可存取且符合關鍵字的資料計算（不受狀態/分頁影響）
+        // cnt_shared＝別人分享給我的筆數（不含自己擁有）
         $st = $db->prepare("SELECT
                 COALESCE(SUM(t.status = 0), 0) AS cnt_open,
                 COALESCE(SUM(t.status = 1), 0) AS cnt_done,
                 COALESCE(SUM(t.status = 2), 0) AS cnt_paused,
-                COALESCE(SUM({$urgentExpr}), 0) AS cnt_urgent
+                COALESCE(SUM({$urgentExpr}), 0) AS cnt_urgent,
+                COALESCE(SUM(t.user_id <> ?), 0) AS cnt_shared
             FROM personal_task t WHERE {$where}");
-        $st->execute($params);
+        $st->execute(array_merge([$user_id], $params));
         $counts = $st->fetch(PDO::FETCH_ASSOC);
 
         // 列表條件
         $listWhere = $where;
         $listParams = $params;
-        if ($urgentOnly) {
+        if ($sharedOnly) {
+            $listWhere .= " AND t.user_id <> ?";          // 只看他人分享給我（不含自己擁有）
+            $listParams[] = $user_id;
+        } elseif ($urgentOnly) {
             $listWhere .= " AND {$urgentExpr}";
         } elseif (in_array($status, ['0', '1', '2'], true)) {
             $listWhere .= " AND t.status = " . (int)$status;
@@ -264,9 +357,16 @@ try {
         }
 
         $limitSql = $exportAll ? "" : " LIMIT " . (($page - 1) * $pageSize) . ", " . $pageSize;
+        // is_shared/share_mode/owner_name：$user_id 為 (int) session 值，直接內嵌安全（避免 SELECT 子句參數排序糾結）
+        $uid = (int)$user_id;
         $st = $db->prepare("SELECT t.*, {$urgentExpr} AS is_urgent,
-                (t.status = 0 AND t.deadline IS NOT NULL AND CURDATE() > DATE(t.deadline)) AS is_overdue
-            FROM personal_task t WHERE {$listWhere} ORDER BY {$orderBy}{$limitSql}");
+                (t.status = 0 AND t.deadline IS NOT NULL AND CURDATE() > DATE(t.deadline)) AS is_overdue,
+                (t.user_id <> {$uid}) AS is_shared,
+                (SELECT sh.mode FROM personal_task_share sh
+                   WHERE sh.task_id = t.id AND sh.shared_with_user_id = {$uid}) AS share_mode,
+                u.user_cname AS owner_name
+            FROM personal_task t LEFT JOIN user u ON u.id = t.user_id
+            WHERE {$listWhere} ORDER BY {$orderBy}{$limitSql}");
         $st->execute($listParams);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 
@@ -281,9 +381,11 @@ try {
             foreach ($steps as $s) { $byTask[$s['task_id']][] = $s; }
             list(, $urlDir) = pt_attach_dirs($db);
             $imgMap = pt_task_images($db, $ids, $urlDir);
+            $bindMap = pt_task_binds($db, $ids);
             foreach ($rows as &$r) {
                 $r['steps'] = $byTask[$r['id']] ?? [];
                 $r['images'] = $imgMap[(int)$r['id']] ?? [];
+                $r['binds'] = $bindMap[(int)$r['id']] ?? [];
             }
             unset($r);
         }
@@ -295,13 +397,16 @@ try {
 
     // ══ 單筆讀取（編輯用）══════════════════════════════════════════════
     if ($action === 'get_task') {
-        $task = pt_get_own_task($db, $user_id, (int)($_GET['id'] ?? $_POST['id'] ?? 0));
+        list($task, $access) = pt_get_accessible_task($db, $user_id, (int)($_GET['id'] ?? $_POST['id'] ?? 0));
         if (!$task) throw new Exception('找不到紀錄或無權限');
         $st = $db->prepare("SELECT * FROM personal_task_step WHERE task_id = ? ORDER BY sort_order, id");
         $st->execute([$task['id']]);
         $steps = $st->fetchAll(PDO::FETCH_ASSOC);
         pt_attach_step_items($db, $steps);
         $task['steps'] = $steps;
+        $task['binds'] = pt_task_binds($db, [$task['id']])[(int)$task['id']] ?? [];
+        $task['access'] = $access;
+        $task['owner_name'] = pt_user_name($db, (int)$task['user_id']);
         list(, $urlDir) = pt_attach_dirs($db);
         $imgMap = pt_task_images($db, [$task['id']], $urlDir);
         $task['images'] = $imgMap[(int)$task['id']] ?? [];
@@ -318,18 +423,32 @@ try {
         $receivedAt = trim((string)($_POST['received_at'] ?? ''));
         if ($receivedAt === '') $receivedAt = date('Y-m-d');
 
-        $bindType = trim((string)($_POST['bind_type'] ?? ''));
-        $bindId = trim((string)($_POST['bind_id'] ?? ''));
-        $bindLabel = trim((string)($_POST['bind_label'] ?? ''));
-        if ($bindType !== '' && !in_array($bindType, ['bom', 'part', 'customer', 'maker', 'order'], true)) {
-            throw new Exception('綁定類型不正確');
+        // 多重綁定：前端傳 binds JSON 陣列 [{bind_type,bind_id,bind_label}...]（相容舊單欄）
+        $bindsIn = json_decode($_POST['binds'] ?? '', true);
+        if (!is_array($bindsIn)) {
+            // 相容舊單欄格式
+            $bt = trim((string)($_POST['bind_type'] ?? ''));
+            $bi = trim((string)($_POST['bind_id'] ?? ''));
+            $bindsIn = ($bt !== '' && $bi !== '') ? [['bind_type' => $bt, 'bind_id' => $bi]] : [];
         }
-        if ($bindType === '' || $bindId === '') { $bindType = null; $bindId = null; $bindLabel = null; }
-        if ($bindType !== null) {
-            $resolved = pt_resolve_bind_label($db, $bindType, $bindId);
-            if ($resolved !== null) $bindLabel = $resolved;
-            if ($bindLabel === '') throw new Exception('查無綁定對象，請重新搜尋選擇');
+        $binds = [];  // 驗證後的綁定（label 一律以 DB 當下為準）
+        $seenBind = [];
+        foreach ($bindsIn as $b) {
+            $bt = trim((string)($b['bind_type'] ?? ''));
+            $bi = trim((string)($b['bind_id'] ?? ''));
+            if ($bt === '' || $bi === '') continue;
+            if (!in_array($bt, ['bom', 'part', 'customer', 'maker', 'order'], true)) throw new Exception('綁定類型不正確');
+            $key = $bt . '|' . $bi;
+            if (isset($seenBind[$key])) continue;             // 去重
+            $seenBind[$key] = 1;
+            $label = pt_resolve_bind_label($db, $bt, $bi);
+            if ($label === null || $label === '') throw new Exception('查無綁定對象，請重新搜尋選擇');
+            $binds[] = ['bind_type' => $bt, 'bind_id' => $bi, 'bind_label' => $label];
         }
+        // 舊單欄寫入第一筆（保留相容：提醒發送等仍讀 personal_task.bind_label）
+        $bindType  = $binds ? $binds[0]['bind_type']  : null;
+        $bindId    = $binds ? $binds[0]['bind_id']    : null;
+        $bindLabel = $binds ? $binds[0]['bind_label'] : null;
 
         $deadline = pt_norm_dt($_POST['deadline'] ?? '');
         $remindMin = pt_norm_int($_POST['remind_before_minutes'] ?? '');
@@ -361,6 +480,16 @@ try {
                 $st->execute([$user_id, $title, $bindType, $bindId, $bindLabel, $receivedAt,
                     $deadline, $remindMin, $urgentDays, $note]);
                 $id = (int)$db->lastInsertId();
+            }
+
+            // ── 多重綁定同步：整批覆蓋（先刪後插，依前端順序寫 sort_order）──
+            $db->prepare("DELETE FROM personal_task_bind WHERE task_id = ?")->execute([$id]);
+            if ($binds) {
+                $insB = $db->prepare("INSERT INTO personal_task_bind (task_id, bind_type, bind_id, bind_label, sort_order)
+                                      VALUES (?,?,?,?,?)");
+                foreach ($binds as $i => $b) {
+                    $insB->execute([$id, $b['bind_type'], $b['bind_id'], $b['bind_label'], $i]);
+                }
             }
 
             // ── 進度步驟同步：前端傳完整清單(含既有id)，依陣列順序寫 sort_order ──
@@ -472,6 +601,8 @@ try {
                           WHERE s.task_id = ?")->execute([$id]);
             $db->prepare("DELETE FROM personal_task_step WHERE task_id = ?")->execute([$id]);
             $db->prepare("DELETE FROM personal_task_image WHERE task_id = ?")->execute([$id]);
+            $db->prepare("DELETE FROM personal_task_bind WHERE task_id = ?")->execute([$id]);
+            $db->prepare("DELETE FROM personal_task_share WHERE task_id = ?")->execute([$id]);
             $db->prepare("DELETE FROM personal_task WHERE id = ? AND user_id = ?")->execute([$id, $user_id]);
             $db->commit();
         } catch (Exception $e) {
@@ -548,7 +679,7 @@ try {
         $id = (int)($_POST['id'] ?? 0);
         $status = (int)($_POST['status'] ?? -1);
         if (!in_array($status, [0, 1, 2], true)) throw new Exception('狀態值不正確');
-        if (!pt_get_own_task($db, $user_id, $id)) throw new Exception('找不到紀錄或無權限');
+        pt_require_progress_access($db, $user_id, $id);   // owner 或共同進度協作者可改狀態
         if ($status === 1) {
             $st = $db->prepare("UPDATE personal_task SET status = 1, completed_at = NOW() WHERE id = ? AND user_id = ?");
         } elseif ($status === 0) {
@@ -564,12 +695,11 @@ try {
     // ══ 進度回報：點選到達（必須依序，不可跳過）════════════════════════
     if ($action === 'reach_step') {
         $stepId = (int)($_POST['step_id'] ?? 0);
-        $st = $db->prepare("SELECT s.id, s.task_id FROM personal_task_step s
-                            JOIN personal_task t ON t.id = s.task_id
-                            WHERE s.id = ? AND t.user_id = ?");
-        $st->execute([$stepId, $user_id]);
+        $st = $db->prepare("SELECT id, task_id FROM personal_task_step WHERE id = ?");
+        $st->execute([$stepId]);
         $step = $st->fetch(PDO::FETCH_ASSOC);
-        if (!$step) throw new Exception('找不到進度或無權限');
+        if (!$step) throw new Exception('找不到進度');
+        pt_require_progress_access($db, $user_id, (int)$step['task_id']);  // owner 或共同進度協作者
 
         // 依排序找出第一個尚未到達的步驟，只有它可以被回報（防跳關）
         $st = $db->prepare("SELECT id FROM personal_task_step
@@ -589,12 +719,13 @@ try {
     if ($action === 'toggle_step_item') {
         $itemId = (int)($_POST['item_id'] ?? 0);
         $done = (int)($_POST['done'] ?? 0) ? 1 : 0;
-        $st = $db->prepare("SELECT i.id FROM personal_task_step_item i
+        $st = $db->prepare("SELECT s.task_id FROM personal_task_step_item i
                             JOIN personal_task_step s ON s.id = i.step_id
-                            JOIN personal_task t ON t.id = s.task_id
-                            WHERE i.id = ? AND t.user_id = ?");
-        $st->execute([$itemId, $user_id]);
-        if (!$st->fetchColumn()) throw new Exception('找不到小項或無權限');
+                            WHERE i.id = ?");
+        $st->execute([$itemId]);
+        $itemTaskId = $st->fetchColumn();
+        if ($itemTaskId === false) throw new Exception('找不到小項');
+        pt_require_progress_access($db, $user_id, (int)$itemTaskId);  // owner 或共同進度協作者
         $db->prepare("UPDATE personal_task_step_item SET done_at = " . ($done ? "NOW()" : "NULL") . " WHERE id = ?")
            ->execute([$itemId]);
         $st = $db->prepare("SELECT done_at FROM personal_task_step_item WHERE id = ?");
@@ -606,12 +737,11 @@ try {
     // ══ 進度回報復原：只能取消「最後一個已到達」的步驟 ══════════════════
     if ($action === 'unreach_step') {
         $stepId = (int)($_POST['step_id'] ?? 0);
-        $st = $db->prepare("SELECT s.id, s.task_id FROM personal_task_step s
-                            JOIN personal_task t ON t.id = s.task_id
-                            WHERE s.id = ? AND t.user_id = ?");
-        $st->execute([$stepId, $user_id]);
+        $st = $db->prepare("SELECT id, task_id FROM personal_task_step WHERE id = ?");
+        $st->execute([$stepId]);
         $step = $st->fetch(PDO::FETCH_ASSOC);
-        if (!$step) throw new Exception('找不到進度或無權限');
+        if (!$step) throw new Exception('找不到進度');
+        pt_require_progress_access($db, $user_id, (int)$step['task_id']);  // owner 或共同進度協作者
 
         $st = $db->prepare("SELECT id FROM personal_task_step
                             WHERE task_id = ? AND reached_at IS NOT NULL ORDER BY sort_order DESC, id DESC LIMIT 1");
@@ -668,8 +798,11 @@ try {
     $like = '%' . $kw . '%';
 
     if ($action === 'search_boms') {
-        $st = $db->prepare("SELECT bom, Client_Name FROM bom WHERE bom LIKE ? ORDER BY bom DESC LIMIT 20");
-        $st->execute([$like]);
+        // 可用 BOM號 / 料號(d_id) / 客戶(Client_Name) 模糊搜尋；建議清單顯示料號、客戶、數量
+        $st = $db->prepare("SELECT bom, d_id, Client_Name, sqty, specification FROM bom
+                            WHERE bom LIKE ? OR d_id LIKE ? OR Client_Name LIKE ?
+                            ORDER BY bom DESC LIMIT 20");
+        $st->execute([$like, $like, $like]);
         echo json_encode(['success' => true, 'data' => $st->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -755,6 +888,173 @@ try {
                             ORDER BY maker_id LIMIT 20");
         $st->execute([$like, $like, $like]);
         echo json_encode(['success' => true, 'data' => $st->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // ══ 綁定 BOM 的實際製程進度（唯讀，比照 bom_tracking 由 bom_ing 逐關即時算）══
+    if ($action === 'get_bom_progress') {
+        $bomsRaw = $_POST['boms'] ?? $_GET['boms'] ?? ($_POST['bom'] ?? $_GET['bom'] ?? '');
+        $boms = array_values(array_unique(array_filter(array_map('trim', explode(',', (string)$bomsRaw)))));
+        $out = [];
+        foreach ($boms as $bom) {
+            $st = $db->prepare("SELECT bom, d_id, Client_Name, sqty, processing_state, Delivery_date FROM bom WHERE bom = ?");
+            $st->execute([$bom]);
+            $m = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$m) continue;
+            // 逐關節點（一個 bom_sn 一個節點，排除 skip；分母口徑比照 bom_tracking）
+            $st = $db->prepare("SELECT bi.bom_sn,
+                    MAX(pn.ProcessName) AS name,
+                    MAX(bi.outsource_date) AS outsource_date,
+                    MAX(bi.return_date) AS return_date
+                FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                WHERE bi.bom = ? AND bi.processing_state != 'skip'
+                GROUP BY bi.bom_sn ORDER BY bi.bom_sn");
+            $st->execute([$bom]);
+            $nodeRows = $st->fetchAll(PDO::FETCH_ASSOC);
+            $processCount = count($nodeRows);
+            // 目前所在關卡序位（公式抄 BomTrack_API get_matched_boms）
+            $st = $db->prepare("SELECT COUNT(DISTINCT bi.bom_sn) FROM bom_ing bi
+                WHERE bi.bom = ? AND bi.processing_state != 'skip' AND bi.bom_sn <= (
+                    SELECT bi2.bom_sn FROM bom_ing bi2 WHERE bi2.bom = ? AND bi2.processing_state != 'skip'
+                    ORDER BY GREATEST(COALESCE(bi2.outsource_date,'0000-00-00'), COALESCE(bi2.QC_check_date,'0000-00-00')) DESC, bi2.bom_sn DESC LIMIT 1
+                )");
+            $st->execute([$bom, $bom]);
+            $currentStep = (int)$st->fetchColumn();
+            $isClosed = ((string)$m['processing_state'] === '1');
+            $progressPct = $isClosed ? 100 : ($processCount > 0 ? round($currentStep / $processCount * 100, 1) : null);
+            $nodes = [];
+            foreach ($nodeRows as $i => $n) {
+                $rank = $i + 1;
+                $nodes[] = [
+                    'bom_sn' => $n['bom_sn'],
+                    'name' => $n['name'] ?: ('關卡' . $rank),
+                    'outsource_date' => $n['outsource_date'],
+                    'return_date' => $n['return_date'],
+                    'reached' => ($isClosed || $rank <= $currentStep) ? 1 : 0,
+                    'current' => (!$isClosed && $rank === $currentStep) ? 1 : 0,
+                ];
+            }
+            $latestName = ($currentStep > 0 && isset($nodeRows[$currentStep - 1])) ? $nodeRows[$currentStep - 1]['name'] : null;
+            $out[$bom] = [
+                'bom' => $bom, 'd_id' => $m['d_id'], 'Client_Name' => $m['Client_Name'], 'sqty' => $m['sqty'],
+                'processing_state' => $m['processing_state'], 'is_closed' => $isClosed ? 1 : 0,
+                'process_count' => $processCount, 'current_step' => $currentStep,
+                'progress_pct' => $progressPct, 'latest_process_name' => $isClosed ? '結案' : $latestName,
+                'delivery_date' => $m['Delivery_date'], 'nodes' => $nodes,
+            ];
+        }
+        echo json_encode(['success' => true, 'data' => $out], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // ══ 分享/複製對象搜尋（限有 personal_task 使用資格者，排除自己）══════════
+    if ($action === 'search_users') {
+        $st = $db->prepare("SELECT DISTINCT u.id, u.user_cname FROM user u
+                            JOIN user_roles ur ON ur.user_id = u.id
+                            JOIN roles r ON r.role_id = ur.role_id
+                            WHERE r.module = 'personal_task' AND u.id <> ?
+                              AND (u.user_cname LIKE ? OR u.user_uname LIKE ?)
+                            ORDER BY u.user_cname LIMIT 20");
+        $st->execute([$user_id, $like, $like]);
+        echo json_encode(['success' => true, 'data' => $st->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // ══ 分享管理（皆 owner only）══════════════════════════════════════════
+    if ($action === 'list_shares') {
+        $taskId = (int)($_POST['task_id'] ?? $_GET['task_id'] ?? 0);
+        if (!pt_get_own_task($db, $user_id, $taskId)) throw new Exception('找不到紀錄或無權限');
+        $st = $db->prepare("SELECT sh.id, sh.shared_with_user_id, sh.mode, u.user_cname
+                            FROM personal_task_share sh JOIN user u ON u.id = sh.shared_with_user_id
+                            WHERE sh.task_id = ? ORDER BY u.user_cname");
+        $st->execute([$taskId]);
+        echo json_encode(['success' => true, 'data' => $st->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($action === 'add_share') {
+        $taskId = (int)($_POST['task_id'] ?? 0);
+        $target = (int)($_POST['target_user_id'] ?? 0);
+        $mode = (($_POST['mode'] ?? 'view') === 'edit') ? 'edit' : 'view';
+        $task = pt_get_own_task($db, $user_id, $taskId);
+        if (!$task) throw new Exception('找不到紀錄或無權限');
+        if ($target <= 0 || $target === $user_id) throw new Exception('分享對象不正確');
+        if (!rf_has_module_role($db, $target, 'personal_task')) throw new Exception('該使用者尚無個人工作紀錄權限，無法看到分享');
+        $db->prepare("INSERT INTO personal_task_share (task_id, owner_id, shared_with_user_id, mode, created_by)
+                      VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE mode = VALUES(mode)")
+           ->execute([$taskId, $user_id, $target, $mode, $user_id]);
+        try {
+            $modeTxt = $mode === 'edit' ? '共同進度' : '看進度';
+            personal_task_remind_user($db, $target, '📋 有人分享工作給你',
+                pt_user_name($db, $user_id) . '分享了「' . $task['title'] . '」（' . $modeTxt . '）給你');
+        } catch (\Throwable $e) {}
+        echo json_encode(['success' => true]);
+        exit;
+    }
+
+    if ($action === 'remove_share') {
+        $shareId = (int)($_POST['share_id'] ?? 0);
+        $st = $db->prepare("SELECT sh.id FROM personal_task_share sh
+                            JOIN personal_task t ON t.id = sh.task_id
+                            WHERE sh.id = ? AND t.user_id = ?");
+        $st->execute([$shareId, $user_id]);
+        if (!$st->fetchColumn()) throw new Exception('找不到分享或無權限');
+        $db->prepare("DELETE FROM personal_task_share WHERE id = ?")->execute([$shareId]);
+        echo json_encode(['success' => true]);
+        exit;
+    }
+
+    // ══ 複製給對方：一次性複製成對方獨立的工作，進度歸零（owner only）══════
+    if ($action === 'copy_task') {
+        $srcId = (int)($_POST['task_id'] ?? 0);
+        $target = (int)($_POST['target_user_id'] ?? 0);
+        $src = pt_get_own_task($db, $user_id, $srcId);
+        if (!$src) throw new Exception('找不到紀錄或無權限');
+        if ($target <= 0) throw new Exception('複製對象不正確');
+        if (!rf_has_module_role($db, $target, 'personal_task')) throw new Exception('該使用者尚無個人工作紀錄權限');
+        $db->beginTransaction();
+        try {
+            // 主檔（進度歸零：status=0、received_at=今天、完成/提醒旗標清空；期限沿用）
+            $ins = $db->prepare("INSERT INTO personal_task
+                    (user_id, title, bind_type, bind_id, bind_label, status, received_at, deadline,
+                     remind_before_minutes, remind_sent, urgent_days, note)
+                    VALUES (?,?,?,?,?,0,CURDATE(),?,?,0,?,?)");
+            $ins->execute([$target, $src['title'], $src['bind_type'], $src['bind_id'], $src['bind_label'],
+                $src['deadline'], $src['remind_before_minutes'], $src['urgent_days'], $src['note']]);
+            $newId = (int)$db->lastInsertId();
+            // 綁定複製
+            $selB = $db->prepare("SELECT bind_type, bind_id, bind_label, sort_order FROM personal_task_bind WHERE task_id = ?");
+            $selB->execute([$srcId]);
+            $insB = $db->prepare("INSERT INTO personal_task_bind (task_id, bind_type, bind_id, bind_label, sort_order) VALUES (?,?,?,?,?)");
+            foreach ($selB->fetchAll(PDO::FETCH_ASSOC) as $b) {
+                $insB->execute([$newId, $b['bind_type'], $b['bind_id'], $b['bind_label'], $b['sort_order']]);
+            }
+            // 步驟＋小項複製（進度歸零：reached_at/done_at 清空、remind_sent=0）
+            $selS = $db->prepare("SELECT id, step_name, sort_order, planned_at, remind_before_minutes
+                                  FROM personal_task_step WHERE task_id = ? ORDER BY sort_order, id");
+            $selS->execute([$srcId]);
+            $insS = $db->prepare("INSERT INTO personal_task_step
+                    (task_id, step_name, sort_order, planned_at, remind_before_minutes, remind_sent) VALUES (?,?,?,?,?,0)");
+            $selItems = $db->prepare("SELECT item_name, sort_order FROM personal_task_step_item WHERE step_id = ? ORDER BY sort_order, id");
+            $insItem = $db->prepare("INSERT INTO personal_task_step_item (step_id, item_name, sort_order) VALUES (?,?,?)");
+            foreach ($selS->fetchAll(PDO::FETCH_ASSOC) as $s) {
+                $insS->execute([$newId, $s['step_name'], $s['sort_order'], $s['planned_at'], $s['remind_before_minutes']]);
+                $newStepId = (int)$db->lastInsertId();
+                $selItems->execute([$s['id']]);
+                foreach ($selItems->fetchAll(PDO::FETCH_ASSOC) as $it) {
+                    $insItem->execute([$newStepId, $it['item_name'], $it['sort_order']]);
+                }
+            }
+            $db->commit();
+        } catch (Exception $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            throw $e;
+        }
+        try {
+            personal_task_remind_user($db, $target, '📋 有人複製工作給你',
+                pt_user_name($db, $user_id) . '複製了一筆工作「' . $src['title'] . '」給你');
+        } catch (\Throwable $e) {}
+        echo json_encode(['success' => true, 'id' => $newId]);
         exit;
     }
 
