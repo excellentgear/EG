@@ -118,6 +118,32 @@ function kpi_as_ensure_schema(PDO $db): void {
         KEY idx_ind (indicator_id, year)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='KPI設定/數值變更歷史(AS9100可追溯)'");
 
+    // ── 資料來源目錄（no-code builder）：IT 一次性把資料表用中文登記為白名單 ──
+    $db->exec("CREATE TABLE IF NOT EXISTS kpi_ds_catalog (
+        ds_id INT AUTO_INCREMENT PRIMARY KEY,
+        ds_label VARCHAR(60) NOT NULL COMMENT '中文名稱(管理員看到的,例:出貨單)',
+        table_name VARCHAR(64) NOT NULL COMMENT '實際資料表名(白名單,只有登記的表可被查)',
+        date_column VARCHAR(64) NOT NULL COMMENT '月份歸屬用的日期欄',
+        note VARCHAR(200) NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        sort_order INT NOT NULL DEFAULT 0,
+        Created_By VARCHAR(30) NULL,
+        Created_At DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_table (table_name)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='KPI資料來源目錄(白名單資料表,IT登記)'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS kpi_ds_field (
+        field_id INT AUTO_INCREMENT PRIMARY KEY,
+        ds_id INT NOT NULL,
+        field_label VARCHAR(60) NOT NULL COMMENT '中文欄位名(例:客戶名稱)',
+        column_name VARCHAR(64) NOT NULL COMMENT '實際欄位名',
+        role ENUM('filter','measure') NOT NULL DEFAULT 'filter' COMMENT 'filter=可作篩選 measure=可加總的數值欄',
+        data_type ENUM('text','number','date') NOT NULL DEFAULT 'text',
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        sort_order INT NOT NULL DEFAULT 0,
+        KEY idx_ds (ds_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='KPI資料來源目錄-欄位(可篩選/可加總)'");
+
     // 角色 seed（module='kpi'，固定 role_code，供 user_permissions.php 指派）
     foreach ([['kpi_view','KPI檢閱'],['kpi_fill','KPI填報'],['kpi_admin','KPI管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='kpi' LIMIT 1");
@@ -131,6 +157,52 @@ function kpi_as_ensure_schema(PDO $db): void {
     // 指標 seed（僅首次；之後一律由設定頁維護）
     $n = (int)$db->query("SELECT COUNT(*) FROM kpi_as_indicator")->fetchColumn();
     if ($n === 0) kpi_as_seed_indicators($db);
+
+    // 資料來源目錄 seed（僅首次；給非IT管理員現成可組的積木＋示範）
+    $dn = (int)$db->query("SELECT COUNT(*) FROM kpi_ds_catalog")->fetchColumn();
+    if ($dn === 0) kpi_as_seed_catalog($db);
+}
+
+/** 資料來源目錄初始積木（IT 之後可於設定頁增修） */
+function kpi_as_seed_catalog(PDO $db): void {
+    // [label, table, date_col, note, [ [field_label, column, role, data_type], ... ]]
+    $cat = [
+        ['出貨單', 'is_list', 'Order_date', '每筆出貨明細（可算筆數／數量加總）', [
+            ['客戶名稱','Client_name','filter','text'],
+            ['出貨性質','sale_type','filter','number'],
+            ['數量','Qty','measure','number'],
+            ['料號','Product_id','filter','text'],
+        ]],
+        ['退貨單', 'ir_track', 'IR_date', '客戶退貨（客訴來源）', [
+            ['客戶名稱','Client_name','filter','text'],
+            ['退貨性質','return_type_id','filter','number'],
+            ['數量','Qty','measure','number'],
+        ]],
+        ['訂單', 'order_track', 'Delivery_date', '訂單（依交期歸屬月份）', [
+            ['客戶名稱','Client_name','filter','text'],
+            ['數量','Qty','measure','number'],
+            ['料號','d_id','filter','text'],
+        ]],
+        ['報價單', 'quotation_list', 'quote_date', '報價單', [
+            ['客戶名稱','client_name','filter','text'],
+            ['草稿','is_draft','filter','number'],
+        ]],
+        ['出貨檢驗', 'qc_packing_inspection', 'inspection_date', '成品出貨檢驗（可算NG數／全檢數加總）', [
+            ['判定','judgement','filter','text'],
+            ['NG總數','ng_qty','measure','number'],
+            ['實際全檢數','inspected_qty','measure','number'],
+            ['合格數','ok_qty','measure','number'],
+        ]],
+    ];
+    $insC = $db->prepare("INSERT INTO kpi_ds_catalog (ds_label, table_name, date_column, note, sort_order, Created_By) VALUES (?,?,?,?,?, 'system-seed')");
+    $insF = $db->prepare("INSERT INTO kpi_ds_field (ds_id, field_label, column_name, role, data_type, sort_order) VALUES (?,?,?,?,?,?)");
+    $i = 0;
+    foreach ($cat as $c) {
+        $insC->execute([$c[0], $c[1], $c[2], $c[3], ++$i]);
+        $dsId = (int)$db->lastInsertId();
+        $j = 0;
+        foreach ($c[4] as $f) $insF->execute([$dsId, $f[0], $f[1], $f[2], $f[3], ++$j]);
+    }
 }
 
 /** 21 項指標初始資料（來源：2-GM-04-01-關鍵績效指標 2025.xlsx） */
@@ -475,6 +547,10 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
     $ym = sprintf('%04d-%02d', $year, $month);
     $ms = sprintf('%04d-%02d-01', $year, $month);
     $me = date('Y-m-t', strtotime($ms));
+
+    // 自訂（資料來源目錄 no-code builder）：params_json 本身即 spec
+    if ($key === '__builder__') return kpi_as_builder_compute($db, $year, $month, $params);
+
     switch ($key) {
 
         case 'complaint_rate': {
@@ -738,4 +814,103 @@ function kpi_as_below_target(?float $v, array $iy): bool {
         case 'yes': return $v < 1;
         default:    return $v < $t;
     }
+}
+
+/* ============================================================
+ * 資料來源目錄 no-code builder（安全通用查詢器）
+ * spec = { num:{side}, den:{side}|null, multiply_100:bool }
+ * side = { ds_id, agg:'count|sum', measure_field_id, filters:[{field_id,op,values[]}] }
+ * 安全：表名/欄名一律取自目錄白名單(kpi_ds_catalog/kpi_ds_field)且過識別字正規；值一律綁定
+ * ============================================================ */
+function kpi_as_ident_ok($s): bool {
+    return is_string($s) && $s !== '' && preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $s);
+}
+
+/** 允許的篩選運算子 */
+function kpi_as_builder_ops(): array {
+    return ['in'=>'屬於','not_in'=>'不屬於','eq'=>'等於','ne'=>'不等於',
+            'gt'=>'大於','lt'=>'小於','ge'=>'大於等於','le'=>'小於等於',
+            'isnull'=>'空值','notnull'=>'非空值'];
+}
+
+/** 計算 builder 一側（分子或分母），回傳數值或 null(無法計算) */
+function kpi_as_builder_side(PDO $db, int $year, int $month, ?array $side): ?float {
+    if (!$side || empty($side['ds_id'])) return null;
+    $st = $db->prepare("SELECT table_name, date_column FROM kpi_ds_catalog WHERE ds_id=? AND is_active=1");
+    $st->execute([(int)$side['ds_id']]);
+    $ds = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$ds) return null;
+    $table = $ds['table_name']; $dateCol = $ds['date_column'];
+    if (!kpi_as_ident_ok($table) || !kpi_as_ident_ok($dateCol)) return null;
+
+    $fst = $db->prepare("SELECT field_id, column_name, role FROM kpi_ds_field WHERE ds_id=? AND is_active=1");
+    $fst->execute([(int)$side['ds_id']]);
+    $fields = [];
+    foreach ($fst->fetchAll(PDO::FETCH_ASSOC) as $f) $fields[(int)$f['field_id']] = $f;
+
+    $agg = strtolower((string)($side['agg'] ?? 'count'));
+    $aggSql = 'COUNT(*)';
+    if ($agg === 'sum') {
+        $mf = $fields[(int)($side['measure_field_id'] ?? 0)] ?? null;
+        if (!$mf || $mf['role'] !== 'measure' || !kpi_as_ident_ok($mf['column_name'])) return null;
+        $aggSql = 'COALESCE(SUM(`' . $mf['column_name'] . '`),0)';
+    }
+
+    $ym = sprintf('%04d-%02d', $year, $month);
+    $where = ["DATE_FORMAT(`$dateCol`,'%Y-%m')=?"];
+    $bind = [$ym];
+    $ops = kpi_as_builder_ops();
+    foreach (($side['filters'] ?? []) as $flt) {
+        $f = $fields[(int)($flt['field_id'] ?? 0)] ?? null;
+        if (!$f || !kpi_as_ident_ok($f['column_name'])) continue;
+        $op = (string)($flt['op'] ?? 'in');
+        if (!isset($ops[$op])) continue;
+        $col = '`' . $f['column_name'] . '`';
+        $vals = $flt['values'] ?? [];
+        if (!is_array($vals)) $vals = [$vals];
+        $vals = array_values(array_filter(array_map('strval', $vals), function ($x) { return $x !== ''; }));
+        switch ($op) {
+            case 'in':     if ($vals) { $where[] = "$col IN (" . implode(',', array_fill(0, count($vals), '?')) . ")"; $bind = array_merge($bind, $vals); } break;
+            case 'not_in': if ($vals) { $where[] = "$col NOT IN (" . implode(',', array_fill(0, count($vals), '?')) . ")"; $bind = array_merge($bind, $vals); } break;
+            case 'eq': if ($vals !== []) { $where[] = "$col = ?";  $bind[] = $vals[0]; } break;
+            case 'ne': if ($vals !== []) { $where[] = "$col <> ?"; $bind[] = $vals[0]; } break;
+            case 'gt': if ($vals !== []) { $where[] = "$col > ?";  $bind[] = $vals[0]; } break;
+            case 'lt': if ($vals !== []) { $where[] = "$col < ?";  $bind[] = $vals[0]; } break;
+            case 'ge': if ($vals !== []) { $where[] = "$col >= ?"; $bind[] = $vals[0]; } break;
+            case 'le': if ($vals !== []) { $where[] = "$col <= ?"; $bind[] = $vals[0]; } break;
+            case 'isnull':  $where[] = "($col IS NULL OR $col='')"; break;
+            case 'notnull': $where[] = "($col IS NOT NULL AND $col<>'')"; break;
+        }
+    }
+    $sql = "SELECT $aggSql FROM `$table` WHERE " . implode(' AND ', $where);
+    try {
+        $st = $db->prepare($sql);
+        $st->execute($bind);
+        return (float)$st->fetchColumn();
+    } catch (Throwable $e) { return null; }
+}
+
+/** builder 整體計算：回傳 ['num','den','value'] 或 null */
+function kpi_as_builder_compute(PDO $db, int $year, int $month, array $spec): ?array {
+    $num = kpi_as_builder_side($db, $year, $month, $spec['num'] ?? null);
+    if ($num === null) return null;
+    $hasDen = !empty($spec['den']) && !empty($spec['den']['ds_id']);
+    if (!$hasDen) return ['num' => $num, 'den' => null, 'value' => $num]; // 純計數/加總
+    $den = kpi_as_builder_side($db, $year, $month, $spec['den']);
+    if ($den === null) return ['num' => $num, 'den' => null, 'value' => null];
+    $mult = !empty($spec['multiply_100']) ? 100 : 1;
+    return ['num' => $num, 'den' => $den, 'value' => $den > 0 ? $num / $den * $mult : null];
+}
+
+/** 目錄（含欄位）供設定頁使用 */
+function kpi_as_catalog(PDO $db): array {
+    $cats = $db->query("SELECT ds_id, ds_label, table_name, date_column, note, is_active, sort_order
+                        FROM kpi_ds_catalog ORDER BY sort_order, ds_id")->fetchAll(PDO::FETCH_ASSOC);
+    $fmap = [];
+    foreach ($db->query("SELECT field_id, ds_id, field_label, column_name, role, data_type, is_active, sort_order
+                         FROM kpi_ds_field ORDER BY sort_order, field_id")->fetchAll(PDO::FETCH_ASSOC) as $f) {
+        $fmap[(int)$f['ds_id']][] = $f;
+    }
+    foreach ($cats as &$c) $c['fields'] = $fmap[(int)$c['ds_id']] ?? [];
+    return $cats;
 }
