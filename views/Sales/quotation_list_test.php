@@ -1455,6 +1455,27 @@ body { background:var(--bg); }
   </div></div>
 </div>
 
+<!-- ══ 圖片檢視器 Modal（點開附件 → 檢視＋旋轉存檔）══ -->
+<div class="modal fade" id="imgViewerModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:92vw;max-width:1100px;" role="document"><div class="modal-content">
+    <div class="modal-header" style="background:#5a4632;color:#fff;padding:8px 14px;">
+      <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.85;"><span>&times;</span></button>
+      <h4 class="modal-title" style="font-size:14px;"><i class="fa fa-image" style="margin-right:6px;"></i><span id="imgViewerName"></span></h4>
+    </div>
+    <div class="modal-body" style="text-align:center;background:#2b2b2b;padding:10px;max-height:78vh;overflow:auto;">
+      <img id="imgViewerImg" src="" alt="" style="max-width:100%;max-height:74vh;background:#fff;">
+      <div id="imgViewerLoading" style="display:none;color:#ddd;padding:30px;"><i class="fa fa-spinner fa-spin fa-2x"></i></div>
+    </div>
+    <div class="modal-footer" style="padding:8px 14px;text-align:center;">
+      <button type="button" class="btn btn-default btn-sm" id="imgViewerRotL"><i class="fa fa-undo"></i> 逆時針旋轉</button>
+      <button type="button" class="btn btn-default btn-sm" id="imgViewerRotR"><i class="fa fa-repeat"></i> 順時針旋轉</button>
+      <span id="imgViewerHint" style="font-size:11px;color:#999;margin:0 6px;">旋轉會直接存檔（永久生效）</span>
+      <a class="btn btn-default btn-sm" id="imgViewerOpen" target="_blank" href="#" title="以原檔在新分頁開啟"><i class="fa fa-external-link"></i> 開新分頁</a>
+      <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+    </div>
+  </div></div>
+</div>
+
 <!-- ══ 修改紀錄 Modal ══ -->
 <div class="modal fade" id="changeLogModal" tabindex="-1" role="dialog">
   <div class="modal-dialog" style="width:640px;max-width:96vw;" role="document"><div class="modal-content">
@@ -5912,11 +5933,9 @@ function appendFileItem(f, quoteNo) {
             </button>
             <span class="file-part-badge-slot">${partBadgeHtml}</span>
             ${statusBadge}
-            <span class="file-item-name" onclick="window.open('${dlUrl}','_blank')" title="${escapeHtml(f.original_name||f.filename)}">${dispName}</span>
+            <span class="file-item-name" title="${escapeHtml(f.original_name||f.filename)}${isImg?'（點擊可檢視並旋轉）':''}" style="cursor:pointer;">${dispName}${isImg?' <i class="fa fa-search-plus" style="opacity:.5;font-size:10px;"></i>':''}</span>
             <span class="file-item-size">${escapeHtml(f.size)}</span>
             <span class="file-item-time">${escapeHtml(f.mtime)}</span>
-            ${isImg ? `<button class="btn btn-xs btn-default file-rot-left"  style="padding:1px 5px;" title="逆時針旋轉並存檔"><i class="fa fa-undo"></i></button>
-            <button class="btn btn-xs btn-default file-rot-right" style="padding:1px 5px;" title="順時針旋轉並存檔"><i class="fa fa-repeat"></i></button>` : ''}
             <button class="btn btn-xs btn-danger file-del-btn" style="padding:1px 5px;" title="刪除此附件">
                 <i class="fa fa-trash"></i>
             </button>
@@ -5954,26 +5973,57 @@ function appendFileItem(f, quoteNo) {
         });
     });
 
-    // 旋轉並存檔（永久生效）：圖片檔專用
-    $wrap.find('.file-rot-left').on('click',  () => _rotateFile(quoteNo, f.filename, -90));
-    $wrap.find('.file-rot-right').on('click', () => _rotateFile(quoteNo, f.filename, 90));
+    // 點檔名：圖片→開檢視器(可旋轉存檔)；其他檔→新分頁開原檔
+    $wrap.find('.file-item-name').on('click', function () {
+        if (isImg) openImageViewer(quoteNo, f.filename, f.original_name || f.filename, false);
+        else window.open(dlUrl, '_blank');
+    });
 
     $('#uploadedFilesList').append($wrap);
     return $wrap;
 }
 
-// 旋轉影像附件並覆寫存檔（deg：90=順時針、-90=逆時針），完成後重載清單破快取
-function _rotateFile(quoteNo, filename, deg) {
-    Swal.fire({ toast:true, position:'top-end', title:'旋轉中…', showConfirmButton:false, timer:600, didOpen:()=>Swal.showLoading() });
-    $.post(FILE_API_URL, { action:'rotate_file', quote_no:quoteNo, filename:filename, deg:deg }, res => {
+// ── 圖片檢視器（點開附件檢視，可即時旋轉並存檔）──────────────
+// isViewMode：來源是唯讀檢視清單(true)或編輯清單(false)；旋轉後重載對應清單以更新 mtime/破快取
+let _imgViewer = { quoteNo:'', filename:'', name:'', isViewMode:false };
+function openImageViewer(quoteNo, filename, name, isViewMode) {
+    _imgViewer = { quoteNo, filename, name, isViewMode:!!isViewMode };
+    $('#imgViewerName').text(name || filename);
+    // 旋轉存檔需編輯權限；無權者僅檢視
+    const canRotate = (typeof CAN_EDIT !== 'undefined' && CAN_EDIT) || (typeof IS_ADMIN !== 'undefined' && IS_ADMIN);
+    $('#imgViewerRotL, #imgViewerRotR, #imgViewerHint').toggle(!!canRotate);
+    _imgViewerReload();
+    $('#imgViewerModal').modal('show');
+}
+function _imgViewerReload() {
+    const t = new Date().getTime();  // 破快取：旋轉存檔後吃到新圖
+    const url = `${FILE_API_URL}?action=download&quote_no=${encodeURIComponent(_imgViewer.quoteNo)}&filename=${encodeURIComponent(_imgViewer.filename)}&_t=${t}`;
+    $('#imgViewerImg').hide().attr('src', url);
+    $('#imgViewerOpen').attr('href', url);
+    $('#imgViewerLoading').show();
+}
+function _imgViewerRotate(deg) {
+    const canRotate = (typeof CAN_EDIT !== 'undefined' && CAN_EDIT) || (typeof IS_ADMIN !== 'undefined' && IS_ADMIN);
+    if (!canRotate) { Swal.fire('無權限','需編輯權限才能旋轉存檔','warning'); return; }
+    $('#imgViewerRotL, #imgViewerRotR').prop('disabled', true);
+    $.post(FILE_API_URL, { action:'rotate_file', quote_no:_imgViewer.quoteNo, filename:_imgViewer.filename, deg:deg }, res => {
+        $('#imgViewerRotL, #imgViewerRotR').prop('disabled', false);
         if (res && res.success) {
-            loadFileList(quoteNo, false);  // 重載→ mtime 更新→開檔網址破快取吃到新圖
-            Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已旋轉並存檔', showConfirmButton:false, timer:1500 });
+            _imgViewerReload();                                   // 檢視器換上旋轉後的圖
+            if (typeof loadFileList === 'function') loadFileList(_imgViewer.quoteNo, _imgViewer.isViewMode); // 背景清單同步更新
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已旋轉並存檔', showConfirmButton:false, timer:1200 });
         } else {
             Swal.fire('無法旋轉', (res && res.message) || '請稍後再試', 'warning');
         }
-    }, 'json').fail(() => Swal.fire('錯誤','與伺服器通訊失敗','error'));
+    }, 'json').fail(() => { $('#imgViewerRotL, #imgViewerRotR').prop('disabled', false); Swal.fire('錯誤','與伺服器通訊失敗','error'); });
 }
+// 圖片載入完成 → 隱藏 loading 顯示圖；綁定旋轉鈕（一次即可）
+$(function () {
+    $('#imgViewerImg').on('load', function () { $('#imgViewerLoading').hide(); $(this).show(); })
+                      .on('error', function () { $('#imgViewerLoading').hide(); });
+    $('#imgViewerRotL').on('click', () => _imgViewerRotate(-90));
+    $('#imgViewerRotR').on('click', () => _imgViewerRotate(90));
+});
 
 // ── 檢視模式附件項目（唯讀，可點開）────────────────────────
 function appendFileItemView(f, quoteNo) {
@@ -5997,17 +6047,22 @@ function appendFileItemView(f, quoteNo) {
         : '';
     const linkedParts = f.linked_parts ? JSON.parse(f.linked_parts) : null;
     const partHtml     = filePartBadgeHtml(linkedParts);
+    const isImg        = ['png','jpg','jpeg','gif','bmp','webp'].includes(ext);
 
     const $item = $(`<div class="file-item-wrap">
         <div class="file-item">
             <i class="fa ${icon}"></i>
             ${catHtml}
             ${partHtml}
-            <span class="file-item-name" onclick="window.open('${dlUrl}','_blank')" title="${escapeHtml(f.original_name||f.filename)}">${dispName}</span>
+            <span class="file-item-name" title="${escapeHtml(f.original_name||f.filename)}${isImg?'（點擊可檢視並旋轉）':''}" style="cursor:pointer;">${dispName}${isImg?' <i class="fa fa-search-plus" style="opacity:.5;font-size:10px;"></i>':''}</span>
             <span class="file-item-size">${escapeHtml(f.size)}</span>
             <span class="file-item-time">${escapeHtml(f.mtime)}</span>
         </div>
     </div>`);
+    $item.find('.file-item-name').on('click', function () {
+        if (isImg) openImageViewer(quoteNo, f.filename, f.original_name || f.filename, true);
+        else window.open(dlUrl, '_blank');
+    });
     $('#viewAttachList').append($item);
 }
 
