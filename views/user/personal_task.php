@@ -158,6 +158,12 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .pt-bom-flow .pt-step-time { font-size:9px; margin-top:0; }
         /* 外包廠商：換行到製程名下方，小字暖色 */
         .pt-step-maker { display:block; color:#B5732A; font-size:9px; line-height:1.1; margin-top:0; }
+        /* 綁定訂單的生命週期狀態條（暖色調，與 BOM 製程條區隔） */
+        .pt-order-flow { margin-top:5px; padding:3px 8px 1px; background:#FDF8F0; border:1px dashed #EFDFC9; border-radius:6px; }
+        .pt-order-flow .pt-step { cursor:default; min-width:58px; max-width:120px; }
+        .pt-order-flow .pt-dot { width:16px; height:16px; flex:0 0 16px; font-size:9px; border-width:1px; margin:0 2px; }
+        .pt-order-flow .pt-step-name { font-size:10px; margin-top:2px; line-height:1.1; }
+        .pt-order-flow .pt-bom-flow { background:#FBFCFE; margin-top:4px; }   /* 訂單下巢狀的 BOM 製程條 */
         .pt-bom-flow-closed { font-size:11px; color:#7A869A; cursor:pointer; padding:2px 0; }
         .pt-bom-flow-closed .pct { color:#1ABB9C; font-weight:700; }
         .pt-bom-flow-closed:hover { color:#4A5A6A; }
@@ -837,11 +843,15 @@ function stepFlowCell(r) {
     $flow.append($fin);
 
     $td.append($flow).append($panelsBox);
-    // 綁定 BOM 的唯讀實際製程進度條（每個 BOM 一條，資料由 renderBomFlows 批次填入）
+    // 綁定 BOM→唯讀製程條；綁定訂單→訂單生命週期狀態條（皆由批次 render 填入）
     (r.binds || []).forEach(function (b) {
-        if (b.bind_type !== 'bom') return;
-        $td.append($('<div class="pt-bom-flow" data-pending="1">').attr('data-bom', b.bind_id)
-            .html('<div class="pt-bom-flow-title" style="color:#9AA5B1;"><i class="fa fa-cog fa-spin"></i> BOM 製程載入中…</div>'));
+        if (b.bind_type === 'bom') {
+            $td.append($('<div class="pt-bom-flow" data-pending="1">').attr('data-bom', b.bind_id)
+                .html('<div class="pt-bom-flow-title" style="color:#9AA5B1;"><i class="fa fa-cog fa-spin"></i> BOM 製程載入中…</div>'));
+        } else if (b.bind_type === 'order') {
+            $td.append($('<div class="pt-order-flow" data-pending="1">').attr('data-order', b.bind_id)
+                .html('<div class="pt-bom-flow-title" style="color:#9AA5B1;"><i class="fa fa-cog fa-spin"></i> 訂單狀態載入中…</div>'));
+        }
     });
     return $td;
 }
@@ -994,8 +1004,66 @@ function renderBomFlows() {
     }).fail(paint);
 }
 
+// ── 綁定訂單的生命週期狀態條（設計批圖→轉生管→生管綁定BOM→BOM製程）──────
+var orderProgressCache = {};
+function orderStageInner(od) {
+    var $flow = $('<div class="step-flow">');
+    (od.stages || []).forEach(function (s, i) {
+        var $node = $('<div class="pt-step">');
+        if (s.reached) $node.addClass('reached'); else if (s.current) $node.addClass('current');
+        var prevReached = i > 0 && od.stages[i - 1].reached;
+        var $top = $('<div class="pt-step-top">');
+        $top.append($('<span class="pt-line">').addClass(i === 0 ? 'edge' : (prevReached ? 'done' : '')));
+        var $dot = $('<span class="pt-dot">');
+        if (s.reached) $dot.html('<i class="fa fa-check"></i>'); else $dot.text(i + 1);
+        $top.append($dot).append($('<span class="pt-line">').addClass(s.reached ? 'done' : ''));
+        $node.append($top);
+        var $nm = $('<div class="pt-step-name">').text(s.name);
+        var subTxt = s.sub || (s.reached && s.date ? fmtDateShort(s.date) : '');
+        if (subTxt) $nm.append($('<span class="pt-step-maker">').text(subTxt));
+        $node.append($nm);
+        $flow.append($node);
+    });
+    return $flow;
+}
+function fillOrderFlow($c, od) {
+    $c.empty();
+    var head = '訂單狀態：' + (od.order_no || od.order_id) + (od.d_id ? '｜' + od.d_id : '') + (od.qty ? '｜數量 ' + od.qty : '');
+    var $title = $('<div class="pt-bom-flow-title">').html('<i class="fa fa-shopping-cart"></i> ').append($('<span>').text(head));
+    if (od.is_closed) $title.append($('<span style="color:#1ABB9C;">').text('｜已結案'));
+    if (od.is_paused) $title.append($('<span style="color:#DD5138;">').text('｜暫停/取消'));
+    $c.append($title);
+    $c.append(orderStageInner(od));
+    // 訂單已綁定的各 BOM 製程進度（重用 BOM 製程條）
+    (od.boms || []).forEach(function (bd) {
+        var $sub = $('<div class="pt-bom-flow">');
+        fillBomFlow($sub, bd);
+        $c.append($sub);
+    });
+}
+function renderOrderFlows() {
+    var $pending = $('.pt-order-flow[data-pending="1"]');
+    if (!$pending.length) return;
+    var need = {};
+    $pending.each(function () { need[$(this).attr('data-order')] = 1; });
+    var ids = Object.keys(need).filter(function (o) { return !(o in orderProgressCache); });
+    function paint() {
+        $('.pt-order-flow[data-pending="1"]').each(function () {
+            var $c = $(this).attr('data-pending', '0');
+            var o = $c.attr('data-order');
+            if (orderProgressCache[o]) fillOrderFlow($c, orderProgressCache[o]);
+            else $c.html('<div class="pt-bom-flow-title" style="color:#bbb;">此訂單查無狀態資料</div>');
+        });
+    }
+    if (!ids.length) { paint(); return; }
+    apiGet('get_order_progress', { orders: ids.join(',') }).done(function (res) {
+        if (res.success) { var d = res.data || {}; Object.keys(d).forEach(function (k) { orderProgressCache[k] = d[k]; }); }
+        paint();
+    }).fail(paint);
+}
+
 function renderRows(rows) {
-    bomProgressCache = {};   // 每次重載清快取，確保製程進度為最新
+    bomProgressCache = {}; orderProgressCache = {};   // 每次重載清快取，確保進度為最新
     var $tb = $('#ptaskTbody').empty();
     if (!rows.length) { $tb.html('<tr><td colspan="4" class="text-center text-muted">沒有符合條件的紀錄</td></tr>'); return; }
     rows.forEach(function (r) {
@@ -1054,7 +1122,8 @@ function renderRows(rows) {
         $tb.append(tr);
     });
     alignAllPanels();  // 所有列都進 DOM 後，把小項面板對齊到各自的進度節點下方
-    renderBomFlows();  // 綁定 BOM 的唯讀製程進度條（批次取回後填入）
+    renderBomFlows();    // 綁定 BOM 的唯讀製程進度條（批次取回後填入）
+    renderOrderFlows();  // 綁定訂單的生命週期狀態條（批次取回後填入）
 }
 
 // 雙擊「接收日期／標題／期限」任一儲存格 → 開啟編輯跳窗

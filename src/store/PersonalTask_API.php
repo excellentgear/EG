@@ -173,6 +173,50 @@ function pt_user_name(PDO $db, int $userId): string {
     return $v !== false ? (string)$v : '';
 }
 
+// 單一 BOM 的逐關製程進度（唯讀，比照 bom_tracking get_matched_boms 口徑）。查無回 null。
+function pt_bom_progress(PDO $db, string $bom): ?array {
+    $st = $db->prepare("SELECT bom, d_id, Client_Name, sqty, processing_state, Delivery_date FROM bom WHERE bom = ?");
+    $st->execute([$bom]);
+    $m = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$m) return null;
+    // 逐關節點（一個 bom_sn 一節點，排除 skip；含外包廠商 maker）
+    $st = $db->prepare("SELECT bi.bom_sn, MAX(pn.ProcessName) AS name, MAX(bi.maker_id) AS maker,
+            MAX(bi.outsource_date) AS outsource_date, MAX(bi.return_date) AS return_date
+        FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+        WHERE bi.bom = ? AND bi.processing_state != 'skip'
+        GROUP BY bi.bom_sn ORDER BY bi.bom_sn");
+    $st->execute([$bom]);
+    $nodeRows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $processCount = count($nodeRows);
+    $st = $db->prepare("SELECT COUNT(DISTINCT bi.bom_sn) FROM bom_ing bi
+        WHERE bi.bom = ? AND bi.processing_state != 'skip' AND bi.bom_sn <= (
+            SELECT bi2.bom_sn FROM bom_ing bi2 WHERE bi2.bom = ? AND bi2.processing_state != 'skip'
+            ORDER BY GREATEST(COALESCE(bi2.outsource_date,'0000-00-00'), COALESCE(bi2.QC_check_date,'0000-00-00')) DESC, bi2.bom_sn DESC LIMIT 1
+        )");
+    $st->execute([$bom, $bom]);
+    $currentStep = (int)$st->fetchColumn();
+    $isClosed = ((string)$m['processing_state'] === '1');
+    $progressPct = $isClosed ? 100 : ($processCount > 0 ? round($currentStep / $processCount * 100, 1) : null);
+    $nodes = [];
+    foreach ($nodeRows as $i => $n) {
+        $rank = $i + 1;
+        $nodes[] = [
+            'bom_sn' => $n['bom_sn'], 'name' => $n['name'] ?: ('關卡' . $rank), 'maker' => $n['maker'],
+            'outsource_date' => $n['outsource_date'], 'return_date' => $n['return_date'],
+            'reached' => ($isClosed || $rank <= $currentStep) ? 1 : 0,
+            'current' => (!$isClosed && $rank === $currentStep) ? 1 : 0,
+        ];
+    }
+    $latestName = ($currentStep > 0 && isset($nodeRows[$currentStep - 1])) ? $nodeRows[$currentStep - 1]['name'] : null;
+    return [
+        'bom' => $bom, 'd_id' => $m['d_id'], 'Client_Name' => $m['Client_Name'], 'sqty' => $m['sqty'],
+        'processing_state' => $m['processing_state'], 'is_closed' => $isClosed ? 1 : 0,
+        'process_count' => $processCount, 'current_step' => $currentStep,
+        'progress_pct' => $progressPct, 'latest_process_name' => $isClosed ? '結案' : $latestName,
+        'delivery_date' => $m['Delivery_date'], 'nodes' => $nodes,
+    ];
+}
+
 // 把小項掛到步驟陣列上（$steps 需含 id 欄；以參考傳遞直接改寫）
 function pt_attach_step_items(PDO $db, array &$steps): void {
     if (!$steps) return;
@@ -897,52 +941,72 @@ try {
         $boms = array_values(array_unique(array_filter(array_map('trim', explode(',', (string)$bomsRaw)))));
         $out = [];
         foreach ($boms as $bom) {
-            $st = $db->prepare("SELECT bom, d_id, Client_Name, sqty, processing_state, Delivery_date FROM bom WHERE bom = ?");
-            $st->execute([$bom]);
-            $m = $st->fetch(PDO::FETCH_ASSOC);
-            if (!$m) continue;
-            // 逐關節點（一個 bom_sn 一個節點，排除 skip；分母口徑比照 bom_tracking）
-            $st = $db->prepare("SELECT bi.bom_sn,
-                    MAX(pn.ProcessName) AS name,
-                    MAX(bi.maker_id) AS maker,
-                    MAX(bi.outsource_date) AS outsource_date,
-                    MAX(bi.return_date) AS return_date
-                FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
-                WHERE bi.bom = ? AND bi.processing_state != 'skip'
-                GROUP BY bi.bom_sn ORDER BY bi.bom_sn");
-            $st->execute([$bom]);
-            $nodeRows = $st->fetchAll(PDO::FETCH_ASSOC);
-            $processCount = count($nodeRows);
-            // 目前所在關卡序位（公式抄 BomTrack_API get_matched_boms）
-            $st = $db->prepare("SELECT COUNT(DISTINCT bi.bom_sn) FROM bom_ing bi
-                WHERE bi.bom = ? AND bi.processing_state != 'skip' AND bi.bom_sn <= (
-                    SELECT bi2.bom_sn FROM bom_ing bi2 WHERE bi2.bom = ? AND bi2.processing_state != 'skip'
-                    ORDER BY GREATEST(COALESCE(bi2.outsource_date,'0000-00-00'), COALESCE(bi2.QC_check_date,'0000-00-00')) DESC, bi2.bom_sn DESC LIMIT 1
-                )");
-            $st->execute([$bom, $bom]);
-            $currentStep = (int)$st->fetchColumn();
-            $isClosed = ((string)$m['processing_state'] === '1');
-            $progressPct = $isClosed ? 100 : ($processCount > 0 ? round($currentStep / $processCount * 100, 1) : null);
-            $nodes = [];
-            foreach ($nodeRows as $i => $n) {
-                $rank = $i + 1;
-                $nodes[] = [
-                    'bom_sn' => $n['bom_sn'],
-                    'name' => $n['name'] ?: ('關卡' . $rank),
-                    'maker' => $n['maker'],
-                    'outsource_date' => $n['outsource_date'],
-                    'return_date' => $n['return_date'],
-                    'reached' => ($isClosed || $rank <= $currentStep) ? 1 : 0,
-                    'current' => (!$isClosed && $rank === $currentStep) ? 1 : 0,
-                ];
+            $bd = pt_bom_progress($db, $bom);
+            if ($bd) $out[$bom] = $bd;
+        }
+        echo json_encode(['success' => true, 'data' => $out], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // ══ 綁定訂單的生命週期狀態（設計批圖→轉生管→生管綁定BOM→BOM製程；唯讀）══
+    //   階段判定比照 views/Sales/NewOrder_Track222.php（pmGet 為批圖/生管分水嶺）
+    if ($action === 'get_order_progress') {
+        $raw = $_POST['orders'] ?? $_GET['orders'] ?? ($_POST['order'] ?? $_GET['order'] ?? '');
+        $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)$raw)))));
+        $out = [];
+        foreach ($ids as $oid) {
+            $st = $db->prepare("SELECT o.Order_id, o.Order_oo, o.d_id, o.Qty, o.Order_status,
+                    o.ateGet, o.ate, o.ateNote, o.in_review, o.pmGet,
+                    (SELECT COALESCE(SUM(m.allocated_qty),0) FROM bom_order_process_map m WHERE m.order_id=o.Order_id) AS bom_alloc_sum,
+                    (SELECT COUNT(*) FROM bom_order_process_map m WHERE m.order_id=o.Order_id) AS bom_cnt
+                FROM order_track o WHERE o.Order_id = ?");
+            $st->execute([$oid]);
+            $o = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$o) continue;
+            $pmDone = !empty($o['pmGet']);              // 已轉生管（＝批圖結束）
+            $bomCnt = (int)$o['bom_cnt'];
+            $allocSum = (int)$o['bom_alloc_sum'];
+            $qty = (int)$o['Qty'];
+            // 該訂單綁定的 BOM 逐筆製程進度（重用 pt_bom_progress）
+            $boms = [];
+            $bst = $db->prepare("SELECT m.bom FROM bom_order_process_map m WHERE m.order_id = ? ORDER BY m.bom");
+            $bst->execute([$oid]);
+            $bomAllDone = $bomCnt > 0;
+            foreach ($bst->fetchAll(PDO::FETCH_COLUMN) as $bomName) {
+                $bd = pt_bom_progress($db, $bomName);
+                if (!$bd) continue;
+                $boms[] = $bd;
+                $done = $bd['is_closed'] || ($bd['process_count'] > 0 && $bd['current_step'] >= $bd['process_count']);
+                if (!$done) $bomAllDone = false;
             }
-            $latestName = ($currentStep > 0 && isset($nodeRows[$currentStep - 1])) ? $nodeRows[$currentStep - 1]['name'] : null;
-            $out[$bom] = [
-                'bom' => $bom, 'd_id' => $m['d_id'], 'Client_Name' => $m['Client_Name'], 'sqty' => $m['sqty'],
-                'processing_state' => $m['processing_state'], 'is_closed' => $isClosed ? 1 : 0,
-                'process_count' => $processCount, 'current_step' => $currentStep,
-                'progress_pct' => $progressPct, 'latest_process_name' => $isClosed ? '結案' : $latestName,
-                'delivery_date' => $m['Delivery_date'], 'nodes' => $nodes,
+            if (!$boms) $bomAllDone = false;
+            // 各階段子狀態
+            $designSub = null;
+            if (!$pmDone) {
+                if (!empty($o['in_review'])) $designSub = '審圖中';
+                elseif (trim((string)$o['ateNote']) !== '') $designSub = '批圖溝通中';
+                else $designSub = '批圖中';
+            }
+            $bindSub = $bomCnt > 0 ? (($qty > 0 && $allocSum >= $qty) ? '全部綁定' : '部分綁定') : null;
+            // 線性四階段完成旗標（pmGet 一到，設計批圖與轉生管同時完成）
+            $reached = [$pmDone, $pmDone, $bomCnt > 0, $bomAllDone];
+            $stages = [
+                ['key' => 'design', 'name' => '設計批圖', 'reached' => $reached[0] ? 1 : 0, 'sub' => $designSub, 'date' => $o['ateGet']],
+                ['key' => 'pm', 'name' => '轉生管', 'reached' => $reached[1] ? 1 : 0, 'sub' => null, 'date' => $o['pmGet']],
+                ['key' => 'bind', 'name' => '生管綁定BOM', 'reached' => $reached[2] ? 1 : 0, 'sub' => $bindSub, 'date' => null],
+                ['key' => 'bom', 'name' => 'BOM製程', 'reached' => $reached[3] ? 1 : 0, 'sub' => null, 'date' => null],
+            ];
+            $curIdx = -1;
+            foreach ($reached as $i => $r) { if (!$r) { $curIdx = $i; break; } }
+            foreach ($stages as $i => &$s) { $s['current'] = ($i === $curIdx) ? 1 : 0; }
+            unset($s);
+            $status = $o['Order_status'];
+            $out[(string)$oid] = [
+                'order_id' => $oid, 'order_no' => $o['Order_oo'], 'd_id' => $o['d_id'], 'qty' => $qty,
+                'order_status' => $status,
+                'is_closed' => ($status !== null && (int)$status === 9) ? 1 : 0,
+                'is_paused' => ($status !== null && (int)$status === 6) ? 1 : 0,
+                'stages' => $stages, 'boms' => $boms,
             ];
         }
         echo json_encode(['success' => true, 'data' => $out], JSON_UNESCAPED_UNICODE);
