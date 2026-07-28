@@ -363,6 +363,12 @@ function updateUserDelegates() {
             return;
         }
 
+        // 冪等：插入前先清掉「目標 key（相同 被代理人+身分+起訖）」的既有列，避免重複新增產生重複優先序
+        $sqlDelTarget = "DELETE FROM user_delegate WHERE user_id = ? AND start_date = ? AND end_date = ?
+                         AND " . ($scope_dep === null ? "scope_department_id IS NULL" : "scope_department_id = " . intval($scope_dep)) . "
+                         AND " . ($scope_pos === null ? "scope_position_id IS NULL" : "scope_position_id = " . intval($scope_pos));
+        $db->prepare($sqlDelTarget)->execute([$user_id, $start_date, $end_date]);
+
         // 2. 插入新的代理規則
         if (!empty($delegate_ids)) {
             $insertStmt = $db->prepare("INSERT INTO user_delegate (user_id, delegate_id, scope_department_id, scope_position_id, start_date, end_date, active, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");

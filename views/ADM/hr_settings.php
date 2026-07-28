@@ -192,6 +192,7 @@ $jsPerms = [
                         <?php if (!empty($agentPerm)): ?>
                         <a href="#user-delegate-section" class="btn btn-default btn-sm">使用者代理設定</a>
                         <a href="#position-delegate-section" class="btn btn-default btn-sm">職稱代理設定</a>
+                        <a href="#dept-position-owner-section" class="btn btn-default btn-sm">指定負責人</a>
                         <?php endif; ?>
                         <a href="#leave-type-section" class="btn btn-default btn-sm">假別設定</a>
                     </div>
@@ -219,6 +220,14 @@ $jsPerms = [
                                             <label for="user_id">被代理人</label>
                                             <select id="user_id" name="user_id" class="form-control" required></select>
                                         </div>
+                                        <div class="form-group col-md-5 col-sm-6 col-xs-12">
+                                            <label for="scope_identity">適用職務身分 <small class="text-muted">(可只針對某兼任身分設代理)</small></label>
+                                            <select id="scope_identity" name="scope_identity" class="form-control">
+                                                <option value="">不分身分（主職／全部，預設）</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="row">
                                         <div class="form-group col-md-3 col-sm-6 col-xs-12">
                                             <label for="start_date">開始日期</label>
                                             <input type="date" id="start_date" name="start_date" class="form-control" required>
@@ -253,10 +262,20 @@ $jsPerms = [
                                     </div>
                                 </form>
                                 <?php endif; ?>
+                                <div class="clearfix" style="margin-bottom:8px;">
+                                    <div class="pull-right" style="display:flex; align-items:center; gap:10px;">
+                                        <label style="margin:0; font-weight:normal;">每頁
+                                            <select id="ud-page-size" class="form-control input-sm" style="display:inline-block; width:auto;">
+                                                <option>5</option><option selected>10</option><option>20</option><option>50</option>
+                                            </select> 筆
+                                        </label>
+                                        <span id="ud-pager"></span>
+                                    </div>
+                                </div>
                                 <table class="table table-striped table-hover">
                                     <thead>
                                         <tr>
-                                            <th>被代理人</th><th>代理人 (依順序)</th><th>開始日期</th><th>結束日期</th><th style="width: 150px;">操作</th>
+                                            <th>被代理人</th><th style="width:16%;">適用職務身分</th><th>代理人 (依順序)</th><th>開始日期</th><th>結束日期</th><th style="width: 150px;">操作</th>
                                         </tr>
                                     </thead>
                                     <tbody id="user-delegate-table-body"></tbody>
@@ -316,6 +335,41 @@ $jsPerms = [
                                 <table class="table table-striped table-hover">
                                     <thead><tr><th style="width: 25%;">主職稱</th><th>代理職稱 (依順序)</th><th style="width: 15%;">操作</th></tr></thead>
                                     <tbody id="position-delegate-table-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3. 部門×職稱 指定負責人設定區塊 (P2) -->
+                    <div id="dept-position-owner-section" class="col-md-12 col-sm-12 col-xs-12">
+                        <div class="x_panel">
+                            <div class="x_title">
+                                <h2>部門×職稱 指定負責人 <small style="color:#8a5a2b;">（讓職位代理解析成實際的人、並作為權責分離的主管鏈依據）</small></h2>
+                                <ul class="nav navbar-right panel_toolbox">
+                                    <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
+                                    <li><a class="close-link"><i class="fa fa-close"></i></a></li>
+                                </ul>
+                                <div class="clearfix"></div>
+                            </div>
+                            <div class="x_content">
+                                <div id="level-missing-alert" style="display:none; margin-bottom:12px; padding:10px 14px; border-radius:4px; background:#f7e0bd; color:#5a3d1a; border:1px solid #e6c48f;">
+                                    <i class="fa fa-exclamation-triangle"></i> <b>提醒：</b>以下職稱尚未設定「主管階級」，權責分離(SoD)自動直升上一級主管時可能無法正確解析，建議到「職稱設定」補齊：<span id="level-missing-list"></span>
+                                </div>
+                                <p class="text-muted" style="margin-bottom:10px;">指定某部門某職稱的「負責人」後，選單變更即自動儲存。此人會成為職位代理(職稱→職稱)實際落到的人，也是 SoD 直升主管鏈的解析依據。</p>
+                                <div style="margin-bottom:8px;">
+                                    <input type="text" id="dpo-filter" class="form-control input-sm" style="display:inline-block; width:260px;" placeholder="輸入部門/職稱過濾…">
+                                    <label style="margin-left:10px; font-weight:normal;"><input type="checkbox" id="dpo-only-unset"> 只看未指定</label>
+                                </div>
+                                <table class="table table-striped table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th style="width:28%;">部門</th>
+                                            <th style="width:24%;">職稱</th>
+                                            <th style="width:14%;">主管階級</th>
+                                            <th>指定負責人</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="dept-position-owner-body"></tbody>
                                 </table>
                             </div>
                         </div>
@@ -527,100 +581,133 @@ $jsPerms = [
             });
         }
 
+        // 格式化被代理人/代理人資訊（主職 + 兼任）
+        function formatUserInfo(u) {
+            if (!u || !u.user_cname) { return `(ID: ${u ? u.id : '?'})`; }
+            let html = `<b>${escapeHtml(u.user_cname)}</b><br><small style="color:#8a5a2b;">[主] ${escapeHtml(u.main_department_name || '-')} / ${escapeHtml(u.main_position_name || '-')}</small>`;
+            if (u.concurrent_positions) {
+                html += `<br><small style="color:#b26a1a;">[兼] ${u.concurrent_positions.split('; ').map(escapeHtml).join('<br>[兼] ')}</small>`;
+            }
+            return html;
+        }
+
+        // 使用者代理：分頁狀態
+        let udGroupsList = [];  // 排序後的規則群組陣列（供分頁）
+        let udPage = 1;
+
         function loadUserDelegates() {
             // 如果 allUsers 是空的，表示使用者資料還沒載入，稍後會由 loadUsersToSelect 觸發
             if (allUsers.length === 0) return;
 
-            // 建立一個函式來格式化使用者資訊 (主要與兼任職務)
-            const formatUserInfo = (u) => {
-                if (!u || !u.user_cname) {
-                    return `(ID: ${u.id})`;
-                }
-                let userInfoHtml = `<b>${escapeHtml(u.user_cname)}</b><br><small style="color: #007bff;">[主] ${escapeHtml(u.main_department_name || '-')} / ${escapeHtml(u.main_position_name || '-')}</small>`;
-                if (u.concurrent_positions) {
-                    userInfoHtml += `<br><small style="color: #008000;">[兼] ${u.concurrent_positions.split('; ').map(escapeHtml).join('<br>[兼] ')}</small>`;
-                }
-                return userInfoHtml;
-            };
-
             callApi(DEPT_JOB_API_URL, 'get_user_delegates', 'GET', null, function(response) {
-                if (response.status === 'success') {
-                    var tableBody = $('#user-delegate-table-body');
-                    tableBody.empty();
-                    
-                    // 將規則按 user_id 和 start_date 分組
-                    groupedByUserAndDate = response.data.reduce((acc, item) => {
-                        // 建立一個已設定代理的被代理人 ID 集合
-                        if (!acc.configuredUserIds) {
-                            acc.configuredUserIds = new Set();
-                        }
-                        const key = `${item.user_id}|${item.start_date}|${item.end_date}`;
-                        if (!acc[key]) {
-                            const user = allUsers.find(u => u.id == item.user_id);
-                            if (!user || parseInt(user.state) === 0) return acc; // 如果找不到被代理人或已離職，則跳過
+                if (response.status !== 'success') { alert('讀取代理設定失敗: ' + response.message); return; }
 
-                            acc[key] = {
-                                user: user,
-                                startDate: item.start_date,
-                                endDate: item.end_date,
-                                delegates: []
-                            };
-                            acc.configuredUserIds.add(String(item.user_id));
-                        }
-                        const delegate = allUsers.find(u => u.id == item.delegate_id);
-                        if (delegate && parseInt(delegate.state) !== 0) { // 只加入在職的代理人
-                             acc[key].delegates.push({ ...delegate, priority: item.priority });
-                        }
-                        return acc;
-                    }, {});
-
-                    // 從 groupedByUserAndDate 中移除 'configuredUserIds' 屬性，以便只遍歷規則
-                    const configuredUserIds = groupedByUserAndDate.configuredUserIds || new Set();
-                    delete groupedByUserAndDate.configuredUserIds;
-
-                    for (const key in groupedByUserAndDate) { // 遍歷代理規則
-                        // 檢查權限以決定是否顯示操作按鈕
-                        let editBtn = '';
-                        let delBtn = '';
-                        const agentP = window.currentUserPerms.agent || '';
-                        if (agentP.includes('A') || agentP.includes('U')) {
-                            editBtn = `<button class="btn btn-sm btn-info btn-edit-user-delegate-group" data-key="${key}">編輯</button>`;
-                        }
-                        if (agentP.includes('A') || agentP.includes('D')) {
-                            delBtn = `<button class="btn btn-sm btn-danger btn-delete-user-delegate-group" data-key="${key}">刪除</button>`;
-                        }
-
-                        const rule = groupedByUserAndDate[key];
-                        const userDisplay = formatUserInfo(rule.user);
-                        
-                        // 排序代理人並產生 HTML
-                        const delegatesHtml = rule.delegates
-                            .sort((a, b) => a.priority - b.priority)
-                            .map(d => `<span class="badge" style="background-color: #f0f0f0; color: #333; border: 1px solid #ddd; margin: 2px; font-size: 13px; display: inline-block; text-align: left; white-space: normal; padding: 8px;"><b>${d.priority}. ${escapeHtml(d.user_cname)}</b> <small style="color: #007bff;">[主] ${escapeHtml(d.main_department_name || '-')}/${escapeHtml(d.main_position_name || '-')}</small>${d.concurrent_positions ? ` <small style="color: #008000;">[兼] ${d.concurrent_positions.split('; ').map(escapeHtml).join(', ')}</small>` : ''}</span>`)
-                            .join(' ');
-
-                        const startDate = rule.startDate ? escapeHtml(rule.startDate.split(' ')[0]) : '-';
-                        const endDate = rule.endDate ? escapeHtml(rule.endDate.split(' ')[0]) : '-';
-
-                        var row = `<tr style="vertical-align: top;">
-                            <td>${userDisplay}</td>
-                            <td style="min-width: 250px; line-height: 1.8;">${delegatesHtml}</td>
-                            <td>${startDate}</td>
-                            <td>${endDate}</td>
-                            <td>
-                                ${editBtn}
-                                ${delBtn}
-                            </td>
-                        </tr>`;
-                        tableBody.append(row);
+                // 依 被代理人 + 職務身分(scope) + 起訖 分組；key = user_id|scopeDep|scopePos|start|end
+                groupedByUserAndDate = {};
+                response.data.forEach(item => {
+                    const dep = item.scope_department_id || '';
+                    const pos = item.scope_position_id || '';
+                    const key = `${item.user_id}|${dep}|${pos}|${item.start_date}|${item.end_date}`;
+                    if (!groupedByUserAndDate[key]) {
+                        const user = allUsers.find(u => u.id == item.user_id);
+                        if (!user || parseInt(user.state) === 0) return; // 找不到或已離職的被代理人跳過
+                        groupedByUserAndDate[key] = {
+                            user: user,
+                            startDate: item.start_date,
+                            endDate: item.end_date,
+                            scopeDep: dep,
+                            scopePos: pos,
+                            scopeLabel: (dep || pos) ? `${escapeHtml(item.scope_department_name || '-')} / ${escapeHtml(item.scope_position_name || '-')}` : '',
+                            delegates: []
+                        };
                     }
+                    const delegate = allUsers.find(u => u.id == item.delegate_id);
+                    if (delegate && parseInt(delegate.state) !== 0) {
+                        groupedByUserAndDate[key].delegates.push({ ...delegate, priority: item.priority });
+                    }
+                });
 
-                    // 更新被代理人下拉選單，隱藏已設定的選項
-                    $('#user_id option').each(function() {
-                        const userId = $(this).val();
-                        if (userId && configuredUserIds.has(userId)) $(this).prop('disabled', true).hide(); else $(this).prop('disabled', false).show();
+                udGroupsList = Object.keys(groupedByUserAndDate).map(k => ({ key: k, ...groupedByUserAndDate[k] }));
+                udPage = 1;
+                renderUserDelegateTable();
+            });
+        }
+
+        function renderUserDelegateTable() {
+            const tableBody = $('#user-delegate-table-body');
+            tableBody.empty();
+
+            const size = parseInt($('#ud-page-size').val()) || 10;
+            const total = udGroupsList.length;
+            const pages = Math.max(1, Math.ceil(total / size));
+            if (udPage > pages) udPage = pages;
+            const startIdx = (udPage - 1) * size;
+            const slice = udGroupsList.slice(startIdx, startIdx + size);
+
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            const agentP = window.currentUserPerms.agent || '';
+
+            slice.forEach(rule => {
+                let editBtn = '', delBtn = '';
+                if (agentP.includes('A') || agentP.includes('U')) editBtn = `<button class="btn btn-sm btn-info btn-edit-user-delegate-group" data-key="${rule.key}">編輯</button>`;
+                if (agentP.includes('A') || agentP.includes('D')) delBtn = `<button class="btn btn-sm btn-danger btn-delete-user-delegate-group" data-key="${rule.key}">刪除</button>`;
+
+                const delegatesHtml = rule.delegates
+                    .sort((a, b) => a.priority - b.priority)
+                    .map(d => `<span class="badge" style="background-color:#f7e0bd; color:#5a3d1a; border:1px solid #e6c48f; margin:2px; font-size:13px; display:inline-block; text-align:left; white-space:normal; padding:8px;"><b>${d.priority}. ${escapeHtml(d.user_cname)}</b> <small style="color:#8a5a2b;">[主] ${escapeHtml(d.main_department_name || '-')}/${escapeHtml(d.main_position_name || '-')}</small></span>`)
+                    .join(' ');
+
+                const startDate = rule.startDate ? escapeHtml(rule.startDate.split(' ')[0]) : '-';
+                const endDateRaw = rule.endDate ? rule.endDate.split(' ')[0] : '';
+                const endDate = endDateRaw ? escapeHtml(endDateRaw) : '-';
+                // 到期判定：結束日 < 今天 => 已到期，整列暖色底標示
+                const isExpired = endDateRaw && (new Date(endDateRaw) < today);
+                const rowStyle = isExpired ? 'background-color:#f2d3c4;' : '';
+                const expiredTag = isExpired ? ' <span class="label" style="background-color:#dd5138;">已到期</span>' : '';
+                const scopeHtml = rule.scopeLabel ? `<span style="color:#8a5a2b; font-weight:600;">${rule.scopeLabel}</span>` : `<small class="text-muted">不分身分</small>`;
+
+                tableBody.append(`<tr style="vertical-align:top; ${rowStyle}">
+                    <td>${formatUserInfo(rule.user)}</td>
+                    <td>${scopeHtml}</td>
+                    <td style="min-width:250px; line-height:1.8;">${delegatesHtml}</td>
+                    <td>${startDate}</td>
+                    <td>${endDate}${expiredTag}</td>
+                    <td>${editBtn} ${delBtn}</td>
+                </tr>`);
+            });
+            if (total === 0) tableBody.append('<tr><td colspan="6" class="text-center text-muted">尚無代理設定</td></tr>');
+
+            // 分頁列（右上）
+            const from = total === 0 ? 0 : startIdx + 1;
+            const to = Math.min(startIdx + size, total);
+            let pager = `<span style="margin-right:8px;">第 ${from}-${to} / 共 ${total} 筆</span>`;
+            pager += `<div class="btn-group btn-group-sm" role="group">`;
+            pager += `<button type="button" class="btn btn-default ud-page-btn" data-page="${udPage - 1}" ${udPage <= 1 ? 'disabled' : ''}>‹</button>`;
+            pager += `<button type="button" class="btn btn-default" disabled>${udPage}/${pages}</button>`;
+            pager += `<button type="button" class="btn btn-default ud-page-btn" data-page="${udPage + 1}" ${udPage >= pages ? 'disabled' : ''}>›</button>`;
+            pager += `</div>`;
+            $('#ud-pager').html(pager);
+        }
+
+        $(document).on('click', '.ud-page-btn', function() {
+            const p = parseInt($(this).data('page'));
+            if (p >= 1) { udPage = p; renderUserDelegateTable(); }
+        });
+        $('#ud-page-size').on('change', function() { udPage = 1; renderUserDelegateTable(); });
+
+        // 載入被代理人的職務身分（主職+兼任）到 scope 下拉；selectedValue 供編輯時回填 "dep:pos"
+        function loadUserScopes(userId, selectedValue) {
+            const sel = $('#scope_identity');
+            sel.empty().append('<option value="">不分身分（主職／全部，預設）</option>');
+            if (!userId) return;
+            callApi(DEPT_JOB_API_URL, 'get_user_scopes', 'GET', { user_id: userId }, function(resp) {
+                if (resp.status === 'success') {
+                    resp.data.forEach(s => {
+                        const tag = parseInt(s.is_main) === 1 ? '[主]' : '[兼]';
+                        sel.append(`<option value="${s.department_id}:${s.position_id}">${tag} ${escapeHtml(s.department_name || '-')} - ${escapeHtml(s.position_name || '-')}</option>`);
                     });
-                } else { alert('讀取代理設定失敗: ' + response.message); }
+                    if (selectedValue) sel.val(selectedValue);
+                }
             });
         }
 
@@ -651,6 +738,7 @@ $jsPerms = [
             if ($('#userDelegateForm').length === 0) return;
             $('#userDelegateForm')[0].reset();
             $('#original_key').val(''); // 重設時清空 original_key
+            $('#scope_identity').empty().append('<option value="">不分身分（主職／全部，預設）</option>'); // 重設職務身分
             $('#selected-user-delegates').empty();
             // 重設可選列表，同時考慮到被代理人不能是自己
             const mainUserId = $('#user_id').val();
@@ -668,7 +756,7 @@ $jsPerms = [
         }
         $('#btn-clear-user-delegate-selection').on('click', resetUserDelegateForm);
 
-        // 當被代理人變更時，更新可選代理人列表
+        // 當被代理人變更時，更新可選代理人列表 + 載入其職務身分
         $('#user_id').on('change', function() {
             const mainUserId = $(this).val();
             $('#selected-user-delegates').empty();
@@ -676,6 +764,7 @@ $jsPerms = [
             if (mainUserId) {
                 $('#available-users option[value="' + mainUserId + '"]').hide();
             }
+            loadUserScopes(mainUserId);
         });
 
         $('#userDelegateForm').on('submit', function(e) {
@@ -698,9 +787,16 @@ $jsPerms = [
                 return;
             }
 
+            // 解析職務身分 scope（value 格式 "dep:pos"；空=不分身分）
+            const scopeVal = $('#scope_identity').val() || '';
+            let scopeDep = '', scopePos = '';
+            if (scopeVal) { const parts = scopeVal.split(':'); scopeDep = parts[0]; scopePos = parts[1]; }
+
             const data = {
                 original_key: $('#original_key').val(), // 提交 original_key
                 user_id: userId,
+                scope_department_id: scopeDep,
+                scope_position_id: scopePos,
                 start_date: startDate,
                 end_date: endDate,
                 delegate_ids: delegateIds,
@@ -721,8 +817,10 @@ $jsPerms = [
         // 編輯使用者代理群組
         $(document).on('click', '.btn-edit-user-delegate-group', function() {
             const key = $(this).data('key');
-            const [userId, startDate, endDate] = key.split('|');
-            
+            // key = user_id|scopeDep|scopePos|start|end
+            const parts = key.split('|');
+            const userId = parts[0], scopeDep = parts[1] || '', scopePos = parts[2] || '', startDate = parts[3], endDate = parts[4];
+
             // 1. 重設表單
             resetUserDelegateForm();
 
@@ -742,6 +840,8 @@ $jsPerms = [
             $('#user_id').val(userId);
             $('#start_date').val(startDate);
             $('#end_date').val(endDate);
+            // 載入該被代理人的職務身分並回填 scope
+            loadUserScopes(userId, (scopeDep || scopePos) ? `${scopeDep}:${scopePos}` : '');
 
             // 3. 載入代理人
             const rule = groupedByUserAndDate[key];
@@ -759,14 +859,15 @@ $jsPerms = [
         $(document).on('click', '.btn-delete-user-delegate-group', function() {
             if (confirm('您確定要刪除此群組的所有代理設定嗎？')) {
                 const key = $(this).data('key');
-                const [userId, startDate, endDate] = key.split('|');
+                // key = user_id|scopeDep|scopePos|start|end
+                const parts = key.split('|');
                 const data = {
-                    // 使用 original_key 來精準刪除，即使未來 API 邏輯變更也能適用
+                    // 使用 original_key 來精準刪除（含 scope）
                     original_key: key,
                     // 為了通過後端驗證，仍需傳遞 user_id, start_date, end_date
-                    user_id: userId,
-                    start_date: startDate,
-                    end_date: endDate,
+                    user_id: parts[0],
+                    start_date: parts[3],
+                    end_date: parts[4],
                     delegate_ids: [] // 傳送空陣列表示刪除
                 };
                 callApi(DEPT_JOB_API_URL, 'update_user_delegates', 'POST', data, function(response) {
@@ -1102,10 +1203,107 @@ $jsPerms = [
             }
         }
 
+        // --- 部門×職稱 指定負責人 (P2) ---
+        let dpoData = []; // 快取所有 部門×職稱 綁定
+
+        function loadDeptPositionOwners() {
+            if ($('#dept-position-owner-body').length === 0) return;
+            callApi(DEPT_JOB_API_URL, 'get_dept_position_owners', 'GET', null, function(resp) {
+                if (resp.status !== 'success') { alert('讀取指定負責人失敗: ' + resp.message); return; }
+                dpoData = resp.data;
+                renderDeptPositionOwners();
+            });
+        }
+
+        function levelText(level) {
+            switch (parseInt(level)) {
+                case 1: return '一階主管';
+                case 2: return '二階主管';
+                case 3: return '三階主管';
+                default: return '非主管';
+            }
+        }
+
+        function renderDeptPositionOwners() {
+            const tbody = $('#dept-position-owner-body');
+            tbody.empty();
+            const kw = ($('#dpo-filter').val() || '').trim().toLowerCase();
+            const onlyUnset = $('#dpo-only-unset').is(':checked');
+            const agentP = window.currentUserPerms.agent || '';
+            const canEdit = agentP.includes('A') || agentP.includes('U') || agentP.includes('C');
+
+            let shown = 0;
+            dpoData.forEach(row => {
+                if (onlyUnset && row.primary_user_id) return;
+                const hay = `${row.department_name} ${row.position_name}`.toLowerCase();
+                if (kw && hay.indexOf(kw) === -1) return;
+                shown++;
+
+                let selHtml;
+                if (!canEdit) {
+                    selHtml = row.primary_user_name ? escapeHtml(row.primary_user_name) : '<small class="text-muted">未指定</small>';
+                } else if (!row.candidates || row.candidates.length === 0) {
+                    selHtml = '<small class="text-muted">此部門×職稱目前無在職持有者</small>';
+                } else {
+                    let opts = '<option value="">— 未指定 —</option>';
+                    row.candidates.forEach(c => {
+                        opts += `<option value="${c.user_id}" ${String(c.user_id) === String(row.primary_user_id) ? 'selected' : ''}>${escapeHtml(c.user_cname)}</option>`;
+                    });
+                    selHtml = `<select class="form-control input-sm dpo-owner-select" data-dp-id="${row.id}" style="width:auto; display:inline-block; min-width:160px;">${opts}</select>`;
+                }
+                const lvlBadge = row.level ? `<span class="label" style="background-color:#b26a1a;">${levelText(row.level)}</span>` : '<span class="label" style="background-color:#c9a06a;">未設階級</span>';
+
+                tbody.append(`<tr>
+                    <td>${escapeHtml(row.department_name)}</td>
+                    <td>${escapeHtml(row.position_name)}</td>
+                    <td>${lvlBadge}</td>
+                    <td><span class="dpo-saved-flag" style="color:#3c9d40; display:none; margin-right:8px;"><i class="fa fa-check"></i> 已儲存</span>${selHtml}</td>
+                </tr>`);
+            });
+            if (shown === 0) tbody.append('<tr><td colspan="4" class="text-center text-muted">無符合的資料</td></tr>');
+        }
+
+        // 選單變更即自動儲存
+        $(document).on('change', '.dpo-owner-select', function() {
+            const dpId = $(this).data('dp-id');
+            const val = $(this).val();
+            const $flag = $(this).closest('td').find('.dpo-saved-flag');
+            callApi(DEPT_JOB_API_URL, 'update_dept_position_owner', 'POST', { dp_id: dpId, primary_user_id: val }, function(resp) {
+                if (resp.status === 'success') {
+                    // 更新快取
+                    const row = dpoData.find(r => String(r.id) === String(dpId));
+                    if (row) {
+                        row.primary_user_id = val || null;
+                        const cand = (row.candidates || []).find(c => String(c.user_id) === String(val));
+                        row.primary_user_name = cand ? cand.user_cname : null;
+                    }
+                    $flag.stop(true, true).fadeIn(120).delay(1200).fadeOut(400);
+                } else {
+                    alert('儲存失敗: ' + resp.message);
+                    loadDeptPositionOwners();
+                }
+            });
+        });
+
+        $('#dpo-filter').on('input', renderDeptPositionOwners);
+        $('#dpo-only-unset').on('change', renderDeptPositionOwners);
+
+        function loadMissingLevels() {
+            if ($('#level-missing-alert').length === 0) return;
+            callApi(DEPT_JOB_API_URL, 'get_positions_missing_level', 'GET', null, function(resp) {
+                if (resp.status !== 'success') return;
+                if (resp.data.length === 0) { $('#level-missing-alert').hide(); return; }
+                $('#level-missing-list').html(resp.data.map(p => `<span class="label" style="background-color:#dd5138; margin:2px;">${escapeHtml(p.name)}</span>`).join(' '));
+                $('#level-missing-alert').show();
+            });
+        }
+
         // 初始載入
         loadUsersToSelect(['user_id', 'available-users']);
         loadPositionsToDelegateSelects();
         loadPositionDelegates();
+        loadDeptPositionOwners();
+        loadMissingLevels();
         loadSupervisorTitlesForSelect(); // 載入主管職稱，並在其成功回呼中觸發 loadLeaveTypes()
 
         // 初始化 SortableJS
