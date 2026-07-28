@@ -4,7 +4,8 @@
 //   rows:[ {h:30, text:'{部門}', fs:0, mode:'shrink', wrapn:0}, ... ] }   // h=高度%（自動正規化）
 //   fs=字級（viewBox 單位，章寬=100；0/未填=自動）；mode='shrink' 超寬時壓縮字距（預設）｜'wrap' 超寬時自動換列
 //   wrapn=換列模式的「第一列字數」：前 N 字放第一列、其餘放第二列（超寬壓縮），字級依列數自動放大填滿；0/未填=依寬度自動折行
-// text 內可混用固定字樣與變數 token：{部門} {職稱} {姓名} {日期} {編號}
+// text 內可混用固定字樣與變數 token：{部門} {部門簡稱} {職稱} {姓名} {日期} {編號}
+// {部門簡稱}＝去掉部門名尾端常見組織後綴（中心/總部/分部/部/組/課/室/廠/處/隊/站）：生管組→生管、設計開發課→設計開發
 // ctx = { dept, position, name, date, serial }（date/serial 由呼叫端先算好字串）
 (function (global) {
     var FONTS = {
@@ -12,6 +13,16 @@
         ming: "PMingLiU,'新細明體','Times New Roman',serif",
         hei:  "'Microsoft JhengHei','微軟正黑體',Arial,sans-serif"
     };
+    // 長後綴排前面優先比對（如「中心」要整組去掉，不能只去掉「心」）
+    var DEPT_SUFFIX = ['中心', '總部', '分部', '部', '組', '課', '室', '廠', '處', '隊', '站'];
+    function deptShort(name) {
+        name = String(name || '');
+        for (var i = 0; i < DEPT_SUFFIX.length; i++) {
+            var s = DEPT_SUFFIX[i];
+            if (name.length > s.length && name.slice(-s.length) === s) return name.slice(0, -s.length);
+        }
+        return name;
+    }
     function esc(s) {
         return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
             .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -19,12 +30,13 @@
     function fill(text, ctx) {
         ctx = ctx || {};
         return String(text || '')
-            .replace(/\{公司\}/g,  ctx.company == null ? '' : ctx.company)
-            .replace(/\{部門\}/g,  ctx.dept    == null ? '' : ctx.dept)
-            .replace(/\{職稱\}/g,  ctx.position== null ? '' : ctx.position)
-            .replace(/\{姓名\}/g,  ctx.name    == null ? '' : ctx.name)
-            .replace(/\{日期\}/g,  ctx.date    == null ? '' : ctx.date)
-            .replace(/\{編號\}/g,  ctx.serial  == null ? '' : ctx.serial);
+            .replace(/\{公司\}/g,   ctx.company == null ? '' : ctx.company)
+            .replace(/\{部門簡稱\}/g, ctx.dept   == null ? '' : deptShort(ctx.dept))
+            .replace(/\{部門\}/g,   ctx.dept    == null ? '' : ctx.dept)
+            .replace(/\{職稱\}/g,   ctx.position== null ? '' : ctx.position)
+            .replace(/\{姓名\}/g,   ctx.name    == null ? '' : ctx.name)
+            .replace(/\{日期\}/g,   ctx.date    == null ? '' : ctx.date)
+            .replace(/\{編號\}/g,   ctx.serial  == null ? '' : ctx.serial);
     }
     function hasSerial(schema) {
         return (schema.rows || []).some(function (r) { return String(r.text || '').indexOf('{編號}') >= 0; });
@@ -33,7 +45,7 @@
     // （例如純固定字樣的模板完全不需要選對象；只用{部門}的模板不需要強求選到有人名的個人章）
     function usesTokens(schema) {
         var all = (schema.rows || []).map(function (r) { return String(r.text || ''); }).join('');
-        return { name: all.indexOf('{姓名}') >= 0, dept: all.indexOf('{部門}') >= 0, position: all.indexOf('{職稱}') >= 0 };
+        return { name: all.indexOf('{姓名}') >= 0, dept: (all.indexOf('{部門}') >= 0 || all.indexOf('{部門簡稱}') >= 0), position: all.indexOf('{職稱}') >= 0 };
     }
     function needsHolder(schema) {
         var t = usesTokens(schema);
@@ -132,5 +144,5 @@
         svg += '</svg>';
         return svg;
     }
-    global.EGStampTpl = { render: render, fill: fill, hasSerial: hasSerial, usesTokens: usesTokens, needsHolder: needsHolder, FONTS: FONTS };
+    global.EGStampTpl = { render: render, fill: fill, hasSerial: hasSerial, usesTokens: usesTokens, needsHolder: needsHolder, deptShort: deptShort, FONTS: FONTS };
 })(window);

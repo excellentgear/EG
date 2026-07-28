@@ -70,16 +70,23 @@ case 'meta': {
     if (!$canView) jout(['ok'=>true, 'canView'=>false, 'canManage'=>false, 'isAdmin'=>false, 'me'=>$cname]);
     $users = [];
     if ($canManage) {
-        $users = $db->query("SELECT id, user_cname FROM user WHERE (state IS NULL OR state <> 0)
-                             ORDER BY CONVERT(user_cname USING utf8mb4) COLLATE utf8mb4_unicode_ci")->fetchAll(PDO::FETCH_ASSOC);
+        // dept_id = 該員主要部門（is_main 優先，供前端「部門→篩選人員」cascading 選單使用；同部門+人員綁定用）
+        $users = $db->query("SELECT u.id, u.user_cname,
+                                    (SELECT m.department_id FROM user_department_position_map m
+                                     WHERE m.user_id = u.id ORDER BY m.is_main DESC, m.id LIMIT 1) AS dept_id
+                             FROM user u WHERE (u.state IS NULL OR u.state <> 0)
+                             ORDER BY CONVERT(u.user_cname USING utf8mb4) COLLATE utf8mb4_unicode_ci")->fetchAll(PDO::FETCH_ASSOC);
     }
     $types = $db->query("SELECT id, type_name, bind_targets, sort_order, is_active FROM stamp_type ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     $depts = $canManage ? $db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC) : [];
     $positions = $canManage ? $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC) : [];
+    $tpls = $db->query("SELECT p.id, p.type_id, t.type_name, p.tpl_name
+                        FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
+                        WHERE p.is_active=1 ORDER BY t.sort_order, p.id")->fetchAll(PDO::FETCH_ASSOC);
     $base = '';
     if ($canManage) $base = eg_stamp_base($db);
     jout(['ok'=>true, 'canView'=>true, 'canManage'=>$canManage, 'isAdmin'=>$isAdmin, 'me'=>$cname,
-          'users'=>$users, 'types'=>$types, 'depts'=>$depts, 'positions'=>$positions,
+          'users'=>$users, 'types'=>$types, 'depts'=>$depts, 'positions'=>$positions, 'templates'=>$tpls,
           'base'=>$base, 'base_ok'=>$canManage ? is_dir($base) : null]);
 }
 
@@ -168,8 +175,10 @@ case 'list': {
     $limit = $all ? '' : ('LIMIT ' . (($page-1)*$per) . ',' . $per);
     $st = $db->prepare("SELECT r.id, r.user_id, r.dept_id, r.position_id, u.user_cname, d.name AS dept_name, p.name AS position_name,
                                CASE WHEN r.position_id IS NOT NULL THEN CONCAT(d.name,'／',p.name)
+                                    WHEN r.user_id IS NOT NULL AND r.dept_id IS NOT NULL THEN CONCAT(u.user_cname,'（',d.name,'）')
                                     ELSE COALESCE(u.user_cname, d.name) END AS holder_name,
                                CASE WHEN r.position_id IS NOT NULL THEN 'position'
+                                    WHEN r.user_id IS NOT NULL AND r.dept_id IS NOT NULL THEN 'user_dept'
                                     WHEN r.dept_id IS NOT NULL THEN 'dept' ELSE 'user' END AS holder_kind,
                                r.type_id, t.type_name,
                                r.issue_date, r.revoke_date, r.status, r.note,
@@ -187,27 +196,33 @@ case 'list': {
 
 // ── 新增登記 ──
 // holder_kind：'user'（個人）｜'dept'（部門）｜'position'（職稱＝該部門的該職稱，dept_id+position_id併用）
+//            ｜'user_dept'（部門所屬人員＝該部門下的某個人，dept_id+user_id併用；種類同時綁定個人+課室時的組合登記）
 case 'add': {
     needManage($canManage);
     $kind = (string)($_POST['holder_kind'] ?? 'user');
-    if (!in_array($kind, ['user','dept','position'], true)) jerr('持有對象類型錯誤');
-    $tuid     = $kind === 'user'     ? ((int)($_POST['user_id'] ?? 0) ?: null) : null;
-    $deptId   = in_array($kind, ['dept','position'], true) ? ((int)($_POST['dept_id'] ?? 0) ?: null) : null;
+    if (!in_array($kind, ['user','dept','position','user_dept'], true)) jerr('持有對象類型錯誤');
+    $tuid     = in_array($kind, ['user','user_dept'], true) ? ((int)($_POST['user_id'] ?? 0) ?: null) : null;
+    $deptId   = in_array($kind, ['dept','position','user_dept'], true) ? ((int)($_POST['dept_id'] ?? 0) ?: null) : null;
     $posId    = $kind === 'position' ? ((int)($_POST['position_id'] ?? 0) ?: null) : null;
     $typeId = (int)($_POST['type_id'] ?? 0) ?: null;
     $issue = trim((string)($_POST['issue_date'] ?? ''));
     $note  = trim((string)($_POST['note'] ?? ''));
-    if ($kind === 'user'     && $tuid === null) jerr('請選擇人員');
-    if ($kind === 'dept'     && $deptId === null) jerr('請選擇部門');
-    if ($kind === 'position' && ($deptId === null || $posId === null)) jerr('請選擇部門與職稱');
+    if ($kind === 'user'      && $tuid === null) jerr('請選擇人員');
+    if ($kind === 'dept'      && $deptId === null) jerr('請選擇部門');
+    if ($kind === 'position'  && ($deptId === null || $posId === null)) jerr('請選擇部門與職稱');
+    if ($kind === 'user_dept' && ($deptId === null || $tuid === null)) jerr('請選擇部門與人員');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $issue)) jerr('核發日期格式錯誤');
     if ($typeId !== null) {
         $st = $db->prepare("SELECT bind_targets FROM stamp_type WHERE id=? AND is_active=1");
         $st->execute([$typeId]);
         $bt = $st->fetchColumn();
         if ($bt === false) jerr('印章種類不存在或已停用');
-        if ($bt !== '' && $bt !== null && !in_array($kind, explode(',', $bt), true)) {
-            jerr('此種類限定綁定對象為：' . str_replace(['user','dept','position'], ['個人','部門','職稱'], $bt));
+        if ($bt !== '' && $bt !== null) {
+            $btArr = explode(',', $bt);
+            $ok = $kind === 'user_dept'
+                ? (in_array('user', $btArr, true) && in_array('dept', $btArr, true))
+                : in_array($kind, $btArr, true);
+            if (!$ok) jerr('此種類限定綁定對象為：' . str_replace(['user','dept','position'], ['個人','部門','職稱'], implode('/', $btArr)));
         }
     }
     if ($deptId !== null) {
@@ -290,8 +305,10 @@ case 'csv': {
     if ($typeId > 0)    { $where[] = "r.type_id = ?"; $args[] = $typeId; }
     $w = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
     $st = $db->prepare("SELECT CASE WHEN r.position_id IS NOT NULL THEN CONCAT(d.name,'／',p.name)
+                                     WHEN r.user_id IS NOT NULL AND r.dept_id IS NOT NULL THEN CONCAT(u.user_cname,'（',d.name,'）')
                                      ELSE COALESCE(u.user_cname, d.name) END AS holder_name,
                                CASE WHEN r.position_id IS NOT NULL THEN '職稱章'
+                                    WHEN r.user_id IS NOT NULL AND r.dept_id IS NOT NULL THEN '部門人員章'
                                     WHEN r.dept_id IS NOT NULL THEN '部門章' ELSE '個人章' END AS holder_kind,
                                t.type_name, r.issue_date, r.revoke_date, r.status, r.note, r.created_by, r.created_at,
                                a.file_name IS NOT NULL AS has_asset

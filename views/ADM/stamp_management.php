@@ -85,12 +85,15 @@ try {
   <div id="stickyBar">
   <div id="addBar" style="display:none;margin-bottom:10px;padding:8px;background:#fdf6ea;border:1px solid #e8d9b8;border-radius:4px;">
     <strong style="color:#7a4e17;"><i class="fa fa-plus-circle"></i> 新增登記：</strong>
-    種類 <select id="addType" class="form-control input-sm" style="width:120px;display:inline-block;" title="先選種類，決定可綁定的持有對象"></select>
+    模板 <select id="addTpl" class="form-control input-sm" style="width:150px;display:inline-block;" title="選模板，種類自動帶入（模板請到「線上圖章設計」頁建立）"></select>
+    種類：<span id="addTypeShow" class="text-muted" style="font-size:12.5px;">（請先選模板）</span>
+    <select id="addType" style="display:none;"></select>
     <span id="addKindWrap">
       對象別 <select id="addKind" class="form-control input-sm" style="width:96px;display:inline-block;" title="此種類允許的持有對象"></select>
     </span>
     <select id="addUser" class="form-control input-sm" style="width:140px;display:none;"></select>
     <select id="addDept" class="form-control input-sm" style="width:140px;display:none;"></select>
+    <select id="addDeptUser" class="form-control input-sm" style="width:140px;display:none;" title="僅列出該部門的在職人員"></select>
     <select id="addPosition" class="form-control input-sm" style="width:120px;display:none;" title="該部門的職稱（現任者異動蓋章自動帶新任者）"></select>
     <input type="date" id="addDate" class="form-control input-sm" style="width:150px;display:inline-block;" max="9999-12-31">
     <input type="text" id="addNote" class="form-control input-sm" style="width:180px;display:inline-block;" placeholder="備註（選填）">
@@ -247,6 +250,7 @@ try {
           <span id="tokenBtns">
             <button class="btn btn-default btn-xs tok" data-t="{公司}">公司</button>
             <button class="btn btn-default btn-xs tok" data-t="{部門}">部門</button>
+            <button class="btn btn-default btn-xs tok" data-t="{部門簡稱}" title="去掉部門名尾端「部/組/課/室/廠/中心」等後綴，例：生管組→生管、設計開發課→設計開發">部門簡稱</button>
             <button class="btn btn-default btn-xs tok" data-t="{職稱}">職稱</button>
             <button class="btn btn-default btn-xs tok" data-t="{姓名}">姓名</button>
             <button class="btn btn-default btn-xs tok" data-t="{日期}">日期</button>
@@ -331,14 +335,14 @@ let canManage=false, isAdmin=false, USERS=[], page=1, per=10, total=0, curScanUi
 function esc(s){return $('<div>').text(s==null?'':s).html();}
 function dot(d){return (d||'').substring(0,10).replace(/-/g,'.');}
 function today(){const t=new Date();return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');}
-const KIND_LABEL={user:'個人持有',dept:'課室持有',position:'職稱持有'};
+const KIND_LABEL={user:'個人持有',dept:'課室持有',position:'職稱持有',user_dept:'部門所屬人員'};
 
 // ── 通用輸入互動（雙擊清空/聚焦全選/Enter 逐欄）──
 $(document).on('dblclick','input[type=text],input[type=date]',function(){ $(this).val(''); if(this.id==='fltName'){loadList(1);} });
 $(document).on('focus','input[type=text]',function(){ this.select(); });
-$('#addKind,#addUser,#addDept,#addPosition,#addType,#addDate,#addNote').on('keydown',function(e){
+$('#addTpl,#addKind,#addUser,#addDept,#addDeptUser,#addPosition,#addDate,#addNote').on('keydown',function(e){
   if(e.key!=='Enter') return; e.preventDefault();
-  const order=['addType','addKind','addUser','addDept','addPosition','addDate','addNote'];
+  const order=['addTpl','addKind','addUser','addDept','addDeptUser','addPosition','addDate','addNote'];
   const visible=order.filter(id=>$('#'+id).is(':visible'));
   const i=visible.indexOf(this.id);
   if(i>-1&&i<visible.length-1) $('#'+visible[i+1]).focus(); else $('#btnAdd').click();
@@ -346,11 +350,17 @@ $('#addKind,#addUser,#addDept,#addPosition,#addType,#addDate,#addNote').on('keyd
 
 let TYPES=[], DEPTS=[], POSITIONS=[];
 // 依印章種類的 bind_targets 決定新增登記可選的持有對象別；未選種類或無限制＝三種都可選（沿用舊行為）
+// 種類同時綁定「個人」＋「課室」時，合併成一種組合模式：先選部門、再選該部門所屬人員（而非各自獨立可選）
 function allowedKinds(){
   const tid=$('#addType').val();
   const t=TYPES.find(x=>String(x.id)===String(tid));
   const bt=t&&t.bind_targets?t.bind_targets.split(',').filter(Boolean):[];
-  return bt.length?bt:['user','dept','position'];
+  if(!bt.length) return ['user','dept','position'];
+  const hasU=bt.includes('user'), hasD=bt.includes('dept'), hasP=bt.includes('position');
+  const kinds=[];
+  if(hasU&&hasD) kinds.push('user_dept'); else { if(hasU) kinds.push('user'); if(hasD) kinds.push('dept'); }
+  if(hasP) kinds.push('position');
+  return kinds.length?kinds:['user','dept','position'];
 }
 function updateAddKindUI(){
   const kinds=allowedKinds();
@@ -363,11 +373,36 @@ function updateAddKindUI(){
 function updateAddTargetSelects(){
   const k=$('#addKind').val();
   $('#addUser').toggle(k==='user');
-  $('#addDept').toggle(k==='dept'||k==='position');
+  $('#addDept').toggle(k==='dept'||k==='position'||k==='user_dept');
+  $('#addDeptUser').toggle(k==='user_dept');
   $('#addPosition').toggle(k==='position');
+  if(k==='user_dept'){ $('#addDept').val(''); populateDeptUserOptions(); }
+}
+// 部門→篩選人員：只列出主要部門＝所選部門的在職人員（部門所屬人員組合登記用）
+function populateDeptUserOptions(){
+  const did=$('#addDept').val();
+  if(!did){ $('#addDeptUser').html('<option value="">（請先選部門）</option>'); return; }
+  const list=USERS.filter(u=>String(u.dept_id||'')===String(did));
+  $('#addDeptUser').html(list.length
+    ? '<option value="">— 選擇人員 —</option>'+list.map(u=>`<option value="${u.id}">${esc(u.user_cname)}</option>`).join('')
+    : '<option value="">（此部門查無在職人員）</option>');
 }
 $('#addType').on('change',updateAddKindUI);
 $('#addKind').on('change',updateAddTargetSelects);
+$('#addDept').on('change',function(){ if($('#addKind').val()==='user_dept') populateDeptUserOptions(); });
+// 新增登記先選「模板」，種類由模板自動帶入（唯讀顯示，不再讓使用者另外選種類）
+$('#addTpl').on('change',function(){
+  const t=(TPLS||[]).find(x=>String(x.id)===String($(this).val()));
+  $('#addTypeShow').text(t?(t.type_name||'（未分類）'):'（請先選模板）');
+  $('#addType').val(t?(t.type_id||''):'').trigger('change');
+});
+function populateAddTpl(){
+  const act=(TPLS||[]).filter(t=>+t.is_active===1);
+  $('#addTpl').html(act.length
+    ? act.map(t=>`<option value="${t.id}">${t.type_name?esc(t.type_name)+'｜':''}${esc(t.tpl_name)}</option>`).join('')
+    : '<option value="">（尚無啟用模板，請先到下方「線上圖章設計」頁籤建立）</option>');
+  $('#addTpl').trigger('change');
+}
 function typeOpts(sel,withAll){
   const act=TYPES.filter(t=>+t.is_active===1);
   return (withAll?'<option value="">全部種類</option>':'<option value="">（未分類）</option>')
@@ -430,6 +465,7 @@ function loadList(p){
     $('#regBody').html(r.rows.map(x=>{
       const stampHtml=EGStamp.stamp(x.holder_name, dot(x.issue_date), false);
       const kindBadge=x.holder_kind==='position'?' <span class="status-chip" style="background:#dcd0e8;color:#3a2c4a;">職稱章</span>'
+        :x.holder_kind==='user_dept'?' <span class="status-chip" style="background:#f0dfc3;color:#4a3a20;">部門人員章</span>'
         :x.holder_kind==='dept'?' <span class="status-chip" style="background:#e8dcc3;color:#4a3a20;">課室章</span>':'';
       return `<tr>
       <td style="text-align:center;">${stampHtml}</td>
@@ -473,13 +509,17 @@ $('#btnAdd').on('click',function(){
   }else if(kind==='dept'){
     if(!$('#addDept').val()){alert('請選擇部門');return;}
     p.dept_id=$('#addDept').val();
-  }else{ // position：該部門的該職稱
+  }else if(kind==='position'){ // 該部門的該職稱
     if(!$('#addDept').val()||!$('#addPosition').val()){alert('請選擇部門與職稱');return;}
     p.dept_id=$('#addDept').val(); p.position_id=$('#addPosition').val();
+  }else{ // user_dept：部門所屬人員（先選部門篩出人員，再選人員）
+    if(!$('#addDept').val()||!$('#addDeptUser').val()){alert('請選擇部門與人員');return;}
+    p.dept_id=$('#addDept').val(); p.user_id=$('#addDeptUser').val();
   }
   $.post(API+'?action=add',p,r=>{
     if(!r.ok){alert(r.error||'登記失敗');return;}
-    $('#addUser,#addDept,#addPosition').val(''); $('#addNote').val(''); $('#addDate').val(today()); loadList(1);
+    $('#addUser,#addDept,#addDeptUser,#addPosition').val(''); $('#addNote').val(''); $('#addDate').val(today());
+    populateDeptUserOptions(); loadList(1);
   },'json');
 });
 $('#regBody').on('click','.edit-btn',function(){
@@ -594,7 +634,7 @@ $('#btnPrint').on('click',function(){
     if(!r.ok){alert(r.error||'載入失敗');return;}
     const rows=r.rows.map(x=>`<tr>
       <td style="text-align:center;">${EGStamp.stamp(x.holder_name,dot(x.issue_date),false)}</td>
-      <td>${esc(x.holder_name)}${x.dept_id?'（部門章）':''}</td>
+      <td>${esc(x.holder_name)}${x.holder_kind==='position'?'（職稱章）':x.holder_kind==='user_dept'?'（部門人員章）':x.holder_kind==='dept'?'（部門章）':''}</td>
       <td>${x.type_name?esc(x.type_name):'（未分類）'}</td>
       <td>${esc(x.issue_date||'')}</td><td>${esc(x.revoke_date||'—')}</td>
       <td>${x.status==='active'?'使用中':'已停用'}</td><td>${esc(x.note||'')}</td>
@@ -799,6 +839,7 @@ function loadTpls(){
           <button class="btn btn-warning btn-xs tplrow-toggle" data-id="${t.id}">${+t.is_active?'停用':'啟用'}</button>
           <button class="btn btn-danger btn-xs tplrow-del" data-id="${t.id}"><i class="fa fa-trash"></i></button>`:'<span class="text-muted">—</span>'}
         </td></tr>`;}).join('')||'<tr><td colspan="6" class="text-muted">尚無模板，請新增。</td></tr>');
+    if(canManage) populateAddTpl();   // 新增登記的「模板」下拉同步更新（啟用/停用/刪除/改種類都會影響可選清單）
   });
 }
 $('#tplBody').on('click','.tplrow-edit',function(){
