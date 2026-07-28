@@ -16,6 +16,17 @@ include '../../src/common/_config.php';
 @$userName      = $_SESSION['user_cname'];
 @$id            = $_SESSION['id'];
 
+/* =====================================================================
+ * 【待刪除清單 2026-07-28】以下 4 個舊上傳區塊已由 ERP 直接匯入取代，
+ * 目前只在前端加 style="display:none" 隱藏，HTML 與後端處理都還在，
+ * 待使用者確認新流程無誤後再整段移除（頁內搜尋「待刪除 2026-07-28」可定位）：
+ *   1. 新 BOM(N-new_bom)                        but=nb
+ *   2. [針對製程輸入] 新 BOM(製程 N-BOM_ING_ok)  but=u5_NEW
+ *   3. [針對轉製程中] 移轉紀錄(S-OK)             but=u5
+ *   4. 加工單價(transfer_log)                    but=transfer_log
+ * 移除時同步清 _upload_For_List.php 內對應 but 分支與頁尾 enterToSubmit 設定。
+ * ===================================================================== */
+
 // 查詢各匯入功能最近上傳紀錄（由 system_settings 記錄）
 $uploadLogs = [];
 try {
@@ -316,7 +327,13 @@ function lastUpdateBadge($info, $color = '#555') {
                                     </form>
                                     </div><!-- /淺藍底 -->
 
-                                    <!-- 上傳-新bom(新增bom) 2025.02.27 ok — 2026-07-28 已由 BOM ERP直接匯入 取代，先隱藏待確認後移除 -->
+                                    <!-- ============================================================
+                                         【待刪除 2026-07-28】新 BOM(N-new_bom)　but=nb
+                                         已由上方「BOM ERP直接匯入」取代，目前僅前端 display:none 隱藏。
+                                         使用者確認無誤後：刪除本 <form> 區塊，並一併清掉
+                                         _upload_For_List.php 內 but=nb 的處理與下方 JS enterToSubmit 設定
+                                              (file_new_bom / btn_upload_new_bom)。
+                                         ============================================================ -->
                                     <form action="_upload_For_List.php?but=nb" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate style="display:none">
                                         <div class="item form-group" style="margin-bottom:6px">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file">新 BOM(N-new_bom)<small>(只接受.xls)</small><BR> <span class="required">*</span></label>
@@ -331,7 +348,13 @@ function lastUpdateBadge($info, $color = '#555') {
                                             <div class="col-md-5 col-sm-5 hidden-xs" style="padding-top:7px"><?= lastUpdateBadge($bomLastUpdate) ?></div>
                                         </div>
                                     </form>
-                                    <!-- [針對製程輸入] 新 BOM(製程 N-BOM_ING_ok) — 2026-07-28 先隱藏待確認後移除 -->
+                                    <!-- ============================================================
+                                         【待刪除 2026-07-28】[針對製程輸入] 新 BOM(製程 N-BOM_ING_ok)　but=u5_NEW
+                                         已由上方「BOM ERP直接匯入」取代，目前僅前端 display:none 隱藏。
+                                         使用者確認無誤後：刪除本 <form> 區塊，並一併清掉
+                                         _upload_For_List.php 內 but=u5_NEW 的處理與下方 JS enterToSubmit 設定
+                                              (file_bom_ing_ok / btn_upload_bom_ing_ok)。
+                                         ============================================================ -->
                                     <form action="_upload_For_List.php?but=u5_NEW" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate style="display:none">
                                         <div class="item form-group" style="margin-bottom:6px">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file">[針對製程輸入] 新 BOM(製程 N-BOM_ING_ok)<small>(只接受.xls)</small><BR> <span class="required">*</span></label>
@@ -347,7 +370,13 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
 
-                                    <!-- 上傳-移轉紀錄(新增S) 2025.02 ok — 2026-07-28 已由下方「移轉紀錄 ERP直接匯入」取代，先隱藏待確認後移除 -->
+                                    <!-- ============================================================
+                                         【待刪除 2026-07-28】[針對轉製程中] 移轉紀錄(S-OK)　but=u5
+                                         已由下方「移轉紀錄 ERP直接匯入」(but=Transfer_ERP) 取代，目前僅前端 display:none 隱藏。
+                                         使用者確認無誤後：刪除本 <form> 區塊，並一併清掉
+                                         _upload_For_List.php 內 but=u5 的處理與下方 JS enterToSubmit 設定
+                                              (file_transfer_record / btn_upload_transfer_record)。
+                                         ============================================================ -->
                                     <form action="_upload_For_List.php?but=u5" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate style="display:none">
                                         <div class="item form-group" style="margin-bottom:6px">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file">[針對轉製程中] 移轉紀錄(S-OK)<small>(只接受.xls)</small><BR> <span class="required">*</span></label>
@@ -475,7 +504,13 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
 
-                                    <!-- 上傳-加工單價 (transfer_log) — 2026-07-28 已由下方「ERP原始檔直接匯入」取代，先隱藏待確認後移除 -->
+                                    <!-- ============================================================
+                                         【待刪除 2026-07-28】加工單價(transfer_log)　but=transfer_log
+                                         已由下方「更新加工單價 ERP原始檔直接匯入」(but=transfer_log_raw) 取代，目前僅前端 display:none 隱藏。
+                                         使用者確認無誤後：刪除本 <form> 區塊，並一併清掉
+                                         _upload_For_List.php 內 but=transfer_log 的處理與下方 JS enterToSubmit 設定
+                                              (file_transfer_log / btn_upload_transfer_log)。
+                                         ============================================================ -->
                                     <form action="_upload_For_List.php?but=transfer_log" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate style="display:none">
                                         <div class="item form-group" style="margin-bottom:6px">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file_transfer_log">加工單價(transfer_log)<small>(只接受.xls/.xlsx)</small><br><span class="required">*</span></label>
