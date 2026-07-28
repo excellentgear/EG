@@ -267,17 +267,25 @@ try {
         <button class="btn btn-default btn-xs" id="btnTplRowAdd" style="margin-top:4px;"><i class="fa fa-plus"></i> 加一列</button>
         <div style="margin-top:10px;padding:8px;background:#fdf6ea;border:1px solid #e8d9b8;border-radius:4px;">
           <strong style="color:#7a4e17;font-size:13px;">編號跳號規則</strong>（內容有 {編號} 才會用到）<br>
-          前綴 <input type="text" id="serPrefix" class="form-control input-sm" style="width:80px;display:inline-block;" placeholder="如 QA-">
+          前綴 <input type="text" id="serPrefix" class="form-control input-sm" style="width:150px;display:inline-block;" placeholder="如 B-{民國年}{月}{日}">
+          <span id="serTokenBtns">
+            <button class="btn btn-default btn-xs ser-tok" data-t="{民國年}" title="民國年3碼，如2026→115">民國年</button>
+            <button class="btn btn-default btn-xs ser-tok" data-t="{西元年}" title="西元年4碼，如2026">西元年</button>
+            <button class="btn btn-default btn-xs ser-tok" data-t="{月}" title="月份2碼補零">月</button>
+            <button class="btn btn-default btn-xs ser-tok" data-t="{日}" title="日期2碼補零">日</button>
+          </span><br>
           位數 <input type="number" id="serDigits" class="form-control input-sm" style="width:56px;display:inline-block;" value="3" min="1" max="10">
           起始 <input type="number" id="serStart" class="form-control input-sm" style="width:64px;display:inline-block;" value="1" min="0">
           間隔 <input type="number" id="serStep" class="form-control input-sm" style="width:56px;display:inline-block;" value="1" min="1">
           歸零 <select id="serReset" class="form-control input-sm" style="width:90px;display:inline-block;">
-            <option value="none">不歸零</option><option value="year">每年</option><option value="month">每月</option></select>
+            <option value="none">不歸零</option><option value="day">每日</option><option value="month">每月</option><option value="year">每年</option></select>
           <div id="serExplain" style="font-size:12.5px;color:#7a4e17;margin-top:6px;"></div>
           <div class="text-muted" style="font-size:11.5px;margin-top:3px;line-height:1.6;">
-            範例：前綴「QA-」＋位數 3＋起始 1＋間隔 1 → 蓋章依序取 <code>QA-001、QA-002、QA-003…</code>；
-            間隔 2 → <code>QA-001、QA-003、QA-005…</code>（跳號）。
-            「歸零」＝編號重新起算的週期：選<strong>每年</strong>，隔年第一顆章又從 QA-001 開始；選<strong>不歸零</strong>則一直累加。
+            前綴可插入日期變數，取號當下即時展開成實際日期，常見於 BOM 單號／訂單編號格式：<br>
+            例：<code>B-{民國年}{月}{日}</code>＋位數3＋歸零<strong>每日</strong> → 今天(115年7月28日)蓋出 <code>B-1150728001、B-1150728002…</code>，明天自動變 <code>B-1150729001…</code>；<br>
+            <code>{西元年}{月}{日}</code>＋歸零每日 → <code>20260728001、20260728002…</code>。<br>
+            範例（無日期變數）：前綴「QA-」＋位數 3＋起始 1＋間隔 1 → <code>QA-001、QA-002、QA-003…</code>；間隔 2 → <code>QA-001、QA-003、QA-005…</code>（跳號）。
+            「歸零」＝編號重新起算的週期：<strong>每日</strong>／每月／每年 到期第一顆章重新從起始值開始；<strong>不歸零</strong>則一直累加。含{月}{日}的前綴通常要搭配「每日」歸零，否則每日開頭日期變了但流水號不會跟著歸零。
           </div>
         </div>
       </div>
@@ -759,9 +767,15 @@ $('#btnBandSave').on('click',function(){
 
 // ── 線上圖章模板（設計器）──
 let TPLS=[], curTplId=0, lastTokInput=null;
+// 前綴內的日期變數即時展開成「今天」的實際日期，供各處預覽/試算使用；真正蓋章時後端 next_serial 用同一套規則、當下日期重算
+function resolveSerialPrefix(prefix){
+  const d=new Date(), y=d.getFullYear();
+  const roc=String(y-1911).padStart(3,'0'), mm=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0');
+  return (prefix||'').replace(/\{民國年\}/g,roc).replace(/\{西元年\}/g,String(y)).replace(/\{月\}/g,mm).replace(/\{日\}/g,dd);
+}
 function sampleCtx(){
   return {company:window.__ownCompany||'公司全名',dept:'品保課',position:'課長',name:'王小明',date:dot(today()),
-          serial:($('#serPrefix').val()||'')+String(+$('#serStart').val()||1).padStart(+$('#serDigits').val()||3,'0')};
+          serial:resolveSerialPrefix($('#serPrefix').val())+String(+$('#serStart').val()||1).padStart(+$('#serDigits').val()||3,'0')};
 }
 function tplRowHtml(h,text,fs,mode,wrapn){
   const isWrap=mode==='wrap';
@@ -793,14 +807,15 @@ function tplPreview(){
 }
 // 跳號規則即時試算說明：依目前設定列出前三個號與歸零說明，設定當下就看得懂會怎麼跳
 function updateSerExplain(){
-  const pre=$('#serPrefix').val()||'', dg=+$('#serDigits').val()||3;
+  const pre=resolveSerialPrefix($('#serPrefix').val()), dg=+$('#serDigits').val()||3;
   const st=+$('#serStart').val()||1, sp=+$('#serStep').val()||1;
   const pad=n=>pre+String(n).padStart(dg,'0');
   const seq=[st,st+sp,st+sp*2].map(pad).join('　→　');
   const rs={none:'不歸零：編號一直連續累加',
+            day:'每日歸零：每天第一次蓋章重新從 '+pad(st)+' 開始（跨日自動變號，各日流水獨立）',
             year:'每年歸零：每年第一次蓋章重新從 '+pad(st)+' 開始（各年度流水獨立）',
             month:'每月歸零：每月第一次蓋章重新從 '+pad(st)+' 開始'}[$('#serReset').val()]||'';
-  $('#serExplain').html('目前規則試算：<strong>'+esc(seq)+'　→　…</strong>｜'+esc(rs));
+  $('#serExplain').html('目前規則試算（今天）：<strong>'+esc(seq)+'　→　…</strong>｜'+esc(rs));
 }
 $('#tplModal').on('input change','input,select',tplPreview);
 $('#tplModal').on('focusin','.tpl-text',function(){ lastTokInput=this; });
@@ -809,6 +824,14 @@ $('#tokenBtns').on('click','.tok',function(e){
   if(!lastTokInput){alert('請先點選要插入的內容框');return;}
   const t=$(this).data('t'), el=lastTokInput, s=el.selectionStart||el.value.length;
   el.value=el.value.slice(0,s)+t+el.value.slice(el.selectionEnd||s);
+  el.focus(); el.selectionStart=el.selectionEnd=s+t.length;
+  tplPreview();
+});
+$('#serTokenBtns').on('click','.ser-tok',function(e){
+  e.preventDefault();
+  const t=$(this).data('t'), el=$('#serPrefix')[0], s=el.selectionStart!=null?el.selectionStart:el.value.length;
+  const e2=el.selectionEnd!=null?el.selectionEnd:s;
+  el.value=el.value.slice(0,s)+t+el.value.slice(e2);
   el.focus(); el.selectionStart=el.selectionEnd=s+t.length;
   tplPreview();
 });
@@ -848,9 +871,9 @@ $('#btnTplSave').on('click',function(){
   },'json');
 });
 function serialRuleText(t){
-  return esc(t.serial_prefix||'')+'#'.repeat(Math.min(10,+t.serial_digits||3))
+  return esc(resolveSerialPrefix(t.serial_prefix))+'#'.repeat(Math.min(10,+t.serial_digits||3))
     +'　起'+t.serial_start+' 跳'+t.serial_step
-    +({none:'',year:' 每年歸零',month:' 每月歸零'}[t.serial_reset]||'');
+    +({none:'',day:' 每日歸零',year:' 每年歸零',month:' 每月歸零'}[t.serial_reset]||'');
 }
 function loadTpls(cb){
   $.getJSON(API+'?action=tpl_list',r=>{
@@ -860,7 +883,7 @@ function loadTpls(cb){
       let sc={}; try{sc=JSON.parse(t.schema_json||'{}');}catch(e){}
       const prev=EGStampTpl.render(Object.assign({},sc,{size:76}),
         {company:window.__ownCompany||'公司全名',dept:'品保課',position:'課長',name:'王小明',date:dot(today()),
-         serial:(t.serial_prefix||'')+String(t.serial_start||1).padStart(+t.serial_digits||3,'0')});
+         serial:resolveSerialPrefix(t.serial_prefix)+String(t.serial_start||1).padStart(+t.serial_digits||3,'0')});
       return `<tr>
         <td style="text-align:center;">${prev}</td>
         <td>${esc(t.tpl_name)}</td>

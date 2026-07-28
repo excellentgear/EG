@@ -17,6 +17,17 @@ $db = (new DBConnection())->getPDO();
 function jout($arr){ header('Content-Type: application/json; charset=utf-8'); echo json_encode($arr, JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code=400){ http_response_code($code); header('Content-Type: application/json; charset=utf-8'); echo json_encode(['ok'=>false,'error'=>$msg], JSON_UNESCAPED_UNICODE); exit; }
 
+// 編號前綴內的日期變數，取號當下才即時展開成實際日期（BOM單號/訂單編號常見格式：B-民國年3碼+月日各2碼+流水號3碼 等）
+// {民國年}=ROC年3碼(2026→115)｜{西元年}=西元年4碼｜{月}{日}=各2碼補零
+function stamp_resolve_prefix_tokens(string $prefix): string {
+    $y = (int)date('Y');
+    return str_replace(
+        ['{民國年}', '{西元年}', '{月}', '{日}'],
+        [str_pad((string)($y - 1911), 3, '0', STR_PAD_LEFT), date('Y'), date('m'), date('d')],
+        $prefix
+    );
+}
+
 // ── 使用者 ──
 $uname = $_SESSION['userName'] ?? '';
 if ($uname === '') jerr('未登入', 401);
@@ -490,7 +501,7 @@ case 'tpl_save': {
     $digits = max(1, min(10, (int)($_POST['serial_digits'] ?? 3)));
     $start  = max(0, (int)($_POST['serial_start'] ?? 1));
     $step   = max(1, (int)($_POST['serial_step'] ?? 1));
-    $reset  = in_array($_POST['serial_reset'] ?? 'none', ['none','year','month'], true) ? $_POST['serial_reset'] : 'none';
+    $reset  = in_array($_POST['serial_reset'] ?? 'none', ['none','year','month','day'], true) ? $_POST['serial_reset'] : 'none';
     if ($tid > 0) {
         $st = $db->prepare("UPDATE stamp_template SET type_id=?, tpl_name=?, schema_json=?, serial_prefix=?, serial_digits=?, serial_start=?, serial_step=?, serial_reset=?, modified_at=NOW() WHERE id=?");
         $st->execute([$typeId, $name, json_encode($schema, JSON_UNESCAPED_UNICODE), $prefix, $digits, $start, $step, $reset, $tid]);
@@ -566,7 +577,8 @@ case 'next_serial': {
     $st->execute([$tid]);
     $tpl = $st->fetch(PDO::FETCH_ASSOC);
     if (!$tpl) jerr('模板不存在或已停用');
-    $period = $tpl['serial_reset'] === 'year' ? date('Y') : ($tpl['serial_reset'] === 'month' ? date('Y-m') : '');
+    $period = $tpl['serial_reset'] === 'day' ? date('Y-m-d')
+            : ($tpl['serial_reset'] === 'year' ? date('Y') : ($tpl['serial_reset'] === 'month' ? date('Y-m') : ''));
     $db->beginTransaction();
     $st = $db->prepare("SELECT last_no FROM stamp_serial WHERE template_id=? AND period=? FOR UPDATE");
     $st->execute([$tid, $period]);
@@ -575,7 +587,7 @@ case 'next_serial': {
     $db->prepare("INSERT INTO stamp_serial (template_id, period, last_no) VALUES (?,?,?)
                   ON DUPLICATE KEY UPDATE last_no=VALUES(last_no)")->execute([$tid, $period, $next]);
     $db->commit();
-    $serial = $tpl['serial_prefix'] . str_pad((string)$next, (int)$tpl['serial_digits'], '0', STR_PAD_LEFT);
+    $serial = stamp_resolve_prefix_tokens($tpl['serial_prefix']) . str_pad((string)$next, (int)$tpl['serial_digits'], '0', STR_PAD_LEFT);
     jout(['ok'=>true, 'serial'=>$serial, 'no'=>$next, 'period'=>$period]);
 }
 
