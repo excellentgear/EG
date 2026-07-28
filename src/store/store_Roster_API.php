@@ -46,6 +46,32 @@ function load_board_editable(PDO $pdo, int $id, int $myid, bool $isAdmin): array
     return $b;
 }
 
+/** 對調兩格（同欄），交換負責人、清簽核、標記調班、寫紀錄 */
+function roster_swap_two(PDO $pdo, array $a, array $t, int $op, string $note) {
+    $ua = (int)$a['user_id']; $ut = (int)$t['user_id'];
+    $up = $pdo->prepare("UPDATE roster_assignment SET user_id=?,orig_user_id=?,is_adjusted=1,adjust_note=?,pending_swap_id=NULL,sign_status=0,signed_at=NULL,signed_by=NULL WHERE id=?");
+    $up->execute([$ut, ($a['orig_user_id'] ?: $a['user_id']), $note, $a['id']]);
+    $up->execute([$ua, ($t['orig_user_id'] ?: $t['user_id']), $note, $t['id']]);
+    $pdo->prepare("INSERT INTO roster_adjust_log (board_id,lane_id,scope,date_from,date_to,from_user_id,to_user_id,note,operator_id) VALUES (?,?, 'swap',?,?,?,?,?,?)")
+        ->execute([$a['board_id'], $a['lane_id'], $a['duty_date'], $t['duty_date'], $ua, $ut, $note, $op]);
+}
+
+/** 區間內把 A 與 B 的班對調（同欄或全欄），清簽核、標記、寫紀錄，回傳受影響格數 */
+function roster_swap_range(PDO $pdo, int $bid, $laneId, string $df, string $dt, int $ua, int $ub, int $op, string $note) {
+    $sql = "SELECT id,user_id,orig_user_id FROM roster_assignment WHERE board_id=? AND duty_date BETWEEN ? AND ? AND user_id IN (?,?)";
+    $args = [$bid, $df, $dt, $ua, $ub];
+    if ($laneId !== null) { $sql .= " AND lane_id=?"; $args[] = $laneId; }
+    $rows = $pdo->prepare($sql); $rows->execute($args); $rows = $rows->fetchAll(PDO::FETCH_ASSOC);
+    $up = $pdo->prepare("UPDATE roster_assignment SET user_id=?,orig_user_id=?,is_adjusted=1,adjust_note=?,pending_swap_id=NULL,sign_status=0,signed_at=NULL,signed_by=NULL WHERE id=?");
+    foreach ($rows as $r) {
+        $nu = ((int)$r['user_id'] === $ua) ? $ub : $ua;
+        $up->execute([$nu, ($r['orig_user_id'] ?: $r['user_id']), $note, $r['id']]);
+    }
+    $pdo->prepare("INSERT INTO roster_adjust_log (board_id,lane_id,scope,date_from,date_to,from_user_id,to_user_id,note,operator_id) VALUES (?,?, 'swap_range',?,?,?,?,?,?)")
+        ->execute([$bid, $laneId, $df, $dt, $ua, $ub, $note, $op]);
+    return count($rows);
+}
+
 try {
 switch ($action) {
 
@@ -129,8 +155,12 @@ case 'save_board': {
     $memberMode = in_array($p['member_mode'] ?? '', ['per_lane', 'shared_pool'], true) ? $p['member_mode'] : 'per_lane';
     $cadence    = in_array($p['exec_cadence'] ?? '', ['daily', 'weekly', 'monthly'], true) ? $p['exec_cadence'] : 'daily';
     $policy     = in_array($p['holiday_policy'] ?? '', ['skip', 'postpone', 'advance'], true) ? $p['holiday_policy'] : 'skip';
-    $rotate     = in_array($p['rotate_unit'] ?? '', ['each', 'weekly', 'monthly'], true) ? $p['rotate_unit'] : 'each';
+    $rotate     = in_array($p['rotate_unit'] ?? '', ['each', 'day', 'week', 'month'], true) ? $p['rotate_unit'] : 'each';
+    $rotateN    = max(1, (int)($p['rotate_n'] ?? 1));
+    // 非管理員只允許基本頻率（每次/每週/每月，N=1）
+    if (!$IS_ADMIN) { if (!in_array($rotate, ['each', 'week', 'month'], true)) $rotate = 'each'; $rotateN = 1; }
     $execCount  = max(1, (int)($p['exec_count'] ?? 1));
+    $wasCreate  = ($id === 0);
     $execWd     = implode(',', array_filter(array_map('intval', $p['exec_weekdays'] ?? []), fn($x) => $x >= 1 && $x <= 7));
     $execMd     = implode(',', array_filter(array_map('intval', $p['exec_monthdays'] ?? []), fn($x) => $x >= 1 && $x <= 31));
     $signReq    = !empty($p['sign_required']) ? 1 : 0;
@@ -139,13 +169,13 @@ case 'save_board': {
     try {
         if ($id === 0) {
             $st = $pdo->prepare("INSERT INTO roster_board
-                (name,purpose,owner_id,member_mode,exec_cadence,exec_count,exec_weekdays,exec_monthdays,holiday_policy,rotate_unit,start_date,sign_required)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
-            $st->execute([$name, trim($p['purpose'] ?? ''), $MYID, $memberMode, $cadence, $execCount, $execWd, $execMd, $policy, $rotate, $startDate, $signReq]);
+                (name,purpose,owner_id,member_mode,exec_cadence,exec_count,exec_weekdays,exec_monthdays,holiday_policy,rotate_unit,rotate_n,start_date,sign_required)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+            $st->execute([$name, trim($p['purpose'] ?? ''), $MYID, $memberMode, $cadence, $execCount, $execWd, $execMd, $policy, $rotate, $rotateN, $startDate, $signReq]);
             $id = (int)$pdo->lastInsertId();
         } else {
-            $st = $pdo->prepare("UPDATE roster_board SET name=?,purpose=?,member_mode=?,exec_cadence=?,exec_count=?,exec_weekdays=?,exec_monthdays=?,holiday_policy=?,rotate_unit=?,start_date=?,sign_required=? WHERE id=?");
-            $st->execute([$name, trim($p['purpose'] ?? ''), $memberMode, $cadence, $execCount, $execWd, $execMd, $policy, $rotate, $startDate, $signReq, $id]);
+            $st = $pdo->prepare("UPDATE roster_board SET name=?,purpose=?,member_mode=?,exec_cadence=?,exec_count=?,exec_weekdays=?,exec_monthdays=?,holiday_policy=?,rotate_unit=?,rotate_n=?,start_date=?,sign_required=? WHERE id=?");
+            $st->execute([$name, trim($p['purpose'] ?? ''), $memberMode, $cadence, $execCount, $execWd, $execMd, $policy, $rotate, $rotateN, $startDate, $signReq, $id]);
         }
 
         // lanes：以 id 對應更新、無 id 新增、DB 有而 payload 無者刪除(連同其排班)
@@ -223,6 +253,10 @@ case 'save_board': {
             elseif (strpos($v, 'status-') === 0) $insV->execute([$id, 'status', (int)substr($v, 7)]);
             elseif (strpos($v, 'user-') === 0)   $insV->execute([$id, 'user', (int)substr($v, 5)]);
         }
+        if ($wasCreate) {
+            $pdo->prepare("INSERT INTO roster_board_log (board_id,board_name,action,operator_id,operator_name) VALUES (?,?, 'create',?,?)")
+                ->execute([$id, $name, $MYID, $me['name']]);
+        }
         $pdo->commit();
     } catch (Exception $e) {
         $pdo->rollBack();
@@ -237,11 +271,14 @@ case 'save_board': {
 /* ── 刪除 / 封存 ── */
 case 'delete_board': {
     $id = (int)($_POST['id'] ?? 0);
-    load_board_editable($pdo, $id, $MYID, $IS_ADMIN);
+    $b = load_board_editable($pdo, $id, $MYID, $IS_ADMIN);
     if (!$CAN_DELETE && !$IS_ADMIN) jerr('無刪除權限', 403);
     $pdo->beginTransaction();
     try {
-        foreach (['roster_assignment','roster_member','roster_lane','roster_visibility','roster_adjust_log'] as $t) {
+        // 刪除紀錄先寫（board_log 不隨表刪除）
+        $pdo->prepare("INSERT INTO roster_board_log (board_id,board_name,action,operator_id,operator_name) VALUES (?,?, 'delete',?,?)")
+            ->execute([$id, $b['name'], $MYID, $me['name']]);
+        foreach (['roster_assignment','roster_member','roster_lane','roster_visibility','roster_adjust_log','roster_swap_request'] as $t) {
             $pdo->prepare("DELETE FROM $t WHERE board_id=?")->execute([$id]);
         }
         $pdo->prepare("DELETE FROM roster_board WHERE id=?")->execute([$id]);
@@ -278,7 +315,25 @@ case 'get_calendar': {
     $lanes = $pdo->prepare("SELECT id,lane_name,color,shift_type_id,sort_order FROM roster_lane WHERE board_id=? ORDER BY sort_order,id");
     $lanes->execute([$id]); $lanes = $lanes->fetchAll(PDO::FETCH_ASSOC);
 
-    $sql = "SELECT id,lane_id,duty_date,user_id,orig_user_id,sign_status,signed_at,is_adjusted,adjust_note FROM roster_assignment WHERE board_id=? AND duty_date BETWEEN ? AND ?";
+    // 每欄可對調的同組人員（per_lane=該欄名單；shared_pool=全表共用池，套用到每一欄）
+    $laneMembers = [];
+    if ($b['member_mode'] === 'shared_pool') {
+        $mq = $pdo->prepare("SELECT user_id FROM roster_member WHERE board_id=? AND lane_id IS NULL AND active=1 ORDER BY sort_order,id");
+        $mq->execute([$id]); $pool = array_map('intval', $mq->fetchAll(PDO::FETCH_COLUMN));
+        $pn = roster_user_name_map($pdo, $pool);
+        $poolList = array_map(fn($u) => ['id' => $u, 'name' => $pn[$u]['name'] ?? ('#' . $u)], $pool);
+        foreach ($lanes as $ln) $laneMembers[(int)$ln['id']] = $poolList;
+    } else {
+        $mq = $pdo->prepare("SELECT lane_id,user_id FROM roster_member WHERE board_id=? AND lane_id IS NOT NULL AND active=1 ORDER BY sort_order,id");
+        $mq->execute([$id]);
+        $tmp = [];
+        foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $m) $tmp[(int)$m['lane_id']][] = (int)$m['user_id'];
+        $allm = array_merge(...array_values($tmp) ?: [[]]);
+        $mn = roster_user_name_map($pdo, $allm);
+        foreach ($tmp as $lid => $us) $laneMembers[$lid] = array_map(fn($u) => ['id' => $u, 'name' => $mn[$u]['name'] ?? ('#' . $u)], $us);
+    }
+
+    $sql = "SELECT id,lane_id,duty_date,user_id,orig_user_id,sign_status,signed_at,is_adjusted,adjust_note,pending_swap_id FROM roster_assignment WHERE board_id=? AND duty_date BETWEEN ? AND ?";
     $args = [$id, $from, $to];
     if ($filterUser) { $sql .= " AND user_id=?"; $args[] = $filterUser; }
     $ass = $pdo->prepare($sql); $ass->execute($args); $ass = $ass->fetchAll(PDO::FETCH_ASSOC);
@@ -293,6 +348,7 @@ case 'get_calendar': {
             'name' => $names[$uid]['name'] ?? ('#' . $uid), 'left' => $names[$uid]['left'] ?? false,
             'sign' => (int)$r['sign_status'], 'signed_at' => $r['signed_at'] ? substr($r['signed_at'], 0, 16) : null,
             'adjusted' => (int)$r['is_adjusted'], 'mine' => ($uid === $MYID),
+            'pending' => $r['pending_swap_id'] ? (int)$r['pending_swap_id'] : 0,
             'can_sign' => ($uid === $MYID), 'note' => $r['adjust_note'],
         ];
     }
@@ -309,8 +365,9 @@ case 'get_calendar': {
 
     jout([
         'board' => ['id' => (int)$b['id'], 'name' => $b['name'], 'sign_required' => (int)$b['sign_required'],
-                    'can_edit' => ($mine || $IS_ADMIN), 'is_admin' => $IS_ADMIN],
-        'lanes' => $lanes, 'months' => [$ym, $second],
+                    'can_edit' => ($mine || $IS_ADMIN), 'is_admin' => $IS_ADMIN, 'is_owner' => $mine,
+                    'swap_bypass' => ($mine || $IS_ADMIN), 'member_mode' => $b['member_mode']],
+        'lanes' => $lanes, 'lane_members' => $laneMembers, 'months' => [$ym, $second],
         'cells' => $cells, 'holidays' => array_keys($ctx['holidays']), 'makeup' => array_keys($ctx['makeup']),
         'people' => $people, 'today' => date('Y-m-d'),
     ]);
@@ -333,54 +390,189 @@ case 'sign': case 'unsign': {
     jout();
 }
 
-/* ── 單次調班 ── */
-case 'adjust_single': {
-    $aid = (int)($_POST['aid'] ?? 0);
-    $newUser = (int)($_POST['new_user_id'] ?? 0);
-    $note = trim($_POST['note'] ?? '');
-    $st = $pdo->prepare("SELECT a.*, b.owner_id FROM roster_assignment a JOIN roster_board b ON b.id=a.board_id WHERE a.id=?");
-    $st->execute([$aid]); $a = $st->fetch(PDO::FETCH_ASSOC);
-    if (!$a) jerr('排班不存在', 404);
-    if ((int)$a['owner_id'] !== $MYID && !$IS_ADMIN) jerr('只有建立者或管理者可調班', 403);
-    if ($newUser <= 0) jfail('請選擇代班人員');
-    $orig = $a['orig_user_id'] ?: $a['user_id'];
-    $pdo->prepare("UPDATE roster_assignment SET user_id=?,orig_user_id=?,is_adjusted=1,adjust_note=?,sign_status=0,signed_at=NULL,signed_by=NULL WHERE id=?")
-        ->execute([$newUser, $orig, $note, $aid]);
-    $pdo->prepare("INSERT INTO roster_adjust_log (board_id,lane_id,scope,date_from,date_to,from_user_id,to_user_id,note,operator_id) VALUES (?,?, 'single',?,?,?,?,?,?)")
-        ->execute([$a['board_id'], $a['lane_id'], $a['duty_date'], $a['duty_date'], $a['user_id'], $newUser, $note, $MYID]);
-    jout();
+/* ── 申請對調（單次）：選對方某一天，與自己這天對調 ── */
+case 'request_swap': {
+    $fromAid = (int)($_POST['from_aid'] ?? 0);
+    $toAid   = (int)($_POST['to_aid'] ?? 0);
+    $note    = trim($_POST['note'] ?? '');
+    $q = $pdo->prepare("SELECT a.*, b.owner_id, b.name AS board_name FROM roster_assignment a JOIN roster_board b ON b.id=a.board_id WHERE a.id=?");
+    $q->execute([$fromAid]); $a = $q->fetch(PDO::FETCH_ASSOC);
+    $q->execute([$toAid]);   $t = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$a || !$t) jerr('排班不存在', 404);
+    if ((int)$a['board_id'] !== (int)$t['board_id']) jfail('只能在同一張表內對調');
+    if ((int)$a['lane_id'] !== (int)$t['lane_id']) jfail('只能跟同一個職務欄（同組）對調');
+    $bypass = ((int)$a['owner_id'] === $MYID) || $IS_ADMIN;
+    if ((int)$a['user_id'] !== $MYID && !$bypass) jerr('只能對調自己負責的班', 403);
+    if ((int)$t['user_id'] === (int)$a['user_id']) jfail('對調雙方是同一人');
+    $today = date('Y-m-d');
+    if ($a['duty_date'] < $today || $t['duty_date'] < $today) jfail('不能調整已過去的班');
+    if ($a['pending_swap_id'] || $t['pending_swap_id']) jfail('其中一天已有調班申請進行中');
+
+    if ($bypass) { // 管理員/建立者：免對方同意，直接對調
+        $pdo->beginTransaction();
+        try { roster_swap_two($pdo, $a, $t, $MYID, $note); $pdo->commit(); }
+        catch (Exception $e) { $pdo->rollBack(); jfail('對調失敗：' . $e->getMessage()); }
+        jout(['mode' => 'done']);
+    }
+    // 一般使用者：建立待核准申請
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare("INSERT INTO roster_swap_request (board_id,lane_id,scope,requester_id,counterpart_id,from_aid,to_aid,date_from,date_to,note) VALUES (?,?, 'single',?,?,?,?,?,?,?)")
+            ->execute([$a['board_id'], $a['lane_id'], $MYID, (int)$t['user_id'], $fromAid, $toAid, $a['duty_date'], $t['duty_date'], $note]);
+        $rid = (int)$pdo->lastInsertId();
+        $pdo->prepare("UPDATE roster_assignment SET pending_swap_id=? WHERE id IN (?,?)")->execute([$rid, $fromAid, $toAid]);
+        $pdo->commit();
+    } catch (Exception $e) { $pdo->rollBack(); jfail('申請失敗：' . $e->getMessage()); }
+    jout(['mode' => 'pending']);
 }
 
-/* ── 區間調班 ── */
-case 'adjust_range': {
+/* ── 申請對調（整個換手單位/區間）：自己與某位同組人員，在區間內全部對調 ── */
+case 'request_swap_range': {
     $bid = (int)($_POST['board_id'] ?? 0);
     $laneId = ($_POST['lane_id'] ?? '') === '' ? null : (int)$_POST['lane_id'];
     $df = $_POST['date_from'] ?? ''; $dt = $_POST['date_to'] ?? '';
-    $fromUser = (int)($_POST['from_user_id'] ?? 0); // 0=不限原負責人
-    $toUser = (int)($_POST['to_user_id'] ?? 0);
+    $counterpart = (int)($_POST['counterpart_id'] ?? 0);
     $note = trim($_POST['note'] ?? '');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $df) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dt)) jfail('日期格式錯誤');
     if ($df > $dt) jfail('起訖日期顛倒');
-    if ($toUser <= 0) jfail('請選擇代班人員');
-    load_board_editable($pdo, $bid, $MYID, $IS_ADMIN);
+    if ($counterpart <= 0 || $counterpart === $MYID) jfail('請選擇要對調的同組人員');
+    if ($df < date('Y-m-d')) jfail('不能調整已過去的班');
+    $bq = $pdo->prepare("SELECT * FROM roster_board WHERE id=?"); $bq->execute([$bid]); $bd = $bq->fetch(PDO::FETCH_ASSOC);
+    if (!$bd) jerr('排班表不存在', 404);
+    $bypass = ((int)$bd['owner_id'] === $MYID) || $IS_ADMIN;
+    // 一般使用者：發起者必須是雙方之一（只能調自己的）
+    $me_or = $bypass ? $counterpart : $MYID; // 一般人以自己為 A
+    $userA = $bypass ? (int)($_POST['from_user_id'] ?? 0) : $MYID;
+    if (!$bypass && $userA !== $MYID) jerr('只能對調自己負責的班', 403);
+    if ($bypass && $userA <= 0) jfail('請選擇原負責人');
 
-    $sql = "SELECT id,user_id,orig_user_id FROM roster_assignment WHERE board_id=? AND duty_date BETWEEN ? AND ?";
-    $args = [$bid, $df, $dt];
-    if ($laneId !== null) { $sql .= " AND lane_id=?"; $args[] = $laneId; }
-    if ($fromUser > 0)    { $sql .= " AND user_id=?"; $args[] = $fromUser; }
-    $rows = $pdo->prepare($sql); $rows->execute($args); $rows = $rows->fetchAll(PDO::FETCH_ASSOC);
+    // 檢查區間內是否已有進行中的申請
+    $chk = "SELECT COUNT(*) FROM roster_assignment WHERE board_id=? AND duty_date BETWEEN ? AND ? AND pending_swap_id IS NOT NULL AND user_id IN (?,?)";
+    $ca = [$bid, $df, $dt, $userA, $counterpart];
+    if ($laneId !== null) { $chk .= " AND lane_id=?"; $ca[] = $laneId; }
+    $cs = $pdo->prepare($chk); $cs->execute($ca);
+    if ((int)$cs->fetchColumn() > 0) jfail('區間內已有調班申請進行中');
+
+    if ($bypass) {
+        $pdo->beginTransaction();
+        try { $n = roster_swap_range($pdo, $bid, $laneId, $df, $dt, $userA, $counterpart, $MYID, $note); $pdo->commit(); }
+        catch (Exception $e) { $pdo->rollBack(); jfail('對調失敗：' . $e->getMessage()); }
+        jout(['mode' => 'done', 'affected' => $n]);
+    }
+    // 一般使用者：pending
     $pdo->beginTransaction();
     try {
-        $up = $pdo->prepare("UPDATE roster_assignment SET user_id=?,orig_user_id=?,is_adjusted=1,adjust_note=?,sign_status=0,signed_at=NULL,signed_by=NULL WHERE id=?");
-        foreach ($rows as $r) {
-            $orig = $r['orig_user_id'] ?: $r['user_id'];
-            $up->execute([$toUser, $orig, $note, $r['id']]);
-        }
-        $pdo->prepare("INSERT INTO roster_adjust_log (board_id,lane_id,scope,date_from,date_to,from_user_id,to_user_id,note,operator_id) VALUES (?,?, 'range',?,?,?,?,?,?)")
-            ->execute([$bid, $laneId, $df, $dt, ($fromUser ?: null), $toUser, $note, $MYID]);
+        $pdo->prepare("INSERT INTO roster_swap_request (board_id,lane_id,scope,requester_id,counterpart_id,date_from,date_to,note) VALUES (?,?, 'range',?,?,?,?,?)")
+            ->execute([$bid, $laneId, $MYID, $counterpart, $df, $dt, $note]);
+        $rid = (int)$pdo->lastInsertId();
+        $mk = "UPDATE roster_assignment SET pending_swap_id=? WHERE board_id=? AND duty_date BETWEEN ? AND ? AND user_id IN (?,?)";
+        $ma = [$rid, $bid, $df, $dt, $MYID, $counterpart];
+        if ($laneId !== null) { $mk .= " AND lane_id=?"; $ma[] = $laneId; }
+        $pdo->prepare($mk)->execute($ma);
         $pdo->commit();
-    } catch (Exception $e) { $pdo->rollBack(); jfail('調班失敗：' . $e->getMessage()); }
-    jout(['affected' => count($rows)]);
+    } catch (Exception $e) { $pdo->rollBack(); jfail('申請失敗：' . $e->getMessage()); }
+    jout(['mode' => 'pending']);
+}
+
+/* ── 回應對調申請（同意/不同意）── */
+case 'respond_swap': {
+    $rid = (int)($_POST['req_id'] ?? 0);
+    $decision = $_POST['decision'] ?? '';
+    $rq = $pdo->prepare("SELECT r.*, b.owner_id FROM roster_swap_request r JOIN roster_board b ON b.id=r.board_id WHERE r.id=?");
+    $rq->execute([$rid]); $r = $rq->fetch(PDO::FETCH_ASSOC);
+    if (!$r) jerr('申請不存在', 404);
+    if ($r['status'] !== 'pending') jfail('此申請已處理過');
+    $canRespond = ((int)$r['counterpart_id'] === $MYID) || ((int)$r['owner_id'] === $MYID) || $IS_ADMIN;
+    if (!$canRespond) jerr('只有被指定對調的人（或管理者）可回應', 403);
+    $pdo->beginTransaction();
+    try {
+        if ($decision === 'agree') {
+            if ($r['scope'] === 'single') {
+                $q = $pdo->prepare("SELECT * FROM roster_assignment WHERE id=?");
+                $q->execute([$r['from_aid']]); $a = $q->fetch(PDO::FETCH_ASSOC);
+                $q->execute([$r['to_aid']]);   $t = $q->fetch(PDO::FETCH_ASSOC);
+                if ($a && $t) roster_swap_two($pdo, $a, $t, $MYID, $r['note']);
+            } else {
+                roster_swap_range($pdo, (int)$r['board_id'], $r['lane_id'], $r['date_from'], $r['date_to'], (int)$r['requester_id'], (int)$r['counterpart_id'], $MYID, $r['note']);
+            }
+            $pdo->prepare("UPDATE roster_swap_request SET status='agreed',responder_id=?,responded_at=NOW() WHERE id=?")->execute([$MYID, $rid]);
+        } else {
+            // 不同意：清 pending，狀態駁回
+            $pdo->prepare("UPDATE roster_assignment SET pending_swap_id=NULL WHERE pending_swap_id=?")->execute([$rid]);
+            $pdo->prepare("UPDATE roster_swap_request SET status='rejected',responder_id=?,responded_at=NOW() WHERE id=?")->execute([$MYID, $rid]);
+        }
+        $pdo->commit();
+    } catch (Exception $e) { $pdo->rollBack(); jfail('處理失敗：' . $e->getMessage()); }
+    jout(['status' => ($decision === 'agree' ? 'agreed' : 'rejected')]);
+}
+
+/* ── 取消自己送出的對調申請 ── */
+case 'cancel_swap': {
+    $rid = (int)($_POST['req_id'] ?? 0);
+    $rq = $pdo->prepare("SELECT r.*, b.owner_id FROM roster_swap_request r JOIN roster_board b ON b.id=r.board_id WHERE r.id=?");
+    $rq->execute([$rid]); $r = $rq->fetch(PDO::FETCH_ASSOC);
+    if (!$r) jerr('申請不存在', 404);
+    if ($r['status'] !== 'pending') jfail('此申請已處理過');
+    if ((int)$r['requester_id'] !== $MYID && (int)$r['owner_id'] !== $MYID && !$IS_ADMIN) jerr('只能取消自己送出的申請', 403);
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare("UPDATE roster_assignment SET pending_swap_id=NULL WHERE pending_swap_id=?")->execute([$rid]);
+        $pdo->prepare("UPDATE roster_swap_request SET status='cancelled',responder_id=?,responded_at=NOW() WHERE id=?")->execute([$MYID, $rid]);
+        $pdo->commit();
+    } catch (Exception $e) { $pdo->rollBack(); jfail('取消失敗：' . $e->getMessage()); }
+    jout();
+}
+
+/* ── 待我核准 / 我送出的（進行中）── */
+case 'list_my_swaps': {
+    $rq = $pdo->prepare("
+        SELECT r.*, b.name AS board_name, l.lane_name
+        FROM roster_swap_request r
+        JOIN roster_board b ON b.id=r.board_id
+        LEFT JOIN roster_lane l ON l.id=r.lane_id
+        WHERE r.status='pending' AND (r.counterpart_id=? OR r.requester_id=?)
+        ORDER BY r.created_at DESC");
+    $rq->execute([$MYID, $MYID]);
+    $rows = $rq->fetchAll(PDO::FETCH_ASSOC);
+    $ids = [];
+    foreach ($rows as $r) { $ids[] = (int)$r['requester_id']; $ids[] = (int)$r['counterpart_id']; }
+    $nm = roster_user_name_map($pdo, $ids);
+    $inbox = []; $sent = [];
+    foreach ($rows as $r) {
+        $item = [
+            'id' => (int)$r['id'], 'board_name' => $r['board_name'], 'lane_name' => $r['lane_name'],
+            'scope' => $r['scope'], 'requester' => $nm[(int)$r['requester_id']]['name'] ?? '', 'counterpart' => $nm[(int)$r['counterpart_id']]['name'] ?? '',
+            'date_from' => $r['date_from'], 'date_to' => $r['date_to'], 'note' => $r['note'], 'created_at' => substr($r['created_at'], 0, 16),
+        ];
+        if ((int)$r['counterpart_id'] === $MYID) $inbox[] = $item; else $sent[] = $item;
+    }
+    jout(['inbox' => $inbox, 'sent' => $sent]);
+}
+
+/* ── 建立 / 刪除紀錄 ── */
+case 'list_board_log': {
+    $sql = "SELECT * FROM roster_board_log " . ($IS_ADMIN ? "" : "WHERE operator_id=" . $MYID) . " ORDER BY created_at DESC LIMIT 300";
+    $rows = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    jout(['rows' => $rows]);
+}
+
+/* ── 調班紀錄（某表）── */
+case 'list_adjust_log': {
+    $id = (int)($_POST['id'] ?? 0);
+    $st = $pdo->prepare("SELECT * FROM roster_board WHERE id=?"); $st->execute([$id]); $b = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$b) jerr('排班表不存在', 404);
+    if ((int)$b['owner_id'] !== $MYID && !roster_can_view_board($pdo, $b, $MYID, $features)) jerr('無權檢視', 403);
+    $lg = $pdo->prepare("SELECT g.*, l.lane_name FROM roster_adjust_log g LEFT JOIN roster_lane l ON l.id=g.lane_id WHERE g.board_id=? ORDER BY g.created_at DESC LIMIT 300");
+    $lg->execute([$id]); $rows = $lg->fetchAll(PDO::FETCH_ASSOC);
+    $ids = [];
+    foreach ($rows as $r) { $ids[] = (int)$r['from_user_id']; $ids[] = (int)$r['to_user_id']; $ids[] = (int)$r['operator_id']; }
+    $nm = roster_user_name_map($pdo, $ids);
+    foreach ($rows as &$r) {
+        $r['from_name'] = $nm[(int)$r['from_user_id']]['name'] ?? '';
+        $r['to_name']   = $nm[(int)$r['to_user_id']]['name'] ?? '';
+        $r['op_name']   = $nm[(int)$r['operator_id']]['name'] ?? '';
+    } unset($r);
+    jout(['rows' => $rows]);
 }
 
 /* ── 手動重算 / 延長 ── */

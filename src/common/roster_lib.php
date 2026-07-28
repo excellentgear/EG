@@ -304,10 +304,12 @@ if (!function_exists('roster_regenerate')) {
             $monBucket[$d] = $monSeen[$mo];
         }
         $rotate = $board['rotate_unit'] ?: 'each';
-        $bucketOf = function ($d, $laneIdx) use ($rotate, $occ, $weekBucket, $monBucket, $board, $laneCount) {
-            if ($rotate === 'weekly')      $b = $weekBucket[$d];
-            elseif ($rotate === 'monthly') $b = $monBucket[$d];
-            else                           $b = $occ[$d];
+        $rn = max(1, (int)($board['rotate_n'] ?? 1)); // 連續 N 個單位才換手
+        $bucketOf = function ($d, $laneIdx) use ($rotate, $rn, $occ, $weekBucket, $monBucket, $board, $laneCount) {
+            if ($rotate === 'week' || $rotate === 'weekly')       $b = intdiv($weekBucket[$d], $rn);
+            elseif ($rotate === 'month' || $rotate === 'monthly') $b = intdiv($monBucket[$d], $rn);
+            elseif ($rotate === 'day')                            $b = intdiv($occ[$d], $rn);
+            else                                                  $b = $occ[$d]; // each＝每次執行就換
             // 共用池：跨欄再加位移，讓同組人輪流換到不同欄
             if ($board['member_mode'] === 'shared_pool') return $b * $laneCount + $laneIdx;
             return $b;
