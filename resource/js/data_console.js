@@ -34,8 +34,9 @@
       let badge = '';
       if (t.hard_readonly) badge = '<span class="dc-pill ro">唯讀</span>';
       else { if (t.can_edit) badge += '<span class="dc-pill edit">可編</span>'; if (t.can_delete) badge += '<span class="dc-pill del">可刪</span>'; }
-      return `<div class="it${S.curTable === t.name ? ' active' : ''}" onclick="DC.selectTable('${t.name}')">
-        <span>${esc(t.name)}${badge}</span><span class="cnt">${t.rows}</span></div>`;
+      const cmt = t.comment ? `<span style="color:#a98a5c;font-size:11px;">${esc(t.comment)}</span>` : '';
+      return `<div class="it${S.curTable === t.name ? ' active' : ''}" onclick="DC.selectTable('${t.name}')" title="${esc(t.comment || '')}">
+        <span>${esc(t.name)}${badge} ${cmt}</span><span class="cnt">${t.rows}</span></div>`;
     }).join('') || '<div style="padding:12px;color:#a98a5c;font-size:13px;">無符合的資料表</div>';
   };
   DC.filterTableList = q => DC.renderTableList(q);
@@ -60,7 +61,7 @@
     const cols = sc.columns.map(c => c.name);
     const tmeta = S.tables.find(t => t.name === S.curTable) || {};
     let head = `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
-      <h4 style="margin:0;color:var(--amber-d);">${esc(S.curTable)}
+      <h4 style="margin:0;color:var(--amber-d);">${esc(S.curTable)}${sc.comment ? ' <span style="font-size:12px;color:#8a5a1a;font-weight:400;">（' + esc(sc.comment) + '）</span>' : ''}
         <span style="font-size:12px;color:#a98a5c;font-weight:400;">主鍵：${esc(sc.pk.join(', ') || '（無）')}</span></h4>
       <div>`;
     if (sc.hard_readonly) head += '<span class="dc-pill ro">永久唯讀（紀錄/稽核表）</span>';
@@ -142,9 +143,10 @@
     if (canRowAct) th += '<th style="width:96px;">操作</th>';
     cols.forEach(c => {
       const arrow = S.sort_col === c.name ? (S.sort_dir === 'ASC' ? ' ▲' : ' ▼') : '';
-      const roTag = c.readonly ? '<span class="dc-pill ro" style="font-size:9px;">鎖</span>' : '';
+      const roTag = c.sensitive ? '<span class="dc-pill ro" style="font-size:9px;">🔒密</span>' : (c.readonly ? '<span class="dc-pill ro" style="font-size:9px;">鎖</span>' : '');
       const refTag = c.ref ? `<span class="dc-ref">→${esc(c.ref.table)}</span>` : '';
-      th += `<th onclick="DC.sortBy('${esc(c.name)}')">${esc(c.name)}${roTag}${refTag}${arrow}</th>`;
+      const ttl = c.comment ? esc(c.name + '　' + c.comment) : esc(c.name);
+      th += `<th onclick="DC.sortBy('${esc(c.name)}')" title="${ttl}">${esc(c.name)}${roTag}${refTag}${arrow}</th>`;
     });
     th += '</tr>';
     $('rowsTbl').querySelector('thead').innerHTML = th;
@@ -265,7 +267,7 @@
 
   DC.renderField = function (c, val, editable, mode, row) {
     const dis = editable ? '' : 'disabled';
-    const roTag = editable ? '' : '<span class="ro-tag">🔒 唯讀</span>';
+    const roTag = c.sensitive ? '<span class="ro-tag">🔒 密碼/金鑰欄，一律遮蔽且不可由此頁修改</span>' : (editable ? '' : '<span class="ro-tag">🔒 唯讀</span>');
     let inner;
     if (c.ref && editable) {
       // 參照欄：combobox

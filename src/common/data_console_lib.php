@@ -76,12 +76,30 @@ function dc_pk(PDO $pdo, string $t): array {
 /** 反引號安全引用識別字（僅在已白名單驗證後使用） */
 function dc_q(string $ident): string { return '`' . str_replace('`', '``', $ident) . '`'; }
 
-/** 欄位是否唯讀（主鍵、auto_increment、稽核欄一律唯讀） */
+/** 敏感欄位（密碼/金鑰等）：一律遮蔽顯示且不可直接修改 */
+function dc_col_sensitive(string $name): bool {
+    return (bool)preg_match('/pass(word)?|passwd|pwd|secret|salt|token|api[_-]?key|private[_-]?key/i', $name);
+}
+
+/** 遮蔽顯示值（敏感欄用）：有值→固定星號，空值維持空 */
+function dc_mask_value($v): string {
+    return ($v === null || $v === '') ? (string)$v : '********';
+}
+
+/** 欄位是否唯讀（主鍵、auto_increment、稽核欄、敏感欄一律唯讀） */
 function dc_col_readonly(array $col): bool {
     if ($col['column_key'] === 'PRI') return true;
     if (stripos((string)$col['extra'], 'auto_increment') !== false) return true;
     if (in_array(strtolower($col['column_name']), dc_readonly_col_names(), true)) return true;
+    if (dc_col_sensitive($col['column_name'])) return true;
     return false;
+}
+
+/** 資料表註解 */
+function dc_table_comment(PDO $pdo, string $t): string {
+    $st = $pdo->prepare("SELECT table_comment FROM information_schema.tables WHERE table_schema=? AND table_name=?");
+    $st->execute([dc_db_name($pdo), $t]);
+    return (string)$st->fetchColumn();
 }
 
 // ── 關聯地圖 ───────────────────────────────────────────────────────────────

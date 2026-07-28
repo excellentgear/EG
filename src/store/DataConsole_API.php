@@ -118,17 +118,18 @@ case 'bootstrap': {
     $cfgAll=[];
     foreach ($pdo->query("SELECT table_name,can_edit,can_delete,note FROM data_console_table_cfg")->fetchAll(PDO::FETCH_ASSOC) as $r)
         $cfgAll[$r['table_name']]=$r;
-    // 筆數（information_schema 的 table_rows 對 InnoDB 是估算，夠用）
-    $rowsEst=[];
-    $st=$pdo->prepare("SELECT table_name AS table_name,table_rows AS table_rows FROM information_schema.tables WHERE table_schema=? AND table_type='BASE TABLE'");
+    // 筆數與表註解（information_schema 的 table_rows 對 InnoDB 是估算，夠用）
+    $rowsEst=[]; $cmtEst=[];
+    $st=$pdo->prepare("SELECT table_name AS table_name,table_rows AS table_rows,table_comment AS table_comment FROM information_schema.tables WHERE table_schema=? AND table_type='BASE TABLE'");
     $st->execute([dc_db_name($pdo)]);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { $r=array_change_key_case($r,CASE_LOWER); $rowsEst[$r['table_name']]=(int)$r['table_rows']; }
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { $r=array_change_key_case($r,CASE_LOWER); $rowsEst[$r['table_name']]=(int)$r['table_rows']; $cmtEst[$r['table_name']]=(string)$r['table_comment']; }
     $hard=dc_hard_readonly_tables();
     $tables=[];
     foreach (dc_all_tables($pdo) as $t) {
         $c=$cfgAll[$t]??null;
         $tables[]=[
             'name'=>$t,
+            'comment'=>$cmtEst[$t]??'',
             'rows'=>$rowsEst[$t]??0,
             'can_edit'=>(int)($c['can_edit']??0),
             'can_delete'=>(int)($c['can_delete']??0),
@@ -159,11 +160,11 @@ case 'schema': {
             'name'=>$c['column_name'],'type'=>$c['data_type'],'coltype'=>$c['column_type'],
             'nullable'=>$c['is_nullable']==='YES','default'=>$c['column_default'],
             'key'=>$c['column_key'],'extra'=>$c['extra'],'comment'=>$c['column_comment'],
-            'readonly'=>$ro,
+            'readonly'=>$ro,'sensitive'=>dc_col_sensitive($c['column_name']),
             'ref'=>isset($refs[$c['column_name']])?$refs[$c['column_name']]:null,
         ];
     }
-    out(['success'=>true,'table'=>$t,'pk'=>dc_pk($pdo,$t),'columns'=>$cols,
+    out(['success'=>true,'table'=>$t,'comment'=>dc_table_comment($pdo,$t),'pk'=>dc_pk($pdo,$t),'columns'=>$cols,
          'hard_readonly'=>$hard,'can_edit'=>$cfg['can_edit'],'can_delete'=>$cfg['can_delete'],'note'=>$cfg['note']]);
 }
 
@@ -184,6 +185,9 @@ case 'rows': {
     $sql='SELECT * FROM '.dc_q($t).$whereSql.$orderSql.' LIMIT '.$per.' OFFSET '.$off;
     $st=$pdo->prepare($sql); $st->execute($params);
     $rows=$st->fetchAll(PDO::FETCH_ASSOC);
+    // 遮蔽敏感欄（密碼/金鑰）
+    $sensCols=[]; foreach (dc_columns($pdo,$t) as $c) if (dc_col_sensitive($c['column_name'])) $sensCols[]=$c['column_name'];
+    if ($sensCols) foreach ($rows as &$r) foreach ($sensCols as $sc) if (array_key_exists($sc,$r)) $r[$sc]=dc_mask_value($r[$sc]); unset($r);
     $refs=dc_table_refs($pdo,$t);
     $disp=dc_resolve_display($pdo,$t,$rows,$refs);
     out(['success'=>true,'rows'=>$rows,'total'=>$total,'page'=>$page,'per'=>$per,
@@ -216,6 +220,8 @@ case 'search': {
             if ($cnt<=0) continue;
             $st=$pdo->prepare("SELECT * FROM ".dc_q($t)." WHERE ".$wsql." LIMIT ".$capHitsPerTable);
             $st->execute($params); $sample=$st->fetchAll(PDO::FETCH_ASSOC);
+            $sc2=[]; foreach ($cols as $cc) if (dc_col_sensitive($cc['column_name'])) $sc2[]=$cc['column_name'];
+            if ($sc2) foreach ($sample as &$sr) foreach ($sc2 as $scn) if (array_key_exists($scn,$sr)) $sr[$scn]=dc_mask_value($sr[$scn]); unset($sr);
             $results[]=['table'=>$t,'count'=>$cnt,'pk'=>dc_pk($pdo,$t),'sample'=>$sample];
         } catch (Throwable $e) { /* 某些表可能因欄位型別/字集比對失敗，略過 */ }
     }
@@ -301,6 +307,7 @@ case 'insert': {
     $cols=[]; $ph=[]; $vals=[];
     foreach ($fields as $col=>$v) {
         if (!isset($colMeta[$col])) bad('欄位不存在：'.$col);
+        if (dc_col_sensitive($col)) bad('密碼／金鑰欄不可由此頁直接寫入：'.$col);
         if (stripos((string)$colMeta[$col]['extra'],'auto_increment')!==false) continue; // 跳過自增
         $cols[]=dc_q($col); $ph[]='?'; $vals[]=($v===''&&$colMeta[$col]['is_nullable']==='YES')?null:$v;
     }
