@@ -232,6 +232,39 @@ if ($deptPerm === 'R') {
                             </div>
                         </div>
                     </div>
+
+                    <!-- 3. 職稱階級管理區塊（管理者可增減修改） -->
+                    <div id="position-rank-section" class="col-md-12 col-sm-12 col-xs-12">
+                        <div class="x_panel">
+                            <div class="x_title">
+                                <h2>職稱階級管理 <small style="color:#8a5a2b;">（數字越小＝越高階；供權責分離自動找上一級主管；非主管的職稱不必設階級）</small></h2>
+                                <ul class="nav navbar-right panel_toolbox">
+                                    <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
+                                    <li><a class="close-link"><i class="fa fa-close"></i></a></li>
+                                </ul>
+                                <div class="clearfix"></div>
+                            </div>
+                            <div class="x_content">
+                                <?php if (strpos($deptPerm, 'A') !== false || strpos($deptPerm, 'C') !== false): ?>
+                                <form id="addRankForm" class="form-inline" style="margin-bottom:14px;">
+                                    <div class="form-group">
+                                        <label>順序</label>
+                                        <input type="number" id="rank_order_new" class="form-control" style="width:90px;" placeholder="如 4" min="1">
+                                    </div>
+                                    <div class="form-group" style="margin-left:8px;">
+                                        <label>名稱</label>
+                                        <input type="text" id="rank_name_new" class="form-control" placeholder="如 四階主管">
+                                    </div>
+                                    <button type="submit" class="btn btn-primary" style="margin-left:8px;">新增階級</button>
+                                </form>
+                                <?php endif; ?>
+                                <table class="table table-striped table-hover" style="max-width:640px;">
+                                    <thead><tr><th style="width:130px;">順序(越小越高)</th><th>名稱</th><th style="width:170px;">操作</th></tr></thead>
+                                    <tbody id="position-rank-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -259,12 +292,9 @@ if ($deptPerm === 'R') {
                                 <input type="text" class="form-control" id="job_title_name" name="name" required>
                             </div>
                             <div class="form-group">
-                                <label for="job_title_level">職稱層級</label>
-                                <select class="form-control" id="job_title_level" name="level">
+                                <label for="job_title_level">職稱層級 <small class="text-muted">(非主管免設；階級可於下方「職稱階級管理」增減)</small></label>
+                                <select class="form-control job-level-select" id="job_title_level" name="level">
                                     <option value="">非主管</option>
-                                    <option value="1">一階主管</option>
-                                    <option value="2">二階主管</option>
-                                    <option value="3">三階主管</option>
                                 </select>
                             </div>
                         </div>
@@ -387,12 +417,9 @@ if ($deptPerm === 'R') {
                         <input type="text" class="form-control" id="edit_job_title_name" name="name" required>
                     </div>
                     <div class="form-group">
-                        <label for="edit_job_title_level">職稱層級</label>
-                        <select class="form-control" id="edit_job_title_level" name="level">
+                        <label for="edit_job_title_level">職稱層級 <small class="text-muted">(非主管免設)</small></label>
+                        <select class="form-control job-level-select" id="edit_job_title_level" name="level">
                             <option value="">非主管</option>
-                            <option value="1">一階主管</option>
-                            <option value="2">二階主管</option>
-                            <option value="3">三階主管</option>
                         </select>
                     </div>
                 </div>
@@ -568,6 +595,83 @@ if ($deptPerm === 'R') {
             });
         }
 
+        // ---- 職稱階級管理（position_rank：管理者可增減修改） ----
+        let positionRanks = []; // [{id,name,rank_order}]
+        function rankName(level) {
+            if (level === null || level === '' || typeof level === 'undefined') return '非主管';
+            const r = positionRanks.find(x => String(x.rank_order) === String(level));
+            return r ? r.name : ('第' + level + '階');
+        }
+        function populateLevelSelects() {
+            $('.job-level-select').each(function() {
+                const $s = $(this);
+                const cur = $s.val();
+                $s.empty().append('<option value="">非主管</option>');
+                positionRanks.forEach(r => $s.append(`<option value="${r.rank_order}">${escapeHtml(r.name)}</option>`));
+                $s.val(cur);
+            });
+        }
+        function loadPositionRanks(cb) {
+            callApi('get_position_ranks', 'GET', null, function(resp) {
+                if (resp.status === 'success') {
+                    positionRanks = resp.data;
+                    populateLevelSelects();
+                    renderPositionRanks();
+                }
+                if (typeof cb === 'function') cb();
+            });
+        }
+        function renderPositionRanks() {
+            const tbody = $('#position-rank-body');
+            if (tbody.length === 0) return;
+            tbody.empty();
+            const perm = window.deptPerm || '';
+            const canEdit = perm.includes('A') || perm.includes('U');
+            const canDel = perm.includes('A') || perm.includes('D');
+            if (positionRanks.length === 0) { tbody.append('<tr><td colspan="3" class="text-muted text-center">尚無階級，請於上方新增</td></tr>'); return; }
+            positionRanks.forEach(r => {
+                if (canEdit) {
+                    tbody.append(`<tr data-id="${r.id}">
+                        <td><input type="number" class="form-control input-sm rank-order-edit" value="${escapeHtml(String(r.rank_order))}" style="width:80px;" min="1"></td>
+                        <td><input type="text" class="form-control input-sm rank-name-edit" value="${escapeHtml(r.name)}"></td>
+                        <td><button type="button" class="btn btn-sm btn-success btn-save-rank">儲存</button> ${canDel ? '<button type="button" class="btn btn-sm btn-danger btn-del-rank">刪除</button>' : ''}</td>
+                    </tr>`);
+                } else {
+                    tbody.append(`<tr><td>${escapeHtml(String(r.rank_order))}</td><td>${escapeHtml(r.name)}</td><td>-</td></tr>`);
+                }
+            });
+        }
+        $('#addRankForm').on('submit', function(e) {
+            e.preventDefault();
+            const order = $('#rank_order_new').val();
+            const name = ($('#rank_name_new').val() || '').trim();
+            if (order === '' || name === '') { alert('請輸入順序與名稱'); return; }
+            callApi('add_position_rank', 'POST', { rank_order: order, name: name }, function(resp) {
+                if (resp.status === 'success') { $('#rank_order_new').val(''); $('#rank_name_new').val(''); loadPositionRanks(); loadJobTitles(); }
+                else alert(resp.message);
+            });
+        });
+        $(document).on('click', '.btn-save-rank', function() {
+            const $tr = $(this).closest('tr');
+            const id = $tr.data('id');
+            const rank_order = $tr.find('.rank-order-edit').val();
+            const name = ($tr.find('.rank-name-edit').val() || '').trim();
+            if (rank_order === '' || name === '') { alert('順序與名稱不可空'); return; }
+            callApi('update_position_rank', 'POST', { id: id, rank_order: rank_order, name: name }, function(resp) {
+                if (resp.status === 'success') { loadPositionRanks(); loadJobTitles(); }
+                else alert(resp.message);
+            });
+        });
+        $(document).on('click', '.btn-del-rank', function() {
+            const $tr = $(this).closest('tr');
+            const id = $tr.data('id');
+            if (!confirm('確定刪除此階級？(仍有職稱使用時會被擋下)')) return;
+            callApi('delete_position_rank', 'POST', { id: id }, function(resp) {
+                if (resp.status === 'success') { loadPositionRanks(); loadJobTitles(); }
+                else alert(resp.message);
+            });
+        });
+
         // 載入職稱列表 (水平排列)
         function loadJobTitles() {
             callApi('get_job_titles', 'GET', null, function(response) {
@@ -590,19 +694,10 @@ if ($deptPerm === 'R') {
 
                         for (let j = i * itemsPerColumn; j < Math.min((i + 1) * itemsPerColumn, response.data.length); j++) {
                             var item = response.data[j];
-                            let levelText = '';
-                            switch(parseInt(item.level)) {
-                                case 1: levelText = '一階主管'; break;
-                                case 2: levelText = '二階主管'; break;
-                                case 3: levelText = '三階主管'; break;
-                                default: levelText = '非主管';
-                            }
-                            let levelBadge = '';
-                            if (item.level) {
-                                levelBadge = ` <span class="badge" style="background-color: #1ABB9C;">${levelText}</span>`;
-                            } else {
-                                levelBadge = ` <span class="badge" style="background-color: #777;">${levelText}</span>`;
-                            }
+                            const levelText = rankName(item.level);
+                            const levelBadge = item.level
+                                ? ` <span class="badge" style="background-color:#b26a1a;">${escapeHtml(levelText)}</span>`
+                                : ` <span class="badge" style="background-color:#c9a06a;">非主管</span>`;
 
                             let editBtn = '';
                             let delBtn = '';
@@ -805,9 +900,9 @@ if ($deptPerm === 'R') {
             }
         });
 
-        // 初始載入
+        // 初始載入（先載階級，讓職稱清單能顯示階級名稱）
         loadDepartments();
-        loadJobTitles();
+        loadPositionRanks(function() { loadJobTitles(); });
     });
 </script>
 </body>

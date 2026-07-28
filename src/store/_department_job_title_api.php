@@ -71,6 +71,20 @@ switch ($action) {
         getPositionsMissingLevel();
         break;
 
+    // --- 職稱階級管理 (管理者可增減修改) ---
+    case 'get_position_ranks':
+        getPositionRanks();
+        break;
+    case 'add_position_rank':
+        addPositionRank();
+        break;
+    case 'update_position_rank':
+        updatePositionRank();
+        break;
+    case 'delete_position_rank':
+        deletePositionRank();
+        break;
+
     // --- 職稱代理 (Position Delegate) Actions ---
     case 'get_position_delegates':
         getPositionDelegates();
@@ -671,6 +685,7 @@ function getUserScopes() {
 function getDeptPositionOwners() {
     global $db;
     try {
+        // 只列出「該部門×職稱確有在職持有者」的綁定（沒人擔任的組合無從指定負責人，不顯示）
         $sql = "SELECT dp.id, dp.department_id, d.name AS department_name, dp.position_id, p.name AS position_name,
                        dp.primary_user_id, u.user_cname AS primary_user_name, pl.level
                 FROM department_position dp
@@ -678,6 +693,11 @@ function getDeptPositionOwners() {
                 JOIN position p ON p.id = dp.position_id
                 LEFT JOIN user u ON u.id = dp.primary_user_id
                 LEFT JOIN position_level pl ON pl.position_id = dp.position_id
+                WHERE EXISTS (
+                    SELECT 1 FROM user_department_position_map m
+                    JOIN user uu ON uu.id = m.user_id AND uu.state = 1
+                    WHERE m.department_id = dp.department_id AND m.position_id = dp.position_id
+                )
                 ORDER BY d.sort_order, d.name, p.sort_order, p.name";
         $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
 
@@ -720,6 +740,91 @@ function updateDeptPositionOwner() {
         echo json_encode(['status'=>'success','message'=>'指定負責人已更新。']);
     } catch (PDOException $e) {
         echo json_encode(['status'=>'error','message'=>'更新失敗: '.$e->getMessage()]);
+    }
+}
+
+// ---- 職稱階級管理 (position_rank：管理者可增減修改) ----
+
+/** 取得所有階級（依 rank_order 由高到低排序，數字小=高階） */
+function getPositionRanks() {
+    global $db;
+    try {
+        $rows = $db->query("SELECT id, name, rank_order FROM position_rank ORDER BY rank_order ASC")->fetchAll(PDO::FETCH_ASSOC);
+        echo json_encode(['status'=>'success','data'=>$rows]);
+    } catch (PDOException $e) {
+        echo json_encode(['status'=>'error','message'=>'讀取階級失敗: '.$e->getMessage()]);
+    }
+}
+
+/** 新增階級 */
+function addPositionRank() {
+    global $db;
+    $name = trim($_POST['name'] ?? '');
+    $rank_order = isset($_POST['rank_order']) && $_POST['rank_order'] !== '' ? intval($_POST['rank_order']) : null;
+    if ($name === '' || $rank_order === null) { echo json_encode(['status'=>'error','message'=>'階級名稱與順序為必填。']); return; }
+    try {
+        $chk = $db->prepare("SELECT COUNT(*) FROM position_rank WHERE rank_order = ?");
+        $chk->execute([$rank_order]);
+        if ((int)$chk->fetchColumn() > 0) { echo json_encode(['status'=>'error','message'=>'此順序已存在，請用不同數字（數字越小越高階）。']); return; }
+        $db->prepare("INSERT INTO position_rank (name, rank_order) VALUES (?, ?)")->execute([$name, $rank_order]);
+        echo json_encode(['status'=>'success','message'=>'階級已新增。']);
+    } catch (PDOException $e) {
+        echo json_encode(['status'=>'error','message'=>'新增失敗: '.$e->getMessage()]);
+    }
+}
+
+/** 修改階級（改名安全；改順序時同步 position_level.level 既有指派，維持一致） */
+function updatePositionRank() {
+    global $db;
+    $id = intval($_POST['id'] ?? 0);
+    $name = trim($_POST['name'] ?? '');
+    $rank_order = isset($_POST['rank_order']) && $_POST['rank_order'] !== '' ? intval($_POST['rank_order']) : null;
+    if ($id <= 0 || $name === '' || $rank_order === null) { echo json_encode(['status'=>'error','message'=>'缺少參數。']); return; }
+    try {
+        $db->beginTransaction();
+        $cur = $db->prepare("SELECT rank_order FROM position_rank WHERE id = ?");
+        $cur->execute([$id]);
+        $old = $cur->fetchColumn();
+        if ($old === false) { $db->rollBack(); echo json_encode(['status'=>'error','message'=>'找不到此階級。']); return; }
+        $old = (int)$old;
+        // 若改順序，檢查新順序未被其他階級占用
+        if ($rank_order !== $old) {
+            $chk = $db->prepare("SELECT COUNT(*) FROM position_rank WHERE rank_order = ? AND id <> ?");
+            $chk->execute([$rank_order, $id]);
+            if ((int)$chk->fetchColumn() > 0) { $db->rollBack(); echo json_encode(['status'=>'error','message'=>'此順序已被其他階級使用。']); return; }
+        }
+        $db->prepare("UPDATE position_rank SET name = ?, rank_order = ? WHERE id = ?")->execute([$name, $rank_order, $id]);
+        // 同步既有職稱指派（position_level.level 存的是 rank_order 值）
+        if ($rank_order !== $old) {
+            $db->prepare("UPDATE position_level SET level = ? WHERE level = ?")->execute([$rank_order, $old]);
+        }
+        $db->commit();
+        echo json_encode(['status'=>'success','message'=>'階級已更新。']);
+    } catch (PDOException $e) {
+        $db->rollBack();
+        echo json_encode(['status'=>'error','message'=>'更新失敗: '.$e->getMessage()]);
+    }
+}
+
+/** 刪除階級（若仍有職稱指派此階級則擋下） */
+function deletePositionRank() {
+    global $db;
+    $id = intval($_POST['id'] ?? 0);
+    if ($id <= 0) { echo json_encode(['status'=>'error','message'=>'缺少 id']); return; }
+    try {
+        $cur = $db->prepare("SELECT rank_order FROM position_rank WHERE id = ?");
+        $cur->execute([$id]);
+        $ro = $cur->fetchColumn();
+        if ($ro === false) { echo json_encode(['status'=>'error','message'=>'找不到此階級。']); return; }
+        $inUse = $db->prepare("SELECT COUNT(*) FROM position_level WHERE level = ?");
+        $inUse->execute([(int)$ro]);
+        if ((int)$inUse->fetchColumn() > 0) {
+            echo json_encode(['status'=>'error','message'=>'刪除失敗：仍有職稱設為此階級，請先改掉那些職稱的階級。']); return;
+        }
+        $db->prepare("DELETE FROM position_rank WHERE id = ?")->execute([$id]);
+        echo json_encode(['status'=>'success','message'=>'階級已刪除。']);
+    } catch (PDOException $e) {
+        echo json_encode(['status'=>'error','message'=>'刪除失敗: '.$e->getMessage()]);
     }
 }
 

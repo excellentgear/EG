@@ -354,8 +354,8 @@ $jsPerms = [
                                 <div class="clearfix"></div>
                             </div>
                             <div class="x_content">
-                                <div id="level-missing-alert" style="display:none; margin-bottom:12px; padding:10px 14px; border-radius:4px; background:#f7e0bd; color:#5a3d1a; border:1px solid #e6c48f;">
-                                    <i class="fa fa-exclamation-triangle"></i> <b>提醒：</b>以下職稱尚未設定「主管階級」，權責分離(SoD)自動直升上一級主管時可能無法正確解析，建議到「職稱設定」補齊：<span id="level-missing-list"></span>
+                                <div style="margin-bottom:12px; padding:8px 12px; border-radius:4px; background:#fbf1e0; color:#5a3d1a; border:1px solid #e6c48f;">
+                                    <i class="fa fa-info-circle"></i> 主管階級（供權責分離自動找上一級主管）在「<b>部門與職稱設定 → 職稱階級管理</b>」維護，可自行增減修改；非主管職稱不必設。
                                 </div>
                                 <p class="text-muted" style="margin-bottom:10px;">指定某部門某職稱的「負責人」後，選單變更即自動儲存。此人會成為職位代理(職稱→職稱)實際落到的人，也是 SoD 直升主管鏈的解析依據。</p>
                                 <div style="margin-bottom:8px;">
@@ -1240,13 +1240,18 @@ $jsPerms = [
             });
         }
 
+        // 職稱階級名稱（動態，來自 position_rank；於「部門與職稱設定」頁維護）
+        let positionRanks = [];
         function levelText(level) {
-            switch (parseInt(level)) {
-                case 1: return '一階主管';
-                case 2: return '二階主管';
-                case 3: return '三階主管';
-                default: return '非主管';
-            }
+            if (level === null || level === '' || typeof level === 'undefined') return '非主管';
+            const r = positionRanks.find(x => String(x.rank_order) === String(level));
+            return r ? r.name : ('第' + level + '階');
+        }
+        function loadPositionRanks(cb) {
+            callApi(DEPT_JOB_API_URL, 'get_position_ranks', 'GET', null, function(resp) {
+                if (resp.status === 'success') positionRanks = resp.data;
+                if (typeof cb === 'function') cb();
+            });
         }
 
         function renderDeptPositionOwners() {
@@ -1313,22 +1318,11 @@ $jsPerms = [
         $('#dpo-filter').on('input', renderDeptPositionOwners);
         $('#dpo-only-unset').on('change', renderDeptPositionOwners);
 
-        function loadMissingLevels() {
-            if ($('#level-missing-alert').length === 0) return;
-            callApi(DEPT_JOB_API_URL, 'get_positions_missing_level', 'GET', null, function(resp) {
-                if (resp.status !== 'success') return;
-                if (resp.data.length === 0) { $('#level-missing-alert').hide(); return; }
-                $('#level-missing-list').html(resp.data.map(p => `<span class="label" style="background-color:#dd5138; margin:2px;">${escapeHtml(p.name)}</span>`).join(' '));
-                $('#level-missing-alert').show();
-            });
-        }
-
         // 初始載入
         loadUsersToSelect(['user_id', 'available-users']);
         loadPositionsToDelegateSelects();
         loadPositionDelegates();
-        loadDeptPositionOwners();
-        loadMissingLevels();
+        loadPositionRanks(function() { loadDeptPositionOwners(); }); // 先載階級名稱，讓指定負責人表的階級顯示正確
         loadSupervisorTitlesForSelect(); // 載入主管職稱，並在其成功回呼中觸發 loadLeaveTypes()
 
         // 初始化 SortableJS
