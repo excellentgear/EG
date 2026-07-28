@@ -349,11 +349,15 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         <div class="form-section">
           <div class="form-section-title"><i class="fa fa-info-circle"></i>基本資料</div>
           <div class="row">
-            <div class="col-sm-7"><div class="form-group" style="margin-bottom:8px;">
+            <div class="col-sm-6"><div class="form-group" style="margin-bottom:8px;">
               <label>標題 <span style="color:#E74C3C;">*</span></label>
               <input type="text" id="tTitle" class="form-control" maxlength="200" placeholder="自行輸入工作標題">
             </div></div>
-            <div class="col-sm-5"><div class="form-group" style="margin-bottom:8px;">
+            <div class="col-sm-3"><div class="form-group" style="margin-bottom:8px;">
+              <label>提案人</label>
+              <input type="text" id="tProposer" class="form-control" maxlength="50" placeholder="可自行輸入">
+            </div></div>
+            <div class="col-sm-3"><div class="form-group" style="margin-bottom:8px;">
               <label>接收日期</label>
               <input type="date" id="tReceived" class="form-control" max="9999-12-31">
             </div></div>
@@ -1106,6 +1110,11 @@ function renderRows(rows) {
             $titleLine.append($('<span class="share-badge">').text('👥 ' + (r.owner_name || '') + ' 分享（' + modeTxt + '）'));
         }
         $titleTd.append($titleLine);
+        // 提案人顯示在標題下方
+        if (r.proposer) {
+            $titleTd.append($('<div style="font-size:11px;color:#8A6D3B;margin-top:1px;">')
+                .text('提案人：' + r.proposer));
+        }
         // 綁定內容顯示在標題下方（多個：一項一行；料號可點開圖面）
         if (r.binds && r.binds.length) {
             r.binds.forEach(function (b) {
@@ -1331,7 +1340,7 @@ function refreshModalHeaderButtons() {
 function openTaskModal(id) {
     $('#tId').val(id || 0);
     $('#taskModalTitle').html('<i class="fa fa-pencil-square-o"></i> ' + (id ? '編輯紀錄' : '新增紀錄'));
-    $('#tTitle, #tBindKw, #tRemindVal, #tUrgentDays, #tNote, #tDeadline, #defaultInterval').val('');
+    $('#tTitle, #tProposer, #tBindKw, #tRemindVal, #tUrgentDays, #tNote, #tDeadline, #defaultInterval').val('');
     $('#tBindType').val(''); $('#tBindKw').prop('disabled', true);
     $('#tBindSug').hide().empty();
     selectedBinds = []; renderBindChips();
@@ -1358,6 +1367,7 @@ function openTaskModal(id) {
             $('#btnSaveTask').toggle(isOwner);
             refreshModalHeaderButtons();
             $('#tTitle').val(t.title);
+            $('#tProposer').val(t.proposer || '');
             $('#tReceived').val(t.received_at);
             $('#tDeadline').val(dtToDateInput(t.deadline));
             var ui = minToUi(t.remind_before_minutes);
@@ -1704,6 +1714,7 @@ $('#btnSaveTask').on('click', function () {
     var params = {
         id: $('#tId').val(),
         title: title,
+        proposer: $('#tProposer').val(),
         received_at: $('#tReceived').val(),
         binds: JSON.stringify(selectedBinds),
         deadline: $('#tDeadline').val() || '',

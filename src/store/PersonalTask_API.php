@@ -25,6 +25,7 @@ $db = $conn->getPDO();
 try { $db->exec("ALTER TABLE personal_task_image ADD COLUMN user_id INT NULL COMMENT '上傳者/擁有者 FK→user.id（temp列以此判定擁有者）' AFTER task_id"); } catch (Exception $e) {}
 try { $db->exec("ALTER TABLE personal_task_image ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'active' COMMENT 'temp=未存檔暫存 active=正式' AFTER file_size"); } catch (Exception $e) {}
 try { $db->exec("ALTER TABLE personal_task_image ADD COLUMN expire_at DATETIME NULL COMMENT 'temp 自動清除到期時間，NULL=不清' AFTER status"); } catch (Exception $e) {}
+try { $db->exec("ALTER TABLE personal_task ADD COLUMN proposer VARCHAR(50) NULL COMMENT '提案人（自由輸入）' AFTER title"); } catch (Exception $e) {}
 
 // ── 資料表升級（分享 + 多重綁定 2026-07-24）：沿用本模組慣例（sql.php 拒絕 DDL，改在 API 內建）─
 // 多重綁定：一筆工作可綁多個對象（bom/part/customer/maker/order）
@@ -499,6 +500,7 @@ try {
         if ($remindMin !== null && $deadline === null) throw new Exception('要設定提醒須先設定期限');
         $urgentDays = pt_norm_int($_POST['urgent_days'] ?? '');
         $note = trim((string)($_POST['note'] ?? ''));
+        $proposer = trim((string)($_POST['proposer'] ?? ''));
 
         $stepsIn = json_decode($_POST['steps'] ?? '[]', true);
         if (!is_array($stepsIn)) $stepsIn = [];
@@ -511,17 +513,17 @@ try {
                 // 期限或提醒設定變更 → 重置已發送旗標，讓提醒依新設定重新生效
                 $remindReset = ($old['deadline'] !== $deadline
                     || (string)$old['remind_before_minutes'] !== (string)$remindMin);
-                $st = $db->prepare("UPDATE personal_task SET title=?, bind_type=?, bind_id=?, bind_label=?,
+                $st = $db->prepare("UPDATE personal_task SET title=?, proposer=?, bind_type=?, bind_id=?, bind_label=?,
                         received_at=?, deadline=?, remind_before_minutes=?, urgent_days=?, note=?" .
                         ($remindReset ? ", remind_sent=0" : "") . " WHERE id=? AND user_id=?");
-                $st->execute([$title, $bindType, $bindId, $bindLabel, $receivedAt, $deadline,
+                $st->execute([$title, $proposer, $bindType, $bindId, $bindLabel, $receivedAt, $deadline,
                     $remindMin, $urgentDays, $note, $id, $user_id]);
             } else {
                 $st = $db->prepare("INSERT INTO personal_task
-                        (user_id, title, bind_type, bind_id, bind_label, received_at, deadline,
+                        (user_id, title, proposer, bind_type, bind_id, bind_label, received_at, deadline,
                          remind_before_minutes, urgent_days, note)
-                        VALUES (?,?,?,?,?,?,?,?,?,?)");
-                $st->execute([$user_id, $title, $bindType, $bindId, $bindLabel, $receivedAt,
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+                $st->execute([$user_id, $title, $proposer, $bindType, $bindId, $bindLabel, $receivedAt,
                     $deadline, $remindMin, $urgentDays, $note]);
                 $id = (int)$db->lastInsertId();
             }
@@ -1082,10 +1084,10 @@ try {
         try {
             // 主檔（進度歸零：status=0、received_at=今天、完成/提醒旗標清空；期限沿用）
             $ins = $db->prepare("INSERT INTO personal_task
-                    (user_id, title, bind_type, bind_id, bind_label, status, received_at, deadline,
+                    (user_id, title, proposer, bind_type, bind_id, bind_label, status, received_at, deadline,
                      remind_before_minutes, remind_sent, urgent_days, note)
-                    VALUES (?,?,?,?,?,0,CURDATE(),?,?,0,?,?)");
-            $ins->execute([$target, $src['title'], $src['bind_type'], $src['bind_id'], $src['bind_label'],
+                    VALUES (?,?,?,?,?,?,0,CURDATE(),?,?,0,?,?)");
+            $ins->execute([$target, $src['title'], $src['proposer'] ?? null, $src['bind_type'], $src['bind_id'], $src['bind_label'],
                 $src['deadline'], $src['remind_before_minutes'], $src['urgent_days'], $src['note']]);
             $newId = (int)$db->lastInsertId();
             // 綁定複製
