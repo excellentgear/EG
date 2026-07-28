@@ -326,7 +326,7 @@ function fillOwnerPeople(sel){
     var did = +$(sel).val();
     var $p = $(sel).closest('td').find('.f-owner').empty().append('<option value="0">（未指定）</option>');
     ((DATA.dicts.dept_members||{})[did] || []).forEach(function(m){
-        $p.append('<option value="'+m.user_id+'">'+esc(m.cname)+(m.position_name?'（'+esc(m.position_name)+'）':'')+'</option>');
+        $p.append('<option value="'+m.user_id+'" data-pos="'+(m.position_id||'')+'">'+esc(m.cname)+(m.position_name?'（'+esc(m.position_name)+'）':'')+'</option>');
     });
 }
 function ownerChanged(sel){
@@ -340,14 +340,15 @@ function ownerChanged(sel){
 function setOwners(){
     DATA.indicators.forEach(function(r, i){
         var $tr = $('tr[data-i="'+i+'"]');
-        var did = DEPT_OF_USER[r.owner_user_id] || 0;
+        // 精準還原：優先用已存的部門(兼任者才不會跑掉)；舊資料無 owner_dept_id 才回退推斷
+        var did = r.owner_dept_id || DEPT_OF_USER[r.owner_user_id] || 0;
         var $dept = $tr.find('.f-odept'), $own = $tr.find('.f-owner');
         $dept.val(did);
         fillOwnerPeople($dept[0]);
         // 若擔當者所屬部門查不到，仍補一個單獨選項避免掉資料
         if ((!did || $own.find('option[value="'+r.owner_user_id+'"]').length===0) && r.owner_user_id) {
             var nm = (r.owner_display||'').split('/')[0] || ('user#'+r.owner_user_id);
-            $own.append('<option value="'+r.owner_user_id+'">'+esc(nm)+'</option>');
+            $own.append('<option value="'+r.owner_user_id+'" data-pos="'+(r.owner_position_id||'')+'">'+esc(nm)+'</option>');
         }
         $own.val(r.owner_user_id || 0);
     });
@@ -453,7 +454,11 @@ function saveRow(i, silent){
     var r = DATA.indicators[i];
     var $tr = $('tr[data-i="'+i+'"]');
     var freq = $tr.find('.f-freq').val(), vt = $tr.find('.f-vt').val();
-    var ownerId = $tr.find('.f-owner').val() || 0, ownerDisp = $tr.find('.f-ownerdisp').val();
+    var $ownSel = $tr.find('.f-owner');
+    var ownerId = $ownSel.val() || 0;
+    var ownerDeptId = $tr.find('.f-odept').val() || 0;
+    var ownerPosId = $ownSel.find('option:selected').attr('data-pos') || 0;
+    var ownerDisp = $tr.find('.f-ownerdisp').val();
     var post = {
         action:'save_iy', indicator_id:r.indicator_id, year:YEAR,
         source_mode: $tr.find('.f-mode').val(),
@@ -464,6 +469,8 @@ function saveRow(i, silent){
         target_unit: $tr.find('.f-tunit').val(),
         target_text: $tr.find('.f-ttext').val(),
         owner_user_id: ownerId,
+        owner_dept_id: ownerDeptId,
+        owner_position_id: ownerPosId,
         owner_display: ownerDisp,
         is_active: $tr.find('.f-active').is(':checked') ? 1 : 0
     };
@@ -483,7 +490,8 @@ function saveRow(i, silent){
             // 就地更新 DATA（不 reload，避免清掉其他列未存的編輯 / 兼任擔當者被重新推斷）
             r.freq = freq; r.value_type = vt;
             r.source_mode = post.source_mode; r.calculator_key = post.calculator_key;
-            r.owner_user_id = +ownerId || 0; r.owner_display = ownerDisp;
+            r.owner_user_id = +ownerId || 0; r.owner_dept_id = +ownerDeptId || 0;
+            r.owner_position_id = +ownerPosId || 0; r.owner_display = ownerDisp;
             r.target_direction = post.target_direction; r.target_value = post.target_value;
             r.target_unit = post.target_unit; r.target_text = post.target_text;
             r.year_active = post.is_active;

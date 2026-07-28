@@ -144,6 +144,10 @@ function kpi_as_ensure_schema(PDO $db): void {
         KEY idx_ds (ds_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='KPI資料來源目錄-欄位(可篩選/可加總)'");
 
+    // 擔當者改存「部門+職位+人員」三者（兼任者才不會顯示錯誤）；舊表自動補欄
+    try { $db->exec("ALTER TABLE kpi_as_indicator_year ADD COLUMN owner_dept_id INT NULL COMMENT '擔當者部門 department.id（兼任者用以精準還原）' AFTER owner_user_id"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE kpi_as_indicator_year ADD COLUMN owner_position_id INT NULL COMMENT '擔當者職位 position.id' AFTER owner_dept_id"); } catch (Throwable $e) {}
+
     // 角色 seed（module='kpi'，固定 role_code，供 user_permissions.php 指派）
     foreach ([['kpi_view','KPI檢閱'],['kpi_fill','KPI填報'],['kpi_admin','KPI管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='kpi' LIMIT 1");
@@ -906,6 +910,48 @@ function kpi_as_builder_compute(PDO $db, int $year, int $month, array $spec): ?a
     if ($den === null) return ['num' => $num, 'den' => null, 'value' => null];
     $mult = !empty($spec['multiply_100']) ? 100 : 1;
     return ['num' => $num, 'den' => $den, 'value' => $den > 0 ? $num / $den * $mult : null];
+}
+
+/** builder spec 轉人話摘要（給明細顯示）：例「退貨單 筆數 ÷ 出貨單 筆數 ×100」 */
+function kpi_as_builder_summary(PDO $db, array $spec): string {
+    $cats = [];
+    foreach (kpi_as_catalog($db) as $c) {
+        $cats[(int)$c['ds_id']] = $c;
+    }
+    $sideTxt = function ($side) use ($cats) {
+        if (!$side || empty($side['ds_id']) || !isset($cats[(int)$side['ds_id']])) return '—';
+        $ds = $cats[(int)$side['ds_id']];
+        $t = $ds['ds_label'];
+        if (($side['agg'] ?? 'count') === 'sum') {
+            $fl = '數值';
+            foreach ($ds['fields'] as $f) if ((int)$f['field_id'] === (int)($side['measure_field_id'] ?? 0)) $fl = $f['field_label'];
+            $t .= ' ' . $fl . '加總';
+        } else { $t .= ' 筆數'; }
+        $flt = [];
+        foreach (($side['filters'] ?? []) as $ft) {
+            foreach ($ds['fields'] as $f) if ((int)$f['field_id'] === (int)($ft['field_id'] ?? 0)) {
+                $ops = kpi_as_builder_ops();
+                $flt[] = $f['field_label'] . ' ' . ($ops[$ft['op'] ?? 'in'] ?? '') . ' ' . implode('/', (array)($ft['values'] ?? []));
+            }
+        }
+        if ($flt) $t .= '（' . implode('，', $flt) . '）';
+        return $t;
+    };
+    $s = $sideTxt($spec['num'] ?? null);
+    if (!empty($spec['den']) && !empty($spec['den']['ds_id'])) {
+        $s .= ' ÷ ' . $sideTxt($spec['den']);
+        if (!empty($spec['multiply_100'])) $s .= ' ×100';
+    }
+    return $s;
+}
+
+/** 指標資料來源說明（給明細彈窗）：['label','page','desc'] */
+function kpi_as_source_info(PDO $db, string $mode, ?string $calc, array $params): array {
+    if ($mode === 'manual') return ['label'=>'手動填寫', 'page'=>'由擔當者每期填報', 'desc'=>''];
+    if ($calc === '__builder__') return ['label'=>'自訂公式', 'page'=>'資料來源目錄', 'desc'=>kpi_as_builder_summary($db, $params)];
+    $reg = kpi_as_registry();
+    if ($calc && isset($reg[$calc])) return ['label'=>$reg[$calc]['name'], 'page'=>$reg[$calc]['page'], 'desc'=>$reg[$calc]['desc']];
+    return ['label'=>'—', 'page'=>'', 'desc'=>''];
 }
 
 /** 目錄（含欄位）供設定頁使用 */

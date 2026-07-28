@@ -149,6 +149,7 @@ case 'matrix': {
                 'ov_at' => $mv['override_at'] ?? null,
                 'ov_reason' => $mv['override_reason'] ?? null,
                 'auto_v' => isset($mv['auto_value']) && $mv['auto_value'] !== null ? round((float)$mv['auto_value'], 2) : null,
+                'computed_at' => $mv['computed_at'] ?? null,
                 'note' => $mv['note'] ?? null,
             ];
         }
@@ -176,6 +177,7 @@ case 'matrix': {
                 }
             }
         }
+        $srcInfo = kpi_as_source_info($db, $iy['source_mode'], $iy['calculator_key'], $params);
         $rows[] = [
             'indicator_id'=>$iid, 'item_no'=>(int)$iy['item_no'], 'name'=>$iy['name'],
             'clause'=>$iy['clause'], 'stat_desc'=>$iy['stat_desc'], 'freq'=>$iy['freq'],
@@ -183,6 +185,7 @@ case 'matrix': {
             'owner_user_id'=>(int)$iy['owner_user_id'],
             'is_owner'=>((int)$iy['owner_user_id'] === $uid),
             'source_mode'=>$iy['source_mode'], 'calculator_key'=>$iy['calculator_key'],
+            'source_info'=>$srcInfo,
             'target'=>['dir'=>$iy['target_direction'], 'value'=>$iy['target_value'],
                        'unit'=>$iy['target_unit'], 'text'=>$iy['target_text']],
             'months'=>$months, 'cells'=>$cells, 'avg'=>$avg, 'prev_avg'=>$prevAvg,

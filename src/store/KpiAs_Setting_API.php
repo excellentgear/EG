@@ -35,7 +35,8 @@ case 'get_all': {
     kpi_as_ensure_year($db, $year);
     $st = $db->prepare("SELECT i.indicator_id, i.item_no, i.name, i.clause, i.stat_desc, i.freq, i.value_type,
                                i.sort_order, i.is_active AS ind_active,
-                               y.iy_id, y.owner_user_id, y.owner_display, y.source_mode, y.calculator_key,
+                               y.iy_id, y.owner_user_id, y.owner_dept_id, y.owner_position_id, y.owner_display,
+                               y.source_mode, y.calculator_key,
                                y.params_json, y.target_direction, y.target_value, y.target_unit, y.target_text,
                                y.is_active AS year_active, y.Modified_By, y.Modified_At
                         FROM kpi_as_indicator i
@@ -60,7 +61,7 @@ case 'get_all': {
     // 部門→人員(含職稱/主管階級)：擔當者「先選部門再選人」用
     // 依職稱順序排序（position.sort_order 越小職位越大，排前面；比照 department_job_title_settings.php）
     $deptMembers = [];
-    $st = $db->query("SELECT m.department_id, m.user_id, u.user_cname, m.is_main,
+    $st = $db->query("SELECT m.department_id, m.user_id, u.user_cname, m.is_main, m.position_id,
                              p.name AS position_name, p.sort_order AS pos_sort, pl.level AS mgr_level
                       FROM user_department_position_map m
                       JOIN user u ON u.id=m.user_id
@@ -71,6 +72,7 @@ case 'get_all': {
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $deptMembers[(int)$r['department_id']][] = [
             'user_id'=>(int)$r['user_id'], 'cname'=>$r['user_cname'],
+            'position_id'=>$r['position_id']===null ? null : (int)$r['position_id'],
             'position_name'=>$r['position_name'],
             'pos_sort'=>$r['pos_sort']===null ? null : (int)$r['pos_sort'],
             'is_main'=>(int)$r['is_main'],
@@ -121,19 +123,24 @@ case 'save_iy': {
     $tunit = mb_substr(trim((string)($_POST['target_unit'] ?? '')), 0, 20);
     $ttext = mb_substr(trim((string)($_POST['target_text'] ?? '')), 0, 60);
     $ownerId = (int)($_POST['owner_user_id'] ?? 0) ?: null;
+    $ownerDeptId = (int)($_POST['owner_dept_id'] ?? 0) ?: null;
+    $ownerPosId = (int)($_POST['owner_position_id'] ?? 0) ?: null;
     $ownerDisp = mb_substr(trim((string)($_POST['owner_display'] ?? '')), 0, 50);
     $active = (int)($_POST['is_active'] ?? 1) ? 1 : 0;
 
-    $new = ['owner_user_id'=>$ownerId, 'owner_display'=>$ownerDisp, 'source_mode'=>$sourceMode,
+    $new = ['owner_user_id'=>$ownerId, 'owner_dept_id'=>$ownerDeptId, 'owner_position_id'=>$ownerPosId,
+            'owner_display'=>$ownerDisp, 'source_mode'=>$sourceMode,
             'calculator_key'=>$calc, 'params_json'=>$paramsJson, 'target_direction'=>$dir,
             'target_value'=>$tval, 'target_unit'=>$tunit, 'target_text'=>$ttext, 'is_active'=>$active];
     $db->beginTransaction();
     try {
-        $st = $db->prepare("UPDATE kpi_as_indicator_year SET owner_user_id=?, owner_display=?, source_mode=?,
+        // 先存部門+職位，再存人員（比照使用者要求的儲存順序），單句 UPDATE 一次寫入
+        $st = $db->prepare("UPDATE kpi_as_indicator_year SET owner_dept_id=?, owner_position_id=?, owner_user_id=?,
+                            owner_display=?, source_mode=?,
                             calculator_key=?, params_json=?, target_direction=?, target_value=?, target_unit=?,
                             target_text=?, is_active=?, Modified_By=?, Modified_At=NOW()
                             WHERE indicator_id=? AND year=?");
-        $st->execute([$ownerId, $ownerDisp, $sourceMode, $calc, $paramsJson, $dir, $tval, $tunit, $ttext,
+        $st->execute([$ownerDeptId, $ownerPosId, $ownerId, $ownerDisp, $sourceMode, $calc, $paramsJson, $dir, $tval, $tunit, $ttext,
                       $active, $u['user_cname'], $iid, $year]);
         foreach ($new as $k => $v) {
             $ov = $old[$k];

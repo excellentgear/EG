@@ -404,11 +404,25 @@ $(document).on('click', function(){ $('#cellMenu').hide(); });
 
 function showDetail(ri, m){
     var r = MATRIX.rows[ri], c = r.cells[m];
+    var si = r.source_info || {};
     var h = '<b>'+r.item_no+'. '+esc(r.name)+'</b>（'+YEAR+'年'+m+'月）<hr style="border-color:#EADFC8;margin:6px 0;">';
     h += '判定目標：'+esc(r.target.text||'-')+'<br>';
+    h += '對應條文：'+esc(r.clause||'-')+'<br>';
     h += '統計方式：'+esc(r.stat_desc||'-')+'<br>';
-    h += '顯示值：'+(c.v===null?'?':fmtVal(c.v, r.value_type))+'（來源：'+({auto:'自動計算',manual:'手動填寫',override:'手動覆寫',preview:'當月即時試算',none:'無資料'}[c.src]||c.src)+'）<br>';
-    if (c.num !== null || c.den !== null) h += '分子／分母：'+(c.num===null?'-':(+c.num))+' ／ '+(c.den===null?'-':(+c.den))+'<br>';
+    h += '資料來源：'+esc(si.label||(r.source_mode==='manual'?'手動填寫':'-'))
+       + (si.page?'（'+esc(si.page)+'）':'')+'<br>';
+    if (si.desc) h += '計算口徑：'+esc(si.desc)+'<br>';
+    h += '擔當者：'+esc(r.owner||'-')+'　｜　頻率：'+freqName(r.freq)+'<br>';
+    h += '<hr style="border-color:#EADFC8;margin:6px 0;">';
+    h += '顯示值：<b>'+(c.v===null?'?':fmtVal(c.v, r.value_type))+'</b>（來源：'+({auto:'自動計算(快照)',manual:'手動填寫',override:'手動覆寫',preview:'當月即時試算',none:'無資料'}[c.src]||c.src)+'）<br>';
+    if (c.num !== null || c.den !== null) {
+        h += '分子／分母：'+(c.num===null?'-':(+c.num))+' ／ '+(c.den===null?'-':(+c.den));
+        if (c.den !== null && +c.den !== 0 && (r.value_type==='percent'||r.value_type==='rate')) {
+            h += '　=　'+(Math.round((+c.num)/(+c.den)*10000)/100)+(r.value_type==='percent'?'%':'');
+        }
+        h += '<br>';
+    }
+    if (c.computed_at) h += '結算時間：'+esc((c.computed_at||'').substr(0,16))+'<br>';
     if (c.src === 'override' && c.auto_v !== null) h += '被覆寫前自動值：'+fmtVal(c.auto_v, r.value_type)+'<br>';
     if (c.ov_by) h += '覆寫：'+esc(c.ov_by)+'（'+esc(c.ov_reason||'')+'）'+esc((c.ov_at||'').substr(0,16))+'<br>';
     if (c.filled_by) h += '填寫：'+esc(c.filled_by)+' '+esc((c.filled_at||'').substr(0,16))+'<br>';
