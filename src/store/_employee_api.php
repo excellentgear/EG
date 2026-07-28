@@ -353,6 +353,59 @@ function addOrUpdateEmployee($mode) {
             }
         }
 
+        // === P4：人員異動 → 代理設定連動檢查（僅 update 模式；規範見 ai-rules/11） ===
+        // 若此次異動移除了某職務身分，會使「綁該身分的 scoped 代理」與「此人擔任的指定負責人」失效；
+        // 未確認前擋下存檔（rollback 回傳 need_confirm），確認後於本交易一併停用。
+        $delegate_cleanup = [];
+        if ($mode === 'update') {
+            $oldStmt = $db->prepare("SELECT department_id, position_id, is_main FROM user_department_position_map WHERE user_id = ?");
+            $oldStmt->execute([$id]);
+            $oldSet = []; $oldMainDep = null;
+            foreach ($oldStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $oldSet[$r['department_id'] . ':' . $r['position_id']] = true;
+                if ((int)$r['is_main'] === 1) $oldMainDep = (int)$r['department_id'];
+            }
+            $newSet = []; $newMainDep = !empty($_POST['main_department_id']) ? (int)$_POST['main_department_id'] : null;
+            if (!empty($_POST['main_department_id']) && !empty($_POST['main_position_id'])) $newSet[$_POST['main_department_id'] . ':' . $_POST['main_position_id']] = true;
+            if (isset($_POST['concurrent']) && is_array($_POST['concurrent'])) {
+                foreach ($_POST['concurrent'] as $cp) if (!empty($cp['department_id']) && !empty($cp['position_id'])) $newSet[$cp['department_id'] . ':' . $cp['position_id']] = true;
+            }
+            $removed = array_diff_key($oldSet, $newSet);
+
+            $affected = ['as_target_scoped' => [], 'as_primary_owner' => [], 'as_delegate_info' => []];
+            foreach (array_keys($removed) as $key) {
+                list($dep, $pos) = explode(':', $key);
+                $st = $db->prepare("SELECT ud.id, u.user_cname AS delegate_name, d.name AS dep_name, p.name AS pos_name
+                                    FROM user_delegate ud JOIN user u ON u.id = ud.delegate_id
+                                    LEFT JOIN department d ON d.id = ud.scope_department_id
+                                    LEFT JOIN position p ON p.id = ud.scope_position_id
+                                    WHERE ud.user_id = ? AND ud.scope_department_id = ? AND ud.scope_position_id = ? AND ud.active = 1");
+                $st->execute([$id, $dep, $pos]);
+                foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) $affected['as_target_scoped'][] = $row;
+
+                $st2 = $db->prepare("SELECT dp.id, d.name AS dep_name, p.name AS pos_name
+                                     FROM department_position dp JOIN department d ON d.id = dp.department_id JOIN position p ON p.id = dp.position_id
+                                     WHERE dp.primary_user_id = ? AND dp.department_id = ? AND dp.position_id = ?");
+                $st2->execute([$id, $dep, $pos]);
+                foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $row) $affected['as_primary_owner'][] = $row;
+            }
+            if ($oldMainDep !== $newMainDep) {
+                $st3 = $db->prepare("SELECT ud.id, u.user_cname AS target_name FROM user_delegate ud JOIN user u ON u.id = ud.user_id WHERE ud.delegate_id = ? AND ud.active = 1");
+                $st3->execute([$id]);
+                $affected['as_delegate_info'] = $st3->fetchAll(PDO::FETCH_ASSOC);
+            }
+
+            $mustHandle = !empty($affected['as_target_scoped']) || !empty($affected['as_primary_owner']);
+            $needConfirm = $mustHandle || !empty($affected['as_delegate_info']);
+            if ($needConfirm && (($_POST['confirm_delegate'] ?? '') !== '1')) {
+                $db->rollBack();
+                echo json_encode(['status' => 'need_confirm', 'affected' => $affected,
+                    'message' => '此員工的部門/職位異動會影響既有代理設定，請確認處理方式。']);
+                return;
+            }
+            if ($mustHandle) $delegate_cleanup = array_keys($removed);
+        }
+
         // 更新職務對應
         // 1. 刪除舊的對應
         $db->prepare("DELETE FROM user_department_position_map WHERE user_id = ?")->execute([$id]);
@@ -370,6 +423,15 @@ function addOrUpdateEmployee($mode) {
                     $stmt_map = $db->prepare("INSERT INTO user_department_position_map (user_id, department_id, position_id, is_main) VALUES (?, ?, ?, 0)");
                     $stmt_map->execute([$id, $concurrent_pos['department_id'], $concurrent_pos['position_id']]);
                 }
+            }
+        }
+
+        // P4：確認後，停用因身分移除而失效的代理設定（scoped 代理停用、指定負責人清空）
+        if (!empty($delegate_cleanup)) {
+            foreach ($delegate_cleanup as $key) {
+                list($dep, $pos) = explode(':', $key);
+                $db->prepare("UPDATE user_delegate SET active = 0 WHERE user_id = ? AND scope_department_id = ? AND scope_position_id = ?")->execute([$id, $dep, $pos]);
+                $db->prepare("UPDATE department_position SET primary_user_id = NULL WHERE primary_user_id = ? AND department_id = ? AND position_id = ?")->execute([$id, $dep, $pos]);
             }
         }
 

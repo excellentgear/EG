@@ -781,24 +781,53 @@ $(document).ready(function() {
 
 
     // --- 表單提交 ---
+    // P4：組出「部門/職位異動影響代理設定」的確認訊息
+    function buildDelegateImpactMsg(aff) {
+        aff = aff || {};
+        const scoped = aff.as_target_scoped || [];
+        const owner = aff.as_primary_owner || [];
+        const info = aff.as_delegate_info || [];
+        let lines = ['此員工的部門/職位異動會影響既有代理設定：', ''];
+        if (scoped.length || owner.length) {
+            lines.push('● 下列設定將因移除該職務身分而失效，存檔時一併停用：');
+            scoped.forEach(r => lines.push('　- 代理：由「' + r.delegate_name + '」代理（' + (r.dep_name || '') + '/' + (r.pos_name || '') + ' 身分）'));
+            owner.forEach(r => lines.push('　- 指定負責人：' + (r.dep_name || '') + '/' + (r.pos_name || '')));
+            lines.push('');
+        }
+        if (info.length) {
+            lines.push('● 另：此人目前是 ' + info.length + ' 筆代理設定的「代理人」（' + info.map(r => r.target_name).join('、') + '），換單位後仍有效，建議至代理設定頁複查。');
+            lines.push('');
+        }
+        lines.push('按「確定」＝停用上述失效項並存檔；「取消」＝先不存檔、我去調整。');
+        return lines.join('\n');
+    }
+
+    function submitEmployee(action, data, confirmed) {
+        var payload = data + (confirmed ? '&confirm_delegate=1' : '');
+        callApi(action, 'POST', payload, function(response) {
+            if (response.status === 'success') {
+                $('#employeeModal').modal('hide');
+                loadEmployees();
+            } else if (response.status === 'need_confirm') {
+                if (confirm(buildDelegateImpactMsg(response.affected))) {
+                    submitEmployee(action, data, true); // 確認後帶旗標重送
+                }
+            } else {
+                alert('操作失敗: ' + response.message);
+            }
+        });
+    }
+
     $('#employeeForm').on('submit', function(e) {
         e.preventDefault();
         // 從表單的 data 屬性中獲取當前操作 (在 show.bs.modal 事件中設定)
         var action = $(this).data('action');
 
         // 將 password input 的值複製到隱藏的 user_password 欄位
-        // 後端 API (_employee_api.php) 應該要接收 user_password 這個參數
         var password = $('#password').val();
         $('#user_password').val(password);
 
-        callApi(action, 'POST', $(this).serialize(), function(response) {
-            if (response.status === 'success') {
-                $('#employeeModal').modal('hide');
-                loadEmployees();
-            } else {
-                alert('操作失敗: ' + response.message);
-            }
-        });
+        submitEmployee(action, $(this).serialize(), false);
     });
 
     // --- 列表雙擊編輯事件 ---
