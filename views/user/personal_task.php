@@ -163,7 +163,11 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .pt-order-flow .pt-step { cursor:default; min-width:58px; max-width:120px; }
         .pt-order-flow .pt-dot { width:16px; height:16px; flex:0 0 16px; font-size:9px; border-width:1px; margin:0 2px; }
         .pt-order-flow .pt-step-name { font-size:10px; margin-top:2px; line-height:1.1; }
-        .pt-order-flow .pt-bom-flow { background:#FBFCFE; margin-top:4px; }   /* 訂單下巢狀的 BOM 製程條 */
+        .pt-order-flow .pt-bom-flow { background:#FBFCFE; margin:0; }   /* 訂單下巢狀的 BOM 製程條 */
+        .pt-order-boms { display:flex; flex-direction:column; gap:4px; }   /* 展開時在階段條右側，一筆一條 */
+        .pt-toggle-node { cursor:pointer; }
+        .pt-toggle-node:hover .pt-step-name { text-decoration:underline; }
+        .pt-bom-caret { color:#B5732A; font-weight:700; margin-left:1px; }
         .pt-bom-flow-closed { font-size:11px; color:#7A869A; cursor:pointer; padding:2px 0; }
         .pt-bom-flow-closed .pct { color:#1ABB9C; font-weight:700; }
         .pt-bom-flow-closed:hover { color:#4A5A6A; }
@@ -1033,13 +1037,29 @@ function fillOrderFlow($c, od) {
     if (od.is_closed) $title.append($('<span style="color:#1ABB9C;">').text('｜已結案'));
     if (od.is_paused) $title.append($('<span style="color:#DD5138;">').text('｜暫停/取消'));
     $c.append($title);
-    $c.append(orderStageInner(od));
-    // 訂單已綁定的各 BOM 製程進度（重用 BOM 製程條）
-    (od.boms || []).forEach(function (bd) {
-        var $sub = $('<div class="pt-bom-flow">');
-        fillBomFlow($sub, bd);
-        $c.append($sub);
-    });
+
+    // 階段流程條 + 右側可展開的 BOM 製程明細（預設收合，省空間）
+    var $wrap = $('<div style="display:flex; align-items:flex-start; gap:8px;">');
+    var $stages = orderStageInner(od);
+    $wrap.append($stages);
+    var boms = od.boms || [];
+    if (boms.length) {
+        var $detail = $('<div class="pt-order-boms">');
+        boms.forEach(function (bd) { var $sub = $('<div class="pt-bom-flow">'); fillBomFlow($sub, bd); $detail.append($sub); });
+        $detail.hide();   // 預設收合
+        $wrap.append($detail);
+        // 讓最後一個「BOM製程」節點可點，往右展開/收合明細
+        var $bomNode = $stages.children('.pt-step').last().addClass('pt-toggle-node')
+            .attr('title', '點一下展開/收合 BOM 製程明細（共 ' + boms.length + ' 筆）');
+        var $caret = $('<span class="pt-bom-caret">▸</span>');
+        $bomNode.find('.pt-step-name').append(document.createTextNode(' ')).append($caret);
+        $bomNode.on('click', function () {
+            var show = $detail.is(':hidden');
+            $detail.toggle(show);
+            $caret.text(show ? '▾' : '▸');
+        });
+    }
+    $c.append($wrap);
 }
 function renderOrderFlows() {
     var $pending = $('.pt-order-flow[data-pending="1"]');
