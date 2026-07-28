@@ -5878,7 +5878,9 @@ function appendFileItem(f, quoteNo) {
                : ['doc','docx'].includes(ext) ? 'fa-file-word-o text-primary'
                : ['png','jpg','jpeg','gif','bmp'].includes(ext) ? 'fa-file-image-o text-warning'
                : 'fa-file-o text-muted';
-    const dlUrl    = `${FILE_API_URL}?action=download&quote_no=${encodeURIComponent(quoteNo)}&filename=${encodeURIComponent(f.filename)}`;
+    // 開檔網址帶 mtime 破快取（旋轉存檔後 mtime 變 → 重新載入不吃舊圖）
+    const dlUrl    = `${FILE_API_URL}?action=download&quote_no=${encodeURIComponent(quoteNo)}&filename=${encodeURIComponent(f.filename)}&v=${encodeURIComponent(f.mtime||'')}`;
+    const isImg    = ['png','jpg','jpeg','gif','bmp','webp'].includes(ext);
     const attachId = f.attachment_id || '';
     const dispName = escapeHtml(f.original_name || f.filename);
     // 解析多類別 IDs → 名稱
@@ -5913,6 +5915,8 @@ function appendFileItem(f, quoteNo) {
             <span class="file-item-name" onclick="window.open('${dlUrl}','_blank')" title="${escapeHtml(f.original_name||f.filename)}">${dispName}</span>
             <span class="file-item-size">${escapeHtml(f.size)}</span>
             <span class="file-item-time">${escapeHtml(f.mtime)}</span>
+            ${isImg ? `<button class="btn btn-xs btn-default file-rot-left"  style="padding:1px 5px;" title="逆時針旋轉並存檔"><i class="fa fa-undo"></i></button>
+            <button class="btn btn-xs btn-default file-rot-right" style="padding:1px 5px;" title="順時針旋轉並存檔"><i class="fa fa-repeat"></i></button>` : ''}
             <button class="btn btn-xs btn-danger file-del-btn" style="padding:1px 5px;" title="刪除此附件">
                 <i class="fa fa-trash"></i>
             </button>
@@ -5950,8 +5954,25 @@ function appendFileItem(f, quoteNo) {
         });
     });
 
+    // 旋轉並存檔（永久生效）：圖片檔專用
+    $wrap.find('.file-rot-left').on('click',  () => _rotateFile(quoteNo, f.filename, -90));
+    $wrap.find('.file-rot-right').on('click', () => _rotateFile(quoteNo, f.filename, 90));
+
     $('#uploadedFilesList').append($wrap);
     return $wrap;
+}
+
+// 旋轉影像附件並覆寫存檔（deg：90=順時針、-90=逆時針），完成後重載清單破快取
+function _rotateFile(quoteNo, filename, deg) {
+    Swal.fire({ toast:true, position:'top-end', title:'旋轉中…', showConfirmButton:false, timer:600, didOpen:()=>Swal.showLoading() });
+    $.post(FILE_API_URL, { action:'rotate_file', quote_no:quoteNo, filename:filename, deg:deg }, res => {
+        if (res && res.success) {
+            loadFileList(quoteNo, false);  // 重載→ mtime 更新→開檔網址破快取吃到新圖
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已旋轉並存檔', showConfirmButton:false, timer:1500 });
+        } else {
+            Swal.fire('無法旋轉', (res && res.message) || '請稍後再試', 'warning');
+        }
+    }, 'json').fail(() => Swal.fire('錯誤','與伺服器通訊失敗','error'));
 }
 
 // ── 檢視模式附件項目（唯讀，可點開）────────────────────────

@@ -424,6 +424,64 @@ switch ($action) {
         readfile($realPath);
         exit;
 
+    // ── 旋轉影像附件並覆寫存檔（永久生效；需編輯權限）──
+    // 只處理圖片檔(90/180/270)；PDF/Office 檔不支援(請用原軟體轉正後重新上傳)。
+    case 'rotate_file': {
+        $feats   = _quotFeats($pdo);
+        $isAdmin = rbac_has($feats, 'all');
+        if (!$isAdmin && !rbac_has($feats, 'quotation_edit')) {
+            http_response_code(403); echo json_encode(['success'=>false,'message'=>'無編輯權限，不能旋轉附件']); break;
+        }
+        $quoteNo  = safeQuoteNo($_POST['quote_no'] ?? '');
+        $filename = basename($_POST['filename'] ?? '');
+        $deg      = (int)($_POST['deg'] ?? 90);            // 順時針度數：90 / 180 / -90(=逆時針90)
+        if (!in_array($deg, [90, 180, -90, 270], true)) $deg = 90;
+        $base = getUploadBase($pdo);
+        if ($quoteNo === '' || $filename === '' || $base === '') { echo json_encode(['success'=>false,'message'=>'參數錯誤']); break; }
+        $filepath    = quoteDir($base, $quoteNo) . $filename;
+        $realPath    = realpath($filepath);
+        $expectedDir = realpath(rtrim($base, '/\\') . DIRECTORY_SEPARATOR . $quoteNo);
+        if (!$realPath || !$expectedDir || strpos($realPath, $expectedDir) !== 0 || !is_file($realPath)) {
+            echo json_encode(['success'=>false,'message'=>'檔案不存在']); break;
+        }
+        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        if (!in_array($ext, ['png','jpg','jpeg','gif','bmp','webp'], true)) {
+            echo json_encode(['success'=>false,'message'=>'只有圖片檔可旋轉；PDF／Office 檔請用原軟體轉正後重新上傳']); break;
+        }
+        if (!function_exists('imagerotate')) { echo json_encode(['success'=>false,'message'=>'伺服器未啟用 GD imagerotate']); break; }
+        try {
+            $src = match ($ext) {
+                'png'  => imagecreatefrompng($realPath),
+                'gif'  => imagecreatefromgif($realPath),
+                'bmp'  => (function_exists('imagecreatefrombmp')  ? imagecreatefrombmp($realPath)  : false),
+                'webp' => (function_exists('imagecreatefromwebp') ? imagecreatefromwebp($realPath) : false),
+                default => imagecreatefromjpeg($realPath),   // jpg / jpeg
+            };
+            if (!$src) { echo json_encode(['success'=>false,'message'=>'無法讀取圖片(格式不支援或檔案毀損)']); break; }
+            // imagerotate 角度為「逆時針」；使用者送順時針度數 → 取負值。90/180/270 為直角旋轉，不會露出背景三角。
+            imagealphablending($src, false);
+            imagesavealpha($src, true);
+            $bg  = imagecolorallocatealpha($src, 0, 0, 0, 127);
+            $rot = imagerotate($src, -$deg, $bg);
+            imagealphablending($rot, false);
+            imagesavealpha($rot, true);
+            $ok = match ($ext) {
+                'png'  => imagepng($rot, $realPath),
+                'gif'  => imagegif($rot, $realPath),
+                'webp' => (function_exists('imagewebp') ? imagewebp($rot, $realPath) : false),
+                'bmp'  => (function_exists('imagebmp')  ? imagebmp($rot, $realPath)  : false),
+                default => imagejpeg($rot, $realPath, 92),
+            };
+            imagedestroy($src); imagedestroy($rot);
+            if (!$ok) { echo json_encode(['success'=>false,'message'=>'旋轉後寫入失敗']); break; }
+            @touch($realPath);   // 更新 mtime 供前端破快取
+            echo json_encode(['success'=>true, 'message'=>'已旋轉並存檔']);
+        } catch (Throwable $e) {
+            echo json_encode(['success'=>false,'message'=>'旋轉失敗：'.$e->getMessage()]);
+        }
+        break;
+    }
+
     // ══════════════════════════════════════════════════════════
     // 補件重審（功能2）：已核准報價單追加附件，需經簽核者審核「是否允許放入此報價單」
     // ══════════════════════════════════════════════════════════
