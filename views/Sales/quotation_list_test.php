@@ -3870,7 +3870,7 @@ function openSupplementModal(quoteNo) {
     $('#suppModalQno').text(quoteNo);
     $('#suppFileList').empty();
     $('#suppFileInput').val('');
-    $('#suppSubmitBtn').prop('disabled', false);
+    $('#suppSubmitBtn').prop('disabled', true);   // 尚無附件／未選類別前不可送審
     $('#supplementModal').modal('show');
 }
 
@@ -3886,29 +3886,49 @@ function _suppHandleFiles(fileList) {
           .done(res => {
             if (!res || !res.success) { $('#'+rowId).html(`<span class="text-danger">上傳失敗：${escapeHtml((res&&res.message)||'')}（${escapeHtml(file.name)}）</span>`); return; }
             _suppUploaded.push({ attachment_id: res.attachment_id, filename: res.filename, original_name: res.original_name });
-            $('#'+rowId).html(_suppFileRowHtml(res.attachment_id, res.original_name || res.filename));
+            $('#'+rowId).html(_suppFileRowHtml(res.attachment_id, res.original_name || res.filename, res.filename));
+            _suppValidate();
           })
           .fail(() => { $('#'+rowId).html(`<span class="text-danger">上傳失敗（${escapeHtml(file.name)}）</span>`); });
     });
 }
 
-function _suppFileRowHtml(attId, name) {
+function _suppFileRowHtml(attId, name, filename) {
     const reqCats = (typeof effectiveRequiredCats === 'function') ? effectiveRequiredCats() : [];
     const catOpts = fileCategories.length
         ? fileCategories.map(c => {
             const req = reqCats.some(r => Number(r) === Number(c.id));
-            return `<label style="margin-right:8px;font-weight:400;"><input type="checkbox" class="supp-cat" value="${c.id}" data-req="${req?1:0}" onchange="_suppSyncPart(this)"> ${escapeHtml(c.category_name)}${req ? ' <span style="color:#DD5138;" title="必備類別，需連結單一料號">*</span>' : ''}</label>`;
+            return `<label style="margin-right:8px;font-weight:400;"><input type="checkbox" class="supp-cat" value="${c.id}" data-req="${req?1:0}" onchange="_suppSyncPart(this);_suppValidate()"> ${escapeHtml(c.category_name)}${req ? ' <span style="color:#DD5138;" title="必備類別，需連結單一料號">*</span>' : ''}</label>`;
           }).join('')
         : '<span class="text-muted">尚無啟用類別</span>';
     const partOpts = ['<option value="all">共用（此報價單全部料號）</option>']
         .concat(_viewQuoteParts.map(pid => `<option value="${escapeHtml(pid)}">${escapeHtml(pid)}</option>`)).join('');
+    // 檔名可點擊開啟：與正式附件相同的 download 端點（暫存檔也可讀取），供補件時確認內容
+    const dlUrl = `${FILE_API_URL}?action=download&quote_no=${encodeURIComponent(_suppQno)}&filename=${encodeURIComponent(filename||'')}`;
+    const nameHtml = filename
+        ? `<a href="${dlUrl}" target="_blank" style="color:#a86a1e;text-decoration:underline;cursor:pointer;" title="點擊開啟檢視內容">${escapeHtml(name)}</a>`
+        : escapeHtml(name);
     return `<div class="supp-file" data-att-id="${attId}">
-        <div style="font-weight:600;color:#333;margin-bottom:4px;"><i class="fa fa-file-o"></i> ${escapeHtml(name)}
+        <div style="font-weight:600;color:#333;margin-bottom:4px;"><i class="fa fa-file-o"></i> ${nameHtml}
             <button class="btn btn-xs btn-link text-danger" style="float:right;padding:0;" onclick="_suppRemove(${attId}, this)"><i class="fa fa-trash"></i> 移除</button></div>
         <div style="font-size:12px;margin-bottom:4px;"><span style="color:#888;">類別（必選）：</span>${catOpts}
             ${reqCats.length ? '<span style="color:#DD5138;font-size:11px;margin-left:4px;">（* 必備類別，須連結單一料號）</span>' : ''}</div>
-        <div style="font-size:12px;"><span style="color:#888;">連結料號：</span><select class="supp-part form-control input-sm" style="display:inline-block;width:auto;">${partOpts}</select></div>
+        <div style="font-size:12px;"><span style="color:#888;">連結料號：</span><select class="supp-part form-control input-sm" style="display:inline-block;width:auto;" onchange="_suppValidate()">${partOpts}</select></div>
     </div>`;
+}
+// 送出補件審核前的即時檢核：每個附件都必須選好類別（必備類別還需連結單一料號），
+// 否則停用「送出補件審核」按鈕——即「附件都需點選完整標籤才能上傳送審」。
+function _suppValidate() {
+    const reqCats = (typeof effectiveRequiredCats === 'function') ? effectiveRequiredCats() : [];
+    const $rows = $('#suppFileList .supp-file');
+    let ok = $rows.length > 0;
+    $rows.each(function () {
+        const cats = $(this).find('.supp-cat:checked').map((i, el) => el.value).get();
+        if (!cats.length) { ok = false; return; }
+        const hasReq = cats.some(c => reqCats.some(r => Number(r) === Number(c)));
+        if (hasReq && $(this).find('.supp-part').val() === 'all') ok = false;
+    });
+    $('#suppSubmitBtn').prop('disabled', !ok);
 }
 // 勾選到必備類別時，若目前料號為「共用」則自動改選第一個料號（沒有料號可選則維持，送出時擋下）
 function _suppSyncPart(chk) {
@@ -3926,6 +3946,7 @@ function _suppRemove(attId, btn) {
     if (rec) $.post(FILE_API_URL, { action:'delete_file', quote_no:_suppQno, filename: rec.filename });
     _suppUploaded = _suppUploaded.filter(u => Number(u.attachment_id) !== Number(attId));
     $(btn).closest('.supp-file').remove();
+    _suppValidate();
 }
 
 function submitSupplement() {
