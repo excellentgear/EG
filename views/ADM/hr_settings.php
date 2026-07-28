@@ -218,6 +218,7 @@ $jsPerms = [
                                     <div class="row">
                                         <div class="form-group col-md-4 col-sm-6 col-xs-12">
                                             <label for="user_id">被代理人</label>
+                                            <input type="text" id="ud-target-filter" class="form-control input-sm" style="margin-bottom:6px;" placeholder="篩選：部門／姓名／職稱…">
                                             <select id="user_id" name="user_id" class="form-control" required></select>
                                         </div>
                                         <div class="form-group col-md-5 col-sm-6 col-xs-12">
@@ -241,6 +242,7 @@ $jsPerms = [
                                         <!-- 可選代理人列表 -->
                                         <div class="col-md-5">
                                             <label>可選的代理人</label>
+                                            <input type="text" id="ud-delegate-filter" class="form-control input-sm" style="margin-bottom:6px;" placeholder="篩選：部門／姓名／職稱…">
                                             <select id="available-users" class="form-control" multiple style="height: 200px;"></select>
                                         </div>
                                         <!-- 操作按鈕 -->
@@ -711,6 +713,25 @@ $jsPerms = [
             });
         }
 
+        // 被代理人 / 可選代理人 下拉篩選（選項文字含 [姓名] 部門 - 職稱，關鍵字比對即可）
+        function applyOptionFilter(selectId, kw) {
+            kw = (kw || '').trim().toLowerCase();
+            const isAvail = (selectId === 'available-users');
+            $(`#${selectId} option`).each(function() {
+                const $o = $(this);
+                if ($o.val() === '') return; // 保留「請選擇…」
+                const match = !kw || $o.text().toLowerCase().indexOf(kw) !== -1;
+                if (isAvail) {
+                    const picked = $(`#selected-user-delegates li[data-id="${$o.val()}"]`).length > 0;
+                    $o.toggle(match && !picked); // 已挑選者維持隱藏
+                } else {
+                    $o.toggle(match || $o.is(':selected')); // 目前已選的被代理人不因篩選而消失
+                }
+            });
+        }
+        $('#ud-target-filter').on('input', function() { applyOptionFilter('user_id', this.value); });
+        $('#ud-delegate-filter').on('input', function() { applyOptionFilter('available-users', this.value); });
+
         // 使用者代理雙列表操作
         $('#add-to-user-delegates').on('click', function() {
             $('#available-users option:selected').each(function() {
@@ -721,6 +742,7 @@ $jsPerms = [
                 }
                 $(this).hide();
             });
+            applyOptionFilter('available-users', $('#ud-delegate-filter').val());
         });
 
         $('#remove-from-user-delegates').on('click', function() {
@@ -728,6 +750,7 @@ $jsPerms = [
                 $('#available-users option[value="' + $(this).data('id') + '"]').show();
                 $(this).remove();
             });
+            applyOptionFilter('available-users', $('#ud-delegate-filter').val());
         });
 
         $(document).on('click', '#selected-user-delegates li', function() {
@@ -739,6 +762,7 @@ $jsPerms = [
             $('#userDelegateForm')[0].reset();
             $('#original_key').val(''); // 重設時清空 original_key
             $('#scope_identity').empty().append('<option value="">不分身分（主職／全部，預設）</option>'); // 重設職務身分
+            $('#ud-target-filter').val(''); $('#ud-delegate-filter').val(''); // 清空篩選字
             $('#selected-user-delegates').empty();
             // 重設可選列表，同時考慮到被代理人不能是自己
             const mainUserId = $('#user_id').val();
@@ -764,6 +788,7 @@ $jsPerms = [
             if (mainUserId) {
                 $('#available-users option[value="' + mainUserId + '"]').hide();
             }
+            applyOptionFilter('available-users', $('#ud-delegate-filter').val());
             loadUserScopes(mainUserId);
         });
 
