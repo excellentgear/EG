@@ -1,8 +1,8 @@
 # EGsystem — AI 工作規範（每次 session 必讀）
 
-> 最後修改：2026-07-28 — 路由表新增 `ai-rules/11-代理系統設計.md`（簽核/待辦/請假的代理人解析一律走共用庫 delegate_lib，禁各頁自寫代理 SQL）。（前次 07-23）鐵律5 補附件暫存機制（temp/active，勿寫死絕對路徑，見 ai-rules/07）；鐵律6 新增頁面一律登記進選單。
+> 最後修改：2026-07-28 — 鐵律6 推送改用 **`git pushall`**（雙 remote：origin=excellentgear/EG 公帳號進度、backup=ellentravel1003/EGsystem 私帳號備份；只用 git push 會漏備份庫）。（前次 07-28）路由表新增 `ai-rules/11-代理系統設計.md`（代理人解析一律走 delegate_lib）；鐵律5 補附件暫存機制（temp/active，見 ai-rules/07）；鐵律6 新增頁面一律登記進選單。
 
-PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**已用 git 版本控管**（GitHub private repo `ellentravel1003/EGsystem`，分支 `master`），改壞可用 git 復原——但前提是每個檔案改完都有立刻 commit+push（見鐵律6），沒 push 的部分一樣救不回來。
+PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**已用 git 版本控管**，分支 `master`，改壞可用 git 復原——但前提是每個檔案改完都有立刻 commit＋**`git pushall`**（雙 remote，見鐵律6），沒 push 的部分一樣救不回來。
 
 ## 環境速查
 - 網址 http://192.168.2.128/EGsystem ｜ PHP 8.3.1 ｜ MySQL 9.4.0（utf8mb4）｜ Apache 2.4.33 ｜ phpMyAdmin 5.2.3
@@ -19,7 +19,10 @@ PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**�
 5. **檔案路徑一律「即時組路徑」＋附件暫存機制**：任何跟磁碟/NAS 路徑相關的功能（附件、圖檔、匯出、備份等），DB 只能存檔名／相對值，完整路徑一律在讀取當下用「目前設定值＋即時算出的子資料夾」現場組出；**絕對不可**把組好的完整絕對路徑寫死存進 DB 欄位（換 NAS 硬碟或資料夾位置後，舊資料會全部讀不到、且無法只靠改設定修復）。另：**任何有附件的頁面，新增單據時就要能立刻上傳附件，不可要求「先存單據才能上傳」**——用 temp/active 暫存狀態機解決（新增中先存 temp、存檔時轉正、逾期懶惰清除）。兩者的實作標準、可直接抄的範例、尚未合規模組見 `ai-rules/07-附件路徑儲存規範.md`。
 6. **收尾四件事**（每完成一個修改立刻做，勿累積到最後、勿等整個任務做完才一次處理）：
    - `php -l` 通過每個改過的檔案
-   - `git add <改過的檔案>` → `git commit -m "一句話說明"` → `git push`（單一檔案改完驗證通過就立刻推，不要累積多檔一起 commit，才能保證每個 commit 都是可回復的獨立檢查點）
+   - `git add <改過的檔案>` → `git commit -m "一句話說明"` → **`git pushall`**（單一檔案改完驗證通過就立刻推，不要累積多檔一起 commit，才能保證每個 commit 都是可回復的獨立檢查點）
+     - **推送一律用 `git pushall`，不要只用 `git push`**：本專案設了**兩個 remote**——`origin`＝公帳號 `excellentgear/EG`（共用/目前進度）、`backup`＝私帳號 `ellentravel1003/EGsystem`（備份，防公帳號被他人改動）。`git pushall` 是 alias（`!git push origin master && git push backup master`），一次推兩邊；只 `git push` 會漏掉備份庫。
+     - 兩個 remote 的 URL 都已內嵌各自帳號的 PAT。若某邊 push 出現 `Repository not found`(404) 或 401＝該帳號 PAT 失效/無權限：**勿自行改 remote/憑證**，回報使用者重產該帳號 PAT（iOS App 不能產、需 github.com 網頁）。細節與踩坑見記憶 `git_push_broken`。
+     - 注意：`views/ADM/db_backup.php` 的「GitHub 帳號綁定」只會覆寫 `origin` 的 token（保留 excellentgear/EG 路徑），不會動 `backup` remote。
    - 寫入 page_change_log（範本見下）
    - 若新增頁面：到 `views/user/user_permissions.php` 仿照報價單加上該頁角色設定區塊；並登記進選單＝`system_module_pages` INSERT 一列（page_name＋page_url 格式 `/EGsystem/views/...`、sort_order=MAX+1）再把 group_id 綁到「測試功能」主項目（system_module_groups.group_name='測試功能'），等同 `views/admin/system_module_setting.php` 的「子頁面設定＋主項目綁定」操作；帶參數才能開的子頁（設計器/填寫頁等）不登記，只登記入口頁
 
