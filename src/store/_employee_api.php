@@ -6,6 +6,8 @@ $document_root = $_SERVER['DOCUMENT_ROOT'];
 session_start();
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
+// 特休天數算法已抽為共用庫（請假系統額度也用同一套，避免兩邊數字不一致）
+require_once $document_root . '/EGsystem/src/common/annual_leave_lib.php';
 
 $db_connection = new DBConnection();
 $db = $db_connection->getPDO();
@@ -59,109 +61,13 @@ switch ($action) {
 
 /**
  * 根據到職日，以曆年制按比例計算特休天數
+ * 實作已移至 src/common/annual_leave_lib.php（請假系統的特休額度共用同一套算法）。
+ * 本函式保留為薄包裝，行為與原本完全相同。
  * @param string|null $hireDate 到職日 (Y-m-d)
  * @return float 計算後的天數
  */
 function calculateProratedAnnualLeave($hireDate) {
-    if (!$hireDate) {
-        return 0;
-    }
-
-    $currentYear = date('Y');
-    $hire_date_obj = new DateTime($hireDate);
-    $year_start_obj = new DateTime("$currentYear-01-01");
-    $year_end_obj = new DateTime("$currentYear-12-31");
-    $days_in_year = $year_start_obj->diff($year_end_obj)->days + 1;
-
-    // 週年日
-    $anniversary_date_this_year = new DateTime($hire_date_obj->format("$currentYear-m-d"));
-
-    // 取得對應年資的特休天數
-    $get_leave_days = function($years, $months) {
-        // 規則：滿10年16天，之後每年+1，上限30天
-        if ($years >= 10) return min(30, 16 + ($years - 10));
-        // 規則：根據範例，滿5年為15天。此處假設5-9年皆為15天
-        if ($years >= 5) return 15; 
-        // 規則：滿3, 4年為14天
-        if ($years >= 3) return 14; 
-        if ($years >= 2) return 10;
-        if ($years >= 1) return 7;
-        // 規則：僅在未滿一年但滿6個月時適用
-        if ($years == 0 && $months >= 6) return 3; 
-        return 0;
-    };
-
-    // 1. 計算前期年資 (年初時的年資)
-    $interval_at_year_start = $hire_date_obj->diff($year_start_obj);
-    $seniority_years_before = $interval_at_year_start->y;
-    $seniority_months_before = $interval_at_year_start->y * 12 + $interval_at_year_start->m;
-    $leave_days_before = $get_leave_days($seniority_years_before, $seniority_months_before);
-
-    // --- 特殊情況：在計算年度內才滿6個月 ---
-    $six_month_anniversary = (clone $hire_date_obj)->add(new DateInterval('P6M'));
-    if ($seniority_months_before < 6 && $six_month_anniversary->format('Y') == $currentYear) {
-        $leave_days = 0;
-        
-        // 1. 滿6個月的3天假，直接給予
-        $leave_days += 3;
-
-        // 2. 計算滿一年後的按比例天數
-        $one_year_anniversary = (clone $hire_date_obj)->add(new DateInterval('P1Y'));
-        if ($one_year_anniversary->format('Y') == $currentYear) {
-            $days_after_one_year = $one_year_anniversary->diff($year_end_obj)->days + 1;
-            $pro_rated_after_one_year = (7 / $days_in_year) * $days_after_one_year;
-            $leave_days += $pro_rated_after_one_year;
-        }
-
-        $total_leave_days = $leave_days;
-    } else {
-        // --- 正常情況：年初已滿6個月或更久 ---
-    // 2. 計算後期年資 (週年日時的年資)
-    $seniority_at_anniversary = $hire_date_obj->diff($anniversary_date_this_year)->y;
-    $leave_days_after = $get_leave_days($seniority_at_anniversary, 12); // 週年日當天必滿12個月
-
-    $total_leave_days = 0;
-
-    if ($anniversary_date_this_year > $year_start_obj && $anniversary_date_this_year <= $year_end_obj) {
-        // 週年日在今年
-        $days_before_anniversary = $year_start_obj->diff($anniversary_date_this_year)->days;
-        $days_after_anniversary = $days_in_year - $days_before_anniversary;
-
-        // 判斷前期的計算基數：滿6個月的3天特休，其基數為半年(182.5天)
-        $proration_base_before = ($leave_days_before == 3) ? 182.5 : $days_in_year;
-        // 後期的計算基數恆為一整年
-        $proration_base_after = $days_in_year;
-
-        $pro_rated_before = ($leave_days_before / $proration_base_before) * $days_before_anniversary;
-        $pro_rated_after = ($leave_days_after / $proration_base_after) * $days_after_anniversary;
-        
-        $total_leave_days = $pro_rated_before + $pro_rated_after;
-    } else {
-        // 週年日不在今年 (例如 2/29)，直接用年初年資計算整年
-        $total_leave_days = $leave_days_before;
-    }
-    }
-
-    // --- 根據年資套用不同的進位規則 ---
-
-    // 判斷是否為 "到職滿一年的年度"
-    $is_first_anniversary_year = ($seniority_years_before == 0 && $hire_date_obj->format('Y') < $currentYear);
-
-    if ($is_first_anniversary_year) {
-        // 規則B: 到職滿一年的特例，無條件進位 (e.g., 6.52 -> 7)
-        return ceil($total_leave_days);
-    } else {
-        // 規則A: 正常情況，半天進位 (e.g., 14.17 -> 14.5)
-        $floor_val = floor($total_leave_days);
-        $decimal_part = $total_leave_days - $floor_val;
-
-        if ($decimal_part > 0.5) {
-            return ceil($total_leave_days);
-        } elseif ($decimal_part > 0) {
-            return $floor_val + 0.5;
-        }
-        return $total_leave_days;
-    }
+    return eg_annual_leave_raw($hireDate);
 }
 
 function getEmployees() {
