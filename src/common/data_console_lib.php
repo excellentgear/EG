@@ -40,24 +40,24 @@ function dc_all_tables(PDO $pdo): array {
     return $st->fetchAll(PDO::FETCH_COLUMN);
 }
 
-/** 表是否存在（BASE TABLE）— 白名單驗證用 */
+/** 表是否存在（BASE TABLE）— 白名單驗證用；一次載入全表名快取 */
 function dc_table_exists(PDO $pdo, string $t): bool {
-    $st = $pdo->prepare(
-        "SELECT 1 FROM information_schema.tables
-         WHERE table_schema=? AND table_name=? AND table_type='BASE TABLE'");
-    $st->execute([dc_db_name($pdo), $t]);
-    return (bool)$st->fetchColumn();
+    static $set = null;
+    if ($set === null) $set = array_flip(dc_all_tables($pdo));
+    return isset($set[$t]);
 }
 
-/** 欄位清單（含型別/主鍵/可空/預設/extra） */
+/** 欄位清單（含型別/主鍵/可空/預設/extra）— 全域搜尋會反覆呼叫，故快取 */
 function dc_columns(PDO $pdo, string $t): array {
+    static $cache = [];
+    if (isset($cache[$t])) return $cache[$t];
     $st = $pdo->prepare(
         "SELECT column_name, data_type, column_type, is_nullable, column_default, column_key, extra, column_comment
          FROM information_schema.columns
          WHERE table_schema=? AND table_name=? ORDER BY ordinal_position");
     $st->execute([dc_db_name($pdo), $t]);
     // information_schema 在本機 MySQL 回傳大寫欄名，統一轉小寫供全檔存取
-    return array_map(fn($r) => array_change_key_case($r, CASE_LOWER), $st->fetchAll(PDO::FETCH_ASSOC));
+    return $cache[$t] = array_map(fn($r) => array_change_key_case($r, CASE_LOWER), $st->fetchAll(PDO::FETCH_ASSOC));
 }
 
 /** 某欄是否存在於某表（白名單驗證） */
@@ -195,6 +195,32 @@ function dc_resolve_ref(PDO $pdo, string $table, string $column): ?array {
     $display = array_values(array_filter($display, fn($c) => dc_column_exists($pdo, $hit['table'], $c)));
     if (!$display) $display = dc_pick_display($pdo, $hit['table']);
     return ['table' => $hit['table'], 'pk' => $refPk, 'display' => $display];
+}
+
+/**
+ * 「實體目標表」清單：可被其他表以 id 參照的主體表（user/d_setting/order_track...）。
+ * 來源＝種子＋DB覆寫中出現過的 ref_table。回傳 [table => ['pk'=>, 'display'=>[cols]]]。
+ * 用途：全域搜尋以文字關鍵字 → 反查這些表的 id → 再比對各表的參照欄。
+ */
+function dc_entity_targets(PDO $pdo): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $out = [];
+    $add = function ($table, $display) use (&$out, $pdo) {
+        if (!$table || !dc_table_exists($pdo, $table)) return;
+        if (!isset($out[$table])) {
+            $pk = dc_pk($pdo, $table); if (!$pk) return;
+            $out[$table] = ['pk' => $pk[0], 'display' => []];
+        }
+        foreach ((array)$display as $d)
+            if (dc_column_exists($pdo, $table, $d) && !in_array($d, $out[$table]['display'], true))
+                $out[$table]['display'][] = $d;
+    };
+    foreach (dc_seed_refmap() as $def) $add($def['table'] ?? null, $def['display'] ?? []);
+    foreach (dc_db_refmap($pdo) as $def) $add($def['table'] ?? null, $def['display'] ?? []);
+    foreach ($out as $t => &$m) if (!$m['display']) $m['display'] = dc_pick_display($pdo, $t);
+    unset($m);
+    return $cache = $out;
 }
 
 /** 一次解析整張表所有欄位的參照（給前端顯示/下拉用） */

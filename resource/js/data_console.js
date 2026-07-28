@@ -211,7 +211,12 @@
     DC.api('search', { q }).then(res => {
       if (!res.success) { $('gsResult').innerHTML = `<div class="warn-box">${esc(res.message)}</div>`; return; }
       if (!res.hits.length) { $('gsResult').innerHTML = `<div class="info-box">在所有資料表中都找不到「${esc(q)}」。</div>`; return; }
-      let h = `<div style="margin-bottom:10px;font-size:14px;color:#6b5638;">關鍵字「<b>${esc(q)}</b>」命中 <b>${res.table_count}</b> 張資料表：</div>`;
+      let h = '';
+      if (res.entities && res.entities.length) {
+        h += `<div class="info-box" style="margin-bottom:10px;">🔗 關鍵字對應到以下實體，已一併用其 id 找出所有引用它的資料表：<br>` +
+          res.entities.map(e => `<b>${esc(e.table)}</b> #${esc(e.id)}${e.label ? '（' + esc(e.label) + '）' : ''}`).join('　｜　') + `</div>`;
+      }
+      h += `<div style="margin-bottom:10px;font-size:14px;color:#6b5638;">關鍵字「<b>${esc(q)}</b>」命中 <b>${res.table_count}</b> 張資料表：</div>`;
       res.hits.forEach(hit => {
         h += `<div class="hit-card"><div class="hh"><span><b>${esc(hit.table)}</b> 命中 ${hit.count} 筆</span>
           <button class="btn btn-amber btn-sm" onclick="DC.selectTable('${hit.table}')">前往此表編輯 →</button></div>
@@ -396,22 +401,32 @@
   };
   DC.renderCfg = function (filter) {
     filter = (filter || '').toLowerCase();
-    const cmt = t => t.comment ? ` <span style="color:#8a5a1a;font-size:12px;font-weight:400;">（${esc(t.comment)}）</span>` : '';
-    let h = `<thead><tr><th>資料表（含DB備註）</th><th>估計筆數</th><th>可編輯</th><th>可刪除</th><th>自訂備註</th></tr></thead><tbody>`;
+    const cmtInput = t => `<input class="dc-input dc-cmt" data-t="${esc(t.name)}" style="width:100%;" value="${esc(t.comment || '')}" placeholder="（無，可填寫）" title="直接改寫 MySQL 的資料表備註" onblur="DC.saveTableComment('${t.name}',this.value)">`;
+    let h = `<thead><tr><th>資料表</th><th>DB資料表備註 <span style="font-weight:400;color:#a98a5c;">（可改，離開欄位即寫回 MySQL）</span></th><th>估計筆數</th><th>可編輯</th><th>可刪除</th><th>自訂備註</th></tr></thead><tbody>`;
     S.tables.filter(t => !filter || t.name.toLowerCase().includes(filter) || (t.comment || '').toLowerCase().includes(filter)).forEach(t => {
       if (t.hard_readonly) {
-        h += `<tr><td><b>${esc(t.name)}</b>${cmt(t)} <span class="dc-pill ro">永久唯讀</span></td><td>${t.rows}</td><td colspan="3" style="color:#a98a5c;">紀錄/稽核表，不可開放</td></tr>`;
+        h += `<tr><td><b>${esc(t.name)}</b> <span class="dc-pill ro">永久唯讀</span></td><td>${cmtInput(t)}</td><td>${t.rows}</td><td colspan="2" style="color:#a98a5c;text-align:center;">紀錄/稽核表，不可開放</td><td style="color:#c4b596;">—</td></tr>`;
         return;
       }
-      h += `<tr><td><b>${esc(t.name)}</b>${cmt(t)}</td><td>${t.rows}</td>
-        <td><input type="checkbox" ${t.can_edit ? 'checked' : ''} onchange="DC.saveCfg('${t.name}',this.checked?1:0,undefined)"></td>
-        <td><input type="checkbox" ${t.can_delete ? 'checked' : ''} onchange="DC.saveCfg('${t.name}',undefined,this.checked?1:0)"></td>
+      h += `<tr><td><b>${esc(t.name)}</b></td><td>${cmtInput(t)}</td><td>${t.rows}</td>
+        <td style="text-align:center;"><input type="checkbox" ${t.can_edit ? 'checked' : ''} onchange="DC.saveCfg('${t.name}',this.checked?1:0,undefined)"></td>
+        <td style="text-align:center;"><input type="checkbox" ${t.can_delete ? 'checked' : ''} onchange="DC.saveCfg('${t.name}',undefined,this.checked?1:0)"></td>
         <td><input class="dc-input cfg-note" data-t="${esc(t.name)}" style="width:100%;" value="${esc(t.note || '')}" onblur="DC.saveCfg('${t.name}',undefined,undefined,this.value)"></td></tr>`;
     });
     h += '</tbody>';
     $('cfgTbl').innerHTML = h;
   };
   DC.filterCfg = q => DC.renderCfg(q);
+  DC.saveTableComment = function (table, val) {
+    const t = S.tables.find(x => x.name === table);
+    if (t && (t.comment || '') === val) return; // 無變動不寫入
+    DC.api('save_table_comment', { table, comment: val, csrf: S.csrf }, 'POST').then(res => {
+      if (!res.success) { alert(res.message); DC.renderCfg($('cfgFilter').value); return; }
+      if (t) t.comment = val;
+      DC.renderTableList($('tblFilter') ? $('tblFilter').value : '');
+      if (S.schema && S.curTable === table) S.schema.comment = val;
+    });
+  };
   DC.saveCfg = function (table, ce, cd, note) {
     const t = S.tables.find(x => x.name === table);
     const params = { table, csrf: S.csrf, can_edit: ce !== undefined ? ce : t.can_edit, can_delete: cd !== undefined ? cd : t.can_delete, note: note !== undefined ? note : (t.note || '') };

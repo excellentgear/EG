@@ -199,34 +199,80 @@ case 'search': {
     $kw=trim((string)($_REQUEST['q']??''));
     if ($kw==='') bad('請輸入搜尋關鍵字');
     $isNum=is_numeric($kw);
+
+    // ── 關聯感知：先把文字關鍵字反查成「實體 id」──────────────────────────
+    // 例：搜「生管公用」→ 在 user 找到 id=99991 → 之後各表的 user_id 欄也一起用 id 比對
+    $entityIds=[]; $entities=[];
+    foreach (dc_entity_targets($pdo) as $et=>$m) {
+        $ors=[]; $p=[];
+        foreach ($m['display'] as $d) { $ors[]=dc_q($d).' LIKE ?'; $p[]='%'.$kw.'%'; }
+        if ($isNum) { $ors[]=dc_q($m['pk']).' = ?'; $p[]=$kw; }
+        if (!$ors) continue;
+        try {
+            $sel=array_values(array_unique(array_merge([$m['pk']],$m['display'])));
+            $st=$pdo->prepare('SELECT '.implode(',',array_map('dc_q',$sel)).' FROM '.dc_q($et).' WHERE '.implode(' OR ',$ors).' LIMIT 50');
+            $st->execute($p);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $id=$r[$m['pk']]; if ($id===null) continue;
+                $entityIds[$et][]=$id;
+                $lbl=[]; foreach ($m['display'] as $d) if (isset($r[$d])&&$r[$d]!=='') $lbl[]=$r[$d];
+                if (count($entities)<50) $entities[]=['table'=>$et,'id'=>$id,'label'=>implode(' / ',$lbl)];
+            }
+        } catch (Throwable $e) {}
+    }
+
     $results=[]; $scanned=0; $capTables=400; $capHitsPerTable=5;
     foreach (dc_all_tables($pdo) as $t) {
         if ($scanned++>$capTables) break;
         $cols=dc_columns($pdo,$t);
-        $ors=[]; $params=[];
+        $terms=[];  // 每項 ['sql'=>片段,'params'=>[..]]，便於逐項容錯
         foreach ($cols as $c) {
             $dt=$c['data_type'];
             if (in_array($dt,['varchar','char','text','tinytext','mediumtext','longtext'],true)) {
-                $ors[]=dc_q($c['column_name']).' LIKE ?'; $params[]='%'.$kw.'%';
+                $terms[]=['sql'=>dc_q($c['column_name']).' LIKE ?','params'=>['%'.$kw.'%']];
             } elseif ($isNum && in_array($dt,['int','bigint','smallint','mediumint','tinyint'],true)) {
-                $ors[]=dc_q($c['column_name']).' = ?'; $params[]=$kw;
+                $terms[]=['sql'=>dc_q($c['column_name']).' = ?','params'=>[$kw]];
             }
         }
-        if (!$ors) continue;
-        $wsql=implode(' OR ',$ors);
+        // 關聯感知：參照欄若指向有命中的實體表，補上 IN (matched ids)
+        if ($entityIds) {
+            foreach ($cols as $c) {
+                $ref=dc_resolve_ref($pdo,$t,$c['column_name']);
+                if ($ref && !empty($entityIds[$ref['table']])) {
+                    $ids=array_values(array_unique($entityIds[$ref['table']]));
+                    $ph=implode(',',array_fill(0,count($ids),'?'));
+                    $terms[]=['sql'=>dc_q($c['column_name']).' IN ('.$ph.')','params'=>$ids];
+                }
+            }
+        }
+        if (!$terms) continue;
+        // 執行：先整句 OR；若整句失敗（多為 user 表 latin1 舊欄位中文 LIKE 混字集報錯），
+        // 逐項剔除會噴錯的條件後再組一次，讓能查的欄位仍命中。
+        $run=function(array $tt) use ($pdo,$t){
+            $sql=implode(' OR ',array_column($tt,'sql'));
+            $ps=[]; foreach ($tt as $x) foreach ($x['params'] as $p) $ps[]=$p;
+            $cst=$pdo->prepare("SELECT COUNT(*) FROM ".dc_q($t)." WHERE ".$sql); $cst->execute($ps);
+            return [(int)$cst->fetchColumn(),$sql,$ps];
+        };
+        $cnt=0; $wsql=''; $params=[];
+        try { [$cnt,$wsql,$params]=$run($terms); }
+        catch (Throwable $e) {
+            $safe=[];
+            foreach ($terms as $tm) { try { $x=$pdo->prepare("SELECT 1 FROM ".dc_q($t)." WHERE ".$tm['sql']." LIMIT 1"); $x->execute($tm['params']); $safe[]=$tm; } catch (Throwable $e2) {} }
+            if (!$safe) continue;
+            try { [$cnt,$wsql,$params]=$run($safe); } catch (Throwable $e3) { continue; }
+        }
+        if ($cnt<=0) continue;
         try {
-            $cst=$pdo->prepare("SELECT COUNT(*) FROM ".dc_q($t)." WHERE ".$wsql);
-            $cst->execute($params); $cnt=(int)$cst->fetchColumn();
-            if ($cnt<=0) continue;
             $st=$pdo->prepare("SELECT * FROM ".dc_q($t)." WHERE ".$wsql." LIMIT ".$capHitsPerTable);
             $st->execute($params); $sample=$st->fetchAll(PDO::FETCH_ASSOC);
             $sc2=[]; foreach ($cols as $cc) if (dc_col_sensitive($cc['column_name'])) $sc2[]=$cc['column_name'];
             if ($sc2) foreach ($sample as &$sr) foreach ($sc2 as $scn) if (array_key_exists($scn,$sr)) $sr[$scn]=dc_mask_value($sr[$scn]); unset($sr);
             $results[]=['table'=>$t,'count'=>$cnt,'pk'=>dc_pk($pdo,$t),'sample'=>$sample];
-        } catch (Throwable $e) { /* 某些表可能因欄位型別/字集比對失敗，略過 */ }
+        } catch (Throwable $e) { /* 樣本讀取失敗略過 */ }
     }
     usort($results,fn($a,$b)=>$b['count']<=>$a['count']);
-    out(['success'=>true,'keyword'=>$kw,'hits'=>$results,'table_count'=>count($results)]);
+    out(['success'=>true,'keyword'=>$kw,'hits'=>$results,'table_count'=>count($results),'entities'=>$entities]);
 }
 
 // ── 參照下拉：搜尋即輸入 ───────────────────────────────────────────────────
@@ -389,6 +435,22 @@ case 'save_table_cfg': {
         ON DUPLICATE KEY UPDATE can_edit=VALUES(can_edit),can_delete=VALUES(can_delete),note=VALUES(note),updated_by=VALUES(updated_by),updated_at=NOW()");
     $st->execute([$t,$ce,$cd,$note,$by]);
     out(['success'=>true,'message'=>'設定已儲存']);
+}
+
+// ── 直接改資料表的 DB 備註（僅管理員；ALTER TABLE ... COMMENT）─────────────
+case 'save_table_comment': {
+    if (!$IS_ADMIN) deny();
+    if (!dc_csrf_ok($_POST['csrf']??'')) bad('CSRF 驗證失敗');
+    $t=$_POST['table']??''; $cmt=(string)($_POST['comment']??'');
+    if (!dc_table_exists($pdo,$t)) bad('資料表不存在');
+    if (mb_strlen($cmt)>2048) bad('備註過長（上限 2048 字）');
+    $old=dc_table_comment($pdo,$t);
+    try {
+        // COMMENT 值無法用參數綁定（DDL），改用 PDO::quote 安全引號；表名已白名單驗證
+        $pdo->exec('ALTER TABLE '.dc_q($t).' COMMENT = '.$pdo->quote($cmt));
+        dc_audit($pdo,'COMMENT',$t,$t,null,['reason'=>'修改資料表備註','fields'=>['table_comment'=>['old'=>$old,'new'=>$cmt]]],$uid,$by);
+        out(['success'=>true,'message'=>'資料表備註已更新','comment'=>$cmt]);
+    } catch (Throwable $e) { bad('更新備註失敗：'.$e->getMessage()); }
 }
 
 // ── 關聯地圖覆寫（僅管理員） ───────────────────────────────────────────────
