@@ -3359,12 +3359,24 @@ function initTplStamps() {
 }
 function onTplStampChange() {
     const t = TPL_STAMPS.find(x => String(x.id) === document.getElementById('p-stamp-tpl').value);
-    // 對象清單＝該模板綁定種類的「使用中」登記（個人章/部門章）；未綁種類的模板列出全部登記
-    const hs = t ? TPL_HOLDERS.filter(h => !t.type_id || String(h.type_id || '') === String(t.type_id || '')) : [];
+    const wrapHolder = document.getElementById('wrap-stamp-holder');
     const hsel = document.getElementById('p-stamp-holder');
-    hsel.innerHTML = '<option value="">本人（' + (USER_CNAME || '') + '）</option>' +
+    if (!t) { wrapHolder.style.display = 'none'; hsel._list = []; return; }
+    let schema = {}; try { schema = JSON.parse(t.schema_json || '{}'); } catch (e) {}
+    const need = EGStampTpl.usesTokens(schema);
+    if (!need.name && !need.dept && !need.position) {
+        // 這顆模板純固定字樣/日期/編號，完全用不到「被登記對象」的資料 → 不需要選，直接隱藏，減少不必要的操作
+        wrapHolder.style.display = 'none'; hsel._list = []; hsel._selfOk = false;
+        return;
+    }
+    wrapHolder.style.display = '';
+    // 對象清單＝該模板綁定種類的「使用中」登記；且要能提供此模板實際用到的變數（過濾掉選了也印不出東西的對象，如模板要{部門}但選到純個人卻沒填部門）
+    const hs = TPL_HOLDERS.filter(h => (!t.type_id || String(h.type_id || '') === String(t.type_id || ''))
+        && (!need.name || h.name) && (!need.dept || h.dept) && (!need.position || h.position));
+    const selfOk = !need.dept && !need.position;   // 模板只用到{姓名}時，才能用「本人」快速預設（部門/職稱本人無法代表）
+    hsel.innerHTML = (selfOk ? '<option value="">本人（' + (USER_CNAME || '') + '）</option>' : '<option value="">— 請選擇（此模板需要部門/職稱資料）—</option>') +
         hs.map((h, i) => `<option value="${i}">${h.holder_name}${h.dept_id ? '（部門章）' : ''}</option>`).join('');
-    hsel._list = hs;
+    hsel._list = hs; hsel._selfOk = selfOk;
 }
 document.getElementById('p-stamp-type').addEventListener('change', function () {
     const isTpl = this.value === 'tpl';
@@ -3377,8 +3389,11 @@ async function placeTplStamp(x, y, size) {
     const t = TPL_STAMPS.find(o => String(o.id) === document.getElementById('p-stamp-tpl').value);
     if (!t) { toast('尚無可用模板，請先到「圖章管理」頁設計並啟用'); return; }
     let schema = {}; try { schema = JSON.parse(t.schema_json || '{}'); } catch (e) {}
+    const need = EGStampTpl.usesTokens(schema);
+    const holderNeeded = need.name || need.dept || need.position;
     const hsel = document.getElementById('p-stamp-holder');
     const h = (hsel._list || [])[parseInt(hsel.value, 10)];
+    if (holderNeeded && !h && !(hsel._selfOk && hsel.value === '')) { toast('請先選擇被登記對象（此模板需要部門/職稱資料才印得出來）'); return; }
     const ctx = h ? { name: h.name || '', dept: h.dept || '', position: h.position || '' }
                   : { name: USER_CNAME || '', dept: '', position: '' };
     ctx.company = OWN_COMPANY || '';

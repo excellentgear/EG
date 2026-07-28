@@ -74,7 +74,7 @@ case 'meta': {
                              ORDER BY CONVERT(user_cname USING utf8mb4) COLLATE utf8mb4_unicode_ci")->fetchAll(PDO::FETCH_ASSOC);
     }
     $types = $db->query("SELECT id, type_name, bind_targets, sort_order, is_active FROM stamp_type ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
-    $depts = $canManage ? $db->query("SELECT id, name FROM department ORDER BY id")->fetchAll(PDO::FETCH_ASSOC) : [];
+    $depts = $canManage ? $db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC) : [];
     $positions = $canManage ? $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC) : [];
     $base = '';
     if ($canManage) $base = eg_stamp_base($db);
@@ -489,12 +489,12 @@ case 'pick_meta': {
                         FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
                         WHERE p.is_active=1 ORDER BY t.sort_order, p.id")->fetchAll(PDO::FETCH_ASSOC);
     // 各種類「使用中」持有對象＋變數 ctx。個人章：name=本人、dept/position=主要部門職稱。
-    // 部門章：name=部門名(相容既有無{姓名}的模板)、dept=部門名。職稱章(dept_id+position_id)：即時查該部門該職稱「現任者」，
-    // 人員異動時蓋章自動帶新任者，不需重新登記——name=現任者姓名(無人在任則空)、dept/position=登記當下的部門/職稱名。
+    // 部門章：name=空字串（部門不是人，不可把部門名塞進{姓名}變數，否則模板誤用{姓名}時會顯示成部門名）、dept=部門名、holder_name(僅供下拉顯示用)=部門名。
+    // 職稱章(dept_id+position_id)：即時查該部門該職稱「現任者」，人員異動時蓋章自動帶新任者，不需重新登記——name=現任者姓名(無人在任則空)、dept/position=登記當下的部門/職稱名。
     $holders = $db->query("
         SELECT r.type_id, r.user_id, r.dept_id, r.position_id,
                COALESCE(u.user_cname, d.name) AS holder_name,
-               COALESCE(u.user_cname, d.name) AS name,
+               COALESCE(u.user_cname, '') AS name,
                COALESCE(d.name, md.name, '')  AS dept,
                COALESCE(mp.name, '')          AS position
         FROM stamp_register r

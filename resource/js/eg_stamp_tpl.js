@@ -29,6 +29,16 @@
     function hasSerial(schema) {
         return (schema.rows || []).some(function (r) { return String(r.text || '').indexOf('{編號}') >= 0; });
     }
+    // 這顆模板實際用到哪些「被登記對象」變數：呼叫端據此決定要不要顯示/要求選「對象」
+    // （例如純固定字樣的模板完全不需要選對象；只用{部門}的模板不需要強求選到有人名的個人章）
+    function usesTokens(schema) {
+        var all = (schema.rows || []).map(function (r) { return String(r.text || ''); }).join('');
+        return { name: all.indexOf('{姓名}') >= 0, dept: all.indexOf('{部門}') >= 0, position: all.indexOf('{職稱}') >= 0 };
+    }
+    function needsHolder(schema) {
+        var t = usesTokens(schema);
+        return t.name || t.dept || t.position;
+    }
     // 外框內某一水平線的可用半寬（圓/橢圓用弦長，矩形固定）
     function halfWidthAt(schema, y, W, H) {
         var shape = schema.shape || 'circle';
@@ -122,5 +132,5 @@
         svg += '</svg>';
         return svg;
     }
-    global.EGStampTpl = { render: render, fill: fill, hasSerial: hasSerial, FONTS: FONTS };
+    global.EGStampTpl = { render: render, fill: fill, hasSerial: hasSerial, usesTokens: usesTokens, needsHolder: needsHolder, FONTS: FONTS };
 })(window);

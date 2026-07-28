@@ -53,6 +53,10 @@ try {
   .warm-tabs li:hover:not(.active){background:#f7e0bd;color:#5a3d1e;}
   /* 新增登記＋篩選列凍結（捲動清冊時固定在上方） */
   #stickyBar{position:sticky;top:0;z-index:30;background:#fff;padding-top:2px;box-shadow:0 4px 6px -4px rgba(90,61,30,.25);}
+  /* 模板設計器分割列表格：欄位窄，縮小格內留白讓數字完整顯示，不被截斷 */
+  #tplRowsTbl td{padding:3px 4px;}
+  #tplRowsTbl input[type=number]{padding:3px 2px;text-align:center;font-size:12px;}
+  #tplRowsTbl select{padding:3px 2px;font-size:12px;}
 </style>
 </head>
 <body class="nav-sm">
@@ -219,13 +223,14 @@ try {
   <div class="modal-body">
     <div style="display:flex;gap:16px;flex-wrap:wrap;">
       <div style="flex:1;min-width:430px;">
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-          <span>名稱 <input type="text" id="tplName" class="form-control input-sm" style="width:150px;display:inline-block;"></span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:2px;">
+          <span>名稱 <input type="text" id="tplName" class="form-control input-sm" style="width:150px;display:inline-block;" title="僅供你在模板清單中辨識/挑選，不會印在章上"></span>
           <span>種類 <select id="tplType" class="form-control input-sm" style="width:120px;display:inline-block;"></select></span>
           <span>外框 <select id="tplShape" class="form-control input-sm" style="width:100px;display:inline-block;">
             <option value="circle">圓形</option><option value="ellipse">橢圓</option>
             <option value="rect">方形</option><option value="roundrect">圓角方形</option></select></span>
         </div>
+        <p class="text-muted" style="font-size:11px;margin:0 0 8px;"><i class="fa fa-info-circle"></i> 「名稱」只是方便你在清單中辨識、挑選模板用，<strong>不會印在圖章上</strong>；章上實際印出的文字，要靠下方每一列自己輸入固定字樣或插入變數。</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
           <span>顏色 <input type="color" id="tplColor" value="#cf3a2b" style="width:44px;height:28px;vertical-align:middle;border:1px solid #d8c19a;">
             <button class="btn btn-default btn-xs tpl-color" data-c="#cf3a2b">紅</button>
@@ -249,11 +254,11 @@ try {
           </span>
         </div>
         <table class="list" id="tplRowsTbl"><thead><tr>
-          <th style="width:58px;">高度比</th><th>內容（固定字樣＋變數）</th>
+          <th style="width:64px;">高度比</th><th>內容（固定字樣＋變數）</th>
           <th style="width:60px;" title="字的大小（相對單位，章寬=100）；留空=依列高自動放大填滿">字級</th>
-          <th style="width:78px;" title="文字超過章寬時的處理：縮小=壓縮字距擠在一行；換列=分成多行">超寬時</th>
-          <th style="width:74px;" title="換列模式專用：第一列固定放前N個字，其餘自動放第二列；留空=改依可用寬度自動折行">首列字數</th>
-          <th style="width:34px;"></th></tr></thead>
+          <th style="width:66px;" title="文字超過章寬時的處理：縮小=壓縮字距擠在一行；換列=分成多行">超寬時</th>
+          <th style="width:56px;" title="換列模式專用：第一列固定放前N個字，其餘自動放第二列；留空=改依可用寬度自動折行">首列字數</th>
+          <th style="width:28px;"></th></tr></thead>
           <tbody id="tplRows"></tbody></table>
         <button class="btn btn-default btn-xs" id="btnTplRowAdd" style="margin-top:4px;"><i class="fa fa-plus"></i> 加一列</button>
         <div style="margin-top:10px;padding:8px;background:#fdf6ea;border:1px solid #e8d9b8;border-radius:4px;">
@@ -504,7 +509,7 @@ function renderTypeMng(){
     <td>${bindChecks('type-bt',t.bind_targets)}</td>
     <td style="text-align:center;">${+t.is_active?'<span style="color:#3c763d;">啟用</span>':'<span class="text-muted">已停用</span>'}</td>
     <td>
-      <button class="btn btn-default btn-xs type-save" data-id="${t.id}"><i class="fa fa-check"></i> 存</button>
+      <span id="type-flash-${t.id}" class="text-success" style="display:none;font-size:11.5px;margin-right:4px;"><i class="fa fa-check"></i> 已儲存</span>
       <button class="btn btn-warning btn-xs type-toggle" data-id="${t.id}">${+t.is_active?'停用':'啟用'}</button>
       <button class="btn btn-danger btn-xs type-del" data-id="${t.id}"><i class="fa fa-trash"></i></button>
     </td></tr>`).join('')||'<tr><td colspan="4" class="text-muted">尚無種類，請於下方新增。</td></tr>');
@@ -529,16 +534,22 @@ $('#btnTypeAdd').on('click',function(){
     $('#newTypeName').val(''); $('.newType-bt').prop('checked',false); reloadTypes();
   },'json');
 });
-$('#typeBody').on('click','.type-save',function(){
-  const id=$(this).data('id'), row=$(this).closest('tr');
+// 修改即自動儲存（名稱失焦時／勾選綁定對象當下）：不需另按「存」，改後立刻生效並閃示「已儲存」
+function saveTypeRow(id){
+  const row=$('.type-name[data-id="'+id+'"]').closest('tr');
   const name=row.find('.type-name').val().trim();
   if(!name){alert('請輸入種類名稱');return;}
   const bt=row.find('.type-bt:checked').map((i,el)=>el.value).get().join(',');
   $.post(API+'?action=type_save',{id,type_name:name,bind_targets:bt},r=>{
     if(!r.ok){alert(r.error||'儲存失敗');return;}
-    reloadTypes(()=>loadList());
+    reloadTypes(()=>{
+      loadList();
+      $('#type-flash-'+id).stop(true,true).show().delay(1200).fadeOut(400);
+    });
   },'json');
-});
+}
+$('#typeBody').on('change','.type-bt',function(){ saveTypeRow($(this).closest('tr').find('.type-name').data('id')); });
+$('#typeBody').on('blur','.type-name',function(){ saveTypeRow($(this).data('id')); });
 $('#typeBody').on('click','.type-toggle',function(){
   $.post(API+'?action=type_toggle',{id:$(this).data('id')},r=>{
     if(!r.ok){alert(r.error||'切換失敗');return;}
@@ -784,6 +795,7 @@ function loadTpls(){
         <td>${+t.is_active?'<span style="color:#3c763d;">啟用</span>':'<span class="text-muted">停用</span>'}</td>
         <td>${canManage?`
           <button class="btn btn-default btn-xs tplrow-edit" data-id="${t.id}"><i class="fa fa-pencil"></i> 設計</button>
+          <button class="btn btn-default btn-xs tplrow-dup" data-id="${t.id}" title="以此模板為底稿另存一份新模板，方便微調外框/顏色/種類等設定"><i class="fa fa-copy"></i> 複製</button>
           <button class="btn btn-warning btn-xs tplrow-toggle" data-id="${t.id}">${+t.is_active?'停用':'啟用'}</button>
           <button class="btn btn-danger btn-xs tplrow-del" data-id="${t.id}"><i class="fa fa-trash"></i></button>`:'<span class="text-muted">—</span>'}
         </td></tr>`;}).join('')||'<tr><td colspan="6" class="text-muted">尚無模板，請新增。</td></tr>');
@@ -792,6 +804,13 @@ function loadTpls(){
 $('#tplBody').on('click','.tplrow-edit',function(){
   const t=TPLS.find(x=>String(x.id)===String($(this).data('id')));
   if(t) openTplModal(t);
+});
+$('#tplBody').on('click','.tplrow-dup',function(){
+  const t=TPLS.find(x=>String(x.id)===String($(this).data('id')));
+  if(!t) return;
+  openTplModal(t);           // 先把來源模板的設定整組帶入設計器
+  curTplId=0;                // 存檔時新增一筆，不覆蓋原本
+  $('#tplName').val(t.tpl_name+'（複製）');
 });
 $('#tplBody').on('click','.tplrow-toggle',function(){
   $.post(API+'?action=tpl_toggle',{id:$(this).data('id')},r=>{ if(!r.ok){alert(r.error||'失敗');return;} loadTpls(); },'json');
