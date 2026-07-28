@@ -395,6 +395,7 @@ case 'get_calendar': {
 
     $uids = array_map(fn($r) => (int)$r['user_id'], $ass);
     $names = roster_user_name_map($pdo, $uids);
+    $leaveMap = roster_leave_map($pdo, $uids, $from, $to);
     $cells = [];
     foreach ($ass as $r) {
         $uid = (int)$r['user_id'];
@@ -404,6 +405,7 @@ case 'get_calendar': {
             'sign' => (int)$r['sign_status'], 'signed_at' => $r['signed_at'] ? substr($r['signed_at'], 0, 16) : null,
             'adjusted' => (int)$r['is_adjusted'], 'mine' => ($uid === $MYID),
             'pending' => $r['pending_swap_id'] ? (int)$r['pending_swap_id'] : 0,
+            'leave' => $leaveMap[$uid . '|' . $r['duty_date']] ?? null,
             'can_sign' => ($uid === $MYID), 'note' => $r['adjust_note'],
         ];
     }
@@ -476,9 +478,13 @@ case 'get_calendar_multi': {
             ];
         }
     }
-    // 補人名
+    // 補人名 + 請假
     $nm = roster_user_name_map($pdo, $allUids);
-    foreach ($cells as $d => &$arr) { foreach ($arr as &$c) { $c['name'] = $nm[$c['user_id']]['name'] ?? ('#' . $c['user_id']); $c['left'] = $nm[$c['user_id']]['left'] ?? false; } unset($c); } unset($arr);
+    $leaveMap = roster_leave_map($pdo, $allUids, $from, $to);
+    foreach ($cells as $d => &$arr) { foreach ($arr as &$c) {
+        $c['name'] = $nm[$c['user_id']]['name'] ?? ('#' . $c['user_id']); $c['left'] = $nm[$c['user_id']]['left'] ?? false;
+        $c['leave'] = $leaveMap[$c['user_id'] . '|' . $d] ?? null;
+    } unset($c); } unset($arr);
     // 排序每日：依表色群組
     foreach ($cells as $d => &$arr) { usort($arr, fn($a, $b) => strcmp($a['board_name'] . $a['lane_name'], $b['board_name'] . $b['lane_name'])); } unset($arr);
 

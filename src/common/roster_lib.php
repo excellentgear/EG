@@ -487,6 +487,54 @@ if (!function_exists('roster_load_pickers')) {
     }
 }
 
+if (!function_exists('roster_leave_map')) {
+    /**
+     * 查一批 user 在 [from,to] 內「已核准」的請假，展開成 "uid|YYYY-MM-DD" => 假別名稱。
+     * 權威來源＝leave_request（employee_id=user.id，status approved，start/end datetime 區間重疊）。
+     */
+    function roster_leave_map(PDO $pdo, array $userIds, string $from, string $to): array {
+        $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
+        if (empty($userIds)) return [];
+        $map = [];
+        $in = implode(',', array_fill(0, count($userIds), '?'));
+        $expand = function ($uid, $s, $e, $label) use ($from, $to, &$map) {
+            $s = max($from, substr($s, 0, 10)); $e = min($to, substr($e, 0, 10));
+            if ($s > $e) return;
+            $d = new DateTime($s); $ed = new DateTime($e);
+            while ($d <= $ed) { $map[$uid . '|' . $d->format('Y-m-d')] = $label; $d->modify('+1 day'); }
+        };
+        // A) 行事曆請假（暫用：請假系統未建，用 evenement_actor 綁人＋有 leave_type_id 或分類含「休假」）
+        try {
+            $st = $pdo->prepare("
+                SELECT a.user_id, e.start, e.end, ec.category_name, lt.leave_name
+                FROM evenement e
+                JOIN evenement_actor a ON a.event_id = e.id
+                LEFT JOIN event_category ec ON ec.id = e.category_id
+                LEFT JOIN leave_type lt ON lt.id = e.leave_type_id
+                WHERE a.user_id IN ($in)
+                  AND (e.leave_type_id IS NOT NULL OR ec.category_name LIKE '%休假%')
+                  AND DATE(e.start) < DATE_ADD(?, INTERVAL 1 DAY) AND DATE(e.end) >= ?");
+            $st->execute(array_merge($userIds, [$to, $from]));
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $expand((int)$r['user_id'], $r['start'], $r['end'], $r['leave_name'] ?: ($r['category_name'] ?: '請假'));
+            }
+        } catch (Exception $e) { /* 行事曆查詢失敗不擋 */ }
+        // B) 正式請假單（leave_request；目前尚未有資料，未來上線自動生效）
+        try {
+            $st = $pdo->prepare("
+                SELECT lr.employee_id, lr.start_datetime, lr.end_datetime, lt.leave_name
+                FROM leave_request lr LEFT JOIN leave_type lt ON lt.id = lr.leave_type_id
+                WHERE lr.employee_id IN ($in) AND lr.status IN ('approved','核准')
+                  AND lr.start_datetime < DATE_ADD(?, INTERVAL 1 DAY) AND lr.end_datetime >= ?");
+            $st->execute(array_merge($userIds, [$to, $from]));
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $expand((int)$r['employee_id'], $r['start_datetime'], $r['end_datetime'], $r['leave_name'] ?: '請假');
+            }
+        } catch (Exception $e) { /* leave_request 不存在等 */ }
+        return $map;
+    }
+}
+
 if (!function_exists('roster_user_name_map')) {
     /** id => 中文姓名（含已離職，供顯示過去排班）。 */
     function roster_user_name_map(PDO $pdo, array $ids): array {

@@ -110,6 +110,9 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         .rst-logtabs div.active{ color:var(--amber); border-bottom:2px solid var(--amber); font-weight:bold; }
         .chip .stamp{ display:inline-block; min-width:15px; height:15px; line-height:13px; text-align:center; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:50%; font-size:9px; transform:rotate(-8deg); margin-right:3px; vertical-align:middle; }
         .chip.signed .stamp{ border-color:#fff; color:#fff; background:transparent; }
+        .leave-stamp{ display:inline-block; min-width:15px; height:15px; line-height:12px; text-align:center; border:1.5px solid #c0392b; color:#c0392b; background:#fff; border-radius:50%; font-size:9px; font-weight:bold; transform:rotate(-8deg); flex:none; }
+        .chip.onleave{ background:#f7e2dc; }
+        .chip.onleave.signed{ background:var(--amber); }
         #editorModal .modal-body{ max-height:72vh; overflow-y:auto; overflow-x:hidden; }
         #editorModal .modal-body .row{ margin-left:0; margin-right:0; }
         .legend{ font-size:12px; color:#a08c72; }
@@ -206,7 +209,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                                 </span>
                             </div>
                             <div class="legend" style="margin-bottom:8px;">
-                                圖例：<b style="background:#efe6d8"></b>休假 <b style="background:#fff6e8"></b>補班 <b style="background:var(--amber)"></b>已簽核 <b style="background:#f3ead9"></b>未簽核 <b style="background:#fff;box-shadow:inset 0 0 0 2px #8c5320"></b>我的班 ・「調」＝已調班
+                                圖例：<b style="background:#efe6d8"></b>休假 <b style="background:#fff6e8"></b>補班 <b style="background:var(--amber)"></b>已簽核 <b style="background:#f3ead9"></b>未簽核 <b style="background:#fff;box-shadow:inset 0 0 0 2px #8c5320"></b>我的班 ・<span class="leave-stamp" style="width:14px;height:14px;line-height:11px">休</span> 當天請假(未調班) ・「調」＝已調班
                             </div>
                             <div class="lane-bar" id="laneBar"></div>
                             <div id="calView"><div class="cal-months" id="calMonths"></div></div>
@@ -496,10 +499,11 @@ var R = (function(){
                 var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
                 var lcol=c.color||laneColor(l,idx);
                 var tag=c.color?(c.board_name||c.lane_name||''):(l?l.lane_name:''); // 單表=項目名;多表=表名
-                var tip=tag+'：'+c.name+(c.pending?'（申請調班中）':'')+(c.sign&&c.signed_at?'（已簽 '+c.signed_at+'）':'')+(c.mine?'（我）':'');
-                h+='<div class="chip'+(c.sign?' signed':'')+(c.left?' left':'')+(c.adjusted?' adj':'')+(c.mine?' mine':'')+(c.pending?' pending':'')+'" style="border-left-color:'+lcol+'" title="'+esc(tip)+'">'
+                var tip=tag+'：'+c.name+(c.leave?'（請假：'+c.leave+'，未調班）':'')+(c.pending?'（申請調班中）':'')+(c.sign&&c.signed_at?'（已簽 '+c.signed_at+'）':'')+(c.mine?'（我）':'');
+                h+='<div class="chip'+(c.sign?' signed':'')+(c.left?' left':'')+(c.adjusted?' adj':'')+(c.mine?' mine':'')+(c.pending?' pending':'')+(c.leave?' onleave':'')+'" style="border-left-color:'+lcol+'" title="'+esc(tip)+'">'
                   +(c.pending?'<i class="fa fa-clock-o"></i>':(c.sign?'<span class="stamp">簽</span>':''))
                   +'<span class="chip-nm">'+esc(c.name)+'</span>'
+                  +(c.leave?'<span class="leave-stamp" title="請假：'+esc(c.leave)+'">休</span>':'')
                   +(tag?'<span class="chip-lane" style="background:'+lcol+'">'+esc(tag)+'</span>':'')
                   +'</div>';
             });
@@ -522,7 +526,7 @@ var R = (function(){
         rows.forEach(function(x){
             var l=lm[x.c.lane_id]; var lbl=x.c.color?((x.c.board_name?x.c.board_name+' · ':'')+(x.c.lane_name||'')):(l?l.lane_name:'');
             h+='<tr><td>'+x.d+'</td><td>'+(x.c.color?'<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+x.c.color+';margin-right:4px"></span>':'')+esc(lbl)+'</td>'
-              +'<td>'+esc(x.c.name)+(x.c.left?' <span class="label label-default">離職</span>':'')+(x.c.adjusted?' <span class="label label-warning">調</span>':'')+'</td>'
+              +'<td>'+esc(x.c.name)+(x.c.leave?' <span class="leave-stamp">休</span>':'')+(x.c.left?' <span class="label label-default">離職</span>':'')+(x.c.adjusted?' <span class="label label-warning">調</span>':'')+'</td>'
               +'<td>'+(x.c.sign?'<span style="color:#C0762C"><span class="stamp" style="color:#c0392b;border-color:#c0392b">簽</span> 已簽 '+(x.c.signed_at||'')+'</span>':'<span style="color:#a08c72">未簽</span>')+'</td>'
               +'<td>'+actionBtns(x.c,x.d)+'</td></tr>';
         });
@@ -555,7 +559,7 @@ var R = (function(){
         else{
             var h='<table class="rst-list" style="width:100%"><tr><th>'+(calData.board.multi?'表 · 項目':'輪值項目')+'</th><th>負責人</th><th>狀態</th><th>操作</th></tr>';
             cells.forEach(function(c){ var l=lm[c.lane_id]; var lbl=c.color?((c.board_name?c.board_name+' · ':'')+(c.lane_name||'')):(l?l.lane_name:'');
-                h+='<tr'+(c.mine?' style="background:#fbf3e6"':'')+'><td>'+(c.color?'<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+c.color+';margin-right:4px"></span>':'')+esc(lbl)+'</td><td>'+esc(c.name)+(c.mine?' <span class="label label-warning">我</span>':'')+(c.left?'（離職）':'')+'</td>'
+                h+='<tr'+(c.mine?' style="background:#fbf3e6"':'')+'><td>'+(c.color?'<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+c.color+';margin-right:4px"></span>':'')+esc(lbl)+'</td><td>'+esc(c.name)+(c.leave?' <span class="leave-stamp">休</span>':'')+(c.mine?' <span class="label label-warning">我</span>':'')+(c.left?'（離職）':'')+'</td>'
                   +'<td>'+(c.sign?'<span style="color:#C0762C">已簽 '+(c.signed_at||'')+'</span>':'未簽')+'</td><td>'+actionBtns(c,ds)+'</td></tr>';
             });
             h+='</table>'; $('#dayBody').html(h);
