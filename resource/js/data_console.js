@@ -396,13 +396,14 @@
   };
   DC.renderCfg = function (filter) {
     filter = (filter || '').toLowerCase();
-    let h = `<thead><tr><th>資料表</th><th>估計筆數</th><th>可編輯</th><th>可刪除</th><th>備註</th></tr></thead><tbody>`;
-    S.tables.filter(t => !filter || t.name.toLowerCase().includes(filter)).forEach(t => {
+    const cmt = t => t.comment ? ` <span style="color:#8a5a1a;font-size:12px;font-weight:400;">（${esc(t.comment)}）</span>` : '';
+    let h = `<thead><tr><th>資料表（含DB備註）</th><th>估計筆數</th><th>可編輯</th><th>可刪除</th><th>自訂備註</th></tr></thead><tbody>`;
+    S.tables.filter(t => !filter || t.name.toLowerCase().includes(filter) || (t.comment || '').toLowerCase().includes(filter)).forEach(t => {
       if (t.hard_readonly) {
-        h += `<tr><td><b>${esc(t.name)}</b> <span class="dc-pill ro">永久唯讀</span></td><td>${t.rows}</td><td colspan="3" style="color:#a98a5c;">紀錄/稽核表，不可開放</td></tr>`;
+        h += `<tr><td><b>${esc(t.name)}</b>${cmt(t)} <span class="dc-pill ro">永久唯讀</span></td><td>${t.rows}</td><td colspan="3" style="color:#a98a5c;">紀錄/稽核表，不可開放</td></tr>`;
         return;
       }
-      h += `<tr><td><b>${esc(t.name)}</b></td><td>${t.rows}</td>
+      h += `<tr><td><b>${esc(t.name)}</b>${cmt(t)}</td><td>${t.rows}</td>
         <td><input type="checkbox" ${t.can_edit ? 'checked' : ''} onchange="DC.saveCfg('${t.name}',this.checked?1:0,undefined)"></td>
         <td><input type="checkbox" ${t.can_delete ? 'checked' : ''} onchange="DC.saveCfg('${t.name}',undefined,this.checked?1:0)"></td>
         <td><input class="dc-input cfg-note" data-t="${esc(t.name)}" style="width:100%;" value="${esc(t.note || '')}" onblur="DC.saveCfg('${t.name}',undefined,undefined,this.value)"></td></tr>`;
