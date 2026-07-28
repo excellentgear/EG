@@ -90,8 +90,13 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         table.cal td.sun .dnum{ color:#c0562c; }
         .dnum{ font-size:12px; color:#7a6a52; }
         .dnum .tag{ font-size:10px; color:#b08a5a; margin-left:2px; }
-        .chip{ display:block; font-size:11px; margin-top:2px; padding:1px 4px; border-radius:3px; color:#4a3a28; background:#f3ead9;
-               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-left:4px solid #ccc; }
+        .chip{ display:flex; align-items:center; gap:3px; font-size:11px; margin-top:2px; padding:1px 4px; border-radius:3px; color:#4a3a28; background:#f3ead9;
+               white-space:nowrap; overflow:hidden; border-left:4px solid #ccc; }
+        .chip .chip-nm{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+        .chip .chip-lane{ font-size:9px; color:#fff; padding:0 4px; border-radius:2px; white-space:nowrap; flex:none; }
+        .lane-bar{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:8px; }
+        .lane-tag{ font-size:12px; padding:2px 9px; border-radius:11px; cursor:pointer; color:#fff; user-select:none; }
+        .lane-tag.off{ opacity:.35; text-decoration:line-through; }
         .chip.signed{ background:var(--amber); color:#fff; border-left-color:#8c5320; }
         .chip.left{ text-decoration:line-through; opacity:.6; }
         .chip.adj::after{ content:'調'; font-size:9px; background:#fff; color:var(--coral); border-radius:2px; padding:0 2px; margin-left:3px; }
@@ -203,6 +208,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                             <div class="legend" style="margin-bottom:8px;">
                                 圖例：<b style="background:#efe6d8"></b>休假 <b style="background:#fff6e8"></b>補班 <b style="background:var(--amber)"></b>已簽核 <b style="background:#f3ead9"></b>未簽核 <b style="background:#fff;box-shadow:inset 0 0 0 2px #8c5320"></b>我的班 ・「調」＝已調班
                             </div>
+                            <div class="lane-bar" id="laneBar"></div>
                             <div id="calView"><div class="cal-months" id="calMonths"></div></div>
                             <div id="listView" style="display:none;"></div>
                         </div>
@@ -355,7 +361,7 @@ var RD = {
     isAdmin: <?= $IS_ADMIN ? 'true' : 'false' ?>
 };
 var R = (function(){
-    var scope='all', boards=[], curBoard=null, curYm=null, view='cal', calData=null, selIds=[], overlay=false;
+    var scope='all', boards=[], curBoard=null, curYm=null, view='cal', calData=null, selIds=[], overlay=false, hiddenLanes={};
 
     function post(action,data){ data=data||{}; data.action=action;
         return $.post(RD.api,data,null,'json').fail(function(x){
@@ -394,7 +400,7 @@ var R = (function(){
     }
     function switchScope(el){ $('.rst-tab').removeClass('active'); $(el).addClass('active'); scope=$(el).data('scope'); loadBoards(); }
     function selectBoard(id){   // 點整列＝單選（含全功能）
-        selIds=[id]; overlay=false;
+        selIds=[id]; overlay=false; hiddenLanes={};
         curBoard=boards.find(function(b){return b.id===id;});
         curYm=curYm||ym(new Date());
         renderBoards();
@@ -451,10 +457,22 @@ var R = (function(){
         $('#calView').show(); $('#listView').hide();
         var lm=laneMap(), hol={}, mk={};
         (calData.holidays||[]).forEach(function(d){hol[d]=1;}); (calData.makeup||[]).forEach(function(d){mk[d]=1;});
+        renderLaneBar();
         var html='';
         calData.months.forEach(function(mo){ html+=monthGrid(mo,lm,hol,mk); });
         $('#calMonths').html(html);
     }
+    function renderLaneBar(){
+        var lanes=calData.lanes||[];
+        if(overlay || lanes.length<2){ $('#laneBar').empty(); return; }
+        var h='<span style="font-size:12px;color:#a08c72;align-self:center;margin-right:2px">項目（點擊顯示/隱藏）：</span>';
+        lanes.forEach(function(l,i){
+            var col=laneColor(l,i), off=hiddenLanes[l.id]?' off':'';
+            h+='<span class="lane-tag'+off+'" style="background:'+col+'" onclick="R.toggleLane('+l.id+')">'+esc(l.lane_name)+'</span>';
+        });
+        $('#laneBar').html(h);
+    }
+    function toggleLane(id){ hiddenLanes[id]=!hiddenLanes[id]; if(view==='cal') renderCalendar(); else renderList(); }
     function monthGrid(mo,lm,hol,mk){
         var y=+mo.slice(0,4), m=+mo.slice(5,7);
         var first=new Date(y,m-1,1), start=first.getDay(), dim=new Date(y,m,0).getDate();
@@ -474,12 +492,16 @@ var R = (function(){
             h+='<td class="'+cls.trim()+'" onclick="R.openDay(\''+ds+'\')"><div class="dnum">'+day+tag+'</div>';
             var cells=(calData.cells[ds]||[]);
             cells.forEach(function(c){
+                if(hiddenLanes[c.lane_id]) return;   // 個別隱藏的項目
                 var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
                 var lcol=c.color||laneColor(l,idx);
-                var lbl=c.color?((c.board_name?c.board_name+'·':'')+(c.lane_name||'')):(l?l.lane_name:'');
-                var tip=lbl+'：'+c.name+(c.pending?'（申請調班中）':'')+(c.sign&&c.signed_at?'（已簽 '+c.signed_at+'）':'')+(c.mine?'（我）':'');
+                var tag=c.color?(c.board_name||c.lane_name||''):(l?l.lane_name:''); // 單表=項目名;多表=表名
+                var tip=tag+'：'+c.name+(c.pending?'（申請調班中）':'')+(c.sign&&c.signed_at?'（已簽 '+c.signed_at+'）':'')+(c.mine?'（我）':'');
                 h+='<div class="chip'+(c.sign?' signed':'')+(c.left?' left':'')+(c.adjusted?' adj':'')+(c.mine?' mine':'')+(c.pending?' pending':'')+'" style="border-left-color:'+lcol+'" title="'+esc(tip)+'">'
-                  +(c.pending?'<i class="fa fa-clock-o"></i> ':(c.sign?'<span class="stamp">簽</span>':''))+esc(c.name)+'</div>';
+                  +(c.pending?'<i class="fa fa-clock-o"></i>':(c.sign?'<span class="stamp">簽</span>':''))
+                  +'<span class="chip-nm">'+esc(c.name)+'</span>'
+                  +(tag?'<span class="chip-lane" style="background:'+lcol+'">'+esc(tag)+'</span>':'')
+                  +'</div>';
             });
             h+='</td>'; col++;
             if(col%7===0 && day<dim) h+='</tr><tr>';
@@ -490,10 +512,10 @@ var R = (function(){
     }
 
     function renderList(){
-        $('#calView').hide(); $('#listView').show();
+        $('#calView').hide(); $('#listView').show(); renderLaneBar();
         var lm=laneMap(), rows=[];
         Object.keys(calData.cells).sort().forEach(function(d){
-            calData.cells[d].forEach(function(c){ rows.push({d:d,c:c}); });
+            calData.cells[d].forEach(function(c){ if(!hiddenLanes[c.lane_id]) rows.push({d:d,c:c}); });
         });
         if(!rows.length){ $('#listView').html('<div style="color:#a08c72;padding:16px">此區間無排班</div>'); return; }
         var h='<table class="rst-list"><tr><th>日期</th><th>'+(calData.board.multi?'表 · 項目':'輪值項目')+'</th><th>負責人</th><th>狀態</th><th>操作</th></tr>';
@@ -919,7 +941,7 @@ var R = (function(){
         openRange:openRange, rgLaneChange:rgLaneChange, submitRange:submitRange, openEditor:openEditor, openEditorCurrent:openEditorCurrent, saveBoard:saveBoard, deleteBoard:deleteBoard, copyBoard:copyBoard,
         addLane:addLane, delLane:delLane, pickColor:pickColor, onModeChange:onModeChange, onCadenceChange:onCadenceChange, onRotateChange:onRotateChange,
         toggleWk:toggleWk, toggleMo:toggleMo, onAllVis:onAllVis, filterVis:filterVis, moveMonth:moveMonth, goToday:goToday, setView:setView,
-        msFilter:msFilter, msAll:msAll, selectAllRostered:selectAllRostered, openLogs:openLogs, logTab:logTab };
+        msFilter:msFilter, msAll:msAll, selectAllRostered:selectAllRostered, openLogs:openLogs, logTab:logTab, toggleLane:toggleLane };
 })();
 </script>
 </body>
