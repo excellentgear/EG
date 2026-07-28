@@ -761,6 +761,118 @@ case 'shift_type_delete': {
     jout(['deleted' => true]);
 }
 
+/* ── 固定班別排班：兩個月月曆 ── */
+case 'get_shift_calendar': {
+    $ym = $_POST['ym'] ?? date('Y-m');
+    if (!preg_match('/^\d{4}-\d{2}$/', $ym)) $ym = date('Y-m');
+    $filterUser = (int)($_POST['filter_user'] ?? 0);
+    $filterShift = (int)($_POST['filter_shift'] ?? 0);
+    $from = $ym . '-01';
+    $secondObj = (new DateTime($from))->modify('+1 month');
+    $second = $secondObj->format('Y-m');
+    $to = $secondObj->modify('last day of this month')->format('Y-m-d');
+
+    $shifts = $pdo->query("SELECT id,name,color,start_time,end_time,is_overnight FROM roster_shift_type WHERE is_active=1 ORDER BY sort_order,id")->fetchAll(PDO::FETCH_ASSOC);
+    $shiftMap = []; foreach ($shifts as $s) $shiftMap[(int)$s['id']] = $s;
+
+    $sql = "SELECT sa.id, sa.shift_type_id, sa.user_id, sa.work_date, sa.is_agent, sa.orig_user_id, sa.sign_status, sa.signed_at, sa.pending_swap_id
+            FROM roster_shift_assign sa JOIN roster_shift_type st ON st.id=sa.shift_type_id
+            WHERE sa.work_date BETWEEN ? AND ?";
+    $args = [$from, $to];
+    if ($filterUser)  { $sql .= " AND sa.user_id=?"; $args[] = $filterUser; }
+    if ($filterShift) { $sql .= " AND sa.shift_type_id=?"; $args[] = $filterShift; }
+    $rows = $pdo->prepare($sql); $rows->execute($args); $rows = $rows->fetchAll(PDO::FETCH_ASSOC);
+
+    $uids = array_map(fn($r) => (int)$r['user_id'], $rows);
+    $names = roster_user_name_map($pdo, $uids);
+    $leaveMap = roster_leave_map($pdo, $uids, $from, $to);
+    $cells = [];
+    foreach ($rows as $r) {
+        $uid = (int)$r['user_id']; $sid = (int)$r['shift_type_id'];
+        $lv = $leaveMap[$uid . '|' . $r['work_date']] ?? null;
+        $s = $shiftMap[$sid] ?? null;
+        $cells[$r['work_date']][] = [
+            'aid' => (int)$r['id'], 'lane_id' => $sid, 'shift_id' => $sid, 'user_id' => $uid,
+            'name' => $names[$uid]['name'] ?? ('#' . $uid), 'left' => $names[$uid]['left'] ?? false,
+            'color' => $s['color'] ?: '#C0762C', 'lane_name' => $s ? $s['name'] : '', 'board_name' => $s ? $s['name'] : '',
+            'time' => $s ? (substr($s['start_time'], 0, 5) . '~' . substr($s['end_time'], 0, 5)) : '',
+            'sign' => (int)$r['sign_status'], 'signed_at' => $r['signed_at'] ? substr($r['signed_at'], 0, 16) : null,
+            'is_agent' => (int)$r['is_agent'], 'adjusted' => ($r['orig_user_id'] ? 1 : 0),
+            'pending' => $r['pending_swap_id'] ? (int)$r['pending_swap_id'] : 0,
+            'leave' => $lv['label'] ?? null, 'leave_full' => $lv ? (bool)$lv['full'] : false,
+            'mine' => ($uid === $MYID), 'can_sign' => ($uid === $MYID),
+        ];
+    }
+    foreach ($cells as $d => &$arr) { usort($arr, fn($a, $b) => ($a['shift_id'] <=> $b['shift_id']) ?: strcmp($a['name'], $b['name'])); } unset($arr);
+    $ctx = roster_workday_context($pdo, $from, $to);
+    $ppl = array_values(array_unique($uids));
+    $pn = roster_user_name_map($pdo, $ppl); $people = [];
+    foreach ($ppl as $pid) $people[] = ['id' => $pid, 'name' => $pn[$pid]['name'] ?? ('#' . $pid)];
+    usort($people, fn($a, $c) => strcmp($a['name'], $c['name']));
+
+    jout([
+        'months' => [$ym, $second], 'cells' => $cells,
+        'holidays' => array_keys($ctx['holidays']), 'makeup' => array_keys($ctx['makeup']),
+        'shifts' => $shifts, 'people' => $people, 'today' => date('Y-m-d'),
+        'can_edit' => ($CAN_CREATE || $IS_ADMIN), 'is_admin' => $IS_ADMIN,
+    ]);
+}
+
+/* ── 固定班別排班：排入人員（某班別×人員×日期區間，可選星期幾/略過假日）── */
+case 'add_shift_assign': {
+    if (!$CAN_CREATE && !$IS_ADMIN) jerr('無排班權限', 403);
+    $p = json_decode($_POST['payload'] ?? '', true);
+    if (!is_array($p)) jfail('資料格式錯誤');
+    $sid = (int)($p['shift_type_id'] ?? 0);
+    $users = array_values(array_unique(array_filter(array_map('intval', $p['user_ids'] ?? []))));
+    $df = $p['date_from'] ?? ''; $dt = $p['date_to'] ?? '';
+    $weekdays = array_filter(array_map('intval', $p['weekdays'] ?? []), fn($x) => $x >= 1 && $x <= 7);
+    $skipHoliday = !empty($p['skip_holiday']);
+    if ($sid <= 0) jfail('請選班別');
+    if (empty($users)) jfail('請選人員');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $df) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dt)) jfail('日期格式錯誤');
+    if ($df > $dt) jfail('起訖顛倒');
+    $chk = $pdo->prepare("SELECT 1 FROM roster_shift_type WHERE id=?"); $chk->execute([$sid]);
+    if (!$chk->fetchColumn()) jerr('班別不存在', 404);
+    $ctx = $skipHoliday ? roster_workday_context($pdo, $df, $dt) : null;
+
+    $pdo->beginTransaction();
+    try {
+        $ins = $pdo->prepare("INSERT IGNORE INTO roster_shift_assign (shift_type_id,user_id,work_date,created_by) VALUES (?,?,?,?)");
+        $n = 0;
+        $d = new DateTime($df); $e = new DateTime($dt);
+        while ($d <= $e) {
+            $ds = $d->format('Y-m-d');
+            $ok = true;
+            if (!empty($weekdays) && !in_array((int)$d->format('N'), $weekdays, true)) $ok = false;
+            if ($ok && $skipHoliday && !roster_is_workday($ds, $ctx)) $ok = false;
+            if ($ok) foreach ($users as $u) { $ins->execute([$sid, $u, $ds, $MYID]); $n += $ins->rowCount(); }
+            $d->modify('+1 day');
+        }
+        $pdo->commit();
+    } catch (Exception $e) { $pdo->rollBack(); jfail('排班失敗：' . $e->getMessage()); }
+    jout(['inserted' => $n]);
+}
+
+/* ── 固定班別排班：移除一筆 ── */
+case 'del_shift_assign': {
+    if (!$CAN_CREATE && !$IS_ADMIN) jerr('無權限', 403);
+    $aid = (int)($_POST['aid'] ?? 0);
+    $pdo->prepare("DELETE FROM roster_shift_assign WHERE id=?")->execute([$aid]);
+    jout();
+}
+
+/* ── 固定班別排班：簽核 ── */
+case 'shift_sign': case 'shift_unsign': {
+    $aid = (int)($_POST['aid'] ?? 0);
+    $st = $pdo->prepare("SELECT * FROM roster_shift_assign WHERE id=?"); $st->execute([$aid]); $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('排班不存在', 404);
+    if ((int)$a['user_id'] !== $MYID && !$IS_ADMIN) jerr('只有本人或管理者可簽核', 403);
+    if ($action === 'shift_sign') $pdo->prepare("UPDATE roster_shift_assign SET sign_status=1,signed_at=NOW(),signed_by=? WHERE id=?")->execute([$MYID, $aid]);
+    else $pdo->prepare("UPDATE roster_shift_assign SET sign_status=0,signed_at=NULL,signed_by=NULL WHERE id=?")->execute([$aid]);
+    jout();
+}
+
 default:
     jfail('未知動作：' . $action);
 }

@@ -236,9 +236,23 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                     </div>
                     <div style="color:#a08c72;font-size:12px;margin-bottom:10px;"><i class="fa fa-info-circle"></i> 先定義班別（早班/晚班…含休息時間、固定加班），下一步才安排人員。此處與 KPI 排班獨立，不影響 KPI 工時計算。</div>
                     <div id="shiftTypeList"><div style="color:#a08c72;padding:10px;">載入中…</div></div>
-                    <div style="margin-top:16px;color:#b7a789;border-top:1px dashed #e4d8c6;padding-top:10px;font-size:13px;">
-                        <i class="fa fa-info-circle"></i> 人員排班（指定某人某班別於日期區間、月曆顯示、可調班、請假自動用代理人補人）為下一階段，班別定義完成後開放。
+                </div>
+
+                <div class="rst-panel" style="padding:12px;margin-top:12px;">
+                    <div class="rst-cal-head">
+                        <button class="btn btn-default btn-sm" onclick="R.shiftMoveMonth(-1)"><i class="fa fa-chevron-left"></i></button>
+                        <button class="btn btn-default btn-sm" onclick="R.shiftGoToday()">本月</button>
+                        <button class="btn btn-default btn-sm" onclick="R.shiftMoveMonth(1)"><i class="fa fa-chevron-right"></i></button>
+                        <span style="font-weight:bold;color:#5a4632;">人員排班</span>
+                        <span style="flex:1"></span>
+                        <select id="shiftFilterPerson" class="form-control input-sm" style="width:120px" onchange="R.loadShiftCal()"><option value="0">全部人員</option></select>
+                        <span id="shiftEditTools" style="display:none"><button class="btn btn-sm btn-warning" onclick="R.openShiftAssign()"><i class="fa fa-user-plus"></i> 排班</button></span>
                     </div>
+                    <div class="legend" style="margin-bottom:8px;">
+                        圖例：<b style="background:#efe6d8"></b>休假 <b style="background:#fff6e8"></b>補班 <b style="background:var(--amber)"></b>已簽核 <b style="background:#fff;box-shadow:inset 0 0 0 2px #8c5320"></b>我的班 ・<span class="leave-stamp" style="width:14px;height:14px;line-height:11px">休</span>整天請假 ・<span class="leave-stamp half" style="width:14px;height:14px;line-height:11px">半</span>半天 ・「代」＝代理補班
+                    </div>
+                    <div class="lane-bar" id="shiftLaneBar"></div>
+                    <div class="cal-months" id="shiftMonths"></div>
                 </div>
             </div><!-- /tab-shift -->
             </div><!-- /tab-content -->
@@ -355,6 +369,35 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         <div class="form-group"><label>備註</label><input type="text" id="rg_note" class="form-control" placeholder="例：兩人互調本週"></div>
     </div>
     <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">取消</button><button class="btn btn-warning" onclick="R.submitRange()">套用</button></div>
+</div></div></div>
+
+<!-- 排班 modal -->
+<div class="modal fade" id="shiftAssignModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title">排班（指定人員上班別）</h4></div>
+    <div class="modal-body">
+        <div class="form-group"><label>班別 *</label><select id="sa_shift" class="form-control"></select></div>
+        <div class="row">
+            <div class="col-sm-6 form-group"><label>起 *</label><input type="date" id="sa_from" class="form-control"></div>
+            <div class="col-sm-6 form-group"><label>迄 *</label><input type="date" id="sa_to" class="form-control"></div>
+        </div>
+        <div class="form-group"><label>只排這些星期（不選＝每天）</label><div id="sa_weekdays">
+            <?php foreach (['一','二','三','四','五','六','日'] as $i => $w): ?><label class="checkbox-inline"><input type="checkbox" class="sa-wd" value="<?= $i+1 ?>"><?= $w ?></label><?php endforeach; ?>
+        </div></div>
+        <div class="checkbox"><label><input type="checkbox" id="sa_skipholiday" checked> 略過行事曆假日（只排上班日）</label></div>
+        <div class="form-group"><label>人員（可多選）</label>
+            <input type="text" class="form-control input-sm" id="sa_search" placeholder="搜尋姓名/部門/職稱" oninput="R.saFilter()" style="margin-bottom:5px">
+            <div style="margin-bottom:4px"><a href="#" onclick="R.saAll(true);return false;">全選</a> ｜ <a href="#" onclick="R.saAll(false);return false;">全不選</a></div>
+            <div id="sa_users" style="max-height:220px;overflow:auto;border:1px solid var(--warm-line);border-radius:5px;padding:6px"></div>
+        </div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">取消</button><button class="btn btn-warning" onclick="R.submitShiftAssign()"><i class="fa fa-save"></i> 排入</button></div>
+</div></div></div>
+
+<!-- 班別當日 modal -->
+<div class="modal fade" id="shiftDayModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title" id="shiftDayTitle"></h4></div>
+    <div class="modal-body" id="shiftDayBody"></div>
+    <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">關閉</button></div>
 </div></div></div>
 
 <!-- 班別定義 modal -->
@@ -988,8 +1031,8 @@ var R = (function(){
     }
 
     /* ── 固定班別排班：班別定義 ── */
-    var shiftLoaded=false, shiftColor='';
-    function initShiftTab(){ if(shiftLoaded) return; shiftLoaded=true; loadShiftTypes(); }
+    var shiftLoaded=false, shiftColor='', shiftCalYm=null, shiftCalData=null, shiftHidden={};
+    function initShiftTab(){ if(shiftLoaded) return; shiftLoaded=true; loadShiftTypes(); loadShiftCal(); }
     function toMin(t){ if(!t) return 0; var p=String(t).split(':'); return (+p[0])*60+(+p[1]||0); }
     function shiftDur(s){ var st=toMin(s.start_time), en=toMin(s.end_time); if(+s.is_overnight) en+=1440; var span=en-st; if(span<0) span+=1440; return span-(+s.break_minutes||0)+(+s.overtime_minutes||0); }
     function durText(m){ m=Math.max(0,m); return Math.floor(m/60)+'h'+(m%60?(' '+(m%60)+'m'):''); }
@@ -1022,7 +1065,104 @@ var R = (function(){
         if(!p.name.trim()){alert('請輸入班別名稱');return;} if(!p.start_time||!p.end_time){alert('請輸入上下班時間');return;}
         post('shift_type_save',{payload:JSON.stringify(p)}).done(function(r){ if(!r.success){alert(r.message);return;} $('#shiftModal').modal('hide'); loadShiftTypes(); });
     }
-    function delShift(id,name){ if(!confirm('刪除班別「'+name+'」？（若已被排班使用會改為停用）')) return; post('shift_type_delete',{id:id}).done(function(r){ if(!r.success){alert(r.message);return;} if(r.softDeleted) alert('此班別已被排班使用，已改為「停用」。'); loadShiftTypes(); }); }
+    function delShift(id,name){ if(!confirm('刪除班別「'+name+'」？（若已被排班使用會改為停用）')) return; post('shift_type_delete',{id:id}).done(function(r){ if(!r.success){alert(r.message);return;} if(r.softDeleted) alert('此班別已被排班使用，已改為「停用」。'); loadShiftTypes(); loadShiftCal(); }); }
+
+    /* ── 固定班別排班：人員排班月曆 ── */
+    function loadShiftCal(){
+        shiftCalYm = shiftCalYm || ym(new Date());
+        post('get_shift_calendar',{ym:shiftCalYm, filter_user:$('#shiftFilterPerson').val()||0}).done(function(r){
+            if(!r.success) return; shiftCalData=r;
+            $('#shiftEditTools').toggle(!!r.can_edit);
+            var cur=$('#shiftFilterPerson').val(), opt='<option value="0">全部人員</option>';
+            (r.people||[]).forEach(function(p){ opt+='<option value="'+p.id+'">'+esc(p.name)+'</option>'; });
+            $('#shiftFilterPerson').html(opt).val(cur);
+            renderShiftCal();
+        });
+    }
+    function shiftLaneBar(){
+        var ss=shiftCalData.shifts||[]; if(!ss.length){ $('#shiftLaneBar').empty(); return; }
+        var h='<span style="font-size:12px;color:#a08c72;align-self:center;margin-right:2px">班別（點擊顯示/隱藏）：</span>';
+        ss.forEach(function(s){ var off=shiftHidden[s.id]?' off':''; h+='<span class="lane-tag'+off+'" style="background:'+(s.color||'#C0762C')+'" onclick="R.toggleShiftLane('+s.id+')">'+esc(s.name)+'</span>'; });
+        $('#shiftLaneBar').html(h);
+    }
+    function toggleShiftLane(id){ shiftHidden[id]=!shiftHidden[id]; renderShiftCal(); }
+    function renderShiftCal(){
+        var hol={},mk={}; (shiftCalData.holidays||[]).forEach(function(d){hol[d]=1;}); (shiftCalData.makeup||[]).forEach(function(d){mk[d]=1;});
+        shiftLaneBar();
+        var html=''; shiftCalData.months.forEach(function(mo){ html+=shiftMonthGrid(mo,hol,mk); });
+        $('#shiftMonths').html(html);
+    }
+    function shiftMonthGrid(mo,hol,mk){
+        var y=+mo.slice(0,4), m=+mo.slice(5,7);
+        var start=new Date(y,m-1,1).getDay(), dim=new Date(y,m,0).getDate();
+        var wd=['日','一','二','三','四','五','六'];
+        var h='<div class="cal-month"><h4>'+y+' 年 '+m+' 月</h4><table class="cal"><tr>';
+        wd.forEach(function(w,i){ h+='<th'+(i===0?' style="color:#c0562c"':'')+'>'+w+'</th>'; });
+        h+='</tr><tr>'; var col=0;
+        for(var i=0;i<start;i++){ h+='<td class="empty"></td>'; col++; }
+        for(var day=1;day<=dim;day++){
+            var ds=mo+'-'+String(day).padStart(2,'0'), dow=new Date(y,m-1,day).getDay(), cls='';
+            if(hol[ds])cls+=' holiday'; if(mk[ds])cls+=' makeup'; if(dow===0)cls+=' sun'; if(ds===shiftCalData.today)cls+=' today';
+            var tg=hol[ds]?'<span class="tag">休</span>':(mk[ds]?'<span class="tag">補</span>':'');
+            h+='<td class="'+cls.trim()+'" onclick="R.openShiftDay(\''+ds+'\')"><div class="dnum">'+day+tg+'</div>';
+            (shiftCalData.cells[ds]||[]).forEach(function(c){
+                if(shiftHidden[c.shift_id]) return;
+                var tip=c.lane_name+(c.time?'('+c.time+')':'')+'：'+c.name+(c.is_agent?'（代理）':'')+(c.leave?'（'+(c.leave_full?'整天請假':'半天')+'）':'')+(c.sign&&c.signed_at?'（已簽 '+c.signed_at+'）':'');
+                h+='<div class="chip'+(c.sign?' signed':'')+(c.mine?' mine':'')+(c.leave?(c.leave_full?' onleave':' onleave half'):'')+'" style="border-left-color:'+c.color+'" title="'+esc(tip)+'">'
+                  +(c.sign?'<span class="stamp">簽</span>':'')
+                  +'<span class="chip-nm">'+esc(c.name)+'</span>'
+                  +leaveHtml(c)
+                  +(c.is_agent?'<span class="chip-lane" style="background:#8c5a3c">代</span>':'')
+                  +'</div>';
+            });
+            h+='</td>'; col++; if(col%7===0&&day<dim) h+='</tr><tr>';
+        }
+        while(col%7!==0){ h+='<td class="empty"></td>'; col++; }
+        return h+'</tr></table></div>';
+    }
+    function shiftMoveMonth(n){ var d=new Date(shiftCalYm+'-01'); d.setMonth(d.getMonth()+n); shiftCalYm=ym(d); loadShiftCal(); }
+    function shiftGoToday(){ shiftCalYm=ym(new Date()); loadShiftCal(); }
+    function openShiftAssign(){
+        var ss=(window.__shifts||[]).filter(function(s){return +s.is_active===1;});
+        if(!ss.length){ alert('請先在上方建立至少一個啟用的班別'); return; }
+        $('#sa_shift').html(ss.map(function(s){return '<option value="'+s.id+'">'+esc(s.name)+'（'+String(s.start_time).substring(0,5)+'~'+String(s.end_time).substring(0,5)+'）</option>';}).join(''));
+        var t=shiftCalData?shiftCalData.today:new Date().toISOString().slice(0,10);
+        $('#sa_from').val(t); $('#sa_to').val(t); $('.sa-wd').prop('checked',false); $('#sa_skipholiday').prop('checked',true); $('#sa_search').val('');
+        $('#sa_users').html(RD.users.map(function(u){return '<label class="msitem" style="display:block;font-weight:normal;margin:1px 0"><input type="checkbox" value="'+u.id+'"> '+esc(u.user_cname)+posLabel(u)+'</label>';}).join(''));
+        $('#shiftAssignModal').modal('show');
+    }
+    function saFilter(){ var q=$('#sa_search').val().toLowerCase(); $('#sa_users .msitem').each(function(){ $(this).toggle($(this).text().toLowerCase().indexOf(q)>=0); }); }
+    function saAll(v){ $('#sa_users .msitem:visible input').prop('checked',v); }
+    function submitShiftAssign(){
+        var users=$('#sa_users input:checked').map(function(){return +this.value;}).get();
+        if(!users.length){ alert('請選人員'); return; }
+        var p={shift_type_id:+$('#sa_shift').val(), user_ids:users, date_from:$('#sa_from').val(), date_to:$('#sa_to').val(),
+               weekdays:$('.sa-wd:checked').map(function(){return +this.value;}).get(), skip_holiday:$('#sa_skipholiday').is(':checked')?1:0};
+        if(!p.date_from||!p.date_to){ alert('請選日期'); return; }
+        post('add_shift_assign',{payload:JSON.stringify(p)}).done(function(r){ if(!r.success){alert(r.message);return;} $('#shiftAssignModal').modal('hide'); alert('已排入 '+r.inserted+' 筆'); loadShiftCal(); });
+    }
+    function openShiftDay(ds){
+        if(!shiftCalData) return;
+        var cells=(shiftCalData.cells[ds]||[]).filter(function(c){return !shiftHidden[c.shift_id];});
+        $('#shiftDayTitle').text(ds+' 班別排班');
+        if(!cells.length){ $('#shiftDayBody').html('<div style="color:#a08c72">當天無排班</div>'); }
+        else{
+            var h='<table class="rst-list" style="width:100%"><tr><th>班別</th><th>人員</th><th>狀態</th><th>操作</th></tr>';
+            cells.forEach(function(c){
+                var act='';
+                if(c.can_sign) act+= c.sign?'<button class="btn btn-xs btn-default" onclick="R.shiftSign('+c.aid+',0)">取消簽核</button>':'<button class="btn btn-xs btn-warning" onclick="R.shiftSign('+c.aid+',1)">簽核</button> ';
+                if(shiftCalData.can_edit) act+=' <button class="btn btn-xs btn-default" style="color:#c0392b" onclick="R.delShiftAssign('+c.aid+')">移除</button>';
+                h+='<tr'+(c.mine?' style="background:#fbf3e6"':'')+'><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+c.color+';margin-right:4px"></span>'+esc(c.lane_name)+(c.time?' <span style="color:#a08c72">'+c.time+'</span>':'')+'</td>'
+                  +'<td>'+esc(c.name)+' '+leaveHtml(c)+(c.is_agent?' <span class="label" style="background:#8c5a3c">代</span>':'')+(c.mine?' <span class="label label-warning">我</span>':'')+'</td>'
+                  +'<td>'+(c.sign?'已簽 '+(c.signed_at||''):'未簽')+'</td><td>'+(act||'—')+'</td></tr>';
+            });
+            $('#shiftDayBody').html(h+'</table>');
+        }
+        $('#shiftDayModal').modal('show');
+    }
+    function refreshShiftDay(){ if($('#shiftDayModal').is(':visible')){ var t=$('#shiftDayTitle').text().slice(0,10); setTimeout(function(){openShiftDay(t);},150); } }
+    function shiftSign(aid,to){ post(to?'shift_sign':'shift_unsign',{aid:aid}).done(function(r){ if(!r.success){alert(r.message);return;} loadShiftCal(); refreshShiftDay(); }); }
+    function delShiftAssign(aid){ if(!confirm('移除這筆排班？')) return; post('del_shift_assign',{aid:aid}).done(function(r){ if(!r.success){alert(r.message);return;} loadShiftCal(); refreshShiftDay(); }); }
 
     $(function(){
         $('#btn-perm-help').on('click',function(e){e.preventDefault();$('#permHelp').modal('show');});
@@ -1036,7 +1176,9 @@ var R = (function(){
         addLane:addLane, delLane:delLane, pickColor:pickColor, onModeChange:onModeChange, onCadenceChange:onCadenceChange, onRotateChange:onRotateChange,
         toggleWk:toggleWk, toggleMo:toggleMo, onAllVis:onAllVis, filterVis:filterVis, moveMonth:moveMonth, goToday:goToday, setView:setView,
         msFilter:msFilter, msAll:msAll, selectAllRostered:selectAllRostered, openLogs:openLogs, logTab:logTab, toggleLane:toggleLane,
-        initShiftTab:initShiftTab, openShiftEdit:openShiftEdit, pickShiftColor:pickShiftColor, saveShift:saveShift, delShift:delShift, updShiftHint:updShiftHint };
+        initShiftTab:initShiftTab, openShiftEdit:openShiftEdit, pickShiftColor:pickShiftColor, saveShift:saveShift, delShift:delShift, updShiftHint:updShiftHint,
+        loadShiftCal:loadShiftCal, toggleShiftLane:toggleShiftLane, shiftMoveMonth:shiftMoveMonth, shiftGoToday:shiftGoToday,
+        openShiftAssign:openShiftAssign, saFilter:saFilter, saAll:saAll, submitShiftAssign:submitShiftAssign, openShiftDay:openShiftDay, shiftSign:shiftSign, delShiftAssign:delShiftAssign };
 })();
 </script>
 </body>
