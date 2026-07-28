@@ -385,24 +385,36 @@ if (!function_exists('roster_regenerate')) {
 
 /* ───────────────────── 離職自動移出 ───────────────────── */
 
-if (!function_exists('roster_sync_left_members')) {
+if (!function_exists('roster_sync_member_status')) {
     /**
-     * 掃描所有 active 排班表，將已離職(user.state=0)的成員標記移出(active=0, reason=leave)，
-     * 並重算受影響 board 的未來排班（不動過去）。回傳受影響 board 數。
+     * 順路同步：依 user.state 自動移出/復入排班成員，並重算受影響 board 的未來排班（過去凍結）。
+     *  - 在職＝state IN (1,99)；其餘（0離職/2留停/3育嬰/90公用…）＝非在職。
+     *  - 非在職且目前 active=1 → 自動移出(active=0, reason='auto')，未來由剩下的人遞補。
+     *  - 已在職且被「自動移出」(reason='auto') → 自動復入(active=1)，回到原順序重新排入。
+     *  - 只復「自動移出」的；管理員手動移除(reason='manual')者不會被自動加回。
+     * 回傳受影響 board 數。
      */
-    function roster_sync_left_members(PDO $pdo): int {
+    function roster_sync_member_status(PDO $pdo): int {
         $rows = $pdo->query("
             SELECT DISTINCT m.board_id
             FROM roster_member m
             JOIN user u ON u.id = m.user_id
             JOIN roster_board b ON b.id = m.board_id
-            WHERE m.active=1 AND u.state=0 AND b.status='active'")->fetchAll(PDO::FETCH_COLUMN);
+            WHERE b.status='active' AND (
+                (m.active=1 AND u.state NOT IN (1,99)) OR
+                (m.active=0 AND m.removed_reason='auto' AND u.state IN (1,99))
+            )")->fetchAll(PDO::FETCH_COLUMN);
         if (empty($rows)) return 0;
+        // 非在職 → 移出
         $pdo->exec("
-            UPDATE roster_member m
-            JOIN user u ON u.id = m.user_id
-            SET m.active=0, m.removed_at=NOW(), m.removed_reason='leave'
-            WHERE m.active=1 AND u.state=0");
+            UPDATE roster_member m JOIN user u ON u.id = m.user_id
+            SET m.active=0, m.removed_at=NOW(), m.removed_reason='auto'
+            WHERE m.active=1 AND u.state NOT IN (1,99)");
+        // 回到在職且原為自動移出 → 復入（保留原 sort_order）
+        $pdo->exec("
+            UPDATE roster_member m JOIN user u ON u.id = m.user_id
+            SET m.active=1, m.removed_at=NULL, m.removed_reason=''
+            WHERE m.active=0 AND m.removed_reason='auto' AND u.state IN (1,99)");
         foreach ($rows as $bid) {
             try { roster_regenerate($pdo, (int)$bid); } catch (Exception $e) {}
         }

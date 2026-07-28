@@ -77,6 +77,8 @@ switch ($action) {
 
 /* ── 我的/共享 排班表清單 ── */
 case 'list_boards': {
+    // 順路同步：離職/留停等非在職者自動移出未來、回任者自動復入（過去凍結）
+    try { roster_sync_member_status($pdo); } catch (Exception $e) {}
     $scope = $_POST['scope'] ?? 'all'; // mine|shared|all
     $rows = $pdo->query("SELECT * FROM roster_board WHERE status IN ('active','archived') ORDER BY status ASC, updated_at DESC")->fetchAll(PDO::FETCH_ASSOC);
     $out = [];
