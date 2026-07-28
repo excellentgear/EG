@@ -713,13 +713,19 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
             $types = array_map('intval', kpi_as_list(kpi_as_pv($params, 'machine_type_ids', [])));
             $machines = array_map('intval', kpi_as_list(kpi_as_pv($params, 'machine_ids', [])));
             if (!$types && !$machines) return null;
-            $conds = []; $bind = [$ms, $me];
-            if ($types)    { $conds[] = "ml.machine_type_id IN (" . implode(',', array_fill(0, count($types), '?')) . ")"; $bind = array_merge($bind, $types); }
-            if ($machines) { $conds[] = "r.machine_id IN (" . implode(',', array_fill(0, count($machines), '?')) . ")"; $bind = array_merge($bind, $machines); }
+            // 指定機台優先：有勾指定機台就只算那些機台；否則才用機台種類（不可用 OR，否則兩者都設時會退化成整個種類）
+            $bind = [$ms, $me];
+            if ($machines) {
+                $cond = "r.machine_id IN (" . implode(',', array_fill(0, count($machines), '?')) . ")";
+                $bind = array_merge($bind, $machines);
+            } else {
+                $cond = "ml.machine_type_id IN (" . implode(',', array_fill(0, count($types), '?')) . ")";
+                $bind = array_merge($bind, $types);
+            }
             $st = $db->prepare("SELECT r.produced_qty, r.production_start_time, r.production_end_time
                                 FROM pm_process_daily_report r
                                 JOIN machine_list ml ON ml.machine_id=r.machine_id
-                                WHERE r.report_date BETWEEN ? AND ? AND (" . implode(' OR ', $conds) . ")");
+                                WHERE r.report_date BETWEEN ? AND ? AND (" . $cond . ")");
             $st->execute($bind);
             $qty = 0; $hours = 0.0;
             while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
