@@ -340,6 +340,7 @@ $_mdataRoles    = [];  $_userMdataRoles  = [];
 $_dbbkRoles     = [];  $_userDbbkRoles   = [];
 $_stampRoles    = [];  $_userStampRoles  = [];
 $_rosterRoles   = [];  $_userRosterRoles = [];
+$_dcRoles       = [];  $_userDcRoles     = [];
 $_kpiRoles      = [];  $_userKpiRoles    = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
@@ -365,6 +366,7 @@ try {
     $st->execute(['stamp']);       $_stampRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['kpi']);         $_kpiRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['roster']);      $_rosterRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['data_console']);$_dcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -444,6 +446,10 @@ try {
     $st->execute(['roster']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userRosterRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['data_console']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userDcRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -1037,6 +1043,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('dbbk', 'db_backup', '資料庫備份管理', 'fa-database', '#b06f27',
                         '為每位使用者指派「資料庫備份管理」頁的操作角色（檢視/下載、立即備份、整表還原）。<strong>未被指派角色者無法進入本頁</strong>；整庫還原、備份設定與還原密碼一律僅限管理員；整表/部分還原另需輸入管理員設定的還原密碼。角色與功能定義請至 <strong>資料庫備份管理頁 → 角色權限（僅管理員可見）</strong>。',
                         $_dbbkRoles, $_userDbbkRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('dc', 'data_console', '資料急救台', 'fa-medkit', '#b53c26',
+                        '為每位使用者指派「資料急救台」頁的操作角色。此頁可直接查改後端資料庫，請謹慎授權。角色功能：<strong>data_console_view</strong>＝進入/瀏覽/搜尋/查詢；<strong>data_console_edit</strong>＝新增/修改（仍受各表「允許編輯」限制）；<strong>data_console_delete</strong>＝刪除（仍受各表「允許刪除」限制且需二次確認）。<strong>未被指派角色者無法進入本頁</strong>；表級開放設定與關聯地圖一律僅限管理員；管理員固定擁有全部權限。',
+                        $_dcRoles, $_userDcRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 
                     <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->
