@@ -446,10 +446,11 @@ if (!function_exists('roster_load_pickers')) {
         $departments = $pdo->query("SELECT id, name, parent_id, level FROM department ORDER BY level ASC, sort_order ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
         $statuses    = $pdo->query("SELECT id, title FROM `user_status` ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
         $users       = $pdo->query("
-            SELECT u.id, u.user_cname, d.name AS department_name
+            SELECT u.id, u.user_cname, d.name AS department_name, p.name AS position_name
             FROM user u
             LEFT JOIN user_department_position_map udpm ON u.id = udpm.user_id AND udpm.is_main = 1
             LEFT JOIN department d ON udpm.department_id = d.id
+            LEFT JOIN position p ON udpm.position_id = p.id
             WHERE u.state NOT IN (0, 90)
             ORDER BY u.user_cname ASC")->fetchAll(PDO::FETCH_ASSOC);
         $shiftTypes  = [];

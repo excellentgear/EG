@@ -103,12 +103,17 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
         table.rst-list td{ padding:5px 8px; border:1px solid var(--warm-line); font-size:13px; }
         /* 編輯器 */
         .lane-row{ display:flex; gap:6px; align-items:flex-start; margin-bottom:8px; padding:8px; background:var(--warm-bg); border-radius:5px; }
-        .picker ul{ list-style:none; margin:4px 0 0; padding:0; max-height:150px; overflow:auto; border:1px solid var(--warm-line); border-radius:4px; }
-        .picker li{ display:flex; align-items:center; gap:6px; padding:3px 6px; border-bottom:1px solid #f0e9dc; font-size:13px; }
-        .picker li .nm{ flex:1; }
-        .picker li .idx{ color:#b09; color:#a08c72; width:20px; text-align:right; }
-        .vis-box{ max-height:190px; overflow:auto; border:1px solid var(--warm-line); border-radius:5px; padding:6px; }
-        .vis-box label{ display:block; font-weight:normal; margin:1px 0; font-size:13px; }
+        .pk-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:4px; margin-top:6px; }
+        .pk-item{ display:flex; align-items:center; gap:4px; background:#fff; border:1px solid var(--warm-line); border-radius:4px; padding:3px 6px; font-size:12px; cursor:grab; }
+        .pk-item.sortable-ghost{ opacity:.4; background:#f6ead8; }
+        .pk-item .nm{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .pk-item .pos{ color:#a08c72; }
+        .pk-item .idx{ color:#b5651d; font-weight:bold; }
+        .pk-item .pk-rm{ color:#c0392b; text-decoration:none; }
+        .pk-empty{ color:#b7a789; font-size:12px; grid-column:1/-1; padding:4px; }
+        .vis-box{ max-height:230px; overflow:auto; border:1px solid var(--warm-line); border-radius:5px; padding:6px; }
+        .vis-items{ display:grid; grid-template-columns:repeat(3,1fr); gap:1px 8px; }
+        .vis-box label{ font-weight:normal; margin:1px 0; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .vis-grp{ font-weight:bold; color:var(--warm-head); margin:6px 0 2px; font-size:12px; }
         input[type=number].no-spin::-webkit-outer-spin-button,
         input[type=number].no-spin::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
@@ -256,7 +261,10 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
 
         <hr>
         <label>公開對象（只有名單內的人看得到此表）</label>
-        <input type="text" class="form-control input-sm" id="visSearch" placeholder="搜尋部門/身分/姓名…" oninput="R.filterVis()" style="margin-bottom:6px;">
+        <div style="display:flex;gap:6px;margin-bottom:6px;">
+            <input type="text" class="form-control input-sm" id="visSearch" placeholder="搜尋部門/身分/姓名…" oninput="R.filterVis()" style="flex:1">
+            <button type="button" class="btn btn-default btn-xs" onclick="R.selectAllRostered()"><i class="fa fa-users"></i> 全選被排班者</button>
+        </div>
         <div class="vis-box" id="visBox"></div>
     </div>
     <div class="modal-footer">
@@ -293,6 +301,7 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/Sortable.min.js"></script>
 <script>
 var RD = {
     api: '../../src/store/store_Roster_API.php',
@@ -474,8 +483,10 @@ var R = (function(){
             if(!r.success){alert(r.message);return;} $('#rangeModal').modal('hide'); alert('已調整 '+r.affected+' 筆'); loadCalendar();
         });
     }
+    function posText(u){ var p=[u.position_name,u.department_name].filter(Boolean).join('・'); return p?'（'+p+'）':''; }
+    function posLabel(u){ var t=posText(u); return t?' <span class="pos">'+esc(t)+'</span>':''; }
     function userOptions(mode){ // mode -1: 不含空; 0: 一般
-        var o=''; RD.users.forEach(function(u){ o+='<option value="'+u.id+'">'+esc(u.user_cname)+(u.department_name?'（'+esc(u.department_name)+'）':'')+'</option>'; }); return o;
+        var o=''; RD.users.forEach(function(u){ o+='<option value="'+u.id+'">'+esc(u.user_cname+posText(u))+'</option>'; }); return o;
     }
 
     /* ── 通用 prompt modal（動態） ── */
@@ -570,52 +581,85 @@ var R = (function(){
     function delLane(btn){ $(btn).closest('.lane-row').remove(); }
     function pickColor(sp){ var $w=$(sp).closest('.lane-color'); $w.find('.swatch').removeClass('on'); $(sp).addClass('on'); $w.attr('data-color',$(sp).data('c')); }
 
-    // 人員 picker widget
+    // 人員 picker widget（可多選加入、拖拉排序、三欄、顯示職稱）
     function buildPicker($box, ids){
         $box.data('built',true);
-        var sel='<select class="form-control input-sm pk-sel" style="display:inline-block;width:70%">'+userOptions(0)+'</select>'
-              +' <button class="btn btn-xs btn-warning pk-add">加入</button><ul></ul>';
-        $box.html(sel);
-        $box.find('.pk-add').on('click',function(){ var v=$box.find('.pk-sel').val(); addToPicker($box,v); });
+        $box.html('<button type="button" class="btn btn-xs btn-warning pk-addbtn"><i class="fa fa-user-plus"></i> 加入人員（可多選）</button><div class="pk-grid"></div>');
+        $box.find('.pk-addbtn').on('click',function(){ openAddMembers($box); });
+        var grid=$box.find('.pk-grid')[0];
+        if(window.Sortable) Sortable.create(grid,{animation:150,ghostClass:'sortable-ghost',onEnd:function(){renumber($box);}});
         (ids||[]).forEach(function(id){ addToPicker($box,id); });
+        renumber($box);
     }
+    function openAddMembers($box){
+        var have={}; pickerIds($box).forEach(function(id){have[id]=1;});
+        var list=RD.users.filter(function(u){return !have[u.id];});
+        if(!list.length){ alert('沒有可加入的人員（都已加入或無在職人員）'); return; }
+        var body='<input class="form-control input-sm" id="msSearch" placeholder="搜尋姓名 / 部門 / 職稱" oninput="R.msFilter()" style="margin-bottom:6px">'
+            +'<div style="margin-bottom:4px"><a href="#" onclick="R.msAll(true);return false;">全選</a> ｜ <a href="#" onclick="R.msAll(false);return false;">全不選</a></div>'
+            +'<div style="max-height:320px;overflow:auto;border:1px solid #e4d8c6;border-radius:4px;padding:4px" id="msList">'
+            + list.map(function(u){ return '<label class="msitem" style="display:block;font-weight:normal;margin:1px 0"><input type="checkbox" value="'+u.id+'"> '+esc(u.user_cname)+posLabel(u)+'</label>'; }).join('')
+            +'</div>';
+        showPrompt('加入人員（可多選）', body, function(){
+            $('#msList input:checked').each(function(){ addToPicker($box, this.value); });
+            renumber($box); $('#promptModal').modal('hide');
+        });
+    }
+    function msFilter(){ var q=$('#msSearch').val().toLowerCase(); $('#msList .msitem').each(function(){ $(this).toggle($(this).text().toLowerCase().indexOf(q)>=0); }); }
+    function msAll(v){ $('#msList .msitem:visible input').prop('checked',v); }
     function addToPicker($box,id){
-        id=String(id); if($box.find('li[data-id="'+id+'"]').length) return;
+        id=String(id); if($box.find('.pk-item[data-id="'+id+'"]').length) return;
         var u=RD.users.find(function(x){return String(x.id)===id;});
         var nm=u?u.user_cname:('#'+id);
-        var $li=$('<li data-id="'+id+'"><span class="idx"></span><span class="nm">'+esc(nm)+'</span>'
-            +'<a href="#" class="pk-up" title="上移">▲</a> <a href="#" class="pk-dn" title="下移">▼</a> <a href="#" class="pk-rm" title="移除">✕</a></li>');
-        $box.find('ul').append($li); renumber($box);
-        $li.find('.pk-up').on('click',function(e){e.preventDefault();$li.prev().length&&$li.insertBefore($li.prev());renumber($box);});
-        $li.find('.pk-dn').on('click',function(e){e.preventDefault();$li.next().length&&$li.insertAfter($li.next());renumber($box);});
-        $li.find('.pk-rm').on('click',function(e){e.preventDefault();$li.remove();renumber($box);});
+        var $it=$('<div class="pk-item" data-id="'+id+'"><span class="idx"></span><span class="nm">'+esc(nm)+posLabel(u||{})+'</span><a href="#" class="pk-rm" title="移除">✕</a></div>');
+        $box.find('.pk-grid').append($it); renumber($box);
+        $it.find('.pk-rm').on('click',function(e){e.preventDefault();$it.remove();renumber($box);});
     }
-    function renumber($box){ $box.find('li').each(function(i){ $(this).find('.idx').text((i+1)); }); }
-    function pickerIds($box){ return $box.find('li').map(function(){return +$(this).data('id');}).get(); }
+    function renumber($box){
+        var $g=$box.find('.pk-grid'); $g.find('.pk-empty').remove();
+        var items=$g.find('.pk-item');
+        items.each(function(i){ $(this).find('.idx').text((i+1)+'.'); });
+        if(!items.length) $g.append('<div class="pk-empty">尚未加入人員，點上方按鈕加入；可拖拉調整順序</div>');
+    }
+    function pickerIds($box){ return $box.find('.pk-item').map(function(){return +$(this).attr('data-id');}).get(); }
 
     // 公開對象
     function renderVis(selected){
         var set={}; (selected||[]).forEach(function(v){set[v]=1;});
         var h='<label><input type="checkbox" class="vischk" value="all"'+(set['all']?' checked':'')+' onchange="R.onAllVis(this)"> <b>全體（所有人可見）</b></label>';
-        h+='<div class="vis-grp">部門</div>';
+        <?php if ($IS_ADMIN): ?>
+        h+='<div class="vis-grp">測試（僅管理員可見）</div><div class="vis-items">'
+          +'<label class="visitem"><input type="checkbox" class="vischk" value="user-1"'+(set['user-1']?' checked':'')+'> 超級管理員（此選項僅供測試使用）</label></div>';
+        <?php endif; ?>
+        h+='<div class="vis-grp">部門</div><div class="vis-items">';
         <?php foreach ($pickers['departments'] as $d): ?>
-        h+='<label class="visitem"><input type="checkbox" class="vischk" value="dept-<?= $d['id'] ?>"'+(set['dept-<?= $d['id'] ?>']?' checked':'')+'> <?= htmlspecialchars(addslashes(rosterDeptPath($d['id'], $deptMap))) ?></label>';
+        h+='<label class="visitem"><input type="checkbox" class="vischk" value="dept-<?= $d['id'] ?>"'+(set['dept-<?= $d['id'] ?>']?' checked':'')+'> <?= htmlspecialchars(addslashes($d['name'])) ?></label>';
         <?php endforeach; ?>
-        h+='<div class="vis-grp">身分別</div>';
+        h+='</div><div class="vis-grp">身分別</div><div class="vis-items">';
         <?php foreach ($pickers['statuses'] as $s): ?>
         h+='<label class="visitem"><input type="checkbox" class="vischk" value="status-<?= $s['id'] ?>"'+(set['status-<?= $s['id'] ?>']?' checked':'')+'> <?= htmlspecialchars(addslashes($s['title'])) ?></label>';
         <?php endforeach; ?>
-        h+='<div class="vis-grp">人員</div>';
+        h+='</div><div class="vis-grp">人員</div><div class="vis-items">';
         <?php foreach ($pickers['users'] as $u): ?>
         h+='<label class="visitem"><input type="checkbox" class="vischk" value="user-<?= $u['id'] ?>"'+(set['user-<?= $u['id'] ?>']?' checked':'')+'> <?= htmlspecialchars(addslashes($u['user_cname'])) ?></label>';
         <?php endforeach; ?>
+        h+='</div>';
         $('#visBox').html(h); onAllVisState();
     }
     function onAllVis(el){ onAllVisState(); }
     function onAllVisState(){ var all=$('.vischk[value=all]').is(':checked'); $('.visitem input').prop('disabled',all); }
     function filterVis(){ var q=$('#visSearch').val().toLowerCase(); $('#visBox .visitem').each(function(){ $(this).toggle($(this).text().toLowerCase().indexOf(q)>=0); }); }
+    function selectAllRostered(){
+        var s={};
+        if($('#ed_member_mode').val()==='shared_pool'){ pickerIds($('#sharedPicker')).forEach(function(id){s[id]=1;}); }
+        else { $('#lanesBox .lane-picker').each(function(){ pickerIds($(this)).forEach(function(id){s[id]=1;}); }); }
+        var ids=Object.keys(s);
+        if(!ids.length){ alert('目前尚未加入任何排班人員'); return; }
+        if($('.vischk[value=all]').is(':checked')){ alert('已勾「全體」，請先取消才能指定個人'); return; }
+        ids.forEach(function(id){ $('.vischk[value="user-'+id+'"]').prop('checked',true); });
+    }
 
-    function collectVis(){ return $('.vischk:checked').map(function(){return $(this).val();}).get(); }
+    function collectVis(){ var seen={},out=[]; $('.vischk:checked').each(function(){ var v=$(this).val(); if(!seen[v]){seen[v]=1;out.push(v);} }); return out; }
 
     function saveBoard(){
         var mode=$('#ed_member_mode').val();
@@ -669,7 +713,8 @@ var R = (function(){
         openDay:openDay, sign:sign, adjustSingle:adjustSingle, openRange:openRange, submitRange:submitRange,
         openEditor:openEditor, openEditorCurrent:openEditorCurrent, saveBoard:saveBoard, deleteBoard:deleteBoard,
         addLane:addLane, delLane:delLane, pickColor:pickColor, onModeChange:onModeChange, onCadenceChange:onCadenceChange,
-        toggleWk:toggleWk, toggleMo:toggleMo, onAllVis:onAllVis, filterVis:filterVis, moveMonth:moveMonth, goToday:goToday, setView:setView };
+        toggleWk:toggleWk, toggleMo:toggleMo, onAllVis:onAllVis, filterVis:filterVis, moveMonth:moveMonth, goToday:goToday, setView:setView,
+        msFilter:msFilter, msAll:msAll, selectAllRostered:selectAllRostered };
 })();
 </script>
 </body>
