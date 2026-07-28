@@ -718,6 +718,49 @@ case 'regenerate': {
     jout(['generated' => $gen['generated'] ?? 0]);
 }
 
+/* ── 固定班別排班：班別定義 ── */
+case 'shift_type_list': {
+    $rows = $pdo->query("SELECT * FROM roster_shift_type ORDER BY is_active DESC, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['rows' => $rows, 'can_edit' => ($CAN_CREATE || $IS_ADMIN)]);
+}
+case 'shift_type_save': {
+    if (!$CAN_CREATE && !$IS_ADMIN) jerr('無建立/管理權限', 403);
+    $p = json_decode($_POST['payload'] ?? '', true);
+    if (!is_array($p)) jfail('資料格式錯誤');
+    $id = (int)($p['id'] ?? 0);
+    $name = trim($p['name'] ?? '');
+    if ($name === '') jfail('請輸入班別名稱');
+    $start = trim($p['start_time'] ?? ''); $end = trim($p['end_time'] ?? '');
+    if (!preg_match('/^\d{2}:\d{2}$/', $start) || !preg_match('/^\d{2}:\d{2}$/', $end)) jfail('請輸入上下班時間 (HH:MM)');
+    $overnight = !empty($p['is_overnight']) ? 1 : 0;
+    $brk = max(0, (int)($p['break_minutes'] ?? 0));
+    $ot  = max(0, (int)($p['overtime_minutes'] ?? 0));
+    $color = trim($p['color'] ?? '');
+    $sort = (int)($p['sort_order'] ?? 0);
+    $active = isset($p['is_active']) ? (!empty($p['is_active']) ? 1 : 0) : 1;
+    $code = trim($p['code'] ?? '');
+    if ($id === 0) {
+        $st = $pdo->prepare("INSERT INTO roster_shift_type (name,code,start_time,end_time,is_overnight,break_minutes,overtime_minutes,color,sort_order,is_active,owner_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+        $st->execute([$name, $code, $start, $end, $overnight, $brk, $ot, $color, $sort, $active, $MYID]);
+        $id = (int)$pdo->lastInsertId();
+    } else {
+        $st = $pdo->prepare("UPDATE roster_shift_type SET name=?,code=?,start_time=?,end_time=?,is_overnight=?,break_minutes=?,overtime_minutes=?,color=?,sort_order=?,is_active=? WHERE id=?");
+        $st->execute([$name, $code, $start, $end, $overnight, $brk, $ot, $color, $sort, $active, $id]);
+    }
+    jout(['id' => $id]);
+}
+case 'shift_type_delete': {
+    if (!$CAN_CREATE && !$IS_ADMIN) jerr('無權限', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    $used = (int)$pdo->query("SELECT COUNT(*) FROM roster_shift_assign WHERE shift_type_id=" . $id)->fetchColumn();
+    if ($used > 0) {
+        $pdo->prepare("UPDATE roster_shift_type SET is_active=0 WHERE id=?")->execute([$id]);
+        jout(['softDeleted' => true, 'used' => $used]);
+    }
+    $pdo->prepare("DELETE FROM roster_shift_type WHERE id=?")->execute([$id]);
+    jout(['deleted' => true]);
+}
+
 default:
     jfail('未知動作：' . $action);
 }

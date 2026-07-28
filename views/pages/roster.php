@@ -163,6 +163,12 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
             <?php if (!$hasAccess): ?>
                 <div class="alert alert-warning" style="margin-top:20px;">您沒有檢閱此頁的權限，請洽管理者於「使用者權限設定」指派「輪值排班」角色。</div>
             <?php else: ?>
+            <ul class="nav nav-tabs" style="margin-bottom:12px;">
+                <li class="active"><a href="#tab-rotation" data-toggle="tab"><i class="fa fa-refresh"></i> 輪值排班</a></li>
+                <li><a href="#tab-shift" data-toggle="tab" onclick="R.initShiftTab()"><i class="fa fa-clock-o"></i> 固定班別排班</a></li>
+            </ul>
+            <div class="tab-content">
+            <div class="tab-pane active" id="tab-rotation">
             <div id="swapBar" style="display:none;margin:6px 0;padding:8px 12px;background:#fff6e8;border:1px solid #e4d8c6;border-radius:6px;">
                 <b style="color:#b5651d"><i class="fa fa-exchange"></i> 調班申請</b>
                 <div id="swapInboxBox" style="margin-top:4px;"></div>
@@ -220,6 +226,22 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                     </div>
                 </div>
             </div>
+            </div><!-- /tab-rotation -->
+
+            <div class="tab-pane" id="tab-shift">
+                <div class="rst-panel" style="padding:12px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <b style="color:var(--warm-head);font-size:15px;">班別定義</b>
+                        <button class="btn btn-sm btn-warning" onclick="R.openShiftEdit(0)"><i class="fa fa-plus"></i> 新增班別</button>
+                    </div>
+                    <div style="color:#a08c72;font-size:12px;margin-bottom:10px;"><i class="fa fa-info-circle"></i> 先定義班別（早班/晚班…含休息時間、固定加班），下一步才安排人員。此處與 KPI 排班獨立，不影響 KPI 工時計算。</div>
+                    <div id="shiftTypeList"><div style="color:#a08c72;padding:10px;">載入中…</div></div>
+                    <div style="margin-top:16px;color:#b7a789;border-top:1px dashed #e4d8c6;padding-top:10px;font-size:13px;">
+                        <i class="fa fa-info-circle"></i> 人員排班（指定某人某班別於日期區間、月曆顯示、可調班、請假自動用代理人補人）為下一階段，班別定義完成後開放。
+                    </div>
+                </div>
+            </div><!-- /tab-shift -->
+            </div><!-- /tab-content -->
             <?php endif; ?>
         </div>
     </div>
@@ -333,6 +355,32 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         <div class="form-group"><label>備註</label><input type="text" id="rg_note" class="form-control" placeholder="例：兩人互調本週"></div>
     </div>
     <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">取消</button><button class="btn btn-warning" onclick="R.submitRange()">套用</button></div>
+</div></div></div>
+
+<!-- 班別定義 modal -->
+<div class="modal fade" id="shiftModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title" id="shTitle">新增班別</h4></div>
+    <div class="modal-body">
+        <input type="hidden" id="sh_id">
+        <div class="row">
+            <div class="col-sm-8 form-group"><label>班別名稱 *</label><input type="text" id="sh_name" class="form-control" placeholder="例：一般日班"></div>
+            <div class="col-sm-4 form-group"><label>代碼</label><input type="text" id="sh_code" class="form-control" placeholder="D08"></div>
+        </div>
+        <div class="row">
+            <div class="col-sm-4 form-group"><label>上班 *</label><input type="time" id="sh_start" class="form-control"></div>
+            <div class="col-sm-4 form-group"><label>下班 *</label><input type="time" id="sh_end" class="form-control"></div>
+            <div class="col-sm-4 form-group"><label>&nbsp;</label><div class="checkbox" style="margin:6px 0"><label><input type="checkbox" id="sh_overnight"> 跨夜(下班為隔日)</label></div></div>
+        </div>
+        <div class="row">
+            <div class="col-sm-4 form-group"><label>休息扣除(分)</label><input type="number" id="sh_break" class="no-spin form-control" min="0" value="0"></div>
+            <div class="col-sm-4 form-group"><label>固定加班(分)</label><input type="number" id="sh_ot" class="no-spin form-control" min="0" value="0"></div>
+            <div class="col-sm-4 form-group"><label>排序</label><input type="number" id="sh_sort" class="no-spin form-control" min="0" value="0"></div>
+        </div>
+        <div class="form-group"><label>顏色</label><div id="sh_colorbox"></div></div>
+        <div class="checkbox"><label><input type="checkbox" id="sh_active" checked> 啟用</label></div>
+        <div style="color:#a08c72;font-size:12px;" id="sh_hint"></div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">取消</button><button class="btn btn-warning" onclick="R.saveShift()"><i class="fa fa-save"></i> 儲存</button></div>
 </div></div></div>
 
 <!-- 紀錄 modal -->
@@ -939,8 +987,46 @@ var R = (function(){
         });
     }
 
+    /* ── 固定班別排班：班別定義 ── */
+    var shiftLoaded=false, shiftColor='';
+    function initShiftTab(){ if(shiftLoaded) return; shiftLoaded=true; loadShiftTypes(); }
+    function toMin(t){ if(!t) return 0; var p=String(t).split(':'); return (+p[0])*60+(+p[1]||0); }
+    function shiftDur(s){ var st=toMin(s.start_time), en=toMin(s.end_time); if(+s.is_overnight) en+=1440; var span=en-st; if(span<0) span+=1440; return span-(+s.break_minutes||0)+(+s.overtime_minutes||0); }
+    function durText(m){ m=Math.max(0,m); return Math.floor(m/60)+'h'+(m%60?(' '+(m%60)+'m'):''); }
+    function loadShiftTypes(){ post('shift_type_list',{}).done(function(r){ if(!r.success)return; renderShiftTypes(r.rows||[], r.can_edit); }); }
+    function renderShiftTypes(rows, canEdit){
+        window.__shifts=rows;
+        if(!rows.length){ $('#shiftTypeList').html('<div style="color:#a08c72;padding:10px;">尚無班別，點右上「新增班別」建立。</div>'); return; }
+        var h='<table class="rst-list"><tr><th>班別</th><th>時間</th><th>休息</th><th>固定加班</th><th>有效工時</th><th>狀態</th><th>操作</th></tr>';
+        rows.forEach(function(s){ var col=s.color||'#C0762C';
+            h+='<tr'+(+s.is_active===0?' style="opacity:.5"':'')+'><td><span style="display:inline-block;width:11px;height:11px;border-radius:2px;background:'+col+';margin-right:5px"></span>'+esc(s.name)+(s.code?' <span style="color:#a08c72">('+esc(s.code)+')</span>':'')+'</td>'
+              +'<td>'+String(s.start_time).substring(0,5)+'~'+String(s.end_time).substring(0,5)+(+s.is_overnight?' <span style="color:#c0762c">跨夜</span>':'')+'</td>'
+              +'<td>'+s.break_minutes+' 分</td><td>'+(+s.overtime_minutes?('+'+s.overtime_minutes+' 分'):'—')+'</td>'
+              +'<td>'+durText(shiftDur(s))+'</td><td>'+(+s.is_active===1?'啟用':'<span style="color:#a08c72">停用</span>')+'</td>'
+              +'<td>'+(canEdit?'<button class="btn btn-xs btn-default" onclick="R.openShiftEdit('+s.id+')">編輯</button> <button class="btn btn-xs btn-default" style="color:#c0392b" onclick="R.delShift('+s.id+',\''+esc(s.name).replace(/'/g,"\\\x27")+'\')">刪除</button>':'—')+'</td></tr>';
+        });
+        $('#shiftTypeList').html(h+'</table>');
+    }
+    function shiftColorBox(sel){ shiftColor=sel||RD.palette[0]; $('#sh_colorbox').html(RD.palette.map(function(c){return '<span class="swatch'+(c===shiftColor?' on':'')+'" style="background:'+c+'" data-c="'+c+'" onclick="R.pickShiftColor(this)"></span>';}).join('')); }
+    function pickShiftColor(sp){ $('#sh_colorbox .swatch').removeClass('on'); $(sp).addClass('on'); shiftColor=$(sp).data('c'); }
+    function updShiftHint(){ var s={start_time:$('#sh_start').val(),end_time:$('#sh_end').val(),is_overnight:$('#sh_overnight').is(':checked')?1:0,break_minutes:+$('#sh_break').val()||0,overtime_minutes:+$('#sh_ot').val()||0}; if(s.start_time&&s.end_time) $('#sh_hint').text('有效工時約 '+durText(shiftDur(s))); else $('#sh_hint').text(''); }
+    function openShiftEdit(id){
+        var s=(window.__shifts||[]).find(function(x){return x.id===id;});
+        $('#sh_id').val(id||''); $('#shTitle').text(id?'編輯班別':'新增班別');
+        if(s){ $('#sh_name').val(s.name);$('#sh_code').val(s.code);$('#sh_start').val(String(s.start_time).substring(0,5));$('#sh_end').val(String(s.end_time).substring(0,5));$('#sh_overnight').prop('checked',+s.is_overnight===1);$('#sh_break').val(s.break_minutes);$('#sh_ot').val(s.overtime_minutes);$('#sh_sort').val(s.sort_order);$('#sh_active').prop('checked',+s.is_active===1); shiftColorBox(s.color); }
+        else { $('#sh_name,#sh_code').val('');$('#sh_start').val('08:00');$('#sh_end').val('17:00');$('#sh_overnight').prop('checked',false);$('#sh_break').val(60);$('#sh_ot').val(0);$('#sh_sort').val(0);$('#sh_active').prop('checked',true); shiftColorBox(''); }
+        updShiftHint(); $('#shiftModal').modal('show');
+    }
+    function saveShift(){
+        var p={id:+($('#sh_id').val()||0),name:$('#sh_name').val(),code:$('#sh_code').val(),start_time:$('#sh_start').val(),end_time:$('#sh_end').val(),is_overnight:$('#sh_overnight').is(':checked')?1:0,break_minutes:+$('#sh_break').val()||0,overtime_minutes:+$('#sh_ot').val()||0,color:shiftColor,sort_order:+$('#sh_sort').val()||0,is_active:$('#sh_active').is(':checked')?1:0};
+        if(!p.name.trim()){alert('請輸入班別名稱');return;} if(!p.start_time||!p.end_time){alert('請輸入上下班時間');return;}
+        post('shift_type_save',{payload:JSON.stringify(p)}).done(function(r){ if(!r.success){alert(r.message);return;} $('#shiftModal').modal('hide'); loadShiftTypes(); });
+    }
+    function delShift(id,name){ if(!confirm('刪除班別「'+name+'」？（若已被排班使用會改為停用）')) return; post('shift_type_delete',{id:id}).done(function(r){ if(!r.success){alert(r.message);return;} if(r.softDeleted) alert('此班別已被排班使用，已改為「停用」。'); loadShiftTypes(); }); }
+
     $(function(){
         $('#btn-perm-help').on('click',function(e){e.preventDefault();$('#permHelp').modal('show');});
+        $('#sh_start,#sh_end,#sh_break,#sh_ot').on('input',updShiftHint); $('#sh_overnight').on('change',updShiftHint);
         <?php if ($hasAccess): ?>loadBoards(); loadMySwaps();<?php endif; ?>
     });
 
@@ -949,7 +1035,8 @@ var R = (function(){
         openRange:openRange, rgLaneChange:rgLaneChange, submitRange:submitRange, openEditor:openEditor, openEditorCurrent:openEditorCurrent, saveBoard:saveBoard, deleteBoard:deleteBoard, copyBoard:copyBoard,
         addLane:addLane, delLane:delLane, pickColor:pickColor, onModeChange:onModeChange, onCadenceChange:onCadenceChange, onRotateChange:onRotateChange,
         toggleWk:toggleWk, toggleMo:toggleMo, onAllVis:onAllVis, filterVis:filterVis, moveMonth:moveMonth, goToday:goToday, setView:setView,
-        msFilter:msFilter, msAll:msAll, selectAllRostered:selectAllRostered, openLogs:openLogs, logTab:logTab, toggleLane:toggleLane };
+        msFilter:msFilter, msAll:msAll, selectAllRostered:selectAllRostered, openLogs:openLogs, logTab:logTab, toggleLane:toggleLane,
+        initShiftTab:initShiftTab, openShiftEdit:openShiftEdit, pickShiftColor:pickShiftColor, saveShift:saveShift, delShift:delShift, updShiftHint:updShiftHint };
 })();
 </script>
 </body>
