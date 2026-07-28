@@ -340,8 +340,21 @@ function ownerChanged(sel){
 function setOwners(){
     DATA.indicators.forEach(function(r, i){
         var $tr = $('tr[data-i="'+i+'"]');
-        // 精準還原：優先用已存的部門(兼任者才不會跑掉)；舊資料無 owner_dept_id 才回退推斷
-        var did = r.owner_dept_id || DEPT_OF_USER[r.owner_user_id] || 0;
+        // 精準還原：優先用已存的部門(兼任者才不會跑掉)
+        var did = r.owner_dept_id || 0;
+        // 舊資料無 owner_dept_id：先用 owner_display 內已存的部門名，比對「該人員實際所屬」的部門，其次才用主要部門
+        if (!did && r.owner_user_id) {
+            var wantName = (r.owner_display || '').split('/').slice(1).join('/').replace(/\s/g, '');
+            if (wantName) {
+                var dm = DATA.dicts.dept_members || {};
+                Object.keys(dm).forEach(function(d){
+                    if (did) return;
+                    var inDept = (dm[d] || []).some(function(m){ return +m.user_id === +r.owner_user_id; });
+                    if (inDept && (DEPT_NAME[d] || '').replace(/\s/g, '') === wantName) did = +d;
+                });
+            }
+            if (!did) did = DEPT_OF_USER[r.owner_user_id] || 0;
+        }
         var $dept = $tr.find('.f-odept'), $own = $tr.find('.f-owner');
         $dept.val(did);
         fillOwnerPeople($dept[0]);
