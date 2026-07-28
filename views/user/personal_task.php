@@ -148,11 +148,16 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .pt-part-link:hover, .pt-part-link:focus { color:#8F5416; }
 
         /* 唯讀 BOM 製程條（綁定 BOM 後即時取 bom_ing 逐關，不可點；淡藍框與手動進度區隔） */
-        .pt-bom-flow { margin-top:6px; padding:4px 8px 2px; background:#F5F8FC; border:1px dashed #CDDBEA; border-radius:6px; }
-        .pt-bom-flow-title { font-size:10px; font-weight:700; color:#5A7794; margin-bottom:2px; white-space:nowrap; }
+        .pt-bom-flow { margin-top:5px; padding:3px 8px 1px; background:#F5F8FC; border:1px dashed #CDDBEA; border-radius:6px; }
+        .pt-bom-flow-title { font-size:10px; font-weight:700; color:#5A7794; margin-bottom:1px; white-space:nowrap; }
         .pt-bom-flow-title > i { margin-right:4px; }
-        .pt-bom-flow .pt-step { cursor:default; }
-        .pt-step-maker { color:#B5732A; font-size:10px; margin-left:2px; }
+        /* BOM 製程條整體壓縮（比手動進度條更精簡，降低列高） */
+        .pt-bom-flow .pt-step { cursor:default; min-width:52px; max-width:108px; }
+        .pt-bom-flow .pt-dot { width:16px; height:16px; flex:0 0 16px; font-size:9px; border-width:1px; margin:0 2px; }
+        .pt-bom-flow .pt-step-name { font-size:10px; margin-top:2px; line-height:1.1; }
+        .pt-bom-flow .pt-step-time { font-size:9px; margin-top:0; }
+        /* 外包廠商：換行到製程名下方，小字暖色 */
+        .pt-step-maker { display:block; color:#B5732A; font-size:9px; line-height:1.1; margin-top:0; }
         .pt-bom-flow-closed { font-size:11px; color:#7A869A; cursor:pointer; padding:2px 0; }
         .pt-bom-flow-closed .pct { color:#1ABB9C; font-weight:700; }
         .pt-bom-flow-closed:hover { color:#4A5A6A; }
@@ -932,7 +937,7 @@ function bomFlowInner(bd) {
         $top.append($dot).append($('<span class="pt-line">').addClass(n.reached ? 'done' : ''));
         $node.append($top);
         var $nm = $('<div class="pt-step-name">').text(n.name);
-        if (n.maker) $nm.append($('<span class="pt-step-maker">').text('(' + n.maker + ')'));  // 外包廠商
+        if (n.maker) $nm.append($('<span class="pt-step-maker">').text(n.maker));  // 外包廠商：換行到製程名下方小字
         $node.append($nm);
         var sub = n.return_date ? ('回 ' + fmtDateShort(n.return_date))
                 : (n.outsource_date ? ('發 ' + fmtDateShort(n.outsource_date)) : '');
