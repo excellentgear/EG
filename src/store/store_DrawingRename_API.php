@@ -274,11 +274,12 @@ switch ($action) {
                     if ($e === '.' || $e === '..') continue;
                     $fullOld = $outputDir . DIRECTORY_SEPARATOR . $e;
                     if (!is_file($fullOld)) continue;
+                    $oldExt = strtolower(pathinfo($e, PATHINFO_EXTENSION));
+                    if (!in_array($oldExt, DR_ALLOWED_EXT, true)) continue; // 只處理圖片/PDF，避免誤動同名的Excel等其他檔案
                     $oldBody = pathinfo($e, PATHINFO_FILENAME);
                     if (mb_strpos($oldBody, '作廢') !== false) continue;
                     if (!drIsSameType($oldBody, $prefix, $bomNumber, $suffix, $isBoss)) continue;
 
-                    $oldExt = strtolower(pathinfo($e, PATHINFO_EXTENSION));
                     try {
                         $voidName = drUniqueVoidName($outputDir, $oldBody, $oldExt);
                         $tmpAnnotated = drTmpDir() . '/void_' . uniqid() . '.' . $oldExt;

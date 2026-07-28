@@ -255,12 +255,20 @@ case 'publish': {
             $ti->execute([$tid]);
             $bound = $ti->fetch(PDO::FETCH_ASSOC);
             if ($bound && $newVer > 1) {
+                // 綁 2-DC-01-01 的已發布模板可能有多份 → 挑「有標記特殊用途」的那份（否則取最新更新）
                 $rv = $db->prepare("SELECT t.id, t.current_schema FROM as_form_template t JOIN as_document d ON d.id=t.form_doc_id
                                     WHERE d.doc_no='2-DC-01-01' AND t.status='published' AND t.is_deleted=0
-                                    ORDER BY t.id LIMIT 1");
+                                    ORDER BY t.updated_at DESC, t.id DESC");
                 $rv->execute();
-                if ($rvRow = $rv->fetch(PDO::FETCH_ASSOC)) {
-                    // 依制修申請單模板上「特殊用途(purpose)」標記的欄位，動態組 prefill（不寫死欄位代號）
+                $rvRow = null;
+                foreach ($rv->fetchAll(PDO::FETCH_ASSOC) as $cand) {
+                    if ($rvRow === null) $rvRow = $cand;   // 後備：最新更新的
+                    $sc = json_decode($cand['current_schema'] ?: '{}', true) ?: [];
+                    foreach (($sc['cells'] ?? []) as $c) { if (!empty($c['purpose'])) { $rvRow = $cand; break 2; } }
+                }
+                if ($rvRow) {
+                    // 依制修申請單模板上「特殊用途(purpose)」標記的欄位，動態組 prefill；
+                    // 欄位代號＝key，沒填則用 purpose 當代號（與渲染器一致）
                     $vals = [
                         'rev_type'        => '修訂',
                         'rev_target_no'   => $bound['doc_no'],
@@ -271,7 +279,8 @@ case 'publish': {
                     $prefill = [];
                     $revSchema = json_decode($rvRow['current_schema'] ?: '{}', true) ?: [];
                     foreach (($revSchema['cells'] ?? []) as $c) {
-                        $pp = $c['purpose'] ?? ''; $ck = $c['key'] ?? '';
+                        $pp = $c['purpose'] ?? '';
+                        $ck = ($c['key'] ?? '') !== '' ? $c['key'] : $pp;   // 沒 key 用 purpose
                         if ($pp !== '' && $ck !== '' && isset($vals[$pp])) $prefill[$ck] = $vals[$pp];
                     }
                     $suggest = [

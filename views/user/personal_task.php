@@ -63,6 +63,7 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .stat-card.c-urgent.active { box-shadow:0 0 0 3px #E74C3C; }
         .stat-card.c-paused.active { box-shadow:0 0 0 3px #95A5A6; }
         .stat-card.c-done.active   { box-shadow:0 0 0 3px #1ABB9C; }
+        .stat-card.c-shared.active { box-shadow:0 0 0 3px #C08A52; }
         .stat-card .stat-icon { position:absolute; right:15px; top:15px; font-size:32px; opacity:.1; }
         .stat-card .stat-value { font-size:24px; font-weight:800; color:var(--primary-color); }
         .stat-card .stat-label { font-size:12px; color:#888; font-weight:600; letter-spacing:1px; }
@@ -71,6 +72,8 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .stat-card.c-urgent .stat-value { color:#C0392B; }
         .stat-card.c-paused { border-left-color:#95A5A6; }
         .stat-card.c-done   { border-left-color:#1ABB9C; }
+        .stat-card.c-shared { border-left-color:#C08A52; }
+        .stat-card.c-shared .stat-value { color:#B5732A; }
 
         .filter-bar { background:#fff; padding:10px; border-radius:8px; margin-bottom:15px;
             display:flex; gap:10px; align-items:center; flex-wrap:wrap; box-shadow:0 2px 5px rgba(0,0,0,.05); }
@@ -140,6 +143,26 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .bind-customer { color:#7FB3A2; border-color:#D5EAE2; background:#F6FBF9; }
         .bind-maker    { color:#C99A6B; border-color:#EEDFCE; background:#FCF8F3; }
         .bind-order    { color:#C08A52; border-color:#EFDFC9; background:#FDF8F0; }
+
+        /* 唯讀 BOM 製程條（綁定 BOM 後即時取 bom_ing 逐關，不可點；淡藍框與手動進度區隔） */
+        .pt-bom-flow { margin-top:6px; padding:4px 8px 2px; background:#F5F8FC; border:1px dashed #CDDBEA; border-radius:6px; }
+        .pt-bom-flow-title { font-size:10px; font-weight:700; color:#5A7794; margin-bottom:2px; white-space:nowrap; }
+        .pt-bom-flow-title > i { margin-right:4px; }
+        .pt-bom-flow .pt-step { cursor:default; }
+        .pt-bom-flow-closed { font-size:11px; color:#7A869A; cursor:pointer; padding:2px 0; }
+        .pt-bom-flow-closed .pct { color:#1ABB9C; font-weight:700; }
+        .pt-bom-flow-closed:hover { color:#4A5A6A; }
+        /* 分享徽章（暖色，與綁定徽章一致調性） */
+        .share-badge { display:inline-block; padding:0 5px; border-radius:3px; font-size:10px; line-height:1.7;
+            margin-left:6px; background:#FCEFD9; border:1px solid #F0D6A8; color:#B5732A; font-weight:600; white-space:nowrap; }
+        .pt-share-btn { color:#C08A52; cursor:pointer; margin-left:8px; font-size:12px; float:right; }
+        .pt-share-btn:hover { color:#A5702F; }
+        /* 分享來的工作：編輯視窗唯讀（協作者用行內進度條回報，非改結構） */
+        .pt-readonly .pt-modal-body input, .pt-readonly .pt-modal-body textarea,
+        .pt-readonly .pt-modal-body select, .pt-readonly .pt-modal-body .btn { pointer-events:none; opacity:.75; }
+        .pt-readonly-tip { display:none; background:#FCEFD9; border:1px solid #F0D6A8; color:#B5732A;
+            border-radius:6px; padding:6px 10px; font-size:12px; margin-bottom:12px; }
+        .pt-readonly .pt-readonly-tip { display:block; }
 
         .no-access-box{ max-width:520px; margin:80px auto; text-align:center; padding:40px; background:#fff; border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,.08); }
 
@@ -232,6 +255,7 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         <div class="stat-card c-urgent" data-filter="urgent"><i class="fa fa-exclamation-triangle stat-icon"></i><div class="stat-value" id="cntUrgent">0</div><div class="stat-label">急件（期限將至）</div></div>
         <div class="stat-card c-paused" data-filter="paused"><i class="fa fa-pause stat-icon"></i><div class="stat-value" id="cntPaused">0</div><div class="stat-label">暫停</div></div>
         <div class="stat-card c-done" data-filter="done"><i class="fa fa-check-circle stat-icon"></i><div class="stat-value" id="cntDone">0</div><div class="stat-label">已完成</div></div>
+        <div class="stat-card c-shared" data-filter="shared"><i class="fa fa-share-alt stat-icon"></i><div class="stat-value" id="cntShared">0</div><div class="stat-label">他人分享給我</div></div>
       </div>
 
       <div class="filter-bar">
@@ -293,6 +317,7 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
       <div class="modal-header pt-modal-header">
         <button type="button" class="close" data-dismiss="modal" title="關閉">&times;</button>
         <div class="pt-header-actions">
+          <button type="button" class="btn btn-success btn-xs" id="btnModalShare" style="display:none;"><i class="fa fa-share-alt"></i> 分享</button>
           <button type="button" class="btn btn-warning btn-xs" id="btnModalStatus" style="display:none;"><i class="fa fa-pause"></i> 暫停</button>
           <button type="button" class="btn btn-danger btn-xs" id="btnModalDelete" style="display:none;"><i class="fa fa-trash"></i> 刪除</button>
         </div>
@@ -300,6 +325,7 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
       </div>
       <div class="modal-body pt-modal-body">
         <input type="hidden" id="tId" value="0">
+        <div class="pt-readonly-tip" id="tReadonlyTip"><i class="fa fa-eye"></i> 這是他人分享給你的工作，內容唯讀；共同進度可直接在列表的進度條回報。</div>
 
         <div class="form-section">
           <div class="form-section-title"><i class="fa fa-info-circle"></i>基本資料</div>
@@ -314,10 +340,10 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
             </div></div>
           </div>
           <div class="form-group" style="margin-bottom:0;">
-            <label>綁定對象（擇一綁定，也可不綁定）</label>
+            <label>綁定對象（可綁多個，也可不綁定；選好一個可再選下一個）</label>
             <div style="display:flex; gap:8px; align-items:flex-start;">
               <select id="tBindType" class="form-control" style="width:115px;">
-                <option value="">不綁定</option>
+                <option value="">選類型…</option>
                 <option value="bom">BOM號碼</option>
                 <option value="part">料號</option>
                 <option value="customer">客戶</option>
@@ -325,12 +351,11 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
                 <option value="order">訂單追蹤</option>
               </select>
               <div class="ac-box" style="flex:1;">
-                <input type="text" id="tBindKw" class="form-control" placeholder="先選類型，再輸入關鍵字搜尋" disabled>
+                <input type="text" id="tBindKw" class="form-control" placeholder="先選類型，再輸入關鍵字搜尋（BOM 可用料號/客戶搜尋）" disabled>
                 <div class="ac-list" id="tBindSug"></div>
               </div>
             </div>
             <div id="tBindChosen" style="margin-top:6px;"></div>
-            <input type="hidden" id="tBindId"><input type="hidden" id="tBindLabel">
           </div>
         </div>
 
@@ -486,11 +511,53 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
       <div class="modal-body" style="font-size:13px;">
         <ul style="padding-left:18px;">
           <li><b>個人工作紀錄使用者</b>：可建立、編輯、刪除自己的工作紀錄與流程範本。</li>
-          <li>每個人<b>只看得到自己</b>建立的紀錄；其他使用者（包含管理者）都看不到你的內容。</li>
+          <li>每個人<b>預設只看得到自己</b>建立的紀錄；其他使用者（包含管理者）都看不到你的內容。</li>
+          <li><b>分享（例外）</b>：你可自行把某筆工作<b>分享看進度</b>（對方唯讀）、<b>共同進度</b>（對方可一起回報進度）、或<b>複製給對方</b>（複製成對方獨立的一份）。分享出去後對方才看得到那一筆。</li>
           <li>權限指派：管理者可至「使用者權限管理」頁指派本功能的使用資格。</li>
         </ul>
       </div>
       <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 分享 / 複製 Modal ══ -->
+<div class="modal fade" id="shareModal" role="dialog" tabindex="-1" data-backdrop="static">
+  <div class="modal-dialog" style="width:540px;">
+    <div class="modal-content pt-modal">
+      <div class="modal-header pt-modal-header">
+        <button type="button" class="close" data-dismiss="modal" title="關閉">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-share-alt"></i> 分享 / 複製工作</h4>
+      </div>
+      <div class="modal-body pt-modal-body">
+        <input type="hidden" id="shTaskId">
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa fa-user-plus"></i> 分享 / 複製給對方</div>
+          <div class="form-group">
+            <label>對象（限有「個人工作紀錄」權限的同仁）</label>
+            <div class="ac-box">
+              <input type="text" id="shUserKw" class="form-control" placeholder="輸入姓名搜尋">
+              <div class="ac-list" id="shUserSug"></div>
+            </div>
+            <div id="shUserChosen" style="margin-top:6px;"></div>
+            <input type="hidden" id="shUserId"><input type="hidden" id="shUserName">
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <label>方式</label>
+            <div style="display:flex; flex-direction:column; gap:7px;">
+              <label style="font-weight:400;"><input type="radio" name="shMode" value="view" checked> <b>分享看進度</b>：對方唯讀，即時看你的進度</label>
+              <label style="font-weight:400;"><input type="radio" name="shMode" value="edit"> <b>共同進度</b>：對方可一起回報進度（不能改結構/刪除/再分享）</label>
+              <label style="font-weight:400;"><input type="radio" name="shMode" value="copy"> <b>複製給對方</b>：複製成對方獨立的一份，進度歸零，之後互不影響</label>
+            </div>
+          </div>
+          <button type="button" class="btn btn-success btn-sm" id="btnDoShare"><i class="fa fa-check"></i> 確定</button>
+        </div>
+        <div class="form-section">
+          <div class="form-section-title"><i class="fa fa-users"></i> 目前分享中（可取消）</div>
+          <div id="shareList" style="font-size:13px; color:#556;">—</div>
+        </div>
+      </div>
+      <div class="modal-footer pt-modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
     </div>
   </div>
 </div>
@@ -592,11 +659,18 @@ function minToUi(min) {
 }
 
 var bindTypeName = { bom: 'BOM', part: '料號', customer: '客戶', maker: '廠商', order: '訂單' };
+// 綁定摘要（多個以「；」串接，供匯出用）
+function bindSummary(r) {
+    return (r.binds || []).map(function (b) {
+        return (bindTypeName[b.bind_type] || b.bind_type) + '：' + b.bind_label;
+    }).join('；');
+}
 
 // ── 列表 ─────────────────────────────────────────────────────────────
 function filterParams() {
     var p = { kw: state.kw, page: state.page, pageSize: state.pageSize };
     if (state.filter === 'urgent') { p.urgent_only = 1; p.status = '0'; }
+    else if (state.filter === 'shared') { p.shared_only = 1; }
     else p.status = { open: '0', paused: '2', done: '1' }[state.filter] || '0';
     return p;
 }
@@ -612,6 +686,7 @@ function loadList() {
         $('#cntUrgent').text(c.cnt_urgent || 0);
         $('#cntPaused').text(c.cnt_paused || 0);
         $('#cntDone').text(c.cnt_done || 0);
+        $('#cntShared').text(c.cnt_shared || 0);
         var maxPage = Math.max(1, Math.ceil(state.total / state.pageSize));
         if (state.page > maxPage) { state.page = maxPage; loadList(); return; }
         $('#pageInfo').text('共 ' + state.total + ' 筆，第 ' + state.page + '/' + maxPage + ' 頁');
@@ -646,6 +721,7 @@ var expandAllItems = false;   // 「展開所有小項」開關（預設只展�
 
 function stepFlowCell(r) {
     var $td = $('<td>');
+    var canReport = (r.is_shared != 1) || (r.share_mode === 'edit');   // 唯讀分享(view)不可回報進度
     var steps = r.steps || [];
     var firstUnreachedId = null, lastReachedId = null;
     steps.forEach(function (s) {
@@ -677,8 +753,8 @@ function stepFlowCell(r) {
         if (reached) {
             $node.attr('title', '到達：' + fmtDt(s.reached_at) + (s.planned_at ? '（預定 ' + fmtDate(s.planned_at) + '）' : ''));
             $node.append($('<div class="pt-step-time">').text(fmtDtShort(s.reached_at)));
-            // 最後一個已到達者提供復原（僅未完成狀態）
-            if (r.status == 0 && s.id === lastReachedId) {
+            // 最後一個已到達者提供復原（僅未完成狀態；唯讀分享不可）
+            if (canReport && r.status == 0 && s.id === lastReachedId) {
                 $node.append($('<span class="step-undo">').text('復原').on('click', function (e) {
                     e.stopPropagation();
                     if (!confirm('取消「' + s.step_name + '」的到達回報？')) return;
@@ -689,9 +765,9 @@ function stepFlowCell(r) {
                 }));
             }
         } else if (isCurrent) {
-            $node.attr('title', (s.planned_at ? '預定 ' + fmtDate(s.planned_at) + '，' : '') + '點一下回報到達');
+            $node.attr('title', (s.planned_at ? '預定 ' + fmtDate(s.planned_at) + '，' : '') + (canReport ? '點一下回報到達' : '（他人分享，唯讀）'));
             if (s.planned_at) $node.append($('<div class="pt-step-time">').text('預定 ' + fmtDateShort(s.planned_at)));
-            $node.on('click', function () {
+            if (canReport) $node.on('click', function () {
                 if (!confirm('回報到達「' + s.step_name + '」？（會記錄現在時間）')) return;
                 apiPost('reach_step', { step_id: s.id }).done(function (res) {
                     if (!res.success) { alert(res.message || '回報失敗'); return; }
@@ -735,14 +811,14 @@ function stepFlowCell(r) {
     if (isDone) {
         $fin.attr('title', '完成於 ' + fmtDt(r.completed_at));
         if (r.completed_at) $fin.append($('<div class="pt-step-time">').text(fmtDtShort(r.completed_at)));
-        $fin.append($('<span class="step-undo">').text('復原').on('click', function (e) {
+        if (canReport) $fin.append($('<span class="step-undo">').text('復原').on('click', function (e) {
             e.stopPropagation();
             if (!confirm('把「' + r.title + '」恢復為未完成？')) return;
             setStatus(r, 0);
         }));
     } else if (finCurrent) {
-        $fin.attr('title', '點一下＝整筆工作完成');
-        $fin.on('click', function () {
+        $fin.attr('title', canReport ? '點一下＝整筆工作完成' : '（他人分享，唯讀）');
+        if (canReport) $fin.on('click', function () {
             if (!confirm('確認「' + r.title + '」已全部完成？')) return;
             setStatus(r, 1);
         });
@@ -751,7 +827,14 @@ function stepFlowCell(r) {
     }
     $flow.append($fin);
 
-    return $td.append($flow).append($panelsBox);
+    $td.append($flow).append($panelsBox);
+    // 綁定 BOM 的唯讀實際製程進度條（每個 BOM 一條，資料由 renderBomFlows 批次填入）
+    (r.binds || []).forEach(function (b) {
+        if (b.bind_type !== 'bom') return;
+        $td.append($('<div class="pt-bom-flow" data-pending="1">').attr('data-bom', b.bind_id)
+            .html('<div class="pt-bom-flow-title" style="color:#9AA5B1;"><i class="fa fa-cog fa-spin"></i> BOM 製程載入中…</div>'));
+    });
+    return $td;
 }
 
 // 小項面板水平對齊：每個面板左緣對齊上方所屬進度節點；放不下時往右順推、不互相重疊
@@ -816,7 +899,71 @@ $('#btnToggleAllItems').on('click', function () {
     renderRows(state.rows);
 });
 
+// ── 綁定 BOM 的唯讀製程進度條（比照 bom_tracking，資料即時取自 bom_ing）──────
+var bomProgressCache = {};
+function bomFlowInner(bd) {
+    var $flow = $('<div class="step-flow">');
+    (bd.nodes || []).forEach(function (n, i) {
+        var $node = $('<div class="pt-step">');
+        if (n.reached) $node.addClass('reached'); else if (n.current) $node.addClass('current');
+        var prevReached = i > 0 && bd.nodes[i - 1].reached;
+        var $top = $('<div class="pt-step-top">');
+        $top.append($('<span class="pt-line">').addClass(i === 0 ? 'edge' : (prevReached ? 'done' : '')));
+        var $dot = $('<span class="pt-dot">');
+        if (n.reached) $dot.html('<i class="fa fa-check"></i>'); else $dot.text(i + 1);
+        $top.append($dot).append($('<span class="pt-line">').addClass(n.reached ? 'done' : ''));
+        $node.append($top);
+        $node.append($('<div class="pt-step-name">').text(n.name));
+        var sub = n.return_date ? ('回 ' + fmtDateShort(n.return_date))
+                : (n.outsource_date ? ('發 ' + fmtDateShort(n.outsource_date)) : '');
+        if (sub) $node.append($('<div class="pt-step-time">').text(sub));
+        $node.attr('title', n.name + (n.current ? '（目前製程）' : (n.reached ? '（已完成）' : '（未到）')));
+        $flow.append($node);
+    });
+    return $flow;
+}
+function fillBomFlow($c, bd) {
+    $c.empty();
+    var head = 'BOM 製程' + (bd.progress_pct != null ? '（' + bd.progress_pct + '%）' : '') + '：' + bd.bom
+             + (bd.d_id ? '｜' + bd.d_id : '') + (bd.Client_Name ? '｜' + bd.Client_Name : '');
+    $c.append($('<div class="pt-bom-flow-title">').html('<i class="fa fa-cogs"></i>').append($('<span>').text(head)));
+    if (!bd.nodes || !bd.nodes.length) {
+        $c.append($('<div style="font-size:11px;color:#bbb;">此 BOM 尚無製程資料</div>'));
+        return;
+    }
+    if (bd.is_closed == 1) {
+        // 只顯示進行中：已結案收合成一行，點開才看製程
+        var $body = bomFlowInner(bd).hide();
+        var $sum = $('<div class="pt-bom-flow-closed">').html('已結案 <span class="pct">100%</span>（點開看製程）')
+            .on('click', function () { $body.toggle(); });
+        $c.append($sum).append($body);
+    } else {
+        $c.append(bomFlowInner(bd));
+    }
+}
+function renderBomFlows() {
+    var $pending = $('.pt-bom-flow[data-pending="1"]');
+    if (!$pending.length) return;
+    var need = {};
+    $pending.each(function () { need[$(this).attr('data-bom')] = 1; });
+    var boms = Object.keys(need).filter(function (b) { return !(b in bomProgressCache); });
+    function paint() {
+        $('.pt-bom-flow[data-pending="1"]').each(function () {
+            var $c = $(this).attr('data-pending', '0');
+            var b = $c.attr('data-bom');
+            if (bomProgressCache[b]) fillBomFlow($c, bomProgressCache[b]);
+            else $c.html('<div class="pt-bom-flow-title" style="color:#bbb;">此 BOM 查無製程資料</div>');
+        });
+    }
+    if (!boms.length) { paint(); return; }
+    apiGet('get_bom_progress', { boms: boms.join(',') }).done(function (res) {
+        if (res.success) { var d = res.data || {}; Object.keys(d).forEach(function (k) { bomProgressCache[k] = d[k]; }); }
+        paint();
+    }).fail(paint);
+}
+
 function renderRows(rows) {
+    bomProgressCache = {};   // 每次重載清快取，確保製程進度為最新
     var $tb = $('#ptaskTbody').empty();
     if (!rows.length) { $tb.html('<tr><td colspan="4" class="text-center text-muted">沒有符合條件的紀錄</td></tr>'); return; }
     rows.forEach(function (r) {
@@ -825,14 +972,27 @@ function renderRows(rows) {
             if (r.is_overdue == 1) tr.addClass('row-overdue');
             else if (r.is_urgent == 1) tr.addClass('row-urgent');
         }
-        tr.append($('<td class="cell-edit" title="雙擊編輯">').text(fmtDate(r.received_at)));
-        var $titleTd = $('<td class="cell-edit" title="雙擊編輯">');
-        $titleTd.append($('<div style="font-weight:600;">').text(r.title));
-        // 綁定內容顯示在標題下方（增加閱讀性）
-        if (r.bind_type && r.bind_label) {
+        var owned = (r.is_shared != 1);
+        var editCls = owned ? 'cell-edit' : '';
+        var editTitle = owned ? '雙擊編輯' : '';
+        tr.append($('<td>').addClass(editCls).attr('title', editTitle).text(fmtDate(r.received_at)));
+        var $titleTd = $('<td>').addClass(editCls).attr('title', editTitle);
+        var $titleLine = $('<div style="font-weight:600;">').text(r.title);
+        if (owned) {
+            $titleLine.append($('<span class="pt-share-btn" title="分享/複製給同仁"><i class="fa fa-share-alt"></i></span>')
+                .on('click', function (e) { e.stopPropagation(); openShareModal(r.id); }));
+        } else {
+            var modeTxt = (r.share_mode === 'edit') ? '共同進度' : '看進度';
+            $titleLine.append($('<span class="share-badge">').text('👥 ' + (r.owner_name || '') + ' 分享（' + modeTxt + '）'));
+        }
+        $titleTd.append($titleLine);
+        // 綁定內容顯示在標題下方（多個全列出）
+        if (r.binds && r.binds.length) {
             var $bind = $('<div style="margin-top:2px;">');
-            $bind.append($('<span class="bind-badge bind-' + r.bind_type + '">').text(bindTypeName[r.bind_type] || r.bind_type));
-            $bind.append($('<span style="font-size:12px;color:#667;">').text(r.bind_label));
+            r.binds.forEach(function (b) {
+                $bind.append($('<span class="bind-badge bind-' + b.bind_type + '">').text(bindTypeName[b.bind_type] || b.bind_type));
+                $bind.append($('<span style="font-size:12px;color:#667;margin-right:8px;">').text(b.bind_label));
+            });
             $titleTd.append($bind);
         }
         if (r.note) $titleTd.append($('<div style="font-size:11px;color:#888;white-space:pre-line;">').text(r.note));
@@ -852,11 +1012,12 @@ function renderRows(rows) {
             $titleTd.append($imgs);
         }
         tr.append($titleTd);
-        tr.append(deadlineCell(r).addClass('cell-edit').attr('title', '雙擊編輯'));
+        tr.append(deadlineCell(r).addClass(editCls).attr('title', editTitle));
         tr.append(stepFlowCell(r));
         $tb.append(tr);
     });
     alignAllPanels();  // 所有列都進 DOM 後，把小項面板對齊到各自的進度節點下方
+    renderBomFlows();  // 綁定 BOM 的唯讀製程進度條（批次取回後填入）
 }
 
 // 雙擊「接收日期／標題／期限」任一儲存格 → 開啟編輯跳窗
@@ -1030,7 +1191,10 @@ var modalTask = { id: 0, status: 0, title: '' };
 
 // 右上角暫停/刪除的顯示與文案（依紀錄狀態）
 function refreshModalHeaderButtons() {
-    if (!modalTask.id) { $('#btnModalStatus, #btnModalDelete').hide(); return; }
+    var owner = (modalTask.access === 'owner' || !modalTask.access);
+    // 分享按鈕：只有擁有者、且已存檔的紀錄才可分享
+    $('#btnModalShare').toggle(!!modalTask.id && owner);
+    if (!modalTask.id || !owner) { $('#btnModalStatus, #btnModalDelete').hide(); return; }
     var $b = $('#btnModalStatus').removeClass('btn-warning btn-primary');
     if (modalTask.status == 0) $b.addClass('btn-warning').html('<i class="fa fa-pause"></i> 暫停');
     else if (modalTask.status == 2) $b.addClass('btn-primary').html('<i class="fa fa-play"></i> 恢復');
@@ -1041,9 +1205,12 @@ function refreshModalHeaderButtons() {
 function openTaskModal(id) {
     $('#tId').val(id || 0);
     $('#taskModalTitle').html('<i class="fa fa-pencil-square-o"></i> ' + (id ? '編輯紀錄' : '新增紀錄'));
-    $('#tTitle, #tBindKw, #tBindId, #tBindLabel, #tRemindVal, #tUrgentDays, #tNote, #tDeadline, #defaultInterval').val('');
+    $('#tTitle, #tBindKw, #tRemindVal, #tUrgentDays, #tNote, #tDeadline, #defaultInterval').val('');
     $('#tBindType').val(''); $('#tBindKw').prop('disabled', true);
-    $('#tBindChosen').empty(); $('#tBindSug').hide().empty();
+    $('#tBindSug').hide().empty();
+    selectedBinds = []; renderBindChips();
+    $('#taskModal').removeClass('pt-readonly');   // 預設可編輯（擁有者）
+    $('#btnSaveTask').show();
     $('#tRemindUnit').val('1440');
     $('#tReceived').val(new Date().toISOString().substring(0, 10));
     $('#tUrgentDays').attr('placeholder', '預設 ' + state.urgentDefault + ' 天');
@@ -1051,14 +1218,18 @@ function openTaskModal(id) {
     $('#tImgsList').empty();
     tempImgs = [];
     $('#tImgHint').text(id ? '' : '尚未儲存前圖片先暫存，按「儲存」時自動綁定到這筆紀錄');
-    modalTask = { id: id || 0, status: 0, title: '' };
+    modalTask = { id: id || 0, status: 0, title: '', access: 'owner' };
     refreshModalHeaderButtons();
     loadTplOptions();
     if (id) {
         apiGet('get_task', { id: id }).done(function (res) {
             if (!res.success) { alert(res.message || '讀取失敗'); return; }
             var t = res.data;
-            modalTask = { id: t.id, status: parseInt(t.status, 10), title: t.title };
+            var isOwner = (t.access === 'owner' || !t.access);
+            modalTask = { id: t.id, status: parseInt(t.status, 10), title: t.title, access: t.access || 'owner' };
+            // 非擁有者（他人分享給我）→ 整個編輯視窗唯讀
+            $('#taskModal').toggleClass('pt-readonly', !isOwner);
+            $('#btnSaveTask').toggle(isOwner);
             refreshModalHeaderButtons();
             $('#tTitle').val(t.title);
             $('#tReceived').val(t.received_at);
@@ -1067,7 +1238,10 @@ function openTaskModal(id) {
             $('#tRemindVal').val(ui.val); $('#tRemindUnit').val(ui.unit);
             $('#tUrgentDays').val(t.urgent_days == null ? '' : t.urgent_days);
             $('#tNote').val(t.note || '');
-            if (t.bind_type && t.bind_id) setBind(t.bind_type, t.bind_id, t.bind_label);
+            selectedBinds = (t.binds || []).map(function (b) {
+                return { bind_type: b.bind_type, bind_id: String(b.bind_id), bind_label: b.bind_label };
+            });
+            renderBindChips();
             (t.steps || []).forEach(function (s) { $('#stepEditor').append(stepRowHtml(s)); });
             initStepSortable();
             renderModalImages(t.images || []);
@@ -1159,23 +1333,33 @@ $('#btnModalDelete').on('click', function () {
     });
 });
 
-// ── 綁定搜尋（自動完成）──────────────────────────────────────────────
-function setBind(type, id, label) {
-    $('#tBindType').val(type); $('#tBindId').val(id); $('#tBindLabel').val(label);
-    $('#tBindKw').prop('disabled', false).val('');
-    var chip = $('<span class="label label-primary" style="font-size:12px;">')
-        .text((bindTypeName[type] || '') + '：' + label);
-    chip.append($('<span style="margin-left:6px;cursor:pointer;">×</span>').on('click', clearBind));
-    $('#tBindChosen').empty().append(chip);
+// ── 綁定搜尋（自動完成，可綁多個）──────────────────────────────────────
+var selectedBinds = [];   // [{bind_type, bind_id, bind_label}...]
+function renderBindChips() {
+    var $box = $('#tBindChosen').empty();
+    if (!selectedBinds.length) { $box.append($('<span style="font-size:12px;color:#bbb;">尚未綁定</span>')); return; }
+    selectedBinds.forEach(function (b, idx) {
+        var chip = $('<span class="label label-primary" style="font-size:12px; margin-right:5px; margin-bottom:4px; display:inline-block;">')
+            .text((bindTypeName[b.bind_type] || b.bind_type) + '：' + b.bind_label);
+        chip.append($('<span style="margin-left:6px;cursor:pointer;">×</span>').on('click', function () {
+            selectedBinds.splice(idx, 1); renderBindChips();
+        }));
+        $box.append(chip);
+    });
 }
-function clearBind() { $('#tBindId, #tBindLabel').val(''); $('#tBindChosen').empty(); }
+function addBind(type, id, label) {
+    id = String(id);
+    if (selectedBinds.some(function (b) { return b.bind_type === type && String(b.bind_id) === id; })) return;  // 去重
+    selectedBinds.push({ bind_type: type, bind_id: id, bind_label: label });
+    renderBindChips();
+}
 
 $('#tBindType').on('change', function () {
-    clearBind();
     var type = $(this).val();
     $('#tBindKw').prop('disabled', !type).val('')
         .attr('placeholder', !type ? '先選類型，再輸入關鍵字搜尋'
-            : (type === 'order' ? '輸入料號（或訂單編號）搜尋訂單' : '輸入關鍵字搜尋'));
+            : (type === 'bom' ? '輸入 BOM／料號／客戶 搜尋'
+            : (type === 'order' ? '輸入料號（或訂單編號）搜尋訂單' : '輸入關鍵字搜尋')));
     $('#tBindSug').hide().empty();
 });
 
@@ -1191,7 +1375,14 @@ $('#tBindKw').on('input focus', function () {
             var $sug = $('#tBindSug').empty();
             (res.data || []).forEach(function (o) {
                 var id, label, extra = '';
-                if (type === 'bom') { id = o.bom; label = o.bom; extra = o.Client_Name || ''; }
+                if (type === 'bom') {
+                    id = o.bom; label = o.bom;
+                    var parts = [];
+                    if (o.d_id) parts.push('料號 ' + o.d_id);
+                    if (o.Client_Name) parts.push('客戶 ' + o.Client_Name);
+                    if (o.sqty != null && o.sqty !== '') parts.push('數量 ' + o.sqty);
+                    extra = parts.join('｜');
+                }
                 else if (type === 'part') { id = o.d_id; label = o.D_Setting_Id; extra = o.Drawing_No || ''; }
                 else if (type === 'customer') { id = o.customer_id; label = o.customer; extra = o.customer_id; }
                 else if (type === 'order') {
@@ -1201,14 +1392,97 @@ $('#tBindKw').on('input focus', function () {
                 }
                 else { id = o.maker_id_no; label = o.maker_id; extra = o.maker_id_all || ''; }
                 var $item = $('<div class="ac-item">').text(label + (extra ? '（' + extra + '）' : ''));
-                $item.on('mousedown', function (e) { e.preventDefault(); setBind(type, id, label); $sug.hide(); });
+                // 綁多個：選定後保留類型與搜尋框，清空關鍵字方便繼續加
+                $item.on('mousedown', function (e) { e.preventDefault(); addBind(type, id, label); $('#tBindKw').val(''); $sug.hide(); });
                 $sug.append($item);
             });
             $sug.toggle(!!(res.data || []).length);
         });
     }, 180);
 });
-$(document).on('click', function (e) { if (!$(e.target).closest('.ac-box').length) $('#tBindSug').hide(); });
+$(document).on('click', function (e) { if (!$(e.target).closest('.ac-box').length) $('#tBindSug, #shUserSug').hide(); });
+
+// ── 分享 / 複製 ───────────────────────────────────────────────────────
+function openShareModal(id) {
+    $('#shTaskId').val(id);
+    $('#shUserKw, #shUserId, #shUserName').val('');
+    $('#shUserChosen').empty(); $('#shUserSug').hide().empty();
+    $('input[name=shMode][value=view]').prop('checked', true);
+    loadShareList(id);
+    $('#shareModal').modal('show');
+}
+$('#btnModalShare').on('click', function () {
+    var id = parseInt($('#tId').val(), 10) || 0;
+    if (id) openShareModal(id);
+});
+function loadShareList(id) {
+    var $box = $('#shareList').html('載入中…');
+    apiGet('list_shares', { task_id: id }).done(function (res) {
+        if (!res.success) { $box.text(res.message || '讀取失敗'); return; }
+        var rows = res.data || [];
+        if (!rows.length) { $box.html('<span style="color:#bbb;">尚未分享給任何人</span>'); return; }
+        $box.empty();
+        rows.forEach(function (s) {
+            var modeTxt = s.mode === 'edit' ? '共同進度' : '看進度';
+            var $row = $('<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid #eef2f7;">');
+            $row.append($('<span style="flex:1;">').text(s.user_cname + '（' + modeTxt + '）'));
+            $row.append($('<button type="button" class="btn btn-xs btn-danger">取消</button>').on('click', function () {
+                if (!confirm('取消分享給「' + s.user_cname + '」？')) return;
+                apiPost('remove_share', { share_id: s.id }).done(function (r2) {
+                    if (!r2.success) { alert(r2.message || '取消失敗'); return; }
+                    loadShareList(id); loadList();
+                });
+            }));
+            $box.append($row);
+        });
+    });
+}
+// 分享對象自動完成
+var shUserTimer = null;
+$('#shUserKw').on('input focus', function () {
+    var kw = $(this).val();
+    clearTimeout(shUserTimer);
+    shUserTimer = setTimeout(function () {
+        apiGet('search_users', { kw: kw }).done(function (res) {
+            var $sug = $('#shUserSug').empty();
+            (res.data || []).forEach(function (u) {
+                var $item = $('<div class="ac-item">').text(u.user_cname);
+                $item.on('mousedown', function (e) {
+                    e.preventDefault();
+                    $('#shUserId').val(u.id); $('#shUserName').val(u.user_cname);
+                    $('#shUserKw').val('');
+                    $('#shUserChosen').html($('<span class="label label-primary" style="font-size:12px;">').text(u.user_cname));
+                    $sug.hide();
+                });
+                $sug.append($item);
+            });
+            $sug.toggle(!!(res.data || []).length);
+        });
+    }, 180);
+});
+$('#btnDoShare').on('click', function () {
+    var taskId = parseInt($('#shTaskId').val(), 10) || 0;
+    var target = parseInt($('#shUserId').val(), 10) || 0;
+    var mode = $('input[name=shMode]:checked').val() || 'view';
+    if (!target) { alert('請先搜尋並選擇分享對象'); $('#shUserKw').focus(); return; }
+    var $btn = $(this).prop('disabled', true);
+    if (mode === 'copy') {
+        apiPost('copy_task', { task_id: taskId, target_user_id: target }).done(function (res) {
+            $btn.prop('disabled', false);
+            if (!res.success) { alert(res.message || '複製失敗'); return; }
+            toast('已複製給 ' + $('#shUserName').val());
+            $('#shUserId, #shUserName').val(''); $('#shUserChosen').empty();
+        });
+    } else {
+        apiPost('add_share', { task_id: taskId, target_user_id: target, mode: mode }).done(function (res) {
+            $btn.prop('disabled', false);
+            if (!res.success) { alert(res.message || '分享失敗'); return; }
+            toast('已分享給 ' + $('#shUserName').val());
+            $('#shUserId, #shUserName').val(''); $('#shUserChosen').empty();
+            loadShareList(taskId); loadList();
+        });
+    }
+});
 
 // ── 附件圖片（縮圖點擊另開原圖、×刪除；比照 Sales_Track_test）────────
 // 新增紀錄尚未存檔時：先上傳為暫存(temp)記在 tempImgs，儲存時把 img_id 一併送出綁定轉正
@@ -1305,9 +1579,7 @@ $('#btnSaveTask').on('click', function () {
         id: $('#tId').val(),
         title: title,
         received_at: $('#tReceived').val(),
-        bind_type: $('#tBindId').val() ? $('#tBindType').val() : '',
-        bind_id: $('#tBindId').val(),
-        bind_label: $('#tBindLabel').val(),
+        binds: JSON.stringify(selectedBinds),
         deadline: $('#tDeadline').val() || '',
         remind_before_minutes: rv === '' ? '' : parseInt(rv, 10) * parseInt($('#tRemindUnit').val(), 10),
         urgent_days: $('#tUrgentDays').val(),
@@ -1453,7 +1725,7 @@ $('#btnExportCsv').on('click', function () {
         if (s.header) lines.push('"' + s.header.replace(/"/g, '""') + '"');
         lines.push('接收日期,標題,綁定,期限,進度,狀態,備註');
         rows.forEach(function (r) {
-            var bind = r.bind_label ? (bindTypeName[r.bind_type] || '') + '：' + r.bind_label : '';
+            var bind = bindSummary(r);
             var cells = [r.received_at || '', r.title, bind, fmtDt(r.deadline), stepsSummary(r), statusName[r.status] || '', r.note || ''];
             lines.push(cells.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(','));
         });
@@ -1471,7 +1743,7 @@ $('#btnExportPdf').on('click', function () {
         var s = expSetting();
         var body = [['接收日期', '標題', '綁定', '期限', '進度', '狀態', '備註']];
         rows.forEach(function (r) {
-            var bind = r.bind_label ? (bindTypeName[r.bind_type] || '') + '：' + r.bind_label : '';
+            var bind = bindSummary(r);
             body.push([r.received_at || '', r.title, bind, fmtDt(r.deadline), stepsSummary(r), statusName[r.status] || '', r.note || '']);
         });
         var content = [];

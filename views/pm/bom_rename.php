@@ -64,6 +64,10 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         .br-empty-card{ text-align:center; padding:60px 20px; color:#999; }
         .br-share-note{ font-size:12px; color:#888; margin-top:4px; }
         #bomSourceHint{ font-size:12px; color:#a66a00; }
+        .br-env-status{ font-size:11px; margin-top:3px; }
+        .br-env-status.ok{ color:#27ae60; }
+        .br-env-status.bad{ color:#c0392b; }
+        .br-env-status.auto{ color:#8a9bab; }
     </style>
 </head>
 <body class="nav-sm">
@@ -112,11 +116,20 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
             </div>
             <div class="col-md-3">
               <label>Python 執行檔路徑</label>
-              <input type="text" id="s-python" class="form-control input-sm" <?php echo $CAN_SETTINGS ? '' : 'readonly'; ?>>
+              <input type="text" id="s-python" class="form-control input-sm" placeholder="留空＝自動偵測伺服器上的安裝位置" <?php echo $CAN_SETTINGS ? '' : 'readonly'; ?>>
+              <div class="br-env-status" id="py-status"></div>
             </div>
             <div class="col-md-3">
               <label>Tesseract 執行檔路徑</label>
-              <input type="text" id="s-tesseract" class="form-control input-sm" <?php echo $CAN_SETTINGS ? '' : 'readonly'; ?>>
+              <input type="text" id="s-tesseract" class="form-control input-sm" placeholder="留空＝自動偵測伺服器上的安裝位置" <?php echo $CAN_SETTINGS ? '' : 'readonly'; ?>>
+              <div class="br-env-status" id="tess-status"></div>
+            </div>
+          </div>
+          <div class="row" style="margin-top:6px;">
+            <div class="col-md-12">
+              <div class="br-share-note"><i class="fa fa-server"></i> <b>這兩個路徑指的是「伺服器主機」（MAMP 那台機器）上的執行檔位置，不是您自己電腦的路徑</b>——一般操作者用自己電腦連進來使用本工具，不需要在自己電腦安裝 Python 或 Tesseract。留空會自動偵測伺服器上的安裝位置；伺服器上如果沒有裝，「開始掃描」仍可正常使用，只是會自動切換為純人工輸入模式，不會卡住。
+                <?php if ($CAN_SETTINGS): ?><button class="btn btn-default btn-xs" id="btn-check-env" style="margin-left:6px;"><i class="fa fa-plug"></i> 測試連線</button><?php endif; ?>
+              </div>
             </div>
           </div>
           <div class="row" style="margin-top:10px;">
@@ -254,8 +267,17 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       if (r && r.success) {
         settings = r.settings;
         $('#s-source').val(settings.source_dir);
-        $('#s-python').val(settings.python_exe);
-        $('#s-tesseract').val(settings.tesseract_exe);
+        // 留空欄位＝跟著伺服器自動偵測；欄位不直接填入偵測結果，避免使用者一按「儲存設定」就把自動值誤存成寫死值
+        $('#s-python').val(settings.python_is_auto ? '' : settings.python_exe);
+        $('#s-tesseract').val(settings.tesseract_is_auto ? '' : settings.tesseract_exe);
+        if (settings.python_is_auto) {
+          $('#py-status').attr('class', 'br-env-status ' + (settings.python_exe ? 'auto' : 'bad'))
+            .text(settings.python_exe ? ('自動偵測到：' + settings.python_exe) : '伺服器上偵測不到 Python，掃描會退化為純人工輸入');
+        } else { $('#py-status').text(''); }
+        if (settings.tesseract_is_auto) {
+          $('#tess-status').attr('class', 'br-env-status ' + (settings.tesseract_exe ? 'auto' : 'bad'))
+            .text(settings.tesseract_exe ? ('自動偵測到：' + settings.tesseract_exe) : '伺服器上偵測不到 Tesseract，掃描會退化為純人工輸入');
+        } else { $('#tess-status').text(''); }
         $('#c-left').val(settings.crop_left);
         $('#c-top').val(settings.crop_top);
         $('#c-width').val(settings.crop_width);
@@ -264,6 +286,24 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       }
       if (cb) cb();
     }, 'json');
+  }
+
+  $('#btn-check-env').on('click', function(){
+    var $btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 測試中…');
+    $.post(API, { action:'check_env', python_exe: $('#s-python').val(), tesseract_exe: $('#s-tesseract').val() }, function(r){
+      $btn.prop('disabled', false).html('<i class="fa fa-plug"></i> 測試連線');
+      if (!r || !r.success) { alert('測試失敗：' + (r && r.message ? r.message : '未知錯誤')); return; }
+      paintEnvStatus('#py-status', r.python);
+      paintEnvStatus('#tess-status', r.tesseract);
+    }, 'json').fail(function(){
+      $btn.prop('disabled', false).html('<i class="fa fa-plug"></i> 測試連線');
+      alert('連線失敗，請確認網路');
+    });
+  });
+  function paintEnvStatus(sel, r){
+    var $el = $(sel);
+    if (r && r.ok) $el.attr('class', 'br-env-status ok').html('<i class="fa fa-check-circle"></i> ' + esc(r.path) + '（' + esc(r.message) + '）');
+    else $el.attr('class', 'br-env-status bad').html('<i class="fa fa-times-circle"></i> ' + esc((r && r.path) || '') + ' — ' + esc((r && r.message) || '無法連線'));
   }
 
   function updateCropPreview(){

@@ -71,7 +71,78 @@ function drbSaveSetting(PDO $pdo, string $key, string $value, int $uid, string $
                                 updated_by_id = VALUES(updated_by_id), updated_by = VALUES(updated_by)");
     $stmt->execute([$key, $value, $uid, $uname]);
 }
+// 這兩個執行檔都在「伺服器主機」上（不是操作者自己的電腦）。預設值不寫死特定使用者帳號路徑，
+// 而是現場自動偵測：先試 PATH，再用萬用字元掃「任何使用者」的常見安裝位置，找不到才留空
+// （留空時 UI 會提示尚未設定，並非卡住——scan 動作找不到執行檔一樣會優雅退化成純人工輸入）。
+// Windows 常見地雷：「where python」常會先列出 System32\python 這種 Microsoft Store 假替身
+// （檔案存在、但一執行就跳去開 Store，等於不能用）。所以候選路徑一律用 drbCheckExe() 真的跑一次
+// --version 驗證能不能用，不能只檢查 is_file()；選第一個「真的能跑」的，而非第一個「存在」的。
+function drbFirstWorkingExe(array $candidates): string {
+    foreach ($candidates as $c) {
+        // 頁面每次載入都可能跑到這裡（設定留空＝每次都自動偵測），逾時給短一點，避免假替身拖慢整頁
+        if ($c !== '' && is_file($c) && drbCheckExe($c, 4)['ok']) return $c;
+    }
+    return '';
+}
+function drbAutoDetectPythonExe(): string {
+    $fromPath = [];
+    $viaPath = @shell_exec('where python 2>NUL');
+    if (is_string($viaPath)) {
+        foreach (preg_split('/\r?\n/', trim($viaPath)) as $line) {
+            $line = trim($line);
+            if ($line !== '') $fromPath[] = $line;
+        }
+    }
+    // glob 找到的實際安裝路徑優先試（較可靠），PATH 常會先列出 Store 假替身，放最後當備援
+    $candidates = array_merge(
+        glob('C:/Users/*/AppData/Local/Programs/Python/Python3*/python.exe') ?: [],
+        glob('C:/Program Files/Python3*/python.exe') ?: [],
+        glob('C:/Python3*/python.exe') ?: [],
+        $fromPath
+    );
+    return drbFirstWorkingExe($candidates);
+}
+function drbAutoDetectTesseractExe(): string {
+    $fromPath = [];
+    $viaPath = @shell_exec('where tesseract 2>NUL');
+    if (is_string($viaPath)) {
+        foreach (preg_split('/\r?\n/', trim($viaPath)) as $line) {
+            $line = trim($line);
+            if ($line !== '') $fromPath[] = $line;
+        }
+    }
+    $candidates = array_merge(
+        $fromPath,
+        glob('C:/Program Files/Tesseract-OCR/tesseract.exe') ?: [],
+        glob('C:/Program Files (x86)/Tesseract-OCR/tesseract.exe') ?: []
+    );
+    return drbFirstWorkingExe($candidates);
+}
+// 執行 exe --version 驗證真的能跑起來（不是只檢查檔案存在），逾時/失敗都不丟例外，回傳可讀訊息
+function drbCheckExe(string $exe, int $timeoutSec = 10): array {
+    if ($exe === '') return ['ok' => false, 'message' => '尚未設定路徑'];
+    if (!is_file($exe)) return ['ok' => false, 'message' => '找不到檔案：' . $exe];
+    $proc = @proc_open([$exe, '--version'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    if (!is_resource($proc)) return ['ok' => false, 'message' => '無法啟動執行檔'];
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+    $t0 = time(); $out = '';
+    while (true) {
+        $st = proc_get_status($proc);
+        $out .= (string)stream_get_contents($pipes[1]) . (string)stream_get_contents($pipes[2]);
+        if (!$st['running']) break;
+        if (time() - $t0 > $timeoutSec) { proc_terminate($proc); $out .= "\n逾時終止"; break; }
+        usleep(150000);
+    }
+    fclose($pipes[1]); fclose($pipes[2]);
+    $code = proc_close($proc);
+    $firstLine = trim(explode("\n", trim($out))[0] ?? '');
+    if ($code !== 0 && $firstLine === '') return ['ok' => false, 'message' => '執行失敗（exit=' . $code . '）'];
+    return ['ok' => true, 'message' => $firstLine !== '' ? $firstLine : '可執行'];
+}
 function drbGetAllSettings(PDO $pdo): array {
+    $pyRaw   = drbGetSetting($pdo, 'bomrename_python_exe', '');
+    $tessRaw = drbGetSetting($pdo, 'bomrename_tesseract_exe', '');
     return [
         // 來源資料夾與「圖面自動改檔名工具」共用同一把設定鍵
         'source_dir'      => drbGetSetting($pdo, 'drawingrename_source_dir', ''),
@@ -79,8 +150,10 @@ function drbGetAllSettings(PDO $pdo): array {
         'crop_top'        => (float)drbGetSetting($pdo, 'bomrename_crop_top', '0'),
         'crop_width'      => (float)drbGetSetting($pdo, 'bomrename_crop_width', '35'),
         'crop_height'     => (float)drbGetSetting($pdo, 'bomrename_crop_height', '100'),
-        'python_exe'      => drbGetSetting($pdo, 'bomrename_python_exe', 'C:\\Users\\Ellen\\AppData\\Local\\Programs\\Python\\Python313\\python.exe'),
-        'tesseract_exe'   => drbGetSetting($pdo, 'bomrename_tesseract_exe', 'C:\\Program Files\\Tesseract-OCR\\tesseract.exe'),
+        'python_exe'      => $pyRaw !== '' ? $pyRaw : drbAutoDetectPythonExe(),
+        'tesseract_exe'   => $tessRaw !== '' ? $tessRaw : drbAutoDetectTesseractExe(),
+        'python_is_auto'    => $pyRaw === '',
+        'tesseract_is_auto' => $tessRaw === '',
     ];
 }
 function drbTmpDir(): string {
@@ -221,6 +294,20 @@ switch ($action) {
     case 'get_settings':
         if (!rbac_has($features, 'bom_rename_view')) { http_response_code(403); echo json_encode(['success' => false, 'message' => '無權限']); break; }
         echo json_encode(['success' => true, 'settings' => drbGetAllSettings($pdo)]);
+        break;
+
+    // 測試連線：檢查「伺服器主機」上目前設定/自動偵測到的 Python、Tesseract 是否真的能執行
+    case 'check_env':
+        if (!rbac_has($features, 'bom_rename_manage_settings')) { http_response_code(403); echo json_encode(['success' => false, 'message' => '無權限']); break; }
+        $pyExe = trim($_POST['python_exe'] ?? '');
+        $tessExe = trim($_POST['tesseract_exe'] ?? '');
+        if ($pyExe === '') $pyExe = drbAutoDetectPythonExe();
+        if ($tessExe === '') $tessExe = drbAutoDetectTesseractExe();
+        echo json_encode([
+            'success' => true,
+            'python' => array_merge(['path' => $pyExe], drbCheckExe($pyExe)),
+            'tesseract' => array_merge(['path' => $tessExe], drbCheckExe($tessExe)),
+        ]);
         break;
 
     case 'save_settings':

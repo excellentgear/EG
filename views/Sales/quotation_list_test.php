@@ -466,7 +466,14 @@ body { background:var(--bg); }
             <h3><i class="fa fa-file-text-o" style="color:var(--accent);margin-right:7px;"></i>
                 報價單管理 <small style="font-size:12px;color:#aaa;font-weight:400;">快速版</small>
             </h3>
-            <div style="display:flex;gap:7px;">
+            <div style="display:flex;gap:14px;align-items:center;">
+                <button class="btn btn-warning btn-sm" id="pendingDocBtn" onclick="applyPendingFilter()" title="只顯示被駁回或補件待審的報價單" style="position:relative;font-weight:600;">
+                    <i class="fa fa-inbox"></i> 待處理單據
+                    <span id="pendingDocBadge" style="display:none;position:absolute;top:-7px;right:-7px;background:#DD5138;color:#fff;border-radius:10px;font-size:10px;padding:0 5px;font-weight:700;">0</span>
+                </button>
+                <button class="btn btn-default btn-sm" id="showAllDocBtn" onclick="clearPendingFilter()" title="取消篩選，顯示全部報價單" style="display:none;">
+                    <i class="fa fa-list"></i> 顯示全部
+                </button>
                 <?php if ($CAN_CREATE): ?>
                 <button class="btn btn-success btn-sm" id="newQuoteBtn" onclick="openNewEditor()">
                     <i class="fa fa-plus"></i> 新增報價單
@@ -1429,6 +1436,21 @@ body { background:var(--bg); }
     </div>
     <div class="modal-body" id="suppReviewBody" style="font-size:13px;max-height:70vh;overflow-y:auto;padding:14px 18px;"></div>
     <div class="modal-footer" style="padding:8px 14px;">
+      <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+    </div>
+  </div></div>
+</div>
+
+<!-- ══ 進站提醒 Modal（被駁回 + 待審補件；點擊跳窗外自動關閉）══ -->
+<div class="modal fade" id="pendingAlertModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-lg" style="width:680px;max-width:96vw;" role="document"><div class="modal-content">
+    <div class="modal-header" style="background:#F0A24B;color:#fff;padding:12px 18px;">
+      <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.85;"><span>&times;</span></button>
+      <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-bell" style="margin-right:7px;"></i>待處理提醒</h4>
+    </div>
+    <div class="modal-body" id="pendingAlertBody" style="font-size:13px;max-height:70vh;overflow-y:auto;padding:14px 18px;"></div>
+    <div class="modal-footer" style="padding:8px 14px;">
+      <button type="button" class="btn btn-warning btn-sm" onclick="$('#pendingAlertModal').modal('hide');applyPendingFilter();"><i class="fa fa-inbox"></i> 篩選待處理單據</button>
       <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
     </div>
   </div></div>

@@ -247,6 +247,40 @@ case 'preview': {
     jout(['months'=>$out]);
 }
 
+/* ---------- 套用試算：把調整後的開放參數寫回本年度設定（僅管理者） ---------- */
+case 'apply_params': {
+    if (!$perms['canAdmin']) jerr('僅KPI管理者可套用修改本年度設定', 403);
+    $iid = (int)($_POST['indicator_id'] ?? 0);
+    $year = (int)($_POST['year'] ?? 0);
+    if ($year < 2025 || $year > $curY) jerr('年度不合法');
+    $iy = kpi_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    if ($iy['source_mode'] !== 'auto') jerr('手動指標無參數可套用');
+    $params = kpi_as_params($iy['params_json']);
+    $ov = json_decode((string)($_POST['params'] ?? '{}'), true);
+    if (!is_array($ov)) jerr('參數格式錯誤');
+    $changed = [];
+    foreach ($ov as $k => $v) {
+        $cur = $params[$k] ?? null;
+        $fe = is_array($cur) && !empty($cur['fe']);
+        if (!$fe) continue; // 只允許套用「開放前端試算」的參數
+        $oldV = is_array($cur) && array_key_exists('v', $cur) ? $cur['v'] : null;
+        $params[$k] = ['v'=>$v, 'fe'=>1];
+        if (json_encode($oldV) !== json_encode($v)) $changed[$k] = ['old'=>$oldV, 'new'=>$v];
+    }
+    if (!$changed) jout(['changed'=>0]);
+    $st = $db->prepare("UPDATE kpi_as_indicator_year SET params_json=?, Modified_By=?, Modified_At=NOW() WHERE indicator_id=? AND year=?");
+    $st->execute([json_encode($params, JSON_UNESCAPED_UNICODE), $u['user_cname'], $iid, $year]);
+    kpi_as_log($db, $iid, $year, null, 'apply_params', null, null, json_encode($changed, JSON_UNESCAPED_UNICODE), '主頁試算套用', $u);
+    // 重算本年度已結束月份，讓套用即時反映
+    for ($m = 1; $m <= 12; $m++) {
+        if (!in_array($m, kpi_as_months($iy['freq']), true)) continue;
+        if (!kpi_month_ended($year, $m)) continue;
+        kpi_as_settle($db, array_merge($iy, ['indicator_id'=>$iid]), $year, $m, $u);
+    }
+    jout(['changed'=>count($changed)]);
+}
+
 /* ---------- 手動填寫（manual 模式；擔當者/管理者；鎖定年僅管理者） ---------- */
 case 'fill': {
     $iid = (int)($_POST['indicator_id'] ?? 0);

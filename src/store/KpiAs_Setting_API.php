@@ -58,19 +58,22 @@ case 'get_all': {
     try { $rtypes = $db->query("SELECT type_id, type_name FROM ir_return_type ORDER BY type_id")->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) {}
 
     // 部門→人員(含職稱/主管階級)：擔當者「先選部門再選人」用
+    // 依職稱順序排序（position.sort_order 越小職位越大，排前面；比照 department_job_title_settings.php）
     $deptMembers = [];
     $st = $db->query("SELECT m.department_id, m.user_id, u.user_cname, m.is_main,
-                             p.name AS position_name, pl.level AS mgr_level
+                             p.name AS position_name, p.sort_order AS pos_sort, pl.level AS mgr_level
                       FROM user_department_position_map m
                       JOIN user u ON u.id=m.user_id
                       LEFT JOIN position p ON p.id=m.position_id
                       LEFT JOIN position_level pl ON pl.position_id=m.position_id
                       WHERE u.user_cname IS NOT NULL AND u.user_cname<>''
-                      ORDER BY m.department_id, m.is_main DESC, (pl.level IS NULL), pl.level, m.user_id");
+                      ORDER BY m.department_id, (p.sort_order IS NULL), p.sort_order, m.user_id");
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $deptMembers[(int)$r['department_id']][] = [
             'user_id'=>(int)$r['user_id'], 'cname'=>$r['user_cname'],
             'position_name'=>$r['position_name'],
+            'pos_sort'=>$r['pos_sort']===null ? null : (int)$r['pos_sort'],
+            'is_main'=>(int)$r['is_main'],
             'mgr_level'=>$r['mgr_level']===null ? null : (int)$r['mgr_level']];
     }
 

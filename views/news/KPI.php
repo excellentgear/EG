@@ -599,8 +599,9 @@ function toggleSim(ri, ev){
         h += '<label>'+esc(p.label)+'</label><input data-key="'+esc(p.key)+'" data-type="'+esc(p.type)+'" value="'+esc(val)+'">';
     });
     h += '<button onclick="runSim('+ri+')">試算</button>';
+    if (MATRIX.can_override) h += '<button style="background:#DD5138;border-color:#b53c28;" onclick="applySim('+ri+')" title="把目前試算參數寫回本年度設定並重算">套用修改</button>';
     h += '<button style="background:#fff;color:#5b3a1e;border-color:#D8BE93;" onclick="toggleSim('+ri+')">還原</button>';
-    h += '<span style="color:#b5762a;">試算僅預覽，不影響正式快照數值</span></div>';
+    h += '<span style="color:#b5762a;">試算僅預覽；「套用修改」才會寫回本年度設定</span></div>';
     $row.show().find('td').html(h);
 }
 function runSim(ri){
@@ -625,6 +626,27 @@ function runSim(ri){
             $td.html('<span class="kpi-preview" title="試算值 分子='+pv.num+' 分母='+pv.den+'">'+fmtVal(pv.v, r.value_type)+'</span>');
         });
     }).fail(function(){ NProgress.done(); alert('試算失敗'); });
+}
+function collectSimParams(ri){
+    var params = {};
+    $('#simRow'+ri+' input').each(function(){
+        var k = $(this).data('key'), t = $(this).data('type'), v = $.trim($(this).val());
+        if (t === 'int' || t === 'num') params[k] = v === '' ? 0 : +v;
+        else if (t === 'bool') params[k] = v === '1' || v === 'true' ? 1 : 0;
+        else params[k] = v;
+    });
+    return params;
+}
+function applySim(ri){
+    var r = MATRIX.rows[ri];
+    if (!confirm('把第 '+r.item_no+' 項目前試算的參數寫回 '+YEAR+' 年度設定，並重算已結束月份？')) return;
+    NProgress.start();
+    $.post(API, {action:'apply_params', indicator_id:r.indicator_id, year:YEAR, params:JSON.stringify(collectSimParams(ri))}, function(res){
+        NProgress.done();
+        if (!res.ok) { alert(res.error||'套用失敗'); return; }
+        alert(res.changed > 0 ? ('已套用並重算（更新 '+res.changed+' 個參數）') : '參數無變更');
+        loadMatrix();
+    }, 'json').fail(function(x){ NProgress.done(); alert('套用失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
 /* ---------- 趨勢圖 ---------- */

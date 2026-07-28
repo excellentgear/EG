@@ -180,9 +180,20 @@ function pvr_build_dataset(PDO $pdo): array {
         }
     }
 
+    // 4. 未掛選單頁面的自訂別名（管理員設定，方便搜尋辨識）：套進 menu_name 供顯示與搜尋
+    $aliasMap = [];
+    try {
+        foreach ($pdo->query("SELECT page_path, alias FROM page_visit_alias") as $a) {
+            $aliasMap[$a['page_path']] = (string)$a['alias'];
+        }
+    } catch (Exception $e) {}
+
     $rows = array_values($byPath);
     foreach ($rows as &$r) {
         $r['dead_menu'] = ($r['on_menu'] === 1 && $r['c90'] === 0) ? 1 : 0;   // 掛選單但90天零使用（核心產出）
+        $r['alias'] = $aliasMap[$r['page_path']] ?? '';
+        // 未掛選單且有別名 → 以別名當顯示名稱（menu_name 同時供表格顯示、搜尋比對、CSV 匯出）
+        if ($r['on_menu'] === 0 && $r['alias'] !== '') $r['menu_name'] = $r['alias'];
         sort($r['users']);
         $r['users_str'] = implode('、', $r['users']);
     }
@@ -264,6 +275,31 @@ if ($isAjax) {
             }
             unset($l);
             echo json_encode(['success'=>true, 'page_path'=>$pp, 'rows'=>$list]);
+            exit;
+        }
+
+        /* ── 頁面使用統計：設定/清除未掛選單頁面的自訂別名（管理員；寫入走 POST＋transaction） ── */
+        if ($action === 'pv_set_alias') {
+            header('Content-Type: application/json; charset=utf-8');
+            $pp    = mb_substr(trim($_POST['page_path'] ?? ''), 0, 191);
+            $alias = mb_substr(trim($_POST['alias'] ?? ''), 0, 191);
+            if ($pp === '') { echo json_encode(['success'=>false, 'error'=>'缺頁面路徑']); exit; }
+            try {
+                $pdo->beginTransaction();
+                if ($alias === '') {
+                    $pdo->prepare("DELETE FROM page_visit_alias WHERE page_path = ?")->execute([$pp]);
+                } else {
+                    $pdo->prepare("INSERT INTO page_visit_alias (page_path, alias, Modified_By, Modified_At)
+                                   VALUES (?,?,?,NOW())
+                                   ON DUPLICATE KEY UPDATE alias = VALUES(alias), Modified_By = VALUES(Modified_By), Modified_At = NOW()")
+                        ->execute([$pp, $alias, $my_id]);
+                }
+                $pdo->commit();
+                echo json_encode(['success'=>true, 'alias'=>$alias]);
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                echo json_encode(['success'=>false, 'error'=>$e->getMessage()]);
+            }
             exit;
         }
 
@@ -774,7 +810,7 @@ if ($isAjax) {
           <div class="note-box">
             ．記錄方式：所有走共用側欄的頁面每次「開啟」記一筆（頁 × 日 × 人 彙總）；AJAX 請求不計。統計自起算日起累積，<b>累積 2–3 個月後的近90天數字才有代表性</b>。<br>
             ．「選單零使用」＝掛在 system_module_pages 選單上、但近 90 天沒有任何人開啟過——為下架或改良的頭號候選。<br>
-            ．未掛選單但有使用紀錄的頁面（直接輸入網址、由其他頁跳轉，如批圖編輯器）也會列出，選單名稱為空。<br>
+            ．未掛選單但有使用紀錄的頁面（直接輸入網址、由其他頁跳轉，如批圖編輯器）也會列出；可點該列「選單名稱」旁的 <i class="fa fa-pencil" style="color:#B25E1F;"></i> 自訂顯示名稱，方便搜尋辨識。<br>
             ．統計卡與總筆數一律以「全部資料」於後端計算，非僅當前頁。
           </div>
         </div>
@@ -791,6 +827,29 @@ if ($isAjax) {
       <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
         <h4 class="modal-title"><i class="fa fa-users"></i> 使用者明細 <small id="umSub" style="color:#8a7a66;word-break:break-all;"></small></h4></div>
       <div class="modal-body" id="umBody" style="max-height:70vh;overflow-y:auto;">載入中...</div>
+    </div>
+  </div>
+</div>
+
+<!-- 未掛選單頁面命名 Modal（頁面使用統計分頁） -->
+<div class="modal fade" id="aliasModal" role="dialog" tabindex="-1">
+  <div class="modal-dialog" style="width:520px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-pencil"></i> 設定頁面顯示名稱</h4></div>
+      <div class="modal-body" style="font-size:13px;">
+        <p style="color:#8a7a66;margin-bottom:6px;">為未掛選單的頁面取一個好記的名稱，方便在此頁搜尋辨識（僅影響本統計頁顯示，不影響實際頁面）。</p>
+        <div style="background:#F8F2E8;border-radius:6px;padding:6px 10px;margin-bottom:10px;word-break:break-all;color:#6b5745;">
+          <i class="fa fa-file-o"></i> <span id="aliasPath"></span>
+        </div>
+        <input type="text" id="aliasInput" class="form-control input-sm" maxlength="191"
+               placeholder="例如：批圖編輯器" style="width:100%;">
+        <div id="aliasErr" class="text-danger" style="font-size:12px;margin-top:6px;display:none;"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default btn-sm" id="aliasClear" title="清除名稱，恢復顯示路徑">清除名稱</button>
+        <button type="button" class="btn btn-info btn-sm" id="aliasSave"><i class="fa fa-check"></i> 儲存</button>
+      </div>
     </div>
   </div>
 </div>
@@ -996,9 +1055,18 @@ if ($isAjax) {
                 var users = r.users90 > 0
                           ? '<span class="user-link" data-idx="' + i + '" title="點我看每人使用次數與期間">' + esc(r.users_str) + '</span>'
                           : '<span style="color:#c9bba8;">—</span>';
+                var nameCell;
+                if (r.on_menu == 1) {
+                    nameCell = esc(r.menu_name || '');                       // 選單頁：用真實選單名稱，不可改
+                } else {
+                    var lbl = r.alias ? esc(r.alias) : '<span style="color:#c9bba8;">（未命名）</span>';
+                    nameCell = lbl + ' <i class="fa fa-pencil pv-alias-edit" data-path="' + esc(r.page_path)
+                             + '" data-alias="' + esc(r.alias || '') + '" title="設定顯示名稱，方便搜尋辨識"'
+                             + ' style="cursor:pointer;color:#B25E1F;margin-left:5px;"></i>';
+                }
                 html += '<tr' + (r.dead_menu == 1 ? ' class="dead-row"' : '') + '>'
                      +  '<td style="word-break:break-all;">' + esc(r.page_path) + '</td>'
-                     +  '<td>' + esc(r.menu_name || '') + '</td>'
+                     +  '<td>' + nameCell + '</td>'
                      +  '<td>' + esc(r.group_name || '') + '</td>'
                      +  '<td class="num">' + r.c30 + '</td>'
                      +  '<td class="num"><b>' + r.c90 + '</b></td>'
@@ -1060,6 +1128,31 @@ if ($isAjax) {
             $('#umBody').html(h);
         }).fail(function(xhr){ $('#umBody').html('<span class="text-danger">載入失敗（' + xhr.status + '）</span>'); });
     });
+
+    /* 未掛選單頁面命名：開窗、儲存、清除 */
+    $('#vTbody').on('click', '.pv-alias-edit', function(){
+        $('#aliasPath').text($(this).data('path'));
+        $('#aliasInput').val($(this).data('alias') || '');
+        $('#aliasErr').hide().text('');
+        $('#aliasModal').modal('show');
+        setTimeout(function(){ $('#aliasInput').focus().select(); }, 300);
+    });
+    function saveAlias(clear){
+        var pp = $('#aliasPath').text();
+        var alias = clear ? '' : $('#aliasInput').val().trim();
+        $('#aliasSave,#aliasClear').prop('disabled', true);
+        $.ajax({ url:'audit_log_report.php?action=pv_set_alias', method:'POST',
+                 data:{ page_path: pp, alias: alias }, dataType:'json' })
+         .done(function(res){
+             if (!res || !res.success) { $('#aliasErr').text('儲存失敗：' + (res && res.error ? res.error : '未知錯誤')).show(); return; }
+             $('#aliasModal').modal('hide'); loadPv();
+         })
+         .fail(function(xhr){ $('#aliasErr').text('儲存失敗（' + xhr.status + '）').show(); })
+         .always(function(){ $('#aliasSave,#aliasClear').prop('disabled', false); });
+    }
+    $('#aliasSave').on('click', function(){ saveAlias(false); });
+    $('#aliasClear').on('click', function(){ saveAlias(true); });
+    $('#aliasInput').on('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); saveAlias(false); } });
 
     $('#vSize').on('change', function(){ vState.size = parseInt(this.value, 10); vState.page = 1; loadPv(); });
     $('#vPrev').on('click', function(){ if (vState.page > 1) { vState.page--; loadPv(); } });

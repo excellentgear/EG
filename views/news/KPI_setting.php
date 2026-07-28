@@ -39,6 +39,11 @@ $kpiPerms = kpi_as_perms($db, $kpiUser);
         #ksToast { position:fixed; top:70px; left:50%; transform:translateX(-50%); z-index:2000;
             background:#7a9c3f; color:#fff; padding:8px 20px; border-radius:20px; font-size:14px;
             box-shadow:0 3px 10px rgba(0,0,0,.25); display:none; }
+        table.ks-table tbody tr.row-dirty { background:#FDEFD6 !important; }
+        table.ks-table tbody tr.row-dirty td:first-child::before { content:'●'; color:#F0A24B; margin-right:3px; }
+        .ks-btn.f-save.dirty { background:#DD5138; border-color:#b53c28; animation:kspulse 1.2s infinite; }
+        @keyframes kspulse { 0%,100%{opacity:1;} 50%{opacity:.55;} }
+        #btnSaveAll { background:#DD5138; color:#fff; border-color:#b53c28; }
         .ks-panel { border:1.5px solid #E8D5B5; border-radius:8px; background:#fff; margin-bottom:14px; }
         .ks-panel .p-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:8px 12px;
             border-radius:8px 8px 0 0; font-size:14px; }
@@ -111,6 +116,7 @@ $kpiPerms = kpi_as_perms($db, $kpiUser);
             <button id="btnCopyYear" title="把某年度的目標/公式/擔當者設定複製到另一年度(僅補缺漏)">
                 <i class="fa fa-copy"></i> 年度設定複製</button>
             <button id="btnAddInd"><i class="fa fa-plus"></i> 新增指標</button>
+            <button id="btnSaveAll" style="display:none;"><i class="fa fa-save"></i> 全部儲存（<span class="cnt">0</span>）</button>
             <button id="btnCatalog" style="display:none;"><i class="fa fa-database"></i> 資料來源目錄</button>
             <span style="margin-left:auto;font-size:12px;color:#8a6d45;">
                 每年目標/公式獨立儲存；所有修改自動寫入變更歷史</span>
@@ -304,6 +310,10 @@ function buildOwnerMaps(){
     DEPT_OF_USER = {}; DEPT_NAME = {};
     (DATA.dicts.departments||[]).forEach(function(d){ DEPT_NAME[d.id] = d.name; });
     var dm = DATA.dicts.dept_members || {};
+    // 兼任者優先顯示其「主要」部門(is_main=1)，其次才用第一個出現的部門
+    Object.keys(dm).forEach(function(did){
+        dm[did].forEach(function(m){ if (m.is_main === 1) DEPT_OF_USER[m.user_id] = +did; });
+    });
     Object.keys(dm).forEach(function(did){
         dm[did].forEach(function(m){ if (DEPT_OF_USER[m.user_id] === undefined) DEPT_OF_USER[m.user_id] = +did; });
     });
@@ -423,11 +433,11 @@ function renderIndicators(){
         h += '</optgroup><optgroup label="自訂"><option value="__builder__"'+(r.calculator_key==='__builder__'?' selected':'')+'>🔧 自訂公式（資料來源目錄）</option></optgroup>';
         h += '</select>'+(reg?'<div class="param-hint">'+esc(reg.page)+'</div>'
               :(r.calculator_key==='__builder__'?'<div class="param-hint">用資料來源目錄自組公式</div>':''))+'</td>';
-        h += '<td style="text-align:center;"><button class="ks-btn gray" onclick="openParams('+i+')"'
+        h += '<td style="text-align:center;"><button class="ks-btn gray f-parambtn" onclick="openParams('+i+')"'
            + (r.source_mode==='manual'?' disabled style="opacity:.4;"':'')+'>參數'
            + (hasConfiguredParams(r)?' <span style="color:#7a9c3f;" title="已設定參數">●</span>':'')+'</button></td>';
         h += '<td style="text-align:center;"><input type="checkbox" class="f-active"'+(r.year_active==1?' checked':'')+'></td>';
-        h += '<td style="text-align:center;"><button class="ks-btn" onclick="saveRow('+i+')">儲存</button></td>';
+        h += '<td style="text-align:center;"><button class="ks-btn f-save" onclick="saveRow('+i+')">儲存</button></td>';
         h += '</tr>';
     });
     $('#indBody').html(h || '<tr><td colspan="10">無資料</td></tr>');
@@ -437,9 +447,13 @@ function modeChanged(sel, i){
     $tr.find('.f-calc').prop('disabled', sel.value === 'manual');
     $tr.find('td button.ks-btn.gray').prop('disabled', sel.value === 'manual').css('opacity', sel.value === 'manual' ? .4 : 1);
 }
-function saveRow(i){
+// 儲存單列：不整頁 reload（保留其他列未存編輯）、就地更新 DATA、回傳 promise 供「全部儲存」串接
+function saveRow(i, silent){
+    var d = $.Deferred();
     var r = DATA.indicators[i];
     var $tr = $('tr[data-i="'+i+'"]');
+    var freq = $tr.find('.f-freq').val(), vt = $tr.find('.f-vt').val();
+    var ownerId = $tr.find('.f-owner').val() || 0, ownerDisp = $tr.find('.f-ownerdisp').val();
     var post = {
         action:'save_iy', indicator_id:r.indicator_id, year:YEAR,
         source_mode: $tr.find('.f-mode').val(),
@@ -449,27 +463,59 @@ function saveRow(i){
         target_value: $tr.find('.f-tval').val(),
         target_unit: $tr.find('.f-tunit').val(),
         target_text: $tr.find('.f-ttext').val(),
-        owner_user_id: $tr.find('.f-owner').val() || 0,
-        owner_display: $tr.find('.f-ownerdisp').val(),
+        owner_user_id: ownerId,
+        owner_display: ownerDisp,
         is_active: $tr.find('.f-active').is(':checked') ? 1 : 0
     };
-    if (post.source_mode==='auto' && !post.calculator_key) { alert('自動模式請選擇資料來源'); return; }
-    // 主檔(頻率/型態)另存；名稱等沿用原值
+    if (post.source_mode==='auto' && !post.calculator_key) {
+        if (!silent) alert('第 '+r.item_no+' 項：自動模式請選擇資料來源');
+        d.reject(); return d.promise();
+    }
     var mpost = {
         action:'save_indicator', indicator_id:r.indicator_id,
         name: r.name, clause: r.clause || '', stat_desc: r.stat_desc || '',
-        freq: $tr.find('.f-freq').val(), value_type: $tr.find('.f-vt').val(),
-        sort_order: r.sort_order, is_active: (r.ind_active==1?1:0)
+        freq: freq, value_type: vt, sort_order: r.sort_order, is_active: (r.ind_active==1?1:0)
     };
     $.post(API, mpost, function(mr){
-        if (!mr.ok) { alert(mr.error||'主檔儲存失敗'); return; }
+        if (!mr.ok) { if (!silent) alert('第 '+r.item_no+' 項主檔儲存失敗：'+(mr.error||'')); d.reject(); return; }
         $.post(API, post, function(res){
-            if (!res.ok) { alert(res.error||'儲存失敗'); return; }
-            toast('第 '+r.item_no+' 項已儲存');
-            loadAll();
-        }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
-    }, 'json').fail(function(x){ alert('主檔儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+            if (!res.ok) { if (!silent) alert('第 '+r.item_no+' 項儲存失敗：'+(res.error||'')); d.reject(); return; }
+            // 就地更新 DATA（不 reload，避免清掉其他列未存的編輯 / 兼任擔當者被重新推斷）
+            r.freq = freq; r.value_type = vt;
+            r.source_mode = post.source_mode; r.calculator_key = post.calculator_key;
+            r.owner_user_id = +ownerId || 0; r.owner_display = ownerDisp;
+            r.target_direction = post.target_direction; r.target_value = post.target_value;
+            r.target_unit = post.target_unit; r.target_text = post.target_text;
+            r.year_active = post.is_active;
+            // 只刷新該列的參數●標記，不動使用者已挑好的下拉
+            $tr.find('.f-parambtn').html('參數' + (hasConfiguredParams(r) ? ' <span style="color:#7a9c3f;" title="已設定參數">●</span>' : ''));
+            clearDirty(i);
+            if (!silent) toast('第 '+r.item_no+' 項已儲存');
+            d.resolve();
+        }, 'json').fail(function(){ if (!silent) alert('第 '+r.item_no+' 項儲存失敗'); d.reject(); });
+    }, 'json').fail(function(){ if (!silent) alert('第 '+r.item_no+' 項主檔儲存失敗'); d.reject(); });
+    return d.promise();
 }
+
+/* ---- 變異偵測 + 全部儲存 ---- */
+function markDirty(i){ $('tr[data-i="'+i+'"]').addClass('row-dirty').find('.f-save').addClass('dirty'); updateSaveAll(); }
+function clearDirty(i){ $('tr[data-i="'+i+'"]').removeClass('row-dirty').find('.f-save').removeClass('dirty'); updateSaveAll(); }
+function updateSaveAll(){ var n = $('#indBody tr.row-dirty').length; $('#btnSaveAll').toggle(n>0).find('.cnt').text(n); }
+// 使用者手動改動列內任一控制項才標記（程式化 .val() 不觸發 change，故 setOwners 不會誤標）
+$(document).on('change', '#indBody tr[data-i] select, #indBody tr[data-i] input', function(){
+    var i = $(this).closest('tr[data-i]').data('i');
+    if (i !== undefined && i !== null) markDirty(i);
+});
+$('#btnSaveAll').on('click', function(){
+    var dirty = $('#indBody tr.row-dirty').map(function(){ return $(this).data('i'); }).get();
+    if (!dirty.length) return;
+    NProgress.start();
+    var okc = 0;
+    (function next(k){
+        if (k >= dirty.length) { NProgress.done(); toast('已儲存 '+okc+' / '+dirty.length+' 項'); loadLog(); return; }
+        saveRow(dirty[k], true).done(function(){ okc++; }).always(function(){ next(k+1); });
+    })(0);
+});
 
 /* ---------- 參數 modal（依 registry schema 動態欄位＋開放前端勾選） ---------- */
 var pCtx = null;

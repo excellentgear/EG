@@ -193,8 +193,8 @@
       var ch = cell.chart || {};
       return '<div class="eg-chart" data-kind="' + esc(ch.kind || 'radar') + '" data-fields="' + esc((ch.fields || []).join(',')) + '" data-labels="' + esc((ch.labels || []).join(',')) + '" data-max="' + esc(ch.max || '') + '"></div>';
     }
-    // field
-    var key = cell.key, val = data[key] != null ? data[key] : '';
+    // field（沒填欄位代號但有「特殊用途」→ 用 purpose 當代號，免使用者重複設定）
+    var key = cell.key || cell.purpose || '', val = data[key] != null ? data[key] : '';
     var req = cell.required ? ' data-req="1"' : '';
     var ro = (mode === 'view') ? ' readonly disabled' : '';
     var star = '';   // 必填星號一律標在標題（__stars），不放欄位內（會擠壓輸入元件排版）

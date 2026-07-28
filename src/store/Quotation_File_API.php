@@ -512,6 +512,61 @@ switch ($action) {
         break;
     }
 
+    // ── 進站提醒／待處理單據：我被駁回的補件 ＋（簽核者）待審補件 ──
+    case 'supplement_alerts': {
+        initTables($pdo);
+        $uid = _quotUid();
+        // 類別名稱對照
+        $catMap = [];
+        foreach ($pdo->query("SELECT id, category_name FROM quotation_file_categories")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+            $catMap[(int)$c['id']] = $c['category_name'];
+        }
+        $labelCats = function ($cids) use ($catMap) {
+            $ids = array_values(array_filter(array_map('intval', explode(',', (string)$cids))));
+            return implode('、', array_map(fn($i) => $catMap[$i] ?? ('#'.$i), $ids));
+        };
+        // 我被駁回的補件（status=trash + 有駁回原因 + 我上傳；trash 於保留天數內，逾期自動清除）
+        $rj = $pdo->prepare("
+            SELECT a.id, a.quote_no, a.original_name, a.filename, a.category_ids, a.linked_parts, a.trashed_reason,
+                   DATE_FORMAT(a.expire_at,'%Y-%m-%d') AS expire_at, ql.client_name
+            FROM quotation_attachments a
+            LEFT JOIN quotation_list ql ON ql.quote_no = a.quote_no
+            WHERE a.status='trash' AND a.trashed_reason IS NOT NULL AND a.trashed_reason<>''
+              AND CAST(a.uploaded_by AS UNSIGNED) = ?
+            ORDER BY a.id DESC");
+        $rj->execute([$uid]);
+        $rejected = $rj->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rejected as &$r) {
+            $r['category_label'] = $labelCats($r['category_ids']);
+            $r['part_label']     = _quotPartLabel($r['linked_parts']);
+        }
+        unset($r);
+        // 待審補件（僅簽核者可見；與 list_pending_supplements 同來源）
+        $pending = [];
+        $feats   = _quotFeats($pdo);
+        $canSign = rbac_has($feats, 'all') || rbac_has($feats, 'quotation_sign');
+        if ($canSign) {
+            $pending = $pdo->query("
+                SELECT a.id, a.quote_no, a.original_name, a.filename, a.category_ids, a.linked_parts,
+                       DATE_FORMAT(a.uploaded_at,'%Y-%m-%d %H:%i') AS uploaded_at,
+                       COALESCE(u.user_cname, a.uploaded_by) AS uploader_name, ql.client_name
+                FROM quotation_attachments a
+                JOIN approval_record ar ON ar.module='quotation_attach' AND ar.entity_id=a.id AND ar.status='pending'
+                     AND ar.id = (SELECT MAX(id) FROM approval_record WHERE module='quotation_attach' AND entity_id=a.id)
+                LEFT JOIN quotation_list ql ON ql.quote_no = a.quote_no
+                LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
+                WHERE a.status='pending'
+                ORDER BY a.id DESC")->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($pending as &$r) {
+                $r['category_label'] = $labelCats($r['category_ids']);
+                $r['part_label']     = _quotPartLabel($r['linked_parts']);
+            }
+            unset($r);
+        }
+        echo json_encode(['success'=>true, 'rejected'=>$rejected, 'pending'=>$pending, 'can_sign'=>$canSign]);
+        break;
+    }
+
     // ── 簽核者：核准 / 駁回一件補件附件 ──
     case 'decide_supplement': {
         initTables($pdo);
@@ -569,7 +624,7 @@ switch ($action) {
         // 交易外：解除其他簽核者通知（OR-gate）＋通知上傳者結果
         eg_quot_supp_close_notice($pdo, $attId, $uid);
         $uploaderUid = is_numeric($att['uploaded_by']) ? (int)$att['uploaded_by'] : 0;
-        eg_quot_supp_notify_result($pdo, $attId, $att['quote_no'], $uploaderUid, $fileLabel, $decision, $note ?: null);
+        eg_quot_supp_notify_result($pdo, $attId, $att['quote_no'], $uploaderUid, $fileLabel, $name, $decision, $note ?: null);
         echo json_encode(['success'=>true, 'message'=>$decision==='approved' ? '已核准，附件已正式放入報價單' : '已駁回，附件已刪除並通知上傳者']);
         break;
     }
