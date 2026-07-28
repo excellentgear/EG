@@ -56,6 +56,20 @@ switch ($action) {
     case 'update_user_delegates':
         updateUserDelegates();
         break;
+    case 'get_user_scopes': // 某被代理人的職務身分(主職+兼任)清單，供「兼任身分別代理」下拉
+        getUserScopes();
+        break;
+
+    // --- 部門×職稱 指定負責人 (P2) ---
+    case 'get_dept_position_owners':
+        getDeptPositionOwners();
+        break;
+    case 'update_dept_position_owner':
+        updateDeptPositionOwner();
+        break;
+    case 'get_positions_missing_level': // 階級未設定職稱提醒
+        getPositionsMissingLevel();
+        break;
 
     // --- 職稱代理 (Position Delegate) Actions ---
     case 'get_position_delegates':
@@ -286,10 +300,14 @@ function updateDepartmentPositions() {
 function getUserDelegates() {
     global $db;
     try {
-        $sql = "SELECT ud.id, ud.user_id, u1.user_cname, ud.delegate_id, u2.user_cname as delegate_cname, ud.start_date, ud.end_date, ud.active, ud.priority
+        $sql = "SELECT ud.id, ud.user_id, u1.user_cname, ud.delegate_id, u2.user_cname as delegate_cname,
+                       ud.scope_department_id, ud.scope_position_id, sd.name AS scope_department_name, sp.name AS scope_position_name,
+                       ud.start_date, ud.end_date, ud.active, ud.priority
                 FROM user_delegate ud
                 JOIN user u1 ON ud.user_id = u1.id
                 JOIN user u2 ON ud.delegate_id = u2.id
+                LEFT JOIN department sd ON sd.id = ud.scope_department_id
+                LEFT JOIN position sp ON sp.id = ud.scope_position_id
                 ORDER BY ud.user_id, ud.start_date DESC, ud.priority ASC";
         $stmt = $db->query($sql);
         $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -307,8 +325,11 @@ function updateUserDelegates() {
     $end_date = $_POST['end_date'] ?? '';
     $delegate_ids = $_POST['delegate_ids'] ?? [];
     $active = $_POST['active'] ?? 1;
+    // 職務身分別代理（scope）；空字串 => NULL（主職/全域）
+    $scope_dep = (isset($_POST['scope_department_id']) && $_POST['scope_department_id'] !== '') ? intval($_POST['scope_department_id']) : null;
+    $scope_pos = (isset($_POST['scope_position_id']) && $_POST['scope_position_id'] !== '') ? intval($_POST['scope_position_id']) : null;
 
-    // 來自編輯時的原始資料 key
+    // 來自編輯時的原始資料 key：user_id|scopeDep|scopePos|start|end（scope 空字串=NULL）
     $original_key = $_POST['original_key'] ?? '';
 
     if (empty($user_id) || empty($start_date) || empty($end_date)) {
@@ -319,13 +340,22 @@ function updateUserDelegates() {
     try {
         $db->beginTransaction();
 
-        // 如果有 original_key，表示是編輯模式，使用原始 key 來刪除舊資料
+        // 如果有 original_key，表示是編輯模式，使用原始 key 來刪除舊資料（scope 精準比對，NULL 用 IS NULL）
         if (!empty($original_key)) {
-            list($original_user_id, $original_start_date, $original_end_date) = explode('|', $original_key);
-            $deleteStmt = $db->prepare("DELETE FROM user_delegate WHERE user_id = ? AND start_date = ? AND end_date = ?");
-            $deleteStmt->execute([$original_user_id, $original_start_date, $original_end_date]);
+            $parts = explode('|', $original_key);
+            // 相容舊格式(3段) 與 新格式(5段)
+            if (count($parts) === 5) {
+                list($o_uid, $o_dep, $o_pos, $o_start, $o_end) = $parts;
+            } else {
+                list($o_uid, $o_start, $o_end) = $parts; $o_dep = ''; $o_pos = '';
+            }
+            $sqlDel = "DELETE FROM user_delegate WHERE user_id = ? AND start_date = ? AND end_date = ?
+                       AND " . ($o_dep === '' ? "scope_department_id IS NULL" : "scope_department_id = " . intval($o_dep)) . "
+                       AND " . ($o_pos === '' ? "scope_position_id IS NULL" : "scope_position_id = " . intval($o_pos));
+            $deleteStmt = $db->prepare($sqlDel);
+            $deleteStmt->execute([$o_uid, $o_start, $o_end]);
         }
-        
+
         // 如果 delegate_ids 是空的，代表是刪除操作，直接完成交易並返回
         if (empty($delegate_ids)) {
             $db->commit();
@@ -335,10 +365,10 @@ function updateUserDelegates() {
 
         // 2. 插入新的代理規則
         if (!empty($delegate_ids)) {
-            $insertStmt = $db->prepare("INSERT INTO user_delegate (user_id, delegate_id, start_date, end_date, active, priority) VALUES (?, ?, ?, ?, ?, ?)");
+            $insertStmt = $db->prepare("INSERT INTO user_delegate (user_id, delegate_id, scope_department_id, scope_position_id, start_date, end_date, active, priority) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
             foreach ($delegate_ids as $index => $delegate_id) {
                 $priority = $index + 1; // 順序從 1 開始
-                $insertStmt->execute([$user_id, $delegate_id, $start_date, $end_date, $active, $priority]);
+                $insertStmt->execute([$user_id, $delegate_id, $scope_dep, $scope_pos, $start_date, $end_date, $active, $priority]);
             }
         }
 
@@ -606,6 +636,100 @@ function deleteJobTitle() {
         } else {
             echo json_encode(['status' => 'error', 'message' => $e->getMessage()]);
         }
+    }
+}
+
+// ===== P2：職務身分別代理 / 部門×職稱指定負責人 / 階級提醒 =====
+
+/** 某被代理人的職務身分清單（主職 + 兼任），供「兼任身分別代理」下拉選擇 */
+function getUserScopes() {
+    global $db;
+    $user_id = intval($_REQUEST['user_id'] ?? 0);
+    if ($user_id <= 0) { echo json_encode(['status'=>'error','message'=>'缺少 user_id']); return; }
+    try {
+        $sql = "SELECT m.department_id, d.name AS department_name, m.position_id, p.name AS position_name, m.is_main
+                FROM user_department_position_map m
+                LEFT JOIN department d ON d.id = m.department_id
+                LEFT JOIN position p ON p.id = m.position_id
+                WHERE m.user_id = ?
+                ORDER BY m.is_main DESC, m.id ASC";
+        $stmt = $db->prepare($sql);
+        $stmt->execute([$user_id]);
+        echo json_encode(['status'=>'success','data'=>$stmt->fetchAll(PDO::FETCH_ASSOC)]);
+    } catch (PDOException $e) {
+        echo json_encode(['status'=>'error','message'=>'讀取職務身分失敗: '.$e->getMessage()]);
+    }
+}
+
+/** 列出所有 部門×職稱 綁定及其指定負責人；並附各綁定可指派的在職人員清單 */
+function getDeptPositionOwners() {
+    global $db;
+    try {
+        $sql = "SELECT dp.id, dp.department_id, d.name AS department_name, dp.position_id, p.name AS position_name,
+                       dp.primary_user_id, u.user_cname AS primary_user_name, pl.level
+                FROM department_position dp
+                JOIN department d ON d.id = dp.department_id
+                JOIN position p ON p.id = dp.position_id
+                LEFT JOIN user u ON u.id = dp.primary_user_id
+                LEFT JOIN position_level pl ON pl.position_id = dp.position_id
+                ORDER BY d.sort_order, d.name, p.sort_order, p.name";
+        $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+
+        // 各 部門×職稱 目前在職的持有者（可被指派為負責人）
+        $candStmt = $db->prepare("SELECT m.user_id, u.user_cname
+                                  FROM user_department_position_map m
+                                  JOIN user u ON u.id = m.user_id AND u.state = 1
+                                  WHERE m.department_id = ? AND m.position_id = ?
+                                  ORDER BY u.user_cname");
+        foreach ($rows as &$r) {
+            $candStmt->execute([$r['department_id'], $r['position_id']]);
+            $r['candidates'] = $candStmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+        unset($r);
+        echo json_encode(['status'=>'success','data'=>$rows]);
+    } catch (PDOException $e) {
+        echo json_encode(['status'=>'error','message'=>'讀取指定負責人失敗: '.$e->getMessage()]);
+    }
+}
+
+/** 設定某 部門×職稱 綁定的指定負責人（primary_user_id）；空值=清除 */
+function updateDeptPositionOwner() {
+    global $db;
+    $dp_id = intval($_POST['dp_id'] ?? 0);
+    $primary_user_id = (isset($_POST['primary_user_id']) && $_POST['primary_user_id'] !== '') ? intval($_POST['primary_user_id']) : null;
+    if ($dp_id <= 0) { echo json_encode(['status'=>'error','message'=>'缺少 dp_id']); return; }
+    try {
+        // 驗證：若有指定人，該人須確實擔任此 部門×職稱 且在職
+        if ($primary_user_id !== null) {
+            $chk = $db->prepare("SELECT COUNT(*) FROM user_department_position_map m JOIN user u ON u.id=m.user_id AND u.state=1
+                                 JOIN department_position dp ON dp.department_id=m.department_id AND dp.position_id=m.position_id
+                                 WHERE dp.id = ? AND m.user_id = ?");
+            $chk->execute([$dp_id, $primary_user_id]);
+            if ((int)$chk->fetchColumn() === 0) {
+                echo json_encode(['status'=>'error','message'=>'指定的負責人並未擔任此部門×職稱，或已離職。']); return;
+            }
+        }
+        $stmt = $db->prepare("UPDATE department_position SET primary_user_id = ? WHERE id = ?");
+        $stmt->execute([$primary_user_id, $dp_id]);
+        echo json_encode(['status'=>'success','message'=>'指定負責人已更新。']);
+    } catch (PDOException $e) {
+        echo json_encode(['status'=>'error','message'=>'更新失敗: '.$e->getMessage()]);
+    }
+}
+
+/** 尚未設定主管階級(position_level)的職稱清單（供 SoD 主管鏈提醒管理員補齊） */
+function getPositionsMissingLevel() {
+    global $db;
+    try {
+        $sql = "SELECT p.id, p.name
+                FROM position p
+                LEFT JOIN position_level pl ON pl.position_id = p.id
+                WHERE pl.id IS NULL OR pl.level IS NULL
+                ORDER BY p.sort_order, p.name";
+        $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+        echo json_encode(['status'=>'success','data'=>$rows]);
+    } catch (PDOException $e) {
+        echo json_encode(['status'=>'error','message'=>'讀取失敗: '.$e->getMessage()]);
     }
 }
 
