@@ -1,6 +1,6 @@
 # EGsystem — AI 工作規範（每次 session 必讀）
 
-> 最後修改：2026-07-23 — 鐵律5 補「附件暫存機制」：有附件的頁面新增單據時就要能上傳（temp/active 狀態機），並重申絕不可把絕對路徑寫死進 DB（詳見 ai-rules/07）。（前次）鐵律6「若新增頁面」補：一律登記進選單（system_module_pages INSERT＋group_id 綁「測試功能」主項目，只登記入口頁）。
+> 最後修改：2026-07-28 — 路由表新增 `ai-rules/11-代理系統設計.md`（簽核/待辦/請假的代理人解析一律走共用庫 delegate_lib，禁各頁自寫代理 SQL）。（前次 07-23）鐵律5 補附件暫存機制（temp/active，勿寫死絕對路徑，見 ai-rules/07）；鐵律6 新增頁面一律登記進選單。
 
 PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**已用 git 版本控管**（GitHub private repo `ellentravel1003/EGsystem`，分支 `master`），改壞可用 git 復原——但前提是每個檔案改完都有立刻 commit+push（見鐵律6），沒 push 的部分一樣救不回來。
 
@@ -58,5 +58,6 @@ VALUES ('views/xx/xxx.php', '一句話說明', '詳細說明可分點', NOW(), '
 | 要做輸入欄位／日期欄位／資料列表相關頁面 | `ai-rules/08-UI互動規範.md` |
 | 網頁列印畫質不夠（要接近本機看圖列印） | `ai-rules/09-網頁列印高畫質技巧.md` |
 | 要上色（圖表/長條/標籤/狀態色）或改配色 | `ai-rules/10-配色與文字可讀性.md` |
+| 做簽核/待辦派送/請假/異常判定，涉及「某人不在由誰代理」 | `ai-rules/11-代理系統設計.md`（**必讀**，禁各頁自寫代理 SQL） |
 
 原始版 CLAUDE.md 備份：`CLAUDE.md.bak-20260706` 與 `CLAUDE(原始 不可更改).md`（勿動；該備份檔名未帶時分屬歷史命名，新備份一律用 `.bak-yyyyMMdd-HHmm`）。
