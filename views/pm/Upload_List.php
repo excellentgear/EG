@@ -43,10 +43,27 @@ $irLastImport          = $uploadLogs['upload_ir_erp']       ?? null;
 $bomErpLastImport      = $uploadLogs['upload_bom_erp']      ?? null;
 $transferErpLastImport = $uploadLogs['upload_bom_ing_s_erp'] ?? null;
 
+// system_settings.updated_by 存的是登入帳號(user_uname)，顯示時要轉成中文姓名
+$uploaderNames = [];
+try {
+    $ru = $db->query("SELECT id, user_uname, user_cname FROM user");
+    while ($u = $ru->fetch(PDO::FETCH_ASSOC)) {
+        if (isset($u['user_uname']) && $u['user_uname'] !== '') {
+            $uploaderNames[(string)$u['user_uname']] = $u['user_cname'];
+        }
+        // 少數舊資料可能存的是 user.id，一併備援對應（不覆蓋帳號對應）
+        if (!isset($uploaderNames[(string)$u['id']])) {
+            $uploaderNames[(string)$u['id']] = $u['user_cname'];
+        }
+    }
+} catch (Exception $e) {}
+
 function lastUpdateBadge($info, $color = '#555') {
+    global $uploaderNames;
     if (!$info || empty($info['ts'])) return '<span style="font-size:11px;color:#aaa">尚無記錄</span>';
     $ts      = date('Y-m-d H:i', strtotime($info['ts']));
-    $creator = htmlspecialchars($info['creator'] ?? '');
+    $raw     = (string)($info['creator'] ?? '');
+    $creator = htmlspecialchars($uploaderNames[$raw] ?? $raw);   // 查不到就退回原值
     return "<span style=\"font-size:11px;color:{$color}\">⏱ 最近匯入：{$ts}　│　{$creator}</span>";
 }
 
@@ -299,8 +316,8 @@ function lastUpdateBadge($info, $color = '#555') {
                                     </form>
                                     </div><!-- /淺藍底 -->
 
-                                    <!-- 上傳-新bom(新增bom) 2025.02.27 ok-->
-                                    <form action="_upload_For_List.php?but=nb" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
+                                    <!-- 上傳-新bom(新增bom) 2025.02.27 ok — 2026-07-28 已由 BOM ERP直接匯入 取代，先隱藏待確認後移除 -->
+                                    <form action="_upload_For_List.php?but=nb" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate style="display:none">
                                         <div class="item form-group" style="margin-bottom:6px">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file">新 BOM(N-new_bom)<small>(只接受.xls)</small><BR> <span class="required">*</span></label>
                                             <div class="col-md-4 col-sm-4 col-xs-8">
@@ -314,7 +331,8 @@ function lastUpdateBadge($info, $color = '#555') {
                                             <div class="col-md-5 col-sm-5 hidden-xs" style="padding-top:7px"><?= lastUpdateBadge($bomLastUpdate) ?></div>
                                         </div>
                                     </form>
-                                    <form action="_upload_For_List.php?but=u5_NEW" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
+                                    <!-- [針對製程輸入] 新 BOM(製程 N-BOM_ING_ok) — 2026-07-28 先隱藏待確認後移除 -->
+                                    <form action="_upload_For_List.php?but=u5_NEW" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate style="display:none">
                                         <div class="item form-group" style="margin-bottom:6px">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file">[針對製程輸入] 新 BOM(製程 N-BOM_ING_ok)<small>(只接受.xls)</small><BR> <span class="required">*</span></label>
                                             <div class="col-md-4 col-sm-4 col-xs-8">
@@ -329,8 +347,8 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
 
-                                    <!-- 上傳-移轉紀錄(新增S) 2025.02 ok-->
-                                    <form action="_upload_For_List.php?but=u5" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
+                                    <!-- 上傳-移轉紀錄(新增S) 2025.02 ok — 2026-07-28 已由下方「移轉紀錄 ERP直接匯入」取代，先隱藏待確認後移除 -->
+                                    <form action="_upload_For_List.php?but=u5" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate style="display:none">
                                         <div class="item form-group" style="margin-bottom:6px">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file">[針對轉製程中] 移轉紀錄(S-OK)<small>(只接受.xls)</small><BR> <span class="required">*</span></label>
                                             <div class="col-md-4 col-sm-4 col-xs-8">
@@ -457,8 +475,8 @@ function lastUpdateBadge($info, $color = '#555') {
                                         </div>
                                     </form>
 
-                                    <!-- 上傳-加工單價 (transfer_log) -->
-                                    <form action="_upload_For_List.php?but=transfer_log" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
+                                    <!-- 上傳-加工單價 (transfer_log) — 2026-07-28 已由下方「ERP原始檔直接匯入」取代，先隱藏待確認後移除 -->
+                                    <form action="_upload_For_List.php?but=transfer_log" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate style="display:none">
                                         <div class="item form-group" style="margin-bottom:6px">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file_transfer_log">加工單價(transfer_log)<small>(只接受.xls/.xlsx)</small><br><span class="required">*</span></label>
                                             <div class="col-md-4 col-sm-4 col-xs-8">
