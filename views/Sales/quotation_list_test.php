@@ -72,13 +72,16 @@ try {
         $stmtUR->execute([$_user_id]);
         foreach ($stmtUR->fetchAll(PDO::FETCH_ASSOC) as $_row) {
             $_features[] = $_row['feature_code'];
-            $_my_roles[] = $_row['role_name'];
+            // 只把「對本頁(報價單)有權限」的角色列為本頁角色，避免把其他模組的角色(如批圖使用者/一般使用者)也顯示進權限說明
+            if ($_row['feature_code']==='all' || strpos((string)$_row['feature_code'],'quotation_')===0) {
+                $_my_roles[] = $_row['role_name'];
+            }
         }
         $_features = array_unique($_features);
         $_my_roles = array_unique($_my_roles);
-        // 取得角色名稱（即使無功能也要顯示角色名）
+        // 後備：若上面沒抓到任何「本頁相關」角色，退而取仍具本頁權限的角色名（仍限報價單，避免帶入他頁角色）
         if (empty($_my_roles)) {
-            $stmtRN = $_pdo->prepare("SELECT DISTINCT r.role_name FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=?");
+            $stmtRN = $_pdo->prepare("SELECT DISTINCT r.role_name FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id JOIN role_features rf ON rf.role_id=ur.role_id WHERE ur.user_id=? AND (rf.feature_code='all' OR rf.feature_code LIKE 'quotation%')");
             $stmtRN->execute([$_user_id]);
             $_my_roles = $stmtRN->fetchAll(PDO::FETCH_COLUMN);
         }
@@ -467,13 +470,15 @@ body { background:var(--bg); }
                 報價單管理 <small style="font-size:12px;color:#aaa;font-weight:400;">快速版</small>
             </h3>
             <div style="display:flex;gap:14px;align-items:center;">
-                <button class="btn btn-warning btn-sm" id="pendingDocBtn" onclick="applyPendingFilter()" title="只顯示被駁回或補件待審的報價單" style="position:relative;font-weight:600;">
+                <?php if ($CAN_CREATE || $CAN_EDIT || $CAN_SIGN): /* 唯讀(僅檢視)使用者不顯示待處理篩選，避免看到/使用無意義的操作鈕 */ ?>
+                <button class="btn btn-sm" id="pendingDocBtn" onclick="applyPendingFilter()" title="只顯示待審核或被駁回的報價單" style="position:relative;font-weight:600;background:#F7E0BD;color:#7a4a00;border:1px solid #e8c98f;">
                     <i class="fa fa-inbox"></i> 待處理單據
-                    <span id="pendingDocBadge" style="display:none;position:absolute;top:-7px;right:-7px;background:#DD5138;color:#fff;border-radius:10px;font-size:10px;padding:0 5px;font-weight:700;">0</span>
+                    <span id="pendingDocBadge" style="display:none;position:absolute;top:-7px;right:-7px;background:#b5651d;color:#fff;border-radius:10px;font-size:10px;padding:0 5px;font-weight:700;">0</span>
                 </button>
                 <button class="btn btn-default btn-sm" id="showAllDocBtn" onclick="clearPendingFilter()" title="取消篩選，顯示全部報價單" style="display:none;">
                     <i class="fa fa-list"></i> 顯示全部
                 </button>
+                <?php endif; ?>
                 <?php if ($CAN_CREATE): ?>
                 <button class="btn btn-success btn-sm" id="newQuoteBtn" onclick="openNewEditor()">
                     <i class="fa fa-plus"></i> 新增報價單
@@ -4179,15 +4184,13 @@ function applyPendingFilter() {
         return;
     }
     pendingFilterMode = true;
-    $('#pendingDocBtn').removeClass('btn-warning').addClass('btn-danger');
-    $('#showAllDocBtn').show();
+    $('#showAllDocBtn').show();   // 篩選中的狀態指示＝出現「顯示全部」鈕（按鈕本身樣式維持一致，不變色）
     renderQuoteList(allQuotes, $('#listSearch').val().trim());
     Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已篩選待處理單據（報價單待審核/被駁回），點「顯示全部」可還原', showConfirmButton:false, timer:2800 });
 }
 // 取消篩選，還原全部
 function clearPendingFilter() {
     pendingFilterMode = false;
-    $('#pendingDocBtn').removeClass('btn-danger').addClass('btn-warning');
     $('#showAllDocBtn').hide();
     renderQuoteList(allQuotes, $('#listSearch').val().trim());
 }
