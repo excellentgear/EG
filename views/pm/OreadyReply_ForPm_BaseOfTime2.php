@@ -2588,12 +2588,15 @@ echo "</script>\n";
     .list-sort-controls {
         display: inline-flex;
         align-items: center;
+        vertical-align: middle;
         gap: 4px;
-        padding: 2px 6px;
+        padding: 1px 6px;
         border: 1px solid #E0C091;
         border-radius: 4px;
         background: #FDF3E4;
         white-space: nowrap;
+        font-size: 12px;
+        line-height: 1.2;
     }
     .list-sort-controls > label {
         margin: 0;
@@ -14386,6 +14389,21 @@ echo "</script>\n";
                                             <?php endif; ?>
                                             <a><input type="button" id="btn-pm-daily-report" class="btn btn-xs btn-primary" value="生管每日報表" style="margin-left: 70px;" title="匯出Excel：QC待驗逾2天者一分頁，其餘未回廠(ing)依廠商分頁" onclick="window.location.href='pm_daily_report_export.php'"></a>
                                             <a><input type="button" id="btn-capacity-gantt" class="btn btn-xs btn-primary" value="外包產能" style="margin-left: 5px; background:#5a3d8a; border-color:#4a3072;" title="外包產能甘特圖：依廠商/製程看自訂期間內的移轉→回廠重疊(產能排擠)狀態" onclick="openCapacityGantt()"></a>
+                                            <!-- 清單排序（套用於「目前篩選後」的全部資料，非只有本頁） -->
+                                            <span class="list-sort-controls" style="margin-left: 12px;" title="排序會套用在目前所有篩選條件之後的完整結果上（不是只排本頁）">
+                                                <label for="list-sort-field">排序</label>
+                                                <select id="list-sort-field">
+                                                    <option value="">原始順序</option>
+                                                    <option value="outsource_date">發單日</option>
+                                                    <option value="delivery_date">交期</option>
+                                                    <option value="bom">BOM</option>
+                                                    <option value="d_id">料號</option>
+                                                    <option value="customer">客戶</option>
+                                                </select>
+                                                <button type="button" id="btn-list-sort-dir" class="list-sort-btn" title="切換遞增／遞減">▲ 遞增</button>
+                                                <button type="button" id="btn-list-sort-clear" class="list-sort-btn" title="清除排序，回到原始順序">取消排序</button>
+                                            </span>
+                                            <a><input type="button" id="btn-vendor-notify-img" class="btn btn-xs" value="通知廠商圖" style="margin-left: 6px; background:#F0A24B; border-color:#d9861f; color:#fff; font-weight:bold;" title="依目前篩選＋排序結果，產生只含 BOM／料號／發單日 三欄的圖片並自動複製到剪貼簿（不含任何單價資訊）" ></a>
                                         </h2>
                                         <ul class="nav navbar-right panel_toolbox">
                                             <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a>
@@ -14477,21 +14495,6 @@ echo "</script>\n";
                                             <div class="export-buttons" style="margin-right: 15px; display: inline-block; vertical-align: middle;">
                                                 <button id="btn-export-csv" class="btn btn-info btn-sm" title="將目前篩選結果匯出為CSV">轉 CSV</button>
                                                 <button id="btn-export-jpg" class="btn btn-info btn-sm" title="將目前表格畫面匯出為JPG">轉 JPG</button>
-                                                <button id="btn-vendor-notify-img" class="btn btn-sm" style="background:#F0A24B; border:1px solid #d9861f; color:#fff; font-weight:bold;" title="依目前篩選＋排序結果，產生只含 BOM／料號／發單日 三欄的圖片並自動複製到剪貼簿（不含任何單價資訊）">通知廠商圖</button>
-                                            </div>
-                                            <!-- 清單排序（套用於「目前篩選後」的全部資料，非只有本頁） -->
-                                            <div class="list-sort-controls" title="排序會套用在目前所有篩選條件之後的完整結果上（不是只排本頁）">
-                                                <label for="list-sort-field">排序</label>
-                                                <select id="list-sort-field">
-                                                    <option value="">原始順序</option>
-                                                    <option value="outsource_date">發單日</option>
-                                                    <option value="delivery_date">交期</option>
-                                                    <option value="bom">BOM</option>
-                                                    <option value="d_id">料號</option>
-                                                    <option value="customer">客戶</option>
-                                                </select>
-                                                <button type="button" id="btn-list-sort-dir" class="list-sort-btn" title="切換遞增／遞減">▲ 遞增</button>
-                                                <button type="button" id="btn-list-sort-clear" class="list-sort-btn" title="清除排序，回到原始順序">取消排序</button>
                                             </div>
                                             <div class="pagination-info" id="pagination-info">
                                                 顯示 0 筆中的 0 筆，第 0/0 頁
