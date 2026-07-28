@@ -143,6 +143,9 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .bind-customer { color:#7FB3A2; border-color:#D5EAE2; background:#F6FBF9; }
         .bind-maker    { color:#C99A6B; border-color:#EEDFCE; background:#FCF8F3; }
         .bind-order    { color:#C08A52; border-color:#EFDFC9; background:#FDF8F0; }
+        /* 料號連結（暖色，點開圖面/檔案） */
+        .pt-part-link { font-size:12px; color:#B5732A; text-decoration:underline; cursor:pointer; }
+        .pt-part-link:hover, .pt-part-link:focus { color:#8F5416; }
 
         /* 唯讀 BOM 製程條（綁定 BOM 後即時取 bom_ing 逐關，不可點；淡藍框與手動進度區隔） */
         .pt-bom-flow { margin-top:6px; padding:4px 8px 2px; background:#F5F8FC; border:1px dashed #CDDBEA; border-radius:6px; }
@@ -899,6 +902,20 @@ $('#btnToggleAllItems').on('click', function () {
     renderRows(state.rows);
 });
 
+// 點料號開啟圖面/檔案跳窗（比照 bom_tracking 的 openBomFiles → part_viewer.php）
+function openPartDrawing(did, bom) {
+    if (!did && !bom) return;
+    var w = screen.availWidth, h = screen.availHeight;
+    var pw = Math.min(1400, Math.round(w * 0.85));
+    var ph = Math.min(900, Math.round(h * 0.88));
+    var pl = Math.round((w - pw) / 2), pt = Math.round((h - ph) / 2);
+    var url = did
+        ? '../pm/part_viewer.php?d_id=' + encodeURIComponent(did) + (bom ? '&bom=' + encodeURIComponent(bom) : '')
+        : '../pm/bom_viewer.php?bom=' + encodeURIComponent(bom);
+    var winName = did ? ('part_dv_' + did) : ('bom_viewer_' + bom);
+    window.open(url, winName, 'width=' + pw + ',height=' + ph + ',left=' + pl + ',top=' + pt + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
+}
+
 // ── 綁定 BOM 的唯讀製程進度條（比照 bom_tracking，資料即時取自 bom_ing）──────
 var bomProgressCache = {};
 function bomFlowInner(bd) {
@@ -924,9 +941,16 @@ function bomFlowInner(bd) {
 }
 function fillBomFlow($c, bd) {
     $c.empty();
-    var head = 'BOM 製程' + (bd.progress_pct != null ? '（' + bd.progress_pct + '%）' : '') + '：' + bd.bom
-             + (bd.d_id ? '｜' + bd.d_id : '') + (bd.Client_Name ? '｜' + bd.Client_Name : '');
-    $c.append($('<div class="pt-bom-flow-title">').html('<i class="fa fa-cogs"></i>').append($('<span>').text(head)));
+    var $title = $('<div class="pt-bom-flow-title">').html('<i class="fa fa-cogs"></i> ');
+    $title.append($('<span>').text('BOM 製程' + (bd.progress_pct != null ? '（' + bd.progress_pct + '%）' : '') + '：' + bd.bom));
+    if (bd.d_id) {   // 料號可點開圖面
+        $title.append(document.createTextNode('｜'));
+        $title.append($('<a href="#" class="pt-part-link" title="點開圖面/檔案">').text(bd.d_id)
+            .on('click', function (e) { e.preventDefault(); openPartDrawing(bd.d_id, bd.bom); }));
+    }
+    if (bd.Client_Name) $title.append($('<span>').text('｜' + bd.Client_Name));
+    if (bd.sqty != null && bd.sqty !== '') $title.append($('<span>').text('｜數量 ' + bd.sqty));
+    $c.append($title);
     if (!bd.nodes || !bd.nodes.length) {
         $c.append($('<div style="font-size:11px;color:#bbb;">此 BOM 尚無製程資料</div>'));
         return;
@@ -986,14 +1010,19 @@ function renderRows(rows) {
             $titleLine.append($('<span class="share-badge">').text('👥 ' + (r.owner_name || '') + ' 分享（' + modeTxt + '）'));
         }
         $titleTd.append($titleLine);
-        // 綁定內容顯示在標題下方（多個全列出）
+        // 綁定內容顯示在標題下方（多個：一項一行；料號可點開圖面）
         if (r.binds && r.binds.length) {
-            var $bind = $('<div style="margin-top:2px;">');
             r.binds.forEach(function (b) {
-                $bind.append($('<span class="bind-badge bind-' + b.bind_type + '">').text(bindTypeName[b.bind_type] || b.bind_type));
-                $bind.append($('<span style="font-size:12px;color:#667;margin-right:8px;">').text(b.bind_label));
+                var $line = $('<div style="margin-top:2px;">');
+                $line.append($('<span class="bind-badge bind-' + b.bind_type + '">').text(bindTypeName[b.bind_type] || b.bind_type));
+                if (b.bind_type === 'part') {
+                    $line.append($('<a href="#" class="pt-part-link" title="點開圖面/檔案">').text(b.bind_label)
+                        .on('click', function (e) { e.preventDefault(); openPartDrawing(b.bind_label, null); }));
+                } else {
+                    $line.append($('<span style="font-size:12px;color:#667;">').text(b.bind_label));
+                }
+                $titleTd.append($line);
             });
-            $titleTd.append($bind);
         }
         if (r.note) $titleTd.append($('<div style="font-size:11px;color:#888;white-space:pre-line;">').text(r.note));
         // 附件縮圖：最多顯示 3 張，點縮圖另開原圖；「+N」開啟編輯視窗看全部（比照 Sales_Track）
