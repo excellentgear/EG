@@ -1450,7 +1450,6 @@ body { background:var(--bg); }
     </div>
     <div class="modal-body" id="pendingAlertBody" style="font-size:13px;max-height:70vh;overflow-y:auto;padding:14px 18px;"></div>
     <div class="modal-footer" style="padding:8px 14px;">
-      <button type="button" class="btn btn-warning btn-sm" onclick="$('#pendingAlertModal').modal('hide');applyPendingFilter();"><i class="fa fa-inbox"></i> 篩選待處理單據</button>
       <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
     </div>
   </div></div>
@@ -1584,9 +1583,8 @@ let requiredAttachCats = [];    // 每個料號必備的附件類別 ID 清單
 let processTagTree = [];        // 製程標籤樹 [{group_id,group_name,sub_tags:[...]}]
 let allYearsData   = null;      // 全年份快取
 let isAllYearsMode = false;
-let pendingFilterMode = false;  // 待處理單據篩選模式（每次進站預設 false＝全部顯示）
-let pendingQuoteNos   = new Set(); // 有被駁回/待審補件的報價單號集合
-let pendingAlertData  = { rejected: [], pending: [] }; // 進站提醒資料
+let pendingFilterMode = false;  // 待處理單據篩選模式（每次進站預設 false＝全部顯示；篩選報價單本身待審/被駁回）
+let pendingAlertData  = { rejected: [], pending: [] }; // 進站提醒資料（補件被駁回/待審）
 let allProcesses   = [];        // [{id, text}]
 let allUnits         = [];        // [{unit_id, unit_name, unit_symbol}]
 let currentEditId    = null;      // 目前編輯的 quote_id (null = 新增)
@@ -1654,10 +1652,12 @@ $(document).ready(function () {
     loadProcesses();
     loadUnits();
     loadQuoteList(<?= $selectedYear ?>);
-    loadSupplementAlerts(true);   // 進站提醒：被駁回/待審補件（清單預設仍顯示全部）
-    // 切回本分頁時重讀待處理最新狀態：他人已審核者即時收回（不掛已處理待辦，比照通知 OR-gate）
+    loadSupplementAlerts(true);   // 進站提醒：補件被駁回/待審（清單預設仍顯示全部）
+    // 切回本分頁時：若正在待處理篩選，重讀報價單清單→他人已簽核/退回的單即時反映（不掛已處理）；提醒視窗開著也刷新
     document.addEventListener('visibilitychange', function () {
-        if (!document.hidden) loadSupplementAlerts(false);
+        if (document.hidden) return;
+        if (pendingFilterMode) { if (isAllYearsMode) { allYearsData = null; loadAllYears(); } else loadQuoteList(<?= $selectedYear ?>); }
+        if ($('#pendingAlertModal').hasClass('in')) loadSupplementAlerts(false);
     });
     // 通知點擊深連結：?open_id=quote_id 直接開啟該張報價單檢視畫面（比照CAR/QA的open_id慣例）
     (function () {
@@ -3019,8 +3019,10 @@ function renderQuoteList(quotes, filter) {
     const clientF = $('#clientFilterSel').val();
 
     let filtered = quotes;
-    if (pendingFilterMode) filtered = filtered.filter(q => pendingQuoteNos.has(q.quote_no));
+    // 待處理單據＝報價單「本身」簽核狀態為待審核(pending)或被駁回(rejected)；已核准者不列入（補件待審另有專屬入口）
+    if (pendingFilterMode) filtered = filtered.filter(q => q.approval_status === 'pending' || q.approval_status === 'rejected');
     if (clientF) filtered = filtered.filter(q => (q.client_name || '') === clientF);
+    refreshPendingDocBadge();
     if (f) filtered = filtered.filter(q =>
         ((q.quote_no || '') + (q.note || '') + (q.search_keywords || '')).toLowerCase().includes(f)
     );
@@ -4088,44 +4090,29 @@ function refreshSuppReviewBadge() {
 }
 
 // ══════════════════════════════════════════════════════════════
-// 待處理提醒（進站跳窗）＋ 待處理單據篩選
-// 資料來源：我被駁回的補件（rejected）＋（簽核者）待審補件（pending）
+// 進站提醒跳窗（補件被駁回/待審）＋ 待處理單據篩選（報價單本身待審/被駁回）
+// 兩者是不同維度：進站提醒＝補件層級；待處理單據按鈕/篩選＝報價單簽核層級。
 // ══════════════════════════════════════════════════════════════
 // showAlert：是否於載入後跳出進站提醒視窗（僅進站首次為 true）
-// cb：資料更新完成後的回呼（供「先刷新再篩選」等待最新狀態）
-// ★ 每次都向伺服器重讀權威狀態（status='pending' / 被駁回）：只要任一簽核者已審核，
-//   該件即離開 pending → 這裡自動收回，比照補件通知 OR-gate「有人審完其他人就不再掛著」。
-function loadSupplementAlerts(showAlert, cb) {
+// 補件被駁回/待審皆以伺服器 status 為權威；補件通知 OR-gate（有人審完即收回）由後端 status 變更自然反映。
+function loadSupplementAlerts(showAlert) {
     $.get(FILE_API_URL, { action:'supplement_alerts' }, res => {
-        if (!res || !res.success) { if (cb) cb(); return; }
+        if (!res || !res.success) return;
         pendingAlertData = { rejected: res.rejected || [], pending: res.pending || [] };
-        // 更新篩選集合：被駁回 + 待審 的報價單號
-        pendingQuoteNos = new Set();
-        pendingAlertData.rejected.forEach(r => pendingQuoteNos.add(r.quote_no));
-        pendingAlertData.pending.forEach(r => pendingQuoteNos.add(r.quote_no));
-        // 更新「待處理單據」按鈕徽章
-        const n = pendingQuoteNos.size;
-        const $b = $('#pendingDocBadge');
-        if (n > 0) $b.text(n).show(); else $b.hide();
-        // 若正在待處理篩選畫面：依最新狀態重繪；已全部被審核處理完則自動切回全部（不再掛已處理待辦）
-        if (pendingFilterMode) {
-            if (n === 0) {
-                clearPendingFilter();
-                Swal.fire({ toast:true, position:'top-end', icon:'success', title:'待處理單據都已處理完畢，已切回全部', showConfirmButton:false, timer:2500 });
-            } else {
-                renderQuoteList(allQuotes, $('#listSearch').val().trim());
-            }
-        }
-        // 若進站提醒視窗開著，同步刷新其內容（他人審核後即時反映）
+        // 若進站提醒視窗開著，同步刷新其內容（他人審核後即時反映；已無項目則關閉）
+        const total = pendingAlertData.rejected.length + pendingAlertData.pending.length;
         if ($('#pendingAlertModal').hasClass('in')) {
-            const total0 = pendingAlertData.rejected.length + pendingAlertData.pending.length;
-            if (total0 > 0) renderPendingAlertBody(); else $('#pendingAlertModal').modal('hide');
+            if (total > 0) renderPendingAlertBody(); else $('#pendingAlertModal').modal('hide');
         }
         // 進站跳窗（有資料才跳；點窗外自動關閉＝Bootstrap 預設 backdrop 行為）
-        const total = pendingAlertData.rejected.length + pendingAlertData.pending.length;
         if (showAlert && total > 0) showPendingAlertModal();
-        if (cb) cb();
     }, 'json');
+}
+// 「待處理單據」按鈕徽章＝報價單本身待審/被駁回的張數（依 allQuotes 即時算）
+function refreshPendingDocBadge() {
+    const n = allQuotes.filter(q => q.approval_status === 'pending' || q.approval_status === 'rejected').length;
+    const $b = $('#pendingDocBadge');
+    if (n > 0) $b.text(n).show(); else $b.hide();
 }
 
 function showPendingAlertModal() {
@@ -4163,19 +4150,18 @@ function renderPendingAlertBody() {
     $('#pendingAlertBody').html(html);
 }
 
-// 篩選：只顯示被駁回/待審的報價單（先向伺服器刷新最新狀態，他人已審核者即時收回）
+// 篩選：只顯示報價單本身「待審核/被駁回」的單（已核准者不列入）
 function applyPendingFilter() {
-    loadSupplementAlerts(false, () => {
-        if (pendingQuoteNos.size === 0) {
-            Swal.fire({ toast:true, position:'top-end', icon:'info', title:'目前沒有待處理單據', showConfirmButton:false, timer:2500 });
-            return;
-        }
-        pendingFilterMode = true;
-        $('#pendingDocBtn').removeClass('btn-warning').addClass('btn-danger');
-        $('#showAllDocBtn').show();
-        renderQuoteList(allQuotes, $('#listSearch').val().trim());
-        Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已篩選待處理單據，點「顯示全部」可還原', showConfirmButton:false, timer:2500 });
-    });
+    const n = allQuotes.filter(q => q.approval_status === 'pending' || q.approval_status === 'rejected').length;
+    if (n === 0) {
+        Swal.fire({ toast:true, position:'top-end', icon:'info', title:'目前沒有待處理（待審核/被駁回）的報價單', showConfirmButton:false, timer:2500 });
+        return;
+    }
+    pendingFilterMode = true;
+    $('#pendingDocBtn').removeClass('btn-warning').addClass('btn-danger');
+    $('#showAllDocBtn').show();
+    renderQuoteList(allQuotes, $('#listSearch').val().trim());
+    Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已篩選待處理單據（報價單待審核/被駁回），點「顯示全部」可還原', showConfirmButton:false, timer:2800 });
 }
 // 取消篩選，還原全部
 function clearPendingFilter() {
