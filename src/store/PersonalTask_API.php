@@ -904,6 +904,7 @@ try {
             // 逐關節點（一個 bom_sn 一個節點，排除 skip；分母口徑比照 bom_tracking）
             $st = $db->prepare("SELECT bi.bom_sn,
                     MAX(pn.ProcessName) AS name,
+                    MAX(bi.maker_id) AS maker,
                     MAX(bi.outsource_date) AS outsource_date,
                     MAX(bi.return_date) AS return_date
                 FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
@@ -928,6 +929,7 @@ try {
                 $nodes[] = [
                     'bom_sn' => $n['bom_sn'],
                     'name' => $n['name'] ?: ('關卡' . $rank),
+                    'maker' => $n['maker'],
                     'outsource_date' => $n['outsource_date'],
                     'return_date' => $n['return_date'],
                     'reached' => ($isClosed || $rank <= $currentStep) ? 1 : 0,

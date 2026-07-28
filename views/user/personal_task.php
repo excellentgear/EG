@@ -152,6 +152,7 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         .pt-bom-flow-title { font-size:10px; font-weight:700; color:#5A7794; margin-bottom:2px; white-space:nowrap; }
         .pt-bom-flow-title > i { margin-right:4px; }
         .pt-bom-flow .pt-step { cursor:default; }
+        .pt-step-maker { color:#B5732A; font-size:10px; margin-left:2px; }
         .pt-bom-flow-closed { font-size:11px; color:#7A869A; cursor:pointer; padding:2px 0; }
         .pt-bom-flow-closed .pct { color:#1ABB9C; font-weight:700; }
         .pt-bom-flow-closed:hover { color:#4A5A6A; }
@@ -930,7 +931,9 @@ function bomFlowInner(bd) {
         if (n.reached) $dot.html('<i class="fa fa-check"></i>'); else $dot.text(i + 1);
         $top.append($dot).append($('<span class="pt-line">').addClass(n.reached ? 'done' : ''));
         $node.append($top);
-        $node.append($('<div class="pt-step-name">').text(n.name));
+        var $nm = $('<div class="pt-step-name">').text(n.name);
+        if (n.maker) $nm.append($('<span class="pt-step-maker">').text('(' + n.maker + ')'));  // 外包廠商
+        $node.append($nm);
         var sub = n.return_date ? ('回 ' + fmtDateShort(n.return_date))
                 : (n.outsource_date ? ('發 ' + fmtDateShort(n.outsource_date)) : '');
         if (sub) $node.append($('<div class="pt-step-time">').text(sub));
