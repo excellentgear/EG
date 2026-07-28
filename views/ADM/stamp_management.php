@@ -348,7 +348,7 @@ $('#addTpl,#addKind,#addUser,#addDept,#addDeptUser,#addPosition,#addDate,#addNot
   if(i>-1&&i<visible.length-1) $('#'+visible[i+1]).focus(); else $('#btnAdd').click();
 });
 
-let TYPES=[], DEPTS=[], POSITIONS=[];
+let TYPES=[], DEPTS=[], POSITIONS=[], DEPT_POSITIONS={};
 // 依印章種類的 bind_targets 決定新增登記可選的持有對象別；未選種類或無限制＝三種都可選（沿用舊行為）
 // 種類同時綁定「個人」＋「課室」時，合併成一種組合模式：先選部門、再選該部門所屬人員（而非各自獨立可選）
 function allowedKinds(){
@@ -377,6 +377,7 @@ function updateAddTargetSelects(){
   $('#addDeptUser').toggle(k==='user_dept');
   $('#addPosition').toggle(k==='position');
   if(k==='user_dept'){ $('#addDept').val(''); populateDeptUserOptions(); }
+  if(k==='position'){ $('#addDept').val(''); populatePositionOptions(); }
 }
 // 部門→篩選人員：只列出主要部門＝所選部門的在職人員（部門所屬人員組合登記用）
 function populateDeptUserOptions(){
@@ -387,9 +388,23 @@ function populateDeptUserOptions(){
     ? '<option value="">— 選擇人員 —</option>'+list.map(u=>`<option value="${u.id}">${esc(u.user_cname)}</option>`).join('')
     : '<option value="">（此部門查無在職人員）</option>');
 }
+// 部門→篩選職稱：只列出該部門在「部門/職稱設定」實際有設定的職稱（department_position 主檔，非人員實際指派）
+function populatePositionOptions(){
+  const did=$('#addDept').val();
+  if(!did){ $('#addPosition').html('<option value="">（請先選部門）</option>'); return; }
+  const allowed=(DEPT_POSITIONS[did]||[]).map(String);
+  const list=POSITIONS.filter(p=>allowed.includes(String(p.id)));
+  $('#addPosition').html(list.length
+    ? '<option value="">— 選擇職稱 —</option>'+list.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')
+    : '<option value="">（此部門未設定職稱）</option>');
+}
 $('#addType').on('change',updateAddKindUI);
 $('#addKind').on('change',updateAddTargetSelects);
-$('#addDept').on('change',function(){ if($('#addKind').val()==='user_dept') populateDeptUserOptions(); });
+$('#addDept').on('change',function(){
+  const k=$('#addKind').val();
+  if(k==='user_dept') populateDeptUserOptions();
+  else if(k==='position') populatePositionOptions();
+});
 // 新增登記先選「模板」，種類由模板自動帶入（唯讀顯示，不再讓使用者另外選種類）
 $('#addTpl').on('change',function(){
   const t=(TPLS||[]).find(x=>String(x.id)===String($(this).val()));
@@ -417,10 +432,10 @@ function loadMeta(){
     $('#fltType').html(typeOpts('',true));
     if(canManage){
       $('#addBar').show();
-      DEPTS=m.depts||[]; POSITIONS=m.positions||[];
+      DEPTS=m.depts||[]; POSITIONS=m.positions||[]; DEPT_POSITIONS=m.dept_positions||{};
       $('#addUser').html('<option value="">— 選擇人員 —</option>'+USERS.map(u=>`<option value="${u.id}">${esc(u.user_cname)}</option>`).join(''));
       $('#addDept').html('<option value="">— 選擇部門 —</option>'+DEPTS.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
-      $('#addPosition').html('<option value="">— 選擇職稱 —</option>'+POSITIONS.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join(''));
+      $('#addPosition').html('<option value="">（請先選部門）</option>');
       $('#addType').html(typeOpts('',false));
       $('#addDate').val(today());
       updateAddKindUI();
@@ -428,8 +443,7 @@ function loadMeta(){
     }
     if(isAdmin){ $('#stabBase').show(); $('#baseDir').val(m.base||''); baseState(m.base,m.base_ok); }
     if(canManage){ $('#btnSettings').show(); $('#btnTplNew').show(); }
-    loadTpls();
-    loadList(1);
+    loadTpls(()=>loadList(1));   // 清冊印模預覽要用模板資料(TPLS)渲染，等模板載完再載清冊，避免競速下第一次顯示退回舊版簡易章
   });
 }
 
@@ -454,6 +468,19 @@ $('#btnBaseSave').on('click',function(){
   },'json');
 });
 
+// 清冊印模預覽：改用該登記「種類」實際綁定的線上圖章模板渲染（有多顆取第一顆啟用中的），
+// 而不是舊版固定三行章——否則模板沒設計{部門}，清冊卻因為 holder_name 帶部門名而看起來章上印了部門名稱，跟模板設計對不上。
+// 查無對應模板時（尚未設計）才退回舊版簡易章當佔位預覽。
+function renderRegStamp(x){
+  const tpl=(TPLS||[]).find(t=>+t.is_active===1 && String(t.type_id||'')===String(x.type_id||''));
+  if(tpl){
+    let sc={}; try{sc=JSON.parse(tpl.schema_json||'{}');}catch(e){sc={};}
+    const ctx={company:window.__ownCompany||'', dept:x.dept_name||'', position:x.position_name||'', name:x.user_cname||'', date:dot(x.issue_date)};
+    return EGStampTpl.render(Object.assign({},sc,{size:76}), ctx);
+  }
+  return EGStamp.stamp(x.holder_name, dot(x.issue_date), false);
+}
+
 // ── 清冊列表（後端分頁＋彙總）──
 function loadList(p){
   page=p||page;
@@ -463,7 +490,7 @@ function loadList(p){
     total=r.total;
     $('#sumInfo').text(`使用中 ${r.summary.active} 顆／已停用 ${r.summary.revoked} 顆，共 ${total} 筆`);
     $('#regBody').html(r.rows.map(x=>{
-      const stampHtml=EGStamp.stamp(x.holder_name, dot(x.issue_date), false);
+      const stampHtml=renderRegStamp(x);
       const kindBadge=x.holder_kind==='position'?' <span class="status-chip" style="background:#dcd0e8;color:#3a2c4a;">職稱章</span>'
         :x.holder_kind==='user_dept'?' <span class="status-chip" style="background:#f0dfc3;color:#4a3a20;">部門人員章</span>'
         :x.holder_kind==='dept'?' <span class="status-chip" style="background:#e8dcc3;color:#4a3a20;">課室章</span>':'';
@@ -633,7 +660,7 @@ $('#btnPrint').on('click',function(){
   $.getJSON(API,{action:'list',q,status:st,type_id:tid,all:1},r=>{
     if(!r.ok){alert(r.error||'載入失敗');return;}
     const rows=r.rows.map(x=>`<tr>
-      <td style="text-align:center;">${EGStamp.stamp(x.holder_name,dot(x.issue_date),false)}</td>
+      <td style="text-align:center;">${renderRegStamp(x)}</td>
       <td>${esc(x.holder_name)}${x.holder_kind==='position'?'（職稱章）':x.holder_kind==='user_dept'?'（部門人員章）':x.holder_kind==='dept'?'（部門章）':''}</td>
       <td>${x.type_name?esc(x.type_name):'（未分類）'}</td>
       <td>${esc(x.issue_date||'')}</td><td>${esc(x.revoke_date||'—')}</td>
@@ -818,7 +845,7 @@ function serialRuleText(t){
     +'　起'+t.serial_start+' 跳'+t.serial_step
     +({none:'',year:' 每年歸零',month:' 每月歸零'}[t.serial_reset]||'');
 }
-function loadTpls(){
+function loadTpls(cb){
   $.getJSON(API+'?action=tpl_list',r=>{
     if(!r.ok) return;
     TPLS=r.rows||[];
@@ -840,6 +867,7 @@ function loadTpls(){
           <button class="btn btn-danger btn-xs tplrow-del" data-id="${t.id}"><i class="fa fa-trash"></i></button>`:'<span class="text-muted">—</span>'}
         </td></tr>`;}).join('')||'<tr><td colspan="6" class="text-muted">尚無模板，請新增。</td></tr>');
     if(canManage) populateAddTpl();   // 新增登記的「模板」下拉同步更新（啟用/停用/刪除/改種類都會影響可選清單）
+    if(cb) cb();
   });
 }
 $('#tplBody').on('click','.tplrow-edit',function(){

@@ -80,13 +80,22 @@ case 'meta': {
     $types = $db->query("SELECT id, type_name, bind_targets, sort_order, is_active FROM stamp_type ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     $depts = $canManage ? $db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC) : [];
     $positions = $canManage ? $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC) : [];
+    // 部門→職稱對照（department_position 主檔，非 user_department_position_map 實際指派）：職稱下拉依所選部門「該部門有設定的職稱」篩選
+    $deptPositions = new stdClass();
+    if ($canManage) {
+        $dp = [];
+        foreach ($db->query("SELECT department_id, position_id FROM department_position")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $dp[(string)$r['department_id']][] = (int)$r['position_id'];
+        }
+        $deptPositions = $dp;
+    }
     $tpls = $db->query("SELECT p.id, p.type_id, t.type_name, p.tpl_name
                         FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
                         WHERE p.is_active=1 ORDER BY t.sort_order, p.id")->fetchAll(PDO::FETCH_ASSOC);
     $base = '';
     if ($canManage) $base = eg_stamp_base($db);
     jout(['ok'=>true, 'canView'=>true, 'canManage'=>$canManage, 'isAdmin'=>$isAdmin, 'me'=>$cname,
-          'users'=>$users, 'types'=>$types, 'depts'=>$depts, 'positions'=>$positions, 'templates'=>$tpls,
+          'users'=>$users, 'types'=>$types, 'depts'=>$depts, 'positions'=>$positions, 'dept_positions'=>$deptPositions, 'templates'=>$tpls,
           'base'=>$base, 'base_ok'=>$canManage ? is_dir($base) : null]);
 }
 
