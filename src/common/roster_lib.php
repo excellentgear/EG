@@ -497,16 +497,29 @@ if (!function_exists('roster_leave_map')) {
         if (empty($userIds)) return [];
         $map = [];
         $in = implode(',', array_fill(0, count($userIds), '?'));
-        $expand = function ($uid, $s, $e, $label) use ($from, $to, &$map) {
-            $s = max($from, substr($s, 0, 10)); $e = min($to, substr($e, 0, 10));
-            if ($s > $e) return;
-            $d = new DateTime($s); $ed = new DateTime($e);
-            while ($d <= $ed) { $map[$uid . '|' . $d->format('Y-m-d')] = $label; $d->modify('+1 day'); }
+        // 每筆假逐日展開，判定該日是「整天(full)」還是「部分工時(half)」
+        //  full = allday 旗標，或該日被涵蓋時數 >= 6 小時（跨日假的中間日必為整天）
+        $expand = function ($uid, $s, $e, $label, $allday) use ($from, $to, &$map) {
+            $sD = substr($s, 0, 10); $eD = substr($e, 0, 10);
+            $lo = max($from, $sD); $hi = min($to, $eD);
+            if ($lo > $hi) return;
+            $sT = new DateTime($s); $eT = new DateTime($e);
+            $d = new DateTime($lo); $ed = new DateTime($hi);
+            while ($d <= $ed) {
+                $day = $d->format('Y-m-d');
+                $dayS = new DateTime($day . ' 00:00:00'); $dayE = new DateTime($day . ' 23:59:59');
+                $segS = $sT > $dayS ? $sT : $dayS; $segE = $eT < $dayE ? $eT : $dayE;
+                $hours = ($segE->getTimestamp() - $segS->getTimestamp()) / 3600;
+                $full = $allday || $hours >= 6;
+                $prev = $map[$uid . '|' . $day] ?? null;
+                $map[$uid . '|' . $day] = ['label' => $label, 'full' => ($full || ($prev && $prev['full']))];
+                $d->modify('+1 day');
+            }
         };
         // A) 行事曆請假（暫用：請假系統未建，用 evenement_actor 綁人＋有 leave_type_id 或分類含「休假」）
         try {
             $st = $pdo->prepare("
-                SELECT a.user_id, e.start, e.end, ec.category_name, lt.leave_name
+                SELECT a.user_id, e.start, e.end, e.allday, ec.category_name, lt.leave_name
                 FROM evenement e
                 JOIN evenement_actor a ON a.event_id = e.id
                 LEFT JOIN event_category ec ON ec.id = e.category_id
@@ -516,7 +529,7 @@ if (!function_exists('roster_leave_map')) {
                   AND DATE(e.start) < DATE_ADD(?, INTERVAL 1 DAY) AND DATE(e.end) >= ?");
             $st->execute(array_merge($userIds, [$to, $from]));
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                $expand((int)$r['user_id'], $r['start'], $r['end'], $r['leave_name'] ?: ($r['category_name'] ?: '請假'));
+                $expand((int)$r['user_id'], $r['start'], $r['end'], $r['leave_name'] ?: ($r['category_name'] ?: '請假'), !empty($r['allday']));
             }
         } catch (Exception $e) { /* 行事曆查詢失敗不擋 */ }
         // B) 正式請假單（leave_request；目前尚未有資料，未來上線自動生效）
@@ -528,7 +541,7 @@ if (!function_exists('roster_leave_map')) {
                   AND lr.start_datetime < DATE_ADD(?, INTERVAL 1 DAY) AND lr.end_datetime >= ?");
             $st->execute(array_merge($userIds, [$to, $from]));
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                $expand((int)$r['employee_id'], $r['start_datetime'], $r['end_datetime'], $r['leave_name'] ?: '請假');
+                $expand((int)$r['employee_id'], $r['start_datetime'], $r['end_datetime'], $r['leave_name'] ?: '請假', false);
             }
         } catch (Exception $e) { /* leave_request 不存在等 */ }
         return $map;

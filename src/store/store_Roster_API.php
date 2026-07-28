@@ -399,13 +399,14 @@ case 'get_calendar': {
     $cells = [];
     foreach ($ass as $r) {
         $uid = (int)$r['user_id'];
+        $lv = $leaveMap[$uid . '|' . $r['duty_date']] ?? null;
         $cells[$r['duty_date']][] = [
             'aid' => (int)$r['id'], 'lane_id' => (int)$r['lane_id'], 'user_id' => $uid,
             'name' => $names[$uid]['name'] ?? ('#' . $uid), 'left' => $names[$uid]['left'] ?? false,
             'sign' => (int)$r['sign_status'], 'signed_at' => $r['signed_at'] ? substr($r['signed_at'], 0, 16) : null,
             'adjusted' => (int)$r['is_adjusted'], 'mine' => ($uid === $MYID),
             'pending' => $r['pending_swap_id'] ? (int)$r['pending_swap_id'] : 0,
-            'leave' => $leaveMap[$uid . '|' . $r['duty_date']] ?? null,
+            'leave' => $lv['label'] ?? null, 'leave_full' => $lv ? (bool)$lv['full'] : false,
             'can_sign' => ($uid === $MYID), 'note' => $r['adjust_note'],
         ];
     }
@@ -483,7 +484,8 @@ case 'get_calendar_multi': {
     $leaveMap = roster_leave_map($pdo, $allUids, $from, $to);
     foreach ($cells as $d => &$arr) { foreach ($arr as &$c) {
         $c['name'] = $nm[$c['user_id']]['name'] ?? ('#' . $c['user_id']); $c['left'] = $nm[$c['user_id']]['left'] ?? false;
-        $c['leave'] = $leaveMap[$c['user_id'] . '|' . $d] ?? null;
+        $lv = $leaveMap[$c['user_id'] . '|' . $d] ?? null;
+        $c['leave'] = $lv['label'] ?? null; $c['leave_full'] = $lv ? (bool)$lv['full'] : false;
     } unset($c); } unset($arr);
     // 排序每日：依表色群組
     foreach ($cells as $d => &$arr) { usort($arr, fn($a, $b) => strcmp($a['board_name'] . $a['lane_name'], $b['board_name'] . $b['lane_name'])); } unset($arr);
