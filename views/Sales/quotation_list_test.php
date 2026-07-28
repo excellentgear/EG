@@ -539,13 +539,23 @@ body { background:var(--bg); }
                     </button>
                     <div id="allYearsIndicator" style="display:none;font-size:10px;color:var(--accent);padding:1px 5px;border:1px solid var(--accent);border-radius:3px;">ALL</div>
                 </div>
-                <!-- 客戶篩選下拉 -->
+                <!-- 客戶篩選下拉（上方模糊搜尋框可用客戶代碼或名稱縮小下拉選項） -->
                 <div style="padding:6px 10px;border-bottom:1px solid var(--border);background:#fafafa;flex-shrink:0;">
+                    <div style="position:relative;margin-bottom:4px;">
+                        <i class="fa fa-filter" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);color:#c9a074;font-size:11px;"></i>
+                        <input type="text" id="clientFilterSearch" class="form-control input-sm"
+                            placeholder="模糊篩選客戶代碼／名稱…" autocomplete="off"
+                            title="輸入客戶代碼或名稱片段即可縮小下方客戶清單；可用空白分隔多個關鍵字；雙擊清空"
+                            style="font-size:12px;padding-left:24px;padding-right:24px;">
+                        <i class="fa fa-times-circle" id="clientFilterSearchClear" title="清除篩選字"
+                            style="display:none;position:absolute;right:7px;top:50%;transform:translateY(-50%);color:#bbb;cursor:pointer;font-size:13px;"></i>
+                    </div>
                     <select id="clientFilterSel" class="form-control input-sm"
                         style="font-size:12px;"
                         onchange="renderQuoteList(allQuotes, $('#listSearch').val().trim())">
                         <option value="">全部客戶</option>
                     </select>
+                    <div id="clientFilterHint" style="display:none;font-size:10px;color:#96601f;margin-top:3px;"></div>
                 </div>
                 <!-- 搜尋 -->
                 <div class="list-search">
@@ -1726,6 +1736,28 @@ $(document).ready(function () {
     $('#listSearch').on('input', function () {
         renderQuoteList(allQuotes, $(this).val().trim());
     });
+
+    // 客戶模糊篩選（代碼／名稱）→ 即時縮小客戶下拉選項
+    $('#clientFilterSearch')
+        .on('input', renderClientFilterOptions)
+        .on('focus', function () { if (this.value) this.select(); })
+        .on('dblclick', function () {              // 雙擊清空＝連同客戶篩選一起解除
+            if (!this.value && !$('#clientFilterSel').val()) return;
+            this.value = '';
+            $('#clientFilterSel').val('');
+            renderClientFilterOptions();
+            renderQuoteList(allQuotes, $('#listSearch').val().trim());
+        })
+        .on('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === 'ArrowDown') {   // Enter/↓ 跳到客戶下拉
+                e.preventDefault();
+                $('#clientFilterSel').focus();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                clearClientFilterSearch();
+            }
+        });
+    $('#clientFilterSearchClear').on('click', clearClientFilterSearch);
 
     // 幣別變更 → 重算
     $('#currency').on('change', calculateTotal);
@@ -3027,14 +3059,77 @@ function loadAllYears() {
 // ══════════════════════════════════════════════════════
 // ★ 客戶下拉選單（由載入的資料動態產生）
 // ══════════════════════════════════════════════════════
+// 目前資料裡出現過的客戶清單：{ name, id（同名多代碼以 / 併列）, count }
+let clientOptionList = [];
+
 function buildClientFilter(quotes) {
-    const prevVal = $('#clientFilterSel').val();
-    const clients = [...new Set(quotes.map(q => q.client_name || '').filter(Boolean))].sort();
-    let html = '<option value="">全部客戶</option>';
-    clients.forEach(c => { html += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`; });
+    const map = new Map();
+    quotes.forEach(q => {
+        const name = q.client_name || '';
+        if (!name) return;
+        if (!map.has(name)) map.set(name, { name, ids: new Set(), count: 0 });
+        const o = map.get(name);
+        if (q.client_id) o.ids.add(String(q.client_id));
+        o.count++;
+    });
+    clientOptionList = [...map.values()]
+        .map(o => ({ name: o.name, id: [...o.ids].sort().join('/'), count: o.count }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'));
+    renderClientFilterOptions();
+}
+
+// 子序列比對（關鍵字的字元依序出現即算命中），只在完全比不到時才啟用
+function _clientSubseq(hay, needle) {
+    let i = 0;
+    for (const ch of hay) { if (ch === needle[i]) i++; if (i >= needle.length) return true; }
+    return needle.length === 0;
+}
+
+// 模糊篩選：代碼＋名稱一起比對，空白可分隔多關鍵字（需全部命中）
+function filterClientOptions(term) {
+    const t = (term || '').trim().toLowerCase();
+    if (!t) return clientOptionList;
+    const toks = t.split(/\s+/).filter(Boolean);
+    const hay  = o => ((o.id || '') + ' ' + o.name).toLowerCase();
+    let list = clientOptionList.filter(o => toks.every(k => hay(o).includes(k)));
+    // 一筆都比不到才放寬成子序列比對（例：打 "台電" 也能找到 "台灣電機"）
+    if (!list.length) list = clientOptionList.filter(o => toks.every(k => _clientSubseq(hay(o), k)));
+    return list;
+}
+
+// 依搜尋字重建下拉選項（維持目前選取的客戶；剛好只剩一家時自動選取）
+function renderClientFilterOptions() {
+    const term = $('#clientFilterSearch').val() || '';
+    const cur  = $('#clientFilterSel').val() || '';
+    const list = filterClientOptions(term);
+    const lbl  = o => (o.id ? o.id + '－' : '') + o.name + ' (' + o.count + ')';
+
+    let html = `<option value="">全部客戶${term.trim() ? `（符合 ${list.length} 家）` : ''}</option>`;
+    list.forEach(o => { html += `<option value="${escapeHtml(o.name)}">${escapeHtml(lbl(o))}</option>`; });
+    // 目前選取的客戶被篩選字排除時仍保留一列，避免選取被意外清掉
+    const curOpt = cur ? clientOptionList.find(o => o.name === cur) : null;
+    if (curOpt && !list.some(o => o.name === cur)) {
+        html += `<option value="${escapeHtml(curOpt.name)}">${escapeHtml(lbl(curOpt))}（目前選取）</option>`;
+    }
     $('#clientFilterSel').html(html);
-    // 恢復上次選取（若仍在清單中）
-    if (prevVal && clients.includes(prevVal)) $('#clientFilterSel').val(prevVal);
+    $('#clientFilterSel').val(curOpt ? cur : '');
+
+    $('#clientFilterSearchClear').toggle(!!term);
+    const $hint = $('#clientFilterHint');
+    if (!term.trim())      $hint.hide();
+    else if (!list.length) $hint.text('找不到符合的客戶').css('color', '#DD5138').show();
+    else                   $hint.text(`符合 ${list.length} 家客戶`).css('color', '#96601f').show();
+
+    // 只剩一家 → 直接選起來，省一次點擊
+    if (term.trim() && list.length === 1 && $('#clientFilterSel').val() !== list[0].name) {
+        $('#clientFilterSel').val(list[0].name).trigger('change');
+    }
+}
+
+// 清空客戶模糊篩選字（不動已選取的客戶）
+function clearClientFilterSearch() {
+    $('#clientFilterSearch').val('');
+    renderClientFilterOptions();
 }
 
 // ══════════════════════════════════════════════════════
