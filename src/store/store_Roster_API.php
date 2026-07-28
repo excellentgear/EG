@@ -145,7 +145,7 @@ case 'save_board': {
     $name = trim($p['name'] ?? '');
     if ($name === '') jfail('請輸入表名稱');
     $lanesIn = $p['lanes'] ?? [];
-    if (!is_array($lanesIn) || count($lanesIn) === 0) jfail('至少要有一個職務欄');
+    if (!is_array($lanesIn) || count($lanesIn) === 0) jfail('至少要有一個輪值項目');
     $startDate = $p['start_date'] ?? date('Y-m-d');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $startDate)) jfail('起始日格式錯誤');
 
@@ -188,7 +188,7 @@ case 'save_board': {
         $inL = $pdo->prepare("INSERT INTO roster_lane (board_id,lane_name,color,shift_type_id,sort_order) VALUES (?,?,?,?,?)");
         foreach ($lanesIn as $i => $ln) {
             $lname = trim($ln['lane_name'] ?? '');
-            if ($lname === '') $lname = '職務' . ($i + 1);
+            if ($lname === '') $lname = '項目' . ($i + 1);
             $color = trim($ln['color'] ?? '');
             $shift = isset($ln['shift_type_id']) && $ln['shift_type_id'] !== '' ? (int)$ln['shift_type_id'] : null;
             $lid = (int)($ln['id'] ?? 0);
@@ -400,7 +400,7 @@ case 'request_swap': {
     $q->execute([$toAid]);   $t = $q->fetch(PDO::FETCH_ASSOC);
     if (!$a || !$t) jerr('排班不存在', 404);
     if ((int)$a['board_id'] !== (int)$t['board_id']) jfail('只能在同一張表內對調');
-    if ((int)$a['lane_id'] !== (int)$t['lane_id']) jfail('只能跟同一個職務欄（同組）對調');
+    if ((int)$a['lane_id'] !== (int)$t['lane_id']) jfail('只能跟同一個輪值項目（同組）對調');
     $bypass = ((int)$a['owner_id'] === $MYID) || $IS_ADMIN;
     if ((int)$a['user_id'] !== $MYID && !$bypass) jerr('只能對調自己負責的班', 403);
     if ((int)$t['user_id'] === (int)$a['user_id']) jfail('對調雙方是同一人');

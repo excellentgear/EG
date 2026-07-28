@@ -36,7 +36,7 @@ if (rbac_has($features, 'roster_delete')) $permParts[] = '刪除';
 if ($IS_ADMIN)   $permParts[] = '管理';
 $permBadge = $permParts ? implode('+', $permParts) : '無';
 
-// 公開對象 / 職務欄 / 成員 選單資料
+// 公開對象 / 輪值項目 / 成員 選單資料
 $pickers = roster_load_pickers($pdo);
 // 部門階層路徑
 $deptMap = [];
@@ -46,7 +46,7 @@ function rosterDeptPath($id, $map) {
     while ($id && isset($map[$id]) && $guard++ < 10) { array_unshift($path, $map[$id]['name']); $id = $map[$id]['parent_id']; }
     return implode(' / ', $path);
 }
-// 暖色系職務欄調色盤（鐵律：暖色，禁冷暖混雜）
+// 暖色系輪值項目調色盤（鐵律：暖色，禁冷暖混雜）
 $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F', '#8C5A3C', '#A64B2A'];
 ?>
 <!DOCTYPE html>
@@ -241,7 +241,7 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
             <div class="col-sm-4 form-group"><label>起始日 *</label><input type="date" id="ed_start" class="form-control"></div>
             <div class="col-sm-4 form-group"><label>人員歸屬</label>
                 <select id="ed_member_mode" class="form-control" onchange="R.onModeChange()">
-                    <option value="per_lane">各職務欄各自一份名單</option>
+                    <option value="per_lane">各輪值項目各自一份名單</option>
                     <option value="shared_pool">全表共用一池・輪流換到不同欄</option>
                 </select>
             </div>
@@ -279,9 +279,9 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
             <div id="sharedPicker" class="picker"></div>
         </div>
 
-        <label>職務欄（男廁/女廁、早班/晚班…可多欄）</label>
+        <label>輪值項目（男廁/女廁、早班/晚班…可多欄）</label>
         <div id="lanesBox"></div>
-        <button class="btn btn-default btn-sm" onclick="R.addLane()"><i class="fa fa-plus"></i> 新增職務欄</button>
+        <button class="btn btn-default btn-sm" onclick="R.addLane()"><i class="fa fa-plus"></i> 新增輪值項目</button>
 
         <hr>
         <label>公開對象（只有名單內的人看得到此表）</label>
@@ -313,7 +313,7 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
             <div class="col-sm-6 form-group"><label>起</label><input type="date" id="rg_from" class="form-control"></div>
             <div class="col-sm-6 form-group"><label>迄</label><input type="date" id="rg_to" class="form-control"></div>
         </div>
-        <div class="form-group"><label>職務欄</label><select id="rg_lane" class="form-control"></select></div>
+        <div class="form-group"><label>輪值項目</label><select id="rg_lane" class="form-control" onchange="R.rgLaneChange()"></select></div>
         <div class="form-group"><label>甲（原負責人）*</label><select id="rg_from_user" class="form-control"></select></div>
         <div class="form-group"><label>乙（對調對象）*</label><select id="rg_to_user" class="form-control"></select></div>
         <div class="form-group"><label>備註</label><input type="text" id="rg_note" class="form-control" placeholder="例：兩人互調本週"></div>
@@ -464,7 +464,7 @@ var R = (function(){
             calData.cells[d].forEach(function(c){ rows.push({d:d,c:c}); });
         });
         if(!rows.length){ $('#listView').html('<div style="color:#a08c72;padding:16px">此區間無排班</div>'); return; }
-        var h='<table class="rst-list"><tr><th>日期</th><th>職務欄</th><th>負責人</th><th>狀態</th><th>操作</th></tr>';
+        var h='<table class="rst-list"><tr><th>日期</th><th>輪值項目</th><th>負責人</th><th>狀態</th><th>操作</th></tr>';
         rows.forEach(function(x){
             var l=lm[x.c.lane_id];
             h+='<tr><td>'+x.d+'</td><td>'+esc(l?l.lane_name:'')+'</td>'
@@ -498,7 +498,7 @@ var R = (function(){
         $('#dayTitle').text(ds+' 排班');
         if(!cells.length){ $('#dayBody').html('<div style="color:#a08c72">當天無排班</div>'); }
         else{
-            var h='<table class="rst-list" style="width:100%"><tr><th>職務欄</th><th>負責人</th><th>狀態</th><th>操作</th></tr>';
+            var h='<table class="rst-list" style="width:100%"><tr><th>輪值項目</th><th>負責人</th><th>狀態</th><th>操作</th></tr>';
             cells.forEach(function(c){ var l=lm[c.lane_id];
                 h+='<tr'+(c.mine?' style="background:#fbf3e6"':'')+'><td>'+esc(l?l.lane_name:'')+'</td><td>'+esc(c.name)+(c.mine?' <span class="label label-warning">我</span>':'')+(c.left?'（離職）':'')+'</td>'
                   +'<td>'+(c.sign?'<span style="color:#C0762C">已簽 '+(c.signed_at||'')+'</span>':'未簽')+'</td><td>'+actionBtns(c,ds)+'</td></tr>';
@@ -513,20 +513,33 @@ var R = (function(){
     function refreshDay(){ if($('#dayModal').is(':visible')){ var t=$('#dayTitle').text().slice(0,10); setTimeout(function(){openDay(t);},200);} }
     function findCell(aid){ var f=null; Object.keys(calData.cells).forEach(function(d){ calData.cells[d].forEach(function(c){ if(c.aid===aid){f=c;f.__d=d;} }); }); return f; }
     function laneName(id){ var l=laneMap()[id]; return l?l.lane_name:''; }
+    // 找出「這一格所屬的換手單位（連續同一人的整段）」的起訖
+    function blockRange(laneId, userId, date){
+        var arr=[];
+        Object.keys(calData.cells).forEach(function(d){ (calData.cells[d]||[]).forEach(function(c){ if(c.lane_id===laneId) arr.push({d:d,u:c.user_id}); }); });
+        arr.sort(function(a,b){return a.d<b.d?-1:1;});
+        var idx=-1; for(var k=0;k<arr.length;k++){ if(arr[k].d===date){ idx=k; break; } }
+        if(idx<0) return {from:date,to:date};
+        var i=idx,j=idx;
+        while(i>0 && arr[i-1].u===userId) i--;
+        while(j<arr.length-1 && arr[j+1].u===userId) j++;
+        return {from:arr[i].d, to:arr[j].d};
+    }
     function openSwap(aid){
         var c=findCell(aid); if(!c) return;
         var mem=(calData.lane_members&&calData.lane_members[c.lane_id])||[];
         var others=mem.filter(function(m){return m.id!==c.user_id;});
-        if(!others.length){ alert('此職務欄沒有其他同組人員可對調'); return; }
+        if(!others.length){ alert('此輪值項目沒有其他同組人員可對調'); return; }
+        var blk=blockRange(c.lane_id, c.user_id, c.__d);   // 該換手單位整段（如整週）
         window.__sw={aid:aid, lane:c.lane_id, myUser:c.user_id};
         var opts=others.map(function(m){return '<option value="'+m.id+'">'+esc(m.name)+'</option>';}).join('');
         var bypass=calData.board.swap_bypass;
         var html='<div style="margin-bottom:6px">'+(c.mine?'你':esc(c.name))+'的班：<b>'+c.__d+'</b>（'+esc(laneName(c.lane_id))+'）</div>'
             +'<label>跟哪位同組人員對調</label><select id="swU" class="form-control" onchange="R.swDays()">'+opts+'</select>'
             +'<div style="margin-top:8px"><label style="font-weight:400"><input type="radio" name="swScope" value="single" checked onchange="R.swScope()"> 只換這一天，選對方的某一天對調</label></div>'
-            +'<div><label style="font-weight:400"><input type="radio" name="swScope" value="range" onchange="R.swScope()"> 整段對調（雙方在一段期間內全部互換）</label></div>'
+            +'<div><label style="font-weight:400"><input type="radio" name="swScope" value="range" onchange="R.swScope()"> 整段對調（換手單位 '+blk.from+' ~ '+blk.to+' 整段互換）</label></div>'
             +'<div id="swSingle" style="margin-top:4px"><label>對方的哪一天</label><select id="swDay" class="form-control"></select></div>'
-            +'<div id="swRange" style="display:none;margin-top:4px"><div class="row"><div class="col-xs-6"><label>起</label><input type="date" id="swFrom" class="form-control" value="'+calData.today+'"></div><div class="col-xs-6"><label>迄</label><input type="date" id="swTo" class="form-control" value="'+calData.today+'"></div></div></div>'
+            +'<div id="swRange" style="display:none;margin-top:4px"><div class="row"><div class="col-xs-6"><label>起</label><input type="date" id="swFrom" class="form-control" value="'+blk.from+'"></div><div class="col-xs-6"><label>迄</label><input type="date" id="swTo" class="form-control" value="'+blk.to+'"></div></div></div>'
             +'<input id="swNote" class="form-control" placeholder="備註（選填）" style="margin-top:8px">'
             +(bypass?'<div style="color:#8a7a63;font-size:12px;margin-top:6px"><i class="fa fa-info-circle"></i> 你是管理員/建立者，將直接對調，免對方同意。</div>':'<div style="color:#8a7a63;font-size:12px;margin-top:6px"><i class="fa fa-info-circle"></i> 送出後需對方按「同意」才會生效。</div>');
         showPrompt('申請對調', html, submitSwap);
@@ -569,12 +582,17 @@ var R = (function(){
     /* ── 區間對調（建立者/管理員：兩人在區間內互換，免同意）── */
     function openRange(){
         if(!curBoard) return;
-        var lo='<option value="">全部職務欄</option>'; (calData.lanes||[]).forEach(function(l){ lo+='<option value="'+l.id+'">'+esc(l.lane_name)+'</option>'; });
+        var lo=''; (calData.lanes||[]).forEach(function(l){ lo+='<option value="'+l.id+'">'+esc(l.lane_name)+'</option>'; });
         $('#rg_lane').html(lo);
-        $('#rg_from_user').html(userOptions(0));
-        $('#rg_to_user').html(userOptions(0));
         $('#rg_from').val(calData.today); $('#rg_to').val(calData.today); $('#rg_note').val('');
+        rgLaneChange();
         $('#rangeModal').modal('show');
+    }
+    function rgLaneChange(){
+        var lid=+$('#rg_lane').val()||0;
+        var list=(calData.lane_members&&calData.lane_members[lid])||[];
+        var opt=list.map(function(m){return '<option value="'+m.id+'">'+esc(m.name)+'</option>';}).join('');
+        $('#rg_from_user,#rg_to_user').html(opt||'<option value="">（此項目尚未設定人員）</option>');
     }
     function submitRange(){
         var a=$('#rg_from_user').val(), b=$('#rg_to_user').val();
@@ -669,7 +687,7 @@ var R = (function(){
     function toggleWk(){ var a=$('[name=wkmode]:checked').val()==='auto'; $('#wkAuto').toggle(a); $('#wkDays').toggle(!a); }
     function toggleMo(){ var a=$('[name=momode]:checked').val()==='auto'; $('#moAuto').toggle(a); $('#moDays').toggle(!a); }
 
-    // 職務欄
+    // 輪值項目
     function addLane(l){
         l=l||{}; var i=$('#lanesBox .lane-row').length;
         var color=l.color||RD.palette[i%RD.palette.length];
@@ -678,7 +696,7 @@ var R = (function(){
         var $row=$('<div class="lane-row">'
             +'<div style="flex:1">'
               +'<input type="hidden" class="lane-id" value="'+(l.id||'')+'">'
-              +'<div class="row"><div class="col-sm-5"><input type="text" class="form-control input-sm lane-name" placeholder="職務欄名稱(男廁/早班…)" value="'+esc(l.lane_name||'')+'"></div>'
+              +'<div class="row"><div class="col-sm-5"><input type="text" class="form-control input-sm lane-name" placeholder="輪值項目名稱(男廁/早班…)" value="'+esc(l.lane_name||'')+'"></div>'
               +'<div class="col-sm-4"><div class="lane-color" data-color="'+color+'">'+sw+'</div></div>'
               +'<div class="col-sm-3"><select class="form-control input-sm lane-shift">'+shiftOpt+'</select></div></div>'
               +'<div class="lane-members" style="margin-top:6px"><small>此欄人員（依序輪值）</small><div class="picker lane-picker"></div></div>'
@@ -780,7 +798,7 @@ var R = (function(){
             lanes.push({ id:$r.find('.lane-id').val()||0, lane_name:$r.find('.lane-name').val(), color:$r.find('.lane-color').attr('data-color'),
                 shift_type_id:$r.find('.lane-shift').val(), members: mode==='per_lane'?pickerIds($r.find('.lane-picker')):[] });
         });
-        if(!lanes.length){ alert('至少要有一個職務欄'); return; }
+        if(!lanes.length){ alert('至少要有一個輪值項目'); return; }
         var cadence=$('#ed_cadence').val(), payload={
             id:+($('#ed_id').val()||0), name:$('#ed_name').val(), purpose:$('#ed_purpose').val(),
             member_mode:mode, rotate_unit:$('#ed_rotate').val(), rotate_n:(RD.isAdmin?(+$('#ed_rotate_n').val()||1):1), exec_cadence:cadence,
@@ -842,7 +860,7 @@ var R = (function(){
         if(!curBoard){ $('#logAdjust').html('<div style="color:#a08c72;padding:8px">請先在左側選一張表，再看它的調班紀錄</div>'); return; }
         post('list_adjust_log',{id:curBoard.id}).done(function(r){ if(!r.success)return;
             var rows=r.rows||[]; if(!rows.length){ $('#logAdjust').html('<div style="color:#a08c72;padding:8px">此表尚無調班紀錄</div>'); return; }
-            var h='<table class="rst-list"><tr><th>時間</th><th>類型</th><th>職務欄</th><th>期間</th><th>對調</th><th>操作人</th><th>備註</th></tr>';
+            var h='<table class="rst-list"><tr><th>時間</th><th>類型</th><th>輪值項目</th><th>期間</th><th>對調</th><th>操作人</th><th>備註</th></tr>';
             var typ={swap:'對調',swap_range:'區間對調',single:'調班',range:'區間調班'};
             rows.forEach(function(x){ h+='<tr><td>'+x.created_at.substring(0,16)+'</td><td>'+(typ[x.scope]||x.scope)+'</td><td>'+esc(x.lane_name||'')+'</td><td>'+x.date_from+(x.date_to&&x.date_to!==x.date_from?'~'+x.date_to:'')+'</td><td>'+esc(x.from_name)+' ⇄ '+esc(x.to_name)+'</td><td>'+esc(x.op_name)+'</td><td>'+esc(x.note||'')+'</td></tr>'; });
             $('#logAdjust').html(h+'</table>');
@@ -856,7 +874,7 @@ var R = (function(){
 
     return { loadBoards:loadBoards, switchScope:switchScope, selectBoard:selectBoard, loadCalendar:loadCalendar,
         openDay:openDay, sign:sign, openSwap:openSwap, swScope:swScope, swDays:swDays, cancelSwap:cancelSwap, respondSwap:respondSwap,
-        openRange:openRange, submitRange:submitRange, openEditor:openEditor, openEditorCurrent:openEditorCurrent, saveBoard:saveBoard, deleteBoard:deleteBoard,
+        openRange:openRange, rgLaneChange:rgLaneChange, submitRange:submitRange, openEditor:openEditor, openEditorCurrent:openEditorCurrent, saveBoard:saveBoard, deleteBoard:deleteBoard,
         addLane:addLane, delLane:delLane, pickColor:pickColor, onModeChange:onModeChange, onCadenceChange:onCadenceChange, onRotateChange:onRotateChange,
         toggleWk:toggleWk, toggleMo:toggleMo, onAllVis:onAllVis, filterVis:filterVis, moveMonth:moveMonth, goToday:goToday, setView:setView,
         msFilter:msFilter, msAll:msAll, selectAllRostered:selectAllRostered, openLogs:openLogs, logTab:logTab };
