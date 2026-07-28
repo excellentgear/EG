@@ -468,11 +468,18 @@ $('#btnBaseSave').on('click',function(){
   },'json');
 });
 
-// 清冊印模預覽：改用該登記「種類」實際綁定的線上圖章模板渲染（有多顆取第一顆啟用中的），
-// 而不是舊版固定三行章——否則模板沒設計{部門}，清冊卻因為 holder_name 帶部門名而看起來章上印了部門名稱，跟模板設計對不上。
-// 查無對應模板時（尚未設計）才退回舊版簡易章當佔位預覽。
+// 找出這筆登記「實際該用哪顆模板」：優先用登記當時選的 template_id（後端已回傳，僅在該模板仍啟用時才有值）；
+// 若未指定或已停用/刪除，才退回「同種類任一啟用模板」當備援——同種類若有多顆模板，備援結果不保證是哪一顆，
+// 所以正常情況都應該有 template_id，備援只是舊資料/模板被停用時的優雅降級，不是常態。
+function resolveTplFor(x){
+  let tpl=null;
+  if(x.template_id) tpl=(TPLS||[]).find(t=>String(t.id)===String(x.template_id)&&+t.is_active===1);
+  if(!tpl) tpl=(TPLS||[]).find(t=>+t.is_active===1 && String(t.type_id||'')===String(x.type_id||''));
+  return tpl||null;
+}
+// 清冊印模預覽：用 resolveTplFor 解析出的模板渲染，查無對應模板時（尚未設計）才退回舊版簡易章當佔位預覽。
 function renderRegStamp(x){
-  const tpl=(TPLS||[]).find(t=>+t.is_active===1 && String(t.type_id||'')===String(x.type_id||''));
+  const tpl=resolveTplFor(x);
   if(tpl){
     let sc={}; try{sc=JSON.parse(tpl.schema_json||'{}');}catch(e){sc={};}
     const ctx={company:window.__ownCompany||'', dept:x.dept_name||'', position:x.position_name||'', name:x.user_cname||'', date:dot(x.issue_date)};
@@ -497,7 +504,7 @@ function loadList(p){
       return `<tr>
       <td style="text-align:center;">${stampHtml}</td>
       <td>${esc(x.holder_name)}${kindBadge}</td>
-      <td>${x.type_name?esc(x.type_name):'<span class="text-muted">（未分類）</span>'}</td>
+      <td>${x.type_name?esc(x.type_name):'<span class="text-muted">（未分類）</span>'}${x.tpl_name?'<br><span class="text-muted" style="font-size:11px;">模板：'+esc(x.tpl_name)+'</span>':''}</td>
       <td>${esc(x.issue_date||'')}</td>
       <td>${esc(x.revoke_date||'—')}</td>
       <td><span class="status-chip st-${x.status}">${x.status==='active'?'使用中':'已停用'}</span></td>
@@ -529,7 +536,7 @@ $('#fltStatus,#fltType').on('change',()=>loadList(1));
 // ── 新增/編輯/停用/刪除 ──
 $('#btnAdd').on('click',function(){
   const kind=$('#addKind').val();
-  const p={holder_kind:kind,issue_date:$('#addDate').val(),type_id:$('#addType').val()||'',note:$('#addNote').val().trim()};
+  const p={holder_kind:kind,issue_date:$('#addDate').val(),type_id:$('#addType').val()||'',template_id:$('#addTpl').val()||'',note:$('#addNote').val().trim()};
   if(kind==='user'){
     if(!$('#addUser').val()){alert('請選擇人員');return;}
     p.user_id=$('#addUser').val();
@@ -662,7 +669,7 @@ $('#btnPrint').on('click',function(){
     const rows=r.rows.map(x=>`<tr>
       <td style="text-align:center;">${renderRegStamp(x)}</td>
       <td>${esc(x.holder_name)}${x.holder_kind==='position'?'（職稱章）':x.holder_kind==='user_dept'?'（部門人員章）':x.holder_kind==='dept'?'（部門章）':''}</td>
-      <td>${x.type_name?esc(x.type_name):'（未分類）'}</td>
+      <td>${x.type_name?esc(x.type_name):'（未分類）'}${x.tpl_name?'／'+esc(x.tpl_name):''}</td>
       <td>${esc(x.issue_date||'')}</td><td>${esc(x.revoke_date||'—')}</td>
       <td>${x.status==='active'?'使用中':'已停用'}</td><td>${esc(x.note||'')}</td>
       <td style="text-align:center;">${+x.has_asset?'已上傳':'—'}</td></tr>`).join('');

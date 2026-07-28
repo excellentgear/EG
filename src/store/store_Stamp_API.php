@@ -189,12 +189,13 @@ case 'list': {
                                CASE WHEN r.position_id IS NOT NULL THEN 'position'
                                     WHEN r.user_id IS NOT NULL AND r.dept_id IS NOT NULL THEN 'user_dept'
                                     WHEN r.dept_id IS NOT NULL THEN 'dept' ELSE 'user' END AS holder_kind,
-                               r.type_id, t.type_name,
+                               r.type_id, t.type_name, r.template_id, tp.tpl_name,
                                r.issue_date, r.revoke_date, r.status, r.note,
                                r.created_by, r.created_at,
                                a.file_name IS NOT NULL AS has_asset, a.band_top, a.band_bottom
                         $joins
                         LEFT JOIN stamp_type t ON t.id = r.type_id
+                        LEFT JOIN stamp_template tp ON tp.id = r.template_id AND tp.is_active = 1
                         LEFT JOIN stamp_asset a ON a.user_id = r.user_id
                         $w ORDER BY r.status='active' DESC, r.issue_date DESC, r.id DESC $limit");
     $st->execute($args);
@@ -214,6 +215,7 @@ case 'add': {
     $deptId   = in_array($kind, ['dept','position','user_dept'], true) ? ((int)($_POST['dept_id'] ?? 0) ?: null) : null;
     $posId    = $kind === 'position' ? ((int)($_POST['position_id'] ?? 0) ?: null) : null;
     $typeId = (int)($_POST['type_id'] ?? 0) ?: null;
+    $tplId  = (int)($_POST['template_id'] ?? 0) ?: null;
     $issue = trim((string)($_POST['issue_date'] ?? ''));
     $note  = trim((string)($_POST['note'] ?? ''));
     if ($kind === 'user'      && $tuid === null) jerr('請選擇人員');
@@ -221,6 +223,13 @@ case 'add': {
     if ($kind === 'position'  && ($deptId === null || $posId === null)) jerr('請選擇部門與職稱');
     if ($kind === 'user_dept' && ($deptId === null || $tuid === null)) jerr('請選擇部門與人員');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $issue)) jerr('核發日期格式錯誤');
+    if ($tplId !== null) {
+        // 種類一律以模板實際所屬種類為準（不信任前端送來的 type_id，避免兩者不一致時清冊顯示與登記種類對不上）
+        $st = $db->prepare("SELECT type_id FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$tplId]);
+        if (($tplRow = $st->fetch(PDO::FETCH_ASSOC)) === false) jerr('模板不存在或已停用');
+        $typeId = $tplRow['type_id'] !== null ? (int)$tplRow['type_id'] : null;
+    }
     if ($typeId !== null) {
         $st = $db->prepare("SELECT bind_targets FROM stamp_type WHERE id=? AND is_active=1");
         $st->execute([$typeId]);
@@ -249,8 +258,8 @@ case 'add': {
     $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND position_id <=> ? AND status='active' AND type_id <=> ? LIMIT 1 FOR UPDATE");
     $st->execute([$tuid, $deptId, $posId, $typeId]);
     if ($st->fetchColumn()) { $db->rollBack(); jerr('該持有對象此種類已有一筆「使用中」圖章，請先停用舊登記再核發'); }
-    $st = $db->prepare("INSERT INTO stamp_register (user_id, dept_id, position_id, type_id, issue_date, status, note, created_by) VALUES (?,?,?,?,?,'active',?,?)");
-    $st->execute([$tuid, $deptId, $posId, $typeId, $issue, $note, $cname]);
+    $st = $db->prepare("INSERT INTO stamp_register (user_id, dept_id, position_id, type_id, template_id, issue_date, status, note, created_by) VALUES (?,?,?,?,?,?,'active',?,?)");
+    $st->execute([$tuid, $deptId, $posId, $typeId, $tplId, $issue, $note, $cname]);
     $newId = (int)$db->lastInsertId();
     $db->commit();
     jout(['ok'=>true, 'id'=>$newId]);
@@ -265,7 +274,7 @@ case 'update': {
     $note  = trim((string)($_POST['note'] ?? ''));
     if ($id <= 0) jerr('參數錯誤');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $issue)) jerr('核發日期格式錯誤');
-    $cur = $db->prepare("SELECT user_id, dept_id, position_id, status FROM stamp_register WHERE id=?");
+    $cur = $db->prepare("SELECT user_id, dept_id, position_id, type_id, status FROM stamp_register WHERE id=?");
     $cur->execute([$id]);
     $curRow = $cur->fetch(PDO::FETCH_ASSOC);
     if (!$curRow) jerr('登記不存在');
@@ -274,7 +283,9 @@ case 'update': {
         $st->execute([$curRow['user_id'], $curRow['dept_id'], $curRow['position_id'], $typeId, $id]);
         if ($st->fetchColumn()) jerr('該持有對象此種類已有另一筆「使用中」圖章');
     }
-    $st = $db->prepare("UPDATE stamp_register SET type_id=?, issue_date=?, note=?, modified_by=?, modified_at=NOW() WHERE id=?");
+    // 種類改變時，登記當初選的模板已不屬於新種類，清空 template_id（清冊預覽退回「該新種類任一啟用模板」）
+    $clearTplSql = ((string)$curRow['type_id'] !== (string)$typeId) ? ", template_id=NULL" : "";
+    $st = $db->prepare("UPDATE stamp_register SET type_id=?, issue_date=?, note=?, modified_by=?, modified_at=NOW()$clearTplSql WHERE id=?");
     $st->execute([$typeId, $issue, $note, $cname, $id]);
     jout(['ok'=>true]);
 }
@@ -319,13 +330,14 @@ case 'csv': {
                                CASE WHEN r.position_id IS NOT NULL THEN '職稱章'
                                     WHEN r.user_id IS NOT NULL AND r.dept_id IS NOT NULL THEN '部門人員章'
                                     WHEN r.dept_id IS NOT NULL THEN '部門章' ELSE '個人章' END AS holder_kind,
-                               t.type_name, r.issue_date, r.revoke_date, r.status, r.note, r.created_by, r.created_at,
+                               t.type_name, tp.tpl_name, r.issue_date, r.revoke_date, r.status, r.note, r.created_by, r.created_at,
                                a.file_name IS NOT NULL AS has_asset
                         FROM stamp_register r
                         LEFT JOIN user u ON u.id=r.user_id
                         LEFT JOIN department d ON d.id=r.dept_id
                         LEFT JOIN position p ON p.id=r.position_id
                         LEFT JOIN stamp_type t ON t.id=r.type_id
+                        LEFT JOIN stamp_template tp ON tp.id=r.template_id AND tp.is_active=1
                         LEFT JOIN stamp_asset a ON a.user_id=r.user_id
                         $w ORDER BY r.status='active' DESC, r.issue_date DESC, r.id DESC");
     $st->execute($args);
@@ -333,9 +345,9 @@ case 'csv': {
     header('Content-Disposition: attachment; filename="stamp_register_' . date('Ymd_His') . '.csv"');
     echo "\xEF\xBB\xBF";
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['持有對象','對象別','種類','核發日期','停用/繳回日期','狀態','備註','掃描章','登記人','登記時間']);
+    fputcsv($out, ['持有對象','對象別','種類','模板','核發日期','停用/繳回日期','狀態','備註','掃描章','登記人','登記時間']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        fputcsv($out, [$r['holder_name'], $r['holder_kind'], $r['type_name'] ?: '', $r['issue_date'], $r['revoke_date'] ?: '',
+        fputcsv($out, [$r['holder_name'], $r['holder_kind'], $r['type_name'] ?: '', $r['tpl_name'] ?: '', $r['issue_date'], $r['revoke_date'] ?: '',
                        $r['status']==='active' ? '使用中' : '已停用', $r['note'] ?: '',
                        $r['has_asset'] ? '已上傳' : '—', $r['created_by'] ?: '', $r['created_at'] ?: '']);
     }
