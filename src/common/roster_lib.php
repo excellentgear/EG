@@ -266,6 +266,8 @@ if (!function_exists('roster_regenerate')) {
             $cap = (new DateTime('first day of this month'))->modify('+24 month')->modify('last day of this month')->format('Y-m-d');
             $horizon = min($throughDate, $cap);
         }
+        // 有終止日則不排到終止日之後
+        if (!empty($board['end_date']) && $horizon > $board['end_date']) $horizon = $board['end_date'];
         if ($horizon < $regenFrom) return ['generated' => 0, 'from' => $regenFrom, 'to' => $horizon];
 
         // lanes（依排序）
@@ -366,6 +368,11 @@ if (!function_exists('roster_regenerate')) {
                 if (!isset($wanted[$key]) && (int)$r['is_adjusted'] === 0) {
                     $del->execute([$r['id']]);
                 }
+            }
+            // 終止日縮短時，清掉終止日之後的未來排班
+            if (!empty($board['end_date'])) {
+                $pdo->prepare("DELETE FROM roster_assignment WHERE board_id=? AND duty_date>? AND duty_date>=?")
+                    ->execute([$boardId, $board['end_date'], $regenFrom]);
             }
             $pdo->commit();
             return ['generated' => $written, 'from' => $regenFrom, 'to' => $horizon];

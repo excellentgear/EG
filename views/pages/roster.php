@@ -188,7 +188,7 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
                                 <button class="btn btn-default btn-sm" onclick="R.moveMonth(1)"><i class="fa fa-chevron-right"></i></button>
                                 <span style="font-weight:bold;color:#5a4632;" id="calBoardName"></span>
                                 <span style="flex:1"></span>
-                                <select id="filterPerson" class="form-control input-sm" style="width:130px" onchange="R.loadCalendar()">
+                                <select id="filterPerson" class="form-control input-sm" style="width:130px" onchange="R.reloadCal()">
                                     <option value="0">全部人員</option>
                                 </select>
                                 <div class="btn-group" data-toggle="buttons">
@@ -239,14 +239,15 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
             <div class="col-sm-6 form-group"><label>用途說明</label><input type="text" id="ed_purpose" class="form-control" placeholder="選填"></div>
         </div>
         <div class="row">
-            <div class="col-sm-4 form-group"><label>起始日 *</label><input type="date" id="ed_start" class="form-control"></div>
-            <div class="col-sm-4 form-group"><label>人員歸屬</label>
+            <div class="col-sm-3 form-group"><label>起始日 *</label><input type="date" id="ed_start" class="form-control"></div>
+            <div class="col-sm-3 form-group"><label>終止日</label><input type="date" id="ed_end" class="form-control" placeholder="留空＝無終止日"><small style="color:#a08c72">留空＝一直排下去</small></div>
+            <div class="col-sm-3 form-group"><label>人員歸屬</label>
                 <select id="ed_member_mode" class="form-control" onchange="R.onModeChange()">
                     <option value="per_lane">各輪值項目各自一份名單</option>
                     <option value="shared_pool">全表共用一池・輪流換到不同欄</option>
                 </select>
             </div>
-            <div class="col-sm-4 form-group"><label>換手頻率</label>
+            <div class="col-sm-3 form-group"><label>換手頻率</label>
                 <div style="display:flex;gap:4px;align-items:center;">
                     <span id="rotEvery" style="display:none;color:#8a7a63;">每</span>
                     <input type="number" id="ed_rotate_n" class="no-spin form-control" style="width:56px;display:none;" min="1" value="1" oninput="R.onRotateChange()">
@@ -353,7 +354,7 @@ var RD = {
     isAdmin: <?= $IS_ADMIN ? 'true' : 'false' ?>
 };
 var R = (function(){
-    var scope='all', boards=[], curBoard=null, curYm=null, view='cal', calData=null;
+    var scope='all', boards=[], curBoard=null, curYm=null, view='cal', calData=null, selIds=[], overlay=false;
 
     function post(action,data){ data=data||{}; data.action=action;
         return $.post(RD.api,data,null,'json').fail(function(x){
@@ -373,15 +374,15 @@ var R = (function(){
     }
     function renderBoards(){
         if(!boards.length){ $('#boardList').html('<div style="padding:14px;color:#a08c72;">尚無排班表'+(RD.canCreate?'，點右上「新增」建立':'')+'</div>'); return; }
-        var h='';
+        var h='<div style="padding:4px 12px;font-size:12px;color:#a08c72;border-bottom:1px solid #f0e9dc;">勾選多張＝疊加同曆檢視</div>';
         boards.forEach(function(b){
             var tools = b.can_edit
               ? '<div style="margin-top:5px">'
                 +'<button class="btn btn-xs btn-default" onclick="event.stopPropagation();R.openEditor('+b.id+')"><i class="fa fa-cog"></i> 編輯</button> '
                 +'<button class="btn btn-xs btn-default" style="color:#c0392b" onclick="event.stopPropagation();R.deleteBoard('+b.id+',\''+esc(b.name).replace(/'/g,"\\\x27")+'\')"><i class="fa fa-trash"></i> 刪除</button>'
                 +'</div>' : '';
-            h+='<div class="board-item'+(curBoard&&curBoard.id===b.id?' sel':'')+'" onclick="R.selectBoard('+b.id+')">'
-              +'<div class="bname">'+esc(b.name)+(b.status==='archived'?' <span class="label label-default">已封存</span>':'')+'</div>'
+            h+='<div class="board-item'+(selIds.indexOf(b.id)>=0?' sel':'')+'" onclick="R.selectBoard('+b.id+')">'
+              +'<div class="bname"><input type="checkbox" class="bsel" data-id="'+b.id+'" onclick="event.stopPropagation();R.onBsel()" '+(selIds.indexOf(b.id)>=0?'checked':'')+'> '+esc(b.name)+(b.status==='archived'?' <span class="label label-default">已封存</span>':'')+'</div>'
               +'<div class="bmeta">'+(b.is_mine?'我建立':'由 '+esc(b.owner_name))+' ・ '+b.lane_count+'欄 / '+b.member_count+'人</div>'
               +(b.next_my_duty?'<div class="bnext"><i class="fa fa-bell"></i> 我的下次值勤：'+b.next_my_duty+'</div>':'')
               +tools
@@ -390,14 +391,26 @@ var R = (function(){
         $('#boardList').html(h);
     }
     function switchScope(el){ $('.rst-tab').removeClass('active'); $(el).addClass('active'); scope=$(el).data('scope'); loadBoards(); }
-    function selectBoard(id){
+    function selectBoard(id){   // 點整列＝單選（含全功能）
+        selIds=[id]; overlay=false;
         curBoard=boards.find(function(b){return b.id===id;});
         curYm=curYm||ym(new Date());
-        $('.board-item').removeClass('sel'); renderBoards();
+        renderBoards();
         $('#calEmpty').hide(); $('#calArea').show();
         $('#ownerTools').toggle(!!(curBoard&&curBoard.can_edit));
         loadCalendar();
     }
+    function onBsel(){
+        selIds=$('.bsel:checked').map(function(){return +$(this).data('id');}).get();
+        renderBoards();
+        if(selIds.length===0){ overlay=false; curBoard=null; $('#calArea').hide(); $('#calEmpty').show(); return; }
+        if(selIds.length===1){ selectBoard(selIds[0]); return; }
+        // 多選 → 疊加唯讀
+        overlay=true; curBoard=null; curYm=curYm||ym(new Date());
+        $('#calEmpty').hide(); $('#calArea').show(); $('#ownerTools').hide();
+        loadCalendarMulti();
+    }
+    function reloadCal(){ overlay?loadCalendarMulti():loadCalendar(); }
 
     /* ── 月曆 ── */
     function loadCalendar(){
@@ -407,6 +420,21 @@ var R = (function(){
             if(!r.success){ alert(r.message); return; }
             calData=r; $('#calBoardName').text(r.board.name);
             // 人員篩選下拉
+            var cur=$('#filterPerson').val();
+            var opt='<option value="0">全部人員</option>';
+            r.people.forEach(function(p){ opt+='<option value="'+p.id+'">'+esc(p.name)+(p.left?'（已離職）':'')+'</option>'; });
+            $('#filterPerson').html(opt).val(cur);
+            if(view==='cal') renderCalendar(); else renderList();
+        });
+    }
+    function loadCalendarMulti(){
+        if(selIds.length<2) return;
+        var fu=$('#filterPerson').val()||0;
+        post('get_calendar_multi',{ids:selIds.join(','), ym:curYm, filter_user:fu}).done(function(r){
+            if(!r.success){ alert(r.message); return; }
+            calData=r;
+            var key=(r.boards_meta||[]).map(function(m){return '<span style="margin-right:10px"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+m.color+';margin-right:3px"></span>'+esc(m.name)+'</span>';}).join('');
+            $('#calBoardName').html('<span style="font-weight:normal">疊加：</span>'+key);
             var cur=$('#filterPerson').val();
             var opt='<option value="0">全部人員</option>';
             r.people.forEach(function(p){ opt+='<option value="'+p.id+'">'+esc(p.name)+(p.left?'（已離職）':'')+'</option>'; });
@@ -445,8 +473,9 @@ var R = (function(){
             var cells=(calData.cells[ds]||[]);
             cells.forEach(function(c){
                 var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
-                var lcol=laneColor(l,idx);
-                var tip=(l?l.lane_name:'')+'：'+c.name+(c.pending?'（申請調班中）':'')+(c.sign&&c.signed_at?'（已簽 '+c.signed_at+'）':'')+(c.mine?'（我）':'');
+                var lcol=c.color||laneColor(l,idx);
+                var lbl=c.color?((c.board_name?c.board_name+'·':'')+(c.lane_name||'')):(l?l.lane_name:'');
+                var tip=lbl+'：'+c.name+(c.pending?'（申請調班中）':'')+(c.sign&&c.signed_at?'（已簽 '+c.signed_at+'）':'')+(c.mine?'（我）':'');
                 h+='<div class="chip'+(c.sign?' signed':'')+(c.left?' left':'')+(c.adjusted?' adj':'')+(c.mine?' mine':'')+(c.pending?' pending':'')+'" style="border-left-color:'+lcol+'" title="'+esc(tip)+'">'
                   +(c.pending?'<i class="fa fa-clock-o"></i> ':(c.sign?'<span class="stamp">簽</span>':''))+esc(c.name)+'</div>';
             });
@@ -465,10 +494,10 @@ var R = (function(){
             calData.cells[d].forEach(function(c){ rows.push({d:d,c:c}); });
         });
         if(!rows.length){ $('#listView').html('<div style="color:#a08c72;padding:16px">此區間無排班</div>'); return; }
-        var h='<table class="rst-list"><tr><th>日期</th><th>輪值項目</th><th>負責人</th><th>狀態</th><th>操作</th></tr>';
+        var h='<table class="rst-list"><tr><th>日期</th><th>'+(calData.board.multi?'表 · 項目':'輪值項目')+'</th><th>負責人</th><th>狀態</th><th>操作</th></tr>';
         rows.forEach(function(x){
-            var l=lm[x.c.lane_id];
-            h+='<tr><td>'+x.d+'</td><td>'+esc(l?l.lane_name:'')+'</td>'
+            var l=lm[x.c.lane_id]; var lbl=x.c.color?((x.c.board_name?x.c.board_name+' · ':'')+(x.c.lane_name||'')):(l?l.lane_name:'');
+            h+='<tr><td>'+x.d+'</td><td>'+(x.c.color?'<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+x.c.color+';margin-right:4px"></span>':'')+esc(lbl)+'</td>'
               +'<td>'+esc(x.c.name)+(x.c.left?' <span class="label label-default">離職</span>':'')+(x.c.adjusted?' <span class="label label-warning">調</span>':'')+'</td>'
               +'<td>'+(x.c.sign?'<span style="color:#C0762C"><span class="stamp" style="color:#c0392b;border-color:#c0392b">簽</span> 已簽 '+(x.c.signed_at||'')+'</span>':'<span style="color:#a08c72">未簽</span>')+'</td>'
               +'<td>'+actionBtns(x.c,x.d)+'</td></tr>';
@@ -477,6 +506,7 @@ var R = (function(){
         $('#listView').html(h);
     }
     function actionBtns(c,d){
+        if(calData.board.multi) return '<span style="color:#a08c72">疊加檢視（唯讀）</span>';
         if(c.pending){
             var pb='<span class="label" style="background:#b5651d">申請調班中</span>';
             if(c.mine || calData.board.can_edit) pb+=' <button class="btn btn-xs btn-default" onclick="R.cancelSwap('+c.pending+')">取消申請</button>';
@@ -499,9 +529,9 @@ var R = (function(){
         $('#dayTitle').text(ds+' 排班');
         if(!cells.length){ $('#dayBody').html('<div style="color:#a08c72">當天無排班</div>'); }
         else{
-            var h='<table class="rst-list" style="width:100%"><tr><th>輪值項目</th><th>負責人</th><th>狀態</th><th>操作</th></tr>';
-            cells.forEach(function(c){ var l=lm[c.lane_id];
-                h+='<tr'+(c.mine?' style="background:#fbf3e6"':'')+'><td>'+esc(l?l.lane_name:'')+'</td><td>'+esc(c.name)+(c.mine?' <span class="label label-warning">我</span>':'')+(c.left?'（離職）':'')+'</td>'
+            var h='<table class="rst-list" style="width:100%"><tr><th>'+(calData.board.multi?'表 · 項目':'輪值項目')+'</th><th>負責人</th><th>狀態</th><th>操作</th></tr>';
+            cells.forEach(function(c){ var l=lm[c.lane_id]; var lbl=c.color?((c.board_name?c.board_name+' · ':'')+(c.lane_name||'')):(l?l.lane_name:'');
+                h+='<tr'+(c.mine?' style="background:#fbf3e6"':'')+'><td>'+(c.color?'<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+c.color+';margin-right:4px"></span>':'')+esc(lbl)+'</td><td>'+esc(c.name)+(c.mine?' <span class="label label-warning">我</span>':'')+(c.left?'（離職）':'')+'</td>'
                   +'<td>'+(c.sign?'<span style="color:#C0762C">已簽 '+(c.signed_at||'')+'</span>':'未簽')+'</td><td>'+actionBtns(c,ds)+'</td></tr>';
             });
             h+='</table>'; $('#dayBody').html(h);
@@ -629,12 +659,12 @@ var R = (function(){
         else { $('#edTitle').text('新增排班表'); $('#ed_start').val(calData?calData.today:new Date().toISOString().slice(0,10)); addLane(); onModeChange(); onCadenceChange(); onRotateChange(); renderVis([]); $('#editorModal').modal('show'); }
     }
     function openEditorCurrent(){ if(curBoard) openEditor(curBoard.id); }
-    function resetEditor(){ $('#ed_id,#ed_name,#ed_purpose').val(''); $('#lanesBox').empty(); $('#ed_member_mode').val('per_lane'); $('#ed_cadence').val('daily'); $('#ed_rotate').val('each'); $('#ed_rotate_n').val(1); $('#ed_sign').prop('checked',true); }
+    function resetEditor(){ $('#ed_id,#ed_name,#ed_purpose,#ed_end').val(''); $('#lanesBox').empty(); $('#ed_member_mode').val('per_lane'); $('#ed_cadence').val('daily'); $('#ed_rotate').val('each'); $('#ed_rotate_n').val(1); $('#ed_sign').prop('checked',true); }
     function fillEditor(r){
         var b=r.board;
         var rot=b.rotate_unit; if(rot==='weekly')rot='week'; if(rot==='monthly')rot='month'; // 舊值相容
         $('#edTitle').text('編輯：'+b.name);
-        $('#ed_id').val(b.id); $('#ed_name').val(b.name); $('#ed_purpose').val(b.purpose); $('#ed_start').val(b.start_date);
+        $('#ed_id').val(b.id); $('#ed_name').val(b.name); $('#ed_purpose').val(b.purpose); $('#ed_start').val(b.start_date); $('#ed_end').val(b.end_date||'');
         $('#ed_member_mode').val(b.member_mode); $('#ed_cadence').val(b.exec_cadence);
         $('#ed_rotate').val(rot); $('#ed_rotate_n').val(b.rotate_n||1); $('#ed_sign').prop('checked',b.sign_required==1);
         $('#lanesBox').empty();
@@ -804,7 +834,7 @@ var R = (function(){
             id:+($('#ed_id').val()||0), name:$('#ed_name').val(), purpose:$('#ed_purpose').val(),
             member_mode:mode, rotate_unit:$('#ed_rotate').val(), rotate_n:(RD.isAdmin?(+$('#ed_rotate_n').val()||1):1), exec_cadence:cadence,
             holiday_policy: $('#ed_policy').length?$('#ed_policy').val():'skip',
-            start_date:$('#ed_start').val(), sign_required:$('#ed_sign').is(':checked')?1:0,
+            start_date:$('#ed_start').val(), end_date:$('#ed_end').val(), sign_required:$('#ed_sign').is(':checked')?1:0,
             lanes:lanes, shared_members: mode==='shared_pool'?pickerIds($('#sharedPicker')):[],
             visibility: collectVis(), exec_weekdays:[], exec_monthdays:[], exec_count:1
         };
@@ -841,8 +871,8 @@ var R = (function(){
         });
     }
 
-    function moveMonth(n){ var d=new Date(curYm+'-01'); d.setMonth(d.getMonth()+n); curYm=ym(d); loadCalendar(); }
-    function goToday(){ curYm=ym(new Date()); loadCalendar(); }
+    function moveMonth(n){ var d=new Date(curYm+'-01'); d.setMonth(d.getMonth()+n); curYm=ym(d); reloadCal(); }
+    function goToday(){ curYm=ym(new Date()); reloadCal(); }
     function setView(v){ view=v; $('#viewCal').toggleClass('btn-warning',v==='cal').toggleClass('btn-default',v!=='cal');
         $('#viewList').toggleClass('btn-warning',v==='list').toggleClass('btn-default',v!=='list'); if(calData){ v==='cal'?renderCalendar():renderList(); } }
 
@@ -873,7 +903,7 @@ var R = (function(){
         <?php if ($hasAccess): ?>loadBoards(); loadMySwaps();<?php endif; ?>
     });
 
-    return { loadBoards:loadBoards, switchScope:switchScope, selectBoard:selectBoard, loadCalendar:loadCalendar,
+    return { loadBoards:loadBoards, switchScope:switchScope, selectBoard:selectBoard, loadCalendar:loadCalendar, onBsel:onBsel, reloadCal:reloadCal,
         openDay:openDay, sign:sign, openSwap:openSwap, swScope:swScope, swDays:swDays, cancelSwap:cancelSwap, respondSwap:respondSwap,
         openRange:openRange, rgLaneChange:rgLaneChange, submitRange:submitRange, openEditor:openEditor, openEditorCurrent:openEditorCurrent, saveBoard:saveBoard, deleteBoard:deleteBoard,
         addLane:addLane, delLane:delLane, pickColor:pickColor, onModeChange:onModeChange, onCadenceChange:onCadenceChange, onRotateChange:onRotateChange,

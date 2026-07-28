@@ -148,6 +148,10 @@ case 'save_board': {
     if (!is_array($lanesIn) || count($lanesIn) === 0) jfail('至少要有一個輪值項目');
     $startDate = $p['start_date'] ?? date('Y-m-d');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $startDate)) jfail('起始日格式錯誤');
+    $endDate = trim($p['end_date'] ?? '');
+    if ($endDate !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $endDate)) jfail('終止日格式錯誤');
+    if ($endDate !== '' && $endDate < $startDate) jfail('終止日不能早於起始日');
+    $endDateSql = $endDate !== '' ? $endDate : null;
 
     if ($id === 0 && !$CAN_CREATE && !$IS_ADMIN) jerr('無建立權限', 403);
     if ($id !== 0) load_board_editable($pdo, $id, $MYID, $IS_ADMIN);
@@ -169,13 +173,13 @@ case 'save_board': {
     try {
         if ($id === 0) {
             $st = $pdo->prepare("INSERT INTO roster_board
-                (name,purpose,owner_id,member_mode,exec_cadence,exec_count,exec_weekdays,exec_monthdays,holiday_policy,rotate_unit,rotate_n,start_date,sign_required)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
-            $st->execute([$name, trim($p['purpose'] ?? ''), $MYID, $memberMode, $cadence, $execCount, $execWd, $execMd, $policy, $rotate, $rotateN, $startDate, $signReq]);
+                (name,purpose,owner_id,member_mode,exec_cadence,exec_count,exec_weekdays,exec_monthdays,holiday_policy,rotate_unit,rotate_n,start_date,end_date,sign_required)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+            $st->execute([$name, trim($p['purpose'] ?? ''), $MYID, $memberMode, $cadence, $execCount, $execWd, $execMd, $policy, $rotate, $rotateN, $startDate, $endDateSql, $signReq]);
             $id = (int)$pdo->lastInsertId();
         } else {
-            $st = $pdo->prepare("UPDATE roster_board SET name=?,purpose=?,member_mode=?,exec_cadence=?,exec_count=?,exec_weekdays=?,exec_monthdays=?,holiday_policy=?,rotate_unit=?,rotate_n=?,start_date=?,sign_required=? WHERE id=?");
-            $st->execute([$name, trim($p['purpose'] ?? ''), $memberMode, $cadence, $execCount, $execWd, $execMd, $policy, $rotate, $rotateN, $startDate, $signReq, $id]);
+            $st = $pdo->prepare("UPDATE roster_board SET name=?,purpose=?,member_mode=?,exec_cadence=?,exec_count=?,exec_weekdays=?,exec_monthdays=?,holiday_policy=?,rotate_unit=?,rotate_n=?,start_date=?,end_date=?,sign_required=? WHERE id=?");
+            $st->execute([$name, trim($p['purpose'] ?? ''), $memberMode, $cadence, $execCount, $execWd, $execMd, $policy, $rotate, $rotateN, $startDate, $endDateSql, $signReq, $id]);
         }
 
         // lanes：以 id 對應更新、無 id 新增、DB 有而 payload 無者刪除(連同其排班)
@@ -379,6 +383,77 @@ case 'get_calendar': {
     ]);
 }
 
+/* ── 多張表疊加同曆（唯讀檢視）── */
+case 'get_calendar_multi': {
+    $ids = $_POST['ids'] ?? [];
+    if (is_string($ids)) $ids = explode(',', $ids);
+    if (!is_array($ids)) $ids = [];
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+    $ym = $_POST['ym'] ?? date('Y-m');
+    if (!preg_match('/^\d{4}-\d{2}$/', $ym)) $ym = date('Y-m');
+    $filterUser = (int)($_POST['filter_user'] ?? 0);
+
+    $from = $ym . '-01';
+    $secondObj = (new DateTime($from))->modify('+1 month');
+    $second = $secondObj->format('Y-m');
+    $to = $secondObj->modify('last day of this month')->format('Y-m-d');
+
+    // 暖色系每表一色（禁冷暖混雜）
+    $palette = ['#DD5138', '#F0A24B', '#C0762C', '#B5651D', '#8C5A3C', '#E6B566', '#A64B2A', '#D98C5F'];
+    $cells = []; $boardsMeta = []; $ci = 0; $allUids = [];
+    foreach ($ids as $bid) {
+        $bq = $pdo->prepare("SELECT * FROM roster_board WHERE id=?"); $bq->execute([$bid]); $b = $bq->fetch(PDO::FETCH_ASSOC);
+        if (!$b) continue;
+        $mine = ((int)$b['owner_id'] === $MYID);
+        if (!$mine && !roster_can_view_board($pdo, $b, $MYID, $features)) continue;
+        if ($b['status'] === 'active') {
+            $maxD = $pdo->query("SELECT MAX(duty_date) FROM roster_assignment WHERE board_id=" . (int)$bid)->fetchColumn();
+            if (!$maxD || $maxD < $to) { try { roster_regenerate($pdo, (int)$bid, null, $to); } catch (Exception $e) {} }
+        }
+        $color = $palette[$ci % count($palette)]; $ci++;
+        $boardsMeta[] = ['id' => (int)$bid, 'name' => $b['name'], 'color' => $color];
+        $lq = $pdo->prepare("SELECT id,lane_name FROM roster_lane WHERE board_id=?"); $lq->execute([$bid]);
+        $lmap = []; foreach ($lq->fetchAll(PDO::FETCH_ASSOC) as $l) $lmap[(int)$l['id']] = $l['lane_name'];
+        $sql = "SELECT id,lane_id,duty_date,user_id,sign_status,signed_at,is_adjusted,pending_swap_id FROM roster_assignment WHERE board_id=? AND duty_date BETWEEN ? AND ?";
+        $ar = [$bid, $from, $to];
+        if ($filterUser) { $sql .= " AND user_id=?"; $ar[] = $filterUser; }
+        $aq = $pdo->prepare($sql); $aq->execute($ar);
+        $rows = $aq->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) $allUids[] = (int)$r['user_id'];
+        foreach ($rows as $r) {
+            $uid = (int)$r['user_id'];
+            $cells[$r['duty_date']][] = [
+                'aid' => (int)$r['id'], 'lane_id' => (int)$r['lane_id'], 'user_id' => $uid,
+                'lane_name' => $lmap[(int)$r['lane_id']] ?? '', 'board_name' => $b['name'], 'color' => $color,
+                'sign' => (int)$r['sign_status'], 'signed_at' => $r['signed_at'] ? substr($r['signed_at'], 0, 16) : null,
+                'adjusted' => (int)$r['is_adjusted'], 'pending' => $r['pending_swap_id'] ? 1 : 0,
+                'mine' => ($uid === $MYID), 'can_sign' => false,
+            ];
+        }
+    }
+    // 補人名
+    $nm = roster_user_name_map($pdo, $allUids);
+    foreach ($cells as $d => &$arr) { foreach ($arr as &$c) { $c['name'] = $nm[$c['user_id']]['name'] ?? ('#' . $c['user_id']); $c['left'] = $nm[$c['user_id']]['left'] ?? false; } unset($c); } unset($arr);
+    // 排序每日：依表色群組
+    foreach ($cells as $d => &$arr) { usort($arr, fn($a, $b) => strcmp($a['board_name'] . $a['lane_name'], $b['board_name'] . $b['lane_name'])); } unset($arr);
+
+    $ctx = roster_workday_context($pdo, $from, $to);
+    $people = [];
+    $puids = array_values(array_unique($allUids));
+    $pnm = roster_user_name_map($pdo, $puids);
+    foreach ($puids as $pid) $people[] = ['id' => $pid, 'name' => $pnm[$pid]['name'] ?? ('#' . $pid), 'left' => $pnm[$pid]['left'] ?? false];
+    usort($people, fn($a, $c) => strcmp($a['name'], $c['name']));
+
+    jout([
+        'board' => ['name' => '疊加檢視（' . count($boardsMeta) . ' 張表）', 'multi' => true, 'sign_required' => 0,
+                    'can_edit' => false, 'is_admin' => $IS_ADMIN, 'swap_bypass' => false],
+        'boards_meta' => $boardsMeta, 'lanes' => [], 'lane_members' => new stdClass(),
+        'months' => [$ym, $second], 'cells' => $cells,
+        'holidays' => array_keys($ctx['holidays']), 'makeup' => array_keys($ctx['makeup']),
+        'people' => $people, 'today' => date('Y-m-d'),
+    ]);
+}
+
 /* ── 簽核 / 取消 ── */
 case 'sign': case 'unsign': {
     $aid = (int)($_POST['aid'] ?? 0);
@@ -451,6 +526,7 @@ case 'request_swap_range': {
     $userA = $bypass ? (int)($_POST['from_user_id'] ?? 0) : $MYID;
     if (!$bypass && $userA !== $MYID) jerr('只能對調自己負責的班', 403);
     if ($bypass && $userA <= 0) jfail('請選擇原負責人');
+    if ($userA === $counterpart) jfail('原負責人與對調對象不可為同一人');
 
     // 檢查區間內是否已有進行中的申請
     $chk = "SELECT COUNT(*) FROM roster_assignment WHERE board_id=? AND duty_date BETWEEN ? AND ? AND pending_swap_id IS NOT NULL AND user_id IN (?,?)";
