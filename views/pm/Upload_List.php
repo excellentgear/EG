@@ -30,7 +30,7 @@ include '../../src/common/_config.php';
 // 查詢各匯入功能最近上傳紀錄（由 system_settings 記錄）
 $uploadLogs = [];
 try {
-    $r = $db->query("SELECT setting_key, updated_at AS ts, updated_by AS creator
+    $r = $db->query("SELECT setting_key, updated_at AS ts, updated_by AS creator, updated_by_id AS creator_id
                      FROM system_settings
                      WHERE setting_key IN (
                          'upload_bom_nb','upload_bom_ing_new','upload_bom_ing_s',
@@ -54,27 +54,33 @@ $irLastImport          = $uploadLogs['upload_ir_erp']       ?? null;
 $bomErpLastImport      = $uploadLogs['upload_bom_erp']      ?? null;
 $transferErpLastImport = $uploadLogs['upload_bom_ing_s_erp'] ?? null;
 
-// system_settings.updated_by 存的是登入帳號(user_uname)，顯示時要轉成中文姓名
-$uploaderNames = [];
+/* 匯入者姓名對應表
+ * _upload_For_List.php 的 recordUploadLog() 寫的是：
+ *   updated_by_id = $_SESSION['id']（user.id，準確）
+ *   updated_by    = $_SESSION['user_cname'] ?: $_SESSION['userName']
+ * 但 Login.php 只設 userName/id、沒設 user_cname，所以 updated_by 實際都落成
+ * 登入帳號(022、e…)。顯示時優先用 updated_by_id 查中文姓名，其次才用帳號對應。 */
+$uploaderById   = [];   // user.id        => 中文姓名
+$uploaderByName = [];   // user_uname     => 中文姓名
 try {
     $ru = $db->query("SELECT id, user_uname, user_cname FROM user");
     while ($u = $ru->fetch(PDO::FETCH_ASSOC)) {
+        $uploaderById[(string)$u['id']] = $u['user_cname'];
         if (isset($u['user_uname']) && $u['user_uname'] !== '') {
-            $uploaderNames[(string)$u['user_uname']] = $u['user_cname'];
-        }
-        // 少數舊資料可能存的是 user.id，一併備援對應（不覆蓋帳號對應）
-        if (!isset($uploaderNames[(string)$u['id']])) {
-            $uploaderNames[(string)$u['id']] = $u['user_cname'];
+            $uploaderByName[(string)$u['user_uname']] = $u['user_cname'];
         }
     }
 } catch (Exception $e) {}
 
 function lastUpdateBadge($info, $color = '#555') {
-    global $uploaderNames;
+    global $uploaderById, $uploaderByName;
     if (!$info || empty($info['ts'])) return '<span style="font-size:11px;color:#aaa">尚無記錄</span>';
-    $ts      = date('Y-m-d H:i', strtotime($info['ts']));
-    $raw     = (string)($info['creator'] ?? '');
-    $creator = htmlspecialchars($uploaderNames[$raw] ?? $raw);   // 查不到就退回原值
+    $ts  = date('Y-m-d H:i', strtotime($info['ts']));
+    $raw = trim((string)($info['creator'] ?? ''));
+    $uid = (string)($info['creator_id'] ?? '');
+    // 1) 先用 user.id 查；2) 再用登入帳號查；3) 都查不到就退回原值（不會變空白）
+    $creator = $uploaderById[$uid] ?? $uploaderByName[$raw] ?? $raw;
+    $creator = htmlspecialchars($creator);
     return "<span style=\"font-size:11px;color:{$color}\">⏱ 最近匯入：{$ts}　│　{$creator}</span>";
 }
 
