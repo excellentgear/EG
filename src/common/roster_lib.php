@@ -248,7 +248,7 @@ if (!function_exists('roster_regenerate')) {
      *  - 未來非調班格子：依現行在職人員與週期重新指派；不再需要的未來格子刪除。
      * 回傳 ['generated'=>寫入格數, 'from'=>, 'to'=>]
      */
-    function roster_regenerate(PDO $pdo, int $boardId, ?string $fromDate = null): array {
+    function roster_regenerate(PDO $pdo, int $boardId, ?string $fromDate = null, ?string $throughDate = null): array {
         $st = $pdo->prepare("SELECT * FROM roster_board WHERE id=?");
         $st->execute([$boardId]);
         $board = $st->fetch(PDO::FETCH_ASSOC);
@@ -258,9 +258,14 @@ if (!function_exists('roster_regenerate')) {
         $regenFrom = $fromDate ?: $today;
         if ($regenFrom < $board['start_date']) $regenFrom = $board['start_date'];
 
-        // 物化到「今日所在月 +2 個月」月底，確保兩月月曆一定排得到
+        // 排班無終止日：預設先物化到「今日所在月 +2 個月」月底（兩月月曆夠用）；
+        // 若指定 throughDate（使用者翻到更後面的月份）則補算到那個月底。上限今日 +24 個月防暴衝。
         $horizon = (new DateTime('first day of this month'))->modify('+2 month')
                     ->modify('last day of this month')->format('Y-m-d');
+        if ($throughDate && $throughDate > $horizon) {
+            $cap = (new DateTime('first day of this month'))->modify('+24 month')->modify('last day of this month')->format('Y-m-d');
+            $horizon = min($throughDate, $cap);
+        }
         if ($horizon < $regenFrom) return ['generated' => 0, 'from' => $regenFrom, 'to' => $horizon];
 
         // lanes（依排序）

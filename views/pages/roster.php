@@ -104,7 +104,8 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
         .rst-logtabs div.active{ color:var(--amber); border-bottom:2px solid var(--amber); font-weight:bold; }
         .chip .stamp{ display:inline-block; min-width:15px; height:15px; line-height:13px; text-align:center; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:50%; font-size:9px; transform:rotate(-8deg); margin-right:3px; vertical-align:middle; }
         .chip.signed .stamp{ border-color:#fff; color:#fff; background:transparent; }
-        #editorModal .modal-body{ max-height:72vh; overflow-y:auto; }
+        #editorModal .modal-body{ max-height:72vh; overflow-y:auto; overflow-x:hidden; }
+        #editorModal .modal-body .row{ margin-left:0; margin-right:0; }
         .legend{ font-size:12px; color:#a08c72; }
         .legend b{ display:inline-block; width:12px; height:12px; border-radius:2px; vertical-align:middle; margin:0 3px 0 8px; }
         /* 列表 */
@@ -114,9 +115,9 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
         /* 編輯器 */
         .lane-row{ display:flex; gap:6px; align-items:flex-start; margin-bottom:8px; padding:8px; background:var(--warm-bg); border-radius:5px; }
         .pk-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:4px; margin-top:6px; }
-        .pk-item{ display:flex; align-items:center; gap:4px; background:#fff; border:1px solid var(--warm-line); border-radius:4px; padding:3px 6px; font-size:12px; cursor:grab; }
+        .pk-item{ display:flex; align-items:center; gap:4px; background:#fff; border:1px solid var(--warm-line); border-radius:4px; padding:3px 6px; font-size:12px; cursor:grab; min-width:0; }
         .pk-item.sortable-ghost{ opacity:.4; background:#f6ead8; }
-        .pk-item .nm{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .pk-item .nm{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         .pk-item .pos{ color:#a08c72; }
         .pk-item .idx{ color:#b5651d; font-weight:bold; }
         .pk-item .pk-rm{ color:#c0392b; text-decoration:none; }

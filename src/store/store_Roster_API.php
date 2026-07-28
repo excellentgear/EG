@@ -312,6 +312,12 @@ case 'get_calendar': {
     $second = $secondObj->format('Y-m');
     $to = $secondObj->modify('last day of this month')->format('Y-m-d');
 
+    // 排班無終止日：翻到還沒物化的月份就即時補算到該月（凍結過去、只補未來）
+    if ($b['status'] === 'active') {
+        $maxD = $pdo->query("SELECT MAX(duty_date) FROM roster_assignment WHERE board_id=" . (int)$id)->fetchColumn();
+        if (!$maxD || $maxD < $to) { try { roster_regenerate($pdo, (int)$id, null, $to); } catch (Exception $e) {} }
+    }
+
     $lanes = $pdo->prepare("SELECT id,lane_name,color,shift_type_id,sort_order FROM roster_lane WHERE board_id=? ORDER BY sort_order,id");
     $lanes->execute([$id]); $lanes = $lanes->fetchAll(PDO::FETCH_ASSOC);
 
