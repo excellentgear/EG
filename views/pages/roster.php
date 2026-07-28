@@ -47,7 +47,8 @@ function rosterDeptPath($id, $map) {
     return implode(' / ', $path);
 }
 // 暖色系輪值項目調色盤（鐵律：暖色，禁冷暖混雜）
-$lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F', '#8C5A3C', '#A64B2A'];
+// 暖色系但彼此差異大（磚紅/珊瑚橘/南瓜/金黃/暖棕/赭土/深棕/暖玫瑰）
+$lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A', '#6E4326', '#D94F70'];
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -376,11 +377,12 @@ var R = (function(){
         if(!boards.length){ $('#boardList').html('<div style="padding:14px;color:#a08c72;">尚無排班表'+(RD.canCreate?'，點右上「新增」建立':'')+'</div>'); return; }
         var h='<div style="padding:4px 12px;font-size:12px;color:#a08c72;border-bottom:1px solid #f0e9dc;">勾選多張＝疊加同曆檢視</div>';
         boards.forEach(function(b){
-            var tools = b.can_edit
-              ? '<div style="margin-top:5px">'
-                +'<button class="btn btn-xs btn-default" onclick="event.stopPropagation();R.openEditor('+b.id+')"><i class="fa fa-cog"></i> 編輯</button> '
-                +'<button class="btn btn-xs btn-default" style="color:#c0392b" onclick="event.stopPropagation();R.deleteBoard('+b.id+',\''+esc(b.name).replace(/'/g,"\\\x27")+'\')"><i class="fa fa-trash"></i> 刪除</button>'
-                +'</div>' : '';
+            var nmJs=esc(b.name).replace(/'/g,"\\\x27");
+            var btns='';
+            if(RD.canCreate) btns+='<button class="btn btn-xs btn-default" onclick="event.stopPropagation();R.copyBoard('+b.id+',\''+nmJs+'\')"><i class="fa fa-files-o"></i> 複製</button> ';
+            if(b.can_edit) btns+='<button class="btn btn-xs btn-default" onclick="event.stopPropagation();R.openEditor('+b.id+')"><i class="fa fa-cog"></i> 編輯</button> '
+                +'<button class="btn btn-xs btn-default" style="color:#c0392b" onclick="event.stopPropagation();R.deleteBoard('+b.id+',\''+nmJs+'\')"><i class="fa fa-trash"></i> 刪除</button>';
+            var tools = btns ? '<div style="margin-top:5px">'+btns+'</div>' : '';
             h+='<div class="board-item'+(selIds.indexOf(b.id)>=0?' sel':'')+'" onclick="R.selectBoard('+b.id+')">'
               +'<div class="bname"><input type="checkbox" class="bsel" data-id="'+b.id+'" onclick="event.stopPropagation();R.onBsel()" '+(selIds.indexOf(b.id)>=0?'checked':'')+'> '+esc(b.name)+(b.status==='archived'?' <span class="label label-default">已封存</span>':'')+'</div>'
               +'<div class="bmeta">'+(b.is_mine?'我建立':'由 '+esc(b.owner_name))+' ・ '+b.lane_count+'欄 / '+b.member_count+'人</div>'
@@ -861,6 +863,15 @@ var R = (function(){
         });
     }
 
+    function copyBoard(id,name){
+        if(!confirm('複製「'+name+'」為你自己的新表（複本）？\n（設定、項目、人員、公開對象都會複製；你可再進去修改）')) return;
+        post('copy_board',{id:id}).done(function(r){ if(!r.success){alert(r.message);return;}
+            post('list_boards',{scope:scope}).done(function(rr){ boards=rr.boards||[]; renderBoards();
+                if(boards.find(function(x){return x.id===r.id;})) selectBoard(r.id);
+                alert('已複製為「'+r.name+'」，可點「編輯」調整。');
+            });
+        });
+    }
     function deleteBoard(id,name){
         var t=prompt('刪除「'+name+'」會一併刪除此表所有排班與紀錄，無法復原。\n\n請輸入大寫「Y」確認刪除：');
         if(t===null) return;
@@ -905,7 +916,7 @@ var R = (function(){
 
     return { loadBoards:loadBoards, switchScope:switchScope, selectBoard:selectBoard, loadCalendar:loadCalendar, onBsel:onBsel, reloadCal:reloadCal,
         openDay:openDay, sign:sign, openSwap:openSwap, swScope:swScope, swDays:swDays, cancelSwap:cancelSwap, respondSwap:respondSwap,
-        openRange:openRange, rgLaneChange:rgLaneChange, submitRange:submitRange, openEditor:openEditor, openEditorCurrent:openEditorCurrent, saveBoard:saveBoard, deleteBoard:deleteBoard,
+        openRange:openRange, rgLaneChange:rgLaneChange, submitRange:submitRange, openEditor:openEditor, openEditorCurrent:openEditorCurrent, saveBoard:saveBoard, deleteBoard:deleteBoard, copyBoard:copyBoard,
         addLane:addLane, delLane:delLane, pickColor:pickColor, onModeChange:onModeChange, onCadenceChange:onCadenceChange, onRotateChange:onRotateChange,
         toggleWk:toggleWk, toggleMo:toggleMo, onAllVis:onAllVis, filterVis:filterVis, moveMonth:moveMonth, goToday:goToday, setView:setView,
         msFilter:msFilter, msAll:msAll, selectAllRostered:selectAllRostered, openLogs:openLogs, logTab:logTab };

@@ -272,6 +272,49 @@ case 'save_board': {
     jout(['id' => $id, 'generated' => $gen['generated'] ?? 0]);
 }
 
+/* ── 複製排班表（複製設定/項目/人員/公開對象為自己的新表）── */
+case 'copy_board': {
+    if (!$CAN_CREATE && !$IS_ADMIN) jerr('無建立權限', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    $st = $pdo->prepare("SELECT * FROM roster_board WHERE id=?"); $st->execute([$id]); $b = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$b) jerr('排班表不存在', 404);
+    if ((int)$b['owner_id'] !== $MYID && !roster_can_view_board($pdo, $b, $MYID, $features)) jerr('無權複製此表', 403);
+    $pdo->beginTransaction();
+    try {
+        $newName = mb_substr($b['name'], 0, 88) . '（複本）';
+        $pdo->prepare("INSERT INTO roster_board
+            (name,purpose,owner_id,member_mode,exec_cadence,exec_count,exec_weekdays,exec_monthdays,holiday_policy,rotate_unit,rotate_n,start_date,end_date,sign_required,status)
+            SELECT ?, purpose, ?, member_mode,exec_cadence,exec_count,exec_weekdays,exec_monthdays,holiday_policy,rotate_unit,rotate_n,start_date,end_date,sign_required,'active'
+            FROM roster_board WHERE id=?")->execute([$newName, $MYID, $id]);
+        $nid = (int)$pdo->lastInsertId();
+        // 項目（lane）對應新 id
+        $laneMap = [];
+        $lq = $pdo->prepare("SELECT * FROM roster_lane WHERE board_id=? ORDER BY sort_order,id"); $lq->execute([$id]);
+        $il = $pdo->prepare("INSERT INTO roster_lane (board_id,lane_name,color,shift_type_id,sort_order) VALUES (?,?,?,?,?)");
+        foreach ($lq->fetchAll(PDO::FETCH_ASSOC) as $l) {
+            $il->execute([$nid, $l['lane_name'], $l['color'], $l['shift_type_id'], $l['sort_order']]);
+            $laneMap[(int)$l['id']] = (int)$pdo->lastInsertId();
+        }
+        // 成員（在職中的）
+        $mq = $pdo->prepare("SELECT lane_id,user_id,sort_order FROM roster_member WHERE board_id=? AND active=1 ORDER BY sort_order,id"); $mq->execute([$id]);
+        $im = $pdo->prepare("INSERT INTO roster_member (board_id,lane_id,user_id,sort_order,active) VALUES (?,?,?,?,1)");
+        foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $m) {
+            $lid = $m['lane_id'] === null ? null : ($laneMap[(int)$m['lane_id']] ?? null);
+            $im->execute([$nid, $lid, $m['user_id'], $m['sort_order']]);
+        }
+        // 公開對象
+        $vq = $pdo->prepare("SELECT target_type,target_id FROM roster_visibility WHERE board_id=?"); $vq->execute([$id]);
+        $iv = $pdo->prepare("INSERT INTO roster_visibility (board_id,target_type,target_id) VALUES (?,?,?)");
+        foreach ($vq->fetchAll(PDO::FETCH_ASSOC) as $v) $iv->execute([$nid, $v['target_type'], $v['target_id']]);
+        // 建立紀錄
+        $pdo->prepare("INSERT INTO roster_board_log (board_id,board_name,action,detail,operator_id,operator_name) VALUES (?,?, 'create',?,?,?)")
+            ->execute([$nid, $newName, '複製自 #' . $id . ' ' . $b['name'], $MYID, $me['name']]);
+        $pdo->commit();
+    } catch (Exception $e) { $pdo->rollBack(); jfail('複製失敗：' . $e->getMessage()); }
+    roster_regenerate($pdo, $nid);
+    jout(['id' => $nid, 'name' => $newName]);
+}
+
 /* ── 刪除 / 封存 ── */
 case 'delete_board': {
     $id = (int)($_POST['id'] ?? 0);
@@ -398,8 +441,8 @@ case 'get_calendar_multi': {
     $second = $secondObj->format('Y-m');
     $to = $secondObj->modify('last day of this month')->format('Y-m-d');
 
-    // 暖色系每表一色（禁冷暖混雜）
-    $palette = ['#DD5138', '#F0A24B', '#C0762C', '#B5651D', '#8C5A3C', '#E6B566', '#A64B2A', '#D98C5F'];
+    // 暖色系每表一色，彼此差異大（禁冷暖混雜）
+    $palette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A', '#6E4326', '#D94F70'];
     $cells = []; $boardsMeta = []; $ci = 0; $allUids = [];
     foreach ($ids as $bid) {
         $bq = $pdo->prepare("SELECT * FROM roster_board WHERE id=?"); $bq->execute([$bid]); $b = $bq->fetch(PDO::FETCH_ASSOC);
