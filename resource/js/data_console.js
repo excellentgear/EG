@@ -401,7 +401,7 @@
   };
   DC.renderCfg = function (filter) {
     filter = (filter || '').toLowerCase();
-    const cmtInput = t => `<input class="dc-input dc-cmt" data-t="${esc(t.name)}" style="width:100%;" value="${esc(t.comment || '')}" placeholder="（無，可填寫）" title="直接改寫 MySQL 的資料表備註" onblur="DC.saveTableComment('${t.name}',this.value)">`;
+    const cmtInput = t => `<input class="dc-input dc-cmt" data-t="${esc(t.name)}" style="width:100%;" value="${esc(t.comment || '')}" placeholder="（無，可填寫後按 Enter 或點別處存）" title="直接改寫 MySQL 的資料表備註；按 Enter 或移開游標即儲存" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}" onblur="DC.saveTableComment('${t.name}',this.value,this)">`;
     let h = `<thead><tr><th>資料表</th><th>DB資料表備註 <span style="font-weight:400;color:#a98a5c;">（可改，離開欄位即寫回 MySQL）</span></th><th>估計筆數</th><th>可編輯</th><th>可刪除</th><th>自訂備註</th></tr></thead><tbody>`;
     S.tables.filter(t => !filter || t.name.toLowerCase().includes(filter) || (t.comment || '').toLowerCase().includes(filter)).forEach(t => {
       if (t.hard_readonly) {
@@ -417,22 +417,33 @@
     $('cfgTbl').innerHTML = h;
   };
   DC.filterCfg = q => DC.renderCfg(q);
-  DC.saveTableComment = function (table, val) {
+  DC.saveTableComment = function (table, val, el) {
     const t = S.tables.find(x => x.name === table);
     if (t && (t.comment || '') === val) return; // 無變動不寫入
+    if (el) el.classList.add('saving');
     DC.api('save_table_comment', { table, comment: val, csrf: S.csrf }, 'POST').then(res => {
-      if (!res.success) { alert(res.message); DC.renderCfg($('cfgFilter').value); return; }
+      if (el) el.classList.remove('saving');
+      if (!res.success) { alert('備註儲存失敗：' + res.message); DC.renderCfg($('cfgFilter') ? $('cfgFilter').value : ''); return; }
       if (t) t.comment = val;
+      if (el) { el.classList.add('saved'); setTimeout(() => el.classList.remove('saved'), 1200); }
+      DC.toast('已儲存資料表備註：' + table);
       DC.renderTableList($('tblFilter') ? $('tblFilter').value : '');
       if (S.schema && S.curTable === table) S.schema.comment = val;
-    });
+    }).catch(() => { if (el) el.classList.remove('saving'); alert('備註儲存失敗：連線錯誤'); });
+  };
+  DC.toast = function (msg) {
+    let el = $('dcToast');
+    if (!el) { el = document.createElement('div'); el.id = 'dcToast'; el.style.cssText = 'position:fixed;right:20px;bottom:20px;background:#3a2c1a;color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;z-index:2000;box-shadow:0 6px 20px rgba(0,0,0,.3);opacity:0;transition:opacity .2s;'; document.body.appendChild(el); }
+    el.textContent = msg; el.style.opacity = '1';
+    clearTimeout(DC._toastT); DC._toastT = setTimeout(() => el.style.opacity = '0', 1800);
   };
   DC.saveCfg = function (table, ce, cd, note) {
     const t = S.tables.find(x => x.name === table);
     const params = { table, csrf: S.csrf, can_edit: ce !== undefined ? ce : t.can_edit, can_delete: cd !== undefined ? cd : t.can_delete, note: note !== undefined ? note : (t.note || '') };
     DC.api('save_table_cfg', params, 'POST').then(res => {
-      if (!res.success) { alert(res.message); DC.renderCfg($('cfgFilter').value); return; }
+      if (!res.success) { alert(res.message); DC.renderCfg($('cfgFilter') ? $('cfgFilter').value : ''); return; }
       t.can_edit = parseInt(params.can_edit, 10); t.can_delete = parseInt(params.can_delete, 10); t.note = params.note;
+      DC.toast('設定已更新：' + table);
       DC.renderTableList($('tblFilter') ? $('tblFilter').value : '');
     });
   };

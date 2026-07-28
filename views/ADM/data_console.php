@@ -64,7 +64,9 @@ $jsVer = @filemtime(__DIR__ . '/../../resource/js/data_console.js') ?: time();
 .btn-sand{background:var(--sand);border:1px solid var(--line);color:var(--amber-d);}
 .btn-sand:hover{background:#f0e2c8;color:var(--amber-d);}
 .dc-tbl{width:100%;border-collapse:collapse;font-size:13px;background:#fff;}
-.dc-tbl th{background:var(--sand);color:var(--amber-d);padding:7px 8px;border-bottom:2px solid var(--line);text-align:left;font-weight:600;white-space:nowrap;cursor:pointer;}
+.dc-tbl th{background:var(--sand);color:var(--amber-d);padding:7px 8px;border-bottom:2px solid var(--line);text-align:left;font-weight:600;white-space:nowrap;cursor:pointer;position:sticky;top:0;z-index:3;box-shadow:0 2px 0 var(--line);}
+.dc-cmt.saved{border-color:#8bbf7a!important;background:#eef6e6;transition:background .3s;}
+.dc-cmt.saving{opacity:.6;}
 .dc-tbl td{padding:6px 8px;border-bottom:1px solid #f0e7d7;vertical-align:middle;white-space:nowrap;max-width:280px;overflow:hidden;text-overflow:ellipsis;}
 .dc-tbl tr:hover td{background:#fdf6ea;}
 .dc-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:6px;}
