@@ -1655,6 +1655,10 @@ $(document).ready(function () {
     loadUnits();
     loadQuoteList(<?= $selectedYear ?>);
     loadSupplementAlerts(true);   // 進站提醒：被駁回/待審補件（清單預設仍顯示全部）
+    // 切回本分頁時重讀待處理最新狀態：他人已審核者即時收回（不掛已處理待辦，比照通知 OR-gate）
+    document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) loadSupplementAlerts(false);
+    });
     // 通知點擊深連結：?open_id=quote_id 直接開啟該張報價單檢視畫面（比照CAR/QA的open_id慣例）
     (function () {
         var openId = parseInt(new URLSearchParams(window.location.search).get('open_id'), 10);
@@ -4088,9 +4092,12 @@ function refreshSuppReviewBadge() {
 // 資料來源：我被駁回的補件（rejected）＋（簽核者）待審補件（pending）
 // ══════════════════════════════════════════════════════════════
 // showAlert：是否於載入後跳出進站提醒視窗（僅進站首次為 true）
-function loadSupplementAlerts(showAlert) {
+// cb：資料更新完成後的回呼（供「先刷新再篩選」等待最新狀態）
+// ★ 每次都向伺服器重讀權威狀態（status='pending' / 被駁回）：只要任一簽核者已審核，
+//   該件即離開 pending → 這裡自動收回，比照補件通知 OR-gate「有人審完其他人就不再掛著」。
+function loadSupplementAlerts(showAlert, cb) {
     $.get(FILE_API_URL, { action:'supplement_alerts' }, res => {
-        if (!res || !res.success) return;
+        if (!res || !res.success) { if (cb) cb(); return; }
         pendingAlertData = { rejected: res.rejected || [], pending: res.pending || [] };
         // 更新篩選集合：被駁回 + 待審 的報價單號
         pendingQuoteNos = new Set();
@@ -4100,13 +4107,32 @@ function loadSupplementAlerts(showAlert) {
         const n = pendingQuoteNos.size;
         const $b = $('#pendingDocBadge');
         if (n > 0) $b.text(n).show(); else $b.hide();
+        // 若正在待處理篩選畫面：依最新狀態重繪；已全部被審核處理完則自動切回全部（不再掛已處理待辦）
+        if (pendingFilterMode) {
+            if (n === 0) {
+                clearPendingFilter();
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title:'待處理單據都已處理完畢，已切回全部', showConfirmButton:false, timer:2500 });
+            } else {
+                renderQuoteList(allQuotes, $('#listSearch').val().trim());
+            }
+        }
+        // 若進站提醒視窗開著，同步刷新其內容（他人審核後即時反映）
+        if ($('#pendingAlertModal').hasClass('in')) {
+            const total0 = pendingAlertData.rejected.length + pendingAlertData.pending.length;
+            if (total0 > 0) renderPendingAlertBody(); else $('#pendingAlertModal').modal('hide');
+        }
         // 進站跳窗（有資料才跳；點窗外自動關閉＝Bootstrap 預設 backdrop 行為）
         const total = pendingAlertData.rejected.length + pendingAlertData.pending.length;
         if (showAlert && total > 0) showPendingAlertModal();
+        if (cb) cb();
     }, 'json');
 }
 
 function showPendingAlertModal() {
+    renderPendingAlertBody();
+    $('#pendingAlertModal').modal('show');  // 點窗外＝backdrop 預設可關閉
+}
+function renderPendingAlertBody() {
     const rej = pendingAlertData.rejected, pen = pendingAlertData.pending;
     let html = '';
     if (rej.length) {
@@ -4135,20 +4161,21 @@ function showPendingAlertModal() {
     }
     if (!html) html = '<p class="text-muted text-center" style="padding:20px;">目前沒有待處理項目</p>';
     $('#pendingAlertBody').html(html);
-    $('#pendingAlertModal').modal('show');  // 點窗外＝backdrop 預設可關閉
 }
 
-// 篩選：只顯示被駁回/待審的報價單
+// 篩選：只顯示被駁回/待審的報價單（先向伺服器刷新最新狀態，他人已審核者即時收回）
 function applyPendingFilter() {
-    if (pendingQuoteNos.size === 0) {
-        Swal.fire({ toast:true, position:'top-end', icon:'info', title:'目前沒有待處理單據', showConfirmButton:false, timer:2500 });
-        return;
-    }
-    pendingFilterMode = true;
-    $('#pendingDocBtn').removeClass('btn-warning').addClass('btn-danger');
-    $('#showAllDocBtn').show();
-    renderQuoteList(allQuotes, $('#listSearch').val().trim());
-    Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已篩選待處理單據，點「顯示全部」可還原', showConfirmButton:false, timer:2500 });
+    loadSupplementAlerts(false, () => {
+        if (pendingQuoteNos.size === 0) {
+            Swal.fire({ toast:true, position:'top-end', icon:'info', title:'目前沒有待處理單據', showConfirmButton:false, timer:2500 });
+            return;
+        }
+        pendingFilterMode = true;
+        $('#pendingDocBtn').removeClass('btn-warning').addClass('btn-danger');
+        $('#showAllDocBtn').show();
+        renderQuoteList(allQuotes, $('#listSearch').val().trim());
+        Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已篩選待處理單據，點「顯示全部」可還原', showConfirmButton:false, timer:2500 });
+    });
 }
 // 取消篩選，還原全部
 function clearPendingFilter() {
