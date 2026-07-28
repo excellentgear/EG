@@ -541,14 +541,20 @@ body { background:var(--bg); }
                 </div>
                 <!-- 客戶篩選下拉（上方模糊搜尋框可用客戶代碼或名稱縮小下拉選項） -->
                 <div style="padding:6px 10px;border-bottom:1px solid var(--border);background:#fafafa;flex-shrink:0;">
-                    <div style="position:relative;margin-bottom:4px;">
-                        <i class="fa fa-filter" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);color:#c9a074;font-size:11px;"></i>
-                        <input type="text" id="clientFilterSearch" class="form-control input-sm"
-                            placeholder="模糊篩選客戶代碼／名稱…" autocomplete="off"
-                            title="輸入客戶代碼或名稱片段即可縮小下方客戶清單；可用空白分隔多個關鍵字；雙擊清空"
-                            style="font-size:12px;padding-left:24px;padding-right:24px;">
-                        <i class="fa fa-times-circle" id="clientFilterSearchClear" title="清除篩選字"
-                            style="display:none;position:absolute;right:7px;top:50%;transform:translateY(-50%);color:#bbb;cursor:pointer;font-size:13px;"></i>
+                    <div style="display:flex;gap:5px;margin-bottom:4px;">
+                        <div style="position:relative;flex:1;min-width:0;">
+                            <i class="fa fa-filter" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);color:#c9a074;font-size:11px;"></i>
+                            <input type="text" id="clientFilterSearch" class="form-control input-sm"
+                                placeholder="模糊篩選客戶代碼／名稱…" autocomplete="off"
+                                title="輸入客戶代碼或名稱片段即可縮小下方客戶清單；可用空白分隔多個關鍵字；雙擊清空"
+                                style="font-size:12px;padding-left:24px;">
+                        </div>
+                        <button type="button" id="clearAllFilterBtn" class="btn btn-sm"
+                            onclick="clearAllListFilters()"
+                            title="一次清除：客戶模糊篩選字、客戶篩選下拉、下方單號/備註搜尋"
+                            style="font-size:11px;padding:3px 8px;white-space:nowrap;background:#F7E0BD;border:1px solid #e0c193;color:#7a4b12;">
+                            <i class="fa fa-eraser"></i> 取消篩選
+                        </button>
                     </div>
                     <select id="clientFilterSel" class="form-control input-sm"
                         style="font-size:12px;"
@@ -1732,10 +1738,15 @@ $(document).ready(function () {
         syncNoteTemplateBtnStates();
     });
 
-    // 搜尋列表
-    $('#listSearch').on('input', function () {
-        renderQuoteList(allQuotes, $(this).val().trim());
-    });
+    // 搜尋列表（雙擊清空＝同時解除此欄篩選）
+    $('#listSearch')
+        .on('input', function () { renderQuoteList(allQuotes, $(this).val().trim()); })
+        .on('focus', function () { if (this.value) this.select(); })
+        .on('dblclick', function () {
+            if (!this.value) return;
+            this.value = '';
+            renderQuoteList(allQuotes, '');
+        });
 
     // 客戶模糊篩選（代碼／名稱）→ 即時縮小客戶下拉選項
     $('#clientFilterSearch')
@@ -1757,7 +1768,6 @@ $(document).ready(function () {
                 clearClientFilterSearch();
             }
         });
-    $('#clientFilterSearchClear').on('click', clearClientFilterSearch);
 
     // 幣別變更 → 重算
     $('#currency').on('change', calculateTotal);
@@ -3114,7 +3124,7 @@ function renderClientFilterOptions() {
     $('#clientFilterSel').html(html);
     $('#clientFilterSel').val(curOpt ? cur : '');
 
-    $('#clientFilterSearchClear').toggle(!!term);
+    refreshClearFilterBtn();
     const $hint = $('#clientFilterHint');
     if (!term.trim())      $hint.hide();
     else if (!list.length) $hint.text('找不到符合的客戶').css('color', '#DD5138').show();
@@ -3132,12 +3142,28 @@ function clearClientFilterSearch() {
     renderClientFilterOptions();
 }
 
+// 三個篩選欄任一有值時才讓「取消篩選」鈕亮起（沒東西可清時淡化）
+function refreshClearFilterBtn() {
+    const on = !!($('#clientFilterSearch').val() || $('#clientFilterSel').val() || $('#listSearch').val());
+    $('#clearAllFilterBtn').css({ opacity: on ? 1 : .45, cursor: on ? 'pointer' : 'default' });
+}
+
+// 取消篩選：客戶模糊篩選字 + 客戶下拉 + 下方單號/備註搜尋一次全清
+function clearAllListFilters() {
+    $('#clientFilterSearch').val('');
+    $('#clientFilterSel').val('');
+    $('#listSearch').val('');
+    renderClientFilterOptions();                 // 客戶下拉還原成完整清單
+    renderQuoteList(allQuotes, '');
+}
+
 // ══════════════════════════════════════════════════════
 // ★ 渲染清單（支援客戶篩選 + 依客戶分組）
 // ══════════════════════════════════════════════════════
 function renderQuoteList(quotes, filter) {
     const f       = filter.toLowerCase();
     const clientF = $('#clientFilterSel').val();
+    refreshClearFilterBtn();
 
     let filtered = quotes;
     // 待處理單據＝報價單「本身」簽核狀態為待審核(pending)或被駁回(rejected)；已核准者不列入（補件待審另有專屬入口）
