@@ -231,7 +231,7 @@ function kpi_as_seed_indicators(PDO $db): void {
         [15,'齒研製程不良率','不合格品管理程序 檢驗與測試管理程序','總不良數/工件完成總數','monthly','percent','lte',5,'%','不良率小於5％',110041901,'林鴻銘/生產課','auto','process_ng_rate',['process_type_ids'=>['v'=>[12],'fe'=>0]]],
         [16,'進料檢驗不良率','不合格品管理程序 檢驗與測試管理程序','進料檢驗不良數/進料總數(同生管計算)','monthly','percent','lte',5,'%','不良率小於5％',111050101,'陳彦驊/品保課','auto','incoming_ng_rate',['ng_statuses'=>['v'=>['ng'],'fe'=>0]]],
         [17,'成品出貨不良率','不合格品管理程序 檢驗與測試管理程序','出貨檢驗不良數/出貨總數','monthly','percent','lte',5,'%','不良率小於5％',111050101,'陳彦驊/品保課','auto','packing_ng_rate',[]],
-        [18,'量測儀器按時校驗率','量測儀器校正管理辦法 量規儀器內校作業標準','校驗完成件數/當月應校驗件數','monthly','percent','gte',95,'%','達成率大於95％',111050101,'陳彦驊/品保課','manual',null,[]],
+        [18,'量測儀器按時校驗率','量測儀器校正管理辦法 量規儀器內校作業標準','校驗完成件數/當月應校驗件數','monthly','percent','gte',95,'%','達成率大於95％',111050101,'陳彦驊/品保課','auto','calibration_ontime',['grace_days'=>['v'=>0,'fe'=>1]]],
         [19,'人員教育訓練達成率','人力資源管理程序','有上課次數/總課程次數','monthly','percent','gte',95,'%','達成率大於95％',105030102,'林雅婷/管理課','manual',null,[]],
         [20,'應收帳款(票據)未收件數','N/A','當月應收但延遲收件數','monthly','count','lte',5,'件','少於5件',109110202,'林郁婷/管理課','manual',null,[]],
         [21,'明細分類帳(損益表)於期限內完成','N/A','每月月底前應完成','monthly','yesno','yes',1,'','Yes/No',109110202,'林郁婷/管理課','manual',null,[]],
@@ -473,6 +473,13 @@ function kpi_as_registry(): array {
             'page' => '出貨檢驗 qc_packing_inspection',
             'desc' => '分子=ΣNG總數；分母=Σ實際全檢數量',
             'params' => []],
+        'calibration_ontime' => [
+            'name' => '量測儀器按時校驗率',
+            'page' => '量測儀器校驗管理 views/QC/tool_calibration.php',
+            'desc' => '分母=當月應校驗量具數(已完成紀錄到期日在當月＋尚待完成的到期)；分子=其中準時完成(校驗日≤到期日+寬限)者',
+            'params' => [
+                ['key'=>'grace_days','label'=>'準時寬限天數(0=須到期日前完成)','type'=>'int','fe'=>1],
+            ]],
     ];
 }
 
@@ -783,6 +790,11 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
             $r = $st->fetch(PDO::FETCH_ASSOC);
             $num = (float)($r['n'] ?? 0); $den = (float)($r['d'] ?? 0);
             return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];
+        }
+
+        case 'calibration_ontime': {
+            require_once __DIR__ . '/tool_calib_lib.php';
+            return tool_calib_kpi_compute($db, $year, $month, $params);
         }
     }
     return null;

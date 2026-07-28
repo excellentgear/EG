@@ -341,6 +341,7 @@ $_dbbkRoles     = [];  $_userDbbkRoles   = [];
 $_stampRoles    = [];  $_userStampRoles  = [];
 $_rosterRoles   = [];  $_userRosterRoles = [];
 $_dcRoles       = [];  $_userDcRoles     = [];
+$_tcalRoles     = [];  $_userTcalRoles   = [];
 $_kpiRoles      = [];  $_userKpiRoles    = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
@@ -367,6 +368,7 @@ try {
     $st->execute(['kpi']);         $_kpiRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['roster']);      $_rosterRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['data_console']);$_dcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['tool_calib']);  $_tcalRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -450,6 +452,10 @@ try {
     $st->execute(['data_console']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userDcRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['tool_calib']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userTcalRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -654,6 +660,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'stamp-role-section'     => '圖章管理',
                                         'roster-role-section'    => '輪值排班',
                                         'kpi-role-section'        => 'KPI績效指標',
+                                        'tcal-role-section'      => '量測儀器校驗',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -1047,6 +1054,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('dc', 'data_console', '資料急救台', 'fa-medkit', '#b53c26',
                         '為每位使用者指派「資料急救台」頁的操作角色。此頁可直接查改後端資料庫，請謹慎授權。角色功能：<strong>data_console_view</strong>＝進入/瀏覽/搜尋/查詢；<strong>data_console_edit</strong>＝新增/修改（仍受各表「允許編輯」限制）；<strong>data_console_delete</strong>＝刪除（仍受各表「允許刪除」限制且需二次確認）。<strong>未被指派角色者無法進入本頁</strong>；表級開放設定與關聯地圖一律僅限管理員；管理員固定擁有全部權限。',
                         $_dcRoles, $_userDcRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('tcal', 'tool_calib', '量測儀器校驗管理', 'fa-thermometer-half', '#b06f27',
+                        '為每位使用者指派「量測儀器校驗管理」頁的操作角色（KPI #18 量測儀器按時校驗率的來源頁）。角色功能：<strong>校驗唯讀</strong>＝檢視儀器清單/校驗歷史/統計與匯出；<strong>校驗登錄</strong>＝唯讀＋登錄各儀器校驗完成紀錄；<strong>校驗管理員</strong>＝登錄＋新增儀器、設定週期/納管/基準到期日、刪除誤登紀錄。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
+                        $_tcalRoles, $_userTcalRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 
                     <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->
