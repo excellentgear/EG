@@ -111,6 +111,7 @@ $kpiPerms = kpi_as_perms($db, $kpiUser);
             <button id="btnCopyYear" title="把某年度的目標/公式/擔當者設定複製到另一年度(僅補缺漏)">
                 <i class="fa fa-copy"></i> 年度設定複製</button>
             <button id="btnAddInd"><i class="fa fa-plus"></i> 新增指標</button>
+            <button id="btnCatalog" style="display:none;"><i class="fa fa-database"></i> 資料來源目錄</button>
             <span style="margin-left:auto;font-size:12px;color:#8a6d45;">
                 每年目標/公式獨立儲存；所有修改自動寫入變更歷史</span>
         </div>
@@ -202,6 +203,51 @@ $kpiPerms = kpi_as_perms($db, $kpiUser);
     <div class="m-foot">
         <button class="ks-btn gray" onclick="$('#pMask').hide()">取消</button>
         <button class="ks-btn" onclick="saveParams()">儲存參數</button>
+    </div>
+</div></div>
+
+<!-- 自訂公式 builder modal -->
+<div class="kpi-modal-mask" id="bMask"><div class="kpi-modal" style="max-width:720px;">
+    <div class="m-head"><span id="bTitle">自訂公式</span><span class="m-close" onclick="$('#bMask').hide()">✕</span></div>
+    <div class="m-body" id="bBody">
+        <div class="param-hint" style="margin-bottom:8px;">用「資料來源目錄」自組公式，全程下拉、不需寫程式。分子÷分母；只設分子＝直接算筆數/加總。</div>
+        <div style="border:1px solid #EADFC8;border-radius:6px;padding:10px;margin-bottom:10px;">
+            <div style="font-weight:bold;color:#5b3a1e;margin-bottom:6px;">分子（要計算的對象）</div>
+            <div id="bNum"></div>
+        </div>
+        <label style="font-weight:bold;"><input type="checkbox" id="bUseDen" style="width:auto;" onchange="toggleDen()"> 除以分母（做成比率/百分比）</label>
+        <div id="bDenBox" style="border:1px solid #EADFC8;border-radius:6px;padding:10px;margin:6px 0;display:none;">
+            <div style="font-weight:bold;color:#5b3a1e;margin-bottom:6px;">分母（拿來除的總數）</div>
+            <div id="bDen"></div>
+            <label style="margin-top:6px;"><input type="checkbox" id="bMul100" style="width:auto;"> 結果 ×100（顯示為百分比）</label>
+        </div>
+        <div style="background:#FFF7E8;border:1px dashed #F0A24B;border-radius:6px;padding:8px;margin-top:8px;">
+            <button class="ks-btn gray" onclick="previewBuilder()"><i class="fa fa-calculator"></i> 試算本月</button>
+            <span id="bPreview" style="margin-left:10px;font-size:13px;color:#5b3a1e;"></span>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="ks-btn gray" onclick="$('#bMask').hide()">取消</button>
+        <button class="ks-btn" onclick="saveBuilder()">儲存公式</button>
+    </div>
+</div></div>
+
+<!-- 資料來源目錄管理 modal（僅系統管理者） -->
+<div class="kpi-modal-mask" id="cMask"><div class="kpi-modal" style="max-width:780px;">
+    <div class="m-head"><span>資料來源目錄管理（系統管理者）</span><span class="m-close" onclick="$('#cMask').hide()">✕</span></div>
+    <div class="m-body" id="cBody">
+        <div class="param-hint" style="margin-bottom:8px;">在這裡把「資料表」用中文登記成積木，KPI 管理員之後就能用下拉自組公式、不必知道資料表名稱。此區僅系統管理者可用。</div>
+        <div id="cList"></div>
+        <div style="border-top:1px dashed #EADFC8;margin-top:10px;padding-top:8px;">
+            <div style="font-weight:bold;color:#5b3a1e;">新增資料來源</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px;">
+                <input type="text" id="ncLabel" placeholder="中文名稱(例:出貨單)" style="width:150px;">
+                <input type="text" id="ncTable" placeholder="資料表名(is_list)" style="width:150px;">
+                <input type="text" id="ncDate" placeholder="日期欄(Order_date)" style="width:150px;">
+                <button class="ks-btn" onclick="saveCatalog(0)">新增</button>
+            </div>
+            <div class="param-hint">資料表與日期欄需為系統實際存在的名稱（會自動驗證）。</div>
+        </div>
     </div>
 </div></div>
 
@@ -370,10 +416,13 @@ function renderIndicators(){
            + '<option value="manual"'+(r.source_mode==='manual'?' selected':'')+'>手動</option>'
            + '<option value="auto"'+(r.source_mode==='auto'?' selected':'')+'>自動</option></select></td>';
         h += '<td><select class="f-calc" style="max-width:230px;"'+(r.source_mode==='manual'?' disabled':'')+'><option value="">（選擇資料來源）</option>';
+        h += '<optgroup label="內建計算">';
         Object.keys(DATA.registry).forEach(function(k){
             h += '<option value="'+k+'"'+(r.calculator_key===k?' selected':'')+'>'+esc(DATA.registry[k].name)+'</option>';
         });
-        h += '</select>'+(reg?'<div class="param-hint">'+esc(reg.page)+'</div>':'')+'</td>';
+        h += '</optgroup><optgroup label="自訂"><option value="__builder__"'+(r.calculator_key==='__builder__'?' selected':'')+'>🔧 自訂公式（資料來源目錄）</option></optgroup>';
+        h += '</select>'+(reg?'<div class="param-hint">'+esc(reg.page)+'</div>'
+              :(r.calculator_key==='__builder__'?'<div class="param-hint">用資料來源目錄自組公式</div>':''))+'</td>';
         h += '<td style="text-align:center;"><button class="ks-btn gray" onclick="openParams('+i+')"'
            + (r.source_mode==='manual'?' disabled style="opacity:.4;"':'')+'>參數'
            + (hasConfiguredParams(r)?' <span style="color:#7a9c3f;" title="已設定參數">●</span>':'')+'</button></td>';
@@ -427,6 +476,7 @@ var pCtx = null;
 function openParams(i){
     var r = DATA.indicators[i];
     var calcKey = $('tr[data-i="'+i+'"]').find('.f-calc').val() || r.calculator_key;
+    if (calcKey === '__builder__') { openBuilder(i); return; }
     if (!calcKey || !DATA.registry[calcKey]) { alert('請先選擇資料來源'); return; }
     var reg = DATA.registry[calcKey];
     var params = {};
@@ -680,7 +730,214 @@ $(document).on('keydown', '#iMask input', function(e){
     else saveIndicator();
 });
 
-if (canAdmin) loadAll();
+/* ================= 自訂公式 builder + 資料來源目錄 ================= */
+var CATALOG = null, CAT_OPS = null, IS_SYSADMIN = false, bCtx = null;
+function loadCatalog(cb){
+    $.getJSON(API, {action:'get_catalog'}, function(res){
+        if (!res.ok) { alert(res.error||'目錄載入失敗'); return; }
+        CATALOG = res.catalog; CAT_OPS = res.ops; IS_SYSADMIN = res.is_sysadmin;
+        $('#btnCatalog').toggle(!!IS_SYSADMIN);
+        if (cb) cb();
+    });
+}
+function dsById(id){ return (CATALOG||[]).find(function(c){ return +c.ds_id === +id; }); }
+function catOptsHtml(sel){
+    return '<option value="0">（選資料來源）</option>' + (CATALOG||[]).filter(function(c){return +c.is_active===1;}).map(function(c){
+        return '<option value="'+c.ds_id+'"'+(+sel===+c.ds_id?' selected':'')+'>'+esc(c.ds_label)+'</option>'; }).join('');
+}
+
+/* ---- builder ---- */
+function openBuilder(i){
+    var r = DATA.indicators[i];
+    bCtx = {i:i};
+    loadCatalog(function(){
+        if (!CATALOG.length) { alert('尚無資料來源目錄。請先由系統管理者點「資料來源目錄」登記資料表。'); return; }
+        var spec = {};
+        try { spec = JSON.parse(r.params_json || '{}') || {}; } catch(e){}
+        if (!spec.num) spec = {num:{ds_id:0,agg:'count',filters:[]}, den:null, multiply_100:(r.value_type==='percent')};
+        $('#bTitle').text('自訂公式：' + r.item_no + '. ' + r.name);
+        renderBuilderSide('bNum', spec.num || {ds_id:0,agg:'count',filters:[]});
+        var useDen = !!(spec.den && spec.den.ds_id);
+        $('#bUseDen').prop('checked', useDen);
+        $('#bDenBox').toggle(useDen);
+        renderBuilderSide('bDen', spec.den || {ds_id:0,agg:'count',filters:[]});
+        $('#bMul100').prop('checked', spec.multiply_100 !== false && (r.value_type==='percent' || !!spec.multiply_100));
+        $('#bPreview').text('');
+        $('#bMask').show();
+    });
+}
+function toggleDen(){ $('#bDenBox').toggle($('#bUseDen').is(':checked')); }
+function renderBuilderSide(boxId, side){
+    var h = '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">';
+    h += '<span>資料來源</span><select class="b-ds" onchange="onDsChange(this,\''+boxId+'\')" style="width:150px;">'+catOptsHtml(side.ds_id)+'</select>';
+    h += '<span>計算</span><select class="b-agg" onchange="onAggChange(this,\''+boxId+'\')" style="width:100px;"><option value="count"'+(side.agg!=='sum'?' selected':'')+'>筆數</option><option value="sum"'+(side.agg==='sum'?' selected':'')+'>數值加總</option></select>';
+    h += '<select class="b-measure" style="width:130px;'+(side.agg==='sum'?'':'display:none;')+'">'+measureOptsHtml(side.ds_id, side.measure_field_id)+'</select>';
+    h += '</div>';
+    h += '<div style="margin-top:6px;"><span style="color:#8a6d45;font-size:12px;">篩選條件（可不設）：</span> <button class="ks-btn gray" style="height:22px;font-size:11px;" onclick="addFilter(\''+boxId+'\')">＋條件</button></div>';
+    h += '<div class="b-filters"></div>';
+    $('#'+boxId).html(h);
+    (side.filters||[]).forEach(function(f){ addFilter(boxId, f); });
+}
+function measureOptsHtml(dsId, sel){
+    var ds = dsById(dsId);
+    var ms = ds ? ds.fields.filter(function(f){ return f.role==='measure' && +f.is_active===1; }) : [];
+    if (!ms.length) return '<option value="0">（此來源無可加總欄）</option>';
+    return '<option value="0">（選數值欄）</option>' + ms.map(function(f){
+        return '<option value="'+f.field_id+'"'+(+sel===+f.field_id?' selected':'')+'>'+esc(f.field_label)+'</option>'; }).join('');
+}
+function filterFieldOptsHtml(dsId, sel){
+    var ds = dsById(dsId);
+    var fs = ds ? ds.fields.filter(function(f){ return f.role==='filter' && +f.is_active===1; }) : [];
+    return '<option value="0">（選欄位）</option>' + fs.map(function(f){
+        return '<option value="'+f.field_id+'"'+(+sel===+f.field_id?' selected':'')+'>'+esc(f.field_label)+'</option>'; }).join('');
+}
+function onDsChange(sel, boxId){
+    var dsId = $(sel).val();
+    var $box = $('#'+boxId);
+    $box.find('.b-measure').html(measureOptsHtml(dsId, 0));
+    $box.find('.b-filters').empty();
+    $box.find('.f-fieldsel').html(filterFieldOptsHtml(dsId, 0));
+}
+function onAggChange(sel, boxId){
+    $('#'+boxId).find('.b-measure').toggle($(sel).val()==='sum');
+}
+function addFilter(boxId, f){
+    f = f || {field_id:0, op:'in', values:[]};
+    var dsId = $('#'+boxId).find('.b-ds').val();
+    var opsHtml = Object.keys(CAT_OPS).map(function(k){
+        return '<option value="'+k+'"'+(f.op===k?' selected':'')+'>'+esc(CAT_OPS[k])+'</option>'; }).join('');
+    var valStr = Array.isArray(f.values) ? f.values.join(',') : (f.values==null?'':f.values);
+    var h = '<div class="b-filter" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-top:4px;background:#FBF6EC;padding:4px;border-radius:4px;">'
+          + '<select class="f-fieldsel" style="width:120px;">'+filterFieldOptsHtml(dsId, f.field_id)+'</select>'
+          + '<select class="f-op" style="width:90px;">'+opsHtml+'</select>'
+          + '<input type="text" class="f-vals" style="width:150px;" placeholder="值(可多個,逗號分隔)" value="'+esc(valStr)+'">'
+          + '<button class="ks-btn gray" style="height:22px;font-size:11px;" onclick="loadFieldVals(this)">選現有值</button>'
+          + '<button class="ks-btn red" style="height:22px;font-size:11px;" onclick="$(this).closest(\'.b-filter\').remove()">✕</button>'
+          + '</div>';
+    $('#'+boxId+' .b-filters').append(h);
+}
+function loadFieldVals(btn){
+    var $f = $(btn).closest('.b-filter');
+    var fid = $f.find('.f-fieldsel').val();
+    if (!fid || fid==='0') { alert('請先選欄位'); return; }
+    $.getJSON(API, {action:'get_field_values', field_id:fid}, function(res){
+        if (!res.ok) { alert(res.error||'載入失敗'); return; }
+        if (!res.values.length) { alert('此欄目前無資料值'); return; }
+        var cur = $f.find('.f-vals').val().split(/[,，]+/).map(function(s){return s.trim();}).filter(String);
+        var pick = prompt('現有值（勾選請直接編輯下方，逗號分隔）：\n' + res.values.slice(0,80).join('、'), cur.join(','));
+        if (pick !== null) $f.find('.f-vals').val(pick);
+    });
+}
+function collectSide(boxId){
+    var $box = $('#'+boxId);
+    var dsId = +$box.find('.b-ds').val();
+    if (!dsId) return null;
+    var agg = $box.find('.b-agg').val();
+    var side = {ds_id:dsId, agg:agg, filters:[]};
+    if (agg === 'sum') side.measure_field_id = +$box.find('.b-measure').val() || 0;
+    $box.find('.b-filter').each(function(){
+        var fid = +$(this).find('.f-fieldsel').val();
+        if (!fid) return;
+        var op = $(this).find('.f-op').val();
+        var vals = $(this).find('.f-vals').val().split(/[,，]+/).map(function(s){return s.trim();}).filter(String);
+        side.filters.push({field_id:fid, op:op, values:vals});
+    });
+    return side;
+}
+function collectSpec(){
+    var num = collectSide('bNum');
+    if (!num) { alert('請選擇分子的資料來源'); return null; }
+    if (num.agg==='sum' && !num.measure_field_id) { alert('分子選了「數值加總」請選數值欄'); return null; }
+    var spec = {num:num, den:null, multiply_100:false};
+    if ($('#bUseDen').is(':checked')) {
+        var den = collectSide('bDen');
+        if (!den) { alert('已勾除以分母，請選擇分母的資料來源'); return null; }
+        if (den.agg==='sum' && !den.measure_field_id) { alert('分母選了「數值加總」請選數值欄'); return null; }
+        spec.den = den;
+        spec.multiply_100 = $('#bMul100').is(':checked');
+    }
+    return spec;
+}
+function previewBuilder(){
+    var spec = collectSpec(); if (!spec) return;
+    $('#bPreview').text('計算中…');
+    $.post(API, {action:'preview_builder', spec:JSON.stringify(spec), year:YEAR, month:''}, function(res){
+        if (!res.ok) { $('#bPreview').text(res.error||'試算失敗'); return; }
+        var r = res.result;
+        if (!r) { $('#bPreview').html('<span style="color:#DD5138;">無法計算（來源/欄位設定不完整）</span>'); return; }
+        var txt = '分子='+(+r.num) + (r.den!==null?' ／ 分母='+(+r.den):'') + ' → 結果=' + (r.value===null?'—':(Math.round(r.value*100)/100));
+        $('#bPreview').html('<b>'+esc(txt)+'</b>（'+YEAR+'年本月）');
+    }, 'json').fail(function(x){ $('#bPreview').text('試算失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function saveBuilder(){
+    var spec = collectSpec(); if (!spec) return;
+    var r = DATA.indicators[bCtx.i];
+    r.params_json = JSON.stringify(spec);
+    // 確保該列來源=自動+__builder__
+    var $tr = $('tr[data-i="'+bCtx.i+'"]');
+    $tr.find('.f-mode').val('auto').prop('disabled', false);
+    $tr.find('.f-calc').prop('disabled', false).val('__builder__');
+    $('#bMask').hide();
+    saveRow(bCtx.i);
+}
+
+/* ---- 資料來源目錄管理 ---- */
+$('#btnCatalog').on('click', function(){ loadCatalog(renderCatalogManager); });
+function renderCatalogManager(){
+    var h = '';
+    (CATALOG||[]).forEach(function(c){
+        h += '<div style="border:1px solid #EADFC8;border-radius:6px;padding:8px;margin-bottom:8px;">';
+        h += '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">'
+           + '<b style="color:#5b3a1e;">'+esc(c.ds_label)+'</b>'
+           + '<span class="param-hint" style="margin:0;">表：'+esc(c.table_name)+'｜日期：'+esc(c.date_column)+'</span>'
+           + (+c.is_active===1?'':'<span class="rule-tag" style="background:#eee;">停用</span>')
+           + '<button class="ks-btn red" style="height:22px;font-size:11px;margin-left:auto;" onclick="delCatalog('+c.ds_id+')">刪來源</button></div>';
+        h += '<table class="ks-table" style="margin-top:6px;"><thead><tr><th>中文欄位</th><th>欄位名</th><th>用途</th><th>型態</th><th></th></tr></thead><tbody>';
+        (c.fields||[]).forEach(function(f){
+            h += '<tr><td>'+esc(f.field_label)+'</td><td>'+esc(f.column_name)+'</td>'
+               + '<td>'+(f.role==='measure'?'可加總':'可篩選')+'</td><td>'+esc(f.data_type)+'</td>'
+               + '<td style="text-align:center;"><button class="ks-btn red" style="height:20px;font-size:11px;" onclick="delField('+f.field_id+')">刪</button></td></tr>';
+        });
+        h += '<tr style="background:#FBF6EC;"><td><input type="text" class="nf-label" placeholder="中文欄位" style="width:100%;"></td>'
+           + '<td><input type="text" class="nf-col" placeholder="欄位名" style="width:100%;"></td>'
+           + '<td><select class="nf-role"><option value="filter">可篩選</option><option value="measure">可加總</option></select></td>'
+           + '<td><select class="nf-type"><option value="text">文字</option><option value="number">數字</option><option value="date">日期</option></select></td>'
+           + '<td style="text-align:center;"><button class="ks-btn" style="height:20px;font-size:11px;" onclick="saveField('+c.ds_id+',this)">加欄</button></td></tr>';
+        h += '</tbody></table></div>';
+    });
+    $('#cList').html(h || '<div class="param-hint">尚無資料來源</div>');
+    $('#cMask').show();
+}
+function saveCatalog(dsId){
+    $.post(API, {action:'catalog_save', ds_id:dsId, ds_label:$('#ncLabel').val(), table_name:$('#ncTable').val(), date_column:$('#ncDate').val(), is_active:1}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        $('#ncLabel,#ncTable,#ncDate').val('');
+        loadCatalog(renderCatalogManager);
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function delCatalog(dsId){
+    if (!confirm('刪除此資料來源及其欄位？（用到它的自訂公式將算不出來）')) return;
+    $.post(API, {action:'catalog_del', ds_id:dsId}, function(res){
+        if (!res.ok) { alert(res.error||'刪除失敗'); return; }
+        loadCatalog(renderCatalogManager);
+    }, 'json');
+}
+function saveField(dsId, btn){
+    var $tr = $(btn).closest('tr');
+    $.post(API, {action:'field_save', ds_id:dsId, field_label:$tr.find('.nf-label').val(), column_name:$tr.find('.nf-col').val(), role:$tr.find('.nf-role').val(), data_type:$tr.find('.nf-type').val(), is_active:1}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        loadCatalog(renderCatalogManager);
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function delField(fid){
+    if (!confirm('刪除此欄位？')) return;
+    $.post(API, {action:'field_del', field_id:fid}, function(res){
+        if (!res.ok) { alert(res.error||'刪除失敗'); return; }
+        loadCatalog(renderCatalogManager);
+    }, 'json');
+}
+
+if (canAdmin) { loadAll(); loadCatalog(); }
 </script>
 </body>
 </html>
