@@ -95,6 +95,10 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
         .chip.left{ text-decoration:line-through; opacity:.6; }
         .chip.adj::after{ content:'調'; font-size:9px; background:#fff; color:var(--coral); border-radius:2px; padding:0 2px; margin-left:3px; }
         .chip.dim{ opacity:.2; }
+        .chip.mine{ box-shadow:inset 0 0 0 2px #8c5320; font-weight:bold; }
+        .chip .stamp{ display:inline-block; min-width:15px; height:15px; line-height:13px; text-align:center; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:50%; font-size:9px; transform:rotate(-8deg); margin-right:3px; vertical-align:middle; }
+        .chip.signed .stamp{ border-color:#fff; color:#fff; background:transparent; }
+        #editorModal .modal-body{ max-height:72vh; overflow-y:auto; }
         .legend{ font-size:12px; color:#a08c72; }
         .legend b{ display:inline-block; width:12px; height:12px; border-radius:2px; vertical-align:middle; margin:0 3px 0 8px; }
         /* 列表 */
@@ -178,12 +182,11 @@ $lanePalette = ['#DD5138', '#F0A24B', '#C0762C', '#E6B566', '#B5651D', '#D98C5F'
                                     <button class="btn btn-sm btn-default" id="viewList" onclick="R.setView('list')">列表</button>
                                 </div>
                                 <span id="ownerTools" style="display:none">
-                                    <button class="btn btn-sm btn-default" onclick="R.openEditorCurrent()" title="編輯設定"><i class="fa fa-cog"></i></button>
                                     <button class="btn btn-sm btn-default" onclick="R.openRange()" title="區間調班"><i class="fa fa-random"></i> 區間調班</button>
                                 </span>
                             </div>
                             <div class="legend" style="margin-bottom:8px;">
-                                圖例：<b style="background:#efe6d8"></b>休假 <b style="background:#fff6e8"></b>補班 <b style="background:var(--amber)"></b>已簽核 <b style="background:#f3ead9"></b>未簽核 ・「調」＝已調班
+                                圖例：<b style="background:#efe6d8"></b>休假 <b style="background:#fff6e8"></b>補班 <b style="background:var(--amber)"></b>已簽核 <b style="background:#f3ead9"></b>未簽核 <b style="background:#fff;box-shadow:inset 0 0 0 2px #8c5320"></b>我的班 ・「調」＝已調班
                             </div>
                             <div id="calView"><div class="cal-months" id="calMonths"></div></div>
                             <div id="listView" style="display:none;"></div>
@@ -314,7 +317,12 @@ var RD = {
 var R = (function(){
     var scope='all', boards=[], curBoard=null, curYm=null, view='cal', calData=null;
 
-    function post(action,data){ data=data||{}; data.action=action; return $.post(RD.api,data,null,'json'); }
+    function post(action,data){ data=data||{}; data.action=action;
+        return $.post(RD.api,data,null,'json').fail(function(x){
+            var m='操作失敗（'+x.status+'）'; try{ m=(JSON.parse(x.responseText).message)||m; }catch(e){}
+            alert(m);
+        });
+    }
     function esc(s){ return $('<div>').text(s==null?'':s).html(); }
     function ym(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
 
@@ -329,10 +337,16 @@ var R = (function(){
         if(!boards.length){ $('#boardList').html('<div style="padding:14px;color:#a08c72;">尚無排班表'+(RD.canCreate?'，點右上「新增」建立':'')+'</div>'); return; }
         var h='';
         boards.forEach(function(b){
+            var tools = b.can_edit
+              ? '<div style="margin-top:5px">'
+                +'<button class="btn btn-xs btn-default" onclick="event.stopPropagation();R.openEditor('+b.id+')"><i class="fa fa-cog"></i> 編輯</button> '
+                +'<button class="btn btn-xs btn-default" style="color:#c0392b" onclick="event.stopPropagation();R.deleteBoard('+b.id+',\''+esc(b.name).replace(/'/g,"\\\x27")+'\')"><i class="fa fa-trash"></i> 刪除</button>'
+                +'</div>' : '';
             h+='<div class="board-item'+(curBoard&&curBoard.id===b.id?' sel':'')+'" onclick="R.selectBoard('+b.id+')">'
               +'<div class="bname">'+esc(b.name)+(b.status==='archived'?' <span class="label label-default">已封存</span>':'')+'</div>'
               +'<div class="bmeta">'+(b.is_mine?'我建立':'由 '+esc(b.owner_name))+' ・ '+b.lane_count+'欄 / '+b.member_count+'人</div>'
               +(b.next_my_duty?'<div class="bnext"><i class="fa fa-bell"></i> 我的下次值勤：'+b.next_my_duty+'</div>':'')
+              +tools
               +'</div>';
         });
         $('#boardList').html(h);
@@ -394,8 +408,9 @@ var R = (function(){
             cells.forEach(function(c){
                 var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
                 var lcol=laneColor(l,idx);
-                h+='<div class="chip'+(c.sign?' signed':'')+(c.left?' left':'')+(c.adjusted?' adj':'')+'" style="border-left-color:'+lcol+'" title="'+esc((l?l.lane_name:'')+'：'+c.name)+'">'
-                  +(c.sign?'<i class="fa fa-check"></i> ':'')+esc(c.name)+'</div>';
+                var tip=(l?l.lane_name:'')+'：'+c.name+(c.sign&&c.signed_at?'（已簽 '+c.signed_at+'）':'')+(c.mine?'（我）':'');
+                h+='<div class="chip'+(c.sign?' signed':'')+(c.left?' left':'')+(c.adjusted?' adj':'')+(c.mine?' mine':'')+'" style="border-left-color:'+lcol+'" title="'+esc(tip)+'">'
+                  +(c.sign?'<span class="stamp">簽</span>':'')+esc(c.name)+'</div>';
             });
             h+='</td>'; col++;
             if(col%7===0 && day<dim) h+='</tr><tr>';
@@ -417,7 +432,7 @@ var R = (function(){
             var l=lm[x.c.lane_id];
             h+='<tr><td>'+x.d+'</td><td>'+esc(l?l.lane_name:'')+'</td>'
               +'<td>'+esc(x.c.name)+(x.c.left?' <span class="label label-default">離職</span>':'')+(x.c.adjusted?' <span class="label label-warning">調</span>':'')+'</td>'
-              +'<td>'+(x.c.sign?'<span style="color:#C0762C"><i class="fa fa-check"></i> 已簽</span>':'<span style="color:#a08c72">未簽</span>')+'</td>'
+              +'<td>'+(x.c.sign?'<span style="color:#C0762C"><span class="stamp" style="color:#c0392b;border-color:#c0392b">簽</span> 已簽 '+(x.c.signed_at||'')+'</span>':'<span style="color:#a08c72">未簽</span>')+'</td>'
               +'<td>'+actionBtns(x.c,x.d)+'</td></tr>';
         });
         h+='</table>';
@@ -425,13 +440,11 @@ var R = (function(){
     }
     function actionBtns(c,d){
         var b='';
-        if(calData.board.sign_required){
-            if(c.can_sign||calData.board.is_admin||calData.board.can_edit){
-                b+= c.sign? '<button class="btn btn-xs btn-default" onclick="R.sign('+c.aid+',0)">取消簽核</button>'
-                          : '<button class="btn btn-xs btn-warning" onclick="R.sign('+c.aid+',1)">簽核</button> ';
-            }
+        if(calData.board.sign_required && c.can_sign){   // 只能簽自己負責的
+            b+= c.sign? '<button class="btn btn-xs btn-default" onclick="R.sign('+c.aid+',0)">取消簽核</button>'
+                      : '<button class="btn btn-xs btn-warning" onclick="R.sign('+c.aid+',1)">簽核</button> ';
         }
-        if(calData.board.can_edit) b+=' <button class="btn btn-xs btn-default" onclick="R.adjustSingle('+c.aid+',\''+esc(c.name)+'\')">調班</button>';
+        if(c.mine) b+=' <button class="btn btn-xs btn-default" onclick="R.adjustSingle('+c.aid+',\''+esc(c.name)+'\')">調班</button>'; // 只能調自己的
         return b||'—';
     }
 
@@ -444,8 +457,8 @@ var R = (function(){
         else{
             var h='<table class="rst-list" style="width:100%"><tr><th>職務欄</th><th>負責人</th><th>狀態</th><th>操作</th></tr>';
             cells.forEach(function(c){ var l=lm[c.lane_id];
-                h+='<tr><td>'+esc(l?l.lane_name:'')+'</td><td>'+esc(c.name)+(c.left?'（離職）':'')+'</td>'
-                  +'<td>'+(c.sign?'<span style="color:#C0762C">已簽</span>':'未簽')+'</td><td>'+actionBtns(c,ds)+'</td></tr>';
+                h+='<tr'+(c.mine?' style="background:#fbf3e6"':'')+'><td>'+esc(l?l.lane_name:'')+'</td><td>'+esc(c.name)+(c.mine?' <span class="label label-warning">我</span>':'')+(c.left?'（離職）':'')+'</td>'
+                  +'<td>'+(c.sign?'<span style="color:#C0762C">已簽 '+(c.signed_at||'')+'</span>':'未簽')+'</td><td>'+actionBtns(c,ds)+'</td></tr>';
             });
             h+='</table>'; $('#dayBody').html(h);
         }
@@ -689,15 +702,27 @@ var R = (function(){
         post('save_board',{payload:JSON.stringify(payload)}).done(function(r){
             if(!r.success){ alert(r.message); return; }
             $('#editorModal').modal('hide');
-            loadBoards();
-            curYm=curYm||ym(new Date());
-            setTimeout(function(){ loadBoards(); if(!curBoard||curBoard.id===r.id){ selectBoardById(r.id);} },200);
+            curYm = curYm || ym(new Date());
+            var savedId = r.id;
+            post('list_boards',{scope:scope}).done(function(rr){
+                if(!rr.success) return;
+                boards = rr.boards || []; renderBoards();
+                var b = boards.find(function(x){return x.id===savedId;});
+                if(b) selectBoard(savedId);   // 重新載入最新排班到月曆
+                else if(curBoard) loadCalendar();
+            });
         });
     }
-    function selectBoardById(id){ post('list_boards',{scope:'all'}).done(function(r){ boards=r.boards||[]; renderBoards(); selectBoard(id); }); }
 
-    function deleteBoard(){ if(!curBoard||!confirm('確定刪除「'+curBoard.name+'」？此表所有排班紀錄將一併刪除。'))return;
-        post('delete_board',{id:curBoard.id}).done(function(r){ if(!r.success){alert(r.message);return;} curBoard=null; $('#calArea').hide(); $('#calEmpty').show(); loadBoards(); }); }
+    function deleteBoard(id,name){
+        var t=prompt('刪除「'+name+'」會一併刪除此表所有排班與紀錄，無法復原。\n\n請輸入大寫「Y」確認刪除：');
+        if(t===null) return;
+        if(t!=='Y'){ alert('未輸入大寫 Y，已取消刪除'); return; }
+        post('delete_board',{id:id}).done(function(r){ if(!r.success){alert(r.message);return;}
+            if(curBoard&&curBoard.id===id){ curBoard=null; $('#calArea').hide(); $('#calEmpty').show(); }
+            loadBoards();
+        });
+    }
 
     function moveMonth(n){ var d=new Date(curYm+'-01'); d.setMonth(d.getMonth()+n); curYm=ym(d); loadCalendar(); }
     function goToday(){ curYm=ym(new Date()); loadCalendar(); }

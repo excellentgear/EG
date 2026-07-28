@@ -291,7 +291,8 @@ case 'get_calendar': {
         $cells[$r['duty_date']][] = [
             'aid' => (int)$r['id'], 'lane_id' => (int)$r['lane_id'], 'user_id' => $uid,
             'name' => $names[$uid]['name'] ?? ('#' . $uid), 'left' => $names[$uid]['left'] ?? false,
-            'sign' => (int)$r['sign_status'], 'adjusted' => (int)$r['is_adjusted'],
+            'sign' => (int)$r['sign_status'], 'signed_at' => $r['signed_at'] ? substr($r['signed_at'], 0, 16) : null,
+            'adjusted' => (int)$r['is_adjusted'], 'mine' => ($uid === $MYID),
             'can_sign' => ($uid === $MYID), 'note' => $r['adjust_note'],
         ];
     }
