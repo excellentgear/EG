@@ -27,6 +27,12 @@ $conn = new DBConnection();
 $pdo  = $conn->getPDO();
 $my_id = (int)$_SESSION['id'];
 
+// 本頁 JS 為內嵌，改版後不可讓瀏覽器續用舊快取（曾因舊版反查DNS卡死而整頁「載入中」，已修但快取仍會重現舊行為）
+if (!$isAjax) {
+    header('Cache-Control: no-cache, no-store, must-revalidate');
+    header('Pragma: no-cache');
+}
+
 // 僅管理者可見；無權限分支不設 lastpage、不導回登入頁
 $has_access = rbac_has(rbac_user_features($pdo, $my_id), 'all');
 
