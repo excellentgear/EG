@@ -8646,14 +8646,64 @@ echo "</script>\n";
         return m[1] + '/' + String(parseInt(m[2], 10)).padStart(2, '0') + '/' + String(parseInt(m[3], 10)).padStart(2, '0');
     }
 
+    // 取該列目前「進行中製程」清單（與畫面發單日欄同一來源 ingActiveMap；已移轉 E 不算）
+    function _vendorImgActiveProcs(row) {
+        var procs = (window.ingActiveMap || {})[String(row.bom || '').trim()] || [];
+        var live = procs.filter(function(p) {
+            return (p.batch_label || p.processing_state !== 'E') && (p.outsource_date || p.batch_label);
+        });
+        return live;
+    }
+
+    // 製程x數量：拆分批次用該批數量，否則用 BOM 總數（row.Qty）
+    function _vendorImgProcessQty(row) {
+        var live = _vendorImgActiveProcs(row);
+        var totalQty = (row.Qty === null || row.Qty === undefined || row.Qty === '') ? '' : String(row.Qty);
+        if (live.length === 0) {
+            var fbName = String(row.ProcessName || '').trim();
+            if (!fbName) return totalQty ? ('x' + totalQty) : '';
+            return fbName + ' x' + totalQty;
+        }
+        return live.map(function(p) {
+            var name = (p.batch_label ? '[' + p.batch_label + '] ' : '') + String(p.ProcessName || '').trim();
+            var qty = (p.batch_label && p.sqty !== null && p.sqty !== undefined && p.sqty !== '') ? String(p.sqty) : totalQty;
+            return (name || '製程') + ' x' + qty;
+        }).join(' / ');
+    }
+
+    // 標題用的廠商名稱：資料只有一家廠商時用該家，否則取廠商篩選框的字
+    function _vendorImgVendorName(rows) {
+        var names = {};
+        rows.forEach(function(r) {
+            var live = _vendorImgActiveProcs(r);
+            if (live.length === 0) {
+                var mk = String(r.maker_id || '').trim();
+                if (mk) names[mk] = 1;
+            } else {
+                live.forEach(function(p) {
+                    var mk2 = String(p.maker_id || '').trim();
+                    if (mk2) names[mk2] = 1;
+                });
+            }
+        });
+        var list = Object.keys(names);
+        if (list.length === 1) return { name: list[0], multi: false };
+
+        var filterEl = document.getElementById('vendor-filter');
+        var filterVal = filterEl ? String(filterEl.value || '').trim() : '';
+        if (filterVal && filterVal !== 'FILTER_NO_VENDOR') return { name: filterVal, multi: list.length > 1 };
+        return { name: '', multi: list.length > 1 };
+    }
+
     // 繪製圖片；回傳 canvas
     function _buildVendorNotifyCanvas(rows) {
-        var HEADERS = ['BOM', '料號', '發單日'];
+        var HEADERS = ['BOM', '料號', '發單日', '製程x數量'];
         var data = rows.map(function(r) {
             return [
                 String(r.bom || ''),
                 String(r.d_display || r.d_id || ''),
-                _vendorImgFormatDate(r.outsource_date) || '－'
+                _vendorImgFormatDate(r.outsource_date) || '－',
+                _vendorImgProcessQty(r) || '－'
             ];
         });
 
@@ -8691,7 +8741,7 @@ echo "</script>\n";
             });
         });
         colW = colW.map(function(w, i) {
-            var min = (i === 2) ? 92 : (i === 0 ? 80 : 110);
+            var min = [80, 110, 92, 120][i] || 90;
             return Math.max(min, Math.ceil(w) + PAD_X * 2);
         });
         var blockW = colW.reduce(function(a, b) { return a + b; }, 0);
@@ -8704,8 +8754,10 @@ echo "</script>\n";
         var sortText = listSortField ?
             ('排序：' + (LIST_SORT_LABELS[listSortField] || listSortField) + (listSortDir === 'desc' ? '（遞減）' : '（遞增）')) :
             '排序：原始順序';
-        var title = '發單通知清單';
-        var subtitle = '共 ' + n + ' 筆　|　' + sortText + '　|　產生時間 ' + stamp;
+        var vendorInfo = _vendorImgVendorName(rows);
+        var title = (vendorInfo.name ? vendorInfo.name + ' ' : '') + '未回清單';
+        var subtitle = '共 ' + n + ' 筆　|　' + sortText + '　|　產生時間 ' + stamp +
+                       (vendorInfo.multi ? '　|　含多家廠商' : '');
 
         var headerH = 30;                       // 表頭列高
         var titleH  = 30 + 20;                  // 標題 + 副標
@@ -8798,6 +8850,7 @@ echo "</script>\n";
             ctx.stroke();
         }
 
+        canvas._imgTitle = title; // 供預覽視窗標題／下載檔名使用
         return canvas;
     }
 
@@ -8860,7 +8913,8 @@ echo "</script>\n";
     function _downloadCanvasPng(canvas) {
         var now = new Date();
         var pad2 = function(v) { return String(v).padStart(2, '0'); };
-        var name = '發單通知_' + now.getFullYear() + pad2(now.getMonth() + 1) + pad2(now.getDate()) +
+        var base = String(canvas._imgTitle || '未回清單').replace(/[\\\/:*?"<>|]/g, '').replace(/\s+/g, '_');
+        var name = base + '_' + now.getFullYear() + pad2(now.getMonth() + 1) + pad2(now.getDate()) +
                    '_' + pad2(now.getHours()) + pad2(now.getMinutes()) + '.png';
         var link = document.createElement('a');
         link.download = name;
@@ -8877,7 +8931,7 @@ echo "</script>\n";
             mask.id = 'vendor-notify-mask';
             mask.innerHTML =
                 '<div id="vendor-notify-box">' +
-                '  <div id="vendor-notify-head"><span>通知廠商圖（BOM／料號／發單日）</span>' +
+                '  <div id="vendor-notify-head"><span id="vendor-notify-title">通知廠商圖（BOM／料號／發單日／製程x數量）</span>' +
                 '    <span style="margin-left:auto; cursor:pointer; font-size:16px;" id="vendor-notify-close-x" title="關閉">✕</span>' +
                 '  </div>' +
                 '  <div id="vendor-notify-body"></div>' +
@@ -8910,11 +8964,15 @@ echo "</script>\n";
         }
 
         mask._canvas = canvas;
+        var titleEl = mask.querySelector('#vendor-notify-title');
+        if (titleEl) {
+            titleEl.textContent = (canvas._imgTitle || '未回清單') + '　通知廠商圖（BOM／料號／發單日／製程x數量）';
+        }
         var body = mask.querySelector('#vendor-notify-body');
         body.innerHTML = '';
         var img = document.createElement('img');
         img.src = canvas.toDataURL('image/png');
-        img.alt = '發單通知清單';
+        img.alt = canvas._imgTitle || '未回清單';
         img.title = '若剪貼簿複製失敗，可在此圖上按右鍵 →「複製圖片」';
         body.appendChild(img);
         mask.style.display = 'block';
@@ -14403,7 +14461,7 @@ echo "</script>\n";
                                                 <button type="button" id="btn-list-sort-dir" class="list-sort-btn" title="切換遞增／遞減">▲ 遞增</button>
                                                 <button type="button" id="btn-list-sort-clear" class="list-sort-btn" title="清除排序，回到原始順序">取消排序</button>
                                             </span>
-                                            <a><input type="button" id="btn-vendor-notify-img" class="btn btn-xs" value="通知廠商圖" style="margin-left: 6px; background:#F0A24B; border-color:#d9861f; color:#fff; font-weight:bold;" title="依目前篩選＋排序結果，產生只含 BOM／料號／發單日 三欄的圖片並自動複製到剪貼簿（不含任何單價資訊）" ></a>
+                                            <a><input type="button" id="btn-vendor-notify-img" class="btn btn-xs" value="通知廠商圖" style="margin-left: 6px; background:#F0A24B; border-color:#d9861f; color:#fff; font-weight:bold;" title="依目前篩選＋排序結果，產生只含 BOM／料號／發單日／製程x數量 的未回清單圖片並自動複製到剪貼簿（不含任何單價資訊）" ></a>
                                         </h2>
                                         <ul class="nav navbar-right panel_toolbox">
                                             <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a>
