@@ -116,8 +116,15 @@ if (!function_exists('eg_telegram_event_notify')) {
             $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
             if (empty($userIds)) return ['ok' => true, 'sent' => 0, 'failed' => 0, 'skipped' => 0];
 
-            // 只取有綁定 Telegram 的收件人（user_id => chat_id）
-            $in = implode(',', $userIds);
+            // 共用帳號轉送展開（見 ai-rules/13）：只有被「指名(target_type='user')」的收件人才轉送，
+            // 全體/部門/身分廣播不逐人轉送。展開後每筆 = 一則訊息（同一共用帳號多位成員 → 各一則）。
+            require_once __DIR__ . '/../src/common/shared_account_lib.php';
+            $entries = eg_shared_fanout($db, $userIds, eg_shared_named_recipients($db, $eventId));
+            if (empty($entries)) foreach ($userIds as $u) $entries[] = ['deliver_uid' => $u, 'for_uid' => $u, 'for_name' => ''];
+
+            // 只取有綁定 Telegram 的投遞對象（user_id => chat_id）
+            $deliverIds = array_values(array_unique(array_map(fn($e) => (int)$e['deliver_uid'], $entries)));
+            $in = implode(',', $deliverIds);
             $bound = [];
             foreach ($db->query("SELECT user_id, chat_id FROM telegram_users WHERE is_active = 1 AND user_id IN ($in)") as $r) {
                 $bound[(int)$r['user_id']] = $r['chat_id'];
@@ -138,7 +145,9 @@ if (!function_exists('eg_telegram_event_notify')) {
             // 完成定義與網頁端一致：回覆模式須有 replied_at，回簽模式有 signed_at 即可
             $modes = eg_telegram_event_modes($db, $eventId);
             $resp = [];
-            $inB = implode(',', array_keys($bound));
+            // 需含「被轉送的員工本人」的完成狀態（共用帳號那則要看本人有沒有做完）
+            $respIds = array_unique(array_merge(array_keys($bound), array_map(fn($e) => (int)$e['for_uid'], $entries)));
+            $inB = implode(',', array_map('intval', $respIds));
             foreach ($db->query("SELECT user_id, signed_at, replied_at FROM live_event_response WHERE live_event_id = " . (int)$eventId . " AND user_id IN ($inB)") as $r) {
                 $resp[(int)$r['user_id']] = $r;
             }
@@ -158,14 +167,37 @@ if (!function_exists('eg_telegram_event_notify')) {
             if ($att['locked'] > 0) $base .= "\n\n📎 另有 " . $att['locked'] . " 個附件：請至內網查看";
 
             $sent = 0; $failed = 0;
-            foreach ($bound as $uid => $chatId) {
-                $mode = $modes[$uid] ?? 'read';
-                $text = $base;
+            $sentKey = [];   // chat_id|for_uid 去重（本人與共用帳號可能是同一支手機）
+            foreach ($entries as $en) {
+                $uid     = (int)$en['deliver_uid'];
+                $forUid  = (int)$en['for_uid'];
+                $forName = trim((string)($en['for_name'] ?? ''));
+                if (!isset($bound[$uid])) continue;
+                $chatId  = $bound[$uid];
+                $k = $chatId . '|' . $forUid;
+                if (isset($sentKey[$k])) continue;
+                $sentKey[$k] = 1;
+
+                // 轉送到共用帳號的那則：標題前綴「【給 ○○○】」，且**不附回簽/已閱按鈕**
+                // （Telegram 按鈕無法驗本人密碼，按下去會記成共用帳號 → 已讀名單失真；
+                //   一律請本人登入系統操作，站內有「輸入本人密碼代簽」流程）。附件按鈕照附，現場要看圖。
+                $isForward = ($uid !== $forUid);
+                $mode = $isForward ? 'read' : ($modes[$forUid] ?? 'read');
+                $text = $isForward
+                    ? ('【給 ' . htmlspecialchars($forName !== '' ? $forName : ('員工#' . $forUid)) . '】' . "\n" . $base)
+                    : $base;
                 $rows = []; // inline keyboard 列
-                $done = isset($resp[$uid]) && ($mode === 'reply'
-                    ? !empty($resp[$uid]['replied_at'])
-                    : (!empty($resp[$uid]['signed_at']) || !empty($resp[$uid]['replied_at'])));
-                if ($done) {
+                $done = isset($resp[$forUid]) && ($mode === 'reply'
+                    ? !empty($resp[$forUid]['replied_at'])
+                    : (!empty($resp[$forUid]['signed_at']) || !empty($resp[$forUid]['replied_at'])));
+                if ($isForward) {
+                    $needAct = ($modes[$forUid] ?? 'read');
+                    if (!$done) {
+                        $text .= "\n\n👤 此通知是給 <b>" . htmlspecialchars($forName !== '' ? $forName : ('員工#' . $forUid)) . "</b> 的"
+                               . ($needAct === 'reply' ? '，需本人回覆' : ($needAct === 'sign' ? '，需本人回簽' : ''))
+                               . "：請本人登入系統確認（共用帳號代按需輸入本人密碼）。";
+                    }
+                } elseif ($done) {
                     // 已完成者：不附回覆/回簽按鈕（附件按鈕照附）
                 } elseif ($mode === 'reply') {
                     // 回覆模式不提供「只回簽」捷徑（與網頁端一致，須輸入回覆內容，送出時一併回簽）

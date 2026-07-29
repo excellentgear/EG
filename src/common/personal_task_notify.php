@@ -16,7 +16,8 @@ if (!function_exists('personal_task_remind_user')) {
                 'body'  => $body,
                 'url'   => '/EGsystem/views/user/personal_task.php',
                 'tag'   => 'personal-task',
-            ]);
+            // 個人工作紀錄僅本人可見 → 不轉送共用帳號（現場平板多人共用，會把私人待辦公開，見 ai-rules/13）
+            ], ['fanout' => false]);
         } catch (\Throwable $e) {
             error_log('[ptask] push failed: ' . $e->getMessage());
         }

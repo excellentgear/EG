@@ -91,10 +91,12 @@ if (!function_exists('eg_push_send_to_users')) {
      * @param array $opts     ['event_id'=>int] 有公告來源時傳入：只有被「指名(target_type='user')」的
      *                        收件人才轉送到共用帳號，全體/部門/身分廣播不逐人轉送（避免現場平板洗版）。
      *                        不傳＝視同全部指名（模組直接指定收件人時的情況）。
+     *                        ['fanout'=>false] 完全不轉送（私人內容，例如個人工作提醒）。
      * @return array ['ok'=>bool,'sent'=>int,'failed'=>int,'removed'=>int]
      */
     function eg_push_send_to_users(PDO $db, array $userIds, array $payload, array $opts = []): array
     {
+        if (isset($opts['fanout']) && $opts['fanout'] === false) return eg_push_send_raw($db, $userIds, $payload);
         try {
             require_once __DIR__ . '/../common/shared_account_lib.php';
             $fanoutOnly = isset($opts['event_id'])
