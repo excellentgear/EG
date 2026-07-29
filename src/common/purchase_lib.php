@@ -483,6 +483,17 @@ function purchase_notify(PDO $db, array $userIds, string $refType, int $refId,
 {
     $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
     if (!$userIds) return 0;
+    // 測試紀律：標題含 __ 的單據視為測試單，不建立公告也不推播。
+    // 一定要回頭查「單據本身」的標題——只檢查訊息字串會漏掉（訊息不一定帶得到單據標題），
+    // 2026-07-29 就是這樣讓 6 則測試通知外流到真實使用者。
+    if (str_contains($title, '__') || str_contains($content, '__')) return 0;
+    if ($refId > 0) {
+        try {
+            $st = $db->prepare("SELECT CONCAT(COALESCE(title,''),'|',COALESCE(reason,'')) FROM purchase_request WHERE req_id=?");
+            $st->execute([$refId]);
+            if (str_contains((string)$st->fetchColumn(), '__')) return 0;
+        } catch (Throwable $e) {}
+    }
     try {
         if ($mode === 'sign') {
             $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY)

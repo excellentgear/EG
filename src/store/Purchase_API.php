@@ -1,0 +1,981 @@
+<?php
+/**
+ * 申請採購 API
+ * 權限：purchase_lib.php purchase_perms()（roles module='purchase'），fail-closed
+ * 流程：申請 → 採購詢價填實際金額 → 依總額判定簽核層級 → 核准 → 下單 → 到貨(入庫/直接交付/不列管) → 記帳 → 結案
+ * 所有金額、統計、匯出一律後端對「全部符合條件的資料」算完才回傳（UI 規範：不可只算前端那一頁）
+ * 寫入一律 transaction；附件只存檔名、路徑現場組（鐵律5）
+ */
+$document_root = $_SERVER['DOCUMENT_ROOT'];
+session_start();
+header('Content-Type: application/json; charset=utf-8');
+include_once $document_root . '/EGsystem/src/common/_config.php';
+include_once $document_root . '/EGsystem/src/common/DBConnection.php';
+include_once $document_root . '/EGsystem/src/common/purchase_lib.php';
+
+function jout($a) { echo json_encode(array_merge(['ok' => true], $a), JSON_UNESCAPED_UNICODE); exit; }
+function jerr($msg, $code = 400) { http_response_code($code); echo json_encode(['ok' => false, 'error' => $msg], JSON_UNESCAPED_UNICODE); exit; }
+
+try {
+    $db = (new DBConnection())->getPDO();
+    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    purchase_ensure_schema($db);
+} catch (Throwable $e) { jerr('DB連線失敗：' . $e->getMessage(), 500); }
+
+$u = purchase_current_user($db);
+if (!$u) jerr('未登入', 401);
+$uid   = (int)$u['id'];
+$uname = (string)$u['user_cname'];
+$perms = purchase_perms($db, $u);
+if (!$perms['canView']) jerr('無申請採購權限，請洽管理者指派角色', 403);
+
+$action = $_GET['action'] ?? $_POST['action'] ?? '';
+
+/* ── 小工具 ───────────────────────────────────────── */
+function pv($k, $d = '') { return isset($_POST[$k]) ? trim((string)$_POST[$k]) : $d; }
+function pnum($k, $d = null) { $v = pv($k, ''); return $v === '' ? $d : (float)$v; }
+function pint($k, $d = 0) { $v = pv($k, ''); return $v === '' ? $d : (int)$v; }
+function pdate($k) { $v = pv($k, ''); return preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) ? $v : null; }
+function pjson($k) { $a = json_decode($_POST[$k] ?? '[]', true); return is_array($a) ? $a : []; }
+
+function purchase_load_req(PDO $db, int $reqId): array {
+    $st = $db->prepare("SELECT * FROM purchase_request WHERE req_id=? AND is_active=1");
+    $st->execute([$reqId]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) throw new Exception('找不到採購單');
+    return $r;
+}
+
+/** 依明細到貨狀況重算單據狀態 */
+function purchase_refresh_status(PDO $db, int $reqId, int $userId): string {
+    $st = $db->prepare("SELECT COUNT(*) total,
+                        SUM(CASE WHEN qty_received >= qty_requested THEN 1 ELSE 0 END) done,
+                        COALESCE(SUM(qty_received),0) recv
+                        FROM purchase_request_item WHERE req_id=?");
+    $st->execute([$reqId]);
+    $s = $st->fetch(PDO::FETCH_ASSOC);
+    $status = ((int)$s['total'] > 0 && (int)$s['done'] >= (int)$s['total']) ? 'received'
+            : ((float)$s['recv'] > 0 ? 'partial' : 'ordered');
+    $db->prepare("UPDATE purchase_request SET status=?, Modified_By=? WHERE req_id=?")->execute([$status, $userId, $reqId]);
+    return $status;
+}
+
+try {
+switch ($action) {
+
+/* ============================================================
+ * 共用基礎資料
+ * ============================================================ */
+case 'meta': {
+    purchase_purge_expired_temp($db);   // 懶惰清除過期暫存附件
+    [$l1, $l2] = purchase_thresholds($db);
+    $cats  = $db->query("SELECT category_id, category_name, category_code, color FROM stock_item_categories
+                         WHERE is_active=1 ORDER BY sort_order, category_id")->fetchAll(PDO::FETCH_ASSOC);
+    $units = $db->query("SELECT unit_id, unit_name, unit_symbol FROM stock_units WHERE is_active=1
+                         ORDER BY unit_id")->fetchAll(PDO::FETCH_ASSOC);
+    $locs  = $db->query("SELECT location_id, location_code FROM stock_locations ORDER BY location_code")->fetchAll(PDO::FETCH_ASSOC);
+    $tags  = $db->query("SELECT tag_id, tag_name, color FROM purchase_tag WHERE is_active=1
+                         ORDER BY sort_order, tag_id")->fetchAll(PDO::FETCH_ASSOC);
+    $resp = [
+        'perms' => $perms, 'role_label' => purchase_role_label($perms),
+        'me' => ['id' => $uid, 'name' => $uname, 'dept_id' => $u['dept_id'], 'dept_name' => $u['dept_name']],
+        'today' => date('Y-m-d'),
+        'categories' => $cats, 'units' => $units, 'locations' => $locs, 'tags' => $tags,
+        'thresholds' => ['l1' => $l1, 'l2' => $l2],
+        'tax_types' => PURCHASE_TAX_TYPES, 'receive_modes' => PURCHASE_RECEIVE_MODES,
+        'statuses' => PURCHASE_STATUS,
+    ];
+    if ($perms['canAdmin']) {
+        [$nas, $url] = purchase_attach_dirs($db);
+        $resp['attach_nas_dir'] = $nas;
+        $resp['attach_url_dir'] = $url;
+    }
+    jout($resp);
+}
+
+case 'save_settings': {
+    if (!$perms['canAdmin']) jerr('無採購管理員權限', 403);
+    $l1 = max(0, (float)pv('l1', '5000'));
+    $l2 = max($l1, (float)pv('l2', '30000'));
+    purchase_set_setting($db, 'purchase_appr_l1', (string)$l1);
+    purchase_set_setting($db, 'purchase_appr_l2', (string)$l2);
+    if (pv('nas_dir') !== '') purchase_set_setting($db, 'purchase_attach_nas_dir', pv('nas_dir'));
+    if (pv('url_dir') !== '') purchase_set_setting($db, 'purchase_attach_url_dir', pv('url_dir'));
+    jout([]);
+}
+
+case 'search_vendor': {
+    $kw = trim($_GET['kw'] ?? '');
+    $st = $db->prepare("SELECT maker_id_no, maker_id, settlement_mode, payment_method, net_days
+                        FROM maker_list WHERE status <> 'X' AND (maker_id LIKE ? OR maker_id_no LIKE ?)
+                        ORDER BY maker_id LIMIT 30");
+    $lk = '%' . $kw . '%';
+    $st->execute([$lk, $lk]);
+    jout(['vendors' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+case 'search_user': {
+    $kw = trim($_GET['kw'] ?? '');
+    $st = $db->prepare("SELECT u.id, u.user_cname, COALESCE(d.name,'') dept_name
+                        FROM user u
+                        LEFT JOIN user_department_position_map m ON m.user_id=u.id AND m.is_main=1
+                        LEFT JOIN department d ON d.id=m.department_id
+                        WHERE u.state=1 AND u.user_cname LIKE ? ORDER BY u.user_cname LIMIT 30");
+    $st->execute(['%' . $kw . '%']);
+    jout(['users' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+/* ============================================================
+ * 採購品主檔：標籤 / 規格屬性
+ * ============================================================ */
+case 'tag_save': {
+    if (!$perms['canAdmin']) jerr('無採購管理員權限', 403);
+    $tagId = pint('tag_id');
+    $name  = pv('tag_name');
+    if ($name === '') jerr('請輸入標籤名稱');
+    $color = pv('color', '#F7E0BD');
+    if ($tagId > 0) {
+        $db->prepare("UPDATE purchase_tag SET tag_name=?, color=?, sort_order=?, is_active=? WHERE tag_id=?")
+           ->execute([$name, $color, pint('sort_order'), pint('is_active', 1), $tagId]);
+    } else {
+        $db->prepare("INSERT INTO purchase_tag (tag_name, color, sort_order) VALUES (?,?,?)")
+           ->execute([$name, $color, pint('sort_order')]);
+        $tagId = (int)$db->lastInsertId();
+    }
+    jout(['tag_id' => $tagId]);
+}
+
+case 'tag_delete': {
+    if (!$perms['canAdmin']) jerr('無採購管理員權限', 403);
+    $tagId = pint('tag_id');
+    $db->beginTransaction();
+    $db->prepare("DELETE FROM purchase_item_tag WHERE tag_id=?")->execute([$tagId]);
+    $db->prepare("DELETE FROM purchase_tag WHERE tag_id=?")->execute([$tagId]);
+    $db->commit();
+    jout([]);
+}
+
+case 'attr_list': {
+    $catId = (int)($_GET['category_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM purchase_attr WHERE category_id=? AND is_active=1 ORDER BY sort_order, attr_id");
+    $st->execute([$catId]);
+    jout(['attrs' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+case 'attr_save': {
+    if (!$perms['canAdmin']) jerr('無採購管理員權限', 403);
+    $attrId = pint('attr_id');
+    $name   = pv('attr_name');
+    $catId  = pint('category_id');
+    if ($name === '' || $catId <= 0) jerr('請選擇類別並輸入屬性名稱');
+    $type = in_array(pv('attr_type', 'text'), ['text', 'number', 'select'], true) ? pv('attr_type', 'text') : 'text';
+    if ($attrId > 0) {
+        $db->prepare("UPDATE purchase_attr SET category_id=?, attr_name=?, attr_type=?, attr_options=?, attr_unit=?, sort_order=? WHERE attr_id=?")
+           ->execute([$catId, $name, $type, pv('attr_options') ?: null, pv('attr_unit') ?: null, pint('sort_order'), $attrId]);
+    } else {
+        $db->prepare("INSERT INTO purchase_attr (category_id, attr_name, attr_type, attr_options, attr_unit, sort_order) VALUES (?,?,?,?,?,?)")
+           ->execute([$catId, $name, $type, pv('attr_options') ?: null, pv('attr_unit') ?: null, pint('sort_order')]);
+        $attrId = (int)$db->lastInsertId();
+    }
+    jout(['attr_id' => $attrId]);
+}
+
+case 'attr_delete': {
+    if (!$perms['canAdmin']) jerr('無採購管理員權限', 403);
+    $db->prepare("UPDATE purchase_attr SET is_active=0 WHERE attr_id=?")->execute([pint('attr_id')]);
+    jout([]);
+}
+
+/* ============================================================
+ * 採購品主檔：品項 / 規格變體
+ * ============================================================ */
+case 'item_list': {
+    $kw    = trim($_GET['kw'] ?? '');
+    $catId = (int)($_GET['category_id'] ?? 0);
+    $tagId = (int)($_GET['tag_id'] ?? 0);
+    $page  = max(1, (int)($_GET['page'] ?? 1));
+    $ps    = in_array((int)($_GET['page_size'] ?? 20), [5, 10, 20, 50], true) ? (int)$_GET['page_size'] : 20;
+    $where = ['i.is_active=1']; $bind = [];
+    if ($kw !== '') {
+        // 打「鑽頭」找得到整個品項；打「鑽頭 5」也能命中規格
+        $where[] = "(i.item_name LIKE ? OR i.item_code LIKE ? OR EXISTS
+                     (SELECT 1 FROM purchase_spec s2 WHERE s2.item_id=i.item_id
+                      AND (s2.spec_text LIKE ? OR s2.spec_code LIKE ?)))";
+        $lk = '%' . $kw . '%'; array_push($bind, $lk, $lk, $lk, $lk);
+    }
+    if ($catId > 0) { $where[] = 'i.category_id=?'; $bind[] = $catId; }
+    if ($tagId > 0) { $where[] = 'EXISTS (SELECT 1 FROM purchase_item_tag t WHERE t.item_id=i.item_id AND t.tag_id=?)'; $bind[] = $tagId; }
+    $w = implode(' AND ', $where);
+
+    $cst = $db->prepare("SELECT COUNT(*) FROM purchase_item i WHERE $w");
+    $cst->execute($bind);
+    $total = (int)$cst->fetchColumn();
+
+    $off = ($page - 1) * $ps;
+    $st = $db->prepare("SELECT i.*, COALESCE(c.category_name,'') category_name,
+                        (SELECT COUNT(*) FROM purchase_spec s WHERE s.item_id=i.item_id AND s.is_active=1) spec_cnt,
+                        (SELECT COALESCE(SUM(si.qty),0) FROM stock_items si
+                          JOIN purchase_spec s3 ON s3.spec_id=si.purchase_spec_id
+                          WHERE s3.item_id=i.item_id AND si.is_active=1) stock_qty
+                        FROM purchase_item i
+                        LEFT JOIN stock_item_categories c ON c.category_id=i.category_id
+                        WHERE $w ORDER BY i.category_id, i.item_name LIMIT $ps OFFSET $off");
+    $st->execute($bind);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if ($rows) {
+        $ids = implode(',', array_map(fn($r) => (int)$r['item_id'], $rows));
+        $tg = $db->query("SELECT it.item_id, t.tag_id, t.tag_name, t.color FROM purchase_item_tag it
+                          JOIN purchase_tag t ON t.tag_id=it.tag_id WHERE it.item_id IN ($ids)")->fetchAll(PDO::FETCH_ASSOC);
+        $map = [];
+        foreach ($tg as $t) $map[(int)$t['item_id']][] = $t;
+        foreach ($rows as &$r) $r['tags'] = $map[(int)$r['item_id']] ?? [];
+        unset($r);
+    }
+    jout(['rows' => $rows, 'total' => $total, 'pages' => (int)ceil($total / $ps), 'page' => $page]);
+}
+
+case 'item_detail': {
+    $itemId = (int)($_GET['item_id'] ?? 0);
+    $st = $db->prepare("SELECT i.*, COALESCE(c.category_name,'') category_name FROM purchase_item i
+                        LEFT JOIN stock_item_categories c ON c.category_id=i.category_id WHERE i.item_id=?");
+    $st->execute([$itemId]);
+    $item = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$item) jerr('找不到品項');
+    $st = $db->prepare("SELECT s.*, COALESCE(l.location_code,'') location_code,
+                        (SELECT COALESCE(SUM(si.qty),0) FROM stock_items si
+                          WHERE si.purchase_spec_id=s.spec_id AND si.is_active=1) stock_qty
+                        FROM purchase_spec s LEFT JOIN stock_locations l ON l.location_id=s.location_id
+                        WHERE s.item_id=? AND s.is_active=1 ORDER BY s.spec_code");
+    $st->execute([$itemId]);
+    $item['specs'] = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st = $db->prepare("SELECT tag_id FROM purchase_item_tag WHERE item_id=?");
+    $st->execute([$itemId]);
+    $item['tag_ids'] = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    $st = $db->prepare("SELECT * FROM purchase_attr WHERE category_id=? AND is_active=1 ORDER BY sort_order, attr_id");
+    $st->execute([(int)$item['category_id']]);
+    $item['attrs'] = $st->fetchAll(PDO::FETCH_ASSOC);
+    jout(['item' => $item]);
+}
+
+/** 打字即時防重複：找出相似品項 */
+case 'item_check_dup': {
+    $name  = trim($_GET['item_name'] ?? '');
+    $catId = (int)($_GET['category_id'] ?? 0);
+    if (mb_strlen($name) < 1) jout(['similar' => []]);
+    $bind = ['%' . $name . '%'];
+    $sql  = "SELECT i.item_id, i.item_code, i.item_name, COALESCE(c.category_name,'') category_name,
+             (SELECT COUNT(*) FROM purchase_spec s WHERE s.item_id=i.item_id AND s.is_active=1) spec_cnt
+             FROM purchase_item i LEFT JOIN stock_item_categories c ON c.category_id=i.category_id
+             WHERE i.is_active=1 AND i.item_name LIKE ?";
+    if ($catId > 0) { $sql .= " AND i.category_id=?"; $bind[] = $catId; }
+    $sql .= " ORDER BY i.item_name LIMIT 8";
+    $st = $db->prepare($sql);
+    $st->execute($bind);
+    jout(['similar' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+case 'item_save': {
+    if (!$perms['canBuy']) jerr('無維護採購品主檔的權限', 403);
+    $itemId = pint('item_id');
+    $name   = pv('item_name');
+    $catId  = pint('category_id');
+    if ($name === '' || $catId <= 0) jerr('請選擇類別並輸入品項名稱');
+    $tagIds = array_map('intval', pjson('tag_ids'));
+    $db->beginTransaction();
+    if ($itemId > 0) {
+        $db->prepare("UPDATE purchase_item SET category_id=?, item_name=?, default_unit_id=?, default_vendor_id=?,
+                      default_vendor_name=?, note=?, is_active=?, Modified_By=? WHERE item_id=?")
+           ->execute([$catId, $name, pint('default_unit_id') ?: null, pv('default_vendor_id') ?: null,
+                      pv('default_vendor_name') ?: null, pv('note') ?: null, pint('is_active', 1), $uid, $itemId]);
+    } else {
+        $code = purchase_next_item_code($db, $catId);
+        $db->prepare("INSERT INTO purchase_item (item_code, category_id, item_name, default_unit_id,
+                      default_vendor_id, default_vendor_name, note, Created_By) VALUES (?,?,?,?,?,?,?,?)")
+           ->execute([$code, $catId, $name, pint('default_unit_id') ?: null, pv('default_vendor_id') ?: null,
+                      pv('default_vendor_name') ?: null, pv('note') ?: null, $uid]);
+        $itemId = (int)$db->lastInsertId();
+    }
+    $db->prepare("DELETE FROM purchase_item_tag WHERE item_id=?")->execute([$itemId]);
+    if ($tagIds) {
+        $ins = $db->prepare("INSERT IGNORE INTO purchase_item_tag (item_id, tag_id) VALUES (?,?)");
+        foreach ($tagIds as $t) if ($t > 0) $ins->execute([$itemId, $t]);
+    }
+    $db->commit();
+    $st = $db->prepare("SELECT item_code FROM purchase_item WHERE item_id=?");
+    $st->execute([$itemId]);
+    jout(['item_id' => $itemId, 'item_code' => $st->fetchColumn()]);
+}
+
+case 'item_delete': {
+    if (!$perms['canAdmin']) jerr('無採購管理員權限', 403);
+    $itemId = pint('item_id');
+    $st = $db->prepare("SELECT COALESCE(SUM(si.qty),0) FROM stock_items si
+                        JOIN purchase_spec s ON s.spec_id=si.purchase_spec_id
+                        WHERE s.item_id=? AND si.is_active=1");
+    $st->execute([$itemId]);
+    if ((float)$st->fetchColumn() > 0) jerr('此品項尚有庫存，不可停用');
+    $db->beginTransaction();
+    $db->prepare("UPDATE purchase_item SET is_active=0, Modified_By=? WHERE item_id=?")->execute([$uid, $itemId]);
+    $db->prepare("UPDATE purchase_spec SET is_active=0, Modified_By=? WHERE item_id=?")->execute([$uid, $itemId]);
+    $db->commit();
+    jout([]);
+}
+
+case 'spec_save': {
+    if (!$perms['canBuy']) jerr('無維護採購品主檔的權限', 403);
+    $specId = pint('spec_id');
+    $itemId = pint('item_id');
+    if ($itemId <= 0) jerr('缺少品項');
+    $st = $db->prepare("SELECT category_id FROM purchase_item WHERE item_id=?");
+    $st->execute([$itemId]);
+    $catId = (int)$st->fetchColumn();
+    $attrVals = pjson('attr_vals');
+    $specText = pv('spec_text');
+    if ($specText === '') $specText = purchase_build_spec_text($db, $catId, $attrVals);
+    if ($specText === '') jerr('請至少填一項規格（或直接輸入規格說明）');
+    $attrJson = $attrVals ? json_encode($attrVals, JSON_UNESCAPED_UNICODE) : null;
+    $db->beginTransaction();
+    if ($specId > 0) {
+        $db->prepare("UPDATE purchase_spec SET spec_text=?, attr_json=?, unit_id=?, location_id=?, safety_qty=?,
+                      is_active=?, Modified_By=? WHERE spec_id=?")
+           ->execute([$specText, $attrJson, pint('unit_id') ?: null, pint('location_id') ?: null,
+                      pnum('safety_qty'), pint('is_active', 1), $uid, $specId]);
+    } else {
+        // 同品項同規格擋重複
+        $chk = $db->prepare("SELECT spec_code FROM purchase_spec WHERE item_id=? AND spec_text=? AND is_active=1 LIMIT 1");
+        $chk->execute([$itemId, $specText]);
+        if ($dup = $chk->fetchColumn()) { $db->rollBack(); jerr('此規格已存在：' . $dup); }
+        $code = purchase_next_spec_code($db, $itemId);
+        $db->prepare("INSERT INTO purchase_spec (item_id, spec_code, spec_text, attr_json, unit_id, location_id, safety_qty, Created_By)
+                      VALUES (?,?,?,?,?,?,?,?)")
+           ->execute([$itemId, $code, $specText, $attrJson, pint('unit_id') ?: null,
+                      pint('location_id') ?: null, pnum('safety_qty'), $uid]);
+        $specId = (int)$db->lastInsertId();
+    }
+    $db->commit();
+    $st = $db->prepare("SELECT spec_code FROM purchase_spec WHERE spec_id=?");
+    $st->execute([$specId]);
+    jout(['spec_id' => $specId, 'spec_code' => $st->fetchColumn()]);
+}
+
+case 'spec_delete': {
+    if (!$perms['canAdmin']) jerr('無採購管理員權限', 403);
+    $specId = pint('spec_id');
+    $st = $db->prepare("SELECT COALESCE(SUM(qty),0) FROM stock_items WHERE purchase_spec_id=? AND is_active=1");
+    $st->execute([$specId]);
+    if ((float)$st->fetchColumn() > 0) jerr('此規格尚有庫存，不可停用');
+    $db->prepare("UPDATE purchase_spec SET is_active=0, Modified_By=? WHERE spec_id=?")->execute([$uid, $specId]);
+    jout([]);
+}
+
+/** 申請單挑料號：以規格變體為單位回傳（含目前庫存、最近採購價） */
+case 'spec_search': {
+    $kw    = trim($_GET['kw'] ?? '');
+    $catId = (int)($_GET['category_id'] ?? 0);
+    $tagId = (int)($_GET['tag_id'] ?? 0);
+    $where = ['s.is_active=1', 'i.is_active=1']; $bind = [];
+    if ($kw !== '') {
+        // 逐字拆開 AND 比對，讓「鑽頭 5」找得到 鑽頭 Ø5
+        foreach (preg_split('/\s+/', $kw) as $w) {
+            if ($w === '') continue;
+            $where[] = "(i.item_name LIKE ? OR i.item_code LIKE ? OR s.spec_text LIKE ? OR s.spec_code LIKE ?)";
+            $lk = '%' . $w . '%'; array_push($bind, $lk, $lk, $lk, $lk);
+        }
+    }
+    if ($catId > 0) { $where[] = 'i.category_id=?'; $bind[] = $catId; }
+    if ($tagId > 0) { $where[] = 'EXISTS (SELECT 1 FROM purchase_item_tag t WHERE t.item_id=i.item_id AND t.tag_id=?)'; $bind[] = $tagId; }
+    $st = $db->prepare("SELECT s.spec_id, s.spec_code, s.spec_text, s.unit_id, s.location_id, s.safety_qty,
+                        s.last_price, s.last_vendor_id, s.last_vendor_name, s.last_buy_date,
+                        i.item_id, i.item_name, i.category_id, i.default_unit_id,
+                        i.default_vendor_id, i.default_vendor_name,
+                        COALESCE(c.category_name,'') category_name,
+                        COALESCE(un.unit_symbol, un.unit_name, '') unit_label,
+                        (SELECT COALESCE(SUM(si.qty),0) FROM stock_items si
+                          WHERE si.purchase_spec_id=s.spec_id AND si.is_active=1) stock_qty
+                        FROM purchase_spec s
+                        JOIN purchase_item i ON i.item_id=s.item_id
+                        LEFT JOIN stock_item_categories c ON c.category_id=i.category_id
+                        LEFT JOIN stock_units un ON un.unit_id=COALESCE(s.unit_id, i.default_unit_id)
+                        WHERE " . implode(' AND ', $where) . "
+                        ORDER BY i.item_name, s.spec_code LIMIT 200");
+    $st->execute($bind);
+    jout(['specs' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+/* ============================================================
+ * 申請單
+ * ============================================================ */
+case 'req_list':
+case 'req_export': {
+    purchase_purge_expired_temp($db);
+    $isExport = ($action === 'req_export');
+    $scope  = $_GET['scope'] ?? 'mine';
+    $status = trim($_GET['status'] ?? '');
+    $kw     = trim($_GET['kw'] ?? '');
+    $df     = trim($_GET['date_from'] ?? '');
+    $dt     = trim($_GET['date_to'] ?? '');
+    $pay    = trim($_GET['pay_status'] ?? '');
+    $page   = max(1, (int)($_GET['page'] ?? 1));
+    $ps     = in_array((int)($_GET['page_size'] ?? 10), [5, 10, 20, 50], true) ? (int)$_GET['page_size'] : 10;
+
+    $where = ['r.is_active=1']; $bind = [];
+    if ($scope === 'mine')       { $where[] = 'r.requester_id=?'; $bind[] = $uid; }
+    elseif ($scope === 'buy')    { if (!$perms['canBuy']) jerr('無採購作業權限', 403);
+                                   $where[] = "r.status IN ('submitted','approved','ordered','partial')"; }
+    elseif ($scope === 'sign')   { $where[] = "r.status='quoted'"; }
+    elseif ($scope === 'unpaid') { $where[] = "r.pay_status='unpaid' AND r.status IN ('ordered','partial','received','closed')"; }
+    if ($status !== '' && isset(PURCHASE_STATUS[$status])) { $where[] = 'r.status=?'; $bind[] = $status; }
+    if ($pay !== '')  { $where[] = 'r.pay_status=?'; $bind[] = $pay; }
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $df)) { $where[] = 'DATE(r.Created_At)>=?'; $bind[] = $df; }
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $dt)) { $where[] = 'DATE(r.Created_At)<=?'; $bind[] = $dt; }
+    if ($kw !== '') {
+        $where[] = "(r.req_no LIKE ? OR r.title LIKE ? OR r.requester_name LIKE ? OR r.dept_name LIKE ?
+                     OR r.vendor_name LIKE ? OR r.invoice_no LIKE ?
+                     OR EXISTS (SELECT 1 FROM purchase_request_item pi WHERE pi.req_id=r.req_id
+                                AND (pi.item_name LIKE ? OR pi.spec_text LIKE ?)))";
+        $lk = '%' . $kw . '%';
+        array_push($bind, $lk, $lk, $lk, $lk, $lk, $lk, $lk, $lk);
+    }
+    $w = implode(' AND ', $where);
+
+    // 全量統計（規範：總計一律後端對全部符合條件的資料算）
+    $sst = $db->prepare("SELECT COUNT(*) cnt, COALESCE(SUM(r.grand_total),0) sum_total,
+                         COALESCE(SUM(CASE WHEN r.pay_status='unpaid' THEN r.grand_total ELSE 0 END),0) sum_unpaid
+                         FROM purchase_request r WHERE $w");
+    $sst->execute($bind);
+    $stats = $sst->fetch(PDO::FETCH_ASSOC);
+
+    $sql = "SELECT r.*, (SELECT COUNT(*) FROM purchase_request_item pi WHERE pi.req_id=r.req_id) item_cnt,
+            (SELECT SUM(pi.is_urgent) FROM purchase_request_item pi WHERE pi.req_id=r.req_id) urgent_cnt
+            FROM purchase_request r WHERE $w ORDER BY r.Created_At DESC";
+
+    // 待簽核分頁：簽核關卡要逐單解析，無法寫進 SQL —— 先撈全部、過濾完再自行分頁，
+    // 否則「先分頁再過濾」會讓每頁筆數忽多忽少、總計也算錯
+    if ($scope === 'sign') {
+        $st = $db->prepare($sql);
+        $st->execute($bind);
+        $all = array_values(array_filter($st->fetchAll(PDO::FETCH_ASSOC),
+                    fn($r) => purchase_can_sign($db, $r, $uid, $perms)));
+        $total = count($all);
+        $stats = ['cnt' => $total,
+                  'sum_total' => array_sum(array_map(fn($r) => (float)$r['grand_total'], $all)),
+                  'sum_unpaid' => 0];
+        $rows = $isExport ? $all : array_slice($all, ($page - 1) * $ps, $ps);
+    } elseif ($isExport) {
+        $st = $db->prepare($sql);
+        $st->execute($bind);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        $total = count($rows);
+    } else {
+        $cst = $db->prepare("SELECT COUNT(*) FROM purchase_request r WHERE $w");
+        $cst->execute($bind);
+        $total = (int)$cst->fetchColumn();
+        $off = ($page - 1) * $ps;
+        $st = $db->prepare($sql . " LIMIT $ps OFFSET $off");
+        $st->execute($bind);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    }
+    jout($isExport
+        ? ['rows' => $rows, 'stats' => $stats]
+        : ['rows' => $rows, 'stats' => $stats, 'total' => $total,
+           'pages' => (int)max(1, ceil($total / $ps)), 'page' => $page]);
+}
+
+/** 各分頁待辦數（badge） */
+case 'req_badges': {
+    $out = ['mine' => 0, 'buy' => 0, 'sign' => 0, 'unpaid' => 0];
+    $st = $db->prepare("SELECT COUNT(*) FROM purchase_request WHERE is_active=1 AND requester_id=? AND status NOT IN ('closed','rejected','canceled')");
+    $st->execute([$uid]);
+    $out['mine'] = (int)$st->fetchColumn();
+    if ($perms['canBuy']) {
+        $out['buy'] = (int)$db->query("SELECT COUNT(*) FROM purchase_request WHERE is_active=1
+                                       AND status IN ('submitted','approved','ordered','partial')")->fetchColumn();
+        $out['unpaid'] = (int)$db->query("SELECT COUNT(*) FROM purchase_request WHERE is_active=1
+                                          AND pay_status='unpaid' AND status IN ('ordered','partial','received','closed')")->fetchColumn();
+    }
+    $q = $db->query("SELECT * FROM purchase_request WHERE is_active=1 AND status='quoted'")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($q as $r) if (purchase_can_sign($db, $r, $uid, $perms)) $out['sign']++;
+    jout(['badges' => $out]);
+}
+
+case 'req_detail': {
+    $reqId = (int)($_GET['req_id'] ?? 0);
+    $req = purchase_load_req($db, $reqId);
+    $st = $db->prepare("SELECT pi.*, COALESCE(un.unit_symbol, un.unit_name, '') unit_label,
+                        COALESCE(l.location_code,'') location_code, s.spec_code
+                        FROM purchase_request_item pi
+                        LEFT JOIN stock_units un ON un.unit_id=pi.unit_id
+                        LEFT JOIN stock_locations l ON l.location_id=pi.location_id
+                        LEFT JOIN purchase_spec s ON s.spec_id=pi.spec_id
+                        WHERE pi.req_id=? ORDER BY pi.sort_order, pi.pr_item_id");
+    $st->execute([$reqId]);
+    $req['items'] = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    $st = $db->prepare("SELECT rc.*, COALESCE(l.location_code,'') location_code, u.user_cname created_name
+                        FROM purchase_receipt rc
+                        LEFT JOIN stock_locations l ON l.location_id=rc.location_id
+                        LEFT JOIN user u ON u.id=rc.Created_By
+                        WHERE rc.req_id=? ORDER BY rc.rcpt_id");
+    $st->execute([$reqId]);
+    $req['receipts'] = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    $st = $db->prepare("SELECT att_id, att_type, file_name, original_name, file_size, Created_At
+                        FROM purchase_attachment WHERE req_id=? AND status='active' ORDER BY att_id");
+    $st->execute([$reqId]);
+    $atts = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($atts as &$a) $a['url'] = purchase_att_url($db, $a + ['status' => 'active'], $req['req_no']);
+    unset($a);
+    $req['attachments'] = $atts;
+
+    $st = $db->prepare("SELECT * FROM approval_record WHERE module='purchase' AND entity_id=? ORDER BY id");
+    $st->execute([$reqId]);
+    $req['approvals'] = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    $isOwner = ((int)$req['requester_id'] === $uid);
+    $req['can'] = [
+        'edit'    => ($req['status'] === 'submitted' && ($isOwner || $perms['canBuy'])) || $perms['canAdmin'],
+        'quote'   => $perms['canBuy'] && in_array($req['status'], ['submitted', 'rejected'], true),
+        'sign'    => purchase_can_sign($db, $req, $uid, $perms),
+        'order'   => $perms['canBuy'] && $req['status'] === 'approved',
+        'receive' => $perms['canReceive'] && in_array($req['status'], ['ordered', 'partial'], true),
+        'account' => $perms['canBuy'] && in_array($req['status'], ['ordered', 'partial', 'received', 'closed'], true),
+        'close'   => $perms['canBuy'] && in_array($req['status'], ['received', 'partial'], true),
+        'delete'  => $perms['canAdmin'] || ($isOwner && $req['status'] === 'submitted'),
+    ];
+    if ($req['status'] === 'quoted') {
+        $lv = (int)$req['level_done'] + 1;
+        $signers = purchase_level_signers($db, $req, $lv);
+        if ($signers) {
+            $in = implode(',', array_fill(0, count($signers), '?'));
+            $st = $db->prepare("SELECT user_cname FROM user WHERE id IN ($in)");
+            $st->execute($signers);
+            $req['pending_signers'] = implode('、', $st->fetchAll(PDO::FETCH_COLUMN));
+            $req['pending_level']   = $lv;
+        }
+    }
+    jout(['req' => $req]);
+}
+
+/** 新增／修改申請單（申請人填，金額可留白） */
+case 'req_save': {
+    if (!$perms['canApply']) jerr('無申請採購權限', 403);
+    $reqId = pint('req_id');
+    $items = pjson('items');
+    if (!$items) jerr('請至少填一筆品項');
+    $tempAtts = array_map('intval', pjson('temp_att_ids'));
+
+    $db->beginTransaction();
+    if ($reqId > 0) {
+        $req = purchase_load_req($db, $reqId);
+        $isOwner = ((int)$req['requester_id'] === $uid);
+        if (!($perms['canAdmin'] || (($isOwner || $perms['canBuy']) && $req['status'] === 'submitted'))) {
+            $db->rollBack(); jerr('此單目前狀態不可修改', 403);
+        }
+        $db->prepare("UPDATE purchase_request SET title=?, need_date=?, reason=?, Modified_By=? WHERE req_id=?")
+           ->execute([pv('title') ?: null, pdate('need_date'), pv('reason') ?: null, $uid, $reqId]);
+        $db->prepare("DELETE FROM purchase_request_item WHERE req_id=? AND qty_received=0")->execute([$reqId]);
+        $reqNo = $req['req_no'];
+    } else {
+        $reqNo = purchase_next_req_no($db);
+        $db->prepare("INSERT INTO purchase_request (req_no, title, dept_id, dept_name, requester_id, requester_name,
+                      need_date, reason, status, Created_By) VALUES (?,?,?,?,?,?,?,?, 'submitted', ?)")
+           ->execute([$reqNo, pv('title') ?: null, $u['dept_id'], $u['dept_name'], $uid, $uname,
+                      pdate('need_date'), pv('reason') ?: null, $uid]);
+        $reqId = (int)$db->lastInsertId();
+    }
+
+    $ins = $db->prepare("INSERT INTO purchase_request_item (req_id, spec_id, item_name, spec_text, category_id,
+                         unit_id, qty_requested, est_price, receive_mode, location_id, remark, is_urgent, sort_order)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    $sort = 0;
+    foreach ($items as $it) {
+        $specId = (int)($it['spec_id'] ?? 0) ?: null;
+        $name   = trim((string)($it['item_name'] ?? ''));
+        if ($name === '') continue;
+        $mode = (string)($it['receive_mode'] ?? 'stock');
+        if (!in_array($mode, array_keys(PURCHASE_RECEIVE_MODES), true)) $mode = 'stock';
+        $ins->execute([
+            $reqId, $specId, $name, trim((string)($it['spec_text'] ?? '')) ?: null,
+            (int)($it['category_id'] ?? 0) ?: null, (int)($it['unit_id'] ?? 0) ?: null,
+            max(0.0001, (float)($it['qty'] ?? 1)),
+            ($it['est_price'] ?? '') === '' ? null : (float)$it['est_price'],
+            $mode, (int)($it['location_id'] ?? 0) ?: null,
+            trim((string)($it['remark'] ?? '')) ?: null, (int)($it['is_urgent'] ?? 0), $sort++,
+        ]);
+    }
+    if ($tempAtts) purchase_commit_temp_atts($db, $tempAtts, $reqId, $reqNo, $uid);
+    $db->commit();
+
+    if (($_POST['is_new'] ?? '') === '1') {
+        $targets = purchase_role_users($db, 'purchase_buy');
+        if (!$targets) $targets = purchase_role_users($db, 'purchase_admin');
+        purchase_notify($db, $targets, 'PURCHASE_NEW', $reqId, '新採購申請：' . $reqNo,
+            $uname . ' 提出採購申請 ' . $reqNo . (pv('title') ? '（' . pv('title') . '）' : '') . '，請詢價。', 'read', $uid);
+    }
+    jout(['req_id' => $reqId, 'req_no' => $reqNo]);
+}
+
+case 'req_delete': {
+    $reqId  = pint('req_id');
+    $reason = pv('delete_reason');
+    if ($reason === '') jerr('請輸入刪除原因');
+    $req = purchase_load_req($db, $reqId);
+    $isOwner = ((int)$req['requester_id'] === $uid);
+    if (!($perms['canAdmin'] || ($isOwner && $req['status'] === 'submitted'))) jerr('無刪除權限或此單已進入採購流程', 403);
+    $st = $db->prepare("SELECT COALESCE(SUM(qty_received),0) FROM purchase_request_item WHERE req_id=?");
+    $st->execute([$reqId]);
+    if ((float)$st->fetchColumn() > 0) jerr('此單已有到貨紀錄，不可刪除（請改用結案）');
+    $db->beginTransaction();
+    $db->prepare("UPDATE purchase_request SET is_active=0, deleted_by=?, deleted_at=NOW(), delete_reason=?, Modified_By=? WHERE req_id=?")
+       ->execute([$uid, $reason, $uid, $reqId]);
+    $db->commit();
+    if (!$isOwner && $req['requester_id']) {
+        purchase_notify($db, [(int)$req['requester_id']], 'PURCHASE_RESULT', $reqId,
+            '採購申請已刪除：' . $req['req_no'], $uname . ' 刪除了 ' . $req['req_no'] . '，原因：' . $reason, 'read', $uid);
+    }
+    jout([]);
+}
+
+/** 採購詢價：填廠商／單價／稅別 → 後端算總額 → 判定簽核層級（免簽直接核准） */
+case 'save_quote': {
+    if (!$perms['canBuy']) jerr('無採購作業權限', 403);
+    $reqId = pint('req_id');
+    $req = purchase_load_req($db, $reqId);
+    if (!in_array($req['status'], ['submitted', 'rejected'], true)) jerr('此單目前狀態不可填價');
+    $taxType = in_array(pv('tax_type', 'taxable'), array_keys(PURCHASE_TAX_TYPES), true) ? pv('tax_type', 'taxable') : 'taxable';
+    $prices  = pjson('prices');   // [{pr_item_id, unit_price, receive_mode, location_id}]
+
+    $db->beginTransaction();
+    $upd = $db->prepare("UPDATE purchase_request_item SET unit_price=?, amount=ROUND(qty_requested*?,2),
+                         receive_mode=?, location_id=? WHERE pr_item_id=? AND req_id=?");
+    foreach ($prices as $p) {
+        $price = ($p['unit_price'] ?? '') === '' ? 0 : (float)$p['unit_price'];
+        $mode  = (string)($p['receive_mode'] ?? 'stock');
+        if (!in_array($mode, array_keys(PURCHASE_RECEIVE_MODES), true)) $mode = 'stock';
+        $upd->execute([$price, $price, $mode, (int)($p['location_id'] ?? 0) ?: null, (int)($p['pr_item_id'] ?? 0), $reqId]);
+    }
+    $t = purchase_calc_totals($db, $reqId, $taxType);
+    [$l1, $l2] = purchase_thresholds($db);
+    $levels = purchase_need_levels($t['grand_total'], $l1, $l2);
+    $status = $levels === 0 ? 'approved' : 'quoted';
+    $db->prepare("UPDATE purchase_request SET vendor_id=?, vendor_name=?, tax_type=?, subtotal=?, tax_amount=?,
+                  grand_total=?, need_levels=?, level_done=0, status=?, buyer_id=?, buyer_name=?, quoted_at=NOW(),
+                  expected_date=?, pay_method=?, approved_at=?, reject_reason=NULL, Modified_By=? WHERE req_id=?")
+       ->execute([pv('vendor_id') ?: null, pv('vendor_name') ?: null, $taxType,
+                  $t['subtotal'], $t['tax_amount'], $t['grand_total'], $levels, $status, $uid, $uname,
+                  pdate('expected_date'), pv('pay_method') ?: null,
+                  $levels === 0 ? date('Y-m-d H:i:s') : null, $uid, $reqId]);
+    // 最近採購價回寫規格主檔（下次申請自動帶）
+    $sp = $db->prepare("SELECT spec_id, unit_price FROM purchase_request_item WHERE req_id=? AND spec_id IS NOT NULL");
+    $sp->execute([$reqId]);
+    $updSpec = $db->prepare("UPDATE purchase_spec SET last_price=?, last_vendor_id=?, last_vendor_name=?, last_buy_date=CURDATE() WHERE spec_id=?");
+    foreach ($sp->fetchAll(PDO::FETCH_ASSOC) as $s) {
+        if ($s['unit_price'] !== null) $updSpec->execute([$s['unit_price'], pv('vendor_id') ?: null, pv('vendor_name') ?: null, (int)$s['spec_id']]);
+    }
+    $db->commit();
+
+    $req = purchase_load_req($db, $reqId);
+    if ($levels > 0) {
+        eg_approval_submit($db, 'purchase', $reqId, 'L1', $uid, $uname);
+        $signers = purchase_level_signers($db, $req, 1);
+        purchase_notify($db, $signers, 'PURCHASE_APPROVAL', $reqId, '採購單待簽核：' . $req['req_no'],
+            $uname . ' 送出採購單 ' . $req['req_no'] . '，含稅總額 ' . number_format($t['grand_total'], 2) . ' 元，請簽核。',
+            'sign', $uid);
+    } else {
+        purchase_notify($db, [(int)$req['requester_id']], 'PURCHASE_RESULT', $reqId,
+            '採購申請已核價（免簽核）：' . $req['req_no'],
+            '含稅總額 ' . number_format($t['grand_total'], 2) . ' 元，未達簽核門檻，採購可直接下單。', 'read', $uid);
+    }
+    jout(['status' => $status, 'need_levels' => $levels] + $t);
+}
+
+/** 簽核 */
+case 'sign': {
+    $reqId    = pint('req_id');
+    $decision = pv('decision');
+    $note     = pv('note');
+    if (!in_array($decision, ['approved', 'rejected'], true)) jerr('決策值不正確');
+    $req = purchase_load_req($db, $reqId);
+    if (!purchase_can_sign($db, $req, $uid, $perms)) jerr('目前不是您的簽核關卡', 403);
+    if ($decision === 'rejected' && $note === '') jerr('駁回必須填寫原因');
+    $level = (int)$req['level_done'] + 1;
+
+    $db->beginTransaction();
+    $ar = eg_approval_latest($db, 'purchase', $reqId, 'L' . $level);
+    if ($ar && $ar['status'] === 'pending') {
+        eg_approval_decide($db, (int)$ar['id'], $uid, $uname, $decision, $note ?: null);
+    } else {
+        $db->prepare("INSERT INTO approval_record (module, entity_id, level, status, submitted_by, submitted_by_name,
+                      submitted_at, approver_id, approver_name, note, decided_at)
+                      VALUES ('purchase',?,?,?,?,?,NOW(),?,?,?,NOW())")
+           ->execute([$reqId, 'L' . $level, $decision, (int)$req['requester_id'], (string)$req['requester_name'],
+                      $uid, $uname, $note ?: null]);
+    }
+    if ($decision === 'rejected') {
+        $db->prepare("UPDATE purchase_request SET status='rejected', reject_reason=?, Modified_By=? WHERE req_id=?")
+           ->execute([$note, $uid, $reqId]);
+        $newStatus = 'rejected';
+    } elseif ($level >= (int)$req['need_levels']) {
+        $db->prepare("UPDATE purchase_request SET status='approved', level_done=?, approved_at=NOW(), Modified_By=? WHERE req_id=?")
+           ->execute([$level, $uid, $reqId]);
+        $newStatus = 'approved';
+    } else {
+        $db->prepare("UPDATE purchase_request SET level_done=?, Modified_By=? WHERE req_id=?")->execute([$level, $uid, $reqId]);
+        $newStatus = 'quoted';
+    }
+    $db->commit();
+
+    purchase_close_sign_notice($db, $reqId, $uid);
+    if ($newStatus === 'quoted') {
+        $req2 = purchase_load_req($db, $reqId);
+        $signers = purchase_level_signers($db, $req2, $level + 1);
+        purchase_notify($db, $signers, 'PURCHASE_APPROVAL', $reqId, '採購單待簽核(第2關)：' . $req['req_no'],
+            $uname . ' 已核准第1關，含稅總額 ' . number_format((float)$req['grand_total'], 2) . ' 元，請簽核。', 'sign', $uid);
+    } else {
+        $targets = array_merge([(int)$req['requester_id']], $req['buyer_id'] ? [(int)$req['buyer_id']] : []);
+        $title = $newStatus === 'approved' ? '採購單已核准：' . $req['req_no'] : '採購單被駁回：' . $req['req_no'];
+        $body  = $newStatus === 'approved'
+               ? $uname . ' 已核准 ' . $req['req_no'] . '，採購可下單。' . ($note ? '（意見：' . $note . '）' : '')
+               : $uname . ' 駁回 ' . $req['req_no'] . '，原因：' . $note;
+        purchase_notify($db, $targets, 'PURCHASE_RESULT', $reqId, $title, $body, 'read', $uid);
+    }
+    jout(['status' => $newStatus]);
+}
+
+/** 下單 */
+case 'mark_ordered': {
+    if (!$perms['canBuy']) jerr('無採購作業權限', 403);
+    $reqId = pint('req_id');
+    $req = purchase_load_req($db, $reqId);
+    if ($req['status'] !== 'approved') jerr('此單尚未核准或已下單');
+    $db->beginTransaction();
+    $db->prepare("UPDATE purchase_request SET status='ordered', ordered_at=NOW(), expected_date=COALESCE(?,expected_date),
+                  Modified_By=? WHERE req_id=?")->execute([pdate('expected_date'), $uid, $reqId]);
+    $db->commit();
+    purchase_notify($db, [(int)$req['requester_id']], 'PURCHASE_RESULT', $reqId,
+        '採購已下單：' . $req['req_no'], $uname . ' 已向 ' . ($req['vendor_name'] ?: '廠商') . ' 下單。', 'read', $uid);
+    jout(['status' => 'ordered']);
+}
+
+/** 到貨：每筆明細三選一（入庫待領 / 直接交付請購人 / 不列管） */
+case 'receive': {
+    if (!$perms['canReceive']) jerr('無到貨入庫權限', 403);
+    $reqId = pint('req_id');
+    $req = purchase_load_req($db, $reqId);
+    if (!in_array($req['status'], ['ordered', 'partial'], true)) jerr('此單目前狀態不可收貨');
+    $lines = pjson('lines');   // [{pr_item_id, qty, receive_mode, location_id, receiver_id, remark}]
+    if (!$lines) jerr('請至少填一筆到貨數量');
+    $rcptDate = pdate('rcpt_date') ?: date('Y-m-d');
+
+    $db->beginTransaction();
+    $got = $db->prepare("SELECT * FROM purchase_request_item WHERE pr_item_id=? AND req_id=?");
+    $insR = $db->prepare("INSERT INTO purchase_receipt (req_id, pr_item_id, rcpt_date, qty, receive_mode, location_id,
+                          stock_item_id, txn_in_id, txn_out_id, receiver_id, receiver_name, remark, Created_By)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    $done = 0;
+    foreach ($lines as $ln) {
+        $qty = (float)($ln['qty'] ?? 0);
+        if ($qty <= 0) continue;
+        $got->execute([(int)($ln['pr_item_id'] ?? 0), $reqId]);
+        $item = $got->fetch(PDO::FETCH_ASSOC);
+        if (!$item) continue;
+        $left = (float)$item['qty_requested'] - (float)$item['qty_received'];
+        if ($qty > $left + 0.0001) { $db->rollBack(); jerr($item['item_name'] . ' 到貨量超過未到量（剩 ' . rtrim(rtrim(number_format($left, 4, '.', ''), '0'), '.') . '）'); }
+
+        $mode = (string)($ln['receive_mode'] ?? $item['receive_mode']);
+        if (!in_array($mode, array_keys(PURCHASE_RECEIVE_MODES), true)) $mode = (string)$item['receive_mode'];
+        $locId = (int)($ln['location_id'] ?? 0) ?: ($item['location_id'] !== null ? (int)$item['location_id'] : null);
+        $stockItemId = null; $txnIn = null; $txnOut = null;
+        $receiverId = (int)($ln['receiver_id'] ?? 0) ?: null;
+        $receiverName = null;
+
+        if ($mode === 'stock' || $mode === 'direct') {
+            try {
+                $stockItemId = purchase_find_or_create_stock_item($db, $item, $req, $locId, $uid);
+            } catch (Throwable $e) { $db->rollBack(); jerr($item['item_name'] . '：' . $e->getMessage()); }
+            $locName = '';
+            if ($locId) {
+                $lq = $db->prepare("SELECT location_code FROM stock_locations WHERE location_id=?");
+                $lq->execute([$locId]);
+                $locName = (string)($lq->fetchColumn() ?: '');
+            }
+            $txnIn = purchase_write_txn($db, $stockItemId, 'in', $qty, $locId, [
+                'location_name' => $locName, 'unit_cost' => $item['unit_price'], 'txn_date' => $rcptDate,
+                'remark' => '採購入庫 ' . $req['req_no'] . ($req['vendor_name'] ? '／' . $req['vendor_name'] : ''),
+            ], $uid);
+            if ($mode === 'direct') {
+                if (!$receiverId) $receiverId = (int)$req['requester_id'];
+                $nq = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+                $nq->execute([$receiverId]);
+                $receiverName = (string)($nq->fetchColumn() ?: '');
+                $txnOut = purchase_write_txn($db, $stockItemId, 'out', $qty, $locId, [
+                    'location_name' => $locName, 'unit_cost' => $item['unit_price'], 'txn_date' => $rcptDate,
+                    'remark' => '採購到貨直接交付 ' . $req['req_no'] . '／' . $receiverName,
+                    'out_dept_id' => $req['dept_id'], 'out_user_id' => $receiverId,
+                ], $uid);
+            }
+        }
+
+        $insR->execute([$reqId, (int)$item['pr_item_id'], $rcptDate, $qty, $mode, $locId, $stockItemId,
+                        $txnIn, $txnOut, $receiverId, $receiverName, trim((string)($ln['remark'] ?? '')) ?: null, $uid]);
+        $db->prepare("UPDATE purchase_request_item SET qty_received=qty_received+?, receive_mode=?,
+                      location_id=COALESCE(?,location_id), stock_item_id=COALESCE(?,stock_item_id) WHERE pr_item_id=?")
+           ->execute([$qty, $mode, $locId, $stockItemId, (int)$item['pr_item_id']]);
+        $done++;
+    }
+    if (!$done) { $db->rollBack(); jerr('沒有有效的到貨數量'); }
+    $status = purchase_refresh_status($db, $reqId, $uid);
+    $db->commit();
+
+    purchase_notify($db, [(int)$req['requester_id']], 'PURCHASE_RESULT', $reqId,
+        ($status === 'received' ? '採購已全數到貨：' : '採購部分到貨：') . $req['req_no'],
+        $uname . ' 登錄了 ' . $req['req_no'] . ' 的到貨。', 'read', $uid);
+    jout(['status' => $status]);
+}
+
+/** 記帳：發票／付款 */
+case 'save_account': {
+    if (!$perms['canBuy']) jerr('無採購作業權限', 403);
+    $reqId = pint('req_id');
+    $req = purchase_load_req($db, $reqId);
+    $payStatus = in_array(pv('pay_status', 'unpaid'), ['unpaid', 'paid'], true) ? pv('pay_status', 'unpaid') : 'unpaid';
+    $db->beginTransaction();
+    $db->prepare("UPDATE purchase_request SET invoice_no=?, invoice_date=?, pay_status=?, pay_date=?, pay_method=?, Modified_By=? WHERE req_id=?")
+       ->execute([pv('invoice_no') ?: null, pdate('invoice_date'), $payStatus,
+                  $payStatus === 'paid' ? (pdate('pay_date') ?: date('Y-m-d')) : null,
+                  pv('pay_method') ?: null, $uid, $reqId]);
+    $db->commit();
+    jout([]);
+}
+
+case 'close_req': {
+    if (!$perms['canBuy']) jerr('無採購作業權限', 403);
+    $reqId = pint('req_id');
+    $db->beginTransaction();
+    $db->prepare("UPDATE purchase_request SET status='closed', closed_at=NOW(), Modified_By=? WHERE req_id=? AND is_active=1")
+       ->execute([$uid, $reqId]);
+    $db->commit();
+    jout(['status' => 'closed']);
+}
+
+/* ============================================================
+ * 附件（新增單據未存檔即可上傳：temp → 存檔時轉正）
+ * ============================================================ */
+case 'att_upload': {
+    if (!$perms['canApply']) jerr('無上傳權限', 403);
+    $reqId = pint('req_id');
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) jerr('上傳失敗');
+    $orig = basename($_FILES['file']['name']);
+    $ext  = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+    if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'pdf', 'xlsx', 'xls', 'docx', 'doc'], true)) {
+        jerr('僅支援圖片／PDF／Office 檔');
+    }
+    if ((int)$_FILES['file']['size'] > 20 * 1024 * 1024) jerr('檔案不可超過 20MB');
+    $attType = in_array(pv('att_type', 'other'), ['quote', 'invoice', 'receipt', 'other'], true) ? pv('att_type', 'other') : 'other';
+
+    [$nas] = purchase_attach_dirs($db);
+    $reqNo = '';
+    if ($reqId > 0) {
+        $st = $db->prepare("SELECT req_no FROM purchase_request WHERE req_id=? AND is_active=1");
+        $st->execute([$reqId]);
+        $reqNo = (string)($st->fetchColumn() ?: '');
+        if ($reqNo === '') jerr('找不到採購單');
+    }
+    $sub = $reqNo !== '' ? $reqNo : '_temp';
+    $dir = $nas . $sub;
+    if (!is_dir($dir) && !@mkdir($dir, 0777, true)) jerr('無法建立附件目錄，請確認路徑設定：' . $dir);
+    $fname = date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ext;
+    if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir . DIRECTORY_SEPARATOR . $fname)) jerr('檔案寫入失敗');
+
+    if ($reqId > 0) {
+        $db->prepare("INSERT INTO purchase_attachment (req_id, user_id, att_type, file_name, original_name, file_size, status)
+                      VALUES (?,?,?,?,?,?, 'active')")
+           ->execute([$reqId, $uid, $attType, $fname, $orig, (int)$_FILES['file']['size']]);
+    } else {
+        $db->prepare("INSERT INTO purchase_attachment (req_id, user_id, att_type, file_name, original_name, file_size, status, expire_at)
+                      VALUES (0,?,?,?,?,?, 'temp', DATE_ADD(NOW(), INTERVAL 2 DAY))")
+           ->execute([$uid, $attType, $fname, $orig, (int)$_FILES['file']['size']]);
+    }
+    $attId = (int)$db->lastInsertId();
+    jout(['att_id' => $attId, 'file_name' => $fname, 'original_name' => $orig,
+          'url' => purchase_att_url($db, ['file_name' => $fname, 'status' => $reqId > 0 ? 'active' : 'temp'], $reqNo)]);
+}
+
+case 'att_delete': {
+    $attId = pint('att_id');
+    $st = $db->prepare("SELECT a.*, r.req_no, r.requester_id FROM purchase_attachment a
+                        LEFT JOIN purchase_request r ON r.req_id=a.req_id WHERE a.att_id=?");
+    $st->execute([$attId]);
+    $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('找不到附件');
+    $mine = ((int)$a['user_id'] === $uid);
+    $ok = $a['status'] === 'temp' ? $mine : ($perms['canBuy'] || $perms['canAdmin'] || (int)$a['requester_id'] === $uid);
+    if (!$ok) jerr('無刪除權限', 403);
+    $fp = purchase_att_path($db, $a, (string)($a['req_no'] ?? ''));
+    $db->prepare("DELETE FROM purchase_attachment WHERE att_id=?")->execute([$attId]);
+    if (is_file($fp)) @unlink($fp);
+    jout([]);
+}
+
+/**
+ * 明細綁定採購品規格：申請時手打的品名，到貨要入庫前在這裡建檔或掛到既有規格
+ * （spec_id 有值＝掛既有；否則用 item_id/item_name＋規格建新的，一次完成不用跳頁）
+ */
+case 'bind_spec': {
+    if (!$perms['canBuy']) jerr('無維護採購品主檔的權限', 403);
+    $prItemId = pint('pr_item_id');
+    $specId   = pint('spec_id');
+    $st = $db->prepare("SELECT * FROM purchase_request_item WHERE pr_item_id=?");
+    $st->execute([$prItemId]);
+    $item = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$item) jerr('找不到明細');
+
+    $db->beginTransaction();
+    if ($specId <= 0) {
+        $itemId = pint('item_id');
+        $catId  = pint('category_id') ?: (int)$item['category_id'];
+        if ($catId <= 0) { $db->rollBack(); jerr('請選擇類別'); }
+        if ($itemId <= 0) {
+            $name = pv('item_name') ?: (string)$item['item_name'];
+            $code = purchase_next_item_code($db, $catId);
+            $db->prepare("INSERT INTO purchase_item (item_code, category_id, item_name, default_unit_id, Created_By) VALUES (?,?,?,?,?)")
+               ->execute([$code, $catId, $name, (int)$item['unit_id'] ?: null, $uid]);
+            $itemId = (int)$db->lastInsertId();
+        }
+        $attrVals = pjson('attr_vals');
+        $specText = pv('spec_text') ?: purchase_build_spec_text($db, $catId, $attrVals);
+        if ($specText === '') $specText = (string)($item['spec_text'] ?: '標準');
+        $chk = $db->prepare("SELECT spec_id FROM purchase_spec WHERE item_id=? AND spec_text=? AND is_active=1 LIMIT 1");
+        $chk->execute([$itemId, $specText]);
+        $exist = $chk->fetchColumn();
+        if ($exist) {
+            $specId = (int)$exist;
+        } else {
+            $code = purchase_next_spec_code($db, $itemId);
+            $db->prepare("INSERT INTO purchase_spec (item_id, spec_code, spec_text, attr_json, unit_id, location_id, Created_By)
+                          VALUES (?,?,?,?,?,?,?)")
+               ->execute([$itemId, $code, $specText, $attrVals ? json_encode($attrVals, JSON_UNESCAPED_UNICODE) : null,
+                          (int)$item['unit_id'] ?: null, pint('location_id') ?: null, $uid]);
+            $specId = (int)$db->lastInsertId();
+        }
+    }
+    $sq = $db->prepare("SELECT s.spec_id, s.spec_text, s.unit_id, i.item_name, i.category_id
+                        FROM purchase_spec s JOIN purchase_item i ON i.item_id=s.item_id WHERE s.spec_id=?");
+    $sq->execute([$specId]);
+    $spec = $sq->fetch(PDO::FETCH_ASSOC);
+    if (!$spec) { $db->rollBack(); jerr('找不到規格'); }
+    $db->prepare("UPDATE purchase_request_item SET spec_id=?, item_name=?, spec_text=?, category_id=?,
+                  unit_id=COALESCE(unit_id,?) WHERE pr_item_id=?")
+       ->execute([$specId, $spec['item_name'], $spec['spec_text'], (int)$spec['category_id'],
+                  $spec['unit_id'] !== null ? (int)$spec['unit_id'] : null, $prItemId]);
+    $db->commit();
+    jout(['spec_id' => $specId]);
+}
+
+default:
+    jerr('未知的 action：' . $action, 404);
+}
+} catch (Throwable $e) {
+    if ($db->inTransaction()) $db->rollBack();
+    jerr($e->getMessage(), 500);
+}
