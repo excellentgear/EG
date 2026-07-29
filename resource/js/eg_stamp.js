@@ -93,6 +93,29 @@
         }
     }
 
+    // 小型印章圖示（badge）：行事曆/列表等狹小處用的迷你章，非正式簽章。
+    // kind：'sign'=「簽」字章（已簽核確認用）；'pending'=「申請中」章（請假送審中）。
+    // 純 SVG 免圖檔；size 預設 16px，行事曆事件列可直接內嵌。title 給滑鼠提示（顏色非唯一資訊）。
+    function badge(kind, size) {
+        var FONT = "DFKai-SB,BiauKai,KaiTi,'標楷體',serif";
+        size = size || 16;
+        var svg;
+        if (kind === 'pending') {
+            // 「申請中」三字直排太擠，改橫式膠囊章：外框圓角矩形＋橫排文字（暖橘 #F0A24B 系）
+            svg = '<svg viewBox="0 0 44 20" width="' + Math.round(size * 2.2) + '" height="' + size + '" xmlns="http://www.w3.org/2000/svg" style="vertical-align:-2px;">'
+                + '<rect x="1.2" y="1.2" width="41.6" height="17.6" rx="4" fill="rgba(255,255,255,.75)" stroke="#d2691e" stroke-width="1.8"/>'
+                + '<text x="22" y="14.6" text-anchor="middle" font-size="11.5" fill="#d2691e" font-weight="bold" font-family="' + FONT + '" textLength="34" lengthAdjust="spacingAndGlyphs">申請中</text>'
+                + '</svg>';
+            return '<span class="stamp-badge stamp-badge-pending" title="請假申請中（簽核尚未完成）">' + svg + '</span>';
+        }
+        // 預設 'sign'：圓形「簽」字章（印泥紅，同正式章色系）
+        svg = '<svg viewBox="0 0 20 20" width="' + size + '" height="' + size + '" xmlns="http://www.w3.org/2000/svg" style="vertical-align:-2px;">'
+            + '<circle cx="10" cy="10" r="8.8" fill="rgba(255,255,255,.75)" stroke="#cf3a2b" stroke-width="1.6"/>'
+            + '<text x="10" y="14" text-anchor="middle" font-size="11" fill="#cf3a2b" font-weight="bold" font-family="' + FONT + '">簽</text>'
+            + '</svg>';
+        return '<span class="stamp-badge stamp-badge-sign" title="已簽核">' + svg + '</span>';
+    }
+
     // 簽章列：右側=「簽章：」緊貼印章；左側可帶欄位內左下角文字（如 預定完成日）
     function row(stampHtml, leftHtml) {
         return '<div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:2px;">'
@@ -116,7 +139,7 @@
     loadAssets();
 
     global.EGStamp = {
-        stamp: stamp, row: row,
+        stamp: stamp, row: row, badge: badge,                        // badge('sign'|'pending', size)：迷你章圖示（行事曆/列表用）
         scan: scanStamp, svg: svgStamp,                              // 圖章管理頁預覽用（可帶暫時的日期帶值）
         setAssets: function (m) { ASSETS = m || {}; upgradeRendered(document); },
         hasAsset: function (name) { return !!(ASSETS && ASSETS[name]); },
