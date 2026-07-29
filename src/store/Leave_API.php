@@ -93,7 +93,26 @@ case 'bootstrap': {
              'hours_per_day' => (float)$cfg['leave_hours_per_day'],
              'halfday_hours' => (float)$cfg['leave_halfday_hours'],
              'attach_ready' => trim((string)$cfg['leave_attach_base']) !== '',
+             'print_header' => (string)$cfg['leave_print_header'],
+             'print_footer' => (string)$cfg['leave_print_footer'],
          ]]);
+}
+
+// ════════════════ 列印表頭/表尾設定（僅管理員） ════════════════
+case 'save_print_setting': {
+    need_csrf();
+    if (!$IS_ADMIN) bad('僅管理員可修改列印表頭表尾');
+    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by, updated_at)
+                        VALUES (?,?,?,?,NOW())
+                        ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                                                updated_by_id = VALUES(updated_by_id),
+                                                updated_by = VALUES(updated_by), updated_at = NOW()");
+    $nameSt = $db->prepare("SELECT user_cname FROM user WHERE id = ?");
+    $nameSt->execute([$user_id]);
+    $by = (string)$nameSt->fetchColumn();
+    $st->execute(['leave_print_header', trim((string)($_POST['header'] ?? '')), $user_id, $by]);
+    $st->execute(['leave_print_footer', trim((string)($_POST['footer'] ?? '')), $user_id, $by]);
+    out(['success' => true, 'message' => '已儲存列印表頭表尾']);
 }
 
 // ════════════════ 申請前預覽 ════════════════

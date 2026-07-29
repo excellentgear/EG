@@ -39,6 +39,8 @@ if (!function_exists('eg_leave_settings')) {
             'leave_backdate_limit_days' => '7',
             'leave_hours_per_day'       => '8',
             'leave_halfday_hours'       => '4',
+            'leave_print_header'        => '',   // 列印表頭（空=用公司抬頭）
+            'leave_print_footer'        => '',   // 列印表尾（表單編號等）
         ];
         try {
             $st = $db->query("SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE 'leave\\_%'");
