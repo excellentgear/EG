@@ -346,6 +346,7 @@ $_trainRoles    = [];  $_userTrainRoles  = [];
 $_vaudRoles     = [];  $_userVaudRoles   = [];
 $_leaveRoles    = [];  $_userLeaveRoles  = [];
 $_shipRoles     = [];  $_userShipRoles   = [];
+$_purcRoles     = [];  $_userPurcRoles   = [];
 $_kpiRoles      = [];  $_userKpiRoles    = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
@@ -377,6 +378,7 @@ try {
     $st->execute(['vendor_audit']);$_vaudRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['leave']);       $_leaveRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['shipping']);    $_shipRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['purchase']);    $_purcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -480,6 +482,10 @@ try {
     $st->execute(['shipping']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userShipRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['purchase']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userPurcRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -1102,6 +1108,11 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('ship', 'shipping', '快速出貨', 'fa-truck', '#F0A24B',
                         '為每位使用者指派「快速出貨」頁的操作角色。角色功能：<strong>出貨檢閱</strong>＝查詢待出貨清單、檢視近期出貨單與匯出，<span style="color:#b06f27;">不可建立出貨單</span>；<strong>出貨登錄</strong>＝檢閱＋建立出貨單（同客戶同日自動併為一張出貨單，並回填訂單編號與扣製令完工量）；<strong>出貨管理員</strong>＝登錄＋執行「舊資料訂單回填」（把 ERP 匯入、未帶訂單編號的歷史出貨資料比對回訂單）。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         $_shipRoles, $_userShipRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('purc', 'purchase', '申請採購', 'fa-shopping-cart', '#8A5A2B',
+                        '為每位使用者指派「申請採購」頁的操作角色（權限由上而下包含，指派上層即自動具備下層能力）。<strong>申請採購</strong>＝提出／修改自己的申請單、上傳附件、查看自己的單；<strong>到貨入庫</strong>＝申請＋登錄到貨（可選「入庫待領／直接交付請購人／不列管」）；<strong>採購作業</strong>＝到貨入庫＋詢價填實際金額、下單、記發票與付款、結案、維護採購品主檔；<strong>採購管理員</strong>＝採購作業＋標籤與規格屬性設定、簽核門檻與附件路徑設定、刪除任何單據；<strong>採購檢閱</strong>＝唯讀查看全部單據與統計；<strong>高階核准</strong>＝金額超過第二層門檻時的第二關簽核人。<br>
+                         <span style="color:#b06f27;">簽核不在申請當下判定</span>：申請時金額可以留白，等採購詢完價、填入實際金額後才依含稅總額判定要不要簽核（門檻在該頁「設定」分頁調整，預設 5000／30000）。第一層簽核人＝申請人的部門主管，由系統依代理人設定自動解析（主管當日有行程改由代理人簽，代理人正好是申請人時自動直升上一級）。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
+                        $_purcRoles, $_userPurcRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 
                     <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->
