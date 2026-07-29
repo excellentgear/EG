@@ -31,7 +31,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['changePassword'])) {
     $newPwd     = isset($_POST['new_password']) ? $_POST['new_password'] : '';
     $confirmPwd = isset($_POST['confirm_password']) ? $_POST['confirm_password'] : '';
 
-    if ($oldPwd === '' || $newPwd === '' || $confirmPwd === '') {
+    // 共用帳號可鎖密碼（ai-rules/13）：避免現場有人隨手改掉害全廠登不進去
+    require_once __DIR__ . '/../../src/common/shared_account_lib.php';
+    if (eg_shared_password_locked($conn_pdo, (int)$currentUser['id'])) {
+        $msg = '此帳號已鎖定密碼，請洽管理員';
+        $msgType = 'danger';
+    } elseif ($oldPwd === '' || $newPwd === '' || $confirmPwd === '') {
         $msg = '請完整填寫所有欄位';
         $msgType = 'danger';
     } elseif ($oldPwd !== $currentUser['user_password']) {

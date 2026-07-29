@@ -249,6 +249,15 @@ function addOrUpdateEmployee($mode) {
 
             // 根據是否有提供密碼來決定是否更新密碼欄位
             if (!empty($user_password)) {
+                // 共用帳號鎖密碼（ai-rules/13）：管理員這條路徑豁免可改，但必須留稽核紀錄
+                require_once __DIR__ . '/../common/shared_account_lib.php';
+                if (eg_shared_password_locked($db, (int)$id)) {
+                    try {
+                        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                                      VALUES ('pw_change_locked', 'user', ?, ?, '管理員變更了已鎖定密碼的帳號密碼', ?, ?, NOW())")
+                           ->execute([(string)$id, $user_cname, (int)($_SESSION['id'] ?? 0), ($_SESSION['user_cname'] ?? '')]);
+                    } catch (Throwable $e) { error_log('[shared] locked pw audit failed: ' . $e->getMessage()); }
+                }
                 $sql = "UPDATE user SET user_uname = ?, user_cname = ?, phone = ?, user_password = ?, state = ?, gender = ?, hire_date = ?, leave_date = ? WHERE id = ?";
                 $stmt = $db->prepare($sql);
                 $stmt->execute([$user_uname, $user_cname, $_POST['phone'], $user_password, $state, $gender, $hire_date, $final_leave_date, $id]);
