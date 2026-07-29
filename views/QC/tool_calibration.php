@@ -55,6 +55,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .tc-stat .s-lab { font-size:12px; color:#8a6d45; }
         .tc-stat .s-rate.below { color:#DD5138; }
         .tc-stat .s-rate.ok { color:#8A5A2B; }
+        /* 類別分頁列（哪些類別要當分頁＝類別設定的 calib_tab） */
+        .tc-tabs { display:flex; flex-wrap:wrap; gap:4px; align-items:flex-end; margin:0 0 8px;
+            border-bottom:2px solid #E8D5B5; }
+        .tc-tabs .tab { padding:6px 14px; font-size:13px; color:#8a6d45; background:#FBF6EC;
+            border:1px solid #E8D5B5; border-bottom:none; border-radius:6px 6px 0 0; cursor:pointer; margin-bottom:-2px; }
+        .tc-tabs .tab:hover { background:#F7E0BD; }
+        .tc-tabs .tab.active { background:#F0A24B; color:#fff; border-color:#d98a33; font-weight:bold; }
+        .tc-tabs .tab .cnt { font-size:11px; margin-left:4px; opacity:.85; }
+        .tc-tabs .tab-hint { font-size:12px; color:#b5762a; margin:0 0 6px 10px; }
         .tc-pager { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:4px 0 6px; font-size:13px; color:#5b3a1e; }
         .tc-pager select, .tc-pager button { height:28px; font-size:13px; border:1px solid #D8BE93; border-radius:4px;
             background:#fff; color:#5b3a1e; cursor:pointer; padding:0 10px; }
@@ -106,6 +115,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         @media print {
             .tc-toolbar, .nav_menu, .left_col, footer, .tc-role-badge .fa-question-circle, .tc-op { display:none !important; }
             .right_col { margin:0 !important; padding:0 !important; }
+            /* 只留目前分頁當標題，讓列印看得出印的是哪一類 */
+            .tc-tabs { border:none; }
+            .tc-tabs .tab:not(.active), .tc-tabs .tab-hint { display:none !important; }
+            .tc-tabs .tab.active { background:none !important; color:#5b3a1e !important; border:none !important;
+                font-size:14px; padding:0 0 4px; }
             table.tc-table thead th { position:static; }
         }
     </style>
@@ -130,8 +144,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div class="tc-toolbar">
             <label>統計月份</label>
             <input type="month" id="ymSel">
-            <label>類別</label>
-            <select id="catSel"><option value="">全部</option></select>
             <label>狀態</label>
             <select id="statSel">
                 <option value="">全部</option>
@@ -144,6 +156,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             </select>
             <input type="text" id="kwSel" placeholder="搜尋編號" style="width:120px;">
             <button class="btn-warm" id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增儀器</button>
+            <button id="btnCatSet" style="display:none;"><i class="fa fa-sliders"></i> 類別設定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
             <span class="tc-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
@@ -156,6 +169,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><span class="s-num s-rate" id="stRate">—</span> <span class="s-lab">按時校驗率（目標 ≥95%）</span></div>
             <div class="s-lab" id="stHint" style="margin-left:auto;"></div>
         </div>
+
+        <div class="tc-tabs" id="tcTabs"></div>
 
         <div class="tc-pager" id="tcPager">
             <span id="tcCount" style="margin-right:auto;color:#8a6d45;"></span>
@@ -179,6 +194,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <span class="st-pill st-ok">正常</span> <span class="st-pill st-nobaseline">未設基準</span>
             <span class="st-pill st-unmanaged">未納管</span>。
             「納入管理」者才計入 KPI；下次應校驗日＝上次校驗日＋週期（登錄完成後自動前滾）。
+            <span id="tcExcluded" style="color:#b5762a;"></span>
         </div>
 <?php endif; ?>
     </div>
@@ -217,9 +233,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-body">
         <div class="grid2">
             <div id="setNoBox"><label>量具編號 *</label><input type="text" id="setNo" maxlength="30"></div>
-            <div id="setCatBox"><label>類別 *
-                <a href="#" id="btnAddCat" style="font-size:12px;color:#b5762a;margin-left:6px;display:none;"
-                   onclick="addCategory();return false;"><i class="fa fa-plus"></i>新增類別</a></label>
+            <div id="setCatBox"><label>類別 *</label>
                 <select id="setCat"></select></div>
             <div><label>校驗週期（月）</label><input type="number" id="setCycle" step="1" min="0" placeholder="例：12"></div>
             <div><label>校驗方式（預設）</label><select id="setMethod">
@@ -231,12 +245,39 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             </select></div>
         </div>
         <div style="font-size:12px;color:#8a6d45;margin-top:8px;">
-            設定基準到期日後，之後每次登錄校驗會依週期自動前滾，不需再手動維護。
+            設定基準到期日後，之後每次登錄校驗會依週期自動前滾，不需再手動維護。<br>
+            類別下拉只列出「需校驗且可設定量具編號」的類別；類別的新增／更名／刪除請至
+            <a href="inspection_combined_prototype.php" target="_blank" style="color:#b5762a;">線上檢驗－量具設定</a>，
+            其校驗屬性則於本頁工具列「類別設定」勾選。
         </div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('setMask')">取消</button>
         <button class="b-ok" onclick="submitSet()">儲存</button>
+    </div>
+</div></div>
+
+<!-- 類別設定 modal（只設校驗屬性；類別本身的新增/更名/刪除在 線上檢驗－量具設定） -->
+<div class="tc-mask" id="catMask"><div class="tc-modal wide">
+    <div class="m-head"><span>量具類別設定</span><span class="m-close" onclick="closeMask('catMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;line-height:1.7;">
+            類別的<b>新增／更名／刪除</b>請至
+            <a href="inspection_combined_prototype.php" target="_blank" style="color:#b5762a;">線上檢驗－量具設定</a>（本頁不重複提供）。<br>
+            <b>需校驗</b>：不是實體量具、只是檢驗方式者（例如「目視」）請取消勾選，其量具不會出現在本頁、也不列入 KPI。<br>
+            <b>可設定量具編號</b>：取消後該類別不能再新增／移入量具編號。<br>
+            <b>列入分頁</b>：勾選者會在清單上方出現專屬分頁；需先勾「需校驗」才能設定，未列入分頁者歸在「其他」分頁。
+        </div>
+        <div style="max-height:46vh;overflow-y:auto;">
+        <table class="hist" id="catTable">
+            <thead><tr><th style="text-align:left;">類別</th><th>量具數</th><th>需校驗</th><th>可設定量具編號</th><th>列入分頁</th></tr></thead>
+            <tbody id="catBody"></tbody>
+        </table>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('catMask')">取消</button>
+        <button class="b-ok" onclick="submitCats()">儲存</button>
     </div>
 </div></div>
 
@@ -271,7 +312,8 @@ $(document).ready(function(){
 });
 
 var API = '../../src/store/ToolCalib_API.php';
-var META = null, ROWS = [], PERMS = null;
+var META = null, ROWS = [], PERMS = null, CATS = [];
+var curTab = '';   // 目前分頁：'' 全部 ｜ 類別id ｜ 'other' 其他（需校驗但未設為分頁）
 var canView = <?= $perms['canView'] ? 'true' : 'false' ?>;
 var RESULT_LABEL = {pass:'合格', pass_adjust:'校正後合格', fail:'不合格'};
 var STATUS_LABEL = {overdue:'逾期', soon:'即將到期', ok:'正常', nobaseline:'未設基準', unmanaged:'未納管'};
@@ -287,31 +329,22 @@ function loadMeta(cb){
         if (!m.ok){ alert(m.error||'載入失敗'); return; }
         META = m; PERMS = m.perms;
         $('#ymSel').val(m.cur_ym);
-        fillCats(m.categories);
-        if (m.perms.canAdmin) { $('#btnAdd').show(); $('#btnAddCat').show(); }
+        setCats(m.categories);
+        if (m.perms.canAdmin) { $('#btnAdd').show(); $('#btnCatSet').show(); }
         if (cb) cb();
     });
 }
-function fillCats(cats){
-    META.categories = cats;
-    var selC = $('#catSel').val(), selS = $('#setCat').val();
-    var $c = $('#catSel').empty().append('<option value="">全部</option>'), $sc = $('#setCat').empty();
-    cats.forEach(function(c){
-        $c.append('<option value="'+c.QC_Tool_List_id+'">'+esc(c.QC_Tool)+'</option>');
+/* 類別清單（含旗標）：新增/更名/刪除類別在「線上檢驗－量具設定」，本頁只設校驗屬性 */
+function setCats(cats){
+    CATS = cats || [];
+    if (META) META.categories = CATS;
+    var sel = $('#setCat').val(), $sc = $('#setCat').empty();
+    CATS.forEach(function(c){
+        if (c.calib_required !== 1 || c.has_tool_no !== 1) return;   // 只列可掛量具編號的校驗類別
         $sc.append('<option value="'+c.QC_Tool_List_id+'">'+esc(c.QC_Tool)+'</option>');
     });
-    $('#catSel').val(selC); $('#setCat').val(selS);
-}
-function addCategory(){
-    var name = prompt('新增量具類別名稱：');
-    if (name===null) return;
-    name = $.trim(name);
-    if (!name) return;
-    $.post(API, {action:'create_category', name:name}, function(res){
-        if (!res.ok){ alert(res.error||'新增失敗'); return; }
-        fillCats(res.categories);
-        $('#setCat').val(res.category_id);
-    }, 'json').fail(function(x){ alert('新增失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    $('#setCat').val(sel);
+    renderTabs();
 }
 
 function loadList(){
@@ -320,10 +353,41 @@ function loadList(){
         NProgress.done();
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         ROWS = res.rows; PERMS = res.perms;
+        if (res.categories) setCats(res.categories); else renderTabs();
+        $('#tcExcluded').text(res.excluded > 0
+            ? '　另有 '+res.excluded+' 支量具所屬類別未設為「需校驗」，未列入本頁與 KPI。' : '');
         renderStat(res.stat, res.ym);
         renderTable();
     }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
+
+/* ---------- 類別分頁列 ---------- */
+function tabCats(){ return CATS.filter(function(c){ return c.calib_required===1 && c.calib_tab===1; }); }
+function renderTabs(){
+    var tabs = tabCats(), tabIds = tabs.map(function(c){ return String(c.QC_Tool_List_id); });
+    var cnt = {}, other = 0;
+    ROWS.forEach(function(r){
+        var k = String(r.QC_Tool_List_id);
+        cnt[k] = (cnt[k]||0) + 1;
+        if (tabIds.indexOf(k) < 0) other++;
+    });
+    // 目前分頁若被取消設定 → 回到全部
+    if (curTab !== '' && curTab !== 'other' && tabIds.indexOf(curTab) < 0) curTab = '';
+    var h = '<div class="tab'+(curTab===''?' active':'')+'" data-tab="">全部<span class="cnt">'+ROWS.length+'</span></div>';
+    tabs.forEach(function(c){
+        var id = String(c.QC_Tool_List_id);
+        h += '<div class="tab'+(curTab===id?' active':'')+'" data-tab="'+id+'">'+esc(c.QC_Tool)
+           + '<span class="cnt">'+(cnt[id]||0)+'</span></div>';
+    });
+    if (other > 0 || curTab === 'other')
+        h += '<div class="tab'+(curTab==='other'?' active':'')+'" data-tab="other">其他<span class="cnt">'+other+'</span></div>';
+    if (!tabs.length)
+        h += '<span class="tab-hint">尚未設定分頁類別'+((PERMS&&PERMS.canAdmin)?'，可按工具列「類別設定」勾選':'')+'</span>';
+    $('#tcTabs').html(h);
+}
+$('#tcTabs').on('click', '.tab', function(){
+    curTab = String($(this).attr('data-tab')); tcPage = 1; renderTabs(); renderTable();
+});
 
 function renderStat(stat, ym){
     $('#stDen').text(stat.den);
@@ -341,9 +405,12 @@ function statPill(s){ return '<span class="st-pill st-'+s+'">'+(STATUS_LABEL[s]|
 
 var tcPage = 1;
 function filteredRows(){
-    var cat = $('#catSel').val(), stt = $('#statSel').val(), kw = $.trim($('#kwSel').val()).toLowerCase();
+    var stt = $('#statSel').val(), kw = $.trim($('#kwSel').val()).toLowerCase();
+    var tabIds = tabCats().map(function(c){ return String(c.QC_Tool_List_id); });
     return ROWS.filter(function(r){
-        if (cat && String(r.QC_Tool_List_id)!==String(cat)) return false;
+        var cid = String(r.QC_Tool_List_id);
+        if (curTab === 'other') { if (tabIds.indexOf(cid) >= 0) return false; }
+        else if (curTab !== '' && cid !== curTab) return false;
         if (stt === 'managed' && r.calib_managed!==1) return false;
         if (stt && stt!=='managed' && r.status!==stt) return false;
         if (kw && String(r.Tool_No).toLowerCase().indexOf(kw)<0) return false;
@@ -385,7 +452,7 @@ function renderTable(){
     $('#tcBody').html(html || '<tr><td colspan="9" style="padding:16px;color:#8a6d45;">無符合條件的儀器</td></tr>');
 }
 
-$('#catSel,#statSel').on('change', function(){ tcPage=1; renderTable(); });
+$('#statSel').on('change', function(){ tcPage=1; renderTable(); });
 $('#kwSel').on('input', function(){ tcPage=1; renderTable(); });
 $('#tcPageSize').on('change', function(){ tcPage=1; renderTable(); });
 $('#tcPrev').on('click', function(){ if(tcPage>1){ tcPage--; renderTable(); } });
@@ -446,11 +513,20 @@ function submitRec(){
 var setTool = null;
 function openSet(tid){
     setTool = tid ? ROWS.find(function(x){ return x.Tool_id===tid; }) : null;
+    $('#setCat option.tmp-cat').remove();          // 清掉上一支量具補上的「目前類別」暫時選項
+    if (!$('#setCat option').length && !setTool){
+        alert('目前沒有「需校驗且可設定量具編號」的類別。\n請先按工具列「類別設定」勾選，或至「線上檢驗－量具設定」新增類別。');
+        return;
+    }
     if (setTool){
         $('#setTitle').text('儀器設定：'+setTool.Tool_No);
         $('#setNoBox,#setCatBox').show();
         $('#setNo').val(setTool.Tool_No);
-        $('#setCat').val(String(setTool.QC_Tool_List_id));
+        // 該量具目前類別若已被設為不可掛編號（下拉不含）→ 補一個選項，避免存檔時被誤改類別
+        var cid = String(setTool.QC_Tool_List_id);
+        if (!$('#setCat option[value="'+cid+'"]').length)
+            $('#setCat').append('<option class="tmp-cat" value="'+cid+'">'+esc(setTool.category_name||cid)+'（目前類別）</option>');
+        $('#setCat').val(cid);
         $('#setCycle').val(setTool.calib_cycle_months==null?'':setTool.calib_cycle_months);
         $('#setMethod').val(setTool.calib_method||'');
         $('#setBase').val(fmtDate(setTool.calibration_due));
@@ -474,6 +550,47 @@ function submitSet(){
     $.post(API, data, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         closeMask('setMask'); loadList();
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
+/* ---------- 類別設定（管理員；只改校驗屬性旗標） ---------- */
+$('#btnCatSet').on('click', function(){
+    var h = CATS.map(function(c){
+        var req = c.calib_required===1, hasNo = c.has_tool_no===1, tab = (c.calib_tab===1 && req);
+        return '<tr data-id="'+c.QC_Tool_List_id+'">'
+            + '<td style="text-align:left;">'+esc(c.QC_Tool)+'</td>'
+            + '<td>'+c.tool_cnt+(c.managed_cnt>0 ? '（納管 '+c.managed_cnt+'）' : '')+'</td>'
+            + '<td><input type="checkbox" class="ck-req"'+(req?' checked':'')+'></td>'
+            + '<td><input type="checkbox" class="ck-hasno"'+(hasNo?' checked':'')+'></td>'
+            + '<td><input type="checkbox" class="ck-tab"'+(tab?' checked':'')+(req?'':' disabled')+'></td>'
+            + '</tr>';
+    }).join('');
+    $('#catBody').html(h || '<tr><td colspan="5" style="color:#8a6d45;padding:12px;">尚無量具類別</td></tr>');
+    openMask('catMask');
+});
+// 取消「需校驗」→ 同時鎖住並取消「列入分頁」
+$('#catBody').on('change', '.ck-req', function(){
+    var $tr = $(this).closest('tr'), on = this.checked;
+    $tr.find('.ck-tab').prop('disabled', !on);
+    if (!on) $tr.find('.ck-tab').prop('checked', false);
+});
+function submitCats(){
+    var items = [], warn = [];
+    $('#catBody tr').each(function(){
+        var $tr = $(this), id = $tr.attr('data-id');
+        if (!id) return;
+        var c = CATS.find(function(x){ return String(x.QC_Tool_List_id)===String(id); }) || {};
+        var req = $tr.find('.ck-req').prop('checked') ? 1 : 0;
+        if (!req && (c.managed_cnt||0) > 0) warn.push('・'+c.QC_Tool+'（'+c.managed_cnt+' 支已納管）');
+        items.push({id:id, calib_required:req,
+                    has_tool_no:$tr.find('.ck-hasno').prop('checked')?1:0,
+                    calib_tab:$tr.find('.ck-tab').prop('checked')?1:0});
+    });
+    if (warn.length && !confirm('下列類別取消「需校驗」後，其已納管量具將不再顯示於本頁、也不計入 KPI：\n'
+        + warn.join('\n') + '\n\n確定儲存？')) return;
+    $.post(API, {action:'save_categories', items: JSON.stringify(items)}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        setCats(res.categories); closeMask('catMask'); loadList();
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
