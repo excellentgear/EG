@@ -78,8 +78,29 @@ function getLeaveSettings($db) {
             'leave_backdate_limit_days' => '7', 'leave_hours_per_day' => '8', 'leave_halfday_hours' => '4',
         ];
         foreach ($def as $k => $v) if (!array_key_exists($k, $rows)) $rows[$k] = $v;
-        $users = $db->query("SELECT id, user_cname FROM user WHERE state = 1 ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
-        echo json_encode(['status' => 'success', 'data' => $rows, 'users' => $users]);
+
+        // 最終裁決者候選：在職人員，帶主部門與主職稱供前端「部門篩選＋姓名關鍵字」使用
+        $users = $db->query(
+            "SELECT u.id, u.user_cname,
+                    m.department_id, d.name AS department_name, p.name AS position_name
+             FROM user u
+             LEFT JOIN user_department_position_map m ON m.user_id = u.id AND m.is_main = 1
+             LEFT JOIN department d ON d.id = m.department_id
+             LEFT JOIN position p ON p.id = m.position_id
+             WHERE u.state = 1
+             ORDER BY (d.sort_order IS NULL), d.sort_order, p.sort_order, u.user_cname")->fetchAll(PDO::FETCH_ASSOC);
+        $depts = $db->query(
+            "SELECT id, name FROM department ORDER BY (sort_order IS NULL), sort_order, name")->fetchAll(PDO::FETCH_ASSOC);
+
+        // 已設定的裁決者若已離職/查無此人，另外回傳供前端提示（避免篩選後靜默遺失設定）
+        $currentName = null;
+        if (!empty($rows['leave_final_decider_id'])) {
+            $st = $db->prepare("SELECT user_cname FROM user WHERE id = ? LIMIT 1");
+            $st->execute([(int)$rows['leave_final_decider_id']]);
+            $currentName = $st->fetchColumn() ?: null;
+        }
+        echo json_encode(['status' => 'success', 'data' => $rows, 'users' => $users,
+                          'departments' => $depts, 'current_decider_name' => $currentName]);
     } catch (PDOException $e) {
         echo json_encode(['status' => 'error', 'message' => '讀取設定失敗: ' . $e->getMessage()]);
     }

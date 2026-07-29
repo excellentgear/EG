@@ -95,6 +95,21 @@ $r = api('get_leave_settings');
 ok(($r['status'] ?? '') === 'success' && isset($r['data']['leave_backdate_limit_days']),
    'get_leave_settings 成功', json_encode(array_slice($r, 0, 2)));
 ok(!empty($r['users']), '回傳最終裁決者候選人清單');
+// 最終裁決者的部門/姓名篩選所需資料
+$u0 = $r['users'][0] ?? [];
+ok(array_key_exists('department_id', $u0) && array_key_exists('department_name', $u0)
+   && array_key_exists('position_name', $u0),
+   '候選人帶 department_id/department_name/position_name（供部門篩選）', json_encode($u0));
+ok(!empty($r['departments']) && isset($r['departments'][0]['id'], $r['departments'][0]['name']),
+   '回傳部門清單供下拉', json_encode($r['departments'][0] ?? []));
+ok(array_key_exists('current_decider_name', $r), '回傳目前裁決者姓名欄位（供離職提示）');
+// 候選人只含在職者
+$ids = array_column($r['users'], 'id');
+$inService = (int)$db->query("SELECT COUNT(*) FROM user WHERE state = 1")->fetchColumn();
+ok(count($ids) === $inService, "候選人數與在職人數一致（{$inService}）", (string)count($ids));
+// 部門篩選可用：至少有一位候選人有部門
+$withDept = array_filter($r['users'], function ($x) { return !empty($x['department_id']); });
+ok(count($withDept) > 0, '至少一位候選人有主部門（否則部門篩選無意義）', (string)count($withDept));
 $origBackdate = $r['data']['leave_backdate_limit_days'];
 $origBase     = $r['data']['leave_attach_base'];
 $r = api('save_leave_settings', ['leave_backdate_limit_days' => '14',

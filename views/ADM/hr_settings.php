@@ -455,11 +455,16 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                             </div>
                             <div class="x_content">
                                 <div class="row">
-                                    <div class="col-md-6 form-group">
-                                        <label for="set_final_decider">最終裁決者</label>
-                                        <select class="form-control" id="set_final_decider"></select>
+                                    <div class="col-md-9 form-group">
+                                        <label>最終裁決者</label>
+                                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                            <select class="form-control" id="fd_dept" style="width:auto;min-width:150px;" title="先選部門縮小範圍（雙擊可解除篩選）"></select>
+                                            <input type="text" class="form-control" id="fd_kw" placeholder="姓名關鍵字…" style="width:auto;min-width:140px;" title="輸入姓名可再縮小範圍（雙擊清空）">
+                                            <select class="form-control" id="set_final_decider" style="min-width:240px;flex:1;"></select>
+                                        </div>
                                         <div class="text-muted" style="font-size:12px;">
-                                            當申請人的主管鏈往上找不到下一級主管時（例如申請人本身已是最高階，或上層部門未設指定負責人），由這位裁決。未設定時會暫掛管理員。
+                                            當申請人的主管鏈往上找不到下一級主管時（例如申請人本身已是最高階，或上層部門未設指定負責人），由這位裁決。未設定時會暫掛管理員。<br>
+                                            部門／姓名兩個欄位<b>只是用來縮小人員下拉的範圍</b>，不會被存檔；篩選不會清掉已選定的人。<span id="fd_hint"></span>
                                         </div>
                                     </div>
                                     <div class="col-md-3 form-group">
@@ -1604,21 +1609,66 @@ $(function () {
         });
         // ── 請假系統設定（2026-07-29）──────────────────────────────
         $('#require_attachment').on('change', function(){ $('#attachOpts').toggle(this.checked); });
+        // 最終裁決者：部門＋姓名兩層篩選（篩選欄不存檔，且不會清掉已選定的人）
+        var LEAVE_USERS = [], LEAVE_DECIDER = '', LEAVE_DECIDER_NAME = '';
+        function renderDeciderOptions() {
+            const dept = $('#fd_dept').val() || '';
+            const kw   = ($('#fd_kw').val() || '').trim().toLowerCase();
+            const $u = $('#set_final_decider').empty().append('<option value="">（未設定，暫掛管理員）</option>');
+            let hit = false;
+            LEAVE_USERS.forEach(function(u) {
+                if (dept !== '' && String(u.department_id || '') !== String(dept)) return;
+                if (kw !== '' && String(u.user_cname || '').toLowerCase().indexOf(kw) === -1) return;
+                const label = escapeHtml(u.user_cname)
+                            + '（' + escapeHtml(u.department_name || '未設部門')
+                            + (u.position_name ? ' / ' + escapeHtml(u.position_name) : '') + '）';
+                $u.append('<option value="' + u.id + '">' + label + '</option>');
+                if (String(u.id) === String(LEAVE_DECIDER)) hit = true;
+            });
+            // 已選定的人被篩掉（或已離職）時補回一個選項，避免存檔時靜默變成「未設定」
+            if (LEAVE_DECIDER && !hit) {
+                $u.append('<option value="' + escapeHtml(LEAVE_DECIDER) + '">'
+                        + escapeHtml(LEAVE_DECIDER_NAME || ('#' + LEAVE_DECIDER))
+                        + '（目前設定，不在篩選結果內）</option>');
+            }
+            $('#set_final_decider').val(LEAVE_DECIDER || '');
+            const shown = $('#set_final_decider option').length - 1;
+            $('#fd_hint').html(' 目前可選 <b>' + shown + '</b> 人。'
+                + (LEAVE_DECIDER ? '' : '<span class="text-warning">尚未指定裁決者，需簽多層的假別會提早收鏈。</span>'));
+        }
         function loadLeaveSettings() {
             callApi(LEAVE_API_URL, 'get_leave_settings', 'GET', null, function(res) {
                 if (res.status !== 'success') return;
                 const d = res.data || {};
-                const $u = $('#set_final_decider').empty().append('<option value="">（未設定，暫掛管理員）</option>');
-                (res.users || []).forEach(function(u) {
-                    $u.append('<option value="' + u.id + '">' + escapeHtml(u.user_cname) + '</option>');
+                LEAVE_USERS = res.users || [];
+                LEAVE_DECIDER = d.leave_final_decider_id || '';
+                LEAVE_DECIDER_NAME = res.current_decider_name || '';
+                if (LEAVE_DECIDER && !LEAVE_DECIDER_NAME) LEAVE_DECIDER_NAME = '（查無此人或已離職）';
+                const $dp = $('#fd_dept').empty().append('<option value="">全部部門</option>');
+                (res.departments || []).forEach(function(x) {
+                    $dp.append('<option value="' + x.id + '">' + escapeHtml(x.name) + '</option>');
                 });
-                $('#set_final_decider').val(d.leave_final_decider_id || '');
+                renderDeciderOptions();
                 $('#set_backdate_days').val(d.leave_backdate_limit_days);
                 $('#set_hours_per_day').val(d.leave_hours_per_day);
                 $('#set_halfday_hours').val(d.leave_halfday_hours);
                 $('#set_attach_base').val(d.leave_attach_base);
             });
         }
+        // 篩選欄互動（全站規範：篩選欄雙擊＝解除該欄篩選）
+        $('#fd_dept').on('change', renderDeciderOptions);
+        $('#fd_kw').on('input', renderDeciderOptions)
+                   .on('dblclick', function(){ if(this.value !== ''){ this.value = ''; renderDeciderOptions(); } })
+                   .on('focus', function(){ if(this.value !== '') try { this.select(); } catch(e) {} })
+                   .on('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); $('#set_final_decider').focus(); } });
+        $('#fd_dept').on('dblclick', function(){ if(this.value !== ''){ this.value = ''; renderDeciderOptions(); } });
+        // 使用者實際選了人才更新記憶值（篩選重繪時不會被覆蓋）
+        $('#set_final_decider').on('change', function(){
+            LEAVE_DECIDER = this.value || '';
+            const u = LEAVE_USERS.filter(function(x){ return String(x.id) === String(LEAVE_DECIDER); })[0];
+            LEAVE_DECIDER_NAME = u ? u.user_cname : '';
+            renderDeciderOptions();
+        });
         $('#btnSaveLeaveSetting').on('click', function() {
             const payload = {
                 leave_final_decider_id:    $('#set_final_decider').val(),
