@@ -330,8 +330,11 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
                             <thead><tr id="grid-head"></tr></thead>
                             <tbody id="items-body"></tbody>
                             <tfoot><tr>
-                                <td id="verdict-label" class="text-right" style="font-weight:bold;background:var(--cream);">判定結果</td>
+                                <td id="verdict-label" class="text-right" style="font-weight:bold;background:var(--cream);">判定結果<br>
+                                    <span class="muted-help" style="font-weight:normal;">該件任一項 NG 即自動 NG；點擊可手動改判，雙擊恢復自動</span></td>
                                 <td id="verdict-cells" style="background:var(--cream);"></td>
+                                <td style="background:var(--cream);"></td>
+                                <td style="background:var(--cream);"></td>
                             </tr></tfoot>
                         </table>
                     </div>
@@ -1491,7 +1494,7 @@ $(function(){
                         '<td class="text-center"><i class="fa fa-trash btn-del-reading" data-i="'+i+'" data-r="'+r+'" style="cursor:pointer;color:var(--coral)"></i></td></tr>';
             }
         });
-        $('#items-body').html(body || '<tr><td colspan="'+(colsBefore+3)+'" class="text-center muted-help" style="padding:24px;">尚無檢驗項目</td></tr>');
+        $('#items-body').html(body || '<tr><td colspan="'+(colsBefore+2)+'" class="text-center muted-help" style="padding:24px;">尚無檢驗項目</td></tr>');
 
         var vh='';
         for(var s4=0;s4<state.sampleN;s4++){
