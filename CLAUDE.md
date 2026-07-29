@@ -1,6 +1,6 @@
 # EGsystem — AI 工作規範（每次 session 必讀）
 
-> 最後修改：2026-07-28 — 路由表新增 `ai-rules/12-請假系統製作說明.md`（請假動工前必讀，代理走 delegate_lib、勿用 leave_agent_setting）。（前次同日）鐵律6 推送改用 **`git pushall`**（雙 remote：origin=excellentgear/EG、backup=ellentravel1003/EGsystem；只 git push 會漏備份）；路由表新增 `ai-rules/11-代理系統設計.md`（代理人解析一律走 delegate_lib）；鐵律5 附件暫存機制（temp/active，見 ai-rules/07）。
+> 最後修改：2026-07-29 — 路由表新增 `ai-rules/13-共用帳號通知與綁定.md`（現場共用帳號成員綁定/通知轉送/鎖密碼；規格已定案待實作）。（前次 07-28）路由表新增 `ai-rules/12-請假系統製作說明.md`（請假動工前必讀，代理走 delegate_lib、勿用 leave_agent_setting）；鐵律6 推送改用 **`git pushall`**（雙 remote：origin=excellentgear/EG、backup=ellentravel1003/EGsystem；只 git push 會漏備份）；路由表新增 `ai-rules/11-代理系統設計.md`（代理人解析一律走 delegate_lib）；鐵律5 附件暫存機制（temp/active，見 ai-rules/07）。
 
 PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**已用 git 版本控管**，分支 `master`，改壞可用 git 復原——但前提是每個檔案改完都有立刻 commit＋**`git pushall`**（雙 remote，見鐵律6），沒 push 的部分一樣救不回來。
 
@@ -63,5 +63,6 @@ VALUES ('views/xx/xxx.php', '一句話說明', '詳細說明可分點', NOW(), '
 | 要上色（圖表/長條/標籤/狀態色）或改配色 | `ai-rules/10-配色與文字可讀性.md` |
 | 做簽核/待辦派送/請假/異常判定，涉及「某人不在由誰代理」 | `ai-rules/11-代理系統設計.md`（**必讀**，禁各頁自寫代理 SQL） |
 | 要做/改請假系統（申請、簽核鏈、假別、額度） | `ai-rules/12-請假系統製作說明.md`（**必讀**，代理走 delegate_lib、勿用 leave_agent_setting） |
+| 要處理共用帳號（現場多人共用登入）的成員綁定、通知轉送、鎖密碼 | `ai-rules/13-共用帳號通知與綁定.md`（**必讀**，改收件人展開層一處全站生效；改完須回歸測試 ROSTER 通知） |
 
 原始版 CLAUDE.md 備份：`CLAUDE.md.bak-20260706` 與 `CLAUDE(原始 不可更改).md`（勿動；該備份檔名未帶時分屬歷史命名，新備份一律用 `.bak-yyyyMMdd-HHmm`）。
