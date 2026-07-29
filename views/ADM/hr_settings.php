@@ -398,8 +398,10 @@ $jsPerms = [
                                         <tr>
                                             <th>假別名稱</th>
                                             <th>需主管簽核</th>
-                                            <th>需代理人簽章</th>
+                                            <th>需指定代理人</th>
                                             <th>最高簽核層級</th>
+                                            <th>請假粒度</th>
+                                            <th>需附證明</th>
                                             <th>操作</th>
                                         </tr>
                                     </thead>
@@ -407,6 +409,59 @@ $jsPerms = [
                                         <!-- JS 動態載入 -->
                                     </tbody>
                                 </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 6. 請假系統設定（2026-07-29 新增）-->
+                    <div id="leave-setting-section" class="col-md-12 col-sm-12 col-xs-12">
+                        <div class="x_panel">
+                            <div class="x_title">
+                                <h2>請假系統設定 <small>簽核補位・補請假期限・工時基準・證明文件存放位置</small></h2>
+                                <ul class="nav navbar-right panel_toolbox">
+                                    <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
+                                </ul>
+                                <div class="clearfix"></div>
+                            </div>
+                            <div class="x_content">
+                                <div class="row">
+                                    <div class="col-md-6 form-group">
+                                        <label for="set_final_decider">最終裁決者</label>
+                                        <select class="form-control" id="set_final_decider"></select>
+                                        <div class="text-muted" style="font-size:12px;">
+                                            當申請人的主管鏈往上找不到下一級主管時（例如申請人本身已是最高階，或上層部門未設指定負責人），由這位裁決。未設定時會暫掛管理員。
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3 form-group">
+                                        <label for="set_backdate_days">補請假上限（天）</label>
+                                        <input type="number" class="form-control" id="set_backdate_days" min="0" step="1">
+                                        <div class="text-muted" style="font-size:12px;">起始日早於今天幾天內仍可送單；超過須洽人事。</div>
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-3 form-group">
+                                        <label for="set_hours_per_day">一天工時（小時）</label>
+                                        <input type="number" class="form-control" id="set_hours_per_day" min="1" step="0.5">
+                                    </div>
+                                    <div class="col-md-3 form-group">
+                                        <label for="set_halfday_hours">半天時數（小時）</label>
+                                        <input type="number" class="form-control" id="set_halfday_hours" min="0.5" step="0.5">
+                                        <div class="text-muted" style="font-size:12px;">半天假的換算基準。</div>
+                                    </div>
+                                    <div class="col-md-6 form-group">
+                                        <label for="set_attach_base">證明文件存放根目錄</label>
+                                        <input type="text" class="form-control" id="set_attach_base" placeholder="例：\\excellentnas\人事\ERP請假單附件">
+                                        <div class="text-muted" style="font-size:12px;">
+                                            只填<b>根目錄</b>；系統會依單號自動建子資料夾，完整路徑於讀取當下即時組出。<span class="text-warning">未設定時無法上傳證明文件。</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <button type="button" class="btn btn-primary" id="btnSaveLeaveSetting">儲存請假系統設定</button>
+                                <span id="leaveSettingMsg" style="margin-left:10px;font-size:13px;"></span>
+                                <div class="text-muted" style="font-size:12px;margin-top:10px;">
+                                    <i class="fa fa-info-circle"></i>
+                                    請假的<b>職務代理人</b>沿用本頁上方的「代理人設定」，請假頁不另設一套；主管當日有行程時由其代理人簽核，代理人若正好是申請人則自動直升上一級（權責分離）。
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -442,7 +497,34 @@ $jsPerms = [
                                 <label><input type="checkbox" id="need_manager_sign" name="need_manager_sign"> 需主管簽核</label>
                             </div>
                             <div class="checkbox">
-                                <label><input type="checkbox" id="need_agent_sign" name="need_agent_sign"> 需代理人簽章</label>
+                                <label><input type="checkbox" id="need_agent_sign" name="need_agent_sign"> 需指定職務代理人</label>
+                                <div class="text-muted" style="font-size:12px;margin-left:20px;">
+                                    勾選後，申請此假別時必須從「代理人設定」既有的代理人中指定一位；<b>代理人不參與簽核</b>，核准後系統才通知他接手職務。
+                                </div>
+                            </div>
+                            <hr>
+                            <div class="form-group">
+                                <label for="unit_type">請假粒度</label>
+                                <select class="form-control" id="unit_type" name="unit_type">
+                                    <option value="hour">時假（依實際起訖時數計算）</option>
+                                    <option value="halfday">半天（不足半天以半天計）</option>
+                                    <option value="day">整天（以工作日計，忽略時分）</option>
+                                </select>
+                            </div>
+                            <div class="checkbox">
+                                <label><input type="checkbox" id="require_attachment" name="require_attachment"> 需附證明文件（例：病假需診斷證明）</label>
+                            </div>
+                            <div class="form-group" id="attachOpts" style="margin-left:20px;">
+                                <label for="attach_min_days" style="font-weight:400;">超過幾天才需要證明</label>
+                                <input type="number" class="form-control" id="attach_min_days" name="attach_min_days" min="0" step="0.5" value="0" style="max-width:160px;">
+                                <div class="text-muted" style="font-size:12px;">0＝一律需要。例如填 3 表示請超過 3 天才需附證明。</div>
+                                <div class="checkbox" style="margin-top:6px;">
+                                    <input type="hidden" name="allow_attach_later" value="0">
+                                    <label><input type="checkbox" id="allow_attach_later" name="allow_attach_later" value="1" checked> 允許先送審、事後補件</label>
+                                    <div class="text-muted" style="font-size:12px;margin-left:20px;">
+                                        不勾選＝沒附證明就不能送出。勾選時單據會標記「待補證明」，但不影響主管簽核。
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div class="modal-footer">
@@ -1144,12 +1226,23 @@ $jsPerms = [
                             delBtn = `<button class="btn btn-sm btn-danger btn-delete-leave-type" data-id="${item.id}">刪除</button>`;
                         }
 
+                        // 請假粒度／證明文件（2026-07-29 請假系統）
+                        const unitTxt = {hour:'時假', halfday:'半天', day:'整天'}[item.unit_type] || '時假';
+                        let attTxt = '<i class="fa fa-times text-danger"></i>';
+                        if (parseInt(item.require_attachment) === 1) {
+                            const minD = parseFloat(item.attach_min_days || 0);
+                            attTxt = '<i class="fa fa-check text-success"></i>'
+                                   + (minD > 0 ? ` <span class="text-muted">(逾 ${minD} 天)</span>` : '')
+                                   + (parseInt(item.allow_attach_later) === 1 ? ' <span class="label label-warning">可補件</span>' : ' <span class="label label-default">須先附</span>');
+                        }
                         var row = `<tr>
                             <td>${escapeHtml(item.leave_name)}</td>
                             <td>${parseInt(item.need_approval) === 1 ? '<i class="fa fa-check text-success"></i>' : '<i class="fa fa-times text-danger"></i>'}</td>
                             <td>${parseInt(item.agent) === 1 ? '<i class="fa fa-check text-success"></i>' : '<i class="fa fa-times text-danger"></i>'}</td>
                             <td>${escapeHtml(item.max_approval_level)}
                                 ${supervisorTitles[item.max_approval_level] ? ` <span class="text-muted">(${supervisorTitles[item.max_approval_level]})</span>` : ''}</td>
+                            <td>${unitTxt}</td>
+                            <td>${attTxt}</td>
                             <td>
                                 ${editBtn}
                                 ${delBtn}
@@ -1167,6 +1260,7 @@ $jsPerms = [
             modal.find('form')[0].reset();
             modal.find('#leave_type_id').val('');
             var form = modal.find('form');
+            $('#attachOpts').toggle($('#require_attachment').is(':checked'));   // 依勾選顯示證明文件細部設定
             if (action === 'add') {
                 modal.find('.modal-title').text('新增假別');
                 form.data('action', 'add_leave_type'); // 設定 action
@@ -1182,6 +1276,11 @@ $jsPerms = [
                         $('#max_level').val(d.max_approval_level);
                         $('#need_manager_sign').prop('checked', parseInt(d.need_approval) === 1);
                         $('#need_agent_sign').prop('checked', parseInt(d.agent) === 1);
+                        // 請假系統擴充欄位
+                        $('#unit_type').val(d.unit_type || 'hour');
+                        $('#require_attachment').prop('checked', parseInt(d.require_attachment) === 1).trigger('change');
+                        $('#attach_min_days').val(parseFloat(d.attach_min_days || 0));
+                        $('#allow_attach_later').prop('checked', parseInt(d.allow_attach_later) === 1);
                     } else { alert('讀取資料失敗: ' + response.message); modal.modal('hide'); }
                 });
             }
@@ -1196,6 +1295,40 @@ $jsPerms = [
                 } else { alert('操作失敗: ' + response.message); }
             });
         });
+        // ── 請假系統設定（2026-07-29）──────────────────────────────
+        $('#require_attachment').on('change', function(){ $('#attachOpts').toggle(this.checked); });
+        function loadLeaveSettings() {
+            callApi(LEAVE_API_URL, 'get_leave_settings', 'GET', null, function(res) {
+                if (res.status !== 'success') return;
+                const d = res.data || {};
+                const $u = $('#set_final_decider').empty().append('<option value="">（未設定，暫掛管理員）</option>');
+                (res.users || []).forEach(function(u) {
+                    $u.append('<option value="' + u.id + '">' + escapeHtml(u.user_cname) + '</option>');
+                });
+                $('#set_final_decider').val(d.leave_final_decider_id || '');
+                $('#set_backdate_days').val(d.leave_backdate_limit_days);
+                $('#set_hours_per_day').val(d.leave_hours_per_day);
+                $('#set_halfday_hours').val(d.leave_halfday_hours);
+                $('#set_attach_base').val(d.leave_attach_base);
+            });
+        }
+        $('#btnSaveLeaveSetting').on('click', function() {
+            const payload = {
+                leave_final_decider_id:    $('#set_final_decider').val(),
+                leave_backdate_limit_days: $('#set_backdate_days').val(),
+                leave_hours_per_day:       $('#set_hours_per_day').val(),
+                leave_halfday_hours:       $('#set_halfday_hours').val(),
+                leave_attach_base:         $('#set_attach_base').val()
+            };
+            callApi(LEAVE_API_URL, 'save_leave_settings', 'POST', payload, function(res) {
+                $('#leaveSettingMsg').html(res.status === 'success'
+                    ? '<span class="text-success"><i class="fa fa-check"></i> ' + escapeHtml(res.message) + '</span>'
+                    : '<span class="text-danger">' + escapeHtml(res.message) + '</span>');
+                if (res.status === 'success') setTimeout(function(){ $('#leaveSettingMsg').empty(); }, 3000);
+            });
+        });
+        loadLeaveSettings();
+
         $(document).on('click', '.btn-delete-leave-type', function() {
             if (confirm('您確定要刪除此假別嗎？')) {
                 callApi(LEAVE_API_URL, 'delete_leave_type', 'POST', { id: $(this).data('id') }, function(response) { // 移除多餘的 alert，統一操作體驗

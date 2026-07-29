@@ -37,9 +37,86 @@ switch ($action) {
     case 'delete_leave_type':
         deleteLeaveType($db); // 改為只傳入 $db
         break;
+    // ── 請假系統設定（2026-07-29 新增，供請假系統使用）──
+    case 'get_leave_settings':
+        getLeaveSettings($db);
+        break;
+    case 'save_leave_settings':
+        saveLeaveSettings($db);
+        break;
     default:
         echo json_encode(['status' => 'error', 'message' => '無效的操作。']);
         break;
+}
+
+/**
+ * 假別的請假系統擴充欄位（2026-07-29 新增）：粒度與證明文件設定。
+ * 舊版表單沒有這些欄位時採安全預設（時假、不需證明、可補件），避免既有操作行為改變。
+ */
+function leaveTypeExtraFields(): array {
+    $unit = isset($_POST['unit_type']) ? trim((string)$_POST['unit_type']) : 'hour';
+    if (!in_array($unit, ['hour', 'halfday', 'day'], true)) $unit = 'hour';
+    return [
+        'unit_type'          => $unit,
+        'require_attachment' => isset($_POST['require_attachment']) ? 1 : 0,
+        'attach_min_days'    => isset($_POST['attach_min_days']) ? max(0, (float)$_POST['attach_min_days']) : 0,
+        // 沒送這個欄位時預設允許補件（比較寬鬆，不會卡住使用者送單）
+        'allow_attach_later' => array_key_exists('allow_attach_later', $_POST) ? (empty($_POST['allow_attach_later']) ? 0 : 1) : 1,
+    ];
+}
+
+/**
+ * 讀取請假系統設定（system_settings 的 leave_* 系列）＋最終裁決者候選人清單。
+ */
+function getLeaveSettings($db) {
+    if (!isset($_SESSION['id'])) { echo json_encode(['status' => 'error', 'message' => '尚未登入。']); exit; }
+    try {
+        $rows = $db->query("SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE 'leave\\_%'")
+                   ->fetchAll(PDO::FETCH_KEY_PAIR);
+        $def = [
+            'leave_attach_base' => '', 'leave_final_decider_id' => '',
+            'leave_backdate_limit_days' => '7', 'leave_hours_per_day' => '8', 'leave_halfday_hours' => '4',
+        ];
+        foreach ($def as $k => $v) if (!array_key_exists($k, $rows)) $rows[$k] = $v;
+        $users = $db->query("SELECT id, user_cname FROM user WHERE state = 1 ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
+        echo json_encode(['status' => 'success', 'data' => $rows, 'users' => $users]);
+    } catch (PDOException $e) {
+        echo json_encode(['status' => 'error', 'message' => '讀取設定失敗: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
+/**
+ * 儲存請假系統設定。附件根目錄只存「根目錄」，完整路徑一律於讀取當下即時組（鐵律5）。
+ */
+function saveLeaveSettings($db) {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status' => 'error', 'message' => '僅接受 POST 請求。']); exit; }
+    if (!isset($_SESSION['id'])) { echo json_encode(['status' => 'error', 'message' => '尚未登入。']); exit; }
+    $uid = (int)$_SESSION['id'];
+    $allow = ['leave_attach_base', 'leave_final_decider_id', 'leave_backdate_limit_days',
+              'leave_hours_per_day', 'leave_halfday_hours'];
+    try {
+        $nameSt = $db->prepare("SELECT user_cname FROM user WHERE id = ?");
+        $nameSt->execute([$uid]);
+        $by = (string)$nameSt->fetchColumn();
+        $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by, updated_at)
+                            VALUES (?,?,?,?,NOW())
+                            ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                                                    updated_by_id = VALUES(updated_by_id),
+                                                    updated_by = VALUES(updated_by), updated_at = NOW()");
+        foreach ($allow as $k) {
+            if (!array_key_exists($k, $_POST)) continue;
+            $v = trim((string)$_POST[$k]);
+            if ($k === 'leave_backdate_limit_days') $v = (string)max(0, (int)$v);
+            if ($k === 'leave_hours_per_day')       $v = (string)max(1, (float)$v);
+            if ($k === 'leave_halfday_hours')       $v = (string)max(0.5, (float)$v);
+            $st->execute([$k, $v, $uid, $by]);
+        }
+        echo json_encode(['status' => 'success', 'message' => '請假系統設定已儲存。']);
+    } catch (PDOException $e) {
+        echo json_encode(['status' => 'error', 'message' => '儲存失敗: ' . $e->getMessage()]);
+    }
+    exit;
 }
 
 /**
@@ -48,7 +125,9 @@ switch ($action) {
 function getLeaveTypes($db) { // 改為接收 $db
     try {
         // 使用 PDO 進行查詢
-        $stmt = $db->query("SELECT id, leave_name, need_approval, agent, max_approval_level FROM leave_type ORDER BY id");
+        $stmt = $db->query("SELECT id, leave_name, need_approval, agent, max_approval_level,
+                  unit_type, require_attachment, attach_min_days, allow_attach_later
+           FROM leave_type ORDER BY id");
         $leaveTypes = $stmt->fetchAll(PDO::FETCH_ASSOC);
         echo json_encode(['status' => 'success', 'data' => $leaveTypes]);
     } catch (PDOException $e) { // 捕捉 PDOException
@@ -87,13 +166,20 @@ function addLeaveType($db) { // 改為只接收 $db
         }
 
         // 如果名稱不存在，則執行新增
+        $ext = leaveTypeExtraFields();
         $stmt = $db->prepare(
-            "INSERT INTO leave_type (leave_name, need_approval, agent, max_approval_level) VALUES (:name, :need_approval, :agent, :max_level)"
+            "INSERT INTO leave_type (leave_name, need_approval, agent, max_approval_level,
+                                     unit_type, require_attachment, attach_min_days, allow_attach_later)
+             VALUES (:name, :need_approval, :agent, :max_level, :unit_type, :req_att, :att_min, :att_later)"
         );
         $stmt->bindParam(':name', $name, PDO::PARAM_STR);
         $stmt->bindParam(':need_approval', $need_approval, PDO::PARAM_INT);
         $stmt->bindParam(':agent', $agent, PDO::PARAM_INT);
         $stmt->bindParam(':max_level', $max_level, PDO::PARAM_INT);
+        $stmt->bindValue(':unit_type', $ext['unit_type'], PDO::PARAM_STR);
+        $stmt->bindValue(':req_att',   $ext['require_attachment'], PDO::PARAM_INT);
+        $stmt->bindValue(':att_min',   $ext['attach_min_days']);
+        $stmt->bindValue(':att_later', $ext['allow_attach_later'], PDO::PARAM_INT);
         $stmt->execute();
         echo json_encode(['status' => 'success', 'message' => '假別新增成功。']);
         exit;
@@ -114,7 +200,9 @@ function getLeaveTypeDetails($db) { // 改為只接收 $db
     }
 
     try {
-        $stmt = $db->prepare("SELECT id, leave_name, need_approval, agent, max_approval_level FROM leave_type WHERE id = :id");
+        $stmt = $db->prepare("SELECT id, leave_name, need_approval, agent, max_approval_level,
+                  unit_type, require_attachment, attach_min_days, allow_attach_later
+           FROM leave_type WHERE id = :id");
         $stmt->bindParam(':id', $id, PDO::PARAM_INT);
         $stmt->execute();
         $leaveType = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -169,13 +257,22 @@ function updateLeaveType($db) { // 改為只接收 $db
         }
 
         // 執行更新
+        $ext = leaveTypeExtraFields();
         $stmt = $db->prepare(
-            "UPDATE leave_type SET leave_name = :name, need_approval = :need_approval, agent = :agent, max_approval_level = :max_level WHERE id = :id"
+            "UPDATE leave_type SET leave_name = :name, need_approval = :need_approval, agent = :agent,
+                                   max_approval_level = :max_level, unit_type = :unit_type,
+                                   require_attachment = :req_att, attach_min_days = :att_min,
+                                   allow_attach_later = :att_later
+             WHERE id = :id"
         );
         $stmt->bindParam(':name', $name, PDO::PARAM_STR);
         $stmt->bindParam(':need_approval', $need_approval, PDO::PARAM_INT);
         $stmt->bindParam(':agent', $agent, PDO::PARAM_INT);
         $stmt->bindParam(':max_level', $max_level, PDO::PARAM_INT);
+        $stmt->bindValue(':unit_type', $ext['unit_type'], PDO::PARAM_STR);
+        $stmt->bindValue(':req_att',   $ext['require_attachment'], PDO::PARAM_INT);
+        $stmt->bindValue(':att_min',   $ext['attach_min_days']);
+        $stmt->bindValue(':att_later', $ext['allow_attach_later'], PDO::PARAM_INT);
         $stmt->bindParam(':id', $id, PDO::PARAM_INT);
         $stmt->execute();
         echo json_encode(['status' => 'success', 'message' => '假別更新成功。']);
@@ -203,6 +300,17 @@ function deleteLeaveType($db) { // 改為只接收 $db
     }
 
     try {
+        // 使用中防呆（2026-07-29）：已有請假單引用此假別時不可刪除，否則舊單會查不到假別名稱
+        $used = $db->prepare("SELECT COUNT(*) FROM leave_request WHERE leave_type_id = :id");
+        $used->bindParam(':id', $id, PDO::PARAM_INT);
+        $used->execute();
+        $n = (int)$used->fetchColumn();
+        if ($n > 0) {
+            echo json_encode(['status' => 'error',
+                'message' => "此假別已有 {$n} 張請假單使用中，不可刪除。若不再使用，請改為停用或改名。"]);
+            exit;
+        }
+
         // 執行刪除
         $stmt = $db->prepare("DELETE FROM leave_type WHERE id = :id");
         $stmt->bindParam(':id', $id, PDO::PARAM_INT);
