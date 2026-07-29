@@ -73,8 +73,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
         input[type=number] { -moz-appearance:textfield; }
         .va-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
-        .va-modal { background:#fff; border-radius:8px; max-width:560px; margin:52px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
-            max-height:84vh; display:flex; flex-direction:column; }
+        .va-modal { background:#fff; border-radius:8px; max-width:560px; margin:36px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
+            max-height:90vh; display:flex; flex-direction:column; }
         .va-modal.wide { max-width:860px; }
         .va-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
             display:flex; justify-content:space-between; }
@@ -90,9 +90,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .va-modal .m-foot .b-cancel { background:#fff; color:#5b3a1e; border-color:#D8BE93; margin-right:6px; }
         .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
         /* picker */
-        .pk-filter { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px; }
-        .pk-filter select, .pk-filter input { height:28px; font-size:12px; border:1px solid #D8BE93; border-radius:4px; padding:0 6px; }
-        .pk-list { border:1px solid #EADFC8; border-radius:6px; max-height:340px; overflow-y:auto; }
+        .pk-filter { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; margin-bottom:8px; }
+        .pk-filter label { margin:0; font-size:12px; color:#5b3a1e; }
+        /* 高特異度覆蓋 .m-body select{width:100%}，讓大類/加工項目並排 */
+        .va-modal .m-body .pk-filter select { width:150px; height:28px; font-size:12px; padding:0 6px; }
+        .va-modal .m-body .pk-filter input[type=text] { width:150px; height:28px; font-size:12px; padding:0 6px; }
+        .pk-list { border:1px solid #EADFC8; border-radius:6px; max-height:60vh; overflow-y:auto; }
         table.pk-table { width:100%; border-collapse:collapse; font-size:12px; }
         table.pk-table th, table.pk-table td { border-bottom:1px solid #F0E7D5; padding:4px 6px; text-align:center; }
         table.pk-table thead th { position:sticky; top:0; background:#F7E0BD; color:#5b3a1e; z-index:2; }
