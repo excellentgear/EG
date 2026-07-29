@@ -121,6 +121,9 @@ $jsPerms = [
     'leave_type' => $leaveTypePerm,
     'hr_user' => $hrUserPerm
 ];
+
+// 共用帳號管理（ai-rules/13）：帳號人事屬性，僅管理者（A）可操作
+$isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
 // --- 結束權限檢查 ---
 ?>
 <!DOCTYPE html>
@@ -164,6 +167,17 @@ $jsPerms = [
         .scroll-to-top:hover {
             background-color: rgba(255, 255, 255, 0.7);
         }
+
+        /* 共用帳號管理（暖色系，見 ai-rules/10） */
+        .sa-table thead th { background: #F7E0BD; color: #5A3312; border-bottom: 2px solid #E0B27A; }
+        .sa-table tr.sa-active > td { background: #FCEFDC !important; }
+        .sa-table .sa-pick { color: #8C5A2B; font-weight: 600; }
+        .sa-btn-primary { background: #F0A24B; border: 1px solid #D9873A; color: #4A2B10; font-weight: 600; }
+        .sa-btn-primary:hover { background: #E08F36; color: #3B2109; }
+        .sa-btn-del { background: #F3E3D3; border: 1px solid #D9B98F; color: #7A3B12; }
+        .sa-btn-del:hover { background: #DD5138; border-color: #C2432D; color: #fff; }
+        .sa-note { background: #FBF3E7; border-left: 4px solid #F0A24B; padding: 10px 12px; font-size: 12.5px; color: #5A3312; border-radius: 3px; }
+        .sa-addbar { padding: 8px 10px; background: #FBF3E7; border-radius: 4px; }
     </style>
 </head>
 
@@ -195,6 +209,9 @@ $jsPerms = [
                         <a href="#dept-position-owner-section" class="btn btn-default btn-sm">指定負責人</a>
                         <?php endif; ?>
                         <a href="#leave-type-section" class="btn btn-default btn-sm">假別設定</a>
+                        <?php if ($isHrAdmin): ?>
+                        <a href="#shared-account-section" class="btn btn-default btn-sm">共用帳號管理</a>
+                        <?php endif; ?>
                     </div>
                 </div>
 
@@ -465,6 +482,74 @@ $jsPerms = [
                             </div>
                         </div>
                     </div>
+
+                    <?php if ($isHrAdmin): ?>
+                    <!-- 5. 共用帳號管理（ai-rules/13）：現場多人共用一個登入帳號時的成員綁定與通知轉送 -->
+                    <div id="shared-account-section" class="col-md-12 col-sm-12 col-xs-12">
+                        <div class="x_panel">
+                            <div class="x_title">
+                                <h2>共用帳號管理 <small style="color:#8a5a2b;">（現場多人共用一個登入帳號：綁定成員後，該員工的<b>指名通知</b>自動轉送到共用帳號，並標「【給 ○○○】」）</small></h2>
+                                <ul class="nav navbar-right panel_toolbox">
+                                    <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
+                                    <li><a class="close-link"><i class="fa fa-close"></i></a></li>
+                                </ul>
+                                <div class="clearfix"></div>
+                            </div>
+                            <div class="x_content">
+                                <div class="row">
+                                    <!-- 左：共用帳號清單 -->
+                                    <div class="col-md-5">
+                                        <h4 style="margin-top:0;">共用帳號</h4>
+                                        <div class="sa-addbar">
+                                            <select id="sa_cand" class="form-control input-sm" style="max-width:260px;display:inline-block;"></select>
+                                            <button type="button" class="btn btn-sm sa-btn-primary" id="sa_mark">標記為共用帳號</button>
+                                            <div class="text-muted" style="font-size:12px;margin-top:4px;">標記後<b>預設鎖定密碼</b>，避免現場有人隨手改掉害全廠登不進去。</div>
+                                        </div>
+                                        <table class="table table-hover sa-table" style="margin-top:10px;">
+                                            <thead>
+                                                <tr><th>帳號</th><th style="width:70px;">成員</th><th style="width:90px;">鎖密碼</th><th style="width:60px;"></th></tr>
+                                            </thead>
+                                            <tbody id="sa_list"><tr><td colspan="4" class="text-muted">載入中…</td></tr></tbody>
+                                        </table>
+                                    </div>
+
+                                    <!-- 右：選定共用帳號的成員 -->
+                                    <div class="col-md-7">
+                                        <h4 style="margin-top:0;">成員 <small id="sa_cur_name" class="text-muted">（請先於左側選擇共用帳號）</small></h4>
+                                        <div class="sa-addbar" id="sa_member_add" style="display:none;">
+                                            <select id="sa_emp" class="form-control input-sm" multiple size="5" style="max-width:300px;display:inline-block;vertical-align:top;"></select>
+                                            <div style="display:inline-block;vertical-align:top;margin-left:8px;">
+                                                <select id="sa_mode" class="form-control input-sm" style="width:180px;">
+                                                    <option value="attach">綁定依附（只送共用帳號）</option>
+                                                    <option value="notify">開通（本人＋共用帳號雙送）</option>
+                                                </select>
+                                                <button type="button" class="btn btn-sm sa-btn-primary" id="sa_add" style="margin-top:6px;">加入成員</button>
+                                                <div class="text-muted" style="font-size:12px;margin-top:4px;max-width:180px;">可按住 Ctrl 多選。</div>
+                                            </div>
+                                        </div>
+                                        <table class="table table-hover sa-table" style="margin-top:10px;">
+                                            <thead>
+                                                <tr><th>員工</th><th style="width:220px;">模式</th><th style="width:80px;">啟用</th><th style="width:60px;"></th></tr>
+                                            </thead>
+                                            <tbody id="sa_members"><tr><td colspan="4" class="text-muted">—</td></tr></tbody>
+                                        </table>
+                                        <div class="sa-note">
+                                            <b>兩種模式差別：</b>
+                                            <ul style="margin:4px 0 0 18px;padding:0;">
+                                                <li><b>綁定依附 attach</b>：員工平常不登入系統（帳密保留不取消）。通知<b>只送共用帳號</b>；本人不推播，但他日後登入時站內清單仍看得到。</li>
+                                                <li><b>開通 notify</b>：員工自己也在用系統（例如現場主管）。<b>本人＋共用帳號雙送</b>。</li>
+                                            </ul>
+                                            <div style="margin-top:6px;">
+                                                轉送只作用在<b>指名通知</b>（點名給某人的簽核/待辦/提醒）；全體、部門、身分別的廣播公告不會逐人轉送，避免現場平板被洗版。
+                                                共用帳號上按「已閱／回簽」時<b>須輸入該員工本人密碼</b>，紀錄才會記在本人身上（已讀名單與可追溯性）。
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
@@ -560,6 +645,127 @@ $jsPerms = [
     // 將後端權限資料注入到全域變數
     window.currentUserPerms = <?php echo json_encode($jsPerms); ?>;
 </script>
+
+<?php if ($isHrAdmin): ?>
+<script>
+// ===== 共用帳號管理（ai-rules/13）=====
+$(function () {
+    var SA_API = '../../src/store/_shared_account_api.php';
+    var saToken = '', saCur = 0, saCurName = '', saEmployees = [];
+
+    function esc(s) { return $('<i>').text(s == null ? '' : s).html(); }
+    function saPost(action, data, cb) {
+        data = data || {}; data.action = action; data.csrf = saToken;
+        $.post(SA_API, data, function (r) {
+            if (r && r.ok) { cb && cb(r); }
+            else { alert((r && r.msg) || '操作失敗'); }
+        }, 'json').fail(function () { alert('連線失敗'); });
+    }
+
+    function saLoad() {
+        $.get(SA_API, { action: 'list' }, function (r) {
+            if (!r || !r.ok) { $('#sa_list').html('<tr><td colspan="4" class="text-muted">' + esc((r && r.msg) || '載入失敗') + '</td></tr>'); return; }
+            saToken = r.token || '';
+            saEmployees = r.employees || [];
+
+            var opt = '<option value="">— 選擇要標記的帳號 —</option>';
+            (r.candidates || []).forEach(function (c) {
+                opt += '<option value="' + c.id + '">' + esc(c.user_cname) + '（' + esc(c.user_uname) + '）'
+                     + (String(c.state) === '90' ? ' [公用]' : '') + '</option>';
+            });
+            $('#sa_cand').html(opt);
+
+            if (!(r.shared || []).length) {
+                $('#sa_list').html('<tr><td colspan="4" class="text-muted">尚未設定任何共用帳號</td></tr>');
+            } else {
+                var h = '';
+                (r.shared || []).forEach(function (s) {
+                    h += '<tr class="sa-row' + (String(s.id) === String(saCur) ? ' sa-active' : '') + '" data-id="' + s.id + '" data-name="' + esc(s.user_cname) + '">'
+                       + '<td><a href="javascript:;" class="sa-pick">' + esc(s.user_cname) + '</a><div class="text-muted" style="font-size:12px;">' + esc(s.user_uname) + '</div></td>'
+                       + '<td>' + s.member_cnt + '</td>'
+                       + '<td><label style="font-weight:400;margin:0;"><input type="checkbox" class="sa-lock" ' + (String(s.lock_password) === '1' ? 'checked' : '') + '> 鎖定</label></td>'
+                       + '<td><button type="button" class="btn btn-xs sa-btn-del sa-unmark" title="取消共用帳號標記">取消</button></td>'
+                       + '</tr>';
+                });
+                $('#sa_list').html(h);
+            }
+            if (saCur) saLoadMembers(saCur, saCurName);
+        }, 'json');
+    }
+
+    function saLoadMembers(sid, name) {
+        saCur = sid; saCurName = name;
+        $('#sa_cur_name').text('（' + name + '）');
+        $('#sa_member_add').show();
+        var opt = '';
+        saEmployees.forEach(function (e) {
+            if (String(e.id) === String(sid)) return;
+            opt += '<option value="' + e.id + '">' + esc(e.user_cname) + '（' + esc(e.user_uname) + '）</option>';
+        });
+        $('#sa_emp').html(opt);
+
+        $.get(SA_API, { action: 'members', shared_uid: sid }, function (r) {
+            if (!r || !r.ok) { $('#sa_members').html('<tr><td colspan="4" class="text-muted">載入失敗</td></tr>'); return; }
+            if (!(r.members || []).length) { $('#sa_members').html('<tr><td colspan="4" class="text-muted">尚未加入任何成員</td></tr>'); return; }
+            var h = '';
+            r.members.forEach(function (m) {
+                h += '<tr data-rid="' + m.id + '">'
+                   + '<td>' + esc(m.user_cname) + '<div class="text-muted" style="font-size:12px;">' + esc(m.user_uname) + '</div></td>'
+                   + '<td><select class="form-control input-sm sa-mode">'
+                   + '<option value="attach"' + (m.mode === 'attach' ? ' selected' : '') + '>綁定依附</option>'
+                   + '<option value="notify"' + (m.mode === 'notify' ? ' selected' : '') + '>開通（雙送）</option>'
+                   + '</select></td>'
+                   + '<td><input type="checkbox" class="sa-active" ' + (String(m.active) === '1' ? 'checked' : '') + '></td>'
+                   + '<td><button type="button" class="btn btn-xs sa-btn-del sa-remove">移除</button></td>'
+                   + '</tr>';
+            });
+            $('#sa_members').html(h);
+        }, 'json');
+    }
+
+    $('#sa_mark').on('click', function () {
+        var uid = $('#sa_cand').val();
+        if (!uid) { alert('請先選擇帳號'); return; }
+        saPost('set_shared', { uid: uid, on: 1 }, saLoad);
+    });
+    $('#sa_list').on('click', '.sa-pick', function () {
+        var $tr = $(this).closest('tr');
+        $('#sa_list tr').removeClass('sa-active'); $tr.addClass('sa-active');
+        saLoadMembers($tr.data('id'), $tr.data('name'));
+    });
+    $('#sa_list').on('change', '.sa-lock', function () {
+        var $tr = $(this).closest('tr');
+        saPost('set_lock', { uid: $tr.data('id'), on: this.checked ? 1 : 0 });
+    });
+    $('#sa_list').on('click', '.sa-unmark', function () {
+        var $tr = $(this).closest('tr');
+        if (!confirm('取消「' + $tr.data('name') + '」的共用帳號標記？該帳號將不再接收成員的轉送通知。')) return;
+        saPost('set_shared', { uid: $tr.data('id'), on: 0 }, function () {
+            if (String(saCur) === String($tr.data('id'))) { saCur = 0; $('#sa_members').html('<tr><td colspan="4" class="text-muted">—</td></tr>'); $('#sa_member_add').hide(); $('#sa_cur_name').text('（請先於左側選擇共用帳號）'); }
+            saLoad();
+        });
+    });
+    $('#sa_add').on('click', function () {
+        var ids = $('#sa_emp').val();
+        if (!saCur) { alert('請先於左側選擇共用帳號'); return; }
+        if (!ids || !ids.length) { alert('請選擇要加入的員工'); return; }
+        saPost('add_member', { shared_uid: saCur, member_uids: ids, mode: $('#sa_mode').val() }, saLoad);
+    });
+    $('#sa_members').on('change', '.sa-mode', function () {
+        saPost('set_mode', { id: $(this).closest('tr').data('rid'), mode: $(this).val() });
+    });
+    $('#sa_members').on('change', '.sa-active', function () {
+        saPost('set_active', { id: $(this).closest('tr').data('rid'), on: this.checked ? 1 : 0 }, saLoad);
+    });
+    $('#sa_members').on('click', '.sa-remove', function () {
+        if (!confirm('移除此成員綁定？')) return;
+        saPost('remove_member', { id: $(this).closest('tr').data('rid') }, saLoad);
+    });
+
+    saLoad();
+});
+</script>
+<?php endif; ?>
 
 <script>
     $(document).ready(function() {
