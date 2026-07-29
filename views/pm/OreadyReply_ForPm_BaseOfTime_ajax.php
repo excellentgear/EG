@@ -1568,6 +1568,53 @@ else if (isset($_POST['action']) && $_POST['action'] === 'mark_skip') {
     exit;
 }
 
+// ── 本關已移轉：直接把該關(bom_ing_fid 所屬的 bom_sn)設為 E(生管已移轉) ──────
+// 由「快速移轉」跳窗內的「本關已移轉」按鈕呼叫，前端需先做輸入大寫 OK 的二次確認，
+// 後端同樣要求 confirm=OK 才執行，避免誤觸或被其他程式誤呼叫。
+else if (isset($_POST['action']) && $_POST['action'] === 'mark_process_transferred') {
+    session_write_close();
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $fid     = trim($_POST['bom_ing_fid'] ?? '');
+    $confirm = (string)($_POST['confirm'] ?? '');
+    $uid     = $_SESSION['id'] ?? 'system';
+    if ($confirm !== 'OK') { echo json_encode(['success'=>false,'message'=>'二次確認碼不正確（需輸入大寫 OK）']); exit; }
+    if ($fid === '')       { echo json_encode(['success'=>false,'message'=>'缺少fid']); exit; }
+    try {
+        $chk = $db->prepare("SELECT bom_ing_fid, bom, bom_sn, process_no, batch_label, processing_state FROM bom_ing WHERE bom_ing_fid = ?");
+        $chk->execute([$fid]);
+        $row = $chk->fetch(PDO::FETCH_ASSOC);
+        if (!$row) { echo json_encode(['success'=>false,'message'=>'找不到對應製程記錄 (fid='.$fid.')']); exit; }
+        $cur = (string)$row['processing_state'];
+        if ($cur === 'E') {
+            echo json_encode(['success'=>false,'no_action'=>true,'message'=>'本關已經是「生管已移轉(E)」，無須重複設定。','fid'=>$fid,'current_state'=>$cur]);
+            exit;
+        }
+        $db->beginTransaction();
+        $stmt = $db->prepare("UPDATE bom_ing SET processing_state='E', Modified_At=NOW(), Modified_By=:u WHERE bom_ing_fid=:f");
+        $stmt->execute([':u'=>$uid, ':f'=>$fid]);
+        $db->prepare("INSERT INTO bom_ing_event (bom_ing_fid, event_type, event_note, Created_By) VALUES (?,?,?,?)")
+            ->execute([$fid, 'mark_transferred', '跳窗「本關已移轉」：'.$cur.' → E（第'.$row['bom_sn'].'關'.($row['batch_label'] ? ' 批次'.$row['batch_label'] : '').'）', $uid]);
+        $db->commit();
+        echo json_encode([
+            'success'       => true,
+            'message'       => '本關已設為生管已移轉(E)。',
+            'fid'           => $fid,
+            'bom'           => $row['bom'],
+            'bom_sn'        => $row['bom_sn'],
+            'prev_state'    => $cur,
+            'new_state'     => 'E',
+            'rows_affected' => $stmt->rowCount()
+        ]);
+    } catch(PDOException $e){
+        if ($db->inTransaction()) $db->rollBack();
+        echo json_encode(['success'=>false,'message'=>$e->getMessage(),'fid'=>$fid]);
+    }
+    exit;
+}
+
 // ── 取消結案 ──────────────────────────────────────────────────────────────
 else if (isset($_POST['action']) && $_POST['action'] === 'cancel_bom_close') {
     session_write_close();
