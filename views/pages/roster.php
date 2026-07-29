@@ -250,7 +250,10 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                         <span style="flex:1"></span>
                         <select id="shiftFilterPerson" class="form-control input-sm" style="width:120px" onchange="R.loadShiftCal()"><option value="0">全部人員</option></select>
                         <button class="btn btn-sm btn-default" onclick="R.exportShiftPdf()" title="匯出目前兩個月完整班表"><i class="fa fa-file-pdf-o"></i> PDF</button>
-                        <span id="shiftEditTools" style="display:none"><button class="btn btn-sm btn-warning" onclick="R.openShiftAssign()"><i class="fa fa-user-plus"></i> 排班</button></span>
+                        <span id="shiftEditTools" style="display:none">
+                            <button class="btn btn-sm btn-default" onclick="R.openShiftBatch()" title="批次修改/移除已建立的排班"><i class="fa fa-pencil-square-o"></i> 批次編輯</button>
+                            <button class="btn btn-sm btn-warning" onclick="R.openShiftAssign()"><i class="fa fa-user-plus"></i> 排班</button>
+                        </span>
                     </div>
                     <div class="legend" style="margin-bottom:8px;">
                         圖例：<b style="background:#efe6d8"></b>休假 <b style="background:#fff6e8"></b>補班 <b style="background:var(--amber)"></b>已簽核 <b style="background:#fff;box-shadow:inset 0 0 0 2px #8c5320"></b>我的班 ・<span class="leave-stamp" style="width:14px;height:14px;line-height:11px">休</span>整天請假 ・<span class="leave-stamp half" style="width:14px;height:14px;line-height:11px">半</span>半天 ・「代」＝代理補班
@@ -402,6 +405,47 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         </div>
     </div>
     <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">取消</button><button class="btn btn-warning" onclick="R.submitShiftAssign()"><i class="fa fa-save"></i> 排入</button></div>
+</div></div></div>
+
+<!-- 批次編輯排班 modal -->
+<div class="modal fade" id="shiftBatchModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+    <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title">批次編輯排班</h4></div>
+    <div class="modal-body">
+        <div style="color:#a08c72;font-size:12px;margin-bottom:8px;"><i class="fa fa-info-circle"></i> 先設定「要改哪些排班」的條件 → 預覽 → 選擇動作套用。</div>
+        <div style="background:var(--warm-bg);border:1px solid var(--warm-line);border-radius:5px;padding:10px;margin-bottom:10px;">
+            <b style="color:var(--warm-head)">① 條件（找出要修改的排班）</b>
+            <div class="row" style="margin-top:6px;">
+                <div class="col-sm-4 form-group"><label>班別</label><select id="bt_shift" class="form-control"></select></div>
+                <div class="col-sm-4 form-group"><label>起 *</label><input type="date" id="bt_from" class="form-control"></div>
+                <div class="col-sm-4 form-group"><label>迄 *</label><input type="date" id="bt_to" class="form-control"></div>
+            </div>
+            <div class="form-group"><label>只找這些星期（不選＝全部）</label><div>
+                <?php foreach (['一','二','三','四','五','六','日'] as $i => $w): ?><label class="checkbox-inline"><input type="checkbox" class="bt-wd" value="<?= $i+1 ?>"><?= $w ?></label><?php endforeach; ?>
+            </div></div>
+            <div class="form-group"><label>人員（不選＝該班別全部人）</label>
+                <input type="text" class="form-control input-sm" id="bt_search" placeholder="搜尋姓名/部門/職稱" oninput="R.btFilter()" style="margin-bottom:5px">
+                <div style="margin-bottom:4px"><a href="#" onclick="R.btAll(true);return false;">全選(目前顯示)</a> ｜ <a href="#" onclick="R.btAll(false);return false;">全不選</a> <span id="bt_count" style="color:#b5651d;font-weight:bold;margin-left:8px;">已選 0 人</span></div>
+                <div id="bt_users" style="max-height:150px;overflow:auto;border:1px solid var(--warm-line);border-radius:5px;padding:6px"></div>
+            </div>
+            <button class="btn btn-default btn-sm" onclick="R.btPreview()"><i class="fa fa-search"></i> 預覽符合的排班</button>
+            <span id="bt_result" style="margin-left:8px;color:#b5651d;font-weight:bold;"></span>
+        </div>
+        <div id="bt_list" style="max-height:200px;overflow:auto;margin-bottom:10px;"></div>
+        <div style="background:var(--warm-bg);border:1px solid var(--warm-line);border-radius:5px;padding:10px;">
+            <b style="color:var(--warm-head)">② 要做什麼</b>
+            <div style="margin-top:6px;">
+                <label style="font-weight:400;display:block"><input type="radio" name="btOp" value="shift" checked onchange="R.btOpChange()"> 改成別的班別</label>
+                <div id="bt_op_shift" style="margin:4px 0 8px 22px;"><select id="bt_new_shift" class="form-control" style="max-width:340px"></select></div>
+                <label style="font-weight:400;display:block"><input type="radio" name="btOp" value="user" onchange="R.btOpChange()"> 換成別的人員</label>
+                <div id="bt_op_user" style="display:none;margin:4px 0 8px 22px;">
+                    <select id="bt_new_user" class="form-control" style="max-width:340px"></select>
+                    <div class="checkbox"><label><input type="checkbox" id="bt_agent"> 標記為代理</label></div>
+                </div>
+                <label style="font-weight:400;display:block;color:#c0392b"><input type="radio" name="btOp" value="delete" onchange="R.btOpChange()"> 移除這些排班</label>
+            </div>
+        </div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">取消</button><button class="btn btn-warning" onclick="R.btApply()"><i class="fa fa-check"></i> 套用</button></div>
 </div></div></div>
 
 <!-- 班別當日 modal -->
@@ -1281,6 +1325,58 @@ var R = (function(){
     function refreshShiftDay(){ if($('#shiftDayModal').is(':visible')){ var t=$('#shiftDayTitle').text().slice(0,10); setTimeout(function(){openShiftDay(t);},150); } }
     function shiftSign(aid,to){ post(to?'shift_sign':'shift_unsign',{aid:aid}).done(function(r){ if(!r.success){alert(r.message);return;} loadShiftCal(); refreshShiftDay(); }); }
     function delShiftAssign(aid){ if(!confirm('移除這筆排班？')) return; post('del_shift_assign',{aid:aid}).done(function(r){ if(!r.success){alert(r.message);return;} loadShiftCal(); refreshShiftDay(); }); }
+    /* ── 批次編輯排班 ── */
+    var btRows=[];
+    function openShiftBatch(){
+        var ss=(window.__shifts||[]);
+        if(!ss.length){ alert('尚無班別'); return; }
+        var opt=ss.map(function(s){return '<option value="'+s.id+'">'+esc(s.name)+'（'+String(s.start_time).substring(0,5)+'~'+String(s.end_time).substring(0,5)+'）</option>';}).join('');
+        $('#bt_shift').html('<option value="0">— 全部班別 —</option>'+opt);
+        $('#bt_new_shift').html(ss.filter(function(s){return +s.is_active===1;}).map(function(s){return '<option value="'+s.id+'">'+esc(s.name)+'（'+String(s.start_time).substring(0,5)+'~'+String(s.end_time).substring(0,5)+'）</option>';}).join(''));
+        $('#bt_new_user').html(userOptions(0));
+        var t=shiftCalData?shiftCalData.today:new Date().toISOString().slice(0,10);
+        $('#bt_from').val(t); $('#bt_to').val((new Date(new Date(t).getTime()+30*864e5)).toISOString().slice(0,10));
+        $('.bt-wd').prop('checked',false); $('#bt_search').val(''); $('#bt_agent').prop('checked',false);
+        $('#bt_users').html(RD.users.map(function(u){return '<label class="btitem" style="display:block;font-weight:normal;margin:1px 0"><input type="checkbox" value="'+u.id+'" onchange="R.btSync()"> '+esc(u.user_cname)+posLabel(u)+'</label>';}).join(''));
+        btRows=[]; $('#bt_list').empty(); $('#bt_result').text(''); btSync(); btOpChange();
+        $('#shiftBatchModal').modal('show');
+    }
+    function btFilter(){ var q=$('#bt_search').val().toLowerCase(); $('#bt_users .btitem').each(function(){ $(this).toggle($(this).text().toLowerCase().indexOf(q)>=0); }); }
+    function btAll(v){ $('#bt_users .btitem:visible input').prop('checked',v); btSync(); }
+    function btSync(){ $('#bt_count').text('已選 '+$('#bt_users input:checked').length+' 人'); }
+    function btOpChange(){ var v=$('[name=btOp]:checked').val(); $('#bt_op_shift').toggle(v==='shift'); $('#bt_op_user').toggle(v==='user'); }
+    function btPreview(){
+        var p={shift_type_id:+$('#bt_shift').val()||0, user_ids:$('#bt_users input:checked').map(function(){return +this.value;}).get(),
+               date_from:$('#bt_from').val(), date_to:$('#bt_to').val(), weekdays:$('.bt-wd:checked').map(function(){return +this.value;}).get()};
+        if(!p.date_from||!p.date_to){ alert('請選日期區間'); return; }
+        post('preview_shift_batch',p).done(function(r){
+            if(!r.success){ alert(r.message); return; }
+            btRows=r.rows||[];
+            $('#bt_result').text('符合 '+r.count+' 筆');
+            if(!btRows.length){ $('#bt_list').html('<div style="color:#a08c72;padding:8px">沒有符合條件的排班</div>'); return; }
+            var h='<table class="rst-list"><tr><th>日期</th><th>班別</th><th>人員</th></tr>';
+            btRows.forEach(function(x){ h+='<tr><td>'+x.work_date+'</td><td>'+esc(x.shift_name)+'</td><td>'+esc(x.user_name)+'</td></tr>'; });
+            $('#bt_list').html(h+'</table>');
+        });
+    }
+    function btApply(){
+        if(!btRows.length){ alert('請先按「預覽符合的排班」，確認要修改哪些'); return; }
+        var op=$('[name=btOp]:checked').val();
+        var ids=btRows.map(function(x){return x.id;});
+        var d={ids:ids, op:op};
+        var msg='';
+        if(op==='shift'){ d.new_shift_type_id=+$('#bt_new_shift').val(); msg='把這 '+ids.length+' 筆改成「'+$('#bt_new_shift option:selected').text()+'」？'; }
+        else if(op==='user'){ d.new_user_id=+$('#bt_new_user').val(); d.is_agent=$('#bt_agent').is(':checked')?1:0; msg='把這 '+ids.length+' 筆換成「'+$('#bt_new_user option:selected').text()+'」？'; }
+        else { msg='確定移除這 '+ids.length+' 筆排班？此動作無法復原。'; }
+        if(!confirm(msg)) return;
+        post('apply_shift_batch',d).done(function(r){
+            if(!r.success){ alert(r.message); return; }
+            $('#shiftBatchModal').modal('hide');
+            alert('已處理 '+r.affected+' 筆'+(r.skipped?('，略過 '+r.skipped+' 筆（重複或已相同）'):''));
+            loadShiftCal();
+        });
+    }
+
     function editShiftAssign(aid){
         var c=null; Object.keys(shiftCalData.cells).forEach(function(d){ (shiftCalData.cells[d]||[]).forEach(function(x){ if(x.aid===aid){c=x;c.__d=d;} }); });
         if(!c) return;
@@ -1343,6 +1439,7 @@ var R = (function(){
         shiftExpand:function(d){ shiftExpanded[d]=!shiftExpanded[d]; renderShiftCal(); },
         exportPdf:exportPdf, exportShiftPdf:exportShiftPdf,
         saSync:saSync, saClearAll:saClearAll, saToggle:saToggle, editShiftAssign:editShiftAssign,
+        openShiftBatch:openShiftBatch, btFilter:btFilter, btAll:btAll, btSync:btSync, btOpChange:btOpChange, btPreview:btPreview, btApply:btApply,
         initShiftTab:initShiftTab, openShiftEdit:openShiftEdit, pickShiftColor:pickShiftColor, saveShift:saveShift, delShift:delShift, updShiftHint:updShiftHint,
         loadShiftCal:loadShiftCal, toggleShiftLane:toggleShiftLane, shiftMoveMonth:shiftMoveMonth, shiftGoToday:shiftGoToday,
         openShiftAssign:openShiftAssign, saFilter:saFilter, saAll:saAll, submitShiftAssign:submitShiftAssign, openShiftDay:openShiftDay, shiftSign:shiftSign, delShiftAssign:delShiftAssign,

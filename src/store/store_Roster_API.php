@@ -918,6 +918,88 @@ case 'update_shift_assign': {
     jout();
 }
 
+/* ── 固定班別排班：批次預覽（依條件列出將受影響的排班）── */
+case 'preview_shift_batch': {
+    $sid = (int)($_POST['shift_type_id'] ?? 0);
+    $users = array_values(array_unique(array_filter(array_map('intval', $_POST['user_ids'] ?? []))));
+    $df = $_POST['date_from'] ?? ''; $dt = $_POST['date_to'] ?? '';
+    $weekdays = array_filter(array_map('intval', $_POST['weekdays'] ?? []), fn($x) => $x >= 1 && $x <= 7);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $df) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dt)) jfail('日期格式錯誤');
+    if ($df > $dt) jfail('起訖顛倒');
+    $sql = "SELECT sa.id, sa.work_date, sa.user_id, sa.shift_type_id, st.name AS shift_name
+            FROM roster_shift_assign sa JOIN roster_shift_type st ON st.id=sa.shift_type_id
+            WHERE sa.work_date BETWEEN ? AND ?";
+    $args = [$df, $dt];
+    if ($sid > 0) { $sql .= " AND sa.shift_type_id=?"; $args[] = $sid; }
+    if ($users)   { $sql .= " AND sa.user_id IN (" . implode(',', array_fill(0, count($users), '?')) . ")"; $args = array_merge($args, $users); }
+    if ($weekdays) { $sql .= " AND DAYOFWEEK(sa.work_date) IN (" . implode(',', array_map(fn($d) => ($d % 7) + 1, $weekdays)) . ")"; }
+    $sql .= " ORDER BY sa.work_date, sa.user_id";
+    $q = $pdo->prepare($sql); $q->execute($args); $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+    $nm = roster_user_name_map($pdo, array_map(fn($r) => (int)$r['user_id'], $rows));
+    foreach ($rows as &$r) $r['user_name'] = $nm[(int)$r['user_id']]['name'] ?? ('#' . $r['user_id']);
+    unset($r);
+    jout(['rows' => $rows, 'count' => count($rows)]);
+}
+
+/* ── 固定班別排班：批次套用（改班別／換人／移除）── */
+case 'apply_shift_batch': {
+    if (!$CAN_CREATE && !$IS_ADMIN) jerr('無權限', 403);
+    $ids = array_values(array_unique(array_filter(array_map('intval', $_POST['ids'] ?? []))));
+    $op = $_POST['op'] ?? '';
+    if (!$ids) jfail('沒有要處理的排班');
+    if (count($ids) > 3000) jfail('一次處理上限 3000 筆，請縮小範圍');
+    $in = implode(',', array_fill(0, count($ids), '?'));
+
+    if ($op === 'delete') {
+        $pdo->prepare("DELETE FROM roster_shift_assign WHERE id IN ($in)")->execute($ids);
+        jout(['affected' => count($ids), 'op' => 'delete']);
+    }
+    if ($op === 'shift') {
+        $newSid = (int)($_POST['new_shift_type_id'] ?? 0);
+        if ($newSid <= 0) jfail('請選新班別');
+        $chk = $pdo->prepare("SELECT 1 FROM roster_shift_type WHERE id=?"); $chk->execute([$newSid]);
+        if (!$chk->fetchColumn()) jerr('班別不存在', 404);
+        $done = 0; $skip = 0;
+        $pdo->beginTransaction();
+        try {
+            $sel = $pdo->prepare("SELECT id,user_id,work_date FROM roster_shift_assign WHERE id IN ($in)");
+            $sel->execute($ids);
+            $dup = $pdo->prepare("SELECT 1 FROM roster_shift_assign WHERE shift_type_id=? AND user_id=? AND work_date=? AND id<>?");
+            $up = $pdo->prepare("UPDATE roster_shift_assign SET shift_type_id=?, sign_status=0, signed_at=NULL, signed_by=NULL WHERE id=?");
+            foreach ($sel->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $dup->execute([$newSid, $r['user_id'], $r['work_date'], $r['id']]);
+                if ($dup->fetchColumn()) { $skip++; continue; }   // 已在新班別 → 跳過
+                $up->execute([$newSid, $r['id']]); $done++;
+            }
+            $pdo->commit();
+        } catch (Exception $e) { $pdo->rollBack(); jfail('批次改班別失敗：' . $e->getMessage()); }
+        jout(['affected' => $done, 'skipped' => $skip, 'op' => 'shift']);
+    }
+    if ($op === 'user') {
+        $newUid = (int)($_POST['new_user_id'] ?? 0);
+        $isAgent = !empty($_POST['is_agent']) ? 1 : 0;
+        if ($newUid <= 0) jfail('請選新人員');
+        $done = 0; $skip = 0;
+        $pdo->beginTransaction();
+        try {
+            $sel = $pdo->prepare("SELECT id,user_id,orig_user_id,shift_type_id,work_date FROM roster_shift_assign WHERE id IN ($in)");
+            $sel->execute($ids);
+            $dup = $pdo->prepare("SELECT 1 FROM roster_shift_assign WHERE shift_type_id=? AND user_id=? AND work_date=? AND id<>?");
+            $up = $pdo->prepare("UPDATE roster_shift_assign SET user_id=?, orig_user_id=?, is_agent=?, sign_status=0, signed_at=NULL, signed_by=NULL WHERE id=?");
+            foreach ($sel->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                if ((int)$r['user_id'] === $newUid) { $skip++; continue; }
+                $dup->execute([$r['shift_type_id'], $newUid, $r['work_date'], $r['id']]);
+                if ($dup->fetchColumn()) { $skip++; continue; }   // 該員當天已在此班別
+                $orig = $r['orig_user_id'] ?: $r['user_id'];
+                $up->execute([$newUid, $orig, $isAgent, $r['id']]); $done++;
+            }
+            $pdo->commit();
+        } catch (Exception $e) { $pdo->rollBack(); jfail('批次換人失敗：' . $e->getMessage()); }
+        jout(['affected' => $done, 'skipped' => $skip, 'op' => 'user']);
+    }
+    jfail('未知的批次動作');
+}
+
 /* ── 固定班別排班：移除一筆 ── */
 case 'del_shift_assign': {
     if (!$CAN_CREATE && !$IS_ADMIN) jerr('無權限', 403);
