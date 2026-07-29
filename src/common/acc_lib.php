@@ -368,6 +368,357 @@ function acc_import_apply(PDO $db, array $items, string $userId): array
             'message' => "已更新 {$applied} 家客戶" . ($skipped ? "，略過 {$skipped} 家" : '')];
 }
 
+/* ============================================================
+ * 帳款月份（結帳日切月）
+ *
+ * 口徑沿用 Shipping_Analysis_new.php 的 compute_billing_month_global，
+ * 但額外支援客戶自己的結帳日（customer_list.settlement_mode / settlement_day）：
+ *   FIXED    → 用 settlement_day（實測 908 家 = 25、5 家 = 20）
+ *   EOM      → 月底結帳，等於不跨月（實測 11 家）
+ *   VARIABLE → 無固定規則，退回用全域截止日（實測 1 家）
+ * is_list / ir_track 的 billing_month_override 一律優先於上述計算。
+ * ============================================================ */
+
+/** 全域帳款月份截止日（system_settings.billing_cutoff_day，實測 = 25） */
+function acc_global_cutoff(PDO $db): int
+{
+    static $c = null;
+    if ($c !== null) return $c;
+    try {
+        $st = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key='billing_cutoff_day' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        $c = ($v !== false) ? (int)$v : 0;
+    } catch (Throwable $e) { $c = 0; }
+    return $c;
+}
+
+/** 營業稅率（system_settings.acc_tax_rate，預設 5%） */
+function acc_tax_rate(PDO $db): float
+{
+    static $r = null;
+    if ($r !== null) return $r;
+    try {
+        $st = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key='acc_tax_rate' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        $r = ($v !== false && $v !== '' && (float)$v > 0) ? (float)$v : 0.05;
+    } catch (Throwable $e) { $r = 0.05; }
+    return $r;
+}
+
+/** 取某客戶適用的結帳日；回傳 0 = 不跨月（當月即帳款月） */
+function acc_cutoff_for(?array $cust, int $global): int
+{
+    if (!$cust) return $global;
+    $mode = strtoupper(trim((string)($cust['settlement_mode'] ?? '')));
+    if ($mode === 'EOM') return 0;                       // 月底結帳＝不跨月
+    if ($mode === 'FIXED') {
+        $d = (int)($cust['settlement_day'] ?? 0);
+        if ($d >= 1 && $d <= 31) return $d;
+    }
+    return $global;                                      // VARIABLE 或未設定
+}
+
+/** 依出貨/退貨日期與結帳日算出帳款月份 YYYY-MM */
+function acc_billing_month(string $date, int $cutoff): string
+{
+    $ts = strtotime($date);
+    if ($ts === false) return '';
+    $y = (int)date('Y', $ts);
+    $m = (int)date('n', $ts);
+    $d = (int)date('j', $ts);
+    if ($cutoff > 0 && $d > $cutoff) {
+        return ($m === 12) ? sprintf('%04d-01', $y + 1) : sprintf('%04d-%02d', $y, $m + 1);
+    }
+    return sprintf('%04d-%02d', $y, $m);
+}
+
+/** 帳款月份對應要掃描的出貨日期區間（放寬一個月，實際歸屬再逐列精算） */
+function acc_scan_range(string $bmFrom, string $bmTo): array
+{
+    $from = date('Y-m-d', strtotime($bmFrom . '-01 -1 month'));
+    $to   = date('Y-m-t', strtotime($bmTo . '-01'));
+    return [$from, $to];
+}
+
+/* ============================================================
+ * 應收對帳（客戶 × 帳款月份）
+ * ============================================================ */
+
+/**
+ * 應收金額口徑（重要）：
+ *  - 不使用 is_sale_type.is_count——那是「本業業績統計」用的旗標。
+ *    機台買賣/刀具/砂輪/非本業 的 is_count=0，但那些都是真的要開發票收錢的。
+ *  - 計入所有金額不為 0 的出貨列；退貨(ir_track)金額則從應收扣除。
+ *  - is_sale_type.exclude_when_nonzero=1（備註、歸還NG）本來就該是 0 元，
+ *    若出現金額不視為正常，計入但另外標記為待確認，不靜默吞掉。
+ *  - ir_return_type.is_note=1（備註性質退貨）不計金額。
+ *
+ * @param array $f bm_from, bm_to (YYYY-MM), customer_id, kw, only_gap, sort, dir, page, per_page
+ */
+function acc_ar_summary(PDO $db, array $f): array
+{
+    $bmFrom = preg_match('/^\d{4}-\d{2}$/', (string)($f['bm_from'] ?? '')) ? $f['bm_from'] : date('Y-m');
+    $bmTo   = preg_match('/^\d{4}-\d{2}$/', (string)($f['bm_to'] ?? ''))   ? $f['bm_to']   : $bmFrom;
+    if ($bmTo < $bmFrom) [$bmFrom, $bmTo] = [$bmTo, $bmFrom];
+    [$scanFrom, $scanTo] = acc_scan_range($bmFrom, $bmTo);
+
+    $global = acc_global_cutoff($db);
+    $rate   = acc_tax_rate($db);
+
+    // 客戶主檔（用簡稱歸戶：近期 is_list.Client_id 幾乎為 NULL）
+    $cust = [];
+    foreach ($db->query("SELECT customer_id, customer, customer_full, tax_id, invoice_email,
+                                settlement_mode, settlement_day, payment_method, net_days
+                         FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+        if (trim((string)$c['customer']) !== '') $cust[trim($c['customer'])] = $c;
+    }
+
+    $bucket = [];   // key = customer_key|billing_month
+    $anomaly = [];
+
+    $addRow = function (string $name, string $bm, array $add) use (&$bucket, $cust) {
+        $c   = $cust[$name] ?? null;
+        $key = ($c ? $c['customer_id'] : '?' . $name) . '|' . $bm;
+        if (!isset($bucket[$key])) {
+            $bucket[$key] = [
+                'customer_id'    => $c['customer_id']   ?? null,
+                'customer'       => $name,
+                'customer_full'  => $c['customer_full'] ?? null,
+                'tax_id'         => $c['tax_id']        ?? null,
+                'invoice_email'  => $c['invoice_email'] ?? null,
+                'payment_method' => $c['payment_method'] ?? null,
+                'net_days'       => $c['net_days']      ?? null,
+                'in_master'      => (bool)$c,
+                'billing_month'  => $bm,
+                'ship_cnt' => 0, 'ship_amt' => 0.0,
+                'ret_cnt'  => 0, 'ret_amt'  => 0.0,
+                'anomaly'  => 0,
+            ];
+        }
+        foreach ($add as $k => $v) $bucket[$key][$k] += $v;
+    };
+
+    // ── 出貨 ────────────────────────────────────────────────────────────
+    $st = $db->prepare("
+        SELECT il.IS_id, il.IS_number, il.Client_name, il.Order_date, il.Qty, il.Unit_price,
+               il.sale_type, il.billing_month_override,
+               COALESCE(ist.exclude_when_nonzero, 0) AS excl_nonzero
+        FROM is_list il
+        LEFT JOIN is_sale_type ist ON ist.sale_type_id = il.sale_type
+        WHERE il.Order_date BETWEEN ? AND ?");
+    $st->execute([$scanFrom, $scanTo]);
+
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
+        if (abs($amt) < 0.0001) continue;                       // 0 元列不構成應收
+        $name = trim((string)$r['Client_name']);
+        if ($name === '') continue;
+
+        $bm = trim((string)$r['billing_month_override']);
+        if (!preg_match('/^\d{4}-\d{2}$/', $bm)) {
+            $bm = acc_billing_month($r['Order_date'], acc_cutoff_for($cust[$name] ?? null, $global));
+        }
+        if ($bm < $bmFrom || $bm > $bmTo) continue;
+
+        $bad = ((int)$r['excl_nonzero'] === 1);
+        $addRow($name, $bm, ['ship_cnt' => 1, 'ship_amt' => $amt, 'anomaly' => $bad ? 1 : 0]);
+        if ($bad) {
+            $anomaly[] = ['is_number' => $r['IS_number'], 'client' => $name, 'date' => $r['Order_date'],
+                          'amount' => $amt, 'reason' => '此出貨性質應為 0 元卻有金額，請確認'];
+        }
+    }
+
+    // ── 退貨（從應收扣除；備註性質不計金額）─────────────────────────────
+    $st2 = $db->prepare("
+        SELECT it.IR_id, it.IR_no, it.Client_name, it.IR_date, it.Qty, it.Unit_price,
+               it.billing_month_override, COALESCE(rt.is_note, 0) AS is_note
+        FROM ir_track it
+        LEFT JOIN ir_return_type rt ON rt.type_id = it.return_type_id
+        WHERE it.IR_date BETWEEN ? AND ?");
+    $st2->execute([$scanFrom, $scanTo]);
+
+    foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        if ((int)$r['is_note'] === 1) continue;
+        $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
+        if (abs($amt) < 0.0001) continue;
+        $name = trim((string)$r['Client_name']);
+        if ($name === '') continue;
+
+        $bm = trim((string)$r['billing_month_override']);
+        if (!preg_match('/^\d{4}-\d{2}$/', $bm)) {
+            $bm = acc_billing_month($r['IR_date'], acc_cutoff_for($cust[$name] ?? null, $global));
+        }
+        if ($bm < $bmFrom || $bm > $bmTo) continue;
+
+        $addRow($name, $bm, ['ret_cnt' => 1, 'ret_amt' => $amt]);
+    }
+
+    // ── 收斂成清單 ──────────────────────────────────────────────────────
+    $rows = [];
+    foreach ($bucket as $b) {
+        $net = $b['ship_amt'] - $b['ret_amt'];
+        $b['net_amt']   = $net;
+        $b['tax_amt']   = round($net * $rate);
+        $b['total_amt'] = $net + $b['tax_amt'];
+        $b['inv_ready'] = acc_invoice_ready($b);            // 能不能開發票
+        $rows[] = $b;
+    }
+
+    // 篩選
+    $kw = trim((string)($f['kw'] ?? ''));
+    if ($kw !== '') {
+        $rows = array_values(array_filter($rows, fn($r) =>
+            mb_stripos((string)$r['customer'], $kw) !== false
+            || mb_stripos((string)$r['customer_full'], $kw) !== false
+            || mb_stripos((string)$r['customer_id'], $kw) !== false));
+    }
+    if (!empty($f['customer_id'])) {
+        $rows = array_values(array_filter($rows, fn($r) => $r['customer_id'] === $f['customer_id']));
+    }
+    if (!empty($f['only_gap'])) {                            // 只看不能開發票的
+        $rows = array_values(array_filter($rows, fn($r) => $r['inv_ready'] !== 'ok'));
+    }
+
+    // 全部符合條件才算合計
+    $summary = ['groups' => count($rows), 'ship_amt' => 0.0, 'ret_amt' => 0.0,
+                'net_amt' => 0.0, 'tax_amt' => 0.0, 'total_amt' => 0.0,
+                'not_ready' => 0, 'not_in_master' => 0, 'anomaly' => count($anomaly)];
+    foreach ($rows as $r) {
+        $summary['ship_amt']  += $r['ship_amt'];
+        $summary['ret_amt']   += $r['ret_amt'];
+        $summary['net_amt']   += $r['net_amt'];
+        $summary['tax_amt']   += $r['tax_amt'];
+        $summary['total_amt'] += $r['total_amt'];
+        if ($r['inv_ready'] !== 'ok') $summary['not_ready']++;
+        if (!$r['in_master'])         $summary['not_in_master']++;
+    }
+
+    // 排序：預設應收金額由大到小
+    $sort = $f['sort'] ?? 'net_amt';
+    $dir  = (($f['dir'] ?? 'desc') === 'asc') ? 1 : -1;
+    usort($rows, function ($a, $b) use ($sort, $dir) {
+        switch ($sort) {
+            case 'customer':      return $dir * strnatcasecmp($a['customer'], $b['customer']);
+            case 'billing_month': return $dir * strcmp($a['billing_month'], $b['billing_month']);
+            case 'ship_amt':      return $dir * ($a['ship_amt'] <=> $b['ship_amt']);
+            case 'total_amt':     return $dir * ($a['total_amt'] <=> $b['total_amt']);
+            default:              return $dir * ($a['net_amt'] <=> $b['net_amt']);
+        }
+    });
+
+    $total   = count($rows);
+    $perPage = (int)($f['per_page'] ?? 20);
+    if ($perPage === 0) {
+        return ['rows' => $rows, 'total' => $total, 'page' => 1, 'per_page' => 0,
+                'summary' => $summary, 'anomaly' => $anomaly, 'tax_rate' => $rate,
+                'bm_from' => $bmFrom, 'bm_to' => $bmTo];
+    }
+    if (!in_array($perPage, [5, 10, 20, 50], true)) $perPage = 20;
+    $page = max(1, (int)($f['page'] ?? 1));
+
+    return [
+        'rows'     => array_slice($rows, ($page - 1) * $perPage, $perPage),
+        'total'    => $total, 'page' => $page, 'per_page' => $perPage,
+        'summary'  => $summary, 'anomaly' => $anomaly, 'tax_rate' => $rate,
+        'bm_from'  => $bmFrom, 'bm_to' => $bmTo,
+    ];
+}
+
+/** 單一客戶單一帳款月份的明細（對帳單內容） */
+function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
+{
+    if (!preg_match('/^\d{4}-\d{2}$/', $billingMonth)) return ['items' => [], 'head' => null];
+    [$scanFrom, $scanTo] = acc_scan_range($billingMonth, $billingMonth);
+    $global = acc_global_cutoff($db);
+    $rate   = acc_tax_rate($db);
+
+    $stc = $db->prepare("SELECT customer_id, customer, customer_full, tax_id, invoice_email,
+                                customer_address, billing_contact, settlement_mode, settlement_day,
+                                payment_method, net_days
+                         FROM customer_list WHERE customer = ? LIMIT 1");
+    $stc->execute([$clientName]);
+    $c = $stc->fetch(PDO::FETCH_ASSOC) ?: null;
+    $cut = acc_cutoff_for($c, $global);
+
+    $items = [];
+
+    $st = $db->prepare("
+        SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') AS d,
+               il.Product_id, il.Specification, il.Qty, il.Unit_price, il.Note,
+               il.billing_month_override, ot.Order_oo,
+               COALESCE(ist.sale_type_name,'') AS sale_type_name
+        FROM is_list il
+        LEFT JOIN order_track  ot  ON ot.Order_id = il.Order_id
+        LEFT JOIN is_sale_type ist ON ist.sale_type_id = il.sale_type
+        WHERE il.Client_name = ? AND il.Order_date BETWEEN ? AND ?
+        ORDER BY il.Order_date, il.IS_number, il.IS_id");
+    $st->execute([$clientName, $scanFrom, $scanTo]);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
+        if (abs($amt) < 0.0001) continue;
+        $bm = trim((string)$r['billing_month_override']);
+        if (!preg_match('/^\d{4}-\d{2}$/', $bm)) $bm = acc_billing_month($r['d'], $cut);
+        if ($bm !== $billingMonth) continue;
+        $items[] = ['kind' => 'ship', 'no' => $r['IS_number'], 'date' => $r['d'],
+                    'order_oo' => $r['Order_oo'], 'product_id' => $r['Product_id'],
+                    'spec' => $r['Specification'], 'qty' => (int)$r['Qty'],
+                    'unit_price' => (float)$r['Unit_price'], 'amount' => $amt,
+                    'note' => $r['Note'], 'sale_type' => $r['sale_type_name']];
+    }
+
+    $st2 = $db->prepare("
+        SELECT it.IR_no, DATE_FORMAT(it.IR_date,'%Y-%m-%d') AS d, it.d_id, it.Specification,
+               it.Qty, it.Unit_price, it.IR_ps, it.billing_month_override,
+               COALESCE(rt.is_note,0) AS is_note
+        FROM ir_track it
+        LEFT JOIN ir_return_type rt ON rt.type_id = it.return_type_id
+        WHERE it.Client_name = ? AND it.IR_date BETWEEN ? AND ?
+        ORDER BY it.IR_date, it.IR_no");
+    $st2->execute([$clientName, $scanFrom, $scanTo]);
+    foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        if ((int)$r['is_note'] === 1) continue;
+        $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
+        if (abs($amt) < 0.0001) continue;
+        $bm = trim((string)$r['billing_month_override']);
+        if (!preg_match('/^\d{4}-\d{2}$/', $bm)) $bm = acc_billing_month($r['d'], $cut);
+        if ($bm !== $billingMonth) continue;
+        $items[] = ['kind' => 'return', 'no' => $r['IR_no'], 'date' => $r['d'],
+                    'order_oo' => null, 'product_id' => $r['d_id'], 'spec' => $r['Specification'],
+                    'qty' => -(int)$r['Qty'], 'unit_price' => (float)$r['Unit_price'],
+                    'amount' => -$amt, 'note' => $r['IR_ps'], 'sale_type' => '退貨'];
+    }
+
+    usort($items, fn($a, $b) => strcmp($a['date'], $b['date']) ?: strcmp((string)$a['no'], (string)$b['no']));
+
+    $net = 0.0;
+    foreach ($items as $i) $net += $i['amount'];
+    $tax = round($net * $rate);
+
+    return [
+        'head' => [
+            'customer'       => $clientName,
+            'customer_id'    => $c['customer_id']   ?? null,
+            'customer_full'  => $c['customer_full'] ?? null,
+            'tax_id'         => $c['tax_id']        ?? null,
+            'address'        => $c['customer_address'] ?? null,
+            'contact'        => $c['billing_contact']  ?? null,
+            'payment_method' => $c['payment_method']   ?? null,
+            'net_days'       => $c['net_days']         ?? null,
+            'cutoff'         => $cut,
+            'billing_month'  => $billingMonth,
+            'in_master'      => (bool)$c,
+            'inv_ready'      => $c ? acc_invoice_ready($c) : 'no_tax',
+        ],
+        'items'     => $items,
+        'net_amt'   => $net,
+        'tax_amt'   => $tax,
+        'total_amt' => $net + $tax,
+        'tax_rate'  => $rate,
+    ];
+}
+
 /** 解析上傳的 CSV（支援 UTF-8 BOM 與 Big5），回傳 [表頭, 資料列] */
 function acc_parse_csv(string $raw): array
 {

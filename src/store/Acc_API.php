@@ -23,6 +23,21 @@ function acc_csrf_ok(?string $t): bool {
     return !empty($_SESSION['acc_csrf']) && is_string($t) && hash_equals($_SESSION['acc_csrf'], $t);
 }
 
+/* 未攔截的例外一律轉成 JSON 錯誤，不要回空白 500——
+   前端只會看到「載入失敗」而查不出原因。實測觸發點：非 UTF-8 的中文參數
+   打到 utf8mb3 欄位會噴 SQLSTATE 3854（見記憶 db_charset_constraints）。 */
+set_exception_handler(function (Throwable $e) {
+    error_log('Acc_API 未攔截例外: ' . $e->getMessage());
+    acc_err('伺服器錯誤：' . $e->getMessage(), 500);
+});
+
+/** 把輸入正規化成 UTF-8（Big5/CP950 來源會讓 SQL 直接炸掉） */
+function acc_u8(string $s): string {
+    if ($s === '' || mb_check_encoding($s, 'UTF-8')) return $s;
+    $c = @mb_convert_encoding($s, 'UTF-8', 'BIG-5,CP950,UTF-8');
+    return ($c === false) ? '' : $c;
+}
+
 try {
     $db = (new DBConnection())->getPDO();
 } catch (Throwable $e) { acc_err('DB連線失敗：' . $e->getMessage(), 500); }
@@ -38,13 +53,30 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 function acc_filter(): array {
     $s = $_POST ?: $_GET;
     return [
-        'kw'       => trim((string)($s['kw'] ?? '')),
+        'kw'       => acc_u8(trim((string)($s['kw'] ?? ''))),
         'status'   => trim((string)($s['status'] ?? 'all')),
         'months'   => (int)($s['months'] ?? 12),
         'sort'     => trim((string)($s['sort'] ?? 'ship_amt')),
         'dir'      => (($s['dir'] ?? 'desc') === 'asc') ? 'asc' : 'desc',
         'page'     => max(1, (int)($s['page'] ?? 1)),
         'per_page' => (int)($s['per_page'] ?? 20),
+    ];
+}
+
+/* 應收對帳篩選參數（必須定義在 switch 之外：PHP 不會 hoist 控制結構內的函式宣告，
+   放進 switch 會因為直接跳到 case 而永遠沒被宣告到） */
+function acc_ar_filter(): array {
+    $s = $_POST ?: $_GET;
+    return [
+        'bm_from'     => trim((string)($s['bm_from'] ?? '')),
+        'bm_to'       => trim((string)($s['bm_to'] ?? '')),
+        'kw'          => acc_u8(trim((string)($s['kw'] ?? ''))),
+        'customer_id' => trim((string)($s['customer_id'] ?? '')),
+        'only_gap'    => !empty($s['only_gap']),
+        'sort'        => trim((string)($s['sort'] ?? 'net_amt')),
+        'dir'         => (($s['dir'] ?? 'desc') === 'asc') ? 'asc' : 'desc',
+        'page'        => max(1, (int)($s['page'] ?? 1)),
+        'per_page'    => (int)($s['per_page'] ?? 20),
     ];
 }
 
@@ -179,6 +211,80 @@ case 'export': {
             $r['ship_cnt'], round($r['ship_amt']), $r['last_date'],
         ]);
     }
+    fclose($o);
+    exit;
+}
+
+/* ══ 應收對帳 ═════════════════════════════════════════════════════════ */
+
+case 'ar_summary':
+    acc_out(acc_ar_summary($db, acc_ar_filter()));
+
+case 'ar_detail': {
+    $s  = $_POST ?: $_GET;
+    $cn = acc_u8(trim((string)($s['customer'] ?? '')));
+    $bm = trim((string)($s['billing_month'] ?? ''));
+    if ($cn === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) acc_err('缺少客戶或帳款月份');
+    acc_out(acc_ar_detail($db, $cn, $bm));
+}
+
+/* 應收彙總匯出（全部符合條件） */
+case 'ar_export': {
+    $f = acc_ar_filter();
+    $f['per_page'] = 0;
+    $r = acc_ar_summary($db, $f);
+
+    $lbl = ['ok' => '可開發票', 'no_tax' => '缺統編', 'bad_tax' => '統編錯誤', 'no_full' => '缺發票全名'];
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="應收對帳彙總_' . $r['bm_from'] . '_' . $r['bm_to'] . '.csv"');
+    $o = fopen('php://output', 'w');
+    fwrite($o, "\xEF\xBB\xBF");
+    fputcsv($o, ['帳款月份', '客戶編號', '客戶簡稱', '客戶全名(發票用)', '統一編號',
+                 '出貨筆數', '出貨金額', '退貨筆數', '退貨金額',
+                 '應收未稅', '稅額', '應收含稅', '發票資料狀態', '在客戶主檔']);
+    foreach ($r['rows'] as $x) {
+        fputcsv($o, [
+            $x['billing_month'], $x['customer_id'], $x['customer'], $x['customer_full'],
+            ($x['tax_id'] !== null && $x['tax_id'] !== '') ? "\t" . $x['tax_id'] : '',
+            $x['ship_cnt'], round($x['ship_amt']), $x['ret_cnt'], round($x['ret_amt']),
+            round($x['net_amt']), round($x['tax_amt']), round($x['total_amt']),
+            $lbl[$x['inv_ready']] ?? $x['inv_ready'], $x['in_master'] ? '是' : '否（簡稱對不到）',
+        ]);
+    }
+    $s = $r['summary'];
+    fputcsv($o, []);
+    fputcsv($o, ['合計', '', '', '', '', '', round($s['ship_amt']), '', round($s['ret_amt']),
+                 round($s['net_amt']), round($s['tax_amt']), round($s['total_amt']), '', '']);
+    fclose($o);
+    exit;
+}
+
+/* 單一客戶對帳單明細匯出 */
+case 'ar_detail_export': {
+    $s  = $_GET ?: $_POST;
+    $cn = acc_u8(trim((string)($s['customer'] ?? '')));
+    $bm = trim((string)($s['billing_month'] ?? ''));
+    if ($cn === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) acc_err('缺少客戶或帳款月份');
+    $d = acc_ar_detail($db, $cn, $bm);
+
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="對帳單_' . $cn . '_' . $bm . '.csv"');
+    $o = fopen('php://output', 'w');
+    fwrite($o, "\xEF\xBB\xBF");
+    fputcsv($o, ['對帳單', $cn, $bm . ' 帳款月份']);
+    fputcsv($o, ['統一編號', $d['head']['tax_id'] ? "\t" . $d['head']['tax_id'] : '（未建）',
+                 '發票抬頭', $d['head']['customer_full'] ?: '（未建）']);
+    fputcsv($o, []);
+    fputcsv($o, ['類型', '單號', '日期', '訂單號', '料號', '品名規格', '數量', '單價', '金額', '備註']);
+    foreach ($d['items'] as $i) {
+        fputcsv($o, [$i['kind'] === 'ship' ? '出貨' : '退貨', $i['no'], $i['date'], $i['order_oo'],
+                     $i['product_id'], $i['spec'], $i['qty'], $i['unit_price'],
+                     round($i['amount']), $i['note']]);
+    }
+    fputcsv($o, []);
+    fputcsv($o, ['', '', '', '', '', '', '', '應收未稅', round($d['net_amt'])]);
+    fputcsv($o, ['', '', '', '', '', '', '', '稅額(' . round($d['tax_rate'] * 100) . '%)', round($d['tax_amt'])]);
+    fputcsv($o, ['', '', '', '', '', '', '', '應收含稅', round($d['total_amt'])]);
     fclose($o);
     exit;
 }
