@@ -1151,7 +1151,11 @@ var R = (function(){
             cells.forEach(function(c){
                 var act='';
                 if(c.can_sign) act+= c.sign?'<button class="btn btn-xs btn-default" onclick="R.shiftSign('+c.aid+',0)">取消簽核</button>':'<button class="btn btn-xs btn-warning" onclick="R.shiftSign('+c.aid+',1)">簽核</button> ';
-                if(shiftCalData.can_edit) act+=' <button class="btn btn-xs btn-default" style="color:#c0392b" onclick="R.delShiftAssign('+c.aid+')">移除</button>';
+                if(shiftCalData.can_edit){
+                    if(c.leave) act+=' <button class="btn btn-xs btn-warning" onclick="R.fillAgent('+c.aid+',\''+esc(c.name).replace(/'/g,"\\\x27")+'\')" title="以其代理人補此班"><i class="fa fa-user-md"></i> 代理補班</button>';
+                    act+=' <button class="btn btn-xs btn-default" onclick="R.shiftChange('+c.aid+',\''+esc(c.name).replace(/'/g,"\\\x27")+'\')">調班</button>';
+                    act+=' <button class="btn btn-xs btn-default" style="color:#c0392b" onclick="R.delShiftAssign('+c.aid+')">移除</button>';
+                }
                 h+='<tr'+(c.mine?' style="background:#fbf3e6"':'')+'><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+c.color+';margin-right:4px"></span>'+esc(c.lane_name)+(c.time?' <span style="color:#a08c72">'+c.time+'</span>':'')+'</td>'
                   +'<td>'+esc(c.name)+' '+leaveHtml(c)+(c.is_agent?' <span class="label" style="background:#8c5a3c">代</span>':'')+(c.mine?' <span class="label label-warning">我</span>':'')+'</td>'
                   +'<td>'+(c.sign?'已簽 '+(c.signed_at||''):'未簽')+'</td><td>'+(act||'—')+'</td></tr>';
@@ -1163,6 +1167,36 @@ var R = (function(){
     function refreshShiftDay(){ if($('#shiftDayModal').is(':visible')){ var t=$('#shiftDayTitle').text().slice(0,10); setTimeout(function(){openShiftDay(t);},150); } }
     function shiftSign(aid,to){ post(to?'shift_sign':'shift_unsign',{aid:aid}).done(function(r){ if(!r.success){alert(r.message);return;} loadShiftCal(); refreshShiftDay(); }); }
     function delShiftAssign(aid){ if(!confirm('移除這筆排班？')) return; post('del_shift_assign',{aid:aid}).done(function(r){ if(!r.success){alert(r.message);return;} loadShiftCal(); refreshShiftDay(); }); }
+    function shiftChange(aid,cur){
+        var html='<div style="margin-bottom:8px">把「'+esc(cur)+'」這天的班改由：</div>'
+            +'<select id="scUser" class="form-control">'+userOptions(0)+'</select>'
+            +'<div class="checkbox"><label><input type="checkbox" id="scAgent"> 標記為代理（原負責人保留於紀錄）</label></div>'
+            +'<input id="scNote" class="form-control" placeholder="備註（選填）">';
+        showPrompt('調班（換人）', html, function(){
+            post('shift_change_user',{aid:aid,new_user_id:$('#scUser').val(),is_agent:$('#scAgent').is(':checked')?1:0,note:$('#scNote').val()}).done(function(r){
+                if(!r.success){alert(r.message);return;} $('#promptModal').modal('hide'); loadShiftCal(); refreshShiftDay();
+            });
+        });
+    }
+    function fillAgent(aid,cur){
+        post('shift_agent_candidates',{aid:aid}).done(function(r){
+            if(!r.success){alert(r.message);return;}
+            var cands=r.candidates||[];
+            var html='<div style="margin-bottom:8px">「'+esc(cur)+'」當天請假，選擇代理人補此班：</div>';
+            if(cands.length){
+                html+='<select id="faUser" class="form-control">'+cands.map(function(c){return '<option value="'+c.user_id+'">'+esc(c.user_cname)+(c.source==='BY_POSITION'?'（職稱代理）':'（指定代理）')+'</option>';}).join('')+'</select>'
+                    +'<div style="color:#8a7a63;font-size:12px;margin-top:6px"><i class="fa fa-info-circle"></i> 名單來自 HR 代理人設定（delegate）。</div>';
+            } else {
+                html+='<div style="color:#c0392b;margin-bottom:6px"><i class="fa fa-exclamation-triangle"></i> 此人未設定代理人（HR 設定→代理人），改為手動選人：</div>'
+                    +'<select id="faUser" class="form-control">'+userOptions(0)+'</select>';
+            }
+            showPrompt('代理補班', html, function(){
+                post('shift_fill_agent',{aid:aid,agent_id:$('#faUser').val()}).done(function(rr){
+                    if(!rr.success){alert(rr.message);return;} $('#promptModal').modal('hide'); loadShiftCal(); refreshShiftDay();
+                });
+            });
+        });
+    }
 
     $(function(){
         $('#btn-perm-help').on('click',function(e){e.preventDefault();$('#permHelp').modal('show');});
@@ -1178,7 +1212,8 @@ var R = (function(){
         msFilter:msFilter, msAll:msAll, selectAllRostered:selectAllRostered, openLogs:openLogs, logTab:logTab, toggleLane:toggleLane,
         initShiftTab:initShiftTab, openShiftEdit:openShiftEdit, pickShiftColor:pickShiftColor, saveShift:saveShift, delShift:delShift, updShiftHint:updShiftHint,
         loadShiftCal:loadShiftCal, toggleShiftLane:toggleShiftLane, shiftMoveMonth:shiftMoveMonth, shiftGoToday:shiftGoToday,
-        openShiftAssign:openShiftAssign, saFilter:saFilter, saAll:saAll, submitShiftAssign:submitShiftAssign, openShiftDay:openShiftDay, shiftSign:shiftSign, delShiftAssign:delShiftAssign };
+        openShiftAssign:openShiftAssign, saFilter:saFilter, saAll:saAll, submitShiftAssign:submitShiftAssign, openShiftDay:openShiftDay, shiftSign:shiftSign, delShiftAssign:delShiftAssign,
+        shiftChange:shiftChange, fillAgent:fillAgent };
 })();
 </script>
 </body>

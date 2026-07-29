@@ -12,6 +12,7 @@ session_start();
 require_once __DIR__ . '/../common/DBConnection.php';
 require_once __DIR__ . '/../common/rbac.php';
 require_once __DIR__ . '/../common/roster_lib.php';
+require_once __DIR__ . '/../common/delegate_lib.php'; // 代理人解析（請假補班用）
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -859,6 +860,54 @@ case 'del_shift_assign': {
     if (!$CAN_CREATE && !$IS_ADMIN) jerr('無權限', 403);
     $aid = (int)($_POST['aid'] ?? 0);
     $pdo->prepare("DELETE FROM roster_shift_assign WHERE id=?")->execute([$aid]);
+    jout();
+}
+
+/* ── 固定班別排班：調班（換人；記錄原負責人）── */
+case 'shift_change_user': {
+    if (!$CAN_CREATE && !$IS_ADMIN) jerr('無調班權限', 403);
+    $aid = (int)($_POST['aid'] ?? 0);
+    $newUser = (int)($_POST['new_user_id'] ?? 0);
+    $isAgent = !empty($_POST['is_agent']) ? 1 : 0;
+    $note = trim($_POST['note'] ?? '');
+    $st = $pdo->prepare("SELECT * FROM roster_shift_assign WHERE id=?"); $st->execute([$aid]); $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('排班不存在', 404);
+    if ($newUser <= 0) jfail('請選擇人員');
+    if ($newUser === (int)$a['user_id']) jfail('已是同一人');
+    // 防重：同班別同日不可重複同一人
+    $dup = $pdo->prepare("SELECT 1 FROM roster_shift_assign WHERE shift_type_id=? AND user_id=? AND work_date=? AND id<>?");
+    $dup->execute([$a['shift_type_id'], $newUser, $a['work_date'], $aid]);
+    if ($dup->fetchColumn()) jfail('該員當天已在此班別');
+    $orig = $a['orig_user_id'] ?: $a['user_id'];
+    $pdo->prepare("UPDATE roster_shift_assign SET user_id=?, orig_user_id=?, is_agent=?, note=?, sign_status=0, signed_at=NULL, signed_by=NULL WHERE id=?")
+        ->execute([$newUser, $orig, $isAgent, $note, $aid]);
+    jout();
+}
+
+/* ── 固定班別排班：某排班者的代理人候選（請假補班用，走 delegate_lib）── */
+case 'shift_agent_candidates': {
+    $aid = (int)($_POST['aid'] ?? 0);
+    $st = $pdo->prepare("SELECT * FROM roster_shift_assign WHERE id=?"); $st->execute([$aid]); $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('排班不存在', 404);
+    $cands = eg_person_delegate_candidates($pdo, (int)$a['user_id']);
+    jout(['candidates' => $cands]);
+}
+
+/* ── 固定班別排班：請假一鍵代理補班 ── */
+case 'shift_fill_agent': {
+    if (!$CAN_CREATE && !$IS_ADMIN) jerr('無權限', 403);
+    $aid = (int)($_POST['aid'] ?? 0);
+    $agent = (int)($_POST['agent_id'] ?? 0);
+    $st = $pdo->prepare("SELECT * FROM roster_shift_assign WHERE id=?"); $st->execute([$aid]); $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('排班不存在', 404);
+    if ($agent <= 0) jfail('請選擇代理人');
+    if ($agent === (int)$a['user_id']) jfail('代理人不可是本人');
+    $dup = $pdo->prepare("SELECT 1 FROM roster_shift_assign WHERE shift_type_id=? AND user_id=? AND work_date=? AND id<>?");
+    $dup->execute([$a['shift_type_id'], $agent, $a['work_date'], $aid]);
+    if ($dup->fetchColumn()) jfail('代理人當天已在此班別');
+    $orig = $a['orig_user_id'] ?: $a['user_id'];
+    $pdo->prepare("UPDATE roster_shift_assign SET user_id=?, orig_user_id=?, is_agent=1, note=?, sign_status=0, signed_at=NULL, signed_by=NULL WHERE id=?")
+        ->execute([$agent, $orig, '請假代理補班', $aid]);
     jout();
 }
 
