@@ -399,13 +399,71 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
     </div>
 </div>
 
+<!-- 共用帳號代成員確認：需輸入該員工本人密碼（ai-rules/13；避免已讀名單記成共用帳號而失真） -->
+<div class="modal fade" id="sharedPwModal" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal-dialog modal-sm" role="document">
+        <div class="modal-content">
+            <div class="modal-header eg-sp-head">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                <h4 class="modal-title"><i class="fa fa-user-secret"></i> 本人確認</h4>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom:10px;">這則通知是給 <b id="sp-name"></b> 的。<br>請<b>由本人</b>輸入自己的密碼以確認：</p>
+                <input type="password" id="sp-pw" class="form-control" placeholder="本人密碼" autocomplete="off">
+                <div id="sp-err" class="eg-sp-err" style="display:none;"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-warning" id="sp-ok">確認</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
     window.addEventListener("load", function() {
         if (typeof $ === 'undefined') return;
 
         var nmId = null;
+        var nmForUid = 0, nmForName = '';   // 這則通知是給哪位成員的（共用帳號代收時 > 0）
         var nmEsc = function(s) { return $('<i>').text(s == null ? '' : s).html(); };
         var modeName = { read: '已閱', sign: '回簽', reply: '回覆 + 回簽' };
+
+        // 代成員確認：跳窗要密碼 → 驗過才寫紀錄（記在成員本人身上、signed_via 留共用帳號）
+        var spCb = null;
+        function nmAskMemberPw(name, cb) {
+            spCb = cb;
+            $('#sp-name').text(name || '該員工');
+            $('#sp-pw').val(''); $('#sp-err').hide().text('');
+            $('#sharedPwModal').modal('show');
+            setTimeout(function() { $('#sp-pw').focus(); }, 300);
+        }
+        $('#sp-ok').on('click', function() {
+            var pw = $('#sp-pw').val();
+            if (!pw) { $('#sp-err').text('請輸入密碼').show(); return; }
+            if (spCb) spCb(pw, function(msg) { $('#sp-err').text(msg || '確認失敗').show(); });
+        });
+        $('#sp-pw').on('keydown', function(e) { if (e.which === 13) $('#sp-ok').click(); });
+
+        /**
+         * 標記已閱。共用帳號代成員時先要密碼；本人操作維持原行為。
+         * @param {function} done 成功後執行（通常是把該則從未讀清單移除）
+         */
+        function nmMarkRead(done) {
+            var id = nmId, forUid = nmForUid, forName = nmForName;
+            if (!forUid) {
+                $.post('../../src/store/_markEventRead.php', { eventid: id }, function() { if (done) done(); });
+                return;
+            }
+            nmAskMemberPw(forName, function(pw, showErr) {
+                $.post('../../src/store/_markEventRead.php',
+                    { eventid: id, for_uid: forUid, member_password: pw },
+                    function(r) {
+                        if (r && r.ok) { $('#sharedPwModal').modal('hide'); if (done) done(); }
+                        else { showErr(r && r.msg); }
+                    }, 'json').fail(function() { showErr('連線失敗'); });
+            });
+        }
 
         function nmRemoveFromList() {
             $('#notice_item_' + nmId).remove();
@@ -417,12 +475,13 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
         // 點通知 → 載入詳情、開跳窗；品質異常單通知(ref_type='QA')改開異常單檢視頁
         $(document).on('click', '.notice-open', function() {
             nmId = $(this).data('id');
+            nmForUid = parseInt($(this).data('foruid'), 10) || 0;
+            nmForName = $(this).data('forname') || '';
             var refType = $(this).data('reftype');
             if (refType === 'QA_EDIT_REQ') {
                 // 異常單修改請求（給主管）：開品管合併檢驗頁的核准畫面（含快速開放修改按鈕）
                 window.open('../QC/inspection_combined_prototype.php?edit_request=' + $(this).data('refid'));
-                $.post('../../src/store/_markEventRead.php', { eventid: nmId });
-                nmRemoveFromList();
+                nmMarkRead(nmRemoveFromList);
                 return;
             }
             if (refType === 'QA_DECIDE' || refType === 'QA_DECIDE_F') {
@@ -433,8 +492,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             if (refType === 'QA_EDIT_OK') {
                 // 主管已開放修改：直接開異常單修改畫面
                 window.open('../QC/inspection_combined_prototype.php?edit_abnormal=' + $(this).data('refid'));
-                $.post('../../src/store/_markEventRead.php', { eventid: nmId });
-                nmRemoveFromList();
+                nmMarkRead(nmRemoveFromList);
                 return;
             }
             if (refType === 'QA') {
@@ -449,8 +507,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 // 行動型通知(need_mode>1，如「指派您回覆」)在填寫送出前不移除，持續提示。
                 window.open('../QA/correction_order.php?open_id=' + $(this).data('refid'));
                 if (parseInt($(this).data('needmode'), 10) <= 1) {
-                    $.post('../../src/store/_markEventRead.php', { eventid: nmId });
-                    nmRemoveFromList();
+                    nmMarkRead(nmRemoveFromList);
                 }
                 return;
             }
@@ -459,16 +516,14 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 // 任一簽核人核准/駁回完成前不移除(mode=sign)。
                 window.open('../Sales/quotation_approval_view.php?event=' + nmId);
                 if (parseInt($(this).data('needmode'), 10) <= 1) {
-                    $.post('../../src/store/_markEventRead.php', { eventid: nmId });
-                    nmRemoveFromList();
+                    nmMarkRead(nmRemoveFromList);
                 }
                 return;
             }
             if (refType === 'QUOTATION_APPROVAL_RESULT') {
                 // 核准/駁回結果通知（給原送審人）：純資訊型，開同一審核頁檢視結果後直接標記已讀移除
                 window.open('../Sales/quotation_approval_view.php?event=' + nmId);
-                $.post('../../src/store/_markEventRead.php', { eventid: nmId });
-                nmRemoveFromList();
+                nmMarkRead(nmRemoveFromList);
                 return;
             }
             if (refType === 'QUOTATION_SUPP') {
@@ -476,16 +531,14 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 // 任一簽核人核准/駁回完成前不移除(mode=sign)。
                 window.open('../Sales/quotation_supplement_view.php?event=' + nmId);
                 if (parseInt($(this).data('needmode'), 10) <= 1) {
-                    $.post('../../src/store/_markEventRead.php', { eventid: nmId });
-                    nmRemoveFromList();
+                    nmMarkRead(nmRemoveFromList);
                 }
                 return;
             }
             if (refType === 'QUOTATION_SUPP_RESULT') {
                 // 補件核准/駁回結果通知（給上傳者）：純資訊型，開同一頁檢視結果後標記已讀移除
                 window.open('../Sales/quotation_supplement_view.php?event=' + nmId);
-                $.post('../../src/store/_markEventRead.php', { eventid: nmId });
-                nmRemoveFromList();
+                nmMarkRead(nmRemoveFromList);
                 return;
             }
             $('#nm-title').text($(this).data('title') || '');
@@ -651,20 +704,31 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 if (files && files.files) { for (var i = 0; i < files.files.length; i++) fd.append('reply_files[]', files.files[i]); }
             }
             $btn.html('<i class="fa fa-spinner fa-spin"></i> 處理中…');
-            $.ajax({
-                url: '../../src/store/_eventRespond.php', type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json',
-                success: function(res) {
-                    if (res && res.ok) {
-                        nmRemoveFromList();
-                        // 重新載入詳情以顯示完成狀態
-                        $.get('../../src/store/_eventDetail.php', { eventid: nmId }, nmRender, 'json');
-                    } else {
+
+            // 共用帳號代成員回應：先要本人密碼（驗過才寫，紀錄記在成員本人身上）
+            var submit = function(pw, showErr) {
+                if (pw) { fd.append('for_uid', nmForUid); fd.append('member_password', pw); }
+                $.ajax({
+                    url: '../../src/store/_eventRespond.php', type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json',
+                    success: function(res) {
+                        if (res && res.ok) {
+                            if (pw) $('#sharedPwModal').modal('hide');
+                            nmRemoveFromList();
+                            // 重新載入詳情以顯示完成狀態
+                            $.get('../../src/store/_eventDetail.php', { eventid: nmId }, nmRender, 'json');
+                        } else {
+                            $btn.prop('disabled', false).text('重試');
+                            if (showErr) showErr(res && res.msg ? res.msg : '送出失敗');
+                            else alert(res && res.msg ? res.msg : '送出失敗');
+                        }
+                    },
+                    error: function() {
                         $btn.prop('disabled', false).text('重試');
-                        alert(res && res.msg ? res.msg : '送出失敗');
+                        if (showErr) showErr('連線失敗'); else alert('連線失敗');
                     }
-                },
-                error: function() { $btn.prop('disabled', false).text('重試'); alert('連線失敗'); }
-            });
+                });
+            };
+            if (nmForUid) nmAskMemberPw(nmForName, submit); else submit(null, null);
         });
     });
 </script>
@@ -776,6 +840,13 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
         overflow: hidden;
         text-overflow: ellipsis;
     }
+    /* 共用帳號「本人確認」跳窗（暖色系，見 ai-rules/10） */
+    #sharedPwModal .eg-sp-head { background: #8C5A2B; color: #fff; border-radius: 6px 6px 0 0; }
+    #sharedPwModal .eg-sp-head .close { color: #fff; opacity: .9; }
+    #sharedPwModal .eg-sp-head .modal-title { font-weight: 600; }
+    #sharedPwModal .eg-sp-err { margin-top: 8px; padding: 6px 8px; border-radius: 4px; background: #F7E0BD; color: #7A3B12; font-size: 12px; }
+    #sharedPwModal .btn-warning { background: #F0A24B; border-color: #D9873A; color: #4A2B10; font-weight: 600; }
+
     /* 共用帳號代收成員通知的標籤（暖色系：琥珀底深棕字，見 ai-rules/10） */
     .notice-for {
         display: inline-block;

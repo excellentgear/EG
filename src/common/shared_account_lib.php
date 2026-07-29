@@ -228,6 +228,44 @@ if (!function_exists('eg_shared_is_member_of')) {
     }
 }
 
+if (!function_exists('eg_shared_resolve_actor')) {
+    /**
+     * 共用帳號代員工「已閱/回簽/回覆」時的身分解析。
+     * 現場是共用帳號在操作，但紀錄必須記在員工本人身上（已讀名單、AS9100 可追溯性），
+     * 因此要求輸入該員工本人的密碼才放行，並以 signed_via 留下「經由哪個共用帳號」的痕跡。
+     *
+     * @param int    $sessionUid 目前登入者（可能是共用帳號）
+     * @param int    $forUid     這則通知實際的收件員工（0 或等於 $sessionUid＝本人操作）
+     * @param string $password   員工本人密碼（本人操作時不需要）
+     * @return array ['ok'=>bool,'uid'=>int,'via'=>?int,'msg'=>string]
+     */
+    function eg_shared_resolve_actor(PDO $db, int $sessionUid, int $forUid, string $password): array
+    {
+        if ($forUid <= 0 || $forUid === $sessionUid) {
+            return ['ok' => true, 'uid' => $sessionUid, 'via' => null, 'msg' => ''];
+        }
+        if (!eg_shared_is_member_of($db, $sessionUid, $forUid)) {
+            return ['ok' => false, 'uid' => 0, 'via' => null, 'msg' => '此帳號無權代替該員工確認'];
+        }
+        if ($password === '') {
+            return ['ok' => false, 'uid' => 0, 'via' => null, 'msg' => 'NEED_PASSWORD'];
+        }
+        try {
+            $st = $db->prepare("SELECT user_password FROM `user` WHERE id = ?");
+            $st->execute([$forUid]);
+            $real = $st->fetchColumn();
+            if ($real === false) return ['ok' => false, 'uid' => 0, 'via' => null, 'msg' => '查無此員工'];
+            if (!hash_equals((string)$real, $password)) {
+                return ['ok' => false, 'uid' => 0, 'via' => null, 'msg' => '密碼錯誤，請由本人輸入自己的密碼'];
+            }
+        } catch (Throwable $e) {
+            error_log('[shared] resolve_actor failed: ' . $e->getMessage());
+            return ['ok' => false, 'uid' => 0, 'via' => null, 'msg' => '驗證失敗'];
+        }
+        return ['ok' => true, 'uid' => $forUid, 'via' => $sessionUid, 'msg' => ''];
+    }
+}
+
 if (!function_exists('eg_shared_password_locked')) {
     /** 該帳號是否禁止改密碼（lock_password=1）。 */
     function eg_shared_password_locked(PDO $db, int $uid): bool

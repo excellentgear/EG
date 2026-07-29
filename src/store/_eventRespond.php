@@ -10,6 +10,17 @@ $eid = (int)($_POST['eventid'] ?? 0);
 $action = $_POST['action'] ?? '';
 if ($eid <= 0 || !in_array($action, ['read', 'sign', 'reply'], true)) { echo json_encode(['ok' => false, 'msg' => '參數錯誤']); exit(); }
 
+// 共用帳號代成員已閱/回簽/回覆（ai-rules/13）：須輸入該員工本人密碼；
+// 紀錄一律記在員工本人身上，signed_via 留下「經由哪個共用帳號」。
+require_once __DIR__ . '/../common/shared_account_lib.php';
+$__actor = eg_shared_resolve_actor($db, $uid, (int)($_POST['for_uid'] ?? 0), (string)($_POST['member_password'] ?? ''));
+if (!$__actor['ok']) {
+    echo json_encode(['ok' => false, 'need_password' => ($__actor['msg'] === 'NEED_PASSWORD'), 'msg' => ($__actor['msg'] === 'NEED_PASSWORD' ? '請輸入本人密碼' : $__actor['msg'])]);
+    exit();
+}
+$uid = $__actor['uid'];
+$via = $__actor['via'];
+
 try {
     $ev = $db->prepare("SELECT * FROM live_event WHERE id = ?");
     $ev->execute([$eid]);
@@ -31,12 +42,13 @@ try {
     $rs->execute([$eid, $uid]);
     $row = $rs->fetch(PDO::FETCH_ASSOC);
     if (!$row) {
-        $db->prepare("INSERT INTO live_event_response (live_event_id, user_id, read_at) VALUES (?,?,NOW())")->execute([$eid, $uid]);
+        $db->prepare("INSERT INTO live_event_response (live_event_id, user_id, read_at, signed_via) VALUES (?,?,NOW(),?)")->execute([$eid, $uid, $via]);
         $rid = (int)$db->lastInsertId();
         $row = ['id' => $rid, 'read_at' => date('Y-m-d H:i:s'), 'reply_folder' => null];
     } else {
         $rid = (int)$row['id'];
         if (empty($row['read_at'])) $db->prepare("UPDATE live_event_response SET read_at=NOW() WHERE id=?")->execute([$rid]);
+        if ($via !== null) $db->prepare("UPDATE live_event_response SET signed_via = COALESCE(signed_via, ?) WHERE id=?")->execute([$via, $rid]);
     }
 
     // 同步標記置頂列鈴鐺已讀（live_event_for_user）：
@@ -45,9 +57,9 @@ try {
     $chk->execute([$uid, $eid]);
     $frId = $chk->fetchColumn();
     if ($frId) {
-        $db->prepare("UPDATE live_event_for_user SET oready_read = 1, read_at = COALESCE(read_at, NOW()) WHERE id = ?")->execute([$frId]);
+        $db->prepare("UPDATE live_event_for_user SET oready_read = 1, read_at = COALESCE(read_at, NOW()), signed_via = COALESCE(signed_via, ?) WHERE id = ?")->execute([$via, $frId]);
     } else {
-        $db->prepare("INSERT INTO live_event_for_user (user_id, live_event_id, oready_read, read_at) VALUES (?,?,1,NOW())")->execute([$uid, $eid]);
+        $db->prepare("INSERT INTO live_event_for_user (user_id, live_event_id, oready_read, read_at, signed_via) VALUES (?,?,1,NOW(),?)")->execute([$uid, $eid, $via]);
     }
 
     if ($action === 'sign' || $action === 'reply') {
