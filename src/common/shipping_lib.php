@@ -339,11 +339,15 @@ function sq_pending_orders(PDO $db, array $f): array
         }
     });
 
-    $total    = count($out);
-    $perPage  = (int)($f['per_page'] ?? 20);
+    $total   = count($out);
+    $perPage = (int)($f['per_page'] ?? 20);
+    if ($perPage === 0) {                       // 0 = 取全部（匯出用）
+        return ['rows' => $out, 'total' => $total, 'page' => 1,
+                'per_page' => 0, 'summary' => $summary];
+    }
     if (!in_array($perPage, [5, 10, 20, 50], true)) $perPage = 20;
-    $page     = max(1, (int)($f['page'] ?? 1));
-    $offset   = ($page - 1) * $perPage;
+    $page   = max(1, (int)($f['page'] ?? 1));
+    $offset = ($page - 1) * $perPage;
 
     return [
         'rows'     => array_slice($out, $offset, $perPage),
@@ -511,6 +515,124 @@ function sq_auto_allocate(PDO $db, int $orderId, int $qty): array
         $left -= $take;
     }
     return $out;
+}
+
+/* ============================================================
+ * 舊資料回填：is_list.Order_id 幾乎全空（42071 筆僅 1 筆有值），
+ * 導致訂單未出量算不出來。用「客戶簡稱 + 料號id(d_setting_id) + 日期先後」
+ * 比對出候選，交由人工確認後才寫入（不自動寫）。
+ * 料號一律用 d_setting_id 歸戶，不可用料號字串 join（有 159 個重複料號會灌水）。
+ * ============================================================ */
+
+/**
+ * 產生回填候選。同一 (客戶, 料號) 群組內，出貨依日期 FIFO 吃訂單剩餘量。
+ * @return array ['pairs'=>[...], 'summary'=>[...]]
+ */
+function sq_match_preview(PDO $db, string $from, string $to): array
+{
+    $st = $db->prepare("
+        SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') AS ship_date,
+               il.Client_name, il.Product_id, il.d_setting_id, il.Qty, il.Unit_price
+        FROM is_list il
+        WHERE il.Order_id IS NULL AND il.d_setting_id IS NOT NULL
+          AND il.Order_date BETWEEN ? AND ?
+        ORDER BY il.Order_date, il.IS_id");
+    $st->execute([$from, $to]);
+    $ships = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    $summary = ['ship_rows' => count($ships), 'matched' => 0, 'unmatched' => 0, 'qty_matched' => 0];
+    if (!$ships) return ['pairs' => [], 'summary' => $summary];
+
+    // 取這批料號相關的訂單（含已結案，回填要涵蓋歷史）
+    $dids = array_values(array_unique(array_map('intval', array_column($ships, 'd_setting_id'))));
+    $ph   = implode(',', array_fill(0, count($dids), '?'));
+    $so   = $db->prepare("
+        SELECT ot.Order_id, ot.Order_oo, ot.Client_name, ot.d_id, ot.d_id_ID, ot.Qty,
+               ot.unit_price, ot.Order_status,
+               DATE_FORMAT(ot.Order_date,'%Y-%m-%d')    AS order_date,
+               DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') AS delivery_date,
+               COALESCE(sh.sq, 0) AS used_qty
+        FROM order_track ot
+        LEFT JOIN (SELECT Order_id, SUM(Qty) AS sq FROM is_list
+                   WHERE Order_id IS NOT NULL GROUP BY Order_id) sh ON sh.Order_id = ot.Order_id
+        WHERE ot.d_id_ID IN ($ph)
+        ORDER BY ot.Order_date, ot.Order_id");
+    $so->execute($dids);
+
+    // 依 (客戶簡稱, 料號id) 分組
+    $ordersByKey = [];
+    foreach ($so->fetchAll(PDO::FETCH_ASSOC) as $o) {
+        $key = $o['Client_name'] . '|' . (int)$o['d_id_ID'];
+        $o['left'] = max(0, (int)$o['Qty'] - (int)$o['used_qty']);
+        $ordersByKey[$key][] = $o;
+    }
+
+    $pairs = [];
+    foreach ($ships as $s) {
+        $key  = $s['Client_name'] . '|' . (int)$s['d_setting_id'];
+        $cand = $ordersByKey[$key] ?? [];
+        $hit  = null;
+
+        foreach ($cand as $idx => $o) {
+            if ($o['left'] <= 0) continue;
+            if ($o['order_date'] > $s['ship_date']) continue;   // 不可出在下單之前
+            $ordersByKey[$key][$idx]['left'] = $o['left'] - (int)$s['Qty'];
+            $hit = $o;
+            break;
+        }
+
+        if (!$hit) { $summary['unmatched']++; continue; }
+
+        $exact      = ((int)$hit['left'] === (int)$s['Qty']);
+        $over       = ((int)$s['Qty'] > (int)$hit['left']);   // 出貨量超過訂單剩餘量
+        $priceMatch = (abs((float)$hit['unit_price'] - (float)$s['Unit_price']) < 0.01);
+        $pairs[] = [
+            'is_id'        => (int)$s['IS_id'],
+            'is_number'    => $s['IS_number'],
+            'ship_date'    => $s['ship_date'],
+            'client_name'  => $s['Client_name'],
+            'product_id'   => $s['Product_id'],
+            'ship_qty'     => (int)$s['Qty'],
+            'ship_price'   => (float)$s['Unit_price'],
+            'order_id'     => (int)$hit['Order_id'],
+            'order_oo'     => $hit['Order_oo'],
+            'order_date'   => $hit['order_date'],
+            'order_qty'    => (int)$hit['Qty'],
+            'order_left'   => (int)$hit['left'],
+            'order_price'  => (float)$hit['unit_price'],
+            // 信心：high=數量剛好吃完且單價相符；low=出貨量超過訂單剩餘量（需人工判斷）；其餘 mid
+            'confidence'   => $over ? 'low' : (($exact && $priceMatch) ? 'high' : 'mid'),
+            'price_match'  => $priceMatch,
+            'over_qty'     => $over,
+        ];
+        $summary['matched']++;
+        $summary['qty_matched'] += (int)$s['Qty'];
+    }
+
+    return ['pairs' => $pairs, 'summary' => $summary];
+}
+
+/** 寫入回填結果（僅覆寫 Order_id 仍為 NULL 的列，避免蓋掉已正確的資料） */
+function sq_match_apply(PDO $db, array $pairs, string $userId): array
+{
+    $applied = 0; $skipped = 0;
+    try {
+        $db->beginTransaction();
+        $up = $db->prepare("UPDATE is_list SET Order_id = ? WHERE IS_id = ? AND Order_id IS NULL");
+        foreach ($pairs as $p) {
+            $isId = (int)($p['is_id'] ?? 0);
+            $oid  = (int)($p['order_id'] ?? 0);
+            if ($isId <= 0 || $oid <= 0) { $skipped++; continue; }
+            $up->execute([$oid, $isId]);
+            if ($up->rowCount() > 0) $applied++; else $skipped++;
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '回填失敗：' . $e->getMessage()];
+    }
+    return ['success' => true, 'applied' => $applied, 'skipped' => $skipped,
+            'message' => "已回填 {$applied} 筆" . ($skipped ? "，略過 {$skipped} 筆（已有訂單或資料異動）" : '')];
 }
 
 /* ============================================================
