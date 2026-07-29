@@ -892,6 +892,30 @@ case 'add_shift_assign': {
     jout(['inserted' => $n]);
 }
 
+/* ── 固定班別排班：編輯一筆（改班別/日期/人員）── */
+case 'update_shift_assign': {
+    if (!$CAN_CREATE && !$IS_ADMIN) jerr('無權限', 403);
+    $aid = (int)($_POST['aid'] ?? 0);
+    $sid = (int)($_POST['shift_type_id'] ?? 0);
+    $uid = (int)($_POST['user_id'] ?? 0);
+    $wd  = $_POST['work_date'] ?? '';
+    $st = $pdo->prepare("SELECT * FROM roster_shift_assign WHERE id=?"); $st->execute([$aid]); $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('排班不存在', 404);
+    if ($sid <= 0) $sid = (int)$a['shift_type_id'];
+    if ($uid <= 0) $uid = (int)$a['user_id'];
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $wd)) $wd = $a['work_date'];
+    $chk = $pdo->prepare("SELECT 1 FROM roster_shift_type WHERE id=?"); $chk->execute([$sid]);
+    if (!$chk->fetchColumn()) jerr('班別不存在', 404);
+    $dup = $pdo->prepare("SELECT 1 FROM roster_shift_assign WHERE shift_type_id=? AND user_id=? AND work_date=? AND id<>?");
+    $dup->execute([$sid, $uid, $wd, $aid]);
+    if ($dup->fetchColumn()) jfail('該員當天已在此班別，不可重複');
+    $changedUser = ($uid !== (int)$a['user_id']);
+    $orig = $changedUser ? ($a['orig_user_id'] ?: $a['user_id']) : $a['orig_user_id'];
+    $pdo->prepare("UPDATE roster_shift_assign SET shift_type_id=?, user_id=?, work_date=?, orig_user_id=?, sign_status=0, signed_at=NULL, signed_by=NULL WHERE id=?")
+        ->execute([$sid, $uid, $wd, $orig, $aid]);
+    jout();
+}
+
 /* ── 固定班別排班：移除一筆 ── */
 case 'del_shift_assign': {
     if (!$CAN_CREATE && !$IS_ADMIN) jerr('無權限', 403);

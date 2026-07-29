@@ -97,6 +97,8 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         .lane-bar{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:8px; }
         .lane-tag{ font-size:12px; padding:2px 9px; border-radius:11px; cursor:pointer; color:#fff; user-select:none; }
         .lane-tag.off{ opacity:.35; text-decoration:line-through; }
+        .chip-more{ font-size:10px; color:#8c5a3c; background:#f3ead9; border-radius:3px; margin-top:2px; padding:1px 4px; text-align:center; cursor:pointer; }
+        .chip-more:hover{ background:#e9dcc4; }
         .chip.signed{ background:var(--amber); color:#fff; border-left-color:#8c5320; }
         .chip.left{ text-decoration:line-through; opacity:.6; }
         .chip.adj::after{ content:'調'; font-size:9px; background:#fff; color:var(--coral); border-radius:2px; padding:0 2px; margin-left:3px; }
@@ -212,6 +214,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                                     <button class="btn btn-sm btn-warning" id="viewCal" onclick="R.setView('cal')">月曆</button>
                                     <button class="btn btn-sm btn-default" id="viewList" onclick="R.setView('list')">列表</button>
                                 </div>
+                                <button class="btn btn-sm btn-default" onclick="R.exportPdf()" title="匯出目前兩個月完整排班"><i class="fa fa-file-pdf-o"></i> PDF</button>
                                 <span id="ownerTools" style="display:none">
                                     <button class="btn btn-sm btn-default" onclick="R.openRange()" title="區間調班"><i class="fa fa-random"></i> 區間調班</button>
                                 </span>
@@ -246,6 +249,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                         <span style="font-weight:bold;color:#5a4632;">人員排班</span>
                         <span style="flex:1"></span>
                         <select id="shiftFilterPerson" class="form-control input-sm" style="width:120px" onchange="R.loadShiftCal()"><option value="0">全部人員</option></select>
+                        <button class="btn btn-sm btn-default" onclick="R.exportShiftPdf()" title="匯出目前兩個月完整班表"><i class="fa fa-file-pdf-o"></i> PDF</button>
                         <span id="shiftEditTools" style="display:none"><button class="btn btn-sm btn-warning" onclick="R.openShiftAssign()"><i class="fa fa-user-plus"></i> 排班</button></span>
                     </div>
                     <div class="legend" style="margin-bottom:8px;">
@@ -386,7 +390,14 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         <div class="checkbox"><label><input type="checkbox" id="sa_skipholiday" checked> 略過行事曆假日（只排上班日）</label></div>
         <div class="form-group"><label>人員（可多選）</label>
             <input type="text" class="form-control input-sm" id="sa_search" placeholder="搜尋姓名/部門/職稱" oninput="R.saFilter()" style="margin-bottom:5px">
-            <div style="margin-bottom:4px"><a href="#" onclick="R.saAll(true);return false;">全選</a> ｜ <a href="#" onclick="R.saAll(false);return false;">全不選</a></div>
+            <div style="margin-bottom:4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <a href="#" onclick="R.saAll(true);return false;">全選(目前顯示)</a> ｜
+                <a href="#" onclick="R.saAll(false);return false;">全不選(目前顯示)</a> ｜
+                <a href="#" onclick="R.saClearAll();return false;" style="color:#c0392b">清除全部已選</a>
+                <span style="flex:1"></span>
+                <span id="sa_count" style="color:#b5651d;font-weight:bold;">已選 0 人</span>
+            </div>
+            <div id="sa_selected" style="margin-bottom:5px;"></div>
             <div id="sa_users" style="max-height:220px;overflow:auto;border:1px solid var(--warm-line);border-radius:5px;padding:6px"></div>
         </div>
     </div>
@@ -457,7 +468,7 @@ var RD = {
     isAdmin: <?= $IS_ADMIN ? 'true' : 'false' ?>
 };
 var R = (function(){
-    var scope='all', boards=[], curBoard=null, curYm=null, view='cal', calData=null, selIds=[], overlay=false, hiddenLanes={};
+    var scope='all', boards=[], curBoard=null, curYm=null, view='cal', calData=null, selIds=[], overlay=false, hiddenLanes={}, calExpanded={}, shiftExpanded={};
 
     function post(action,data){ data=data||{}; data.action=action;
         return $.post(RD.api,data,null,'json').fail(function(x){
@@ -589,9 +600,11 @@ var R = (function(){
             if(ds===calData.today) cls+=' today';
             var tag=hol[ds]?'<span class="tag">休</span>':(mk[ds]?'<span class="tag">補</span>':'');
             h+='<td class="'+cls.trim()+'" onclick="R.openDay(\''+ds+'\')"><div class="dnum">'+day+tag+'</div>';
-            var cells=(calData.cells[ds]||[]);
+            var cells=(calData.cells[ds]||[]).filter(function(c){ return !hiddenLanes[c.lane_id]; });
+            var shown=0, more=0;
             cells.forEach(function(c){
-                if(hiddenLanes[c.lane_id]) return;   // 個別隱藏的項目
+                if(!calExpanded[ds] && shown>=3){ more++; return; }   // 預設只顯示 3 人
+                shown++;
                 var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
                 var lcol=c.color||laneColor(l,idx);
                 var tag=c.color?(c.board_name||c.lane_name||''):(l?l.lane_name:''); // 單表=項目名;多表=表名
@@ -602,6 +615,8 @@ var R = (function(){
                   +leaveHtml(c)
                   +'</div>';
             });
+            if(more>0) h+='<div class="chip-more" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')">⋯ 還有 '+more+' 人</div>';
+            else if(calExpanded[ds] && cells.length>3) h+='<div class="chip-more" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')">收合</div>';
             h+='</td>'; col++;
             if(col%7===0 && day<dim) h+='</tr><tr>';
         }
@@ -1008,6 +1023,74 @@ var R = (function(){
     function setView(v){ view=v; $('#viewCal').toggleClass('btn-warning',v==='cal').toggleClass('btn-default',v!=='cal');
         $('#viewList').toggleClass('btn-warning',v==='list').toggleClass('btn-default',v!=='list'); if(calData){ v==='cal'?renderCalendar():renderList(); } }
 
+    /* ── PDF 匯出（走瀏覽器列印→另存PDF；中文字型正確，且列出完整排班不受「顯示3人」限制）── */
+    function pdfWindow(title, bodyHtml){
+        var w=window.open('','_blank');
+        if(!w){ alert('瀏覽器封鎖了彈出視窗，請允許後再試'); return; }
+        w.document.write('<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'+title+'</title><style>'
+          +'@page{size:A4 landscape;margin:10mm}'
+          +'body{font-family:"Microsoft JhengHei","PingFang TC",sans-serif;color:#3a2e20;margin:0}'
+          +'h2{font-size:16px;margin:0 0 4px}.sub{font-size:11px;color:#7a6a52;margin-bottom:8px}'
+          +'table{width:100%;border-collapse:collapse;table-layout:fixed;page-break-inside:auto}'
+          +'th{background:#f6ead8;border:1px solid #c9b99f;font-size:11px;padding:3px}'
+          +'td{border:1px solid #c9b99f;vertical-align:top;height:78px;padding:2px;font-size:10px}'
+          +'td.empty{background:#fafafa}td.hol{background:#efe6d8}td.mk{background:#fff6e8}'
+          +'.dn{font-size:10px;color:#7a6a52;font-weight:bold}'
+          +'.it{display:block;border-left:3px solid #999;padding:0 3px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
+          +'.mon{page-break-inside:avoid;margin-bottom:10px}'
+          +'</style></head><body>'+bodyHtml+'</body></html>');
+        w.document.close();
+        w.onload=function(){ w.focus(); w.print(); };
+        setTimeout(function(){ try{ w.focus(); w.print(); }catch(e){} }, 600);
+    }
+    function pdfMonth(mo, cells, hol, mk, labelFn){
+        var y=+mo.slice(0,4), m=+mo.slice(5,7);
+        var start=new Date(y,m-1,1).getDay(), dim=new Date(y,m,0).getDate();
+        var wd=['日','一','二','三','四','五','六'];
+        var h='<div class="mon"><h2>'+y+' 年 '+m+' 月</h2><table><tr>'+wd.map(function(w){return '<th>'+w+'</th>';}).join('')+'</tr><tr>';
+        var col=0;
+        for(var i=0;i<start;i++){ h+='<td class="empty"></td>'; col++; }
+        for(var d=1;d<=dim;d++){
+            var ds=mo+'-'+String(d).padStart(2,'0');
+            var cls=hol[ds]?'hol':(mk[ds]?'mk':'');
+            h+='<td class="'+cls+'"><div class="dn">'+d+(hol[ds]?' 休':(mk[ds]?' 補':''))+'</div>';
+            (cells[ds]||[]).forEach(function(c){ h+=labelFn(c); });   // 完整列出，不限 3 人
+            h+='</td>'; col++;
+            if(col%7===0 && d<dim) h+='</tr><tr>';
+        }
+        while(col%7!==0){ h+='<td class="empty"></td>'; col++; }
+        return h+'</tr></table></div>';
+    }
+    function exportPdf(){
+        if(!calData){ alert('請先選擇排班表'); return; }
+        var hol={},mk={}; (calData.holidays||[]).forEach(function(d){hol[d]=1;}); (calData.makeup||[]).forEach(function(d){mk[d]=1;});
+        var lm=laneMap();
+        var name=(calData.board&&calData.board.name)||'輪值排班表';
+        var body='<h2>'+esc(name)+'</h2><div class="sub">列印日期：'+new Date().toLocaleString('zh-TW')+'　範圍：'+calData.months[0]+' ~ '+calData.months[1]+'</div>';
+        calData.months.forEach(function(mo){
+            body+=pdfMonth(mo, calData.cells, hol, mk, function(c){
+                var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
+                var col=c.color||laneColor(l,idx);
+                var tag=c.color?(c.board_name||c.lane_name||''):(l?l.lane_name:'');
+                return '<span class="it" style="border-left-color:'+col+'">'+esc(c.name)+(tag?'（'+esc(tag)+'）':'')
+                     +(c.sign?' ✔':'')+(c.leave?(c.leave_full?' [休]':' [半]'):'')+'</span>';
+            });
+        });
+        pdfWindow(name, body);
+    }
+    function exportShiftPdf(){
+        if(!shiftCalData){ alert('尚無班表資料'); return; }
+        var hol={},mk={}; (shiftCalData.holidays||[]).forEach(function(d){hol[d]=1;}); (shiftCalData.makeup||[]).forEach(function(d){mk[d]=1;});
+        var body='<h2>固定班別排班表</h2><div class="sub">列印日期：'+new Date().toLocaleString('zh-TW')+'　範圍：'+shiftCalData.months[0]+' ~ '+shiftCalData.months[1]+'</div>';
+        shiftCalData.months.forEach(function(mo){
+            body+=pdfMonth(mo, shiftCalData.cells, hol, mk, function(c){
+                return '<span class="it" style="border-left-color:'+c.color+'">'+esc(c.name)+'（'+esc(c.lane_name)+(c.time?' '+c.time:'')+'）'
+                     +(c.sign?' ✔':'')+(c.is_agent?' [代]':'')+(c.leave?(c.leave_full?' [休]':' [半]'):'')+'</span>';
+            });
+        });
+        pdfWindow('固定班別排班表', body);
+    }
+
     /* ── 紀錄 ── */
     function openLogs(){ $('#logModal').modal('show'); $('.rst-logtabs div').removeClass('active').filter('[data-tab=board]').addClass('active'); $('#logBoard').show(); $('#logAdjust').hide(); loadBoardLog(); loadAdjustLog(); }
     function logTab(el){ $('.rst-logtabs div').removeClass('active'); $(el).addClass('active'); var t=$(el).data('tab'); $('#logBoard').toggle(t==='board'); $('#logAdjust').toggle(t==='adjust'); }
@@ -1105,8 +1188,11 @@ var R = (function(){
             if(hol[ds])cls+=' holiday'; if(mk[ds])cls+=' makeup'; if(dow===0)cls+=' sun'; if(ds===shiftCalData.today)cls+=' today';
             var tg=hol[ds]?'<span class="tag">休</span>':(mk[ds]?'<span class="tag">補</span>':'');
             h+='<td class="'+cls.trim()+'" onclick="R.openShiftDay(\''+ds+'\')"><div class="dnum">'+day+tg+'</div>';
-            (shiftCalData.cells[ds]||[]).forEach(function(c){
-                if(shiftHidden[c.shift_id]) return;
+            var scells=(shiftCalData.cells[ds]||[]).filter(function(c){ return !shiftHidden[c.shift_id]; });
+            var sshown=0, smore=0;
+            scells.forEach(function(c){
+                if(!shiftExpanded[ds] && sshown>=3){ smore++; return; }
+                sshown++;
                 var tip=c.lane_name+(c.time?'('+c.time+')':'')+'：'+c.name+(c.is_agent?'（代理）':'')+(c.leave?'（'+(c.leave_full?'整天請假':'半天')+'）':'')+(c.sign&&c.signed_at?'（已簽 '+c.signed_at+'）':'');
                 h+='<div class="chip'+(c.sign?' signed':'')+(c.mine?' mine':'')+(c.leave?(c.leave_full?' onleave':' onleave half'):'')+'" style="border-left-color:'+c.color+'" title="'+esc(tip)+'">'
                   +(c.sign?'<span class="stamp">簽</span>':'')
@@ -1115,6 +1201,8 @@ var R = (function(){
                   +(c.is_agent?'<span class="chip-lane" style="background:#8c5a3c">代</span>':'')
                   +'</div>';
             });
+            if(smore>0) h+='<div class="chip-more" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')">⋯ 還有 '+smore+' 人</div>';
+            else if(shiftExpanded[ds] && scells.length>3) h+='<div class="chip-more" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')">收合</div>';
             h+='</td>'; col++; if(col%7===0&&day<dim) h+='</tr><tr>';
         }
         while(col%7!==0){ h+='<td class="empty"></td>'; col++; }
@@ -1128,11 +1216,26 @@ var R = (function(){
         $('#sa_shift').html(ss.map(function(s){return '<option value="'+s.id+'">'+esc(s.name)+'（'+String(s.start_time).substring(0,5)+'~'+String(s.end_time).substring(0,5)+'）</option>';}).join(''));
         var t=shiftCalData?shiftCalData.today:new Date().toISOString().slice(0,10);
         $('#sa_from').val(t); $('#sa_to').val(t); $('.sa-wd').prop('checked',false); $('#sa_skipholiday').prop('checked',true); $('#sa_search').val('');
-        $('#sa_users').html(RD.users.map(function(u){return '<label class="msitem" style="display:block;font-weight:normal;margin:1px 0"><input type="checkbox" value="'+u.id+'"> '+esc(u.user_cname)+posLabel(u)+'</label>';}).join(''));
+        $('#sa_users').html(RD.users.map(function(u){return '<label class="msitem" style="display:block;font-weight:normal;margin:1px 0"><input type="checkbox" value="'+u.id+'" onchange="R.saSync()"> '+esc(u.user_cname)+posLabel(u)+'</label>';}).join(''));
+        saSync();
         $('#shiftAssignModal').modal('show');
     }
     function saFilter(){ var q=$('#sa_search').val().toLowerCase(); $('#sa_users .msitem').each(function(){ $(this).toggle($(this).text().toLowerCase().indexOf(q)>=0); }); }
-    function saAll(v){ $('#sa_users .msitem:visible input').prop('checked',v); }
+    function saAll(v){ $('#sa_users .msitem:visible input').prop('checked',v); saSync(); }
+    function saClearAll(){ $('#sa_users input').prop('checked',false); saSync(); }
+    function saToggle(id){ $('#sa_users input[value="'+id+'"]').prop('checked',false); saSync(); }
+    function saSync(){
+        var ids=$('#sa_users input:checked').map(function(){return +this.value;}).get();
+        $('#sa_count').text('已選 '+ids.length+' 人');
+        if(!ids.length){ $('#sa_selected').empty(); return; }
+        var h='<div style="border:1px solid var(--warm-line);border-radius:5px;padding:5px;background:var(--warm-bg);max-height:78px;overflow:auto;">';
+        ids.forEach(function(id){
+            var u=RD.users.find(function(x){return +x.id===id;});
+            h+='<span class="label" style="background:#C0762C;display:inline-block;margin:2px;font-size:12px;">'+esc(u?u.user_cname:('#'+id))
+              +' <a href="#" onclick="R.saToggle('+id+');return false;" style="color:#fff;opacity:.85;">×</a></span>';
+        });
+        $('#sa_selected').html(h+'</div>');
+    }
     function submitShiftAssign(){
         var users=$('#sa_users input:checked').map(function(){return +this.value;}).get();
         if(!users.length){ alert('請選人員'); return; }
@@ -1153,6 +1256,7 @@ var R = (function(){
                 if(c.can_sign) act+= c.sign?'<button class="btn btn-xs btn-default" onclick="R.shiftSign('+c.aid+',0)">取消簽核</button>':'<button class="btn btn-xs btn-warning" onclick="R.shiftSign('+c.aid+',1)">簽核</button> ';
                 if(shiftCalData.can_edit){
                     if(c.leave) act+=' <button class="btn btn-xs btn-warning" onclick="R.fillAgent('+c.aid+',\''+esc(c.name).replace(/'/g,"\\\x27")+'\')" title="以其代理人補此班"><i class="fa fa-user-md"></i> 代理補班</button>';
+                    act+=' <button class="btn btn-xs btn-default" onclick="R.editShiftAssign('+c.aid+')"><i class="fa fa-pencil"></i> 編輯</button>';
                     act+=' <button class="btn btn-xs btn-default" onclick="R.shiftChange('+c.aid+',\''+esc(c.name).replace(/'/g,"\\\x27")+'\')">調班</button>';
                     act+=' <button class="btn btn-xs btn-default" style="color:#c0392b" onclick="R.delShiftAssign('+c.aid+')">移除</button>';
                 }
@@ -1167,6 +1271,21 @@ var R = (function(){
     function refreshShiftDay(){ if($('#shiftDayModal').is(':visible')){ var t=$('#shiftDayTitle').text().slice(0,10); setTimeout(function(){openShiftDay(t);},150); } }
     function shiftSign(aid,to){ post(to?'shift_sign':'shift_unsign',{aid:aid}).done(function(r){ if(!r.success){alert(r.message);return;} loadShiftCal(); refreshShiftDay(); }); }
     function delShiftAssign(aid){ if(!confirm('移除這筆排班？')) return; post('del_shift_assign',{aid:aid}).done(function(r){ if(!r.success){alert(r.message);return;} loadShiftCal(); refreshShiftDay(); }); }
+    function editShiftAssign(aid){
+        var c=null; Object.keys(shiftCalData.cells).forEach(function(d){ (shiftCalData.cells[d]||[]).forEach(function(x){ if(x.aid===aid){c=x;c.__d=d;} }); });
+        if(!c) return;
+        var ss=(window.__shifts||[]).filter(function(s){return +s.is_active===1;});
+        var html='<div class="form-group"><label>班別</label><select id="esShift" class="form-control">'
+            +ss.map(function(s){return '<option value="'+s.id+'"'+(+s.id===+c.shift_id?' selected':'')+'>'+esc(s.name)+'（'+String(s.start_time).substring(0,5)+'~'+String(s.end_time).substring(0,5)+'）</option>';}).join('')+'</select></div>'
+            +'<div class="form-group"><label>人員</label><select id="esUser" class="form-control">'+userOptions(0)+'</select></div>'
+            +'<div class="form-group"><label>日期</label><input type="date" id="esDate" class="form-control" value="'+c.__d+'"></div>';
+        showPrompt('編輯排班', html, function(){
+            post('update_shift_assign',{aid:aid,shift_type_id:$('#esShift').val(),user_id:$('#esUser').val(),work_date:$('#esDate').val()}).done(function(r){
+                if(!r.success){alert(r.message);return;} $('#promptModal').modal('hide'); loadShiftCal(); refreshShiftDay();
+            });
+        });
+        $('#esUser').val(c.user_id);
+    }
     function shiftChange(aid,cur){
         var html='<div style="margin-bottom:8px">把「'+esc(cur)+'」這天的班改由：</div>'
             +'<select id="scUser" class="form-control">'+userOptions(0)+'</select>'
@@ -1210,6 +1329,10 @@ var R = (function(){
         addLane:addLane, delLane:delLane, pickColor:pickColor, onModeChange:onModeChange, onCadenceChange:onCadenceChange, onRotateChange:onRotateChange,
         toggleWk:toggleWk, toggleMo:toggleMo, onAllVis:onAllVis, filterVis:filterVis, moveMonth:moveMonth, goToday:goToday, setView:setView,
         msFilter:msFilter, msAll:msAll, selectAllRostered:selectAllRostered, openLogs:openLogs, logTab:logTab, toggleLane:toggleLane,
+        calExpand:function(d){ calExpanded[d]=!calExpanded[d]; renderCalendar(); },
+        shiftExpand:function(d){ shiftExpanded[d]=!shiftExpanded[d]; renderShiftCal(); },
+        exportPdf:exportPdf, exportShiftPdf:exportShiftPdf,
+        saSync:saSync, saClearAll:saClearAll, saToggle:saToggle, editShiftAssign:editShiftAssign,
         initShiftTab:initShiftTab, openShiftEdit:openShiftEdit, pickShiftColor:pickShiftColor, saveShift:saveShift, delShift:delShift, updShiftHint:updShiftHint,
         loadShiftCal:loadShiftCal, toggleShiftLane:toggleShiftLane, shiftMoveMonth:shiftMoveMonth, shiftGoToday:shiftGoToday,
         openShiftAssign:openShiftAssign, saFilter:saFilter, saAll:saAll, submitShiftAssign:submitShiftAssign, openShiftDay:openShiftDay, shiftSign:shiftSign, delShiftAssign:delShiftAssign,
