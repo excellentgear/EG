@@ -35,6 +35,7 @@ if (!function_exists('eg_user_busy_today')) {
                                 WHERE a.user_id = ?
                                   AND (ec.day_type IS NULL OR ec.day_type = '')
                                   AND ec.category_name <> '通知'
+                                  AND ec.category_name <> '請假申請中'
                                   AND e.start <= ? AND e.end >= ?");
             $st->execute([$uid, $dayEnd, $now]);
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $e) {
@@ -113,6 +114,37 @@ if (!function_exists('eg_person_delegates')) {
             $st->execute([$targetUserId]);
             return array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
         } catch (Throwable $e) { return []; }
+    }
+}
+
+if (!function_exists('eg_person_delegate_candidates')) {
+    /**
+     * 某人「目前有效」的候選代理人清單（含姓名，依 priority），供表單下拉選用。
+     * 用途：請假單等需要申請人「從已設定的代理人中指定一位」的場景（唯讀，不解析行程/SoD）。
+     * 與 eg_person_delegates() 同一套 scope 規則（精準職務身分優先，無則退全域），
+     * 若 BY_PERSON 無設定，退回 BY_POSITION（position_delegate → 指定負責人）。
+     * 回傳 [['user_id'=>int,'user_cname'=>string,'source'=>'BY_PERSON'|'BY_POSITION'], ...]；空陣列=無任何代理設定。
+     */
+    function eg_person_delegate_candidates(PDO $db, int $targetUserId, ?int $scopeDep = null, ?int $scopePos = null): array {
+        $ids = eg_person_delegates($db, $targetUserId, $scopeDep, $scopePos);
+        $source = 'BY_PERSON';
+        if (empty($ids)) {
+            $ids = eg_position_delegate_persons($db, $targetUserId, $scopeDep, $scopePos);
+            $source = 'BY_POSITION';
+        }
+        if (empty($ids)) return [];
+        $out = [];
+        try {
+            $st = $db->prepare("SELECT user_cname FROM user WHERE id = ? AND state = 1");
+            foreach ($ids as $id) {
+                if ($id === $targetUserId) continue; // 自己不能當自己的代理
+                $st->execute([$id]);
+                $name = $st->fetchColumn();
+                if ($name === false) continue; // 離職者不列入
+                $out[] = ['user_id' => $id, 'user_cname' => (string)$name, 'source' => $source];
+            }
+        } catch (Throwable $e) { return []; }
+        return $out;
     }
 }
 
