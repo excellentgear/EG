@@ -1,6 +1,6 @@
 # EGsystem — AI 工作規範（每次 session 必讀）
 
-> 最後修改：2026-07-29 — 路由表新增 `ai-rules/13-共用帳號通知與綁定.md`（現場共用帳號成員綁定/通知轉送/鎖密碼；規格已定案待實作）。（前次 07-28）路由表新增 `ai-rules/12-請假系統製作說明.md`（請假動工前必讀，代理走 delegate_lib、勿用 leave_agent_setting）；鐵律6 推送改用 **`git pushall`**（雙 remote：origin=excellentgear/EG、backup=ellentravel1003/EGsystem；只 git push 會漏備份）；路由表新增 `ai-rules/11-代理系統設計.md`（代理人解析一律走 delegate_lib）；鐵律5 附件暫存機制（temp/active，見 ai-rules/07）。
+> 最後修改：2026-07-29 — 鐵律6「若新增頁面」補上**版型必備 JS 載入順序**（缺 `custom.min.js` 左側欄選單就死；此陷阱原本只記在 `ai-rules/00-診斷.md`＝壞了才去查的文件，導致新頁面重複踩坑兩次，故移到動工前就會讀到的地方）。（同日）路由表新增 `ai-rules/13-共用帳號通知與綁定.md`（現場共用帳號成員綁定/通知轉送/鎖密碼；規格已定案待實作）。（前次 07-28）路由表新增 `ai-rules/12-請假系統製作說明.md`（請假動工前必讀，代理走 delegate_lib、勿用 leave_agent_setting）；鐵律6 推送改用 **`git pushall`**（雙 remote：origin=excellentgear/EG、backup=ellentravel1003/EGsystem；只 git push 會漏備份）；路由表新增 `ai-rules/11-代理系統設計.md`（代理人解析一律走 delegate_lib）；鐵律5 附件暫存機制（temp/active，見 ai-rules/07）。
 
 PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**已用 git 版本控管**，分支 `master`，改壞可用 git 復原——但前提是每個檔案改完都有立刻 commit＋**`git pushall`**（雙 remote，見鐵律6），沒 push 的部分一樣救不回來。
 
@@ -24,7 +24,7 @@ PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**�
      - 兩個 remote 的 URL 都已內嵌各自帳號的 PAT。若某邊 push 出現 `Repository not found`(404) 或 401＝該帳號 PAT 失效/無權限：**勿自行改 remote/憑證**，回報使用者重產該帳號 PAT（iOS App 不能產、需 github.com 網頁）。細節與踩坑見記憶 `git_push_broken`。
      - 注意：`views/ADM/db_backup.php` 的「GitHub 帳號綁定」只會覆寫 `origin` 的 token（保留 excellentgear/EG 路徑），不會動 `backup` remote。
    - 寫入 page_change_log（範本見下）
-   - 若新增頁面：到 `views/user/user_permissions.php` 仿照報價單加上該頁角色設定區塊；並登記進選單＝`system_module_pages` INSERT 一列（page_name＋page_url 格式 `/EGsystem/views/...`、sort_order=MAX+1）再把 group_id 綁到「測試功能」主項目（system_module_groups.group_name='測試功能'），等同 `views/admin/system_module_setting.php` 的「子頁面設定＋主項目綁定」操作；帶參數才能開的子頁（設計器/填寫頁等）不登記，只登記入口頁
+   - 若新增頁面：**頁面底部必須依序載入 `jquery.min.js`→`bootstrap.min.js`→`fastclick.js`→`nprogress.js`→`custom.min.js`（缺 custom.min.js 左側欄選單就死，已重複踩過兩次）**；到 `views/user/user_permissions.php` 仿照報價單加上該頁角色設定區塊；並登記進選單＝`system_module_pages` INSERT 一列（page_name＋page_url 格式 `/EGsystem/views/...`、sort_order=MAX+1）再把 group_id 綁到「測試功能」主項目（system_module_groups.group_name='測試功能'），等同 `views/admin/system_module_setting.php` 的「子頁面設定＋主項目綁定」操作；帶參數才能開的子頁（設計器/填寫頁等）不登記，只登記入口頁
 
 ## page_change_log 寫入範本
 ```
