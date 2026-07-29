@@ -82,7 +82,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         .cal-month h4{ text-align:center; color:var(--warm-head); margin:4px 0 8px; }
         table.cal{ width:100%; border-collapse:collapse; table-layout:fixed; }
         table.cal th{ background:var(--warm-bg); color:var(--warm-head); font-size:12px; padding:4px 0; border:1px solid var(--warm-line); font-weight:normal; }
-        table.cal td{ border:1px solid var(--warm-line); vertical-align:top; height:74px; padding:2px 3px; cursor:pointer; }
+        table.cal td{ border:1px solid var(--warm-line); vertical-align:top; height:58px; padding:1px 2px; cursor:pointer; }
         table.cal td.empty{ background:#fbfbfb; cursor:default; }
         table.cal td.holiday{ background:#efe6d8; }
         table.cal td.makeup{ background:#fff6e8; }
@@ -90,14 +90,14 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         table.cal td.sun .dnum{ color:#c0562c; }
         .dnum{ font-size:12px; color:#7a6a52; }
         .dnum .tag{ font-size:10px; color:#b08a5a; margin-left:2px; }
-        .chip{ display:flex; align-items:center; gap:3px; font-size:11px; margin-top:2px; padding:1px 4px; border-radius:3px; color:#4a3a28; background:#f3ead9;
-               white-space:nowrap; overflow:hidden; border-left:4px solid #ccc; }
+        .chip{ display:flex; align-items:center; gap:2px; font-size:10px; line-height:1.35; margin-top:1px; padding:0 3px; border-radius:2px; color:#4a3a28; background:#f3ead9;
+               white-space:nowrap; overflow:hidden; border-left:3px solid #ccc; }
         .chip .chip-nm{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
-        .chip .chip-lane{ font-size:9px; color:#fff; padding:0 4px; border-radius:2px; white-space:nowrap; flex:none; }
+        .chip .chip-lane{ font-size:8px; color:#fff; padding:0 3px; border-radius:2px; white-space:nowrap; flex:none; }
         .lane-bar{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:8px; }
         .lane-tag{ font-size:12px; padding:2px 9px; border-radius:11px; cursor:pointer; color:#fff; user-select:none; }
         .lane-tag.off{ opacity:.35; text-decoration:line-through; }
-        .chip-more{ font-size:10px; color:#8c5a3c; background:#f3ead9; border-radius:3px; margin-top:2px; padding:1px 4px; text-align:center; cursor:pointer; }
+        .chip-more{ font-size:9px; color:#8c5a3c; background:#f3ead9; border-radius:2px; margin-top:1px; padding:0 3px; text-align:center; cursor:pointer; }
         .chip-more:hover{ background:#e9dcc4; }
         .chip.signed{ background:var(--amber); color:#fff; border-left-color:#8c5320; }
         .chip.left{ text-decoration:line-through; opacity:.6; }
@@ -112,7 +112,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         .rst-logtabs div.active{ color:var(--amber); border-bottom:2px solid var(--amber); font-weight:bold; }
         .chip .stamp{ display:inline-block; min-width:15px; height:15px; line-height:13px; text-align:center; border:1px solid #c0392b; color:#c0392b; background:#fff; border-radius:50%; font-size:9px; transform:rotate(-8deg); margin-right:3px; vertical-align:middle; }
         .chip.signed .stamp{ border-color:#fff; color:#fff; background:transparent; }
-        .leave-stamp{ display:inline-block; min-width:15px; height:15px; line-height:12px; text-align:center; border:1.5px solid #c0392b; color:#c0392b; background:#fff; border-radius:50%; font-size:9px; font-weight:bold; transform:rotate(-8deg); flex:none; }
+        .leave-stamp{ display:inline-block; min-width:13px; height:13px; line-height:11px; text-align:center; border:1.2px solid #c0392b; color:#c0392b; background:#fff; border-radius:50%; font-size:8px; font-weight:bold; transform:rotate(-8deg); flex:none; }
         .leave-stamp.half{ border-color:#C77D1A; color:#C77D1A; }
         .chip.onleave{ background:#f7e2dc; }
         .chip.onleave.half{ background:#f9edd8; }
@@ -256,7 +256,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                         </span>
                     </div>
                     <div class="legend" style="margin-bottom:8px;">
-                        圖例：<b style="background:#efe6d8"></b>休假 <b style="background:#fff6e8"></b>補班 <b style="background:var(--amber)"></b>已簽核 <b style="background:#fff;box-shadow:inset 0 0 0 2px #8c5320"></b>我的班 ・<span class="leave-stamp" style="width:14px;height:14px;line-height:11px">休</span>整天請假 ・<span class="leave-stamp half" style="width:14px;height:14px;line-height:11px">半</span>半天 ・「代」＝代理補班
+                        圖例：<b style="background:#efe6d8"></b>休假 <b style="background:#fff6e8"></b>補班 <b style="background:#fff;box-shadow:inset 0 0 0 2px #8c5320"></b>我的班 ・<span class="leave-stamp" style="width:14px;height:14px;line-height:11px">休</span>整天請假 ・<span class="leave-stamp half" style="width:14px;height:14px;line-height:11px">半</span>半天 ・「代」＝代理補班
                     </div>
                     <div class="lane-bar" id="shiftLaneBar"></div>
                     <div class="cal-months" id="shiftMonths"></div>
@@ -392,7 +392,12 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
     <div class="modal-body">
         <input type="hidden" id="sa_oldids">
         <div id="sa_editnote" style="display:none;background:#fff6e8;border:1px solid #e4d8c6;border-radius:5px;padding:7px;margin-bottom:8px;font-size:12px;color:#8a5a2b;">
-            <i class="fa fa-info-circle"></i> 編輯模式：存檔會依下方設定<b>重建這張排班單</b>（原本的簽核紀錄會清除）。<b>已過去的日期不會變動</b>。
+            <i class="fa fa-info-circle"></i> 編輯模式：存檔會依下方設定<b>重建這張排班單</b>。預設<b>已過去的日期不會變動</b>。
+            <?php if ($IS_ADMIN): ?>
+            <div class="checkbox" style="margin:4px 0 0;"><label style="color:#c0392b;font-weight:bold;">
+                <input type="checkbox" id="sa_include_past"> 連同過去日期一起修改（測試用，僅管理員）
+            </label></div>
+            <?php endif; ?>
         </div>
         <div class="form-group"><label>班別 *</label><select id="sa_shift" class="form-control"></select></div>
         <div class="row">
@@ -664,7 +669,7 @@ var R = (function(){
             var cells=(calData.cells[ds]||[]).filter(function(c){ return !hiddenLanes[c.lane_id]; });
             var shown=0, more=0;
             cells.forEach(function(c){
-                if(!calExpanded[ds] && shown>=3){ more++; return; }   // 預設只顯示 3 人
+                if(!calExpanded[ds] && shown>=2){ more++; return; }   // 預設只顯示 2 人
                 shown++;
                 var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
                 var lcol=c.color||laneColor(l,idx);
@@ -677,7 +682,7 @@ var R = (function(){
                   +'</div>';
             });
             if(more>0) h+='<div class="chip-more" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')">⋯ 還有 '+more+' 人</div>';
-            else if(calExpanded[ds] && cells.length>3) h+='<div class="chip-more" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')">收合</div>';
+            else if(calExpanded[ds] && cells.length>2) h+='<div class="chip-more" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')">收合</div>';
             h+='</td>'; col++;
             if(col%7===0 && day<dim) h+='</tr><tr>';
         }
@@ -1146,7 +1151,7 @@ var R = (function(){
         shiftCalData.months.forEach(function(mo){
             body+=pdfMonth(mo, shiftCalData.cells, hol, mk, function(c){
                 return '<span class="it" style="border-left-color:'+c.color+'">'+esc(c.name)+'（'+esc(c.lane_name)+(c.time?' '+c.time:'')+'）'
-                     +(c.sign?' ✔':'')+(c.is_agent?' [代]':'')+(c.leave?(c.leave_full?' [休]':' [半]'):'')+'</span>';
+                     +(c.is_agent?' [代]':'')+(c.leave?(c.leave_full?' [休]':' [半]'):'')+'</span>';
             });
         });
         pdfWindow('固定班別排班表', body);
@@ -1257,18 +1262,17 @@ var R = (function(){
             var scells=(shiftCalData.cells[ds]||[]).filter(function(c){ return !shiftHidden[c.shift_id]; });
             var sshown=0, smore=0;
             scells.forEach(function(c){
-                if(!shiftExpanded[ds] && sshown>=3){ smore++; return; }
+                if(!shiftExpanded[ds] && sshown>=2){ smore++; return; }
                 sshown++;
-                var tip=c.lane_name+(c.time?'('+c.time+')':'')+'：'+c.name+(c.is_agent?'（代理）':'')+(c.leave?'（'+(c.leave_full?'整天請假':'半天')+'）':'')+(c.sign&&c.signed_at?'（已簽 '+c.signed_at+'）':'');
-                h+='<div class="chip'+(c.sign?' signed':'')+(c.mine?' mine':'')+(c.leave?(c.leave_full?' onleave':' onleave half'):'')+'" style="border-left-color:'+c.color+'" title="'+esc(tip)+'">'
-                  +(c.sign?'<span class="stamp">簽</span>':'')
+                var tip=c.lane_name+(c.time?'('+c.time+')':'')+'：'+c.name+(c.is_agent?'（代理）':'')+(c.leave?'（'+(c.leave_full?'整天請假':'半天')+'）':'');
+                h+='<div class="chip'+(c.mine?' mine':'')+(c.leave?(c.leave_full?' onleave':' onleave half'):'')+'" style="border-left-color:'+c.color+'" title="'+esc(tip)+'">'
                   +'<span class="chip-nm">'+esc(c.name)+'</span>'
                   +leaveHtml(c)
                   +(c.is_agent?'<span class="chip-lane" style="background:#8c5a3c">代</span>':'')
                   +'</div>';
             });
             if(smore>0) h+='<div class="chip-more" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')">⋯ 還有 '+smore+' 人</div>';
-            else if(shiftExpanded[ds] && scells.length>3) h+='<div class="chip-more" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')">收合</div>';
+            else if(shiftExpanded[ds] && scells.length>2) h+='<div class="chip-more" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')">收合</div>';
             h+='</td>'; col++; if(col%7===0&&day<dim) h+='</tr><tr>';
         }
         while(col%7!==0){ h+='<td class="empty"></td>'; col++; }
@@ -1291,7 +1295,7 @@ var R = (function(){
             // 只有「非每天」時才回填星期條件（7天全含＝視為每天）
             if(block.weekdays && block.weekdays.length && block.weekdays.length<7)
                 block.weekdays.forEach(function(w){ $('.sa-wd[value="'+w+'"]').prop('checked',true); });
-            $('#sa_skipholiday').prop('checked',true); $('#sa_search').val('');
+            $('#sa_skipholiday').prop('checked',true); $('#sa_search').val(''); $('#sa_include_past').prop('checked',false);
             $('#sa_users').html(RD.users.map(function(u){return '<label class="msitem" style="display:block;font-weight:normal;margin:1px 0"><input type="checkbox" value="'+u.id+'"'+(+u.id===+block.user_id?' checked':'')+' onchange="R.saSync()"> '+esc(u.user_cname)+posLabel(u)+'</label>';}).join(''));
             saSync();
             $('#shiftAssignModal').modal('show');
@@ -1327,6 +1331,7 @@ var R = (function(){
         var oldIds=$('#sa_oldids').val();
         if(oldIds){   // 編輯模式：重建這張排班單
             p.old_ids=JSON.parse(oldIds);
+            p.include_past=$('#sa_include_past').is(':checked')?1:0;
             post('update_shift_block',{payload:JSON.stringify(p)}).done(function(r){
                 if(!r.success){alert(r.message);return;}
                 $('#shiftAssignModal').modal('hide');
@@ -1363,8 +1368,15 @@ var R = (function(){
     function editBlock(i){ var b=blockData[i]; if(b) openShiftAssign(b); }
     function delBlock(i){
         var b=blockData[i]; if(!b) return;
-        if(!confirm('刪除整張排班單？\n\n'+b.shift_name+'　'+b.user_name+'\n'+b.date_from+' ~ '+b.date_to+'（'+b.days+' 天）\n\n（已過去的日期不會刪除）')) return;
-        post('delete_shift_block',{ids:b.ids}).done(function(r){ if(!r.success){alert(r.message);return;} alert('已刪除 '+r.deleted+' 筆'); loadShiftCal(); loadBlocks(); });
+        var info=b.shift_name+'　'+b.user_name+'\n'+b.date_from+' ~ '+b.date_to+'（'+b.days+' 天）';
+        var inc=0;
+        if(RD.isAdmin){
+            if(!confirm('刪除整張排班單？\n\n'+info)) return;
+            inc=confirm('要「連同已過去的日期」一起刪除嗎？\n\n確定＝全部刪除（測試用）\n取消＝只刪今天以後（保留歷史）')?1:0;
+        } else {
+            if(!confirm('刪除整張排班單？\n\n'+info+'\n\n（已過去的日期不會刪除）')) return;
+        }
+        post('delete_shift_block',{ids:b.ids, include_past:inc}).done(function(r){ if(!r.success){alert(r.message);return;} alert('已刪除 '+r.deleted+' 筆'); loadShiftCal(); loadBlocks(); });
     }
     function openShiftDay(ds){
         if(!shiftCalData) return;
@@ -1372,10 +1384,9 @@ var R = (function(){
         $('#shiftDayTitle').text(ds+' 班別排班');
         if(!cells.length){ $('#shiftDayBody').html('<div style="color:#a08c72">當天無排班</div>'); }
         else{
-            var h='<table class="rst-list" style="width:100%"><tr><th>班別</th><th>人員</th><th>狀態</th><th>操作</th></tr>';
+            var h='<table class="rst-list" style="width:100%"><tr><th>班別</th><th>人員</th><th>操作</th></tr>';
             cells.forEach(function(c){
                 var act='';
-                if(c.can_sign) act+= c.sign?'<button class="btn btn-xs btn-default" onclick="R.shiftSign('+c.aid+',0)">取消簽核</button>':'<button class="btn btn-xs btn-warning" onclick="R.shiftSign('+c.aid+',1)">簽核</button> ';
                 if(shiftCalData.can_edit){
                     if(c.leave) act+=' <button class="btn btn-xs btn-warning" onclick="R.fillAgent('+c.aid+',\''+esc(c.name).replace(/'/g,"\\\x27")+'\')" title="以其代理人補此班"><i class="fa fa-user-md"></i> 代理補班</button>';
                     act+=' <button class="btn btn-xs btn-default" onclick="R.editShiftAssign('+c.aid+')"><i class="fa fa-pencil"></i> 編輯</button>';
@@ -1384,7 +1395,7 @@ var R = (function(){
                 }
                 h+='<tr'+(c.mine?' style="background:#fbf3e6"':'')+'><td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+c.color+';margin-right:4px"></span>'+esc(c.lane_name)+(c.time?' <span style="color:#a08c72">'+c.time+'</span>':'')+'</td>'
                   +'<td>'+esc(c.name)+' '+leaveHtml(c)+(c.is_agent?' <span class="label" style="background:#8c5a3c">代</span>':'')+(c.mine?' <span class="label label-warning">我</span>':'')+'</td>'
-                  +'<td>'+(c.sign?'已簽 '+(c.signed_at||''):'未簽')+'</td><td>'+(act||'—')+'</td></tr>';
+                  +'<td>'+(act||'—')+'</td></tr>';
             });
             $('#shiftDayBody').html(h+'</table>');
         }
