@@ -934,20 +934,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $ph_p     = implode(',', array_fill(0, count($part_nos), '?'));
 
             // ③ 批量：is_list 出貨統計（排除 is_count=0 不納入計算的性質，與 Shipping_Analysis 一致）
+            // 出貨統計一律以「料號 id (d_setting.d_id)」歸戶，不可用料號字串當 key——同一個料號在
+            // d_setting 可能有多列（不同版次/規格），用字串當 key 會讓每一列都拿到同一份統計。
+            // 規則：優先取 is_list.d_setting_id；未綁定的舊資料才回退用料號字串比對，
+            //       且一律歸給該料號最早建立的那一列（與 master_data_management.php 同口徑）。
             $st_ship = $pdo->prepare("
-                SELECT il.Product_id,
+                SELECT COALESCE(il.d_setting_id, fb.min_d_id) AS eff_d_id,
                        ROUND(AVG(CASE WHEN il.Unit_price > 0 THEN il.Unit_price ELSE NULL END), 2) AS avg_sell_price,
                        MAX(CASE WHEN il.Unit_price > 0 THEN il.Order_date ELSE NULL END)           AS last_ship_date,
                        COUNT(*) AS ship_count
                 FROM is_list il
                 LEFT JOIN is_sale_type ist ON il.sale_type = ist.sale_type_id
+                LEFT JOIN (SELECT D_Setting_Id, MIN(d_id) AS min_d_id FROM d_setting GROUP BY D_Setting_Id) fb
+                       ON fb.D_Setting_Id = il.Product_id
                 WHERE il.Product_id IN ($ph_p)
                   AND (ist.is_count IS NULL OR ist.is_count != 0)
-                GROUP BY il.Product_id
+                GROUP BY eff_d_id
+                HAVING eff_d_id IS NOT NULL
             ");
             $st_ship->execute($part_nos);
             $ship_map = [];
-            foreach ($st_ship->fetchAll(PDO::FETCH_ASSOC) as $s) $ship_map[$s['Product_id']] = $s;
+            foreach ($st_ship->fetchAll(PDO::FETCH_ASSOC) as $s) $ship_map[intval($s['eff_d_id'])] = $s;
 
             // ③b 批量：order_track 訂單平均單價（is_list 無資料時的備用售價）
             $st_ord_price = $pdo->prepare("
@@ -1032,7 +1039,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // ⑦ 合併所有批量結果
             foreach ($rows as &$r) {
                 $pno  = $r['part_no'];
-                $ship = $ship_map[$pno] ?? null;
+                $ship = $ship_map[intval($r['d_id'])] ?? null; // 出貨統計以 d_id 取，不可用料號字串
+
                 $lbom = $latest_bom_map[$pno] ?? null;
                 $bom_key    = $lbom ? $lbom['bom'] : null;
                 $full_cost  = $bom_key ? ($cost_map[$bom_key] ?? 0) : 0;
@@ -1535,15 +1543,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             } elseif ($type === 'list') {
                 echo implode(',', ['料號','品名','規格','客戶','最新出貨均價','最新BOM','估計單位成本','利潤率%','出貨次數','最近出貨日']) . "\n";
+                // 出貨統計先以「料號 id (d_setting.d_id)」聚合完再 join，不可用料號字串直接 join
+                // d_setting——同一料號多列時每一列都會拿到同一份統計（實際沒出貨的那列也有數字）。
                 $st = $pdo->prepare("
                     SELECT ds.D_Setting_Id, ds.Drawing_No, ds.Spec_No,
                            COALESCE(cl.customer,'') AS client_name,
-                           ROUND(AVG(NULLIF(il.Unit_price,0)),2) AS avg_price,
-                           (SELECT MAX(Order_date) FROM is_list WHERE Product_id = ds.D_Setting_Id AND Unit_price > 0) AS last_ship
+                           s.avg_price, s.last_ship
                     FROM d_setting ds
                     LEFT JOIN customer_list cl ON ds.Customer_Id = cl.customer_id
-                    LEFT JOIN is_list il ON il.Product_id = ds.D_Setting_Id AND il.Unit_price > 0
-                    GROUP BY ds.d_id
+                    LEFT JOIN (
+                        SELECT COALESCE(il.d_setting_id, fb.min_d_id) AS eff_d_id,
+                               ROUND(AVG(NULLIF(il.Unit_price,0)),2) AS avg_price,
+                               MAX(il.Order_date) AS last_ship
+                        FROM is_list il
+                        LEFT JOIN (SELECT D_Setting_Id, MIN(d_id) AS min_d_id FROM d_setting GROUP BY D_Setting_Id) fb
+                               ON fb.D_Setting_Id = il.Product_id
+                        WHERE il.Unit_price > 0
+                        GROUP BY eff_d_id
+                        HAVING eff_d_id IS NOT NULL
+                    ) s ON s.eff_d_id = ds.d_id
                     ORDER BY ds.D_Setting_Id
                 ");
                 $st->execute();
