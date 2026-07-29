@@ -245,8 +245,12 @@ $jsVer = @filemtime(__DIR__ . '/../../resource/js/data_console.js') ?: time();
   </div>
 </div></div></div>
 
+<!-- Gentelella 版型必備，順序不可調換：缺 custom.min.js 左側欄選單就不會展開（ai-rules/00-診斷.md 陷阱表） -->
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/fastclick.js"></script>
+<script src="../../resource/js/nprogress.js"></script>
+<script src="../../resource/js/custom.min.js"></script>
 <script>
 window.DC_API = '../../src/store/DataConsole_API.php';
 </script>
