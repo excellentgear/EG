@@ -9530,7 +9530,9 @@ echo "</script>\n";
             ProcessName: processInfo.ProcessName,
             maker_id_no: processInfo.maker_id_no,
             maker_id: processInfo.maker_id,
-            batch_label: processInfo.batch_label || null
+            batch_label: processInfo.batch_label || null,
+            bom_sn: processInfo.bom_sn,
+            processing_state: processInfo.processing_state
         });
     }
 
@@ -9591,7 +9593,9 @@ echo "</script>\n";
                     ProcessName: procName,
                     maker_id_no: b.maker_id_no,
                     maker_id: b.maker_id,
-                    batch_label: b.batch_label
+                    batch_label: b.batch_label,
+                    bom_sn: processInfo.bom_sn,
+                    processing_state: b.processing_state
                 });
             };
         });
@@ -9616,6 +9620,27 @@ echo "</script>\n";
         const today=new Date(), todayStr=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
         const defaultMakerNo=String(target.maker_id_no||''), defaultMakerName=String(target.maker_id||'');
         const batchTitle = target.batch_label ? (' <span style="color:#337ab7;">[批次 '+escapeHtml(target.batch_label)+']</span>') : '';
+        // ── 本關已移轉（直接把這一關設為 E 生管已移轉，需輸入大寫 OK 二次確認）──
+        const _curState = String(target.processing_state || '');
+        const _snText   = (target.bom_sn !== undefined && target.bom_sn !== null && target.bom_sn !== '') ? ('第 ' + target.bom_sn + ' 關') : '本關';
+        const _canMarkE = ((!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer) && _curState !== 'E';
+        const _etrBtnHtml = _canMarkE
+            ? `<button id="qtr-etr-${fid}" class="btn" style="margin-right:auto;background:#F0A24B;border:1px solid #d9861f;color:#fff;font-weight:bold;" title="不經發單流程，直接把這一關標記為生管已移轉(E)">本關已移轉</button>`
+            : '';
+        const _etrPanelHtml = _canMarkE ? `
+  <div id="qtr-etr-panel-${fid}" style="display:none;margin-top:12px;padding:10px;border:1px solid #DD5138;background:#FBEBE4;border-radius:4px;">
+    <div style="font-size:12px;color:#8a2d10;line-height:1.6;">
+      <b>二次確認：</b>將把 ${escapeHtml(bom)} 的 <b>${escapeHtml(_snText)}　${escapeHtml(procNo)} ${escapeHtml(procName)}</b>${batchTitle}
+      狀態直接設為 <b>生管已移轉（E）</b>${_curState ? '（目前狀態：' + escapeHtml(_curState) + '）' : ''}，本關即視為結束。<br>
+      確定請在下方輸入大寫 <b>OK</b> 後按「確認設為已移轉」。
+    </div>
+    <div style="margin-top:8px;display:flex;gap:6px;align-items:center;">
+      <input type="text" id="qtr-etr-input-${fid}" class="form-control" placeholder="輸入 OK" autocomplete="off" style="width:120px;">
+      <button id="qtr-etr-go-${fid}" class="btn btn-sm" disabled style="background:#c0561f;border:1px solid #a4491a;color:#fff;">確認設為已移轉</button>
+      <button id="qtr-etr-cancel-${fid}" class="btn btn-sm btn-default">取消</button>
+    </div>
+  </div>` : '';
+
         const modalId='qtr-modal-'+fid; const ex=document.getElementById(modalId); if(ex)ex.remove();
         const overlay=document.createElement('div');
         overlay.id=modalId;
@@ -9643,8 +9668,10 @@ echo "</script>\n";
     </div>
   </div>
   ${_qtrNoteHtml}
+  ${_etrPanelHtml}
 </div>
 <div style="padding:10px 16px;border-top:1px solid #e0e0e0;display:flex;justify-content:flex-end;gap:8px;">
+  ${_etrBtnHtml}
   <button id="qtr-cancel-${fid}" class="btn btn-default">取消</button>
   <button id="qtr-confirm-${fid}" class="btn btn-primary">確認移轉</button>
 </div></div>`;
@@ -9713,6 +9740,86 @@ echo "</script>\n";
         function _closeQtr(){const m=document.getElementById(modalId);if(m)m.remove();}
         document.getElementById('qtr-close-'+fid).onclick=_closeQtr;
         document.getElementById('qtr-cancel-'+fid).onclick=_closeQtr;
+
+        // ── 本關已移轉：展開二次確認 → 需輸入大寫 OK → 設 processing_state='E' ──
+        if (_canMarkE) {
+            const _etrBtn    = document.getElementById('qtr-etr-'+fid);
+            const _etrPanel  = document.getElementById('qtr-etr-panel-'+fid);
+            const _etrInput  = document.getElementById('qtr-etr-input-'+fid);
+            const _etrGo     = document.getElementById('qtr-etr-go-'+fid);
+            const _etrCancel = document.getElementById('qtr-etr-cancel-'+fid);
+
+            _etrBtn.onclick = function() {
+                _etrPanel.style.display = 'block';
+                _etrBtn.disabled = true;
+                _etrInput.value = '';
+                _etrGo.disabled = true;
+                _etrInput.focus();
+            };
+            _etrCancel.onclick = function() {
+                _etrPanel.style.display = 'none';
+                _etrBtn.disabled = false;
+            };
+            _etrInput.addEventListener('input', function() {
+                _etrGo.disabled = (this.value !== 'OK'); // 必須是大寫 OK
+            });
+            _etrInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (!_etrGo.disabled) _etrGo.click();
+                }
+            });
+
+            _etrGo.onclick = function() {
+                if (_etrInput.value !== 'OK') { alert('請輸入大寫 OK 以確認。'); return; }
+                const $go = $(_etrGo);
+                $go.prop('disabled', true).text('處理中...');
+                $.ajax({
+                    url: _phpSelf, type: 'POST', dataType: 'json',
+                    data: { action: 'mark_process_transferred', bom_ing_fid: fid, confirm: 'OK' },
+                    success: function(resp) {
+                        if (resp && resp.no_action) {
+                            alert(resp.message || '本關已經是已移轉狀態。');
+                            _closeQtr();
+                            fetchDataAndFilter();
+                            return;
+                        }
+                        if (resp && resp.success) {
+                            showTemporaryMessage(resp.message || '本關已設為生管已移轉(E)', true);
+                            _closeQtr();
+                            // 樂觀更新前端快取，讓畫面立即反映
+                            if (Array.isArray(window.bomPSList)) window.bomPSList.forEach(function(p) {
+                                if (String(p.bom_ing_fid || '') === String(fid)) p.processing_state = 'E';
+                            });
+                            if (window.ingActiveMap && Array.isArray(window.ingActiveMap[bom])) {
+                                window.ingActiveMap[bom].forEach(function(p) {
+                                    if (String(p.bom_ing_fid || '') === String(fid)) p.processing_state = 'E';
+                                });
+                            }
+                            if (Array.isArray(fullDataset)) fullDataset.forEach(function(item) {
+                                if (item && item.bom_ing_fid && String(item.bom_ing_fid).split(',').some(function(id) { return String(id).trim() === String(fid); })) {
+                                    item.processing_state = 'E';
+                                    delete _rowDetailCache[item.bom];
+                                }
+                            });
+                            delete _rowDetailCache[bom];
+                            processAndRenderData();
+                            isSelectFocused = false; isTextareaFocused = false;
+                            isUpdatingOrderId = false; isPriorityUpdating = false;
+                            fetchDataAndFilter();
+                        } else {
+                            alert('設定失敗：' + ((resp && resp.message) || '未知錯誤'));
+                            $go.prop('disabled', false).text('確認設為已移轉');
+                        }
+                    },
+                    error: function() {
+                        alert('與伺服器通訊失敗。');
+                        $go.prop('disabled', false).text('確認設為已移轉');
+                    }
+                });
+            };
+        }
+
         overlay.addEventListener('click',function(e){if(e.target===overlay)_closeQtr();});
         document.getElementById('qtr-confirm-'+fid).onclick=function(){
             const $btn=$(this), transDate=$('#qtr-date-'+fid).val().trim(), makerNo=$('#qtr-maker-no-'+fid).val().trim(), makerName=$('#qtr-maker-name-'+fid).val().trim();
