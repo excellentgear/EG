@@ -57,7 +57,51 @@ case 'meta': {
           'cycle_months'=>vendor_audit_cycle_months($db), 'main_categories'=>$cats,
           'items'=>vendor_audit_items(), 'item_max'=>VENDOR_AUDIT_ITEM_MAX,
           'total_max'=>VENDOR_AUDIT_TOTAL_MAX, 'pass_rate'=>VENDOR_AUDIT_PASS_RATE,
-          'self_w'=>VENDOR_AUDIT_SELF_W, 'audit_w'=>VENDOR_AUDIT_AUDIT_W]);
+          'self_w'=>VENDOR_AUDIT_SELF_W, 'audit_w'=>VENDOR_AUDIT_AUDIT_W,
+          'eval_settings'=>vendor_eval_settings($db)]);
+}
+
+/* 定期評核：廠商下拉（納管非停用；有關鍵字則全廠搜尋） */
+case 'eval_vendors': {
+    $kw = trim((string)($_GET['kw'] ?? ''));
+    if ($kw !== '') {
+        $st = $db->prepare("SELECT maker_id_no, maker_id FROM maker_list
+                            WHERE (status IS NULL OR status<>?) AND (maker_id LIKE ? OR maker_id_no LIKE ? OR maker_id_all LIKE ?)
+                            ORDER BY maker_id LIMIT 50");
+        $st->execute([VENDOR_AUDIT_DISABLED, "%$kw%", "%$kw%", "%$kw%"]);
+    } else {
+        $st = $db->prepare("SELECT maker_id_no, maker_id FROM maker_list
+                            WHERE (status IS NULL OR status<>?) AND audit_managed=1 ORDER BY maker_id LIMIT 300");
+        $st->execute([VENDOR_AUDIT_DISABLED]);
+    }
+    jout(['vendors'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+/* 定期評核：某廠商×年度 月不良率/特採率/遲交率 + 半年判定 */
+case 'periodic_eval': {
+    $mid = trim((string)($_GET['maker_id_no'] ?? ''));
+    $year = (int)($_GET['year'] ?? date('Y'));
+    if ($mid === '') jerr('請選擇廠商');
+    $mk = $db->prepare("SELECT maker_id FROM maker_list WHERE maker_id_no=?");
+    $mk->execute([$mid]);
+    $name = $mk->fetchColumn();
+    if ($name === false) jerr('找不到廠商');
+    $set = vendor_eval_settings($db);
+    $res = vendor_periodic_eval($db, $mid, $year, $set);
+    jout(['maker_id_no'=>$mid, 'maker_name'=>$name, 'year'=>$year, 'settings'=>$set,
+          'months'=>$res['months'], 'halves'=>$res['halves']]);
+}
+
+/* 定期評核門檻設定（管理員） */
+case 'save_eval_settings': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    vendor_eval_save_settings($db, [
+        'vendor_eval_ng_max'      => max(0, (float)($_POST['ng_max'] ?? 5)),
+        'vendor_eval_special_max' => max(0, (float)($_POST['special_max'] ?? 100)),
+        'vendor_eval_late_max'    => max(0, (float)($_POST['late_max'] ?? 30)),
+        'vendor_eval_default_days'=> max(0, (int)($_POST['default_days'] ?? 7)),
+    ]);
+    jout(['settings'=>vendor_eval_settings($db)]);
 }
 
 /* 某大類下的加工項目(小類) */

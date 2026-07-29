@@ -48,6 +48,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .va-toolbar .btn-warm:hover { background:#d98a33; }
         .va-role-badge { margin-left:auto; font-size:13px; color:#5b3a1e; background:#F7E0BD; border-radius:12px; padding:4px 12px; }
         .va-role-badge .fa-question-circle { cursor:pointer; color:#b5762a; margin-left:5px; }
+        .va-tabs { display:flex; gap:4px; margin-bottom:8px; border-bottom:2px solid #E8D5B5; }
+        .va-tab { border:1px solid #E8D5B5; border-bottom:none; background:#FBF3E5; color:#8a6d45; cursor:pointer;
+            padding:7px 16px; font-size:14px; border-radius:6px 6px 0 0; margin-bottom:-2px; }
+        .va-tab.active { background:#fff; color:#5b3a1e; font-weight:bold; border-bottom:2px solid #fff; }
         .va-stat { display:flex; flex-wrap:wrap; gap:18px; align-items:center; margin-bottom:8px;
             border:1.5px solid #E8D5B5; border-radius:8px; padding:10px 14px; background:#FFF7E8; }
         .va-stat .s-num { font-size:22px; font-weight:bold; color:#8A5A2B; }
@@ -153,6 +157,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <p>請洽管理者於「使用者權限設定」指派「稽核檢閱／登錄／管理員」角色。</p>
         </div>
 <?php else: ?>
+        <div class="va-tabs">
+            <button class="va-tab active" data-tab="audit"><i class="fa fa-check-square-o"></i> 稽核批次</button>
+            <button class="va-tab" data-tab="eval"><i class="fa fa-line-chart"></i> 定期評核（月不良/遲交率）</button>
+        </div>
+        <div id="tabAudit">
         <div class="va-toolbar">
             <label>年度</label>
             <select id="yearSel"></select>
@@ -188,6 +197,38 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             每期(上/下半年)由「加入稽核對象」挑一批廠商（大類/加工項目篩選後多選，或隨機抽 N 家），逐一登錄稽核結果。
             KPI 執行率＝已完成 ÷ 本期對象數（<span class="st-pill st-dis">停用</span>廠商不列入）。
         </div>
+        </div><!-- /tabAudit -->
+
+        <div id="tabEval" style="display:none;">
+            <div class="va-toolbar">
+                <label>廠商</label>
+                <input type="text" id="evKw" placeholder="搜尋廠商名/編號" style="width:150px;">
+                <select id="evVendor" style="min-width:180px;"></select>
+                <label>年度</label>
+                <select id="evYear"></select>
+                <button class="btn-warm" id="evGo"><i class="fa fa-search"></i> 查詢</button>
+                <button id="evSet" style="display:none;"><i class="fa fa-cog"></i> 門檻設定</button>
+                <button id="evCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
+                <button onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
+            </div>
+            <div class="va-remind" id="evThresh"></div>
+            <div class="va-table-wrap">
+                <table class="va-table" id="evTable">
+                    <thead><tr>
+                        <th rowspan="2">月份</th>
+                        <th colspan="4">品質（進料檢驗）</th>
+                        <th colspan="3">交期</th>
+                    </tr><tr>
+                        <th>檢驗數</th><th>不良數</th><th>不良率</th><th>特採率</th>
+                        <th>應交數</th><th>遲交數</th><th>遲交率</th>
+                    </tr></thead>
+                    <tbody id="evBody"><tr><td colspan="8" style="padding:18px;color:#8a6d45;">請選擇廠商與年度後查詢</td></tr></tbody>
+                </table>
+            </div>
+            <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
+                資料自 ERP（bom_ing）自動計算：品質依檢驗日歸月（不良=ng、特採=QQ）；交期＝發包日＋約定工作天為應交日，遲交＝未回廠或回廠晚於應交。半年判定依門檻（管理員可設）。
+            </div>
+        </div><!-- /tabEval -->
 <?php endif; ?>
     </div>
     <?php include '../partPage/footer.html' ?>
@@ -288,6 +329,24 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     </div>
 </div></div>
 
+<!-- 定期評核門檻設定 modal -->
+<div class="va-mask" id="evSetMask"><div class="va-modal">
+    <div class="m-head"><span>定期評核門檻設定</span><span class="m-close" onclick="closeMask('evSetMask')">✕</span></div>
+    <div class="m-body">
+        <div class="grid2">
+            <div><label>不良率上限（%）</label><input type="number" id="stNgMax" step="0.1" min="0"></div>
+            <div><label>遲交率上限（%）</label><input type="number" id="stLateMax" step="0.1" min="0"></div>
+            <div><label>特採率上限（%，100=不判定）</label><input type="number" id="stSpMax" step="0.1" min="0"></div>
+            <div><label>約定工作天（算應交日）</label><input type="number" id="stDays" step="1" min="0"></div>
+        </div>
+        <div style="font-size:12px;color:#8a6d45;margin-top:8px;">半年不良率／遲交率超過上限即判不合格；特採率上限設 100 表示不納入判定。約定工作天沿用 KPI#7 準交口徑。</div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('evSetMask')">取消</button>
+        <button class="b-ok" onclick="submitEvSet()">儲存</button>
+    </div>
+</div></div>
+
 <!-- 歷史 modal -->
 <div class="va-mask" id="hisMask"><div class="va-modal wide">
     <div class="m-head"><span id="hisTitle">稽核歷史</span><span class="m-close" onclick="closeMask('hisMask')">✕</span></div>
@@ -354,7 +413,11 @@ function loadMeta(cb){
         $('#pkMonth').html(mo).val(m.cur_month);
         $('#recPlanMonth').html(mo);
         if (m.perms.canEdit) $('#btnPick').show();
-        if (m.perms.canAdmin){ $('#btnCycle').show(); $('#pkManageGrp').show(); }
+        if (m.perms.canAdmin){ $('#btnCycle').show(); $('#pkManageGrp').show(); $('#evSet').show(); }
+        var $ey = $('#evYear').empty();
+        for (var yy=m.cur_year+1; yy>=m.cur_year-4; yy--) $ey.append('<option value="'+yy+'">'+yy+'</option>');
+        $ey.val(m.cur_year);
+        loadEvVendors('');
         if (cb) cb();
     });
 }
@@ -665,6 +728,84 @@ $('#btnCsv').on('click', function(){
     a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}));
     a.download = '供應商稽核_'+$('#yearSel').val()+'_H'+$('#halfSel').val()+'.csv';
     a.click();
+});
+
+/* ---------- 分頁切換 ---------- */
+$('.va-tab').on('click', function(){
+    $('.va-tab').removeClass('active'); $(this).addClass('active');
+    var t=$(this).data('tab');
+    $('#tabAudit').toggle(t==='audit'); $('#tabEval').toggle(t==='eval');
+});
+
+/* ---------- 定期評核 ---------- */
+var EVAL = null;
+function loadEvVendors(kw){
+    $.getJSON(API, {action:'eval_vendors', kw:kw||''}, function(res){
+        if(!res.ok) return;
+        var $v=$('#evVendor').empty();
+        if(!res.vendors.length){ $v.append('<option value="">（無納管廠商，請先於稽核批次設定納管或用搜尋）</option>'); return; }
+        res.vendors.forEach(function(v){ $v.append('<option value="'+esc(v.maker_id_no)+'">'+esc(v.maker_id||v.maker_id_no)+'</option>'); });
+    });
+}
+var evKwT=null;
+$('#evKw').on('input', function(){ clearTimeout(evKwT); var k=$(this).val(); evKwT=setTimeout(function(){ loadEvVendors(k); }, 300); });
+$('#evGo').on('click', loadEval);
+$('#evVendor,#evYear').on('change', loadEval);
+function rate(v){ return v==null?'—':v+'%'; }
+function loadEval(){
+    var mid=$('#evVendor').val(); if(!mid) return;
+    NProgress.start();
+    $.getJSON(API, {action:'periodic_eval', maker_id_no:mid, year:$('#evYear').val()}, function(res){
+        NProgress.done();
+        if(!res.ok){ alert(res.error||'查詢失敗'); return; }
+        EVAL=res;
+        var s=res.settings;
+        $('#evThresh').html('廠商：<b>'+esc(res.maker_name)+'</b>　'+res.year+' 年　門檻：不良率≤'+s.ng_max+'%、遲交率≤'+s.late_max+'%'
+            +(s.special_max<100?('、特採率≤'+s.special_max+'%'):'（特採率不判定）')+'　約定工作天 '+s.default_days+' 天');
+        var overNg=function(v){return v!=null&&v>s.ng_max;}, overLt=function(v){return v!=null&&v>s.late_max;}, overSp=function(v){return s.special_max<100&&v!=null&&v>s.special_max;};
+        var h='';
+        for(var m=1;m<=12;m++){
+            var d=res.months[m];
+            h+='<tr><td>'+m+'月</td>';
+            h+='<td>'+d.qc_in+'</td><td>'+d.ng+'</td>';
+            h+='<td'+(overNg(d.ng_rate)?' class="af-judge-fail"':'')+'>'+rate(d.ng_rate)+'</td>';
+            h+='<td'+(overSp(d.special_rate)?' class="af-judge-fail"':'')+'>'+rate(d.special_rate)+'</td>';
+            h+='<td>'+d.del_in+'</td><td>'+d.late+'</td>';
+            h+='<td'+(overLt(d.late_rate)?' class="af-judge-fail"':'')+'>'+rate(d.late_rate)+'</td></tr>';
+            if(m===6) h+=halfRow(res.halves[1],'上半年',s);
+            if(m===12) h+=halfRow(res.halves[2],'下半年',s);
+        }
+        $('#evBody').html(h);
+    }).fail(function(x){ NProgress.done(); alert('查詢失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function halfRow(hf,label,s){
+    var judge=hf.judge?(hf.judge==='pass'?'<span class="af-judge-pass">合格</span>':'<span class="af-judge-fail">不合格</span>'):'—';
+    return '<tr style="background:#FDF3E0;font-weight:bold;"><td>'+label+'</td>'
+        +'<td>'+hf.qc_in+'</td><td>'+hf.ng+'</td><td>'+rate(hf.ng_rate)+'</td><td>'+rate(hf.special_rate)+'</td>'
+        +'<td>'+hf.del_in+'</td><td>'+hf.late+'</td><td>'+rate(hf.late_rate)+'　'+judge+'</td></tr>';
+}
+$('#evSet').on('click', function(){
+    var s=(EVAL&&EVAL.settings)||META.eval_settings||{ng_max:5,late_max:30,special_max:100,default_days:7};
+    $('#stNgMax').val(s.ng_max); $('#stLateMax').val(s.late_max); $('#stSpMax').val(s.special_max); $('#stDays').val(s.default_days);
+    openMask('evSetMask');
+});
+function submitEvSet(){
+    $.post(API, {action:'save_eval_settings', ng_max:$('#stNgMax').val(), late_max:$('#stLateMax').val(),
+        special_max:$('#stSpMax').val(), default_days:$('#stDays').val()}, function(res){
+        if(!res.ok){ alert(res.error||'儲存失敗'); return; }
+        META.eval_settings=res.settings; closeMask('evSetMask'); if($('#evVendor').val()) loadEval();
+    }, 'json');
+}
+$('#evCsv').on('click', function(){
+    if(!EVAL) return;
+    var rows=[['月份','檢驗數','不良數','不良率','特採率','應交數','遲交數','遲交率']];
+    for(var m=1;m<=12;m++){ var d=EVAL.months[m];
+        rows.push([m+'月',d.qc_in,d.ng,rate(d.ng_rate),rate(d.special_rate),d.del_in,d.late,rate(d.late_rate)]); }
+    [['上半年',EVAL.halves[1]],['下半年',EVAL.halves[2]]].forEach(function(p){ var hf=p[1];
+        rows.push([p[0],hf.qc_in,hf.ng,rate(hf.ng_rate),rate(hf.special_rate),hf.del_in,hf.late,rate(hf.late_rate)+(hf.judge?(hf.judge==='pass'?' 合格':' 不合格'):'')]); });
+    var csv='﻿'+rows.map(function(l){return l.map(function(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
+    var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));
+    a.download='供應商定期評核_'+esc(EVAL.maker_name)+'_'+EVAL.year+'.csv'; a.click();
 });
 
 $('#btnRoleHelp').on('click', function(){ openMask('helpMask'); });

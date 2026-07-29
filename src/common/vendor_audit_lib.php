@@ -219,6 +219,97 @@ function vendor_audit_set_cycle(PDO $db, int $months): void {
     $st->execute([(string)$months]);
 }
 
+/* ---- 定期評核門檻設定（system_settings） ---- */
+function vendor_eval_setting(PDO $db, string $key, $default) {
+    try {
+        $st = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key=? LIMIT 1");
+        $st->execute([$key]);
+        $v = $st->fetchColumn();
+        return ($v === false || $v === null || $v === '') ? $default : $v;
+    } catch (Throwable $e) { return $default; }
+}
+function vendor_eval_settings(PDO $db): array {
+    return [
+        'ng_max'       => (float)vendor_eval_setting($db, 'vendor_eval_ng_max', 5),        // 不良率上限%
+        'special_max'  => (float)vendor_eval_setting($db, 'vendor_eval_special_max', 100), // 特採率上限%(100=不判定)
+        'late_max'     => (float)vendor_eval_setting($db, 'vendor_eval_late_max', 30),     // 遲交率上限%
+        'default_days' => (int)vendor_eval_setting($db, 'vendor_eval_default_days', 7),    // 約定工作天(算應交日)
+    ];
+}
+function vendor_eval_save_settings(PDO $db, array $vals): void {
+    $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
+                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+    foreach (['vendor_eval_ng_max','vendor_eval_special_max','vendor_eval_late_max','vendor_eval_default_days'] as $k) {
+        if (array_key_exists($k, $vals)) $up->execute([$k, (string)$vals[$k]]);
+    }
+}
+
+/* ============================================================
+ * 定期評核（2-PH-01-05）：單一廠商×年度 月不良率/特採率/遲交率（ERP bom_ing 自動算）
+ *  品質：QC_check_date 歸月；進貨數=有檢驗筆數、不良=ng、特採=QQ
+ *  交期：應交日=outsource_date+約定工作天(沿用#7)；歸應交月；遲交=未回廠或回廠>應交
+ * ============================================================ */
+function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): array {
+    require_once __DIR__ . '/kpi_as_lib.php';
+    $mon = [];
+    for ($m = 1; $m <= 12; $m++) $mon[$m] = ['qc_in'=>0,'ng'=>0,'special'=>0,'del_in'=>0,'late'=>0];
+
+    // 品質：依 QC_check_date 月份
+    $st = $db->prepare("SELECT MONTH(QC_check_date) m, QC_check, COUNT(*) c FROM bom_ing
+                        WHERE maker_id_no=? AND QC_check_date>=? AND QC_check_date<? AND QC_check IS NOT NULL AND QC_check<>''
+                        GROUP BY MONTH(QC_check_date), QC_check");
+    $st->execute([$mid, sprintf('%04d-01-01',$year), sprintf('%04d-01-01',$year+1)]);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $m = (int)$r['m']; if ($m<1||$m>12) continue;
+        $mon[$m]['qc_in'] += (int)$r['c'];
+        if ($r['QC_check']==='ng') $mon[$m]['ng'] += (int)$r['c'];
+        elseif ($r['QC_check']==='QQ') $mon[$m]['special'] += (int)$r['c'];
+    }
+
+    // 交期：進貨數=實際回廠(有 return_date)筆數，依回廠日歸月；遲交=回廠日晚於應交日(發包+約定工作天)
+    $days = max(0, (int)$set['default_days']);
+    $st = $db->prepare("SELECT outsource_date, return_date FROM bom_ing
+                        WHERE maker_id_no=? AND return_date IS NOT NULL AND return_date>=? AND return_date<?");
+    $st->execute([$mid, sprintf('%04d-01-01',$year), sprintf('%04d-01-01',$year+1)]);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $ret = substr((string)$r['return_date'],0,10);
+        $m = (int)substr($ret,5,2); if ($m<1||$m>12) continue;
+        $mon[$m]['del_in']++;
+        if (!empty($r['outsource_date'])) {
+            $due = kpi_as_add_workdays($db, (string)$r['outsource_date'], $days);
+            if ($ret > $due) $mon[$m]['late']++;
+        }
+    }
+
+    // 各月率
+    $rows = [];
+    foreach ($mon as $m => $d) {
+        $rows[$m] = $d + [
+            'ng_rate'      => $d['qc_in']  ? round($d['ng']/$d['qc_in']*100,1) : null,
+            'special_rate' => $d['qc_in']  ? round($d['special']/$d['qc_in']*100,1) : null,
+            'late_rate'    => $d['del_in'] ? round($d['late']/$d['del_in']*100,1) : null,
+        ];
+    }
+    // 半年彙總(以加總筆數算率) + 判定
+    $halves = [];
+    foreach ([1=>[1,6], 2=>[7,12]] as $h => $rg) {
+        $qc=0;$ng=0;$sp=0;$di=0;$lt=0;
+        for ($m=$rg[0]; $m<=$rg[1]; $m++){ $qc+=$mon[$m]['qc_in']; $ng+=$mon[$m]['ng']; $sp+=$mon[$m]['special']; $di+=$mon[$m]['del_in']; $lt+=$mon[$m]['late']; }
+        $ngR = $qc?round($ng/$qc*100,1):null; $spR=$qc?round($sp/$qc*100,1):null; $ltR=$di?round($lt/$di*100,1):null;
+        $judge = null;
+        if ($qc>0 || $di>0) {
+            $ok = true;
+            if ($ngR !== null && $ngR > $set['ng_max']) $ok = false;
+            if ($ltR !== null && $ltR > $set['late_max']) $ok = false;
+            if ($set['special_max'] < 100 && $spR !== null && $spR > $set['special_max']) $ok = false;
+            $judge = $ok ? 'pass' : 'fail';
+        }
+        $halves[$h] = ['qc_in'=>$qc,'ng'=>$ng,'special'=>$sp,'del_in'=>$di,'late'=>$lt,
+                       'ng_rate'=>$ngR,'special_rate'=>$spR,'late_rate'=>$ltR,'judge'=>$judge];
+    }
+    return ['months'=>$rows, 'halves'=>$halves];
+}
+
 /* ============================================================
  * 期別輔助
  * ============================================================ */
