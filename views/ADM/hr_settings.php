@@ -171,7 +171,9 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
         /* 共用帳號管理（暖色系，見 ai-rules/10） */
         .sa-table thead th { background: #F7E0BD; color: #5A3312; border-bottom: 2px solid #E0B27A; }
         .sa-table tr.sa-active > td { background: #FCEFDC !important; }
-        .sa-table .sa-pick { color: #8C5A2B; font-weight: 600; }
+        .sa-table .sa-name { color: #8C5A2B; font-weight: 600; }
+        .sa-table tr.sa-row { cursor: pointer; }
+        .sa-table tr.sa-row:hover > td { background: #FCEFDC; }
         .sa-btn-primary { background: #F0A24B; border: 1px solid #D9873A; color: #4A2B10; font-weight: 600; }
         .sa-btn-primary:hover { background: #E08F36; color: #3B2109; }
         .sa-btn-del { background: #F3E3D3; border: 1px solid #D9B98F; color: #7A3B12; }
@@ -711,12 +713,13 @@ $(function () {
                 var h = '';
                 (r.shared || []).forEach(function (s) {
                     h += '<tr class="sa-row' + (String(s.id) === String(saCur) ? ' sa-active' : '') + '" data-id="' + s.id + '" data-name="' + esc(s.user_cname) + '">'
-                       + '<td><a href="javascript:;" class="sa-pick">' + esc(s.user_cname) + '</a>'
+                       + '<td><span class="sa-name">' + esc(s.user_cname) + '</span>'
                        + '<div class="text-muted" style="font-size:12px;">' + esc(s.user_uname)
                        + (s.role_label ? '｜' + esc(s.role_label) : '') + '</div></td>'
                        + '<td>' + s.member_cnt + '</td>'
                        + '<td><label style="font-weight:400;margin:0;"><input type="checkbox" class="sa-lock" ' + (String(s.lock_password) === '1' ? 'checked' : '') + '> 鎖定</label></td>'
-                       + '<td><button type="button" class="btn btn-xs sa-btn-del sa-unmark" title="取消共用帳號標記">取消</button></td>'
+                       + '<td><button type="button" class="btn btn-xs sa-btn-primary sa-pick" title="選擇此共用帳號來設定成員">選擇</button>'
+                       + '<button type="button" class="btn btn-xs sa-btn-del sa-unmark" title="取消共用帳號標記" style="margin-top:4px;">取消</button></td>'
                        + '</tr>';
                 });
                 $('#sa_list').html(h);
@@ -790,10 +793,15 @@ $(function () {
         if (!uid) { alert('請先選擇帳號'); return; }
         saPost('set_shared', { uid: uid, on: 1 }, saLoad);
     });
-    $('#sa_list').on('click', '.sa-pick', function () {
-        var $tr = $(this).closest('tr');
+    // 選定共用帳號：整列都可點（只有名字可點太難命中），「選擇」鈕與名字連結同效；
+    // 勾選框/取消鈕等控制項不觸發選取。
+    $('#sa_list').on('click', 'tr.sa-row', function (ev) {
+        if ($(ev.target).is('input, label, .sa-unmark') || $(ev.target).closest('.sa-unmark').length) return;
+        var $tr = $(this);
+        var sid = parseInt($tr.data('id'), 10) || 0;
+        if (!sid) return;
         $('#sa_list tr').removeClass('sa-active'); $tr.addClass('sa-active');
-        saLoadMembers($tr.data('id'), $tr.data('name'));
+        saLoadMembers(sid, $tr.data('name'));
     });
     $('#sa_list').on('change', '.sa-lock', function () {
         var $tr = $(this).closest('tr');
