@@ -289,9 +289,38 @@ if (!function_exists('eg_leave_can_sign')) {
 
 // ============================== 行事曆 ==============================
 
+if (!function_exists('eg_leave_event_set_targets')) {
+    /**
+     * 設定行事曆事件的可見對象（比照 src/store/_events_setting.php 的寫法）：
+     *   evenement_target 決定廣播對象、evenement_recipient_cache 是 events.php 過濾用的快取。
+     * $userIds 為空 → 全體可見（target_type='all'）；否則只有指定使用者看得到。
+     */
+    function eg_leave_event_set_targets(PDO $db, int $evenementId, array $userIds = []): void {
+        try {
+            $db->prepare("DELETE FROM evenement_target WHERE event_id = ?")->execute([$evenementId]);
+            $db->prepare("DELETE FROM evenement_recipient_cache WHERE event_id = ?")->execute([$evenementId]);
+            if (empty($userIds)) {
+                $db->prepare("INSERT INTO evenement_target (event_id, target_type, created_at) VALUES (?, 'all', NOW())")
+                   ->execute([$evenementId]);
+                $ids = $db->query("SELECT id FROM user WHERE state NOT IN (0, 90) AND state IS NOT NULL")
+                          ->fetchAll(PDO::FETCH_COLUMN);
+            } else {
+                $ins = $db->prepare("INSERT INTO evenement_target (event_id, target_type, target_id, created_at) VALUES (?, 'user', ?, NOW())");
+                foreach (array_unique($userIds) as $u) $ins->execute([$evenementId, (int)$u]);
+                $ids = array_unique($userIds);
+            }
+            $cache = $db->prepare("INSERT INTO evenement_recipient_cache (event_id, user_id, created_at) VALUES (?, ?, NOW())");
+            foreach ($ids as $u) $cache->execute([$evenementId, (int)$u]);
+        } catch (Throwable $e) { /* 可見度設定失敗不擋流程 */ }
+    }
+}
+
 if (!function_exists('eg_leave_event_create_pending')) {
-    /** 送審：寫「請假申請中」行事曆事件＋actor，回傳事件 id（失敗回 null，不擋流程） */
-    function eg_leave_event_create_pending(PDO $db, int $requestId, int $userId, int $leaveTypeId, string $typeName, string $startDt, string $endDt): ?int {
+    /**
+     * 送審：寫「請假申請中」行事曆事件＋actor，回傳事件 id（失敗回 null，不擋流程）。
+     * 可見對象＝申請人＋簽核鏈成員（申請中還沒定案，不對全公司公開）；核准轉正時才改為全體。
+     */
+    function eg_leave_event_create_pending(PDO $db, int $requestId, int $userId, int $leaveTypeId, string $typeName, string $startDt, string $endDt, array $viewerIds = []): ?int {
         try {
             $catId = eg_leave_pending_category_id($db);
             if (!$catId) return null;
@@ -305,13 +334,18 @@ if (!function_exists('eg_leave_event_create_pending')) {
             $evId = (int)$db->lastInsertId();
             $db->prepare("INSERT INTO evenement_actor (event_id, user_id, created_at) VALUES (?, ?, NOW())")
                ->execute([$evId, $userId]);
+            $viewers = array_merge([$userId], $viewerIds);
+            eg_leave_event_set_targets($db, $evId, $viewers);
             return $evId;
         } catch (Throwable $e) { return null; }
     }
 }
 
 if (!function_exists('eg_leave_event_approve')) {
-    /** 核准：同一筆申請中事件轉正為「休假」(category_id=1)，標題去掉(申請中) */
+    /**
+     * 核准：同一筆申請中事件轉正為「休假」(category_id=1)，標題去掉(申請中)，
+     * 並把可見對象改為全體（與既有休假事件一致 → 行事曆上正式顯示）。
+     */
     function eg_leave_event_approve(PDO $db, int $evenementId, int $requestId): void {
         try {
             $db->prepare("UPDATE evenement
@@ -320,6 +354,7 @@ if (!function_exists('eg_leave_event_approve')) {
                               remark = ?
                           WHERE id = ?")
                ->execute(['請假單 #' . $requestId . ' 已核准', $evenementId]);
+            eg_leave_event_set_targets($db, $evenementId, []);   // 空陣列＝全體可見
         } catch (Throwable $e) {}
     }
 }
@@ -329,6 +364,8 @@ if (!function_exists('eg_leave_event_remove')) {
     function eg_leave_event_remove(PDO $db, ?int $evenementId): void {
         if (!$evenementId) return;
         try {
+            $db->prepare("DELETE FROM evenement_recipient_cache WHERE event_id = ?")->execute([$evenementId]);
+            $db->prepare("DELETE FROM evenement_target WHERE event_id = ?")->execute([$evenementId]);
             $db->prepare("DELETE FROM evenement_actor WHERE event_id = ?")->execute([$evenementId]);
             $db->prepare("DELETE FROM evenement WHERE id = ?")->execute([$evenementId]);
         } catch (Throwable $e) {}
@@ -534,7 +571,11 @@ if (!function_exists('eg_leave_submit')) {
             }
 
             // 行事曆：送審即寫「請假申請中」事件（核准時轉正）；免簽假別直接寫正式休假
-            $evId = eg_leave_event_create_pending($db, $reqId, $uid, $tid, (string)$type['leave_name'], $start, $end);
+            // 申請中的可見對象＝申請人＋簽核鏈主管（讓主管在行事曆上就看到有人要請假）
+            $viewers = [];
+            foreach ($chain as $c) $viewers[] = (int)$c['user_id'];
+            if ($agentId) $viewers[] = (int)$agentId;
+            $evId = eg_leave_event_create_pending($db, $reqId, $uid, $tid, (string)$type['leave_name'], $start, $end, $viewers);
             if ($evId) {
                 if (!$needApproval) eg_leave_event_approve($db, $evId, $reqId);
                 $db->prepare("UPDATE leave_request SET evenement_id = ? WHERE id = ?")->execute([$evId, $reqId]);

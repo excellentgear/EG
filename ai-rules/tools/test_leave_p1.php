@@ -105,6 +105,14 @@ ok($ev && $ev['category_name'] === '請假申請中', "行事曆寫入「請假�
 ok($ev && strpos((string)$ev['title'], '(申請中)') !== false, "事件標題帶(申請中)");
 $actor = $evId ? $db->query("SELECT user_id FROM evenement_actor WHERE event_id=$evId")->fetchColumn() : null;
 ok((int)$actor === $APPLICANT, "evenement_actor=申請人");
+// 可見度：申請中只給申請人＋簽核鏈（不對全公司公開）
+$tg = $db->query("SELECT target_type, target_id FROM evenement_target WHERE event_id=$evId")->fetchAll(PDO::FETCH_ASSOC);
+$tgTypes = array_unique(array_column($tg, 'target_type'));
+$tgIds = array_map('intval', array_column($tg, 'target_id'));
+ok($tgTypes === ['user'] && in_array($APPLICANT, $tgIds, true) && in_array($EXPECT_SUP, $tgIds, true),
+   "申請中事件可見對象=申請人＋簽核主管（非全體）", json_encode($tg));
+$cacheN = (int)$db->query("SELECT COUNT(*) FROM evenement_recipient_cache WHERE event_id=$evId")->fetchColumn();
+ok($cacheN === count($tgIds), "recipient_cache 筆數與對象一致", (string)$cacheN);
 // 通知
 $evts = $db->query("SELECT id FROM live_event WHERE ref_type='LEAVE' AND ref_id=$reqA")->fetchAll(PDO::FETCH_COLUMN);
 ok(count($evts) >= 1, "送審通知已寫 live_event(ref_type=LEAVE)");
@@ -134,6 +142,8 @@ ok($row['status'] === 'approved' && $row['decided_at'], "主檔 approved");
 $ev = $db->query("SELECT e.*, ec.category_name FROM evenement e JOIN event_category ec ON ec.id=e.category_id WHERE e.id=$evId")->fetch(PDO::FETCH_ASSOC);
 ok($ev && $ev['category_name'] === '休假', "行事曆事件轉正為「休假」", json_encode($ev ?: []));
 ok($ev && strpos((string)$ev['title'], '(申請中)') === false, "標題移除(申請中)");
+$tgAfter = $db->query("SELECT target_type FROM evenement_target WHERE event_id=$evId")->fetchAll(PDO::FETCH_COLUMN);
+ok($tgAfter === ['all'], "核准後可見對象轉為全體（正式顯示在行事曆）", json_encode($tgAfter));
 $sr = $db->query("SELECT * FROM leave_sign_record WHERE leave_request_id=$reqA")->fetchAll(PDO::FETCH_ASSOC);
 ok(count($sr) === 1 && $sr[0]['action'] === 'approved', "簽章軌跡 1 筆 approved");
 $evts = $db->query("SELECT id FROM live_event WHERE ref_type='LEAVE' AND ref_id=$reqA")->fetchAll(PDO::FETCH_COLUMN);
@@ -226,6 +236,8 @@ foreach ($createdRequests as $id) {
     // 撤掉可能殘留的行事曆事件（evenement_id 捕捉）
     $ev = $db->query("SELECT evenement_id FROM leave_request WHERE id=$id")->fetchColumn();
     if ($ev) {
+        $db->exec("DELETE FROM evenement_recipient_cache WHERE event_id=" . (int)$ev);
+        $db->exec("DELETE FROM evenement_target WHERE event_id=" . (int)$ev);
         $db->exec("DELETE FROM evenement_actor WHERE event_id=" . (int)$ev);
         $db->exec("DELETE FROM evenement WHERE id=" . (int)$ev);
     }

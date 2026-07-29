@@ -732,6 +732,8 @@ foreach (['userid', 'schdule_title', 'schdule_start', 'schdule_end', 'schdule_ca
 
     <!-- Custom Theme Scripts - 應在我們的頁面腳本之前，但在所有函式庫之後載入 -->
     <script src="../../resource/js/custom.min.js"></script>
+    <!-- 共用印章：請假申請中事件掛「申請中」小印章圖示（EGStamp.badge） -->
+    <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_stamp.js') ?: time() ?>"></script>
 
     <!-- 我們的頁面腳本，包含 FullCalendar 初始化 -->
     <script>
@@ -1188,6 +1190,19 @@ foreach (['userid', 'schdule_title', 'schdule_start', 'schdule_end', 'schdule_ca
                     event._element = element; // 新增：儲存元素參照，供 eventAfterAllRender 使用
                     // --- 根據事件類別設定顏色 ---
                     if (event.color) { element.css('background-color', event.color); }
+
+                    // --- 請假系統：「請假申請中」事件掛上申請中印章圖示（核准後類別會轉為休假，此段自動不套用）---
+                    // 原有休假(類別1)事件與其顯示邏輯完全不動。
+                    try {
+                        var _cat = categoriesLookup[event.category_id];
+                        if (_cat && _cat.name === '請假申請中' && window.EGStamp) {
+                            var _t = element.find('.fc-title, .fc-event-title').first();
+                            if (_t.length && !_t.data('lvBadged')) {
+                                _t.data('lvBadged', 1).before(EGStamp.badge('pending', 14));
+                                element.attr('title', '請假申請中（簽核尚未完成，核准後才會轉為正式休假）');
+                            }
+                        }
+                    } catch (e) {}
 
                     var tooltipParts = []; // 用於儲存浮動視窗的各個部分
 
