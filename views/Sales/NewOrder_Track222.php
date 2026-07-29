@@ -2026,7 +2026,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $part_dn_map     = [];   // d_id string => ['count'=>N,'has_img'=>bool]
     $cust_dn_map     = [];   // customer_id  => ['count'=>N,'has_img'=>bool]
     $labels_map      = [];   // d_id_ID int  => [['name'=>'…','val'=>'…'],…]
-    $has_drawing_map = [];   // d_id string => true
+    $has_drawing_map = [];   // d_id string => true（bom 圖面）
+    $has_quote_map   = [];   // d_id string => true（報價單附件）
+    $has_att_map     = [];   // d_id string => true（料號其他附件）
     $stock_map       = [];   // d_id string => ['qty_single'=>N,'qty_combo'=>N,'locs'=>'…']
     $gear_map        = [];   // d_id_ID int  => gear_spec_str
     $drawing_no_map  = [];   // d_id_ID int  => Drawing_No string
@@ -2190,6 +2192,91 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     }
                 }
             } catch(Exception $e) {}
+        }
+
+        // 是否有「報價資料 / 其他附件」：bom_viewer.php 是三分頁（圖面／報價資料／其他附件），
+        // 只要任一分頁有資料，料號就該是可點的超連結（原本只看圖面，導致只有報價單或料號附件的料號點不開）
+        // 權限判定與 bom_viewer.php 完全一致：報價需 quotation_view；其他附件過渡期（未指派 master_data 角色者開放）
+        if (!empty($all_d_ids)) {
+            $can_quote_view = false;
+            $can_other_view = true;
+            try {
+                require_once __DIR__ . '/../../src/common/rbac.php';
+                $_uidF    = intval($_SESSION['id'] ?? 0);
+                $_featsF  = rbac_user_features($pdo, $_uidF);
+                $_isAdminF= rbac_has($_featsF, 'all');
+                $can_quote_view = $_isAdminF || rbac_has($_featsF, 'quotation_view');
+                $_rq = $pdo->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=? AND r.module='master_data' LIMIT 1");
+                $_rq->execute([$_uidF]);
+                $_hasMdRole = (bool)$_rq->fetchColumn();
+                $can_other_view = $_isAdminF || !$_hasMdRole || rbac_has($_featsF, 'md_attach_view');
+            } catch (Exception $e) { $can_quote_view = false; $can_other_view = true; }
+
+            // 料號文字 → d_setting.d_id（同一料號可能對到多筆，不同客戶）
+            $did_of_part = [];   // d_setting.d_id(int) => 料號文字
+            try {
+                $ph5 = implode(',', array_fill(0, count($all_d_ids), '?'));
+                $ds5 = $pdo->prepare("SELECT d_id, D_Setting_Id FROM d_setting WHERE D_Setting_Id IN ($ph5)");
+                $ds5->execute($all_d_ids);
+                foreach ($ds5->fetchAll(PDO::FETCH_ASSOC) as $r5) {
+                    $did_of_part[(int)$r5['d_id']] = $r5['D_Setting_Id'];
+                }
+            } catch (Exception $e) {}
+
+            // 其他附件（part_attachments）：批圖工作檔依分享範圍過濾，與 bom_viewer 相同
+            if ($can_other_view && !empty($did_of_part)) {
+                try {
+                    $pks6 = array_keys($did_of_part);
+                    $ph6  = implode(',', array_fill(0, count($pks6), '?'));
+                    $pa6  = $pdo->prepare("SELECT id, d_id, filename FROM part_attachments WHERE d_id IN ($ph6) AND deleted_at IS NULL");
+                    $pa6->execute($pks6);
+                    $paRows = $pa6->fetchAll(PDO::FETCH_ASSOC);
+                    require_once __DIR__ . '/../../src/common/imgedit_visibility.php';
+                    $paRows = imgedit_filter_attachment_rows($pdo, $paRows, intval($_SESSION['id'] ?? 0));
+                    foreach ($paRows as $r6) {
+                        $pn6 = $did_of_part[(int)$r6['d_id']] ?? null;
+                        if ($pn6 !== null) $has_att_map[$pn6] = true;
+                    }
+                } catch (Exception $e) {}
+            }
+
+            // 報價資料（quotation_attachments，只算 status='active'）
+            if ($can_quote_view) {
+                try {
+                    // (1) linked_parts 明確指定此料號
+                    $qa7 = $pdo->prepare("SELECT DISTINCT linked_parts FROM quotation_attachments
+                                          WHERE status='active' AND linked_parts IS NOT NULL AND linked_parts <> ''
+                                            AND JSON_VALID(linked_parts)
+                                            AND JSON_OVERLAPS(CAST(linked_parts AS JSON), CAST(? AS JSON))");
+                    $qa7->execute([json_encode(array_values($all_d_ids), JSON_UNESCAPED_UNICODE)]);
+                    $partSet7 = array_flip($all_d_ids);
+                    foreach ($qa7->fetchAll(PDO::FETCH_COLUMN) as $lp7) {
+                        $arr7 = json_decode((string)$lp7, true);
+                        if (!is_array($arr7)) continue;
+                        foreach ($arr7 as $pn7) {
+                            if (isset($partSet7[$pn7])) $has_quote_map[$pn7] = true;
+                        }
+                    }
+                } catch (Exception $e) {}
+                // (2) linked_parts NULL（該報價單的共用附件）→ 報價單含此料號即算有資料
+                if (!empty($did_of_part)) {
+                    try {
+                        $pks8 = array_keys($did_of_part);
+                        $ph8  = implode(',', array_fill(0, count($pks8), '?'));
+                        $qs8  = $pdo->prepare("SELECT DISTINCT qi.d_setting_d_id
+                                               FROM quotation_attachments a
+                                               JOIN quotation_list ql ON ql.quote_no = a.quote_no
+                                               JOIN quotation_item qi ON qi.quote_id = ql.quote_id
+                                               WHERE a.status='active' AND a.linked_parts IS NULL
+                                                 AND qi.d_setting_d_id IN ($ph8)");
+                        $qs8->execute($pks8);
+                        foreach ($qs8->fetchAll(PDO::FETCH_COLUMN) as $pk8) {
+                            $pn8 = $did_of_part[(int)$pk8] ?? null;
+                            if ($pn8 !== null) $has_quote_map[$pn8] = true;
+                        }
+                    } catch (Exception $e) {}
+                }
+            }
         }
 
         // 庫存摘要（所有人可見）：依料號合計數量，組合件與非組合件分開
@@ -2377,6 +2464,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     $_cust_dn    = ($is_perm_a && $__cid) ? ($cust_dn_map[$__cid] ?? null) : null;
                     $_order_lbls = $labels_map[(int)($order['d_id_ID'] ?? 0)] ?? [];
                     $_has_draw   = $has_drawing_map[$order['d_id']] ?? false;
+                    $_has_quote  = $has_quote_map[$order['d_id']]   ?? false;
+                    $_has_att    = $has_att_map[$order['d_id']]     ?? false;
+                    // 只要圖面／報價資料／其他附件任一有資料就可點開（bom_viewer 會自動切到第一個有資料的分頁）
+                    $_has_files  = $_has_draw || $_has_quote || $_has_att;
+                    $_file_kinds = [];
+                    if ($_has_draw)  $_file_kinds[] = '圖面';
+                    if ($_has_quote) $_file_kinds[] = '報價資料';
+                    if ($_has_att)   $_file_kinds[] = '其他附件';
+                    $_file_tip   = $_has_files ? ('點擊查閱：' . implode('／', $_file_kinds)) : '';
                     $_dn_total   = ($_part_dn ? $_part_dn['count'] : 0) + ($_cust_dn ? $_cust_dn['count'] : 0);
                     $_dn_img     = ($_part_dn && $_part_dn['has_img']) || ($_cust_dn && $_cust_dn['has_img']);
                     // 庫存摘要
@@ -2394,10 +2490,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     ?>
                     <div style="display:flex;align-items:center;gap:3px;flex-wrap:nowrap;min-width:0;">
                         <i class="fa fa-copy copy-icon" title="複製" onclick="copyToClipboard('<?= safe_html($order['d_id']) ?>', this)" style="flex-shrink:0;"></i>
-                        <?php if ($_has_draw): ?>
-                        <span class="part-link" style="cursor:pointer;" onclick="openPartDrawing('<?= safe_html($order['d_id']) ?>')"><?= safe_html($order['d_id']) ?></span>
+                        <?php if ($_has_files): ?>
+                        <span class="part-link" style="cursor:pointer;" title="<?= safe_html($_file_tip) ?>" onclick="openPartDrawing('<?= safe_html($order['d_id']) ?>')"><?= safe_html($order['d_id']) ?></span>
                         <?php else: ?>
-                        <span style="color:#555;cursor:default;" onclick="showNoDrawingToast()" title="無圖面資料"><?= safe_html($order['d_id']) ?></span>
+                        <span style="color:#555;cursor:default;" onclick="showNoDrawingToast()" title="無圖面／報價／附件資料"><?= safe_html($order['d_id']) ?></span>
                         <?php endif; ?>
                         <?php if (!empty($order['assembly_parent_order_id'])):
                             $_asm_src = $asmSrcMap[(int)$order['assembly_parent_order_id']] ?? null;
@@ -6450,7 +6546,7 @@ foreach($dCounts as $c) {
 
         // 無圖面資料提示（5 秒後自動消失）
         function showNoDrawingToast() {
-            showToast('此料號無圖面資料', 'warning');
+            showToast('此料號無圖面／報價／附件資料', 'warning');
         }
 
         function showFile(el, path, type) {
