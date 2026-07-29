@@ -645,7 +645,7 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                             <div class="form-group">
                                 <label for="unit_type">請假粒度</label>
                                 <select class="form-control" id="unit_type" name="unit_type">
-                                    <option value="hour">時假（依實際起訖時數計算）</option>
+                                    <option value="hour">時假（以半小時為單位，不足半小時進位）</option>
                                     <option value="halfday">半天（不足半天以半天計）</option>
                                     <option value="day">整天（以工作日計，忽略時分）</option>
                                 </select>

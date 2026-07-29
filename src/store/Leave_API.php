@@ -142,6 +142,17 @@ case 'preview': {
     out($ret);
 }
 
+// ════════════════ 依排班帶出請假時間 ════════════════
+case 'roster_shift': {
+    // 申請頁選好「請假起日／迄日」後呼叫：回傳該員工當日固定班別的上下班時間，
+    // 供前端自動帶出「整天請假」的起訖（跨夜班的結束時間會落到隔天）。
+    $s = trim((string)($_GET['start_date'] ?? ''));
+    $e = trim((string)($_GET['end_date'] ?? ''));
+    if ($s === '') bad('缺少請假起日');
+    $r = eg_leave_roster_range($db, $user_id, $s, $e !== '' ? $e : null);
+    out(['success' => true] + $r);
+}
+
 // ════════════════ 送審 ════════════════
 case 'submit': {
     need_csrf();

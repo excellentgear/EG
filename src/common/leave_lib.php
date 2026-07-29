@@ -153,13 +153,111 @@ if (!function_exists('eg_leave_calc_amount')) {
                 // 向上取整到半天倍數
                 $hours = ceil($hours / $halfHours) * $halfHours;
             } else {
-                $hours = round($hours, 2);
+                // 時假一律以「半小時」為最小單位，無條件進位（2026-07-29 使用者定案）
+                // 例：請 40 分鐘算 1 小時、請 10 分鐘算 0.5 小時。
+                // 前端 datetime-local 已限制 step=1800 只能選整點/半點，這裡是後端保險。
+                $hours = ceil($hours * 2) / 2;
             }
         }
         return [
             'hours'    => round($hours, 2),
             'days'     => round($hours / $hoursPerDay, 2),
             'workdays' => $n,
+        ];
+    }
+}
+
+// ============================== 排班連動（固定班別） ==============================
+
+if (!function_exists('eg_leave_roster_shift')) {
+    /**
+     * 查某人某日的固定班別排班（views/pages/roster.php「固定班別排班」分頁所設）。
+     * 資料源：roster_shift_assign（誰在哪天上哪個班）JOIN roster_shift_type（班別起訖時間）。
+     * 用途：請假申請時依當日班別自動帶出整天請假的起訖時間，使用者不必自己記幾點到幾點。
+     *
+     * @return array|null [
+     *   'shift_type_id','name','code','start_time'(HH:MM),'end_time'(HH:MM),
+     *   'is_overnight'(bool),'break_minutes','start_datetime','end_datetime'  // 跨夜班的 end 已自動 +1 天
+     * ]；當日無排班回 null。
+     */
+    function eg_leave_roster_shift(PDO $db, int $userId, string $date): ?array {
+        $d = substr($date, 0, 10);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) return null;
+        try {
+            $st = $db->prepare(
+                "SELECT a.shift_type_id, t.name, t.code, t.start_time, t.end_time,
+                        t.is_overnight, t.break_minutes
+                 FROM roster_shift_assign a
+                 JOIN roster_shift_type t ON t.id = a.shift_type_id
+                 WHERE a.user_id = ? AND a.work_date = ?
+                 ORDER BY a.id DESC LIMIT 1");
+            $st->execute([$userId, $d]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$r) return null;
+
+            $startT = substr((string)$r['start_time'], 0, 5);
+            $endT   = substr((string)$r['end_time'], 0, 5);
+            $overnight = !empty($r['is_overnight']);
+            // 跨夜班（例：18:00~03:00）結束時間落在隔天
+            $endDate = $overnight ? date('Y-m-d', strtotime($d . ' +1 day')) : $d;
+            return [
+                'shift_type_id'  => (int)$r['shift_type_id'],
+                'name'           => (string)$r['name'],
+                'code'           => (string)$r['code'],
+                'start_time'     => $startT,
+                'end_time'       => $endT,
+                'is_overnight'   => $overnight,
+                'break_minutes'  => (int)$r['break_minutes'],
+                'start_datetime' => $d . ' ' . $startT . ':00',
+                'end_datetime'   => $endDate . ' ' . $endT . ':00',
+            ];
+        } catch (Throwable $e) { return null; }   // 排班表查詢失敗不擋請假流程
+    }
+}
+
+if (!function_exists('eg_leave_roster_range')) {
+    /**
+     * 依「請假起日～迄日」推出建議的請假起訖時間（整天請假）。
+     * 起日取當日班別的上班時間、迄日取當日班別的下班時間（跨夜自動落到隔天）。
+     * 任一天查不到排班就以該端點的預設工時（08:00 / 依 hours_per_day 推算的下班時間）回退，
+     * 並在 missing 標明哪一端沒有排班，讓前端提示使用者自行確認。
+     *
+     * @return array ['start_datetime','end_datetime','start_shift'=>?array,'end_shift'=>?array,'missing'=>string[]]
+     */
+    function eg_leave_roster_range(PDO $db, int $userId, string $startDate, ?string $endDate = null): array {
+        $s = substr($startDate, 0, 10);
+        $e = substr((string)($endDate ?: $startDate), 0, 10);
+        if ($e < $s) $e = $s;
+
+        $cfg = eg_leave_settings($db);
+        $perDay = max(1, (float)$cfg['leave_hours_per_day']);
+        $defStart = '08:00';
+        // 預設下班時間＝08:00 + 一天工時 + 1 小時休息（與日班 08:00~17:00 的慣例一致）
+        $defEnd = date('H:i', strtotime($s . ' ' . $defStart) + (int)round(($perDay + 1) * 3600));
+
+        $ss = eg_leave_roster_shift($db, $userId, $s);
+        $es = ($e === $s) ? $ss : eg_leave_roster_shift($db, $userId, $e);
+
+        $missing = [];
+        if (!$ss) $missing[] = $s;
+        if (!$es && $e !== $s) $missing[] = $e;
+
+        $startDt = $ss ? $ss['start_datetime'] : ($s . ' ' . $defStart . ':00');
+        if ($es) {
+            $endDt = $es['end_datetime'];
+        } else {
+            $endDt = $e . ' ' . $defEnd . ':00';
+        }
+        // 保險：結束一定要晚於開始（例如迄日排到跨夜班又比起日早的異常資料）
+        if (strtotime($endDt) <= strtotime($startDt)) {
+            $endDt = date('Y-m-d H:i:s', strtotime($startDt) + (int)round($perDay * 3600));
+        }
+        return [
+            'start_datetime' => $startDt,
+            'end_datetime'   => $endDt,
+            'start_shift'    => $ss,
+            'end_shift'      => $es,
+            'missing'        => $missing,
         ];
     }
 }

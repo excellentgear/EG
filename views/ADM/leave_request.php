@@ -146,16 +146,36 @@ input[type=number]{-moz-appearance:textfield;}
             <div id="typeHint" style="font-size:11.5px;color:#9a7b4f;margin-top:3px;min-height:16px;"></div>
           </div>
           <div class="col-md-3 col-sm-6" style="margin-bottom:10px;">
-            <label>開始時間 <span style="color:var(--coral);">*</span></label>
-            <input type="datetime-local" class="form-control input-sm eg-inp" id="fStart">
+            <label>請假日期（起） <span style="color:var(--coral);">*</span></label>
+            <input type="date" class="form-control input-sm eg-inp" id="fDateFrom" max="9999-12-31">
           </div>
           <div class="col-md-3 col-sm-6" style="margin-bottom:10px;">
-            <label>結束時間 <span style="color:var(--coral);">*</span></label>
-            <input type="datetime-local" class="form-control input-sm eg-inp" id="fEnd">
+            <label>請假日期（迄）</label>
+            <input type="date" class="form-control input-sm eg-inp" id="fDateTo" max="9999-12-31">
+            <div style="font-size:11.5px;color:#9a7b4f;margin-top:3px;">留空＝當天請假</div>
           </div>
           <div class="col-md-3 col-sm-6" style="margin-bottom:10px;">
             <label>時數／天數（自動計算）</label>
             <input type="text" class="form-control input-sm" id="fAmount" readonly style="background:#f7f2e8;">
+          </div>
+        </div>
+        <div id="shiftHint" style="display:none;font-size:12.5px;margin-bottom:10px;padding:7px 12px;border-radius:6px;"></div>
+        <div class="row">
+          <div class="col-md-3 col-sm-6" style="margin-bottom:10px;">
+            <label>開始時間 <span style="color:var(--coral);">*</span></label>
+            <input type="datetime-local" class="form-control input-sm eg-inp" id="fStart" step="1800">
+          </div>
+          <div class="col-md-3 col-sm-6" style="margin-bottom:10px;">
+            <label>結束時間 <span style="color:var(--coral);">*</span></label>
+            <input type="datetime-local" class="form-control input-sm eg-inp" id="fEnd" step="1800">
+          </div>
+          <div class="col-md-6" style="margin-bottom:10px;">
+            <label style="visibility:hidden;">.</label>
+            <div style="font-size:12px;color:#9a7b4f;padding-top:6px;">
+              選好上方請假日期後，系統會依您當天的<b>固定班別排班</b>自動帶出整天的起訖時間；
+              只請半天或幾小時再自行調整即可（<b>以半小時為單位</b>）。
+              <button type="button" class="btn btn-xs btn-default" style="margin-left:6px;" onclick="applyShift(true)">重新帶入排班時間</button>
+            </div>
           </div>
         </div>
 
@@ -369,7 +389,7 @@ function renderAnnual(an){
 $(document).on('change', '#fType', function(){
   const t = TYPES.find(x => String(x.id) === String(this.value));
   if(!t){ $('#typeHint').text(''); $('#agentReq').hide(); $('#attReq').hide(); $('#signerPrev').hide(); return; }
-  const unit = {hour:'可請時假（依實際時數）', halfday:'以半天為單位（不足半天以半天計）', day:'以整天為單位'}[t.unit_type] || '';
+  const unit = {hour:'可請時假（以半小時為單位）', halfday:'以半天為單位（不足半天以半天計）', day:'以整天為單位'}[t.unit_type] || '';
   let hint = unit;
   if(+t.need_approval === 0) hint += '｜此假別免主管簽核';
   else hint += '｜需簽核至第 ' + t.max_approval_level + ' 層主管';
@@ -384,7 +404,52 @@ $(document).on('change', '#fType', function(){
   } else if(SETTINGS.attach_ready) { $('#attMsg').text(''); }
   doPreview();
 });
-$(document).on('change', '#fStart, #fEnd', doPreview);
+$(document).on('change', '#fStart, #fEnd', function(){ shiftApplied = true; doPreview(); });
+
+// ── 排班連動：選好請假日期 → 依當日固定班別自動帶出整天的起訖時間 ──
+let shiftApplied = false;   // 使用者是否已自行動過時間欄（動過就不再自動覆蓋）
+$(document).on('change', '#fDateFrom, #fDateTo', function(){
+  const from = $('#fDateFrom').val();
+  if (from && $('#fDateTo').val() && $('#fDateTo').val() < from) $('#fDateTo').val(from);
+  shiftApplied = false;     // 換日期＝重新帶入
+  applyShift(false);
+});
+function applyShift(force){
+  const from = $('#fDateFrom').val();
+  if(!from){ $('#shiftHint').hide(); return; }
+  if(shiftApplied && !force) return;   // 使用者手動調過時間就不覆蓋，除非按「重新帶入」
+  const to = $('#fDateTo').val() || from;
+  $.getJSON(API, {action:'roster_shift', start_date:from, end_date:to}, function(r){
+    if(!r.success) return;
+    // datetime-local 需要 "YYYY-MM-DDTHH:MM"
+    const toLocal = s => String(s||'').substring(0,16).replace(' ', 'T');
+    $('#fStart').val(toLocal(r.start_datetime));
+    $('#fEnd').val(toLocal(r.end_datetime));
+    shiftApplied = false;   // 這是系統帶入的，之後使用者若手動改才鎖住
+
+    const has = r.start_shift || r.end_shift;
+    let msg, bg, bd, col;
+    if(has && (!r.missing || !r.missing.length)){
+      const s = r.start_shift, e = r.end_shift;
+      msg = '<i class="fa fa-calendar-check-o"></i> 已依排班帶入整天請假：<b>' + esc(s.name) + '</b> '
+          + esc(s.start_time) + '～' + esc(e ? e.end_time : s.end_time)
+          + (s.is_overnight ? '（跨夜，結束時間為隔天）' : '')
+          + '。只請部分時段的話請直接改下方時間。';
+      bg = '#eef5e6'; bd = '#b8cf9a'; col = '#4d6b2e';
+    } else if(has){
+      msg = '<i class="fa fa-exclamation-triangle"></i> 部分日期（' + esc(r.missing.join('、'))
+          + '）查不到排班，該端已用預設上下班時間帶入，<b>請確認下方時間是否正確</b>。';
+      bg = '#fdf0dc'; bd = '#e9c98f'; col = '#8a5a1a';
+    } else {
+      msg = '<i class="fa fa-info-circle"></i> 這幾天在「輪值排班表 → 固定班別排班」查不到您的排班，'
+          + '已用預設上下班時間帶入，<b>請自行確認下方時間</b>。';
+      bg = '#fdf0dc'; bd = '#e9c98f'; col = '#8a5a1a';
+    }
+    $('#shiftHint').html(msg)
+      .css({background:bg, border:'1px solid '+bd, color:col}).show();
+    doPreview();
+  });
+}
 
 // ── 試算＋簽核人預覽 ──
 let previewTimer = null;
@@ -454,6 +519,7 @@ function delAttach(id, isTemp){
 function submitLeave(){
   const tid = $('#fType').val(), s = $('#fStart').val(), e = $('#fEnd').val();
   if(!tid){ $('#applyMsg').html('<span style="color:#a3341f;">請選擇假別</span>'); return; }
+  if(!$('#fDateFrom').val()){ $('#applyMsg').html('<span style="color:#a3341f;">請選擇請假日期</span>'); $('#fDateFrom').focus(); return; }
   if(!s || !e){ $('#applyMsg').html('<span style="color:#a3341f;">請填寫開始與結束時間</span>'); return; }
   $('#btnSubmit').prop('disabled', true);
   $('#applyMsg').html('送出中…');
@@ -473,6 +539,7 @@ function submitLeave(){
 }
 function resetForm(keepMsg){
   $('#fType').val(''); $('#fStart').val(''); $('#fEnd').val(''); $('#fAmount').val('');
+  $('#fDateFrom').val(''); $('#fDateTo').val(''); $('#shiftHint').hide(); shiftApplied = false;
   $('#fReason').val(''); $('#fAgent').val(''); $('#tempList').empty();
   $('#signerPrev').hide(); $('#typeHint').text(''); $('#agentReq').hide(); $('#attReq').hide();
   if(!keepMsg) $('#applyMsg').empty();
