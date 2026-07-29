@@ -94,6 +94,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .va-modal .m-foot .b-cancel { background:#fff; color:#5b3a1e; border-color:#D8BE93; margin-right:6px; }
         .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
         .va-modal.xwide { max-width:920px; }
+        .va-modal.pkwide { max-width:min(1200px, 96vw); }
         /* 稽核評鑑表單 */
         .af-head { display:grid; grid-template-columns:repeat(3,1fr); gap:0 14px; }
         .af-table-wrap { border:1px solid #EADFC8; border-radius:6px; overflow:hidden; }
@@ -118,9 +119,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .va-modal .m-body .pk-filter input[type=text] { width:150px; height:28px; font-size:12px; padding:0 6px; }
         .pk-selbar { display:flex; align-items:center; gap:10px; font-size:12px; color:#5b3a1e; margin-bottom:4px; }
         .pk-selbar label { margin:0; cursor:pointer; }
-        .pk-grid { border:1px solid #EADFC8; border-radius:6px; padding:6px 8px; max-height:56vh; overflow-y:auto;
-            display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:2px 10px; }
-        .pk-grid .pk-item { display:flex; align-items:center; gap:5px; padding:3px 6px; border-radius:4px; font-size:12px;
+        /* 廠商池：多欄自動排版、不使用上下捲軸（禁止 overflow-y） */
+        .pk-grid { border:1px solid #EADFC8; border-radius:6px; padding:5px 6px;
+            display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:1px 8px; }
+        .pk-grid .pk-item { display:flex; align-items:center; gap:4px; padding:2px 4px; border-radius:4px; font-size:12px;
             color:#5b3a1e; cursor:pointer; margin:0; font-weight:normal; white-space:nowrap; overflow:hidden; }
         .pk-grid .pk-item:hover { background:#FBF0DD; }
         .pk-grid .pk-item .no { color:#8a6d45; }
@@ -244,7 +246,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 </div>
 
 <!-- 廠商池挑選 modal -->
-<div class="va-mask" id="pkMask"><div class="va-modal wide">
+<div class="va-mask" id="pkMask"><div class="va-modal pkwide">
     <div class="m-head"><span id="pkTitle">加入稽核對象</span><span class="m-close" onclick="closeMask('pkMask')">✕</span></div>
     <div class="m-body">
         <div class="pk-filter">
