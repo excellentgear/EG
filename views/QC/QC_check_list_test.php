@@ -2284,7 +2284,10 @@ if ($reply_id != "") {
                 var w = screen.availWidth, h = screen.availHeight;
                 var pw = Math.min(1500, Math.round(w*0.9)), ph = Math.min(960, Math.round(h*0.92));
                 var pl = Math.round((w-pw)/2), pt = Math.round((h-ph)/2);
-                window.open('inspection_combined_prototype.php?popup=1&bom_ing_fid=' + encodeURIComponent(bomIngFid),
+                // 2026-07-29 改開新版填寫介面 inspection_entry_v2.php（逐項/逐件/總表三模式）。
+                // 後端 API 仍是 inspection_combined_prototype.php，回傳彙總格式完全相同。
+                // 若新版有狀況要退回舊版：把下一行檔名改回 inspection_combined_prototype.php 即可。
+                window.open('inspection_entry_v2.php?popup=1&bom_ing_fid=' + encodeURIComponent(bomIngFid),
                     'qc_inspect_' + bomIngFid,
                     'width='+pw+',height='+ph+',left='+pl+',top='+pt+',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
             };
