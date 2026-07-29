@@ -84,6 +84,8 @@ case 'meta': {
         'thresholds' => ['l1' => $l1, 'l2' => $l2],
         'tax_types' => PURCHASE_TAX_TYPES, 'receive_modes' => PURCHASE_RECEIVE_MODES,
         'statuses' => PURCHASE_STATUS,
+        'print_header' => purchase_setting($db, 'purchase_print_header', '超正齒輪科技有限公司　採購申請單'),
+        'print_footer' => purchase_setting($db, 'purchase_print_footer', ''),
     ];
     if ($perms['canAdmin']) {
         [$nas, $url] = purchase_attach_dirs($db);
@@ -101,6 +103,8 @@ case 'save_settings': {
     purchase_set_setting($db, 'purchase_appr_l2', (string)$l2);
     if (pv('nas_dir') !== '') purchase_set_setting($db, 'purchase_attach_nas_dir', pv('nas_dir'));
     if (pv('url_dir') !== '') purchase_set_setting($db, 'purchase_attach_url_dir', pv('url_dir'));
+    if (isset($_POST['print_header'])) purchase_set_setting($db, 'purchase_print_header', pv('print_header'));
+    if (isset($_POST['print_footer'])) purchase_set_setting($db, 'purchase_print_footer', pv('print_footer'));
     jout([]);
 }
 
