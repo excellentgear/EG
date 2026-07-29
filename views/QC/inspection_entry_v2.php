@@ -97,10 +97,31 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
     .spec { background:var(--sand); border:1px solid var(--line); border-radius:8px; padding:6px 14px; min-width:96px; text-align:center; }
     .spec .k { font-size:11px; color:#8a6a45; }
     .spec .v { font-size:20px; font-weight:bold; color:var(--ink); line-height:1.2; }
-    .spec.lim { background:#FFF3E2; }
-    .spec.tool { background:#fff; text-align:left; min-width:180px; }
+    /* 標準值＝主角(大)，上下限＝配角(小)，一眼分得出來 */
+    .spec.std { padding:4px 18px; }
+    .spec.std .v { font-size:30px; }
+    .spec.lim { background:#FFF6EA; min-width:84px; padding:6px 10px; }
+    .spec.lim .k { font-size:10px; }
+    .spec.lim .v { font-size:17px; color:#7A5A35; }
+    .spec.tool { background:#fff; text-align:left; min-width:200px; }
     .spec.tool .v { font-size:14px; }
-    .spec.tool select { width:100%; }
+    /* 量具改用「點按鈕開跳窗挑」，不再用又長又難點的下拉 */
+    .tool-btn { display:block; width:100%; text-align:left; border:1px solid var(--line); background:#fff; color:var(--ink);
+                border-radius:6px; padding:7px 10px; font-size:14px; line-height:1.25; }
+    .tool-btn:hover { background:var(--cream); border-color:var(--amber-d); }
+    .tool-btn .tcat { font-weight:bold; }
+    .tool-btn .tno { color:#8a6a45; font-size:12px; }
+    .tool-btn.none { color:#a08a6d; border-style:dashed; }
+    #items-table .tool-btn { padding:4px 6px; font-size:12px; }
+    /* 量具挑選跳窗：類型 → 編號，兩層都是大按鈕 */
+    .tpick-grid { display:flex; flex-wrap:wrap; gap:8px; }
+    .tpick-grid button { min-width:130px; min-height:52px; border:1px solid var(--line); background:#fff; color:var(--ink);
+                         border-radius:8px; padding:8px 12px; font-size:15px; font-weight:bold; }
+    .tpick-grid button:hover { background:var(--sand); border-color:var(--amber-d); }
+    .tpick-grid button.on { background:var(--amber); border-color:var(--amber-d); }
+    .tpick-grid button small { display:block; font-weight:normal; font-size:11px; color:#8a6a45; }
+    .tpick-scope { background:var(--cream); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-top:12px; font-size:13px; }
+    .tpick-scope label { font-weight:normal; display:block; margin:2px 0; cursor:pointer; }
 
     /* ---------- 量測格（大觸控目標） ---------- */
     .cells { display:flex; flex-wrap:wrap; gap:10px; }
@@ -123,9 +144,10 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
     .mcell.okng.c-ng .mtxt { color:#fff; }
     .mcell.okng.c-empty .mtxt { color:#b9a68d; }
     /* 逐件模式：一列一個檢驗項目 */
-    .prow { display:flex; align-items:center; gap:12px; padding:8px 0; border-bottom:1px dashed var(--line); }
+    /* 逐件模式：項目名稱與輸入格靠在一起（max-width 讓兩者不會被拉到左右兩端） */
+    .prow { display:flex; align-items:center; gap:16px; padding:8px 0; border-bottom:1px dashed var(--line); max-width:660px; }
     .prow:last-child { border-bottom:0; }
-    .prow .pnm { flex:1 1 40%; min-width:150px; }
+    .prow .pnm { flex:1 1 auto; min-width:0; }
     .prow .pnm .n { font-size:16px; font-weight:bold; color:var(--ink); }
     .prow .pnm .s { font-size:12px; color:#8a6a45; }
     .prow .pin { flex:0 0 auto; }
@@ -142,8 +164,9 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
     #items-table .g-name { font-weight:bold; color:var(--ink); }
     #items-table .g-spec { font-size:13px; color:var(--ink2); white-space:nowrap; }
     #items-table .table-input { width:100%; min-width:0; border:1px solid #ccc; padding:3px 5px; border-radius:3px; }
-    #items-table .mcell { width:82px; padding:14px 4px 3px; }
+    #items-table .mcell { width:96px; padding:14px 3px 3px; }
     #items-table .mcell .mval { font-size:18px; height:26px; }
+    #items-table .mcell .mdev { font-size:10px; }
     #items-table .mcell.okng .mtxt { font-size:15px; height:26px; line-height:26px; }
     .gcells { display:flex; flex-wrap:wrap; gap:6px; }
     .pverdict { display:inline-block; min-width:82px; text-align:center; border-radius:6px; padding:6px 4px; font-weight:bold;
@@ -162,7 +185,9 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
     .progbar { width:150px; height:8px; border-radius:4px; background:#EADFCE; overflow:hidden; display:inline-block; vertical-align:middle; }
     .progbar i { display:block; height:100%; background:var(--amber); }
     #dock-extra { display:none; padding-top:8px; border-top:1px dashed var(--line); margin-top:8px; }
-    body.qc2 { padding-bottom:110px; }
+    /* 底部空白由 JS 依 dock 實際高度設定（展開「數量/處置備註」時會變高），避免蓋住內容 */
+    body.qc2 { padding-bottom:120px; }
+    #dock .draft-note { font-size:12px; color:var(--amber-d); }
 
     /* ---------- 內建數字鍵盤（平板/戴手套） ---------- */
     #keypad { position:fixed; right:14px; bottom:104px; z-index:1001; background:#fff; border:1px solid var(--line);
@@ -357,6 +382,7 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
         <span class="stat">進度 <b id="dk-prog">0/0</b> <span class="progbar"><i id="dk-progbar" style="width:0%"></i></span></span>
         <span class="stat bad">不良 <b id="dk-ng">0</b> 件</span>
         <span class="stat">整體判定 <b id="dk-judge">—</b></span>
+        <span class="draft-note" id="draft-status"></span>
         <span style="flex:1 1 auto;"></span>
         <button class="btn btn-default btn-sm" id="btn-dock-extra"><i class="fa fa-sliders"></i> 數量 / 處置備註</button>
         <button class="btn btn-default btn-sm" id="btn-cancel"><i class="fa fa-times"></i> 取消</button>
@@ -394,6 +420,37 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
         <button data-k="OK"><i class="fa fa-check"></i></button>
         <button class="wide" data-k="NEXT">下一格 <i class="fa fa-arrow-right"></i></button>
     </div>
+</div>
+
+<!-- ===================== 量具挑選跳窗：先點類型、再點編號 ===================== -->
+<div class="modal fade" id="toolPickModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
+            <button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-wrench"></i> 選擇量具 <small id="tp-for"></small></h4>
+        </div>
+        <div class="modal-body">
+            <div id="tp-step1">
+                <div class="muted-help" style="margin-bottom:6px;">① 先點量具<b>類型</b></div>
+                <div class="tpick-grid" id="tp-cats"></div>
+            </div>
+            <div id="tp-step2" style="display:none;">
+                <div class="muted-help" style="margin-bottom:6px;">
+                    ② 再點量具<b>編號</b>　<a href="#" id="tp-back">← 換一個類型</a></div>
+                <div class="tpick-grid" id="tp-nos"></div>
+            </div>
+            <div class="tpick-scope" id="tp-scope">
+                <b>套用範圍</b>　<span class="muted-help">同一支量具常常好幾個尺寸共用，不必一欄一欄設</span>
+                <label><input type="radio" name="tpscope" value="blank" checked> 套用到<b>所有尚未指定量具</b>的檢驗項目</label>
+                <label><input type="radio" name="tpscope" value="one"> 只設定<b>這一個</b>項目</label>
+                <label><input type="radio" name="tpscope" value="all"> 套用到<b>全部</b>檢驗項目（覆蓋既有設定）</label>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-default pull-left" id="tp-clear"><i class="fa fa-eraser"></i> 清除此項量具</button>
+            <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+        </div>
+    </div></div>
 </div>
 
 <!-- 樣板選擇 Modal（示意：正式版接通用樣板） -->
@@ -1075,7 +1132,12 @@ $(function(){
         } else if (opts.data == null){ opts.data = { csrf: CSRF }; }
     });
     $('body').append('<div id="print-area"></div>');
-    $('body').append('<span id="draft-status" style="position:fixed;right:14px;bottom:96px;background:#C77C1A;color:#fff;padding:4px 12px;border-radius:14px;font-size:12px;z-index:1002;display:none;"></span>');
+    // 底部固定列會遮住內容（現場回報「下一項」按鈕被蓋住）→ 依 dock 實際高度撐出底部空白
+    function syncDockPad(){
+        var h = $('#dock').is(':visible') ? $('#dock').outerHeight() : 0;
+        $('body').css('padding-bottom', (h+24)+'px');
+    }
+    $(window).on('resize', syncDockPad);
 
     // =====================================================================
     // 狀態與資料模型
@@ -1128,14 +1190,15 @@ $(function(){
         return { hi:base+(isNaN(up)?0:up), low:base+(isNaN(lo)?0:lo), base:base };
     }
     // 偏差量：告訴現場「離標準多少、超出多少」，不必自己心算（痛點④）
-    function devText(it, raw){
+    // compact＝總表用的短版（格子窄，長文字會被切掉）：▲=超上限、▼=超下限
+    function devText(it, raw, compact){
         if(it.type==='OKNG') return '';
         if(raw===''||raw==null) return '';
         var L=limits(it), v=parseFloat(raw);
         if(!L||isNaN(v)) return '';
         var d=v-L.base, sign=(d>0?'+':'');
-        if(v>L.hi) return '超上限 '+trimNum((v-L.hi).toFixed(4));
-        if(v<L.low) return '超下限 '+trimNum((L.low-v).toFixed(4));
+        if(v>L.hi) return (compact?'▲':'超上限 ')+trimNum((v-L.hi).toFixed(4));
+        if(v<L.low) return (compact?'▼':'超下限 ')+trimNum((L.low-v).toFixed(4));
         return sign+trimNum(d.toFixed(4));
     }
     function itemVerdict(it){
@@ -1174,12 +1237,17 @@ $(function(){
             render();
         }, 'json');
     }
-    function toolInstOptions(selId){
-        var h='<option value="">— 未指定量具 —</option>';
-        TOOL_INSTANCES.forEach(function(t){
-            h+='<option value="'+t.id+'" '+(String(selId||'')===t.id?'selected':'')+'>'+esc((t.cat?t.cat+' / ':'')+t.no)+'</option>';
-        });
-        return h;
+    function toolInstById(id){
+        if(id==null || id==='') return null;
+        for(var i=0;i<TOOL_INSTANCES.length;i++){ if(TOOL_INSTANCES[i].id===String(id)) return TOOL_INSTANCES[i]; }
+        return null;
+    }
+    // 量具改用「按鈕 → 跳窗挑」：下拉選單選項太多又擠，現場很難點（2026-07-29 回饋）
+    function toolBtn(i, r){
+        var t = toolInstById(MODEL.items[i].readings[r].tool_id);
+        return '<button type="button" class="tool-btn '+(t?'':'none')+'" data-i="'+i+'" data-r="'+r+'" title="點此選擇量具">'+
+               (t ? '<span class="tcat">'+esc(t.cat||'量具')+'</span><span class="tno">'+esc(t.no)+'</span>'
+                  : '<i class="fa fa-wrench"></i> 點此選擇量具')+'</button>';
     }
     function firstInstOfCat(catName){
         if(!catName) return '';
@@ -1321,7 +1389,7 @@ $(function(){
                '<span class="mno">#'+(s+1)+'</span>'+
                '<input type="text" inputmode="decimal" class="mval" value="'+esc(raw)+'" '+
                       'data-i="'+i+'" data-r="'+r+'" data-s="'+s+'">'+
-               '<span class="mdev">'+esc(devText(it,raw))+'</span></div>';
+               '<span class="mdev">'+esc(devText(it,raw,!big))+'</span></div>';
     }
     // 只更新單一格的外觀，避免重繪打斷輸入焦點
     function paintCell($cell){
@@ -1329,33 +1397,42 @@ $(function(){
         var it=MODEL.items[i]; if(!it) return;
         var raw=it.readings[r].vals[s];
         var j = (it.type==='OKNG') ? ((raw==='NG')?'NG':(raw===''?'':'OK')) : judge(it, raw);
-        $cell.removeClass('c-ok c-ng c-empty').addClass(j==='NG'?'c-ng':(j==='OK'?'c-ok':'c-empty'));
-        if(it.type==='OKNG') $cell.find('.mtxt').text(j==='NG'?'✘ NG':(j==='OK'?'✔ OK':'—'));
-        else $cell.find('.mdev').text(devText(it, raw));
+        var repaint=function($c){
+            var compact = $c.closest('#items-table').length>0;   // 總表格子窄→用短版偏差文字
+            $c.removeClass('c-ok c-ng c-empty').addClass(j==='NG'?'c-ng':(j==='OK'?'c-ok':'c-empty'));
+            if(it.type==='OKNG') $c.find('.mtxt').text(j==='NG'?'✘ NG':(j==='OK'?'✔ OK':'—'));
+            else $c.find('.mdev').text(devText(it, raw, compact));
+        };
+        repaint($cell);
         // 同一格在別的檢視也要同步（總表恆在 DOM）
         $('.mcell[data-i="'+i+'"][data-r="'+r+'"][data-s="'+s+'"]').not($cell).each(function(){
-            var $o=$(this);
-            $o.removeClass('c-ok c-ng c-empty').addClass(j==='NG'?'c-ng':(j==='OK'?'c-ok':'c-empty'));
-            $o.find('.mval').val(raw);
-            if(it.type==='OKNG') $o.find('.mtxt').text(j==='NG'?'✘ NG':(j==='OK'?'✔ OK':'—'));
-            else $o.find('.mdev').text(devText(it, raw));
+            $(this).find('.mval').val(raw);
+            repaint($(this));
         });
+        updateItemVerdictCell(i);
+    }
+    // 總表「判定」欄：輸入後要立刻跟著變（原本只在整頁重繪時才更新，會停在「—」）
+    function updateItemVerdictCell(i){
+        var it=MODEL.items[i]; if(!it) return;
+        var v=itemVerdict(it);
+        $('#items-body td.g-verdict[data-i="'+i+'"]')
+            .css('color', v==='NG'?'var(--coral)':'var(--ink)')
+            .text(v==='NG'?'✘ NG':(v==='OK'?'✔ OK':'—'));
     }
 
     // ---------- 規格帶（標準/上限/下限/量具） ----------
     function specBar(it, i){
         var h='<div class="specbar">';
         if(it.type==='OKNG'){
-            h+='<div class="spec"><div class="k">判定方式</div><div class="v">OK / NG</div></div>'+
+            h+='<div class="spec std"><div class="k">判定方式</div><div class="v">OK / NG</div></div>'+
                '<div class="spec lim" style="min-width:200px;"><div class="k">判定基準</div><div class="v" style="font-size:15px;">'+esc(it.std||'目視/功能檢查')+'</div></div>';
         } else {
             var L=limits(it);
-            h+='<div class="spec"><div class="k">標準值</div><div class="v">'+esc(trimNum(it.std)||'—')+'</div></div>'+
+            h+='<div class="spec std"><div class="k">標準值</div><div class="v">'+esc(trimNum(it.std)||'—')+'</div></div>'+
                '<div class="spec lim"><div class="k">上限（'+esc(it.up||'0')+'）</div><div class="v">'+(L?trimNum(L.hi.toFixed(4)):'—')+'</div></div>'+
                '<div class="spec lim"><div class="k">下限（'+esc(it.lo||'0')+'）</div><div class="v">'+(L?trimNum(L.low.toFixed(4)):'—')+'</div></div>';
         }
-        h+='<div class="spec tool"><div class="k">量具（可追溯編號）</div><div class="v">'+
-           '<select class="form-control input-sm f-tool" data-i="'+i+'" data-r="0">'+toolInstOptions(it.readings[0].tool_id)+'</select></div></div>';
+        h+='<div class="spec tool"><div class="k">量具（可追溯編號）</div><div class="v">'+toolBtn(i,0)+'</div></div>';
         h+='</div>';
         return h;
     }
@@ -1387,7 +1464,7 @@ $(function(){
         h+='</div>';
         for(var r=1;r<it.readings.length;r++){
             h+='<div class="rdbox"><div class="rdhd"><b>加量測 '+r+'</b>'+
-               '<select class="form-control input-sm f-tool" data-i="'+i+'" data-r="'+r+'">'+toolInstOptions(it.readings[r].tool_id)+'</select>'+
+               '<span style="min-width:220px;display:inline-block;">'+toolBtn(i,r)+'</span>'+
                '<a href="#" class="btn-del-reading" data-i="'+i+'" data-r="'+r+'" style="color:var(--coral);"><i class="fa fa-trash"></i> 移除</a></div><div class="cells">';
             for(var s2=0;s2<state.sampleN;s2++) h+=cellHtml(it,i,r,s2,true);
             h+='</div></div>';
@@ -1468,7 +1545,7 @@ $(function(){
                         '<td><input class="table-input f-std" data-i="'+i+'" value="'+esc(it.std)+'"></td>'+
                         '<td><input class="table-input f-up" data-i="'+i+'" value="'+esc(it.up)+'" '+(it.type==='OKNG'?'readonly':'')+'></td>'+
                         '<td><input class="table-input f-lo" data-i="'+i+'" value="'+esc(it.lo)+'" '+(it.type==='OKNG'?'readonly':'')+'></td>'+
-                        '<td><select class="table-input f-tool" data-i="'+i+'" data-r="0">'+toolInstOptions(it.readings[0].tool_id)+'</select></td>'+
+                        '<td>'+toolBtn(i,0)+'</td>'+
                         '<td><select class="table-input f-type" data-i="'+i+'">'+
                           '<option value="NUM" '+(it.type==='NUM'?'selected':'')+'>數值</option>'+
                           '<option value="OKNG" '+(it.type==='OKNG'?'selected':'')+'>OK/NG</option></select></td>';
@@ -1477,20 +1554,23 @@ $(function(){
                             (it.remark?' <i class="fa fa-comment-o" title="'+esc(it.remark)+'"></i>':'')+'</td>'+
                         '<td class="g-spec">'+(it.type==='OKNG' ? esc(it.std||'OK/NG')
                             : (esc(trimNum(it.std)||'—')+(L?('<br><span class="muted-help">'+trimNum(L.low.toFixed(4))+' ~ '+trimNum(L.hi.toFixed(4))+'</span>'):'')))+'</td>'+
-                        '<td class="g-spec">'+esc(toolLabelById(it.readings[0].tool_id)||'—')+'</td>';
+                        '<td>'+toolBtn(i,0)+'</td>';
             }
             var cells=''; for(var s=0;s<state.sampleN;s++) cells+=cellHtml(it,i,0,s,false);
             body += '<td><div class="gcells">'+cells+'</div></td>'+
-                    '<td class="text-center" style="font-weight:bold;color:'+(v==='NG'?'var(--coral)':'var(--ink)')+'">'+(v==='NG'?'✘ NG':(v==='OK'?'✔ OK':'—'))+'</td>'+
+                    '<td class="text-center g-verdict" data-i="'+i+'" style="font-weight:bold;color:'+(v==='NG'?'var(--coral)':'var(--ink)')+'">'+(v==='NG'?'✘ NG':(v==='OK'?'✔ OK':'—'))+'</td>'+
                     '<td class="text-center" style="white-space:nowrap">'+
                       '<i class="fa fa-plus btn-add-reading" data-i="'+i+'" style="cursor:pointer;color:var(--amber-d)" title="加量測"></i> '+
                       '<i class="fa fa-comment-o btn-item-note" data-i="'+i+'" style="cursor:pointer;color:'+(it.remark?'var(--amber-d)':'#bbb')+'" title="本項備註"></i> '+
                       '<i class="fa fa-trash btn-del-item" data-i="'+i+'" style="cursor:pointer;color:var(--coral)"></i></td></tr>';
             for(var r=1;r<it.readings.length;r++){
                 var sub=''; for(var s3=0;s3<state.sampleN;s3++) sub+=cellHtml(it,i,r,s3,false);
-                body += '<tr style="background:#FBF7F1;"><td></td><td colspan="'+(colsBefore-2)+'" class="text-right muted-help">↳ 加量測 '+r+'</td>'+
-                        '<td><select class="table-input f-tool" data-i="'+i+'" data-r="'+r+'" style="max-width:150px;display:inline-block;">'+toolInstOptions(it.readings[r].tool_id)+'</select>'+
-                        '<div class="gcells" style="margin-top:4px;">'+sub+'</div></td><td></td>'+
+                // 對齊主列欄位：空(編號) + 併格(項目…) + 量具 + [型態空格] + 實測 + 判定空 + 動作
+                var toolCol = stdEdit ? 6 : 4;            // 量具是第幾欄
+                var afterTool = (colsBefore - toolCol - 1); // 量具與實測值之間還有幾欄（型態）
+                body += '<tr style="background:#FBF7F1;"><td></td><td colspan="'+(toolCol-2)+'" class="text-right muted-help">↳ 加量測 '+r+'</td>'+
+                        '<td>'+toolBtn(i,r)+'</td>'+ (afterTool>0 ? '<td></td>' : '') +
+                        '<td><div class="gcells">'+sub+'</div></td><td></td>'+
                         '<td class="text-center"><i class="fa fa-trash btn-del-reading" data-i="'+i+'" data-r="'+r+'" style="cursor:pointer;color:var(--coral)"></i></td></tr>';
             }
         });
@@ -1539,6 +1619,7 @@ $(function(){
             $(this).find('.dot').removeClass('ok ng').addClass(v==='NG'?'ng':(v==='OK'?'ok':''));
             $(this).find('.cnt').text(itemFilledCount(it)+'/'+state.sampleN);
         });
+        MODEL.items.forEach(function(it,i){ updateItemVerdictCell(i); });
     }
 
     // =====================================================================
@@ -1626,13 +1707,58 @@ $(function(){
     });
 
     // ---------- 標準/量具/型態/備註 編修 ----------
-    $(document).on('change', '.f-tool', function(){
-        var i=+$(this).data('i'), r=+$(this).data('r');
-        if(!MODEL.items[i]) return;
-        MODEL.items[i].readings[r].tool_id = $(this).val()||'';
-        $('.f-tool[data-i="'+i+'"][data-r="'+r+'"]').not(this).val($(this).val());
-        scheduleDraftSave();
+    // ---------- 量具挑選跳窗（類型 → 編號；可一次套用到多個項目） ----------
+    var tpTarget=null;
+    $(document).on('click', '.tool-btn', function(){ openToolPicker(+$(this).data('i'), +$(this).data('r')); });
+    function openToolPicker(i, r){
+        var it=MODEL.items[i]; if(!it) return;
+        tpTarget={ i:i, r:r };
+        $('#tp-for').text('（'+codeLabel(i)+' '+(it.name||'未命名')+(r>0?(' · 加量測'+r):'')+'）');
+        // 只有主量測、且表內不只一個項目時，才需要問套用範圍
+        $('#tp-scope').toggle(r===0 && MODEL.items.length>1);
+        var cats=[], cnt={};
+        TOOL_INSTANCES.forEach(function(t){ var c=t.cat||'（未分類）'; if(cnt[c]===undefined){ cnt[c]=0; cats.push(c); } cnt[c]++; });
+        $('#tp-cats').html(cats.length ? cats.map(function(c){
+            return '<button type="button" class="tp-cat" data-c="'+esc(c)+'">'+esc(c)+'<small>'+cnt[c]+' 支</small></button>';
+        }).join('') : '<div class="text-muted">尚未建立任何量具，請至 設定 → 量具設定 新增。</div>');
+        $('#tp-step1').show(); $('#tp-step2').hide();
+        $('#toolPickModal').modal('show');
+    }
+    $(document).on('click', '.tp-cat', function(){
+        var cat=String($(this).attr('data-c'));
+        var list=TOOL_INSTANCES.filter(function(t){ return (t.cat||'（未分類）')===cat; });
+        $('#tp-nos').html(list.map(function(t){
+            return '<button type="button" class="tp-no" data-id="'+t.id+'">'+esc(t.no)+'<small>'+esc(t.cat||'')+'</small></button>';
+        }).join(''));
+        $('#tp-step1').hide(); $('#tp-step2').show();
     });
+    $(document).on('click', '#tp-back', function(e){ e.preventDefault(); $('#tp-step2').hide(); $('#tp-step1').show(); });
+    $(document).on('click', '.tp-no', function(){ applyTool(String($(this).attr('data-id'))); });
+    $('#tp-clear').on('click', function(){ applyTool(''); });
+    function applyTool(tid){
+        if(!tpTarget) return;
+        var i=tpTarget.i, r=tpTarget.r, n=0;
+        var scope = ($('#tp-scope').is(':visible')) ? ($('input[name=tpscope]:checked').val()||'one') : 'one';
+        if(scope==='one'){ MODEL.items[i].readings[r].tool_id=tid; n=1; }
+        else {
+            MODEL.items.forEach(function(it){
+                if(scope==='blank' && it.readings[0].tool_id) return;   // 只補「還沒設定」的
+                it.readings[0].tool_id=tid; n++;
+            });
+            if(scope==='blank' && !MODEL.items[i].readings[0].tool_id){ MODEL.items[i].readings[0].tool_id=tid; n++; }
+        }
+        $('#toolPickModal').modal('hide');
+        render(); scheduleDraftSave();
+        var t=toolInstById(tid);
+        if(n>1) flashMsg('已套用「'+((t?(t.cat+' / '+t.no):'未指定'))+'」到 '+n+' 個檢驗項目');
+    }
+    function flashMsg(msg){
+        var $m=$('#flash-msg');
+        if(!$m.length) $m=$('<div id="flash-msg" style="position:fixed;left:50%;transform:translateX(-50%);bottom:140px;'+
+            'background:#4A3524;color:#fff;padding:9px 20px;border-radius:20px;z-index:1100;font-size:14px;display:none;'+
+            'box-shadow:0 2px 8px rgba(0,0,0,.25);"></div>').appendTo('body');
+        $m.text(msg).stop(true,true).fadeIn(120).delay(2000).fadeOut(400);
+    }
     $(document).on('input', '.f-name', function(){ var i=+$(this).data('i'); MODEL.items[i].name=$(this).val(); scheduleDraftSave(); });
     $(document).on('input', '.f-std',  function(){ var i=+$(this).data('i'); MODEL.items[i].std =$(this).val(); repaintItem(i); });
     $(document).on('input', '.f-up',   function(){ var i=+$(this).data('i'); MODEL.items[i].up  =$(this).val(); repaintItem(i); });
@@ -1696,7 +1822,7 @@ $(function(){
     });
     $('#inp-sample').on('change', function(){ setSampleN($(this).val()); scheduleDraftSave(); });
     $('#inp-qty,#inp-remark').on('input', scheduleDraftSave);
-    $('#btn-dock-extra').on('click', function(){ $('#dock-extra').slideToggle(120); });
+    $('#btn-dock-extra').on('click', function(){ $('#dock-extra').slideToggle(120, syncDockPad); });
 
     // =====================================================================
     // 內建數字鍵盤（平板/戴手套；桌機可關）
@@ -1780,7 +1906,7 @@ $(function(){
             state.processes = [ ctx.process || '檢驗' ];
             buildBatchesFromHistory(res.history || []);
             renderCtxBar();
-            $('#main-area').show(); $('#dock').show();
+            $('#main-area').show(); $('#dock').show(); syncDockPad();
             $('#inp-qty').val(ctx.order_qty || 0);
             $('#inp-sample').val(state.sampleN);
             renderBatches();
@@ -2026,7 +2152,7 @@ $(function(){
             if(res && res.success){
                 draftDirty=false; state.draftFormId=res.draft_form_id;
                 var t=new Date(), p=function(n){return('0'+n).slice(-2);};
-                $('#draft-status').text('已自動存草稿 '+p(t.getHours())+':'+p(t.getMinutes())+':'+p(t.getSeconds())).show();
+                $('#draft-status').html('<i class="fa fa-check"></i> 已自動存草稿 '+p(t.getHours())+':'+p(t.getMinutes())+':'+p(t.getSeconds()));
             }
         }, 'json');
     }
