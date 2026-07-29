@@ -61,10 +61,11 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
     <link href="../../resource/css/custom.css" rel="stylesheet">
     <style>
         :root{ --warm-line:#e4d8c6; --warm-bg:#faf6ef; --warm-head:#8c5a3c; --amber:#C0762C; --coral:#DD5138; }
-        .roster-wrap{ padding:0 14px; }
+        .roster-wrap{ padding:0 14px; overflow-x:hidden; }
         .rst-flex{ display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap; }
-        .rst-left{ flex:0 0 300px; max-width:320px; }
-        .rst-right{ flex:1 1 620px; min-width:520px; }
+        .rst-left{ flex:0 0 300px; max-width:320px; min-width:0; }
+        .rst-right{ flex:1 1 520px; min-width:0; }
+        .cal-months{ max-width:100%; }
         .rst-panel{ background:#fff; border:1px solid var(--warm-line); border-radius:6px; }
         .rst-panel-h{ background:var(--warm-bg); border-bottom:1px solid var(--warm-line); padding:8px 12px; font-weight:bold; color:var(--warm-head); display:flex; justify-content:space-between; align-items:center; }
         .rst-tabs{ display:flex; border-bottom:1px solid var(--warm-line); }
@@ -82,7 +83,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         .cal-month h4{ text-align:center; color:var(--warm-head); margin:4px 0 8px; }
         table.cal{ width:100%; border-collapse:collapse; table-layout:fixed; }
         table.cal th{ background:var(--warm-bg); color:var(--warm-head); font-size:12px; padding:4px 0; border:1px solid var(--warm-line); font-weight:normal; }
-        table.cal td{ border:1px solid var(--warm-line); vertical-align:top; height:58px; padding:1px 2px; cursor:pointer; }
+        table.cal td{ border:1px solid var(--warm-line); vertical-align:top; height:58px; padding:1px 2px; cursor:pointer; overflow:hidden; max-width:0; }
         table.cal td.empty{ background:#fbfbfb; cursor:default; }
         table.cal td.holiday{ background:#efe6d8; }
         table.cal td.makeup{ background:#fff6e8; }
@@ -91,7 +92,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         .dnum{ font-size:12px; color:#7a6a52; }
         .dnum .tag{ font-size:10px; color:#b08a5a; margin-left:2px; }
         .chip{ display:flex; align-items:center; gap:2px; font-size:10px; line-height:1.35; margin-top:1px; padding:0 3px; border-radius:2px; color:#4a3a28; background:#f3ead9;
-               white-space:nowrap; overflow:hidden; border-left:3px solid #ccc; }
+               white-space:nowrap; overflow:hidden; border-left:3px solid #ccc; min-width:0; max-width:100%; }
         .chip .chip-nm{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
         .chip .chip-lane{ font-size:8px; color:#fff; padding:0 3px; border-radius:2px; white-space:nowrap; flex:none; }
         .lane-bar{ display:flex; flex-wrap:wrap; gap:5px; margin-bottom:8px; }
@@ -103,7 +104,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         .chip-more:hover{ background:#e9dcc4; }
         .chip.signed{ background:var(--amber); color:#fff; border-left-color:#8c5320; }
         .chip.left{ text-decoration:line-through; opacity:.6; }
-        .chip.adj::after{ content:'調'; font-size:9px; background:#fff; color:var(--coral); border-radius:2px; padding:0 2px; margin-left:3px; }
+        .chip.adj::after{ content:'調'; font-size:8px; background:#fff; color:#2E6FB7; border:1px solid #2E6FB7; border-radius:2px; padding:0 2px; margin-left:2px; flex:none; font-weight:bold; }
         .chip.dim{ opacity:.2; }
         .chip.mine{ box-shadow:inset 0 0 0 2px #8c5320; font-weight:bold; }
         .chip.pending{ background:repeating-linear-gradient(45deg,#f6e2c2,#f6e2c2 6px,#efd3a6 6px,#efd3a6 12px); color:#7a4a1a; }
@@ -216,6 +217,10 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                                     <button class="btn btn-sm btn-warning" id="viewCal" onclick="R.setView('cal')">月曆</button>
                                     <button class="btn btn-sm btn-default" id="viewList" onclick="R.setView('list')">列表</button>
                                 </div>
+                                <span style="font-size:12px;color:#a08c72;white-space:nowrap;">每日顯示
+                                    <input type="number" id="prefLimit" class="no-spin form-control input-sm" style="width:48px;display:inline-block;" min="1" max="30" value="4" onchange="R.prefApply()"> 人
+                                    <label style="font-weight:400;margin:0 0 0 6px;"><input type="checkbox" id="prefExpand" onchange="R.prefApply()"> 預設展開</label>
+                                </span>
                                 <button class="btn btn-sm btn-default" onclick="R.exportPdf()" title="匯出目前兩個月完整排班"><i class="fa fa-file-pdf-o"></i> PDF</button>
                                 <span id="ownerTools" style="display:none">
                                     <button class="btn btn-sm btn-default" onclick="R.openRange()" title="區間調班"><i class="fa fa-random"></i> 區間調班</button>
@@ -250,6 +255,10 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                         <button class="btn btn-default btn-sm" onclick="R.shiftMoveMonth(1)"><i class="fa fa-chevron-right"></i></button>
                         <span style="font-weight:bold;color:#5a4632;">人員排班</span>
                         <span style="flex:1"></span>
+                        <select id="shiftFilterDept" class="form-control input-sm" style="width:120px" onchange="R.loadShiftCal()">
+                            <option value="0">全部部門</option>
+                            <?php foreach ($pickers['departments'] as $d): ?><option value="<?= (int)$d['id'] ?>"><?= htmlspecialchars($d['name']) ?></option><?php endforeach; ?>
+                        </select>
                         <select id="shiftFilterPerson" class="form-control input-sm" style="width:120px" onchange="R.loadShiftCal()"><option value="0">全部人員</option></select>
                         <button class="btn btn-sm btn-default" onclick="R.exportShiftPdf()" title="匯出目前兩個月完整班表"><i class="fa fa-file-pdf-o"></i> PDF</button>
                         <span id="shiftEditTools" style="display:none">
@@ -544,6 +553,22 @@ var R = (function(){
             alert(m);
         });
     }
+    /* ── 個人化顯示偏好（存 localStorage，每個使用者各自）── */
+    var PREF={limit:4, expand:false};
+    function prefKey(){ return 'roster_pref_'+RD.myid; }
+    function prefLoad(){ try{ var v=JSON.parse(localStorage.getItem(prefKey())||'{}');
+        if(v && typeof v==='object'){ if(+v.limit>0) PREF.limit=Math.min(30,+v.limit); PREF.expand=!!v.expand; } }catch(e){} }
+    function prefSave(){ try{ localStorage.setItem(prefKey(), JSON.stringify(PREF)); }catch(e){} }
+    function prefApply(){
+        PREF.limit=Math.max(1,Math.min(30,+$('#prefLimit').val()||4));
+        PREF.expand=$('#prefExpand').is(':checked');
+        $('#prefLimit').val(PREF.limit);
+        prefSave(); calExpanded={}; shiftExpanded={};
+        if(calData) (view==='cal'?renderCalendar():renderList());
+        if(shiftCalData) renderShiftCal();
+    }
+    function dayOpen(map,ds){ return (map[ds]===undefined) ? PREF.expand : map[ds]; }   // 未手動切換過→依個人預設
+
     function esc(s){ return $('<div>').text(s==null?'':s).html(); }
     function ym(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
     function leaveHtml(c){ if(!c.leave) return '';
@@ -669,27 +694,10 @@ var R = (function(){
             var tag=hol[ds]?'<span class="tag">休</span>':(mk[ds]?'<span class="tag">補</span>':'');
             h+='<td class="'+cls.trim()+'" onclick="R.openDay(\''+ds+'\')"><div class="dnum">'+day+tag+'</div>';
             var cells=(calData.cells[ds]||[]).filter(function(c){ return !hiddenLanes[c.lane_id]; });
-            // 超過 2 人：改以「項目 ×N人」彙總顯示（點擊可展開完整名單）
-            if(cells.length>2 && !calExpanded[ds]){
-                var grp={}, ord=[];
-                cells.forEach(function(c){
-                    var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
-                    var key=c.color?(c.board_name||c.lane_name||'排班'):(l?l.lane_name:'排班');
-                    if(!grp[key]){ grp[key]={n:0, col:(c.color||laneColor(l,idx)), leave:0}; ord.push(key); }
-                    grp[key].n++; if(c.leave) grp[key].leave++;
-                });
-                ord.forEach(function(k){
-                    var g=grp[k];
-                    h+='<div class="chip chip-sum" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')" style="border-left-color:'+g.col+'" title="'+esc(k+' 共 '+g.n+' 人（點擊展開）')+'">'
-                      +'<span class="chip-nm">'+esc(k)+'</span><span class="chip-cnt">×'+g.n+'</span>'
-                      +(g.leave?'<span class="leave-stamp" title="其中 '+g.leave+' 人請假">休</span>':'')+'</div>';
-                });
-                h+='</td>'; col++;
-                if(col%7===0 && day<dim) h+='</tr><tr>';
-                continue;
-            }
-            var shown=0, more=0;
+            var open=dayOpen(calExpanded,ds), shown=0, more=0;
             cells.forEach(function(c){
+                if(!open && shown>=PREF.limit){ more++; return; }
+                shown++;
                 var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
                 var lcol=c.color||laneColor(l,idx);
                 var tag=c.color?(c.board_name||c.lane_name||''):(l?l.lane_name:''); // 單表=項目名;多表=表名
@@ -700,7 +708,8 @@ var R = (function(){
                   +leaveHtml(c)
                   +'</div>';
             });
-            if(calExpanded[ds] && cells.length>2) h+='<div class="chip-more" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')">收合</div>';
+            if(more>0) h+='<div class="chip-more" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')">⋯ 還有 '+more+' 人</div>';
+            else if(open && cells.length>PREF.limit) h+='<div class="chip-more" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')">收合</div>';
             h+='</td>'; col++;
             if(col%7===0 && day<dim) h+='</tr><tr>';
         }
@@ -1125,12 +1134,33 @@ var R = (function(){
           +'.key{margin:0 0 8px;font-size:11px}'
           +'.key span{display:inline-block;margin-right:12px;white-space:nowrap}'
           +'.key i{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:middle;margin-right:4px}'
+          +'.it.grp{font-weight:bold;background:#f6ead8}'
+          +'.it.sub{border-left:none;padding-left:12px;color:#4a3a28}'
           +'</style></head><body>'+bodyHtml+'</body></html>');
         w.document.close();
         w.onload=function(){ w.focus(); w.print(); };
         setTimeout(function(){ try{ w.focus(); w.print(); }catch(e){} }, 600);
     }
-    function pdfMonth(mo, cells, hol, mk, labelFn){
+    // 依「班別/項目」分組輸出：班別當小標，其下列人名；該班別只有一人時併成一行
+    function pdfGrouped(list, keyOf, colOf, nameOf, extraOf){
+        var grp={}, ord=[];
+        list.forEach(function(c){ var k=keyOf(c); if(!grp[k]){ grp[k]={col:colOf(c), items:[]}; ord.push(k); } grp[k].items.push(c); });
+        var s='';
+        ord.forEach(function(k){
+            var g=grp[k];
+            if(g.items.length===1){
+                s+='<span class="it" style="border-left-color:'+g.col+'">'+esc(k)+'　'+esc(nameOf(g.items[0]))+extraOf(g.items[0])+'</span>';
+            } else {
+                s+='<span class="it grp" style="border-left-color:'+g.col+'">'+esc(k)+'（'+g.items.length+'）</span>';
+                g.items.forEach(function(c){ s+='<span class="it sub">'+esc(nameOf(c))+extraOf(c)+'</span>'; });
+            }
+        });
+        return s;
+    }
+    function pdfMonthGrouped(mo, cells, hol, mk, keyOf, colOf, nameOf, extraOf){
+        return pdfMonth(mo, cells, hol, mk, null, function(list){ return pdfGrouped(list, keyOf, colOf, nameOf, extraOf); });
+    }
+    function pdfMonth(mo, cells, hol, mk, labelFn, groupFn){
         var y=+mo.slice(0,4), m=+mo.slice(5,7);
         var start=new Date(y,m-1,1).getDay(), dim=new Date(y,m,0).getDate();
         var wd=['日','一','二','三','四','五','六'];
@@ -1141,7 +1171,9 @@ var R = (function(){
             var ds=mo+'-'+String(d).padStart(2,'0');
             var cls=hol[ds]?'hol':(mk[ds]?'mk':'');
             h+='<td class="'+cls+'"><div class="dn">'+d+(hol[ds]?' 休':(mk[ds]?' 補':''))+'</div>';
-            (cells[ds]||[]).forEach(function(c){ h+=labelFn(c); });   // 完整列出，不限 3 人
+            var list=(cells[ds]||[]);                                  // 完整列出，不受畫面顯示上限影響
+            if(groupFn) h+=groupFn(list);
+            else list.forEach(function(c){ h+=labelFn(c); });
             h+='</td>'; col++;
             if(col%7===0 && d<dim) h+='</tr><tr>';
         }
@@ -1163,13 +1195,11 @@ var R = (function(){
         }
         if(keyHtml) body+='<div class="key">'+keyHtml+'</div>';
         calData.months.forEach(function(mo){
-            body+=pdfMonth(mo, calData.cells, hol, mk, function(c){
-                var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
-                var col=c.color||laneColor(l,idx);
-                var tag=c.color?(c.board_name||c.lane_name||''):(l?l.lane_name:'');
-                return '<span class="it" style="border-left-color:'+col+'">'+esc(c.name)+(tag?'（'+esc(tag)+'）':'')
-                     +(c.sign?' ✔':'')+(c.leave?(c.leave_full?' [休]':' [半]'):'')+'</span>';
-            });
+            body+=pdfMonthGrouped(mo, calData.cells, hol, mk,
+                function(c){ var l=lm[c.lane_id]; return c.color?(c.board_name||c.lane_name||'排班'):((l&&l.lane_name)||'排班'); },
+                function(c){ var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l); return c.color||laneColor(l,idx); },
+                function(c){ return c.name; },
+                function(c){ return (c.sign?' ✔':'')+(c.leave?(c.leave_full?' [休]':' [半]'):''); });
         });
         pdfWindow(name, body);
     }
@@ -1185,10 +1215,11 @@ var R = (function(){
         });
         if(keyHtml) body+='<div class="key">'+keyHtml+'</div>';
         shiftCalData.months.forEach(function(mo){
-            body+=pdfMonth(mo, shiftCalData.cells, hol, mk, function(c){
-                return '<span class="it" style="border-left-color:'+c.color+'">'+esc(c.name)+'（'+esc(c.lane_name)+'）'
-                     +(c.is_agent?' [代]':'')+(c.leave?(c.leave_full?' [休]':' [半]'):'')+'</span>';
-            });
+            body+=pdfMonthGrouped(mo, shiftCalData.cells, hol, mk,
+                function(c){ return c.lane_name||'班別'; },
+                function(c){ return c.color; },
+                function(c){ return c.name; },
+                function(c){ return (c.is_agent?' [代]':'')+(c.leave?(c.leave_full?' [休]':' [半]'):''); });
         });
         pdfWindow('固定班別排班表', body);
     }
@@ -1260,7 +1291,7 @@ var R = (function(){
     /* ── 固定班別排班：人員排班月曆 ── */
     function loadShiftCal(){
         shiftCalYm = shiftCalYm || ym(new Date());
-        post('get_shift_calendar',{ym:shiftCalYm, filter_user:$('#shiftFilterPerson').val()||0}).done(function(r){
+        post('get_shift_calendar',{ym:shiftCalYm, filter_user:$('#shiftFilterPerson').val()||0, filter_dept:$('#shiftFilterDept').val()||0}).done(function(r){
             if(!r.success) return; shiftCalData=r;
             $('#shiftEditTools').toggle(!!r.can_edit);
             var cur=$('#shiftFilterPerson').val(), opt='<option value="0">全部人員</option>';
@@ -1296,24 +1327,10 @@ var R = (function(){
             var tg=hol[ds]?'<span class="tag">休</span>':(mk[ds]?'<span class="tag">補</span>':'');
             h+='<td class="'+cls.trim()+'" onclick="R.openShiftDay(\''+ds+'\')"><div class="dnum">'+day+tg+'</div>';
             var scells=(shiftCalData.cells[ds]||[]).filter(function(c){ return !shiftHidden[c.shift_id]; });
-            // 超過 2 人：改以「班別 ×N人」彙總（點擊展開）
-            if(scells.length>2 && !shiftExpanded[ds]){
-                var sg={}, sord=[];
-                scells.forEach(function(c){
-                    var k=c.lane_name||'班別';
-                    if(!sg[k]){ sg[k]={n:0, col:c.color, leave:0}; sord.push(k); }
-                    sg[k].n++; if(c.leave) sg[k].leave++;
-                });
-                sord.forEach(function(k){
-                    var g=sg[k];
-                    h+='<div class="chip chip-sum" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')" style="border-left-color:'+g.col+'" title="'+esc(k+' 共 '+g.n+' 人（點擊展開）')+'">'
-                      +'<span class="chip-nm">'+esc(k)+'</span><span class="chip-cnt">×'+g.n+'</span>'
-                      +(g.leave?'<span class="leave-stamp" title="其中 '+g.leave+' 人請假">休</span>':'')+'</div>';
-                });
-                h+='</td>'; col++; if(col%7===0&&day<dim) h+='</tr><tr>';
-                continue;
-            }
+            var sopen=dayOpen(shiftExpanded,ds), sshown=0, smore=0;
             scells.forEach(function(c){
+                if(!sopen && sshown>=PREF.limit){ smore++; return; }
+                sshown++;
                 var tip=c.lane_name+(c.time?'('+c.time+')':'')+'：'+c.name+(c.is_agent?'（代理）':'')+(c.leave?'（'+(c.leave_full?'整天請假':'半天')+'）':'');
                 h+='<div class="chip'+(c.mine?' mine':'')+(c.leave?(c.leave_full?' onleave':' onleave half'):'')+'" style="border-left-color:'+c.color+'" title="'+esc(tip)+'">'
                   +'<span class="chip-nm">'+esc(c.name)+'</span>'
@@ -1321,7 +1338,8 @@ var R = (function(){
                   +(c.is_agent?'<span class="chip-lane" style="background:#8c5a3c">代</span>':'')
                   +'</div>';
             });
-            if(shiftExpanded[ds] && scells.length>2) h+='<div class="chip-more" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')">收合</div>';
+            if(smore>0) h+='<div class="chip-more" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')">⋯ 還有 '+smore+' 人</div>';
+            else if(sopen && scells.length>PREF.limit) h+='<div class="chip-more" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')">收合</div>';
             h+='</td>'; col++; if(col%7===0&&day<dim) h+='</tr><tr>';
         }
         while(col%7!==0){ h+='<td class="empty"></td>'; col++; }
@@ -1552,6 +1570,7 @@ var R = (function(){
     }
 
     $(function(){
+        prefLoad(); $('#prefLimit').val(PREF.limit); $('#prefExpand').prop('checked',PREF.expand);
         $('#btn-perm-help').on('click',function(e){e.preventDefault();$('#permHelp').modal('show');});
         $('#sh_start,#sh_end,#sh_break,#sh_ot').on('input',updShiftHint); $('#sh_overnight').on('change',updShiftHint);
         <?php if ($hasAccess): ?>loadBoards(); loadMySwaps();<?php endif; ?>
@@ -1563,8 +1582,9 @@ var R = (function(){
         addLane:addLane, delLane:delLane, pickColor:pickColor, onModeChange:onModeChange, onCadenceChange:onCadenceChange, onRotateChange:onRotateChange,
         toggleWk:toggleWk, toggleMo:toggleMo, onAllVis:onAllVis, filterVis:filterVis, moveMonth:moveMonth, goToday:goToday, setView:setView,
         msFilter:msFilter, msAll:msAll, selectAllRostered:selectAllRostered, openLogs:openLogs, logTab:logTab, toggleLane:toggleLane,
-        calExpand:function(d){ calExpanded[d]=!calExpanded[d]; renderCalendar(); },
-        shiftExpand:function(d){ shiftExpanded[d]=!shiftExpanded[d]; renderShiftCal(); },
+        calExpand:function(d){ calExpanded[d]=!dayOpen(calExpanded,d); renderCalendar(); },
+        shiftExpand:function(d){ shiftExpanded[d]=!dayOpen(shiftExpanded,d); renderShiftCal(); },
+        prefApply:prefApply,
         exportPdf:exportPdf, exportShiftPdf:exportShiftPdf,
         saSync:saSync, saClearAll:saClearAll, saToggle:saToggle, editShiftAssign:editShiftAssign,
         openShiftBatch:openShiftBatch, btFilter:btFilter, btAll:btAll, btSync:btSync, btOpChange:btOpChange, btPreview:btPreview, btApply:btApply,

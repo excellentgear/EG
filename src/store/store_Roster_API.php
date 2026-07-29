@@ -807,6 +807,7 @@ case 'get_shift_calendar': {
     if (!preg_match('/^\d{4}-\d{2}$/', $ym)) $ym = date('Y-m');
     $filterUser = (int)($_POST['filter_user'] ?? 0);
     $filterShift = (int)($_POST['filter_shift'] ?? 0);
+    $filterDept = (int)($_POST['filter_dept'] ?? 0);
     $from = $ym . '-01';
     $secondObj = (new DateTime($from))->modify('+1 month');
     $second = $secondObj->format('Y-m');
@@ -821,6 +822,7 @@ case 'get_shift_calendar': {
     $args = [$from, $to];
     if ($filterUser)  { $sql .= " AND sa.user_id=?"; $args[] = $filterUser; }
     if ($filterShift) { $sql .= " AND sa.shift_type_id=?"; $args[] = $filterShift; }
+    if ($filterDept)  { $sql .= " AND sa.user_id IN (SELECT user_id FROM user_department_position_map WHERE department_id=?)"; $args[] = $filterDept; }
     $rows = $pdo->prepare($sql); $rows->execute($args); $rows = $rows->fetchAll(PDO::FETCH_ASSOC);
 
     $uids = array_map(fn($r) => (int)$r['user_id'], $rows);
