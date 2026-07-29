@@ -193,7 +193,8 @@ input[type=number]{-moz-appearance:textfield;}
           </div>
         </div>
 
-        <div class="row">
+        <!-- 證明文件：只有假別在「人事設定→假別設定」勾了「需附證明文件」才會出現整個區塊 -->
+        <div class="row" id="attachBlock" style="display:none;">
           <div class="col-md-12" style="margin-bottom:10px;">
             <label>證明文件 <span id="attReq" style="color:var(--coral);display:none;">*</span>
               <span style="font-weight:400;font-size:11.5px;color:#9a7b4f;">（jpg／png／pdf，單檔 20MB 內；新增當下即可上傳，不必先存單）</span>
@@ -373,7 +374,7 @@ function boot(){
     AGENTS.forEach(a => $a.append('<option value="'+a.user_id+'">'+esc(a.user_cname)+'</option>'));
     renderAnnual(r.annual);
     if(IS_ADMIN){ $('#psHeader').val(SETTINGS.print_header||''); $('#psFooter').val(SETTINGS.print_footer||''); }
-    if(!SETTINGS.attach_ready) $('#attMsg').html('<span style="color:#a3341f;">附件根目錄尚未設定，請洽管理員（人事設定→請假系統設定）</span>');
+    // 附件根目錄未設定的警告改在「選到需附證明的假別」時才顯示（見假別切換），此處不預先顯示
     uploadToken = newToken();
     bindInputUx();
     refreshPendingCount();
@@ -388,20 +389,29 @@ function renderAnnual(an){
 // ── 假別切換：代理人/證明文件需求提示 ──
 $(document).on('change', '#fType', function(){
   const t = TYPES.find(x => String(x.id) === String(this.value));
-  if(!t){ $('#typeHint').text(''); $('#agentReq').hide(); $('#attReq').hide(); $('#signerPrev').hide(); return; }
+  if(!t){ $('#typeHint').text(''); $('#agentReq').hide(); $('#attReq').hide(); $('#attachBlock').hide(); $('#signerPrev').hide(); return; }
   const unit = {hour:'可請時假（以半小時為單位）', halfday:'以半天為單位（不足半天以半天計）', day:'以整天為單位'}[t.unit_type] || '';
   let hint = unit;
   if(+t.need_approval === 0) hint += '｜此假別免主管簽核';
   else hint += '｜需簽核至第 ' + t.max_approval_level + ' 層主管';
   $('#typeHint').text(hint);
   $('#agentReq').toggle(+t.agent === 1);
-  $('#attReq').toggle(+t.require_attachment === 1);
-  if(+t.require_attachment === 1){
+  // 沒設定「需附證明文件」的假別，整個上傳區塊不出現（使用者要求 2026-07-29）
+  const needAtt = (+t.require_attachment === 1);
+  $('#attReq').toggle(needAtt);
+  $('#attachBlock').toggle(needAtt);
+  if(needAtt){
     const minD = parseFloat(t.attach_min_days||0);
-    $('#attMsg').html('<span style="color:#8a5a1a;">此假別需附證明文件'
-      + (minD>0 ? ('（超過 '+num(minD)+' 天才需要）') : '')
-      + (+t.allow_attach_later===1 ? '；可先送審、事後補件。' : '；必須先上傳才能送出。') + '</span>');
-  } else if(SETTINGS.attach_ready) { $('#attMsg').text(''); }
+    let m = '<span style="color:#8a5a1a;">此假別需附證明文件'
+          + (minD>0 ? ('（超過 '+num(minD)+' 天才需要）') : '')
+          + (+t.allow_attach_later===1 ? '；可先送審、事後補件。' : '；必須先上傳才能送出。') + '</span>';
+    if(!SETTINGS.attach_ready) m = '<span style="color:#a3341f;">附件根目錄尚未設定，請洽管理員（人事設定→請假系統設定）</span>';
+    $('#attMsg').html(m);
+  } else {
+    // 切換到不需證明的假別：清掉先前可能已暫存的附件狀態，避免誤送
+    $('#attMsg').text(''); $('#tempList').empty();
+    const ff = document.getElementById('fFile'); if(ff) ff.value = '';
+  }
   doPreview();
 });
 $(document).on('change', '#fStart, #fEnd', function(){ shiftApplied = true; doPreview(); });
@@ -486,9 +496,11 @@ function doPreview(){
 function uploadTemp(){
   const f = document.getElementById('fFile').files[0];
   if(!f){ $('#attMsg').html('<span style="color:#a3341f;">請先選擇檔案</span>'); return; }
+  const tid = $('#fType').val();
+  if(!tid){ $('#attMsg').html('<span style="color:#a3341f;">請先選擇假別</span>'); return; }
   const fd = new FormData();
   fd.append('action','attach_upload'); fd.append('csrf',CSRF);
-  fd.append('upload_token', uploadToken); fd.append('file', f);
+  fd.append('upload_token', uploadToken); fd.append('leave_type_id', tid); fd.append('file', f);
   $('#attMsg').html('上傳中…');
   $.ajax({url:API, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
    .done(function(r){
@@ -541,7 +553,9 @@ function resetForm(keepMsg){
   $('#fType').val(''); $('#fStart').val(''); $('#fEnd').val(''); $('#fAmount').val('');
   $('#fDateFrom').val(''); $('#fDateTo').val(''); $('#shiftHint').hide(); shiftApplied = false;
   $('#fReason').val(''); $('#fAgent').val(''); $('#tempList').empty();
-  $('#signerPrev').hide(); $('#typeHint').text(''); $('#agentReq').hide(); $('#attReq').hide();
+  $('#signerPrev').hide(); $('#typeHint').text(''); $('#agentReq').hide();
+  $('#attReq').hide(); $('#attachBlock').hide(); $('#attMsg').text('');
+  const ff0 = document.getElementById('fFile'); if(ff0) ff0.value = '';
   if(!keepMsg) $('#applyMsg').empty();
   uploadToken = newToken();
   $.getJSON(API, {action:'annual_summary'}, function(r){ if(r.success) renderAnnual(r.annual); });
@@ -690,22 +704,29 @@ function openDetail(id){
     if(o.status === 'canceled') h += row('銷假原因', esc(o.cancel_reason||'—') + '（' + esc(String(o.canceled_at||'').substring(0,16)) + '）');
     h += '</tbody></table>';
 
-    // 證明文件（含補件）
-    h += '<h4 style="color:var(--amber-d);font-size:14px;">證明文件'
-       + (o.attach_status==='pending' ? ' <span class="tag-warn">待補證明</span>' : '')
-       + '</h4>';
-    h += (r.attachments||[]).length ? (r.attachments||[]).map(function(a){
-        return '<div class="att-item"><i class="fa fa-paperclip"></i> '
-             + '<a href="'+API+'?action=attach_download&id='+a.id+'" target="_blank">'+esc(a.file_name)+'</a>'
-             + ' <span style="color:#9a7b4f;">('+Math.round(a.file_size/1024)+' KB, '+esc(String(a.uploaded_at).substring(0,16))+')</span>'
-             + (String(o.employee_id)===String(ME.id) && o.status!=='approved' ? ' <a href="javascript:;" onclick="delAttach('+a.id+',0)" style="color:var(--coral);">移除</a>' : '')
-             + '</div>';
-      }).join('') : '<div style="font-size:12.5px;color:#9a7b4f;padding:4px 0;">（尚無附件）</div>';
-    if(String(o.employee_id) === String(ME.id) && o.status !== 'rejected' && o.status !== 'canceled'){
-      h += '<div class="no-print" style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
-         + '<input type="file" id="dFile" accept=".jpg,.jpeg,.png,.pdf" style="font-size:12.5px;">'
-         + '<button class="btn btn-xs btn-amber" onclick="uploadLater('+o.id+')"><i class="fa fa-upload"></i> 補上傳</button>'
-         + '<span id="dAttMsg" style="font-size:12px;"></span></div>';
+    // 證明文件（含補件）：假別沒設定需附證明就整段不顯示；
+    // 但若該單先前已有附件（例如假別設定事後被改掉），仍要列出來讓人看得到、不憑空消失。
+    const needAtt = (+o.require_attachment === 1);
+    const hasAtt  = (r.attachments||[]).length > 0;
+    if(needAtt || hasAtt){
+      h += '<h4 style="color:var(--amber-d);font-size:14px;">證明文件'
+         + (o.attach_status==='pending' ? ' <span class="tag-warn">待補證明</span>' : '')
+         + (!needAtt && hasAtt ? ' <span class="tag-soft">此假別現已不需證明</span>' : '')
+         + '</h4>';
+      h += hasAtt ? (r.attachments||[]).map(function(a){
+          return '<div class="att-item"><i class="fa fa-paperclip"></i> '
+               + '<a href="'+API+'?action=attach_download&id='+a.id+'" target="_blank">'+esc(a.file_name)+'</a>'
+               + ' <span style="color:#9a7b4f;">('+Math.round(a.file_size/1024)+' KB, '+esc(String(a.uploaded_at).substring(0,16))+')</span>'
+               + (String(o.employee_id)===String(ME.id) && o.status!=='approved' ? ' <a href="javascript:;" onclick="delAttach('+a.id+',0)" style="color:var(--coral);">移除</a>' : '')
+               + '</div>';
+        }).join('') : '<div style="font-size:12.5px;color:#9a7b4f;padding:4px 0;">（尚無附件）</div>';
+      // 補上傳只在「此假別需附證明」時提供
+      if(needAtt && String(o.employee_id) === String(ME.id) && o.status !== 'rejected' && o.status !== 'canceled'){
+        h += '<div class="no-print" style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+           + '<input type="file" id="dFile" accept=".jpg,.jpeg,.png,.pdf" style="font-size:12.5px;">'
+           + '<button class="btn btn-xs btn-amber" onclick="uploadLater('+o.id+')"><i class="fa fa-upload"></i> 補上傳</button>'
+           + '<span id="dAttMsg" style="font-size:12px;"></span></div>';
+      }
     }
 
     // 簽核流程（leave_approval：每層狀態）＋ 簽章軌跡（leave_sign_record）

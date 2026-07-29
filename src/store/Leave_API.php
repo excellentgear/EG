@@ -349,19 +349,33 @@ case 'attach_upload': {
     $reqId = (int)($_POST['leave_request_id'] ?? 0);
     $token = trim((string)($_POST['upload_token'] ?? ''));
 
+    // 假別若未勾「需附證明文件」，一律不接受上傳（前端也不會顯示上傳區塊；
+    // 此處為後端把關，避免繞過畫面直接打 API 塞檔案）
+    $assertNeedAttach = function (int $leaveTypeId) use ($db) {
+        $st = $db->prepare("SELECT leave_name, require_attachment FROM leave_type WHERE id = ? LIMIT 1");
+        $st->execute([$leaveTypeId]);
+        $t = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$t) bad('假別不存在');
+        if ((int)$t['require_attachment'] !== 1) {
+            bad('「' . $t['leave_name'] . '」未設定需附證明文件，不提供上傳；如需開啟請洽管理員於「人事設定→假別設定」勾選。');
+        }
+    };
+
     if ($reqId > 0) {
-        // 補件：限本人（或管理員），單須存在且需要證明
+        // 補件：限本人（或管理員），單須存在且該假別需要證明
         $st = $db->prepare("SELECT * FROM leave_request WHERE id = ? LIMIT 1");
         $st->execute([$reqId]);
         $req = $st->fetch(PDO::FETCH_ASSOC);
         if (!$req) bad('請假單不存在');
         if ((int)$req['employee_id'] !== $user_id && !$IS_ADMIN) bad('僅申請人本人可補件');
         if (in_array($req['status'], ['rejected', 'canceled'], true)) bad('此單已' . ($req['status'] === 'rejected' ? '退回' : '取消') . '，不可補件');
+        $assertNeedAttach((int)$req['leave_type_id']);
         $sub = 'req_' . $reqId;
         $statusVal = 'active';
     } else {
         // 新增單據中：temp 暫存（鐵律5：新增當下就能上傳）
         if ($token === '' || !preg_match('/^[a-f0-9]{16,64}$/', $token)) bad('缺少有效的上傳批次識別');
+        $assertNeedAttach((int)($_POST['leave_type_id'] ?? 0));
         $sub = 'temp_' . $token;
         $statusVal = 'temp';
     }
