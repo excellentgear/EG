@@ -822,6 +822,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             requireSettingPerm($pdo, $user_id);
             $id = $_POST['id'] ?? ''; $cat_id = $_POST['cat_id'] ?? ''; $no = trim($_POST['no'] ?? '');
             if ($cat_id === '' || $no === '') throw new Exception('資料不完整');
+            // 量測儀器校驗管理設為「不可設定量具編號」的種類（僅檢驗方式，如目視）不得掛編號
+            $noNo = false;
+            try {
+                $s = $pdo->prepare("SELECT has_tool_no FROM qc_tool_list WHERE QC_Tool_List_id=?");
+                $s->execute([$cat_id]);
+                $v = $s->fetchColumn();
+                $noNo = ($v !== false && $v !== null && (int)$v === 0);
+            } catch (PDOException $e) { /* 尚未加欄 → 不擋，維持原行為 */ }
+            if ($noNo) throw new Exception('此量具種類已設為「不可設定量具編號」（僅為檢驗方式），如需開放請至「量測儀器校驗管理－類別設定」調整');
             if ($id) $pdo->prepare("UPDATE qc_tool SET Tool_No=?, QC_Tool_List_id=? WHERE Tool_id=?")->execute([$no, $cat_id, $id]);
             else $pdo->prepare("INSERT INTO qc_tool (Tool_No, QC_Tool_List_id, Created_at) VALUES (?, ?, NOW())")->execute([$no, $cat_id]);
             echo json_encode(['success'=>true], JSON_UNESCAPED_UNICODE);
@@ -1392,6 +1401,10 @@ if ($isPopup && !isset($_SESSION['id']) && !isset($_SESSION['user_id'])) {
                     <h4>2. 量具編號</h4>
                     <div id="tool-instance-area" style="display:none;">
                         <p class="text-info">當前選擇種類：<strong id="current-cat-name"></strong></p>
+                        <div id="ti-nono-hint" class="alert alert-warning" style="display:none;padding:8px 12px;">
+                            此種類在「量測儀器校驗管理」已設為<strong>不可設定量具編號</strong>（僅為檢驗方式，如目視），故不提供新增編號。
+                            如需開放，請至該頁工具列「類別設定」調整。
+                        </div>
                         <form id="tool-inst-form" class="form-inline" style="margin-bottom:10px;">
                             <input type="hidden" id="ti-id"><input type="hidden" id="ti-cat-id">
                             <div class="form-group"><input type="text" id="ti-no" class="form-control input-sm" placeholder="量具編號 (如: C01)" required></div>
@@ -3037,6 +3050,11 @@ $(function(){
     });
     function renderToolInsts(catId){
         $('#tool-instance-empty').hide(); $('#tool-instance-area').show();
+        // 校驗管理頁設為「不可設定量具編號」的種類（如目視）→ 只能看，不給新增編號
+        var cat=toolMg.categories.filter(function(c){ return c.QC_Tool_List_id==catId; })[0]||{};
+        var noNo = (cat.has_tool_no!==undefined && Number(cat.has_tool_no)===0);
+        $('#ti-nono-hint').toggle(noNo);
+        $('#tool-inst-form').toggle(!noNo);
         var list=toolMg.tools.filter(function(t){ return t.QC_Tool_List_id==catId; });
         $('#tool-inst-list').html(list.length ? list.map(function(t){
             return '<tr><td>'+esc(t.Tool_No)+'</td><td>'+
