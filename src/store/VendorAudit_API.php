@@ -52,7 +52,7 @@ switch ($action) {
 case 'meta': {
     $cats = $db->query("SELECT main_cat_id, main_cat_name FROM dict_maker_main_category
                         WHERE is_active=1 ORDER BY sort_order, main_cat_id")->fetchAll(PDO::FETCH_ASSOC);
-    jout(['perms'=>$perms, 'cur_year'=>(int)date('Y'),
+    jout(['perms'=>$perms, 'cur_year'=>(int)date('Y'), 'cur_month'=>(int)date('n'),
           'cur_half'=>((int)date('n') <= 6 ? 1 : 2), 'today'=>date('Y-m-d'),
           'cycle_months'=>vendor_audit_cycle_months($db), 'main_categories'=>$cats,
           'items'=>vendor_audit_items(), 'item_max'=>VENDOR_AUDIT_ITEM_MAX,
@@ -81,7 +81,7 @@ case 'round': {
 
     $targets = [];
     if ($rid !== null) {
-        $st = $db->prepare("SELECT t.target_id, t.maker_id_no, t.audit_date, t.auditor,
+        $st = $db->prepare("SELECT t.target_id, t.maker_id_no, t.audit_date, t.auditor, t.plan_month,
                                    t.report_no, t.note, t.added_by_name,
                                    t.overall_rate, t.self_rate, t.audit_rate, t.judge, t.audit_mode, t.conclusion,
                                    m.maker_id, m.status, dc.main_cat_name
@@ -148,14 +148,15 @@ case 'add_targets': {
     if ($year < 2000 || ($half !== 1 && $half !== 2)) jerr('期別不正確');
     $ids = va_ids($_POST['maker_ids'] ?? '');
     if (!$ids) jerr('請選擇廠商');
+    $pm = (int)($_POST['plan_month'] ?? 0); $pm = ($pm >= 1 && $pm <= 12) ? $pm : null;
     try {
         $db->beginTransaction();
         $rid = vendor_audit_round_id($db, $year, $half, true, $u);
-        $ins = $db->prepare("INSERT IGNORE INTO vendor_audit_target (round_id, maker_id_no, added_by, added_by_name)
-                             SELECT ?, m.maker_id_no, ?, ? FROM maker_list m
+        $ins = $db->prepare("INSERT IGNORE INTO vendor_audit_target (round_id, maker_id_no, plan_month, added_by, added_by_name)
+                             SELECT ?, m.maker_id_no, ?, ?, ? FROM maker_list m
                              WHERE m.maker_id_no=? AND (m.status IS NULL OR m.status<>?)");
         $n = 0;
-        foreach ($ids as $mid) { $ins->execute([$rid, $uid, $uname, $mid, VENDOR_AUDIT_DISABLED]); $n += $ins->rowCount(); }
+        foreach ($ids as $mid) { $ins->execute([$rid, $pm, $uid, $uname, $mid, VENDOR_AUDIT_DISABLED]); $n += $ins->rowCount(); }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('加入失敗：'.$e->getMessage(), 500); }
     jout(['added'=>$n]);
@@ -171,6 +172,7 @@ case 'random_targets': {
     if ($n < 1) jerr('請輸入抽取家數');
     $mainCat = (int)($_POST['main_cat_id'] ?? 0);
     $subCat = (int)($_POST['sub_cat_id'] ?? 0);
+    $pm = (int)($_POST['plan_month'] ?? 0); $pm = ($pm >= 1 && $pm <= 12) ? $pm : null;
 
     try {
         $db->beginTransaction();
@@ -184,8 +186,8 @@ case 'random_targets': {
         $st = $db->prepare($sql);
         $st->execute($bind);
         $picked = $st->fetchAll(PDO::FETCH_COLUMN);
-        $ins = $db->prepare("INSERT IGNORE INTO vendor_audit_target (round_id, maker_id_no, added_by, added_by_name) VALUES (?,?,?,?)");
-        foreach ($picked as $mid) $ins->execute([$rid, $mid, $uid, $uname]);
+        $ins = $db->prepare("INSERT IGNORE INTO vendor_audit_target (round_id, maker_id_no, plan_month, added_by, added_by_name) VALUES (?,?,?,?,?)");
+        foreach ($picked as $mid) $ins->execute([$rid, $mid, $pm, $uid, $uname]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('隨機抽取失敗：'.$e->getMessage(), 500); }
     jout(['added'=>count($picked), 'note'=>count($picked) < $n ? '符合條件的納管廠商不足，僅抽到 '.count($picked).' 家' : '']);
@@ -223,7 +225,7 @@ case 'get_form': {
     jout(['target'=>[
         'target_id'=>(int)$t['target_id'], 'maker_id_no'=>$t['maker_id_no'], 'maker_id'=>$t['maker_id'],
         'main_cat_name'=>$t['main_cat_name'], 'audit_date'=>$t['audit_date'], 'auditor'=>$t['auditor'],
-        'report_no'=>$t['report_no'], 'note'=>$t['note'], 'audit_mode'=>$t['audit_mode'],
+        'report_no'=>$t['report_no'], 'note'=>$t['note'], 'audit_mode'=>$t['audit_mode'], 'plan_month'=>$t['plan_month'],
         'self_evaluator'=>$t['self_evaluator'], 'supplier_rep'=>$t['supplier_rep'], 'conclusion'=>$t['conclusion'],
         'self_rate'=>$t['self_rate'], 'audit_rate'=>$t['audit_rate'], 'overall_rate'=>$t['overall_rate'], 'judge'=>$t['judge'],
         'scores'=>is_array($scores) ? $scores : new stdClass(),
@@ -247,6 +249,7 @@ case 'record_target': {
     $selfEval = trim((string)($_POST['self_evaluator'] ?? '')) ?: null;
     $supplierRep = trim((string)($_POST['supplier_rep'] ?? '')) ?: null;
     $conclusion = trim((string)($_POST['conclusion'] ?? '')) ?: null;
+    $pm = (int)($_POST['plan_month'] ?? 0); $pm = ($pm >= 1 && $pm <= 12) ? $pm : null;
 
     // scores：{item_id:{self,audit,note}}
     $scores = json_decode((string)($_POST['scores'] ?? ''), true);
@@ -260,9 +263,9 @@ case 'record_target': {
         try {
             $db->beginTransaction();
             $db->prepare("UPDATE vendor_audit_target SET audit_date=NULL, scores_json=NULL, self_rate=NULL, audit_rate=NULL,
-                          overall_rate=NULL, judge=NULL, audit_mode=?, self_evaluator=?, supplier_rep=?, conclusion=?,
+                          overall_rate=NULL, judge=NULL, plan_month=?, audit_mode=?, self_evaluator=?, supplier_rep=?, conclusion=?,
                           auditor=?, report_no=?, note=? WHERE target_id=?")
-               ->execute([$auditMode,$selfEval,$supplierRep,$conclusion,$auditor,$reportNo,$note,$tid]);
+               ->execute([$pm,$auditMode,$selfEval,$supplierRep,$conclusion,$auditor,$reportNo,$note,$tid]);
             $db->commit();
         } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
         jout(['cleared'=>true]);
@@ -272,11 +275,11 @@ case 'record_target': {
     try {
         $db->beginTransaction();
         $db->prepare("UPDATE vendor_audit_target SET audit_date=?, scores_json=?, self_rate=?, audit_rate=?, overall_rate=?,
-                      judge=?, audit_mode=?, self_evaluator=?, supplier_rep=?, conclusion=?, auditor=?, report_no=?, note=? WHERE target_id=?")
+                      judge=?, plan_month=?, audit_mode=?, self_evaluator=?, supplier_rep=?, conclusion=?, auditor=?, report_no=?, note=? WHERE target_id=?")
            ->execute([$auditDate, $hasScore ? json_encode($scores, JSON_UNESCAPED_UNICODE) : null,
                       $hasScore ? $tt['self_rate'] : null, $hasScore ? $tt['audit_rate'] : null,
                       $hasScore ? $tt['overall_rate'] : null, $hasScore ? $tt['judge'] : null,
-                      $auditMode, $selfEval, $supplierRep, $conclusion, $auditor, $reportNo, $note, $tid]);
+                      $pm, $auditMode, $selfEval, $supplierRep, $conclusion, $auditor, $reportNo, $note, $tid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout(['rates'=>$rates]);

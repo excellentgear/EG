@@ -62,6 +62,7 @@ function vendor_audit_ensure_schema(PDO $db): void {
 
     // 稽核評鑑表單(簡版15項 2-PH-01-02/03)：每對象存整份評分表
     foreach ([
+        "ALTER TABLE vendor_audit_target ADD COLUMN plan_month TINYINT NULL COMMENT '預定稽核月份1-12(月內完成即準時)'",
         "ALTER TABLE vendor_audit_target ADD COLUMN scores_json TEXT NULL COMMENT '各項自評/稽核分 JSON'",
         "ALTER TABLE vendor_audit_target ADD COLUMN self_rate DECIMAL(5,1) NULL COMMENT '自評合格率%'",
         "ALTER TABLE vendor_audit_target ADD COLUMN audit_rate DECIMAL(5,1) NULL COMMENT '稽核合格率%'",
