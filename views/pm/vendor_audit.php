@@ -122,12 +122,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         table.pk-table thead th { position:sticky; top:0; background:#F7E0BD; color:#5b3a1e; z-index:2; }
         table.pk-table td.t-left { text-align:left; }
         .mg-yes { color:#8A5A2B; font-weight:bold; } .mg-no { color:#b0a390; }
-        .pk-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; padding-top:8px; border-top:1px dashed #EADFC8; }
-        .pk-actions .grp { display:flex; gap:4px; align-items:center; }
-        .pk-actions button { height:28px; font-size:12px; border-radius:4px; border:1px solid #d98a33; cursor:pointer; padding:0 10px; }
+        .pk-actions { display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center; margin-top:10px; padding-top:8px; border-top:1px dashed #EADFC8; }
+        .pk-actions .grp { display:flex; gap:4px; align-items:center; flex-wrap:wrap; font-size:12px; color:#5b3a1e; }
+        .pk-actions button { display:inline-flex; align-items:center; gap:4px; min-height:28px; line-height:1.2; white-space:nowrap;
+            font-size:12px; border-radius:4px; border:1px solid #d98a33; cursor:pointer; padding:5px 12px; }
         .pk-actions .b-add { background:#F0A24B; color:#fff; }
         .pk-actions .b-alt { background:#fff; color:#5b3a1e; border-color:#D8BE93; }
-        .pk-actions input[type=number] { width:60px; height:28px; border:1px solid #D8BE93; border-radius:4px; padding:0 6px; }
+        .pk-actions input[type=number] { width:60px; min-height:28px; box-sizing:border-box; border:1px solid #D8BE93; border-radius:4px; padding:4px 6px; }
         table.hist { width:100%; border-collapse:collapse; font-size:12px; }
         table.hist th, table.hist td { border:1px solid #EADFC8; padding:4px 6px; text-align:center; }
         table.hist thead th { background:#F7E0BD; color:#5b3a1e; }
