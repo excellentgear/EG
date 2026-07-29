@@ -189,6 +189,9 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
         .sa-hint { background: #F7E0BD; color: #7A3B12; padding: 8px 10px; border-radius: 4px; font-size: 13px; margin-bottom: 8px; }
         .sa-ver { font-size: 11px; color: #A98F73; font-weight: 400; margin-left: 6px; }
         .sa-disabled { opacity: .55; }
+        #sa_pager button { border: 1px solid #D9B98F; background: #fff; color: #7A3B12; border-radius: 3px; padding: 2px 9px; font-size: 12px; cursor: pointer; margin-left: 2px; }
+        #sa_pager button.on { background: #F0A24B; border-color: #D9873A; color: #4A2B10; font-weight: 600; }
+        #sa_pager button:disabled { opacity: .45; cursor: not-allowed; }
         #sa_emp option { padding: 2px 4px; }
         #sa_emp option:checked { background: #F0A24B linear-gradient(0deg, #F0A24B 0%, #F0A24B 100%); color: #4A2B10; }
     </style>
@@ -569,6 +572,15 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                                                 </div>
                                             </div>
                                         </div>
+                                        <!-- 分頁列（全站規範：>10 筆分頁、分頁鈕在列表右上、每頁 5/10/20/50）-->
+                                        <div id="sa_pager_wrap" style="display:none;text-align:right;margin-top:10px;">
+                                            <span style="font-size:12px;color:#8C5A2B;">每頁</span>
+                                            <select id="sa_per" class="form-control input-sm" style="width:auto;display:inline-block;">
+                                                <option>5</option><option selected>10</option><option>20</option><option>50</option>
+                                            </select>
+                                            <span id="sa_pager"></span>
+                                            <span id="sa_total" style="font-size:12px;color:#A98F73;margin-left:6px;"></span>
+                                        </div>
                                         <table class="table table-hover sa-table" style="margin-top:10px;">
                                             <thead>
                                                 <tr><th>員工</th><th style="width:220px;">模式</th><th style="width:80px;">啟用</th><th style="width:60px;"></th></tr>
@@ -694,6 +706,7 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
 $(function () {
     var SA_API = '../../src/store/_shared_account_api.php';
     var saToken = '', saCur = 0, saCurName = '', saEmployees = [], saDepts = [];
+    var saMembers = [], saMembersFor = 0, saPage = 1;   // 成員列表分頁用（saMembersFor=目前列表屬於哪個共用帳號）
 
     function esc(s) { return $('<i>').text(s == null ? '' : s).html(); }
     function saPost(action, data, cb) {
@@ -789,25 +802,69 @@ $(function () {
         saRenderEmpList();
 
         $.get(SA_API, { action: 'members', shared_uid: sid }, function (r) {
-            if (!r || !r.ok) { $('#sa_members').html('<tr><td colspan="4" class="text-muted">載入失敗</td></tr>'); return; }
-            if (!(r.members || []).length) { $('#sa_members').html('<tr><td colspan="4" class="text-muted">尚未加入任何成員</td></tr>'); return; }
-            var h = '';
-            r.members.forEach(function (m) {
-                h += '<tr data-rid="' + m.id + '">'
-                   + '<td>' + esc(m.user_cname)
-                   + '<div class="text-muted" style="font-size:12px;">' + esc(m.user_uname)
-                   + (m.role_label ? '｜' + esc(m.role_label) : '') + '</div></td>'
-                   + '<td><select class="form-control input-sm sa-mode">'
-                   + '<option value="attach"' + (m.mode === 'attach' ? ' selected' : '') + '>綁定依附</option>'
-                   + '<option value="notify"' + (m.mode === 'notify' ? ' selected' : '') + '>開通（雙送）</option>'
-                   + '</select></td>'
-                   + '<td><input type="checkbox" class="sa-active" ' + (String(m.active) === '1' ? 'checked' : '') + '></td>'
-                   + '<td><button type="button" class="btn btn-xs sa-btn-del sa-remove">移除</button></td>'
-                   + '</tr>';
-            });
-            $('#sa_members').html(h);
+            if (!r || !r.ok) {
+                saMembers = [];
+                $('#sa_members').html('<tr><td colspan="4" class="text-muted">載入失敗</td></tr>');
+                $('#sa_pager_wrap').hide();
+                return;
+            }
+            saMembers = r.members || [];
+            // 切換到不同共用帳號才回到第 1 頁；同一帳號內改模式/移除後仍留在原頁
+            if (String(saMembersFor) !== String(sid)) saPage = 1;
+            saMembersFor = sid;
+            saRenderMembers();
         }, 'json');
     }
+
+    // 成員列表分頁（全站規範：>10 筆分頁、分頁鈕右上、每頁 5/10/20/50）
+    // 成員數量有限且已一次取回，故在前端切頁；無需後端彙總的欄位，不違反「總計/匯出須後端全量」規則。
+    function saRenderMembers() {
+        var total = saMembers.length;
+        if (!total) {
+            $('#sa_members').html('<tr><td colspan="4" class="text-muted">尚未加入任何成員</td></tr>');
+            $('#sa_pager_wrap').hide();
+            return;
+        }
+        var per = parseInt($('#sa_per').val(), 10) || 10;
+        var pages = Math.max(1, Math.ceil(total / per));
+        if (saPage > pages) saPage = pages;
+        if (saPage < 1) saPage = 1;
+
+        var h = '';
+        saMembers.slice((saPage - 1) * per, saPage * per).forEach(function (m) {
+            h += '<tr data-rid="' + m.id + '">'
+               + '<td>' + esc(m.user_cname)
+               + '<div class="text-muted" style="font-size:12px;">' + esc(m.user_uname)
+               + (m.role_label ? '｜' + esc(m.role_label) : '') + '</div></td>'
+               + '<td><select class="form-control input-sm sa-mode">'
+               + '<option value="attach"' + (m.mode === 'attach' ? ' selected' : '') + '>綁定依附</option>'
+               + '<option value="notify"' + (m.mode === 'notify' ? ' selected' : '') + '>開通（雙送）</option>'
+               + '</select></td>'
+               + '<td><input type="checkbox" class="sa-active" ' + (String(m.active) === '1' ? 'checked' : '') + '></td>'
+               + '<td><button type="button" class="btn btn-xs sa-btn-del sa-remove">移除</button></td>'
+               + '</tr>';
+        });
+        $('#sa_members').html(h);
+
+        // 筆數未超過每頁上限就不顯示分頁列，避免版面多餘
+        if (total <= per) { $('#sa_pager_wrap').hide(); return; }
+        var p = '<button ' + (saPage <= 1 ? 'disabled' : '') + ' data-go="' + (saPage - 1) + '">‹</button>';
+        var from = Math.max(1, saPage - 2), to = Math.min(pages, from + 4);
+        for (var i = from; i <= to; i++) {
+            p += '<button class="' + (i === saPage ? 'on' : '') + '" data-go="' + i + '">' + i + '</button>';
+        }
+        p += '<button ' + (saPage >= pages ? 'disabled' : '') + ' data-go="' + (saPage + 1) + '">›</button>';
+        $('#sa_pager').html(p);
+        $('#sa_total').text('共 ' + total + ' 人');
+        $('#sa_pager_wrap').show();
+    }
+    $(document).on('click', '#sa_pager button', function () {
+        var go = parseInt($(this).data('go'), 10);
+        if (!go || go === saPage) return;
+        saPage = go;
+        saRenderMembers();
+    });
+    $(document).on('change', '#sa_per', function () { saPage = 1; saRenderMembers(); });
 
     $('#sa_mark').on('click', function () {
         var uid = $('#sa_cand').val();
@@ -834,7 +891,9 @@ $(function () {
         saPost('set_shared', { uid: $tr.data('id'), on: 0 }, function () {
             if (String(saCur) === String($tr.data('id'))) {
                 saCur = 0;
+                saMembers = []; saMembersFor = 0; saPage = 1;
                 $('#sa_members').html('<tr><td colspan="4" class="text-muted">—</td></tr>');
+                $('#sa_pager_wrap').hide();
                 $('#sa_cur_name').text('（請先於左側選擇共用帳號）');
                 saSetAddEnabled(false);
             }
