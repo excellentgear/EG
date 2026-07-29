@@ -37,6 +37,34 @@ function training_ensure_schema(PDO $db): void {
         KEY idx_status (status)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練場次(計畫+執行)'");
 
+    // 實際開課資訊 + 講師人員id（既有 done_date=實際開課日；僅加欄不破壞）
+    foreach ([
+        "ALTER TABLE training_session ADD COLUMN start_time VARCHAR(5) NULL COMMENT '開始時間 HH:MM'",
+        "ALTER TABLE training_session ADD COLUMN end_time VARCHAR(5) NULL COMMENT '結束時間 HH:MM'",
+        "ALTER TABLE training_session ADD COLUMN location VARCHAR(100) NULL COMMENT '上課地點'",
+        "ALTER TABLE training_session ADD COLUMN trainer_id INT NULL COMMENT '講師 user.id(外部講師留空,用trainer文字)'",
+        "ALTER TABLE training_session ADD COLUMN train_type VARCHAR(10) NOT NULL DEFAULT 'internal' COMMENT 'internal=內訓 external=外訓'",
+        "ALTER TABLE training_session ADD COLUMN org_unit VARCHAR(100) NULL COMMENT '外訓開課/主辦單位'",
+    ] as $sql) {
+        try { $db->exec($sql); } catch (Throwable $e) {}
+    }
+
+    // 參加人員名單（應參加＋實到＋簽名）
+    $db->exec("CREATE TABLE IF NOT EXISTS training_attendee (
+        att_id INT AUTO_INCREMENT PRIMARY KEY,
+        session_id INT NOT NULL,
+        user_id INT NOT NULL,
+        user_name VARCHAR(50) NULL,
+        dept_name VARCHAR(50) NULL,
+        attended TINYINT(1) NOT NULL DEFAULT 0 COMMENT '實到',
+        signed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '已簽名',
+        signed_at DATETIME NULL,
+        sign_method VARCHAR(10) NULL COMMENT 'online=線上密碼 paper=紙本掃描',
+        note VARCHAR(100) NULL,
+        UNIQUE KEY uq_sa (session_id, user_id),
+        KEY idx_session (session_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練參加人員名單'");
+
     foreach ([['training_view','訓練檢閱'],['training_edit','訓練登錄'],['training_admin','訓練管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='training' LIMIT 1");
         $st->execute([$r[0]]);
