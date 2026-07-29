@@ -116,7 +116,7 @@ case 'create_tool': {
     jout(['tool_id'=>(int)$db->lastInsertId()]);
 }
 
-/* ---------- 設定儀器校驗屬性（管理員） ---------- */
+/* ---------- 設定儀器（管理員）：校驗屬性 + 可編輯編號/類別 ---------- */
 case 'save_tool': {
     if (!$perms['canAdmin']) jerr('無設定權限', 403);
     $tid = (int)($_POST['tool_id'] ?? 0);
@@ -128,10 +128,19 @@ case 'save_tool': {
     // baseline_due：允許管理員設定/修正下次應校驗日（尚無紀錄或需校正時）
     $setBase = array_key_exists('baseline_due', $_POST);
     $baseDue = $setBase ? (trim((string)$_POST['baseline_due']) ?: null) : $t['calibration_due'];
+    // 可編輯基本資料：量具編號 / 類別（有帶才更新）
+    $newNo = array_key_exists('tool_no', $_POST) ? trim((string)$_POST['tool_no']) : $t['Tool_No'];
+    $newCat = array_key_exists('category_id', $_POST) && $_POST['category_id'] !== '' ? trim((string)$_POST['category_id']) : $t['QC_Tool_List_id'];
+    if ($newNo === '') jerr('量具編號不可空白');
+    if ($newNo !== $t['Tool_No']) {
+        $c = $db->prepare("SELECT 1 FROM qc_tool WHERE Tool_No=? AND Tool_id<>? LIMIT 1");
+        $c->execute([$newNo, $tid]);
+        if ($c->fetchColumn()) jerr('量具編號已存在：'.$newNo);
+    }
     try {
         $db->beginTransaction();
-        $db->prepare("UPDATE qc_tool SET calib_cycle_months=?, calib_managed=?, calib_method=?, calibration_due=? WHERE Tool_id=?")
-           ->execute([$cycle, $managed, $method, $baseDue, $tid]);
+        $db->prepare("UPDATE qc_tool SET Tool_No=?, QC_Tool_List_id=?, calib_cycle_months=?, calib_managed=?, calib_method=?, calibration_due=? WHERE Tool_id=?")
+           ->execute([$newNo, $newCat, $cycle, $managed, $method, $baseDue, $tid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout([]);
@@ -166,6 +175,42 @@ case 'record_calib': {
            ->execute([$nextDue, $method, $tid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('登錄失敗：'.$e->getMessage(), 500); }
+    jout(['next_due'=>$nextDue]);
+}
+
+/* ---------- 編輯校驗紀錄（登錄權；修正誤登） ---------- */
+case 'edit_calib': {
+    if (!$perms['canEdit']) jerr('無編輯權限', 403);
+    $cid = (int)($_POST['calib_id'] ?? 0);
+    $st = $db->prepare("SELECT c.*, t.calib_cycle_months FROM qc_tool_calibration c
+                        JOIN qc_tool t ON t.Tool_id=c.Tool_id WHERE c.calib_id=?");
+    $st->execute([$cid]);
+    $rec = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$rec) jerr('找不到紀錄');
+    $tid = (int)$rec['Tool_id'];
+    $calibDate = trim((string)($_POST['calib_date'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $calibDate)) jerr('請選擇校驗完成日');
+    $result = in_array($_POST['result'] ?? '', ['pass','fail','pass_adjust'], true) ? $_POST['result'] : 'pass';
+    $method = trim((string)($_POST['method'] ?? '')) ?: null;
+    $operator = trim((string)($_POST['operator'] ?? '')) ?: null;
+    $certNo = trim((string)($_POST['cert_no'] ?? '')) ?: null;
+    $note = trim((string)($_POST['note'] ?? '')) ?: null;
+    // 若改到期日基準（管理員）也允許
+    $dueDate = array_key_exists('due_date', $_POST)
+        ? (trim((string)$_POST['due_date']) ?: null) : $rec['due_date'];
+    $cycle = $rec['calib_cycle_months'] !== null ? (int)$rec['calib_cycle_months'] : 0;
+    $nextDue = $cycle > 0 ? tool_calib_add_months($calibDate, $cycle) : null;
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE qc_tool_calibration SET due_date=?, calib_date=?, result=?, method=?, operator=?, cert_no=?, next_due=?, note=? WHERE calib_id=?")
+           ->execute([$dueDate, $calibDate, $result, $method, $operator, $certNo, $nextDue, $note, $cid]);
+        // 若此為該量具最近一次校驗，前滾主檔到期日
+        $latest = $db->prepare("SELECT calib_id FROM qc_tool_calibration WHERE Tool_id=? ORDER BY calib_date DESC, calib_id DESC LIMIT 1");
+        $latest->execute([$tid]);
+        if ((int)$latest->fetchColumn() === $cid)
+            $db->prepare("UPDATE qc_tool SET calibration_due=? WHERE Tool_id=?")->execute([$nextDue, $tid]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout(['next_due'=>$nextDue]);
 }
 

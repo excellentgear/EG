@@ -339,11 +339,11 @@ $('#catSel,#statSel').on('change', renderTable);
 $('#kwSel').on('input', renderTable);
 $('#ymSel').on('change', loadList);
 
-/* ---------- 登錄校驗 ---------- */
-var recTool = null;
+/* ---------- 登錄/編輯校驗 ---------- */
+var recTool = null, editCalibId = null;
 function openRec(tid){
     var r = ROWS.find(function(x){ return x.Tool_id===tid; });
-    recTool = r;
+    recTool = r; editCalibId = null;
     $('#recTitle').text('登錄校驗：'+r.Tool_No+'（'+(r.category_name||'')+'）');
     $('#recInfo').html('目前下次應校驗日：<b>'+(fmtDate(r.calibration_due)||'（未設定）')+'</b>　週期：'
         +(r.calib_cycle_months==null?'（未設）':r.calib_cycle_months+' 月'));
@@ -355,6 +355,21 @@ function openRec(tid){
     openMask('recMask');
     setTimeout(function(){ $('#recDate').focus(); }, 100);
 }
+function editHis(cid){
+    var a = (HISTORY||[]).find(function(x){ return String(x.calib_id)===String(cid); });
+    if (!a) return;
+    recTool = ROWS.find(function(x){ return x.Tool_id===HIST_TID; }) || {calib_cycle_months:null};
+    editCalibId = cid;
+    $('#recTitle').text('編輯校驗紀錄');
+    $('#recInfo').html('本次應校驗到期日：<b>'+(fmtDate(a.due_date)||'（無）')+'</b>（編輯不改到期基準，僅修正內容）');
+    $('#recDate').val(fmtDate(a.calib_date));
+    $('#recResult').val(a.result);
+    $('#recMethod').val(a.method||'');
+    $('#recOperator').val(a.operator||''); $('#recCert').val(a.cert_no||''); $('#recNote').val(a.note||'');
+    updateRoll();
+    closeMask('hisMask'); openMask('recMask');
+    setTimeout(function(){ $('#recDate').focus(); }, 100);
+}
 function updateRoll(){
     var cyc = recTool.calib_cycle_months, d = $('#recDate').val();
     if (cyc==null || !d){ $('#recRoll').text(''); return; }
@@ -364,12 +379,14 @@ function updateRoll(){
 $('#recDate').on('change', updateRoll);
 function submitRec(){
     if (!$('#recDate').val()){ alert('請選擇校驗完成日'); return; }
-    $.post(API, {action:'record_calib', tool_id:recTool.Tool_id, calib_date:$('#recDate').val(),
-        result:$('#recResult').val(), method:$('#recMethod').val(), operator:$('#recOperator').val(),
-        cert_no:$('#recCert').val(), note:$('#recNote').val()}, function(res){
-        if (!res.ok){ alert(res.error||'登錄失敗'); return; }
+    var data = {calib_date:$('#recDate').val(), result:$('#recResult').val(), method:$('#recMethod').val(),
+        operator:$('#recOperator').val(), cert_no:$('#recCert').val(), note:$('#recNote').val()};
+    if (editCalibId){ data.action='edit_calib'; data.calib_id=editCalibId; }
+    else { data.action='record_calib'; data.tool_id=recTool.Tool_id; }
+    $.post(API, data, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         closeMask('recMask'); loadList();
-    }, 'json').fail(function(x){ alert('登錄失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
 /* ---------- 設定 / 新增 ---------- */
@@ -378,7 +395,9 @@ function openSet(tid){
     setTool = tid ? ROWS.find(function(x){ return x.Tool_id===tid; }) : null;
     if (setTool){
         $('#setTitle').text('儀器設定：'+setTool.Tool_No);
-        $('#setNoBox,#setCatBox').hide();
+        $('#setNoBox,#setCatBox').show();
+        $('#setNo').val(setTool.Tool_No);
+        $('#setCat').val(String(setTool.QC_Tool_List_id));
         $('#setCycle').val(setTool.calib_cycle_months==null?'':setTool.calib_cycle_months);
         $('#setMethod').val(setTool.calib_method||'');
         $('#setBase').val(fmtDate(setTool.calibration_due));
@@ -393,13 +412,12 @@ function openSet(tid){
 }
 $('#btnAdd').on('click', function(){ openSet(null); });
 function submitSet(){
+    if (!$.trim($('#setNo').val())){ alert('請填量具編號'); return; }
     var data = {cycle:$('#setCycle').val(), managed:$('#setManaged').val(),
-                method:$('#setMethod').val(), baseline_due:$('#setBase').val()};
+                method:$('#setMethod').val(), baseline_due:$('#setBase').val(),
+                tool_no:$('#setNo').val(), category_id:$('#setCat').val()};
     if (setTool){ data.action='save_tool'; data.tool_id=setTool.Tool_id; }
-    else {
-        if (!$.trim($('#setNo').val())){ alert('請填量具編號'); return; }
-        data.action='create_tool'; data.tool_no=$('#setNo').val(); data.category_id=$('#setCat').val();
-    }
+    else { data.action='create_tool'; }
     $.post(API, data, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         closeMask('setMask'); loadList();
@@ -407,14 +425,18 @@ function submitSet(){
 }
 
 /* ---------- 歷史 ---------- */
+var HISTORY = [], HIST_TID = null;
 function openHis(tid){
+    HIST_TID = tid;
     $.getJSON(API, {action:'history', tool_id:tid}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        HISTORY = res.list;
         $('#hisTitle').text('校驗歷史：'+res.tool.Tool_No+'（'+(res.tool.category_name||'')+'）');
         if (!res.list.length){ $('#hisBody').html('<div style="color:#8a6d45;padding:12px;">尚無校驗紀錄</div>'); openMask('hisMask'); return; }
+        var canEdit = PERMS.canEdit, canDel = res.can_delete;
         var h = '<table class="hist"><thead><tr><th>應校驗到期日</th><th>校驗完成日</th><th>準時</th><th>結果</th>'
               + '<th>方式</th><th>人員/單位</th><th>憑證編號</th><th>下次到期</th><th>登錄者</th>'
-              + (res.can_delete?'<th></th>':'') + '</tr></thead><tbody>';
+              + ((canEdit||canDel)?'<th>操作</th>':'') + '</tr></thead><tbody>';
         res.list.forEach(function(a){
             var ontime = (a.due_date && a.calib_date) ? (fmtDate(a.calib_date)<=fmtDate(a.due_date)) : null;
             h += '<tr>';
@@ -427,7 +449,12 @@ function openHis(tid){
             h += '<td>'+esc(a.cert_no||'—')+'</td>';
             h += '<td>'+(fmtDate(a.next_due)||'—')+'</td>';
             h += '<td>'+esc(a.created_by_name||'')+'</td>';
-            if (res.can_delete) h += '<td><span class="tc-op" style="color:#DD5138;" onclick="delCalib('+a.calib_id+')"><i class="fa fa-trash"></i></span></td>';
+            if (canEdit || canDel){
+                h += '<td>';
+                if (canEdit) h += '<span class="tc-op" onclick="editHis('+a.calib_id+')"><i class="fa fa-pencil"></i></span>';
+                if (canDel) h += '<span class="tc-op" style="color:#DD5138;" onclick="delCalib('+a.calib_id+')"><i class="fa fa-trash"></i></span>';
+                h += '</td>';
+            }
             h += '</tr>';
         });
         h += '</tbody></table>';
