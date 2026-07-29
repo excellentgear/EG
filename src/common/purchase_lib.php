@@ -30,6 +30,17 @@ require_once __DIR__ . '/delegate_lib.php';
 define('PURCHASE_TAX_TYPES', ['taxable' => '應稅5%', 'free' => '免稅', 'zero' => '零稅率']);
 /** 到貨處理方式 */
 define('PURCHASE_RECEIVE_MODES', ['stock' => '入庫待領', 'direct' => '直接交付請購人', 'expense' => '不列管(費用)']);
+/** 用途歸屬類別（申請人只需選這個，成本才歸得了戶）
+ *  前三種要綁 ID：ORDER→order_track.Order_id、BOM→bom.bom、PART→d_setting.d_id
+ *  後三種不綁單據：常備補貨／設備維修／其他，屬間接費用 */
+define('PURCHASE_PURPOSE_TYPES', [
+    'ORDER' => '客戶訂單',
+    'BOM'   => '製令 BOM',
+    'PART'  => '料號',
+    'STOCK' => '常備品補貨',
+    'EQUIP' => '設備維修／治工具',
+    'OTHER' => '其他',
+]);
 /** 單據狀態 */
 define('PURCHASE_STATUS', [
     'submitted' => '待詢價',
@@ -407,6 +418,76 @@ function purchase_build_spec_text(PDO $db, int $categoryId, array $attrVals): st
         $parts[] = $a['attr_name'] . $v . (string)$a['attr_unit'];
     }
     return implode(' ', $parts);
+}
+
+/* ============================================================
+ * 用途歸屬（成本要歸得了戶，一律綁 ID）
+ * ============================================================ */
+/**
+ * 把前端送來的用途欄位正規化：驗證 ID 真的存在、並「由 DB 重建顯示名稱」。
+ * 顯示名稱不採信前端傳來的字串——前端可竄改，且來源列日後可能改名。
+ * 回傳 [type, order_id, bom, d_id, note, label]；type 為 null 代表沒選（品項列＝沿用單頭）。
+ */
+function purchase_purpose_normalize(PDO $db, array $src): array
+{
+    $type = strtoupper(trim((string)($src['purpose_type'] ?? '')));
+    if ($type === '' || !isset(PURCHASE_PURPOSE_TYPES[$type])) {
+        return ['type' => null, 'order_id' => null, 'bom' => null, 'd_id' => null, 'note' => null, 'label' => null];
+    }
+    $out = ['type' => $type, 'order_id' => null, 'bom' => null, 'd_id' => null,
+            'note' => trim((string)($src['purpose_note'] ?? '')) ?: null, 'label' => null];
+
+    if ($type === 'ORDER') {
+        $oid = (int)($src['purpose_order_id'] ?? 0);
+        if ($oid <= 0) throw new RuntimeException('用途選「客戶訂單」時，請指定到訂單裡的料號列');
+        $st = $db->prepare("SELECT Order_oo, d_id, Client_name, Qty FROM order_track WHERE Order_id=?");
+        $st->execute([$oid]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) throw new RuntimeException('找不到該訂單列（可能已被刪除），請重新選擇');
+        $out['order_id'] = $oid;
+        $out['label'] = $r['Order_oo'] . ' / ' . $r['d_id']
+                      . ($r['Client_name'] !== null && $r['Client_name'] !== '' ? '（' . $r['Client_name'] . '）' : '');
+    } elseif ($type === 'BOM') {
+        $bom = trim((string)($src['purpose_bom'] ?? ''));
+        if ($bom === '') throw new RuntimeException('用途選「製令 BOM」時，請指定 BOM 單號');
+        $st = $db->prepare("SELECT bom, d_id, Client_Name FROM bom WHERE bom=?");
+        $st->execute([$bom]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) throw new RuntimeException('找不到該 BOM 單號，請重新選擇');
+        $out['bom'] = $r['bom'];
+        $out['label'] = $r['bom'] . ' / ' . $r['d_id']
+                      . ($r['Client_Name'] !== null && $r['Client_Name'] !== '' ? '（' . $r['Client_Name'] . '）' : '');
+    } elseif ($type === 'PART') {
+        $did = (int)($src['purpose_d_id'] ?? 0);
+        if ($did <= 0) throw new RuntimeException('用途選「料號」時，請指定料號');
+        $st = $db->prepare("SELECT d_id, D_Setting_Id FROM d_setting WHERE d_id=?");
+        $st->execute([$did]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) throw new RuntimeException('找不到該料號，請重新選擇');
+        $out['d_id'] = $did;
+        $out['label'] = (string)$r['D_Setting_Id'];
+    } else {
+        // STOCK / EQUIP / OTHER：不綁單據，label 就用類別名（OTHER 另接自由說明）
+        $out['label'] = PURCHASE_PURPOSE_TYPES[$type]
+                      . ($type === 'OTHER' && $out['note'] !== null ? '：' . mb_substr($out['note'], 0, 60) : '');
+    }
+    return $out;
+}
+
+/** 品項用途留白時沿用單頭，給顯示／成本歸戶用 */
+function purchase_purpose_effective(array $item, array $req): array
+{
+    $useItem = ($item['purpose_type'] ?? null) !== null && $item['purpose_type'] !== '';
+    $s = $useItem ? $item : $req;
+    return [
+        'type'  => $s['purpose_type'] ?? null,
+        'order_id' => $s['purpose_order_id'] ?? null,
+        'bom'   => $s['purpose_bom'] ?? null,
+        'd_id'  => $s['purpose_d_id'] ?? null,
+        'note'  => $s['purpose_note'] ?? null,
+        'label' => $s['purpose_label'] ?? null,
+        'from'  => $useItem ? 'item' : 'req',
+    ];
 }
 
 /* ============================================================

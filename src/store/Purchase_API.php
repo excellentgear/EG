@@ -83,7 +83,7 @@ case 'meta': {
         'categories' => $cats, 'units' => $units, 'locations' => $locs, 'tags' => $tags,
         'thresholds' => ['l1' => $l1, 'l2' => $l2],
         'tax_types' => PURCHASE_TAX_TYPES, 'receive_modes' => PURCHASE_RECEIVE_MODES,
-        'statuses' => PURCHASE_STATUS,
+        'statuses' => PURCHASE_STATUS, 'purpose_types' => PURCHASE_PURPOSE_TYPES,
         'print_header' => purchase_setting($db, 'purchase_print_header', '超正齒輪科技有限公司　採購申請單'),
         'print_footer' => purchase_setting($db, 'purchase_print_footer', ''),
     ];
@@ -406,6 +406,73 @@ case 'spec_search': {
     jout(['specs' => $st->fetchAll(PDO::FETCH_ASSOC)]);
 }
 
+/** 用途歸屬的選擇器：訂單／BOM／料號（一律回主鍵，前端只拿去顯示） */
+case 'purpose_search': {
+    $type = strtoupper(trim($_GET['type'] ?? ''));
+    $kw   = trim($_GET['kw'] ?? '');
+    if ($kw === '') jout(['rows' => []]);
+    $rows = [];
+
+    if ($type === 'ORDER') {
+        // 一個訂單號最多對到 25 列料號，故一律列到「列」，讓使用者指定 Order_id
+        $st = $db->prepare("SELECT o.Order_id, o.Order_oo, o.d_id, o.Client_name, o.Qty,
+                            o.Order_date, o.Delivery_date
+                            FROM order_track o
+                            WHERE o.Order_oo LIKE ? OR o.d_id LIKE ? OR o.Client_name LIKE ?
+                            ORDER BY o.Order_oo DESC, o.Order_id LIMIT 100");
+        $lk = '%' . $kw . '%';
+        $st->execute([$lk, $lk, $lk]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $rows[] = [
+                'id'    => (int)$r['Order_id'],
+                'main'  => $r['Order_oo'],
+                'sub'   => $r['d_id'],
+                'extra' => trim((string)$r['Client_name']) . '　數量 ' . rtrim(rtrim((string)$r['Qty'], '0'), '.')
+                         . ($r['Delivery_date'] ? '　交期 ' . $r['Delivery_date'] : ''),
+                'label' => $r['Order_oo'] . ' / ' . $r['d_id']
+                         . ($r['Client_name'] !== null && $r['Client_name'] !== '' ? '（' . $r['Client_name'] . '）' : ''),
+            ];
+        }
+    } elseif ($type === 'BOM') {
+        $st = $db->prepare("SELECT b.bom, b.d_id, b.Client_Name, b.sqty
+                            FROM bom b
+                            WHERE b.bom LIKE ? OR b.d_id LIKE ? OR b.Client_Name LIKE ?
+                            ORDER BY b.bom DESC LIMIT 100");
+        $lk = '%' . $kw . '%';
+        $st->execute([$lk, $lk, $lk]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $rows[] = [
+                'id'    => $r['bom'],
+                'main'  => $r['bom'],
+                'sub'   => $r['d_id'],
+                'extra' => trim((string)$r['Client_Name']) . ($r['sqty'] !== null ? '　數量 ' . $r['sqty'] : ''),
+                'label' => $r['bom'] . ' / ' . $r['d_id']
+                         . ($r['Client_Name'] !== null && $r['Client_Name'] !== '' ? '（' . $r['Client_Name'] . '）' : ''),
+            ];
+        }
+    } elseif ($type === 'PART') {
+        // 料號字串有重複，一律回 d_setting.d_id 主鍵
+        $st = $db->prepare("SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Customer_Id
+                            FROM d_setting d
+                            WHERE d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ?
+                            ORDER BY d.D_Setting_Id LIMIT 100");
+        $lk = '%' . $kw . '%';
+        $st->execute([$lk, $lk]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $rows[] = [
+                'id'    => (int)$r['d_id'],
+                'main'  => $r['D_Setting_Id'],
+                'sub'   => (string)$r['Drawing_No'],
+                'extra' => (string)$r['Customer_Id'],
+                'label' => (string)$r['D_Setting_Id'],
+            ];
+        }
+    } else {
+        jerr('用途類別不需要選擇對象');
+    }
+    jout(['rows' => $rows]);
+}
+
 /* ============================================================
  * 申請單
  * ============================================================ */
@@ -434,11 +501,11 @@ case 'req_export': {
     if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $dt)) { $where[] = 'DATE(r.Created_At)<=?'; $bind[] = $dt; }
     if ($kw !== '') {
         $where[] = "(r.req_no LIKE ? OR r.title LIKE ? OR r.requester_name LIKE ? OR r.dept_name LIKE ?
-                     OR r.vendor_name LIKE ? OR r.invoice_no LIKE ?
+                     OR r.vendor_name LIKE ? OR r.invoice_no LIKE ? OR r.purpose_label LIKE ?
                      OR EXISTS (SELECT 1 FROM purchase_request_item pi WHERE pi.req_id=r.req_id
-                                AND (pi.item_name LIKE ? OR pi.spec_text LIKE ?)))";
+                                AND (pi.item_name LIKE ? OR pi.spec_text LIKE ? OR pi.purpose_label LIKE ?)))";
         $lk = '%' . $kw . '%';
-        array_push($bind, $lk, $lk, $lk, $lk, $lk, $lk, $lk, $lk);
+        array_push($bind, $lk, $lk, $lk, $lk, $lk, $lk, $lk, $lk, $lk, $lk);
     }
     $w = implode(' AND ', $where);
 
@@ -567,6 +634,32 @@ case 'req_save': {
     $items = pjson('items');
     if (!$items) jerr('請至少填一筆品項');
     $tempAtts = array_map('intval', pjson('temp_att_ids'));
+    $urgent   = pint('is_urgent') ? 1 : 0;
+
+    // 用途歸屬：單頭必填；ID 與顯示名稱都在後端驗過／重建，不採信前端字串
+    $pp = purchase_purpose_normalize($db, $_POST);
+    if ($pp['type'] === null) jerr('請選擇這筆採購的用途（成本要靠它歸戶）');
+
+    // 品項的用途留白＝沿用單頭；有填才逐列驗
+    $itemPurposes = [];
+    foreach ($items as $i => $it) {
+        $itemPurposes[$i] = (trim((string)($it['purpose_type'] ?? '')) === '')
+            ? null : purchase_purpose_normalize($db, $it);
+    }
+
+    // 標題留白時自動組（申請人不必想標題）：〈用途〉- 第一項 等N項
+    $title = pv('title');
+    if ($title === '') {
+        $first = '';
+        foreach ($items as $it) {
+            $n = trim((string)($it['item_name'] ?? ''));
+            if ($n !== '') { $first = $n; break; }
+        }
+        $cnt   = count(array_filter($items, fn($it) => trim((string)($it['item_name'] ?? '')) !== ''));
+        $title = mb_substr((string)$pp['label'], 0, 40) . ' - ' . mb_substr($first, 0, 30)
+               . ($cnt > 1 ? ' 等 ' . $cnt . ' 項' : '');
+        $title = mb_substr($title, 0, 120);
+    }
 
     $db->beginTransaction();
     if ($reqId > 0) {
@@ -575,36 +668,49 @@ case 'req_save': {
         if (!($perms['canAdmin'] || (($isOwner || $perms['canBuy']) && $req['status'] === 'submitted'))) {
             $db->rollBack(); jerr('此單目前狀態不可修改', 403);
         }
-        $db->prepare("UPDATE purchase_request SET title=?, need_date=?, reason=?, Modified_By=? WHERE req_id=?")
-           ->execute([pv('title') ?: null, pdate('need_date'), pv('reason') ?: null, $uid, $reqId]);
+        $db->prepare("UPDATE purchase_request SET title=?, need_date=?, reason=?,
+                      purpose_type=?, purpose_order_id=?, purpose_bom=?, purpose_d_id=?, purpose_note=?, purpose_label=?,
+                      is_urgent=?, Modified_By=? WHERE req_id=?")
+           ->execute([$title, pdate('need_date'), pv('reason') ?: null,
+                      $pp['type'], $pp['order_id'], $pp['bom'], $pp['d_id'], $pp['note'], $pp['label'],
+                      $urgent, $uid, $reqId]);
         $db->prepare("DELETE FROM purchase_request_item WHERE req_id=? AND qty_received=0")->execute([$reqId]);
         $reqNo = $req['req_no'];
     } else {
         $reqNo = purchase_next_req_no($db);
         $db->prepare("INSERT INTO purchase_request (req_no, title, dept_id, dept_name, requester_id, requester_name,
-                      need_date, reason, status, Created_By) VALUES (?,?,?,?,?,?,?,?, 'submitted', ?)")
-           ->execute([$reqNo, pv('title') ?: null, $u['dept_id'], $u['dept_name'], $uid, $uname,
-                      pdate('need_date'), pv('reason') ?: null, $uid]);
+                      need_date, reason, purpose_type, purpose_order_id, purpose_bom, purpose_d_id, purpose_note,
+                      purpose_label, is_urgent, status, Created_By)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'submitted', ?)")
+           ->execute([$reqNo, $title, $u['dept_id'], $u['dept_name'], $uid, $uname,
+                      pdate('need_date'), pv('reason') ?: null,
+                      $pp['type'], $pp['order_id'], $pp['bom'], $pp['d_id'], $pp['note'], $pp['label'],
+                      $urgent, $uid]);
         $reqId = (int)$db->lastInsertId();
     }
 
     $ins = $db->prepare("INSERT INTO purchase_request_item (req_id, spec_id, item_name, spec_text, category_id,
-                         unit_id, qty_requested, est_price, receive_mode, location_id, remark, is_urgent, sort_order)
-                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                         unit_id, qty_requested, est_price, receive_mode, location_id, remark, is_urgent, sort_order,
+                         purpose_type, purpose_order_id, purpose_bom, purpose_d_id, purpose_note, purpose_label)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
     $sort = 0;
-    foreach ($items as $it) {
+    foreach ($items as $i => $it) {
         $specId = (int)($it['spec_id'] ?? 0) ?: null;
         $name   = trim((string)($it['item_name'] ?? ''));
         if ($name === '') continue;
+        // 到貨處理／儲位是倉管語言，申請人不填，由採購在詢價頁補；此處沿用既有預設
         $mode = (string)($it['receive_mode'] ?? 'stock');
         if (!in_array($mode, array_keys(PURCHASE_RECEIVE_MODES), true)) $mode = 'stock';
+        $ip = $itemPurposes[$i] ?? null;   // null = 沿用單頭用途
         $ins->execute([
             $reqId, $specId, $name, trim((string)($it['spec_text'] ?? '')) ?: null,
             (int)($it['category_id'] ?? 0) ?: null, (int)($it['unit_id'] ?? 0) ?: null,
             max(0.0001, (float)($it['qty'] ?? 1)),
             ($it['est_price'] ?? '') === '' ? null : (float)$it['est_price'],
             $mode, (int)($it['location_id'] ?? 0) ?: null,
-            trim((string)($it['remark'] ?? '')) ?: null, (int)($it['is_urgent'] ?? 0), $sort++,
+            trim((string)($it['remark'] ?? '')) ?: null, $urgent, $sort++,
+            $ip['type'] ?? null, $ip['order_id'] ?? null, $ip['bom'] ?? null,
+            $ip['d_id'] ?? null, $ip['note'] ?? null, $ip['label'] ?? null,
         ]);
     }
     if ($tempAtts) purchase_commit_temp_atts($db, $tempAtts, $reqId, $reqNo, $uid);
@@ -613,8 +719,11 @@ case 'req_save': {
     if (($_POST['is_new'] ?? '') === '1') {
         $targets = purchase_role_users($db, 'purchase_buy');
         if (!$targets) $targets = purchase_role_users($db, 'purchase_admin');
-        purchase_notify($db, $targets, 'PURCHASE_NEW', $reqId, '新採購申請：' . $reqNo,
-            $uname . ' 提出採購申請 ' . $reqNo . (pv('title') ? '（' . pv('title') . '）' : '') . '，請詢價。', 'read', $uid);
+        purchase_notify($db, $targets, 'PURCHASE_NEW', $reqId,
+            ($urgent ? '【急】' : '') . '新採購申請：' . $reqNo,
+            $uname . ' 提出採購申請 ' . $reqNo . '（' . $title . '）'
+            . '，用途：' . PURCHASE_PURPOSE_TYPES[$pp['type']] . ' ' . (string)$pp['label']
+            . '，請詢價。', 'read', $uid);
     }
     jout(['req_id' => $reqId, 'req_no' => $reqNo]);
 }
