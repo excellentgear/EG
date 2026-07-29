@@ -54,7 +54,10 @@ case 'meta': {
                         WHERE is_active=1 ORDER BY sort_order, main_cat_id")->fetchAll(PDO::FETCH_ASSOC);
     jout(['perms'=>$perms, 'cur_year'=>(int)date('Y'),
           'cur_half'=>((int)date('n') <= 6 ? 1 : 2), 'today'=>date('Y-m-d'),
-          'cycle_months'=>vendor_audit_cycle_months($db), 'main_categories'=>$cats]);
+          'cycle_months'=>vendor_audit_cycle_months($db), 'main_categories'=>$cats,
+          'items'=>vendor_audit_items(), 'item_max'=>VENDOR_AUDIT_ITEM_MAX,
+          'total_max'=>VENDOR_AUDIT_TOTAL_MAX, 'pass_rate'=>VENDOR_AUDIT_PASS_RATE,
+          'self_w'=>VENDOR_AUDIT_SELF_W, 'audit_w'=>VENDOR_AUDIT_AUDIT_W]);
 }
 
 /* 某大類下的加工項目(小類) */
@@ -78,8 +81,9 @@ case 'round': {
 
     $targets = [];
     if ($rid !== null) {
-        $st = $db->prepare("SELECT t.target_id, t.maker_id_no, t.audit_date, t.result, t.score, t.auditor,
+        $st = $db->prepare("SELECT t.target_id, t.maker_id_no, t.audit_date, t.auditor,
                                    t.report_no, t.note, t.added_by_name,
+                                   t.overall_rate, t.self_rate, t.audit_rate, t.judge, t.audit_mode, t.conclusion,
                                    m.maker_id, m.status, dc.main_cat_name
                             FROM vendor_audit_target t
                             JOIN maker_list m ON m.maker_id_no=t.maker_id_no
@@ -204,7 +208,29 @@ case 'remove_target': {
     jout([]);
 }
 
-/* 登錄/修正稽核結果 */
+/* 讀取某對象的完整評鑑表單（供編輯） */
+case 'get_form': {
+    $tid = (int)($_GET['target_id'] ?? 0);
+    $st = $db->prepare("SELECT t.*, m.maker_id, dc.main_cat_name
+                        FROM vendor_audit_target t
+                        JOIN maker_list m ON m.maker_id_no=t.maker_id_no
+                        LEFT JOIN dict_maker_main_category dc ON dc.main_cat_id=m.main_category_id
+                        WHERE t.target_id=?");
+    $st->execute([$tid]);
+    $t = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$t) jerr('找不到對象');
+    $scores = json_decode((string)($t['scores_json'] ?? ''), true);
+    jout(['target'=>[
+        'target_id'=>(int)$t['target_id'], 'maker_id_no'=>$t['maker_id_no'], 'maker_id'=>$t['maker_id'],
+        'main_cat_name'=>$t['main_cat_name'], 'audit_date'=>$t['audit_date'], 'auditor'=>$t['auditor'],
+        'report_no'=>$t['report_no'], 'note'=>$t['note'], 'audit_mode'=>$t['audit_mode'],
+        'self_evaluator'=>$t['self_evaluator'], 'supplier_rep'=>$t['supplier_rep'], 'conclusion'=>$t['conclusion'],
+        'self_rate'=>$t['self_rate'], 'audit_rate'=>$t['audit_rate'], 'overall_rate'=>$t['overall_rate'], 'judge'=>$t['judge'],
+        'scores'=>is_array($scores) ? $scores : new stdClass(),
+    ]]);
+}
+
+/* 登錄/修正稽核評鑑表單（15項自評/稽核分→伺服器端算合格率判定） */
 case 'record_target': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $tid = (int)($_POST['target_id'] ?? 0);
@@ -214,18 +240,46 @@ case 'record_target': {
     $auditDate = trim((string)($_POST['audit_date'] ?? ''));
     $clear = ($auditDate === '');
     if (!$clear && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $auditDate)) jerr('稽核日格式不正確');
-    $result = in_array($_POST['result'] ?? '', ['pass','conditional','fail'], true) ? $_POST['result'] : null;
-    $score = ($_POST['score'] ?? '') === '' ? null : (int)$_POST['score'];
     $auditor = trim((string)($_POST['auditor'] ?? '')) ?: null;
     $reportNo = trim((string)($_POST['report_no'] ?? '')) ?: null;
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
+    $auditMode = in_array($_POST['audit_mode'] ?? '', ['first','again','self'], true) ? $_POST['audit_mode'] : null;
+    $selfEval = trim((string)($_POST['self_evaluator'] ?? '')) ?: null;
+    $supplierRep = trim((string)($_POST['supplier_rep'] ?? '')) ?: null;
+    $conclusion = trim((string)($_POST['conclusion'] ?? '')) ?: null;
+
+    // scores：{item_id:{self,audit,note}}
+    $scores = json_decode((string)($_POST['scores'] ?? ''), true);
+    if (!is_array($scores)) $scores = [];
+    $rates = vendor_audit_compute_rates($scores);
+    $hasScore = false;
+    foreach ($scores as $s) { if (is_array($s) && ((isset($s['self']) && $s['self'] !== '') || (isset($s['audit']) && $s['audit'] !== ''))) { $hasScore = true; break; } }
+
+    if ($clear) {
+        // 清空稽核（回到未稽核）
+        try {
+            $db->beginTransaction();
+            $db->prepare("UPDATE vendor_audit_target SET audit_date=NULL, scores_json=NULL, self_rate=NULL, audit_rate=NULL,
+                          overall_rate=NULL, judge=NULL, audit_mode=?, self_evaluator=?, supplier_rep=?, conclusion=?,
+                          auditor=?, report_no=?, note=? WHERE target_id=?")
+               ->execute([$auditMode,$selfEval,$supplierRep,$conclusion,$auditor,$reportNo,$note,$tid]);
+            $db->commit();
+        } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+        jout(['cleared'=>true]);
+    }
+
+    $tt = $rates['total'];
     try {
         $db->beginTransaction();
-        $db->prepare("UPDATE vendor_audit_target SET audit_date=?, result=?, score=?, auditor=?, report_no=?, note=? WHERE target_id=?")
-           ->execute([$clear ? null : $auditDate, $clear ? null : $result, $score, $auditor, $reportNo, $note, $tid]);
+        $db->prepare("UPDATE vendor_audit_target SET audit_date=?, scores_json=?, self_rate=?, audit_rate=?, overall_rate=?,
+                      judge=?, audit_mode=?, self_evaluator=?, supplier_rep=?, conclusion=?, auditor=?, report_no=?, note=? WHERE target_id=?")
+           ->execute([$auditDate, $hasScore ? json_encode($scores, JSON_UNESCAPED_UNICODE) : null,
+                      $hasScore ? $tt['self_rate'] : null, $hasScore ? $tt['audit_rate'] : null,
+                      $hasScore ? $tt['overall_rate'] : null, $hasScore ? $tt['judge'] : null,
+                      $auditMode, $selfEval, $supplierRep, $conclusion, $auditor, $reportNo, $note, $tid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
-    jout([]);
+    jout(['rates'=>$rates]);
 }
 
 /* 設定廠商是否納入稽核管理（管理員；支援批次） */
@@ -254,7 +308,7 @@ case 'save_cycle': {
 /* 某廠商跨期稽核歷史 */
 case 'vendor_history': {
     $mid = trim((string)($_GET['maker_id_no'] ?? ''));
-    $st = $db->prepare("SELECT r.year, r.half, t.audit_date, t.result, t.score, t.auditor, t.report_no, t.note
+    $st = $db->prepare("SELECT r.year, r.half, t.audit_date, t.overall_rate, t.judge, t.auditor, t.report_no, t.note
                         FROM vendor_audit_target t JOIN vendor_audit_round r ON r.round_id=t.round_id
                         WHERE t.maker_id_no=? ORDER BY r.year DESC, r.half DESC");
     $st->execute([$mid]);

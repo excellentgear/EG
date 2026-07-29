@@ -60,6 +60,21 @@ function vendor_audit_ensure_schema(PDO $db): void {
         KEY idx_maker (maker_id_no)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='供應商稽核期對象+執行紀錄'");
 
+    // 稽核評鑑表單(簡版15項 2-PH-01-02/03)：每對象存整份評分表
+    foreach ([
+        "ALTER TABLE vendor_audit_target ADD COLUMN scores_json TEXT NULL COMMENT '各項自評/稽核分 JSON'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN self_rate DECIMAL(5,1) NULL COMMENT '自評合格率%'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN audit_rate DECIMAL(5,1) NULL COMMENT '稽核合格率%'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN overall_rate DECIMAL(5,1) NULL COMMENT '綜合合格率%(自評x0.3+稽核x0.7)'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN judge VARCHAR(12) NULL COMMENT 'pass=合格 fail=不合格(依75%)'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN audit_mode VARCHAR(10) NULL COMMENT 'first=首次 again=次稽核 self=自我評量'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN self_evaluator VARCHAR(50) NULL COMMENT '自評人員'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN supplier_rep VARCHAR(50) NULL COMMENT '供應商代表'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN conclusion VARCHAR(30) NULL COMMENT '建議評鑑結果'",
+    ] as $sql) {
+        try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
+    }
+
     foreach ([['vendor_audit_view','稽核檢閱'],['vendor_audit_edit','稽核登錄'],['vendor_audit_admin','稽核管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='vendor_audit' LIMIT 1");
         $st->execute([$r[0]]);
@@ -68,6 +83,80 @@ function vendor_audit_ensure_schema(PDO $db): void {
                ->execute([$r[0], $r[1]]);
         }
     }
+}
+
+/* ============================================================
+ * 稽核評鑑表單題庫（簡版15項 2-PH-01-02 供應商評鑑稽核查表）
+ * 每項自評/稽核各評 0~7 分；分類滿分 A28/B28/C21/D14/E14＝總分105
+ * ============================================================ */
+const VENDOR_AUDIT_ITEM_MAX  = 7;
+const VENDOR_AUDIT_TOTAL_MAX = 105;
+const VENDOR_AUDIT_PASS_RATE = 75.0;   // 綜合合格率 ≥75% 判合格
+const VENDOR_AUDIT_SELF_W    = 0.3;
+const VENDOR_AUDIT_AUDIT_W   = 0.7;
+
+function vendor_audit_items(): array {
+    return [
+        ['A', 'A.管理', [
+            [1, '對客戶之訂單內容是否審核回簽？'],
+            [2, '廠房是否保持整潔，乾燥，及良好照明？'],
+            [3, '是否落實產品追溯系統？'],
+            [4, '針對不良品或可疑品，是否有標示區別、隔離及處理？'],
+        ]],
+        ['B', 'B.品質', [
+            [5, '是否落實首件檢查？'],
+            [6, '是否在加工前校正量具？'],
+            [7, '不合格品是否主動告知？'],
+            [8, '重工後的產品，是否按照生產計劃予以再檢驗與測試？'],
+        ]],
+        ['C', 'C.交期', [
+            [9,  '針對急單產生，處理配合度佳？'],
+            [10, '是否有足夠機台及加工技術可配合製作？'],
+            [11, '是否可配合出車收送貨？'],
+        ]],
+        ['D', 'D.出貨', [
+            [12, '是否按照適合的包裝標準來執行？'],
+            [13, '出貨是否有執行標籤管制作業？'],
+        ]],
+        ['E', 'E.矯正及預防', [
+            [14, '針對異常事件產生，處理配合度佳？'],
+            [15, '是否落實建議改善？'],
+        ]],
+    ];
+}
+
+/** 由 scores_json（{item_id:{self,audit}}）計算各類與總合格率、判定。分數留空以0計。 */
+function vendor_audit_compute_rates(array $scores): array {
+    $cats = [];
+    $tSelf = 0; $tAudit = 0; $tMax = 0;
+    foreach (vendor_audit_items() as $cat) {
+        [$code, $name, $items] = $cat;
+        $cSelf = 0; $cAudit = 0; $cMax = 0;
+        foreach ($items as $it) {
+            $iid = (string)$it[0];
+            $cMax += VENDOR_AUDIT_ITEM_MAX;
+            $s = $scores[$iid] ?? null;
+            $sv = (is_array($s) && isset($s['self'])  && is_numeric($s['self']))  ? max(0, min(VENDOR_AUDIT_ITEM_MAX, (float)$s['self']))  : 0;
+            $av = (is_array($s) && isset($s['audit']) && is_numeric($s['audit'])) ? max(0, min(VENDOR_AUDIT_ITEM_MAX, (float)$s['audit'])) : 0;
+            $cSelf += $sv; $cAudit += $av;
+        }
+        $cats[] = [
+            'code'=>$code, 'name'=>$name, 'max'=>$cMax,
+            'self_sum'=>$cSelf, 'audit_sum'=>$cAudit,
+            'self_rate'=>$cMax ? round($cSelf/$cMax*100, 1) : 0,
+            'audit_rate'=>$cMax ? round($cAudit/$cMax*100, 1) : 0,
+        ];
+        $tSelf += $cSelf; $tAudit += $cAudit; $tMax += $cMax;
+    }
+    $selfRate  = $tMax ? round($tSelf/$tMax*100, 1) : 0;
+    $auditRate = $tMax ? round($tAudit/$tMax*100, 1) : 0;
+    $overall   = round($selfRate*VENDOR_AUDIT_SELF_W + $auditRate*VENDOR_AUDIT_AUDIT_W, 1);
+    return [
+        'categories'=>$cats,
+        'total'=>['max'=>$tMax, 'self_sum'=>$tSelf, 'audit_sum'=>$tAudit,
+                  'self_rate'=>$selfRate, 'audit_rate'=>$auditRate,
+                  'overall_rate'=>$overall, 'judge'=>$overall >= VENDOR_AUDIT_PASS_RATE ? 'pass' : 'fail'],
+    ];
 }
 
 /* ============================================================
