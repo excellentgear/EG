@@ -548,6 +548,16 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script>
+/* 左側欄：上方 CSS 先把 #sidebar-menu 設 visibility:hidden 以避免子選單全展開的閃爍，
+   custom.min.js 收合完成後必須在這裡手動還原 visible——這兩段是成套的，
+   只抄 hidden 沒抄還原，整個左側欄會消失（2026-07-29 本頁踩過）。 */
+$(document).ready(function () {
+    var $am = $('#sidebar-menu .nav.side-menu > li.active');
+    if ($am.length) { $am.removeClass('active').find('ul.child_menu').hide(); $am.find('li.current-page').removeClass('current-page'); }
+    $('#sidebar-menu').css('visibility', 'visible');
+});
+</script>
 <script src="../../resource/js/purchase_request.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/purchase_request.js') ?: time() ?>"></script>
 </body>
 </html>
