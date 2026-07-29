@@ -525,8 +525,8 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                                             <select id="sa_cand" class="form-control input-sm" style="max-width:260px;display:inline-block;"></select>
                                             <button type="button" class="btn btn-sm sa-btn-primary" id="sa_mark">標記為共用帳號</button>
                                             <div class="text-muted" style="font-size:12px;margin-top:4px;">
-                                                只列出<b>員工管理狀態為「特殊帳號(不列入員工)」</b>的帳號；要新增共用帳號請先到
-                                                <a href="employee_management.php" target="_blank">員工管理</a>開帳號並把狀態設為特殊帳號。<br>
+                                                只列出<b>名稱含「共用／公用」</b>且<b>狀態為「特殊帳號(不列入員工)」</b>的帳號；要新增共用帳號請先到
+                                                <a href="employee_management.php" target="_blank">員工管理</a>開帳號（名稱帶「共用」或「公用」）並把狀態設為特殊帳號。<br>
                                                 標記後<b>預設鎖定密碼</b>，避免現場有人隨手改掉害全廠登不進去。
                                             </div>
                                         </div>

@@ -66,6 +66,14 @@ if (!sa_is_admin($db, $me)) sa_out(['ok' => false, 'msg' => '僅管理者可設�
 if (!eg_shared_ready($db)) sa_out(['ok' => false, 'msg' => '共用帳號資料表尚未建立，請先執行遷移']);
 
 /**
+ * 可當共用帳號的條件（使用者定案 2026-07-29）：
+ *   姓名含「共用」或「公用」 **且** 帳號是特殊帳號（state=90，員工管理的「特殊帳號(不列入員工)」）。
+ * 註：現場既有帳號實際叫「生管公用」「報工公用」（公用，非共用），故兩種寫法都收，
+ *     只認「共用」會一筆都撈不到。
+ */
+const SA_CAND_WHERE = "state = 90 AND (user_cname LIKE '%共用%' OR user_cname LIKE '%公用%')";
+
+/**
  * 取這些人的部門／職稱（含兼任，主要身分 is_main 排前面）。
  * @return array user_id => ['dept_ids'=>int[], 'label'=>'生產部／課長、品保部／專員']
  */
@@ -115,10 +123,9 @@ try {
             $sharedRole = sa_role_map($db, array_column($shared, 'id'));
             foreach ($shared as &$s) $s['role_label'] = $sharedRole[(int)$s['id']]['label'] ?? '';
             unset($s);
-            // 可標記為共用帳號的候選：**只列員工管理已設為「特殊帳號(不列入員工)」(state=90) 的帳號**
-            // （使用者定案：共用帳號一定是先在員工管理開成特殊帳號，不可拿一般員工帳號來當共用帳號）
+            // 可標記為共用帳號的候選：姓名含共用/公用 且 為特殊帳號（見 SA_CAND_WHERE）
             $cand = $db->query("SELECT id, user_cname, user_uname, state FROM `user`
-                                WHERE is_shared_account = 0 AND state = 90
+                                WHERE is_shared_account = 0 AND " . SA_CAND_WHERE . "
                                 ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
             $candRole = sa_role_map($db, array_column($cand, 'id'));
             foreach ($cand as &$c) $c['role_label'] = $candRole[(int)$c['id']]['label'] ?? '';
@@ -165,11 +172,11 @@ try {
             $on  = ((int)($_POST['on'] ?? 0) === 1);
             if ($uid <= 0) sa_out(['ok' => false, 'msg' => '參數錯誤']);
             if ($on) {
-                // 只有員工管理設為「特殊帳號(不列入員工)」的帳號才能當共用帳號
-                $stChk = $db->prepare("SELECT state FROM `user` WHERE id = ?");
+                // 後端同樣把關（前端被繞過也擋得住）
+                $stChk = $db->prepare("SELECT COUNT(*) FROM `user` WHERE id = ? AND " . SA_CAND_WHERE);
                 $stChk->execute([$uid]);
-                if ((int)$stChk->fetchColumn() !== 90) {
-                    sa_out(['ok' => false, 'msg' => '只有「特殊帳號(不列入員工)」才能設為共用帳號，請先到員工管理把該帳號的狀態改為特殊帳號']);
+                if (!(int)$stChk->fetchColumn()) {
+                    sa_out(['ok' => false, 'msg' => '只有「名稱含共用/公用」且狀態為「特殊帳號(不列入員工)」的帳號才能設為共用帳號']);
                 }
             }
             if (!$on) {
