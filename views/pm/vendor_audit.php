@@ -1,7 +1,7 @@
 <?php
 /**
- * 供應商稽核管理（KPI 2-GM-04-01 第6項 廠商稽核按時執行率 的來源頁）
- * 廠商主檔沿用 maker_list；週期自動推算下次應稽核日；半年結算(6/12月)。
+ * 供應商稽核管理（KPI 2-GM-04-01 第6項 廠商稽核按時執行率 的來源頁）—— 稽核批次模型
+ * 每期(上/下半年)挑一批稽核對象(手動多選/隨機抽取)；大類/加工項目階層篩選(比照 master_data)。
  * 資料一律走 src/store/VendorAudit_API.php；權限 vendor_audit_lib.php
  */
 session_start();
@@ -40,43 +40,42 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .va-toolbar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; clear:both;
             border:1.5px solid #E8D5B5; border-radius:8px; padding:8px 10px; margin-bottom:10px; background:#FDF8EF; }
         .va-toolbar label { margin:0; font-size:13px; color:#5b3a1e; }
-        .va-toolbar select, .va-toolbar input[type=text], .va-toolbar button {
+        .va-toolbar select, .va-toolbar input[type=text], .va-toolbar input[type=number], .va-toolbar button {
             height:30px; font-size:13px; line-height:1; padding:0 10px; border:1px solid #D8BE93;
             border-radius:4px; background:#fff; color:#5b3a1e; cursor:pointer; }
         .va-toolbar button:hover { background:#F7E0BD; }
         .va-toolbar .btn-warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        .va-toolbar .btn-warm:hover { background:#d98a33; }
         .va-role-badge { margin-left:auto; font-size:13px; color:#5b3a1e; background:#F7E0BD; border-radius:12px; padding:4px 12px; }
         .va-role-badge .fa-question-circle { cursor:pointer; color:#b5762a; margin-left:5px; }
-        .va-stat { display:flex; flex-wrap:wrap; gap:18px; align-items:center; margin-bottom:10px;
+        .va-stat { display:flex; flex-wrap:wrap; gap:18px; align-items:center; margin-bottom:8px;
             border:1.5px solid #E8D5B5; border-radius:8px; padding:10px 14px; background:#FFF7E8; }
         .va-stat .s-num { font-size:22px; font-weight:bold; color:#8A5A2B; }
         .va-stat .s-lab { font-size:12px; color:#8a6d45; }
         .va-stat .s-rate.below { color:#DD5138; }
         .va-stat .s-rate.ok { color:#8A5A2B; }
+        .va-remind { font-size:12px; color:#8a6d45; margin-bottom:8px; }
         .va-table-wrap { overflow-x:auto; border:1px solid #E8D5B5; border-radius:6px; background:#fff; }
         table.va-table { width:100%; border-collapse:collapse; font-size:13px; }
         table.va-table th, table.va-table td { border:1px solid #EADFC8; padding:5px 8px; white-space:nowrap; text-align:center; }
         table.va-table thead th { position:sticky; top:0; z-index:5; background:#F7E0BD; color:#5b3a1e; font-weight:bold; }
         table.va-table tbody tr:nth-child(even) { background:#FBF6EC; }
         table.va-table tbody tr:hover { background:#FBF0DD; }
+        table.va-table tr.dis td { background:#efe7d8 !important; color:#b0a390; }
         table.va-table td.t-left { text-align:left; }
         .st-pill { display:inline-block; font-size:12px; border-radius:10px; padding:2px 9px; }
-        .st-overdue { background:#DD5138; color:#fff; }
-        .st-soon { background:#F0A24B; color:#fff; }
-        .st-ok { background:#F7E0BD; color:#7a5217; }
-        .st-nobaseline { background:#fff; color:#c4863a; border:1px dashed #D8BE93; }
-        .st-unmanaged { background:#efe7d8; color:#b0a390; }
+        .st-done { background:#F0A24B; color:#fff; }
+        .st-todo { background:#F7E0BD; color:#7a5217; }
+        .st-dis { background:#efe7d8; color:#b0a390; }
         .rs-pass { color:#8A5A2B; } .rs-conditional { color:#c98a2e; } .rs-fail { color:#DD5138; }
         .va-op { color:#b5762a; cursor:pointer; margin:0 4px; }
         .va-op:hover { color:#8A5A2B; text-decoration:underline; }
-        .managed-yes { color:#8A5A2B; font-weight:bold; }
-        .managed-no { color:#b0a390; }
         input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
         input[type=number] { -moz-appearance:textfield; }
         .va-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
         .va-modal { background:#fff; border-radius:8px; max-width:560px; margin:52px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
             max-height:84vh; display:flex; flex-direction:column; }
-        .va-modal.wide { max-width:820px; }
+        .va-modal.wide { max-width:860px; }
         .va-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
             display:flex; justify-content:space-between; }
         .va-modal .m-head .m-close { cursor:pointer; color:#b5762a; }
@@ -90,6 +89,21 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .va-modal .m-foot .b-ok { background:#F0A24B; color:#fff; }
         .va-modal .m-foot .b-cancel { background:#fff; color:#5b3a1e; border-color:#D8BE93; margin-right:6px; }
         .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+        /* picker */
+        .pk-filter { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px; }
+        .pk-filter select, .pk-filter input { height:28px; font-size:12px; border:1px solid #D8BE93; border-radius:4px; padding:0 6px; }
+        .pk-list { border:1px solid #EADFC8; border-radius:6px; max-height:340px; overflow-y:auto; }
+        table.pk-table { width:100%; border-collapse:collapse; font-size:12px; }
+        table.pk-table th, table.pk-table td { border-bottom:1px solid #F0E7D5; padding:4px 6px; text-align:center; }
+        table.pk-table thead th { position:sticky; top:0; background:#F7E0BD; color:#5b3a1e; z-index:2; }
+        table.pk-table td.t-left { text-align:left; }
+        .mg-yes { color:#8A5A2B; font-weight:bold; } .mg-no { color:#b0a390; }
+        .pk-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; padding-top:8px; border-top:1px dashed #EADFC8; }
+        .pk-actions .grp { display:flex; gap:4px; align-items:center; }
+        .pk-actions button { height:28px; font-size:12px; border-radius:4px; border:1px solid #d98a33; cursor:pointer; padding:0 10px; }
+        .pk-actions .b-add { background:#F0A24B; color:#fff; }
+        .pk-actions .b-alt { background:#fff; color:#5b3a1e; border-color:#D8BE93; }
+        .pk-actions input[type=number] { width:60px; height:28px; border:1px solid #D8BE93; border-radius:4px; padding:0 6px; }
         table.hist { width:100%; border-collapse:collapse; font-size:12px; }
         table.hist th, table.hist td { border:1px solid #EADFC8; padding:4px 6px; text-align:center; }
         table.hist thead th { background:#F7E0BD; color:#5b3a1e; }
@@ -109,7 +123,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="right_col" role="main">
         <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
             <h2 style="margin:6px 0;">供應商稽核管理
-                <small style="color:#8a6d45;">KPI 2-GM-04-01 #6 廠商稽核按時執行率 來源頁（半年結算）</small></h2>
+                <small style="color:#8a6d45;">KPI 2-GM-04-01 #6 廠商稽核按時執行率 來源頁（半年一期，每期挑一批對象）</small></h2>
         </div>
         <div class="clearfix"></div>
 
@@ -124,13 +138,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <select id="yearSel"></select>
             <label>期別</label>
             <select id="halfSel"><option value="1">上半年(1-6月)</option><option value="2">下半年(7-12月)</option></select>
-            <label>狀態</label>
-            <select id="statSel">
-                <option value="">全部</option><option value="managed">僅納管</option>
-                <option value="overdue">逾期</option><option value="soon">即將到期</option>
-                <option value="ok">正常</option><option value="nobaseline">未設基準</option><option value="unmanaged">未納管</option>
-            </select>
-            <input type="text" id="kwSel" placeholder="搜尋廠商" style="width:130px;">
+            <button class="btn-warm" id="btnPick" style="display:none;"><i class="fa fa-plus"></i> 加入稽核對象</button>
+            <button id="btnCycle" style="display:none;"><i class="fa fa-refresh"></i> 週期設定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
             <span class="va-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
@@ -138,26 +147,25 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         </div>
 
         <div class="va-stat" id="statBar">
-            <div><span class="s-num" id="stDen">—</span> <span class="s-lab">本期應稽核</span></div>
-            <div><span class="s-num" id="stNum">—</span> <span class="s-lab">按時完成</span></div>
-            <div><span class="s-num s-rate" id="stRate">—</span> <span class="s-lab">按時執行率（目標 ≥70%）</span></div>
+            <div><span class="s-num" id="stDen">—</span> <span class="s-lab">本期應稽核（對象）</span></div>
+            <div><span class="s-num" id="stNum">—</span> <span class="s-lab">已完成</span></div>
+            <div><span class="s-num s-rate" id="stRate">—</span> <span class="s-lab">執行率（目標 ≥70%）</span></div>
             <div class="s-lab" id="stHint" style="margin-left:auto;"></div>
         </div>
+        <div class="va-remind" id="remind"></div>
 
         <div class="va-table-wrap">
             <table class="va-table" id="vaTable">
                 <thead><tr>
-                    <th>廠商編號</th><th>廠商名稱</th><th>週期(月)</th><th>下次應稽核日</th>
-                    <th>狀態</th><th>最近稽核</th><th>納入管理</th><th>操作</th>
+                    <th>廠商編號</th><th>廠商名稱</th><th>大類</th><th>稽核狀態</th>
+                    <th>稽核日</th><th>結果</th><th>分數</th><th>稽核人員</th><th>操作</th>
                 </tr></thead>
-                <tbody id="vaBody"><tr><td colspan="8" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="vaBody"><tr><td colspan="9" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
-            狀態：<span class="st-pill st-overdue">逾期</span> <span class="st-pill st-soon">60天內到期</span>
-            <span class="st-pill st-ok">正常</span> <span class="st-pill st-nobaseline">未設基準</span>
-            <span class="st-pill st-unmanaged">未納管</span>。
-            「納入管理」者才計入 KPI；下次應稽核日＝上次稽核日＋週期（登錄完成後自動前滾）；達成率按上/下半年結算。
+            每期(上/下半年)由「加入稽核對象」挑一批廠商（大類/加工項目篩選後多選，或隨機抽 N 家），逐一登錄稽核結果。
+            KPI 執行率＝已完成 ÷ 本期對象數（<span class="st-pill st-dis">停用</span>廠商不列入）。
         </div>
 <?php endif; ?>
     </div>
@@ -165,47 +173,78 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 </div>
 </div>
 
+<!-- 廠商池挑選 modal -->
+<div class="va-mask" id="pkMask"><div class="va-modal wide">
+    <div class="m-head"><span id="pkTitle">加入稽核對象</span><span class="m-close" onclick="closeMask('pkMask')">✕</span></div>
+    <div class="m-body">
+        <div class="pk-filter">
+            <label style="margin:0;font-size:12px;color:#5b3a1e;">大類</label>
+            <select id="pkMain"><option value="">全部</option></select>
+            <label style="margin:0;font-size:12px;color:#5b3a1e;">加工項目</label>
+            <select id="pkSub"><option value="">全部</option></select>
+            <input type="text" id="pkKw" placeholder="搜尋廠商名/編號" style="width:150px;">
+            <label style="margin:0;font-size:12px;color:#5b3a1e;"><input type="checkbox" id="pkManagedOnly"> 只看納管</label>
+            <button class="b-alt" style="height:28px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;" onclick="loadPool()">查詢</button>
+            <span id="pkCount" style="font-size:12px;color:#8a6d45;"></span>
+        </div>
+        <div class="pk-list">
+            <table class="pk-table">
+                <thead><tr>
+                    <th style="width:32px;"><input type="checkbox" id="pkAll"></th>
+                    <th>編號</th><th>廠商名稱</th><th>大類</th><th>納管</th>
+                </tr></thead>
+                <tbody id="pkBody"><tr><td colspan="5" style="padding:14px;color:#8a6d45;">請設定條件後查詢</td></tr></tbody>
+            </table>
+        </div>
+        <div class="pk-actions">
+            <div class="grp"><button class="b-add" onclick="addSelected()"><i class="fa fa-check"></i> 加入選取</button></div>
+            <div class="grp">隨機抽 <input type="number" id="pkRandN" min="1" step="1" value="5"> 家：
+                <button class="b-add" onclick="randomDraw()"><i class="fa fa-random"></i> 抽取加入</button>
+                <span style="font-size:11px;color:#8a6d45;">(自納管廠商)</span></div>
+            <div class="grp" id="pkManageGrp" style="display:none;margin-left:auto;">
+                <button class="b-alt" onclick="bulkManaged(1)">選取設為納管</button>
+                <button class="b-alt" onclick="bulkManaged(0)">選取取消納管</button>
+            </div>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('pkMask')">關閉</button>
+    </div>
+</div></div>
+
 <!-- 登錄稽核 modal -->
 <div class="va-mask" id="recMask"><div class="va-modal">
     <div class="m-head"><span id="recTitle">登錄稽核</span><span class="m-close" onclick="closeMask('recMask')">✕</span></div>
     <div class="m-body">
-        <div style="font-size:12px;color:#8a6d45;" id="recInfo"></div>
         <div class="grid2">
-            <div><label>稽核日 *</label><input type="date" id="recDate"></div>
+            <div><label>稽核日（留空=尚未稽核）</label><input type="date" id="recDate"></div>
             <div><label>判定結果</label><select id="recResult">
-                <option value="pass">合格</option><option value="conditional">限期改善</option><option value="fail">不合格</option>
+                <option value="">—</option><option value="pass">合格</option>
+                <option value="conditional">限期改善</option><option value="fail">不合格</option>
             </select></div>
             <div><label>稽核分數</label><input type="number" id="recScore" step="1" min="0" max="100"></div>
             <div><label>稽核人員</label><input type="text" id="recAuditor" maxlength="50"></div>
             <div><label>報告編號</label><input type="text" id="recReport" maxlength="50"></div>
             <div><label>備註</label><input type="text" id="recNote" maxlength="200"></div>
         </div>
-        <div style="font-size:12px;color:#b5762a;margin-top:8px;" id="recRoll"></div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('recMask')">取消</button>
-        <button class="b-ok" onclick="submitRec()">登錄</button>
+        <button class="b-ok" onclick="submitRec()">儲存</button>
     </div>
 </div></div>
 
-<!-- 設定稽核屬性 modal -->
-<div class="va-mask" id="setMask"><div class="va-modal">
-    <div class="m-head"><span id="setTitle">稽核設定</span><span class="m-close" onclick="closeMask('setMask')">✕</span></div>
+<!-- 週期設定 modal -->
+<div class="va-mask" id="cycMask"><div class="va-modal">
+    <div class="m-head"><span>共用稽核週期設定</span><span class="m-close" onclick="closeMask('cycMask')">✕</span></div>
     <div class="m-body">
-        <div class="grid2">
-            <div><label>稽核週期（月）</label><input type="number" id="setCycle" step="1" min="0" placeholder="例：12"></div>
-            <div><label>納入稽核管理（計入 KPI）</label><select id="setManaged">
-                <option value="1">是</option><option value="0">否</option>
-            </select></div>
-            <div style="grid-column:1/3;"><label>下次應稽核日（基準）</label><input type="date" id="setBase"></div>
-        </div>
-        <div style="font-size:12px;color:#8a6d45;margin-top:8px;">
-            設定基準到期日後，每次登錄稽核會依週期自動前滾，不需再手動維護。
-        </div>
+        <label>稽核週期（月）—— 全公司共用，作為「多久辦一期」的參考與提醒</label>
+        <input type="number" id="cycVal" step="1" min="1" style="width:120px;">
+        <div style="font-size:12px;color:#8a6d45;margin-top:8px;">例：6＝每半年一期。此值僅供提醒，不會自動改變各期對象。</div>
     </div>
     <div class="m-foot">
-        <button class="b-cancel" onclick="closeMask('setMask')">取消</button>
-        <button class="b-ok" onclick="submitSet()">儲存</button>
+        <button class="b-cancel" onclick="closeMask('cycMask')">取消</button>
+        <button class="b-ok" onclick="submitCycle()">儲存</button>
     </div>
 </div></div>
 
@@ -219,12 +258,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <div class="va-mask" id="helpMask"><div class="va-modal">
     <div class="m-head"><span>角色權限說明</span><span class="m-close" onclick="closeMask('helpMask')">✕</span></div>
     <div class="m-body" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
-        <b>稽核檢閱</b>：檢視廠商清單、稽核歷史、本期統計與匯出。<br>
-        <b>稽核登錄</b>：檢閱＋登錄各廠商的稽核完成紀錄。<br>
-        <b>稽核管理員</b>：登錄＋設定週期/納管/基準到期日、刪除誤登紀錄。<br>
+        <b>稽核檢閱</b>：檢視本期對象/稽核歷史/統計與匯出。<br>
+        <b>稽核登錄</b>：檢閱＋加入/移除本期對象、登錄稽核結果。<br>
+        <b>稽核管理員</b>：登錄＋設定廠商納管、共用週期。<br>
         <b>管理者</b>：系統管理者固定擁有全部權限。<br>
         <hr style="border-color:#EADFC8;">
-        本頁資料為 KPI「廠商稽核按時執行率(#6)」計算來源；納管廠商依到期日落在上/下半年計入 KPI。
+        本頁為 KPI「廠商稽核按時執行率(#6)」來源；每期對象由本頁挑選，執行率＝已完成÷對象數。停用廠商不列入。
     </div>
 </div></div>
 
@@ -240,10 +279,9 @@ $(document).ready(function(){
 });
 
 var API = '../../src/store/VendorAudit_API.php';
-var META = null, ROWS = [], PERMS = null;
+var META = null, TARGETS = [], PERMS = null, POOL = [];
 var canView = <?= $perms['canView'] ? 'true' : 'false' ?>;
 var RESULT_LABEL = {pass:'合格', conditional:'限期改善', fail:'不合格'};
-var STATUS_LABEL = {overdue:'逾期', soon:'即將到期', ok:'正常', nobaseline:'未設基準', unmanaged:'未納管'};
 
 function closeMask(id){ document.getElementById(id).style.display='none'; }
 function openMask(id){ document.getElementById(id).style.display='block'; }
@@ -259,158 +297,203 @@ function loadMeta(cb){
         for (var y=cy+1; y>=cy-4; y--) $y.append('<option value="'+y+'">'+y+'</option>');
         $y.val(cy);
         $('#halfSel').val(m.cur_half);
+        var opt = '<option value="">全部</option>';
+        m.main_categories.forEach(function(c){ opt += '<option value="'+c.main_cat_id+'">'+esc(c.main_cat_name)+'</option>'; });
+        $('#pkMain').html(opt);
+        if (m.perms.canEdit) $('#btnPick').show();
+        if (m.perms.canAdmin){ $('#btnCycle').show(); $('#pkManageGrp').show(); }
         if (cb) cb();
     });
 }
 
-function loadList(){
+function loadRound(){
     NProgress.start();
-    $.getJSON(API, {action:'list', year:$('#yearSel').val(), half:$('#halfSel').val()}, function(res){
+    $.getJSON(API, {action:'round', year:$('#yearSel').val(), half:$('#halfSel').val()}, function(res){
         NProgress.done();
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
-        ROWS = res.rows; PERMS = res.perms;
-        renderStat(res);
-        renderTable();
+        TARGETS = res.targets; PERMS = res.perms;
+        renderStat(res); renderRemind(res); renderTargets();
     }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
 function renderStat(res){
     var lab = res.year+' '+(res.half===1?'上半年':'下半年');
-    $('#stDen').text(res.stat.den);
-    $('#stNum').text(res.stat.num);
+    $('#stDen').text(res.stat.den); $('#stNum').text(res.stat.num);
     var $r = $('#stRate');
-    if (res.stat.value === null){ $r.text('—').removeClass('below ok'); $('#stHint').text(lab+' 無應稽核廠商'); }
-    else {
-        var v = Math.round(res.stat.value*10)/10;
+    if (res.stat.value === null){ $r.text('—').removeClass('below ok'); $('#stHint').text(lab+(res.round_exists?'：尚無對象或全為停用':'：本期尚未建立')); }
+    else { var v = Math.round(res.stat.value*10)/10;
         $r.text(v+'%').toggleClass('below', v<70).toggleClass('ok', v>=70);
-        $('#stHint').text(lab+'：'+res.stat.num+' / '+res.stat.den+' 按時完成');
-    }
+        $('#stHint').text(lab+'：'+res.stat.num+' / '+res.stat.den+' 已完成'); }
+}
+function renderRemind(res){
+    var h = '共用稽核週期：<b>'+res.cycle_months+'</b> 月';
+    if (res.last_round) h += '　｜　最近一期：'+res.last_round.year+' '+(res.last_round.half==1?'上半年':'下半年');
+    $('#remind').html(h);
 }
 
-function statPill(s){ return '<span class="st-pill st-'+s+'">'+(STATUS_LABEL[s]||s)+'</span>'; }
-
-function renderTable(){
-    var stt = $('#statSel').val(), kw = $.trim($('#kwSel').val()).toLowerCase();
+function renderTargets(){
     var html = '';
-    ROWS.forEach(function(r){
-        if (stt === 'managed' && r.audit_managed!==1) return;
-        if (stt && stt!=='managed' && r.status!==stt) return;
-        if (kw && (String(r.maker_id).toLowerCase().indexOf(kw)<0 && String(r.maker_id_no).toLowerCase().indexOf(kw)<0)) return;
-        var last = r.last ? (fmtDate(r.last.audit_date)+'（'+(RESULT_LABEL[r.last.result]||r.last.result)+'）') : '—';
-        html += '<tr>';
-        html += '<td>'+esc(r.maker_id_no)+'</td>';
-        html += '<td class="t-left"><b>'+esc(r.maker_id||'')+'</b></td>';
-        html += '<td>'+(r.audit_cycle_months==null?'—':r.audit_cycle_months)+'</td>';
-        html += '<td>'+(fmtDate(r.audit_next_due)||'—')+'</td>';
-        html += '<td>'+statPill(r.status)+'</td>';
-        html += '<td>'+last+'</td>';
-        html += '<td class="'+(r.audit_managed===1?'managed-yes':'managed-no')+'">'+(r.audit_managed===1?'✔ 是':'否')+'</td>';
+    TARGETS.forEach(function(t){
+        var done = !!t.audit_date;
+        var stat = t.disabled ? '<span class="st-pill st-dis">停用</span>'
+                 : (done ? '<span class="st-pill st-done">已完成</span>' : '<span class="st-pill st-todo">未稽核</span>');
+        html += '<tr'+(t.disabled?' class="dis"':'')+'>';
+        html += '<td>'+esc(t.maker_id_no)+'</td>';
+        html += '<td class="t-left"><b>'+esc(t.maker_id||'')+'</b></td>';
+        html += '<td>'+esc(t.main_cat_name||'—')+'</td>';
+        html += '<td>'+stat+'</td>';
+        html += '<td>'+(fmtDate(t.audit_date)||'—')+'</td>';
+        html += '<td class="'+(t.result?'rs-'+t.result:'')+'">'+(t.result?(RESULT_LABEL[t.result]||t.result):'—')+'</td>';
+        html += '<td>'+(t.score==null?'—':t.score)+'</td>';
+        html += '<td>'+esc(t.auditor||'—')+'</td>';
         html += '<td>';
-        html += PERMS.canEdit ? '<span class="va-op" onclick="openRec(\''+esc(r.maker_id_no)+'\')"><i class="fa fa-pencil"></i>登錄</span>' : '';
-        html += PERMS.canAdmin ? '<span class="va-op" onclick="openSet(\''+esc(r.maker_id_no)+'\')"><i class="fa fa-gear"></i>設定</span>' : '';
-        html += '<span class="va-op" onclick="openHis(\''+esc(r.maker_id_no)+'\')"><i class="fa fa-history"></i>歷史</span>';
-        if (!PERMS.canEdit && !PERMS.canAdmin) {}
+        if (PERMS.canEdit) html += '<span class="va-op" onclick="openRec('+t.target_id+')"><i class="fa fa-pencil"></i>登錄</span>';
+        html += '<span class="va-op" onclick="openHis(\''+esc(t.maker_id_no)+'\')"><i class="fa fa-history"></i>歷史</span>';
+        if (PERMS.canEdit) html += '<span class="va-op" style="color:#DD5138;" onclick="removeTarget('+t.target_id+')"><i class="fa fa-times"></i>移除</span>';
         html += '</td></tr>';
     });
-    $('#vaBody').html(html || '<tr><td colspan="8" style="padding:16px;color:#8a6d45;">無符合條件的廠商</td></tr>');
+    $('#vaBody').html(html || '<tr><td colspan="9" style="padding:16px;color:#8a6d45;">本期尚無稽核對象，請按「加入稽核對象」挑選</td></tr>');
 }
 
-$('#statSel').on('change', renderTable);
-$('#kwSel').on('input', renderTable);
-$('#yearSel,#halfSel').on('change', loadList);
+$('#yearSel,#halfSel').on('change', loadRound);
 
-function findRow(mid){ return ROWS.find(function(x){ return x.maker_id_no===mid; }); }
+/* ---------- 廠商池挑選 ---------- */
+$('#btnPick').on('click', function(){
+    $('#pkTitle').text('加入稽核對象（'+$('#yearSel').val()+' '+($('#halfSel').val()==1?'上半年':'下半年')+'）');
+    $('#pkBody').html('<tr><td colspan="5" style="padding:14px;color:#8a6d45;">請設定條件後查詢</td></tr>');
+    $('#pkCount').text(''); $('#pkAll').prop('checked', false);
+    openMask('pkMask');
+    loadPool();
+});
+$('#pkMain').on('change', function(){
+    var mc = $(this).val();
+    var $s = $('#pkSub').html('<option value="">全部</option>');
+    if (mc){ $.getJSON(API, {action:'subcats', main_cat_id:mc}, function(res){
+        if (res.ok) res.subcats.forEach(function(s){ $s.append('<option value="'+s.sub_cat_id+'">'+esc(s.sub_cat_name)+'</option>'); });
+    }); }
+    loadPool();
+});
+$('#pkSub,#pkManagedOnly').on('change', loadPool);
+$('#pkKw').on('keydown', function(e){ if (e.key==='Enter') loadPool(); });
+$('#pkAll').on('change', function(){ $('#pkBody input.pk-ck').prop('checked', this.checked); });
+
+function loadPool(){
+    NProgress.start();
+    $.getJSON(API, {action:'pool', year:$('#yearSel').val(), half:$('#halfSel').val(),
+        main_cat_id:$('#pkMain').val()||0, sub_cat_id:$('#pkSub').val()||0,
+        kw:$('#pkKw').val(), managed_only:$('#pkManagedOnly').is(':checked')?1:0}, function(res){
+        NProgress.done();
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        POOL = res.pool;
+        $('#pkCount').text('符合 '+POOL.length+' 家'+(res.capped?'（僅顯示前 500，請縮小條件）':''));
+        var html = '';
+        POOL.forEach(function(p){
+            html += '<tr>';
+            html += '<td><input type="checkbox" class="pk-ck" value="'+esc(p.maker_id_no)+'"></td>';
+            html += '<td>'+esc(p.maker_id_no)+'</td>';
+            html += '<td class="t-left">'+esc(p.maker_id||'')+'</td>';
+            html += '<td>'+esc(p.main_cat_name||'—')+'</td>';
+            html += '<td class="'+(p.audit_managed===1?'mg-yes':'mg-no')+'">'+(p.audit_managed===1?'✔':'—')+'</td>';
+            html += '</tr>';
+        });
+        $('#pkBody').html(html || '<tr><td colspan="5" style="padding:14px;color:#8a6d45;">無符合條件的廠商</td></tr>');
+        $('#pkAll').prop('checked', false);
+    }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function pkChecked(){ return $('#pkBody input.pk-ck:checked').map(function(){ return this.value; }).get(); }
+
+function addSelected(){
+    var ids = pkChecked();
+    if (!ids.length){ alert('請勾選要加入的廠商'); return; }
+    $.post(API, {action:'add_targets', year:$('#yearSel').val(), half:$('#halfSel').val(), maker_ids:ids.join(',')},
+    function(res){
+        if (!res.ok){ alert(res.error||'加入失敗'); return; }
+        alert('已加入 '+res.added+' 家'); loadPool(); loadRound();
+    }, 'json').fail(function(x){ alert('加入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function randomDraw(){
+    var n = parseInt($('#pkRandN').val(),10);
+    if (!n || n<1){ alert('請輸入抽取家數'); return; }
+    $.post(API, {action:'random_targets', year:$('#yearSel').val(), half:$('#halfSel').val(), n:n,
+        main_cat_id:$('#pkMain').val()||0, sub_cat_id:$('#pkSub').val()||0}, function(res){
+        if (!res.ok){ alert(res.error||'抽取失敗'); return; }
+        alert('已隨機加入 '+res.added+' 家'+(res.note?'\n'+res.note:'')); loadPool(); loadRound();
+    }, 'json').fail(function(x){ alert('抽取失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function bulkManaged(v){
+    var ids = pkChecked();
+    if (!ids.length){ alert('請勾選廠商'); return; }
+    $.post(API, {action:'set_managed', maker_ids:ids.join(','), managed:v}, function(res){
+        if (!res.ok){ alert(res.error||'設定失敗'); return; }
+        loadPool();
+    }, 'json').fail(function(x){ alert('設定失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
 
 /* ---------- 登錄稽核 ---------- */
-var recMk = null;
-function openRec(mid){
-    recMk = findRow(mid);
-    $('#recTitle').text('登錄稽核：'+recMk.maker_id+'（'+recMk.maker_id_no+'）');
-    $('#recInfo').html('目前下次應稽核日：<b>'+(fmtDate(recMk.audit_next_due)||'（未設定）')+'</b>　週期：'
-        +(recMk.audit_cycle_months==null?'（未設）':recMk.audit_cycle_months+' 月'));
-    $('#recDate').val(META.today);
-    $('#recResult').val('pass'); $('#recScore').val(''); $('#recAuditor').val(''); $('#recReport').val(''); $('#recNote').val('');
-    updateRoll(); openMask('recMask');
+var recTid = null;
+function openRec(tid){
+    var t = TARGETS.find(function(x){ return x.target_id===tid; });
+    recTid = tid;
+    $('#recTitle').text('登錄稽核：'+t.maker_id+'（'+t.maker_id_no+'）');
+    $('#recDate').val(fmtDate(t.audit_date));
+    $('#recResult').val(t.result||'');
+    $('#recScore').val(t.score==null?'':t.score);
+    $('#recAuditor').val(t.auditor||''); $('#recReport').val(t.report_no||''); $('#recNote').val(t.note||'');
+    openMask('recMask');
     setTimeout(function(){ $('#recDate').focus(); }, 100);
 }
-function updateRoll(){
-    var cyc = recMk.audit_cycle_months, d = $('#recDate').val();
-    if (cyc==null || !d){ $('#recRoll').text(''); return; }
-    var dt = new Date(d); dt.setMonth(dt.getMonth()+parseInt(cyc,10));
-    $('#recRoll').text('登錄後下次應稽核日將前滾為約 '+dt.toISOString().substr(0,10)+'（依週期 '+cyc+' 月）');
-}
-$('#recDate').on('change', updateRoll);
 function submitRec(){
-    if (!$('#recDate').val()){ alert('請選擇稽核日'); return; }
-    $.post(API, {action:'record_audit', maker_id_no:recMk.maker_id_no, audit_date:$('#recDate').val(),
+    $.post(API, {action:'record_target', target_id:recTid, audit_date:$('#recDate').val(),
         result:$('#recResult').val(), score:$('#recScore').val(), auditor:$('#recAuditor').val(),
         report_no:$('#recReport').val(), note:$('#recNote').val()}, function(res){
-        if (!res.ok){ alert(res.error||'登錄失敗'); return; }
-        closeMask('recMask'); loadList();
-    }, 'json').fail(function(x){ alert('登錄失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        closeMask('recMask'); loadRound();
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function removeTarget(tid){
+    if (!confirm('將此廠商移出本期稽核對象？')) return;
+    $.post(API, {action:'remove_target', target_id:tid}, function(res){
+        if (!res.ok){ alert(res.error||'移除失敗'); return; }
+        loadRound();
+    }, 'json');
 }
 
-/* ---------- 設定 ---------- */
-var setMk = null;
-function openSet(mid){
-    setMk = findRow(mid);
-    $('#setTitle').text('稽核設定：'+setMk.maker_id);
-    $('#setCycle').val(setMk.audit_cycle_months==null?'':setMk.audit_cycle_months);
-    $('#setBase').val(fmtDate(setMk.audit_next_due));
-    $('#setManaged').val(String(setMk.audit_managed));
-    openMask('setMask');
-}
-function submitSet(){
-    $.post(API, {action:'save_vendor', maker_id_no:setMk.maker_id_no, cycle:$('#setCycle').val(),
-        managed:$('#setManaged').val(), baseline_due:$('#setBase').val()}, function(res){
+/* ---------- 週期設定 ---------- */
+$('#btnCycle').on('click', function(){ $('#cycVal').val(META.cycle_months); openMask('cycMask'); });
+function submitCycle(){
+    $.post(API, {action:'save_cycle', cycle_months:$('#cycVal').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        closeMask('setMask'); loadList();
-    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+        META.cycle_months = res.cycle_months; closeMask('cycMask'); loadRound();
+    }, 'json');
 }
 
 /* ---------- 歷史 ---------- */
 function openHis(mid){
-    $.getJSON(API, {action:'history', maker_id_no:mid}, function(res){
+    $.getJSON(API, {action:'vendor_history', maker_id_no:mid}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
-        $('#hisTitle').text('稽核歷史：'+res.maker.maker_id+'（'+res.maker.maker_id_no+'）');
+        $('#hisTitle').text('稽核歷史：'+res.maker_name+'（'+mid+'）');
         if (!res.list.length){ $('#hisBody').html('<div style="color:#8a6d45;padding:12px;">尚無稽核紀錄</div>'); openMask('hisMask'); return; }
-        var h = '<table class="hist"><thead><tr><th>應稽核到期</th><th>稽核日</th><th>按時</th><th>結果</th><th>分數</th>'
-              + '<th>稽核人員</th><th>報告編號</th><th>下次到期</th><th>登錄者</th>'+(res.can_delete?'<th></th>':'')+'</tr></thead><tbody>';
+        var h = '<table class="hist"><thead><tr><th>期別</th><th>稽核日</th><th>結果</th><th>分數</th><th>稽核人員</th><th>報告編號</th><th>備註</th></tr></thead><tbody>';
         res.list.forEach(function(a){
-            var ontime = (a.due_date && a.audit_date) ? (fmtDate(a.audit_date)<=fmtDate(a.due_date)) : null;
-            h += '<tr>';
-            h += '<td>'+(fmtDate(a.due_date)||'—')+'</td>';
-            h += '<td>'+fmtDate(a.audit_date)+'</td>';
-            h += '<td>'+(ontime===null?'—':(ontime?'<span style="color:#8A5A2B;">按時</span>':'<span style="color:#DD5138;">逾期</span>'))+'</td>';
-            h += '<td class="rs-'+a.result+'">'+(RESULT_LABEL[a.result]||a.result)+'</td>';
-            h += '<td>'+(a.score==null?'—':a.score)+'</td>';
-            h += '<td>'+esc(a.auditor||'—')+'</td>';
-            h += '<td>'+esc(a.report_no||'—')+'</td>';
-            h += '<td>'+(fmtDate(a.next_due)||'—')+'</td>';
-            h += '<td>'+esc(a.created_by_name||'')+'</td>';
-            if (res.can_delete) h += '<td><span class="va-op" style="color:#DD5138;" onclick="delAudit('+a.audit_id+')"><i class="fa fa-trash"></i></span></td>';
-            h += '</tr>';
+            h += '<tr><td>'+a.year+' '+(a.half==1?'上半年':'下半年')+'</td>';
+            h += '<td>'+(fmtDate(a.audit_date)||'未稽核')+'</td>';
+            h += '<td class="'+(a.result?'rs-'+a.result:'')+'">'+(a.result?(RESULT_LABEL[a.result]||a.result):'—')+'</td>';
+            h += '<td>'+(a.score==null?'—':a.score)+'</td><td>'+esc(a.auditor||'—')+'</td>';
+            h += '<td>'+esc(a.report_no||'—')+'</td><td>'+esc(a.note||'—')+'</td></tr>';
         });
         h += '</tbody></table>';
         $('#hisBody').html(h); openMask('hisMask');
     });
 }
-function delAudit(aid){
-    if (!confirm('刪除此稽核紀錄？（將依剩餘紀錄修復下次應稽核日）')) return;
-    $.post(API, {action:'delete_audit', audit_id:aid}, function(res){
-        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
-        closeMask('hisMask'); loadList();
-    }, 'json');
-}
 
 /* ---------- CSV ---------- */
 $('#btnCsv').on('click', function(){
-    var rows = [['廠商編號','廠商名稱','週期(月)','下次應稽核日','狀態','最近稽核日','最近結果','納入管理']];
-    ROWS.forEach(function(r){
-        rows.push([r.maker_id_no, r.maker_id||'', r.audit_cycle_months==null?'':r.audit_cycle_months,
-            fmtDate(r.audit_next_due), STATUS_LABEL[r.status]||r.status,
-            r.last?fmtDate(r.last.audit_date):'', r.last?(RESULT_LABEL[r.last.result]||r.last.result):'',
-            r.audit_managed===1?'是':'否']);
+    var rows = [['廠商編號','廠商名稱','大類','稽核狀態','稽核日','結果','分數','稽核人員','報告編號','備註']];
+    TARGETS.forEach(function(t){
+        rows.push([t.maker_id_no, t.maker_id||'', t.main_cat_name||'',
+            t.disabled?'停用':(t.audit_date?'已完成':'未稽核'), fmtDate(t.audit_date),
+            t.result?(RESULT_LABEL[t.result]||t.result):'', t.score==null?'':t.score,
+            t.auditor||'', t.report_no||'', t.note||'']);
     });
     var csv = '﻿' + rows.map(function(l){
         return l.map(function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; }).join(',');
@@ -426,7 +509,7 @@ $('.va-mask').on('click', function(e){ if (e.target===this) this.style.display='
 $(document).on('focus', '.va-modal input[type=text], .va-modal input[type=number]', function(){ this.select(); });
 $(document).on('dblclick', '.va-modal input[type=text], .va-modal input[type=number]', function(){ this.value=''; });
 
-if (canView) loadMeta(function(){ loadList(); });
+if (canView) loadMeta(function(){ loadRound(); });
 </script>
 </body>
 </html>

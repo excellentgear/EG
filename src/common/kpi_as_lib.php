@@ -219,7 +219,7 @@ function kpi_as_seed_indicators(PDO $db): void {
         [3,'月銷貨額達成率','合約訂單審查管理程序','出貨金額/月銷貨目標金額','monthly','percent','gte',85,'%','達成率大於85％',111030101,'吳仁隆/業務課','auto','shipping_target_amount',['monthly_targets'=>['v'=>new stdClass(),'fe'=>0]]],
         [4,'報價單接單率','合約訂單審查管理程序','報價轉訂單數/報價單總數','monthly','percent','gte',70,'%','大於70％',111030101,'吳仁隆/業務課','auto','quote_to_order',['exclude_draft'=>['v'=>1,'fe'=>0]]],
         [5,'客戶滿意度調查','客戶服務管理程序','客戶滿意度調查平均分數','yearly','score','gte',8,'分','大於8分',111030101,'吳仁隆/業務課','manual',null,[]],
-        [6,'廠商稽核按時執行率','供應商管理程序','實際稽核廠商數/當月應稽核廠商總數','halfyear','percent','gte',70,'%','達成率大於70％',109110201,'何沐桐/生管組','auto','vendor_audit_ontime',['grace_days'=>['v'=>0,'fe'=>1]]],
+        [6,'廠商稽核按時執行率','供應商管理程序','實際稽核廠商數/當月應稽核廠商總數','halfyear','percent','gte',70,'%','達成率大於70％',109110201,'何沐桐/生管組','auto','vendor_audit_ontime',[]],
         [7,'廠商準時交貨率','供應商管理程序 採購管理辦法','每月達交工單筆數/每月工單應交總筆數','monthly','percent','gte',70,'%','達成率大於70％',109110201,'何沐桐/生管組','auto','vendor_ontime',['default_days'=>['v'=>7,'fe'=>1],'days_by_process_type'=>['v'=>new stdClass(),'fe'=>0]]],
         [8,'準時出貨率','客戶服務管理程序 生產管理程序','及時交貨訂單筆數/總訂單出貨筆數','monthly','percent','gte',80,'%','達成率大於80％',109110201,'何沐桐/生管組','auto','order_ontime',['exclude_clients'=>['v'=>['寶嘉誠','泳建'],'fe'=>1]]],
         [9,'發料錯誤件數','生產管理程序 採購管理辦法','當月發料錯誤件數','monthly','count','lte',5,'件','少於5件',111050101,'陳彦驊/倉管組','manual',null,[]],
@@ -490,10 +490,8 @@ function kpi_as_registry(): array {
         'vendor_audit_ontime' => [
             'name' => '廠商稽核按時執行率',
             'page' => '供應商稽核管理 views/pm/vendor_audit.php',
-            'desc' => '半年結算(6/12月)：分母=該半年應稽核廠商(已完成紀錄到期＋尚待完成到期)；分子=其中按時完成(稽核日≤到期日+寬限)者',
-            'params' => [
-                ['key'=>'grace_days','label'=>'按時寬限天數(0=須到期日前完成)','type'=>'int','fe'=>1],
-            ]],
+            'desc' => '半年批次(6=上半年/12=下半年)：分母=該期稽核對象數(排除停用廠商)；分子=其中已完成稽核(有稽核日)者',
+            'params' => []],
     ];
 }
 

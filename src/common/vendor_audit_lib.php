@@ -1,49 +1,64 @@
 <?php
 /**
- * 供應商稽核管理 —— 共用函式庫
- * 對應 KPI 2-GM-04-01 第6項「廠商稽核按時執行率」= 該半年實際稽核廠商數 / 應稽核廠商數
+ * 供應商稽核管理 —— 共用函式庫（稽核批次模型）
+ * 對應 KPI 2-GM-04-01 第6項「廠商稽核按時執行率」= 該期實際稽核家數 / 該期應稽核家數
  * 頻率半年（6/12月結算：6月=上半年、12月=下半年）
  *
- * 資料模型（排程+紀錄合一，主檔週期自動推算，比照量測儀器校驗）：
- *   - 廠商主檔沿用 maker_list，僅加欄：
- *       audit_cycle_months  稽核週期(月)
- *       audit_managed       納入稽核管理(KPI計算)
- *       audit_next_due      下次應稽核日
- *   - vendor_audit：每列＝某廠商一次稽核週期的完成紀錄
- *       due_date 該次應稽核到期日(按時判定基準)；audit_date 實際稽核日；
- *       next_due 完成後推算的下次到期(= audit_date + 週期)
+ * 模型（每期挑一批對象）：
+ *   - 每期 = (年, 上/下半年) 一列 vendor_audit_round
+ *   - 該期稽核對象 = vendor_audit_target（可手動多選/隨機抽取加入；audit_date=NULL 未稽核）
+ *   - 廠商是否需稽核 = maker_list.audit_managed（有些廠商不需稽核=0）
+ *   - 大類=maker_list.main_category_id、加工項目(小類)=maker_sub_category_mapping（比照 master_data 廠商分頁）
+ *   - master_data 設「停用」(maker_list.status='停用')者：頁面灰底、不可加入、隨機排除、不列入 KPI
+ *   - 稽核週期(月)=全域共用設定(system_settings vendor_audit_cycle_months,預設6)，僅作參考/提醒
+ *
+ * KPI：den=該期對象數(排除停用)；num=其中已稽核(audit_date 非空)者。
  */
+
+// maker_list.status='X' 代表停用（比照 master_data 廠商分頁：讀取一律 status<>'X'）
+const VENDOR_AUDIT_DISABLED = 'X';
 
 /* ============================================================
  * Schema
  * ============================================================ */
 function vendor_audit_ensure_schema(PDO $db): void {
+    // maker_list：納入稽核管理旗標（cycle/next_due 舊欄位保留但改由批次模型，不再使用）
     foreach ([
-        "ALTER TABLE maker_list ADD COLUMN audit_cycle_months INT NULL COMMENT '稽核週期(月)'",
-        "ALTER TABLE maker_list ADD COLUMN audit_managed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '納入稽核管理(KPI計算)'",
-        "ALTER TABLE maker_list ADD COLUMN audit_next_due DATE NULL COMMENT '下次應稽核日'",
+        "ALTER TABLE maker_list ADD COLUMN audit_managed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '納入稽核管理(需被稽核)'",
+        "ALTER TABLE maker_list ADD COLUMN audit_cycle_months INT NULL COMMENT '(保留,改用全域週期)'",
+        "ALTER TABLE maker_list ADD COLUMN audit_next_due DATE NULL COMMENT '(保留,改用批次模型)'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
     }
 
-    $db->exec("CREATE TABLE IF NOT EXISTS vendor_audit (
-        audit_id INT AUTO_INCREMENT PRIMARY KEY,
-        maker_id_no VARCHAR(11) NOT NULL COMMENT '對應 maker_list.maker_id_no',
-        due_date DATE NULL COMMENT '本次應稽核到期日(按時判定基準)',
-        audit_date DATE NOT NULL COMMENT '實際稽核日',
-        result VARCHAR(12) NOT NULL DEFAULT 'pass' COMMENT 'pass=合格 conditional=限期改善 fail=不合格',
-        score INT NULL COMMENT '稽核分數',
-        auditor VARCHAR(50) NULL COMMENT '稽核人員',
-        report_no VARCHAR(50) NULL COMMENT '稽核報告編號',
-        next_due DATE NULL COMMENT '完成後推算的下次到期(= audit_date + 週期)',
+    $db->exec("CREATE TABLE IF NOT EXISTS vendor_audit_round (
+        round_id INT AUTO_INCREMENT PRIMARY KEY,
+        year INT NOT NULL,
+        half TINYINT NOT NULL COMMENT '1=上半年 2=下半年',
         note VARCHAR(200) NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         created_by INT NULL,
         created_by_name VARCHAR(50) NULL,
-        KEY idx_maker (maker_id_no),
-        KEY idx_due (due_date),
-        KEY idx_audit (audit_date)
-    ) DEFAULT CHARSET=utf8mb4 COMMENT='供應商稽核紀錄(排程+完成合一)'");
+        UNIQUE KEY uq_period (year, half)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='供應商稽核期(每半年一期)'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS vendor_audit_target (
+        target_id INT AUTO_INCREMENT PRIMARY KEY,
+        round_id INT NOT NULL,
+        maker_id_no VARCHAR(11) NOT NULL,
+        audit_date DATE NULL COMMENT '實際稽核日(NULL=未稽核)',
+        result VARCHAR(12) NULL COMMENT 'pass=合格 conditional=限期改善 fail=不合格',
+        score INT NULL,
+        auditor VARCHAR(50) NULL,
+        report_no VARCHAR(50) NULL,
+        note VARCHAR(200) NULL,
+        added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        added_by INT NULL,
+        added_by_name VARCHAR(50) NULL,
+        UNIQUE KEY uq_rt (round_id, maker_id_no),
+        KEY idx_round (round_id),
+        KEY idx_maker (maker_id_no)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='供應商稽核期對象+執行紀錄'");
 
     foreach ([['vendor_audit_view','稽核檢閱'],['vendor_audit_edit','稽核登錄'],['vendor_audit_admin','稽核管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='vendor_audit' LIMIT 1");
@@ -97,70 +112,58 @@ function vendor_audit_perms(PDO $db, ?array $u): array {
 }
 
 /* ============================================================
- * 工具
+ * 全域設定（system_settings）
  * ============================================================ */
-function vendor_audit_add_months(string $date, int $months): ?string {
-    $t = strtotime(substr($date, 0, 10));
-    if ($t === false || $months <= 0) return null;
-    $y = (int)date('Y', $t); $m = (int)date('n', $t); $d = (int)date('j', $t);
-    $m += $months;
-    $y += intdiv($m - 1, 12);
-    $m = (($m - 1) % 12) + 1;
-    $last = (int)date('t', mktime(0,0,0,$m,1,$y));
-    if ($d > $last) $d = $last;
-    return sprintf('%04d-%02d-%02d', $y, $m, $d);
+function vendor_audit_cycle_months(PDO $db): int {
+    try {
+        $st = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key='vendor_audit_cycle_months' LIMIT 1");
+        $st->execute();
+        $v = (int)$st->fetchColumn();
+        return $v > 0 ? $v : 6;
+    } catch (Throwable $e) { return 6; }
 }
-
-function vendor_audit_status(array $v, int $warnDays = 60): string {
-    if ((int)$v['audit_managed'] !== 1) return 'unmanaged';
-    $due = $v['audit_next_due'] ?? null;
-    if (!$due) return 'nobaseline';
-    $today = strtotime(date('Y-m-d'));
-    $dt = strtotime($due);
-    if ($dt < $today) return 'overdue';
-    if ($dt <= $today + $warnDays * 86400) return 'soon';
-    return 'ok';
+function vendor_audit_set_cycle(PDO $db, int $months): void {
+    $months = $months > 0 ? $months : 6;
+    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('vendor_audit_cycle_months', ?)
+                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+    $st->execute([(string)$months]);
 }
 
 /* ============================================================
- * KPI 第6項計算：廠商稽核按時執行率（半年結算，供 kpi_as_lib compute 呼叫）
- * month≤6 → 上半年窗 [Y-01-01,Y-06-30]；否則下半年窗 [Y-07-01,Y-12-31]
+ * 期別輔助
+ * ============================================================ */
+function vendor_audit_round_id(PDO $db, int $year, int $half, bool $create = false, ?array $u = null): ?int {
+    $st = $db->prepare("SELECT round_id FROM vendor_audit_round WHERE year=? AND half=? LIMIT 1");
+    $st->execute([$year, $half]);
+    $rid = $st->fetchColumn();
+    if ($rid !== false) return (int)$rid;
+    if (!$create) return null;
+    $ins = $db->prepare("INSERT INTO vendor_audit_round (year, half, created_by, created_by_name) VALUES (?,?,?,?)");
+    $ins->execute([$year, $half, $u ? (int)$u['id'] : null, $u ? (string)$u['user_cname'] : null]);
+    return (int)$db->lastInsertId();
+}
+
+/* ============================================================
+ * KPI 第6項計算：廠商稽核按時執行率（半年批次，供 kpi_as_lib compute 呼叫）
+ * month≤6→上半年、否則下半年；den=該期對象(排除停用)，num=已稽核
  * ============================================================ */
 function vendor_audit_kpi_compute(PDO $db, int $year, int $month, array $params): ?array {
     try {
-        if (!$db->query("SHOW TABLES LIKE 'vendor_audit'")->fetchColumn())
+        if (!$db->query("SHOW TABLES LIKE 'vendor_audit_target'")->fetchColumn())
             return ['num'=>0, 'den'=>0, 'value'=>null];
     } catch (Throwable $e) { return ['num'=>0, 'den'=>0, 'value'=>null]; }
 
-    $g = $params['grace_days'] ?? 0;
-    if (is_array($g)) $g = $g['v'] ?? 0;
-    $grace = is_numeric($g) ? max(0, (int)$g) : 0;
+    $half = $month <= 6 ? 1 : 2;
+    $rid = vendor_audit_round_id($db, $year, $half, false);
+    if ($rid === null) return ['num'=>0, 'den'=>0, 'value'=>null];
 
-    if ($month <= 6) { $ws = sprintf('%04d-01-01', $year); $we = sprintf('%04d-06-30', $year); }
-    else             { $ws = sprintf('%04d-07-01', $year); $we = sprintf('%04d-12-31', $year); }
-
-    // (1) 已完成紀錄：到期日落在半年窗者
-    $st = $db->prepare("SELECT a.due_date, a.audit_date
-                        FROM vendor_audit a
-                        JOIN maker_list mk ON mk.maker_id_no=a.maker_id_no
-                        WHERE mk.audit_managed=1 AND a.due_date IS NOT NULL
-                          AND a.due_date BETWEEN ? AND ?");
-    $st->execute([$ws, $we]);
-    $den = 0; $num = 0;
-    while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
-        $den++;
-        $limit = $grace > 0 ? date('Y-m-d', strtotime($r['due_date'] . " +$grace days")) : $r['due_date'];
-        if (!empty($r['audit_date']) && substr($r['audit_date'], 0, 10) <= $limit) $num++;
-    }
-
-    // (2) 尚待完成的到期（主檔 audit_next_due 落在半年窗且尚無對應完成紀錄）
-    $st = $db->prepare("SELECT COUNT(*) FROM maker_list mk
-                        WHERE mk.audit_managed=1 AND mk.audit_next_due IS NOT NULL
-                          AND mk.audit_next_due BETWEEN ? AND ?
-                          AND NOT EXISTS (SELECT 1 FROM vendor_audit a
-                                          WHERE a.maker_id_no=mk.maker_id_no AND a.due_date=mk.audit_next_due)");
-    $st->execute([$ws, $we]);
-    $den += (int)$st->fetchColumn();
-
+    $st = $db->prepare("SELECT COUNT(*) den, SUM(t.audit_date IS NOT NULL) num
+                        FROM vendor_audit_target t
+                        JOIN maker_list mk ON mk.maker_id_no=t.maker_id_no
+                        WHERE t.round_id=? AND (mk.status IS NULL OR mk.status<>?)");
+    $st->execute([$rid, VENDOR_AUDIT_DISABLED]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    $den = (int)($r['den'] ?? 0);
+    $num = (int)($r['num'] ?? 0);
     return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];
 }
