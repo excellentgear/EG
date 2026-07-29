@@ -37,6 +37,17 @@ function tc_get_tool(PDO $db, int $tid): ?array {
     return $st->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 
+/** 類別守門：不需校驗／不可設編號的類別不得掛量具編號（fail-closed，找不到類別直接擋） */
+function tc_assert_category_usable(PDO $db, string $catId): void {
+    $st = $db->prepare("SELECT QC_Tool, COALESCE(calib_required,1) AS req, COALESCE(has_tool_no,1) AS hasno
+                        FROM qc_tool_list WHERE QC_Tool_List_id=? LIMIT 1");
+    $st->execute([$catId]);
+    $c = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$c) jerr('找不到量具類別');
+    if ((int)$c['hasno'] !== 1) jerr('類別「'.$c['QC_Tool'].'」已設為不可設定量具編號（僅為檢驗方式），請改選其他類別');
+    if ((int)$c['req'] !== 1) jerr('類別「'.$c['QC_Tool'].'」已設為不需校驗，不能在本頁建立/移入量具');
+}
+
 /** 依現有紀錄重算某支量具的下次應校驗日（刪除紀錄後修復用） */
 function tc_recompute_due(PDO $db, int $tid): void {
     $st = $db->prepare("SELECT next_due, due_date FROM qc_tool_calibration
@@ -53,9 +64,7 @@ switch ($action) {
 
 /* ---------- 基本資訊 ---------- */
 case 'meta': {
-    $cats = $db->query("SELECT QC_Tool_List_id, QC_Tool FROM qc_tool_list ORDER BY sort_order, QC_Tool_List_id")
-               ->fetchAll(PDO::FETCH_ASSOC);
-    jout(['perms'=>$perms, 'categories'=>$cats,
+    jout(['perms'=>$perms, 'categories'=>tool_calib_categories($db),
           'cur_ym'=>date('Y-m'), 'today'=>date('Y-m-d')]);
 }
 
@@ -67,7 +76,9 @@ case 'list': {
 
     $st = $db->query("SELECT t.Tool_id, t.Tool_No, t.QC_Tool_List_id, t.calibration_due,
                              t.calib_cycle_months, t.calib_managed, t.calib_method,
-                             l.QC_Tool AS category_name
+                             l.QC_Tool AS category_name,
+                             COALESCE(l.calib_required,1) AS cat_required,
+                             COALESCE(l.calib_tab,0)      AS cat_tab
                       FROM qc_tool t LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=t.QC_Tool_List_id
                       ORDER BY t.calib_managed DESC, t.calibration_due IS NULL, t.calibration_due ASC, t.Tool_No ASC");
     $tools = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -81,36 +92,44 @@ case 'list': {
         $last[(int)$r['Tool_id']] = $r;
     }
 
-    $rows = [];
+    // 類別設「不需校驗」者（例如「目視」＝檢驗方式非量具）不列入本頁與 KPI，只回報筆數提示
+    $rows = []; $excluded = 0;
     foreach ($tools as $t) {
+        if ((int)$t['cat_required'] !== 1) { $excluded++; continue; }
         $t['calib_managed'] = (int)$t['calib_managed'];
+        $t['cat_tab'] = (int)$t['cat_tab'];
         $t['status'] = tool_calib_status($t);
         $t['last'] = $last[(int)$t['Tool_id']] ?? null;
         $rows[] = $t;
     }
 
     $stat = tool_calib_kpi_compute($db, $y, $m, []);
-    jout(['rows'=>$rows, 'ym'=>$ym, 'stat'=>$stat, 'perms'=>$perms]);
+    jout(['rows'=>$rows, 'ym'=>$ym, 'stat'=>$stat, 'perms'=>$perms,
+          'categories'=>tool_calib_categories($db), 'excluded'=>$excluded]);
 }
 
-/* ---------- 新增量具種類（管理員；qc_tool_list） ---------- */
-case 'create_category': {
-    if (!$perms['canAdmin']) jerr('無新增類別權限', 403);
-    $name = trim((string)($_POST['name'] ?? ''));
-    if ($name === '') jerr('請輸入類別名稱');
-    $st = $db->prepare("SELECT QC_Tool_List_id FROM qc_tool_list WHERE QC_Tool=? LIMIT 1");
-    $st->execute([$name]);
-    $exist = $st->fetchColumn();
-    if ($exist) jerr('類別已存在：'.$name);
+/* ---------- 類別校驗屬性設定（管理員；只改旗標，不改名稱/不新增刪除類別） ----------
+ * 類別的新增/更名/刪除一律在「線上檢驗－量具設定」(inspection_combined_prototype.php)，本頁不重複提供。
+ * 參數 items = JSON [{id, calib_required, has_tool_no, calib_tab}, ...]
+ */
+case 'save_categories': {
+    if (!$perms['canAdmin']) jerr('無類別設定權限', 403);
+    $items = json_decode((string)($_POST['items'] ?? ''), true);
+    if (!is_array($items) || !$items) jerr('無資料可儲存');
     try {
         $db->beginTransaction();
-        $so = (int)$db->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM qc_tool_list")->fetchColumn();
-        $db->prepare("INSERT INTO qc_tool_list (QC_Tool, sort_order) VALUES (?,?)")->execute([$name, $so]);
-        $newId = (int)$db->lastInsertId();
+        $up = $db->prepare("UPDATE qc_tool_list SET calib_required=?, has_tool_no=?, calib_tab=? WHERE QC_Tool_List_id=?");
+        foreach ($items as $it) {
+            $id = (int)($it['id'] ?? 0);
+            if (!$id) continue;
+            $req = (int)($it['calib_required'] ?? 0) === 1 ? 1 : 0;
+            $hasNo = (int)($it['has_tool_no'] ?? 0) === 1 ? 1 : 0;
+            $tab = ((int)($it['calib_tab'] ?? 0) === 1 && $req === 1) ? 1 : 0;   // 需校驗才可列入分頁
+            $up->execute([$req, $hasNo, $tab, $id]);
+        }
         $db->commit();
-    } catch (Throwable $e) { $db->rollBack(); jerr('新增失敗：'.$e->getMessage(), 500); }
-    $cats = $db->query("SELECT QC_Tool_List_id, QC_Tool FROM qc_tool_list ORDER BY sort_order, QC_Tool_List_id")->fetchAll(PDO::FETCH_ASSOC);
-    jout(['category_id'=>$newId, 'categories'=>$cats]);
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    jout(['categories'=>tool_calib_categories($db)]);
 }
 
 /* ---------- 新增儀器（管理員） ---------- */
@@ -119,6 +138,7 @@ case 'create_tool': {
     $no  = trim((string)($_POST['tool_no'] ?? ''));
     $cat = trim((string)($_POST['category_id'] ?? ''));
     if ($no === '' || $cat === '') jerr('請填量具編號與類別');
+    tc_assert_category_usable($db, $cat);
     $st = $db->prepare("SELECT 1 FROM qc_tool WHERE Tool_No=? LIMIT 1");
     $st->execute([$no]);
     if ($st->fetchColumn()) jerr('量具編號已存在：'.$no);
@@ -152,6 +172,7 @@ case 'save_tool': {
     $newNo = array_key_exists('tool_no', $_POST) ? trim((string)$_POST['tool_no']) : $t['Tool_No'];
     $newCat = array_key_exists('category_id', $_POST) && $_POST['category_id'] !== '' ? trim((string)$_POST['category_id']) : $t['QC_Tool_List_id'];
     if ($newNo === '') jerr('量具編號不可空白');
+    if ((string)$newCat !== (string)$t['QC_Tool_List_id']) tc_assert_category_usable($db, (string)$newCat);
     if ($newNo !== $t['Tool_No']) {
         $c = $db->prepare("SELECT 1 FROM qc_tool WHERE Tool_No=? AND Tool_id<>? LIMIT 1");
         $c->execute([$newNo, $tid]);
