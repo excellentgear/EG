@@ -178,6 +178,9 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
         .sa-btn-del:hover { background: #DD5138; border-color: #C2432D; color: #fff; }
         .sa-note { background: #FBF3E7; border-left: 4px solid #F0A24B; padding: 10px 12px; font-size: 12.5px; color: #5A3312; border-radius: 3px; }
         .sa-addbar { padding: 8px 10px; background: #FBF3E7; border-radius: 4px; }
+        .sa-filterbar { padding-bottom: 4px; border-bottom: 1px dashed #E0B27A; }
+        #sa_emp option { padding: 2px 4px; }
+        #sa_emp option:checked { background: #F0A24B linear-gradient(0deg, #F0A24B 0%, #F0A24B 100%); color: #4A2B10; }
     </style>
 </head>
 
@@ -517,14 +520,28 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                                     <div class="col-md-7">
                                         <h4 style="margin-top:0;">成員 <small id="sa_cur_name" class="text-muted">（請先於左側選擇共用帳號）</small></h4>
                                         <div class="sa-addbar" id="sa_member_add" style="display:none;">
-                                            <select id="sa_emp" class="form-control input-sm" multiple size="5" style="max-width:300px;display:inline-block;vertical-align:top;"></select>
+                                            <div style="display:inline-block;vertical-align:top;max-width:340px;">
+                                                <div class="sa-filterbar">
+                                                    <select id="sa_dept" class="form-control input-sm" style="width:150px;display:inline-block;">
+                                                        <option value="">全部部門</option>
+                                                    </select>
+                                                    <input type="text" id="sa_kw" class="form-control input-sm" placeholder="搜尋姓名/帳號" style="width:130px;display:inline-block;">
+                                                    <div style="margin-top:5px;">
+                                                        <button type="button" class="btn btn-xs sa-btn-del" id="sa_all">全選（<span id="sa_cnt">0</span> 人）</button>
+                                                        <button type="button" class="btn btn-xs sa-btn-del" id="sa_none">清除選取</button>
+                                                    </div>
+                                                </div>
+                                                <select id="sa_emp" class="form-control input-sm" multiple size="8" style="width:340px;margin-top:6px;"></select>
+                                            </div>
                                             <div style="display:inline-block;vertical-align:top;margin-left:8px;">
                                                 <select id="sa_mode" class="form-control input-sm" style="width:180px;">
                                                     <option value="attach">綁定依附（只送共用帳號）</option>
                                                     <option value="notify">開通（本人＋共用帳號雙送）</option>
                                                 </select>
-                                                <button type="button" class="btn btn-sm sa-btn-primary" id="sa_add" style="margin-top:6px;">加入成員</button>
-                                                <div class="text-muted" style="font-size:12px;margin-top:4px;max-width:180px;">可按住 Ctrl 多選。</div>
+                                                <button type="button" class="btn btn-sm sa-btn-primary" id="sa_add" style="margin-top:6px;">加入選取的成員</button>
+                                                <div class="text-muted" style="font-size:12px;margin-top:4px;max-width:180px;">
+                                                    可按住 Ctrl 多選；「全選」只會選取目前篩選出來的人。
+                                                </div>
                                             </div>
                                         </div>
                                         <table class="table table-hover sa-table" style="margin-top:10px;">
@@ -651,7 +668,7 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
 // ===== 共用帳號管理（ai-rules/13）=====
 $(function () {
     var SA_API = '../../src/store/_shared_account_api.php';
-    var saToken = '', saCur = 0, saCurName = '', saEmployees = [];
+    var saToken = '', saCur = 0, saCurName = '', saEmployees = [], saDepts = [];
 
     function esc(s) { return $('<i>').text(s == null ? '' : s).html(); }
     function saPost(action, data, cb) {
@@ -667,6 +684,13 @@ $(function () {
             if (!r || !r.ok) { $('#sa_list').html('<tr><td colspan="4" class="text-muted">' + esc((r && r.msg) || '載入失敗') + '</td></tr>'); return; }
             saToken = r.token || '';
             saEmployees = r.employees || [];
+            saDepts = r.departments || [];
+
+            // 部門篩選下拉（保留使用者目前選擇）
+            var keepDept = $('#sa_dept').val() || '';
+            var dopt = '<option value="">全部部門</option>';
+            saDepts.forEach(function (d) { dopt += '<option value="' + d.id + '">' + esc(d.name) + '</option>'; });
+            $('#sa_dept').html(dopt).val(keepDept);
 
             var opt = '<option value="">— 選擇要標記的帳號 —</option>';
             (r.candidates || []).forEach(function (c) {
@@ -693,16 +717,31 @@ $(function () {
         }, 'json');
     }
 
+    // 依「部門 + 關鍵字」篩選可加入的員工，並顯示對應部門／職稱
+    function saRenderEmpList() {
+        var dept = $('#sa_dept').val() || '';
+        var kw = ($('#sa_kw').val() || '').trim().toLowerCase();
+        var picked = ($('#sa_emp').val() || []).map(String);   // 重繪時保留已選取的人
+        var opt = '', n = 0;
+        saEmployees.forEach(function (e) {
+            if (String(e.id) === String(saCur)) return;                       // 共用帳號不能綁自己
+            if (dept && (e.dept_ids || []).map(String).indexOf(dept) < 0) return;
+            if (kw && (String(e.user_cname).toLowerCase().indexOf(kw) < 0
+                    && String(e.user_uname).toLowerCase().indexOf(kw) < 0)) return;
+            var role = e.role_label ? '｜' + e.role_label : '｜（未設部門職稱）';
+            opt += '<option value="' + e.id + '"' + (picked.indexOf(String(e.id)) >= 0 ? ' selected' : '') + '>'
+                 + esc(e.user_cname) + '（' + esc(e.user_uname) + '）' + esc(role) + '</option>';
+            n++;
+        });
+        $('#sa_emp').html(opt || '<option disabled>（此篩選條件下沒有員工）</option>');
+        $('#sa_cnt').text(n);
+    }
+
     function saLoadMembers(sid, name) {
         saCur = sid; saCurName = name;
         $('#sa_cur_name').text('（' + name + '）');
         $('#sa_member_add').show();
-        var opt = '';
-        saEmployees.forEach(function (e) {
-            if (String(e.id) === String(sid)) return;
-            opt += '<option value="' + e.id + '">' + esc(e.user_cname) + '（' + esc(e.user_uname) + '）</option>';
-        });
-        $('#sa_emp').html(opt);
+        saRenderEmpList();
 
         $.get(SA_API, { action: 'members', shared_uid: sid }, function (r) {
             if (!r || !r.ok) { $('#sa_members').html('<tr><td colspan="4" class="text-muted">載入失敗</td></tr>'); return; }
@@ -710,7 +749,9 @@ $(function () {
             var h = '';
             r.members.forEach(function (m) {
                 h += '<tr data-rid="' + m.id + '">'
-                   + '<td>' + esc(m.user_cname) + '<div class="text-muted" style="font-size:12px;">' + esc(m.user_uname) + '</div></td>'
+                   + '<td>' + esc(m.user_cname)
+                   + '<div class="text-muted" style="font-size:12px;">' + esc(m.user_uname)
+                   + (m.role_label ? '｜' + esc(m.role_label) : '') + '</div></td>'
                    + '<td><select class="form-control input-sm sa-mode">'
                    + '<option value="attach"' + (m.mode === 'attach' ? ' selected' : '') + '>綁定依附</option>'
                    + '<option value="notify"' + (m.mode === 'notify' ? ' selected' : '') + '>開通（雙送）</option>'
@@ -745,6 +786,16 @@ $(function () {
             saLoad();
         });
     });
+    // 部門/關鍵字篩選（雙擊清空＝解除該欄篩選，見 ai-rules/08）
+    $('#sa_dept').on('change', saRenderEmpList);
+    $('#sa_kw').on('input', saRenderEmpList);
+    $('#sa_kw').on('dblclick', function () { if ($(this).val()) { $(this).val(''); saRenderEmpList(); } });
+    $('#sa_dept').on('dblclick', function () { if ($(this).val()) { $(this).val('').trigger('change'); } });
+    $('#sa_all').on('click', function () {   // 只全選目前篩選出來的人
+        $('#sa_emp option').not('[disabled]').prop('selected', true);
+    });
+    $('#sa_none').on('click', function () { $('#sa_emp option').prop('selected', false); });
+
     $('#sa_add').on('click', function () {
         var ids = $('#sa_emp').val();
         if (!saCur) { alert('請先於左側選擇共用帳號'); return; }

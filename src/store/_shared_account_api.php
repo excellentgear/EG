@@ -65,6 +65,35 @@ if (!sa_is_admin($db, $me)) sa_out(['ok' => false, 'msg' => '僅管理者可設�
 
 if (!eg_shared_ready($db)) sa_out(['ok' => false, 'msg' => '共用帳號資料表尚未建立，請先執行遷移']);
 
+/**
+ * 取這些人的部門／職稱（含兼任，主要身分 is_main 排前面）。
+ * @return array user_id => ['dept_ids'=>int[], 'label'=>'生產部／課長、品保部／專員']
+ */
+function sa_role_map(PDO $db, array $uids): array
+{
+    $uids = array_values(array_unique(array_filter(array_map('intval', $uids))));
+    if (empty($uids)) return [];
+    $in = implode(',', $uids);
+    $rows = $db->query("SELECT m.user_id, m.department_id, m.is_main, d.name AS dept_name, p.name AS pos_name
+                        FROM user_department_position_map m
+                        LEFT JOIN department d ON d.id = m.department_id
+                        LEFT JOIN position   p ON p.id = m.position_id
+                        WHERE m.user_id IN ($in)
+                        ORDER BY m.is_main DESC, d.name")->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $r) {
+        $uid = (int)$r['user_id'];
+        if (!isset($out[$uid])) $out[$uid] = ['dept_ids' => [], 'parts' => []];
+        if ($r['department_id'] !== null) $out[$uid]['dept_ids'][] = (int)$r['department_id'];
+        $part = trim((string)$r['dept_name']) . (trim((string)$r['pos_name']) !== '' ? '／' . $r['pos_name'] : '');
+        if (trim($part) !== '' && !in_array($part, $out[$uid]['parts'], true)) $out[$uid]['parts'][] = $part;
+    }
+    foreach ($out as $uid => $v) {
+        $out[$uid] = ['dept_ids' => array_values(array_unique($v['dept_ids'])), 'label' => implode('、', $v['parts'])];
+    }
+    return $out;
+}
+
 /** 稽核紀錄（比照 audit_log rbac_* 寫法；失敗不阻斷） */
 function sa_audit(PDO $db, int $me, string $act, string $targetId, string $changes): void
 {
@@ -87,11 +116,27 @@ try {
             $cand = $db->query("SELECT id, user_cname, user_uname, state FROM `user`
                                 WHERE is_shared_account = 0 AND state IN (1,90,99)
                                 ORDER BY state DESC, user_cname")->fetchAll(PDO::FETCH_ASSOC);
-            // 可加入的員工（在職）
-            $emp = $db->query("SELECT id, user_cname, user_uname FROM `user`
-                               WHERE state IN (1,99) AND is_shared_account = 0
-                               ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
-            sa_out(['ok' => true, 'shared' => $shared, 'candidates' => $cand, 'employees' => $emp, 'token' => $_SESSION['sa_csrf']]);
+            // 可加入的員工（在職）＋部門／職稱（含兼任；主要身分排前面，供前端篩選與顯示）
+            $emp = $db->query("SELECT u.id, u.user_cname, u.user_uname FROM `user` u
+                               WHERE u.state IN (1,99) AND u.is_shared_account = 0
+                               ORDER BY u.user_cname")->fetchAll(PDO::FETCH_ASSOC);
+            $roleMap = sa_role_map($db, array_column($emp, 'id'));
+            foreach ($emp as &$e) {
+                $r = $roleMap[(int)$e['id']] ?? ['dept_ids' => [], 'label' => ''];
+                $e['dept_ids'] = $r['dept_ids'];
+                $e['role_label'] = $r['label'];
+            }
+            unset($e);
+
+            // 部門篩選用清單（只列真的有在職人員的部門，避免下拉一長串空部門）
+            $depts = $db->query("SELECT DISTINCT d.id, d.name
+                                 FROM user_department_position_map m
+                                 JOIN department d ON d.id = m.department_id
+                                 JOIN `user` u ON u.id = m.user_id AND u.state IN (1,99) AND u.is_shared_account = 0
+                                 ORDER BY d.name")->fetchAll(PDO::FETCH_ASSOC);
+
+            sa_out(['ok' => true, 'shared' => $shared, 'candidates' => $cand, 'employees' => $emp,
+                    'departments' => $depts, 'token' => $_SESSION['sa_csrf']]);
         }
 
         case 'members': {
@@ -101,7 +146,11 @@ try {
                                 FROM shared_account_member m JOIN `user` u ON u.id = m.member_uid
                                 WHERE m.shared_uid = ? ORDER BY u.user_cname");
             $st->execute([$sid]);
-            sa_out(['ok' => true, 'members' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+            $members = $st->fetchAll(PDO::FETCH_ASSOC);
+            $roleMap = sa_role_map($db, array_column($members, 'member_uid'));
+            foreach ($members as &$m) $m['role_label'] = $roleMap[(int)$m['member_uid']]['label'] ?? '';
+            unset($m);
+            sa_out(['ok' => true, 'members' => $members]);
         }
 
         case 'set_shared': {
