@@ -918,6 +918,113 @@ case 'update_shift_assign': {
     jout();
 }
 
+/* ── 固定班別排班：排班單清單（把連續排班還原成「一張單」）── */
+case 'list_shift_blocks': {
+    $from = $_POST['from'] ?? date('Y-m-01');
+    $to   = $_POST['to'] ?? (new DateTime('today'))->modify('+6 month')->format('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from)) $from = date('Y-m-01');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) $to = (new DateTime('today'))->modify('+6 month')->format('Y-m-d');
+    $q = $pdo->prepare("SELECT sa.id, sa.shift_type_id, sa.user_id, sa.work_date, st.name AS shift_name,
+                               LEFT(st.start_time,5) AS st_s, LEFT(st.end_time,5) AS st_e, st.color
+                        FROM roster_shift_assign sa JOIN roster_shift_type st ON st.id=sa.shift_type_id
+                        WHERE sa.work_date BETWEEN ? AND ?
+                        ORDER BY sa.shift_type_id, sa.user_id, sa.work_date");
+    $q->execute([$from, $to]);
+    $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+    $blocks = []; $cur = null;
+    foreach ($rows as $r) {
+        $key = $r['shift_type_id'] . '|' . $r['user_id'];
+        // 連續判定：允許中間跳過非排班日（週末等）→ 以「間隔<=3天」視為同一段，避免每週一段
+        if ($cur && $cur['key'] === $key) {
+            $gap = (strtotime($r['work_date']) - strtotime($cur['to'])) / 86400;
+            if ($gap >= 1 && $gap <= 3) {
+                $cur['to'] = $r['work_date']; $cur['days']++; $cur['ids'][] = (int)$r['id'];
+                $cur['wd'][(int)date('N', strtotime($r['work_date']))] = 1;
+                continue;
+            }
+        }
+        if ($cur) $blocks[] = $cur;
+        $cur = ['key' => $key, 'shift_type_id' => (int)$r['shift_type_id'], 'user_id' => (int)$r['user_id'],
+                'shift_name' => $r['shift_name'], 'time' => $r['st_s'] . '~' . $r['st_e'], 'color' => $r['color'],
+                'from' => $r['work_date'], 'to' => $r['work_date'], 'days' => 1, 'ids' => [(int)$r['id']],
+                'wd' => [(int)date('N', strtotime($r['work_date'])) => 1]];
+    }
+    if ($cur) $blocks[] = $cur;
+    $nm = roster_user_name_map($pdo, array_map(fn($b) => $b['user_id'], $blocks));
+    $out = [];
+    foreach ($blocks as $b) {
+        $wd = array_keys($b['wd']); sort($wd);
+        $out[] = ['shift_type_id' => $b['shift_type_id'], 'user_id' => $b['user_id'],
+                  'user_name' => $nm[$b['user_id']]['name'] ?? ('#' . $b['user_id']),
+                  'shift_name' => $b['shift_name'], 'time' => $b['time'], 'color' => $b['color'] ?: '#C0762C',
+                  'date_from' => $b['from'], 'date_to' => $b['to'], 'days' => $b['days'],
+                  'weekdays' => $wd, 'ids' => $b['ids']];
+    }
+    usort($out, fn($a, $c) => strcmp($a['date_from'], $c['date_from']) ?: strcmp($a['shift_name'], $c['shift_name']));
+    jout(['blocks' => $out, 'today' => date('Y-m-d'), 'can_edit' => ($CAN_CREATE || $IS_ADMIN)]);
+}
+
+/* ── 固定班別排班：更新排班單（刪舊段→依新設定重建；不動過去）── */
+case 'update_shift_block': {
+    if (!$CAN_CREATE && !$IS_ADMIN) jerr('無權限', 403);
+    $p = json_decode($_POST['payload'] ?? '', true);
+    if (!is_array($p)) jfail('資料格式錯誤');
+    $oldIds = array_values(array_unique(array_filter(array_map('intval', $p['old_ids'] ?? []))));
+    $sid = (int)($p['shift_type_id'] ?? 0);
+    $users = array_values(array_unique(array_filter(array_map('intval', $p['user_ids'] ?? []))));
+    $df = $p['date_from'] ?? ''; $dt = $p['date_to'] ?? '';
+    $weekdays = array_filter(array_map('intval', $p['weekdays'] ?? []), fn($x) => $x >= 1 && $x <= 7);
+    $skipHoliday = !empty($p['skip_holiday']);
+    if ($sid <= 0) jfail('請選班別');
+    if (empty($users)) jfail('請選人員');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $df) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dt)) jfail('日期格式錯誤');
+    if ($df > $dt) jfail('起訖顛倒');
+    $chk = $pdo->prepare("SELECT 1 FROM roster_shift_type WHERE id=?"); $chk->execute([$sid]);
+    if (!$chk->fetchColumn()) jerr('班別不存在', 404);
+
+    $today = date('Y-m-d');
+    $ctx = $skipHoliday ? roster_workday_context($pdo, $df, $dt) : null;
+    $pdo->beginTransaction();
+    try {
+        // 刪除舊段（只刪今天以後，過去凍結保留歷史）
+        $delN = 0;
+        if ($oldIds) {
+            $in = implode(',', array_fill(0, count($oldIds), '?'));
+            $del = $pdo->prepare("DELETE FROM roster_shift_assign WHERE id IN ($in) AND work_date >= ?");
+            $del->execute(array_merge($oldIds, [$today]));
+            $delN = $del->rowCount();
+        }
+        // 依新設定重建（同樣不建立過去日期）
+        $ins = $pdo->prepare("INSERT IGNORE INTO roster_shift_assign (shift_type_id,user_id,work_date,created_by) VALUES (?,?,?,?)");
+        $n = 0;
+        $d = new DateTime($df); $e = new DateTime($dt);
+        while ($d <= $e) {
+            $ds = $d->format('Y-m-d');
+            $ok = ($ds >= $today);
+            if ($ok && !empty($weekdays) && !in_array((int)$d->format('N'), $weekdays, true)) $ok = false;
+            if ($ok && $skipHoliday && !roster_is_workday($ds, $ctx)) $ok = false;
+            if ($ok) foreach ($users as $u) { $ins->execute([$sid, $u, $ds, $MYID]); $n += $ins->rowCount(); }
+            $d->modify('+1 day');
+        }
+        $pdo->commit();
+    } catch (Exception $e) { $pdo->rollBack(); jfail('更新失敗：' . $e->getMessage()); }
+    jout(['deleted' => $delN, 'inserted' => $n]);
+}
+
+/* ── 固定班別排班：刪除整張排班單（不動過去）── */
+case 'delete_shift_block': {
+    if (!$CAN_CREATE && !$IS_ADMIN) jerr('無權限', 403);
+    $ids = array_values(array_unique(array_filter(array_map('intval', $_POST['ids'] ?? []))));
+    $keepPast = empty($_POST['include_past']);
+    if (!$ids) jfail('沒有要刪除的排班');
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $sql = "DELETE FROM roster_shift_assign WHERE id IN ($in)";
+    $args = $ids;
+    if ($keepPast) { $sql .= " AND work_date >= ?"; $args[] = date('Y-m-d'); }
+    $st = $pdo->prepare($sql); $st->execute($args);
+    jout(['deleted' => $st->rowCount()]);
+}
+
 /* ── 固定班別排班：批次預覽（依條件列出將受影響的排班）── */
 case 'preview_shift_batch': {
     $sid = (int)($_POST['shift_type_id'] ?? 0);
