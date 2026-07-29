@@ -112,10 +112,16 @@ try {
                                          (SELECT COUNT(*) FROM shared_account_member m WHERE m.shared_uid = u.id AND m.active = 1) AS member_cnt
                                   FROM `user` u WHERE u.is_shared_account = 1
                                   ORDER BY u.user_cname")->fetchAll(PDO::FETCH_ASSOC);
+            $sharedRole = sa_role_map($db, array_column($shared, 'id'));
+            foreach ($shared as &$s) $s['role_label'] = $sharedRole[(int)$s['id']]['label'] ?? '';
+            unset($s);
             // 可標記為共用帳號的候選（含特殊帳號 90，現場共用帳號多半是 90）
             $cand = $db->query("SELECT id, user_cname, user_uname, state FROM `user`
                                 WHERE is_shared_account = 0 AND state IN (1,90,99)
                                 ORDER BY state DESC, user_cname")->fetchAll(PDO::FETCH_ASSOC);
+            $candRole = sa_role_map($db, array_column($cand, 'id'));
+            foreach ($cand as &$c) $c['role_label'] = $candRole[(int)$c['id']]['label'] ?? '';
+            unset($c);
             // 可加入的員工（在職）＋部門／職稱（含兼任；主要身分排前面，供前端篩選與顯示）
             $emp = $db->query("SELECT u.id, u.user_cname, u.user_uname FROM `user` u
                                WHERE u.state IN (1,99) AND u.is_shared_account = 0

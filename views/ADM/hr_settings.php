@@ -179,6 +179,8 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
         .sa-note { background: #FBF3E7; border-left: 4px solid #F0A24B; padding: 10px 12px; font-size: 12.5px; color: #5A3312; border-radius: 3px; }
         .sa-addbar { padding: 8px 10px; background: #FBF3E7; border-radius: 4px; }
         .sa-filterbar { padding-bottom: 4px; border-bottom: 1px dashed #E0B27A; }
+        .sa-hint { background: #F7E0BD; color: #7A3B12; padding: 8px 10px; border-radius: 4px; font-size: 13px; margin-bottom: 8px; }
+        .sa-disabled { opacity: .55; }
         #sa_emp option { padding: 2px 4px; }
         #sa_emp option:checked { background: #F0A24B linear-gradient(0deg, #F0A24B 0%, #F0A24B 100%); color: #4A2B10; }
     </style>
@@ -519,7 +521,10 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                                     <!-- 右：選定共用帳號的成員 -->
                                     <div class="col-md-7">
                                         <h4 style="margin-top:0;">成員 <small id="sa_cur_name" class="text-muted">（請先於左側選擇共用帳號）</small></h4>
-                                        <div class="sa-addbar" id="sa_member_add" style="display:none;">
+                                        <div class="sa-hint" id="sa_hint">
+                                            <i class="fa fa-arrow-left"></i> 請先在左側<b>標記一個共用帳號</b>並點選它，才能加入成員。
+                                        </div>
+                                        <div class="sa-addbar" id="sa_member_add">
                                             <div style="display:inline-block;vertical-align:top;max-width:340px;">
                                                 <div class="sa-filterbar">
                                                     <select id="sa_dept" class="form-control input-sm" style="width:150px;display:inline-block;">
@@ -695,7 +700,8 @@ $(function () {
             var opt = '<option value="">— 選擇要標記的帳號 —</option>';
             (r.candidates || []).forEach(function (c) {
                 opt += '<option value="' + c.id + '">' + esc(c.user_cname) + '（' + esc(c.user_uname) + '）'
-                     + (String(c.state) === '90' ? ' [公用]' : '') + '</option>';
+                     + (String(c.state) === '90' ? ' [公用]' : '')
+                     + (c.role_label ? '｜' + esc(c.role_label) : '') + '</option>';
             });
             $('#sa_cand').html(opt);
 
@@ -705,7 +711,9 @@ $(function () {
                 var h = '';
                 (r.shared || []).forEach(function (s) {
                     h += '<tr class="sa-row' + (String(s.id) === String(saCur) ? ' sa-active' : '') + '" data-id="' + s.id + '" data-name="' + esc(s.user_cname) + '">'
-                       + '<td><a href="javascript:;" class="sa-pick">' + esc(s.user_cname) + '</a><div class="text-muted" style="font-size:12px;">' + esc(s.user_uname) + '</div></td>'
+                       + '<td><a href="javascript:;" class="sa-pick">' + esc(s.user_cname) + '</a>'
+                       + '<div class="text-muted" style="font-size:12px;">' + esc(s.user_uname)
+                       + (s.role_label ? '｜' + esc(s.role_label) : '') + '</div></td>'
                        + '<td>' + s.member_cnt + '</td>'
                        + '<td><label style="font-weight:400;margin:0;"><input type="checkbox" class="sa-lock" ' + (String(s.lock_password) === '1' ? 'checked' : '') + '> 鎖定</label></td>'
                        + '<td><button type="button" class="btn btn-xs sa-btn-del sa-unmark" title="取消共用帳號標記">取消</button></td>'
@@ -713,7 +721,13 @@ $(function () {
                 });
                 $('#sa_list').html(h);
             }
-            if (saCur) saLoadMembers(saCur, saCurName);
+            if (saCur) {
+                saLoadMembers(saCur, saCurName);
+            } else {
+                // 尚未選定共用帳號：先把人員清單與部門篩選畫出來（停用狀態），讓使用者看得到有這功能
+                saSetAddEnabled(false);
+                saRenderEmpList();
+            }
         }, 'json');
     }
 
@@ -737,10 +751,17 @@ $(function () {
         $('#sa_cnt').text(n);
     }
 
+    // 未選共用帳號時：篩選/清單照樣看得到（才知道有這功能），但停用不能加入
+    function saSetAddEnabled(on) {
+        $('#sa_hint').toggle(!on);
+        $('#sa_member_add').toggleClass('sa-disabled', !on);
+        $('#sa_dept, #sa_kw, #sa_emp, #sa_mode, #sa_add, #sa_all, #sa_none').prop('disabled', !on);
+    }
+
     function saLoadMembers(sid, name) {
         saCur = sid; saCurName = name;
         $('#sa_cur_name').text('（' + name + '）');
-        $('#sa_member_add').show();
+        saSetAddEnabled(true);
         saRenderEmpList();
 
         $.get(SA_API, { action: 'members', shared_uid: sid }, function (r) {
@@ -782,7 +803,12 @@ $(function () {
         var $tr = $(this).closest('tr');
         if (!confirm('取消「' + $tr.data('name') + '」的共用帳號標記？該帳號將不再接收成員的轉送通知。')) return;
         saPost('set_shared', { uid: $tr.data('id'), on: 0 }, function () {
-            if (String(saCur) === String($tr.data('id'))) { saCur = 0; $('#sa_members').html('<tr><td colspan="4" class="text-muted">—</td></tr>'); $('#sa_member_add').hide(); $('#sa_cur_name').text('（請先於左側選擇共用帳號）'); }
+            if (String(saCur) === String($tr.data('id'))) {
+                saCur = 0;
+                $('#sa_members').html('<tr><td colspan="4" class="text-muted">—</td></tr>');
+                $('#sa_cur_name').text('（請先於左側選擇共用帳號）');
+                saSetAddEnabled(false);
+            }
             saLoad();
         });
     });
