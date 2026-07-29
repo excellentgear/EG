@@ -13,6 +13,11 @@
  *       due_date  該次應校驗到期日（排程當下的 calibration_due，準時判定基準）
  *       calib_date 實際完成日；next_due 完成後推算的下次到期(= calib_date + 週期)
  *
+ *   - qc_tool_list（量具類別；新增/更名/刪除在「線上檢驗－量具設定」，本模組只加旗標欄）：
+ *       calib_required 需校驗（否＝僅檢驗方式如「目視」，其量具不列入本頁與 KPI）
+ *       has_tool_no    可設定底下量具編號（否＝無實體量具）
+ *       calib_tab      在校驗管理頁以分頁顯示（需 calib_required=1）
+ *
  * 到期判定：主檔週期自動推算——登錄完成時把 calibration_due 前滾為 next_due。
  * KPI 準時率：den = 當月到期(已完成紀錄的 due_date + 尚待完成的 calibration_due)；
  *            num = 其中 calib_date ≤ due_date(+寬限天數) 者。
@@ -27,6 +32,18 @@ function tool_calib_ensure_schema(PDO $db): void {
         "ALTER TABLE qc_tool ADD COLUMN calib_cycle_months INT NULL COMMENT '校驗週期(月)'",
         "ALTER TABLE qc_tool ADD COLUMN calib_managed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '納入校驗管理(KPI計算)'",
         "ALTER TABLE qc_tool ADD COLUMN calib_method VARCHAR(10) NULL COMMENT '校驗方式 內校/外校'",
+    ] as $sql) {
+        try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
+    }
+
+    // 量具類別主檔 qc_tool_list 加欄（類別的新增/更名/刪除仍只在「線上檢驗－量具設定」，本模組不重複提供）
+    //   calib_required 此類別是否需校驗（否＝僅檢驗方式，例如「目視」，不列入本頁與 KPI）
+    //   has_tool_no    此類別是否可設定底下量具編號（否＝沒有實體量具，不可建編號）
+    //   calib_tab      是否在校驗管理頁以分頁顯示（僅 calib_required=1 者可設）
+    foreach ([
+        "ALTER TABLE qc_tool_list ADD COLUMN calib_required TINYINT(1) NOT NULL DEFAULT 1 COMMENT '需校驗(列入量測儀器校驗管理)'",
+        "ALTER TABLE qc_tool_list ADD COLUMN has_tool_no TINYINT(1) NOT NULL DEFAULT 1 COMMENT '可設定底下量具編號(否=僅檢驗方式)'",
+        "ALTER TABLE qc_tool_list ADD COLUMN calib_tab TINYINT(1) NOT NULL DEFAULT 0 COMMENT '校驗管理頁以分頁顯示(需 calib_required=1)'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
     }
@@ -119,6 +136,27 @@ function tool_calib_add_months(string $date, int $months): ?string {
     return sprintf('%04d-%02d-%02d', $y, $m, $d);
 }
 
+/**
+ * 量具類別清單（含校驗屬性旗標與量具數）
+ * 旗標一律 COALESCE 預設值，欄位剛加或舊資料為 NULL 時行為與加欄前相同（需校驗、可設編號、無分頁）
+ */
+function tool_calib_categories(PDO $db): array {
+    $rows = $db->query("SELECT l.QC_Tool_List_id, l.QC_Tool, l.sort_order,
+                               COALESCE(l.calib_required,1) AS calib_required,
+                               COALESCE(l.has_tool_no,1)    AS has_tool_no,
+                               COALESCE(l.calib_tab,0)      AS calib_tab,
+                               (SELECT COUNT(*) FROM qc_tool t WHERE t.QC_Tool_List_id=l.QC_Tool_List_id) AS tool_cnt,
+                               (SELECT COUNT(*) FROM qc_tool t WHERE t.QC_Tool_List_id=l.QC_Tool_List_id AND t.calib_managed=1) AS managed_cnt
+                        FROM qc_tool_list l
+                        ORDER BY l.sort_order, l.QC_Tool_List_id")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        foreach (['QC_Tool_List_id','calib_required','has_tool_no','calib_tab','tool_cnt','managed_cnt'] as $k) {
+            $r[$k] = (int)$r[$k];
+        }
+    }
+    return $rows;
+}
+
 /** 儀器目前狀態（給前端上色/篩選）：warn_days 內視為即將到期 */
 function tool_calib_status(array $tool, int $warnDays = 30): string {
     if ((int)$tool['calib_managed'] !== 1) return 'unmanaged';
@@ -150,11 +188,22 @@ function tool_calib_kpi_compute(PDO $db, int $year, int $month, array $params): 
     $ms = sprintf('%04d-%02d-01', $year, $month);
     $me = date('Y-m-t', strtotime($ms));
 
+    // 類別旗標「需校驗」：欄位存在才加條件（尚未升級 schema 時行為與加欄前相同）
+    $catJoin = ''; $catCond = '';
+    try {
+        if ($db->query("SHOW COLUMNS FROM qc_tool_list LIKE 'calib_required'")->fetchColumn()) {
+            $catJoin = " LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=t.QC_Tool_List_id ";
+            $catCond = " AND COALESCE(l.calib_required,1)=1 ";
+        }
+    } catch (Throwable $e) { /* 無此表/欄位 → 不加條件 */ }
+
     // (1) 已完成紀錄：本次到期日落在當月者 → 計入 den；準時(calib_date ≤ due+寬限)者計入 num
     $st = $db->prepare("SELECT c.due_date, c.calib_date
                         FROM qc_tool_calibration c
                         JOIN qc_tool t ON t.Tool_id=c.Tool_id
+                        $catJoin
                         WHERE t.calib_managed=1 AND c.due_date IS NOT NULL
+                          $catCond
                           AND c.due_date BETWEEN ? AND ?");
     $st->execute([$ms, $me]);
     $den = 0; $num = 0;
@@ -166,7 +215,9 @@ function tool_calib_kpi_compute(PDO $db, int $year, int $month, array $params): 
 
     // (2) 尚待完成的到期（主檔 calibration_due 落在當月且尚無對應完成紀錄）→ 計入 den，未準時
     $st = $db->prepare("SELECT COUNT(*) FROM qc_tool t
+                        $catJoin
                         WHERE t.calib_managed=1 AND t.calibration_due IS NOT NULL
+                          $catCond
                           AND t.calibration_due BETWEEN ? AND ?
                           AND NOT EXISTS (SELECT 1 FROM qc_tool_calibration c
                                           WHERE c.Tool_id=t.Tool_id AND c.due_date=t.calibration_due)");
