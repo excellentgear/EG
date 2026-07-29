@@ -432,6 +432,11 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         </div>
         <div class="form-group"><label>顏色</label><div id="sh_colorbox"></div></div>
         <div class="checkbox"><label><input type="checkbox" id="sh_active" checked> 啟用</label></div>
+        <hr style="margin:10px 0">
+        <div class="checkbox"><label><input type="checkbox" id="sh_notify" checked onchange="R.updShiftHint()"> 排班後通知人員</label>
+            <div style="color:#a08c72;font-size:12px;margin-left:20px">連續排班只在<b>第一天前一日</b>通知一次（遇假日提前到前一個工作日），期間內不重複洗版。</div></div>
+        <div class="checkbox"><label><input type="checkbox" id="sh_notify_group"> 集體通知（一則列出此班別所有人員、日期、時間）</label>
+            <div style="color:#a08c72;font-size:12px;margin-left:20px">不勾＝每人各收自己的班別通知；勾選＝同班別同期間的人收到同一則含完整名單。</div></div>
         <div style="color:#a08c72;font-size:12px;" id="sh_hint"></div>
     </div>
     <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">取消</button><button class="btn btn-warning" onclick="R.saveShift()"><i class="fa fa-save"></i> 儲存</button></div>
@@ -1123,12 +1128,14 @@ var R = (function(){
     function renderShiftTypes(rows, canEdit){
         window.__shifts=rows;
         if(!rows.length){ $('#shiftTypeList').html('<div style="color:#a08c72;padding:10px;">尚無班別，點右上「新增班別」建立。</div>'); return; }
-        var h='<table class="rst-list"><tr><th>班別</th><th>時間</th><th>休息</th><th>固定加班</th><th>有效工時</th><th>狀態</th><th>操作</th></tr>';
+        var h='<table class="rst-list"><tr><th>班別</th><th>時間</th><th>休息</th><th>固定加班</th><th>有效工時</th><th>通知</th><th>狀態</th><th>操作</th></tr>';
         rows.forEach(function(s){ var col=s.color||'#C0762C';
             h+='<tr'+(+s.is_active===0?' style="opacity:.5"':'')+'><td><span style="display:inline-block;width:11px;height:11px;border-radius:2px;background:'+col+';margin-right:5px"></span>'+esc(s.name)+(s.code?' <span style="color:#a08c72">('+esc(s.code)+')</span>':'')+'</td>'
               +'<td>'+String(s.start_time).substring(0,5)+'~'+String(s.end_time).substring(0,5)+(+s.is_overnight?' <span style="color:#c0762c">跨夜</span>':'')+'</td>'
               +'<td>'+s.break_minutes+' 分</td><td>'+(+s.overtime_minutes?('+'+s.overtime_minutes+' 分'):'—')+'</td>'
-              +'<td>'+durText(shiftDur(s))+'</td><td>'+(+s.is_active===1?'啟用':'<span style="color:#a08c72">停用</span>')+'</td>'
+              +'<td>'+durText(shiftDur(s))+'</td>'
+              +'<td>'+(+s.notify_enabled===0?'<span style="color:#a08c72">不通知</span>':(+s.notify_group===1?'<span style="color:#b5651d">集體</span>':'個別'))+'</td>'
+              +'<td>'+(+s.is_active===1?'啟用':'<span style="color:#a08c72">停用</span>')+'</td>'
               +'<td>'+(canEdit?'<button class="btn btn-xs btn-default" onclick="R.openShiftEdit('+s.id+')">編輯</button> <button class="btn btn-xs btn-default" style="color:#c0392b" onclick="R.delShift('+s.id+',\''+esc(s.name).replace(/'/g,"\\\x27")+'\')">刪除</button>':'—')+'</td></tr>';
         });
         $('#shiftTypeList').html(h+'</table>');
@@ -1139,12 +1146,15 @@ var R = (function(){
     function openShiftEdit(id){
         var s=(window.__shifts||[]).find(function(x){return x.id===id;});
         $('#sh_id').val(id||''); $('#shTitle').text(id?'編輯班別':'新增班別');
-        if(s){ $('#sh_name').val(s.name);$('#sh_code').val(s.code);$('#sh_start').val(String(s.start_time).substring(0,5));$('#sh_end').val(String(s.end_time).substring(0,5));$('#sh_overnight').prop('checked',+s.is_overnight===1);$('#sh_break').val(s.break_minutes);$('#sh_ot').val(s.overtime_minutes);$('#sh_sort').val(s.sort_order);$('#sh_active').prop('checked',+s.is_active===1); shiftColorBox(s.color); }
-        else { $('#sh_name,#sh_code').val('');$('#sh_start').val('08:00');$('#sh_end').val('17:00');$('#sh_overnight').prop('checked',false);$('#sh_break').val(60);$('#sh_ot').val(0);$('#sh_sort').val(0);$('#sh_active').prop('checked',true); shiftColorBox(''); }
+        if(s){ $('#sh_name').val(s.name);$('#sh_code').val(s.code);$('#sh_start').val(String(s.start_time).substring(0,5));$('#sh_end').val(String(s.end_time).substring(0,5));$('#sh_overnight').prop('checked',+s.is_overnight===1);$('#sh_break').val(s.break_minutes);$('#sh_ot').val(s.overtime_minutes);$('#sh_sort').val(s.sort_order);$('#sh_active').prop('checked',+s.is_active===1);
+               $('#sh_notify').prop('checked',+s.notify_enabled!==0);$('#sh_notify_group').prop('checked',+s.notify_group===1); shiftColorBox(s.color); }
+        else { $('#sh_name,#sh_code').val('');$('#sh_start').val('08:00');$('#sh_end').val('17:00');$('#sh_overnight').prop('checked',false);$('#sh_break').val(60);$('#sh_ot').val(0);$('#sh_sort').val(0);$('#sh_active').prop('checked',true);
+               $('#sh_notify').prop('checked',true);$('#sh_notify_group').prop('checked',false); shiftColorBox(''); }
         updShiftHint(); $('#shiftModal').modal('show');
     }
     function saveShift(){
-        var p={id:+($('#sh_id').val()||0),name:$('#sh_name').val(),code:$('#sh_code').val(),start_time:$('#sh_start').val(),end_time:$('#sh_end').val(),is_overnight:$('#sh_overnight').is(':checked')?1:0,break_minutes:+$('#sh_break').val()||0,overtime_minutes:+$('#sh_ot').val()||0,color:shiftColor,sort_order:+$('#sh_sort').val()||0,is_active:$('#sh_active').is(':checked')?1:0};
+        var p={id:+($('#sh_id').val()||0),name:$('#sh_name').val(),code:$('#sh_code').val(),start_time:$('#sh_start').val(),end_time:$('#sh_end').val(),is_overnight:$('#sh_overnight').is(':checked')?1:0,break_minutes:+$('#sh_break').val()||0,overtime_minutes:+$('#sh_ot').val()||0,color:shiftColor,sort_order:+$('#sh_sort').val()||0,is_active:$('#sh_active').is(':checked')?1:0,
+            notify_enabled:$('#sh_notify').is(':checked')?1:0,notify_group:$('#sh_notify_group').is(':checked')?1:0};
         if(!p.name.trim()){alert('請輸入班別名稱');return;} if(!p.start_time||!p.end_time){alert('請輸入上下班時間');return;}
         post('shift_type_save',{payload:JSON.stringify(p)}).done(function(r){ if(!r.success){alert(r.message);return;} $('#shiftModal').modal('hide'); loadShiftTypes(); });
     }

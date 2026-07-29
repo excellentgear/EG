@@ -777,13 +777,15 @@ case 'shift_type_save': {
     $sort = (int)($p['sort_order'] ?? 0);
     $active = isset($p['is_active']) ? (!empty($p['is_active']) ? 1 : 0) : 1;
     $code = trim($p['code'] ?? '');
+    $notifyOn = isset($p['notify_enabled']) ? (!empty($p['notify_enabled']) ? 1 : 0) : 1;
+    $notifyGrp = !empty($p['notify_group']) ? 1 : 0;
     if ($id === 0) {
-        $st = $pdo->prepare("INSERT INTO roster_shift_type (name,code,start_time,end_time,is_overnight,break_minutes,overtime_minutes,color,sort_order,is_active,owner_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
-        $st->execute([$name, $code, $start, $end, $overnight, $brk, $ot, $color, $sort, $active, $MYID]);
+        $st = $pdo->prepare("INSERT INTO roster_shift_type (name,code,start_time,end_time,is_overnight,break_minutes,overtime_minutes,color,sort_order,is_active,notify_enabled,notify_group,owner_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        $st->execute([$name, $code, $start, $end, $overnight, $brk, $ot, $color, $sort, $active, $notifyOn, $notifyGrp, $MYID]);
         $id = (int)$pdo->lastInsertId();
     } else {
-        $st = $pdo->prepare("UPDATE roster_shift_type SET name=?,code=?,start_time=?,end_time=?,is_overnight=?,break_minutes=?,overtime_minutes=?,color=?,sort_order=?,is_active=? WHERE id=?");
-        $st->execute([$name, $code, $start, $end, $overnight, $brk, $ot, $color, $sort, $active, $id]);
+        $st = $pdo->prepare("UPDATE roster_shift_type SET name=?,code=?,start_time=?,end_time=?,is_overnight=?,break_minutes=?,overtime_minutes=?,color=?,sort_order=?,is_active=?,notify_enabled=?,notify_group=? WHERE id=?");
+        $st->execute([$name, $code, $start, $end, $overnight, $brk, $ot, $color, $sort, $active, $notifyOn, $notifyGrp, $id]);
     }
     jout(['id' => $id]);
 }

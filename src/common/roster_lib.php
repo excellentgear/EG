@@ -519,6 +519,113 @@ if (!function_exists('roster_notify')) {
     }
 }
 
+if (!function_exists('roster_notify_shift_blocks')) {
+    /**
+     * 固定班別「整段只通知一次」：
+     *  - 把每人每班別的連續排班日切成「區段」(block)，只在區段第一天通知，內容涵蓋整段起訖。
+     *  - 發送時機＝區段第一天的前一天；若該提醒日非工作日，則再往前提到最近的工作日（提前提醒，不會漏）。
+     *  - 班別可設 notify_enabled=0 不通知；notify_group=1 則改發「集體通知」：
+     *    一則列出該班別該區段的所有人員＋日期＋時間，送給該區段全部人員。
+     * @param callable|null $mark fn(kind,key):bool 去重標記器（null 則自建）
+     * @return int 發出則數
+     */
+    function roster_notify_shift_blocks(PDO $pdo, ?callable $mark = null): int {
+        $sent = 0;
+        if ($mark === null) {
+            $mark = function (string $kind, string $key) use ($pdo): bool {
+                try {
+                    $st = $pdo->prepare("INSERT IGNORE INTO roster_notify_log (kind, ref_key) VALUES (?,?)");
+                    $st->execute([$kind, $key]);
+                    return $st->rowCount() > 0;
+                } catch (Throwable $e) { return false; }
+            };
+        }
+        $today = (new DateTime('today'))->format('Y-m-d');
+        // 只看未來 60 天內的排班，足以涵蓋「提前提醒」
+        $until = (new DateTime('today'))->modify('+60 day')->format('Y-m-d');
+        try {
+            $q = $pdo->prepare("SELECT sa.shift_type_id, sa.user_id, sa.work_date,
+                                       st.name AS shift_name, st.notify_enabled, st.notify_group,
+                                       LEFT(st.start_time,5) AS st_s, LEFT(st.end_time,5) AS st_e, st.is_overnight
+                                FROM roster_shift_assign sa
+                                JOIN roster_shift_type st ON st.id = sa.shift_type_id
+                                WHERE sa.work_date BETWEEN ? AND ? AND st.notify_enabled = 1
+                                ORDER BY sa.shift_type_id, sa.user_id, sa.work_date");
+            $q->execute([$today, $until]);
+            $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { return 0; }
+        if (!$rows) return 0;
+
+        $ctx = roster_workday_context($pdo, (new DateTime('today'))->modify('-14 day')->format('Y-m-d'), $until);
+
+        // 切連續區段：同班別同人，日期連續（以自然日相鄰為準）
+        $blocks = []; $cur = null;
+        foreach ($rows as $r) {
+            $key = $r['shift_type_id'] . '|' . $r['user_id'];
+            if ($cur && $cur['key'] === $key) {
+                $next = (new DateTime($cur['to']))->modify('+1 day')->format('Y-m-d');
+                if ($r['work_date'] === $next) { $cur['to'] = $r['work_date']; $cur['days']++; continue; }
+            }
+            if ($cur) $blocks[] = $cur;
+            $cur = ['key' => $key, 'shift_type_id' => (int)$r['shift_type_id'], 'user_id' => (int)$r['user_id'],
+                    'from' => $r['work_date'], 'to' => $r['work_date'], 'days' => 1,
+                    'shift_name' => $r['shift_name'], 'group' => (int)$r['notify_group'],
+                    'time' => $r['st_s'] . '~' . $r['st_e'] . ((int)$r['is_overnight'] ? '(跨夜)' : '')];
+        }
+        if ($cur) $blocks[] = $cur;
+
+        // 計算提醒日：區段第一天的前一天；非工作日再往前找工作日
+        $names = roster_user_name_map($pdo, array_map(fn($b) => $b['user_id'], $blocks));
+        $groupBuckets = [];
+        foreach ($blocks as $b) {
+            $remind = (new DateTime($b['from']))->modify('-1 day')->format('Y-m-d');
+            if (!roster_is_workday($remind, $ctx)) {
+                $p = roster_shift_workday($remind, $ctx, -1);
+                if ($p !== null) $remind = $p;
+            }
+            if ($remind !== $today) continue;   // 今天才發
+
+            if ($b['group']) {   // 集體通知：先分桶（同班別同區段）
+                $gk = $b['shift_type_id'] . '|' . $b['from'] . '|' . $b['to'];
+                if (!isset($groupBuckets[$gk])) $groupBuckets[$gk] = ['b' => $b, 'uids' => []];
+                $groupBuckets[$gk]['uids'][] = $b['user_id'];
+                continue;
+            }
+            // 個別通知
+            if (!$mark('shiftblock', $b['shift_type_id'] . '|' . $b['user_id'] . '|' . $b['from'])) continue;
+            $period = ($b['from'] === $b['to']) ? $b['from'] : ($b['from'] . ' ~ ' . $b['to'] . '（共 ' . $b['days'] . ' 天）');
+            $sent += roster_notify($pdo,
+                '【班別通知】' . $b['shift_name'] . '　' . $period,
+                '你的班別安排：' . "\n"
+                . '・班別：' . $b['shift_name'] . "\n"
+                . '・時間：' . $b['time'] . "\n"
+                . '・期間：' . $period . "\n\n"
+                . '（此為整段一次性通知，期間內不再重複提醒）',
+                [$b['user_id']]) ? 1 : 0;
+        }
+
+        // 集體通知：一則列出所有人員
+        foreach ($groupBuckets as $gk => $g) {
+            if (!$mark('shiftgroup', $gk)) continue;
+            $b = $g['b'];
+            $uids = array_values(array_unique($g['uids']));
+            $period = ($b['from'] === $b['to']) ? $b['from'] : ($b['from'] . ' ~ ' . $b['to'] . '（共 ' . $b['days'] . ' 天）');
+            $list = [];
+            foreach ($uids as $u) $list[] = '・' . ($names[$u]['name'] ?? ('#' . $u));
+            $sent += roster_notify($pdo,
+                '【班別通知】' . $b['shift_name'] . '　' . $period . '　共 ' . count($uids) . ' 人',
+                '本班別人員安排如下：' . "\n"
+                . '・班別：' . $b['shift_name'] . "\n"
+                . '・時間：' . $b['time'] . "\n"
+                . '・期間：' . $period . "\n\n"
+                . "【人員名單】\n" . implode("\n", $list) . "\n\n"
+                . '（此為整段一次性通知，期間內不再重複提醒）',
+                $uids) ? 1 : 0;
+        }
+        return $sent;
+    }
+}
+
 if (!function_exists('roster_daily_reminders')) {
     /**
      * 順路觸發的每日提醒（開頁時呼叫，一天只跑一次；用 roster_notify_log 防重複）：
@@ -547,37 +654,29 @@ if (!function_exists('roster_daily_reminders')) {
             } catch (Throwable $e) { return false; }
         };
 
-        // A) 值勤提醒（每人每天一則，彙整其明日所有班）
+        // A) 輪值值勤提醒（每人每天一則，彙整其明日所有輪值班）
         try {
             $rows = [];
-            $q = $pdo->prepare("SELECT a.user_id, b.name AS board_name, l.lane_name AS item_name, NULL AS shift_time
+            $q = $pdo->prepare("SELECT a.user_id, b.name AS board_name, l.lane_name AS item_name
                                 FROM roster_assignment a
                                 JOIN roster_board b ON b.id=a.board_id AND b.status='active'
                                 LEFT JOIN roster_lane l ON l.id=a.lane_id
                                 WHERE a.duty_date=?");
             $q->execute([$tom]);
             foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $rows[(int)$r['user_id']][] = $r;
-            $q2 = $pdo->prepare("SELECT sa.user_id, st.name AS board_name, NULL AS item_name,
-                                        CONCAT(LEFT(st.start_time,5),'~',LEFT(st.end_time,5)) AS shift_time
-                                 FROM roster_shift_assign sa JOIN roster_shift_type st ON st.id=sa.shift_type_id
-                                 WHERE sa.work_date=?");
-            $q2->execute([$tom]);
-            foreach ($q2->fetchAll(PDO::FETCH_ASSOC) as $r) $rows[(int)$r['user_id']][] = $r;
-
             foreach ($rows as $uid => $items) {
                 if (!$mark('duty', $tom . '|' . $uid)) continue;
                 $lines = [];
-                foreach ($items as $it) {
-                    $lines[] = '・' . $it['board_name']
-                        . ($it['item_name'] ? '（' . $it['item_name'] . '）' : '')
-                        . ($it['shift_time'] ? '　' . $it['shift_time'] : '');
-                }
+                foreach ($items as $it) $lines[] = '・' . $it['board_name'] . ($it['item_name'] ? '（' . $it['item_name'] . '）' : '');
                 $out['duty'] += roster_notify($pdo,
                     '【值勤提醒】明天(' . $tom . ')輪到你',
                     "明天你有以下值勤：\n" . implode("\n", $lines) . "\n\n完成後請到「輪值排班表」點選簽核。",
                     [$uid]) ? 1 : 0;
             }
         } catch (Throwable $e) {}
+
+        // A2) 固定班別：整段只通知一次（見 roster_notify_shift_blocks）
+        try { $out['duty'] += roster_notify_shift_blocks($pdo, $mark); } catch (Throwable $e) {}
 
         // B) 請假未補位提醒（通知表建立者；固定班別通知管理者=建立該班別者）
         try {
