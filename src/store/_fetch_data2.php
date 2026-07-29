@@ -135,9 +135,23 @@ try { // ✅ 建議：使用 try-catch 捕捉所有資料庫操作的錯誤
         bi.ProcessName,
         bi.pti,
         bi.maker_name           AS maker_id,
+        -- ⚠ 廠商代號清單只能取「目前製程」(移轉日最新的那一批)，
+        --    否則自動更新後會比首次載入多出舊製程的廠商代號，導致用代號片段搜尋跳出無關廠商。
+        --    條件需與 OreadyReply_ForPm_BaseOfTime2.php 首次載入的 bi 子查詢一致。
         (SELECT GROUP_CONCAT(DISTINCT CAST(bi_ml.maker_id_no AS CHAR) ORDER BY bi_ml.bom_sn SEPARATOR '/')
          FROM bom_ing bi_ml
-         WHERE bi_ml.bom = b.bom AND bi_ml.processing_state IN ('Q', 'P', 'ing', 'E')
+         WHERE bi_ml.bom = b.bom
+           AND bi_ml.processing_state IN ('Q', 'P', 'ing', 'E')
+           AND bi_ml.is_schedule_split = 0
+           AND bi_ml.outsource_date IS NOT NULL
+           AND DATE(bi_ml.outsource_date) = (
+                SELECT MAX(DATE(bi_ml2.outsource_date))
+                FROM bom_ing bi_ml2
+                WHERE bi_ml2.bom = b.bom
+                  AND bi_ml2.processing_state IN ('Q', 'P', 'ing', 'E')
+                  AND bi_ml2.is_schedule_split = 0
+                  AND bi_ml2.outsource_date IS NOT NULL
+           )
         ) AS maker_id_no_list,
         bi.sqty                 AS bom_ing_sqty,
         COALESCE(

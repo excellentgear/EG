@@ -2644,6 +2644,47 @@ echo "</script>\n";
     .th-sort-btn:hover { background: #F7E0BD; border-color: #E0C091; color: #7a4a16; }
     .th-sort-btn.active { background: #F0A24B; border-color: #d9861f; color: #fff; font-weight: bold; }
 
+    /* ── 廠商篩選：輸入片段字/代號後的建議清單 ─────────────────── */
+    #vendor-suggest {
+        display: none;
+        position: fixed;
+        z-index: 21000;
+        max-height: 320px;
+        overflow-y: auto;
+        background: #fff;
+        border: 1px solid #E0C091;
+        border-radius: 4px;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+        font-size: 12px;
+        color: #4a3117;
+    }
+    #vendor-suggest .vs-empty { padding: 8px 10px; color: #a08a6a; }
+    #vendor-suggest .vs-item {
+        padding: 5px 10px;
+        cursor: pointer;
+        white-space: nowrap;
+        border-bottom: 1px solid #F5E7D2;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    #vendor-suggest .vs-item:last-child { border-bottom: 0; }
+    #vendor-suggest .vs-item:hover,
+    #vendor-suggest .vs-item.active { background: #F7E0BD; }
+    #vendor-suggest .vs-no {
+        font-weight: bold;
+        color: #a05a12;
+        min-width: 66px;
+        display: inline-block;
+    }
+    #vendor-suggest .vs-name { flex: 1; }
+    #vendor-suggest .vs-cnt { color: #8a6b45; font-size: 11px; }
+    #vendor-filter.vendor-locked {
+        background: #FDF3E4;
+        border-color: #d9861f !important;
+        font-weight: bold;
+    }
+
     /* ── 通知廠商圖 預覽視窗 ───────────────────────────────────── */
     #vendor-notify-mask {
         display: none;
@@ -3423,6 +3464,9 @@ echo "</script>\n";
         }
         updateListSortUI();
 
+        // --- 廠商篩選建議清單（打片段字/代號 → 點選鎖定單一廠商）---
+        initVendorAutocomplete();
+
         // --- Add event listeners for Customer Switching buttons ---
         const setWorkdayBtn = document.getElementById('set-workday-btn');
         if (setWorkdayBtn) {
@@ -3591,6 +3635,8 @@ echo "</script>\n";
             vendorFilterInputForDblClick.addEventListener('dblclick', function() {
                 if (this.value.trim() !== "") {
                     this.value = ""; // 清空輸入框
+                    unlockVendorFilter(); // 一併解除已鎖定的廠商
+                    hideVendorSuggest();
                     console.log("雙擊「廠商篩選」輸入框，已清空內容並觸發篩選。");
                     processAndRenderData(); // 觸發篩選
                 }
@@ -4091,6 +4137,7 @@ echo "</script>\n";
             document.getElementById("customer-filter").value = "";
             document.getElementById("sales-filter").value = "";
             document.getElementById("vendor-filter").value = "";
+            unlockVendorFilter(); // 解除已鎖定的廠商
             document.getElementById("delivery-date-filter").value = ""; // 新增：清除交期篩選
             document.getElementById("order-filter").value = "";
             if (document.getElementById("status-filter")) {
@@ -5498,9 +5545,17 @@ echo "</script>\n";
                 if (vendorFilterInput) {
                     if (vendorFilterInput.value.trim() !== "") { // 如果篩選框已有內容
                         vendorFilterInput.value = ""; // 清空篩選框
+                        unlockVendorFilter();
                         console.log(`雙擊發單日欄位，已清空廠商篩選框。`);
                     } else if (makerValue) { // 如果篩選框為空，且儲存格廠商名稱不為空
+                        // 本列目前製程只有一家廠商時，直接鎖定該廠商代號（確保只篩出同一間）
+                        const _rowNos = getCurrentVendorNos(row);
+                        if (_rowNos.length === 1) {
+                            pickVendor({ no: _rowNos[0], name: makerValue });
+                            return; // pickVendor 內已重繪
+                        }
                         vendorFilterInput.value = makerValue; // 將廠商名稱填入篩選框
+                        unlockVendorFilter();
                         console.log(`雙擊發單日欄位，已將 "${makerValue}" 設定到廠商篩選框。`);
                     }
                     processAndRenderData(); // 觸發篩選
@@ -6701,10 +6756,15 @@ echo "</script>\n";
         if (filters.bom && (!row.bom || row.bom.toLowerCase().indexOf(filters.bom) === -1) && (!row.d_id || row.d_id.toLowerCase().indexOf(filters.bom) === -1)) show = false;
         // 廠商（含拆分批次廠商）
         if (filters.vendor) {
-            var _fvL = String(filters.vendor).trim().toLowerCase();
-            var _mkOk = (row.maker_id && row.maker_id.toLowerCase().indexOf(_fvL) !== -1) ||
-                        (row.maker_id_no_list && String(row.maker_id_no_list).toLowerCase().indexOf(_fvL) !== -1);
-            if (!_mkOk) show = false;
+            if (filters.vendorNo) {
+                // 已鎖定單一廠商：比對目前製程的廠商代號
+                if (getCurrentVendorNos(row).indexOf(filters.vendorNo) === -1) show = false;
+            } else {
+                var _fvL = String(filters.vendor).trim().toLowerCase();
+                var _mkOk = (row.maker_id && row.maker_id.toLowerCase().indexOf(_fvL) !== -1) ||
+                            (row.maker_id_no_list && String(row.maker_id_no_list).toLowerCase().indexOf(_fvL) !== -1);
+                if (!_mkOk) show = false;
+            }
         }
         // 製程
         if (filters.pti && !window._matchPti(row, filters.pti)) show = false;
@@ -7446,7 +7506,10 @@ echo "</script>\n";
     // 1. 獲取篩選條件 (確保此函數正確讀取所有篩選元件的值)
     function getFilters() {
         let customerFilterValue = document.getElementById('customer-filter').value;
-        let vendorFilterValue = document.getElementById('vendor-filter').value;
+        const vendorFilterEl_ = document.getElementById('vendor-filter');
+        let vendorFilterValue = vendorFilterEl_.value;
+        // 由建議清單點選鎖定的廠商代號（有值 = 精準比對單一廠商）
+        let vendorNoValue = (vendorFilterEl_.dataset && vendorFilterEl_.dataset.vendorNo) ? String(vendorFilterEl_.dataset.vendorNo).trim() : '';
         let statusFilterValue = document.getElementById('status-filter') ? document.getElementById('status-filter').value : '';
 
         if (statusFilterValue === "no_vendor") {
@@ -7463,6 +7526,7 @@ echo "</script>\n";
             bom: document.getElementById('bom-filter').value.toLowerCase(),
             sales: document.getElementById('sales-filter').value.toLowerCase(),
             vendor: vendorFilterValue,
+            vendorNo: (vendorFilterValue === 'FILTER_NO_VENDOR') ? '' : vendorNoValue,
             order: document.getElementById('order-filter').value.toLowerCase(),
             deliveryDate: document.getElementById('delivery-date-filter').value.trim(), // 新增：交期篩選值
             date: document.getElementById('date-filter').value,
@@ -7598,6 +7662,187 @@ echo "</script>\n";
         processAndRenderData();
     }
 
+    // ── 廠商篩選：輸入片段字/代號 → 建議清單 → 點選鎖定單一廠商 ─────────────
+    // 只用片段字比對會把「代號含該片段」的其他廠商一起撈進來，所以提供清單讓使用者
+    // 選定一家；選定後改用「廠商代號完全相同」比對，確保篩出的一定是同一間廠商。
+
+    // 取該列「目前製程」的廠商代號集合（找不到時退回 maker_id_no_list）
+    function getCurrentVendorNos(row) {
+        var live = getCurrentDisplayProcs(row);
+        var nos = [];
+        live.forEach(function(p) {
+            var no = String(p.maker_id_no || '').trim();
+            if (no && nos.indexOf(no) === -1) nos.push(no);
+        });
+        if (nos.length === 0) {
+            String(row.maker_id_no_list || '').split('/').forEach(function(n) {
+                var t = n.trim();
+                if (t && nos.indexOf(t) === -1) nos.push(t);
+            });
+        }
+        return nos;
+    }
+
+    // 依目前已載入資料建立廠商清單（代號 + 中文名 + 目前製程在該廠的 BOM 數）
+    function buildVendorCatalog() {
+        var map = {};
+        (fullDataset || []).forEach(function(row) {
+            var live = getCurrentDisplayProcs(row);
+            var pairs = [];
+            if (live.length === 0) {
+                String(row.maker_id || '').split('/').forEach(function(nm) {
+                    if (nm.trim()) pairs.push({ no: '', name: nm.trim() });
+                });
+            } else {
+                live.forEach(function(p) {
+                    pairs.push({ no: String(p.maker_id_no || '').trim(), name: String(p.maker_id || '').trim() });
+                });
+            }
+            var seen = {};
+            pairs.forEach(function(pr) {
+                if (!pr.no && !pr.name) return;
+                var key = pr.no || ('#' + pr.name);
+                if (!map[key]) map[key] = { no: pr.no, name: pr.name, count: 0 };
+                if (!map[key].name && pr.name) map[key].name = pr.name;
+                if (!seen[key]) { seen[key] = 1; map[key].count++; }
+            });
+        });
+        return Object.keys(map).map(function(k) { return map[k]; })
+            .sort(function(a, b) {
+                if (b.count !== a.count) return b.count - a.count;
+                return String(a.name || a.no).localeCompare(String(b.name || b.no), 'zh-Hant');
+            });
+    }
+
+    var _vendorSuggestIndex = -1;
+
+    function _vendorSuggestEl() {
+        var el = document.getElementById('vendor-suggest');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'vendor-suggest';
+            document.body.appendChild(el);
+        }
+        return el;
+    }
+
+    function hideVendorSuggest() {
+        var el = document.getElementById('vendor-suggest');
+        if (el) el.style.display = 'none';
+        _vendorSuggestIndex = -1;
+    }
+
+    // 鎖定單一廠商（由清單點選 / 鍵盤選取）
+    function pickVendor(item) {
+        var input = document.getElementById('vendor-filter');
+        if (!input) return;
+        input.value = item.name || item.no || '';
+        input.dataset.vendorNo = item.no || '';
+        input.classList.toggle('vendor-locked', !!item.no);
+        input.title = item.no ?
+            ('已鎖定廠商：' + (item.name || '') + '（代號 ' + item.no + '）－ 只會篩出這一家；雙擊此欄可清除') :
+            '輸入廠商代號或中文片段後，從下方清單點選一家';
+        hideVendorSuggest();
+        currentPage = 1;
+        processAndRenderData();
+    }
+
+    // 使用者手動改字 → 解除鎖定，回到片段比對
+    function unlockVendorFilter() {
+        var input = document.getElementById('vendor-filter');
+        if (!input) return;
+        if (input.dataset.vendorNo) delete input.dataset.vendorNo;
+        input.classList.remove('vendor-locked');
+    }
+
+    function showVendorSuggest() {
+        var input = document.getElementById('vendor-filter');
+        if (!input) return;
+        var term = String(input.value || '').trim().toLowerCase();
+        var catalog = buildVendorCatalog();
+        var list = term ? catalog.filter(function(v) {
+            return String(v.no || '').toLowerCase().indexOf(term) !== -1 ||
+                   String(v.name || '').toLowerCase().indexOf(term) !== -1;
+        }) : catalog;
+        list = list.slice(0, 50);
+
+        var el = _vendorSuggestEl();
+        el.innerHTML = '';
+        if (list.length === 0) {
+            var em = document.createElement('div');
+            em.className = 'vs-empty';
+            em.textContent = '目前資料中沒有符合「' + input.value + '」的廠商';
+            el.appendChild(em);
+        } else {
+            list.forEach(function(v, i) {
+                var row = document.createElement('div');
+                row.className = 'vs-item';
+                row.innerHTML = '<span class="vs-no">' + escapeHtml(v.no || '－') + '</span>' +
+                                '<span class="vs-name">' + escapeHtml(v.name || '(無中文名)') + '</span>' +
+                                '<span class="vs-cnt">' + v.count + ' 筆</span>';
+                row.addEventListener('mousedown', function(e) {
+                    e.preventDefault(); // 避免 blur 先關掉清單
+                    pickVendor(v);
+                });
+                el.appendChild(row);
+            });
+        }
+
+        var r = input.getBoundingClientRect();
+        el.style.left = r.left + 'px';
+        el.style.top = (r.bottom + 2) + 'px';
+        el.style.minWidth = Math.max(240, r.width) + 'px';
+        el.style.display = 'block';
+        _vendorSuggestIndex = -1;
+    }
+
+    function _moveVendorSuggest(delta) {
+        var el = document.getElementById('vendor-suggest');
+        if (!el || el.style.display === 'none') return false;
+        var items = el.querySelectorAll('.vs-item');
+        if (!items.length) return false;
+        _vendorSuggestIndex += delta;
+        if (_vendorSuggestIndex < 0) _vendorSuggestIndex = items.length - 1;
+        if (_vendorSuggestIndex >= items.length) _vendorSuggestIndex = 0;
+        items.forEach(function(it, i) { it.classList.toggle('active', i === _vendorSuggestIndex); });
+        var act = items[_vendorSuggestIndex];
+        if (act && act.scrollIntoView) act.scrollIntoView({ block: 'nearest' });
+        return true;
+    }
+
+    function initVendorAutocomplete() {
+        var input = document.getElementById('vendor-filter');
+        if (!input || input._vendorAcBound) return;
+        input._vendorAcBound = true;
+
+        input.addEventListener('input', function() {
+            unlockVendorFilter();
+            showVendorSuggest();
+        });
+        input.addEventListener('focus', function() { showVendorSuggest(); });
+        input.addEventListener('blur', function() { setTimeout(hideVendorSuggest, 150); });
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowDown') { if (_moveVendorSuggest(1)) e.preventDefault(); }
+            else if (e.key === 'ArrowUp') { if (_moveVendorSuggest(-1)) e.preventDefault(); }
+            else if (e.key === 'Enter') {
+                var el = document.getElementById('vendor-suggest');
+                if (el && el.style.display !== 'none') {
+                    var items = el.querySelectorAll('.vs-item');
+                    var idx = _vendorSuggestIndex >= 0 ? _vendorSuggestIndex : (items.length === 1 ? 0 : -1);
+                    if (idx >= 0 && items[idx]) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        items[idx].dispatchEvent(new MouseEvent('mousedown'));
+                    }
+                }
+            } else if (e.key === 'Escape') {
+                hideVendorSuggest();
+            }
+        });
+        window.addEventListener('resize', hideVendorSuggest);
+        window.addEventListener('scroll', hideVendorSuggest, true);
+    }
+
     // 2. 過濾數據陣列 (確保此函數邏輯正確，操作 data 陣列)
     function filterData(data) {
         var filters = getFilters();
@@ -7710,6 +7955,9 @@ echo "</script>\n";
                     if (row.maker_id && String(row.maker_id).trim() !== "") {
                         show = false;
                     }
+                } else if (filters.vendorNo) {
+                    // 已由建議清單鎖定單一廠商：只比對「目前製程」的廠商代號，完全相同才算
+                    if (getCurrentVendorNos(row).indexOf(filters.vendorNo) === -1) show = false;
                 } else {
                     const fvLower = String(filters.vendor).trim().toLowerCase();
                     const makerOk = (row.maker_id && String(row.maker_id).toLowerCase().indexOf(fvLower) !== -1) ||
@@ -8646,18 +8894,52 @@ echo "</script>\n";
         return m[1] + '/' + String(parseInt(m[2], 10)).padStart(2, '0') + '/' + String(parseInt(m[3], 10)).padStart(2, '0');
     }
 
-    // 取該列目前「進行中製程」清單（與畫面發單日欄同一來源 ingActiveMap；已移轉 E 不算）
-    function _vendorImgActiveProcs(row) {
+    // 取該列「目前製程」——與畫面發單日欄顯示的完全同一組製程。
+    // 邏輯必須與 updateTable() 內的 _displayProcs 一致：
+    //   有拆分批次 → 所有帶批次標籤的批次（含已移轉 E）＋未移轉的一般製程
+    //   無拆分批次 → 只取移轉日最新的那一批，且排除已移轉 E（全 E 時退回序號最大者）
+    function getCurrentDisplayProcs(row) {
         var procs = (window.ingActiveMap || {})[String(row.bom || '').trim()] || [];
-        var live = procs.filter(function(p) {
-            return (p.batch_label || p.processing_state !== 'E') && (p.outsource_date || p.batch_label);
+        if (procs.length === 0) return [];
+
+        var snCounts = {};
+        procs.forEach(function(p) {
+            if (p.processing_state !== 'E' || p.batch_label) {
+                snCounts[p.bom_sn] = (snCounts[p.bom_sn] || 0) + 1;
+            }
         });
-        return live;
+        var hasActiveSplit = Object.keys(snCounts).some(function(sn) { return snCounts[sn] > 1; });
+
+        if (hasActiveSplit) {
+            return procs.filter(function(p) {
+                return (p.batch_label || p.processing_state !== 'E') && (p.outsource_date || p.batch_label);
+            }).sort(function(a, b) {
+                var snA = parseInt(a.bom_sn || 0, 10), snB = parseInt(b.bom_sn || 0, 10);
+                if (snA !== snB) return snA - snB;
+                return String(a.batch_label || '').localeCompare(String(b.batch_label || ''));
+            });
+        }
+
+        var withDate = procs.filter(function(p) { return p.outsource_date; });
+        var maxVal = -Infinity;
+        var _val = function(p) {
+            var dp = String(p.outsource_date).split('/');
+            return dp.length >= 3 ? new Date(parseInt(dp[0], 10), parseInt(dp[1], 10) - 1, parseInt(dp[2], 10)).getTime() : -Infinity;
+        };
+        withDate.forEach(function(p) { var v = _val(p); if (v > maxVal) maxVal = v; });
+        var latest = withDate.filter(function(p) { return _val(p) === maxVal; });
+        var display = latest.filter(function(p) { return p.processing_state !== 'E'; });
+        if (display.length === 0 && latest.length > 0) {
+            display = [latest.reduce(function(best, p) {
+                return parseInt(p.bom_sn || 0, 10) > parseInt(best.bom_sn || 0, 10) ? p : best;
+            }, latest[0])];
+        }
+        return display;
     }
 
     // 製程x數量：拆分批次用該批數量，否則用 BOM 總數（row.Qty）
     function _vendorImgProcessQty(row) {
-        var live = _vendorImgActiveProcs(row);
+        var live = getCurrentDisplayProcs(row);
         var totalQty = (row.Qty === null || row.Qty === undefined || row.Qty === '') ? '' : String(row.Qty);
         if (live.length === 0) {
             var fbName = String(row.ProcessName || '').trim();
@@ -8671,28 +8953,28 @@ echo "</script>\n";
         }).join(' / ');
     }
 
-    // 標題用的廠商名稱：資料只有一家廠商時用該家，否則取廠商篩選框的字
+    // 標題用的廠商名稱：一律取資料庫的廠商中文名（目前製程的廠商），
+    // 絕不使用使用者在篩選框打的片段字樣（例如打 "RR" 不可拿來當標題）。
     function _vendorImgVendorName(rows) {
-        var names = {};
+        var names = [];
         rows.forEach(function(r) {
-            var live = _vendorImgActiveProcs(r);
-            if (live.length === 0) {
-                var mk = String(r.maker_id || '').trim();
-                if (mk) names[mk] = 1;
-            } else {
-                live.forEach(function(p) {
-                    var mk2 = String(p.maker_id || '').trim();
-                    if (mk2) names[mk2] = 1;
+            var live = getCurrentDisplayProcs(r);
+            var picked = (live.length === 0)
+                ? [String(r.maker_id || '')]
+                : live.map(function(p) { return String(p.maker_id || ''); });
+            picked.forEach(function(mk) {
+                // 首次載入時 row.maker_id 可能是「甲/乙」多家併列，拆開處理
+                String(mk).split('/').forEach(function(one) {
+                    var nm = one.trim();
+                    if (nm && names.indexOf(nm) === -1) names.push(nm);
                 });
-            }
+            });
         });
-        var list = Object.keys(names);
-        if (list.length === 1) return { name: list[0], multi: false };
 
-        var filterEl = document.getElementById('vendor-filter');
-        var filterVal = filterEl ? String(filterEl.value || '').trim() : '';
-        if (filterVal && filterVal !== 'FILTER_NO_VENDOR') return { name: filterVal, multi: list.length > 1 };
-        return { name: '', multi: list.length > 1 };
+        if (names.length === 0) return { name: '', multi: false };
+        if (names.length === 1) return { name: names[0], multi: false };
+        if (names.length <= 3) return { name: names.join('、'), multi: true };
+        return { name: '', multi: true };
     }
 
     // 繪製圖片；回傳 canvas
@@ -9072,6 +9354,7 @@ echo "</script>\n";
             if (currentVendorIndex < 0) currentVendorIndex = availableVendors.length - 1;
         }
         document.getElementById('vendor-filter').value = availableVendors[currentVendorIndex];
+        unlockVendorFilter(); // 用上下鍵切換廠商時改回名稱比對
         processAndRenderData();
     }
 
@@ -9086,6 +9369,7 @@ echo "</script>\n";
             if (currentVendorIndex >= availableVendors.length) currentVendorIndex = 0;
         }
         document.getElementById('vendor-filter').value = availableVendors[currentVendorIndex];
+        unlockVendorFilter(); // 用上下鍵切換廠商時改回名稱比對
         processAndRenderData();
     }
 
@@ -14512,7 +14796,7 @@ echo "</script>\n";
                                                 </div>
                                             </button>
                                             <input type="text" id="bom-filter" placeholder="搜索 BOM / 料號">
-                                            <input type="text" id="vendor-filter" list="vendorList" placeholder="全部廠商">
+                                            <input type="text" id="vendor-filter" autocomplete="off" placeholder="全部廠商(可打代號/中文片段選擇)" title="輸入廠商代號或中文片段後，從下方清單點選一家；選定後只會篩出該廠商（雙擊此欄可清除）">
                                             <button type="button" id="btn-prev-vendor" title="上一個廠商" style="padding: 0 6px; height: 26px; font-size: 10px;">&lt;</button>
                                             <button type="button" id="btn-next-vendor" title="下一個廠商" style="padding: 0 6px; height: 26px; font-size: 10px;">&gt;</button>
                                             <datalist id="vendorList"></datalist>
