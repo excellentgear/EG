@@ -116,14 +116,21 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         /* 高特異度覆蓋 .m-body select{width:100%}，讓大類/加工項目並排 */
         .va-modal .m-body .pk-filter select { width:150px; height:28px; font-size:12px; padding:0 6px; }
         .va-modal .m-body .pk-filter input[type=text] { width:150px; height:28px; font-size:12px; padding:0 6px; }
-        .pk-list { border:1px solid #EADFC8; border-radius:6px; max-height:60vh; overflow-y:auto; }
-        table.pk-table { width:100%; border-collapse:collapse; font-size:12px; }
-        table.pk-table th, table.pk-table td { border-bottom:1px solid #F0E7D5; padding:4px 6px; text-align:center; }
-        table.pk-table thead th { position:sticky; top:0; background:#F7E0BD; color:#5b3a1e; z-index:2; }
-        table.pk-table td.t-left { text-align:left; }
-        .mg-yes { color:#8A5A2B; font-weight:bold; } .mg-no { color:#b0a390; }
+        .pk-selbar { display:flex; align-items:center; gap:10px; font-size:12px; color:#5b3a1e; margin-bottom:4px; }
+        .pk-selbar label { margin:0; cursor:pointer; }
+        .pk-grid { border:1px solid #EADFC8; border-radius:6px; padding:6px 8px; max-height:56vh; overflow-y:auto;
+            display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:2px 10px; }
+        .pk-grid .pk-item { display:flex; align-items:center; gap:5px; padding:3px 6px; border-radius:4px; font-size:12px;
+            color:#5b3a1e; cursor:pointer; margin:0; font-weight:normal; white-space:nowrap; overflow:hidden; }
+        .pk-grid .pk-item:hover { background:#FBF0DD; }
+        .pk-grid .pk-item .no { color:#8a6d45; }
+        .pk-grid .pk-item .nm { overflow:hidden; text-overflow:ellipsis; }
+        .pk-grid .pk-item .cat { color:#b0a390; font-size:11px; }
+        .pk-grid .pk-item .mg { color:#8A5A2B; font-weight:bold; font-size:11px; margin-left:auto; }
+        .pk-grid .empty { color:#8a6d45; padding:10px; grid-column:1/-1; }
         .pk-actions { display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center; margin-top:10px; padding-top:8px; border-top:1px dashed #EADFC8; }
-        .pk-actions .grp { display:flex; gap:4px; align-items:center; flex-wrap:wrap; font-size:12px; color:#5b3a1e; }
+        .pk-actions .grp { display:flex; gap:4px; align-items:center; flex-wrap:nowrap; white-space:nowrap; font-size:12px; color:#5b3a1e; }
+        .pk-actions .grp select, .pk-actions .grp input[type=number] { min-height:28px; box-sizing:border-box; }
         .pk-actions button { display:inline-flex; align-items:center; gap:4px; min-height:28px; line-height:1.2; white-space:nowrap;
             font-size:12px; border-radius:4px; border:1px solid #d98a33; cursor:pointer; padding:5px 12px; }
         .pk-actions .b-add { background:#F0A24B; color:#fff; }
@@ -250,15 +257,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button class="b-alt" style="height:28px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;" onclick="loadPool()">查詢</button>
             <span id="pkCount" style="font-size:12px;color:#8a6d45;"></span>
         </div>
-        <div class="pk-list">
-            <table class="pk-table">
-                <thead><tr>
-                    <th style="width:32px;"><input type="checkbox" id="pkAll"></th>
-                    <th>編號</th><th>廠商名稱</th><th>大類</th><th>納管</th>
-                </tr></thead>
-                <tbody id="pkBody"><tr><td colspan="5" style="padding:14px;color:#8a6d45;">請設定條件後查詢</td></tr></tbody>
-            </table>
+        <div class="pk-selbar">
+            <label><input type="checkbox" id="pkAll"> 全選</label>
+            <span style="color:#8a6d45;">勾選要加入的廠商（<span class="mg" style="color:#8A5A2B;">✔納</span>=已納入稽核管理）</span>
         </div>
+        <div class="pk-grid" id="pkBody"><div class="empty">請設定條件後查詢</div></div>
         <div class="pk-actions">
             <div class="grp">預定稽核月份 <select id="pkMonth" style="height:28px;border:1px solid #D8BE93;border-radius:4px;"></select></div>
             <div class="grp"><button class="b-add" onclick="addSelected()"><i class="fa fa-check"></i> 加入選取</button></div>
@@ -506,15 +509,14 @@ function loadPool(){
         $('#pkCount').text('符合 '+POOL.length+' 家'+(res.capped?'（僅顯示前 500，請縮小條件）':''));
         var html = '';
         POOL.forEach(function(p){
-            html += '<tr>';
-            html += '<td><input type="checkbox" class="pk-ck" value="'+esc(p.maker_id_no)+'"></td>';
-            html += '<td>'+esc(p.maker_id_no)+'</td>';
-            html += '<td class="t-left">'+esc(p.maker_id||'')+'</td>';
-            html += '<td>'+esc(p.main_cat_name||'—')+'</td>';
-            html += '<td class="'+(p.audit_managed===1?'mg-yes':'mg-no')+'">'+(p.audit_managed===1?'✔':'—')+'</td>';
-            html += '</tr>';
+            html += '<label class="pk-item" title="'+esc(p.maker_id_no)+' '+esc(p.maker_id||'')+'／'+esc(p.main_cat_name||'')+'">'
+                + '<input type="checkbox" class="pk-ck" value="'+esc(p.maker_id_no)+'">'
+                + '<span class="no">'+esc(p.maker_id_no)+'</span>'
+                + '<span class="nm">'+esc(p.maker_id||'')+'</span>'
+                + (p.audit_managed===1 ? '<span class="mg">✔納</span>' : '')
+                + '</label>';
         });
-        $('#pkBody').html(html || '<tr><td colspan="5" style="padding:14px;color:#8a6d45;">無符合條件的廠商</td></tr>');
+        $('#pkBody').html(html || '<div class="empty">無符合條件的廠商</div>');
         $('#pkAll').prop('checked', false);
     }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
