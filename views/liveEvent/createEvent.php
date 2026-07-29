@@ -1610,7 +1610,8 @@ if (isset($_POST['btn_go_events'])) {
                             html += '<a href="../../src/store/_updateEvent.php?eventid=' + r.id + '&id=' + EG.uid + '"><span class="eg-mini eg-mini-edit"><i class="fa fa-pencil"></i> 編輯</span></a>';
                             showEdit = true;
                         }
-                        if (r.can_delete) html += '<a href="../../src/store/_deleteEvent.php?eventid=' + r.id + '&id=' + EG.uid + '" onclick="return confirm(\'確認刪除?\')"><span class="eg-mini eg-mini-del"><i class="fa fa-trash"></i> 刪除</span></a>';
+                        // 刪除改走 AJAX（原本是整頁轉址，刪完畫面會捲回最上面）
+                        if (r.can_delete) html += '<a href="javascript:;" class="eg-row-del" data-eid="' + r.id + '"><span class="eg-mini eg-mini-del"><i class="fa fa-trash"></i> 刪除</span></a>';
                         if (!showEdit && !r.can_delete) html += '<span style="color:#c3ccd4;">—</span>';
                     }
                     html += '</td>';
@@ -1631,11 +1632,12 @@ if (isset($_POST['btn_go_events'])) {
                 $('#eg-pager').html(h);
             }
 
-            function egLoadList(page) {
+            // done：列表重繪完成後的回呼（刪除後用來還原捲動位置）
+            function egLoadList(page, done) {
                 egState.page = page || 1;
                 $('#eg-list-msg').html('<i class="fa fa-spinner fa-spin"></i>').show();
                 $.get(LIST_API, { page: egState.page, size: egState.size, kw: egState.kw, source: egState.source }, function(res) {
-                    if (!res || !res.ok) { $('#eg-list-tbody').empty(); $('#eg-list-msg').html(res && res.msg ? res.msg : '載入失敗').show(); return; }
+                    if (!res || !res.ok) { $('#eg-list-tbody').empty(); $('#eg-list-msg').html(res && res.msg ? res.msg : '載入失敗').show(); if (done) done(); return; }
                     egState.pages = res.pages; egState.total = res.total;
                     egRenderRows(res.rows);
                     egRenderPager();
@@ -1650,8 +1652,24 @@ if (isset($_POST['btn_go_events'])) {
                         });
                         $('#eg-filter-source').html(opt).val(egState.source);
                     }
-                }, 'json').fail(function() { $('#eg-list-tbody').empty(); $('#eg-list-msg').html('連線失敗').show(); });
+                    if (done) done();
+                }, 'json').fail(function() { $('#eg-list-tbody').empty(); $('#eg-list-msg').html('連線失敗').show(); if (done) done(); });
             }
+
+            // 刪除公告／通知：AJAX 刪除後只重載目前這一頁列表，並還原捲動位置（不整頁跳轉、畫面不跳回最上面）
+            $('#eg-list-tbody').on('click', '.eg-row-del', function() {
+                var eid = $(this).data('eid');
+                if (!eid || !confirm('確認刪除?')) return;
+                var $a = $(this).css('pointer-events', 'none');
+                var scrollY = window.pageYOffset || document.documentElement.scrollTop;
+                // 若刪的是本頁最後一筆且不在第 1 頁，刪完退回上一頁，避免停在空白頁
+                var targetPage = ($('#eg-list-tbody tr').length <= 1 && egState.page > 1) ? egState.page - 1 : egState.page;
+                $.get('../../src/store/_deleteEvent.php', { eventid: eid, id: EG.uid, ajax: 1 }, function(res) {
+                    if (!res || !res.ok) { $a.css('pointer-events', ''); alert((res && res.msg) ? res.msg : '刪除失敗'); return; }
+                    // 等列表重繪完成（頁面高度已定）再把捲動位置放回原處
+                    egLoadList(targetPage, function() { window.scrollTo(0, scrollY); });
+                }, 'json').fail(function() { $a.css('pointer-events', ''); alert('連線失敗，刪除未完成'); });
+            });
 
             $('#eg-pager').on('click', '.pg:not(.disabled):not(.active)', function() { var pg = parseInt($(this).data('pg'), 10); if (pg >= 1 && pg <= egState.pages) egLoadList(pg); });
             $('#eg-page-size').on('change', function() { egState.size = parseInt(this.value, 10) || 10; egLoadList(1); });
