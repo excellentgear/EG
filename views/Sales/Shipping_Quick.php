@@ -85,6 +85,14 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
 table.sq-t{width:100%;border-collapse:collapse;font-size:13px;}
 table.sq-t th,table.sq-t td{border:1px solid #EADFC8;padding:4px 7px;white-space:nowrap;text-align:center;}
 table.sq-t thead th{position:sticky;top:0;z-index:2;background:var(--sq-normal);color:var(--sq-ink);font-weight:bold;}
+table.sq-t thead th.sortable{cursor:pointer;user-select:none;}
+table.sq-t thead th.sortable:hover{background:#F0CFA0;}
+table.sq-t thead th.sortable .sa{margin-left:4px;font-style:normal;opacity:.35;font-size:11px;}
+table.sq-t thead th.sortable .sa:before{content:'\f0dc';font-family:FontAwesome;}
+table.sq-t thead th.sortable.asc  .sa{opacity:1;color:#8A5A2B;}
+table.sq-t thead th.sortable.asc  .sa:before{content:'\f0de';}
+table.sq-t thead th.sortable.desc .sa{opacity:1;color:#8A5A2B;}
+table.sq-t thead th.sortable.desc .sa:before{content:'\f0dd';}
 table.sq-t td.l{text-align:left;}
 table.sq-t td.r{text-align:right;}
 table.sq-t tbody tr:nth-child(even){background:#FFFCF6;}
@@ -120,10 +128,13 @@ table.sq-t tbody tr.noready{color:#a08a6a;}
 .sq-dock button.go:hover{background:var(--sq-acc-d);}
 .sq-dock button:hover{background:rgba(255,255,255,.16);}
 
-.sq-mask{display:none;position:fixed;inset:0;background:rgba(60,40,20,.45);z-index:1000;
-  align-items:flex-start;justify-content:center;overflow:auto;padding:40px 12px;}
-.sq-mask.show{display:flex;}
-.sq-modal{background:#fff;border-radius:8px;width:960px;max-width:100%;box-shadow:0 6px 30px rgba(0,0,0,.3);}
+/* 遮罩：不用 inset 簡寫也不用 justify-content 置中（內容比視窗寬時左半會被裁掉且捲不到），
+   改為明確四邊 + 子元素 margin:auto，z-index 需高過側欄/頂欄 */
+.sq-mask{display:none;position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;
+  background:rgba(60,40,20,.45);z-index:9999;overflow:auto;padding:40px 12px;}
+.sq-mask.show{display:block;}
+.sq-modal{background:#fff;border-radius:8px;width:960px;max-width:100%;margin:0 auto;
+  box-shadow:0 6px 30px rgba(0,0,0,.3);}
 .sq-modal.narrow{width:640px;}
 .sq-modal .m-head{background:var(--sq-normal);color:var(--sq-ink);padding:9px 14px;font-weight:bold;
   border-radius:8px 8px 0 0;display:flex;align-items:center;}
@@ -212,10 +223,17 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
       <table class="sq-t" id="tbl">
         <thead><tr>
           <th style="width:34px;"><input type="checkbox" id="chkAll" title="全選本頁"></th>
-          <th>訂單號</th><th>客戶</th><th>料號</th><th>品名規格</th>
-          <th>訂購</th><th>已出</th><th>未出</th><th>可出</th>
+          <th class="sortable" data-sort="order_oo">訂單號<i class="sa"></i></th>
+          <th class="sortable" data-sort="client">客戶<i class="sa"></i></th>
+          <th class="sortable" data-sort="d_id">料號<i class="sa"></i></th>
+          <th>品名規格</th>
+          <th>訂購</th><th>已出</th>
+          <th class="sortable" data-sort="remain">未出<i class="sa"></i></th>
+          <th class="sortable" data-sort="ready">可出<i class="sa"></i></th>
           <th style="background:#F0A24B;color:#fff;">出貨量</th>
-          <th>單價</th><th>金額</th><th>交期</th><th>製令</th>
+          <th>單價</th><th>金額</th>
+          <th class="sortable" data-sort="delivery">交期<i class="sa"></i></th>
+          <th>製令</th>
         </tr></thead>
         <tbody id="tbody"><tr><td colspan="14" style="padding:22px;color:#8a6d45;">載入中…</td></tr></tbody>
       </table>
@@ -223,6 +241,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
     <div class="sq-hint">
       「可出」＝該訂單目前有完工製令、且尚未出貨的數量（已扣除製令既有出貨）。「未出」＝訂購量－已出量。
       製令完工量以「最後一道製程已移轉(E)」或 ERP 結案認定；點製令欄可展開各張製令的完工／已出／可出明細。
+      <b>訂單號空白或為 NA 的不列入</b>（多為廠內治具製作，非出給客戶的貨）。點表頭可依訂單號／客戶／料號／未出／可出／交期排序。
     </div>
 <?php endif; ?>
   </div>
@@ -330,6 +349,17 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script>
+/* 左側欄：版型預設 #sidebar-menu 為 visibility:hidden，需在 ready 後手動恢復，
+   否則整個左側選單不會出現（漏掉這段是本頁第一版側欄消失的原因）。 */
+$(document).ready(function () {
+    var $am = $('#sidebar-menu .nav.side-menu > li.active');
+    if ($am.length) {
+        $am.removeClass('active').find('ul.child_menu').hide();
+        $am.find('li.current-page').removeClass('current-page');
+    }
+    $('#sidebar-menu').css('visibility', 'visible');
+});
+
 (function ($) {
 'use strict';
 var API   = '../../src/store/Shipping_API.php';
@@ -337,6 +367,7 @@ var CAN_EDIT  = <?= $perms['canEdit']  ? 'true' : 'false' ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
 
 var CSRF = '', rows = [], page = 1, perPage = 20, total = 0;
+var sortBy = '', sortDir = 'asc';   // '' = 預設（可出貨優先、再依交期）
 var sel = {};              // order_id => {qty, row}
 var cur = -1;              // 目前鍵盤游標所在列 index
 var lastMatch = [];
@@ -404,10 +435,23 @@ function filters(){
     date_to:       $('#dTo').val(),
     only_ready:    $('#onlyReady').is(':checked') ? 1 : 0,
     include_paused:$('#incPaused').is(':checked') ? 1 : 0,
+    sort:          sortBy,
+    dir:           sortDir,
     per_page:      perPage,
     page:          page
   };
 }
+
+/* 表頭排序：同欄再點一次切換升／降冪，第三次回到預設排序 */
+$(document).on('click','#tbl thead th.sortable',function(){
+  var k=$(this).data('sort');
+  if(sortBy!==k){ sortBy=k; sortDir='asc'; }
+  else if(sortDir==='asc'){ sortDir='desc'; }
+  else { sortBy=''; sortDir='asc'; }
+  $('#tbl thead th.sortable').removeClass('asc desc');
+  if(sortBy) $(this).addClass(sortDir);
+  page=1; load();
+});
 
 function load(){
   $('#tbody').html('<tr><td colspan="14" style="padding:22px;color:#8a6d45;">查詢中…</td></tr>');

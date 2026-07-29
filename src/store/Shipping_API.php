@@ -46,7 +46,8 @@ function sq_filter(): array {
         'date_to'        => trim((string)($src['date_to'] ?? '')),
         'only_ready'     => !empty($src['only_ready']),
         'include_paused' => !empty($src['include_paused']),
-        'sort'           => trim((string)($src['sort'] ?? 'delivery')),
+        'sort'           => trim((string)($src['sort'] ?? '')),
+        'dir'            => (($src['dir'] ?? 'asc') === 'desc') ? 'desc' : 'asc',
         'page'           => max(1, (int)($src['page'] ?? 1)),
         'per_page'       => (int)($src['per_page'] ?? 20),
     ];

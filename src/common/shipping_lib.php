@@ -192,7 +192,11 @@ function sq_order_ids_by_bom_kw(PDO $db, string $kw): array
  */
 function sq_pending_orders(PDO $db, array $f): array
 {
-    $where  = ["(ot.Order_status IS NULL OR ot.Order_status <> 9)"];
+    // 排除無訂單號／訂單號 NA 的列：多半是廠內治具製作，不是要出給客戶的貨
+    $where  = ["(ot.Order_status IS NULL OR ot.Order_status <> 9)",
+               "ot.Order_oo IS NOT NULL",
+               "TRIM(ot.Order_oo) <> ''",
+               "UPPER(REPLACE(TRIM(ot.Order_oo), '.', '')) NOT IN ('NA', 'N/A')"];
     $params = [];
 
     if (empty($f['include_paused'])) {
@@ -325,15 +329,20 @@ function sq_pending_orders(PDO $db, array $f): array
     ];
     foreach ($out as $r) $summary['amount'] += $r['ready_qty'] * $r['unit_price'];
 
-    // 排序
+    // 排序（sort 欄位 + dir 方向；預設可立即出貨者優先、再依交期）
     $sort = $f['sort'] ?? 'delivery';
-    usort($out, function ($a, $b) use ($sort) {
+    $dir  = (($f['dir'] ?? 'asc') === 'desc') ? -1 : 1;
+    usort($out, function ($a, $b) use ($sort, $dir) {
         switch ($sort) {
-            case 'ready':    return $b['ready_qty'] <=> $a['ready_qty'];
-            case 'client':   return strcmp($a['client_display'], $b['client_display']);
-            case 'order_oo': return strcmp($b['order_oo'], $a['order_oo']);
+            case 'order_oo': return $dir * strnatcasecmp($a['order_oo'], $b['order_oo']);
+            case 'd_id':     return $dir * strnatcasecmp($a['d_id'], $b['d_id']);
+            case 'client':   return $dir * strnatcasecmp($a['client_display'], $b['client_display']);
+            case 'ready':    return $dir * ($a['ready_qty'] <=> $b['ready_qty']);
+            case 'remain':   return $dir * ($a['remain_qty'] <=> $b['remain_qty']);
+            case 'delivery': return $dir * strcmp($a['delivery_date'] ?: '9999-12-31',
+                                                  $b['delivery_date'] ?: '9999-12-31');
             default:
-                // 可立即出貨的排前面，再依交期
+                // 預設：可立即出貨的排前面，再依交期
                 if (($a['ready_qty'] > 0) !== ($b['ready_qty'] > 0)) return $b['ready_qty'] > 0 ? 1 : -1;
                 return strcmp($a['delivery_date'] ?: '9999-12-31', $b['delivery_date'] ?: '9999-12-31');
         }
