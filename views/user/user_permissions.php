@@ -344,6 +344,7 @@ $_dcRoles       = [];  $_userDcRoles     = [];
 $_tcalRoles     = [];  $_userTcalRoles   = [];
 $_trainRoles    = [];  $_userTrainRoles  = [];
 $_vaudRoles     = [];  $_userVaudRoles   = [];
+$_leaveRoles    = [];  $_userLeaveRoles  = [];
 $_kpiRoles      = [];  $_userKpiRoles    = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
@@ -373,6 +374,7 @@ try {
     $st->execute(['tool_calib']);  $_tcalRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['training']);    $_trainRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['vendor_audit']);$_vaudRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['leave']);       $_leaveRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -468,6 +470,10 @@ try {
     $st->execute(['vendor_audit']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userVaudRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['leave']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userLeaveRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -675,6 +681,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'tcal-role-section'      => '量測儀器校驗',
                                         'train-role-section'     => '教育訓練',
                                         'vaud-role-section'      => '供應商稽核',
+                                        'leave-role-section'     => '請假系統',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -1080,6 +1087,11 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('vaud', 'vendor_audit', '供應商稽核管理', 'fa-clipboard', '#b06f27',
                         '為每位使用者指派「供應商稽核管理」頁的操作角色（KPI #6 廠商稽核按時執行率的來源頁）。角色功能：<strong>稽核檢閱</strong>＝檢視廠商清單/稽核歷史/半年統計與匯出；<strong>稽核登錄</strong>＝檢閱＋登錄各廠商稽核完成紀錄；<strong>稽核管理員</strong>＝登錄＋設定週期/納管/基準到期日、刪除誤登紀錄。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         $_vaudRoles, $_userVaudRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('leave', 'leave', '請假系統', 'fa-calendar-minus-o', '#d99a4e',
+                        '<strong>所有登入者都能申請請假、查看與撤回／銷假自己的單</strong>，不需要在這裡指派角色。此處只指派 <strong>人事（可看全部請假單）</strong>＝可檢視全公司請假單（不含代為簽核的權力）。<br>
+                         <span style="color:#b06f27;">簽核權不由角色決定</span>：由申請人的部門／職稱階級推出主管鏈逐層簽核；主管當日有行程時改由其代理人簽，代理人若正好是申請人則自動直升上一級（權責分離）。<strong>代理人設定與最終裁決者請至「人事設定（hr_settings）」維護</strong>。主管（職稱有設定階級者）自動可檢視自己部門含下轄的請假單。管理者固定擁有全部權限。',
+                        $_leaveRoles, $_userLeaveRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 
                     <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->
