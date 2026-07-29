@@ -1,6 +1,6 @@
 # EGsystem — AI 工作規範（每次 session 必讀）
 
-> 最後修改：2026-07-29（三次）— 鐵律6「若新增頁面」加上**收尾必跑 `ai-rules/tools/check_sidebar.php` 側欄健檢**（新工具，掃全站三種側欄失效根因）。原因：規則文字其實已經寫得很清楚，但 purchase_request.php 仍然踩到——因為規則只規範「怎麼寫」、沒規範「怎麼驗收」，而 `php -l` 和搜尋原始碼有無 `sidebar-menu` 字串都驗不出被 CSS 隱藏的側欄。**靠記憶遵守的規則會失守，把它變成一行指令才擋得住。**（同日二次）鐵律6「若新增頁面」再補上**側欄 `visibility:hidden` 必須連恢復 JS 一起抄**（Shipping_Quick.php 五支 JS 都載對了、側欄仍整片消失，因為只抄了 CSS 沒抄 `$('#sidebar-menu').css('visibility','visible')`；這是側欄第三次出事，前兩次是缺 custom.min.js，屬不同根因故並列）。（同日）鐵律6「若新增頁面」補上**版型必備 JS 載入順序**（缺 `custom.min.js` 左側欄選單就死；此陷阱原本只記在 `ai-rules/00-診斷.md`＝壞了才去查的文件，導致新頁面重複踩坑兩次，故移到動工前就會讀到的地方）。（同日）路由表新增 `ai-rules/13-共用帳號通知與綁定.md`（現場共用帳號成員綁定/通知轉送/鎖密碼；規格已定案待實作）。（前次 07-28）路由表新增 `ai-rules/12-請假系統製作說明.md`（請假動工前必讀，代理走 delegate_lib、勿用 leave_agent_setting）；鐵律6 推送改用 **`git pushall`**（雙 remote：origin=excellentgear/EG、backup=ellentravel1003/EGsystem；只 git push 會漏備份）；路由表新增 `ai-rules/11-代理系統設計.md`（代理人解析一律走 delegate_lib）；鐵律5 附件暫存機制（temp/active，見 ai-rules/07）。
+> 最後修改：2026-07-29（四次）— 路由表新增 `ai-rules/14-職務調動連動檢查.md`（職務調動要留紀錄＋連動點檢表＋前後對照；起因：代理設定因調動被終止後沒人重設，數月後才以「請假頁顯示尚未設定代理人」爆出來）。（同日三次）鐵律6「若新增頁面」加上**收尾必跑 `ai-rules/tools/check_sidebar.php` 側欄健檢**（新工具，掃全站三種側欄失效根因）。原因：規則文字其實已經寫得很清楚，但 purchase_request.php 仍然踩到——因為規則只規範「怎麼寫」、沒規範「怎麼驗收」，而 `php -l` 和搜尋原始碼有無 `sidebar-menu` 字串都驗不出被 CSS 隱藏的側欄。**靠記憶遵守的規則會失守，把它變成一行指令才擋得住。**（同日二次）鐵律6「若新增頁面」再補上**側欄 `visibility:hidden` 必須連恢復 JS 一起抄**（Shipping_Quick.php 五支 JS 都載對了、側欄仍整片消失，因為只抄了 CSS 沒抄 `$('#sidebar-menu').css('visibility','visible')`；這是側欄第三次出事，前兩次是缺 custom.min.js，屬不同根因故並列）。（同日）鐵律6「若新增頁面」補上**版型必備 JS 載入順序**（缺 `custom.min.js` 左側欄選單就死；此陷阱原本只記在 `ai-rules/00-診斷.md`＝壞了才去查的文件，導致新頁面重複踩坑兩次，故移到動工前就會讀到的地方）。（同日）路由表新增 `ai-rules/13-共用帳號通知與綁定.md`（現場共用帳號成員綁定/通知轉送/鎖密碼；規格已定案待實作）。（前次 07-28）路由表新增 `ai-rules/12-請假系統製作說明.md`（請假動工前必讀，代理走 delegate_lib、勿用 leave_agent_setting）；鐵律6 推送改用 **`git pushall`**（雙 remote：origin=excellentgear/EG、backup=ellentravel1003/EGsystem；只 git push 會漏備份）；路由表新增 `ai-rules/11-代理系統設計.md`（代理人解析一律走 delegate_lib）；鐵律5 附件暫存機制（temp/active，見 ai-rules/07）。
 
 PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**已用 git 版本控管**，分支 `master`，改壞可用 git 復原——但前提是每個檔案改完都有立刻 commit＋**`git pushall`**（雙 remote，見鐵律6），沒 push 的部分一樣救不回來。
 
@@ -64,5 +64,6 @@ VALUES ('views/xx/xxx.php', '一句話說明', '詳細說明可分點', NOW(), '
 | 做簽核/待辦派送/請假/異常判定，涉及「某人不在由誰代理」 | `ai-rules/11-代理系統設計.md`（**必讀**，禁各頁自寫代理 SQL） |
 | 要做/改請假系統（申請、簽核鏈、假別、額度） | `ai-rules/12-請假系統製作說明.md`（**必讀**，代理走 delegate_lib、勿用 leave_agent_setting） |
 | 要處理共用帳號（現場多人共用登入）的成員綁定、通知轉送、鎖密碼 | `ai-rules/13-共用帳號通知與綁定.md`（**必讀**，改收件人展開層一處全站生效；改完須回歸測試 ROSTER 通知） |
+| 要做/改「員工部門職位異動」及其連帶影響（代理、權限、指定負責人、簽核鏈） | `ai-rules/14-職務調動連動檢查.md`（**必讀**，異動要留紀錄＋連動點檢表＋前後對照；代理不可自動猜人） |
 
 原始版 CLAUDE.md 備份：`CLAUDE.md.bak-20260706` 與 `CLAUDE(原始 不可更改).md`（勿動；該備份檔名未帶時分屬歷史命名，新備份一律用 `.bak-yyyyMMdd-HHmm`）。
