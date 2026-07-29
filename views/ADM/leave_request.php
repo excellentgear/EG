@@ -179,7 +179,7 @@ input[type=number]{-moz-appearance:textfield;}
           <div class="col-md-4 col-sm-6" style="margin-bottom:10px;" id="agentWrap">
             <label>職務代理人 <span id="agentReq" style="color:var(--coral);display:none;">*</span></label>
             <select class="form-control input-sm" id="fAgent"></select>
-            <div style="font-size:11.5px;color:#9a7b4f;margin-top:3px;">
+            <div id="agentNote" style="font-size:11.5px;color:#9a7b4f;margin-top:3px;">
               代理人清單來自「人事設定」的代理人設定，本頁不提供新增；核准後系統會通知他接手職務。
             </div>
           </div>
@@ -366,7 +366,8 @@ function boot(){
     const $t = $('#fType').empty().append('<option value="">請選擇假別</option>');
     TYPES.forEach(t => $t.append('<option value="'+t.id+'">'+esc(t.leave_name)+'</option>'));
     // 代理人下拉
-    const $a = $('#fAgent').empty().append('<option value="">'+(AGENTS.length? '請選擇代理人' : '（尚未設定代理人，請洽人事）')+'</option>');
+    const $a = $('#fAgent').empty().append('<option value="">'
+      + (AGENTS.length ? '請選擇代理人' : '（不需指定代理人）') + '</option>');
     AGENTS.forEach(a => $a.append('<option value="'+a.user_id+'">'+esc(a.user_cname)+'</option>'));
     renderAnnual(r.annual);
     if(IS_ADMIN){ $('#psHeader').val(SETTINGS.print_header||''); $('#psFooter').val(SETTINGS.print_footer||''); }
@@ -391,7 +392,18 @@ $(document).on('change', '#fType', function(){
   if(+t.need_approval === 0) hint += '｜此假別免主管簽核';
   else hint += '｜需簽核至第 ' + t.max_approval_level + ' 層主管';
   $('#typeHint').text(hint);
-  $('#agentReq').toggle(+t.agent === 1);
+  // 代理人：只有「此人確實有設代理人候選」時才是必填。現場人員多半不設代理（主管直接安排工作），
+  // 這時不顯示必填星號、也不擋送出，只提示不需指定。
+  const agentNeeded = (+t.agent === 1) && AGENTS.length > 0;
+  $('#agentReq').toggle(agentNeeded);
+  $('#agentNote').html(
+    (+t.agent !== 1)
+      ? '此假別不需指定職務代理人。'
+      : (AGENTS.length
+          ? '代理人清單來自「人事設定」的代理人設定，本頁不提供新增；核准後系統會通知他接手職務。'
+          : '<span style="color:#8a5a1a;">您目前沒有設定職務代理人，視為此職務不需代理，可直接送出。'
+            + '若需要指定（例如主管職），請洽人事於「人事設定 → 代理人設定」新增。</span>')
+  );
   // 沒設定「需附證明文件」的假別，整個上傳區塊不出現（使用者要求 2026-07-29）
   const needAtt = (+t.require_attachment === 1);
   $('#attReq').toggle(needAtt);

@@ -245,6 +245,8 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                                 <div class="clearfix"></div>
                             </div>
                             <div class="x_content">
+                                <!-- 到期彙總提醒：逐列標籤只有翻到那頁才看得到，這裡統計全部已到期筆數 -->
+                                <div id="delegateExpiredWarn" style="display:none;background:#fdf0dc;border:1px solid #e9c98f;color:#8a5a1a;padding:8px 12px;border-radius:5px;font-size:13px;margin-bottom:12px;"></div>
                                 <?php if ($showAgentForm): ?>
                                 <form id="userDelegateForm" style="margin-bottom: 20px;">
                                     <input type="hidden" id="original_key" name="original_key"> <!-- 新增隱藏欄位 -->
@@ -1049,6 +1051,7 @@ $(function () {
         // 使用者代理：分頁狀態
         let udGroupsList = [];  // 排序後的規則群組陣列（供分頁）
         let udPage = 1;
+        let udExpiredOnly = false;   // 「只看已到期」篩選（職務調動後用來找出該重設的代理）
 
         function loadUserDelegates() {
             // 如果 allUsers 是空的，表示使用者資料還沒載入，稍後會由 loadUsersToSelect 觸發
@@ -1084,6 +1087,7 @@ $(function () {
 
                 udGroupsList = Object.keys(groupedByUserAndDate).map(k => ({ key: k, ...groupedByUserAndDate[k] }));
                 udPage = 1;
+                udExpiredOnly = false;
                 renderUserDelegateTable();
             });
         }
@@ -1092,14 +1096,20 @@ $(function () {
             const tableBody = $('#user-delegate-table-body');
             tableBody.empty();
 
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            const isExpiredRule = r => {
+                const ed = r.endDate ? r.endDate.split(' ')[0] : '';
+                return !!(ed && (new Date(ed) < today));
+            };
+            // 「只看已到期」篩選（供職務調動後快速找出該重設的代理）
+            const viewList = udExpiredOnly ? udGroupsList.filter(isExpiredRule) : udGroupsList;
+
             const size = parseInt($('#ud-page-size').val()) || 10;
-            const total = udGroupsList.length;
+            const total = viewList.length;
             const pages = Math.max(1, Math.ceil(total / size));
             if (udPage > pages) udPage = pages;
             const startIdx = (udPage - 1) * size;
-            const slice = udGroupsList.slice(startIdx, startIdx + size);
-
-            const today = new Date(); today.setHours(0, 0, 0, 0);
+            const slice = viewList.slice(startIdx, startIdx + size);
             const agentP = window.currentUserPerms.agent || '';
 
             slice.forEach(rule => {
@@ -1132,6 +1142,27 @@ $(function () {
             });
             if (total === 0) tableBody.append('<tr><td colspan="6" class="text-center text-muted">尚無代理設定</td></tr>');
 
+            // 到期彙總提醒（2026-07-29）：逐列標籤只有翻到那一頁才看得到，
+            // 這裡在區塊頂端統計全部已到期筆數，避免代理設定過期後沒人發現、請假時才卡住。
+            const expiredAll = udGroupsList.filter(r => {
+                const ed = r.endDate ? r.endDate.split(' ')[0] : '';
+                return ed && (new Date(ed) < today);
+            });
+            const $warn = $('#delegateExpiredWarn');
+            if (expiredAll.length) {
+                const names = [...new Set(expiredAll.map(r => (r.user && r.user.user_cname) ? r.user.user_cname : ''))]
+                    .filter(Boolean);
+                $warn.html('<i class="fa fa-exclamation-triangle"></i> 目前有 <b>' + expiredAll.length
+                    + '</b> 筆代理設定<b>已到期</b>（' + escapeHtml(names.slice(0, 6).join('、'))
+                    + (names.length > 6 ? ' 等' : '') + '）。'
+                    + '到期的設定不會生效，這些人請假時會變成「不需指定代理人」。'
+                    + ' <a href="javascript:;" id="delegateShowExpired" style="text-decoration:underline;">'
+                    + (udExpiredOnly ? '顯示全部' : '只看已到期') + '</a>')
+                    .show();
+            } else {
+                $warn.hide().empty();
+            }
+
             // 分頁列（右上）
             const from = total === 0 ? 0 : startIdx + 1;
             const to = Math.min(startIdx + size, total);
@@ -1149,6 +1180,9 @@ $(function () {
             if (p >= 1) { udPage = p; renderUserDelegateTable(); }
         });
         $('#ud-page-size').on('change', function() { udPage = 1; renderUserDelegateTable(); });
+        $(document).on('click', '#delegateShowExpired', function() {
+            udExpiredOnly = !udExpiredOnly; udPage = 1; renderUserDelegateTable();
+        });
 
         // 載入被代理人的職務身分（主職+兼任）到 scope 下拉；selectedValue 供編輯時回填 "dep:pos"
         function loadUserScopes(userId, selectedValue) {

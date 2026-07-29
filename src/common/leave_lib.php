@@ -608,13 +608,20 @@ if (!function_exists('eg_leave_submit')) {
             }
         }
 
-        // 代理人：假別 agent=1 必填且須為候選之一（唯讀候選來自 delegate_lib，禁自查 user_delegate）
+        // 代理人（唯讀候選來自 delegate_lib，禁自查 user_delegate）
+        // 2026-07-29 使用者定調：現場人員多半不需要職務代理（主管會直接安排工作），只有主管與
+        // 辦公室人員才設代理。因此「必填」的條件是：此人確實有設代理人候選時才必填；
+        // 一個候選都沒有＝此職務不需代理，允許不指定，不可因此卡住請假。
         if ((int)$type['agent'] === 1) {
-            if ($agentId <= 0) return ['ok' => false, 'msg' => '此假別須指定職務代理人'];
             $cands = eg_person_delegate_candidates($db, $uid);
-            $ok = false;
-            foreach ($cands as $c) { if ((int)$c['user_id'] === $agentId) { $ok = true; break; } }
-            if (!$ok) return ['ok' => false, 'msg' => '指定的代理人不在您的代理人設定中，請洽人事於「人事設定」維護代理人'];
+            if (empty($cands)) {
+                $agentId = null;   // 無代理人設定＝此職務不需代理，放行
+            } else {
+                if ($agentId <= 0) return ['ok' => false, 'msg' => '此假別須指定職務代理人（您已設有代理人，請於下拉選擇）'];
+                $ok = false;
+                foreach ($cands as $c) { if ((int)$c['user_id'] === $agentId) { $ok = true; break; } }
+                if (!$ok) return ['ok' => false, 'msg' => '指定的代理人不在您的代理人設定中，請洽人事於「人事設定」維護代理人'];
+            }
         } else {
             $agentId = $agentId > 0 ? $agentId : null;
         }
