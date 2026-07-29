@@ -80,6 +80,8 @@ switch ($action) {
 case 'list_boards': {
     // 順路同步：離職/留停等非在職者自動移出未來、回任者自動復入（過去凍結）
     try { roster_sync_member_status($pdo); } catch (Exception $e) {}
+    // 順路觸發：值勤提醒／請假未補位提醒（一天只發一次，roster_notify_log 防重）
+    try { roster_daily_reminders($pdo); } catch (Exception $e) {}
     $scope = $_POST['scope'] ?? 'all'; // mine|shared|all
     $rows = $pdo->query("SELECT * FROM roster_board WHERE status IN ('active','archived') ORDER BY status ASC, updated_at DESC")->fetchAll(PDO::FETCH_ASSOC);
     $out = [];
@@ -547,6 +549,12 @@ case 'request_swap': {
         $pdo->beginTransaction();
         try { roster_swap_two($pdo, $a, $t, $MYID, $note); $pdo->commit(); }
         catch (Exception $e) { $pdo->rollBack(); jfail('對調失敗：' . $e->getMessage()); }
+        try {
+            roster_notify($pdo, '【已為你調班】' . $a['board_name'],
+                $me['name'] . ' 已將 ' . $a['duty_date'] . ' 與 ' . $t['duty_date'] . ' 的班對調（表：' . $a['board_name'] . '）。'
+                . ($note !== '' ? "\n備註：" . $note : '') . "\n請至「輪值排班表」確認你的新班表。",
+                [(int)$a['user_id'], (int)$t['user_id']], $MYID);
+        } catch (Exception $e) {}
         jout(['mode' => 'done']);
     }
     // 一般使用者：建立待核准申請
@@ -558,6 +566,16 @@ case 'request_swap': {
         $pdo->prepare("UPDATE roster_assignment SET pending_swap_id=? WHERE id IN (?,?)")->execute([$rid, $fromAid, $toAid]);
         $pdo->commit();
     } catch (Exception $e) { $pdo->rollBack(); jfail('申請失敗：' . $e->getMessage()); }
+    // 通知對方有調班申請
+    try {
+        roster_notify($pdo, '【調班申請】' . $me['name'] . ' 想跟你對調班別',
+            $me['name'] . ' 申請與你對調：' . "\n"
+            . '・對方的班：' . $a['duty_date'] . "\n"
+            . '・你的班：' . $t['duty_date'] . "\n"
+            . '（表：' . $a['board_name'] . '）' . ($note !== '' ? "\n備註：" . $note : '')
+            . "\n\n請至「輪值排班表」上方「調班申請」區按「同意」或「不同意」。",
+            [(int)$t['user_id']], $MYID);
+    } catch (Exception $e) {}
     jout(['mode' => 'pending']);
 }
 
@@ -607,6 +625,13 @@ case 'request_swap_range': {
         $pdo->prepare($mk)->execute($ma);
         $pdo->commit();
     } catch (Exception $e) { $pdo->rollBack(); jfail('申請失敗：' . $e->getMessage()); }
+    try {
+        roster_notify($pdo, '【調班申請】' . $me['name'] . ' 想跟你整段對調',
+            $me['name'] . ' 申請與你對調 ' . $df . ' ~ ' . $dt . ' 這段期間的班（表：' . $bd['name'] . '）。'
+            . ($note !== '' ? "\n備註：" . $note : '')
+            . "\n\n請至「輪值排班表」上方「調班申請」區按「同意」或「不同意」。",
+            [$counterpart], $MYID);
+    } catch (Exception $e) {}
     jout(['mode' => 'pending']);
 }
 
@@ -639,6 +664,18 @@ case 'respond_swap': {
         }
         $pdo->commit();
     } catch (Exception $e) { $pdo->rollBack(); jfail('處理失敗：' . $e->getMessage()); }
+    // 通知申請人結果
+    try {
+        $agree = ($decision === 'agree');
+        $period = ($r['scope'] === 'range')
+            ? ($r['date_from'] . ' ~ ' . $r['date_to'])
+            : ((string)$r['date_from'] . ($r['date_to'] && $r['date_to'] !== $r['date_from'] ? ' / ' . $r['date_to'] : ''));
+        roster_notify($pdo,
+            '【調班' . ($agree ? '已同意' : '未同意') . '】' . $me['name'] . ' ' . ($agree ? '同意' : '婉拒') . '了你的調班申請',
+            $me['name'] . ' ' . ($agree ? '已同意' : '不同意') . '你申請的調班（' . $period . '）。'
+            . ($agree ? "\n班表已更新，請至「輪值排班表」確認。" : "\n原排班維持不變，可再與其他同組人員協調。"),
+            [(int)$r['requester_id']], $MYID);
+    } catch (Exception $e) {}
     jout(['status' => ($decision === 'agree' ? 'agreed' : 'rejected')]);
 }
 

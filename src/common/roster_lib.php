@@ -487,6 +487,154 @@ if (!function_exists('roster_load_pickers')) {
     }
 }
 
+if (!function_exists('roster_notify')) {
+    /**
+     * 輪值排班通知：建立 live_event(ref_type='ROSTER') + live_event_target(user/read)，
+     * 並嘗試 Web Push / Telegram。比照 bom_track_notify.php；失敗一律靜默不阻斷主流程。
+     * 測試用表（名稱含 __）不發通知，遵守 testing_discipline。
+     * @param int[] $userIds 收件人（去重、剔除 0 與 actor 本人）
+     */
+    function roster_notify(PDO $pdo, string $title, string $content, array $userIds, int $actorId = 0): ?int {
+        if (strpos($title, '__') !== false || strpos($content, '__') !== false) return null; // 測試資料不發
+        $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds),
+            fn($u) => $u > 0 && $u !== $actorId)));
+        if (!$userIds) return null;
+        try {
+            $pdo->prepare("INSERT INTO live_event (eventdate, title, content, status, created_by, source, ref_type, show_status_to_others)
+                           VALUES (CURDATE(), ?, ?, 0, ?, '輪值排班', 'ROSTER', 1)")
+                ->execute([$title, $content, ($actorId ?: null)]);
+            $eventId = (int)$pdo->lastInsertId();
+            $tg = $pdo->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'read')");
+            foreach ($userIds as $u) $tg->execute([$eventId, $u]);
+        } catch (Throwable $e) { return null; }
+        try {
+            $lib = __DIR__ . '/../push/push_send.php';
+            if (is_file($lib)) { require_once $lib; if (function_exists('eg_push_event_notify')) eg_push_event_notify($pdo, $eventId, $userIds); }
+        } catch (Throwable $e) {}
+        try {
+            $lib = __DIR__ . '/../../telegram/notify_event.php';
+            if (is_file($lib)) { require_once $lib; if (function_exists('eg_telegram_for_event')) eg_telegram_for_event($pdo, $eventId); }
+        } catch (Throwable $e) {}
+        return $eventId;
+    }
+}
+
+if (!function_exists('roster_daily_reminders')) {
+    /**
+     * 順路觸發的每日提醒（開頁時呼叫，一天只跑一次；用 roster_notify_log 防重複）：
+     *  A) 值勤提醒：明天有班的人（輪值 roster_assignment ＋ 固定班別 roster_shift_assign）
+     *  B) 請假未補位提醒：明天有班者整天請假且未調班/未代理 → 通知表建立者
+     * 回傳 ['duty'=>發出則數, 'leave'=>則數]
+     */
+    function roster_daily_reminders(PDO $pdo): array {
+        $out = ['duty' => 0, 'leave' => 0];
+        try {
+            $pdo->exec("CREATE TABLE IF NOT EXISTS roster_notify_log (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                kind VARCHAR(20) NOT NULL,
+                ref_key VARCHAR(64) NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_kind_ref (kind, ref_key)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        } catch (Throwable $e) { return $out; }
+
+        $tom = (new DateTime('tomorrow'))->format('Y-m-d');
+        $mark = function (string $kind, string $key) use ($pdo): bool {
+            try {
+                $st = $pdo->prepare("INSERT IGNORE INTO roster_notify_log (kind, ref_key) VALUES (?,?)");
+                $st->execute([$kind, $key]);
+                return $st->rowCount() > 0; // true=這次才插入（尚未通知過）
+            } catch (Throwable $e) { return false; }
+        };
+
+        // A) 值勤提醒（每人每天一則，彙整其明日所有班）
+        try {
+            $rows = [];
+            $q = $pdo->prepare("SELECT a.user_id, b.name AS board_name, l.lane_name AS item_name, NULL AS shift_time
+                                FROM roster_assignment a
+                                JOIN roster_board b ON b.id=a.board_id AND b.status='active'
+                                LEFT JOIN roster_lane l ON l.id=a.lane_id
+                                WHERE a.duty_date=?");
+            $q->execute([$tom]);
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $rows[(int)$r['user_id']][] = $r;
+            $q2 = $pdo->prepare("SELECT sa.user_id, st.name AS board_name, NULL AS item_name,
+                                        CONCAT(LEFT(st.start_time,5),'~',LEFT(st.end_time,5)) AS shift_time
+                                 FROM roster_shift_assign sa JOIN roster_shift_type st ON st.id=sa.shift_type_id
+                                 WHERE sa.work_date=?");
+            $q2->execute([$tom]);
+            foreach ($q2->fetchAll(PDO::FETCH_ASSOC) as $r) $rows[(int)$r['user_id']][] = $r;
+
+            foreach ($rows as $uid => $items) {
+                if (!$mark('duty', $tom . '|' . $uid)) continue;
+                $lines = [];
+                foreach ($items as $it) {
+                    $lines[] = '・' . $it['board_name']
+                        . ($it['item_name'] ? '（' . $it['item_name'] . '）' : '')
+                        . ($it['shift_time'] ? '　' . $it['shift_time'] : '');
+                }
+                $out['duty'] += roster_notify($pdo,
+                    '【值勤提醒】明天(' . $tom . ')輪到你',
+                    "明天你有以下值勤：\n" . implode("\n", $lines) . "\n\n完成後請到「輪值排班表」點選簽核。",
+                    [$uid]) ? 1 : 0;
+            }
+        } catch (Throwable $e) {}
+
+        // B) 請假未補位提醒（通知表建立者；固定班別通知管理者=建立該班別者）
+        try {
+            $q = $pdo->prepare("SELECT a.id, a.user_id, a.duty_date, a.is_adjusted, b.owner_id, b.name AS board_name, l.lane_name
+                                FROM roster_assignment a
+                                JOIN roster_board b ON b.id=a.board_id AND b.status='active'
+                                LEFT JOIN roster_lane l ON l.id=a.lane_id
+                                WHERE a.duty_date=?");
+            $q->execute([$tom]);
+            $ass = $q->fetchAll(PDO::FETCH_ASSOC);
+            if ($ass) {
+                $uids = array_map(fn($r) => (int)$r['user_id'], $ass);
+                $lv = roster_leave_map($pdo, $uids, $tom, $tom);
+                $nm = roster_user_name_map($pdo, $uids);
+                foreach ($ass as $r) {
+                    $key = (int)$r['user_id'] . '|' . $tom;
+                    if (empty($lv[$key]) || empty($lv[$key]['full'])) continue;   // 只提醒整天請假
+                    if (!$mark('leavegap', 'A' . $r['id'])) continue;
+                    $who = $nm[(int)$r['user_id']]['name'] ?? ('#' . $r['user_id']);
+                    $out['leave'] += roster_notify($pdo,
+                        '【排班缺人】' . $tom . ' ' . $r['board_name'] . ' 有人請假未調班',
+                        $who . ' 於 ' . $tom . ' 整天請假（' . $lv[$key]['label'] . '），'
+                        . '但仍排在「' . $r['board_name'] . ($r['lane_name'] ? '／' . $r['lane_name'] : '') . '」。'
+                        . "\n請至「輪值排班表」調班或指派他人。",
+                        [(int)$r['owner_id']]) ? 1 : 0;
+                }
+            }
+            // 固定班別：整天請假且未標代理
+            $q2 = $pdo->prepare("SELECT sa.id, sa.user_id, sa.work_date, sa.is_agent, sa.created_by, st.name AS shift_name
+                                 FROM roster_shift_assign sa JOIN roster_shift_type st ON st.id=sa.shift_type_id
+                                 WHERE sa.work_date=? AND sa.is_agent=0");
+            $q2->execute([$tom]);
+            $sass = $q2->fetchAll(PDO::FETCH_ASSOC);
+            if ($sass) {
+                $uids = array_map(fn($r) => (int)$r['user_id'], $sass);
+                $lv = roster_leave_map($pdo, $uids, $tom, $tom);
+                $nm = roster_user_name_map($pdo, $uids);
+                foreach ($sass as $r) {
+                    $key = (int)$r['user_id'] . '|' . $tom;
+                    if (empty($lv[$key]) || empty($lv[$key]['full'])) continue;
+                    if (!$mark('leavegap', 'S' . $r['id'])) continue;
+                    $who = $nm[(int)$r['user_id']]['name'] ?? ('#' . $r['user_id']);
+                    $to = (int)$r['created_by'];
+                    if ($to <= 0) continue;
+                    $out['leave'] += roster_notify($pdo,
+                        '【班別缺人】' . $tom . ' ' . $r['shift_name'] . ' 有人請假未補',
+                        $who . ' 於 ' . $tom . ' 整天請假（' . $lv[$key]['label'] . '），仍排在「' . $r['shift_name'] . '」。'
+                        . "\n請至「輪值排班表→固定班別排班」調班或用「代理補班」。",
+                        [$to]) ? 1 : 0;
+                }
+            }
+        } catch (Throwable $e) {}
+
+        return $out;
+    }
+}
+
 if (!function_exists('roster_leave_map')) {
     /**
      * 查一批 user 在 [from,to] 內「已核准」的請假，展開成 "uid|YYYY-MM-DD" => 假別名稱。
