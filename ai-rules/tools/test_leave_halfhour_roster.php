@@ -100,15 +100,19 @@ if ($night) {
 echo "== 前端欄位與規範 ==\n";
 $src = file_get_contents('C:/MAMP/htdocs/EGsystem/views/ADM/leave_request.php');
 $need = [
-    '請假起日欄位 fDateFrom'   => 'id="fDateFrom"',
-    '請假迄日欄位 fDateTo'     => 'id="fDateTo"',
+    '開始日期欄位 fDateFrom'   => 'id="fDateFrom"',
+    '結束日期欄位 fDateTo'     => 'id="fDateTo"',
     '排班提示區 shiftHint'     => 'id="shiftHint"',
-    '開始時間半小時刻度'       => 'id="fStart" step="1800"',
-    '結束時間半小時刻度'       => 'id="fEnd" step="1800"',
+    // 時間欄改為只選時間（日期已在旁邊選好），半小時刻度
+    '開始時間欄為 time 型別'   => 'type="time" class="form-control input-sm eg-inp" id="fTimeFrom" step="1800"',
+    '結束時間欄為 time 型別'   => 'type="time" class="form-control input-sm eg-inp" id="fTimeTo" step="1800"',
     '日期欄限 4 碼年'          => 'id="fDateFrom" max="9999-12-31"',
+    '日期與時間同一欄位組'     => 'display:flex;gap:6px;',
+    '送出時組合日期＋時間'     => 'function startDT()',
     'applyShift 已定義'        => 'function applyShift',
     '重新帶入按鈕'             => 'applyShift(true)',
     '呼叫 roster_shift API'    => "action:'roster_shift'",
+    '跨夜自動帶出結束日期'     => "$('#fDateTo').val(dPart(r.end_datetime)",
 ];
 foreach ($need as $n => $needle) ok(strpos($src, $needle) !== false, $n);
 

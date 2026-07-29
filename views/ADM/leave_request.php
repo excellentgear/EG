@@ -145,38 +145,34 @@ input[type=number]{-moz-appearance:textfield;}
             <select class="form-control input-sm" id="fType"></select>
             <div id="typeHint" style="font-size:11.5px;color:#9a7b4f;margin-top:3px;min-height:16px;"></div>
           </div>
-          <div class="col-md-3 col-sm-6" style="margin-bottom:10px;">
-            <label>請假日期（起） <span style="color:var(--coral);">*</span></label>
-            <input type="date" class="form-control input-sm eg-inp" id="fDateFrom" max="9999-12-31">
+          <!-- 日期與時間成對放在一起：選完日期，時間欄只需選時間（半小時刻度） -->
+          <div class="col-md-4 col-sm-6" style="margin-bottom:10px;">
+            <label>開始 <span style="color:var(--coral);">*</span>
+              <span style="font-weight:400;font-size:11.5px;color:#9a7b4f;">日期／時間</span></label>
+            <div style="display:flex;gap:6px;">
+              <input type="date" class="form-control input-sm eg-inp" id="fDateFrom" max="9999-12-31" style="flex:1 1 58%;">
+              <input type="time" class="form-control input-sm eg-inp" id="fTimeFrom" step="1800" style="flex:1 1 42%;">
+            </div>
           </div>
-          <div class="col-md-3 col-sm-6" style="margin-bottom:10px;">
-            <label>請假日期（迄）</label>
-            <input type="date" class="form-control input-sm eg-inp" id="fDateTo" max="9999-12-31">
-            <div style="font-size:11.5px;color:#9a7b4f;margin-top:3px;">留空＝當天請假</div>
+          <div class="col-md-4 col-sm-6" style="margin-bottom:10px;">
+            <label>結束 <span style="color:var(--coral);">*</span>
+              <span style="font-weight:400;font-size:11.5px;color:#9a7b4f;">日期／時間</span></label>
+            <div style="display:flex;gap:6px;">
+              <input type="date" class="form-control input-sm eg-inp" id="fDateTo" max="9999-12-31" style="flex:1 1 58%;">
+              <input type="time" class="form-control input-sm eg-inp" id="fTimeTo" step="1800" style="flex:1 1 42%;">
+            </div>
+            <div style="font-size:11.5px;color:#9a7b4f;margin-top:3px;">日期留空＝與開始同一天</div>
           </div>
-          <div class="col-md-3 col-sm-6" style="margin-bottom:10px;">
-            <label>時數／天數（自動計算）</label>
+          <div class="col-md-1 col-sm-6" style="margin-bottom:10px;min-width:130px;">
+            <label>時數／天數</label>
             <input type="text" class="form-control input-sm" id="fAmount" readonly style="background:#f7f2e8;">
           </div>
         </div>
         <div id="shiftHint" style="display:none;font-size:12.5px;margin-bottom:10px;padding:7px 12px;border-radius:6px;"></div>
-        <div class="row">
-          <div class="col-md-3 col-sm-6" style="margin-bottom:10px;">
-            <label>開始時間 <span style="color:var(--coral);">*</span></label>
-            <input type="datetime-local" class="form-control input-sm eg-inp" id="fStart" step="1800">
-          </div>
-          <div class="col-md-3 col-sm-6" style="margin-bottom:10px;">
-            <label>結束時間 <span style="color:var(--coral);">*</span></label>
-            <input type="datetime-local" class="form-control input-sm eg-inp" id="fEnd" step="1800">
-          </div>
-          <div class="col-md-6" style="margin-bottom:10px;">
-            <label style="visibility:hidden;">.</label>
-            <div style="font-size:12px;color:#9a7b4f;padding-top:6px;">
-              選好上方請假日期後，系統會依您當天的<b>固定班別排班</b>自動帶出整天的起訖時間；
-              只請半天或幾小時再自行調整即可（<b>以半小時為單位</b>）。
-              <button type="button" class="btn btn-xs btn-default" style="margin-left:6px;" onclick="applyShift(true)">重新帶入排班時間</button>
-            </div>
-          </div>
+        <div style="font-size:12px;color:#9a7b4f;margin-bottom:10px;">
+          選好開始日期後，系統會依您當天的<b>固定班別排班</b>自動帶出整天的起訖（時間以半小時為單位）；
+          只請半天或幾小時，直接改時間即可。
+          <button type="button" class="btn btn-xs btn-default" style="margin-left:6px;" onclick="applyShift(true)">重新帶入排班時間</button>
         </div>
 
         <div class="row">
@@ -414,7 +410,11 @@ $(document).on('change', '#fType', function(){
   }
   doPreview();
 });
-$(document).on('change', '#fStart, #fEnd', function(){ shiftApplied = true; doPreview(); });
+// 時間欄只選時間，送出時再與日期組成完整時間點
+function startDT(){ const d=$('#fDateFrom').val(), t=$('#fTimeFrom').val(); return (d&&t) ? (d+' '+t+':00') : ''; }
+function endDT(){ const d=$('#fDateTo').val()||$('#fDateFrom').val(), t=$('#fTimeTo').val(); return (d&&t) ? (d+' '+t+':00') : ''; }
+
+$(document).on('change', '#fTimeFrom, #fTimeTo', function(){ shiftApplied = true; doPreview(); });
 
 // ── 排班連動：選好請假日期 → 依當日固定班別自動帶出整天的起訖時間 ──
 let shiftApplied = false;   // 使用者是否已自行動過時間欄（動過就不再自動覆蓋）
@@ -431,10 +431,12 @@ function applyShift(force){
   const to = $('#fDateTo').val() || from;
   $.getJSON(API, {action:'roster_shift', start_date:from, end_date:to}, function(r){
     if(!r.success) return;
-    // datetime-local 需要 "YYYY-MM-DDTHH:MM"
-    const toLocal = s => String(s||'').substring(0,16).replace(' ', 'T');
-    $('#fStart').val(toLocal(r.start_datetime));
-    $('#fEnd').val(toLocal(r.end_datetime));
+    const dPart = s => String(s||'').substring(0,10);
+    const tPart = s => String(s||'').substring(11,16);
+    $('#fTimeFrom').val(tPart(r.start_datetime));
+    $('#fTimeTo').val(tPart(r.end_datetime));
+    // 跨夜班的結束會落到隔天，結束日期要一併帶出來，使用者才看得懂
+    $('#fDateTo').val(dPart(r.end_datetime) === from ? '' : dPart(r.end_datetime));
     shiftApplied = false;   // 這是系統帶入的，之後使用者若手動改才鎖住
 
     const has = r.start_shift || r.end_shift;
@@ -466,9 +468,9 @@ let previewTimer = null;
 function doPreview(){
   clearTimeout(previewTimer);
   previewTimer = setTimeout(function(){
-    const tid = $('#fType').val(), s = $('#fStart').val(), e = $('#fEnd').val();
+    const tid = $('#fType').val(), s = startDT(), e = endDT();
     if(!tid){ return; }
-    $.getJSON(API, {action:'preview', leave_type_id:tid, start:s?s.replace('T',' ')+':00':'', end:e?e.replace('T',' ')+':00':''}, function(r){
+    $.getJSON(API, {action:'preview', leave_type_id:tid, start:s, end:e}, function(r){
       if(!r.success) return;
       if(r.amount){
         $('#fAmount').val(r.amount.hours>0 ? (num(r.amount.hours)+' 小時（'+num(r.amount.days)+' 天，'+r.amount.workdays+' 個工作日）') : '時段內無工作日');
@@ -529,15 +531,17 @@ function delAttach(id, isTemp){
 
 // ── 送審 ──
 function submitLeave(){
-  const tid = $('#fType').val(), s = $('#fStart').val(), e = $('#fEnd').val();
+  const tid = $('#fType').val(), s = startDT(), e = endDT();
   if(!tid){ $('#applyMsg').html('<span style="color:#a3341f;">請選擇假別</span>'); return; }
-  if(!$('#fDateFrom').val()){ $('#applyMsg').html('<span style="color:#a3341f;">請選擇請假日期</span>'); $('#fDateFrom').focus(); return; }
-  if(!s || !e){ $('#applyMsg').html('<span style="color:#a3341f;">請填寫開始與結束時間</span>'); return; }
+  if(!$('#fDateFrom').val()){ $('#applyMsg').html('<span style="color:#a3341f;">請選擇開始日期</span>'); $('#fDateFrom').focus(); return; }
+  if(!$('#fTimeFrom').val()){ $('#applyMsg').html('<span style="color:#a3341f;">請選擇開始時間</span>'); $('#fTimeFrom').focus(); return; }
+  if(!$('#fTimeTo').val()){ $('#applyMsg').html('<span style="color:#a3341f;">請選擇結束時間</span>'); $('#fTimeTo').focus(); return; }
+  if(!s || !e){ $('#applyMsg').html('<span style="color:#a3341f;">請填寫完整的開始與結束日期時間</span>'); return; }
   $('#btnSubmit').prop('disabled', true);
   $('#applyMsg').html('送出中…');
   $.post(API, {
     action:'submit', csrf:CSRF, leave_type_id:tid,
-    start_datetime: s.replace('T',' ')+':00', end_datetime: e.replace('T',' ')+':00',
+    start_datetime: s, end_datetime: e,
     reason: $('#fReason').val(), agent_user_id: $('#fAgent').val()||0, upload_token: uploadToken
   }, function(r){
     $('#btnSubmit').prop('disabled', false);
@@ -550,7 +554,7 @@ function submitLeave(){
   }, 'json').fail(function(){ $('#btnSubmit').prop('disabled', false); $('#applyMsg').html('<span style="color:#a3341f;">送出失敗</span>'); });
 }
 function resetForm(keepMsg){
-  $('#fType').val(''); $('#fStart').val(''); $('#fEnd').val(''); $('#fAmount').val('');
+  $('#fType').val(''); $('#fTimeFrom').val(''); $('#fTimeTo').val(''); $('#fAmount').val('');
   $('#fDateFrom').val(''); $('#fDateTo').val(''); $('#shiftHint').hide(); shiftApplied = false;
   $('#fReason').val(''); $('#fAgent').val(''); $('#tempList').empty();
   $('#signerPrev').hide(); $('#typeHint').text(''); $('#agentReq').hide();
