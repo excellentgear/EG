@@ -64,25 +64,87 @@ if (!function_exists('eg_push_active_user_filter')) {
     /**
      * 員工狀態過濾（規格 6-1）：只有 在職(1)/最高權限(99) 可收推播；
      * 離職(0)、留職停薪(2)、育嬰留停(3)、特殊帳號(90) 一律排除。發送前必呼叫。
+     *
+     * 例外：共用帳號（is_shared_account=1）即使 state=90（現場共用帳號多半是 90）也必須放行，
+     * 否則成員的通知轉送過去會被這道過濾整批丟掉（見 ai-rules/13）。
      */
     function eg_push_active_user_filter(PDO $db, array $userIds): array
     {
         $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
         if (empty($userIds)) return [];
         $in = implode(',', $userIds);
-        return array_map('intval', $db->query("SELECT id FROM user WHERE id IN ($in) AND state IN (1,99)")->fetchAll(PDO::FETCH_COLUMN));
+        $cond = "state IN (1,99)";
+        require_once __DIR__ . '/../common/shared_account_lib.php';
+        if (eg_shared_ready($db)) $cond = "(state IN (1,99) OR is_shared_account = 1)";
+        return array_map('intval', $db->query("SELECT id FROM user WHERE id IN ($in) AND $cond")->fetchAll(PDO::FETCH_COLUMN));
     }
 }
 
 if (!function_exists('eg_push_send_to_users')) {
     /**
-     * 依 User ID 清單撈出訂閱憑證並發送推播。
+     * 依 User ID 清單發送推播。**全站 Web Push 的唯一出口**，共用帳號轉送就在這裡展開
+     * （各模組零修改自動受益，見 ai-rules/13）。
+     *
      * @param PDO   $db
-     * @param int[] $userIds  收件者 user.id
+     * @param int[] $userIds  原收件者 user.id
      * @param array $payload  推播內容，如 ['title'=>..,'body'=>..,'url'=>..,'tag'=>..]
+     * @param array $opts     ['event_id'=>int] 有公告來源時傳入：只有被「指名(target_type='user')」的
+     *                        收件人才轉送到共用帳號，全體/部門/身分廣播不逐人轉送（避免現場平板洗版）。
+     *                        不傳＝視同全部指名（模組直接指定收件人時的情況）。
      * @return array ['ok'=>bool,'sent'=>int,'failed'=>int,'removed'=>int]
      */
-    function eg_push_send_to_users(PDO $db, array $userIds, array $payload): array
+    function eg_push_send_to_users(PDO $db, array $userIds, array $payload, array $opts = []): array
+    {
+        try {
+            require_once __DIR__ . '/../common/shared_account_lib.php';
+            $fanoutOnly = isset($opts['event_id'])
+                ? eg_shared_named_recipients($db, (int)$opts['event_id'])
+                : null;
+            $entries = eg_shared_fanout($db, $userIds, $fanoutOnly);
+        } catch (\Throwable $e) {
+            error_log('[push] shared fanout failed: ' . $e->getMessage());
+            $entries = [];
+        }
+        if (empty($entries)) return eg_push_send_raw($db, $userIds, $payload);
+
+        // 本人自己收的併成一批（原樣）；轉送到共用帳號的「每位成員各一則」（各自前綴姓名）。
+        $selfIds = [];
+        $byMember = [];   // for_uid => ['name'=>.., 'deliver'=>[uid,..]]
+        foreach ($entries as $en) {
+            if ($en['deliver_uid'] === $en['for_uid']) { $selfIds[] = $en['deliver_uid']; continue; }
+            $f = $en['for_uid'];
+            if (!isset($byMember[$f])) $byMember[$f] = ['name' => $en['for_name'], 'deliver' => []];
+            $byMember[$f]['deliver'][] = $en['deliver_uid'];
+        }
+
+        $agg = ['ok' => true, 'sent' => 0, 'failed' => 0, 'removed' => 0];
+        $merge = function (array $r) use (&$agg) {
+            if (empty($r['ok'])) $agg['ok'] = false;
+            $agg['sent']    += (int)($r['sent'] ?? 0);
+            $agg['failed']  += (int)($r['failed'] ?? 0);
+            $agg['removed'] += (int)($r['removed'] ?? 0);
+        };
+
+        if ($selfIds) $merge(eg_push_send_raw($db, $selfIds, $payload));
+        foreach ($byMember as $forUid => $g) {
+            $p = $payload;
+            $p['title'] = eg_shared_prefix_title((string)($payload['title'] ?? ''),
+                          ['deliver_uid' => 0, 'for_uid' => $forUid, 'for_name' => $g['name']]);
+            // tag 必須帶 for_uid：同一 tag 的推播會互相覆蓋，多位成員的通知就只剩最後一則
+            if (!empty($p['tag'])) $p['tag'] .= '-for' . (int)$forUid;
+            $p['forUid'] = (int)$forUid;
+            $merge(eg_push_send_raw($db, $g['deliver'], $p));
+        }
+        return $agg;
+    }
+}
+
+if (!function_exists('eg_push_send_raw')) {
+    /**
+     * 實際發送（不做共用帳號轉送）。原 eg_push_send_to_users 的內容。
+     * @return array ['ok'=>bool,'sent'=>int,'failed'=>int,'removed'=>int]
+     */
+    function eg_push_send_raw(PDO $db, array $userIds, array $payload): array
     {
         // 每次發送前過濾員工狀態（離職/留職停薪/育嬰留停/特殊帳號 不發）
         $userIds = eg_push_active_user_filter($db, $userIds);
@@ -223,7 +285,8 @@ if (!function_exists('eg_push_event_notify')) {
                 'url'   => '/EGsystem/views/liveEvent/mobile.php?event=' . (int)$eventId,
                 'eventId' => (int)$eventId,
             ];
-            return eg_push_send_to_users($db, $userIds, $payload);
+            // 帶 event_id：讓共用帳號轉送只作用在「指名(target_type='user')」的收件人
+            return eg_push_send_to_users($db, $userIds, $payload, ['event_id' => (int)$eventId]);
         } catch (\Throwable $e) {
             error_log('[push] eg_push_event_notify failed: ' . $e->getMessage());
             return ['ok' => false, 'msg' => $e->getMessage()];

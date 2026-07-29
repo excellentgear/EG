@@ -157,7 +157,8 @@ if (!function_exists('eg_qa_insert_event')) {
                 'tag'     => 'qa-event-' . $eventId,
                 'url'     => $opts['url'] ?? ('/EGsystem/views/QA/qa_abnormal_view.php?event=' . $eventId),
                 'eventId' => $eventId,
-            ]);
+            // 帶 event_id：異常單可對「部門」發通知，部門廣播不逐人轉送到共用帳號（見 ai-rules/13）
+            ], ['event_id' => $eventId]);
         } catch (Throwable $e) {
             error_log('[qa_notify] push failed: ' . $e->getMessage());
         }
