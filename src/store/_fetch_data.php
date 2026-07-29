@@ -123,6 +123,7 @@ try { // ✅ 建議：使用 try-catch 捕捉所有資料庫操作的錯誤
         b.d_id,
         b.d_setting_id,
         COALESCE(ds.D_Setting_Id, b.d_id, '') AS d_display,
+        COALESCE(ds.Drawing_No, '') AS d_drawing_no,
         b.Delivery_date,
         b.Client_Name           AS Client_Name_Full,
         SUBSTRING(REPLACE(b.Client_Name, ' ', ''), 1, 3) AS Client_Name,
@@ -134,9 +135,23 @@ try { // ✅ 建議：使用 try-catch 捕捉所有資料庫操作的錯誤
         bi.ProcessName,
         bi.pti,
         bi.maker_name           AS maker_id,
+        -- ⚠ 廠商代號清單只能取「目前製程」(移轉日最新的那一批)，
+        --    否則自動更新後會比首次載入多出舊製程的廠商代號，導致用代號片段搜尋跳出無關廠商。
+        --    條件需與 OreadyReply_ForPm_BaseOfTime.php 首次載入的 bi 子查詢一致。
         (SELECT GROUP_CONCAT(DISTINCT CAST(bi_ml.maker_id_no AS CHAR) ORDER BY bi_ml.bom_sn SEPARATOR '/')
          FROM bom_ing bi_ml
-         WHERE bi_ml.bom = b.bom AND bi_ml.processing_state IN ('Q', 'P', 'ing', 'E')
+         WHERE bi_ml.bom = b.bom
+           AND bi_ml.processing_state IN ('Q', 'P', 'ing', 'E')
+           AND bi_ml.is_schedule_split = 0
+           AND bi_ml.outsource_date IS NOT NULL
+           AND DATE(bi_ml.outsource_date) = (
+                SELECT MAX(DATE(bi_ml2.outsource_date))
+                FROM bom_ing bi_ml2
+                WHERE bi_ml2.bom = b.bom
+                  AND bi_ml2.processing_state IN ('Q', 'P', 'ing', 'E')
+                  AND bi_ml2.is_schedule_split = 0
+                  AND bi_ml2.outsource_date IS NOT NULL
+           )
         ) AS maker_id_no_list,
         bi.sqty                 AS bom_ing_sqty,
         COALESCE(
@@ -303,7 +318,7 @@ if (is_array($OreadyReply_list_base)) {
                 foreach ($stmt_qcs->fetchAll(PDO::FETCH_ASSOC) as $_qcs) {
                     $qc_summary_map[$_qcs['bom']] = $_qcs;
                 }
-            } catch (PDOException $e) { error_log('_fetch_data2 qc_summary_map: ' . $e->getMessage()); }
+            } catch (PDOException $e) { error_log('_fetch_data qc_summary_map: ' . $e->getMessage()); }
         }
 
         // ✅ 修正：一次性獲取出貨紀錄並正確放入回傳資料（原版未將 shipment_history 放入 $item）
@@ -358,7 +373,7 @@ if (is_array($OreadyReply_list_base)) {
                     $users_on_leave_ids = array_map('intval', $stmt_leave->fetchAll(PDO::FETCH_COLUMN));
                 }
             }
-        } catch (Exception $e) { error_log("_fetch_data2 users_on_leave: " . $e->getMessage()); }
+        } catch (Exception $e) { error_log("_fetch_data users_on_leave: " . $e->getMessage()); }
 
         // ✅【報工資訊修正】補齊 pm_has_report / pm_total_processed / pm_total_ng 欄位
         // 主頁面初始載入有這段邏輯，但 _fetch_data.php 原本沒有，導致自動刷新後報工資訊消失
@@ -394,7 +409,7 @@ if (is_array($OreadyReply_list_base)) {
                 foreach ($stmt_pm->fetchAll(PDO::FETCH_ASSOC) as $r) {
                     $pm_report_map[$r['bom_ing_fid']] = $r;
                 }
-            } catch (PDOException $e) { error_log("_fetch_data2 pm_report_map: " . $e->getMessage()); }
+            } catch (PDOException $e) { error_log("_fetch_data pm_report_map: " . $e->getMessage()); }
 
             // 排程順位
             try {
@@ -408,7 +423,7 @@ if (is_array($OreadyReply_list_base)) {
                 foreach ($stmt_sched->fetchAll(PDO::FETCH_ASSOC) as $r) {
                     $pm_schedule_map[$r['bom_ing_fid']] = $r['schedule_order'];
                 }
-            } catch (PDOException $e) { error_log("_fetch_data2 pm_schedule_map: " . $e->getMessage()); }
+            } catch (PDOException $e) { error_log("_fetch_data pm_schedule_map: " . $e->getMessage()); }
 
             // ── 每個 bom 最新一筆報工備註（key=bom，跨製程，與主頁面邏輯一致）──
             $latest_report_info_map = [];
@@ -465,7 +480,7 @@ if (is_array($OreadyReply_list_base)) {
                         'ng_info'             => implode('|', $ng_parts),
                     ];
                 }
-            } catch (PDOException $e) { error_log("_fetch_data2 latest_report_info error: " . $e->getMessage()); }
+            } catch (PDOException $e) { error_log("_fetch_data latest_report_info error: " . $e->getMessage()); }
 
             // ── 累計 NG 明細（key=bom_ing_fid，含 ng_txt 原因與備註）──
             $ng_by_fid = [];
@@ -498,7 +513,7 @@ if (is_array($OreadyReply_list_base)) {
                     }
                     $ng_by_fid[$fid]['parts'][] = $part;
                 }
-            } catch (PDOException $e) { error_log("_fetch_data2 ng_by_fid error: " . $e->getMessage()); }
+            } catch (PDOException $e) { error_log("_fetch_data ng_by_fid error: " . $e->getMessage()); }
 
             // 所有製程 fid（用於完工判斷）
             try {
@@ -512,7 +527,7 @@ if (is_array($OreadyReply_list_base)) {
                 foreach ($stmt_fids->fetchAll(PDO::FETCH_ASSOC) as $r) {
                     $bom_all_fids_map[$r['bom']][] = $r['bom_ing_fid'];
                 }
-            } catch (PDOException $e) { error_log("_fetch_data2 bom_all_fids_map: " . $e->getMessage()); }
+            } catch (PDOException $e) { error_log("_fetch_data bom_all_fids_map: " . $e->getMessage()); }
 
             // 有完工報工（is_finished=1）的 fid 集合
             try {
@@ -528,7 +543,7 @@ if (is_array($OreadyReply_list_base)) {
                 foreach ($stmt_fin->fetchAll(PDO::FETCH_ASSOC) as $r) {
                     $finished_fids_set[$r['bom_ing_fid']] = true;
                 }
-            } catch (PDOException $e) { error_log("_fetch_data2 finished_fids_set: " . $e->getMessage()); }
+            } catch (PDOException $e) { error_log("_fetch_data finished_fids_set: " . $e->getMessage()); }
 
             // 有新製程報工的最大 bom_sn
             try {
@@ -543,7 +558,7 @@ if (is_array($OreadyReply_list_base)) {
                 foreach ($stmt_maxsn->fetchAll(PDO::FETCH_ASSOC) as $r) {
                     $max_reported_sn_map[$r['bom']] = intval($r['max_sn']);
                 }
-            } catch (PDOException $e) { error_log("_fetch_data2 max_reported_sn_map: " . $e->getMessage()); }
+            } catch (PDOException $e) { error_log("_fetch_data max_reported_sn_map: " . $e->getMessage()); }
         }
 
         foreach ($OreadyReply_list_base as $item) {
@@ -773,7 +788,7 @@ if (!empty($current_page_boms)) {
         foreach ($stmt_tp->fetchAll(PDO::FETCH_ASSOC) as $tp) {
             $transfer_price_map[$tp['bom']][$tp['bom_sn']] = $tp;
         }
-    } catch (PDOException $e) { error_log('_fetch_data2 transfer_price_map error: ' . $e->getMessage()); }
+    } catch (PDOException $e) { error_log('_fetch_data transfer_price_map error: ' . $e->getMessage()); }
 }
 
 // ing_active_map：用原始清單（含所有批次），過濾 is_consumed=0，保留 batch_label

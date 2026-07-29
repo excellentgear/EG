@@ -3283,6 +3283,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                         bi.sqty, bi.processing_state, b.priority_type,
                         b.Client_Name, b.d_id, b.Delivery_date,
                         bi.outsource_date, bi.return_date, bi.QC_check_date,
+                        -- 結案日：優先 closed_at；若 BOM 已結案(processing_state='1')但無 closed_at，
+                        -- 依序退回 bom.Modified_At→bom_ing.Modified_At→回廠→QC→移轉日(必為非空)，確保已結案者不會被當成在廠中延到今天
                         CASE WHEN b.closed_at IS NOT NULL THEN b.closed_at
                              WHEN b.processing_state = '1'
                                   THEN COALESCE(b.Modified_At, bi.Modified_At, bi.return_date, bi.QC_check_date, bi.outsource_date)
@@ -3320,6 +3322,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
             $eff_d = $r['eff_return'] ? substr($r['eff_return'], 0, 10) : null;
             $src   = $r['ret_src'];
             $is_stale = ($src === 'ongoing' && strtotime($out_d) < $ts60) ? 1 : 0;
+            // 急件燈號：E=特急件、U=急件、其餘=一般件（對應本頁 getPriorityColor 邏輯）
             $pt = $r['priority_type'] ?? null;
             $prio_code  = ($pt === 'E') ? 'e' : (($pt === 'U') ? 'u' : 'n');
             $prio_label = ($pt === 'E') ? '特急件' : (($pt === 'U') ? '急件' : '一般件');
@@ -3339,20 +3342,20 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 'd_id'       => $r['d_id'] ?? '',
                 'delivery'   => $r['Delivery_date'] ? substr($r['Delivery_date'], 0, 10) : null,
                 'out_date'   => $out_d,
-                'ret_date'   => $eff_d,
+                'ret_date'   => $eff_d,          // null = 在廠中，前端延到今天
                 'ret_src'    => $src,
                 'ret_label'  => $label_map[$src] ?? $src,
                 'is_stale'   => $is_stale,
                 'prio'       => $prio_code,
                 'prio_label' => $prio_label,
-                'work_days'  => 0,
+                'work_days'  => 0,   // 下方以 calendar_workday 回填「加工日」
             ];
         }
 
         // ── 工作日/加工日：完全依 calendar.php 邏輯（休假 day_type='s'、補班 day_type='m'）──
-        //    工作日 = 補班日 OR (非週末 AND 非休假日)。資料源 evenement + event_category（非 calendar_workday 表，該表有誤）。
-        $nonwork = [];
-        $holidays_win = [];
+        //    工作日 = 補班日 OR (非週末 AND 非休假日)。資料源 evenement + event_category（非 calendar_workday 表，該表 6/19 等有誤）。
+        $nonwork = [];        // [start,end] 內的非工作日（供甘特圖底色）
+        $holidays_win = [];   // [start,end] 內的休假日 date=>title（供 tooltip）
         if ($rows) {
             $min_out = $today; $max_end = $today;
             foreach ($rows as $rr) {
@@ -3360,10 +3363,11 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 $e = $rr['ret_date'] ?? $today;
                 if ($e > $max_end) $max_end = $e;
             }
+            // 涵蓋：顯示區間、加工日計算範圍、以及「預測回廠(P80)」所需的歷史範圍
             $span_start = min($min_out, $start);
             $span_end   = max($max_end, $end);
-            $pred_floor = min($span_start, date('Y-m-d', strtotime($today . ' -800 days')));
-            $cum_floor  = date('Y-m-d', strtotime($pred_floor . ' -180 days'));
+            $pred_floor = min($span_start, date('Y-m-d', strtotime($today . ' -800 days'))); // 歷史回廠日下限
+            $cum_floor  = date('Y-m-d', strtotime($pred_floor . ' -180 days'));              // 再往前 180 天涵蓋歷史移轉日
 
             $hol = []; $mk = []; $holname = [];
             $est = $db->prepare("
@@ -3384,6 +3388,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 $isWeekend = ($w === 0 || $w === 6);
                 return isset($mk[$ds]) || (!$isWeekend && !isset($hol[$ds]));
             };
+            // 累計工作日（cum_floor ~ span_end）
             $cum = []; $run = 0; $cur = strtotime($cum_floor); $endts = strtotime($span_end);
             while ($cur <= $endts) {
                 $ds = date('Y-m-d', $cur);
@@ -3398,6 +3403,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 $rr['work_days'] = max(0, $cb - $ca);
             }
             unset($rr);
+            // 顯示區間內的非工作日 + 休假名稱
             $cur = strtotime($start); $endts = strtotime($end);
             while ($cur <= $endts) {
                 $ds = date('Y-m-d', $cur);
@@ -3428,10 +3434,10 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_capacity_gantt') {
                 $byPair = [];
                 foreach ($hst->fetchAll(PDO::FETCH_ASSOC) as $h) {
                     $key = $h['mk'] . '|' . $h['tp'];
-                    if (!isset($pairs[$key])) continue;
-                    if (isset($byPair[$key]) && count($byPair[$key]) >= 50) continue;
+                    if (!isset($pairs[$key])) continue;                 // 只取實際需要的 廠商×大類 組合
+                    if (isset($byPair[$key]) && count($byPair[$key]) >= 50) continue; // 已按 return DESC，取最近 50 筆
                     $ca = $cum[$h['o']] ?? null; $cb = $cum[$h['r']] ?? null;
-                    if ($ca === null || $cb === null) continue;
+                    if ($ca === null || $cb === null) continue;         // 太舊超出 cum 範圍則略過
                     $wd = $cb - $ca;
                     if ($wd > 0) { if (!isset($byPair[$key])) $byPair[$key] = []; $byPair[$key][] = $wd; }
                 }

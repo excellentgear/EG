@@ -810,7 +810,7 @@ if (!empty($all_boms)) {
     }
 }
 
-// 2. 為每筆 BOM 資料準備 OrderList (模擬 _fetch_data2.php 的邏輯)
+// 2. 為每筆 BOM 資料準備 OrderList (模擬 _fetch_data.php 的邏輯)
 $OreadyReply_list_final = [];
 if (is_array($OreadyReply_list_base)) {
     // 確保 $db 物件存在
@@ -4318,7 +4318,7 @@ echo "</script>\n";
         var btnCreateBom = document.getElementById('btn-create-bom');
         if (btnCreateBom) btnCreateBom.addEventListener('click', openCreateBomModal);
         // --- 啟動定時刷新（預設 30 秒，失敗時指數退避至 120 秒）---
-        // 自適應退避定時刷新：_fetch_data2.php 失敗時不干擾即時搜尋
+        // 自適應退避定時刷新：_fetch_data.php 失敗時不干擾即時搜尋
         (function(){
             var _failCount=0, _timer=null, _BASE=30000, _MAX=120000;
             function _schedule(delay){
@@ -4482,7 +4482,7 @@ echo "</script>\n";
         console.log("⏳ fetchDataAndFilter 開始 " + new Date().toLocaleTimeString());
 
         // --- NEW: Modify URL based on QC sort state ---
-        let fetchUrl = new URL('../../src/store/_fetch_data2.php', window.location.href);
+        let fetchUrl = new URL('../../src/store/_fetch_data.php', window.location.href);
 
         // ⭐ 核心修正：在自動更新時，總是請求所有資料
         fetchUrl.searchParams.set('fetchAll', '1');
@@ -4585,7 +4585,7 @@ echo "</script>\n";
                     processAndRenderData(); // 更新空表格
                 }
             } else if (xhr.readyState === 4) {
-                console.warn("_fetch_data2.php 失敗（狀態碼: " + xhr.status + "），保留現有資料。");
+                console.warn("_fetch_data.php 失敗（狀態碼: " + xhr.status + "），保留現有資料。");
             }
         };
         // If a callback is provided and we want it to run *after* processAndRenderData,
@@ -6929,7 +6929,7 @@ echo "</script>\n";
                         // --- CRITICAL: Update fullDataset ---
                         const itemInFullDataset = fullDataset.find(item => item.bom_ing_fid == bomIdentifier); // ⭐ 修改：使用 bom_ing_fid 查找
                         if (itemInFullDataset) {
-                            itemInFullDataset.bom_bom_ps = newBomPsValue; // Ensure this field name matches _fetch_data2.php
+                            itemInFullDataset.bom_bom_ps = newBomPsValue; // Ensure this field name matches _fetch_data.php
                             // console.log("Updated fullDataset for bom_ing_fid:", bomIdentifier, "with new single_bet_ps:", newBomPsValue);
                         } else {
                             console.warn("Could not find BOM in fullDataset to update bom_ps:", bomIdentifier);

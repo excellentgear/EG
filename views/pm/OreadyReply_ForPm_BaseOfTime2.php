@@ -3304,6 +3304,15 @@ echo "</script>\n";
             // 可以選擇性地更新按鈕狀態，如果需要的話
         }
         // --- URL 參數恢復結束 ---
+        // --- 訂單ID篩選（從其他頁面點擊BOM綁定狀態圖示帶入，非既有篩選欄位，僅影響帶此參數時的顯示）---
+        if (urlParams.has("order_id_filter")) {
+            window.orderIdFilterParam = urlParams.get("order_id_filter");
+            var _oidBanner = document.createElement('div');
+            _oidBanner.style.cssText = 'background:#F7E0BD;color:#6b4a1f;border-bottom:2px solid #F0A24B;padding:6px 14px;font-size:13px;text-align:center;';
+            _oidBanner.innerHTML = '目前僅顯示訂單 #' + window.orderIdFilterParam + ' 已綁定的BOM　'
+                + '<a href="' + window.location.pathname + '" style="color:#DD5138;text-decoration:underline;">清除篩選顯示全部</a>';
+            document.body.insertBefore(_oidBanner, document.body.firstChild);
+        }
         // --- Global Search Filter Restore ---
         if (urlParams.has("global_search")) {
             const globalSearchEl = document.getElementById("global-search");
@@ -7535,7 +7544,8 @@ echo "</script>\n";
             globalSearch: document.getElementById('global-search').value.toLowerCase(), // 日內未回篩選值
             elapsedDays: elapsedDaysFilterValue,
             processNotHalfwayActive: isProcessNotHalfwayFilterActive, // Add state of the new filter
-            pti: window.ptiSearch || ''
+            pti: window.ptiSearch || '',
+            orderId: window.orderIdFilterParam || '' // 由訂單列表頁帶入的訂單ID篩選（非UI欄位）
         };
     }
 
@@ -7948,6 +7958,12 @@ echo "</script>\n";
 
             // BOM/料號
             if (filters.bom && (!row.bom || row.bom.toLowerCase().indexOf(filters.bom) === -1) && (!row.d_id || row.d_id.toLowerCase().indexOf(filters.bom) === -1)) show = false;
+
+            // 訂單ID篩選（由訂單列表頁點擊BOM綁定狀態圖示帶入，比對此BOM的OrderList是否含該訂單）
+            if (filters.orderId) {
+                const orderIdMatch = orderList.some(function(o) { return o && String(o.Order_id) === String(filters.orderId); });
+                if (!orderIdMatch) show = false;
+            }
 
             // --- Vendor Filter (handles regular and "FILTER_NO_VENDOR") ---
             if (filters.vendor) { // filters.vendor could be a name or "無廠商"
