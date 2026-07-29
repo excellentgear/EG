@@ -300,8 +300,12 @@ input[type=number]{-moz-appearance:textfield;}
 </div></div></div>
 <?php endif; ?>
 
+<!-- Gentelella 版型必備，順序不可調換：缺 custom.min.js 左側欄選單就不會展開（ai-rules/00-診斷.md 陷阱表） -->
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/fastclick.js"></script>
+<script src="../../resource/js/nprogress.js"></script>
+<script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= $avStamp ?>"></script>
 <script>
 const API = '../../src/store/Leave_API.php';
