@@ -219,7 +219,7 @@ function kpi_as_seed_indicators(PDO $db): void {
         [3,'月銷貨額達成率','合約訂單審查管理程序','出貨金額/月銷貨目標金額','monthly','percent','gte',85,'%','達成率大於85％',111030101,'吳仁隆/業務課','auto','shipping_target_amount',['monthly_targets'=>['v'=>new stdClass(),'fe'=>0]]],
         [4,'報價單接單率','合約訂單審查管理程序','報價轉訂單數/報價單總數','monthly','percent','gte',70,'%','大於70％',111030101,'吳仁隆/業務課','auto','quote_to_order',['exclude_draft'=>['v'=>1,'fe'=>0]]],
         [5,'客戶滿意度調查','客戶服務管理程序','客戶滿意度調查平均分數','yearly','score','gte',8,'分','大於8分',111030101,'吳仁隆/業務課','manual',null,[]],
-        [6,'廠商稽核按時執行率','供應商管理程序','實際稽核廠商數/當月應稽核廠商總數','halfyear','percent','gte',70,'%','達成率大於70％',109110201,'何沐桐/生管組','manual',null,[]],
+        [6,'廠商稽核按時執行率','供應商管理程序','實際稽核廠商數/當月應稽核廠商總數','halfyear','percent','gte',70,'%','達成率大於70％',109110201,'何沐桐/生管組','auto','vendor_audit_ontime',['grace_days'=>['v'=>0,'fe'=>1]]],
         [7,'廠商準時交貨率','供應商管理程序 採購管理辦法','每月達交工單筆數/每月工單應交總筆數','monthly','percent','gte',70,'%','達成率大於70％',109110201,'何沐桐/生管組','auto','vendor_ontime',['default_days'=>['v'=>7,'fe'=>1],'days_by_process_type'=>['v'=>new stdClass(),'fe'=>0]]],
         [8,'準時出貨率','客戶服務管理程序 生產管理程序','及時交貨訂單筆數/總訂單出貨筆數','monthly','percent','gte',80,'%','達成率大於80％',109110201,'何沐桐/生管組','auto','order_ontime',['exclude_clients'=>['v'=>['寶嘉誠','泳建'],'fe'=>1]]],
         [9,'發料錯誤件數','生產管理程序 採購管理辦法','當月發料錯誤件數','monthly','count','lte',5,'件','少於5件',111050101,'陳彦驊/倉管組','manual',null,[]],
@@ -232,7 +232,7 @@ function kpi_as_seed_indicators(PDO $db): void {
         [16,'進料檢驗不良率','不合格品管理程序 檢驗與測試管理程序','進料檢驗不良數/進料總數(同生管計算)','monthly','percent','lte',5,'%','不良率小於5％',111050101,'陳彦驊/品保課','auto','incoming_ng_rate',['ng_statuses'=>['v'=>['ng'],'fe'=>0]]],
         [17,'成品出貨不良率','不合格品管理程序 檢驗與測試管理程序','出貨檢驗不良數/出貨總數','monthly','percent','lte',5,'%','不良率小於5％',111050101,'陳彦驊/品保課','auto','packing_ng_rate',[]],
         [18,'量測儀器按時校驗率','量測儀器校正管理辦法 量規儀器內校作業標準','校驗完成件數/當月應校驗件數','monthly','percent','gte',95,'%','達成率大於95％',111050101,'陳彦驊/品保課','auto','calibration_ontime',['grace_days'=>['v'=>0,'fe'=>1]]],
-        [19,'人員教育訓練達成率','人力資源管理程序','有上課次數/總課程次數','monthly','percent','gte',95,'%','達成率大於95％',105030102,'林雅婷/管理課','manual',null,[]],
+        [19,'人員教育訓練達成率','人力資源管理程序','有上課次數/總課程次數','monthly','percent','gte',95,'%','達成率大於95％',105030102,'林雅婷/管理課','auto','training_completion',['include_cancelled'=>['v'=>0,'fe'=>1]]],
         [20,'應收帳款(票據)未收件數','N/A','當月應收但延遲收件數','monthly','count','lte',5,'件','少於5件',109110202,'林郁婷/管理課','manual',null,[]],
         [21,'明細分類帳(損益表)於期限內完成','N/A','每月月底前應完成','monthly','yesno','yes',1,'','Yes/No',109110202,'林郁婷/管理課','manual',null,[]],
     ];
@@ -479,6 +479,20 @@ function kpi_as_registry(): array {
             'desc' => '分母=當月應校驗量具數(已完成紀錄到期日在當月＋尚待完成的到期)；分子=其中準時完成(校驗日≤到期日+寬限)者',
             'params' => [
                 ['key'=>'grace_days','label'=>'準時寬限天數(0=須到期日前完成)','type'=>'int','fe'=>1],
+            ]],
+        'training_completion' => [
+            'name' => '人員教育訓練達成率',
+            'page' => '教育訓練管理 views/ADM/training_record.php',
+            'desc' => '分母=當月計畫訓練場次(排除取消)；分子=其中已完成場次',
+            'params' => [
+                ['key'=>'include_cancelled','label'=>'取消場次是否計入分母(1=是)','type'=>'bool','fe'=>1],
+            ]],
+        'vendor_audit_ontime' => [
+            'name' => '廠商稽核按時執行率',
+            'page' => '供應商稽核管理 views/pm/vendor_audit.php',
+            'desc' => '半年結算(6/12月)：分母=該半年應稽核廠商(已完成紀錄到期＋尚待完成到期)；分子=其中按時完成(稽核日≤到期日+寬限)者',
+            'params' => [
+                ['key'=>'grace_days','label'=>'按時寬限天數(0=須到期日前完成)','type'=>'int','fe'=>1],
             ]],
     ];
 }
@@ -795,6 +809,16 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
         case 'calibration_ontime': {
             require_once __DIR__ . '/tool_calib_lib.php';
             return tool_calib_kpi_compute($db, $year, $month, $params);
+        }
+
+        case 'training_completion': {
+            require_once __DIR__ . '/training_lib.php';
+            return training_kpi_compute($db, $year, $month, $params);
+        }
+
+        case 'vendor_audit_ontime': {
+            require_once __DIR__ . '/vendor_audit_lib.php';
+            return vendor_audit_kpi_compute($db, $year, $month, $params);
         }
     }
     return null;
