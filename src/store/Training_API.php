@@ -43,7 +43,7 @@ case 'meta': {
     $years = array_values(array_unique(array_merge([$cy], array_map('intval', $years))));
     rsort($years);
     jout(['perms'=>$perms, 'departments'=>$depts, 'years'=>$years,
-          'cur_year'=>$cy, 'cur_month'=>(int)date('n')]);
+          'cur_year'=>$cy, 'cur_month'=>(int)date('n'), 'today'=>date('Y-m-d')]);
 }
 
 case 'list': {
@@ -69,7 +69,9 @@ case 'list': {
           'perms'=>$perms]);
 }
 
-/* 新增/修改場次（登錄權；計畫與完成登錄合一） */
+/* 新增/修改「訓練計畫」（登錄權）
+   只寫計畫欄位：年月/部門/課程/類型/講師或開課單位/時數/備註。
+   實行欄位（狀態、實際開課日、時段、地點、名單）一律由 save_execution 維護，此處不動。 */
 case 'save_session': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $sid = (int)($_POST['session_id'] ?? 0);
@@ -85,33 +87,68 @@ case 'save_session': {
     $orgUnit = trim((string)($_POST['org_unit'] ?? '')) ?: null;     // 外訓開課單位
     if ($trainType === 'external') { $trainer = null; $trainerId = null; }
     else { $orgUnit = null; }
+    if ($trainType === 'external' && $orgUnit === null) jerr('外訓請填開課單位');
     $hours = ($_POST['hours'] ?? '') === '' ? null : (float)$_POST['hours'];
-    $target = ($_POST['target_headcount'] ?? '') === '' ? null : (int)$_POST['target_headcount'];
-    $actual = ($_POST['actual_headcount'] ?? '') === '' ? null : (int)$_POST['actual_headcount'];
-    $status = in_array($_POST['status'] ?? '', ['planned','done','cancelled'], true) ? $_POST['status'] : 'planned';
-    $doneDate = trim((string)($_POST['done_date'] ?? '')) ?: null;
-    if ($status === 'done' && !$doneDate) $doneDate = date('Y-m-d');
-    if ($status !== 'done') $doneDate = null;
-    $startT = trim((string)($_POST['start_time'] ?? '')) ?: null;
-    $endT = trim((string)($_POST['end_time'] ?? '')) ?: null;
-    $location = trim((string)($_POST['location'] ?? '')) ?: null;
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
     try {
         $db->beginTransaction();
         if ($sid > 0) {
             $db->prepare("UPDATE training_session SET year=?, plan_month=?, dept_id=?, course_name=?, train_type=?, trainer=?, trainer_id=?, org_unit=?,
-                          hours=?, target_headcount=?, actual_headcount=?, status=?, done_date=?, start_time=?, end_time=?, location=?, note=? WHERE session_id=?")
-               ->execute([$year,$month,$deptId,$course,$trainType,$trainer,$trainerId,$orgUnit,$hours,$target,$actual,$status,$doneDate,$startT,$endT,$location,$note,$sid]);
+                          hours=?, note=? WHERE session_id=?")
+               ->execute([$year,$month,$deptId,$course,$trainType,$trainer,$trainerId,$orgUnit,$hours,$note,$sid]);
         } else {
             $db->prepare("INSERT INTO training_session
-                (year,plan_month,dept_id,course_name,train_type,trainer,trainer_id,org_unit,hours,target_headcount,actual_headcount,status,done_date,start_time,end_time,location,note,created_by,created_by_name)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-               ->execute([$year,$month,$deptId,$course,$trainType,$trainer,$trainerId,$orgUnit,$hours,$target,$actual,$status,$doneDate,$startT,$endT,$location,$note,$uid,$uname]);
+                (year,plan_month,dept_id,course_name,train_type,trainer,trainer_id,org_unit,hours,status,note,created_by,created_by_name)
+                VALUES (?,?,?,?,?,?,?,?,?, 'planned', ?,?,?)")
+               ->execute([$year,$month,$deptId,$course,$trainType,$trainer,$trainerId,$orgUnit,$hours,$note,$uid,$uname]);
             $sid = (int)$db->lastInsertId();
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout(['session_id'=>$sid]);
+}
+
+/* 確認實行（登錄權）：登錄實際開課日/時段/地點，狀態轉 done。
+   計畫欄位一律不動；參加名單另由 save_attendees 寫入。 */
+case 'save_execution': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $sid = (int)($_POST['session_id'] ?? 0);
+    $st = $db->prepare("SELECT status FROM training_session WHERE session_id=?");
+    $st->execute([$sid]);
+    $cur = $st->fetchColumn();
+    if ($cur === false) jerr('找不到場次');
+    if ($cur === 'cancelled') jerr('此計畫已取消，請先恢復為計畫中再確認實行');
+    $doneDate = trim((string)($_POST['done_date'] ?? ''));
+    if ($doneDate === '') jerr('請填實際開課日期');
+    $startT = trim((string)($_POST['start_time'] ?? '')) ?: null;
+    $endT = trim((string)($_POST['end_time'] ?? '')) ?: null;
+    if ($startT && $endT && $endT < $startT) jerr('時段迄不可早於時段起');
+    $location = trim((string)($_POST['location'] ?? '')) ?: null;
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE training_session SET status='done', done_date=?, start_time=?, end_time=?, location=? WHERE session_id=?")
+           ->execute([$doneDate, $startT, $endT, $location, $sid]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    jout(['session_id'=>$sid]);
+}
+
+/* 狀態切換（登錄權）：退回計畫中 / 取消計畫 / 恢復計畫。
+   退回或取消時清空實際開課日（KPI 只認 done），時段與地點保留供下次沿用。 */
+case 'set_status': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $sid = (int)($_POST['session_id'] ?? 0);
+    $status = (string)($_POST['status'] ?? '');
+    if (!in_array($status, ['planned','cancelled'], true)) jerr('狀態只能設為計畫中或取消');
+    $st = $db->prepare("SELECT 1 FROM training_session WHERE session_id=?");
+    $st->execute([$sid]);
+    if (!$st->fetchColumn()) jerr('找不到場次');
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE training_session SET status=?, done_date=NULL WHERE session_id=?")->execute([$status, $sid]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('狀態變更失敗：'.$e->getMessage(), 500); }
+    jout(['session_id'=>$sid, 'status'=>$status]);
 }
 
 /* 部門人員（講師/參加人員選擇用） */

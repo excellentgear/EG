@@ -88,6 +88,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .tr-modal .m-foot .b-cancel { background:#fff; color:#5b3a1e; border-color:#D8BE93; margin-right:6px; }
         .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
         .tr-modal.wide { max-width:820px; }
+        .tr-hint { margin-top:12px; font-size:12px; color:#8a6d45; background:#FDF8EF; border:1px dashed #E8D5B5;
+            border-radius:6px; padding:7px 10px; line-height:1.6; }
+        .tr-hint b { color:#8A5A2B; }
+        .ex-plan { border:1px solid #E8D5B5; border-radius:6px; background:#FFF7E8; padding:8px 10px; font-size:13px;
+            color:#5b3a1e; line-height:1.8; margin-bottom:4px; }
+        .ex-plan b { color:#8A5A2B; }
+        .ex-plan .st-pill { margin-left:4px; }
         .att-sec { border-top:1px dashed #EADFC8; margin-top:10px; }
         .att-people { max-height:130px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; padding:6px 8px;
             display:flex; flex-wrap:wrap; gap:4px 14px; margin-bottom:6px; min-height:20px; }
@@ -161,6 +168,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
             狀態：<span class="st-pill st-planned">計畫中</span> <span class="st-pill st-done">已完成</span>
             <span class="st-pill st-cancelled">取消</span>。
+            流程分兩步：<b>①計畫</b>（年月、課程、部門、講師/開課單位、時數）→ <b>②確認實行</b>（實際開課日期、時段、地點、參加人員），
+            按下「確認實行」存檔後狀態才轉為已完成。
             KPI 達成率＝當月「已完成」場次 ÷「計畫」場次（取消不計入）；部門留空＝全公司課程。
         </div>
 <?php endif; ?>
@@ -169,9 +178,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 </div>
 </div>
 
-<!-- 新增/編輯 modal -->
-<div class="tr-mask" id="edMask"><div class="tr-modal wide">
-    <div class="m-head"><span id="edTitle">新增訓練場次</span><span class="m-close" onclick="closeMask('edMask')">✕</span></div>
+<!-- 新增/編輯「訓練計畫」modal（只填計畫內容，不含日期時間/地點/人員） -->
+<div class="tr-mask" id="edMask"><div class="tr-modal">
+    <div class="m-head"><span id="edTitle">新增訓練計畫</span><span class="m-close" onclick="closeMask('edMask')">✕</span></div>
     <div class="m-body">
         <div class="grid2">
             <div><label>年度 *</label><input type="number" id="edYear" step="1"></div>
@@ -179,7 +188,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>課程/訓練名稱 *</label><input type="text" id="edCourse" maxlength="100"></div>
             <div><label>對象部門（留空＝全公司）</label><select id="edDept"><option value="">全公司</option></select></div>
             <div><label>訓練類型</label><select id="edType"><option value="internal">內訓</option><option value="external">外訓</option></select></div>
-            <div><label>時數</label><input type="number" id="edHours" step="any" min="0"></div>
+            <div><label>時數（預計）</label><input type="number" id="edHours" step="any" min="0"></div>
         </div>
         <div id="edInternalBox">
             <label>講師（部門→人員；外部講師可直接打字）</label>
@@ -192,19 +201,30 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div id="edExternalBox" style="display:none;">
             <label>開課單位／主辦（外訓）*</label><input type="text" id="edOrgUnit" maxlength="100" placeholder="例：中衛發展中心">
         </div>
-        <div class="grid2" style="margin-top:8px;">
-            <div><label>狀態</label><select id="edStatus">
-                <option value="planned">計畫中</option><option value="done">已完成（實際開課）</option><option value="cancelled">取消</option>
-            </select></div>
-            <div><label>實際開課日（完成時）</label><input type="date" id="edDone"></div>
-            <div><label>時段（起）</label><input type="time" id="edStart"></div>
-            <div><label>時段（迄）</label><input type="time" id="edEnd"></div>
-            <div style="grid-column:1/3;"><label>上課地點</label><input type="text" id="edLocation" maxlength="100"></div>
-        </div>
         <label>備註</label><input type="text" id="edNote" maxlength="200">
+        <div class="tr-hint"><i class="fa fa-info-circle"></i>
+            實際開課日期、時段、上課地點與參加人員，請於清單按 <b>確認實行</b> 登錄；計畫存檔後狀態為「計畫中」。</div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('edMask')">取消</button>
+        <button class="b-ok" onclick="submitEd()">儲存計畫</button>
+    </div>
+</div></div>
+
+<!-- 確認實行 modal（實際開課日期時間、地點、參加人員） -->
+<div class="tr-mask" id="exMask"><div class="tr-modal wide">
+    <div class="m-head"><span id="exTitle">確認實行</span><span class="m-close" onclick="closeMask('exMask')">✕</span></div>
+    <div class="m-body">
+        <div class="ex-plan" id="exPlanInfo"></div>
+        <div class="grid2">
+            <div><label>實際開課日期 *</label><input type="date" id="exDone"></div>
+            <div><label>上課地點</label><input type="text" id="exLocation" maxlength="100" placeholder="例：二樓會議室"></div>
+            <div><label>時段（起）</label><input type="time" id="exStart"></div>
+            <div><label>時段（迄）</label><input type="time" id="exEnd"></div>
+        </div>
 
         <div class="att-sec">
-            <div style="font-weight:bold;color:#5b3a1e;margin:12px 0 4px;">應參加人員名單 <small id="attCount" style="color:#8a6d45;font-weight:normal;"></small></div>
+            <div style="font-weight:bold;color:#5b3a1e;margin:12px 0 4px;">參加人員名單 <small id="attCount" style="color:#8a6d45;font-weight:normal;"></small></div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
                 <select id="attDept" style="width:150px;height:28px;border:1px solid #D8BE93;border-radius:4px;"><option value="">選部門載入人員…</option></select>
                 <button type="button" class="b-att" onclick="attAddChecked()"><i class="fa fa-user-plus"></i> 加入勾選人員</button>
@@ -219,8 +239,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="printSignSheet()"><i class="fa fa-print"></i> 列印簽到表</button>
-        <button class="b-cancel" onclick="closeMask('edMask')">取消</button>
-        <button class="b-ok" onclick="submitEd()">儲存</button>
+        <button class="b-cancel" id="exRevert" style="display:none;color:#DD5138;" onclick="revertPlanned()"><i class="fa fa-undo"></i> 退回計畫中</button>
+        <button class="b-cancel" onclick="closeMask('exMask')">取消</button>
+        <button class="b-ok" id="exSave" onclick="submitEx()">確認實行完成</button>
     </div>
 </div></div>
 
@@ -327,10 +348,20 @@ function renderTable(){
         html += '<td>'+statPill(r.status)+'</td>';
         html += '<td>'+(fmtDate(r.done_date)||'—')+'</td>';
         html += '<td style="white-space:nowrap;">';
-        if (PERMS.canEdit) html += '<span class="tr-op" onclick="openEd('+r.session_id+')"><i class="fa fa-pencil"></i>編輯</span>';
-        if (PERMS.canEdit) html += '<span class="tr-op" onclick="copySession('+r.session_id+')" title="複製內容(不帶名單)"><i class="fa fa-copy"></i>複製</span>';
-        if (PERMS.canAdmin) html += '<span class="tr-op" style="color:#DD5138;" onclick="delSession('+r.session_id+')"><i class="fa fa-trash"></i></span>';
-        if (!PERMS.canEdit) html += '—';
+        if (PERMS.canEdit) {
+            html += '<span class="tr-op" onclick="openEd('+r.session_id+')" title="修改計畫內容"><i class="fa fa-pencil"></i>計畫</span>';
+            if (r.status==='cancelled') {
+                html += '<span class="tr-op" onclick="setStatus('+r.session_id+',\'planned\')" title="恢復為計畫中"><i class="fa fa-undo"></i>恢復</span>';
+            } else if (r.status==='done') {
+                html += '<span class="tr-op" onclick="openEx('+r.session_id+')" title="修改實行紀錄"><i class="fa fa-check-square-o"></i>實行紀錄</span>';
+            } else {
+                html += '<span class="tr-op" onclick="openEx('+r.session_id+')" title="登錄實際開課日期/地點/人員"><i class="fa fa-check-square-o"></i>確認實行</span>';
+                html += '<span class="tr-op" onclick="setStatus('+r.session_id+',\'cancelled\')" title="取消此計畫"><i class="fa fa-ban"></i>取消</span>';
+            }
+            html += '<span class="tr-op" onclick="copySession('+r.session_id+')" title="複製內容(不帶名單)"><i class="fa fa-copy"></i>複製</span>';
+        }
+        if (PERMS.canAdmin) html += '<span class="tr-op" style="color:#DD5138;" onclick="delSession('+r.session_id+')" title="刪除場次"><i class="fa fa-trash"></i></span>';
+        if (!PERMS.canEdit && !PERMS.canAdmin) html += '—';
         html += '</td></tr>';
     });
     $('#trBody').html(html || '<tr><td colspan="11" style="padding:16px;color:#8a6d45;">無符合條件的訓練場次</td></tr>');
@@ -348,9 +379,10 @@ function applyType(){
     $('#edInternalBox').toggle(!ext);
 }
 $('#edType').on('change', applyType);
+/* 計畫 modal：只有計畫內容（年月/部門/課程/類型/講師或單位/時數/備註） */
 function openEd(sid){
     var r = sid ? ROWS.find(function(x){ return String(x.session_id)===String(sid); }) : null;
-    $('#edTitle').text(r ? '編輯訓練場次' : '新增訓練場次');
+    $('#edTitle').text(r ? '編輯訓練計畫' : '新增訓練計畫');
     $('#edMask').data('sid', r ? r.session_id : 0);
     $('#edYear').val(r ? r.year : $('#yearSel').val());
     $('#edMonth').val(r ? r.plan_month : (META.cur_month));
@@ -360,24 +392,43 @@ function openEd(sid){
     $('#edTrainer').val(r ? (r.trainer||'') : ''); $('#edTrainerDept').val(''); $('#edTrainerPerson').html('<option value="">人員</option>');
     $('#edOrgUnit').val(r ? (r.org_unit||'') : '');
     $('#edHours').val(r && r.hours!=null ? numTrim(r.hours) : '');
-    $('#edStatus').val(r ? r.status : 'planned');
-    $('#edDone').val(r ? fmtDate(r.done_date) : '');
-    $('#edStart').val(r ? (r.start_time||'') : ''); $('#edEnd').val(r ? (r.end_time||'') : '');
-    $('#edLocation').val(r ? (r.location||'') : '');
     $('#edNote').val(r ? (r.note||'') : '');
-    $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
-    ATT = [];
-    if (r){ $.getJSON(API, {action:'get_attendees', session_id:r.session_id}, function(res){
-        if (res.ok) ATT = res.attendees.map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name, attended:+a.attended, signed:+a.signed}; });
-        renderAtt();
-    }); } else renderAtt();
     openMask('edMask');
     setTimeout(function(){ $('#edCourse').focus(); }, 100);
 }
 $('#btnAdd').on('click', function(){ openEd(0); });
-$('#edStatus').on('change', function(){
-    if (this.value==='done' && !$('#edDone').val()) $('#edDone').val(META.today || '');
-});
+
+/* 確認實行 modal：實際開課日期/時段/地點＋參加人員 */
+var EXROW = null;
+function openEx(sid){
+    var r = ROWS.find(function(x){ return String(x.session_id)===String(sid); });
+    if (!r) return;
+    EXROW = r;
+    var done = r.status==='done';
+    $('#exTitle').text(done ? '實行紀錄（已完成）' : '確認實行');
+    $('#exSave').text(done ? '儲存實行紀錄' : '確認實行完成');
+    $('#exRevert').toggle(done);
+    $('#exMask').data('sid', r.session_id);
+    var ext = r.train_type==='external';
+    $('#exPlanInfo').html(
+        '<div><b>'+esc(r.course_name)+'</b> '+statPill(r.status)+'</div>'
+      + '<div>計畫：'+r.year+' 年 '+r.plan_month+' 月　對象部門：'+esc(r.dept_name||'全公司')
+      + '　類型：'+(ext?'外訓':'內訓')+'　'+(ext?'開課單位':'講師')+'：'+esc((ext?r.org_unit:r.trainer)||'—')
+      + '　時數：'+(r.hours==null?'—':numTrim(r.hours))+'</div>');
+    $('#exDone').val(fmtDate(r.done_date) || (done ? '' : (META.today||'')));
+    $('#exStart').val(r.start_time||''); $('#exEnd').val(r.end_time||'');
+    $('#exLocation').val(r.location||'');
+    $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
+    $('#attPickAll').prop('checked', false);
+    ATT = [];
+    $.getJSON(API, {action:'get_attendees', session_id:r.session_id}, function(res){
+        if (res.ok) ATT = res.attendees.map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name, attended:+a.attended, signed:+a.signed}; });
+        renderAtt();
+    });
+    renderAtt();
+    openMask('exMask');
+    setTimeout(function(){ $('#exDone').focus(); }, 100);
+}
 /* 講師：部門→人員 */
 $('#edTrainerDept').on('change', function(){
     var did=$(this).val(); var $p=$('#edTrainerPerson').html('<option value="">人員</option>');
@@ -424,6 +475,7 @@ function renderAtt(){
 function attCount(){ var a=ATT.filter(function(x){return x.attended;}).length; $('#attCount').text('（應到 '+ATT.length+'　實到 '+a+'）'); }
 function attDel(i){ ATT.splice(i,1); renderAtt(); if($('#attDept').val()) $('#attDept').trigger('change'); }
 
+/* 儲存計畫（不動實行欄位） */
 function submitEd(){
     if (!$.trim($('#edCourse').val())){ alert('請填課程名稱'); return; }
     if ($('#edType').val()==='external' && !$.trim($('#edOrgUnit').val())){ alert('外訓請填開課單位'); return; }
@@ -431,16 +483,45 @@ function submitEd(){
         year:$('#edYear').val(), plan_month:$('#edMonth').val(), dept_id:$('#edDept').val(),
         course_name:$('#edCourse').val(), train_type:$('#edType').val(),
         trainer:$('#edTrainer').val(), trainer_id:$('#edTrainerPerson').val(), org_unit:$('#edOrgUnit').val(),
-        hours:$('#edHours').val(), status:$('#edStatus').val(), done_date:$('#edDone').val(),
-        start_time:$('#edStart').val(), end_time:$('#edEnd').val(), location:$('#edLocation').val(), note:$('#edNote').val()},
+        hours:$('#edHours').val(), note:$('#edNote').val()},
     function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        var sid=res.session_id;
-        $.post(API, {action:'save_attendees', session_id:sid, attendees:JSON.stringify(ATT)}, function(r2){
-            if (!r2.ok){ alert('場次已存，但名單儲存失敗：'+(r2.error||'')); }
-            closeMask('edMask'); loadList();
-        }, 'json').fail(function(){ closeMask('edMask'); loadList(); });
+        closeMask('edMask'); loadList();
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
+/* 確認實行：寫實際開課日期/時段/地點（狀態轉已完成）＋參加名單 */
+function submitEx(){
+    var sid = $('#exMask').data('sid');
+    if (!$('#exDone').val()){ alert('請選擇實際開課日期'); $('#exDone').focus(); return; }
+    if ($('#exStart').val() && $('#exEnd').val() && $('#exEnd').val() < $('#exStart').val()){
+        alert('時段迄不可早於時段起'); return; }
+    if (!ATT.length && !confirm('尚未加入任何參加人員，仍要確認實行？')) return;
+    $.post(API, {action:'save_execution', session_id:sid, done_date:$('#exDone').val(),
+        start_time:$('#exStart').val(), end_time:$('#exEnd').val(), location:$('#exLocation').val()},
+    function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        $.post(API, {action:'save_attendees', session_id:sid, attendees:JSON.stringify(ATT)}, function(r2){
+            if (!r2.ok){ alert('實行紀錄已存，但名單儲存失敗：'+(r2.error||'')); }
+            closeMask('exMask'); loadList();
+        }, 'json').fail(function(){ closeMask('exMask'); loadList(); });
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+/* 退回計畫中（實行 modal 內） */
+function revertPlanned(){
+    if (!confirm('退回為「計畫中」？實際開課日將清空（時段/地點與名單保留），此場次不再計入當月完成數。')) return;
+    setStatus($('#exMask').data('sid'), 'planned', true);
+}
+/* 狀態切換：取消計畫 / 恢復計畫 / 退回計畫中 */
+function setStatus(sid, status, fromEx){
+    if (!fromEx){
+        var msg = status==='cancelled' ? '取消此訓練計畫？（取消的場次不計入 KPI 分母）' : '恢復為「計畫中」？';
+        if (!confirm(msg)) return;
+    }
+    $.post(API, {action:'set_status', session_id:sid, status:status}, function(res){
+        if (!res.ok){ alert(res.error||'狀態變更失敗'); return; }
+        closeMask('exMask'); loadList();
+    }, 'json').fail(function(x){ alert('狀態變更失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 function copySession(sid){
     if (!confirm('複製此場次內容為新的一場（不含參加名單）？')) return;
@@ -449,14 +530,15 @@ function copySession(sid){
         loadList(); alert('已複製為新場次，可再編輯調整並另建參加名單');
     }, 'json').fail(function(x){ alert('複製失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
-/* 列印簽到表（目前編輯中的場次＋名單） */
+/* 列印簽到表（確認實行 modal 中的場次＋名單） */
 function printSignSheet(){
-    var course=$.trim($('#edCourse').val())||'（課程名稱）';
-    var ext=$('#edType').val()==='external';
-    var lect=ext?('外訓／開課單位：'+($('#edOrgUnit').val()||'')):('講師：'+($('#edTrainer').val()||''));
-    var when=($('#edYear').val()||'')+'年'+($('#edMonth').val()||'')+'月　實際日期：'+($('#edDone').val()||'____/__/__')
-        +'　時段：'+($('#edStart').val()||'__:__')+'~'+($('#edEnd').val()||'__:__');
-    var where='地點：'+($('#edLocation').val()||'____________')+'　時數：'+($('#edHours').val()||'__')+' 小時';
+    var r = EXROW || {};
+    var course=r.course_name||'（課程名稱）';
+    var ext=r.train_type==='external';
+    var lect=ext?('外訓／開課單位：'+(r.org_unit||'')):('講師：'+(r.trainer||''));
+    var when=(r.year||'')+'年'+(r.plan_month||'')+'月　實際日期：'+($('#exDone').val()||'____/__/__')
+        +'　時段：'+($('#exStart').val()||'__:__')+'~'+($('#exEnd').val()||'__:__');
+    var where='地點：'+($('#exLocation').val()||'____________')+'　時數：'+(r.hours==null?'__':numTrim(r.hours))+' 小時';
     var rows='';
     (ATT.length?ATT:[{},{},{},{},{},{},{},{},{},{}]).forEach(function(a,i){
         rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.user_name||'')+'</td><td>'+esc(a.dept_name||'')+'</td><td style="width:160px;"></td><td style="width:80px;"></td></tr>';
