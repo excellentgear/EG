@@ -93,6 +93,26 @@ case 'list': {
     jout(['rows'=>$rows, 'ym'=>$ym, 'stat'=>$stat, 'perms'=>$perms]);
 }
 
+/* ---------- 新增量具種類（管理員；qc_tool_list） ---------- */
+case 'create_category': {
+    if (!$perms['canAdmin']) jerr('無新增類別權限', 403);
+    $name = trim((string)($_POST['name'] ?? ''));
+    if ($name === '') jerr('請輸入類別名稱');
+    $st = $db->prepare("SELECT QC_Tool_List_id FROM qc_tool_list WHERE QC_Tool=? LIMIT 1");
+    $st->execute([$name]);
+    $exist = $st->fetchColumn();
+    if ($exist) jerr('類別已存在：'.$name);
+    try {
+        $db->beginTransaction();
+        $so = (int)$db->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM qc_tool_list")->fetchColumn();
+        $db->prepare("INSERT INTO qc_tool_list (QC_Tool, sort_order) VALUES (?,?)")->execute([$name, $so]);
+        $newId = (int)$db->lastInsertId();
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('新增失敗：'.$e->getMessage(), 500); }
+    $cats = $db->query("SELECT QC_Tool_List_id, QC_Tool FROM qc_tool_list ORDER BY sort_order, QC_Tool_List_id")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['category_id'=>$newId, 'categories'=>$cats]);
+}
+
 /* ---------- 新增儀器（管理員） ---------- */
 case 'create_tool': {
     if (!$perms['canAdmin']) jerr('無新增儀器權限', 403);

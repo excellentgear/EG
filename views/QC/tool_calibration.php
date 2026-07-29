@@ -55,6 +55,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .tc-stat .s-lab { font-size:12px; color:#8a6d45; }
         .tc-stat .s-rate.below { color:#DD5138; }
         .tc-stat .s-rate.ok { color:#8A5A2B; }
+        .tc-pager { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:4px 0 6px; font-size:13px; color:#5b3a1e; }
+        .tc-pager select, .tc-pager button { height:28px; font-size:13px; border:1px solid #D8BE93; border-radius:4px;
+            background:#fff; color:#5b3a1e; cursor:pointer; padding:0 10px; }
+        .tc-pager button:hover:not(:disabled) { background:#F7E0BD; }
+        .tc-pager button:disabled { color:#c9bda9; cursor:not-allowed; }
         .tc-table-wrap { overflow-x:auto; border:1px solid #E8D5B5; border-radius:6px; background:#fff; }
         table.tc-table { width:100%; border-collapse:collapse; font-size:13px; }
         table.tc-table th, table.tc-table td { border:1px solid #EADFC8; padding:5px 8px; white-space:nowrap; text-align:center; }
@@ -152,6 +157,14 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div class="s-lab" id="stHint" style="margin-left:auto;"></div>
         </div>
 
+        <div class="tc-pager" id="tcPager">
+            <span id="tcCount" style="margin-right:auto;color:#8a6d45;"></span>
+            <label>每頁</label>
+            <select id="tcPageSize"><option>5</option><option selected>10</option><option>20</option><option>50</option></select>
+            <button id="tcPrev">‹ 上一頁</button>
+            <span id="tcPageInfo"></span>
+            <button id="tcNext">下一頁 ›</button>
+        </div>
         <div class="tc-table-wrap">
             <table class="tc-table" id="tcTable">
                 <thead><tr>
@@ -204,7 +217,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-body">
         <div class="grid2">
             <div id="setNoBox"><label>量具編號 *</label><input type="text" id="setNo" maxlength="30"></div>
-            <div id="setCatBox"><label>類別 *</label><select id="setCat"></select></div>
+            <div id="setCatBox"><label>類別 *
+                <a href="#" id="btnAddCat" style="font-size:12px;color:#b5762a;margin-left:6px;display:none;"
+                   onclick="addCategory();return false;"><i class="fa fa-plus"></i>新增類別</a></label>
+                <select id="setCat"></select></div>
             <div><label>校驗週期（月）</label><input type="number" id="setCycle" step="1" min="0" placeholder="例：12"></div>
             <div><label>校驗方式（預設）</label><select id="setMethod">
                 <option value="">—</option><option value="內校">內校</option><option value="外校">外校</option>
@@ -271,14 +287,31 @@ function loadMeta(cb){
         if (!m.ok){ alert(m.error||'載入失敗'); return; }
         META = m; PERMS = m.perms;
         $('#ymSel').val(m.cur_ym);
-        var $c = $('#catSel'), $sc = $('#setCat');
-        m.categories.forEach(function(c){
-            $c.append('<option value="'+c.QC_Tool_List_id+'">'+esc(c.QC_Tool)+'</option>');
-            $sc.append('<option value="'+c.QC_Tool_List_id+'">'+esc(c.QC_Tool)+'</option>');
-        });
-        if (m.perms.canAdmin) $('#btnAdd').show();
+        fillCats(m.categories);
+        if (m.perms.canAdmin) { $('#btnAdd').show(); $('#btnAddCat').show(); }
         if (cb) cb();
     });
+}
+function fillCats(cats){
+    META.categories = cats;
+    var selC = $('#catSel').val(), selS = $('#setCat').val();
+    var $c = $('#catSel').empty().append('<option value="">全部</option>'), $sc = $('#setCat').empty();
+    cats.forEach(function(c){
+        $c.append('<option value="'+c.QC_Tool_List_id+'">'+esc(c.QC_Tool)+'</option>');
+        $sc.append('<option value="'+c.QC_Tool_List_id+'">'+esc(c.QC_Tool)+'</option>');
+    });
+    $('#catSel').val(selC); $('#setCat').val(selS);
+}
+function addCategory(){
+    var name = prompt('新增量具類別名稱：');
+    if (name===null) return;
+    name = $.trim(name);
+    if (!name) return;
+    $.post(API, {action:'create_category', name:name}, function(res){
+        if (!res.ok){ alert(res.error||'新增失敗'); return; }
+        fillCats(res.categories);
+        $('#setCat').val(res.category_id);
+    }, 'json').fail(function(x){ alert('新增失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
 function loadList(){
@@ -306,14 +339,31 @@ function renderStat(stat, ym){
 
 function statPill(s){ return '<span class="st-pill st-'+s+'">'+(STATUS_LABEL[s]||s)+'</span>'; }
 
-function renderTable(){
+var tcPage = 1;
+function filteredRows(){
     var cat = $('#catSel').val(), stt = $('#statSel').val(), kw = $.trim($('#kwSel').val()).toLowerCase();
+    return ROWS.filter(function(r){
+        if (cat && String(r.QC_Tool_List_id)!==String(cat)) return false;
+        if (stt === 'managed' && r.calib_managed!==1) return false;
+        if (stt && stt!=='managed' && r.status!==stt) return false;
+        if (kw && String(r.Tool_No).toLowerCase().indexOf(kw)<0) return false;
+        return true;
+    });
+}
+function renderTable(){
+    var list = filteredRows();
+    var size = parseInt($('#tcPageSize').val(),10) || 10;
+    var pages = Math.max(1, Math.ceil(list.length/size));
+    if (tcPage > pages) tcPage = pages;
+    if (tcPage < 1) tcPage = 1;
+    var start = (tcPage-1)*size;
+    var pageRows = list.slice(start, start+size);
+    $('#tcCount').text('共 '+list.length+' 支量具');
+    $('#tcPageInfo').text(tcPage+' / '+pages+' 頁');
+    $('#tcPrev').prop('disabled', tcPage<=1);
+    $('#tcNext').prop('disabled', tcPage>=pages);
     var html = '';
-    ROWS.forEach(function(r){
-        if (cat && String(r.QC_Tool_List_id)!==String(cat)) return;
-        if (stt === 'managed' && r.calib_managed!==1) return;
-        if (stt && stt!=='managed' && r.status!==stt) return;
-        if (kw && String(r.Tool_No).toLowerCase().indexOf(kw)<0) return;
+    pageRows.forEach(function(r){
         var last = r.last ? (fmtDate(r.last.calib_date)+'（'+(RESULT_LABEL[r.last.result]||r.last.result)+'）') : '—';
         var canEdit = PERMS.canEdit, canAdmin = PERMS.canAdmin;
         html += '<tr>';
@@ -335,8 +385,11 @@ function renderTable(){
     $('#tcBody').html(html || '<tr><td colspan="9" style="padding:16px;color:#8a6d45;">無符合條件的儀器</td></tr>');
 }
 
-$('#catSel,#statSel').on('change', renderTable);
-$('#kwSel').on('input', renderTable);
+$('#catSel,#statSel').on('change', function(){ tcPage=1; renderTable(); });
+$('#kwSel').on('input', function(){ tcPage=1; renderTable(); });
+$('#tcPageSize').on('change', function(){ tcPage=1; renderTable(); });
+$('#tcPrev').on('click', function(){ if(tcPage>1){ tcPage--; renderTable(); } });
+$('#tcNext').on('click', function(){ tcPage++; renderTable(); });
 $('#ymSel').on('change', loadList);
 
 /* ---------- 登錄/編輯校驗 ---------- */
