@@ -678,6 +678,8 @@ try {
     } catch (Exception $e) {}
     // is_list 出貨統計索引
     try { $pdo->exec("ALTER TABLE is_list ADD INDEX idx_ship_stats (Product_id, Order_date)"); } catch(Exception $e){}
+    // 出貨統計改以料號 id(d_setting_id) 歸戶後的索引
+    try { $pdo->exec("ALTER TABLE is_list ADD INDEX idx_ship_stats_did (d_setting_id, Order_date)"); } catch(Exception $e){}
     // 支援多料號種類：type_code 改為逗號分隔 VARCHAR(500)
     try { $pdo->exec("ALTER TABLE dict_label MODIFY COLUMN type_code VARCHAR(500) NOT NULL COMMENT '對應料號種類，逗號分隔可多選'"); } catch(Exception $e){}
 
@@ -1712,21 +1714,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 FROM d_setting d
                 LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id
                 LEFT JOIN (
-                    /* 先 DISTINCT 去重（相同 IS+Product+Date+Qty+Price 視為重複行），再聚合 */
-                    SELECT sub.Product_id,
+                    /* 出貨統計一律以「料號 id (d_setting.d_id)」歸戶，不可用料號字串 join——
+                       同一個料號在 d_setting 可能有多列（不同版次/規格），用字串 join 會讓每一列
+                       都顯示同一份統計（實際沒單據的那列也會有數字）。
+                       規則：優先取 is_list.d_setting_id（2026 起 ERP 匯入已綁定）；
+                             未綁定的舊資料才回退用料號字串比對，且一律歸給該料號最早建立的那一列。
+                       先 DISTINCT 去重（相同 IS+料號id+Date+Qty+Price 視為重複行），再聚合 */
+                    SELECT sub.eff_d_id,
                            COUNT(DISTINCT CASE WHEN YEAR(sub.Order_date)=YEAR(CURDATE())   THEN sub.IS_number END) AS ship_cy_count,
                            SUM(CASE WHEN YEAR(sub.Order_date)=YEAR(CURDATE())   THEN sub.Qty ELSE 0 END) AS ship_cy_qty,
                            COUNT(DISTINCT CASE WHEN YEAR(sub.Order_date)=YEAR(CURDATE())-1 THEN sub.IS_number END) AS ship_py_count,
                            SUM(CASE WHEN YEAR(sub.Order_date)=YEAR(CURDATE())-1 THEN sub.Qty ELSE 0 END) AS ship_py_qty
                     FROM (
-                        SELECT DISTINCT il.IS_number, il.Product_id, il.Order_date, il.Qty, il.Unit_price
+                        SELECT DISTINCT COALESCE(il.d_setting_id, fb.min_d_id) AS eff_d_id,
+                               il.IS_number, il.Order_date, il.Qty, il.Unit_price
                         FROM is_list il
                         LEFT JOIN is_sale_type ist ON ist.sale_type_id=il.sale_type
+                        LEFT JOIN (SELECT D_Setting_Id, MIN(d_id) AS min_d_id FROM d_setting GROUP BY D_Setting_Id) fb
+                               ON fb.D_Setting_Id=il.Product_id
                         WHERE (il.sale_type IS NULL OR ist.is_count=1)
                           AND il.Order_date BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 YEAR), '%Y-01-01') AND CURDATE()
                     ) sub
-                    GROUP BY sub.Product_id
-                ) ss ON ss.Product_id=d.D_Setting_Id
+                    WHERE sub.eff_d_id IS NOT NULL
+                    GROUP BY sub.eff_d_id
+                ) ss ON ss.eff_d_id=d.d_id
                 WHERE $where
                 $order_sql
                 LIMIT $lmt OFFSET $off");
