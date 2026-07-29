@@ -346,6 +346,7 @@ $_trainRoles    = [];  $_userTrainRoles  = [];
 $_vaudRoles     = [];  $_userVaudRoles   = [];
 $_leaveRoles    = [];  $_userLeaveRoles  = [];
 $_shipRoles     = [];  $_userShipRoles   = [];
+$_accRoles      = [];  $_userAccRoles    = [];
 $_purcRoles     = [];  $_userPurcRoles   = [];
 $_kpiRoles      = [];  $_userKpiRoles    = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
@@ -379,6 +380,7 @@ try {
     $st->execute(['leave']);       $_leaveRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['shipping']);    $_shipRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['purchase']);    $_purcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['accounting']);  $_accRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -486,6 +488,10 @@ try {
     $st->execute(['purchase']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userPurcRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['accounting']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userAccRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -1113,6 +1119,11 @@ $_quotDepts = array_keys($_deptSet);
                         '為每位使用者指派「申請採購」頁的操作角色（權限由上而下包含，指派上層即自動具備下層能力）。<strong>申請採購</strong>＝提出／修改自己的申請單、上傳附件、查看自己的單；<strong>到貨入庫</strong>＝申請＋登錄到貨（可選「入庫待領／直接交付請購人／不列管」）；<strong>採購作業</strong>＝到貨入庫＋詢價填實際金額、下單、記發票與付款、結案、維護採購品主檔；<strong>採購管理員</strong>＝採購作業＋標籤與規格屬性設定、簽核門檻與附件路徑設定、刪除任何單據；<strong>採購檢閱</strong>＝唯讀查看全部單據與統計；<strong>高階核准</strong>＝金額超過第二層門檻時的第二關簽核人。<br>
                          <span style="color:#b06f27;">簽核不在申請當下判定</span>：申請時金額可以留白，等採購詢完價、填入實際金額後才依含稅總額判定要不要簽核（門檻在該頁「設定」分頁調整，預設 5000／30000）。第一層簽核人＝申請人的部門主管，由系統依代理人設定自動解析（主管當日有行程改由代理人簽，代理人正好是申請人時自動直升上一級）。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         $_purcRoles, $_userPurcRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('acc', 'accounting', '會計（應收／發票／應付）', 'fa-calculator', '#b06f27',
+                        '為每位使用者指派「會計模組」的操作角色（目前含「客戶發票資料維護」頁，後續應收對帳、發票轉出、收款沖帳、應付對帳沿用同一組角色）。<strong>會計檢閱</strong>＝查詢與匯出，不可修改；<strong>會計登錄</strong>＝檢閱＋維護客戶統編/發票抬頭、CSV 匯入、開立與沖帳作業；<strong>會計管理員</strong>＝登錄＋會計設定與批次調整。<br>
+                         <span style="color:#b06f27;">為什麼要先維護客戶發票資料</span>：開立電子發票必須有買方統一編號與買方名稱，目前 925 家有效客戶只有 12 家資料完整、近一年有出貨的 175 家中有 171 家缺資料，補齊前發票轉出會被擋下。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
+                        $_accRoles, $_userAccRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 
                     <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->
