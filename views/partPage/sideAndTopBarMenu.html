@@ -57,23 +57,39 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
         }
         $dept_in = implode(',', array_unique($my_dept_ids));
 
+        // 共用帳號（ai-rules/13）：若登入的是共用帳號，其成員被「指名」的通知也要出現在這裡，
+        // 並標示「給 ○○○」。一般帳號 = 只有自己，行為與改造前完全相同。
+        $my_view_uids = [(int)$id];
+        try {
+            require_once __DIR__ . '/../../src/common/shared_account_lib.php';
+            $my_view_uids = eg_shared_view_uids($conn->getPDO(), (int)$id);
+        } catch (Throwable $e) { error_log('[shared] sidebar view_uids failed: ' . $e->getMessage()); }
+        $view_uid_in = implode(',', array_map('intval', $my_view_uids));
+
         // 未過期、對象(全體/部門/身分/本人)符合，且「要求動作尚未完成」的公告/通知。
         // 要求動作依 live_event_target.mode：read=已閱、sign=回簽、reply=回覆+回簽；
         // 只點開看過(標了已閱)但還沒回簽/回覆者，仍要留在置頂欄未讀清單（need_mode=同一則中最重的未完成要求）。
         $event = $conn->getAll(
-            "SELECT le.*, MAX(CASE WHEN t.mode='reply' THEN 3 WHEN t.mode='sign' THEN 2 ELSE 1 END) AS need_mode
+            "SELECT le.*, MAX(CASE WHEN t.mode='reply' THEN 3 WHEN t.mode='sign' THEN 2 ELSE 1 END) AS need_mode,
+                    MAX(CASE WHEN t.target_type='user' AND t.target_id <> ".(int)$id." THEN t.target_id END) AS for_uid,
+                    MAX(CASE WHEN t.target_type='user' AND t.target_id <> ".(int)$id." THEN fu.user_cname END) AS for_name
              FROM `live_event` le
              JOIN `live_event_target` t ON t.live_event_id = le.id
+             LEFT JOIN `user` fu ON fu.id = t.target_id AND t.target_type = 'user'
+             -- 已閱/回應狀態要看「這則是給誰的」：共用帳號代收成員的通知時，看的是該成員本人的完成狀態
+             -- （共用帳號自己按已閱不算數，必須本人輸密碼代簽才會寫入該成員的紀錄）
              LEFT JOIN `live_event_for_user` lr
-                    ON lr.live_event_id = le.id AND lr.user_id = ".(int)$id." AND lr.oready_read = 1
+                    ON lr.live_event_id = le.id AND lr.oready_read = 1
+                   AND lr.user_id = IF(t.target_type='user' AND t.target_id <> ".(int)$id.", t.target_id, ".(int)$id.")
              LEFT JOIN `live_event_response` resp
-                    ON resp.live_event_id = le.id AND resp.user_id = ".(int)$id."
+                    ON resp.live_event_id = le.id
+                   AND resp.user_id = IF(t.target_type='user' AND t.target_id <> ".(int)$id.", t.target_id, ".(int)$id.")
              WHERE (le.enddate IS NULL OR le.enddate >= CURDATE())
                AND (
                     t.target_type = 'all'
                  OR (t.target_type = 'status' AND t.target_id IN (".$status_in."))
                  OR (t.target_type = 'dept'   AND t.target_id IN (".$dept_in."))
-                 OR (t.target_type = 'user'   AND t.target_id = ".(int)$id.")
+                 OR (t.target_type = 'user'   AND t.target_id IN (".$view_uid_in."))
                )
                AND (
                     (t.mode = 'reply' AND (le.reply_deadline IS NULL OR le.reply_deadline >= CURDATE()) AND (resp.id IS NULL OR resp.replied_at IS NULL))
@@ -315,6 +331,8 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                                        data-reftype="<?= htmlspecialchars($ev['ref_type'] ?? '', ENT_QUOTES) ?>"
                                        data-refid="<?= (int)($ev['ref_id'] ?? 0) ?>"
                                        data-needmode="<?= (int)($ev['need_mode'] ?? 1) ?>"
+                                       data-foruid="<?= (int)($ev['for_uid'] ?? 0) ?>"
+                                       data-forname="<?= htmlspecialchars((string)($ev['for_name'] ?? ''), ENT_QUOTES) ?>"
                                        data-title="<?= htmlspecialchars($ev['title'], ENT_QUOTES) ?>"
                                        data-content="<?= htmlspecialchars($ev['content'], ENT_QUOTES) ?>"
                                        data-date="<?= htmlspecialchars($ev['eventdate'], ENT_QUOTES) ?>">
@@ -328,7 +346,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                                         ?>
                                         <span class="notice-ico"><i class="fa <?= $_evIco ?>"></i></span>
                                         <span class="notice-body">
-                                            <span class="notice-title"><?= htmlspecialchars($ev['title'], ENT_QUOTES) ?></span>
+                                            <span class="notice-title"><?php if (!empty($ev['for_uid'])) { ?><span class="notice-for">給 <?= htmlspecialchars((string)($ev['for_name'] ?: ('員工#'.(int)$ev['for_uid'])), ENT_QUOTES) ?></span> <?php } ?><?= htmlspecialchars($ev['title'], ENT_QUOTES) ?></span>
                                             <span class="notice-preview"><?= htmlspecialchars($preview, ENT_QUOTES) ?></span>
                                             <span class="notice-time"><i class="fa fa-clock-o"></i> <?= $ev['eventdate'] ?></span>
                                         </span>
@@ -757,6 +775,18 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+    }
+    /* 共用帳號代收成員通知的標籤（暖色系：琥珀底深棕字，見 ai-rules/10） */
+    .notice-for {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.4;
+        padding: 0 5px;
+        border-radius: 3px;
+        background: #F0A24B;
+        color: #4A2B10;
+        vertical-align: 1px;
     }
     .notice-preview {
         display: block;
