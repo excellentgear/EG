@@ -115,10 +115,11 @@ try {
             $sharedRole = sa_role_map($db, array_column($shared, 'id'));
             foreach ($shared as &$s) $s['role_label'] = $sharedRole[(int)$s['id']]['label'] ?? '';
             unset($s);
-            // 可標記為共用帳號的候選（含特殊帳號 90，現場共用帳號多半是 90）
+            // 可標記為共用帳號的候選：**只列員工管理已設為「特殊帳號(不列入員工)」(state=90) 的帳號**
+            // （使用者定案：共用帳號一定是先在員工管理開成特殊帳號，不可拿一般員工帳號來當共用帳號）
             $cand = $db->query("SELECT id, user_cname, user_uname, state FROM `user`
-                                WHERE is_shared_account = 0 AND state IN (1,90,99)
-                                ORDER BY state DESC, user_cname")->fetchAll(PDO::FETCH_ASSOC);
+                                WHERE is_shared_account = 0 AND state = 90
+                                ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
             $candRole = sa_role_map($db, array_column($cand, 'id'));
             foreach ($cand as &$c) $c['role_label'] = $candRole[(int)$c['id']]['label'] ?? '';
             unset($c);
@@ -163,6 +164,14 @@ try {
             $uid = (int)($_POST['uid'] ?? 0);
             $on  = ((int)($_POST['on'] ?? 0) === 1);
             if ($uid <= 0) sa_out(['ok' => false, 'msg' => '參數錯誤']);
+            if ($on) {
+                // 只有員工管理設為「特殊帳號(不列入員工)」的帳號才能當共用帳號
+                $stChk = $db->prepare("SELECT state FROM `user` WHERE id = ?");
+                $stChk->execute([$uid]);
+                if ((int)$stChk->fetchColumn() !== 90) {
+                    sa_out(['ok' => false, 'msg' => '只有「特殊帳號(不列入員工)」才能設為共用帳號，請先到員工管理把該帳號的狀態改為特殊帳號']);
+                }
+            }
             if (!$on) {
                 $cnt = $db->prepare("SELECT COUNT(*) FROM shared_account_member WHERE shared_uid = ? AND active = 1");
                 $cnt->execute([$uid]);

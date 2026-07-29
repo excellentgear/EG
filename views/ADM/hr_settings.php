@@ -1,5 +1,10 @@
 <?php
 session_start();
+// 管理設定頁不可被瀏覽器快取：否則改版後使用者仍看到舊畫面（曾發生：新按鈕/新篩選區都不見）
+if (!headers_sent()) {
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+    header('Pragma: no-cache');
+}
 include_once '../../src/common/_config.php';
 include ("../../src/common/DBConnection.php");
 
@@ -182,6 +187,7 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
         .sa-addbar { padding: 8px 10px; background: #FBF3E7; border-radius: 4px; }
         .sa-filterbar { padding-bottom: 4px; border-bottom: 1px dashed #E0B27A; }
         .sa-hint { background: #F7E0BD; color: #7A3B12; padding: 8px 10px; border-radius: 4px; font-size: 13px; margin-bottom: 8px; }
+        .sa-ver { font-size: 11px; color: #A98F73; font-weight: 400; margin-left: 6px; }
         .sa-disabled { opacity: .55; }
         #sa_emp option { padding: 2px 4px; }
         #sa_emp option:checked { background: #F0A24B linear-gradient(0deg, #F0A24B 0%, #F0A24B 100%); color: #4A2B10; }
@@ -495,7 +501,10 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                     <div id="shared-account-section" class="col-md-12 col-sm-12 col-xs-12">
                         <div class="x_panel">
                             <div class="x_title">
-                                <h2>共用帳號管理 <small style="color:#8a5a2b;">（現場多人共用一個登入帳號：綁定成員後，該員工的<b>指名通知</b>自動轉送到共用帳號，並標「【給 ○○○】」）</small></h2>
+                                <h2>共用帳號管理 <small style="color:#8a5a2b;">（現場多人共用一個登入帳號：綁定成員後，該員工的<b>指名通知</b>自動轉送到共用帳號，並標「【給 ○○○】」）</small>
+                                    <!-- 版本戳記：畫面對不上時用來確認瀏覽器是否還在用快取的舊頁 -->
+                                    <span class="sa-ver">版本 <?= date('m/d H:i', filemtime(__FILE__)) ?></span>
+                                </h2>
                                 <ul class="nav navbar-right panel_toolbox">
                                     <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
                                     <li><a class="close-link"><i class="fa fa-close"></i></a></li>
@@ -510,7 +519,11 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                                         <div class="sa-addbar">
                                             <select id="sa_cand" class="form-control input-sm" style="max-width:260px;display:inline-block;"></select>
                                             <button type="button" class="btn btn-sm sa-btn-primary" id="sa_mark">標記為共用帳號</button>
-                                            <div class="text-muted" style="font-size:12px;margin-top:4px;">標記後<b>預設鎖定密碼</b>，避免現場有人隨手改掉害全廠登不進去。</div>
+                                            <div class="text-muted" style="font-size:12px;margin-top:4px;">
+                                                只列出<b>員工管理狀態為「特殊帳號(不列入員工)」</b>的帳號；要新增共用帳號請先到
+                                                <a href="employee_management.php" target="_blank">員工管理</a>開帳號並把狀態設為特殊帳號。<br>
+                                                標記後<b>預設鎖定密碼</b>，避免現場有人隨手改掉害全廠登不進去。
+                                            </div>
                                         </div>
                                         <table class="table table-hover sa-table" style="margin-top:10px;">
                                             <thead>
@@ -699,13 +712,16 @@ $(function () {
             saDepts.forEach(function (d) { dopt += '<option value="' + d.id + '">' + esc(d.name) + '</option>'; });
             $('#sa_dept').html(dopt).val(keepDept);
 
-            var opt = '<option value="">— 選擇要標記的帳號 —</option>';
-            (r.candidates || []).forEach(function (c) {
+            var cands = r.candidates || [];
+            var opt = cands.length
+                ? '<option value="">— 選擇要標記的帳號 —</option>'
+                : '<option value="">（沒有可標記的特殊帳號）</option>';
+            cands.forEach(function (c) {
                 opt += '<option value="' + c.id + '">' + esc(c.user_cname) + '（' + esc(c.user_uname) + '）'
-                     + (String(c.state) === '90' ? ' [公用]' : '')
                      + (c.role_label ? '｜' + esc(c.role_label) : '') + '</option>';
             });
-            $('#sa_cand').html(opt);
+            $('#sa_cand').html(opt).prop('disabled', !cands.length);
+            $('#sa_mark').prop('disabled', !cands.length);
 
             if (!(r.shared || []).length) {
                 $('#sa_list').html('<tr><td colspan="4" class="text-muted">尚未設定任何共用帳號</td></tr>');
