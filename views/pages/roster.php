@@ -98,6 +98,8 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         .lane-tag{ font-size:12px; padding:2px 9px; border-radius:11px; cursor:pointer; color:#fff; user-select:none; }
         .lane-tag.off{ opacity:.35; text-decoration:line-through; }
         .chip-more{ font-size:9px; color:#8c5a3c; background:#f3ead9; border-radius:2px; margin-top:1px; padding:0 3px; text-align:center; cursor:pointer; }
+        .chip.chip-sum{ background:#f6ead8; font-weight:bold; }
+        .chip .chip-cnt{ font-size:10px; color:#8c5320; flex:none; }
         .chip-more:hover{ background:#e9dcc4; }
         .chip.signed{ background:var(--amber); color:#fff; border-left-color:#8c5320; }
         .chip.left{ text-decoration:line-through; opacity:.6; }
@@ -667,10 +669,27 @@ var R = (function(){
             var tag=hol[ds]?'<span class="tag">休</span>':(mk[ds]?'<span class="tag">補</span>':'');
             h+='<td class="'+cls.trim()+'" onclick="R.openDay(\''+ds+'\')"><div class="dnum">'+day+tag+'</div>';
             var cells=(calData.cells[ds]||[]).filter(function(c){ return !hiddenLanes[c.lane_id]; });
+            // 超過 2 人：改以「項目 ×N人」彙總顯示（點擊可展開完整名單）
+            if(cells.length>2 && !calExpanded[ds]){
+                var grp={}, ord=[];
+                cells.forEach(function(c){
+                    var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
+                    var key=c.color?(c.board_name||c.lane_name||'排班'):(l?l.lane_name:'排班');
+                    if(!grp[key]){ grp[key]={n:0, col:(c.color||laneColor(l,idx)), leave:0}; ord.push(key); }
+                    grp[key].n++; if(c.leave) grp[key].leave++;
+                });
+                ord.forEach(function(k){
+                    var g=grp[k];
+                    h+='<div class="chip chip-sum" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')" style="border-left-color:'+g.col+'" title="'+esc(k+' 共 '+g.n+' 人（點擊展開）')+'">'
+                      +'<span class="chip-nm">'+esc(k)+'</span><span class="chip-cnt">×'+g.n+'</span>'
+                      +(g.leave?'<span class="leave-stamp" title="其中 '+g.leave+' 人請假">休</span>':'')+'</div>';
+                });
+                h+='</td>'; col++;
+                if(col%7===0 && day<dim) h+='</tr><tr>';
+                continue;
+            }
             var shown=0, more=0;
             cells.forEach(function(c){
-                if(!calExpanded[ds] && shown>=2){ more++; return; }   // 預設只顯示 2 人
-                shown++;
                 var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
                 var lcol=c.color||laneColor(l,idx);
                 var tag=c.color?(c.board_name||c.lane_name||''):(l?l.lane_name:''); // 單表=項目名;多表=表名
@@ -681,8 +700,7 @@ var R = (function(){
                   +leaveHtml(c)
                   +'</div>';
             });
-            if(more>0) h+='<div class="chip-more" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')">⋯ 還有 '+more+' 人</div>';
-            else if(calExpanded[ds] && cells.length>2) h+='<div class="chip-more" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')">收合</div>';
+            if(calExpanded[ds] && cells.length>2) h+='<div class="chip-more" onclick="event.stopPropagation();R.calExpand(\''+ds+'\')">收合</div>';
             h+='</td>'; col++;
             if(col%7===0 && day<dim) h+='</tr><tr>';
         }
@@ -1104,6 +1122,9 @@ var R = (function(){
           +'.dn{font-size:10px;color:#7a6a52;font-weight:bold}'
           +'.it{display:block;border-left:3px solid #999;padding:0 3px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'
           +'.mon{page-break-inside:avoid;margin-bottom:10px}'
+          +'.key{margin:0 0 8px;font-size:11px}'
+          +'.key span{display:inline-block;margin-right:12px;white-space:nowrap}'
+          +'.key i{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:middle;margin-right:4px}'
           +'</style></head><body>'+bodyHtml+'</body></html>');
         w.document.close();
         w.onload=function(){ w.focus(); w.print(); };
@@ -1133,6 +1154,14 @@ var R = (function(){
         var lm=laneMap();
         var name=(calData.board&&calData.board.name)||'輪值排班表';
         var body='<h2>'+esc(name)+'</h2><div class="sub">列印日期：'+new Date().toLocaleString('zh-TW')+'　範圍：'+calData.months[0]+' ~ '+calData.months[1]+'</div>';
+        // 上方對照圖例：項目（或多表疊加時的各表）
+        var keyHtml='';
+        if(calData.board&&calData.board.multi){
+            (calData.boards_meta||[]).forEach(function(m){ keyHtml+='<span><i style="background:'+m.color+'"></i>'+esc(m.name)+'</span>'; });
+        } else {
+            (calData.lanes||[]).forEach(function(l,i){ keyHtml+='<span><i style="background:'+laneColor(l,i)+'"></i>'+esc(l.lane_name)+'</span>'; });
+        }
+        if(keyHtml) body+='<div class="key">'+keyHtml+'</div>';
         calData.months.forEach(function(mo){
             body+=pdfMonth(mo, calData.cells, hol, mk, function(c){
                 var l=lm[c.lane_id], idx=(calData.lanes||[]).indexOf(l);
@@ -1148,9 +1177,16 @@ var R = (function(){
         if(!shiftCalData){ alert('尚無班表資料'); return; }
         var hol={},mk={}; (shiftCalData.holidays||[]).forEach(function(d){hol[d]=1;}); (shiftCalData.makeup||[]).forEach(function(d){mk[d]=1;});
         var body='<h2>固定班別排班表</h2><div class="sub">列印日期：'+new Date().toLocaleString('zh-TW')+'　範圍：'+shiftCalData.months[0]+' ~ '+shiftCalData.months[1]+'</div>';
+        // 上方班別對照（名稱＋時間），格內就不必再重複時間
+        var keyHtml='';
+        (shiftCalData.shifts||[]).forEach(function(s){
+            keyHtml+='<span><i style="background:'+(s.color||'#C0762C')+'"></i>'+esc(s.name)+'　'
+                   +String(s.start_time).substring(0,5)+'~'+String(s.end_time).substring(0,5)+(+s.is_overnight?'(跨夜)':'')+'</span>';
+        });
+        if(keyHtml) body+='<div class="key">'+keyHtml+'</div>';
         shiftCalData.months.forEach(function(mo){
             body+=pdfMonth(mo, shiftCalData.cells, hol, mk, function(c){
-                return '<span class="it" style="border-left-color:'+c.color+'">'+esc(c.name)+'（'+esc(c.lane_name)+(c.time?' '+c.time:'')+'）'
+                return '<span class="it" style="border-left-color:'+c.color+'">'+esc(c.name)+'（'+esc(c.lane_name)+'）'
                      +(c.is_agent?' [代]':'')+(c.leave?(c.leave_full?' [休]':' [半]'):'')+'</span>';
             });
         });
@@ -1260,10 +1296,24 @@ var R = (function(){
             var tg=hol[ds]?'<span class="tag">休</span>':(mk[ds]?'<span class="tag">補</span>':'');
             h+='<td class="'+cls.trim()+'" onclick="R.openShiftDay(\''+ds+'\')"><div class="dnum">'+day+tg+'</div>';
             var scells=(shiftCalData.cells[ds]||[]).filter(function(c){ return !shiftHidden[c.shift_id]; });
-            var sshown=0, smore=0;
+            // 超過 2 人：改以「班別 ×N人」彙總（點擊展開）
+            if(scells.length>2 && !shiftExpanded[ds]){
+                var sg={}, sord=[];
+                scells.forEach(function(c){
+                    var k=c.lane_name||'班別';
+                    if(!sg[k]){ sg[k]={n:0, col:c.color, leave:0}; sord.push(k); }
+                    sg[k].n++; if(c.leave) sg[k].leave++;
+                });
+                sord.forEach(function(k){
+                    var g=sg[k];
+                    h+='<div class="chip chip-sum" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')" style="border-left-color:'+g.col+'" title="'+esc(k+' 共 '+g.n+' 人（點擊展開）')+'">'
+                      +'<span class="chip-nm">'+esc(k)+'</span><span class="chip-cnt">×'+g.n+'</span>'
+                      +(g.leave?'<span class="leave-stamp" title="其中 '+g.leave+' 人請假">休</span>':'')+'</div>';
+                });
+                h+='</td>'; col++; if(col%7===0&&day<dim) h+='</tr><tr>';
+                continue;
+            }
             scells.forEach(function(c){
-                if(!shiftExpanded[ds] && sshown>=2){ smore++; return; }
-                sshown++;
                 var tip=c.lane_name+(c.time?'('+c.time+')':'')+'：'+c.name+(c.is_agent?'（代理）':'')+(c.leave?'（'+(c.leave_full?'整天請假':'半天')+'）':'');
                 h+='<div class="chip'+(c.mine?' mine':'')+(c.leave?(c.leave_full?' onleave':' onleave half'):'')+'" style="border-left-color:'+c.color+'" title="'+esc(tip)+'">'
                   +'<span class="chip-nm">'+esc(c.name)+'</span>'
@@ -1271,8 +1321,7 @@ var R = (function(){
                   +(c.is_agent?'<span class="chip-lane" style="background:#8c5a3c">代</span>':'')
                   +'</div>';
             });
-            if(smore>0) h+='<div class="chip-more" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')">⋯ 還有 '+smore+' 人</div>';
-            else if(shiftExpanded[ds] && scells.length>2) h+='<div class="chip-more" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')">收合</div>';
+            if(shiftExpanded[ds] && scells.length>2) h+='<div class="chip-more" onclick="event.stopPropagation();R.shiftExpand(\''+ds+'\')">收合</div>';
             h+='</td>'; col++; if(col%7===0&&day<dim) h+='</tr><tr>';
         }
         while(col%7!==0){ h+='<td class="empty"></td>'; col++; }
