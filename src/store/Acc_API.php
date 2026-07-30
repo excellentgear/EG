@@ -637,6 +637,91 @@ case 'rcpt_export': {
     exit;
 }
 
+/* ══ 應付對帳（廠商加工費）═══════════════════════════════════════════ */
+
+case 'ap_summary': {
+    $s = $_POST ?: $_GET;
+    acc_out(acc_ap_summary($db, [
+        'ym_from'  => trim((string)($s['ym_from'] ?? '')),
+        'ym_to'    => trim((string)($s['ym_to'] ?? '')),
+        'kw'       => acc_u8(trim((string)($s['kw'] ?? ''))),
+        'only_gap' => !empty($s['only_gap']),
+        'sort'     => trim((string)($s['sort'] ?? 'total_amount')),
+        'dir'      => (($s['dir'] ?? 'desc') === 'asc') ? 'asc' : 'desc',
+        'page'     => max(1, (int)($s['page'] ?? 1)),
+        'per_page' => (int)($s['per_page'] ?? 20),
+    ]));
+}
+
+case 'ap_detail': {
+    $s  = $_POST ?: $_GET;
+    $mk = acc_u8(trim((string)($s['maker_id_no'] ?? '')));
+    $ym = trim((string)($s['invoice_ym'] ?? ''));
+    if ($mk === '' || !preg_match('/^\d{4}-\d{2}$/', $ym)) acc_err('缺少廠商或發票年月');
+    acc_out(acc_ap_detail($db, $mk, $ym));
+}
+
+case 'ap_export': {
+    $s = $_GET ?: $_POST;
+    $r = acc_ap_summary($db, [
+        'ym_from'  => trim((string)($s['ym_from'] ?? '')),
+        'ym_to'    => trim((string)($s['ym_to'] ?? '')),
+        'kw'       => acc_u8(trim((string)($s['kw'] ?? ''))),
+        'only_gap' => !empty($s['only_gap']),
+        'per_page' => 0,
+    ]);
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="應付對帳彙總_' . $r['ym_from'] . '_' . $r['ym_to'] . '.csv"');
+    $o = fopen('php://output', 'w');
+    fwrite($o, "\xEF\xBB\xBF");
+    fputcsv($o, ['發票年月', '廠商編號', '廠商簡稱', '廠商全稱', '統一編號', '付款方式', '月結天數',
+                 '加工筆數', '加工數量', '加工費(未稅)', '稅額', '應付含稅', '缺發票日期筆數', '加工日期範圍']);
+    foreach ($r['rows'] as $x) {
+        fputcsv($o, [$x['invoice_ym'], $x['maker_id_no'], $x['maker_name'], $x['maker_full'],
+                     ($x['tax_id'] ? "\t" . $x['tax_id'] : ''), $x['payment_method'], $x['net_days'],
+                     $x['cnt'], $x['qty'], round($x['amount']), round($x['tax_amount']),
+                     round($x['total_amount']), $x['no_inv_date'], $x['date_range']]);
+    }
+    $s2 = $r['summary'];
+    fputcsv($o, []);
+    fputcsv($o, ['合計', '', '', '', '', '', '', $s2['cnt'], '', round($s2['amount']),
+                 round($s2['tax_amount']), round($s2['total_amount']), $s2['no_inv_date'], '']);
+    fclose($o);
+    exit;
+}
+
+case 'ap_detail_export': {
+    $s  = $_GET ?: $_POST;
+    $mk = acc_u8(trim((string)($s['maker_id_no'] ?? '')));
+    $ym = trim((string)($s['invoice_ym'] ?? ''));
+    if ($mk === '' || !preg_match('/^\d{4}-\d{2}$/', $ym)) acc_err('缺少廠商或發票年月');
+    $d = acc_ap_detail($db, $mk, $ym);
+
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="應付對帳單_' . $d['head']['maker_name'] . '_' . $ym . '.csv"');
+    $o = fopen('php://output', 'w');
+    fwrite($o, "\xEF\xBB\xBF");
+    fputcsv($o, ['應付對帳單', $d['head']['maker_full'] ?: $d['head']['maker_name'], $ym . ' 發票年月']);
+    fputcsv($o, ['統一編號', $d['head']['tax_id'] ? "\t" . $d['head']['tax_id'] : '（未建）',
+                 '付款方式', $d['head']['payment_method'], '月結天數', $d['head']['net_days']]);
+    fputcsv($o, []);
+    fputcsv($o, ['加工日', '移轉單號', '製令', '料號', '製程', '加工數量', '損耗',
+                 '單價', '加工費', '稅額', '發票日期', '訂單號', '備註']);
+    foreach ($d['items'] as $i) {
+        fputcsv($o, [$i['d'], $i['transfer_no'], $i['bom'], $i['product_id'], $i['process_name'],
+                     $i['transfer_qty'], $i['loss_qty'],
+                     rtrim(rtrim(number_format((float)$i['unit_price'], 4, '.', ''), '0'), '.'),
+                     round($i['process_amount']), round($i['tax_amount']),
+                     $i['inv_date'], $i['order_no'], $i['note']]);
+    }
+    fputcsv($o, []);
+    fputcsv($o, ['', '', '', '', '', '', '', '加工費(未稅)', round($d['amount'])]);
+    fputcsv($o, ['', '', '', '', '', '', '', '稅額', round($d['tax_amount'])]);
+    fputcsv($o, ['', '', '', '', '', '', '', '應付含稅', round($d['total_amount'])]);
+    fclose($o);
+    exit;
+}
+
 /* ── 匯入範本下載（告訴使用者 ERP 要匯出成什麼格式）─────────────────── */
 case 'template': {
     header('Content-Type: text/csv; charset=UTF-8');

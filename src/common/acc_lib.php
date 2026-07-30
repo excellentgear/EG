@@ -1666,6 +1666,197 @@ function acc_receipt_delete(PDO $db, int $receiptId, string $userId): array
     }
 }
 
+/* ============================================================
+ * 應付對帳（廠商加工費）
+ *
+ * 來源：bom_ing_transfer_log。實測 43,622 筆有金額的紀錄中有 43,616 筆
+ * 已經帶了 invoice_date / invoice_ym / tax_amount / paid_qty（99.99%），
+ * 也就是廠商發票資訊本來就在維護，所以會計端只需要彙總對帳，不必重新登錄。
+ * 歸戶：maker_from（本次加工廠商）對 maker_list.maker_id_no。
+ * 月份：優先用資料本身的 invoice_ym（廠商發票年月）；沒有才用 transfer_date 配廠商結帳日推算。
+ * ============================================================ */
+
+/**
+ * 應付彙總（廠商 × 發票年月）
+ * @param array $f ym_from, ym_to (YYYY-MM), kw, sort, dir, page, per_page
+ */
+function acc_ap_summary(PDO $db, array $f): array
+{
+    $ymFrom = preg_match('/^\d{4}-\d{2}$/', (string)($f['ym_from'] ?? '')) ? $f['ym_from'] : date('Y-m');
+    $ymTo   = preg_match('/^\d{4}-\d{2}$/', (string)($f['ym_to'] ?? ''))   ? $f['ym_to']   : $ymFrom;
+    if ($ymTo < $ymFrom) [$ymFrom, $ymTo] = [$ymTo, $ymFrom];
+    $c1 = str_replace('-', '', $ymFrom);       // invoice_ym 是 char(6) YYYYMM
+    $c2 = str_replace('-', '', $ymTo);
+    [$dFrom, $dTo] = acc_scan_range($ymFrom, $ymTo);
+
+    $st = $db->prepare("
+        SELECT t.maker_from,
+               COALESCE(NULLIF(t.invoice_ym,''),
+                        DATE_FORMAT(t.transfer_date,'%Y%m'))       AS ym,
+               COUNT(*)                                            AS cnt,
+               SUM(COALESCE(t.process_amount,0))                   AS amt,
+               SUM(COALESCE(t.tax_amount,0))                       AS tax,
+               SUM(COALESCE(t.transfer_qty,0))                     AS qty,
+               SUM(CASE WHEN t.invoice_date IS NULL THEN 1 ELSE 0 END) AS no_inv_date,
+               MIN(t.transfer_date)                                AS d_min,
+               MAX(t.transfer_date)                                AS d_max
+        FROM bom_ing_transfer_log t
+        WHERE COALESCE(t.process_amount,0) <> 0
+          AND (
+                (t.invoice_ym IS NOT NULL AND t.invoice_ym <> '' AND t.invoice_ym BETWEEN ? AND ?)
+             OR ((t.invoice_ym IS NULL OR t.invoice_ym = '') AND t.transfer_date BETWEEN ? AND ?)
+              )
+        GROUP BY t.maker_from, ym
+        ORDER BY amt DESC");
+    $st->execute([$c1, $c2, $dFrom, $dTo]);
+    $raw = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    // 廠商主檔
+    $mk = [];
+    foreach ($db->query("SELECT maker_id_no, maker_id, maker_id_all, tax_id, payment_method,
+                                net_days, settlement_mode, settlement_day, status
+                         FROM maker_list")->fetchAll(PDO::FETCH_ASSOC) as $m) {
+        $mk[trim((string)$m['maker_id_no'])] = $m;
+    }
+
+    $rows = [];
+    foreach ($raw as $r) {
+        $id  = trim((string)$r['maker_from']);
+        $m   = $mk[$id] ?? null;
+        $ym  = (string)$r['ym'];
+        $ymF = (strlen($ym) === 6) ? substr($ym, 0, 4) . '-' . substr($ym, 4, 2) : $ym;
+        $amt = (float)$r['amt'];
+        $tax = (float)$r['tax'];
+        $rows[] = [
+            'maker_id_no'    => $id,
+            'maker_name'     => $m['maker_id']     ?? ($id !== '' ? $id : '（未指定廠商）'),
+            'maker_full'     => $m['maker_id_all'] ?? null,
+            'tax_id'         => $m['tax_id']       ?? null,
+            'payment_method' => $m['payment_method'] ?? null,
+            'net_days'       => $m['net_days']     ?? null,
+            'in_master'      => (bool)$m,
+            'inactive'       => ($m && strtoupper(trim((string)$m['status'])) === 'X'),
+            'invoice_ym'     => $ymF,
+            'cnt'            => (int)$r['cnt'],
+            'qty'            => (int)$r['qty'],
+            'amount'         => $amt,
+            'tax_amount'     => $tax,
+            'total_amount'   => $amt + $tax,
+            'no_inv_date'    => (int)$r['no_inv_date'],
+            'date_range'     => substr((string)$r['d_min'], 0, 10) . ' ~ ' . substr((string)$r['d_max'], 0, 10),
+            'has_tax_id'     => ($m && trim((string)$m['tax_id']) !== ''),
+        ];
+    }
+
+    $kw = trim((string)($f['kw'] ?? ''));
+    if ($kw !== '') {
+        $rows = array_values(array_filter($rows, fn($r) =>
+            mb_stripos((string)$r['maker_name'], $kw) !== false
+            || mb_stripos((string)$r['maker_full'], $kw) !== false
+            || mb_stripos((string)$r['maker_id_no'], $kw) !== false
+            || mb_stripos((string)$r['tax_id'], $kw) !== false));
+    }
+    if (!empty($f['only_gap'])) {
+        $rows = array_values(array_filter($rows, fn($r) => !$r['in_master'] || !$r['has_tax_id'] || $r['no_inv_date'] > 0));
+    }
+
+    $summary = ['groups' => count($rows), 'cnt' => 0, 'amount' => 0.0, 'tax_amount' => 0.0,
+                'total_amount' => 0.0, 'not_in_master' => 0, 'no_tax_id' => 0, 'no_inv_date' => 0];
+    foreach ($rows as $r) {
+        $summary['cnt']          += $r['cnt'];
+        $summary['amount']       += $r['amount'];
+        $summary['tax_amount']   += $r['tax_amount'];
+        $summary['total_amount'] += $r['total_amount'];
+        if (!$r['in_master'])  $summary['not_in_master']++;
+        if (!$r['has_tax_id']) $summary['no_tax_id']++;
+        $summary['no_inv_date'] += $r['no_inv_date'];
+    }
+
+    $sort = $f['sort'] ?? 'total_amount';
+    $dir  = (($f['dir'] ?? 'desc') === 'asc') ? 1 : -1;
+    usort($rows, function ($a, $b) use ($sort, $dir) {
+        switch ($sort) {
+            case 'maker':      return $dir * strnatcasecmp($a['maker_name'], $b['maker_name']);
+            case 'invoice_ym': return $dir * strcmp($a['invoice_ym'], $b['invoice_ym']);
+            case 'cnt':        return $dir * ($a['cnt'] <=> $b['cnt']);
+            case 'amount':     return $dir * ($a['amount'] <=> $b['amount']);
+            default:           return $dir * ($a['total_amount'] <=> $b['total_amount']);
+        }
+    });
+
+    $total   = count($rows);
+    $perPage = (int)($f['per_page'] ?? 20);
+    if ($perPage === 0) return ['rows' => $rows, 'total' => $total, 'page' => 1, 'per_page' => 0,
+                                'summary' => $summary, 'ym_from' => $ymFrom, 'ym_to' => $ymTo];
+    if (!in_array($perPage, [5, 10, 20, 50], true)) $perPage = 20;
+    $page = max(1, (int)($f['page'] ?? 1));
+    return ['rows' => array_slice($rows, ($page - 1) * $perPage, $perPage),
+            'total' => $total, 'page' => $page, 'per_page' => $perPage,
+            'summary' => $summary, 'ym_from' => $ymFrom, 'ym_to' => $ymTo];
+}
+
+/** 應付明細（單一廠商單一發票年月） */
+function acc_ap_detail(PDO $db, string $makerIdNo, string $ym): array
+{
+    if (!preg_match('/^\d{4}-\d{2}$/', $ym)) return ['items' => [], 'head' => null];
+    $c = str_replace('-', '', $ym);
+    [$dFrom, $dTo] = acc_scan_range($ym, $ym);
+
+    $stm = $db->prepare("SELECT maker_id_no, maker_id, maker_id_all, tax_id, payment_method,
+                                net_days, settlement_mode, settlement_day, invoice_address, billing_address
+                         FROM maker_list WHERE maker_id_no = ? LIMIT 1");
+    $stm->execute([$makerIdNo]);
+    $m = $stm->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    $st = $db->prepare("
+        SELECT t.transfer_id, t.transfer_no, DATE_FORMAT(t.transfer_date,'%Y-%m-%d') AS d,
+               t.bom, t.bom_sn, t.product_id, t.transfer_qty, t.loss_qty, t.paid_qty,
+               t.price, t.modified_unit_price, t.process_amount, t.tax_amount,
+               DATE_FORMAT(t.invoice_date,'%Y-%m-%d') AS inv_date, t.invoice_ym,
+               t.note, t.note2, t.order_no,
+               -- bom_ing 同一 (bom, bom_sn) 可能有多列，用 MAX 收斂；
+               -- 直接 SELECT 非聚合欄位會被 only_full_group_by 擋下（錯誤 1055）
+               COALESCE(MAX(pn.ProcessName),'') AS process_name
+        FROM bom_ing_transfer_log t
+        LEFT JOIN bom_ing bi ON bi.bom = t.bom AND bi.bom_sn = t.bom_sn
+        LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+        WHERE t.maker_from = ? AND COALESCE(t.process_amount,0) <> 0
+          AND ( (t.invoice_ym IS NOT NULL AND t.invoice_ym <> '' AND t.invoice_ym = ?)
+             OR ((t.invoice_ym IS NULL OR t.invoice_ym = '') AND t.transfer_date BETWEEN ? AND ?) )
+        GROUP BY t.transfer_id
+        ORDER BY t.transfer_date, t.transfer_no, t.transfer_id");
+    $st->execute([$makerIdNo, $c, $dFrom, $dTo]);
+    $items = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    $amt = 0.0; $tax = 0.0;
+    foreach ($items as &$it) {
+        $it['process_amount'] = (float)$it['process_amount'];
+        $it['tax_amount']     = (float)$it['tax_amount'];
+        $it['unit_price']     = (float)($it['modified_unit_price'] ?: $it['price']);
+        $amt += $it['process_amount'];
+        $tax += $it['tax_amount'];
+    }
+    unset($it);
+
+    return [
+        'head' => [
+            'maker_id_no'    => $makerIdNo,
+            'maker_name'     => $m['maker_id']     ?? $makerIdNo,
+            'maker_full'     => $m['maker_id_all'] ?? null,
+            'tax_id'         => $m['tax_id']       ?? null,
+            'payment_method' => $m['payment_method'] ?? null,
+            'net_days'       => $m['net_days']     ?? null,
+            'address'        => $m['billing_address'] ?? ($m['invoice_address'] ?? null),
+            'invoice_ym'     => $ym,
+            'in_master'      => (bool)$m,
+        ],
+        'items'        => $items,
+        'amount'       => $amt,
+        'tax_amount'   => $tax,
+        'total_amount' => $amt + $tax,
+    ];
+}
+
 /** 解析上傳的 CSV（支援 UTF-8 BOM 與 Big5），回傳 [表頭, 資料列] */
 function acc_parse_csv(string $raw): array
 {
