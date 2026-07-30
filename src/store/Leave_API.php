@@ -74,8 +74,9 @@ case 'bootstrap': {
                          FROM leave_type ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     // 我的候選代理人（唯讀，來自 delegate_lib）
     $cands = eg_person_delegate_candidates($db, $user_id);
-    // 特休摘要
+    // 特休摘要 ＋ 本年度各假別已核准累積（只列請過的假別）
     $annual = eg_leave_annual_summary($db, $user_id);
+    $yearUsage = eg_leave_year_usage($db, $user_id);
     // 檢視範圍
     $deptScope = $VIEW_ALL ? [] : leave_dept_scope($db, $user_id);
     $cfg = eg_leave_settings($db);
@@ -88,6 +89,7 @@ case 'bootstrap': {
          'leave_types' => $types,
          'agent_candidates' => $cands,
          'annual' => $annual,
+         'year_usage' => $yearUsage,
          'settings' => [
              'backdate_limit_days' => (int)$cfg['leave_backdate_limit_days'],
              'hours_per_day' => (float)$cfg['leave_hours_per_day'],
@@ -380,7 +382,8 @@ case 'detail': {
 // ════════════════ 特休額度 ════════════════
 case 'annual_summary': {
     $year = (int)($_GET['year'] ?? date('Y'));
-    out(['success' => true, 'annual' => eg_leave_annual_summary($db, $user_id, $year)]);
+    out(['success' => true, 'annual' => eg_leave_annual_summary($db, $user_id, $year),
+         'year_usage' => eg_leave_year_usage($db, $user_id, $year)]);
 }
 
 // ════════════════ 附件：上傳（temp 或補件） ════════════════

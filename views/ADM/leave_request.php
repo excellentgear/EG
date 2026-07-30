@@ -157,8 +157,11 @@ input[type=number]{-moz-appearance:textfield;}
           <div class="it"><div class="lb">已核准使用</div><div class="vl"><span id="anUsed">—</span> 天</div></div>
           <div class="it"><div class="lb">送審中</div><div class="vl"><span id="anPend">—</span> 天</div></div>
           <div class="it"><div class="lb">剩餘可用</div><div class="vl" style="color:var(--amber-d);"><span id="anRem">—</span> 天</div></div>
-          <div class="it" style="flex:1;min-width:200px;display:flex;align-items:center;">
-            <span style="font-size:11.5px;color:#9a7b4f;">特休額度與員工資料的到職日／年資同一套算法即時計算，不另建額度表。</span>
+          <!-- 右側：本年度其他假別的已核准累積（只列請過的假別，故每人顯示不同）-->
+          <div class="it" style="flex:1;min-width:240px;border-left:1px solid var(--sand-d);padding-left:16px;">
+            <div class="lb">本年度請假紀錄（已核准）</div>
+            <div id="yearUsage" style="font-size:13px;color:var(--ink);line-height:1.7;margin-top:2px;"></div>
+            <div style="font-size:11px;color:#9a7b4f;margin-top:2px;">特休額度與員工資料的到職日／年資同一套算法即時計算，不另建額度表。</div>
           </div>
         </div>
 
@@ -427,6 +430,7 @@ function boot(){
     TYPES.forEach(t => $t.append('<option value="'+t.id+'">'+esc(t.leave_name)+'</option>'));
     // 代理人不再由申請人挑選：系統依人事設定的順位自動解析，改以 renderAgentPreview() 唯讀顯示
     renderAnnual(r.annual);
+    renderYearUsage(r.year_usage);
     if(IS_ADMIN){ $('#psHeader').val(SETTINGS.print_header||''); $('#psFooter').val(SETTINGS.print_footer||''); }
     // 附件根目錄未設定的警告改在「選到需附證明的假別」時才顯示（見假別切換），此處不預先顯示
     uploadToken = newToken();
@@ -439,6 +443,17 @@ function renderAnnual(an){
   if(!an) return;
   $('#anEnt').text(num(an.entitlement)); $('#anUsed').text(num(an.used));
   $('#anPend').text(num(an.pending));    $('#anRem').text(num(an.remaining));
+}
+// 本年度各假別已核准累積：只列請過的假別，格式「1天+5小時」（後端 eg_leave_fmt_amount 算好）
+function renderYearUsage(list){
+  if(!list || !list.length){
+    $('#yearUsage').html('<span style="color:#9a7b4f;">本年度尚無已核准的請假紀錄</span>');
+    return;
+  }
+  $('#yearUsage').html(list.map(function(u){
+    return '<span style="display:inline-block;margin-right:14px;white-space:nowrap;">'
+         + esc(u.leave_name) + '　<b>' + esc(u.label) + '</b></span>';
+  }).join(''));
 }
 
 // ── 假別切換：代理人/證明文件需求提示 ──
@@ -721,7 +736,9 @@ function resetForm(keepMsg){
   const ff0 = document.getElementById('fFile'); if(ff0) ff0.value = '';
   if(!keepMsg) $('#applyMsg').empty();
   uploadToken = newToken();
-  $.getJSON(API, {action:'annual_summary'}, function(r){ if(r.success) renderAnnual(r.annual); });
+  $.getJSON(API, {action:'annual_summary'}, function(r){
+    if(r.success){ renderAnnual(r.annual); renderYearUsage(r.year_usage); }
+  });
 }
 
 // ── 範圍／狀態按鈕切換（則一選擇）──

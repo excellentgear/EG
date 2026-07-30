@@ -461,6 +461,65 @@ if (!function_exists('eg_leave_annual_summary')) {
     }
 }
 
+if (!function_exists('eg_leave_fmt_amount')) {
+    /**
+     * 時數格式化為「N天+M小時」（2026-07-30 使用者指定格式）：
+     *   13 小時（一天 8 小時）→ '1天+5小時'
+     *   16 小時               → '2天'（整天就不顯示小時）
+     *   3.5 小時              → '3.5小時'（不足一天就只顯示小時）
+     * 小數尾 0 省略（3.50→3.5、3.00→3），比照全站數字顯示規範。
+     */
+    function eg_leave_fmt_amount(float $hours, float $hoursPerDay): string {
+        if ($hours <= 0) return '0';
+        $per = max(1.0, $hoursPerDay);
+        $d = (int)floor($hours / $per);
+        $rem = round($hours - $d * $per, 2);
+        $trim = function (float $v): string {
+            $s = rtrim(rtrim(number_format($v, 2, '.', ''), '0'), '.');
+            return $s === '' ? '0' : $s;
+        };
+        if ($d > 0 && $rem > 0.001) return $d . '天+' . $trim($rem) . '小時';
+        if ($d > 0) return $d . '天';
+        return $trim($rem) . '小時';
+    }
+}
+
+if (!function_exists('eg_leave_year_usage')) {
+    /**
+     * 某人某年度「已核准」的各假別累積用量，只回傳確實請過的假別（沒請的不列）。
+     * 用途：請假申請頁在特休額度列右側顯示「事假 1天+5小時、病假 3.5小時…」。
+     * 年度歸屬以請假起日年份計（與特休額度同一口徑）。
+     *
+     * @return array [['leave_type_id','leave_name','hours','label'], ...] 依時數多寡排序
+     */
+    function eg_leave_year_usage(PDO $db, int $userId, ?int $year = null): array {
+        $year = $year ?? (int)date('Y');
+        $perDay = max(1.0, (float)eg_leave_settings($db)['leave_hours_per_day']);
+        try {
+            $st = $db->prepare(
+                "SELECT lt.id AS leave_type_id, lt.leave_name, COALESCE(SUM(lr.total_hours),0) AS hrs
+                 FROM leave_request lr JOIN leave_type lt ON lt.id = lr.leave_type_id
+                 WHERE lr.employee_id = ? AND lr.status = 'approved'
+                   AND YEAR(lr.start_datetime) = ?
+                 GROUP BY lt.id, lt.leave_name
+                 HAVING hrs > 0
+                 ORDER BY hrs DESC, lt.sort_order, lt.id");
+            $st->execute([$userId, $year]);
+            $out = [];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $h = (float)$r['hrs'];
+                $out[] = [
+                    'leave_type_id' => (int)$r['leave_type_id'],
+                    'leave_name'    => (string)$r['leave_name'],
+                    'hours'         => $h,
+                    'label'         => eg_leave_fmt_amount($h, $perDay),
+                ];
+            }
+            return $out;
+        } catch (Throwable $e) { return []; }
+    }
+}
+
 // ============================== 主管鏈與簽核人解析 ==============================
 
 if (!function_exists('eg_leave_supervisor_chain')) {
