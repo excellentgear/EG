@@ -15,6 +15,10 @@ $uid = (int)($_SESSION['id'] ?? 0);
 
 $features = rf_load_user_features_override($pdo, $uid, 'leave');
 $IS_ADMIN = rf_has_feature($features, 'all');
+// 徹底刪除只給「員工 id=1 且在職狀態=99 最高權限」的帳號（2026-07-30 使用者要求；
+// 判定與後端 eg_leave_is_superadmin() 同一條件，前端只是不畫按鈕，實際守門在 API）
+require_once '../../src/common/leave_lib.php';
+$IS_SUPERADMIN = eg_leave_is_superadmin($pdo, $uid);
 $VIEW_ALL = $IS_ADMIN || rf_has_feature($features, 'leave_view_all');
 
 // 首次載入植入預設角色（module=leave）
@@ -99,6 +103,17 @@ input[type=number]{-moz-appearance:textfield;}
 .flow-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #f0e7d7;font-size:13px;}
 .flow-row .lvl-badge{background:var(--sand);border:1px solid var(--sand-d);color:var(--amber-d);border-radius:10px;padding:1px 9px;font-size:11px;font-weight:600;white-space:nowrap;}
 .empty-note{padding:22px;color:#9a7b4f;text-align:center;font-size:13px;}
+/* 列底色依狀態（暖色系，快速辨識）；顏色不是唯一資訊，狀態欄仍有文字標籤。
+   左側色條加強區分：審核中橘、已退回赭紅、已取消暖粉；已核准保持白底讓需注意的狀態跳出來。 */
+.lv-tbl tr.row-pending  > td{background:#FDF4E3;}
+.lv-tbl tr.row-rejected > td{background:#FBE6DF;}
+.lv-tbl tr.row-canceled > td{background:#FAE3E7;}
+.lv-tbl tr.row-pending  > td:first-child{box-shadow:inset 3px 0 0 #F0A24B;}
+.lv-tbl tr.row-rejected > td:first-child{box-shadow:inset 3px 0 0 #DD5138;}
+.lv-tbl tr.row-canceled > td:first-child{box-shadow:inset 3px 0 0 #C4808F;}
+.lv-tbl tr.row-pending:hover  > td{background:#FBEDD4;}
+.lv-tbl tr.row-rejected:hover > td{background:#F7D9CE;}
+.lv-tbl tr.row-canceled:hover > td{background:#F5D5DB;}
 /* 範圍／狀態切換鈕（則一選擇，暖色系；選中深底白字，未選淺底深棕字） */
 .scope-btn,.status-btn{background:#fffdf9;border:1px solid var(--sand-d);color:#8a6d45;font-size:12.5px;}
 .scope-btn:hover,.status-btn:hover{background:#f7e9d5;color:#6b5638;}
@@ -289,6 +304,12 @@ input[type=number]{-moz-appearance:textfield;}
     <button class="btn btn-amber" id="btnEditLeave" style="display:none;" onclick="startEdit()"><i class="fa fa-pencil"></i> 修改內容</button>
     <button class="btn btn-amber" id="btnReqChange" style="display:none;" onclick="requestChange()"><i class="fa fa-refresh"></i> 申請修改</button>
     <button class="btn btn-coral" id="btnCancelLeave" style="display:none;" onclick="doCancel()"></button>
+    <?php if ($IS_SUPERADMIN): ?>
+    <button class="btn btn-coral" id="btnDeleteLeave" style="display:none;" onclick="doDelete()"
+            title="徹底刪除此單及其通知、簽核紀錄、行事曆事件與附件（不可回復，僅最高權限帳號測試用）">
+      <i class="fa fa-trash"></i> 徹底刪除
+    </button>
+    <?php endif; ?>
   </div>
 </div></div></div>
 
@@ -339,6 +360,7 @@ input[type=number]{-moz-appearance:textfield;}
 <script>
 const API = '../../src/store/Leave_API.php';
 const IS_ADMIN = <?= $IS_ADMIN ? 'true' : 'false' ?>;
+const IS_SUPERADMIN = <?= $IS_SUPERADMIN ? 'true' : 'false' ?>;   // 僅 id=1 且 state=99，可徹底刪除
 let CSRF = '', TYPES = [], AGENTS = [], SETTINGS = {}, ME = {};
 let uploadToken = '';
 let listPage = 1, listTotal = 0, curDetailId = 0, curDetailCanCancel = false, curDetailStatus = '';
@@ -718,7 +740,9 @@ function rowHtml(o){
   if(+o.is_backdated === 1) tags += '<span class="tag-soft">補請假</span> ';
   if(o.attach_status === 'pending') tags += '<span class="tag-warn">待補證明</span> ';
   if(tags === '') tags = '<span style="color:#c9b89c;">—</span>';
-  return '<tr>'
+  // 整列底色依狀態（已核准不上色，讓需要注意的三種狀態跳出來）
+  const rowCls = {pending:'row-pending', rejected:'row-rejected', canceled:'row-canceled'}[o.status] || '';
+  return '<tr class="'+rowCls+'">'
     + '<td>#'+o.id+'</td>'
     + '<td>'+esc(o.applicant_name)+'</td>'
     + '<td>'+esc(o.leave_name)+'</td>'
@@ -816,6 +840,9 @@ function savePrintSetting(){
 // ── 詳情 ──
 function openDetail(id){
   curDetailId = id;
+  // 先把所有動作鈕收起來，避免上一張單的按鈕殘留在這張單上
+  $('#btnCancelLeave, #btnEditLeave, #btnReqChange, #btnDeleteLeave').hide();
+  $('#editHint').text('');
   $('#detailBody').html('<div class="empty-note">載入中…</div>');
   $('#detailModal').modal('show');
   $.getJSON(API, {action:'detail', id:id}, function(r){
@@ -876,12 +903,26 @@ function openDetail(id){
       });
     } else h += '<div style="font-size:12.5px;color:#9a7b4f;">（此假別免主管簽核）</div>';
 
-    if((r.sign_records||[]).length){
-      h += '<h4 style="color:var(--amber-d);font-size:14px;margin-top:16px;">簽章軌跡</h4>';
-      r.sign_records.forEach(function(s){
-        const actTxt = {approved:'核准', rejected:'退回', canceled:'撤回／銷假'}[s.action] || s.action;
+    /* 簽章軌跡：單層一次決行時，軌跡內容與上面的簽核流程完全一樣（同一人同一時間同一意見），
+       兩塊並列就是重複顯示（2026-07-30 使用者回報）。因此只在「軌跡比流程多出資訊」時才顯示：
+         · 有非簽核層的動作（step_no>=98：修改內容 98／撤回銷假 99）
+         · 同一層有多筆紀錄（退回後重簽，流程表只留最後結果、軌跡才看得到完整過程）
+         · 軌跡筆數多於流程已決行的層數
+       其餘情況（例如本例：單層退回一次）就只顯示簽核流程，不重複。 */
+    const recs = r.sign_records || [];
+    const decided = (r.approvals || []).filter(a => a.status !== 'pending').length;
+    const stepCount = {};
+    recs.forEach(s => { stepCount[s.step_no] = (stepCount[s.step_no] || 0) + 1; });
+    const hasExtraStep = recs.some(s => +s.step_no >= 98);
+    const hasRepeat = Object.keys(stepCount).some(k => stepCount[k] > 1);
+    if(recs.length && (hasExtraStep || hasRepeat || recs.length > decided)){
+      h += '<h4 style="color:var(--amber-d);font-size:14px;margin-top:16px;">簽章軌跡'
+         + '<span style="font-weight:400;font-size:11.5px;color:#9a7b4f;">（含修改／撤回／重簽等完整歷程）</span></h4>';
+      recs.forEach(function(s){
+        const actTxt = {approved:'核准', rejected:'退回', canceled:'撤回／銷假', edited:'修改內容'}[s.action] || s.action;
+        const stepTxt = (+s.step_no === 98) ? '修改' : ((+s.step_no === 99) ? '撤回' : ('第 '+s.step_no+' 層'));
         h += '<div class="flow-row">'
-           + (s.action==='approved' && window.EGStamp ? EGStamp.badge('sign',18) : '<span class="lvl-badge">'+(s.step_no==99?'—':('第 '+s.step_no+' 層'))+'</span>')
+           + (s.action==='approved' && window.EGStamp ? EGStamp.badge('sign',18) : '<span class="lvl-badge">'+stepTxt+'</span>')
            + '<span>'+esc(s.signer_name)+'</span><span>'+actTxt+'</span>'
            + '<span style="color:#9a7b4f;flex:1;">'+esc(s.remark||'')+'</span>'
            + '<span style="color:#9a7b4f;font-size:12px;">'+esc(String(s.signed_at||'').substring(0,16))+'</span></div>';
@@ -895,10 +936,29 @@ function openDetail(id){
 
     // 修改：審核前（且尚無人簽核）可直接改；已核准提供「申請修改」
     curDetailReq = o;
+    if(IS_SUPERADMIN) $('#btnDeleteLeave').show();
     $('#btnEditLeave').toggle(!!r.can_edit);
     $('#btnReqChange').toggle(!!r.can_request_change);
     $('#editHint').text((!r.can_edit && r.edit_reason && String(o.employee_id)===String(ME.id)) ? r.edit_reason : '');
   });
+}
+
+// ── 徹底刪除（僅管理者，測試用）：連通知、簽核紀錄、行事曆事件、附件一起刪，不可回復 ──
+function doDelete(){
+  const o = curDetailReq; if(!o) return;
+  const ans = prompt('⚠ 徹底刪除請假單 #' + o.id + '\n\n'
+    + '會一併刪除：簽核流程與簽章軌跡、相關通知（含已發送的置頂欄通知）、行事曆事件、附件檔案。\n'
+    + '此操作【不可回復】，僅供測試使用（刪除動作會寫入稽核紀錄）。\n\n'
+    + '確定要刪除請輸入單號「' + o.id + '」：', '');
+  if(ans === null) return;
+  if(String(ans).trim() !== String(o.id)){ alert('輸入的單號不符，已取消刪除。'); return; }
+  $.post(API, {action:'delete', csrf:CSRF, id:o.id, confirm_id:o.id}, function(r){
+    alert(r.message);
+    if(r.success){
+      $('#detailModal').modal('hide');
+      loadList(); refreshPendingCount();
+    }
+  }, 'json');
 }
 
 // ── 修改審核前的單：把原內容帶回申請分頁，改成「儲存修改」模式 ──

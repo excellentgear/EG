@@ -227,6 +227,19 @@ case 'cancel': {
     out(['success' => $r['ok'], 'message' => $r['msg']]);
 }
 
+// ════════════════ 徹底刪除（僅管理者／測試用） ════════════════
+case 'delete': {
+    need_csrf();
+    // 僅「員工 id=1 且在職狀態=99（最高權限）」可用（2026-07-30 使用者要求，比一般管理者更嚴）
+    if (!eg_leave_is_superadmin($db, $user_id)) bad('此功能僅限最高權限帳號（員工編號 1）使用');
+    $reqId = (int)($_POST['id'] ?? 0);
+    if (!$reqId) bad('缺少參數');
+    // 二次確認：前端須把單號原樣送回，避免誤觸就把整張單連通知簽核紀錄一起刪掉
+    if ((string)($_POST['confirm_id'] ?? '') !== (string)$reqId) bad('確認碼不符，未執行刪除');
+    $r = eg_leave_delete($db, $reqId, $user_id);
+    out(['success' => $r['ok'], 'message' => $r['msg']]);
+}
+
 // ════════════════ 待我簽核清單 ════════════════
 case 'pending_for_me': {
     $rows = eg_leave_pending_for($db, $user_id);

@@ -1119,6 +1119,112 @@ if (!function_exists('eg_leave_cancel')) {
     }
 }
 
+// ============================== 徹底刪除（僅管理員／測試用） ==============================
+
+if (!function_exists('eg_leave_is_superadmin')) {
+    /**
+     * 可使用「徹底刪除」的唯一身分：**員工 id=1 且在職狀態為 99（最高權限）**。
+     * 2026-07-30 使用者明確要求——一般管理者角色(rf 'all')不足以刪除單據，
+     * 因為刪除會連通知與簽核紀錄一起消滅、不可回復，只給超級管理員（帳號 e）測試用。
+     * 狀態即時查 DB，不吃 session，避免帳號被降權後仍能刪。
+     */
+    function eg_leave_is_superadmin(PDO $db, int $uid): bool {
+        if ($uid !== 1) return false;
+        try {
+            $st = $db->prepare("SELECT state FROM user WHERE id = 1 LIMIT 1");
+            $st->execute();
+            return (int)$st->fetchColumn() === 99;
+        } catch (Throwable $e) { return false; }   // 查不到就當沒權限（fail-closed）
+    }
+}
+
+if (!function_exists('eg_leave_delete')) {
+    /**
+     * 徹底刪除一張請假單及其所有關聯資料（僅管理員可呼叫；呼叫端負責權限與 CSRF）。
+     * 用途：測試期間清掉測試單，不留孤兒資料。**這是破壞性操作，不可回復**。
+     * 一併刪除：簽核流程 leave_approval、簽章軌跡 leave_sign_record、附件 leave_attachment
+     *          （含實體檔）、行事曆事件 evenement（+actor/target/recipient_cache）、
+     *          通知 live_event（+target/response/for_user）。
+     * 刪除前把整張單的內容寫進 audit_log（action_type='LEAVE_DELETE'），確保仍可追溯做過什麼。
+     */
+    function eg_leave_delete(PDO $db, int $requestId, int $operatorId): array {
+        $st = $db->prepare("SELECT lr.*, lt.leave_name, u.user_cname AS applicant_name
+                            FROM leave_request lr
+                            LEFT JOIN leave_type lt ON lt.id = lr.leave_type_id
+                            LEFT JOIN user u ON u.id = lr.employee_id
+                            WHERE lr.id = ? LIMIT 1");
+        $st->execute([$requestId]);
+        $req = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$req) return ['ok' => false, 'msg' => '請假單不存在（可能已被刪除）'];
+
+        // 先蒐集要刪的關聯 id（交易內用）
+        $evId = $req['evenement_id'] ? (int)$req['evenement_id'] : 0;
+        $atts = [];
+        try {
+            $st = $db->prepare("SELECT id, stored_name, upload_token, leave_request_id FROM leave_attachment WHERE leave_request_id = ?");
+            $st->execute([$requestId]);
+            $atts = $st->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {}
+        $events = [];
+        try {
+            $st = $db->prepare("SELECT id FROM live_event WHERE ref_type IN ('LEAVE','LEAVE_APPROVAL') AND ref_id = ?");
+            $st->execute([$requestId]);
+            $events = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+        } catch (Throwable $e) {}
+
+        // 稽核留痕（刪除前先寫，避免交易失敗後沒紀錄）
+        try {
+            $opName = '';
+            $ns = $db->prepare("SELECT user_cname FROM user WHERE id = ? LIMIT 1");
+            $ns->execute([$operatorId]);
+            $opName = (string)$ns->fetchColumn();
+            $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                          VALUES ('LEAVE_DELETE', 'leave_request', ?, ?, ?, ?, ?, NOW())")
+               ->execute([(string)$requestId,
+                          '請假單 #' . $requestId . '（' . ($req['applicant_name'] ?? '') . '）',
+                          json_encode(['request' => $req, 'attachments' => $atts, 'live_events' => $events],
+                                      JSON_UNESCAPED_UNICODE),
+                          $operatorId ?: null, $opName ?: 'admin']);
+        } catch (Throwable $e) { /* 稽核寫入失敗不擋刪除，但會少一筆紀錄 */ }
+
+        try {
+            $db->beginTransaction();
+            // 通知（含收件對象、回應、共用帳號轉送紀錄）
+            foreach ($events as $eid) {
+                $db->prepare("DELETE FROM live_event_response WHERE live_event_id = ?")->execute([$eid]);
+                $db->prepare("DELETE FROM live_event_target WHERE live_event_id = ?")->execute([$eid]);
+                try { $db->prepare("DELETE FROM live_event_for_user WHERE live_event_id = ?")->execute([$eid]); } catch (Throwable $e) {}
+                $db->prepare("DELETE FROM live_event WHERE id = ?")->execute([$eid]);
+            }
+            // 行事曆事件
+            if ($evId) eg_leave_event_remove($db, $evId);
+            // 附件（DB 列；實體檔在交易外刪，避免交易回滾後檔案已消失）
+            $db->prepare("DELETE FROM leave_attachment WHERE leave_request_id = ?")->execute([$requestId]);
+            // 簽核流程與軌跡
+            $db->prepare("DELETE FROM leave_sign_record WHERE leave_request_id = ?")->execute([$requestId]);
+            $db->prepare("DELETE FROM leave_approval WHERE leave_request_id = ?")->execute([$requestId]);
+            // 主檔
+            $db->prepare("DELETE FROM leave_request WHERE id = ?")->execute([$requestId]);
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            return ['ok' => false, 'msg' => '刪除失敗：' . $e->getMessage()];
+        }
+
+        // 實體附件檔（路徑一律即時組，鐵律5）
+        $filesDeleted = 0;
+        foreach ($atts as $a) {
+            $sub = $a['leave_request_id'] ? ('req_' . (int)$a['leave_request_id']) : ('temp_' . $a['upload_token']);
+            $dir = eg_leave_attach_dir($db, $sub);
+            if ($dir && $a['stored_name'] && is_file($dir . DIRECTORY_SEPARATOR . $a['stored_name'])) {
+                if (@unlink($dir . DIRECTORY_SEPARATOR . $a['stored_name'])) $filesDeleted++;
+            }
+        }
+        return ['ok' => true, 'msg' => sprintf('已徹底刪除請假單 #%d（通知 %d 則、附件 %d 個、簽核紀錄與行事曆事件已一併清除）',
+                                              $requestId, count($events), $filesDeleted)];
+    }
+}
+
 // ============================== 待簽清單 ==============================
 
 if (!function_exists('eg_leave_pending_for')) {

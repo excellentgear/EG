@@ -46,6 +46,20 @@ ok(strpos($src, '.scope-btn.on,.status-btn.on{background:var(--amber)') !== fals
 ok(strpos($src, "\$VIEW_ALL ? 'all' : 'mine'") !== false, '人事/管理員預設範圍＝全公司');
 ok(strpos($src, 'function syncFilterBtns') !== false, '按鈕選中狀態同步（則一選擇）');
 
+echo "== 列底色依狀態（2026-07-30 使用者要求）==\n";
+ok(strpos($src, '.lv-tbl tr.row-canceled > td{background:#FAE3E7;}') !== false, '已取消／撤回＝暖粉底');
+ok(strpos($src, '.lv-tbl tr.row-pending  > td{background:#FDF4E3;}') !== false, '審核中＝淺琥珀底');
+ok(strpos($src, '.lv-tbl tr.row-rejected > td{background:#FBE6DF;}') !== false, '已退回也有底色（淺赭）');
+ok(strpos($src, "{pending:'row-pending', rejected:'row-rejected', canceled:'row-canceled'}") !== false,
+   '列依狀態套用 class');
+ok(strpos($src, 'box-shadow:inset 3px 0 0 #DD5138') !== false, '左側色條加強區分（顏色非唯一資訊，狀態欄仍有文字）');
+
+echo "== 簽核流程／簽章軌跡不重複顯示 ==\n";
+ok(strpos($src, 'const hasExtraStep = recs.some(s => +s.step_no >= 98)') !== false, '有判斷是否有修改/撤回等額外動作');
+ok(strpos($src, 'const hasRepeat = ') !== false, '有判斷同層是否多筆（退回後重簽）');
+ok(strpos($src, 'if(recs.length && (hasExtraStep || hasRepeat || recs.length > decided))') !== false,
+   '軌跡只在比流程多出資訊時才顯示（單層一次決行不重複）');
+
 echo "== 待簽通知 mode=sign 與側欄路由 ==\n";
 $lib = file_get_contents('C:/MAMP/htdocs/EGsystem/src/common/leave_lib.php');
 ok(strpos($lib, "'sign', 'LEAVE_APPROVAL'") !== false, '待簽通知用 mode=sign + ref_type=LEAVE_APPROVAL');
