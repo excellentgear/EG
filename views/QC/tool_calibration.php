@@ -55,6 +55,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .tc-stat .s-lab { font-size:12px; color:#8a6d45; }
         .tc-stat .s-rate.below { color:#DD5138; }
         .tc-stat .s-rate.ok { color:#8A5A2B; }
+        .tc-stat-ops { display:flex; gap:6px; align-items:center; }
+        .tc-stat-ops button { height:30px; font-size:13px; line-height:1; padding:0 12px; border:1px solid #D8BE93;
+            border-radius:4px; background:#fff; color:#5b3a1e; cursor:pointer; }
+        .tc-stat-ops button:hover { background:#F7E0BD; }
         /* 類別分頁列（哪些類別要當分頁＝類別設定的 calib_tab） */
         .tc-tabs { display:flex; flex-wrap:wrap; gap:4px; align-items:flex-end; margin:0 0 8px;
             border-bottom:2px solid #E8D5B5; }
@@ -205,8 +209,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button class="btn-warm" id="btnBatch" style="display:none;"><i class="fa fa-check-square-o"></i> 批次校驗</button>
             <button id="btnBatchList"><i class="fa fa-list-alt"></i> 批次紀錄</button>
             <button class="btn-warm" id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增儀器</button>
-            <button id="btnYear"><i class="fa fa-calendar"></i> 年度紀錄／計畫表</button>
-            <button id="btnCycleSet" style="display:none;"><i class="fa fa-clock-o"></i> 週期批次設定</button>
             <button id="btnCfg" style="display:none;"><i class="fa fa-cog"></i> 設定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
@@ -219,6 +221,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><span class="s-num" id="stNum">—</span> <span class="s-lab">準時完成</span></div>
             <div><span class="s-num s-rate" id="stRate">—</span> <span class="s-lab">按時校驗率（目標 ≥95%）</span></div>
             <div class="s-lab" id="stHint" style="margin-left:auto;"></div>
+            <!-- 年度紀錄／計畫表、週期批次設定：與統計數字同一列（使用者 2026-07-30 指示） -->
+            <span class="tc-stat-ops">
+                <button id="btnYear"><i class="fa fa-calendar"></i> 年度紀錄／計畫表</button>
+                <button id="btnCycleSet" style="display:none;"><i class="fa fa-clock-o"></i> 週期批次設定</button>
+            </span>
         </div>
 
         <div class="tc-tabs" id="tcTabs"></div>
