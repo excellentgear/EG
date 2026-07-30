@@ -124,6 +124,23 @@ function tool_calib_ensure_schema(PDO $db): void {
         KEY idx_tool (Tool_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='校驗附件對應的量具編號(一對多)'");
 
+    // 校驗人員（內校）：品管部門底下具校驗人員資格者，由管理員在本頁「校驗人員資格」設定
+    $db->exec("CREATE TABLE IF NOT EXISTS qc_tool_calib_staff (
+        user_id INT NOT NULL PRIMARY KEY COMMENT 'user.id；具內校校驗人員資格',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='量測儀器內校校驗人員資格'");
+
+    // 校驗人員／外校廠商的可追溯欄位（顯示仍用 operator 字串，這裡多存來源 id）
+    foreach ([
+        "ALTER TABLE qc_tool_calibration ADD COLUMN operator_user_id INT NULL COMMENT '內校人員 user.id',
+         ADD COLUMN vendor_id VARCHAR(11) NULL COMMENT '外校廠商 maker_list.maker_id_no'",
+        "ALTER TABLE qc_tool_calib_batch ADD COLUMN operator_user_id INT NULL COMMENT '內校人員 user.id',
+         ADD COLUMN vendor_id VARCHAR(11) NULL COMMENT '外校廠商 maker_list.maker_id_no'",
+    ] as $sql) {
+        try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
+    }
+
     // 角色 seed（module='tool_calib'，供 user_permissions.php 指派）
     foreach ([['tool_calib_view','校驗唯讀'],['tool_calib_edit','校驗登錄'],['tool_calib_admin','校驗管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='tool_calib' LIMIT 1");
@@ -241,6 +258,164 @@ function tool_calib_status(array $tool, int $warnDays = 30): string {
     if ($dt < $today) return 'overdue';
     if ($dt <= $today + $warnDays * 86400) return 'soon';
     return 'ok';
+}
+
+/* ============================================================
+ * 校驗人員（內校）：品管部門沿用「異常單處置決策設定」已設好的部門，不另設一份
+ * ============================================================ */
+/** 品管部門 id（qa_system_settings.qa_qc_dept_ids）＋其所有子部門 */
+function tool_calib_qc_dept_ids(PDO $db): array {
+    $ids = [];
+    try {
+        $st = $db->prepare("SELECT setting_value FROM qa_system_settings WHERE setting_key='qa_qc_dept_ids'");
+        $st->execute();
+        $j = json_decode((string)$st->fetchColumn(), true);
+        if (is_array($j)) $ids = array_values(array_filter(array_map('intval', $j)));
+    } catch (Throwable $e) { return []; }
+    if (!$ids) return [];
+    // 展開子部門（最多 5 層，避免資料異常造成無限迴圈）
+    $all = $ids;
+    for ($lv = 0; $lv < 5; $lv++) {
+        $in = implode(',', array_map('intval', $ids));
+        $kids = $db->query("SELECT id FROM department WHERE parent_id IN ({$in})")->fetchAll(PDO::FETCH_COLUMN);
+        $kids = array_values(array_diff(array_map('intval', $kids), $all));
+        if (!$kids) break;
+        $all = array_merge($all, $kids);
+        $ids = $kids;
+    }
+    return $all;
+}
+
+/** 品管部門人員清單（含是否具校驗資格）；供設定畫面勾選 */
+function tool_calib_staff_candidates(PDO $db): array {
+    $depts = tool_calib_qc_dept_ids($db);
+    if (!$depts) return [];
+    $in = implode(',', array_map('intval', $depts));
+    $rows = $db->query("SELECT u.id, u.user_cname,
+                               MIN(d.name) AS dept_name, MIN(d.sort_order) AS dept_sort,
+                               (SELECT COUNT(*) FROM qc_tool_calib_staff s WHERE s.user_id=u.id) AS qualified
+                        FROM user_department_position_map m
+                        JOIN user u ON u.id=m.user_id
+                        LEFT JOIN department d ON d.id=m.department_id
+                        WHERE m.department_id IN ({$in}) AND COALESCE(u.user_status,0) <> 90
+                        GROUP BY u.id, u.user_cname
+                        ORDER BY dept_sort, u.id")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) { $r['id'] = (int)$r['id']; $r['qualified'] = ((int)$r['qualified'] > 0) ? 1 : 0; }
+    return $rows;
+}
+
+/** 具校驗人員資格者（內校人員下拉用；離職 user_status=90 不列） */
+function tool_calib_qualified_staff(PDO $db): array {
+    try {
+        $rows = $db->query("SELECT u.id, u.user_cname
+                            FROM qc_tool_calib_staff s JOIN user u ON u.id=s.user_id
+                            WHERE COALESCE(u.user_status,0) <> 90
+                            ORDER BY u.id")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    foreach ($rows as &$r) { $r['id'] = (int)$r['id']; }
+    return $rows;
+}
+
+/* ============================================================
+ * 年度校驗紀錄 / 年度校驗計畫表
+ * ============================================================ */
+/** 日期位移月份（可負；月底 clamp） */
+function tool_calib_shift_months(string $date, int $months): ?string {
+    $t = strtotime(substr($date, 0, 10));
+    if ($t === false) return null;
+    $y = (int)date('Y', $t); $m = (int)date('n', $t); $d = (int)date('j', $t);
+    $tm = ($y * 12 + ($m - 1)) + $months;
+    $y = intdiv($tm, 12); $m = ($tm % 12) + 1;
+    if ($m < 1) { $m += 12; $y -= 1; }
+    $last = (int)date('t', mktime(0, 0, 0, $m, 1, $y));
+    if ($d > $last) $d = $last;
+    return sprintf('%04d-%02d-%02d', $y, $m, $d);
+}
+
+/** 年度校驗紀錄（該年度完成的每一筆校驗；供查閱與列印） */
+function tool_calib_year_records(PDO $db, int $year): array {
+    $st = $db->prepare("SELECT c.calib_id, c.Tool_id, t.Tool_No, l.QC_Tool AS category_name,
+                               c.due_date, c.calib_date, c.result, c.method, c.operator, c.cert_no,
+                               c.next_due, c.note, c.batch_id, c.created_by_name,
+                               (SELECT COUNT(*) FROM qc_tool_calib_attach a
+                                 JOIN qc_tool_calib_attach_map mp ON mp.attach_id=a.attach_id
+                                WHERE a.status='active' AND a.batch_id=c.batch_id AND mp.Tool_id=c.Tool_id) AS attach_count
+                        FROM qc_tool_calibration c
+                        JOIN qc_tool t ON t.Tool_id=c.Tool_id
+                        LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=t.QC_Tool_List_id
+                        WHERE YEAR(c.calib_date)=? AND COALESCE(l.calib_required,1)=1
+                        ORDER BY c.calib_date, t.Tool_No");
+    $st->execute([$year]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * 年度校驗計畫表：每支納管量具在該年度各月的「應校驗(計畫)」與「實際完成」
+ * 計畫月份來源：①已完成/已排定紀錄的 due_date 落在該年度者 ②主檔 calibration_due 依週期往前後推算落在該年度者
+ * 回傳 [['Tool_No','category_name','cycle','months'=>[1..12 => ['plan'=>bool,'done'=>date|null,'result'=>..]]], ...]
+ */
+function tool_calib_year_plan(PDO $db, int $year): array {
+    $tools = $db->query("SELECT t.Tool_id, t.Tool_No, t.calibration_due, t.calib_cycle_months, t.calib_method,
+                                l.QC_Tool AS category_name, l.sort_order
+                         FROM qc_tool t LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=t.QC_Tool_List_id
+                         WHERE t.calib_managed=1 AND COALESCE(l.calib_required,1)=1
+                         ORDER BY l.sort_order, t.Tool_No")->fetchAll(PDO::FETCH_ASSOC);
+    if (!$tools) return [];
+
+    // 該年度相關紀錄（依 due_date 或 calib_date 落在該年度者）
+    $recs = [];
+    $st = $db->prepare("SELECT Tool_id, due_date, calib_date, result FROM qc_tool_calibration
+                        WHERE YEAR(due_date)=? OR YEAR(calib_date)=?");
+    $st->execute([$year, $year]);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { $recs[(int)$r['Tool_id']][] = $r; }
+
+    $out = [];
+    foreach ($tools as $t) {
+        $tid = (int)$t['Tool_id'];
+        $cycle = $t['calib_cycle_months'] !== null ? (int)$t['calib_cycle_months'] : 0;
+        $months = [];
+        for ($m = 1; $m <= 12; $m++) $months[$m] = ['plan'=>false, 'done'=>null, 'result'=>null, 'late'=>false];
+
+        // ① 紀錄：due_date 落在該年度 → 該月為計畫月，並帶入實際完成
+        foreach ($recs[$tid] ?? [] as $r) {
+            if (!empty($r['due_date']) && (int)substr($r['due_date'], 0, 4) === $year) {
+                $m = (int)substr($r['due_date'], 5, 2);
+                $months[$m]['plan'] = true;
+                if (!empty($r['calib_date'])) {
+                    $months[$m]['done'] = substr($r['calib_date'], 0, 10);
+                    $months[$m]['result'] = $r['result'];
+                    $months[$m]['late'] = substr($r['calib_date'], 0, 10) > substr($r['due_date'], 0, 10);
+                }
+            } elseif (!empty($r['calib_date']) && (int)substr($r['calib_date'], 0, 4) === $year) {
+                // 到期日不在本年度但完成日在本年度（提前/逾期補做）→ 完成標在完成月
+                $m = (int)substr($r['calib_date'], 5, 2);
+                if ($months[$m]['done'] === null) {
+                    $months[$m]['done'] = substr($r['calib_date'], 0, 10);
+                    $months[$m]['result'] = $r['result'];
+                }
+            }
+        }
+        // ② 主檔到期日依週期推算落在該年度者（尚未完成的計畫）
+        $anchor = $t['calibration_due'] ? substr($t['calibration_due'], 0, 10) : null;
+        if ($anchor) {
+            if ($cycle > 0) {
+                $d = $anchor; $guard = 0;
+                while ((int)substr($d, 0, 4) > $year && $guard++ < 200) $d = tool_calib_shift_months($d, -$cycle);
+                $guard = 0;
+                while ((int)substr($d, 0, 4) < $year && $guard++ < 200) $d = tool_calib_shift_months($d, $cycle);
+                $guard = 0;
+                while ((int)substr($d, 0, 4) === $year && $guard++ < 60) {
+                    $months[(int)substr($d, 5, 2)]['plan'] = true;
+                    $d = tool_calib_shift_months($d, $cycle);
+                }
+            } elseif ((int)substr($anchor, 0, 4) === $year) {
+                $months[(int)substr($anchor, 5, 2)]['plan'] = true;
+            }
+        }
+        $out[] = ['Tool_id'=>$tid, 'Tool_No'=>$t['Tool_No'], 'category_name'=>$t['category_name'],
+                  'cycle'=>$cycle ?: null, 'method'=>$t['calib_method'], 'months'=>$months];
+    }
+    return $out;
 }
 
 /* ============================================================
