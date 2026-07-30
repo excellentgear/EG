@@ -1650,25 +1650,75 @@ $(function(){
         it.readings[r].vals[s] = (cur==='NG') ? 'OK' : 'NG';
         paintCell($(this)); recalc(); scheduleDraftSave();
     });
-    // 鍵盤導航：Enter/→ 下一格、← 上一格、↓↑ 同件切換項目（總表）或切換項目/件（專注模式）
-    $(document).on('keydown', '.mval', function(e){
-        var k=e.key;
-        if(k!=='Enter' && k!=='ArrowRight' && k!=='ArrowLeft' && k!=='ArrowUp' && k!=='ArrowDown') return;
-        var $cells=$('.view-pane:visible').find('.mval');
-        var idx=$cells.index(this);
-        if(k==='Enter' || k==='ArrowRight'){
-            e.preventDefault();
-            if(idx < $cells.length-1){ $cells.eq(idx+1).focus(); }
-            else { autoAdvance(); }
-        } else if(k==='ArrowLeft'){ e.preventDefault(); if(idx>0) $cells.eq(idx-1).focus(); }
-        else if(k==='ArrowDown' || k==='ArrowUp'){
-            e.preventDefault();
-            var s=+$(this).data('s'), step=(k==='ArrowDown'?1:-1);
-            var $col=$('.view-pane:visible').find('.mval[data-s="'+s+'"]');
-            var ci=$col.index(this), ni=ci+step;
-            if(ni>=0 && ni<$col.length) $col.eq(ni).focus();
-            else if(view!=='GRID') autoAdvance(step);
+    // ============ 鍵盤導航（全頁統一，符合專案 UI 規範：Enter 跳下一欄） ============
+    // 涵蓋範圍：量測格、OK/NG 格、總表「編輯標準」的項目名稱/標準值/上下公差、逐項的本項備註。
+    // （原本只有量測格有導航，填標準欄按 Enter 沒反應 → 2026-07-29 現場回饋修正）
+    var NAV_SEL = 'input.mval, input.table-input, input.f-remark, .mcell.okng';
+    function navPane(el){
+        var $p = $(el).closest('.view-pane');
+        return $p.length ? $p : $('.view-pane').filter(':visible').first();
+    }
+    function navList(el){
+        return navPane(el).find(NAV_SEL).filter(':visible')
+                 .filter(function(){ return !(this.readOnly || this.disabled); });
+    }
+    function navGo($list, idx){
+        if(idx>=0 && idx<$list.length){ $list.eq(idx).focus(); return true; }
+        return false;
+    }
+    // ←→ 只有在游標已經到字首/字尾時才跳格，否則留給瀏覽器移動游標（才改得動中間的字）
+    function caretAtEnd(el){
+        try{ return el.selectionStart===el.selectionEnd && el.selectionEnd===String(el.value).length; }catch(_){ return true; }
+    }
+    function caretAtStart(el){
+        try{ return el.selectionStart===0 && el.selectionEnd===0; }catch(_){ return true; }
+    }
+    $(document).on('keydown', NAV_SEL, function(e){
+        var k=e.key||'', code=e.keyCode||0, self=this, $self=$(this);
+        var isEnter=(k==='Enter'||code===13), isRight=(k==='ArrowRight'||code===39),
+            isLeft =(k==='ArrowLeft'||code===37), isDown=(k==='ArrowDown'||code===40),
+            isUp   =(k==='ArrowUp'||code===38);
+        if(!isEnter && !isRight && !isLeft && !isDown && !isUp){
+            if((k===' '||code===32) && $self.hasClass('okng')){ e.preventDefault(); $self.trigger('click'); }
+            return;
         }
+        var $list=navList(this), idx=$list.index(this);
+        if(idx<0) return;
+        if(this.tagName==='INPUT' && isRight && !caretAtEnd(this)) return;
+        if(this.tagName==='INPUT' && isLeft  && !caretAtStart(this)) return;
+
+        if(isEnter || isRight){
+            e.preventDefault();
+            if(!navGo($list, idx+1)){
+                if(view!=='GRID') autoAdvance(1);
+                else $('#btn-save').focus();     // 最後一欄 → 焦點交給儲存鈕（不自動送出，避免誤存）
+            }
+            return;
+        }
+        if(isLeft){ e.preventDefault(); navGo($list, idx-1); return; }
+
+        // ↑↓：量測格＝同一件的上下項目；標準欄＝同一欄的上下列
+        e.preventDefault();
+        var step = isDown ? 1 : -1;
+        if($self.hasClass('mval') || $self.hasClass('okng')){
+            var s=$self.attr('data-s');
+            var $col=navPane(this).find('.mval[data-s="'+s+'"], .mcell.okng[data-s="'+s+'"]').filter(':visible');
+            if(!navGo($col, $col.index(this)+step) && view!=='GRID') autoAdvance(step);
+        } else {
+            var cls=null;
+            ['f-name','f-std','f-up','f-lo','f-remark'].forEach(function(c){ if($(self).hasClass(c)) cls=c; });
+            if(cls){
+                var $col2=navPane(this).find('input.'+cls).filter(':visible');
+                navGo($col2, $col2.index(this)+step);
+            }
+        }
+    });
+    // 標準欄也套用「聚焦全選」，跟量測格一致
+    $(document).on('focus', 'input.table-input, input.f-remark', function(){
+        var el=this; setTimeout(function(){ try{ el.select(); }catch(_){ } }, 0);
+    });
+    $(document).on('focus', '.mcell.okng', function(){
+        $('.mcell').removeClass('focus-on'); $(this).addClass('focus-on');
     });
     // 專注模式：最後一格填完自動翻到下一項/下一件
     function autoAdvance(step){
@@ -1681,7 +1731,11 @@ $(function(){
             if(m>=0 && m<state.sampleN){ focusPcs=m; renderPcsView(); recalc(); focusFirstCell(); }
         }
     }
-    function focusFirstCell(){ setTimeout(function(){ $('.view-pane:visible').find('.mval').first().focus(); }, 30); }
+    function focusFirstCell(){
+        setTimeout(function(){
+            $('.view-pane').filter(':visible').first().find('input.mval, .mcell.okng').first().focus();
+        }, 30);
+    }
 
     // 膠囊/導航切換
     $(document).on('click', '.jump-item', function(){ focusItem=+$(this).data('ix'); renderItemView(); recalc(); });
@@ -1833,14 +1887,15 @@ $(function(){
     $('#keypad').on('mousedown', 'button', function(e){ e.preventDefault(); });   // 不奪走輸入焦點
     $('#keypad').on('click','button', function(){
         var k=$(this).data('k');
-        var el=lastFocused && document.body.contains(lastFocused) ? lastFocused : $('.view-pane:visible').find('.mval').get(0);
+        var el=lastFocused && document.body.contains(lastFocused) ? lastFocused
+             : $('.view-pane').filter(':visible').first().find('input.mval').get(0);
         if(!el){ return; }
         var $el=$(el), v=$el.val();
         if(k==='BS') v=v.slice(0,-1);
         else if(k==='CL') v='';
         else if(k==='OK'||k==='NEXT'){
-            var $cells=$('.view-pane:visible').find('.mval'), idx=$cells.index(el);
-            if(idx<$cells.length-1) $cells.eq(idx+1).focus(); else autoAdvance();
+            var $cells=navList(el), idx=$cells.index(el);
+            if(!navGo($cells, idx+1)) autoAdvance(1);
             return;
         }
         else if(k==='-'){ v = (v.charAt(0)==='-') ? v.slice(1) : ('-'+v); }
