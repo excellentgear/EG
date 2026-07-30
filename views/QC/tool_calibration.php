@@ -110,6 +110,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         table.hist { width:100%; border-collapse:collapse; font-size:12px; }
         table.hist th, table.hist td { border:1px solid #EADFC8; padding:4px 6px; text-align:center; }
         table.hist thead th { background:#F7E0BD; color:#5b3a1e; }
+        .ck-all-lab { font-weight:normal; font-size:11px; color:#8a6d45; margin:0; cursor:pointer; }
+        table.hist td select.sel-grp { font-size:12px; border:1px solid #D8BE93; border-radius:4px; padding:2px 4px; max-width:150px; }
+        .tab-chip { border:1px solid #D8BE93; border-radius:12px; padding:2px 8px; background:#fff; color:#5b3a1e; }
+        .tab-chip i { cursor:pointer; color:#b5762a; margin-left:5px; }
+        .tab-chip i.del { color:#DD5138; }
         .tc-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
         @media print {
@@ -266,11 +271,25 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <a href="inspection_combined_prototype.php" target="_blank" style="color:#b5762a;">線上檢驗－量具設定</a>（本頁不重複提供）。<br>
             <b>需校驗</b>：不是實體量具、只是檢驗方式者（例如「目視」）請取消勾選，其量具不會出現在本頁、也不列入 KPI。<br>
             <b>可設定量具編號</b>：取消後該類別不能再新增／移入量具編號。<br>
-            <b>列入分頁</b>：勾選者會在清單上方出現專屬分頁；需先勾「需校驗」才能設定，未列入分頁者歸在「其他」分頁。
+            <b>列入分頁</b>：勾選者會在清單上方出現專屬分頁；需先勾「需校驗」才能設定，未列入分頁者歸在「其他」分頁。<br>
+            <b>分頁名稱</b>：選「（自成一頁）」＝用類別名當分頁；也可把數個類別指到同一個自訂分頁合併顯示。
         </div>
-        <div style="max-height:46vh;overflow-y:auto;">
+        <div style="border:1px solid #EADFC8;border-radius:6px;padding:8px 10px;margin-bottom:8px;background:#FDF8EF;">
+            <div style="font-size:12px;color:#5b3a1e;margin-bottom:6px;">
+                <b>自訂分頁</b>（例如新增「分厘卡」，再把盤式／跨珠／針狀／外徑／珠徑分厘卡都指到它）
+                <a href="#" onclick="addTab();return false;" style="color:#b5762a;margin-left:8px;"><i class="fa fa-plus"></i> 新增分頁</a>
+            </div>
+            <div id="tabChips" style="display:flex;flex-wrap:wrap;gap:6px;font-size:12px;"></div>
+        </div>
+        <div style="max-height:42vh;overflow-y:auto;">
         <table class="hist" id="catTable">
-            <thead><tr><th style="text-align:left;">類別</th><th>量具數</th><th>需校驗</th><th>可設定量具編號</th><th>列入分頁</th></tr></thead>
+            <thead><tr>
+                <th style="text-align:left;">類別</th><th>量具數</th>
+                <th>需校驗<br><label class="ck-all-lab"><input type="checkbox" class="ck-all" data-col="req"> 全選</label></th>
+                <th>可設定量具編號<br><label class="ck-all-lab"><input type="checkbox" class="ck-all" data-col="hasno"> 全選</label></th>
+                <th>列入分頁<br><label class="ck-all-lab"><input type="checkbox" class="ck-all" data-col="tab"> 全選</label></th>
+                <th>分頁名稱</th>
+            </tr></thead>
             <tbody id="catBody"></tbody>
         </table>
         </div>
@@ -312,7 +331,7 @@ $(document).ready(function(){
 });
 
 var API = '../../src/store/ToolCalib_API.php';
-var META = null, ROWS = [], PERMS = null, CATS = [];
+var META = null, ROWS = [], PERMS = null, CATS = [], TABS_DEF = [];
 var curTab = '';   // 目前分頁：'' 全部 ｜ 類別id ｜ 'other' 其他（需校驗但未設為分頁）
 var canView = <?= $perms['canView'] ? 'true' : 'false' ?>;
 var RESULT_LABEL = {pass:'合格', pass_adjust:'校正後合格', fail:'不合格'};
@@ -329,6 +348,7 @@ function loadMeta(cb){
         if (!m.ok){ alert(m.error||'載入失敗'); return; }
         META = m; PERMS = m.perms;
         $('#ymSel').val(m.cur_ym);
+        TABS_DEF = m.tabs || [];
         setCats(m.categories);
         if (m.perms.canAdmin) { $('#btnAdd').show(); $('#btnCatSet').show(); }
         if (cb) cb();
@@ -353,6 +373,7 @@ function loadList(){
         NProgress.done();
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         ROWS = res.rows; PERMS = res.perms;
+        if (res.tabs) TABS_DEF = res.tabs;
         if (res.categories) setCats(res.categories); else renderTabs();
         $('#tcExcluded').text(res.excluded > 0
             ? '　另有 '+res.excluded+' 支量具所屬類別未設為「需校驗」，未列入本頁與 KPI。' : '');
@@ -361,27 +382,53 @@ function loadList(){
     }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
-/* ---------- 類別分頁列 ---------- */
-function tabCats(){ return CATS.filter(function(c){ return c.calib_required===1 && c.calib_tab===1; }); }
+/* ---------- 類別分頁列（自成一頁＝類別名；合併分頁＝自訂名稱含數個類別） ---------- */
+var TABS = [];      // [{key, name, catIds:[], ord}]
+function buildTabs(){
+    var reqCats = CATS.filter(function(c){ return c.calib_required===1 && c.calib_tab===1; });
+    var out = [];
+    // 1) 自訂合併分頁（有成員才出現）
+    TABS_DEF.forEach(function(t){
+        var mem = reqCats.filter(function(c){ return Number(c.calib_tab_group) === Number(t.tab_id); });
+        if (!mem.length) return;
+        out.push({key:'g'+t.tab_id, name:t.tab_name,
+                  catIds:mem.map(function(c){ return String(c.QC_Tool_List_id); }),
+                  ord:Math.min.apply(null, mem.map(function(c){ return Number(c.sort_order)||0; }))});
+    });
+    // 2) 自成一頁（未指定合併分頁者）
+    reqCats.forEach(function(c){
+        if (c.calib_tab_group) return;
+        out.push({key:String(c.QC_Tool_List_id), name:c.QC_Tool,
+                  catIds:[String(c.QC_Tool_List_id)], ord:Number(c.sort_order)||0});
+    });
+    out.sort(function(a,b){ return a.ord - b.ord; });
+    return out;
+}
+function tabbedCatIds(){
+    var s = [];
+    TABS.forEach(function(t){ t.catIds.forEach(function(id){ if (s.indexOf(id)<0) s.push(id); }); });
+    return s;
+}
 function renderTabs(){
-    var tabs = tabCats(), tabIds = tabs.map(function(c){ return String(c.QC_Tool_List_id); });
-    var cnt = {}, other = 0;
+    TABS = buildTabs();
+    var inTab = tabbedCatIds(), cnt = {}, other = 0;
     ROWS.forEach(function(r){
         var k = String(r.QC_Tool_List_id);
         cnt[k] = (cnt[k]||0) + 1;
-        if (tabIds.indexOf(k) < 0) other++;
+        if (inTab.indexOf(k) < 0) other++;
     });
-    // 目前分頁若被取消設定 → 回到全部
-    if (curTab !== '' && curTab !== 'other' && tabIds.indexOf(curTab) < 0) curTab = '';
+    // 目前分頁若被取消設定/刪除 → 回到全部
+    if (curTab !== '' && curTab !== 'other' && !TABS.some(function(t){ return t.key===curTab; })) curTab = '';
     var h = '<div class="tab'+(curTab===''?' active':'')+'" data-tab="">全部<span class="cnt">'+ROWS.length+'</span></div>';
-    tabs.forEach(function(c){
-        var id = String(c.QC_Tool_List_id);
-        h += '<div class="tab'+(curTab===id?' active':'')+'" data-tab="'+id+'">'+esc(c.QC_Tool)
-           + '<span class="cnt">'+(cnt[id]||0)+'</span></div>';
+    TABS.forEach(function(t){
+        var n = 0;
+        t.catIds.forEach(function(id){ n += (cnt[id]||0); });
+        h += '<div class="tab'+(curTab===t.key?' active':'')+'" data-tab="'+t.key+'">'+esc(t.name)
+           + '<span class="cnt">'+n+'</span></div>';
     });
     if (other > 0 || curTab === 'other')
         h += '<div class="tab'+(curTab==='other'?' active':'')+'" data-tab="other">其他<span class="cnt">'+other+'</span></div>';
-    if (!tabs.length)
+    if (!TABS.length)
         h += '<span class="tab-hint">尚未設定分頁類別'+((PERMS&&PERMS.canAdmin)?'，可按工具列「類別設定」勾選':'')+'</span>';
     $('#tcTabs').html(h);
 }
@@ -406,11 +453,12 @@ function statPill(s){ return '<span class="st-pill st-'+s+'">'+(STATUS_LABEL[s]|
 var tcPage = 1;
 function filteredRows(){
     var stt = $('#statSel').val(), kw = $.trim($('#kwSel').val()).toLowerCase();
-    var tabIds = tabCats().map(function(c){ return String(c.QC_Tool_List_id); });
+    var inTab = tabbedCatIds();
+    var cur = TABS.filter(function(t){ return t.key===curTab; })[0];
     return ROWS.filter(function(r){
         var cid = String(r.QC_Tool_List_id);
-        if (curTab === 'other') { if (tabIds.indexOf(cid) >= 0) return false; }
-        else if (curTab !== '' && cid !== curTab) return false;
+        if (curTab === 'other') { if (inTab.indexOf(cid) >= 0) return false; }
+        else if (curTab !== '' && (!cur || cur.catIds.indexOf(cid) < 0)) return false;
         if (stt === 'managed' && r.calib_managed!==1) return false;
         if (stt && stt!=='managed' && r.status!==stt) return false;
         if (kw && String(r.Tool_No).toLowerCase().indexOf(kw)<0) return false;
@@ -553,43 +601,142 @@ function submitSet(){
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
-/* ---------- 類別設定（管理員；只改校驗屬性旗標） ---------- */
-$('#btnCatSet').on('click', function(){
+/* ---------- 類別設定（管理員；校驗屬性旗標＋自訂合併分頁） ---------- */
+/** 讀取 modal 目前畫面上的勾選狀態（新增/刪除分頁後重繪時保留未存的編輯） */
+function collectCatUI(){
+    var st = {};
+    $('#catBody tr[data-id]').each(function(){
+        var $tr = $(this);
+        st[String($tr.attr('data-id'))] = {
+            req:  $tr.find('.ck-req').prop('checked') ? 1 : 0,
+            hasNo:$tr.find('.ck-hasno').prop('checked') ? 1 : 0,
+            tab:  $tr.find('.ck-tab').prop('checked') ? 1 : 0,
+            grp:  $tr.find('.sel-grp').val() || ''
+        };
+    });
+    return st;
+}
+function grpOptions(sel){
+    var h = '<option value="">（自成一頁）</option>';
+    TABS_DEF.forEach(function(t){
+        h += '<option value="'+t.tab_id+'"'+(String(sel)===String(t.tab_id)?' selected':'')+'>'+esc(t.tab_name)+'</option>';
+    });
+    return h;
+}
+function renderCatBody(state){
     var h = CATS.map(function(c){
-        var req = c.calib_required===1, hasNo = c.has_tool_no===1, tab = (c.calib_tab===1 && req);
-        return '<tr data-id="'+c.QC_Tool_List_id+'">'
+        var id = String(c.QC_Tool_List_id), s = state && state[id];
+        var req   = s ? s.req===1   : c.calib_required===1;
+        var hasNo = s ? s.hasNo===1 : c.has_tool_no===1;
+        var tab   = (s ? s.tab===1  : c.calib_tab===1) && req;
+        var grp   = s ? s.grp : (c.calib_tab_group || '');
+        if (grp && !TABS_DEF.some(function(t){ return String(t.tab_id)===String(grp); })) grp = '';   // 分頁已被刪除
+        return '<tr data-id="'+id+'">'
             + '<td style="text-align:left;">'+esc(c.QC_Tool)+'</td>'
             + '<td>'+c.tool_cnt+(c.managed_cnt>0 ? '（納管 '+c.managed_cnt+'）' : '')+'</td>'
             + '<td><input type="checkbox" class="ck-req"'+(req?' checked':'')+'></td>'
             + '<td><input type="checkbox" class="ck-hasno"'+(hasNo?' checked':'')+'></td>'
             + '<td><input type="checkbox" class="ck-tab"'+(tab?' checked':'')+(req?'':' disabled')+'></td>'
+            + '<td><select class="sel-grp"'+(tab?'':' disabled')+'>'+grpOptions(tab?grp:'')+'</select></td>'
             + '</tr>';
     }).join('');
-    $('#catBody').html(h || '<tr><td colspan="5" style="color:#8a6d45;padding:12px;">尚無量具類別</td></tr>');
-    openMask('catMask');
+    $('#catBody').html(h || '<tr><td colspan="6" style="color:#8a6d45;padding:12px;">尚無量具類別</td></tr>');
+    syncCkAll();
+}
+function renderTabChips(){
+    var h = TABS_DEF.map(function(t){
+        return '<span class="tab-chip" data-id="'+t.tab_id+'">'+esc(t.tab_name)
+             + '（'+t.cat_cnt+' 類）<i class="fa fa-pencil" title="改名"></i>'
+             + '<i class="fa fa-trash del" title="刪除（成員類別退回自成一頁）"></i></span>';
+    }).join('');
+    $('#tabChips').html(h || '<span style="color:#8a6d45;">尚未建立自訂分頁（每個勾選的類別各自一頁）</span>');
+}
+$('#btnCatSet').on('click', function(){ renderTabChips(); renderCatBody(null); openMask('catMask'); });
+
+/** 單欄全選／全不選；「列入分頁」只作用在有勾「需校驗」的列 */
+$('#catTable').on('change', '.ck-all', function(){
+    var col = $(this).attr('data-col'), on = this.checked;
+    $('#catBody tr[data-id]').each(function(){
+        var $tr = $(this);
+        if (col === 'req')        $tr.find('.ck-req').prop('checked', on);
+        else if (col === 'hasno') $tr.find('.ck-hasno').prop('checked', on);
+        else if ($tr.find('.ck-req').prop('checked')) $tr.find('.ck-tab').prop('checked', on);
+        syncCatRow($tr);
+    });
 });
-// 取消「需校驗」→ 同時鎖住並取消「列入分頁」
-$('#catBody').on('change', '.ck-req', function(){
-    var $tr = $(this).closest('tr'), on = this.checked;
-    $tr.find('.ck-tab').prop('disabled', !on);
-    if (!on) $tr.find('.ck-tab').prop('checked', false);
+/** 單列連動：需校驗→列入分頁→分頁名稱，逐層鎖住 */
+function syncCatRow($tr){
+    var req = $tr.find('.ck-req').prop('checked');
+    $tr.find('.ck-tab').prop('disabled', !req);
+    if (!req) $tr.find('.ck-tab').prop('checked', false);
+    var tab = $tr.find('.ck-tab').prop('checked');
+    $tr.find('.sel-grp').prop('disabled', !tab);
+    if (!tab) $tr.find('.sel-grp').val('');
+}
+/** 表頭全選框狀態跟著列的實際勾選數走 */
+function syncCkAll(){
+    var n = $('#catBody tr[data-id]').length;
+    [['req','.ck-req'],['hasno','.ck-hasno'],['tab','.ck-tab']].forEach(function(p){
+        var c = $('#catBody '+p[1]+':checked').length;
+        $('#catTable .ck-all[data-col="'+p[0]+'"]').prop('checked', n>0 && c===n);
+    });
+}
+$('#catBody').on('change', '.ck-req, .ck-tab', function(){ syncCatRow($(this).closest('tr')); syncCkAll(); });
+$('#catBody').on('change', '.ck-hasno', syncCkAll);
+
+/* 自訂分頁：新增／改名／刪除（即時寫 DB，畫面上未存的勾選會保留） */
+function addTab(){
+    var name = prompt('新增分頁名稱（例：分厘卡）：');
+    if (name === null) return;
+    name = $.trim(name);
+    if (!name) return;
+    saveTab(0, name);
+}
+function saveTab(tabId, name){
+    var st = collectCatUI();
+    $.post(API, {action:'save_tab', tab_id:tabId, name:name}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        TABS_DEF = res.tabs; CATS = res.categories;
+        renderTabChips(); renderCatBody(st); renderTabs();
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+$('#tabChips').on('click', '.fa-pencil', function(){
+    var $c = $(this).closest('.tab-chip'), id = $c.attr('data-id');
+    var t = TABS_DEF.filter(function(x){ return String(x.tab_id)===String(id); })[0] || {};
+    var name = prompt('分頁改名：', t.tab_name || '');
+    if (name === null) return;
+    name = $.trim(name);
+    if (!name) return;
+    saveTab(id, name);
 });
+$('#tabChips').on('click', '.fa-trash', function(){
+    var id = $(this).closest('.tab-chip').attr('data-id');
+    if (!confirm('刪除此自訂分頁？（原本指到它的類別會退回「自成一頁」，量具資料不受影響）')) return;
+    var st = collectCatUI();
+    $.post(API, {action:'delete_tab', tab_id:id}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+        TABS_DEF = res.tabs; CATS = res.categories;
+        renderTabChips(); renderCatBody(st); renderTabs();
+    }, 'json').fail(function(x){ alert('刪除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+});
+
 function submitCats(){
     var items = [], warn = [];
-    $('#catBody tr').each(function(){
+    $('#catBody tr[data-id]').each(function(){
         var $tr = $(this), id = $tr.attr('data-id');
-        if (!id) return;
-        var c = CATS.find(function(x){ return String(x.QC_Tool_List_id)===String(id); }) || {};
+        var c = CATS.filter(function(x){ return String(x.QC_Tool_List_id)===String(id); })[0] || {};
         var req = $tr.find('.ck-req').prop('checked') ? 1 : 0;
         if (!req && (c.managed_cnt||0) > 0) warn.push('・'+c.QC_Tool+'（'+c.managed_cnt+' 支已納管）');
         items.push({id:id, calib_required:req,
                     has_tool_no:$tr.find('.ck-hasno').prop('checked')?1:0,
-                    calib_tab:$tr.find('.ck-tab').prop('checked')?1:0});
+                    calib_tab:$tr.find('.ck-tab').prop('checked')?1:0,
+                    calib_tab_group:$tr.find('.sel-grp').val() || 0});
     });
     if (warn.length && !confirm('下列類別取消「需校驗」後，其已納管量具將不再顯示於本頁、也不計入 KPI：\n'
         + warn.join('\n') + '\n\n確定儲存？')) return;
     $.post(API, {action:'save_categories', items: JSON.stringify(items)}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        if (res.tabs) TABS_DEF = res.tabs;
         setCats(res.categories); closeMask('catMask'); loadList();
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
