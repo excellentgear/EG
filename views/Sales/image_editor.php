@@ -301,6 +301,16 @@ try {
     }
 } catch (Exception $e) {}
 
+// 料號附件標籤（quotation_file_categories）：存檔時必須指定，否則批圖輸出的 PNG 會變成
+// 「無標籤附件」——舊版就是這樣，導致 74/216 筆附件沒標籤，圖面／報價分不出來，
+// 後續「圖面是不是改過」的判定也跑不動（見 ai-rules/15-圖面變更判定依據.md）。
+$attachCats = [];
+try {
+    if (isset($pdo) && $pdo) {
+        $attachCats = $pdo->query("SELECT id, category_name FROM quotation_file_categories WHERE is_active=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (Exception $e) {}
+
 // ── AJAX：標籤庫（公司共用/部門/私人三層）＋ 印章人員設定 ─────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json; charset=utf-8');
@@ -553,6 +563,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $shareIds = array_values(array_unique(array_map('intval', $shareIds)));
             $deptId = (int)($_POST['dept_id'] ?? 0);
             if ($scope === 'dept' && (!$deptId || !in_array($deptId, $myDeptIds, true))) $deptId = $myDeptIds[0] ?? 0;
+            // 附件標籤（必填）：只收現存且啟用中的類別 id，避免前端亂送
+            $catIds = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)($_POST['category_ids'] ?? ''))))));
+            if ($catIds) {
+                $validIds = array_map(fn($c) => (int)$c['id'], $attachCats);
+                $catIds = array_values(array_intersect($catIds, $validIds));
+            }
+            if (!$catIds) throw new Exception('請至少選擇一個附件標籤（圖面／報價之後全靠它分類）');
+            $catStr = implode(',', $catIds);
             if ($dId <= 0) throw new Exception('請先選擇料號');
             if (strpos($png, 'data:image/png;base64,') !== 0) throw new Exception('圖檔資料異常');
             if (json_decode($work) === null) throw new Exception('工作檔資料異常');
@@ -571,11 +589,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $workFile = 'egdraw_' . $stamp . '.egwork.json';
             if (@file_put_contents($dir . DIRECTORY_SEPARATOR . $workFile, json_encode($workArr, JSON_UNESCAPED_UNICODE)) === false) throw new Exception('工作檔寫入失敗');
             $pdo->beginTransaction();
-            $ins = $pdo->prepare("INSERT INTO part_attachments (d_id, filename, original_name, note, uploaded_by, uploaded_by_id, uploaded_at)
-                                  VALUES (?, ?, ?, ?, ?, ?, NOW())");
-            $ins->execute([$dId, $pngFile, $name . '.png', '批圖編輯器輸出圖', $userName, $uid]);
+            $ins = $pdo->prepare("INSERT INTO part_attachments (d_id, filename, original_name, category_ids, note, uploaded_by, uploaded_by_id, uploaded_at)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
+            // 輸出 PNG 帶使用者選的標籤；工作檔不給標籤（它不是圖面，且檢視端一律不列，見 imgedit_strip_workfiles）
+            $ins->execute([$dId, $pngFile, $name . '.png', $catStr, '批圖編輯器輸出圖', $userName, $uid]);
             $pngId = $pdo->lastInsertId();
-            $ins->execute([$dId, $workFile, $name . '.egwork.json', '批圖工作檔（可用批圖編輯器重新開啟，標籤仍可編輯）', $userName, $uid]);
+            $ins->execute([$dId, $workFile, $name . '.egwork.json', null, '批圖工作檔（可用批圖編輯器重新開啟，標籤仍可編輯）', $userName, $uid]);
             $workId = $pdo->lastInsertId();
             $pdo->prepare("INSERT INTO imgedit_workfile_meta (attachment_id, owner_type, owner_dept_id) VALUES (?, ?, ?)")
                 ->execute([$workId, $scope, ($scope === 'dept' && $deptId) ? $deptId : null]);
@@ -1458,6 +1477,18 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <input type="text" id="pf-name" style="flex:1;">
                 <button class="tb-btn primary" onclick="pfSave()"><i class="fa fa-save"></i> 儲存</button>
             </div>
+            <div class="frm-row" style="align-items:flex-start;"><label>附件標籤 <span style="color:#ff8a80;">*</span></label>
+                <div style="flex:1;">
+                    <div id="pf-cats" style="max-height:96px;overflow-y:auto;border:1px solid #45494f;border-radius:4px;padding:5px 6px;">
+                        <?php foreach ($attachCats as $c): ?>
+                        <label style="display:inline-flex;align-items:center;gap:4px;margin:2px 10px 2px 0;font-size:12.5px;cursor:pointer;font-weight:normal;">
+                            <input type="checkbox" class="pf-cat" value="<?= (int)$c['id'] ?>" onchange="pfRenderCatHint()"><?= htmlspecialchars($c['category_name'], ENT_QUOTES, 'UTF-8') ?>
+                        </label>
+                        <?php endforeach; ?>
+                    </div>
+                    <div id="pf-cat-hint" style="font-size:11.5px;color:#ff8a80;margin-top:3px;">尚未選擇標籤——存下去會變成分不出圖面／報價的無標籤附件</div>
+                </div>
+            </div>
             <div class="frm-row"><label>分享範圍</label>
                 <select id="pf-scope" style="flex:1;" onchange="pfOnScopeChange()">
                     <option value="private">私人（只有自己看得到）</option>
@@ -1471,7 +1502,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <div id="pf-share-list" style="max-height:130px;overflow-y:auto;border:1px solid #45494f;border-radius:4px;padding:6px;">載入中…</div>
             </div>
             <div style="font-size:11.5px;color:#8b949e;margin-bottom:10px;">
-                會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔沒有「全公司共用」，避免所有人都能改到；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。
+                會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印，上面選的<b>附件標籤掛在它身上</b>）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔不是圖面、只有這個編輯器打得開，所以<b>不會出現在圖面檢視跳窗</b>裡，也不需要標籤。工作檔沒有「全公司共用」，避免所有人都能改到；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。
             </div>
             <hr style="border-color:#3c4046;margin:10px 0;">
             <div style="font-weight:700;color:#6fc3ff;font-size:12.5px;margin-bottom:6px;"><i class="fa fa-folder-open-o"></i> 開啟此料號的批圖工作檔</div>
@@ -5591,6 +5622,8 @@ function doPrintVector() {
 function openPartModal() {
     document.getElementById('pf-name').value = defaultFileName();
     document.getElementById('pf-scope').value = 'dept';
+    document.querySelectorAll('.pf-cat').forEach(c => { c.checked = false; });
+    pfRenderCatHint();
     pfShareSelected = new Set();
     document.getElementById('pf-share-q').value = '';
     const pd = document.getElementById('pf-dept');
@@ -5599,6 +5632,23 @@ function openPartModal() {
     pfOnScopeChange();
     showModal('partfile-modal');
     document.getElementById('pf-q').focus();
+}
+/* 附件標籤：邊選邊回饋（錯誤即時顯示原因，CLAUDE.md 表單三總則③） */
+function pfSelectedCats() {
+    return Array.from(document.querySelectorAll('.pf-cat:checked')).map(c => c.value);
+}
+function pfRenderCatHint() {
+    const sel = pfSelectedCats(), hint = document.getElementById('pf-cat-hint'), box = document.getElementById('pf-cats');
+    if (sel.length) {
+        const names = Array.from(document.querySelectorAll('.pf-cat:checked')).map(c => c.parentElement.textContent.trim());
+        hint.style.color = '#7ed957';
+        hint.textContent = '已選：' + names.join('、');
+        box.style.borderColor = '#45494f';
+    } else {
+        hint.style.color = '#ff8a80';
+        hint.textContent = '尚未選擇標籤——存下去會變成分不出圖面／報價的無標籤附件';
+        box.style.borderColor = '#ff8a80';
+    }
 }
 /* 範圍切換：部門→顯示部門下拉；指定人員→顯示搜尋+勾選名單（延遲載入使用者清單） */
 let pfAllUsers = null, pfShareSelected = new Set();
@@ -5674,6 +5724,8 @@ async function pfSave() {
     const name = document.getElementById('pf-name').value.trim() || defaultFileName();
     const scope = document.getElementById('pf-scope').value;
     if (scope === 'custom' && !pfShareSelected.size) { toast('請至少勾選一位要分享的人員，或改選別的範圍'); return; }
+    const cats = pfSelectedCats();
+    if (!cats.length) { pfRenderCatHint(); document.getElementById('pf-cats').scrollIntoView({block:'nearest'}); toast('請至少選擇一個附件標籤'); return; }
     try {
         toast('儲存中…');
         // 壓平圖解析度：一般畫布用 3 倍（小畫家貼圖縮小擺放後，存檔的圖與文字仍清晰）；
@@ -5690,6 +5742,7 @@ async function pfSave() {
         fd.append('scope', scope);
         fd.append('dept_id', document.getElementById('pf-dept').value || '0');
         fd.append('share_user_ids', JSON.stringify(Array.from(pfShareSelected)));
+        fd.append('category_ids', cats.join(','));
         const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
         if (!res.success) throw new Error(res.message || '');
         toast('已存入料號附件：壓平圖＋工作檔（底圖抽離 ' + (res.extracted || 0) + ' 張）' +
