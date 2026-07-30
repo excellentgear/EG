@@ -858,6 +858,7 @@ $('.va-tab').on('click', function(){
     $('.va-tab').removeClass('active'); $(this).addClass('active');
     var t=$(this).data('tab');
     $('#tabAudit').toggle(t==='audit'); $('#tabEval').toggle(t==='eval');
+    if (t==='eval') loadEvVendors($('#evKw').val()||'');   // 切入時重抓納管廠商(納管可能剛變動)
 });
 
 /* ---------- 定期評核 ---------- */
