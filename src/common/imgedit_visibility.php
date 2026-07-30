@@ -7,6 +7,19 @@
 // 無 meta＝改版前舊資料，視為全員可見）。
 // 本函式讓任何列出 part_attachments 的端點，依同一套規則過濾掉目前使用者無權看的批圖檔
 // （成對的 PNG 跟隨其工作檔的範圍）。管理者（user_status 9/90 或系統 admin 角色）全可見。
+// 濾掉 Fabric.js 工作檔（*.egwork.json）——給「唯讀檢視」端點用。
+// 工作檔只有批圖編輯器打得開，在圖面檢視跳窗裡既不能看也不能印，列出來只是干擾；
+// 批圖編輯器自己的工作檔清單走 image_editor.php 的獨立查詢，不經過這裡，故不受影響。
+// 附件的 CRUD 清單（master_data_management 的附件跳窗）刻意不套用，才有地方管理／刪除工作檔。
+function imgedit_strip_workfiles(array $rows): array {
+    $out = [];
+    foreach ($rows as $r) {
+        if (preg_match('/\.egwork\.json$/i', (string)($r['filename'] ?? ''))) continue;
+        $out[] = $r;
+    }
+    return $out;
+}
+
 function imgedit_filter_attachment_rows(PDO $pdo, array $rows, int $uid, int $dIdFallback = 0): array {
     $dIds = [];
     foreach ($rows as $r) {

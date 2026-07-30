@@ -235,6 +235,8 @@ switch ($action) {
         $allRows = $pStmt->fetchAll(PDO::FETCH_ASSOC);
         // 批圖編輯器檔案依分享範圍過濾（避免私人檔成為列表顯示的「最新附件」）
         $allRows = imgedit_filter_attachment_rows($pdo, $allRows, $uploadedById);
+        // 工作檔（.egwork.json）不是圖面、無法預覽，不可成為列表縮圖的「最新附件」
+        $allRows = imgedit_strip_workfiles($allRows);
 
         // 報價單附件：先取各 d_id 對應的 D_Setting_Id
         try {
