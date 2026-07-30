@@ -92,7 +92,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     };
 
     try {
-        $WRITE = ['sym_save', 'sym_delete', 'save_adhoc', 'log_sample_change', 'del_inspection'];
+        $WRITE = ['sym_save', 'sym_delete', 'save_adhoc', 'log_sample_change', 'del_inspection',
+                  'dwg_confirm', 'std_item_save', 'std_item_delete', 'std_version_activate', 'std_version_delete'];
         if (in_array($act, $WRITE, true)) {
             $tok = $_POST['csrf'] ?? '';
             if (!is_string($tok) || $tok === '' || !hash_equals((string)($_SESSION['qc_csrf'] ?? ''), $tok)) {
@@ -323,6 +324,149 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             $pdo->commit();
 
             echo json_encode(['success' => true, 'deleted' => $info], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // ---- ⑤ 圖面變更提醒（受影響製程才跳）＋ 檢驗人員確認已更新檢驗項目 ----
+        if ($act === 'dwg_alert') {
+            $d_id = (int)($_POST['d_id'] ?? 0);
+            $fid  = (int)($_POST['bom_ing_fid'] ?? 0);
+            $proc = trim($_POST['process_name'] ?? '');
+            if ($d_id <= 0) { echo json_encode(['success' => true, 'rows' => []], JSON_UNESCAPED_UNICODE); exit; }
+
+            // 目前這一站在該 BOM 的加工順序（用來判斷「從某製程開始」是否已經輪到）
+            $curSeq = null; $bom = null;
+            if ($fid > 0) {
+                $s = $pdo->prepare("SELECT bom, processing_sequence FROM bom_ing WHERE bom_ing_fid=?");
+                $s->execute([$fid]);
+                if ($r = $s->fetch(PDO::FETCH_ASSOC)) { $bom = $r['bom']; $curSeq = ($r['processing_sequence'] === null ? null : (int)$r['processing_sequence']); }
+            }
+
+            $q = $pdo->prepare(
+                "SELECT c.*, pn.ProcessName AS from_process_name
+                 FROM qc_drawing_change c
+                 LEFT JOIN process_no pn ON pn.ProcessNo = c.from_process_no
+                 WHERE c.d_id=? AND c.status='OPEN' ORDER BY c.id DESC");
+            $q->execute([$d_id]);
+            $rows = [];
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $c) {
+                $affected = true;
+                // 有指定起始製程時：查該製程在同一張 BOM 的加工順序，目前這站要在它之後（含）才提醒。
+                // 查不到就一律提醒（寧可多提醒，也不要漏掉該檢查的尺寸）。
+                if ($c['from_process_no'] !== null && $bom !== null && $curSeq !== null) {
+                    $fs = $pdo->prepare("SELECT MIN(processing_sequence) FROM bom_ing WHERE bom=? AND process_no=?");
+                    $fs->execute([$bom, (int)$c['from_process_no']]);
+                    $fromSeq = $fs->fetchColumn();
+                    if ($fromSeq !== null && $fromSeq !== false) $affected = ($curSeq >= (int)$fromSeq);
+                }
+                if (!$affected) continue;
+                $cf = $pdo->prepare("SELECT confirmed_by, confirmed_at, note FROM qc_drawing_change_confirm
+                                     WHERE change_id=? AND (process_name <=> ?) ORDER BY id DESC LIMIT 1");
+                $cf->execute([(int)$c['id'], ($proc === '' ? null : $proc)]);
+                $c['confirm'] = $cf->fetch(PDO::FETCH_ASSOC) ?: null;
+                $rows[] = $c;
+            }
+            echo json_encode(['success' => true, 'rows' => $rows], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'dwg_confirm') {
+            if (!$hasF('qc_fill_inspection')) throw new Exception('您沒有「填寫檢驗表單」權限');
+            $cid = (int)($_POST['change_id'] ?? 0);
+            if (!$cid) throw new Exception('缺少變更單');
+            $proc = trim($_POST['process_name'] ?? '');
+            $vid  = ($_POST['version_id'] ?? '') === '' ? null : (int)$_POST['version_id'];
+            $pdo->prepare("INSERT INTO qc_drawing_change_confirm (change_id, process_name, version_id, note, confirmed_by, confirmed_at)
+                           VALUES (?,?,?,?,?,NOW())")
+                ->execute([$cid, ($proc === '' ? null : $proc), $vid, mb_substr(trim($_POST['note'] ?? ''), 0, 255), $uid]);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // ---- ⑥ 檢驗標準管理（管理員／管理檢驗設定可改可刪，避免設定錯了改不掉）----
+        if ($act === 'std_versions') {
+            if (!$hasF('qc_manage_settings')) throw new Exception('需要「管理檢驗設定」權限');
+            $d_id = (int)($_POST['d_id'] ?? 0);
+            $s = $pdo->prepare("SELECT v.version_id, v.version_label, v.source_type, v.is_active,
+                                       (SELECT COUNT(*) FROM qc_inspection_item i WHERE i.version_id=v.version_id) AS n_item,
+                                       (SELECT COUNT(*) FROM qc_check_form f WHERE f.version_id=v.version_id) AS n_form
+                                FROM qc_inspection_version v WHERE v.d_id=? ORDER BY v.version_id DESC");
+            $s->execute([$d_id]);
+            echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'std_items') {
+            if (!$hasF('qc_manage_settings')) throw new Exception('需要「管理檢驗設定」權限');
+            $s = $pdo->prepare("SELECT item_id, process_name, item_code, item_name, standard_text,
+                                       plus_tolerance, minus_tolerance, result_type, sort_order, is_active
+                                FROM qc_inspection_item WHERE version_id=? ORDER BY process_name, sort_order, item_id");
+            $s->execute([(int)($_POST['version_id'] ?? 0)]);
+            $fmt = function ($v) { if ($v === null) return ''; $t = rtrim(rtrim((string)$v, '0'), '.'); return ($t === '' || $t === '-') ? '0' : $t; };
+            $rows = [];
+            foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $r['plus_tolerance'] = $fmt($r['plus_tolerance']);
+                $r['minus_tolerance'] = $fmt($r['minus_tolerance']);
+                $rows[] = $r;
+            }
+            echo json_encode(['success' => true, 'rows' => $rows], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'std_item_save') {
+            if (!$hasF('qc_manage_settings')) throw new Exception('需要「管理檢驗設定」權限');
+            $iid = (int)($_POST['item_id'] ?? 0);
+            if (!$iid) throw new Exception('缺少項目');
+            $nm = trim($_POST['item_name'] ?? '');
+            if ($nm === '') throw new Exception('檢驗項目名稱不可空白');
+            $pdo->prepare("UPDATE qc_inspection_item SET item_name=?, standard_text=?, plus_tolerance=?, minus_tolerance=?,
+                           result_type=?, sort_order=?, is_active=? WHERE item_id=?")
+                ->execute([$nm, trim($_POST['standard_text'] ?? ''),
+                    (($_POST['plus_tolerance'] ?? '') === '' ? null : $_POST['plus_tolerance']),
+                    (($_POST['minus_tolerance'] ?? '') === '' ? null : $_POST['minus_tolerance']),
+                    (($_POST['result_type'] ?? '') === 'OKNG' ? 'OKNG' : 'NUMERIC'),
+                    (int)($_POST['sort_order'] ?? 0), ((string)($_POST['is_active'] ?? '1') === '1' ? 1 : 0), $iid]);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'std_item_delete') {
+            if (!$hasF('qc_manage_settings')) throw new Exception('需要「管理檢驗設定」權限');
+            $iid = (int)($_POST['item_id'] ?? 0);
+            // 已有實測紀錄的項目不可硬刪（會讓歷史檢驗紀錄失去依據）→ 改為停用
+            $used = $pdo->prepare("SELECT COUNT(*) FROM qc_measurement WHERE item_id=?");
+            $used->execute([$iid]);
+            if ((int)$used->fetchColumn() > 0) {
+                $pdo->prepare("UPDATE qc_inspection_item SET is_active=0 WHERE item_id=?")->execute([$iid]);
+                echo json_encode(['success' => true, 'softened' => true,
+                    'message' => '此項目已有實測紀錄，不能真的刪除（會讓舊檢驗紀錄失去依據），已改為「停用」：之後不再帶出，但歷史查得到。'], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+            $pdo->beginTransaction();
+            $pdo->prepare("DELETE FROM qc_inspection_item_tool_type WHERE item_id=?")->execute([$iid]);
+            $pdo->prepare("DELETE FROM qc_inspection_item WHERE item_id=?")->execute([$iid]);
+            $pdo->commit();
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'std_version_activate') {
+            if (!$hasF('qc_manage_settings')) throw new Exception('需要「管理檢驗設定」權限');
+            $d_id = (int)($_POST['d_id'] ?? 0); $vid = (int)($_POST['version_id'] ?? 0);
+            $pdo->beginTransaction();
+            $pdo->prepare("UPDATE qc_inspection_version SET is_active=0 WHERE d_id=?")->execute([$d_id]);
+            $pdo->prepare("UPDATE qc_inspection_version SET is_active=1 WHERE version_id=?")->execute([$vid]);
+            $pdo->commit();
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'std_version_delete') {
+            if (!$isAdmin) throw new Exception('刪除整個標準版本僅限管理員');
+            $vid = (int)($_POST['version_id'] ?? 0);
+            $n = $pdo->prepare("SELECT COUNT(*) FROM qc_check_form WHERE version_id=?");
+            $n->execute([$vid]);
+            if ((int)$n->fetchColumn() > 0) throw new Exception('此版本已有檢驗紀錄使用，不可刪除（可改為停用）');
+            $pdo->beginTransaction();
+            $pdo->prepare("DELETE t FROM qc_inspection_item_tool_type t JOIN qc_inspection_item i ON t.item_id=i.item_id WHERE i.version_id=?")->execute([$vid]);
+            $pdo->prepare("DELETE FROM qc_inspection_item WHERE version_id=?")->execute([$vid]);
+            $pdo->prepare("DELETE FROM qc_inspection_version WHERE version_id=?")->execute([$vid]);
+            $pdo->commit();
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
@@ -595,6 +739,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-tool-setting"><i class="fa fa-wrench"></i> 量具設定</a></li>
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-special-setting"><i class="fa fa-cog"></i> 幾何公差管理</a></li>
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-template-setting"><i class="fa fa-list-alt"></i> 通用樣板管理</a></li>
+                                <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-std-manage"><i class="fa fa-sliders"></i> 檢驗標準管理（改／刪）</a></li>
+                                <li><a href="drawing_change_log.php" target="_blank"><i class="fa fa-exchange"></i> 圖面變更紀錄（AS 2-PD-01-07）</a></li>
                                 <li class="sampling-menu-item" style="display:none;"><a href="#" id="btn-sampling-setting"><i class="fa fa-list-ol"></i> 抽樣規則設定</a></li>
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-qadept-setting"><i class="fa fa-sitemap"></i> 異常單回覆部門設定</a></li>
                                 <li><a href="#" id="btn-qadecide-setting"><i class="fa fa-gavel"></i> 異常單處置決策設定</a></li>
@@ -856,6 +1002,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             <button class="btn btn-default" data-dismiss="modal">取消</button>
             <button class="btn btn-warm" id="btn-ah-create">建立並開始填寫</button>
         </div>
+    </div></div>
+</div>
+
+<!-- ===================== 檢驗標準管理（改／刪；需管理檢驗設定權限） ===================== -->
+<div class="modal fade" id="stdManageModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
+            <button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-sliders"></i> 檢驗標準管理
+                <small>設定錯了可以在這裡直接改或刪</small></h4>
+        </div>
+        <div class="modal-body">
+            <div class="row">
+                <div class="col-sm-7 form-group">
+                    <label>料號</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control input-sm" id="sm-part-kw" placeholder="輸入部分料號後按搜尋">
+                        <span class="input-group-btn"><button class="btn btn-default btn-sm" id="btn-sm-search">搜尋</button></span>
+                    </div>
+                    <div id="sm-part-results" style="border:1px solid var(--line);margin-top:4px;max-height:140px;overflow:auto;display:none;"></div>
+                </div>
+                <div class="col-sm-5 form-group">
+                    <label>標準版本</label>
+                    <select class="form-control input-sm" id="sm-version"></select>
+                    <div style="margin-top:4px;">
+                        <button class="btn btn-xs btn-warm-o" id="btn-sm-activate">設為目前生效版本</button>
+                        <button class="btn btn-xs btn-default" id="btn-sm-delver" style="color:#DD5138;">刪除此版本</button>
+                    </div>
+                </div>
+            </div>
+            <div class="muted-help" id="sm-hint" style="margin-bottom:6px;"></div>
+            <div class="table-responsive" style="max-height:44vh;overflow:auto;">
+                <table class="table table-condensed table-bordered" style="background:#fff;">
+                    <thead><tr>
+                        <th width="90">製程</th><th width="150">檢驗項目</th><th width="80">標準值</th>
+                        <th width="70">上公差</th><th width="70">下公差</th><th width="76">型態</th>
+                        <th width="56">排序</th><th width="56">啟用</th><th width="96"></th>
+                    </tr></thead>
+                    <tbody id="sm-items"><tr><td colspan="9" class="text-center muted-help">請先選擇料號</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">關閉</button></div>
     </div></div>
 </div>
 
@@ -2674,9 +2863,158 @@ $(function(){
             $('#no-perm-hint').toggle(!state.can_fill);
             $('#btn-save,#btn-redo').prop('disabled', noPart || !state.can_fill);
             maybeOfferDraft(res.draft_form_id || 0);
+            checkDrawingChange();          // 圖面變更提醒（受影響製程才跳）
         }, 'json').fail(function(x){ alert('載入錯誤：'+x.responseText); });
     }
     function reloadContext(){ if(ctx) loadContext(ctx.bom_ing_fid); }
+
+    // =====================================================================
+    // 圖面變更提醒：客戶改圖後即使同料號同製程，檢驗內容也可能整組不同。
+    // 只有「受影響的製程」才跳（變更單可指定從哪一站開始；留白＝全部製程）。
+    // 檢驗人員確認「已依新版次更新檢驗項目」後，該製程就不再提醒。
+    // =====================================================================
+    function checkDrawingChange(){
+        if(!ctx || !ctx.d_id) return;
+        $.post(V2API, { v2action:'dwg_alert', d_id:ctx.d_id, bom_ing_fid:(ctx.bom_ing_fid||0), process_name:(ctx.process||'') },
+        function(res){
+            $('#dwg-banner').remove();
+            if(!res || !res.success || !res.rows || !res.rows.length) return;
+            var h = res.rows.map(function(c){
+                var done = c.confirm && c.confirm.confirmed_at;
+                return '<div style="padding:6px 0;border-top:1px dashed #E4D3BC;">'+
+                    '<b>'+esc(c.change_no)+'</b>　版次 '+esc(c.old_revision||'—')+' → <b>'+esc(c.new_revision||'—')+'</b>'+
+                    (c.from_process_no?('　<span class="muted-help">'+esc(c.from_process_name||'')+' 起受影響</span>'):'　<span class="muted-help">所有製程受影響</span>')+
+                    '<br>'+esc(c.summary)+
+                    (done
+                      ? '<br><span style="color:var(--amber-d);font-weight:bold;">✔ 本製程已由 '+esc(c.confirm.confirmed_by||'')+' 於 '+String(c.confirm.confirmed_at).substring(0,16)+' 確認檢驗項目已更新</span>'
+                      : '<br><button class="btn btn-xs btn-warm dwg-confirm" data-id="'+c.id+'" data-ver="'+(c.new_version_id||'')+'">'+
+                        '<i class="fa fa-check"></i> 我已依新版次確認/更新本製程的檢驗項目</button> '+
+                        '<a href="drawing_change_log.php?ack='+c.id+'" target="_blank" class="btn btn-xs btn-default">看變更明細</a>')+
+                    '</div>';
+            }).join('');
+            $('#mode-banner').after(
+                '<div id="dwg-banner" class="banner" style="background:#FFE9D6;border:2px solid #F0A24B;color:#6B4423;">'+
+                '<i class="fa fa-exclamation-triangle"></i> <b>此料號有圖面變更，請先確認檢驗項目是否需要調整</b>'+h+'</div>');
+        }, 'json');
+    }
+    $(document).on('click','.dwg-confirm', function(){
+        var cid=$(this).data('id'), vid=$(this).data('ver');
+        if(!confirm('確認本製程的檢驗項目已依新版次更新？\n（會記錄您的姓名與時間到該張圖面變更單）')) return;
+        var note=prompt('補充說明（選填）：','');
+        if(note===null) note='';
+        $.post(V2API, { v2action:'dwg_confirm', change_id:cid, process_name:(ctx?ctx.process:''), version_id:vid, note:note },
+        function(r){
+            if(!r.success){ alert(r.message||'確認失敗'); return; }
+            flashMsg('已記錄本製程的檢驗項目更新確認');
+            checkDrawingChange();
+        }, 'json');
+    });
+
+    // =====================================================================
+    // 檢驗標準管理（改／刪）：避免一開始設定錯了就再也改不掉
+    // =====================================================================
+    var smPart=null;
+    $('#btn-std-manage').on('click', function(e){
+        e.preventDefault();
+        smPart = (ctx && ctx.d_id>0) ? { d_id:ctx.d_id, part_no:ctx.part_no } : null;
+        $('#sm-part-kw').val(smPart?smPart.part_no:''); $('#sm-part-results').hide().empty();
+        $('#sm-items').html('<tr><td colspan="9" class="text-center muted-help">請先選擇料號</td></tr>');
+        $('#sm-version').empty(); $('#sm-hint').text('');
+        $('#stdManageModal').modal('show');
+        if(smPart) smLoadVersions();
+    });
+    function smSearch(){
+        $('#sm-part-results').show().html('<div class="search-result-item muted-help">搜尋中…</div>');
+        $.post(V2API,{ v2action:'part_search', keyword:$('#sm-part-kw').val() }, function(r){
+            if(!r.success){ $('#sm-part-results').html('<div class="search-result-item text-danger">'+esc(r.message)+'</div>'); return; }
+            var rows=r.rows||[];
+            $('#sm-part-results').html(rows.length ? rows.map(function(p){
+                return '<div class="search-result-item sm-pick" data-id="'+p.d_id+'" data-no="'+esc(p.D_Setting_Id)+'">'+esc(p.D_Setting_Id)+'</div>';
+            }).join('') : '<div class="search-result-item muted-help">查無此料號</div>');
+        }, 'json');
+    }
+    $('#btn-sm-search').on('click', function(e){ e.preventDefault(); smSearch(); });
+    $('#sm-part-kw').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); smSearch(); } });
+    $(document).on('click','.sm-pick', function(){
+        smPart={ d_id:parseInt($(this).data('id')), part_no:String($(this).attr('data-no')) };
+        $('#sm-part-kw').val(smPart.part_no); $('#sm-part-results').hide();
+        smLoadVersions();
+    });
+    function smLoadVersions(){
+        if(!smPart) return;
+        $.post(V2API,{ v2action:'std_versions', d_id:smPart.d_id }, function(r){
+            if(!r.success){ alert(r.message); return; }
+            var rows=r.rows||[];
+            $('#sm-version').html(rows.map(function(v){
+                return '<option value="'+v.version_id+'">'+esc(v.version_label)+(v.is_active==1?'（生效中）':'')+
+                       '　項目 '+v.n_item+'　已用於 '+v.n_form+' 張檢驗</option>';
+            }).join('') || '<option value="">（此料號尚無標準版本）</option>');
+            smLoadItems();
+        }, 'json');
+    }
+    $('#sm-version').on('change', smLoadItems);
+    function smLoadItems(){
+        var vid=$('#sm-version').val();
+        if(!vid){ $('#sm-items').html('<tr><td colspan="9" class="text-center muted-help">此料號尚無標準</td></tr>'); return; }
+        $.post(V2API,{ v2action:'std_items', version_id:vid }, function(r){
+            if(!r.success){ alert(r.message); return; }
+            var rows=r.rows||[];
+            $('#sm-hint').html('共 '+rows.length+' 個項目。<b>停用</b>＝不再帶進新檢驗，但歷史紀錄仍查得到；已有實測紀錄的項目按刪除會自動改為停用。');
+            $('#sm-items').html(rows.length ? rows.map(function(it){
+                return '<tr data-id="'+it.item_id+'">'+
+                  '<td><input class="form-control input-sm" value="'+esc(it.process_name||'')+'" readonly style="background:#f7f2ea;"></td>'+
+                  '<td><input class="form-control input-sm si-name" value="'+esc(it.item_name||'')+'"></td>'+
+                  '<td><input class="form-control input-sm si-std" value="'+esc(it.standard_text||'')+'"></td>'+
+                  '<td><input class="form-control input-sm si-up" value="'+esc(it.plus_tolerance||'')+'"></td>'+
+                  '<td><input class="form-control input-sm si-lo" value="'+esc(it.minus_tolerance||'')+'"></td>'+
+                  '<td><select class="form-control input-sm si-type">'+
+                     '<option value="NUMERIC" '+(it.result_type==='OKNG'?'':'selected')+'>數值</option>'+
+                     '<option value="OKNG" '+(it.result_type==='OKNG'?'selected':'')+'>OK/NG</option></select></td>'+
+                  '<td><input class="form-control input-sm si-sort" value="'+(it.sort_order||0)+'"></td>'+
+                  '<td class="text-center"><input type="checkbox" class="si-act" '+(String(it.is_active)==='1'?'checked':'')+'></td>'+
+                  '<td class="text-center" style="white-space:nowrap">'+
+                     '<button class="btn btn-xs btn-warm si-save">存</button> '+
+                     '<button class="btn btn-xs btn-default si-del" style="color:#DD5138;"><i class="fa fa-trash"></i></button></td></tr>';
+            }).join('') : '<tr><td colspan="9" class="text-center muted-help">此版本沒有檢驗項目</td></tr>');
+        }, 'json');
+    }
+    $('#sm-items').on('click','.si-save', function(){
+        var $tr=$(this).closest('tr');
+        $.post(V2API,{ v2action:'std_item_save', item_id:$tr.data('id'),
+            item_name:$tr.find('.si-name').val(), standard_text:$tr.find('.si-std').val(),
+            plus_tolerance:$tr.find('.si-up').val(), minus_tolerance:$tr.find('.si-lo').val(),
+            result_type:$tr.find('.si-type').val(), sort_order:$tr.find('.si-sort').val(),
+            is_active:($tr.find('.si-act').is(':checked')?'1':'0')
+        }, function(r){
+            if(!r.success){ alert(r.message||'儲存失敗'); return; }
+            $tr.css('background','#FDF6EA'); setTimeout(function(){ $tr.css('background',''); }, 800);
+        }, 'json');
+    });
+    $('#sm-items').on('click','.si-del', function(){
+        var $tr=$(this).closest('tr');
+        if(!confirm('確定刪除「'+$tr.find('.si-name').val()+'」這個檢驗項目？')) return;
+        $.post(V2API,{ v2action:'std_item_delete', item_id:$tr.data('id') }, function(r){
+            if(!r.success){ alert(r.message||'刪除失敗'); return; }
+            if(r.softened) alert(r.message);
+            smLoadItems();
+        }, 'json');
+    });
+    $('#btn-sm-activate').on('click', function(){
+        if(!smPart || !$('#sm-version').val()) return;
+        if(!confirm('把這個版本設為此料號「目前生效」的檢驗標準？（下次檢驗會帶出這一版）')) return;
+        $.post(V2API,{ v2action:'std_version_activate', d_id:smPart.d_id, version_id:$('#sm-version').val() }, function(r){
+            if(!r.success){ alert(r.message); return; }
+            smLoadVersions();
+        }, 'json');
+    });
+    $('#btn-sm-delver').on('click', function(){
+        if(!$('#sm-version').val()) return;
+        if(!confirm('確定刪除整個標準版本與其所有檢驗項目？（已被檢驗紀錄使用的版本無法刪除）')) return;
+        $.post(V2API,{ v2action:'std_version_delete', version_id:$('#sm-version').val() }, function(r){
+            if(!r.success){ alert(r.message); return; }
+            smLoadVersions();
+        }, 'json');
+    });
 
     function renderCtxBar(){
         var partCell = ctx.part_no

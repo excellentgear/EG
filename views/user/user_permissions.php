@@ -206,6 +206,7 @@ $rbacManagedPageIds = [
     88, 89, // 首頁設定 (home_page_setting)
     86,  // QC檢驗_NEW_TEST (inspection_combined_prototype)
     118, // 品管檢驗表2.0 (inspection_entry_v2)；與 86 共用 module='qc' 角色，見下方「品管檢驗（QC）」角色指派區塊
+    123, // 圖面變更紀錄 (drawing_change_log)；同樣走 module='qc' 角色（建立需 qc_manage_settings）
     93,  // 異常矯正處理單 (correction_order)
     96,  // 圖面自動改檔名工具 (drawing_rename)
     97,  // 叫料文件自動改檔名工具 (bom_rename)

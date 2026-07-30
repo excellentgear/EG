@@ -1,0 +1,552 @@
+<?php
+// =============================================================================
+// views/QC/drawing_change_log.php   圖面變更紀錄（AS 2-PD-01-07 圖面變更簽收單）
+// -----------------------------------------------------------------------------
+// 為什麼要這一頁：客戶改圖後，雖然還是「同料號同製程」，但檢驗內容可能整組不同。
+// 現行 views/pm/drawing_rename.php 的「作廢版」只處理『檔案層』（舊圖蓋作廢章、換上新圖），
+// 沒有留下「改了什麼、從哪個製程開始受影響、誰知道了、檢驗項目改好了沒」的紀錄。
+// 本頁補的就是這一段管理紀錄，並串起三件事：
+//   ① 自動把該料號的檢驗標準複製成「新版次」→ QC 只要改動到的尺寸，舊版保留可追溯
+//   ② 通知相關人員簽收（live_event ref_type='DWG'，行動型：沒簽會一直顯示）
+//   ③ 檢驗表 2.0 開啟受影響製程時跳提醒，QC 確認「已依新版次更新檢驗項目」後才消
+//
+// 影響範圍：可指定「從哪個製程開始」（例如只改精加工尺寸，粗車不受影響）；
+//           留白＝該料號所有製程都提醒。判斷時用該 BOM 的 processing_sequence 比大小。
+// =============================================================================
+include_once '../../src/common/_config.php';
+include_once '../../src/common/DBConnection.php';
+include_once '../../src/common/rbac.php';
+
+if (empty($_SESSION['qc_csrf'])) { $_SESSION['qc_csrf'] = bin2hex(random_bytes(16)); }
+$CSRF = $_SESSION['qc_csrf'];
+$AS_DOC_NO = '2-PD-01-07';   // 綁定的 AS 表單編號（圖面變更簽收單）
+
+// -----------------------------------------------------------------------------
+// AJAX 後端
+// -----------------------------------------------------------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    include_once '../../src/common/dwg_notify.php';
+
+    $pdo = (new DBConnection())->getPDO();
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $uid   = trim((string)($_SESSION['id'] ?? ''));
+    $feats = rbac_user_features($pdo, (int)$uid);
+    $has   = function ($c) use ($feats) { return in_array('all', $feats, true) || in_array($c, $feats, true); };
+    $canView   = $has('qc_view_readonly') || $has('qc_fill_inspection') || $has('qc_manage_settings') || $has('qc_edit_history') || $has('all');
+    $canManage = $has('qc_manage_settings') || $has('all');   // 建立/修改圖面變更＝管理檢驗設定權限
+    $act = $_POST['action'];
+
+    try {
+        $WRITE = ['save_change', 'ack_change', 'close_change', 'delete_change'];
+        if (in_array($act, $WRITE, true)) {
+            $tok = $_POST['csrf'] ?? '';
+            if (!is_string($tok) || $tok === '' || !hash_equals((string)($_SESSION['qc_csrf'] ?? ''), $tok)) {
+                throw new Exception('連線憑證失效，請重新整理頁面後再試 (CSRF)');
+            }
+        }
+        if (!$canView) throw new Exception('您沒有檢閱權限，請洽管理員於 品管檢驗 → 設定 → 權限設定 開通');
+
+        // ---- 清單 ----
+        if ($act === 'list') {
+            $kw = trim($_POST['keyword'] ?? '');
+            $sql = "SELECT c.*, d.D_Setting_Id AS part_no, pn.ProcessName AS from_process_name,
+                           (SELECT COUNT(*) FROM qc_drawing_change_ack a WHERE a.change_id=c.id) AS ack_total,
+                           (SELECT COUNT(*) FROM qc_drawing_change_ack a WHERE a.change_id=c.id AND a.acked_at IS NOT NULL) AS ack_done
+                    FROM qc_drawing_change c
+                    LEFT JOIN d_setting d ON d.d_id = c.d_id
+                    LEFT JOIN process_no pn ON pn.ProcessNo = c.from_process_no";
+            $p = [];
+            if ($kw !== '') { $sql .= " WHERE d.D_Setting_Id LIKE ? OR c.change_no LIKE ? OR c.summary LIKE ?"; $p = ["%$kw%", "%$kw%", "%$kw%"]; }
+            $sql .= " ORDER BY c.id DESC LIMIT 200";
+            $s = $pdo->prepare($sql); $s->execute($p);
+            echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC), 'can_manage' => $canManage], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // ---- 單筆明細（含簽收名單與檢驗項目確認狀況）----
+        if ($act === 'detail') {
+            $id = (int)($_POST['id'] ?? 0);
+            $s = $pdo->prepare("SELECT c.*, d.D_Setting_Id AS part_no, pn.ProcessName AS from_process_name
+                                FROM qc_drawing_change c
+                                LEFT JOIN d_setting d ON d.d_id=c.d_id
+                                LEFT JOIN process_no pn ON pn.ProcessNo=c.from_process_no
+                                WHERE c.id=?");
+            $s->execute([$id]);
+            $row = $s->fetch(PDO::FETCH_ASSOC);
+            if (!$row) throw new Exception('查無此變更紀錄');
+            $a = $pdo->prepare("SELECT k.*, u.user_cname FROM qc_drawing_change_ack k
+                                LEFT JOIN user u ON u.id=k.user_id WHERE k.change_id=? ORDER BY k.id");
+            $a->execute([$id]);
+            $c = $pdo->prepare("SELECT * FROM qc_drawing_change_confirm WHERE change_id=? ORDER BY id");
+            $c->execute([$id]);
+            echo json_encode(['success' => true, 'row' => $row, 'acks' => $a->fetchAll(PDO::FETCH_ASSOC),
+                              'confirms' => $c->fetchAll(PDO::FETCH_ASSOC),
+                              'can_manage' => $canManage, 'me' => (int)$uid], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // ---- 建立 / 修改 ----
+        if ($act === 'save_change') {
+            if (!$canManage) throw new Exception('您沒有「管理檢驗設定」權限，無法建立圖面變更紀錄');
+            $id      = (int)($_POST['id'] ?? 0);
+            $d_id    = (int)($_POST['d_id'] ?? 0);
+            $summary = trim($_POST['summary'] ?? '');
+            if ($d_id <= 0)     throw new Exception('請選擇料號');
+            if ($summary === '') throw new Exception('請填寫變更摘要');
+            $oldRev  = trim($_POST['old_revision'] ?? '');
+            $newRev  = trim($_POST['new_revision'] ?? '');
+            $fromP   = ($_POST['from_process_no'] ?? '') === '' ? null : (int)$_POST['from_process_no'];
+            $ackIds  = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['ack_users'] ?? [])))));
+
+            $pdo->beginTransaction();
+            if ($id) {
+                $pdo->prepare("UPDATE qc_drawing_change SET d_id=?, old_revision=?, new_revision=?, change_date=?,
+                               source=?, customer_doc_no=?, from_process_no=?, summary=?, detail=? WHERE id=?")
+                    ->execute([$d_id, $oldRev, $newRev, ($_POST['change_date'] ?: null), trim($_POST['source'] ?? ''),
+                               trim($_POST['customer_doc_no'] ?? ''), $fromP, $summary, trim($_POST['detail'] ?? ''), $id]);
+                $newVerId = null;
+            } else {
+                // 變更單號 DWG-YYYYMM-nnn（同月流水）
+                $ym = date('Ym');
+                $n  = (int)$pdo->query("SELECT COUNT(*) FROM qc_drawing_change WHERE change_no LIKE 'DWG-$ym-%'")->fetchColumn() + 1;
+                $changeNo = sprintf('DWG-%s-%03d', $ym, $n);
+
+                // ── 檢驗標準：把目前生效版本整組複製成新版本，舊版停用但保留 ──
+                // 這樣 QC 只要改動到的尺寸；舊檢驗紀錄仍指向舊 version_id，追溯得到當時的標準。
+                $oldVerId = $pdo->query("SELECT version_id FROM qc_inspection_version WHERE d_id=" . (int)$d_id . " AND is_active=1 ORDER BY version_id DESC LIMIT 1")->fetchColumn();
+                $oldVerId = $oldVerId ? (int)$oldVerId : null;
+                $newVerId = null;
+                if ($oldVerId) {
+                    $label = $newRev !== '' ? mb_substr($newRev, 0, 30) : ('變更 ' . date('Y-m-d'));
+                    $pdo->prepare("INSERT INTO qc_inspection_version (d_id, version_label, source_type, is_active) VALUES (?,?, 'REVISION', 1)")
+                        ->execute([$d_id, $label]);
+                    $newVerId = (int)$pdo->lastInsertId();
+
+                    $src = $pdo->prepare("SELECT * FROM qc_inspection_item WHERE version_id=?");
+                    $src->execute([$oldVerId]);
+                    $insI = $pdo->prepare("INSERT INTO qc_inspection_item
+                        (version_id, form_type_id, process_name, item_code, item_name, standard_text,
+                         min_value, max_value, plus_tolerance, minus_tolerance, result_type, sort_order, is_active)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                    $insT = $pdo->prepare("INSERT INTO qc_inspection_item_tool_type (item_id, QC_Tool_List_id, is_primary) VALUES (?,?,?)");
+                    $getT = $pdo->prepare("SELECT QC_Tool_List_id, is_primary FROM qc_inspection_item_tool_type WHERE item_id=?");
+                    foreach ($src->fetchAll(PDO::FETCH_ASSOC) as $it) {
+                        $insI->execute([$newVerId, $it['form_type_id'], $it['process_name'], $it['item_code'], $it['item_name'],
+                                        $it['standard_text'], $it['min_value'], $it['max_value'], $it['plus_tolerance'],
+                                        $it['minus_tolerance'], $it['result_type'], $it['sort_order'], $it['is_active']]);
+                        $nid = (int)$pdo->lastInsertId();
+                        $getT->execute([$it['item_id']]);
+                        foreach ($getT->fetchAll(PDO::FETCH_ASSOC) as $t) { try { $insT->execute([$nid, $t['QC_Tool_List_id'], $t['is_primary']]); } catch (Exception $e) {} }
+                    }
+                    $pdo->prepare("UPDATE qc_inspection_version SET is_active=0 WHERE d_id=? AND version_id<>?")->execute([$d_id, $newVerId]);
+                }
+
+                $pdo->prepare("INSERT INTO qc_drawing_change
+                    (change_no, as_doc_no, d_id, old_revision, new_revision, change_date, source, customer_doc_no,
+                     from_process_no, summary, detail, old_version_id, new_version_id, status, created_by, created_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'OPEN', ?, NOW())")
+                    ->execute([$changeNo, '2-PD-01-07', $d_id, $oldRev, $newRev, ($_POST['change_date'] ?: null),
+                               trim($_POST['source'] ?? ''), trim($_POST['customer_doc_no'] ?? ''), $fromP,
+                               $summary, trim($_POST['detail'] ?? ''), $oldVerId, $newVerId, $uid]);
+                $id = (int)$pdo->lastInsertId();
+            }
+
+            // 簽收名單（重設；已簽收者保留簽收時間）
+            $exist = [];
+            $e = $pdo->prepare("SELECT user_id, acked_at FROM qc_drawing_change_ack WHERE change_id=?");
+            $e->execute([$id]);
+            foreach ($e->fetchAll(PDO::FETCH_ASSOC) as $r) $exist[(int)$r['user_id']] = $r['acked_at'];
+            $pdo->prepare("DELETE FROM qc_drawing_change_ack WHERE change_id=?")->execute([$id]);
+            $insA = $pdo->prepare("INSERT INTO qc_drawing_change_ack (change_id, user_id, acked_at) VALUES (?,?,?)");
+            foreach ($ackIds as $u) { $insA->execute([$id, $u, ($exist[$u] ?? null)]); }
+            $pdo->commit();
+
+            // 通知尚未簽收的人（行動型：沒簽會一直留在未讀）
+            $newOnes = array_values(array_filter($ackIds, function ($u) use ($exist) { return empty($exist[$u]); }));
+            if ($newOnes) {
+                $pn = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?"); $pn->execute([$d_id]);
+                $partNo = (string)$pn->fetchColumn();
+                dwg_notify($pdo, $id,
+                    '【圖面變更】料號 ' . $partNo . '　請簽收確認',
+                    '圖面變更單 ' . ($changeNo ?? '') . '（AS 2-PD-01-07）' . "\n" .
+                    '版次：' . ($oldRev ?: '—') . ' → ' . ($newRev ?: '—') . "\n" .
+                    '摘要：' . $summary . "\n" . '請點入確認並簽收。',
+                    $newOnes, (int)$uid, 'reply');
+            }
+            echo json_encode(['success' => true, 'id' => $id], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // ---- 簽收 ----
+        if ($act === 'ack_change') {
+            $id = (int)($_POST['id'] ?? 0);
+            $st = $pdo->prepare("SELECT id FROM qc_drawing_change_ack WHERE change_id=? AND user_id=? LIMIT 1");
+            $st->execute([$id, (int)$uid]);
+            $rid = $st->fetchColumn();
+            if (!$rid) throw new Exception('您不在此變更單的簽收名單內');
+            $pdo->prepare("UPDATE qc_drawing_change_ack SET acked_at=NOW(), note=? WHERE id=?")
+                ->execute([mb_substr(trim($_POST['note'] ?? ''), 0, 255), $rid]);
+            dwg_notify_done($pdo, $id, (int)$uid);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // ---- 結案 / 刪除 ----
+        if ($act === 'close_change') {
+            if (!$canManage) throw new Exception('沒有權限');
+            $pdo->prepare("UPDATE qc_drawing_change SET status=? WHERE id=?")
+                ->execute([(($_POST['reopen'] ?? '') === '1' ? 'OPEN' : 'CLOSED'), (int)($_POST['id'] ?? 0)]);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'delete_change') {
+            if (!in_array('all', $feats, true)) throw new Exception('刪除變更紀錄僅限管理員');
+            $id = (int)($_POST['id'] ?? 0);
+            $pdo->beginTransaction();
+            $pdo->prepare("DELETE FROM qc_drawing_change_ack WHERE change_id=?")->execute([$id]);
+            $pdo->prepare("DELETE FROM qc_drawing_change_confirm WHERE change_id=?")->execute([$id]);
+            $pdo->prepare("DELETE FROM qc_drawing_change WHERE id=?")->execute([$id]);
+            $pdo->commit();
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // ---- 下拉資料：料號搜尋 / 製程 / 人員 ----
+        if ($act === 'part_search') {
+            $s = $pdo->prepare("SELECT d_id, D_Setting_Id, Revision FROM d_setting WHERE D_Setting_Id LIKE ? ORDER BY D_Setting_Id LIMIT 30");
+            $s->execute(['%' . trim($_POST['keyword'] ?? '') . '%']);
+            echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'lookups') {
+            $proc = $pdo->query("SELECT ProcessNo, ProcessName FROM process_no ORDER BY ProcessNo")->fetchAll(PDO::FETCH_ASSOC);
+            $users = $pdo->query("SELECT id, user_cname FROM user WHERE user_cname IS NOT NULL AND user_cname<>'' ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success' => true, 'processes' => $proc, 'users' => $users, 'can_manage' => $canManage], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        throw new Exception('未知的 action: ' . $act);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['success' => false, 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>圖面變更紀錄</title>
+    <link href="../../resource/css/bootstrap.css" rel="stylesheet">
+    <link href="../../resource/css/font-awesome.css" rel="stylesheet">
+    <link href="../../resource/css/custom.css" rel="stylesheet">
+    <style>
+    :root{ --ink:#4A3524; --ink2:#6B4423; --cream:#FCF7F0; --sand:#F7E0BD;
+           --amber:#F0A24B; --amber-d:#C77C1A; --coral:#DD5138; --line:#E4D3BC; }
+    body { background:#F6F1EA; }
+    .warm-panel { background:#fff; border:1px solid var(--line); border-radius:8px; padding:14px; margin-bottom:12px; }
+    .btn-warm { background:var(--amber); border:1px solid var(--amber-d); color:#4A3524; font-weight:bold; }
+    .btn-warm:hover,.btn-warm:focus { background:var(--amber-d); color:#fff; }
+    .btn-warm-o { background:#fff; border:1px solid var(--amber-d); color:var(--amber-d); }
+    .as-tag { display:inline-block; background:var(--sand); border:1px solid var(--line); border-radius:4px;
+              padding:2px 8px; font-size:12px; color:var(--ink); margin-left:8px; }
+    .dc-row { cursor:pointer; }
+    .dc-row:hover td { background:var(--cream); }
+    .badge-open { background:var(--amber); color:#4A3524; }
+    .badge-closed { background:#cfc3b2; color:#4A3524; }
+    .ack-done { color:var(--amber-d); font-weight:bold; }
+    .ack-wait { color:var(--coral); }
+    .muted-help { color:#8a6a45; font-size:12px; }
+    table.dc-table th { background:var(--cream); color:var(--ink); border-color:var(--line) !important; }
+    table.dc-table td { border-color:var(--line) !important; vertical-align:middle; }
+    .search-result-item { cursor:pointer; padding:6px 10px; border-bottom:1px solid var(--line); }
+    .search-result-item:hover { background:var(--cream); }
+    .userpick { max-height:190px; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:6px; }
+    .userpick label { font-weight:normal; display:inline-block; width:33%; margin:0; font-size:13px; }
+    </style>
+</head>
+<body class="nav-sm">
+<div class="container body">
+    <div class="main_container">
+        <?php include '../partPage/sideAndTopBarMenu.html'; ?>
+        <div class="right_col" role="main">
+            <div class="page-title">
+                <div class="title_left"><h3 style="color:#4A3524;">圖面變更紀錄
+                    <span class="as-tag">AS 表單編號 <?php echo htmlspecialchars($AS_DOC_NO, ENT_QUOTES, 'UTF-8'); ?>　圖面變更簽收單</span></h3></div>
+                <div class="title_right"><div class="pull-right">
+                    <button class="btn btn-warm btn-sm" id="btn-new"><i class="fa fa-plus"></i> 登錄圖面變更</button>
+                </div></div>
+            </div>
+            <div class="clearfix"></div>
+
+            <div class="warm-panel" style="font-size:13px;color:#6B4423;">
+                <i class="fa fa-info-circle"></i>
+                客戶改圖後即使<b>同料號同製程</b>，檢驗內容也可能整組不同。這裡登錄的每一筆變更會做三件事：
+                ① 自動把該料號的<b>檢驗標準複製成新版次</b>（舊版保留，舊檢驗紀錄仍追溯得到當時標準）；
+                ② <b>通知指定人員簽收</b>（未簽收會一直留在置頂未讀）；
+                ③ 檢驗表 2.0 開啟<b>受影響製程</b>時跳出提醒，直到檢驗人員確認「已依新版次更新檢驗項目」。
+                <br><span class="muted-help">檔案層的舊圖蓋作廢章／換上新圖，仍請到「圖面自動改檔名工具」的<b>作廢版</b>模式處理；這一頁負責的是管理紀錄與後續追蹤。</span>
+            </div>
+
+            <div class="warm-panel">
+                <div class="input-group" style="max-width:420px;">
+                    <input type="text" id="kw" class="form-control input-sm" placeholder="搜尋料號 / 變更單號 / 摘要">
+                    <span class="input-group-btn"><button class="btn btn-warm-o btn-sm" id="btn-search">搜尋</button></span>
+                </div>
+                <div class="table-responsive" style="margin-top:10px;">
+                    <table class="table table-bordered table-condensed dc-table">
+                        <thead><tr>
+                            <th width="130">變更單號</th><th width="130">料號</th><th width="110">版次</th>
+                            <th width="120">影響製程</th><th>變更摘要</th>
+                            <th width="90">簽收</th><th width="80">狀態</th><th width="140">登錄</th>
+                        </tr></thead>
+                        <tbody id="dc-list"><tr><td colspan="8" class="text-center muted-help">載入中…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <?php include '../partPage/footer.html'; ?>
+    </div>
+</div>
+
+<!-- 登錄/修改 -->
+<div class="modal fade" id="editModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
+            <button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-pencil-square-o"></i> 登錄圖面變更
+                <small>AS <?php echo htmlspecialchars($AS_DOC_NO, ENT_QUOTES, 'UTF-8'); ?></small></h4>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="f-id">
+            <div class="row">
+                <div class="col-sm-6 form-group">
+                    <label>料號（必填）</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control input-sm" id="f-part-kw" placeholder="輸入部分料號後按搜尋">
+                        <span class="input-group-btn"><button class="btn btn-default btn-sm" id="btn-part-search">搜尋</button></span>
+                    </div>
+                    <div id="part-results" style="border:1px solid #E4D3BC;margin-top:4px;max-height:150px;overflow:auto;display:none;"></div>
+                    <div id="part-picked" class="muted-help" style="margin-top:4px;"></div>
+                </div>
+                <div class="col-sm-3 form-group"><label>變更前版次</label><input type="text" class="form-control input-sm" id="f-oldrev"></div>
+                <div class="col-sm-3 form-group"><label>變更後版次</label><input type="text" class="form-control input-sm" id="f-newrev" placeholder="會成為檢驗標準的新版次名稱"></div>
+            </div>
+            <div class="row">
+                <div class="col-sm-3 form-group"><label>變更日期</label><input type="date" class="form-control input-sm" id="f-date"></div>
+                <div class="col-sm-3 form-group"><label>變更來源</label>
+                    <select class="form-control input-sm" id="f-source"><option>客戶</option><option>內部</option></select></div>
+                <div class="col-sm-3 form-group"><label>客戶文件編號</label><input type="text" class="form-control input-sm" id="f-cdoc"></div>
+                <div class="col-sm-3 form-group"><label>從哪個製程開始受影響</label>
+                    <select class="form-control input-sm" id="f-fromproc"></select>
+                    <span class="muted-help">留白＝所有製程都提醒</span></div>
+            </div>
+            <div class="form-group"><label>變更摘要（必填，會出現在檢驗人員的提醒上）</label>
+                <input type="text" class="form-control input-sm" id="f-summary" placeholder="例：外徑由 Ø25±0.1 改為 Ø24.8±0.05，並新增同心度 0.02"></div>
+            <div class="form-group"><label>變更內容明細</label>
+                <textarea class="form-control" id="f-detail" rows="3"></textarea></div>
+            <div class="form-group"><label>需簽收人員（會收到通知，未簽收會一直顯示在置頂未讀）</label>
+                <div class="userpick" id="f-users"></div></div>
+            <div class="alert" style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;" id="ver-hint">
+                <i class="fa fa-magic"></i> 建立後會自動把此料號目前的檢驗標準<b>整組複製成新版次</b>，舊版停用但保留；
+                QC 只要到「檢驗標準管理」改動有變的尺寸即可。<b>修改既有紀錄時不會再複製一次。</b>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-default" data-dismiss="modal">取消</button>
+            <button class="btn btn-warm" id="btn-save">儲存並通知簽收</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- 明細 / 簽收 -->
+<div class="modal fade" id="detailModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
+            <button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-file-text-o"></i> 圖面變更明細</h4>
+        </div>
+        <div class="modal-body" id="detail-body">載入中…</div>
+        <div class="modal-footer">
+            <button class="btn btn-default pull-left" id="btn-del" style="display:none;color:#DD5138;"><i class="fa fa-trash"></i> 刪除此紀錄</button>
+            <button class="btn btn-default" id="btn-edit" style="display:none;"><i class="fa fa-pencil"></i> 修改</button>
+            <button class="btn btn-warm-o" id="btn-close-chg" style="display:none;"></button>
+            <button class="btn btn-warm" id="btn-ack" style="display:none;"><i class="fa fa-check"></i> 我已確認並簽收</button>
+            <button class="btn btn-default" data-dismiss="modal">關閉</button>
+        </div>
+    </div></div>
+</div>
+
+<script src="../../resource/js/jquery.min.js"></script>
+<script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/fastclick.js"></script>
+<script src="../../resource/js/nprogress.js"></script>
+<script src="../../resource/js/custom.min.js"></script>
+<script>
+$(function(){
+    'use strict';
+    var API = location.pathname;
+    var CSRF = <?php echo json_encode($CSRF, JSON_UNESCAPED_SLASHES); ?>;
+    $.ajaxPrefilter(function(o){
+        if ((o.type||'GET').toUpperCase()!=='POST') return;
+        if (o.data && typeof o.data==='object' && !(o.data instanceof FormData) && o.data.csrf===undefined) o.data.csrf=CSRF;
+    });
+    function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c];}); }
+
+    var LOOK={processes:[],users:[]}, CAN_MANAGE=false, pickedPart=null, curId=null, ME=0;
+
+    $.post(API,{action:'lookups'},function(r){
+        if(!r.success) return;
+        LOOK=r; CAN_MANAGE=!!r.can_manage;
+        $('#btn-new').toggle(CAN_MANAGE);
+        $('#f-fromproc').html('<option value="">（全部製程都提醒）</option>'+
+            (r.processes||[]).map(function(p){ return '<option value="'+p.ProcessNo+'">'+esc(p.ProcessName)+'</option>'; }).join(''));
+        $('#f-users').html((r.users||[]).map(function(u){
+            return '<label><input type="checkbox" class="ack-u" value="'+u.id+'"> '+esc(u.user_cname)+'</label>';
+        }).join(''));
+    },'json');
+
+    function load(){
+        $('#dc-list').html('<tr><td colspan="8" class="text-center muted-help">載入中…</td></tr>');
+        $.post(API,{action:'list', keyword:$('#kw').val()},function(r){
+            if(!r.success){ $('#dc-list').html('<tr><td colspan="8" class="text-danger">'+esc(r.message)+'</td></tr>'); return; }
+            var rows=r.rows||[];
+            $('#dc-list').html(rows.length ? rows.map(function(c){
+                var ack=(c.ack_total>0) ? ((c.ack_done>=c.ack_total)
+                        ? '<span class="ack-done">✔ '+c.ack_done+'/'+c.ack_total+'</span>'
+                        : '<span class="ack-wait">'+c.ack_done+'/'+c.ack_total+'</span>') : '—';
+                return '<tr class="dc-row" data-id="'+c.id+'">'+
+                    '<td><b>'+esc(c.change_no)+'</b></td>'+
+                    '<td>'+esc(c.part_no||('d_id '+c.d_id))+'</td>'+
+                    '<td>'+esc(c.old_revision||'—')+' → <b>'+esc(c.new_revision||'—')+'</b></td>'+
+                    '<td>'+(c.from_process_no ? esc(c.from_process_name||('#'+c.from_process_no))+' 起' : '全部製程')+'</td>'+
+                    '<td>'+esc(c.summary)+'</td>'+
+                    '<td>'+ack+'</td>'+
+                    '<td><span class="badge '+(c.status==='CLOSED'?'badge-closed':'badge-open')+'">'+(c.status==='CLOSED'?'已結案':'進行中')+'</span></td>'+
+                    '<td class="muted-help">'+esc(c.created_by||'')+'<br>'+String(c.created_at||'').substring(0,16)+'</td></tr>';
+            }).join('') : '<tr><td colspan="8" class="text-center muted-help">尚無圖面變更紀錄</td></tr>');
+        },'json');
+    }
+    load();
+    $('#btn-search').on('click', load);
+    $('#kw').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); load(); } });
+
+    // ---- 登錄 / 修改 ----
+    $('#btn-new').on('click', function(){ openEdit(null); });
+    function openEdit(row){
+        $('#f-id').val(row?row.id:''); pickedPart = row ? {d_id:row.d_id, part_no:row.part_no} : null;
+        $('#part-picked').html(row ? ('已選料號：<b>'+esc(row.part_no||'')+'</b>') : '');
+        $('#part-results').hide().empty(); $('#f-part-kw').val('');
+        $('#f-oldrev').val(row?row.old_revision:''); $('#f-newrev').val(row?row.new_revision:'');
+        $('#f-date').val(row&&row.change_date?String(row.change_date).substring(0,10):new Date().toISOString().substring(0,10));
+        $('#f-source').val(row?(row.source||'客戶'):'客戶');
+        $('#f-cdoc').val(row?row.customer_doc_no:''); $('#f-fromproc').val(row&&row.from_process_no?row.from_process_no:'');
+        $('#f-summary').val(row?row.summary:''); $('#f-detail').val(row?row.detail:'');
+        $('.ack-u').prop('checked', false);
+        $('#ver-hint').toggle(!row);
+        $('#detailModal').modal('hide');
+        $('#editModal').modal('show');
+    }
+    function partSearch(){
+        $('#part-results').show().html('<div class="search-result-item muted-help">搜尋中…</div>');
+        $.post(API,{action:'part_search', keyword:$('#f-part-kw').val()},function(r){
+            if(!r.success){ $('#part-results').html('<div class="search-result-item text-danger">'+esc(r.message)+'</div>'); return; }
+            var rows=r.rows||[];
+            $('#part-results').html(rows.length ? rows.map(function(p){
+                return '<div class="search-result-item part-pick" data-id="'+p.d_id+'" data-no="'+esc(p.D_Setting_Id)+'" data-rev="'+esc(p.Revision||'')+'">'+
+                       esc(p.D_Setting_Id)+(p.Revision?' <span class="muted-help">Rev '+esc(p.Revision)+'</span>':'')+'</div>';
+            }).join('') : '<div class="search-result-item muted-help">查無此料號</div>');
+        },'json');
+    }
+    $('#btn-part-search').on('click', function(e){ e.preventDefault(); partSearch(); });
+    $('#f-part-kw').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); partSearch(); } });
+    $(document).on('click','.part-pick', function(){
+        pickedPart={ d_id:parseInt($(this).data('id')), part_no:String($(this).attr('data-no')) };
+        $('#part-picked').html('已選料號：<b>'+esc(pickedPart.part_no)+'</b>');
+        if(!$('#f-oldrev').val()) $('#f-oldrev').val($(this).attr('data-rev')||'');
+        $('#part-results').hide();
+    });
+    $('#btn-save').on('click', function(){
+        if(!pickedPart){ alert('請先搜尋並選擇料號'); return; }
+        if(!$('#f-summary').val().trim()){ alert('請填寫變更摘要'); $('#f-summary').focus(); return; }
+        var users=$('.ack-u:checked').map(function(){ return this.value; }).get();
+        var $b=$(this).prop('disabled',true);
+        $.post(API,{ action:'save_change', id:$('#f-id').val(), d_id:pickedPart.d_id,
+            old_revision:$('#f-oldrev').val(), new_revision:$('#f-newrev').val(), change_date:$('#f-date').val(),
+            source:$('#f-source').val(), customer_doc_no:$('#f-cdoc').val(), from_process_no:$('#f-fromproc').val(),
+            summary:$('#f-summary').val(), detail:$('#f-detail').val(), ack_users:users
+        }, function(r){
+            $b.prop('disabled',false);
+            if(!r.success){ alert('儲存失敗：'+r.message); return; }
+            $('#editModal').modal('hide'); load();
+            alert('已儲存'+(users.length?('，並已通知 '+users.length+' 位人員簽收'):''));
+        },'json').fail(function(x){ $b.prop('disabled',false); alert('儲存錯誤：'+x.responseText); });
+    });
+
+    // ---- 明細 / 簽收 ----
+    $('#dc-list').on('click','.dc-row', function(){ openDetail($(this).data('id')); });
+    function openDetail(id){
+        curId=id;
+        $('#detail-body').html('載入中…'); $('#btn-ack,#btn-edit,#btn-close-chg,#btn-del').hide();
+        $('#detailModal').modal('show');
+        $.post(API,{action:'detail', id:id}, function(r){
+            if(!r.success){ $('#detail-body').html('<div class="text-danger">'+esc(r.message)+'</div>'); return; }
+            var c=r.row, acks=r.acks||[], cfs=r.confirms||[]; ME=r.me;
+            var myAck=null; acks.forEach(function(a){ if(parseInt(a.user_id)===parseInt(ME)) myAck=a; });
+            var h='<table class="table table-condensed table-bordered dc-table">'+
+                '<tr><th width="120">變更單號</th><td><b>'+esc(c.change_no)+'</b>　<span class="as-tag">AS '+esc(c.as_doc_no)+'</span></td></tr>'+
+                '<tr><th>料號</th><td>'+esc(c.part_no||'')+'</td></tr>'+
+                '<tr><th>版次</th><td>'+esc(c.old_revision||'—')+' → <b>'+esc(c.new_revision||'—')+'</b>'+
+                    (c.new_version_id?('　<span class="muted-help">已建立檢驗標準新版本 #'+c.new_version_id+'（舊版 #'+(c.old_version_id||'—')+' 已停用保留）</span>'):'')+'</td></tr>'+
+                '<tr><th>影響製程</th><td>'+(c.from_process_no?('<b>'+esc(c.from_process_name||'')+'</b> 起（含）之後的製程'):'<b>所有製程</b>')+'</td></tr>'+
+                '<tr><th>變更來源</th><td>'+esc(c.source||'')+(c.customer_doc_no?('　文件編號 '+esc(c.customer_doc_no)):'')+'　'+String(c.change_date||'').substring(0,10)+'</td></tr>'+
+                '<tr><th>摘要</th><td>'+esc(c.summary)+'</td></tr>'+
+                (c.detail?('<tr><th>明細</th><td style="white-space:pre-wrap">'+esc(c.detail)+'</td></tr>'):'')+
+                '</table>';
+            h+='<b>簽收狀況</b><table class="table table-condensed table-bordered dc-table"><thead><tr><th>人員</th><th width="170">簽收時間</th><th>備註</th></tr></thead><tbody>'+
+               (acks.length ? acks.map(function(a){
+                   return '<tr><td>'+esc(a.user_cname||('#'+a.user_id))+'</td><td>'+
+                          (a.acked_at?('<span class="ack-done">✔ '+String(a.acked_at).substring(0,16)+'</span>'):'<span class="ack-wait">尚未簽收</span>')+
+                          '</td><td>'+esc(a.note||'')+'</td></tr>';
+               }).join('') : '<tr><td colspan="3" class="muted-help">未指定簽收人員</td></tr>')+'</tbody></table>';
+            h+='<b>檢驗項目更新確認</b>（由檢驗人員在檢驗表 2.0 上確認）'+
+               '<table class="table table-condensed table-bordered dc-table"><thead><tr><th>製程</th><th width="170">確認時間</th><th>確認人</th><th>備註</th></tr></thead><tbody>'+
+               (cfs.length ? cfs.map(function(f){
+                   return '<tr><td>'+esc(f.process_name||'—')+'</td><td>'+String(f.confirmed_at||'').substring(0,16)+'</td><td>'+esc(f.confirmed_by||'')+'</td><td>'+esc(f.note||'')+'</td></tr>';
+               }).join('') : '<tr><td colspan="4" class="muted-help">尚無製程確認已更新檢驗項目</td></tr>')+'</tbody></table>';
+            $('#detail-body').html(h);
+            if(myAck && !myAck.acked_at) $('#btn-ack').show();
+            if(r.can_manage){
+                $('#btn-edit').show().off('click').on('click', function(){ openEdit(c); });
+                $('#btn-close-chg').show().text(c.status==='CLOSED'?'重新開啟':'標記為已結案').off('click').on('click', function(){
+                    $.post(API,{action:'close_change', id:c.id, reopen:(c.status==='CLOSED'?'1':'0')}, function(){ $('#detailModal').modal('hide'); load(); },'json');
+                });
+            }
+            $('#btn-del').toggle(!!r.can_manage).off('click').on('click', function(){
+                if(!confirm('確定刪除變更紀錄 '+c.change_no+'？（不會還原已建立的檢驗標準新版本）')) return;
+                $.post(API,{action:'delete_change', id:c.id}, function(res){
+                    if(!res.success){ alert(res.message); return; }
+                    $('#detailModal').modal('hide'); load();
+                },'json');
+            });
+        },'json');
+    }
+    $('#btn-ack').on('click', function(){
+        var note=prompt('簽收備註（選填）：','');
+        if(note===null) return;
+        $.post(API,{action:'ack_change', id:curId, note:note}, function(r){
+            if(!r.success){ alert(r.message); return; }
+            alert('已簽收'); openDetail(curId); load();
+        },'json');
+    });
+
+    // 由通知點入：?ack=<id> 直接開明細
+    var qs=new URLSearchParams(location.search);
+    if(qs.get('ack')) setTimeout(function(){ openDetail(parseInt(qs.get('ack'))); }, 400);
+});
+</script>
+</body>
+</html>

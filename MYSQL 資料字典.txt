@@ -3487,6 +3487,61 @@ is_active	tinyint(1)	是	1
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
 PRIMARY	BTREE	是	否	rule_id	9	A	否	
+qc_drawing_change
+資料表備註： 圖面變更紀錄（AS 2-PD-01-07 圖面變更簽收單）；建立時自動把該料號檢驗標準複製成新版次
+
+欄位	類型	無值(Null)	預設值	備註
+id (主鍵)	int	否		主鍵
+change_no	varchar(30)	否		變更單號 DWG-YYYYMM-nnn
+as_doc_no	varchar(40)	否	2-PD-01-07	綁定的 AS 表單編號
+d_id	int	否		d_setting.d_id（料號）
+old_revision	varchar(30)	是	NULL	變更前圖面版次
+new_revision	varchar(30)	是	NULL	變更後圖面版次（會成為檢驗標準新版次名稱）
+change_date	date	是	NULL	變更日期
+source	varchar(20)	是	NULL	變更來源：客戶／內部
+customer_doc_no	varchar(80)	是	NULL	客戶通知文件編號
+from_process_no	int	是	NULL	從哪個製程開始受影響(process_no.ProcessNo)；NULL=全部製程
+summary	varchar(255)	否		變更摘要（會顯示在檢驗人員的提醒上）
+detail	text	是	NULL	變更內容明細
+old_version_id	int	是	NULL	變更前的檢驗標準版本
+new_version_id	int	是	NULL	自動建立的檢驗標準新版本
+status	varchar(10)	否	OPEN	OPEN=進行中 / CLOSED=已結案
+created_by	char(11)	是	NULL	登錄人
+created_at	datetime	是	NULL	登錄時間
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	id	0	A	否
+idx_did	BTREE	否	否	d_id	0	A	否
+idx_status	BTREE	否	否	status	0	A	否
+qc_drawing_change_ack
+資料表備註： 圖面變更簽收紀錄（live_event ref_type='DWG' 行動型通知，未簽收持續顯示）
+
+欄位	類型	無值(Null)	預設值	備註
+id (主鍵)	int	否		主鍵
+change_id	int	否		對應 qc_drawing_change.id
+user_id	int	否		需簽收的人員
+acked_at	datetime	是	NULL	回簽時間；NULL=尚未簽收
+note	varchar(255)	是	NULL	簽收備註
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	id	0	A	否
+idx_change	BTREE	否	否	change_id	0	A	否
+idx_user	BTREE	否	否	user_id	0	A	否
+qc_drawing_change_confirm
+資料表備註： 圖面變更後，檢驗人員在檢驗表2.0 確認「已依新版次更新檢驗項目」（逐製程各一筆）
+
+欄位	類型	無值(Null)	預設值	備註
+id (主鍵)	int	否		主鍵
+change_id	int	否		對應 qc_drawing_change.id
+process_name	varchar(100)	是	NULL	哪一個製程的檢驗項目已更新
+version_id	int	是	NULL	確認採用的檢驗標準版本
+note	varchar(255)	是	NULL	備註
+confirmed_by	char(11)	是	NULL	確認人
+confirmed_at	datetime	是	NULL	確認時間
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	id	0	A	否
+idx_change	BTREE	否	否	change_id	0	A	否
 qc_symbol
 資料表備註： 線上檢驗2.0：工程符號主檔（Ø ± ▽ 等，供檢驗項目名稱/標準值插入；僅管理員可增修刪）
 
