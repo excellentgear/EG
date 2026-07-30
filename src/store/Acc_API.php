@@ -722,6 +722,78 @@ case 'ap_detail_export': {
     exit;
 }
 
+/* ══ 單據快搜（對紙本用）═════════════════════════════════════════════ */
+case 'doc_lookup': {
+    $s  = $_POST ?: $_GET;
+    $kw = acc_u8(trim((string)($s['kw'] ?? '')));
+    if ($kw === '') acc_err('請輸入要查的單號、金額、料號或客戶／廠商');
+    acc_out(acc_doc_lookup($db, $kw, ['limit' => min(200, max(20, (int)($s['limit'] ?? 60)))]));
+}
+
+/* ══ 帳款月份調整 ═════════════════════════════════════════════════════ */
+case 'billing_search': {
+    $s = $_POST ?: $_GET;
+    acc_out(acc_billing_search($db, [
+        'side'          => trim((string)($s['side'] ?? 'ar')),
+        'kw'            => acc_u8(trim((string)($s['kw'] ?? ''))),
+        'date_from'     => trim((string)($s['date_from'] ?? '')),
+        'date_to'       => trim((string)($s['date_to'] ?? '')),
+        'billing_month' => trim((string)($s['billing_month'] ?? '')),
+        'only_override' => !empty($s['only_override']),
+    ]));
+}
+
+case 'billing_set': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_set_billing_month($db, (string)($_POST['src_type'] ?? ''),
+                               (int)($_POST['id'] ?? 0),
+                               trim((string)($_POST['ym'] ?? '')), (string)$uid);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'billing_set_bulk': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $items = json_decode($_POST['items'] ?? '[]', true);
+    if (!is_array($items) || !$items) acc_err('沒有選取單據');
+    $r = acc_set_billing_month_bulk($db, $items, trim((string)($_POST['ym'] ?? '')), (string)$uid);
+    acc_out($r);
+}
+
+/* 單據快搜結果匯出（對帳時可印出來對照紙本）*/
+case 'doc_lookup_export': {
+    $s  = $_GET ?: $_POST;
+    $kw = acc_u8(trim((string)($s['kw'] ?? '')));
+    if ($kw === '') acc_err('缺少關鍵字');
+    $r = acc_doc_lookup($db, $kw, ['limit' => 200]);
+
+    $label = ['ship' => '出貨單', 'return' => '退貨單', 'invoice' => '發票',
+              'allowance' => '折讓單', 'receipt' => '收款單', 'process' => '加工移轉單'];
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="單據查詢_' . preg_replace('/[^\w\-]/u', '', $kw) . '_' . date('Ymd_Hi') . '.csv"');
+    $o = fopen('php://output', 'w');
+    fwrite($o, "\xEF\xBB\xBF");
+    fputcsv($o, ['查詢關鍵字', $kw, '共 ' . $r['summary']['total'] . ' 筆']);
+    fputcsv($o, []);
+    fputcsv($o, ['單據類型', '單號', '日期', '對象', '對象別', '料號', '數量', '金額',
+                 '帳款月份', '是否人工指定', '已開發票', '備註']);
+    foreach ($r['groups'] as $g) {
+        foreach ($g as $x) {
+            fputcsv($o, [$label[$x['kind']] ?? $x['kind'], $x['no'], $x['date'] ?? '',
+                         $x['party'] ?? '', $x['party_kind'] ?? '', $x['product_id'] ?? '',
+                         $x['qty'] ?? '', round((float)($x['amount'] ?? 0)),
+                         $x['billing_month'] ?? '', !empty($x['overridden']) ? '是' : '',
+                         $x['invoiced'] ?? '', $x['note'] ?? '']);
+        }
+    }
+    fclose($o);
+    exit;
+}
+
 /* ── 匯入範本下載（告訴使用者 ERP 要匯出成什麼格式）─────────────────── */
 case 'template': {
     header('Content-Type: text/csv; charset=UTF-8');

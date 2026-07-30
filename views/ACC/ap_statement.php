@@ -45,13 +45,26 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
 <link href="../../resource/css/nprogress.css" rel="stylesheet">
 <link href="../../resource/css/custom.css" rel="stylesheet">
 <style>
+/* 應付＝暖棕赭色系（錢出去）；應收＝琥珀橘（錢進來）。
+   兩頁都在暖色系內（符合配色規範），但主色、表頭、身分帶明顯不同，
+   且顏色不是唯一辨識依據——另有文字標籤與箭頭方向。 */
 :root{
-  --a-line:#E8D5B5; --a-line2:#D8BE93; --a-bg:#FDF8EF; --a-bg2:#FFF7E8;
-  --a-ink:#5b3a1e; --a-ink2:#8a6d45; --a-brand:#8A5A2B;
-  --a-acc:#F0A24B; --a-acc-d:#d98a33; --a-ok:#F7E0BD; --a-bad:#DD5138;
+  --a-line:#DFCBA9; --a-line2:#C9AE85; --a-bg:#FBF5EC; --a-bg2:#F6EBDA;
+  --a-ink:#4E2C0B; --a-ink2:#7d6242; --a-brand:#7A4A1E;
+  --a-acc:#A2703A; --a-acc-d:#8A5A2B; --a-ok:#E8D3B4; --a-bad:#C0392B;
 }
 #sidebar-menu{visibility:hidden;}
 .right_col .page-title{margin:8px 0 4px;overflow:hidden;}
+
+.side-band{display:flex;align-items:center;gap:10px;clear:both;margin-bottom:8px;
+  background:linear-gradient(90deg,#8A5A2B 0%,#6E4520 100%);color:#fff;
+  border-radius:8px;padding:7px 14px;font-size:15px;box-shadow:inset 0 -3px 0 rgba(0,0,0,.18);}
+.side-band .fa-arrow-circle-up{font-size:19px;}
+.side-band .sb-sub{font-size:12.5px;opacity:.92;font-weight:normal;}
+.side-band .sb-switch{margin-left:auto;font-size:13px;color:#fff;background:rgba(255,255,255,.16);
+  border:1px solid rgba(255,255,255,.5);border-radius:14px;padding:4px 13px;text-decoration:none;
+  white-space:nowrap;}
+.side-band .sb-switch:hover{background:rgba(255,255,255,.3);color:#fff;text-decoration:none;}
 
 .a-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;clear:both;
   border:1.5px solid var(--a-line);border-radius:8px;padding:8px 10px;margin-bottom:8px;background:var(--a-bg);}
@@ -156,10 +169,18 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
   <?php include '../partPage/sideAndTopBarMenu.html' ?>
   <div class="right_col" role="main">
     <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
-      <h2 style="margin:6px 0;"><i class="fa fa-truck" style="color:#F0A24B;"></i> 應付對帳單
-        <small style="color:#8a6d45;">廠商加工費，一列＝廠商×發票年月；資料來源為製程移轉紀錄既有的廠商發票欄位</small></h2>
+      <h2 style="margin:6px 0;"><i class="fa fa-truck" style="color:#8A5A2B;"></i> 應付對帳單
+        <small style="color:#7d6242;">廠商加工費，一列＝廠商×發票年月；資料來源為製程移轉紀錄既有的廠商發票欄位</small></h2>
     </div>
     <div class="clearfix"></div>
+
+    <!-- 身分識別帶：與應收頁用不同色系＋不同文字與箭頭，避免兩頁看起來一樣而誤操作 -->
+    <div class="side-band">
+      <i class="fa fa-arrow-circle-up"></i>
+      <b>應付帳款</b><span class="sb-sub">錢出去 · 付給廠商</span>
+      <a href="ar_statement.php" class="sb-switch" title="切換到應收對帳單">
+        切換到 <b>應收帳款</b>（錢進來） <i class="fa fa-long-arrow-right"></i></a>
+    </div>
 
 <?php if (!$perms['canView']): ?>
     <div class="a-noperm">
@@ -180,13 +201,16 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
     </div>
 
     <div class="a-bar" style="background:var(--a-bg2);">
+      <button id="btnLookup" class="btn-warm"><i class="fa fa-search"></i> 單據快搜
+        <span style="font-weight:normal;font-size:11.5px;">(廠商拿請款單來)</span></button>
+      <button id="btnMonth"><i class="fa fa-calendar"></i> 帳款月份調整</button>
+      <span style="width:1px;height:22px;background:var(--a-line);margin:0 4px;"></span>
       <button id="btnExport"><i class="fa fa-file-text-o"></i> 匯出彙總CSV</button>
       <button id="btnPrint"><i class="fa fa-print"></i> 列印／PDF</button>
-      <a href="ar_statement.php" style="text-decoration:none;">
-        <button type="button"><i class="fa fa-calculator"></i> 應收對帳單</button></a>
-      <span class="a-hint" style="margin-left:10px;">
-        點任一列的「對帳單」可看該廠商該月完整加工明細並列印，用來核對廠商寄來的請款單與發票。
-      </span>
+    </div>
+    <div class="a-hint" style="margin:-4px 0 8px;">
+      <kbd>/</kbd> 或點「單據快搜」可用移轉單號／金額／製令／料號直接查任何一筆屬於哪個發票年月。
+      點任一列的「對帳單」可看該廠商該月完整加工明細並列印，用來核對廠商寄來的請款單與發票。
     </div>
 
     <div class="a-stat">
@@ -268,6 +292,7 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<?php $ACC_TOOL_SIDE = 'ap'; include '_acc_tools.php'; ?>
 <script>
 /* 版型的 #sidebar-menu 預設 visibility:hidden，必須在此恢復，否則整個左側欄不會出現 */
 $(document).ready(function () {
@@ -285,6 +310,7 @@ var API = '../../src/store/Acc_API.php';
 var rows = [], page = 1, perPage = 20, total = 0;
 var sortBy = 'total_amount', sortDir = 'desc';
 var curStmt = null;
+var CSRF = '';
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -488,6 +514,20 @@ $('#btnExport').on('click',function(){
   window.location = API+'?action=ap_export&'+qs(f);
 });
 $('#btnPrint').on('click',function(){ window.print(); });
+
+/* ══ 共用工具：單據快搜 / 帳款月份調整 ══ */
+AccTools.init({side:'ap', api:API, csrf:function(){ return CSRF; }, onChanged:load});
+$('#btnLookup').on('click',function(){ AccTools.openLookup(); });
+$('#btnMonth').on('click',function(){ AccTools.openMonth(); });
+$(document).on('keydown',function(e){
+  var tag=(e.target.tagName||'').toLowerCase();
+  if(e.key==='/' && tag!=='input' && tag!=='select' && tag!=='textarea'){
+    e.preventDefault(); AccTools.openLookup('');
+  }
+});
+
+/* 取 CSRF（調整帳款月份要用）*/
+$.getJSON(API,{action:'meta'},function(r){ if(r.ok) CSRF=r.csrf; });
 
 load();
 })(jQuery);

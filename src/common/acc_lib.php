@@ -1857,6 +1857,415 @@ function acc_ap_detail(PDO $db, string $makerIdNo, string $ym): array
     ];
 }
 
+/* ============================================================
+ * 單據快搜（對帳神器）
+ *
+ * 使用情境：客戶／廠商拿一張紙本單據或對帳單來，上面可能只有
+ * 一個單號、一個金額、一個料號或一個日期。這支函式用同一個關鍵字
+ * 跨「出貨單／退貨單／發票／折讓單／收款單／加工移轉單」全找一遍，
+ * 並直接告訴你每一筆「算在哪個客戶／廠商的哪個帳款月份」，
+ * 免得人工翻月份猜。純數字關鍵字會額外做金額比對（含容差）。
+ * ============================================================ */
+function acc_doc_lookup(PDO $db, string $kw, array $opt = []): array
+{
+    $kw = trim($kw);
+    if ($kw === '') return ['groups' => [], 'summary' => ['total' => 0]];
+
+    $like    = '%' . $kw . '%';
+    $isNum   = (bool)preg_match('/^\d{1,12}(\.\d+)?$/', str_replace(',', '', $kw));
+    $num     = $isNum ? (float)str_replace(',', '', $kw) : 0.0;
+    $tol     = max(1.0, $num * 0.005);           // 金額容差 0.5%，至少 1 元
+    $limit   = (int)($opt['limit'] ?? 60);
+    $global  = acc_global_cutoff($db);
+
+    // 客戶結帳日（算帳款月份要用）
+    $cust = [];
+    foreach ($db->query("SELECT customer_id, customer, settlement_mode, settlement_day
+                         FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+        if (trim((string)$c['customer']) !== '') $cust[trim($c['customer'])] = $c;
+    }
+    // 已開發票的憑證 → 讓結果能顯示「已開在哪張發票上」
+    $used = acc_invoiced_src_map($db);
+
+    $groups = [];
+
+    /* ── 出貨單 ── */
+    $sql = "SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') AS d,
+                   il.Client_name, il.Product_id, il.Specification, il.Qty, il.Unit_price,
+                   il.billing_month_override, il.Note, ot.Order_oo
+            FROM is_list il
+            LEFT JOIN order_track ot ON ot.Order_id = il.Order_id
+            WHERE il.IS_number LIKE ? OR il.Client_name LIKE ? OR il.Product_id LIKE ?
+                  OR il.Specification LIKE ? OR il.Note LIKE ?"
+         . ($isNum ? " OR ABS(il.Qty * il.Unit_price - ?) <= ? OR il.Qty = ?" : "")
+         . " ORDER BY il.Order_date DESC LIMIT " . $limit;
+    $p = [$like, $like, $like, $like, $like];
+    if ($isNum) { $p[] = $num; $p[] = $tol; $p[] = (int)$num; }
+    $st = $db->prepare($sql); $st->execute($p);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $name = trim((string)$r['Client_name']);
+        $bm   = trim((string)$r['billing_month_override']);
+        $auto = acc_billing_month($r['d'], acc_cutoff_for($cust[$name] ?? null, $global));
+        $u    = $used['IS-' . (int)$r['IS_id']] ?? null;
+        $groups['ship'][] = [
+            'kind' => 'ship', 'id' => (int)$r['IS_id'], 'no' => $r['IS_number'], 'date' => $r['d'],
+            'party' => $name, 'party_kind' => '客戶',
+            'product_id' => $r['Product_id'], 'spec' => $r['Specification'],
+            'qty' => (int)$r['Qty'], 'unit_price' => (float)$r['Unit_price'],
+            'amount' => (float)$r['Qty'] * (float)$r['Unit_price'],
+            'billing_month' => ($bm !== '' ? $bm : $auto),
+            'auto_month' => $auto, 'overridden' => ($bm !== ''),
+            'order_oo' => $r['Order_oo'], 'note' => $r['Note'],
+            'invoiced' => $u ? ($u['invoice_no'] ?: '#' . $u['invoice_id']) : null,
+            'can_edit_month' => !$u,     // 已開發票的不可再改月份
+        ];
+    }
+
+    /* ── 退貨單 ── */
+    $sql = "SELECT it.IR_id, it.IR_no, DATE_FORMAT(it.IR_date,'%Y-%m-%d') AS d,
+                   it.Client_name, it.d_id, it.Specification, it.Qty, it.Unit_price,
+                   it.billing_month_override, it.IR_ps
+            FROM ir_track it
+            WHERE it.IR_no LIKE ? OR it.Client_name LIKE ? OR it.d_id LIKE ?
+                  OR it.Specification LIKE ? OR it.IR_ps LIKE ? OR it.C_IR LIKE ?"
+         . ($isNum ? " OR ABS(it.Qty * it.Unit_price - ?) <= ? OR it.Qty = ?" : "")
+         . " ORDER BY it.IR_date DESC LIMIT " . $limit;
+    $p = [$like, $like, $like, $like, $like, $like];
+    if ($isNum) { $p[] = $num; $p[] = $tol; $p[] = (int)$num; }
+    $st = $db->prepare($sql); $st->execute($p);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $name = trim((string)$r['Client_name']);
+        $bm   = trim((string)$r['billing_month_override']);
+        $auto = acc_billing_month($r['d'], acc_cutoff_for($cust[$name] ?? null, $global));
+        $u    = $used['IR-' . (int)$r['IR_id']] ?? null;
+        $groups['return'][] = [
+            'kind' => 'return', 'id' => (int)$r['IR_id'], 'no' => $r['IR_no'], 'date' => $r['d'],
+            'party' => $name, 'party_kind' => '客戶',
+            'product_id' => $r['d_id'], 'spec' => $r['Specification'],
+            'qty' => -(int)$r['Qty'], 'unit_price' => (float)$r['Unit_price'],
+            'amount' => -((float)$r['Qty'] * (float)$r['Unit_price']),
+            'billing_month' => ($bm !== '' ? $bm : $auto),
+            'auto_month' => $auto, 'overridden' => ($bm !== ''),
+            'note' => $r['IR_ps'],
+            'invoiced' => $u ? ($u['invoice_no'] ?: '#' . $u['invoice_id']) : null,
+            'can_edit_month' => !$u,
+        ];
+    }
+
+    /* ── 發票／折讓單 ── */
+    try {
+        acc_ensure_schema($db);
+        $sql = "SELECT i.*, COALESCE((SELECT SUM(a.amount) FROM acc_receipt_alloc a
+                                      WHERE a.invoice_id = i.invoice_id),0) AS paid
+                FROM acc_invoice i
+                WHERE i.invoice_no LIKE ? OR i.customer_name LIKE ? OR i.customer_full LIKE ?
+                      OR i.tax_id LIKE ?"
+             . ($isNum ? " OR ABS(i.total_amount - ?) <= ? OR ABS(i.sales_amount - ?) <= ?" : "")
+             . " ORDER BY i.invoice_date DESC, i.invoice_id DESC LIMIT " . $limit;
+        $p = [$like, $like, $like, $like];
+        if ($isNum) { $p[] = $num; $p[] = $tol; $p[] = $num; $p[] = $tol; }
+        $st = $db->prepare($sql); $st->execute($p);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $groups['invoice'][] = [
+                'kind' => ($r['doc_type'] === 'ALLOWANCE') ? 'allowance' : 'invoice',
+                'id' => (int)$r['invoice_id'], 'no' => $r['invoice_no'] ?: '#' . $r['invoice_id'],
+                'date' => $r['invoice_date'], 'party' => $r['customer_name'], 'party_kind' => '客戶',
+                'billing_month' => $r['billing_month'], 'status' => $r['status'],
+                'amount' => (float)$r['total_amount'], 'sales' => (float)$r['sales_amount'],
+                'tax' => (float)$r['tax_amount'], 'paid' => (float)$r['paid'],
+                'open' => round((float)$r['total_amount'] - (float)$r['paid'], 2),
+                'tax_id' => $r['tax_id'], 'can_edit_month' => false,
+            ];
+        }
+    } catch (Throwable $e) { /* 表還沒建就略過 */ }
+
+    /* ── 收款單 ── */
+    try {
+        $sql = "SELECT r.*, COALESCE((SELECT SUM(a.amount) FROM acc_receipt_alloc a
+                                      WHERE a.receipt_id = r.receipt_id),0) AS allocated
+                FROM acc_receipt r
+                WHERE r.receipt_no LIKE ? OR r.customer_name LIKE ? OR r.bank LIKE ?
+                      OR r.check_no LIKE ?"
+             . ($isNum ? " OR ABS(r.amount - ?) <= ?" : "")
+             . " ORDER BY r.receipt_date DESC LIMIT " . $limit;
+        $p = [$like, $like, $like, $like];
+        if ($isNum) { $p[] = $num; $p[] = $tol; }
+        $st = $db->prepare($sql); $st->execute($p);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $groups['receipt'][] = [
+                'kind' => 'receipt', 'id' => (int)$r['receipt_id'], 'no' => $r['receipt_no'],
+                'date' => $r['receipt_date'], 'party' => $r['customer_name'], 'party_kind' => '客戶',
+                'amount' => (float)$r['amount'], 'allocated' => (float)$r['allocated'],
+                'open' => round((float)$r['amount'] - (float)$r['allocated'], 2),
+                'method' => $r['method'], 'check_no' => $r['check_no'],
+                'can_edit_month' => false,
+            ];
+        }
+    } catch (Throwable $e) { }
+
+    /* ── 加工移轉單（應付側）── */
+    $sql = "SELECT t.transfer_id, t.transfer_no, DATE_FORMAT(t.transfer_date,'%Y-%m-%d') AS d,
+                   t.maker_from, t.bom, t.product_id, t.transfer_qty,
+                   COALESCE(t.modified_unit_price, t.price) AS up,
+                   t.process_amount, t.tax_amount,
+                   DATE_FORMAT(t.invoice_date,'%Y-%m-%d') AS inv_date, t.invoice_ym,
+                   t.note, t.order_no, m.maker_id, m.maker_id_all
+            FROM bom_ing_transfer_log t
+            LEFT JOIN maker_list m ON m.maker_id_no = t.maker_from
+            WHERE COALESCE(t.process_amount,0) <> 0
+              AND (t.transfer_no LIKE ? OR t.bom LIKE ? OR t.product_id LIKE ?
+                   OR t.maker_from LIKE ? OR m.maker_id LIKE ? OR m.maker_id_all LIKE ?
+                   OR t.order_no LIKE ? OR t.note LIKE ?"
+         . ($isNum ? " OR ABS(t.process_amount - ?) <= ? OR t.transfer_qty = ?" : "")
+         . ") ORDER BY t.transfer_date DESC LIMIT " . $limit;
+    $p = [$like, $like, $like, $like, $like, $like, $like, $like];
+    if ($isNum) { $p[] = $num; $p[] = $tol; $p[] = (int)$num; }
+    $st = $db->prepare($sql); $st->execute($p);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $ym  = trim((string)$r['invoice_ym']);
+        $ymF = (strlen($ym) === 6) ? substr($ym, 0, 4) . '-' . substr($ym, 4, 2) : '';
+        $groups['process'][] = [
+            'kind' => 'process', 'id' => (int)$r['transfer_id'], 'no' => $r['transfer_no'],
+            'date' => $r['d'], 'party' => $r['maker_id'] ?: $r['maker_from'], 'party_kind' => '廠商',
+            'party_id' => $r['maker_from'], 'party_full' => $r['maker_id_all'],
+            'bom' => $r['bom'], 'product_id' => $r['product_id'],
+            'qty' => (int)$r['transfer_qty'], 'unit_price' => (float)$r['up'],
+            'amount' => (float)$r['process_amount'], 'tax' => (float)$r['tax_amount'],
+            'billing_month' => ($ymF !== '' ? $ymF : substr((string)$r['d'], 0, 7)),
+            'auto_month' => substr((string)$r['d'], 0, 7),
+            'overridden' => ($ymF !== '' && $ymF !== substr((string)$r['d'], 0, 7)),
+            'inv_date' => $r['inv_date'], 'note' => $r['note'], 'order_no' => $r['order_no'],
+            'can_edit_month' => true,
+        ];
+    }
+
+    // 金額完全相符的排最前面（對紙本時最想先看到的就是這些），其餘依日期新到舊。
+    // 另外標出哪些分組撞到 LIMIT——不可靜默截斷，否則使用者以為就這些。
+    $truncated = [];
+    foreach ($groups as $k => &$g) {
+        if (count($g) >= $limit) $truncated[$k] = true;
+        usort($g, function ($a, $b) use ($isNum, $num, $tol) {
+            if ($isNum) {
+                $ha = (abs(abs((float)($a['amount'] ?? 0)) - $num) <= $tol) ? 1 : 0;
+                $hb = (abs(abs((float)($b['amount'] ?? 0)) - $num) <= $tol) ? 1 : 0;
+                if ($ha !== $hb) return $hb - $ha;
+            }
+            return strcmp((string)($b['date'] ?? ''), (string)($a['date'] ?? ''));
+        });
+    }
+    unset($g);
+
+    $cnt = 0;
+    foreach ($groups as $g) $cnt += count($g);
+    return ['groups' => $groups, 'keyword' => $kw, 'is_amount_search' => $isNum,
+            'limit' => $limit, 'truncated' => $truncated,
+            'summary' => ['total' => $cnt,
+                          'ship'    => count($groups['ship'] ?? []),
+                          'return'  => count($groups['return'] ?? []),
+                          'invoice' => count($groups['invoice'] ?? []),
+                          'receipt' => count($groups['receipt'] ?? []),
+                          'process' => count($groups['process'] ?? [])]];
+}
+
+/* ============================================================
+ * 帳款月份調整
+ *
+ * 為什麼需要：出貨或收貨日期超過結帳日時，系統會自動歸到下個月，
+ * 但對方（客戶或廠商）可能認定算本月帳。這時要能人工指定。
+ *
+ * 應收側：改 is_list / ir_track 的 billing_month_override（留空＝恢復自動計算）。
+ *         已開過發票的憑證不可改月份——金額已經在發票上了，改月份會讓
+ *         對帳單與發票對不起來；要改請先作廢發票。
+ * 應付側：改 bom_ing_transfer_log.invoice_ym（廠商發票年月，本來就是這個欄位的語意）。
+ * ============================================================ */
+
+/** 可調整帳款月份的單據搜尋（應收：出貨＋退貨；應付：加工移轉單） */
+function acc_billing_search(PDO $db, array $f): array
+{
+    $side = ($f['side'] ?? 'ar') === 'ap' ? 'ap' : 'ar';
+    $kw   = trim((string)($f['kw'] ?? ''));
+    $from = trim((string)($f['date_from'] ?? ''));
+    $to   = trim((string)($f['date_to'] ?? ''));
+    $bm   = trim((string)($f['billing_month'] ?? ''));
+    $onlyOvr = !empty($f['only_override']);
+    $limit   = 300;
+    $global  = acc_global_cutoff($db);
+
+    $rows = [];
+
+    if ($side === 'ar') {
+        $cust = [];
+        foreach ($db->query("SELECT customer, settlement_mode, settlement_day
+                             FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+            if (trim((string)$c['customer']) !== '') $cust[trim($c['customer'])] = $c;
+        }
+        $used = acc_invoiced_src_map($db);
+
+        foreach ([['is', 'is_list'], ['ir', 'ir_track']] as [$t, $tbl]) {
+            $isShip = ($t === 'is');
+            $w = []; $p = [];
+            if ($isShip) {
+                $sel = "il.IS_id AS id, il.IS_number AS no, DATE_FORMAT(il.Order_date,'%Y-%m-%d') AS d,
+                        il.Client_name AS party, il.Product_id AS pid, il.Specification AS spec,
+                        il.Qty AS qty, il.Unit_price AS up, il.billing_month_override AS ovr";
+                $tb  = "is_list il"; $dcol = 'il.Order_date';
+                if ($kw !== '') { $w[] = "(il.IS_number LIKE ? OR il.Client_name LIKE ? OR il.Product_id LIKE ?)";
+                                  $p = array_merge($p, ["%$kw%", "%$kw%", "%$kw%"]); }
+            } else {
+                $sel = "it.IR_id AS id, it.IR_no AS no, DATE_FORMAT(it.IR_date,'%Y-%m-%d') AS d,
+                        it.Client_name AS party, it.d_id AS pid, it.Specification AS spec,
+                        it.Qty AS qty, it.Unit_price AS up, it.billing_month_override AS ovr";
+                $tb  = "ir_track it"; $dcol = 'it.IR_date';
+                if ($kw !== '') { $w[] = "(it.IR_no LIKE ? OR it.Client_name LIKE ? OR it.d_id LIKE ?)";
+                                  $p = array_merge($p, ["%$kw%", "%$kw%", "%$kw%"]); }
+            }
+            if ($from !== '') { $w[] = "$dcol >= ?"; $p[] = $from; }
+            if ($to   !== '') { $w[] = "$dcol <= ?"; $p[] = $to; }
+            $ws = $w ? 'WHERE ' . implode(' AND ', $w) : '';
+            $st = $db->prepare("SELECT $sel FROM $tb $ws ORDER BY $dcol DESC LIMIT $limit");
+            $st->execute($p);
+
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $amt = (float)$r['qty'] * (float)$r['up'];
+                if (abs($amt) < 0.0001) continue;
+                $name = trim((string)$r['party']);
+                $o    = trim((string)$r['ovr']);
+                $auto = acc_billing_month($r['d'], acc_cutoff_for($cust[$name] ?? null, $global));
+                $cur  = ($o !== '' ? $o : $auto);
+                if ($bm !== '' && $cur !== $bm) continue;
+                if ($onlyOvr && $o === '') continue;
+                $u = $used[strtoupper($t) . '-' . (int)$r['id']] ?? null;
+                $rows[] = [
+                    'src_type' => strtoupper($t), 'id' => (int)$r['id'], 'no' => $r['no'],
+                    'kind' => $isShip ? 'ship' : 'return', 'date' => $r['d'],
+                    'party' => $name, 'product_id' => $r['pid'], 'spec' => $r['spec'],
+                    'qty' => $isShip ? (int)$r['qty'] : -(int)$r['qty'],
+                    'amount' => $isShip ? $amt : -$amt,
+                    'auto_month' => $auto, 'override' => $o, 'billing_month' => $cur,
+                    'overridden' => ($o !== ''),
+                    'invoiced' => $u ? ($u['invoice_no'] ?: '#' . $u['invoice_id']) : null,
+                    'locked' => (bool)$u,
+                ];
+            }
+        }
+    } else {
+        $w = ["COALESCE(t.process_amount,0) <> 0"]; $p = [];
+        if ($kw !== '') {
+            $w[] = "(t.transfer_no LIKE ? OR t.bom LIKE ? OR t.product_id LIKE ?
+                     OR t.maker_from LIKE ? OR m.maker_id LIKE ?)";
+            $p = array_merge($p, array_fill(0, 5, "%$kw%"));
+        }
+        if ($from !== '') { $w[] = "t.transfer_date >= ?"; $p[] = $from; }
+        if ($to   !== '') { $w[] = "t.transfer_date <= ?"; $p[] = $to; }
+        if ($bm   !== '') { $w[] = "COALESCE(NULLIF(t.invoice_ym,''), DATE_FORMAT(t.transfer_date,'%Y%m')) = ?";
+                            $p[] = str_replace('-', '', $bm); }
+        $st = $db->prepare("
+            SELECT t.transfer_id AS id, t.transfer_no AS no,
+                   DATE_FORMAT(t.transfer_date,'%Y-%m-%d') AS d,
+                   t.maker_from, m.maker_id, t.bom, t.product_id AS pid,
+                   t.transfer_qty AS qty, COALESCE(t.modified_unit_price,t.price) AS up,
+                   t.process_amount AS amt, t.tax_amount AS tax,
+                   t.invoice_ym, DATE_FORMAT(t.invoice_date,'%Y-%m-%d') AS inv_date
+            FROM bom_ing_transfer_log t
+            LEFT JOIN maker_list m ON m.maker_id_no = t.maker_from
+            WHERE " . implode(' AND ', $w) . "
+            ORDER BY t.transfer_date DESC LIMIT $limit");
+        $st->execute($p);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $ym   = trim((string)$r['invoice_ym']);
+            $ymF  = (strlen($ym) === 6) ? substr($ym, 0, 4) . '-' . substr($ym, 4, 2) : '';
+            $auto = substr((string)$r['d'], 0, 7);
+            $cur  = ($ymF !== '' ? $ymF : $auto);
+            if ($onlyOvr && ($ymF === '' || $ymF === $auto)) continue;
+            $rows[] = [
+                'src_type' => 'TLOG', 'id' => (int)$r['id'], 'no' => $r['no'], 'kind' => 'process',
+                'date' => $r['d'], 'party' => $r['maker_id'] ?: $r['maker_from'],
+                'party_id' => $r['maker_from'], 'bom' => $r['bom'],
+                'product_id' => $r['pid'], 'qty' => (int)$r['qty'],
+                'amount' => (float)$r['amt'], 'tax' => (float)$r['tax'],
+                'auto_month' => $auto, 'override' => $ymF, 'billing_month' => $cur,
+                'overridden' => ($ymF !== '' && $ymF !== $auto),
+                'inv_date' => $r['inv_date'], 'locked' => false,
+            ];
+        }
+    }
+
+    usort($rows, fn($a, $b) => strcmp($b['date'], $a['date']) ?: strcmp((string)$a['no'], (string)$b['no']));
+
+    $sum = ['count' => count($rows), 'amount' => 0.0, 'overridden' => 0, 'locked' => 0];
+    foreach ($rows as $r) {
+        $sum['amount'] += $r['amount'];
+        if ($r['overridden']) $sum['overridden']++;
+        if (!empty($r['locked'])) $sum['locked']++;
+    }
+    return ['rows' => $rows, 'summary' => $sum, 'side' => $side];
+}
+
+/**
+ * 設定單一單據的帳款月份。
+ * @param string $srcType IS=出貨 IR=退貨 TLOG=加工移轉單
+ * @param string $ym      YYYY-MM；空字串＝恢復自動計算
+ */
+function acc_set_billing_month(PDO $db, string $srcType, int $id, string $ym, string $userId): array
+{
+    $srcType = strtoupper(trim($srcType));
+    if (!in_array($srcType, ['IS', 'IR', 'TLOG'], true)) return ['success' => false, 'message' => '不支援的單據類型'];
+    if ($id <= 0) return ['success' => false, 'message' => '缺少單據'];
+    $ym = trim($ym);
+    if ($ym !== '' && !preg_match('/^\d{4}-\d{2}$/', $ym)) {
+        return ['success' => false, 'message' => '帳款月份格式須為 YYYY-MM'];
+    }
+
+    // 已開發票的憑證不可改月份（金額已在發票上，改了對帳單與發票會對不起來）
+    if ($srcType === 'IS' || $srcType === 'IR') {
+        $used = acc_invoiced_src_map($db);
+        $u = $used[$srcType . '-' . $id] ?? null;
+        if ($u) {
+            return ['success' => false,
+                    'message' => '此單據已開立在發票 ' . ($u['invoice_no'] ?: '#' . $u['invoice_id'])
+                               . ' 上，不可變更帳款月份。若確定要改，請先作廢該發票。'];
+        }
+    }
+
+    try {
+        $db->beginTransaction();
+        if ($srcType === 'IS') {
+            $st = $db->prepare("UPDATE is_list SET billing_month_override = ? WHERE IS_id = ?");
+            $st->execute([$ym !== '' ? $ym : null, $id]);
+        } elseif ($srcType === 'IR') {
+            $st = $db->prepare("UPDATE ir_track SET billing_month_override = ?, Modified_By = ?,
+                                Modified_At = NOW() WHERE IR_id = ?");
+            $st->execute([$ym !== '' ? $ym : null, $userId, $id]);
+        } else {
+            // 應付：invoice_ym 是 char(6) YYYYMM；清空＝退回用加工日期所在月份
+            $st = $db->prepare("UPDATE bom_ing_transfer_log SET invoice_ym = ?, modified_at = NOW(),
+                                changed_by = ? WHERE transfer_id = ?");
+            $st->execute([$ym !== '' ? str_replace('-', '', $ym) : null, $userId, $id]);
+        }
+        $n = $st->rowCount();
+        $db->commit();
+        return ['success' => true, 'updated' => $n,
+                'message' => $n ? ($ym !== '' ? "已指定帳款月份為 {$ym}" : '已恢復為自動計算')
+                                : '資料未變更'];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '設定失敗：' . $e->getMessage()];
+    }
+}
+
+/** 批次設定帳款月份 */
+function acc_set_billing_month_bulk(PDO $db, array $items, string $ym, string $userId): array
+{
+    $ok = 0; $fail = 0; $errors = [];
+    foreach ($items as $it) {
+        $r = acc_set_billing_month($db, (string)($it['src_type'] ?? ''), (int)($it['id'] ?? 0), $ym, $userId);
+        if ($r['success'] && ($r['updated'] ?? 0) > 0) $ok++;
+        else { $fail++; if (count($errors) < 12) $errors[] = ($it['no'] ?? ('#' . ($it['id'] ?? '?'))) . '：' . $r['message']; }
+    }
+    return ['success' => true, 'applied' => $ok, 'failed' => $fail, 'errors' => $errors,
+            'message' => "已調整 {$ok} 筆" . ($fail ? "，{$fail} 筆未變更" : '')];
+}
+
 /** 解析上傳的 CSV（支援 UTF-8 BOM 與 Big5），回傳 [表頭, 資料列] */
 function acc_parse_csv(string $raw): array
 {

@@ -52,6 +52,18 @@ $taxRate = acc_tax_rate($db);
 #sidebar-menu{visibility:hidden;}
 .right_col .page-title{margin:8px 0 4px;overflow:hidden;}
 
+/* 應收＝琥珀橘（錢進來）。應付頁用暖棕赭，兩頁色系與文字都不同，避免混淆。
+   顏色不是唯一辨識依據：另有文字標籤與箭頭方向。 */
+.side-band{display:flex;align-items:center;gap:10px;clear:both;margin-bottom:8px;
+  background:linear-gradient(90deg,#F0A24B 0%,#E8912F 100%);color:#fff;
+  border-radius:8px;padding:7px 14px;font-size:15px;box-shadow:inset 0 -3px 0 rgba(0,0,0,.12);}
+.side-band .fa-arrow-circle-down{font-size:19px;}
+.side-band .sb-sub{font-size:12.5px;opacity:.92;font-weight:normal;}
+.side-band .sb-switch{margin-left:auto;font-size:13px;color:#fff;background:rgba(255,255,255,.18);
+  border:1px solid rgba(255,255,255,.55);border-radius:14px;padding:4px 13px;text-decoration:none;
+  white-space:nowrap;}
+.side-band .sb-switch:hover{background:rgba(255,255,255,.32);color:#fff;text-decoration:none;}
+
 .a-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;clear:both;
   border:1.5px solid var(--a-line);border-radius:8px;padding:8px 10px;margin-bottom:8px;background:var(--a-bg);}
 .a-bar label{margin:0;font-size:13px;color:var(--a-ink);font-weight:normal;}
@@ -162,6 +174,14 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
     </div>
     <div class="clearfix"></div>
 
+    <!-- 身分識別帶：與應付頁用不同色系＋不同文字與箭頭，避免兩頁看起來一樣而誤操作 -->
+    <div class="side-band">
+      <i class="fa fa-arrow-circle-down"></i>
+      <b>應收帳款</b><span class="sb-sub">錢進來 · 向客戶收款</span>
+      <a href="ap_statement.php" class="sb-switch" title="切換到應付對帳單">
+        切換到 <b>應付帳款</b>（錢出去） <i class="fa fa-long-arrow-right"></i></a>
+    </div>
+
 <?php if (!$perms['canView']): ?>
     <div class="a-noperm">
       <h4><i class="fa fa-lock"></i> 無會計模組檢閱權限</h4>
@@ -181,13 +201,22 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
     </div>
 
     <div class="a-bar" style="background:var(--a-bg2);">
+      <button id="btnLookup" class="btn-warm"><i class="fa fa-search"></i> 單據快搜
+        <span style="font-weight:normal;font-size:11.5px;">(客戶拿紙本來)</span></button>
+      <button id="btnMonth"><i class="fa fa-calendar"></i> 帳款月份調整</button>
+      <span style="width:1px;height:22px;background:var(--a-line);margin:0 4px;"></span>
       <button id="btnExport"><i class="fa fa-file-text-o"></i> 匯出彙總CSV</button>
       <button id="btnPrint"><i class="fa fa-print"></i> 列印／PDF</button>
+      <a href="invoice_export.php" style="text-decoration:none;">
+        <button type="button"><i class="fa fa-file-text-o"></i> 發票開立</button></a>
+      <a href="receipt.php" style="text-decoration:none;">
+        <button type="button"><i class="fa fa-money"></i> 收款沖帳</button></a>
       <a href="customer_invoice_data.php" style="text-decoration:none;">
-        <button type="button"><i class="fa fa-id-card-o"></i> 去補客戶發票資料</button></a>
-      <span class="a-hint" style="margin-left:10px;">
-        點任一列的「對帳單」可看該客戶該月完整明細並列印。稅額以 <?= round($taxRate * 100) ?>% 外加計算。
-      </span>
+        <button type="button"><i class="fa fa-id-card-o"></i> 客戶發票資料</button></a>
+    </div>
+    <div class="a-hint" style="margin:-4px 0 8px;">
+      <kbd>/</kbd> 或點「單據快搜」可用單號／金額／料號直接查任何一張單屬於哪個帳款月份。
+      稅額以 <?= round($taxRate * 100) ?>% 外加計算。
     </div>
 
     <div class="a-stat">
@@ -271,6 +300,7 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<?php $ACC_TOOL_SIDE = 'ar'; include '_acc_tools.php'; ?>
 <script>
 /* 版型的 #sidebar-menu 預設 visibility:hidden，必須在此恢復，否則整個左側欄不會出現 */
 $(document).ready(function () {
@@ -290,6 +320,7 @@ var TAX_RATE = <?= json_encode($taxRate) ?>;
 var rows = [], page = 1, perPage = 20, total = 0;
 var sortBy = 'net_amt', sortDir = 'desc';
 var curStmt = null;
+var CSRF = '';
 
 var READY_LABEL = {ok:'可開發票', no_tax:'缺統編', bad_tax:'統編錯誤', no_full:'缺發票全名'};
 
@@ -516,6 +547,21 @@ $('#btnExport').on('click',function(){
   window.location = API+'?action=ar_export&'+qs(f);
 });
 $('#btnPrint').on('click',function(){ window.print(); });
+
+/* ══ 共用工具：單據快搜 / 帳款月份調整 ══ */
+AccTools.init({side:'ar', api:API, csrf:function(){ return CSRF; }, onChanged:load});
+$('#btnLookup').on('click',function(){ AccTools.openLookup(); });
+$('#btnMonth').on('click',function(){ AccTools.openMonth(); });
+/* 按 / 直接開單據快搜（不在輸入框內時） */
+$(document).on('keydown',function(e){
+  var tag=(e.target.tagName||'').toLowerCase();
+  if(e.key==='/' && tag!=='input' && tag!=='select' && tag!=='textarea'){
+    e.preventDefault(); AccTools.openLookup('');
+  }
+});
+
+/* 取 CSRF（調整帳款月份要用）*/
+$.getJSON(API,{action:'meta'},function(r){ if(r.ok) CSRF=r.csrf; });
 
 load();
 })(jQuery);
