@@ -1369,6 +1369,303 @@ function acc_uninvoiced_returns(PDO $db, string $clientName): array
     return $out;
 }
 
+/* ============================================================
+ * 收款與沖帳
+ *
+ * 彈性設計（使用者指定）：一筆收款可沖多張發票、一張發票可被多筆收款分次沖，
+ * 支援部分收款與尾款。折讓單以負數參與未收餘額計算（等於減少應收）。
+ * ============================================================ */
+
+/** 收款單號：RC + 民國年(3) + MMDD + 序號(3) */
+function acc_receipt_next_no(PDO $db, string $date): string
+{
+    $y      = (int)substr($date, 0, 4) - 1911;
+    $prefix = 'RC' . str_pad((string)$y, 3, '0', STR_PAD_LEFT) . substr($date, 5, 2) . substr($date, 8, 2);
+    $st = $db->prepare("SELECT MAX(CAST(SUBSTRING(receipt_no, 10) AS UNSIGNED)) FROM acc_receipt WHERE receipt_no LIKE ?");
+    $st->execute([$prefix . '%']);
+    return $prefix . str_pad((string)((int)$st->fetchColumn() + 1), 3, '0', STR_PAD_LEFT);
+}
+
+/** 某張發票目前的未收餘額（扣掉所有收款單已沖金額） */
+function acc_invoice_open(PDO $db, int $invoiceId): array
+{
+    $st = $db->prepare("SELECT i.invoice_id, i.invoice_no, i.doc_type, i.status, i.customer_name,
+                               i.billing_month, i.total_amount,
+                               COALESCE((SELECT SUM(a.amount) FROM acc_receipt_alloc a
+                                         WHERE a.invoice_id = i.invoice_id), 0) AS paid
+                        FROM acc_invoice i WHERE i.invoice_id = ? LIMIT 1");
+    $st->execute([$invoiceId]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) return [];
+    $r['total_amount'] = (float)$r['total_amount'];
+    $r['paid']         = (float)$r['paid'];
+    $r['open']         = round($r['total_amount'] - $r['paid'], 2);
+    return $r;
+}
+
+/** 某客戶尚未收完的已開立發票（供沖帳挑選；折讓單一併列出，金額為負） */
+function acc_open_invoices(PDO $db, string $clientName, ?int $includeReceiptId = null): array
+{
+    acc_ensure_schema($db);
+    $st = $db->prepare("
+        SELECT i.invoice_id, i.doc_type, i.invoice_no, i.invoice_date, i.billing_month,
+               i.total_amount, i.customer_name,
+               COALESCE((SELECT SUM(a.amount) FROM acc_receipt_alloc a
+                         WHERE a.invoice_id = i.invoice_id), 0) AS paid,
+               COALESCE((SELECT SUM(a2.amount) FROM acc_receipt_alloc a2
+                         WHERE a2.invoice_id = i.invoice_id AND a2.receipt_id = ?), 0) AS this_paid
+        FROM acc_invoice i
+        WHERE i.customer_name = ? AND i.status = 'issued'
+        ORDER BY i.invoice_date, i.invoice_id");
+    $st->execute([$includeReceiptId ?? 0, $clientName]);
+
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $sign  = ($r['doc_type'] === 'ALLOWANCE') ? -1 : 1;
+        $total = (float)$r['total_amount'] * $sign;
+        $paid  = (float)$r['paid'];
+        $open  = round($total - $paid, 2);
+        // 編輯中的收款單：把它自己已沖的金額算回可沖額度，否則會沖不回去
+        $r['total_amount'] = $total;
+        $r['paid']         = $paid;
+        $r['this_paid']    = (float)$r['this_paid'];
+        $r['open']         = $open;
+        $r['available']    = round($open + $r['this_paid'], 2);
+        if (abs($r['available']) < 0.005) continue;
+        $out[] = $r;
+    }
+    return $out;
+}
+
+/** 建立或更新收款單（不含沖帳明細，沖帳走 acc_alloc_save） */
+function acc_receipt_save(PDO $db, array $d, string $userId): array
+{
+    acc_ensure_schema($db);
+    $id   = (int)($d['receipt_id'] ?? 0);
+    $name = trim((string)($d['customer_name'] ?? ''));
+    $date = trim((string)($d['receipt_date'] ?? ''));
+    $amt  = (float)($d['amount'] ?? 0);
+
+    if ($name === '')                                  return ['success' => false, 'message' => '請填客戶'];
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date))   return ['success' => false, 'message' => '入帳日格式錯誤'];
+    if ($amt <= 0)                                     return ['success' => false, 'message' => '收款金額必須大於 0'];
+
+    $cid = trim((string)($d['customer_id'] ?? ''));
+    if ($cid === '') {
+        $stc = $db->prepare("SELECT customer_id FROM customer_list WHERE customer = ? LIMIT 1");
+        $stc->execute([$name]);
+        $cid = (string)($stc->fetchColumn() ?: '');
+    }
+
+    $method  = trim((string)($d['method'] ?? '匯款'));
+    $fee     = (float)($d['fee'] ?? 0);
+    $bank    = trim((string)($d['bank'] ?? ''));
+    $ckNo    = trim((string)($d['check_no'] ?? ''));
+    $ckDue   = trim((string)($d['check_due'] ?? ''));
+    $note    = trim((string)($d['note'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $ckDue)) $ckDue = null;
+
+    try {
+        $db->beginTransaction();
+        if ($id > 0) {
+            // 縮小金額時不可小於已沖總額
+            $alloc = (float)$db->query("SELECT COALESCE(SUM(amount),0) FROM acc_receipt_alloc
+                                        WHERE receipt_id = " . (int)$id)->fetchColumn();
+            if ($amt < $alloc - 0.005) {
+                $db->rollBack();
+                return ['success' => false, 'message' => '收款金額 ' . number_format($amt)
+                        . ' 小於已沖帳金額 ' . number_format($alloc) . '，請先調整沖帳明細'];
+            }
+            $st = $db->prepare("UPDATE acc_receipt SET customer_id=?, customer_name=?, receipt_date=?,
+                                method=?, amount=?, fee=?, bank=?, check_no=?, check_due=?, note=?,
+                                Modified_By=?, Modified_At=NOW() WHERE receipt_id=?");
+            $st->execute([$cid ?: null, $name, $date, $method, $amt, $fee, $bank ?: null,
+                          $ckNo ?: null, $ckDue, $note ?: null, $userId, $id]);
+            $db->commit();
+            return ['success' => true, 'receipt_id' => $id, 'message' => '已更新收款單'];
+        }
+
+        $no = acc_receipt_next_no($db, $date);
+        $st = $db->prepare("INSERT INTO acc_receipt
+                            (receipt_no, customer_id, customer_name, receipt_date, method, amount,
+                             fee, bank, check_no, check_due, note, Created_By)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+        $st->execute([$no, $cid ?: null, $name, $date, $method, $amt, $fee, $bank ?: null,
+                      $ckNo ?: null, $ckDue, $note ?: null, $userId]);
+        $newId = (int)$db->lastInsertId();
+        $db->commit();
+        return ['success' => true, 'receipt_id' => $newId, 'receipt_no' => $no,
+                'message' => '已建立收款單 ' . $no];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '存檔失敗：' . $e->getMessage()];
+    }
+}
+
+/**
+ * 寫入沖帳明細（整批取代該收款單原有的沖帳）。
+ * 三道檢查：沖帳總額 ≤ 收款金額、每張發票不可超沖、發票客戶需與收款單一致。
+ */
+function acc_alloc_save(PDO $db, int $receiptId, array $allocs, string $userId): array
+{
+    acc_ensure_schema($db);
+    if ($receiptId <= 0) return ['success' => false, 'message' => '缺少收款單'];
+
+    $st = $db->prepare("SELECT * FROM acc_receipt WHERE receipt_id=? LIMIT 1");
+    $st->execute([$receiptId]);
+    $rc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$rc) return ['success' => false, 'message' => '找不到收款單'];
+
+    // 整理輸入
+    $clean = [];
+    $sum   = 0.0;
+    foreach ($allocs as $a) {
+        $iid = (int)($a['invoice_id'] ?? 0);
+        $amt = round((float)($a['amount'] ?? 0), 2);
+        if ($iid <= 0 || abs($amt) < 0.005) continue;
+        if (isset($clean[$iid])) $clean[$iid] += $amt; else $clean[$iid] = $amt;
+    }
+    foreach ($clean as $amt) $sum += $amt;
+
+    if ($sum > (float)$rc['amount'] + 0.005) {
+        return ['success' => false, 'message' => '沖帳總額 ' . number_format($sum)
+                . ' 超過收款金額 ' . number_format((float)$rc['amount'])];
+    }
+
+    try {
+        $db->beginTransaction();
+        // 先刪掉本收款單原有沖帳，再重寫（額度計算才不會把自己算進去）
+        $db->prepare("DELETE FROM acc_receipt_alloc WHERE receipt_id=?")->execute([$receiptId]);
+
+        $ins = $db->prepare("INSERT INTO acc_receipt_alloc (receipt_id, invoice_id, amount, Created_By)
+                             VALUES (?,?,?,?)");
+        foreach ($clean as $iid => $amt) {
+            $inv = acc_invoice_open($db, $iid);
+            if (!$inv) { $db->rollBack(); return ['success' => false, 'message' => "發票 #{$iid} 不存在"]; }
+            if ($inv['status'] !== 'issued') {
+                $db->rollBack();
+                return ['success' => false, 'message' => '發票 ' . ($inv['invoice_no'] ?: '#' . $iid)
+                        . ' 尚未開立或已作廢，不可沖帳'];
+            }
+            if (trim((string)$inv['customer_name']) !== trim((string)$rc['customer_name'])) {
+                $db->rollBack();
+                return ['success' => false, 'message' => '發票 ' . ($inv['invoice_no'] ?: '#' . $iid)
+                        . ' 的客戶（' . $inv['customer_name'] . '）與收款單（' . $rc['customer_name'] . '）不符'];
+            }
+            $sign = ($inv['doc_type'] === 'ALLOWANCE') ? -1 : 1;
+            $open = round((float)$inv['total_amount'] * $sign - (float)$inv['paid'], 2);
+            if ($sign > 0 && $amt > $open + 0.005) {
+                $db->rollBack();
+                return ['success' => false, 'message' => '發票 ' . ($inv['invoice_no'] ?: '#' . $iid)
+                        . ' 未收餘額只有 ' . number_format($open) . '，不可沖 ' . number_format($amt)];
+            }
+            if ($sign < 0 && $amt < $open - 0.005) {
+                $db->rollBack();
+                return ['success' => false, 'message' => '折讓單 ' . ($inv['invoice_no'] ?: '#' . $iid)
+                        . ' 可沖額度只有 ' . number_format($open)];
+            }
+            $ins->execute([$receiptId, $iid, $amt, $userId]);
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '沖帳失敗：' . $e->getMessage()];
+    }
+
+    $left = round((float)$rc['amount'] - $sum, 2);
+    return ['success' => true, 'allocated' => $sum, 'unallocated' => $left,
+            'count' => count($clean),
+            'message' => '已沖帳 ' . count($clean) . ' 張發票、合計 ' . number_format($sum)
+                       . ($left > 0.005 ? '，尚有 ' . number_format($left) . ' 元未分配（暫收款）' : '')];
+}
+
+/** 收款單清單（含已沖／未分配金額） */
+function acc_receipt_list(PDO $db, array $f): array
+{
+    acc_ensure_schema($db);
+    $where = []; $params = [];
+    if (!empty($f['date_from'])) { $where[] = "r.receipt_date >= ?"; $params[] = $f['date_from']; }
+    if (!empty($f['date_to']))   { $where[] = "r.receipt_date <= ?"; $params[] = $f['date_to']; }
+    $kw = trim((string)($f['kw'] ?? ''));
+    if ($kw !== '') {
+        $where[] = "(r.receipt_no LIKE ? OR r.customer_name LIKE ? OR r.bank LIKE ? OR r.check_no LIKE ?)";
+        for ($i = 0; $i < 4; $i++) $params[] = '%' . $kw . '%';
+    }
+    $ws = $where ? 'WHERE ' . implode(' AND ', $where) : '';
+
+    $st = $db->prepare("SELECT r.*,
+                          COALESCE((SELECT SUM(a.amount) FROM acc_receipt_alloc a
+                                    WHERE a.receipt_id = r.receipt_id), 0) AS allocated,
+                          (SELECT COUNT(*) FROM acc_receipt_alloc a2
+                           WHERE a2.receipt_id = r.receipt_id) AS alloc_cnt
+                        FROM acc_receipt r
+                        $ws
+                        ORDER BY r.receipt_date DESC, r.receipt_id DESC");
+    $st->execute($params);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($rows as &$r) {
+        $r['amount']      = (float)$r['amount'];
+        $r['fee']         = (float)$r['fee'];
+        $r['allocated']   = (float)$r['allocated'];
+        $r['alloc_cnt']   = (int)$r['alloc_cnt'];
+        $r['unallocated'] = round($r['amount'] - $r['allocated'], 2);
+    }
+    unset($r);
+
+    if (!empty($f['only_unalloc'])) {
+        $rows = array_values(array_filter($rows, fn($r) => $r['unallocated'] > 0.005));
+    }
+
+    $summary = ['count' => count($rows), 'amount' => 0.0, 'allocated' => 0.0, 'unallocated' => 0.0, 'fee' => 0.0];
+    foreach ($rows as $r) {
+        $summary['amount']      += $r['amount'];
+        $summary['allocated']   += $r['allocated'];
+        $summary['unallocated'] += $r['unallocated'];
+        $summary['fee']         += $r['fee'];
+    }
+
+    $total   = count($rows);
+    $perPage = (int)($f['per_page'] ?? 20);
+    if ($perPage === 0) return ['rows' => $rows, 'total' => $total, 'page' => 1, 'per_page' => 0, 'summary' => $summary];
+    if (!in_array($perPage, [5, 10, 20, 50], true)) $perPage = 20;
+    $page = max(1, (int)($f['page'] ?? 1));
+    return ['rows' => array_slice($rows, ($page - 1) * $perPage, $perPage),
+            'total' => $total, 'page' => $page, 'per_page' => $perPage, 'summary' => $summary];
+}
+
+/** 某收款單的沖帳明細 */
+function acc_receipt_allocs(PDO $db, int $receiptId): array
+{
+    $st = $db->prepare("SELECT a.alloc_id, a.invoice_id, a.amount,
+                               i.invoice_no, i.invoice_date, i.doc_type, i.billing_month, i.total_amount
+                        FROM acc_receipt_alloc a
+                        JOIN acc_invoice i ON i.invoice_id = a.invoice_id
+                        WHERE a.receipt_id = ?
+                        ORDER BY i.invoice_date, a.alloc_id");
+    $st->execute([$receiptId]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** 刪除收款單（連同沖帳明細） */
+function acc_receipt_delete(PDO $db, int $receiptId, string $userId): array
+{
+    if ($receiptId <= 0) return ['success' => false, 'message' => '缺少收款單'];
+    try {
+        $db->beginTransaction();
+        $db->prepare("DELETE FROM acc_receipt_alloc WHERE receipt_id=?")->execute([$receiptId]);
+        $st = $db->prepare("DELETE FROM acc_receipt WHERE receipt_id=?");
+        $st->execute([$receiptId]);
+        $n = $st->rowCount();
+        $db->commit();
+        return ['success' => true, 'deleted' => $n,
+                'message' => $n ? '已刪除收款單與其沖帳明細' : '找不到該收款單'];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '刪除失敗：' . $e->getMessage()];
+    }
+}
+
 /** 解析上傳的 CSV（支援 UTF-8 BOM 與 Big5），回傳 [表頭, 資料列] */
 function acc_parse_csv(string $raw): array
 {
