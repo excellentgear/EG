@@ -118,6 +118,28 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 .flow .cur{background:var(--pq-warm);color:#fff;border-radius:9px;padding:1px 8px;}
 .flow .dn{background:var(--pq-soft);color:var(--pq-ink);border-radius:9px;padding:1px 8px;}
 .hint{font-size:12px;color:var(--pq-ink2);}
+/* 用途選擇是「開在申請單之上」的第二層 modal，明確墊高避免被蓋住 */
+#mPurpose{z-index:2100;}
+/* 用途歸屬：申請單最重要的一格，給它獨立區塊 */
+.pq-purpose{border:1px solid #E2C58F;background:#FFF7EA;border-radius:6px;padding:10px 12px;margin-bottom:12px;}
+.pq-purpose-lb{display:block;font-size:13px;font-weight:bold;color:var(--pq-deep);margin-bottom:6px;}
+.pq-purpose-box{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.pq-purpose-box .pq-purpose-none{color:#a5866a;font-size:13px;}
+.pq-purpose-tag{display:inline-flex;align-items:center;gap:6px;background:#F0A24B;color:#fff;
+  border-radius:12px;padding:3px 12px;font-size:13px;}
+.pq-purpose-tag .k{background:rgba(255,255,255,.28);border-radius:8px;padding:0 7px;font-size:11px;}
+/* 逐列覆寫用的小標籤 */
+.pq-pp-cell{display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:12px;}
+.pq-pp-same{color:#a5866a;cursor:pointer;text-decoration:underline dotted;}
+.pq-pp-set{background:#F7E0BD;color:#6b4415;border-radius:10px;padding:1px 8px;cursor:pointer;}
+.pq-pp-clr{color:#DD5138;cursor:pointer;font-weight:bold;}
+/* 用途選擇 modal 的搜尋結果 */
+.pp-row{padding:5px 8px;border-bottom:1px solid var(--pq-line);cursor:pointer;font-size:13px;}
+.pp-row:hover{background:#FFF3E0;}
+.pp-row .m{font-weight:bold;color:var(--pq-deep);}
+.pp-row .s{color:var(--pq-ink);}
+.pp-row .x{color:var(--pq-ink2);font-size:12px;}
+#ppList{max-height:300px;overflow:auto;border:1px solid var(--pq-line);border-radius:4px;background:#fff;margin-top:6px;}
 .sug{border:1px solid var(--pq-line);border-radius:4px;background:#FFFBF3;padding:6px 8px;font-size:12px;color:#8a5a1e;margin-top:4px;}
 .print-only{display:none;}
 @media print{
@@ -202,10 +224,10 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <div class="pq-wrap">
                 <table class="pq-table" id="listTable">
                     <thead><tr>
-                        <th>單號</th><th>標題</th><th>申請人</th><th>部門</th><th>品項</th>
+                        <th>單號</th><th>標題</th><th>用途</th><th>申請人</th><th>部門</th><th>品項</th>
                         <th>廠商</th><th>含稅總額</th><th>狀態</th><th>付款</th><th>申請日</th><th class="no-print">操作</th>
                     </tr></thead>
-                    <tbody id="listBody"><tr><td colspan="11" class="pq-empty">載入中…</td></tr></tbody>
+                    <tbody id="listBody"><tr><td colspan="12" class="pq-empty">載入中…</td></tr></tbody>
                 </table>
             </div>
             <div class="hint" style="margin-top:5px;" id="listFoot"></div>
@@ -285,15 +307,27 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 <div class="pq-mask" id="mReq"><div class="pq-modal wide">
     <div class="m-head"><span id="reqTitle">提出採購申請</span><span class="m-close" onclick="closeMask('mReq')">✕</span></div>
     <div class="m-body">
+        <div class="pq-purpose">
+            <label class="pq-purpose-lb">這筆採購是為了什麼？ <span style="color:#DD5138;">*</span></label>
+            <div class="pq-purpose-box">
+                <span id="rPurposeShow" class="pq-purpose-none">尚未選擇</span>
+                <button class="pq-btn warm" id="btnPickPurpose"><i class="fa fa-crosshairs"></i> 選擇用途</button>
+            </div>
+            <p class="hint" style="margin:4px 0 0;">選了訂單／BOM／料號，這筆花費才算得進該筆的成本；耗材、辦公用品請選「常備品補貨」。</p>
+        </div>
         <div class="pq-grid">
-            <div class="pq-fld"><label>標題</label><input type="text" id="rTitle" placeholder="例：三廠鑽頭補貨"></div>
             <div class="pq-fld"><label>希望到貨日</label><input type="date" id="rNeed"></div>
             <div class="pq-fld"><label>申請人／部門</label><input type="text" id="rWho" readonly style="background:#F5EEE2;"></div>
+            <div class="pq-fld"><label>急件</label>
+                <label style="display:flex;align-items:center;gap:6px;height:30px;font-weight:normal;cursor:pointer;">
+                    <input type="checkbox" id="rUrgent" style="width:auto;margin:0;"> 這張單是急件
+                </label></div>
         </div>
-        <div class="pq-fld" style="margin-bottom:10px;"><label>申請事由</label><textarea id="rReason"></textarea></div>
+        <div class="pq-fld" style="margin-bottom:10px;"><label>補充說明（選填）</label><textarea id="rReason" placeholder="有特別要求再寫，例：要同一廠牌、附發票"></textarea></div>
+        <div class="pq-fld" style="margin-bottom:10px;"><label>標題（選填，留白會自動帶入用途＋品名）</label><input type="text" id="rTitle" placeholder="留白就好"></div>
 
         <div class="pq-sec">
-            <h5>品項（申請時單價可以留白，價錢由採購詢價後填）</h5>
+            <h5>要買什麼（只填品名、數量就好；價格、入庫方式由採購接手處理）</h5>
             <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
                 <select id="pkCat" style="height:28px;border:1px solid #D8BE93;border-radius:4px;"><option value="">全部類別</option></select>
                 <select id="pkTag" style="height:28px;border:1px solid #D8BE93;border-radius:4px;"><option value="">全部標籤</option></select>
@@ -304,13 +338,13 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <div id="pkResult" class="hint">在上方搜尋採購品後點選加入；主檔沒有的東西可直接手打，採購到貨前再建檔。</div>
             <div class="pq-wrap" style="margin-top:8px;">
                 <table class="pq-table" id="reqItemTable">
-                    <thead><tr><th style="width:26%;">品名</th><th style="width:20%;">規格</th><th style="width:9%;">數量</th>
-                        <th style="width:8%;">單位</th><th style="width:11%;">預估單價</th><th style="width:12%;">到貨處理</th>
-                        <th>備註</th><th style="width:6%;">急件</th><th style="width:5%;"></th></tr></thead>
+                    <thead><tr><th style="width:24%;">品名</th><th style="width:18%;">規格</th><th style="width:9%;">數量</th>
+                        <th style="width:9%;">單位</th><th style="width:20%;">用途</th>
+                        <th>備註</th><th style="width:5%;"></th></tr></thead>
                     <tbody id="reqItemBody"></tbody>
                 </table>
             </div>
-            <p class="hint" style="margin-top:4px;">到貨處理：<b>入庫待領</b>＝進儲位列管；<b>直接交付請購人</b>＝到貨自動一進一出、庫存淨值 0 但留有領用紀錄；<b>不列管</b>＝純費用不進庫存。</p>
+            <p class="hint" style="margin-top:4px;">「用途」預設沿用上面選的，整張單同一個用途就不用理它；某一項是為了別的訂單／料號才點開改。</p>
         </div>
 
         <div class="pq-sec">
@@ -330,6 +364,40 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
     <div class="m-foot">
         <button class="pq-btn" onclick="closeMask('mReq')">取消</button>
         <button class="pq-btn warm" id="btnSaveReq"><i class="fa fa-save"></i> 送出申請</button>
+    </div>
+</div></div>
+
+<!-- ══ 用途歸屬選擇（單頭與逐列共用同一個） ══ -->
+<div class="pq-mask" id="mPurpose"><div class="pq-modal">
+    <div class="m-head"><span id="ppTitle">選擇用途</span><span class="m-close" onclick="closeMask('mPurpose')">✕</span></div>
+    <div class="m-body">
+        <div class="pq-fld" style="margin-bottom:10px;">
+            <label>用途類別</label>
+            <select id="ppType"></select>
+        </div>
+        <div id="ppPickWrap" style="display:none;">
+            <div class="pq-fld">
+                <label id="ppKwLabel">搜尋</label>
+                <div style="display:flex;gap:6px;">
+                    <input type="text" id="ppKw" placeholder="輸入關鍵字後按 Enter" style="flex:1;">
+                    <button class="pq-btn" id="ppGo"><i class="fa fa-search"></i> 搜尋</button>
+                </div>
+            </div>
+            <div id="ppList"></div>
+            <p class="hint" style="margin-top:4px;" id="ppPickHint"></p>
+        </div>
+        <div class="pq-fld" id="ppNoteWrap" style="display:none;margin-top:10px;">
+            <label id="ppNoteLabel">說明</label>
+            <input type="text" id="ppNote" placeholder="簡單寫一下是為了什麼">
+        </div>
+        <div style="margin-top:10px;padding:8px 10px;background:var(--pq-bg);border-radius:4px;">
+            目前選擇：<span id="ppPreview" class="hint">尚未選擇</span>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="pq-btn" id="ppClear" style="float:left;">改回沿用單頭</button>
+        <button class="pq-btn" onclick="closeMask('mPurpose')">取消</button>
+        <button class="pq-btn warm" id="ppOk"><i class="fa fa-check"></i> 確定</button>
     </div>
 </div></div>
 
