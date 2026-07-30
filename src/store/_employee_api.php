@@ -75,12 +75,17 @@ function getEmployees() {
     try {
         $sql = "SELECT 
                     u.id, u.user_uname, u.user_cname, u.user_status, u.state, u.gender, u.hire_date,
+                    map1.department_id as main_department_id,
                     d.name as main_department_name,
                     p.name as main_position_name,
-                    (SELECT GROUP_CONCAT(CONCAT(d2.name, ' / ', p2.name) SEPARATOR '; ') 
+                    (SELECT GROUP_CONCAT(CONCAT(d2.name, ' / ', p2.name) SEPARATOR '; ')
                      FROM user_department_position_map map2
                      JOIN department d2 ON map2.department_id = d2.id
                      JOIN position p2 ON map2.position_id = p2.id WHERE map2.user_id = u.id AND map2.is_main = 0) as concurrent_positions,
+                    -- 兼任部門 id 清單（供前端「兼任部門」篩選用，逗號分隔）
+                    (SELECT GROUP_CONCAT(DISTINCT map3.department_id)
+                     FROM user_department_position_map map3
+                     WHERE map3.user_id = u.id AND map3.is_main = 0) as concurrent_department_ids,
                     -- 備註欄位
                     CASE
                         WHEN u.state = 0 THEN CONCAT('離職日：', IFNULL(u.leave_date, '未記錄'))

@@ -204,14 +204,36 @@ if ($hrUserPerm === 'R') {
                             </div>
                             <div class="x_content">
                                 <div class="row" style="margin-bottom: 15px;">
-                                    <div class="col-md-6 col-sm-6 col-xs-12">
+                                    <div class="col-md-2 col-sm-3 col-xs-12" style="margin-bottom: 8px;">
                                         <button type="button" id="btn-add-employee" class="btn btn-primary" data-toggle="modal" data-target="#employeeModal" data-action="add">新增員工</button>
                                     </div>
-                                    <div class="col-md-3 col-sm-4 col-xs-12 pull-right">
+                                    <div class="col-md-3 col-sm-3 col-xs-12" style="margin-bottom: 8px;">
+                                        <div class="input-group">
+                                            <span class="input-group-addon">主部門</span>
+                                            <select class="form-control dept-filter" id="filter-main-dept" title="左鍵連點兩下解除此篩選">
+                                                <option value="">全部</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3 col-sm-3 col-xs-12" style="margin-bottom: 8px;">
+                                        <div class="input-group">
+                                            <span class="input-group-addon">兼任部門</span>
+                                            <select class="form-control dept-filter" id="filter-concurrent-dept" title="左鍵連點兩下解除此篩選">
+                                                <option value="">全部</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-3 col-sm-3 col-xs-12" style="margin-bottom: 8px;">
                                         <div class="input-group">
                                             <span class="input-group-addon">搜索</span>
                                             <input type="text" class="form-control" id="table-search" placeholder="搜索框" title="左鍵連點兩下清除資料">
                                         </div>
+                                    </div>
+                                    <div class="col-md-1 col-sm-12 col-xs-12" style="margin-bottom: 8px;">
+                                        <button type="button" class="btn btn-default btn-block" id="btn-clear-filter" title="清除主部門／兼任部門／搜索條件">清除</button>
+                                    </div>
+                                    <div class="col-xs-12">
+                                        <small class="text-muted" id="filter-result-count"></small>
                                     </div>
                                 </div>
 
@@ -470,18 +492,70 @@ $(document).ready(function() {
 
     function filterTable() {
         const searchText = $('#table-search').val().toLowerCase();
+        const mainDept = $('#filter-main-dept').val();       // '' = 全部、'none' = 未設定、其餘為 department_id
+        const concurrentDept = $('#filter-concurrent-dept').val(); // '' = 全部、'none' = 無兼任、其餘為 department_id
+
+        let total = 0, shown = 0;
 
         $('#employee-table-body tr').each(function() {
             const row = $(this);
             const rowText = row.text().toLowerCase();
-            
+            total++;
+
             const matchesSearch = searchText === '' || rowText.indexOf(searchText) > -1;
-            
-            if (matchesSearch) {
+
+            // 主部門篩選
+            const rowMainDept = String(row.data('main-dept') || '');
+            let matchesMain = true;
+            if (mainDept === 'none') {
+                matchesMain = rowMainDept === '';
+            } else if (mainDept !== '') {
+                matchesMain = rowMainDept === mainDept;
+            }
+
+            // 兼任部門篩選（一人可有多個兼任部門，任一符合即算符合）
+            const rowConcurrentDepts = String(row.data('concurrent-depts') || '')
+                                        .split(',').filter(v => v !== '');
+            let matchesConcurrent = true;
+            if (concurrentDept === 'none') {
+                matchesConcurrent = rowConcurrentDepts.length === 0;
+            } else if (concurrentDept !== '') {
+                matchesConcurrent = rowConcurrentDepts.indexOf(concurrentDept) > -1;
+            }
+
+            if (matchesSearch && matchesMain && matchesConcurrent) {
                 row.show();
+                shown++;
             } else {
                 row.hide();
             }
+        });
+
+        const hasFilter = searchText !== '' || mainDept !== '' || concurrentDept !== '';
+        $('#filter-result-count').text(hasFilter ? `符合 ${shown} 筆 / 共 ${total} 筆` : `共 ${total} 筆`);
+    }
+
+    // 載入部門清單到兩個篩選下拉（維持與部門主檔相同的 sort_order 排序）
+    function loadDepartmentFilters() {
+        callApi('get_departments', 'GET', null, function(response) {
+            if (response.status !== 'success') return;
+            const keepMain = $('#filter-main-dept').val();
+            const keepConcurrent = $('#filter-concurrent-dept').val();
+
+            const buildOptions = function(select, noneLabel) {
+                select.empty();
+                select.append('<option value="">全部</option>');
+                select.append(`<option value="none">${noneLabel}</option>`);
+                response.data.forEach(function(dept) {
+                    select.append(`<option value="${dept.id}">${escapeHtml(dept.name)}</option>`);
+                });
+            };
+
+            buildOptions($('#filter-main-dept'), '（未設定主部門）');
+            buildOptions($('#filter-concurrent-dept'), '（無兼任職務）');
+
+            if (keepMain) $('#filter-main-dept').val(keepMain);
+            if (keepConcurrent) $('#filter-concurrent-dept').val(keepConcurrent);
         });
     }
 
@@ -527,7 +601,7 @@ $(document).ready(function() {
                         }
                     }
 
-                    var row = `<tr data-id="${escapeHtml(emp.id)}" data-action="edit" style="cursor: pointer;" title="連點兩下編輯">
+                    var row = `<tr data-id="${escapeHtml(emp.id)}" data-action="edit" data-main-dept="${escapeHtml(emp.main_department_id || '')}" data-concurrent-depts="${escapeHtml(emp.concurrent_department_ids || '')}" style="cursor: pointer;" title="連點兩下編輯">
                         <td>${escapeHtml(emp.id)}</td> <!-- 員工編號 -->
                         <td>${escapeHtml(emp.user_uname)}</td> <!-- 登入帳號 -->
                         <td>${escapeHtml(emp.user_cname)}</td>
@@ -867,7 +941,26 @@ $(document).ready(function() {
 
     // --- 搜尋與篩選事件綁定 ---
     $(document).on('keyup', '#table-search', filterTable);
-    
+
+    // 主部門／兼任部門篩選
+    $(document).on('change', '.dept-filter', filterTable);
+
+    // 雙擊解除該欄篩選（同輸入欄位規則）
+    $(document).on('dblclick', '.dept-filter', function() {
+        if ($(this).val()) {
+            $(this).val('');
+            filterTable();
+        }
+    });
+
+    // 清除所有篩選條件
+    $('#btn-clear-filter').on('click', function() {
+        $('#filter-main-dept').val('');
+        $('#filter-concurrent-dept').val('');
+        $('#table-search').val('');
+        filterTable();
+    });
+
     // 雙擊清除搜尋
     $(document).on('dblclick', '#table-search', function() {
         if ($(this).val()) {
@@ -875,13 +968,14 @@ $(document).ready(function() {
             filterTable();
         }
     });
-    
+
     // 根據權限初始化 UI (新增按鈕)
     if (!(window.hrUserPerm.includes('A') || window.hrUserPerm.includes('C'))) {
         $('#btn-add-employee').hide();
     }
 
     // 初始載入
+    loadDepartmentFilters();
     loadEmployees();
 });
 </script>
