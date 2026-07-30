@@ -773,9 +773,12 @@ function auditFormHTML(o){
     var rows = '<table class="pf"><thead><tr><th style="width:34px;">項次</th><th style="width:70px;">項目</th><th>查核問題</th>'
         + '<th style="width:44px;">自評分</th><th style="width:44px;">稽核分</th><th style="width:180px;">佐證／觀察結果</th></tr></thead><tbody>';
     META.items.forEach(function(cat){
-        cat[2].forEach(function(it, idx){
+        var items = cat[2];
+        items.forEach(function(it, idx){
             var s = (o.scores && o.scores[it[0]]) || {};
-            rows += '<tr><td>'+it[0]+'</td><td>'+(idx===0?esc(cat[1]):'')+'</td><td class="q">'+esc(it[1])+'</td>'
+            rows += '<tr><td>'+it[0]+'</td>';
+            if (idx===0) rows += '<td rowspan="'+items.length+'" style="vertical-align:middle;font-weight:bold;">'+esc(cat[1])+'</td>';
+            rows += '<td class="q">'+esc(it[1])+'</td>'
                 + '<td>'+(s.self!=null?s.self:'')+'</td><td>'+(s.audit!=null?s.audit:'')+'</td><td></td></tr>';
         });
     });
