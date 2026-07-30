@@ -37,6 +37,36 @@ function tc_get_tool(PDO $db, int $tid): ?array {
     return $st->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 
+/**
+ * 校驗人員／單位解析（必填，前後端一致守門）
+ * 內校 → 必須是具校驗人員資格的人員(qc_tool_calib_staff)；外校 → 必須是 maker_list 的廠商
+ * 回傳 [顯示名稱, operator_user_id|null, vendor_id|null]
+ */
+function tc_resolve_operator(PDO $db, array $src): array {
+    $method = trim((string)($src['method'] ?? ''));
+    $sid    = (int)($src['operator_user_id'] ?? 0);
+    $vid    = trim((string)($src['vendor_id'] ?? ''));
+    $name   = trim((string)($src['operator'] ?? ''));
+    if ($method === '內校') {
+        if (!$sid) jerr('內校請選擇具校驗人員資格的人員');
+        $st = $db->prepare("SELECT u.user_cname FROM qc_tool_calib_staff s JOIN user u ON u.id=s.user_id WHERE s.user_id=?");
+        $st->execute([$sid]);
+        $n = $st->fetchColumn();
+        if (!$n) jerr('該人員不具校驗人員資格，請先於「校驗人員資格」設定勾選');
+        return [(string)$n, $sid, null];
+    }
+    if ($method === '外校') {
+        if ($vid === '') jerr('外校請搜尋並選擇校驗廠商');
+        $st = $db->prepare("SELECT COALESCE(NULLIF(maker_id_all,''), maker_id) FROM maker_list WHERE maker_id_no=?");
+        $st->execute([$vid]);
+        $n = $st->fetchColumn();
+        if (!$n) jerr('找不到該廠商，請重新搜尋選擇');
+        return [(string)$n, null, $vid];
+    }
+    if ($name === '') jerr('請填寫校驗人員／單位');
+    return [$name, $sid ?: null, $vid ?: null];
+}
+
 /** 類別守門：不需校驗／不可設編號的類別不得掛量具編號（fail-closed，找不到類別直接擋） */
 function tc_assert_category_usable(PDO $db, string $catId): void {
     $st = $db->prepare("SELECT QC_Tool, COALESCE(calib_required,1) AS req, COALESCE(has_tool_no,1) AS hasno
@@ -67,10 +97,111 @@ case 'meta': {
     tool_calib_purge_temp_attach($db);          // 順路清除過期暫存附件
     $cfg = tool_calib_attach_cfg($db);
     jout(['perms'=>$perms, 'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db),
-          'cur_ym'=>date('Y-m'), 'today'=>date('Y-m-d'),
+          'cur_ym'=>date('Y-m'), 'today'=>date('Y-m-d'), 'cur_year'=>(int)date('Y'),
+          'staff'=>tool_calib_qualified_staff($db),
+          'qc_dept_set'=>count(tool_calib_qc_dept_ids($db)) > 0,
           'attach'=>['types'=>$cfg['types'], 'ext'=>$cfg['ext'], 'maxmb'=>$cfg['maxmb'],
                      'dir'=>$perms['canAdmin'] ? $cfg['dir'] : '',
                      'ext_raw'=>$cfg['ext_raw'], 'types_raw'=>$cfg['types_raw']]]);
+}
+
+/* ---------- 校驗人員資格：候選（品管部門人員）與儲存 ---------- */
+case 'staff_candidates': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    jout(['list'=>tool_calib_staff_candidates($db), 'qc_dept_set'=>count(tool_calib_qc_dept_ids($db)) > 0]);
+}
+case 'save_staff': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    $ids = json_decode((string)($_POST['user_ids'] ?? '[]'), true);
+    if (!is_array($ids)) jerr('資料格式錯誤');
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+    // 只允許品管部門底下的人員（避免設定到別部門）
+    $allow = array_column(tool_calib_staff_candidates($db), 'id');
+    $bad = array_diff($ids, $allow);
+    if ($bad) jerr('有人員不屬於品管部門，請重新整理後再設定');
+    try {
+        $db->beginTransaction();
+        $db->exec("DELETE FROM qc_tool_calib_staff");
+        if ($ids) {
+            $ins = $db->prepare("INSERT INTO qc_tool_calib_staff (user_id, created_by) VALUES (?,?)");
+            foreach ($ids as $id) $ins->execute([$id, $uid]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    jout(['staff'=>tool_calib_qualified_staff($db)]);
+}
+
+/* ---------- 外校廠商模糊搜尋（maker_list：廠商ID／簡稱／全名） ---------- */
+case 'vendor_search': {
+    $kw = trim((string)($_GET['kw'] ?? ''));
+    if ($kw === '') jout(['list'=>[]]);
+    $like = '%' . $kw . '%';
+    // maker_list 為 utf8mb3，中文比對一律 CONVERT 成 utf8mb4 再 LIKE（避免定序衝突）
+    $st = $db->prepare("SELECT maker_id_no, maker_id, maker_id_all, m_category, status
+                        FROM maker_list
+                        WHERE CONVERT(maker_id_no USING utf8mb4) LIKE ?
+                           OR CONVERT(maker_id USING utf8mb4) LIKE ?
+                           OR CONVERT(COALESCE(maker_id_all,'') USING utf8mb4) LIKE ?
+                        ORDER BY (CONVERT(maker_id_no USING utf8mb4) LIKE ?) DESC, maker_id_no
+                        LIMIT 30");
+    $st->execute([$like, $like, $like, $kw . '%']);
+    jout(['list'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+/* ---------- 依類別批次設定校驗週期／納入統計／基準到期日（管理員） ----------
+ * items = JSON [{category_id, cycle(''=不改), managed(-1不改/0/1), baseline_due(''=不改), overwrite(0只補空白/1全部覆寫)}]
+ */
+case 'bulk_set_cycle': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    $items = json_decode((string)($_POST['items'] ?? ''), true);
+    if (!is_array($items) || !$items) jerr('沒有要套用的類別');
+    $applied = []; $total = 0;
+    try {
+        $db->beginTransaction();
+        foreach ($items as $it) {
+            $cat = (int)($it['category_id'] ?? 0);
+            if (!$cat) continue;
+            $cycleRaw = (string)($it['cycle'] ?? '');
+            $managed  = array_key_exists('managed', $it) ? (int)$it['managed'] : -1;
+            $baseRaw  = trim((string)($it['baseline_due'] ?? ''));
+            $ovr      = (int)($it['overwrite'] ?? 0) === 1;
+            if ($cycleRaw === '' && $managed === -1 && $baseRaw === '') continue;
+            if ($baseRaw !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $baseRaw)) jerr('基準到期日格式錯誤：'.$baseRaw);
+
+            $set = []; $p = [];
+            if ($cycleRaw !== '') {
+                $cyc = max(0, (int)$cycleRaw) ?: null;
+                $set[] = $ovr ? "calib_cycle_months=?" : "calib_cycle_months=COALESCE(calib_cycle_months,?)";
+                $p[] = $cyc;
+            }
+            if ($managed === 0 || $managed === 1) { $set[] = "calib_managed=?"; $p[] = $managed; }
+            if ($baseRaw !== '') {
+                $set[] = $ovr ? "calibration_due=?" : "calibration_due=COALESCE(calibration_due,?)";
+                $p[] = $baseRaw;
+            }
+            if (!$set) continue;
+            $p[] = $cat;
+            $st = $db->prepare("UPDATE qc_tool SET ".implode(', ', $set)." WHERE QC_Tool_List_id=?");
+            $st->execute($p);
+            $n = $st->rowCount();
+            $total += $n;
+            $applied[] = ['category_id'=>$cat, 'rows'=>$n];
+        }
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('套用失敗：'.$e->getMessage(), 500); }
+    jout(['applied'=>$applied, 'total'=>$total]);
+}
+
+/* ---------- 年度校驗紀錄／年度校驗計畫表 ---------- */
+case 'year_records': {
+    $y = (int)($_GET['year'] ?? date('Y'));
+    if ($y < 2000 || $y > 2999) $y = (int)date('Y');
+    jout(['year'=>$y, 'list'=>tool_calib_year_records($db, $y)]);
+}
+case 'year_plan': {
+    $y = (int)($_GET['year'] ?? date('Y'));
+    if ($y < 2000 || $y > 2999) $y = (int)date('Y');
+    jout(['year'=>$y, 'list'=>tool_calib_year_plan($db, $y)]);
 }
 
 /* ---------- 校驗附件設定（管理員；路徑只存設定值，DB 附件列只存檔名） ---------- */
@@ -271,7 +402,8 @@ case 'record_calib': {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $calibDate)) jerr('請選擇校驗完成日');
     $result = in_array($_POST['result'] ?? '', ['pass','fail','pass_adjust'], true) ? $_POST['result'] : 'pass';
     $method = trim((string)($_POST['method'] ?? '')) ?: ($t['calib_method'] ?: null);
-    $operator = trim((string)($_POST['operator'] ?? '')) ?: null;
+    // 校驗人員／單位必填：內校＝有資格人員、外校＝maker_list 廠商
+    [$operator, $opUid, $vendorId] = tc_resolve_operator($db, ['method'=>$method] + $_POST);
     $certNo = trim((string)($_POST['cert_no'] ?? '')) ?: null;
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
 
@@ -282,9 +414,9 @@ case 'record_calib': {
     try {
         $db->beginTransaction();
         $db->prepare("INSERT INTO qc_tool_calibration
-            (Tool_id, due_date, calib_date, result, method, operator, cert_no, next_due, note, created_by, created_by_name)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-           ->execute([$tid, $dueDate, $calibDate, $result, $method, $operator, $certNo, $nextDue, $note, $uid, $uname]);
+            (Tool_id, due_date, calib_date, result, method, operator, operator_user_id, vendor_id, cert_no, next_due, note, created_by, created_by_name)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+           ->execute([$tid, $dueDate, $calibDate, $result, $method, $operator, $opUid, $vendorId, $certNo, $nextDue, $note, $uid, $uname]);
         // 前滾主檔到期日；並把預設校驗方式更新為本次方式
         $db->prepare("UPDATE qc_tool SET calibration_due=?, calib_method=COALESCE(?, calib_method) WHERE Tool_id=?")
            ->execute([$nextDue, $method, $tid]);
@@ -307,7 +439,7 @@ case 'edit_calib': {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $calibDate)) jerr('請選擇校驗完成日');
     $result = in_array($_POST['result'] ?? '', ['pass','fail','pass_adjust'], true) ? $_POST['result'] : 'pass';
     $method = trim((string)($_POST['method'] ?? '')) ?: null;
-    $operator = trim((string)($_POST['operator'] ?? '')) ?: null;
+    [$operator, $opUid, $vendorId] = tc_resolve_operator($db, ['method'=>$method] + $_POST);
     $certNo = trim((string)($_POST['cert_no'] ?? '')) ?: null;
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
     // 若改到期日基準（管理員）也允許
@@ -317,8 +449,9 @@ case 'edit_calib': {
     $nextDue = $cycle > 0 ? tool_calib_add_months($calibDate, $cycle) : null;
     try {
         $db->beginTransaction();
-        $db->prepare("UPDATE qc_tool_calibration SET due_date=?, calib_date=?, result=?, method=?, operator=?, cert_no=?, next_due=?, note=? WHERE calib_id=?")
-           ->execute([$dueDate, $calibDate, $result, $method, $operator, $certNo, $nextDue, $note, $cid]);
+        $db->prepare("UPDATE qc_tool_calibration SET due_date=?, calib_date=?, result=?, method=?, operator=?,
+                             operator_user_id=?, vendor_id=?, cert_no=?, next_due=?, note=? WHERE calib_id=?")
+           ->execute([$dueDate, $calibDate, $result, $method, $operator, $opUid, $vendorId, $certNo, $nextDue, $note, $cid]);
         // 若此為該量具最近一次校驗，前滾主檔到期日
         $latest = $db->prepare("SELECT calib_id FROM qc_tool_calibration WHERE Tool_id=? ORDER BY calib_date DESC, calib_id DESC LIMIT 1");
         $latest->execute([$tid]);
@@ -339,7 +472,8 @@ case 'create_batch': {
     $calibDate = trim((string)($_POST['calib_date'] ?? ''));
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $calibDate)) jerr('請選擇校驗完成日');
     $method   = trim((string)($_POST['method'] ?? '')) ?: null;
-    $operator = trim((string)($_POST['operator'] ?? '')) ?: null;
+    // 校驗人員／單位必填（內校＝有資格人員；外校＝maker_list 廠商）
+    [$operator, $opUid, $vendorId] = tc_resolve_operator($db, ['method'=>$method] + $_POST);
     $certNo   = trim((string)($_POST['cert_no'] ?? '')) ?: null;
     $note     = trim((string)($_POST['note'] ?? '')) ?: null;
     $tools    = json_decode((string)($_POST['tools'] ?? ''), true);
@@ -349,14 +483,14 @@ case 'create_batch': {
 
     try {
         $db->beginTransaction();
-        $db->prepare("INSERT INTO qc_tool_calib_batch (calib_date, method, operator, cert_no, note, tool_count, created_by, created_by_name)
-                      VALUES (?,?,?,?,?,0,?,?)")
-           ->execute([$calibDate, $method, $operator, $certNo, $note, $uid, $uname]);
+        $db->prepare("INSERT INTO qc_tool_calib_batch (calib_date, method, operator, operator_user_id, vendor_id, cert_no, note, tool_count, created_by, created_by_name)
+                      VALUES (?,?,?,?,?,?,?,0,?,?)")
+           ->execute([$calibDate, $method, $operator, $opUid, $vendorId, $certNo, $note, $uid, $uname]);
         $batchId = (int)$db->lastInsertId();
 
         $insRec = $db->prepare("INSERT INTO qc_tool_calibration
-            (Tool_id, due_date, calib_date, result, method, operator, cert_no, next_due, note, batch_id, created_by, created_by_name)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+            (Tool_id, due_date, calib_date, result, method, operator, operator_user_id, vendor_id, cert_no, next_due, note, batch_id, created_by, created_by_name)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
         $updTool = $db->prepare("UPDATE qc_tool SET calibration_due=?, calib_method=COALESCE(?, calib_method) WHERE Tool_id=?");
         $getTool = $db->prepare("SELECT Tool_id, calibration_due, calib_cycle_months, calib_method FROM qc_tool WHERE Tool_id=?");
 
@@ -371,8 +505,8 @@ case 'create_batch': {
             $mth = $method ?: ($t['calib_method'] ?: null);
             $cycle = $t['calib_cycle_months'] !== null ? (int)$t['calib_cycle_months'] : 0;
             $nextDue = $cycle > 0 ? tool_calib_add_months($calibDate, $cycle) : null;
-            $insRec->execute([$tid, $t['calibration_due'] ?: null, $calibDate, $result, $mth, $operator, $certNo,
-                              $nextDue, $note, $batchId, $uid, $uname]);
+            $insRec->execute([$tid, $t['calibration_due'] ?: null, $calibDate, $result, $mth, $operator, $opUid, $vendorId,
+                              $certNo, $nextDue, $note, $batchId, $uid, $uname]);
             $updTool->execute([$nextDue, $mth, $tid]);   // 前滾下次應校驗日（與單筆登錄同邏輯）
             $done++;
         }
