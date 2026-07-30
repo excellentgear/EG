@@ -64,7 +64,7 @@ switch ($action) {
 
 /* ---------- 基本資訊 ---------- */
 case 'meta': {
-    jout(['perms'=>$perms, 'categories'=>tool_calib_categories($db),
+    jout(['perms'=>$perms, 'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db),
           'cur_ym'=>date('Y-m'), 'today'=>date('Y-m-d')]);
 }
 
@@ -105,31 +105,74 @@ case 'list': {
 
     $stat = tool_calib_kpi_compute($db, $y, $m, []);
     jout(['rows'=>$rows, 'ym'=>$ym, 'stat'=>$stat, 'perms'=>$perms,
-          'categories'=>tool_calib_categories($db), 'excluded'=>$excluded]);
+          'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db), 'excluded'=>$excluded]);
 }
 
 /* ---------- 類別校驗屬性設定（管理員；只改旗標，不改名稱/不新增刪除類別） ----------
  * 類別的新增/更名/刪除一律在「線上檢驗－量具設定」(inspection_combined_prototype.php)，本頁不重複提供。
- * 參數 items = JSON [{id, calib_required, has_tool_no, calib_tab}, ...]
+ * 參數 items = JSON [{id, calib_required, has_tool_no, calib_tab, calib_tab_group}, ...]
+ *   calib_tab_group：併入的自訂分頁 id；空值＝自成一頁（用類別名）
  */
 case 'save_categories': {
     if (!$perms['canAdmin']) jerr('無類別設定權限', 403);
     $items = json_decode((string)($_POST['items'] ?? ''), true);
     if (!is_array($items) || !$items) jerr('無資料可儲存');
+    $validTabs = array_column(tool_calib_tabs($db), 'tab_id');
     try {
         $db->beginTransaction();
-        $up = $db->prepare("UPDATE qc_tool_list SET calib_required=?, has_tool_no=?, calib_tab=? WHERE QC_Tool_List_id=?");
+        $up = $db->prepare("UPDATE qc_tool_list SET calib_required=?, has_tool_no=?, calib_tab=?, calib_tab_group=? WHERE QC_Tool_List_id=?");
         foreach ($items as $it) {
             $id = (int)($it['id'] ?? 0);
             if (!$id) continue;
             $req = (int)($it['calib_required'] ?? 0) === 1 ? 1 : 0;
             $hasNo = (int)($it['has_tool_no'] ?? 0) === 1 ? 1 : 0;
             $tab = ((int)($it['calib_tab'] ?? 0) === 1 && $req === 1) ? 1 : 0;   // 需校驗才可列入分頁
-            $up->execute([$req, $hasNo, $tab, $id]);
+            $grp = (int)($it['calib_tab_group'] ?? 0);
+            // 未列入分頁 or 指到不存在的分頁 → 一律歸零成「自成一頁」
+            $grp = ($tab === 1 && $grp > 0 && in_array($grp, $validTabs, true)) ? $grp : null;
+            $up->execute([$req, $hasNo, $tab, $grp, $id]);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
-    jout(['categories'=>tool_calib_categories($db)]);
+    jout(['categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db)]);
+}
+
+/* ---------- 自訂合併分頁：新增/更名（管理員） ---------- */
+case 'save_tab': {
+    if (!$perms['canAdmin']) jerr('無分頁設定權限', 403);
+    $tabId = (int)($_POST['tab_id'] ?? 0);
+    $name = trim((string)($_POST['name'] ?? ''));
+    if ($name === '') jerr('請輸入分頁名稱');
+    if (mb_strlen($name) > 30) jerr('分頁名稱請在 30 字以內');
+    $chk = $db->prepare("SELECT tab_id FROM qc_tool_calib_tab WHERE tab_name=? AND tab_id<>? LIMIT 1");
+    $chk->execute([$name, $tabId]);
+    if ($chk->fetchColumn()) jerr('分頁名稱已存在：'.$name);
+    try {
+        $db->beginTransaction();
+        if ($tabId > 0) {
+            $db->prepare("UPDATE qc_tool_calib_tab SET tab_name=? WHERE tab_id=?")->execute([$name, $tabId]);
+        } else {
+            $so = (int)$db->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM qc_tool_calib_tab")->fetchColumn();
+            $db->prepare("INSERT INTO qc_tool_calib_tab (tab_name, sort_order) VALUES (?,?)")->execute([$name, $so]);
+            $tabId = (int)$db->lastInsertId();
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    jout(['tab_id'=>$tabId, 'tabs'=>tool_calib_tabs($db), 'categories'=>tool_calib_categories($db)]);
+}
+
+/* ---------- 自訂合併分頁：刪除（管理員；成員類別退回「自成一頁」） ---------- */
+case 'delete_tab': {
+    if (!$perms['canAdmin']) jerr('無分頁設定權限', 403);
+    $tabId = (int)($_POST['tab_id'] ?? 0);
+    if (!$tabId) jerr('缺少分頁 id');
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE qc_tool_list SET calib_tab_group=NULL WHERE calib_tab_group=?")->execute([$tabId]);
+        $db->prepare("DELETE FROM qc_tool_calib_tab WHERE tab_id=?")->execute([$tabId]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：'.$e->getMessage(), 500); }
+    jout(['tabs'=>tool_calib_tabs($db), 'categories'=>tool_calib_categories($db)]);
 }
 
 /* ---------- 新增儀器（管理員） ---------- */
