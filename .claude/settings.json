@@ -2,7 +2,28 @@
   "permissions": {
     "allow": [
       "Bash(php -l views/pm/kpi_main.php)",
-      "Bash(php -r ' *)"
+      "Bash(php -r ' *)",
+
+      "Bash(\"/c/MAMP/bin/php/php8.3.1/php.exe\" -l *)",
+      "Bash(C:/MAMP/bin/php/php8.3.1/php.exe -l *)",
+      "Bash(& C:\\MAMP\\bin\\php\\php8.3.1\\php.exe -l *)",
+      "PowerShell(& C:\\MAMP\\bin\\php\\php8.3.1\\php.exe -l *)",
+
+      "Bash(\"/c/MAMP/bin/php/php8.3.1/php.exe\" ai-rules/tools/check_sidebar.php)",
+      "Bash(C:/MAMP/bin/php/php8.3.1/php.exe ai-rules/tools/check_sidebar.php)",
+
+      "Bash(\"/c/MAMP/bin/php/php8.3.1/php.exe\" ai-rules/tools/sql.php *)",
+      "Bash(C:/MAMP/bin/php/php8.3.1/php.exe ai-rules/tools/sql.php *)",
+      "Bash(& C:\\MAMP\\bin\\php\\php8.3.1\\php.exe C:\\MAMP\\htdocs\\EGsystem\\ai-rules\\tools\\sql.php *)",
+      "PowerShell(& C:\\MAMP\\bin\\php\\php8.3.1\\php.exe C:\\MAMP\\htdocs\\EGsystem\\ai-rules\\tools\\sql.php *)",
+
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git pushall)",
+      "Bash(git push origin master)",
+      "Bash(git push backup master)",
+      "Bash(git check-ignore *)",
+      "Bash(git status --short *)"
     ],
     "defaultMode": "acceptEdits"
   }
