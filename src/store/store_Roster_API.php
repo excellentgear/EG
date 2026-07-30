@@ -945,12 +945,15 @@ case 'list_shift_blocks': {
     $to   = $_POST['to'] ?? (new DateTime('today'))->modify('+6 month')->format('Y-m-d');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from)) $from = date('Y-m-01');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) $to = (new DateTime('today'))->modify('+6 month')->format('Y-m-d');
-    $q = $pdo->prepare("SELECT sa.id, sa.shift_type_id, sa.user_id, sa.work_date, st.name AS shift_name,
-                               LEFT(st.start_time,5) AS st_s, LEFT(st.end_time,5) AS st_e, st.color
-                        FROM roster_shift_assign sa JOIN roster_shift_type st ON st.id=sa.shift_type_id
-                        WHERE sa.work_date BETWEEN ? AND ?
-                        ORDER BY sa.shift_type_id, sa.user_id, sa.work_date");
-    $q->execute([$from, $to]);
+    $onlyShift = (int)($_POST['shift_type_id'] ?? 0);
+    $sqlB = "SELECT sa.id, sa.shift_type_id, sa.user_id, sa.work_date, st.name AS shift_name,
+                    LEFT(st.start_time,5) AS st_s, LEFT(st.end_time,5) AS st_e, st.color
+             FROM roster_shift_assign sa JOIN roster_shift_type st ON st.id=sa.shift_type_id
+             WHERE sa.work_date BETWEEN ? AND ?"
+           . ($onlyShift ? " AND sa.shift_type_id=?" : "")
+           . " ORDER BY sa.shift_type_id, sa.user_id, sa.work_date";
+    $q = $pdo->prepare($sqlB);
+    $q->execute($onlyShift ? [$from, $to, $onlyShift] : [$from, $to]);
     $rows = $q->fetchAll(PDO::FETCH_ASSOC);
     $blocks = []; $cur = null;
     foreach ($rows as $r) {
