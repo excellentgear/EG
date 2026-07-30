@@ -143,6 +143,10 @@ case 'save_eval_settings': {
                             ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
         $up->execute([(string)(int)$_POST['as_doc_id']]);
     }
+    if (array_key_exists('grades', $_POST)) {
+        $g = json_decode((string)$_POST['grades'], true);
+        if (is_array($g)) vendor_eval_save_grades($db, $g);
+    }
     jout(['settings'=>vendor_eval_settings($db), 'eval_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_eval_as_doc_id')]);
 }
 

@@ -259,6 +259,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             </div>
             <div class="va-remind" id="evThresh"></div>
             <div id="evSingle" style="display:none;">
+                <div id="evScoreTop" class="va-stat" style="margin-bottom:8px;"></div>
                 <div class="va-table-wrap">
                     <table class="va-table" id="evTable">
                         <thead><tr>
@@ -431,6 +432,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>約定工作天（算應交日）</label><input type="number" id="stDays" step="1" min="0"></div>
         </div>
         <div style="font-size:12px;color:#8a6d45;margin:8px 0 12px;">半年不良率／遲交率超過上限即判不合格；特採率上限設 100 表示不納入判定。約定工作天沿用 KPI#7 準交口徑。</div>
+        <label>評核等級門檻（分數 ≥ 該值即為該等級，由高到低）</label>
+        <div id="stGrades" style="border:1px solid #EADFC8;border-radius:6px;padding:6px 8px;"></div>
+        <div style="margin:4px 0 12px;"><button type="button" class="b-att2" onclick="gradeAddRow('',0)"><i class="fa fa-plus"></i> 新增等級</button>
+            <span style="font-size:11px;color:#8a6d45;">總分0~100；例：A≥90、B≥80、C≥70、D≥0</span></div>
         <label>綁定 AS 表單 —— 全部列印的文件名稱/編號跟 AS 文件管理連動</label>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
             <input type="text" id="stAsKw" placeholder="搜尋文件編號/名稱" style="width:150px;">
@@ -928,6 +933,12 @@ function loadEval(){
         var s=res.settings;
         $('#evThresh').html('廠商：<b>'+esc(res.maker_name)+'</b>　'+res.year+' 年　門檻：不良率≤'+s.ng_max+'%、遲交率≤'+s.late_max+'%'
             +(s.special_max<100?('、特採率≤'+s.special_max+'%'):'（特採率不判定）')+'　約定工作天 '+s.default_days+' 天');
+        // 上方：半年/全年 分數與等級
+        var sc=function(hf,lab){ if(!hf||hf.score==null) return '<div><span class="s-lab">'+lab+'</span> <span class="s-num" style="font-size:16px;">—</span></div>';
+            return '<div><span class="s-lab">'+lab+'</span> <span class="s-num" style="font-size:18px;">'+hf.score+'</span>'
+                +'<span class="s-lab"> 分</span> <b style="font-size:16px;color:'+(hf.judge==='fail'?'#DD5138':'#8A5A2B')+';">'+(hf.grade||'—')+'</b></div>'; };
+        $('#evScoreTop').html(sc(res.halves[1],'上半年')+sc(res.halves[2],'下半年')+sc(res.full,'全年')
+            +'<div class="s-lab" style="margin-left:auto;">分數＝(1-不良率)×50 +(1-遲交率)×50，依門檻判等級</div>');
         var overNg=function(v){return v!=null&&v>s.ng_max;}, overLt=function(v){return v!=null&&v>s.late_max;}, overSp=function(v){return s.special_max<100&&v!=null&&v>s.special_max;};
         var h='';
         for(var m=1;m<=12;m++){
@@ -974,8 +985,8 @@ function renderEvalCards(){
     var list=EVAL_ALL.vendors.filter(function(v){ return !failOnly || v.fail; });
     var html='';
     list.forEach(function(v){
-        var jb=v.fail?'<span class="af-judge-fail">有不合格</span>':'<span class="af-judge-pass">合格</span>';
-        html+='<div class="ev-card"><div class="h"><span>'+esc(v.maker_name)+'（'+esc(v.maker_id_no)+'）</span>'+jb+'</div>';
+        var g=v.full&&v.full.grade?('等級 <b style="color:'+(v.fail?'#DD5138':'#8A5A2B')+';">'+esc(v.full.grade)+'</b>（'+(v.full.score==null?'—':v.full.score)+'分）'):'';
+        html+='<div class="ev-card"><div class="h"><span>'+esc(v.maker_name)+'（'+esc(v.maker_id_no)+'）</span><span>'+g+'</span></div>';
         html+='<table class="ev-mini"><thead><tr><th>月</th><th>檢驗</th><th>不良率</th><th>特採率</th><th>回廠</th><th>遲交率</th></tr></thead><tbody>';
         for(var m=1;m<=12;m++){ var d=v.months[m];
             html+='<tr><td>'+m+'</td><td>'+d.qc_in+'</td>'
@@ -1037,9 +1048,16 @@ function printEvalAll(){
     w.document.close();
 }
 $('#evPrint').on('click', function(){ if(EVAL_ALL) printEvalAll(); else window.print(); });
+function gradeAddRow(label, min){
+    $('#stGrades').append('<div class="gr-row" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">'
+        +'等級 <input type="text" class="gr-label" maxlength="6" value="'+esc(label||'')+'" style="width:60px;">'
+        +' 分數 ≥ <input type="number" class="gr-min" step="1" min="0" max="100" value="'+(min==null?'':min)+'" style="width:70px;">'
+        +' <span class="af-del" style="color:#DD5138;cursor:pointer;" onclick="$(this).closest(\'.gr-row\').remove()"><i class="fa fa-times"></i></span></div>');
+}
 $('#evSet').on('click', function(){
     var s=(EVAL&&EVAL.settings)||META.eval_settings||{ng_max:5,late_max:30,special_max:100,default_days:7};
     $('#stNgMax').val(s.ng_max); $('#stLateMax').val(s.late_max); $('#stSpMax').val(s.special_max); $('#stDays').val(s.default_days);
+    $('#stGrades').empty(); ((s.grades&&s.grades.length)?s.grades:[{min:90,label:'A'},{min:80,label:'B'},{min:70,label:'C'},{min:0,label:'D'}]).forEach(function(g){ gradeAddRow(g.label,g.min); });
     loadEvalAsForms('', META.eval_as_doc?META.eval_as_doc.id:0);
     openMask('evSetMask');
 });
@@ -1056,8 +1074,10 @@ function loadEvalAsForms(kw, selId){
     });
 }
 function submitEvSet(){
+    var grades=[]; $('#stGrades .gr-row').each(function(){ var l=$.trim($(this).find('.gr-label').val()), mn=$(this).find('.gr-min').val();
+        if(l!=='') grades.push({label:l, min:mn===''?0:+mn}); });
     $.post(API, {action:'save_eval_settings', ng_max:$('#stNgMax').val(), late_max:$('#stLateMax').val(),
-        special_max:$('#stSpMax').val(), default_days:$('#stDays').val(), as_doc_id:$('#stAsDoc').val()}, function(res){
+        special_max:$('#stSpMax').val(), default_days:$('#stDays').val(), as_doc_id:$('#stAsDoc').val(), grades:JSON.stringify(grades)}, function(res){
         if(!res.ok){ alert(res.error||'儲存失敗'); return; }
         META.eval_settings=res.settings; META.eval_as_doc=res.eval_as_doc; closeMask('evSetMask');
         if(EVAL_ALL) $('#evAll').click(); else if($('#evVendor').val()) loadEval();

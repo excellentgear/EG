@@ -314,6 +314,7 @@ function vendor_eval_settings(PDO $db): array {
         'special_max'  => (float)vendor_eval_setting($db, 'vendor_eval_special_max', 100), // 特採率上限%(100=不判定)
         'late_max'     => (float)vendor_eval_setting($db, 'vendor_eval_late_max', 30),     // 遲交率上限%
         'default_days' => (int)vendor_eval_setting($db, 'vendor_eval_default_days', 7),    // 約定工作天(算應交日)
+        'grades'       => vendor_eval_grades($db),                                          // 評核等級門檻
     ];
 }
 function vendor_eval_save_settings(PDO $db, array $vals): void {
@@ -322,6 +323,50 @@ function vendor_eval_save_settings(PDO $db, array $vals): void {
     foreach (['vendor_eval_ng_max','vendor_eval_special_max','vendor_eval_late_max','vendor_eval_default_days'] as $k) {
         if (array_key_exists($k, $vals)) $up->execute([$k, (string)$vals[$k]]);
     }
+}
+
+/* ---- 評核等級（分數→等級；管理員可設門檻）---- */
+function vendor_eval_grades(PDO $db): array {
+    $g = json_decode((string)vendor_eval_setting($db, 'vendor_eval_grades', ''), true);
+    if (!is_array($g) || !$g) $g = [['min'=>90,'label'=>'A'],['min'=>80,'label'=>'B'],['min'=>70,'label'=>'C'],['min'=>0,'label'=>'D']];
+    usort($g, function($a,$b){ return (float)($b['min']??0) <=> (float)($a['min']??0); });
+    return $g;
+}
+function vendor_eval_save_grades(PDO $db, array $grades): void {
+    $clean = [];
+    foreach ($grades as $g) {
+        $label = trim((string)($g['label'] ?? '')); if ($label==='') continue;
+        $clean[] = ['min'=>max(0,(float)($g['min'] ?? 0)), 'label'=>$label];
+    }
+    if (!$clean) return;
+    $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('vendor_eval_grades', ?)
+                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+    $up->execute([json_encode($clean, JSON_UNESCAPED_UNICODE)]);
+}
+function vendor_eval_grade_of($score, array $grades): ?string {
+    if ($score === null) return null;
+    foreach ($grades as $g) if ($score >= (float)($g['min'] ?? 0)) return (string)($g['label'] ?? '');
+    return null;
+}
+/** 彙總一段期間：回傳率/判定/分數(品質分+交期分,各50滿分,四捨五入)/等級 */
+function vendor_eval_summ(int $qc, int $ng, int $sp, int $di, int $lt, array $set, array $grades): array {
+    $ngR = $qc ? round($ng/$qc*100,1) : null;
+    $spR = $qc ? round($sp/$qc*100,1) : null;
+    $ltR = $di ? round($lt/$di*100,1) : null;
+    $judge = null; $qScore = null; $dScore = null; $score = null;
+    if ($qc>0 || $di>0) {
+        $ok = true;
+        if ($ngR!==null && $ngR>$set['ng_max']) $ok=false;
+        if ($ltR!==null && $ltR>$set['late_max']) $ok=false;
+        if ($set['special_max']<100 && $spR!==null && $spR>$set['special_max']) $ok=false;
+        $judge = $ok ? 'pass' : 'fail';
+        $qScore = $qc>0 ? (int)round((1-$ng/$qc)*50) : 50;   // 品質分=(1-不良率)×50
+        $dScore = $di>0 ? (int)round((1-$lt/$di)*50) : 50;   // 交期分=(1-遲交率)×50
+        $score = $qScore + $dScore;                          // 總分(0~100)
+    }
+    return ['qc_in'=>$qc,'ng'=>$ng,'special'=>$sp,'del_in'=>$di,'late'=>$lt,
+            'ng_rate'=>$ngR,'special_rate'=>$spR,'late_rate'=>$ltR,'judge'=>$judge,
+            'q_score'=>$qScore,'d_score'=>$dScore,'score'=>$score,'grade'=>vendor_eval_grade_of($score,$grades)];
 }
 
 /* ============================================================
@@ -370,24 +415,18 @@ function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): arra
             'late_rate'    => $d['del_in'] ? round($d['late']/$d['del_in']*100,1) : null,
         ];
     }
-    // 半年彙總(以加總筆數算率) + 判定
+    // 半年彙總 + 全年彙總（率/判定/分數/等級）
+    $grades = vendor_eval_grades($db);
     $halves = [];
+    $fqc=0;$fng=0;$fsp=0;$fdi=0;$flt=0;
     foreach ([1=>[1,6], 2=>[7,12]] as $h => $rg) {
         $qc=0;$ng=0;$sp=0;$di=0;$lt=0;
         for ($m=$rg[0]; $m<=$rg[1]; $m++){ $qc+=$mon[$m]['qc_in']; $ng+=$mon[$m]['ng']; $sp+=$mon[$m]['special']; $di+=$mon[$m]['del_in']; $lt+=$mon[$m]['late']; }
-        $ngR = $qc?round($ng/$qc*100,1):null; $spR=$qc?round($sp/$qc*100,1):null; $ltR=$di?round($lt/$di*100,1):null;
-        $judge = null;
-        if ($qc>0 || $di>0) {
-            $ok = true;
-            if ($ngR !== null && $ngR > $set['ng_max']) $ok = false;
-            if ($ltR !== null && $ltR > $set['late_max']) $ok = false;
-            if ($set['special_max'] < 100 && $spR !== null && $spR > $set['special_max']) $ok = false;
-            $judge = $ok ? 'pass' : 'fail';
-        }
-        $halves[$h] = ['qc_in'=>$qc,'ng'=>$ng,'special'=>$sp,'del_in'=>$di,'late'=>$lt,
-                       'ng_rate'=>$ngR,'special_rate'=>$spR,'late_rate'=>$ltR,'judge'=>$judge];
+        $halves[$h] = vendor_eval_summ($qc,$ng,$sp,$di,$lt,$set,$grades);
+        $fqc+=$qc;$fng+=$ng;$fsp+=$sp;$fdi+=$di;$flt+=$lt;
     }
-    return ['months'=>$rows, 'halves'=>$halves];
+    $full = vendor_eval_summ($fqc,$fng,$fsp,$fdi,$flt,$set,$grades);
+    return ['months'=>$rows, 'halves'=>$halves, 'full'=>$full];
 }
 
 /* ============================================================
