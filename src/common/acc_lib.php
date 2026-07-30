@@ -134,10 +134,472 @@ function acc_ensure_schema(PDO $db): void
             KEY idx_recon_side (side)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-對帳狀態與註記（不動來源表）'");
 
+        /* 對帳工作底稿：一份底稿 = 客戶或廠商 × 帳款月份 × 側別。
+           為什麼要有底稿而不是直接改原始憑證：
+           實務上我方一筆可能對到廠商多筆（廠商拆批甚至拆月請款），
+           我方多筆也可能對到廠商一筆（廠商把分批送的加工合併成一列）。
+           這種「加總／拆分」只是對帳當下的算法，不該去動原始出貨/加工紀錄，
+           但必須留下來讓會計與稽核看得懂當初是怎麼對的。
+           每個 (側別, 對象, 帳款月份) 只能有一份底稿——落實「一個客戶/廠商×月份只能一筆暫存」。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_recon_sheet (
+            sheet_id       INT NOT NULL AUTO_INCREMENT,
+            side           VARCHAR(2)   NOT NULL COMMENT 'ar=應收 ap=應付',
+            party_id       VARCHAR(20)  NOT NULL COMMENT '客戶 customer_id 或廠商 maker_id_no',
+            party_name     VARCHAR(60)  DEFAULT NULL,
+            billing_month  VARCHAR(7)   NOT NULL COMMENT 'YYYY-MM',
+            status         VARCHAR(10)  NOT NULL DEFAULT 'draft' COMMENT 'draft=暫存 confirmed=已確認鎖帳 reopened=退回重對',
+            our_total      DECIMAL(14,2) NOT NULL DEFAULT 0 COMMENT '我方合計(未稅,含加總拆分調整後)',
+            their_total    DECIMAL(14,2) DEFAULT NULL COMMENT '對方紙本合計(人工輸入,用來核對)',
+            tax_amount     DECIMAL(14,2) NOT NULL DEFAULT 0,
+            total_amount   DECIMAL(14,2) NOT NULL DEFAULT 0 COMMENT '含稅',
+            memo           VARCHAR(500) DEFAULT NULL,
+            saved_by       INT          DEFAULT NULL,
+            saved_by_name  VARCHAR(50)  DEFAULT NULL,
+            saved_at       DATETIME     DEFAULT NULL,
+            confirmed_by   INT          DEFAULT NULL,
+            confirmed_by_name VARCHAR(50) DEFAULT NULL,
+            confirmed_at   DATETIME     DEFAULT NULL,
+            reopen_by      INT          DEFAULT NULL,
+            reopen_by_name VARCHAR(50)  DEFAULT NULL,
+            reopen_at      DATETIME     DEFAULT NULL,
+            reopen_reason  VARCHAR(300) DEFAULT NULL,
+            Created_At     DATETIME     DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (sheet_id),
+            UNIQUE KEY uq_sheet (side, party_id, billing_month),
+            KEY idx_sheet_status (status),
+            KEY idx_sheet_month (billing_month)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-對帳工作底稿'");
+
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_recon_line (
+            line_id      INT NOT NULL AUTO_INCREMENT,
+            sheet_id     INT NOT NULL,
+            sort_order   INT NOT NULL DEFAULT 0 COMMENT '拖移排序後的順序（對照紙本順序）',
+            src_type     VARCHAR(6)   NOT NULL COMMENT 'IS/IR/TLOG=來源憑證 SPLIT=拆分出來的子列 MANUAL=手動加列',
+            src_id       INT          NOT NULL DEFAULT 0,
+            doc_no       VARCHAR(30)  DEFAULT NULL,
+            doc_date     DATE         DEFAULT NULL,
+            bom          VARCHAR(30)  DEFAULT NULL,
+            product_id   VARCHAR(30)  DEFAULT NULL,
+            spec         VARCHAR(120) DEFAULT NULL,
+            orig_qty     INT          DEFAULT NULL COMMENT '原始數量（來源憑證的值，永久保留供比對）',
+            orig_price   DECIMAL(12,4) DEFAULT NULL,
+            orig_amount  DECIMAL(14,2) DEFAULT NULL,
+            adj_qty      INT          DEFAULT NULL COMMENT '對帳調整值；NULL=沿用原始',
+            adj_price    DECIMAL(12,4) DEFAULT NULL,
+            adj_amount   DECIMAL(14,2) DEFAULT NULL,
+            adj_month    VARCHAR(7)   DEFAULT NULL COMMENT '拆分可跨月：這一段算哪個月的帳',
+            checked      TINYINT(1)   NOT NULL DEFAULT 0 COMMENT '1=已對到本筆（畫面轉暖淺綠）',
+            group_no     INT          DEFAULT NULL COMMENT '同組＝多項加總（我方多筆對廠商一筆）',
+            split_parent INT          DEFAULT NULL COMMENT '拆分來源 line_id（我方一筆對廠商多筆）',
+            split_seq    INT          DEFAULT NULL,
+            memo         VARCHAR(300) DEFAULT NULL,
+            PRIMARY KEY (line_id),
+            KEY idx_line_sheet (sheet_id, sort_order),
+            KEY idx_line_src (src_type, src_id),
+            KEY idx_line_group (sheet_id, group_no),
+            KEY idx_line_split (split_parent)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-對帳底稿明細（加總/拆分/排序/勾選都存這裡，不動來源憑證）'");
+
         $done = true;
     } catch (Throwable $e) {
         error_log('acc_ensure_schema 失敗: ' . $e->getMessage());
     }
+}
+
+/* ============================================================
+ * 對帳工作底稿
+ *
+ * 設計要點（對應使用者實務）：
+ *  - 加總／拆分只影響底稿，永不寫回 is_list / bom_ing_transfer_log。
+ *    orig_* 永久保留原始值，adj_* 是對帳當下的算法，會計與稽核兩邊都看得到。
+ *  - 拆分驗證：子列金額合計必須等於父列金額，避免對帳把錢對掉。
+ *  - 一個 (側別, 對象, 帳款月份) 只有一份底稿；確認送出後暫存即成為已確認紀錄。
+ *  - 確認鎖帳後，該底稿涵蓋的憑證不可再用 acc_edit_doc 修改，
+ *    要改必須由會計管理員先退回（reopen），全程留稽核。
+ * ============================================================ */
+
+/** 取得底稿（含明細）；沒有暫存時回 null */
+function acc_sheet_get(PDO $db, string $side, string $partyId, string $bm): ?array
+{
+    acc_ensure_schema($db);
+    $st = $db->prepare("SELECT * FROM acc_recon_sheet WHERE side=? AND party_id=? AND billing_month=? LIMIT 1");
+    $st->execute([$side, $partyId, $bm]);
+    $sheet = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$sheet) return null;
+
+    $sl = $db->prepare("SELECT * FROM acc_recon_line WHERE sheet_id=? ORDER BY sort_order, line_id");
+    $sl->execute([(int)$sheet['sheet_id']]);
+    $sheet['lines'] = $sl->fetchAll(PDO::FETCH_ASSOC);
+
+    // 哪些列是拆分父列（有子列指向它）——父列不計入合計，只是容器
+    $isParent = [];
+    foreach ($sheet['lines'] as $l) {
+        if ($l['split_parent'] !== null) $isParent[(int)$l['split_parent']] = true;
+    }
+
+    foreach ($sheet['lines'] as &$l) {
+        $l['eff_qty']    = ($l['adj_qty']    !== null) ? (int)$l['adj_qty']      : (int)$l['orig_qty'];
+        $l['eff_price']  = ($l['adj_price']  !== null) ? (float)$l['adj_price']  : (float)$l['orig_price'];
+        $l['eff_amount'] = ($l['adj_amount'] !== null) ? (float)$l['adj_amount'] : (float)$l['orig_amount'];
+        $l['adjusted']   = ($l['adj_qty'] !== null || $l['adj_price'] !== null
+                            || $l['adj_amount'] !== null || $l['adj_month'] !== null);
+        $l['is_split_parent'] = isset($isParent[(int)$l['line_id']]);
+        $l['counts_in_total'] = !$l['is_split_parent'];
+    }
+    unset($l);
+    return $sheet;
+}
+
+/** 底稿是否已鎖（confirmed）。給 acc_edit_doc 用來擋修改。 */
+function acc_sheet_locked_src(PDO $db, string $srcType, int $srcId): ?array
+{
+    try {
+        $st = $db->prepare("SELECT s.sheet_id, s.side, s.party_name, s.billing_month, s.status,
+                                   s.confirmed_by_name, s.confirmed_at
+                            FROM acc_recon_line l
+                            JOIN acc_recon_sheet s ON s.sheet_id = l.sheet_id
+                            WHERE l.src_type = ? AND l.src_id = ? AND s.status = 'confirmed'
+                            LIMIT 1");
+        $st->execute([strtoupper($srcType), $srcId]);
+        return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Throwable $e) { return null; }
+}
+
+/**
+ * 從來源憑證組出一份新底稿的明細（不寫入資料庫）。
+ * 已有暫存時前端應改用 acc_sheet_get 的內容，避免蓋掉使用者對過的進度。
+ */
+function acc_sheet_build(PDO $db, string $side, string $partyId, string $bm): array
+{
+    $lines = [];
+    $i = 0;
+    if ($side === 'ap') {
+        $d = acc_ap_detail($db, $partyId, $bm);
+        foreach ($d['items'] as $it) {
+            $lines[] = [
+                'sort_order' => ++$i * 10, 'src_type' => 'TLOG', 'src_id' => (int)$it['transfer_id'],
+                'doc_no' => $it['transfer_no'], 'doc_date' => $it['d'], 'bom' => $it['bom'],
+                'product_id' => $it['product_id'], 'spec' => $it['process_name'],
+                'orig_qty' => (int)$it['transfer_qty'], 'orig_price' => (float)$it['unit_price'],
+                'orig_amount' => (float)$it['process_amount'],
+                'adj_qty' => null, 'adj_price' => null, 'adj_amount' => null, 'adj_month' => null,
+                'checked' => 0, 'group_no' => null, 'split_parent' => null, 'split_seq' => null,
+                'memo' => $it['note'],
+            ];
+        }
+        return ['party_name' => $d['head']['maker_name'], 'lines' => $lines, 'head' => $d['head']];
+    }
+
+    // 應收：partyId 傳的是客戶簡稱（is_list 以簡稱歸戶）
+    $d = acc_ar_detail($db, $partyId, $bm);
+    foreach ($d['items'] as $it) {
+        $lines[] = [
+            'sort_order' => ++$i * 10, 'src_type' => $it['src_type'], 'src_id' => (int)$it['src_id'],
+            'doc_no' => $it['no'], 'doc_date' => $it['date'], 'bom' => null,
+            'product_id' => $it['product_id'], 'spec' => $it['spec'],
+            'orig_qty' => (int)$it['qty'], 'orig_price' => (float)$it['unit_price'],
+            'orig_amount' => (float)$it['amount'],
+            'adj_qty' => null, 'adj_price' => null, 'adj_amount' => null, 'adj_month' => null,
+            'checked' => 0, 'group_no' => null, 'split_parent' => null, 'split_seq' => null,
+            'memo' => $it['note'],
+        ];
+    }
+    return ['party_name' => $d['head']['customer'], 'lines' => $lines, 'head' => $d['head']];
+}
+
+/** 一列的有效金額：有調整就用調整值，否則用原始值 */
+function acc_line_amount(array $l): float
+{
+    if (array_key_exists('adj_amount', $l) && $l['adj_amount'] !== null && $l['adj_amount'] !== '') {
+        return (float)$l['adj_amount'];
+    }
+    return (float)($l['orig_amount'] ?? 0);
+}
+
+/** 找出哪些列是「拆分父列」（有子列指向它）。前端用 client_key，資料庫用 line_id。 */
+function acc_split_parent_keys(array $lines, string $keyField = 'client_key',
+                               string $parentField = 'split_parent_key'): array
+{
+    $p = [];
+    foreach ($lines as $l) {
+        $pk = $l[$parentField] ?? null;
+        if ($pk !== null && $pk !== '' && $pk !== 0) $p[(string)$pk] = true;
+    }
+    return $p;
+}
+
+/**
+ * 依明細算合計。
+ * 關鍵：**有子列的父列不計入合計**——它只是容器，金額由子列代表，
+ * 否則同一筆錢會被算兩次。所以前端不需要（也不該）把父列金額歸零。
+ */
+function acc_sheet_totals(PDO $db, array $lines, string $keyField = 'client_key',
+                          string $parentField = 'split_parent_key'): array
+{
+    $parents = acc_split_parent_keys($lines, $keyField, $parentField);
+    $net = 0.0;
+    foreach ($lines as $l) {
+        $k = (string)($l[$keyField] ?? '');
+        if ($k !== '' && isset($parents[$k])) continue;      // 拆分父列不計入
+        $net += acc_line_amount($l);
+    }
+    $tax = round($net * acc_tax_rate($db));
+    return ['our_total' => $net, 'tax_amount' => $tax, 'total_amount' => $net + $tax];
+}
+
+/**
+ * 儲存底稿（暫存）。整批取代明細，並驗證拆分金額守恆。
+ * @param array $sheet side, party_id, party_name, billing_month, their_total, memo
+ * @param array $lines 前端目前畫面上的所有列
+ */
+function acc_sheet_save(PDO $db, array $sheet, array $lines, ?array $user): array
+{
+    acc_ensure_schema($db);
+    $side = ($sheet['side'] ?? 'ar') === 'ap' ? 'ap' : 'ar';
+    $pid  = trim((string)($sheet['party_id'] ?? ''));
+    $bm   = trim((string)($sheet['billing_month'] ?? ''));
+    if ($pid === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) {
+        return ['success' => false, 'message' => '缺少對象或帳款月份'];
+    }
+
+    // 已確認鎖帳的底稿不可覆蓋
+    $cur = acc_sheet_get($db, $side, $pid, $bm);
+    if ($cur && $cur['status'] === 'confirmed') {
+        return ['success' => false,
+                'message' => '此對帳單已於 ' . $cur['confirmed_at'] . ' 由 ' . $cur['confirmed_by_name']
+                           . ' 確認鎖帳，不可再存暫存。需修改請由會計管理員退回重對。'];
+    }
+
+    /* 拆分守恆：同一父列的子列金額合計必須等於父列的有效金額。
+       比對基準是父列自己的金額（adj 優先、否則 orig），不是「被歸零後的 0」——
+       父列只是容器，金額由子列代表，所以父列不必也不該被前端歸零。 */
+    $byParent  = [];
+    $parentAmt = [];
+    $parentNo  = [];
+    foreach ($lines as $idx => $l) {
+        $key = (string)($l['client_key'] ?? ('idx' . $idx));
+        $pk  = $l['split_parent_key'] ?? null;
+        if ($pk !== null && $pk !== '') {
+            $byParent[(string)$pk][] = acc_line_amount($l);
+        }
+        $parentAmt[$key] = acc_line_amount($l);
+        $parentNo[$key]  = (string)($l['doc_no'] ?? $key);
+    }
+    foreach ($byParent as $pk => $childAmts) {
+        if (!array_key_exists($pk, $parentAmt)) {
+            return ['success' => false, 'message' => '拆分資料異常：找不到子列對應的原列'];
+        }
+        $sum = array_sum($childAmts);
+        if (abs($sum - $parentAmt[$pk]) > 0.01) {
+            return ['success' => false,
+                    'message' => '拆分金額不符（' . $parentNo[$pk] . '）：拆出的 ' . count($childAmts)
+                               . ' 段合計 ' . number_format($sum, 2)
+                               . '，原列金額 ' . number_format($parentAmt[$pk], 2)
+                               . '，兩者必須相等（對帳不可把錢對掉）'];
+        }
+    }
+
+    $t = acc_sheet_totals($db, $lines);
+    try {
+        $db->beginTransaction();
+        if ($cur) {
+            $sid = (int)$cur['sheet_id'];
+            $db->prepare("UPDATE acc_recon_sheet SET party_name=?, our_total=?, their_total=?,
+                          tax_amount=?, total_amount=?, memo=?, status='draft',
+                          saved_by=?, saved_by_name=?, saved_at=NOW()
+                          WHERE sheet_id=?")
+               ->execute([$sheet['party_name'] ?? null, $t['our_total'],
+                          ($sheet['their_total'] === '' || $sheet['their_total'] === null) ? null : (float)$sheet['their_total'],
+                          $t['tax_amount'], $t['total_amount'],
+                          mb_substr((string)($sheet['memo'] ?? ''), 0, 500) ?: null,
+                          $user ? (int)$user['id'] : null, $user ? (string)$user['user_cname'] : null, $sid]);
+            $db->prepare("DELETE FROM acc_recon_line WHERE sheet_id=?")->execute([$sid]);
+        } else {
+            $db->prepare("INSERT INTO acc_recon_sheet
+                          (side, party_id, party_name, billing_month, status, our_total, their_total,
+                           tax_amount, total_amount, memo, saved_by, saved_by_name, saved_at)
+                          VALUES (?,?,?,?,'draft',?,?,?,?,?,?,?,NOW())")
+               ->execute([$side, $pid, $sheet['party_name'] ?? null, $bm, $t['our_total'],
+                          ($sheet['their_total'] === '' || $sheet['their_total'] === null) ? null : (float)$sheet['their_total'],
+                          $t['tax_amount'], $t['total_amount'],
+                          mb_substr((string)($sheet['memo'] ?? ''), 0, 500) ?: null,
+                          $user ? (int)$user['id'] : null, $user ? (string)$user['user_cname'] : null]);
+            $sid = (int)$db->lastInsertId();
+        }
+
+        // 先插入非拆分列，取得 line_id 後再插子列並接上 split_parent
+        $ins = $db->prepare("INSERT INTO acc_recon_line
+            (sheet_id, sort_order, src_type, src_id, doc_no, doc_date, bom, product_id, spec,
+             orig_qty, orig_price, orig_amount, adj_qty, adj_price, adj_amount, adj_month,
+             checked, group_no, split_parent, split_seq, memo)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+
+        $keyToId = [];
+        foreach ([false, true] as $pass) {                 // 第一輪父列、第二輪子列
+            $seq = 0;
+            foreach ($lines as $idx => $l) {
+                $isChild = !empty($l['split_parent_key']);
+                if ($isChild !== $pass) continue;
+                $seq++;
+                $nul = fn($v) => ($v === '' || $v === null) ? null : $v;
+                $ins->execute([
+                    $sid, (int)($l['sort_order'] ?? $seq * 10),
+                    strtoupper((string)($l['src_type'] ?? 'MANUAL')), (int)($l['src_id'] ?? 0),
+                    $nul($l['doc_no'] ?? null), $nul($l['doc_date'] ?? null), $nul($l['bom'] ?? null),
+                    $nul($l['product_id'] ?? null), $nul($l['spec'] ?? null),
+                    $nul($l['orig_qty'] ?? null), $nul($l['orig_price'] ?? null), $nul($l['orig_amount'] ?? null),
+                    $nul($l['adj_qty'] ?? null), $nul($l['adj_price'] ?? null),
+                    $nul($l['adj_amount'] ?? null), $nul($l['adj_month'] ?? null),
+                    !empty($l['checked']) ? 1 : 0,
+                    $nul($l['group_no'] ?? null),
+                    $isChild ? ($keyToId[$l['split_parent_key']] ?? null) : null,
+                    $nul($l['split_seq'] ?? null),
+                    $nul($l['memo'] ?? null),
+                ]);
+                if (!empty($l['client_key'])) $keyToId[$l['client_key']] = (int)$db->lastInsertId();
+            }
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '暫存失敗：' . $e->getMessage()];
+    }
+
+    return ['success' => true, 'sheet_id' => $sid, 'totals' => $t,
+            'message' => '已暫存對帳進度（' . count($lines) . ' 列）'];
+}
+
+/** 確認正確 → 鎖帳。涵蓋的憑證一併標為已對完，並寫稽核。 */
+function acc_sheet_confirm(PDO $db, int $sheetId, ?array $user): array
+{
+    acc_ensure_schema($db);
+    $st = $db->prepare("SELECT * FROM acc_recon_sheet WHERE sheet_id=? LIMIT 1");
+    $st->execute([$sheetId]);
+    $s = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$s) return ['success' => false, 'message' => '找不到對帳單'];
+    if ($s['status'] === 'confirmed') {
+        return ['success' => false, 'message' => '此對帳單已經確認鎖帳（' . $s['confirmed_at'] . '）'];
+    }
+
+    $sl = $db->prepare("SELECT line_id, src_type, src_id, checked FROM acc_recon_line WHERE sheet_id=?");
+    $sl->execute([$sheetId]);
+    $lines = $sl->fetchAll(PDO::FETCH_ASSOC);
+    if (!$lines) return ['success' => false, 'message' => '此對帳單沒有明細，不能確認'];
+
+    $unchecked = 0;
+    foreach ($lines as $l) if (empty($l['checked'])) $unchecked++;
+
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE acc_recon_sheet SET status='confirmed', confirmed_by=?, confirmed_by_name=?,
+                      confirmed_at=NOW() WHERE sheet_id=?")
+           ->execute([$user ? (int)$user['id'] : null, $user ? (string)$user['user_cname'] : null, $sheetId]);
+
+        // 涵蓋的原始憑證標為已對完
+        foreach ($lines as $l) {
+            $t = strtoupper((string)$l['src_type']);
+            if (!in_array($t, ['IS', 'IR', 'TLOG'], true) || (int)$l['src_id'] <= 0) continue;
+            $side = ($t === 'TLOG') ? 'ap' : 'ar';
+            $db->prepare("INSERT INTO acc_recon (src_type, src_id, side, status, recon_by, recon_by_name, recon_at)
+                          VALUES (?,?,?,'ok',?,?,NOW())
+                          ON DUPLICATE KEY UPDATE status='ok', recon_by=VALUES(recon_by),
+                            recon_by_name=VALUES(recon_by_name), recon_at=NOW(), Modified_At=NOW()")
+               ->execute([$t, (int)$l['src_id'], $side,
+                          $user ? (int)$user['id'] : null, $user ? (string)$user['user_cname'] : null]);
+        }
+
+        acc_audit($db, 'ACC_RECON', 'acc_recon_sheet', $sheetId,
+                  $s['party_name'] . ' ' . $s['billing_month'], [
+                      'status'       => ['old' => $s['status'], 'new' => 'confirmed'],
+                      'our_total'    => ['old' => null, 'new' => (float)$s['our_total']],
+                      'their_total'  => ['old' => null, 'new' => $s['their_total'] === null ? null : (float)$s['their_total']],
+                      'tax_amount'   => ['old' => null, 'new' => (float)$s['tax_amount']],
+                      'total_amount' => ['old' => null, 'new' => (float)$s['total_amount']],
+                      'line_count'   => ['old' => null, 'new' => count($lines)],
+                  ], '對帳確認鎖帳', $user);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '確認失敗：' . $e->getMessage()];
+    }
+
+    return ['success' => true, 'locked' => count($lines), 'unchecked' => $unchecked,
+            'message' => '已確認鎖帳，' . count($lines) . ' 筆憑證標記為已對完'
+                       . ($unchecked ? "（其中 {$unchecked} 筆未勾選，仍一併鎖定）" : '')];
+}
+
+/** 退回重對（僅會計管理員；權限在 API 層檢查） */
+function acc_sheet_reopen(PDO $db, int $sheetId, string $reason, ?array $user): array
+{
+    $reason = trim($reason);
+    if (mb_strlen($reason) < 2) return ['success' => false, 'message' => '請填寫退回原因（至少 2 個字）'];
+
+    $st = $db->prepare("SELECT * FROM acc_recon_sheet WHERE sheet_id=? LIMIT 1");
+    $st->execute([$sheetId]);
+    $s = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$s) return ['success' => false, 'message' => '找不到對帳單'];
+    if ($s['status'] !== 'confirmed') return ['success' => false, 'message' => '此對帳單並未處於鎖帳狀態'];
+
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE acc_recon_sheet SET status='reopened', reopen_by=?, reopen_by_name=?,
+                      reopen_at=NOW(), reopen_reason=? WHERE sheet_id=?")
+           ->execute([$user ? (int)$user['id'] : null, $user ? (string)$user['user_cname'] : null,
+                      mb_substr($reason, 0, 300), $sheetId]);
+        acc_audit($db, 'ACC_RECON', 'acc_recon_sheet', $sheetId,
+                  $s['party_name'] . ' ' . $s['billing_month'],
+                  ['status' => ['old' => 'confirmed', 'new' => 'reopened']], $reason, $user);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '退回失敗：' . $e->getMessage()];
+    }
+    return ['success' => true, 'message' => '已退回重對，對帳人員可以繼續修改'];
+}
+
+/** 底稿清單（會計／稽核看誰對完了、誰還卡著） */
+function acc_sheet_list(PDO $db, array $f): array
+{
+    acc_ensure_schema($db);
+    $where = []; $params = [];
+    if (!empty($f['side']) && $f['side'] !== 'all') { $where[] = "s.side = ?"; $params[] = $f['side']; }
+    if (!empty($f['status']) && $f['status'] !== 'all') { $where[] = "s.status = ?"; $params[] = $f['status']; }
+    if (!empty($f['bm_from'])) { $where[] = "s.billing_month >= ?"; $params[] = $f['bm_from']; }
+    if (!empty($f['bm_to']))   { $where[] = "s.billing_month <= ?"; $params[] = $f['bm_to']; }
+    $kw = trim((string)($f['kw'] ?? ''));
+    if ($kw !== '') {
+        $where[] = "(s.party_name LIKE ? OR s.party_id LIKE ? OR s.saved_by_name LIKE ? OR s.confirmed_by_name LIKE ?)";
+        for ($i = 0; $i < 4; $i++) $params[] = '%' . $kw . '%';
+    }
+    $ws = $where ? 'WHERE ' . implode(' AND ', $where) : '';
+
+    $st = $db->prepare("SELECT s.*,
+                          (SELECT COUNT(*) FROM acc_recon_line l WHERE l.sheet_id = s.sheet_id) AS line_cnt,
+                          (SELECT COUNT(*) FROM acc_recon_line l2 WHERE l2.sheet_id = s.sheet_id AND l2.checked = 1) AS checked_cnt,
+                          (SELECT COUNT(*) FROM acc_recon_line l3 WHERE l3.sheet_id = s.sheet_id
+                             AND (l3.adj_qty IS NOT NULL OR l3.adj_price IS NOT NULL
+                                  OR l3.adj_amount IS NOT NULL OR l3.adj_month IS NOT NULL)) AS adj_cnt
+                        FROM acc_recon_sheet s $ws
+                        ORDER BY s.billing_month DESC, s.side, s.party_name");
+    $st->execute($params);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $r['our_total']    = (float)$r['our_total'];
+        $r['their_total']  = $r['their_total'] === null ? null : (float)$r['their_total'];
+        $r['total_amount'] = (float)$r['total_amount'];
+        $r['diff']         = ($r['their_total'] === null) ? null : round($r['their_total'] - $r['our_total'], 2);
+        $r['line_cnt']     = (int)$r['line_cnt'];
+        $r['checked_cnt']  = (int)$r['checked_cnt'];
+        $r['adj_cnt']      = (int)$r['adj_cnt'];
+    }
+    unset($r);
+
+    $summary = ['count' => count($rows), 'draft' => 0, 'confirmed' => 0, 'reopened' => 0, 'diff_cnt' => 0];
+    foreach ($rows as $r) {
+        if (isset($summary[$r['status']])) $summary[$r['status']]++;
+        if ($r['diff'] !== null && abs($r['diff']) > 0.01) $summary['diff_cnt']++;
+    }
+    return ['rows' => $rows, 'total' => count($rows), 'summary' => $summary];
 }
 
 /* ============================================================
@@ -259,6 +721,15 @@ function acc_edit_doc(PDO $db, string $srcType, int $id, array $fields, string $
         return ['success' => false, 'message' => '請填寫修改原因（至少 2 個字），帳款有爭議時要查得出為什麼改'];
     }
     [$tbl, $pk, $noCol] = $meta;
+
+    // 對帳已確認鎖帳的憑證不可改——要改請會計管理員先退回重對
+    $lockedBy = acc_sheet_locked_src($db, $srcType, $id);
+    if ($lockedBy) {
+        return ['success' => false,
+                'message' => '此單據所在的對帳單（' . $lockedBy['party_name'] . ' ' . $lockedBy['billing_month']
+                           . '）已於 ' . $lockedBy['confirmed_at'] . ' 由 ' . $lockedBy['confirmed_by_name']
+                           . ' 確認鎖帳，不可修改。需修改請洽會計管理員退回重對。'];
+    }
 
     // 應收側：已開發票的單據不可改金額（金額已在發票上）
     if ($srcType === 'IS' || $srcType === 'IR') {
