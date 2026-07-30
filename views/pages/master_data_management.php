@@ -5951,7 +5951,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         try {
             $op_code = trim($_POST['op'] ?? '');
             if ($op_code === 'list') {
-                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+                // is_own_drawing＝「自家出的圖」：上傳時要填發行章日期並參與圖面變更判定
+                // （見 ai-rules/15-圖面變更判定依據.md）。欄位由 dwg_change_lib 建立，舊環境可能還沒有。
+                require_once __DIR__ . '/../../src/common/dwg_change_lib.php';
+                dwg_ensure_schema($pdo);
+                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode(['success'=>true,'data'=>$rows]);
             } elseif ($op_code === 'save') {
                 if (!$can_attach_cat_edit) throw new Exception('無編輯附件類別標籤權限（需 A/CDR/CDRU）');
@@ -5959,6 +5963,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $name         = trim($_POST['category_name'] ?? '');
                 $order        = intval($_POST['sort_order'] ?? 0);
                 $show_in_list = intval($_POST['show_in_list'] ?? 0) ? 1 : 0;
+                $own_drawing  = intval($_POST['is_own_drawing'] ?? 0) ? 1 : 0;
                 $tag_vars     = trim($_POST['tag_variables'] ?? '') ?: null;
                 $reactivate   = intval($_POST['reactivate'] ?? 0);
                 $op_name      = _get_operator($pdo, $uid);
@@ -5967,14 +5972,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     echo json_encode(['success'=>true,'message'=>'已重新啟用','cat_id'=>$cat_id]);
                 } elseif ($cat_id) {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=? WHERE id=?")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $cat_id]);
+                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=? WHERE id=?")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $cat_id]);
                     _log_audit($pdo,'update','dict','attach-cat:'.$cat_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已更新','cat_id'=>$cat_id]);
                 } else {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables) VALUES (?,?,?,?)")
-                        ->execute([$name, $order, $show_in_list, $tag_vars]);
+                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing) VALUES (?,?,?,?,?)")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing]);
                     $new_id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','attach-cat:'.$new_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已新增','cat_id'=>$new_id]);
@@ -8340,6 +8345,16 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                             <div style="font-size:10px;color:#aaa;margin-top:2px;">勾選後料號列表中會顯示此類別的最新附件</div>
                         </div>
                         <div class="form-group" style="margin-bottom:8px;">
+                            <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+                                <input type="checkbox" id="acat-own-drawing"> 這是「自家出的圖」
+                            </label>
+                            <div style="font-size:10px;color:#aaa;margin-top:2px;">
+                                勾選後：上傳此類別的附件時<b>必須填發行章日期</b>，系統會拿它跟同料號既有的自家圖面比對，
+                                比較新就判定為<b>圖面變更</b>並請設計填變更內容。<br>
+                                客戶原圖、報價圖不要勾（原圖更新常常只是報價階段，還沒接單）。
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin-bottom:8px;">
                             <label style="font-size:11px;color:#888;">變數定義 <small style="color:#aaa;">（上傳時填入附加資訊）</small></label>
                             <div id="acat-vars-list" style="margin-bottom:5px;"></div>
                             <button type="button" class="btn btn-xs btn-default" onclick="addAttachCatVar()"><i class="fa fa-plus"></i> 新增變數</button>
@@ -8785,10 +8800,81 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
             </div>
         </div>
     </div>
+    <!-- 發行章日期：自家出的圖（BOSS圖/++圖/單製++圖）必填，是圖面變更的新舊依據。
+         客戶圖多半沒有版次，所以判定不能用版次；見 ai-rules/15-圖面變更判定依據.md。
+         放在單檔區塊之外＝多檔一起上傳時共用同一個日期（同一次出圖本來就同一個章）。 -->
+    <div id="pau-issue-wrap" class="form-group" style="display:none;margin-top:8px;margin-bottom:0;padding:8px;background:#fffaf2;border:1px solid #f0d9b5;border-radius:4px;">
+        <label style="font-size:12px;">發行章日期 <span style="color:#e74c3c;">*</span>
+            <small style="color:#aaa;font-weight:normal;">（預設帶今天，請改成圖上實際的蓋章日；多檔上傳時共用）</small></label>
+        <input type="date" id="pau-issue-date" class="form-control input-sm" style="max-width:200px;">
+        <div id="pau-issue-hint" style="font-size:11px;margin-top:4px;"></div>
+    </div>
 </div>
 <div class="modal-footer" style="padding:8px 16px;">
     <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
     <button type="button" class="btn btn-primary" id="pau-submit-btn" onclick="submitPartAttachUpload()"><i class="fa fa-upload"></i> 上傳</button>
+</div>
+</div></div></div>
+
+<!-- ═══ MODAL: 圖面變更登錄（附件上傳判定為「變更」時自動跳出）════════════
+     判準：發行章日期比同料號既有的自家圖新＝變更。詳見 ai-rules/15-圖面變更判定依據.md
+     建立動作走 Part_Attachment_API 的 create_dwg_change → src/common/dwg_change_lib.php，
+     與「圖面變更紀錄」頁手動登錄同一套（會複製檢驗標準新版次並通知簽收）。 -->
+<div class="modal fade" id="dwgChangeModal" tabindex="-1" data-backdrop="static">
+<div class="modal-dialog" style="width:620px;max-width:96vw;"><div class="modal-content">
+<div class="modal-header" style="background:linear-gradient(135deg,#C77C1A,#F0A24B);">
+    <button type="button" class="close" data-dismiss="modal" style="color:#fff;">&times;</button>
+    <h4 class="modal-title" style="color:#4A3524;font-size:15px;"><i class="fa fa-exchange"></i> 偵測到圖面變更 — 請填寫變更內容</h4>
+</div>
+<div class="modal-body" style="padding:12px 16px;">
+    <input type="hidden" id="dwg-attach-id">
+    <div id="dwg-why" style="font-size:12px;background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;border-radius:4px;padding:8px;margin-bottom:10px;"></div>
+    <div class="form-group">
+        <label style="font-size:12px;font-weight:700;color:#555;">變更摘要 <span style="color:#e74c3c;">*</span>
+            <small style="color:#aaa;font-weight:normal;">（會直接出現在檢驗人員的提醒上）</small></label>
+        <input type="text" id="dwg-summary" class="form-control input-sm" maxlength="200"
+               placeholder="例：外徑由 Ø25±0.1 改為 Ø24.8±0.05，並新增同心度 0.02">
+        <div id="dwg-summary-err" style="font-size:11px;color:#e74c3c;margin-top:3px;display:none;">請填寫變更摘要——只有你知道這次改了什麼</div>
+    </div>
+    <div style="display:flex;gap:8px;">
+        <div class="form-group" style="flex:1;">
+            <label style="font-size:12px;font-weight:700;color:#555;">從哪個製程開始受影響</label>
+            <select id="dwg-fromproc" class="form-control input-sm"></select>
+            <small style="color:#aaa;font-size:11px;">留白＝該料號所有製程都提醒</small>
+        </div>
+        <div class="form-group" style="width:110px;flex-shrink:0;">
+            <label style="font-size:12px;font-weight:700;color:#555;">變更前版次</label>
+            <input type="text" id="dwg-oldrev" class="form-control input-sm" maxlength="50" placeholder="選填">
+        </div>
+        <div class="form-group" style="width:110px;flex-shrink:0;">
+            <label style="font-size:12px;font-weight:700;color:#555;">變更後版次</label>
+            <input type="text" id="dwg-newrev" class="form-control input-sm" maxlength="50" placeholder="選填">
+        </div>
+    </div>
+    <div style="display:flex;gap:8px;">
+        <div class="form-group" style="width:130px;flex-shrink:0;">
+            <label style="font-size:12px;font-weight:700;color:#555;">變更來源</label>
+            <select id="dwg-source" class="form-control input-sm"><option>客戶</option><option>內部</option></select>
+        </div>
+        <div class="form-group" style="flex:1;">
+            <label style="font-size:12px;font-weight:700;color:#555;">工程變更單號 / 客戶文件編號</label>
+            <input type="text" id="dwg-cdoc" class="form-control input-sm" maxlength="100" placeholder="選填，沒開單就留白">
+        </div>
+    </div>
+    <div class="form-group">
+        <label style="font-size:12px;font-weight:700;color:#555;">變更內容明細</label>
+        <textarea id="dwg-detail" class="form-control input-sm" rows="2" placeholder="選填"></textarea>
+    </div>
+    <div class="form-group" style="margin-bottom:0;">
+        <label style="font-size:12px;font-weight:700;color:#555;">需簽收人員
+            <small style="color:#aaa;font-weight:normal;">（未簽收會一直留在置頂未讀）</small></label>
+        <input type="text" id="dwg-people-q" class="form-control input-sm" placeholder="輸入姓名篩選" style="margin-bottom:4px;" oninput="renderDwgPeople()">
+        <div id="dwg-people" style="max-height:150px;overflow:auto;border:1px solid #e4e8ed;border-radius:4px;padding:6px;">載入中…</div>
+    </div>
+</div>
+<div class="modal-footer" style="padding:8px 16px;">
+    <button type="button" class="btn btn-default" onclick="dwgSkipChange()" title="附件已存好，之後可到「圖面變更紀錄」頁補登">稍後再填</button>
+    <button type="button" class="btn btn-warning" id="dwg-save-btn" onclick="submitDwgChange()"><i class="fa fa-check"></i> 建立變更紀錄並通知簽收</button>
 </div>
 </div></div></div>
 
@@ -8820,6 +8906,12 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
     <div class="form-group">
         <label style="font-size:12px;font-weight:700;color:#555;">附件類別標籤 <small style="color:#aaa;">（可多選）</small></label>
         <div id="pae-cat-chips" style="display:flex;flex-wrap:wrap;gap:5px;padding:6px;background:#f9fafb;border:1px solid #e4e8ed;border-radius:4px;min-height:34px;"></div>
+    </div>
+    <div class="form-group" id="pae-issue-wrap" style="display:none;">
+        <label style="font-size:12px;font-weight:700;color:#555;">發行章日期 <span style="color:#e74c3c;">*</span>
+            <small style="color:#aaa;font-weight:normal;">（自家出的圖必填，圖面變更以此判新舊）</small></label>
+        <input type="date" id="pae-issue-date" class="form-control input-sm">
+        <div id="pae-issue-hint" style="font-size:11px;margin-top:3px;"></div>
     </div>
     <div class="form-group">
         <label style="font-size:12px;font-weight:700;color:#555;">版次</label>
@@ -17210,7 +17302,9 @@ function loadAttachCatTable() {
             var showBadge = (c.show_in_list=='1'||c.show_in_list===1) ? '<i class="fa fa-eye" style="color:#27ae60;" title="列表顯示"></i>' : '<i class="fa fa-eye-slash" style="color:#ccc;"></i>';
             html += '<tr data-cat-id="'+c.id+'">';
             html += '<td style="cursor:grab;color:#bbb;text-align:center;" class="acat-drag-handle">&#9776;</td>';
-            html += '<td>'+escHtml(c.category_name)+varBadge+'&nbsp;'+badge+'</td>';
+            var odBadge = (c.is_own_drawing=='1'||c.is_own_drawing===1)
+                ? '<span style="font-size:9px;background:#FFF3E2;color:#C77C1A;border:1px solid #E4D3BC;border-radius:3px;padding:1px 4px;margin-left:3px;" title="自家出的圖：上傳需填發行章日期，並參與圖面變更判定">自家圖</span>' : '';
+            html += '<td>'+escHtml(c.category_name)+varBadge+odBadge+'&nbsp;'+badge+'</td>';
             html += '<td style="text-align:center;">'+showBadge+'</td>';
             html += '<td style="text-align:right;">'+badge+'</td>';
             if (CAN_ATTACH_CAT_EDIT) {
@@ -17267,6 +17361,8 @@ function editAttachCat(id) {
     document.getElementById('acat-name-input').value = c.category_name||'';
     var silChk = document.getElementById('acat-show-in-list');
     if (silChk) silChk.checked = (c.show_in_list=='1'||c.show_in_list===1);
+    var odChk = document.getElementById('acat-own-drawing');
+    if (odChk) odChk.checked = (c.is_own_drawing=='1'||c.is_own_drawing===1);
     document.getElementById('acat-form-title').textContent = '修改類別';
     // Render vars
     var varsList = document.getElementById('acat-vars-list');
@@ -17283,6 +17379,8 @@ function resetAttachCatForm() {
     document.getElementById('acat-name-input').value = '';
     var silChk = document.getElementById('acat-show-in-list');
     if (silChk) silChk.checked = false;
+    var odChk = document.getElementById('acat-own-drawing');
+    if (odChk) odChk.checked = false;
     document.getElementById('acat-form-title').textContent = '新增類別';
     var varsList = document.getElementById('acat-vars-list');
     if (varsList) varsList.innerHTML = '';
@@ -17323,10 +17421,12 @@ function saveAttachCategory() {
     var name = (document.getElementById('acat-name-input').value||'').trim();
     var sil  = document.getElementById('acat-show-in-list');
     var showInList = (sil && sil.checked) ? 1 : 0;
+    var od   = document.getElementById('acat-own-drawing');
+    var ownDrawing = (od && od.checked) ? 1 : 0;
     if (!name) { showToast('請填寫類別名稱','error'); return; }
     var vars = getAttachCatVars();
     var tagVarsJson = vars.length ? JSON.stringify(vars) : '';
-    api({ action:'manage_attach_categories', op:'save', cat_id:id, category_name:name, sort_order:0, show_in_list:showInList, tag_variables:tagVarsJson }).done(function(r) {
+    api({ action:'manage_attach_categories', op:'save', cat_id:id, category_name:name, sort_order:0, show_in_list:showInList, is_own_drawing:ownDrawing, tag_variables:tagVarsJson }).done(function(r) {
         if (r.success) { _attachCatsCache = null; showToast(r.message||'已儲存'); resetAttachCatForm(); loadAttachCatTable(); }
         else showToast(r.message||'儲存失敗','error');
     });
@@ -18085,7 +18185,7 @@ function _pauBuildFileCatChips(fileIdx, cats, checkedIds) {
     cats.forEach(function(c) {
         var ck = (checkedIds||[]).indexOf(String(c.id)) >= 0 ? 'checked' : '';
         html += '<label style="display:inline-flex;align-items:center;gap:3px;background:#f0f8ff;color:#1a5276;border:1px solid #aed6f1;border-radius:8px;padding:1px 8px;cursor:pointer;font-weight:normal;font-size:11px;margin-bottom:2px;">'
-              + '<input type="checkbox" value="'+c.id+'" class="pau-row-cat" data-fidx="'+fileIdx+'" '+ck+' style="cursor:pointer;">'
+              + '<input type="checkbox" value="'+c.id+'" class="pau-row-cat" data-fidx="'+fileIdx+'" '+ck+' onchange="refreshPauIssueRow()" style="cursor:pointer;">'
               + escHtml(c.category_name)+'</label>';
     });
     html += '</div>';
@@ -18158,6 +18258,8 @@ function _openPartAttachUploadModal(dId, partNo, preselectedFiles) {
     document.getElementById('pau-d-id').value = dId;
     document.getElementById('pau-note').value = '';
     var _pauRev = document.getElementById('pau-revision'); if (_pauRev) _pauRev.value = '';
+    var _pauIss = document.getElementById('pau-issue-date'); if (_pauIss) _pauIss.value = '';
+    var _pauIw  = document.getElementById('pau-issue-wrap'); if (_pauIw) _pauIw.style.display = 'none';
     document.getElementById('pau-vars-section').style.display = 'none';
     document.getElementById('pau-vars-inputs').innerHTML = '';
     document.getElementById('pau-file-rows').style.display = 'none';
@@ -18210,7 +18312,60 @@ function onPauFileChange(input) {
     });
 }
 
+/* ── 發行章日期：只有勾到「自家出的圖」標籤才要求填 ──────────────────────
+   判準與適用標籤見 ai-rules/15-圖面變更判定依據.md。哪些標籤算自家出的圖，
+   由 quotation_file_categories.is_own_drawing 決定（附件類別設定可調），不寫死 id。 */
+function _pauOwnDrawingCatIds() {
+    return (_attachCatsCache||[]).filter(function(c){ return c.is_own_drawing==1||c.is_own_drawing==='1'; })
+                                 .map(function(c){ return String(c.id); });
+}
+function _pauSelectedCatIds() {
+    var ids = [];
+    // 單檔用 chips，多檔用每列 checkbox；兩種模式共用同一個發行章日期
+    document.querySelectorAll('.pau-cat-chk:checked').forEach(function(cb){ ids.push(cb.value); });
+    document.querySelectorAll('.pau-row-cat:checked').forEach(function(cb){ ids.push(cb.value); });
+    return ids;
+}
+function refreshPauIssueRow() {
+    var wrap = document.getElementById('pau-issue-wrap');
+    if (!wrap) return;
+    var own = _pauOwnDrawingCatIds();
+    var need = _pauSelectedCatIds().some(function(id){ return own.indexOf(String(id))>=0; });
+    wrap.style.display = need ? '' : 'none';
+    if (!need) return;
+    var inp = document.getElementById('pau-issue-date');
+    if (inp && !inp.value) inp.value = _todayStr();          // 預設帶今天（上傳日），可改
+    validatePauIssue();
+}
+function _todayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
+}
+/* 錯誤即時偵測並顯示原因（CLAUDE.md 表單三總則③） */
+function validatePauIssue() {
+    var inp = document.getElementById('pau-issue-date'), hint = document.getElementById('pau-issue-hint');
+    if (!inp || !hint) return true;
+    if (document.getElementById('pau-issue-wrap').style.display === 'none') return true;
+    if (!inp.value) {
+        inp.style.borderColor = '#e74c3c';
+        hint.style.color = '#e74c3c';
+        hint.textContent = '請填發行章日期——這是判斷「這張圖是不是改過」的唯一依據，不填就無法自動偵測圖面變更';
+        return false;
+    }
+    if (inp.value > _todayStr()) {
+        inp.style.borderColor = '#e74c3c';
+        hint.style.color = '#e74c3c';
+        hint.textContent = '發行章日期不可以是未來日期';
+        return false;
+    }
+    inp.style.borderColor = '';
+    hint.style.color = '#7f8c8d';
+    hint.textContent = '上傳後會自動跟這個料號既有的自家圖面比對：比較新＝圖面變更（會請你填變更內容），第一次＝首次發行。';
+    return true;
+}
+
 function onPauCatChange() {
+    refreshPauIssueRow();
     var selectedIds = [];
     document.querySelectorAll('.pau-cat-chk:checked').forEach(function(cb){ selectedIds.push(cb.value); });
     var varSec = document.getElementById('pau-vars-section');
@@ -18247,6 +18402,9 @@ function submitPartAttachUpload() {
               : (document.getElementById('pau-file-input').files ? Array.from(document.getElementById('pau-file-input').files) : []);
     if (!dId)          { showToast('缺少料號 ID','error'); return; }
     if (!files.length) { showToast('請選擇檔案','error'); return; }
+    if (!validatePauIssue()) { document.getElementById('pau-issue-date').focus(); showToast('請先填寫發行章日期','error'); return; }
+    var issueDate = (document.getElementById('pau-issue-wrap').style.display !== 'none')
+                  ? (document.getElementById('pau-issue-date').value||'') : '';
     var isMulti = files.length > 1;
     // 收集每個檔案的設定
     var fileSettings = files.map(function(f, idx) {
@@ -18271,15 +18429,18 @@ function submitPartAttachUpload() {
     });
     var btn = document.getElementById('pau-submit-btn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 上傳中…'; }
-    var total = files.length, done = 0, failed = 0;
+    var total = files.length, done = 0, failed = 0, lastErr = '';
+    // 一批只會有一次「圖面變更」——同一次出圖的 BOSS圖/++圖 是同一件事，記第一個判定為變更的附件即可
+    var changeHit = null;
     function uploadNext(idx) {
         if (idx >= files.length) {
             if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-upload"></i> 上傳'; }
             var msg = total === 1 ? '附件已上傳' : (done + '/' + total + ' 個附件已上傳' + (failed ? '，' + failed + ' 個失敗' : ''));
-            showToast(msg, failed ? 'warning' : 'success');
+            showToast(msg + (failed && lastErr ? '（' + lastErr + '）' : ''), failed ? 'warning' : 'success');
             if (done > 0) {
                 $('#partAttachUploadModal').modal('hide');
                 _refreshPartAttachCell(dId);
+                if (changeHit) { openDwgChangeModal(changeHit); return; }   // 先讓設計填變更，填完再回附件檢視
                 setTimeout(function(){ openAttachAllView(dId, _pav.partNo||''); }, 200);
             }
             return;
@@ -18292,12 +18453,101 @@ function submitPartAttachUpload() {
         fd.append('tag_var_values', s.tagVarStr||'');
         fd.append('note', s.note||'');
         fd.append('revision', s.revision||'');
+        fd.append('issue_stamp_date', issueDate);
         $.ajax({ url:PART_ATTACH_API_URL, type:'POST', data:fd, processData:false, contentType:false, success:function(r) {
-            if (r.success) done++; else failed++;
+            if (r.success) {
+                done++;
+                var v = r.dwg_verdict || {};
+                if (!changeHit && v.kind === 'change') {
+                    changeHit = { attachId:r.id, dId:dId, fileName:r.original_name||'', verdict:v };
+                } else if (total === 1 && v.kind === 'first') {
+                    showToast('已記錄為首次發行（此料號第一張帶發行章日期的自家圖面），不需登錄圖面變更','success');
+                } else if (total === 1 && (v.kind === 'same' || v.kind === 'older')) {
+                    showToast(v.message || '', 'success');
+                }
+            } else { failed++; lastErr = r.message || ''; }
             uploadNext(idx + 1);
         }, error:function(){ failed++; uploadNext(idx + 1); }});
     }
     uploadNext(0);
+}
+
+/* ── 圖面變更登錄跳窗（附件上傳判定為「變更」時自動跳出）────────────────── */
+var _dwgCtx = null, _dwgPeople = null;
+function openDwgChangeModal(ctx) {
+    _dwgCtx = ctx;
+    document.getElementById('dwg-attach-id').value = ctx.attachId;
+    document.getElementById('dwg-why').innerHTML =
+        '<b>' + escHtml(ctx.fileName) + '</b> 的發行章日期是 <b>' + escHtml(ctx.verdict.issue_date || '') + '</b>，'
+        + '比這個料號現有最新的自家圖面（' + escHtml(ctx.verdict.prev_name||'') + '，'
+        + escHtml(ctx.verdict.prev_date||'') + '）新，所以判定為<b>圖面變更</b>。<br>'
+        + '只有你知道這次改了什麼、哪些製程受影響，請填一下；送出後會自動把檢驗標準複製成新版次並通知簽收。';
+    document.getElementById('dwg-summary').value = '';
+    document.getElementById('dwg-detail').value  = '';
+    document.getElementById('dwg-oldrev').value  = '';
+    document.getElementById('dwg-newrev').value  = '';
+    document.getElementById('dwg-cdoc').value    = '';
+    document.getElementById('dwg-source').value  = '客戶';
+    document.getElementById('dwg-people-q').value = '';
+    document.getElementById('dwg-summary-err').style.display = 'none';
+    document.getElementById('dwg-summary').style.borderColor = '';
+    $.post(PART_ATTACH_API_URL, { action:'dwg_lookups' }, function(r) {
+        if (!r || !r.success) return;
+        document.getElementById('dwg-fromproc').innerHTML = '<option value="">（全部製程都提醒）</option>'
+            + (r.processes||[]).map(function(p){ return '<option value="'+p.ProcessNo+'">'+escHtml(p.ProcessName)+'</option>'; }).join('');
+        _dwgPeople = r.people || [];
+        renderDwgPeople();
+    }, 'json');
+    $('#dwgChangeModal').modal('show');
+}
+function renderDwgPeople() {
+    if (!_dwgPeople) return;
+    var q = (document.getElementById('dwg-people-q').value||'').trim();
+    var list = q ? _dwgPeople.filter(function(p){ return p.label.indexOf(q) >= 0; }) : _dwgPeople;
+    var box = document.getElementById('dwg-people');
+    var picked = {};
+    document.querySelectorAll('.dwg-ack:checked').forEach(function(cb){ picked[cb.value] = 1; });
+    box.innerHTML = list.length ? list.map(function(p) {
+        return '<label style="display:inline-block;width:48%;font-weight:normal;font-size:12px;margin:2px 0;cursor:pointer;">'
+             + '<input type="checkbox" class="dwg-ack" value="'+p.id+'"'+(picked[p.id]?' checked':'')+'> ' + escHtml(p.label) + '</label>';
+    }).join('') : '<span style="color:#aaa;font-size:12px;">查無符合人員</span>';
+}
+function submitDwgChange() {
+    var summary = (document.getElementById('dwg-summary').value||'').trim();
+    if (!summary) {
+        document.getElementById('dwg-summary-err').style.display = '';
+        document.getElementById('dwg-summary').style.borderColor = '#e74c3c';
+        document.getElementById('dwg-summary').focus();
+        return;
+    }
+    var acks = [];
+    document.querySelectorAll('.dwg-ack:checked').forEach(function(cb){ acks.push(cb.value); });
+    var btn = document.getElementById('dwg-save-btn');
+    btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 建立中…';
+    $.post(PART_ATTACH_API_URL, {
+        action:'create_dwg_change',
+        attachment_id: document.getElementById('dwg-attach-id').value,
+        summary: summary,
+        detail:  (document.getElementById('dwg-detail').value||'').trim(),
+        old_revision: (document.getElementById('dwg-oldrev').value||'').trim(),
+        new_revision: (document.getElementById('dwg-newrev').value||'').trim(),
+        source: document.getElementById('dwg-source').value,
+        customer_doc_no: (document.getElementById('dwg-cdoc').value||'').trim(),
+        from_process_no: document.getElementById('dwg-fromproc').value,
+        ack_users: acks
+    }, function(r) {
+        btn.disabled = false; btn.innerHTML = '<i class="fa fa-check"></i> 建立變更紀錄並通知簽收';
+        if (!r || !r.success) { showToast((r && r.message) || '建立失敗','error'); return; }
+        showToast('已建立圖面變更 ' + r.change_no + (r.new_version_id ? '，檢驗標準已複製成新版次' : ''), 'success');
+        $('#dwgChangeModal').modal('hide');
+        if (_dwgCtx) setTimeout(function(){ openAttachAllView(_dwgCtx.dId, _pav.partNo||''); }, 200);
+    }, 'json');
+}
+function dwgSkipChange() {
+    // 附件已經存好了，跳過只是沒建變更紀錄；到「圖面變更紀錄」頁仍可手動補登
+    if (!confirm('附件已上傳完成。跳過的話這次改圖不會有變更紀錄，檢驗人員也不會收到提醒。\n\n之後可到「圖面變更紀錄」頁手動補登。確定跳過？')) return;
+    $('#dwgChangeModal').modal('hide');
+    if (_dwgCtx) setTimeout(function(){ openAttachAllView(_dwgCtx.dId, _pav.partNo||''); }, 200);
 }
 
 function pavEditMeta() {
@@ -18306,6 +18556,7 @@ function pavEditMeta() {
     document.getElementById('pae-id').value = f.id;
     document.getElementById('pae-note').value = f.note || '';
     document.getElementById('pae-revision').value = f.revision || '';
+    document.getElementById('pae-issue-date').value = (f.issue_stamp_date || '').substring(0,10);
     loadActiveCatsForUpload(function(cats) {
         var chips = document.getElementById('pae-cat-chips');
         if (!chips) return;
@@ -18320,11 +18571,42 @@ function pavEditMeta() {
                     : 'background:#f0f8ff;color:#1a5276;border:1px solid #aed6f1;');
             var ck = checked.indexOf(String(c.id)) >= 0 ? 'checked' : '';
             var label = isObsCat ? '⊘ 作廢' : escHtml(c.category_name);
-            lbl.innerHTML = '<input type="checkbox" value="'+c.id+'" class="pae-cat-chk" '+ck+' style="cursor:pointer;accent-color:#e74c3c;"> '+label;
+            lbl.innerHTML = '<input type="checkbox" value="'+c.id+'" class="pae-cat-chk" '+ck+' onchange="refreshPaeIssueRow()" style="cursor:pointer;accent-color:#e74c3c;"> '+label;
             chips.appendChild(lbl);
         });
+        refreshPaeIssueRow();
     });
     $('#partAttachEditModal').modal('show');
+}
+
+/* 編輯附件時的發行章日期：勾到「自家出的圖」才要求填（與上傳同一套判準） */
+function refreshPaeIssueRow() {
+    var wrap = document.getElementById('pae-issue-wrap');
+    if (!wrap) return;
+    var own = _pauOwnDrawingCatIds(), ids = [];
+    document.querySelectorAll('.pae-cat-chk:checked').forEach(function(cb){ ids.push(String(cb.value)); });
+    var need = ids.some(function(id){ return own.indexOf(id)>=0; });
+    wrap.style.display = need ? '' : 'none';
+    if (!need) return;
+    var inp = document.getElementById('pae-issue-date');
+    if (inp && !inp.value) inp.value = _todayStr();
+    validatePaeIssue();
+}
+function validatePaeIssue() {
+    var inp = document.getElementById('pae-issue-date'), hint = document.getElementById('pae-issue-hint');
+    if (!inp || !hint || document.getElementById('pae-issue-wrap').style.display === 'none') return true;
+    if (!inp.value) {
+        inp.style.borderColor = '#e74c3c'; hint.style.color = '#e74c3c';
+        hint.textContent = '請填發行章日期——這是判斷「這張圖是不是改過」的唯一依據';
+        return false;
+    }
+    if (inp.value > _todayStr()) {
+        inp.style.borderColor = '#e74c3c'; hint.style.color = '#e74c3c';
+        hint.textContent = '發行章日期不可以是未來日期';
+        return false;
+    }
+    inp.style.borderColor = ''; hint.style.color = '#7f8c8d'; hint.textContent = '';
+    return true;
 }
 
 function submitAttachEdit() {
@@ -18334,11 +18616,14 @@ function submitAttachEdit() {
     document.querySelectorAll('.pae-cat-chk:checked').forEach(function(cb){ catIds.push(cb.value); });
     var note = (document.getElementById('pae-note').value||'').trim();
     var revision = (document.getElementById('pae-revision').value||'').trim();
-    $.post(PART_ATTACH_API_URL, { action:'update_meta', id:id, category_ids:catIds.join(','), note:note, revision:revision }, function(r) {
+    if (!validatePaeIssue()) { document.getElementById('pae-issue-date').focus(); return; }
+    var issueDate = (document.getElementById('pae-issue-wrap').style.display !== 'none')
+                  ? (document.getElementById('pae-issue-date').value||'') : '';
+    $.post(PART_ATTACH_API_URL, { action:'update_meta', id:id, category_ids:catIds.join(','), note:note, revision:revision, issue_stamp_date:issueDate }, function(r) {
         if (!r.success) { showToast(r.message||'儲存失敗','error'); return; }
         // 更新本地資料
         var f = _pav.currentFile;
-        if (f) { f.category_ids = catIds.join(','); f.note = note; f.revision = revision; }
+        if (f) { f.category_ids = catIds.join(','); f.note = note; f.revision = revision; f.issue_stamp_date = issueDate; }
         showToast('已儲存');
         $('#partAttachEditModal').modal('hide');
         _refreshPartAttachCell(_pav.dId);

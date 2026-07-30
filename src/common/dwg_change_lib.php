@@ -58,7 +58,8 @@ function dwg_needs_issue_date(PDO $pdo, array $catIds): bool {
  *   kind: none=不是自家出圖標籤不判定／first=首次發行／change=變更／same=補件或重掃／older=補登舊版
  */
 function dwg_classify_upload(PDO $pdo, int $dId, array $catIds, ?string $issueDate): array {
-    $out = ['kind' => 'none', 'prev_date' => null, 'prev_name' => null, 'message' => '', 'needs_date' => false];
+    $out = ['kind' => 'none', 'prev_date' => null, 'prev_name' => null, 'message' => '',
+            'needs_date' => false, 'issue_date' => $issueDate];
     if (!dwg_needs_issue_date($pdo, $catIds)) return $out;
     $out['needs_date'] = true;
     if (!$issueDate) { $out['message'] = '此標籤屬於「自家出的圖」，必須填發行章日期'; return $out; }

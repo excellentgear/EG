@@ -180,7 +180,7 @@ switch ($action) {
         } catch(Exception $_e) {}
 
         // 1. 直接上傳的料號附件（JOIN user 取中文名稱）
-        $partStmt = $pdo->prepare("SELECT pa.id,'part' AS source,pa.filename,pa.original_name,pa.category_ids,pa.tag_var_values,pa.file_size,pa.note,pa.revision,
+        $partStmt = $pdo->prepare("SELECT pa.id,'part' AS source,pa.filename,pa.original_name,pa.category_ids,pa.tag_var_values,pa.file_size,pa.note,pa.revision,pa.issue_stamp_date,
             COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by, pa.uploaded_at, '' AS quote_no
             FROM part_attachments pa
             LEFT JOIN user u ON u.id = pa.uploaded_by_id
@@ -199,7 +199,7 @@ switch ($action) {
             if ($dSettingId && _paQuotCanView($pdo)) {
                 $qStmt = $pdo->prepare("
                     SELECT a.id,'quote' AS source,a.filename,a.original_name,a.category_ids,
-                           NULL AS tag_var_values,a.file_size,NULL AS note,
+                           NULL AS tag_var_values,a.file_size,NULL AS note,NULL AS revision,NULL AS issue_stamp_date,
                            COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by,
                            a.uploaded_at, a.quote_no
                     FROM quotation_attachments a
