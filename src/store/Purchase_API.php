@@ -708,11 +708,21 @@ case 'req_save': {
             max(0.0001, (float)($it['qty'] ?? 1)),
             ($it['est_price'] ?? '') === '' ? null : (float)$it['est_price'],
             $mode, (int)($it['location_id'] ?? 0) ?: null,
-            trim((string)($it['remark'] ?? '')) ?: null, $urgent, $sort++,
+            trim((string)($it['remark'] ?? '')) ?: null,
+            // 急件可以只勾其中幾項；沒送逐列值時（舊版前端）沿用單頭
+            isset($it['is_urgent']) ? ((int)$it['is_urgent'] ? 1 : 0) : $urgent, $sort++,
             $ip['type'] ?? null, $ip['order_id'] ?? null, $ip['bom'] ?? null,
             $ip['d_id'] ?? null, $ip['note'] ?? null, $ip['label'] ?? null,
         ]);
     }
+    // 單頭急件旗標＝任一項急件（列表、通知都看這個），一律由品項回推才不會兩邊不一致
+    $db->prepare("UPDATE purchase_request r SET r.is_urgent =
+                  COALESCE((SELECT MAX(pi.is_urgent) FROM purchase_request_item pi WHERE pi.req_id=r.req_id),0)
+                  WHERE r.req_id=?")->execute([$reqId]);
+    $st = $db->prepare("SELECT is_urgent FROM purchase_request WHERE req_id=?");
+    $st->execute([$reqId]);
+    $urgent = (int)$st->fetchColumn();
+
     if ($tempAtts) purchase_commit_temp_atts($db, $tempAtts, $reqId, $reqNo, $uid);
     $db->commit();
 

@@ -104,6 +104,58 @@ try {
     $st = $db->prepare("SELECT COUNT(*) FROM purchase_request WHERE purpose_order_id=? AND req_id=?");
     $st->execute([$o['Order_id'], $reqId]);
     ck('可用 Order_id 反查到該申請單（成本歸得了戶）', (int)$st->fetchColumn() === 1);
+
+    echo "\n=== 5. 急件可以只勾其中幾項；單頭旗標由品項回推 ===\n";
+    // 先全部設成非急件，單頭應回推為 0
+    $db->exec("UPDATE purchase_request_item SET is_urgent=0 WHERE req_id=$reqId");
+    $roll = "UPDATE purchase_request r SET r.is_urgent =
+             COALESCE((SELECT MAX(pi.is_urgent) FROM purchase_request_item pi WHERE pi.req_id=r.req_id),0)
+             WHERE r.req_id=?";
+    $db->prepare($roll)->execute([$reqId]);
+    $st = $db->prepare("SELECT is_urgent FROM purchase_request WHERE req_id=?"); $st->execute([$reqId]);
+    ck('全部非急件→單頭 is_urgent=0', (int)$st->fetchColumn() === 0);
+
+    // 只把第二項設急件
+    $db->prepare("UPDATE purchase_request_item SET is_urgent=1 WHERE pr_item_id=?")->execute([$items[1]['pr_item_id']]);
+    $db->prepare($roll)->execute([$reqId]);
+    $st = $db->prepare("SELECT is_urgent FROM purchase_request WHERE req_id=?"); $st->execute([$reqId]);
+    ck('只有一項急件→單頭 is_urgent=1', (int)$st->fetchColumn() === 1);
+    $urg = $db->query("SELECT pr_item_id, is_urgent FROM purchase_request_item
+                       WHERE req_id=$reqId ORDER BY pr_item_id")->fetchAll(PDO::FETCH_ASSOC);
+    ck('逐列急件互不影響（第一項仍為 0、第二項為 1）',
+       (int)$urg[0]['is_urgent'] === 0 && (int)$urg[1]['is_urgent'] === 1);
+
+    echo "\n=== 6. 申請單版型角色 purchase_form_full ===\n";
+    $rid = $db->query("SELECT role_id FROM roles WHERE role_code='purchase_form_full' AND module='purchase'")->fetchColumn();
+    ck('角色 purchase_form_full 已建立', (bool)$rid);
+    // 找一個非管理員、且目前沒有任何採購角色的在職者當受測對象
+    $tu = $db->query("SELECT u.id, u.user_status FROM user u
+                      WHERE u.user_status NOT IN (9,90) AND u.id<>1
+                        AND NOT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                                        WHERE ur.user_id=u.id AND r.module='purchase')
+                      ORDER BY u.id LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    if (!$tu) { ck('找得到受測使用者', false, '（全公司都已指派採購角色，略過）'); }
+    else {
+        $p = purchase_perms($db, ['id' => (int)$tu['id'], 'user_status' => $tu['user_status']]);
+        ck('未指派角色者＝精簡版（canFormFull=false）', $p['canFormFull'] === false);
+        $db->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?,?)")->execute([$tu['id'], $rid]);
+        $p = purchase_perms($db, ['id' => (int)$tu['id'], 'user_status' => $tu['user_status']]);
+        ck('指派後＝採購版（canFormFull=true）', $p['canFormFull'] === true);
+    }
+    // 採購作業以上自動視為有採購版（不必另外指派 purchase_form_full）
+    $bid = $db->query("SELECT role_id FROM roles WHERE role_code='purchase_buy' AND module='purchase'")->fetchColumn();
+    $tu2 = $db->query("SELECT u.id, u.user_status FROM user u
+                       WHERE u.user_status NOT IN (9,90) AND u.id<>1
+                         AND NOT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                                         WHERE ur.user_id=u.id AND r.module='purchase')
+                       ORDER BY u.id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    if ($tu2) {
+        $db->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?,?)")->execute([$tu2['id'], $bid]);
+        $p = purchase_perms($db, ['id' => (int)$tu2['id'], 'user_status' => $tu2['user_status']]);
+        ck('只指派「採購作業」也自動具備採購版', $p['canFormFull'] === true);
+    } else {
+        echo "  [略] 找不到乾淨的受測使用者，跳過\n";
+    }
 } finally {
     $db->rollBack();
 }

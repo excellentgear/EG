@@ -118,6 +118,10 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 .flow .cur{background:var(--pq-warm);color:#fff;border-radius:9px;padding:1px 8px;}
 .flow .dn{background:var(--pq-soft);color:var(--pq-ink);border-radius:9px;padding:1px 8px;}
 .hint{font-size:12px;color:var(--pq-ink2);}
+/* 附件類別：改成標籤直接點，比下拉少一次操作 */
+.att-tag{display:inline-block;border:1px solid #D8BE93;background:#fff;color:var(--pq-ink);
+  border-radius:12px;padding:2px 12px;font-size:12px;cursor:pointer;margin-right:4px;}
+.att-tag.on{background:#F0A24B;border-color:#F0A24B;color:#fff;font-weight:bold;}
 /* 用途選擇是「開在申請單之上」的第二層 modal，明確墊高避免被蓋住 */
 #mPurpose{z-index:2100;}
 /* 用途歸屬：申請單最重要的一格，給它獨立區塊 */
@@ -320,40 +324,48 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <div class="pq-fld"><label>申請人／部門</label><input type="text" id="rWho" readonly style="background:#F5EEE2;"></div>
             <div class="pq-fld"><label>急件</label>
                 <label style="display:flex;align-items:center;gap:6px;height:30px;font-weight:normal;cursor:pointer;">
-                    <input type="checkbox" id="rUrgent" style="width:auto;margin:0;"> 這張單是急件
-                </label></div>
+                    <input type="checkbox" id="rUrgent" style="width:auto;margin:0;"> 整張單都是急件
+                </label>
+                <span class="hint">也可以只勾下面某幾項</span></div>
         </div>
         <div class="pq-fld" style="margin-bottom:10px;"><label>補充說明（選填）</label><textarea id="rReason" placeholder="有特別要求再寫，例：要同一廠牌、附發票"></textarea></div>
-        <div class="pq-fld" style="margin-bottom:10px;"><label>標題（選填，留白會自動帶入用途＋品名）</label><input type="text" id="rTitle" placeholder="留白就好"></div>
+        <!-- 標題由後端自動組（用途＋品名），一般使用者看不到也不用填；採購版才開放手改 -->
+        <div class="pq-fld pq-full-only" style="margin-bottom:10px;"><label>標題（留白＝自動帶入用途＋品名）</label><input type="text" id="rTitle" placeholder="留白就好"></div>
 
         <div class="pq-sec">
-            <h5>要買什麼（只填品名、數量就好；價格、入庫方式由採購接手處理）</h5>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+            <h5 id="reqItemSecTitle">要買什麼</h5>
+            <!-- 找採購品：一般使用者不必先查主檔，直接打品名就好；採購版才需要綁採購料號 -->
+            <div class="pq-full-only" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
                 <select id="pkCat" style="height:28px;border:1px solid #D8BE93;border-radius:4px;"><option value="">全部類別</option></select>
                 <select id="pkTag" style="height:28px;border:1px solid #D8BE93;border-radius:4px;"><option value="">全部標籤</option></select>
                 <input type="text" id="pkKw" placeholder="搜採購品（例：鑽頭 5）" style="height:28px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;width:220px;">
                 <button class="pq-btn" id="pkGo"><i class="fa fa-search"></i> 找採購品</button>
-                <button class="pq-btn" id="pkFree"><i class="fa fa-pencil"></i> 主檔沒有，直接手打</button>
+                <button class="pq-btn" id="pkFree"><i class="fa fa-pencil"></i> 直接手打</button>
             </div>
-            <div id="pkResult" class="hint">在上方搜尋採購品後點選加入；主檔沒有的東西可直接手打，採購到貨前再建檔。</div>
+            <div id="pkResult" class="hint pq-full-only">在上方搜尋採購品後點選加入；主檔沒有的東西可直接手打。</div>
             <div class="pq-wrap" style="margin-top:8px;">
                 <table class="pq-table" id="reqItemTable">
-                    <thead><tr><th style="width:24%;">品名</th><th style="width:18%;">規格</th><th style="width:9%;">數量</th>
-                        <th style="width:9%;">單位</th><th style="width:20%;">用途</th>
-                        <th>備註</th><th style="width:5%;"></th></tr></thead>
+                    <thead><tr id="reqItemHead"></tr></thead>
                     <tbody id="reqItemBody"></tbody>
                 </table>
             </div>
-            <p class="hint" style="margin-top:4px;">「用途」預設沿用上面選的，整張單同一個用途就不用理它；某一項是為了別的訂單／料號才點開改。</p>
+            <div style="margin-top:6px;">
+                <button class="pq-btn" id="btnAddRow"><i class="fa fa-plus"></i> 再加一項</button>
+            </div>
+            <p class="hint" style="margin-top:4px;">「用途」預設沿用上面選的，整張單同一個用途就不用理它；某一項是為了別的訂單／料號才點開改。「急」可以只勾其中幾項。</p>
         </div>
 
         <div class="pq-sec">
-            <h5>附件（估價單／發票／收據，新增中就能上傳）</h5>
+            <h5>附件（選填，現在就能上傳）</h5>
+            <!-- 附件分類改成標籤直接點（不用下拉）；一般使用者連分類都不必選，一律歸「其他」 -->
+            <div class="pq-full-only" id="attTagWrap" style="margin-bottom:6px;">
+                <span class="hint" style="margin-right:6px;">類別</span>
+                <span class="att-tag" data-v="quote">估價單</span>
+                <span class="att-tag" data-v="invoice">發票</span>
+                <span class="att-tag" data-v="receipt">收據</span>
+                <span class="att-tag on" data-v="other">其他</span>
+            </div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-                <select id="attType" style="height:28px;border:1px solid #D8BE93;border-radius:4px;">
-                    <option value="quote">估價單</option><option value="invoice">發票</option>
-                    <option value="receipt">收據</option><option value="other" selected>其他</option>
-                </select>
                 <input type="file" id="attFile" style="font-size:12px;">
                 <button class="pq-btn" id="attUp"><i class="fa fa-upload"></i> 上傳</button>
                 <span class="hint">支援圖片／PDF／Office，單檔 20MB 內</span>
@@ -378,10 +390,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
         <div id="ppPickWrap" style="display:none;">
             <div class="pq-fld">
                 <label id="ppKwLabel">搜尋</label>
-                <div style="display:flex;gap:6px;">
-                    <input type="text" id="ppKw" placeholder="輸入關鍵字後按 Enter" style="flex:1;">
-                    <button class="pq-btn" id="ppGo"><i class="fa fa-search"></i> 搜尋</button>
-                </div>
+                <input type="text" id="ppKw" placeholder="邊打邊找，不必按按鈕" autocomplete="off">
             </div>
             <div id="ppList"></div>
             <p class="hint" style="margin-top:4px;" id="ppPickHint"></p>
@@ -422,8 +431,9 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
         </div>
         <div class="pq-wrap">
             <table class="pq-table" id="quoteTable">
-                <thead><tr><th>品名</th><th>規格</th><th>數量</th><th>單位</th><th style="width:13%;">實際單價</th>
-                    <th style="width:14%;">到貨處理</th><th style="width:16%;">入庫儲位</th><th>小計</th></tr></thead>
+                <thead><tr><th>品名</th><th>規格</th><th style="width:15%;">採購料號</th><th>數量</th><th>單位</th>
+                    <th style="width:12%;">實際單價</th>
+                    <th style="width:13%;">到貨處理</th><th style="width:14%;">入庫儲位</th><th>小計</th></tr></thead>
                 <tbody id="quoteBody"></tbody>
             </table>
         </div>
@@ -604,6 +614,9 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
         <tr><td>採購管理員</td><td class="l">上列全部，加上標籤／規格屬性設定、簽核門檻與附件路徑設定、刪除任何單據</td></tr>
         <tr><td>高階核准</td><td class="l">金額超過第二層門檻時的第二關簽核人</td></tr>
         <tr><td>採購檢閱</td><td class="l">唯讀查看全部單據與統計</td></tr>
+        <tr><td>完整申請單</td><td class="l">看到<b>採購版</b>申請單（多了找採購品綁料號、標題手填、預估單價、到貨處理、附件分類）。<br>
+            沒有這個角色的人看到的是<b>精簡版</b>：只填用途、到貨日、急件、品名數量，其餘由採購接手補齊。<br>
+            <span class="hint">採購作業以上自動視為有此角色，不必另外指派。</span></td></tr>
         <tr><td>管理者</td><td class="l">固定擁有全部權限</td></tr>
         </tbody></table>
         <p class="hint" style="margin-top:8px;">第一層簽核人＝申請人的部門主管，由系統依代理人設定自動解析（主管當日有行程時交代理人；代理人就是申請人時自動升一級迴避）。</p>

@@ -225,6 +225,7 @@ function purchase_ensure_schema(PDO $db): void
         ['purchase_view',        '採購檢閱'],
         ['purchase_approve_top', '高階核准'],
         ['purchase_admin',       '採購管理員'],
+        ['purchase_form_full',   '完整申請單'],   // 看得到採購版（進階）申請單，一般使用者用精簡版
     ] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='purchase' LIMIT 1");
         $st->execute([$r[0]]);
@@ -310,9 +311,13 @@ function purchase_perms(PDO $db, ?array $u): array
     $canApply    = $canReceive || purchase_has_role($db, $uid, ['purchase_apply']);
     $canView     = $canApply || purchase_has_role($db, $uid, ['purchase_view']);
     $canApproveTop = $isAdmin || purchase_has_role($db, $uid, ['purchase_approve_top']);
+    // 申請單有兩種版型：一般使用者＝精簡版（只問買什麼、為了什麼）；採購版＝多了找採購品、
+    // 標題、預估單價、到貨處理、附件分類。採購作業以上自動用採購版，其他人要另外指派此角色。
+    $canFormFull = $canBuy || purchase_has_role($db, $uid, ['purchase_form_full']);
     return compact('isAdmin') + [
         'canAdmin'=>$canAdmin, 'canBuy'=>$canBuy, 'canReceive'=>$canReceive,
         'canView'=>$canView, 'canApply'=>$canApply, 'canApproveTop'=>$canApproveTop,
+        'canFormFull'=>$canFormFull,
     ];
 }
 
