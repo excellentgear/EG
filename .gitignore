@@ -28,3 +28,4 @@
 /src/common/db_backup_last_check.txt
 /src/common/quotation_attach_last_check.txt
 /src/common/mig_backup_last_check.txt
+/src/common/user_leave_last_check.txt
