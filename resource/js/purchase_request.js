@@ -118,13 +118,33 @@ $(function () {
         applyFormMode();
         if (r.perms.canAdmin) {
             $('#cfgL1').val(r.thresholds.l1); $('#cfgL2').val(r.thresholds.l2);
-            $('#cfgNas').val(r.attach_nas_dir || ''); $('#cfgUrl').val(r.attach_url_dir || '');
+            $('#cfgNas').val(r.attach_nas_raw || r.attach_nas_dir || '');
+            renderNasState(r);
             $('#cfgPh').val(r.print_header || ''); $('#cfgPf').val(r.print_footer || '');
         }
         bindAll();
         reload(); loadBadges();
     }).fail(function (m) { $('#listBody').html('<tr><td colspan="11" class="pq-empty">' + esc(m) + '</td></tr>'); });
 });
+
+/* 附件路徑目前的實際狀態：填錯路徑最怕的是「存下去沒事、等有人上傳才爆」，
+   所以直接把實際生效路徑與可否寫入攤在設定頁上。 */
+function renderNasState(r) {
+    if (!$('#cfgNasState').length) return;
+    var eff = r.attach_nas_dir || '';
+    var h = '目前實際使用：<code>' + esc(eff) + '</code>';
+    if (!r.attach_nas_raw) {
+        h += '<br><span style="color:#DD5138;"><b>你還沒設定過</b>，現在用的是系統預設值——附件會寫到上面這個位置。</span>';
+    }
+    if (!r.attach_nas_exists) {
+        h += '<br><span style="color:#DD5138;"><b>這個資料夾現在讀不到</b>（不存在、或執行網站的帳號沒有存取權）。上傳附件會失敗。</span>';
+    } else if (!r.attach_nas_writable) {
+        h += '<br><span style="color:#DD5138;"><b>資料夾存在但不可寫入</b>，上傳附件會失敗。</span>';
+    } else {
+        h += '　<span style="color:#2e7d32;">✔ 讀寫正常</span>';
+    }
+    $('#cfgNasState').html(h);
+}
 
 /* 申請單兩種版型（角色 purchase_form_full 或採購作業以上＝採購版）：
    一般使用者的版本只留「買什麼、為了什麼」，其餘欄位隱藏並由採購後續補。 */
@@ -764,22 +784,35 @@ $(document).on('click', '.i-pp-clr', function (e) {
 });
 
 /* ── 附件 ─────────────────────────────────── */
+// 選檔即上傳（不再有獨立的「上傳」按鈕），多檔逐一送出、一個失敗不影響其餘
 function uploadAtt() {
-    var f = document.getElementById('attFile');
-    if (!f.files || !f.files[0]) { alert('請先選擇檔案'); return; }
-    var fd = new FormData();
-    fd.append('action', 'att_upload'); fd.append('req_id', EDIT.id || 0);
-    fd.append('att_type', ATT_TYPE); fd.append('file', f.files[0]);
-    $('#attUp').prop('disabled', true);
-    $.ajax({ url: API, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
-    .done(function (r) {
-        if (!r.ok) { fail(r.error); return; }
-        if (!EDIT.id) EDIT.tempAtts.push(r.att_id);
-        EDIT.atts.push({ att_id: r.att_id, original_name: r.original_name, url: r.url, att_type: ATT_TYPE });
-        renderAtts(EDIT.atts, true); f.value = '';
-    }).fail(function () { fail('上傳失敗'); })
-    .always(function () { $('#attUp').prop('disabled', false); });
+    var el = document.getElementById('attFile');
+    var files = el && el.files ? Array.prototype.slice.call(el.files) : [];
+    if (!files.length) return;
+    $('#attPick').css('opacity', .5);
+    var done = 0, okCnt = 0, badNames = [];
+    function finish() {
+        if (++done < files.length) return;
+        el.value = '';
+        $('#attPick').css('opacity', 1);
+        $('#attHint').text(badNames.length
+            ? '已上傳 ' + okCnt + ' 個；失敗：' + badNames.join('、')
+            : '已上傳 ' + okCnt + ' 個檔案');
+    }
+    files.forEach(function (file) {
+        var fd = new FormData();
+        fd.append('action', 'att_upload'); fd.append('req_id', EDIT.id || 0);
+        fd.append('att_type', ATT_TYPE); fd.append('file', file);
+        $.ajax({ url: API, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
+        .done(function (r) {
+            if (!r.ok) { badNames.push(file.name + '（' + r.error + '）'); finish(); return; }
+            if (!EDIT.id) EDIT.tempAtts.push(r.att_id);
+            EDIT.atts.push({ att_id: r.att_id, original_name: r.original_name, url: r.url, att_type: ATT_TYPE });
+            renderAtts(EDIT.atts, true); okCnt++; finish();
+        }).fail(function () { badNames.push(file.name); finish(); });
+    });
 }
+$(document).on('change', '#attFile', uploadAtt);
 function renderAtts(list, keep) {
     if (keep) EDIT.atts = list; else EDIT.atts = list.slice();
     var types = { quote: '估價單', invoice: '發票', receipt: '收據', other: '其他' };
@@ -846,18 +879,31 @@ function renderDetail(q) {
               (q.pay_status === 'paid' ? '已付' : '未付') + '</span> ' + esc(q.pay_date || '') + ' ' + esc(q.pay_method || '')) +
         '</div>' + (q.reason ? '<div class="hint" style="margin-top:6px;">事由：' + esc(q.reason) + '</div>' : '') + '</div>';
 
-    h += '<div class="pq-wrap"><table class="pq-table"><thead><tr><th>品名</th><th>規格</th><th>採購料號</th>' +
-         '<th>數量</th><th>單位</th><th>單價</th><th>小計</th><th>到貨處理</th><th>已到貨</th><th>儲位</th><th>備註</th>' +
-         '<th>用途</th></tr></thead><tbody>';
+    h += '<div class="pq-wrap"><table class="pq-table"><thead>' +
+         '<tr><th colspan="4" style="background:#F3E2C7;">申請內容</th>' +
+         '<th colspan="4" style="background:var(--pq-soft);">採購實際</th>' +
+         '<th colspan="6"></th></tr>' +
+         '<tr><th>品名</th><th>規格</th><th>數量</th><th>單位</th>' +
+         '<th>採購料號</th><th>實際品名／規格</th><th>數量</th><th>單價</th>' +
+         '<th>小計</th><th>到貨處理</th><th>已到貨</th><th>儲位</th><th>備註</th><th>用途</th></tr></thead><tbody>';
     q.items.forEach(function (it) {
+        // 申請內容與採購實際並列；採購沒改的欄位顯示「同申請」，一眼看得出買到的是不是他要的
+        var bn = it.buy_item_name || '', bs = it.buy_spec_text || '';
+        var bothSame = (!bn && !bs);
         h += '<tr><td class="l">' + esc(it.item_name) + (parseInt(it.is_urgent, 10) ? ' <span class="urg">急</span>' : '') + '</td>' +
-             '<td class="l">' + esc(it.spec_text || '') + '</td><td>' + esc(it.spec_code || '（未建檔）') + '</td>' +
+             '<td class="l">' + esc(it.spec_text || '') + '</td>' +
              '<td class="r">' + nz(it.qty_requested) + '</td><td>' + esc(it.unit_label || '') + '</td>' +
+             '<td>' + esc(it.buy_spec_code || it.spec_code || '（未綁定）') + '</td>' +
+             '<td class="l">' + (bothSame ? '<span class="hint">同申請</span>'
+                 : esc(bn || it.item_name) + (bs ? '／' + esc(bs) : '')) + '</td>' +
+             '<td class="r">' + (it.buy_qty === null || it.buy_qty === undefined || it.buy_qty === ''
+                 ? '<span class="hint">同申請</span>' : nz(it.buy_qty)) + '</td>' +
              '<td class="r money">' + (it.unit_price === null ? '—' : money(it.unit_price)) + '</td>' +
              '<td class="r money">' + (it.amount === null ? '—' : money(it.amount)) + '</td>' +
              '<td>' + esc(META.receive_modes[it.receive_mode] || '') + '</td>' +
              '<td class="r">' + nz(it.qty_received) + '</td><td>' + esc(it.location_code || '') + '</td>' +
-             '<td class="l">' + esc(it.remark || '') + '</td>' +
+             '<td class="l">' + esc(it.remark || '') +
+                 (it.buy_remark ? '<br><span class="hint">採購：' + esc(it.buy_remark) + '</span>' : '') + '</td>' +
              '<td class="l">' + (it.purpose_type
                  ? esc(ppTypeName(it.purpose_type) + (it.purpose_label ? '：' + it.purpose_label : ''))
                  : '<span class="hint">同單頭</span>') + '</td></tr>';
@@ -945,19 +991,28 @@ function openQuote() {
     var modes = ''; $.each(META.receive_modes, function (k, v) { modes += '<option value="' + esc(k) + '">' + esc(v) + '</option>'; });
     var h = '';
     q.items.forEach(function (it) {
+        // 左半＝申請人填的，唯讀；右半＝採購自己那一層，寫進 buy_* 欄位，不動申請內容
         h += '<tr data-id="' + it.pr_item_id + '" data-qty="' + it.qty_requested + '">' +
             '<td class="l">' + esc(it.item_name) +
                 (parseInt(it.is_urgent, 10) ? ' <span class="urg">急</span>' : '') + '</td>' +
             '<td class="l">' + esc(it.spec_text || '') + '</td>' +
-            // 申請人手打的品名沒有採購料號，由採購在這裡建檔綁定（也可以留到入庫時再綁）
-            '<td class="l">' + (it.spec_code ? esc(it.spec_code) :
-                '<button class="pq-btn bind-spec" data-id="' + it.pr_item_id + '" data-name="' + esc(it.item_name) +
-                '" data-spec="' + esc(it.spec_text || '') + '"><i class="fa fa-link"></i> 綁定</button>') + '</td>' +
             '<td class="r">' + nz(it.qty_requested) + '</td><td>' + esc(it.unit_label || '') + '</td>' +
+            // 申請人手打的品名沒有採購料號，由採購在這裡建檔綁定（也可以留到入庫時再綁）
+            '<td class="l">' + (it.buy_spec_code ? esc(it.buy_spec_code) : (it.spec_code ? esc(it.spec_code) :
+                '<button class="pq-btn bind-spec" data-id="' + it.pr_item_id + '" data-name="' + esc(it.item_name) +
+                '" data-spec="' + esc(it.spec_text || '') + '"><i class="fa fa-link"></i> 綁定</button>')) + '</td>' +
+            '<td><input type="text" class="q-bname" style="width:100%;" placeholder="同申請" value="' +
+                esc(it.buy_item_name || '') + '"></td>' +
+            '<td><input type="text" class="q-bspec" style="width:100%;" placeholder="同申請" value="' +
+                esc(it.buy_spec_text || '') + '"></td>' +
+            '<td><input type="number" class="q-bqty" step="0.01" style="width:70px;text-align:right;" placeholder="同申請" value="' +
+                nz(it.buy_qty) + '"></td>' +
             '<td><input type="number" class="q-price" step="0.0001" style="width:100%;text-align:right;" value="' +
                 (it.unit_price === null ? (it.est_price === null ? '' : nz(it.est_price)) : nz(it.unit_price)) + '"></td>' +
             '<td><select class="q-mode">' + modes + '</select></td>' +
             '<td><select class="q-loc">' + optList(META.locations, 'location_id', 'location_code', it.location_id, '（未指定）') + '</select></td>' +
+            '<td><input type="text" class="q-bremark" style="width:100%;" placeholder="選填" value="' +
+                esc(it.buy_remark || '') + '"></td>' +
             '<td class="r money q-amt">0</td></tr>';
         });
     $('#quoteBody').html(h);
@@ -965,11 +1020,14 @@ function openQuote() {
     calcQuote();
     openMask('mQuote');
 }
-$(document).on('input change', '.q-price,#qTax', calcQuote);
+$(document).on('input change', '.q-price,.q-bqty,#qTax', calcQuote);
 function calcQuote() {
     var sub = 0;
     $('#quoteBody tr').each(function () {
-        var $t = $(this), qty = parseFloat($t.data('qty')) || 0;
+        var $t = $(this);
+        // 小計用採購實際數量；留白就是申請數量（與後端 COALESCE(buy_qty, qty_requested) 一致）
+        var bq = $t.find('.q-bqty').val();
+        var qty = (bq === '' || bq === undefined) ? (parseFloat($t.data('qty')) || 0) : (parseFloat(bq) || 0);
         var p = parseFloat($t.find('.q-price').val() || 0) || 0;
         var amt = Math.round(qty * p * 100) / 100;
         $t.find('.q-amt').text(money(amt)); sub += amt;
@@ -990,7 +1048,12 @@ function saveQuote() {
         var $t = $(this), v = $t.find('.q-price').val();
         if (v === '' || parseFloat(v) < 0) bad = '每一列都要填實際單價（沒有就填 0）';
         prices.push({ pr_item_id: $t.data('id'), unit_price: v, receive_mode: $t.find('.q-mode').val(),
-                      location_id: $t.find('.q-loc').val() || 0 });
+                      location_id: $t.find('.q-loc').val() || 0,
+                      // 採購自己那一層；留白＝同申請（後端存 NULL）
+                      buy_item_name: $t.find('.q-bname').val() || '',
+                      buy_spec_text: $t.find('.q-bspec').val() || '',
+                      buy_qty: $t.find('.q-bqty').val() || '',
+                      buy_remark: $t.find('.q-bremark').val() || '' });
     });
     if (bad) { alert(bad); return; }
     var d = { req_id: CUR.req_id, vendor_name: $('#qVendor').val(), vendor_id: $('#qVendor').data('vid') || '',
@@ -1010,13 +1073,21 @@ function openRecv() {
     var modes = ''; $.each(META.receive_modes, function (k, v) { modes += '<option value="' + esc(k) + '">' + esc(v) + '</option>'; });
     var h = '';
     CUR.items.forEach(function (it) {
-        var left = parseFloat(it.qty_requested) - parseFloat(it.qty_received);
-        h += '<tr data-id="' + it.pr_item_id + '" data-left="' + left + '" data-spec="' + (it.spec_id || '') + '">' +
-            '<td class="l">' + esc(it.item_name) + (it.spec_id ? '' :
-                ' <button class="pq-btn bind-spec" data-id="' + it.pr_item_id + '" data-name="' + esc(it.item_name) +
-                '" data-spec="' + esc(it.spec_text || '') + '">建檔</button>') + '</td>' +
-            '<td class="l">' + esc(it.spec_text || '') + '</td>' +
-            '<td class="r">' + nz(it.qty_received) + ' / ' + nz(it.qty_requested) + '</td>' +
+        // 到貨要對「採購實際」買的東西與數量；採購沒改才等於申請內容
+        var target = (it.buy_qty === null || it.buy_qty === undefined || it.buy_qty === '')
+            ? parseFloat(it.qty_requested) : parseFloat(it.buy_qty);
+        var left = target - parseFloat(it.qty_received);
+        var boundSpec = it.buy_spec_id || it.spec_id;
+        var shownName = it.buy_item_name || it.item_name;
+        var shownSpec = it.buy_spec_text || it.spec_text || '';
+        h += '<tr data-id="' + it.pr_item_id + '" data-left="' + left + '" data-spec="' + (boundSpec || '') + '">' +
+            '<td class="l">' + esc(shownName) +
+                (it.buy_item_name ? ' <span class="hint">（申請：' + esc(it.item_name) + '）</span>' : '') +
+                (boundSpec ? '' :
+                ' <button class="pq-btn bind-spec" data-id="' + it.pr_item_id + '" data-name="' + esc(shownName) +
+                '" data-spec="' + esc(shownSpec) + '">建檔</button>') + '</td>' +
+            '<td class="l">' + esc(shownSpec) + '</td>' +
+            '<td class="r">' + nz(it.qty_received) + ' / ' + nz(target) + '</td>' +
             '<td><input type="number" class="rc-qty" step="0.01" style="width:100%;text-align:right;" value="' +
                 (left > 0 ? nz(left) : '') + '"' + (left <= 0 ? ' disabled' : '') + '></td>' +
             '<td><select class="rc-mode">' + modes + '</select></td>' +
@@ -1346,11 +1417,13 @@ $(document).on('click', '.am-del', function () {
 });
 function saveCfg() {
     api('save_settings', { l1: $('#cfgL1').val(), l2: $('#cfgL2').val(), nas_dir: $('#cfgNas').val(),
-        url_dir: $('#cfgUrl').val(), print_header: $('#cfgPh').val(), print_footer: $('#cfgPf').val() }, 'POST')
+        print_header: $('#cfgPh').val(), print_footer: $('#cfgPf').val() }, 'POST')
     .done(function () {
         META.thresholds.l1 = parseFloat($('#cfgL1').val()); META.thresholds.l2 = parseFloat($('#cfgL2').val());
         META.print_header = $('#cfgPh').val(); META.print_footer = $('#cfgPf').val();
         $('#printHead').text(META.print_header || '');
+        // 重撈一次，讓「目前實際使用／可否寫入」立刻反映剛存的路徑
+        api('meta').done(function (r) { renderNasState(r); });
         alert('已儲存設定');
     }).fail(fail);
 }

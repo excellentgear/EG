@@ -27,7 +27,7 @@ if (!$u) jerr('未登入', 401);
 $uid   = (int)$u['id'];
 $uname = (string)$u['user_cname'];
 $perms = purchase_perms($db, $u);
-if (!$perms['canView']) jerr('無申請採購權限，請洽管理者指派角色', 403);
+if (!$perms['canEnter']) jerr('無申請採購權限，請洽管理者指派角色', 403);
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
@@ -48,8 +48,9 @@ function purchase_load_req(PDO $db, int $reqId): array {
 
 /** 依明細到貨狀況重算單據狀態 */
 function purchase_refresh_status(PDO $db, int $reqId, int $userId): string {
+    // 到貨完成與否比對「採購實際數量」（採購沒改就是申請數量）
     $st = $db->prepare("SELECT COUNT(*) total,
-                        SUM(CASE WHEN qty_received >= qty_requested THEN 1 ELSE 0 END) done,
+                        SUM(CASE WHEN qty_received >= COALESCE(buy_qty, qty_requested) THEN 1 ELSE 0 END) done,
                         COALESCE(SUM(qty_received),0) recv
                         FROM purchase_request_item WHERE req_id=?");
     $st->execute([$reqId]);
@@ -89,9 +90,12 @@ case 'meta': {
         'print_footer' => purchase_setting($db, 'purchase_print_footer', ''),
     ];
     if ($perms['canAdmin']) {
-        [$nas, $url] = purchase_attach_dirs($db);
+        [$nas] = purchase_attach_dirs($db);
         $resp['attach_nas_dir'] = $nas;
-        $resp['attach_url_dir'] = $url;
+        // 設定頁要看得到「現在到底寫到哪、寫不寫得進去」，不然填錯了要到上傳失敗才發現
+        $resp['attach_nas_raw']      = purchase_setting($db, 'purchase_attach_nas_dir', '');
+        $resp['attach_nas_writable'] = is_dir($nas) ? (bool)is_writable($nas) : false;
+        $resp['attach_nas_exists']   = is_dir($nas);
     }
     jout($resp);
 }
@@ -102,8 +106,12 @@ case 'save_settings': {
     $l2 = max($l1, (float)pv('l2', '30000'));
     purchase_set_setting($db, 'purchase_appr_l1', (string)$l1);
     purchase_set_setting($db, 'purchase_appr_l2', (string)$l2);
-    if (pv('nas_dir') !== '') purchase_set_setting($db, 'purchase_attach_nas_dir', pv('nas_dir'));
-    if (pv('url_dir') !== '') purchase_set_setting($db, 'purchase_attach_url_dir', pv('url_dir'));
+    $nasIn = pv('nas_dir');
+    if ($nasIn !== '') {
+        // 擋掉把網址填進實體路徑欄的情況——存進去要等到有人上傳附件才會發現壞了
+        if (preg_match('#^https?://#i', $nasIn)) jerr('「實體存放路徑」要填磁碟或網路資料夾路徑（例 Z:\BOM\ERP\採購 或 \\\\server\\share\\採購），不是網址');
+        purchase_set_setting($db, 'purchase_attach_nas_dir', $nasIn);
+    }
     if (isset($_POST['print_header'])) purchase_set_setting($db, 'purchase_print_header', pv('print_header'));
     if (isset($_POST['print_footer'])) purchase_set_setting($db, 'purchase_print_footer', pv('print_footer'));
     jout([]);
@@ -516,7 +524,11 @@ case 'req_export': {
     elseif ($scope === 'buy')    { if (!$perms['canBuy']) jerr('無採購作業權限', 403);
                                    $where[] = "r.status IN ('submitted','approved','ordered','partial')"; }
     elseif ($scope === 'sign')   { $where[] = "r.status='quoted'"; }
-    elseif ($scope === 'unpaid') { $where[] = "r.pay_status='unpaid' AND r.status IN ('ordered','partial','received','closed')"; }
+    elseif ($scope === 'unpaid') { if (!$perms['canBuy']) jerr('無採購作業權限', 403);
+                                   $where[] = "r.pay_status='unpaid' AND r.status IN ('ordered','partial','received','closed')"; }
+    elseif ($scope === 'all')    { if (!$perms['canView']) jerr('無「檢閱全部單據」權限', 403); }
+    // 認不出來的 scope 一律退回只看自己的（fail-closed，不可變成看全部）
+    else                         { $where[] = 'r.requester_id=?'; $bind[] = $uid; }
     if ($status !== '' && isset(PURCHASE_STATUS[$status])) { $where[] = 'r.status=?'; $bind[] = $status; }
     if ($pay !== '')  { $where[] = 'r.pay_status=?'; $bind[] = $pay; }
     if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $df)) { $where[] = 'DATE(r.Created_At)>=?'; $bind[] = $df; }
@@ -603,11 +615,15 @@ case 'req_detail': {
     $reqId = (int)($_GET['req_id'] ?? 0);
     $req = purchase_load_req($db, $reqId);
     $st = $db->prepare("SELECT pi.*, COALESCE(un.unit_symbol, un.unit_name, '') unit_label,
-                        COALESCE(l.location_code,'') location_code, s.spec_code
+                        COALESCE(bun.unit_symbol, bun.unit_name, '') buy_unit_label,
+                        COALESCE(l.location_code,'') location_code,
+                        s.spec_code, bs.spec_code buy_spec_code
                         FROM purchase_request_item pi
                         LEFT JOIN stock_units un ON un.unit_id=pi.unit_id
+                        LEFT JOIN stock_units bun ON bun.unit_id=pi.buy_unit_id
                         LEFT JOIN stock_locations l ON l.location_id=pi.location_id
                         LEFT JOIN purchase_spec s ON s.spec_id=pi.spec_id
+                        LEFT JOIN purchase_spec bs ON bs.spec_id=pi.buy_spec_id
                         WHERE pi.req_id=? ORDER BY pi.sort_order, pi.pr_item_id");
     $st->execute([$reqId]);
     $req['items'] = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -634,7 +650,9 @@ case 'req_detail': {
 
     $isOwner = ((int)$req['requester_id'] === $uid);
     $req['can'] = [
-        'edit'    => ($req['status'] === 'submitted' && ($isOwner || $perms['canBuy'])) || $perms['canAdmin'],
+        // 申請內容只有申請人本人能改（且限尚未進入採購流程）。採購人員一律不得修改申請單，
+        // 他們買到什麼寫在 buy_* 那一層（詢價頁）。系統管理者保留更正權限。
+        'edit'    => ($req['status'] === 'submitted' && $isOwner) || $perms['isAdmin'],
         'quote'   => $perms['canBuy'] && in_array($req['status'], ['submitted', 'rejected'], true),
         'sign'    => purchase_can_sign($db, $req, $uid, $perms),
         'order'   => $perms['canBuy'] && $req['status'] === 'approved',
@@ -643,6 +661,9 @@ case 'req_detail': {
         'close'   => $perms['canBuy'] && in_array($req['status'], ['received', 'partial'], true),
         'delete'  => $perms['canAdmin'] || ($isOwner && $req['status'] === 'submitted'),
     ];
+    // 只有申請權的人不該看得到別人的單——列表擋住了，這裡也要擋，
+    // 否則換個 req_id 就把別人的單撈出來了
+    if (!$isOwner && !$perms['canView'] && !$req['can']['sign']) jerr('無權檢視此單據', 403);
     if ($req['status'] === 'quoted') {
         $lv = (int)$req['level_done'] + 1;
         $signers = purchase_level_signers($db, $req, $lv);
@@ -697,8 +718,11 @@ case 'req_save': {
     if ($reqId > 0) {
         $req = purchase_load_req($db, $reqId);
         $isOwner = ((int)$req['requester_id'] === $uid);
-        if (!($perms['canAdmin'] || (($isOwner || $perms['canBuy']) && $req['status'] === 'submitted'))) {
-            $db->rollBack(); jerr('此單目前狀態不可修改', 403);
+        // 採購人員不得改申請內容（連 canBuy 都不行）；他們的資料寫在 buy_* 那一層
+        if (!($perms['isAdmin'] || ($isOwner && $req['status'] === 'submitted'))) {
+            $db->rollBack();
+            jerr($isOwner ? '此單已進入採購流程，不可再修改申請內容'
+                          : '只有申請人本人可以修改申請內容；採購請在「詢價／填入實際金額」頁登錄實際採購內容', 403);
         }
         $db->prepare("UPDATE purchase_request SET title=?, need_date=?, reason=?,
                       purpose_type=?, purpose_order_id=?, purpose_bom=?, purpose_d_id=?, purpose_note=?, purpose_label=?,
@@ -798,16 +822,29 @@ case 'save_quote': {
     $req = purchase_load_req($db, $reqId);
     if (!in_array($req['status'], ['submitted', 'rejected'], true)) jerr('此單目前狀態不可填價');
     $taxType = in_array(pv('tax_type', 'taxable'), array_keys(PURCHASE_TAX_TYPES), true) ? pv('tax_type', 'taxable') : 'taxable';
-    $prices  = pjson('prices');   // [{pr_item_id, unit_price, receive_mode, location_id}]
+    // 採購側資料：[{pr_item_id, unit_price, receive_mode, location_id,
+    //               buy_item_name, buy_spec_text, buy_qty, buy_remark}]
+    // 一律只寫採購側欄位，不動申請人填的品名／規格／數量
+    $prices  = pjson('prices');
 
     $db->beginTransaction();
-    $upd = $db->prepare("UPDATE purchase_request_item SET unit_price=?, amount=ROUND(qty_requested*?,2),
-                         receive_mode=?, location_id=? WHERE pr_item_id=? AND req_id=?");
+    $upd = $db->prepare("UPDATE purchase_request_item
+                         SET unit_price=?, buy_qty=?, buy_item_name=?, buy_spec_text=?, buy_remark=?,
+                             amount=ROUND(COALESCE(?, qty_requested) * ?, 2),
+                             receive_mode=?, location_id=?
+                         WHERE pr_item_id=? AND req_id=?");
     foreach ($prices as $p) {
         $price = ($p['unit_price'] ?? '') === '' ? 0 : (float)$p['unit_price'];
         $mode  = (string)($p['receive_mode'] ?? 'stock');
         if (!in_array($mode, array_keys(PURCHASE_RECEIVE_MODES), true)) $mode = 'stock';
-        $upd->execute([$price, $price, $mode, (int)($p['location_id'] ?? 0) ?: null, (int)($p['pr_item_id'] ?? 0), $reqId]);
+        // 留白＝同申請，存 NULL 而不是 0／空字串，才分得出「沒改」與「改成空的」
+        $bq   = ($p['buy_qty'] ?? '') === '' ? null : max(0.0001, (float)$p['buy_qty']);
+        $bn   = trim((string)($p['buy_item_name'] ?? '')) ?: null;
+        $bs   = trim((string)($p['buy_spec_text'] ?? '')) ?: null;
+        $br   = trim((string)($p['buy_remark'] ?? '')) ?: null;
+        $upd->execute([$price, $bq, $bn, $bs, $br, $bq, $price,
+                       $mode, (int)($p['location_id'] ?? 0) ?: null,
+                       (int)($p['pr_item_id'] ?? 0), $reqId]);
     }
     $t = purchase_calc_totals($db, $reqId, $taxType);
     [$l1, $l2] = purchase_thresholds($db);
@@ -821,7 +858,8 @@ case 'save_quote': {
                   pdate('expected_date'), pv('pay_method') ?: null,
                   $levels === 0 ? date('Y-m-d H:i:s') : null, $uid, $reqId]);
     // 最近採購價回寫規格主檔（下次申請自動帶）
-    $sp = $db->prepare("SELECT spec_id, unit_price FROM purchase_request_item WHERE req_id=? AND spec_id IS NOT NULL");
+    $sp = $db->prepare("SELECT COALESCE(buy_spec_id, spec_id) spec_id, unit_price FROM purchase_request_item
+                        WHERE req_id=? AND COALESCE(buy_spec_id, spec_id) IS NOT NULL");
     $sp->execute([$reqId]);
     $updSpec = $db->prepare("UPDATE purchase_spec SET last_price=?, last_vendor_id=?, last_vendor_name=?, last_buy_date=CURDATE() WHERE spec_id=?");
     foreach ($sp->fetchAll(PDO::FETCH_ASSOC) as $s) {
@@ -934,7 +972,10 @@ case 'receive': {
         $got->execute([(int)($ln['pr_item_id'] ?? 0), $reqId]);
         $item = $got->fetch(PDO::FETCH_ASSOC);
         if (!$item) continue;
-        $left = (float)$item['qty_requested'] - (float)$item['qty_received'];
+        // 未到量以「採購實際數量」為基準（採購沒改就是申請數量）
+        $target = ($item['buy_qty'] === null || $item['buy_qty'] === '')
+                ? (float)$item['qty_requested'] : (float)$item['buy_qty'];
+        $left = $target - (float)$item['qty_received'];
         if ($qty > $left + 0.0001) { $db->rollBack(); jerr($item['item_name'] . ' 到貨量超過未到量（剩 ' . rtrim(rtrim(number_format($left, 4, '.', ''), '0'), '.') . '）'); }
 
         $mode = (string)($ln['receive_mode'] ?? $item['receive_mode']);
@@ -1053,7 +1094,30 @@ case 'att_upload': {
     }
     $attId = (int)$db->lastInsertId();
     jout(['att_id' => $attId, 'file_name' => $fname, 'original_name' => $orig,
-          'url' => purchase_att_url($db, ['file_name' => $fname, 'status' => $reqId > 0 ? 'active' : 'temp'], $reqNo)]);
+          'url' => purchase_att_url($db, ['att_id' => $attId])]);
+}
+
+/** 附件下載／預覽：一律經此端點串流，才擋得住未登入直連，也才讀得到 UNC 路徑 */
+case 'att_download': {
+    $attId = (int)($_GET['att_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM purchase_attachment WHERE att_id=?");
+    $st->execute([$attId]);
+    $att = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$att) jerr('找不到附件', 404);
+
+    // 看得到這張單的人才下載得到：全域檢閱者、單據申請人、或這個 temp 附件的上傳者
+    $ok = $perms['canView'];
+    if (!$ok && (int)$att['req_id'] > 0) {
+        $st = $db->prepare("SELECT requester_id FROM purchase_request WHERE req_id=?");
+        $st->execute([(int)$att['req_id']]);
+        $ok = ((int)$st->fetchColumn() === $uid);
+    }
+    if (!$ok) $ok = ((int)$att['user_id'] === $uid);
+    if (!$ok) jerr('無權下載此附件', 403);
+
+    $path = purchase_att_path($db, $att);
+    $name = (string)($att['original_name'] ?: $att['file_name']);
+    purchase_att_stream($path, $name, ($_GET['dl'] ?? '') !== '1');
 }
 
 case 'att_delete': {
@@ -1119,9 +1183,12 @@ case 'bind_spec': {
     $sq->execute([$specId]);
     $spec = $sq->fetch(PDO::FETCH_ASSOC);
     if (!$spec) { $db->rollBack(); jerr('找不到規格'); }
-    $db->prepare("UPDATE purchase_request_item SET spec_id=?, item_name=?, spec_text=?, category_id=?,
-                  unit_id=COALESCE(unit_id,?) WHERE pr_item_id=?")
-       ->execute([$specId, $spec['item_name'], $spec['spec_text'], (int)$spec['category_id'],
+    // 只寫採購側欄位。申請人填的 item_name / spec_text / spec_id 一律不動
+    // ——原本這裡直接覆寫，申請人的原始寫法會被抹掉，之後無從對照買到的是不是他要的東西
+    $db->prepare("UPDATE purchase_request_item
+                  SET buy_spec_id=?, buy_item_name=?, buy_spec_text=?, buy_unit_id=COALESCE(buy_unit_id,?)
+                  WHERE pr_item_id=?")
+       ->execute([$specId, $spec['item_name'], $spec['spec_text'],
                   $spec['unit_id'] !== null ? (int)$spec['unit_id'] : null, $prItemId]);
     $db->commit();
     jout(['spec_id' => $specId]);

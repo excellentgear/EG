@@ -20,7 +20,7 @@ $db = (new DBConnection())->getPDO();
 purchase_ensure_schema($db);
 $pqUser = purchase_current_user($db);
 $perms  = purchase_perms($db, $pqUser);
-$roleLabel = purchase_role_label($perms);
+$roleLabel = purchase_role_names($db, (int)($pqUser['id'] ?? 0), $perms);   // 顯示管理員自訂的角色名稱
 $av = @filemtime(__FILE__) ?: time();
 ?>
 <!DOCTYPE html>
@@ -178,7 +178,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
         <div class="clearfix"></div>
         <div class="print-only" id="printHead" style="text-align:center;font-size:16px;font-weight:bold;margin-bottom:6px;"></div>
 
-<?php if (!$perms['canView']): ?>
+<?php if (!$perms['canEnter']): ?>
         <div class="pq-sec" style="text-align:center;padding:30px;">
             <h4 style="color:#8A5A2B;"><i class="fa fa-lock"></i> 無申請採購權限</h4>
             <p class="hint">請洽管理者於「使用者權限設定」指派「申請採購／採購作業／到貨入庫／採購檢閱」等角色。</p>
@@ -193,7 +193,9 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <?php if ($perms['canBuy']): ?>
             <button class="pq-tab" data-tab="unpaid">💰 未付款 <span class="badge-n" id="bg-unpaid" style="display:none;"></span></button>
             <?php endif; ?>
+            <?php if ($perms['canView']): ?>
             <button class="pq-tab" data-tab="all">📚 全部單據</button>
+            <?php endif; ?>
             <button class="pq-tab" data-tab="master">🏷️ 採購品主檔</button>
             <?php if ($perms['canAdmin']): ?>
             <button class="pq-tab" data-tab="setting">⚙️ 設定</button>
@@ -295,12 +297,18 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                    第二層＝具「高階核准」角色者。門檻改動只影響之後才送簽的單。</p>
             </div>
             <div class="pq-sec" style="max-width:760px;">
-                <h5>附件儲存路徑（只存檔名，完整路徑由此設定即時組出）</h5>
-                <div class="pq-grid">
-                    <div class="pq-fld"><label>實體存放路徑（NAS）</label><input type="text" id="cfgNas"></div>
-                    <div class="pq-fld"><label>網頁讀取路徑（URL）</label><input type="text" id="cfgUrl"></div>
+                <h5>附件儲存路徑（DB 只存檔名，完整路徑由此設定即時組出）</h5>
+                <div class="pq-fld">
+                    <label>實體存放路徑（磁碟或網路資料夾）</label>
+                    <input type="text" id="cfgNas" placeholder="例：Z:\BOM\ERP\採購　或　\\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\採購">
                 </div>
-                <p class="hint">換 NAS 或搬資料夾時，把資料夾原封不動複製過去、改這裡即可，舊附件立刻讀得到。</p>
+                <div id="cfgNasState" class="hint" style="margin-top:6px;"></div>
+                <p class="hint" style="margin-top:6px;">
+                    只需要填這一個。附件下載一律由系統讀檔後送出（會檢查權限），
+                    <b>所以網路磁碟代號（Z:\…）和 UNC 路徑（\\\\主機\\分享\\…）都可以直接填</b>，不必是能被瀏覽器直接開的位置。<br>
+                    換 NAS 或搬資料夾時，把資料夾原封不動複製過去、改這裡即可，舊附件立刻讀得到。
+                    每張單會在底下自動開一個以單號命名的子資料夾（新增中還沒存檔的附件先放 <code>_temp</code>）。
+                </p>
             </div>
             <div class="pq-sec" style="max-width:760px;">
                 <h5>列印表頭／表尾</h5>
@@ -421,10 +429,13 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 <span class="att-tag" data-v="receipt">收據</span>
                 <span class="att-tag on" data-v="other">其他</span>
             </div>
-            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-                <input type="file" id="attFile" style="font-size:12px;">
-                <button class="pq-btn" id="attUp"><i class="fa fa-upload"></i> 上傳</button>
-                <span class="hint">支援圖片／PDF／Office，單檔 20MB 內</span>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <!-- 選檔與上傳合成一個動作：選好就自動送，不必再按一次「上傳」 -->
+                <label class="pq-btn warm" id="attPick" style="margin:0;display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                    <i class="fa fa-paperclip"></i> 選擇檔案（可多選）
+                    <input type="file" id="attFile" multiple style="display:none;">
+                </label>
+                <span class="hint" id="attHint">選好就自動上傳．支援圖片／PDF／Office，單檔 20MB 內</span>
             </div>
             <div id="attList" style="margin-top:6px;"></div>
         </div>
@@ -487,9 +498,15 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
         </div>
         <div class="pq-wrap">
             <table class="pq-table" id="quoteTable">
-                <thead><tr><th>品名</th><th>規格</th><th style="width:15%;">採購料號</th><th>數量</th><th>單位</th>
-                    <th style="width:12%;">實際單價</th>
-                    <th style="width:13%;">到貨處理</th><th style="width:14%;">入庫儲位</th><th>小計</th></tr></thead>
+                <thead>
+                    <tr>
+                        <th colspan="4" style="background:#F3E2C7;">申請內容（唯讀，不可修改）</th>
+                        <th colspan="9" style="background:var(--pq-soft);">採購實際登錄（品名／規格／數量留白＝同申請）</th>
+                    </tr>
+                    <tr><th>品名</th><th>規格</th><th>數量</th><th>單位</th>
+                        <th>採購料號</th><th>實際品名</th><th>實際規格</th><th>數量</th>
+                        <th>實際單價</th><th>到貨處理</th><th>入庫儲位</th><th>採購備註</th><th>小計</th></tr>
+                </thead>
                 <tbody id="quoteBody"></tbody>
             </table>
         </div>

@@ -338,7 +338,7 @@ function purchase_role_users(PDO $db, string $code): array
 function purchase_perms(PDO $db, ?array $u): array
 {
     $none = ['isAdmin'=>false,'canAdmin'=>false,'canBuy'=>false,'canReceive'=>false,
-             'canView'=>false,'canApply'=>false,'canApproveTop'=>false,
+             'canView'=>false,'canApply'=>false,'canApproveTop'=>false,'canEnter'=>false,
              'canFormFull'=>false,'canViewAmount'=>false,'canViewVendor'=>false];
     if (!$u) return $none;
     $uid = (int)$u['id'];
@@ -372,8 +372,12 @@ function purchase_perms(PDO $db, ?array $u): array
     $canBuy      = $canAdmin   || $has('purchase_buy');
     $canReceive  = $canBuy     || $has('purchase_receive');
     $canApply    = $canReceive || $has('purchase_apply');
-    $canView     = $canApply   || $has('purchase_view');
+    // canView＝「檢閱全部單據」，不可以由 canApply 推導出來——
+    // 只有申請權的人本來就只該看得到自己的單（2026-07-30 修：原本兩者混用，一般申請人會看到全部單據）
+    $canView     = $canBuy     || $has('purchase_view');
     $canApproveTop = $isAdmin  || $has('purchase_approve_top');
+    // 能不能進這頁是另一件事：有任何一種採購角色就進得來
+    $canEnter    = $canView || $canApply || $canApproveTop;
     // 申請單有兩種版型：一般使用者＝精簡版（只問買什麼、為了什麼）；採購版＝多了找採購品、
     // 標題、預估單價、到貨處理、附件分類。採購作業以上自動用採購版，其他人要另外勾這個功能。
     $canFormFull = $canBuy || $has('purchase_form_full');
@@ -383,6 +387,7 @@ function purchase_perms(PDO $db, ?array $u): array
     return compact('isAdmin') + [
         'canAdmin'=>$canAdmin, 'canBuy'=>$canBuy, 'canReceive'=>$canReceive,
         'canView'=>$canView, 'canApply'=>$canApply, 'canApproveTop'=>$canApproveTop,
+        'canEnter'=>$canEnter,
         'canFormFull'=>$canFormFull, 'canViewAmount'=>$canViewAmount, 'canViewVendor'=>$canViewVendor,
     ];
 }
@@ -617,7 +622,8 @@ function purchase_purpose_effective(array $item, array $req): array
  * ============================================================ */
 function purchase_calc_totals(PDO $db, int $reqId, string $taxType): array
 {
-    $st = $db->prepare("SELECT COALESCE(SUM(ROUND(qty_requested * COALESCE(unit_price,0), 2)),0)
+    // 金額一律用「採購實際數量」算；採購沒改就等於申請數量（buy_qty 為 NULL）
+    $st = $db->prepare("SELECT COALESCE(SUM(ROUND(COALESCE(buy_qty, qty_requested) * COALESCE(unit_price,0), 2)),0)
                         FROM purchase_request_item WHERE req_id=?");
     $st->execute([$reqId]);
     $subtotal = round((float)$st->fetchColumn(), 2);
@@ -749,8 +755,9 @@ function purchase_close_sign_notice(PDO $db, int $reqId, int $deciderUid): void
 /** 找出或建立採購品對應的 stock_items 列（同規格＋同儲位＝同一列） */
 function purchase_find_or_create_stock_item(PDO $db, array $item, array $req, ?int $locationId, int $userId): int
 {
-    $specId = (int)($item['spec_id'] ?? 0);
-    if ($specId <= 0) throw new Exception('未建檔的採購品無法入庫，請先在「採購品主檔」建立品項與規格');
+    // 入庫要用「採購實際綁的料號」；採購沒綁才退回申請人當初挑的
+    $specId = (int)($item['buy_spec_id'] ?? 0) ?: (int)($item['spec_id'] ?? 0);
+    if ($specId <= 0) throw new Exception('未建檔的採購品無法入庫，請先綁定採購料號（詢價頁或到貨頁的「綁定」）');
 
     $st = $db->prepare("SELECT s.spec_id, s.spec_code, s.spec_text, s.unit_id, s.location_id, i.item_name, i.category_id
                         FROM purchase_spec s JOIN purchase_item i ON i.item_id=s.item_id WHERE s.spec_id=?");
@@ -827,9 +834,11 @@ function purchase_write_txn(PDO $db, int $stockItemId, string $type, float $qty,
 function purchase_attach_dirs(PDO $db): array
 {
     $nas = purchase_setting($db, 'purchase_attach_nas_dir', 'Z:/BOM/ERP/採購/');
-    $url = purchase_setting($db, 'purchase_attach_url_dir', '/nas/ERP/採購/');
-    if (!preg_match('#[/\\\\]$#', $nas)) $nas .= '/';
-    return [$nas, rtrim($url, '/') . '/'];
+    // 結尾補分隔符時要跟著路徑本身的風格：UNC（\\server\share\...）補反斜線，
+    // 否則會組出 \\excellentnas\x\採購/PR001 這種混用路徑
+    if (!preg_match('#[/\\\\]$#', $nas)) $nas .= (strpos($nas, '\\') !== false ? '\\' : '/');
+    // 第二個回傳值保留是為了不動既有呼叫端的解構寫法；附件連結已改走 PHP 端點，不再使用它
+    return [$nas, ''];
 }
 
 /**
@@ -851,12 +860,42 @@ function purchase_att_path(PDO $db, array $att, ?string $reqNo = null): string
     return $nas . $sub . DIRECTORY_SEPARATOR . $att['file_name'];
 }
 
+/**
+ * 附件連結一律走 PHP 端點串流，不再給瀏覽器直連 NAS。三個理由：
+ *  1. UNC 路徑（\\server\share\...）瀏覽器從 http 頁面開不起來，只有走 PHP readfile 才讀得到；
+ *     這樣 NAS 路徑就不必被「必須能被 Apache Alias 出去」綁住。
+ *  2. 直連 URL 完全繞過權限檢查——知道網址的人不用登入就下載得到附件。
+ *  3. 少一個「網頁讀取路徑」設定要維護，也就少一個填錯就整批附件連不到的地方。
+ */
 function purchase_att_url(PDO $db, array $att, ?string $reqNo = null): string
 {
-    [, $url] = purchase_attach_dirs($db);
-    if ($reqNo === null) $reqNo = '';
-    $sub = (($att['status'] ?? 'active') === 'temp' || $reqNo === '') ? '_temp' : $reqNo;
-    return $url . rawurlencode($sub) . '/' . rawurlencode($att['file_name']);
+    return '../../src/store/Purchase_API.php?action=att_download&att_id=' . (int)$att['att_id'];
+}
+
+/** 串流一個附件實體檔（PDF/圖片直接在瀏覽器開，其餘下載） */
+function purchase_att_stream(string $fullpath, string $downloadName, bool $inline = true): void
+{
+    if (!is_file($fullpath)) {
+        http_response_code(404);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo '檔案不存在或 NAS 未連線：' . $fullpath;
+        exit;
+    }
+    $ext = strtolower(pathinfo($fullpath, PATHINFO_EXTENSION));
+    $inlineTypes = ['pdf' => 'application/pdf', 'png' => 'image/png', 'jpg' => 'image/jpeg',
+                    'jpeg' => 'image/jpeg', 'gif' => 'image/gif', 'webp' => 'image/webp',
+                    'txt' => 'text/plain; charset=utf-8'];
+    header_remove('Content-Type');
+    if ($inline && isset($inlineTypes[$ext])) {
+        header('Content-Type: ' . $inlineTypes[$ext]);
+        header('Content-Disposition: inline; filename="' . rawurlencode($downloadName) . '"; filename*=UTF-8\'\'' . rawurlencode($downloadName));
+    } else {
+        header('Content-Type: application/octet-stream');
+        header('Content-Disposition: attachment; filename="' . rawurlencode($downloadName) . '"; filename*=UTF-8\'\'' . rawurlencode($downloadName));
+    }
+    header('Content-Length: ' . filesize($fullpath));
+    readfile($fullpath);
+    exit;
 }
 
 /** 懶惰清除：刪掉過期的 temp 附件（實體檔＋DB 列）。列表 action 順路呼叫。 */

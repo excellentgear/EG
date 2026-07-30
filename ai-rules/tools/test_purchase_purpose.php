@@ -6,6 +6,8 @@ $db = new PDO("mysql:host=127.0.0.1;dbname=EGsystem;port=3306", "EG-TS2024", "ex
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 $db->exec("set names utf8mb4");
 require_once 'C:/MAMP/htdocs/EGsystem/src/common/purchase_lib.php';
+// 需要 eg_user_is_active()／rf_* ——purchase_lib 只在 purchase_perms() 內部才載入這支
+require_once 'C:/MAMP/htdocs/EGsystem/src/common/role_features_helper.php';
 
 $pass = 0; $fail = 0;
 function ck(string $name, bool $ok, string $extra = '') {
@@ -15,6 +17,25 @@ function ck(string $name, bool $ok, string $extra = '') {
 }
 function throws(callable $fn): string {
     try { $fn(); return ''; } catch (Throwable $e) { return $e->getMessage(); }
+}
+/**
+ * 挑一個「在職、且在本模組還沒有任何角色」的受測帳號。
+ * 在職判定必須走 eg_user_is_active()——離職/留停者一律無任何功能碼（role_features_helper 的守門），
+ * 挑到非在職帳號會讓權限測試全部假性失敗（2026-07-30 踩過）。
+ * $skip：已被前面測試用掉的 id。
+ */
+function pickTestUser(PDO $db, array $skip = []): ?array {
+    $rows = $db->query("SELECT u.id, u.user_status FROM user u
+                        WHERE u.user_status NOT IN (9,90) AND u.id<>1
+                          AND NOT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                                          WHERE ur.user_id=u.id AND r.module='purchase')
+                        ORDER BY u.id")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as $r) {
+        if (in_array((int)$r['id'], $skip, true)) continue;
+        if (!eg_user_is_active($db, (int)$r['id'])) continue;
+        return $r;
+    }
+    return null;
 }
 
 echo "=== 1. 欄位存在 ===\n";
@@ -129,11 +150,7 @@ try {
     $rid = $db->query("SELECT role_id FROM roles WHERE role_code='purchase_form_full' AND module='purchase'")->fetchColumn();
     ck('角色 purchase_form_full 已建立', (bool)$rid);
     // 找一個非管理員、且目前沒有任何採購角色的在職者當受測對象
-    $tu = $db->query("SELECT u.id, u.user_status FROM user u
-                      WHERE u.user_status NOT IN (9,90) AND u.id<>1
-                        AND NOT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
-                                        WHERE ur.user_id=u.id AND r.module='purchase')
-                      ORDER BY u.id LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    $tu = pickTestUser($db);
     if (!$tu) { ck('找得到受測使用者', false, '（全公司都已指派採購角色，略過）'); }
     else {
         $p = purchase_perms($db, ['id' => (int)$tu['id'], 'user_status' => $tu['user_status']]);
@@ -144,11 +161,7 @@ try {
     }
     // 採購作業以上自動視為有採購版（不必另外指派 purchase_form_full）
     $bid = $db->query("SELECT role_id FROM roles WHERE role_code='purchase_buy' AND module='purchase'")->fetchColumn();
-    $tu2 = $db->query("SELECT u.id, u.user_status FROM user u
-                       WHERE u.user_status NOT IN (9,90) AND u.id<>1
-                         AND NOT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
-                                         WHERE ur.user_id=u.id AND r.module='purchase')
-                       ORDER BY u.id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    $tu2 = pickTestUser($db);
     if ($tu2) {
         $db->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?,?)")->execute([$tu2['id'], $bid]);
         $p = purchase_perms($db, ['id' => (int)$tu2['id'], 'user_status' => $tu2['user_status']]);
@@ -157,11 +170,7 @@ try {
         echo "  [略] 找不到乾淨的受測使用者，跳過\n";
     }
     echo "\n=== 7. 自訂角色：名稱與功能都由管理員決定 ===\n";
-    $tu3 = $db->query("SELECT u.id, u.user_status FROM user u
-                       WHERE u.user_status NOT IN (9,90) AND u.id<>1
-                         AND NOT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
-                                         WHERE ur.user_id=u.id AND r.module='purchase')
-                       ORDER BY u.id LIMIT 1 OFFSET 1")->fetch(PDO::FETCH_ASSOC);
+    $tu3 = pickTestUser($db);
     if (!$tu3) { echo "  [略] 找不到第三個乾淨的受測使用者\n"; }
     else {
         // 管理員自建一個名字完全自訂的角色，只勾「登錄到貨」
@@ -171,9 +180,14 @@ try {
         $db->prepare("INSERT INTO role_features (role_id, feature_code) VALUES (?,'purchase_receive')")->execute([$nrid]);
         $db->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?,?)")->execute([$tu3['id'], $nrid]);
         $p = purchase_perms($db, ['id' => (int)$tu3['id'], 'user_status' => $tu3['user_status']]);
-        ck('自訂名稱的角色也算得出權限（勾到貨入庫→canReceive）', $p['canReceive'] === true);
+        $dbg = ' uid=' . $tu3['id'] . ' role_id=' . $nrid
+             . ' feats=' . implode(',', rf_load_user_features_all($db, (int)$tu3['id']));
+        ck('自訂名稱的角色也算得出權限（勾到貨入庫→canReceive）', $p['canReceive'] === true, $dbg);
         ck('沒勾的上層權限不會自動給（canBuy=false）', $p['canBuy'] === false);
-        ck('包含關係有效（到貨入庫→自動含申請與檢閱）', $p['canApply'] === true && $p['canView'] === true);
+        // canView＝檢閱全部單據，不該由 canApply 推導（2026-07-30 修正後的正確行為）
+        ck('包含關係有效（到貨入庫→自動含申請）', $p['canApply'] === true, $dbg);
+        ck('只有申請權不會變成看得到全部單據（canView=false）', $p['canView'] === false);
+        ck('有任何角色就進得了頁面（canEnter=true）', $p['canEnter'] === true);
         ck('沒勾採購版申請單→用精簡版', $p['canFormFull'] === false);
 
         // 改名不影響判定（判定看功能碼，不看名稱）
@@ -214,6 +228,59 @@ try {
     // 有權限者當然看得到
     $m4 = purchase_mask_row($sample, ['canViewAmount' => true, 'canViewVendor' => true], 1, false);
     ck('有可視權限者不遮蔽', $m4['grand_total'] === '105.00' && !isset($m4['masked_amount']));
+
+    echo "\n=== 9. 採購側欄位與申請內容分離（採購不得改申請單） ===\n";
+    foreach (['buy_spec_id','buy_item_name','buy_spec_text','buy_qty','buy_unit_id','buy_remark'] as $c) {
+        $st = $db->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS
+                            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='purchase_request_item' AND COLUMN_NAME=?");
+        $st->execute([$c]);
+        ck("purchase_request_item.$c", (bool)$st->fetchColumn());
+    }
+    // 模擬採購登錄：只寫 buy_*，申請人填的內容必須一字不動
+    $pid = (int)$items[0]['pr_item_id'];
+    $before = $db->query("SELECT item_name, spec_text, qty_requested, remark FROM purchase_request_item
+                          WHERE pr_item_id=$pid")->fetch(PDO::FETCH_ASSOC);
+    $db->prepare("UPDATE purchase_request_item
+                  SET unit_price=?, buy_qty=?, buy_item_name=?, buy_spec_text=?, buy_remark=?,
+                      amount=ROUND(COALESCE(?, qty_requested)*?,2)
+                  WHERE pr_item_id=?")
+       ->execute([12.5, 5, '白板筆(藍)', '藍色', '原廠缺貨改同級品', 5, 12.5, $pid]);
+    $after = $db->query("SELECT * FROM purchase_request_item WHERE pr_item_id=$pid")->fetch(PDO::FETCH_ASSOC);
+    ck('申請人的品名沒被覆寫', $after['item_name'] === $before['item_name'],
+       '原=' . $before['item_name'] . ' 現=' . $after['item_name']);
+    ck('申請人的規格沒被覆寫', (string)$after['spec_text'] === (string)$before['spec_text']);
+    ck('申請人的數量沒被覆寫', (float)$after['qty_requested'] === (float)$before['qty_requested']);
+    ck('申請人的備註沒被覆寫', (string)$after['remark'] === (string)$before['remark']);
+    ck('採購側品名／規格／備註寫進 buy_*',
+       $after['buy_item_name'] === '白板筆(藍)' && $after['buy_spec_text'] === '藍色'
+       && $after['buy_remark'] === '原廠缺貨改同級品');
+    ck('小計用採購實際數量算（5×12.5=62.5）', (float)$after['amount'] === 62.5, '得到：' . $after['amount']);
+
+    // 金額合計也要走 COALESCE(buy_qty, qty_requested)
+    $db->prepare("UPDATE purchase_request_item SET unit_price=10, buy_qty=NULL, amount=ROUND(qty_requested*10,2)
+                  WHERE pr_item_id=?")->execute([(int)$items[1]['pr_item_id']]);
+    $t = purchase_calc_totals($db, $reqId, 'free');
+    // 品項一：buy_qty=5 ×12.5=62.5；品項二：qty_requested=1 ×10=10
+    ck('合計＝採購實際數量×單價（62.5+10=72.5）', abs($t['subtotal'] - 72.5) < 0.001, '得到：' . $t['subtotal']);
+
+    // 到貨完成判定要比對採購實際數量
+    $db->prepare("UPDATE purchase_request_item SET qty_received=5 WHERE pr_item_id=?")->execute([$pid]);
+    $st = $db->prepare("SELECT CASE WHEN qty_received >= COALESCE(buy_qty, qty_requested) THEN 1 ELSE 0 END
+                        FROM purchase_request_item WHERE pr_item_id=?");
+    $st->execute([$pid]);
+    ck('收到 5（=採購實際數量）即算到齊，不看申請的 3', (int)$st->fetchColumn() === 1);
+
+    // 入庫用的料號要以 buy_spec_id 優先
+    $sp = $db->query("SELECT spec_id FROM purchase_spec WHERE is_active=1 LIMIT 1")->fetchColumn();
+    if ($sp) {
+        $db->prepare("UPDATE purchase_request_item SET buy_spec_id=?, spec_id=NULL WHERE pr_item_id=?")
+           ->execute([(int)$sp, $pid]);
+        $row = $db->query("SELECT * FROM purchase_request_item WHERE pr_item_id=$pid")->fetch(PDO::FETCH_ASSOC);
+        $eff = (int)($row['buy_spec_id'] ?? 0) ?: (int)($row['spec_id'] ?? 0);
+        ck('申請人沒綁料號時，入庫用採購綁的 buy_spec_id', $eff === (int)$sp);
+    } else {
+        echo "  [略] purchase_spec 尚無資料，跳過 buy_spec_id 優先序測試\n";
+    }
 } finally {
     $db->rollBack();
 }
