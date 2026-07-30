@@ -17,6 +17,8 @@
  *       calib_required 需校驗（否＝僅檢驗方式如「目視」，其量具不列入本頁與 KPI）
  *       has_tool_no    可設定底下量具編號（否＝無實體量具）
  *       calib_tab      在校驗管理頁以分頁顯示（需 calib_required=1）
+ *       calib_tab_group 併入的自訂分頁 id（qc_tool_calib_tab；NULL＝自成一頁、分頁名用類別名）
+ *   - qc_tool_calib_tab：自訂合併分頁（tab_name 自訂，可把數個類別歸到同一分頁）
  *
  * 到期判定：主檔週期自動推算——登錄完成時把 calibration_due 前滾為 next_due。
  * KPI 準時率：den = 當月到期(已完成紀錄的 due_date + 尚待完成的 calibration_due)；
@@ -44,9 +46,18 @@ function tool_calib_ensure_schema(PDO $db): void {
         "ALTER TABLE qc_tool_list ADD COLUMN calib_required TINYINT(1) NOT NULL DEFAULT 1 COMMENT '需校驗(列入量測儀器校驗管理)'",
         "ALTER TABLE qc_tool_list ADD COLUMN has_tool_no TINYINT(1) NOT NULL DEFAULT 1 COMMENT '可設定底下量具編號(否=僅檢驗方式)'",
         "ALTER TABLE qc_tool_list ADD COLUMN calib_tab TINYINT(1) NOT NULL DEFAULT 0 COMMENT '校驗管理頁以分頁顯示(需 calib_required=1)'",
+        "ALTER TABLE qc_tool_list ADD COLUMN calib_tab_group INT NULL COMMENT '併入的自訂分頁 id(qc_tool_calib_tab)；NULL=自成一頁用類別名'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
     }
+
+    // 自訂合併分頁：可把數個類別歸到同一個自訂名稱的分頁（例：盤式/跨珠/針狀/外徑/珠徑 → 「分厘卡」）
+    $db->exec("CREATE TABLE IF NOT EXISTS qc_tool_calib_tab (
+        tab_id INT AUTO_INCREMENT PRIMARY KEY,
+        tab_name VARCHAR(30) NOT NULL COMMENT '自訂分頁名稱',
+        sort_order INT NOT NULL DEFAULT 0,
+        UNIQUE KEY uk_tab_name (tab_name)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='量測儀器校驗管理－自訂合併分頁'");
 
     $db->exec("CREATE TABLE IF NOT EXISTS qc_tool_calibration (
         calib_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -145,6 +156,7 @@ function tool_calib_categories(PDO $db): array {
                                COALESCE(l.calib_required,1) AS calib_required,
                                COALESCE(l.has_tool_no,1)    AS has_tool_no,
                                COALESCE(l.calib_tab,0)      AS calib_tab,
+                               l.calib_tab_group,
                                (SELECT COUNT(*) FROM qc_tool t WHERE t.QC_Tool_List_id=l.QC_Tool_List_id) AS tool_cnt,
                                (SELECT COUNT(*) FROM qc_tool t WHERE t.QC_Tool_List_id=l.QC_Tool_List_id AND t.calib_managed=1) AS managed_cnt
                         FROM qc_tool_list l
@@ -153,6 +165,22 @@ function tool_calib_categories(PDO $db): array {
         foreach (['QC_Tool_List_id','calib_required','has_tool_no','calib_tab','tool_cnt','managed_cnt'] as $k) {
             $r[$k] = (int)$r[$k];
         }
+        $r['calib_tab_group'] = ($r['calib_tab_group'] === null || $r['calib_tab_group'] === '')
+                              ? null : (int)$r['calib_tab_group'];
+    }
+    return $rows;
+}
+
+/** 自訂合併分頁清單（含成員類別數） */
+function tool_calib_tabs(PDO $db): array {
+    try {
+        $rows = $db->query("SELECT t.tab_id, t.tab_name, t.sort_order,
+                                   (SELECT COUNT(*) FROM qc_tool_list l WHERE l.calib_tab_group=t.tab_id) AS cat_cnt
+                            FROM qc_tool_calib_tab t
+                            ORDER BY t.sort_order, t.tab_id")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }   // 表尚未建立
+    foreach ($rows as &$r) {
+        $r['tab_id'] = (int)$r['tab_id']; $r['sort_order'] = (int)$r['sort_order']; $r['cat_cnt'] = (int)$r['cat_cnt'];
     }
     return $rows;
 }
