@@ -52,6 +52,20 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .va-tab { border:1px solid #E8D5B5; border-bottom:none; background:#FBF3E5; color:#8a6d45; cursor:pointer;
             padding:7px 16px; font-size:14px; border-radius:6px 6px 0 0; margin-bottom:-2px; }
         .va-tab.active { background:#fff; color:#5b3a1e; font-weight:bold; border-bottom:2px solid #fff; }
+        /* 定期評核-全部卡片(2欄並列) */
+        .ev-cards { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+        .ev-card { border:1px solid #E8D5B5; border-radius:6px; background:#fff; padding:6px 8px; break-inside:avoid; }
+        .ev-card .h { display:flex; justify-content:space-between; align-items:center; font-weight:bold; color:#5b3a1e; margin-bottom:4px; font-size:13px; }
+        table.ev-mini { width:100%; border-collapse:collapse; font-size:11px; }
+        table.ev-mini th, table.ev-mini td { border:1px solid #EADFC8; padding:1px 4px; text-align:center; }
+        table.ev-mini thead th { background:#F7E0BD; color:#5b3a1e; }
+        table.ev-mini tr.half td { background:#FDF3E0; font-weight:bold; }
+        table.ev-mini td.over { color:#DD5138; font-weight:bold; }
+        @media print {
+            .va-tabs, .va-toolbar, .va-remind { display:none !important; }
+            .ev-cards { gap:4px; }
+            .ev-card:nth-child(4n) { page-break-after: always; }
+        }
         .va-stat { display:flex; flex-wrap:wrap; gap:18px; align-items:center; margin-bottom:8px;
             border:1.5px solid #E8D5B5; border-radius:8px; padding:10px 14px; background:#FFF7E8; }
         .va-stat .s-num { font-size:22px; font-weight:bold; color:#8A5A2B; }
@@ -216,32 +230,40 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 
         <div id="tabEval" style="display:none;">
             <div class="va-toolbar">
-                <label>廠商</label>
-                <input type="text" id="evKw" placeholder="搜尋廠商名/編號" style="width:150px;">
-                <select id="evVendor" style="min-width:180px;"></select>
                 <label>年度</label>
                 <select id="evYear"></select>
-                <button class="btn-warm" id="evGo"><i class="fa fa-search"></i> 查詢</button>
+                <button class="btn-warm" id="evAll"><i class="fa fa-th-large"></i> 全部納管廠商</button>
+                <span style="color:#c9bda9;">｜</span>
+                <label>單一廠商</label>
+                <input type="text" id="evKw" placeholder="搜尋廠商名/編號" style="width:130px;">
+                <select id="evVendor" style="min-width:150px;"></select>
+                <button id="evGo"><i class="fa fa-search"></i> 查詢</button>
+                <span style="color:#c9bda9;">｜</span>
+                <label id="evFailBox" style="display:none;"><input type="checkbox" id="evFailOnly"> 只看不合格</label>
                 <button id="evSet" style="display:none;"><i class="fa fa-cog"></i> 門檻設定</button>
-                <button id="evCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
-                <button onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
+                <button id="evCsv" style="display:none;"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
+                <button id="evPrint"><i class="fa fa-print"></i> 列印</button>
             </div>
             <div class="va-remind" id="evThresh"></div>
-            <div class="va-table-wrap">
-                <table class="va-table" id="evTable">
-                    <thead><tr>
-                        <th rowspan="2">月份</th>
-                        <th colspan="4">品質（進料檢驗）</th>
-                        <th colspan="3">交期</th>
-                    </tr><tr>
-                        <th>檢驗數</th><th>不良數</th><th>不良率</th><th>特採率</th>
-                        <th>應交數</th><th>遲交數</th><th>遲交率</th>
-                    </tr></thead>
-                    <tbody id="evBody"><tr><td colspan="8" style="padding:18px;color:#8a6d45;">請選擇廠商與年度後查詢</td></tr></tbody>
-                </table>
+            <div id="evSingle" style="display:none;">
+                <div class="va-table-wrap">
+                    <table class="va-table" id="evTable">
+                        <thead><tr>
+                            <th rowspan="2">月份</th>
+                            <th colspan="4">品質（進料檢驗）</th>
+                            <th colspan="3">交期</th>
+                        </tr><tr>
+                            <th>檢驗數</th><th>不良數</th><th>不良率</th><th>特採率</th>
+                            <th>應交數</th><th>遲交數</th><th>遲交率</th>
+                        </tr></thead>
+                        <tbody id="evBody"></tbody>
+                    </table>
+                </div>
             </div>
+            <div id="evCards" class="ev-cards"></div>
+            <div id="evEmpty" style="padding:18px;color:#8a6d45;">按「全部納管廠商」列出所有納管廠商評核，或選單一廠商查詢。（自動略過整年無資料廠商）</div>
             <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
-                資料自 ERP（bom_ing）自動計算：品質依檢驗日歸月（不良=ng、特採=QQ）；交期＝發包日＋約定工作天為應交日，遲交＝未回廠或回廠晚於應交。半年判定依門檻（管理員可設）。
+                資料自 ERP（bom_ing）自動計算：品質依檢驗日歸月（不良=ng、特採=QQ）；交期＝發包日＋約定工作天為應交日，遲交＝回廠日晚於應交。半年判定依門檻（管理員可設）。
             </div>
         </div><!-- /tabEval -->
 <?php endif; ?>
@@ -882,7 +904,8 @@ function loadEval(){
     $.getJSON(API, {action:'periodic_eval', maker_id_no:mid, year:$('#evYear').val()}, function(res){
         NProgress.done();
         if(!res.ok){ alert(res.error||'查詢失敗'); return; }
-        EVAL=res;
+        EVAL=res; EVAL_ALL=null;
+        $('#evSingle').show(); $('#evCards').empty().hide(); $('#evEmpty').hide(); $('#evCsv').show(); $('#evFailBox').hide();
         var s=res.settings;
         $('#evThresh').html('廠商：<b>'+esc(res.maker_name)+'</b>　'+res.year+' 年　門檻：不良率≤'+s.ng_max+'%、遲交率≤'+s.late_max+'%'
             +(s.special_max<100?('、特採率≤'+s.special_max+'%'):'（特採率不判定）')+'　約定工作天 '+s.default_days+' 天');
@@ -908,6 +931,51 @@ function halfRow(hf,label,s){
         +'<td>'+hf.qc_in+'</td><td>'+hf.ng+'</td><td>'+rate(hf.ng_rate)+'</td><td>'+rate(hf.special_rate)+'</td>'
         +'<td>'+hf.del_in+'</td><td>'+hf.late+'</td><td>'+rate(hf.late_rate)+'　'+judge+'</td></tr>';
 }
+
+/* ---------- 定期評核：全部納管廠商（2欄卡片，略過無資料） ---------- */
+var EVAL_ALL = null;
+$('#evAll').on('click', function(){
+    NProgress.start();
+    $.getJSON(API, {action:'periodic_eval_all', year:$('#evYear').val()}, function(res){
+        NProgress.done();
+        if(!res.ok){ alert(res.error||'載入失敗'); return; }
+        EVAL_ALL=res; EVAL=null;
+        var s=res.settings;
+        $('#evThresh').html(res.year+' 年　全部納管廠商（'+res.vendors.length+' 家有資料，已略過無資料者）　門檻：不良率≤'+s.ng_max+'%、遲交率≤'+s.late_max+'%'
+            +(s.special_max<100?('、特採率≤'+s.special_max+'%'):'（特採率不判定）')+'　約定工作天 '+s.default_days+' 天');
+        $('#evSingle').hide(); $('#evEmpty').hide(); $('#evCsv').hide(); $('#evFailBox').show(); $('#evCards').css('display','grid');
+        renderEvalCards();
+    }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+});
+$('#evFailOnly').on('change', renderEvalCards);
+function renderEvalCards(){
+    if(!EVAL_ALL) return;
+    var s=EVAL_ALL.settings, failOnly=$('#evFailOnly').is(':checked');
+    var overNg=function(v){return v!=null&&v>s.ng_max;}, overLt=function(v){return v!=null&&v>s.late_max;}, overSp=function(v){return s.special_max<100&&v!=null&&v>s.special_max;};
+    var list=EVAL_ALL.vendors.filter(function(v){ return !failOnly || v.fail; });
+    var html='';
+    list.forEach(function(v){
+        var jb=v.fail?'<span class="af-judge-fail">有不合格</span>':'<span class="af-judge-pass">合格</span>';
+        html+='<div class="ev-card"><div class="h"><span>'+esc(v.maker_name)+'（'+esc(v.maker_id_no)+'）</span>'+jb+'</div>';
+        html+='<table class="ev-mini"><thead><tr><th>月</th><th>檢驗</th><th>不良率</th><th>特採率</th><th>回廠</th><th>遲交率</th></tr></thead><tbody>';
+        for(var m=1;m<=12;m++){ var d=v.months[m];
+            html+='<tr><td>'+m+'</td><td>'+d.qc_in+'</td>'
+                +'<td'+(overNg(d.ng_rate)?' class="over"':'')+'>'+rate(d.ng_rate)+'</td>'
+                +'<td'+(overSp(d.special_rate)?' class="over"':'')+'>'+rate(d.special_rate)+'</td>'
+                +'<td>'+d.del_in+'</td>'
+                +'<td'+(overLt(d.late_rate)?' class="over"':'')+'>'+rate(d.late_rate)+'</td></tr>';
+            if(m===6) html+=miniHalf(v.halves[1],'上半年');
+            if(m===12) html+=miniHalf(v.halves[2],'下半年');
+        }
+        html+='</tbody></table></div>';
+    });
+    $('#evCards').html(html||'<div style="padding:14px;color:#8a6d45;grid-column:1/-1;">'+(failOnly?'無不合格廠商':'無資料')+'</div>');
+}
+function miniHalf(hf,label){
+    var j=hf.judge?(hf.judge==='pass'?'<span class="af-judge-pass">合格</span>':'<span class="af-judge-fail">不合格</span>'):'—';
+    return '<tr class="half"><td>'+label+'</td><td>'+hf.qc_in+'</td><td>'+rate(hf.ng_rate)+'</td><td>'+rate(hf.special_rate)+'</td><td>'+hf.del_in+'</td><td>'+rate(hf.late_rate)+' '+j+'</td></tr>';
+}
+$('#evPrint').on('click', function(){ window.print(); });
 $('#evSet').on('click', function(){
     var s=(EVAL&&EVAL.settings)||META.eval_settings||{ng_max:5,late_max:30,special_max:100,default_days:7};
     $('#stNgMax').val(s.ng_max); $('#stLateMax').val(s.late_max); $('#stSpMax').val(s.special_max); $('#stDays').val(s.default_days);

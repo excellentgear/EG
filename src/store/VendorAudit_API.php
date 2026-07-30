@@ -108,6 +108,25 @@ case 'periodic_eval': {
           'months'=>$res['months'], 'halves'=>$res['halves']]);
 }
 
+/* 定期評核：全部納管廠商（自動略過整年無資料者） */
+case 'periodic_eval_all': {
+    $year = (int)($_GET['year'] ?? date('Y'));
+    $set = vendor_eval_settings($db);
+    $mk = $db->query("SELECT maker_id_no, maker_id FROM maker_list
+                      WHERE (status IS NULL OR status<>'" . VENDOR_AUDIT_DISABLED . "') AND audit_managed=1 ORDER BY maker_id")
+             ->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($mk as $m) {
+        $res = vendor_periodic_eval($db, $m['maker_id_no'], $year, $set);
+        $h1 = $res['halves'][1]; $h2 = $res['halves'][2];
+        if (($h1['qc_in'] + $h1['del_in'] + $h2['qc_in'] + $h2['del_in']) === 0) continue; // 整年無資料→略過
+        $fail = ($h1['judge'] === 'fail' || $h2['judge'] === 'fail');
+        $out[] = ['maker_id_no'=>$m['maker_id_no'], 'maker_name'=>$m['maker_id'],
+                  'months'=>$res['months'], 'halves'=>$res['halves'], 'fail'=>$fail];
+    }
+    jout(['year'=>$year, 'settings'=>$set, 'vendors'=>$out]);
+}
+
 /* 定期評核門檻設定（管理員） */
 case 'save_eval_settings': {
     if (!$perms['canAdmin']) jerr('無設定權限', 403);
