@@ -974,16 +974,28 @@ case 'list_shift_blocks': {
                 'wd' => [(int)date('N', strtotime($r['work_date'])) => 1]];
     }
     if ($cur) $blocks[] = $cur;
+    // 再把「同班別＋同期間＋同星期組合」的多位人員合併成「一張排班單」，可整張修改
     $nm = roster_user_name_map($pdo, array_map(fn($b) => $b['user_id'], $blocks));
-    $out = [];
+    $merged = [];
     foreach ($blocks as $b) {
         $wd = array_keys($b['wd']); sort($wd);
-        $out[] = ['shift_type_id' => $b['shift_type_id'], 'user_id' => $b['user_id'],
-                  'user_name' => $nm[$b['user_id']]['name'] ?? ('#' . $b['user_id']),
-                  'shift_name' => $b['shift_name'], 'time' => $b['time'], 'color' => $b['color'] ?: '#C0762C',
-                  'date_from' => $b['from'], 'date_to' => $b['to'], 'days' => $b['days'],
-                  'weekdays' => $wd, 'ids' => $b['ids']];
+        $gk = $b['shift_type_id'] . '|' . $b['from'] . '|' . $b['to'] . '|' . implode(',', $wd);
+        if (!isset($merged[$gk])) {
+            $merged[$gk] = ['shift_type_id' => $b['shift_type_id'], 'shift_name' => $b['shift_name'],
+                            'time' => $b['time'], 'color' => $b['color'] ?: '#C0762C',
+                            'date_from' => $b['from'], 'date_to' => $b['to'], 'days' => $b['days'],
+                            'weekdays' => $wd, 'ids' => [], 'user_ids' => [], 'user_names' => []];
+        }
+        $merged[$gk]['ids'] = array_merge($merged[$gk]['ids'], $b['ids']);
+        $merged[$gk]['user_ids'][] = $b['user_id'];
+        $merged[$gk]['user_names'][] = $nm[$b['user_id']]['name'] ?? ('#' . $b['user_id']);
     }
+    $out = array_values($merged);
+    foreach ($out as &$o) {
+        $o['user_ids'] = array_values(array_unique($o['user_ids']));
+        $o['user_names'] = array_values(array_unique($o['user_names']));
+        $o['person_count'] = count($o['user_ids']);
+    } unset($o);
     usort($out, fn($a, $c) => strcmp($a['date_from'], $c['date_from']) ?: strcmp($a['shift_name'], $c['shift_name']));
     jout(['blocks' => $out, 'today' => date('Y-m-d'), 'can_edit' => ($CAN_CREATE || $IS_ADMIN)]);
 }

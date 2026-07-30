@@ -415,7 +415,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
     <div class="modal-body">
         <input type="hidden" id="sa_oldids">
         <div id="sa_editnote" style="display:none;background:#fff6e8;border:1px solid #e4d8c6;border-radius:5px;padding:7px;margin-bottom:8px;font-size:12px;color:#8a5a2b;">
-            <i class="fa fa-info-circle"></i> 編輯模式：存檔會依下方設定<b>重建這張排班單</b>。預設<b>已過去的日期不會變動</b>。
+            <i class="fa fa-info-circle"></i> <b>整張排班單編輯</b>：下方人員已勾選這張單的全部人（可增減）；改期間／星期／人員後存檔會<b>重建整張單</b>。預設<b>已過去的日期不會變動</b>。
             <?php if ($IS_ADMIN): ?>
             <div class="checkbox" style="margin:4px 0 0;"><label style="color:#c0392b;font-weight:bold;">
                 <input type="checkbox" id="sa_include_past"> 連同過去日期一起修改（測試用，僅管理員）
@@ -1441,7 +1441,7 @@ var R = (function(){
         if(!ss.length){ alert('請先在上方建立至少一個啟用的班別'); return; }
         $('#sa_shift').html(ss.map(function(s){return '<option value="'+s.id+'">'+esc(s.name)+'（'+String(s.start_time).substring(0,5)+'~'+String(s.end_time).substring(0,5)+'）</option>';}).join(''));
         var t=shiftCalData?shiftCalData.today:new Date().toISOString().slice(0,10);
-        $('#saTitle').text(block?'編輯排班單':'排班（指定人員上班別）');
+        $('#saTitle').text(block?('整張編輯排班單　'+block.date_from+' ~ '+block.date_to+'（共 '+(block.person_count||0)+' 人）'):'排班（指定人員上班別）');
         $('#sa_editnote').toggle(!!block);
         $('#sa_oldids').val(block?JSON.stringify(block.ids):'');
         if(block){
@@ -1452,7 +1452,8 @@ var R = (function(){
             if(block.weekdays && block.weekdays.length && block.weekdays.length<7)
                 block.weekdays.forEach(function(w){ $('.sa-wd[value="'+w+'"]').prop('checked',true); });
             $('#sa_skipholiday').prop('checked',true); $('#sa_search').val(''); $('#sa_include_past').prop('checked',false);
-            $('#sa_users').html(RD.users.map(function(u){return '<label class="msitem" style="display:block;font-weight:normal;margin:1px 0"><input type="checkbox" value="'+u.id+'"'+(+u.id===+block.user_id?' checked':'')+' onchange="R.saSync()"> '+esc(u.user_cname)+posLabel(u)+'</label>';}).join(''));
+            var mem={}; (block.user_ids||[]).forEach(function(u){ mem[+u]=1; });   // 整張單的全部人員都預先勾選
+            $('#sa_users').html(RD.users.map(function(u){return '<label class="msitem" style="display:block;font-weight:normal;margin:1px 0"><input type="checkbox" value="'+u.id+'"'+(mem[+u.id]?' checked':'')+' onchange="R.saSync()"> '+esc(u.user_cname)+posLabel(u)+'</label>';}).join(''));
             saSync();
             $('#shiftAssignModal').modal('show');
             return;
@@ -1509,16 +1510,19 @@ var R = (function(){
             blockData=r.blocks||[];
             if(!blockData.length){ $('#blockList').html('<div style="color:#a08c72;padding:8px;">尚無排班，請按上方「排班」建立。</div>'); return; }
             var wdn=['','一','二','三','四','五','六','日'];
-            var h='<table class="rst-list"><tr><th>班別</th><th>人員</th><th>期間</th><th>天數</th><th>星期</th><th>操作</th></tr>';
+            var h='<table class="rst-list"><tr><th>期間</th><th>星期</th><th>天數</th><th>人員</th><th>操作</th></tr>';
             blockData.forEach(function(b,i){
                 var past=(b.date_to < r.today);
                 var wd=(b.weekdays&&b.weekdays.length&&b.weekdays.length<7)?b.weekdays.map(function(w){return wdn[w];}).join('、'):'每天';
+                var names=(b.user_names||[]);
+                var who=names.length<=4 ? names.map(esc).join('、')
+                       : (names.slice(0,4).map(esc).join('、')+' …等 '+names.length+' 人');
                 h+='<tr'+(past?' style="opacity:.55"':'')+'>'
-                  +'<td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+b.color+';margin-right:4px"></span>'+esc(b.shift_name)+' <span style="color:#a08c72">'+b.time+'</span></td>'
-                  +'<td>'+esc(b.user_name)+'</td>'
-                  +'<td>'+b.date_from+(b.date_to!==b.date_from?' ~ '+b.date_to:'')+(past?' <span class="label label-default">已過</span>':'')+'</td>'
-                  +'<td>'+b.days+' 天</td><td>'+wd+'</td>'
-                  +'<td>'+(r.can_edit?'<button class="btn btn-xs btn-default" onclick="R.editBlock('+i+')"><i class="fa fa-pencil"></i> 編輯</button> <button class="btn btn-xs btn-default" style="color:#c0392b" onclick="R.delBlock('+i+')"><i class="fa fa-trash"></i> 刪除</button>':'—')+'</td></tr>';
+                  +'<td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+b.color+';margin-right:4px"></span>'
+                    +b.date_from+(b.date_to!==b.date_from?' ~ '+b.date_to:'')+(past?' <span class="label label-default">已過</span>':'')+'</td>'
+                  +'<td>'+wd+'</td><td>'+b.days+' 天</td>'
+                  +'<td><b style="color:#b5651d">共 '+(b.person_count||names.length)+' 人</b>　<span style="font-size:12px">'+who+'</span></td>'
+                  +'<td>'+(r.can_edit?'<button class="btn btn-xs btn-warning" onclick="R.editBlock('+i+')"><i class="fa fa-pencil"></i> 整張編輯</button> <button class="btn btn-xs btn-default" style="color:#c0392b" onclick="R.delBlock('+i+')"><i class="fa fa-trash"></i> 整張刪除</button>':'—')+'</td></tr>';
             });
             $('#blockList').html(h+'</table>');
         });
@@ -1526,7 +1530,7 @@ var R = (function(){
     function editBlock(i){ var b=blockData[i]; if(b) openShiftAssign(b); }
     function delBlock(i){
         var b=blockData[i]; if(!b) return;
-        var info=b.shift_name+'　'+b.user_name+'\n'+b.date_from+' ~ '+b.date_to+'（'+b.days+' 天）';
+        var info=b.shift_name+'\n'+b.date_from+' ~ '+b.date_to+'（'+b.days+' 天）\n人員：'+(b.user_names||[]).join('、')+'（共 '+(b.person_count||0)+' 人）';
         var inc=0;
         if(RD.isAdmin){
             if(!confirm('刪除整張排班單？\n\n'+info)) return;
