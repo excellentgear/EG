@@ -40,6 +40,17 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
          : ($perms['reconAp'] ? '應付對帳(生管)'
          : ($perms['canView'] ? '會計檢閱' : '無權限'))))));
 $taxRate = acc_tax_rate($db);
+
+/* 由對帳單總覽（recon_overview.php）帶參數直接開某一份：
+   ?side=ap&party_id=RZ002A&bm=2026-05。沒帶參數就照原本的下拉流程走。 */
+$deep = ['side' => '', 'party_id' => '', 'bm' => ''];
+if (isset($_GET['side']) || isset($_GET['party_id']) || isset($_GET['bm'])) {
+    $deep['side']     = (($_GET['side'] ?? '') === 'ap') ? 'ap' : 'ar';
+    $deep['party_id'] = trim((string)($_GET['party_id'] ?? ''));
+    $bm = trim((string)($_GET['bm'] ?? ''));
+    $deep['bm'] = preg_match('/^\d{4}-\d{2}$/', $bm) ? $bm : '';
+    if ($deep['party_id'] === '' || $deep['bm'] === '') $deep = ['side' => '', 'party_id' => '', 'bm' => ''];
+}
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -436,6 +447,9 @@ var P = {
 };
 
 var CSRF = '', SIDE = 'ar', sheet = null, lines = [], selIdx = -1, keySeq = 0, canEdit = false;
+/* 從總覽頁帶進來的目標（沒帶就是空字串），對象清單載完後自動選起來並載入 */
+var DEEP = <?= json_encode($deep, JSON_UNESCAPED_UNICODE) ?>;
+var pendingParty = '';
 var ST_LABEL = {'new':'尚未建立', draft:'暫存中', confirmed:'已確認鎖帳', reopened:'已退回重對'};
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
@@ -494,6 +508,13 @@ $('#btnSideAp').on('click',function(){
 $.getJSON(API,{action:'meta'},function(r){
   if(!r.ok){ toast(esc(r.error||'初始化失敗'), true); return; }
   CSRF=r.csrf;
+  if(DEEP.party_id){
+    // 由總覽頁指定了要開哪一份：設好月份與側別，對象清單載完會自動接著載入
+    $('#bm').val(DEEP.bm);
+    pendingParty = DEEP.party_id;
+    setSide(DEEP.side);
+    return;
+  }
   // 只有單側權限的人，直接切到他那一側
   if(!P.canReconAr && P.canReconAp) setSide('ap'); else setSide('ar');
 }).fail(function(){ toast('無法連線到會計 API', true); });
@@ -513,6 +534,19 @@ function loadParties(){
         +'（'+p.cnt+' 筆 / '+nf(p.amount)+'）'+esc(tag)+'</option>';
     });
     $('#partySel').html(h);
+    if(pendingParty){
+      var want=pendingParty; pendingParty='';
+      // 該對象若該月已無來源憑證（例如全數拆到別的月份）就不會在清單裡，
+      // 補一個 option 進去，底稿仍然要能開起來看
+      var found=false;
+      $('#partySel option').each(function(){ if(this.value===want) found=true; });
+      if(!found){
+        $('#partySel').append('<option value="'+esc(want)+'">'+esc(want)+'（已有對帳底稿）</option>');
+      }
+      $('#partySel').val(want);
+      if($('#partySel').val()===want) loadSheet();
+      else toast('找不到指定的對象：'+esc(want), true);
+    }
   },'json').fail(function(){ toast('查詢對象清單失敗', true); });
 }
 $('#bm').on('change', loadParties);
