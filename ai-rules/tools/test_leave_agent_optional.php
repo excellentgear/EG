@@ -29,18 +29,34 @@ if (!empty($r['id'])) {
     ok($row['agent_user_id'] === null, '代理人欄位存 NULL（視為不需代理）');
 }
 
-echo "== 有代理人設定者：仍必填 ==\n";
+echo "== 有代理人設定者：系統自動指派，不需也不能由申請人指定 ==\n";
+// 2026-07-30 起代理人改為自動解析（人事設定的順位就是答案），因此
+// 舊行為「未指定代理人被擋」「指定非候選者被擋」已不適用——改驗自動指派是否正確。
+$d2 = date('Y-m-d', strtotime($d . ' +1 day'));
+for ($i = 0; $i < 20 && !eg_leave_is_workday($db, $d2); $i++) $d2 = date('Y-m-d', strtotime($d2 . ' +1 day'));
 $r2 = eg_leave_submit($db, ['employee_id' => $HASAGENT, 'leave_type_id' => $TYPE_AGENT,
-    'start_datetime' => "$d 09:00:00", 'end_datetime' => "$d 11:00:00",
-    'reason' => '__test__有代理人未指定', 'agent_user_id' => 0, 'upload_token' => '']);
-ok(empty($r2['ok']) && strpos($r2['msg'], '須指定職務代理人') !== false, '未指定被擋下', $r2['msg'] ?? '');
-if (!empty($r2['id'])) $created[] = (int)$r2['id'];
-
-$r3 = eg_leave_submit($db, ['employee_id' => $HASAGENT, 'leave_type_id' => $TYPE_AGENT,
-    'start_datetime' => "$d 09:00:00", 'end_datetime' => "$d 11:00:00",
-    'reason' => '__test__指定不在清單的人', 'agent_user_id' => 10, 'upload_token' => '']);
-ok(empty($r3['ok']) && strpos($r3['msg'], '不在您的代理人設定中') !== false, '指定非候選者被擋下', $r3['msg'] ?? '');
-if (!empty($r3['id'])) $created[] = (int)$r3['id'];
+    'start_datetime' => "$d2 09:00:00", 'end_datetime' => "$d2 11:00:00",
+    'reason' => '__test__有代理人自動指派', 'upload_token' => '']);
+ok(!empty($r2['ok']), '未傳代理人也能送出（系統自動解析）', $r2['msg'] ?? '');
+if (!empty($r2['id'])) {
+    $created[] = (int)$r2['id'];
+    $rows = eg_leave_get_agents($db, (int)$r2['id']);
+    ok(count($rows) > 0, '代理人已自動寫入子表', (string)count($rows));
+    $assigned = array_filter($rows, function ($x) { return !empty($x['agent_user_id']); });
+    ok(count($assigned) > 0, '至少指派到一位代理人', json_encode(array_column($rows, 'resolve_reason')));
+    $req = $db->query("SELECT agent_user_id FROM leave_request WHERE id=" . (int)$r2['id'])->fetch(PDO::FETCH_ASSOC);
+    ok($req['agent_user_id'] !== null, '主檔相容欄位也有值', json_encode($req));
+}
+// 前端不再送 agent_user_id，後端也不吃；就算硬塞也應被忽略而非採用
+$r3 = eg_leave_submit($db, ['employee_id' => $NOAGENT, 'leave_type_id' => $TYPE_AGENT,
+    'start_datetime' => "$d2 13:00:00", 'end_datetime' => "$d2 15:00:00",
+    'reason' => '__test__硬塞代理人應被忽略', 'agent_user_id' => 10, 'upload_token' => '']);
+ok(!empty($r3['ok']), '無代理設定者仍可送出', $r3['msg'] ?? '');
+if (!empty($r3['id'])) {
+    $created[] = (int)$r3['id'];
+    $req3 = $db->query("SELECT agent_user_id FROM leave_request WHERE id=" . (int)$r3['id'])->fetch(PDO::FETCH_ASSOC);
+    ok((int)($req3['agent_user_id'] ?? 0) !== 10, '前端硬塞的代理人被忽略（不採用未經解析的值）', json_encode($req3));
+}
 
 // 清理（只刪本腳本建立的）
 foreach ($created as $id) {
@@ -51,6 +67,7 @@ foreach ($created as $id) {
         $db->exec("DELETE FROM evenement_actor WHERE event_id=" . (int)$ev);
         $db->exec("DELETE FROM evenement WHERE id=" . (int)$ev);
     }
+    $db->exec("DELETE FROM leave_request_agent WHERE leave_request_id=$id");
     $db->exec("DELETE FROM leave_sign_record WHERE leave_request_id=$id");
     $db->exec("DELETE FROM leave_approval WHERE leave_request_id=$id");
     $db->exec("DELETE FROM leave_request WHERE id=$id");

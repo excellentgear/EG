@@ -167,6 +167,163 @@ if (!function_exists('eg_leave_calc_amount')) {
     }
 }
 
+// ============================== 職務代理人自動解析 ==============================
+
+if (!function_exists('eg_leave_user_busy_in_range')) {
+    /**
+     * 某人在指定期間內是否也請假（pending 或 approved 皆算，因為 pending 有可能會通過）。
+     * 用於「第一順位代理人自己也請假 → 換下一順位」的判定。
+     * @return array|null 重疊的請假單摘要；無重疊回 null
+     */
+    function eg_leave_user_busy_in_range(PDO $db, int $uid, string $start, string $end, int $excludeReqId = 0): ?array {
+        try {
+            $sql = "SELECT lr.id, lr.start_datetime, lr.end_datetime, lr.status, lt.leave_name
+                    FROM leave_request lr LEFT JOIN leave_type lt ON lt.id = lr.leave_type_id
+                    WHERE lr.employee_id = ? AND lr.status IN ('pending','approved')
+                      AND lr.start_datetime < ? AND lr.end_datetime > ?";
+            $args = [$uid, $end, $start];
+            if ($excludeReqId > 0) { $sql .= " AND lr.id <> ?"; $args[] = $excludeReqId; }
+            $sql .= " ORDER BY lr.start_datetime LIMIT 1";
+            $st = $db->prepare($sql);
+            $st->execute($args);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            return $r ?: null;
+        } catch (Throwable $e) { return null; }   // 查詢失敗就當沒衝突，不擋流程
+    }
+}
+
+if (!function_exists('eg_leave_resolve_agents')) {
+    /**
+     * 自動解析請假期間的職務代理人（2026-07-30 使用者定案：**代理人不由申請人挑選**）。
+     *
+     * 規則：
+     *  1. 人事設定（hr_settings 代理人設定）已有優先順序，就照順序取「第一順位」。
+     *  2. 若第一順位代理人在此人請假期間**自己也請假**（pending 或 approved 且時段重疊），
+     *     跳過他、改通知第二順位；以此類推。
+     *  3. 申請人有多個職務身分（主職＋兼任）時，**每個身分各自解析一位**——
+     *     因為請假是整個人都不在，各身分的工作都要有人接，且各身分的代理設定可能是不同人。
+     *  4. 某身分所有順位都不可用（都請假）→ 該身分記為無可用代理人，但**不擋請假**，
+     *     只在單上標明讓主管知道。
+     *
+     * @return array 每個身分一列：[
+     *   'scope_department_id','scope_position_id','scope_label','is_main',
+     *   'agent_user_id'(?int),'agent_name'(string),'priority_used'(?int),
+     *   'skipped'(array 被跳過者與原因),'reason'(string 人話說明)
+     * ]
+     */
+    function eg_leave_resolve_agents(PDO $db, int $applicantId, string $start, string $end, int $excludeReqId = 0): array {
+        // 取此人所有職務身分的代理候選（已含身分標籤，依 priority 排序）
+        $cands = eg_person_delegate_candidates($db, $applicantId);
+        if (empty($cands)) return [];
+
+        // 依身分分組（保持 priority 順序）
+        $groups = [];
+        foreach ($cands as $c) {
+            $key = ($c['scope_department_id'] ?? 'g') . '-' . ($c['scope_position_id'] ?? 'g');
+            if (!isset($groups[$key])) {
+                $groups[$key] = [
+                    'scope_department_id' => $c['scope_department_id'],
+                    'scope_position_id'   => $c['scope_position_id'],
+                    'scope_label'         => $c['scope_label'],
+                    'is_main'             => $c['is_main'],
+                    'cands'               => [],
+                ];
+            }
+            $groups[$key]['cands'][] = $c;
+        }
+
+        $out = [];
+        foreach ($groups as $g) {
+            $picked = null; $pri = 0; $skipped = [];
+            foreach ($g['cands'] as $i => $c) {
+                $pri = $i + 1;
+                $uid = (int)$c['user_id'];
+                if ($uid === $applicantId) {          // 自己不能代理自己
+                    $skipped[] = ['name' => $c['user_cname'], 'priority' => $pri, 'why' => '即申請人本人'];
+                    continue;
+                }
+                $busy = eg_leave_user_busy_in_range($db, $uid, $start, $end, $excludeReqId);
+                if ($busy) {
+                    $skipped[] = ['name' => $c['user_cname'], 'priority' => $pri,
+                                  'why' => '同期間也請假（' . ($busy['leave_name'] ?? '請假') . ' #' . $busy['id']
+                                           . '，' . substr((string)$busy['start_datetime'], 0, 10) . ' 起）'];
+                    continue;
+                }
+                $picked = $c; break;
+            }
+
+            if ($picked) {
+                $reason = '第 ' . $pri . ' 順位代理人';
+                if ($skipped) {
+                    $why = array_map(function ($s) { return $s['name'] . '（' . $s['why'] . '）'; }, $skipped);
+                    $reason .= '；已跳過 ' . implode('、', $why);
+                }
+                if (($picked['source'] ?? '') === 'BY_POSITION') $reason .= '（由職稱代理解析）';
+                $out[] = [
+                    'scope_department_id' => $g['scope_department_id'],
+                    'scope_position_id'   => $g['scope_position_id'],
+                    'scope_label'         => $g['scope_label'],
+                    'is_main'             => $g['is_main'],
+                    'agent_user_id'       => (int)$picked['user_id'],
+                    'agent_name'          => (string)$picked['user_cname'],
+                    'priority_used'       => $pri,
+                    'skipped'             => $skipped,
+                    'reason'              => $reason,
+                ];
+            } else {
+                $why = array_map(function ($s) { return $s['name'] . '（' . $s['why'] . '）'; }, $skipped);
+                $out[] = [
+                    'scope_department_id' => $g['scope_department_id'],
+                    'scope_position_id'   => $g['scope_position_id'],
+                    'scope_label'         => $g['scope_label'],
+                    'is_main'             => $g['is_main'],
+                    'agent_user_id'       => null,
+                    'agent_name'          => '',
+                    'priority_used'       => null,
+                    'skipped'             => $skipped,
+                    'reason'              => '此身分所有代理人於本期間皆無法代理' . ($why ? '：' . implode('、', $why) : ''),
+                ];
+            }
+        }
+        return $out;
+    }
+}
+
+if (!function_exists('eg_leave_save_agents')) {
+    /** 把解析結果寫入 leave_request_agent（先清後寫，供修改單時重算）。須在呼叫端的 transaction 內。 */
+    function eg_leave_save_agents(PDO $db, int $requestId, array $agents): void {
+        $db->prepare("DELETE FROM leave_request_agent WHERE leave_request_id = ?")->execute([$requestId]);
+        if (!$agents) return;
+        $ins = $db->prepare("INSERT INTO leave_request_agent
+                               (leave_request_id, scope_department_id, scope_position_id, scope_label,
+                                is_main, agent_user_id, priority_used, skipped_json, resolve_reason)
+                             VALUES (?,?,?,?,?,?,?,?,?)");
+        foreach ($agents as $a) {
+            $ins->execute([$requestId, $a['scope_department_id'], $a['scope_position_id'],
+                           (string)$a['scope_label'],
+                           $a['is_main'] === null ? null : ($a['is_main'] ? 1 : 0),
+                           $a['agent_user_id'], $a['priority_used'],
+                           $a['skipped'] ? json_encode($a['skipped'], JSON_UNESCAPED_UNICODE) : null,
+                           (string)$a['reason']]);
+        }
+    }
+}
+
+if (!function_exists('eg_leave_get_agents')) {
+    /** 讀某單已存的代理人解析結果（含姓名）。 */
+    function eg_leave_get_agents(PDO $db, int $requestId): array {
+        try {
+            $st = $db->prepare("SELECT ra.*, u.user_cname AS agent_name
+                                FROM leave_request_agent ra
+                                LEFT JOIN user u ON u.id = ra.agent_user_id
+                                WHERE ra.leave_request_id = ?
+                                ORDER BY (ra.is_main IS NULL), ra.is_main DESC, ra.id");
+            $st->execute([$requestId]);
+            return $st->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { return []; }
+    }
+}
+
 // ============================== 排班連動（固定班別） ==============================
 
 if (!function_exists('eg_leave_roster_shift')) {
@@ -644,22 +801,18 @@ if (!function_exists('eg_leave_submit')) {
             }
         }
 
-        // 代理人（唯讀候選來自 delegate_lib，禁自查 user_delegate）
-        // 2026-07-29 使用者定調：現場人員多半不需要職務代理（主管會直接安排工作），只有主管與
-        // 辦公室人員才設代理。因此「必填」的條件是：此人確實有設代理人候選時才必填；
-        // 一個候選都沒有＝此職務不需代理，允許不指定，不可因此卡住請假。
-        if ((int)$type['agent'] === 1) {
-            $cands = eg_person_delegate_candidates($db, $uid);
-            if (empty($cands)) {
-                $agentId = null;   // 無代理人設定＝此職務不需代理，放行
-            } else {
-                if ($agentId <= 0) return ['ok' => false, 'msg' => '此假別須指定職務代理人（您已設有代理人，請於下拉選擇）'];
-                $ok = false;
-                foreach ($cands as $c) { if ((int)$c['user_id'] === $agentId) { $ok = true; break; } }
-                if (!$ok) return ['ok' => false, 'msg' => '指定的代理人不在您的代理人設定中，請洽人事於「人事設定」維護代理人'];
-            }
-        } else {
-            $agentId = $agentId > 0 ? $agentId : null;
+        // 代理人（2026-07-30 使用者定案：**不由申請人挑選**）
+        // 人事設定已有優先順序，系統自動取第一順位；該順位若在本期間也請假就往下一位；
+        // 多個職務身分（主職＋兼任）各自解析一位。無任何代理設定＝此職務不需代理，放行不擋。
+        $agents = ((int)$type['agent'] === 1) ? eg_leave_resolve_agents($db, $uid, $start, $end) : [];
+        // leave_request.agent_user_id 保留存「主職身分那位」（相容既有顯示與通知）；
+        // 完整的每身分結果存 leave_request_agent。
+        $agentId = null;
+        foreach ($agents as $a) {
+            if (!empty($a['agent_user_id']) && ($a['is_main'] === true || $a['is_main'] === null)) { $agentId = (int)$a['agent_user_id']; break; }
+        }
+        if ($agentId === null) {
+            foreach ($agents as $a) { if (!empty($a['agent_user_id'])) { $agentId = (int)$a['agent_user_id']; break; } }
         }
 
         // 附件需求（temp 附件是否存在）
@@ -711,11 +864,14 @@ if (!function_exists('eg_leave_submit')) {
                    ->execute([$reqId, $token]);
             }
 
+            // 代理人解析結果（每個職務身分一列）
+            eg_leave_save_agents($db, $reqId, $agents);
+
             // 行事曆：送審即寫「請假申請中」事件（核准時轉正）；免簽假別直接寫正式休假
             // 申請中的可見對象＝申請人＋簽核鏈主管（讓主管在行事曆上就看到有人要請假）
             $viewers = [];
             foreach ($chain as $c) $viewers[] = (int)$c['user_id'];
-            if ($agentId) $viewers[] = (int)$agentId;
+            foreach ($agents as $a) if (!empty($a['agent_user_id'])) $viewers[] = (int)$a['agent_user_id'];
             $evId = eg_leave_event_create_pending($db, $reqId, $uid, $tid, (string)$type['leave_name'], $start, $end, $viewers);
             if ($evId) {
                 if (!$needApproval) eg_leave_event_approve($db, $evId, $reqId);
@@ -841,18 +997,15 @@ if (!function_exists('eg_leave_update')) {
             }
         }
 
-        // 代理人（同送審規則：有候選才必填）
-        $agentId = (int)($in['agent_user_id'] ?? 0);
-        if ((int)$type['agent'] === 1) {
-            $cands = eg_person_delegate_candidates($db, $uid);
-            if (empty($cands)) { $agentId = null; }
-            else {
-                if ($agentId <= 0) return ['ok' => false, 'msg' => '此假別須指定職務代理人'];
-                $ok = false;
-                foreach ($cands as $c) { if ((int)$c['user_id'] === $agentId) { $ok = true; break; } }
-                if (!$ok) return ['ok' => false, 'msg' => '指定的代理人不在您的代理人設定中'];
-            }
-        } else { $agentId = $agentId > 0 ? $agentId : null; }
+        // 代理人：改單後期間可能變了，重新自動解析（排除本單自己，否則會判定「代理人也請假」）
+        $agents = ((int)$type['agent'] === 1) ? eg_leave_resolve_agents($db, $uid, $start, $end, $requestId) : [];
+        $agentId = null;
+        foreach ($agents as $a) {
+            if (!empty($a['agent_user_id']) && ($a['is_main'] === true || $a['is_main'] === null)) { $agentId = (int)$a['agent_user_id']; break; }
+        }
+        if ($agentId === null) {
+            foreach ($agents as $a) { if (!empty($a['agent_user_id'])) { $agentId = (int)$a['agent_user_id']; break; } }
+        }
 
         // 證明文件需求可能因假別/天數改變而變動
         $st = $db->prepare("SELECT COUNT(*) FROM leave_attachment WHERE leave_request_id = ? AND status = 'active'");
@@ -888,6 +1041,8 @@ if (!function_exists('eg_leave_update')) {
                                      VALUES (?,?,?,?, 'pending')");
                 foreach ($chain as $c) $ins->execute([$requestId, $c['level'], $c['level'], $c['user_id']]);
             }
+            eg_leave_save_agents($db, $requestId, $agents);   // 代理人依新期間重算
+
             // 軌跡留痕：step_no=98 表示「內容修改」
             $db->prepare("INSERT INTO leave_sign_record (leave_request_id, step_no, signer_id, action, remark, signed_at)
                           VALUES (?, 98, ?, 'edited', ?, NOW())")
@@ -1017,11 +1172,22 @@ if (!function_exists('eg_leave_sign')) {
             eg_leave_notify($db, $requestId, "❌ 請假單 #{$requestId} 已退回", $baseBody . ($remark !== '' ? "\n退回意見：{$remark}" : ''),
                             [(int)$req['employee_id']], $userId, $reason);
         } elseif ($final && $approvedAll) {
-            // 全過：通知申請人＋代理人（代理人此刻才被告知接手，2026-07-28 定案）
+            // 全過：通知申請人＋所有職務身分的代理人（代理人此刻才被告知接手，2026-07-28 定案）
             $targets = [(int)$req['employee_id']];
-            if (!empty($req['agent_user_id'])) $targets[] = (int)$req['agent_user_id'];
             $agentLine = '';
-            if (!empty($req['agent_user_id'])) {
+            $agentRows = eg_leave_get_agents($db, $requestId);
+            foreach ($agentRows as $ar) {
+                if (empty($ar['agent_user_id'])) {
+                    $agentLine .= "\n代理（{$ar['scope_label']}）：⚠ 無可用代理人（" . $ar['resolve_reason'] . '）';
+                    continue;
+                }
+                $targets[] = (int)$ar['agent_user_id'];
+                $agentLine .= "\n代理（{$ar['scope_label']}）：" . (string)$ar['agent_name']
+                            . '（' . $ar['resolve_reason'] . '）';
+            }
+            if ($agentRows) $agentLine .= "\n請上列代理人於請假期間協助代理職務。";
+            elseif (!empty($req['agent_user_id'])) {   // 相容舊單（沒有 leave_request_agent 資料）
+                $targets[] = (int)$req['agent_user_id'];
                 $names->execute([(int)$req['agent_user_id']]);
                 $agentLine = "\n職務代理人：" . (string)$names->fetchColumn() . "（請假期間請協助代理職務）";
             }
@@ -1101,6 +1267,10 @@ if (!function_exists('eg_leave_cancel')) {
                 $st->execute([$requestId]);
                 $targets = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
             } catch (Throwable $e) {}
+            // 通知所有被指派過的代理人（多身分各一位），舊單無資料時退回單一欄位
+            foreach (eg_leave_get_agents($db, $requestId) as $ar) {
+                if (!empty($ar['agent_user_id'])) $targets[] = (int)$ar['agent_user_id'];
+            }
             if (!empty($req['agent_user_id'])) $targets[] = (int)$req['agent_user_id'];
             eg_leave_notify($db, $requestId, "↩️ 請假單 #{$requestId} 已銷假", $body, $targets, $userId, (string)$req['reason']);
         } else {
@@ -1222,6 +1392,8 @@ if (!function_exists('eg_leave_delete')) {
             if ($evId) eg_leave_event_remove($db, $evId);
             // 附件（DB 列；實體檔在交易外刪，避免交易回滾後檔案已消失）
             $db->prepare("DELETE FROM leave_attachment WHERE leave_request_id = ?")->execute([$requestId]);
+            // 代理人解析結果
+            $db->prepare("DELETE FROM leave_request_agent WHERE leave_request_id = ?")->execute([$requestId]);
             // 簽核流程與軌跡
             $db->prepare("DELETE FROM leave_sign_record WHERE leave_request_id = ?")->execute([$requestId]);
             $db->prepare("DELETE FROM leave_approval WHERE leave_request_id = ?")->execute([$requestId]);

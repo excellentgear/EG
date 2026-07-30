@@ -139,6 +139,13 @@ case 'preview': {
     } else {
         $ret['signers'] = [];
     }
+    // 代理人預覽（系統自動依順位解析，申請人不需挑選）
+    if ($start && $end && (int)$type['agent'] === 1) {
+        $ret['agents'] = eg_leave_resolve_agents($db, $user_id, $start, $end);
+    } else {
+        $ret['agents'] = [];
+    }
+    $ret['agent_required'] = ((int)$type['agent'] === 1);
     out($ret);
 }
 
@@ -163,7 +170,7 @@ case 'submit': {
         'start_datetime' => trim((string)($_POST['start_datetime'] ?? '')),
         'end_datetime'   => trim((string)($_POST['end_datetime'] ?? '')),
         'reason'         => trim((string)($_POST['reason'] ?? '')),
-        'agent_user_id'  => (int)($_POST['agent_user_id'] ?? 0),
+        // 代理人不再由前端傳入：系統依人事設定的順位自動解析（2026-07-30 定案）
         'upload_token'   => $token,
     ]);
     // 送審成功：把 temp 目錄的實體檔搬到正式目錄 req_<id>（DB 轉正已在 lib 的 transaction 內完成）
@@ -201,7 +208,7 @@ case 'update': {
         'start_datetime' => trim((string)($_POST['start_datetime'] ?? '')),
         'end_datetime'   => trim((string)($_POST['end_datetime'] ?? '')),
         'reason'         => trim((string)($_POST['reason'] ?? '')),
-        'agent_user_id'  => (int)($_POST['agent_user_id'] ?? 0),
+        // 代理人不再由前端傳入：系統依人事設定的順位自動解析（2026-07-30 定案）
     ], $IS_ADMIN);
     out(['success' => $r['ok'], 'message' => $r['msg'], 'id' => $r['id'] ?? null]);
 }
@@ -356,6 +363,7 @@ case 'detail': {
     $edit = eg_leave_can_edit($db, $req, $user_id, $IS_ADMIN);
     out(['success' => true, 'request' => $req, 'approvals' => $approvals,
          'sign_records' => $signs, 'attachments' => $attaches,
+         'agents' => eg_leave_get_agents($db, $reqId),   // 每個職務身分的代理人與解析原因
          'can_cancel' => ((int)$req['employee_id'] === $user_id || $IS_ADMIN)
                           && in_array($req['status'], ['pending', 'approved'], true),
          'can_edit' => $edit['ok'], 'edit_reason' => $edit['reason'],

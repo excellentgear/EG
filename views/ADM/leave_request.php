@@ -197,18 +197,14 @@ input[type=number]{-moz-appearance:textfield;}
         </div>
 
         <div class="row">
-          <div class="col-md-4 col-sm-6" style="margin-bottom:10px;" id="agentWrap">
-            <label>職務代理人 <span id="agentReq" style="color:var(--coral);display:none;">*</span></label>
-            <select class="form-control input-sm" id="fAgent"></select>
-            <div id="agentNote" style="font-size:11.5px;color:#9a7b4f;margin-top:3px;">
-              代理人清單來自「人事設定」的代理人設定，本頁不提供新增；核准後系統會通知他接手職務。
-            </div>
-          </div>
-          <div class="col-md-8" style="margin-bottom:10px;">
+          <div class="col-md-12" style="margin-bottom:10px;">
             <label>請假原因</label>
             <input type="text" class="form-control input-sm eg-inp" id="fReason" maxlength="200" placeholder="簡述原因（選填）">
           </div>
         </div>
+
+        <!-- 職務代理人：系統依「人事設定」的優先順位自動決定，申請人不需挑選 -->
+        <div id="agentPrev" class="signer-prev" style="display:none;margin-bottom:10px;"></div>
 
         <!-- 證明文件：只有假別在「人事設定→假別設定」勾了「需附證明文件」才會出現整個區塊 -->
         <div class="row" id="attachBlock" style="display:none;">
@@ -424,24 +420,7 @@ function boot(){
     // 假別下拉
     const $t = $('#fType').empty().append('<option value="">請選擇假別</option>');
     TYPES.forEach(t => $t.append('<option value="'+t.id+'">'+esc(t.leave_name)+'</option>'));
-    // 代理人下拉
-    // 代理人下拉依「職務身分」分組（主職／兼任的代理可能是不同人，要標清楚是哪個身分的代理）
-    const $a = $('#fAgent').empty().append('<option value="">'
-      + (AGENTS.length ? '請選擇代理人' : '（不需指定代理人）') + '</option>');
-    const byScope = {};
-    AGENTS.forEach(function(a){
-      const k = a.scope_label || '不分身分';
-      (byScope[k] = byScope[k] || []).push(a);
-    });
-    Object.keys(byScope).forEach(function(k){
-      const mark = byScope[k][0].is_main === true ? '[主] ' : (byScope[k][0].is_main === false ? '[兼] ' : '');
-      const $g = $('<optgroup>').attr('label', mark + k);
-      byScope[k].forEach(function(a){
-        $g.append('<option value="'+a.user_id+'">'+esc(a.user_cname)
-                  + (a.source === 'BY_POSITION' ? '（職稱代理）' : '') + '</option>');
-      });
-      $a.append($g);
-    });
+    // 代理人不再由申請人挑選：系統依人事設定的順位自動解析，改以 renderAgentPreview() 唯讀顯示
     renderAnnual(r.annual);
     if(IS_ADMIN){ $('#psHeader').val(SETTINGS.print_header||''); $('#psFooter').val(SETTINGS.print_footer||''); }
     // 附件根目錄未設定的警告改在「選到需附證明的假別」時才顯示（見假別切換），此處不預先顯示
@@ -460,27 +439,14 @@ function renderAnnual(an){
 // ── 假別切換：代理人/證明文件需求提示 ──
 $(document).on('change', '#fType', function(){
   const t = TYPES.find(x => String(x.id) === String(this.value));
-  if(!t){ $('#typeHint').text(''); $('#agentReq').hide(); $('#attReq').hide(); $('#attachBlock').hide(); $('#signerPrev').hide(); return; }
+  if(!t){ $('#typeHint').text(''); $('#attReq').hide(); $('#attachBlock').hide();
+          $('#signerPrev').hide(); $('#agentPrev').hide(); return; }
   const unit = {hour:'可請時假（以半小時為單位）', halfday:'以半天為單位（不足半天以半天計）', day:'以整天為單位'}[t.unit_type] || '';
   let hint = unit;
   if(+t.need_approval === 0) hint += '｜此假別免主管簽核';
   else hint += '｜需簽核至第 ' + t.max_approval_level + ' 層主管';
   $('#typeHint').text(hint);
-  // 代理人：只有「此人確實有設代理人候選」時才是必填。現場人員多半不設代理（主管直接安排工作），
-  // 這時不顯示必填星號、也不擋送出，只提示不需指定。
-  const agentNeeded = (+t.agent === 1) && AGENTS.length > 0;
-  $('#agentReq').toggle(agentNeeded);
-  $('#agentNote').html(
-    (+t.agent !== 1)
-      ? '此假別不需指定職務代理人。'
-      : (AGENTS.length
-          ? ('代理人清單來自「人事設定」的代理人設定（依職務身分分組，本頁不提供新增）；核准後系統會通知他接手職務。'
-             + (Object.keys(AGENTS.reduce((m,a)=>{m[a.scope_label||'']=1;return m;},{})).length > 1
-                ? '<br><span style="color:#8a5a1a;">您有多個職務身分、各自設有不同代理人，目前只能指定一位；'
-                  + '若需要各身分分別指定，請告知人事調整。</span>' : ''))
-          : '<span style="color:#8a5a1a;">您目前沒有設定職務代理人，視為此職務不需代理，可直接送出。'
-            + '若需要指定（例如主管職），請洽人事於「人事設定 → 代理人設定」新增。</span>')
-  );
+  // 代理人由系統自動解析，畫面在 doPreview() 回來時以 renderAgentPreview() 唯讀顯示
   // 沒設定「需附證明文件」的假別，整個上傳區塊不出現（使用者要求 2026-07-29）
   const needAtt = (+t.require_attachment === 1);
   $('#attReq').toggle(needAtt);
@@ -605,6 +571,37 @@ function applyShift(force){
   });
 }
 
+// ── 職務代理人預覽（唯讀）：系統依人事設定的順位自動決定，第一順位同期間也請假就換下一位 ──
+function renderAgentPreview(r){
+  const $p = $('#agentPrev');
+  if(!r.agent_required){
+    $p.html('<b><i class="fa fa-user-o"></i> 職務代理人：</b>此假別不需代理人。').show();
+    return;
+  }
+  const ags = r.agents || [];
+  if(!ags.length){
+    $p.html('<b><i class="fa fa-user-o"></i> 職務代理人：</b>'
+      + '<span style="color:#8a5a1a;">您尚未設定職務代理人，視為此職務不需代理，可直接送出。'
+      + '若需要指定（例如主管職），請洽人事於「人事設定 → 代理人設定」新增。</span>').show();
+    return;
+  }
+  let h = '<b><i class="fa fa-user-o"></i> 請假期間將由以下人員代理（系統依「人事設定」的順位自動決定，不需挑選）：</b><br>';
+  ags.forEach(function(a){
+    const mark = a.is_main === true ? '[主]' : (a.is_main === false ? '[兼]' : '');
+    h += '<span class="lvl">' + esc(mark + ' ' + (a.scope_label||'')) + '</span>';
+    if(a.agent_user_id){
+      h += '<b>' + esc(a.agent_name) + '</b>'
+         + ' <span style="color:#9a7b4f;">— ' + esc(a.reason) + '</span><br>';
+    } else {
+      h += '<span style="color:#a3341f;">⚠ 無可用代理人</span>'
+         + ' <span style="color:#9a7b4f;">— ' + esc(a.reason) + '</span><br>';
+    }
+  });
+  h += '<span style="color:#9a7b4f;font-size:11.5px;">※ 核准後系統會通知上列代理人接手職務；'
+     + '若代理人在您請假期間也請假，會自動改由下一順位代理。</span>';
+  $p.html(h).show();
+}
+
 // ── 試算＋簽核人預覽 ──
 let previewTimer = null;
 function doPreview(){
@@ -618,6 +615,8 @@ function doPreview(){
         $('#fAmount').val(r.amount.hours>0 ? (num(r.amount.hours)+' 小時（'+num(r.amount.days)+' 天，'+r.amount.workdays+' 個工作日）') : '時段內無工作日');
       } else $('#fAmount').val('');
       if(r.annual) renderAnnual(r.annual);
+      // 代理人：系統自動依順位解析，畫面只顯示結果與原因（申請人無法挑選）
+      renderAgentPreview(r);
       if(r.signers && r.signers.length){
         let h = '<b><i class="fa fa-users"></i> 將由以下人員簽核：</b><br>';
         r.signers.forEach(function(g){
@@ -687,7 +686,7 @@ function submitLeave(){
   $('#applyMsg').html(editingId ? '儲存中…' : '送出中…');
   const payload = {
     csrf:CSRF, leave_type_id:tid, start_datetime: s, end_datetime: e,
-    reason: $('#fReason').val(), agent_user_id: $('#fAgent').val()||0
+    reason: $('#fReason').val()   // 代理人由後端自動解析，不從前端傳
   };
   if(editingId){ payload.action = 'update'; payload.id = editingId; }
   else { payload.action = 'submit'; payload.upload_token = uploadToken; }
@@ -711,8 +710,8 @@ function submitLeave(){
 function resetForm(keepMsg){
   $('#fType').val(''); $('#fTimeFrom').val(''); $('#fTimeTo').val(''); $('#fAmount').val('');
   $('#fDateFrom').val(''); $('#fDateTo').val(''); $('#shiftHint').hide(); shiftApplied = false;
-  $('#fReason').val(''); $('#fAgent').val(''); $('#tempList').empty();
-  $('#signerPrev').hide(); $('#typeHint').text(''); $('#agentReq').hide();
+  $('#fReason').val(''); $('#tempList').empty();
+  $('#signerPrev').hide(); $('#agentPrev').hide(); $('#typeHint').text('');
   $('#attReq').hide(); $('#attachBlock').hide(); $('#attMsg').text('');
   const ff0 = document.getElementById('fFile'); if(ff0) ff0.value = '';
   if(!keepMsg) $('#applyMsg').empty();
@@ -900,7 +899,19 @@ function openDetail(id){
              + (isFullDayLeave(o) ? ' <span class="tag-soft">整天</span>' : '')
              + (+o.is_backdated===1 ? ' <span class="tag-soft">補請假</span>' : ''));
     h += row('時數／天數', num(o.total_hours)+' 小時 / '+num(o.total_days)+' 天');
-    h += row('職務代理人', esc(o.agent_name || '—'));
+    // 職務代理人：每個職務身分各一位（系統依人事設定順位自動解析），舊單退回單一欄位
+    let agentHtml = '';
+    if((r.agents||[]).length){
+      agentHtml = r.agents.map(function(a){
+        const mark = (String(a.is_main) === '1') ? '[主] ' : (a.is_main === null ? '' : '[兼] ');
+        return '<div>' + esc(mark + (a.scope_label||'')) + '：'
+             + (a.agent_user_id ? '<b>'+esc(a.agent_name)+'</b>' : '<span style="color:#a3341f;">無可用代理人</span>')
+             + ' <span style="color:#9a7b4f;font-size:12px;">'+esc(a.resolve_reason||'')+'</span></div>';
+      }).join('');
+    } else {
+      agentHtml = esc(o.agent_name || '—');
+    }
+    h += row('職務代理人', agentHtml);
     h += row('請假原因', esc(o.reason||'—'));
     if(o.status === 'canceled') h += row('銷假原因', esc(o.cancel_reason||'—') + '（' + esc(String(o.canceled_at||'').substring(0,16)) + '）');
     h += '</tbody></table>';
@@ -1022,8 +1033,7 @@ function startEdit(){
   $('#fDateTo').val(ed.substring(0,10) === sd.substring(0,10) ? '' : ed.substring(0,10));
   $('#fTimeTo').val(ed.substring(11,16));
   $('#fReason').val(o.reason || '');
-  if(o.agent_user_id) $('#fAgent').val(o.agent_user_id);
-  shiftApplied = true;        // 帶回原值後不要被排班覆蓋
+  shiftApplied = true;        // 帶回原值後不要被排班覆蓋（代理人由後端依新期間重算）
   doPreview();
   $('#btnSubmit').html('<i class="fa fa-save"></i> 儲存修改（重新送審）');
   $('#editBanner').remove();
@@ -1060,7 +1070,6 @@ function requestChange(){
     $('#fDateTo').val(ed.substring(0,10) === sd.substring(0,10) ? '' : ed.substring(0,10));
     $('#fTimeTo').val(ed.substring(11,16));
     $('#fReason').val(o.reason || '');
-    if(o.agent_user_id) $('#fAgent').val(o.agent_user_id);
     shiftApplied = true; doPreview();
     $('#applyMsg').html('<span style="color:#8a5a1a;">原單 #'+o.id+' 已銷假，已帶回原內容，請調整後送出新的請假單。</span>');
     $('html, body').animate({scrollTop: 0}, 300);
