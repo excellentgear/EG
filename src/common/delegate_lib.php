@@ -119,29 +119,104 @@ if (!function_exists('eg_person_delegates')) {
 
 if (!function_exists('eg_person_delegate_candidates')) {
     /**
-     * 某人「目前有效」的候選代理人清單（含姓名，依 priority），供表單下拉選用。
-     * 用途：請假單等需要申請人「從已設定的代理人中指定一位」的場景（唯讀，不解析行程/SoD）。
-     * 與 eg_person_delegates() 同一套 scope 規則（精準職務身分優先，無則退全域），
-     * 若 BY_PERSON 無設定，退回 BY_POSITION（position_delegate → 指定負責人）。
-     * 回傳 [['user_id'=>int,'user_cname'=>string,'source'=>'BY_PERSON'|'BY_POSITION'], ...]；空陣列=無任何代理設定。
+     * 某人「目前有效」的候選代理人清單（含姓名與所屬職務身分），供表單下拉選用。
+     * 用途：請假單等需要申請人「從已設定的代理人中指定」的場景（唯讀，不解析行程/SoD）。
+     *
+     * **不指定 scope 時＝列出此人「所有職務身分」的代理**（主職＋每個兼任，再加不分身分的全域規則）。
+     * 理由：請假是「整個人都不在」，主職與兼任的代理可能是不同人，只查全域規則會把
+     * 綁了職務身分的設定全部漏掉（2026-07-30 實際踩到：葉卿雅三筆代理全綁身分，
+     * 畫面卻顯示「未設定代理人」）。指定 scope 時仍只回該身分的代理，行為不變。
+     *
+     * 回傳 [[
+     *   'user_id','user_cname','source'=>'BY_PERSON'|'BY_POSITION',
+     *   'scope_department_id','scope_position_id',
+     *   'scope_label'   // '管理部 / 會計'，全域規則為 '不分身分'
+     *   'is_main'       // 是否為主職身分（供前端標 [主]/[兼]）
+     * ], ...]；空陣列＝確實沒有任何代理設定。
      */
     function eg_person_delegate_candidates(PDO $db, int $targetUserId, ?int $scopeDep = null, ?int $scopePos = null): array {
-        $ids = eg_person_delegates($db, $targetUserId, $scopeDep, $scopePos);
+        // 指定了身分 → 維持原行為（只回該身分）
+        if ($scopeDep !== null && $scopePos !== null) {
+            return eg_person_delegate_cand_one($db, $targetUserId, $scopeDep, $scopePos, '', null);
+        }
+
+        // 未指定身分 → 逐一列出此人的每個職務身分，最後補上「不分身分」的全域規則
+        $identities = [];
+        try {
+            $st = $db->prepare("SELECT m.department_id, d.name AS dep_name, m.position_id, p.name AS pos_name, m.is_main
+                                FROM user_department_position_map m
+                                LEFT JOIN department d ON d.id = m.department_id
+                                LEFT JOIN position p ON p.id = m.position_id
+                                WHERE m.user_id = ?
+                                ORDER BY m.is_main DESC, m.department_id, m.position_id");
+            $st->execute([$targetUserId]);
+            $identities = $st->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {}
+
+        $out = []; $seen = [];
+        foreach ($identities as $m) {
+            $label = trim(($m['dep_name'] ?? '') . ' / ' . ($m['pos_name'] ?? ''));
+            $rows = eg_person_delegate_cand_one($db, $targetUserId, (int)$m['department_id'], (int)$m['position_id'],
+                                                $label, (int)$m['is_main'] === 1);
+            foreach ($rows as $r) {
+                $k = $r['user_id'] . '@' . $r['scope_department_id'] . '-' . $r['scope_position_id'];
+                if (isset($seen[$k])) continue;
+                $seen[$k] = 1; $out[] = $r;
+            }
+        }
+        // 不分身分（scope 皆 NULL）的規則
+        foreach (eg_person_delegate_cand_one($db, $targetUserId, null, null, '不分身分', null) as $r) {
+            $k = $r['user_id'] . '@global';
+            if (isset($seen[$k])) continue;
+            $seen[$k] = 1; $out[] = $r;
+        }
+        return $out;
+    }
+
+    /** 單一職務身分（或全域）的候選代理人；供 eg_person_delegate_candidates() 組裝用。 */
+    function eg_person_delegate_cand_one(PDO $db, int $targetUserId, ?int $dep, ?int $pos,
+                                        string $scopeLabel, ?bool $isMain): array {
+        $ids = [];
+        try {
+            if ($dep !== null && $pos !== null) {
+                // 該身分專屬規則（不退回全域，全域由呼叫端另外補，避免重複）
+                $st = $db->prepare("SELECT delegate_id FROM user_delegate
+                                    WHERE user_id = ? AND active = 1
+                                      AND start_date <= CURDATE() AND end_date >= CURDATE()
+                                      AND scope_department_id = ? AND scope_position_id = ?
+                                    ORDER BY priority ASC");
+                $st->execute([$targetUserId, $dep, $pos]);
+            } else {
+                $st = $db->prepare("SELECT delegate_id FROM user_delegate
+                                    WHERE user_id = ? AND active = 1
+                                      AND start_date <= CURDATE() AND end_date >= CURDATE()
+                                      AND scope_department_id IS NULL AND scope_position_id IS NULL
+                                    ORDER BY priority ASC");
+                $st->execute([$targetUserId]);
+            }
+            $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+        } catch (Throwable $e) { return []; }
+
         $source = 'BY_PERSON';
         if (empty($ids)) {
-            $ids = eg_position_delegate_persons($db, $targetUserId, $scopeDep, $scopePos);
+            // 人員代理沒設 → 退回職位代理（需該部門×職稱有指定負責人才解得出人）
+            $ids = eg_position_delegate_persons($db, $targetUserId, $dep, $pos);
             $source = 'BY_POSITION';
         }
         if (empty($ids)) return [];
+
         $out = [];
         try {
             $st = $db->prepare("SELECT user_cname FROM user WHERE id = ? AND state = 1");
             foreach ($ids as $id) {
-                if ($id === $targetUserId) continue; // 自己不能當自己的代理
+                if ($id === $targetUserId) continue;   // 自己不能當自己的代理
                 $st->execute([$id]);
                 $name = $st->fetchColumn();
-                if ($name === false) continue; // 離職者不列入
-                $out[] = ['user_id' => $id, 'user_cname' => (string)$name, 'source' => $source];
+                if ($name === false) continue;         // 離職者不列入
+                $out[] = ['user_id' => $id, 'user_cname' => (string)$name, 'source' => $source,
+                          'scope_department_id' => $dep, 'scope_position_id' => $pos,
+                          'scope_label' => $scopeLabel !== '' ? $scopeLabel : '不分身分',
+                          'is_main' => $isMain];
             }
         } catch (Throwable $e) { return []; }
         return $out;

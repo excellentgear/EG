@@ -1138,6 +1138,28 @@ if (!function_exists('eg_leave_is_superadmin')) {
     }
 }
 
+if (!function_exists('eg_leave_verify_superadmin_password')) {
+    /**
+     * 徹底刪除前的密碼確認：必須輸入 **員工 id=1 本人的密碼**（2026-07-30 使用者要求）。
+     * 比對方式沿用專案既有慣例（user.user_password 明碼欄位 + hash_equals 定時比較），
+     * 與共用帳號代簽的 eg_shared_resolve_actor() 一致，不另發明一套。
+     * 空密碼一律不放行（fail-closed）。
+     */
+    function eg_leave_verify_superadmin_password(PDO $db, string $password): array {
+        if ($password === '') return ['ok' => false, 'msg' => '請輸入最高權限帳號的密碼'];
+        try {
+            $st = $db->prepare("SELECT user_password FROM `user` WHERE id = 1 LIMIT 1");
+            $st->execute();
+            $real = $st->fetchColumn();
+            if ($real === false) return ['ok' => false, 'msg' => '查無最高權限帳號'];
+            if (!hash_equals((string)$real, $password)) return ['ok' => false, 'msg' => '密碼錯誤，未執行刪除'];
+        } catch (Throwable $e) {
+            return ['ok' => false, 'msg' => '密碼驗證失敗，未執行刪除'];
+        }
+        return ['ok' => true, 'msg' => ''];
+    }
+}
+
 if (!function_exists('eg_leave_delete')) {
     /**
      * 徹底刪除一張請假單及其所有關聯資料（僅管理員可呼叫；呼叫端負責權限與 CSRF）。

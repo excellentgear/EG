@@ -55,13 +55,31 @@ $api = file_get_contents('C:/MAMP/htdocs/EGsystem/src/store/Leave_API.php');
 ok(strpos($api, "case 'delete'") !== false, 'API 有 delete action');
 ok(preg_match('/case \'delete\':.*?if \(!eg_leave_is_superadmin\(\$db, \$user_id\)\) bad\(/s', $api) === 1,
    'delete 用 eg_leave_is_superadmin 守門（非一般管理者旗標）');
-ok(strpos($api, "\$_POST['confirm_id']") !== false, 'delete 需二次確認碼');
+ok(strpos($api, "\$_POST['confirm_id']") !== false, 'delete 需二次確認碼（單號）');
 ok(preg_match('/case \'delete\':.*?need_csrf\(\)/s', $api) === 1, 'delete 有 CSRF 守門');
+ok(strpos($api, 'eg_leave_verify_superadmin_password($db, (string)($_POST[\'password\'] ?? \'\'))') !== false,
+   'delete 需輸入 id=1 本人密碼（第三道關卡）');
+
+echo "== 密碼驗證正反例 ==\n";
+$realPw = (string)$db->query("SELECT user_password FROM `user` WHERE id=1")->fetchColumn();
+$v = eg_leave_verify_superadmin_password($db, '');
+ok(empty($v['ok']), '空密碼不放行（fail-closed）', $v['msg'] ?? '');
+$v = eg_leave_verify_superadmin_password($db, $realPw . 'x');
+ok(empty($v['ok']) && strpos($v['msg'], '密碼錯誤') !== false, '錯誤密碼被擋', $v['msg'] ?? '');
+if ($realPw !== '') {
+    $v = eg_leave_verify_superadmin_password($db, $realPw);
+    ok(!empty($v['ok']), '正確密碼通過驗證');
+} else { echo "  （id=1 密碼為空，略過正例）\n"; }
 $src = file_get_contents('C:/MAMP/htdocs/EGsystem/views/ADM/leave_request.php');
 ok(strpos($src, 'id="btnDeleteLeave"') !== false, '前端有刪除鈕');
 ok(strpos($src, 'if ($IS_SUPERADMIN):') !== false, '刪除鈕只對最高權限帳號輸出');
 ok(strpos($src, 'if(IS_SUPERADMIN) $(\'#btnDeleteLeave\').show()') !== false, 'JS 也只對最高權限顯示');
-ok(strpos($src, '確定要刪除請輸入單號') !== false, '前端要求輸入單號才刪');
+ok(strpos($src, 'id="delConfirmId"') !== false, '前端要求輸入單號才刪');
+ok(strpos($src, 'type="password" class="form-control input-sm" id="delPassword"') !== false,
+   '前端密碼欄為遮蔽輸入（不用 prompt 明碼）');
+ok(strpos($src, "password:pw") !== false, '前端會把密碼送給後端驗證');
+ok(strpos($src, "one('hidden.bs.modal'") !== false,
+   '關完詳情才開刪除窗（Bootstrap3 連續開窗會殘留遮罩）');
 
 echo "== 實際刪除並驗證完全清乾淨 ==\n";
 $auditBefore = (int)$db->query("SELECT COUNT(*) FROM audit_log WHERE action_type='LEAVE_DELETE' AND target_id='$rid'")->fetchColumn();

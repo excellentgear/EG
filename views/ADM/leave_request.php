@@ -313,6 +313,31 @@ input[type=number]{-moz-appearance:textfield;}
   </div>
 </div></div></div>
 
+<?php if ($IS_SUPERADMIN): ?>
+<!-- ═══ 徹底刪除確認 Modal（僅最高權限帳號；三道關卡：權限＋單號＋本人密碼）═══ -->
+<div class="modal fade" id="deleteModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header" style="background:#fbe6df;">
+    <button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title" style="color:#a3341f;"><i class="fa fa-exclamation-triangle"></i> 徹底刪除請假單 <span id="delReqNo"></span></h4>
+  </div>
+  <div class="modal-body lv-form">
+    <div style="background:#fdf0dc;border:1px solid #e9c98f;color:#8a5a1a;padding:9px 12px;border-radius:5px;font-size:13px;margin-bottom:12px;">
+      將一併刪除：<b>簽核流程與簽章軌跡、相關通知（含已發送到置頂欄的通知）、行事曆事件、附件檔案</b>。<br>
+      此操作<b>不可回復</b>，僅供測試使用；刪除內容會寫入稽核紀錄（audit_log）以便追溯。
+    </div>
+    <label>請輸入單號確認</label>
+    <input type="text" class="form-control input-sm" id="delConfirmId" placeholder="輸入上方單號的數字" autocomplete="off">
+    <label style="margin-top:10px;">最高權限帳號密碼 <span style="font-weight:400;font-size:11.5px;color:#9a7b4f;">（員工編號 1 本人密碼）</span></label>
+    <input type="password" class="form-control input-sm" id="delPassword" autocomplete="new-password">
+    <div id="delMsg" style="font-size:12.5px;margin-top:8px;min-height:18px;"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-default" data-dismiss="modal">取消</button>
+    <button class="btn btn-coral" onclick="doDeleteConfirm()"><i class="fa fa-trash"></i> 確認徹底刪除</button>
+  </div>
+</div></div></div>
+<?php endif; ?>
+
 <!-- ═══ 角色說明 Modal ═══ -->
 <div class="modal fade" id="roleHelpModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
   <div class="modal-header" style="background:var(--sand);">
@@ -400,9 +425,23 @@ function boot(){
     const $t = $('#fType').empty().append('<option value="">請選擇假別</option>');
     TYPES.forEach(t => $t.append('<option value="'+t.id+'">'+esc(t.leave_name)+'</option>'));
     // 代理人下拉
+    // 代理人下拉依「職務身分」分組（主職／兼任的代理可能是不同人，要標清楚是哪個身分的代理）
     const $a = $('#fAgent').empty().append('<option value="">'
       + (AGENTS.length ? '請選擇代理人' : '（不需指定代理人）') + '</option>');
-    AGENTS.forEach(a => $a.append('<option value="'+a.user_id+'">'+esc(a.user_cname)+'</option>'));
+    const byScope = {};
+    AGENTS.forEach(function(a){
+      const k = a.scope_label || '不分身分';
+      (byScope[k] = byScope[k] || []).push(a);
+    });
+    Object.keys(byScope).forEach(function(k){
+      const mark = byScope[k][0].is_main === true ? '[主] ' : (byScope[k][0].is_main === false ? '[兼] ' : '');
+      const $g = $('<optgroup>').attr('label', mark + k);
+      byScope[k].forEach(function(a){
+        $g.append('<option value="'+a.user_id+'">'+esc(a.user_cname)
+                  + (a.source === 'BY_POSITION' ? '（職稱代理）' : '') + '</option>');
+      });
+      $a.append($g);
+    });
     renderAnnual(r.annual);
     if(IS_ADMIN){ $('#psHeader').val(SETTINGS.print_header||''); $('#psFooter').val(SETTINGS.print_footer||''); }
     // 附件根目錄未設定的警告改在「選到需附證明的假別」時才顯示（見假別切換），此處不預先顯示
@@ -435,7 +474,10 @@ $(document).on('change', '#fType', function(){
     (+t.agent !== 1)
       ? '此假別不需指定職務代理人。'
       : (AGENTS.length
-          ? '代理人清單來自「人事設定」的代理人設定，本頁不提供新增；核准後系統會通知他接手職務。'
+          ? ('代理人清單來自「人事設定」的代理人設定（依職務身分分組，本頁不提供新增）；核准後系統會通知他接手職務。'
+             + (Object.keys(AGENTS.reduce((m,a)=>{m[a.scope_label||'']=1;return m;},{})).length > 1
+                ? '<br><span style="color:#8a5a1a;">您有多個職務身分、各自設有不同代理人，目前只能指定一位；'
+                  + '若需要各身分分別指定，請告知人事調整。</span>' : ''))
           : '<span style="color:#8a5a1a;">您目前沒有設定職務代理人，視為此職務不需代理，可直接送出。'
             + '若需要指定（例如主管職），請洽人事於「人事設定 → 代理人設定」新增。</span>')
   );
@@ -946,19 +988,24 @@ function openDetail(id){
 // ── 徹底刪除（僅管理者，測試用）：連通知、簽核紀錄、行事曆事件、附件一起刪，不可回復 ──
 function doDelete(){
   const o = curDetailReq; if(!o) return;
-  const ans = prompt('⚠ 徹底刪除請假單 #' + o.id + '\n\n'
-    + '會一併刪除：簽核流程與簽章軌跡、相關通知（含已發送的置頂欄通知）、行事曆事件、附件檔案。\n'
-    + '此操作【不可回復】，僅供測試使用（刪除動作會寫入稽核紀錄）。\n\n'
-    + '確定要刪除請輸入單號「' + o.id + '」：', '');
-  if(ans === null) return;
-  if(String(ans).trim() !== String(o.id)){ alert('輸入的單號不符，已取消刪除。'); return; }
-  $.post(API, {action:'delete', csrf:CSRF, id:o.id, confirm_id:o.id}, function(r){
+  $('#delReqNo').text('#' + o.id);
+  $('#delConfirmId').val(''); $('#delPassword').val(''); $('#delMsg').text('');
+  // 先關詳情再開刪除窗（Bootstrap3 兩窗接續開會殘留遮罩，等關完再開）
+  $('#detailModal').one('hidden.bs.modal', function(){ $('#deleteModal').modal('show'); }).modal('hide');
+}
+function doDeleteConfirm(){
+  const o = curDetailReq; if(!o) return;
+  const cid = $('#delConfirmId').val().trim(), pw = $('#delPassword').val();
+  if(cid !== String(o.id)){ $('#delMsg').html('<span style="color:#a3341f;">單號不符，請輸入 '+o.id+'</span>'); $('#delConfirmId').focus(); return; }
+  if(!pw){ $('#delMsg').html('<span style="color:#a3341f;">請輸入最高權限帳號的密碼</span>'); $('#delPassword').focus(); return; }
+  $('#delMsg').text('刪除中…');
+  $.post(API, {action:'delete', csrf:CSRF, id:o.id, confirm_id:cid, password:pw}, function(r){
+    if(!r.success){ $('#delMsg').html('<span style="color:#a3341f;">'+esc(r.message)+'</span>'); $('#delPassword').val('').focus(); return; }
+    $('#delPassword').val('');
+    $('#deleteModal').modal('hide');
     alert(r.message);
-    if(r.success){
-      $('#detailModal').modal('hide');
-      loadList(); refreshPendingCount();
-    }
-  }, 'json');
+    loadList(); refreshPendingCount();
+  }, 'json').fail(function(){ $('#delMsg').html('<span style="color:#a3341f;">刪除請求失敗</span>'); });
 }
 
 // ── 修改審核前的單：把原內容帶回申請分頁，改成「儲存修改」模式 ──

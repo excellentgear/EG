@@ -47,7 +47,11 @@ echo "== bootstrap ==\n";
 $r = call_api($UID, ['action' => 'bootstrap']);
 ok(!empty($r['success']), 'bootstrap 成功', json_encode(array_slice($r, 0, 3)));
 ok(!empty($r['csrf']), '回傳 CSRF token');
-ok(isset($r['leave_types']) && count($r['leave_types']) === 6, '假別 6 筆');
+// 假別筆數不寫死（管理員可自行新增假別），與 DB 實際筆數比對
+$typeN = (int)(new PDO("mysql:host=127.0.0.1;dbname=EGsystem;port=3306;charset=utf8mb4",
+                       "EG-TS2024", "excell30367593"))->query("SELECT COUNT(*) FROM leave_type")->fetchColumn();
+ok(isset($r['leave_types']) && count($r['leave_types']) === $typeN,
+   "假別筆數與 DB 一致（{$typeN} 筆）", (string)count($r['leave_types'] ?? []));
 ok(isset($r['annual']) && array_key_exists('remaining', $r['annual']), '特休摘要含 remaining', json_encode($r['annual'] ?? []));
 ok(isset($r['settings']['backdate_limit_days']), '設定含補請假天數');
 $hasUnit = !empty($r['leave_types'][0]['unit_type']);

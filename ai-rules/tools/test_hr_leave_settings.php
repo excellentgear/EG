@@ -90,6 +90,42 @@ $left = (int)$db->query("SELECT COUNT(*) FROM leave_type WHERE id=$newId")->fetc
 ok($left === 0, '假別已刪除');
 if ($left === 0) $createdTypes = array_diff($createdTypes, [$newId]);
 
+echo "== 假別顯示順序（2026-07-30 新增）==\n";
+$hs = file_get_contents('C:/MAMP/htdocs/EGsystem/views/ADM/hr_settings.php');
+// 比對 script 標籤本身（註解裡會提到檔名，不能用純字串比對）
+ok(strpos($hs, '<script src="../../resource/js/bootstrap.bundle.min.js">') === false,
+   '已移除 Bootstrap 5 bundle 的 script 標籤（v3/v5 並存會導致跳窗關不掉）');
+ok(substr_count($hs, 'resource/js/bootstrap') === 1, '只載入一個 Bootstrap 版本',
+   (string)substr_count($hs, 'resource/js/bootstrap'));
+ok(strpos($hs, 'btn-move-leave-type') !== false, '有上下移按鈕');
+ok(strpos($hs, "'move_leave_type'") !== false, '前端呼叫 move_leave_type');
+ok(strpos($hs, '目前新增修改完跳窗不會消失') === false, '已移除失效的「跳窗不會消失」說明');
+$col = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
+                        WHERE TABLE_SCHEMA='EGsystem' AND TABLE_NAME='leave_type' AND COLUMN_NAME='sort_order'")->fetchColumn();
+ok($col === 1, 'leave_type 有 sort_order 欄位');
+$r = api('get_leave_types');
+$orders = array_column($r['data'] ?? [], 'sort_order');
+ok(count($orders) > 0 && $orders === array_values(array_filter($orders, 'is_numeric')), '清單回傳 sort_order');
+$sorted = $orders; sort($sorted, SORT_NUMERIC);
+ok($orders === $sorted, '清單已依 sort_order 排序', json_encode($orders));
+
+// 實際移動：把第 2 筆上移，驗證與第 1 筆交換，再移回來
+$before = array_column($r['data'], 'id');
+if (count($before) >= 2) {
+    $m = api('move_leave_type', ['id' => $before[1], 'dir' => 'up'], 'POST');
+    ok(($m['status'] ?? '') === 'success', '上移成功', json_encode($m));
+    $after = array_column(api('get_leave_types')['data'], 'id');
+    ok($after[0] == $before[1] && $after[1] == $before[0], '順序確實交換',
+       json_encode([array_slice($before,0,2), array_slice($after,0,2)]));
+    // 移回原位
+    api('move_leave_type', ['id' => $before[1], 'dir' => 'down'], 'POST');
+    $restored = array_column(api('get_leave_types')['data'], 'id');
+    ok($restored === $before, '已還原原本順序（測試不留副作用）', json_encode(array_slice($restored,0,3)));
+    // 邊界：第一筆再上移不應報錯
+    $m2 = api('move_leave_type', ['id' => $before[0], 'dir' => 'up'], 'POST');
+    ok(($m2['status'] ?? '') === 'success' && empty($m2['moved']), '已在最前時上移不報錯且不動', json_encode($m2));
+}
+
 echo "== 請假系統設定讀寫 ==\n";
 $r = api('get_leave_settings');
 ok(($r['status'] ?? '') === 'success' && isset($r['data']['leave_backdate_limit_days']),

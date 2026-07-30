@@ -44,6 +44,10 @@ switch ($action) {
     case 'save_leave_settings':
         saveLeaveSettings($db);
         break;
+    // ── 假別顯示順序（2026-07-30 新增）──
+    case 'move_leave_type':
+        moveLeaveType($db);
+        break;
     default:
         echo json_encode(['status' => 'error', 'message' => '無效的操作。']);
         break;
@@ -141,14 +145,51 @@ function saveLeaveSettings($db) {
 }
 
 /**
+ * 假別顯示順序上移／下移（與相鄰那筆交換 sort_order）。
+ * 順序影響請假申請頁的假別下拉，故一律以 sort_order 為準（同值再以 id 排）。
+ */
+function moveLeaveType($db) {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status' => 'error', 'message' => '僅接受 POST 請求。']); exit; }
+    if (!isset($_SESSION['id'])) { echo json_encode(['status' => 'error', 'message' => '尚未登入。']); exit; }
+    $id  = isset($_POST['id']) ? (int)$_POST['id'] : 0;
+    $dir = ($_POST['dir'] ?? '') === 'up' ? 'up' : 'down';
+    if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '無效的 ID。']); exit; }
+
+    try {
+        // 依目前顯示順序取出全部，用陣列位置交換後重寫 sort_order，
+        // 這樣即使原本有同值或斷號也能穩定重排（不用擔心交換兩筆相同 sort_order 時無效）
+        $rows = $db->query("SELECT id FROM leave_type ORDER BY sort_order, id")->fetchAll(PDO::FETCH_COLUMN);
+        $ids = array_map('intval', $rows);
+        $pos = array_search($id, $ids, true);
+        if ($pos === false) { echo json_encode(['status' => 'error', 'message' => '找不到此假別。']); exit; }
+        $swap = $dir === 'up' ? $pos - 1 : $pos + 1;
+        if ($swap < 0 || $swap >= count($ids)) {
+            echo json_encode(['status' => 'success', 'message' => '已在' . ($dir === 'up' ? '最前' : '最後') . '，無需移動', 'moved' => false]);
+            exit;
+        }
+        $tmp = $ids[$pos]; $ids[$pos] = $ids[$swap]; $ids[$swap] = $tmp;
+
+        $db->beginTransaction();
+        $st = $db->prepare("UPDATE leave_type SET sort_order = ? WHERE id = ?");
+        foreach ($ids as $i => $lid) $st->execute([($i + 1) * 10, $lid]);
+        $db->commit();
+        echo json_encode(['status' => 'success', 'message' => '順序已更新', 'moved' => true]);
+    } catch (PDOException $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        echo json_encode(['status' => 'error', 'message' => '順序更新失敗: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
+/**
  * 獲取所有假別設定
  */
 function getLeaveTypes($db) { // 改為接收 $db
     try {
         // 使用 PDO 進行查詢
         $stmt = $db->query("SELECT id, leave_name, need_approval, agent, max_approval_level,
-                  unit_type, require_attachment, attach_min_days, allow_attach_later
-           FROM leave_type ORDER BY id");
+                  unit_type, require_attachment, attach_min_days, allow_attach_later, sort_order
+           FROM leave_type ORDER BY sort_order, id");
         $leaveTypes = $stmt->fetchAll(PDO::FETCH_ASSOC);
         echo json_encode(['status' => 'success', 'data' => $leaveTypes]);
     } catch (PDOException $e) { // 捕捉 PDOException
@@ -222,7 +263,7 @@ function getLeaveTypeDetails($db) { // 改為只接收 $db
 
     try {
         $stmt = $db->prepare("SELECT id, leave_name, need_approval, agent, max_approval_level,
-                  unit_type, require_attachment, attach_min_days, allow_attach_later
+                  unit_type, require_attachment, attach_min_days, allow_attach_later, sort_order
            FROM leave_type WHERE id = :id");
         $stmt->bindParam(':id', $id, PDO::PARAM_INT);
         $stmt->execute();

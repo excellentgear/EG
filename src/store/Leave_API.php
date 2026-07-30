@@ -71,7 +71,7 @@ case 'bootstrap': {
     // 假別清單
     $types = $db->query("SELECT id, leave_name, agent, need_approval, max_approval_level,
                                 unit_type, require_attachment, attach_min_days, allow_attach_later
-                         FROM leave_type ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+                         FROM leave_type ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     // 我的候選代理人（唯讀，來自 delegate_lib）
     $cands = eg_person_delegate_candidates($db, $user_id);
     // 特休摘要
@@ -236,6 +236,9 @@ case 'delete': {
     if (!$reqId) bad('缺少參數');
     // 二次確認：前端須把單號原樣送回，避免誤觸就把整張單連通知簽核紀錄一起刪掉
     if ((string)($_POST['confirm_id'] ?? '') !== (string)$reqId) bad('確認碼不符，未執行刪除');
+    // 第三道：必須輸入 id=1 本人的密碼（2026-07-30 使用者要求；不可回復的操作要有本人確認）
+    $pw = eg_leave_verify_superadmin_password($db, (string)($_POST['password'] ?? ''));
+    if (!$pw['ok']) bad($pw['msg']);
     $r = eg_leave_delete($db, $reqId, $user_id);
     out(['success' => $r['ok'], 'message' => $r['msg']]);
 }

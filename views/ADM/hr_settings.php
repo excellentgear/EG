@@ -417,7 +417,7 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                     <div id="leave-type-section" class="col-md-12 col-sm-12 col-xs-12">
                         <div class="x_panel">
                             <div class="x_title">
-                                <h2>假別設定 (目前新增修改完跳窗不會消失，須點擊空白處)</h2>
+                                <h2>假別設定 <small style="color:#8a6d45;">可用上下鈕調整顯示順序（影響請假申請頁的假別下拉）</small></h2>
                                 <ul class="nav navbar-right panel_toolbox">
                                     <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
                                     <li><a class="close-link"><i class="fa fa-close"></i></a></li>
@@ -431,6 +431,7 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                                 <table class="table table-striped table-hover">
                                     <thead>
                                         <tr>
+                                            <th style="width:70px;">順序</th>
                                             <th>假別名稱</th>
                                             <th>需主管簽核</th>
                                             <th>需指定代理人</th>
@@ -685,9 +686,12 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
 
 <!-- jQuery -->
 <script src="../../resource/js/jquery.min.js"></script>
-<!-- Bootstrap -->
+<!-- Bootstrap（只能載 v3；本頁是 Gentelella 版型，元件用 data-toggle 等 v3 語法）
+     2026-07-30 修正「新增/修改完跳窗不會消失、要點空白處才關」：原本同時載入
+     bootstrap.min.js(v3.3.6) 與 bootstrap.bundle.min.js(v5.0.0)，兩個版本各自對同一個
+     .modal 建立實例；$(...).modal('hide') 只關掉 v3 那個，v5 的遮罩與狀態還留著，
+     看起來就像沒關。本頁完全沒有用到 v5 語法(data-bs-*)，故移除 v5 bundle。 -->
 <script src="../../resource/js/bootstrap.min.js"></script>
-<script src="../../resource/js/bootstrap.bundle.min.js"></script>
 <!-- FastClick -->
 <script src="../../resource/js/fastclick.js"></script>
 <!-- NProgress -->
@@ -1619,7 +1623,7 @@ $(function () {
                 if (response.status === 'success') {
                     var tableBody = $('#leave-type-table-body');
                     tableBody.empty();
-                    response.data.forEach(function(item) {
+                    response.data.forEach(function(item, idx) {
                         // 檢查權限以決定是否顯示操作按鈕
                         let editBtn = '';
                         let delBtn = '';
@@ -1640,7 +1644,16 @@ $(function () {
                                    + (minD > 0 ? ` <span class="text-muted">(逾 ${minD} 天)</span>` : '')
                                    + (parseInt(item.allow_attach_later) === 1 ? ' <span class="label label-warning">可補件</span>' : ' <span class="label label-default">須先附</span>');
                         }
+                        // 順序調整鈕（第一筆無上移、最後一筆無下移）
+                        let sortBtns = '';
+                        if (leaveP.includes('A') || leaveP.includes('U')) {
+                            const upDis = (idx === 0) ? 'disabled' : '';
+                            const dnDis = (idx === response.data.length - 1) ? 'disabled' : '';
+                            sortBtns = `<button class="btn btn-xs btn-default btn-move-leave-type" data-id="${item.id}" data-dir="up" ${upDis} title="上移"><i class="fa fa-arrow-up"></i></button>
+                                        <button class="btn btn-xs btn-default btn-move-leave-type" data-id="${item.id}" data-dir="down" ${dnDis} title="下移"><i class="fa fa-arrow-down"></i></button>`;
+                        }
                         var row = `<tr>
+                            <td style="white-space:nowrap;">${sortBtns}</td>
                             <td>${escapeHtml(item.leave_name)}</td>
                             <td>${parseInt(item.need_approval) === 1 ? '<i class="fa fa-check text-success"></i>' : '<i class="fa fa-times text-danger"></i>'}</td>
                             <td>${parseInt(item.agent) === 1 ? '<i class="fa fa-check text-success"></i>' : '<i class="fa fa-times text-danger"></i>'}</td>
@@ -1700,6 +1713,18 @@ $(function () {
                 } else { alert('操作失敗: ' + response.message); }
             });
         });
+        // 假別顯示順序上移／下移（順序影響請假申請頁的假別下拉）
+        $(document).on('click', '.btn-move-leave-type', function() {
+            const $b = $(this);
+            if ($b.prop('disabled')) return;
+            $('.btn-move-leave-type').prop('disabled', true);   // 連點防呆，避免順序錯亂
+            callApi(LEAVE_API_URL, 'move_leave_type', 'POST',
+                    { id: $b.data('id'), dir: $b.data('dir') }, function(res) {
+                if (res.status === 'success') loadLeaveTypes();   // 重載時會重新算按鈕可否點
+                else { alert('順序調整失敗: ' + res.message); $('.btn-move-leave-type').prop('disabled', false); }
+            });
+        });
+
         // ── 請假系統設定（2026-07-29）──────────────────────────────
         $('#require_attachment').on('change', function(){ $('#attachOpts').toggle(this.checked); });
         // 最終裁決者：部門＋姓名兩層篩選（篩選欄不存檔，且不會清掉已選定的人）
