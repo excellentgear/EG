@@ -14,6 +14,7 @@ if ($action !== 'download') {
 
 include '../common/DBConnection.php';
 require_once __DIR__ . '/../common/imgedit_visibility.php';
+require_once __DIR__ . '/../common/dwg_change_lib.php';   // 發行章日期判定／建立圖面變更（唯一實作點）
 $db  = new DBConnection();
 $pdo = $db->getPDO();
 
@@ -76,6 +77,7 @@ function initPartAttachTables(PDO $pdo): void {
 }
 
 initPartAttachTables($pdo);
+dwg_ensure_schema($pdo);   // issue_stamp_date / is_own_drawing / trigger_attachment_id 欄位補建
 
 
 switch ($action) {
@@ -106,6 +108,19 @@ switch ($action) {
     case 'upload':
         $dId = intval($_POST['d_id'] ?? 0);
         if (!$dId) { echo json_encode(['success'=>false,'message'=>'缺少料號 ID']); exit; }
+        // 發行章日期：屬於「自家出的圖」標籤時必填（判準見 ai-rules/15-圖面變更判定依據.md）。
+        // 檔案還沒搬進去之前先擋，免得擋下來還留下孤兒檔。
+        $upCatIds  = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['category_ids'] ?? '')))));
+        $upIssue   = trim($_POST['issue_stamp_date'] ?? '');
+        if ($upIssue !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $upIssue)) {
+            echo json_encode(['success'=>false,'message'=>'發行章日期格式錯誤（需 YYYY-MM-DD）']); exit;
+        }
+        if (dwg_needs_issue_date($pdo, $upCatIds) && $upIssue === '') {
+            echo json_encode(['success'=>false,'message'=>'此標籤屬於「自家出的圖」，請填發行章日期（預設帶今天，可改成圖上實際的蓋章日）']); exit;
+        }
+        if ($upIssue === '') $upIssue = null;
+        // 判定要在寫入這一筆之前算，否則會拿自己跟自己比
+        $dwgVerdict = dwg_classify_upload($pdo, $dId, $upCatIds, $upIssue);
         if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
             echo json_encode(['success'=>false,'message'=>'上傳失敗（'.(isset($_FILES['file']) ? $_FILES['file']['error'] : 'no file').')']); exit;
         }
@@ -129,9 +144,12 @@ switch ($action) {
         $revision = trim($_POST['revision']        ?? '') ?: null;
         $sz       = fmtSzPa((int)$_FILES['file']['size']);
         try {
-            $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,uploaded_by,uploaded_by_id) VALUES (?,?,?,?,?,?,?,?,?,?)")
-                ->execute([$dId, $fname, $orig, $catIds, $tagVarVals, $sz, $note, $revision, $uploadedByName, $uploadedById]);
-            echo json_encode(['success'=>true,'id'=>(int)$pdo->lastInsertId(),'filename'=>$fname,'original_name'=>$orig]);
+            $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,issue_stamp_date,uploaded_by,uploaded_by_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+                ->execute([$dId, $fname, $orig, $catIds, $tagVarVals, $sz, $note, $revision, $upIssue, $uploadedByName, $uploadedById]);
+            $newAttachId = (int)$pdo->lastInsertId();
+            // dwg_verdict.kind='change' 時前端要跳出「填變更內容」表單，再呼叫 create_dwg_change
+            echo json_encode(['success'=>true,'id'=>$newAttachId,'filename'=>$fname,'original_name'=>$orig,
+                              'dwg_verdict'=>$dwgVerdict]);
         } catch (Exception $e) {
             @unlink($dir . $fname);
             echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
@@ -505,10 +523,67 @@ switch ($action) {
         $tagVals = trim($_POST['tag_var_values'] ?? '') ?: null;
         $note    = trim($_POST['note']           ?? '') ?: null;
         $revision = trim($_POST['revision']      ?? '') ?: null;
+        $mIssue   = trim($_POST['issue_stamp_date'] ?? '');
         if (!$id) { echo json_encode(['success'=>false,'message'=>'缺少 ID']); exit; }
-        $pdo->prepare("UPDATE part_attachments SET category_ids=?,tag_var_values=?,note=?,revision=? WHERE id=?")
-            ->execute([$catIds, $tagVals, $note, $revision, $id]);
+        if ($mIssue !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $mIssue)) {
+            echo json_encode(['success'=>false,'message'=>'發行章日期格式錯誤（需 YYYY-MM-DD）']); exit;
+        }
+        $mCatIds = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['category_ids'] ?? '')))));
+        if (dwg_needs_issue_date($pdo, $mCatIds) && $mIssue === '') {
+            echo json_encode(['success'=>false,'message'=>'此標籤屬於「自家出的圖」，請填發行章日期']); exit;
+        }
+        $pdo->prepare("UPDATE part_attachments SET category_ids=?,tag_var_values=?,note=?,revision=?,issue_stamp_date=? WHERE id=?")
+            ->execute([$catIds, $tagVals, $note, $revision, ($mIssue !== '' ? $mIssue : null), $id]);
         echo json_encode(['success'=>true]);
+        break;
+
+    // ── 圖面變更：表單用的下拉資料（製程／簽收人員）────────────────
+    // 人員一律走 people_lib（人員列表鐵則：只列未在職者以外、標記長期請假、依職稱排序並顯示職稱）
+    case 'dwg_lookups':
+        try {
+            $proc = $pdo->query("SELECT ProcessNo, ProcessName FROM process_no ORDER BY ProcessNo")->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { $proc = []; }
+        $people = [];
+        try {
+            require_once __DIR__ . '/../common/people_lib.php';
+            $rows = eg_people_list($pdo);
+            $multiDept = function_exists('eg_people_multi_dept') ? eg_people_multi_dept($rows) : false;
+            foreach ($rows as $r) {
+                $label = $r['user_cname'] . ($r['position_name'] ? '（' . $r['position_name'] . '）' : '');
+                if ($multiDept && $r['dept_name']) $label = $r['dept_name'] . '　' . $label;
+                if (!empty($r['leave_note'])) $label .= '　※' . $r['leave_note'];
+                $people[] = ['id' => $r['id'], 'label' => $label];
+            }
+        } catch (Throwable $e) {}
+        echo json_encode(['success'=>true,'processes'=>$proc,'people'=>$people], JSON_UNESCAPED_UNICODE);
+        break;
+
+    // ── 圖面變更：由附件上傳的自動判定產生一筆變更紀錄 ─────────────
+    // 建立單號、檢驗標準整組複製新版次、簽收名單、通知全在 dwg_change_lib（與圖面變更紀錄頁同一套）
+    case 'create_dwg_change':
+        try {
+            $aId = intval($_POST['attachment_id'] ?? 0);
+            $st  = $pdo->prepare("SELECT id, d_id, original_name, issue_stamp_date FROM part_attachments WHERE id=? AND deleted_at IS NULL");
+            $st->execute([$aId]);
+            $att = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$att) throw new Exception('找不到這筆附件，可能已被刪除');
+            $r = dwg_create_change($pdo, [
+                'd_id'                  => (int)$att['d_id'],
+                'summary'               => ($_POST['summary'] ?? ''),
+                'detail'                => ($_POST['detail'] ?? ''),
+                'old_revision'          => ($_POST['old_revision'] ?? ''),
+                'new_revision'          => ($_POST['new_revision'] ?? ''),
+                'change_date'           => ($att['issue_stamp_date'] ?: ''),   // 變更日＝發行章日期
+                'source'                => ($_POST['source'] ?? ''),
+                'customer_doc_no'       => ($_POST['customer_doc_no'] ?? ''),
+                'from_process_no'       => ($_POST['from_process_no'] ?? ''),
+                'ack_users'             => (array)($_POST['ack_users'] ?? []),
+                'created_by'            => $uploadedById,
+                'trigger_attachment_id' => (int)$att['id'],
+            ]);
+            echo json_encode(['success'=>true,'id'=>$r['id'],'change_no'=>$r['change_no'],
+                              'new_version_id'=>$r['new_version_id']], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         break;
 
     // ── 刪除附件 ─────────────────────────────────────────────────
