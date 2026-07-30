@@ -56,10 +56,25 @@ case 'meta': {
           'cur_half'=>((int)date('n') <= 6 ? 1 : 2), 'today'=>date('Y-m-d'),
           'cycle_months'=>vendor_audit_cycle_months($db), 'main_categories'=>$cats,
           'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', ''),
+          'as_doc'=>vendor_audit_bound_asdoc($db),
           'items'=>vendor_audit_items(), 'item_max'=>VENDOR_AUDIT_ITEM_MAX,
           'total_max'=>VENDOR_AUDIT_TOTAL_MAX, 'pass_rate'=>VENDOR_AUDIT_PASS_RATE,
           'self_w'=>VENDOR_AUDIT_SELF_W, 'audit_w'=>VENDOR_AUDIT_AUDIT_W,
           'eval_settings'=>vendor_eval_settings($db)]);
+}
+
+/* AS 表單清單（綁定列印表單名稱/編號用） */
+case 'as_forms': {
+    $kw = trim((string)($_GET['kw'] ?? ''));
+    try {
+        $sql = "SELECT id, doc_no, doc_name FROM as_document
+                WHERE doc_type='表單' AND (is_deleted IS NULL OR is_deleted=0)";
+        $bind = [];
+        if ($kw !== '') { $sql .= " AND (doc_no LIKE ? OR doc_name LIKE ?)"; $bind[] = "%$kw%"; $bind[] = "%$kw%"; }
+        $sql .= " ORDER BY doc_no LIMIT 300";
+        $st = $db->prepare($sql); $st->execute($bind);
+        jout(['forms'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+    } catch (Throwable $e) { jout(['forms'=>[], 'note'=>'AS文件表無法讀取：'.$e->getMessage()]); }
 }
 
 /* 定期評核：廠商下拉（納管非停用；有關鍵字則全廠搜尋） */
@@ -464,8 +479,15 @@ case 'save_cycle': {
                             ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
         $up->execute([$ab]);
     }
+    if (array_key_exists('as_doc_id', $_POST)) {
+        $adid = (int)$_POST['as_doc_id'];
+        $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('vendor_audit_as_doc_id', ?)
+                            ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+        $up->execute([(string)$adid]);
+    }
     jout(['cycle_months'=>vendor_audit_cycle_months($db),
-          'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', '')]);
+          'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', ''),
+          'as_doc'=>vendor_audit_bound_asdoc($db)]);
 }
 
 /* 某廠商跨期稽核歷史 */

@@ -343,6 +343,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <label>稽核週期（月）—— 全公司共用，作為「多久辦一期」的參考與提醒</label>
         <input type="number" id="cycVal" step="1" min="1" style="width:120px;">
         <div style="font-size:12px;color:#8a6d45;margin:4px 0 12px;">例：6＝每半年一期。此值僅供提醒，不會自動改變各期對象。</div>
+        <label>綁定 AS 表單 —— 列印表單的名稱與編號跟 AS 文件管理連動</label>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <input type="text" id="cycAsKw" placeholder="搜尋文件編號/名稱" style="width:150px;">
+            <select id="cycAsDoc" style="flex:1;min-width:200px;"><option value="0">（不綁定，用預設「供應商評鑑稽核查表 / 2-PH-01-02」）</option></select>
+        </div>
+        <div style="font-size:12px;color:#8a6d45;margin:4px 0 12px;">綁定後，AS 文件若改名稱/改編號，列印表單會自動跟著變。</div>
         <label>佐證附件儲存路徑（base）—— 供應商自評等附件的實體存放資料夾</label>
         <input type="text" id="cycAttachBase" maxlength="255" placeholder="留空＝預設 uploads/vendor_audit_attach；可填 NAS 路徑如 \\NAS\品保\供應商稽核附件">
         <div style="font-size:12px;color:#8a6d45;margin-top:6px;">DB 只存檔名，完整路徑於讀取當下用此設定＋年度即時組出；換 NAS 只需改這裡（既有檔案需一併搬移）。</div>
@@ -732,11 +738,27 @@ function removeTarget(tid){
 }
 
 /* ---------- 週期設定 ---------- */
-$('#btnCycle').on('click', function(){ $('#cycVal').val(META.cycle_months); $('#cycAttachBase').val(META.attach_base||''); openMask('cycMask'); });
+$('#btnCycle').on('click', function(){
+    $('#cycVal').val(META.cycle_months); $('#cycAttachBase').val(META.attach_base||'');
+    loadAsForms('', META.as_doc?META.as_doc.id:0);
+    openMask('cycMask');
+});
+var cycAsT=null;
+$('#cycAsKw').on('input', function(){ clearTimeout(cycAsT); var k=$(this).val(); cycAsT=setTimeout(function(){ loadAsForms(k, +$('#cycAsDoc').val()); }, 300); });
+function loadAsForms(kw, selId){
+    $.getJSON(API, {action:'as_forms', kw:kw||''}, function(res){
+        if(!res.ok) return;
+        var $s=$('#cycAsDoc').html('<option value="0">（不綁定，用預設「供應商評鑑稽核查表 / 2-PH-01-02」）</option>');
+        (res.forms||[]).forEach(function(f){ $s.append('<option value="'+f.id+'">'+esc(f.doc_no)+' '+esc(f.doc_name)+'</option>'); });
+        if(selId && $s.find('option[value="'+selId+'"]').length===0 && META.as_doc)
+            $s.append('<option value="'+META.as_doc.id+'">'+esc(META.as_doc.doc_no)+' '+esc(META.as_doc.doc_name)+'（目前綁定）</option>');
+        $s.val(selId||0);
+    });
+}
 function submitCycle(){
-    $.post(API, {action:'save_cycle', cycle_months:$('#cycVal').val(), attach_base:$('#cycAttachBase').val()}, function(res){
+    $.post(API, {action:'save_cycle', cycle_months:$('#cycVal').val(), attach_base:$('#cycAttachBase').val(), as_doc_id:$('#cycAsDoc').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        META.cycle_months = res.cycle_months; META.attach_base = res.attach_base; closeMask('cycMask'); loadRound();
+        META.cycle_months = res.cycle_months; META.attach_base = res.attach_base; META.as_doc = res.as_doc; closeMask('cycMask'); loadRound();
     }, 'json');
 }
 
@@ -763,9 +785,11 @@ function openHis(mid){
 /* ---------- 列印評鑑表單 ---------- */
 function auditFormHTML(o){
     o = o || {};
+    var docName = (META.as_doc && META.as_doc.doc_name) || '供應商評鑑稽核查表';
+    var docNo   = (META.as_doc && META.as_doc.doc_no)   || '2-PH-01-02';
     var head = '<div style="text-align:center;">'
         + '<div style="font-size:18px;font-weight:bold;">超正齒輪科技有限公司</div>'
-        + '<div style="font-size:15px;margin-top:2px;">供應商評鑑稽核查表</div></div>';
+        + '<div style="font-size:15px;margin-top:2px;">'+esc(docName)+'</div></div>';
     var info = '<table class="pf-info"><tr>'
         + '<td>供應商：'+(o.maker?esc(o.maker):'________________')+'</td>'
         + '<td>日期：'+(o.dateStr?esc(o.dateStr):'____ / ____ / ____')+'</td></tr>'
@@ -785,7 +809,7 @@ function auditFormHTML(o){
     rows += '<tr><td colspan="2">合計</td><td style="text-align:right;">總分（滿分 '+META.total_max+'）／綜合合格率＝自評率×'+META.self_w+'＋稽核率×'+META.audit_w+'，≥'+META.pass_rate+'% 判合格</td><td></td><td></td><td></td></tr>';
     rows += '</tbody></table>';
     var sign = '<table class="pf-sign"><tr><td>供應商代表簽章：__________________</td><td>稽核員簽章：__________________</td></tr></table>';
-    var footer = '<div style="text-align:right;margin-top:22px;font-size:12px;color:#333;">表單編號：2-PH-01-02</div>';
+    var footer = '<div style="text-align:right;margin-top:22px;font-size:12px;color:#333;">表單編號：'+esc(docNo)+'</div>';
     return head + info + rows + sign + footer;
 }
 function openPrintWindow(bodyHtml, title){
