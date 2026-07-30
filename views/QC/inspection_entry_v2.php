@@ -34,16 +34,22 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
 // 注意：登入時只寫入 $_SESSION['id'] 與 ['userName']，並沒有 user_cname；
 // 側欄是自己去 user 表查名字，而 popup 模式不載入側欄 → 這裡直接以 id 查一次（PK 查詢，成本可忽略）。
 $CURRENT_CNAME = trim((string)($_SESSION['user_cname'] ?? ''));
-if ($CURRENT_CNAME === '' && !empty($_SESSION['id'])) {
+// 超級管理員（可用「完全刪除檢驗紀錄」）＝ id=1 ＋ user_status=9 ＋ 在職
+$IS_SUPER = false;
+if (!empty($_SESSION['id'])) {
     try {
         include_once '../../src/common/DBConnection.php';
+        include_once '../../src/common/user_active_lib.php';
         $__pdo = (new DBConnection())->getPDO();
-        $__st = $__pdo->prepare("SELECT user_cname, user_uname FROM user WHERE id=? LIMIT 1");
+        $__st = $__pdo->prepare("SELECT user_cname, user_uname, user_status, state FROM user WHERE id=? LIMIT 1");
         $__st->execute([(int)$_SESSION['id']]);
         if ($__u = $__st->fetch(PDO::FETCH_ASSOC)) {
-            $CURRENT_CNAME = trim((string)($__u['user_cname'] ?: $__u['user_uname']));
+            if ($CURRENT_CNAME === '') $CURRENT_CNAME = trim((string)($__u['user_cname'] ?: $__u['user_uname']));
+            $__blocked = (function_exists('eg_blocked_state_list') && $__u['state'] !== null
+                          && in_array((int)$__u['state'], eg_blocked_state_list(), true));
+            $IS_SUPER = ((int)$_SESSION['id'] === 1 && (int)$__u['user_status'] === 9 && !$__blocked);
         }
-    } catch (Exception $e) { /* 取不到名字不影響填寫 */ }
+    } catch (Exception $e) { /* 取不到名字/權限不影響填寫 */ }
 }
 if ($CURRENT_CNAME === '') $CURRENT_CNAME = trim((string)($_SESSION['userName'] ?? $_SESSION['user_uname'] ?? ''));
 
@@ -86,7 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     };
 
     try {
-        $WRITE = ['sym_save', 'sym_delete', 'save_adhoc', 'log_sample_change'];
+        $WRITE = ['sym_save', 'sym_delete', 'save_adhoc', 'log_sample_change', 'del_inspection'];
         if (in_array($act, $WRITE, true)) {
             $tok = $_POST['csrf'] ?? '';
             if (!is_string($tok) || $tok === '' || !hash_equals((string)($_SESSION['qc_csrf'] ?? ''), $tok)) {
@@ -217,6 +223,106 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 'incoming_qty' => $incoming, 'sample_qty' => $sample, 'total_items' => count($items),
                 'ng_qty' => $tot['ng_qty'], 'aod_qty' => $tot['aod_qty'], 'check_result' => $tot['check_result'],
             ]], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // ---- ④ 完全刪除檢驗紀錄（僅超級管理員；測試用，破壞性操作）----
+        // 認定為超級管理員的三個條件（缺一不可）：
+        //   ① 目前登入者 id = 1
+        //   ② 該帳號 user_status = 9（Login.php 內註明 case 9 = 超級管理員）
+        //   ③ 在職（state 不在 eg_blocked_state_list() 的離職/留停清單內）
+        // 另外真正執行刪除時，還必須再輸入一次 id=1 這個帳號的密碼。
+        // 流程：先看影響分析 → 輸入大寫 Y ＋密碼 → transaction 刪除 → 寫 audit_log。
+        $superAdmin = function () use ($pdo, $uid) {
+            if ((int)$uid !== 1) return [false, '此功能僅限超級管理員（員工 ID = 1）使用'];
+            $s = $pdo->prepare("SELECT id, user_uname, user_cname, user_password, user_status, state FROM user WHERE id=1 LIMIT 1");
+            $s->execute();
+            $u = $s->fetch(PDO::FETCH_ASSOC);
+            if (!$u) return [false, '找不到超級管理員帳號'];
+            if ((int)$u['user_status'] !== 9) return [false, '此帳號目前不是最高權限狀態，無法使用完全刪除'];
+            if (function_exists('eg_blocked_state_list') && $u['state'] !== null
+                && in_array((int)$u['state'], eg_blocked_state_list(), true)) {
+                return [false, '此帳號目前非在職狀態，無法使用完全刪除'];
+            }
+            return [true, $u];
+        };
+
+        if ($act === 'del_preview' || $act === 'del_inspection') {
+            include_once '../../src/common/user_active_lib.php';   // eg_blocked_state_list()
+            list($okSa, $sa) = $superAdmin();
+            if (!$okSa) throw new Exception($sa);
+            $qid = (int)($_POST['qc_form_id'] ?? 0);
+            if (!$qid) throw new Exception('缺少 qc_form_id');
+
+            $f = $pdo->prepare(
+                "SELECT f.*, d.D_Setting_Id AS part_no, qa.abnormal_order_no
+                 FROM qc_check_form f
+                 LEFT JOIN d_setting d ON d.d_id = f.d_id
+                 LEFT JOIN qa_abnormal_order qa ON qa.id = f.abnormal_order_id
+                 WHERE f.qc_form_id=?");
+            $f->execute([$qid]);
+            $form = $f->fetch(PDO::FETCH_ASSOC);
+            if (!$form) throw new Exception('查無此檢驗紀錄（可能已被刪除）');
+
+            $cnt = function ($sql, $p) use ($pdo) { $s = $pdo->prepare($sql); $s->execute($p); return (int)$s->fetchColumn(); };
+            $nMeas = $cnt("SELECT COUNT(*) FROM qc_measurement WHERE qc_form_id=?", [$qid]);
+            $nEdit = $cnt("SELECT COUNT(*) FROM qc_inspection_edit_log WHERE qc_form_id=?", [$qid]);
+            $nSamp = $cnt("SELECT COUNT(*) FROM qc_sample_change_log WHERE qc_form_id=?", [$qid]);
+
+            $info = [
+                'qc_form_id'   => $qid,
+                'part_no'      => $form['part_no'],
+                'bom_ing_fid'  => (int)$form['bom_ing_fid'],
+                'process_name' => $form['process_name'],
+                'batch_no'     => (int)$form['batch_no'],
+                'round_no'     => (int)$form['round_no'],
+                'status'       => $form['status'],
+                'check_result' => $form['check_result'],
+                'ng_qty'       => (int)$form['ng_qty'],
+                'created_by'   => $form['created_by'],
+                'created_at'   => $form['created_at'],
+                'abnormal_order_no' => $form['abnormal_order_no'],
+                'n_measurement'     => $nMeas,
+                'n_edit_log'        => $nEdit,
+                'n_sample_change'   => $nSamp,
+            ];
+
+            if ($act === 'del_preview') {
+                echo json_encode(['success' => true, 'info' => $info], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+
+            // ---- 真的刪 ----
+            if (trim((string)($_POST['confirm'] ?? '')) !== 'Y') throw new Exception('請輸入大寫 Y 確認刪除');
+            // 再驗一次超級管理員本人的密碼（本系統密碼為明文比對，見 src/store/Login.php）
+            $pw = (string)($_POST['password'] ?? '');
+            if ($pw === '' || !hash_equals((string)$sa['user_password'], $pw)) {
+                throw new Exception('超級管理員密碼不正確，未執行刪除');
+            }
+            // 已開立異常單者不給刪：異常單是另一份已發出通知/待回簽的正式文件，
+            // 直接刪掉檢驗紀錄會讓異常單指向不存在的來源。請先處理異常單。
+            if (!empty($form['abnormal_order_id'])) {
+                throw new Exception('此檢驗已開立異常單 ' . ($form['abnormal_order_no'] ?: ('#' . $form['abnormal_order_id'])) .
+                                    '，不可直接刪除。請先處理/作廢該異常單。');
+            }
+
+            $pdo->beginTransaction();
+            $pdo->prepare("DELETE FROM qc_measurement WHERE qc_form_id=?")->execute([$qid]);
+            $pdo->prepare("DELETE FROM qc_inspection_edit_log WHERE qc_form_id=?")->execute([$qid]);
+            $pdo->prepare("DELETE FROM qc_sample_change_log WHERE qc_form_id=?")->execute([$qid]);
+            $pdo->prepare("DELETE FROM qc_check_form WHERE qc_form_id=?")->execute([$qid]);
+            // 稽核：刪掉的內容整包留存，事後查得到誰刪了什麼
+            try {
+                $pdo->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                               VALUES ('DELETE','qc_check_form',?,?,?,?,?,NOW())")
+                    ->execute([(string)$qid,
+                        ('料號 ' . ($form['part_no'] ?? '') . ' / ' . ($form['process_name'] ?? '')),
+                        json_encode(['deleted' => $info, 'form' => $form], JSON_UNESCAPED_UNICODE),
+                        (int)$uid, $uid]);
+            } catch (Exception $e) { /* 稽核寫入失敗不影響刪除結果 */ }
+            $pdo->commit();
+
+            echo json_encode(['success' => true, 'deleted' => $info], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
@@ -749,6 +855,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         <div class="modal-footer">
             <button class="btn btn-default" data-dismiss="modal">取消</button>
             <button class="btn btn-warm" id="btn-ah-create">建立並開始填寫</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- ===================== 完全刪除檢驗紀錄（僅超級管理員；測試用） ===================== -->
+<div class="modal fade" id="delRecModal" tabindex="-1" role="dialog" data-backdrop="static">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header" style="background:#8F3016;color:#fff;border-radius:6px 6px 0 0;">
+            <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;">&times;</button>
+            <h4 class="modal-title"><i class="fa fa-trash"></i> 完全刪除檢驗紀錄（無法復原）</h4>
+        </div>
+        <div class="modal-body">
+            <div id="del-info">載入中…</div>
+            <div id="del-form" style="display:none;margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;">
+                <div class="form-group">
+                    <label>請輸入大寫 <b>Y</b> 確認</label>
+                    <input type="text" class="form-control input-sm" id="del-confirm" maxlength="1"
+                           style="width:80px;text-align:center;font-size:18px;" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label>超級管理員密碼</label>
+                    <input type="password" class="form-control input-sm" id="del-password"
+                           style="max-width:260px;" autocomplete="new-password">
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-default" data-dismiss="modal">取消</button>
+            <button class="btn btn-coral" id="btn-del-go" style="display:none;"><i class="fa fa-trash"></i> 確定完全刪除</button>
         </div>
     </div></div>
 </div>
@@ -1457,7 +1592,9 @@ $(function(){
     'use strict';
     // ★ 後端沿用舊頁的 AJAX API（同 session / 同 CSRF / 同 RBAC / 同後端重算判定）
     var API  = 'inspection_combined_prototype.php';
-    var V2API= 'inspection_entry_v2.php';   // v2 專屬後端（符號主檔／抽驗數變更／臨時檢驗單）
+    var V2API= 'inspection_entry_v2.php';   // v2 專屬後端（符號主檔／抽驗數變更／臨時檢驗單／完全刪除）
+    // 超級管理員＝id 1 ＋ user_status 9 ＋ 在職（後端會再驗一次，這裡只決定按鈕顯不顯示）
+    var IS_SUPER = <?php echo $IS_SUPER ? 'true' : 'false'; ?>;
     var CSRF = <?php echo json_encode($CSRF, JSON_UNESCAPED_SLASHES); ?>;
     $.ajaxPrefilter(function(opts){
         var m = (opts.type || opts.method || 'GET').toUpperCase();
@@ -2596,11 +2733,13 @@ $(function(){
             if(!res || !res.success){ $('#adhoc-list').html('<div class="muted-help">查詢失敗</div>'); return; }
             var rows=res.rows||[];
             $('#adhoc-list').html(rows.length ? rows.map(function(r){
-                return '<div class="search-result-item ah-open" data-id="'+r.qc_form_id+'">'+
+                return '<div class="search-result-item">'+
+                    (IS_SUPER ? '<button class="btn btn-xs act-del-rec pull-right" data-id="'+r.qc_form_id+'" title="完全刪除此筆（測試用，需密碼）" style="background:#8F3016;color:#fff;border:0;"><i class="fa fa-trash"></i></button>' : '')+
+                    '<span class="ah-open" style="cursor:pointer;" data-id="'+r.qc_form_id+'">'+
                     '<b>'+esc(r.process_name||'臨時檢驗')+'</b> ／ 料號 '+esc(r.part_no||('d_id '+r.d_id))+
                     ' <span class="muted-help">'+String(r.created_at||'').substring(0,16)+
                     '　'+(r.check_result==='NG'?'<span class="st-ng">✘不良 '+(r.ng_qty||0)+'</span>':'<span class="st-ok">✔合格</span>')+
-                    '　'+esc(r.created_by||'')+'</span></div>';
+                    '　'+esc(r.created_by||'')+'</span></span></div>';
             }).join('') : '<div class="muted-help">目前沒有臨時檢驗單</div>');
         }, 'json');
     }
@@ -2741,7 +2880,8 @@ $(function(){
                 if(locked && state.is_supervisor) act+='<button class="btn btn-xs btn-warm-o act-unlock" data-id="'+r.qc_form_id+'"><i class="fa fa-unlock-alt"></i> 開放修改</button> ';
                 if((!locked && state.can_fill) || state.is_supervisor || selfGrace)
                     act+='<button class="btn btn-xs btn-warm act-edit" data-id="'+r.qc_form_id+'"'+(locked&&selfGrace?' title="本人寬限期內可自改"':'')+'><i class="fa fa-pencil"></i> 修改'+(locked&&selfGrace?'（本人）':'')+'</button> ';
-                if(r.edit_log_count>0) act+='<button class="btn btn-xs btn-default act-log" data-id="'+r.qc_form_id+'"><i class="fa fa-history"></i> 紀錄</button>';
+                if(r.edit_log_count>0) act+='<button class="btn btn-xs btn-default act-log" data-id="'+r.qc_form_id+'"><i class="fa fa-history"></i> 紀錄</button> ';
+                if(IS_SUPER) act+='<button class="btn btn-xs act-del-rec" data-id="'+r.qc_form_id+'" title="完全刪除此筆檢驗紀錄（測試用，需密碼）" style="background:#8F3016;color:#fff;border:0;"><i class="fa fa-trash"></i></button>';
             }
             var edited=r.last_edited_at ? ('<br><small class="muted-help">最後修改：'+esc(r.last_edited_by||'')+' '+esc(r.last_edited_at)+'</small>') : '';
             var ncr='';
@@ -2769,6 +2909,54 @@ $(function(){
         },'json');
     });
     $('#batch-history').on('click','.act-edit', function(){ openEditRecord($(this).data('id')); });
+
+    // ---------- 完全刪除檢驗紀錄（僅超級管理員；測試用） ----------
+    var delTarget=null;
+    $(document).on('click','.act-del-rec', function(){ openDeleteRec($(this).data('id')); });
+    function openDeleteRec(qid){
+        delTarget=qid;
+        $('#del-info').html('載入中…'); $('#del-form').hide(); $('#btn-del-go').hide();
+        $('#del-confirm').val(''); $('#del-password').val('');
+        $('#delRecModal').modal('show');
+        $.post(V2API, { v2action:'del_preview', qc_form_id:qid }, function(res){
+            if(!res.success){ $('#del-info').html('<div class="alert alert-danger" style="margin:0;">'+esc(res.message||'查詢失敗')+'</div>'); return; }
+            var d=res.info;
+            var warn = d.abnormal_order_no
+                ? '<div class="alert alert-danger" style="margin-top:10px;"><b>此檢驗已開立異常單 '+esc(d.abnormal_order_no)+'</b><br>'+
+                  '異常單是另一份已發出通知、待回覆回簽的正式文件，直接刪掉來源檢驗會讓它指向不存在的紀錄，因此<b>不允許刪除</b>。請先處理或作廢該異常單。</div>'
+                : '';
+            $('#del-info').html(
+                '<div class="muted-help">以下資料將被<b>永久刪除</b>，無法復原（會在系統稽核紀錄 audit_log 留下完整內容）：</div>'+
+                '<table class="table table-condensed table-bordered" style="margin-top:8px;">'+
+                '<tr><th width="130">檢驗單號</th><td>#'+d.qc_form_id+'　'+(d.bom_ing_fid>0?('製令待驗 fid '+d.bom_ing_fid):'<b>臨時檢驗單</b>（無製令）')+'</td></tr>'+
+                '<tr><th>料號 / 製程</th><td>'+esc(d.part_no||'—')+'　/　'+esc(d.process_name||'—')+'</td></tr>'+
+                '<tr><th>批次 / 複驗</th><td>批次 '+d.batch_no+'　第 '+d.round_no+' 次</td></tr>'+
+                '<tr><th>判定</th><td>'+(d.check_result==='NG'?'<span class="st-ng">✘ 不良</span>':'<span class="st-ok">✔ 合格</span>')+'　不良 '+d.ng_qty+' 件</td></tr>'+
+                '<tr><th>建立</th><td>'+esc(d.created_by||'')+'　'+String(d.created_at||'').substring(0,16)+'</td></tr>'+
+                '<tr><th>連帶刪除</th><td>實測明細 <b>'+d.n_measurement+'</b> 筆　／　修改稽核 <b>'+d.n_edit_log+'</b> 筆　／　抽驗數變更 <b>'+d.n_sample_change+'</b> 筆</td></tr>'+
+                '</table>'+warn+
+                '<div class="muted-help">註：此料號的<b>檢驗標準（項目/公差）不會被刪除</b>，只刪這一張檢驗紀錄與其明細。</div>');
+            if(!d.abnormal_order_no){ $('#del-form').show(); $('#btn-del-go').show(); setTimeout(function(){ $('#del-confirm').focus(); },200); }
+        }, 'json');
+    }
+    $('#btn-del-go').on('click', function(){
+        if(!delTarget) return;
+        var y=$('#del-confirm').val().trim(), pw=$('#del-password').val();
+        if(y!=='Y'){ alert('請輸入大寫 Y 確認'); $('#del-confirm').focus(); return; }
+        if(!pw){ alert('請輸入超級管理員密碼'); $('#del-password').focus(); return; }
+        var $b=$(this).prop('disabled',true);
+        $.post(V2API, { v2action:'del_inspection', qc_form_id:delTarget, confirm:y, password:pw }, function(res){
+            $b.prop('disabled',false);
+            if(!res.success){ alert('刪除失敗：'+res.message); return; }
+            $('#delRecModal').modal('hide');
+            flashMsg('已完全刪除檢驗紀錄 #'+res.deleted.qc_form_id);
+            delTarget=null;
+            // 若刪掉的正是目前正在修改的那筆，先退出修改模式
+            if(state.editFormId && String(state.editFormId)===String(res.deleted.qc_form_id)) state.editFormId=null;
+            if(ctx && ctx.adhoc){ location.href = 'inspection_entry_v2.php' + (new URLSearchParams(location.search).get('popup')?'?popup=1':''); }
+            else reloadContext();
+        }, 'json').fail(function(x){ $b.prop('disabled',false); alert('刪除錯誤：'+x.responseText); });
+    });
     $('#batch-history').on('click','.act-log',  function(){ viewEditLog($(this).data('id')); });
     $('#batch-history').on('click','.act-open-ncr', function(){
         var qid=$(this).data('id');
