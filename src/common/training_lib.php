@@ -47,6 +47,7 @@ function training_ensure_schema(PDO $db): void {
         "ALTER TABLE training_session ADD COLUMN org_unit VARCHAR(100) NULL COMMENT '外訓開課/主辦單位'",
         "ALTER TABLE training_session ADD COLUMN actual_hours DECIMAL(5,1) NULL COMMENT '實際上課時數(可與計畫 hours 不同；多天=各天合計)'",
         "ALTER TABLE training_session ADD COLUMN plan_days INT NULL COMMENT '計畫上課天數(多天課程；NULL/1=單天)'",
+        "ALTER TABLE training_session ADD COLUMN shift_type_id INT NULL COMMENT '套用的固定班別 shift_type.shift_type_id(上下班時間僅參考、休息分鐘用來扣時數)'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) {}
     }
@@ -64,6 +65,13 @@ function training_ensure_schema(PDO $db): void {
         KEY idx_session (session_id),
         KEY idx_date (day_date)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練場次上課日期(多天課程)'");
+
+    foreach ([
+        "ALTER TABLE training_session_day ADD COLUMN break_minutes INT NOT NULL DEFAULT 0 COMMENT '當日休息分鐘(自班別帶入,可手改;時數已扣除)'",
+        "ALTER TABLE training_session_day ADD COLUMN evenement_id INT NULL COMMENT '同步到行事曆的 evenement.id(一天一筆)'",
+    ] as $sql) {
+        try { $db->exec($sql); } catch (Throwable $e) {}
+    }
 
     // 上課地點主檔（可設定/儲存後選擇；停用不刪，舊紀錄仍存文字）
     $db->exec("CREATE TABLE IF NOT EXISTS training_location (
@@ -103,6 +111,144 @@ function training_ensure_schema(PDO $db): void {
                ->execute([$r[0], $r[1]]);
         }
     }
+}
+
+/* ============================================================
+ * 模組設定（system_settings）：預設班別、行事曆類別綁定
+ *   一律存「id」不存名稱——類別/班別日後改名，綁定仍然有效（使用者明確要求）。
+ * ============================================================ */
+const TRAINING_SETTING_KEYS = ['training_default_shift_id', 'training_cat_internal', 'training_cat_external'];
+
+function training_settings(PDO $db): array {
+    $out = ['training_default_shift_id'=>null, 'training_cat_internal'=>null, 'training_cat_external'=>null];
+    try {
+        $in = implode(',', array_fill(0, count(TRAINING_SETTING_KEYS), '?'));
+        $st = $db->prepare("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ($in)");
+        $st->execute(TRAINING_SETTING_KEYS);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r)
+            $out[$r['setting_key']] = ($r['setting_value'] === '' || $r['setting_value'] === null) ? null : (int)$r['setting_value'];
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+function training_setting_save(PDO $db, string $key, ?int $val, int $uid, string $uname): void {
+    if (!in_array($key, TRAINING_SETTING_KEYS, true)) return;
+    $db->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by)
+                  VALUES (?,?,?,?)
+                  ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value),
+                      updated_by_id=VALUES(updated_by_id), updated_by=VALUES(updated_by)")
+       ->execute([$key, $val === null ? '' : (string)$val, $uid, $uname]);
+}
+
+/** 行事曆類別 id：優先用設定綁定的 id；沒設定才以名稱回退（找不到回 null＝不寫行事曆） */
+function training_category_id(PDO $db, string $trainType): ?int {
+    $set = training_settings($db);
+    $key = $trainType === 'external' ? 'training_cat_external' : 'training_cat_internal';
+    if ($set[$key]) {
+        $st = $db->prepare("SELECT id FROM event_category WHERE id=?");
+        $st->execute([$set[$key]]);
+        $v = $st->fetchColumn();
+        if ($v) return (int)$v;
+    }
+    $fallback = $trainType === 'external' ? '課程(外訓)' : '課程(內訓)';
+    try {
+        $st = $db->prepare("SELECT id FROM event_category WHERE category_name=? LIMIT 1");
+        $st->execute([$fallback]);
+        $v = $st->fetchColumn();
+        return $v ? (int)$v : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** 固定班別（與輪值排班共用 shift_type：上下班時間僅供帶入參考，break_minutes 用於扣時數） */
+function training_shifts(PDO $db): array {
+    try {
+        return $db->query("SELECT shift_type_id, shift_name, shift_code,
+                                  LEFT(start_time,5) AS start_time, LEFT(end_time,5) AS end_time,
+                                  break_minutes, is_overnight
+                           FROM shift_type WHERE is_active=1 ORDER BY sort_order, shift_type_id")
+                  ->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/* ============================================================
+ * 行事曆同步（evenement）：一個上課日一筆事件
+ *   寫法比照 src/store/_events_setting.php 與 leave_lib.php 的行事曆段落。
+ *   同步時機：確認實行/登錄完成(save_execution) → 建立或更新；
+ *             退回計畫中/取消/刪除場次 → 移除。失敗一律不擋主流程。
+ * ============================================================ */
+function training_event_set_targets(PDO $db, int $evId): void {
+    try {
+        $db->prepare("DELETE FROM evenement_target WHERE event_id=?")->execute([$evId]);
+        $db->prepare("DELETE FROM evenement_recipient_cache WHERE event_id=?")->execute([$evId]);
+        $db->prepare("INSERT INTO evenement_target (event_id, target_type, created_at) VALUES (?, 'all', NOW())")
+           ->execute([$evId]);   // 教育訓練屬公司事務 → 全體可見
+        $ids = $db->query("SELECT id FROM user WHERE state NOT IN (0, 90) AND state IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
+        $cache = $db->prepare("INSERT INTO evenement_recipient_cache (event_id, user_id, created_at) VALUES (?, ?, NOW())");
+        foreach ($ids as $u) $cache->execute([$evId, (int)$u]);
+    } catch (Throwable $e) {}
+}
+
+/** 移除某場次已同步的行事曆事件（只刪 training_session_day.evenement_id 指到的那些，不條件反查） */
+function training_event_remove(PDO $db, int $sid): void {
+    try {
+        $st = $db->prepare("SELECT day_id, evenement_id FROM training_session_day WHERE session_id=? AND evenement_id IS NOT NULL");
+        $st->execute([$sid]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $ev = (int)$r['evenement_id'];
+            $db->prepare("DELETE FROM evenement_recipient_cache WHERE event_id=?")->execute([$ev]);
+            $db->prepare("DELETE FROM evenement_target WHERE event_id=?")->execute([$ev]);
+            $db->prepare("DELETE FROM evenement_actor WHERE event_id=?")->execute([$ev]);
+            $db->prepare("DELETE FROM evenement WHERE id=?")->execute([$ev]);
+            $db->prepare("UPDATE training_session_day SET evenement_id=NULL WHERE day_id=?")->execute([$r['day_id']]);
+        }
+    } catch (Throwable $e) {}
+}
+
+/**
+ * 同步某場次到行事曆：每個上課日一筆 evenement（先移除舊的再重建，避免改期後殘留）。
+ * 回傳實際寫入的事件數；沒有綁定類別（且名稱也找不到）時回 0 並不寫入。
+ */
+function training_event_sync(PDO $db, int $sid): int {
+    try {
+        $st = $db->prepare("SELECT s.*, d.name AS dept_name FROM training_session s
+                            LEFT JOIN department d ON d.id=s.dept_id WHERE s.session_id=?");
+        $st->execute([$sid]);
+        $s = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$s) return 0;
+        training_event_remove($db, $sid);
+        if (!in_array($s['status'], ['scheduled', 'done'], true)) return 0;   // 只有確定開課後才進行事曆
+        $catId = training_category_id($db, (string)$s['train_type']);
+        if (!$catId) return 0;
+        $dq = $db->prepare("SELECT day_id, day_no, day_date, start_time, end_time, hours FROM training_session_day
+                            WHERE session_id=? ORDER BY day_no, day_date");
+        $dq->execute([$sid]);
+        $days = $dq->fetchAll(PDO::FETCH_ASSOC);
+        $ext = $s['train_type'] === 'external';
+        $n = count($days); $done = 0;
+        foreach ($days as $d) {
+            $title = '教育訓練：' . $s['course_name'] . ($n > 1 ? '（第' . $d['day_no'] . '/' . $n . '天）' : '');
+            $startT = $d['start_time'] ?: '00:00';
+            $endT   = $d['end_time'] ?: '23:59';
+            $allday = ($d['start_time'] && $d['end_time']) ? 0 : 1;
+            $remark = ($ext ? '外訓' : '內訓')
+                . '／' . ($ext ? ('開課單位：' . ($s['org_unit'] ?: '—')) : ('講師：' . ($s['trainer'] ?: '—')))
+                . '　對象：' . ($s['dept_id'] === null ? '全公司' : ($s['dept_name'] ?: ''))
+                . ($s['location'] ? '　地點：' . $s['location'] : '')
+                . ($d['hours'] !== null ? '　時數：' . rtrim(rtrim(number_format((float)$d['hours'], 1), '0'), '.') : '')
+                . '（教育訓練管理 #' . $sid . '）';
+            $db->prepare("INSERT INTO evenement (title, category_id, start, end, allday, remark) VALUES (?,?,?,?,?,?)")
+               ->execute([$title, $catId, $d['day_date'] . ' ' . $startT . ':00', $d['day_date'] . ' ' . $endT . ':00', $allday, $remark]);
+            $evId = (int)$db->lastInsertId();
+            if (!$ext && $s['trainer_id']) {
+                try { $db->prepare("INSERT INTO evenement_actor (event_id, user_id, created_at) VALUES (?,?,NOW())")
+                         ->execute([$evId, (int)$s['trainer_id']]); } catch (Throwable $e) {}
+            }
+            training_event_set_targets($db, $evId);
+            $db->prepare("UPDATE training_session_day SET evenement_id=? WHERE day_id=?")->execute([$evId, $d['day_id']]);
+            $done++;
+        }
+        return $done;
+    } catch (Throwable $e) { return 0; }
 }
 
 /* ============================================================

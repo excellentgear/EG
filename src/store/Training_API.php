@@ -58,8 +58,31 @@ case 'meta': {
     $cy = (int)date('Y');
     $years = array_values(array_unique(array_merge([$cy], array_map('intval', $years))));
     rsort($years);
+    $cats = [];
+    try { $cats = $db->query("SELECT id, category_name, color FROM event_category ORDER BY category_name")->fetchAll(PDO::FETCH_ASSOC); }
+    catch (Throwable $e) {}
     jout(['perms'=>$perms, 'departments'=>$depts, 'years'=>$years, 'locations'=>tr_locations($db),
+          'shifts'=>training_shifts($db), 'settings'=>training_settings($db), 'event_categories'=>$cats,
+          'cat_internal_eff'=>training_category_id($db, 'internal'), 'cat_external_eff'=>training_category_id($db, 'external'),
           'cur_year'=>$cy, 'cur_month'=>(int)date('n'), 'today'=>date('Y-m-d')]);
+}
+
+/* 模組設定（限訓練管理員）：預設班別、行事曆類別綁定（存 id 不存名稱） */
+case 'save_settings': {
+    if (!$perms['canAdmin']) jerr('無管理權限（設定限訓練管理員）', 403);
+    $map = ['default_shift_id'=>'training_default_shift_id',
+            'cat_internal'=>'training_cat_internal', 'cat_external'=>'training_cat_external'];
+    try {
+        $db->beginTransaction();
+        foreach ($map as $post => $key) {
+            if (!array_key_exists($post, $_POST)) continue;
+            $v = trim((string)$_POST[$post]);
+            training_setting_save($db, $key, $v === '' ? null : (int)$v, $uid, $uname);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('設定儲存失敗：'.$e->getMessage(), 500); }
+    jout(['settings'=>training_settings($db),
+          'cat_internal_eff'=>training_category_id($db, 'internal'), 'cat_external_eff'=>training_category_id($db, 'external')]);
 }
 
 /* ---------- 上課地點主檔（設定後可下拉選擇） ---------- */
@@ -101,7 +124,8 @@ case 'list': {
     $st = $db->prepare("SELECT * FROM training_session WHERE year=? ORDER BY plan_month, session_id");
     $st->execute([$year]);
     // 各場次上課日期（多天課程）
-    $dq = $db->prepare("SELECT d.session_id, d.day_no, d.day_date, d.start_time, d.end_time, d.hours
+    $dq = $db->prepare("SELECT d.session_id, d.day_no, d.day_date, d.start_time, d.end_time, d.hours,
+                               d.break_minutes, d.evenement_id
                         FROM training_session_day d JOIN training_session s ON s.session_id=d.session_id
                         WHERE s.year=? ORDER BY d.session_id, d.day_no, d.day_date");
     $dq->execute([$year]);
@@ -181,7 +205,9 @@ case 'save_execution': {
     if ($cur === 'cancelled') jerr('此計畫已取消，請先恢復為計畫中再確認實行');
     $location = trim((string)($_POST['location'] ?? '')) ?: null;
 
-    // days：[{day_date, start_time, end_time, hours}, ...]；沒帶就退回單天（相容舊呼叫）
+    $shiftId = ($_POST['shift_type_id'] ?? '') === '' ? null : (int)$_POST['shift_type_id'];
+
+    // days：[{day_date, start_time, end_time, break_minutes, hours}, ...]；沒帶就退回單天（相容舊呼叫）
     $days = json_decode((string)($_POST['days'] ?? '[]'), true);
     if (!is_array($days) || !count($days)) {
         $days = [['day_date'=>trim((string)($_POST['done_date'] ?? '')),
@@ -204,10 +230,17 @@ case 'save_execution': {
         if (!tr_valid_time($s)) jerr("第 {$n} 天：開始時間不是合法時刻（{$s}），時須 0-23、分須 0-59");
         if (!tr_valid_time($e)) jerr("第 {$n} 天：結束時間不是合法時刻（{$e}），時須 0-23、分須 0-59");
         if ($s && $e && $e <= $s) jerr("第 {$n} 天：結束時間（{$e}）不可早於或等於開始時間（{$s}）");
+        $brk = ($d['break_minutes'] ?? '') === '' ? 0 : (int)$d['break_minutes'];
+        if ($brk < 0) jerr("第 {$n} 天：休息時間不可為負數");
+        if ($brk > 480) jerr("第 {$n} 天：休息時間 {$brk} 分鐘不合理（上限 480）");
+        // 時數＝(結束−開始)−休息；使用者可手填覆蓋（例：中間穿插其他行程）
+        $span = ($s && $e) ? (int)round((strtotime("1970-01-01 $e UTC") - strtotime("1970-01-01 $s UTC")) / 60) : null;
+        if ($span !== null && $brk >= $span)
+            jerr("第 {$n} 天：上課時間 {$span} 分鐘（{$s}~{$e}）不足以扣除休息 {$brk} 分鐘");
         $h = ($d['hours'] ?? '') === '' ? null : (float)$d['hours'];
-        if ($h === null && $s && $e) $h = round((strtotime("1970-01-01 $e UTC") - strtotime("1970-01-01 $s UTC")) / 3600, 1);
+        if ($h === null && $span !== null) $h = round(($span - $brk) / 60, 1);
         if ($h !== null && ($h < 0 || $h > 24)) jerr("第 {$n} 天：時數 {$h} 不合理（0~24）");
-        $clean[] = ['date'=>$date, 'start'=>$s, 'end'=>$e, 'hours'=>$h];
+        $clean[] = ['date'=>$date, 'start'=>$s, 'end'=>$e, 'break'=>$brk, 'hours'=>$h];
     }
     usort($clean, fn($a, $b) => strcmp($a['date'], $b['date']));
     $totalH = 0; $hasH = false;
@@ -217,17 +250,21 @@ case 'save_execution': {
     $newStatus = $markDone ? 'done' : ($cur === 'done' ? 'done' : 'scheduled');
     try {
         $db->beginTransaction();
-        $db->prepare("UPDATE training_session SET status=?, done_date=?, start_time=?, end_time=?, location=?, actual_hours=?, plan_days=?
+        training_event_remove($db, $sid);      // 舊事件先清（日期/時間可能已變動）
+        $db->prepare("UPDATE training_session SET status=?, done_date=?, start_time=?, end_time=?, location=?, actual_hours=?, plan_days=?, shift_type_id=?
                       WHERE session_id=?")
            ->execute([$newStatus, $clean[0]['date'], $clean[0]['start'], $clean[0]['end'], $location,
-                      $hasH ? round($totalH, 1) : null, count($clean), $sid]);
+                      $hasH ? round($totalH, 1) : null, count($clean), $shiftId, $sid]);
         $db->prepare("DELETE FROM training_session_day WHERE session_id=?")->execute([$sid]);
-        $ins = $db->prepare("INSERT INTO training_session_day (session_id, day_no, day_date, start_time, end_time, hours)
-                             VALUES (?,?,?,?,?,?)");
-        foreach ($clean as $i => $c) $ins->execute([$sid, $i + 1, $c['date'], $c['start'], $c['end'], $c['hours']]);
+        $ins = $db->prepare("INSERT INTO training_session_day (session_id, day_no, day_date, start_time, end_time, break_minutes, hours)
+                             VALUES (?,?,?,?,?,?,?)");
+        foreach ($clean as $i => $c) $ins->execute([$sid, $i + 1, $c['date'], $c['start'], $c['end'], $c['break'], $c['hours']]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
-    jout(['session_id'=>$sid, 'status'=>$newStatus, 'days'=>count($clean), 'total_hours'=>$hasH ? round($totalH, 1) : null]);
+    // 確定開課後自動寫入行事曆（一天一筆；失敗不擋存檔）
+    $evCount = training_event_sync($db, $sid);
+    jout(['session_id'=>$sid, 'status'=>$newStatus, 'days'=>count($clean), 'events'=>$evCount,
+          'total_hours'=>$hasH ? round($totalH, 1) : null]);
 }
 
 /* 狀態切換（登錄權）：退回計畫中 / 取消計畫 / 恢復計畫。
@@ -242,6 +279,7 @@ case 'set_status': {
     if (!$st->fetchColumn()) jerr('找不到場次');
     try {
         $db->beginTransaction();
+        training_event_remove($db, $sid);      // 退回計畫中/取消 → 一併撤掉行事曆事件
         $db->prepare("UPDATE training_session SET status=?, done_date=NULL WHERE session_id=?")->execute([$status, $sid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('狀態變更失敗：'.$e->getMessage(), 500); }
@@ -347,6 +385,7 @@ case 'delete_session': {
     if (!$st->fetchColumn()) jerr('找不到場次');
     try {
         $db->beginTransaction();
+        training_event_remove($db, $sid);      // 連帶撤掉行事曆事件
         $db->prepare("DELETE FROM training_attendee WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_session_day WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_session WHERE session_id=?")->execute([$sid]);

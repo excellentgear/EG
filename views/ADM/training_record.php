@@ -163,6 +163,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             </select>
             <input type="text" id="kwSel" placeholder="搜尋課程" style="width:130px;">
             <button class="btn-warm" id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增訓練場次</button>
+            <button id="btnSetting" style="display:none;"><i class="fa fa-sliders"></i> 模組設定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
             <span class="tr-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
@@ -190,6 +191,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <b>②確認實行</b>＝確定要開課（上課日期、每日時間、地點、參加人員 → 狀態轉「已排定」，此時就能列印簽到表給人員簽名；多天課程一天一頁）→
             <b>③登錄完成</b>＝上完課後回到同一畫面勾「實到」再按「登錄完成」（狀態轉「已完成」）。
             KPI 達成率＝當月「已完成」場次 ÷「計畫」場次（已排定算分母不算分子、取消不計入）；部門留空＝全公司課程。時數欄有 <span style="color:#DD5138;">*</span> 表示實際時數與計畫不同。
+            時數＝(結束−開始)−休息時間（休息可由「套用班別」自動帶入，見「模組設定」）；狀態轉「已排定/已完成」時會自動把每個上課日寫進<b>行事曆</b>（內訓/外訓各自類別，退回或取消會自動撤除）。
         </div>
 <?php endif; ?>
     </div>
@@ -256,24 +258,32 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         </div>
 
         <div class="batch-box">
+            <b>套用班別</b>
+            <select id="exShift" style="max-width:210px;"><option value="">（不套用班別）</option></select>
+            <span style="color:#8a6d45;">→ 帶入上下班時間與休息時間</span>
+        </div>
+        <div class="batch-box" style="margin-top:0;">
             <b>每日上課時間</b>
             <span>開始</span><input type="text" id="exBStart" class="time-in" maxlength="5" placeholder="09:00" style="width:66px;">
             <span>結束</span><input type="text" id="exBEnd" class="time-in" maxlength="5" placeholder="17:00" style="width:66px;">
+            <span>休息</span><input type="number" id="exBBreak" min="0" max="480" step="10" style="width:62px;"><span>分</span>
             <button type="button" class="b-att" onclick="dayApplyAll()"><i class="fa fa-clone"></i> 套用到全部日期</button>
             <button type="button" class="b-att" style="background:#fff;color:#8A5A2B;" onclick="dayRebuild()"><i class="fa fa-refresh"></i> 依首日與天數重建日期</button>
             <span class="errmsg" id="errBatch" style="margin:0;"></span>
         </div>
         <div class="att-list-wrap" style="max-height:210px;">
             <table class="day-tbl">
-                <thead><tr><th style="width:52px;">第</th><th style="width:135px;">上課日期</th><th style="width:78px;">開始</th>
-                    <th style="width:78px;">結束</th><th style="width:70px;">時數</th><th>檢查</th><th style="width:30px;"></th></tr></thead>
+                <thead><tr><th style="width:52px;">第</th><th style="width:130px;">上課日期</th><th style="width:70px;">開始</th>
+                    <th style="width:70px;">結束</th><th style="width:66px;">休息(分)</th><th style="width:62px;">時數</th>
+                    <th>檢查</th><th style="width:28px;"></th></tr></thead>
                 <tbody id="dayBody"></tbody>
             </table>
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin:4px 0 2px;font-size:12px;color:#5b3a1e;">
             <button type="button" class="b-att" onclick="dayAdd()"><i class="fa fa-plus"></i> 新增一天</button>
             <span id="exTotalHint"></span>
-            <span style="color:#8a6d45;">時間可直接輸入（09:00、0900、9 都可）；先用上方「套用到全部日期」設定，再個別修改不同的那幾天。</span>
+            <span style="color:#8a6d45;">時間可直接輸入（09:00、0900、9 都可）；先用上方「套用到全部日期」設定，再個別修改不同的那幾天。
+                時數＝(結束−開始)−休息，可自行覆寫。</span>
         </div>
 
         <div class="att-sec">
@@ -297,6 +307,30 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <button class="b-cancel" onclick="closeMask('exMask')">取消</button>
         <button class="b-ok" id="exSave" onclick="submitEx(0)">確認開課</button>
         <button class="b-ok" id="exFinish" style="margin-left:6px;" onclick="submitEx(1)">登錄完成</button>
+    </div>
+</div></div>
+
+<!-- 模組設定 modal（限訓練管理員）：預設班別、行事曆類別綁定 -->
+<div class="tr-mask" id="setMask"><div class="tr-modal" style="max-width:520px;">
+    <div class="m-head"><span>教育訓練模組設定</span><span class="m-close" onclick="closeMask('setMask')">✕</span></div>
+    <div class="m-body">
+        <label>預設套用班別（上下班時間僅作開課時間參考，休息時間用來扣除實際時數）</label>
+        <select id="setShift"><option value="">（不套用班別）</option></select>
+        <div class="tr-hint" style="margin-top:6px;">班別資料與「輪值排班表」的固定班別共用（`shift_type`）；在此只是選預設值，確認實行時仍可逐場改，
+            且<b>不限制上課時間必須落在班別的上下班時間內</b>。</div>
+
+        <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
+        <label>行事曆類別綁定 — 內訓</label>
+        <select id="setCatIn"><option value="">（自動：以名稱「課程(內訓)」尋找）</option></select>
+        <label>行事曆類別綁定 — 外訓</label>
+        <select id="setCatEx"><option value="">（自動：以名稱「課程(外訓)」尋找）</option></select>
+        <div class="tr-hint" style="margin-top:6px;">綁定存的是類別 <b>id</b>，所以日後在行事曆把類別改名（例如「課程(內訓)」→「內部訓練」）綁定依然有效。
+            未綁定時才用名稱尋找，找不到就不寫行事曆（不影響存檔）。<br>
+            <span id="setCatEff" style="color:#8A5A2B;"></span></div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('setMask')">取消</button>
+        <button class="b-ok" onclick="saveSettings()">儲存設定</button>
     </div>
 </div></div>
 
@@ -408,7 +442,11 @@ function loadMeta(cb){
         var $em = $('#edMonth').empty();
         for (var i=1;i<=12;i++) $em.append('<option value="'+i+'">'+i+'月</option>');
         LOCS = m.locations || []; renderLocSel();
+        SHIFTS = m.shifts || []; SETTINGS = m.settings || {}; CATS = m.event_categories || [];
+        CAT_EFF = {internal:m.cat_internal_eff||null, external:m.cat_external_eff||null};
+        renderShiftSel();
         if (m.perms.canEdit) $('#btnAdd').show();
+        if (m.perms.canAdmin) $('#btnSetting').show();
         if (cb) cb();
     });
 }
@@ -564,19 +602,27 @@ function openEx(sid){
       + '　計畫時數：'+(r.hours==null?'—':numTrim(r.hours))+'</div>');
     // 上課日期明細：已登錄過就沿用；沒有就依「首日＋計畫天數」自動排連續日期
     var first = fmtDate(r.done_date) || META.today || '';
+    // 班別：沿用本場已選的，否則用模組設定的預設班別
+    var shiftId = r.shift_type_id || SETTINGS.training_default_shift_id || '';
+    $('#exShift').val(shiftId || '');
+    var sh = shiftById(shiftId);
     DAYS = (r.days||[]).map(function(d){
         return {date:fmtDate(d.day_date), start:d.start_time||'', end:d.end_time||'',
-                hours:d.hours==null?'':numTrim(d.hours)};
+                brk:d.break_minutes==null?0:+d.break_minutes, hours:d.hours==null?'':numTrim(d.hours)};
     });
     if (!DAYS.length){
         var n = Math.max(1, parseInt(r.plan_days||1, 10) || 1);
-        var perH = (r.hours!=null && n>0) ? numTrim(Math.round(parseFloat(r.hours)/n*10)/10) : '';
-        for (var i=0;i<n;i++) DAYS.push({date:first?addDaysStr(first,i):'', start:r.start_time||'', end:r.end_time||'', hours:perH});
+        var st0 = r.start_time || (sh?sh.start_time:''), en0 = r.end_time || (sh?sh.end_time:'');
+        var bk0 = sh ? +sh.break_minutes : 0;
+        var perH = calcDayHours({start:st0, end:en0, brk:bk0});
+        if (perH==null && r.hours!=null && n>0) perH = numTrim(Math.round(parseFloat(r.hours)/n*10)/10);
+        for (var i=0;i<n;i++) DAYS.push({date:first?addDaysStr(first,i):'', start:st0, end:en0, brk:bk0, hours:perH||''});
     }
     $('#exDone').val(DAYS[0].date || first);
     $('#exDays').val(DAYS.length);
     $('#exBStart').val(DAYS[0].start||''); $('#exBEnd').val(DAYS[0].end||'');
-    setErr($('#exBStart'), null, ''); setErr($('#exBEnd'), 'errBatch', '');
+    $('#exBBreak').val(DAYS[0].brk==null?0:DAYS[0].brk);
+    setErr($('#exBStart'), null, ''); setErr($('#exBEnd'), null, ''); setErr($('#exBBreak'), 'errBatch', '');
     setLocSel(r.location||'');
     renderDays();
     $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
@@ -592,7 +638,16 @@ function openEx(sid){
     setTimeout(function(){ $('#exDone').focus(); }, 100);
 }
 /* ---------- 多天課程：上課日期明細（每天一列，可全部套用後個別修改） ---------- */
-var DAYS = [];   // [{date,start,end,hours}]
+var DAYS = [];   // [{date,start,end,brk,hours}]
+/* 當日時數＝(結束−開始)−休息 */
+function calcDayHours(d){
+    var s=timeToMin(d.start), e=timeToMin(d.end);
+    if (s==null || e==null || e<=s) return null;
+    var brk = parseInt(d.brk,10); if (isNaN(brk)||brk<0) brk=0;
+    var mins = (e-s) - brk;
+    if (mins <= 0) return null;
+    return numTrim(Math.round(mins/60*10)/10);
+}
 function renderDays(){
     var h='';
     DAYS.forEach(function(d,i){
@@ -601,6 +656,7 @@ function renderDays(){
           +'<td><input type="date" max="9999-12-31" value="'+esc(d.date)+'" onchange="dayEdit('+i+',\'date\',this.value)"></td>'
           +'<td><input type="text" class="time-in" maxlength="5" placeholder="09:00" value="'+esc(d.start)+'" oninput="dayEdit('+i+',\'start\',this.value,1)" onchange="dayEdit('+i+',\'start\',this.value)"></td>'
           +'<td><input type="text" class="time-in" maxlength="5" placeholder="17:00" value="'+esc(d.end)+'" oninput="dayEdit('+i+',\'end\',this.value,1)" onchange="dayEdit('+i+',\'end\',this.value)"></td>'
+          +'<td><input type="number" min="0" max="480" step="10" value="'+esc(d.brk==null?0:d.brk)+'" onchange="dayEdit('+i+',\'brk\',this.value)"></td>'
           +'<td><input type="number" step="any" min="0" value="'+esc(d.hours)+'" onchange="dayEdit('+i+',\'hours\',this.value)"></td>'
           +'<td class="chk" id="dayChk'+i+'"></td>'
           +'<td>'+(DAYS.length>1?'<span class="att-del" onclick="dayDel('+i+')"><i class="fa fa-times"></i></span>':'')+'</td>'
@@ -619,18 +675,22 @@ function dayEdit(i, key, val, typing){
         DAYS[i][key] = p.ok ? p.val : val;
         if (!typing){
             if (p.ok) $('#dayBody tr').eq(i).find('input').eq(key==='start'?1:2).val(p.val);
-            // 有起訖就自動回填當日時數（使用者仍可手改，例如扣午休）
-            var s=timeToMin(DAYS[i].start), e=timeToMin(DAYS[i].end);
-            if (s!=null && e!=null && e>s) DAYS[i].hours = numTrim(Math.round((e-s)/60*10)/10);
+            var hh = calcDayHours(DAYS[i]);      // 起訖(扣休息)自動回填時數，仍可手改
+            if (hh!=null) DAYS[i].hours = hh;
             renderDays(); return;
         }
+    } else if (key==='brk'){
+        DAYS[i].brk = val;
+        var h2 = calcDayHours(DAYS[i]);
+        if (h2!=null) DAYS[i].hours = h2;
+        renderDays(); return;
     } else DAYS[i][key] = val;
     dayValidate();
 }
 function dayDel(i){ if (DAYS.length<=1) return; DAYS.splice(i,1); renderDays(); }
 function dayAdd(){
-    var last = DAYS[DAYS.length-1] || {date:$('#exDone').val()||META.today, start:'', end:'', hours:''};
-    DAYS.push({date:last.date?addDaysStr(last.date,1):'', start:last.start, end:last.end, hours:last.hours});
+    var last = DAYS[DAYS.length-1] || {date:$('#exDone').val()||META.today, start:'', end:'', brk:0, hours:''};
+    DAYS.push({date:last.date?addDaysStr(last.date,1):'', start:last.start, end:last.end, brk:last.brk, hours:last.hours});
     renderDays();
 }
 /* 依「開課首日＋上課天數」重建連續日期（時間沿用批次設定或第一天） */
@@ -643,26 +703,29 @@ function dayRebuild(){
     setErr($('#exDone'),'errExDone',''); setErr($('#exDays'),'errExDays','');
     var bs=parseTime($('#exBStart').val()), be=parseTime($('#exBEnd').val());
     var s = bs.ok?bs.val:(DAYS[0]?DAYS[0].start:''), e = be.ok?be.val:(DAYS[0]?DAYS[0].end:'');
-    var hh = ''; var sm=timeToMin(s), em=timeToMin(e);
-    if (sm!=null && em!=null && em>sm) hh = numTrim(Math.round((em-sm)/60*10)/10);
+    var brk = $('#exBBreak').val(); if (brk==='') brk = DAYS[0] ? DAYS[0].brk : 0;
+    var hh = calcDayHours({start:s, end:e, brk:brk});
     var old = DAYS.slice();
     DAYS = [];
     for (var i=0;i<n;i++) DAYS.push({date:addDaysStr(first,i),
-        start:s||(old[i]?old[i].start:''), end:e||(old[i]?old[i].end:''), hours:hh||(old[i]?old[i].hours:'')});
+        start:s||(old[i]?old[i].start:''), end:e||(old[i]?old[i].end:''),
+        brk:brk, hours:hh!=null?hh:(old[i]?old[i].hours:'')});
     renderDays();
 }
-/* 時間套用到全部日期（不動日期） */
+/* 時間與休息套用到全部日期（不動日期） */
 function dayApplyAll(){
     var bs=parseTime($('#exBStart').val()), be=parseTime($('#exBEnd').val());
     if (!bs.ok){ setErr($('#exBStart'),'errBatch','開始時間：'+bs.msg); return; }
     if (!be.ok){ setErr($('#exBEnd'),'errBatch','結束時間：'+be.msg); return; }
     if (bs.val && be.val && timeToMin(be.val)<=timeToMin(bs.val)){
         setErr($('#exBEnd'),'errBatch','結束時間（'+be.val+'）不可早於或等於開始時間（'+bs.val+'）'); return; }
-    setErr($('#exBStart'),null,''); setErr($('#exBEnd'),'errBatch','');
-    $('#exBStart').val(bs.val); $('#exBEnd').val(be.val);
-    var hh=''; var sm=timeToMin(bs.val), em=timeToMin(be.val);
-    if (sm!=null && em!=null && em>sm) hh = numTrim(Math.round((em-sm)/60*10)/10);
-    DAYS.forEach(function(d){ d.start=bs.val; d.end=be.val; if(hh) d.hours=hh; });
+    var brk = parseInt($('#exBBreak').val(),10); if (isNaN(brk)||brk<0) brk=0;
+    if (bs.val && be.val && brk >= (timeToMin(be.val)-timeToMin(bs.val))){
+        setErr($('#exBBreak'),'errBatch','上課時間 '+(timeToMin(be.val)-timeToMin(bs.val))+' 分鐘不足以扣除休息 '+brk+' 分鐘'); return; }
+    setErr($('#exBStart'),null,''); setErr($('#exBEnd'),null,''); setErr($('#exBBreak'),'errBatch','');
+    $('#exBStart').val(bs.val); $('#exBEnd').val(be.val); $('#exBBreak').val(brk);
+    var hh = calcDayHours({start:bs.val, end:be.val, brk:brk});
+    DAYS.forEach(function(d){ d.start=bs.val; d.end=be.val; d.brk=brk; if(hh!=null) d.hours=hh; });
     renderDays();
 }
 /* 即時驗證每一天：日期存在/不重複、時間合法(擋 25:00)、同日結束不可早於開始、時數合理 */
@@ -670,8 +733,9 @@ function dayValidate(){
     var seen={}, bad=0, total=0, hasH=false, firstMsg='', firstIdx=-1;
     DAYS.forEach(function(d,i){
         var msg='', $tr=$('#dayBody tr').eq(i);
-        var $din=$tr.find('input').eq(0), $sin=$tr.find('input').eq(1), $ein=$tr.find('input').eq(2), $hin=$tr.find('input').eq(3);
-        $din.removeClass('inv'); $sin.removeClass('inv'); $ein.removeClass('inv'); $hin.removeClass('inv');
+        var $din=$tr.find('input').eq(0), $sin=$tr.find('input').eq(1), $ein=$tr.find('input').eq(2),
+            $bin=$tr.find('input').eq(3), $hin=$tr.find('input').eq(4);
+        $din.removeClass('inv'); $sin.removeClass('inv'); $ein.removeClass('inv'); $bin.removeClass('inv'); $hin.removeClass('inv');
         if (!d.date){ msg='請填上課日期'; $din.addClass('inv'); }
         else if (!validDateStr(d.date)){ msg='日期不存在或格式錯誤'; $din.addClass('inv'); }
         else if (seen[d.date]){ msg='日期與第'+seen[d.date]+'天重複'; $din.addClass('inv'); }
@@ -681,13 +745,19 @@ function dayValidate(){
         if (!msg && !pe.ok){ msg='結束時間：'+pe.msg; $ein.addClass('inv'); }
         if (!msg && ps.ok && pe.ok && ps.val && pe.val && timeToMin(pe.val)<=timeToMin(ps.val)){
             msg='結束 '+pe.val+' 不可早於或等於開始 '+ps.val; $ein.addClass('inv'); }
+        var bv = (d.brk===''||d.brk==null) ? 0 : parseInt(d.brk,10);
+        if (!msg && (isNaN(bv)||bv<0)){ msg='休息時間不可為負數'; $bin.addClass('inv'); }
+        if (!msg && bv>480){ msg='休息 '+bv+' 分鐘不合理（上限 480）'; $bin.addClass('inv'); }
+        if (!msg && ps.val && pe.val && bv >= (timeToMin(pe.val)-timeToMin(ps.val))){
+            msg='上課時間 '+(timeToMin(pe.val)-timeToMin(ps.val))+' 分鐘不足以扣除休息 '+bv+' 分鐘'; $bin.addClass('inv'); }
         var hv = d.hours===''||d.hours==null ? null : parseFloat(d.hours);
         if (!msg && hv!=null && (isNaN(hv)||hv<0)){ msg='時數不可為負數'; $hin.addClass('inv'); }
         if (!msg && hv!=null && hv>24){ msg='當日時數 '+numTrim(hv)+' 超過 24 小時'; $hin.addClass('inv'); }
         if (hv!=null && !isNaN(hv)){ total+=hv; hasH=true; }
         if (msg){ bad++; if(firstIdx<0){ firstMsg='第'+(i+1)+'天：'+msg; firstIdx=i; } }
         $('#dayChk'+i).text(msg||'').toggleClass('ok', !msg);
-        if (!msg) $('#dayChk'+i).text(d.start&&d.end ? '✓ '+d.start+'~'+d.end : '✓');
+        if (!msg) $('#dayChk'+i).text(d.start&&d.end
+            ? '✓ '+d.start+'~'+d.end+(bv>0?'（扣休息 '+bv+' 分）':'') : '✓');
     });
     // 首日欄與明細第一天連動顯示
     var pl = EXROW && EXROW.hours!=null ? parseFloat(EXROW.hours) : null;
@@ -808,17 +878,69 @@ function submitEx(markDone){
     if (!ATT.length && !confirm('尚未加入任何參加人員，仍要儲存？')) return;
     if (markDone && !confirm('確定此場訓練已上完課？登錄完成後將計入當月教育訓練達成率。')) return;
     $.post(API, {action:'save_execution', session_id:sid, location:$('#exLocSel').val(),
+        shift_type_id:$('#exShift').val(),
         days:JSON.stringify(DAYS.map(function(d){
-            return {day_date:d.date, start_time:d.start, end_time:d.end, hours:d.hours}; })),
+            return {day_date:d.date, start_time:d.start, end_time:d.end,
+                    break_minutes:(d.brk===''||d.brk==null)?0:d.brk, hours:d.hours}; })),
         mark_done:markDone?1:0},
     function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        var evMsg = res.events>0 ? '已同步 '+res.events+' 筆行事曆事件。'
+                                 : '（未寫入行事曆：請於「模組設定」綁定行事曆類別）';
         $.post(API, {action:'save_attendees', session_id:sid, attendees:JSON.stringify(ATT)}, function(r2){
             if (!r2.ok){ alert('實行紀錄已存，但名單儲存失敗：'+(r2.error||'')); }
-            closeMask('exMask'); loadList();
+            closeMask('exMask'); loadList(); alert('已儲存。'+evMsg);
         }, 'json').fail(function(){ closeMask('exMask'); loadList(); });
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
+/* ---------- 固定班別（與輪值排班共用 shift_type）＋模組設定 ---------- */
+var SHIFTS = [], SETTINGS = {}, CATS = [], CAT_EFF = {internal:null, external:null};
+function shiftLabel(s){
+    return s.shift_name+'（'+s.start_time+'~'+s.end_time+'，休息 '+(+s.break_minutes)+' 分）';
+}
+function renderShiftSel(){
+    var h = '<option value="">（不套用班別）</option>';
+    SHIFTS.forEach(function(s){ h += '<option value="'+s.shift_type_id+'">'+esc(shiftLabel(s))+'</option>'; });
+    $('#exShift').html(h);
+    $('#setShift').html(h);
+    if (SETTINGS.training_default_shift_id) $('#setShift').val(SETTINGS.training_default_shift_id);
+}
+function shiftById(id){
+    for (var i=0;i<SHIFTS.length;i++) if (String(SHIFTS[i].shift_type_id)===String(id)) return SHIFTS[i];
+    return null;
+}
+/* 選班別 → 帶入批次時間與休息（上下班時間只是參考，不限制上課一定要在此區間內） */
+$('#exShift').on('change', function(){
+    var s = shiftById($(this).val());
+    if (!s) return;
+    $('#exBStart').val(s.start_time); $('#exBEnd').val(s.end_time); $('#exBBreak').val(+s.break_minutes);
+    setErr($('#exBStart'),null,''); setErr($('#exBEnd'),'errBatch','');
+    dayApplyAll();
+});
+/* 模組設定（預設班別、行事曆類別綁定） */
+function openSetting(){
+    var h='<option value="">（自動：以名稱尋找）</option>';
+    CATS.forEach(function(c){ h += '<option value="'+c.id+'">'+esc(c.category_name)+'</option>'; });
+    $('#setCatIn').html(h.replace('以名稱尋找','以名稱「課程(內訓)」尋找')).val(SETTINGS.training_cat_internal||'');
+    $('#setCatEx').html(h.replace('以名稱尋找','以名稱「課程(外訓)」尋找')).val(SETTINGS.training_cat_external||'');
+    $('#setShift').val(SETTINGS.training_default_shift_id||'');
+    var nm=function(id){ var f=CATS.filter(function(c){ return String(c.id)===String(id); }); return f.length?f[0].category_name:'（找不到）'; };
+    $('#setCatEff').html('目前實際使用：內訓＝'+(CAT_EFF.internal?esc(nm(CAT_EFF.internal))+'（id '+CAT_EFF.internal+'）':'未設定→不寫行事曆')
+        +'　外訓＝'+(CAT_EFF.external?esc(nm(CAT_EFF.external))+'（id '+CAT_EFF.external+'）':'未設定→不寫行事曆'));
+    openMask('setMask');
+}
+$('#btnSetting').on('click', openSetting);
+function saveSettings(){
+    $.post(API, {action:'save_settings', default_shift_id:$('#setShift').val(),
+        cat_internal:$('#setCatIn').val(), cat_external:$('#setCatEx').val()}, function(res){
+        if (!res.ok){ alert(res.error||'設定儲存失敗'); return; }
+        SETTINGS = res.settings||{};
+        CAT_EFF = {internal:res.cat_internal_eff||null, external:res.cat_external_eff||null};
+        renderShiftSel(); closeMask('setMask');
+        alert('設定已儲存。日後行事曆類別改名不影響綁定（存的是類別 id）。');
+    }, 'json').fail(function(x){ alert('設定儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
 /* ---------- 上課地點主檔 ---------- */
 var LOCS = [];
 function renderLocSel(){
@@ -868,7 +990,7 @@ function locDel(locId){
 
 /* 退回計畫中（實行 modal 內） */
 function revertPlanned(){
-    if (!confirm('退回為「計畫中」？實際開課日將清空（時段/地點與名單保留），此場次不再計入當月完成數。')) return;
+    if (!confirm('退回為「計畫中」？開課日期將清空、已同步的行事曆事件會一併撤除（時段/地點/休息/名單保留），此場次不再計入當月完成數。')) return;
     setStatus($('#exMask').data('sid'), 'planned', true);
 }
 /* 狀態切換：取消計畫 / 恢復計畫 / 退回計畫中 */
@@ -938,7 +1060,7 @@ function delSession(sid){
 
 /* ---------- CSV ---------- */
 $('#btnCsv').on('click', function(){
-    var rows = [['年','月','對象部門','課程名稱','類型','講師/開課單位','計畫時數','實際時數','天數','應到','實到','狀態','開課日期','每日時段','地點','備註']];
+    var rows = [['年','月','對象部門','課程名稱','類型','講師/開課單位','計畫時數','實際時數','天數','應到','實到','狀態','開課日期','每日時段','休息(分)','地點','備註']];
     ROWS.forEach(function(r){
         var ext=r.train_type==='external';
         var ds=(r.days||[]);
@@ -950,6 +1072,7 @@ $('#btnCsv').on('click', function(){
             ds.length ? ds.map(function(d){ return fmtDate(d.day_date); }).join('、') : fmtDate(r.done_date),
             ds.length ? ds.map(function(d){ return (d.start_time||'')+(d.end_time?'~'+d.end_time:''); }).join('、')
                       : (r.start_time||'')+(r.end_time?'~'+r.end_time:''),
+            ds.length ? ds.map(function(d){ return (d.break_minutes==null?0:d.break_minutes); }).join('、') : '',
             r.location||'', r.note||'']);
     });
     var csv = '﻿' + rows.map(function(l){
