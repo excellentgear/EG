@@ -2448,6 +2448,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $chk = $pdo->prepare("SELECT COUNT(*) FROM ir_track WHERE d_setting_id=?");
             $chk->execute([$d_id]); $cnt=(int)$chk->fetchColumn();
             if ($cnt>0) $blocks[] = "退貨單 {$cnt} 筆";
+            // 圖面變更紀錄（views/QC/drawing_change_log.php，AS 2-PD-01-07）：綁 d_id，屬品質可追溯紀錄，
+            // 刪掉料號會讓「這張圖改過什麼」斷線，故一併阻擋、要求先移轉。表可能尚未建立，故包 try。
+            try {
+                $chk = $pdo->prepare("SELECT COUNT(*) FROM qc_drawing_change WHERE d_id=?");
+                $chk->execute([$d_id]); $cnt=(int)$chk->fetchColumn();
+                if ($cnt>0) $blocks[] = "圖面變更紀錄 {$cnt} 筆";
+            } catch (Exception $qe) {}
             if (!empty($blocks)) throw new Exception('此料號已有關聯資料，無法刪除：' . implode('、',$blocks));
             $pdo->prepare("DELETE FROM d_setting WHERE d_id=?")->execute([$d_id]);
             _log_audit($pdo,'delete','part',$del_row['D_Setting_Id']??$d_id,null,null,$uid,_get_operator($pdo,$uid));
@@ -3483,6 +3490,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $chk = $pdo->prepare("SELECT COUNT(*) FROM stock_items WHERE d_id=? AND is_active=1"); $chk->execute([$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="庫存紀錄 {$n} 筆";$counts['stock']=$n;}
             $chk = $pdo->prepare("SELECT COUNT(*) FROM quotation_item WHERE d_setting_d_id=?"); $chk->execute([$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="報價單 {$n} 筆";$counts['quotation']=$n;}
             $chk = $pdo->prepare("SELECT COUNT(*) FROM ir_track WHERE d_setting_id=?"); $chk->execute([$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="退貨單 {$n} 筆";$counts['ir']=$n;}
+            // 圖面變更紀錄（AS 2-PD-01-07）：見 delete_part 內同一段註解。表可能尚未建立，故包 try。
+            try { $chk = $pdo->prepare("SELECT COUNT(*) FROM qc_drawing_change WHERE d_id=?"); $chk->execute([$d_id]); $n=(int)$chk->fetchColumn(); if($n){$blocks[]="圖面變更紀錄 {$n} 筆";$counts['dwg_change']=$n;} } catch (Exception $qe) {}
             echo json_encode(['success'=>true,'blocks'=>$blocks,'counts'=>$counts,'part'=>$part]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -3582,6 +3591,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $q=$pdo->prepare("SELECT COUNT(*) FROM is_list WHERE d_setting_id=?"); $q->execute([$did]); $n=(int)$q->fetchColumn(); if($n) $cs[]="出貨{$n}筆";
                 $q=$pdo->prepare("SELECT COUNT(*) FROM quotation_item WHERE d_setting_d_id=?"); $q->execute([$did]); $n=(int)$q->fetchColumn(); if($n) $cs[]="報價{$n}筆";
                 $q=$pdo->prepare("SELECT COUNT(*) FROM ir_track WHERE d_setting_id=?"); $q->execute([$did]); $n=(int)$q->fetchColumn(); if($n) $cs[]="退貨{$n}筆";
+                try { $q=$pdo->prepare("SELECT COUNT(*) FROM qc_drawing_change WHERE d_id=?"); $q->execute([$did]); $n=(int)$q->fetchColumn(); if($n) $cs[]="圖面變更{$n}筆"; } catch (Exception $qe) {}
                 $row['bound_counts'] = implode('、', $cs) ?: '無綁定';
             }; unset($row);
             echo json_encode(['success'=>true,'data'=>$d_id>0?($rows[0]??null):$rows]);
@@ -3628,6 +3638,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $pdo->prepare("UPDATE d_setting_bom  SET child_d_id=?             WHERE child_d_id=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE stock_items    SET d_id=?                   WHERE d_id=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE quotation_item SET d_setting_d_id=?, product_id=? WHERE d_setting_d_id=?")->execute([$tgt_id,$tds,$src_id]);
+            // 圖面變更紀錄（AS 2-PD-01-07）改指向目標料號；表可能尚未建立，故包 try（缺表不影響其餘移轉）。
+            // 註：qc_inspection_version（檢驗標準版本）刻意不自動搬——目標料號通常已有自己的生效版本，
+            //     兩邊合併會出現兩個 is_active=1，屬品質決策，需人工到「檢驗標準管理」處理。
+            try { $pdo->prepare("UPDATE qc_drawing_change SET d_id=? WHERE d_id=?")->execute([$tgt_id,$src_id]); } catch (Exception $qe) {}
             $pdo->commit();
             $op_name = _get_operator($pdo, $uid);
             $cust_note = $sync_cust ? ('，客戶一併改為「'.($tgt_cust_name ?: $tgt_cust_id).'」') : '';
