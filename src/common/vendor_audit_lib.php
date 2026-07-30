@@ -111,6 +111,16 @@ function vendor_audit_ensure_schema(PDO $db): void {
     }
 }
 
+/* ---- 本公司名稱（列印標頭統一來源：customer_list.is_own_company=1 的 customer_full 客戶全名發票用）---- */
+function vendor_audit_company_name(PDO $db): string {
+    try {
+        $st = $db->query("SELECT customer_full, customer FROM customer_list WHERE is_own_company=1 LIMIT 1");
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if ($r) { $n = trim((string)($r['customer_full'] ?: $r['customer'])); if ($n !== '') return $n; }
+    } catch (Throwable $e) {}
+    return '超正齒輪科技有限公司';
+}
+
 /* ---- 綁定的 AS 表單（列印表單名稱/編號與 AS 文件管理連動）---- */
 function vendor_audit_bound_asdoc(PDO $db, string $key = 'vendor_audit_as_doc_id'): ?array {
     $id = (int)vendor_eval_setting($db, $key, 0);

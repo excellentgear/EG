@@ -58,6 +58,7 @@ case 'meta': {
           'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', ''),
           'as_doc'=>vendor_audit_bound_asdoc($db),
           'eval_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_eval_as_doc_id'),
+          'company_name'=>vendor_audit_company_name($db),
           'items'=>vendor_audit_items(), 'item_max'=>VENDOR_AUDIT_ITEM_MAX,
           'total_max'=>VENDOR_AUDIT_TOTAL_MAX, 'pass_rate'=>VENDOR_AUDIT_PASS_RATE,
           'self_w'=>VENDOR_AUDIT_SELF_W, 'audit_w'=>VENDOR_AUDIT_AUDIT_W,

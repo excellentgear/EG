@@ -829,7 +829,7 @@ function auditFormHTML(o){
     var docName = (META.as_doc && META.as_doc.doc_name) || '供應商評鑑稽核查表';
     var docNo   = (META.as_doc && META.as_doc.doc_no)   || '2-PH-01-02';
     var head = '<div style="text-align:center;">'
-        + '<div style="font-size:18px;font-weight:bold;">超正齒輪科技有限公司</div>'
+        + '<div style="font-size:18px;font-weight:bold;">'+esc(META.company_name||'')+'</div>'
         + '<div style="font-size:15px;margin-top:2px;">'+esc(docName)+'</div></div>';
     var info = '<table class="pf-info"><tr>'
         + '<td>供應商：'+(o.maker?esc(o.maker):'________________')+'</td>'
@@ -1016,7 +1016,7 @@ function printEvalAll(){
     for(var p=0;p<pages;p++){
         var cards='';
         for(var k=p*per;k<Math.min((p+1)*per,list.length);k++) cards+=evCardPrintHTML(list[k]);
-        body+='<div class="pg"><div class="pg-h"><div class="ttl"><div class="co">超正齒輪科技有限公司</div><div class="dn">'+esc(docName)+'（'+EVAL_ALL.year+' 年 定期評核）</div></div>'
+        body+='<div class="pg"><div class="pg-h"><div class="ttl"><div class="co">'+esc(META.company_name||'')+'</div><div class="dn">'+esc(docName)+'（'+EVAL_ALL.year+' 年 定期評核）</div></div>'
             +'<div class="pn">第 '+(p+1)+' / '+pages+' 頁</div></div>'
             +'<div class="pg-cards">'+cards+'</div><div class="pg-f">表單編號：'+esc(docNo)+'</div></div>';
     }
