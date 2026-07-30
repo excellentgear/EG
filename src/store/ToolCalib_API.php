@@ -654,8 +654,8 @@ case 'history': {
     $tid = (int)($_GET['tool_id'] ?? 0);
     $t = tc_get_tool($db, $tid);
     if (!$t) jerr('找不到量具');
-    $st = $db->prepare("SELECT calib_id, due_date, calib_date, result, method, operator, cert_no, next_due, note,
-                               batch_id, created_by_name, created_at
+    $st = $db->prepare("SELECT calib_id, due_date, calib_date, result, method, operator, operator_user_id, vendor_id,
+                               cert_no, next_due, note, batch_id, created_by_name, created_at
                         FROM qc_tool_calibration WHERE Tool_id=? ORDER BY calib_date DESC, calib_id DESC");
     $st->execute([$tid]);
     $list = $st->fetchAll(PDO::FETCH_ASSOC);
