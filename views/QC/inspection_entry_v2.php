@@ -30,6 +30,10 @@ $CSRF = $_SESSION['qc_csrf'];
 
 $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
 
+// 目前登入者中文名稱（底部固定列與列印的「檢驗人員」用；popup 模式不含側欄，故直接讀 session）
+$CURRENT_CNAME = trim((string)($_SESSION['user_cname'] ?? ''));
+if ($CURRENT_CNAME === '') $CURRENT_CNAME = trim((string)($_SESSION['user_uname'] ?? $_SESSION['userid'] ?? ''));
+
 // =============================================================================
 // v2 專屬後端（只處理舊頁沒有的三件事，其餘一律仍打舊頁 API，不動舊檔）
 //   ① 工程符號主檔 qc_symbol（Ø ± ▽ …）CRUD——僅管理員可增修刪
@@ -304,13 +308,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .tpick-scope { background:var(--cream); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-top:12px; font-size:13px; }
     .tpick-scope label { font-weight:normal; display:block; margin:2px 0; cursor:pointer; }
 
-    /* ---------- 量測格（大觸控目標） ---------- */
-    .cells { display:flex; flex-wrap:wrap; gap:10px; }
-    .mcell { position:relative; width:118px; border:2px solid var(--line); border-radius:8px; background:#fff; padding:16px 6px 4px; text-align:center; }
-    .mcell .mno { position:absolute; top:2px; left:6px; font-size:11px; color:#8a6a45; }
-    .mcell .mval { width:100%; border:0; background:transparent; text-align:center; font-size:24px; font-weight:bold;
-                   color:var(--ink); padding:0; height:34px; outline:none; }
-    .mcell .mdev { display:block; font-size:11px; height:15px; line-height:15px; color:#8a6a45; }
+    /* ---------- 量測格（三種檢視同一尺寸；2026-07-30 依現場要求逐項/逐件改成與總表一致） ---------- */
+    .cells { display:flex; flex-wrap:wrap; gap:6px; }
+    .mcell { position:relative; width:72px; border:1px solid var(--line); border-radius:5px; background:#fff; padding:12px 2px 2px; text-align:center; }
+    .mcell .mno { position:absolute; top:1px; left:3px; font-size:9px; color:#8a6a45; }
+    .mcell .mval { width:100%; border:0; background:transparent; text-align:center; font-size:15px; font-weight:bold;
+                   color:var(--ink); padding:0; height:22px; outline:none; }
+    .mcell .mdev { display:block; font-size:9px; height:12px; line-height:12px; color:#8a6a45; }
     .mcell.c-ok { border-color:var(--amber); background:#FDF6EA; }
     .mcell.c-ok .mdev:before { content:'✔ '; }
     .mcell.c-ng { border-color:var(--coral); background:var(--coral); }
@@ -320,8 +324,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .mcell.c-ng .mdev:before { content:'✘ '; }
     .mcell.c-empty { border-style:dashed; border-color:#D9C8B0; }
     .mcell.focus-on { box-shadow:0 0 0 3px rgba(240,162,75,.45); }
-    .mcell.okng { cursor:pointer; user-select:none; padding-bottom:8px; }
-    .mcell.okng .mtxt { display:block; font-size:20px; font-weight:bold; color:var(--ink); height:34px; line-height:34px; }
+    .mcell.okng { cursor:pointer; user-select:none; padding-bottom:4px; }
+    .mcell.okng .mtxt { display:block; font-size:13px; font-weight:bold; color:var(--ink); height:22px; line-height:22px; }
     .mcell.okng.c-ng .mtxt { color:#fff; }
     .mcell.okng.c-empty .mtxt { color:#b9a68d; }
     /* 逐件模式：一列一個檢驗項目 */
@@ -345,13 +349,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     #items-table .g-name { font-weight:bold; color:var(--ink); }
     #items-table .g-spec { font-size:13px; color:var(--ink2); white-space:nowrap; }
     #items-table .table-input { width:100%; min-width:0; border:1px solid #ccc; padding:3px 5px; border-radius:3px; }
-    /* 總表格子刻意做小：項目一多才不會整頁散開（大格請用逐項／逐件模式） */
-    #items-table .mcell { width:72px; padding:12px 2px 2px; border-width:1px; border-radius:5px; }
-    #items-table .mcell .mno { font-size:9px; top:1px; left:3px; }
-    #items-table .mcell .mval { font-size:15px; height:22px; }
-    #items-table .mcell .mdev { font-size:9px; height:12px; line-height:12px; }
-    #items-table .mcell.okng { padding-bottom:4px; }
-    #items-table .mcell.okng .mtxt { font-size:13px; height:22px; line-height:22px; }
     #items-table .gcells { gap:4px; }
     /* 項目列的操作鈕（加量測/備註/刪除）改放在「檢驗項目」欄名稱下方，
        原本擺最右欄會被視窗右緣切掉看不到（2026-07-30 現場回饋） */
@@ -406,15 +403,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .tool-sel-label { font-size:11px; color:#6b5a45; }
 
     /* 平板：加大所有觸控目標 */
+    /* 平板：格子與按鈕稍微加大以利觸控（桌機維持與總表一致的緊湊尺寸） */
     @media (max-width:1024px), (pointer:coarse) {
-        .mcell { width:132px; padding-top:18px; }
-        .mcell .mval { font-size:26px; height:38px; }
+        .mcell { width:92px; padding-top:14px; }
+        .mcell .mval { font-size:19px; height:28px; }
+        .mcell .mdev { font-size:10px; height:14px; line-height:14px; }
+        .mcell.okng .mtxt { font-size:16px; height:28px; line-height:28px; }
         .chip { padding:8px 14px; font-size:14px; }
         .btn-sm,.btn-xs { padding:8px 13px; font-size:14px; }
-        #items-table .mcell { width:96px; }
     }
     @media (max-width:600px){
-        .mcell { width:calc(50% - 5px); }
+        .mcell { width:calc(33% - 6px); }
         .spec { flex:1 1 45%; }
     }
 
@@ -426,8 +425,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         body * { visibility:hidden; }
         #print-area, #print-area * { visibility:visible; }
         #print-area { display:block; position:absolute; left:0; top:0; width:100%; color:#000; font-size:12px; }
-        #print-area .pr-title { text-align:center; font-size:18px; font-weight:bold; margin-bottom:2px; }
-        #print-area .pr-sub { text-align:center; font-size:12px; margin-bottom:8px; }
+        #print-area .pr-title { text-align:center; font-size:18px; font-weight:bold; margin-bottom:6px; }
+        /* 表單編號移到表尾右下角（比照紙本表單慣例）；量具改印編號，全名放對照列，省欄寬 */
+        #print-area .pr-foot { margin-top:8px; font-size:11px; overflow:hidden; }
+        #print-area .pr-foot .fno { float:right; }
+        #print-area .pr-tools { font-size:11px; margin-top:4px; line-height:1.5; }
+        #print-area table.pr-items th.c-tool, #print-area table.pr-items td.c-tool { width:62px; font-size:11px; }
+        #print-area table.pr-items th.c-no { width:34px; }
+        #print-area table.pr-items th.c-std, #print-area table.pr-items th.c-tol { width:56px; }
         #print-area .pr-meta { width:100%; border-collapse:collapse; margin-bottom:6px; }
         #print-area .pr-meta td { border:1px solid #000; padding:3px 6px; }
         #print-area .pr-meta .k { background:#f0f0f0; font-weight:bold; white-space:nowrap; width:70px; }
@@ -588,6 +593,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 <!-- ===================== 底部固定摘要 / 動作列 ===================== -->
 <div id="dock" style="display:none;">
     <div class="dockrow">
+        <span class="stat"><i class="fa fa-user"></i> 檢驗人員 <b><?php echo htmlspecialchars($CURRENT_CNAME !== '' ? $CURRENT_CNAME : '（未取得使用者名稱）', ENT_QUOTES, 'UTF-8'); ?></b></span>
         <span class="stat">進度 <b id="dk-prog">0/0</b> <span class="progbar"><i id="dk-progbar" style="width:0%"></i></span></span>
         <span class="stat bad">不良 <b id="dk-ng">0</b> 件</span>
         <span class="stat">整體判定 <b id="dk-judge">—</b></span>
@@ -1945,10 +1951,14 @@ $(function(){
         recalc(); scheduleDraftSave();
     });
     // UI 規範：聚焦自動全選、有值雙擊清空
+    // （插入工程符號後會把 symSkipSelect 拉起來，此時不可全選，否則接著打的字會蓋掉剛插的符號）
+    function autoSelectOnFocus(el){
+        setTimeout(function(){ if(symSkipSelect) return; try{ el.select(); }catch(_){ } }, 0);
+    }
     $(document).on('focus', '.mval', function(){
-        lastFocused=this; var el=this;
+        lastFocused=this;
         $('.mcell').removeClass('focus-on'); $(this).closest('.mcell').addClass('focus-on');
-        setTimeout(function(){ try{ el.select(); }catch(_){ } }, 0);
+        autoSelectOnFocus(this);
     });
     $(document).on('dblclick', '.mval', function(){
         if($(this).val()===''){ return; }
@@ -2067,9 +2077,7 @@ $(function(){
         return true;
     }
     // 標準欄也套用「聚焦全選」，跟量測格一致
-    $(document).on('focus', 'input.table-input, input.f-remark', function(){
-        var el=this; setTimeout(function(){ try{ el.select(); }catch(_){ } }, 0);
-    });
+    $(document).on('focus', 'input.table-input, input.f-remark', function(){ autoSelectOnFocus(this); });
     $(document).on('focus', '.mcell.okng', function(){
         $('.mcell').removeClass('focus-on'); $(this).addClass('focus-on');
     });
@@ -2286,9 +2294,11 @@ $(function(){
     // 工程符號（Ø ± ▽ …）：插到最後聚焦的文字欄游標處；主檔僅管理員可增修刪
     // 參考 views/Sales/image_editor.php 的符號列做法，但符號改由 qc_symbol 主檔維護
     // =====================================================================
-    var SYMS=[], symAdmin=false, lastTextEl=null;
-    // 記住最後聚焦的「文字型」欄位（項目名稱／標準值／備註／臨時檢驗單欄位）
-    $(document).on('focus', 'input.f-name, input.f-std, input.f-remark, #ah-type, #inp-remark', function(){ lastTextEl=this; });
+    var SYMS=[], symAdmin=false, lastTextEl=null, symSkipSelect=false;
+    // 記住最後聚焦的「可插符號」欄位：只有純文字欄位可以（項目名稱／備註／臨時單檢驗類型）
+    $(document).on('focus', 'input.f-name, input.f-remark, #ah-type, #inp-remark', function(){ lastTextEl=this; });
+    // 標準值與實測值要參與公差計算，插入符號會讓數值解析失敗 → 聚焦這些欄位時清掉插入目標
+    $(document).on('focus', 'input.f-std, input.f-up, input.f-lo, input.mval', function(){ lastTextEl=null; });
     function loadSymbols(){
         $.post(V2API, { v2action:'sym_list' }, function(res){
             if(!res || !res.success) return;
@@ -2313,11 +2323,19 @@ $(function(){
     $(document).on('click', '.sym-ins', function(){
         var s=String($(this).attr('data-s'));
         var el=lastTextEl && document.body.contains(lastTextEl) ? lastTextEl : null;
-        if(!el){ alert('請先點一下要插入符號的欄位（檢驗項目名稱、標準值或備註），再按符號。'); return; }
+        if(!el){
+            alert('請先點一下要插入符號的欄位（檢驗項目名稱或備註），再按符號。\n\n註：標準值／公差／實測值要參與計算，不提供符號插入。');
+            return;
+        }
         var st=el.selectionStart||0, en=el.selectionEnd||0, v=String(el.value||'');
+        var pos=st+s.length;
         el.value = v.slice(0,st) + s + v.slice(en);
-        el.selectionStart = el.selectionEnd = st + s.length;
-        $(el).trigger('input').focus();
+        // 插完游標要停在符號後面，才能接著打字；此時不可觸發「聚焦自動全選」（會把剛插的符號選起來被蓋掉）
+        symSkipSelect = true;
+        $(el).trigger('input');
+        el.focus();
+        try{ el.selectionStart = el.selectionEnd = pos; }catch(_){ }
+        setTimeout(function(){ symSkipSelect=false; }, 80);
     });
     // ---- 符號主檔維護（僅管理員） ----
     $('#btn-sym-manage').on('click', function(e){ e.preventDefault(); $('#sym-pad').hide(); renderSymList(); $('#symManageModal').modal('show'); });
@@ -3039,16 +3057,24 @@ $(function(){
         var m=currentMeta(), items=collectItems(), n=state.sampleN;
         var now=new Date(), pad=function(x){ return ('0'+x).slice(-2); };
         var dateStr=now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate());
-        var head='<div class="pr-title">品管檢驗記錄表</div><div class="pr-sub">表單編號 2-QA-01-06（線上檢驗系統列印）</div>'+
+        var head='<div class="pr-title">品管檢驗記錄表</div>'+
             '<table class="pr-meta"><tr>'+
             '<td class="k">料號</td><td>'+esc(m.part)+'</td><td class="k">客戶</td><td>'+esc(m.client)+'</td><td class="k">製令/BOM</td><td>'+esc(m.bom)+'</td></tr>'+
             '<tr><td class="k">製程</td><td>'+esc(m.process)+'</td><td class="k">送驗數</td><td>'+m.incoming+'</td><td class="k">抽驗數</td><td>'+m.sample+'</td></tr>'+
             '<tr><td class="k">日期</td><td>'+dateStr+'</td><td class="k">整體判定</td><td>'+m.judge+'（不良 '+m.ng+'）</td><td class="k">備註</td><td>'+esc(m.remark)+'</td></tr></table>';
         var pcsHead=''; for(var i=1;i<=n;i++) pcsHead+='<th>'+i+'</th>';
+        // 量具欄只印「編號」，全名（類型/量程）集中放表格下方對照列 → 大幅省下欄寬
+        var usedTools={};
+        var toolNoOf=function(id){
+            var t=toolInstById(id);
+            if(!t) return '';
+            usedTools[t.id]=t;
+            return t.no;
+        };
         var body='';
         items.forEach(function(it,idx){
-            var readings=[{tool:toolLabelById(it.tool_id), samples:it.samples}];
-            (it.extra||[]).forEach(function(ex){ readings.push({tool:toolLabelById(ex.tool_id), samples:ex.samples}); });
+            var readings=[{tool:toolNoOf(it.tool_id), samples:it.samples}];
+            (it.extra||[]).forEach(function(ex){ readings.push({tool:toolNoOf(ex.tool_id), samples:ex.samples}); });
             readings.forEach(function(rd,ri){
                 var cells='';
                 for(var i2=0;i2<n;i2++){
@@ -3058,14 +3084,28 @@ $(function(){
                 }
                 body+='<tr>'+
                     (ri===0?('<td rowspan="'+readings.length+'">'+codeLabel(idx)+'</td><td rowspan="'+readings.length+'" style="text-align:left">'+esc(it.name)+'</td><td rowspan="'+readings.length+'">'+esc(it.std||'')+'</td><td rowspan="'+readings.length+'">'+esc((it.up||'')+(it.lo?(' / '+it.lo):''))+'</td>'):'')+
-                    '<td>'+esc(rd.tool||'')+'</td>'+cells+
+                    '<td class="c-tool">'+esc(rd.tool||'')+'</td>'+cells+
                     (ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'NG':'OK')+'</td>'):'')+'</tr>';
                 if(ri===0 && it.remark) body+='<tr><td colspan="'+(5+n)+'" style="text-align:left;font-size:11px">備註：'+esc(it.remark)+'</td></tr>';
             });
         });
-        var tbl='<table class="pr-items"><thead><tr><th>編號</th><th>檢驗項目</th><th>標準</th><th>公差</th><th>量具</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>'+body+'</tbody></table>';
-        var sign='<table class="pr-sign"><tr><td>檢驗員<div class="lbl">Inspector</div></td><td>主管審核<div class="lbl">Approved</div></td><td>日期<div class="lbl">Date</div></td></tr></table>';
-        return head+tbl+sign;
+        var tbl='<table class="pr-items"><thead><tr><th class="c-no">編號</th><th>檢驗項目</th><th class="c-std">標準</th>'+
+                '<th class="c-tol">公差</th><th class="c-tool">量具編號</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>'+body+'</tbody></table>';
+        // 量具對照（可追溯：編號 ＝ 類型）
+        var tk=Object.keys(usedTools);
+        var toolLegend = tk.length
+            ? '<div class="pr-tools"><b>量具對照：</b>'+tk.map(function(k){
+                  var t=usedTools[k]; return esc(t.no)+'＝'+esc(t.cat||'');
+              }).join('　｜　')+'</div>'
+            : '';
+        var insp = <?php echo json_encode($CURRENT_CNAME, JSON_UNESCAPED_UNICODE); ?>;
+        var sign='<table class="pr-sign"><tr>'+
+                 '<td>'+esc(insp)+'<div class="lbl">檢驗員 Inspector</div></td>'+
+                 '<td><div class="lbl">主管審核 Approved</div></td>'+
+                 '<td>'+dateStr+'<div class="lbl">日期 Date</div></td></tr></table>';
+        // 表單編號改放表尾右下角（比照紙本表單慣例）
+        var foot='<div class="pr-foot"><span class="fno">表單編號 2-QA-01-06（線上檢驗系統列印）</span></div>';
+        return head+tbl+toolLegend+sign+foot;
     }
     $('#btn-print').on('click', function(){
         if(!ctx){ alert('請先由待驗清單開啟一筆檢驗再列印。'); return; }
