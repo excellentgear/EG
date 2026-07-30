@@ -371,13 +371,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-head"><span>校驗人員資格（內校）</span><span class="m-close" onclick="closeMask('staffMask')">✕</span></div>
     <div class="m-body">
         <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;line-height:1.7;">
-            候選名單＝<b>品管部門（含子部門）</b>底下<b>未離職</b>人員，依職稱排序；品管部門沿用「異常單處置決策設定」已設定的部門，本頁不另設一份。<br>
+            候選名單＝<b>品管部門（含子部門）</b>底下<b>未離職</b>人員，依職稱排序（名單已限定在該部門，故不另列部門與職稱欄）；品管部門沿用「異常單處置決策設定」已設定的部門，本頁不另設一份。<br>
             勾選者才會出現在「內校」的校驗人員下拉。長期請假（留職停薪／育嬰留停等）者會標記假別與期間，請自行判斷是否勾選。
         </div>
         <div id="staffHint" style="font-size:12px;color:#DD5138;margin-bottom:6px;"></div>
         <div style="max-height:46vh;overflow-y:auto;">
             <table class="hist" id="staffTable">
-                <thead><tr><th>職稱</th><th style="text-align:left;">姓名</th><th class="col-dept">部門</th><th>長期請假</th>
+                <thead><tr><th style="text-align:left;">姓名</th><th>長期請假</th>
                     <th>具校驗資格<br><label class="ck-all-lab"><input type="checkbox" id="staffCkAll"> 全選</label></th></tr></thead>
                 <tbody id="staffBody"></tbody>
             </table>
@@ -1343,12 +1343,11 @@ function opRender(boxId){
               + ((PERMS && PERMS.canAdmin) ? '，請按工具列「校驗人員資格」設定' : '，請洽管理者設定')
               + (QC_DEPT_SET ? '' : '；品管部門也尚未設定，請先於「異常單處置決策設定」設定品管部門') + '</div>';
         } else {
-            // 鐵則：顯示職稱（跨部門時連部門）、長期請假者標記假別與期間
+            // 名單已限定在品管部門底下，故不顯示部門與職稱（使用者 2026-07-30 指示）；
+            // 排序仍依職稱(people_lib)，長期請假者仍標記假別與期間
             h = '<select class="op-staff"><option value="">— 請選擇校驗人員 —</option>'
               + STAFF.map(function(s){
-                    var lab = s.user_cname + (s.position_name ? '（'+s.position_name+'）' : '')
-                            + (STAFF_MULTI_DEPT && s.dept_name ? '－'+s.dept_name : '')
-                            + (s.on_leave ? '［'+s.leave_note+'］' : '');
+                    var lab = s.user_cname + (s.on_leave ? '［'+s.leave_note+'］' : '');
                     return '<option value="'+s.id+'"'+(String(st.userId)===String(s.id)?' selected':'')+'>'
                          + esc(lab)+'</option>'; }).join('')
               + '</select>';
@@ -1426,16 +1425,13 @@ $('#btnStaffSet').on('click', function(){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         $('#staffHint').text(res.qc_dept_set ? ''
             : '尚未設定品管部門：請先到「線上檢驗－異常單處置決策設定」設定品管單位部門，這裡才會出現候選人員。');
-        // 鐵則：跨部門才顯示部門欄
-        $('#staffTable .col-dept').toggle(!!res.multi_dept);
+        // 名單已限定在品管部門底下 → 不顯示部門與職稱（仍依職稱排序）
         var h = res.list.map(function(u){
-            return '<tr data-id="'+u.id+'"><td>'+esc(u.position_name||'—')+'</td>'
-                 + '<td style="text-align:left;">'+esc(u.user_cname)+'</td>'
-                 + (res.multi_dept ? '<td>'+esc(u.dept_name||'')+'</td>' : '')
+            return '<tr data-id="'+u.id+'"><td style="text-align:left;">'+esc(u.user_cname)+'</td>'
                  + '<td>'+(u.on_leave ? '<span style="color:#DD5138;">'+esc(u.leave_note)+'</span>' : '—')+'</td>'
                  + '<td><input type="checkbox" class="ck-staff"'+(u.qualified===1?' checked':'')+'></td></tr>';
         }).join('');
-        $('#staffBody').html(h || '<tr><td colspan="5" style="padding:12px;color:#8a6d45;">品管部門底下查無未離職人員</td></tr>');
+        $('#staffBody').html(h || '<tr><td colspan="3" style="padding:12px;color:#8a6d45;">品管部門底下查無未離職人員</td></tr>');
         syncStaffAll();
         openMask('staffMask');
     }).fail(function(x){ alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
