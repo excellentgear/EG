@@ -1,0 +1,81 @@
+# 尚未導入 resource/js/eg_input_rules.js 的既有頁面（基準線，2026-07-30 產生）
+# 這些頁面各自手刻或根本沒做輸入欄位規則。不硬塞共用檔的原因：Enter 自動跳欄與
+# 觸發主按鈕會改變既有行為，可能造成誤送出（CLAUDE.md 鐵律4 不破壞既有功能）。
+# check_input_rules.php 會把清單內的頁面列為「待導入」而不算不合格；
+# 清單外的頁面（＝新頁面）漏載就是不合格。日後逐步導入後，把該行從本檔刪掉即可。
+views/ADM/as_document_management.php
+views/ADM/as_form_designer.php
+views/ADM/as_form_fill.php
+views/ADM/as_form_list.php
+views/ADM/db_backup.php
+views/ADM/department_job_title_settings.php
+views/ADM/employee_management.php
+views/ADM/hr_settings.php
+views/ADM/leave_request.php
+views/ADM/stamp_management.php
+views/ADM/training_record.php
+views/QA/correction_order.php
+views/QC/IPQC_Setting copy.php
+views/QC/IPQC_Setting.php
+views/QC/QC_Setting.php
+views/QC/QC_check_list copy(自動更新改一半).php
+views/QC/QC_check_list.php
+views/QC/QC_check_list_test.php
+views/QC/drawing_change_log.php
+views/QC/inspection_combined_prototype.php
+views/QC/inspection_entry_v2.php
+views/QC/inspection_result_entry.php
+views/QC/inspection_standard_setting.php
+views/QC/packaging_inspection_entry.php
+views/QC/tool_calibration.php
+views/Sales/IR_Track.php
+views/Sales/NewOrder_List.php
+views/Sales/NewOrder_Track.php
+views/Sales/NewOrder_Track222.php
+views/Sales/Order_Profit_Analysis.php
+views/Sales/Order_Track.php
+views/Sales/Quick_Shipping.php
+views/Sales/Sales_Track.php
+views/Sales/Sales_Track_test.php
+views/Sales/Shipping_Analysis.php
+views/Sales/Shipping_Analysis_new.php
+views/Sales/quotation_list_NEW.php
+views/Sales/quotation_list_test.php
+views/admin/audit_log_report.php
+views/admin/home_page_setting.php
+views/admin/system_module_setting.php
+views/liveEvent/createEvent.php
+views/news/KPI.php
+views/news/KPI_setting.php
+views/pages/TGok.php
+views/pages/calendar.php
+views/pages/change_log.php
+views/pages/master_data_management.php
+views/pages/purchase_request.php
+views/pages/roster.php
+views/pages/stock.php
+views/pages/tracking.php
+views/pages/vendor_kpi.php
+views/pm/BomList.php
+views/pm/ERP_Cost_Analysis-NEW.php
+views/pm/ERP_Cost_Analysis.php
+views/pm/Machine_Person_Efficiency.php
+views/pm/OreadyReply_ForPm_BaseOfTime.php
+views/pm/OreadyReply_ForPm_BaseOfTime2.php
+views/pm/Transfer_Log_Analysis.php
+views/pm/X Product_Profit_Analysis.php
+views/pm/bom_rename.php
+views/pm/bom_tracking.php
+views/pm/drawing_rename.php
+views/pm/kpi_main.php
+views/pm/kpi_shift_setting.php
+views/pm/packing_schedule.php
+views/pm/process_schedule.php
+views/pm/process_schedule_NOW.php
+views/pm/schedule_T5 copy.php
+views/pm/schedule_T5.php
+views/pm/vendor_audit.php
+views/reply/reply_other copy.php
+views/reply/reply_other.php
+views/user/personal_task.php
+views/user/user_permissions.php

@@ -1,0 +1,226 @@
+/*!
+ * eg_input_rules.js — EGsystem 全站輸入欄位互動規則（CLAUDE.md「UI 規則」的唯一實作）
+ *
+ * 為什麼要有這支：這些規則 CLAUDE.md 早就寫了，但過去每個頁面都自己手刻一份，
+ * 結果總有頁面漏掉、或只綁到一部分欄位（例如只綁跳窗內、沒綁篩選列）。
+ * 改成共用檔＋document 事件委派後，只要載入本檔就全頁生效，
+ * 連 AJAX 之後才畫出來的欄位也一樣有效，沒有「忘記綁」的可能。
+ *
+ * 用法（放在 custom.min.js 之後）：
+ *   <script src="../../resource/js/eg_input_rules.js?v=<?= filemtime('../../resource/js/eg_input_rules.js') ?>"></script>
+ *
+ * 實作的規則：
+ *   1. 有值時雙擊清空（並觸發 input/change，篩選欄雙擊＝同時解除該欄篩選）
+ *   2. 聚焦已有資料的欄位自動全選
+ *   3. Enter 跳下一欄；容器最後一欄按 Enter＝觸發該容器的主要動作鈕（textarea 內 Enter 仍為換行）
+ *   4. 多列輸入表格內 ↑↓ 切換上下列同欄（日期欄會攔截原生 ↑↓ 改日，否則會變成改日期）
+ *   5. 數字欄：隱藏上下增減鈕、離開欄位時小數尾 0 省略（3.50→3.5、3.00→3）
+ *
+ * 個別欄位要排除：加 data-eg-skip
+ * 整個區塊要排除：在祖先元素加 data-eg-skip
+ * 指定 Enter 的送出目標：在容器加 data-eg-submit="選擇器"，或讓容器內有 .m-foot .go / .btn-warm / button[type=submit]
+ */
+(function () {
+    'use strict';
+
+    /* Element.closest 相容保護：本檔是全站共用，不假設瀏覽器版本 */
+    if (!Element.prototype.closest) {
+        var matches = Element.prototype.matches || Element.prototype.msMatchesSelector
+                   || Element.prototype.webkitMatchesSelector;
+        Element.prototype.closest = function (sel) {
+            var n = this;
+            while (n && n.nodeType === 1) {
+                if (matches.call(n, sel)) return n;
+                n = n.parentElement || n.parentNode;
+            }
+            return null;
+        };
+    }
+
+    /* 可套用規則的欄位型別（checkbox/radio/file/hidden/按鈕類都不算） */
+    var TEXTY = ['text', 'search', 'tel', 'url', 'email', 'password',
+                 'number', 'date', 'month', 'week', 'time', 'datetime-local'];
+
+    function isTexty(el) {
+        if (!el || !el.tagName) return false;
+        var tag = el.tagName.toLowerCase();
+        if (tag === 'textarea') return true;
+        if (tag === 'select')   return true;
+        if (tag !== 'input')    return false;
+        return TEXTY.indexOf((el.type || 'text').toLowerCase()) >= 0;
+    }
+    function skipped(el) {
+        if (!el) return true;
+        if (el.disabled || el.readOnly) return true;
+        return !!(el.closest && el.closest('[data-eg-skip]'));
+    }
+    function fire(el, name) {
+        var ev;
+        try { ev = new Event(name, {bubbles: true}); }
+        catch (e) { ev = document.createEvent('Event'); ev.initEvent(name, true, true); }
+        el.dispatchEvent(ev);
+    }
+    function isNumberish(el) {
+        return el.tagName.toLowerCase() === 'input'
+            && (el.type || '').toLowerCase() === 'number';
+    }
+
+    /* ── 規則 1：有值雙擊清空 ─────────────────────────────────────────── */
+    document.addEventListener('dblclick', function (e) {
+        var el = e.target;
+        if (!isTexty(el) || skipped(el)) return;
+        var tag = el.tagName.toLowerCase();
+
+        if (tag === 'select') {
+            // 篩選用下拉：雙擊回到第一個「空值」選項＝解除該欄篩選
+            var reset = -1;
+            for (var i = 0; i < el.options.length; i++) {
+                if (el.options[i].value === '') { reset = i; break; }
+            }
+            if (reset < 0 || el.selectedIndex === reset) return;
+            el.selectedIndex = reset;
+            fire(el, 'change');
+            return;
+        }
+        if (el.value === '' || el.value == null) return;
+        el.value = '';
+        fire(el, 'input');
+        fire(el, 'change');
+    }, true);
+
+    /* ── 規則 2：聚焦已有資料自動全選 ─────────────────────────────────── */
+    document.addEventListener('focusin', function (e) {
+        var el = e.target;
+        if (!isTexty(el) || skipped(el)) return;
+        if (el.tagName.toLowerCase() === 'select') return;
+        if (el.value === '' || el.value == null) return;
+        // number/date 等型別部分瀏覽器不支援 select()，包 try 即可
+        setTimeout(function () { try { el.select(); } catch (err) {} }, 0);
+    });
+
+    /* ── 規則 3/4：Enter 跳欄、表格內 ↑↓ 換列 ─────────────────────────── */
+
+    /** 找出這個欄位所屬的「表單容器」，用來決定 Enter 要跳到哪、以及誰是送出鈕 */
+    function containerOf(el) {
+        return el.closest('[data-eg-form]') || el.closest('form')
+            || el.closest('.a-modal') || el.closest('.at-modal')
+            || el.closest('.sq-modal') || el.closest('.a-bar')
+            || el.closest('.sq-bar')  || el.closest('.at-bar')
+            || el.form || document.body;
+    }
+    function focusables(box) {
+        var list = box.querySelectorAll('input,select,textarea');
+        var out = [];
+        for (var i = 0; i < list.length; i++) {
+            var el = list[i];
+            if (!isTexty(el) || skipped(el)) continue;
+            if (el.offsetParent === null && el.type !== 'hidden') continue;  // 看不到的不算
+            out.push(el);
+        }
+        return out;
+    }
+    function submitTargetOf(box) {
+        var sel = box.getAttribute && box.getAttribute('data-eg-submit');
+        if (sel) return box.querySelector(sel) || document.querySelector(sel);
+        return box.querySelector('.m-foot .go')
+            || box.querySelector('.btn-warm')
+            || box.querySelector('button[type=submit]');
+    }
+
+    /** 同一欄在上／下一列的對應欄位（多列輸入表格用） */
+    function siblingRowField(el, dir) {
+        var td = el.closest('td'); if (!td) return null;
+        var tr = td.closest('tr');  if (!tr) return null;
+        var idx = Array.prototype.indexOf.call(tr.children, td);
+        var row = (dir < 0) ? tr.previousElementSibling : tr.nextElementSibling;
+        while (row) {
+            var cell = row.children[idx];
+            if (cell) {
+                var f = cell.querySelector('input,select,textarea');
+                if (f && isTexty(f) && !skipped(f)) return f;
+            }
+            row = (dir < 0) ? row.previousElementSibling : row.nextElementSibling;
+        }
+        return null;
+    }
+
+    document.addEventListener('keydown', function (e) {
+        // 頁面自己已經處理掉的（有 preventDefault）就不再插手，
+        // 否則會出現「頁面跳一欄、共用檔又跳一欄」而跳過欄位。
+        if (e.defaultPrevented) return;
+        var el = e.target;
+        if (!isTexty(el) || skipped(el)) return;
+        var tag = el.tagName.toLowerCase();
+
+        /* 規則 4：在表格內的欄位，↑↓ 切換上下列同欄。
+           日期／數字欄的原生 ↑↓ 會改值，所以一律 preventDefault 蓋掉。 */
+        if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            if (tag === 'select') return;                       // 下拉的 ↑↓ 保留原生選項切換
+            if (el.closest('td')) {
+                var nx = siblingRowField(el, e.key === 'ArrowUp' ? -1 : 1);
+                if (nx) {
+                    e.preventDefault();
+                    nx.focus();
+                    try { nx.select(); } catch (err) {}
+                    return;
+                }
+                // 沒有上／下一列時，日期與數字欄仍要擋掉原生改值，避免誤改
+                if ((el.type === 'date' || el.type === 'month' || el.type === 'number')) {
+                    e.preventDefault();
+                }
+            }
+            return;
+        }
+
+        /* 規則 3：Enter 跳下一欄；textarea 內 Enter 保持換行 */
+        if (e.key !== 'Enter' || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+        if (tag === 'textarea') return;
+
+        var box  = containerOf(el);
+        var list = focusables(box);
+        var i    = list.indexOf(el);
+        if (i < 0) return;
+
+        if (i < list.length - 1) {
+            e.preventDefault();
+            var t = list[i + 1];
+            t.focus();
+            try { t.select(); } catch (err) {}
+        } else {
+            // 最後一欄：觸發該容器的主要動作（查詢／存檔）
+            var btn = submitTargetOf(box);
+            if (btn && !btn.disabled) {
+                e.preventDefault();
+                btn.click();
+            }
+        }
+    });
+
+    /* ── 規則 5：數字欄小數尾 0 省略 ──────────────────────────────────── */
+    document.addEventListener('blur', function (e) {
+        var el = e.target;
+        if (!isNumberish(el) || skipped(el)) return;
+        var v = (el.value || '').trim();
+        if (v === '' || !/^-?\d*\.\d+$/.test(v)) return;         // 只處理有小數點的
+        var n = parseFloat(v);
+        if (isNaN(n)) return;
+        var s = String(parseFloat(n.toFixed(6)));                // 3.50→3.5、3.00→3
+        if (s !== v) { el.value = s; fire(el, 'change'); }
+    }, true);
+
+    /* ── 規則 5：數字欄不顯示上下增減鈕（注入一次，免得每頁各寫一份 CSS）── */
+    (function injectCss() {
+        if (document.getElementById('eg-input-rules-css')) return;
+        var css = 'input[type=number]::-webkit-outer-spin-button,'
+                + 'input[type=number]::-webkit-inner-spin-button'
+                + '{-webkit-appearance:none;margin:0;}'
+                + 'input[type=number]{-moz-appearance:textfield;appearance:textfield;}';
+        var st = document.createElement('style');
+        st.id = 'eg-input-rules-css';
+        st.appendChild(document.createTextNode(css));
+        (document.head || document.documentElement).appendChild(st);
+    })();
+
+    /* 對外留一個旗標，檢查工具與頁面都可判斷本檔是否已載入 */
+    window.EG_INPUT_RULES = {version: 1};
+})();
