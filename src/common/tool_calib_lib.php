@@ -78,6 +78,52 @@ function tool_calib_ensure_schema(PDO $db): void {
         KEY idx_calib (calib_date)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='量測儀器校驗紀錄(排程+完成合一)'");
 
+    // 批次校驗（一次校驗多支量具，常見於外校/廠內批量校驗）
+    foreach ([
+        "ALTER TABLE qc_tool_calibration ADD COLUMN batch_id INT NULL COMMENT '批次校驗單 id(qc_tool_calib_batch)；NULL=單筆登錄'",
+    ] as $sql) {
+        try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
+    }
+    $db->exec("CREATE TABLE IF NOT EXISTS qc_tool_calib_batch (
+        batch_id INT AUTO_INCREMENT PRIMARY KEY,
+        calib_date DATE NOT NULL COMMENT '本批校驗完成日',
+        method VARCHAR(10) NULL COMMENT '內校/外校',
+        operator VARCHAR(50) NULL COMMENT '校驗人員/單位(外校廠商)',
+        cert_no VARCHAR(50) NULL COMMENT '校驗憑證/報告編號',
+        note VARCHAR(200) NULL,
+        tool_count INT NOT NULL DEFAULT 0 COMMENT '本批量具數(快取，僅供列表顯示)',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL,
+        created_by_name VARCHAR(50) NULL,
+        KEY idx_date (calib_date)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='量測儀器批次校驗單'");
+
+    // 校驗附件（鐵律5：DB 只存檔名，完整路徑讀取當下用設定值現場組；temp/active 暫存機制）
+    $db->exec("CREATE TABLE IF NOT EXISTS qc_tool_calib_attach (
+        attach_id INT AUTO_INCREMENT PRIMARY KEY,
+        batch_id INT NOT NULL DEFAULT 0 COMMENT '所屬批次；0=尚未存檔的暫存',
+        category_id INT NULL COMMENT '對應量具類別(選填，方便依種類上傳報告)',
+        doc_type VARCHAR(20) NULL COMMENT '文件類別(校驗報告/證書/原始記錄…，可於附件設定維護)',
+        file_name VARCHAR(120) NOT NULL COMMENT '實際存檔檔名(不含路徑!)',
+        original_name VARCHAR(200) NULL,
+        file_size INT NULL,
+        note VARCHAR(200) NULL,
+        user_id INT NULL COMMENT '上傳者(temp 列以此判定擁有者)',
+        status VARCHAR(16) NOT NULL DEFAULT 'active' COMMENT 'temp=未存檔暫存 / active=正式',
+        expire_at DATETIME NULL COMMENT 'temp 自動清除時間',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_batch (batch_id),
+        KEY idx_status (status)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='量測儀器校驗附件(校驗報告等)'");
+
+    // 附件↔量具 一對多對應（一份外校報告可涵蓋多支量具）
+    $db->exec("CREATE TABLE IF NOT EXISTS qc_tool_calib_attach_map (
+        attach_id INT NOT NULL,
+        Tool_id INT NOT NULL,
+        PRIMARY KEY (attach_id, Tool_id),
+        KEY idx_tool (Tool_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='校驗附件對應的量具編號(一對多)'");
+
     // 角色 seed（module='tool_calib'，供 user_permissions.php 指派）
     foreach ([['tool_calib_view','校驗唯讀'],['tool_calib_edit','校驗登錄'],['tool_calib_admin','校驗管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='tool_calib' LIMIT 1");
@@ -195,6 +241,77 @@ function tool_calib_status(array $tool, int $warnDays = 30): string {
     if ($dt < $today) return 'overdue';
     if ($dt <= $today + $warnDays * 86400) return 'soon';
     return 'ok';
+}
+
+/* ============================================================
+ * 校驗附件（鐵律5：DB 只存檔名；根路徑存 system_settings，完整路徑讀取當下現場組）
+ * ============================================================ */
+/** 附件設定：dir(以/結尾)、ext(允許副檔名陣列)、maxmb、types(文件類別陣列) */
+function tool_calib_attach_cfg(PDO $db): array {
+    $dir   = 'Z:/BOM/ERP/量測儀器校驗/';
+    $ext   = 'pdf,jpg,jpeg,png,gif,webp,xlsx,xls,doc,docx,zip';
+    $maxmb = 20;
+    $types = '校驗報告,校驗證書,原始記錄,其他';
+    try {
+        $rows = $db->query("SELECT setting_key, setting_value FROM system_settings
+                            WHERE setting_key IN ('tool_calib_attach_dir','tool_calib_attach_ext',
+                                                  'tool_calib_attach_maxmb','tool_calib_attach_types')")
+                   ->fetchAll(PDO::FETCH_KEY_PAIR);
+        if (!empty($rows['tool_calib_attach_dir']))   $dir   = trim($rows['tool_calib_attach_dir']);
+        if (!empty($rows['tool_calib_attach_ext']))   $ext   = trim($rows['tool_calib_attach_ext']);
+        if (isset($rows['tool_calib_attach_maxmb']) && (int)$rows['tool_calib_attach_maxmb'] > 0)
+            $maxmb = (int)$rows['tool_calib_attach_maxmb'];
+        if (!empty($rows['tool_calib_attach_types'])) $types = trim($rows['tool_calib_attach_types']);
+    } catch (Throwable $e) { /* 表不存在 → 用預設 */ }
+    if (!preg_match('#[/\\\\]$#', $dir)) $dir .= '/';
+    $split = function ($s) {
+        return array_values(array_filter(array_map('trim', preg_split('/[,、\s]+/u', $s)), function ($v) { return $v !== ''; }));
+    };
+    return ['dir'=>$dir, 'ext'=>array_map('strtolower', $split($ext)), 'ext_raw'=>$ext,
+            'maxmb'=>$maxmb, 'types'=>$split($types), 'types_raw'=>$types];
+}
+
+/** 單一附件的完整實體路徑（唯一組路徑的地方，其他處一律呼叫本函式） */
+function tool_calib_attach_file(PDO $db, string $fileName): string {
+    $cfg = tool_calib_attach_cfg($db);
+    return $cfg['dir'] . $fileName;
+}
+
+/** 懶惰清除：刪掉已過期的暫存附件（實體檔＋DB 列＋對應），list/meta 順路呼叫 */
+function tool_calib_purge_temp_attach(PDO $db): void {
+    try {
+        $rows = $db->query("SELECT attach_id, file_name FROM qc_tool_calib_attach
+                            WHERE status='temp' AND expire_at IS NOT NULL AND expire_at < NOW()")->fetchAll(PDO::FETCH_ASSOC);
+        if (!$rows) return;
+        $cfg = tool_calib_attach_cfg($db);
+        foreach ($rows as $r) {
+            $fp = $cfg['dir'] . $r['file_name'];
+            if (is_file($fp)) @unlink($fp);
+        }
+        $in = implode(',', array_map(function ($r) { return (int)$r['attach_id']; }, $rows));
+        $db->exec("DELETE FROM qc_tool_calib_attach_map WHERE attach_id IN ({$in})");
+        $db->exec("DELETE FROM qc_tool_calib_attach WHERE attach_id IN ({$in})");
+    } catch (Throwable $e) { /* 忽略清除失敗，不影響主流程 */ }
+}
+
+/** 取某批/某量具的附件（只取 active）；$toolId>0 時只回對應到該量具者 */
+function tool_calib_attach_list(PDO $db, int $batchId, int $toolId = 0): array {
+    if ($batchId <= 0 && $toolId <= 0) return [];
+    $sql = "SELECT a.attach_id, a.batch_id, a.category_id, a.doc_type, a.file_name, a.original_name,
+                   a.file_size, a.note, a.created_at, l.QC_Tool AS category_name,
+                   (SELECT GROUP_CONCAT(t.Tool_No ORDER BY t.Tool_No SEPARATOR ', ')
+                      FROM qc_tool_calib_attach_map m JOIN qc_tool t ON t.Tool_id=m.Tool_id
+                     WHERE m.attach_id=a.attach_id) AS tool_nos
+            FROM qc_tool_calib_attach a
+            LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=a.category_id
+            WHERE a.status='active'";
+    $p = [];
+    if ($batchId > 0) { $sql .= " AND a.batch_id=?"; $p[] = $batchId; }
+    if ($toolId > 0)  { $sql .= " AND EXISTS(SELECT 1 FROM qc_tool_calib_attach_map m2 WHERE m2.attach_id=a.attach_id AND m2.Tool_id=?)"; $p[] = $toolId; }
+    $sql .= " ORDER BY a.attach_id";
+    $st = $db->prepare($sql);
+    $st->execute($p);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
 /* ============================================================
