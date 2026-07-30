@@ -25,6 +25,8 @@ $uid = (int)$u['id'];
 $uname = (string)$u['user_cname'];
 $perms = tool_calib_perms($db, $u);
 if (!$perms['canView']) jerr('無量測儀器校驗檢閱權限', 403);
+// 超級管理員＝員工 id=1 本人且具管理者權限（清除測試資料等破壞性操作限他一人）
+$isSuper = ($uid === 1 && $perms['isAdmin']);
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
@@ -101,6 +103,7 @@ case 'meta': {
     $metaStaff = tool_calib_qualified_staff($db);
     jout(['perms'=>$perms, 'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db),
           'cur_ym'=>date('Y-m'), 'today'=>date('Y-m-d'), 'cur_year'=>(int)date('Y'),
+          'is_super'=>$isSuper,
           'staff'=>$metaStaff,
           'staff_multi_dept'=>eg_people_multi_dept($metaStaff),
           'qc_dept_set'=>count(tool_calib_qc_dept_ids($db)) > 0,
@@ -244,12 +247,18 @@ case 'list': {
     if (!preg_match('/^\d{4}-\d{2}$/', $ym)) $ym = date('Y-m');
     [$y, $m] = array_map('intval', explode('-', $ym));
 
+    // 採購料號（purchase_spec）尚未建表的環境不加 join，行為與加欄前相同
+    $hasSpecTbl = false;
+    try { $hasSpecTbl = (bool)$db->query("SHOW TABLES LIKE 'purchase_spec'")->fetchColumn(); } catch (Throwable $e) {}
     $st = $db->query("SELECT t.Tool_id, t.Tool_No, t.QC_Tool_List_id, t.calibration_due,
-                             t.calib_cycle_months, t.calib_managed, t.calib_method,
+                             t.calib_cycle_months, t.calib_managed, t.calib_method, t.purchase_spec_id,
                              l.QC_Tool AS category_name,
                              COALESCE(l.calib_required,1) AS cat_required,
-                             COALESCE(l.calib_tab,0)      AS cat_tab
-                      FROM qc_tool t LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=t.QC_Tool_List_id
+                             COALESCE(l.calib_tab,0)      AS cat_tab"
+                     . ($hasSpecTbl ? ", ps.spec_code, ps.spec_text, pi.item_name AS spec_item_name" : "") . "
+                      FROM qc_tool t LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=t.QC_Tool_List_id"
+                     . ($hasSpecTbl ? " LEFT JOIN purchase_spec ps ON ps.spec_id=t.purchase_spec_id
+                                        LEFT JOIN purchase_item pi ON pi.item_id=ps.item_id" : "") . "
                       ORDER BY t.calib_managed DESC, t.calibration_due IS NULL, t.calibration_due ASC, t.Tool_No ASC");
     $tools = $st->fetchAll(PDO::FETCH_ASSOC);
 
@@ -703,6 +712,132 @@ case 'delete_calib': {
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：'.$e->getMessage(), 500); }
     jout([]);
+}
+
+/* ---------- 量具料號對應：解析草稿（管理員；只讀不寫，可重複產生） ----------
+ * 使用者 2026-07-30 定案：量具規格掛到「採購料號」(purchase_item→purchase_spec)，不另建量具規格主檔。
+ * 舊資料規格塞在 Tool_No 字串裡 → 先解析成草稿讓使用者確認/修改，確認後才寫入（見 spec_apply）。
+ */
+case 'spec_draft': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    jout(['list'=>tool_calib_spec_draft($db),
+          'purchase_categories'=>tool_calib_purchase_categories($db),
+          'default_category_id'=>tool_calib_default_purchase_category($db)]);
+}
+
+/* ---------- 量具料號對應：確認後寫入（管理員；單一 transaction） ----------
+ * items = JSON [{tool_id, item_name, spec, type, model, brand}]
+ * 同名品項沿用既有、同 item+同 spec_text 沿用既有規格 → 重跑不會重複建立。
+ */
+case 'spec_apply': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    require_once $document_root . '/EGsystem/src/common/purchase_lib.php';   // 料號編碼規則的唯一來源
+    $catId = (int)($_POST['category_id'] ?? 0);
+    if (!$catId) jerr('請選擇採購品類別（品項要掛在哪一類）');
+    $chk = $db->prepare("SELECT COUNT(*) FROM stock_item_categories WHERE category_id=?");
+    $chk->execute([$catId]);
+    if (!(int)$chk->fetchColumn()) jerr('找不到該採購品類別，請重新整理後再試');
+
+    $items = json_decode((string)($_POST['items'] ?? ''), true);
+    if (!is_array($items) || !$items) jerr('沒有要建立的資料（請先產生草稿並勾選）');
+
+    $newItems = 0; $newSpecs = 0; $bound = 0; $skipped = [];
+    try {
+        $db->beginTransaction();
+        $findItem = $db->prepare("SELECT item_id FROM purchase_item WHERE category_id=? AND item_name=? ORDER BY item_id LIMIT 1");
+        $insItem  = $db->prepare("INSERT INTO purchase_item (item_code, category_id, item_name, note, Created_By)
+                                  VALUES (?,?,?,'由量測儀器校驗管理－量具料號對應建立',?)");
+        $findSpec = $db->prepare("SELECT spec_id FROM purchase_spec WHERE item_id=? AND spec_text=? ORDER BY spec_id LIMIT 1");
+        $insSpec  = $db->prepare("INSERT INTO purchase_spec (item_id, spec_code, spec_text, Created_By) VALUES (?,?,?,?)");
+        $updTool  = $db->prepare("UPDATE qc_tool SET purchase_spec_id=? WHERE Tool_id=?");
+        $getTool  = $db->prepare("SELECT Tool_No FROM qc_tool WHERE Tool_id=? LIMIT 1");
+
+        foreach ($items as $it) {
+            $tid = (int)($it['tool_id'] ?? 0);
+            if (!$tid) continue;
+            $getTool->execute([$tid]);
+            $toolNo = $getTool->fetchColumn();
+            if ($toolNo === false) { $skipped[] = $tid; continue; }          // 量具已被刪除
+            $itemName = mb_substr(trim((string)($it['item_name'] ?? '')), 0, 100);
+            // 交易中不可用 jerr()（會 exit 而不 rollback）→ 丟例外交給下面的 catch 統一回復
+            if ($itemName === '') throw new RuntimeException('量具「'.$toolNo.'」的品項名稱不可空白');
+            $specText = tool_calib_compose_spec_text([
+                'brand' => (string)($it['brand'] ?? ''), 'spec' => (string)($it['spec'] ?? ''),
+                'model' => (string)($it['model'] ?? ''), 'type' => (string)($it['type'] ?? ''),
+            ]);
+
+            $findItem->execute([$catId, $itemName]);
+            $itemId = (int)$findItem->fetchColumn();
+            if (!$itemId) {
+                $insItem->execute([purchase_next_item_code($db, $catId), $catId, $itemName, $uid]);
+                $itemId = (int)$db->lastInsertId();
+                $newItems++;
+            }
+            $findSpec->execute([$itemId, $specText]);
+            $specId = (int)$findSpec->fetchColumn();
+            if (!$specId) {
+                $insSpec->execute([$itemId, purchase_next_spec_code($db, $itemId), $specText, $uid]);
+                $specId = (int)$db->lastInsertId();
+                $newSpecs++;
+            }
+            $updTool->execute([$specId, $tid]);
+            $bound++;
+        }
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('建立料號失敗：'.$e->getMessage(), 500); }
+    jout(['new_items'=>$newItems, 'new_specs'=>$newSpecs, 'bound'=>$bound, 'skipped'=>$skipped]);
+}
+
+/* ---------- 清除測試資料（僅超級管理員 id=1；只清本模組交易資料，設定類一律保留） ---------- */
+case 'clean_preview': {
+    if (!$isSuper) jerr('僅超級管理員可使用此功能', 403);
+    jout(['counts'=>tool_calib_clean_counts($db)]);
+}
+case 'clean_test_data': {
+    if (!$isSuper) jerr('僅超級管理員可使用此功能', 403);
+    if (trim((string)($_POST['confirm'] ?? '')) !== 'Y') jerr('請於確認欄輸入大寫 Y');
+    $vp = tool_calib_verify_superadmin_password($db, (string)($_POST['password'] ?? ''));
+    if (!$vp['ok']) jerr($vp['msg'], 403);
+
+    $before = tool_calib_clean_counts($db);
+    tool_calib_log_change($db, '清除量測儀器校驗測試資料（執行前）',
+        "執行者：{$uname}（id={$uid}）\n清除前筆數："
+        . "校驗紀錄 {$before['calibration']}／批次 {$before['batch']}／附件 {$before['attach']}"
+        . "／附件對應 {$before['attach_map']}／待還原量具欄位 {$before['tool_reset']} 支\n"
+        . "保留不動：類別旗標與自訂分頁、附件設定、校驗人員資格、量具主檔本身", $uname);
+
+    // 實體檔路徑先算好（DB 列刪掉後就查不到檔名了）；一律走 tool_calib_attach_file()（鐵律5）
+    $files = [];
+    try {
+        foreach ($db->query("SELECT file_name FROM qc_tool_calib_attach")->fetchAll(PDO::FETCH_COLUMN) as $fn) {
+            $files[] = tool_calib_attach_file($db, (string)$fn);
+        }
+    } catch (Throwable $e) { /* 表不存在 */ }
+
+    $deleted = [];
+    try {
+        $db->beginTransaction();
+        $deleted['attach_map']  = (int)$db->exec("DELETE FROM qc_tool_calib_attach_map");
+        $deleted['attach']      = (int)$db->exec("DELETE FROM qc_tool_calib_attach");
+        $deleted['calibration'] = (int)$db->exec("DELETE FROM qc_tool_calibration");
+        $deleted['batch']       = (int)$db->exec("DELETE FROM qc_tool_calib_batch");
+        // 量具主檔只還原本模組的四個欄位，Tool_No／類別／purchase_spec_id 一律不動
+        $deleted['tool_reset']  = (int)$db->exec(
+            "UPDATE qc_tool SET calib_cycle_months=NULL, calibration_due=NULL, calib_managed=0, calib_method=NULL
+             WHERE calib_cycle_months IS NOT NULL OR calibration_due IS NOT NULL
+                OR calib_managed=1 OR calib_method IS NOT NULL");
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('清除失敗（已全部回復）：'.$e->getMessage(), 500); }
+
+    $fileDeleted = 0;
+    foreach ($files as $f) { if (is_file($f) && @unlink($f)) $fileDeleted++; }
+
+    tool_calib_log_change($db, '清除量測儀器校驗測試資料（執行後）',
+        "執行者：{$uname}（id={$uid}）\n實際刪除："
+        . "校驗紀錄 {$deleted['calibration']}／批次 {$deleted['batch']}／附件 {$deleted['attach']}"
+        . "（實體檔 {$fileDeleted}）／附件對應 {$deleted['attach_map']}／還原量具欄位 {$deleted['tool_reset']} 支", $uname);
+
+    jout(['deleted'=>$deleted, 'files_deleted'=>$fileDeleted, 'counts'=>tool_calib_clean_counts($db)]);
 }
 
 default:

@@ -132,6 +132,9 @@ function initTables(PDO $pdo): void {
     // 附件類別標籤擴充欄位
     try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN show_in_list TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否在料號列表顯示最新附件'"); } catch(PDOException $e){}
     try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN tag_variables TEXT NULL COMMENT '標籤變數定義 JSON [{key,hint,var_type}]'"); } catch(PDOException $e){}
+    // 外來文件（AS9100）：是否列入外來文件清單＋清單上顯示的類別名稱（空=直接用標籤名稱）（2026-07-30）
+    try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN is_external_doc TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否列入外來文件清單'"); } catch(PDOException $e){}
+    try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN external_doc_name VARCHAR(100) NULL COMMENT '外來文件類別名稱(空=用標籤名)'"); } catch(PDOException $e){}
     // 暫存/補件/垃圾狀態機（2026-07-22）：temp=未存檔暫存 active=正式 pending=補件待審 trash=已否決待清
     try { $pdo->exec("ALTER TABLE quotation_attachments ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'active' COMMENT 'temp/active/pending/trash' AFTER linked_parts"); } catch(PDOException $e){}
     try { $pdo->exec("ALTER TABLE quotation_attachments ADD COLUMN expire_at DATETIME NULL COMMENT 'temp/trash 自動清除到期時間，NULL=不清' AFTER updated_at"); } catch(PDOException $e){}
@@ -147,7 +150,8 @@ switch ($action) {
     case 'get_categories':
         initTables($pdo);
         $rows = $pdo->query(
-            "SELECT id, category_name, sort_order, COALESCE(show_in_list,0) AS show_in_list, tag_variables
+            "SELECT id, category_name, sort_order, COALESCE(show_in_list,0) AS show_in_list, tag_variables,
+                    COALESCE(is_external_doc,0) AS is_external_doc, external_doc_name
              FROM quotation_file_categories WHERE is_active=1 ORDER BY sort_order, id"
         )->fetchAll(PDO::FETCH_ASSOC);
         echo json_encode(['success' => true, 'categories' => $rows]);
@@ -157,7 +161,8 @@ switch ($action) {
     case 'get_all_categories':
         initTables($pdo);
         $rows = $pdo->query(
-            "SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, tag_variables
+            "SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, tag_variables,
+                    COALESCE(is_external_doc,0) AS is_external_doc, external_doc_name
              FROM quotation_file_categories ORDER BY sort_order, id"
         )->fetchAll(PDO::FETCH_ASSOC);
         echo json_encode(['success' => true, 'categories' => $rows]);
@@ -171,6 +176,8 @@ switch ($action) {
         $reactivate = intval($_POST['reactivate'] ?? 0);
         $showInList = intval($_POST['show_in_list'] ?? 0) ? 1 : 0;
         $tagVars    = trim($_POST['tag_variables'] ?? '') ?: null;
+        $isExtDoc   = intval($_POST['is_external_doc'] ?? 0) ? 1 : 0;
+        $extDocName = trim($_POST['external_doc_name'] ?? '') ?: null;
         initTables($pdo);
         if ($catId && $reactivate) {
             $pdo->prepare("UPDATE quotation_file_categories SET is_active=1 WHERE id=?")
@@ -178,13 +185,13 @@ switch ($action) {
             echo json_encode(['success'=>true,'message'=>'已重新啟用','cat_id'=>$catId]);
         } elseif ($catId) {
             if (!$name) { echo json_encode(['success'=>false,'message'=>'類別名稱不可為空']); exit; }
-            $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=? WHERE id=?")
-                ->execute([$name, $order, $showInList, $tagVars, $catId]);
+            $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_external_doc=?,external_doc_name=? WHERE id=?")
+                ->execute([$name, $order, $showInList, $tagVars, $isExtDoc, $extDocName, $catId]);
             echo json_encode(['success'=>true,'message'=>'已更新','cat_id'=>$catId]);
         } else {
             if (!$name) { echo json_encode(['success'=>false,'message'=>'類別名稱不可為空']); exit; }
-            $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables) VALUES (?,?,?,?)")
-                ->execute([$name, $order, $showInList, $tagVars]);
+            $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_external_doc,external_doc_name) VALUES (?,?,?,?,?,?)")
+                ->execute([$name, $order, $showInList, $tagVars, $isExtDoc, $extDocName]);
             echo json_encode(['success'=>true,'message'=>'已新增','cat_id'=>(int)$pdo->lastInsertId()]);
         }
         break;

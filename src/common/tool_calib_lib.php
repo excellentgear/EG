@@ -9,6 +9,7 @@
  *       calib_managed       是否納入校驗管理(KPI計算)
  *       calib_method        內校/外校（預設值，可於每次登錄覆寫）
  *       calibration_due     下次應校驗日（既有欄位，當作「目前待完成的到期日」）
+ *       purchase_spec_id    對應採購料號規格（purchase_spec.spec_id）；全公司只留採購料號與產品料號兩種
  *   - qc_tool_calibration：每列＝某支量具「一次校驗週期」的完成紀錄
  *       due_date  該次應校驗到期日（排程當下的 calibration_due，準時判定基準）
  *       calib_date 實際完成日；next_due 完成後推算的下次到期(= calib_date + 週期)
@@ -38,6 +39,10 @@ function tool_calib_ensure_schema(PDO $db): void {
         "ALTER TABLE qc_tool ADD COLUMN calib_cycle_months INT NULL COMMENT '校驗週期(月)'",
         "ALTER TABLE qc_tool ADD COLUMN calib_managed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '納入校驗管理(KPI計算)'",
         "ALTER TABLE qc_tool ADD COLUMN calib_method VARCHAR(10) NULL COMMENT '校驗方式 內校/外校'",
+        // 量具規格一律掛到「採購料號」(purchase_item→purchase_spec)，不另建第三套料號主檔
+        // （2026-07-30 使用者定案）；實體仍以 Tool_No 為主，這裡只是往上指向規格。
+        "ALTER TABLE qc_tool ADD COLUMN purchase_spec_id INT NULL COMMENT '對應採購料號規格 purchase_spec.spec_id'",
+        "ALTER TABLE qc_tool ADD INDEX idx_purchase_spec (purchase_spec_id)",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
     }
@@ -520,6 +525,164 @@ function tool_calib_attach_list(PDO $db, int $batchId, int $toolId = 0): array {
     $st = $db->prepare($sql);
     $st->execute($p);
     return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/* ============================================================
+ * 量具料號對應（qc_tool.purchase_spec_id → purchase_spec）
+ * 使用者 2026-07-30 定案：不另建量具規格主檔，規格一律掛到「採購料號」
+ *   purchase_item（品項＝量具類別，如「盤式分厘卡」）→ purchase_spec（規格變體＝採購料號）
+ * 舊資料的規格是人工塞在 Tool_No 字串裡（例 `A-200-Q 電子(0-25mm)`），
+ * 所以先「解析成草稿」給使用者確認、可改，確認後才寫入（不可直接寫）。
+ * ============================================================ */
+/**
+ * 從量具編號解析出規格草稿
+ *   spec  規格文字＝括號內容（半形/全形混用都處理，例 `B-007-Q (0-300mm）`）
+ *   type  型式＝編號出現「電子」→ 電子，否則 機械
+ *   model 型號／描述＝去掉編號本體與「電子(式)」後剩下的字（例 三點式、千分）；與類別同名時視為贅字捨去
+ *   brand 廠牌＝編號看不出來，一律留空待使用者補
+ */
+function tool_calib_parse_tool_no(string $toolNo, string $catName = ''): array {
+    $raw  = trim($toolNo);
+    $spec = '';
+    $rest = $raw;
+    if (preg_match_all('/[（(]([^（()）]*)[)）]/u', $raw, $ms, PREG_SET_ORDER)) {
+        $last = end($ms);                                   // 取最後一組括號＝規格
+        $spec = trim($last[1]);
+        $rest = trim(str_replace($last[0], ' ', $raw));
+    }
+    $type  = (mb_strpos($raw, '電子') !== false) ? '電子' : '機械';
+    $model = (string)preg_replace('/^[A-Za-z0-9\-~_.\/\s]+/u', '', $rest);   // 去掉編號本體
+    $model = trim(str_replace(['電子式', '電子'], '', $model));               // 型式已另存，避免重複
+    if ($catName !== '' && $model === $catName) $model = '';
+    return ['spec' => $spec, 'type' => $type, 'model' => $model, 'brand' => ''];
+}
+
+/** 由草稿欄位組出 purchase_spec.spec_text（廠牌 規格 型號 型式；空欄自動略過，上限 150 字） */
+function tool_calib_compose_spec_text(array $d): string {
+    $parts = [];
+    foreach (['brand', 'spec', 'model'] as $k) {
+        $v = trim((string)($d[$k] ?? ''));
+        if ($v !== '') $parts[] = $v;
+    }
+    if (trim((string)($d['type'] ?? '')) === '電子') $parts[] = '電子';
+    $s = trim((string)preg_replace('/\s+/u', ' ', implode(' ', $parts)));
+    return mb_substr($s, 0, 150);
+}
+
+/**
+ * 全部量具的料號對應草稿（含已綁定者的現況，供畫面標示「已對應」）
+ * 回傳每列：Tool_id / Tool_No / category_id / category_name / item_name(預設＝類別名)
+ *          spec / type / model / brand / spec_text_preview / bound(0/1) / bound_code / bound_text / parsed(0=編號看不出規格)
+ */
+function tool_calib_spec_draft(PDO $db): array {
+    $hasSpecTbl = false;
+    try { $hasSpecTbl = (bool)$db->query("SHOW TABLES LIKE 'purchase_spec'")->fetchColumn(); } catch (Throwable $e) {}
+    $sql = "SELECT t.Tool_id, t.Tool_No, t.QC_Tool_List_id, t.purchase_spec_id,
+                   l.QC_Tool AS category_name" .
+           ($hasSpecTbl ? ", ps.spec_code AS bound_code, ps.spec_text AS bound_text, pi.item_name AS bound_item" : "") . "
+            FROM qc_tool t
+            LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id = t.QC_Tool_List_id" .
+           ($hasSpecTbl ? " LEFT JOIN purchase_spec ps ON ps.spec_id = t.purchase_spec_id
+                            LEFT JOIN purchase_item pi ON pi.item_id = ps.item_id" : "") . "
+            ORDER BY l.sort_order, t.Tool_No";
+    $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $r) {
+        $cat = (string)($r['category_name'] ?? '');
+        $p   = tool_calib_parse_tool_no((string)$r['Tool_No'], $cat);
+        $d   = [
+            'Tool_id'       => (int)$r['Tool_id'],
+            'Tool_No'       => (string)$r['Tool_No'],
+            'category_id'   => (string)$r['QC_Tool_List_id'],
+            'category_name' => $cat,
+            'item_name'     => $cat !== '' ? $cat : (string)$r['Tool_No'],
+            'spec'          => $p['spec'],
+            'type'          => $p['type'],
+            'model'         => $p['model'],
+            'brand'         => $p['brand'],
+            'bound'         => $r['purchase_spec_id'] ? 1 : 0,
+            'bound_code'    => (string)($r['bound_code'] ?? ''),
+            'bound_text'    => trim(((string)($r['bound_item'] ?? '')) . ' ' . ((string)($r['bound_text'] ?? ''))),
+            'parsed'        => $p['spec'] !== '' ? 1 : 0,
+        ];
+        $d['spec_text_preview'] = tool_calib_compose_spec_text($d);
+        $out[] = $d;
+    }
+    return $out;
+}
+
+/** 採購品類別清單（purchase_item.category_id 用；預設挑「品管 檢/量具」那一類） */
+function tool_calib_purchase_categories(PDO $db): array {
+    try {
+        $rows = $db->query("SELECT category_id, category_code, category_name
+                            FROM stock_item_categories ORDER BY category_id")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    foreach ($rows as &$r) { $r['category_id'] = (int)$r['category_id']; }
+    return $rows;
+}
+
+/** 預設採購品類別 id（優先 category_code='QC'，其次名稱含「量具」，都沒有回 0 由使用者選） */
+function tool_calib_default_purchase_category(PDO $db): int {
+    foreach (tool_calib_purchase_categories($db) as $c) {
+        if (strtoupper(trim((string)$c['category_code'])) === 'QC') return (int)$c['category_id'];
+    }
+    foreach (tool_calib_purchase_categories($db) as $c) {
+        if (mb_strpos((string)$c['category_name'], '量具') !== false) return (int)$c['category_id'];
+    }
+    return 0;
+}
+
+/* ============================================================
+ * 清除測試資料（僅超級管理員；只清本模組的交易性資料，設定類一律保留）
+ * ============================================================ */
+/** 本模組可被清除的資料筆數（畫面先顯示，讓使用者知道要刪掉什麼） */
+function tool_calib_clean_counts(PDO $db): array {
+    $one = function (string $sql) use ($db): int {
+        try { return (int)$db->query($sql)->fetchColumn(); } catch (Throwable $e) { return 0; }
+    };
+    return [
+        'calibration' => $one("SELECT COUNT(*) FROM qc_tool_calibration"),
+        'batch'       => $one("SELECT COUNT(*) FROM qc_tool_calib_batch"),
+        'attach'      => $one("SELECT COUNT(*) FROM qc_tool_calib_attach"),
+        'attach_map'  => $one("SELECT COUNT(*) FROM qc_tool_calib_attach_map"),
+        'tool_reset'  => $one("SELECT COUNT(*) FROM qc_tool
+                               WHERE calib_cycle_months IS NOT NULL OR calibration_due IS NOT NULL
+                                  OR calib_managed = 1 OR calib_method IS NOT NULL"),
+        // 保留不動者（畫面同時列出，避免使用者誤以為會一起被清）
+        'keep_category' => $one("SELECT COUNT(*) FROM qc_tool_list"),
+        'keep_tab'      => $one("SELECT COUNT(*) FROM qc_tool_calib_tab"),
+        'keep_staff'    => $one("SELECT COUNT(*) FROM qc_tool_calib_staff"),
+        'keep_tool'     => $one("SELECT COUNT(*) FROM qc_tool"),
+    ];
+}
+
+/**
+ * 二次確認用：必須輸入 **員工 id=1 本人的密碼**。
+ * 比對方式沿用專案既有慣例（user.user_password 明碼欄位 + hash_equals 定時比較），
+ * 與 eg_leave_verify_superadmin_password() / 共用帳號代簽一致，不另發明一套。
+ * 空密碼一律不放行（fail-closed）。
+ */
+function tool_calib_verify_superadmin_password(PDO $db, string $password): array {
+    if ($password === '') return ['ok' => false, 'msg' => '請輸入最高權限帳號的密碼'];
+    try {
+        $st = $db->prepare("SELECT user_password FROM `user` WHERE id = 1 LIMIT 1");
+        $st->execute();
+        $real = $st->fetchColumn();
+        if ($real === false) return ['ok' => false, 'msg' => '查無最高權限帳號'];
+        if (!hash_equals((string)$real, $password)) return ['ok' => false, 'msg' => '密碼錯誤，未執行清除'];
+    } catch (Throwable $e) {
+        return ['ok' => false, 'msg' => '密碼驗證失敗，未執行清除'];
+    }
+    return ['ok' => true, 'msg' => ''];
+}
+
+/** page_change_log 一列（清除測試資料前後各記一次，確保破壞性操作可追溯） */
+function tool_calib_log_change(PDO $db, string $summary, string $detail, string $who): void {
+    try {
+        $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
+                      VALUES ('views/QC/tool_calibration.php', ?, ?, NOW(), ?)")
+           ->execute([mb_substr($summary, 0, 255), $detail, mb_substr($who, 0, 100)]);
+    } catch (Throwable $e) { /* 記錄失敗不影響主流程 */ }
 }
 
 /* ============================================================
