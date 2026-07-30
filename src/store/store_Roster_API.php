@@ -771,7 +771,22 @@ case 'shift_type_save': {
     $start = trim($p['start_time'] ?? ''); $end = trim($p['end_time'] ?? '');
     if (!preg_match('/^\d{2}:\d{2}$/', $start) || !preg_match('/^\d{2}:\d{2}$/', $end)) jfail('請輸入上下班時間 (HH:MM)');
     $overnight = !empty($p['is_overnight']) ? 1 : 0;
-    $brk = max(0, (int)($p['break_minutes'] ?? 0));
+    // 休息時段（上班時間內，可多段）→ 自動加總為休息分鐘，供工時計算
+    $breaks = [];
+    foreach (($p['breaks'] ?? []) as $b) {
+        $bs = trim($b['s'] ?? ''); $be = trim($b['e'] ?? '');
+        if (!preg_match('/^\d{2}:\d{2}$/', $bs) || !preg_match('/^\d{2}:\d{2}$/', $be)) continue;
+        $breaks[] = ['s' => $bs, 'e' => $be];
+    }
+    $brkFromRange = 0;
+    foreach ($breaks as $b) {
+        [$h1, $m1] = explode(':', $b['s']); [$h2, $m2] = explode(':', $b['e']);
+        $mins = ((int)$h2 * 60 + (int)$m2) - ((int)$h1 * 60 + (int)$m1);
+        if ($mins < 0) $mins += 1440;   // 跨夜班的休息時段
+        $brkFromRange += $mins;
+    }
+    $brk = $breaks ? $brkFromRange : max(0, (int)($p['break_minutes'] ?? 0));
+    $breakJson = $breaks ? json_encode($breaks, JSON_UNESCAPED_UNICODE) : null;
     $ot  = max(0, (int)($p['overtime_minutes'] ?? 0));
     $color = trim($p['color'] ?? '');
     $sort = (int)($p['sort_order'] ?? 0);
@@ -779,13 +794,14 @@ case 'shift_type_save': {
     $code = trim($p['code'] ?? '');
     $notifyOn = isset($p['notify_enabled']) ? (!empty($p['notify_enabled']) ? 1 : 0) : 1;
     $notifyGrp = !empty($p['notify_group']) ? 1 : 0;
+    $showRoster = isset($p['show_in_roster']) ? (!empty($p['show_in_roster']) ? 1 : 0) : 1;
     if ($id === 0) {
-        $st = $pdo->prepare("INSERT INTO roster_shift_type (name,code,start_time,end_time,is_overnight,break_minutes,overtime_minutes,color,sort_order,is_active,notify_enabled,notify_group,owner_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
-        $st->execute([$name, $code, $start, $end, $overnight, $brk, $ot, $color, $sort, $active, $notifyOn, $notifyGrp, $MYID]);
+        $st = $pdo->prepare("INSERT INTO roster_shift_type (name,code,start_time,end_time,is_overnight,break_minutes,break_json,overtime_minutes,color,sort_order,is_active,show_in_roster,notify_enabled,notify_group,owner_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        $st->execute([$name, $code, $start, $end, $overnight, $brk, $breakJson, $ot, $color, $sort, $active, $showRoster, $notifyOn, $notifyGrp, $MYID]);
         $id = (int)$pdo->lastInsertId();
     } else {
-        $st = $pdo->prepare("UPDATE roster_shift_type SET name=?,code=?,start_time=?,end_time=?,is_overnight=?,break_minutes=?,overtime_minutes=?,color=?,sort_order=?,is_active=?,notify_enabled=?,notify_group=? WHERE id=?");
-        $st->execute([$name, $code, $start, $end, $overnight, $brk, $ot, $color, $sort, $active, $notifyOn, $notifyGrp, $id]);
+        $st = $pdo->prepare("UPDATE roster_shift_type SET name=?,code=?,start_time=?,end_time=?,is_overnight=?,break_minutes=?,break_json=?,overtime_minutes=?,color=?,sort_order=?,is_active=?,show_in_roster=?,notify_enabled=?,notify_group=? WHERE id=?");
+        $st->execute([$name, $code, $start, $end, $overnight, $brk, $breakJson, $ot, $color, $sort, $active, $showRoster, $notifyOn, $notifyGrp, $id]);
     }
     jout(['id' => $id]);
 }
@@ -813,12 +829,15 @@ case 'get_shift_calendar': {
     $second = $secondObj->format('Y-m');
     $to = $secondObj->modify('last day of this month')->format('Y-m-d');
 
-    $shifts = $pdo->query("SELECT id,name,color,start_time,end_time,is_overnight FROM roster_shift_type WHERE is_active=1 ORDER BY sort_order,id")->fetchAll(PDO::FETCH_ASSOC);
+    // 預設只顯示 show_in_roster=1 的班別（固定日班等不需換班者可設為不顯示）；帶 show_all=1 可全看
+    $showAll = !empty($_POST['show_all']);
+    $shifts = $pdo->query("SELECT id,name,color,start_time,end_time,is_overnight,show_in_roster FROM roster_shift_type WHERE is_active=1"
+                          . ($showAll ? "" : " AND show_in_roster=1") . " ORDER BY sort_order,id")->fetchAll(PDO::FETCH_ASSOC);
     $shiftMap = []; foreach ($shifts as $s) $shiftMap[(int)$s['id']] = $s;
 
     $sql = "SELECT sa.id, sa.shift_type_id, sa.user_id, sa.work_date, sa.is_agent, sa.orig_user_id, sa.sign_status, sa.signed_at, sa.pending_swap_id
             FROM roster_shift_assign sa JOIN roster_shift_type st ON st.id=sa.shift_type_id
-            WHERE sa.work_date BETWEEN ? AND ?";
+            WHERE sa.work_date BETWEEN ? AND ?" . ($showAll ? "" : " AND st.show_in_roster=1");
     $args = [$from, $to];
     if ($filterUser)  { $sql .= " AND sa.user_id=?"; $args[] = $filterUser; }
     if ($filterShift) { $sql .= " AND sa.shift_type_id=?"; $args[] = $filterShift; }
