@@ -114,8 +114,13 @@ ok($tgTypes === ['user'] && in_array($APPLICANT, $tgIds, true) && in_array($EXPE
 $cacheN = (int)$db->query("SELECT COUNT(*) FROM evenement_recipient_cache WHERE event_id=$evId")->fetchColumn();
 ok($cacheN === count($tgIds), "recipient_cache 筆數與對象一致", (string)$cacheN);
 // 通知
-$evts = $db->query("SELECT id FROM live_event WHERE ref_type='LEAVE' AND ref_id=$reqA")->fetchAll(PDO::FETCH_COLUMN);
-ok(count($evts) >= 1, "送審通知已寫 live_event(ref_type=LEAVE)");
+$evts = $db->query("SELECT id FROM live_event WHERE ref_type IN ('LEAVE','LEAVE_APPROVAL') AND ref_id=$reqA")->fetchAll(PDO::FETCH_COLUMN);
+ok(count($evts) >= 1, "送審通知已寫 live_event（待簽核用 ref_type=LEAVE_APPROVAL、資訊型用 LEAVE）");
+// 待簽核通知必須是 mode=sign，否則主管點開就消失、沒簽也不再提醒
+$signMode = (int)$db->query("SELECT COUNT(*) FROM live_event e
+                             JOIN live_event_target t ON t.live_event_id = e.id
+                             WHERE e.ref_type='LEAVE_APPROVAL' AND e.ref_id=$reqA AND t.mode='sign'")->fetchColumn();
+ok($signMode >= 1, "待簽核通知為 mode=sign（簽完前不從未讀清單消失）", (string)$signMode);
 foreach ($evts as $e) $createdEvents[] = (int)$e;
 
 echo "== 4. 重疊擋下 ==\n";
@@ -146,7 +151,14 @@ $tgAfter = $db->query("SELECT target_type FROM evenement_target WHERE event_id=$
 ok($tgAfter === ['all'], "核准後可見對象轉為全體（正式顯示在行事曆）", json_encode($tgAfter));
 $sr = $db->query("SELECT * FROM leave_sign_record WHERE leave_request_id=$reqA")->fetchAll(PDO::FETCH_ASSOC);
 ok(count($sr) === 1 && $sr[0]['action'] === 'approved', "簽章軌跡 1 筆 approved");
-$evts = $db->query("SELECT id FROM live_event WHERE ref_type='LEAVE' AND ref_id=$reqA")->fetchAll(PDO::FETCH_COLUMN);
+// 簽核完成 → 待簽通知要被結案（signed_at 有值），否則會一直掛在置頂欄
+$unsigned = (int)$db->query("SELECT COUNT(*) FROM live_event e
+                             JOIN live_event_target t ON t.live_event_id=e.id AND t.mode='sign'
+                             LEFT JOIN live_event_response rp ON rp.live_event_id=e.id AND rp.user_id=t.target_id
+                             WHERE e.ref_type='LEAVE_APPROVAL' AND e.ref_id=$reqA
+                               AND (rp.signed_at IS NULL)")->fetchColumn();
+ok($unsigned === 0, "簽核後待簽通知已結案（不再掛在未讀清單）", (string)$unsigned);
+$evts = $db->query("SELECT id FROM live_event WHERE ref_type IN ('LEAVE','LEAVE_APPROVAL') AND ref_id=$reqA")->fetchAll(PDO::FETCH_COLUMN);
 foreach ($evts as $e) if (!in_array((int)$e, $createdEvents)) $createdEvents[] = (int)$e;
 
 echo "== 6. 重複簽核擋下 ==\n";
@@ -164,7 +176,7 @@ $evLeft = $db->query("SELECT COUNT(*) FROM evenement WHERE id = $evId")->fetchCo
 ok((int)$evLeft === 0, "行事曆事件已撤除");
 $sr = $db->query("SELECT * FROM leave_sign_record WHERE leave_request_id=$reqA AND step_no=99")->fetchAll(PDO::FETCH_ASSOC);
 ok(count($sr) === 1 && $sr[0]['action'] === 'canceled', "銷假軌跡 step_no=99 已記");
-$evts = $db->query("SELECT id FROM live_event WHERE ref_type='LEAVE' AND ref_id=$reqA")->fetchAll(PDO::FETCH_COLUMN);
+$evts = $db->query("SELECT id FROM live_event WHERE ref_type IN ('LEAVE','LEAVE_APPROVAL') AND ref_id=$reqA")->fetchAll(PDO::FETCH_COLUMN);
 foreach ($evts as $e) if (!in_array((int)$e, $createdEvents)) $createdEvents[] = (int)$e;
 
 echo "== 8. 退回流程 ==\n";
@@ -186,7 +198,7 @@ $rowB = $db->query("SELECT * FROM leave_request WHERE id = $reqB")->fetch(PDO::F
 ok($rowB['status'] === 'rejected', "主檔 rejected");
 $evLeftB = $evB ? (int)$db->query("SELECT COUNT(*) FROM evenement WHERE id=$evB")->fetchColumn() : 0;
 ok($evLeftB === 0, "退回後申請中事件已撤除");
-$evts = $db->query("SELECT id FROM live_event WHERE ref_type='LEAVE' AND ref_id=$reqB")->fetchAll(PDO::FETCH_COLUMN);
+$evts = $db->query("SELECT id FROM live_event WHERE ref_type IN ('LEAVE','LEAVE_APPROVAL') AND ref_id=$reqB")->fetchAll(PDO::FETCH_COLUMN);
 foreach ($evts as $e) if (!in_array((int)$e, $createdEvents)) $createdEvents[] = (int)$e;
 
 echo "== 9. 補請假限制與特休摘要 ==\n";
@@ -226,7 +238,7 @@ if (!empty($r12['id'])) {
     $createdRequests[] = (int)$r12['id'];
     $rowC = $db->query("SELECT attach_status FROM leave_request WHERE id=" . (int)$r12['id'])->fetch(PDO::FETCH_ASSOC);
     ok($rowC['attach_status'] === 'pending', "attach_status=pending 待補證明");
-    $evts = $db->query("SELECT id FROM live_event WHERE ref_type='LEAVE' AND ref_id=" . (int)$r12['id'])->fetchAll(PDO::FETCH_COLUMN);
+    $evts = $db->query("SELECT id FROM live_event WHERE ref_type IN ('LEAVE','LEAVE_APPROVAL') AND ref_id=" . (int)$r12['id'])->fetchAll(PDO::FETCH_COLUMN);
     foreach ($evts as $e) if (!in_array((int)$e, $createdEvents)) $createdEvents[] = (int)$e;
 }
 
@@ -253,7 +265,7 @@ foreach ($createdEvents as $eid) {
 echo "  已刪測試請假單 " . count($createdRequests) . " 張、通知 " . count($createdEvents) . " 則\n";
 // 驗證清乾淨
 $left = $db->query("SELECT COUNT(*) FROM leave_request WHERE reason LIKE '\\_\\_test\\_\\_%'")->fetchColumn();
-$leftE = $db->query("SELECT COUNT(*) FROM live_event WHERE ref_type='LEAVE'")->fetchColumn();
+$leftE = $db->query("SELECT COUNT(*) FROM live_event WHERE ref_type IN ('LEAVE','LEAVE_APPROVAL')")->fetchColumn();
 echo "  殘留檢查：leave_request __test__ 剩 $left 筆、live_event LEAVE 剩 $leftE 筆\n";
 
 printf("\n結果：PASS %d / FAIL %d\n", $pass, $fail);

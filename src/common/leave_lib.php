@@ -478,18 +478,21 @@ if (!function_exists('eg_leave_notify')) {
      * 測試紀律：$reasonText 內含 __xxx__ 樣式（測試單命名）→ 只寫站內通知，不發真實推播。
      * @return int|null live_event id
      */
-    function eg_leave_notify(PDO $db, int $requestId, string $title, string $content, array $userIds, int $actorId = 0, string $reasonText = ''): ?int {
+    function eg_leave_notify(PDO $db, int $requestId, string $title, string $content, array $userIds, int $actorId = 0, string $reasonText = '', string $mode = 'read', string $refType = 'LEAVE'): ?int {
         $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds),
             function ($u) use ($actorId) { return $u > 0 && $u !== $actorId; })));
         if (!$userIds) return null;
+        if (!in_array($mode, ['read', 'sign'], true)) $mode = 'read';
+        if (!in_array($refType, ['LEAVE', 'LEAVE_APPROVAL'], true)) $refType = 'LEAVE';
         try {
             $db->prepare(
                 "INSERT INTO live_event (eventdate, title, content, status, created_by, source, ref_type, ref_id, show_status_to_others)
-                 VALUES (CURDATE(), ?, ?, 0, ?, '請假系統', 'LEAVE', ?, 1)")
-               ->execute([$title, $content, ($actorId ?: null), $requestId]);
+                 VALUES (CURDATE(), ?, ?, 0, ?, '請假系統', ?, ?, 1)")
+               ->execute([$title, $content, ($actorId ?: null), $refType, $requestId]);
             $eventId = (int)$db->lastInsertId();
-            $tg = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'read')");
-            foreach ($userIds as $u) { $tg->execute([$eventId, $u]); }
+            // mode=sign：待簽核通知在真正簽核完成前不會從置頂欄未讀清單消失（比照報價單 QUOTATION_APPROVAL）
+            $tg = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, ?)");
+            foreach ($userIds as $u) { $tg->execute([$eventId, $u, $mode]); }
         } catch (Throwable $e) {
             return null;   // 通知失敗不阻斷主流程
         }
@@ -520,6 +523,39 @@ if (!function_exists('eg_leave_notify')) {
             }
         } catch (Throwable $e) {}
         return $eventId;
+    }
+}
+
+if (!function_exists('eg_leave_notify_done')) {
+    /**
+     * 把某單「針對此使用者的待簽核通知(mode=sign)」標記為已簽，讓它從置頂欄未讀清單消失。
+     * 比照 car_notify_done()。於簽核完成、或該單已決行/撤回時呼叫，避免通知永遠掛著。
+     * @param int $userId 0=該單所有待簽對象一併結案（單據已決行時用）
+     */
+    function eg_leave_notify_done(PDO $db, int $requestId, int $userId = 0): void {
+        try {
+            $sql = "SELECT DISTINCT e.id, t.target_id FROM live_event e
+                    JOIN live_event_target t ON t.live_event_id = e.id AND t.mode = 'sign' AND t.target_type = 'user'
+                    WHERE e.ref_type = 'LEAVE_APPROVAL' AND e.ref_id = ?";
+            $args = [$requestId];
+            if ($userId > 0) { $sql .= " AND t.target_id = ?"; $args[] = $userId; }
+            $st = $db->prepare($sql);
+            $st->execute($args);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $eid = (int)$r['id']; $uid = (int)$r['target_id'];
+                $chk = $db->prepare("SELECT id FROM live_event_response WHERE live_event_id = ? AND user_id = ? LIMIT 1");
+                $chk->execute([$eid, $uid]);
+                $rid = $chk->fetchColumn();
+                if ($rid) {
+                    $db->prepare("UPDATE live_event_response
+                                  SET read_at = COALESCE(read_at, NOW()), signed_at = COALESCE(signed_at, NOW())
+                                  WHERE id = ?")->execute([$rid]);
+                } else {
+                    $db->prepare("INSERT INTO live_event_response (live_event_id, user_id, read_at, signed_at)
+                                  VALUES (?, ?, NOW(), NOW())")->execute([$eid, $uid]);
+                }
+            }
+        } catch (Throwable $e) { /* 通知結案失敗不影響簽核本身 */ }
     }
 }
 
@@ -707,8 +743,8 @@ if (!function_exists('eg_leave_submit')) {
             // 通知第一層簽核人（簽核當下解析實際簽核人）
             $first = $chain[0];
             $r = eg_resolve_signer($db, $first['user_id'], ['applicant_id' => $uid, 'flow_key' => 'leave', 'doc_id' => $reqId]);
-            eg_leave_notify($db, $reqId, "📋 請假單 #{$reqId} 待您簽核", $body . "\n（請至 請假系統 頁面簽核）",
-                            [$r['signer_id']], $uid, $reason);
+            eg_leave_notify($db, $reqId, "📋 請假單 #{$reqId} 待您簽核", $body . "\n（點開通知即可直接簽核）",
+                            [$r['signer_id']], $uid, $reason, 'sign', 'LEAVE_APPROVAL');
         } else {
             // 免簽：直接通知申請人與代理人
             $targets = [$uid];
@@ -718,6 +754,180 @@ if (!function_exists('eg_leave_submit')) {
 
         return ['ok' => true, 'id' => $reqId, 'msg' => $needApproval ? '已送審' : '已核准（此假別免簽）',
                 'need_attach_later' => ($attachStatus === 'pending')];
+    }
+}
+
+// ============================== 修改（審核前） ==============================
+
+if (!function_exists('eg_leave_can_edit')) {
+    /**
+     * 此單現在可否由申請人直接修改內容。
+     * 規則（2026-07-30 定）：狀態 pending 且**還沒有任何人簽核過**才可改。
+     * 已有主管簽過就不可直接改（否則已簽的意見會對不上新內容），只能撤回後重送。
+     * @return array ['ok'=>bool,'reason'=>string]
+     */
+    function eg_leave_can_edit(PDO $db, array $req, int $userId, bool $isAdmin = false): array {
+        if (!$isAdmin && (int)$req['employee_id'] !== $userId) return ['ok' => false, 'reason' => '僅申請人本人可修改'];
+        if ($req['status'] !== 'pending') {
+            $m = ['approved' => '此單已核准，如需變更請用「申請修改」（將銷假後重新申請）',
+                  'rejected' => '此單已退回，請重新申請', 'canceled' => '此單已取消'];
+            return ['ok' => false, 'reason' => $m[$req['status']] ?? '此狀態不可修改'];
+        }
+        try {
+            $st = $db->prepare("SELECT COUNT(*) FROM leave_sign_record WHERE leave_request_id = ? AND action IN ('approved','rejected')");
+            $st->execute([(int)$req['id']]);
+            if ((int)$st->fetchColumn() > 0) {
+                return ['ok' => false, 'reason' => '已有主管簽核過，不可直接修改；請先「撤回申請」再重新送出'];
+            }
+        } catch (Throwable $e) {}
+        return ['ok' => true, 'reason' => ''];
+    }
+}
+
+if (!function_exists('eg_leave_update')) {
+    /**
+     * 修改審核前的請假單（transaction）：重算時數、重寫行事曆事件時間、重建簽核鏈、通知待簽者內容已變更。
+     * 只允許改 假別/起訖/原因/代理人；不可改申請人。
+     */
+    function eg_leave_update(PDO $db, int $requestId, int $userId, array $in, bool $isAdmin = false): array {
+        $st = $db->prepare("SELECT * FROM leave_request WHERE id = ? LIMIT 1");
+        $st->execute([$requestId]);
+        $req = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$req) return ['ok' => false, 'msg' => '請假單不存在'];
+
+        $can = eg_leave_can_edit($db, $req, $userId, $isAdmin);
+        if (!$can['ok']) return ['ok' => false, 'msg' => $can['reason']];
+
+        $uid   = (int)$req['employee_id'];   // 申請人不可改
+        $tid   = (int)($in['leave_type_id'] ?? 0);
+        $start = trim((string)($in['start_datetime'] ?? ''));
+        $end   = trim((string)($in['end_datetime'] ?? ''));
+        if (!$tid || !$start || !$end) return ['ok' => false, 'msg' => '缺少必要欄位'];
+        if (strtotime($end) === false || strtotime($start) === false || strtotime($end) <= strtotime($start)) {
+            return ['ok' => false, 'msg' => '結束時間必須晚於開始時間'];
+        }
+
+        $st = $db->prepare("SELECT * FROM leave_type WHERE id = ? LIMIT 1");
+        $st->execute([$tid]);
+        $type = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$type) return ['ok' => false, 'msg' => '假別不存在'];
+
+        $cfg = eg_leave_settings($db);
+        $isBackdated = (substr($start, 0, 10) < date('Y-m-d')) ? 1 : 0;
+        if ($isBackdated) {
+            $limit = max(0, (int)$cfg['leave_backdate_limit_days']);
+            $earliest = date('Y-m-d', strtotime("-{$limit} day"));
+            if (substr($start, 0, 10) < $earliest) {
+                return ['ok' => false, 'msg' => "補請假僅限起始日在 {$limit} 天內（最早 {$earliest}）"];
+            }
+        }
+        // 重疊檢查要排除自己這張單
+        $st = $db->prepare("SELECT id FROM leave_request
+                            WHERE employee_id = ? AND id <> ? AND status IN ('pending','approved')
+                              AND start_datetime < ? AND end_datetime > ? LIMIT 1");
+        $st->execute([$uid, $requestId, $end, $start]);
+        if ($dup = $st->fetchColumn()) return ['ok' => false, 'msg' => "此時段與請假單 #{$dup} 重疊"];
+
+        $amt = eg_leave_calc_amount($db, (string)$type['unit_type'], $start, $end);
+        if ($amt['hours'] <= 0) return ['ok' => false, 'msg' => '請假時段內沒有工作日（或時數為 0）'];
+
+        if ($type['leave_name'] === '特休') {
+            $sum = eg_leave_annual_summary($db, $uid, (int)substr($start, 0, 4));
+            // 本單原本已列入 pending 合計，改單時要先扣回自己才不會誤判超額
+            $selfPending = ($req['status'] === 'pending' && (int)$req['leave_type_id'] === $tid) ? (float)$req['total_days'] : 0;
+            $remain = $sum['remaining'] + $selfPending;
+            if ($amt['days'] > $remain + 0.001) {
+                return ['ok' => false, 'msg' => sprintf('特休額度不足：可用 %.1f 天，本次 %.1f 天', $remain, $amt['days'])];
+            }
+        }
+
+        // 代理人（同送審規則：有候選才必填）
+        $agentId = (int)($in['agent_user_id'] ?? 0);
+        if ((int)$type['agent'] === 1) {
+            $cands = eg_person_delegate_candidates($db, $uid);
+            if (empty($cands)) { $agentId = null; }
+            else {
+                if ($agentId <= 0) return ['ok' => false, 'msg' => '此假別須指定職務代理人'];
+                $ok = false;
+                foreach ($cands as $c) { if ((int)$c['user_id'] === $agentId) { $ok = true; break; } }
+                if (!$ok) return ['ok' => false, 'msg' => '指定的代理人不在您的代理人設定中'];
+            }
+        } else { $agentId = $agentId > 0 ? $agentId : null; }
+
+        // 證明文件需求可能因假別/天數改變而變動
+        $st = $db->prepare("SELECT COUNT(*) FROM leave_attachment WHERE leave_request_id = ? AND status = 'active'");
+        $st->execute([$requestId]);
+        $hasAttach = ((int)$st->fetchColumn()) > 0;
+        $needAttach = eg_leave_attach_needed($type, (float)$amt['days']);
+        $attachStatus = 'not_required';
+        if ($needAttach) {
+            if ($hasAttach) $attachStatus = 'done';
+            elseif (!empty($type['allow_attach_later'])) $attachStatus = 'pending';
+            else return ['ok' => false, 'msg' => '此假別須附證明文件，請先上傳再修改'];
+        }
+
+        $needApproval = (int)$type['need_approval'] === 1;
+        $chain = $needApproval ? eg_leave_supervisor_chain($db, $uid, max(1, (int)$type['max_approval_level'])) : [];
+        if ($needApproval && empty($chain)) return ['ok' => false, 'msg' => '無法解析簽核主管鏈'];
+
+        try {
+            $db->beginTransaction();
+            $db->prepare("UPDATE leave_request
+                          SET leave_type_id = ?, start_datetime = ?, end_datetime = ?, reason = ?,
+                              agent_user_id = ?, total_hours = ?, total_days = ?, is_backdated = ?,
+                              attach_status = ?, status = ?, last_update = NOW()
+                          WHERE id = ?")
+               ->execute([$tid, $start, $end, trim((string)($in['reason'] ?? '')), $agentId ?: null,
+                          $amt['hours'], $amt['days'], $isBackdated, $attachStatus,
+                          $needApproval ? 'pending' : 'approved', $requestId]);
+
+            // 簽核鏈重建（假別可能換成需簽不同層數；此時尚無人簽過，直接重建最單純）
+            $db->prepare("DELETE FROM leave_approval WHERE leave_request_id = ?")->execute([$requestId]);
+            if ($needApproval) {
+                $ins = $db->prepare("INSERT INTO leave_approval (leave_request_id, approval_level, approver_level, approver_id, status)
+                                     VALUES (?,?,?,?, 'pending')");
+                foreach ($chain as $c) $ins->execute([$requestId, $c['level'], $c['level'], $c['user_id']]);
+            }
+            // 軌跡留痕：step_no=98 表示「內容修改」
+            $db->prepare("INSERT INTO leave_sign_record (leave_request_id, step_no, signer_id, action, remark, signed_at)
+                          VALUES (?, 98, ?, 'edited', ?, NOW())")
+               ->execute([$requestId, $userId, '修改內容：' . substr($start, 0, 16) . ' ~ ' . substr($end, 0, 16)
+                                              . '（' . $type['leave_name'] . '，' . $amt['hours'] . ' 小時）']);
+
+            // 行事曆事件同步（沿用原事件 id，不新建；沒有就補建）
+            $evId = $req['evenement_id'] ? (int)$req['evenement_id'] : 0;
+            if ($evId) {
+                $db->prepare("UPDATE evenement SET start = ?, end = ?, leave_type_id = ? WHERE id = ?")
+                   ->execute([$start, $end, $tid, $evId]);
+            } else {
+                $viewers = [];
+                foreach ($chain as $c) $viewers[] = (int)$c['user_id'];
+                if ($agentId) $viewers[] = (int)$agentId;
+                $evId = eg_leave_event_create_pending($db, $requestId, $uid, $tid, (string)$type['leave_name'], $start, $end, $viewers);
+                if ($evId) $db->prepare("UPDATE leave_request SET evenement_id = ? WHERE id = ?")->execute([$evId, $requestId]);
+            }
+            if (!$needApproval && $evId) eg_leave_event_approve($db, $evId, $requestId);
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            return ['ok' => false, 'msg' => '修改失敗：' . $e->getMessage()];
+        }
+
+        // 舊的待簽通知作廢，重新通知第一層（內容已變更）
+        eg_leave_notify_done($db, $requestId, 0);
+        $nm = $db->prepare("SELECT user_cname FROM user WHERE id = ? LIMIT 1");
+        $nm->execute([$uid]);
+        $applicantName = (string)$nm->fetchColumn();
+        $body = "申請人：{$applicantName}\n假　別：{$type['leave_name']}\n時　段："
+              . substr($start, 0, 16) . ' ~ ' . substr($end, 0, 16)
+              . "\n時　數：{$amt['hours']} 小時（{$amt['days']} 天）\n【內容已修改，請重新確認】";
+        if ($needApproval) {
+            $first = $chain[0];
+            $r = eg_resolve_signer($db, $first['user_id'], ['applicant_id' => $uid, 'flow_key' => 'leave', 'doc_id' => $requestId]);
+            eg_leave_notify($db, $requestId, "✏️ 請假單 #{$requestId} 已修改，待您簽核", $body,
+                            [$r['signer_id']], $uid, (string)($in['reason'] ?? ''), 'sign', 'LEAVE_APPROVAL');
+        }
+        return ['ok' => true, 'msg' => '已修改並重新送審', 'id' => $requestId];
     }
 }
 
@@ -790,6 +1000,11 @@ if (!function_exists('eg_leave_sign')) {
             return ['ok' => false, 'msg' => '簽核失敗：' . $e->getMessage()];
         }
 
+        // 簽核完成 → 把此人的待簽通知結案（mode=sign 的通知否則會一直掛在置頂欄）
+        eg_leave_notify_done($db, $requestId, $userId);
+        // 整單已決行（核准或退回）→ 其餘同層待簽者的通知也一併收回
+        if ($final) eg_leave_notify_done($db, $requestId, 0);
+
         // ---- 通知（transaction 外） ----
         $names = $db->prepare("SELECT user_cname FROM user WHERE id = ? LIMIT 1");
         $names->execute([(int)$req['employee_id']]);
@@ -822,7 +1037,8 @@ if (!function_exists('eg_leave_sign')) {
                 $r = eg_resolve_signer($db, (int)$next['approver_id'],
                     ['applicant_id' => (int)$req['employee_id'], 'flow_key' => 'leave', 'doc_id' => $requestId]);
                 eg_leave_notify($db, $requestId, "📋 請假單 #{$requestId} 待您簽核（第 {$next['approval_level']} 層）",
-                                $baseBody . "\n（請至 請假系統 頁面簽核）", [$r['signer_id']], $userId, $reason);
+                                $baseBody . "\n（點開通知即可直接簽核）", [$r['signer_id']], $userId, $reason,
+                                'sign', 'LEAVE_APPROVAL');
             }
         }
 
@@ -866,6 +1082,9 @@ if (!function_exists('eg_leave_cancel')) {
             if ($db->inTransaction()) $db->rollBack();
             return ['ok' => false, 'msg' => '操作失敗：' . $e->getMessage()];
         }
+
+        // 撤回/銷假後單據已不需簽核，收回所有待簽通知（否則主管的通知會一直掛著）
+        eg_leave_notify_done($db, $requestId, 0);
 
         // 銷假：通知所有已簽核者＋代理人；撤回（pending）：通知目前待簽者即可
         $names = $db->prepare("SELECT user_cname FROM user WHERE id = ? LIMIT 1");

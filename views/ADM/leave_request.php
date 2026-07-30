@@ -99,6 +99,10 @@ input[type=number]{-moz-appearance:textfield;}
 .flow-row{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #f0e7d7;font-size:13px;}
 .flow-row .lvl-badge{background:var(--sand);border:1px solid var(--sand-d);color:var(--amber-d);border-radius:10px;padding:1px 9px;font-size:11px;font-weight:600;white-space:nowrap;}
 .empty-note{padding:22px;color:#9a7b4f;text-align:center;font-size:13px;}
+/* 範圍／狀態切換鈕（則一選擇，暖色系；選中深底白字，未選淺底深棕字） */
+.scope-btn,.status-btn{background:#fffdf9;border:1px solid var(--sand-d);color:#8a6d45;font-size:12.5px;}
+.scope-btn:hover,.status-btn:hover{background:#f7e9d5;color:#6b5638;}
+.scope-btn.on,.status-btn.on{background:var(--amber);border-color:var(--amber-d);color:#fff;font-weight:600;}
 @media print{
   .right_col,.container.body{margin:0!important;padding:0!important;}
   .nav_menu,.left_col,.pm-tab-btn,.btn,.pager,.no-print{display:none!important;}
@@ -151,17 +155,19 @@ input[type=number]{-moz-appearance:textfield;}
               <span style="font-weight:400;font-size:11.5px;color:#9a7b4f;">日期／時間</span></label>
             <div style="display:flex;gap:6px;">
               <input type="date" class="form-control input-sm eg-inp" id="fDateFrom" max="9999-12-31" style="flex:1 1 58%;">
-              <input type="time" class="form-control input-sm eg-inp" id="fTimeFrom" step="1800" style="flex:1 1 42%;">
+              <input type="text" class="form-control input-sm eg-inp" id="fTimeFrom" maxlength="5" placeholder="08:00" style="flex:1 1 42%;">
             </div>
+            <div id="errTimeFrom" style="font-size:11.5px;color:#a3341f;margin-top:3px;"></div>
           </div>
           <div class="col-md-4 col-sm-6" style="margin-bottom:10px;">
             <label>結束 <span style="color:var(--coral);">*</span>
               <span style="font-weight:400;font-size:11.5px;color:#9a7b4f;">日期／時間</span></label>
             <div style="display:flex;gap:6px;">
               <input type="date" class="form-control input-sm eg-inp" id="fDateTo" max="9999-12-31" style="flex:1 1 58%;">
-              <input type="time" class="form-control input-sm eg-inp" id="fTimeTo" step="1800" style="flex:1 1 42%;">
+              <input type="text" class="form-control input-sm eg-inp" id="fTimeTo" maxlength="5" placeholder="17:00" style="flex:1 1 42%;">
             </div>
-            <div style="font-size:11.5px;color:#9a7b4f;margin-top:3px;">日期留空＝與開始同一天</div>
+            <div id="errTimeTo" style="font-size:11.5px;color:#a3341f;margin-top:3px;"></div>
+            <div style="font-size:11.5px;color:#9a7b4f;margin-top:2px;">日期留空＝與開始同一天；時間可直接打 0900／9</div>
           </div>
           <div class="col-md-1 col-sm-6" style="margin-bottom:10px;min-width:130px;">
             <label>時數／天數</label>
@@ -217,18 +223,21 @@ input[type=number]{-moz-appearance:textfield;}
       <div class="lv-card">
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
           <h4 style="margin:0;flex:0 0 auto;"><i class="fa fa-list"></i> 請假單列表</h4>
-          <select class="form-control input-sm" id="fScope" style="width:auto;" onchange="listPage=1;loadList()">
-            <option value="mine">我的請假單</option>
-            <?php if ($VIEW_ALL): ?><option value="all">全公司</option><?php endif; ?>
-            <option value="dept">我的部門（含下轄）</option>
-          </select>
-          <select class="form-control input-sm eg-inp" id="fStatus" style="width:auto;" onchange="listPage=1;loadList()">
-            <option value="">全部狀態</option>
-            <option value="pending">審核中</option>
-            <option value="approved">已核准</option>
-            <option value="rejected">已退回</option>
-            <option value="canceled">已取消</option>
-          </select>
+          <!-- 範圍改按鈕切換（則一選擇）：只有三個選項，按鈕比下拉少一次點擊 -->
+          <div class="btn-group btn-group-sm" role="group" id="scopeBtns">
+            <button type="button" class="btn scope-btn" data-scope="mine">我的請假單</button>
+            <button type="button" class="btn scope-btn" data-scope="dept">我的部門（含下轄）</button>
+            <?php if ($VIEW_ALL): ?><button type="button" class="btn scope-btn" data-scope="all">全公司</button><?php endif; ?>
+          </div>
+          <input type="hidden" id="fScope" value="<?= $VIEW_ALL ? 'all' : 'mine' ?>"><!-- 人事/管理員預設全公司 -->
+          <div class="btn-group btn-group-sm" role="group" id="statusBtns">
+            <button type="button" class="btn status-btn" data-status="">全部狀態</button>
+            <button type="button" class="btn status-btn" data-status="pending">審核中</button>
+            <button type="button" class="btn status-btn" data-status="approved">已核准</button>
+            <button type="button" class="btn status-btn" data-status="rejected">已退回</button>
+            <button type="button" class="btn status-btn" data-status="canceled">已取消</button>
+          </div>
+          <input type="hidden" id="fStatus" value="">
           <span style="flex:1;"></span>
           <div class="pager no-print">
             <span style="font-size:12px;color:#9a7b4f;">每頁</span>
@@ -275,7 +284,10 @@ input[type=number]{-moz-appearance:textfield;}
   </div>
   <div class="modal-body" id="detailBody" style="max-height:70vh;overflow:auto;"></div>
   <div class="modal-footer no-print">
+    <span id="editHint" style="float:left;font-size:12px;color:#8a5a1a;text-align:left;max-width:60%;"></span>
     <button class="btn btn-default" data-dismiss="modal">關閉</button>
+    <button class="btn btn-amber" id="btnEditLeave" style="display:none;" onclick="startEdit()"><i class="fa fa-pencil"></i> 修改內容</button>
+    <button class="btn btn-amber" id="btnReqChange" style="display:none;" onclick="requestChange()"><i class="fa fa-refresh"></i> 申請修改</button>
     <button class="btn btn-coral" id="btnCancelLeave" style="display:none;" onclick="doCancel()"></button>
   </div>
 </div></div></div>
@@ -374,6 +386,7 @@ function boot(){
     // 附件根目錄未設定的警告改在「選到需附證明的假別」時才顯示（見假別切換），此處不預先顯示
     uploadToken = newToken();
     bindInputUx();
+    syncFilterBtns();
     refreshPendingCount();
   });
 }
@@ -422,11 +435,64 @@ $(document).on('change', '#fType', function(){
   }
   doPreview();
 });
+/* ── 時間：直接輸入（09:00 / 0900 / 9 都可），禁用下拉；離開欄位才正規化，即時說明錯誤原因
+      規範見 ai-rules/08 第二之二節；實作比照 views/ADM/training_record.php 的 parseTime() ── */
+function parseTime(v){
+  var s = String(v==null?'':v).trim().replace(/[：]/g,':').replace(/\s+/g,'');
+  if (s==='') return {ok:true, val:''};
+  var hh, mm, m;
+  if ((m = s.match(/^(\d{1,2}):(\d{1,2})$/))) { hh=+m[1]; mm=+m[2]; }
+  else if ((m = s.match(/^(\d{1,2})$/)))      { hh=+m[1]; mm=0; }
+  else if ((m = s.match(/^(\d)(\d{2})$/)))    { hh=+m[1]; mm=+m[2]; }
+  else if ((m = s.match(/^(\d{2})(\d{2})$/))) { hh=+m[1]; mm=+m[2]; }
+  else return {ok:false, msg:'時間格式應為 HH:MM（例 09:00，也可打 0900 或 9）'};
+  if (hh>23) return {ok:false, msg:'小時 '+hh+' 不存在，須 0~23'};
+  if (mm>59) return {ok:false, msg:'分鐘 '+mm+' 不存在，須 0~59'};
+  return {ok:true, val:(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm};
+}
+// 請假以半小時為單位：正規化時把分鐘吸附到 00 / 30（無條件進位，與後端時數計算一致）
+function snapHalf(t){
+  if(!t) return '';
+  const p = t.split(':'); let h = +p[0], m = +p[1];
+  if(m === 0 || m === 30) return t;
+  if(m < 30) m = 30; else { m = 0; h = (h + 1) % 24; }
+  return (h<10?'0':'')+h+':'+(m<10?'0':'')+m;
+}
+function timeErr(id, msg){
+  const $i = $('#'+id), $e = $('#err'+id.substring(1));
+  if(msg){ $i.css('border-color','#dd5138'); $e.text(msg); }
+  else { $i.css('border-color',''); $e.text(''); }
+}
+// 打字中只提示不改寫（否則游標會被搶）；change/blur 才正規化
+$(document).on('input', '#fTimeFrom, #fTimeTo', function(){
+  const r = parseTime(this.value);
+  timeErr(this.id, r.ok ? '' : r.msg);
+});
+$(document).on('change blur', '#fTimeFrom, #fTimeTo', function(){
+  const r = parseTime(this.value);
+  if(!r.ok){ timeErr(this.id, r.msg); return; }
+  const snapped = snapHalf(r.val);
+  this.value = snapped;
+  timeErr(this.id, (r.val && snapped !== r.val) ? ('請假以半小時為單位，已調整為 ' + snapped) : '');
+  shiftApplied = true;
+  checkTimeOrder();
+  doPreview();
+});
+// 同一天的結束時間不可早於或等於開始時間
+function checkTimeOrder(){
+  const df = $('#fDateFrom').val(), dt = $('#fDateTo').val() || df;
+  const tf = $('#fTimeFrom').val(), tt = $('#fTimeTo').val();
+  if(!df || !tf || !tt) return true;
+  if(dt === df && tt <= tf){
+    timeErr('fTimeTo', '同一天的結束時間（'+tt+'）不可早於或等於開始時間（'+tf+'）；跨夜請把結束日期改為隔天');
+    return false;
+  }
+  return true;
+}
+
 // 時間欄只選時間，送出時再與日期組成完整時間點
 function startDT(){ const d=$('#fDateFrom').val(), t=$('#fTimeFrom').val(); return (d&&t) ? (d+' '+t+':00') : ''; }
 function endDT(){ const d=$('#fDateTo').val()||$('#fDateFrom').val(), t=$('#fTimeTo').val(); return (d&&t) ? (d+' '+t+':00') : ''; }
-
-$(document).on('change', '#fTimeFrom, #fTimeTo', function(){ shiftApplied = true; doPreview(); });
 
 // ── 排班連動：選好請假日期 → 依當日固定班別自動帶出整天的起訖時間 ──
 let shiftApplied = false;   // 使用者是否已自行動過時間欄（動過就不再自動覆蓋）
@@ -548,22 +614,35 @@ function submitLeave(){
   if(!$('#fDateFrom').val()){ $('#applyMsg').html('<span style="color:#a3341f;">請選擇開始日期</span>'); $('#fDateFrom').focus(); return; }
   if(!$('#fTimeFrom').val()){ $('#applyMsg').html('<span style="color:#a3341f;">請選擇開始時間</span>'); $('#fTimeFrom').focus(); return; }
   if(!$('#fTimeTo').val()){ $('#applyMsg').html('<span style="color:#a3341f;">請選擇結束時間</span>'); $('#fTimeTo').focus(); return; }
+  const pf = parseTime($('#fTimeFrom').val()), pt = parseTime($('#fTimeTo').val());
+  if(!pf.ok){ timeErr('fTimeFrom', pf.msg); $('#fTimeFrom').focus(); return; }
+  if(!pt.ok){ timeErr('fTimeTo', pt.msg); $('#fTimeTo').focus(); return; }
+  if(!checkTimeOrder()){ $('#fTimeTo').focus(); return; }
   if(!s || !e){ $('#applyMsg').html('<span style="color:#a3341f;">請填寫完整的開始與結束日期時間</span>'); return; }
   $('#btnSubmit').prop('disabled', true);
-  $('#applyMsg').html('送出中…');
-  $.post(API, {
-    action:'submit', csrf:CSRF, leave_type_id:tid,
-    start_datetime: s, end_datetime: e,
-    reason: $('#fReason').val(), agent_user_id: $('#fAgent').val()||0, upload_token: uploadToken
-  }, function(r){
+  $('#applyMsg').html(editingId ? '儲存中…' : '送出中…');
+  const payload = {
+    csrf:CSRF, leave_type_id:tid, start_datetime: s, end_datetime: e,
+    reason: $('#fReason').val(), agent_user_id: $('#fAgent').val()||0
+  };
+  if(editingId){ payload.action = 'update'; payload.id = editingId; }
+  else { payload.action = 'submit'; payload.upload_token = uploadToken; }
+  $.post(API, payload, function(r){
     $('#btnSubmit').prop('disabled', false);
     if(!r.success){ $('#applyMsg').html('<span style="color:#a3341f;"><i class="fa fa-times-circle"></i> '+esc(r.message)+'</span>'); return; }
+    if(editingId){
+      $('#applyMsg').html('<span style="color:#4d6b2e;"><i class="fa fa-check-circle"></i> '+esc(r.message)+'（單號 #'+editingId+'）</span>');
+      cancelEdit();
+      loadList();
+      refreshPendingCount();
+      return;
+    }
     let msg = '<span style="color:#4d6b2e;"><i class="fa fa-check-circle"></i> '+esc(r.message)+'（單號 #'+r.id+'）行事曆已標示為「申請中」。</span>';
     if(r.need_attach_later) msg += '<br><span class="tag-warn">待補證明</span> <span style="color:#8a5a1a;">請盡快到「我的請假單」開啟本單補上傳證明文件。</span>';
     $('#applyMsg').html(msg);
     resetForm(true);
     refreshPendingCount();
-  }, 'json').fail(function(){ $('#btnSubmit').prop('disabled', false); $('#applyMsg').html('<span style="color:#a3341f;">送出失敗</span>'); });
+  }, 'json').fail(function(){ $('#btnSubmit').prop('disabled', false); $('#applyMsg').html('<span style="color:#a3341f;">'+(editingId?'儲存':'送出')+'失敗</span>'); });
 }
 function resetForm(keepMsg){
   $('#fType').val(''); $('#fTimeFrom').val(''); $('#fTimeTo').val(''); $('#fAmount').val('');
@@ -576,6 +655,18 @@ function resetForm(keepMsg){
   uploadToken = newToken();
   $.getJSON(API, {action:'annual_summary'}, function(r){ if(r.success) renderAnnual(r.annual); });
 }
+
+// ── 範圍／狀態按鈕切換（則一選擇）──
+function syncFilterBtns(){
+  $('.scope-btn').removeClass('on').filter('[data-scope="'+$('#fScope').val()+'"]').addClass('on');
+  $('.status-btn').removeClass('on').filter('[data-status="'+$('#fStatus').val()+'"]').addClass('on');
+}
+$(document).on('click', '.scope-btn', function(){
+  $('#fScope').val($(this).data('scope')); syncFilterBtns(); listPage = 1; loadList();
+});
+$(document).on('click', '.status-btn', function(){
+  $('#fStatus').val(String($(this).data('status')||'')); syncFilterBtns(); listPage = 1; loadList();
+});
 
 // ── 列表 ──
 function loadList(){
@@ -595,17 +686,43 @@ function stBadge(s){
   const x = m[s] || ['st-canceled', s];
   return '<span class="st-badge '+x[0]+'">'+x[1]+'</span>';
 }
+
+/* ── 起訖顯示（列表／待簽核／詳情共用同一份，避免各處格式不一致）──
+   規則（2026-07-29 使用者要求）：
+     整天請假（起訖時間＝該日班別或涵蓋整個上班時間）→ 只顯示日期
+     同一天內的部分時段          → 日期 + 時間（日期只出現一次）
+     跨日                        → 兩邊都顯示日期，中間用 ~
+*/
+function fmtPeriod(startStr, endStr, isFullDay){
+  const s = String(startStr||''), e = String(endStr||'');
+  const sd = s.substring(0,10), ed = e.substring(0,10);
+  const st = s.substring(11,16), et = e.substring(11,16);
+  if(sd === ed){
+    if(isFullDay) return sd;                       // 整天：只顯示日期
+    return sd + '　' + st + '～' + et;             // 同日部分時段：日期只出現一次
+  }
+  // 跨日
+  if(isFullDay) return sd + ' ~ ' + ed;
+  return sd + ' ' + st + ' ~ ' + ed + ' ' + et;
+}
+// 是否視為「整天請假」：以後端算出的天數為準（半小時單位下，整天＝天數為整數且時數≥一天工時）
+function isFullDayLeave(o){
+  const days = parseFloat(o.total_days || 0), hrs = parseFloat(o.total_hours || 0);
+  const perDay = parseFloat((SETTINGS && SETTINGS.hours_per_day) || 8);
+  return days > 0 && Math.abs(days - Math.round(days)) < 0.001 && hrs >= perDay - 0.001;
+}
 function rowHtml(o){
+  // 標記欄只放「額外資訊」；狀態一律只在狀態欄用 stBadge 呈現，
+  // 不再另外放申請中/簽章圖示（同一件事用兩種樣式顯示會不一致，2026-07-29 使用者回報）
   let tags = '';
   if(+o.is_backdated === 1) tags += '<span class="tag-soft">補請假</span> ';
   if(o.attach_status === 'pending') tags += '<span class="tag-warn">待補證明</span> ';
-  if(o.status === 'pending') tags += (window.EGStamp ? EGStamp.badge('pending', 15) : '');
-  if(o.status === 'approved') tags += (window.EGStamp ? EGStamp.badge('sign', 15) : '');
+  if(tags === '') tags = '<span style="color:#c9b89c;">—</span>';
   return '<tr>'
     + '<td>#'+o.id+'</td>'
     + '<td>'+esc(o.applicant_name)+'</td>'
     + '<td>'+esc(o.leave_name)+'</td>'
-    + '<td style="white-space:nowrap;">'+esc(String(o.start_datetime).substring(0,16))+'<br>~ '+esc(String(o.end_datetime).substring(0,16))+'</td>'
+    + '<td style="white-space:nowrap;">'+esc(fmtPeriod(o.start_datetime, o.end_datetime, isFullDayLeave(o)))+'</td>'
     + '<td>'+num(o.total_hours)+' 時 / '+num(o.total_days)+' 天</td>'
     + '<td>'+esc(o.agent_name||'—')+'</td>'
     + '<td>'+stBadge(o.status)+'</td>'
@@ -707,12 +824,11 @@ function openDetail(id){
     curDetailCanCancel = r.can_cancel; curDetailStatus = o.status;
     let h = '<table class="lv-tbl" style="margin-bottom:14px;"><tbody>';
     const row = (k,v) => '<tr><th style="width:110px;">'+k+'</th><td>'+v+'</td></tr>';
-    h += row('單號', '#'+o.id + '　' + stBadge(o.status)
-             + (o.status==='pending' && window.EGStamp ? ' '+EGStamp.badge('pending',16) : '')
-             + (o.status==='approved' && window.EGStamp ? ' '+EGStamp.badge('sign',16) : ''));
+    h += row('單號', '#'+o.id + '　' + stBadge(o.status));
     h += row('申請人', esc(o.applicant_name));
     h += row('假別', esc(o.leave_name));
-    h += row('請假時段', esc(String(o.start_datetime).substring(0,16)) + ' ~ ' + esc(String(o.end_datetime).substring(0,16))
+    h += row('請假時段', esc(fmtPeriod(o.start_datetime, o.end_datetime, isFullDayLeave(o)))
+             + (isFullDayLeave(o) ? ' <span class="tag-soft">整天</span>' : '')
              + (+o.is_backdated===1 ? ' <span class="tag-soft">補請假</span>' : ''));
     h += row('時數／天數', num(o.total_hours)+' 小時 / '+num(o.total_days)+' 天');
     h += row('職務代理人', esc(o.agent_name || '—'));
@@ -776,7 +892,72 @@ function openDetail(id){
     if(r.can_cancel){
       $('#btnCancelLeave').show().html('<i class="fa fa-undo"></i> ' + (o.status==='approved' ? '銷假' : '撤回申請'));
     } else $('#btnCancelLeave').hide();
+
+    // 修改：審核前（且尚無人簽核）可直接改；已核准提供「申請修改」
+    curDetailReq = o;
+    $('#btnEditLeave').toggle(!!r.can_edit);
+    $('#btnReqChange').toggle(!!r.can_request_change);
+    $('#editHint').text((!r.can_edit && r.edit_reason && String(o.employee_id)===String(ME.id)) ? r.edit_reason : '');
   });
+}
+
+// ── 修改審核前的單：把原內容帶回申請分頁，改成「儲存修改」模式 ──
+let editingId = 0, curDetailReq = null;
+function startEdit(){
+  const o = curDetailReq; if(!o) return;
+  $('#detailModal').modal('hide');
+  editingId = o.id;
+  topTab('apply', document.getElementById('tbApply'));
+  $('#fType').val(o.leave_type_id).trigger('change');
+  const sd = String(o.start_datetime||''), ed = String(o.end_datetime||'');
+  $('#fDateFrom').val(sd.substring(0,10));
+  $('#fTimeFrom').val(sd.substring(11,16));
+  $('#fDateTo').val(ed.substring(0,10) === sd.substring(0,10) ? '' : ed.substring(0,10));
+  $('#fTimeTo').val(ed.substring(11,16));
+  $('#fReason').val(o.reason || '');
+  if(o.agent_user_id) $('#fAgent').val(o.agent_user_id);
+  shiftApplied = true;        // 帶回原值後不要被排班覆蓋
+  doPreview();
+  $('#btnSubmit').html('<i class="fa fa-save"></i> 儲存修改（重新送審）');
+  $('#editBanner').remove();
+  $('.lv-form').prepend('<div id="editBanner" style="background:#fdf0dc;border:1px solid #e9c98f;color:#8a5a1a;'
+    + 'padding:8px 12px;border-radius:5px;font-size:13px;margin-bottom:10px;">'
+    + '<i class="fa fa-pencil"></i> 正在修改請假單 <b>#'+o.id+'</b>，儲存後會重新送簽核。'
+    + ' <a href="javascript:;" onclick="cancelEdit()" style="text-decoration:underline;">取消修改</a></div>');
+  $('html, body').animate({scrollTop: 0}, 300);
+}
+function cancelEdit(){
+  editingId = 0;
+  $('#editBanner').remove();
+  $('#btnSubmit').html('<i class="fa fa-paper-plane"></i> 送出申請');
+  resetForm();
+}
+// 已核准 → 申請修改：等同銷假後重新申請（帶回原內容），流程上是「變更」
+function requestChange(){
+  const o = curDetailReq; if(!o) return;
+  if(!confirm('已核准的請假要修改，系統會先「銷假」（撤除行事曆並通知已簽核的主管），'
+    + '再把原內容帶回申請單讓您調整後重新送審。\n\n確定要申請修改嗎？')) return;
+  const reason = prompt('請輸入申請修改的原因（會記入銷假原因）：', '內容需修改');
+  if(reason === null) return;
+  $.post(API, {action:'cancel', csrf:CSRF, id:o.id, reason:'申請修改：'+reason}, function(r){
+    if(!r.success){ alert(r.message); return; }
+    $('#detailModal').modal('hide');
+    loadList(); refreshPendingCount();
+    // 帶回原內容開新單（不是修改舊單，舊單已銷假留存紀錄）
+    editingId = 0;
+    topTab('apply', document.getElementById('tbApply'));
+    $('#fType').val(o.leave_type_id).trigger('change');
+    const sd = String(o.start_datetime||''), ed = String(o.end_datetime||'');
+    $('#fDateFrom').val(sd.substring(0,10));
+    $('#fTimeFrom').val(sd.substring(11,16));
+    $('#fDateTo').val(ed.substring(0,10) === sd.substring(0,10) ? '' : ed.substring(0,10));
+    $('#fTimeTo').val(ed.substring(11,16));
+    $('#fReason').val(o.reason || '');
+    if(o.agent_user_id) $('#fAgent').val(o.agent_user_id);
+    shiftApplied = true; doPreview();
+    $('#applyMsg').html('<span style="color:#8a5a1a;">原單 #'+o.id+' 已銷假，已帶回原內容，請調整後送出新的請假單。</span>');
+    $('html, body').animate({scrollTop: 0}, 300);
+  }, 'json');
 }
 function uploadLater(reqId){
   const f = document.getElementById('dFile').files[0];
@@ -809,7 +990,7 @@ function loadPending(){
     if(!r.success){ $('#pendBody').html('<div class="empty-note">'+esc(r.message)+'</div>'); return; }
     if(!r.rows.length){ $('#pendBody').html('<div class="empty-note">目前沒有待您簽核的請假單 👍</div>'); return; }
     $('#pendBody').html(r.rows.map(function(o){
-      return '<div class="lv-card" style="background:#fff;">'
+      return '<div class="lv-card" style="background:#fff;" data-req="'+o.leave_request_id+'">'
         + '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">'
         + '<b style="font-size:14px;">#'+o.leave_request_id+' '+esc(o.applicant_name)+'</b>'
         + '<span class="tag-soft">'+esc(o.leave_name)+'</span>'
@@ -817,9 +998,9 @@ function loadPending(){
         + (o.as_delegate ? '<span class="tag-warn">您以代理人身分簽核</span>' : '')
         + (+o.is_backdated===1 ? '<span class="tag-soft">補請假</span>' : '')
         + (o.attach_status==='pending' ? '<span class="tag-warn">待補證明</span>' : '')
-        + (window.EGStamp ? EGStamp.badge('pending',15) : '')
+        + stBadge('pending')
         + '</div>'
-        + '<div style="font-size:13px;color:#6b5638;">時段：'+esc(String(o.start_datetime).substring(0,16))+' ~ '+esc(String(o.end_datetime).substring(0,16))
+        + '<div style="font-size:13px;color:#6b5638;">時段：'+esc(fmtPeriod(o.start_datetime, o.end_datetime, isFullDayLeave(o)))
         + '　時數：'+num(o.total_hours)+' 小時（'+num(o.total_days)+' 天）</div>'
         + (o.reason ? '<div style="font-size:13px;color:#6b5638;">原因：'+esc(o.reason)+'</div>' : '')
         + (o.as_delegate && o.delegate_reason ? '<div style="font-size:11.5px;color:#9a7b4f;">'+esc(o.delegate_reason)+'</div>' : '')
@@ -849,7 +1030,27 @@ function refreshPendingCount(){
   });
 }
 
-$(function(){ boot(); });
+// 從通知點進來（?sign=請假單id）：直接切到「待我簽核」並標出該單
+function focusSignTarget(){
+  const m = location.search.match(/[?&]sign=(\d+)/);
+  if(!m) return;
+  const rid = m[1];
+  topTab('sign', document.getElementById('tbSign'));
+  loadPending();
+  // 等清單畫完再捲到該單並highlight
+  setTimeout(function(){
+    const $card = $('#pendBody').find('[data-req="'+rid+'"]');
+    if($card.length){
+      $('html, body').animate({scrollTop: $card.offset().top - 90}, 350);
+      $card.css({'box-shadow':'0 0 0 2px var(--amber)','border-color':'var(--amber-d)'});
+    } else {
+      $('#pendBody').prepend('<div class="empty-note" style="color:#8a5a1a;">'
+        + '請假單 #'+rid+' 已不在您的待簽清單中（可能已由其他有權簽核者處理，或單據已撤回）。</div>');
+    }
+  }, 700);
+}
+
+$(function(){ boot(); focusSignTarget(); });
 </script>
 </body>
 </html>

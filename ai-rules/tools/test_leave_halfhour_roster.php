@@ -103,9 +103,10 @@ $need = [
     '開始日期欄位 fDateFrom'   => 'id="fDateFrom"',
     '結束日期欄位 fDateTo'     => 'id="fDateTo"',
     '排班提示區 shiftHint'     => 'id="shiftHint"',
-    // 時間欄改為只選時間（日期已在旁邊選好），半小時刻度
-    '開始時間欄為 time 型別'   => 'type="time" class="form-control input-sm eg-inp" id="fTimeFrom" step="1800"',
-    '結束時間欄為 time 型別'   => 'type="time" class="form-control input-sm eg-inp" id="fTimeTo" step="1800"',
+    // 時間欄＝直接輸入的 text（2026-07-30 起禁用 type=time／下拉選時間，見 ai-rules/08 第二之二節）
+    '開始時間欄為直接輸入'     => 'id="fTimeFrom" maxlength="5" placeholder="08:00"',
+    '結束時間欄為直接輸入'     => 'id="fTimeTo" maxlength="5" placeholder="17:00"',
+    '半小時吸附函式'           => 'function snapHalf',
     '日期欄限 4 碼年'          => 'id="fDateFrom" max="9999-12-31"',
     '日期與時間同一欄位組'     => 'display:flex;gap:6px;',
     '送出時組合日期＋時間'     => 'function startDT()',

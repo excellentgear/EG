@@ -191,6 +191,21 @@ case 'submit': {
          'need_attach_later' => $r['need_attach_later'] ?? false]);
 }
 
+// ════════════════ 修改（審核前） ════════════════
+case 'update': {
+    need_csrf();
+    $reqId = (int)($_POST['id'] ?? 0);
+    if (!$reqId) bad('缺少參數');
+    $r = eg_leave_update($db, $reqId, $user_id, [
+        'leave_type_id'  => (int)($_POST['leave_type_id'] ?? 0),
+        'start_datetime' => trim((string)($_POST['start_datetime'] ?? '')),
+        'end_datetime'   => trim((string)($_POST['end_datetime'] ?? '')),
+        'reason'         => trim((string)($_POST['reason'] ?? '')),
+        'agent_user_id'  => (int)($_POST['agent_user_id'] ?? 0),
+    ], $IS_ADMIN);
+    out(['success' => $r['ok'], 'message' => $r['msg'], 'id' => $r['id'] ?? null]);
+}
+
 // ════════════════ 簽核 ════════════════
 case 'sign': {
     need_csrf();
@@ -322,10 +337,14 @@ case 'detail': {
     $st->execute([$reqId]);
     $attaches = $st->fetchAll(PDO::FETCH_ASSOC);
 
+    $edit = eg_leave_can_edit($db, $req, $user_id, $IS_ADMIN);
     out(['success' => true, 'request' => $req, 'approvals' => $approvals,
          'sign_records' => $signs, 'attachments' => $attaches,
          'can_cancel' => ((int)$req['employee_id'] === $user_id || $IS_ADMIN)
-                          && in_array($req['status'], ['pending', 'approved'], true)]);
+                          && in_array($req['status'], ['pending', 'approved'], true),
+         'can_edit' => $edit['ok'], 'edit_reason' => $edit['reason'],
+         // 已核准者提供「申請修改」＝銷假後重新申請（帶回原內容），流程上等同變更
+         'can_request_change' => ((int)$req['employee_id'] === $user_id || $IS_ADMIN) && $req['status'] === 'approved']);
 }
 
 // ════════════════ 特休額度 ════════════════

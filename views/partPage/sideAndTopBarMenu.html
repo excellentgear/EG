@@ -511,6 +511,21 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 }
                 return;
             }
+            if (refType === 'LEAVE_APPROVAL') {
+                // 請假單待簽核：開請假系統的「待我簽核」分頁並直接展開該單的簽核面板。
+                // mode=sign → 真正核准/退回完成前不從置頂欄未讀清單移除（比照報價單）。
+                window.open('../ADM/leave_request.php?sign=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) {
+                    nmMarkRead(nmRemoveFromList);
+                }
+                return;
+            }
+            if (refType === 'LEAVE') {
+                // 請假結果/補件等資訊型通知：開請假系統頁後直接標記已讀移除
+                window.open('../ADM/leave_request.php');
+                nmMarkRead(nmRemoveFromList);
+                return;
+            }
             if (refType === 'QUOTATION_APPROVAL') {
                 // 報價單待簽核：開專屬審核頁(左=報價單內容/右=核准駁回，RWD桌機手機通用)，帶event讓頁面判斷是否為對象。
                 // 任一簽核人核准/駁回完成前不移除(mode=sign)。
