@@ -1068,6 +1068,17 @@ body { background:var(--bg); }
                       <label>排序（數字越小越前）</label>
                       <input type="number" class="form-control input-sm" id="cat-order-input" value="0">
                     </div>
+                    <div class="form-group" style="margin-bottom:6px;">
+                      <div class="checkbox" style="margin:0;">
+                        <label><input type="checkbox" id="cat-extdoc-chk" data-eg-skip
+                                      onchange="$('#cat-extdoc-name-group').toggle(this.checked)">
+                          <b>列入外來文件清單</b>（AS9100 外來文件管制）</label>
+                      </div>
+                    </div>
+                    <div class="form-group" id="cat-extdoc-name-group" style="display:none;">
+                      <label>外來文件類別名稱<small class="text-muted">（清單/列印顯示用；留空＝直接用標籤名稱）</small></label>
+                      <input type="text" class="form-control input-sm" id="cat-extdoc-name" placeholder="例：客戶圖面">
+                    </div>
                     <button class="btn btn-success btn-sm" onclick="saveCategorySettings()">
                       <i class="fa fa-save"></i> 儲存
                     </button>
@@ -2585,17 +2596,22 @@ function loadSettingCategories(refreshPanels) {
         }
     });
 }
+let settingCatsCache = [];   // 供 editCategorySettings 依 id 取回完整欄位（含外來文件設定）
 function renderSettingCategoryTable(cats) {
+    settingCatsCache = cats;
     let html = '';
     cats.forEach(c => {
         const badge = c.is_active == 1
             ? '<span class="label label-success">啟用</span>'
             : '<span class="label label-default">停用</span>';
+        const extBadge = c.is_external_doc == 1
+            ? ` <span class="label" style="background:#F0A24B;" title="列入外來文件清單${c.external_doc_name ? '：'+escapeHtml(c.external_doc_name) : ''}">外來文件</span>`
+            : '';
         html += `<tr data-cat-id="${c.id}" draggable="false">
             <td style="width:24px;cursor:grab;color:#bbb;text-align:center;" class="cat-drag-handle">&#9776;</td>
-            <td>${escapeHtml(c.category_name)} ${badge}</td>
+            <td>${escapeHtml(c.category_name)} ${badge}${extBadge}</td>
             <td>
-                <button class="btn btn-xs btn-warning" onclick="editCategorySettings(${c.id},'${escapeHtml(c.category_name)}',${c.sort_order})">
+                <button class="btn btn-xs btn-warning" onclick="editCategorySettings(${c.id})">
                     <i class="fa fa-pencil"></i>
                 </button>
                 ${c.is_active == 1
@@ -2638,7 +2654,10 @@ function saveCategorySettings() {
     const name = $('#cat-name-input').val().trim();
     const ord  = parseInt($('#cat-order-input').val()) || 0;
     if (!name) { Swal.fire('提示','請填寫類別名稱','warning'); return; }
-    $.post(FILE_API_URL, { action:'save_category', cat_id:id, category_name:name, sort_order:ord }, res => {
+    const isExt   = $('#cat-extdoc-chk').is(':checked') ? 1 : 0;
+    const extName = $('#cat-extdoc-name').val().trim();
+    $.post(FILE_API_URL, { action:'save_category', cat_id:id, category_name:name, sort_order:ord,
+                           is_external_doc:isExt, external_doc_name:extName }, res => {
         if (res.success) {
             Swal.fire({ toast:true, position:'top-end', icon:'success', title:res.message, showConfirmButton:false, timer:1800 });
             resetCategoryForm();
@@ -2646,16 +2665,24 @@ function saveCategorySettings() {
         } else { Swal.fire('錯誤', res.message, 'error'); }
     });
 }
-function editCategorySettings(id, name, order) {
-    $('#cat-edit-id').val(id);
-    $('#cat-name-input').val(name);
-    $('#cat-order-input').val(order);
+function editCategorySettings(id) {
+    const c = settingCatsCache.find(x => x.id == id);
+    if (!c) return;
+    $('#cat-edit-id').val(c.id);
+    $('#cat-name-input').val(c.category_name);
+    $('#cat-order-input').val(c.sort_order);
+    $('#cat-extdoc-chk').prop('checked', c.is_external_doc == 1);
+    $('#cat-extdoc-name').val(c.external_doc_name || '');
+    $('#cat-extdoc-name-group').toggle(c.is_external_doc == 1);
     $('#cat-form-title').text('修改類別');
 }
 function resetCategoryForm() {
     $('#cat-edit-id').val('');
     $('#cat-name-input').val('');
     $('#cat-order-input').val(0);
+    $('#cat-extdoc-chk').prop('checked', false);
+    $('#cat-extdoc-name').val('');
+    $('#cat-extdoc-name-group').hide();
     $('#cat-form-title').text('新增類別');
 }
 function deactivateCategorySettings(id) {

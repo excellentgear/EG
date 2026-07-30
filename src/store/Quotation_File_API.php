@@ -185,8 +185,17 @@ switch ($action) {
             echo json_encode(['success'=>true,'message'=>'已重新啟用','cat_id'=>$catId]);
         } elseif ($catId) {
             if (!$name) { echo json_encode(['success'=>false,'message'=>'類別名稱不可為空']); exit; }
-            $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_external_doc=?,external_doc_name=? WHERE id=?")
-                ->execute([$name, $order, $showInList, $tagVars, $isExtDoc, $extDocName, $catId]);
+            // 只更新有送來的欄位：不同頁面的編輯表單欄位不齊（報價頁無 show_in_list、主檔頁無外來文件…），
+            // 沒送的欄位保持原值，避免互相洗掉設定
+            $sets = ['category_name=?', 'sort_order=?'];
+            $vals = [$name, $order];
+            if (isset($_POST['show_in_list']))      { $sets[]='show_in_list=?';      $vals[]=$showInList; }
+            if (isset($_POST['tag_variables']))     { $sets[]='tag_variables=?';     $vals[]=$tagVars; }
+            if (isset($_POST['is_external_doc']))   { $sets[]='is_external_doc=?';   $vals[]=$isExtDoc; }
+            if (isset($_POST['external_doc_name'])) { $sets[]='external_doc_name=?'; $vals[]=$extDocName; }
+            $vals[] = $catId;
+            $pdo->prepare("UPDATE quotation_file_categories SET ".implode(',', $sets)." WHERE id=?")
+                ->execute($vals);
             echo json_encode(['success'=>true,'message'=>'已更新','cat_id'=>$catId]);
         } else {
             if (!$name) { echo json_encode(['success'=>false,'message'=>'類別名稱不可為空']); exit; }
