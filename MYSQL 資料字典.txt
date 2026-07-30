@@ -3487,6 +3487,33 @@ is_active	tinyint(1)	是	1
 索引
 鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
 PRIMARY	BTREE	是	否	rule_id	9	A	否	
+qc_symbol
+資料表備註： 線上檢驗2.0：工程符號主檔（Ø ± ▽ 等，供檢驗項目名稱/標準值插入；僅管理員可增修刪）
+
+欄位	類型	無值(Null)	預設值	備註
+sym_id (主鍵)	int	否		符號主鍵
+symbol	varchar(8)	否		符號本身，如 Ø ± ▽
+label	varchar(50)	是	NULL	說明，如 直徑
+sort_order	int	是	0	排序（小的排前面）
+is_active	tinyint(1)	是	1	是否啟用
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	sym_id	0	A	否
+qc_sample_change_log
+資料表備註： 線上檢驗2.0：抽驗數變更紀錄（改抽驗數必填理由，掛在該張檢驗表單下）
+
+欄位	類型	無值(Null)	預設值	備註
+id (主鍵)	int	否		主鍵
+qc_form_id	int	否		對應 qc_check_form.qc_form_id
+old_qty	int	是	NULL	原抽驗數
+new_qty	int	否		改為抽驗數
+reason	varchar(255)	否		變更理由（必填）
+changed_by	char(11)	是	NULL	變更人
+changed_at	datetime	是	NULL	變更時間
+索引
+鍵名	類型	唯一	緊湊	欄位	基數	編碼與排序	無值(Null)	備註
+PRIMARY	BTREE	是	否	id	0	A	否
+idx_form	BTREE	否	否	qc_form_id	0	A	否
 qc_special_characteristic
 資料表備註： QC 幾何公差與特殊檢驗項目字典
 

@@ -29,6 +29,187 @@ if (empty($_SESSION['qc_csrf'])) { $_SESSION['qc_csrf'] = bin2hex(random_bytes(1
 $CSRF = $_SESSION['qc_csrf'];
 
 $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
+
+// =============================================================================
+// v2 專屬後端（只處理舊頁沒有的三件事，其餘一律仍打舊頁 API，不動舊檔）
+//   ① 工程符號主檔 qc_symbol（Ø ± ▽ …）CRUD——僅管理員可增修刪
+//   ② 抽驗數變更理由 qc_sample_change_log——記在該張檢驗表單下
+//   ③ 無 BOM／無製程的臨時檢驗單（退貨、客訴、來料…）建立與查詢
+// 以 v2action 參數區分，不與舊頁 action 衝突；CSRF 共用同一組 session token。
+// =============================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/rbac.php';
+    include_once '../../src/common/qc_inspection_lib.php'; // 共用：後端重算判定＋寫 qc_measurement
+
+    $pdo = (new DBConnection())->getPDO();
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $uid   = trim($_SESSION['id'] ?? $_SESSION['user_id'] ?? '');
+    $feats = rbac_user_features($pdo, (int)$uid);
+    $hasF  = function ($c) use ($feats) { return in_array('all', $feats, true) || in_array($c, $feats, true); };
+    $isAdmin = in_array('all', $feats, true);
+    $act = $_POST['v2action'];
+
+    // 版本／表單型態：與舊頁同邏輯（此處為 v2 專用副本，避免 include 舊頁觸發它的 API 分支）
+    $v2Version = function ($pdo, $d_id) {
+        $s = $pdo->prepare("SELECT version_id FROM qc_inspection_version WHERE d_id=? AND is_active=1 ORDER BY version_id DESC LIMIT 1");
+        $s->execute([$d_id]);
+        if ($v = $s->fetchColumn()) return (int)$v;
+        $pdo->prepare("INSERT INTO qc_inspection_version (d_id, version_label, source_type, is_active) VALUES (?, '目前使用中', 'REVISION', 1)")->execute([$d_id]);
+        return (int)$pdo->lastInsertId();
+    };
+    $v2FormType = function ($pdo) {
+        $v = $pdo->query("SELECT form_type_id FROM qc_inspection_form_type WHERE is_active=1 AND form_code='GENERAL' LIMIT 1")->fetchColumn();
+        if ($v) return (int)$v;
+        $v = $pdo->query("SELECT form_type_id FROM qc_inspection_form_type WHERE is_active=1 ORDER BY form_type_id ASC LIMIT 1")->fetchColumn();
+        if ($v) return (int)$v;
+        $pdo->exec("INSERT INTO qc_inspection_form_type (form_code, form_name, inspection_stage, is_active) VALUES ('GENERAL','一般檢','IPQC',1)");
+        return (int)$pdo->lastInsertId();
+    };
+
+    try {
+        $WRITE = ['sym_save', 'sym_delete', 'save_adhoc', 'log_sample_change'];
+        if (in_array($act, $WRITE, true)) {
+            $tok = $_POST['csrf'] ?? '';
+            if (!is_string($tok) || $tok === '' || !hash_equals((string)($_SESSION['qc_csrf'] ?? ''), $tok)) {
+                throw new Exception('連線憑證失效或不符，請重新整理頁面後再試 (CSRF)');
+            }
+        }
+
+        // ---- ① 工程符號主檔 ----
+        if ($act === 'sym_list') {
+            $rows = $pdo->query("SELECT sym_id, symbol, label, sort_order FROM qc_symbol WHERE is_active=1 ORDER BY sort_order ASC, sym_id ASC")->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success' => true, 'rows' => $rows, 'is_admin' => $isAdmin], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'sym_save') {
+            if (!$isAdmin) throw new Exception('符號主檔僅管理員可維護');
+            $sym = trim($_POST['symbol'] ?? '');
+            $lab = trim($_POST['label'] ?? '');
+            $srt = (int)($_POST['sort_order'] ?? 0);
+            $id  = (int)($_POST['sym_id'] ?? 0);
+            if ($sym === '') throw new Exception('符號不可空白');
+            if (mb_strlen($sym) > 4) throw new Exception('符號請控制在 4 個字以內');
+            if ($id) $pdo->prepare("UPDATE qc_symbol SET symbol=?, label=?, sort_order=? WHERE sym_id=?")->execute([$sym, $lab, $srt, $id]);
+            else {
+                if (!$srt) $srt = (int)$pdo->query("SELECT COALESCE(MAX(sort_order),0)+10 FROM qc_symbol")->fetchColumn();
+                $pdo->prepare("INSERT INTO qc_symbol (symbol,label,sort_order,is_active) VALUES (?,?,?,1)")->execute([$sym, $lab, $srt]);
+            }
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'sym_delete') {
+            if (!$isAdmin) throw new Exception('符號主檔僅管理員可維護');
+            $pdo->prepare("DELETE FROM qc_symbol WHERE sym_id=?")->execute([(int)($_POST['sym_id'] ?? 0)]);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // ---- ② 抽驗數變更理由 ----
+        if ($act === 'log_sample_change') {
+            $qid = (int)($_POST['qc_form_id'] ?? 0);
+            $rsn = trim($_POST['reason'] ?? '');
+            if (!$qid || $rsn === '') throw new Exception('缺少檢驗單號或理由');
+            $pdo->prepare("INSERT INTO qc_sample_change_log (qc_form_id, old_qty, new_qty, reason, changed_by, changed_at) VALUES (?,?,?,?,?,NOW())")
+                ->execute([$qid, ($_POST['old_qty'] === '' ? null : (int)$_POST['old_qty']), (int)($_POST['new_qty'] ?? 0), mb_substr($rsn, 0, 255), $uid]);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'get_sample_changes') {
+            $s = $pdo->prepare("SELECT old_qty, new_qty, reason, changed_by, changed_at FROM qc_sample_change_log WHERE qc_form_id=? ORDER BY id ASC");
+            $s->execute([(int)($_POST['qc_form_id'] ?? 0)]);
+            echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // ---- ③ 無 BOM／無製程的臨時檢驗單 ----
+        if ($act === 'part_search') {
+            $kw = trim($_POST['keyword'] ?? '');
+            $s  = $pdo->prepare("SELECT d_id, D_Setting_Id, Revision FROM d_setting WHERE D_Setting_Id LIKE ? ORDER BY D_Setting_Id ASC LIMIT 30");
+            $s->execute(['%' . $kw . '%']);
+            echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'adhoc_list') {
+            $s = $pdo->query(
+                "SELECT f.qc_form_id, f.d_id, f.process_name, f.incoming_qty, f.sample_qty, f.ng_qty,
+                        f.check_result, f.created_at, f.created_by, d.D_Setting_Id AS part_no
+                 FROM qc_check_form f LEFT JOIN d_setting d ON d.d_id = f.d_id
+                 WHERE f.bom_ing_fid = 0 AND f.status <> 'DRAFT'
+                 ORDER BY f.qc_form_id DESC LIMIT 50");
+            echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'save_adhoc') {
+            if (!$hasF('qc_fill_inspection')) throw new Exception('您沒有「填寫檢驗表單」權限');
+            $d_id = (int)($_POST['d_id'] ?? 0);
+            if ($d_id <= 0) throw new Exception('請先選擇料號');
+            $process = trim($_POST['process_name'] ?? '');      // 檢驗類型（退貨/客訴/來料…），非 BOM 製程
+            if ($process === '') $process = '臨時檢驗';
+            $incoming = (int)($_POST['incoming_qty'] ?? 0);
+            $sample   = (int)($_POST['sample_qty'] ?? 0);
+            $remark   = trim($_POST['main_remark'] ?? '');
+            $items    = json_decode($_POST['items'] ?? '[]', true); if (!is_array($items)) $items = [];
+            $pcs      = json_decode($_POST['pcs_verdicts'] ?? '[]', true); if (!is_array($pcs)) $pcs = [];
+            if (!$items) throw new Exception('請至少輸入一個檢驗項目');
+
+            $version_id = $v2Version($pdo, $d_id);
+            $form_type_id = $v2FormType($pdo);
+            $pdo->beginTransaction();
+
+            // 臨時檢驗單一律不改寫料號標準（update_std=false）：找得到同名標準就沿用，
+            // 找不到才新建且 is_active=0，不污染該料號的正式檢驗標準。
+            $findItem = $pdo->prepare("SELECT item_id FROM qc_inspection_item
+                 WHERE version_id=? AND form_type_id=? AND (process_name <=> ?) AND item_name=? ORDER BY item_id DESC LIMIT 1");
+            $insItem = $pdo->prepare("INSERT INTO qc_inspection_item
+                 (version_id, form_type_id, process_name, item_code, item_name, standard_text,
+                  min_value, max_value, plus_tolerance, minus_tolerance, result_type, sort_order, is_active)
+                 VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, 0)");
+            $itemIds = [];
+            foreach ($items as $idx => $it) {
+                $name = trim($it['name'] ?? '');
+                if ($name === '') { $itemIds[$idx] = null; continue; }
+                $findItem->execute([$version_id, $form_type_id, $process, $name]);
+                $iid = $findItem->fetchColumn();
+                if (!$iid) {
+                    $insItem->execute([$version_id, $form_type_id, $process, (string)($idx + 1), $name, ($it['std'] ?? ''),
+                        (($it['up'] ?? '') !== '' ? $it['up'] : null), (($it['lo'] ?? '') !== '' ? $it['lo'] : null),
+                        (($it['type'] ?? 'NUM') === 'OKNG' ? 'OKNG' : 'NUMERIC'), $idx + 1]);
+                    $iid = (int)$pdo->lastInsertId();
+                }
+                $itemIds[$idx] = (int)$iid;
+            }
+
+            // bom_ing_fid=0 代表「非 BOM 來源」的臨時檢驗單
+            $pdo->prepare("INSERT INTO qc_check_form
+                 (bom_ing_fid, d_id, version_id, form_type_id, process_name, batch_no, round_no,
+                  incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, pcs_verdicts, check_date, created_by, created_at)
+                 VALUES (0, ?, ?, ?, ?, 1, 1, ?, ?, 0, 'OK', 'SUBMITTED', ?, ?, NOW(), ?, NOW())")
+                ->execute([$d_id, $version_id, (string)$form_type_id, $process, $incoming, $sample, $remark,
+                           json_encode($pcs, JSON_UNESCAPED_UNICODE), $uid]);
+            $qc_form_id = (int)$pdo->lastInsertId();
+
+            $tot = qc_persist_readings($pdo, $qc_form_id, $items, $itemIds, $pcs, $uid);
+            $pdo->prepare("UPDATE qc_check_form SET ng_qty=?, check_result=? WHERE qc_form_id=?")
+                ->execute([$tot['ng_qty'], $tot['check_result'], $qc_form_id]);
+            $pdo->commit();
+
+            echo json_encode(['success' => true, 'qc_form_id' => $qc_form_id, 'summary' => [
+                'bom_ing_fid' => 0, 'process' => $process, 'batch_no' => 1, 'round_no' => 1,
+                'incoming_qty' => $incoming, 'sample_qty' => $sample, 'total_items' => count($items),
+                'ng_qty' => $tot['ng_qty'], 'aod_qty' => $tot['aod_qty'], 'check_result' => $tot['check_result'],
+            ]], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        throw new Exception('未知的 v2action: ' . $act);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['success' => false, 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -164,10 +345,21 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
     #items-table .g-name { font-weight:bold; color:var(--ink); }
     #items-table .g-spec { font-size:13px; color:var(--ink2); white-space:nowrap; }
     #items-table .table-input { width:100%; min-width:0; border:1px solid #ccc; padding:3px 5px; border-radius:3px; }
-    #items-table .mcell { width:96px; padding:14px 3px 3px; }
-    #items-table .mcell .mval { font-size:18px; height:26px; }
-    #items-table .mcell .mdev { font-size:10px; }
-    #items-table .mcell.okng .mtxt { font-size:15px; height:26px; line-height:26px; }
+    /* 總表格子刻意做小：項目一多才不會整頁散開（大格請用逐項／逐件模式） */
+    #items-table .mcell { width:72px; padding:12px 2px 2px; border-width:1px; border-radius:5px; }
+    #items-table .mcell .mno { font-size:9px; top:1px; left:3px; }
+    #items-table .mcell .mval { font-size:15px; height:22px; }
+    #items-table .mcell .mdev { font-size:9px; height:12px; line-height:12px; }
+    #items-table .mcell.okng { padding-bottom:4px; }
+    #items-table .mcell.okng .mtxt { font-size:13px; height:22px; line-height:22px; }
+    #items-table .gcells { gap:4px; }
+    /* 項目列的操作鈕（加量測/備註/刪除）改放在「檢驗項目」欄名稱下方，
+       原本擺最右欄會被視窗右緣切掉看不到（2026-07-30 現場回饋） */
+    .row-acts { margin-top:4px; font-size:12px; }
+    .row-acts a { color:#8a6a45; text-decoration:none; margin-right:10px; white-space:nowrap; }
+    .row-acts a:hover { color:var(--amber-d); text-decoration:underline; }
+    .row-acts a.del:hover { color:var(--coral); }
+    .row-acts a.has-note { color:var(--amber-d); font-weight:bold; }
     .gcells { display:flex; flex-wrap:wrap; gap:6px; }
     .pverdict { display:inline-block; min-width:82px; text-align:center; border-radius:6px; padding:6px 4px; font-weight:bold;
                 border:2px solid var(--line); background:#fff; color:var(--ink); cursor:pointer; user-select:none; }
@@ -287,15 +479,28 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
             <div class="banner banner-info" id="mode-banner"></div>
 
             <!-- 示範/獨立瀏覽模式才出現的待驗搜尋 -->
-            <div id="step-search" class="warm-panel" style="display:none;">
-                <b>選擇待驗項目</b>
-                <div class="row" style="margin-top:6px;">
+            <div id="step-search" style="display:none;">
+                <div class="row">
                     <div class="col-md-6">
-                        <div class="input-group">
-                            <input type="text" id="search-kw" class="form-control" placeholder="輸入部分料號 / BOM / 客戶後按搜尋">
-                            <span class="input-group-btn"><button class="btn btn-warm" id="btn-search">搜尋</button></span>
+                        <div class="warm-panel">
+                            <b>① 從製令待驗清單挑</b>
+                            <div class="muted-help" style="margin-bottom:6px;">正常生產的檢驗：有 BOM、有製程</div>
+                            <div class="input-group">
+                                <input type="text" id="search-kw" class="form-control" placeholder="輸入部分料號 / BOM / 客戶後按搜尋">
+                                <span class="input-group-btn"><button class="btn btn-warm" id="btn-search">搜尋</button></span>
+                            </div>
+                            <div id="search-results" style="border:1px solid #E4D3BC; margin-top:4px; max-height:220px; overflow:auto;"></div>
                         </div>
-                        <div id="search-results" style="border:1px solid #eee; margin-top:4px;"></div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="warm-panel">
+                            <b>② 臨時檢驗單（退貨／客訴／來料，無製程）</b>
+                            <div class="muted-help" style="margin-bottom:6px;">不是從製令來的檢驗，這裡自己開一張</div>
+                            <button class="btn btn-warm btn-sm" id="btn-new-adhoc"><i class="fa fa-plus"></i> 建立臨時檢驗單</button>
+                            <div style="margin-top:8px;"><b class="muted-help">最近的臨時檢驗單</b>
+                                <div id="adhoc-list" style="max-height:200px;overflow:auto;margin-top:4px;"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -331,12 +536,17 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
                     後微調。<b>勾選底部「同步更新標準」存檔後即成此料號標準，下次自動帶出。</b>
                 </div>
 
-                <!-- 檢視切換列 -->
+                <!-- 檢視切換列（新增項目／符號／編號切換都放這裡，永遠看得到、不會被底部列蓋住） -->
                 <div class="toolbar-row">
                     <span class="view-switch">
-                        <button data-view="ITEM" title="一次專注一個尺寸，量完 5 件再換下一個尺寸">逐項</button>
+                        <button data-view="ITEM" title="一次專注一個尺寸，量完所有件再換下一個尺寸">逐項</button>
                         <button data-view="PCS"  title="一次專注一件，把該件所有尺寸量完">逐件</button>
                         <button data-view="GRID" title="傳統格狀總表，鍵盤連續輸入最快">總表</button>
+                    </span>
+                    <button class="btn btn-warm-o btn-sm" id="btn-add-row-top"><i class="fa fa-plus"></i> 新增檢驗項目</button>
+                    <span class="btn-group">
+                        <button class="btn btn-default btn-sm" id="btn-sym" title="插入工程符號（Ø ± ▽ …）到游標處">Ø± 符號</button>
+                        <button class="btn btn-default btn-sm" id="btn-code-mode2" title="切換檢驗項目編號顯示方式"></button>
                     </span>
                     <button class="btn btn-default btn-sm" id="btn-keypad"><i class="fa fa-keyboard-o"></i> 數字鍵盤</button>
                     <span class="muted-help" id="view-hint"></span>
@@ -348,7 +558,7 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
                 <div id="view-grid" class="view-pane" style="display:none;">
                     <div style="margin-bottom:6px;">
                         <label style="font-weight:normal;"><input type="checkbox" id="chk-std-edit"> 編輯標準（顯示項目名稱／公差／量具／型態欄位）</label>
-                        <a href="#" id="btn-code-mode" class="pull-right muted-help" title="切換編號顯示方式"></a>
+                        <span class="muted-help pull-right">在最後一列的欄位按 <b>↓</b> 會自動新增一列；在全空的最後一列按 <b>↑</b> 會自動移除該列</span>
                     </div>
                     <div class="table-responsive" style="max-height:58vh; overflow:auto;">
                         <table class="table table-bordered" id="items-table">
@@ -358,7 +568,6 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
                                 <td id="verdict-label" class="text-right" style="font-weight:bold;background:var(--cream);">判定結果<br>
                                     <span class="muted-help" style="font-weight:normal;">該件任一項 NG 即自動 NG；點擊可手動改判，雙擊恢復自動</span></td>
                                 <td id="verdict-cells" style="background:var(--cream);"></td>
-                                <td style="background:var(--cream);"></td>
                                 <td style="background:var(--cream);"></td>
                             </tr></tfoot>
                         </table>
@@ -420,6 +629,100 @@ $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
         <button data-k="OK"><i class="fa fa-check"></i></button>
         <button class="wide" data-k="NEXT">下一格 <i class="fa fa-arrow-right"></i></button>
     </div>
+</div>
+
+<!-- ===================== 工程符號面板（插到游標處；管理員可增修刪） ===================== -->
+<div id="sym-pad" onmousedown="event.preventDefault()"
+     style="display:none;position:fixed;z-index:1200;background:#fff;border:1px solid #E4D3BC;border-radius:8px;
+            padding:8px;box-shadow:0 4px 14px rgba(120,90,50,.3);width:266px;">
+    <div style="font-size:12px;color:#8a6a45;margin-bottom:6px;">點一下插入到剛才的輸入欄游標處</div>
+    <div id="sym-pad-list" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
+    <div id="sym-pad-admin" style="display:none;border-top:1px dashed #E4D3BC;margin-top:8px;padding-top:6px;">
+        <a href="#" id="btn-sym-manage" style="font-size:12px;color:#C77C1A;"><i class="fa fa-cog"></i> 管理符號（新增／修改／刪除）</a>
+    </div>
+</div>
+
+<!-- 符號主檔維護跳窗（僅管理員） -->
+<div class="modal fade" id="symManageModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
+            <button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-font"></i> 工程符號管理 <small>（僅管理員）</small></h4>
+        </div>
+        <div class="modal-body">
+            <form id="sym-form" class="form-inline" style="margin-bottom:10px;">
+                <input type="hidden" id="sym-id">
+                <input type="text" class="form-control input-sm" id="sym-char" placeholder="符號" style="width:80px;font-size:18px;text-align:center;" maxlength="4" required>
+                <input type="text" class="form-control input-sm" id="sym-label" placeholder="說明（如 直徑）" style="width:180px;">
+                <input type="number" class="form-control input-sm" id="sym-sort" placeholder="排序" style="width:80px;">
+                <button type="submit" class="btn btn-warm btn-sm" id="btn-sym-save">新增</button>
+                <button type="button" class="btn btn-default btn-sm" id="btn-sym-cancel" style="display:none;">取消編輯</button>
+            </form>
+            <div class="muted-help" style="margin-bottom:6px;">符號可直接從別處複製貼上（例如 ⌀ ⊥ ∥ ⌭）。排序數字小的排前面。</div>
+            <table class="table table-condensed table-bordered">
+                <thead><tr><th width="70">符號</th><th>說明</th><th width="70">排序</th><th width="110"></th></tr></thead>
+                <tbody id="sym-list"></tbody>
+            </table>
+        </div>
+        <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">關閉</button></div>
+    </div></div>
+</div>
+
+<!-- ===================== 抽驗數變更理由（必填，會記錄在此檢驗單） ===================== -->
+<div class="modal fade" id="sampleChgModal" tabindex="-1" role="dialog" data-backdrop="static">
+    <div class="modal-dialog modal-sm"><div class="modal-content">
+        <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
+            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-list-ol"></i> 變更抽驗數</h4>
+        </div>
+        <div class="modal-body">
+            <div class="muted-help" id="sc-info" style="margin-bottom:8px;"></div>
+            <label>變更理由（必填，會記錄在這張檢驗單）</label>
+            <textarea class="form-control" id="sc-reason" rows="3" placeholder="例：客戶要求加嚴抽驗／本批數量不足，改抽 3 件"></textarea>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-default" id="btn-sc-cancel">取消變更</button>
+            <button class="btn btn-warm" id="btn-sc-ok">確定變更</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- ===================== 無 BOM／無製程的臨時檢驗單 ===================== -->
+<div class="modal fade" id="adhocModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
+            <button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-plus-square-o"></i> 建立臨時檢驗單（無製令／無製程）</h4>
+        </div>
+        <div class="modal-body">
+            <div class="muted-help" style="margin-bottom:10px;">
+                用於<b>退貨、客訴、來料、重工</b>等不是從製令待驗清單來、也沒有 BOM 製程的檢驗。
+                存檔後一樣寫入正式檢驗表，可列印、可查歷史，只是「製程」欄記的是檢驗類型。
+            </div>
+            <div class="form-group">
+                <label>檢驗類型</label>
+                <div id="ah-type-btns" style="margin-bottom:6px;"></div>
+                <input type="text" class="form-control input-sm" id="ah-type" placeholder="也可自行輸入，例如：客戶退貨複驗">
+            </div>
+            <div class="form-group">
+                <label>料號（必填）</label>
+                <div class="input-group">
+                    <input type="text" class="form-control input-sm" id="ah-part-kw" placeholder="輸入部分料號後按搜尋">
+                    <span class="input-group-btn"><button class="btn btn-default btn-sm" id="btn-ah-search">搜尋</button></span>
+                </div>
+                <div id="ah-part-results" style="border:1px solid #E4D3BC;margin-top:4px;max-height:160px;overflow:auto;display:none;"></div>
+                <div id="ah-part-picked" class="muted-help" style="margin-top:4px;"></div>
+            </div>
+            <div class="row">
+                <div class="col-xs-6 form-group"><label>送驗數</label><input type="number" class="form-control input-sm" id="ah-qty" value="0"></div>
+                <div class="col-xs-6 form-group"><label>抽驗數（件）</label><input type="number" class="form-control input-sm" id="ah-sample" value="3"></div>
+            </div>
+            <div class="form-group"><label>備註</label><input type="text" class="form-control input-sm" id="ah-remark" placeholder="選填"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-default" data-dismiss="modal">取消</button>
+            <button class="btn btn-warm" id="btn-ah-create">建立並開始填寫</button>
+        </div>
+    </div></div>
 </div>
 
 <!-- ===================== 量具挑選跳窗：先點類型、再點編號 ===================== -->
@@ -1121,6 +1424,7 @@ $(function(){
     'use strict';
     // ★ 後端沿用舊頁的 AJAX API（同 session / 同 CSRF / 同 RBAC / 同後端重算判定）
     var API  = 'inspection_combined_prototype.php';
+    var V2API= 'inspection_entry_v2.php';   // v2 專屬後端（符號主檔／抽驗數變更／臨時檢驗單）
     var CSRF = <?php echo json_encode($CSRF, JSON_UNESCAPED_SLASHES); ?>;
     $.ajaxPrefilter(function(opts){
         var m = (opts.type || opts.method || 'GET').toUpperCase();
@@ -1368,7 +1672,7 @@ $(function(){
         if(view==='ITEM') renderItemView();
         else if(view==='PCS') renderPcsView();
         renderGrid();               // 總表恆繪（隱藏時也在 DOM，供列印/樣板等功能取用）
-        $('#btn-code-mode').text(codeMode==='ALPHA' ? '編號：A,B,C…（點此切換）' : '編號：1,2,3…（點此切換）');
+        $('#btn-code-mode2').html(codeMode==='ALPHA' ? '編號 <b>A,B,C</b> ⇄ 1,2,3' : '編號 <b>1,2,3</b> ⇄ A,B,C');
         recalc();
     }
 
@@ -1531,17 +1835,25 @@ $(function(){
         } else {
             head += '<th width="190">檢驗項目</th><th width="180">標準（上/下限）</th><th width="150">量具</th>';
         }
-        head += '<th>實測值（每件一格）</th><th width="70">判定</th><th width="48"></th>';
+        head += '<th>實測值（每件一格）</th><th width="70">判定</th>';
         $('#grid-head').html(head);
         var colsBefore = stdEdit ? 8 : 5;
         $('#verdict-label').attr('colspan', colsBefore-1);
+
+        // 每列的操作鈕：放在「檢驗項目」欄名稱下方（原本放最右欄會被視窗右緣切掉）
+        function rowActs(it, i){
+            return '<div class="row-acts">'+
+                   '<a href="#" class="btn-add-reading" data-i="'+i+'" title="同尺寸再用其他量具/方法量一次"><i class="fa fa-plus"></i> 加量測</a>'+
+                   '<a href="#" class="btn-item-note'+(it.remark?' has-note':'')+'" data-i="'+i+'" title="'+esc(it.remark||'本項備註')+'"><i class="fa fa-comment-o"></i> 備註'+(it.remark?'✔':'')+'</a>'+
+                   '<a href="#" class="btn-del-item del" data-i="'+i+'"><i class="fa fa-trash"></i> 刪除</a></div>';
+        }
 
         var body='';
         MODEL.items.forEach(function(it,i){
             var L=limits(it), v=itemVerdict(it);
             body += '<tr data-i="'+i+'"><td class="text-center">'+codeLabel(i)+'</td>';
             if(stdEdit){
-                body += '<td><input class="table-input f-name" data-i="'+i+'" value="'+esc(it.name)+'"></td>'+
+                body += '<td><input class="table-input f-name" data-i="'+i+'" value="'+esc(it.name)+'">'+rowActs(it,i)+'</td>'+
                         '<td><input class="table-input f-std" data-i="'+i+'" value="'+esc(it.std)+'"></td>'+
                         '<td><input class="table-input f-up" data-i="'+i+'" value="'+esc(it.up)+'" '+(it.type==='OKNG'?'readonly':'')+'></td>'+
                         '<td><input class="table-input f-lo" data-i="'+i+'" value="'+esc(it.lo)+'" '+(it.type==='OKNG'?'readonly':'')+'></td>'+
@@ -1550,31 +1862,31 @@ $(function(){
                           '<option value="NUM" '+(it.type==='NUM'?'selected':'')+'>數值</option>'+
                           '<option value="OKNG" '+(it.type==='OKNG'?'selected':'')+'>OK/NG</option></select></td>';
             } else {
-                body += '<td class="g-name">'+esc(it.name||'（未命名）')+
-                            (it.remark?' <i class="fa fa-comment-o" title="'+esc(it.remark)+'"></i>':'')+'</td>'+
+                body += '<td class="g-name">'+esc(it.name||'（未命名）')+rowActs(it,i)+'</td>'+
                         '<td class="g-spec">'+(it.type==='OKNG' ? esc(it.std||'OK/NG')
                             : (esc(trimNum(it.std)||'—')+(L?('<br><span class="muted-help">'+trimNum(L.low.toFixed(4))+' ~ '+trimNum(L.hi.toFixed(4))+'</span>'):'')))+'</td>'+
                         '<td>'+toolBtn(i,0)+'</td>';
             }
             var cells=''; for(var s=0;s<state.sampleN;s++) cells+=cellHtml(it,i,0,s,false);
             body += '<td><div class="gcells">'+cells+'</div></td>'+
-                    '<td class="text-center g-verdict" data-i="'+i+'" style="font-weight:bold;color:'+(v==='NG'?'var(--coral)':'var(--ink)')+'">'+(v==='NG'?'✘ NG':(v==='OK'?'✔ OK':'—'))+'</td>'+
-                    '<td class="text-center" style="white-space:nowrap">'+
-                      '<i class="fa fa-plus btn-add-reading" data-i="'+i+'" style="cursor:pointer;color:var(--amber-d)" title="加量測"></i> '+
-                      '<i class="fa fa-comment-o btn-item-note" data-i="'+i+'" style="cursor:pointer;color:'+(it.remark?'var(--amber-d)':'#bbb')+'" title="本項備註"></i> '+
-                      '<i class="fa fa-trash btn-del-item" data-i="'+i+'" style="cursor:pointer;color:var(--coral)"></i></td></tr>';
+                    '<td class="text-center g-verdict" data-i="'+i+'" style="font-weight:bold;color:'+(v==='NG'?'var(--coral)':'var(--ink)')+'">'+(v==='NG'?'✘ NG':(v==='OK'?'✔ OK':'—'))+'</td></tr>';
             for(var r=1;r<it.readings.length;r++){
                 var sub=''; for(var s3=0;s3<state.sampleN;s3++) sub+=cellHtml(it,i,r,s3,false);
-                // 對齊主列欄位：空(編號) + 併格(項目…) + 量具 + [型態空格] + 實測 + 判定空 + 動作
-                var toolCol = stdEdit ? 6 : 4;            // 量具是第幾欄
+                // 對齊主列欄位：空(編號) + 併格(項目…) + 量具 + [型態空格] + 實測 + 判定
+                var toolCol = stdEdit ? 6 : 4;              // 量具是第幾欄
                 var afterTool = (colsBefore - toolCol - 1); // 量具與實測值之間還有幾欄（型態）
-                body += '<tr style="background:#FBF7F1;"><td></td><td colspan="'+(toolCol-2)+'" class="text-right muted-help">↳ 加量測 '+r+'</td>'+
+                body += '<tr style="background:#FBF7F1;"><td></td><td colspan="'+(toolCol-2)+'" class="text-right muted-help">↳ 加量測 '+r+
+                        ' <a href="#" class="btn-del-reading" data-i="'+i+'" data-r="'+r+'" style="color:var(--coral);"><i class="fa fa-trash"></i></a></td>'+
                         '<td>'+toolBtn(i,r)+'</td>'+ (afterTool>0 ? '<td></td>' : '') +
-                        '<td><div class="gcells">'+sub+'</div></td><td></td>'+
-                        '<td class="text-center"><i class="fa fa-trash btn-del-reading" data-i="'+i+'" data-r="'+r+'" style="cursor:pointer;color:var(--coral)"></i></td></tr>';
+                        '<td><div class="gcells">'+sub+'</div></td><td></td></tr>';
             }
         });
-        $('#items-body').html(body || '<tr><td colspan="'+(colsBefore+2)+'" class="text-center muted-help" style="padding:24px;">尚無檢驗項目</td></tr>');
+        // 表格最後永遠有一列「＋ 新增檢驗項目」，不必捲到表格外面找按鈕
+        body += '<tr><td colspan="'+(colsBefore+1)+'" style="background:#FDFAF5;">'+
+                '<a href="#" id="btn-add-row-grid" style="color:var(--amber-d);font-weight:bold;text-decoration:none;">'+
+                '<i class="fa fa-plus-circle"></i> 新增檢驗項目</a>'+
+                '<span class="muted-help" style="margin-left:12px;">（在最後一列欄位按 ↓ 也會自動加一列）</span></td></tr>';
+        $('#items-body').html(body);
 
         var vh='';
         for(var s4=0;s4<state.sampleN;s4++){
@@ -1700,6 +2012,33 @@ $(function(){
         // ↑↓：量測格＝同一件的上下項目；標準欄＝同一欄的上下列
         e.preventDefault();
         var step = isDown ? 1 : -1;
+        var myItem = parseInt($self.attr('data-i'), 10);
+
+        // 專案 UI 規範：末列按 ↓ 自動加一列；在全空的最後一列按 ↑ 離開時自動移除該列
+        if(view==='GRID' && !isNaN(myItem)){
+            var last = MODEL.items.length-1;
+            if(isDown && myItem===last){
+                var keepCls=null;
+                ['f-name','f-std','f-up','f-lo'].forEach(function(c){ if($(self).hasClass(c)) keepCls=c; });
+                var keepS = $self.attr('data-s');
+                addItemRow(false);
+                setTimeout(function(){
+                    var $tr=$('#items-body tr[data-i="'+(MODEL.items.length-1)+'"]');
+                    var $t = keepCls ? $tr.find('input.'+keepCls)
+                                     : $tr.find('.mval[data-s="'+keepS+'"], .mcell.okng[data-s="'+keepS+'"]');
+                    ($t.length ? $t : $tr.find('input.f-name')).first().focus();
+                }, 30);
+                return;
+            }
+            if(isUp && myItem===last && last>0 && isItemEmpty(MODEL.items[last])){
+                MODEL.items.pop();
+                if(focusItem>=MODEL.items.length) focusItem=MODEL.items.length-1;
+                render();
+                setTimeout(function(){ $('#items-body tr[data-i="'+(MODEL.items.length-1)+'"] input.f-name').focus(); }, 30);
+                return;
+            }
+        }
+
         if($self.hasClass('mval') || $self.hasClass('okng')){
             var s=$self.attr('data-s');
             var $col=navPane(this).find('.mval[data-s="'+s+'"], .mcell.okng[data-s="'+s+'"]').filter(':visible');
@@ -1713,6 +2052,20 @@ $(function(){
             }
         }
     });
+    // 「全空列」＝名稱/標準/公差/備註都空白，且沒有任何實測值
+    function isItemEmpty(it){
+        if(!it) return true;
+        if((it.name||'').trim()!=='' || (it.std||'').trim()!=='' || (it.up||'').trim()!=='' ||
+           (it.lo||'').trim()!=='' || (it.remark||'').trim()!=='') return false;
+        for(var r=0;r<it.readings.length;r++){
+            if(it.readings[r].tool_id) return false;
+            for(var s=0;s<it.readings[r].vals.length;s++){
+                var v=it.readings[r].vals[s];
+                if(v!=='' && v!=null && !(it.type==='OKNG' && v==='OK')) return false;
+            }
+        }
+        return true;
+    }
     // 標準欄也套用「聚焦全選」，跟量測格一致
     $(document).on('focus', 'input.table-input, input.f-remark', function(){
         var el=this; setTimeout(function(){ try{ el.select(); }catch(_){ } }, 0);
@@ -1754,7 +2107,8 @@ $(function(){
         view=$(this).data('view'); localStorage.setItem('qc2_view', view); render();
     });
     $('#chk-std-edit').on('change', function(){ renderGrid(); recalc(); });
-    $('#btn-code-mode').on('click', function(e){
+    // 編號 A,B,C… ↔ 1,2,3… 切換（做成工具列按鈕，三種檢視都能按；偏好記在瀏覽器）
+    $(document).on('click', '#btn-code-mode2', function(e){
         e.preventDefault();
         codeMode = (codeMode==='ALPHA') ? 'NUM' : 'ALPHA';
         localStorage.setItem('qc_item_code_mode', codeMode); render();
@@ -1844,27 +2198,31 @@ $(function(){
         var i=+$(this).data('i'), r=+$(this).data('r');
         MODEL.items[i].readings.splice(r,1); render(); scheduleDraftSave();
     });
-    $(document).on('click', '.btn-del-item', function(){
+    $(document).on('click', '.btn-del-item', function(e){
+        e.preventDefault();
         var i=+$(this).data('i');
         if(!confirm('確定刪除「'+(MODEL.items[i].name||'未命名項目')+'」？已填的實測值也會一併移除。')) return;
         MODEL.items.splice(i,1);
         if(focusItem>=MODEL.items.length) focusItem=Math.max(0,MODEL.items.length-1);
         render(); scheduleDraftSave();
     });
-    $(document).on('click', '.btn-item-note', function(){
+    $(document).on('click', '.btn-item-note', function(e){
+        e.preventDefault();
         var i=+$(this).data('i');
         var v=prompt('本項目備註（處置/狀況，如「毛邊已修」）：', MODEL.items[i].remark||'');
         if(v===null) return;
         MODEL.items[i].remark=String(v).slice(0,255); render(); scheduleDraftSave();
     });
-    $('#btn-add-row').on('click', function(){
+    // 新增檢驗項目：工具列、表格最後一列、原本表格下方三個入口都走這裡
+    function addItemRow(focusName){
         MODEL.items.push(newItem());
         focusItem=MODEL.items.length-1;
         view='GRID'; localStorage.setItem('qc2_view',view);
         $('#chk-std-edit').prop('checked', true);
         $('#no-std-hint').hide(); render();
-        setTimeout(function(){ $('#items-body tr[data-i="'+focusItem+'"] .f-name').focus(); },50);
-    });
+        if(focusName!==false) setTimeout(function(){ $('#items-body tr[data-i="'+focusItem+'"] .f-name').focus(); },50);
+    }
+    $(document).on('click', '#btn-add-row, #btn-add-row-top, #btn-add-row-grid', function(e){ e.preventDefault(); addItemRow(); });
     // 判定列：點擊手動改判、雙擊恢復自動
     $(document).on('click', '#verdict-cells .pverdict', function(){
         var s=+$(this).data('s'); if(!MODEL.items.length) return;
@@ -1874,9 +2232,139 @@ $(function(){
     $(document).on('dblclick', '#verdict-cells .pverdict', function(){
         var s=+$(this).data('s'); MODEL.pcs[s].m=0; recalc(); scheduleDraftSave();
     });
-    $('#inp-sample').on('change', function(){ setSampleN($(this).val()); scheduleDraftSave(); });
+    // ---------- 抽驗數變更：必須填理由，理由會隨這張檢驗單一起留存 ----------
+    var scPending=null;   // {from,to}
+    $('#inp-sample').on('focus', function(){ $(this).data('prev', parseInt($(this).val())||state.sampleN); });
+    $('#inp-sample').on('change', function(){
+        var from = parseInt($(this).data('prev'));
+        if(isNaN(from)) from = state.sampleN;
+        var to = Math.max(1, parseInt($(this).val())||1);
+        if(to===from){ return; }
+        scPending={ from:from, to:to };
+        $('#sc-info').html('原抽驗數 <b>'+from+'</b> 件 → 改為 <b>'+to+'</b> 件');
+        $('#sc-reason').val('');
+        $('#sampleChgModal').modal('show');
+        setTimeout(function(){ $('#sc-reason').focus(); }, 300);
+    });
+    $('#btn-sc-cancel').on('click', function(){
+        if(scPending) $('#inp-sample').val(scPending.from);
+        scPending=null; $('#sampleChgModal').modal('hide');
+    });
+    $('#btn-sc-ok').on('click', function(){
+        var rsn=$('#sc-reason').val().trim();
+        if(!rsn){ alert('請填寫變更理由（必填，會記錄在這張檢驗單）'); $('#sc-reason').focus(); return; }
+        if(!scPending) { $('#sampleChgModal').modal('hide'); return; }
+        // 累積起來，存檔成功後一併寫入 qc_sample_change_log
+        state.sampleChanges = state.sampleChanges || [];
+        state.sampleChanges.push({ from:scPending.from, to:scPending.to, reason:rsn });
+        setSampleN(scPending.to);
+        $('#inp-sample').data('prev', scPending.to);
+        renderSampleChangeBanner();
+        scPending=null; $('#sampleChgModal').modal('hide'); scheduleDraftSave();
+    });
+    function renderSampleChangeBanner(){
+        var list=state.sampleChanges||[];
+        if(!list.length){ $('#sc-banner').remove(); return; }
+        if(!$('#sc-banner').length) $('#mode-banner').after('<div id="sc-banner" class="banner banner-info"></div>');
+        $('#sc-banner').html('<i class="fa fa-list-ol"></i> <b>抽驗數已變更</b>（存檔時會一併記錄在本檢驗單）：'+
+            list.map(function(c){ return esc(c.from+' → '+c.to+' 件（'+c.reason+'）'); }).join('　／　'));
+    }
+    // 存檔成功後把變更理由寫進 qc_sample_change_log
+    function flushSampleChanges(qcFormId){
+        var list=state.sampleChanges||[];
+        if(!qcFormId || !list.length) return;
+        list.forEach(function(c){
+            $.post(V2API, { v2action:'log_sample_change', qc_form_id:qcFormId,
+                            old_qty:c.from, new_qty:c.to, reason:c.reason }, function(){}, 'json');
+        });
+        state.sampleChanges=[]; $('#sc-banner').remove();
+    }
     $('#inp-qty,#inp-remark').on('input', scheduleDraftSave);
     $('#btn-dock-extra').on('click', function(){ $('#dock-extra').slideToggle(120, syncDockPad); });
+
+    // =====================================================================
+    // 工程符號（Ø ± ▽ …）：插到最後聚焦的文字欄游標處；主檔僅管理員可增修刪
+    // 參考 views/Sales/image_editor.php 的符號列做法，但符號改由 qc_symbol 主檔維護
+    // =====================================================================
+    var SYMS=[], symAdmin=false, lastTextEl=null;
+    // 記住最後聚焦的「文字型」欄位（項目名稱／標準值／備註／臨時檢驗單欄位）
+    $(document).on('focus', 'input.f-name, input.f-std, input.f-remark, #ah-type, #inp-remark', function(){ lastTextEl=this; });
+    function loadSymbols(){
+        $.post(V2API, { v2action:'sym_list' }, function(res){
+            if(!res || !res.success) return;
+            SYMS=res.rows||[]; symAdmin=!!res.is_admin;
+            $('#sym-pad-list').html(SYMS.length ? SYMS.map(function(s){
+                return '<button type="button" class="btn btn-default btn-sm sym-ins" data-s="'+esc(s.symbol)+'" '+
+                       'title="'+esc(s.label||'')+'" style="min-width:38px;font-size:16px;padding:4px 6px;">'+esc(s.symbol)+'</button>';
+            }).join('') : '<span class="muted-help">尚無符號</span>');
+            $('#sym-pad-admin').toggle(symAdmin);
+        }, 'json');
+    }
+    $('#btn-sym').on('click', function(e){
+        e.preventDefault();
+        var $pad=$('#sym-pad');
+        if($pad.is(':visible')){ $pad.hide(); return; }
+        var r=this.getBoundingClientRect();
+        $pad.css({ left:Math.max(4, Math.min(r.left, $(window).width()-274))+'px', top:(r.bottom+4)+'px' }).show();
+    });
+    $(document).on('mousedown', function(e){
+        if($('#sym-pad').is(':visible') && !$(e.target).closest('#sym-pad, #btn-sym').length) $('#sym-pad').hide();
+    });
+    $(document).on('click', '.sym-ins', function(){
+        var s=String($(this).attr('data-s'));
+        var el=lastTextEl && document.body.contains(lastTextEl) ? lastTextEl : null;
+        if(!el){ alert('請先點一下要插入符號的欄位（檢驗項目名稱、標準值或備註），再按符號。'); return; }
+        var st=el.selectionStart||0, en=el.selectionEnd||0, v=String(el.value||'');
+        el.value = v.slice(0,st) + s + v.slice(en);
+        el.selectionStart = el.selectionEnd = st + s.length;
+        $(el).trigger('input').focus();
+    });
+    // ---- 符號主檔維護（僅管理員） ----
+    $('#btn-sym-manage').on('click', function(e){ e.preventDefault(); $('#sym-pad').hide(); renderSymList(); $('#symManageModal').modal('show'); });
+    function renderSymList(){
+        $('#sym-list').html(SYMS.length ? SYMS.map(function(s){
+            return '<tr><td class="text-center" style="font-size:20px;">'+esc(s.symbol)+'</td><td>'+esc(s.label||'')+'</td>'+
+                   '<td>'+(s.sort_order||0)+'</td><td>'+
+                   '<button class="btn btn-xs btn-default sym-edit" data-id="'+s.sym_id+'" data-c="'+esc(s.symbol)+'" data-l="'+esc(s.label||'')+'" data-o="'+(s.sort_order||0)+'"><i class="fa fa-pencil"></i> 修改</button> '+
+                   '<button class="btn btn-xs btn-danger sym-del" data-id="'+s.sym_id+'"><i class="fa fa-trash"></i></button></td></tr>';
+        }).join('') : '<tr><td colspan="4" class="text-center muted-help">尚無符號</td></tr>');
+    }
+    $('#sym-form').on('submit', function(e){
+        e.preventDefault();
+        $.post(V2API, { v2action:'sym_save', sym_id:$('#sym-id').val(), symbol:$('#sym-char').val(),
+                        label:$('#sym-label').val(), sort_order:$('#sym-sort').val() }, function(res){
+            if(!res.success){ alert(res.message||'儲存失敗'); return; }
+            resetSymForm(); loadSymbolsThen(renderSymList);
+        }, 'json');
+    });
+    $('#sym-list').on('click','.sym-edit', function(){
+        $('#sym-id').val($(this).data('id')); $('#sym-char').val($(this).attr('data-c'));
+        $('#sym-label').val($(this).attr('data-l')); $('#sym-sort').val($(this).attr('data-o'));
+        $('#btn-sym-save').text('儲存修改'); $('#btn-sym-cancel').show();
+    });
+    $('#sym-list').on('click','.sym-del', function(){
+        if(!confirm('確定刪除此符號？')) return;
+        $.post(V2API, { v2action:'sym_delete', sym_id:$(this).data('id') }, function(res){
+            if(!res.success){ alert(res.message||'刪除失敗'); return; }
+            loadSymbolsThen(renderSymList);
+        }, 'json');
+    });
+    $('#btn-sym-cancel').on('click', resetSymForm);
+    function resetSymForm(){
+        $('#sym-id').val(''); $('#sym-char').val(''); $('#sym-label').val(''); $('#sym-sort').val('');
+        $('#btn-sym-save').text('新增'); $('#btn-sym-cancel').hide();
+    }
+    function loadSymbolsThen(cb){
+        $.post(V2API, { v2action:'sym_list' }, function(res){
+            if(res && res.success){ SYMS=res.rows||[]; symAdmin=!!res.is_admin;
+                $('#sym-pad-list').html(SYMS.map(function(s){
+                    return '<button type="button" class="btn btn-default btn-sm sym-ins" data-s="'+esc(s.symbol)+'" title="'+esc(s.label||'')+'" style="min-width:38px;font-size:16px;padding:4px 6px;">'+esc(s.symbol)+'</button>';
+                }).join(''));
+                $('#sym-pad-admin').toggle(symAdmin);
+            }
+            if(cb) cb();
+        }, 'json');
+    }
 
     // =====================================================================
     // 內建數字鍵盤（平板/戴手套；桌機可關）
@@ -1927,6 +2415,7 @@ $(function(){
         }
     }, 'json');
     loadToolInstances();
+    loadSymbols();
     applyKeypad();
 
     var fid = getFid();
@@ -1935,8 +2424,10 @@ $(function(){
         loadContext(fid);
     } else {
         state.demo = true;
-        $('#mode-banner').html('<i class="fa fa-info-circle"></i> <b>示範模式</b>（未帶 bom_ing_fid）：可搜尋待驗項目瀏覽動線。正式由「QC待驗清單」按檢驗開啟。');
+        $('#mode-banner').html('<i class="fa fa-info-circle"></i> 請先選擇要檢驗的對象：'+
+            '左邊是<b>製令待驗項目</b>（有 BOM、有製程）；右邊是<b>臨時檢驗單</b>（退貨／客訴／來料，沒有製令與製程）。');
         $('#step-search').show();
+        loadAdhocList();
     }
 
     function loadContext(fid){
@@ -1977,16 +2468,19 @@ $(function(){
     function reloadContext(){ if(ctx) loadContext(ctx.bom_ing_fid); }
 
     function renderCtxBar(){
+        var partCell = ctx.part_no
+            ? '<a href="javascript:void(0)" class="cv" id="lnk-part-drawing" title="點擊開啟圖檔預覽">'+esc(ctx.part_no)+' <i class="fa fa-picture-o"></i></a>'
+            : '<span class="cv">—</span>';
         $('#ctx-bar').show().html(
-            '<div><b>料號</b><a href="javascript:void(0)" class="cv" id="lnk-part-drawing" title="點擊開啟圖檔預覽">'+esc(ctx.part_no)+' <i class="fa fa-picture-o"></i></a></div>'+
-            '<div><b>客戶</b><span class="cv">'+esc(ctx.client||'—')+'</span></div>'+
+            '<div><b>料號</b>'+partCell+'</div>'+
+            (ctx.adhoc ? '' : '<div><b>客戶</b><span class="cv">'+esc(ctx.client||'—')+'</span></div>')+
             '<div><b>製令 / BOM</b><span class="cv">'+esc(ctx.bom||'—')+'</span></div>'+
-            '<div><b>製程</b><span class="cv">'+esc(ctx.process||'—')+'</span></div>'+
-            '<div><b>訂單數</b><span class="cv">'+(ctx.order_qty||0)+'</span></div>'+
-            '<div><b>建議抽驗</b><span class="cv">'+(ctx.sample_qty||0)+' 件</span></div>');
+            '<div><b>'+(ctx.adhoc?'檢驗類型（無製程）':'製程')+'</b><span class="cv">'+esc(ctx.process||'—')+'</span></div>'+
+            '<div><b>'+(ctx.adhoc?'送驗數':'訂單數')+'</b><span class="cv">'+(ctx.order_qty||0)+'</span></div>'+
+            '<div><b>'+(ctx.adhoc?'抽驗數':'建議抽驗')+'</b><span class="cv">'+(ctx.sample_qty||0)+' 件</span></div>');
     }
     $('#ctx-bar').on('click','#lnk-part-drawing', function(){
-        if(!ctx) return;
+        if(!ctx || !ctx.part_no) return;
         var w=screen.availWidth, h=screen.availHeight;
         var pw=Math.min(1400, Math.round(w*0.85)), ph=Math.min(900, Math.round(h*0.88));
         var url = ctx.part_no ? ('../pm/part_viewer.php?d_id='+encodeURIComponent(ctx.part_no)+(ctx.bom?'&bom='+encodeURIComponent(ctx.bom):''))
@@ -2015,6 +2509,104 @@ $(function(){
         var f=$(this).data('fid'); if(!f) return;
         var pop=new URLSearchParams(location.search).get('popup');
         location.search=(pop?'?popup=1&':'?')+'bom_ing_fid='+f;
+    });
+
+    // =====================================================================
+    // 臨時檢驗單（退貨／客訴／來料…）：沒有製令、沒有 BOM 製程也能開檢驗
+    //   ctx.adhoc=true 時，存檔改走 v2 後端 save_adhoc（bom_ing_fid=0）
+    // =====================================================================
+    var AH_TYPES = ['退貨檢驗','客訴複驗','來料檢驗','重工後檢驗','庫存抽驗'];
+    var ahPart = null;   // {d_id, part_no}
+    function loadAdhocList(){
+        $.post(V2API, { v2action:'adhoc_list' }, function(res){
+            if(!res || !res.success){ $('#adhoc-list').html('<div class="muted-help">查詢失敗</div>'); return; }
+            var rows=res.rows||[];
+            $('#adhoc-list').html(rows.length ? rows.map(function(r){
+                return '<div class="search-result-item ah-open" data-id="'+r.qc_form_id+'">'+
+                    '<b>'+esc(r.process_name||'臨時檢驗')+'</b> ／ 料號 '+esc(r.part_no||('d_id '+r.d_id))+
+                    ' <span class="muted-help">'+String(r.created_at||'').substring(0,16)+
+                    '　'+(r.check_result==='NG'?'<span class="st-ng">✘不良 '+(r.ng_qty||0)+'</span>':'<span class="st-ok">✔合格</span>')+
+                    '　'+esc(r.created_by||'')+'</span></div>';
+            }).join('') : '<div class="muted-help">目前沒有臨時檢驗單</div>');
+        }, 'json');
+    }
+    $('#btn-new-adhoc').on('click', function(){
+        ahPart=null;
+        $('#ah-type-btns').html(AH_TYPES.map(function(t){
+            return '<button type="button" class="btn btn-default btn-xs ah-type-pick" data-t="'+esc(t)+'" style="margin:0 4px 4px 0;">'+esc(t)+'</button>';
+        }).join(''));
+        $('#ah-type').val(AH_TYPES[0]);
+        $('#ah-part-kw').val(''); $('#ah-part-results').hide().empty(); $('#ah-part-picked').empty();
+        $('#ah-qty').val(0); $('#ah-sample').val(3); $('#ah-remark').val('');
+        $('#adhocModal').modal('show');
+    });
+    $(document).on('click','.ah-type-pick', function(){ $('#ah-type').val($(this).attr('data-t')); });
+    function ahSearch(){
+        var kw=$('#ah-part-kw').val().trim();
+        $('#ah-part-results').show().html('<div class="search-result-item muted-help">搜尋中…</div>');
+        $.post(V2API, { v2action:'part_search', keyword:kw }, function(res){
+            if(!res.success){ $('#ah-part-results').html('<div class="search-result-item text-danger">'+esc(res.message||'搜尋失敗')+'</div>'); return; }
+            var rows=res.rows||[];
+            $('#ah-part-results').html(rows.length ? rows.map(function(r){
+                return '<div class="search-result-item ah-part-pick" data-id="'+r.d_id+'" data-no="'+esc(r.D_Setting_Id)+'">'+
+                       esc(r.D_Setting_Id)+(r.Revision?' <span class="muted-help">Rev '+esc(r.Revision)+'</span>':'')+'</div>';
+            }).join('') : '<div class="search-result-item muted-help">查無此料號</div>');
+        }, 'json');
+    }
+    $('#btn-ah-search').on('click', function(e){ e.preventDefault(); ahSearch(); });
+    $('#ah-part-kw').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); ahSearch(); } });
+    $(document).on('click','.ah-part-pick', function(){
+        ahPart={ d_id:parseInt($(this).data('id')), part_no:String($(this).attr('data-no')) };
+        $('#ah-part-picked').html('已選料號：<b>'+esc(ahPart.part_no)+'</b>');
+        $('#ah-part-results').hide();
+    });
+    $('#btn-ah-create').on('click', function(){
+        var type=$('#ah-type').val().trim();
+        if(!type){ alert('請選擇或輸入檢驗類型'); return; }
+        if(!ahPart){ alert('請先搜尋並選擇料號'); $('#ah-part-kw').focus(); return; }
+        var sample=Math.max(1, parseInt($('#ah-sample').val())||1);
+        // 自行組出 ctx（不打 load_context，因為沒有 bom_ing_fid）
+        ctx = { bom_ing_fid:0, bom:'—（無製令）', part_no:ahPart.part_no, client:'', order_qty:parseInt($('#ah-qty').val())||0,
+                process:type, d_id:ahPart.d_id, sample_qty:sample, adhoc:true };
+        state.demo=false; state.sampleN=sample; state.editFormId=null; state.sampleChanges=[];
+        state.batches=[{ no:1, status:'WAIT', rounds:[] }]; state.curBatch=0;
+        $('#adhocModal').modal('hide');
+        $('#step-search').hide();
+        $('#mode-banner').html('<i class="fa fa-plus-square-o"></i> <b>臨時檢驗單</b>（'+esc(type)+'）：此檢驗<b>沒有製令與製程</b>，存檔後一樣寫入正式檢驗表、可列印與查歷史。');
+        renderCtxBar();
+        $('#main-area').show(); $('#dock').show(); syncDockPad();
+        $('#inp-qty').val(ctx.order_qty); $('#inp-sample').val(sample).data('prev', sample);
+        $('#inp-remark').val($('#ah-remark').val());
+        $('#chk-save-std').prop('checked', false).closest('label').hide();  // 臨時檢驗不改寫料號標準
+        renderBatches();
+        renderItems([]);
+        $('#no-std-hint').hide();
+        $('#btn-save,#btn-redo').prop('disabled', !state.can_fill);
+        $('#btn-redo').hide();      // 臨時檢驗沒有「退回重做」批次概念
+        addItemRow();               // 直接給一列可填
+    });
+    // 點最近的臨時檢驗單 → 用既有的歷程檢視/修改流程開啟
+    $(document).on('click','.ah-open', function(){
+        var qid=$(this).data('id');
+        $.post(API, { action:'get_history_record', qc_form_id:qid }, function(res){
+            if(!res.success){ alert('載入失敗：'+res.message); return; }
+            var h=res.header;
+            ctx = { bom_ing_fid:0, bom:'—（無製令）', part_no:'', client:'', order_qty:h.incoming_qty||0,
+                    process:h.process_name||'臨時檢驗', d_id:0, sample_qty:h.sample_qty||3, adhoc:true, readonly:!res.can_edit };
+            state.demo=false; state.sampleN=h.sample_qty||3;
+            state.batches=[{ no:1, status:(h.check_result==='NG'?'NG':'OK'), rounds:[{
+                date:String(h.check_date||'').substring(0,16), status:(h.check_result==='NG'?'NG':'OK'),
+                qc_form_id:h.qc_form_id, round_no:1, ng_qty:h.ng_qty||0,
+                edit_unlocked:h.edit_unlocked, self_grace:(res.self_grace?1:0), edit_log_count:0,
+                ncr_decision:h.ncr_decision, abnormal_order_id:h.abnormal_order_id, abnormal_order_no:h.abnormal_order_no
+            }] }]; state.curBatch=0;
+            $('#step-search').hide();
+            $('#mode-banner').html('<i class="fa fa-folder-open-o"></i> 已開啟臨時檢驗單 #'+qid+'（'+esc(ctx.process)+'）');
+            renderCtxBar(); $('#main-area').show(); $('#dock').show(); syncDockPad();
+            $('#chk-save-std').closest('label').hide();
+            renderBatches();
+            openEditRecord(qid);
+        }, 'json');
     });
 
     // =====================================================================
@@ -2188,7 +2780,8 @@ $(function(){
     // 草稿 / 自動存檔（沿用 save_draft / get_draft / discard_draft）
     // =====================================================================
     var draftTimer=null, draftDirty=false;
-    function draftEligible(){ return ctx && !state.demo && !state.editFormId && state.can_fill && ctx.d_id>0; }
+    // 草稿走舊頁 save_draft，需要真實 bom_ing_fid；臨時檢驗單（adhoc）不適用
+    function draftEligible(){ return ctx && !ctx.adhoc && !state.demo && !state.editFormId && state.can_fill && ctx.d_id>0 && ctx.bom_ing_fid>0; }
     function scheduleDraftSave(){
         if(!draftEligible()) return;
         draftDirty=true;
@@ -2293,12 +2886,36 @@ $(function(){
                 $eb.prop('disabled',false);
                 if(!res.success){ alert('修改失敗：'+res.message); return; }
                 var s=res.summary;
+                flushSampleChanges(s.qc_form_id);
                 if(window.opener && !window.opener.closed){
                     try{ window.opener.postMessage({type:'qc_inspection_done',bom_ing_fid:s.bom_ing_fid,summary:s,qc_form_id:s.qc_form_id,edited:true},'*'); }catch(e){}
                 }
                 alert('已儲存修改（qc_form_id='+s.qc_form_id+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty+'\n此筆已自動回鎖。');
                 exitEditMode();
             },'json').fail(function(x){ $eb.prop('disabled',false); alert('修改錯誤：'+x.responseText); });
+            return;
+        }
+
+        // 臨時檢驗單（無製令/無製程）：走 v2 後端 save_adhoc
+        if(ctx.adhoc){
+            var $ab=$('#btn-save').prop('disabled',true);
+            $.post(V2API, { v2action:'save_adhoc', d_id:ctx.d_id, process_name:ctx.process,
+                incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
+                main_remark:$('#inp-remark').val(), items:JSON.stringify(items),
+                pcs_verdicts:JSON.stringify(collectPcsVerdicts())
+            }, function(res){
+                $ab.prop('disabled',false);
+                if(!res.success){ alert('儲存失敗：'+res.message); return; }
+                var s=res.summary;
+                flushSampleChanges(res.qc_form_id);
+                state.batches[0].rounds.push({ date:'剛剛', status:s.check_result, qc_form_id:res.qc_form_id, round_no:1, ng_qty:s.ng_qty });
+                state.batches[0].status=s.check_result;
+                renderBatches();
+                function done(){
+                    alert('臨時檢驗單已儲存（qc_form_id='+res.qc_form_id+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty);
+                }
+                if(s.check_result==='NG') openNgAsk(res.qc_form_id, s, items, done); else done();
+            }, 'json').fail(function(x){ $ab.prop('disabled',false); alert('儲存錯誤：'+x.responseText); });
             return;
         }
 
@@ -2313,6 +2930,7 @@ $(function(){
             $btn.prop('disabled',false);
             if(!res.success){ alert('儲存失敗：'+res.message); return; }
             var s=res.summary;
+            flushSampleChanges(res.qc_form_id);
             b.rounds.push({ date:'剛剛', status:(asRedo?'NG':s.check_result), qc_form_id:res.qc_form_id,
                             round_no:(b.rounds.length+1), ng_qty:s.ng_qty });
             b.status = asRedo ? 'REDO' : s.check_result;
