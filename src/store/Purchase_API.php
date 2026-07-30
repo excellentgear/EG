@@ -347,18 +347,30 @@ case 'spec_save': {
     if ($specText === '') $specText = purchase_build_spec_text($db, $catId, $attrVals);
     if ($specText === '') jerr('請至少填一項規格（或直接輸入規格說明）');
     $attrJson = $attrVals ? json_encode($attrVals, JSON_UNESCAPED_UNICODE) : null;
+    // 採購料號可自訂（留白＝沿用/自動編號）；spec_code 有 UNIQUE，重複一律擋在前面說清楚是誰用掉了
+    $code = pv('spec_code');
+    if ($code !== '') {
+        if (mb_strlen($code) > 40) jerr('採購料號最長 40 個字');
+        $chk = $db->prepare("SELECT s.spec_id, s.spec_text, i.item_name FROM purchase_spec s
+                             JOIN purchase_item i ON i.item_id=s.item_id WHERE s.spec_code=? LIMIT 1");
+        $chk->execute([$code]);
+        $dupC = $chk->fetch(PDO::FETCH_ASSOC);
+        if ($dupC && (int)$dupC['spec_id'] !== $specId) {
+            jerr('採購料號 ' . $code . ' 已經被「' . $dupC['item_name'] . '／' . $dupC['spec_text'] . '」用掉了，請換一個');
+        }
+    }
     $db->beginTransaction();
     if ($specId > 0) {
-        $db->prepare("UPDATE purchase_spec SET spec_text=?, attr_json=?, unit_id=?, location_id=?, safety_qty=?,
-                      is_active=?, Modified_By=? WHERE spec_id=?")
-           ->execute([$specText, $attrJson, pint('unit_id') ?: null, pint('location_id') ?: null,
+        $db->prepare("UPDATE purchase_spec SET spec_code=COALESCE(NULLIF(?,''), spec_code), spec_text=?, attr_json=?,
+                      unit_id=?, location_id=?, safety_qty=?, is_active=?, Modified_By=? WHERE spec_id=?")
+           ->execute([$code, $specText, $attrJson, pint('unit_id') ?: null, pint('location_id') ?: null,
                       pnum('safety_qty'), pint('is_active', 1), $uid, $specId]);
     } else {
         // 同品項同規格擋重複
         $chk = $db->prepare("SELECT spec_code FROM purchase_spec WHERE item_id=? AND spec_text=? AND is_active=1 LIMIT 1");
         $chk->execute([$itemId, $specText]);
         if ($dup = $chk->fetchColumn()) { $db->rollBack(); jerr('此規格已存在：' . $dup); }
-        $code = purchase_next_spec_code($db, $itemId);
+        if ($code === '') $code = purchase_next_spec_code($db, $itemId);
         $db->prepare("INSERT INTO purchase_spec (item_id, spec_code, spec_text, attr_json, unit_id, location_id, safety_qty, Created_By)
                       VALUES (?,?,?,?,?,?,?,?)")
            ->execute([$itemId, $code, $specText, $attrJson, pint('unit_id') ?: null,
@@ -413,6 +425,54 @@ case 'spec_search': {
                         ORDER BY i.item_name, s.spec_code LIMIT 200");
     $st->execute($bind);
     jout(['specs' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+/**
+ * 依類別找既有品項（給「建立新採購料號」時選「掛在既有品項」用）
+ * 一併帶回該品項現有的規格，讓採購看得出「要買的這支是不是已經有料號了」
+ */
+case 'item_search': {
+    $catId = (int)($_GET['category_id'] ?? 0);
+    $kw    = trim($_GET['kw'] ?? '');
+    $where = ['i.is_active=1']; $bind = [];
+    if ($catId > 0) { $where[] = 'i.category_id=?'; $bind[] = $catId; }
+    if ($kw !== '') { $where[] = '(i.item_name LIKE ? OR i.item_code LIKE ?)'; $lk = '%' . $kw . '%'; array_push($bind, $lk, $lk); }
+    $st = $db->prepare("SELECT i.item_id, i.item_code, i.item_name, i.category_id, i.default_unit_id,
+                        COALESCE(c.category_name,'') category_name
+                        FROM purchase_item i
+                        LEFT JOIN stock_item_categories c ON c.category_id=i.category_id
+                        WHERE " . implode(' AND ', $where) . "
+                        ORDER BY i.item_name LIMIT 200");
+    $st->execute($bind);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if ($rows) {
+        $ids = implode(',', array_map(fn($r) => (int)$r['item_id'], $rows));
+        $sp = $db->query("SELECT item_id, spec_id, spec_code, spec_text FROM purchase_spec
+                          WHERE item_id IN ($ids) AND is_active=1 ORDER BY spec_code")->fetchAll(PDO::FETCH_ASSOC);
+        $map = [];
+        foreach ($sp as $s) $map[(int)$s['item_id']][] = $s;
+        foreach ($rows as &$r) $r['specs'] = $map[(int)$r['item_id']] ?? [];
+        unset($r);
+    }
+    jout(['items' => $rows]);
+}
+
+/**
+ * 料號編碼建議值（新增前先讓採購看到會拿到什麼號碼，也可以自己改）
+ * 只是建議：真正的唯一性在存檔時才判定（spec_code 有 UNIQUE）
+ */
+case 'code_preview': {
+    $itemId = (int)($_GET['item_id'] ?? 0);
+    $catId  = (int)($_GET['category_id'] ?? 0);
+    if ($itemId > 0) {
+        $st = $db->prepare("SELECT item_code FROM purchase_item WHERE item_id=?");
+        $st->execute([$itemId]);
+        $itemCode = (string)($st->fetchColumn() ?: '');
+        jout(['item_code' => $itemCode, 'spec_code' => purchase_next_spec_code($db, $itemId), 'is_new_item' => 0]);
+    }
+    if ($catId <= 0) jerr('請選擇類別');
+    $itemCode = purchase_next_item_code($db, $catId);
+    jout(['item_code' => $itemCode, 'spec_code' => $itemCode . '-01', 'is_new_item' => 1]);
 }
 
 /** 目前實際的角色×功能對照（給「角色權限說明」用；角色可改名，寫死的說明會失真） */
@@ -1137,52 +1197,110 @@ case 'att_delete': {
 }
 
 /**
- * 明細綁定採購品規格：申請時手打的品名，到貨要入庫前在這裡建檔或掛到既有規格
- * （spec_id 有值＝掛既有；否則用 item_id/item_name＋規格建新的，一次完成不用跳頁）
+ * 明細綁定採購料號（採購自己那一層 buy_spec_id；申請人填的 item_name/spec_text/spec_id 一律不動）
+ *   mode=existing → 綁既有料號（spec_id）
+ *   mode=new      → 建立新料號：類別＋（既有品項 or 新品項）＋規格屬性/說明＋料號（可自訂，留白＝自動編號）
+ *   mode=clear    → 解除綁定（綁錯了要能改回來）
+ *
+ * 刻意「不替採購自動決定」：舊版只問類別就自動建品項＋自動配號，主檔於是長出一堆同名品項、
+ * 料號沒人看過也沒人記得，之後根本找不到正確的採購料號（2026-07-30 使用者退回）。
+ * 現在同類別同品名／同品項同規格／料號重複一律擋下，回傳既有那筆讓採購改去綁它。
  */
 case 'bind_spec': {
     if (!$perms['canBuy']) jerr('無維護採購品主檔的權限', 403);
     $prItemId = pint('pr_item_id');
-    $specId   = pint('spec_id');
     $st = $db->prepare("SELECT * FROM purchase_request_item WHERE pr_item_id=?");
     $st->execute([$prItemId]);
     $item = $st->fetch(PDO::FETCH_ASSOC);
     if (!$item) jerr('找不到明細');
+    $specId = pint('spec_id');
+    $mode   = pv('mode', $specId > 0 ? 'existing' : 'new');
 
-    $db->beginTransaction();
-    if ($specId <= 0) {
+    if ($mode === 'clear') {
+        $db->prepare("UPDATE purchase_request_item SET buy_spec_id=NULL WHERE pr_item_id=?")->execute([$prItemId]);
+        jout(['cleared' => 1]);
+    }
+
+    $created = 0;
+    if ($mode === 'new') {
         $itemId = pint('item_id');
-        $catId  = pint('category_id') ?: (int)$item['category_id'];
-        if ($catId <= 0) { $db->rollBack(); jerr('請選擇類別'); }
+        $catId  = pint('category_id');
+        $unitId = pint('unit_id') ?: ((int)$item['unit_id'] ?: 0);
+        if ($itemId > 0) {
+            $iq = $db->prepare("SELECT item_id, category_id, item_name FROM purchase_item WHERE item_id=? AND is_active=1");
+            $iq->execute([$itemId]);
+            $pit = $iq->fetch(PDO::FETCH_ASSOC);
+            if (!$pit) jerr('找不到品項（可能已停用）');
+            $catId = (int)$pit['category_id'];
+        } else {
+            if ($catId <= 0) jerr('請選擇類別');
+            $name = pv('item_name');
+            if ($name === '') jerr('請輸入品名');
+            // 同類別同品名＝就是同一種東西，不可再建一個（尺寸差異請放在規格）
+            $chk = $db->prepare("SELECT item_id, item_code FROM purchase_item
+                                 WHERE category_id=? AND item_name=? AND is_active=1 LIMIT 1");
+            $chk->execute([$catId, $name]);
+            if ($dup = $chk->fetch(PDO::FETCH_ASSOC)) {
+                jout(['conflict' => 'item', 'item_id' => (int)$dup['item_id'],
+                      'msg' => '這個類別已經有品名「' . $name . '」（品項編碼 ' . $dup['item_code'] .
+                               '）。請改用「掛在既有品項」把新規格加在它下面，不要再建一個同名品項。']);
+            }
+        }
+
+        $attrVals = pjson('attr_vals');
+        $specText = pv('spec_text');
+        if ($specText === '') $specText = purchase_build_spec_text($db, $catId, $attrVals);
+        if ($specText === '') jerr('請填規格（沒有屬性欄位就直接寫規格說明，例：Ø5 長100 HSS）');
+
+        // 同品項同規格＝同一個採購料號，直接叫他去綁既有那筆
+        if ($itemId > 0) {
+            $chk = $db->prepare("SELECT spec_id, spec_code FROM purchase_spec
+                                 WHERE item_id=? AND spec_text=? AND is_active=1 LIMIT 1");
+            $chk->execute([$itemId, $specText]);
+            if ($dup = $chk->fetch(PDO::FETCH_ASSOC)) {
+                jout(['conflict' => 'spec', 'spec_id' => (int)$dup['spec_id'], 'spec_code' => $dup['spec_code'],
+                      'msg' => '這個品項底下已經有一樣的規格，採購料號 ' . $dup['spec_code'] . '。請直接綁定它。']);
+            }
+        }
+
+        $code = pv('spec_code');
+        if ($code !== '') {
+            if (mb_strlen($code) > 40) jerr('採購料號最長 40 個字');
+            $chk = $db->prepare("SELECT s.spec_id, s.spec_code, s.spec_text, i.item_name FROM purchase_spec s
+                                 JOIN purchase_item i ON i.item_id=s.item_id WHERE s.spec_code=? LIMIT 1");
+            $chk->execute([$code]);
+            if ($dup = $chk->fetch(PDO::FETCH_ASSOC)) {
+                jout(['conflict' => 'code', 'spec_id' => (int)$dup['spec_id'], 'spec_code' => $dup['spec_code'],
+                      'msg' => '採購料號 ' . $code . ' 已經被「' . $dup['item_name'] . '／' . $dup['spec_text'] .
+                               '」用掉了。請換一個號碼，或直接綁定那一筆。']);
+            }
+        }
+
+        $db->beginTransaction();
         if ($itemId <= 0) {
-            $name = pv('item_name') ?: (string)$item['item_name'];
-            $code = purchase_next_item_code($db, $catId);
-            $db->prepare("INSERT INTO purchase_item (item_code, category_id, item_name, default_unit_id, Created_By) VALUES (?,?,?,?,?)")
-               ->execute([$code, $catId, $name, (int)$item['unit_id'] ?: null, $uid]);
+            $icode = purchase_next_item_code($db, $catId);
+            $db->prepare("INSERT INTO purchase_item (item_code, category_id, item_name, default_unit_id, Created_By)
+                          VALUES (?,?,?,?,?)")
+               ->execute([$icode, $catId, pv('item_name'), $unitId ?: null, $uid]);
             $itemId = (int)$db->lastInsertId();
         }
-        $attrVals = pjson('attr_vals');
-        $specText = pv('spec_text') ?: purchase_build_spec_text($db, $catId, $attrVals);
-        if ($specText === '') $specText = (string)($item['spec_text'] ?: '標準');
-        $chk = $db->prepare("SELECT spec_id FROM purchase_spec WHERE item_id=? AND spec_text=? AND is_active=1 LIMIT 1");
-        $chk->execute([$itemId, $specText]);
-        $exist = $chk->fetchColumn();
-        if ($exist) {
-            $specId = (int)$exist;
-        } else {
-            $code = purchase_next_spec_code($db, $itemId);
-            $db->prepare("INSERT INTO purchase_spec (item_id, spec_code, spec_text, attr_json, unit_id, location_id, Created_By)
-                          VALUES (?,?,?,?,?,?,?)")
-               ->execute([$itemId, $code, $specText, $attrVals ? json_encode($attrVals, JSON_UNESCAPED_UNICODE) : null,
-                          (int)$item['unit_id'] ?: null, pint('location_id') ?: null, $uid]);
-            $specId = (int)$db->lastInsertId();
-        }
+        if ($code === '') $code = purchase_next_spec_code($db, $itemId);
+        $db->prepare("INSERT INTO purchase_spec (item_id, spec_code, spec_text, attr_json, unit_id, location_id, safety_qty, Created_By)
+                      VALUES (?,?,?,?,?,?,?,?)")
+           ->execute([$itemId, $code, $specText, $attrVals ? json_encode($attrVals, JSON_UNESCAPED_UNICODE) : null,
+                      $unitId ?: null, pint('location_id') ?: null, pnum('safety_qty'), $uid]);
+        $specId  = (int)$db->lastInsertId();
+        $created = 1;
+        $db->commit();
     }
-    $sq = $db->prepare("SELECT s.spec_id, s.spec_text, s.unit_id, i.item_name, i.category_id
-                        FROM purchase_spec s JOIN purchase_item i ON i.item_id=s.item_id WHERE s.spec_id=?");
+
+    if ($specId <= 0) jerr('請選擇要綁定的採購料號');
+    $sq = $db->prepare("SELECT s.spec_id, s.spec_code, s.spec_text, s.unit_id, i.item_name, i.category_id
+                        FROM purchase_spec s JOIN purchase_item i ON i.item_id=s.item_id
+                        WHERE s.spec_id=? AND s.is_active=1");
     $sq->execute([$specId]);
     $spec = $sq->fetch(PDO::FETCH_ASSOC);
-    if (!$spec) { $db->rollBack(); jerr('找不到規格'); }
+    if (!$spec) jerr('找不到這筆採購料號（可能已停用）');
     // 只寫採購側欄位。申請人填的 item_name / spec_text / spec_id 一律不動
     // ——原本這裡直接覆寫，申請人的原始寫法會被抹掉，之後無從對照買到的是不是他要的東西
     $db->prepare("UPDATE purchase_request_item
@@ -1190,8 +1308,7 @@ case 'bind_spec': {
                   WHERE pr_item_id=?")
        ->execute([$specId, $spec['item_name'], $spec['spec_text'],
                   $spec['unit_id'] !== null ? (int)$spec['unit_id'] : null, $prItemId]);
-    $db->commit();
-    jout(['spec_id' => $specId]);
+    jout(['spec_id' => $specId, 'spec_code' => $spec['spec_code'], 'created' => $created]);
 }
 
 default:

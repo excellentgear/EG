@@ -107,11 +107,11 @@ $(function () {
         $.each(r.statuses, function (k, v) { stOpts += '<option value="' + esc(k) + '">' + esc(v) + '</option>'; });
         $('#fStatus').append(stOpts);
         $('#fPay,#fStatus').val('');
-        $('#mCat,#pkCat,#itCat,#amCat').html(optList(r.categories, 'category_id', 'category_name', '', '全部類別'));
-        $('#itCat,#amCat').html(optList(r.categories, 'category_id', 'category_name', '', ''));
-        $('#mTag,#pkTag').html(optList(r.tags, 'tag_id', 'tag_name', '', '全部標籤'));
-        $('#itUnit,#spUnit').html(optList(r.units, 'unit_id', 'unit_name', '', '（未指定）'));
-        $('#spLoc').html(optList(r.locations, 'location_id', 'location_code', '', '（未指定）'));
+        $('#mCat,#pkCat,#bdFCat,#itCat,#amCat').html(optList(r.categories, 'category_id', 'category_name', '', '全部類別'));
+        $('#itCat,#amCat,#bdCat').html(optList(r.categories, 'category_id', 'category_name', '', ''));
+        $('#mTag,#pkTag,#bdFTag').html(optList(r.tags, 'tag_id', 'tag_name', '', '全部標籤'));
+        $('#itUnit,#spUnit,#bdUnit').html(optList(r.units, 'unit_id', 'unit_name', '', '（未指定）'));
+        $('#spLoc,#bdLoc').html(optList(r.locations, 'location_id', 'location_code', '', '（未指定）'));
         var taxOpts = ''; $.each(r.tax_types, function (k, v) { taxOpts += '<option value="' + esc(k) + '">' + esc(v) + '</option>'; });
         $('#qTax').html(taxOpts);
         $('#rWho').val(r.me.name + (r.me.dept_name ? '／' + r.me.dept_name : ''));
@@ -198,6 +198,52 @@ function bindAll() {
     $('#attUp').on('click', uploadAtt);
     $('#btnSaveQuote').on('click', saveQuote);
     $('#btnSaveRecv').on('click', saveRecv);
+    // 綁定採購料號：查既有 / 建新的（詳細理由見 openBind 上方註解）
+    $(document).on('click', '.bind-spec', function () { openBind($(this).data('id')); });
+    $('#bdTabs').on('click', '.pq-tab', function () { bdTab($(this).data('bd')); });
+    $('#bdFGo').on('click', bdSearch);
+    var bdT = null;
+    $('#bdFKw').on('input', function () { clearTimeout(bdT); bdT = setTimeout(bdSearch, 300); });
+    $('#bdFCat,#bdFTag').on('change', bdSearch);
+    // 雙擊清空篩選欄＝同時解除該欄篩選（共用清空handler跑在後面，所以延一個 tick 再查）
+    $('#bdFKw,#bdFCat,#bdFTag').on('dblclick', function () { setTimeout(bdSearch, 0); });
+    $('#bdCat').on('change', function () { BIND.codeTouched = false; bdCatChanged(); });
+    $('input[name=bdItemMode]').on('change', bdItemChanged);
+    $('#bdItemSel').on('change', function () { BIND.codeTouched = false; bdItemChanged(); });
+    $('#bdCodeAuto').on('click', function () { BIND.codeTouched = false; bdCodeSuggest(); });
+    $('#bdSpecCode').on('input', function () { BIND.codeTouched = true; });
+    $('#bdSpecText').on('input', function () { BIND.textTouched = ($.trim(this.value) !== ''); });
+    $(document).on('input change', '.bd-attr', bdCompose);
+    $('#bdSave').on('click', bdSaveNew);
+    $('#bdClear').on('click', function () {
+        if (!confirm('解除這一列的採購料號綁定？（主檔的料號不會被刪除）')) return;
+        bdSubmit({ mode: 'clear' }, '已解除綁定');
+    });
+    // 新品項品名打字即時防重複（同類別同名不可再建一個，否則以後找不到料號）
+    var bdDupT = null;
+    $('#bdItemName').on('input', function () {
+        clearTimeout(bdDupT); var kw = $.trim($(this).val());
+        if (kw.length < 1) { $('#bdItemDup').empty(); return; }
+        bdDupT = setTimeout(function () {
+            api('item_check_dup', { item_name: kw, category_id: $('#bdCat').val() }).done(function (r) {
+                if (!r.similar.length) { $('#bdItemDup').empty(); return; }
+                var h = '<div class="sug"><i class="fa fa-exclamation-triangle"></i> 已有類似品項，確定不是同一個嗎？<br>';
+                r.similar.forEach(function (s) {
+                    h += '<a href="javascript:;" class="bd-dup-pick" data-id="' + s.item_id + '">' +
+                         esc(s.item_code + ' ' + s.item_name) + '（' + s.category_name + '，' + s.spec_cnt + ' 個料號）</a><br>';
+                });
+                $('#bdItemDup').html(h + '<span class="hint">同一個品項只要加規格就好，不必重建。</span></div>');
+            });
+        }, 300);
+    });
+    $('#bdItemDup').on('click', '.bd-dup-pick', function () {
+        $('input[name=bdItemMode][value=exist]').prop('checked', true);
+        BIND.codeTouched = false;
+        if ($('#bdItemSel option[value="' + $(this).data('id') + '"]').length) {
+            $('#bdItemSel').val($(this).data('id')); bdItemChanged();
+        } else { bdCatChanged(); }
+        $('#bdItemDup').empty();
+    });
     $('#btnSaveAcct').on('click', saveAcct);
     $('#btnApprove').on('click', function () { doSign('approved'); });
     $('#btnReject').on('click', function () { doSign('rejected'); });
@@ -983,6 +1029,15 @@ function doDelete() {
 }
 
 /* ── 詢價填價 ─────────────────────────────── */
+/** 採購料號欄：顯示目前綁到哪一支＋一個入口（綁定／改綁或新建）。沒有採購權限的人只看得到料號 */
+function bindCell(it) {
+    var code = it.buy_spec_code || it.spec_code || '';
+    var h = code ? '<b style="color:#8A5A2B;">' + esc(code) + '</b>' : '<span class="hint">未綁定</span>';
+    if (!(META.perms && META.perms.canBuy)) return h + (code ? '' : '<br><span class="hint">請採購綁定</span>');
+    return h + '<br><button class="pq-btn bind-spec" data-id="' + it.pr_item_id + '">' +
+           '<i class="fa fa-link"></i> ' + (code ? '改綁／新建' : '綁定料號') + '</button>';
+}
+
 function openQuote() {
     var q = CUR;
     $('#qVendor').val(q.vendor_name || '').data('vid', q.vendor_id || '');
@@ -997,10 +1052,8 @@ function openQuote() {
                 (parseInt(it.is_urgent, 10) ? ' <span class="urg">急</span>' : '') + '</td>' +
             '<td class="l">' + esc(it.spec_text || '') + '</td>' +
             '<td class="r">' + nz(it.qty_requested) + '</td><td>' + esc(it.unit_label || '') + '</td>' +
-            // 申請人手打的品名沒有採購料號，由採購在這裡建檔綁定（也可以留到入庫時再綁）
-            '<td class="l">' + (it.buy_spec_code ? esc(it.buy_spec_code) : (it.spec_code ? esc(it.spec_code) :
-                '<button class="pq-btn bind-spec" data-id="' + it.pr_item_id + '" data-name="' + esc(it.item_name) +
-                '" data-spec="' + esc(it.spec_text || '') + '"><i class="fa fa-link"></i> 綁定</button>')) + '</td>' +
+            // 採購料號一律可點：沒綁的來綁，綁錯的可改綁或另建一支（申請人選的也可能買到別支）
+            '<td class="l">' + bindCell(it) + '</td>' +
             '<td><input type="text" class="q-bname" style="width:100%;" placeholder="同申請" value="' +
                 esc(it.buy_item_name || '') + '"></td>' +
             '<td><input type="text" class="q-bspec" style="width:100%;" placeholder="同申請" value="' +
@@ -1082,11 +1135,9 @@ function openRecv() {
         var shownSpec = it.buy_spec_text || it.spec_text || '';
         h += '<tr data-id="' + it.pr_item_id + '" data-left="' + left + '" data-spec="' + (boundSpec || '') + '">' +
             '<td class="l">' + esc(shownName) +
-                (it.buy_item_name ? ' <span class="hint">（申請：' + esc(it.item_name) + '）</span>' : '') +
-                (boundSpec ? '' :
-                ' <button class="pq-btn bind-spec" data-id="' + it.pr_item_id + '" data-name="' + esc(shownName) +
-                '" data-spec="' + esc(shownSpec) + '">建檔</button>') + '</td>' +
+                (it.buy_item_name ? ' <span class="hint">（申請：' + esc(it.item_name) + '）</span>' : '') + '</td>' +
             '<td class="l">' + esc(shownSpec) + '</td>' +
+            '<td class="l">' + bindCell(it) + '</td>' +
             '<td class="r">' + nz(it.qty_received) + ' / ' + nz(target) + '</td>' +
             '<td><input type="number" class="rc-qty" step="0.01" style="width:100%;text-align:right;" value="' +
                 (left > 0 ? nz(left) : '') + '"' + (left <= 0 ? ' disabled' : '') + '></td>' +
@@ -1132,29 +1183,236 @@ $(document).on('click', '.rc-pick', function () {
     $in.val($(this).data('name')).data('uid', $(this).data('id'));
     $(this).closest('.rc-recv-list').empty();
 });
-// 申請人手打的品名沒有採購料號：由採購在「詢價」或「登錄到貨」時建檔綁定（申請人不必先查主檔）
-$(document).on('click', '.bind-spec', function () {
-    var id = $(this).data('id'), name = $(this).data('name'), sp = $(this).data('spec');
-    // 用編號選類別，比要求打對中文名稱不容易錯
-    var list = META.categories.map(function (c, i) { return (i + 1) + '. ' + c.category_name; }).join('\n');
-    var ans = prompt('要把「' + name + '」建到哪個類別？請輸入編號：\n' + list, '1');
-    if (ans === null || $.trim(ans) === '') return;
-    ans = $.trim(ans);
-    var c = /^\d+$/.test(ans) ? META.categories[parseInt(ans, 10) - 1]
-                             : META.categories.filter(function (x) { return x.category_name === ans; })[0];
-    if (!c) { alert('查無此類別'); return; }
-    // 綁完要回到原本那個視窗（詢價 or 到貨），不能寫死其中一個
-    var back = $('#mQuote').hasClass('show') ? 'quote' : 'recv';
-    api('bind_spec', { pr_item_id: id, spec_id: 0, category_id: c.category_id, item_name: name,
-                       spec_text: sp || '' }, 'POST').done(function () {
-        api('req_detail', { req_id: CUR.req_id }).done(function (r) {
-            CUR = r.req;
-            if (back === 'quote') { closeMask('mQuote'); openQuote(); }
-            else { closeMask('mRecv'); openRecv(); }
-            alert('已建檔並綁定採購料號');
+/* ── 綁定採購料號（採購側）─────────────────────────────
+   申請人手打的品名沒有採購料號，由採購在「詢價」或「登錄到貨」時決定它是哪一支。
+   舊版只用 prompt 問類別就自動建品項＋自動配號，主檔於是長出一堆同名品項、
+   號碼沒人看過也沒人記得，之後根本找不到採購料號（2026-07-30 使用者退回）。
+   現在給兩條明路：①綁既有料號（查得到就不要重建） ②真的建一個新料號
+   （類別／掛哪個品項／規格屬性／料號自己決定，可自訂編號），重複一律當場擋下並指出是哪一筆。 */
+var BIND = { prItemId: 0, back: '', boundId: 0, codeTouched: false, textTouched: false, attrs: [], items: [] };
+
+function openBind(prItemId) {
+    var it = ((CUR && CUR.items) || []).filter(function (x) { return String(x.pr_item_id) === String(prItemId); })[0];
+    if (!it) return;
+    BIND = { prItemId: prItemId, boundId: parseInt(it.buy_spec_id, 10) || 0,
+             // 綁完要回到原本那個視窗（詢價 or 到貨），不能寫死其中一個
+             back: $('#mQuote').hasClass('show') ? 'quote' : ($('#mRecv').hasClass('show') ? 'recv' : ''),
+             codeTouched: false, textTouched: false, attrs: [], items: [] };
+    var curCode = it.buy_spec_code || it.spec_code || '';
+    $('#bdInfo').html('<b>申請內容</b>：' + esc(it.item_name) + (it.spec_text ? '／' + esc(it.spec_text) : '') +
+        '　數量 ' + nz(it.qty_requested) + ' ' + esc(it.unit_label || '') +
+        '<br><b>目前採購料號</b>：' + (curCode ? '<b style="color:#8A5A2B;">' + esc(curCode) + '</b>' +
+            (it.buy_spec_code ? '（採購綁定）' : '（申請人選的）') : '<span class="hint">尚未綁定</span>'));
+    $('#bdClear').toggle(!!it.buy_spec_id);
+    // 預設先查既有：帶申請的品名去找，找得到就不該再建一支新料號
+    bdTab('exist');
+    $('#bdFCat,#bdFTag').val('');
+    $('#bdFKw').val(it.item_name || '');
+    bdSearch();
+    // 建新的那一頁：類別預設沿用申請時帶的類別，品名預設帶申請人寫的
+    $('#bdCat').val(it.category_id || (META.categories.length ? META.categories[0].category_id : ''));
+    $('input[name=bdItemMode][value=exist]').prop('checked', true);
+    $('#bdItemName').val(it.item_name || ''); $('#bdItemDup').empty();
+    $('#bdSpecText').val(it.spec_text || ''); $('#bdSpecCode').val('');
+    $('#bdUnit').val(it.unit_id || ''); $('#bdLoc').val(it.location_id || ''); $('#bdSafe').val('');
+    $('#bdErr').hide().empty();
+    // textTouched 只在採購自己動過規格說明時才成立：帶進來的申請人原文可以被屬性組合覆蓋
+    bdCatChanged();
+    openMask('mBind');
+}
+function bdTab(which) {
+    $('#bdTabs .pq-tab').removeClass('on').filter('[data-bd=' + which + ']').addClass('on');
+    $('#bdExist').toggle(which === 'exist');
+    $('#bdNew').toggle(which === 'new');
+    $('#bdSave').toggle(which === 'new');
+}
+/** 綁既有：查詢結果 */
+function bdSearch() {
+    $('#bdResult').html('<span class="hint">查詢中…</span>');
+    api('spec_search', { kw: $('#bdFKw').val(), category_id: $('#bdFCat').val(), tag_id: $('#bdFTag').val() })
+    .done(function (r) {
+        if (!r.specs.length) {
+            $('#bdResult').html('<span class="hint">查無採購料號——請改關鍵字（少打幾個字），或切到「建立新採購料號」。</span>');
+            return;
+        }
+        var h = '<div class="pq-wrap"><table class="pq-table"><thead><tr><th>採購料號</th><th>品名</th><th>規格</th>' +
+                '<th>類別</th><th>目前庫存</th><th>最近採購價</th><th></th></tr></thead><tbody>';
+        r.specs.forEach(function (s, i) {
+            var isCur = String(s.spec_id) === String(BIND.boundId);
+            h += '<tr' + (isCur ? ' style="background:#FFF3DF;"' : '') + '><td><b>' + esc(s.spec_code) + '</b></td>' +
+                 '<td class="l">' + esc(s.item_name) + '</td><td class="l">' + esc(s.spec_text) + '</td>' +
+                 '<td>' + esc(s.category_name) + '</td>' +
+                 '<td class="r">' + nz(s.stock_qty) + ' ' + esc(s.unit_label || '') + '</td>' +
+                 '<td class="r money">' + (s.last_price ? money(s.last_price) : '—') + '</td>' +
+                 '<td>' + (isCur ? '<span class="hint">目前綁定</span>'
+                     : '<button class="pq-btn warm bd-pick" data-id="' + s.spec_id + '">綁定這筆</button>') + '</td></tr>';
         });
-    }).fail(fail);
+        $('#bdResult').html(h + '</tbody></table></div>');
+    }).fail(function (m) { $('#bdResult').html('<span style="color:#DD5138;">' + esc(m) + '</span>'); });
+}
+$(document).on('click', '.bd-pick', function () {
+    bdSubmit({ mode: 'existing', spec_id: $(this).data('id') }, '已綁定採購料號');
 });
+/** 建新的：類別換了 → 重載該類別的品項與規格屬性、重取建議編號 */
+function bdCatChanged() {
+    var cat = $('#bdCat').val();
+    api('item_search', { category_id: cat }).done(function (r) {
+        BIND.items = r.items || [];
+        var h = '<option value="">（請選擇品項）</option>';
+        BIND.items.forEach(function (o) {
+            h += '<option value="' + o.item_id + '">' + esc(o.item_code + '　' + o.item_name) +
+                 '（' + (o.specs || []).length + ' 個料號）</option>';
+        });
+        $('#bdItemSel').html(h);
+        // 沒有既有品項可掛時，自動切到「建立新品項」，不要讓人卡在空下拉
+        if (!BIND.items.length) {
+            $('input[name=bdItemMode][value=new]').prop('checked', true).trigger('change');
+        } else {
+            // 品名一樣的直接幫他選好（最常見情況：同一種東西買不同尺寸）
+            var name = $.trim($('#bdItemName').val());
+            var hit = BIND.items.filter(function (o) { return o.item_name === name; })[0];
+            if (hit) $('#bdItemSel').val(hit.item_id);
+        }
+        bdItemChanged();
+    }).fail(fail);
+    api('attr_list', { category_id: cat }).done(function (r) {
+        BIND.attrs = r.attrs || [];
+        $('#bdAttrs').html(bdAttrHtml(BIND.attrs));
+        $('#bdSpecHint').text(BIND.attrs.length ? '上面填了屬性就會自動組出規格說明，也可以自己改。'
+                                                : '這個類別還沒設定規格屬性（設定→規格屬性設定可加），直接寫規格說明即可。');
+    }).fail(fail);
+}
+function bdAttrHtml(attrs) {
+    if (!attrs.length) return '';
+    var h = '';
+    attrs.forEach(function (a) {
+        h += '<div class="pq-fld"><label>' + esc(a.attr_name) + (a.attr_unit ? '（' + esc(a.attr_unit) + '）' : '') + '</label>';
+        if (a.attr_type === 'select') {
+            h += '<select class="bd-attr" data-id="' + a.attr_id + '"><option value="">—</option>';
+            String(a.attr_options || '').split(',').forEach(function (o) {
+                o = o.trim(); if (!o) return;
+                h += '<option value="' + esc(o) + '">' + esc(o) + '</option>';
+            });
+            h += '</select>';
+        } else {
+            h += '<input type="' + (a.attr_type === 'number' ? 'number' : 'text') +
+                 '" class="bd-attr" data-id="' + a.attr_id + '" step="any">';
+        }
+        h += '</div>';
+    });
+    return h;
+}
+/** 選了哪個品項 → 顯示它現有的料號（避免又建一支一樣的）＋重取建議編號 */
+function bdItemChanged() {
+    var isNew = $('input[name=bdItemMode]:checked').val() === 'new';
+    $('#bdItemExistWrap').toggle(!isNew);
+    $('#bdItemNewWrap').toggle(isNew);
+    var itemId = isNew ? 0 : (parseInt($('#bdItemSel').val(), 10) || 0);
+    if (!isNew && itemId) {
+        var o = BIND.items.filter(function (x) { return String(x.item_id) === String(itemId); })[0];
+        var sp = (o && o.specs) || [];
+        $('#bdItemSpecs').html(sp.length
+            ? '這個品項現有料號：' + sp.map(function (s) {
+                  return '<a href="javascript:;" class="bd-pick" data-id="' + s.spec_id + '" title="直接綁定這筆">' +
+                         esc(s.spec_code + '（' + s.spec_text + '）') + '</a>'; }).join('、') +
+              '　<span class="hint">要買的就是其中一筆的話直接點它，不要再建新的。</span>'
+            : '<span class="hint">這個品項還沒有任何料號。</span>');
+        if (o && o.default_unit_id && !$('#bdUnit').val()) $('#bdUnit').val(o.default_unit_id);
+    } else {
+        $('#bdItemSpecs').empty();
+    }
+    if (!BIND.codeTouched) bdCodeSuggest();
+}
+/** 建議編號：先讓採購看到會拿到什麼號碼（可自己改成公司慣用編號） */
+function bdCodeSuggest() {
+    var isNew = $('input[name=bdItemMode]:checked').val() === 'new';
+    var itemId = isNew ? 0 : (parseInt($('#bdItemSel').val(), 10) || 0);
+    if (!isNew && !itemId) { $('#bdSpecCode').val(''); return; }
+    api('code_preview', { item_id: itemId, category_id: $('#bdCat').val() }).done(function (r) {
+        $('#bdSpecCode').val(r.spec_code || '');
+        BIND.codeTouched = false;
+        $('#bdCodeHint').text(r.is_new_item
+            ? '新品項編碼 ' + r.item_code + '，料號建議 ' + r.spec_code + '（可改，全系統不可重複）'
+            : '建議 ' + r.spec_code + '（可改成公司慣用編號，全系統不可重複）');
+    });
+}
+/** 屬性填一填就即時組出規格說明；除非採購自己動過那一欄 */
+function bdCompose() {
+    if (BIND.textTouched) return;
+    var parts = [];
+    BIND.attrs.forEach(function (a) {
+        var v = $.trim(String($('.bd-attr[data-id="' + a.attr_id + '"]').val() || ''));
+        if (v !== '') parts.push(a.attr_name + v + (a.attr_unit || ''));
+    });
+    $('#bdSpecText').val(parts.join(' '));
+}
+function bdSaveNew() {
+    // 「綁既有」分頁時共用檔的 Enter 規則會去點 .m-foot 的主要動作鈕（此時是隱藏的建立鈕），
+    // 若不擋，在搜尋框按 Enter 會憑隱藏欄位建出一支料號——改成當成「再查一次」
+    if (!$('#bdNew').is(':visible')) { bdSearch(); return; }
+    var isNew = $('input[name=bdItemMode]:checked').val() === 'new';
+    var d = { mode: 'new', pr_item_id: BIND.prItemId, category_id: $('#bdCat').val(),
+              spec_text: $.trim($('#bdSpecText').val()), spec_code: $.trim($('#bdSpecCode').val()),
+              unit_id: $('#bdUnit').val() || 0, location_id: $('#bdLoc').val() || 0,
+              safety_qty: $('#bdSafe').val() || '' };
+    var vals = {};
+    $('.bd-attr').each(function () { var v = $.trim(String($(this).val() || '')); if (v !== '') vals[$(this).data('id')] = v; });
+    d.attr_vals = JSON.stringify(vals);
+    if (isNew) {
+        d.item_id = 0; d.item_name = $.trim($('#bdItemName').val());
+        if (!d.item_name) { bdErr('請輸入新品項的品名'); return; }
+    } else {
+        d.item_id = parseInt($('#bdItemSel').val(), 10) || 0;
+        if (!d.item_id) { bdErr('請選一個既有品項，或改成「建立新品項」'); return; }
+    }
+    if (!d.spec_text) { bdErr('請填規格說明（例：Ø5 長100 HSS）——它是這支料號代表的東西'); return; }
+    $('#bdErr').hide();
+    bdSubmit(d, '已建立採購料號並綁定');
+}
+/** 綁完只更新那一列的料號欄（詢價／到貨兩張表格都有這一欄，欄位位置不同） */
+function bdRefreshRow(prItemId) {
+    var it = ((CUR && CUR.items) || []).filter(function (x) { return String(x.pr_item_id) === String(prItemId); })[0];
+    if (!it) return;
+    var $q = $('#quoteBody tr[data-id="' + prItemId + '"]');
+    if ($q.length) $q.children('td').eq(4).html(bindCell(it));
+    var $r = $('#recvBody tr[data-id="' + prItemId + '"]');
+    if ($r.length) {
+        // data-spec 是「能不能入庫」的判定依據，跟著一起更新
+        $r.attr('data-spec', it.buy_spec_id || it.spec_id || '').data('spec', it.buy_spec_id || it.spec_id || '');
+        $r.children('td').eq(2).html(bindCell(it));
+    }
+}
+function bdErr(msg, extraHtml) {
+    $('#bdErr').html(esc(msg) + (extraHtml || '')).show();
+}
+/** 綁定共用出口：成功就回到原本那個視窗；重複則當場說明是哪一筆、可一鍵改綁 */
+function bdSubmit(data, okMsg) {
+    var d = $.extend({ pr_item_id: BIND.prItemId }, data);
+    $('#bdSave,#bdClear').prop('disabled', true);
+    api('bind_spec', d, 'POST').done(function (r) {
+        if (r.conflict) {
+            bdTab('new');
+            bdErr(r.msg, r.spec_id ? ' <button class="pq-btn warm bd-pick" data-id="' + r.spec_id + '">改綁這筆</button>' : '');
+            if (r.conflict === 'item' && r.item_id) {
+                // 幫他切到「掛在既有品項」並選好那個同名品項，少一步手動找
+                $('input[name=bdItemMode][value=exist]').prop('checked', true);
+                if (!$('#bdItemSel option[value="' + r.item_id + '"]').length) { bdCatChanged(); }
+                else { $('#bdItemSel').val(r.item_id); bdItemChanged(); }
+            }
+            return;
+        }
+        var prId = BIND.prItemId;
+        api('req_detail', { req_id: CUR.req_id }).done(function (rr) {
+            CUR = rr.req;
+            closeMask('mBind');
+            // 只換那一列的料號欄，不整個重畫——重畫會把採購剛打好還沒送出的單價／數量清掉
+            if (BIND.back === 'quote' || BIND.back === 'recv') bdRefreshRow(prId);
+            else openDetail(CUR.req_id);
+            if (okMsg) alert(okMsg + (r.spec_code ? '：' + r.spec_code : ''));
+        });
+    }).fail(function (m) { bdErr('操作失敗：' + m); })
+      .always(function () { $('#bdSave,#bdClear').prop('disabled', false); });
+}
 function saveRecv() {
     var lines = [], bad = '';
     $('#recvBody tr').each(function () {
@@ -1165,7 +1423,7 @@ function saveRecv() {
         if (qty > left + 0.0001) { bad = '到貨數量不可超過未到量'; return; }
         var mode = $t.find('.rc-mode').val();
         if ((mode === 'stock' || mode === 'direct') && !$t.data('spec')) {
-            bad = '有品項尚未建檔，無法入庫——請先按「建檔」，或把該列改成「不列管」'; return;
+            bad = '有品項還沒有採購料號，無法入庫——請先按該列「綁定料號」，或把該列改成「不列管」'; return;
         }
         if ((mode === 'stock' || mode === 'direct') && !$t.find('.rc-loc').val()) { bad = '入庫要指定儲位'; return; }
         lines.push({ pr_item_id: $t.data('id'), qty: qty, receive_mode: mode,
@@ -1328,6 +1586,7 @@ function openSpec(spec) {
     var s = spec || null;
     $('#spTitle').text(s ? '編輯規格' : '新增規格');
     $('#spText').val(s ? s.spec_text : ''); $('#spUnit').val(s ? (s.unit_id || '') : ($('#itUnit').val() || ''));
+    $('#spCode').val(s ? (s.spec_code || '') : '');   // 新增時留白＝自動編號；編輯時可改號
     $('#spLoc').val(s ? (s.location_id || '') : ''); $('#spSafe').val(s ? nz(s.safety_qty) : '');
     var vals = {};
     if (s && s.attr_json) { try { vals = JSON.parse(s.attr_json) || {}; } catch (e) {} }
@@ -1356,7 +1615,8 @@ function saveSpec() {
     var vals = {};
     $('.sp-attr').each(function () { var v = $(this).val(); if (v !== '') vals[$(this).data('id')] = v; });
     api('spec_save', { spec_id: $('#spAttrs').data('spec_id') || 0, item_id: ITEMEDIT.id,
-        spec_text: $('#spText').val(), attr_vals: JSON.stringify(vals), unit_id: $('#spUnit').val() || 0,
+        spec_text: $('#spText').val(), spec_code: $.trim($('#spCode').val()),
+        attr_vals: JSON.stringify(vals), unit_id: $('#spUnit').val() || 0,
         location_id: $('#spLoc').val() || 0, safety_qty: $('#spSafe').val() }, 'POST')
     .done(function (r) { closeMask('mSpec'); openItem(ITEMEDIT.id); }).fail(fail);
 }

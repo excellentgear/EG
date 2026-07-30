@@ -530,16 +530,89 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
         <div class="pq-grid"><div class="pq-fld"><label>到貨日期</label><input type="date" id="rcDate"></div></div>
         <div class="pq-wrap">
             <table class="pq-table" id="recvTable">
-                <thead><tr><th>品名</th><th>規格</th><th>已到／應到</th><th style="width:10%;">本次到貨</th>
-                    <th style="width:14%;">到貨處理</th><th style="width:15%;">入庫儲位</th><th style="width:15%;">交付對象</th><th>備註</th></tr></thead>
+                <thead><tr><th>品名</th><th>規格</th><th style="width:13%;">採購料號</th><th>已到／應到</th><th style="width:9%;">本次到貨</th>
+                    <th style="width:12%;">到貨處理</th><th style="width:13%;">入庫儲位</th><th style="width:13%;">交付對象</th><th>備註</th></tr></thead>
                 <tbody id="recvBody"></tbody>
             </table>
         </div>
-        <p class="hint" style="margin-top:6px;">未在主檔建檔的品項無法入庫，請先按該列的「建檔」把它掛到採購品主檔（或選「不列管」）。</p>
+        <p class="hint" style="margin-top:6px;">沒有採購料號的品項無法入庫：請按該列「綁定料號」，把它綁到既有採購料號、或當場建一支新的（或把該列改成「不列管」）。</p>
     </div>
     <div class="m-foot">
         <button class="pq-btn" onclick="closeMask('mRecv')">取消</button>
         <button class="pq-btn warm" id="btnSaveRecv"><i class="fa fa-check"></i> 確認到貨</button>
+    </div>
+</div></div>
+
+<!-- ══ 綁定採購料號（採購在詢價／到貨時用；可綁既有料號，也可以真的建一個新料號） ══ -->
+<div class="pq-mask" id="mBind"><div class="pq-modal wide">
+    <div class="m-head"><span>採購料號</span><span class="m-close" onclick="closeMask('mBind')">✕</span></div>
+    <div class="m-body">
+        <div id="bdInfo" style="background:var(--pq-bg);border:1px solid var(--pq-line);border-radius:4px;padding:8px 10px;margin-bottom:8px;"></div>
+        <div class="pq-tabs" id="bdTabs" style="margin:0 0 10px;">
+            <button class="pq-tab on" data-bd="exist"><i class="fa fa-search"></i> 綁定現有採購料號</button>
+            <button class="pq-tab" data-bd="new"><i class="fa fa-plus"></i> 建立新採購料號</button>
+        </div>
+
+        <!-- ── 綁既有 ── -->
+        <div id="bdExist">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+                <select id="bdFCat" style="height:28px;border:1px solid #D8BE93;border-radius:4px;"><option value="">全部類別</option></select>
+                <select id="bdFTag" style="height:28px;border:1px solid #D8BE93;border-radius:4px;"><option value="">全部標籤</option></select>
+                <input type="text" id="bdFKw" placeholder="料號／品名／規格（邊打邊找）" autocomplete="off"
+                       style="height:28px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;width:260px;">
+                <button class="pq-btn" id="bdFGo"><i class="fa fa-search"></i> 查詢</button>
+            </div>
+            <div id="bdResult" class="hint">預設帶入申請的品名去找；找不到就切到「建立新採購料號」。</div>
+        </div>
+
+        <!-- ── 建新的 ── -->
+        <div id="bdNew" style="display:none;">
+            <div class="pq-grid">
+                <div class="pq-fld"><label>類別 <span style="color:#DD5138;">*</span></label><select id="bdCat"></select></div>
+                <div class="pq-fld"><label>品項要掛哪裡 <span style="color:#DD5138;">*</span></label>
+                    <div style="display:flex;gap:12px;align-items:center;height:30px;font-weight:normal;">
+                        <label style="margin:0;font-weight:normal;cursor:pointer;"><input type="radio" name="bdItemMode" value="exist" style="width:auto;margin:0 4px 0 0;" checked> 掛在既有品項</label>
+                        <label style="margin:0;font-weight:normal;cursor:pointer;"><input type="radio" name="bdItemMode" value="new" style="width:auto;margin:0 4px 0 0;"> 建立新品項</label>
+                    </div>
+                </div>
+            </div>
+            <div class="pq-grid" id="bdItemExistWrap">
+                <div class="pq-fld" style="grid-column:1/-1;"><label>選既有品項（同一種東西的不同尺寸請掛在同一個品項下）</label>
+                    <select id="bdItemSel"></select>
+                    <div id="bdItemSpecs" class="hint" style="margin-top:4px;"></div>
+                </div>
+            </div>
+            <div class="pq-grid" id="bdItemNewWrap" style="display:none;">
+                <div class="pq-fld"><label>新品項品名 <span style="color:#DD5138;">*</span></label>
+                    <input type="text" id="bdItemName" placeholder="例：鑽頭（尺寸放在下面規格，不要寫在品名裡）" autocomplete="off">
+                    <div id="bdItemDup"></div></div>
+            </div>
+
+            <div class="pq-sec" style="margin-top:4px;">
+                <h5>規格（＝這一筆採購料號代表什麼）</h5>
+                <div id="bdAttrs" class="pq-grid"></div>
+                <div class="pq-grid">
+                    <div class="pq-fld"><label>規格說明 <span style="color:#DD5138;">*</span></label>
+                        <input type="text" id="bdSpecText" placeholder="留白則由上方屬性自動組出">
+                        <span class="hint" id="bdSpecHint"></span></div>
+                    <div class="pq-fld"><label>採購料號</label>
+                        <div style="display:flex;gap:4px;">
+                            <input type="text" id="bdSpecCode" placeholder="留白＝系統自動編號" maxlength="40">
+                            <button class="pq-btn" id="bdCodeAuto" title="重新取得系統建議編號" style="white-space:nowrap;">建議號</button>
+                        </div>
+                        <span class="hint" id="bdCodeHint">可自行輸入公司慣用編號，全系統不可重複。</span></div>
+                    <div class="pq-fld"><label>單位</label><select id="bdUnit"></select></div>
+                    <div class="pq-fld"><label>預設儲位</label><select id="bdLoc"></select></div>
+                    <div class="pq-fld"><label>安全存量</label><input type="number" id="bdSafe" step="0.01"></div>
+                </div>
+                <div id="bdErr" style="display:none;color:#DD5138;font-size:13px;margin-top:4px;"></div>
+            </div>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="pq-btn danger" id="bdClear" style="float:left;display:none;"><i class="fa fa-unlink"></i> 解除綁定</button>
+        <button class="pq-btn" onclick="closeMask('mBind')">取消</button>
+        <button class="pq-btn warm" id="bdSave" style="display:none;"><i class="fa fa-save"></i> 建立並綁定</button>
     </div>
 </div></div>
 
@@ -616,6 +689,8 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
         <div id="spAttrs" class="pq-grid"></div>
         <div class="pq-grid">
             <div class="pq-fld"><label>規格說明（留白則由上方屬性自動組出）</label><input type="text" id="spText"></div>
+            <div class="pq-fld"><label>採購料號（留白＝自動編號，可自行輸入公司慣用編號）</label>
+                <input type="text" id="spCode" maxlength="40" placeholder="留白＝自動編號"></div>
             <div class="pq-fld"><label>單位</label><select id="spUnit"></select></div>
             <div class="pq-fld"><label>預設儲位</label><select id="spLoc"></select></div>
             <div class="pq-fld"><label>安全存量</label><input type="number" id="spSafe" step="0.01"></div>
