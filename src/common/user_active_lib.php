@@ -238,10 +238,15 @@ if (!function_exists('eg_revoke_user_permissions')) {
             $st = $pdo->prepare("INSERT INTO audit_log
                     (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
                     VALUES ('PERM_REVOKE', 'user', ?, ?, ?, ?, ?, NOW())");
+            // JSON_INVALID_UTF8_SUBSTITUTE：任一欄位若混到非 UTF-8 位元組（本專案 user 表有 latin1 欄位），
+            // json_encode 會整包回 false → 稽核紀錄變空白字串，等於沒留紀錄。用替代字元確保一定寫得進去。
+            $changes = json_encode(['reason' => $reason, 'before' => $snapshot, 'warnings' => $warnings],
+                                   JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+            if ($changes === false) $changes = '{"reason":"' . addslashes((string)$reason) . '","before":"編碼失敗，無法序列化"}';
+
             $st->execute([
                 (string)$uid, $uname,
-                json_encode(['reason' => $reason, 'before' => $snapshot, 'warnings' => $warnings],
-                            JSON_UNESCAPED_UNICODE),
+                $changes,
                 $operator_id !== null ? (int)$operator_id : null,
                 $operator !== '' ? $operator : 'system',
             ]);

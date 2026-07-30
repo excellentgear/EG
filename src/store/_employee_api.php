@@ -8,6 +8,8 @@ include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 // 特休天數算法已抽為共用庫（請假系統額度也用同一套，避免兩邊數字不一致）
 require_once $document_root . '/EGsystem/src/common/annual_leave_lib.php';
+// 在職狀態封鎖／權限清除（離職、留職停薪、育嬰留停）
+require_once $document_root . '/EGsystem/src/common/user_active_lib.php';
 
 $db_connection = new DBConnection();
 $db = $db_connection->getPDO();
@@ -41,6 +43,12 @@ switch ($action) {
         break;
     case 'delete_employee':
         deleteEmployee();
+        break;
+    case 'get_permission_summary':   // 查此人殘留的權限設定（清除前給人事看）
+        getPermissionSummary();
+        break;
+    case 'revoke_permissions':       // 一鍵清除此人所有權限設定（先寫 audit_log 再刪）
+        revokePermissions();
         break;
 
     // --- 從 department_job_title_api.php 搬移過來的 Actions ---
@@ -249,6 +257,14 @@ function addOrUpdateEmployee($mode) {
                 return;
             }
 
+            // 本次是否「從可用狀態」變成「被封鎖狀態（離職/留停）」——存檔後要提醒人事清權限
+            $stmt_old = $db->prepare("SELECT state FROM user WHERE id = ?");
+            $stmt_old->execute([$id]);
+            $old_state = $stmt_old->fetchColumn();
+            $turned_blocked = ($old_state === false ? false
+                : (!in_array((int)$old_state, eg_blocked_state_list(), true)
+                   && in_array((int)$state, eg_blocked_state_list(), true)));
+
             // 如果狀態為離職，則更新離職日期，否則設為 NULL
             $final_leave_date = ($state == 0) ? $leave_date : null;
 
@@ -368,12 +384,86 @@ function addOrUpdateEmployee($mode) {
 
         $db->commit();
         $message = $mode === 'add' ? '員工新增成功。' : '員工更新成功。';
-        echo json_encode(['status' => 'success', 'message' => $message]);
+        $resp = ['status' => 'success', 'message' => $message];
+
+        // 改成離職/留停 → 權限已自動失效（判斷時擋住），但「殘留設定要不要真的刪掉」由人事決定
+        if (!empty($turned_blocked)) {
+            $snap  = eg_collect_user_permissions($db, (int)$id);
+            $count = count($snap['user_roles']) + (empty($snap['user_permissions']) ? 0 : 1)
+                   + count($snap['user_module_permissions']) + count($snap['page_operator_acl'])
+                   + count($snap['user_delegate']);
+            $resp['permission_notice'] = [
+                'user_id'  => (int)$id,
+                'state'    => (int)$state,
+                'label'    => eg_user_state_label($state),
+                'count'    => $count,
+                'warnings' => eg_user_permission_warnings($db, (int)$id),
+            ];
+        }
+        echo json_encode($resp, JSON_UNESCAPED_UNICODE);
 
     } catch (PDOException $e) {
         $db->rollBack();
         echo json_encode(['status' => 'error', 'message' => '資料庫操作失敗: ' . $e->getMessage()]);
     }
+}
+
+/**
+ * 權限殘留摘要：離職/留停者身上還掛著哪些權限設定。
+ * 判斷時已一律擋下（見 src/common/user_active_lib.php），這裡是給人事「真的把資料清掉」前先看的清單。
+ */
+function getPermissionSummary() {
+    global $db;
+    $id = (int)($_REQUEST['id'] ?? 0);
+    if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。']); return; }
+
+    $snap  = eg_collect_user_permissions($db, $id);
+    $items = [];
+    if (!empty($snap['user_roles'])) {
+        $names = [];
+        foreach ($snap['user_roles'] as $r) $names[] = ($r['role_name'] ?? ('角色' . $r['role_id']));
+        $items[] = ['label' => 'RBAC 角色', 'count' => count($snap['user_roles']), 'detail' => implode('、', $names)];
+    }
+    if (!empty($snap['user_permissions'])) {
+        $items[] = ['label' => '舊版個人權限(user_permissions)', 'count' => 1, 'detail' => '整列設定'];
+    }
+    if (!empty($snap['user_module_permissions'])) {
+        $codes = [];
+        foreach ($snap['user_module_permissions'] as $r) $codes[] = $r['module_code'] . '(' . $r['permission'] . ')';
+        $items[] = ['label' => '模組權限', 'count' => count($snap['user_module_permissions']), 'detail' => implode('、', $codes)];
+    }
+    if (!empty($snap['page_operator_acl'])) {
+        $keys = [];
+        foreach ($snap['page_operator_acl'] as $r) $keys[] = $r['page_key'];
+        $items[] = ['label' => '頁面白名單', 'count' => count($snap['page_operator_acl']), 'detail' => implode('、', $keys)];
+    }
+    if (!empty($snap['user_delegate'])) {
+        $items[] = ['label' => '生效中的代理設定', 'count' => count($snap['user_delegate']), 'detail' => '本人被代理或擔任他人代理（清除時只停用，不刪紀錄）'];
+    }
+
+    echo json_encode([
+        'status'   => 'success',
+        'items'    => $items,
+        'warnings' => eg_user_permission_warnings($db, $id),
+        'total'    => array_sum(array_column($items, 'count')),
+    ], JSON_UNESCAPED_UNICODE);
+}
+
+/** 一鍵清除權限設定（清除前把原設定完整寫進 audit_log 備查） */
+function revokePermissions() {
+    global $db;
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。']); return; }
+
+    $reason = $_POST['reason'] ?? '在職狀態異動';
+    $res = eg_revoke_user_permissions($db, $id, $reason,
+                                      $_SESSION['id'] ?? null, $_SESSION['user_cname'] ?? '');
+    echo json_encode([
+        'status'   => $res['ok'] ? 'success' : 'error',
+        'message'  => $res['message'],
+        'deleted'  => $res['deleted'],
+        'warnings' => $res['warnings'],
+    ], JSON_UNESCAPED_UNICODE);
 }
 
 function deleteEmployee() {
