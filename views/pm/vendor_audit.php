@@ -770,15 +770,15 @@ function auditFormHTML(o){
         + '<td>供應商：'+(o.maker?esc(o.maker):'________________')+'</td>'
         + '<td>日期：'+(o.dateStr?esc(o.dateStr):'____ / ____ / ____')+'</td></tr>'
         + '<tr><td colspan="2">稽核狀況：□首次稽核　□次稽核　□自我評量　　　評分：每項 0~7 分（0＝最差、7＝最佳；無此流程填 NA）</td></tr></table>';
-    var rows = '<table class="pf"><thead><tr><th style="width:34px;">項次</th><th style="width:70px;">項目</th><th>查核問題</th>'
+    var rows = '<table class="pf"><thead><tr><th style="width:70px;">項目</th><th style="width:34px;">項次</th><th>查核問題</th>'
         + '<th style="width:44px;">自評分</th><th style="width:44px;">稽核分</th><th style="width:180px;">佐證／觀察結果</th></tr></thead><tbody>';
     META.items.forEach(function(cat){
         var items = cat[2];
         items.forEach(function(it, idx){
             var s = (o.scores && o.scores[it[0]]) || {};
-            rows += '<tr><td>'+it[0]+'</td>';
+            rows += '<tr>';
             if (idx===0) rows += '<td rowspan="'+items.length+'" style="vertical-align:middle;font-weight:bold;">'+esc(cat[1])+'</td>';
-            rows += '<td class="q">'+esc(it[1])+'</td>'
+            rows += '<td>'+it[0]+'</td><td class="q">'+esc(it[1])+'</td>'
                 + '<td>'+(s.self!=null?s.self:'')+'</td><td>'+(s.audit!=null?s.audit:'')+'</td><td></td></tr>';
         });
     });
