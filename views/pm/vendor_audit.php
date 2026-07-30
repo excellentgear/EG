@@ -765,12 +765,11 @@ function auditFormHTML(o){
     o = o || {};
     var head = '<div style="text-align:center;">'
         + '<div style="font-size:18px;font-weight:bold;">超正齒輪科技有限公司</div>'
-        + '<div style="font-size:15px;margin-top:2px;">供應商評鑑稽核查表（2-PH-01-02）</div></div>';
+        + '<div style="font-size:15px;margin-top:2px;">供應商評鑑稽核查表</div></div>';
     var info = '<table class="pf-info"><tr>'
         + '<td>供應商：'+(o.maker?esc(o.maker):'________________')+'</td>'
-        + '<td>供應商代號：'+(o.makerNo?esc(o.makerNo):'____________')+'</td>'
         + '<td>日期：'+(o.dateStr?esc(o.dateStr):'____ / ____ / ____')+'</td></tr>'
-        + '<tr><td colspan="3">稽核狀況：□首次稽核　□次稽核　□自我評量　　　評分：每項 0~7 分（0＝最差、7＝最佳；無此流程填 NA）</td></tr></table>';
+        + '<tr><td colspan="2">稽核狀況：□首次稽核　□次稽核　□自我評量　　　評分：每項 0~7 分（0＝最差、7＝最佳；無此流程填 NA）</td></tr></table>';
     var rows = '<table class="pf"><thead><tr><th style="width:34px;">項次</th><th style="width:70px;">項目</th><th>查核問題</th>'
         + '<th style="width:44px;">自評分</th><th style="width:44px;">稽核分</th><th style="width:180px;">佐證／觀察結果</th></tr></thead><tbody>';
     META.items.forEach(function(cat){
@@ -783,7 +782,8 @@ function auditFormHTML(o){
     rows += '<tr><td colspan="2">合計</td><td style="text-align:right;">總分（滿分 '+META.total_max+'）／綜合合格率＝自評率×'+META.self_w+'＋稽核率×'+META.audit_w+'，≥'+META.pass_rate+'% 判合格</td><td></td><td></td><td></td></tr>';
     rows += '</tbody></table>';
     var sign = '<table class="pf-sign"><tr><td>供應商代表簽章：__________________</td><td>稽核員簽章：__________________</td></tr></table>';
-    return head + info + rows + sign;
+    var footer = '<div style="text-align:right;margin-top:22px;font-size:12px;color:#333;">表單編號：2-PH-01-02</div>';
+    return head + info + rows + sign + footer;
 }
 function openPrintWindow(bodyHtml, title){
     var w = window.open('', '_blank');
