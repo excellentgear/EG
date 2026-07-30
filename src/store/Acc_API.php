@@ -535,6 +535,108 @@ case 'inv_export_csv': {
     exit;
 }
 
+/* ══ 收款與沖帳 ═══════════════════════════════════════════════════════ */
+
+case 'rcpt_list': {
+    $s = $_POST ?: $_GET;
+    acc_out(acc_receipt_list($db, [
+        'date_from'     => trim((string)($s['date_from'] ?? '')),
+        'date_to'       => trim((string)($s['date_to'] ?? '')),
+        'kw'            => acc_u8(trim((string)($s['kw'] ?? ''))),
+        'only_unalloc'  => !empty($s['only_unalloc']),
+        'page'          => max(1, (int)($s['page'] ?? 1)),
+        'per_page'      => (int)($s['per_page'] ?? 20),
+    ]));
+}
+
+case 'rcpt_save': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $d = json_decode($_POST['data'] ?? '{}', true);
+    if (!is_array($d)) acc_err('資料格式錯誤');
+    foreach (['customer_name', 'bank', 'note', 'method'] as $k)
+        if (isset($d[$k])) $d[$k] = acc_u8((string)$d[$k]);
+    $r = acc_receipt_save($db, $d, (string)$uid);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'rcpt_delete': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('僅會計管理員可刪除收款單', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_receipt_delete($db, (int)($_POST['receipt_id'] ?? 0), (string)$uid);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* 某收款單的沖帳明細 + 該客戶目前可沖的發票 */
+case 'rcpt_alloc_options': {
+    $s   = $_POST ?: $_GET;
+    $rid = (int)($s['receipt_id'] ?? 0);
+    if ($rid <= 0) acc_err('缺少收款單');
+    $st = $db->prepare("SELECT * FROM acc_receipt WHERE receipt_id=? LIMIT 1");
+    $st->execute([$rid]);
+    $rc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$rc) acc_err('找不到收款單');
+    acc_out(['receipt'  => $rc,
+             'allocs'   => acc_receipt_allocs($db, $rid),
+             'invoices' => acc_open_invoices($db, (string)$rc['customer_name'], $rid)]);
+}
+
+case 'rcpt_alloc_save': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $allocs = json_decode($_POST['allocs'] ?? '[]', true);
+    $r = acc_alloc_save($db, (int)($_POST['receipt_id'] ?? 0), is_array($allocs) ? $allocs : [], (string)$uid);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* 客戶下拉（有已開立發票或有收款紀錄的） */
+case 'rcpt_customers': {
+    $rows = $db->query("SELECT customer_name, MAX(customer_id) AS customer_id, COUNT(*) AS cnt
+                        FROM (
+                          SELECT customer_name, customer_id FROM acc_invoice WHERE status='issued'
+                          UNION ALL
+                          SELECT customer_name, customer_id FROM acc_receipt
+                        ) t
+                        GROUP BY customer_name ORDER BY customer_name")->fetchAll(PDO::FETCH_ASSOC);
+    acc_out(['customers' => $rows]);
+}
+
+/* 收款單匯出 */
+case 'rcpt_export': {
+    $s = $_GET ?: $_POST;
+    $r = acc_receipt_list($db, [
+        'date_from' => trim((string)($s['date_from'] ?? '')),
+        'date_to'   => trim((string)($s['date_to'] ?? '')),
+        'kw'        => acc_u8(trim((string)($s['kw'] ?? ''))),
+        'only_unalloc' => !empty($s['only_unalloc']),
+        'per_page'  => 0,
+    ]);
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="收款明細_' . date('Ymd_Hi') . '.csv"');
+    $o = fopen('php://output', 'w');
+    fwrite($o, "\xEF\xBB\xBF");
+    fputcsv($o, ['收款單號', '入帳日', '客戶', '方式', '收款金額', '手續費', '已沖帳',
+                 '未分配', '沖帳張數', '銀行', '支票號碼', '票期', '備註']);
+    foreach ($r['rows'] as $x) {
+        fputcsv($o, [$x['receipt_no'], $x['receipt_date'], $x['customer_name'], $x['method'],
+                     round($x['amount']), round($x['fee']), round($x['allocated']),
+                     round($x['unallocated']), $x['alloc_cnt'], $x['bank'],
+                     $x['check_no'], $x['check_due'], $x['note']]);
+    }
+    $s2 = $r['summary'];
+    fputcsv($o, []);
+    fputcsv($o, ['合計', '', '', '', round($s2['amount']), round($s2['fee']),
+                 round($s2['allocated']), round($s2['unallocated']), '', '', '', '', '']);
+    fclose($o);
+    exit;
+}
+
 /* ── 匯入範本下載（告訴使用者 ERP 要匯出成什麼格式）─────────────────── */
 case 'template': {
     header('Content-Type: text/csv; charset=UTF-8');
