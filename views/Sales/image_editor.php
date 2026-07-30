@@ -307,7 +307,9 @@ try {
 $attachCats = [];
 try {
     if (isset($pdo) && $pdo) {
-        $attachCats = $pdo->query("SELECT id, category_name FROM quotation_file_categories WHERE is_active=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+        require_once __DIR__ . '/../../src/common/dwg_change_lib.php';
+        dwg_ensure_schema($pdo);
+        $attachCats = $pdo->query("SELECT id, category_name, COALESCE(is_own_drawing,0) AS is_own_drawing FROM quotation_file_categories WHERE is_active=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     }
 } catch (Exception $e) {}
 
@@ -572,6 +574,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$catIds) throw new Exception('請至少選擇一個附件標籤（圖面／報價之後全靠它分類）');
             $catStr = implode(',', $catIds);
             if ($dId <= 0) throw new Exception('請先選擇料號');
+            // 發行章日期：自家出的圖必填（見 ai-rules/15-圖面變更判定依據.md）。
+            // 判定要在寫入這一筆之前算，否則會拿自己跟自己比。
+            $issueDate = trim($_POST['issue_stamp_date'] ?? '');
+            if ($issueDate !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $issueDate)) throw new Exception('發行章日期格式錯誤（需 YYYY-MM-DD）');
+            if (dwg_needs_issue_date($pdo, $catIds) && $issueDate === '') throw new Exception('此標籤屬於「自家出的圖」，請填發行章日期');
+            if ($issueDate === '') $issueDate = null;
+            $dwgVerdict = dwg_classify_upload($pdo, $dId, $catIds, $issueDate);
             if (strpos($png, 'data:image/png;base64,') !== 0) throw new Exception('圖檔資料異常');
             if (json_decode($work) === null) throw new Exception('工作檔資料異常');
             $pb = imgedit_part_base($pdo);
@@ -589,12 +598,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $workFile = 'egdraw_' . $stamp . '.egwork.json';
             if (@file_put_contents($dir . DIRECTORY_SEPARATOR . $workFile, json_encode($workArr, JSON_UNESCAPED_UNICODE)) === false) throw new Exception('工作檔寫入失敗');
             $pdo->beginTransaction();
-            $ins = $pdo->prepare("INSERT INTO part_attachments (d_id, filename, original_name, category_ids, note, uploaded_by, uploaded_by_id, uploaded_at)
-                                  VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
-            // 輸出 PNG 帶使用者選的標籤；工作檔不給標籤（它不是圖面，且檢視端一律不列，見 imgedit_strip_workfiles）
-            $ins->execute([$dId, $pngFile, $name . '.png', $catStr, '批圖編輯器輸出圖', $userName, $uid]);
+            $ins = $pdo->prepare("INSERT INTO part_attachments (d_id, filename, original_name, category_ids, issue_stamp_date, note, uploaded_by, uploaded_by_id, uploaded_at)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+            // 輸出 PNG 帶使用者選的標籤與發行章日期；工作檔兩者都不給
+            //（它不是圖面，檢視端一律不列，見 imgedit_strip_workfiles，也不該參與圖面變更判定）
+            $ins->execute([$dId, $pngFile, $name . '.png', $catStr, $issueDate, '批圖編輯器輸出圖', $userName, $uid]);
             $pngId = $pdo->lastInsertId();
-            $ins->execute([$dId, $workFile, $name . '.egwork.json', null, '批圖工作檔（可用批圖編輯器重新開啟，標籤仍可編輯）', $userName, $uid]);
+            $ins->execute([$dId, $workFile, $name . '.egwork.json', null, null, '批圖工作檔（可用批圖編輯器重新開啟，標籤仍可編輯）', $userName, $uid]);
             $workId = $pdo->lastInsertId();
             $pdo->prepare("INSERT INTO imgedit_workfile_meta (attachment_id, owner_type, owner_dept_id) VALUES (?, ?, ?)")
                 ->execute([$workId, $scope, ($scope === 'dept' && $deptId) ? $deptId : null]);
@@ -622,7 +632,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
             $pdo->commit();
-            echo json_encode(['success' => true, 'png_id' => $pngId, 'work_id' => $workId, 'extracted' => $n, 'auto_removed' => $removed]);
+            echo json_encode(['success' => true, 'png_id' => $pngId, 'work_id' => $workId, 'extracted' => $n,
+                              'auto_removed' => $removed, 'dwg_verdict' => $dwgVerdict]);
         } elseif ($act === 'list_workfiles') {
             $dId = (int)($_POST['d_id'] ?? 0);
             if ($dId <= 0) throw new Exception('缺少料號');
@@ -1482,11 +1493,19 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                     <div id="pf-cats" style="max-height:96px;overflow-y:auto;border:1px solid #45494f;border-radius:4px;padding:5px 6px;">
                         <?php foreach ($attachCats as $c): ?>
                         <label style="display:inline-flex;align-items:center;gap:4px;margin:2px 10px 2px 0;font-size:12.5px;cursor:pointer;font-weight:normal;">
-                            <input type="checkbox" class="pf-cat" value="<?= (int)$c['id'] ?>" onchange="pfRenderCatHint()"><?= htmlspecialchars($c['category_name'], ENT_QUOTES, 'UTF-8') ?>
+                            <input type="checkbox" class="pf-cat" value="<?= (int)$c['id'] ?>" data-own="<?= (int)$c['is_own_drawing'] ?>" onchange="pfRenderCatHint()"><?= htmlspecialchars($c['category_name'], ENT_QUOTES, 'UTF-8') ?>
                         </label>
                         <?php endforeach; ?>
                     </div>
                     <div id="pf-cat-hint" style="font-size:11.5px;color:#ff8a80;margin-top:3px;">尚未選擇標籤——存下去會變成分不出圖面／報價的無標籤附件</div>
+                </div>
+            </div>
+            <!-- 發行章日期：自家出的圖必填，是圖面變更的新舊依據（見 ai-rules/15-圖面變更判定依據.md） -->
+            <div class="frm-row" id="pf-issue-row" style="display:none;"><label>發行章日期 <span style="color:#ff8a80;">*</span></label>
+                <div style="flex:1;">
+                    <input type="date" id="pf-issue-date" style="width:170px;" onchange="pfRenderCatHint()">
+                    <span style="font-size:11.5px;color:#8b949e;margin-left:6px;">預設今天，請改成圖上實際蓋章日</span>
+                    <div id="pf-issue-hint" style="font-size:11.5px;margin-top:3px;"></div>
                 </div>
             </div>
             <div class="frm-row"><label>分享範圍</label>
@@ -5623,6 +5642,7 @@ function openPartModal() {
     document.getElementById('pf-name').value = defaultFileName();
     document.getElementById('pf-scope').value = 'dept';
     document.querySelectorAll('.pf-cat').forEach(c => { c.checked = false; });
+    const _pfIss = document.getElementById('pf-issue-date'); if (_pfIss) _pfIss.value = '';
     pfRenderCatHint();
     pfShareSelected = new Set();
     document.getElementById('pf-share-q').value = '';
@@ -5637,6 +5657,28 @@ function openPartModal() {
 function pfSelectedCats() {
     return Array.from(document.querySelectorAll('.pf-cat:checked')).map(c => c.value);
 }
+function pfTodayStr() {
+    const d = new Date();
+    return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
+}
+/** 勾到「自家出的圖」才要發行章日期；回傳是否通過驗證 */
+function pfSyncIssueRow() {
+    const need = Array.from(document.querySelectorAll('.pf-cat:checked')).some(c => c.dataset.own === '1');
+    const row = document.getElementById('pf-issue-row'), inp = document.getElementById('pf-issue-date'),
+          hint = document.getElementById('pf-issue-hint');
+    row.style.display = need ? '' : 'none';
+    if (!need) return true;
+    if (!inp.value) inp.value = pfTodayStr();          // 預設今天，可改
+    if (inp.value > pfTodayStr()) {
+        inp.style.borderColor = '#ff8a80';
+        hint.style.color = '#ff8a80'; hint.textContent = '發行章日期不可以是未來日期';
+        return false;
+    }
+    inp.style.borderColor = '';
+    hint.style.color = '#8b949e';
+    hint.textContent = '存檔後會跟這個料號既有的自家圖面比對：比較新＝圖面變更（請到料號附件頁或圖面變更紀錄頁登錄變更內容）。';
+    return true;
+}
 function pfRenderCatHint() {
     const sel = pfSelectedCats(), hint = document.getElementById('pf-cat-hint'), box = document.getElementById('pf-cats');
     if (sel.length) {
@@ -5649,6 +5691,7 @@ function pfRenderCatHint() {
         hint.textContent = '尚未選擇標籤——存下去會變成分不出圖面／報價的無標籤附件';
         box.style.borderColor = '#ff8a80';
     }
+    pfSyncIssueRow();
 }
 /* 範圍切換：部門→顯示部門下拉；指定人員→顯示搜尋+勾選名單（延遲載入使用者清單） */
 let pfAllUsers = null, pfShareSelected = new Set();
@@ -5726,6 +5769,9 @@ async function pfSave() {
     if (scope === 'custom' && !pfShareSelected.size) { toast('請至少勾選一位要分享的人員，或改選別的範圍'); return; }
     const cats = pfSelectedCats();
     if (!cats.length) { pfRenderCatHint(); document.getElementById('pf-cats').scrollIntoView({block:'nearest'}); toast('請至少選擇一個附件標籤'); return; }
+    if (!pfSyncIssueRow()) { document.getElementById('pf-issue-date').focus(); toast('請確認發行章日期'); return; }
+    const issueDate = (document.getElementById('pf-issue-row').style.display !== 'none')
+                    ? (document.getElementById('pf-issue-date').value || '') : '';
     try {
         toast('儲存中…');
         // 壓平圖解析度：一般畫布用 3 倍（小畫家貼圖縮小擺放後，存檔的圖與文字仍清晰）；
@@ -5743,10 +5789,21 @@ async function pfSave() {
         fd.append('dept_id', document.getElementById('pf-dept').value || '0');
         fd.append('share_user_ids', JSON.stringify(Array.from(pfShareSelected)));
         fd.append('category_ids', cats.join(','));
+        fd.append('issue_stamp_date', issueDate);
         const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
         if (!res.success) throw new Error(res.message || '');
         toast('已存入料號附件：壓平圖＋工作檔（底圖抽離 ' + (res.extracted || 0) + ' 張）' +
             (res.auto_removed ? '，並自動清掉 ' + res.auto_removed + ' 份超過保留上限的舊工作檔' : ''));
+        // 圖面變更判定：本頁不做登錄表單（欄位多、跳窗會蓋住畫布），改提示到料號附件頁登錄
+        const v = res.dwg_verdict || {};
+        if (v.kind === 'change') {
+            alert('偵測到圖面變更\n\n這張圖的發行章日期（' + (v.issue_date||'') + '）比此料號現有最新的自家圖面（'
+                + (v.prev_name||'') + '，' + (v.prev_date||'') + '）新。\n\n'
+                + '請到「圖面變更紀錄」頁登錄這次改了什麼、從哪個製程開始受影響，\n'
+                + '系統才會複製檢驗標準新版次並通知相關人員簽收。');
+        } else if (v.kind === 'first') {
+            toast('已記錄為首次發行（此料號第一張帶發行章日期的自家圖面）');
+        }
         pfLoadWorkfiles();
     } catch (e) { toast('儲存失敗：' + (e.message || '')); }
 }
