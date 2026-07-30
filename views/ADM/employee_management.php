@@ -324,9 +324,11 @@ if ($hrUserPerm === 'R') {
                                 </div>
                                 <div class="col-md-4">
                                     <!-- 動態日期顯示區塊 -->
+                                    <!-- 離職日：在職者可預填「預定離職日」（未來日期），當天仍可用系統，隔天起自動封鎖 -->
                                     <div id="leave_date_group" class="form-group" style="display: none;">
-                                        <label for="leave_date">離職日</label>
+                                        <label for="leave_date" id="leave_date_label">離職日</label>
                                         <input type="date" class="form-control" id="leave_date" name="leave_date">
+                                        <small id="leave_date_hint" class="help-block" style="margin:2px 0 0;color:#8a6d3b;"></small>
                                     </div>
                                     <div id="status_dates_group" style="display: none;">
                                         <div class="form-group">
@@ -857,17 +859,40 @@ $(document).ready(function() {
 
     function handleStatusChange() {
         const status = $('#user_status').val();
-        if (status === '0') { // 離職
-            $('#leave_date_group').show();
-            $('#status_dates_group').hide();
-        } else if (status === '2' || status === '3') { // 留職停薪或育嬰留停
-            $('#leave_date_group').hide();
-            $('#status_dates_group').show();
-        } else {
-            $('#leave_date_group').hide();
-            $('#status_dates_group').hide();
-        }
+        // 離職日欄位一律顯示：離職＝實際離職日；其他狀態＝可預填的「預定離職日」（留空表示沒有）
+        $('#leave_date_group').show();
+        $('#leave_date_label').text(status === '0' ? '離職日' : '預定離職日（可留空）');
+        $('#status_dates_group').toggle(status === '2' || status === '3');
+        validateLeaveDate();
     }
+
+    // 即時驗證離職日（表單三總則：輸入當下就驗，紅框＋寫明為什麼錯）
+    function validateLeaveDate() {
+        const status = $('#user_status').val();
+        const val = $('#leave_date').val();
+        const grp = $('#leave_date_group');
+        const hint = $('#leave_date_hint');
+        grp.removeClass('has-error');
+        hint.css('color', '#8a6d3b').text('');
+
+        if (!val) {
+            if (status !== '0') hint.text('可先填未來的預定離職日；當天仍可使用系統，隔天起自動停用並轉為離職。');
+            return true;
+        }
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const picked = new Date(val + 'T00:00:00');
+        if (status !== '0' && picked <= today) {
+            grp.addClass('has-error');
+            hint.css('color', '#DD5138')
+                .text('預定離職日必須是未來日期（' + val + ' 已過或就是今天）。'
+                    + '若是復職，請把此欄清空；若確實已離職，請把在職狀態改成「離職」。');
+            return false;
+        }
+        if (status !== '0') hint.text('到 ' + val + ' 當天仍可使用系統，隔天起自動停用並轉為離職。');
+        return true;
+    }
+
+    $(document).on('change input', '#leave_date', validateLeaveDate);
 
 
     // --- 表單提交 ---
@@ -941,6 +966,11 @@ $(document).ready(function() {
         e.preventDefault();
         // 從表單的 data 屬性中獲取當前操作 (在 show.bs.modal 事件中設定)
         var action = $(this).data('action');
+
+        if (!validateLeaveDate()) {
+            $('#leave_date').focus();
+            return;   // 錯誤原因已顯示在欄位旁，不再另跳「資料有誤」的空泛訊息
+        }
 
         // 將 password input 的值複製到隱藏的 user_password 欄位
         var password = $('#password').val();

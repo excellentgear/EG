@@ -56,9 +56,11 @@ require_once('../../src/common/user_active_lib.php'); // 在職狀態封鎖（�
         if (isset($admin['user_uname'], $admin['user_password'])
             && $_POST['userName'] == $admin['user_uname']
             && $_POST['password'] == $admin['user_password']) {
-            // 在職狀態封鎖（離職/留職停薪/育嬰留停），清單見 src/common/user_active_lib.php
-            if ($admin['state'] !== null && in_array((int)$admin['state'], eg_blocked_state_list(), true)) {
-                $stateLabel = eg_user_state_label($admin['state']);
+            // 在職狀態封鎖（離職/留停，或預定離職日已過）——規則收斂在 src/common/user_active_lib.php，
+            // 這裡不可自己判斷 state，否則新增封鎖條件時會漏掉登入這一關
+            $blocked = eg_user_blocked_state($conn->getPDO(), (int)$admin['id']);
+            if ($blocked !== null) {
+                $stateLabel = $blocked['label'];
                 if (function_exists('eg_login_log')) eg_login_log($conn->getPDO(), (int)$admin['id'], (string)$_POST['userName'], false, '帳號停用（' . $stateLabel . '）');
                 header("Location:../../index.php?msg=" . urlencode('此帳號目前為「' . $stateLabel . '」狀態，無法使用系統'));
                 exit();

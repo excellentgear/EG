@@ -426,7 +426,11 @@ try {
                (SELECT p.name FROM user_department_position_map m JOIN position p ON p.id = m.position_id
                   WHERE m.user_id = u.id ORDER BY m.is_main DESC, m.id ASC LIMIT 1) AS pos_name
         FROM user u
-        WHERE u.leave_date IS NULL AND u.id <> 1
+        -- 在職判斷改看 state（原本用 leave_date IS NULL；2026-07-30 起離職日可預填，
+        -- 在職者也會有未來的預定離職日，再用它判斷會提前把人濾掉）
+        WHERE (u.state IS NULL OR u.state NOT IN (0, 2, 3))
+          AND (u.leave_date IS NULL OR u.leave_date >= CURDATE())
+          AND u.id <> 1
         ORDER BY u.id ASC
     ")->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {

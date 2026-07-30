@@ -9,7 +9,7 @@
  *   (3) 離職者身上仍留著 user_module_permissions / 職稱對應，權限解析照樣發功能碼給他。
  *   本庫把「這個人現在還算不算在職」收斂成一處，登入、側欄守門、RBAC 解析三層都問同一個答案。
  *
- * 封鎖規則：user.state ∈ EG_BLOCKED_USER_STATES 就是被封鎖。
+ * 封鎖規則：user.state ∈ EG_BLOCKED_USER_STATES，或 user.leave_date 已過（預定離職日的隔天起），就是被封鎖。
  *   刻意用「黑名單」而非白名單：日後人事若新增未知狀態碼，預設仍可正常使用，
  *   不會因為沒登記在白名單就讓全公司登不進系統（誤傷成本遠大於收益）。
  *
@@ -51,7 +51,7 @@ if (!function_exists('eg_user_blocked_state')) {
 
         $result = null;
         try {
-            $st = $pdo->prepare("SELECT state, user_cname FROM `user` WHERE id = ? LIMIT 1");
+            $st = $pdo->prepare("SELECT state, user_cname, leave_date FROM `user` WHERE id = ? LIMIT 1");
             $st->execute([$uid]);
             $row = $st->fetch(PDO::FETCH_ASSOC);
             if ($row && $row['state'] !== null && in_array((int)$row['state'], eg_blocked_state_list(), true)) {
@@ -59,6 +59,15 @@ if (!function_exists('eg_user_blocked_state')) {
                     'state' => (int)$row['state'],
                     'label' => eg_user_state_label($row['state']),
                     'name'  => (string)$row['user_cname'],
+                ];
+            } elseif ($row && !empty($row['leave_date']) && $row['leave_date'] < date('Y-m-d')) {
+                // 預定離職日已過（離職當天仍可用，方便交接結案；隔天 0 點起封鎖）。
+                // 判斷時就生效，不必等順路觸發把 state 改成 0——排程晚跑不影響安全。
+                $result = [
+                    'state' => 0,
+                    'label' => '離職',
+                    'name'  => (string)$row['user_cname'],
+                    'by_leave_date' => (string)$row['leave_date'],
                 ];
             }
         } catch (Exception $e) {

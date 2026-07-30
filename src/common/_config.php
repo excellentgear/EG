@@ -86,6 +86,15 @@ try {
     error_log('[db_backup] tick hook failed: ' . $e->getMessage());
 }
 
+// === 預定離職日到期自動轉離職 順路觸發（2026-07-30 新增；做法同上，免工作排程器）===
+// 距上次檢查超過 3600 秒才掃描；封鎖本身在判斷時就生效，這支只負責把 state/歷程/稽核補寫進資料
+try {
+    require_once __DIR__ . '/user_leave_tick.php';
+    eg_user_leave_tick($db);
+} catch (Throwable $e) {
+    error_log('[user_leave] tick hook failed: ' . $e->getMessage());
+}
+
 // === 移機快速備份 順路觸發（2026-07-24 新增；做法同上，免工作排程器）===
 // 距上次檢查超過 3600 秒才背景啟動；是否執行由工人依 migbk_interval_days 判斷(0=未啟用)
 try {

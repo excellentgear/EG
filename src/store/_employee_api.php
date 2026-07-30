@@ -265,8 +265,18 @@ function addOrUpdateEmployee($mode) {
                 : (!in_array((int)$old_state, eg_blocked_state_list(), true)
                    && in_array((int)$state, eg_blocked_state_list(), true)));
 
-            // 如果狀態為離職，則更新離職日期，否則設為 NULL
-            $final_leave_date = ($state == 0) ? $leave_date : null;
+            // 離職日（2026-07-30 起可預填）：
+            //   離職狀態 → 實際離職日，可為過去或今天；
+            //   其他狀態 → 視為「預定離職日」，只接受未來日期（當天仍可使用系統，隔天 0 點起自動封鎖）。
+            //   填今天或更早卻不是離職狀態＝資料自相矛盾，直接擋下並說明原因，不要默默清成 NULL。
+            $final_leave_date = $leave_date;
+            if ($leave_date !== null && (int)$state !== 0 && $leave_date <= date('Y-m-d')) {
+                $db->rollBack();
+                echo json_encode(['status' => 'error',
+                    'message' => '預定離職日必須是未來日期（' . $leave_date . ' 已過或就是今天）。'
+                               . '若是復職，請把離職日清空；若此人確實已離職，請把在職狀態改為「離職」。'], JSON_UNESCAPED_UNICODE);
+                return;
+            }
 
             // 根據是否有提供密碼來決定是否更新密碼欄位
             if (!empty($user_password)) {
