@@ -45,10 +45,36 @@ function training_ensure_schema(PDO $db): void {
         "ALTER TABLE training_session ADD COLUMN trainer_id INT NULL COMMENT '講師 user.id(外部講師留空,用trainer文字)'",
         "ALTER TABLE training_session ADD COLUMN train_type VARCHAR(10) NOT NULL DEFAULT 'internal' COMMENT 'internal=內訓 external=外訓'",
         "ALTER TABLE training_session ADD COLUMN org_unit VARCHAR(100) NULL COMMENT '外訓開課/主辦單位'",
-        "ALTER TABLE training_session ADD COLUMN actual_hours DECIMAL(5,1) NULL COMMENT '實際上課時數(可與計畫 hours 不同)'",
+        "ALTER TABLE training_session ADD COLUMN actual_hours DECIMAL(5,1) NULL COMMENT '實際上課時數(可與計畫 hours 不同；多天=各天合計)'",
+        "ALTER TABLE training_session ADD COLUMN plan_days INT NULL COMMENT '計畫上課天數(多天課程；NULL/1=單天)'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) {}
     }
+
+    // 多天課程：每天一列上課日期與時段（單天課程也存 1 列）
+    // 主表 done_date/start_time/end_time 保留＝第 1 天的值（KPI、清單、既有程式相容）
+    $db->exec("CREATE TABLE IF NOT EXISTS training_session_day (
+        day_id INT AUTO_INCREMENT PRIMARY KEY,
+        session_id INT NOT NULL,
+        day_no INT NOT NULL DEFAULT 1 COMMENT '第幾天(1起)',
+        day_date DATE NOT NULL COMMENT '上課日期',
+        start_time VARCHAR(5) NULL COMMENT '開始 HH:MM',
+        end_time VARCHAR(5) NULL COMMENT '結束 HH:MM',
+        hours DECIMAL(5,1) NULL COMMENT '當日時數(可手改,扣休息)',
+        KEY idx_session (session_id),
+        KEY idx_date (day_date)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練場次上課日期(多天課程)'");
+
+    // 上課地點主檔（可設定/儲存後選擇；停用不刪，舊紀錄仍存文字）
+    $db->exec("CREATE TABLE IF NOT EXISTS training_location (
+        loc_id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL,
+        UNIQUE KEY uq_name (name)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練上課地點主檔'");
 
     // 參加人員名單（應參加＋實到＋簽名）
     $db->exec("CREATE TABLE IF NOT EXISTS training_attendee (
