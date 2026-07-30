@@ -557,7 +557,13 @@ function acc_sheet_reopen(PDO $db, int $sheetId, string $reason, ?array $user): 
     return ['success' => true, 'message' => '已退回重對，對帳人員可以繼續修改'];
 }
 
-/** 底稿清單（會計／稽核看誰對完了、誰還卡著） */
+/**
+ * 底稿清單（會計／稽核看誰對完了、誰還卡著）
+ *
+ * 排序與統計一律對「全部符合條件」的資料算完才分頁（差額是運算欄位，
+ * 只用當頁資料排會排錯）。per_page=0 或未給＝不分頁全部回傳，
+ * recon_parties 等既有呼叫端靠這個預設值維持原行為。
+ */
 function acc_sheet_list(PDO $db, array $f): array
 {
     acc_ensure_schema($db);
@@ -594,12 +600,66 @@ function acc_sheet_list(PDO $db, array $f): array
     }
     unset($r);
 
+    /* only_diff／only_open 是後端篩選（不是前端只挑當頁），
+       否則「有差額的共幾份」會隨當頁載到什麼而變動。 */
+    if (!empty($f['only_diff'])) {
+        $rows = array_values(array_filter($rows, function ($r) {
+            return $r['diff'] !== null && abs($r['diff']) > 0.01;
+        }));
+    }
+    if (!empty($f['only_open'])) {
+        $rows = array_values(array_filter($rows, function ($r) {
+            return $r['status'] !== 'confirmed';
+        }));
+    }
+
     $summary = ['count' => count($rows), 'draft' => 0, 'confirmed' => 0, 'reopened' => 0, 'diff_cnt' => 0];
     foreach ($rows as $r) {
         if (isset($summary[$r['status']])) $summary[$r['status']]++;
         if ($r['diff'] !== null && abs($r['diff']) > 0.01) $summary['diff_cnt']++;
     }
-    return ['rows' => $rows, 'total' => count($rows), 'summary' => $summary];
+
+    /* 排序（對全部資料排，不是只排當頁） */
+    $sortable = ['billing_month', 'party_name', 'party_id', 'side', 'status',
+                 'our_total', 'their_total', 'total_amount', 'diff', 'abs_diff',
+                 'line_cnt', 'checked_cnt', 'adj_cnt', 'saved_at', 'confirmed_at'];
+    $sort = (string)($f['sort'] ?? '');
+    if (!in_array($sort, $sortable, true)) $sort = '';
+    if ($sort !== '') {
+        $dir     = (($f['dir'] ?? 'desc') === 'asc') ? 1 : -1;
+        $numeric = ['our_total', 'their_total', 'total_amount', 'tax_amount',
+                    'diff', 'abs_diff', 'line_cnt', 'checked_cnt', 'adj_cnt'];
+        $stOrder = ['reopened' => 0, 'draft' => 1, 'confirmed' => 2];
+        usort($rows, function ($a, $b) use ($sort, $dir, $numeric, $stOrder) {
+            if ($sort === 'abs_diff') {
+                // 差額為 null（對方紙本還沒填）一律排到最後，不論升冪降冪
+                $x = ($a['diff'] === null) ? null : abs($a['diff']);
+                $y = ($b['diff'] === null) ? null : abs($b['diff']);
+            } elseif ($sort === 'status') {
+                $x = $stOrder[$a['status']] ?? 9; $y = $stOrder[$b['status']] ?? 9;
+            } else {
+                $x = $a[$sort] ?? null; $y = $b[$sort] ?? null;
+            }
+            if ($x === null && $y === null) return 0;
+            if ($x === null) return 1;      // null 永遠墊底
+            if ($y === null) return -1;
+            if (in_array($sort, $numeric, true) || $sort === 'status') {
+                return ((float)$x <=> (float)$y) * $dir;
+            }
+            return strcmp((string)$x, (string)$y) * $dir;
+        });
+    }
+
+    $total   = count($rows);
+    $perPage = (int)($f['per_page'] ?? 0);
+    if ($perPage > 0) {
+        if (!in_array($perPage, [5, 10, 20, 50], true)) $perPage = 20;
+        $page = max(1, (int)($f['page'] ?? 1));
+        $rows = array_slice($rows, ($page - 1) * $perPage, $perPage);
+        return ['rows' => $rows, 'total' => $total, 'page' => $page,
+                'per_page' => $perPage, 'summary' => $summary];
+    }
+    return ['rows' => $rows, 'total' => $total, 'page' => 1, 'per_page' => 0, 'summary' => $summary];
 }
 
 /* ============================================================

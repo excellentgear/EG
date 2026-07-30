@@ -80,6 +80,25 @@ function acc_ar_filter(): array {
     ];
 }
 
+/** 對帳單總覽的篩選參數（sheet_list 與 sheet_list_export 共用；
+    與 acc_ar_filter 同理，必須定義在 switch 之外才會被宣告到）。 */
+function acc_sheet_list_filter(): array {
+    $s = $_POST ?: $_GET;
+    return [
+        'side'     => trim((string)($s['side'] ?? 'all')),
+        'status'   => trim((string)($s['status'] ?? 'all')),
+        'bm_from'  => trim((string)($s['bm_from'] ?? '')),
+        'bm_to'    => trim((string)($s['bm_to'] ?? '')),
+        'kw'       => acc_u8(trim((string)($s['kw'] ?? ''))),
+        'only_diff'=> !empty($s['only_diff']) && $s['only_diff'] !== '0',
+        'only_open'=> !empty($s['only_open']) && $s['only_open'] !== '0',
+        'sort'     => trim((string)($s['sort'] ?? 'billing_month')),
+        'dir'      => (($s['dir'] ?? 'desc') === 'asc') ? 'asc' : 'desc',
+        'page'     => max(1, (int)($s['page'] ?? 1)),
+        'per_page' => (int)($s['per_page'] ?? 20),
+    ];
+}
+
 /** 依單據類型判斷該用哪一側的對帳權限（業務只能碰應收、生管只能碰應付）。
     與 acc_ar_filter 同理，必須定義在 switch 之外才會被宣告到。 */
 function acc_recon_guard(array $perms, string $srcType): void {
@@ -1062,14 +1081,50 @@ case 'sheet_reopen': {
 
 /* 底稿清單（會計／稽核看誰對完、誰還卡著、哪些有差額） */
 case 'sheet_list': {
-    $s = $_POST ?: $_GET;
-    acc_out(acc_sheet_list($db, [
-        'side'    => trim((string)($s['side'] ?? 'all')),
-        'status'  => trim((string)($s['status'] ?? 'all')),
-        'bm_from' => trim((string)($s['bm_from'] ?? '')),
-        'bm_to'   => trim((string)($s['bm_to'] ?? '')),
-        'kw'      => acc_u8(trim((string)($s['kw'] ?? ''))),
-    ]));
+    acc_out(acc_sheet_list($db, acc_sheet_list_filter()));
+}
+
+/* 對帳單總覽匯出（總覽層級：一列一份底稿，含差額與經手人） */
+case 'sheet_list_export': {
+    $f = acc_sheet_list_filter();
+    $f['per_page'] = 0;                       // 匯出一律匯全部符合條件的資料，不受分頁影響
+    $r = acc_sheet_list($db, $f);
+
+    $sideLbl = ['ar' => '應收', 'ap' => '應付'];
+    $stLbl   = ['draft' => '暫存中', 'confirmed' => '已確認鎖帳', 'reopened' => '已退回重對'];
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="對帳單總覽_' . date('Ymd_His') . '.csv"');
+    $o = fopen('php://output', 'w');
+    fwrite($o, "\xEF\xBB\xBF");
+    fputcsv($o, ['對帳單總覽', '匯出時間', date('Y-m-d H:i:s'),
+                 '月份區間', ($f['bm_from'] ?: '不限') . ' ~ ' . ($f['bm_to'] ?: '不限'),
+                 '側別', $sideLbl[$f['side']] ?? '全部',
+                 '狀態', $stLbl[$f['status']] ?? '全部',
+                 '關鍵字', $f['kw'],
+                 '附加篩選', trim(($f['only_diff'] ? '只看有差額 ' : '') . ($f['only_open'] ? '只看還沒對完' : '')) ?: '無']);
+    $sm = $r['summary'];
+    fputcsv($o, ['總份數', $sm['count'], '暫存中', $sm['draft'], '已確認', $sm['confirmed'],
+                 '已退回', $sm['reopened'], '有差額', $sm['diff_cnt']]);
+    fputcsv($o, []);
+    fputcsv($o, ['側別', '對象', '對象編號', '帳款月份', '狀態', '總列數', '已勾選', '調整列數',
+                 '我方未稅', '對方紙本', '差額', '稅額', '含稅合計',
+                 '暫存人', '暫存時間', '確認人', '確認時間', '退回人', '退回時間', '退回原因', '備註']);
+    foreach ($r['rows'] as $x) {
+        fputcsv($o, [
+            $sideLbl[$x['side']] ?? $x['side'], $x['party_name'], $x['party_id'], $x['billing_month'],
+            $stLbl[$x['status']] ?? $x['status'],
+            $x['line_cnt'], $x['checked_cnt'], $x['adj_cnt'],
+            round((float)$x['our_total']),
+            $x['their_total'] === null ? '' : round((float)$x['their_total']),
+            $x['diff'] === null ? '' : round((float)$x['diff']),
+            round((float)$x['tax_amount']), round((float)$x['total_amount']),
+            $x['saved_by_name'], $x['saved_at'],
+            $x['confirmed_by_name'], $x['confirmed_at'],
+            $x['reopen_by_name'], $x['reopen_at'], $x['reopen_reason'], $x['memo'],
+        ]);
+    }
+    fclose($o);
+    exit;
 }
 
 /* 底稿匯出（含原始值與調整後對照，供會計／稽核核對） */
