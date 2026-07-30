@@ -21,7 +21,11 @@ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function
 /** 小數尾 0 省略：3.50→3.5、3.00→3 */
 function nz(v) { if (v === null || v === '' || v === undefined) return ''; var n = parseFloat(v);
     if (isNaN(n)) return ''; return String(parseFloat(n.toFixed(4))); }
-function money(v) { var n = parseFloat(v || 0); return n.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
+// 金額：null＝角色沒有「看得到金額」權限，後端已挖掉，顯示遮蔽符號而不是 0
+function money(v) {
+    if (v === null || v === undefined) return '＊＊＊';
+    var n = parseFloat(v || 0); return n.toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
 function api(action, data, method) {
     var opt = { url: API, dataType: 'json' };
     if (method === 'POST') { opt.type = 'POST'; opt.data = $.extend({ action: action }, data || {}); }
@@ -144,12 +148,14 @@ function bindAll() {
         $('#view-list').toggle(['mine', 'buy', 'sign', 'unpaid', 'all'].indexOf(TAB) > -1);
         $('#view-master').toggle(TAB === 'master');
         $('#view-setting').toggle(TAB === 'setting');
-        if (TAB === 'master') loadItems(); else if (TAB !== 'setting') reload();
+        if (TAB === 'master') loadItems();
+        else if (TAB === 'setting') { if ($('#roleList').length) loadRoles(); }
+        else reload();
     });
     $('#btnSearch').on('click', function () { PAGE = 1; reload(); });
     $('#pageSize').on('change', function () { PS = parseInt(this.value, 10) || 10; PAGE = 1; reload(); });
     $('#btnCsv').on('click', exportCsv);
-    $('#btnRoleHelp').on('click', function () { openMask('mRole'); });
+    $('#btnRoleHelp').on('click', function () { openMask('mRole'); loadRoleHelp(); });
     $('#btnNew').on('click', function () { openReq(0); });
     $('#btnSaveReq').on('click', saveReq);
     $('#pkGo').on('click', searchSpecs);
@@ -267,8 +273,10 @@ function renderList(r) {
                   (x.purpose_label ? '<br>' + esc(x.purpose_label) : '')
                 : '<span class="hint">—</span>') + '</td>' +
             '<td>' + esc(x.requester_name || '') + '</td><td>' + esc(x.dept_name || '') + '</td>' +
-            '<td>' + esc(x.item_cnt) + '</td><td class="l">' + esc(x.vendor_name || '') + '</td>' +
-            '<td class="r money">' + (parseFloat(x.grand_total) ? money(x.grand_total) : '—') + '</td>' +
+            '<td>' + esc(x.item_cnt) + '</td>' +
+            '<td class="l">' + (x.masked_vendor ? '＊＊＊' : esc(x.vendor_name || '')) + '</td>' +
+            '<td class="r money">' + (x.masked_amount ? '＊＊＊'
+                : (parseFloat(x.grand_total) ? money(x.grand_total) : '—')) + '</td>' +
             '<td>' + pill(x.status) + '</td>' +
             '<td><span class="pill ' + (x.pay_status === 'paid' ? 'paid' : 'unpaid') + '">' +
                 (x.pay_status === 'paid' ? '已付' : '未付') + '</span></td>' +
@@ -480,6 +488,142 @@ function saveReq() {
         alert('已' + (EDIT.id ? '儲存' : '送出') + '：' + r.req_no);
     }).fail(fail).always(function () { $('#btnSaveReq').prop('disabled', false); });
 }
+
+/* ── 角色權限說明（動態產生：角色可改名／可改內容，寫死的說明表會失真） ── */
+function loadRoleHelp() {
+    api('role_matrix').done(function (r) {
+        var byGroup = { view: [], op: [] };
+        (r.features || []).forEach(function (f) { byGroup[f.group].push(f); });
+        // 「由上而下包含」的鏈：勾了上層就自動有下層，說明要一起列出來才不會誤解
+        var chain = { purchase_admin: ['purchase_buy', 'purchase_receive', 'purchase_apply', 'purchase_view'],
+                      purchase_buy: ['purchase_receive', 'purchase_apply', 'purchase_view'],
+                      purchase_receive: ['purchase_apply', 'purchase_view'],
+                      purchase_apply: [] };
+        var h = '';
+        (r.roles || []).forEach(function (ro) {
+            var codes = ro.codes.slice();
+            if (ro.is_system) codes = ['all'];
+            // 展開包含關係
+            codes.slice().forEach(function (c) { (chain[c] || []).forEach(function (x) {
+                if (codes.indexOf(x) < 0) codes.push(x); }); });
+            if (codes.indexOf('purchase_buy') > -1 && codes.indexOf('purchase_form_full') < 0) codes.push('purchase_form_full');
+            function labels(list) {
+                if (codes.indexOf('all') > -1) return '<span style="color:#8A5A2B;">全部</span>';
+                var t = list.filter(function (f) { return codes.indexOf(f.code) > -1; })
+                            .map(function (f) { return esc(f.label); });
+                return t.length ? t.join('<br>') : '<span class="hint">—</span>';
+            }
+            h += '<tr><td><b>' + esc(ro.role_name) + '</b>' +
+                 (ro.is_system ? '<br><span class="hint">系統角色．固定全權</span>' : '') + '</td>' +
+                 '<td class="l">' + labels(byGroup.view) + '</td>' +
+                 '<td class="l">' + labels(byGroup.op) + '</td></tr>';
+        });
+        $('#roleHelpBody').html(h || '<tr><td colspan="3" class="pq-empty">尚無角色</td></tr>');
+    }).fail(function (m) {
+        $('#roleHelpBody').html('<tr><td colspan="3" class="pq-empty">' + esc(m) + '</td></tr>');
+    });
+}
+
+/* ── 角色權限設定（沿用全站 Roles_API + role_features，module=purchase） ──
+   角色名稱與功能勾選都由管理員自訂；程式不再依賴固定的 role_code。 */
+var RAPI = '../../src/store/Roles_API.php';
+var ROLES = [], CURROLE = 0;
+
+function loadRoles(then) {
+    $.getJSON(RAPI, { action: 'get_roles', module: 'purchase' }, function (res) {
+        ROLES = res.data || [];
+        var h = '';
+        ROLES.forEach(function (r) {
+            var sys = String(r.is_system) === '1';
+            h += '<div class="pq-role-item' + (sys ? ' sys' : '') + '" data-id="' + r.role_id + '">' +
+                 esc(r.role_name) + (sys ? '（系統．固定全權）' : '') + '</div>';
+        });
+        $('#roleList').html(h || '<div class="hint" style="padding:10px;">尚無角色</div>');
+        if (CURROLE) $('.pq-role-item[data-id="' + CURROLE + '"]').addClass('on');
+        if (typeof then === 'function') then();
+    });
+}
+
+function selRole(id) {
+    var r = ROLES.filter(function (x) { return String(x.role_id) === String(id); })[0];
+    if (!r) return;
+    if (String(r.is_system) === '1') { alert('系統角色「' + r.role_name + '」固定擁有全部權限，不可修改'); return; }
+    CURROLE = id;
+    $('.pq-role-item').removeClass('on');
+    $('.pq-role-item[data-id="' + id + '"]').addClass('on');
+    $('#roleEditHint').hide(); $('#roleEdit').show();
+    $('#roleName').val(r.role_name);
+
+    var vh = '', oh = '';
+    (META.features || []).forEach(function (f) {
+        var row = '<label class="pq-feat"><input type="checkbox" class="featcb" value="' + esc(f.code) + '"> ' +
+                  esc(f.label) + '</label>';
+        if (f.group === 'view') vh += row; else oh += row;
+    });
+    $('#featView').html(vh); $('#featOp').html(oh);
+    $.getJSON(RAPI, { action: 'get_role_features', role_id: id }, function (res) {
+        var has = res.data || [];
+        $('.featcb').each(function () {
+            $(this).prop('checked', has.indexOf(this.value) > -1 || has.indexOf('all') > -1);
+        });
+    });
+    loadRoleUsers(id);
+}
+
+function loadRoleUsers(rid) {
+    $.getJSON(RAPI, { action: 'get_users', module: 'purchase' }, function (res) {
+        var h = '';
+        (res.data || []).forEach(function (u) {
+            var owned = (u.roles || []).some(function (x) { return String(x.role_id) === String(rid); });
+            h += '<label class="pq-feat"><input type="checkbox" class="rucb" data-uid="' + u.id + '"' +
+                 (owned ? ' checked' : '') + '> ' + esc(u.user_cname) +
+                 ' <span class="hint">(' + esc(u.user_uname) + ')</span></label>';
+        });
+        $('#roleUsers').html(h || '<span class="hint">查無使用者</span>');
+    });
+}
+
+$(document).on('click', '#roleList .pq-role-item', function () { selRole($(this).data('id')); });
+$(document).on('click', '#btnRoleAdd', function () {
+    var n = prompt('新角色名稱（例：倉管、廠務、只看報表）：');
+    if (!n || !$.trim(n)) return;
+    $.post(RAPI, { action: 'save_role', role_name: $.trim(n), module: 'purchase' }, function (r) {
+        if (!r.success) { alert(r.message); return; }
+        // 新角色一開始沒有任何功能，載完直接開起來讓管理員勾
+        loadRoles(function () { selRole(r.role_id); });
+    }, 'json');
+});
+$(document).on('click', '#btnRoleRename', function () {
+    if (!CURROLE) return;
+    var n = $.trim($('#roleName').val() || '');
+    if (!n) { alert('請輸入角色名稱'); return; }
+    $.post(RAPI, { action: 'save_role', role_id: CURROLE, role_name: n }, function (r) {
+        if (!r.success) { alert(r.message); return; }
+        loadRoles(); alert('已改名');
+    }, 'json');
+});
+$(document).on('click', '#btnRoleDel', function () {
+    if (!CURROLE) return;
+    if (!confirm('確定刪除此角色？擁有此角色的人會失去對應權限（不會刪到使用者本身）。')) return;
+    $.post(RAPI, { action: 'delete_role', role_id: CURROLE }, function (r) {
+        if (!r.success) { alert(r.message); return; }
+        CURROLE = 0; $('#roleEdit').hide(); $('#roleEditHint').show();
+        $('#roleUsers').html('<span class="hint">請先選一個角色</span>');
+        loadRoles();
+    }, 'json');
+});
+$(document).on('click', '#btnRoleFeatSave', function () {
+    if (!CURROLE) return;
+    var feats = $('.featcb:checked').map(function () { return this.value; }).get();
+    $.post(RAPI, { action: 'save_role_features', role_id: CURROLE, features: JSON.stringify(feats) },
+        function (r) { alert(r.success ? '已儲存。受影響的人重新整理頁面後生效。' : r.message); }, 'json');
+});
+$(document).on('change', '#roleUsers .rucb', function () {
+    if (!CURROLE) return;
+    var uid = $(this).data('uid'), on = this.checked, $cb = $(this);
+    $.post(RAPI, { action: on ? 'assign_user_role' : 'remove_user_role', user_id: uid, role_id: CURROLE },
+        function (r) { if (!r.success) { alert(r.message); $cb.prop('checked', !on); } }, 'json');
+});
 
 /* ── 用途歸屬（單頭與逐列共用同一個選擇器） ── */
 // 成本要歸得了戶，訂單一律綁 order_track.Order_id、料號一律綁 d_setting.d_id，
@@ -710,16 +854,18 @@ function renderDetail(q) {
             : '<span class="hint">未指定</span>') +
         fld('申請人', esc(q.requester_name) + '／' + esc(q.dept_name || '')) +
         fld('申請日', String(q.Created_At || '').substr(0, 16)) + fld('希望到貨日', q.need_date || '—') +
-        fld('廠商', esc(q.vendor_name || '—')) + fld('稅別', esc(META.tax_types[q.tax_type] || '')) +
+        fld('廠商', q.masked_vendor ? '＊＊＊' : esc(q.vendor_name || '—')) +
+        fld('稅別', esc(META.tax_types[q.tax_type] || '')) +
         fld('未稅小計', '<span class="money">' + money(q.subtotal) + '</span>') +
         fld('稅額', '<span class="money">' + money(q.tax_amount) + '</span>') +
         fld('含稅總額', '<b class="money" style="font-size:16px;color:#8A5A2B;">' + money(q.grand_total) + '</b>') +
         fld('簽核', q.need_levels > 0 ? ('需 ' + q.need_levels + ' 層，已完成 ' + q.level_done + ' 層' +
             (q.pending_signers ? '（待簽：' + esc(q.pending_signers) + '）' : '')) : '未達門檻，免簽核') +
         fld('採購', esc(q.buyer_name || '—')) + fld('預計到貨', q.expected_date || '—') +
-        fld('發票', esc(q.invoice_no || '—') + (q.invoice_date ? '（' + q.invoice_date + '）' : '')) +
-        fld('付款', '<span class="pill ' + (q.pay_status === 'paid' ? 'paid' : 'unpaid') + '">' +
-            (q.pay_status === 'paid' ? '已付' : '未付') + '</span> ' + esc(q.pay_date || '') + ' ' + esc(q.pay_method || '')) +
+        fld('發票', q.masked_vendor ? '＊＊＊' : esc(q.invoice_no || '—') + (q.invoice_date ? '（' + q.invoice_date + '）' : '')) +
+        fld('付款', q.masked_vendor ? '＊＊＊'
+            : '<span class="pill ' + (q.pay_status === 'paid' ? 'paid' : 'unpaid') + '">' +
+              (q.pay_status === 'paid' ? '已付' : '未付') + '</span> ' + esc(q.pay_date || '') + ' ' + esc(q.pay_method || '')) +
         '</div>' + (q.reason ? '<div class="hint" style="margin-top:6px;">事由：' + esc(q.reason) + '</div>' : '') + '</div>';
 
     h += '<div class="pq-wrap"><table class="pq-table"><thead><tr><th>品名</th><th>規格</th><th>採購料號</th>' +

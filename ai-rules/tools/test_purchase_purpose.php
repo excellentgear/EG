@@ -156,6 +156,64 @@ try {
     } else {
         echo "  [略] 找不到乾淨的受測使用者，跳過\n";
     }
+    echo "\n=== 7. 自訂角色：名稱與功能都由管理員決定 ===\n";
+    $tu3 = $db->query("SELECT u.id, u.user_status FROM user u
+                       WHERE u.user_status NOT IN (9,90) AND u.id<>1
+                         AND NOT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                                         WHERE ur.user_id=u.id AND r.module='purchase')
+                       ORDER BY u.id LIMIT 1 OFFSET 1")->fetch(PDO::FETCH_ASSOC);
+    if (!$tu3) { echo "  [略] 找不到第三個乾淨的受測使用者\n"; }
+    else {
+        // 管理員自建一個名字完全自訂的角色，只勾「登錄到貨」
+        $db->prepare("INSERT INTO roles (role_code, role_name, module) VALUES (?,?,'purchase')")
+           ->execute(['role_test_' . $tu3['id'], '倉庫小幫手']);
+        $nrid = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO role_features (role_id, feature_code) VALUES (?,'purchase_receive')")->execute([$nrid]);
+        $db->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?,?)")->execute([$tu3['id'], $nrid]);
+        $p = purchase_perms($db, ['id' => (int)$tu3['id'], 'user_status' => $tu3['user_status']]);
+        ck('自訂名稱的角色也算得出權限（勾到貨入庫→canReceive）', $p['canReceive'] === true);
+        ck('沒勾的上層權限不會自動給（canBuy=false）', $p['canBuy'] === false);
+        ck('包含關係有效（到貨入庫→自動含申請與檢閱）', $p['canApply'] === true && $p['canView'] === true);
+        ck('沒勾採購版申請單→用精簡版', $p['canFormFull'] === false);
+
+        // 改名不影響判定（判定看功能碼，不看名稱）
+        $db->prepare("UPDATE roles SET role_name=? WHERE role_id=?")->execute(['倉管(改過名字)', $nrid]);
+        $p2 = purchase_perms($db, ['id' => (int)$tu3['id'], 'user_status' => $tu3['user_status']]);
+        ck('角色改名後權限不變', $p2['canReceive'] === true && $p2['canBuy'] === false);
+        ck('頁面標頭顯示的是自訂的角色名稱',
+           strpos(purchase_role_names($db, (int)$tu3['id'], $p2), '倉管(改過名字)') !== false,
+           '得到：' . purchase_role_names($db, (int)$tu3['id'], $p2));
+
+        // 加勾「看得到金額」後就看得到
+        ck('未勾可視金額→canViewAmount=false', $p2['canViewAmount'] === false);
+        $db->prepare("INSERT INTO role_features (role_id, feature_code) VALUES (?,'purchase_view_amount')")->execute([$nrid]);
+        $p3 = purchase_perms($db, ['id' => (int)$tu3['id'], 'user_status' => $tu3['user_status']]);
+        ck('勾了可視金額→canViewAmount=true', $p3['canViewAmount'] === true);
+    }
+
+    echo "\n=== 8. 可視內容遮蔽（後端就挖掉，不是只有前端隱藏） ===\n";
+    $noSee = ['canViewAmount' => false, 'canViewVendor' => false];
+    $sample = ['requester_id' => 999888, 'subtotal' => '100.00', 'tax_amount' => '5.00',
+               'grand_total' => '105.00', 'vendor_name' => '某廠商', 'invoice_no' => 'AB123',
+               'pay_method' => '匯款',
+               'items' => [['unit_price' => '10.0000', 'amount' => '100.00', 'est_price' => '9.0000']]];
+    $m = purchase_mask_row($sample, $noSee, 1, false);
+    ck('金額被挖掉', $m['grand_total'] === null && $m['subtotal'] === null && $m['tax_amount'] === null);
+    ck('品項單價／小計也被挖掉',
+       $m['items'][0]['unit_price'] === null && $m['items'][0]['amount'] === null && $m['items'][0]['est_price'] === null);
+    ck('廠商／發票／付款方式被挖掉',
+       $m['vendor_name'] === null && $m['invoice_no'] === null && $m['pay_method'] === null);
+    ck('有標記讓前端顯示遮蔽符號', ($m['masked_amount'] ?? 0) === 1 && ($m['masked_vendor'] ?? 0) === 1);
+
+    // 例外一：自己的單看得到
+    $m2 = purchase_mask_row($sample, $noSee, 999888, false);
+    ck('自己提的單不遮蔽', $m2['grand_total'] === '105.00' && $m2['vendor_name'] === '某廠商');
+    // 例外二：輪到自己簽的單看得到（不然沒辦法簽）
+    $m3 = purchase_mask_row($sample, $noSee, 1, true);
+    ck('輪到自己簽核的單不遮蔽', $m3['grand_total'] === '105.00');
+    // 有權限者當然看得到
+    $m4 = purchase_mask_row($sample, ['canViewAmount' => true, 'canViewVendor' => true], 1, false);
+    ck('有可視權限者不遮蔽', $m4['grand_total'] === '105.00' && !isset($m4['masked_amount']));
 } finally {
     $db->rollBack();
 }

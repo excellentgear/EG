@@ -118,6 +118,17 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 .flow .cur{background:var(--pq-warm);color:#fff;border-radius:9px;padding:1px 8px;}
 .flow .dn{background:var(--pq-soft);color:var(--pq-ink);border-radius:9px;padding:1px 8px;}
 .hint{font-size:12px;color:var(--pq-ink2);}
+/* 角色權限設定：三欄（角色清單／角色內容／擁有者） */
+.pq-role-mgr{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;}
+.pq-role-col{border:1px solid var(--pq-line);border-radius:6px;background:#fff;min-width:200px;}
+.pq-role-hd{background:var(--pq-soft);color:var(--pq-deep);font-size:12px;font-weight:bold;
+  padding:5px 10px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between;align-items:center;}
+.pq-role-item{padding:6px 10px;border-bottom:1px solid var(--pq-line);cursor:pointer;font-size:13px;}
+.pq-role-item:hover{background:#FFF3E0;}
+.pq-role-item.on{background:#F0A24B;color:#fff;font-weight:bold;}
+.pq-role-item.sys{color:#a5866a;cursor:not-allowed;}
+.pq-feat{display:block;font-size:13px;font-weight:normal;padding:2px 0;cursor:pointer;}
+.pq-feat input{width:auto;margin:0 6px 0 0;}
 /* 附件類別：改成標籤直接點，比下拉少一次操作 */
 .att-tag{display:inline-block;border:1px solid #D8BE93;background:#fff;color:var(--pq-ink);
   border-radius:12px;padding:2px 12px;font-size:12px;cursor:pointer;margin-right:4px;}
@@ -299,6 +310,51 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                 </div>
                 <button class="pq-btn warm" id="btnSaveCfg"><i class="fa fa-save"></i> 儲存設定</button>
             </div>
+
+            <?php if ($perms['isAdmin']): ?>
+            <!-- 角色權限：名稱與可操作/可視內容都由管理員自訂（沿用全站 Roles_API + role_features） -->
+            <div class="pq-sec">
+                <h5>角色權限設定（角色名稱與能做／看得到什麼，都由你自己定）</h5>
+                <p class="hint" style="margin-bottom:8px;">
+                    左邊選或新增角色 → 中間改名稱、勾功能 → 右邊勾誰擁有這個角色。
+                    <b>權限由上而下包含</b>：勾了「詢價下單」就自動含到貨入庫、申請、檢閱，不必逐個勾。
+                    此處為本頁專用角色，與其他頁面不連動；「管理者」固定擁有全部權限、不可修改。
+                </p>
+                <div class="pq-role-mgr">
+                    <div class="pq-role-col" style="flex:0 0 210px;">
+                        <div class="pq-role-hd">角色
+                            <button class="pq-btn warm" id="btnRoleAdd" style="padding:1px 8px;">＋ 新增</button></div>
+                        <div id="roleList"></div>
+                    </div>
+                    <div class="pq-role-col" style="flex:1;">
+                        <div class="pq-role-hd">角色內容</div>
+                        <div id="roleEdit" style="display:none;padding:10px;">
+                            <div class="pq-fld" style="margin-bottom:8px;"><label>角色名稱</label>
+                                <div style="display:flex;gap:6px;">
+                                    <input type="text" id="roleName" style="flex:1;">
+                                    <button class="pq-btn" id="btnRoleRename">改名</button>
+                                    <button class="pq-btn danger" id="btnRoleDel">刪除</button>
+                                </div>
+                            </div>
+                            <div style="font-size:12px;font-weight:bold;color:var(--pq-deep);margin:8px 0 4px;">可視內容（看得到什麼）</div>
+                            <div id="featView"></div>
+                            <div style="font-size:12px;font-weight:bold;color:var(--pq-deep);margin:10px 0 4px;">可操作（能做什麼）</div>
+                            <div id="featOp"></div>
+                            <button class="pq-btn warm" id="btnRoleFeatSave" style="margin-top:10px;">
+                                <i class="fa fa-save"></i> 儲存功能</button>
+                            <p class="hint" style="margin-top:6px;">「看得到金額／廠商」沒勾的人，連 API 回應裡都拿不到這些欄位；
+                               但<b>自己提的單</b>與<b>輪到自己簽核的單</b>一律看得到（不然沒辦法簽）。</p>
+                        </div>
+                        <div id="roleEditHint" class="hint" style="padding:24px;text-align:center;">請在左側選一個角色，或按「＋ 新增」</div>
+                    </div>
+                    <div class="pq-role-col" style="flex:0 0 250px;">
+                        <div class="pq-role-hd">擁有此角色的人</div>
+                        <div id="roleUsers" style="max-height:420px;overflow:auto;padding:8px;font-size:13px;">
+                            <span class="hint">請先選一個角色</span></div>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
         </div>
         <?php endif; ?>
 <?php endif; ?>
@@ -607,19 +663,18 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 <div class="pq-mask" id="mRole"><div class="pq-modal">
     <div class="m-head"><span>角色權限說明</span><span class="m-close" onclick="closeMask('mRole')">✕</span></div>
     <div class="m-body">
-        <table class="pq-table"><thead><tr><th>角色</th><th>可做的事</th></tr></thead><tbody>
-        <tr><td>申請採購</td><td class="l">提出／修改自己的申請單、上傳附件、查看自己的單</td></tr>
-        <tr><td>到貨入庫</td><td class="l">上列全部，加上登錄到貨（入庫／直接交付／不列管）</td></tr>
-        <tr><td>採購作業</td><td class="l">上列全部，加上詢價填金額、下單、記帳、結案、維護採購品主檔</td></tr>
-        <tr><td>採購管理員</td><td class="l">上列全部，加上標籤／規格屬性設定、簽核門檻與附件路徑設定、刪除任何單據</td></tr>
-        <tr><td>高階核准</td><td class="l">金額超過第二層門檻時的第二關簽核人</td></tr>
-        <tr><td>採購檢閱</td><td class="l">唯讀查看全部單據與統計</td></tr>
-        <tr><td>完整申請單</td><td class="l">看到<b>採購版</b>申請單（多了找採購品綁料號、標題手填、預估單價、到貨處理、附件分類）。<br>
-            沒有這個角色的人看到的是<b>精簡版</b>：只填用途、到貨日、急件、品名數量，其餘由採購接手補齊。<br>
-            <span class="hint">採購作業以上自動視為有此角色，不必另外指派。</span></td></tr>
-        <tr><td>管理者</td><td class="l">固定擁有全部權限</td></tr>
-        </tbody></table>
-        <p class="hint" style="margin-top:8px;">第一層簽核人＝申請人的部門主管，由系統依代理人設定自動解析（主管當日有行程時交代理人；代理人就是申請人時自動升一級迴避）。</p>
+        <p class="hint" style="margin-bottom:8px;">角色名稱與內容都是管理員自己設定的，以下是<b>目前實際的設定</b>（管理員可在「設定」分頁調整）。</p>
+        <div class="pq-wrap">
+            <table class="pq-table"><thead><tr><th style="width:24%;">角色</th><th>看得到什麼</th><th>能做什麼</th></tr></thead>
+                <tbody id="roleHelpBody"><tr><td colspan="3" class="pq-empty">載入中…</td></tr></tbody>
+            </table>
+        </div>
+        <p class="hint" style="margin-top:8px;">
+            權限<b>由上而下包含</b>：勾了「詢價下單」就自動含到貨入庫、申請、檢閱。<br>
+            <b>沒有任何角色</b>的人進不了本頁；<b>管理者</b>固定擁有全部權限。<br>
+            「看得到金額／廠商」沒勾的人，<b>自己提的單</b>與<b>輪到自己簽核的單</b>仍然看得到（不然沒辦法簽）。<br>
+            簽核第一層＝申請人的部門主管，由系統依代理人設定自動解析（主管當日有行程時交代理人；代理人就是申請人時自動升一級迴避）。
+        </p>
     </div>
     <div class="m-foot"><button class="pq-btn" onclick="closeMask('mRole')">關閉</button></div>
 </div></div>

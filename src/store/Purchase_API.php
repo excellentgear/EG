@@ -77,7 +77,8 @@ case 'meta': {
     $tags  = $db->query("SELECT tag_id, tag_name, color FROM purchase_tag WHERE is_active=1
                          ORDER BY sort_order, tag_id")->fetchAll(PDO::FETCH_ASSOC);
     $resp = [
-        'perms' => $perms, 'role_label' => purchase_role_label($perms),
+        'perms' => $perms, 'role_label' => purchase_role_names($db, $uid, $perms),
+        'features' => PURCHASE_FEATURES,
         'me' => ['id' => $uid, 'name' => $uname, 'dept_id' => $u['dept_id'], 'dept_name' => $u['dept_name']],
         'today' => date('Y-m-d'),
         'categories' => $cats, 'units' => $units, 'locations' => $locs, 'tags' => $tags,
@@ -406,6 +407,27 @@ case 'spec_search': {
     jout(['specs' => $st->fetchAll(PDO::FETCH_ASSOC)]);
 }
 
+/** 目前實際的角色×功能對照（給「角色權限說明」用；角色可改名，寫死的說明會失真） */
+case 'role_matrix': {
+    $st = $db->query("SELECT r.role_id, r.role_name, r.is_system,
+                      GROUP_CONCAT(rf.feature_code) codes
+                      FROM roles r
+                      LEFT JOIN role_features rf ON rf.role_id=r.role_id
+                      WHERE r.module='purchase' OR r.is_system=1
+                      GROUP BY r.role_id, r.role_name, r.is_system
+                      ORDER BY r.is_system DESC, r.role_id");
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[] = [
+            'role_id'   => (int)$r['role_id'],
+            'role_name' => $r['role_name'],
+            'is_system' => (int)$r['is_system'],
+            'codes'     => $r['codes'] === null ? [] : array_values(array_unique(explode(',', $r['codes']))),
+        ];
+    }
+    jout(['roles' => $out, 'features' => PURCHASE_FEATURES]);
+}
+
 /** 用途歸屬的選擇器：訂單／BOM／料號（一律回主鍵，前端只拿去顯示） */
 case 'purpose_search': {
     $type = strtoupper(trim($_GET['type'] ?? ''));
@@ -546,6 +568,14 @@ case 'req_export': {
         $st->execute($bind);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     }
+    // 可視內容遮蔽：一律後端挖掉，前端隱藏擋不住直接看 API 回應的人
+    $rows = array_map(function ($r) use ($db, $perms, $uid) {
+        return purchase_mask_row($r, $perms, $uid, purchase_can_sign($db, $r, $uid, $perms));
+    }, $rows);
+    if (!$perms['canViewAmount']) {
+        // 統計卡的金額也要一起蓋掉，否則從總額還是推得出來
+        $stats['sum_total'] = null; $stats['sum_unpaid'] = null; $stats['masked_amount'] = 1;
+    }
     jout($isExport
         ? ['rows' => $rows, 'stats' => $stats]
         : ['rows' => $rows, 'stats' => $stats, 'total' => $total,
@@ -624,6 +654,8 @@ case 'req_detail': {
             $req['pending_level']   = $lv;
         }
     }
+    // 可視內容遮蔽：沒勾「看得到金額／廠商」就挖掉（自己的單、輪到自己簽的單例外）
+    $req = purchase_mask_row($req, $perms, $uid, (bool)$req['can']['sign']);
     jout(['req' => $req]);
 }
 

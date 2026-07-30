@@ -41,6 +41,33 @@ define('PURCHASE_PURPOSE_TYPES', [
     'EQUIP' => '設備維修／治工具',
     'OTHER' => '其他',
 ]);
+/** 本模組的功能碼（角色可自訂名稱＋自己勾要哪些功能，存 role_features）
+ *  group：view＝可視內容（看得到什麼）／op＝可操作（能做什麼）
+ *  注意：權限仍「由上而下包含」（勾了採購作業就自動含到貨入庫、申請、檢閱），
+ *  所以只勾最上層那一個就夠，不必逐個勾。 */
+define('PURCHASE_FEATURES', [
+    ['code' => 'purchase_view',        'group' => 'view', 'label' => '檢閱全部單據與統計（沒勾就只看得到自己的單）'],
+    ['code' => 'purchase_view_amount', 'group' => 'view', 'label' => '看得到金額（單價、小計、總額、統計卡）'],
+    ['code' => 'purchase_view_vendor', 'group' => 'view', 'label' => '看得到廠商與發票／付款資訊'],
+    ['code' => 'purchase_apply',       'group' => 'op',   'label' => '提出／修改自己的申請單、上傳附件'],
+    ['code' => 'purchase_form_full',   'group' => 'op',   'label' => '使用採購版申請單（找採購品、標題、預估單價、到貨處理、附件分類）'],
+    ['code' => 'purchase_receive',     'group' => 'op',   'label' => '登錄到貨（入庫待領／直接交付／不列管）'],
+    ['code' => 'purchase_buy',         'group' => 'op',   'label' => '詢價填金額、下單、發票付款、結案、維護採購品主檔'],
+    ['code' => 'purchase_approve_top', 'group' => 'op',   'label' => '高階核准（金額超過第二層門檻時的第二關簽核人）'],
+    ['code' => 'purchase_admin',       'group' => 'op',   'label' => '採購設定（標籤、規格屬性、簽核門檻、附件路徑）、刪除任何單據'],
+]);
+
+/** 預設角色一次建立時要附帶的功能碼（既有角色沿用原本行為，不改變任何人現有權限） */
+define('PURCHASE_DEFAULT_ROLE_FEATURES', [
+    'purchase_view'        => ['purchase_view', 'purchase_view_amount', 'purchase_view_vendor'],
+    'purchase_apply'       => ['purchase_apply', 'purchase_view_amount'],
+    'purchase_receive'     => ['purchase_receive', 'purchase_view_amount'],
+    'purchase_buy'         => ['purchase_buy', 'purchase_view', 'purchase_view_amount', 'purchase_view_vendor'],
+    'purchase_admin'       => ['purchase_admin', 'purchase_view', 'purchase_view_amount', 'purchase_view_vendor'],
+    'purchase_approve_top' => ['purchase_approve_top', 'purchase_view_amount', 'purchase_view_vendor'],
+    'purchase_form_full'   => ['purchase_form_full'],
+]);
+
 /** 單據狀態 */
 define('PURCHASE_STATUS', [
     'submitted' => '待詢價',
@@ -227,10 +254,20 @@ function purchase_ensure_schema(PDO $db): void
         ['purchase_admin',       '採購管理員'],
         ['purchase_form_full',   '完整申請單'],   // 看得到採購版（進階）申請單，一般使用者用精簡版
     ] as $r) {
-        $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='purchase' LIMIT 1");
+        $st = $db->prepare("SELECT role_id FROM roles WHERE role_code=? AND module='purchase' LIMIT 1");
         $st->execute([$r[0]]);
-        if (!$st->fetchColumn()) {
+        $rid = (int)$st->fetchColumn();
+        if (!$rid) {
             $db->prepare("INSERT INTO roles (role_code, role_name, module) VALUES (?,?,'purchase')")->execute([$r[0], $r[1]]);
+            $rid = (int)$db->lastInsertId();
+        }
+        // 預設角色補上對應功能碼。只在該角色完全沒有功能碼時植入，
+        // 否則管理員自己調過的勾選會被蓋掉（角色名稱與功能都可自訂，程式不該回頭覆寫）
+        $st = $db->prepare("SELECT COUNT(*) FROM role_features WHERE role_id=?");
+        $st->execute([$rid]);
+        if ((int)$st->fetchColumn() === 0) {
+            $ins = $db->prepare("INSERT IGNORE INTO role_features (role_id, feature_code) VALUES (?,?)");
+            foreach (PURCHASE_DEFAULT_ROLE_FEATURES[$r[0]] ?? [$r[0]] as $fc) $ins->execute([$rid, $fc]);
         }
     }
 }
@@ -292,10 +329,17 @@ function purchase_role_users(PDO $db, string $code): array
     return array_values(array_unique(array_filter($out)));
 }
 
+/**
+ * 權限判定：以「角色勾選的功能碼」(role_features) 為主，
+ * 並保留舊的 role_code 判斷當後援——這樣管理員把角色改名、或建了自己的角色，
+ * 都不會影響判定；反之若某個角色還沒勾任何功能碼，也仍照舊有行為運作（不破壞既有功能）。
+ * 權限一律「由上而下包含」：勾了採購作業就自動含到貨入庫→申請→檢閱。
+ */
 function purchase_perms(PDO $db, ?array $u): array
 {
     $none = ['isAdmin'=>false,'canAdmin'=>false,'canBuy'=>false,'canReceive'=>false,
-             'canView'=>false,'canApply'=>false,'canApproveTop'=>false];
+             'canView'=>false,'canApply'=>false,'canApproveTop'=>false,
+             'canFormFull'=>false,'canViewAmount'=>false,'canViewVendor'=>false];
     if (!$u) return $none;
     $uid = (int)$u['id'];
     $isAdmin = in_array((int)$u['user_status'], [9, 90], true);
@@ -305,20 +349,61 @@ function purchase_perms(PDO $db, ?array $u): array
         $st->execute([$uid]);
         $isAdmin = (bool)$st->fetchColumn();
     }
-    $canAdmin    = $isAdmin  || purchase_has_role($db, $uid, ['purchase_admin']);
-    $canBuy      = $canAdmin || purchase_has_role($db, $uid, ['purchase_buy']);
-    $canReceive  = $canBuy   || purchase_has_role($db, $uid, ['purchase_receive']);
-    $canApply    = $canReceive || purchase_has_role($db, $uid, ['purchase_apply']);
-    $canView     = $canApply || purchase_has_role($db, $uid, ['purchase_view']);
-    $canApproveTop = $isAdmin || purchase_has_role($db, $uid, ['purchase_approve_top']);
+    require_once __DIR__ . '/role_features_helper.php';
+    $feat = rf_load_user_features_all($db, $uid);   // 個人指派 ∪ 職稱指派（功能碼）
+    // 舊 role_code 後援也一次撈完，別在每個功能碼上各跑一次查詢（9 個碼會變 18 次來回）
+    $codes = [];
+    try {
+        $st = $db->prepare("SELECT DISTINCT r.role_code FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                            WHERE ur.user_id=? AND r.module='purchase'
+                            UNION
+                            SELECT DISTINCT r.role_code FROM user_department_position_map m
+                            JOIN position_roles pr ON pr.position_id=m.position_id
+                            JOIN roles r ON r.role_id=pr.role_id
+                            WHERE m.user_id=? AND r.module='purchase'");
+        $st->execute([$uid, $uid]);
+        $codes = $st->fetchAll(PDO::FETCH_COLUMN) ?: [];
+    } catch (Throwable $e) {}
+    $has = function (string $code) use ($feat, $codes): bool {
+        return rf_has_feature($feat, $code) || in_array($code, $codes, true);
+    };
+
+    $canAdmin    = $isAdmin    || $has('purchase_admin');
+    $canBuy      = $canAdmin   || $has('purchase_buy');
+    $canReceive  = $canBuy     || $has('purchase_receive');
+    $canApply    = $canReceive || $has('purchase_apply');
+    $canView     = $canApply   || $has('purchase_view');
+    $canApproveTop = $isAdmin  || $has('purchase_approve_top');
     // 申請單有兩種版型：一般使用者＝精簡版（只問買什麼、為了什麼）；採購版＝多了找採購品、
-    // 標題、預估單價、到貨處理、附件分類。採購作業以上自動用採購版，其他人要另外指派此角色。
-    $canFormFull = $canBuy || purchase_has_role($db, $uid, ['purchase_form_full']);
+    // 標題、預估單價、到貨處理、附件分類。採購作業以上自動用採購版，其他人要另外勾這個功能。
+    $canFormFull = $canBuy || $has('purchase_form_full');
+    // 可視內容：沒勾就看不到金額／廠商（自己的單與輪到自己簽的單例外，見 API 的遮蔽邏輯）
+    $canViewAmount = $canBuy || $has('purchase_view_amount');
+    $canViewVendor = $canBuy || $has('purchase_view_vendor');
     return compact('isAdmin') + [
         'canAdmin'=>$canAdmin, 'canBuy'=>$canBuy, 'canReceive'=>$canReceive,
         'canView'=>$canView, 'canApply'=>$canApply, 'canApproveTop'=>$canApproveTop,
-        'canFormFull'=>$canFormFull,
+        'canFormFull'=>$canFormFull, 'canViewAmount'=>$canViewAmount, 'canViewVendor'=>$canViewVendor,
     ];
+}
+
+/** 頁面標頭要顯示的角色名稱：直接列出使用者實際被指派的角色名（管理員可自訂名稱） */
+function purchase_role_names(PDO $db, int $uid, array $p): string
+{
+    if ($p['isAdmin']) return '管理者';
+    try {
+        $st = $db->prepare("SELECT DISTINCT r.role_name FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                            WHERE ur.user_id=? AND r.module='purchase'
+                            UNION
+                            SELECT DISTINCT r.role_name FROM user_department_position_map m
+                            JOIN position_roles pr ON pr.position_id=m.position_id
+                            JOIN roles r ON r.role_id=pr.role_id
+                            WHERE m.user_id=? AND r.module='purchase'");
+        $st->execute([$uid, $uid]);
+        $names = $st->fetchAll(PDO::FETCH_COLUMN);
+        if ($names) return implode('、', $names);
+    } catch (Throwable $e) {}
+    return purchase_role_label($p);
 }
 
 function purchase_role_label(array $p): string
@@ -423,6 +508,38 @@ function purchase_build_spec_text(PDO $db, int $categoryId, array $attrVals): st
         $parts[] = $a['attr_name'] . $v . (string)$a['attr_unit'];
     }
     return implode(' ', $parts);
+}
+
+/* ============================================================
+ * 可視內容遮蔽（金額／廠商）
+ * ============================================================ */
+/**
+ * 依角色勾選的「可視內容」把不該看的欄位挖掉。一律在後端做——只靠前端隱藏，
+ * 對方看 API 回應就全看到了。
+ * 例外（永遠看得到金額）：自己提的單、以及輪到自己簽核的單（不看到金額沒辦法簽）。
+ */
+function purchase_mask_row(array $row, array $perms, int $uid, bool $canSign = false): array
+{
+    $isOwner = ((int)($row['requester_id'] ?? 0) === $uid);
+    $seeAmount = $perms['canViewAmount'] || $isOwner || $canSign;
+    $seeVendor = $perms['canViewVendor'] || $isOwner || $canSign;
+    if (!$seeAmount) {
+        foreach (['subtotal', 'tax_amount', 'grand_total'] as $k) if (array_key_exists($k, $row)) $row[$k] = null;
+        if (isset($row['items']) && is_array($row['items'])) {
+            foreach ($row['items'] as &$it) {
+                foreach (['est_price', 'unit_price', 'amount'] as $k) if (array_key_exists($k, $it)) $it[$k] = null;
+            }
+            unset($it);
+        }
+        $row['masked_amount'] = 1;
+    }
+    if (!$seeVendor) {
+        foreach (['vendor_id', 'vendor_name', 'invoice_no', 'invoice_date', 'pay_date', 'pay_method'] as $k) {
+            if (array_key_exists($k, $row)) $row[$k] = null;
+        }
+        $row['masked_vendor'] = 1;
+    }
+    return $row;
 }
 
 /* ============================================================
