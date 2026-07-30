@@ -48,6 +48,8 @@ function training_ensure_schema(PDO $db): void {
         "ALTER TABLE training_session ADD COLUMN actual_hours DECIMAL(5,1) NULL COMMENT '實際上課時數(可與計畫 hours 不同；多天=各天合計)'",
         "ALTER TABLE training_session ADD COLUMN plan_days INT NULL COMMENT '計畫上課天數(多天課程；NULL/1=單天)'",
         "ALTER TABLE training_session ADD COLUMN shift_type_id INT NULL COMMENT '套用的固定班別 shift_type.shift_type_id(上下班時間僅參考、休息分鐘用來扣時數)'",
+        "ALTER TABLE training_session ADD COLUMN outline TEXT NULL COMMENT '課程大綱(確認開課時填,列印簽到表會帶出)'",
+        "ALTER TABLE training_session ADD COLUMN eval_method VARCHAR(20) NULL COMMENT '評鑑方式 exam=試券/report=心得/practice=實作/oral=口試/notice=宣導(免評鑑)'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) {}
     }
@@ -100,8 +102,34 @@ function training_ensure_schema(PDO $db): void {
         KEY idx_session (session_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練參加人員名單'");
 
-    try { $db->exec("ALTER TABLE training_attendee ADD COLUMN position_name VARCHAR(50) NULL COMMENT '職稱(冗餘保存,列印簽到表用)'"); }
-    catch (Throwable $e) {}
+    // 參加人員：一律綁 user.id（user_name 等只是當下的冗餘快照，供列印/歷史保存；
+    // 日後「某人受過哪些訓練」一律用 user_id 查，故補一支單欄索引）
+    foreach ([
+        "ALTER TABLE training_attendee ADD COLUMN position_name VARCHAR(50) NULL COMMENT '職稱(冗餘保存,列印簽到表用)'",
+        "ALTER TABLE training_attendee ADD COLUMN eval_result VARCHAR(10) NULL COMMENT '評鑑結果 pass=合格 fail=不合格 exempt=免評鑑(宣導)；NULL=未評'",
+        "ALTER TABLE training_attendee ADD COLUMN eval_score DECIMAL(5,1) NULL COMMENT '評分(選填 0~100)'",
+        "ALTER TABLE training_attendee ADD COLUMN eval_note VARCHAR(100) NULL COMMENT '評鑑備註(不合格原因等)'",
+        "ALTER TABLE training_attendee ADD KEY idx_user (user_id)",
+    ] as $sql) {
+        try { $db->exec($sql); } catch (Throwable $e) {}
+    }
+
+    // 場次附件（簽到表掃描、教材、試卷…）：DB 只存檔名，完整路徑一律讀取當下組出（鐵律5／ai-rules/07）
+    $db->exec("CREATE TABLE IF NOT EXISTS training_attachment (
+        att_id INT AUTO_INCREMENT PRIMARY KEY,
+        session_id INT NOT NULL DEFAULT 0 COMMENT '0=新增中的暫存(status=temp)',
+        cat VARCHAR(16) NOT NULL DEFAULT 'other' COMMENT 'sign=簽到表 material=教材 exam=試卷/測驗 photo=照片 other=其他',
+        file_name VARCHAR(150) NOT NULL COMMENT '實際存檔檔名(只存檔名,不存路徑)',
+        original_name VARCHAR(200) NULL,
+        file_size INT NULL,
+        user_id INT NULL COMMENT '上傳者(temp 列以此判定擁有者)',
+        user_name VARCHAR(50) NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'active' COMMENT 'temp=未存檔暫存 active=正式',
+        expire_at DATETIME NULL COMMENT 'temp 到期時間(懶惰清除)',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_session (session_id),
+        KEY idx_status (status)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練場次附件(簽到表/教材/試卷)'");
 
     foreach ([['training_view','訓練檢閱'],['training_edit','訓練登錄'],['training_admin','訓練管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='training' LIMIT 1");
@@ -204,6 +232,71 @@ function training_shifts(PDO $db): array {
                                   break_minutes, is_overnight
                            FROM shift_type WHERE is_active=1 ORDER BY sort_order, shift_type_id")
                   ->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/* ============================================================
+ * 附件（鐵律5／ai-rules/07）：DB 只存檔名，完整路徑一律在讀取當下用「目前設定值」現場組出。
+ *   換 NAS 磁碟或搬資料夾時只要改設定值，舊附件立刻讀得到，不必動 DB。
+ * ============================================================ */
+const TRAINING_ATT_CATS = ['sign'=>'簽到表', 'material'=>'教材/講義', 'exam'=>'試卷/測驗', 'photo'=>'上課照片', 'other'=>'其他'];
+/* 評鑑方式（確認開課時選定）；notice=宣導＝免評鑑，選了它參加人員一律記 exempt */
+const TRAINING_EVAL_METHODS = ['exam'=>'試券', 'report'=>'心得', 'practice'=>'實作', 'oral'=>'口試', 'notice'=>'宣導（免評鑑）'];
+
+/** 回傳 [NAS實體路徑(寫檔用), URL前綴(瀏覽用)]，皆以 / 結尾 */
+function training_attach_dirs(PDO $db): array {
+    $nas = 'Z:/BOM/ERP/教育訓練/';
+    $url = '/nas/ERP/教育訓練/';
+    try {
+        $rows = $db->query("SELECT setting_key, setting_value FROM system_settings
+                            WHERE setting_key IN ('training_nas_dir','training_url_dir')")->fetchAll(PDO::FETCH_KEY_PAIR);
+        if (!empty($rows['training_nas_dir'])) $nas = trim($rows['training_nas_dir']);
+        if (!empty($rows['training_url_dir'])) $url = trim($rows['training_url_dir']);
+    } catch (Throwable $e) {}
+    if (!preg_match('#[/\\\\]$#', $nas)) $nas .= '/';
+    return [$nas, rtrim($url, '/') . '/'];
+}
+
+/** 某場次的正式附件（只回 active） */
+function training_attachments(PDO $db, int $sid): array {
+    try {
+        $st = $db->prepare("SELECT att_id, session_id, cat, file_name, original_name, file_size, user_name, created_at
+                            FROM training_attachment WHERE session_id=? AND status='active'
+                            ORDER BY cat, att_id");
+        $st->execute([$sid]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/** 懶惰清除：刪掉過期的暫存附件（實體檔＋DB 列），由 list 動作順路呼叫 */
+function training_purge_temp_attachments(PDO $db): void {
+    try {
+        $rows = $db->query("SELECT att_id, file_name FROM training_attachment
+                            WHERE status='temp' AND expire_at IS NOT NULL AND expire_at < NOW()")->fetchAll(PDO::FETCH_ASSOC);
+        if (!$rows) return;
+        [$nas] = training_attach_dirs($db);
+        foreach ($rows as $r) { $fp = $nas . $r['file_name']; if (is_file($fp)) @unlink($fp); }
+        $in = implode(',', array_map(fn($r) => (int)$r['att_id'], $rows));
+        $db->exec("DELETE FROM training_attachment WHERE att_id IN ({$in})");
+    } catch (Throwable $e) {}
+}
+
+/* ============================================================
+ * 某位員工的受訓紀錄（供其他頁面查詢用，例如員工資料/履歷/稽核佐證）
+ *   一律以 user.id 綁定（training_attendee.user_id），不要用姓名比對。
+ * ============================================================ */
+function training_user_history(PDO $db, int $userId, ?int $year = null): array {
+    try {
+        $sql = "SELECT s.session_id, s.year, s.plan_month, s.course_name, s.train_type, s.trainer, s.org_unit,
+                       s.status, s.done_date, s.actual_hours, s.hours, s.location, s.eval_method,
+                       a.attended, a.signed, a.eval_result, a.eval_score, a.eval_note
+                FROM training_attendee a
+                JOIN training_session s ON s.session_id = a.session_id
+                WHERE a.user_id = ?" . ($year ? " AND s.year = ?" : "") . "
+                ORDER BY s.done_date DESC, s.session_id DESC";
+        $st = $db->prepare($sql);
+        $st->execute($year ? [$userId, $year] : [$userId]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) { return []; }
 }
 
