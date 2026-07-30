@@ -82,7 +82,12 @@ function getEmployees() {
     global $db;
     try {
         $sql = "SELECT 
-                    u.id, u.user_uname, u.user_cname, u.user_status, u.state, u.gender, u.hire_date,
+                    u.id, u.user_uname, u.user_cname, u.user_status, u.state, u.gender, u.hire_date, u.leave_date,
+                    -- 預定離職：還在可用狀態、但已填未來離職日（含今天，當天仍可使用系統）
+                    CASE WHEN u.leave_date IS NOT NULL AND u.leave_date >= CURDATE()
+                              AND (u.state IS NULL OR u.state NOT IN (" . EG_BLOCKED_USER_STATES . "))
+                         THEN u.leave_date END AS pending_leave_date,
+                    DATEDIFF(u.leave_date, CURDATE()) AS pending_leave_days,
                     map1.department_id as main_department_id,
                     d.name as main_department_name,
                     p.name as main_position_name,

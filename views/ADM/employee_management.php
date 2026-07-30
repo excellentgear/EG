@@ -148,6 +148,29 @@ if ($hrUserPerm === 'R') {
             font-size: 14px; /* 加大表格字體 */
             vertical-align: middle !important; /* 垂直置中 */
         }
+        /* 預定離職（仍在職、已填未來離職日）：暖粉底提醒。
+           色票見 ai-rules/10 —— 珊瑚紅系列的淺底版，淺底配深棕字。
+           已離職者不套用，維持原本樣式（只有紅色「離職」標籤），符合「離職後恢復原底色」。
+           specificity 要壓過 .table-striped 的斑馬紋，故加 tbody id 前綴。 */
+        #employee-table-body tr.pending-leave > td {
+            background-color: #F8DCD5;
+            border-top-color: #E9B8AC;
+            color: #6B471A;
+        }
+        #employee-table-body tr.pending-leave:hover > td {
+            background-color: #F2CBC1;
+        }
+        .label-pending-leave {
+            display: inline-block;
+            margin-left: 4px;
+            padding: 2px 7px;
+            border-radius: 3px;
+            background-color: #E9B8AC;
+            border: 1px solid #D89C8C;
+            color: #8C3A28;
+            font-size: 12px;
+            white-space: nowrap;
+        }
         .scroll-to-top {
             position: fixed;
             bottom: 20px;
@@ -560,6 +583,19 @@ $(document).ready(function() {
                         default: statusLabel = '<span class="btn btn-default btn-sm">未知</span>';
                     }
                     
+                    // 預定離職（仍可使用系統，離職日當天過後才封鎖）：整列暖粉底＋標示日期與剩餘天數。
+                    // 顏色不是唯一資訊（規範要求）：狀態欄與備註欄都會寫出日期，黑白列印也看得懂。
+                    let rowClass = '', remarkText = emp.remark || '';
+                    if (emp.pending_leave_date) {
+                        const d = String(emp.pending_leave_date);
+                        const days = parseInt(emp.pending_leave_days);
+                        const dayTxt = isNaN(days) ? '' : (days === 0 ? '（今天最後一天）' : '（尚餘 ' + days + ' 天）');
+                        rowClass = ' class="pending-leave"';
+                        statusLabel += '<span class="label-pending-leave" title="離職日當天仍可使用系統，隔天起自動停用">預定離職 '
+                                     + escapeHtml(d.substring(5)) + '</span>';
+                        remarkText = '預定離職日：' + d + dayTxt + (remarkText ? '　' + remarkText : '');
+                    }
+
                     let genderLabel = '';
                     switch(emp.gender) {
                         case 'M': genderLabel = '男'; break;
@@ -584,7 +620,7 @@ $(document).ready(function() {
                         }
                     }
 
-                    var row = `<tr data-id="${escapeHtml(emp.id)}" data-action="edit" data-main-dept="${escapeHtml(emp.main_department_id || '')}" data-concurrent-depts="${escapeHtml(emp.concurrent_department_ids || '')}" style="cursor: pointer;" title="連點兩下編輯">
+                    var row = `<tr${rowClass} data-id="${escapeHtml(emp.id)}" data-action="edit" data-main-dept="${escapeHtml(emp.main_department_id || '')}" data-concurrent-depts="${escapeHtml(emp.concurrent_department_ids || '')}" style="cursor: pointer;" title="連點兩下編輯">
                         <td>${escapeHtml(emp.id)}</td> <!-- 員工編號 -->
                         <td>${escapeHtml(emp.user_uname)}</td> <!-- 登入帳號 -->
                         <td>${escapeHtml(emp.user_cname)}</td>
@@ -598,7 +634,7 @@ $(document).ready(function() {
                             ${emp.concurrent_positions ? emp.concurrent_positions.split('; ').map(escapeHtml).join('<br>') : '<i class="text-muted">無</i>'}
                         </td>
                         <td>${statusLabel}</td>
-                        <td>${escapeHtml(emp.remark)}</td>
+                        <td>${escapeHtml(remarkText)}</td>
                     </tr>`;
                     tableBody.append(row);
                 });
