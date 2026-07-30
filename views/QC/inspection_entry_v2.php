@@ -30,9 +30,22 @@ $CSRF = $_SESSION['qc_csrf'];
 
 $isPopup = isset($_GET['popup']) && $_GET['popup'] == '1';
 
-// 目前登入者中文名稱（底部固定列與列印的「檢驗人員」用；popup 模式不含側欄，故直接讀 session）
+// 目前登入者中文名稱（底部固定列與列印的「檢驗人員」用）。
+// 注意：登入時只寫入 $_SESSION['id'] 與 ['userName']，並沒有 user_cname；
+// 側欄是自己去 user 表查名字，而 popup 模式不載入側欄 → 這裡直接以 id 查一次（PK 查詢，成本可忽略）。
 $CURRENT_CNAME = trim((string)($_SESSION['user_cname'] ?? ''));
-if ($CURRENT_CNAME === '') $CURRENT_CNAME = trim((string)($_SESSION['user_uname'] ?? $_SESSION['userid'] ?? ''));
+if ($CURRENT_CNAME === '' && !empty($_SESSION['id'])) {
+    try {
+        include_once '../../src/common/DBConnection.php';
+        $__pdo = (new DBConnection())->getPDO();
+        $__st = $__pdo->prepare("SELECT user_cname, user_uname FROM user WHERE id=? LIMIT 1");
+        $__st->execute([(int)$_SESSION['id']]);
+        if ($__u = $__st->fetch(PDO::FETCH_ASSOC)) {
+            $CURRENT_CNAME = trim((string)($__u['user_cname'] ?: $__u['user_uname']));
+        }
+    } catch (Exception $e) { /* 取不到名字不影響填寫 */ }
+}
+if ($CURRENT_CNAME === '') $CURRENT_CNAME = trim((string)($_SESSION['userName'] ?? $_SESSION['user_uname'] ?? ''));
 
 // =============================================================================
 // v2 專屬後端（只處理舊頁沒有的三件事，其餘一律仍打舊頁 API，不動舊檔）
@@ -323,6 +336,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .mcell.c-ng .mdev { color:#fff; font-weight:bold; }
     .mcell.c-ng .mdev:before { content:'✘ '; }
     .mcell.c-empty { border-style:dashed; border-color:#D9C8B0; }
+    /* 疑似誤填（與標準值差異過大，例如漏打小數點／看錯量具）：底色比一般 NG 更深，並加 ⚠ */
+    .mcell.c-warn { background:#8F3016 !important; border-color:#5E1F0E !important; }
+    .mcell.c-warn .mval { color:#fff; }
+    .mcell.c-warn .mno { color:#F3CDC2; }
+    .mcell.c-warn .mdev { color:#FFD9A0; font-weight:bold; }
+    .mcell.c-warn .mdev:before { content:''; }
+    .mcell.c-warn .mtxt { color:#fff; }
+    #dock .stat.warn { color:#8F3016; font-weight:bold; }
     .mcell.focus-on { box-shadow:0 0 0 3px rgba(240,162,75,.45); }
     .mcell.okng { cursor:pointer; user-select:none; padding-bottom:4px; }
     .mcell.okng .mtxt { display:block; font-size:13px; font-weight:bold; color:var(--ink); height:22px; line-height:22px; }
@@ -597,6 +618,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         <span class="stat">進度 <b id="dk-prog">0/0</b> <span class="progbar"><i id="dk-progbar" style="width:0%"></i></span></span>
         <span class="stat bad">不良 <b id="dk-ng">0</b> 件</span>
         <span class="stat">整體判定 <b id="dk-judge">—</b></span>
+        <span class="stat warn" id="dk-warn" style="display:none;"></span>
         <span class="draft-note" id="draft-status"></span>
         <span style="flex:1 1 auto;"></span>
         <button class="btn btn-default btn-sm" id="btn-dock-extra"><i class="fa fa-sliders"></i> 數量 / 處置備註</button>
@@ -781,6 +803,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             <div class="text-center" style="margin:16px 0;">
                 <button class="btn btn-danger btn-lg" id="btn-ng-open" style="margin-right:14px;"><i class="fa fa-file-text-o"></i> 開立異常單</button>
                 <button class="btn btn-default btn-lg" id="btn-ng-skip">不開立（填原因）</button>
+            </div>
+            <div class="text-center">
+                <button class="btn btn-link" id="btn-ng-later" style="color:#8a6a45;">
+                    <i class="fa fa-clock-o"></i> 取消，稍後再決定</button>
+                <div class="muted-help">檢驗結果<b>已經存檔</b>，關掉不影響紀錄；之後可從「批次與檢驗歷程」的<b>開異常單</b>按鈕補開。</div>
             </div>
             <div id="ng-skip-area" style="display:none;">
                 <label>不開立異常單的原因（必填，會記錄於檢驗歷程）</label>
@@ -1511,6 +1538,27 @@ $(function(){
         if(v<L.low) return (compact?'▼':'超下限 ')+trimNum((L.low-v).toFixed(4));
         return sign+trimNum(d.toFixed(4));
     }
+    // 疑似誤填：與標準值差異「大到不像量測誤差」（漏打小數點、多打一位、看錯量具、抄錯列）。
+    // 需同時超過「公差帶的 20 倍」與「標準值的 30%」才示警——只看公差倍數的話，
+    // 精密件（公差 0.005）動不動就跳警告；只看百分比的話，粗公差件又抓不到。
+    var OUTLIER_TOL_X = 20, OUTLIER_STD_RATIO = 0.30;
+    function isOutlier(it, raw){
+        if(!it || it.type==='OKNG' || raw===''||raw==null) return false;
+        var base=parseFloat(it.std), v=parseFloat(raw);
+        if(isNaN(base)||isNaN(v)) return false;
+        var tol=Math.max(Math.abs(parseFloat(it.up)||0), Math.abs(parseFloat(it.lo)||0));
+        if(tol<=0 && base===0) return false;          // 無標準也無公差 → 無從判斷，不亂示警
+        var dev=Math.abs(v-base);
+        return dev > Math.max(tol*OUTLIER_TOL_X, Math.abs(base)*OUTLIER_STD_RATIO);
+    }
+    function cellTitle(it, raw){
+        if(!it || it.type==='OKNG' || raw===''||raw==null) return '';
+        var full=devText(it, raw, false);
+        if(!full) return '';
+        var t='偏差：'+full;
+        if(isOutlier(it, raw)) t += ' ⚠ 與標準值差異過大，請確認是否誤填（漏打小數點／看錯量具／抄錯列）';
+        return t;
+    }
     function itemVerdict(it){
         var any=false, filled=false;
         it.readings.forEach(function(rd){
@@ -1693,13 +1741,15 @@ $(function(){
             return '<div class="mcell okng '+cls+'" data-i="'+i+'" data-r="'+r+'" data-s="'+s+'" tabindex="0" title="點擊切換 OK / NG">'+
                    '<span class="mno">#'+(s+1)+'</span>'+inner+'</div>';
         }
-        var j = judge(it, raw);
+        var j = judge(it, raw), warn = isOutlier(it, raw);
         cls = j==='NG' ? 'c-ng' : (j==='OK' ? 'c-ok' : 'c-empty');
-        return '<div class="mcell '+cls+'" data-i="'+i+'" data-r="'+r+'" data-s="'+s+'">'+
+        if(warn) cls += ' c-warn';
+        // 三種檢視的格子已統一為小格 → 一律用短版偏差文字，完整說明放 title
+        return '<div class="mcell '+cls+'" data-i="'+i+'" data-r="'+r+'" data-s="'+s+'" title="'+esc(cellTitle(it,raw))+'">'+
                '<span class="mno">#'+(s+1)+'</span>'+
                '<input type="text" inputmode="decimal" class="mval" value="'+esc(raw)+'" '+
                       'data-i="'+i+'" data-r="'+r+'" data-s="'+s+'">'+
-               '<span class="mdev">'+esc(devText(it,raw,!big))+'</span></div>';
+               '<span class="mdev">'+(warn?'⚠ ':'')+esc(devText(it,raw,true))+'</span></div>';
     }
     // 只更新單一格的外觀，避免重繪打斷輸入焦點
     function paintCell($cell){
@@ -1707,11 +1757,13 @@ $(function(){
         var it=MODEL.items[i]; if(!it) return;
         var raw=it.readings[r].vals[s];
         var j = (it.type==='OKNG') ? ((raw==='NG')?'NG':(raw===''?'':'OK')) : judge(it, raw);
+        var warn = isOutlier(it, raw);
         var repaint=function($c){
-            var compact = $c.closest('#items-table').length>0;   // 總表格子窄→用短版偏差文字
-            $c.removeClass('c-ok c-ng c-empty').addClass(j==='NG'?'c-ng':(j==='OK'?'c-ok':'c-empty'));
+            $c.removeClass('c-ok c-ng c-empty c-warn').addClass(j==='NG'?'c-ng':(j==='OK'?'c-ok':'c-empty'));
+            if(warn) $c.addClass('c-warn');
+            $c.attr('title', cellTitle(it, raw));
             if(it.type==='OKNG') $c.find('.mtxt').text(j==='NG'?'✘ NG':(j==='OK'?'✔ OK':'—'));
-            else $c.find('.mdev').text(devText(it, raw, compact));
+            else $c.find('.mdev').text((warn?'⚠ ':'')+devText(it, raw, true));
         };
         repaint($cell);
         // 同一格在別的檢視也要同步（總表恆在 DOM）
@@ -1938,6 +1990,10 @@ $(function(){
             $(this).find('.cnt').text(itemFilledCount(it)+'/'+state.sampleN);
         });
         MODEL.items.forEach(function(it,i){ updateItemVerdictCell(i); });
+        // 疑似誤填提醒
+        var warnN=0;
+        MODEL.items.forEach(function(it){ it.readings.forEach(function(rd){ rd.vals.forEach(function(v){ if(isOutlier(it,v)) warnN++; }); }); });
+        $('#dk-warn').html(warnN ? '<i class="fa fa-exclamation-triangle"></i> 疑似誤填 <b>'+warnN+'</b> 格，請確認' : '').toggle(warnN>0);
     }
 
     // =====================================================================
@@ -2882,14 +2938,86 @@ $(function(){
     });
 
     // =====================================================================
+    // 存檔前檢核：把「缺了什麼、缺在哪一項」講清楚，而不是存進去才發現沒有量具可追溯
+    //   硬性擋下：① 有填實測值卻沒有項目名稱 ② 數值型項目有實測值卻沒選量具編號
+    //             ③ 數值型項目有實測值卻沒填標準值（沒有標準就判不出 OK/NG）
+    //   OK/NG 型（目視/功能檢查）不強制量具。
+    // =====================================================================
+    function validateBeforeSave(){
+        var out=[];
+        MODEL.items.forEach(function(it,i){
+            var code=codeLabel(i), nm=(it.name||'').trim();
+            it.readings.forEach(function(rd,r){
+                var hasVal=false;
+                for(var s=0;s<state.sampleN;s++){
+                    var v=rd.vals[s];
+                    if(v!=='' && v!=null && !(it.type==='OKNG' && v==='OK')) { hasVal=true; break; }
+                }
+                if(!hasVal) return;
+                var where = code+(r>0?('（加量測 '+r+'）'):'')+'　'+(nm||'（未命名項目）');
+                if(!nm) out.push({ i:i, r:r, field:'name', text:where+'：<b>未填檢驗項目名稱</b>' });
+                if(it.type!=='OKNG'){
+                    if(!rd.tool_id) out.push({ i:i, r:r, field:'tool', text:where+'：<b>未選擇量具編號</b>（品質紀錄需可追溯到實際使用的那一支量具）' });
+                    if(r===0 && (it.std==null || String(it.std).trim()==='')) out.push({ i:i, r:r, field:'std', text:where+'：<b>未填標準值</b>（沒有標準值就無法判定 OK/NG）' });
+                }
+            });
+        });
+        return out;
+    }
+    function showValidateModal(probs){
+        if(!$('#validateModal').length){
+            $('body').append(
+              '<div class="modal fade" id="validateModal" tabindex="-1" role="dialog"><div class="modal-dialog"><div class="modal-content">'+
+              '<div class="modal-header" style="background:#DD5138;color:#fff;border-radius:6px 6px 0 0;">'+
+              '<h4 class="modal-title"><i class="fa fa-exclamation-circle"></i> 尚未完成，無法存檔</h4></div>'+
+              '<div class="modal-body"><div class="muted-help" style="margin-bottom:8px;">請補齊下列資料後再儲存（點一下可直接跳到該欄位）：</div>'+
+              '<ol id="validate-list" style="padding-left:20px;line-height:1.9;"></ol></div>'+
+              '<div class="modal-footer"><button class="btn btn-warm" data-dismiss="modal">我知道了，回去補</button></div>'+
+              '</div></div></div>');
+        }
+        $('#validate-list').html(probs.map(function(p){
+            return '<li><a href="#" class="vjump" data-i="'+p.i+'" data-r="'+p.r+'" data-f="'+p.field+'" style="color:var(--ink);">'+p.text+'</a></li>';
+        }).join(''));
+        $('#validateModal').modal('show');
+    }
+    $(document).on('click','.vjump', function(e){
+        e.preventDefault();
+        var i=+$(this).data('i'), r=+$(this).data('r'), f=$(this).data('f');
+        $('#validateModal').modal('hide');
+        view='GRID'; localStorage.setItem('qc2_view', view);
+        if(f==='name' || f==='std') $('#chk-std-edit').prop('checked', true);
+        render();
+        setTimeout(function(){
+            var $tr=$('#items-body tr[data-i="'+i+'"]');
+            if(f==='tool'){ $('.tool-btn[data-i="'+i+'"][data-r="'+r+'"]').first().focus().click(); return; }
+            var $t=$tr.find(f==='name' ? 'input.f-name' : 'input.f-std');
+            if($t.length){ $t.focus(); $('html,body').animate({ scrollTop:$t.offset().top-160 }, 200); }
+        }, 120);
+    });
+
+    // =====================================================================
     // 儲存 / 退回重做
     // =====================================================================
     function doSave(asRedo){
         if(state.demo){ alert('示範模式不寫入資料庫，請由待驗清單開啟實際待驗項目。'); return; }
         var items=collectItems();
         if(!items.length){ alert('請至少輸入一個檢驗項目'); return; }
+        // 存檔前檢核：缺量具編號等硬性問題一律擋下，並明確告知哪一項缺什麼
+        var probs = validateBeforeSave();
+        if(probs.length){ showValidateModal(probs); return; }
         var unfilled = MODEL.items.filter(function(it){ return itemFilledCount(it)<state.sampleN; }).length;
         if(!asRedo && unfilled>0 && !confirm('尚有 '+unfilled+' 個檢驗項目未填滿 '+state.sampleN+' 件，仍要儲存嗎？')) return;
+        // 疑似誤填：不擋存檔，但一定要再確認一次
+        var warnCells=[];
+        MODEL.items.forEach(function(it,i){
+            it.readings.forEach(function(rd,r){
+                rd.vals.forEach(function(v,s){
+                    if(isOutlier(it,v)) warnCells.push(codeLabel(i)+' '+(it.name||'')+(r>0?('（加量測'+r+'）'):'')+' 第'+(s+1)+'件 = '+v+'（標準 '+it.std+'）');
+                });
+            });
+        });
+        if(warnCells.length && !confirm('下列實測值與標準值差異過大，可能是誤填：\n\n'+warnCells.join('\n')+
+            '\n\n確定這些數值正確、要照這樣存檔嗎？')) return;
 
         if(state.editFormId){
             var reason=prompt('請填寫修改原因（必填，會記錄於稽核）：','');
@@ -3024,6 +3152,13 @@ $(function(){
                 }, 'json');
             }
         });
+    });
+    // 取消：不現在決定要不要開異常單（檢驗結果已存檔），之後可從歷程「開異常單」補開
+    $('#btn-ng-later').on('click', function(){
+        if(!ngCtx) { $('#ngAskModal').modal('hide'); return; }
+        ngCtx.decided = true;                      // 避免開單跳窗的 hidden 事件把它again 叫回來
+        $('#ngAskModal').modal('hide');
+        var d=ngCtx.done; ngCtx=null; if(d) d();
     });
     $('#qamModal').on('hidden.bs.modal', function(){
         if(ngCtx && !ngCtx.decided) setTimeout(function(){ $('#ngAskModal').modal('show'); }, 300);
