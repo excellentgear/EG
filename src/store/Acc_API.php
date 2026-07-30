@@ -80,6 +80,16 @@ function acc_ar_filter(): array {
     ];
 }
 
+/** 依單據類型判斷該用哪一側的對帳權限（業務只能碰應收、生管只能碰應付）。
+    與 acc_ar_filter 同理，必須定義在 switch 之外才會被宣告到。 */
+function acc_recon_guard(array $perms, string $srcType): void {
+    if (strtoupper(trim($srcType)) === 'TLOG') {
+        if (empty($perms['canReconAp'])) acc_err('無應付對帳權限（需「應付對帳(生管)」或會計登錄角色）', 403);
+    } else {
+        if (empty($perms['canReconAr'])) acc_err('無應收對帳權限（需「應收對帳(業務)」或會計登錄角色）', 403);
+    }
+}
+
 switch ($action) {
 
 case 'meta':
@@ -788,6 +798,150 @@ case 'doc_lookup_export': {
                          $x['qty'] ?? '', round((float)($x['amount'] ?? 0)),
                          $x['billing_month'] ?? '', !empty($x['overridden']) ? '是' : '',
                          $x['invoiced'] ?? '', $x['note'] ?? '']);
+        }
+    }
+    fclose($o);
+    exit;
+}
+
+/* ══ 對帳：線上修改單據 / 對帳狀態 / 稽核紀錄 ═════════════════════════ */
+
+/* 線上修改單據欄位（數量／單價／金額／備註），必填修改原因，寫入稽核 */
+case 'doc_edit': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $srcType = (string)($_POST['src_type'] ?? '');
+    acc_recon_guard($perms, $srcType);
+
+    $fields = json_decode($_POST['fields'] ?? '{}', true);
+    if (!is_array($fields) || !$fields) acc_err('沒有要修改的欄位');
+    foreach ($fields as $k => $v) if (is_string($v)) $fields[$k] = acc_u8($v);
+
+    $r = acc_edit_doc($db, $srcType, (int)($_POST['id'] ?? 0), $fields,
+                      acc_u8((string)($_POST['reason'] ?? '')), $u);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* 對帳狀態（未對／已對完／有異常）＋對帳註記 */
+case 'recon_set': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $srcType = (string)($_POST['src_type'] ?? '');
+    acc_recon_guard($perms, $srcType);
+
+    $r = acc_recon_set($db, $srcType, (int)($_POST['id'] ?? 0),
+                       trim((string)($_POST['status'] ?? '')),
+                       acc_u8((string)($_POST['note'] ?? '')), $u);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* 批次標對帳狀態 */
+case 'recon_set_bulk': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $items  = json_decode($_POST['items'] ?? '[]', true);
+    $status = trim((string)($_POST['status'] ?? ''));
+    $note   = acc_u8((string)($_POST['note'] ?? ''));
+    if (!is_array($items) || !$items) acc_err('沒有選取單據');
+
+    $ok = 0; $fail = 0; $errors = [];
+    foreach ($items as $it) {
+        $st = (string)($it['src_type'] ?? '');
+        // 逐筆檢查權限，避免夾帶另一側的單據繞過
+        $isAp = (strtoupper(trim($st)) === 'TLOG');
+        if (($isAp && empty($perms['canReconAp'])) || (!$isAp && empty($perms['canReconAr']))) {
+            $fail++; if (count($errors) < 10) $errors[] = ($it['no'] ?? '?') . '：無此側對帳權限';
+            continue;
+        }
+        $r = acc_recon_set($db, $st, (int)($it['id'] ?? 0), $status, $note, $u);
+        if ($r['success']) $ok++;
+        else { $fail++; if (count($errors) < 10) $errors[] = ($it['no'] ?? '?') . '：' . $r['message']; }
+    }
+    acc_out(['applied' => $ok, 'failed' => $fail, 'errors' => $errors,
+             'message' => "已標記 {$ok} 筆" . ($fail ? "，{$fail} 筆失敗" : '')]);
+}
+
+/* 對帳明細（含目前對帳狀態與可改欄位定義），供明細跳窗就地編輯 */
+case 'recon_detail': {
+    $s  = $_POST ?: $_GET;
+    $side = (($s['side'] ?? 'ar') === 'ap') ? 'ap' : 'ar';
+
+    if ($side === 'ar') {
+        $cn = acc_u8(trim((string)($s['customer'] ?? '')));
+        $bm = trim((string)($s['billing_month'] ?? ''));
+        if ($cn === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) acc_err('缺少客戶或帳款月份');
+        $d = acc_ar_detail($db, $cn, $bm);
+        // 明細本身沒帶 src_id，用單據快搜的邏輯補不上，改為直接查一次對帳狀態
+        $isIds = []; $irIds = [];
+        foreach ($d['items'] as $it) {
+            if (($it['src_type'] ?? '') === 'IS') $isIds[] = (int)($it['src_id'] ?? 0);
+            else                                  $irIds[] = (int)($it['src_id'] ?? 0);
+        }
+        $d['recon'] = array_merge(acc_recon_map($db, 'IS', $isIds), acc_recon_map($db, 'IR', $irIds));
+        $d['editable'] = ['IS' => acc_editable_fields('IS'), 'IR' => acc_editable_fields('IR')];
+        $d['can_edit'] = (bool)$perms['canReconAr'];
+        acc_out($d);
+    } else {
+        $mk = acc_u8(trim((string)($s['maker_id_no'] ?? '')));
+        $ym = trim((string)($s['invoice_ym'] ?? ''));
+        if ($mk === '' || !preg_match('/^\d{4}-\d{2}$/', $ym)) acc_err('缺少廠商或發票年月');
+        $d = acc_ap_detail($db, $mk, $ym);
+        $d['recon']    = acc_recon_map($db, 'TLOG', array_column($d['items'], 'transfer_id'));
+        $d['editable'] = ['TLOG' => acc_editable_fields('TLOG')];
+        $d['can_edit'] = (bool)$perms['canReconAp'];
+        acc_out($d);
+    }
+}
+
+/* 稽核紀錄查詢 */
+case 'audit_search': {
+    $s = $_POST ?: $_GET;
+    acc_out(acc_audit_search($db, [
+        'action'    => trim((string)($s['action'] ?? 'all')),
+        'kw'        => acc_u8(trim((string)($s['kw'] ?? ''))),
+        'date_from' => trim((string)($s['date_from'] ?? '')),
+        'date_to'   => trim((string)($s['date_to'] ?? '')),
+        'page'      => max(1, (int)($s['page'] ?? 1)),
+        'per_page'  => (int)($s['per_page'] ?? 20),
+    ]));
+}
+
+/* 稽核紀錄匯出（帳款有爭議時要能整份交出去） */
+case 'audit_export': {
+    $s = $_GET ?: $_POST;
+    $r = acc_audit_search($db, [
+        'action'    => trim((string)($s['action'] ?? 'all')),
+        'kw'        => acc_u8(trim((string)($s['kw'] ?? ''))),
+        'date_from' => trim((string)($s['date_from'] ?? '')),
+        'date_to'   => trim((string)($s['date_to'] ?? '')),
+        'per_page'  => 0,
+    ]);
+    $al = ['ACC_EDIT' => '修改單據', 'ACC_MONTH' => '改帳款月份', 'ACC_RECON' => '對帳狀態'];
+    $tl = ['is_list' => '出貨單', 'ir_track' => '退貨單', 'bom_ing_transfer_log' => '加工移轉單'];
+
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="會計稽核紀錄_' . date('Ymd_Hi') . '.csv"');
+    $o = fopen('php://output', 'w');
+    fwrite($o, "\xEF\xBB\xBF");
+    fputcsv($o, ['紀錄編號', '時間', '操作人', '動作', '單據類型', '單據ID', '單號',
+                 '變更欄位', '原值', '新值', '修改原因']);
+    foreach ($r['rows'] as $x) {
+        $ch = $x['parsed'] ?: [];
+        if (!$ch) {
+            fputcsv($o, [$x['id'], $x['created_at'], $x['operator'], $al[$x['action_type']] ?? $x['action_type'],
+                         $tl[$x['target_type']] ?? $x['target_type'], $x['target_id'], $x['target_name'],
+                         '', '', '', $x['reason']]);
+            continue;
+        }
+        foreach ($ch as $col => $v) {
+            fputcsv($o, [$x['id'], $x['created_at'], $x['operator'], $al[$x['action_type']] ?? $x['action_type'],
+                         $tl[$x['target_type']] ?? $x['target_type'], $x['target_id'], $x['target_name'],
+                         $col,
+                         is_array($v) ? (string)($v['old'] ?? '') : '',
+                         is_array($v) ? (string)($v['new'] ?? '') : (string)$v,
+                         $x['reason']]);
         }
     }
     fclose($o);

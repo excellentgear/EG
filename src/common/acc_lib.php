@@ -113,10 +113,314 @@ function acc_ensure_schema(PDO $db): void
             KEY idx_alloc_inv  (invoice_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-收款沖帳明細（支援部分沖帳與一筆對多張）'");
 
+        // 對帳狀態：業務(應收)／生管(應付)對完帳後標記，會計據此判斷可不可以開票／付款。
+        // 刻意獨立成表而不加欄位到 is_list / ir_track / bom_ing_transfer_log——
+        // 那三張是全系統重度使用的表，加欄位風險高；用 (src_type, src_id) 對應即可。
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_recon (
+            recon_id     INT NOT NULL AUTO_INCREMENT,
+            src_type     VARCHAR(6)   NOT NULL COMMENT 'IS=出貨 IR=退貨 TLOG=加工移轉單',
+            src_id       INT          NOT NULL,
+            side         VARCHAR(2)   NOT NULL DEFAULT 'ar' COMMENT 'ar=應收 ap=應付',
+            status       VARCHAR(10)  NOT NULL DEFAULT 'pending' COMMENT 'pending=未對 ok=已對完 issue=有異常',
+            note         VARCHAR(300) DEFAULT NULL COMMENT '對帳註記（如客戶說這筆下月才付）',
+            recon_by     INT          DEFAULT NULL,
+            recon_by_name VARCHAR(50) DEFAULT NULL,
+            recon_at     DATETIME     DEFAULT NULL,
+            Created_At   DATETIME     DEFAULT CURRENT_TIMESTAMP,
+            Modified_At  DATETIME     DEFAULT NULL,
+            PRIMARY KEY (recon_id),
+            UNIQUE KEY uq_recon_src (src_type, src_id),
+            KEY idx_recon_status (status),
+            KEY idx_recon_side (side)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-對帳狀態與註記（不動來源表）'");
+
         $done = true;
     } catch (Throwable $e) {
         error_log('acc_ensure_schema 失敗: ' . $e->getMessage());
     }
+}
+
+/* ============================================================
+ * 稽核紀錄
+ *
+ * 沿用全站既有的 audit_log 表（已有 2,120 筆、且有現成查詢頁
+ * views/admin/audit_log_report.php），不另建一套會計專用稽核表——
+ * 帳款出問題時只需要查一個地方。
+ * action_type：ACC_EDIT=改單據金額/數量/備註、ACC_MONTH=改帳款月份、
+ *              ACC_RECON=對帳狀態變更
+ * ============================================================ */
+function acc_audit(PDO $db, string $action, string $targetType, $targetId,
+                   ?string $targetName, array $changes, ?string $reason, ?array $user): void
+{
+    try {
+        $payload = ['changes' => $changes];
+        if ($reason !== null && $reason !== '') $payload['reason'] = $reason;
+        $st = $db->prepare("INSERT INTO audit_log
+                            (action_type, target_type, target_id, target_name, changes,
+                             user_id, operator, created_at)
+                            VALUES (?,?,?,?,?,?,?,NOW())");
+        $st->execute([$action, $targetType, (string)$targetId, $targetName,
+                      json_encode($payload, JSON_UNESCAPED_UNICODE),
+                      $user ? (int)$user['id'] : null,
+                      $user ? (string)$user['user_cname'] : 'system']);
+    } catch (Throwable $e) {
+        // 稽核寫入失敗不可讓業務操作整批失敗，但一定要留在錯誤日誌裡
+        error_log('acc_audit 寫入失敗: ' . $e->getMessage());
+    }
+}
+
+/** 會計相關稽核紀錄查詢 */
+function acc_audit_search(PDO $db, array $f): array
+{
+    $where  = ["a.action_type IN ('ACC_EDIT','ACC_MONTH','ACC_RECON')"];
+    $params = [];
+
+    if (!empty($f['action'])   && $f['action'] !== 'all') { $where[] = "a.action_type = ?"; $params[] = $f['action']; }
+    if (!empty($f['date_from'])) { $where[] = "a.created_at >= ?"; $params[] = $f['date_from'] . ' 00:00:00'; }
+    if (!empty($f['date_to']))   { $where[] = "a.created_at <= ?"; $params[] = $f['date_to']   . ' 23:59:59'; }
+    $kw = trim((string)($f['kw'] ?? ''));
+    if ($kw !== '') {
+        $where[] = "(a.target_id LIKE ? OR a.target_name LIKE ? OR a.operator LIKE ? OR a.changes LIKE ?)";
+        for ($i = 0; $i < 4; $i++) $params[] = '%' . $kw . '%';
+    }
+    $ws = 'WHERE ' . implode(' AND ', $where);
+
+    $st = $db->prepare("SELECT a.id, a.action_type, a.target_type, a.target_id, a.target_name,
+                               a.changes, a.user_id, a.operator, a.created_at
+                        FROM audit_log a
+                        $ws
+                        ORDER BY a.id DESC
+                        LIMIT 500");
+    $st->execute($params);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($rows as &$r) {
+        $j = json_decode((string)$r['changes'], true);
+        $r['parsed']  = is_array($j) ? ($j['changes'] ?? []) : [];
+        $r['reason']  = is_array($j) ? ($j['reason'] ?? '') : '';
+        $r['raw_len'] = strlen((string)$r['changes']);
+    }
+    unset($r);
+
+    $summary = ['count' => count($rows), 'ACC_EDIT' => 0, 'ACC_MONTH' => 0, 'ACC_RECON' => 0];
+    foreach ($rows as $r) if (isset($summary[$r['action_type']])) $summary[$r['action_type']]++;
+
+    $total   = count($rows);
+    $perPage = (int)($f['per_page'] ?? 20);
+    if ($perPage === 0) return ['rows' => $rows, 'total' => $total, 'page' => 1, 'per_page' => 0, 'summary' => $summary];
+    if (!in_array($perPage, [5, 10, 20, 50], true)) $perPage = 20;
+    $page = max(1, (int)($f['page'] ?? 1));
+    return ['rows' => array_slice($rows, ($page - 1) * $perPage, $perPage),
+            'total' => $total, 'page' => $page, 'per_page' => $perPage, 'summary' => $summary];
+}
+
+/* ============================================================
+ * 對帳：線上修改單據 + 對帳狀態
+ * ============================================================ */
+
+/** 各來源可線上修改的欄位白名單。應收單價是 int（資料表型別限制），不接受小數。 */
+function acc_editable_fields(string $srcType): array
+{
+    switch (strtoupper($srcType)) {
+        case 'IS':   return ['Qty' => 'int', 'Unit_price' => 'int', 'Note' => 'text'];
+        case 'IR':   return ['Qty' => 'int', 'Unit_price' => 'int', 'IR_ps' => 'text'];
+        case 'TLOG': return ['transfer_qty' => 'int', 'modified_unit_price' => 'dec',
+                             'process_amount' => 'dec', 'tax_amount' => 'dec', 'note' => 'text'];
+        default:     return [];
+    }
+}
+
+/** 單據所在的表與主鍵 */
+function acc_src_table(string $srcType): array
+{
+    switch (strtoupper($srcType)) {
+        case 'IS':   return ['is_list', 'IS_id', 'IS_number'];
+        case 'IR':   return ['ir_track', 'IR_id', 'IR_no'];
+        case 'TLOG': return ['bom_ing_transfer_log', 'transfer_id', 'transfer_no'];
+        default:     return [];
+    }
+}
+
+/**
+ * 線上修改單據欄位（對帳用）。每一次修改都寫 audit_log，不留紀錄就不寫入。
+ * @param array  $fields 欄位=>新值（只認白名單）
+ * @param string $reason 修改原因（必填，帳款爭議時要查得出為什麼改）
+ */
+function acc_edit_doc(PDO $db, string $srcType, int $id, array $fields, string $reason, ?array $user): array
+{
+    acc_ensure_schema($db);
+    $srcType = strtoupper(trim($srcType));
+    $meta    = acc_src_table($srcType);
+    $allow   = acc_editable_fields($srcType);
+    if (!$meta || !$allow) return ['success' => false, 'message' => '不支援的單據類型'];
+    if ($id <= 0)          return ['success' => false, 'message' => '缺少單據'];
+    $reason = trim($reason);
+    if (mb_strlen($reason) < 2) {
+        return ['success' => false, 'message' => '請填寫修改原因（至少 2 個字），帳款有爭議時要查得出為什麼改'];
+    }
+    [$tbl, $pk, $noCol] = $meta;
+
+    // 應收側：已開發票的單據不可改金額（金額已在發票上）
+    if ($srcType === 'IS' || $srcType === 'IR') {
+        $used = acc_invoiced_src_map($db);
+        $u = $used[$srcType . '-' . $id] ?? null;
+        $touchMoney = array_intersect(array_keys($fields), ['Qty', 'Unit_price']);
+        if ($u && $touchMoney) {
+            return ['success' => false,
+                    'message' => '此單據已開立在發票 ' . ($u['invoice_no'] ?: '#' . $u['invoice_id'])
+                               . ' 上，不可修改數量或單價。若確定要改，請先作廢該發票。'];
+        }
+    }
+
+    // 讀舊值
+    $cols = implode(',', array_map(fn($c) => "`$c`", array_keys($allow)));
+    $st = $db->prepare("SELECT $noCol AS doc_no, $cols FROM $tbl WHERE $pk = ? LIMIT 1");
+    $st->execute([$id]);
+    $old = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$old) return ['success' => false, 'message' => '找不到該單據'];
+
+    $set = []; $vals = []; $changes = [];
+    foreach ($fields as $col => $nv) {
+        if (!isset($allow[$col])) continue;
+        $type = $allow[$col];
+        $ov   = $old[$col];
+
+        if ($type === 'int') {
+            $s = trim((string)$nv);
+            if ($s === '') { $new = null; }
+            else {
+                if (!preg_match('/^-?\d+$/', str_replace(',', '', $s))) {
+                    return ['success' => false,
+                            'message' => "「{$col}」只能填整數（資料表欄位型別為 int，不接受小數）"];
+                }
+                $new = (int)str_replace(',', '', $s);
+            }
+        } elseif ($type === 'dec') {
+            $s = trim((string)$nv);
+            if ($s === '') { $new = null; }
+            else {
+                if (!is_numeric(str_replace(',', '', $s))) {
+                    return ['success' => false, 'message' => "「{$col}」必須是數字"];
+                }
+                $new = round((float)str_replace(',', '', $s), 2);
+            }
+        } else {
+            $new = trim((string)$nv);
+            if ($new === '') $new = null;
+        }
+
+        // 比較（數值用數值比，避免 "100" 與 100 被當成有變動）
+        $same = ($type === 'text')
+            ? ((string)$ov === (string)$new)
+            : (($ov === null && $new === null) || (abs((float)$ov - (float)$new) < 0.0001));
+        if ($same) continue;
+
+        $set[]  = "`$col` = ?";
+        $vals[] = $new;
+        $changes[$col] = ['old' => $ov, 'new' => $new];
+    }
+
+    if (!$set) return ['success' => true, 'updated' => 0, 'message' => '沒有欄位變動'];
+
+    // 加工單改了數量或單價時，加工費與稅額要跟著重算（除非使用者自己指定了金額）
+    if ($srcType === 'TLOG' && !isset($changes['process_amount'])) {
+        $q  = $changes['transfer_qty']['new']        ?? $old['transfer_qty'];
+        $up = $changes['modified_unit_price']['new'] ?? $old['modified_unit_price'];
+        if ($up !== null && $q !== null) {
+            $amt = round((float)$q * (float)$up, 2);
+            if (abs((float)$old['process_amount'] - $amt) > 0.0001) {
+                $set[] = "`process_amount` = ?"; $vals[] = $amt;
+                $changes['process_amount'] = ['old' => $old['process_amount'], 'new' => $amt];
+                if (!isset($changes['tax_amount'])) {
+                    $tax = round($amt * acc_tax_rate($db));
+                    $set[] = "`tax_amount` = ?"; $vals[] = $tax;
+                    $changes['tax_amount'] = ['old' => $old['tax_amount'], 'new' => $tax];
+                }
+            }
+        }
+    }
+
+    try {
+        $db->beginTransaction();
+        // 各表的修改人欄位名稱不同，有就一起更新
+        if ($srcType === 'IR')        { $set[] = "Modified_By = ?"; $vals[] = $user ? (string)$user['id'] : null;
+                                        $set[] = "Modified_At = NOW()"; }
+        elseif ($srcType === 'TLOG')  { $set[] = "changed_by = ?";  $vals[] = $user ? (string)$user['id'] : null;
+                                        $set[] = "modified_at = NOW()"; }
+        $vals[] = $id;
+        $st = $db->prepare("UPDATE $tbl SET " . implode(', ', $set) . " WHERE $pk = ?");
+        $st->execute($vals);
+        $n = $st->rowCount();
+        acc_audit($db, 'ACC_EDIT', $tbl, $id, (string)$old['doc_no'], $changes, $reason, $user);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '修改失敗：' . $e->getMessage()];
+    }
+
+    return ['success' => true, 'updated' => $n, 'changes' => $changes,
+            'message' => '已修改 ' . count($changes) . ' 個欄位並寫入稽核紀錄'];
+}
+
+/** 設定對帳狀態／註記（業務對應收、生管對應付） */
+function acc_recon_set(PDO $db, string $srcType, int $id, string $status,
+                       ?string $note, ?array $user): array
+{
+    acc_ensure_schema($db);
+    $srcType = strtoupper(trim($srcType));
+    $meta = acc_src_table($srcType);
+    if (!$meta) return ['success' => false, 'message' => '不支援的單據類型'];
+    if ($id <= 0) return ['success' => false, 'message' => '缺少單據'];
+    if (!in_array($status, ['pending', 'ok', 'issue'], true)) {
+        return ['success' => false, 'message' => '對帳狀態只能是 未對／已對完／有異常'];
+    }
+    $side = ($srcType === 'TLOG') ? 'ap' : 'ar';
+    $note = ($note === null || trim($note) === '') ? null : mb_substr(trim($note), 0, 300);
+
+    try {
+        $db->beginTransaction();
+        $st = $db->prepare("SELECT status, note FROM acc_recon WHERE src_type=? AND src_id=? LIMIT 1");
+        $st->execute([$srcType, $id]);
+        $old = $st->fetch(PDO::FETCH_ASSOC);
+
+        if ($old) {
+            $up = $db->prepare("UPDATE acc_recon SET status=?, note=?, side=?, recon_by=?, recon_by_name=?,
+                                recon_at=NOW(), Modified_At=NOW() WHERE src_type=? AND src_id=?");
+            $up->execute([$status, $note, $side, $user ? (int)$user['id'] : null,
+                          $user ? (string)$user['user_cname'] : null, $srcType, $id]);
+        } else {
+            $ins = $db->prepare("INSERT INTO acc_recon
+                                 (src_type, src_id, side, status, note, recon_by, recon_by_name, recon_at)
+                                 VALUES (?,?,?,?,?,?,?,NOW())");
+            $ins->execute([$srcType, $id, $side, $status, $note,
+                           $user ? (int)$user['id'] : null, $user ? (string)$user['user_cname'] : null]);
+        }
+
+        acc_audit($db, 'ACC_RECON', $meta[0], $id, null, [
+            'status' => ['old' => $old['status'] ?? 'pending', 'new' => $status],
+            'note'   => ['old' => $old['note'] ?? null,        'new' => $note],
+        ], null, $user);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '對帳狀態儲存失敗：' . $e->getMessage()];
+    }
+
+    $lbl = ['pending' => '未對帳', 'ok' => '已對完', 'issue' => '有異常'];
+    return ['success' => true, 'message' => '已標記為「' . $lbl[$status] . '」'];
+}
+
+/** 批次取對帳狀態：'IS-123' => row */
+function acc_recon_map(PDO $db, string $srcType, array $ids): array
+{
+    $ids = array_values(array_unique(array_map('intval', array_filter($ids))));
+    if (!$ids) return [];
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $st = $db->prepare("SELECT * FROM acc_recon WHERE src_type = ? AND src_id IN ($ph)");
+    $st->execute(array_merge([strtoupper($srcType)], $ids));
+    $m = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $m[$r['src_type'] . '-' . (int)$r['src_id']] = $r;
+    return $m;
 }
 
 /* ============================================================
@@ -160,8 +464,25 @@ function acc_perms(PDO $db, ?array $u): array
     }
     $canAdmin = $isAdmin  || acc_has_role($db, $uid, ['acc_admin']);
     $canEdit  = $canAdmin || acc_has_role($db, $uid, ['acc_edit']);
-    $canView  = $canEdit  || acc_has_role($db, $uid, ['acc_view']);
-    return ['isAdmin' => $isAdmin, 'canAdmin' => $canAdmin, 'canEdit' => $canEdit, 'canView' => $canView];
+
+    /* 對帳角色：實務分工是「應收由業務對完帳給會計、應付由生管對完帳給會計」。
+       這兩個角色只能做對帳（改單據、標對帳狀態），不能開發票、不能沖帳、不能付款；
+       而且各自只碰自己那一側——業務不能改應付、生管不能改應收。 */
+    $reconAr = acc_has_role($db, $uid, ['acc_ar_recon']);
+    $reconAp = acc_has_role($db, $uid, ['acc_ap_recon']);
+
+    $canView = $canEdit || $reconAr || $reconAp || acc_has_role($db, $uid, ['acc_view']);
+
+    return [
+        'isAdmin'    => $isAdmin,
+        'canAdmin'   => $canAdmin,
+        'canEdit'    => $canEdit,          // 會計本身：開票、沖帳、匯入
+        'canView'    => $canView,
+        'reconAr'    => $reconAr,          // 純業務對帳角色（不含會計權限）
+        'reconAp'    => $reconAp,          // 純生管對帳角色
+        'canReconAr' => $canEdit || $reconAr,   // 可修改應收單據與標對帳狀態
+        'canReconAp' => $canEdit || $reconAp,   // 可修改應付單據與標對帳狀態
+    ];
 }
 
 /* ============================================================
@@ -768,7 +1089,8 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
         $bm = trim((string)$r['billing_month_override']);
         if (!preg_match('/^\d{4}-\d{2}$/', $bm)) $bm = acc_billing_month($r['d'], $cut);
         if ($bm !== $billingMonth) continue;
-        $items[] = ['kind' => 'ship', 'no' => $r['IS_number'], 'date' => $r['d'],
+        $items[] = ['kind' => 'ship', 'src_type' => 'IS', 'src_id' => (int)$r['IS_id'],
+                    'no' => $r['IS_number'], 'date' => $r['d'],
                     'order_oo' => $r['Order_oo'], 'product_id' => $r['Product_id'],
                     'spec' => $r['Specification'], 'qty' => (int)$r['Qty'],
                     'unit_price' => (float)$r['Unit_price'], 'amount' => $amt,
@@ -776,7 +1098,7 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
     }
 
     $st2 = $db->prepare("
-        SELECT it.IR_no, DATE_FORMAT(it.IR_date,'%Y-%m-%d') AS d, it.d_id, it.Specification,
+        SELECT it.IR_id, it.IR_no, DATE_FORMAT(it.IR_date,'%Y-%m-%d') AS d, it.d_id, it.Specification,
                it.Qty, it.Unit_price, it.IR_ps, it.billing_month_override,
                COALESCE(rt.is_note,0) AS is_note
         FROM ir_track it
@@ -791,7 +1113,8 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
         $bm = trim((string)$r['billing_month_override']);
         if (!preg_match('/^\d{4}-\d{2}$/', $bm)) $bm = acc_billing_month($r['d'], $cut);
         if ($bm !== $billingMonth) continue;
-        $items[] = ['kind' => 'return', 'no' => $r['IR_no'], 'date' => $r['d'],
+        $items[] = ['kind' => 'return', 'src_type' => 'IR', 'src_id' => (int)$r['IR_id'],
+                    'no' => $r['IR_no'], 'date' => $r['d'],
                     'order_oo' => null, 'product_id' => $r['d_id'], 'spec' => $r['Specification'],
                     'qty' => -(int)$r['Qty'], 'unit_price' => (float)$r['Unit_price'],
                     'amount' => -$amt, 'note' => $r['IR_ps'], 'sale_type' => '退貨'];
