@@ -27,6 +27,7 @@ $AS_DOC_NO = '2-PD-01-07';   // 綁定的 AS 表單編號（圖面變更簽收�
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json; charset=utf-8');
     include_once '../../src/common/dwg_notify.php';
+    include_once '../../src/common/dwg_change_lib.php';   // 判定與建立變更的唯一實作點
 
     $pdo = (new DBConnection())->getPDO();
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -99,59 +100,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $fromP   = ($_POST['from_process_no'] ?? '') === '' ? null : (int)$_POST['from_process_no'];
             $ackIds  = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['ack_users'] ?? [])))));
 
-            $pdo->beginTransaction();
-            if ($id) {
-                $pdo->prepare("UPDATE qc_drawing_change SET d_id=?, old_revision=?, new_revision=?, change_date=?,
-                               source=?, customer_doc_no=?, from_process_no=?, summary=?, detail=? WHERE id=?")
-                    ->execute([$d_id, $oldRev, $newRev, ($_POST['change_date'] ?: null), trim($_POST['source'] ?? ''),
-                               trim($_POST['customer_doc_no'] ?? ''), $fromP, $summary, trim($_POST['detail'] ?? ''), $id]);
-                $newVerId = null;
-            } else {
-                // 變更單號 DWG-YYYYMM-nnn（同月流水）
-                $ym = date('Ym');
-                $n  = (int)$pdo->query("SELECT COUNT(*) FROM qc_drawing_change WHERE change_no LIKE 'DWG-$ym-%'")->fetchColumn() + 1;
-                $changeNo = sprintf('DWG-%s-%03d', $ym, $n);
-
-                // ── 檢驗標準：把目前生效版本整組複製成新版本，舊版停用但保留 ──
-                // 這樣 QC 只要改動到的尺寸；舊檢驗紀錄仍指向舊 version_id，追溯得到當時的標準。
-                $oldVerId = $pdo->query("SELECT version_id FROM qc_inspection_version WHERE d_id=" . (int)$d_id . " AND is_active=1 ORDER BY version_id DESC LIMIT 1")->fetchColumn();
-                $oldVerId = $oldVerId ? (int)$oldVerId : null;
-                $newVerId = null;
-                if ($oldVerId) {
-                    $label = $newRev !== '' ? mb_substr($newRev, 0, 30) : ('變更 ' . date('Y-m-d'));
-                    $pdo->prepare("INSERT INTO qc_inspection_version (d_id, version_label, source_type, is_active) VALUES (?,?, 'REVISION', 1)")
-                        ->execute([$d_id, $label]);
-                    $newVerId = (int)$pdo->lastInsertId();
-
-                    $src = $pdo->prepare("SELECT * FROM qc_inspection_item WHERE version_id=?");
-                    $src->execute([$oldVerId]);
-                    $insI = $pdo->prepare("INSERT INTO qc_inspection_item
-                        (version_id, form_type_id, process_name, item_code, item_name, standard_text,
-                         min_value, max_value, plus_tolerance, minus_tolerance, result_type, sort_order, is_active)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
-                    $insT = $pdo->prepare("INSERT INTO qc_inspection_item_tool_type (item_id, QC_Tool_List_id, is_primary) VALUES (?,?,?)");
-                    $getT = $pdo->prepare("SELECT QC_Tool_List_id, is_primary FROM qc_inspection_item_tool_type WHERE item_id=?");
-                    foreach ($src->fetchAll(PDO::FETCH_ASSOC) as $it) {
-                        $insI->execute([$newVerId, $it['form_type_id'], $it['process_name'], $it['item_code'], $it['item_name'],
-                                        $it['standard_text'], $it['min_value'], $it['max_value'], $it['plus_tolerance'],
-                                        $it['minus_tolerance'], $it['result_type'], $it['sort_order'], $it['is_active']]);
-                        $nid = (int)$pdo->lastInsertId();
-                        $getT->execute([$it['item_id']]);
-                        foreach ($getT->fetchAll(PDO::FETCH_ASSOC) as $t) { try { $insT->execute([$nid, $t['QC_Tool_List_id'], $t['is_primary']]); } catch (Exception $e) {} }
-                    }
-                    $pdo->prepare("UPDATE qc_inspection_version SET is_active=0 WHERE d_id=? AND version_id<>?")->execute([$d_id, $newVerId]);
-                }
-
-                $pdo->prepare("INSERT INTO qc_drawing_change
-                    (change_no, as_doc_no, d_id, old_revision, new_revision, change_date, source, customer_doc_no,
-                     from_process_no, summary, detail, old_version_id, new_version_id, status, created_by, created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'OPEN', ?, NOW())")
-                    ->execute([$changeNo, '2-PD-01-07', $d_id, $oldRev, $newRev, ($_POST['change_date'] ?: null),
-                               trim($_POST['source'] ?? ''), trim($_POST['customer_doc_no'] ?? ''), $fromP,
-                               $summary, trim($_POST['detail'] ?? ''), $oldVerId, $newVerId, $uid]);
-                $id = (int)$pdo->lastInsertId();
+            // ── 新建：走共用 lib（與「料號附件上傳自動判定」產生的變更同一套邏輯）──
+            // 建立單號、檢驗標準整組複製成新版次、簽收名單、通知都在 src/common/dwg_change_lib.php，
+            // 兩個入口共用一份，避免日後只改到其中一邊。
+            if (!$id) {
+                $r = dwg_create_change($pdo, [
+                    'd_id'            => $d_id,
+                    'summary'         => $summary,
+                    'old_revision'    => $oldRev,
+                    'new_revision'    => $newRev,
+                    'change_date'     => ($_POST['change_date'] ?? ''),
+                    'source'          => ($_POST['source'] ?? ''),
+                    'customer_doc_no' => ($_POST['customer_doc_no'] ?? ''),
+                    'from_process_no' => ($_POST['from_process_no'] ?? ''),
+                    'detail'          => ($_POST['detail'] ?? ''),
+                    'ack_users'       => $ackIds,
+                    'created_by'      => (int)$uid,
+                ]);
+                echo json_encode(['success' => true, 'id' => $r['id']], JSON_UNESCAPED_UNICODE);
+                exit;
             }
 
+            // ── 修改既有紀錄：只改欄位與簽收名單，不再複製檢驗標準版次 ──
+            $cn = $pdo->prepare("SELECT change_no FROM qc_drawing_change WHERE id=?");
+            $cn->execute([$id]);
+            $changeNo = (string)$cn->fetchColumn();   // 修改後若新增簽收人，通知要帶得出原單號
+            $pdo->beginTransaction();
+            $pdo->prepare("UPDATE qc_drawing_change SET d_id=?, old_revision=?, new_revision=?, change_date=?,
+                           source=?, customer_doc_no=?, from_process_no=?, summary=?, detail=? WHERE id=?")
+                ->execute([$d_id, $oldRev, $newRev, ($_POST['change_date'] ?: null), trim($_POST['source'] ?? ''),
+                           trim($_POST['customer_doc_no'] ?? ''), $fromP, $summary, trim($_POST['detail'] ?? ''), $id]);
             // 簽收名單（重設；已簽收者保留簽收時間）
             $exist = [];
             $e = $pdo->prepare("SELECT user_id, acked_at FROM qc_drawing_change_ack WHERE change_id=?");
@@ -169,7 +147,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $partNo = (string)$pn->fetchColumn();
                 dwg_notify($pdo, $id,
                     '【圖面變更】料號 ' . $partNo . '　請簽收確認',
-                    '圖面變更單 ' . ($changeNo ?? '') . '（AS 2-PD-01-07）' . "\n" .
+                    '圖面變更單 ' . $changeNo . '（AS 2-PD-01-07）' . "\n" .
                     '版次：' . ($oldRev ?: '—') . ' → ' . ($newRev ?: '—') . "\n" .
                     '摘要：' . $summary . "\n" . '請點入確認並簽收。',
                     $newOnes, (int)$uid, 'reply');
