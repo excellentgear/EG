@@ -179,7 +179,7 @@ if (!function_exists('eg_leave_user_busy_in_range')) {
         try {
             $sql = "SELECT lr.id, lr.start_datetime, lr.end_datetime, lr.status, lt.leave_name
                     FROM leave_request lr LEFT JOIN leave_type lt ON lt.id = lr.leave_type_id
-                    WHERE lr.employee_id = ? AND lr.status IN ('pending','approved')
+                    WHERE lr.employee_id = ? AND lr.status IN ('pending','cancel_pending','approved')
                       AND lr.start_datetime < ? AND lr.end_datetime > ?";
             $args = [$uid, $end, $start];
             if ($excludeReqId > 0) { $sql .= " AND lr.id <> ?"; $args[] = $excludeReqId; }
@@ -443,11 +443,13 @@ if (!function_exists('eg_leave_annual_summary')) {
                 "SELECT lr.status, COALESCE(SUM(lr.total_days),0) AS d
                  FROM leave_request lr JOIN leave_type lt ON lt.id = lr.leave_type_id
                  WHERE lr.employee_id = ? AND lt.leave_name = '特休'
-                   AND lr.status IN ('approved','pending') AND YEAR(lr.start_datetime) = ?
+                   AND lr.status IN ('approved','pending','cancel_pending') AND YEAR(lr.start_datetime) = ?
                  GROUP BY lr.status");
             $st->execute([$userId, $year]);
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                if ($r['status'] === 'approved') $used = (float)$r['d']; else $pending = (float)$r['d'];
+                // pending 與 cancel_pending 都算「送審中」，必須累加；
+                // 用 = 會讓後一種狀態覆蓋前一種，導致額度算少（2026-07-30 加入 cancel_pending 時發現）
+                if ($r['status'] === 'approved') $used += (float)$r['d']; else $pending += (float)$r['d'];
             }
         } catch (Throwable $e) {}
         return [
@@ -781,7 +783,7 @@ if (!function_exists('eg_leave_submit')) {
 
         // 重疊檢查：同人已有 pending/approved 且時段重疊 → 擋下
         $st = $db->prepare("SELECT id FROM leave_request
-                            WHERE employee_id = ? AND status IN ('pending','approved')
+                            WHERE employee_id = ? AND status IN ('pending','cancel_pending','approved')
                               AND start_datetime < ? AND end_datetime > ? LIMIT 1");
         $st->execute([$uid, $end, $start]);
         if ($dup = $st->fetchColumn()) {
@@ -926,11 +928,13 @@ if (!function_exists('eg_leave_can_edit')) {
         if (!$isAdmin && (int)$req['employee_id'] !== $userId) return ['ok' => false, 'reason' => '僅申請人本人可修改'];
         if ($req['status'] !== 'pending') {
             $m = ['approved' => '此單已核准，如需變更請用「申請修改」（將銷假後重新申請）',
-                  'rejected' => '此單已退回，請重新申請', 'canceled' => '此單已取消'];
+                  'rejected' => '此單已退回，請重新申請', 'canceled' => '此單已取消',
+                  'cancel_pending' => '此單的撤回申請正待主管簽核，簽核結果出來後才能再動'];
             return ['ok' => false, 'reason' => $m[$req['status']] ?? '此狀態不可修改'];
         }
         try {
-            $st = $db->prepare("SELECT COUNT(*) FROM leave_sign_record WHERE leave_request_id = ? AND action IN ('approved','rejected')");
+            $st = $db->prepare("SELECT COUNT(*) FROM leave_sign_record
+                                WHERE leave_request_id = ? AND action IN ('approved','rejected') AND step_no < 90");
             $st->execute([(int)$req['id']]);
             if ((int)$st->fetchColumn() > 0) {
                 return ['ok' => false, 'reason' => '已有主管簽核過，不可直接修改；請先「撤回申請」再重新送出'];
@@ -979,7 +983,7 @@ if (!function_exists('eg_leave_update')) {
         }
         // 重疊檢查要排除自己這張單
         $st = $db->prepare("SELECT id FROM leave_request
-                            WHERE employee_id = ? AND id <> ? AND status IN ('pending','approved')
+                            WHERE employee_id = ? AND id <> ? AND status IN ('pending','cancel_pending','approved')
                               AND start_datetime < ? AND end_datetime > ? LIMIT 1");
         $st->execute([$uid, $requestId, $end, $start]);
         if ($dup = $st->fetchColumn()) return ['ok' => false, 'msg' => "此時段與請假單 #{$dup} 重疊"];
@@ -1106,7 +1110,7 @@ if (!function_exists('eg_leave_sign')) {
 
         // 目前輪到的層（最小的 pending 層）
         $st = $db->prepare("SELECT * FROM leave_approval
-                            WHERE leave_request_id = ? AND status = 'pending'
+                            WHERE leave_request_id = ? AND approval_kind = 'leave' AND status = 'pending'
                             ORDER BY approval_level ASC LIMIT 1");
         $st->execute([$requestId]);
         $cur = $st->fetch(PDO::FETCH_ASSOC);
@@ -1139,7 +1143,8 @@ if (!function_exists('eg_leave_sign')) {
                 $final = true;
             } else {
                 // 還有下一層嗎？
-                $st = $db->prepare("SELECT COUNT(*) FROM leave_approval WHERE leave_request_id = ? AND status = 'pending'");
+                $st = $db->prepare("SELECT COUNT(*) FROM leave_approval
+                                    WHERE leave_request_id = ? AND approval_kind = 'leave' AND status = 'pending'");
                 $st->execute([$requestId]);
                 if ((int)$st->fetchColumn() === 0) {
                     $db->prepare("UPDATE leave_request SET status = 'approved', decided_at = NOW(), last_update = NOW() WHERE id = ?")
@@ -1196,8 +1201,8 @@ if (!function_exists('eg_leave_sign')) {
                             $targets, 0, $reason);
         } else {
             // 過一層還有下一層：通知下一層簽核人
-            $st = $db->prepare("SELECT * FROM leave_approval WHERE leave_request_id = ? AND status = 'pending'
-                                ORDER BY approval_level ASC LIMIT 1");
+            $st = $db->prepare("SELECT * FROM leave_approval WHERE leave_request_id = ? AND approval_kind = 'leave'
+                                  AND status = 'pending' ORDER BY approval_level ASC LIMIT 1");
             $st->execute([$requestId]);
             if ($next = $st->fetch(PDO::FETCH_ASSOC)) {
                 $r = eg_resolve_signer($db, (int)$next['approver_id'],
@@ -1214,10 +1219,166 @@ if (!function_exists('eg_leave_sign')) {
 
 // ============================== 撤回 / 銷假 ==============================
 
+if (!function_exists('eg_leave_cancel_mode')) {
+    /**
+     * 依請假日期判斷撤回／銷假該走哪條路（2026-07-30 使用者定案）：
+     *   'direct'   請假起日還沒到（未來）→ 申請人可直接撤回／銷假。
+     *   'approval' 請假期間已開始、還沒結束（含請假當日）→ **撤回需主管簽核**，不可自行生效。
+     *   'blocked'  請假期間已結束 → **不開放自行撤回**，只能找管理員處理。
+     *              理由：避免「已經休完假卻把請假紀錄撤掉」變成有休假無紀錄。
+     * 管理者不受限（一律 'direct'）。
+     */
+    function eg_leave_cancel_mode(array $req, bool $isAdmin = false): string {
+        if ($isAdmin) return 'direct';
+        $today = date('Y-m-d');
+        $sd = substr((string)$req['start_datetime'], 0, 10);
+        $ed = substr((string)$req['end_datetime'], 0, 10);
+        if ($sd > $today) return 'direct';
+        if ($ed < $today) return 'blocked';
+        return 'approval';   // 期間內（含當日）
+    }
+}
+
+if (!function_exists('eg_leave_request_cancel')) {
+    /**
+     * 提出「撤回申請」：請假期間內（含當日）要撤回必須主管簽核，先轉為 cancel_pending 待簽。
+     * 簽核人＝第一層主管（撤回不需走完整條鏈），透過 eg_resolve_signer 解析當下實際簽核人。
+     */
+    function eg_leave_request_cancel(PDO $db, int $requestId, int $userId, string $reason): array {
+        $st = $db->prepare("SELECT lr.*, lt.leave_name, lt.max_approval_level FROM leave_request lr
+                            JOIN leave_type lt ON lt.id = lr.leave_type_id WHERE lr.id = ? LIMIT 1");
+        $st->execute([$requestId]);
+        $req = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$req) return ['ok' => false, 'msg' => '請假單不存在'];
+        if ((int)$req['employee_id'] !== $userId) return ['ok' => false, 'msg' => '僅申請人本人可提出撤回'];
+        if (!in_array($req['status'], ['pending', 'approved'], true)) {
+            return ['ok' => false, 'msg' => '此單狀態（' . $req['status'] . '）無法撤回'];
+        }
+        if (trim($reason) === '') return ['ok' => false, 'msg' => '請假期間內撤回必須填寫原因（將送主管簽核）'];
+
+        $uid = (int)$req['employee_id'];
+        $chain = eg_leave_supervisor_chain($db, $uid, 1);
+        if (empty($chain)) return ['ok' => false, 'msg' => '無法解析簽核主管，請洽管理員撤回'];
+        $target = (int)$chain[0]['user_id'];
+
+        try {
+            $db->beginTransaction();
+            $db->prepare("UPDATE leave_request SET status = 'cancel_pending', cancel_reason = ?, last_update = NOW()
+                          WHERE id = ?")->execute([$reason, $requestId]);
+            // 撤回簽核列（approval_kind='cancel'）；同單重複提出時先清掉舊的待簽列
+            $db->prepare("DELETE FROM leave_approval WHERE leave_request_id = ? AND approval_kind = 'cancel'")
+               ->execute([$requestId]);
+            $db->prepare("INSERT INTO leave_approval
+                            (leave_request_id, approval_kind, approval_level, approver_level, approver_id, status)
+                          VALUES (?, 'cancel', 1, 1, ?, 'pending')")->execute([$requestId, $target]);
+            // 軌跡：step_no=97 表示「提出撤回申請」
+            $db->prepare("INSERT INTO leave_sign_record (leave_request_id, step_no, signer_id, action, remark, signed_at)
+                          VALUES (?, 97, ?, 'cancel_requested', ?, NOW())")
+               ->execute([$requestId, $userId, '提出撤回申請：' . $reason]);
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            return ['ok' => false, 'msg' => '提出撤回失敗：' . $e->getMessage()];
+        }
+
+        // 通知主管（mode=sign，簽完前不從未讀清單消失）
+        $r = eg_resolve_signer($db, $target, ['applicant_id' => $uid, 'flow_key' => 'leave', 'doc_id' => $requestId]);
+        $ns = $db->prepare("SELECT user_cname FROM user WHERE id = ? LIMIT 1");
+        $ns->execute([$uid]);
+        $body = "申請人：" . (string)$ns->fetchColumn()
+              . "\n假　別：{$req['leave_name']}"
+              . "\n時　段：" . substr((string)$req['start_datetime'], 0, 16) . ' ~ ' . substr((string)$req['end_datetime'], 0, 16)
+              . "\n撤回原因：{$reason}"
+              . "\n【此單已在請假期間內，撤回需您簽核】";
+        eg_leave_notify($db, $requestId, "↩️ 請假單 #{$requestId} 撤回待您簽核", $body,
+                        [$r['signer_id']], $uid, $reason, 'sign', 'LEAVE_APPROVAL');
+        return ['ok' => true, 'msg' => '已送出撤回申請，待主管簽核後才會撤除（行事曆暫時保留）', 'mode' => 'approval'];
+    }
+}
+
+if (!function_exists('eg_leave_sign_cancel')) {
+    /**
+     * 主管簽核「撤回申請」：核准→真的撤回（狀態 canceled、撤行事曆）；退回→回復原狀態。
+     */
+    function eg_leave_sign_cancel(PDO $db, int $requestId, int $userId, string $action, string $remark = ''): array {
+        if (!in_array($action, ['approved', 'rejected'], true)) return ['ok' => false, 'msg' => '無效的動作'];
+        $st = $db->prepare("SELECT lr.*, lt.leave_name FROM leave_request lr
+                            JOIN leave_type lt ON lt.id = lr.leave_type_id WHERE lr.id = ? LIMIT 1");
+        $st->execute([$requestId]);
+        $req = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$req) return ['ok' => false, 'msg' => '請假單不存在'];
+        if ($req['status'] !== 'cancel_pending') return ['ok' => false, 'msg' => '此單目前不是「撤回待簽核」狀態'];
+
+        $st = $db->prepare("SELECT * FROM leave_approval WHERE leave_request_id = ? AND approval_kind = 'cancel'
+                            AND status = 'pending' LIMIT 1");
+        $st->execute([$requestId]);
+        $cur = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$cur) return ['ok' => false, 'msg' => '找不到撤回簽核列（資料異常）'];
+
+        $can = eg_leave_can_sign($db, $cur, $userId, (int)$req['employee_id']);
+        if (!$can['ok']) return ['ok' => false, 'msg' => '撤回簽核人不是您（或代理未生效）'];
+
+        // 退回撤回申請時要回到原本狀態：有人簽核過→approved，否則→pending
+        $doneN = (int)$db->query("SELECT COUNT(*) FROM leave_approval WHERE leave_request_id = " . (int)$requestId
+                                 . " AND approval_kind = 'leave' AND status = 'pending'")->fetchColumn();
+        $restore = ($doneN > 0) ? 'pending' : 'approved';
+
+        try {
+            $db->beginTransaction();
+            $db->prepare("UPDATE leave_approval SET status = ?, remark = ?, approval_time = NOW(), delegate_id = ?
+                          WHERE id = ?")
+               ->execute([$action, $remark, $can['as_delegate'] ? $userId : null, $cur['id']]);
+            $db->prepare("INSERT INTO leave_sign_record (leave_request_id, step_no, signer_id, action, remark, signed_at)
+                          VALUES (?, 97, ?, ?, ?, NOW())")
+               ->execute([$requestId, $userId, $action === 'approved' ? 'cancel_approved' : 'cancel_rejected',
+                          ($action === 'approved' ? '核准撤回' : '駁回撤回') . ($remark !== '' ? '：' . $remark : '')]);
+
+            if ($action === 'approved') {
+                $db->prepare("UPDATE leave_request
+                              SET status = 'canceled', canceled_at = NOW(), canceled_by = ?, last_update = NOW()
+                              WHERE id = ?")->execute([$userId, $requestId]);
+                eg_leave_event_remove($db, $req['evenement_id'] ? (int)$req['evenement_id'] : null);
+                $db->prepare("UPDATE leave_request SET evenement_id = NULL WHERE id = ?")->execute([$requestId]);
+            } else {
+                $db->prepare("UPDATE leave_request SET status = ?, last_update = NOW() WHERE id = ?")
+                   ->execute([$restore, $requestId]);
+            }
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            return ['ok' => false, 'msg' => '簽核失敗：' . $e->getMessage()];
+        }
+
+        eg_leave_notify_done($db, $requestId, $userId);
+        eg_leave_notify_done($db, $requestId, 0);
+
+        $ns = $db->prepare("SELECT user_cname FROM user WHERE id = ? LIMIT 1");
+        $ns->execute([(int)$req['employee_id']]);
+        $body = "假　別：{$req['leave_name']}\n時　段："
+              . substr((string)$req['start_datetime'], 0, 16) . ' ~ ' . substr((string)$req['end_datetime'], 0, 16)
+              . ($remark !== '' ? "\n簽核意見：{$remark}" : '');
+        if ($action === 'approved') {
+            $targets = [(int)$req['employee_id']];
+            foreach (eg_leave_get_agents($db, $requestId) as $ar) {
+                if (!empty($ar['agent_user_id'])) $targets[] = (int)$ar['agent_user_id'];
+            }
+            eg_leave_notify($db, $requestId, "↩️ 請假單 #{$requestId} 撤回已核准（假已取消）", $body,
+                            $targets, $userId, (string)$req['reason']);
+        } else {
+            eg_leave_notify($db, $requestId, "⛔ 請假單 #{$requestId} 撤回申請被駁回（請假仍有效）", $body,
+                            [(int)$req['employee_id']], $userId, (string)$req['reason']);
+        }
+        return ['ok' => true, 'msg' => $action === 'approved' ? '已核准撤回，假別已取消' : '已駁回撤回，請假仍然有效'];
+    }
+}
+
 if (!function_exists('eg_leave_cancel')) {
     /**
-     * pending=撤回（限本人）；approved=銷假（限本人，直接生效並通知已簽核者與代理人，2026-07-28 定案）。
-     * 管理員（$isAdmin）可代任何人操作。
+     * 撤回／銷假。依 eg_leave_cancel_mode() 分三種情形（2026-07-30 使用者定案）：
+     *   未來的假        → 直接撤回／銷假（原行為）
+     *   請假期間內(含當日) → 轉為「撤回待簽核」，主管核准後才真的撤除
+     *   請假已結束      → 不開放自行撤回，回訊息請洽管理員（避免已休假卻無紀錄）
+     * 管理者不受限，一律直接撤除。
      */
     function eg_leave_cancel(PDO $db, int $requestId, int $userId, string $reason = '', bool $isAdmin = false): array {
         $st = $db->prepare("SELECT lr.*, lt.leave_name FROM leave_request lr
@@ -1229,6 +1390,18 @@ if (!function_exists('eg_leave_cancel')) {
         if (!in_array($req['status'], ['pending', 'approved'], true)) {
             return ['ok' => false, 'msg' => '此單狀態（' . $req['status'] . '）無法撤回/銷假'];
         }
+
+        // 依請假日期分流（管理者不受限）
+        $mode = eg_leave_cancel_mode($req, $isAdmin);
+        if ($mode === 'blocked') {
+            return ['ok' => false, 'mode' => 'blocked',
+                    'msg' => '請假期間已結束（' . substr((string)$req['end_datetime'], 0, 10)
+                             . '），為避免出現「已休假卻無請假紀錄」，不開放自行撤回；如確有需要請洽管理員處理。'];
+        }
+        if ($mode === 'approval') {
+            return eg_leave_request_cancel($db, $requestId, $userId, $reason);
+        }
+
         $wasApproved = ($req['status'] === 'approved');
 
         try {
@@ -1276,7 +1449,8 @@ if (!function_exists('eg_leave_cancel')) {
         } else {
             try {
                 $st = $db->prepare("SELECT approver_id FROM leave_approval
-                                    WHERE leave_request_id = ? AND status = 'pending' ORDER BY approval_level ASC LIMIT 1");
+                                    WHERE leave_request_id = ? AND approval_kind = 'leave' AND status = 'pending'
+                                    ORDER BY approval_level ASC LIMIT 1");
                 $st->execute([$requestId]);
                 if ($ap = $st->fetchColumn()) {
                     $r = eg_resolve_signer($db, (int)$ap, ['applicant_id' => (int)$req['employee_id'], 'flow_key' => 'leave', 'log' => false]);
@@ -1429,19 +1603,26 @@ if (!function_exists('eg_leave_pending_for')) {
     function eg_leave_pending_for(PDO $db, int $userId): array {
         $rows = [];
         try {
-            // 每張 pending 單目前輪到的層
+            // 兩種待簽都要列：
+            //   kind='leave'  → 請假本身待簽（單據 status=pending，取目前輪到的最小層）
+            //   kind='cancel' → 撤回待簽（單據 status=cancel_pending，請假期間內撤回需主管簽核）
             $st = $db->query(
                 "SELECT la.*, lr.employee_id, lr.start_datetime, lr.end_datetime, lr.total_hours, lr.total_days,
-                        lr.reason, lr.is_backdated, lr.attach_status, lr.submit_time,
-                        lt.leave_name, u.user_cname AS applicant_name
+                        lr.reason, lr.is_backdated, lr.attach_status, lr.submit_time, lr.status AS req_status,
+                        lr.cancel_reason, lt.leave_name, u.user_cname AS applicant_name
                  FROM leave_approval la
-                 JOIN leave_request lr ON lr.id = la.leave_request_id AND lr.status = 'pending'
+                 JOIN leave_request lr ON lr.id = la.leave_request_id
                  JOIN leave_type lt ON lt.id = lr.leave_type_id
                  JOIN user u ON u.id = lr.employee_id
                  WHERE la.status = 'pending'
-                   AND la.approval_level = (SELECT MIN(la2.approval_level) FROM leave_approval la2
-                                            WHERE la2.leave_request_id = la.leave_request_id AND la2.status = 'pending')
-                 ORDER BY lr.submit_time ASC");
+                   AND (
+                        (la.approval_kind = 'leave'  AND lr.status = 'pending'
+                         AND la.approval_level = (SELECT MIN(la2.approval_level) FROM leave_approval la2
+                                                  WHERE la2.leave_request_id = la.leave_request_id
+                                                    AND la2.approval_kind = 'leave' AND la2.status = 'pending'))
+                     OR (la.approval_kind = 'cancel' AND lr.status = 'cancel_pending')
+                   )
+                 ORDER BY (la.approval_kind = 'cancel') DESC, lr.submit_time ASC");
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
                 $can = eg_leave_can_sign($db, $row, $userId, (int)$row['employee_id']);
                 if (!$can['ok']) continue;

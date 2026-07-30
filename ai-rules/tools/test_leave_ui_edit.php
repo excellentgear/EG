@@ -50,8 +50,11 @@ echo "== 列底色依狀態（2026-07-30 使用者要求）==\n";
 ok(strpos($src, '.lv-tbl tr.row-canceled > td{background:#FAE3E7;}') !== false, '已取消／撤回＝暖粉底');
 ok(strpos($src, '.lv-tbl tr.row-pending  > td{background:#FDF4E3;}') !== false, '審核中＝淺琥珀底');
 ok(strpos($src, '.lv-tbl tr.row-rejected > td{background:#FBE6DF;}') !== false, '已退回也有底色（淺赭）');
-ok(strpos($src, "{pending:'row-pending', rejected:'row-rejected', canceled:'row-canceled'}") !== false,
+ok(strpos($src, "{pending:'row-pending', rejected:'row-rejected', canceled:'row-canceled',") !== false,
    '列依狀態套用 class');
+ok(strpos($src, "cancel_pending:'row-cancelpend'") !== false, '撤回待簽核也有底色（2026-07-30 新狀態）');
+ok(strpos($src, "cancel_pending:['st-cancelpend','撤回待簽核']") !== false, '撤回待簽核有狀態徽章');
+ok(strpos($src, 'data-status="cancel_pending"') !== false, '狀態篩選含撤回待簽核');
 ok(strpos($src, 'box-shadow:inset 3px 0 0 #DD5138') !== false, '左側色條加強區分（顏色非唯一資訊，狀態欄仍有文字）');
 
 echo "== 簽核流程／簽章軌跡不重複顯示 ==\n";

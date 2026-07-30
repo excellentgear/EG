@@ -80,6 +80,7 @@ $avStamp = @filemtime(__DIR__ . '/../../resource/js/eg_stamp.js') ?: time();
 .st-approved{background:#e7f0dd;color:#4d6b2e;}   /* 已核准 */
 .st-rejected{background:#f7d9d1;color:#a3341f;}   /* 已退回 */
 .st-canceled{background:#ece5da;color:#6b5638;}   /* 已取消 */
+.st-cancelpend{background:#F0A24B;color:#fff;}    /* 撤回待簽核（需主管處理，用較醒目的暖橘） */
 .tag-warn{background:#F0A24B;color:#fff;font-size:11px;padding:2px 7px;border-radius:9px;font-weight:600;}
 .tag-soft{background:#f3ead9;color:#8a5a1a;font-size:11px;padding:2px 7px;border-radius:9px;}
 .lv-form label{font-size:13px;color:#6b5638;margin-bottom:3px;font-weight:600;}
@@ -108,6 +109,9 @@ input[type=number]{-moz-appearance:textfield;}
 .lv-tbl tr.row-pending  > td{background:#FDF4E3;}
 .lv-tbl tr.row-rejected > td{background:#FBE6DF;}
 .lv-tbl tr.row-canceled > td{background:#FAE3E7;}
+.lv-tbl tr.row-cancelpend > td{background:#FBEBD2;}
+.lv-tbl tr.row-cancelpend > td:first-child{box-shadow:inset 3px 0 0 #D9873A;}
+.lv-tbl tr.row-cancelpend:hover > td{background:#F8E0BC;}
 .lv-tbl tr.row-pending  > td:first-child{box-shadow:inset 3px 0 0 #F0A24B;}
 .lv-tbl tr.row-rejected > td:first-child{box-shadow:inset 3px 0 0 #DD5138;}
 .lv-tbl tr.row-canceled > td:first-child{box-shadow:inset 3px 0 0 #C4808F;}
@@ -244,6 +248,7 @@ input[type=number]{-moz-appearance:textfield;}
           <div class="btn-group btn-group-sm" role="group" id="statusBtns">
             <button type="button" class="btn status-btn" data-status="">全部狀態</button>
             <button type="button" class="btn status-btn" data-status="pending">審核中</button>
+            <button type="button" class="btn status-btn" data-status="cancel_pending">撤回待簽核</button>
             <button type="button" class="btn status-btn" data-status="approved">已核准</button>
             <button type="button" class="btn status-btn" data-status="rejected">已退回</button>
             <button type="button" class="btn status-btn" data-status="canceled">已取消</button>
@@ -745,7 +750,8 @@ function loadList(){
 }
 function stBadge(s){
   const m = {pending:['st-pending','審核中'], approved:['st-approved','已核准'],
-             rejected:['st-rejected','已退回'], canceled:['st-canceled','已取消']};
+             rejected:['st-rejected','已退回'], canceled:['st-canceled','已取消'],
+             cancel_pending:['st-cancelpend','撤回待簽核']};
   const x = m[s] || ['st-canceled', s];
   return '<span class="st-badge '+x[0]+'">'+x[1]+'</span>';
 }
@@ -782,7 +788,8 @@ function rowHtml(o){
   if(o.attach_status === 'pending') tags += '<span class="tag-warn">待補證明</span> ';
   if(tags === '') tags = '<span style="color:#c9b89c;">—</span>';
   // 整列底色依狀態（已核准不上色，讓需要注意的三種狀態跳出來）
-  const rowCls = {pending:'row-pending', rejected:'row-rejected', canceled:'row-canceled'}[o.status] || '';
+  const rowCls = {pending:'row-pending', rejected:'row-rejected', canceled:'row-canceled',
+                  cancel_pending:'row-cancelpend'}[o.status] || '';
   return '<tr class="'+rowCls+'">'
     + '<td>#'+o.id+'</td>'
     + '<td>'+esc(o.applicant_name)+'</td>'
@@ -983,9 +990,17 @@ function openDetail(id){
     }
     $('#detailBody').html(h);
 
-    if(r.can_cancel){
-      $('#btnCancelLeave').show().html('<i class="fa fa-undo"></i> ' + (o.status==='approved' ? '銷假' : '撤回申請'));
+    // 撤回/銷假按鈕依「請假日期」分三種情形（2026-07-30 規則）
+    curCancelMode = r.cancel_mode || 'direct';
+    if(r.can_cancel && curCancelMode !== 'blocked'){
+      const base = (o.status==='approved' ? '銷假' : '撤回申請');
+      $('#btnCancelLeave').show().html('<i class="fa fa-undo"></i> '
+        + (curCancelMode === 'approval' ? (base + '（需主管簽核）') : base));
     } else $('#btnCancelLeave').hide();
+    if(r.can_cancel && curCancelMode === 'blocked'){
+      $('#editHint').html('<span style="color:#a3341f;">請假期間已結束，為避免「已休假卻無請假紀錄」，'
+        + '不開放自行撤回；如確有需要請洽管理員。</span>');
+    }
 
     // 修改：審核前（且尚無人簽核）可直接改；已核准提供「申請修改」
     curDetailReq = o;
@@ -1088,12 +1103,19 @@ function uploadLater(reqId){
       else $('#dAttMsg').html('<span style="color:#a3341f;">'+esc(r.message)+'</span>');
    }).fail(function(){ $('#dAttMsg').html('<span style="color:#a3341f;">上傳失敗</span>'); });
 }
+let curCancelMode = 'direct';
 function doCancel(){
   const isApproved = curDetailStatus === 'approved';
-  const msg = isApproved ? '確定要銷假？行事曆上的休假會撤除，並通知所有已簽核的主管與代理人。' : '確定撤回此申請？';
+  const needSign = (curCancelMode === 'approval');
+  const msg = needSign
+    ? '此單已在請假期間內（含請假當日），撤回必須經主管簽核。\n\n'
+      + '送出後單據會變成「撤回待簽核」，主管核准後才真的取消（行事曆在核准前先保留）。\n\n確定要提出撤回申請嗎？'
+    : (isApproved ? '確定要銷假？行事曆上的休假會撤除，並通知所有已簽核的主管與代理人。' : '確定撤回此申請？');
   if(!confirm(msg)) return;
-  const reason = prompt(isApproved ? '請輸入銷假原因：' : '請輸入撤回原因（可留空）：', '') ;
+  const reason = prompt(needSign ? '請輸入撤回原因（必填，會送給主管審核）：'
+                                 : (isApproved ? '請輸入銷假原因：' : '請輸入撤回原因（可留空）：'), '');
   if(reason === null) return;
+  if(needSign && !String(reason).trim()){ alert('請假期間內撤回必須填寫原因。'); return; }
   $.post(API, {action:'cancel', csrf:CSRF, id:curDetailId, reason:reason}, function(r){
     alert(r.message);
     if(r.success){ $('#detailModal').modal('hide'); loadList(); refreshPendingCount(); }
@@ -1106,35 +1128,52 @@ function loadPending(){
     if(!r.success){ $('#pendBody').html('<div class="empty-note">'+esc(r.message)+'</div>'); return; }
     if(!r.rows.length){ $('#pendBody').html('<div class="empty-note">目前沒有待您簽核的請假單 👍</div>'); return; }
     $('#pendBody').html(r.rows.map(function(o){
-      return '<div class="lv-card" style="background:#fff;" data-req="'+o.leave_request_id+'">'
+      const isCancel = (o.approval_kind === 'cancel');
+      return '<div class="lv-card" style="background:#fff;'
+        + (isCancel ? 'border-color:#D9873A;box-shadow:inset 4px 0 0 #F0A24B;' : '')
+        + '" data-req="'+o.leave_request_id+'" data-kind="'+esc(o.approval_kind||'leave')+'">'
         + '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">'
         + '<b style="font-size:14px;">#'+o.leave_request_id+' '+esc(o.applicant_name)+'</b>'
         + '<span class="tag-soft">'+esc(o.leave_name)+'</span>'
-        + '<span class="lvl-badge" style="background:var(--sand);border:1px solid var(--sand-d);color:var(--amber-d);border-radius:10px;padding:1px 9px;font-size:11px;">第 '+o.approval_level+' 層</span>'
+        + (isCancel
+            ? '<span class="st-badge st-cancelpend">撤回待您簽核</span>'
+            : '<span class="lvl-badge" style="background:var(--sand);border:1px solid var(--sand-d);color:var(--amber-d);border-radius:10px;padding:1px 9px;font-size:11px;">第 '+o.approval_level+' 層</span>'
+              + stBadge('pending'))
         + (o.as_delegate ? '<span class="tag-warn">您以代理人身分簽核</span>' : '')
         + (+o.is_backdated===1 ? '<span class="tag-soft">補請假</span>' : '')
         + (o.attach_status==='pending' ? '<span class="tag-warn">待補證明</span>' : '')
-        + stBadge('pending')
         + '</div>'
+        + (isCancel ? '<div style="font-size:13px;color:#8a5a1a;background:#fdf0dc;border:1px solid #e9c98f;'
+              + 'padding:6px 10px;border-radius:4px;margin-bottom:6px;">'
+              + '此單已在請假期間內，申請人要求撤回，需您簽核。撤回原因：'
+              + esc(o.cancel_reason || '（未填）') + '</div>' : '')
         + '<div style="font-size:13px;color:#6b5638;">時段：'+esc(fmtPeriod(o.start_datetime, o.end_datetime, isFullDayLeave(o)))
         + '　時數：'+num(o.total_hours)+' 小時（'+num(o.total_days)+' 天）</div>'
         + (o.reason ? '<div style="font-size:13px;color:#6b5638;">原因：'+esc(o.reason)+'</div>' : '')
         + (o.as_delegate && o.delegate_reason ? '<div style="font-size:11.5px;color:#9a7b4f;">'+esc(o.delegate_reason)+'</div>' : '')
         + '<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
         + '<input type="text" class="form-control input-sm eg-inp" id="rm'+o.leave_request_id+'" placeholder="簽核意見（退回必填）" style="max-width:320px;">'
-        + '<button class="btn btn-sm btn-amber" onclick="doSign('+o.leave_request_id+',\'approve\')"><i class="fa fa-check"></i> 核准</button>'
-        + '<button class="btn btn-sm btn-coral" onclick="doSign('+o.leave_request_id+',\'reject\')"><i class="fa fa-times"></i> 退回</button>'
+        + '<button class="btn btn-sm btn-amber" onclick="doSign('+o.leave_request_id+',\'approve\',\''+(isCancel?'cancel':'leave')+'\')">'
+        + '<i class="fa fa-check"></i> ' + (isCancel ? '核准撤回' : '核准') + '</button>'
+        + '<button class="btn btn-sm btn-coral" onclick="doSign('+o.leave_request_id+',\'reject\',\''+(isCancel?'cancel':'leave')+'\')">'
+        + '<i class="fa fa-times"></i> ' + (isCancel ? '駁回撤回' : '退回') + '</button>'
         + '<button class="btn btn-sm btn-default" onclick="openDetail('+o.leave_request_id+')">檢視詳情</button>'
         + '</div></div>';
     }).join(''));
     bindInputUx('#pendBody');
   });
 }
-function doSign(id, decision){
+function doSign(id, decision, kind){
+  kind = kind || 'leave';
   const remark = $('#rm'+id).val() || '';
   if(decision === 'reject' && !remark.trim()){ alert('退回必須填寫意見'); $('#rm'+id).focus(); return; }
-  if(!confirm(decision === 'approve' ? '確定核准此請假單？' : '確定退回此請假單？')) return;
-  $.post(API, {action:'sign', csrf:CSRF, id:id, decision:decision, remark:remark}, function(r){
+  const msg = (kind === 'cancel')
+    ? (decision === 'approve'
+        ? '確定核准撤回？此請假將取消，行事曆上的休假會撤除。'
+        : '確定駁回撤回？此請假仍然有效。')
+    : (decision === 'approve' ? '確定核准此請假單？' : '確定退回此請假單？');
+  if(!confirm(msg)) return;
+  $.post(API, {action:'sign', csrf:CSRF, id:id, decision:decision, remark:remark, kind:kind}, function(r){
     alert(r.message);
     if(r.success){ loadPending(); refreshPendingCount(); }
   }, 'json');

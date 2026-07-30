@@ -221,7 +221,11 @@ case 'sign': {
     $act = $act === 'approve' ? 'approved' : ($act === 'reject' ? 'rejected' : '');
     if (!$reqId || !$act) bad('缺少參數');
     if ($act === 'rejected' && trim((string)($_POST['remark'] ?? '')) === '') bad('退回必須填寫意見');
-    $r = eg_leave_sign($db, $reqId, $user_id, $act, trim((string)($_POST['remark'] ?? '')));
+    // kind=cancel → 簽核「撤回申請」（請假期間內撤回需主管簽核）；否則為請假本身的簽核
+    $kind = (($_POST['kind'] ?? '') === 'cancel') ? 'cancel' : 'leave';
+    $r = ($kind === 'cancel')
+        ? eg_leave_sign_cancel($db, $reqId, $user_id, $act, trim((string)($_POST['remark'] ?? '')))
+        : eg_leave_sign($db, $reqId, $user_id, $act, trim((string)($_POST['remark'] ?? '')));
     out(['success' => $r['ok'], 'message' => $r['msg'], 'final' => $r['final'] ?? false]);
 }
 
@@ -277,7 +281,7 @@ case 'list': {
     } else {
         $where[] = 'lr.employee_id = ?'; $args[] = $user_id;
     }
-    if ($status !== '' && in_array($status, ['pending', 'approved', 'rejected', 'canceled'], true)) {
+    if ($status !== '' && in_array($status, ['pending', 'cancel_pending', 'approved', 'rejected', 'canceled'], true)) {
         $where[] = 'lr.status = ?'; $args[] = $status;
     }
     $w = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
@@ -366,6 +370,8 @@ case 'detail': {
          'agents' => eg_leave_get_agents($db, $reqId),   // 每個職務身分的代理人與解析原因
          'can_cancel' => ((int)$req['employee_id'] === $user_id || $IS_ADMIN)
                           && in_array($req['status'], ['pending', 'approved'], true),
+         // 撤回會走哪條路：direct=直接撤 / approval=需主管簽核 / blocked=請假已結束不開放
+         'cancel_mode' => eg_leave_cancel_mode($req, $IS_ADMIN),
          'can_edit' => $edit['ok'], 'edit_reason' => $edit['reason'],
          // 已核准者提供「申請修改」＝銷假後重新申請（帶回原內容），流程上等同變更
          'can_request_change' => ((int)$req['employee_id'] === $user_id || $IS_ADMIN) && $req['status'] === 'approved']);
