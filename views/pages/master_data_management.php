@@ -5955,7 +5955,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 // （見 ai-rules/15-圖面變更判定依據.md）。欄位由 dwg_change_lib 建立，舊環境可能還沒有。
                 require_once __DIR__ . '/../../src/common/dwg_change_lib.php';
                 dwg_ensure_schema($pdo);
-                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+                // 外來文件欄位（AS9100，與報價頁附件類別設定連動；舊環境自動補欄位）
+                try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN is_external_doc TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否列入外來文件清單'"); } catch(PDOException $e){}
+                try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN external_doc_name VARCHAR(100) NULL COMMENT '外來文件類別名稱(空=用標籤名)'"); } catch(PDOException $e){}
+                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode(['success'=>true,'data'=>$rows]);
             } elseif ($op_code === 'save') {
                 if (!$can_attach_cat_edit) throw new Exception('無編輯附件類別標籤權限（需 A/CDR/CDRU）');
@@ -5964,6 +5967,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $order        = intval($_POST['sort_order'] ?? 0);
                 $show_in_list = intval($_POST['show_in_list'] ?? 0) ? 1 : 0;
                 $own_drawing  = intval($_POST['is_own_drawing'] ?? 0) ? 1 : 0;
+                $is_ext_doc   = intval($_POST['is_external_doc'] ?? 0) ? 1 : 0;
+                $ext_doc_name = trim($_POST['external_doc_name'] ?? '') ?: null;
                 $tag_vars     = trim($_POST['tag_variables'] ?? '') ?: null;
                 $reactivate   = intval($_POST['reactivate'] ?? 0);
                 $op_name      = _get_operator($pdo, $uid);
@@ -5972,14 +5977,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     echo json_encode(['success'=>true,'message'=>'已重新啟用','cat_id'=>$cat_id]);
                 } elseif ($cat_id) {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=? WHERE id=?")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $cat_id]);
+                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=? WHERE id=?")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $cat_id]);
                     _log_audit($pdo,'update','dict','attach-cat:'.$cat_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已更新','cat_id'=>$cat_id]);
                 } else {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing) VALUES (?,?,?,?,?)")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing]);
+                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name) VALUES (?,?,?,?,?,?,?)")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name]);
                     $new_id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','attach-cat:'.$new_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已新增','cat_id'=>$new_id]);
@@ -8352,6 +8357,16 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                                 勾選後：上傳此類別的附件時<b>必須填發行章日期</b>，系統會拿它跟同料號既有的自家圖面比對，
                                 比較新就判定為<b>圖面變更</b>並請設計填變更內容。<br>
                                 客戶原圖、報價圖不要勾（原圖更新常常只是報價階段，還沒接單）。
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin-bottom:8px;">
+                            <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+                                <input type="checkbox" id="acat-external-doc" onchange="document.getElementById('acat-extdoc-name-wrap').style.display=this.checked?'':'none'"> 列入外來文件清單（AS9100）
+                            </label>
+                            <div style="font-size:10px;color:#aaa;margin-top:2px;">勾選後此類別的附件會出現在「外來文件清單」（業務 &gt; 外來文件清單）；與報價單頁的附件類別設定連動</div>
+                            <div id="acat-extdoc-name-wrap" style="display:none;margin-top:5px;">
+                                <label style="font-size:11px;color:#888;">外來文件類別名稱 <small style="color:#aaa;">（清單/列印顯示用；留空＝直接用標籤名稱）</small></label>
+                                <input type="text" id="acat-extdoc-name" class="form-control input-sm" maxlength="100" placeholder="例：客戶圖面">
                             </div>
                         </div>
                         <div class="form-group" style="margin-bottom:8px;">
@@ -17304,7 +17319,9 @@ function loadAttachCatTable() {
             html += '<td style="cursor:grab;color:#bbb;text-align:center;" class="acat-drag-handle">&#9776;</td>';
             var odBadge = (c.is_own_drawing=='1'||c.is_own_drawing===1)
                 ? '<span style="font-size:9px;background:#FFF3E2;color:#C77C1A;border:1px solid #E4D3BC;border-radius:3px;padding:1px 4px;margin-left:3px;" title="自家出的圖：上傳需填發行章日期，並參與圖面變更判定">自家圖</span>' : '';
-            html += '<td>'+escHtml(c.category_name)+varBadge+odBadge+'&nbsp;'+badge+'</td>';
+            var extBadge = (c.is_external_doc=='1'||c.is_external_doc===1)
+                ? '<span style="font-size:9px;background:#F0A24B;color:#fff;border-radius:3px;padding:1px 4px;margin-left:3px;" title="列入外來文件清單'+(c.external_doc_name?'：'+escHtml(c.external_doc_name):'')+'">外來文件</span>' : '';
+            html += '<td>'+escHtml(c.category_name)+varBadge+odBadge+extBadge+'&nbsp;'+badge+'</td>';
             html += '<td style="text-align:center;">'+showBadge+'</td>';
             html += '<td style="text-align:right;">'+badge+'</td>';
             if (CAN_ATTACH_CAT_EDIT) {
@@ -17363,6 +17380,14 @@ function editAttachCat(id) {
     if (silChk) silChk.checked = (c.show_in_list=='1'||c.show_in_list===1);
     var odChk = document.getElementById('acat-own-drawing');
     if (odChk) odChk.checked = (c.is_own_drawing=='1'||c.is_own_drawing===1);
+    var extChk = document.getElementById('acat-external-doc');
+    if (extChk) {
+        extChk.checked = (c.is_external_doc=='1'||c.is_external_doc===1);
+        var extWrap = document.getElementById('acat-extdoc-name-wrap');
+        if (extWrap) extWrap.style.display = extChk.checked ? '' : 'none';
+        var extName = document.getElementById('acat-extdoc-name');
+        if (extName) extName.value = c.external_doc_name || '';
+    }
     document.getElementById('acat-form-title').textContent = '修改類別';
     // Render vars
     var varsList = document.getElementById('acat-vars-list');
@@ -17381,6 +17406,12 @@ function resetAttachCatForm() {
     if (silChk) silChk.checked = false;
     var odChk = document.getElementById('acat-own-drawing');
     if (odChk) odChk.checked = false;
+    var extChk = document.getElementById('acat-external-doc');
+    if (extChk) extChk.checked = false;
+    var extWrap = document.getElementById('acat-extdoc-name-wrap');
+    if (extWrap) extWrap.style.display = 'none';
+    var extName = document.getElementById('acat-extdoc-name');
+    if (extName) extName.value = '';
     document.getElementById('acat-form-title').textContent = '新增類別';
     var varsList = document.getElementById('acat-vars-list');
     if (varsList) varsList.innerHTML = '';
@@ -17423,10 +17454,13 @@ function saveAttachCategory() {
     var showInList = (sil && sil.checked) ? 1 : 0;
     var od   = document.getElementById('acat-own-drawing');
     var ownDrawing = (od && od.checked) ? 1 : 0;
+    var ext  = document.getElementById('acat-external-doc');
+    var isExtDoc = (ext && ext.checked) ? 1 : 0;
+    var extDocName = ((document.getElementById('acat-extdoc-name')||{}).value||'').trim();
     if (!name) { showToast('請填寫類別名稱','error'); return; }
     var vars = getAttachCatVars();
     var tagVarsJson = vars.length ? JSON.stringify(vars) : '';
-    api({ action:'manage_attach_categories', op:'save', cat_id:id, category_name:name, sort_order:0, show_in_list:showInList, is_own_drawing:ownDrawing, tag_variables:tagVarsJson }).done(function(r) {
+    api({ action:'manage_attach_categories', op:'save', cat_id:id, category_name:name, sort_order:0, show_in_list:showInList, is_own_drawing:ownDrawing, is_external_doc:isExtDoc, external_doc_name:extDocName, tag_variables:tagVarsJson }).done(function(r) {
         if (r.success) { _attachCatsCache = null; showToast(r.message||'已儲存'); resetAttachCatForm(); loadAttachCatTable(); }
         else showToast(r.message||'儲存失敗','error');
     });
