@@ -520,6 +520,26 @@ if (!function_exists('eg_leave_year_usage')) {
     }
 }
 
+if (!function_exists('eg_leave_years_of')) {
+    /**
+     * 某人有請假資料的年度清單（新到舊），供申請頁的年度下拉使用。
+     * 一定包含今年（就算今年還沒請過假，也要能選回今年）。
+     * 年度歸屬以請假起日年份計，與 eg_leave_year_usage／特休額度同一口徑。
+     */
+    function eg_leave_years_of(PDO $db, int $userId): array {
+        $cur = (int)date('Y');
+        try {
+            $st = $db->prepare("SELECT DISTINCT YEAR(start_datetime) AS y FROM leave_request
+                                WHERE employee_id = ? ORDER BY y DESC");
+            $st->execute([$userId]);
+            $ys = array_values(array_filter(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN))));
+        } catch (Throwable $e) { $ys = []; }
+        if (!in_array($cur, $ys, true)) $ys[] = $cur;
+        rsort($ys);
+        return $ys;
+    }
+}
+
 // ============================== 主管鏈與簽核人解析 ==============================
 
 if (!function_exists('eg_leave_supervisor_chain')) {

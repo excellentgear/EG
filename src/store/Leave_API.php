@@ -77,6 +77,7 @@ case 'bootstrap': {
     // 特休摘要 ＋ 本年度各假別已核准累積（只列請過的假別）
     $annual = eg_leave_annual_summary($db, $user_id);
     $yearUsage = eg_leave_year_usage($db, $user_id);
+    $myYears = eg_leave_years_of($db, $user_id);   // 申請頁年度下拉（我有請假資料的年度＋今年）
     // 檢視範圍
     $deptScope = $VIEW_ALL ? [] : leave_dept_scope($db, $user_id);
     $cfg = eg_leave_settings($db);
@@ -90,6 +91,8 @@ case 'bootstrap': {
          'agent_candidates' => $cands,
          'annual' => $annual,
          'year_usage' => $yearUsage,
+         'my_years' => $myYears,
+         'cur_year' => (int)date('Y'),
          'settings' => [
              'backdate_limit_days' => (int)$cfg['leave_backdate_limit_days'],
              'hours_per_day' => (float)$cfg['leave_hours_per_day'],
@@ -269,7 +272,12 @@ case 'list': {
     $per = (int)($_GET['per'] ?? 10);
     if (!in_array($per, [5, 10, 20, 50], true)) $per = 10;
     $status = trim((string)($_GET['status'] ?? ''));
-    $where = []; $args = [];
+    // 年度：預設今年，'all'＝不限年度。年度歸屬以請假「起日」年份計，
+    // 與特休額度／年度累積同一口徑（跨年度的假算在起日那年）。
+    $yearRaw = trim((string)($_GET['year'] ?? date('Y')));
+    // 範圍條件與「狀態／年度」條件分開放：年度下拉的選項只能套範圍條件算，
+    // 否則切到 2025 之後下拉就只剩 2025 一個選項，切不回來。
+    $scopeWhere = []; $scopeArgs = [];
 
     if ($scope === 'all') {
         if (!$VIEW_ALL) bad('您沒有檢視全部請假單的權限');
@@ -278,15 +286,25 @@ case 'list': {
         if (!$depts && !$VIEW_ALL) bad('您不是主管，無法檢視部門請假單');
         if ($depts) {
             $in = implode(',', array_map('intval', $depts));
-            $where[] = "lr.employee_id IN (SELECT DISTINCT m.user_id FROM user_department_position_map m WHERE m.department_id IN ($in))";
+            $scopeWhere[] = "lr.employee_id IN (SELECT DISTINCT m.user_id FROM user_department_position_map m WHERE m.department_id IN ($in))";
         }
     } else {
-        $where[] = 'lr.employee_id = ?'; $args[] = $user_id;
+        $scopeWhere[] = 'lr.employee_id = ?'; $scopeArgs[] = $user_id;
     }
+    $where = $scopeWhere; $args = $scopeArgs;
     if ($status !== '' && in_array($status, ['pending', 'cancel_pending', 'approved', 'rejected', 'canceled'], true)) {
         $where[] = 'lr.status = ?'; $args[] = $status;
     }
+    if ($yearRaw !== 'all' && ctype_digit($yearRaw)) {
+        $where[] = 'YEAR(lr.start_datetime) = ?'; $args[] = (int)$yearRaw;
+    }
     $w = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+
+    // 有資料的年度（供前端下拉；只套範圍條件）
+    $sw = $scopeWhere ? ('WHERE ' . implode(' AND ', $scopeWhere)) : '';
+    $st = $db->prepare("SELECT DISTINCT YEAR(lr.start_datetime) AS y FROM leave_request lr $sw ORDER BY y DESC");
+    $st->execute($scopeArgs);
+    $years = array_values(array_filter(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN))));
 
     $st = $db->prepare("SELECT COUNT(*) FROM leave_request lr $w");
     $st->execute($args);
@@ -303,6 +321,7 @@ case 'list': {
          $w ORDER BY lr.submit_time DESC LIMIT $per OFFSET $off");
     $st->execute($args);
     out(['success' => true, 'total' => $total, 'page' => $page, 'per' => $per,
+         'year' => $yearRaw, 'years' => $years,
          'rows' => $st->fetchAll(PDO::FETCH_ASSOC)]);
 }
 
@@ -382,7 +401,9 @@ case 'detail': {
 // ════════════════ 特休額度 ════════════════
 case 'annual_summary': {
     $year = (int)($_GET['year'] ?? date('Y'));
-    out(['success' => true, 'annual' => eg_leave_annual_summary($db, $user_id, $year),
+    if ($year < 1990 || $year > 9999) $year = (int)date('Y');   // 年度下拉被亂帶時退回今年
+    out(['success' => true, 'year' => $year,
+         'annual' => eg_leave_annual_summary($db, $user_id, $year),
          'year_usage' => eg_leave_year_usage($db, $user_id, $year)]);
 }
 

@@ -153,13 +153,20 @@ input[type=number]{-moz-appearance:textfield;}
         <h4><i class="fa fa-pencil-square-o"></i> 填寫請假單</h4>
 
         <div class="annual-box" id="annualBox">
-          <div class="it"><div class="lb">本年度特休額度</div><div class="vl"><span id="anEnt">—</span> 天</div></div>
+          <!-- 年度切換：預設今年；只列出本人實際有請假資料的年度（一定含今年） -->
+          <div class="it">
+            <div class="lb">年度</div>
+            <select class="form-control input-sm" id="fAnYear" data-eg-skip
+                    style="width:auto;padding:2px 6px;height:26px;font-size:14px;font-weight:700;
+                           color:var(--amber-d);border-color:var(--sand-d);background:#fff;"></select>
+          </div>
+          <div class="it"><div class="lb"><span class="an-y">本年度</span>特休額度</div><div class="vl"><span id="anEnt">—</span> 天</div></div>
           <div class="it"><div class="lb">已核准使用</div><div class="vl"><span id="anUsed">—</span> 天</div></div>
           <div class="it"><div class="lb">送審中</div><div class="vl"><span id="anPend">—</span> 天</div></div>
           <div class="it"><div class="lb">剩餘可用</div><div class="vl" style="color:var(--amber-d);"><span id="anRem">—</span> 天</div></div>
-          <!-- 右側：本年度其他假別的已核准累積（只列請過的假別，故每人顯示不同）-->
+          <!-- 右側：該年度其他假別的已核准累積（只列請過的假別，故每人顯示不同）-->
           <div class="it" style="flex:1;min-width:240px;border-left:1px solid var(--sand-d);padding-left:16px;">
-            <div class="lb">本年度請假紀錄（已核准）</div>
+            <div class="lb"><span class="an-y">本年度</span>請假紀錄（已核准）</div>
             <div id="yearUsage" style="font-size:13px;color:var(--ink);line-height:1.7;margin-top:2px;"></div>
             <div style="font-size:11px;color:#9a7b4f;margin-top:2px;">特休額度與員工資料的到職日／年資同一套算法即時計算，不另建額度表。</div>
           </div>
@@ -248,6 +255,11 @@ input[type=number]{-moz-appearance:textfield;}
             <?php if ($VIEW_ALL): ?><button type="button" class="btn scope-btn" data-scope="all">全公司</button><?php endif; ?>
           </div>
           <input type="hidden" id="fScope" value="<?= $VIEW_ALL ? 'all' : 'mine' ?>"><!-- 人事/管理員預設全公司 -->
+          <!-- 年度：預設今年，可切換到有資料的其他年度或「全部年度」；選項由後端依目前範圍算出 -->
+          <select class="form-control input-sm" id="fYear"
+                  title="雙擊＝解除年度篩選（全部年度）"
+                  style="width:auto;display:inline-block;border-color:var(--sand-d);color:#8a6d45;"
+                  onchange="listPage=1;loadList()"></select>
           <div class="btn-group btn-group-sm" role="group" id="statusBtns">
             <button type="button" class="btn status-btn" data-status="">全部狀態</button>
             <button type="button" class="btn status-btn" data-status="pending">審核中</button>
@@ -391,6 +403,7 @@ const API = '../../src/store/Leave_API.php';
 const IS_ADMIN = <?= $IS_ADMIN ? 'true' : 'false' ?>;
 const IS_SUPERADMIN = <?= $IS_SUPERADMIN ? 'true' : 'false' ?>;   // 僅 id=1 且 state=99，可徹底刪除
 let CSRF = '', TYPES = [], AGENTS = [], SETTINGS = {}, ME = {};
+let CUR_YEAR = (new Date()).getFullYear();
 let uploadToken = '';
 let listPage = 1, listTotal = 0, curDetailId = 0, curDetailCanCancel = false, curDetailStatus = '';
 
@@ -406,7 +419,9 @@ function topTab(k, btn){
 
 // ── 共用輸入 UX（全站規範）：有值雙擊清空／聚焦全選／Enter 跳下一欄（textarea 除外）──
 function bindInputUx(root){
-  const $f = $(root||document).find('input.eg-inp, select.eg-inp, input.form-control, select.form-control');
+  // data-eg-skip 的欄位排除在共用行為外（全站規則；例如申請頁的年度下拉不該被雙擊清成別的年度）
+  const $f = $(root||document).find('input.eg-inp, select.eg-inp, input.form-control, select.form-control')
+               .not('[data-eg-skip]');
   $f.off('.egux')
     .on('dblclick.egux', function(){ if($(this).is('select')){ this.selectedIndex=0; $(this).trigger('change'); } else if(this.value!==''){ this.value=''; $(this).trigger('change'); } })
     .on('focus.egux', function(){ if(this.value!=='' && this.select) { try{ this.select(); }catch(e){} } })
@@ -429,6 +444,10 @@ function boot(){
     const $t = $('#fType').empty().append('<option value="">請選擇假別</option>');
     TYPES.forEach(t => $t.append('<option value="'+t.id+'">'+esc(t.leave_name)+'</option>'));
     // 代理人不再由申請人挑選：系統依人事設定的順位自動解析，改以 renderAgentPreview() 唯讀顯示
+    CUR_YEAR = r.cur_year || (new Date()).getFullYear();
+    $('#fAnYear').empty().append((r.my_years||[CUR_YEAR]).map(y => '<option value="'+y+'">'+y+' 年</option>').join(''));
+    $('#fAnYear').val(String(CUR_YEAR));
+    syncAnnualYearLabel();
     renderAnnual(r.annual);
     renderYearUsage(r.year_usage);
     if(IS_ADMIN){ $('#psHeader').val(SETTINGS.print_header||''); $('#psFooter').val(SETTINGS.print_footer||''); }
@@ -444,10 +463,26 @@ function renderAnnual(an){
   $('#anEnt').text(num(an.entitlement)); $('#anUsed').text(num(an.used));
   $('#anPend').text(num(an.pending));    $('#anRem').text(num(an.remaining));
 }
+// 年度切換：標題文字跟著改（看往年時要一眼看得出來現在不是今年）
+function syncAnnualYearLabel(){
+  const y = parseInt($('#fAnYear').val() || CUR_YEAR, 10);
+  $('.an-y').text(y === CUR_YEAR ? '本年度' : (y + ' 年'));
+}
+// 申請頁的特休額度與各假別累積，一律以下拉選的年度為準（查往年紀錄用）
+function loadAnnual(){
+  syncAnnualYearLabel();
+  $.getJSON(API, {action:'annual_summary', year:$('#fAnYear').val()}, function(r){
+    if(!r.success) return;
+    renderAnnual(r.annual); renderYearUsage(r.year_usage);
+  });
+}
+$(document).on('change', '#fAnYear', loadAnnual);
 // 本年度各假別已核准累積：只列請過的假別，格式「1天+5小時」（後端 eg_leave_fmt_amount 算好）
 function renderYearUsage(list){
   if(!list || !list.length){
-    $('#yearUsage').html('<span style="color:#9a7b4f;">本年度尚無已核准的請假紀錄</span>');
+    const y = parseInt($('#fAnYear').val() || CUR_YEAR, 10);
+    $('#yearUsage').html('<span style="color:#9a7b4f;">'
+      + (y === CUR_YEAR ? '本年度' : (y + ' 年')) + '尚無已核准的請假紀錄</span>');
     return;
   }
   $('#yearUsage').html(list.map(function(u){
@@ -736,9 +771,7 @@ function resetForm(keepMsg){
   const ff0 = document.getElementById('fFile'); if(ff0) ff0.value = '';
   if(!keepMsg) $('#applyMsg').empty();
   uploadToken = newToken();
-  $.getJSON(API, {action:'annual_summary'}, function(r){
-    if(r.success){ renderAnnual(r.annual); renderYearUsage(r.year_usage); }
-  });
+  loadAnnual();
 }
 
 // ── 範圍／狀態按鈕切換（則一選擇）──
@@ -754,15 +787,38 @@ $(document).on('click', '.status-btn', function(){
 });
 
 // ── 列表 ──
+// 列表查詢條件（列表／CSV／PDF 共用同一份，避免匯出的內容跟畫面對不起來）
+function listQuery(extra){
+  return $.extend({action:'list', scope:$('#fScope').val(), status:$('#fStatus').val(),
+                   year:($('#fYear').val() || CUR_YEAR)}, extra || {});
+}
+/* 年度下拉：選項由後端依「目前範圍」算出（不受狀態／年度篩選影響，切走了才切得回來）。
+   每次載入都重畫會把使用者選的年度洗掉，所以只有選項真的變了才重畫，並保留目前選擇。 */
+let yearOptsKey = '';
+function renderYearOptions(years){
+  const cur = $('#fYear').val() || String(CUR_YEAR);
+  const list = (years || []).slice();
+  if(list.indexOf(CUR_YEAR) < 0) list.push(CUR_YEAR);          // 今年就算沒資料也要能選回來
+  list.sort((a,b) => b - a);
+  const key = list.join(',');
+  if(key === yearOptsKey) return;
+  yearOptsKey = key;
+  // 「全部年度」排第一個：雙擊篩選欄＝解除該欄篩選（全站 UI 規則），select 的雙擊會回到第一個選項
+  $('#fYear').html('<option value="all">全部年度</option>'
+                  + list.map(y => '<option value="'+y+'">'+y+' 年</option>').join(''));
+  $('#fYear').val((cur === 'all' || list.indexOf(parseInt(cur,10)) >= 0) ? cur : String(CUR_YEAR));
+}
 function loadList(){
-  const q = {action:'list', scope:$('#fScope').val(), status:$('#fStatus').val(), page:listPage, per:$('#fPer').val()};
+  const q = listQuery({page:listPage, per:$('#fPer').val()});
   $.getJSON(API, q, function(r){
     if(!r.success){ $('#listBody').html('<tr><td colspan="10" class="empty-note">'+esc(r.message)+'</td></tr>'); $('#pagerBtns').empty(); return; }
     listTotal = r.total;
+    renderYearOptions(r.years);
     $('#listBody').html((r.rows||[]).length ? r.rows.map(rowHtml).join('')
                         : '<tr><td colspan="10" class="empty-note">沒有符合條件的請假單</td></tr>');
     renderPager(r.total, r.page, r.per);
-    $('#listInfo').text('共 ' + r.total + ' 筆，第 ' + r.page + ' 頁');
+    const yTxt = (String(r.year) === 'all') ? '全部年度' : (r.year + ' 年');
+    $('#listInfo').text(yTxt + '　共 ' + r.total + ' 筆，第 ' + r.page + ' 頁');
   });
 }
 function stBadge(s){
@@ -832,11 +888,11 @@ function renderPager(total, page, per){
 
 // ── 匯出（後端全量，不用前端已載入的那一頁）──
 function exportCsv(){
-  $.getJSON(API, {action:'list', scope:$('#fScope').val(), status:$('#fStatus').val(), page:1, per:50}, function(first){
+  $.getJSON(API, listQuery({page:1, per:50}), function(first){
     if(!first.success){ alert(first.message); return; }
     const total = first.total, per = 50, pages = Math.max(1, Math.ceil(total/per));
     const all = [], reqs = [];
-    for(let p=1;p<=pages;p++) reqs.push($.getJSON(API, {action:'list', scope:$('#fScope').val(), status:$('#fStatus').val(), page:p, per:per}));
+    for(let p=1;p<=pages;p++) reqs.push($.getJSON(API, listQuery({page:p, per:per})));
     $.when.apply($, reqs).done(function(){
       const results = (pages === 1) ? [arguments] : arguments;
       for(let i=0;i<pages;i++){
@@ -855,17 +911,18 @@ function exportCsv(){
       const blob = new Blob(['﻿' + lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = '請假單_' + new Date().toISOString().substring(0,10) + '.csv';
+      const yTag = (String($('#fYear').val()) === 'all') ? '全部年度' : ($('#fYear').val() + '年');
+      a.download = '請假單_' + yTag + '_' + new Date().toISOString().substring(0,10) + '.csv';
       a.click();
     });
   });
 }
 function exportPdf(){
   // 列印一律交給瀏覽器引擎原生分頁（單一表格，不用 JS 量高度自算分頁）
-  $.getJSON(API, {action:'list', scope:$('#fScope').val(), status:$('#fStatus').val(), page:1, per:50}, function(first){
+  $.getJSON(API, listQuery({page:1, per:50}), function(first){
     if(!first.success){ alert(first.message); return; }
     const pages = Math.max(1, Math.ceil(first.total/50)), reqs = [];
-    for(let p=1;p<=pages;p++) reqs.push($.getJSON(API, {action:'list', scope:$('#fScope').val(), status:$('#fStatus').val(), page:p, per:50}));
+    for(let p=1;p<=pages;p++) reqs.push($.getJSON(API, listQuery({page:p, per:50})));
     $.when.apply($, reqs).done(function(){
       const results = (pages === 1) ? [[first]] : arguments;
       const all = [];
@@ -879,7 +936,9 @@ function exportPdf(){
         + 'tfoot{display:table-footer-group;} thead{display:table-header-group;}'
         + '.ft{text-align:center;color:#9a7b4f;font-size:11px;margin-top:8px;}'
         + '</style></head><body>';
+      const yTxt = (String($('#fYear').val()) === 'all') ? '全部年度' : ($('#fYear').val() + ' 年度');
       h += '<h2>' + esc(SETTINGS.print_header || '請假單列表') + '</h2>';
+      h += '<div style="text-align:center;color:#9a7b4f;font-size:11.5px;margin-bottom:6px;">' + esc(yTxt) + '</div>';
       h += '<table><thead><tr><th>單號</th><th>申請人</th><th>假別</th><th>開始</th><th>結束</th><th>時數</th><th>天數</th><th>代理人</th><th>狀態</th></tr></thead><tbody>';
       all.forEach(function(o){
         h += '<tr><td>#'+o.id+'</td><td>'+esc(o.applicant_name)+'</td><td>'+esc(o.leave_name)+'</td>'
