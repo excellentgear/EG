@@ -279,6 +279,7 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
                                 <div class="legend" style="margin-bottom:8px;">
                                     圖例：<b style="background:#efe6d8"></b>休假 <b style="background:#fff6e8"></b>補班 <b style="background:#fff;box-shadow:inset 0 0 0 2px #8c5320"></b>我的班 ・<span class="leave-stamp" style="width:14px;height:14px;line-height:11px">休</span>整天請假 ・<span class="leave-stamp half" style="width:14px;height:14px;line-height:11px">半</span>半天 ・「代」＝代理補班
                                 </div>
+                                <div id="shiftAbsentBox" style="display:none;margin-bottom:8px;padding:7px 10px;background:#f7e2dc;border:1px solid #e0b8ab;border-radius:5px;font-size:12px;color:#8a3b28;"></div>
                                 <div class="cal-months" id="shiftMonths"></div>
 
                                 <div style="margin-top:14px;border-top:1px solid var(--warm-line);padding-top:10px;">
@@ -425,7 +426,8 @@ $lanePalette = ['#C0392B', '#E0592B', '#F0872B', '#E0A400', '#9C6B30', '#C77D4A'
         <div class="form-group"><label>班別 *</label><select id="sa_shift" class="form-control"></select></div>
         <div class="row">
             <div class="col-sm-6 form-group"><label>起 *</label><input type="date" id="sa_from" class="form-control"></div>
-            <div class="col-sm-6 form-group"><label>迄 *</label><input type="date" id="sa_to" class="form-control"></div>
+            <div class="col-sm-6 form-group"><label>迄</label><input type="date" id="sa_to" class="form-control">
+                <small style="color:#a08c72">留空＝<b>長期單</b>（先排 12 個月，之後自動延伸）</small></div>
         </div>
         <div class="form-group"><label>只排這些星期（不選＝每天）</label><div id="sa_weekdays">
             <?php foreach (['一','二','三','四','五','六','日'] as $i => $w): ?><label class="checkbox-inline"><input type="checkbox" class="sa-wd" value="<?= $i+1 ?>"><?= $w ?></label><?php endforeach; ?>
@@ -887,7 +889,13 @@ var R = (function(){
         });
     }
     function posText(u){ var p=[u.position_name,u.department_name].filter(Boolean).join('・'); return p?'（'+p+'）':''; }
-    function posLabel(u){ var t=posText(u); return t?' <span class="pos">'+esc(t)+'</span>':''; }
+    // 留職停薪／育嬰留停者標記假別與期間（仍可排班，但班表上不顯示）
+    function leaveTag(u){
+        if(!u || !+u.on_leave) return '';
+        var period=(u.leave_start||u.leave_end)?((u.leave_start||'—')+'~'+(u.leave_end||'未定')):'期間未登錄請假單';
+        return ' <span class="label" style="background:#C0392B;font-size:10px">'+esc(u.leave_label||'長期請假')+' '+esc(period)+'</span>';
+    }
+    function posLabel(u){ var t=posText(u); return (t?' <span class="pos">'+esc(t)+'</span>':'')+leaveTag(u); }
     function userOptions(mode){ // mode -1: 不含空; 0: 一般
         var o=''; RD.users.forEach(function(u){ o+='<option value="'+u.id+'">'+esc(u.user_cname+posText(u))+'</option>'; }); return o;
     }
@@ -1386,6 +1394,7 @@ var R = (function(){
             var cur=$('#shiftFilterPerson').val(), opt='<option value="0">全部人員</option>';
             (r.people||[]).forEach(function(p){ opt+='<option value="'+p.id+'">'+esc(p.name)+'</option>'; });
             $('#shiftFilterPerson').html(opt).val(cur);
+            renderAbsent(r.absent||[]);
             renderShiftCal();
         });
     }
@@ -1396,6 +1405,17 @@ var R = (function(){
         $('#shiftLaneBar').html(h);
     }
     function toggleShiftLane(id){ shiftHidden[id]=!shiftHidden[id]; renderShiftCal(); }
+    /* 被排班但長期不到班者（離職/留停/育嬰留停）：班表已抽離，於上方告知 */
+    function renderAbsent(list){
+        if(!list.length){ $('#shiftAbsentBox').hide().empty(); return; }
+        var h='<b><i class="fa fa-user-times"></i> 以下人員已排班但期間內不會到班（班表已自動不顯示）：</b><div style="margin-top:3px">';
+        list.forEach(function(a){
+            var period=(a.start||a.end) ? (( a.start||'—')+' ~ '+(a.end||'未定')) : '期間未登錄請假單';
+            h+='<div>・<b>'+esc(a.name)+'</b>　'+esc(a.label)+'　'+esc(period)
+              +'　<span style="color:#a86b57">（已隱藏 '+(a.hidden||0)+' 天班）</span></div>';
+        });
+        $('#shiftAbsentBox').html(h+'</div>').show();
+    }
     function renderShiftCal(){
         var hol={},mk={}; (shiftCalData.holidays||[]).forEach(function(d){hol[d]=1;}); (shiftCalData.makeup||[]).forEach(function(d){mk[d]=1;});
         // 已改為「一次只看一個班別」，不需班別過濾列
@@ -1485,7 +1505,8 @@ var R = (function(){
         if(!users.length){ alert('請選人員'); return; }
         var p={shift_type_id:+$('#sa_shift').val(), user_ids:users, date_from:$('#sa_from').val(), date_to:$('#sa_to').val(),
                weekdays:$('.sa-wd:checked').map(function(){return +this.value;}).get(), skip_holiday:$('#sa_skipholiday').is(':checked')?1:0};
-        if(!p.date_from||!p.date_to){ alert('請選日期'); return; }
+        if(!p.date_from){ alert('請選起始日'); return; }
+        if(!p.date_to && !confirm('「迄」未設定＝長期單，將先排 12 個月（之後自動延伸）。要繼續嗎？')) return;
         var oldIds=$('#sa_oldids').val();
         if(oldIds){   // 編輯模式：重建這張排班單
             p.old_ids=JSON.parse(oldIds);
@@ -1498,7 +1519,8 @@ var R = (function(){
             });
             return;
         }
-        post('add_shift_assign',{payload:JSON.stringify(p)}).done(function(r){ if(!r.success){alert(r.message);return;} $('#shiftAssignModal').modal('hide'); alert('已排入 '+r.inserted+' 筆'); loadShiftCal(); loadBlocks(); });
+        post('add_shift_assign',{payload:JSON.stringify(p)}).done(function(r){ if(!r.success){alert(r.message);return;} $('#shiftAssignModal').modal('hide');
+            alert('已排入 '+r.inserted+' 筆'+(r.long_term?('（長期單，已先排到 '+r.date_to+'）'):'')); loadShiftCal(); loadBlocks(); });
     }
 
     /* ── 排班單清單（連續排班合併成一張單，可點編輯）── */

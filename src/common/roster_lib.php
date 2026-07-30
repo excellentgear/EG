@@ -467,18 +467,38 @@ if (!function_exists('roster_can_view_board')) {
 /* ───────────────────── 選單資料 ───────────────────── */
 
 if (!function_exists('roster_load_pickers')) {
-    /** 載入公開對象選單所需的 部門/身分別/人員 三清單（比照 createEvent.php）。 */
+    /**
+     * 載入公開對象選單所需的 部門/身分別/人員 三清單。
+     * 人員一律走共用庫 eg_people_list()（人員列表鐵則：離職/特殊帳號不列；
+     * 留停/育嬰留停仍列出但帶 on_leave 與請假期間），不自行拼 SQL。
+     */
     function roster_load_pickers(PDO $pdo): array {
         $departments = $pdo->query("SELECT id, name, parent_id, level FROM department ORDER BY level ASC, sort_order ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
         $statuses    = $pdo->query("SELECT id, title FROM `user_status` ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
-        $users       = $pdo->query("
-            SELECT u.id, u.user_cname, d.name AS department_name, p.name AS position_name
-            FROM user u
-            LEFT JOIN user_department_position_map udpm ON u.id = udpm.user_id AND udpm.is_main = 1
-            LEFT JOIN department d ON udpm.department_id = d.id
-            LEFT JOIN position p ON udpm.position_id = p.id
-            WHERE u.state NOT IN (0, 90)
-            ORDER BY u.user_cname ASC")->fetchAll(PDO::FETCH_ASSOC);
+        $users = [];
+        $peopleLib = __DIR__ . '/people_lib.php';
+        if (is_file($peopleLib)) {
+            require_once $peopleLib;
+            foreach (eg_people_list($pdo) as $p) {
+                $users[] = ['id' => $p['id'], 'user_cname' => $p['user_cname'],
+                            'department_name' => $p['dept_name'], 'position_name' => $p['position_name'],
+                            'state' => $p['state'], 'state_label' => $p['state_label'],
+                            'on_leave' => (int)$p['on_leave'], 'leave_label' => $p['leave_label'],
+                            'leave_start' => $p['leave_start'], 'leave_end' => $p['leave_end'],
+                            'leave_note' => $p['leave_note']];
+            }
+        }
+        if (!$users) {   // 備援：共用庫不存在時仍能運作
+            $users = $pdo->query("
+                SELECT u.id, u.user_cname, d.name AS department_name, p.name AS position_name,
+                       u.state, 0 AS on_leave, '' AS leave_label, NULL AS leave_start, NULL AS leave_end, '' AS leave_note
+                FROM user u
+                LEFT JOIN user_department_position_map udpm ON u.id = udpm.user_id AND udpm.is_main = 1
+                LEFT JOIN department d ON udpm.department_id = d.id
+                LEFT JOIN position p ON udpm.position_id = p.id
+                WHERE u.state NOT IN (0, 90)
+                ORDER BY u.user_cname ASC")->fetchAll(PDO::FETCH_ASSOC);
+        }
         $shiftTypes  = [];
         try {
             $shiftTypes = $pdo->query("SELECT shift_type_id, shift_name, shift_code, start_time, end_time, color FROM shift_type WHERE is_active=1 ORDER BY sort_order, shift_type_id")->fetchAll(PDO::FETCH_ASSOC);
@@ -792,6 +812,53 @@ if (!function_exists('roster_leave_map')) {
             }
         } catch (Exception $e) { /* leave_request 不存在等 */ }
         return $map;
+    }
+}
+
+if (!function_exists('roster_absent_map')) {
+    /**
+     * 長期不到班者（留職停薪 2／育嬰留停 3／離職 0）與其期間。
+     * 期間優先取「已核准的長期請假單」（people_lib 的 eg_people_long_leave_map，需 total_days>=門檻）；
+     * 無假單時：離職＝leave_date 起，留停/育嬰＝無期間（視為目前起長期）。
+     * @return array user_id => ['name'=>,'label'=>,'start'=>?Y-m-d,'end'=>?Y-m-d,'state'=>int]
+     */
+    function roster_absent_map(PDO $pdo, array $userIds): array {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $userIds))));
+        if (!$ids) return [];
+        $out = [];
+        $peopleLib = __DIR__ . '/people_lib.php';
+        $leave = [];
+        if (is_file($peopleLib)) { require_once $peopleLib; $leave = eg_people_long_leave_map($pdo, $ids); }
+        try {
+            $in = implode(',', array_fill(0, count($ids), '?'));
+            $st = $pdo->prepare("SELECT id, user_cname, state, leave_date FROM user WHERE id IN ($in) AND state IN (0,2,3)");
+            $st->execute($ids);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $uid = (int)$r['id']; $state = (int)$r['state'];
+                $label = function_exists('eg_people_state_label') ? eg_people_state_label($state)
+                       : ([0 => '離職', 2 => '留職停薪', 3 => '育嬰留停'][$state] ?? '不到班');
+                $lv = $leave[$uid] ?? null;
+                $out[$uid] = [
+                    'name'  => $r['user_cname'],
+                    'label' => $lv ? $lv['label'] : $label,
+                    'state' => $state,
+                    'start' => $lv ? $lv['start'] : (($state === 0 && $r['leave_date']) ? substr((string)$r['leave_date'], 0, 10) : null),
+                    'end'   => $lv ? $lv['end'] : null,
+                ];
+            }
+        } catch (Exception $e) {}
+        return $out;
+    }
+}
+
+if (!function_exists('roster_absent_on')) {
+    /** 某人在某日是否「長期不到班」（期間內；無期間＝一律不到班）。 */
+    function roster_absent_on(array $absent, int $uid, string $ymd): bool {
+        if (!isset($absent[$uid])) return false;
+        $a = $absent[$uid];
+        if ($a['start'] && $ymd < $a['start']) return false;   // 尚未開始（如離職日之前）
+        if ($a['end'] && $ymd > $a['end']) return false;       // 已結束（復職後）
+        return true;
     }
 }
 

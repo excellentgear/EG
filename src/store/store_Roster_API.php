@@ -847,9 +847,19 @@ case 'get_shift_calendar': {
     $uids = array_map(fn($r) => (int)$r['user_id'], $rows);
     $names = roster_user_name_map($pdo, $uids);
     $leaveMap = roster_leave_map($pdo, $uids, $from, $to);
+    // 長期不到班者（離職／留停／育嬰留停）：期間內的班表不顯示，但於上方彙總告知
+    $absent = roster_absent_map($pdo, $uids);
+    $absentInfo = [];
     $cells = [];
     foreach ($rows as $r) {
         $uid = (int)$r['user_id']; $sid = (int)$r['shift_type_id'];
+        if (roster_absent_on($absent, $uid, $r['work_date'])) {
+            $a = $absent[$uid];
+            $absentInfo[$uid] = ['name' => $a['name'], 'label' => $a['label'],
+                                 'start' => $a['start'], 'end' => $a['end'], 'state' => $a['state'],
+                                 'hidden' => (($absentInfo[$uid]['hidden'] ?? 0) + 1)];
+            continue;   // 不會到班 → 班表上抽離
+        }
         $lv = $leaveMap[$uid . '|' . $r['work_date']] ?? null;
         $s = $shiftMap[$sid] ?? null;
         $cells[$r['work_date']][] = [
@@ -875,6 +885,7 @@ case 'get_shift_calendar': {
         'months' => [$ym, $second], 'cells' => $cells,
         'holidays' => array_keys($ctx['holidays']), 'makeup' => array_keys($ctx['makeup']),
         'shifts' => $shifts, 'people' => $people, 'today' => date('Y-m-d'),
+        'absent' => array_values($absentInfo),
         'can_edit' => ($CAN_CREATE || $IS_ADMIN), 'is_admin' => $IS_ADMIN,
     ]);
 }
@@ -886,12 +897,15 @@ case 'add_shift_assign': {
     if (!is_array($p)) jfail('資料格式錯誤');
     $sid = (int)($p['shift_type_id'] ?? 0);
     $users = array_values(array_unique(array_filter(array_map('intval', $p['user_ids'] ?? []))));
-    $df = $p['date_from'] ?? ''; $dt = $p['date_to'] ?? '';
+    $df = $p['date_from'] ?? ''; $dt = trim($p['date_to'] ?? '');
     $weekdays = array_filter(array_map('intval', $p['weekdays'] ?? []), fn($x) => $x >= 1 && $x <= 7);
     $skipHoliday = !empty($p['skip_holiday']);
     if ($sid <= 0) jfail('請選班別');
     if (empty($users)) jfail('請選人員');
-    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $df) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dt)) jfail('日期格式錯誤');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $df)) jfail('起始日格式錯誤');
+    $longTerm = ($dt === '');   // 迄未設定＝長期單：先排 12 個月，之後由順路觸發自動延伸
+    if ($longTerm) $dt = (new DateTime($df))->modify('+12 month')->format('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dt)) jfail('終止日格式錯誤');
     if ($df > $dt) jfail('起訖顛倒');
     $chk = $pdo->prepare("SELECT 1 FROM roster_shift_type WHERE id=?"); $chk->execute([$sid]);
     if (!$chk->fetchColumn()) jerr('班別不存在', 404);
@@ -912,7 +926,7 @@ case 'add_shift_assign': {
         }
         $pdo->commit();
     } catch (Exception $e) { $pdo->rollBack(); jfail('排班失敗：' . $e->getMessage()); }
-    jout(['inserted' => $n]);
+    jout(['inserted' => $n, 'long_term' => $longTerm ? 1 : 0, 'date_to' => $dt]);
 }
 
 /* ── 固定班別排班：編輯一筆（改班別/日期/人員）── */
@@ -1008,12 +1022,14 @@ case 'update_shift_block': {
     $oldIds = array_values(array_unique(array_filter(array_map('intval', $p['old_ids'] ?? []))));
     $sid = (int)($p['shift_type_id'] ?? 0);
     $users = array_values(array_unique(array_filter(array_map('intval', $p['user_ids'] ?? []))));
-    $df = $p['date_from'] ?? ''; $dt = $p['date_to'] ?? '';
+    $df = $p['date_from'] ?? ''; $dt = trim($p['date_to'] ?? '');
     $weekdays = array_filter(array_map('intval', $p['weekdays'] ?? []), fn($x) => $x >= 1 && $x <= 7);
     $skipHoliday = !empty($p['skip_holiday']);
     if ($sid <= 0) jfail('請選班別');
     if (empty($users)) jfail('請選人員');
-    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $df) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dt)) jfail('日期格式錯誤');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $df)) jfail('起始日格式錯誤');
+    if ($dt === '') $dt = (new DateTime($df))->modify('+12 month')->format('Y-m-d');   // 迄未設定＝長期單
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dt)) jfail('終止日格式錯誤');
     if ($df > $dt) jfail('起訖顛倒');
     $chk = $pdo->prepare("SELECT 1 FROM roster_shift_type WHERE id=?"); $chk->execute([$sid]);
     if (!$chk->fetchColumn()) jerr('班別不存在', 404);
