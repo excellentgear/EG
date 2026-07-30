@@ -264,6 +264,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     table.dc-table td { border-color:var(--line) !important; vertical-align:middle; }
     .search-result-item { cursor:pointer; padding:6px 10px; border-bottom:1px solid var(--line); }
     .search-result-item:hover { background:var(--cream); }
+    .search-result-item.active { background:var(--sand); }
+    /* 料號即時搜尋的候選清單：浮在欄位下方，不把跳窗撐長 */
+    .part-dd { position:absolute; z-index:1060; left:0; right:0; top:100%;
+               background:#fff; border:1px solid var(--line); border-radius:0 0 6px 6px;
+               max-height:210px; overflow:auto; box-shadow:0 6px 14px rgba(74,53,36,.18); }
+    .err-msg { color:var(--coral); }
+    .form-control.err { border-color:var(--coral); }
+    .form-control.warn { border-color:var(--amber); }
     .userpick { max-height:190px; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:6px; }
     .userpick label { font-weight:normal; display:inline-block; width:33%; margin:0; font-size:13px; }
     </style>
@@ -292,8 +300,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             </div>
 
             <div class="warm-panel">
-                <div class="input-group" style="max-width:420px;">
-                    <input type="text" id="kw" class="form-control input-sm" placeholder="搜尋料號 / 變更單號 / 摘要">
+                <div class="input-group" style="max-width:420px;" data-eg-form data-eg-submit="#btn-search">
+                    <input type="text" id="kw" class="form-control input-sm" placeholder="搜尋料號 / 變更單號 / 摘要（雙擊清空＝解除篩選）">
                     <span class="input-group-btn"><button class="btn btn-warm-o btn-sm" id="btn-search">搜尋</button></span>
                 </div>
                 <div class="table-responsive" style="margin-top:10px;">
@@ -320,17 +328,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-pencil-square-o"></i> 登錄圖面變更
                 <small>AS <?php echo htmlspecialchars($AS_DOC_NO, ENT_QUOTES, 'UTF-8'); ?></small></h4>
         </div>
-        <div class="modal-body">
+        <div class="modal-body" data-eg-form data-eg-submit="#btn-save">
             <input type="hidden" id="f-id">
             <div class="row">
                 <div class="col-sm-6 form-group">
                     <label>料號（必填）</label>
-                    <div class="input-group">
-                        <input type="text" class="form-control input-sm" id="f-part-kw" placeholder="輸入部分料號後按搜尋">
-                        <span class="input-group-btn"><button class="btn btn-default btn-sm" id="btn-part-search">搜尋</button></span>
+                    <div style="position:relative;">
+                        <input type="text" class="form-control input-sm" id="f-part-kw" autocomplete="off"
+                               placeholder="輸入料號關鍵字即時搜尋，再點選（或 ↑↓＋Enter）">
+                        <div id="part-results" class="part-dd" style="display:none;"></div>
                     </div>
-                    <div id="part-results" style="border:1px solid #E4D3BC;margin-top:4px;max-height:150px;overflow:auto;display:none;"></div>
-                    <div id="part-picked" class="muted-help" style="margin-top:4px;"></div>
+                    <div id="part-picked" style="margin-top:4px;font-size:12px;"></div>
                 </div>
                 <div class="col-sm-3 form-group"><label>變更前版次</label><input type="text" class="form-control input-sm" id="f-oldrev"></div>
                 <div class="col-sm-3 form-group"><label>變更後版次</label><input type="text" class="form-control input-sm" id="f-newrev" placeholder="會成為檢驗標準的新版次名稱"></div>
@@ -385,6 +393,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script>
 $(function(){
     'use strict';
@@ -397,6 +406,7 @@ $(function(){
     function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c];}); }
 
     var LOOK={processes:[],users:[]}, CAN_MANAGE=false, pickedPart=null, curId=null, ME=0;
+    var partTimer=null, partSeq=0, partRows=[], partActive=-1;   // 料號即時搜尋用
 
     $.post(API,{action:'lookups'},function(r){
         if(!r.success) return;
@@ -433,13 +443,17 @@ $(function(){
     load();
     $('#btn-search').on('click', load);
     $('#kw').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); load(); } });
+    // 雙擊清空（eg_input_rules.js）後要同時解除篩選＝重新載入全部
+    $('#kw').on('input', function(){ if($.trim(this.value)==='') load(); });
 
     // ---- 登錄 / 修改 ----
     $('#btn-new').on('click', function(){ openEdit(null); });
     function openEdit(row){
-        $('#f-id').val(row?row.id:''); pickedPart = row ? {d_id:row.d_id, part_no:row.part_no} : null;
-        $('#part-picked').html(row ? ('已選料號：<b>'+esc(row.part_no||'')+'</b>') : '');
-        $('#part-results').hide().empty(); $('#f-part-kw').val('');
+        $('#f-id').val(row?row.id:'');
+        pickedPart = row ? {d_id:parseInt(row.d_id,10), part_no:String(row.part_no||'')} : null;
+        $('#part-results').hide().empty(); partRows=[]; partActive=-1;
+        $('#f-part-kw').val(pickedPart ? pickedPart.part_no : '');
+        renderPicked();
         $('#f-oldrev').val(row?row.old_revision:''); $('#f-newrev').val(row?row.new_revision:'');
         $('#f-date').val(row&&row.change_date?String(row.change_date).substring(0,10):new Date().toISOString().substring(0,10));
         $('#f-source').val(row?(row.source||'客戶'):'客戶');
@@ -450,27 +464,81 @@ $(function(){
         $('#detailModal').modal('hide');
         $('#editModal').modal('show');
     }
+    // ---- 料號即時搜尋（必須綁到 d_id，不接受純打字）----------------------------
+    // 只存 d_id：料號字串會因改版／重新命名而變，綁 ID 才不會斷線。
+    // 對應地，master_data_management.php 的料號刪除也已把 qc_drawing_change 列入
+    // 關聯阻擋＋綁定移轉，避免料號被刪掉後這裡的紀錄變孤兒。
+    function renderPicked(){
+        var $p = $('#part-picked'), $kw = $('#f-part-kw');
+        $kw.removeClass('err warn');
+        if(!pickedPart){
+            $p.html('<span class="err-msg"><i class="fa fa-exclamation-circle"></i> 尚未選定料號——請在上面輸入關鍵字，再從清單點選（必須綁定料號 ID，只打字不算）</span>');
+            $kw.addClass('err');
+            return;
+        }
+        var kw = $.trim($kw.val());
+        var stale = (kw !== '' && kw !== pickedPart.part_no);
+        $p.html('<span style="color:#C77C1A;"><i class="fa fa-check"></i> 已綁定料號 <b>'+esc(pickedPart.part_no)+'</b></span>'+
+                ' <span class="muted-help">(d_id '+pickedPart.d_id+')</span>'+
+                (stale ? '<br><span class="err-msg">搜尋字串已改成「'+esc(kw)+'」但還沒重新點選，現在存檔仍會綁上面那一筆</span>' : ''));
+        if(stale) $kw.addClass('warn');
+    }
+    function renderPartResults(){
+        $('#part-results').show().html(partRows.length ? partRows.map(function(p,i){
+            return '<div class="search-result-item part-pick'+(i===partActive?' active':'')+'" data-i="'+i+'">'+
+                   esc(p.D_Setting_Id)+(p.Revision?' <span class="muted-help">Rev '+esc(p.Revision)+'</span>':'')+
+                   ' <span class="muted-help">d_id '+p.d_id+'</span></div>';
+        }).join('') : '<div class="search-result-item muted-help">查無此料號</div>');
+    }
     function partSearch(){
+        var kw = $.trim($('#f-part-kw').val());
+        if(kw===''){ $('#part-results').hide().empty(); partRows=[]; partActive=-1; return; }
+        var seq = ++partSeq;
         $('#part-results').show().html('<div class="search-result-item muted-help">搜尋中…</div>');
-        $.post(API,{action:'part_search', keyword:$('#f-part-kw').val()},function(r){
+        $.post(API,{action:'part_search', keyword:kw},function(r){
+            if(seq!==partSeq) return;        // 打字快時舊請求可能晚回來，丟棄免蓋掉新結果
             if(!r.success){ $('#part-results').html('<div class="search-result-item text-danger">'+esc(r.message)+'</div>'); return; }
-            var rows=r.rows||[];
-            $('#part-results').html(rows.length ? rows.map(function(p){
-                return '<div class="search-result-item part-pick" data-id="'+p.d_id+'" data-no="'+esc(p.D_Setting_Id)+'" data-rev="'+esc(p.Revision||'')+'">'+
-                       esc(p.D_Setting_Id)+(p.Revision?' <span class="muted-help">Rev '+esc(p.Revision)+'</span>':'')+'</div>';
-            }).join('') : '<div class="search-result-item muted-help">查無此料號</div>');
+            partRows = r.rows||[]; partActive = partRows.length ? 0 : -1;
+            renderPartResults();
         },'json');
     }
-    $('#btn-part-search').on('click', function(e){ e.preventDefault(); partSearch(); });
-    $('#f-part-kw').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); partSearch(); } });
-    $(document).on('click','.part-pick', function(){
-        pickedPart={ d_id:parseInt($(this).data('id')), part_no:String($(this).attr('data-no')) };
-        $('#part-picked').html('已選料號：<b>'+esc(pickedPart.part_no)+'</b>');
-        if(!$('#f-oldrev').val()) $('#f-oldrev').val($(this).attr('data-rev')||'');
-        $('#part-results').hide();
+    function pickPart(i){
+        var p = partRows[i]; if(!p) return;
+        pickedPart = { d_id:parseInt(p.d_id,10), part_no:String(p.D_Setting_Id) };
+        $('#f-part-kw').val(pickedPart.part_no);
+        if(!$('#f-oldrev').val()) $('#f-oldrev').val(p.Revision||'');
+        $('#part-results').hide(); partRows=[]; partActive=-1;
+        renderPicked();
+    }
+    $('#f-part-kw').on('input', function(){
+        // 雙擊清空（eg_input_rules.js）會走到這裡：欄位清空＝連同已綁定的料號一起解除
+        if($.trim(this.value)==='') pickedPart = null;
+        clearTimeout(partTimer);
+        partTimer = setTimeout(partSearch, 220);
+        renderPicked();
+    });
+    $('#f-part-kw').on('focus', function(){ if(partRows.length) $('#part-results').show(); });
+    $('#f-part-kw').on('keydown', function(e){
+        if(e.key==='ArrowDown' || e.key==='ArrowUp'){
+            if(!partRows.length) return;
+            e.preventDefault();
+            partActive = (partActive + (e.key==='ArrowDown'?1:-1) + partRows.length) % partRows.length;
+            renderPartResults();
+            var a = $('#part-results .active')[0];
+            if(a && a.scrollIntoView) a.scrollIntoView({block:'nearest'});
+        } else if(e.key==='Enter'){
+            // 有候選就選它；沒有候選則不攔，交給 eg_input_rules.js 跳下一欄
+            if(partActive>=0 && partRows.length){ e.preventDefault(); pickPart(partActive); }
+        } else if(e.key==='Escape'){
+            $('#part-results').hide();
+        }
+    });
+    $(document).on('click','.part-pick', function(){ pickPart(parseInt($(this).attr('data-i'),10)); });
+    $(document).on('click', function(e){
+        if(!$(e.target).closest('#f-part-kw,#part-results').length) $('#part-results').hide();
     });
     $('#btn-save').on('click', function(){
-        if(!pickedPart){ alert('請先搜尋並選擇料號'); return; }
+        if(!pickedPart){ renderPicked(); $('#f-part-kw').focus(); alert('請從即時搜尋清單中點選料號（需綁定料號 ID）'); return; }
         if(!$('#f-summary').val().trim()){ alert('請填寫變更摘要'); $('#f-summary').focus(); return; }
         var users=$('.ack-u:checked').map(function(){ return this.value; }).get();
         var $b=$(this).prop('disabled',true);

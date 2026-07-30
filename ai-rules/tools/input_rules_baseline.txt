@@ -21,7 +21,6 @@ views/QC/QC_Setting.php
 views/QC/QC_check_list copy(自動更新改一半).php
 views/QC/QC_check_list.php
 views/QC/QC_check_list_test.php
-views/QC/drawing_change_log.php
 views/QC/inspection_combined_prototype.php
 views/QC/inspection_entry_v2.php
 views/QC/inspection_result_entry.php
