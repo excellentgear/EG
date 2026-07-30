@@ -52,6 +52,19 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .va-tab { border:1px solid #E8D5B5; border-bottom:none; background:#FBF3E5; color:#8a6d45; cursor:pointer;
             padding:7px 16px; font-size:14px; border-radius:6px 6px 0 0; margin-bottom:-2px; }
         .va-tab.active { background:#fff; color:#5b3a1e; font-weight:bold; border-bottom:2px solid #fff; }
+        /* 凍結窗格：標題→分頁→工具列→門檻說明 固定在頂端(僅螢幕) */
+        @media screen {
+            .right_col .page-title { position:sticky; top:0; z-index:32; background:#fff; }
+            .va-tabs { position:sticky; top:34px; z-index:31; background:#fff; }
+            #tabEval .va-toolbar { position:sticky; top:72px; z-index:30; }
+            #tabEval #evThresh { position:sticky; top:120px; z-index:29; background:#fff; padding:3px 0; margin:0; }
+        }
+        /* 回頂端按鈕 */
+        .va-totop { position:fixed; bottom:22px; right:22px; width:48px; height:48px; border:none; border-radius:50%;
+            background:#F0A24B; color:#fff; font-size:12px; font-weight:bold; cursor:pointer; z-index:1000;
+            box-shadow:0 4px 8px rgba(90,58,30,.3); display:none; }
+        .va-totop:hover { background:#d98a33; }
+        @media print { .va-totop { display:none !important; } }
         /* 定期評核-全部卡片(2欄並列) */
         .ev-cards { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
         .ev-card { border:1px solid #E8D5B5; border-radius:6px; background:#fff; padding:6px 8px; break-inside:avoid; }
@@ -271,6 +284,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <?php include '../partPage/footer.html' ?>
 </div>
 </div>
+<button class="va-totop" id="vaToTop" title="回頂端" onclick="window.scrollTo({top:0,behavior:'smooth'})">回頂端</button>
 
 <!-- 廠商池挑選 modal -->
 <div class="va-mask" id="pkMask"><div class="va-modal pkwide">
@@ -416,7 +430,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>特採率上限（%，100=不判定）</label><input type="number" id="stSpMax" step="0.1" min="0"></div>
             <div><label>約定工作天（算應交日）</label><input type="number" id="stDays" step="1" min="0"></div>
         </div>
-        <div style="font-size:12px;color:#8a6d45;margin-top:8px;">半年不良率／遲交率超過上限即判不合格；特採率上限設 100 表示不納入判定。約定工作天沿用 KPI#7 準交口徑。</div>
+        <div style="font-size:12px;color:#8a6d45;margin:8px 0 12px;">半年不良率／遲交率超過上限即判不合格；特採率上限設 100 表示不納入判定。約定工作天沿用 KPI#7 準交口徑。</div>
+        <label>綁定 AS 表單 —— 全部列印的文件名稱/編號跟 AS 文件管理連動</label>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <input type="text" id="stAsKw" placeholder="搜尋文件編號/名稱" style="width:150px;">
+            <select id="stAsDoc" style="flex:1;min-width:200px;"><option value="0">（不綁定，用預設「供應商定期評核表 / 2-PH-01-05」）</option></select>
+        </div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('evSetMask')">取消</button>
@@ -479,7 +498,7 @@ function loadMeta(cb){
         if (!m.ok){ alert(m.error||'載入失敗'); return; }
         META = m; PERMS = m.perms;
         var $y = $('#yearSel').empty(), cy = m.cur_year;
-        for (var y=cy+1; y>=cy-4; y--) $y.append('<option value="'+y+'">'+y+'</option>');
+        for (var y=cy; y>=cy-5; y--) $y.append('<option value="'+y+'">'+y+'</option>');
         $y.val(cy);
         $('#halfSel').val(m.cur_half);
         var opt = '<option value="">全部</option>';
@@ -492,7 +511,7 @@ function loadMeta(cb){
         if (m.perms.canEdit) $('#btnPick').show();
         if (m.perms.canAdmin){ $('#btnCycle').show(); $('#btnAuditor').show(); $('#pkManageGrp').show(); $('#evSet').show(); }
         var $ey = $('#evYear').empty();
-        for (var yy=m.cur_year+1; yy>=m.cur_year-4; yy--) $ey.append('<option value="'+yy+'">'+yy+'</option>');
+        for (var yy=m.cur_year; yy>=m.cur_year-5; yy--) $ey.append('<option value="'+yy+'">'+yy+'</option>');
         $ey.val(m.cur_year);
         loadEvVendors('');
         if (cb) cb();
@@ -975,17 +994,73 @@ function miniHalf(hf,label){
     var j=hf.judge?(hf.judge==='pass'?'<span class="af-judge-pass">合格</span>':'<span class="af-judge-fail">不合格</span>'):'—';
     return '<tr class="half"><td>'+label+'</td><td>'+hf.qc_in+'</td><td>'+rate(hf.ng_rate)+'</td><td>'+rate(hf.special_rate)+'</td><td>'+hf.del_in+'</td><td>'+rate(hf.late_rate)+' '+j+'</td></tr>';
 }
-$('#evPrint').on('click', function(){ window.print(); });
+/* 全部評核 橫式列印：一頁6間(3欄×2列)，頁首公司名+文件名，右上頁碼，右下AS編號 */
+function evCardPrintHTML(v){
+    var s=EVAL_ALL.settings;
+    var oNg=function(x){return x!=null&&x>s.ng_max?' class="over"':'';}, oLt=function(x){return x!=null&&x>s.late_max?' class="over"':'';}, oSp=function(x){return s.special_max<100&&x!=null&&x>s.special_max?' class="over"':'';};
+    var h='<div class="pc"><div class="pc-h">'+esc(v.maker_name)+'（'+esc(v.maker_id_no)+'）'+(v.fail?'<span class="jf">不合格</span>':'<span class="jp">合格</span>')+'</div>'
+        +'<table class="pm"><thead><tr><th>月</th><th>檢驗</th><th>不良率</th><th>特採率</th><th>回廠</th><th>遲交率</th></tr></thead><tbody>';
+    for(var m=1;m<=12;m++){ var d=v.months[m];
+        h+='<tr><td>'+m+'</td><td>'+d.qc_in+'</td><td'+oNg(d.ng_rate)+'>'+rate(d.ng_rate)+'</td><td'+oSp(d.special_rate)+'>'+rate(d.special_rate)+'</td><td>'+d.del_in+'</td><td'+oLt(d.late_rate)+'>'+rate(d.late_rate)+'</td></tr>';
+        if(m===6||m===12){ var hf=v.halves[m===6?1:2]; var jj=hf.judge?(hf.judge==='pass'?'合格':'不合格'):'—';
+            h+='<tr class="ph"><td>'+(m===6?'上半':'下半')+'</td><td>'+hf.qc_in+'</td><td>'+rate(hf.ng_rate)+'</td><td>'+rate(hf.special_rate)+'</td><td>'+hf.del_in+'</td><td>'+rate(hf.late_rate)+' '+jj+'</td></tr>'; }
+    }
+    return h+'</tbody></table></div>';
+}
+function printEvalAll(){
+    if(!EVAL_ALL) return;
+    var list=EVAL_ALL.vendors.filter(function(v){ return !$('#evFailOnly').is(':checked')||v.fail; });
+    if(!list.length){ alert('無資料可列印'); return; }
+    var doc=META.eval_as_doc, docName=(doc&&doc.doc_name)||'供應商定期評核表', docNo=(doc&&doc.doc_no)||'2-PH-01-05';
+    var per=6, pages=Math.ceil(list.length/per), body='';
+    for(var p=0;p<pages;p++){
+        var cards='';
+        for(var k=p*per;k<Math.min((p+1)*per,list.length);k++) cards+=evCardPrintHTML(list[k]);
+        body+='<div class="pg"><div class="pg-h"><div class="ttl"><div class="co">超正齒輪科技有限公司</div><div class="dn">'+esc(docName)+'（'+EVAL_ALL.year+' 年 定期評核）</div></div>'
+            +'<div class="pn">第 '+(p+1)+' / '+pages+' 頁</div></div>'
+            +'<div class="pg-cards">'+cards+'</div><div class="pg-f">表單編號：'+esc(docNo)+'</div></div>';
+    }
+    var w=window.open('','_blank'); if(!w){alert('請允許彈出視窗');return;}
+    var css='@page{size:A4 landscape;margin:8mm;} body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;margin:0;}'
+        +'.pg{page-break-after:always;padding:2mm;} .pg:last-child{page-break-after:auto;}'
+        +'.pg-h{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #333;padding-bottom:3px;margin-bottom:5px;}'
+        +'.pg-h .co{font-size:15px;font-weight:bold;} .pg-h .dn{font-size:12px;} .pg-h .pn{font-size:12px;font-weight:bold;}'
+        +'.pg-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;}'
+        +'.pc{border:1px solid #333;border-radius:3px;padding:3px 4px;break-inside:avoid;}'
+        +'.pc-h{font-weight:bold;font-size:12px;margin-bottom:2px;display:flex;justify-content:space-between;}'
+        +'.pc .jf{color:#c00;} .pc .jp{color:#282;}'
+        +'table.pm{width:100%;border-collapse:collapse;font-size:10px;} table.pm th,table.pm td{border:1px solid #999;padding:0 2px;text-align:center;}'
+        +'table.pm thead th{background:#eee;} table.pm tr.ph td{background:#f3ead6;font-weight:bold;} table.pm td.over{color:#c00;font-weight:bold;}'
+        +'.pg-f{text-align:right;font-size:11px;margin-top:6px;}';
+    w.document.write('<html><head><meta charset="utf-8"><title>供應商定期評核</title><style>'+css+'</style></head><body>'+body
+        +'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+    w.document.close();
+}
+$('#evPrint').on('click', function(){ if(EVAL_ALL) printEvalAll(); else window.print(); });
 $('#evSet').on('click', function(){
     var s=(EVAL&&EVAL.settings)||META.eval_settings||{ng_max:5,late_max:30,special_max:100,default_days:7};
     $('#stNgMax').val(s.ng_max); $('#stLateMax').val(s.late_max); $('#stSpMax').val(s.special_max); $('#stDays').val(s.default_days);
+    loadEvalAsForms('', META.eval_as_doc?META.eval_as_doc.id:0);
     openMask('evSetMask');
 });
+var stAsT=null;
+$('#stAsKw').on('input', function(){ clearTimeout(stAsT); var k=$(this).val(); stAsT=setTimeout(function(){ loadEvalAsForms(k, +$('#stAsDoc').val()); }, 300); });
+function loadEvalAsForms(kw, selId){
+    $.getJSON(API, {action:'as_forms', kw:kw||''}, function(res){
+        if(!res.ok) return;
+        var $s=$('#stAsDoc').html('<option value="0">（不綁定，用預設「供應商定期評核表 / 2-PH-01-05」）</option>');
+        (res.forms||[]).forEach(function(f){ $s.append('<option value="'+f.id+'">'+esc(f.doc_no)+' '+esc(f.doc_name)+'</option>'); });
+        if(selId && $s.find('option[value="'+selId+'"]').length===0 && META.eval_as_doc)
+            $s.append('<option value="'+META.eval_as_doc.id+'">'+esc(META.eval_as_doc.doc_no)+' '+esc(META.eval_as_doc.doc_name)+'（目前綁定）</option>');
+        $s.val(selId||0);
+    });
+}
 function submitEvSet(){
     $.post(API, {action:'save_eval_settings', ng_max:$('#stNgMax').val(), late_max:$('#stLateMax').val(),
-        special_max:$('#stSpMax').val(), default_days:$('#stDays').val()}, function(res){
+        special_max:$('#stSpMax').val(), default_days:$('#stDays').val(), as_doc_id:$('#stAsDoc').val()}, function(res){
         if(!res.ok){ alert(res.error||'儲存失敗'); return; }
-        META.eval_settings=res.settings; closeMask('evSetMask'); if($('#evVendor').val()) loadEval();
+        META.eval_settings=res.settings; META.eval_as_doc=res.eval_as_doc; closeMask('evSetMask');
+        if(EVAL_ALL) $('#evAll').click(); else if($('#evVendor').val()) loadEval();
     }, 'json');
 }
 $('#evCsv').on('click', function(){
@@ -1066,6 +1141,8 @@ $(document).on('keydown', '#afBody input.af-score', function(e){
 
 $('#btnRoleHelp').on('click', function(){ openMask('helpMask'); });
 $('.va-mask').on('click', function(e){ if (e.target===this) this.style.display='none'; });
+
+$(window).on('scroll', function(){ $('#vaToTop').toggle($(window).scrollTop()>200); });
 
 if (canView) loadMeta(function(){ loadRound(); });
 </script>

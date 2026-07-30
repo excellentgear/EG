@@ -112,8 +112,8 @@ function vendor_audit_ensure_schema(PDO $db): void {
 }
 
 /* ---- 綁定的 AS 表單（列印表單名稱/編號與 AS 文件管理連動）---- */
-function vendor_audit_bound_asdoc(PDO $db): ?array {
-    $id = (int)vendor_eval_setting($db, 'vendor_audit_as_doc_id', 0);
+function vendor_audit_bound_asdoc(PDO $db, string $key = 'vendor_audit_as_doc_id'): ?array {
+    $id = (int)vendor_eval_setting($db, $key, 0);
     if ($id <= 0) return null;
     try {
         $st = $db->prepare("SELECT id, doc_no, doc_name FROM as_document WHERE id=? AND (is_deleted IS NULL OR is_deleted=0) LIMIT 1");

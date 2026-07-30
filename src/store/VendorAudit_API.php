@@ -57,6 +57,7 @@ case 'meta': {
           'cycle_months'=>vendor_audit_cycle_months($db), 'main_categories'=>$cats,
           'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', ''),
           'as_doc'=>vendor_audit_bound_asdoc($db),
+          'eval_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_eval_as_doc_id'),
           'items'=>vendor_audit_items(), 'item_max'=>VENDOR_AUDIT_ITEM_MAX,
           'total_max'=>VENDOR_AUDIT_TOTAL_MAX, 'pass_rate'=>VENDOR_AUDIT_PASS_RATE,
           'self_w'=>VENDOR_AUDIT_SELF_W, 'audit_w'=>VENDOR_AUDIT_AUDIT_W,
@@ -136,7 +137,12 @@ case 'save_eval_settings': {
         'vendor_eval_late_max'    => max(0, (float)($_POST['late_max'] ?? 30)),
         'vendor_eval_default_days'=> max(0, (int)($_POST['default_days'] ?? 7)),
     ]);
-    jout(['settings'=>vendor_eval_settings($db)]);
+    if (array_key_exists('as_doc_id', $_POST)) {
+        $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('vendor_eval_as_doc_id', ?)
+                            ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+        $up->execute([(string)(int)$_POST['as_doc_id']]);
+    }
+    jout(['settings'=>vendor_eval_settings($db), 'eval_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_eval_as_doc_id')]);
 }
 
 /* 某大類下的加工項目(小類) */
