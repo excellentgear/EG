@@ -108,8 +108,9 @@ case 'save_session': {
     jout(['session_id'=>$sid]);
 }
 
-/* 確認實行（登錄權）：登錄實際開課日/時段/地點，狀態轉 done。
-   計畫欄位一律不動；參加名單另由 save_attendees 寫入。 */
+/* 確認實行（登錄權）：登錄開課日期/時段/地點/實際時數。
+   狀態：mark_done=1 → done(已完成，計入 KPI 分子)；否則至少推進到 scheduled(已排定，可印簽到表)，
+   已經是 done 的場次維持 done（單純修改實行紀錄）。計畫欄位一律不動；名單另由 save_attendees 寫入。 */
 case 'save_execution': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $sid = (int)($_POST['session_id'] ?? 0);
@@ -119,22 +120,25 @@ case 'save_execution': {
     if ($cur === false) jerr('找不到場次');
     if ($cur === 'cancelled') jerr('此計畫已取消，請先恢復為計畫中再確認實行');
     $doneDate = trim((string)($_POST['done_date'] ?? ''));
-    if ($doneDate === '') jerr('請填實際開課日期');
+    if ($doneDate === '') jerr('請填開課日期');
     $startT = trim((string)($_POST['start_time'] ?? '')) ?: null;
     $endT = trim((string)($_POST['end_time'] ?? '')) ?: null;
     if ($startT && $endT && $endT < $startT) jerr('時段迄不可早於時段起');
     $location = trim((string)($_POST['location'] ?? '')) ?: null;
+    $actHours = ($_POST['actual_hours'] ?? '') === '' ? null : (float)$_POST['actual_hours'];
+    $markDone = (int)($_POST['mark_done'] ?? 0) === 1;
+    $newStatus = $markDone ? 'done' : ($cur === 'done' ? 'done' : 'scheduled');
     try {
         $db->beginTransaction();
-        $db->prepare("UPDATE training_session SET status='done', done_date=?, start_time=?, end_time=?, location=? WHERE session_id=?")
-           ->execute([$doneDate, $startT, $endT, $location, $sid]);
+        $db->prepare("UPDATE training_session SET status=?, done_date=?, start_time=?, end_time=?, location=?, actual_hours=? WHERE session_id=?")
+           ->execute([$newStatus, $doneDate, $startT, $endT, $location, $actHours, $sid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
-    jout(['session_id'=>$sid]);
+    jout(['session_id'=>$sid, 'status'=>$newStatus]);
 }
 
 /* 狀態切換（登錄權）：退回計畫中 / 取消計畫 / 恢復計畫。
-   退回或取消時清空實際開課日（KPI 只認 done），時段與地點保留供下次沿用。 */
+   退回或取消時清空開課日（KPI 只認 done），時段/地點/實際時數保留供改期後沿用。 */
 case 'set_status': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $sid = (int)($_POST['session_id'] ?? 0);
@@ -151,13 +155,22 @@ case 'set_status': {
     jout(['session_id'=>$sid, 'status'=>$status]);
 }
 
-/* 部門人員（講師/參加人員選擇用） */
+/* 部門人員（講師/參加人員選擇用）
+   排除：離職(state=0)、共用帳號(is_shared_account=1)、系統/公用身分(user_status 9/90/9999)。
+   一併回傳該部門的職稱（同一人多職稱時取主要職務 is_main 優先）。 */
 case 'people': {
     $deptId = (int)($_GET['dept_id'] ?? 0);
     if ($deptId <= 0) jout(['people'=>[]]);
-    $st = $db->prepare("SELECT DISTINCT u.id, u.user_cname
-                        FROM user_department_position_map m JOIN user u ON u.id=m.user_id
+    $st = $db->prepare("SELECT u.id, u.user_cname,
+                               SUBSTRING_INDEX(GROUP_CONCAT(p.name ORDER BY m.is_main DESC, p.sort_order, p.id SEPARATOR '|'), '|', 1) AS position_name
+                        FROM user_department_position_map m
+                        JOIN user u ON u.id=m.user_id
+                        LEFT JOIN position p ON p.id=m.position_id
                         WHERE m.department_id=? AND u.user_cname IS NOT NULL AND u.user_cname<>''
+                          AND COALESCE(u.state,1) <> 0
+                          AND COALESCE(u.is_shared_account,0) <> 1
+                          AND COALESCE(u.user_status,0) NOT IN (9,90,9999)
+                        GROUP BY u.id, u.user_cname
                         ORDER BY u.user_cname");
     $st->execute([$deptId]);
     jout(['people'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
@@ -166,7 +179,7 @@ case 'people': {
 /* 場次參加人員名單 */
 case 'get_attendees': {
     $sid = (int)($_GET['session_id'] ?? 0);
-    $st = $db->prepare("SELECT att_id, user_id, user_name, dept_name, attended, signed, signed_at, sign_method
+    $st = $db->prepare("SELECT att_id, user_id, user_name, dept_name, position_name, attended, signed, signed_at, sign_method
                         FROM training_attendee WHERE session_id=? ORDER BY dept_name, user_name");
     $st->execute([$sid]);
     jout(['attendees'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
@@ -189,8 +202,8 @@ case 'save_attendees': {
         $oq->execute([$sid]);
         foreach ($oq->fetchAll(PDO::FETCH_ASSOC) as $o) $old[(int)$o['user_id']] = $o;
         $db->prepare("DELETE FROM training_attendee WHERE session_id=?")->execute([$sid]);
-        $ins = $db->prepare("INSERT INTO training_attendee (session_id,user_id,user_name,dept_name,attended,signed,signed_at,sign_method)
-                             VALUES (?,?,?,?,?,?,?,?)");
+        $ins = $db->prepare("INSERT INTO training_attendee (session_id,user_id,user_name,dept_name,position_name,attended,signed,signed_at,sign_method)
+                             VALUES (?,?,?,?,?,?,?,?,?)");
         $total = 0; $att = 0;
         foreach ($list as $p) {
             $uidP = (int)($p['user_id'] ?? 0);
@@ -198,7 +211,8 @@ case 'save_attendees': {
             $attended = (int)($p['attended'] ?? 0) === 1 ? 1 : 0;
             $o = $old[$uidP] ?? null;
             $ins->execute([$sid, $uidP, trim((string)($p['user_name'] ?? '')) ?: null,
-                trim((string)($p['dept_name'] ?? '')) ?: null, $attended,
+                trim((string)($p['dept_name'] ?? '')) ?: null,
+                trim((string)($p['position_name'] ?? '')) ?: null, $attended,
                 $o ? (int)$o['signed'] : 0, $o ? $o['signed_at'] : null, $o ? $o['sign_method'] : null]);
             $total++; if ($attended) $att++;
         }

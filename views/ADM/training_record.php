@@ -65,6 +65,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         table.tr-table td.t-left { text-align:left; }
         .st-pill { display:inline-block; font-size:12px; border-radius:10px; padding:2px 9px; }
         .st-planned { background:#F7E0BD; color:#7a5217; }
+        .st-scheduled { background:#E8B77A; color:#4d2f10; }
         .st-done { background:#F0A24B; color:#fff; }
         .st-cancelled { background:#efe7d8; color:#b0a390; text-decoration:line-through; }
         .tr-op { color:#b5762a; cursor:pointer; margin:0 4px; }
@@ -95,6 +96,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             color:#5b3a1e; line-height:1.8; margin-bottom:4px; }
         .ex-plan b { color:#8A5A2B; }
         .ex-plan .st-pill { margin-left:4px; }
+        select.time-sel { font-size:14px; letter-spacing:.5px; }
         .att-sec { border-top:1px dashed #EADFC8; margin-top:10px; }
         .att-people { max-height:130px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; padding:6px 8px;
             display:flex; flex-wrap:wrap; gap:4px 14px; margin-bottom:6px; min-height:20px; }
@@ -141,6 +143,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <label>狀態</label>
             <select id="statSel">
                 <option value="">全部</option><option value="planned">計畫中</option>
+                <option value="scheduled">已排定</option>
                 <option value="done">已完成</option><option value="cancelled">取消</option>
             </select>
             <input type="text" id="kwSel" placeholder="搜尋課程" style="width:130px;">
@@ -160,17 +163,18 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <table class="tr-table" id="trTable">
                 <thead><tr>
                     <th>月份</th><th>對象部門</th><th>課程名稱</th><th>類型</th><th>講師/開課單位</th><th>時數</th>
-                    <th>應到</th><th>實到</th><th>狀態</th><th>實際開課日</th><th>操作</th>
+                    <th>應到</th><th>實到</th><th>狀態</th><th>開課日期</th><th>操作</th>
                 </tr></thead>
                 <tbody id="trBody"><tr><td colspan="11" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
-            狀態：<span class="st-pill st-planned">計畫中</span> <span class="st-pill st-done">已完成</span>
-            <span class="st-pill st-cancelled">取消</span>。
-            流程分兩步：<b>①計畫</b>（年月、課程、部門、講師/開課單位、時數）→ <b>②確認實行</b>（實際開課日期、時段、地點、參加人員），
-            按下「確認實行」存檔後狀態才轉為已完成。
-            KPI 達成率＝當月「已完成」場次 ÷「計畫」場次（取消不計入）；部門留空＝全公司課程。
+            狀態：<span class="st-pill st-planned">計畫中</span> <span class="st-pill st-scheduled">已排定</span>
+            <span class="st-pill st-done">已完成</span> <span class="st-pill st-cancelled">取消</span>。
+            流程分三步：<b>①計畫</b>（年月、課程、部門、講師/開課單位、時數）→
+            <b>②確認實行</b>＝確定要開課（開課日期、時段、地點、參加人員 → 狀態轉「已排定」，此時就能列印簽到表給人員簽名）→
+            <b>③登錄完成</b>＝上完課後回到同一畫面勾「實到」再按「登錄完成」（狀態轉「已完成」）。
+            KPI 達成率＝當月「已完成」場次 ÷「計畫」場次（已排定算分母不算分子、取消不計入）；部門留空＝全公司課程。時數欄有 <span style="color:#DD5138;">*</span> 表示實際時數與計畫不同。
         </div>
 <?php endif; ?>
     </div>
@@ -217,10 +221,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-body">
         <div class="ex-plan" id="exPlanInfo"></div>
         <div class="grid2">
-            <div><label>實際開課日期 *</label><input type="date" id="exDone"></div>
+            <div><label>開課日期 *</label><input type="date" id="exDone"></div>
             <div><label>上課地點</label><input type="text" id="exLocation" maxlength="100" placeholder="例：二樓會議室"></div>
-            <div><label>時段（起）</label><input type="time" id="exStart"></div>
-            <div><label>時段（迄）</label><input type="time" id="exEnd"></div>
+            <div><label>開始時間</label><select id="exStart" class="time-sel"></select></div>
+            <div><label>實際時數（改時數會自動算結束時間）</label><input type="number" id="exHours" step="any" min="0"></div>
+            <div><label>結束時間（可自行修改）</label><select id="exEnd" class="time-sel"></select></div>
+            <div style="display:flex;align-items:flex-end;padding-bottom:6px;">
+                <span id="exHourHint" style="font-size:12px;color:#8a6d45;"></span></div>
         </div>
 
         <div class="att-sec">
@@ -232,16 +239,18 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             </div>
             <div id="attPeopleBox" class="att-people"></div>
             <div class="att-list-wrap">
-                <table class="att-tbl"><thead><tr><th>姓名</th><th>部門</th><th>實到</th><th>簽名</th><th></th></tr></thead>
+                <table class="att-tbl"><thead><tr><th>姓名</th><th>部門</th><th>職稱</th><th>實到</th><th>簽名</th><th></th></tr></thead>
                 <tbody id="attBody"></tbody></table>
             </div>
+            <div style="font-size:11px;color:#8a6d45;margin-top:3px;">開課前先建名單並列印簽到表；上完課回來勾「實到」再按「登錄完成」。</div>
         </div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="printSignSheet()"><i class="fa fa-print"></i> 列印簽到表</button>
         <button class="b-cancel" id="exRevert" style="display:none;color:#DD5138;" onclick="revertPlanned()"><i class="fa fa-undo"></i> 退回計畫中</button>
         <button class="b-cancel" onclick="closeMask('exMask')">取消</button>
-        <button class="b-ok" id="exSave" onclick="submitEx()">確認實行完成</button>
+        <button class="b-ok" id="exSave" onclick="submitEx(0)">確認開課</button>
+        <button class="b-ok" id="exFinish" style="margin-left:6px;" onclick="submitEx(1)">登錄完成</button>
     </div>
 </div></div>
 
@@ -250,11 +259,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-head"><span>角色權限說明</span><span class="m-close" onclick="closeMask('helpMask')">✕</span></div>
     <div class="m-body" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
         <b>訓練檢閱</b>：檢視訓練計畫/紀錄、月達成率與匯出。<br>
-        <b>訓練登錄</b>：檢閱＋新增/編輯訓練場次、登錄完成。<br>
+        <b>訓練登錄</b>：檢閱＋新增/編輯計畫、確認實行（確定開課）、登錄完成、列印簽到表。<br>
         <b>訓練管理員</b>：登錄＋刪除場次。<br>
         <b>管理者</b>：系統管理者固定擁有全部權限。<br>
         <hr style="border-color:#EADFC8;">
-        本頁資料為 KPI「人員教育訓練達成率(#19)」計算來源；達成率依「計畫月份」歸月計算。
+        本頁資料為 KPI「人員教育訓練達成率(#19)」計算來源；達成率依「計畫月份」歸月計算。<br>
+        作業流程：<b>計畫</b>（要辦什麼）→ <b>確認實行</b>（確定開課，狀態「已排定」，可印簽到表）→ <b>登錄完成</b>（上完課、勾實到，狀態「已完成」才計入達成率）。
     </div>
 </div></div>
 
@@ -272,7 +282,29 @@ $(document).ready(function(){
 var API = '../../src/store/Training_API.php';
 var META = null, ROWS = [], PERMS = null;
 var canView = <?= $perms['canView'] ? 'true' : 'false' ?>;
-var STATUS_LABEL = {planned:'計畫中', done:'已完成', cancelled:'取消'};
+var STATUS_LABEL = {planned:'計畫中', scheduled:'已排定', done:'已完成', cancelled:'取消'};
+
+/* ---------- 時間下拉（10 分為單位，06:00~21:50） ---------- */
+var TIME_MIN = 6, TIME_MAX = 22;
+function buildTimeSel($sel, blankLabel){
+    var h = '<option value="">'+(blankLabel||'--:--')+'</option>';
+    for (var hh=TIME_MIN; hh<TIME_MAX; hh++){
+        for (var mm=0; mm<60; mm+=10){
+            var v = (hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm;
+            h += '<option value="'+v+'">'+v+'</option>';
+        }
+    }
+    $sel.html(h);
+}
+/* 舊資料若非 10 分整（如 14:25）仍要能顯示：不在清單中就補一個選項 */
+function setTimeSel($sel, val){
+    if (val && !$sel.find('option[value="'+val+'"]').length)
+        $sel.append('<option value="'+val+'">'+val+'</option>');
+    $sel.val(val || '');
+}
+function timeToMin(t){ if(!t) return null; var p=String(t).split(':'); return (+p[0])*60 + (+p[1]); }
+function minToTime(m){ if(m==null) return ''; m=Math.round(m); if(m<0) m=0; if(m>=24*60) m=24*60-10;
+    var h=Math.floor(m/60), mm=m%60; return (h<10?'0':'')+h+':'+(mm<10?'0':'')+mm; }
 
 function closeMask(id){ document.getElementById(id).style.display='none'; }
 function openMask(id){ document.getElementById(id).style.display='block'; }
@@ -297,6 +329,7 @@ function loadMeta(cb){
         });
         var $em = $('#edMonth').empty();
         for (var i=1;i<=12;i++) $em.append('<option value="'+i+'">'+i+'月</option>');
+        buildTimeSel($('#exStart'), '--:--'); buildTimeSel($('#exEnd'), '--:--');
         if (m.perms.canEdit) $('#btnAdd').show();
         if (cb) cb();
     });
@@ -342,7 +375,11 @@ function renderTable(){
         html += '<td class="t-left"><b>'+esc(r.course_name)+'</b></td>';
         html += '<td>'+(ext?'<span style="color:#c0762c;">外訓</span>':'內訓')+'</td>';
         html += '<td>'+esc((ext?r.org_unit:r.trainer)||'—')+'</td>';
-        html += '<td>'+(r.hours==null?'—':numTrim(r.hours))+'</td>';
+        // 時數：已排定/已完成有登錄實際時數就顯示實際值（與計畫不同時標示）
+        var showH = r.actual_hours!=null ? r.actual_hours : r.hours, diffH = r.actual_hours!=null && r.hours!=null
+            && Math.abs(parseFloat(r.actual_hours)-parseFloat(r.hours))>0.05;
+        html += '<td'+(diffH?' title="計畫時數 '+numTrim(r.hours)+'，實際 '+numTrim(r.actual_hours)+'"':'')+'>'
+             +  (showH==null?'—':numTrim(showH))+(diffH?' <span style="color:#DD5138;">*</span>':'')+'</td>';
         html += '<td>'+(r.target_headcount==null?'—':r.target_headcount)+'</td>';
         html += '<td>'+(r.actual_headcount==null?'—':r.actual_headcount)+'</td>';
         html += '<td>'+statPill(r.status)+'</td>';
@@ -354,8 +391,10 @@ function renderTable(){
                 html += '<span class="tr-op" onclick="setStatus('+r.session_id+',\'planned\')" title="恢復為計畫中"><i class="fa fa-undo"></i>恢復</span>';
             } else if (r.status==='done') {
                 html += '<span class="tr-op" onclick="openEx('+r.session_id+')" title="修改實行紀錄"><i class="fa fa-check-square-o"></i>實行紀錄</span>';
+            } else if (r.status==='scheduled') {
+                html += '<span class="tr-op" onclick="openEx('+r.session_id+')" title="修改開課資料/名單、印簽到表、登錄完成"><i class="fa fa-calendar-check-o"></i>實行資料</span>';
             } else {
-                html += '<span class="tr-op" onclick="openEx('+r.session_id+')" title="登錄實際開課日期/地點/人員"><i class="fa fa-check-square-o"></i>確認實行</span>';
+                html += '<span class="tr-op" onclick="openEx('+r.session_id+')" title="確定開課：登錄開課日期/地點/參加人員"><i class="fa fa-check-square-o"></i>確認實行</span>';
                 html += '<span class="tr-op" onclick="setStatus('+r.session_id+',\'cancelled\')" title="取消此計畫"><i class="fa fa-ban"></i>取消</span>';
             }
             html += '<span class="tr-op" onclick="copySession('+r.session_id+')" title="複製內容(不帶名單)"><i class="fa fa-copy"></i>複製</span>';
@@ -398,37 +437,66 @@ function openEd(sid){
 }
 $('#btnAdd').on('click', function(){ openEd(0); });
 
-/* 確認實行 modal：實際開課日期/時段/地點＋參加人員 */
+/* 確認實行 modal：開課日期/時段/地點/實際時數＋參加人員
+   語意：確認實行＝「確定要開這堂課」（狀態轉已排定，可先印簽到表）；
+        上完課後回到同一畫面勾實到、按「登錄完成」才轉已完成（計入 KPI）。 */
 var EXROW = null;
 function openEx(sid){
     var r = ROWS.find(function(x){ return String(x.session_id)===String(sid); });
     if (!r) return;
     EXROW = r;
-    var done = r.status==='done';
-    $('#exTitle').text(done ? '實行紀錄（已完成）' : '確認實行');
-    $('#exSave').text(done ? '儲存實行紀錄' : '確認實行完成');
-    $('#exRevert').toggle(done);
+    var done = r.status==='done', sch = r.status==='scheduled';
+    $('#exTitle').text(done ? '實行紀錄（已完成）' : (sch ? '實行資料（已排定開課）' : '確認實行（確定開課）'));
+    $('#exSave').text(done ? '儲存實行紀錄' : (sch ? '儲存' : '確認開課'));
+    $('#exFinish').toggle(!done);
+    $('#exRevert').toggle(done || sch);
     $('#exMask').data('sid', r.session_id);
     var ext = r.train_type==='external';
     $('#exPlanInfo').html(
         '<div><b>'+esc(r.course_name)+'</b> '+statPill(r.status)+'</div>'
       + '<div>計畫：'+r.year+' 年 '+r.plan_month+' 月　對象部門：'+esc(r.dept_name||'全公司')
       + '　類型：'+(ext?'外訓':'內訓')+'　'+(ext?'開課單位':'講師')+'：'+esc((ext?r.org_unit:r.trainer)||'—')
-      + '　時數：'+(r.hours==null?'—':numTrim(r.hours))+'</div>');
+      + '　計畫時數：'+(r.hours==null?'—':numTrim(r.hours))+'</div>');
     $('#exDone').val(fmtDate(r.done_date) || (done ? '' : (META.today||'')));
-    $('#exStart').val(r.start_time||''); $('#exEnd').val(r.end_time||'');
+    setTimeSel($('#exStart'), r.start_time||'');
+    setTimeSel($('#exEnd'), r.end_time||'');
+    $('#exHours').val(r.actual_hours!=null ? numTrim(r.actual_hours) : (r.hours!=null ? numTrim(r.hours) : ''));
+    exHint();
+    if ($('#exStart').val() && !$('#exEnd').val()) exCalcEnd();
     $('#exLocation').val(r.location||'');
     $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
     $('#attPickAll').prop('checked', false);
     ATT = [];
     $.getJSON(API, {action:'get_attendees', session_id:r.session_id}, function(res){
-        if (res.ok) ATT = res.attendees.map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name, attended:+a.attended, signed:+a.signed}; });
+        if (res.ok) ATT = res.attendees.map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name,
+            position_name:a.position_name||'', attended:+a.attended, signed:+a.signed}; });
         renderAtt();
     });
     renderAtt();
     openMask('exMask');
     setTimeout(function(){ $('#exDone').focus(); }, 100);
 }
+/* 開始時間 or 實際時數 改變 → 算結束時間；改結束時間 → 反算實際時數 */
+function exCalcEnd(){
+    var s = timeToMin($('#exStart').val()), h = parseFloat($('#exHours').val());
+    if (s==null || isNaN(h) || h<=0) return;
+    setTimeSel($('#exEnd'), minToTime(s + Math.round(h*60)));
+    exHint();
+}
+function exCalcHours(){
+    var s = timeToMin($('#exStart').val()), e = timeToMin($('#exEnd').val());
+    if (s==null || e==null || e<s) return;
+    $('#exHours').val(numTrim(Math.round((e-s)/60*10)/10));
+    exHint();
+}
+function exHint(){
+    var pl = EXROW && EXROW.hours!=null ? parseFloat(EXROW.hours) : null;
+    var ac = parseFloat($('#exHours').val());
+    $('#exHourHint').html(pl!=null && !isNaN(ac) && Math.abs(pl-ac)>0.05
+        ? '<span style="color:#DD5138;">與計畫時數 '+numTrim(pl)+' 不同</span>' : '');
+}
+$('#exStart,#exHours').on('change', exCalcEnd);
+$('#exEnd').on('change', exCalcHours);
 /* 講師：部門→人員 */
 $('#edTrainerDept').on('change', function(){
     var did=$(this).val(); var $p=$('#edTrainerPerson').html('<option value="">人員</option>');
@@ -445,7 +513,9 @@ $('#attDept').on('change', function(){
         var deptName=$('#attDept option:selected').text();
         var h=''; res.people.forEach(function(u){
             var inList=ATT.some(function(a){return a.user_id===+u.id;});
-            h+='<label><input type="checkbox" class="att-ck" value="'+u.id+'" data-name="'+esc(u.user_cname)+'" data-dept="'+esc(deptName)+'"'+(inList?' checked disabled':'')+'> '+esc(u.user_cname)+(inList?'(已加)':'')+'</label>';
+            var pos=u.position_name||'';
+            h+='<label><input type="checkbox" class="att-ck" value="'+u.id+'" data-name="'+esc(u.user_cname)+'" data-dept="'+esc(deptName)+'" data-pos="'+esc(pos)+'"'+(inList?' checked disabled':'')+'> '
+              +esc(u.user_cname)+(pos?'<span style="color:#8a6d45;">（'+esc(pos)+'）</span>':'')+(inList?'(已加)':'')+'</label>';
         });
         $b.html(h||'<span class="empty">此部門無人員</span>');
         $('#attPickAll').prop('checked',false);
@@ -456,7 +526,8 @@ function attAddChecked(){
     $('#attPeopleBox .att-ck:checked:not(:disabled)').each(function(){
         var id=+$(this).val();
         if(!ATT.some(function(a){return a.user_id===id;}))
-            ATT.push({user_id:id, user_name:$(this).data('name'), dept_name:$(this).data('dept'), attended:0, signed:0});
+            ATT.push({user_id:id, user_name:$(this).data('name'), dept_name:$(this).data('dept'),
+                      position_name:$(this).data('pos')||'', attended:0, signed:0});
     });
     renderAtt();
     $('#attDept').trigger('change');
@@ -465,11 +536,12 @@ function renderAtt(){
     var h='';
     ATT.forEach(function(a,i){
         h+='<tr><td class="t-left">'+esc(a.user_name||'')+'</td><td>'+esc(a.dept_name||'')+'</td>'
+          +'<td>'+esc(a.position_name||'—')+'</td>'
           +'<td><input type="checkbox" '+(a.attended?'checked':'')+' onchange="ATT['+i+'].attended=this.checked?1:0;attCount()"></td>'
           +'<td>'+(a.signed?'<span style="color:#8A5A2B;">已簽</span>':'—')+'</td>'
           +'<td><span class="att-del" onclick="attDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
     });
-    $('#attBody').html(h||'<tr><td colspan="5" style="color:#8a6d45;padding:8px;">尚未加入人員</td></tr>');
+    $('#attBody').html(h||'<tr><td colspan="6" style="color:#8a6d45;padding:8px;">尚未加入人員</td></tr>');
     attCount();
 }
 function attCount(){ var a=ATT.filter(function(x){return x.attended;}).length; $('#attCount').text('（應到 '+ATT.length+'　實到 '+a+'）'); }
@@ -490,15 +562,18 @@ function submitEd(){
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
-/* 確認實行：寫實際開課日期/時段/地點（狀態轉已完成）＋參加名單 */
-function submitEx(){
+/* 確認實行：寫開課日期/時段/地點/實際時數＋參加名單
+   markDone=0 → 已排定（確定開課，可印簽到表）；markDone=1 → 已完成（計入 KPI） */
+function submitEx(markDone){
     var sid = $('#exMask').data('sid');
-    if (!$('#exDone').val()){ alert('請選擇實際開課日期'); $('#exDone').focus(); return; }
+    if (!$('#exDone').val()){ alert('請選擇開課日期'); $('#exDone').focus(); return; }
     if ($('#exStart').val() && $('#exEnd').val() && $('#exEnd').val() < $('#exStart').val()){
-        alert('時段迄不可早於時段起'); return; }
-    if (!ATT.length && !confirm('尚未加入任何參加人員，仍要確認實行？')) return;
+        alert('結束時間不可早於開始時間'); return; }
+    if (!ATT.length && !confirm('尚未加入任何參加人員，仍要儲存？')) return;
+    if (markDone && !confirm('確定此場訓練已上完課？登錄完成後將計入當月教育訓練達成率。')) return;
     $.post(API, {action:'save_execution', session_id:sid, done_date:$('#exDone').val(),
-        start_time:$('#exStart').val(), end_time:$('#exEnd').val(), location:$('#exLocation').val()},
+        start_time:$('#exStart').val(), end_time:$('#exEnd').val(), location:$('#exLocation').val(),
+        actual_hours:$('#exHours').val(), mark_done:markDone?1:0},
     function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         $.post(API, {action:'save_attendees', session_id:sid, attendees:JSON.stringify(ATT)}, function(r2){
@@ -536,18 +611,19 @@ function printSignSheet(){
     var course=r.course_name||'（課程名稱）';
     var ext=r.train_type==='external';
     var lect=ext?('外訓／開課單位：'+(r.org_unit||'')):('講師：'+(r.trainer||''));
-    var when=(r.year||'')+'年'+(r.plan_month||'')+'月　實際日期：'+($('#exDone').val()||'____/__/__')
-        +'　時段：'+($('#exStart').val()||'__:__')+'~'+($('#exEnd').val()||'__:__');
-    var where='地點：'+($('#exLocation').val()||'____________')+'　時數：'+(r.hours==null?'__':numTrim(r.hours))+' 小時';
+    var tm=($('#exStart').val()||'')+($('#exEnd').val()?'~'+$('#exEnd').val():'');
+    var when='日期：'+($('#exDone').val()||'____-__-__')+(tm?'  '+tm:'');
+    var hh=$('#exHours').val()||(r.hours==null?'':numTrim(r.hours));
+    var where='地點：'+($('#exLocation').val()||'____________')+'　時數：'+(hh||'__')+' 小時';
     var rows='';
     (ATT.length?ATT:[{},{},{},{},{},{},{},{},{},{}]).forEach(function(a,i){
-        rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.user_name||'')+'</td><td>'+esc(a.dept_name||'')+'</td><td style="width:160px;"></td><td style="width:80px;"></td></tr>';
+        rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.user_name||'')+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td style="width:150px;"></td><td style="width:70px;"></td></tr>';
     });
     var html='<div style="text-align:center;"><div style="font-size:18px;font-weight:bold;">超正齒輪科技有限公司</div>'
         +'<div style="font-size:15px;margin-top:2px;">教育訓練簽到表</div></div>'
         +'<table class="sf-info"><tr><td colspan="2">課程名稱：'+esc(course)+'</td></tr>'
         +'<tr><td>'+esc(lect)+'</td><td>'+esc(where)+'</td></tr><tr><td colspan="2">'+esc(when)+'</td></tr></table>'
-        +'<table class="sf"><thead><tr><th style="width:36px;">序</th><th>姓名</th><th>部門</th><th>簽名</th><th>時數確認</th></tr></thead><tbody>'+rows+'</tbody></table>'
+        +'<table class="sf"><thead><tr><th style="width:36px;">序</th><th>姓名</th><th>部門</th><th>職稱</th><th>簽名</th><th>時數確認</th></tr></thead><tbody>'+rows+'</tbody></table>'
         +'<div style="margin-top:14px;font-size:13px;">講師/主辦簽章：______________　　單位主管簽章：______________</div>';
     var w=window.open('','_blank'); if(!w){alert('請允許彈出視窗');return;}
     var css='body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:14px;}'
@@ -567,11 +643,12 @@ function delSession(sid){
 
 /* ---------- CSV ---------- */
 $('#btnCsv').on('click', function(){
-    var rows = [['年','月','對象部門','課程名稱','類型','講師/開課單位','時數','應到','實到','狀態','實際開課日','時段','地點','備註']];
+    var rows = [['年','月','對象部門','課程名稱','類型','講師/開課單位','計畫時數','實際時數','應到','實到','狀態','開課日期','時段','地點','備註']];
     ROWS.forEach(function(r){
         var ext=r.train_type==='external';
         rows.push([r.year, r.plan_month, r.dept_name||'', r.course_name, ext?'外訓':'內訓', (ext?r.org_unit:r.trainer)||'',
-            r.hours==null?'':numTrim(r.hours), r.target_headcount==null?'':r.target_headcount,
+            r.hours==null?'':numTrim(r.hours), r.actual_hours==null?'':numTrim(r.actual_hours),
+            r.target_headcount==null?'':r.target_headcount,
             r.actual_headcount==null?'':r.actual_headcount, STATUS_LABEL[r.status]||r.status,
             fmtDate(r.done_date), (r.start_time||'')+(r.end_time?'~'+r.end_time:''), r.location||'', r.note||'']);
     });

@@ -7,8 +7,8 @@
  *   - training_session：每列＝一場訓練課程（計畫+執行合一）
  *       year, plan_month  計畫歸屬年月（KPI 依此歸月）
  *       dept_id           指定部門(department.id；NULL=全公司/跨部門)
- *       status            planned=計畫中 / done=已完成 / cancelled=取消
- *   - KPI 達成率(場次口徑)：den=當月計畫場次(排除取消)；num=當月已完成場次
+ *       status            planned=計畫中 / scheduled=已排定(確認開課,可印簽到表) / done=已完成 / cancelled=取消
+ *   - KPI 達成率(場次口徑)：den=當月計畫場次(排除取消；已排定仍算分母)；num=當月已完成(done)場次
  *     （取消是否計入分母可由參數 include_cancelled 控制）
  */
 
@@ -45,6 +45,7 @@ function training_ensure_schema(PDO $db): void {
         "ALTER TABLE training_session ADD COLUMN trainer_id INT NULL COMMENT '講師 user.id(外部講師留空,用trainer文字)'",
         "ALTER TABLE training_session ADD COLUMN train_type VARCHAR(10) NOT NULL DEFAULT 'internal' COMMENT 'internal=內訓 external=外訓'",
         "ALTER TABLE training_session ADD COLUMN org_unit VARCHAR(100) NULL COMMENT '外訓開課/主辦單位'",
+        "ALTER TABLE training_session ADD COLUMN actual_hours DECIMAL(5,1) NULL COMMENT '實際上課時數(可與計畫 hours 不同)'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) {}
     }
@@ -64,6 +65,9 @@ function training_ensure_schema(PDO $db): void {
         UNIQUE KEY uq_sa (session_id, user_id),
         KEY idx_session (session_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練參加人員名單'");
+
+    try { $db->exec("ALTER TABLE training_attendee ADD COLUMN position_name VARCHAR(50) NULL COMMENT '職稱(冗餘保存,列印簽到表用)'"); }
+    catch (Throwable $e) {}
 
     foreach ([['training_view','訓練檢閱'],['training_edit','訓練登錄'],['training_admin','訓練管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='training' LIMIT 1");
