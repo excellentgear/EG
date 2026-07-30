@@ -948,6 +948,175 @@ case 'audit_export': {
     exit;
 }
 
+/* ══ 對帳工作底稿 ═════════════════════════════════════════════════════ */
+
+/* 某帳款月份有帳的對象清單（供下拉選擇，取代萬用關鍵字搜尋） */
+case 'recon_parties': {
+    $s    = $_POST ?: $_GET;
+    $side = (($s['side'] ?? 'ar') === 'ap') ? 'ap' : 'ar';
+    $bm   = trim((string)($s['bm'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}$/', $bm)) acc_err('請指定帳款月份');
+
+    $out = [];
+    if ($side === 'ap') {
+        foreach (acc_ap_summary($db, ['ym_from' => $bm, 'ym_to' => $bm, 'per_page' => 0])['rows'] as $r) {
+            $out[] = ['party_id' => $r['maker_id_no'], 'party_name' => $r['maker_name'],
+                      'party_full' => $r['maker_full'], 'tax_id' => $r['tax_id'],
+                      'cnt' => $r['cnt'], 'amount' => $r['amount'], 'total' => $r['total_amount']];
+        }
+    } else {
+        foreach (acc_ar_summary($db, ['bm_from' => $bm, 'bm_to' => $bm, 'per_page' => 0])['rows'] as $r) {
+            // 應收以客戶簡稱歸戶（is_list.Client_id 近期多為空）
+            $out[] = ['party_id' => $r['customer'], 'party_name' => $r['customer'],
+                      'party_full' => $r['customer_full'], 'tax_id' => $r['tax_id'],
+                      'cnt' => $r['ship_cnt'] + $r['ret_cnt'], 'amount' => $r['net_amt'],
+                      'total' => $r['total_amt'], 'customer_id' => $r['customer_id']];
+        }
+    }
+    // 已有底稿的標出來，讓使用者知道哪些對過了
+    $sh = acc_sheet_list($db, ['side' => $side, 'bm_from' => $bm, 'bm_to' => $bm]);
+    $map = [];
+    foreach ($sh['rows'] as $x) $map[$x['party_id']] = ['status' => $x['status'],
+                                                        'checked_cnt' => $x['checked_cnt'],
+                                                        'line_cnt' => $x['line_cnt'],
+                                                        'sheet_id' => (int)$x['sheet_id']];
+    foreach ($out as &$o) $o['sheet'] = $map[$o['party_id']] ?? null;
+    unset($o);
+
+    acc_out(['side' => $side, 'billing_month' => $bm, 'parties' => $out,
+             'summary' => ['count' => count($out), 'with_sheet' => count($map)]]);
+}
+
+/* 載入底稿：有暫存就回暫存，否則從來源憑證即時組出（尚未寫入） */
+case 'sheet_load': {
+    $s    = $_POST ?: $_GET;
+    $side = (($s['side'] ?? 'ar') === 'ap') ? 'ap' : 'ar';
+    $pid  = acc_u8(trim((string)($s['party_id'] ?? '')));
+    $bm   = trim((string)($s['billing_month'] ?? ''));
+    if ($pid === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) acc_err('缺少對象或帳款月份');
+
+    $canEdit = ($side === 'ap') ? (bool)$perms['canReconAp'] : (bool)$perms['canReconAr'];
+    $sheet = acc_sheet_get($db, $side, $pid, $bm);
+
+    if ($sheet) {
+        acc_out(['from' => 'draft', 'sheet' => $sheet, 'can_edit' => $canEdit,
+                 'can_reopen' => (bool)$perms['canAdmin'], 'tax_rate' => acc_tax_rate($db)]);
+    }
+    $built = acc_sheet_build($db, $side, $pid, $bm);
+    $t = acc_sheet_totals($db, $built['lines']);
+    acc_out(['from' => 'source',
+             'sheet' => ['sheet_id' => null, 'side' => $side, 'party_id' => $pid,
+                         'party_name' => $built['party_name'], 'billing_month' => $bm,
+                         'status' => 'new', 'their_total' => null, 'memo' => null,
+                         'our_total' => $t['our_total'], 'tax_amount' => $t['tax_amount'],
+                         'total_amount' => $t['total_amount'], 'lines' => $built['lines']],
+             'head' => $built['head'], 'can_edit' => $canEdit,
+             'can_reopen' => (bool)$perms['canAdmin'], 'tax_rate' => acc_tax_rate($db)]);
+}
+
+/* 暫存底稿 */
+case 'sheet_save': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $sheet = json_decode($_POST['sheet'] ?? '{}', true);
+    $lines = json_decode($_POST['lines'] ?? '[]', true);
+    if (!is_array($sheet) || !is_array($lines)) acc_err('資料格式錯誤');
+    if (!$lines) acc_err('沒有明細可暫存');
+    acc_recon_guard($perms, (($sheet['side'] ?? 'ar') === 'ap') ? 'TLOG' : 'IS');
+
+    foreach (['party_name', 'memo'] as $k) if (isset($sheet[$k])) $sheet[$k] = acc_u8((string)$sheet[$k]);
+    foreach ($lines as &$l) if (isset($l['memo'])) $l['memo'] = acc_u8((string)$l['memo']);
+    unset($l);
+
+    $r = acc_sheet_save($db, $sheet, $lines, $u);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* 確認正確 → 鎖帳 */
+case 'sheet_confirm': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $sid = (int)($_POST['sheet_id'] ?? 0);
+    if ($sid <= 0) acc_err('請先暫存後再確認');
+    $st = $db->prepare("SELECT side FROM acc_recon_sheet WHERE sheet_id=? LIMIT 1");
+    $st->execute([$sid]);
+    $side = (string)$st->fetchColumn();
+    acc_recon_guard($perms, ($side === 'ap') ? 'TLOG' : 'IS');
+
+    $r = acc_sheet_confirm($db, $sid, $u);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* 退回重對（僅會計管理員） */
+case 'sheet_reopen': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('僅會計管理員可退回已鎖帳的對帳單', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_sheet_reopen($db, (int)($_POST['sheet_id'] ?? 0),
+                          acc_u8((string)($_POST['reason'] ?? '')), $u);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* 底稿清單（會計／稽核看誰對完、誰還卡著、哪些有差額） */
+case 'sheet_list': {
+    $s = $_POST ?: $_GET;
+    acc_out(acc_sheet_list($db, [
+        'side'    => trim((string)($s['side'] ?? 'all')),
+        'status'  => trim((string)($s['status'] ?? 'all')),
+        'bm_from' => trim((string)($s['bm_from'] ?? '')),
+        'bm_to'   => trim((string)($s['bm_to'] ?? '')),
+        'kw'      => acc_u8(trim((string)($s['kw'] ?? ''))),
+    ]));
+}
+
+/* 底稿匯出（含原始值與調整後對照，供會計／稽核核對） */
+case 'sheet_export': {
+    $s    = $_GET ?: $_POST;
+    $side = (($s['side'] ?? 'ar') === 'ap') ? 'ap' : 'ar';
+    $pid  = acc_u8(trim((string)($s['party_id'] ?? '')));
+    $bm   = trim((string)($s['billing_month'] ?? ''));
+    if ($pid === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) acc_err('缺少對象或帳款月份');
+    $sheet = acc_sheet_get($db, $side, $pid, $bm);
+    if (!$sheet) acc_err('此對象與月份尚無對帳底稿');
+
+    $stLbl = ['draft' => '暫存中', 'confirmed' => '已確認鎖帳', 'reopened' => '已退回重對'];
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="對帳底稿_' . $sheet['party_name'] . '_' . $bm . '.csv"');
+    $o = fopen('php://output', 'w');
+    fwrite($o, "\xEF\xBB\xBF");
+    fputcsv($o, ['對帳底稿', $sheet['party_name'], $bm, $side === 'ap' ? '應付' : '應收',
+                 $stLbl[$sheet['status']] ?? $sheet['status']]);
+    fputcsv($o, ['我方合計(未稅)', round((float)$sheet['our_total']),
+                 '對方紙本合計', $sheet['their_total'] === null ? '' : round((float)$sheet['their_total']),
+                 '差額', $sheet['their_total'] === null ? '' : round((float)$sheet['their_total'] - (float)$sheet['our_total'])]);
+    fputcsv($o, ['稅額', round((float)$sheet['tax_amount']), '含稅合計', round((float)$sheet['total_amount'])]);
+    if ($sheet['status'] === 'confirmed')
+        fputcsv($o, ['確認人', $sheet['confirmed_by_name'], '確認時間', $sheet['confirmed_at']]);
+    if (!empty($sheet['reopen_at']))
+        fputcsv($o, ['退回人', $sheet['reopen_by_name'], '退回時間', $sheet['reopen_at'], '退回原因', $sheet['reopen_reason']]);
+    fputcsv($o, ['備註', $sheet['memo']]);
+    fputcsv($o, []);
+    fputcsv($o, ['順序', '已對到', '單號', '日期', '製令', '料號', '說明',
+                 '原始數量', '原始單價', '原始金額',
+                 '調整數量', '調整單價', '調整金額', '指定月份',
+                 '加總組', '拆分自', '拆分序', '計入合計', '備註']);
+    foreach ($sheet['lines'] as $l) {
+        fputcsv($o, [
+            $l['sort_order'], $l['checked'] ? '✓' : '', $l['doc_no'], $l['doc_date'],
+            $l['bom'], $l['product_id'], $l['spec'],
+            $l['orig_qty'], $l['orig_price'], $l['orig_amount'],
+            $l['adj_qty'], $l['adj_price'], $l['adj_amount'], $l['adj_month'],
+            $l['group_no'], $l['split_parent'], $l['split_seq'],
+            $l['counts_in_total'] ? '是' : '否(拆分父列)', $l['memo'],
+        ]);
+    }
+    fclose($o);
+    exit;
+}
+
 /* ── 匯入範本下載（告訴使用者 ERP 要匯出成什麼格式）─────────────────── */
 case 'template': {
     header('Content-Type: text/csv; charset=UTF-8');
