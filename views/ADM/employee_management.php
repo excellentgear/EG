@@ -207,30 +207,22 @@ if ($hrUserPerm === 'R') {
                                     <div class="col-md-2 col-sm-3 col-xs-12" style="margin-bottom: 8px;">
                                         <button type="button" id="btn-add-employee" class="btn btn-primary" data-toggle="modal" data-target="#employeeModal" data-action="add">新增員工</button>
                                     </div>
-                                    <div class="col-md-3 col-sm-3 col-xs-12" style="margin-bottom: 8px;">
+                                    <div class="col-md-4 col-sm-5 col-xs-12" style="margin-bottom: 8px;">
                                         <div class="input-group">
-                                            <span class="input-group-addon">主部門</span>
-                                            <select class="form-control dept-filter" id="filter-main-dept" title="左鍵連點兩下解除此篩選">
+                                            <span class="input-group-addon">部門</span>
+                                            <select class="form-control dept-filter" id="filter-dept" title="主職務或兼任職務任一符合即列出；左鍵連點兩下解除此篩選">
                                                 <option value="">全部</option>
                                             </select>
                                         </div>
                                     </div>
-                                    <div class="col-md-3 col-sm-3 col-xs-12" style="margin-bottom: 8px;">
-                                        <div class="input-group">
-                                            <span class="input-group-addon">兼任部門</span>
-                                            <select class="form-control dept-filter" id="filter-concurrent-dept" title="左鍵連點兩下解除此篩選">
-                                                <option value="">全部</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-3 col-sm-3 col-xs-12" style="margin-bottom: 8px;">
+                                    <div class="col-md-4 col-sm-4 col-xs-12" style="margin-bottom: 8px;">
                                         <div class="input-group">
                                             <span class="input-group-addon">搜索</span>
                                             <input type="text" class="form-control" id="table-search" placeholder="搜索框" title="左鍵連點兩下清除資料">
                                         </div>
                                     </div>
                                     <div class="col-md-1 col-sm-12 col-xs-12" style="margin-bottom: 8px;">
-                                        <button type="button" class="btn btn-default btn-block" id="btn-clear-filter" title="清除主部門／兼任部門／搜索條件">清除</button>
+                                        <button type="button" class="btn btn-default btn-block" id="btn-clear-filter" title="清除部門／搜索條件">清除</button>
                                     </div>
                                     <div class="col-xs-12">
                                         <small class="text-muted" id="filter-result-count"></small>
@@ -430,6 +422,8 @@ if ($hrUserPerm === 'R') {
                         </div>
                         <div class="modal-footer">
                             <button type="button" class="btn btn-danger pull-left" id="btn-delete-in-modal" style="display: none;">刪除</button>
+                            <!-- 離職/留停者才出現：清掉殘留的權限設定資料（權限本身已由在職狀態自動擋下） -->
+                            <button type="button" class="btn btn-warning pull-left" id="btn-revoke-perm" style="display: none; margin-left: 8px;">清除權限設定</button>
                             <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
                             <button type="submit" class="btn btn-primary">儲存</button>
                         </div>
@@ -492,8 +486,8 @@ $(document).ready(function() {
 
     function filterTable() {
         const searchText = $('#table-search').val().toLowerCase();
-        const mainDept = $('#filter-main-dept').val();       // '' = 全部、'none' = 未設定、其餘為 department_id
-        const concurrentDept = $('#filter-concurrent-dept').val(); // '' = 全部、'none' = 無兼任、其餘為 department_id
+        // 同一個部門篩選框同時比對主職務與兼任職務：'' = 全部、'none' = 未設定部門、其餘為 department_id
+        const dept = $('#filter-dept').val();
 
         let total = 0, shown = 0;
 
@@ -504,26 +498,19 @@ $(document).ready(function() {
 
             const matchesSearch = searchText === '' || rowText.indexOf(searchText) > -1;
 
-            // 主部門篩選
+            // 主部門 + 兼任部門（一人可有多個兼任部門），任一符合即算符合
             const rowMainDept = String(row.data('main-dept') || '');
-            let matchesMain = true;
-            if (mainDept === 'none') {
-                matchesMain = rowMainDept === '';
-            } else if (mainDept !== '') {
-                matchesMain = rowMainDept === mainDept;
+            const rowDepts = String(row.data('concurrent-depts') || '').split(',').filter(v => v !== '');
+            if (rowMainDept !== '') rowDepts.push(rowMainDept);
+
+            let matchesDept = true;
+            if (dept === 'none') {
+                matchesDept = rowDepts.length === 0;
+            } else if (dept !== '') {
+                matchesDept = rowDepts.indexOf(dept) > -1;
             }
 
-            // 兼任部門篩選（一人可有多個兼任部門，任一符合即算符合）
-            const rowConcurrentDepts = String(row.data('concurrent-depts') || '')
-                                        .split(',').filter(v => v !== '');
-            let matchesConcurrent = true;
-            if (concurrentDept === 'none') {
-                matchesConcurrent = rowConcurrentDepts.length === 0;
-            } else if (concurrentDept !== '') {
-                matchesConcurrent = rowConcurrentDepts.indexOf(concurrentDept) > -1;
-            }
-
-            if (matchesSearch && matchesMain && matchesConcurrent) {
+            if (matchesSearch && matchesDept) {
                 row.show();
                 shown++;
             } else {
@@ -531,31 +518,25 @@ $(document).ready(function() {
             }
         });
 
-        const hasFilter = searchText !== '' || mainDept !== '' || concurrentDept !== '';
-        $('#filter-result-count').text(hasFilter ? `符合 ${shown} 筆 / 共 ${total} 筆` : `共 ${total} 筆`);
+        const hasFilter = searchText !== '' || dept !== '';
+        $('#filter-result-count').text(hasFilter ? `符合 ${shown} 筆 / 共 ${total} 筆（部門篩選含主職務與兼任職務）` : `共 ${total} 筆`);
     }
 
-    // 載入部門清單到兩個篩選下拉（維持與部門主檔相同的 sort_order 排序）
+    // 載入部門清單到篩選下拉（維持與部門主檔相同的 sort_order 排序）
     function loadDepartmentFilters() {
         callApi('get_departments', 'GET', null, function(response) {
             if (response.status !== 'success') return;
-            const keepMain = $('#filter-main-dept').val();
-            const keepConcurrent = $('#filter-concurrent-dept').val();
+            const select = $('#filter-dept');
+            const keep = select.val();
 
-            const buildOptions = function(select, noneLabel) {
-                select.empty();
-                select.append('<option value="">全部</option>');
-                select.append(`<option value="none">${noneLabel}</option>`);
-                response.data.forEach(function(dept) {
-                    select.append(`<option value="${dept.id}">${escapeHtml(dept.name)}</option>`);
-                });
-            };
+            select.empty();
+            select.append('<option value="">全部</option>');
+            select.append('<option value="none">（未設定部門）</option>');
+            response.data.forEach(function(dept) {
+                select.append(`<option value="${dept.id}">${escapeHtml(dept.name)}</option>`);
+            });
 
-            buildOptions($('#filter-main-dept'), '（未設定主部門）');
-            buildOptions($('#filter-concurrent-dept'), '（無兼任職務）');
-
-            if (keepMain) $('#filter-main-dept').val(keepMain);
-            if (keepConcurrent) $('#filter-concurrent-dept').val(keepConcurrent);
+            if (keep) select.val(keep);
         });
     }
 
@@ -775,6 +756,7 @@ $(document).ready(function() {
             modal.find('#user_uname').prop('readonly', false);
             modal.find('#password').prop('required', true);
             $('#btn-delete-in-modal').hide();
+            $('#btn-revoke-perm').hide();
         } else {
             modal.find('.modal-title').text('編輯員工資料');
             modal.find('#user_id_input').prop('readonly', true);
@@ -822,8 +804,22 @@ $(document).ready(function() {
                         setTimeout(updateConcurrentPositionVisibility, 500);
                     }
 
+                    // 離職/留停者才顯示「清除權限設定」，並先問後端還剩幾筆（0 筆就不用出現）
+                    var st = parseInt(emp.state !== undefined ? emp.state : emp.user_status);
+                    $('#btn-revoke-perm').hide();
+                    if ([0, 2, 3].indexOf(st) > -1 && (window.hrUserPerm.includes('A') || window.hrUserPerm.includes('U'))) {
+                        callApi('get_permission_summary', 'GET', { id: userId }, function(res) {
+                            if (res.status === 'success' && res.total > 0) {
+                                $('#btn-revoke-perm').show()
+                                    .data('id', userId)
+                                    .data('summary', res)
+                                    .text('清除權限設定 (' + res.total + ')');
+                            }
+                        });
+                    }
+
                     // 根據狀態顯示/隱藏日期欄位，並填入資料
-                    handleStatusChange(); 
+                    handleStatusChange();
                     if (emp.status_history) {
                         $('#status_start_date').val(emp.status_history.start_date);
                         $('#status_end_date').val(emp.status_history.end_date);
@@ -834,6 +830,26 @@ $(document).ready(function() {
                 }
             });
         }
+    });
+
+    // 清除權限設定（離職/留停者專用；權限本身已由在職狀態自動擋下，這裡只是把殘留資料刪乾淨）
+    $('#btn-revoke-perm').on('click', function() {
+        var userId  = $(this).data('id');
+        var summary = $(this).data('summary') || {};
+        var lines = ['此帳號目前還留有下列權限設定：', ''];
+        (summary.items || []).forEach(function(it) {
+            lines.push('● ' + it.label + '：' + it.count + ' 筆　' + (it.detail || ''));
+        });
+        if (summary.warnings && summary.warnings.length) {
+            lines.push('', '● 需人事另行處理（系統不會自動改）：');
+            summary.warnings.forEach(function(w) { lines.push('　- ' + w); });
+        }
+        lines.push('', '清除後復職需重新設定權限。清除前會完整寫入稽核紀錄備查。確定要清除嗎？');
+        if (!confirm(lines.join('\n'))) return;
+        callApi('revoke_permissions', 'POST', { id: userId, reason: '人事手動清除' }, function(res) {
+            alert(res.status === 'success' ? res.message : ('清除失敗：' + res.message));
+            if (res.status === 'success') $('#btn-revoke-perm').hide();
+        });
     });
 
     // 監聽在職狀態的變化，以顯示/隱藏相關日期欄位
@@ -876,12 +892,41 @@ $(document).ready(function() {
         return lines.join('\n');
     }
 
+    // 在職狀態改成離職/留停後的權限處理（2026-07-30）
+    // 系統已自動讓此人「判斷時無任何權限」，這裡問的只是「要不要把殘留的設定資料也刪掉」。
+    function askRevokePermissions(n) {
+        var lines = ['已將「' + n.label + '」狀態存檔。', '',
+                     '● 此帳號即時生效的處置：無法登入、線上中會被登出、所有權限判斷一律視為無權限。', ''];
+        if (n.count > 0) {
+            lines.push('● 目前還留有 ' + n.count + ' 筆權限設定資料（角色、模組權限、代理等）。');
+            lines.push('　留著不影響安全（判斷時已擋），清掉則資料乾淨、復職需重設。');
+        } else {
+            lines.push('● 此帳號沒有殘留的權限設定資料。');
+        }
+        if (n.warnings && n.warnings.length) {
+            lines.push('');
+            lines.push('● 需人事另行處理（系統不會自動改）：');
+            n.warnings.forEach(function(w) { lines.push('　- ' + w); });
+        }
+        if (n.count > 0) {
+            lines.push('', '要現在清除這些權限設定嗎？（清除前會完整寫入稽核紀錄備查）');
+            if (!confirm(lines.join('\n'))) return;
+            callApi('revoke_permissions', 'POST', { id: n.user_id, reason: n.label }, function(res) {
+                alert(res.status === 'success' ? res.message : ('清除失敗：' + res.message));
+            });
+        } else {
+            alert(lines.join('\n'));
+        }
+    }
+
     function submitEmployee(action, data, confirmed) {
         var payload = data + (confirmed ? '&confirm_delegate=1' : '');
         callApi(action, 'POST', payload, function(response) {
             if (response.status === 'success') {
                 $('#employeeModal').modal('hide');
                 loadEmployees();
+                // 改成離職/留停：權限已自動失效，順便問要不要把殘留設定也清掉
+                if (response.permission_notice) askRevokePermissions(response.permission_notice);
             } else if (response.status === 'need_confirm') {
                 if (confirm(buildDelegateImpactMsg(response.affected))) {
                     submitEmployee(action, data, true); // 確認後帶旗標重送
@@ -942,7 +987,7 @@ $(document).ready(function() {
     // --- 搜尋與篩選事件綁定 ---
     $(document).on('keyup', '#table-search', filterTable);
 
-    // 主部門／兼任部門篩選
+    // 部門篩選（主職務＋兼任職務共用同一個篩選框）
     $(document).on('change', '.dept-filter', filterTable);
 
     // 雙擊解除該欄篩選（同輸入欄位規則）
@@ -955,8 +1000,7 @@ $(document).ready(function() {
 
     // 清除所有篩選條件
     $('#btn-clear-filter').on('click', function() {
-        $('#filter-main-dept').val('');
-        $('#filter-concurrent-dept').val('');
+        $('#filter-dept').val('');
         $('#table-search').val('');
         filterTable();
     });
