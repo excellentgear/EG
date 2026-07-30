@@ -49,10 +49,12 @@ function tc_resolve_operator(PDO $db, array $src): array {
     $name   = trim((string)($src['operator'] ?? ''));
     if ($method === '內校') {
         if (!$sid) jerr('內校請選擇具校驗人員資格的人員');
-        $st = $db->prepare("SELECT u.user_cname FROM qc_tool_calib_staff s JOIN user u ON u.id=s.user_id WHERE s.user_id=?");
+        // 離職／特殊帳號一律不可登錄（人員列表鐵則的排除狀態）
+        $st = $db->prepare("SELECT u.user_cname FROM qc_tool_calib_staff s JOIN `user` u ON u.id=s.user_id
+                            WHERE s.user_id=? AND u.state NOT IN (" . EG_PEOPLE_EXCLUDE_STATES . ")");
         $st->execute([$sid]);
         $n = $st->fetchColumn();
-        if (!$n) jerr('該人員不具校驗人員資格，請先於「校驗人員資格」設定勾選');
+        if (!$n) jerr('該人員不具校驗人員資格或已離職，請確認「校驗人員資格」設定');
         return [(string)$n, $sid, null];
     }
     if ($method === '外校') {
@@ -96,9 +98,11 @@ switch ($action) {
 case 'meta': {
     tool_calib_purge_temp_attach($db);          // 順路清除過期暫存附件
     $cfg = tool_calib_attach_cfg($db);
+    $metaStaff = tool_calib_qualified_staff($db);
     jout(['perms'=>$perms, 'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db),
           'cur_ym'=>date('Y-m'), 'today'=>date('Y-m-d'), 'cur_year'=>(int)date('Y'),
-          'staff'=>tool_calib_qualified_staff($db),
+          'staff'=>$metaStaff,
+          'staff_multi_dept'=>eg_people_multi_dept($metaStaff),
           'qc_dept_set'=>count(tool_calib_qc_dept_ids($db)) > 0,
           'attach'=>['types'=>$cfg['types'], 'ext'=>$cfg['ext'], 'maxmb'=>$cfg['maxmb'],
                      'dir'=>$perms['canAdmin'] ? $cfg['dir'] : '',
@@ -108,7 +112,9 @@ case 'meta': {
 /* ---------- 校驗人員資格：候選（品管部門人員）與儲存 ---------- */
 case 'staff_candidates': {
     if (!$perms['canAdmin']) jerr('無設定權限', 403);
-    jout(['list'=>tool_calib_staff_candidates($db), 'qc_dept_set'=>count(tool_calib_qc_dept_ids($db)) > 0]);
+    $list = tool_calib_staff_candidates($db);
+    jout(['list'=>$list, 'multi_dept'=>eg_people_multi_dept($list),
+          'qc_dept_set'=>count(tool_calib_qc_dept_ids($db)) > 0]);
 }
 case 'save_staff': {
     if (!$perms['canAdmin']) jerr('無設定權限', 403);
@@ -128,7 +134,8 @@ case 'save_staff': {
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
-    jout(['staff'=>tool_calib_qualified_staff($db)]);
+    $staff = tool_calib_qualified_staff($db);
+    jout(['staff'=>$staff, 'staff_multi_dept'=>eg_people_multi_dept($staff)]);
 }
 
 /* ---------- 外校廠商模糊搜尋（maker_list：廠商ID／簡稱／全名） ---------- */

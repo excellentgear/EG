@@ -20,10 +20,14 @@
  *       calib_tab_group 併入的自訂分頁 id（qc_tool_calib_tab；NULL＝自成一頁、分頁名用類別名）
  *   - qc_tool_calib_tab：自訂合併分頁（tab_name 自訂，可把數個類別歸到同一分頁）
  *
+ * 人員列表一律走 src/common/people_lib.php（人員列表鐵則：只列未離職、長期請假標記、依職稱排序）。
+ *
  * 到期判定：主檔週期自動推算——登錄完成時把 calibration_due 前滾為 next_due。
  * KPI 準時率：den = 當月到期(已完成紀錄的 due_date + 尚待完成的 calibration_due)；
  *            num = 其中 calib_date ≤ due_date(+寬限天數) 者。
  */
+
+require_once __DIR__ . '/people_lib.php';   // 人員列表鐵則（只列未離職、長假標記、職稱排序）
 
 /* ============================================================
  * Schema（CREATE TABLE IF NOT EXISTS + qc_tool 加欄 + roles seed）
@@ -286,34 +290,32 @@ function tool_calib_qc_dept_ids(PDO $db): array {
     return $all;
 }
 
-/** 品管部門人員清單（含是否具校驗資格）；供設定畫面勾選 */
+/**
+ * 品管部門人員清單（含是否具校驗資格）；供設定畫面勾選
+ * 一律走 people_lib（人員列表鐵則：只列未離職、標記長期請假、依職稱排序、含職稱/部門）
+ */
 function tool_calib_staff_candidates(PDO $db): array {
     $depts = tool_calib_qc_dept_ids($db);
     if (!$depts) return [];
-    $in = implode(',', array_map('intval', $depts));
-    $rows = $db->query("SELECT u.id, u.user_cname,
-                               MIN(d.name) AS dept_name, MIN(d.sort_order) AS dept_sort,
-                               (SELECT COUNT(*) FROM qc_tool_calib_staff s WHERE s.user_id=u.id) AS qualified
-                        FROM user_department_position_map m
-                        JOIN user u ON u.id=m.user_id
-                        LEFT JOIN department d ON d.id=m.department_id
-                        WHERE m.department_id IN ({$in}) AND COALESCE(u.user_status,0) <> 90
-                        GROUP BY u.id, u.user_cname
-                        ORDER BY dept_sort, u.id")->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($rows as &$r) { $r['id'] = (int)$r['id']; $r['qualified'] = ((int)$r['qualified'] > 0) ? 1 : 0; }
+    $rows = eg_people_list($db, ['dept_ids'=>$depts]);
+    $q = [];
+    try {
+        foreach ($db->query("SELECT user_id FROM qc_tool_calib_staff")->fetchAll(PDO::FETCH_COLUMN) as $v) {
+            $q[(int)$v] = 1;
+        }
+    } catch (Throwable $e) { /* 表尚未建立 */ }
+    foreach ($rows as &$r) { $r['qualified'] = isset($q[$r['id']]) ? 1 : 0; }
     return $rows;
 }
 
-/** 具校驗人員資格者（內校人員下拉用；離職 user_status=90 不列） */
+/** 具校驗人員資格者（內校人員下拉用）；離職者自動不列，長期請假者會帶 leave_note 標記 */
 function tool_calib_qualified_staff(PDO $db): array {
     try {
-        $rows = $db->query("SELECT u.id, u.user_cname
-                            FROM qc_tool_calib_staff s JOIN user u ON u.id=s.user_id
-                            WHERE COALESCE(u.user_status,0) <> 90
-                            ORDER BY u.id")->fetchAll(PDO::FETCH_ASSOC);
+        $ids = $db->query("SELECT user_id FROM qc_tool_calib_staff")->fetchAll(PDO::FETCH_COLUMN);
     } catch (Throwable $e) { return []; }
-    foreach ($rows as &$r) { $r['id'] = (int)$r['id']; }
-    return $rows;
+    $ids = array_values(array_filter(array_map('intval', $ids)));
+    if (!$ids) return [];
+    return eg_people_list($db, ['user_ids'=>$ids]);
 }
 
 /* ============================================================
