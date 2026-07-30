@@ -5,6 +5,14 @@
 
  if(!isset($_SESSION['id']) && !isset($_SESSION['user_password'])) {
      header("Location:../../../index.php");
+     exit();   // 原本沒有 exit，導頁後整頁程式仍繼續跑（未登入者照樣觸發頁面內的查詢與寫入）
+ }
+
+ // 在職狀態守門：登入後才被改成離職/留停的人，翻下一頁就會被銷毀 session 踢出，不必等 session 過期。
+ // 全站唯一共同進入點在此，所以掛這一處等於全站生效。
+ @include_once __DIR__ . '/../../src/common/user_active_lib.php';
+ if (function_exists('eg_guard_active_session') && class_exists('DBConnection')) {
+     try { eg_guard_active_session((new DBConnection())->getPDO()); } catch (Throwable $e) { /* DB異常不擋人 */ }
  }
 
  // 頁面使用統計：全站唯一共同進入點在此掛載（AJAX 不渲染側欄故不會被記錄）。
