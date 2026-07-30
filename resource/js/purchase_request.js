@@ -567,20 +567,6 @@ function selRole(id) {
             $(this).prop('checked', has.indexOf(this.value) > -1 || has.indexOf('all') > -1);
         });
     });
-    loadRoleUsers(id);
-}
-
-function loadRoleUsers(rid) {
-    $.getJSON(RAPI, { action: 'get_users', module: 'purchase' }, function (res) {
-        var h = '';
-        (res.data || []).forEach(function (u) {
-            var owned = (u.roles || []).some(function (x) { return String(x.role_id) === String(rid); });
-            h += '<label class="pq-feat"><input type="checkbox" class="rucb" data-uid="' + u.id + '"' +
-                 (owned ? ' checked' : '') + '> ' + esc(u.user_cname) +
-                 ' <span class="hint">(' + esc(u.user_uname) + ')</span></label>';
-        });
-        $('#roleUsers').html(h || '<span class="hint">查無使用者</span>');
-    });
 }
 
 $(document).on('click', '#roleList .pq-role-item', function () { selRole($(this).data('id')); });
@@ -608,7 +594,6 @@ $(document).on('click', '#btnRoleDel', function () {
     $.post(RAPI, { action: 'delete_role', role_id: CURROLE }, function (r) {
         if (!r.success) { alert(r.message); return; }
         CURROLE = 0; $('#roleEdit').hide(); $('#roleEditHint').show();
-        $('#roleUsers').html('<span class="hint">請先選一個角色</span>');
         loadRoles();
     }, 'json');
 });
@@ -618,13 +603,6 @@ $(document).on('click', '#btnRoleFeatSave', function () {
     $.post(RAPI, { action: 'save_role_features', role_id: CURROLE, features: JSON.stringify(feats) },
         function (r) { alert(r.success ? '已儲存。受影響的人重新整理頁面後生效。' : r.message); }, 'json');
 });
-$(document).on('change', '#roleUsers .rucb', function () {
-    if (!CURROLE) return;
-    var uid = $(this).data('uid'), on = this.checked, $cb = $(this);
-    $.post(RAPI, { action: on ? 'assign_user_role' : 'remove_user_role', user_id: uid, role_id: CURROLE },
-        function (r) { if (!r.success) { alert(r.message); $cb.prop('checked', !on); } }, 'json');
-});
-
 /* ── 用途歸屬（單頭與逐列共用同一個選擇器） ── */
 // 成本要歸得了戶，訂單一律綁 order_track.Order_id、料號一律綁 d_setting.d_id，
 // 絕不存訂單號／料號字串（一個訂單號最多對到 25 列、料號字串有 159 個重複）。

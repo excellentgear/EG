@@ -316,9 +316,14 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <div class="pq-sec">
                 <h5>角色權限設定（角色名稱與能做／看得到什麼，都由你自己定）</h5>
                 <p class="hint" style="margin-bottom:8px;">
-                    左邊選或新增角色 → 中間改名稱、勾功能 → 右邊勾誰擁有這個角色。
+                    左邊選或新增角色 → 右邊改名稱、勾這個角色能看到什麼／能做什麼。
                     <b>權限由上而下包含</b>：勾了「詢價下單」就自動含到貨入庫、申請、檢閱，不必逐個勾。
                     此處為本頁專用角色，與其他頁面不連動；「管理者」固定擁有全部權限、不可修改。
+                </p>
+                <p class="hint" style="margin-bottom:8px;padding:6px 10px;background:#FFF7EA;border:1px solid #E2C58F;border-radius:4px;">
+                    <i class="fa fa-info-circle"></i> <b>「誰擁有這個角色」不在這裡設定</b>——人員對應角色全站統一在
+                    <a href="../user/user_permissions.php#purc-role-section" target="_blank"><b>人員權限設定頁</b></a>
+                    的「申請採購 角色指派」區塊，才不會兩個地方各改一半。這裡只負責定義角色的名稱與內容。
                 </p>
                 <div class="pq-role-mgr">
                     <div class="pq-role-col" style="flex:0 0 210px;">
@@ -346,11 +351,6 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
                                但<b>自己提的單</b>與<b>輪到自己簽核的單</b>一律看得到（不然沒辦法簽）。</p>
                         </div>
                         <div id="roleEditHint" class="hint" style="padding:24px;text-align:center;">請在左側選一個角色，或按「＋ 新增」</div>
-                    </div>
-                    <div class="pq-role-col" style="flex:0 0 250px;">
-                        <div class="pq-role-hd">擁有此角色的人</div>
-                        <div id="roleUsers" style="max-height:420px;overflow:auto;padding:8px;font-size:13px;">
-                            <span class="hint">請先選一個角色</span></div>
                     </div>
                 </div>
             </div>
@@ -663,7 +663,9 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 <div class="pq-mask" id="mRole"><div class="pq-modal">
     <div class="m-head"><span>角色權限說明</span><span class="m-close" onclick="closeMask('mRole')">✕</span></div>
     <div class="m-body">
-        <p class="hint" style="margin-bottom:8px;">角色名稱與內容都是管理員自己設定的，以下是<b>目前實際的設定</b>（管理員可在「設定」分頁調整）。</p>
+        <p class="hint" style="margin-bottom:8px;">角色名稱與內容都是管理員自己設定的，以下是<b>目前實際的設定</b>。
+            管理員可在「設定」分頁的「角色權限設定」改角色名稱與內容；
+            <b>人員對應角色</b>則統一在<a href="../user/user_permissions.php#purc-role-section" target="_blank">人員權限設定頁</a>指派。</p>
         <div class="pq-wrap">
             <table class="pq-table"><thead><tr><th style="width:24%;">角色</th><th>看得到什麼</th><th>能做什麼</th></tr></thead>
                 <tbody id="roleHelpBody"><tr><td colspan="3" class="pq-empty">載入中…</td></tr></tbody>
