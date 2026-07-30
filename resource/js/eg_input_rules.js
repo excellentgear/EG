@@ -15,10 +15,16 @@
  *   3. Enter 跳下一欄；容器最後一欄按 Enter＝觸發該容器的主要動作鈕（textarea 內 Enter 仍為換行）
  *   4. 多列輸入表格內 ↑↓ 切換上下列同欄（日期欄會攔截原生 ↑↓ 改日，否則會變成改日期）
  *   5. 數字欄：隱藏上下增減鈕、離開欄位時小數尾 0 省略（3.50→3.5、3.00→3）
+ *   6. 可增列表格：在最末列按 ↓ 自動新增一列並跳過去；在「沒填東西的最末列」按 ↑ 自動移除該列並跳回上一列
  *
  * 個別欄位要排除：加 data-eg-skip
  * 整個區塊要排除：在祖先元素加 data-eg-skip
  * 指定 Enter 的送出目標：在容器加 data-eg-submit="選擇器"，或讓容器內有 .m-foot .go / .btn-warm / button[type=submit]
+ * 啟用規則 6（自動增/刪列）：在該表格的 <tbody> 加
+ *     data-eg-row-add="全域函式名"   （呼叫後應在最後面多一列並重繪；不帶參數）
+ *     data-eg-row-del="全域函式名"   （呼叫後應移除最後一列並重繪；列數只剩 1 列時函式自己要擋掉）
+ *   「沒填東西」的判定：該列所有輸入欄皆為空，或該列是剛剛用 ↓ 自動加出來、使用者一個字都沒動過
+ *   （所以即使新列會自動帶入上一列的值，只要沒動過，按 ↑ 一樣會收回去）。
  */
 (function () {
     'use strict';
@@ -144,6 +150,59 @@
         return null;
     }
 
+    /* ── 規則 6：可增列表格的自動增／刪列 ─────────────────────────────── */
+    /* 剛用 ↓ 自動加出來、還沒被使用者動過的那一列（動過就不再自動收回） */
+    var AUTOROW = null;      // {tb: tbody, idx: 列索引}
+
+    function autoRowBox(el) {
+        var tb = el.closest('tbody');
+        if (!tb) return null;
+        return (tb.getAttribute('data-eg-row-add') || tb.getAttribute('data-eg-row-del')) ? tb : null;
+    }
+    function callFn(name) {
+        if (!name) return false;
+        var f = window[name];
+        if (typeof f !== 'function') return false;
+        try { f(); } catch (err) { return false; }
+        return true;
+    }
+    function idxOf(list, node) { return Array.prototype.indexOf.call(list, node); }
+    function rowIsBlank(tr) {
+        var list = tr.querySelectorAll('input,select,textarea');
+        for (var i = 0; i < list.length; i++) {
+            var el = list[i];
+            if (!isTexty(el)) continue;                 // checkbox 等不列入判斷
+            if (String(el.value == null ? '' : el.value).trim() !== '') return false;
+        }
+        return true;
+    }
+    /* 重繪後才找得到新列，所以用「列索引＋欄索引」重新定位，找不到再延後一次 */
+    function focusCell(tb, ri, ci) {
+        var tr = tb.rows && tb.rows[ri];
+        if (!tr) return false;
+        var cell = tr.children[ci];
+        var f = (cell && cell.querySelector('input,select,textarea')) || tr.querySelector('input,select,textarea');
+        if (!f) return false;
+        f.focus();
+        try { f.select(); } catch (err) {}
+        return true;
+    }
+    function focusCellSoon(tb, ri, ci) {
+        if (!focusCell(tb, ri, ci)) setTimeout(function () { focusCell(tb, ri, ci); }, 0);
+    }
+    /* 使用者一動那一列（打字/改值）就取消「自動加出來的」標記 */
+    function autoRowTouched(e) {
+        if (!AUTOROW) return;
+        var el = e.target;
+        if (!el || !el.closest) return;
+        var tb = el.closest('tbody');
+        if (tb !== AUTOROW.tb) return;
+        var tr = el.closest('tr');
+        if (tr && idxOf(tb.rows, tr) === AUTOROW.idx) AUTOROW = null;
+    }
+    document.addEventListener('input', autoRowTouched, true);
+    document.addEventListener('change', autoRowTouched, true);
+
     document.addEventListener('keydown', function (e) {
         // 頁面自己已經處理掉的（有 preventDefault）就不再插手，
         // 否則會出現「頁面跳一欄、共用檔又跳一欄」而跳過欄位。
@@ -156,12 +215,36 @@
            日期／數字欄的原生 ↑↓ 會改值，所以一律 preventDefault 蓋掉。 */
         if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.ctrlKey && !e.altKey && !e.metaKey) {
             if (tag === 'select') return;                       // 下拉的 ↑↓ 保留原生選項切換
-            if (el.closest('td')) {
+            var td0 = el.closest('td');
+            if (td0) {
+                /* 規則 6：可增列表格的自動增／刪列（要放在換列之前——
+                   「最末空列按 ↑」時上一列是存在的，先換列就沒機會刪了） */
+                var tb  = autoRowBox(el);
+                var tr0 = el.closest('tr');
+                var ri  = tb ? idxOf(tb.rows, tr0) : -1;
+                var ci  = idxOf(tr0.children, td0);
+                var isLast = (tb && ri >= 0 && ri === tb.rows.length - 1);
+                if (isLast && e.key === 'ArrowUp' && ri > 0 && tb.getAttribute('data-eg-row-del')
+                    && (rowIsBlank(tr0) || (AUTOROW && AUTOROW.tb === tb && AUTOROW.idx === ri))) {
+                    e.preventDefault();
+                    AUTOROW = null;
+                    callFn(tb.getAttribute('data-eg-row-del'));
+                    focusCellSoon(tb, ri - 1, ci);
+                    return;
+                }
                 var nx = siblingRowField(el, e.key === 'ArrowUp' ? -1 : 1);
                 if (nx) {
                     e.preventDefault();
                     nx.focus();
                     try { nx.select(); } catch (err) {}
+                    return;
+                }
+                if (isLast && e.key === 'ArrowDown' && tb.getAttribute('data-eg-row-add')) {
+                    e.preventDefault();
+                    if (callFn(tb.getAttribute('data-eg-row-add'))) {
+                        AUTOROW = {tb: tb, idx: ri + 1};
+                        focusCellSoon(tb, ri + 1, ci);
+                    }
                     return;
                 }
                 // 沒有上／下一列時，日期與數字欄仍要擋掉原生改值，避免誤改
@@ -222,5 +305,5 @@
     })();
 
     /* 對外留一個旗標，檢查工具與頁面都可判斷本檔是否已載入 */
-    window.EG_INPUT_RULES = {version: 1};
+    window.EG_INPUT_RULES = {version: 2};
 })();

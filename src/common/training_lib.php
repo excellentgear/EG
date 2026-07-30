@@ -118,26 +118,63 @@ function training_ensure_schema(PDO $db): void {
  *   一律存「id」不存名稱——類別/班別日後改名，綁定仍然有效（使用者明確要求）。
  * ============================================================ */
 const TRAINING_SETTING_KEYS = ['training_default_shift_id', 'training_cat_internal', 'training_cat_external'];
+/* 休息時段（HH:MM 字串，不是 id）：上課時間與此時段重疊幾分鐘就扣幾分鐘。
+   兩欄都留空＝完全不扣休息。預設 12:00~13:00（＝日班的午休）。 */
+const TRAINING_SETTING_STR_KEYS = ['training_break_start', 'training_break_end'];
+const TRAINING_BREAK_DEFAULT = ['training_break_start'=>'12:00', 'training_break_end'=>'13:00'];
 
 function training_settings(PDO $db): array {
     $out = ['training_default_shift_id'=>null, 'training_cat_internal'=>null, 'training_cat_external'=>null];
+    $out += TRAINING_BREAK_DEFAULT;      // 沒設定過才用預設；設定成空字串＝管理員刻意關閉，不可再被預設蓋回去
     try {
-        $in = implode(',', array_fill(0, count(TRAINING_SETTING_KEYS), '?'));
+        $keys = array_merge(TRAINING_SETTING_KEYS, TRAINING_SETTING_STR_KEYS);
+        $in = implode(',', array_fill(0, count($keys), '?'));
         $st = $db->prepare("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ($in)");
-        $st->execute(TRAINING_SETTING_KEYS);
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r)
-            $out[$r['setting_key']] = ($r['setting_value'] === '' || $r['setting_value'] === null) ? null : (int)$r['setting_value'];
+        $st->execute($keys);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if (in_array($r['setting_key'], TRAINING_SETTING_STR_KEYS, true)) {
+                $out[$r['setting_key']] = (string)($r['setting_value'] ?? '');
+            } else {
+                $out[$r['setting_key']] = ($r['setting_value'] === '' || $r['setting_value'] === null) ? null : (int)$r['setting_value'];
+            }
+        }
     } catch (Throwable $e) {}
     return $out;
 }
 
-function training_setting_save(PDO $db, string $key, ?int $val, int $uid, string $uname): void {
-    if (!in_array($key, TRAINING_SETTING_KEYS, true)) return;
+function training_setting_save(PDO $db, string $key, $val, int $uid, string $uname): void {
+    if (!in_array($key, TRAINING_SETTING_KEYS, true) && !in_array($key, TRAINING_SETTING_STR_KEYS, true)) return;
     $db->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by)
                   VALUES (?,?,?,?)
                   ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value),
                       updated_by_id=VALUES(updated_by_id), updated_by=VALUES(updated_by)")
        ->execute([$key, $val === null ? '' : (string)$val, $uid, $uname]);
+}
+
+/** HH:MM → 分鐘；不合法回 null */
+function training_min(?string $t): ?int {
+    $t = trim((string)$t);
+    if ($t === '' || !preg_match('/^([0-9]{1,2}):([0-9]{2})$/', $t, $m)) return null;
+    $h = (int)$m[1]; $i = (int)$m[2];
+    if ($h > 23 || $i > 59) return null;
+    return $h * 60 + $i;
+}
+
+/**
+ * 當日應扣的休息分鐘 ＝「上課時間」與「休息時段」的重疊分鐘數。
+ * 使用者明確要求：休息時間不給手動改，由系統依實際上課時間自動算——
+ * 例如 11:00~12:00 的課根本沒跨到午休，就不該被扣掉 60 分鐘（舊版會扣，導致時數算錯甚至變負數）。
+ */
+function training_break_minutes(PDO $db, ?string $start, ?string $end, ?array $set = null): int {
+    $set = $set ?? training_settings($db);
+    $bs = training_min($set['training_break_start'] ?? '');
+    $be = training_min($set['training_break_end'] ?? '');
+    $s  = training_min($start);
+    $e  = training_min($end);
+    if ($bs === null || $be === null || $be <= $bs) return 0;   // 未設定休息時段＝不扣
+    if ($s === null || $e === null || $e <= $s) return 0;
+    $ov = min($e, $be) - max($s, $bs);
+    return $ov > 0 ? $ov : 0;
 }
 
 /** 行事曆類別 id：優先用設定綁定的 id；沒設定才以名稱回退（找不到回 null＝不寫行事曆） */

@@ -13,7 +13,6 @@ views/ADM/employee_management.php
 views/ADM/hr_settings.php
 views/ADM/leave_request.php
 views/ADM/stamp_management.php
-views/ADM/training_record.php
 views/QA/correction_order.php
 views/QC/IPQC_Setting copy.php
 views/QC/IPQC_Setting.php

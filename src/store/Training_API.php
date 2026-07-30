@@ -72,12 +72,25 @@ case 'save_settings': {
     if (!$perms['canAdmin']) jerr('無管理權限（設定限訓練管理員）', 403);
     $map = ['default_shift_id'=>'training_default_shift_id',
             'cat_internal'=>'training_cat_internal', 'cat_external'=>'training_cat_external'];
+    // 休息時段（HH:MM 字串）：兩欄都空＝不扣休息；只填一欄視為未設定
+    $bs = tr_norm_time($_POST['break_start'] ?? null);
+    $be = tr_norm_time($_POST['break_end'] ?? null);
+    if (array_key_exists('break_start', $_POST) || array_key_exists('break_end', $_POST)) {
+        if (!tr_valid_time($bs)) jerr("休息開始時間不是合法時刻（{$bs}）");
+        if (!tr_valid_time($be)) jerr("休息結束時間不是合法時刻（{$be}）");
+        if (($bs === null) !== ($be === null)) jerr('休息時段請「起、迄」兩個都填，或兩個都留空（＝不扣休息）');
+        if ($bs !== null && $be <= $bs) jerr("休息結束（{$be}）不可早於或等於休息開始（{$bs}）");
+    }
     try {
         $db->beginTransaction();
         foreach ($map as $post => $key) {
             if (!array_key_exists($post, $_POST)) continue;
             $v = trim((string)$_POST[$post]);
             training_setting_save($db, $key, $v === '' ? null : (int)$v, $uid, $uname);
+        }
+        if (array_key_exists('break_start', $_POST) || array_key_exists('break_end', $_POST)) {
+            training_setting_save($db, 'training_break_start', $bs === null ? '' : $bs, $uid, $uname);
+            training_setting_save($db, 'training_break_end',   $be === null ? '' : $be, $uid, $uname);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('設定儲存失敗：'.$e->getMessage(), 500); }
@@ -215,6 +228,7 @@ case 'save_execution': {
                   'hours'=>$_POST['actual_hours'] ?? '']];
     }
     if (count($days) > 60) jerr('上課天數請勿超過 60 天');
+    $trSet = training_settings($db);          // 休息時段（重算休息分鐘用），迴圈外讀一次
     $clean = []; $seen = [];
     foreach ($days as $i => $d) {
         $n = $i + 1;
@@ -230,13 +244,12 @@ case 'save_execution': {
         if (!tr_valid_time($s)) jerr("第 {$n} 天：開始時間不是合法時刻（{$s}），時須 0-23、分須 0-59");
         if (!tr_valid_time($e)) jerr("第 {$n} 天：結束時間不是合法時刻（{$e}），時須 0-23、分須 0-59");
         if ($s && $e && $e <= $s) jerr("第 {$n} 天：結束時間（{$e}）不可早於或等於開始時間（{$s}）");
-        $brk = ($d['break_minutes'] ?? '') === '' ? 0 : (int)$d['break_minutes'];
-        if ($brk < 0) jerr("第 {$n} 天：休息時間不可為負數");
-        if ($brk > 480) jerr("第 {$n} 天：休息時間 {$brk} 分鐘不合理（上限 480）");
+        // 休息一律由系統依「上課時間 ∩ 休息時段」重算（前端不給改，後端也不採信送上來的值）
+        $brk = training_break_minutes($db, $s, $e, $trSet);
         // 時數＝(結束−開始)−休息；使用者可手填覆蓋（例：中間穿插其他行程）
         $span = ($s && $e) ? (int)round((strtotime("1970-01-01 $e UTC") - strtotime("1970-01-01 $s UTC")) / 60) : null;
         if ($span !== null && $brk >= $span)
-            jerr("第 {$n} 天：上課時間 {$span} 分鐘（{$s}~{$e}）不足以扣除休息 {$brk} 分鐘");
+            jerr("第 {$n} 天：上課時間 {$s}~{$e} 全部落在休息時段（{$trSet['training_break_start']}~{$trSet['training_break_end']}），扣除休息後沒有時數；請調整上課時間，或到「模組設定」改休息時段");
         $h = ($d['hours'] ?? '') === '' ? null : (float)$d['hours'];
         if ($h === null && $span !== null) $h = round(($span - $brk) / 60, 1);
         if ($h !== null && ($h < 0 || $h > 24)) jerr("第 {$n} 天：時數 {$h} 不合理（0~24）");
