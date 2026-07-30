@@ -160,17 +160,6 @@ if ($hrUserPerm === 'R') {
         #employee-table-body tr.pending-leave:hover > td {
             background-color: #F2CBC1;
         }
-        .label-pending-leave {
-            display: inline-block;
-            margin-left: 4px;
-            padding: 2px 7px;
-            border-radius: 3px;
-            background-color: #E9B8AC;
-            border: 1px solid #D89C8C;
-            color: #8C3A28;
-            font-size: 12px;
-            white-space: nowrap;
-        }
         .scroll-to-top {
             position: fixed;
             bottom: 20px;
@@ -590,9 +579,8 @@ $(document).ready(function() {
                         const d = String(emp.pending_leave_date);
                         const days = parseInt(emp.pending_leave_days);
                         const dayTxt = isNaN(days) ? '' : (days === 0 ? '（今天最後一天）' : '（尚餘 ' + days + ' 天）');
+                        // 日期只寫在備註欄一處（狀態欄不再重複掛標籤）
                         rowClass = ' class="pending-leave"';
-                        statusLabel += '<span class="label-pending-leave" title="離職日當天仍可使用系統，隔天起自動停用">預定離職 '
-                                     + escapeHtml(d.substring(5)) + '</span>';
                         remarkText = '預定離職日：' + d + dayTxt + (remarkText ? '　' + remarkText : '');
                     }
 
