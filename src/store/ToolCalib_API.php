@@ -173,7 +173,8 @@ case 'bulk_set_cycle': {
             $baseRaw  = trim((string)($it['baseline_due'] ?? ''));
             $ovr      = (int)($it['overwrite'] ?? 0) === 1;
             if ($cycleRaw === '' && $managed === -1 && $baseRaw === '') continue;
-            if ($baseRaw !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $baseRaw)) jerr('基準到期日格式錯誤：'.$baseRaw);
+            if ($baseRaw !== '' && !preg_match('/^\d{4}-\d{2}(-\d{2})?$/', $baseRaw)) jerr('基準到期月格式錯誤：'.$baseRaw);
+            if ($baseRaw !== '') $baseRaw = (string)tool_calib_month_start($baseRaw);
 
             $set = []; $p = [];
             if ($cycleRaw !== '') {
@@ -357,7 +358,7 @@ case 'create_tool': {
     $cycle = ($_POST['cycle'] ?? '') === '' ? null : max(0, (int)$_POST['cycle']);
     $managed = (int)($_POST['managed'] ?? 0) === 1 ? 1 : 0;
     $method = trim((string)($_POST['method'] ?? '')) ?: null;
-    $baseDue = trim((string)($_POST['baseline_due'] ?? '')) ?: null;
+    $baseDue = tool_calib_month_start(trim((string)($_POST['baseline_due'] ?? '')) ?: null);   // 到期以「月」為單位
     try {
         $db->beginTransaction();
         $db->prepare("INSERT INTO qc_tool (Tool_No, QC_Tool_List_id, Created_at, calib_cycle_months, calib_managed, calib_method, calibration_due)
@@ -377,9 +378,10 @@ case 'save_tool': {
     $cycle = ($_POST['cycle'] ?? '') === '' ? null : max(0, (int)$_POST['cycle']);
     $managed = (int)($_POST['managed'] ?? 0) === 1 ? 1 : 0;
     $method = trim((string)($_POST['method'] ?? '')) ?: null;
-    // baseline_due：允許管理員設定/修正下次應校驗日（尚無紀錄或需校正時）
+    // baseline_due：允許管理員設定/修正下次應校驗「月」（尚無紀錄或需校正時）
     $setBase = array_key_exists('baseline_due', $_POST);
-    $baseDue = $setBase ? (trim((string)$_POST['baseline_due']) ?: null) : $t['calibration_due'];
+    $baseDue = $setBase ? tool_calib_month_start(trim((string)$_POST['baseline_due']) ?: null)
+                        : tool_calib_month_start($t['calibration_due']);
     // 可編輯基本資料：量具編號 / 類別（有帶才更新）
     $newNo = array_key_exists('tool_no', $_POST) ? trim((string)$_POST['tool_no']) : $t['Tool_No'];
     $newCat = array_key_exists('category_id', $_POST) && $_POST['category_id'] !== '' ? trim((string)$_POST['category_id']) : $t['QC_Tool_List_id'];
@@ -414,9 +416,9 @@ case 'record_calib': {
     $certNo = trim((string)($_POST['cert_no'] ?? '')) ?: null;
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
 
-    $dueDate = $t['calibration_due'] ?: null;               // 本次滿足的到期日
+    $dueDate = tool_calib_month_start($t['calibration_due']);   // 本次滿足的到期月
     $cycle = $t['calib_cycle_months'] !== null ? (int)$t['calib_cycle_months'] : 0;
-    $nextDue = $cycle > 0 ? tool_calib_add_months($calibDate, $cycle) : null;
+    $nextDue = tool_calib_next_due_month($calibDate, $cycle);   // 下次應校驗「月」
 
     try {
         $db->beginTransaction();
@@ -451,9 +453,10 @@ case 'edit_calib': {
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
     // 若改到期日基準（管理員）也允許
     $dueDate = array_key_exists('due_date', $_POST)
-        ? (trim((string)$_POST['due_date']) ?: null) : $rec['due_date'];
+        ? tool_calib_month_start(trim((string)$_POST['due_date']) ?: null)
+        : tool_calib_month_start($rec['due_date']);
     $cycle = $rec['calib_cycle_months'] !== null ? (int)$rec['calib_cycle_months'] : 0;
-    $nextDue = $cycle > 0 ? tool_calib_add_months($calibDate, $cycle) : null;
+    $nextDue = tool_calib_next_due_month($calibDate, $cycle);
     try {
         $db->beginTransaction();
         $db->prepare("UPDATE qc_tool_calibration SET due_date=?, calib_date=?, result=?, method=?, operator=?,
@@ -511,8 +514,8 @@ case 'create_batch': {
             $result = in_array($it['result'] ?? '', ['pass','fail','pass_adjust'], true) ? $it['result'] : 'pass';
             $mth = $method ?: ($t['calib_method'] ?: null);
             $cycle = $t['calib_cycle_months'] !== null ? (int)$t['calib_cycle_months'] : 0;
-            $nextDue = $cycle > 0 ? tool_calib_add_months($calibDate, $cycle) : null;
-            $insRec->execute([$tid, $t['calibration_due'] ?: null, $calibDate, $result, $mth, $operator, $opUid, $vendorId,
+            $nextDue = tool_calib_next_due_month($calibDate, $cycle);
+            $insRec->execute([$tid, tool_calib_month_start($t['calibration_due']), $calibDate, $result, $mth, $operator, $opUid, $vendorId,
                               $certNo, $nextDue, $note, $batchId, $uid, $uname]);
             $updTool->execute([$nextDue, $mth, $tid]);   // 前滾下次應校驗日（與單筆登錄同邏輯）
             $done++;

@@ -201,6 +201,32 @@ function tool_calib_perms(PDO $db, ?array $u): array {
 /* ============================================================
  * 工具函式
  * ============================================================ */
+/**
+ * 到期一律以「月」為單位（使用者 2026-07-30 定調：同一月份內安排校驗即可）
+ *   - calibration_due / due_date / next_due 一律存該月 **1 日**，語意＝「該月到期」
+ *   - 準時判定＝實際校驗日 ≤ 該月**最後一天**(+寬限)
+ * 任意日期字串（含 'YYYY-MM'）正規化成該月 1 日
+ */
+function tool_calib_month_start(?string $date): ?string {
+    if (!$date) return null;
+    if (preg_match('/^(\d{4})-(\d{2})$/', trim($date), $m)) return sprintf('%04d-%02d-01', (int)$m[1], (int)$m[2]);
+    $t = strtotime(substr(trim($date), 0, 10));
+    return $t === false ? null : date('Y-m-01', $t);
+}
+
+/** 該到期月的最後一天（準時判定基準） */
+function tool_calib_month_end(?string $date): ?string {
+    $s = tool_calib_month_start($date);
+    return $s === null ? null : date('Y-m-t', strtotime($s));
+}
+
+/** 校驗月 + 週期 → 下次應校驗月（回該月 1 日）；週期未設回 null */
+function tool_calib_next_due_month(string $calibDate, int $months): ?string {
+    if ($months <= 0) return null;
+    $s = tool_calib_month_start($calibDate);
+    return $s === null ? null : tool_calib_shift_months($s, $months);
+}
+
 /** 安全加月份（避免 1/31 +1月 溢位到 3 月，超出當月時 clamp 到月底） */
 function tool_calib_add_months(string $date, int $months): ?string {
     $t = strtotime(substr($date, 0, 10));
@@ -252,15 +278,19 @@ function tool_calib_tabs(PDO $db): array {
     return $rows;
 }
 
-/** 儀器目前狀態（給前端上色/篩選）：warn_days 內視為即將到期 */
-function tool_calib_status(array $tool, int $warnDays = 30): string {
+/**
+ * 儀器目前狀態（給前端上色/篩選）——到期以「月」為單位
+ *   overdue＝到期月已整月過完仍未校驗；soon＝本月或下個月到期；ok＝更晚
+ */
+function tool_calib_status(array $tool, int $warnMonths = 1): string {
     if ((int)$tool['calib_managed'] !== 1) return 'unmanaged';
     $due = $tool['calibration_due'] ?? null;
     if (!$due) return 'nobaseline';
-    $today = strtotime(date('Y-m-d'));
-    $dt = strtotime($due);
-    if ($dt < $today) return 'overdue';
-    if ($dt <= $today + $warnDays * 86400) return 'soon';
+    $dueM  = substr((string)tool_calib_month_start($due), 0, 7);
+    $thisM = date('Y-m');
+    if ($dueM < $thisM) return 'overdue';                                    // 到期月已過
+    $warnM = date('Y-m', strtotime(date('Y-m-01') . " +{$warnMonths} month"));
+    if ($dueM <= $warnM) return 'soon';                                      // 本月或警示月內
     return 'ok';
 }
 
@@ -386,7 +416,8 @@ function tool_calib_year_plan(PDO $db, int $year): array {
                 if (!empty($r['calib_date'])) {
                     $months[$m]['done'] = substr($r['calib_date'], 0, 10);
                     $months[$m]['result'] = $r['result'];
-                    $months[$m]['late'] = substr($r['calib_date'], 0, 10) > substr($r['due_date'], 0, 10);
+                    // 逾期＝超過到期月月底才完成（到期以月為單位）
+                    $months[$m]['late'] = substr($r['calib_date'], 0, 10) > (string)tool_calib_month_end($r['due_date']);
                 }
             } elseif (!empty($r['calib_date']) && (int)substr($r['calib_date'], 0, 4) === $year) {
                 // 到期日不在本年度但完成日在本年度（提前/逾期補做）→ 完成標在完成月
@@ -531,7 +562,9 @@ function tool_calib_kpi_compute(PDO $db, int $year, int $month, array $params): 
     $den = 0; $num = 0;
     while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
         $den++;
-        $limit = $grace > 0 ? date('Y-m-d', strtotime($r['due_date'] . " +$grace days")) : $r['due_date'];
+        // 到期以「月」為單位 → 準時＝該月月底前完成（再加寬限天數）
+        $limit = tool_calib_month_end($r['due_date']);
+        if ($grace > 0) $limit = date('Y-m-d', strtotime($limit . " +$grace days"));
         if (!empty($r['calib_date']) && substr($r['calib_date'], 0, 10) <= $limit) $num++;
     }
 

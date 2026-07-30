@@ -144,6 +144,14 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         table.hist { width:100%; border-collapse:collapse; font-size:12px; }
         table.hist th, table.hist td { border:1px solid #EADFC8; padding:4px 6px; text-align:center; }
         table.hist thead th { background:#F7E0BD; color:#5b3a1e; }
+        /* 統一設定視窗的分頁 */
+        .cfg-tabs { display:flex; flex-wrap:wrap; gap:4px; align-items:flex-end; padding:8px 15px 0;
+            border-bottom:2px solid #E8D5B5; background:#FDF8EF; }
+        .cfg-tabs .tab { padding:6px 16px; font-size:13px; color:#8a6d45; background:#fff;
+            border:1px solid #E8D5B5; border-bottom:none; border-radius:6px 6px 0 0; cursor:pointer; margin-bottom:-2px; }
+        .cfg-tabs .tab:hover { background:#F7E0BD; }
+        .cfg-tabs .tab.active { background:#F0A24B; color:#fff; border-color:#d98a33; font-weight:bold; }
+        .cfg-pane { display:flex; flex-direction:column; min-height:0; }
         .ck-all-lab { font-weight:normal; font-size:11px; color:#8a6d45; margin:0; cursor:pointer; }
         table.hist td select.sel-grp { font-size:12px; border:1px solid #D8BE93; border-radius:4px; padding:2px 4px; max-width:150px; }
         .tab-chip { border:1px solid #D8BE93; border-radius:12px; padding:2px 8px; background:#fff; color:#5b3a1e; }
@@ -198,10 +206,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button id="btnBatchList"><i class="fa fa-list-alt"></i> 批次紀錄</button>
             <button class="btn-warm" id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增儀器</button>
             <button id="btnYear"><i class="fa fa-calendar"></i> 年度紀錄／計畫表</button>
-            <button id="btnCatSet" style="display:none;"><i class="fa fa-sliders"></i> 類別設定</button>
             <button id="btnCycleSet" style="display:none;"><i class="fa fa-clock-o"></i> 週期批次設定</button>
-            <button id="btnStaffSet" style="display:none;"><i class="fa fa-user-md"></i> 校驗人員資格</button>
-            <button id="btnAttSet" style="display:none;"><i class="fa fa-folder-open-o"></i> 附件設定</button>
+            <button id="btnCfg" style="display:none;"><i class="fa fa-cog"></i> 設定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
             <span class="tc-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
@@ -229,16 +235,16 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <table class="tc-table" id="tcTable">
                 <thead><tr>
                     <th>量具編號</th><th>類別</th><th>週期(月)</th><th>校驗方式</th>
-                    <th>下次應校驗日</th><th>狀態</th><th>最近校驗</th><th>列入校驗率統計</th><th>操作</th>
+                    <th>下次應校驗月</th><th>狀態</th><th>最近校驗</th><th>列入校驗率統計</th><th>操作</th>
                 </tr></thead>
                 <tbody id="tcBody"><tr><td colspan="9" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
-            狀態：<span class="st-pill st-overdue">逾期</span> <span class="st-pill st-soon">30天內到期</span>
+            狀態：<span class="st-pill st-overdue">逾期</span> <span class="st-pill st-soon">本月或下月到期</span>
             <span class="st-pill st-ok">正常</span> <span class="st-pill st-nobaseline">未設基準</span>
             <span class="st-pill st-unmanaged">未列入統計</span>。
-            「列入校驗率統計」者才計入 KPI；下次應校驗日＝上次校驗日＋週期（登錄完成後自動前滾）。
+            「列入校驗率統計」者才計入 KPI；下次應校驗月＝上次校驗月＋週期（登錄完成後自動前滾）；同月內完成即算準時。
             <span id="tcExcluded" style="color:#b5762a;"></span>
         </div>
 <?php endif; ?>
@@ -284,13 +290,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>校驗方式（預設）</label><select id="setMethod">
                 <option value="">—</option><option value="內校">內校</option><option value="外校">外校</option>
             </select></div>
-            <div><label>下次應校驗日（基準）</label><input type="date" id="setBase"></div>
+            <div><label>下次應校驗月（基準）</label><input type="month" id="setBase"></div>
             <div><label>列入校驗率統計（計入 KPI）</label><select id="setManaged">
                 <option value="1">是</option><option value="0">否</option>
             </select></div>
         </div>
         <div style="font-size:12px;color:#8a6d45;margin-top:8px;">
-            設定基準到期日後，之後每次登錄校驗會依週期自動前滾，不需再手動維護。<br>
+            到期以「月」為單位——同一月份內完成校驗即算準時。設定基準到期月後，之後每次登錄校驗會依週期自動前滾，不需再手動維護。<br>
             類別下拉只列出「需校驗且可設定量具編號」的類別；類別的新增／更名／刪除請至
             <a href="inspection_combined_prototype.php" target="_blank" style="color:#b5762a;">線上檢驗－量具設定</a>，
             其校驗屬性則於本頁工具列「類別設定」勾選。
@@ -338,7 +344,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div class="bt-tools">
                 <table class="bt-tbl" id="btTbl">
                     <thead><tr><th style="width:34px;"><input type="checkbox" id="btCkAll"></th>
-                        <th>量具編號</th><th>類別</th><th>週期</th><th>下次應校驗日</th><th>狀態</th><th>本次結果</th></tr></thead>
+                        <th>量具編號</th><th>類別</th><th>週期</th><th>下次應校驗月</th><th>狀態</th><th>本次結果</th></tr></thead>
                     <tbody id="btBody"></tbody>
                 </table>
             </div>
@@ -366,35 +372,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-body" id="batListBody" style="font-size:13px;color:#5b3a1e;"></div>
 </div></div>
 
-<!-- 校驗人員資格 modal（管理員；候選＝品管部門，部門沿用「異常單處置決策設定」） -->
-<div class="tc-mask" id="staffMask"><div class="tc-modal">
-    <div class="m-head"><span>校驗人員資格（內校）</span><span class="m-close" onclick="closeMask('staffMask')">✕</span></div>
-    <div class="m-body">
-        <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;line-height:1.7;">
-            候選名單＝<b>品管部門（含子部門）</b>底下<b>未離職</b>人員，依職稱排序（名單已限定在該部門，故不另列部門與職稱欄）；品管部門沿用「異常單處置決策設定」已設定的部門，本頁不另設一份。<br>
-            勾選者才會出現在「內校」的校驗人員下拉。長期請假（留職停薪／育嬰留停等）者會標記假別與期間，請自行判斷是否勾選。
-        </div>
-        <div id="staffHint" style="font-size:12px;color:#DD5138;margin-bottom:6px;"></div>
-        <div style="max-height:46vh;overflow-y:auto;">
-            <table class="hist" id="staffTable">
-                <thead><tr><th style="text-align:left;">姓名</th><th>長期請假</th>
-                    <th>具校驗資格<br><label class="ck-all-lab"><input type="checkbox" id="staffCkAll"> 全選</label></th></tr></thead>
-                <tbody id="staffBody"></tbody>
-            </table>
-        </div>
-    </div>
-    <div class="m-foot">
-        <button class="b-cancel" onclick="closeMask('staffMask')">取消</button>
-        <button class="b-ok" onclick="submitStaff()">儲存</button>
-    </div>
-</div></div>
 
 <!-- 週期批次設定 modal（管理員；依類別套用到底下量具） -->
 <div class="tc-mask" id="cycMask"><div class="tc-modal xwide">
     <div class="m-head"><span>校驗週期批次設定（依類別）</span><span class="m-close" onclick="closeMask('cycMask')">✕</span></div>
     <div class="m-body">
         <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;line-height:1.7;">
-            對整個類別底下的量具一次設定校驗週期／基準到期日／是否列入校驗率統計。<br>
+            對整個類別底下的量具一次設定校驗週期／基準到期月／是否列入校驗率統計。到期以「月」為單位，同月內完成即算準時。<br>
             <b>覆寫</b>未勾＝只補「目前空白」的量具（已個別設定過的不動）；勾了＝該類別全部覆寫。留空的欄位不會被更動。
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px;font-size:12px;color:#5b3a1e;">
@@ -405,7 +389,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div style="max-height:48vh;overflow-y:auto;">
             <table class="hist" id="cycTable">
                 <thead><tr><th style="text-align:left;">類別</th><th>量具數</th><th>目前週期</th>
-                    <th>新週期(月)</th><th>基準到期日</th><th>列入校驗率統計</th><th>覆寫</th></tr></thead>
+                    <th>新週期(月)</th><th>基準到期月</th><th>列入校驗率統計</th><th>覆寫</th></tr></thead>
                 <tbody id="cycBody"></tbody>
             </table>
         </div>
@@ -435,33 +419,18 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     </div>
 </div></div>
 
-<!-- 校驗附件設定 modal（管理員） -->
-<div class="tc-mask" id="attSetMask"><div class="tc-modal">
-    <div class="m-head"><span>校驗附件設定</span><span class="m-close" onclick="closeMask('attSetMask')">✕</span></div>
-    <div class="m-body">
-        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;line-height:1.7;">
-            資料庫只存檔名，完整路徑一律用此處設定值即時組出——換 NAS 或搬資料夾時，
-            把資料夾內檔案原樣複製過去、改這裡的路徑即可，舊附件立即可讀（不需改資料）。
-        </div>
-        <label>附件存放路徑（建議 UNC，例 \\NAS\ERP\量測儀器校驗\）</label>
-        <input type="text" id="asDir" maxlength="255">
-        <label>允許的副檔名（逗號分隔）</label>
-        <input type="text" id="asExt" maxlength="255">
-        <label>單檔大小上限（MB）</label>
-        <input type="number" id="asMax" min="1" max="500" step="1">
-        <label>文件類別（逗號分隔，供上傳時挑選）</label>
-        <input type="text" id="asTypes" maxlength="255">
-    </div>
-    <div class="m-foot">
-        <button class="b-cancel" onclick="closeMask('attSetMask')">取消</button>
-        <button class="b-ok" onclick="submitAttSet()">儲存</button>
-    </div>
-</div></div>
 
 <!-- 類別設定 modal（只設校驗屬性；類別本身的新增/更名/刪除在 線上檢驗－量具設定） -->
-<div class="tc-mask" id="catMask"><div class="tc-modal wide">
-    <div class="m-head"><span>量具類別設定</span><span class="m-close" onclick="closeMask('catMask')">✕</span></div>
-    <div class="m-body">
+<!-- 統一設定 modal（分頁：類別設定／校驗人員資格／附件設定；週期批次設定屬逐類別操作，仍留在工具列） -->
+<div class="tc-mask" id="cfgMask"><div class="tc-modal xwide">
+    <div class="m-head"><span>量測儀器校驗設定</span><span class="m-close" onclick="closeMask('cfgMask')">✕</span></div>
+    <div class="cfg-tabs">
+        <div class="tab active" data-pane="cfgCat">類別設定</div>
+        <div class="tab" data-pane="cfgStaff">校驗人員資格</div>
+        <div class="tab" data-pane="cfgAtt">附件設定</div>
+    </div>
+    <div class="cfg-pane" id="cfgCat">
+<div class="m-body">
         <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;line-height:1.7;">
             類別的<b>新增／更名／刪除</b>請至
             <a href="inspection_combined_prototype.php" target="_blank" style="color:#b5762a;">線上檢驗－量具設定</a>（本頁不重複提供）。<br>
@@ -491,8 +460,49 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         </div>
     </div>
     <div class="m-foot">
-        <button class="b-cancel" onclick="closeMask('catMask')">取消</button>
+        <button class="b-cancel" onclick="closeMask('cfgMask')">取消</button>
         <button class="b-ok" onclick="submitCats()">儲存</button>
+    </div>
+    </div>
+    <div class="cfg-pane" id="cfgStaff" style="display:none;">
+<div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;line-height:1.7;">
+            候選名單＝<b>品管部門（含子部門）</b>底下<b>未離職</b>人員，依職稱排序（名單已限定在該部門，故不另列部門與職稱欄）；品管部門沿用「異常單處置決策設定」已設定的部門，本頁不另設一份。<br>
+            勾選者才會出現在「內校」的校驗人員下拉。長期請假（留職停薪／育嬰留停等）者會標記假別與期間，請自行判斷是否勾選。
+        </div>
+        <div id="staffHint" style="font-size:12px;color:#DD5138;margin-bottom:6px;"></div>
+        <div style="max-height:46vh;overflow-y:auto;">
+            <table class="hist" id="staffTable">
+                <thead><tr><th style="text-align:left;">姓名</th><th>長期請假</th>
+                    <th>具校驗資格<br><label class="ck-all-lab"><input type="checkbox" id="staffCkAll"> 全選</label></th></tr></thead>
+                <tbody id="staffBody"></tbody>
+            </table>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('cfgMask')">取消</button>
+        <button class="b-ok" onclick="submitStaff()">儲存</button>
+    </div>
+    </div>
+    <div class="cfg-pane" id="cfgAtt" style="display:none;">
+<div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;line-height:1.7;">
+            資料庫只存檔名，完整路徑一律用此處設定值即時組出——換 NAS 或搬資料夾時，
+            把資料夾內檔案原樣複製過去、改這裡的路徑即可，舊附件立即可讀（不需改資料）。
+        </div>
+        <label>附件存放路徑（建議 UNC，例 \\NAS\ERP\量測儀器校驗\）</label>
+        <input type="text" id="asDir" maxlength="255">
+        <label>允許的副檔名（逗號分隔）</label>
+        <input type="text" id="asExt" maxlength="255">
+        <label>單檔大小上限（MB）</label>
+        <input type="number" id="asMax" min="1" max="500" step="1">
+        <label>文件類別（逗號分隔，供上傳時挑選）</label>
+        <input type="text" id="asTypes" maxlength="255">
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('cfgMask')">取消</button>
+        <button class="b-ok" onclick="submitAttSet()">儲存</button>
+    </div>
     </div>
 </div></div>
 
@@ -539,6 +549,19 @@ function openMask(id){ document.getElementById(id).style.display='block'; }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtDate(d){ return d ? String(d).substr(0,10) : ''; }
+/* 到期一律以「月」為單位（同月內完成即算準時） */
+function fmtMonth(d){ return d ? String(d).substr(0,7) : ''; }
+function monthEnd(d){
+    if (!d) return '';
+    var y = parseInt(String(d).substr(0,4),10), m = parseInt(String(d).substr(5,2),10);
+    var last = new Date(y, m, 0).getDate();
+    return y + '-' + ('0'+m).slice(-2) + '-' + ('0'+last).slice(-2);
+}
+/** 準時＝實際校驗日 ≤ 到期月月底 */
+function isOnTime(calibDate, dueDate){
+    if (!calibDate || !dueDate) return null;
+    return fmtDate(calibDate) <= monthEnd(dueDate);
+}
 
 function loadMeta(cb){
     $.getJSON(API, {action:'meta'}, function(m){
@@ -550,8 +573,7 @@ function loadMeta(cb){
         STAFF = m.staff || []; STAFF_MULTI_DEPT = !!m.staff_multi_dept; QC_DEPT_SET = !!m.qc_dept_set;
         setCats(m.categories);
         if (m.perms.canEdit)  { $('#btnBatch').show(); }
-        if (m.perms.canAdmin) { $('#btnAdd').show(); $('#btnCatSet').show(); $('#btnAttSet').show();
-                                $('#btnCycleSet').show(); $('#btnStaffSet').show(); }
+        if (m.perms.canAdmin) { $('#btnAdd').show(); $('#btnCycleSet').show(); $('#btnCfg').show(); }
         if (cb) cb();
     });
 }
@@ -687,7 +709,7 @@ function renderTable(){
         html += '<td>'+esc(r.category_name||'')+'</td>';
         html += '<td>'+(r.calib_cycle_months==null?'—':r.calib_cycle_months)+'</td>';
         html += '<td>'+esc(r.calib_method||'—')+'</td>';
-        html += '<td>'+(fmtDate(r.calibration_due)||'—')+'</td>';
+        html += '<td>'+(fmtMonth(r.calibration_due)||'—')+'</td>';
         html += '<td>'+statPill(r.status)+'</td>';
         html += '<td>'+last+'</td>';
         html += '<td class="'+(r.calib_managed===1?'managed-yes':'managed-no')+'">'+(r.calib_managed===1?'✔ 是':'否')+'</td>';
@@ -714,7 +736,7 @@ function openRec(tid){
     var r = ROWS.find(function(x){ return x.Tool_id===tid; });
     recTool = r; editCalibId = null;
     $('#recTitle').text('登錄校驗：'+r.Tool_No+'（'+(r.category_name||'')+'）');
-    $('#recInfo').html('目前下次應校驗日：<b>'+(fmtDate(r.calibration_due)||'（未設定）')+'</b>　週期：'
+    $('#recInfo').html('目前下次應校驗月：<b>'+(fmtMonth(r.calibration_due)||'（未設定）')+'</b>　週期：'
         +(r.calib_cycle_months==null?'（未設）':r.calib_cycle_months+' 月'));
     $('#recDate').val(META.today);
     $('#recResult').val('pass');
@@ -731,7 +753,7 @@ function editHis(cid){
     recTool = ROWS.find(function(x){ return x.Tool_id===HIST_TID; }) || {calib_cycle_months:null};
     editCalibId = cid;
     $('#recTitle').text('編輯校驗紀錄');
-    $('#recInfo').html('本次應校驗到期日：<b>'+(fmtDate(a.due_date)||'（無）')+'</b>（編輯不改到期基準，僅修正內容）');
+    $('#recInfo').html('本次應校驗到期月：<b>'+(fmtMonth(a.due_date)||'（無）')+'</b>（編輯不改到期基準，僅修正內容）');
     $('#recDate').val(fmtDate(a.calib_date));
     $('#recResult').val(a.result);
     $('#recMethod').val(a.method||'');
@@ -746,7 +768,7 @@ function updateRoll(){
     var cyc = recTool.calib_cycle_months, d = $('#recDate').val();
     if (cyc==null || !d){ $('#recRoll').text(''); return; }
     var dt = new Date(d); dt.setMonth(dt.getMonth()+parseInt(cyc,10));
-    $('#recRoll').text('登錄後下次應校驗日將前滾為約 '+dt.toISOString().substr(0,10)+'（依週期 '+cyc+' 月）');
+    $('#recRoll').text('登錄後下次應校驗月將前滾為 '+dt.toISOString().substr(0,7)+'（依週期 '+cyc+' 月）');
 }
 $('#recDate').on('change', updateRoll);
 function submitRec(){
@@ -788,7 +810,7 @@ function openSet(tid){
         $('#setCat').val(cid);
         $('#setCycle').val(setTool.calib_cycle_months==null?'':setTool.calib_cycle_months);
         $('#setMethod').val(setTool.calib_method||'');
-        $('#setBase').val(fmtDate(setTool.calibration_due));
+        $('#setBase').val(fmtMonth(setTool.calibration_due));
         $('#setManaged').val(String(setTool.calib_managed));
     } else {
         $('#setTitle').text('新增儀器');
@@ -862,7 +884,7 @@ function renderTabChips(){
     }).join('');
     $('#tabChips').html(h || '<span style="color:#8a6d45;">尚未建立自訂分頁（每個勾選的類別各自一頁）</span>');
 }
-$('#btnCatSet').on('click', function(){ renderTabChips(); renderCatBody(null); openMask('catMask'); });
+function loadCatPane(){ renderTabChips(); renderCatBody(null); }
 
 /** 單欄全選／全不選；「列入分頁」只作用在有勾「需校驗」的列 */
 $('#catTable').on('change', '.ck-all', function(){
@@ -948,7 +970,7 @@ function submitCats(){
     $.post(API, {action:'save_categories', items: JSON.stringify(items)}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         if (res.tabs) TABS_DEF = res.tabs;
-        setCats(res.categories); closeMask('catMask'); loadList();
+        setCats(res.categories); closeMask('cfgMask'); loadList();
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
@@ -962,20 +984,20 @@ function openHis(tid){
         $('#hisTitle').text('校驗歷史：'+res.tool.Tool_No+'（'+(res.tool.category_name||'')+'）');
         if (!res.list.length){ $('#hisBody').html('<div style="color:#8a6d45;padding:12px;">尚無校驗紀錄</div>'); openMask('hisMask'); return; }
         var canEdit = PERMS.canEdit, canDel = res.can_delete;
-        var h = '<table class="hist"><thead><tr><th>應校驗到期日</th><th>校驗完成日</th><th>準時</th><th>結果</th>'
+        var h = '<table class="hist"><thead><tr><th>應校驗到期月</th><th>校驗完成日</th><th>準時</th><th>結果</th>'
               + '<th>方式</th><th>人員/單位</th><th>憑證編號</th><th>下次到期</th><th>附件</th><th>登錄者</th>'
               + ((canEdit||canDel)?'<th>操作</th>':'') + '</tr></thead><tbody>';
         res.list.forEach(function(a){
-            var ontime = (a.due_date && a.calib_date) ? (fmtDate(a.calib_date)<=fmtDate(a.due_date)) : null;
+            var ontime = isOnTime(a.calib_date, a.due_date);
             h += '<tr>';
-            h += '<td>'+(fmtDate(a.due_date)||'—')+'</td>';
+            h += '<td>'+(fmtMonth(a.due_date)||'—')+'</td>';
             h += '<td>'+fmtDate(a.calib_date)+'</td>';
             h += '<td>'+(ontime===null?'—':(ontime?'<span style="color:#8A5A2B;">準時</span>':'<span style="color:#DD5138;">逾期</span>'))+'</td>';
             h += '<td>'+(RESULT_LABEL[a.result]||a.result)+'</td>';
             h += '<td>'+esc(a.method||'—')+'</td>';
             h += '<td>'+esc(a.operator||'—')+'</td>';
             h += '<td>'+esc(a.cert_no||'—')+'</td>';
-            h += '<td>'+(fmtDate(a.next_due)||'—')+'</td>';
+            h += '<td>'+(fmtMonth(a.next_due)||'—')+'</td>';
             // 批次校驗的共用報告：一份附件可對應多支量具，這裡只列對應到本支者
             var att = (a.attaches||[]).map(function(x){
                 return '<a href="'+API+'?action=download_attach&attach_id='+x.attach_id+'" target="_blank" '
@@ -1073,7 +1095,7 @@ function renderBtTools(){
             + '<td style="text-align:left;"><b>'+esc(r.Tool_No)+'</b></td>'
             + '<td>'+esc(r.category_name||'')+'</td>'
             + '<td>'+(r.calib_cycle_months==null?'<span style="color:#DD5138;">未設</span>':r.calib_cycle_months+' 月')+'</td>'
-            + '<td>'+(fmtDate(r.calibration_due)||'—')+'</td>'
+            + '<td>'+(fmtMonth(r.calibration_due)||'—')+'</td>'
             + '<td>'+statPill(r.status)+'</td>'
             + '<td><select class="bt-res">'+resOptions(on?BT_SEL[r.Tool_id]:def)+'</select></td></tr>';
     }).join('');
@@ -1276,11 +1298,11 @@ function openBatchDetail(bid){
            + esc(b.method||'—')+'　人員／單位 '+esc(b.operator||'—')+'　憑證 '+esc(b.cert_no||'—')
            + '　登錄者 '+esc(b.created_by_name||'')+(b.note?'<br>備註：'+esc(b.note):'')+'</div>';
         h += '<div style="font-size:13px;font-weight:bold;color:#5b3a1e;margin:6px 0 3px;">本批量具（'+res.tools.length+'）</div>';
-        h += '<table class="hist"><thead><tr><th>量具編號</th><th>類別</th><th>應校驗到期日</th><th>校驗日</th><th>準時</th><th>結果</th></tr></thead><tbody>';
+        h += '<table class="hist"><thead><tr><th>量具編號</th><th>類別</th><th>應校驗到期月</th><th>校驗日</th><th>準時</th><th>結果</th></tr></thead><tbody>';
         res.tools.forEach(function(t){
-            var ontime = (t.due_date && t.calib_date) ? (fmtDate(t.calib_date) <= fmtDate(t.due_date)) : null;
+            var ontime = isOnTime(t.calib_date, t.due_date);
             h += '<tr><td><b>'+esc(t.Tool_No)+'</b></td><td>'+esc(t.category_name||'')+'</td>'
-               + '<td>'+(fmtDate(t.due_date)||'—')+'</td><td>'+fmtDate(t.calib_date)+'</td>'
+               + '<td>'+(fmtMonth(t.due_date)||'—')+'</td><td>'+fmtDate(t.calib_date)+'</td>'
                + '<td>'+(ontime===null?'—':(ontime?'<span style="color:#8A5A2B;">準時</span>':'<span style="color:#DD5138;">逾期</span>'))+'</td>'
                + '<td>'+(RESULT_LABEL[t.result]||t.result)+'</td></tr>';
         });
@@ -1312,17 +1334,16 @@ function delAttach(aid, bid){
 }
 
 /* ---------- 校驗附件設定（管理員） ---------- */
-$('#btnAttSet').on('click', function(){
+function loadAttPane(){
     $('#asDir').val(ATT_CFG.dir||''); $('#asExt').val(ATT_CFG.ext_raw||'');
     $('#asMax').val(ATT_CFG.maxmb||20); $('#asTypes').val(ATT_CFG.types_raw||'');
-    openMask('attSetMask');
-});
+}
 function submitAttSet(){
     $.post(API, {action:'save_attach_settings', dir:$('#asDir').val(), ext:$('#asExt').val(),
                  maxmb:$('#asMax').val(), types:$('#asTypes').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         ATT_CFG = res.attach;
-        closeMask('attSetMask');
+        closeMask('cfgMask');
         alert('已儲存附件設定。');
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
@@ -1420,7 +1441,23 @@ $('#btMethod').on('change', function(){ opInit('btOpBox', this.value, OP['btOpBo
 $('#recMethod').on('change', function(){ opInit('recOpBox', this.value, OP['recOpBox']); });
 
 /* ================= 校驗人員資格設定（管理員） ================= */
-$('#btnStaffSet').on('click', function(){
+/* 統一設定視窗：切分頁時才載入該分頁資料 */
+function openCfg(pane){
+    cfgSwitch(pane || 'cfgCat');
+    openMask('cfgMask');
+}
+function cfgSwitch(pane){
+    $('#cfgMask .cfg-tabs .tab').each(function(){ $(this).toggleClass('active', $(this).attr('data-pane')===pane); });
+    $('#cfgMask .cfg-pane').hide();
+    $('#'+pane).show();
+    if (pane === 'cfgCat')   loadCatPane();
+    if (pane === 'cfgStaff') loadStaffPane();
+    if (pane === 'cfgAtt')   loadAttPane();
+}
+$('#btnCfg').on('click', function(){ openCfg('cfgCat'); });
+$('#cfgMask').on('click', '.cfg-tabs .tab', function(){ cfgSwitch($(this).attr('data-pane')); });
+
+function loadStaffPane(){
     $.getJSON(API, {action:'staff_candidates'}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         $('#staffHint').text(res.qc_dept_set ? ''
@@ -1433,9 +1470,8 @@ $('#btnStaffSet').on('click', function(){
         }).join('');
         $('#staffBody').html(h || '<tr><td colspan="3" style="padding:12px;color:#8a6d45;">品管部門底下查無未離職人員</td></tr>');
         syncStaffAll();
-        openMask('staffMask');
     }).fail(function(x){ alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
-});
+}
 function syncStaffAll(){
     var n = $('#staffBody tr[data-id]').length, c = $('#staffBody .ck-staff:checked').length;
     $('#staffCkAll').prop('checked', n>0 && c===n);
@@ -1448,7 +1484,7 @@ function submitStaff(){
     $.post(API, {action:'save_staff', user_ids:JSON.stringify(ids)}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         STAFF = res.staff || []; STAFF_MULTI_DEPT = !!res.staff_multi_dept;
-        closeMask('staffMask');
+        closeMask('cfgMask');
         alert('已儲存校驗人員資格（'+STAFF.length+' 人）。');
         if (OP['recOpBox']) opRender('recOpBox');
         if (OP['btOpBox']) opRender('btOpBox');
@@ -1472,7 +1508,7 @@ $('#btnCycleSet').on('click', function(){
             + '<td>'+c.tool_cnt+'</td>'
             + '<td style="font-size:11px;">'+esc(cycTxt)+(base?'<br><span style="color:#DD5138;">未設基準 '+base+' 支</span>':'')+'</td>'
             + '<td><input type="number" class="cy-cycle" min="0" step="1" style="width:64px;border:1px solid #D8BE93;border-radius:3px;padding:1px 4px;"></td>'
-            + '<td><input type="date" class="cy-base" style="border:1px solid #D8BE93;border-radius:3px;padding:1px 4px;font-size:11px;"></td>'
+            + '<td><input type="month" class="cy-base" style="border:1px solid #D8BE93;border-radius:3px;padding:1px 4px;font-size:11px;"></td>'
             + '<td><select class="cy-managed" style="font-size:11px;border:1px solid #D8BE93;border-radius:3px;">'
             + '<option value="-1">不變</option><option value="1">是</option><option value="0">否</option></select></td>'
             + '<td><input type="checkbox" class="cy-ovr"></td></tr>';
@@ -1497,7 +1533,7 @@ function submitCycle(){
         items.push({category_id:parseInt($tr.attr('data-id'),10), cycle:cyc, baseline_due:base||'',
                     managed:parseInt(mg,10), overwrite:ovr});
     });
-    if (!items.length){ alert('沒有要套用的設定（請至少填一個類別的週期／基準日／統計選項）'); return; }
+    if (!items.length){ alert('沒有要套用的設定（請至少填一個類別的週期／基準月／統計選項）'); return; }
     if (!confirm('確定套用到 '+items.length+' 個類別底下的量具？\n未勾「覆寫」者只補目前空白的欄位。')) return;
     $.post(API, {action:'bulk_set_cycle', items:JSON.stringify(items)}, function(res){
         if (!res.ok){ alert(res.error||'套用失敗'); return; }
@@ -1536,16 +1572,16 @@ function loadYear(){
 }
 function yrRecHtml(res){
     if (!res.list.length) return '<div style="padding:12px;color:#8a6d45;">'+res.year+' 年度尚無校驗紀錄</div>';
-    var h = '<table class="hist"><thead><tr><th>校驗完成日</th><th>量具編號</th><th>類別</th><th>應校驗到期日</th>'
+    var h = '<table class="hist"><thead><tr><th>校驗完成日</th><th>量具編號</th><th>類別</th><th>應校驗到期月</th>'
           + '<th>準時</th><th>結果</th><th>方式</th><th>校驗人員／單位</th><th>憑證編號</th><th>下次到期</th><th>附件</th><th>登錄者</th></tr></thead><tbody>';
     res.list.forEach(function(r){
-        var ontime = (r.due_date && r.calib_date) ? (fmtDate(r.calib_date) <= fmtDate(r.due_date)) : null;
+        var ontime = isOnTime(r.calib_date, r.due_date);
         h += '<tr><td>'+fmtDate(r.calib_date)+'</td><td><b>'+esc(r.Tool_No)+'</b></td><td>'+esc(r.category_name||'')+'</td>'
-           + '<td>'+(fmtDate(r.due_date)||'—')+'</td>'
+           + '<td>'+(fmtMonth(r.due_date)||'—')+'</td>'
            + '<td>'+(ontime===null?'—':(ontime?'<span style="color:#8A5A2B;">準時</span>':'<span style="color:#DD5138;">逾期</span>'))+'</td>'
            + '<td>'+(RESULT_LABEL[r.result]||r.result)+'</td><td>'+esc(r.method||'—')+'</td>'
            + '<td style="text-align:left;">'+esc(r.operator||'—')+'</td><td>'+esc(r.cert_no||'—')+'</td>'
-           + '<td>'+(fmtDate(r.next_due)||'—')+'</td>'
+           + '<td>'+(fmtMonth(r.next_due)||'—')+'</td>'
            + '<td>'+(r.attach_count>0 ? r.attach_count+' 份' : '—')+'</td>'
            + '<td>'+esc(r.created_by_name||'')+'</td></tr>';
     });
@@ -1601,12 +1637,13 @@ $('#yrCsv').on('click', function(){
     if (!YR_DATA){ return; }
     var rows = [];
     if (YR_MODE === 'rec'){
-        rows.push(['校驗完成日','量具編號','類別','應校驗到期日','準時','結果','方式','校驗人員／單位','憑證編號','下次到期','附件份數','登錄者']);
+        rows.push(['校驗完成日','量具編號','類別','應校驗到期月','準時','結果','方式','校驗人員／單位','憑證編號','下次到期月','附件份數','登錄者']);
         YR_DATA.list.forEach(function(r){
-            var ontime = (r.due_date && r.calib_date) ? (fmtDate(r.calib_date) <= fmtDate(r.due_date) ? '準時':'逾期') : '';
-            rows.push([fmtDate(r.calib_date), r.Tool_No, r.category_name||'', fmtDate(r.due_date), ontime,
+            var ot = isOnTime(r.calib_date, r.due_date);
+            var ontime = (ot === null) ? '' : (ot ? '準時' : '逾期');
+            rows.push([fmtDate(r.calib_date), r.Tool_No, r.category_name||'', fmtMonth(r.due_date), ontime,
                        RESULT_LABEL[r.result]||r.result, r.method||'', r.operator||'', r.cert_no||'',
-                       fmtDate(r.next_due), r.attach_count||0, r.created_by_name||'']);
+                       fmtMonth(r.next_due), r.attach_count||0, r.created_by_name||'']);
         });
     } else {
         var head = ['量具編號','類別','週期(月)','方式'];
@@ -1632,10 +1669,10 @@ $('#yrCsv').on('click', function(){
 
 /* ---------- 匯出 CSV ---------- */
 $('#btnCsv').on('click', function(){
-    var rows = [['量具編號','類別','週期(月)','校驗方式','下次應校驗日','狀態','最近校驗日','最近結果','列入校驗率統計']];
+    var rows = [['量具編號','類別','週期(月)','校驗方式','下次應校驗月','狀態','最近校驗日','最近結果','列入校驗率統計']];
     ROWS.forEach(function(r){
         rows.push([r.Tool_No, r.category_name||'', r.calib_cycle_months==null?'':r.calib_cycle_months,
-            r.calib_method||'', fmtDate(r.calibration_due), STATUS_LABEL[r.status]||r.status,
+            r.calib_method||'', fmtMonth(r.calibration_due), STATUS_LABEL[r.status]||r.status,
             r.last?fmtDate(r.last.calib_date):'', r.last?(RESULT_LABEL[r.last.result]||r.last.result):'',
             r.calib_managed===1?'是':'否']);
     });
