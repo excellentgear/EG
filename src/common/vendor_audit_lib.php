@@ -76,6 +76,31 @@ function vendor_audit_ensure_schema(PDO $db): void {
         try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
     }
 
+    // 稽核員資格（管理員設定：管理供應商的部門×人員，scope 區分外包加工/採購/通用）
+    $db->exec("CREATE TABLE IF NOT EXISTS vendor_auditor (
+        auditor_id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        user_name VARCHAR(50) NULL,
+        dept_id INT NULL COMMENT '管理供應商的部門 department.id',
+        dept_name VARCHAR(50) NULL,
+        scope VARCHAR(10) NOT NULL DEFAULT 'all' COMMENT 'outsource=外包加工 purchase=採購 all=通用',
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        UNIQUE KEY uq_us (user_id, scope), KEY idx_scope (scope)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='供應商稽核員資格'");
+
+    // 稽核佐證附件（供應商自評表等；DB只存檔名，路徑即時組）
+    $db->exec("CREATE TABLE IF NOT EXISTS vendor_audit_attach (
+        attach_id INT AUTO_INCREMENT PRIMARY KEY,
+        target_id INT NOT NULL COMMENT '對應 vendor_audit_target',
+        year INT NULL, file_name VARCHAR(120) NOT NULL COMMENT '實體檔名(亂數)',
+        original_name VARCHAR(200) NULL, note VARCHAR(200) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        KEY idx_target (target_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='供應商稽核佐證附件(供應商自評等)'");
+
     foreach ([['vendor_audit_view','稽核檢閱'],['vendor_audit_edit','稽核登錄'],['vendor_audit_admin','稽核管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='vendor_audit' LIMIT 1");
         $st->execute([$r[0]]);
@@ -84,6 +109,39 @@ function vendor_audit_ensure_schema(PDO $db): void {
                ->execute([$r[0], $r[1]]);
         }
     }
+}
+
+/* ---- 供應商 scope 判定：加工廠(main_category_id=1)=外包加工，其餘=採購 ---- */
+function vendor_audit_scope_of(?int $mainCatId): string {
+    return ((int)$mainCatId === 1) ? 'outsource' : 'purchase';
+}
+function vendor_audit_scope_label(string $s): string {
+    return ['outsource'=>'外包加工','purchase'=>'採購','all'=>'通用'][$s] ?? $s;
+}
+/** 有效稽核員清單（依 scope 篩該 scope+all；**自動排除離職員工 user.state=0**） */
+function vendor_audit_auditors(PDO $db, ?string $scope = null): array {
+    $base = "SELECT a.auditor_id, a.user_id, a.user_name, a.dept_id, a.dept_name, a.scope
+             FROM vendor_auditor a JOIN user u ON u.id=a.user_id
+             WHERE a.is_active=1 AND (u.state IS NULL OR u.state<>0)";
+    if ($scope === 'outsource' || $scope === 'purchase') {
+        $st = $db->prepare($base . " AND a.scope IN (?, 'all') ORDER BY a.dept_name, a.user_name");
+        $st->execute([$scope]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    }
+    return $db->query($base . " ORDER BY a.scope, a.dept_name, a.user_name")->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/* ---- 附件路徑（即時組：system_settings vendor_audit_attach_base + /年度/ 檔名） ---- */
+function vendor_audit_attach_base(PDO $db): string {
+    $v = trim((string)vendor_eval_setting($db, 'vendor_audit_attach_base', ''));
+    if ($v !== '') return rtrim($v, '\\/');
+    return realpath(__DIR__ . '/../../') . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'vendor_audit_attach';
+}
+function vendor_audit_attach_path(PDO $db, array $att): ?string {
+    $fn = basename((string)($att['file_name'] ?? ''));
+    if ($fn === '') return null;
+    $p = vendor_audit_attach_base($db) . DIRECTORY_SEPARATOR . (int)($att['year'] ?: date('Y')) . DIRECTORY_SEPARATOR . $fn;
+    return is_file($p) ? $p : null;
 }
 
 /* ============================================================

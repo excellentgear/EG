@@ -55,6 +55,7 @@ case 'meta': {
     jout(['perms'=>$perms, 'cur_year'=>(int)date('Y'), 'cur_month'=>(int)date('n'),
           'cur_half'=>((int)date('n') <= 6 ? 1 : 2), 'today'=>date('Y-m-d'),
           'cycle_months'=>vendor_audit_cycle_months($db), 'main_categories'=>$cats,
+          'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', ''),
           'items'=>vendor_audit_items(), 'item_max'=>VENDOR_AUDIT_ITEM_MAX,
           'total_max'=>VENDOR_AUDIT_TOTAL_MAX, 'pass_rate'=>VENDOR_AUDIT_PASS_RATE,
           'self_w'=>VENDOR_AUDIT_SELF_W, 'audit_w'=>VENDOR_AUDIT_AUDIT_W,
@@ -257,7 +258,7 @@ case 'remove_target': {
 /* 讀取某對象的完整評鑑表單（供編輯） */
 case 'get_form': {
     $tid = (int)($_GET['target_id'] ?? 0);
-    $st = $db->prepare("SELECT t.*, m.maker_id, dc.main_cat_name
+    $st = $db->prepare("SELECT t.*, m.maker_id, m.main_category_id, dc.main_cat_name
                         FROM vendor_audit_target t
                         JOIN maker_list m ON m.maker_id_no=t.maker_id_no
                         LEFT JOIN dict_maker_main_category dc ON dc.main_cat_id=m.main_category_id
@@ -266,14 +267,122 @@ case 'get_form': {
     $t = $st->fetch(PDO::FETCH_ASSOC);
     if (!$t) jerr('找不到對象');
     $scores = json_decode((string)($t['scores_json'] ?? ''), true);
+    $scope = vendor_audit_scope_of($t['main_category_id'] !== null ? (int)$t['main_category_id'] : null);
+    $auditors = vendor_audit_auditors($db, $scope);
+    // 附件
+    $at = $db->prepare("SELECT attach_id, original_name, note, created_by_name, created_at, file_name, year
+                        FROM vendor_audit_attach WHERE target_id=? ORDER BY attach_id");
+    $at->execute([$tid]);
+    $attaches = [];
+    foreach ($at->fetchAll(PDO::FETCH_ASSOC) as $a) {
+        $attaches[] = ['attach_id'=>(int)$a['attach_id'], 'original_name'=>$a['original_name'], 'note'=>$a['note'],
+                       'uploaded_by'=>$a['created_by_name'], 'created_at'=>$a['created_at'],
+                       'exists'=>vendor_audit_attach_path($db, $a) !== null];
+    }
     jout(['target'=>[
         'target_id'=>(int)$t['target_id'], 'maker_id_no'=>$t['maker_id_no'], 'maker_id'=>$t['maker_id'],
-        'main_cat_name'=>$t['main_cat_name'], 'audit_date'=>$t['audit_date'], 'auditor'=>$t['auditor'],
+        'main_cat_name'=>$t['main_cat_name'], 'scope'=>$scope, 'scope_label'=>vendor_audit_scope_label($scope),
+        'audit_date'=>$t['audit_date'], 'auditor'=>$t['auditor'],
         'report_no'=>$t['report_no'], 'note'=>$t['note'], 'audit_mode'=>$t['audit_mode'], 'plan_month'=>$t['plan_month'],
-        'self_evaluator'=>$t['self_evaluator'], 'supplier_rep'=>$t['supplier_rep'], 'conclusion'=>$t['conclusion'],
+        'self_evaluator'=>$t['self_evaluator'], 'conclusion'=>$t['conclusion'],
         'self_rate'=>$t['self_rate'], 'audit_rate'=>$t['audit_rate'], 'overall_rate'=>$t['overall_rate'], 'judge'=>$t['judge'],
         'scores'=>is_array($scores) ? $scores : new stdClass(),
-    ]]);
+    ], 'auditors'=>$auditors, 'attaches'=>$attaches]);
+}
+
+/* ===== 稽核員資格管理（管理員） ===== */
+case 'people': {   // 部門人員（設定稽核員用）
+    $deptId = (int)($_GET['dept_id'] ?? 0);
+    if ($deptId <= 0) jout(['people'=>[]]);
+    $st = $db->prepare("SELECT DISTINCT u.id, u.user_cname FROM user_department_position_map m
+                        JOIN user u ON u.id=m.user_id
+                        WHERE m.department_id=? AND u.user_cname IS NOT NULL AND u.user_cname<>''
+                          AND (u.state IS NULL OR u.state<>0) ORDER BY u.user_cname");
+    $st->execute([$deptId]);
+    jout(['people'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+case 'auditors_all': {
+    $rows = $db->query("SELECT a.auditor_id, a.user_id, a.user_name, a.dept_id, a.dept_name, a.scope,
+                               CASE WHEN u.id IS NULL THEN 1 WHEN u.state=0 THEN 1 ELSE 0 END AS has_left
+                        FROM vendor_auditor a LEFT JOIN user u ON u.id=a.user_id
+                        WHERE a.is_active=1 ORDER BY has_left, a.scope, a.dept_name, a.user_name")->fetchAll(PDO::FETCH_ASSOC);
+    $depts = $db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['auditors'=>$rows, 'departments'=>$depts,
+          'scopes'=>[['v'=>'outsource','l'=>'外包加工'],['v'=>'purchase','l'=>'採購'],['v'=>'all','l'=>'通用']]]);
+}
+case 'add_auditors': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    $deptId = (int)($_POST['dept_id'] ?? 0);
+    $deptName = trim((string)($_POST['dept_name'] ?? '')) ?: null;
+    $scope = in_array($_POST['scope'] ?? '', ['outsource','purchase','all'], true) ? $_POST['scope'] : 'all';
+    $ids = va_ids($_POST['user_ids'] ?? '');
+    if (!$ids) jerr('請選擇人員');
+    try {
+        $db->beginTransaction();
+        $ins = $db->prepare("INSERT INTO vendor_auditor (user_id, user_name, dept_id, dept_name, scope, created_by, created_by_name)
+                             SELECT u.id, u.user_cname, ?, ?, ?, ?, ? FROM user u WHERE u.id=?
+                             ON DUPLICATE KEY UPDATE dept_id=VALUES(dept_id), dept_name=VALUES(dept_name), is_active=1");
+        $n = 0;
+        foreach ($ids as $u2) { $ins->execute([$deptId ?: null, $deptName, $scope, $uid, $uname, (int)$u2]); $n++; }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('新增失敗：'.$e->getMessage(), 500); }
+    jout(['added'=>$n]);
+}
+case 'remove_auditor': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    $aid = (int)($_POST['auditor_id'] ?? 0);
+    $db->prepare("DELETE FROM vendor_auditor WHERE auditor_id=?")->execute([$aid]);
+    jout([]);
+}
+
+/* ===== 稽核佐證附件（供應商自評等） ===== */
+case 'attach_upload': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $tid = (int)($_POST['target_id'] ?? 0);
+    $tr = $db->prepare("SELECT r.year FROM vendor_audit_target t JOIN vendor_audit_round r ON r.round_id=t.round_id WHERE t.target_id=?");
+    $tr->execute([$tid]);
+    $yr = $tr->fetchColumn();
+    if ($yr === false) jerr('找不到對象');
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) jerr('請選擇檔案');
+    if ($_FILES['file']['size'] > 20*1024*1024) jerr('單檔上限 20MB');
+    $orig = (string)$_FILES['file']['name'];
+    $ext = pathinfo($orig, PATHINFO_EXTENSION);
+    $fn = 'va' . $tid . '_' . date('YmdHis') . '_' . substr(md5(uniqid('', true)), 0, 8) . ($ext !== '' ? '.' . preg_replace('/[^A-Za-z0-9]/','',$ext) : '');
+    $dir = vendor_audit_attach_base($db) . DIRECTORY_SEPARATOR . (int)$yr;
+    if (!is_dir($dir)) @mkdir($dir, 0775, true);
+    if (!@move_uploaded_file($_FILES['file']['tmp_name'], $dir . DIRECTORY_SEPARATOR . $fn)) jerr('存檔失敗（請確認附件路徑設定與權限）', 500);
+    $db->prepare("INSERT INTO vendor_audit_attach (target_id, year, file_name, original_name, note, created_by, created_by_name)
+                  VALUES (?,?,?,?,?,?,?)")
+       ->execute([$tid, (int)$yr, $fn, $orig, trim((string)($_POST['note'] ?? '')) ?: null, $uid, $uname]);
+    jout(['attach_id'=>(int)$db->lastInsertId()]);
+}
+case 'attach_delete': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $aid = (int)($_POST['attach_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM vendor_audit_attach WHERE attach_id=?");
+    $st->execute([$aid]);
+    $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('找不到附件');
+    $p = vendor_audit_attach_path($db, $a);
+    if ($p) @unlink($p);
+    $db->prepare("DELETE FROM vendor_audit_attach WHERE attach_id=?")->execute([$aid]);
+    jout([]);
+}
+case 'attach_open': {
+    $aid = (int)($_GET['attach_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM vendor_audit_attach WHERE attach_id=?");
+    $st->execute([$aid]);
+    $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) { http_response_code(404); exit('not found'); }
+    $p = vendor_audit_attach_path($db, $a);
+    if (!$p) { http_response_code(404); exit('檔案不存在(NAS路徑可能已變更)'); }
+    $mime = function_exists('mime_content_type') ? (mime_content_type($p) ?: 'application/octet-stream') : 'application/octet-stream';
+    header_remove('Content-Type');
+    header('Content-Type: ' . $mime);
+    header('Content-Disposition: inline; filename="' . rawurlencode((string)$a['original_name']) . '"');
+    header('Content-Length: ' . filesize($p));
+    readfile($p);
+    exit;
 }
 
 /* 登錄/修正稽核評鑑表單（15項自評/稽核分→伺服器端算合格率判定） */
@@ -349,7 +458,14 @@ case 'set_managed': {
 case 'save_cycle': {
     if (!$perms['canAdmin']) jerr('無設定權限', 403);
     vendor_audit_set_cycle($db, (int)($_POST['cycle_months'] ?? 6));
-    jout(['cycle_months'=>vendor_audit_cycle_months($db)]);
+    if (array_key_exists('attach_base', $_POST)) {
+        $ab = trim((string)$_POST['attach_base']);
+        $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('vendor_audit_attach_base', ?)
+                            ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+        $up->execute([$ab]);
+    }
+    jout(['cycle_months'=>vendor_audit_cycle_months($db),
+          'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', '')]);
 }
 
 /* 某廠商跨期稽核歷史 */

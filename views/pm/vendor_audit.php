@@ -111,6 +111,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .af-summary td, .af-summary th { padding:3px 6px; text-align:center; border-bottom:1px solid #F0E7D5; }
         .af-summary .af-total td { font-weight:bold; background:#FDF3E0; }
         .af-judge-pass { color:#8A5A2B; font-weight:bold; } .af-judge-fail { color:#DD5138; font-weight:bold; }
+        .af-attach { border:1px dashed #E8D5B5; border-radius:6px; background:#FDF8EF; padding:8px 10px; margin-top:8px; }
+        button.b-att2 { height:28px; font-size:12px; border:1px solid #d98a33; background:#F0A24B; color:#fff; border-radius:4px; cursor:pointer; padding:0 10px; white-space:nowrap; }
+        button.b-att2:hover { background:#d98a33; }
+        #audPeople label { margin:0; font-weight:normal; cursor:pointer; white-space:nowrap; }
         /* picker */
         .pk-filter { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; margin-bottom:8px; }
         .pk-filter label { margin:0; font-size:12px; color:#5b3a1e; }
@@ -178,6 +182,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <label>期別</label>
             <select id="halfSel"><option value="1">上半年(1-6月)</option><option value="2">下半年(7-12月)</option></select>
             <button class="btn-warm" id="btnPick" style="display:none;"><i class="fa fa-plus"></i> 加入稽核對象</button>
+            <button id="btnAuditor" style="display:none;"><i class="fa fa-user-circle-o"></i> 稽核員設定</button>
             <button id="btnCycle" style="display:none;"><i class="fa fa-refresh"></i> 週期設定</button>
             <button id="btnBlank"><i class="fa fa-file-o"></i> 列印空白表單</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
@@ -291,10 +296,20 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>稽核狀況</label><select id="recMode">
                 <option value="first">首次稽核</option><option value="again">次稽核</option><option value="self">自我評量</option>
             </select></div>
-            <div><label>稽核員</label><input type="text" id="recAuditor" maxlength="50"></div>
-            <div><label>供應商代表</label><input type="text" id="recRep" maxlength="50"></div>
+            <div><label>稽核員 <span id="recScopeHint" style="font-size:11px;color:#b5762a;"></span></label>
+                <select id="recAuditor"><option value="">—</option></select></div>
             <div><label>自評人員</label><input type="text" id="recSelfEval" maxlength="50"></div>
-            <div><label>報告編號</label><input type="text" id="recReport" maxlength="50"></div>
+            <div><label>報告編號 <span style="font-size:11px;color:#8a6d45;">(稽核報告文件編號,選填)</span></label><input type="text" id="recReport" maxlength="50"></div>
+        </div>
+        <div class="af-attach" id="afAttachBox">
+            <div style="font-weight:bold;color:#5b3a1e;margin:10px 0 4px;"><i class="fa fa-paperclip"></i> 佐證附件（供應商自評表等）</div>
+            <div id="afAttachList" style="font-size:12px;"></div>
+            <div id="afAttachUp" style="margin-top:5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                <input type="file" id="afAttachFile" style="font-size:12px;">
+                <input type="text" id="afAttachNote" maxlength="200" placeholder="附件說明(選填)" style="width:200px;">
+                <button type="button" class="b-att2" onclick="uploadAttach()"><i class="fa fa-upload"></i> 上傳</button>
+                <span style="font-size:11px;color:#8a6d45;">單檔上限 20MB</span>
+            </div>
         </div>
         <div style="font-size:11px;color:#8a6d45;margin:6px 0;">
             每項自評/稽核各評 0~7 分（0=最差、7=最佳）；綜合合格率＝自評率×0.3＋稽核率×0.7，<b>≥75% 判合格</b>。
@@ -327,12 +342,40 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-body">
         <label>稽核週期（月）—— 全公司共用，作為「多久辦一期」的參考與提醒</label>
         <input type="number" id="cycVal" step="1" min="1" style="width:120px;">
-        <div style="font-size:12px;color:#8a6d45;margin-top:8px;">例：6＝每半年一期。此值僅供提醒，不會自動改變各期對象。</div>
+        <div style="font-size:12px;color:#8a6d45;margin:4px 0 12px;">例：6＝每半年一期。此值僅供提醒，不會自動改變各期對象。</div>
+        <label>佐證附件儲存路徑（base）—— 供應商自評等附件的實體存放資料夾</label>
+        <input type="text" id="cycAttachBase" maxlength="255" placeholder="留空＝預設 uploads/vendor_audit_attach；可填 NAS 路徑如 \\NAS\品保\供應商稽核附件">
+        <div style="font-size:12px;color:#8a6d45;margin-top:6px;">DB 只存檔名，完整路徑於讀取當下用此設定＋年度即時組出；換 NAS 只需改這裡（既有檔案需一併搬移）。</div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('cycMask')">取消</button>
         <button class="b-ok" onclick="submitCycle()">儲存</button>
     </div>
+</div></div>
+
+<!-- 稽核員資格設定 modal -->
+<div class="va-mask" id="audMask"><div class="va-modal wide">
+    <div class="m-head"><span>稽核員資格設定</span><span class="m-close" onclick="closeMask('audMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">
+            設定管理供應商的部門與稽核員。<b>外包加工</b>與<b>採購</b>供應商的管理部門通常不同，請分別指定；「通用」表示兩者皆可稽核。
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;border:1px dashed #E8D5B5;border-radius:6px;padding:8px;margin-bottom:8px;">
+            <label style="margin:0;font-size:12px;">管理範圍</label>
+            <select id="audScope" style="height:28px;border:1px solid #D8BE93;border-radius:4px;">
+                <option value="outsource">外包加工</option><option value="purchase">採購</option><option value="all">通用</option>
+            </select>
+            <label style="margin:0;font-size:12px;">部門</label>
+            <select id="audDept" style="height:28px;border:1px solid #D8BE93;border-radius:4px;min-width:120px;"><option value="">選部門…</option></select>
+            <button type="button" class="b-att2" onclick="audAddChecked()"><i class="fa fa-user-plus"></i> 加入勾選為稽核員</button>
+            <label style="margin:0;font-size:12px;"><input type="checkbox" id="audAll"> 全選</label>
+        </div>
+        <div id="audPeople" style="display:flex;flex-wrap:wrap;gap:4px 14px;max-height:120px;overflow-y:auto;border:1px solid #EADFC8;border-radius:6px;padding:6px 8px;margin-bottom:10px;font-size:12px;color:#5b3a1e;"><span style="color:#b0a390;">選部門載入人員</span></div>
+        <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;">目前稽核員</div>
+        <div class="va-table-wrap"><table class="va-table" style="font-size:12px;"><thead><tr><th>管理範圍</th><th>部門</th><th>姓名</th><th></th></tr></thead>
+            <tbody id="audList"><tr><td colspan="4" style="padding:12px;color:#8a6d45;">尚未設定</td></tr></tbody></table></div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('audMask')">關閉</button></div>
 </div></div>
 
 <!-- 定期評核門檻設定 modal -->
@@ -419,7 +462,7 @@ function loadMeta(cb){
         $('#pkMonth').html(mo).val(m.cur_month);
         $('#recPlanMonth').html(mo);
         if (m.perms.canEdit) $('#btnPick').show();
-        if (m.perms.canAdmin){ $('#btnCycle').show(); $('#pkManageGrp').show(); $('#evSet').show(); }
+        if (m.perms.canAdmin){ $('#btnCycle').show(); $('#btnAuditor').show(); $('#pkManageGrp').show(); $('#evSet').show(); }
         var $ey = $('#evYear').empty();
         for (var yy=m.cur_year+1; yy>=m.cur_year-4; yy--) $ey.append('<option value="'+yy+'">'+yy+'</option>');
         $ey.val(m.cur_year);
@@ -568,12 +611,60 @@ function openRec(tid){
         $('#recPlanMonth').val(t.plan_month||'');
         $('#recDate').val(fmtDate(t.audit_date)||META.today);
         $('#recMode').val(t.audit_mode||'first');
-        $('#recAuditor').val(t.auditor||''); $('#recRep').val(t.supplier_rep||'');
+        // 稽核員下拉：只列該供應商 scope(外包加工/採購)＋通用 的有資格者
+        var $au = $('#recAuditor').html('<option value="">—</option>');
+        (res.auditors||[]).forEach(function(a){
+            $au.append('<option value="'+esc(a.user_name)+'">'+esc(a.user_name)+'（'+esc(a.dept_name||'')+'／'+scopeLabel(a.scope)+'）</option>');
+        });
+        // 若舊資料的稽核員不在名單內，補一個 option 以免存檔遺失
+        if (t.auditor && $au.find('option[value="'+t.auditor.replace(/"/g,'')+'"]').length===0)
+            $au.append('<option value="'+esc(t.auditor)+'">'+esc(t.auditor)+'（原紀錄）</option>');
+        $au.val(t.auditor||'');
+        $('#recScopeHint').text('本供應商屬「'+(t.scope_label||'')+'」'+((res.auditors||[]).length?'':'—尚未設定稽核員，請先按工具列「稽核員設定」'));
         $('#recSelfEval').val(t.self_evaluator||''); $('#recReport').val(t.report_no||'');
         $('#recConclusion').val(t.conclusion||''); $('#recNote').val(t.note||'');
+        renderAttach(t.target_id, res.attaches||[]);
         renderForm(t.scores||{});
         openMask('recMask');
     });
+}
+function scopeLabel(s){ return {outsource:'外包加工',purchase:'採購',all:'通用'}[s]||s; }
+/* ---------- 佐證附件 ---------- */
+function renderAttach(tid, list){
+    $('#afAttachBox').data('tid', tid);
+    var h='';
+    (list||[]).forEach(function(a){
+        h += '<div style="display:flex;gap:8px;align-items:center;border-bottom:1px dashed #EADFC8;padding:3px 0;">';
+        h += a.exists ? '<a href="'+API+'?action=attach_open&attach_id='+a.attach_id+'" target="_blank" style="color:#b5762a;flex:1;overflow:hidden;text-overflow:ellipsis;">📄 '+esc(a.original_name||'')+'</a>'
+                      : '<span style="color:#c9bda9;text-decoration:line-through;flex:1;">📄 '+esc(a.original_name||'')+'(檔案不存在)</span>';
+        h += '<span style="color:#8a6d45;font-size:11px;">'+esc(a.note||'')+'　'+esc(a.uploaded_by||'')+'</span>';
+        if (PERMS.canEdit) h += '<span class="af-del" style="color:#DD5138;cursor:pointer;" onclick="delAttach('+a.attach_id+')"><i class="fa fa-trash"></i></span>';
+        h += '</div>';
+    });
+    $('#afAttachList').html(h||'<span style="color:#8a6d45;">尚無附件</span>');
+    $('#afAttachUp').toggle(!!PERMS.canEdit);
+}
+function uploadAttach(){
+    var tid=$('#afAttachBox').data('tid'), f=document.getElementById('afAttachFile');
+    if(!f.files.length){ alert('請選擇檔案'); return; }
+    var fd=new FormData();
+    fd.append('action','attach_upload'); fd.append('target_id',tid);
+    fd.append('note',$('#afAttachNote').val()); fd.append('file',f.files[0]);
+    NProgress.start();
+    $.ajax({url:API,method:'POST',data:fd,processData:false,contentType:false,dataType:'json'})
+     .done(function(res){ NProgress.done(); if(!res.ok){alert(res.error||'上傳失敗');return;}
+         f.value=''; $('#afAttachNote').val(''); reloadAttach(tid); })
+     .fail(function(x){ NProgress.done(); alert('上傳失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function delAttach(aid){
+    if(!confirm('刪除此附件？')) return;
+    $.post(API,{action:'attach_delete',attach_id:aid},function(res){
+        if(!res.ok){alert(res.error||'刪除失敗');return;}
+        reloadAttach($('#afAttachBox').data('tid'));
+    },'json');
+}
+function reloadAttach(tid){
+    $.getJSON(API,{action:'get_form',target_id:tid},function(res){ if(res.ok) renderAttach(tid,res.target?res.attaches:[]); });
 }
 function renderForm(scores){
     var html='';
@@ -624,7 +715,7 @@ function submitRec(){
     if(bad){ alert('有 '+bad+' 個分數超出範圍或非整數（限 0~'+META.item_max+'），已標紅，請修正後再儲存'); return; }
     var scores=collectScores();
     $.post(API, {action:'record_target', target_id:recTid, audit_date:$('#recDate').val(), plan_month:$('#recPlanMonth').val(),
-        audit_mode:$('#recMode').val(), auditor:$('#recAuditor').val(), supplier_rep:$('#recRep').val(),
+        audit_mode:$('#recMode').val(), auditor:$('#recAuditor').val(),
         self_evaluator:$('#recSelfEval').val(), report_no:$('#recReport').val(),
         conclusion:$('#recConclusion').val(), note:$('#recNote').val(), scores:JSON.stringify(scores)},
     function(res){
@@ -641,11 +732,11 @@ function removeTarget(tid){
 }
 
 /* ---------- 週期設定 ---------- */
-$('#btnCycle').on('click', function(){ $('#cycVal').val(META.cycle_months); openMask('cycMask'); });
+$('#btnCycle').on('click', function(){ $('#cycVal').val(META.cycle_months); $('#cycAttachBase').val(META.attach_base||''); openMask('cycMask'); });
 function submitCycle(){
-    $.post(API, {action:'save_cycle', cycle_months:$('#cycVal').val()}, function(res){
+    $.post(API, {action:'save_cycle', cycle_months:$('#cycVal').val(), attach_base:$('#cycAttachBase').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        META.cycle_months = res.cycle_months; closeMask('cycMask'); loadRound();
+        META.cycle_months = res.cycle_months; META.attach_base = res.attach_base; closeMask('cycMask'); loadRound();
     }, 'json');
 }
 
@@ -813,10 +904,72 @@ $('#evCsv').on('click', function(){
     a.download='供應商定期評核_'+esc(EVAL.maker_name)+'_'+EVAL.year+'.csv'; a.click();
 });
 
+/* ---------- 稽核員資格設定 ---------- */
+$('#btnAuditor').on('click', function(){ loadAuditorMgr(); openMask('audMask'); });
+function loadAuditorMgr(){
+    $.getJSON(API, {action:'auditors_all'}, function(res){
+        if(!res.ok){ alert(res.error||'載入失敗'); return; }
+        var $d=$('#audDept').html('<option value="">選部門…</option>');
+        res.departments.forEach(function(d){ $d.append('<option value="'+d.id+'" data-name="'+esc(d.name)+'">'+esc(d.name)+'</option>'); });
+        $('#audPeople').html('<span style="color:#b0a390;">選部門載入人員</span>');
+        var h='';
+        (res.auditors||[]).forEach(function(a){
+            var left = (+a.has_left===1);
+            h+='<tr'+(left?' style="background:#efe7d8;color:#b0a390;"':'')+'><td>'+scopeLabel(a.scope)+'</td><td>'+esc(a.dept_name||'')+'</td>'
+              +'<td>'+esc(a.user_name||'')+(left?' <span style="color:#DD5138;">（已離職）</span>':'')+'</td>'
+              +'<td><span class="af-del" style="color:#DD5138;cursor:pointer;" onclick="removeAuditor('+a.auditor_id+')"><i class="fa fa-trash"></i></span></td></tr>';
+        });
+        $('#audList').html(h||'<tr><td colspan="4" style="padding:12px;color:#8a6d45;">尚未設定</td></tr>');
+    });
+}
+$('#audDept').on('change', function(){
+    var did=$(this).val(); var $b=$('#audPeople');
+    if(!did){ $b.html('<span style="color:#b0a390;">選部門載入人員</span>'); return; }
+    $b.html('<span style="color:#b0a390;">載入中…</span>');
+    $.getJSON(API,{action:'people',dept_id:did},function(res){
+        if(!res.ok){ $b.html('載入失敗'); return; }
+        var h=''; res.people.forEach(function(u){ h+='<label><input type="checkbox" class="aud-ck" value="'+u.id+'" data-name="'+esc(u.user_cname)+'"> '+esc(u.user_cname)+'</label>'; });
+        $b.html(h||'<span style="color:#b0a390;">此部門無人員</span>'); $('#audAll').prop('checked',false);
+    });
+});
+$('#audAll').on('change', function(){ $('#audPeople .aud-ck').prop('checked', this.checked); });
+function audAddChecked(){
+    var ids=$('#audPeople .aud-ck:checked').map(function(){return this.value;}).get();
+    if(!ids.length){ alert('請勾選人員'); return; }
+    $.post(API,{action:'add_auditors', user_ids:ids.join(','), scope:$('#audScope').val(),
+        dept_id:$('#audDept').val(), dept_name:$('#audDept option:selected').data('name')||''}, function(res){
+        if(!res.ok){ alert(res.error||'新增失敗'); return; }
+        loadAuditorMgr();
+    },'json').fail(function(x){ alert('新增失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function removeAuditor(aid){
+    if(!confirm('移除此稽核員資格？')) return;
+    $.post(API,{action:'remove_auditor',auditor_id:aid},function(res){ if(!res.ok){alert(res.error||'失敗');return;} loadAuditorMgr(); },'json');
+}
+
+/* ---------- 欄位互動（雙擊清空／Enter 下一欄／評分格上下鍵移動） ---------- */
+$(document).on('dblclick', '.va-modal input[type=text], .va-modal input[type=number], .va-modal input[type=date]', function(){ this.value=''; $(this).trigger('input'); });
+$(document).on('focus', '.va-modal input[type=text], .va-modal input[type=number]', function(){ this.select && this.select(); });
+$(document).on('keydown', '#recMask input, #recMask select', function(e){
+    if (e.key==='Enter'){
+        e.preventDefault();
+        var $f=$('#recMask').find('input,select,textarea').filter(':visible:not([disabled])');
+        var i=$f.index(this); if(i>=0 && i<$f.length-1){ var $n=$f.eq(i+1); $n.focus(); if($n.is('input')&&$n[0].select)$n[0].select(); }
+    }
+});
+// 評分格：上下鍵移動到相鄰列同欄（自評↕自評、稽核↕稽核）
+$(document).on('keydown', '#afBody input.af-score', function(e){
+    if (e.key!=='ArrowUp' && e.key!=='ArrowDown') return;
+    e.preventDefault();
+    var cls = $(this).hasClass('af-self') ? 'af-self' : 'af-audit';
+    var $col = $('#afBody input.'+cls);
+    var i = $col.index(this);
+    var j = e.key==='ArrowDown' ? i+1 : i-1;
+    if (j>=0 && j<$col.length){ var el=$col.eq(j); el.focus(); if(el[0].select) el[0].select(); }
+});
+
 $('#btnRoleHelp').on('click', function(){ openMask('helpMask'); });
 $('.va-mask').on('click', function(e){ if (e.target===this) this.style.display='none'; });
-$(document).on('focus', '.va-modal input[type=text], .va-modal input[type=number]', function(){ this.select(); });
-$(document).on('dblclick', '.va-modal input[type=text], .va-modal input[type=number]', function(){ this.value=''; });
 
 if (canView) loadMeta(function(){ loadRound(); });
 </script>
