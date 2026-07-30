@@ -64,8 +64,39 @@ switch ($action) {
 
 /* ---------- 基本資訊 ---------- */
 case 'meta': {
+    tool_calib_purge_temp_attach($db);          // 順路清除過期暫存附件
+    $cfg = tool_calib_attach_cfg($db);
     jout(['perms'=>$perms, 'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db),
-          'cur_ym'=>date('Y-m'), 'today'=>date('Y-m-d')]);
+          'cur_ym'=>date('Y-m'), 'today'=>date('Y-m-d'),
+          'attach'=>['types'=>$cfg['types'], 'ext'=>$cfg['ext'], 'maxmb'=>$cfg['maxmb'],
+                     'dir'=>$perms['canAdmin'] ? $cfg['dir'] : '',
+                     'ext_raw'=>$cfg['ext_raw'], 'types_raw'=>$cfg['types_raw']]]);
+}
+
+/* ---------- 校驗附件設定（管理員；路徑只存設定值，DB 附件列只存檔名） ---------- */
+case 'save_attach_settings': {
+    if (!$perms['canAdmin']) jerr('無附件設定權限', 403);
+    $dir   = trim((string)($_POST['dir'] ?? ''));
+    $ext   = trim((string)($_POST['ext'] ?? ''));
+    $maxmb = (int)($_POST['maxmb'] ?? 0);
+    $types = trim((string)($_POST['types'] ?? ''));
+    if ($dir === '') jerr('請填附件存放路徑');
+    if ($ext === '') jerr('請填允許的副檔名');
+    if ($maxmb <= 0 || $maxmb > 500) jerr('單檔上限請填 1～500（MB）');
+    if ($types === '') jerr('請填至少一種文件類別');
+    try {
+        $db->beginTransaction();
+        $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?)
+                            ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+        $st->execute(['tool_calib_attach_dir', $dir]);
+        $st->execute(['tool_calib_attach_ext', $ext]);
+        $st->execute(['tool_calib_attach_maxmb', (string)$maxmb]);
+        $st->execute(['tool_calib_attach_types', $types]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    $cfg = tool_calib_attach_cfg($db);
+    jout(['attach'=>['types'=>$cfg['types'], 'ext'=>$cfg['ext'], 'maxmb'=>$cfg['maxmb'], 'dir'=>$cfg['dir'],
+                     'ext_raw'=>$cfg['ext_raw'], 'types_raw'=>$cfg['types_raw']]]);
 }
 
 /* ---------- 儀器清單 + 當月統計 ---------- */
@@ -298,17 +329,210 @@ case 'edit_calib': {
     jout(['next_due'=>$nextDue]);
 }
 
+/* ---------- 批次校驗（一次登錄多支量具；外校/廠內批量校驗用） ----------
+ * 參數：calib_date, method, operator, cert_no, note
+ *       tools  = JSON [{tool_id, result}]（result 省略＝pass）
+ *       attach = JSON [{attach_id, category_id, doc_type, note, tool_ids:[...]}]（暫存附件轉正＋一對多對應）
+ */
+case 'create_batch': {
+    if (!$perms['canEdit']) jerr('無校驗登錄權限', 403);
+    $calibDate = trim((string)($_POST['calib_date'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $calibDate)) jerr('請選擇校驗完成日');
+    $method   = trim((string)($_POST['method'] ?? '')) ?: null;
+    $operator = trim((string)($_POST['operator'] ?? '')) ?: null;
+    $certNo   = trim((string)($_POST['cert_no'] ?? '')) ?: null;
+    $note     = trim((string)($_POST['note'] ?? '')) ?: null;
+    $tools    = json_decode((string)($_POST['tools'] ?? ''), true);
+    if (!is_array($tools) || !$tools) jerr('請至少選擇一支量具');
+    $attach   = json_decode((string)($_POST['attach'] ?? '[]'), true);
+    if (!is_array($attach)) $attach = [];
+
+    try {
+        $db->beginTransaction();
+        $db->prepare("INSERT INTO qc_tool_calib_batch (calib_date, method, operator, cert_no, note, tool_count, created_by, created_by_name)
+                      VALUES (?,?,?,?,?,0,?,?)")
+           ->execute([$calibDate, $method, $operator, $certNo, $note, $uid, $uname]);
+        $batchId = (int)$db->lastInsertId();
+
+        $insRec = $db->prepare("INSERT INTO qc_tool_calibration
+            (Tool_id, due_date, calib_date, result, method, operator, cert_no, next_due, note, batch_id, created_by, created_by_name)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+        $updTool = $db->prepare("UPDATE qc_tool SET calibration_due=?, calib_method=COALESCE(?, calib_method) WHERE Tool_id=?");
+        $getTool = $db->prepare("SELECT Tool_id, calibration_due, calib_cycle_months, calib_method FROM qc_tool WHERE Tool_id=?");
+
+        $done = 0; $skipped = [];
+        foreach ($tools as $it) {
+            $tid = (int)($it['tool_id'] ?? 0);
+            if (!$tid) continue;
+            $getTool->execute([$tid]);
+            $t = $getTool->fetch(PDO::FETCH_ASSOC);
+            if (!$t) { $skipped[] = $tid; continue; }
+            $result = in_array($it['result'] ?? '', ['pass','fail','pass_adjust'], true) ? $it['result'] : 'pass';
+            $mth = $method ?: ($t['calib_method'] ?: null);
+            $cycle = $t['calib_cycle_months'] !== null ? (int)$t['calib_cycle_months'] : 0;
+            $nextDue = $cycle > 0 ? tool_calib_add_months($calibDate, $cycle) : null;
+            $insRec->execute([$tid, $t['calibration_due'] ?: null, $calibDate, $result, $mth, $operator, $certNo,
+                              $nextDue, $note, $batchId, $uid, $uname]);
+            $updTool->execute([$nextDue, $mth, $tid]);   // 前滾下次應校驗日（與單筆登錄同邏輯）
+            $done++;
+        }
+        if (!$done) { $db->rollBack(); jerr('沒有成功登錄的量具（請確認所選量具仍存在）'); }
+        $db->prepare("UPDATE qc_tool_calib_batch SET tool_count=? WHERE batch_id=?")->execute([$done, $batchId]);
+
+        // 暫存附件轉正 + 重建一對多對應（限本人上傳的 temp，或本批已存在的 active）
+        $upAtt = $db->prepare("UPDATE qc_tool_calib_attach
+                               SET batch_id=?, status='active', expire_at=NULL, category_id=?, doc_type=?, note=?
+                               WHERE attach_id=? AND (status='active' OR (status='temp' AND user_id=?))");
+        $delMap = $db->prepare("DELETE FROM qc_tool_calib_attach_map WHERE attach_id=?");
+        $insMap = $db->prepare("INSERT IGNORE INTO qc_tool_calib_attach_map (attach_id, Tool_id) VALUES (?,?)");
+        $chkTool = $db->prepare("SELECT 1 FROM qc_tool WHERE Tool_id=? LIMIT 1");
+        foreach ($attach as $a) {
+            $aid = (int)($a['attach_id'] ?? 0);
+            if (!$aid) continue;
+            $cat = (int)($a['category_id'] ?? 0) ?: null;
+            $dtp = trim((string)($a['doc_type'] ?? '')) ?: null;
+            $ant = trim((string)($a['note'] ?? '')) ?: null;
+            $upAtt->execute([$batchId, $cat, $dtp, $ant, $aid, $uid]);
+            $delMap->execute([$aid]);
+            foreach ((array)($a['tool_ids'] ?? []) as $mtid) {
+                $mtid = (int)$mtid;
+                if (!$mtid) continue;
+                $chkTool->execute([$mtid]);
+                if ($chkTool->fetchColumn()) $insMap->execute([$aid, $mtid]);
+            }
+        }
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('批次登錄失敗：'.$e->getMessage(), 500); }
+    jout(['batch_id'=>$batchId, 'done'=>$done, 'skipped'=>$skipped]);
+}
+
+/* ---------- 批次校驗紀錄列表／明細 ---------- */
+case 'batch_list': {
+    $rows = $db->query("SELECT b.*,
+                               (SELECT COUNT(*) FROM qc_tool_calib_attach a WHERE a.batch_id=b.batch_id AND a.status='active') AS attach_count
+                        FROM qc_tool_calib_batch b ORDER BY b.calib_date DESC, b.batch_id DESC LIMIT 200")
+               ->fetchAll(PDO::FETCH_ASSOC);
+    jout(['list'=>$rows]);
+}
+case 'batch_detail': {
+    $bid = (int)($_GET['batch_id'] ?? 0);
+    if (!$bid) jerr('缺少批次 id');
+    $st = $db->prepare("SELECT * FROM qc_tool_calib_batch WHERE batch_id=?");
+    $st->execute([$bid]);
+    $b = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$b) jerr('找不到批次');
+    $st = $db->prepare("SELECT c.calib_id, c.Tool_id, c.due_date, c.calib_date, c.result, t.Tool_No, l.QC_Tool AS category_name
+                        FROM qc_tool_calibration c
+                        JOIN qc_tool t ON t.Tool_id=c.Tool_id
+                        LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=t.QC_Tool_List_id
+                        WHERE c.batch_id=? ORDER BY t.Tool_No");
+    $st->execute([$bid]);
+    jout(['batch'=>$b, 'tools'=>$st->fetchAll(PDO::FETCH_ASSOC),
+          'attaches'=>tool_calib_attach_list($db, $bid), 'can_admin'=>$perms['canAdmin']]);
+}
+
+/* ---------- 附件：上傳（batch_id=0＝新增批次中，先存 temp 兩天） ---------- */
+case 'upload_attach': {
+    if (!$perms['canEdit']) jerr('無附件上傳權限', 403);
+    $batchId = (int)($_POST['batch_id'] ?? 0);
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) jerr('上傳失敗（請確認檔案大小與 PHP 上傳限制）');
+    $cfg = tool_calib_attach_cfg($db);
+    $orig = basename((string)$_FILES['file']['name']);
+    $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+    if ($ext === '' || !in_array($ext, $cfg['ext'], true)) jerr('不允許的檔案格式（可用：'.implode('、', $cfg['ext']).'）');
+    if ((int)$_FILES['file']['size'] > $cfg['maxmb'] * 1024 * 1024) jerr('檔案超過上限 '.$cfg['maxmb'].' MB');
+    if (!is_dir($cfg['dir']) && !@mkdir($cfg['dir'], 0777, true)) jerr('無法建立附件目錄，請確認附件設定的路徑：'.$cfg['dir'], 500);
+    $fname = date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ext;   // DB 只存這個檔名（鐵律5）
+    if (!move_uploaded_file($_FILES['file']['tmp_name'], $cfg['dir'] . $fname)) jerr('檔案寫入失敗：'.$cfg['dir'], 500);
+    $cat = (int)($_POST['category_id'] ?? 0) ?: null;
+    $dtp = trim((string)($_POST['doc_type'] ?? '')) ?: null;
+    $ant = trim((string)($_POST['note'] ?? '')) ?: null;
+    try {
+        if ($batchId > 0) {
+            $db->prepare("INSERT INTO qc_tool_calib_attach (batch_id, category_id, doc_type, file_name, original_name, file_size, note, user_id, status)
+                          VALUES (?,?,?,?,?,?,?,?,'active')")
+               ->execute([$batchId, $cat, $dtp, $fname, $orig, (int)$_FILES['file']['size'], $ant, $uid]);
+        } else {
+            $db->prepare("INSERT INTO qc_tool_calib_attach (batch_id, category_id, doc_type, file_name, original_name, file_size, note, user_id, status, expire_at)
+                          VALUES (0,?,?,?,?,?,?,?,'temp', DATE_ADD(NOW(), INTERVAL 2 DAY))")
+               ->execute([$cat, $dtp, $fname, $orig, (int)$_FILES['file']['size'], $ant, $uid]);
+        }
+    } catch (Throwable $e) {
+        if (is_file($cfg['dir'].$fname)) @unlink($cfg['dir'].$fname);
+        jerr('附件登錄失敗：'.$e->getMessage(), 500);
+    }
+    jout(['attach_id'=>(int)$db->lastInsertId(), 'original_name'=>$orig,
+          'file_size'=>(int)$_FILES['file']['size'], 'doc_type'=>$dtp]);
+}
+
+/* ---------- 附件：清單（依批次或依量具） ---------- */
+case 'list_attach': {
+    $bid = (int)($_GET['batch_id'] ?? 0);
+    $tid = (int)($_GET['tool_id'] ?? 0);
+    jout(['list'=>tool_calib_attach_list($db, $bid, $tid), 'can_admin'=>$perms['canAdmin']]);
+}
+
+/* ---------- 附件：下載（實體路徑一律用設定值＋檔名現場組） ---------- */
+case 'download_attach': {
+    $aid = (int)($_GET['attach_id'] ?? 0);
+    $st = $db->prepare("SELECT file_name, original_name, status, user_id FROM qc_tool_calib_attach WHERE attach_id=?");
+    $st->execute([$aid]);
+    $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('找不到附件');
+    if ($a['status'] === 'temp' && (int)$a['user_id'] !== $uid && !$perms['canAdmin']) jerr('無權限下載暫存附件', 403);
+    $path = tool_calib_attach_file($db, $a['file_name']);
+    if (!is_file($path)) jerr('檔案不存在（可能附件路徑設定已變更或檔案未搬移）：'.$path, 404);
+    $name = $a['original_name'] ?: $a['file_name'];
+    header_remove('Content-Type');
+    header('Content-Type: application/octet-stream');
+    header('Content-Length: ' . filesize($path));
+    header('Content-Disposition: attachment; filename="' . rawurlencode($name) . '"; filename*=UTF-8\'\'' . rawurlencode($name));
+    header('X-Content-Type-Options: nosniff');
+    readfile($path);
+    exit;
+}
+
+/* ---------- 附件：刪除（temp 限上傳者本人；active 限管理員） ---------- */
+case 'delete_attach': {
+    $aid = (int)($_POST['attach_id'] ?? 0);
+    $st = $db->prepare("SELECT file_name, status, user_id FROM qc_tool_calib_attach WHERE attach_id=?");
+    $st->execute([$aid]);
+    $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('找不到附件');
+    if ($a['status'] === 'temp') {
+        if ((int)$a['user_id'] !== $uid && !$perms['canAdmin']) jerr('暫存附件僅上傳者本人可刪除', 403);
+    } elseif (!$perms['canAdmin']) {
+        jerr('刪除正式附件需校驗管理員權限', 403);
+    }
+    $path = tool_calib_attach_file($db, $a['file_name']);
+    try {
+        $db->beginTransaction();
+        $db->prepare("DELETE FROM qc_tool_calib_attach_map WHERE attach_id=?")->execute([$aid]);
+        $db->prepare("DELETE FROM qc_tool_calib_attach WHERE attach_id=?")->execute([$aid]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：'.$e->getMessage(), 500); }
+    if (is_file($path)) @unlink($path);
+    jout([]);
+}
+
 /* ---------- 校驗歷史 ---------- */
 case 'history': {
     $tid = (int)($_GET['tool_id'] ?? 0);
     $t = tc_get_tool($db, $tid);
     if (!$t) jerr('找不到量具');
     $st = $db->prepare("SELECT calib_id, due_date, calib_date, result, method, operator, cert_no, next_due, note,
-                               created_by_name, created_at
+                               batch_id, created_by_name, created_at
                         FROM qc_tool_calibration WHERE Tool_id=? ORDER BY calib_date DESC, calib_id DESC");
     $st->execute([$tid]);
+    $list = $st->fetchAll(PDO::FETCH_ASSOC);
+    // 該量具的附件（一份報告可對應多支量具）→ 依批次掛到對應紀錄
+    $byBatch = [];
+    foreach (tool_calib_attach_list($db, 0, $tid) as $a) { $byBatch[(int)$a['batch_id']][] = $a; }
+    foreach ($list as &$r) {
+        $r['attaches'] = $byBatch[(int)($r['batch_id'] ?? 0)] ?? [];
+    }
     jout(['tool'=>['Tool_No'=>$t['Tool_No'],'category_name'=>$t['category_name']],
-          'list'=>$st->fetchAll(PDO::FETCH_ASSOC), 'can_delete'=>$perms['canAdmin']]);
+          'list'=>$list, 'can_delete'=>$perms['canAdmin']]);
 }
 
 /* ---------- 刪除校驗紀錄（管理員；修正誤登） ---------- */
