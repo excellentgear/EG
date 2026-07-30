@@ -94,6 +94,26 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .tc-modal { background:#fff; border-radius:8px; max-width:560px; margin:52px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
             max-height:84vh; display:flex; flex-direction:column; }
         .tc-modal.wide { max-width:760px; }
+        .tc-modal.xwide { max-width:1080px; }
+        /* 批次校驗 */
+        .bt-sec { border:1px solid #EADFC8; border-radius:6px; padding:8px 10px; margin-bottom:8px; }
+        .bt-sec > .h { font-size:13px; font-weight:bold; color:#5b3a1e; margin-bottom:6px; }
+        .bt-tools { max-height:34vh; overflow-y:auto; border:1px solid #EADFC8; border-radius:4px; }
+        table.bt-tbl { width:100%; border-collapse:collapse; font-size:12px; }
+        table.bt-tbl th, table.bt-tbl td { border:1px solid #EADFC8; padding:3px 6px; text-align:center; white-space:nowrap; }
+        table.bt-tbl thead th { position:sticky; top:0; background:#F7E0BD; color:#5b3a1e; z-index:2; }
+        table.bt-tbl tbody tr.sel { background:#FFF3DF; }
+        table.bt-tbl td select { font-size:12px; border:1px solid #D8BE93; border-radius:3px; }
+        .bt-quick button { height:24px; font-size:12px; padding:0 8px; border:1px solid #D8BE93; border-radius:3px;
+            background:#fff; color:#5b3a1e; cursor:pointer; margin-right:4px; }
+        .bt-quick button:hover { background:#F7E0BD; }
+        .att-row { border:1px dashed #D8BE93; border-radius:4px; padding:5px 8px; margin-bottom:5px; font-size:12px; background:#FDF8EF; }
+        .att-row .fn { font-weight:bold; color:#5b3a1e; }
+        .att-row .op { color:#b5762a; cursor:pointer; margin-left:8px; }
+        .att-row .op.del { color:#DD5138; }
+        .att-map { margin-top:5px; padding:5px; background:#fff; border:1px solid #EADFC8; border-radius:4px;
+            max-height:150px; overflow-y:auto; display:none; }
+        .att-map label { display:inline-block; width:32%; font-weight:normal; font-size:12px; margin:0; }
         .tc-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
             display:flex; justify-content:space-between; }
         .tc-modal .m-head .m-close { cursor:pointer; color:#b5762a; }
@@ -160,8 +180,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <option value="unmanaged">未納管</option>
             </select>
             <input type="text" id="kwSel" placeholder="搜尋編號" style="width:120px;">
+            <button class="btn-warm" id="btnBatch" style="display:none;"><i class="fa fa-check-square-o"></i> 批次校驗</button>
+            <button id="btnBatchList"><i class="fa fa-list-alt"></i> 批次紀錄</button>
             <button class="btn-warm" id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增儀器</button>
             <button id="btnCatSet" style="display:none;"><i class="fa fa-sliders"></i> 類別設定</button>
+            <button id="btnAttSet" style="display:none;"><i class="fa fa-folder-open-o"></i> 附件設定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
             <span class="tc-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
@@ -262,6 +285,93 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     </div>
 </div></div>
 
+<!-- 批次校驗 modal（外校/廠內批量校驗：一次多支量具＋共用報告附件） -->
+<div class="tc-mask" id="batMask"><div class="tc-modal xwide">
+    <div class="m-head"><span>批次校驗登錄</span><span class="m-close" onclick="closeBatch()">✕</span></div>
+    <div class="m-body">
+        <div class="bt-sec">
+            <div class="h">1. 本批共用資訊</div>
+            <div class="grid2" style="grid-template-columns:repeat(3,1fr);">
+                <div><label>校驗完成日 *</label><input type="date" id="btDate"></div>
+                <div><label>校驗方式</label><select id="btMethod">
+                    <option value="外校">外校</option><option value="內校">內校</option><option value="">—</option>
+                </select></div>
+                <div><label>校驗人員／單位（外校廠商）</label><input type="text" id="btOperator" maxlength="50"></div>
+                <div><label>憑證／報告編號</label><input type="text" id="btCert" maxlength="50"></div>
+                <div><label>判定結果（套用到全部）</label><select id="btResult">
+                    <option value="pass">合格</option><option value="pass_adjust">校正後合格</option><option value="fail">不合格</option>
+                </select></div>
+                <div><label>備註</label><input type="text" id="btNote" maxlength="200"></div>
+            </div>
+        </div>
+
+        <div class="bt-sec">
+            <div class="h">2. 選擇本批量具　<span style="font-weight:normal;color:#8a6d45;font-size:12px;" id="btSelInfo"></span></div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px;">
+                <label style="margin:0;font-size:13px;">類別</label>
+                <select id="btCat" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;"></select>
+                <input type="text" id="btKw" placeholder="搜尋編號" style="height:26px;font-size:12px;width:110px;border:1px solid #D8BE93;border-radius:4px;padding:0 6px;">
+                <span class="bt-quick">
+                    <button type="button" onclick="btPick('all')">全選</button>
+                    <button type="button" onclick="btPick('none')">全不選</button>
+                    <button type="button" onclick="btPick('overdue')">只選逾期</button>
+                    <button type="button" onclick="btPick('due')">只選逾期＋30天內</button>
+                </span>
+            </div>
+            <div class="bt-tools">
+                <table class="bt-tbl" id="btTbl">
+                    <thead><tr><th style="width:34px;"><input type="checkbox" id="btCkAll"></th>
+                        <th>量具編號</th><th>類別</th><th>週期</th><th>下次應校驗日</th><th>狀態</th><th>本次結果</th></tr></thead>
+                    <tbody id="btBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="bt-sec">
+            <div class="h">3. 校驗報告／相關資料附件
+                <span style="font-weight:normal;color:#8a6d45;font-size:12px;">（一份檔案可對應多支量具編號；上傳後按「對應量具」勾選）</span></div>
+            <div style="margin-bottom:6px;">
+                <input type="file" id="btFile" multiple style="font-size:12px;">
+                <span id="btAttHint" style="font-size:11px;color:#8a6d45;"></span>
+            </div>
+            <div id="btAttList"></div>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeBatch()">取消</button>
+        <button class="b-ok" onclick="submitBatch()">登錄本批校驗</button>
+    </div>
+</div></div>
+
+<!-- 批次紀錄 modal -->
+<div class="tc-mask" id="batListMask"><div class="tc-modal xwide">
+    <div class="m-head"><span>批次校驗紀錄</span><span class="m-close" onclick="closeMask('batListMask')">✕</span></div>
+    <div class="m-body" id="batListBody" style="font-size:13px;color:#5b3a1e;"></div>
+</div></div>
+
+<!-- 校驗附件設定 modal（管理員） -->
+<div class="tc-mask" id="attSetMask"><div class="tc-modal">
+    <div class="m-head"><span>校驗附件設定</span><span class="m-close" onclick="closeMask('attSetMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;line-height:1.7;">
+            資料庫只存檔名，完整路徑一律用此處設定值即時組出——換 NAS 或搬資料夾時，
+            把資料夾內檔案原樣複製過去、改這裡的路徑即可，舊附件立即可讀（不需改資料）。
+        </div>
+        <label>附件存放路徑（建議 UNC，例 \\NAS\ERP\量測儀器校驗\）</label>
+        <input type="text" id="asDir" maxlength="255">
+        <label>允許的副檔名（逗號分隔）</label>
+        <input type="text" id="asExt" maxlength="255">
+        <label>單檔大小上限（MB）</label>
+        <input type="number" id="asMax" min="1" max="500" step="1">
+        <label>文件類別（逗號分隔，供上傳時挑選）</label>
+        <input type="text" id="asTypes" maxlength="255">
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('attSetMask')">取消</button>
+        <button class="b-ok" onclick="submitAttSet()">儲存</button>
+    </div>
+</div></div>
+
 <!-- 類別設定 modal（只設校驗屬性；類別本身的新增/更名/刪除在 線上檢驗－量具設定） -->
 <div class="tc-mask" id="catMask"><div class="tc-modal wide">
     <div class="m-head"><span>量具類別設定</span><span class="m-close" onclick="closeMask('catMask')">✕</span></div>
@@ -332,6 +442,7 @@ $(document).ready(function(){
 
 var API = '../../src/store/ToolCalib_API.php';
 var META = null, ROWS = [], PERMS = null, CATS = [], TABS_DEF = [];
+var ATT_CFG = {types:[], ext:[], maxmb:20, dir:'', ext_raw:'', types_raw:''};
 var curTab = '';   // 目前分頁：'' 全部 ｜ 類別id ｜ 'other' 其他（需校驗但未設為分頁）
 var canView = <?= $perms['canView'] ? 'true' : 'false' ?>;
 var RESULT_LABEL = {pass:'合格', pass_adjust:'校正後合格', fail:'不合格'};
@@ -349,8 +460,10 @@ function loadMeta(cb){
         META = m; PERMS = m.perms;
         $('#ymSel').val(m.cur_ym);
         TABS_DEF = m.tabs || [];
+        ATT_CFG = m.attach || ATT_CFG;
         setCats(m.categories);
-        if (m.perms.canAdmin) { $('#btnAdd').show(); $('#btnCatSet').show(); }
+        if (m.perms.canEdit)  { $('#btnBatch').show(); }
+        if (m.perms.canAdmin) { $('#btnAdd').show(); $('#btnCatSet').show(); $('#btnAttSet').show(); }
         if (cb) cb();
     });
 }
@@ -752,7 +865,7 @@ function openHis(tid){
         if (!res.list.length){ $('#hisBody').html('<div style="color:#8a6d45;padding:12px;">尚無校驗紀錄</div>'); openMask('hisMask'); return; }
         var canEdit = PERMS.canEdit, canDel = res.can_delete;
         var h = '<table class="hist"><thead><tr><th>應校驗到期日</th><th>校驗完成日</th><th>準時</th><th>結果</th>'
-              + '<th>方式</th><th>人員/單位</th><th>憑證編號</th><th>下次到期</th><th>登錄者</th>'
+              + '<th>方式</th><th>人員/單位</th><th>憑證編號</th><th>下次到期</th><th>附件</th><th>登錄者</th>'
               + ((canEdit||canDel)?'<th>操作</th>':'') + '</tr></thead><tbody>';
         res.list.forEach(function(a){
             var ontime = (a.due_date && a.calib_date) ? (fmtDate(a.calib_date)<=fmtDate(a.due_date)) : null;
@@ -765,6 +878,13 @@ function openHis(tid){
             h += '<td>'+esc(a.operator||'—')+'</td>';
             h += '<td>'+esc(a.cert_no||'—')+'</td>';
             h += '<td>'+(fmtDate(a.next_due)||'—')+'</td>';
+            // 批次校驗的共用報告：一份附件可對應多支量具，這裡只列對應到本支者
+            var att = (a.attaches||[]).map(function(x){
+                return '<a href="'+API+'?action=download_attach&attach_id='+x.attach_id+'" target="_blank" '
+                     + 'style="color:#b5762a;" title="'+esc(x.original_name||'')+'"><i class="fa fa-paperclip"></i>'
+                     + esc(x.doc_type||'附件')+'</a>';
+            }).join('　');
+            h += '<td>'+(att || '—')+'</td>';
             h += '<td>'+esc(a.created_by_name||'')+'</td>';
             if (canEdit || canDel){
                 h += '<td>';
@@ -785,6 +905,320 @@ function delCalib(cid){
         if (!res.ok){ alert(res.error||'刪除失敗'); return; }
         closeMask('hisMask'); loadList();
     }, 'json');
+}
+
+/* ================= 批次校驗（外校/廠內批量校驗：一次多支＋共用報告附件） ================= */
+var BT_SEL = {};    // {tool_id: result}
+var BT_ATT = [];    // [{attach_id, name, size, doc_type, note, category_id, toolIds:null|[ids]}]  toolIds=null → 對應本批全部
+function resOptions(sel){
+    return ['pass','pass_adjust','fail'].map(function(v){
+        return '<option value="'+v+'"'+(v===sel?' selected':'')+'>'+RESULT_LABEL[v]+'</option>';
+    }).join('');
+}
+function typeOptions(sel){
+    var list = (ATT_CFG.types||[]);
+    if (!list.length) list = ['校驗報告'];
+    return list.map(function(v){
+        return '<option value="'+esc(v)+'"'+(v===sel?' selected':'')+'>'+esc(v)+'</option>';
+    }).join('');
+}
+$('#btnBatch').on('click', openBatch);
+function openBatch(){
+    if (!ROWS.length){ alert('目前清單沒有量具可登錄'); return; }
+    BT_SEL = {}; BT_ATT = [];
+    $('#btDate').val(META.today); $('#btMethod').val('外校'); $('#btResult').val('pass');
+    $('#btOperator').val(''); $('#btCert').val(''); $('#btNote').val('');
+    $('#btFile').val(''); $('#btKw').val('');
+    $('#btAttHint').text('可用格式：' + (ATT_CFG.ext||[]).join('、') + '；單檔上限 ' + ATT_CFG.maxmb + ' MB');
+    // 類別下拉（含「目前分頁」快捷）
+    var cur = TABS.filter(function(t){ return t.key===curTab; })[0];
+    var h = '';
+    if (cur) h += '<option value="__tab__">目前分頁：'+esc(cur.name)+'</option>';
+    h += '<option value="">全部類別</option>';
+    var seen = [];
+    ROWS.forEach(function(r){
+        var id = String(r.QC_Tool_List_id);
+        if (seen.indexOf(id) >= 0) return;
+        seen.push(id);
+        var n = ROWS.filter(function(x){ return String(x.QC_Tool_List_id)===id; }).length;
+        h += '<option value="'+id+'">'+esc(r.category_name||id)+'（'+n+'）</option>';
+    });
+    $('#btCat').html(h);
+    renderBtTools(); renderBtAtt();
+    openMask('batMask');
+}
+function closeBatch(){
+    if (BT_ATT.length && !confirm('取消將刪除本次已上傳的 '+BT_ATT.length+' 份附件，確定取消？')) return;
+    var ids = BT_ATT.map(function(a){ return a.attach_id; });
+    BT_ATT = []; BT_SEL = {};
+    closeMask('batMask');
+    ids.forEach(function(id){ $.post(API, {action:'delete_attach', attach_id:id}, function(){}, 'json'); });
+}
+function btFilteredTools(){
+    var cat = $('#btCat').val(), kw = $.trim($('#btKw').val()).toLowerCase();
+    var cur = TABS.filter(function(t){ return t.key===curTab; })[0];
+    return ROWS.filter(function(r){
+        var cid = String(r.QC_Tool_List_id);
+        if (cat === '__tab__') { if (!cur || cur.catIds.indexOf(cid) < 0) return false; }
+        else if (cat && cid !== cat) return false;
+        if (kw && String(r.Tool_No).toLowerCase().indexOf(kw) < 0) return false;
+        return true;
+    });
+}
+function renderBtTools(){
+    var list = btFilteredTools(), def = $('#btResult').val();
+    var h = list.map(function(r){
+        var on = BT_SEL.hasOwnProperty(r.Tool_id);
+        return '<tr data-id="'+r.Tool_id+'"'+(on?' class="sel"':'')+'>'
+            + '<td><input type="checkbox" class="bt-ck"'+(on?' checked':'')+'></td>'
+            + '<td style="text-align:left;"><b>'+esc(r.Tool_No)+'</b></td>'
+            + '<td>'+esc(r.category_name||'')+'</td>'
+            + '<td>'+(r.calib_cycle_months==null?'<span style="color:#DD5138;">未設</span>':r.calib_cycle_months+' 月')+'</td>'
+            + '<td>'+(fmtDate(r.calibration_due)||'—')+'</td>'
+            + '<td>'+statPill(r.status)+'</td>'
+            + '<td><select class="bt-res">'+resOptions(on?BT_SEL[r.Tool_id]:def)+'</select></td></tr>';
+    }).join('');
+    $('#btBody').html(h || '<tr><td colspan="7" style="padding:12px;color:#8a6d45;">無符合條件的量具</td></tr>');
+    var all = list.length>0 && list.every(function(r){ return BT_SEL.hasOwnProperty(r.Tool_id); });
+    $('#btCkAll').prop('checked', all);
+    updateBtInfo();
+}
+function updateBtInfo(){
+    var ids = Object.keys(BT_SEL);
+    var noCycle = ids.filter(function(id){
+        var r = ROWS.filter(function(x){ return String(x.Tool_id)===String(id); })[0];
+        return r && r.calib_cycle_months == null;
+    }).length;
+    $('#btSelInfo').html('已選 <b>'+ids.length+'</b> 支'
+        + (noCycle ? '；其中 <span style="color:#DD5138;">'+noCycle+' 支未設校驗週期</span>，登錄後不會自動算下次到期日' : ''));
+    renderBtAtt();   // 附件「本批全部」的支數會跟著變
+}
+$('#btCat').on('change', renderBtTools);
+$('#btKw').on('input', renderBtTools);
+$('#btResult').on('change', function(){
+    var v = this.value;
+    Object.keys(BT_SEL).forEach(function(id){ BT_SEL[id] = v; });
+    renderBtTools();
+});
+$('#btCkAll').on('change', function(){
+    var on = this.checked, def = $('#btResult').val();
+    btFilteredTools().forEach(function(r){
+        if (on) { if (!BT_SEL.hasOwnProperty(r.Tool_id)) BT_SEL[r.Tool_id] = def; }
+        else delete BT_SEL[r.Tool_id];
+    });
+    renderBtTools();
+});
+$('#btBody').on('change', '.bt-ck', function(){
+    var $tr = $(this).closest('tr'), id = $tr.attr('data-id');
+    if (this.checked) BT_SEL[id] = $tr.find('.bt-res').val() || $('#btResult').val();
+    else delete BT_SEL[id];
+    $tr.toggleClass('sel', this.checked);
+    var list = btFilteredTools();
+    $('#btCkAll').prop('checked', list.length>0 && list.every(function(r){ return BT_SEL.hasOwnProperty(r.Tool_id); }));
+    updateBtInfo();
+});
+$('#btBody').on('change', '.bt-res', function(){
+    var $tr = $(this).closest('tr'), id = $tr.attr('data-id');
+    if (BT_SEL.hasOwnProperty(id)) BT_SEL[id] = this.value;
+    else { BT_SEL[id] = this.value; $tr.addClass('sel').find('.bt-ck').prop('checked', true); updateBtInfo(); }
+});
+/** 快捷挑選（作用在目前篩選範圍內） */
+function btPick(mode){
+    var def = $('#btResult').val(), list = btFilteredTools();
+    if (mode === 'none'){ list.forEach(function(r){ delete BT_SEL[r.Tool_id]; }); renderBtTools(); return; }
+    list.forEach(function(r){
+        var hit = (mode === 'all') || (mode === 'overdue' && r.status === 'overdue')
+               || (mode === 'due' && (r.status === 'overdue' || r.status === 'soon'));
+        if (hit) { if (!BT_SEL.hasOwnProperty(r.Tool_id)) BT_SEL[r.Tool_id] = def; }
+        else if (mode !== 'all') delete BT_SEL[r.Tool_id];
+    });
+    renderBtTools();
+}
+
+/* ---------- 批次附件：上傳（先存 temp，登錄本批時轉正） ---------- */
+$('#btFile').on('change', function(){
+    var files = this.files;
+    if (!files || !files.length) return;
+    var cat = $('#btCat').val();
+    cat = (cat && cat !== '__tab__') ? parseInt(cat, 10) : 0;
+    var i = 0;
+    function next(){
+        if (i >= files.length){ $('#btFile').val(''); renderBtAtt(); return; }
+        var fd = new FormData();
+        fd.append('action', 'upload_attach'); fd.append('batch_id', 0);
+        fd.append('category_id', cat); fd.append('doc_type', (ATT_CFG.types||[])[0] || '校驗報告');
+        fd.append('file', files[i]);
+        NProgress.start();
+        $.ajax({url:API, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+            .done(function(res){
+                if (!res.ok) { alert(res.error||'上傳失敗'); return; }
+                BT_ATT.push({attach_id:res.attach_id, name:res.original_name, size:res.file_size,
+                             doc_type:res.doc_type||'', note:'', category_id:cat, toolIds:null});
+            })
+            .fail(function(x){ alert('上傳失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); })
+            .always(function(){ NProgress.done(); i++; renderBtAtt(); next(); });
+    }
+    next();
+});
+function renderBtAtt(){
+    var selCnt = Object.keys(BT_SEL).length;
+    var h = BT_ATT.map(function(a, idx){
+        var lab = (a.toolIds === null) ? ('本批全部 '+selCnt+' 支') : (a.toolIds.length + ' 支');
+        return '<div class="att-row" data-idx="'+idx+'">'
+            + '<span class="fn"><i class="fa fa-file-o"></i> '+esc(a.name)+'</span>'
+            + ' <select class="att-type">'+typeOptions(a.doc_type)+'</select>'
+            + ' <input type="text" class="att-note" placeholder="附件備註" value="'+esc(a.note)+'" style="width:150px;font-size:12px;border:1px solid #D8BE93;border-radius:3px;padding:1px 4px;">'
+            + ' <span class="op map"><i class="fa fa-link"></i> 對應量具（'+lab+'）</span>'
+            + ' <span class="op del"><i class="fa fa-trash"></i> 刪除</span>'
+            + '<div class="att-map"></div></div>';
+    }).join('');
+    $('#btAttList').html(h || '<div style="font-size:12px;color:#8a6d45;">尚未上傳附件（可不上傳）。上傳後預設對應本批全部量具，可再逐支調整。</div>');
+}
+$('#btAttList').on('change', '.att-type', function(){
+    BT_ATT[+$(this).closest('.att-row').attr('data-idx')].doc_type = this.value;
+});
+$('#btAttList').on('input', '.att-note', function(){
+    BT_ATT[+$(this).closest('.att-row').attr('data-idx')].note = this.value;
+});
+$('#btAttList').on('click', '.op.del', function(){
+    var idx = +$(this).closest('.att-row').attr('data-idx'), a = BT_ATT[idx];
+    if (!confirm('刪除附件「'+a.name+'」？')) return;
+    $.post(API, {action:'delete_attach', attach_id:a.attach_id}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+        BT_ATT.splice(idx, 1); renderBtAtt();
+    }, 'json').fail(function(x){ alert('刪除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+});
+/** 附件對應量具（一對多）：只在本批已選量具中勾選；全不勾＝跟隨本批全部 */
+$('#btAttList').on('click', '.op.map', function(){
+    var $row = $(this).closest('.att-row'), idx = +$row.attr('data-idx'), a = BT_ATT[idx], $p = $row.find('.att-map');
+    if ($p.is(':visible')){ $p.hide(); return; }
+    var sel = Object.keys(BT_SEL);
+    if (!sel.length){ alert('請先於上方「選擇本批量具」勾選量具，再設定附件對應'); return; }
+    var cur = (a.toolIds === null) ? sel.map(String) : a.toolIds.map(String);
+    var h = '<div style="margin-bottom:4px;color:#8a6d45;">'
+          + '<a href="#" class="mp-all" style="color:#b5762a;">全選</a>　'
+          + '<a href="#" class="mp-none" style="color:#b5762a;">全不選</a>　全不勾＝跟隨本批全部量具</div>';
+    h += sel.map(function(id){
+        var r = ROWS.filter(function(x){ return String(x.Tool_id)===String(id); })[0] || {};
+        return '<label><input type="checkbox" class="mp-ck" value="'+id+'"'+(cur.indexOf(String(id))>=0?' checked':'')+'> '
+             + esc(r.Tool_No||id)+'</label>';
+    }).join('');
+    $p.html(h).show();
+});
+$('#btAttList').on('click', '.mp-all, .mp-none', function(e){
+    e.preventDefault();
+    var $p = $(this).closest('.att-map');
+    $p.find('.mp-ck').prop('checked', $(this).hasClass('mp-all'));
+    $p.find('.mp-ck').first().trigger('change');
+});
+$('#btAttList').on('change', '.mp-ck', function(){
+    var $row = $(this).closest('.att-row'), idx = +$row.attr('data-idx');
+    var ids = $row.find('.mp-ck:checked').map(function(){ return parseInt(this.value, 10); }).get();
+    BT_ATT[idx].toolIds = ids.length ? ids : null;
+    var lab = (BT_ATT[idx].toolIds === null) ? ('本批全部 '+Object.keys(BT_SEL).length+' 支') : (ids.length+' 支');
+    $row.find('.op.map').html('<i class="fa fa-link"></i> 對應量具（'+lab+'）');
+});
+
+function submitBatch(){
+    var date = $('#btDate').val();
+    if (!date){ alert('請選擇校驗完成日'); $('#btDate').focus(); return; }
+    var ids = Object.keys(BT_SEL);
+    if (!ids.length){ alert('請至少選擇一支量具'); return; }
+    var tools = ids.map(function(id){ return {tool_id:parseInt(id,10), result:BT_SEL[id]}; });
+    var attach = BT_ATT.map(function(a){
+        return {attach_id:a.attach_id, doc_type:a.doc_type, note:a.note, category_id:a.category_id||0,
+                tool_ids:(a.toolIds === null) ? ids.map(Number) : a.toolIds};
+    });
+    if (!confirm('確定登錄本批校驗？\n量具 '+ids.length+' 支、附件 '+BT_ATT.length+' 份。\n各量具的下次應校驗日會依其週期自動前滾。')) return;
+    NProgress.start();
+    $.post(API, {action:'create_batch', calib_date:date, method:$('#btMethod').val(),
+                 operator:$('#btOperator').val(), cert_no:$('#btCert').val(), note:$('#btNote').val(),
+                 tools:JSON.stringify(tools), attach:JSON.stringify(attach)}, function(res){
+        NProgress.done();
+        if (!res.ok){ alert(res.error||'登錄失敗'); return; }
+        BT_ATT = []; BT_SEL = {};
+        closeMask('batMask');
+        alert('已登錄 '+res.done+' 支量具的校驗紀錄。');
+        loadList();
+    }, 'json').fail(function(x){ NProgress.done(); alert('登錄失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
+/* ---------- 批次紀錄 ---------- */
+$('#btnBatchList').on('click', function(){
+    $.getJSON(API, {action:'batch_list'}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        if (!res.list.length){ $('#batListBody').html('<div style="padding:12px;color:#8a6d45;">尚無批次校驗紀錄</div>'); openMask('batListMask'); return; }
+        var h = '<table class="hist"><thead><tr><th>校驗日</th><th>方式</th><th>人員／單位</th><th>憑證編號</th>'
+              + '<th>量具數</th><th>附件</th><th>備註</th><th>登錄者</th><th>明細</th></tr></thead><tbody>';
+        res.list.forEach(function(b){
+            h += '<tr><td>'+fmtDate(b.calib_date)+'</td><td>'+esc(b.method||'—')+'</td><td>'+esc(b.operator||'—')+'</td>'
+               + '<td>'+esc(b.cert_no||'—')+'</td><td>'+b.tool_count+'</td><td>'+b.attach_count+'</td>'
+               + '<td style="text-align:left;">'+esc(b.note||'')+'</td><td>'+esc(b.created_by_name||'')+'</td>'
+               + '<td><span class="tc-op" onclick="openBatchDetail('+b.batch_id+')">明細</span></td></tr>';
+        });
+        h += '</tbody></table>';
+        $('#batListBody').html(h);
+        openMask('batListMask');
+    }).fail(function(x){ alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+});
+function openBatchDetail(bid){
+    $.getJSON(API, {action:'batch_detail', batch_id:bid}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        var b = res.batch;
+        var h = '<div style="margin-bottom:8px;"><span class="tc-op" onclick="$(\'#btnBatchList\').click()">‹ 返回批次列表</span></div>';
+        h += '<div style="font-size:13px;color:#5b3a1e;margin-bottom:8px;">校驗日 <b>'+fmtDate(b.calib_date)+'</b>　方式 '
+           + esc(b.method||'—')+'　人員／單位 '+esc(b.operator||'—')+'　憑證 '+esc(b.cert_no||'—')
+           + '　登錄者 '+esc(b.created_by_name||'')+(b.note?'<br>備註：'+esc(b.note):'')+'</div>';
+        h += '<div style="font-size:13px;font-weight:bold;color:#5b3a1e;margin:6px 0 3px;">本批量具（'+res.tools.length+'）</div>';
+        h += '<table class="hist"><thead><tr><th>量具編號</th><th>類別</th><th>應校驗到期日</th><th>校驗日</th><th>準時</th><th>結果</th></tr></thead><tbody>';
+        res.tools.forEach(function(t){
+            var ontime = (t.due_date && t.calib_date) ? (fmtDate(t.calib_date) <= fmtDate(t.due_date)) : null;
+            h += '<tr><td><b>'+esc(t.Tool_No)+'</b></td><td>'+esc(t.category_name||'')+'</td>'
+               + '<td>'+(fmtDate(t.due_date)||'—')+'</td><td>'+fmtDate(t.calib_date)+'</td>'
+               + '<td>'+(ontime===null?'—':(ontime?'<span style="color:#8A5A2B;">準時</span>':'<span style="color:#DD5138;">逾期</span>'))+'</td>'
+               + '<td>'+(RESULT_LABEL[t.result]||t.result)+'</td></tr>';
+        });
+        h += '</tbody></table>';
+        h += '<div style="font-size:13px;font-weight:bold;color:#5b3a1e;margin:10px 0 3px;">附件（'+res.attaches.length+'）</div>';
+        if (!res.attaches.length) h += '<div style="font-size:12px;color:#8a6d45;">本批無附件</div>';
+        else {
+            h += '<table class="hist"><thead><tr><th>文件類別</th><th>檔名</th><th>對應量具編號</th><th>備註</th><th>下載</th>'
+               + (res.can_admin?'<th>刪除</th>':'')+'</tr></thead><tbody>';
+            res.attaches.forEach(function(a){
+                h += '<tr><td>'+esc(a.doc_type||'—')+'</td><td style="text-align:left;">'+esc(a.original_name||a.file_name)+'</td>'
+                   + '<td style="text-align:left;">'+esc(a.tool_nos||'（未對應）')+'</td><td>'+esc(a.note||'')+'</td>'
+                   + '<td><a href="'+API+'?action=download_attach&attach_id='+a.attach_id+'" target="_blank" style="color:#b5762a;"><i class="fa fa-download"></i> 下載</a></td>'
+                   + (res.can_admin?'<td><span class="tc-op" style="color:#DD5138;" onclick="delAttach('+a.attach_id+','+bid+')"><i class="fa fa-trash"></i></span></td>':'')
+                   + '</tr>';
+            });
+            h += '</tbody></table>';
+        }
+        $('#batListBody').html(h);
+        openMask('batListMask');
+    });
+}
+function delAttach(aid, bid){
+    if (!confirm('刪除此附件？（實體檔案一併刪除，無法復原）')) return;
+    $.post(API, {action:'delete_attach', attach_id:aid}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+        if (bid) openBatchDetail(bid); else if (HIST_TID) openHis(HIST_TID);
+    }, 'json').fail(function(x){ alert('刪除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
+/* ---------- 校驗附件設定（管理員） ---------- */
+$('#btnAttSet').on('click', function(){
+    $('#asDir').val(ATT_CFG.dir||''); $('#asExt').val(ATT_CFG.ext_raw||'');
+    $('#asMax').val(ATT_CFG.maxmb||20); $('#asTypes').val(ATT_CFG.types_raw||'');
+    openMask('attSetMask');
+});
+function submitAttSet(){
+    $.post(API, {action:'save_attach_settings', dir:$('#asDir').val(), ext:$('#asExt').val(),
+                 maxmb:$('#asMax').val(), types:$('#asTypes').val()}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        ATT_CFG = res.attach;
+        closeMask('attSetMask');
+        alert('已儲存附件設定。');
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
 /* ---------- 匯出 CSV ---------- */
