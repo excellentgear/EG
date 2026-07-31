@@ -450,7 +450,7 @@ if (!in_array($initTab, ['drawing','quote','other'], true)) $initTab = '';
             <!-- 批圖編輯器：獨立跳窗（未被指派 imgedit 角色者不顯示此鈕，見上方 $imgeditCanUse） -->
             <button id="btn-image-editor" type="button"
                 onclick="openImageEditor()"
-                title="批圖編輯器（貼上/拖入圖面、遮蓋客戶資料、加標籤文字、球標與設變標示、多圖合併、列印/另存）——開啟時自動帶入目前預覽的圖檔"
+                title="批圖編輯器（貼上/拖入圖面、遮蓋客戶資料、加標籤文字、球標與設變標示、多圖合併、列印/另存）——開啟時自動帶入目前預覽的圖檔；PDF 會自動轉成圖檔開啟，多頁會問要開哪一頁"
                 class="btn btn-xs" style="background:linear-gradient(135deg,#6a1b9a,#ab47bc);color:#fff;border:none;font-weight:600;"><i class="fa fa-paint-brush"></i> 批圖編輯器</button>
             <?php endif; ?>
         </div>
@@ -560,8 +560,8 @@ function showFile(path, type, name) {
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
     resetTransform();
 
-    // 小畫家支援的圖片格式
-    var _paintFormats = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tif', 'tiff'];
+    // 批圖編輯器可處理的格式（pdf 由編輯器端用 pdf.js 轉成圖檔再開，多頁會問要開哪幾頁）
+    var _paintFormats = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tif', 'tiff', 'pdf'];
     var _isPaintable   = _paintFormats.indexOf(_currentType) !== -1;
 
     if (_currentType === 'pdf') {
@@ -583,13 +583,15 @@ function showFile(path, type, name) {
 // ── 開啟批圖編輯器（自動帶入目前預覽的圖檔）────────────────────────────────
 function openImageEditor() {
     var url = '../Sales/image_editor.php';
-    // 目前預覽的是圖片才帶入；PDF／其他格式則開空白編輯器
+    // 圖片直接帶入；PDF 也帶入（編輯器端會用 pdf.js 轉成圖檔，多頁會跳窗問要開哪幾頁）；其他格式開空白編輯器
+    var _type = (_currentType || '').toLowerCase();
     var _imgTypes = ['jpg','jpeg','png','gif','bmp'];
-    if (_currentPath && _imgTypes.indexOf((_currentType||'').toLowerCase()) !== -1) {
+    if (_currentPath && (_imgTypes.indexOf(_type) !== -1 || _type === 'pdf')) {
         // 本頁在 views/pm/，編輯器在 views/Sales/，相對路徑無法共用；一律換算成絕對 URL 再傳
         var absSrc = new URL(_currentPath, window.location.href).href;
         url += '?preload=' + encodeURIComponent(absSrc)
-             + '&preload_name=' + encodeURIComponent(_currentName || '');
+             + '&preload_name=' + encodeURIComponent(_currentName || '')
+             + (_type === 'pdf' ? '&preload_type=pdf' : '');   // 走 API 下載端點的網址不一定有 .pdf 副檔名，型別直接註明
     }
     window.open(url, 'egImgEditor_' + Date.now(),
         'width=1280,height=860,menubar=no,toolbar=no,location=no,status=no,resizable=yes');

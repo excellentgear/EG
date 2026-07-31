@@ -1038,7 +1038,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 
 <div id="topbar">
     <span class="brand"><i class="fa fa-paint-brush"></i> 批圖編輯器 <span style="font-size:10px;color:#8b949e;font-weight:400;" title="版本＝程式檔最後更新時間；跟最新修改時間不符表示瀏覽器載到舊版，請按 Ctrl+F5"><?= $EDITOR_VER ?></span></span>
-    <button class="tb-btn" onclick="openImageFiles()" title="開啟圖片檔（可多選，也可直接拖檔案進來）"><i class="fa fa-folder-open-o"></i> 開啟圖檔</button>
+    <button class="tb-btn" onclick="openImageFiles()" title="開啟圖片檔或 PDF（可多選，也可直接拖檔案進來；PDF 會自動轉成圖檔，多頁會問要開哪幾頁）"><i class="fa fa-folder-open-o"></i> 開啟圖檔</button>
     <button class="tb-btn" onclick="pasteFromButton()" title="貼上剪貼簿圖片（小畫家複製後按此，或直接 Ctrl+V）"><i class="fa fa-clipboard"></i> 貼上</button>
     <span class="tb-sep"></span>
     <button class="tb-btn" onclick="undo()" title="復原 (Ctrl+Z)"><i class="fa fa-undo"></i></button>
@@ -1700,6 +1700,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <b style="color:#6fc3ff;">① 開圖與圖片</b>
             <ul style="padding-left:18px;margin:4px 0 10px;">
                 <li>小畫家複製 → 本視窗按 <b>Ctrl+V</b> 貼入；圖檔直接<b>拖進視窗</b>開啟（可多張，排版後匯出＝合併）</li>
+                <li><b>PDF 也能開</b>：從 BOM 檢視器等頁面按「批圖編輯器」帶入 PDF、或直接把 PDF 拖進視窗／用「開啟圖檔」選 PDF，系統會自動把它<b>轉成圖檔</b>再放進畫布（原 PDF 檔不會被改到）。<b>多頁 PDF 會跳窗問要開哪幾頁</b>（可填 <b>1</b> 或 <b>1,3-5</b> 一次帶多頁，一頁一張依序放入，上限 20 頁），並可選轉圖畫質（標準約 150dpi／高約 220dpi／極高約 290dpi）；超大圖面會自動限制像素以免瀏覽器當掉</li>
                 <li>圖比畫布大會自動撐大畫布；「適合內容」讓畫布剛好包住所有東西</li>
                 <li>底圖調好後按屬性列「<b>鎖定</b>」→ 點擊穿透不誤選；屬性列右側「解鎖全部」解開</li>
             </ul>
@@ -1762,7 +1763,33 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     </div>
 </div>
 
-<input type="file" id="file-input" accept="image/*" multiple style="display:none;">
+<!-- PDF 轉圖：多頁時讓使用者指定要開哪幾頁（單頁 PDF 直接開，不跳窗） -->
+<div class="modal-mask" id="pdfpage-modal">
+    <div class="modal-box">
+        <h3><i class="fa fa-file-pdf-o"></i> PDF 轉成圖檔開啟</h3>
+        <div class="modal-body">
+            <div id="pdf-file-name" style="color:#cfd6dd;margin-bottom:8px;word-break:break-all;"></div>
+            <div class="frm-row"><label>開啟頁碼</label>
+                <input type="text" id="pdf-pages" style="flex:1;" placeholder="例如 1 或 1,3-5">
+                <span style="color:#8b949e;white-space:nowrap;">／共 <b id="pdf-total" style="color:#ffb74d;">－</b> 頁</span>
+            </div>
+            <div class="frm-row"><label>轉圖畫質</label>
+                <select id="pdf-quality" style="flex:1;">
+                    <option value="2">標準（約 150 dpi，轉檔快）</option>
+                    <option value="3" selected>高（約 220 dpi，建議）</option>
+                    <option value="4">極高（約 290 dpi，大圖較慢）</option>
+                </select>
+            </div>
+            <div style="font-size:11.5px;color:#8b949e;">PDF 是文件格式沒辦法直接畫記號，這裡會把指定的頁「拍成圖檔」再放進畫布（原 PDF 不會被更動）。可一次填多頁（如 <b>1,3-5</b>），會一頁一張依序放入、最多 20 頁。超大圖面會自動限制像素避免瀏覽器當掉。</div>
+        </div>
+        <div class="modal-foot">
+            <button class="tb-btn" onclick="hideModal('pdfpage-modal')">取消</button>
+            <button class="tb-btn primary" onclick="confirmPdfPages()"><i class="fa fa-check"></i> 開啟</button>
+        </div>
+    </div>
+</div>
+
+<input type="file" id="file-input" accept="image/*,application/pdf,.pdf" multiple style="display:none;">
 <div id="toast"></div>
 
 <script src="../../resource/js/fabric.min.js?v=<?= filemtime(__DIR__ . '/../../resource/js/fabric.min.js') ?>"></script><!-- 帶檔案時間當版本參數：修過的 fabric 才不會被瀏覽器快取的舊檔蓋掉 -->
@@ -4898,13 +4925,21 @@ document.getElementById('file-input').addEventListener('change', function () {
 
 let addOffset = 0;
 function loadFiles(files) {
-    const imgs = files.filter(f => f.type.startsWith('image/'));
-    if (!imgs.length) { toast('沒有可用的圖片檔'); return; }
+    const imgs = files.filter(f => (f.type || '').startsWith('image/'));
+    const pdfs = files.filter(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || ''));
+    if (!imgs.length && !pdfs.length) { toast('沒有可用的圖片或 PDF 檔'); return; }
     imgs.forEach((f, i) => {
         const r = new FileReader();
         r.onload = e => addImageFromURL(e.target.result, i);
         r.readAsDataURL(f);
     });
+    if (pdfs.length) {
+        // PDF 一次處理一份（多頁要跳窗問頁碼，同時開多份會互相蓋掉）
+        if (pdfs.length > 1) toast('一次只能帶入一個 PDF，先開啟「' + pdfs[0].name + '」');
+        const r = new FileReader();
+        r.onload = ev => openPdfFromSource({ data: new Uint8Array(ev.target.result) }, pdfs[0].name);
+        r.readAsArrayBuffer(pdfs[0]);
+    }
 }
 function addImageFromURL(url, cascade) {
     fabric.Image.fromURL(url, function (img) {
@@ -4927,6 +4962,106 @@ function addImageFromURL(url, cascade) {
         pushState();
         toast('已加入圖片（' + img.width + '×' + img.height + '），可拖角縮放對齊');
     }, { crossOrigin: 'anonymous' });
+}
+
+/* ── PDF → 圖檔（2026-07-31）───────────────────────────────────────────────
+   PDF 是文件格式、不是點陣圖，Fabric 開不了；改成用 pdf.js 在「瀏覽器端」把指定頁
+   渲染到暫存 canvas 再當成圖片放進畫布（原 PDF 檔不動）。
+   ‧為什麼放前端做：本機沒有 Ghostscript / poppler / Imagick，LibreOffice 轉 PDF→PNG
+     只吃得到第一頁；pdf.js 是向量渲染，要幾 dpi 就幾 dpi，且多頁可以讓使用者挑。
+   ‧函式庫放本機 resource/js/pdfjs（內網不走 CDN），且「用到才載入」——1MB 多的
+     worker 不該讓每次開編輯器都變慢。
+   ‧多頁 PDF 一律跳窗問要開哪幾頁（可 1,3-5），單頁直接開不囉嗦。 */
+const PDFJS_BASE = '../../resource/js/pdfjs/';
+const PDFJS_V    = '<?= @filemtime(__DIR__ . '/../../resource/js/pdfjs/pdf.min.js') ?>';
+let pdfjsLoading = null;
+function ensurePdfJs() {
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (pdfjsLoading) return pdfjsLoading;
+    pdfjsLoading = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = PDFJS_BASE + 'pdf.min.js?v=' + PDFJS_V;
+        s.onload = () => {
+            if (!window.pdfjsLib) { pdfjsLoading = null; reject(new Error('pdfjsLib 未載入')); return; }
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.js?v=' + PDFJS_V;
+            resolve(window.pdfjsLib);
+        };
+        s.onerror = () => { pdfjsLoading = null; reject(new Error('找不到 resource/js/pdfjs/pdf.min.js')); };
+        document.head.appendChild(s);
+    });
+    return pdfjsLoading;
+}
+let pdfPending = null;   // 等使用者填頁碼的 PDF：{doc, name}
+/* src：{url:'…'}（同源檔案／API 下載端點皆可，帶 cookie 過權限閘門）或 {data:Uint8Array}（本機開檔/拖入） */
+async function openPdfFromSource(src, name) {
+    toast('PDF 讀取中…');
+    let lib;
+    try { lib = await ensurePdfJs(); }
+    catch (e) { toast('無法載入 PDF 轉圖元件：' + (e.message || e)); return; }
+    try {
+        const doc = await lib.getDocument(Object.assign({ withCredentials: true }, src)).promise;
+        if (doc.numPages === 1) { await renderPdfPages(doc, [1], 3, name); return; }
+        pdfPending = { doc: doc, name: name || 'PDF' };
+        document.getElementById('pdf-file-name').textContent = (name || 'PDF') + '（共 ' + doc.numPages + ' 頁）';
+        document.getElementById('pdf-total').textContent = doc.numPages;
+        document.getElementById('pdf-pages').value = '1';
+        showModal('pdfpage-modal');
+        setTimeout(() => { const el = document.getElementById('pdf-pages'); if (el) { el.focus(); el.select(); } }, 60);
+    } catch (e) {
+        toast('PDF 讀取失敗：' + (e && e.message ? e.message : e));
+    }
+}
+/* 頁碼字串 → 頁碼陣列：接受「1」「1,3」「1,3-5」「1~3」，超出範圍/重複的自動略過 */
+function parsePdfPageSpec(spec, total) {
+    const out = [];
+    String(spec || '').split(/[,，、\s]+/).forEach(seg => {
+        if (!seg) return;
+        const m = seg.match(/^(\d+)\s*[-–~～至到]\s*(\d+)$/);
+        if (m) {
+            let a = parseInt(m[1], 10), b = parseInt(m[2], 10);
+            if (a > b) { const t = a; a = b; b = t; }
+            for (let i = a; i <= b; i++) if (i >= 1 && i <= total && out.indexOf(i) === -1) out.push(i);
+            return;
+        }
+        const n = parseInt(seg, 10);
+        if (n >= 1 && n <= total && out.indexOf(n) === -1) out.push(n);
+    });
+    return out;
+}
+async function confirmPdfPages() {
+    if (!pdfPending) { hideModal('pdfpage-modal'); return; }
+    const total = pdfPending.doc.numPages;
+    const pages = parsePdfPageSpec(document.getElementById('pdf-pages').value, total);
+    if (!pages.length) { toast('請輸入要開啟的頁碼（1～' + total + '，可用 1,3-5）'); return; }
+    if (pages.length > 20) { toast('一次最多帶入 20 頁，請分批'); return; }
+    const q = parseFloat(document.getElementById('pdf-quality').value) || 3;
+    hideModal('pdfpage-modal');
+    const d = pdfPending; pdfPending = null;
+    await renderPdfPages(d.doc, pages, q, d.name);
+}
+/* 把指定頁渲染成圖片加進畫布。quality＝以 72dpi 為底的倍率（3≈216dpi）；
+   單邊超過 MAX_SIDE 就自動降倍率——A0 圖面用 3 倍會到 1 億像素，瀏覽器直接爆掉。 */
+async function renderPdfPages(doc, pages, quality, name) {
+    const MAX_SIDE = 4000;
+    for (let i = 0; i < pages.length; i++) {
+        try {
+            const page = await doc.getPage(pages[i]);
+            const base = page.getViewport({ scale: 1 });
+            let scale = quality;
+            const longest = Math.max(base.width, base.height);
+            if (longest * scale > MAX_SIDE) scale = Math.max(1, MAX_SIDE / longest);
+            const vp = page.getViewport({ scale: scale });
+            const cv = document.createElement('canvas');
+            cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+            const ctx = cv.getContext('2d');
+            ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height);   // PDF 底是透明的，先鋪白否則存成 JPG 會變黑底
+            await page.render({ canvasContext: ctx, viewport: vp }).promise;
+            addImageFromURL(cv.toDataURL('image/png'), i);
+            toast('已帶入' + (name ? '「' + name + '」' : '') + '第 ' + pages[i] + ' 頁（' + cv.width + '×' + cv.height + '）');
+        } catch (e) {
+            toast('第 ' + pages[i] + ' 頁轉圖失敗：' + (e && e.message ? e.message : e));
+        }
+    }
 }
 
 /* 拖放開圖 */
@@ -6947,6 +7082,12 @@ setTool('select');
     var preload = qs.get('preload');
     if (!preload) return;
     var name = qs.get('preload_name') || '';
+    // PDF（副檔名或呼叫端指定 preload_type=pdf；走 API 下載端點的網址不一定有副檔名）
+    // → 先轉成圖檔再進畫布，多頁會跳窗問要開哪幾頁
+    if ((qs.get('preload_type') || '').toLowerCase() === 'pdf' || /\.pdf(\?|#|$)/i.test(preload)) {
+        openPdfFromSource({ url: preload }, name || 'PDF');
+        return;
+    }
     // 同源圖檔，直接載入畫布（addImageFromURL 內含載入失敗提示）
     if (name) toast('帶入圖檔：' + name);
     addImageFromURL(preload, 0);
