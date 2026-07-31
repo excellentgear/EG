@@ -140,8 +140,10 @@ switch ($action) {
         }
         $catIds   = trim($_POST['category_ids']   ?? '') ?: null;
         $tagVarVals = trim($_POST['tag_var_values'] ?? '') ?: null;
-        $note     = trim($_POST['note']            ?? '') ?: null;
-        $revision = trim($_POST['revision']        ?? '') ?: null;
+        // 注意：不可用 ?: null —— PHP 會把字串 "0" 當假值，版次填 0 會被存成 NULL，
+        // 變成「版次0」與「沒填版次」無法區分（版次 0 是合法值，要照樣顯示）
+        $note     = (trim($_POST['note']     ?? '') !== '') ? trim($_POST['note'])     : null;
+        $revision = (trim($_POST['revision'] ?? '') !== '') ? trim($_POST['revision']) : null;
         $sz       = fmtSzPa((int)$_FILES['file']['size']);
         try {
             $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,issue_stamp_date,uploaded_by,uploaded_by_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
@@ -521,8 +523,9 @@ switch ($action) {
         $id      = intval($_POST['id'] ?? 0);
         $catIds  = trim($_POST['category_ids']   ?? '') ?: null;
         $tagVals = trim($_POST['tag_var_values'] ?? '') ?: null;
-        $note    = trim($_POST['note']           ?? '') ?: null;
-        $revision = trim($_POST['revision']      ?? '') ?: null;
+        // 同上：版次 "0" 是合法值，禁用 ?: null
+        $note    = (trim($_POST['note']     ?? '') !== '') ? trim($_POST['note'])     : null;
+        $revision = (trim($_POST['revision'] ?? '') !== '') ? trim($_POST['revision']) : null;
         $mIssue   = trim($_POST['issue_stamp_date'] ?? '');
         if (!$id) { echo json_encode(['success'=>false,'message'=>'缺少 ID']); exit; }
         if ($mIssue !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $mIssue)) {

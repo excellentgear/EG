@@ -17942,7 +17942,9 @@ function _pavRenderList() {
         html += '<i class="fa '+icon+'" style="color:'+(isObs?'#c0392b':'#888')+';flex-shrink:0;font-size:12px;"></i>';
         html += '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;'+(isObs?'color:#c0392b;text-decoration:line-through;':'')+'">'+name+'</span>';
         if (isObs) html += '<span style="flex-shrink:0;background:#e74c3c;color:#fff;font-size:9px;font-weight:700;padding:0 5px;border-radius:3px;letter-spacing:1px;">作廢</span>';
-        if (f.revision) html += '<span style="flex-shrink:0;background:#eef4fb;color:#1a5276;font-size:10px;font-weight:600;padding:0 5px;border-radius:3px;" title="版次">Rev.'+escHtml(f.revision)+'</span>';
+        // 版次 0 也要顯示：不可用 if(f.revision) 判斷（0 / "0" 會被當成沒填）
+        if (f.revision !== null && f.revision !== undefined && String(f.revision) !== '')
+            html += '<span style="flex-shrink:0;background:#eef4fb;color:#1a5276;font-size:10px;font-weight:600;padding:0 5px;border-radius:3px;" title="版次">Rev.'+escHtml(f.revision)+'</span>';
         html += '</div>';
         // 第二行：日期 · 上傳者 · 標籤（單行）
         html += '<div style="display:flex;gap:5px;margin-top:1px;align-items:center;flex-wrap:wrap;font-size:10px;color:#aaa;line-height:1.3;">';
@@ -18341,6 +18343,19 @@ function _pauRenderFileRows(fileArr, cats) {
     rows.style.display = '';
 }
 
+// 多檔上傳表格：↑↓ 在同一欄的上下列之間移動（版次／備註），比照多列輸入表格的操作習慣
+$(document).on('keydown', '#pau-file-rows input.pau-row-rev, #pau-file-rows input.pau-row-note', function(e) {
+    var key = e.key || '';
+    if (key !== 'ArrowUp' && key !== 'ArrowDown') return;
+    var cls = this.classList.contains('pau-row-rev') ? 'pau-row-rev' : 'pau-row-note';
+    var idx = parseInt(this.getAttribute('data-fidx') || '0', 10);
+    var tgt = document.querySelector('#pau-file-rows input.' + cls + '[data-fidx="' + (idx + (key === 'ArrowDown' ? 1 : -1)) + '"]');
+    if (!tgt) return;
+    e.preventDefault();
+    tgt.focus();
+    tgt.select();
+});
+
 function pauApplyFirstToAll() {
     var allRows = document.querySelectorAll('tbody tr', document.getElementById('pau-file-rows'));
     // 取第一列的勾選狀態
@@ -18666,8 +18681,9 @@ function pavEditMeta() {
     var f = _pav.currentFile;
     if (!f || f.source === 'quote') return;
     document.getElementById('pae-id').value = f.id;
-    document.getElementById('pae-note').value = f.note || '';
-    document.getElementById('pae-revision').value = f.revision || '';
+    document.getElementById('pae-note').value = (f.note === null || f.note === undefined) ? '' : String(f.note);
+    // 版次 0 也要帶回編輯框（不可用 || ''）
+    document.getElementById('pae-revision').value = (f.revision === null || f.revision === undefined) ? '' : String(f.revision);
     document.getElementById('pae-issue-date').value = (f.issue_stamp_date || '').substring(0,10);
     loadActiveCatsForUpload(function(cats) {
         var chips = document.getElementById('pae-cat-chips');
