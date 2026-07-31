@@ -126,6 +126,7 @@ $CAN_VIEW_DELETED = _hasF('quotation_view_deleted');
 $CAN_RESTORE      = _hasF('quotation_restore');
 $CAN_VIEW_HISTORY = _hasF('quotation_view_history');
 $CAN_SETTINGS     = _hasF('quotation_settings');
+$CAN_SORT_RULE    = _hasF('quotation_sort_rule');
 $IS_ADMIN         = _hasF('all');
 $_perm            = $IS_ADMIN ? 'A（管理員）' : (empty($_my_roles) ? '（未指派角色）' : implode('、',$_my_roles));
 
@@ -146,6 +147,7 @@ $PAGE_FEATURES = [
     ['group'=>'進階功能', 'code'=>'quotation_restore',      'label'=>'還原已刪除報價單'],
     ['group'=>'進階功能', 'code'=>'quotation_view_history', 'label'=>'查看修改紀錄'],
     ['group'=>'進階功能', 'code'=>'quotation_settings',     'label'=>'報價單設定'],
+    ['group'=>'進階功能', 'code'=>'quotation_sort_rule',    'label'=>'調整項目自動排序規則（全體適用）'],
 ];
 ?>
 <!DOCTYPE html>
@@ -716,11 +718,18 @@ body { background:var(--bg); }
                                     <select class="form-control input-sm" id="contact_select" style="font-size:12px;" onchange="$('#contact_id').val(this.value)">
                                     </select>
                                 </div>
-                                <div style="margin-top:6px;">
-                                    <button type="button" class="btn btn-default btn-xs" id="btnAutoSortItems" onclick="autoSortQuoteItems()"
-                                        title="依「料號→製程→料號備註→數量→建檔順序」重新排列報價項目，並直接寫入資料庫排序號碼；列印一律依存檔的順序">
+                                <div style="margin-top:6px;display:flex;align-items:center;gap:4px;">
+                                    <button type="button" class="btn btn-warning btn-sm" id="btnAutoSortItems" onclick="autoSortQuoteItems()"
+                                        style="font-weight:600;font-size:13px;padding:6px 14px;"
+                                        title="依排序規則重新排列報價項目（先預覽確認才寫入資料庫排序號碼）；列印一律依存檔的順序">
                                         <i class="fa fa-sort-amount-asc"></i> 項目自動排序
                                     </button>
+                                    <?php if ($CAN_SORT_RULE || $IS_ADMIN): ?>
+                                    <button type="button" class="btn btn-link btn-xs" onclick="openSortRuleSetting()"
+                                        style="padding:2px 4px;color:#b5722a;" title="調整自動排序規則（全體適用）">
+                                        <i class="fa fa-cog"></i>
+                                    </button>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                             <div class="col-sm-3 form-group has-feedback">
@@ -1704,6 +1713,7 @@ $(document).ready(function () {
     adjustLayout();          // ★ 初始化高度，消除外層滾動條
     loadFileCategories();    // ★ 載入附件類別（同時自動建 DB 資料表）
     loadPageAttachCats();    // ★ 載入本頁適用附件類別與排序
+    loadAutoSortKeys();      // ★ 載入項目自動排序規則（全域設定）
     loadRequiredAttachCats();// ★ 載入每個料號必備的附件類別設定
     initProcessTagTables();  // ★ 自動建立製程標籤三張資料表
     loadProcessTagTree();    // ★ 載入製程標籤樹
@@ -3814,11 +3824,42 @@ function resetEditor() {
 // 儲存
 // ══════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════
-// 項目自動排序按鈕：依舊版「列印時自動排序」規則
-// （料號→製程→料號備註→數量→建檔順序）重排編輯畫面列，
-// 並把新順序直接寫入資料庫排序號碼（quotation_item.sort_order）。
+// 項目自動排序：依全域排序規則（可由授權角色調整優先順序）
+// 重排編輯畫面列，先跳窗預覽新順序，使用者按「確認排序」
+// 才正式重排並把排序號碼直接寫入資料庫（quotation_item.sort_order）。
 // 列印一律依存檔順序，不再於列印時自動排序。
 // ══════════════════════════════════════════════════════
+const AUTO_SORT_KEY_DEFS = [   // 全部可拖移調整優先順序；「建檔順序」固定為最終比較
+    { key:'product_id',    label:'料號' },
+    { key:'process_notes', label:'製程' },
+    { key:'specification', label:'料號備註' },
+    { key:'quantity',      label:'數量' },
+];
+let autoSortKeys = AUTO_SORT_KEY_DEFS.map(d => d.key); // 預設順序＝舊版列印排序規則
+
+function loadAutoSortKeys() {
+    $.get(API_URL, { action:'get_param', param_group:'QUOTATION', param_key:'auto_sort_keys' }, res => {
+        if (res && res.success && Array.isArray(res.value)) {
+            const valid = res.value.filter(k => AUTO_SORT_KEY_DEFS.some(d => d.key === k));
+            // 設定裡缺漏的鍵補在最後，保證四個鍵都會比較到
+            AUTO_SORT_KEY_DEFS.forEach(d => { if (!valid.includes(d.key)) valid.push(d.key); });
+            autoSortKeys = valid;
+        }
+    }, 'json');
+}
+function autoSortRuleText() {
+    return autoSortKeys.map(k => (AUTO_SORT_KEY_DEFS.find(d => d.key === k) || {}).label || k)
+        .concat('建檔順序').join(' → ');
+}
+// 依 proc-subtags-hidden 的子標籤 ID 轉成可讀製程名稱（預覽用）
+function procNamesFromSubTags(csv) {
+    return (csv || '').split(',').map(s => parseInt(s.trim())).filter(x => x > 0).map(sid => {
+        let name = String(sid);
+        processTagTree.forEach(g => (g.sub_tags || []).forEach(st => { if (st.sub_tag_id === sid) name = st.sub_tag_name; }));
+        return name;
+    }).join('、');
+}
+
 function autoSortQuoteItems() {
     const $tbody = $('#quoteItemsTable > tbody');
     const groups = [];
@@ -3833,6 +3874,10 @@ function autoSortQuoteItems() {
             process_notes: ($row.find('.proc-subtags-hidden').val() || '').toUpperCase(),
             specification: ($row.find('input[name="specification"]').val() || '').toUpperCase(),
             quantity:      isTiered ? 0 : (parseFloat($row.find('.quantity').val()) || 0),
+            procText:      procNamesFromSubTags($row.find('.proc-subtags-hidden').val()),
+            specRaw:       $row.find('input[name="specification"]').val() || '',
+            pidRaw:        $row.find('.product_id_hidden').val() || '',
+            qtyRaw:        isTiered ? '（階梯）' : ($row.find('.quantity').val() || ''),
             idx
         });
     });
@@ -3841,29 +3886,132 @@ function autoSortQuoteItems() {
         return;
     }
     const cmpStr = (a, b) => a < b ? -1 : (a > b ? 1 : 0);
-    groups.sort((a, b) =>
-        cmpStr(a.product_id, b.product_id) ||
-        cmpStr(a.process_notes, b.process_notes) ||
-        cmpStr(a.specification, b.specification) ||
-        (a.quantity - b.quantity) ||
-        (a.item_id === b.item_id ? (a.idx - b.idx) : (a.item_id - b.item_id))
-    );
-    groups.forEach(g => $tbody.append(g.$rows));
+    const sorted = groups.slice().sort((a, b) => {
+        for (const k of autoSortKeys) {
+            const r = (k === 'quantity') ? (a.quantity - b.quantity) : cmpStr(a[k], b[k]);
+            if (r) return r;
+        }
+        return a.item_id === b.item_id ? (a.idx - b.idx) : (a.item_id - b.item_id);
+    });
 
-    // 已存檔的報價單：把新順序直接寫入 DB 排序號碼；未存檔新列待儲存時依列順序補號
-    const quoteId    = parseInt($('#quote_id').val()) || 0;
-    const orderedIds = groups.map(g => parseInt(g.$rows.first().attr('data-item-id')) || 0).filter(x => x > 0);
-    if (quoteId && orderedIds.length) {
-        $.post(API_URL, { action:'save_item_sort', quote_id: quoteId, item_ids: JSON.stringify(orderedIds) }, res => {
+    if (sorted.every((g, i) => g.idx === i)) {
+        Swal.fire({ toast:true, position:'top-end', icon:'info', title:'目前順序已符合排序規則，無需變更', showConfirmButton:false, timer:2200 });
+        return;
+    }
+
+    // ── 預覽跳窗：確認才正式重排＋寫入 DB；取消/關閉＝不動 ──
+    let bodyRows = '';
+    sorted.forEach((g, i) => {
+        const moved = g.idx !== i;
+        bodyRows += `<tr style="${moved ? 'background:#fdf0dd;font-weight:600;' : ''}">
+            <td style="text-align:center;">${i + 1}</td>
+            <td style="text-align:center;color:${moved ? '#c0392b' : '#999'};">${g.idx + 1}${moved ? (g.idx > i ? ' ↑' : ' ↓') : ''}</td>
+            <td style="text-align:left;">${escapeHtml(g.pidRaw)}</td>
+            <td style="text-align:left;">${escapeHtml(g.procText)}</td>
+            <td style="text-align:left;">${escapeHtml(g.specRaw)}</td>
+            <td style="text-align:right;">${escapeHtml(String(g.qtyRaw))}</td>
+        </tr>`;
+    });
+    Swal.fire({
+        title: '自動排序預覽',
+        width: 760,
+        html: `
+            <div style="text-align:left;font-size:12px;color:#8a6d3b;margin-bottom:6px;">
+                排序規則：<b>${escapeHtml(autoSortRuleText())}</b>（橘底＝位置有變動）
+            </div>
+            <div style="max-height:340px;overflow-y:auto;border:1px solid #e8dcc8;border-radius:4px;">
+            <table class="table table-condensed" style="font-size:12px;margin:0;">
+                <thead><tr style="background:#faf3e8;">
+                    <th style="text-align:center;width:50px;">新序</th><th style="text-align:center;width:60px;">原序</th>
+                    <th style="text-align:left;">料號</th><th style="text-align:left;">製程</th>
+                    <th style="text-align:left;">料號備註</th><th style="text-align:right;width:70px;">數量</th>
+                </tr></thead>
+                <tbody>${bodyRows}</tbody>
+            </table></div>`,
+        showCancelButton: true,
+        confirmButtonText: '<i class="fa fa-check"></i> 確認排序',
+        cancelButtonText: '取消',
+        confirmButtonColor: '#F0A24B',
+    }).then(r => {
+        if (!r.isConfirmed) return; // 取消或關閉跳窗＝不排序
+        sorted.forEach(g => $tbody.append(g.$rows));
+
+        // 已存檔的報價單：把新順序直接寫入 DB 排序號碼；未存檔新列待儲存時依列順序補號
+        const quoteId    = parseInt($('#quote_id').val()) || 0;
+        const orderedIds = sorted.map(g => parseInt(g.$rows.first().attr('data-item-id')) || 0).filter(x => x > 0);
+        if (quoteId && orderedIds.length) {
+            $.post(API_URL, { action:'save_item_sort', quote_id: quoteId, item_ids: JSON.stringify(orderedIds) }, res => {
+                if (res && res.success) {
+                    Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已自動排序並寫入資料庫', showConfirmButton:false, timer:2200 });
+                } else {
+                    Swal.fire('錯誤', (res && res.message) || '排序寫入資料庫失敗', 'error');
+                }
+            }, 'json').fail(() => Swal.fire('錯誤', '與伺服器通訊失敗', 'error'));
+        } else {
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已自動排序（儲存後寫入排序號碼）', showConfirmButton:false, timer:2200 });
+        }
+    });
+}
+
+// ══ 自動排序規則設定（角色限定；全體適用）：拖移調整比較優先順序 ══
+function openSortRuleSetting() {
+    const rows = autoSortKeys.map(k => {
+        const d = AUTO_SORT_KEY_DEFS.find(x => x.key === k) || { label:k };
+        return `<div class="sortrule-row" data-key="${k}"
+            style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid #e8dcc8;border-radius:4px;margin-bottom:4px;background:#fffdf9;cursor:default;">
+            <span class="sortrule-drag" style="cursor:grab;color:#b5722a;font-size:15px;" title="拖移調整順序">&#9776;</span>
+            <span style="font-size:13px;">${escapeHtml(d.label)}</span>
+        </div>`;
+    }).join('');
+    Swal.fire({
+        title: '自動排序規則設定',
+        width: 420,
+        html: `
+            <div style="text-align:left;font-size:12px;color:#8a6d3b;margin-bottom:8px;">
+                拖移調整比較的優先順序（由上而下）。<b>此設定為全體適用</b>，儲存後所有人的「項目自動排序」都依此規則。
+            </div>
+            <div id="sortrule-box" style="text-align:left;">${rows}</div>
+            <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px dashed #d5c9b5;border-radius:4px;background:#f6f2ea;color:#999;font-size:13px;">
+                <span style="font-size:15px;">&#9776;</span> 建檔順序（固定最後，不可調整）
+            </div>`,
+        showCancelButton: true,
+        confirmButtonText: '<i class="fa fa-save"></i> 儲存規則',
+        cancelButtonText: '取消',
+        confirmButtonColor: '#F0A24B',
+        didOpen: () => {
+            const box = document.getElementById('sortrule-box');
+            let dragging = null;
+            box.querySelectorAll('.sortrule-row').forEach(row => {
+                const handle = row.querySelector('.sortrule-drag');
+                handle.addEventListener('mousedown', () => row.setAttribute('draggable', 'true'));
+                row.addEventListener('dragend',   () => { row.setAttribute('draggable', 'false'); row.style.opacity = ''; dragging = null; });
+                row.addEventListener('dragstart', e => { dragging = row; e.dataTransfer.effectAllowed = 'move'; setTimeout(() => row.style.opacity = '0.4', 0); });
+                row.addEventListener('dragover',  e => {
+                    e.preventDefault();
+                    if (!dragging || dragging === row) return;
+                    const rect = row.getBoundingClientRect();
+                    if (e.clientY < rect.top + rect.height / 2) box.insertBefore(dragging, row);
+                    else box.insertBefore(dragging, row.nextSibling);
+                });
+                row.addEventListener('drop', e => e.preventDefault());
+            });
+        },
+        preConfirm: () => Array.from(document.querySelectorAll('#sortrule-box .sortrule-row')).map(r => r.getAttribute('data-key')),
+    }).then(r => {
+        if (!r.isConfirmed || !Array.isArray(r.value) || r.value.length !== AUTO_SORT_KEY_DEFS.length) return;
+        const newKeys = r.value;
+        $.post(API_URL, {
+            action:'save_param', param_group:'QUOTATION', param_key:'auto_sort_keys',
+            param_value: JSON.stringify(newKeys), description:'報價項目自動排序規則優先順序(全體適用)'
+        }, res => {
             if (res && res.success) {
-                Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已自動排序並寫入資料庫', showConfirmButton:false, timer:2200 });
+                autoSortKeys = newKeys;
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title:'排序規則已儲存：' + autoSortRuleText(), showConfirmButton:false, timer:2600 });
             } else {
-                Swal.fire('錯誤', (res && res.message) || '排序寫入資料庫失敗', 'error');
+                Swal.fire('錯誤', (res && res.message) || '規則儲存失敗', 'error');
             }
         }, 'json').fail(() => Swal.fire('錯誤', '與伺服器通訊失敗', 'error'));
-    } else {
-        Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已自動排序（儲存後寫入排序號碼）', showConfirmButton:false, timer:2200 });
-    }
+    });
 }
 
 function saveQuote(onSuccess) {
