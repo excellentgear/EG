@@ -352,6 +352,7 @@ $_accRoles      = [];  $_userAccRoles    = [];
 $_purcRoles     = [];  $_userPurcRoles   = [];
 $_kpiRoles      = [];  $_userKpiRoles    = [];
 $_extdocRoles   = [];  $_userExtdocRoles = [];
+$_otrkRoles     = [];  $_userOtrkRoles   = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -385,6 +386,7 @@ try {
     $st->execute(['purchase']);    $_purcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['accounting']);  $_accRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['external_doc']);$_extdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['order_track']); $_otrkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -500,6 +502,10 @@ try {
     $st->execute(['external_doc']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userExtdocRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['order_track']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userOtrkRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -712,6 +718,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'purc-role-section'      => '申請採購',
                                         'acc-role-section'       => '會計',
                                         'extdoc-role-section'    => '外來文件清單',
+                                        'otrk-role-section'      => '訂單追蹤',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -1148,6 +1155,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('extdoc', 'external_doc', '外來文件清單', 'fa-file-text-o', '#b06f27',
                         '為每位使用者指派「外來文件清單」頁（業務 &gt; 外來文件清單，AS9100 外來文件管制）的操作角色。角色功能：<strong>外來文件檢閱</strong>＝檢視清單（依訂單綁定/客戶/年度篩選）、匯出 CSV、依客戶分組列印；<strong>外來文件管理</strong>＝檢閱＋綁定列印頁尾的 AS 文件編號。清單內容來自附件標籤有勾「列入外來文件清單」的料號附件與報價附件（標籤設定在報價單頁或主檔管理）。<strong>未被指派角色者無法檢視本頁</strong>；管理者固定擁有全部權限。',
                         $_extdocRoles, $_userExtdocRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('otrk', 'order_track', '訂單追蹤', 'fa-list-alt', '#c0762c',
+                        '為每位使用者指派「訂單追蹤」頁（業務 &gt; 訂單追蹤）的操作角色。角色與各功能的對應在<strong>訂單追蹤頁右上「角色設定」</strong>（僅管理員）依功能群組勾選：訂單基本操作（檢視/新建編輯/刪除/顯示金額）、訂單流程（批圖/轉生管/結案/取消訂單/OP轉訂單）、訂單變更、設計與批圖（設計備註/批圖編輯器/前往料號主檔）、計算工具（齒輪/鍵槽計算）。<strong>注意：訂單追蹤頁目前權限檢查尚未切換為角色制</strong>，此處指派先建立人員對照，切換後才會生效；管理者固定擁有全部權限。',
+                        $_otrkRoles, $_userOtrkRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 
                     <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->
