@@ -438,10 +438,104 @@ if ($hrUserPerm === 'R') {
                             <button type="button" class="btn btn-danger pull-left" id="btn-delete-in-modal" style="display: none;">刪除</button>
                             <!-- 離職/留停者才出現：清掉殘留的權限設定資料（權限本身已由在職狀態自動擋下） -->
                             <button type="button" class="btn btn-warning pull-left" id="btn-revoke-perm" style="display: none; margin-left: 8px;">清除權限設定</button>
+                            <!-- 職務調動＋在職狀態的歷史紀錄（含補登過去資料；ai-rules/14 P1） -->
+                            <button type="button" class="btn btn-default pull-left" id="btn-history" style="display: none; margin-left: 8px;">異動紀錄</button>
                             <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
                             <button type="submit" class="btn btn-primary">儲存</button>
                         </div>
                     </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- 異動紀錄 Modal：職務調動（user_position_history）＋在職狀態（user_status_history），含補登 -->
+        <div class="modal fade" id="historyModal" tabindex="-1" role="dialog" aria-labelledby="historyModalLabel">
+            <div class="modal-dialog modal-lg" role="document">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                        <h4 class="modal-title" id="historyModalLabel">異動紀錄 — <span id="historyUserName"></span></h4>
+                    </div>
+                    <div class="modal-body">
+                        <h4 style="margin-top:0;">職務調動紀錄</h4>
+                        <p class="text-muted" style="font-size:13px; margin-bottom:8px;">
+                            教育訓練等頁補登舊資料時，會依這裡的紀錄解析出「當時」的部門與職稱；職位變動過的人請把過去的異動補登進來（生效日填當時實際生效的日期）。
+                            系統異動當下自動寫入的紀錄不可刪除，只有補登列可刪。</p>
+                        <table class="table table-condensed table-striped">
+                            <thead><tr><th>生效日</th><th>類型</th><th>異動前</th><th>異動後</th><th>原因</th><th>來源</th><th style="width:50px;"></th></tr></thead>
+                            <tbody id="posHistBody"></tbody>
+                        </table>
+                        <div id="posBackfillBox" class="concurrent-group">
+                            <b>補登職務異動</b>
+                            <div class="row" style="margin-top:8px;">
+                                <div class="col-md-3 form-group">
+                                    <label>生效日</label>
+                                    <input type="date" max="9999-12-31" class="form-control input-sm" id="bfEffDate">
+                                </div>
+                                <div class="col-md-4 form-group">
+                                    <label>異動前（可都留空＝之前無紀錄）</label>
+                                    <div class="row">
+                                        <div class="col-xs-6" style="padding-right:4px;"><select id="bfBeforeDept" class="form-control input-sm hist-dept" data-pos-target="#bfBeforePos"><option value="">部門…</option></select></div>
+                                        <div class="col-xs-6" style="padding-left:4px;"><select id="bfBeforePos" class="form-control input-sm"><option value="">職稱…</option></select></div>
+                                    </div>
+                                </div>
+                                <div class="col-md-4 form-group">
+                                    <label>異動後（必填）</label>
+                                    <div class="row">
+                                        <div class="col-xs-6" style="padding-right:4px;"><select id="bfAfterDept" class="form-control input-sm hist-dept" data-pos-target="#bfAfterPos"><option value="">部門…</option></select></div>
+                                        <div class="col-xs-6" style="padding-left:4px;"><select id="bfAfterPos" class="form-control input-sm"><option value="">職稱…</option></select></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-8 form-group">
+                                    <label>原因（選填）</label>
+                                    <input type="text" class="form-control input-sm" id="bfReason" placeholder="例：組織調整、升任組長">
+                                </div>
+                                <div class="col-md-4" style="padding-top:24px;">
+                                    <button type="button" class="btn btn-sm btn-primary" id="btnBackfillPos">補登</button>
+                                    <span id="bfPosErr" style="color:#DD5138; margin-left:8px; font-size:13px;"></span>
+                                </div>
+                            </div>
+                        </div>
+                        <hr>
+                        <h4>在職狀態紀錄（離職／復職／留職停薪／育嬰留停）</h4>
+                        <table class="table table-condensed table-striped">
+                            <thead><tr><th>狀態</th><th>開始日</th><th>結束日</th><th>備註</th><th>來源</th><th style="width:50px;"></th></tr></thead>
+                            <tbody id="staHistBody"></tbody>
+                        </table>
+                        <div id="staBackfillBox" class="concurrent-group">
+                            <b>補登在職狀態</b>
+                            <div class="row" style="margin-top:8px;">
+                                <div class="col-md-3 form-group">
+                                    <label>狀態</label>
+                                    <select id="bfStaStatus" class="form-control input-sm">
+                                        <option value="0">離職</option>
+                                        <option value="1">在職（復職）</option>
+                                        <option value="2">留職停薪</option>
+                                        <option value="3">育嬰留停</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3 form-group">
+                                    <label>開始日</label>
+                                    <input type="date" max="9999-12-31" class="form-control input-sm" id="bfStaStart">
+                                </div>
+                                <div class="col-md-3 form-group">
+                                    <label>結束日（選填）</label>
+                                    <input type="date" max="9999-12-31" class="form-control input-sm" id="bfStaEnd">
+                                </div>
+                                <div class="col-md-3 form-group">
+                                    <label>備註（選填）</label>
+                                    <input type="text" class="form-control input-sm" id="bfStaRemark">
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-sm btn-primary" id="btnBackfillSta">補登</button>
+                            <span id="bfStaErr" style="color:#DD5138; margin-left:8px; font-size:13px;"></span>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -783,6 +877,7 @@ $(document).ready(function() {
             modal.find('#password').prop('required', true);
             $('#btn-delete-in-modal').hide();
             $('#btn-revoke-perm').hide();
+            $('#btn-history').hide();
         } else {
             modal.find('.modal-title').text('編輯員工資料');
             modal.find('#user_id_input').prop('readonly', true);
@@ -794,6 +889,9 @@ $(document).ready(function() {
             if (window.hrUserPerm.includes('A') || window.hrUserPerm.includes('D')) {
                 $('#btn-delete-in-modal').show().data('id', userId);
             }
+
+            // 異動紀錄：編輯模式一律可看（補登/刪除另依 U/A 權限在 modal 內控管）
+            $('#btn-history').show().data('id', userId);
             
             // 載入員工詳細資料
             callApi('get_employee_details', 'GET', { id: userId }, function(response) {
@@ -1036,6 +1134,124 @@ $(document).ready(function() {
                 }
             });
         }
+    });
+
+    // --- 異動紀錄（職務調動＋在職狀態；ai-rules/14 P1）---
+    const CHANGE_TYPE_LABEL = { transfer: '調動', concurrent_add: '兼任新增', concurrent_remove: '兼任移除',
+                                backfill: '補登', resign: '離職', reinstate: '復職' };
+    const STATUS_HIST_LABEL = { 0: '離職', 1: '在職（復職）', 2: '留職停薪', 3: '育嬰留停' };
+    const canEditHist = window.hrUserPerm.includes('A') || window.hrUserPerm.includes('U');
+
+    $('#btn-history').on('click', function() {
+        const userId = $(this).data('id');
+        $('#historyUserName').text(($('#user_cname').val() || '') + '（' + userId + '）');
+        $('#historyModal').data('id', userId);
+        $('#employeeModal').modal('hide');
+        $('#bfPosErr, #bfStaErr').text('');
+        $('#posBackfillBox, #staBackfillBox').toggle(canEditHist);
+        loadHistDepts();
+        loadChangeHistory(userId);
+        $('#historyModal').modal('show');
+    });
+
+    function loadChangeHistory(userId) {
+        callApi('get_change_history', 'GET', { id: userId }, function(res) {
+            if (res.status !== 'success') { alert('讀取異動紀錄失敗: ' + res.message); return; }
+            let h = '';
+            res.position.forEach(function(r) {
+                h += '<tr><td>' + escapeHtml(r.effective_date) + '</td>'
+                  + '<td>' + escapeHtml(CHANGE_TYPE_LABEL[r.change_type] || r.change_type) + '</td>'
+                  + '<td>' + escapeHtml(r.before_label) + '</td><td>' + escapeHtml(r.after_label) + '</td>'
+                  + '<td>' + escapeHtml(r.reason || '') + '</td>'
+                  + '<td>' + (r.source === 'manual' ? '補登' : '系統') + (r.operator ? '<br><small>' + escapeHtml(r.operator) + '</small>' : '') + '</td>'
+                  + '<td>' + (r.source === 'manual' && canEditHist
+                        ? '<button type="button" class="btn btn-xs btn-danger btn-del-poshist" data-hid="' + r.id + '">刪</button>' : '') + '</td></tr>';
+            });
+            $('#posHistBody').html(h || '<tr><td colspan="7" class="text-muted">尚無職務調動紀錄（' +
+                '之後在上方表單改部門/職稱會自動寫入；更早以前的異動請由下方補登）</td></tr>');
+            let s = '';
+            res.state.forEach(function(r) {
+                s += '<tr><td>' + escapeHtml(STATUS_HIST_LABEL[parseInt(r.status)] || r.status) + '</td>'
+                  + '<td>' + escapeHtml(r.start_date || '') + '</td><td>' + escapeHtml(r.end_date || '') + '</td>'
+                  + '<td>' + escapeHtml(r.remark || '') + '</td>'
+                  + '<td>' + (r.is_backfill ? '補登' : '系統') + '</td>'
+                  + '<td>' + (r.is_backfill && canEditHist
+                        ? '<button type="button" class="btn btn-xs btn-danger btn-del-stahist" data-hid="' + r.id + '">刪</button>' : '') + '</td></tr>';
+            });
+            $('#staHistBody').html(s || '<tr><td colspan="6" class="text-muted">尚無在職狀態紀錄（' +
+                '之後改狀態會自動寫入；更早以前的請由下方補登）</td></tr>');
+        });
+    }
+
+    // 補登區的部門下拉（與員工表單的下拉分開，避免互相干擾）
+    function loadHistDepts() {
+        callApi('get_departments', 'GET', null, function(res) {
+            if (res.status !== 'success') return;
+            $('.hist-dept').each(function() {
+                const keep = $(this).val(); const $s = $(this);
+                $s.empty().append('<option value="">部門…</option>');
+                res.data.forEach(function(d) { $s.append('<option value="' + d.id + '">' + escapeHtml(d.name) + '</option>'); });
+                if (keep) $s.val(keep);
+            });
+        });
+    }
+    $(document).on('change', '.hist-dept', function() {
+        const did = $(this).val(); const $p = $($(this).data('pos-target'));
+        $p.empty().append('<option value="">職稱…</option>');
+        if (!did) return;
+        callApi('get_department_positions_for_assignment', 'GET', { department_id: did }, function(res) {
+            if (res.status !== 'success') return;
+            res.data.forEach(function(p) { $p.append('<option value="' + p.id + '">' + escapeHtml(p.name) + '</option>'); });
+        });
+    });
+
+    // 補登職務異動（表單三總則：當下驗證、紅字寫原因）
+    $('#btnBackfillPos').on('click', function() {
+        const userId = $('#historyModal').data('id');
+        const $err = $('#bfPosErr').text('');
+        const eff = $('#bfEffDate').val();
+        if (!eff) { $err.text('請填生效日（當時實際生效的日期）'); return; }
+        if (!$('#bfAfterDept').val() || !$('#bfAfterPos').val()) { $err.text('「異動後」的部門與職稱必填'); return; }
+        const bD = $('#bfBeforeDept').val(), bP = $('#bfBeforePos').val();
+        if ((bD && !bP) || (!bD && bP)) { $err.text('「異動前」請部門與職稱都選，或兩個都留空'); return; }
+        callApi('backfill_position_history', 'POST', {
+            id: userId, effective_date: eff,
+            before_department_id: bD || 0, before_position_id: bP || 0,
+            after_department_id: $('#bfAfterDept').val(), after_position_id: $('#bfAfterPos').val(),
+            reason: $('#bfReason').val()
+        }, function(res) {
+            if (res.status === 'success') { $('#bfEffDate, #bfReason').val(''); loadChangeHistory(userId); }
+            else $err.text(res.message);
+        });
+    });
+    $(document).on('click', '.btn-del-poshist', function() {
+        if (!confirm('確定刪除此筆補登的職務異動？（教育訓練等頁依日期解析職務會受影響）')) return;
+        const userId = $('#historyModal').data('id');
+        callApi('delete_position_history', 'POST', { hist_id: $(this).data('hid') }, function(res) {
+            if (res.status === 'success') loadChangeHistory(userId); else alert(res.message);
+        });
+    });
+
+    // 補登在職狀態
+    $('#btnBackfillSta').on('click', function() {
+        const userId = $('#historyModal').data('id');
+        const $err = $('#bfStaErr').text('');
+        const sd = $('#bfStaStart').val(), ed = $('#bfStaEnd').val();
+        if (!sd) { $err.text('請填開始日'); return; }
+        if (ed && ed < sd) { $err.text('結束日（' + ed + '）不可早於開始日（' + sd + '）'); return; }
+        callApi('backfill_status_history', 'POST', {
+            id: userId, status: $('#bfStaStatus').val(), start_date: sd, end_date: ed, remark: $('#bfStaRemark').val()
+        }, function(res) {
+            if (res.status === 'success') { $('#bfStaStart, #bfStaEnd, #bfStaRemark').val(''); loadChangeHistory(userId); }
+            else $err.text(res.message);
+        });
+    });
+    $(document).on('click', '.btn-del-stahist', function() {
+        if (!confirm('確定刪除此筆補登的在職狀態紀錄？')) return;
+        const userId = $('#historyModal').data('id');
+        callApi('delete_status_history', 'POST', { hist_id: $(this).data('hid') }, function(res) {
+            if (res.status === 'success') loadChangeHistory(userId); else alert(res.message);
+        });
     });
 
     // --- 搜尋與篩選事件綁定 ---
