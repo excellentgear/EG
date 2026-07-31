@@ -288,19 +288,28 @@ switch ($action) {
 
 case 'get_options':
     if (!extCan('view')) jout(['success'=>false,'message'=>'無檢閱權限']);
-    // 客戶下拉：只列「實際出現在外來文件清單」的客戶（依全部模式抓一次，不分年度）
-    $all = extdoc_fetch_rows($db, ['mode'=>'all']);
+    // 選項跟著目前篩選連動：客戶下拉只列「目前範圍/年度/類別下真的有外來文件」的客戶，
+    // 年度/類別鈕同理（各維度用「其他維度的篩選」交叉過濾，不含自己，才不會把自己清空）
+    $selMode = $_POST['mode'] ?? 'all';
+    $selCust = trim((string)($_POST['customer_id'] ?? ''));
+    $selYear = (int)($_POST['year'] ?? 0);
+    $selCat  = (int)($_POST['category'] ?? 0);
+    $all = extdoc_fetch_rows($db, ['mode'=>$selMode]);
     $custs = []; $years = []; $presentCats = [];
     foreach ($all as $r) {
-        if ($r['customer_id'] !== '') $custs[$r['customer_id']] = $r['customer_name'];
         $y = (int)substr($r['doc_date'], 0, 4);
-        if ($y) $years[$y] = 1;
-        foreach ($r['category_ids'] as $cid) $presentCats[$cid] = 1;
+        $mCust = $selCust === '' || $r['customer_id'] === $selCust;
+        $mYear = !$selYear || $y === $selYear;
+        $mCat  = !$selCat  || in_array($selCat, $r['category_ids']);
+        if ($mYear && $mCat && $r['customer_id'] !== '') $custs[$r['customer_id']] = $r['customer_name'];
+        if ($mCust && $mCat && $y) $years[$y] = 1;
+        if ($mCust && $mYear) foreach ($r['category_ids'] as $cid) $presentCats[$cid] = 1;
     }
     asort($custs); krsort($years);
-    // 類別篩選鈕：只回傳「實際出現在外來文件內」的類別（依標籤設定順序）
-    $catList = [];
+    // 類別鈕＝目前篩選下實際出現的；all_categories＝全部外來文件標籤（配色基準，跨篩選穩定）
+    $catList = []; $catAll = [];
     foreach (extdoc_categories($db) as $cid => $c) {
+        $catAll[] = ['id'=>$cid, 'name'=>$c['display']];
         if (isset($presentCats[$cid])) $catList[] = ['id'=>$cid, 'name'=>$c['display']];
     }
     $asDocs = [];
@@ -315,6 +324,7 @@ case 'get_options':
         'customers'  => array_map(fn($id) => ['customer_id'=>$id, 'customer'=>$custs[$id]], array_keys($custs)),
         'years'      => array_keys($years),
         'categories' => $catList,
+        'all_categories' => $catAll,
         'company_name' => extdoc_company_name($db),
         'issue_unit' => extdoc_issue_unit($db),
         'as_doc'     => extdoc_bound_asdoc($db),

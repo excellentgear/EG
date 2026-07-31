@@ -355,29 +355,43 @@ function renderCatBar(){
 }
 $(document).on('click', '#catFilterBar .cat-btn', function(){
     CAT = parseInt($(this).data('cid'))||0;
-    renderCatBar(); PAGE = 1; loadList();
+    renderCatBar(); refreshAll();
 });
 
-function loadOptions(){
-    $.post(API, {action:'get_options'}, function(res){
+// 選項（客戶/年度/類別鈕）跟著目前篩選連動：沒外來文件的客戶不會出現在下拉裡
+function loadOptions(first){
+    var f = filters();
+    f.action = 'get_options';
+    $.post(API, f, function(res){
         if (!res.success) return;
         CUSTOMERS = res.customers||[];
-        renderCustOptions('');
+        var beforeCust = $('#custSel').val()||'';
+        renderCustOptions($('#custKw').val()||'');
+        // 年度：保留原選擇；該年度在目前篩選下已無資料則退回全部
+        var beforeYear = $('#yearSel').val()||'';
+        $('#yearSel').find('option:not(:first)').remove();
         (res.years||[]).forEach(function(y){
             $('#yearSel').append('<option value="'+y+'">'+y+' 年</option>');
         });
-        CATS = res.categories||[];
+        $('#yearSel').val(($('#yearSel').find('option[value="'+beforeYear+'"]').length) ? beforeYear : '');
+        // 配色以「全部外來文件標籤」為基準（跨篩選穩定同色）；按鈕只列目前篩選下實際出現的
         CAT_COLOR = {};
-        CATS.forEach(function(c, i){ CAT_COLOR[c.id] = CAT_PALETTE[i % CAT_PALETTE.length]; });
+        (res.all_categories||[]).forEach(function(c, i){ CAT_COLOR[c.id] = CAT_PALETTE[i % CAT_PALETTE.length]; });
+        CATS = res.categories||[];
+        if (CAT && !CATS.some(function(c){ return c.id === CAT; })) CAT = 0;
         renderCatBar();
         COMPANY = res.company_name||'';
         AS_DOCS = res.as_docs||[];
         renderAsDoc(res.as_doc);
         ISSUE_UNIT = res.issue_unit||'';
         $('#issueUnit').text(ISSUE_UNIT || '（未設定業務單位）');
-        loadList();   // 類別配色載好才畫列表，確保標籤顏色一致
+        if (first) loadList();
+        // 連動後原選擇被移除（客戶/年度已無資料）→ 以新值重載一次列表
+        else if (($('#custSel').val()||'') !== beforeCust || ($('#yearSel').val()||'') !== beforeYear) loadList();
     }, 'json');
 }
+// 任一篩選變更：重載列表＋重算其他維度的選項
+function refreshAll(){ PAGE = 1; loadList(); loadOptions(false); }
 var custKwT = null;
 $('#custKw').on('input', function(){
     var kw = $(this).val();
@@ -385,7 +399,7 @@ $('#custKw').on('input', function(){
     custKwT = setTimeout(function(){
         var before = $('#custSel').val();
         renderCustOptions(kw);
-        if ($('#custSel').val() !== before){ PAGE = 1; loadList(); }
+        if ($('#custSel').val() !== before) refreshAll();
     }, 250);
 });
 
@@ -511,9 +525,9 @@ function renderPager(){
 }
 function goPage(p){ PAGE = Math.max(1, p); loadList(); }
 
-$('#modeBound').on('click', function(){ MODE='bound'; $(this).addClass('active'); $('#modeAll').removeClass('active'); PAGE=1; loadList(); });
-$('#modeAll').on('click', function(){ MODE='all'; $(this).addClass('active'); $('#modeBound').removeClass('active'); PAGE=1; loadList(); });
-$('#custSel, #yearSel').on('change', function(){ PAGE=1; loadList(); });
+$('#modeBound').on('click', function(){ MODE='bound'; $(this).addClass('active'); $('#modeAll').removeClass('active'); refreshAll(); });
+$('#modeAll').on('click', function(){ MODE='all'; $(this).addClass('active'); $('#modeBound').removeClass('active'); refreshAll(); });
+$('#custSel, #yearSel').on('change', function(){ refreshAll(); });
 $('#perPageSel').on('change', function(){ PAGE=1; loadList(); });
 
 $('#btnCsv').on('click', function(){
@@ -556,23 +570,25 @@ $('#btnPrint').on('click', function(){
             + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:6px;margin-bottom:2px;}'
             + '.p-sub{font-size:11px;text-align:center;color:#555;margin-bottom:10px;}'
             + '.p-cust{font-size:14px;font-weight:bold;margin:10px 0 3px;border-left:4px solid #F0A24B;padding-left:6px;break-after:avoid;}'
-            + 'table.p-tb{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:6px;}'
-            + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 5px;text-align:center;}'
+            + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:11px;margin-bottom:6px;}'
+            + 'table.p-tb thead{display:table-header-group;}'   // 跨頁時每頁重印表頭
+            + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 5px;text-align:center;overflow-wrap:anywhere;}'
             + 'table.p-tb thead th{background:#f3ead6;}'
             + 'table.p-tb td.tl{text-align:left;word-break:break-all;}'
             + 'table.p-tb tr{break-inside:avoid;}'
             + '.cat-pill{display:inline-block;font-size:10px;border:1px solid rgba(122,82,23,.25);border-radius:9px;padding:0 6px;margin:1px 2px;}'
-            + '@page{margin:12mm 8mm 16mm;'
-            + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
+            // 左右邊界 10mm、下邊界 18mm：RICOH 等實體印表機邊緣約 4~5mm 印不到，太貼邊會被裁掉
+            + '@page{margin:12mm 10mm 18mm;'
+            + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
             + '}';
         var w = window.open('', '_blank');
         w.document.write('<html><head><meta charset="utf-8"><title>外來文件清單</title><style>'+css+'</style></head><body>'+body
             +'<scr'+'ipt>window.onload=function(){'
             // 內容超過一頁(以A4概算)才加頁碼——只影響顯示不影響分頁；counter(pages) 由列印引擎在列印當下計算
-            +'var onePageA4=(297-28)*96/25.4;'
+            +'var onePageA4=(297-30)*96/25.4;'
             +'if(document.body.scrollHeight>onePageA4*0.92){'
             +'var st=document.createElement(\'style\');'
-            +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
+            +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
             +'document.head.appendChild(st);}'
             +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
         w.document.close();
@@ -605,7 +621,7 @@ $('#btnRoleHelp').on('click', function(){ openMask('helpMask'); });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('.xd-mask').on('click', function(e){ if (e.target === this) this.style.display='none'; });
 
-if (canView){ loadOptions(); }   // 選項(含類別配色)載好後由 loadOptions 觸發 loadList
+if (canView){ loadOptions(true); }   // 選項(含類別配色)載好後由 loadOptions 觸發 loadList
 </script>
 </body>
 </html>
