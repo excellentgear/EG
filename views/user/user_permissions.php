@@ -1135,7 +1135,10 @@ $_quotDepts = array_keys($_deptSet);
                         $_purcRoles, $_userPurcRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('acc', 'accounting', '會計（對帳／應收／發票／應付）', 'fa-calculator', '#b06f27',
-                        '為每位使用者指派「會計模組」的角色，涵蓋客戶發票資料維護、對帳作業、對帳單總覽、應收對帳單、發票開立與轉出、收款沖帳、應付對帳等頁。<br>
+                        '為每位使用者指派「會計模組」的角色，涵蓋客戶發票資料維護、對帳作業、對帳單總覽、應收對帳單、發票開立與轉出、收款沖帳、應付對帳（加工費＋採購）、付款與沖帳等頁。<br>
+                         <span style="color:#b06f27;">應付涵蓋範圍</span>：廠商加工費＋材料／其他採購（<strong>只收月結</strong>；現金／零用金採購不經會計，由採購自行做零用金記帳）。
+                         採購單是現金還是月結預設依付款方式文字判定，<strong>會計登錄</strong>以上可在應付頁逐張改判（須填原因、寫入稽核）。
+                         月結採購的付款狀態<strong>以會計的付款沖帳為準</strong>並自動回寫採購單，採購頁只顯示結果。<br>
                          <strong>會計檢閱</strong>＝只能查詢與匯出，不可修改；<strong>會計登錄</strong>＝檢閱＋維護客戶統編/發票抬頭、CSV 匯入、開立發票與收款沖帳、兩側都可對帳；<strong>會計管理員</strong>＝登錄＋作廢發票、刪除收款單、<strong>退回已鎖帳的對帳單</strong>。<br>
                          <span style="color:#b06f27;">對帳分工（實務）</span>：應收由<strong>業務</strong>對完帳給會計、應付由<strong>生管</strong>對完帳給會計，所以另有兩個只做對帳的角色——<strong>應收對帳(業務)</strong> 只能對應收（客戶／出貨退貨），<strong>應付對帳(生管)</strong> 只能對應付（廠商／加工費），<span style="color:#b06f27;">兩者互不相通</span>（業務不能碰應付、生管不能碰應收），且都<strong>不能</strong>開發票或做收款付款。這兩個角色可以修改單據數量/單價/金額/備註與帳款月份，但<strong>每次修改都必填原因並寫入稽核紀錄</strong>。<br>
                          <span style="color:#b06f27;">鎖帳規則</span>：對帳人員按「確認正確」即鎖帳，之後不可改單也不可再暫存，<strong>僅會計管理員可退回重對</strong>（須填原因）。已開立發票的憑證另有更硬的鎖——不提供解鎖，只能作廢／折讓／補開，因為帳面必須與國稅局申報一致。<br>

@@ -117,6 +117,11 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
 .p-ok{background:var(--a-ok);color:#6b4522;}
 .p-warn{background:var(--a-acc);color:#fff;}
 .p-bad{background:var(--a-bad);color:#fff;}
+/* 來源徽章：同屬暖色系但深淺不同，另有文字，不靠顏色單獨辨識 */
+.p-tlog{background:#E8D3B4;color:#5b3a1e;}
+.p-purc{background:#A2703A;color:#fff;}
+.p-cash{background:#EFE0C6;color:#7a4a1e;}
+.p-paid{background:#5C7A2E;color:#fff;}
 .btn-mini{height:24px;padding:0 8px;border:1px solid var(--a-line2);border-radius:4px;
   background:#fff;cursor:pointer;color:var(--a-ink);font-size:12px;}
 .btn-mini:hover{background:var(--a-ok);}
@@ -170,7 +175,8 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
   <div class="right_col" role="main">
     <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
       <h2 style="margin:6px 0;"><i class="fa fa-truck" style="color:#8A5A2B;"></i> 應付對帳單
-        <small style="color:#7d6242;">廠商加工費，一列＝廠商×發票年月；資料來源為製程移轉紀錄既有的廠商發票欄位</small></h2>
+        <small style="color:#7d6242;">廠商加工費＋材料／其他採購，一列＝廠商×帳款月份；
+          採購只收<b>月結</b>（現金／零用金不經會計）</small></h2>
     </div>
     <div class="clearfix"></div>
 
@@ -193,6 +199,12 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
       <input type="month" id="ymFrom"> ~ <input type="month" id="ymTo">
       <button id="btnThis">本月</button>
       <button id="btnPrev">上月</button>
+      <label>來源</label>
+      <select id="src" style="width:150px;">
+        <option value="all">全部</option>
+        <option value="TLOG">加工費</option>
+        <option value="PURC">採購（月結）</option>
+      </select>
       <input type="text" id="kw" placeholder="廠商編號／簡稱／全稱／統編" style="width:210px;">
       <label><input type="checkbox" id="onlyGap"> 只顯示資料有缺的</label>
       <button id="btnSearch" class="btn-warm"><i class="fa fa-search"></i> 查詢</button>
@@ -205,19 +217,27 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
         <span style="font-weight:normal;font-size:11.5px;">(廠商拿請款單來)</span></button>
       <button id="btnMonth"><i class="fa fa-calendar"></i> 帳款月份調整</button>
       <span style="width:1px;height:22px;background:var(--a-line);margin:0 4px;"></span>
+      <button id="btnPurc"><i class="fa fa-shopping-cart"></i> 採購應付明細</button>
+      <button id="btnCash"><i class="fa fa-money"></i> 現金／零用金（未列入）</button>
+      <a href="payment.php" style="text-decoration:none;">
+        <button type="button"><i class="fa fa-credit-card"></i> 付款與沖帳</button></a>
+      <span style="width:1px;height:22px;background:var(--a-line);margin:0 4px;"></span>
       <button id="btnExport"><i class="fa fa-file-text-o"></i> 匯出彙總CSV</button>
       <button id="btnPrint"><i class="fa fa-print"></i> 列印／PDF</button>
     </div>
     <div class="a-hint" style="margin:-4px 0 8px;">
       <kbd>/</kbd> 或點「單據快搜」可用移轉單號／金額／製令／料號直接查任何一筆屬於哪個發票年月。
-      點任一列的「對帳單」可看該廠商該月完整加工明細並列印，用來核對廠商寄來的請款單與發票。
+      點任一列的「對帳單」可看該廠商該月完整明細（加工＋採購）並列印，用來核對廠商寄來的請款單與發票。
+      同一廠商同一月份的加工費與採購會併在同一列、同一份對帳單，因為對帳本來就是一個廠商一個月對一次。
     </div>
 
     <div class="a-stat">
       <div><span class="n" id="stGroups">—</span> <span class="l">廠商×月份</span></div>
-      <div><span class="n" id="stCnt">—</span> <span class="l">加工筆數</span></div>
+      <div><span class="n" id="stCnt">—</span> <span class="l">單據筆數</span></div>
       <div class="sep"></div>
-      <div><span class="n big" id="stAmt">—</span> <span class="l">加工費(未稅)</span></div>
+      <div><span class="n big" id="stAmt">—</span> <span class="l">未稅合計</span></div>
+      <div><span class="n" id="stTlog">—</span> <span class="l">其中加工費</span></div>
+      <div><span class="n" id="stPurc">—</span> <span class="l">其中採購</span></div>
       <div><span class="n" id="stTax">—</span> <span class="l">稅額</span></div>
       <div><span class="n big" id="stTotal">—</span> <span class="l">應付含稅</span></div>
       <div class="sep"></div>
@@ -234,25 +254,29 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
     <div class="a-wrap">
       <table class="a-t" id="tbl">
         <thead><tr>
-          <th class="sortable" data-sort="invoice_ym">發票年月<i class="sa"></i></th>
+          <th class="sortable" data-sort="invoice_ym">帳款月份<i class="sa"></i></th>
           <th class="sortable" data-sort="maker">廠商<i class="sa"></i></th>
           <th>統一編號</th><th>付款條件</th>
-          <th class="sortable" data-sort="cnt">加工筆數<i class="sa"></i></th>
-          <th>加工數量</th>
-          <th class="sortable" data-sort="amount">加工費(未稅)<i class="sa"></i></th>
+          <th>來源</th>
+          <th class="sortable" data-sort="cnt">筆數<i class="sa"></i></th>
+          <th class="sortable" data-sort="amount">未稅合計<i class="sa"></i></th>
+          <th>加工費</th><th>採購</th>
           <th>稅額</th>
           <th class="sortable" data-sort="total_amount">應付含稅<i class="sa"></i></th>
-          <th>加工日期範圍</th><th>對帳單</th>
+          <th>日期範圍</th><th>對帳單</th>
         </tr></thead>
-        <tbody id="tbody"><tr><td colspan="11" style="padding:22px;color:#8a6d45;">載入中…</td></tr></tbody>
+        <tbody id="tbody"><tr><td colspan="13" style="padding:22px;color:#8a6d45;">載入中…</td></tr></tbody>
         <tfoot id="tfoot"></tfoot>
       </table>
     </div>
     <div class="a-hint">
-      月份歸屬以資料本身的<b>廠商發票年月（invoice_ym）</b>為準；少數沒填的紀錄才退回用加工日期所在月份。
+      <b>加工費</b>月份歸屬以資料本身的<b>廠商發票年月（invoice_ym）</b>為準；少數沒填的紀錄才退回用加工日期所在月份。
       加工費與稅額直接取自製程移轉紀錄，未做二次計算，因此可與 ERP 對得起來。
-      廠商簡稱在廠商主檔找不到對應者會標示 <span class="pill p-bad">未對應主檔</span>。
-      <b>材料／其他採購的應付尚未納入</b>——待「申請採購」模組有實際單據後再接進來，兩者會共用同一層付款沖帳。
+      廠商簡稱在廠商主檔找不到對應者會標示 <span class="pill p-bad">未對應主檔</span>。<br>
+      <b>採購</b>來源為「申請採購」的採購單，<b>已下單之後</b>才算應付（還在詢價／簽核／待下單的不算），
+      月份用廠商發票日、沒有才用下單日。<b>只收月結</b>：付款方式寫現金／零用金／代墊的單子不列入（採購自己做零用金記帳），
+      判定結果與依據可按上方「現金／零用金（未列入）」查看，判錯可當場改判。
+      採購單金額（未稅／稅額）由採購明細算出，會計端不可線上改；要改請回「申請採購」頁改明細。
     </div>
 <?php endif; ?>
   </div>
@@ -272,15 +296,54 @@ table.a-t tfoot td{background:var(--a-ok);font-weight:bold;color:var(--a-ink);}
   </div>
 </div></div>
 
+<!-- 採購應付明細／現金零用金（未列入） -->
+<div class="a-mask" id="mkPurc"><div class="a-modal">
+  <div class="m-head"><i class="fa fa-shopping-cart"></i>&nbsp;<span id="pcTitle">採購應付明細</span>
+    <span class="m-close" data-close="mkPurc">✕</span></div>
+  <div class="m-body" id="pcBody"></div>
+  <div class="m-foot">
+    <button data-close="mkPurc">關閉</button>
+    <button id="btnPurcCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
+  </div>
+</div></div>
+
+<!-- 改判結帳方式 -->
+<div class="a-mask" id="mkMode"><div class="a-modal narrow">
+  <div class="m-head"><i class="fa fa-exchange"></i>&nbsp;改判結帳方式
+    <span class="m-close" data-close="mkMode">✕</span></div>
+  <div class="m-body" style="color:#4E2C0B;font-size:13.5px;">
+    <div id="mdTitle" style="margin-bottom:8px;"></div>
+    <div class="info" style="margin-bottom:10px;">
+      月結＝列入應付，要透過會計付款沖帳；現金／零用金＝不列入應付（採購自己記零用金帳）。
+      這個設定只存在會計這邊，不會改到採購單本身的資料。
+    </div>
+    <label style="font-weight:normal;">改判為</label>
+    <select id="mdMode" style="height:32px;width:100%;border:1px solid #C9AE85;border-radius:4px;">
+      <option value="CREDIT">月結（列入應付）</option>
+      <option value="CASH">現金／零用金（不列入應付）</option>
+      <option value="AUTO">取消手動指定，回到自動判定</option>
+    </select>
+    <label style="font-weight:normal;margin-top:8px;">原因（改判時必填，至少 2 個字）</label>
+    <textarea id="mdReason" style="width:100%;min-height:70px;border:1px solid #C9AE85;border-radius:4px;
+      padding:6px 8px;font-size:13.5px;" placeholder="例如：這張其實是月結，採購付款方式欄填錯"></textarea>
+    <div id="mdErr" style="color:#DD5138;font-size:12.5px;min-height:18px;margin-top:4px;"></div>
+  </div>
+  <div class="m-foot">
+    <button data-close="mkMode">取消</button>
+    <button class="go" id="btnModeGo"><i class="fa fa-check"></i> 確定</button>
+  </div>
+</div></div>
+
 <!-- 角色說明 -->
 <div class="a-mask" id="mkRole"><div class="a-modal narrow">
   <div class="m-head">角色權限說明<span class="m-close" data-close="mkRole">✕</span></div>
   <div class="m-body" style="font-size:13.5px;color:#5b3a1e;line-height:1.9;">
     <b>管理者</b>：固定擁有全部權限。<br>
-    <b>會計管理員／會計登錄</b>：可查詢與匯出應付對帳資料（本頁目前為對帳用途，不修改加工紀錄）。<br>
-    <b>會計檢閱</b>：可查詢與匯出。<br>
+    <b>會計管理員</b>：會計登錄的全部權限，另可刪除付款單。<br>
+    <b>會計登錄</b>：可查詢匯出，另可<b>改判採購單的結帳方式</b>（現金⇄月結）與開立付款單／沖帳。<br>
+    <b>會計檢閱</b>：只能查詢與匯出。<br>
     <span style="color:#8a6d45;font-size:12.5px;">
-      加工費金額請於製程移轉／加工單價相關頁面維護，本頁不改動來源資料。<br>
+      加工費金額請於製程移轉／加工單價相關頁面維護，採購金額請於「申請採購」頁維護，本頁不改動來源單據金額。<br>
       角色於「使用者權限設定」頁指派（模組 accounting）。</span>
   </div>
 </div></div>
@@ -345,13 +408,13 @@ $('#btnPrev').on('click',function(){
 
 function filters(){
   return {ym_from:$('#ymFrom').val(), ym_to:$('#ymTo').val(), kw:$('#kw').val(),
-          only_gap:$('#onlyGap').is(':checked')?1:0,
+          src:$('#src').val(), only_gap:$('#onlyGap').is(':checked')?1:0,
           sort:sortBy, dir:sortDir, per_page:perPage, page:page};
 }
 
 function load(){
   if(!$('#ymFrom').val()||!$('#ymTo').val()){ toast('請選擇發票年月', true); return; }
-  $('#tbody').html('<tr><td colspan="11" style="padding:22px;color:#8a6d45;">計算中…</td></tr>');
+  $('#tbody').html('<tr><td colspan="13" style="padding:22px;color:#8a6d45;">計算中…</td></tr>');
   $('#tfoot').empty();
   $.post(API+'?action=ap_summary', filters(), function(r){
     if(!r.ok){ toast(esc(r.error||'查詢失敗'), true); return; }
@@ -359,6 +422,7 @@ function load(){
     var s=r.summary||{};
     $('#stGroups').text(nf(s.groups)); $('#stCnt').text(nf(s.cnt));
     $('#stAmt').text(nf(s.amount)); $('#stTax').text(nf(s.tax_amount));
+    $('#stTlog').text(nf(s.amt_tlog)); $('#stPurc').text(nf(s.amt_purc));
     $('#stTotal').text(nf(s.total_amount)); $('#stGapN').text(nf(s.no_tax_id));
     var w='';
     if(s.not_in_master>0)
@@ -372,10 +436,14 @@ function load(){
   },'json').fail(function(){ toast('查詢失敗', true); });
 }
 
+var SRC_PILL = {TLOG:'<span class="pill p-tlog">加工費</span>',
+                PURC:'<span class="pill p-purc">採購</span>',
+                MIX :'<span class="pill p-tlog">加工費</span> <span class="pill p-purc">採購</span>'};
+
 function render(s){
   if(!rows.length){
-    $('#tbody').html('<tr><td colspan="11" style="padding:22px;color:#8a6d45;">'
-      +'此發票年月沒有應付資料。</td></tr>');
+    $('#tbody').html('<tr><td colspan="13" style="padding:22px;color:#8a6d45;">'
+      +'此帳款月份沒有應付資料。</td></tr>');
     return;
   }
   var h='';
@@ -389,9 +457,11 @@ function render(s){
         +(r.inactive?' <span class="pill p-warn">已停用</span>':'')+'</td>'
       +'<td>'+(r.tax_id?esc(r.tax_id):'<span class="pill p-warn">缺統編</span>')+'</td>'
       +'<td>'+esc(pay||'—')+'</td>'
+      +'<td>'+(SRC_PILL[r.src]||'')+'</td>'
       +'<td class="r">'+nf(r.cnt)+(r.no_inv_date>0?' <span class="pill p-warn">'+r.no_inv_date+'筆無發票日</span>':'')+'</td>'
-      +'<td class="r">'+nf(r.qty)+'</td>'
       +'<td class="r"><b>'+nf(r.amount)+'</b></td>'
+      +'<td class="r">'+(r.amt_tlog?nf(r.amt_tlog):'')+'</td>'
+      +'<td class="r">'+(r.amt_purc?nf(r.amt_purc):'')+'</td>'
       +'<td class="r">'+nf(r.tax_amount)+'</td>'
       +'<td class="r"><b style="color:#8A5A2B;">'+nf(r.total_amount)+'</b></td>'
       +'<td style="font-size:11.5px;">'+esc(r.date_range)+'</td>'
@@ -399,9 +469,11 @@ function render(s){
       +'</tr>';
   });
   $('#tbody').html(h);
-  $('#tfoot').html('<tr><td colspan="4">全部符合條件合計</td>'
-    +'<td class="r">'+nf(s.cnt)+'</td><td></td>'
-    +'<td class="r">'+nf(s.amount)+'</td><td class="r">'+nf(s.tax_amount)+'</td>'
+  $('#tfoot').html('<tr><td colspan="5">全部符合條件合計</td>'
+    +'<td class="r">'+nf(s.cnt)+'</td>'
+    +'<td class="r">'+nf(s.amount)+'</td>'
+    +'<td class="r">'+nf(s.amt_tlog)+'</td><td class="r">'+nf(s.amt_purc)+'</td>'
+    +'<td class="r">'+nf(s.tax_amount)+'</td>'
     +'<td class="r">'+nf(s.total_amount)+'</td><td colspan="2"></td></tr>');
 }
 
@@ -425,7 +497,7 @@ $(document).on('click','#pgBtns button',function(){
 $('#perPage').on('change',function(){ perPage=parseInt(this.value,10)||20; page=1; load(); });
 $('#btnSearch').on('click',function(){ page=1; load(); });
 $('#kw').on('keydown',function(e){ if(e.key==='Enter'){ e.preventDefault(); page=1; load(); } });
-$('#ymFrom,#ymTo,#onlyGap').on('change',function(){ page=1; load(); });
+$('#ymFrom,#ymTo,#onlyGap,#src').on('change',function(){ page=1; load(); });
 
 $(document).on('click','#tbl thead th.sortable',function(){
   var k=$(this).data('sort');
@@ -440,7 +512,7 @@ $(document).on('click','#tbl thead th.sortable',function(){
 $(document).on('click','.btn-stmt',function(){
   var r=rows[parseInt($(this).data('i'),10)];
   if(!r) return;
-  curStmt={maker_id_no:r.maker_id_no, invoice_ym:r.invoice_ym};
+  curStmt={maker_id_no:r.maker_id_no, invoice_ym:r.invoice_ym, src:$('#src').val()};
   $('#stTitle').text('應付對帳單　'+r.maker_name+'　'+r.invoice_ym);
   $('#stBody').html('<div style="padding:16px;color:#8a6d45;">載入中…</div>');
   openMask('mkStmt');
@@ -452,9 +524,11 @@ $(document).on('click','.btn-stmt',function(){
 
 function renderStmt(d){
   var hd=d.head||{};
+  var srcSel=$('#src').val();
+  var srcName = srcSel==='TLOG' ? '加工費' : (srcSel==='PURC' ? '採購' : '加工費＋採購');
   var h='<div id="stmtPrint">';
   h+='<div style="text-align:center;font-size:20px;font-weight:bold;color:#5b3a1e;margin-bottom:8px;">'
-    +'應付對帳單（加工費）</div>';
+    +'應付對帳單（'+srcName+'）</div>';
   if(!hd.in_master)
     h+='<div class="warn">此廠商代號在廠商主檔找不到對應，無法取得統一編號與付款條件。</div>';
 
@@ -469,16 +543,19 @@ function renderStmt(d){
     +'<tr><td>製表日</td><td colspan="3">'+new Date().toISOString().slice(0,10)+'</td></tr>'
     +'</table></div>';
 
-  h+='<table class="a-t"><thead><tr><th>#</th><th>加工日</th><th>移轉單號</th><th>製令</th>'
-    +'<th>料號</th><th>製程</th><th>加工數量</th><th>損耗</th><th>單價</th><th>加工費</th>'
+  h+='<table class="a-t"><thead><tr><th>#</th><th>來源</th><th>日期</th><th>單號</th><th>製令</th>'
+    +'<th>料號</th><th>製程／品名</th><th>數量</th><th>損耗</th><th>單價</th><th>未稅金額</th>'
     +'<th>稅額</th><th>發票日期</th><th>備註</th></tr></thead><tbody>';
   (d.items||[]).forEach(function(i,n){
-    h+='<tr><td>'+(n+1)+'</td><td>'+esc(i.d)+'</td><td>'+esc(i.transfer_no||'')+'</td>'
+    var isP = (i.src==='PURC');
+    h+='<tr><td>'+(n+1)+'</td>'
+      +'<td>'+(isP?'採購':'加工費')+'</td>'
+      +'<td>'+esc(i.d)+'</td><td>'+esc(i.doc_no||i.transfer_no||'')+'</td>'
       +'<td>'+esc(i.bom)+'</td><td class="l">'+esc(i.product_id||'')+'</td>'
-      +'<td>'+esc(i.process_name||'')+'</td>'
-      +'<td class="r">'+nf(i.transfer_qty)+'</td>'
+      +'<td class="l">'+esc(i.process_name||'')+'</td>'
+      +'<td class="r">'+(isP?'':nf(i.transfer_qty))+'</td>'
       +'<td class="r">'+(i.loss_qty>0?nf(i.loss_qty):'')+'</td>'
-      +'<td class="r">'+np(i.unit_price)+'</td>'
+      +'<td class="r">'+(isP?'':np(i.unit_price))+'</td>'
       +'<td class="r">'+nf(i.process_amount)+'</td>'
       +'<td class="r">'+nf(i.tax_amount)+'</td>'
       +'<td>'+esc(i.inv_date||'—')+'</td>'
@@ -486,7 +563,7 @@ function renderStmt(d){
   });
   h+='</tbody></table>';
   h+='<div class="stmt-total">'
-    +'加工費（未稅）：<b>'+nf(d.amount)+'</b> 元　／　稅額：<b>'+nf(d.tax_amount)+'</b> 元　／　'
+    +'未稅合計：<b>'+nf(d.amount)+'</b> 元　／　稅額：<b>'+nf(d.tax_amount)+'</b> 元　／　'
     +'應付含稅：<b style="color:#DD5138;">'+nf(d.total_amount)+'</b> 元</div>';
   h+='</div>';
   $('#stBody').html(h);
@@ -515,6 +592,109 @@ $('#btnExport').on('click',function(){
   window.location = API+'?action=ap_export&'+qs(f);
 });
 $('#btnPrint').on('click',function(){ window.print(); });
+
+/* ══ 採購應付明細／現金零用金（未列入）══════════════════════════════
+   現金那份的用途是「讓被排除的單子看得見」——判定規則靠關鍵字，一定會有判錯的，
+   看得到才改得掉。改判只寫會計自己的表，不動採購單。 */
+var pcMode = 'credit';
+function openPurc(mode){
+  pcMode = mode;
+  $('#pcTitle').text(mode==='cash' ? '現金／零用金採購（未列入應付）' : '採購應付明細（月結）');
+  $('#pcBody').html('<div style="padding:16px;color:#8a6d45;">載入中…</div>');
+  openMask('mkPurc');
+  $.post(API+'?action=purc_list', {mode:mode, ym_from:$('#ymFrom').val(), ym_to:$('#ymTo').val(),
+                                   kw:$('#kw').val(), per_page:0}, function(r){
+    if(!r.ok){ $('#pcBody').html('<div style="padding:16px;color:#DD5138;">'+esc(r.error||'載入失敗')+'</div>'); return; }
+    renderPurc(r);
+  },'json').fail(function(){ $('#pcBody').html('<div style="padding:16px;color:#DD5138;">載入失敗。</div>'); });
+}
+$('#btnPurc').on('click',function(){ openPurc('credit'); });
+$('#btnCash').on('click',function(){ openPurc('cash'); });
+
+function renderPurc(r){
+  var s=r.summary||{}, rows=r.rows||[];
+  var h='';
+  h+='<div class="'+(pcMode==='cash'?'info':'info')+'" style="margin-bottom:8px;">'
+    + (pcMode==='cash'
+        ? '以下採購單被判定為<b>現金／零用金</b>，<b>不列入應付</b>也不做付款沖帳（採購自己做零用金記帳）。'
+          +'判定依據列在每一列後面；判錯請按「改判」。'
+        : '以下是<b>月結</b>採購單（已下單之後才成立應付）。付款請到「付款與沖帳」開付款單，'
+          +'一筆付款可以沖多張、也可以先付一半；沖完會自動回寫採購單的付款狀態。')
+    + '</div>';
+  h+='<div style="margin-bottom:6px;color:#4E2C0B;">共 <b>'+nf(s.count)+'</b> 張'
+    + '　含稅合計 <b>'+nf(s.grand_total)+'</b>'
+    + (pcMode==='cash' ? '' : '　已付 <b>'+nf(s.paid)+'</b>　未付 <b style="color:#DD5138;">'+nf(s.open)+'</b>')
+    + '</div>';
+  if(!rows.length){
+    h+='<div style="padding:14px;color:#8a6d45;">這個月份區間沒有'+(pcMode==='cash'?'現金／零用金':'月結')+'採購單。</div>';
+    $('#pcBody').html(h); return;
+  }
+  h+='<div style="overflow-x:auto;"><table class="a-t"><thead><tr>'
+    +'<th>採購單號</th><th>標題</th><th>用途</th><th>廠商</th><th>帳款月份</th><th>發票</th>'
+    +'<th>未稅</th><th>稅額</th><th>含稅</th>'
+    + (pcMode==='cash' ? '<th>判定依據</th>' : '<th>已付</th><th>未付</th>')
+    +'<th>操作</th></tr></thead><tbody>';
+  rows.forEach(function(x){
+    h+='<tr>'
+      +'<td>'+esc(x.req_no)+'</td>'
+      +'<td class="l">'+esc((x.title||'').substr(0,20))+'</td>'
+      +'<td class="l" style="font-size:11.5px;">'+esc(x.purpose_label||'')+'</td>'
+      +'<td class="l">'+esc(x.vendor_name||'')+'</td>'
+      +'<td>'+esc(x.billing_month)+'</td>'
+      +'<td style="font-size:11.5px;">'+esc(x.invoice_no||'—')+(x.invoice_date?'<br>'+esc(x.invoice_date):'')+'</td>'
+      +'<td class="r">'+nf(x.subtotal)+'</td><td class="r">'+nf(x.tax_amount)+'</td>'
+      +'<td class="r"><b>'+nf(x.grand_total)+'</b></td>';
+    if(pcMode==='cash'){
+      h+='<td class="l" style="font-size:11.5px;">'+esc(x.mode_reason)
+        +(x.mode_manual?' <span class="pill p-cash">手動</span>':'')+'</td>';
+    }else{
+      h+='<td class="r">'+(x.paid_amt?nf(x.paid_amt):'')+'</td>'
+        +'<td class="r">'+(x.open_amt>0.005
+            ? '<b style="color:#DD5138;">'+nf(x.open_amt)+'</b>'
+            : '<span class="pill p-paid">已付清</span>')+'</td>';
+    }
+    h+='<td><button class="btn-mini btn-mode" data-id="'+x.req_id+'" data-no="'+esc(x.req_no)
+      +'" data-mode="'+esc(x.settle_mode)+'"><i class="fa fa-exchange"></i> 改判</button></td></tr>';
+  });
+  h+='</tbody></table></div>';
+  $('#pcBody').html(h);
+}
+$('#btnPurcCsv').on('click',function(){
+  window.location = API+'?action=purc_export&'+qs({mode:pcMode, ym_from:$('#ymFrom').val(),
+                                                   ym_to:$('#ymTo').val()});
+});
+
+/* 改判結帳方式（現金⇄月結） */
+var mdTarget=null;
+$(document).on('click','.btn-mode',function(){
+  mdTarget = {id: parseInt($(this).data('id'),10), no: String($(this).data('no'))};
+  $('#mdTitle').html('採購單：<b>'+esc(mdTarget.no)+'</b>　目前：<b>'
+    + (String($(this).data('mode'))==='CASH' ? '現金／零用金' : '月結') + '</b>');
+  $('#mdMode').val(String($(this).data('mode'))==='CASH' ? 'CREDIT' : 'CASH');
+  $('#mdReason').val(''); $('#mdErr').text('');
+  openMask('mkMode');
+});
+$('#mdReason').on('input',function(){
+  if($('#mdMode').val()==='AUTO'){ $('#mdErr').text(''); return; }
+  $('#mdErr').text($.trim(this.value).length<2 ? '請填原因，至少 2 個字' : '');
+});
+$('#mdMode').on('change',function(){ $('#mdErr').text(''); });
+$('#btnModeGo').on('click',function(){
+  if(!mdTarget) return;
+  var mode=$('#mdMode').val(), reason=$.trim($('#mdReason').val());
+  if(mode!=='AUTO' && reason.length<2){ $('#mdErr').text('請填原因，至少 2 個字'); $('#mdReason').focus(); return; }
+  var $b=$(this).prop('disabled',true);
+  $.post(API+'?action=purc_set_mode',{req_id:mdTarget.id, settle_mode:mode, reason:reason, csrf:CSRF},
+    function(r){
+      $b.prop('disabled',false);
+      if(!r.ok){ $('#mdErr').text(r.error||'設定失敗'); return; }
+      closeMask('mkMode'); toast(esc(r.message||'已設定')); openPurc(pcMode); load();
+    },'json').fail(function(x){
+      $b.prop('disabled',false);
+      var m='設定失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){}
+      $('#mdErr').text(m);
+    });
+});
 
 /* ══ 共用工具：單據快搜 / 帳款月份調整 ══ */
 AccTools.init({side:'ap', api:API, csrf:function(){ return CSRF; }, onChanged:load});
