@@ -17,6 +17,16 @@ if (!isset($_SESSION['id'])) {
 }
 $user_id = $_SESSION['id'];
 
+// 相容舊表：quotation_item.sort_order（列印/顯示排序號碼）首次執行自動補欄，
+// 並依「舊版列印時的自動排序規則」回填既有資料，讓舊報價單的列印順序維持不變
+try { $pdo->query("SELECT sort_order FROM quotation_item LIMIT 1"); }
+catch (PDOException $e) {
+    try {
+        $pdo->exec("ALTER TABLE quotation_item ADD COLUMN sort_order INT NOT NULL DEFAULT 0 COMMENT '列印/顯示排序號碼(依存檔順序;0=未排依item_id)' AFTER quote_id");
+        $pdo->exec("UPDATE quotation_item qi JOIN (SELECT item_id, ROW_NUMBER() OVER (PARTITION BY quote_id ORDER BY product_id ASC, process_notes ASC, specification ASC, quantity ASC, item_id ASC) AS rn FROM quotation_item) t ON t.item_id = qi.item_id SET qi.sort_order = t.rn");
+    } catch (PDOException $e2) {}
+}
+
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 
 // ──────────────────────────────────────────────────────────────
@@ -32,7 +42,7 @@ function fetchItemsWithTiers(PDO $pdo, int $quote_id): array
         LEFT JOIN quotation_item_process_map qipm ON qi.item_id = qipm.quotation_item_id
         WHERE qi.quote_id = ?
         GROUP BY qi.item_id
-        ORDER BY qi.product_id ASC, qi.process_notes ASC, qi.specification ASC, qi.quantity ASC, qi.item_id ASC
+        ORDER BY qi.sort_order ASC, qi.item_id ASC
     ");
     $stmt->execute([$quote_id]);
     $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -302,6 +312,33 @@ try {
             $response = ['success' => true, 'data' => $main];
             break;
 
+        // ── 自動排序按鈕：依前端排好的順序直接改資料庫排序號碼（只動 quotation_item.sort_order，
+        //    不碰 quotation_list.updated_at，避免觸發樂觀鎖誤判衝突）──
+        case 'save_item_sort': {
+            $quote_id = intval($_POST['quote_id'] ?? 0);
+            if (!$quote_id) throw new Exception('缺少 quote_id');
+            $item_ids = json_decode($_POST['item_ids'] ?? '[]', true);
+            if (!is_array($item_ids) || empty($item_ids)) throw new Exception('缺少排序項目');
+
+            // 只接受屬於該報價單的 item_id
+            $chk = $pdo->prepare("SELECT item_id FROM quotation_item WHERE quote_id=?");
+            $chk->execute([$quote_id]);
+            $own_ids = array_map('intval', $chk->fetchAll(PDO::FETCH_COLUMN));
+
+            $pdo->beginTransaction();
+            $upd = $pdo->prepare("UPDATE quotation_item SET sort_order=? WHERE item_id=? AND quote_id=?");
+            $pos = 0;
+            foreach ($item_ids as $iid) {
+                $iid = intval($iid);
+                if (!in_array($iid, $own_ids)) continue;
+                $pos++;
+                $upd->execute([$pos, $iid, $quote_id]);
+            }
+            $pdo->commit();
+            $response = ['success' => true, 'updated' => $pos];
+            break;
+        }
+
         case 'save':
             $data = json_decode($_POST['data'], true);
             if (json_last_error() !== JSON_ERROR_NONE) throw new Exception('Invalid data format.');
@@ -476,8 +513,10 @@ try {
                 if ($eid0) $explicit_ids[] = $eid0;
             }
 
+            $sort_pos = 0; // 依前端送出的列順序寫入排序號碼（存檔順序=列印順序）
             foreach ($items as $item) {
                 if (empty($item['product_id'])) continue;
+                $sort_pos++;
 
                 $item_id   = intval($item['item_id'] ?? 0) ?: null;
                 $is_tiered = !empty($item['is_tiered']) ? 1 : 0;
@@ -512,14 +551,15 @@ try {
                     'show_bom'           => !empty($item['show_bom']) ? 1 : 0,
                     // 階層式規則：未勾「顯示」時「列印」一律歸零
                     'print_bom'          => (!empty($item['show_bom']) && !empty($item['print_bom'])) ? 1 : 0,
+                    'sort_order'         => $sort_pos,
                 ];
 
                 if ($item_id && in_array($item_id, $existing_ids)) {
                     $submitted_ids[] = $item_id;
                     $if['item_id'] = $item_id;
-                    $pdo->prepare("UPDATE quotation_item SET quote_id=:quote_id,product_id=:product_id,d_setting_d_id=:d_setting_d_id,specification=:specification,quantity=:quantity,unit=:unit,unit_price=:unit_price,amount=:amount,process_group_type=:process_group_type,process_notes=:process_notes,is_tiered=:is_tiered,show_bom=:show_bom,print_bom=:print_bom,updated_at=NOW() WHERE item_id=:item_id")->execute($if);
+                    $pdo->prepare("UPDATE quotation_item SET quote_id=:quote_id,product_id=:product_id,d_setting_d_id=:d_setting_d_id,specification=:specification,quantity=:quantity,unit=:unit,unit_price=:unit_price,amount=:amount,process_group_type=:process_group_type,process_notes=:process_notes,is_tiered=:is_tiered,show_bom=:show_bom,print_bom=:print_bom,sort_order=:sort_order,updated_at=NOW() WHERE item_id=:item_id")->execute($if);
                 } else {
-                    $pdo->prepare("INSERT INTO quotation_item (quote_id,product_id,d_setting_d_id,specification,quantity,unit,unit_price,amount,process_group_type,process_notes,is_tiered,show_bom,print_bom) VALUES (:quote_id,:product_id,:d_setting_d_id,:specification,:quantity,:unit,:unit_price,:amount,:process_group_type,:process_notes,:is_tiered,:show_bom,:print_bom)")->execute($if);
+                    $pdo->prepare("INSERT INTO quotation_item (quote_id,product_id,d_setting_d_id,specification,quantity,unit,unit_price,amount,process_group_type,process_notes,is_tiered,show_bom,print_bom,sort_order) VALUES (:quote_id,:product_id,:d_setting_d_id,:specification,:quantity,:unit,:unit_price,:amount,:process_group_type,:process_notes,:is_tiered,:show_bom,:print_bom,:sort_order)")->execute($if);
                     $item_id = (int)$pdo->lastInsertId();
                 }
                 $submitted_ids[] = $item_id;
@@ -712,8 +752,8 @@ try {
             $ins_item  = $pdo->prepare("
                 INSERT INTO quotation_item
                     (quote_id,product_id,specification,quantity,unit_price,amount,
-                     process_group_type,process_notes,is_tiered,show_bom,print_bom)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     process_group_type,process_notes,is_tiered,show_bom,print_bom,sort_order)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
             ");
             $ins_map  = $pdo->prepare("INSERT INTO quotation_item_process_map (quotation_item_id,process_no) VALUES (?,?)");
             $ins_tier = $pdo->prepare("
@@ -736,6 +776,7 @@ try {
                     $item['is_tiered'],
                     $item['show_bom'] ?? 0,
                     $item['print_bom'] ?? 0,
+                    $item['sort_order'] ?? 0,
                 ]);
                 $new_item_id = (int)$pdo->lastInsertId();
 
