@@ -15,6 +15,8 @@ header('Content-Type: application/json; charset=utf-8');
 require_once __DIR__ . '/../common/DBConnection.php';
 require_once __DIR__ . '/../common/role_features_helper.php';
 require_once __DIR__ . '/../common/leave_lib.php';
+require_once __DIR__ . '/../common/leave_stats_lib.php';
+require_once __DIR__ . '/../common/people_lib.php';
 
 if (!isset($_SESSION['id'])) {
     echo json_encode(['success' => false, 'message' => '尚未登入']);
@@ -323,6 +325,65 @@ case 'list': {
     out(['success' => true, 'total' => $total, 'page' => $page, 'per' => $per,
          'year' => $yearRaw, 'years' => $years,
          'rows' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+// ════════════════ 請假統計（月／年／趨勢／部門・人員） ════════════════
+// 檢視範圍與請假單列表同一套：人事/管理員看全公司，主管看自己部門(含下轄)，其他人看不到本分頁。
+// 統計一律後端全量計算（eg_leave_stats），前端只負責畫圖，不可自己加總已載入的那一頁。
+case 'stats': {
+    $depts = $VIEW_ALL ? [] : leave_dept_scope($db, $user_id);
+    if (!$VIEW_ALL && !$depts) bad('您沒有檢視請假統計的權限');
+    // 主管只看得到自己部門(含下轄)的人；人事/管理員不設限（null）
+    $scopeIds = null;
+    if (!$VIEW_ALL) {
+        $in = implode(',', array_map('intval', $depts));
+        $scopeIds = array_map('intval', $db->query(
+            "SELECT DISTINCT user_id FROM user_department_position_map WHERE department_id IN ($in)")
+            ->fetchAll(PDO::FETCH_COLUMN));
+        if (!$scopeIds) $scopeIds = [0];   // 空白名單也要是「什麼都看不到」，不能退化成看全部
+    }
+    $yearRaw = trim((string)($_GET['year'] ?? date('Y')));
+    $year = ($yearRaw === 'all') ? 'all'
+          : ((ctype_digit($yearRaw) && (int)$yearRaw >= 1990 && (int)$yearRaw <= 9999) ? (int)$yearRaw : (int)date('Y'));
+    $typeIds = array_values(array_filter(array_map('intval', explode(',', (string)($_GET['type_ids'] ?? '')))));
+    // 預設只算「已核准」；人事要看含審核中的預估時才切 with_pending
+    $statuses = ((string)($_GET['with_pending'] ?? '') === '1') ? ['approved', 'pending', 'cancel_pending'] : ['approved'];
+
+    // 主管切「某部門」時仍受可視範圍限制：dept_id 只能是自己看得到的部門
+    $deptId = (int)($_GET['dept_id'] ?? 0);
+    if ($deptId > 0 && !$VIEW_ALL && !in_array($deptId, array_map('intval', $depts), true)) $deptId = 0;
+
+    out(['success' => true, 'scope' => $VIEW_ALL ? 'all' : 'dept',
+         'with_pending' => ($statuses !== ['approved']),
+         'data' => eg_leave_stats($db, [
+             'scope_user_ids' => $scopeIds,
+             'year'           => $year,
+             'dept_id'        => $deptId,
+             'user_id'        => (int)($_GET['user_id'] ?? 0),
+             'type_ids'       => $typeIds,
+             'statuses'       => $statuses,
+         ])]);
+}
+
+// ════════════════ 統計頁的篩選下拉（部門／人員） ════════════════
+// 人員下拉一律走 people_lib（CLAUDE.md 人員列表鐵則：只列未離職、標長期請假、依職稱排序、跨部門顯示部門）
+case 'stats_options': {
+    $depts = $VIEW_ALL ? [] : leave_dept_scope($db, $user_id);
+    if (!$VIEW_ALL && !$depts) bad('您沒有檢視請假統計的權限');
+    $deptIds = $VIEW_ALL ? [] : array_map('intval', $depts);
+    $people = eg_people_list($db, $deptIds ? ['dept_ids' => $deptIds] : []);
+    $showDept = eg_people_multi_dept($people);
+    $rows = [];
+    foreach ($people as $p) {
+        $rows[] = ['id' => $p['id'],
+                   'label' => $p['display'] . ($showDept && $p['dept_name'] !== '' ? '／' . $p['dept_name'] : ''),
+                   'dept_id' => $p['dept_id'] ?? 0];
+    }
+    // 部門清單：有可視範圍就只給那些，否則全部
+    $dq = $deptIds ? ("WHERE id IN (" . implode(',', $deptIds) . ")") : '';
+    $dl = $db->query("SELECT id, name FROM department $dq ORDER BY COALESCE(sort_order,999), id")
+             ->fetchAll(PDO::FETCH_ASSOC);
+    out(['success' => true, 'depts' => $dl, 'people' => $rows, 'show_dept' => $showDept]);
 }
 
 // ════════════════ 單一請假單詳情（含簽核歷程） ════════════════

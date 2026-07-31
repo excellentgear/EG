@@ -20,6 +20,15 @@ $IS_ADMIN = rf_has_feature($features, 'all');
 require_once '../../src/common/leave_lib.php';
 $IS_SUPERADMIN = eg_leave_is_superadmin($pdo, $uid);
 $VIEW_ALL = $IS_ADMIN || rf_has_feature($features, 'leave_view_all');
+// 請假統計分頁：人事/管理員看全公司；主管（主職職稱有階級）看自己部門含下轄；其他人看不到這個分頁。
+// 判定與 Leave_API 的 leave_dept_scope() 同一條件（主職 position_level.level 非 NULL），
+// 前端只是不畫分頁，實際守門在 API 的 stats / stats_options。
+$IS_SUPERVISOR = false;
+try {
+    $mainIdent = eg_user_main_identity($pdo, $uid);
+    $IS_SUPERVISOR = ($mainIdent && $mainIdent['level'] !== null);
+} catch (Throwable $e) {}
+$SHOW_STATS = $VIEW_ALL || $IS_SUPERVISOR;
 
 // 首次載入植入預設角色（module=leave）
 try {
@@ -122,6 +131,20 @@ input[type=number]{-moz-appearance:textfield;}
 .scope-btn,.status-btn{background:#fffdf9;border:1px solid var(--sand-d);color:#8a6d45;font-size:12.5px;}
 .scope-btn:hover,.status-btn:hover{background:#f7e9d5;color:#6b5638;}
 .scope-btn.on,.status-btn.on{background:var(--amber);border-color:var(--amber-d);color:#fff;font-weight:600;}
+/* ── 請假統計 ── */
+.chart-box{position:relative;height:300px;}                 /* Chart.js 需要固定高度的容器 */
+.chart-box canvas{max-width:100%;}
+.st-chip{border:1px solid var(--sand-d);border-radius:14px;padding:2px 11px 2px 8px;font-size:12px;
+         cursor:pointer;background:#fffdf9;color:#8a6d45;user-select:none;white-space:nowrap;
+         display:inline-flex;align-items:center;gap:6px;}
+.st-chip .dot{width:11px;height:11px;border-radius:3px;display:inline-block;border:1px solid rgba(0,0,0,.15);}
+.st-chip.off{opacity:.42;text-decoration:line-through;}
+.st-chip:hover{background:#f7e9d5;}
+.kpi-it .lb{font-size:11px;color:#9a7b4f;}
+.kpi-it .vl{font-size:19px;font-weight:700;color:var(--ink);}
+.kpi-it .un{font-size:12px;font-weight:400;color:#9a7b4f;}
+.lv-tbl td.numc,.lv-tbl th.numc{text-align:right;white-space:nowrap;}
+.lv-tbl tr.sum-row td{background:#f7efe0;font-weight:700;color:var(--amber-d);}
 @media print{
   .right_col,.container.body{margin:0!important;padding:0!important;}
   .nav_menu,.left_col,.pm-tab-btn,.btn,.pager,.no-print{display:none!important;}
@@ -145,6 +168,9 @@ input[type=number]{-moz-appearance:textfield;}
       <button class="pm-tab-btn active" id="tbApply" onclick="topTab('apply',this)">📝 申請請假</button>
       <button class="pm-tab-btn" id="tbMine" onclick="topTab('mine',this);loadList()">📋 我的請假單</button>
       <button class="pm-tab-btn" id="tbSign" onclick="topTab('sign',this);loadPending()">✍️ 待我簽核 <span id="pendCnt" class="tag-warn" style="display:none;">0</span></button>
+      <?php if ($SHOW_STATS): ?>
+      <button class="pm-tab-btn" id="tbStats" onclick="topTab('stats',this);openStats()">📊 請假統計</button>
+      <?php endif; ?>
     </div>
 
     <!-- ═══════════ 申請請假 ═══════════ -->
@@ -304,6 +330,152 @@ input[type=number]{-moz-appearance:textfield;}
         <div id="pendBody"><div class="empty-note">載入中…</div></div>
       </div>
     </div>
+
+    <!-- ═══════════ 請假統計（人事／主管） ═══════════ -->
+    <?php if ($SHOW_STATS): ?>
+    <div class="top-tab" id="tab-stats" style="display:none;">
+      <!-- 篩選列：四個子分頁共用同一組條件，切子分頁不會讓數字換一套口徑 -->
+      <div class="lv-card" id="stFilterCard">
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+          <div>
+            <label style="display:block;font-size:12px;color:#9a7b4f;margin-bottom:2px;">年度</label>
+            <select class="form-control input-sm" id="stYear" style="width:auto;"></select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:#9a7b4f;margin-bottom:2px;">部門</label>
+            <select class="form-control input-sm" id="stDept" style="width:auto;min-width:130px;"
+                    title="雙擊＝解除部門篩選"></select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:#9a7b4f;margin-bottom:2px;">人員</label>
+            <select class="form-control input-sm" id="stUser" style="width:auto;min-width:190px;"
+                    title="雙擊＝解除人員篩選"></select>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;color:#9a7b4f;margin-bottom:2px;">狀態</label>
+            <label style="font-weight:400;font-size:12.5px;color:#6b5638;white-space:nowrap;padding:5px 0;">
+              <input type="checkbox" id="stPending" data-eg-skip> 含審核中（預設只算已核准）
+            </label>
+          </div>
+          <span style="flex:1;"></span>
+          <div class="no-print">
+            <button class="btn btn-sm btn-default" onclick="loadStats()"><i class="fa fa-refresh"></i> 重新計算</button>
+            <button class="btn btn-sm btn-amber" onclick="printStats()"><i class="fa fa-print"></i> 列印本分頁</button>
+          </div>
+        </div>
+        <!-- 假別篩選：色塊即圖表顏色，點一下切換納入與否（長假天數大，可在這裡排除） -->
+        <div style="margin-top:10px;">
+          <div style="font-size:12px;color:#9a7b4f;margin-bottom:4px;">
+            假別（點選切換納入；<b>留職停薪／育嬰留停等長假天數很大</b>，會壓過其他假別，需要時請在此排除）
+            <a href="javascript:;" onclick="stAllTypes(true)" style="margin-left:8px;">全選</a>
+            <a href="javascript:;" onclick="stAllTypes(false)" style="margin-left:6px;">全不選</a>
+          </div>
+          <div id="stTypeChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+        </div>
+        <div id="stScopeNote" style="font-size:11.5px;color:#9a7b4f;margin-top:8px;"></div>
+      </div>
+
+      <!-- KPI 卡：四個子分頁共用，一眼看到選定條件下的總量 -->
+      <div id="stKpi" class="annual-box" style="gap:26px;"></div>
+
+      <div style="display:flex;gap:4px;background:#f3ead9;border-radius:8px;padding:4px;margin-bottom:12px;flex-wrap:wrap;">
+        <button class="pm-tab-btn active" id="sbMonth" onclick="statsSub('month',this)">月度統計</button>
+        <button class="pm-tab-btn" id="sbYear"  onclick="statsSub('year',this)">年度比較</button>
+        <button class="pm-tab-btn" id="sbTrend" onclick="statsSub('trend',this)">趨勢分析</button>
+        <button class="pm-tab-btn" id="sbPeople" onclick="statsSub('people',this)">部門・人員分析</button>
+      </div>
+
+      <!-- ── 月度統計 ── -->
+      <div class="st-sub" id="st-month">
+        <div class="row">
+          <div class="col-md-8"><div class="lv-card">
+            <h4><i class="fa fa-bar-chart"></i> <span class="st-y"></span>每月請假天數（依假別堆疊）</h4>
+            <div class="chart-box"><canvas id="cvMonth"></canvas></div>
+          </div></div>
+          <div class="col-md-4"><div class="lv-card">
+            <h4><i class="fa fa-pie-chart"></i> 假別佔比</h4>
+            <div class="chart-box"><canvas id="cvType"></canvas></div>
+          </div></div>
+        </div>
+        <div class="lv-card">
+          <h4><i class="fa fa-table"></i> 月 × 假別 交叉表（天）</h4>
+          <div style="overflow-x:auto;"><table class="lv-tbl" id="tbMonth"></table></div>
+        </div>
+      </div>
+
+      <!-- ── 年度比較 ── -->
+      <div class="st-sub" id="st-year" style="display:none;">
+        <div class="lv-card">
+          <h4><i class="fa fa-bar-chart"></i> 各年度請假天數（依假別堆疊，不受上方年度篩選影響）</h4>
+          <div class="chart-box"><canvas id="cvYear"></canvas></div>
+        </div>
+        <div class="lv-card">
+          <h4><i class="fa fa-table"></i> 年 × 假別 交叉表（天）</h4>
+          <div style="overflow-x:auto;"><table class="lv-tbl" id="tbYear"></table></div>
+        </div>
+      </div>
+
+      <!-- ── 趨勢分析 ── -->
+      <div class="st-sub" id="st-trend" style="display:none;">
+        <div class="lv-card">
+          <h4><i class="fa fa-line-chart"></i> 逐月請假天數趨勢（跨年度連續，中間沒人請假的月份補 0）</h4>
+          <div class="chart-box"><canvas id="cvTrend"></canvas></div>
+        </div>
+        <div class="row">
+          <div class="col-md-6"><div class="lv-card">
+            <h4><i class="fa fa-line-chart"></i> 逐月請假<b>件數</b></h4>
+            <div class="chart-box"><canvas id="cvTrendCnt"></canvas></div>
+          </div></div>
+          <div class="col-md-6"><div class="lv-card">
+            <h4><i class="fa fa-exchange"></i> 同期比較（<span class="st-y2"></span> vs 前一年，每月天數）</h4>
+            <div class="chart-box"><canvas id="cvYoY"></canvas></div>
+          </div></div>
+        </div>
+        <div class="lv-card">
+          <h4><i class="fa fa-table"></i> 逐月明細</h4>
+          <div style="overflow-x:auto;"><table class="lv-tbl" id="tbTrend"></table></div>
+        </div>
+      </div>
+
+      <!-- ── 部門・人員分析 ── -->
+      <div class="st-sub" id="st-people" style="display:none;">
+        <div class="row">
+          <div class="col-md-6"><div class="lv-card">
+            <h4><i class="fa fa-building-o"></i> <span class="st-y"></span>各部門請假天數</h4>
+            <div class="chart-box"><canvas id="cvDept"></canvas></div>
+          </div></div>
+          <div class="col-md-6"><div class="lv-card">
+            <h4><i class="fa fa-user"></i> 請假天數最多的人員（前 15 名）</h4>
+            <div class="chart-box"><canvas id="cvTop"></canvas></div>
+          </div></div>
+        </div>
+        <div class="lv-card">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+            <h4 style="margin:0;flex:0 0 auto;"><i class="fa fa-table"></i> 部門統計</h4>
+          </div>
+          <div style="overflow-x:auto;"><table class="lv-tbl" id="tbDept"></table></div>
+        </div>
+        <div class="lv-card">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+            <h4 style="margin:0;flex:0 0 auto;"><i class="fa fa-users"></i> 人員明細</h4>
+            <span style="flex:1;"></span>
+            <div class="pager no-print">
+              <span style="font-size:12px;color:#9a7b4f;">每頁</span>
+              <select class="form-control input-sm" id="stPer" style="width:auto;display:inline-block;"
+                      data-eg-skip onchange="stPersonPage=1;renderPeopleTable()">
+                <option>5</option><option selected>10</option><option>20</option><option>50</option>
+              </select>
+              <span id="stPagerBtns"></span>
+              <button onclick="exportStatsCsv()" title="匯出全部人員（後端全量計算的結果）">
+                <i class="fa fa-file-excel-o"></i> CSV</button>
+            </div>
+          </div>
+          <div style="overflow-x:auto;"><table class="lv-tbl" id="tbPeople"></table></div>
+          <div id="stPeopleInfo" style="font-size:12px;color:#9a7b4f;margin-top:8px;"></div>
+        </div>
+      </div>
+    </div>
+    <?php endif; ?>
   </div>
 </div></div></div>
 
@@ -362,8 +534,10 @@ input[type=number]{-moz-appearance:textfield;}
   </div>
   <div class="modal-body" style="font-size:13px;">
     <p><b>一般使用者（所有登入者）</b>：申請請假、查看與撤回／銷假自己的單、上傳與補件自己的證明文件。</p>
-    <p><b>主管（職稱有設定階級者）</b>：除上述外，可檢視自己部門（含下轄部門）的請假單。</p>
-    <p><b>人事（leave_view_all）</b>：可檢視全公司請假單；此角色<u>不含</u>代為簽核的權力。</p>
+    <p><b>主管（職稱有設定階級者）</b>：除上述外，可檢視自己部門（含下轄部門）的請假單，
+       並可使用「請假統計」分頁（範圍同樣限自己部門含下轄）。</p>
+    <p><b>人事（leave_view_all）</b>：可檢視全公司請假單，「請假統計」分頁涵蓋全公司；
+       此角色<u>不含</u>代為簽核的權力。</p>
     <p><b>管理者</b>：全部權限，另可代任何人銷假、刪除已核准單的附件、設定列印表頭表尾。</p>
     <hr>
     <p style="color:#8a5a1a;"><b>簽核權不由角色決定</b>：由申請人的部門／職稱階級推出主管鏈，每層由該層主管本人簽；主管當日有行程（請假／外出／會議）時，改由其在「人事設定」設定的代理人簽；若代理人正好是申請人本人，則依權責分離自動直升上一級。</p>
@@ -397,6 +571,9 @@ input[type=number]{-moz-appearance:textfield;}
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<!-- Chart.js 必須排在 custom.min.js 之後（custom.min.js 內有 Chart v2 的相容 patch，
+     順序顛倒會被覆蓋）。用站內本地檔不用 CDN：本系統是內網，連不到外網時 CDN 會整頁圖表消失。 -->
+<?php if ($SHOW_STATS): ?><script src="../../resource/js/Chart.min.js"></script><?php endif; ?>
 <script src="../../resource/js/eg_stamp.js?v=<?= $avStamp ?>"></script>
 <script>
 const API = '../../src/store/Leave_API.php';
@@ -1280,6 +1457,402 @@ function focusSignTarget(){
     }
   }, 700);
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   請假統計（人事／主管）
+   · 所有數字都由後端 eg_leave_stats() 對「全部符合條件的資料」算完才回傳，
+     本檔只負責畫圖與排版，絕不拿已載入的一頁自己加總（ai-rules/08）。
+   · 假別顏色由後端固定色盤指派（暖色系，ai-rules/10），這裡不自己配色、不用亂數。
+   · 圖表容器在隱藏分頁時寬高為 0，Chart.js 會畫成 0×0 → 一律等分頁顯示後才建圖。
+   ══════════════════════════════════════════════════════════════════ */
+<?php if ($SHOW_STATS): ?>
+let ST = null;              // 後端回來的整包統計資料
+let stLoaded = false;       // 是否已載過（第一次點分頁才載）
+let stSub = 'month';        // 目前子分頁
+let stTypesOn = null;       // 啟用的假別 id（null＝尚未初始化＝全選）
+let stPersonPage = 1;
+const stCharts = {};        // canvas id -> Chart 實例（重畫前要 destroy）
+const MON = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+
+function openStats(){
+  if(stLoaded){ statsSub(stSub, document.getElementById('sb' + stSub.charAt(0).toUpperCase() + stSub.slice(1))); return; }
+  stLoaded = true;
+  $.getJSON(API, {action:'stats_options'}, function(o){
+    if(!o.success){ $('#stScopeNote').html('<span style="color:#a3341f;">'+esc(o.message)+'</span>'); return; }
+    $('#stDept').html('<option value="0">全部部門</option>'
+      + (o.depts||[]).map(d => '<option value="'+d.id+'">'+esc(d.name)+'</option>').join(''));
+    $('#stUser').html('<option value="0">全部人員</option>'
+      + (o.people||[]).map(p => '<option value="'+p.id+'">'+esc(p.label)+'</option>').join(''));
+    loadStats();
+  });
+}
+// 部門／人員／狀態一改就重算（年度與假別各自有處理）
+$(document).on('change', '#stDept, #stUser, #stPending, #stYear', function(){ stPersonPage = 1; loadStats(); });
+
+function stTypeIdsParam(){
+  if(!ST || !stTypesOn) return '';
+  const all = ST.types.map(t => +t.id);
+  // 全選時不帶 type_ids，讓後端維持「不篩」的語意
+  return (stTypesOn.length === all.length) ? '' : stTypesOn.join(',');
+}
+function loadStats(){
+  if(ST && stTypesOn && stTypesOn.length === 0){
+    $('#stScopeNote').html('<span style="color:#a3341f;">請至少選擇一個假別。</span>');
+    return;
+  }
+  $('#stKpi').html('<div class="empty-note" style="width:100%;">統計計算中…</div>');
+  const q = {action:'stats',
+             year: $('#stYear').val() || CUR_YEAR,
+             dept_id: $('#stDept').val() || 0,
+             user_id: $('#stUser').val() || 0,
+             with_pending: $('#stPending').is(':checked') ? 1 : 0,
+             type_ids: stTypeIdsParam()};
+  $.getJSON(API, q, function(r){
+    if(!r.success){ $('#stKpi').html('<div class="empty-note" style="width:100%;color:#a3341f;">'+esc(r.message)+'</div>'); return; }
+    ST = r.data;
+    renderStatsHeader(r);
+    renderStats();
+  });
+}
+function renderStatsHeader(r){
+  // 年度下拉（只在選項變動時重畫，避免洗掉使用者的選擇）
+  const cur = $('#stYear').val();
+  const key = (ST.years||[]).join(',');
+  if($('#stYear').data('key') !== key){
+    $('#stYear').data('key', key)
+      .html((ST.years||[CUR_YEAR]).map(y => '<option value="'+y+'">'+y+' 年</option>').join('')
+            + '<option value="all">全部年度</option>')
+      .val(cur || String(CUR_YEAR));
+    if(!$('#stYear').val()) $('#stYear').val(String(CUR_YEAR));
+  }
+  // 假別色塊（第一次載入時全選）
+  if(!stTypesOn) stTypesOn = ST.types.map(t => +t.id);
+  $('#stTypeChips').html(ST.types.map(function(t){
+    const on = stTypesOn.indexOf(+t.id) >= 0;
+    return '<span class="st-chip'+(on?'':' off')+'" data-tid="'+t.id+'">'
+         + '<span class="dot" style="background:'+t.color+';"></span>' + esc(t.leave_name) + '</span>';
+  }).join(''));
+  const yTxt = (String(ST.year) === 'all') ? '全部年度' : (ST.year + ' 年');
+  $('.st-y').text(yTxt + '　');
+  $('.st-y2').text(String(ST.year) === 'all' ? '最近一年' : ST.year);
+  $('#stScopeNote').html(
+      '<i class="fa fa-info-circle"></i> 範圍：' + (r.scope === 'all' ? '全公司' : '我的部門（含下轄）')
+    + '　狀態：' + (r.with_pending ? '已核准＋審核中' : '僅已核准')
+    + '　｜　年度／月份一律以請假<b>起日</b>歸屬（與特休額度同口徑），跨月長假整筆算在起日那個月。'
+    + '　｜　所有總計皆由後端對全部符合條件的資料算出，非畫面上這一頁的加總。');
+}
+$(document).on('click', '.st-chip', function(){
+  const tid = +$(this).data('tid');
+  const i = stTypesOn.indexOf(tid);
+  if(i >= 0) stTypesOn.splice(i, 1); else stTypesOn.push(tid);
+  stPersonPage = 1;
+  loadStats();
+});
+function stAllTypes(on){
+  if(!ST) return;
+  stTypesOn = on ? ST.types.map(t => +t.id) : [];
+  stPersonPage = 1;
+  if(on) loadStats(); else renderStatsHeader({scope:'', with_pending:false});
+}
+
+function statsSub(k, btn){
+  stSub = k;
+  $('.st-sub').hide(); $('#st-'+k).show();
+  $('#tab-stats .pm-tab-btn').removeClass('active'); if(btn) $(btn).addClass('active');
+  renderStats();   // 分頁顯示之後才建圖（隱藏時 canvas 寬高為 0）
+}
+
+// ── KPI ──
+function renderKpi(){
+  const k = ST.kpi;
+  const it = (lb, vl, un) => '<div class="it kpi-it"><div class="lb">'+lb+'</div><div class="vl">'
+                           + vl + (un ? ' <span class="un">'+un+'</span>' : '') + '</div></div>';
+  let h = it('總請假天數', num(k.total_days), '天')
+        + it('總時數', num(k.total_hours), '小時')
+        + it('請假單數', k.req_count, '張')
+        + it('請假人數', k.people_count, '人')
+        + it('平均每人', num(k.avg_days), '天');
+  if(k.top_type) h += it('最多的假別', esc(k.top_type), num(k.top_type_days)+' 天');
+  if(k.busiest_month) h += it('最多的月份', k.busiest_month + ' 月', num(k.busiest_month_days)+' 天');
+  $('#stKpi').html(h || '<div class="empty-note" style="width:100%;">此條件下沒有資料</div>');
+}
+
+// ── Chart.js 共用 ──
+function mkChart(id, cfg){
+  const el = document.getElementById(id);
+  if(!el || typeof Chart === 'undefined') return;
+  if(stCharts[id]){ stCharts[id].destroy(); delete stCharts[id]; }
+  cfg.options = $.extend(true, {responsive:true, maintainAspectRatio:false,
+                                legend:{position:'bottom', labels:{fontColor:'#6b5638', boxWidth:12, fontSize:11}},
+                                tooltips:{backgroundColor:'rgba(58,44,26,.92)'}}, cfg.options || {});
+  stCharts[id] = new Chart(el.getContext('2d'), cfg);
+}
+function axesStacked(){
+  return {xAxes:[{stacked:true, gridLines:{color:'#f0e7d7'}, ticks:{fontColor:'#8a6d45', fontSize:11}}],
+          yAxes:[{stacked:true, gridLines:{color:'#f0e7d7'},
+                  ticks:{beginAtZero:true, fontColor:'#8a6d45', fontSize:11}}]};
+}
+function activeTypes(){ return (ST.types||[]).filter(t => !stTypesOn || stTypesOn.indexOf(+t.id) >= 0); }
+// 只保留這批資料裡真的出現過的假別，圖例才不會塞一堆 0（顏色仍是固定色盤，不會跑掉）
+function usedTypes(buckets){
+  return activeTypes().filter(t => buckets.some(b => (+((b.by_type||{})[t.id]) || 0) > 0));
+}
+
+function renderStats(){
+  if(!ST) return;
+  renderKpi();
+  if(stSub === 'month')  renderMonth();
+  if(stSub === 'year')   renderYear();
+  if(stSub === 'trend')  renderTrend();
+  if(stSub === 'people') renderPeople();
+}
+
+// ── 月度統計 ──
+function renderMonth(){
+  const bm = ST.by_month || [], ts = usedTypes(bm);
+  mkChart('cvMonth', {type:'bar',
+    data:{labels:MON, datasets: ts.map(t => ({label:t.leave_name, backgroundColor:t.color,
+             data: bm.map(m => +((m.by_type||{})[t.id]) || 0)}))},
+    options:{scales:axesStacked(),
+             tooltips:{callbacks:{label:(ti,d)=> d.datasets[ti.datasetIndex].label+'：'+ti.yLabel+' 天'}}}});
+  const bt = (ST.by_type || []).filter(t => !stTypesOn || stTypesOn.indexOf(+t.leave_type_id) >= 0);
+  mkChart('cvType', {type:'doughnut',
+    data:{labels: bt.map(t => t.leave_name),
+          datasets:[{data: bt.map(t => t.days), backgroundColor: bt.map(t => t.color),
+                     borderColor:'#fffdf9', borderWidth:2}]},
+    options:{cutoutPercentage:52,
+             tooltips:{callbacks:{label:(ti,d)=> d.labels[ti.index]+'：'+d.datasets[0].data[ti.index]+' 天'}}}});
+  // 交叉表（含每月合計與每假別合計；合計由各格加總，來源本身已是後端全量結果）
+  $('#tbMonth').html(crossTable('月份', MON.map((m,i)=>({key:m, b:bm[i]||{}})), ts));
+}
+
+// ── 年度比較 ──
+function renderYear(){
+  const by = ST.by_year || [], ts = usedTypes(by);
+  const labels = by.map(y => y.year + ' 年');
+  mkChart('cvYear', {type:'bar',
+    data:{labels: labels, datasets: ts.map(t => ({label:t.leave_name, backgroundColor:t.color,
+             data: by.map(y => +((y.by_type||{})[t.id]) || 0)}))},
+    options:{scales:axesStacked(),
+             tooltips:{callbacks:{label:(ti,d)=> d.datasets[ti.datasetIndex].label+'：'+ti.yLabel+' 天'}}}});
+  $('#tbYear').html(crossTable('年度', by.map(y => ({key:y.year+' 年', b:y})), ts));
+}
+
+// ── 趨勢分析 ──
+function renderTrend(){
+  const tr = ST.trend || [];
+  const labels = tr.map(t => t.ym);
+  mkChart('cvTrend', {type:'line',
+    data:{labels: labels, datasets:[{label:'請假天數', data: tr.map(t => t.total_days),
+            borderColor:'#B06F27', backgroundColor:'rgba(217,154,78,.22)', pointBackgroundColor:'#B06F27',
+            pointRadius:3, borderWidth:2, fill:true, lineTension:.25}]},
+    options:{scales:{xAxes:[{gridLines:{color:'#f0e7d7'}, ticks:{fontColor:'#8a6d45', fontSize:10, maxTicksLimit:14}}],
+                     yAxes:[{gridLines:{color:'#f0e7d7'}, ticks:{beginAtZero:true, fontColor:'#8a6d45', fontSize:11}}]}}});
+  mkChart('cvTrendCnt', {type:'line',
+    data:{labels: labels, datasets:[{label:'請假單數', data: tr.map(t => t.req_count),
+            borderColor:'#DD5138', backgroundColor:'rgba(221,81,56,.16)', pointBackgroundColor:'#DD5138',
+            pointRadius:3, borderWidth:2, fill:true, lineTension:.25}]},
+    options:{scales:{xAxes:[{gridLines:{color:'#f0e7d7'}, ticks:{fontColor:'#8a6d45', fontSize:10, maxTicksLimit:12}}],
+                     yAxes:[{gridLines:{color:'#f0e7d7'}, ticks:{beginAtZero:true, fontColor:'#8a6d45', fontSize:11, precision:0}}]}}});
+  // 同期比較：從逐月資料切出「選定年度」與「前一年」各 12 個月
+  const baseY = (String(ST.year) === 'all')
+              ? (tr.length ? parseInt(tr[tr.length-1].ym.substring(0,4), 10) : CUR_YEAR)
+              : parseInt(ST.year, 10);
+  const pick = y => { const a = new Array(12).fill(0);
+                      tr.forEach(t => { if(parseInt(t.ym.substring(0,4),10) === y) a[parseInt(t.ym.substring(5,7),10)-1] = t.total_days; });
+                      return a; };
+  mkChart('cvYoY', {type:'bar',
+    data:{labels: MON, datasets:[
+      {label: baseY + ' 年', backgroundColor:'#F0A24B', data: pick(baseY)},
+      {label:(baseY-1) + ' 年', backgroundColor:'#EBD3A8', data: pick(baseY-1)}]},
+    options:{scales:{xAxes:[{gridLines:{color:'#f0e7d7'}, ticks:{fontColor:'#8a6d45', fontSize:11}}],
+                     yAxes:[{gridLines:{color:'#f0e7d7'}, ticks:{beginAtZero:true, fontColor:'#8a6d45', fontSize:11}}]},
+             tooltips:{callbacks:{label:(ti,d)=> d.datasets[ti.datasetIndex].label+'：'+ti.yLabel+' 天'}}}});
+  // 逐月明細表
+  let h = '<thead><tr><th>年月</th><th class="numc">天數</th><th class="numc">時數</th><th class="numc">單數</th></tr></thead><tbody>';
+  if(!tr.length) h += '<tr><td colspan="4" class="empty-note">沒有資料</td></tr>';
+  tr.forEach(t => { h += '<tr><td>'+esc(t.ym)+'</td><td class="numc">'+num(t.total_days)
+                       + '</td><td class="numc">'+num(t.total_hours)+'</td><td class="numc">'+t.req_count+'</td></tr>'; });
+  h += '</tbody>';
+  $('#tbTrend').html(h);
+}
+
+// ── 部門・人員 ──
+function renderPeople(){
+  const bd = ST.by_dept || [];
+  mkChart('cvDept', {type:'horizontalBar',
+    data:{labels: bd.map(d => d.dept_name),
+          datasets:[{label:'請假天數', backgroundColor:'#B06F27', data: bd.map(d => d.days)}]},
+    options:{legend:{display:false},
+             scales:{xAxes:[{gridLines:{color:'#f0e7d7'}, ticks:{beginAtZero:true, fontColor:'#8a6d45', fontSize:11}}],
+                     yAxes:[{gridLines:{color:'#f0e7d7'}, ticks:{fontColor:'#8a6d45', fontSize:11}}]},
+             tooltips:{callbacks:{label:(ti,d)=> ti.xLabel+' 天'}}}});
+  const top = (ST.by_person || []).slice(0, 15);
+  mkChart('cvTop', {type:'horizontalBar',
+    data:{labels: top.map(p => p.name + (p.left_company ? '（已離職）' : '')),
+          datasets:[{label:'請假天數', backgroundColor:'#F0A24B', data: top.map(p => p.days)}]},
+    options:{legend:{display:false},
+             scales:{xAxes:[{gridLines:{color:'#f0e7d7'}, ticks:{beginAtZero:true, fontColor:'#8a6d45', fontSize:11}}],
+                     yAxes:[{gridLines:{color:'#f0e7d7'}, ticks:{fontColor:'#8a6d45', fontSize:11}}]},
+             tooltips:{callbacks:{label:(ti,d)=> ti.xLabel+' 天'}}}});
+  // 部門表
+  let h = '<thead><tr><th>部門</th><th class="numc">天數</th><th class="numc">時數</th>'
+        + '<th class="numc">單數</th><th class="numc">人數</th><th class="numc">平均每人(天)</th></tr></thead><tbody>';
+  if(!bd.length) h += '<tr><td colspan="6" class="empty-note">沒有資料</td></tr>';
+  bd.forEach(d => { h += '<tr><td>'+esc(d.dept_name)+'</td><td class="numc">'+num(d.days)+'</td>'
+                       + '<td class="numc">'+num(d.hours)+'</td><td class="numc">'+d.req_count+'</td>'
+                       + '<td class="numc">'+d.people+'</td><td class="numc">'+num(d.avg_days)+'</td></tr>'; });
+  h += '</tbody>';
+  $('#tbDept').html(h);
+  renderPeopleTable();
+}
+function renderPeopleTable(){
+  const all = ST.by_person || [], ts = usedTypes(all);
+  const per = parseInt($('#stPer').val() || 10, 10);
+  const pages = Math.max(1, Math.ceil(all.length / per));
+  if(stPersonPage > pages) stPersonPage = pages;
+  const rows = all.slice((stPersonPage-1)*per, stPersonPage*per);
+  let h = '<thead><tr><th>姓名</th><th>職稱</th><th>部門</th>'
+        + ts.map(t => '<th class="numc">'+esc(t.leave_name)+'</th>').join('')
+        + '<th class="numc">合計(天)</th><th class="numc">時數</th><th class="numc">單數</th></tr></thead><tbody>';
+  if(!rows.length) h += '<tr><td colspan="'+(6+ts.length)+'" class="empty-note">沒有資料</td></tr>';
+  rows.forEach(function(p){
+    h += '<tr><td>'+esc(p.name)
+       + (p.left_company ? ' <span class="tag-soft">已離職</span>' : '')
+       + (!p.left_company && p.state_label && p.state_label !== '在職' ? ' <span class="tag-soft">'+esc(p.state_label)+'</span>' : '')
+       + '</td><td>'+esc(p.position_name||'—')+'</td><td>'+esc(p.dept_name||'—')+'</td>'
+       + ts.map(t => '<td class="numc">'+num((p.by_type||{})[t.id] || 0)+'</td>').join('')
+       + '<td class="numc"><b>'+num(p.days)+'</b></td><td class="numc">'+num(p.hours)+'</td>'
+       + '<td class="numc">'+p.req_count+'</td></tr>';
+  });
+  // 合計列：對「全部人員」加總，不是只加目前這一頁（ai-rules/08）
+  if(all.length){
+    const sum = f => all.reduce((s,p) => s + (+f(p) || 0), 0);
+    h += '<tr class="sum-row"><td colspan="3">全部 '+all.length+' 人合計</td>'
+       + ts.map(t => '<td class="numc">'+num(sum(p => (p.by_type||{})[t.id] || 0))+'</td>').join('')
+       + '<td class="numc">'+num(sum(p => p.days))+'</td><td class="numc">'+num(sum(p => p.hours))+'</td>'
+       + '<td class="numc">'+sum(p => p.req_count)+'</td></tr>';
+  }
+  h += '</tbody>';
+  $('#tbPeople').html(h);
+  // 分頁鈕
+  let pg = '';
+  if(pages > 1){
+    pg += '<button '+(stPersonPage<=1?'disabled':'')+' onclick="stPersonPage='+(stPersonPage-1)+';renderPeopleTable()">‹</button>';
+    const from = Math.max(1, stPersonPage-2), to = Math.min(pages, from+4);
+    for(let i=from;i<=to;i++) pg += '<button class="'+(i===stPersonPage?'on':'')+'" onclick="stPersonPage='+i+';renderPeopleTable()">'+i+'</button>';
+    pg += '<button '+(stPersonPage>=pages?'disabled':'')+' onclick="stPersonPage='+(stPersonPage+1)+';renderPeopleTable()">›</button>';
+  }
+  $('#stPagerBtns').html(pg);
+  $('#stPeopleInfo').text('共 ' + all.length + ' 人，第 ' + stPersonPage + ' / ' + pages + ' 頁');
+}
+
+// ── 月/年 交叉表（共用）──
+function crossTable(firstCol, buckets, ts){
+  let h = '<thead><tr><th>'+firstCol+'</th>'
+        + ts.map(t => '<th class="numc">'+esc(t.leave_name)+'</th>').join('')
+        + '<th class="numc">合計(天)</th><th class="numc">單數</th></tr></thead><tbody>';
+  if(!buckets.length) h += '<tr><td colspan="'+(3+ts.length)+'" class="empty-note">沒有資料</td></tr>';
+  const colSum = ts.map(() => 0); let allSum = 0, cntSum = 0;
+  buckets.forEach(function(x){
+    const b = x.b || {};
+    h += '<tr><td>'+esc(x.key)+'</td>'
+       + ts.map(function(t, i){ const v = +((b.by_type||{})[t.id]) || 0; colSum[i] += v;
+                                return '<td class="numc">'+(v ? num(v) : '<span style="color:#c9b89c;">—</span>')+'</td>'; }).join('')
+       + '<td class="numc"><b>'+num(b.total_days || 0)+'</b></td>'
+       + '<td class="numc">'+(b.req_count || 0)+'</td></tr>';
+    allSum += (+b.total_days || 0); cntSum += (+b.req_count || 0);
+  });
+  h += '<tr class="sum-row"><td>合計</td>'
+     + colSum.map(v => '<td class="numc">'+num(v)+'</td>').join('')
+     + '<td class="numc">'+num(allSum)+'</td><td class="numc">'+cntSum+'</td></tr></tbody>';
+  return h;
+}
+
+// ── 列印：把目前子分頁的圖表轉成圖片＋表格一起送去列印（交給瀏覽器原生分頁）──
+function printStats(){
+  if(!ST){ alert('請先等統計載入完成'); return; }
+  const map = {month:{title:'月度統計', canvas:['cvMonth','cvType'], tables:[['月 × 假別 交叉表（天）','tbMonth']]},
+               year:{title:'年度比較',  canvas:['cvYear'],           tables:[['年 × 假別 交叉表（天）','tbYear']]},
+               trend:{title:'趨勢分析', canvas:['cvTrend','cvTrendCnt','cvYoY'], tables:[['逐月明細','tbTrend']]},
+               people:{title:'部門・人員分析', canvas:['cvDept','cvTop'],
+                       tables:[['部門統計','tbDept'], ['人員明細（全部人員）','tbPeople']]}};
+  const cfg = map[stSub];
+  const yTxt = (String(ST.year) === 'all') ? '全部年度' : (ST.year + ' 年度');
+  const cond = [yTxt,
+                ($('#stDept option:selected').text() || ''),
+                ($('#stUser option:selected').text() || ''),
+                ($('#stPending').is(':checked') ? '含審核中' : '僅已核准'),
+                '假別：' + (stTypesOn && stTypesOn.length === ST.types.length ? '全部'
+                          : ST.types.filter(t => stTypesOn.indexOf(+t.id) >= 0).map(t => t.leave_name).join('、'))
+               ].join('　｜　');
+  let h = '<html><head><meta charset="utf-8"><title>請假統計 - ' + cfg.title + '</title><style>'
+    + 'body{font-family:"Microsoft JhengHei",sans-serif;font-size:12px;color:#3a2c1a;margin:12px;}'
+    + 'h2{text-align:center;font-size:17px;margin:4px 0;} h3{font-size:13px;color:#b06f27;margin:14px 0 6px;}'
+    + '.cond{text-align:center;color:#8a6d45;font-size:11.5px;margin-bottom:10px;}'
+    + '.kpi{display:flex;flex-wrap:wrap;gap:14px;justify-content:center;margin-bottom:10px;}'
+    + '.kpi div{border:1px solid #e6d8c3;background:#faf3e7;border-radius:5px;padding:5px 12px;}'
+    + '.kpi b{font-size:15px;color:#3a2c1a;}'
+    + 'img{max-width:100%;page-break-inside:avoid;} table{width:100%;border-collapse:collapse;}'
+    + 'th{background:#faf3e7;color:#b06f27;} th,td{border:1px solid #e6d8c3;padding:3px 6px;}'
+    + '.numc{text-align:right;} .sum-row td{background:#f7efe0;font-weight:700;}'
+    + 'thead{display:table-header-group;} tr{page-break-inside:avoid;}'
+    + '.ft{text-align:center;color:#9a7b4f;font-size:11px;margin-top:10px;}'
+    + '.empty-note,.no-print{display:none;} .tag-soft{font-size:10px;color:#8a5a1a;}'
+    + '</style></head><body>';
+  h += '<h2>' + esc(SETTINGS.print_header || '請假統計表') + '</h2>';
+  h += '<h2 style="font-size:14px;">' + esc(cfg.title) + '</h2>';
+  h += '<div class="cond">' + esc(cond) + '</div>';
+  const k = ST.kpi;
+  h += '<div class="kpi">'
+     + '<div>總請假天數 <b>'+num(k.total_days)+'</b> 天</div>'
+     + '<div>總時數 <b>'+num(k.total_hours)+'</b> 小時</div>'
+     + '<div>請假單數 <b>'+k.req_count+'</b> 張</div>'
+     + '<div>請假人數 <b>'+k.people_count+'</b> 人</div>'
+     + '<div>平均每人 <b>'+num(k.avg_days)+'</b> 天</div></div>';
+  cfg.canvas.forEach(function(id){
+    const el = document.getElementById(id);
+    if(el && el.width) h += '<div><img src="'+el.toDataURL('image/png')+'"></div>';
+  });
+  cfg.tables.forEach(function(t){
+    const $t = $('#'+t[1]);
+    if($t.length) h += '<h3>'+esc(t[0])+'</h3><table>' + $t.html() + '</table>';
+  });
+  h += '<div class="ft">' + esc(SETTINGS.print_footer || '')
+     + '　列印時間：' + new Date().toLocaleString('zh-TW') + '</div></body></html>';
+  const w = window.open('', '_blank');
+  w.document.write(h); w.document.close();
+  setTimeout(function(){ w.print(); }, 600);   // 等圖片 decode 完再叫列印
+}
+
+// ── 人員明細 CSV（後端全量結果，不是目前這一頁）──
+function exportStatsCsv(){
+  if(!ST) return;
+  const all = ST.by_person || [], ts = usedTypes(all);
+  const head = ['姓名','職稱','部門','在職狀態'].concat(ts.map(t => t.leave_name + '(天)'))
+               .concat(['合計(天)','時數','單數']);
+  const lines = [head.join(',')].concat(all.map(function(p){
+    return [p.name, p.position_name, p.dept_name, p.state_label]
+           .concat(ts.map(t => num((p.by_type||{})[t.id] || 0)))
+           .concat([num(p.days), num(p.hours), p.req_count])
+           .map(v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"').join(',');
+  }));
+  const yTag = (String(ST.year) === 'all') ? '全部年度' : (ST.year + '年');
+  const blob = new Blob(['﻿' + lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = '請假統計_人員明細_' + yTag + '_' + new Date().toISOString().substring(0,10) + '.csv';
+  a.click();
+}
+
+// 視窗尺寸變動時讓目前分頁的圖重新配合寬度（Chart.js 只對可見 canvas 有效）
+let stResizeTimer = null;
+$(window).on('resize', function(){
+  if(!ST || $('#tab-stats').is(':hidden')) return;
+  clearTimeout(stResizeTimer);
+  stResizeTimer = setTimeout(renderStats, 250);
+});
+<?php endif; ?>
 
 $(function(){ boot(); focusSignTarget(); });
 </script>
