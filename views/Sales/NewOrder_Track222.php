@@ -3520,8 +3520,12 @@ foreach($dCounts as $c) {
                     </div>
 
                     <!-- Filter Bar -->
-                    <div class="filter-bar" style="background: #fff; padding: 10px; border-radius: 8px; margin-bottom: 15px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
-                        <select id="year-select" class="form-control input-sm" style="width: 100px; display: inline-block;">
+                    <style>
+                    /* 篩選列自適應：一行放不下時加上 .fb-compact，按鈕只顯示圖示（滑鼠移過看 title 名稱） */
+                    .filter-bar.fb-compact .fb-txt { display:none; }
+                    </style>
+                    <div class="filter-bar" style="background: #fff; padding: 8px 10px; border-radius: 8px; margin-bottom: 15px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
+                        <select id="year-select" class="form-control input-sm" style="width: 92px; display: inline-block;">
                             <option value="ALL" <?= $selectedYear === 'ALL' ? 'selected' : '' ?>>全部年份</option>
                             <?php 
                             $currY = date('Y');
@@ -3545,42 +3549,42 @@ foreach($dCounts as $c) {
                             <?php endforeach; ?>
                         </select>
                         <div style="position:relative;display:inline-block;vertical-align:middle;">
-                            <input type="text" id="filter-client" class="form-control input-sm" placeholder="搜尋客戶(名稱/ID)" style="width:130px;" autocomplete="off">
+                            <input type="text" id="filter-client" class="form-control input-sm" placeholder="搜尋客戶(名稱/ID)" style="width:115px;" autocomplete="off">
                             <div id="filter-client-dd" style="display:none;position:absolute;top:100%;left:0;z-index:9999;background:#fff;border:1px solid #ccc;border-radius:4px;box-shadow:0 3px 8px rgba(0,0,0,.15);min-width:220px;max-height:220px;overflow-y:auto;font-size:12px;"></div>
                         </div>
-                        <input type="text" id="filter-part" class="form-control input-sm" placeholder="搜尋料號" style="width: 120px;">
-                        <input type="text" id="filter-global" class="form-control input-sm" placeholder="全表搜尋" style="width: 150px;">
+                        <input type="text" id="filter-part" class="form-control input-sm" placeholder="搜尋料號" style="width: 105px;">
+                        <input type="text" id="filter-global" class="form-control input-sm" placeholder="全表搜尋" style="width: 130px;">
                         <button type="button" class="btn btn-warning btn-sm" id="filter-unbound" style="margin:0;" title="篩選尚未綁定客戶ID或料號ID的訂單">
-                            <i class="fa fa-unlink"></i> 未綁定
+                            <i class="fa fa-unlink"></i><span class="fb-txt"> 未綁定</span>
                         </button>
-                        <button type="button" class="btn btn-danger btn-sm" id="clear-filters" style="margin: 0;"><i class="fa fa-times"></i> 取消</button>
+                        <button type="button" class="btn btn-danger btn-sm" id="clear-filters" style="margin: 0;" title="清除篩選條件"><i class="fa fa-times"></i><span class="fb-txt"> 取消</span></button>
                         <?php if ($show_gear_tool): ?>
                         <button type="button" id="btn-open-gear-tool"
                             onclick="openGearTool()"
                             title="齒輪計算工具（技術課專用）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#1a252f,#2980b9);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-cog" style="font-size:13px;"></i> 齒輪計算
+                            <i class="fa fa-cog" style="font-size:13px;"></i><span class="fb-txt"> 齒輪計算</span>
                         </button>
                         <?php endif; ?>
                         <button type="button" id="btn-open-kw-tool"
                             onclick="openKwTool()"
                             title="軸件鍵槽計算工具"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#1a3a2a,#27ae60);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-key" style="font-size:13px;"></i> 鍵槽計算
+                            <i class="fa fa-key" style="font-size:13px;"></i><span class="fb-txt"> 鍵槽計算</span>
                         </button>
                         <!-- 訂單變更：變更(全部歷史) + 設定(限A權限)，緊鄰鍵槽計算右側 -->
                         <button type="button" id="btn-order-change-history"
                             onclick="openChangeHistory()"
                             title="全部訂單變更歷史紀錄"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#5d4037,#a1887f);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-history" style="font-size:13px;"></i> 變更
+                            <i class="fa fa-history" style="font-size:13px;"></i><span class="fb-txt"> 變更</span>
                         </button>
                         <?php if ($permission_code === 'A'): ?>
                         <button type="button" id="btn-order-change-settings"
                             onclick="openChangeSettings()"
                             title="訂單變更設定（通知對象、附件路徑、列印表頭表尾）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#37474f,#607d8b);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-cog" style="font-size:13px;"></i> 設定
+                            <i class="fa fa-cog" style="font-size:13px;"></i><span class="fb-txt"> 設定</span>
                         </button>
                         <?php endif; ?>
                         <!-- 批圖編輯器：獨立跳窗（可拖到另一個螢幕），小畫家+Figma 混合式圖面編輯 -->
@@ -3588,7 +3592,7 @@ foreach($dCounts as $c) {
                             onclick="window.open('image_editor.php', 'egImgEditor_' + Date.now(), 'width=1280,height=860,menubar=no,toolbar=no,location=no,status=no,resizable=yes')"
                             title="批圖編輯器（貼上/拖入圖面、遮蓋客戶資料、加標籤文字、球標與設變標示、多圖合併、列印/另存）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#6a1b9a,#ab47bc);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-paint-brush" style="font-size:13px;"></i> 批圖
+                            <i class="fa fa-paint-brush" style="font-size:13px;"></i><span class="fb-txt"> 批圖</span>
                         </button>
                         <?php if ($IS_OT_RBAC_ADMIN): ?>
                         <!-- 角色設定：僅管理員可見，設定本頁各功能的角色權限 -->
@@ -3596,7 +3600,7 @@ foreach($dCounts as $c) {
                             onclick="otOpenRoleModal()"
                             title="角色設定（本頁各功能的角色權限，僅管理員）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#8a5a2b,#c0762c);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-key" style="font-size:13px;"></i> 角色設定
+                            <i class="fa fa-key" style="font-size:13px;"></i><span class="fb-txt"> 角色設定</span>
                         </button>
                         <?php endif; ?>
                         <!-- 分頁控制：推到最右側與按鈕同列 -->
@@ -13273,6 +13277,35 @@ window.OT_FEAT = <?= json_encode(array_values(array_map('strval', $_ot_features)
 window.otHasFeat = function(code) {
     return window.OT_FEAT.indexOf('all') !== -1 || window.OT_FEAT.indexOf(code) !== -1;
 };
+
+// ── 篩選列自適應：一行放不下時按鈕改只顯示圖示（.fb-compact 隱藏 .fb-txt）──
+(function() {
+    var fbFitTimer = null;
+    function fbFit() {
+        var bar = document.querySelector('.filter-bar');
+        if (!bar) return;
+        bar.classList.remove('fb-compact');
+        // 單行高度約 46px（input-sm 30 + 上下 padding 16）；超過即代表換行了
+        if (bar.offsetHeight > 56) bar.classList.add('fb-compact');
+    }
+    window.addEventListener('resize', function() {
+        clearTimeout(fbFitTimer);
+        fbFitTimer = setTimeout(fbFit, 120);
+    });
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', fbFit);
+    } else {
+        fbFit();
+    }
+    // 分頁是 AJAX 後才畫入、筆數變動時寬度會變 → 監聽分頁容器重繪後重新偵測
+    var pc = document.getElementById('pagination-container');
+    if (pc && window.MutationObserver) {
+        new MutationObserver(function() {
+            clearTimeout(fbFitTimer);
+            fbFitTimer = setTimeout(fbFit, 60);
+        }).observe(pc, { childList: true, subtree: true });
+    }
+})();
 </script>
 
 </body>
