@@ -452,15 +452,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if (!empty($d_id)) {
                 // Update
-                // 同步更新 Drawing_No 與 D_Setting_Id，並記錄修改人，更新 Customer_Id 與 Type
-                $sql = "UPDATE d_setting SET D_Setting_Id=?, Drawing_No=?, Customer_Id=?, Type=?, Revision=?, Issue_Date=?, Remark=?, Modified_By=?, Modified_At=NOW() WHERE d_id=?";
+                // 不碰 Drawing_No（圖面代號）：那是料號主檔設定的獨立欄位，
+                // 這裡若一併寫成料號，會把使用者設好的圖面代號洗掉
+                $sql = "UPDATE d_setting SET D_Setting_Id=?, Customer_Id=?, Type=?, Revision=?, Issue_Date=?, Remark=?, Modified_By=?, Modified_At=NOW() WHERE d_id=?";
                 $stmt = $pdo->prepare($sql);
-                $stmt->execute([$part_no, $part_no, $customer_id, $type, $revision, $issue_date, $remark, $user_id, $d_id]);
+                $stmt->execute([$part_no, $customer_id, $type, $revision, $issue_date, $remark, $user_id, $d_id]);
             } else {
                 // Insert
-                $sql = "INSERT INTO d_setting (D_Setting_Id, Drawing_No, Customer_Id, Type, Revision, Issue_Date, Remark, Created_By, Created_At) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())";
+                // Drawing_No 不自動帶入料號（沒有圖面代號就留空，才不會與別筆料號互相誤判）
+                $sql = "INSERT INTO d_setting (D_Setting_Id, Customer_Id, Type, Revision, Issue_Date, Remark, Created_By, Created_At) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())";
                 $stmt = $pdo->prepare($sql);
-                $stmt->execute([$part_no, $part_no, $customer_id, $type, $revision, $issue_date, $remark, $user_id]);
+                $stmt->execute([$part_no, $customer_id, $type, $revision, $issue_date, $remark, $user_id]);
                 $d_id = $pdo->lastInsertId();
 
                 // 處理複製檢驗標準邏輯

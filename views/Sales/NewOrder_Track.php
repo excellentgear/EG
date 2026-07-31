@@ -349,9 +349,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if (!empty($d_id)) {
                 // Update — 不做重複檢查（修改現有資料）
-                $sql = "UPDATE d_setting SET D_Setting_Id=?, Drawing_No=?, Customer_Id=?, Type=?, Revision=?, Issue_Date=?, Remark=?, Modified_By=?, Modified_At=NOW() WHERE d_id=?";
+                // 不碰 Drawing_No（圖面代號）：那是料號主檔設定的獨立欄位，
+                // 這裡若一併寫成料號，會把使用者設好的圖面代號洗掉
+                $sql = "UPDATE d_setting SET D_Setting_Id=?, Customer_Id=?, Type=?, Revision=?, Issue_Date=?, Remark=?, Modified_By=?, Modified_At=NOW() WHERE d_id=?";
                 $stmt = $pdo->prepare($sql);
-                $stmt->execute([$part_no, $part_no, $customer_id, $type, $revision, $issue_date, $remark, $user_id, $d_id]);
+                $stmt->execute([$part_no, $customer_id, $type, $revision, $issue_date, $remark, $user_id, $d_id]);
             } else {
                 // Insert — 先檢查是否重複
                 // 重複判斷規則：
@@ -394,9 +396,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     exit;
                 }
 
-                $sql = "INSERT INTO d_setting (D_Setting_Id, Drawing_No, Customer_Id, Type, Revision, Issue_Date, Remark, Created_By, Created_At) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())";
+                // Drawing_No 不自動帶入料號（沒有圖面代號就留空，才不會與別筆料號互相誤判）
+                $sql = "INSERT INTO d_setting (D_Setting_Id, Customer_Id, Type, Revision, Issue_Date, Remark, Created_By, Created_At) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())";
                 $stmt = $pdo->prepare($sql);
-                $stmt->execute([$part_no, $part_no, $customer_id, $type, $revision, $issue_date, $remark, $user_id]);
+                $stmt->execute([$part_no, $customer_id, $type, $revision, $issue_date, $remark, $user_id]);
                 $d_id = $pdo->lastInsertId();
             }
 
@@ -542,8 +545,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $chk->execute([$part_no]);
             }
             if ($chk->fetchColumn() > 0) throw new Exception('料號已存在（此客戶下已有相同料號）');
-            $ins = $pdo->prepare("INSERT INTO d_setting (D_Setting_Id, Drawing_No, Spec_No, Revision, Customer_Id, Type, Created_By, Created_At) VALUES (?,?,?,?,?,'N',?,NOW())");
-            $ins->execute([$part_no, $part_no, $spec_no, $revision, $customer_id, $user_id]);
+            $ins = $pdo->prepare("INSERT INTO d_setting (D_Setting_Id, Spec_No, Revision, Customer_Id, Type, Created_By, Created_At) VALUES (?,?,?,?,'N',?,NOW())");
+            $ins->execute([$part_no, $spec_no, $revision, $customer_id, $user_id]);
             $new_id = $pdo->lastInsertId();
             echo json_encode(['success' => true, 'd_id' => $new_id, 'D_Setting_Id' => $part_no]);
         } catch (Exception $e) {

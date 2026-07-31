@@ -2205,8 +2205,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $customer_id = $stmt_cust->fetchColumn();
                 }
 
-                $stmt_ins = $pdo->prepare("INSERT INTO d_setting (D_Setting_Id, Drawing_No, Customer_Id, Type, Created_By, Created_At) VALUES (?, ?, ?, 'G', ?, NOW())");
-                $stmt_ins->execute([$part_no, $part_no, $customer_id, $user_id]);
+                // Drawing_No 不自動帶入料號（沒有圖面代號就留空）
+                $stmt_ins = $pdo->prepare("INSERT INTO d_setting (D_Setting_Id, Customer_Id, Type, Created_By, Created_At) VALUES (?, ?, 'G', ?, NOW())");
+                $stmt_ins->execute([$part_no, $customer_id, $user_id]);
                 $d_id = $pdo->lastInsertId();
             }
         }
