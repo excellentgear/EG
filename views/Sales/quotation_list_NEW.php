@@ -808,9 +808,11 @@ body { background:var(--bg); }
                         <div class="table-responsive">
                             <table id="quoteItemsTable" class="table table-condensed" style="table-layout:fixed;font-size:13px;">
                                 <colgroup>
+                                    <!-- 2026-07-31 料號欄加寬 15→20%（長料號被省略遮蔽），由製程欄 33→28% 挪出；
+                                         總和維持 100%，table-layout:fixed 不會出現左右捲軸 -->
                                     <col style="width:4%">   <!-- 刪除 -->
-                                    <col style="width:15%">  <!-- 料號 -->
-                                    <col style="width:33%">  <!-- 製程+製程分類 -->
+                                    <col style="width:20%">  <!-- 料號 -->
+                                    <col style="width:28%">  <!-- 製程+製程分類 -->
                                     <col style="width:11%">  <!-- 料號備註 -->
                                     <col style="width:6%">   <!-- 數量 -->
                                     <col style="width:7%">   <!-- 單位 -->
@@ -979,7 +981,19 @@ body { background:var(--bg); }
               <small class="text-muted">每張報價單的附件存入 <code>[根目錄\報價單號\]</code> 子資料夾</small>
             </div>
             <div class="form-group" style="margin-top:16px;">
-              <label style="font-size:13px;">列印表單編號</label>
+              <label style="font-size:13px;">綁定 AS 文件編號</label>
+              <div class="input-group">
+                <select id="qs-as-doc" class="form-control" style="font-size:12px;"></select>
+                <span class="input-group-btn">
+                  <button class="btn btn-primary" type="button" onclick="saveAsDocBinding()">
+                    <i class="fa fa-save"></i> 儲存
+                  </button>
+                </span>
+              </div>
+              <small class="text-muted">綁定後列印時文件編號顯示於<b>每頁頁尾右下角</b>（列印文件標準）；異動 AS 文件編號時此處自動跟著變</small>
+            </div>
+            <div class="form-group" style="margin-top:12px;">
+              <label style="font-size:13px;">列印表單編號（未綁定 AS 文件時的後備）</label>
               <div class="input-group">
                 <input type="text" id="qs-form-number" class="form-control"
                   placeholder="例：2-SM-01-02">
@@ -989,7 +1003,7 @@ body { background:var(--bg); }
                   </button>
                 </span>
               </div>
-              <small class="text-muted">顯示於列印報價單右下角</small>
+              <small class="text-muted">僅在未綁定 AS 文件時使用；建議改用上方綁定</small>
             </div>
             <div class="form-group" style="margin-top:12px;">
               <label style="font-size:13px;">報價有效期天數</label>
@@ -1855,6 +1869,71 @@ $(document).ready(function () {
             const $target    = $adjInputs.eq(Math.min(idx, $adjInputs.length - 1));
             if ($target.length) $target.focus().select();
         }
+    });
+
+    // ── 階梯區間表：Enter 跳欄、↑↓ 跨階同欄、末階↓自動加一階、全空白階↑自動刪除（比照項目表可增列鐵則）──
+    $(document).on('keydown', '.tier-tbody tr.tier-input-row input', function (e) {
+        const key = e.key;
+        if (!['Enter', 'ArrowUp', 'ArrowDown'].includes(key)) return;
+        const $tr     = $(this).closest('tr.tier-input-row');
+        const $tbody  = $tr.closest('.tier-tbody');
+        const $inputs = $tr.find('input:not([readonly]):visible');
+        const idx     = $inputs.index(this);
+
+        if (key === 'ArrowUp' || key === 'ArrowDown') {
+            e.preventDefault();
+            const $rows  = $tbody.find('tr.tier-input-row');
+            const rowIdx = $rows.index($tr);
+            const adjIdx = key === 'ArrowUp' ? rowIdx - 1 : rowIdx + 1;
+
+            // 末階按 ↓ → 自動新增一階並跳到同欄
+            if (key === 'ArrowDown' && adjIdx >= $rows.length) {
+                addTierRow(this);
+                const $ni = $tbody.find('tr.tier-input-row').last().find('input:not([readonly]):visible');
+                const $t  = $ni.eq(Math.min(idx, $ni.length - 1));
+                if ($t.length) $t.focus();
+                return;
+            }
+            // 完全空白階（最小量/最大量/單價/容差值/容差備註全空）按 ↑ → 自動刪除該階並跳回上一階
+            if (key === 'ArrowUp' && rowIdx > 0 && tierRowIsBlank($tr)) {
+                deleteTierRow($tr.find('.btn-del-tier')[0]);
+                const $pi = $tbody.find('tr.tier-input-row').eq(rowIdx - 1).find('input:not([readonly]):visible');
+                const $t  = $pi.eq(Math.min(idx, $pi.length - 1));
+                if ($t.length) $t.focus().select();
+                return;
+            }
+            if (adjIdx < 0 || adjIdx >= $rows.length) return;
+            const $ai = $rows.eq(adjIdx).find('input:not([readonly]):visible');
+            const $t  = $ai.eq(Math.min(idx, $ai.length - 1));
+            if ($t.length) $t.focus().select();
+            return;
+        }
+
+        // Enter：跳同階下一欄；最後一欄跳下一階第一欄
+        e.preventDefault();
+        const $next = $inputs.eq(idx + 1);
+        if ($next.length) { $next.focus().select(); return; }
+        const $rows  = $tbody.find('tr.tier-input-row');
+        const rowIdx = $rows.index($tr);
+        if (rowIdx < $rows.length - 1) {
+            const $ni = $rows.eq(rowIdx + 1).find('input:not([readonly]):visible');
+            if ($ni.length) $ni.first().focus().select();
+        }
+    });
+
+    // ── 階梯排序≥2 的最小量：留空時聚焦自動帶入「上一階最大量＋1」（帶入後全選、可直接覆寫）。
+    //    與容差不衝突——容差是交貨數量誤差（訂單對價時才擴大比對區間），不改變計價區間邊界。──
+    $(document).on('focusin', '.tier-tbody tr.tier-input-row .tier-qty-min', function () {
+        if (($(this).val() || '').trim() !== '') return;
+        const $tr    = $(this).closest('tr.tier-input-row');
+        const $rows  = $(this).closest('.tier-tbody').find('tr.tier-input-row');
+        const rowIdx = $rows.index($tr);
+        if (rowIdx <= 0) return;
+        const prevMax = parseFloat($rows.eq(rowIdx - 1).find('.tier-qty-max').val());
+        if (isNaN(prevMax) || prevMax <= 0) return;
+        $(this).val(Math.round(prevMax) + 1).trigger('input');
+        const el = this;
+        setTimeout(() => { try { el.select(); } catch (err) {} }, 0);
     });
 
     // ── 流水號（後3碼）：只允許數字，blur 時補零 ──
@@ -4599,7 +4678,7 @@ function printQuote() {
     if (!currentEditId) { Swal.fire('提示','請先儲存報價單再列印','warning'); return; }
     $.get(API_URL, { action:'get_print_data', quote_id: currentEditId }, res => {
         if (!res.success) { Swal.fire('錯誤', res.message || '無法取得資料', 'error'); return; }
-        const { quote, customer, contact, company, form_number } = res;
+        const { quote, customer, contact, company, form_number, as_doc_no } = res;
         // 伺服器端資料為準的最後防線：草稿一律擋下；「需審核通過才能列印」開關開啟時未核准也擋（前端按鈕閘門可能被繞過）
         if (quote.is_draft == 1 || (printNeedApproval && quote.approval_status !== 'approved')) {
             const reason = quote.is_draft == 1 ? '草稿不能列印，請先存為正式報價單。' : '尚未通過主管審核，核准後才能列印。';
@@ -4619,7 +4698,7 @@ function printQuote() {
             item.process_names = names.join('・');
         });
         const win = window.open('', '_blank', 'width=900,height=700');
-        win.document.write(buildPrintHtml(quote, customer, contact, company, form_number));
+        win.document.write(buildPrintHtml(quote, customer, contact, company, as_doc_no || form_number));
         win.document.close();
         // window.print() 已改在 buildPrintHtml 產出的內嵌 script 完成動態分頁量測後自行呼叫，
         // 不再依賴 win.onload（曾因時機競速偶爾不會自動跳出列印視窗）
@@ -4668,6 +4747,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
     // 填滿才換頁；JS 在螢幕上量高度再自己切頁的作法，量測結果跟引擎實排永遠有落差，會提早換頁或內容溢出。
     const items = q.items || [];
     let totalAmt = 0;
+    let hasTiered = false; // 有階梯報價項目時，合計加註「階梯項目依訂購量另計」
     const itemRowChunks = []; // 每個元素＝一個主料號的所有列(含BOM子件續列)組成的HTML字串
     items.forEach((it, idx) => {
         const specNo   = it.spec_no       || '';
@@ -4677,14 +4757,15 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         // 料號規格+齒輪規格 / 製程 / 料號備註(報價單內)，無料號備註省略含分隔
         const leftSpec = [specNo, gearSpec].filter(Boolean).join(' ');
         const desc     = [leftSpec, procStr, specRmk].filter(Boolean).join(' / ');
+        const isTieredIt = it.is_tiered == 1 && (it.tiers || []).length > 0;
         const qty    = it.quantity || 0;
         const price  = it.unit_price || 0;
         const amt    = parseFloat(it.amount || (qty * price));
-        totalAmt    += amt;
+        if (!isTieredIt) totalAmt += amt;   // 階梯項目金額依訂購量另計，不列入合計
         const unit = it.unit || 'PCS';
-        const priceCell = q.is_negotiation == 1
-            ? `<span style="font-size:8.5pt;color:#c0392b;font-weight:bold;margin-right:2px;">議價</span>${fmtNum(price)}`
-            : fmtNum(price);
+        const negoTag = q.is_negotiation == 1
+            ? `<span style="font-size:8.5pt;color:#c0392b;font-weight:bold;margin-right:2px;">議價</span>` : '';
+        const priceCell = negoTag + fmtNum(price);
         // 組合件子件清單（勾選「列印時包含」才印；併入品名規格儲存格，與母件同格顯示，全數列出、不收合）
         // 子件過多時分段成多列（每列禁止跨頁），續列產品編號重複標示「（續）」，數量/單價等不重複
         const BOM_PRINT_CHUNK = 12;
@@ -4698,7 +4779,33 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
                 kidChunks.push(lines.slice(i, i + BOM_PRINT_CHUNK).join(''));
             }
         }
-        let rowHtml = `<tr>
+        let rowHtml = '';
+        if (isTieredIt) {
+            // ── 階梯報價：每階一列。數量欄＝區間（含容差小字），單價欄＝該階單價，金額欄＝—（依訂購量另計）
+            hasTiered = true;
+            const rangeTxt = t => {
+                const mn = fmtNum(Math.round(Number(t.qty_min || 0)));
+                return (t.qty_max === null || t.qty_max === undefined || t.qty_max === '')
+                    ? `${mn}以上` : `${mn}~${fmtNum(Math.round(Number(t.qty_max)))}`;
+            };
+            const tolTxt = t => {
+                if (t.tolerance_value === null || t.tolerance_value === undefined || t.tolerance_value === '') return '';
+                const note = t.tolerance_note ? `<br>${esc(t.tolerance_note)}` : '';
+                return `<div style="font-size:8pt;color:#333;">容差±${fmtNum(t.tolerance_value)}${esc(t.tolerance_unit || '')}${note}</div>`;
+            };
+            it.tiers.forEach((t, ti) => {
+                rowHtml += `<tr>
+                    <td class="center">${ti === 0 ? idx + 1 : ''}</td>
+                    <td>${ti === 0 ? pnCell(it.product_id) : ''}</td>
+                    <td>${ti === 0 ? `${esc(desc)}<div style="font-size:8.5pt;color:#333;">（階梯報價，單價依訂購數量區間）</div>${kidChunks[0] || ''}` : ''}</td>
+                    <td class="right">${rangeTxt(t)}${tolTxt(t)}</td>
+                    <td class="center">${ti === 0 ? esc(unit) : ''}</td>
+                    <td class="right">${negoTag}${fmtNum(t.unit_price || 0)}</td>
+                    <td class="center" style="color:#666;">—</td>
+                </tr>`;
+            });
+        } else {
+            rowHtml = `<tr>
             <td class="center">${idx+1}</td>
             <td>${pnCell(it.product_id)}</td>
             <td>${esc(desc)}${kidChunks[0] || ''}</td>
@@ -4707,6 +4814,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
             <td class="right">${priceCell}</td>
             <td class="right">${fmtNum(amt)}</td>
         </tr>`;
+        }
         kidChunks.slice(1).forEach(chunk => {
             rowHtml += `<tr>
                 <td></td>
@@ -4718,9 +4826,14 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         itemRowChunks.push(rowHtml);
     });
 
-    // 合計 / 稅額（5%）/ 總額
+    // 合計 / 稅額（5%）/ 總額（階梯項目不列入；全部都是階梯時金額欄顯示「依訂購量計」）
     const tax   = Math.round(totalAmt * 0.05);
     const grand = totalAmt + tax;
+    const allTiered = hasTiered && totalAmt === 0;
+    const amtCell = v => allTiered ? '<span style="font-size:9pt;letter-spacing:1px;">依訂購量計</span>' : fmtNum(v);
+    const tierNoteHtml = hasTiered
+        ? `<p style="margin:4px 0;font-size:9pt;"><strong>●階梯報價：</strong>標示「—」之項目金額依實際訂購數量與對應區間單價計算${allTiered ? '' : '，未列入合計'}。</p>`
+        : '';
     const remark = q.note || '';
     const remarkHtml = remark.split(/[；;]/).map(s => esc(s.trim())).filter(Boolean).join('<br>');
 
@@ -4734,14 +4847,15 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         ? EGStamp.stamp(q.approved_by_name, fmtDot(q.approved_at))
         : '';
 
-    // thead 第一列放單號/客戶名稱：表格跨頁時 thead 每頁自動重複，紙本被拆散仍能認出是哪張單；
-    // 欄寬一律由 colgroup 決定（table-layout:fixed 取第一列儲存格算欄寬，第一列是 colspan=7 的單號列，不能靠它）
+    // 跨頁識別列改用 @page 頁首 margin box（見下方 CSS）：第 2 頁起每頁頁首自動印「單號／客戶」，
+    // 第 1 頁由 @page :first 蓋掉不印——舊作法把它放在 thead 會連第 1 頁也重複出現（表頭上方已有 meta 區）
+    // 欄寬一律由 colgroup 決定（table-layout:fixed 取第一列儲存格算欄寬）
+    const contInfoTxt = `單號：${String(q.quote_no || '').replace(/['\\]/g, '')}　客戶：${String(custName || '').replace(/['\\]/g, '')}`;
     const itemsColgroupHtml = `<colgroup>
         <col style="width:4%"><col style="width:20%"><col style="width:44%">
         <col style="width:7%"><col style="width:5%"><col style="width:9%"><col style="width:11%">
       </colgroup>`;
     const itemsTheadHtml = `<thead>
-        <tr class="cont-info"><td colspan="7">單　　號：${esc(q.quote_no)}　　客戶名稱：${esc(custName)}</td></tr>
         <tr>
           <th>項次</th>
           <th>產品編號</th>
@@ -4759,12 +4873,12 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
           <col class="val"><!-- 11%: 金額 -->
         </colgroup>
         <tr>
-          <td class="remark-cell" rowspan="3"><p style="margin:4px 0;"><strong>●備註：</strong>${remarkHtml}</p></td>
+          <td class="remark-cell" rowspan="3"><p style="margin:4px 0;"><strong>●備註：</strong>${remarkHtml}</p>${tierNoteHtml}</td>
           <td class="total-lbl">合　計</td>
-          <td class="total-val">${fmtNum(totalAmt)}</td>
+          <td class="total-val">${amtCell(totalAmt)}</td>
         </tr>
-        <tr><td class="total-lbl">稅　額</td><td class="total-val">${fmtNum(tax)}</td></tr>
-        <tr><td class="total-lbl">總　額</td><td class="total-val">${fmtNum(grand)}</td></tr>
+        <tr><td class="total-lbl">稅　額</td><td class="total-val">${amtCell(tax)}</td></tr>
+        <tr><td class="total-lbl">總　額</td><td class="total-val">${amtCell(grand)}</td></tr>
       </table>
       <div class="page-footer">
         <div class="sig-row">
@@ -4772,8 +4886,10 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
           <span>客戶簽收：</span>
           <span>主管審核：${approverStampHtml}</span>
         </div>
-      </div>
-      ${formNo ? `<div class="form-no">${esc(formNo)}</div>` : ''}`;
+      </div>`;
+    // AS 文件編號（ai-rules/16）：每頁頁尾右下角由 @page @bottom-right 印，不再只印在最後一頁；
+    // 動態塞進 content 前先濾掉單引號與反斜線，避免撐破 CSS
+    const docNoTxt = String(formNo || '').replace(/['\\]/g, '');
 
     // 完整表頭（公司/客戶/單號等 meta-grid）：放在表格前，自然只出現在第1頁；
     // 第2頁起由 thead 的 cont-info 列（單號/客戶名稱）自動重複標示。
@@ -4787,7 +4903,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         <div><span class="label">單　　號：</span>${esc(q.quote_no)}</div>
         <div><span class="label">傳真號碼：</span>${esc(custFax)}</div>
         <div><span class="label">業務人員：</span>${esc(q.created_by_name||q.created_by||'')}</div>
-        <div><span class="label">聯絡人　：</span>${esc(contactName)}</div>
+        ${contactName ? `<div><span class="label">聯絡人　：</span>${esc(contactName)}</div>` : '<div></div>'}
         <div><span class="label">幣　　別：</span>${esc(q.currency==='TWD'?'NTD':(q.currency||'NTD'))}</div>
         ${q.inquiry_no ? `<div><span class="label">詢價編號：</span>${esc(q.inquiry_no)}</div>` : '<div></div>'}
         <div><span class="label">有效日期：</span>${esc(toRoc(q.valid_until))}</div>
@@ -4801,7 +4917,14 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
 <meta charset="UTF-8">
 <title>客戶報價單 - ${esc(q.quote_no)}</title>
 <style>
-  @page { size: A4; margin: 12mm; }
+  /* 下邊界 16mm：留給頁尾 margin box（頁碼左下、AS 文件編號右下，ai-rules/16 列印標準）
+     頁首 @top-center：第 2 頁起印「單號／客戶」跨頁識別，第 1 頁由 :first 蓋掉（表頭 meta 區已有，不重複） */
+  @page {
+    size: A4; margin: 12mm 12mm 16mm;
+    @top-center { content:'${contInfoTxt}'; font-family:'標楷體','DFKai-SB',serif; font-size:9pt; color:#333; }
+    ${docNoTxt ? `@bottom-right { content:'${docNoTxt}'; font-family:'標楷體','DFKai-SB',serif; font-size:9pt; color:#333; }` : ''}
+  }
+  @page :first { @top-center { content: none; } }
   body { font-family:'標楷體','DFKai-SB',serif; font-size:11pt; width:186mm; margin:0 auto; color:#000; }
   h2.co-name { text-align:center; font-size:20pt; font-weight:bold; margin:0 0 3px; }
   .co-info   { text-align:center; font-size:10pt; margin:0 0 6px; }
@@ -4814,9 +4937,9 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
   table.items td { vertical-align: top; }
   table.items tr { page-break-inside: avoid; }
   table.items th { text-align:center; font-weight:bold; }
-  /* 表格跨頁時 thead 每頁自動重複（含單號列+欄位標題列），瀏覽器列印引擎原生行為 */
+  /* 表格跨頁時 thead 欄位標題列每頁自動重複，瀏覽器列印引擎原生行為；
+     單號/客戶跨頁識別改由 @page @top-center 印（第1頁不印，避免與 meta 區重複） */
   table.items thead { display: table-header-group; }
-  table.items tr.cont-info td { border:none; font-size:9pt; color:#333; text-align:left; padding:0 0 3px; letter-spacing:1px; }
   .center { text-align:center; }
   .right  { text-align:right; }
   .footer-area { display:table; width:97%; border-collapse:collapse; margin-top:4px; font-size:11pt; }
@@ -4830,7 +4953,6 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
   .sig-row { display:flex; align-items:flex-end; margin-top:8px; font-size:10pt; border-top:1px solid #000; padding-top:4px; }
   .sig-row span { flex:1; text-align:left; }
   .sig-row span:not(:last-child) { margin-right:16px; }
-  .form-no { margin-top:2px; text-align:right; font-size:9pt; }
   /* 合計/備註/簽章整塊不可被分頁切開：本頁放不下就整塊移到下一頁 */
   .sig-block { page-break-inside: avoid; }
   svg.car-stamp { width:91px !important; height:91px !important; }
@@ -4854,7 +4976,7 @@ ${fullHeaderHtml}
     var onePageA4 = (297 - 24) * 96 / 25.4;
     if (document.body.scrollHeight > onePageA4 * 0.92) {
         var st = document.createElement('style');
-        st.textContent = "@page { @bottom-center { content: '第 ' counter(page) ' 頁，共 ' counter(pages) ' 頁'; font-family:'標楷體','DFKai-SB',serif; font-size:9pt; color:#333; } }";
+        st.textContent = "@page { @bottom-left { content: '第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-family:'標楷體','DFKai-SB',serif; font-size:9pt; color:#333; } }";
         document.head.appendChild(st);
     }
     // 版面組完才叫用瀏覽器列印，取代舊版靠 win.onload 觸發（曾有時機競速、偶爾不會自動跳出列印視窗的問題）
@@ -5157,6 +5279,16 @@ function quoteRowIsBlank($row) {
     if (($row.find('.unit-price').val() || '').trim() !== '') return false;               // 單價
     const amt = ($row.find('.amount').val() || '').replace(/,/g, '').trim();              // 金額
     if (amt !== '' && parseFloat(amt) !== 0) return false;
+    return true;
+}
+
+// 階梯區間列是否完全空白（最小量/最大量/單價/容差值/容差備註全空；容差單位下拉與唯讀門檻小計不列入）
+function tierRowIsBlank($tr) {
+    if (($tr.find('.tier-qty-min').val() || '').trim() !== '') return false;
+    if (($tr.find('.tier-qty-max').val() || '').trim() !== '') return false;
+    if (($tr.find('.tier-unit-price').val() || '').trim() !== '') return false;
+    if (($tr.find('.tier-tol-value').val() || '').trim() !== '') return false;
+    if (($tr.find('.tier-tol-note').val() || '').trim() !== '') return false;
     return true;
 }
 
@@ -5794,6 +5926,26 @@ function saveFormNumber() {
 function loadFormNumber() {
     $.get(API_URL, { action:'get_param', param_group:'QUOTATION', param_key:'form_number' }, res => {
         if (res.success && res.value) $('#qs-form-number').val(typeof res.value === 'string' ? res.value : '');
+    });
+    loadAsDocBinding();
+}
+// ── 綁定 AS 文件編號（ai-rules/16：編號一律走 as_document 綁定，禁寫死；列印於每頁頁尾右下角）──
+function loadAsDocBinding() {
+    $.get(API_URL, { action:'get_as_documents' }, res => {
+        if (!res || !res.success) return;
+        const cur  = parseInt(res.bound_id) || 0;
+        const opts = ['<option value="0">— 未綁定 —</option>'].concat(
+            (res.docs || []).map(d =>
+                `<option value="${d.id}" ${Number(d.id) === cur ? 'selected' : ''}>${escapeHtml(d.doc_no + '　' + (d.doc_name || ''))}</option>`));
+        $('#qs-as-doc').html(opts.join(''));
+    }, 'json');
+}
+function saveAsDocBinding() {
+    const v = parseInt($('#qs-as-doc').val()) || 0;
+    $.post(API_URL, { action:'save_param', param_group:'QUOTATION', param_key:'as_doc_id',
+        param_value: JSON.stringify(v), description:'報價單列印綁定的AS文件id(0=未綁定)' }, res => {
+        if (res.success) Swal.fire({ toast:true, position:'top-end', icon:'success', title: v ? '已綁定 AS 文件編號' : '已解除綁定', showConfirmButton:false, timer:2000 });
+        else Swal.fire('錯誤', res.message, 'error');
     });
 }
 
