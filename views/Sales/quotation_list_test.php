@@ -4847,14 +4847,15 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         ? EGStamp.stamp(q.approved_by_name, fmtDot(q.approved_at))
         : '';
 
-    // thead 第一列放單號/客戶名稱：表格跨頁時 thead 每頁自動重複，紙本被拆散仍能認出是哪張單；
-    // 欄寬一律由 colgroup 決定（table-layout:fixed 取第一列儲存格算欄寬，第一列是 colspan=7 的單號列，不能靠它）
+    // 跨頁識別列改用 @page 頁首 margin box（見下方 CSS）：第 2 頁起每頁頁首自動印「單號／客戶」，
+    // 第 1 頁由 @page :first 蓋掉不印——舊作法把它放在 thead 會連第 1 頁也重複出現（表頭上方已有 meta 區）
+    // 欄寬一律由 colgroup 決定（table-layout:fixed 取第一列儲存格算欄寬）
+    const contInfoTxt = `單號：${String(q.quote_no || '').replace(/['\\]/g, '')}　客戶：${String(custName || '').replace(/['\\]/g, '')}`;
     const itemsColgroupHtml = `<colgroup>
         <col style="width:4%"><col style="width:20%"><col style="width:44%">
         <col style="width:7%"><col style="width:5%"><col style="width:9%"><col style="width:11%">
       </colgroup>`;
     const itemsTheadHtml = `<thead>
-        <tr class="cont-info"><td colspan="7">單　　號：${esc(q.quote_no)}　　客戶名稱：${esc(custName)}</td></tr>
         <tr>
           <th>項次</th>
           <th>產品編號</th>
@@ -4902,7 +4903,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         <div><span class="label">單　　號：</span>${esc(q.quote_no)}</div>
         <div><span class="label">傳真號碼：</span>${esc(custFax)}</div>
         <div><span class="label">業務人員：</span>${esc(q.created_by_name||q.created_by||'')}</div>
-        <div><span class="label">聯絡人　：</span>${esc(contactName)}</div>
+        ${contactName ? `<div><span class="label">聯絡人　：</span>${esc(contactName)}</div>` : '<div></div>'}
         <div><span class="label">幣　　別：</span>${esc(q.currency==='TWD'?'NTD':(q.currency||'NTD'))}</div>
         ${q.inquiry_no ? `<div><span class="label">詢價編號：</span>${esc(q.inquiry_no)}</div>` : '<div></div>'}
         <div><span class="label">有效日期：</span>${esc(toRoc(q.valid_until))}</div>
@@ -4916,8 +4917,14 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
 <meta charset="UTF-8">
 <title>客戶報價單 - ${esc(q.quote_no)}</title>
 <style>
-  /* 下邊界 16mm：留給頁尾 margin box（頁碼左下、AS 文件編號右下，ai-rules/16 列印標準） */
-  @page { size: A4; margin: 12mm 12mm 16mm;${docNoTxt ? ` @bottom-right { content:'${docNoTxt}'; font-family:'標楷體','DFKai-SB',serif; font-size:9pt; color:#333; }` : ''} }
+  /* 下邊界 16mm：留給頁尾 margin box（頁碼左下、AS 文件編號右下，ai-rules/16 列印標準）
+     頁首 @top-center：第 2 頁起印「單號／客戶」跨頁識別，第 1 頁由 :first 蓋掉（表頭 meta 區已有，不重複） */
+  @page {
+    size: A4; margin: 12mm 12mm 16mm;
+    @top-center { content:'${contInfoTxt}'; font-family:'標楷體','DFKai-SB',serif; font-size:9pt; color:#333; }
+    ${docNoTxt ? `@bottom-right { content:'${docNoTxt}'; font-family:'標楷體','DFKai-SB',serif; font-size:9pt; color:#333; }` : ''}
+  }
+  @page :first { @top-center { content: none; } }
   body { font-family:'標楷體','DFKai-SB',serif; font-size:11pt; width:186mm; margin:0 auto; color:#000; }
   h2.co-name { text-align:center; font-size:20pt; font-weight:bold; margin:0 0 3px; }
   .co-info   { text-align:center; font-size:10pt; margin:0 0 6px; }
@@ -4930,9 +4937,9 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
   table.items td { vertical-align: top; }
   table.items tr { page-break-inside: avoid; }
   table.items th { text-align:center; font-weight:bold; }
-  /* 表格跨頁時 thead 每頁自動重複（含單號列+欄位標題列），瀏覽器列印引擎原生行為 */
+  /* 表格跨頁時 thead 欄位標題列每頁自動重複，瀏覽器列印引擎原生行為；
+     單號/客戶跨頁識別改由 @page @top-center 印（第1頁不印，避免與 meta 區重複） */
   table.items thead { display: table-header-group; }
-  table.items tr.cont-info td { border:none; font-size:9pt; color:#333; text-align:left; padding:0 0 3px; letter-spacing:1px; }
   .center { text-align:center; }
   .right  { text-align:right; }
   .footer-area { display:table; width:97%; border-collapse:collapse; margin-top:4px; font-size:11pt; }
