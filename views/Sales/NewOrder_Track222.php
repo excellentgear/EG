@@ -722,15 +722,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$quote) throw new Exception('找不到報價單');
 
             $stmt = $pdo->prepare("SELECT qi.item_id, qi.product_id, qi.d_setting_d_id, qi.specification,
-                                           qi.quantity, qi.unit_price, qi.process_notes,
+                                           qi.quantity, qi.unit_price, qi.process_notes, qi.is_tiered,
                                            ds.D_Setting_Id, ds.Is_Assembly,
                                            (SELECT ot2.Order_oo FROM order_track ot2 WHERE ot2.quote_item_id = qi.item_id ORDER BY ot2.Order_id DESC LIMIT 1) AS converted_order_oo
                                     FROM quotation_item qi
                                     LEFT JOIN d_setting ds ON ds.d_id = qi.d_setting_d_id
                                     WHERE qi.quote_id = ?
-                                    ORDER BY qi.item_id ASC");
+                                    ORDER BY qi.sort_order ASC, qi.item_id ASC");
             $stmt->execute([$quote_id]);
             $rows = eg_build_process_names($pdo, $stmt->fetchAll(PDO::FETCH_ASSOC));
+            // 階梯報價項目：附上各區間（含容差），供轉單時輸入數量自動對價
+            $tieredIds = [];
+            foreach ($rows as $r) { if (!empty($r['is_tiered'])) $tieredIds[] = (int)$r['item_id']; }
+            if ($tieredIds) {
+                $phT = implode(',', array_fill(0, count($tieredIds), '?'));
+                $stT = $pdo->prepare("SELECT item_id, qty_min, qty_max, unit_price, tolerance_value, tolerance_unit, tolerance_note
+                                      FROM quotation_item_tier WHERE item_id IN ($phT)
+                                      ORDER BY item_id ASC, sort_order ASC, qty_min ASC");
+                $stT->execute($tieredIds);
+                $tierMap = [];
+                foreach ($stT->fetchAll(PDO::FETCH_ASSOC) as $t) $tierMap[$t['item_id']][] = $t;
+                foreach ($rows as &$r) { if (!empty($r['is_tiered'])) $r['tiers'] = $tierMap[$r['item_id']] ?? []; }
+                unset($r);
+            }
             echo json_encode(['success' => true, 'quote' => $quote, 'data' => $rows]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -1800,6 +1814,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $global = $_POST['global'] ?? '';
     $unbound = !empty($_POST['unbound']) ? (int)$_POST['unbound'] : 0;
     $unbound_op = !empty($_POST['unbound_op']) ? (int)$_POST['unbound_op'] : 0;
+    $qty_over = !empty($_POST['qty_over']) ? (int)$_POST['qty_over'] : 0; // 轉單數量超出階梯區間篩選
+    // 相容舊表：qty_over_range 首次執行自動補欄（統計/篩選 SQL 會引用；部署後第一個請求可能是 AJAX 而非整頁載入）
+    try { $pdo->query("SELECT qty_over_range FROM order_track LIMIT 1"); }
+    catch (Exception $_eQov) {
+        try { $pdo->exec("ALTER TABLE order_track ADD COLUMN qty_over_range TINYINT(1) NOT NULL DEFAULT 0 COMMENT '轉單數量超出報價階梯區間(含容差後)=1,待補報價單'"); } catch (Exception $_eQov2) {}
+    }
 
     $whereClauses = ["1=1", "(ot.parent_order_id IS NULL OR ot.parent_order_id = 0)"];
     $params = [];
@@ -1844,6 +1864,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     if ($unbound_op === 1) {
         // 未綁定OP條件暫時停用（OP單據尚未開始使用）；恢復時在 OR 前取消 /*…OR*/ 的 SQL 注解
         $whereClauses[] = "(/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0)";
+    }
+    if ($qty_over === 1) {
+        // OP轉訂單時輸入數量超出報價階梯區間（含容差後區間）的訂單，供補報價單追蹤
+        $whereClauses[] = "ot.qty_over_range = 1";
     }
     // 半高卡片第一優先篩選（優先於 status 篩選）
     if ($order_status_filter === 'unfinished') {
@@ -1891,7 +1915,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
             SUM(CASE WHEN (ot.pmGet IS NULL AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as processing,
             SUM(CASE WHEN (ot.pmGet IS NOT NULL AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as done,
             SUM(CASE WHEN (ot.pmGet IS NULL AND ot.in_review IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as communication,
-            SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op
+            SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
+            SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over
             FROM order_track ot LEFT JOIN user u ON u.id = ot.ate LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID $whereSql";
     } else {
         // 無半高篩選（paused/closed/無選）：正常計算 processing/done/communication
@@ -1900,7 +1925,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
             SUM(CASE WHEN (ot.pmGet IS NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as processing,
             SUM(CASE WHEN (ot.pmGet IS NOT NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as done,
             SUM(CASE WHEN (ot.pmGet IS NULL AND ot.in_review IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as communication,
-            SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op
+            SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
+            SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over
             FROM order_track ot LEFT JOIN user u ON u.id = ot.ate LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID $whereSql";
     }
     $stmtMain = $pdo->prepare($mainStatsSql);
@@ -1923,6 +1949,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         'done'          => $mainResult['done'] ?? 0,
         'communication' => $mainResult['communication'] ?? 0,
         'unbound_op'    => $mainResult['unbound_op'] ?? 0,
+        'qty_over'      => $mainResult['qty_over'] ?? 0,
         'paused'        => $globalResult['paused'] ?? 0,
         'closed'        => $globalResult['closed'] ?? 0,
         'unfinished'    => $globalResult['unfinished'] ?? 0,
@@ -2708,7 +2735,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     <?php endif; ?>
                 </td>
                 <td class="col-process"><?= safe_html($order['Processing_items']) ?></td>
-                <td class="col-qty"><?= number_format($order['Qty'] ?? 0) ?></td>
+                <td class="col-qty"><?= number_format($order['Qty'] ?? 0) ?><?php if (!empty($order['qty_over_range'])): ?><br><span style="color:#DD5138;font-size:10px;font-weight:600;white-space:nowrap;" title="OP轉訂單時輸入的數量超出報價階梯區間（含容差後區間），請補報價單">數量超出區間</span><?php endif; ?></td>
                 <?php
                 $upDisplay = '';
                 $upRaw = $order['display_unit_price'] ?? $order['unit_price'] ?? '';
@@ -2863,9 +2890,15 @@ $selectedYear = $_GET['year'] ?? 'ALL'; // 預設改為 ALL
 // 1. 統計 SQL (修正 TIMESTAMP 比對問題)
 // 初始頁面統計：paused/closed/unfinished 只看年份
 $yearCondInit = ($selectedYear !== 'ALL') ? "WHERE YEAR(ot.Order_date) = " . intval($selectedYear) . " AND (ot.parent_order_id IS NULL OR ot.parent_order_id = 0)" : "WHERE (ot.parent_order_id IS NULL OR ot.parent_order_id = 0)";
+// 相容舊表：qty_over_range（OP轉訂單數量超出報價階梯區間旗標）首次載入自動補欄
+try { $conn->getPDO()->query("SELECT qty_over_range FROM order_track LIMIT 1"); }
+catch (Exception $_eQov) {
+    try { $conn->getPDO()->exec("ALTER TABLE order_track ADD COLUMN qty_over_range TINYINT(1) NOT NULL DEFAULT 0 COMMENT '轉單數量超出報價階梯區間(含容差後)=1,待補報價單'"); } catch (Exception $_eQov2) {}
+}
 $initStatsSql = "SELECT
     COUNT(*) as total_records,
     SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
+    SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over,
     SUM(CASE WHEN (ot.Order_status = 6) THEN 1 ELSE 0 END) as paused,
     SUM(CASE WHEN (ot.Order_status = 9) THEN 1 ELSE 0 END) as closed,
     SUM(CASE WHEN (ot.Order_status IS NULL) THEN 1 ELSE 0 END) as unfinished
@@ -2886,6 +2919,7 @@ $stats = [
     'done'         => $processingResult['done'] ?? 0,
     'communication'=> $processingResult['communication'] ?? 0,
     'unbound_op'   => $initResult['unbound_op'] ?? 0,
+    'qty_over'     => $initResult['qty_over'] ?? 0,
     'paused'       => $initResult['paused'] ?? 0,
     'closed'       => $initResult['closed'] ?? 0,
     'unfinished'   => $initResult['unfinished'] ?? 0,
@@ -3234,15 +3268,16 @@ foreach($dCounts as $c) {
         .stat-card-half:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.15); opacity:0.9; }
         .stat-card-half.active { outline: 2px solid #2A3F54; }
         .stat-value-sm { font-size: 18px; font-weight: 700; line-height: 1; }
-        .col-part { font-family: "Consolas", monospace; font-weight: 600; color: #007bff; min-width: 150px; white-space: nowrap; }
+        .col-part { font-family: "Consolas", monospace; font-weight: 600; color: #007bff; min-width: 220px; white-space: nowrap; }
         .col-qty { text-align: right; font-weight: 700; color: var(--accent-color); width: 60px; }
         .col-status { text-align: center; white-space: nowrap; width: 110px; }
 
         /* 料號欄（.col-part 已設 min-width/white-space，此規則作為補強）
-           欄位順序（有操作欄）：1操作 2接單/交期 3客戶 4料號 */
+           欄位順序（有操作欄）：1操作 2接單/交期 3客戶 4料號
+           2026-07-31 加寬 140→220：長料號（含中文尾綴）會被右側欄位壓到遮蔽 */
         #orderTable th:nth-child(4),
         #orderTable td:nth-child(4) {
-            min-width: 140px;
+            min-width: 220px;
         }
         
         /* Editable Textarea */
@@ -3488,6 +3523,11 @@ foreach($dCounts as $c) {
                             <i class="fa fa-exclamation-triangle stat-icon"></i>
                             <div class="stat-value" id="count-unbound-op" style="color:#E67E22;"><?= number_format($stats['unbound_op']) ?></div>
                             <div class="stat-label">單價為0</div>
+                            <div id="count-qty-over-note" onclick="event.stopPropagation();toggleQtyOver(this);"
+                                 title="OP轉訂單數量超出報價階梯區間（含容差後）的訂單，點擊篩選，需補報價單"
+                                 style="font-size:10px;color:#DD5138;margin-top:2px;cursor:pointer;text-decoration:underline dotted;<?= ($stats['qty_over'] ?? 0) > 0 ? '' : 'display:none;' ?>">
+                                <span id="count-qty-over"><?= number_format($stats['qty_over'] ?? 0) ?></span>筆數量超出區間
+                            </div>
                         </div>
                         <!-- 三個半高卡片 -->
                         <div style="display:flex;flex-direction:column;gap:4px;flex:0 0 auto;justify-content:center;">
@@ -3523,6 +3563,8 @@ foreach($dCounts as $c) {
                     <style>
                     /* 篩選列自適應：一行放不下時加上 .fb-compact，按鈕只顯示圖示（滑鼠移過看 title 名稱） */
                     .filter-bar.fb-compact .fb-txt { display:none; }
+                    /* 圖示化後仍塞不下而換行：分頁不再靠右推出大片空白，改為緊接按鈕排列 */
+                    .filter-bar.fb-packed #pagination-container { margin-left:0 !important; }
                     </style>
                     <div class="filter-bar" style="background: #fff; padding: 8px 10px; border-radius: 8px; margin-bottom: 15px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
                         <select id="year-select" class="form-control input-sm" style="width: 92px; display: inline-block;">
@@ -4437,6 +4479,16 @@ foreach($dCounts as $c) {
                                         <span class="input-group-btn"><button type="button" class="btn btn-default" onclick="opApplyBatch('orderno')">套用</button></span>
                                     </div>
                                 </div>
+                                <div class="col-xs-3" style="padding:0 5px;">
+                                    <label style="font-size:11px;">階梯對價區間<small style="color:#999;">（僅階梯報價列）</small></label>
+                                    <div class="input-group input-group-sm">
+                                        <select class="form-control" id="op-batch-tolmatch">
+                                            <option value="0">容差前（報價區間）</option>
+                                            <option value="1">容差後區間</option>
+                                        </select>
+                                        <span class="input-group-btn"><button type="button" class="btn btn-default" onclick="opApplyBatch('tolmatch')">套用</button></span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -4555,7 +4607,7 @@ foreach($dCounts as $c) {
         // 核心狀態變數
         // =====================================================================
         var currentPage = 1;
-        var currentFilters = { status: 'all', unbound: false, unbound_op: false };
+        var currentFilters = { status: 'all', unbound: false, unbound_op: false, qty_over: false };
         var isStatCardFilter = false;
         var lockedStats = null;
 
@@ -4601,7 +4653,8 @@ foreach($dCounts as $c) {
                 status:            currentFilters.status,
                 order_status_filter: currentStatusCardFilter || '',
                 unbound:           currentFilters.unbound    ? 1 : 0,
-                unbound_op:        currentFilters.unbound_op ? 1 : 0
+                unbound_op:        currentFilters.unbound_op ? 1 : 0,
+                qty_over:          currentFilters.qty_over   ? 1 : 0
             }, function(res) {
                 if (!res.success) {
                     $('#orderTable tbody').html('<tr><td colspan="20" class="text-center text-danger">載入失敗: ' + (res.message || '未知錯誤') + '</td></tr>');
@@ -4621,7 +4674,8 @@ foreach($dCounts as $c) {
                             status:   'all',
                             order_status_filter: currentStatusCardFilter || '',
                             unbound:  currentFilters.unbound    ? 1 : 0,
-                            unbound_op: currentFilters.unbound_op ? 1 : 0
+                            unbound_op: currentFilters.unbound_op ? 1 : 0,
+                            qty_over:   currentFilters.qty_over   ? 1 : 0
                         }, function(r2) {
                             if (r2.success) {
                                 lockedStats = r2.stats;
@@ -4654,6 +4708,11 @@ foreach($dCounts as $c) {
             $('#count-all').text(s.total_records || 0);
             // unbound_op 跟著當前篩選
             if (s.unbound_op !== undefined) $('#count-unbound-op').text(s.unbound_op || 0);
+            // 數量超出區間（OP轉訂單超出階梯區間）子連結：>0 才顯示
+            if (s.qty_over !== undefined) {
+                $('#count-qty-over').text(s.qty_over || 0);
+                $('#count-qty-over-note').toggle((parseInt(s.qty_over) || 0) > 0 || currentFilters.qty_over);
+            }
             // 三個半高卡片始終顯示全域數字（後端獨立計算，只跟年份走）
             if (s.paused !== undefined) $('#count-paused').text(s.paused || 0);
             if (s.closed !== undefined) $('#count-closed').text(s.closed || 0);
@@ -4760,6 +4819,8 @@ foreach($dCounts as $c) {
                 currentFilters.status = 'all';
                 currentFilters.unbound = false;
                 currentFilters.unbound_op = false;
+                currentFilters.qty_over = false;
+                $('#count-qty-over-note').css({'font-weight':''});
                 currentStatusCardFilter = null;
                 isStatCardFilter = false;
                 lockedStats = null;
@@ -6444,12 +6505,30 @@ foreach($dCounts as $c) {
             fetchTableData(1);
         }
 
+        // ── 數量超出區間（OP轉訂單超出階梯區間，待補報價單）快速篩選 toggle ──
+        function toggleQtyOver(el) {
+            currentFilters.qty_over = !currentFilters.qty_over;
+            if (currentFilters.qty_over) {
+                $(el).css({'font-weight':'700'});
+                $('#unbound-banner-type').text('數量超出區間（待補報價單）');
+                $('#unbound-filter-banner').show();
+            } else {
+                $(el).css({'font-weight':''});
+                if (!currentFilters.unbound && !currentFilters.unbound_op) $('#unbound-filter-banner').hide();
+            }
+            isStatCardFilter = false;
+            lockedStats = null;
+            fetchTableData(1);
+        }
+
         // ── 橫幅右側「取消篩選」按鈕 ────────────────────────────────────────
         function clearUnboundFilter() {
             currentFilters.unbound    = false;
             currentFilters.unbound_op = false;
+            currentFilters.qty_over   = false;
             $('#filter-unbound').removeClass('btn-primary').addClass('btn-warning');
             $('#stat-card-unbound-op').removeClass('active');
+            $('#count-qty-over-note').css({'font-weight':''});
             $('#unbound-filter-banner').hide();
             isStatCardFilter = false;
             lockedStats = null;
@@ -7327,6 +7406,66 @@ foreach($dCounts as $c) {
             }, 'json').fail(function() { showOrderAlert('連線失敗，請稍後再試'); });
         }
 
+        // ── 階梯報價工具：容差後區間計算、依輸入數量對價 ──────────────────
+        // base_lo/base_hi＝報價（容差前）區間；tol_lo/tol_hi＝容差後區間（hi=null 表示無上限）
+        function opTolRange(t) {
+            var mn = Math.round(parseFloat(t.qty_min) || 0);
+            var mx = (t.qty_max === null || t.qty_max === undefined || t.qty_max === '') ? null : Math.round(parseFloat(t.qty_max));
+            var tv = parseFloat(t.tolerance_value);
+            var lo = mn, hi = mx;
+            if (!isNaN(tv) && tv > 0) {
+                if ((t.tolerance_unit || '') === '%') {
+                    lo = Math.max(1, Math.floor(mn * (1 - tv / 100)));
+                    if (hi !== null) hi = Math.ceil(hi * (1 + tv / 100));
+                } else if ((t.tolerance_unit || '') === 'PCS') {
+                    lo = Math.max(1, mn - Math.round(tv));
+                    if (hi !== null) hi = hi + Math.round(tv);
+                }
+            }
+            return { base_lo: mn, base_hi: mx, tol_lo: lo, tol_hi: hi };
+        }
+        // 對價：先用容差前（報價）區間精確比對；useTol=true 時再用容差後區間，
+        // 落在相鄰兩階容差區重疊處時取「距離原區間邊界較近」的那一階
+        function opMatchTier(tiers, qty, useTol) {
+            if (!(qty > 0)) return null;
+            for (var i = 0; i < tiers.length; i++) {
+                var r = opTolRange(tiers[i]);
+                if (qty >= r.base_lo && (r.base_hi === null || qty <= r.base_hi)) return { tier: tiers[i], idx: i, byTol: false };
+            }
+            if (!useTol) return null;
+            var best = null;
+            for (var j = 0; j < tiers.length; j++) {
+                var rr = opTolRange(tiers[j]);
+                if (qty >= rr.tol_lo && (rr.tol_hi === null || qty <= rr.tol_hi)) {
+                    var dist = qty < rr.base_lo ? (rr.base_lo - qty) : (rr.base_hi === null ? 0 : qty - rr.base_hi);
+                    if (!best || dist < best.dist) best = { tier: tiers[j], idx: j, byTol: true, dist: dist };
+                }
+            }
+            return best;
+        }
+        function opIsTieredItem(it) { return parseInt(it.is_tiered) === 1 && (it.tiers || []).length > 0; }
+        // 依輸入數量與對價模式更新該列單價顯示
+        function opUpdateTierPrice($tr) {
+            var it  = $tr.data('item');
+            var qty = parseInt($tr.find('.op-f-qty').val()) || 0;
+            var useTol = $tr.find('.op-f-tolmatch').is(':checked');
+            var $disp  = $tr.find('.op-f-price-display');
+            if (!qty) { $disp.html('-'); $tr.data('op-match', null); return; }
+            var m = opMatchTier(it.tiers || [], qty, useTol);
+            $tr.data('op-match', m || null);
+            if (m) {
+                $disp.html(formatPrice(parseFloat(m.tier.unit_price) || 0) +
+                    '<div style="font-size:9px;font-weight:400;color:' + (m.byTol ? '#a06a1f' : '#888') + ';">區間' + (m.idx + 1) + (m.byTol ? '（容差）' : '') + '</div>');
+            } else {
+                var mTol = opMatchTier(it.tiers || [], qty, true);
+                $disp.html(mTol
+                    ? '<span style="color:#DD5138;font-size:10px;">僅容差區間符合<br>請勾容差對價</span>'
+                    : '<span style="color:#DD5138;font-size:11px;font-weight:600;">超出區間</span>');
+            }
+        }
+        $(document).on('input',  '#op-items-tbody .op-f-qty',      function() { opUpdateTierPrice($(this).closest('tr')); });
+        $(document).on('change', '#op-items-tbody .op-f-tolmatch', function() { opUpdateTierPrice($(this).closest('tr')); });
+
         function opRenderItems(items) {
             var $tb = $('#op-items-tbody').empty();
             var ateOptionsHtml = $('#op-ate-options-template').html();
@@ -7346,8 +7485,32 @@ foreach($dCounts as $c) {
                 $tr.append('<td>' + escapeHtml((opCurrentQuote && opCurrentQuote.client_name) || '') + '</td>');
                 $tr.append('<td>' + escapeHtml(it.processes || '') + '</td>');
                 $tr.append('<td>' + escapeHtml((it.specification||'').substring(0,40)) + '</td>');
-                $tr.append('<td style="text-align:right;">' + (parseInt(it.quantity)||0) + '</td>');
-                $tr.append('<td style="text-align:right;">' + (parseFloat(it.unit_price) > 0 ? formatPrice(parseFloat(it.unit_price)) : '-') + '</td>');
+                if (opIsTieredItem(it)) {
+                    // 階梯報價：數量改為自行輸入；下方分開列出「報價區間」與「容差後區間」
+                    var rangeLines = it.tiers.map(function(t, i) {
+                        var r = opTolRange(t);
+                        var baseTxt = r.base_hi === null ? (r.base_lo + '以上') : (r.base_lo + '~' + r.base_hi);
+                        var tolDiff = (r.tol_lo !== r.base_lo) || (r.tol_hi !== r.base_hi);
+                        var tolTxt  = tolDiff
+                            ? '｜<span style="color:#a06a1f;">容差後 ' + (r.tol_hi === null ? (r.tol_lo + '以上') : (r.tol_lo + '~' + r.tol_hi)) + '</span>' : '';
+                        return '<div style="font-size:10px;line-height:1.5;white-space:nowrap;">' +
+                               '區間' + (i + 1) + '：' + baseTxt + ' @' + formatPrice(parseFloat(t.unit_price) || 0) + tolTxt + '</div>';
+                    }).join('');
+                    var $qtyTd = $('<td style="text-align:right;min-width:150px;"></td>');
+                    $qtyTd.append($('<input type="number" class="form-control input-sm op-f-qty" placeholder="輸入數量" min="1" step="1">').prop('disabled', converted));
+                    $qtyTd.append('<div style="text-align:left;margin-top:2px;">' + rangeLines + '</div>');
+                    $tr.append($qtyTd);
+                    var $priceTd = $('<td style="text-align:right;min-width:100px;"></td>');
+                    $priceTd.append('<div class="op-f-price-display" style="font-weight:600;">-</div>');
+                    if (!converted) {
+                        $priceTd.append('<label style="font-weight:400;font-size:10px;display:flex;align-items:center;gap:3px;justify-content:flex-end;cursor:pointer;margin:2px 0 0;white-space:nowrap;" title="數量落在容差後區間內也視為對應該區間取價">' +
+                            '<input type="checkbox" class="op-f-tolmatch" style="margin:0;">容差區間對價</label>');
+                    }
+                    $tr.append($priceTd);
+                } else {
+                    $tr.append('<td style="text-align:right;">' + (parseInt(it.quantity)||0) + '</td>');
+                    $tr.append('<td style="text-align:right;">' + (parseFloat(it.unit_price) > 0 ? formatPrice(parseFloat(it.unit_price)) : '-') + '</td>');
+                }
                 $tr.append($('<td></td>').append($('<input type="date" class="form-control input-sm op-f-delivery">').prop('disabled', converted)));
                 $tr.append($('<td></td>').append($('<input type="text" class="form-control input-sm op-f-ps">').prop('disabled', converted)));
                 $tr.append($('<td></td>').append($('<select class="form-control input-sm op-f-ate"></select>').html(ateOptionsHtml).prop('disabled', converted)));
@@ -7375,6 +7538,14 @@ foreach($dCounts as $c) {
                 $checked.find('.op-f-ateget').val($('#op-batch-ateget').val());
             } else if (field === 'orderno') {
                 $checked.find('.op-f-orderno').val($('#op-batch-orderno').val().trim().toUpperCase());
+            } else if (field === 'tolmatch') {
+                // 全部改用容差區間對價／改回容差前（報價）區間對價
+                var on = $('#op-batch-tolmatch').val() === '1';
+                $checked.each(function() {
+                    var $tr = $(this);
+                    var $cb = $tr.find('.op-f-tolmatch');
+                    if ($cb.length) { $cb.prop('checked', on); opUpdateTierPrice($tr); }
+                });
             }
         }
 
@@ -7385,6 +7556,7 @@ foreach($dCounts as $c) {
 
             var items = [];
             var errMsg = '';
+            var overRangeLabels = []; // 完全超出區間（含容差後）仍執意轉單的料號，確認後存檔並標記
             $checked.each(function() {
                 if (errMsg) return;
                 var $tr = $(this);
@@ -7404,10 +7576,56 @@ foreach($dCounts as $c) {
                     var vr = validateOrderNo(orderNo);
                     if (!vr.valid) { errMsg = '料號 ' + label + ' 訂單編號有誤：' + vr.msg; return; }
                 }
-                items.push({ quote_item_id: it.item_id, order_no: orderNo, delivery_date: delivery, order_ps: ps, ate: ate, ateget: ateget });
+                var payload = { quote_item_id: it.item_id, order_no: orderNo, delivery_date: delivery, order_ps: ps, ate: ate, ateget: ateget };
+                if (opIsTieredItem(it)) {
+                    var qtyIn  = parseInt($tr.find('.op-f-qty').val()) || 0;
+                    var useTol = $tr.find('.op-f-tolmatch').is(':checked');
+                    if (!qtyIn) { errMsg = '料號 ' + label + ' 為階梯報價，請輸入訂購數量。'; return; }
+                    var mMode = opMatchTier(it.tiers, qtyIn, useTol);   // 依使用者選的對價模式
+                    var mTol  = opMatchTier(it.tiers, qtyIn, true);     // 含容差後區間的最寬判定
+                    if (!mMode && mTol) {
+                        errMsg = '料號 ' + label + ' 數量 ' + qtyIn + ' 僅落在容差後區間：請勾選該列「容差區間對價」取得單價，或修改數量。';
+                        return;
+                    }
+                    if (!mTol) overRangeLabels.push(label + '（數量 ' + qtyIn + '）');
+                    payload.qty = qtyIn;
+                    payload.tol_match = useTol ? 1 : 0;
+                }
+                items.push(payload);
             });
             if (errMsg) { $('#op-create-error').text(errMsg).show(); return; }
+            if (overRangeLabels.length) {
+                // 完全超出（報價區間與容差後區間都不含此數量）→ 提醒後仍可繼續存檔，訂單標記「數量超出區間」待補報價
+                opConfirm('下列料號輸入的數量<b style="color:#DD5138;">超出階梯報價區間範圍（含容差後區間）</b>：<br><br>' +
+                    overRangeLabels.map(function(s){ return '・' + escapeHtml(s); }).join('<br>') +
+                    '<br><br>繼續存檔將以<b>無單價</b>建立訂單並標記「數量超出區間」，之後請補報價單。',
+                    function() { opSubmitOrders(items); });
+                return;
+            }
+            opSubmitOrders(items);
+        }
 
+        // 超出區間確認跳窗（繼續存檔／取消）
+        function opConfirm(htmlMsg, onOk) {
+            var ov = document.createElement('div');
+            ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:99998;';
+            var box = document.createElement('div');
+            box.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-top:4px solid #F0A24B;border-radius:6px;padding:24px 30px 18px;z-index:99999;min-width:320px;max-width:480px;width:92%;box-shadow:0 10px 40px rgba(0,0,0,0.3);text-align:center;';
+            box.innerHTML = '<div style="color:#F0A24B;font-size:30px;margin-bottom:8px;"><i class="fa fa-exclamation-triangle"></i></div>'
+                          + '<div style="font-size:13px;color:#333;line-height:1.8;text-align:left;">' + htmlMsg + '</div>'
+                          + '<div style="margin-top:16px;display:flex;gap:10px;justify-content:center;">'
+                          + '<button type="button" class="btn btn-sm btn-default" id="op-confirm-cancel">取消</button>'
+                          + '<button type="button" class="btn btn-sm btn-warning" id="op-confirm-ok" style="font-weight:600;">仍要繼續存檔</button>'
+                          + '</div>';
+            document.body.appendChild(ov);
+            document.body.appendChild(box);
+            function dismiss() { ov.remove(); box.remove(); }
+            box.querySelector('#op-confirm-cancel').onclick = dismiss;
+            ov.onclick = dismiss;
+            box.querySelector('#op-confirm-ok').onclick = function() { dismiss(); onOk(); };
+        }
+
+        function opSubmitOrders(items) {
             var $btn = $('#op-btn-create');
             $btn.prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 建立中...');
             $.post('../../src/store/_NewOrder_Track222.php', {
@@ -13285,8 +13503,14 @@ window.otHasFeat = function(code) {
         var bar = document.querySelector('.filter-bar');
         if (!bar) return;
         bar.classList.remove('fb-compact');
+        bar.classList.remove('fb-packed');
         // 單行高度約 46px（input-sm 30 + 上下 padding 16）；超過即代表換行了
-        if (bar.offsetHeight > 56) bar.classList.add('fb-compact');
+        if (bar.offsetHeight > 56) {
+            bar.classList.add('fb-compact');           // 先把按鈕文字收成圖示
+            if (bar.offsetHeight > 56) {               // 仍放不下 → 分頁不靠右，避免第二行整排空白
+                bar.classList.add('fb-packed');
+            }
+        }
     }
     window.addEventListener('resize', function() {
         clearTimeout(fbFitTimer);
