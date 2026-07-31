@@ -27,4 +27,27 @@ try {
     if (strpos($e->getMessage(), 'Duplicate column') === false) throw $e;
     echo "external_doc_name 已存在，跳過\n";
 }
+
+// 2026-07-31 二期：報價附件補備註欄（比照 part_attachments.note；外來文件清單可回寫）
+try {
+    $pdo->exec("ALTER TABLE quotation_attachments ADD COLUMN note TEXT NULL COMMENT '附件備註（外來文件清單等處可回寫）'");
+    echo "quotation_attachments.note OK\n";
+} catch (PDOException $e) {
+    if (strpos($e->getMessage(), 'Duplicate column') === false) throw $e;
+    echo "quotation_attachments.note 已存在，跳過\n";
+}
+
+// 2026-07-31 二期：外來文件清單排除表（同一份文件料號/報價兩邊都掛附件時，可把重複那筆排除）
+$pdo->exec("
+CREATE TABLE IF NOT EXISTS external_doc_exclude (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  source      VARCHAR(10)  NOT NULL COMMENT 'part=料號附件 / quote=報價附件',
+  attach_id   INT          NOT NULL COMMENT 'part_attachments.id 或 quotation_attachments.id',
+  ds_pk       INT          NOT NULL COMMENT 'd_setting.d_id（附件×料號為排除單位）',
+  part_no     VARCHAR(100) NULL COMMENT '料號字串（備查）',
+  excluded_by VARCHAR(50)  NULL,
+  excluded_at DATETIME     NULL,
+  UNIQUE KEY uq_item (source, attach_id, ds_pk)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='外來文件清單排除項目'");
+echo "external_doc_exclude OK\n";
 echo "done\n";

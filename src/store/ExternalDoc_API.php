@@ -128,6 +128,21 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
     $custId   = trim((string)($opt['customer_id'] ?? ''));
     $year     = (int)($opt['year'] ?? 0);
     $catId    = (int)($opt['category'] ?? 0);   // 外來文件類別篩選（quotation_file_categories.id，0=全部）
+    $show     = ($opt['show'] ?? 'active') === 'excluded' ? 'excluded' : 'active';   // excluded=只看已排除
+
+    // 排除清單（附件×料號為單位）：active 檢視要跳過、excluded 檢視只留這些
+    $excludes = [];
+    try {
+        foreach ($db->query("SELECT source, attach_id, ds_pk, excluded_by, excluded_at FROM external_doc_exclude")->fetchAll(PDO::FETCH_ASSOC) as $e) {
+            $excludes[$e['source'].'|'.$e['attach_id'].'|'.$e['ds_pk']] = $e;
+        }
+    } catch (Exception $e) {}
+
+    // 料號附件檔案 URL 根（鐵律5：即時組路徑，DB 只存檔名）
+    $urlBase = '';
+    try {
+        $urlBase = rtrim((string)$db->query("SELECT setting_value FROM system_settings WHERE setting_key='part_attach_url_dir'")->fetchColumn(), '/\\');
+    } catch (Exception $e) {}
 
     // 標籤條件（category_ids 為逗號分隔字串，去空白後 FIND_IN_SET）
     $catCond = function(string $col, string $singleCol = '') use ($catIds): string {
@@ -144,6 +159,7 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
     $sql = "SELECT pa.id AS attach_id, ds.d_id AS ds_pk, ds.D_Setting_Id AS part_no,
                    ds.Customer_Id AS customer_id, COALESCE(cl.customer,'') AS customer_name,
                    COALESCE(NULLIF(pa.original_name,''), pa.filename) AS doc_name,
+                   pa.filename, COALESCE(pa.note,'') AS note,
                    pa.category_ids, '' AS category_id_single, pa.uploaded_at,
                    COALESCE(u.user_cname, pa.uploaded_by, '') AS uploaded_by, '' AS quote_no, '' AS quote_client
             FROM part_attachments pa
@@ -168,6 +184,7 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
     $sql = "SELECT a.id AS attach_id, ds.d_id AS ds_pk, ds.D_Setting_Id AS part_no,
                    ds.Customer_Id AS customer_id, ANY_VALUE(COALESCE(cl.customer,'')) AS customer_name,
                    COALESCE(NULLIF(a.original_name,''), a.filename) AS doc_name,
+                   a.filename, COALESCE(a.note,'') AS note,
                    a.category_ids, COALESCE(a.category_id,'') AS category_id_single, a.uploaded_at,
                    ANY_VALUE(COALESCE(u.user_cname, a.uploaded_by, '')) AS uploaded_by, a.quote_no,
                    ANY_VALUE(ql.client_id) AS quote_client
@@ -186,6 +203,7 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
     $sql = "SELECT a.id AS attach_id, ds.d_id AS ds_pk, ds.D_Setting_Id AS part_no,
                    ds.Customer_Id AS customer_id, COALESCE(cl.customer,'') AS customer_name,
                    COALESCE(NULLIF(a.original_name,''), a.filename) AS doc_name,
+                   a.filename, COALESCE(a.note,'') AS note,
                    a.category_ids, COALESCE(a.category_id,'') AS category_id_single, a.uploaded_at,
                    COALESCE(u.user_cname, a.uploaded_by, '') AS uploaded_by, a.quote_no, ql.client_id AS quote_client
             FROM quotation_attachments a
@@ -231,8 +249,17 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
             $names[(int)$r['category_id_single']] = $cats[(int)$r['category_id_single']]['display'];
         }
         if ($catId && !isset($names[$catId])) continue;   // 類別篩選（在完整資料上過濾）
+        $exKey = $r['source'].'|'.$r['attach_id'].'|'.$r['ds_pk'];
+        $isExcluded = isset($excludes[$exKey]);
+        if ($show === 'excluded' ? !$isExcluded : $isExcluded) continue;
+        // 檔案連結：料號附件走 URL 根＋d_id 子資料夾；報價附件走下載 API（皆即時組，鐵律5）
+        $fileUrl = $r['source'] === 'part'
+            ? ($urlBase !== '' ? $urlBase.'/'.$r['ds_pk'].'/'.$r['filename'] : '')
+            : '../../src/store/Quotation_File_API.php?action=download&quote_no='.rawurlencode($r['quote_no']).'&filename='.rawurlencode($r['filename']);
         $out[] = [
             'source'        => $r['source'],
+            'attach_id'     => (int)$r['attach_id'],
+            'ds_pk'         => (int)$r['ds_pk'],
             'customer_id'   => (string)$r['customer_id'],
             'customer_name' => $r['customer_name'] !== '' ? $r['customer_name'] : (string)$r['customer_id'],
             'part_no'       => $r['part_no'],
@@ -242,6 +269,10 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
             'category_ids'  => array_keys($names),
             'uploaded_by'   => $r['uploaded_by'],
             'quote_no'      => $r['quote_no'],
+            'note'          => (string)$r['note'],
+            'file_url'      => $fileUrl,
+            'excluded_by'   => $isExcluded ? (string)($excludes[$exKey]['excluded_by'] ?? '') : '',
+            'excluded_at'   => $isExcluded ? substr((string)($excludes[$exKey]['excluded_at'] ?? ''), 0, 16) : '',
         ];
     }
     usort($out, function($a, $b) {
@@ -298,6 +329,7 @@ case 'get_list':
         'customer_id' => $_POST['customer_id'] ?? '',
         'year'        => (int)($_POST['year'] ?? 0),
         'category'    => (int)($_POST['category'] ?? 0),
+        'show'        => $_POST['show'] ?? 'active',
     ]);
     $total   = count($rows);
     $perPage = max(0, (int)($_POST['per_page'] ?? 10));
@@ -350,16 +382,57 @@ case 'export_csv':
     header('Content-Disposition: attachment; filename="external_doc_list_' . date('Ymd') . '.csv"');
     echo "\xEF\xBB\xBF";  // UTF-8 BOM（Excel 相容）
     $fp = fopen('php://output', 'w');
-    fputcsv($fp, ['客戶', '料號', '文件名稱', '外來文件類別', '發行日期', '發行單位', '來源', '報價單號']);
+    fputcsv($fp, ['客戶', '料號', '文件名稱', '外來文件類別', '發行日期', '發行單位', '來源', '報價單號', '備註']);
     foreach ($rows as $r) {
         fputcsv($fp, [
             $r['customer_name'], $r['part_no'], $r['doc_name'],
             implode('、', $r['categories']), $r['doc_date'], $unit,
-            $r['source'] === 'part' ? '料號附件' : '報價附件', $r['quote_no'],
+            $r['source'] === 'part' ? '料號附件' : '報價附件', $r['quote_no'], $r['note'],
         ]);
     }
     fclose($fp);
     exit;
+
+case 'save_note':
+    // 備註回寫到附件本體（part_attachments.note / quotation_attachments.note），其他頁看到的是同一筆
+    if (!extCan('manage')) jout(['success'=>false,'message'=>'無管理權限（備註需「外來文件管理」角色）']);
+    $src = ($_POST['source'] ?? '') === 'quote' ? 'quote' : 'part';
+    $aid = (int)($_POST['attach_id'] ?? 0);
+    $note = trim((string)($_POST['note'] ?? ''));
+    if (mb_strlen($note) > 500) jout(['success'=>false,'message'=>'備註過長（上限 500 字）']);
+    if (!$aid) jout(['success'=>false,'message'=>'參數錯誤']);
+    $table = $src === 'part' ? 'part_attachments' : 'quotation_attachments';
+    $st = $db->prepare("UPDATE $table SET note=? WHERE id=?");
+    $st->execute([$note !== '' ? $note : null, $aid]);
+    jout(['success'=>true, 'message'=>'備註已儲存', 'note'=>$note]);
+
+case 'exclude_item':
+    if (!extCan('manage')) jout(['success'=>false,'message'=>'無管理權限（排除需「外來文件管理」角色）']);
+    $src = ($_POST['source'] ?? '') === 'quote' ? 'quote' : 'part';
+    $aid = (int)($_POST['attach_id'] ?? 0);
+    $dpk = (int)($_POST['ds_pk'] ?? 0);
+    if (!$aid || !$dpk) jout(['success'=>false,'message'=>'參數錯誤']);
+    $opName = '';
+    try {
+        $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+        $st->execute([$uid]);
+        $opName = (string)($st->fetchColumn() ?: '');
+    } catch (Exception $e) {}
+    if ($opName === '') $opName = (string)($_SESSION['userName'] ?? '');
+    $db->prepare("INSERT IGNORE INTO external_doc_exclude (source, attach_id, ds_pk, part_no, excluded_by, excluded_at)
+                  VALUES (?,?,?,?,?,NOW())")
+       ->execute([$src, $aid, $dpk, trim((string)($_POST['part_no'] ?? '')), $opName]);
+    jout(['success'=>true, 'message'=>'已排除，可在「已排除」分頁加回']);
+
+case 'restore_item':
+    if (!extCan('manage')) jout(['success'=>false,'message'=>'無管理權限']);
+    $src = ($_POST['source'] ?? '') === 'quote' ? 'quote' : 'part';
+    $aid = (int)($_POST['attach_id'] ?? 0);
+    $dpk = (int)($_POST['ds_pk'] ?? 0);
+    if (!$aid || !$dpk) jout(['success'=>false,'message'=>'參數錯誤']);
+    $db->prepare("DELETE FROM external_doc_exclude WHERE source=? AND attach_id=? AND ds_pk=?")
+       ->execute([$src, $aid, $dpk]);
+    jout(['success'=>true, 'message'=>'已加回清單']);
 
 case 'save_as_doc':
     if (!extCan('manage')) jout(['success'=>false,'message'=>'無管理設定權限']);

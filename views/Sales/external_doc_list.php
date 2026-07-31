@@ -101,6 +101,15 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
         .cat-btn { height:26px; font-size:12px; padding:0 12px; border:1px solid rgba(122,82,23,.3);
             border-radius:13px; cursor:pointer; opacity:.55; }
         .cat-btn.active { opacity:1; box-shadow:0 0 0 2px #8A5A2B inset; font-weight:bold; }
+        .xd-tabs { display:flex; gap:4px; margin-bottom:8px; border-bottom:2px solid #E8D5B5; }
+        .xd-tab { border:1px solid #E8D5B5; border-bottom:none; background:#FBF3E5; color:#8a6d45; cursor:pointer;
+            padding:7px 16px; font-size:14px; border-radius:6px 6px 0 0; margin-bottom:-2px; }
+        .xd-tab.active { background:#fff; color:#5b3a1e; font-weight:bold; border-bottom:2px solid #fff; }
+        a.xd-doclink { color:#b5762a; text-decoration:underline; }
+        a.xd-doclink:hover { color:#8A5A2B; }
+        .xd-op { color:#b5762a; cursor:pointer; white-space:nowrap; }
+        .xd-op:hover { color:#DD5138; text-decoration:underline; }
+        .xd-note-edit { border:1px solid #D8BE93; border-radius:4px; padding:3px 6px; font-size:12px; width:95%; }
         .xd-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
         .xd-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
@@ -163,6 +172,11 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
             <span>類別：</span>
         </div>
 
+        <div class="xd-tabs">
+            <button type="button" class="xd-tab active" id="tabActive"><i class="fa fa-list"></i> 外來文件清單</button>
+            <button type="button" class="xd-tab" id="tabExcluded"><i class="fa fa-ban"></i> 已排除</button>
+        </div>
+
         <div class="xd-pagebar">
             <span id="totalInfo">共 0 筆</span>
             <label style="margin-left:8px;">每頁</label>
@@ -174,15 +188,14 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
 
         <div class="xd-table-wrap">
             <table class="xd-table" id="xdTable">
-                <thead><tr>
-                    <th>客戶</th><th>料號</th><th>外來文件類別</th>
-                    <th>發行日期</th><th>發行單位</th><th>來源</th>
-                </tr></thead>
-                <tbody id="xdBody"><tr><td colspan="6" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <thead><tr id="xdHead"></tr></thead>
+                <tbody id="xdBody"></tbody>
             </table>
         </div>
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
             發行日期＝附件上傳日期。「外來文件類別」顯示標籤設定的類別名稱（未設定則用標籤名稱）。
+            點<b>料號</b>可開啟文件；備註直接回寫到附件本體（其他頁面看到同一筆備註）；列印不帶備註。
+            同一份文件在報價單與料號都掛了附件而重複時，用「排除」把重複那筆移到「已排除」分頁（可隨時加回）。
             要把某類附件納入本清單：至報價單頁或主檔管理的「附件類別標籤設定」勾選「列入外來文件清單」。
         </div>
 <?php endif; ?>
@@ -210,8 +223,8 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
 <div class="xd-mask" id="helpMask"><div class="xd-modal">
     <div class="m-head">角色權限說明<span class="m-close" onclick="closeMask('helpMask')">✕</span></div>
     <div class="m-body" style="line-height:1.8;">
-        <b>外來文件檢閱</b>：檢視清單、匯出 CSV、列印。<br>
-        <b>外來文件管理</b>：檢閱＋綁定 AS 文件編號。<br>
+        <b>外來文件檢閱</b>：檢視清單（含點料號開啟文件）、匯出 CSV、列印。<br>
+        <b>外來文件管理</b>：檢閱＋綁定 AS 文件編號、編輯附件備註、排除/加回清單項目。<br>
         <b>管理者</b>：系統管理者固定擁有全部權限。<br>
         <hr style="border-color:#EADFC8;">
         清單來源＝附件標籤有勾「列入外來文件清單」的料號附件與報價附件；
@@ -234,7 +247,8 @@ $(document).ready(function(){
 
 var API = '../../src/store/ExternalDoc_API.php';
 var canView = <?= $canView ? 'true' : 'false' ?>;
-var MODE = 'bound', PAGE = 1, TOTAL = 0, AS_DOC = null, AS_DOCS = [], ISSUE_UNIT = '';
+var canManage = <?= $canManage ? 'true' : 'false' ?>;
+var MODE = 'bound', VIEW = 'active', PAGE = 1, TOTAL = 0, AS_DOC = null, AS_DOCS = [], ISSUE_UNIT = '';
 var CAT = 0, CATS = [], CAT_COLOR = {}, COMPANY = '', CUSTOMERS = [];
 
 // 類別固定調色盤（暖色系，依 ai-rules/10；同類別同色，列表/篩選鈕/列印一致）
@@ -256,6 +270,14 @@ function openMask(id){ document.getElementById(id).style.display='block'; }
 function filters(){
     return { mode: MODE, customer_id: $('#custSel').val()||'', year: $('#yearSel').val()||0, category: CAT };
 }
+
+function renderHead(){
+    var h = '<th>客戶</th><th>料號</th><th>外來文件類別</th><th>發行日期</th><th>發行單位</th><th>來源</th><th>備註</th>';
+    if (VIEW === 'excluded') h += '<th>排除資訊</th>';
+    if (canManage) h += '<th>操作</th>';
+    $('#xdHead').html(h);
+}
+function colCount(){ return 7 + (VIEW==='excluded'?1:0) + (canManage?1:0); }
 
 function renderCustOptions(kw){
     kw = (kw||'').toLowerCase();
@@ -330,11 +352,13 @@ function renderAsDoc(doc){
 function loadList(){
     var f = filters();
     f.action = 'get_list';
+    f.show = VIEW;
     f.page = PAGE;
     f.per_page = parseInt($('#perPageSel').val())||10;
-    $('#xdBody').html('<tr><td colspan="6" style="padding:20px;color:#8a6d45;">載入中…</td></tr>');
+    renderHead();
+    $('#xdBody').html('<tr><td colspan="'+colCount()+'" style="padding:20px;color:#8a6d45;">載入中…</td></tr>');
     $.post(API, f, function(res){
-        if (!res.success){ $('#xdBody').html('<tr><td colspan="6" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
+        if (!res.success){ $('#xdBody').html('<tr><td colspan="'+colCount()+'" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
         TOTAL = res.total;
         ISSUE_UNIT = res.issue_unit||ISSUE_UNIT;
         $('#issueUnit').text(ISSUE_UNIT || '（未設定業務單位）');
@@ -344,16 +368,89 @@ function loadList(){
             var cats = (r.categories||[]).map(function(c, i){ return catPill((r.category_ids||[])[i], c); }).join('');
             var src = r.source==='part' ? '<span class="src-pill src-part">料號附件</span>'
                     : '<span class="src-pill src-quote" title="報價單 '+esc(r.quote_no)+'">報價附件</span>';
-            h += '<tr><td class="t-left">'+esc(r.customer_name)+'</td>'
-               + '<td class="t-left" title="'+esc(r.doc_name)+'">'+esc(r.part_no)+'</td>'
+            var partCell = r.file_url
+                ? '<a class="xd-doclink" href="'+esc(r.file_url)+'" target="_blank" title="開啟文件：'+esc(r.doc_name)+'">'+esc(r.part_no)+'</a>'
+                : '<span title="'+esc(r.doc_name)+'">'+esc(r.part_no)+'</span>';
+            var noteCell = esc(r.note||'');
+            if (canManage) noteCell += ' <i class="fa fa-pencil xd-note-pen" style="cursor:pointer;color:#b5762a;" title="編輯備註（回寫到附件本體）"></i>';
+            h += '<tr data-src="'+r.source+'" data-aid="'+r.attach_id+'" data-dpk="'+r.ds_pk+'" data-pno="'+esc(r.part_no)+'">'
+               + '<td class="t-left">'+esc(r.customer_name)+'</td>'
+               + '<td class="t-left">'+partCell+'</td>'
                + '<td>'+(cats||'<span style="color:#c9bda9;">—</span>')+'</td>'
                + '<td>'+esc(r.doc_date)+'</td>'
                + '<td>'+esc(ISSUE_UNIT)+'</td>'
-               + '<td>'+src+'</td></tr>';
+               + '<td>'+src+'</td>'
+               + '<td class="t-left xd-note" data-note="'+esc(r.note||'')+'" style="min-width:120px;">'+noteCell+'</td>';
+            if (VIEW === 'excluded')
+                h += '<td style="font-size:11px;color:#8a6d45;">'+esc(r.excluded_by||'')+'<br>'+esc(r.excluded_at||'')+'</td>';
+            if (canManage)
+                h += '<td>'+(VIEW==='excluded'
+                        ? '<span class="xd-op xd-re-btn"><i class="fa fa-undo"></i> 加回</span>'
+                        : '<span class="xd-op xd-ex-btn"><i class="fa fa-ban"></i> 排除</span>')+'</td>';
+            h += '</tr>';
         });
-        $('#xdBody').html(h || '<tr><td colspan="6" style="padding:20px;color:#8a6d45;">無符合條件的外來文件（先到附件類別標籤設定勾選「列入外來文件清單」）</td></tr>');
+        var emptyMsg = VIEW==='excluded' ? '沒有被排除的項目'
+                     : '無符合條件的外來文件（先到附件類別標籤設定勾選「列入外來文件清單」）';
+        $('#xdBody').html(h || '<tr><td colspan="'+colCount()+'" style="padding:20px;color:#8a6d45;">'+emptyMsg+'</td></tr>');
         renderPager();
     }, 'json');
+}
+
+// ── 分頁籤：清單 / 已排除（列印與 CSV 只針對正式清單）──────────────
+$('#tabActive').on('click', function(){
+    VIEW = 'active'; PAGE = 1;
+    $(this).addClass('active'); $('#tabExcluded').removeClass('active');
+    $('#btnPrint,#btnCsv').prop('disabled', false).css('opacity', 1);
+    loadList();
+});
+$('#tabExcluded').on('click', function(){
+    VIEW = 'excluded'; PAGE = 1;
+    $(this).addClass('active'); $('#tabActive').removeClass('active');
+    $('#btnPrint,#btnCsv').prop('disabled', true).css('opacity', .45);
+    loadList();
+});
+
+// ── 排除 / 加回 ─────────────────────────────────────────────
+$(document).on('click', '.xd-ex-btn', function(){
+    var tr = $(this).closest('tr');
+    if (!confirm('將「'+tr.data('pno')+'」這筆附件自外來文件清單排除？（可在「已排除」分頁加回）')) return;
+    $.post(API, {action:'exclude_item', source:tr.data('src'), attach_id:tr.data('aid'),
+                 ds_pk:tr.data('dpk'), part_no:tr.data('pno')}, function(res){
+        if (!res.success){ alert(res.message||'排除失敗'); return; }
+        loadList();
+    }, 'json');
+});
+$(document).on('click', '.xd-re-btn', function(){
+    var tr = $(this).closest('tr');
+    $.post(API, {action:'restore_item', source:tr.data('src'), attach_id:tr.data('aid'),
+                 ds_pk:tr.data('dpk')}, function(res){
+        if (!res.success){ alert(res.message||'加回失敗'); return; }
+        loadList();
+    }, 'json');
+});
+
+// ── 備註即時編輯（回寫附件本體：part_attachments.note / quotation_attachments.note）──
+$(document).on('click', '.xd-note-pen', function(){
+    var td = $(this).closest('td');
+    if (td.find('input').length) return;
+    var cur = td.attr('data-note') || '';
+    td.html('<input type="text" class="xd-note-edit" data-eg-skip maxlength="500" value="'+esc(cur)+'" placeholder="輸入備註後 Enter 儲存，Esc 取消">');
+    var inp = td.find('input');
+    inp.focus();
+    inp.on('keydown', function(ev){
+        if (ev.key === 'Enter'){ ev.preventDefault(); saveNote(td, inp.val()); }
+        else if (ev.key === 'Escape'){ td.data('saving', 1); loadList(); }
+    });
+    inp.on('blur', function(){ saveNote(td, inp.val()); });
+});
+function saveNote(td, val){
+    if (td.data('saving')) return;
+    td.data('saving', 1);
+    var tr = td.closest('tr');
+    $.post(API, {action:'save_note', source:tr.data('src'), attach_id:tr.data('aid'), note:val}, function(res){
+        if (!res.success) alert(res.message||'備註儲存失敗');
+        loadList();
+    }, 'json').fail(function(){ alert('備註儲存失敗'); loadList(); });
 }
 
 function renderPager(){
