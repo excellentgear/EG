@@ -808,9 +808,11 @@ body { background:var(--bg); }
                         <div class="table-responsive">
                             <table id="quoteItemsTable" class="table table-condensed" style="table-layout:fixed;font-size:13px;">
                                 <colgroup>
+                                    <!-- 2026-07-31 料號欄加寬 15→20%（長料號被省略遮蔽），由製程欄 33→28% 挪出；
+                                         總和維持 100%，table-layout:fixed 不會出現左右捲軸 -->
                                     <col style="width:4%">   <!-- 刪除 -->
-                                    <col style="width:15%">  <!-- 料號 -->
-                                    <col style="width:33%">  <!-- 製程+製程分類 -->
+                                    <col style="width:20%">  <!-- 料號 -->
+                                    <col style="width:28%">  <!-- 製程+製程分類 -->
                                     <col style="width:11%">  <!-- 料號備註 -->
                                     <col style="width:6%">   <!-- 數量 -->
                                     <col style="width:7%">   <!-- 單位 -->
