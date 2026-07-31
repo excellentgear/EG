@@ -1137,10 +1137,15 @@ $('#exBStart,#exBEnd').on('input', function(){
     var p=parseTime($(this).val());
     setErr($(this), 'errBatch', p.ok?'':(this.id==='exBStart'?'開始時間：':'結束時間：')+p.msg);
 });
-/* 講師：部門→人員 */
+/* 補舊資料時挑人要用「當時」的職務（依職務異動紀錄解析，ai-rules/14）：以上課首日為準 */
+function classAtDate(){
+    if (DAYS.length && DAYS[0].date) return DAYS[0].date;
+    return $('#exDone').val() || '';
+}
+/* 講師：部門→人員（帶上課日期，過去日期會依當時職務列人） */
 $('#edTrainerDept').on('change', function(){
     var did=$(this).val(); var $p=$('#edTrainerPerson').html('<option value="">人員</option>');
-    if(did) $.getJSON(API,{action:'people',dept_id:did},function(res){ if(res.ok) res.people.forEach(function(u){ $p.append('<option value="'+u.id+'">'+esc(u.user_cname)+'</option>'); }); });
+    if(did) $.getJSON(API,{action:'people',dept_id:did,at_date:classAtDate()},function(res){ if(res.ok) res.people.forEach(function(u){ $p.append('<option value="'+u.id+'">'+esc(u.user_cname)+'</option>'); }); });
 });
 $('#edTrainerPerson').on('change', function(){ var t=$(this).find('option:selected').text(); if($(this).val()) $('#edTrainer').val(t); });
 /* 參加人員：講師是「上課的人」不是「受訓的人」，一律不列入名單（外訓沒有內部講師故不判斷）。
@@ -1155,10 +1160,13 @@ $('#attDept').on('change', function(){
     var did=$(this).val(); var $b=$('#attPeopleBox');
     if(!did){ $b.html('<span class="empty">選部門載入人員</span>'); return; }
     $b.html('<span class="empty">載入中…</span>');
-    $.getJSON(API,{action:'people',dept_id:did},function(res){
+    $.getJSON(API,{action:'people',dept_id:did,at_date:classAtDate()},function(res){
         if(!res.ok){ $b.html('<span class="empty">載入失敗</span>'); return; }
         var deptName=$('#attDept option:selected').text();
-        var h=''; res.people.forEach(function(u){
+        var h='';
+        // at_date＝上課首日是過去日期時，後端依職務異動紀錄解析「當時」在此部門的人與當時職稱（補舊資料用）
+        if (res.at_date) h+='<div style="flex-basis:100%;color:#8a6d45;font-size:12px;">名單依 '+esc(res.at_date)+' 當時職務顯示（依職務異動紀錄解析；已離職但當時在職者也會列出）</div>';
+        res.people.forEach(function(u){
             var pos=u.position_name||'';
             if (isTrainer(u.id, u.user_cname)){          // 講師：顯示但不可勾（讓人看得出來是刻意排除的）
                 h+='<label style="color:#b0a390;" title="本場講師，不列入參加人員"><input type="checkbox" disabled> '
@@ -1167,7 +1175,8 @@ $('#attDept').on('change', function(){
             }
             var inList=ATT.some(function(a){return a.user_id===+u.id;});
             h+='<label><input type="checkbox" class="att-ck" value="'+u.id+'" data-name="'+esc(u.user_cname)+'" data-dept="'+esc(deptName)+'" data-pos="'+esc(pos)+'"'+(inList?' checked disabled':'')+'> '
-              +esc(u.user_cname)+(pos?'<span style="color:#8a6d45;">（'+esc(pos)+'）</span>':'')+(inList?'(已加)':'')+'</label>';
+              +esc(u.user_cname)+(pos?'<span style="color:#8a6d45;">（'+esc(pos)+'）</span>':'')
+              +(+u.resigned?'<span style="color:#b0722a;">（已離職）</span>':'')+(inList?'(已加)':'')+'</label>';
         });
         $b.html(h||'<span class="empty">此部門無人員</span>');
         $('#attPickAll').prop('checked',false);
