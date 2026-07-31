@@ -3259,31 +3259,34 @@ foreach($dCounts as $c) {
         table.dataTable tbody tr:hover { background-color: #FAFBFE !important; }
         
         /* Column Specifics */
-        .col-date { width: 95px; text-align: center; font-family: "Consolas", monospace; color: #666; }
-        .col-process { min-width: 120px; }
-        .col-client { font-weight: 600; color: #2A3F54; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .col-date { width: 88px; text-align: center; font-family: "Consolas", monospace; color: #666; }
+        .col-process { min-width: 90px; }
+        .col-client { font-weight: 600; color: #2A3F54; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .stat-card-half:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important; opacity:0.9; }
         .stat-card-half.active { outline: 2px solid #2A3F54; }
         .stat-value-sm { font-size: 18px; font-weight: 700; line-height: 1; }
         .stat-card-half:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.15); opacity:0.9; }
         .stat-card-half.active { outline: 2px solid #2A3F54; }
         .stat-value-sm { font-size: 18px; font-weight: 700; line-height: 1; }
-        .col-part { font-family: "Consolas", monospace; font-weight: 600; color: #007bff; min-width: 220px; white-space: nowrap; }
+        /* 料號欄：改成「可換行完整顯示」而非硬撐寬度——長料號自動折行，不會被遮蔽、
+           也不會把總寬撐到出現左右捲軸（2026-07-31 使用者要求頁面完整顯示、禁用左右拉桿） */
+        .col-part { font-family: "Consolas", monospace; font-weight: 600; color: #007bff; min-width: 150px; word-break: break-all; }
+        .col-part > div { flex-wrap: wrap !important; }   /* 料號旁的徽章/按鈕擠不下時換行，不壓縮料號本文 */
         .col-qty { text-align: right; font-weight: 700; color: var(--accent-color); width: 60px; }
-        .col-status { text-align: center; white-space: nowrap; width: 110px; }
+        .col-status { text-align: center; white-space: nowrap; width: 96px; }
 
-        /* 料號欄（.col-part 已設 min-width/white-space，此規則作為補強）
-           欄位順序（有操作欄）：1操作 2接單/交期 3客戶 4料號
-           2026-07-31 加寬 140→220：長料號（含中文尾綴）會被右側欄位壓到遮蔽 */
+        /* 料號欄（.col-part 已設 min-width，此規則作為補強）
+           欄位順序（有操作欄）：1操作 2接單/交期 3客戶 4料號 */
         #orderTable th:nth-child(4),
         #orderTable td:nth-child(4) {
-            min-width: 220px;
+            min-width: 150px;
         }
         
-        /* Editable Textarea */
+        /* Editable Textarea（備註類欄位＝可壓縮的次要欄位：min-width 200→110，
+           內容自動換行、點入編輯時仍會自動長高，全文不會遺失，只是預設佔位變窄） */
         .table-textarea {
             width: 100%;
-            min-width: 200px;
+            min-width: 110px;
             max-width: 400px;
             min-height: 32px;
             resize: vertical;
@@ -3659,7 +3662,9 @@ foreach($dCounts as $c) {
                                     <strong>未綁定篩選已啟用</strong> — 目前顯示的是 <span id="unbound-banner-type">未綁定客戶/料號 ID</span> 的訂單，請逐筆確認並完成綁定。
                                     <button type="button" class="btn btn-xs btn-default pull-right" onclick="clearUnboundFilter()" style="margin-top:-1px;"><i class="fa fa-times"></i> 取消篩選</button>
                                 </div>
-                                <div style="overflow-x:auto; width:100%;">
+                                <!-- 2026-07-31 使用者要求：頁面完整顯示、禁用左右拉桿——overflow-x 改 hidden，
+                                     欄寬以「料號可折行＋備註/次要欄可壓縮」讓表格自然塞進容器，不再出現水平捲軸 -->
+                                <div style="overflow-x:hidden; width:100%;">
                                 <table id="orderTable" class="table table-striped" data-no-dt="1">
                                     <thead>
                                         <tr>
