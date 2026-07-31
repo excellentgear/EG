@@ -10,6 +10,8 @@ include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 require_once $document_root . '/EGsystem/src/common/annual_leave_lib.php';
 // 在職狀態封鎖／權限清除（離職、留職停薪、育嬰留停）
 require_once $document_root . '/EGsystem/src/common/user_active_lib.php';
+// 職務調動紀錄（ai-rules/14 P1：異動快照、依日期解析、補登）
+require_once $document_root . '/EGsystem/src/common/position_history_lib.php';
 
 $db_connection = new DBConnection();
 $db = $db_connection->getPDO();
@@ -49,6 +51,21 @@ switch ($action) {
         break;
     case 'revoke_permissions':       // 一鍵清除此人所有權限設定（先寫 audit_log 再刪）
         revokePermissions();
+        break;
+    case 'get_change_history':       // 異動紀錄（職務調動＋在職狀態）
+        getChangeHistory();
+        break;
+    case 'backfill_position_history': // 補登過去的職務異動（生效日可為過去）
+        backfillPositionHistory();
+        break;
+    case 'delete_position_history':   // 刪除補登列（source='manual' 才可刪，系統自動寫的不可）
+        deletePositionHistory();
+        break;
+    case 'backfill_status_history':   // 補登離職/復職/留停等在職狀態紀錄
+        backfillStatusHistory();
+        break;
+    case 'delete_status_history':     // 刪除補登的在職狀態列（remark 帶 [補登 前綴者才可刪）
+        deleteStatusHistory();
         break;
 
     // --- 從 department_job_title_api.php 搬移過來的 Actions ---
@@ -358,6 +375,8 @@ function addOrUpdateEmployee($mode) {
         }
 
         // 更新職務對應
+        // P1（ai-rules/14）：改動 map 前先拍「異動前」快照，異動紀錄與職務變更同一交易
+        $before_snap = ($mode === 'update') ? eg_position_snapshot_now($db, (int)$id) : [];
         // 1. 刪除舊的對應
         $db->prepare("DELETE FROM user_department_position_map WHERE user_id = ?")->execute([$id]);
 
@@ -386,14 +405,44 @@ function addOrUpdateEmployee($mode) {
             }
         }
 
-        // 4. 處理留職停薪或育嬰留停的歷史紀錄
-        if ($mode === 'update' && in_array($state, [2, 3])) {
-            $status_start_date = !empty($_POST['status_start_date']) ? $_POST['status_start_date'] : null;
-            $status_end_date = !empty($_POST['status_end_date']) ? $_POST['status_end_date'] : null;
-            $status_remark = $_POST['status_remark'] ?? null;
+        // P1：職務有實質變動（部門:職稱:主兼 組合不同）→ 寫入 user_position_history＋audit_log（同一交易）
+        if ($mode === 'update') {
+            $after_snap = eg_position_snapshot_now($db, (int)$id);
+            if (eg_position_snapshot_changed($before_snap, $after_snap)) {
+                eg_position_history_write($db, (int)$id, eg_position_change_type($before_snap, $after_snap),
+                    $before_snap, $after_snap, date('Y-m-d'), null, 'auto',
+                    isset($_SESSION['id']) ? (int)$_SESSION['id'] : null, $_SESSION['user_cname'] ?? '');
+            }
+        }
 
-            $stmt_history = $db->prepare("INSERT INTO user_status_history (user_id, status, start_date, end_date, remark) VALUES (?, ?, ?, ?, ?)");
-            $stmt_history->execute([$id, $state, $status_start_date, $status_end_date, $status_remark]);
+        // 4. 在職狀態歷程（user_status_history）
+        if ($mode === 'update') {
+            $newSt = (int)$state;
+            $oldSt = ($old_state === false) ? null : (int)$old_state;
+            if (in_array($newSt, [2, 3], true)) {
+                $status_start_date = !empty($_POST['status_start_date']) ? $_POST['status_start_date'] : null;
+                $status_end_date = !empty($_POST['status_end_date']) ? $_POST['status_end_date'] : null;
+                $status_remark = $_POST['status_remark'] ?? null;
+                // 與最後一筆完全相同就不重複寫（留停期間每次存檔都插一筆會灌出重複列）
+                $chk = $db->prepare("SELECT status, start_date, end_date, remark FROM user_status_history
+                                     WHERE user_id = ? ORDER BY id DESC LIMIT 1");
+                $chk->execute([$id]);
+                $last = $chk->fetch(PDO::FETCH_ASSOC);
+                if (!$last || (int)$last['status'] !== $newSt || $last['start_date'] !== $status_start_date
+                    || $last['end_date'] !== $status_end_date || (string)$last['remark'] !== (string)$status_remark) {
+                    $db->prepare("INSERT INTO user_status_history (user_id, status, start_date, end_date, remark) VALUES (?, ?, ?, ?, ?)")
+                       ->execute([$id, $newSt, $status_start_date, $status_end_date, $status_remark]);
+                }
+            } elseif ($oldSt !== null && $oldSt !== $newSt && $newSt === 0) {
+                // 人事手動設為離職也留一筆（原本只有「預定離職日到期系統自動轉離職」會寫）
+                $db->prepare("INSERT INTO user_status_history (user_id, status, start_date, end_date, remark) VALUES (?, 0, ?, NULL, '人事設定離職')")
+                   ->execute([$id, $final_leave_date ?: date('Y-m-d')]);
+            } elseif ($oldSt !== null && in_array($oldSt, [0, 2, 3], true) && $newSt === 1) {
+                // 復職／恢復在職也留一筆，時間軸才接得起來（日後補歷史資料要靠它）
+                $db->prepare("INSERT INTO user_status_history (user_id, status, start_date, end_date, remark) VALUES (?, 1, ?, NULL, ?)")
+                   ->execute([$id, date('Y-m-d'),
+                              $oldSt === 0 ? '復職' : '恢復在職（原：' . ($oldSt === 2 ? '留職停薪' : '育嬰留停') . '）']);
+            }
         }
 
 
@@ -479,6 +528,196 @@ function revokePermissions() {
         'deleted'  => $res['deleted'],
         'warnings' => $res['warnings'],
     ], JSON_UNESCAPED_UNICODE);
+}
+
+/**
+ * 異動紀錄查詢：職務調動（user_position_history）＋在職狀態（user_status_history）。
+ * 快照在後端組成顯示字串（before_label/after_label），前端不用自己拼。
+ */
+function getChangeHistory() {
+    global $db;
+    $id = (int)($_REQUEST['id'] ?? 0);
+    if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。']); return; }
+    try {
+        $st = $db->prepare("SELECT id, change_type, before_json, after_json, effective_date, reason, source, operator, created_at
+                            FROM user_position_history WHERE user_id = ? ORDER BY effective_date DESC, id DESC");
+        $st->execute([$id]);
+        $pos = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $r['before_label'] = eg_position_snapshot_label(eg_position_snap_decode($r['before_json']));
+            $r['after_label']  = eg_position_snapshot_label(eg_position_snap_decode($r['after_json']));
+            unset($r['before_json'], $r['after_json']);
+            $pos[] = $r;
+        }
+        $st2 = $db->prepare("SELECT id, status, start_date, end_date, remark, created_at FROM user_status_history
+                             WHERE user_id = ? ORDER BY COALESCE(start_date, '1000-01-01') DESC, id DESC");
+        $st2->execute([$id]);
+        $sta = [];
+        foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            // 補登列以 remark 前綴 [補登:操作者] 標記（此表加 source 欄需 ALTER，工具擋 DDL，待使用者核准後再轉正）
+            $r['is_backfill'] = (strpos((string)$r['remark'], '[補登') === 0) ? 1 : 0;
+            $sta[] = $r;
+        }
+        echo json_encode(['status' => 'success', 'position' => $pos, 'state' => $sta], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        echo json_encode(['status' => 'error', 'message' => '查詢失敗: ' . $e->getMessage()]);
+    }
+}
+
+/** 補登快照用：查部門/職稱名稱，組成單一職務(主職)的快照列；查不到名稱回 null */
+function _backfillSnapItem(PDO $db, int $depId, int $posId): ?array {
+    $d = $db->prepare("SELECT name FROM department WHERE id = ?");
+    $d->execute([$depId]);
+    $dn = $d->fetchColumn();
+    $p = $db->prepare("SELECT name FROM position WHERE id = ?");
+    $p->execute([$posId]);
+    $pn = $p->fetchColumn();
+    if ($dn === false || $pn === false) return null;
+    return ['department_id' => $depId, 'department_name' => (string)$dn,
+            'position_id' => $posId, 'position_name' => (string)$pn, 'is_main' => 1];
+}
+
+/**
+ * 補登過去的職務異動（生效日可為過去日期）。
+ * 補了之後，教育訓練等頁依日期解析（eg_position_snapshot_at）才能抓到「當時」的部門職稱。
+ * 異動前職務可留空（＝當時之前無職務紀錄或不確定）；異動後職務必填。
+ */
+function backfillPositionHistory() {
+    global $db;
+    $id = (int)($_POST['id'] ?? 0);
+    $eff = trim((string)($_POST['effective_date'] ?? ''));
+    $reason = trim((string)($_POST['reason'] ?? ''));
+    if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。']); return; }
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $eff)) {
+        echo json_encode(['status' => 'error', 'message' => '生效日格式不正確（YYYY-MM-DD）。'], JSON_UNESCAPED_UNICODE); return;
+    }
+    [$y, $m, $d] = array_map('intval', explode('-', $eff));
+    if (!checkdate($m, $d, $y)) { echo json_encode(['status' => 'error', 'message' => '生效日不存在（' . $eff . '）。'], JSON_UNESCAPED_UNICODE); return; }
+
+    $aDep = (int)($_POST['after_department_id'] ?? 0);
+    $aPos = (int)($_POST['after_position_id'] ?? 0);
+    if ($aDep <= 0 || $aPos <= 0) {
+        echo json_encode(['status' => 'error', 'message' => '請選擇「異動後」的部門與職稱。'], JSON_UNESCAPED_UNICODE); return;
+    }
+    $after = _backfillSnapItem($db, $aDep, $aPos);
+    if ($after === null) { echo json_encode(['status' => 'error', 'message' => '異動後的部門或職稱不存在。'], JSON_UNESCAPED_UNICODE); return; }
+
+    $bDep = (int)($_POST['before_department_id'] ?? 0);
+    $bPos = (int)($_POST['before_position_id'] ?? 0);
+    $before = [];
+    if ($bDep > 0 || $bPos > 0) {
+        if ($bDep <= 0 || $bPos <= 0) {
+            echo json_encode(['status' => 'error', 'message' => '「異動前」的部門與職稱請兩個都選，或兩個都留空（＝之前無紀錄）。'], JSON_UNESCAPED_UNICODE); return;
+        }
+        $item = _backfillSnapItem($db, $bDep, $bPos);
+        if ($item === null) { echo json_encode(['status' => 'error', 'message' => '異動前的部門或職稱不存在。'], JSON_UNESCAPED_UNICODE); return; }
+        $before = [$item];
+    }
+    try {
+        $db->beginTransaction();
+        $hid = eg_position_history_write($db, $id, 'backfill', $before, [$after], $eff,
+            $reason !== '' ? $reason : '人事補登', 'manual',
+            isset($_SESSION['id']) ? (int)$_SESSION['id'] : null, $_SESSION['user_cname'] ?? '');
+        $db->commit();
+        echo json_encode(['status' => 'success', 'message' => '已補登職務異動。', 'id' => $hid], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        $db->rollBack();
+        echo json_encode(['status' => 'error', 'message' => '補登失敗: ' . $e->getMessage()]);
+    }
+}
+
+/** 刪除補登的職務異動列（source='manual' 限定；系統異動當下自動寫的不可刪，刪除前寫 audit_log） */
+function deletePositionHistory() {
+    global $db;
+    $hid = (int)($_POST['hist_id'] ?? 0);
+    if ($hid <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供紀錄 ID。']); return; }
+    try {
+        $st = $db->prepare("SELECT user_id, change_type, effective_date, source, before_json, after_json FROM user_position_history WHERE id = ?");
+        $st->execute([$hid]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) { echo json_encode(['status' => 'error', 'message' => '找不到該筆紀錄。'], JSON_UNESCAPED_UNICODE); return; }
+        if ($row['source'] !== 'manual') {
+            echo json_encode(['status' => 'error', 'message' => '系統自動寫入的異動紀錄不可刪除（稽核軌跡）。'], JSON_UNESCAPED_UNICODE); return;
+        }
+        $db->beginTransaction();
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES ('POSITION_CHANGE_DEL', 'user', ?, '', ?, ?, ?, NOW())")
+           ->execute([(string)$row['user_id'],
+                      json_encode(['deleted_hist_id' => $hid, 'effective_date' => $row['effective_date'],
+                                   'before' => $row['before_json'], 'after' => $row['after_json']], JSON_UNESCAPED_UNICODE),
+                      isset($_SESSION['id']) ? (int)$_SESSION['id'] : null, $_SESSION['user_cname'] ?? '']);
+        $db->prepare("DELETE FROM user_position_history WHERE id = ?")->execute([$hid]);
+        $db->commit();
+        echo json_encode(['status' => 'success', 'message' => '已刪除補登紀錄。'], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        $db->rollBack();
+        echo json_encode(['status' => 'error', 'message' => '刪除失敗: ' . $e->getMessage()]);
+    }
+}
+
+/** 補登在職狀態紀錄（離職/復職/留停/育嬰；remark 加 [補登:操作者] 前綴以便辨識與刪除） */
+function backfillStatusHistory() {
+    global $db;
+    $id = (int)($_POST['id'] ?? 0);
+    $status = (string)($_POST['status'] ?? '');
+    $start = trim((string)($_POST['start_date'] ?? ''));
+    $end = trim((string)($_POST['end_date'] ?? ''));
+    $remark = trim((string)($_POST['remark'] ?? ''));
+    if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。']); return; }
+    if (!in_array($status, ['0', '1', '2', '3'], true)) {
+        echo json_encode(['status' => 'error', 'message' => '狀態不正確（離職/在職/留職停薪/育嬰留停）。'], JSON_UNESCAPED_UNICODE); return;
+    }
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $start)) {
+        echo json_encode(['status' => 'error', 'message' => '開始日格式不正確（YYYY-MM-DD）。'], JSON_UNESCAPED_UNICODE); return;
+    }
+    if ($end !== '' && (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $end) || $end < $start)) {
+        echo json_encode(['status' => 'error', 'message' => '結束日格式不正確，或早於開始日。'], JSON_UNESCAPED_UNICODE); return;
+    }
+    try {
+        $op = (string)($_SESSION['user_cname'] ?? '');
+        $db->beginTransaction();
+        $db->prepare("INSERT INTO user_status_history (user_id, status, start_date, end_date, remark) VALUES (?, ?, ?, ?, ?)")
+           ->execute([$id, (int)$status, $start, $end !== '' ? $end : null,
+                      '[補登:' . $op . ']' . ($remark !== '' ? ' ' . $remark : '')]);
+        $hid = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES ('STATUS_BACKFILL', 'user', ?, '', ?, ?, ?, NOW())")
+           ->execute([(string)$id,
+                      json_encode(['hist_id' => $hid, 'status' => (int)$status, 'start' => $start, 'end' => $end, 'remark' => $remark], JSON_UNESCAPED_UNICODE),
+                      isset($_SESSION['id']) ? (int)$_SESSION['id'] : null, $op]);
+        $db->commit();
+        echo json_encode(['status' => 'success', 'message' => '已補登在職狀態紀錄。', 'id' => $hid], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        $db->rollBack();
+        echo json_encode(['status' => 'error', 'message' => '補登失敗: ' . $e->getMessage()]);
+    }
+}
+
+/** 刪除補登的在職狀態列（remark 前綴 [補登 者限定；系統寫入的不可刪） */
+function deleteStatusHistory() {
+    global $db;
+    $hid = (int)($_POST['hist_id'] ?? 0);
+    if ($hid <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供紀錄 ID。']); return; }
+    try {
+        $st = $db->prepare("SELECT user_id, status, start_date, end_date, remark FROM user_status_history WHERE id = ?");
+        $st->execute([$hid]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) { echo json_encode(['status' => 'error', 'message' => '找不到該筆紀錄。'], JSON_UNESCAPED_UNICODE); return; }
+        if (strpos((string)$row['remark'], '[補登') !== 0) {
+            echo json_encode(['status' => 'error', 'message' => '系統自動寫入的狀態紀錄不可刪除（稽核軌跡）。'], JSON_UNESCAPED_UNICODE); return;
+        }
+        $db->beginTransaction();
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES ('STATUS_BACKFILL_DEL', 'user', ?, '', ?, ?, ?, NOW())")
+           ->execute([(string)$row['user_id'], json_encode($row + ['deleted_hist_id' => $hid], JSON_UNESCAPED_UNICODE),
+                      isset($_SESSION['id']) ? (int)$_SESSION['id'] : null, $_SESSION['user_cname'] ?? '']);
+        $db->prepare("DELETE FROM user_status_history WHERE id = ?")->execute([$hid]);
+        $db->commit();
+        echo json_encode(['status' => 'success', 'message' => '已刪除補登紀錄。'], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        $db->rollBack();
+        echo json_encode(['status' => 'error', 'message' => '刪除失敗: ' . $e->getMessage()]);
+    }
 }
 
 function deleteEmployee() {
