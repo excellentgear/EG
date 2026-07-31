@@ -128,6 +128,35 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         table.att-tbl thead th { position:sticky; top:0; background:#F7E0BD; color:#5b3a1e; }
         table.att-tbl td.t-left { text-align:left; }
         .att-del { color:#DD5138; cursor:pointer; }
+        /* 主分頁（訓練場次／達標狀況）與月份分頁 */
+        .tr-tabs { display:flex; gap:4px; margin:6px 0 8px; flex-wrap:wrap; }
+        .tr-tabs .tab { cursor:pointer; padding:5px 16px; font-size:13px; border:1.5px solid #E8D5B5; border-bottom:none;
+            border-radius:8px 8px 0 0; background:#FDF8EF; color:#8a6d45; }
+        .tr-tabs .tab.on { background:#F0A24B; color:#fff; border-color:#d98a33; font-weight:bold; }
+        .mon-tabs { display:flex; gap:3px; flex-wrap:wrap; margin-bottom:8px; }
+        .mon-tabs .mt { cursor:pointer; font-size:12.5px; padding:3px 10px; border:1px solid #E8D5B5; border-radius:6px;
+            background:#fff; color:#5b3a1e; }
+        .mon-tabs .mt.on { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        .mon-tabs .mt.has { background:#F7E0BD; }
+        .mon-tabs .mt.on.has { background:#F0A24B; }
+        /* 清單展開明細 */
+        tr.det-row > td { background:#FFFBF3 !important; text-align:left; padding:10px 14px !important; }
+        .det-box { font-size:12.5px; color:#5b3a1e; line-height:1.7; }
+        .det-box h5 { margin:0 0 4px; font-size:13px; color:#8A5A2B; font-weight:bold; }
+        .det-box .kv { margin-bottom:6px; }
+        .det-box .kv b { color:#8A5A2B; }
+        .det-box pre.ol { white-space:pre-wrap; font-family:inherit; background:#FDF8EF; border:1px dashed #E8D5B5;
+            border-radius:6px; padding:6px 9px; margin:2px 0 8px; }
+        .det-box table { border-collapse:collapse; font-size:12px; background:#fff; }
+        .det-box table th, .det-box table td { border:1px solid #EADFC8; padding:3px 8px; }
+        .det-box table th { background:#F7E0BD; color:#5b3a1e; }
+        .ev-pass { color:#7a5217; background:#F7E0BD; border-radius:9px; padding:1px 8px; font-size:11.5px; }
+        .ev-fail { color:#fff; background:#DD5138; border-radius:9px; padding:1px 8px; font-size:11.5px; }
+        .ev-exempt { color:#8a6d45; background:#efe7d8; border-radius:9px; padding:1px 8px; font-size:11.5px; }
+        .ev-none { color:#b0a390; font-size:11.5px; }
+        .tr-clickable { cursor:pointer; }
+        .ok-yes { color:#7a5217; font-weight:bold; }
+        .ok-no  { color:#DD5138; font-weight:bold; }
         .tr-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
         @media print {
@@ -174,6 +203,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
         </div>
 
+        <div class="tr-tabs">
+            <span class="tab on" data-tab="list">訓練場次</span>
+            <span class="tab" data-tab="target">達標狀況（各部門訓練次數）</span>
+        </div>
+
+<div id="paneList">
         <div class="tr-stat" id="statBar">
             <span class="yr" id="yrRate">—</span>
             <span id="monWrap"></span>
@@ -183,11 +218,33 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <table class="tr-table" id="trTable">
                 <thead><tr>
                     <th>月份</th><th>對象部門</th><th>課程名稱</th><th>類型</th><th>講師/開課單位</th><th>時數</th>
-                    <th>應到</th><th>實到</th><th>狀態</th><th>開課日期</th><th>操作</th>
+                    <th>應到</th><th>實到</th><th>評鑑</th><th>狀態</th><th>開課日期</th><th>操作</th>
                 </tr></thead>
-                <tbody id="trBody"><tr><td colspan="11" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="trBody"><tr><td colspan="12" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
+        <div style="font-size:11px;color:#8a6d45;margin-top:3px;">點任一列可展開該場次明細（課程大綱、上課時段、參加人員與評鑑結果、附件）。</div>
+</div>
+
+<div id="paneTarget" style="display:none;">
+        <div class="tr-toolbar">
+            <b style="color:#8A5A2B;">達標狀況</b>
+            <span style="font-size:12px;color:#8a6d45;">依「顯示單位」統計；子部門可合併成一個單位一起算。未指定部門的全公司課程，每個單位都計入。</span>
+            <button id="btnTarget" style="display:none;"><i class="fa fa-bullseye"></i> 目標次數設定</button>
+            <button id="btnGroup" style="display:none;"><i class="fa fa-sitemap"></i> 部門合併設定</button>
+        </div>
+        <div class="mon-tabs" id="monTabs"></div>
+        <div class="tr-table-wrap">
+            <table class="tr-table" id="tgTable">
+                <thead id="tgHead"></thead>
+                <tbody id="tgBody"><tr><td style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+            </table>
+        </div>
+        <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
+            達標判定：目標設「每月 N 次」→ 逐月各自要 N 次；設「每年 N 次」→ 看年度累計。
+            <span class="ok-yes">達標</span>／<span class="ok-no">未達標</span>；括號內為該月已排定或計畫中的場次（尚未完成，不計入達標）。
+        </div>
+</div>
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
             狀態：<span class="st-pill st-planned">計畫中</span> <span class="st-pill st-scheduled">已排定</span>
             <span class="st-pill st-done">已完成</span> <span class="st-pill st-cancelled">取消</span>。
@@ -212,7 +269,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>年度 *</label><input type="number" id="edYear" step="1"></div>
             <div><label>計畫月份 *</label><select id="edMonth"></select></div>
             <div><label>課程/訓練名稱 *</label><input type="text" id="edCourse" maxlength="100"></div>
-            <div><label>對象部門（留空＝全公司）</label><select id="edDept"><option value="">全公司</option></select></div>
+            <div><label>對象部門（可複選；全不勾＝全公司）</label>
+                <div id="edDeptBox" class="att-people" style="max-height:78px;"></div>
+                <div style="font-size:11px;color:#8a6d45;margin-top:2px;">
+                    <a href="javascript:;" onclick="edDeptAll(1)" style="color:#b5762a;">全選</a>
+                    <a href="javascript:;" onclick="edDeptAll(0)" style="color:#b5762a;">全不選（＝全公司）</a>
+                    　勾選的每個部門都認定有做這場訓練</div></div>
             <div><label>訓練類型</label><select id="edType"><option value="internal">內訓</option><option value="external">外訓</option></select></div>
             <div><label>預計天數（多天課程）</label><input type="number" id="edDays" step="1" min="1" max="60" placeholder="1">
                 <div class="errmsg" id="errEdDays"></div></div>
@@ -311,6 +373,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <label style="margin:0;font-size:12px;color:#8a6d45;"><input type="checkbox" id="attPickAll"> 全選</label>
             </div>
             <div id="attPeopleBox" class="att-people"></div>
+            <div class="batch-box" style="margin:4px 0 0;">
+                <b>批次設定實到</b>
+                <button type="button" class="b-att nw" onclick="attAttendAll(1)"><i class="fa fa-check-square-o"></i> 全部設為實到</button>
+                <button type="button" class="b-att nw" style="background:#fff;color:#8A5A2B;" onclick="attAttendAll(0)">全部取消實到</button>
+                <span style="color:#8a6d45;">（先全設實到，再把沒來的幾個取消，最快）</span>
+            </div>
             <div class="batch-box" id="evalBatchBox" style="margin:4px 0 6px;">
                 <b>批次設定評鑑</b>
                 <button type="button" class="b-att nw" onclick="attEvalAll('pass')">全設合格</button>
@@ -334,11 +402,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div style="font-weight:bold;color:#5b3a1e;margin:12px 0 4px;">附件 <small id="atCount" style="color:#8a6d45;font-weight:normal;"></small>
                 <small style="color:#8a6d45;font-weight:normal;">（簽到表掃描件、教材/講義、試卷、上課照片…）</small></div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
-                <select id="atCat" style="width:130px;height:28px;border:1px solid #D8BE93;border-radius:4px;"></select>
+                <span style="font-size:12px;color:#5b3a1e;">類別（可複選）</span>
+                <span id="atCatBox" style="display:flex;gap:2px 12px;flex-wrap:wrap;"></span>
                 <input type="file" id="atFile" multiple style="display:none;">
                 <button type="button" class="b-att nw" onclick="document.getElementById('atFile').click()"><i class="fa fa-upload"></i> 選擇檔案上傳</button>
                 <span id="atMsg" style="font-size:12px;color:#8a6d45;"></span>
             </div>
+            <div style="font-size:11px;color:#8a6d45;margin-bottom:4px;">同一份掃描 PDF 若同時是簽到表和試卷，兩個類別都勾即可（一個檔案可屬多個類別）。</div>
             <div class="att-list-wrap" style="max-height:150px;">
                 <table class="att-tbl"><thead><tr><th style="width:88px;">類別</th><th class="t-left">檔名</th>
                     <th style="width:70px;">大小</th><th style="width:80px;">上傳者</th><th style="width:120px;">上傳時間</th><th style="width:26px;"></th></tr></thead>
@@ -382,12 +452,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <span id="setBrkVsShift" style="color:#8A5A2B;"></span></div>
 
         <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
-        <label>附件儲存路徑（NAS 實體路徑，寫檔用）</label>
-        <input type="text" id="setAttNas" maxlength="200" placeholder="Z:/BOM/ERP/教育訓練/">
-        <label>附件瀏覽 URL 前綴（網頁預覽用）</label>
-        <input type="text" id="setAttUrl" maxlength="200" placeholder="/nas/ERP/教育訓練/">
-        <div class="tr-hint" style="margin-top:6px;">附件在 DB <b>只存檔名</b>，完整路徑一律讀取當下用這裡的設定值現場組出——
-            換 NAS 磁碟或搬資料夾時，把檔案原封不動複製過去、改這一個設定即可，舊附件立刻讀得到（鐵律5）。</div>
+        <label>附件儲存路徑（NAS 實體資料夾）</label>
+        <input type="text" id="setAttNas" maxlength="200">
+        <div class="tr-hint" style="margin-top:6px;">全站附件預設放在 <b id="setAttRoot" style="word-break:break-all;"></b> 之下，
+            再以<b>頁面名稱</b>為子資料夾（本頁＝「教育訓練」），不存在會自動建立；要放別的位置就直接改這一欄。<br>
+            附件在 DB <b>只存檔名</b>，完整路徑一律讀取當下用這個設定值現場組出——換 NAS 或搬資料夾時把檔案原封不動複製過去、
+            改這一個設定即可，舊附件立刻讀得到（鐵律5）。<b>不需要填網址</b>：附件一律經本頁 API 下載，已自動套用權限檢查。</div>
 
         <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
         <label>行事曆類別綁定 — 內訓</label>
@@ -421,6 +491,51 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">停用只是不再出現在下拉選單，已登錄的舊紀錄不受影響（停用限訓練管理員）。</div>
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('locMask')">關閉</button></div>
+</div></div>
+
+<!-- 目標次數設定 modal（限訓練管理員） -->
+<div class="tr-mask" id="tgMask"><div class="tr-modal wide" data-eg-form data-eg-submit=".m-foot .b-ok">
+    <div class="m-head"><span>訓練次數目標設定 — <span id="tgYear"></span> 年度</span><span class="m-close" onclick="closeMask('tgMask')">✕</span></div>
+    <div class="m-body">
+        <div class="tr-hint" style="margin:0 0 8px;">第一列「<b>全公司統一</b>」是預設值：沒有個別設定的單位一律套用它。
+            某個單位要不一樣，就把該列的「套用統一」取消勾選再填數字。週期可各自選「每月」或「每年」。</div>
+        <div class="att-list-wrap" style="max-height:400px;">
+            <table class="att-tbl" id="tgSetTbl">
+                <thead><tr><th class="t-left">單位</th><th style="width:96px;">套用統一</th>
+                    <th style="width:150px;">內訓目標</th><th style="width:150px;">外訓目標</th></tr></thead>
+                <tbody id="tgSetBody"></tbody>
+            </table>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('tgMask')">取消</button>
+        <button class="b-ok" onclick="saveTargets()">儲存目標</button>
+    </div>
+</div></div>
+
+<!-- 部門合併設定 modal（限訓練管理員）：子部門併入母部門一起算達標 -->
+<div class="tr-mask" id="grpMask"><div class="tr-modal wide" data-eg-form data-eg-submit=".m-foot .b-ok">
+    <div class="m-head"><span>部門合併設定（達標統計的顯示單位）</span><span class="m-close" onclick="closeMask('grpMask')">✕</span></div>
+    <div class="m-body">
+        <div class="tr-hint" style="margin:0 0 8px;">把子部門勾進同一個群組，達標統計就<b>合併成一列</b>計算（例如「管理課」含其下各組）。
+            一個部門只能屬於一個群組；沒被勾進任何群組的部門各自獨立成一列。</div>
+        <div id="grpList"></div>
+        <button type="button" class="b-att nw" onclick="grpAdd()"><i class="fa fa-plus"></i> 新增合併群組</button>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('grpMask')">取消</button>
+        <button class="b-ok" onclick="saveGroups()">儲存合併設定</button>
+    </div>
+</div></div>
+
+<!-- 場次檢視（唯讀）modal -->
+<div class="tr-mask" id="viewMask"><div class="tr-modal wide">
+    <div class="m-head"><span>訓練場次檢視</span><span class="m-close" onclick="closeMask('viewMask')">✕</span></div>
+    <div class="m-body" id="viewBody"></div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="printRecord()"><i class="fa fa-print"></i> 列印訓練紀錄</button>
+        <button class="b-ok" onclick="closeMask('viewMask')">關閉</button>
+    </div>
 </div></div>
 
 <!-- 角色說明 modal -->
@@ -504,28 +619,32 @@ function loadMeta(cb){
         var $y = $('#yearSel').empty();
         m.years.forEach(function(y){ $y.append('<option value="'+y+'">'+y+'</option>'); });
         $y.val(m.cur_year);
-        var $d = $('#deptSel'), $ed = $('#edDept'), $td = $('#edTrainerDept'), $ad = $('#attDept');
-        m.departments.forEach(function(d){
+        var $d = $('#deptSel'), $td = $('#edTrainerDept'), $ad = $('#attDept'), dh='';
+        DEPTS = m.departments || [];
+        DEPTS.forEach(function(d){
             $d.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
-            $ed.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
             $td.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
             $ad.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
+            dh += '<label><input type="checkbox" class="ed-dept" value="'+d.id+'"> '+esc(d.name)+'</label>';
         });
+        $('#edDeptBox').html(dh);
         var $em = $('#edMonth').empty();
         for (var i=1;i<=12;i++) $em.append('<option value="'+i+'">'+i+'月</option>');
         LOCS = m.locations || []; renderLocSel();
         SHIFTS = m.shifts || []; SETTINGS = m.settings || {}; CATS = m.event_categories || [];
         applyBreakSetting();
         ATT_CATS = m.att_cats || {}; EVAL_METHODS = m.eval_methods || {};
-        ATT_DIRS = {nas:m.attach_nas_dir||'', url:m.attach_url_dir||''};
+        ATT_DIRS = {nas:m.attach_nas_dir||'', root:m.attach_root||''};
+        GROUPS = m.dept_groups || []; UNITS = m.units || [];
         var eh='<option value="">（未指定）</option>', ah='';
         $.each(EVAL_METHODS, function(k,v){ eh += '<option value="'+k+'">'+esc(v)+'</option>'; });
-        $.each(ATT_CATS,     function(k,v){ ah += '<option value="'+k+'">'+esc(v)+'</option>'; });
-        $('#exEvalMethod').html(eh); $('#atCat').html(ah);
+        $.each(ATT_CATS, function(k,v){ ah += '<label style="font-size:12px;color:#5b3a1e;margin:0;font-weight:normal;">'
+            + '<input type="checkbox" class="at-cat" value="'+k+'"'+(k==='sign'?' checked':'')+'> '+esc(v)+'</label>'; });
+        $('#exEvalMethod').html(eh); $('#atCatBox').html(ah);
         CAT_EFF = {internal:m.cat_internal_eff||null, external:m.cat_external_eff||null};
         renderShiftSel();
         if (m.perms.canEdit) $('#btnAdd').show();
-        if (m.perms.canAdmin) $('#btnSetting').show();
+        if (m.perms.canAdmin) { $('#btnSetting').show(); $('#btnTarget').show(); $('#btnGroup').show(); }
         if (cb) cb();
     });
 }
@@ -566,15 +685,27 @@ function dateRangeText(r){
     return '<span title="'+ds.join('、')+'">'+t+'</span>';
 }
 
+/* 清單「評鑑」欄：合格/不合格/未評 一眼看出 */
+function evalCell(r){
+    var e = r.eval || {pass:0,fail:0,exempt:0,none:0};
+    if (r.eval_method==='notice') return '<span class="ev-exempt">免評鑑</span>';
+    if (!e.pass && !e.fail && !e.exempt && !e.none) return '—';
+    var h = '';
+    if (e.pass)   h += '<span class="ev-pass">合格 '+e.pass+'</span> ';
+    if (e.fail)   h += '<span class="ev-fail">不合格 '+e.fail+'</span> ';
+    if (e.exempt) h += '<span class="ev-exempt">免評 '+e.exempt+'</span> ';
+    if (e.none)   h += '<span class="ev-none">未評 '+e.none+'</span>';
+    return h || '—';
+}
 function renderTable(){
     var dep = $('#deptSel').val(), stt = $('#statSel').val(), kw = $.trim($('#kwSel').val()).toLowerCase();
     var html = '';
     ROWS.forEach(function(r){
-        if (dep && String(r.dept_id)!==String(dep)) return;
+        if (dep && (r.dept_ids||[]).map(String).indexOf(String(dep))<0) return;   // 對象部門複選：任一符合即列出
         if (stt && r.status!==stt) return;
         if (kw && String(r.course_name).toLowerCase().indexOf(kw)<0) return;
         var ext = r.train_type==='external';
-        html += '<tr>';
+        html += '<tr class="tr-clickable" onclick="toggleDetail(event,'+r.session_id+')">';
         html += '<td>'+r.plan_month+'月</td>';
         html += '<td>'+esc(r.dept_name||'')+'</td>';
         html += '<td class="t-left"><b>'+esc(r.course_name)+'</b>'
@@ -590,11 +721,17 @@ function renderTable(){
              +  (showH==null?'—':numTrim(showH))+(diffH?' <span style="color:#DD5138;">*</span>':'')+'</td>';
         html += '<td>'+(r.target_headcount==null?'—':r.target_headcount)+'</td>';
         html += '<td>'+(r.actual_headcount==null?'—':r.actual_headcount)+'</td>';
+        html += '<td>'+evalCell(r)+'</td>';
         html += '<td>'+statPill(r.status)+'</td>';
         html += '<td>'+dateRangeText(r)+'</td>';
-        html += '<td style="white-space:nowrap;">';
+        html += '<td style="white-space:nowrap;" onclick="event.stopPropagation();">';
+        html += '<span class="tr-op" onclick="openView('+r.session_id+')" title="檢視完整內容（含名單與評鑑結果）"><i class="fa fa-search-plus"></i>檢視</span>';
         if (PERMS.canEdit) {
-            html += '<span class="tr-op" onclick="openEd('+r.session_id+')" title="修改計畫內容"><i class="fa fa-pencil"></i>計畫</span>';
+            // 已排定/已完成＝計畫已定案，只有訓練管理員可再改計畫內容
+            var lock = (r.status==='scheduled' || r.status==='done') && !PERMS.canAdmin;
+            html += lock
+                ? '<span class="tr-op" style="color:#c4b79c;cursor:not-allowed;" title="已'+(r.status==='done'?'完成':'排定開課')+'，計畫內容僅訓練管理員可修改"><i class="fa fa-lock"></i>計畫</span>'
+                : '<span class="tr-op" onclick="openEd('+r.session_id+')" title="修改計畫內容"><i class="fa fa-pencil"></i>計畫</span>';
             if (r.status==='cancelled') {
                 html += '<span class="tr-op" onclick="setStatus('+r.session_id+',\'planned\')" title="恢復為計畫中"><i class="fa fa-undo"></i>恢復</span>';
             } else if (r.status==='done') {
@@ -608,10 +745,73 @@ function renderTable(){
             html += '<span class="tr-op" onclick="copySession('+r.session_id+')" title="複製內容(不帶名單)"><i class="fa fa-copy"></i>複製</span>';
         }
         if (PERMS.canAdmin) html += '<span class="tr-op" style="color:#DD5138;" onclick="delSession('+r.session_id+')" title="刪除場次"><i class="fa fa-trash"></i></span>';
-        if (!PERMS.canEdit && !PERMS.canAdmin) html += '—';
         html += '</td></tr>';
     });
-    $('#trBody').html(html || '<tr><td colspan="11" style="padding:16px;color:#8a6d45;">無符合條件的訓練場次</td></tr>');
+    $('#trBody').html(html || '<tr><td colspan="12" style="padding:16px;color:#8a6d45;">無符合條件的訓練場次</td></tr>');
+    OPEN_DET = {};
+}
+/* ---------- 點列展開明細（課程大綱/時段/名單與評鑑/附件） ---------- */
+var OPEN_DET = {};
+function toggleDetail(ev, sid){
+    var $tr = $(ev.currentTarget);
+    if (OPEN_DET[sid]){ $tr.next('tr.det-row').remove(); delete OPEN_DET[sid]; return; }
+    OPEN_DET[sid] = 1;
+    $tr.after('<tr class="det-row"><td colspan="12"><span style="color:#8a6d45;">載入中…</span></td></tr>');
+    var $td = $tr.next('tr.det-row').find('td');
+    $.getJSON(API, {action:'session_detail', session_id:sid}, function(res){
+        if (!res.ok){ $td.html('<span style="color:#DD5138;">'+esc(res.error||'載入失敗')+'</span>'); return; }
+        $td.html(detailHtml(res));
+    }).fail(function(){ $td.html('<span style="color:#DD5138;">載入失敗</span>'); });
+}
+function evalPill(v){
+    return v==='pass' ? '<span class="ev-pass">合格</span>'
+         : v==='fail' ? '<span class="ev-fail">不合格</span>'
+         : v==='exempt' ? '<span class="ev-exempt">免評鑑</span>' : '<span class="ev-none">未評</span>';
+}
+function detailHtml(res){
+    var s=res.session, ext=s.train_type==='external';
+    var h='<div class="det-box">';
+    h+='<div class="kv"><b>對象部門：</b>'+(res.dept_names&&res.dept_names.length?esc(res.dept_names.join('、')):'全公司')
+      +'　<b>'+(ext?'開課單位':'講師')+'：</b>'+esc((ext?s.org_unit:s.trainer)||'—')
+      +'　<b>地點：</b>'+esc(s.location||'—')
+      +'　<b>評鑑方式：</b>'+(s.eval_method?esc(EVAL_METHODS[s.eval_method]||s.eval_method):'—')
+      +'　<b>實際時數：</b>'+(s.actual_hours==null?'—':numTrim(s.actual_hours))+'</div>';
+    if (s.outline) h+='<h5>課程大綱</h5><pre class="ol">'+esc(s.outline)+'</pre>';
+    if (res.days && res.days.length){
+        h+='<h5>上課日期</h5><table><tr><th>第</th><th>日期</th><th>時間</th><th>休息(分)</th><th>時數</th></tr>';
+        res.days.forEach(function(d){
+            h+='<tr><td>'+d.day_no+'</td><td>'+fmtDate(d.day_date)+'</td><td>'+esc((d.start_time||'')+(d.end_time?'~'+d.end_time:''))
+             +'</td><td>'+(d.break_minutes||0)+'</td><td>'+(d.hours==null?'':numTrim(d.hours))+'</td></tr>';
+        });
+        h+='</table>';
+    }
+    h+='<h5 style="margin-top:8px;">參加人員（'+(res.attendees||[]).length+' 人）</h5>';
+    if (!(res.attendees||[]).length) h+='<div style="color:#8a6d45;">尚未建立名單</div>';
+    else {
+        h+='<table><tr><th>姓名</th><th>部門</th><th>職稱</th><th>實到</th><th>評鑑結果</th><th>分數</th><th>備註</th></tr>';
+        res.attendees.forEach(function(a){
+            h+='<tr><td>'+esc(a.user_name||'')+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td>'
+             +'<td>'+(+a.attended?'✔':'—')+'</td><td>'+evalPill(a.eval_result)+'</td>'
+             +'<td>'+(a.eval_score==null?'':numTrim(a.eval_score))+'</td><td>'+esc(a.eval_note||'')+'</td></tr>';
+        });
+        h+='</table>';
+    }
+    h+='<h5 style="margin-top:8px;">附件（'+(res.attachments||[]).length+'）</h5>';
+    if (!(res.attachments||[]).length) h+='<div style="color:#8a6d45;">無附件</div>';
+    else {
+        h+='<div>';
+        res.attachments.forEach(function(f){
+            h+='<div><a href="'+API+'?action=download_attach&att_id='+f.att_id+'" target="_blank" style="color:#b5762a;">'
+             +'<i class="fa fa-paperclip"></i> '+esc(f.original_name||f.file_name)+'</a> '
+             +'<span style="color:#8a6d45;">['+esc(catLabels(f.cat))+'　'+fmtSize(f.file_size)+']</span></div>';
+        });
+        h+='</div>';
+    }
+    h+='</div>';
+    return h;
+}
+function catLabels(cat){
+    return String(cat||'').split(',').map(function(c){ return ATT_CATS[c]||c; }).join('、');
 }
 
 $('#deptSel,#statSel').on('change', renderTable);
@@ -633,7 +833,8 @@ function openEd(sid){
     $('#edMask').data('sid', r ? r.session_id : 0);
     $('#edYear').val(r ? r.year : $('#yearSel').val());
     $('#edMonth').val(r ? r.plan_month : (META.cur_month));
-    $('#edDept').val(r && r.dept_id!=null ? r.dept_id : '');
+    var ds = (r && r.dept_ids) ? r.dept_ids.map(String) : [];
+    $('#edDeptBox .ed-dept').each(function(){ this.checked = ds.indexOf(String(this.value))>=0; });
     $('#edCourse').val(r ? r.course_name : '');
     $('#edType').val(r ? (r.train_type||'internal') : 'internal'); applyType();
     $('#edTrainer').val(r ? (r.trainer||'') : ''); $('#edTrainerDept').val(''); $('#edTrainerPerson').html('<option value="">人員</option>');
@@ -646,6 +847,10 @@ function openEd(sid){
     setTimeout(function(){ $('#edCourse').focus(); }, 100);
 }
 $('#btnAdd').on('click', function(){ openEd(0); });
+function edDeptAll(on){ $('#edDeptBox .ed-dept').prop('checked', !!on); }
+function edDeptIds(){
+    var a=[]; $('#edDeptBox .ed-dept:checked').each(function(){ a.push(this.value); }); return a;
+}
 /* 計畫欄位即時檢查（天數/時數） */
 function edValidate(){
     var ok = true, dv = $.trim($('#edDays').val()), hv = $.trim($('#edHours').val());
@@ -995,6 +1200,7 @@ function applyEvalMethod(){
     renderAtt();
 }
 $('#exEvalMethod').on('change', applyEvalMethod);
+function attAttendAll(v){ ATT.forEach(function(a){ a.attended = v?1:0; }); renderAtt(); }
 function attEvalAll(v){
     var only = $('#evalOnlyAttended').prop('checked');
     ATT.forEach(function(a){ if (only && v!=='' && !a.attended) return; a.eval_result = v; });
@@ -1034,6 +1240,183 @@ function attCount(){
 }
 function attDel(i){ ATT.splice(i,1); renderAtt(); if($('#attDept').val()) $('#attDept').trigger('change'); }
 
+/* ================= 達標狀況（各單位每月/每年內外訓次數） ================= */
+var UNITS = [], GROUPS = [], DEPTS = [], TGSTATS = null, TGTARGETS = {}, TGMON = 0;   // TGMON: 0=全年
+$('.tr-tabs .tab').on('click', function(){
+    var t = $(this).data('tab');
+    $('.tr-tabs .tab').removeClass('on'); $(this).addClass('on');
+    $('#paneList').toggle(t==='list'); $('#paneTarget').toggle(t==='target');
+    if (t==='target' && !TGSTATS) loadTargetStats();
+});
+function loadTargetStats(){
+    NProgress.start();
+    $.getJSON(API, {action:'target_stats', year:$('#yearSel').val()}, function(res){
+        NProgress.done();
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        TGSTATS = res.stats; TGTARGETS = res.targets||{}; UNITS = res.units||UNITS;
+        renderMonTabs(); renderTargetTable();
+    }).fail(function(){ NProgress.done(); });
+}
+function renderMonTabs(){
+    var h = '<span class="mt'+(TGMON===0?' on':'')+'" onclick="setMon(0)">全年</span>';
+    for (var m=1;m<=12;m++){
+        var has=false;
+        (TGSTATS||[]).forEach(function(s){ if (s.months.internal[m].done+s.months.internal[m].plan
+                                             + s.months.external[m].done+s.months.external[m].plan) has=true; });
+        h += '<span class="mt'+(TGMON===m?' on':'')+(has?' has':'')+'" onclick="setMon('+m+')">'+m+'月</span>';
+    }
+    $('#monTabs').html(h);
+}
+function setMon(m){ TGMON=m; renderMonTabs(); renderTargetTable(); }
+/* 目標文字：每月N次 / 每年N次；0＝未設定 */
+function targetText(p, n){ return n>0 ? (p==='month'?'每月 ':'每年 ')+n+' 次' : '未設定'; }
+function renderTargetTable(){
+    if (!TGSTATS){ $('#tgBody').html('<tr><td style="padding:16px;color:#8a6d45;">載入中…</td></tr>'); return; }
+    var m = TGMON, head, body='';
+    if (m===0){
+        head = '<tr><th class="t-left">單位</th><th>內訓目標</th><th>內訓年度完成</th><th>外訓目標</th><th>外訓年度完成</th>'
+             + '<th>達標</th><th class="t-left">各月完成（內/外）</th></tr>';
+        TGSTATS.forEach(function(s){
+            var t=s.target, okI=yearOk(s,'internal'), okE=yearOk(s,'external');
+            var cells='';
+            for (var i=1;i<=12;i++){
+                var di=s.months.internal[i], de=s.months.external[i];
+                var v=(di.done||0)+'/'+(de.done||0), pl=(di.plan||0)+(de.plan||0);
+                cells += '<span class="mon-pill'+((di.done||de.done)?'':' empty')+'" title="'+i+'月'+(pl?'（另有 '+pl+' 場已排定/計畫中）':'')+'">'
+                       + i+'月 <b>'+v+'</b>'+(pl?'<span style="color:#c0762c;">+'+pl+'</span>':'')+'</span> ';
+            }
+            body += '<tr><td class="t-left">'+esc(s.unit.name)+(s.unit.is_group?'<span style="color:#8a6d45;font-size:11px;">（合併）</span>':'')+'</td>'
+                 + '<td>'+targetText(t.internal_period,t.internal_times)+(t.is_default?'<br><span style="font-size:11px;color:#8a6d45;">(統一)</span>':'')+'</td>'
+                 + '<td><b>'+s.year_done.internal+'</b></td>'
+                 + '<td>'+targetText(t.external_period,t.external_times)+(t.is_default?'<br><span style="font-size:11px;color:#8a6d45;">(統一)</span>':'')+'</td>'
+                 + '<td><b>'+s.year_done.external+'</b></td>'
+                 + '<td>'+okLabel(okI && okE)+'</td>'
+                 + '<td class="t-left">'+cells+'</td></tr>';
+        });
+    } else {
+        head = '<tr><th class="t-left">單位</th><th>內訓目標</th><th>'+m+'月完成</th><th>外訓目標</th><th>'+m+'月完成</th>'
+             + '<th>達標</th><th class="t-left">'+m+'月場次（含尚未完成）</th></tr>';
+        TGSTATS.forEach(function(s){
+            var t=s.target, di=s.months.internal[m], de=s.months.external[m];
+            var okI=monOk(s,'internal',m), okE=monOk(s,'external',m);
+            var items=[].concat(di.items||[], de.items||[]).map(function(it){
+                return '<span class="mon-pill" title="'+STATUS_LABEL[it.status]+'">'+esc(it.course_name)
+                     + '<b> '+STATUS_LABEL[it.status]+'</b>'+(it.company_wide?'<span style="color:#8a6d45;">(全公司)</span>':'')+'</span>';
+            }).join(' ');
+            body += '<tr><td class="t-left">'+esc(s.unit.name)+(s.unit.is_group?'<span style="color:#8a6d45;font-size:11px;">（合併）</span>':'')+'</td>'
+                 + '<td>'+targetText(t.internal_period,t.internal_times)+'</td>'
+                 + '<td><b>'+di.done+'</b>'+(di.plan?'<span style="color:#c0762c;"> +'+di.plan+' 待辦</span>':'')+'</td>'
+                 + '<td>'+targetText(t.external_period,t.external_times)+'</td>'
+                 + '<td><b>'+de.done+'</b>'+(de.plan?'<span style="color:#c0762c;"> +'+de.plan+' 待辦</span>':'')+'</td>'
+                 + '<td>'+okLabel(okI && okE)+'</td>'
+                 + '<td class="t-left">'+(items||'<span style="color:#b0a390;">本月無場次</span>')+'</td></tr>';
+        });
+    }
+    $('#tgHead').html(head);
+    $('#tgBody').html(body || '<tr><td style="padding:16px;color:#8a6d45;">尚無部門資料</td></tr>');
+}
+function okLabel(ok){ return ok ? '<span class="ok-yes">達標</span>' : '<span class="ok-no">未達標</span>'; }
+/* 每月制→該月要達到 N 次；每年制→年度累計要達到 N 次（未設定目標視為達標） */
+function monOk(s, type, m){
+    var t=s.target, p=t[type+'_period'], n=t[type+'_times'];
+    if (!n) return true;
+    return p==='month' ? s.months[type][m].done >= n : s.year_done[type] >= n;
+}
+function yearOk(s, type){
+    var t=s.target, p=t[type+'_period'], n=t[type+'_times'];
+    if (!n) return true;
+    if (p==='year') return s.year_done[type] >= n;
+    for (var m=1;m<=12;m++) if (s.months[type][m].done < n) return false;   // 每月制＝每個月都要達標
+    return true;
+}
+
+/* ---------- 目標次數設定（限管理員） ---------- */
+$('#btnTarget').on('click', function(){
+    if (!TGSTATS) { loadTargetStats(); setTimeout(openTargetSet, 600); } else openTargetSet();
+});
+function openTargetSet(){
+    $('#tgYear').text($('#yearSel').val());
+    var rows = [{key:'ALL', name:'全公司統一（預設值）'}].concat((UNITS||[]).map(function(u){
+        return {key:u.key, name:u.name + (u.is_group?'（合併）':'')};
+    }));
+    var h='';
+    rows.forEach(function(r){
+        var t = TGTARGETS[r.key] || null, isAll = r.key==='ALL';
+        var ip = t? t.internal_period : 'year', it = t? +t.internal_times : 0;
+        var ep = t? t.external_period : 'year', et = t? +t.external_times : 0;
+        h+='<tr data-key="'+r.key+'"><td class="t-left"><b>'+esc(r.name)+'</b></td>'
+          +'<td>'+(isAll?'—':'<input type="checkbox" class="tg-def"'+(t?'':' checked')+'>')+'</td>'
+          +'<td><select class="tg-ip"><option value="year"'+(ip==='year'?' selected':'')+'>每年</option>'
+          +'<option value="month"'+(ip==='month'?' selected':'')+'>每月</option></select> '
+          +'<input type="number" class="tg-it" min="0" max="999" style="width:52px;" value="'+it+'"> 次</td>'
+          +'<td><select class="tg-ep"><option value="year"'+(ep==='year'?' selected':'')+'>每年</option>'
+          +'<option value="month"'+(ep==='month'?' selected':'')+'>每月</option></select> '
+          +'<input type="number" class="tg-et" min="0" max="999" style="width:52px;" value="'+et+'"> 次</td></tr>';
+    });
+    $('#tgSetBody').html(h);
+    $('#tgSetBody').off('change.def').on('change.def', '.tg-def', function(){
+        $(this).closest('tr').find('.tg-ip,.tg-it,.tg-ep,.tg-et').prop('disabled', this.checked);
+    });
+    $('#tgSetBody .tg-def').trigger('change');
+    openMask('tgMask');
+}
+function saveTargets(){
+    var list=[];
+    $('#tgSetBody tr').each(function(){
+        var $t=$(this);
+        list.push({unit_key:$t.data('key'), use_default:$t.find('.tg-def').prop('checked')?1:0,
+            internal_period:$t.find('.tg-ip').val(), internal_times:$t.find('.tg-it').val(),
+            external_period:$t.find('.tg-ep').val(), external_times:$t.find('.tg-et').val()});
+    });
+    $.post(API, {action:'save_targets', year:$('#yearSel').val(), targets:JSON.stringify(list)}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        closeMask('tgMask'); TGSTATS=null; loadTargetStats(); alert('目標已儲存。');
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
+/* ---------- 部門合併設定（限管理員） ---------- */
+$('#btnGroup').on('click', function(){ renderGroups(GROUPS); openMask('grpMask'); });
+function renderGroups(gs){
+    var h='';
+    (gs||[]).forEach(function(g,i){ h += groupBoxHtml(g, i); });
+    $('#grpList').html(h || '<div style="color:#8a6d45;font-size:12px;margin-bottom:6px;">尚未設定合併群組（各部門各自獨立統計）</div>');
+}
+function groupBoxHtml(g, i){
+    var ids=(g.dept_ids||[]).map(String);
+    var chk='';
+    DEPTS.forEach(function(d){
+        chk += '<label><input type="checkbox" class="gp-dept" value="'+d.id+'"'+(ids.indexOf(String(d.id))>=0?' checked':'')+'> '+esc(d.name)+'</label>';
+    });
+    return '<div class="batch-box grp-box" data-gid="'+(g.group_id||0)+'" style="display:block;">'
+        + '<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">'
+        + '<b>群組名稱</b><input type="text" class="gp-name" maxlength="50" value="'+esc(g.group_name||'')+'" style="flex:1;max-width:240px;">'
+        + '<span class="att-del" onclick="$(this).closest(\'.grp-box\').remove()" title="移除此群組"><i class="fa fa-times"></i></span></div>'
+        + '<div class="att-people" style="max-height:96px;">'+chk+'</div></div>';
+}
+function grpAdd(){
+    if (!$('#grpList .grp-box').length) $('#grpList').empty();
+    $('#grpList').append(groupBoxHtml({group_id:0, group_name:'', dept_ids:[]}, 0));
+}
+function saveGroups(){
+    var list=[], dup={}, bad='';
+    $('#grpList .grp-box').each(function(){
+        var $b=$(this), ids=[];
+        $b.find('.gp-dept:checked').each(function(){
+            if (dup[this.value]) bad = '同一個部門不可同時屬於兩個群組';
+            dup[this.value]=1; ids.push(+this.value);
+        });
+        var nm=$.trim($b.find('.gp-name').val());
+        if (!nm && ids.length) bad = '有群組沒有填名稱';
+        if (nm && ids.length) list.push({group_id:+$b.data('gid'), group_name:nm, dept_ids:ids});
+    });
+    if (bad){ alert(bad); return; }
+    $.post(API, {action:'save_dept_groups', groups:JSON.stringify(list)}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        GROUPS = res.dept_groups||[]; UNITS = res.units||[];
+        closeMask('grpMask'); TGSTATS=null; loadTargetStats(); alert('合併設定已儲存。');
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
 /* ---------- 場次附件（簽到表掃描/教材/試卷）：DB 只存檔名，路徑由後端即時組（鐵律5） ---------- */
 var ATT_CATS = {}, EVAL_METHODS = {}, ATT_DIRS = {nas:'', url:''};
 var FILES = [], TEMP_ATT = [];      // TEMP_ATT＝場次還沒 id 時的暫存附件（本頁場次一定已存在，保留機制備用）
@@ -1051,7 +1434,7 @@ function loadAttach(sid){
 function renderAttach(){
     var h='';
     FILES.forEach(function(f){
-        h+='<tr><td>'+esc(ATT_CATS[f.cat]||f.cat)+'</td>'
+        h+='<tr><td>'+esc(catLabels(f.cat))+'</td>'
           +'<td class="t-left"><a href="'+API+'?action=download_attach&att_id='+f.att_id+'" target="_blank" style="color:#b5762a;">'
           +'<i class="fa fa-paperclip"></i> '+esc(f.original_name||f.file_name)+'</a></td>'
           +'<td>'+fmtSize(f.file_size)+'</td><td>'+esc(f.user_name||'')+'</td>'
@@ -1064,7 +1447,10 @@ function renderAttach(){
 $('#atFile').on('change', function(){
     var files = this.files, sid = $('#exMask').data('sid');
     if (!files || !files.length) return;
-    var cat = $('#atCat').val(), done = 0, fail = [];
+    var cats = [];                                  // 類別可複選（同一份 PDF 可能同時是簽到表＋試卷）
+    $('#atCatBox .at-cat:checked').each(function(){ cats.push(this.value); });
+    if (!cats.length){ alert('請至少勾選一個附件類別'); this.value=''; return; }
+    var cat = cats.join(','), done = 0, fail = [];
     $('#atMsg').text('上傳中… 0/'+files.length);
     var upload = function(idx){
         if (idx >= files.length){
@@ -1103,7 +1489,7 @@ function submitEd(){
     setErr($('#edOrgUnit'), null, '');
     if (!edValidate()){ alert('欄位有錯誤：'+($('#errEdDays').text()||$('#errEdHours').text())); return; }
     $.post(API, {action:'save_session', session_id:$('#edMask').data('sid'),
-        year:$('#edYear').val(), plan_month:$('#edMonth').val(), dept_id:$('#edDept').val(),
+        year:$('#edYear').val(), plan_month:$('#edMonth').val(), dept_ids:edDeptIds().join(','),
         course_name:$('#edCourse').val(), train_type:$('#edType').val(),
         trainer:$('#edTrainer').val(), trainer_id:$('#edTrainerPerson').val(), org_unit:$('#edOrgUnit').val(),
         hours:$('#edHours').val(), plan_days:$('#edDays').val(), note:$('#edNote').val()},
@@ -1174,7 +1560,7 @@ function openSetting(){
     $('#setCatIn').html(h.replace('以名稱尋找','以名稱「課程(內訓)」尋找')).val(SETTINGS.training_cat_internal||'');
     $('#setCatEx').html(h.replace('以名稱尋找','以名稱「課程(外訓)」尋找')).val(SETTINGS.training_cat_external||'');
     $('#setShift').val(SETTINGS.training_default_shift_id||'');
-    $('#setAttNas').val(ATT_DIRS.nas||''); $('#setAttUrl').val(ATT_DIRS.url||'');
+    $('#setAttNas').val(ATT_DIRS.nas||''); $('#setAttRoot').text(ATT_DIRS.root||'');
     $('#setBrkStart').val(SETTINGS.training_break_start||'');
     $('#setBrkEnd').val(SETTINGS.training_break_end||'');
     setBrkCheck();
@@ -1223,12 +1609,12 @@ function saveSettings(){
 }
 /* 附件路徑（限訓練管理員；沒改就不打這支 API） */
 function saveAttachPath(cb){
-    var nas=$.trim($('#setAttNas').val()), url=$.trim($('#setAttUrl').val());
-    if (!PERMS || !PERMS.canAdmin || (nas===ATT_DIRS.nas && url===ATT_DIRS.url)) { cb(); return; }
-    if (!nas || !url){ alert('附件路徑與 URL 前綴皆不可為空（未修改附件路徑，其餘設定已儲存）'); cb(); return; }
-    $.post(API, {action:'save_attach_path', nas_dir:nas, url_dir:url}, function(res){
+    var nas=$.trim($('#setAttNas').val());
+    if (!PERMS || !PERMS.canAdmin || nas===ATT_DIRS.nas) { cb(); return; }
+    if (!nas){ alert('附件儲存路徑不可為空（未修改附件路徑，其餘設定已儲存）'); cb(); return; }
+    $.post(API, {action:'save_attach_path', nas_dir:nas}, function(res){
         if (!res.ok){ alert('附件路徑儲存失敗：'+(res.error||'')); cb(); return; }
-        ATT_DIRS = {nas:res.attach_nas_dir, url:res.attach_url_dir};
+        ATT_DIRS.nas = res.attach_nas_dir;
         cb();
     }, 'json').fail(function(x){ alert('附件路徑儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); cb(); });
 }
@@ -1351,12 +1737,72 @@ function printSignSheet(){
     w.document.write('<html><head><meta charset="utf-8"><title>教育訓練簽到表</title><style>'+css+'</style></head><body>'+html+'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},150);};</scr'+'ipt></body></html>');
     w.document.close();
 }
+/* 刪除：兩次都要輸入大寫 Y 才執行（連同上課日、參加名單、附件實體檔一起刪，無法復原） */
 function delSession(sid){
-    if (!confirm('刪除此訓練場次？')) return;
+    var r = ROWS.find(function(x){ return String(x.session_id)===String(sid); }) || {};
+    var name = r.course_name || '此場次';
+    var a1 = prompt('【刪除確認 1/2】將永久刪除訓練場次「'+name+'」，連同上課日期、參加人員名單與評鑑結果、'
+        + (r.attach_count>0 ? '以及 '+r.attach_count+' 個附件（實體檔一併刪除）' : '所有附件')
+        + '，且無法復原。\n\n確定要刪除請輸入大寫 Y：');
+    if (a1 !== 'Y'){ if (a1!==null) alert('未輸入大寫 Y，已取消刪除。'); return; }
+    var a2 = prompt('【刪除確認 2/2】再確認一次：真的要刪除「'+name+'」嗎？\n\n請再輸入一次大寫 Y：');
+    if (a2 !== 'Y'){ if (a2!==null) alert('未輸入大寫 Y，已取消刪除。'); return; }
     $.post(API, {action:'delete_session', session_id:sid}, function(res){
         if (!res.ok){ alert(res.error||'刪除失敗'); return; }
-        loadList();
-    }, 'json');
+        loadList(); alert('已刪除「'+name+'」（含附件）。');
+    }, 'json').fail(function(x){ alert('刪除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
+/* ---------- 檢視（唯讀）＋列印訓練紀錄 ---------- */
+var VIEW_RES = null;
+function openView(sid){
+    VIEW_RES = null;
+    $('#viewBody').html('<span style="color:#8a6d45;">載入中…</span>');
+    openMask('viewMask');
+    $.getJSON(API, {action:'session_detail', session_id:sid}, function(res){
+        if (!res.ok){ $('#viewBody').html('<span style="color:#DD5138;">'+esc(res.error||'載入失敗')+'</span>'); return; }
+        VIEW_RES = res;
+        var s=res.session, ext=s.train_type==='external';
+        $('#viewBody').html('<div class="ex-plan"><div><b>'+esc(s.course_name)+'</b> '+statPill(s.status)+'</div>'
+            +'<div>計畫：'+s.year+' 年 '+s.plan_month+' 月　類型：'+(ext?'外訓':'內訓')
+            +'　計畫時數：'+(s.hours==null?'—':numTrim(s.hours))+'　開課日：'+(fmtDate(s.done_date)||'—')+'</div></div>'
+            + detailHtml(res));
+    }).fail(function(){ $('#viewBody').html('<span style="color:#DD5138;">載入失敗</span>'); });
+}
+/* 列印訓練紀錄（含名單與評鑑結果，AS9100 品質紀錄用） */
+function printRecord(){
+    if (!VIEW_RES){ alert('資料尚未載入完成'); return; }
+    var res=VIEW_RES, s=res.session, ext=s.train_type==='external';
+    var rows='';
+    (res.attendees||[]).forEach(function(a,i){
+        rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.user_name||'')+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td>'
+            +'<td>'+(+a.attended?'✔':'')+'</td>'
+            +'<td>'+(a.eval_result==='pass'?'合格':a.eval_result==='fail'?'不合格':a.eval_result==='exempt'?'免評鑑':'')+'</td>'
+            +'<td>'+(a.eval_score==null?'':numTrim(a.eval_score))+'</td><td>'+esc(a.eval_note||'')+'</td></tr>';
+    });
+    var days=(res.days||[]).map(function(d){ return fmtDate(d.day_date)+' '+((d.start_time||'')+(d.end_time?'~'+d.end_time:'')); }).join('　');
+    var html='<div style="text-align:center;"><div style="font-size:18px;font-weight:bold;">超正齒輪科技有限公司</div>'
+        +'<div style="font-size:15px;margin-top:2px;">教育訓練紀錄表</div></div>'
+        +'<table class="sf-info"><tr><td colspan="2">課程名稱：'+esc(s.course_name)+'</td></tr>'
+        +'<tr><td>'+(ext?'外訓／開課單位：'+esc(s.org_unit||''):'內訓／講師：'+esc(s.trainer||''))+'</td>'
+        +'<td>對象部門：'+esc((res.dept_names&&res.dept_names.length)?res.dept_names.join('、'):'全公司')+'</td></tr>'
+        +'<tr><td>上課日期：'+esc(days||'—')+'</td><td>地點：'+esc(s.location||'—')
+        +'　時數：'+(s.actual_hours==null?'—':numTrim(s.actual_hours))+'</td></tr>'
+        +'<tr><td colspan="2">評鑑方式：'+(s.eval_method?esc(EVAL_METHODS[s.eval_method]||s.eval_method):'—')+'</td></tr>'
+        +(s.outline?'<tr><td colspan="2" class="ol">課程大綱：'+esc(s.outline)+'</td></tr>':'')+'</table>'
+        +'<table class="sf"><thead><tr><th style="width:36px;">序</th><th>姓名</th><th>部門</th><th>職稱</th>'
+        +'<th style="width:44px;">實到</th><th style="width:70px;">評鑑結果</th><th style="width:50px;">分數</th><th>備註</th></tr></thead>'
+        +'<tbody>'+(rows||'<tr><td colspan="8">（無名單）</td></tr>')+'</tbody></table>'
+        +'<div style="margin-top:14px;font-size:13px;">講師/主辦簽章：______________　　單位主管簽章：______________　　管理代表：______________</div>';
+    var w=window.open('','_blank'); if(!w){alert('請允許彈出視窗');return;}
+    var css='body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:14px;}'
+        +'table.sf{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}table.sf th,table.sf td{border:1px solid #333;padding:5px;text-align:center;}'
+        +'table.sf-info{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;}table.sf-info td{border:1px solid #999;padding:5px 8px;text-align:left;}'
+        +'table.sf-info td.ol{white-space:pre-wrap;line-height:1.6;}'
+        +'@media print{@page{size:A4;margin:12mm;}}';
+    w.document.write('<html><head><meta charset="utf-8"><title>教育訓練紀錄表</title><style>'+css+'</style></head><body>'+html
+        +'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},150);};</scr'+'ipt></body></html>');
+    w.document.close();
 }
 
 /* ---------- CSV ---------- */

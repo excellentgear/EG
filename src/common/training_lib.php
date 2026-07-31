@@ -10,7 +10,10 @@
  *       status            planned=計畫中 / scheduled=已排定(確認開課,可印簽到表) / done=已完成 / cancelled=取消
  *   - KPI 達成率(場次口徑)：den=當月計畫場次(排除取消；已排定仍算分母)；num=當月已完成(done)場次
  *     （取消是否計入分母可由參數 include_cancelled 控制）
+ *   - 對象部門為**複選**（training_session_dept），每個被列入的部門都認定有做這場訓練；
+ *     達標統計以「顯示單位」為準（部門合併群組 training_dept_group，未分組部門自成一單位）。
  */
+include_once __DIR__ . '/attach_lib.php';   // 附件根路徑（鐵律5：只存檔名、路徑即時組）
 
 /* ============================================================
  * Schema
@@ -131,6 +134,56 @@ function training_ensure_schema(PDO $db): void {
         KEY idx_status (status)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練場次附件(簽到表/教材/試卷)'");
 
+    // 類別可複選（逗號分隔，如 'sign,exam'）→ 原 VARCHAR(16) 不夠長
+    try { $db->exec("ALTER TABLE training_attachment MODIFY COLUMN cat VARCHAR(80) NOT NULL DEFAULT 'other'
+                     COMMENT '類別可複選,逗號分隔 sign/material/exam/photo/other'"); } catch (Throwable $e) {}
+
+    // 對象部門（複選）：一場訓練可同時屬於多個部門，每個部門都認定「有做這場教育訓練」。
+    // training_session.dept_id 保留＝主部門(第一個)，供既有清單/KPI 相容；判定達標一律用本表。
+    $db->exec("CREATE TABLE IF NOT EXISTS training_session_dept (
+        session_id INT NOT NULL,
+        dept_id INT NOT NULL,
+        PRIMARY KEY (session_id, dept_id),
+        KEY idx_dept (dept_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練場次對象部門(複選)'");
+    // 舊資料一次性回填（用旗標擋住，否則使用者事後把部門拿掉會被再塞回來）
+    try {
+        $done = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='training_dept_backfilled'")->fetchColumn();
+        if (!$done) {
+            $db->exec("INSERT IGNORE INTO training_session_dept (session_id, dept_id)
+                       SELECT session_id, dept_id FROM training_session WHERE dept_id IS NOT NULL");
+            $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('training_dept_backfilled','1')
+                          ON DUPLICATE KEY UPDATE setting_value='1'")->execute();
+        }
+    } catch (Throwable $e) {}
+
+    // 部門合併顯示群組（子部門併入母部門一起算達標）；一個部門只能屬於一個群組(PK 保證不重複計算)
+    $db->exec("CREATE TABLE IF NOT EXISTS training_dept_group (
+        group_id INT AUTO_INCREMENT PRIMARY KEY,
+        group_name VARCHAR(50) NOT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練達標統計的部門合併群組'");
+    $db->exec("CREATE TABLE IF NOT EXISTS training_dept_group_member (
+        dept_id INT NOT NULL PRIMARY KEY,
+        group_id INT NOT NULL,
+        KEY idx_group (group_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='部門合併群組成員(一個部門只能屬一個群組)'");
+
+    // 訓練次數目標：unit_key = 'ALL'(全公司統一預設) / 'D<dept_id>' / 'G<group_id>'
+    $db->exec("CREATE TABLE IF NOT EXISTS training_target (
+        target_id INT AUTO_INCREMENT PRIMARY KEY,
+        year INT NOT NULL,
+        unit_key VARCHAR(20) NOT NULL COMMENT 'ALL=全公司統一 / D部門id / G群組id',
+        internal_period VARCHAR(5) NOT NULL DEFAULT 'year' COMMENT 'month=每月 year=每年',
+        internal_times INT NOT NULL DEFAULT 0 COMMENT '內訓次數目標',
+        external_period VARCHAR(5) NOT NULL DEFAULT 'year',
+        external_times INT NOT NULL DEFAULT 0 COMMENT '外訓次數目標',
+        updated_at DATETIME NULL,
+        updated_by VARCHAR(50) NULL,
+        UNIQUE KEY uq_year_unit (year, unit_key)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練次數目標(內訓/外訓,每月或每年)'");
+
     foreach ([['training_view','訓練檢閱'],['training_edit','訓練登錄'],['training_admin','訓練管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='training' LIMIT 1");
         $st->execute([$r[0]]);
@@ -243,18 +296,13 @@ const TRAINING_ATT_CATS = ['sign'=>'簽到表', 'material'=>'教材/講義', 'ex
 /* 評鑑方式（確認開課時選定）；notice=宣導＝免評鑑，選了它參加人員一律記 exempt */
 const TRAINING_EVAL_METHODS = ['exam'=>'試券', 'report'=>'心得', 'practice'=>'實作', 'oral'=>'口試', 'notice'=>'宣導（免評鑑）'];
 
-/** 回傳 [NAS實體路徑(寫檔用), URL前綴(瀏覽用)]，皆以 / 結尾 */
+/** 附件目錄（寫檔／讀檔皆用這支；預設＝全站附件根資料夾＼教育訓練＼，見 attach_lib.php） */
+function training_attach_dir(PDO $db): string {
+    return eg_attach_dir($db, 'training_nas_dir', '教育訓練');
+}
+/** 相容舊呼叫：回傳 [實體目錄, URL前綴]（附件一律走 API download_attach，URL 前綴已不使用） */
 function training_attach_dirs(PDO $db): array {
-    $nas = 'Z:/BOM/ERP/教育訓練/';
-    $url = '/nas/ERP/教育訓練/';
-    try {
-        $rows = $db->query("SELECT setting_key, setting_value FROM system_settings
-                            WHERE setting_key IN ('training_nas_dir','training_url_dir')")->fetchAll(PDO::FETCH_KEY_PAIR);
-        if (!empty($rows['training_nas_dir'])) $nas = trim($rows['training_nas_dir']);
-        if (!empty($rows['training_url_dir'])) $url = trim($rows['training_url_dir']);
-    } catch (Throwable $e) {}
-    if (!preg_match('#[/\\\\]$#', $nas)) $nas .= '/';
-    return [$nas, rtrim($url, '/') . '/'];
+    return [training_attach_dir($db), ''];
 }
 
 /** 某場次的正式附件（只回 active） */
@@ -274,11 +322,132 @@ function training_purge_temp_attachments(PDO $db): void {
         $rows = $db->query("SELECT att_id, file_name FROM training_attachment
                             WHERE status='temp' AND expire_at IS NOT NULL AND expire_at < NOW()")->fetchAll(PDO::FETCH_ASSOC);
         if (!$rows) return;
-        [$nas] = training_attach_dirs($db);
+        $nas = training_attach_dir($db);
         foreach ($rows as $r) { $fp = $nas . $r['file_name']; if (is_file($fp)) @unlink($fp); }
         $in = implode(',', array_map(fn($r) => (int)$r['att_id'], $rows));
         $db->exec("DELETE FROM training_attachment WHERE att_id IN ({$in})");
     } catch (Throwable $e) {}
+}
+
+/* ============================================================
+ * 對象部門（複選）／部門合併群組／訓練次數目標／達標統計
+ * ============================================================ */
+/** 某些場次的對象部門 map：session_id => [dept_id,...] */
+function training_session_depts(PDO $db, array $sids): array {
+    $sids = array_values(array_filter(array_map('intval', $sids)));
+    if (!$sids) return [];
+    $in = implode(',', $sids);
+    $map = [];
+    try {
+        foreach ($db->query("SELECT session_id, dept_id FROM training_session_dept WHERE session_id IN ({$in})")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $r) $map[(int)$r['session_id']][] = (int)$r['dept_id'];
+    } catch (Throwable $e) {}
+    return $map;
+}
+
+/** 整批覆寫某場次的對象部門（主表 dept_id 同步成第一個，維持既有相容） */
+function training_save_session_depts(PDO $db, int $sid, array $deptIds): void {
+    $deptIds = array_values(array_unique(array_filter(array_map('intval', $deptIds))));
+    $db->prepare("DELETE FROM training_session_dept WHERE session_id=?")->execute([$sid]);
+    if ($deptIds) {
+        $ins = $db->prepare("INSERT IGNORE INTO training_session_dept (session_id, dept_id) VALUES (?,?)");
+        foreach ($deptIds as $d) $ins->execute([$sid, $d]);
+    }
+    $db->prepare("UPDATE training_session SET dept_id=? WHERE session_id=?")
+       ->execute([$deptIds ? $deptIds[0] : null, $sid]);
+}
+
+/** 部門合併群組（含成員） */
+function training_dept_groups(PDO $db): array {
+    try {
+        $gs = $db->query("SELECT group_id, group_name, sort_order FROM training_dept_group
+                          WHERE is_active=1 ORDER BY sort_order, group_id")->fetchAll(PDO::FETCH_ASSOC);
+        $mem = [];
+        foreach ($db->query("SELECT group_id, dept_id FROM training_dept_group_member")->fetchAll(PDO::FETCH_ASSOC) as $m)
+            $mem[(int)$m['group_id']][] = (int)$m['dept_id'];
+        foreach ($gs as &$g) $g['dept_ids'] = $mem[(int)$g['group_id']] ?? [];
+        return $gs;
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 達標統計的「顯示單位」：合併群組各算一個單位，沒被歸入群組的部門各自一個單位。
+ * 回傳 [['key'=>'G1'|'D5', 'name'=>..., 'dept_ids'=>[...]], ...]
+ */
+function training_units(PDO $db): array {
+    $units = [];
+    $inGroup = [];
+    foreach (training_dept_groups($db) as $g) {
+        foreach ($g['dept_ids'] as $d) $inGroup[$d] = true;
+        $units[] = ['key'=>'G'.$g['group_id'], 'name'=>$g['group_name'], 'dept_ids'=>$g['dept_ids'], 'is_group'=>1];
+    }
+    try {
+        foreach ($db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC) as $d) {
+            if (isset($inGroup[(int)$d['id']])) continue;
+            $units[] = ['key'=>'D'.$d['id'], 'name'=>$d['name'], 'dept_ids'=>[(int)$d['id']], 'is_group'=>0];
+        }
+    } catch (Throwable $e) {}
+    return $units;
+}
+
+/** 某年度的目標設定（unit_key => 設定列）；'ALL' 為未個別設定時的預設 */
+function training_targets(PDO $db, int $year): array {
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT * FROM training_target WHERE year=?");
+        $st->execute([$year]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[$r['unit_key']] = $r;
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/**
+ * 達標統計：每個顯示單位 × 每個月 × 內訓/外訓 的完成數、排定數、目標與達標與否。
+ * 計入規則：場次的對象部門屬於該單位就計入；**未指定部門(全公司課程)計入所有單位**。
+ * 月份歸屬：已完成用實際開課日、其餘用計畫月份（看得出「哪個月已有計畫」）。
+ */
+function training_target_stats(PDO $db, int $year): array {
+    $units   = training_units($db);
+    $targets = training_targets($db, $year);
+    $def     = $targets['ALL'] ?? ['internal_period'=>'year','internal_times'=>0,'external_period'=>'year','external_times'=>0];
+
+    $rows = [];
+    try {
+        $st = $db->prepare("SELECT session_id, plan_month, course_name, train_type, status, done_date, dept_id
+                            FROM training_session WHERE year=? AND status<>'cancelled'");
+        $st->execute([$year]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {}
+    $deptMap = training_session_depts($db, array_column($rows, 'session_id'));
+
+    $out = [];
+    foreach ($units as $u) {
+        $mine = ['internal'=>[], 'external'=>[]];      // type => month => ['done'=>n,'plan'=>n,'items'=>[]]
+        for ($m = 1; $m <= 12; $m++) { $mine['internal'][$m] = ['done'=>0,'plan'=>0,'items'=>[]];
+                                       $mine['external'][$m] = ['done'=>0,'plan'=>0,'items'=>[]]; }
+        foreach ($rows as $r) {
+            $sid  = (int)$r['session_id'];
+            $ds   = $deptMap[$sid] ?? ($r['dept_id'] !== null ? [(int)$r['dept_id']] : []);
+            $hit  = !$ds;                                       // 沒指定部門＝全公司課程，每個單位都算
+            if (!$hit) foreach ($ds as $d) if (in_array($d, $u['dept_ids'], true)) { $hit = true; break; }
+            if (!$hit) continue;
+            $type = $r['train_type'] === 'external' ? 'external' : 'internal';
+            $mon  = (int)$r['plan_month'];
+            if ($r['status'] === 'done' && $r['done_date']) $mon = (int)substr($r['done_date'], 5, 2);
+            if ($mon < 1 || $mon > 12) $mon = (int)$r['plan_month'];
+            if ($r['status'] === 'done') $mine[$type][$mon]['done']++; else $mine[$type][$mon]['plan']++;
+            $mine[$type][$mon]['items'][] = ['session_id'=>$sid, 'course_name'=>$r['course_name'], 'status'=>$r['status'],
+                                             'company_wide'=>$ds ? 0 : 1];
+        }
+        $t = $targets[$u['key']] ?? $def;
+        $sum = ['internal'=>0, 'external'=>0];
+        foreach (['internal','external'] as $ty) for ($m = 1; $m <= 12; $m++) $sum[$ty] += $mine[$ty][$m]['done'];
+        $out[] = ['unit'=>$u, 'months'=>$mine, 'year_done'=>$sum,
+                  'target'=>['internal_period'=>$t['internal_period'], 'internal_times'=>(int)$t['internal_times'],
+                             'external_period'=>$t['external_period'], 'external_times'=>(int)$t['external_times'],
+                             'is_default'=>isset($targets[$u['key']]) ? 0 : 1]];
+    }
+    return $out;
 }
 
 /* ============================================================
@@ -369,10 +538,16 @@ function training_event_sync(PDO $db, int $sid): int {
             $db->prepare("INSERT INTO evenement (title, category_id, start, end, allday, remark) VALUES (?,?,?,?,?,?)")
                ->execute([$title, $catId, $d['day_date'] . ' ' . $startT . ':00', $d['day_date'] . ' ' . $endT . ':00', $allday, $remark]);
             $evId = (int)$db->lastInsertId();
-            if (!$ext && $s['trainer_id']) {
-                try { $db->prepare("INSERT INTO evenement_actor (event_id, user_id, created_at) VALUES (?,?,NOW())")
-                         ->execute([$evId, (int)$s['trainer_id']]); } catch (Throwable $e) {}
-            }
+            // 事件發生者：內訓＝講師＋參加人員；外訓＝只有參加人員（外部講師不是本公司員工）
+            try {
+                $actors = [];
+                if (!$ext && $s['trainer_id']) $actors[] = (int)$s['trainer_id'];
+                $aq = $db->prepare("SELECT user_id FROM training_attendee WHERE session_id=? AND user_id>0");
+                $aq->execute([$sid]);
+                foreach ($aq->fetchAll(PDO::FETCH_COLUMN) as $au) $actors[] = (int)$au;
+                $ins = $db->prepare("INSERT INTO evenement_actor (event_id, user_id, created_at) VALUES (?,?,NOW())");
+                foreach (array_values(array_unique(array_filter($actors))) as $au) $ins->execute([$evId, $au]);
+            } catch (Throwable $e) {}
             training_event_set_targets($db, $evId);
             $db->prepare("UPDATE training_session_day SET evenement_id=? WHERE day_id=?")->execute([$evId, $d['day_id']]);
             $done++;

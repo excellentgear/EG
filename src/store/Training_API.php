@@ -62,12 +62,13 @@ case 'meta': {
     try { $cats = $db->query("SELECT id, category_name, color FROM event_category ORDER BY category_name")->fetchAll(PDO::FETCH_ASSOC); }
     catch (Throwable $e) {}
     training_purge_temp_attachments($db);      // 懶惰清除過期暫存附件
-    [$nasDir, $urlDir] = training_attach_dirs($db);
     jout(['perms'=>$perms, 'departments'=>$depts, 'years'=>$years, 'locations'=>tr_locations($db),
           'shifts'=>training_shifts($db), 'settings'=>training_settings($db), 'event_categories'=>$cats,
           'cat_internal_eff'=>training_category_id($db, 'internal'), 'cat_external_eff'=>training_category_id($db, 'external'),
           'att_cats'=>TRAINING_ATT_CATS, 'eval_methods'=>TRAINING_EVAL_METHODS,
-          'attach_nas_dir'=>$perms['canAdmin'] ? $nasDir : null, 'attach_url_dir'=>$perms['canAdmin'] ? $urlDir : null,
+          'dept_groups'=>training_dept_groups($db), 'units'=>training_units($db),
+          'attach_nas_dir'=>$perms['canAdmin'] ? training_attach_dir($db) : null,
+          'attach_root'=>$perms['canAdmin'] ? eg_attach_root($db) : null,
           'cur_year'=>$cy, 'cur_month'=>(int)date('n'), 'today'=>date('Y-m-d')]);
 }
 
@@ -117,8 +118,10 @@ case 'upload_attach': {
         $st->execute([$sid]);
         if (!$st->fetchColumn()) jerr('找不到場次');
     }
-    $cat = (string)($_POST['cat'] ?? 'other');
-    if (!isset(TRAINING_ATT_CATS[$cat])) $cat = 'other';
+    // 類別可複選（同一份掃描 PDF 可能同時是簽到表＋試卷），存逗號分隔
+    $cats = array_values(array_filter(array_map('trim', explode(',', (string)($_POST['cat'] ?? ''))),
+                                      fn($c) => isset(TRAINING_ATT_CATS[$c])));
+    $cat = $cats ? implode(',', array_unique($cats)) : 'other';
     if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
         $err = $_FILES['file']['error'] ?? -1;
         jerr($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE
@@ -129,8 +132,8 @@ case 'upload_attach': {
     $allow = ['pdf','jpg','jpeg','png','gif','webp','bmp','tif','tiff','doc','docx','xls','xlsx','ppt','pptx','txt','csv','zip'];
     if (!in_array($ext, $allow, true)) jerr('不支援的檔案類型「'.$ext.'」（可上傳：'.implode('、', $allow).'）');
     if ((int)$_FILES['file']['size'] > 50 * 1024 * 1024) jerr('單檔上限 50MB');
-    [$nasDir, $urlDir] = training_attach_dirs($db);
-    if (!is_dir($nasDir) && !@mkdir($nasDir, 0777, true)) jerr('無法建立附件目錄，請確認「模組設定」的附件路徑：'.$nasDir, 500);
+    $nasDir = training_attach_dir($db);
+    if (!eg_attach_ensure_dir($nasDir)) jerr('無法建立附件目錄，請確認「模組設定」的附件路徑（含網路磁碟權限）：'.$nasDir, 500);
     $fname = date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ext;
     if (!move_uploaded_file($_FILES['file']['tmp_name'], $nasDir . $fname)) jerr('檔案寫入失敗（路徑：'.$nasDir.'）', 500);
     try {
@@ -145,7 +148,7 @@ case 'upload_attach': {
         }
     } catch (Throwable $e) { @unlink($nasDir . $fname); jerr('附件登錄失敗：'.$e->getMessage(), 500); }
     jout(['att_id'=>(int)$db->lastInsertId(), 'file_name'=>$fname, 'original_name'=>$orig,
-          'cat'=>$cat, 'file_size'=>(int)$_FILES['file']['size'], 'url'=>$urlDir . $fname]);
+          'cat'=>$cat, 'file_size'=>(int)$_FILES['file']['size']]);
 }
 
 case 'del_attach': {
@@ -157,7 +160,7 @@ case 'del_attach': {
     if (!$a) jerr('找不到附件');
     if ($a['status'] === 'temp' && (int)$a['user_id'] !== $uid) jerr('暫存附件僅上傳者本人可刪', 403);
     $db->prepare("DELETE FROM training_attachment WHERE att_id=?")->execute([$aid]);
-    [$nasDir] = training_attach_dirs($db);
+    $nasDir = training_attach_dir($db);
     $fp = $nasDir . $a['file_name'];
     if (is_file($fp)) @unlink($fp);
     jout([]);
@@ -170,7 +173,7 @@ case 'download_attach': {
     $st->execute([$aid]);
     $a = $st->fetch(PDO::FETCH_ASSOC);
     if (!$a) jerr('找不到附件');
-    [$nasDir] = training_attach_dirs($db);
+    $nasDir = training_attach_dir($db);
     $fp = $nasDir . $a['file_name'];
     if (!is_file($fp)) jerr('檔案不存在（可能已被移動或附件路徑設定已變更）：'.$a['file_name'], 404);
     $ext = strtolower(pathinfo($a['file_name'], PATHINFO_EXTENSION));
@@ -189,17 +192,105 @@ case 'download_attach': {
 case 'save_attach_path': {
     if (!$perms['canAdmin']) jerr('無管理權限（附件路徑限訓練管理員）', 403);
     $nasDir = trim((string)($_POST['nas_dir'] ?? ''));
-    $urlDir = trim((string)($_POST['url_dir'] ?? ''));
-    if ($nasDir === '' || $urlDir === '') jerr('NAS 路徑與 URL 前綴皆不可為空');
+    if ($nasDir === '') jerr('附件儲存路徑不可為空（要恢復預設請填全站根路徑＋\\教育訓練）');
     try {
-        $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by) VALUES (?,?,?,?)
-                            ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value),
-                                updated_by_id=VALUES(updated_by_id), updated_by=VALUES(updated_by)");
-        $st->execute(['training_nas_dir', $nasDir, $uid, $uname]);
-        $st->execute(['training_url_dir', $urlDir, $uid, $uname]);
+        $db->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by) VALUES (?,?,?,?)
+                      ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value),
+                          updated_by_id=VALUES(updated_by_id), updated_by=VALUES(updated_by)")
+           ->execute(['training_nas_dir', $nasDir, $uid, $uname]);
     } catch (Throwable $e) { jerr('路徑儲存失敗：'.$e->getMessage(), 500); }
-    [$n, $u2] = training_attach_dirs($db);
-    jout(['attach_nas_dir'=>$n, 'attach_url_dir'=>$u2]);
+    jout(['attach_nas_dir'=>training_attach_dir($db)]);
+}
+
+/* ---------- 部門合併群組（達標統計的顯示單位）：限訓練管理員 ---------- */
+case 'save_dept_groups': {
+    if (!$perms['canAdmin']) jerr('無管理權限（部門合併設定限訓練管理員）', 403);
+    $groups = json_decode((string)($_POST['groups'] ?? '[]'), true);
+    if (!is_array($groups)) jerr('資料格式不正確');
+    try {
+        $db->beginTransaction();
+        $db->exec("DELETE FROM training_dept_group_member");
+        $db->exec("UPDATE training_dept_group SET is_active=0");
+        $ins  = $db->prepare("INSERT INTO training_dept_group (group_id, group_name, sort_order, is_active) VALUES (?,?,?,1)
+                              ON DUPLICATE KEY UPDATE group_name=VALUES(group_name), sort_order=VALUES(sort_order), is_active=1");
+        $ins2 = $db->prepare("INSERT INTO training_dept_group (group_name, sort_order, is_active) VALUES (?,?,1)");
+        $mem  = $db->prepare("INSERT IGNORE INTO training_dept_group_member (dept_id, group_id) VALUES (?,?)");
+        $i = 0;
+        foreach ($groups as $g) {
+            $name = trim((string)($g['group_name'] ?? ''));
+            $ids  = array_values(array_unique(array_filter(array_map('intval', $g['dept_ids'] ?? []))));
+            if ($name === '' || !$ids) continue;              // 沒名字或沒成員的群組直接不留
+            $gid = (int)($g['group_id'] ?? 0);
+            if ($gid > 0) { $ins->execute([$gid, $name, $i]); }
+            else { $ins2->execute([$name, $i]); $gid = (int)$db->lastInsertId(); }
+            foreach ($ids as $d) $mem->execute([$d, $gid]);
+            $i++;
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('合併設定儲存失敗：'.$e->getMessage(), 500); }
+    jout(['dept_groups'=>training_dept_groups($db), 'units'=>training_units($db)]);
+}
+
+/* ---------- 訓練次數目標（每月/每年 × 內訓/外訓，可全公司統一或逐單位）：限訓練管理員 ---------- */
+case 'save_targets': {
+    if (!$perms['canAdmin']) jerr('無管理權限（目標設定限訓練管理員）', 403);
+    $year = (int)($_POST['year'] ?? date('Y'));
+    $list = json_decode((string)($_POST['targets'] ?? '[]'), true);
+    if (!is_array($list)) jerr('資料格式不正確');
+    try {
+        $db->beginTransaction();
+        $up = $db->prepare("INSERT INTO training_target (year, unit_key, internal_period, internal_times, external_period, external_times, updated_at, updated_by)
+                            VALUES (?,?,?,?,?,?,NOW(),?)
+                            ON DUPLICATE KEY UPDATE internal_period=VALUES(internal_period), internal_times=VALUES(internal_times),
+                                external_period=VALUES(external_period), external_times=VALUES(external_times),
+                                updated_at=NOW(), updated_by=VALUES(updated_by)");
+        $del = $db->prepare("DELETE FROM training_target WHERE year=? AND unit_key=?");
+        foreach ($list as $t) {
+            $key = trim((string)($t['unit_key'] ?? ''));
+            if ($key === '' || !preg_match('/^(ALL|[DG]\d+)$/', $key)) continue;
+            if (!empty($t['use_default']) && $key !== 'ALL') { $del->execute([$year, $key]); continue; }  // 改回套用統一預設
+            $ip = ($t['internal_period'] ?? 'year') === 'month' ? 'month' : 'year';
+            $ep = ($t['external_period'] ?? 'year') === 'month' ? 'month' : 'year';
+            $it = max(0, (int)($t['internal_times'] ?? 0));
+            $et = max(0, (int)($t['external_times'] ?? 0));
+            if ($it > 999 || $et > 999) jerr('次數上限 999');
+            $up->execute([$year, $key, $ip, $it, $ep, $et, $uname]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('目標儲存失敗：'.$e->getMessage(), 500); }
+    jout(['targets'=>training_targets($db, $year)]);
+}
+
+/* 達標狀況（依顯示單位 × 月份 × 內外訓） */
+case 'target_stats': {
+    $year = (int)($_GET['year'] ?? date('Y'));
+    jout(['year'=>$year, 'stats'=>training_target_stats($db, $year), 'targets'=>training_targets($db, $year),
+          'units'=>training_units($db)]);
+}
+
+/* 單一場次完整內容（清單展開／檢視畫面用）：場次＋上課日＋參加人員(含評鑑)＋附件 */
+case 'session_detail': {
+    $sid = (int)($_GET['session_id'] ?? 0);
+    $st = $db->prepare("SELECT s.*, d.name AS dept_name FROM training_session s
+                        LEFT JOIN department d ON d.id=s.dept_id WHERE s.session_id=?");
+    $st->execute([$sid]);
+    $s = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$s) jerr('找不到場次');
+    $dq = $db->prepare("SELECT day_no, day_date, start_time, end_time, break_minutes, hours FROM training_session_day
+                        WHERE session_id=? ORDER BY day_no, day_date");
+    $dq->execute([$sid]);
+    $aq = $db->prepare("SELECT user_id, user_name, dept_name, position_name, attended, signed, eval_result, eval_score, eval_note
+                        FROM training_attendee WHERE session_id=? ORDER BY dept_name, user_name");
+    $aq->execute([$sid]);
+    $deptIds = training_session_depts($db, [$sid])[$sid] ?? [];
+    $dnames = [];
+    if ($deptIds) {
+        $in = implode(',', $deptIds);
+        $dnames = $db->query("SELECT name FROM department WHERE id IN ({$in}) ORDER BY sort_order, id")->fetchAll(PDO::FETCH_COLUMN);
+    }
+    jout(['session'=>$s, 'dept_ids'=>$deptIds, 'dept_names'=>$dnames,
+          'days'=>$dq->fetchAll(PDO::FETCH_ASSOC), 'attendees'=>$aq->fetchAll(PDO::FETCH_ASSOC),
+          'attachments'=>training_attachments($db, $sid)]);
 }
 
 /* ---------- 上課地點主檔（設定後可下拉選擇） ---------- */
@@ -257,13 +348,36 @@ case 'list': {
         $aq->execute([$year]);
         foreach ($aq->fetchAll(PDO::FETCH_ASSOC) as $a) $attMap[(int)$a['session_id']] = (int)$a['c'];
     } catch (Throwable $e) {}
+    // 各場次評鑑統計（清單顯示合格狀態）
+    $evMap = [];
+    try {
+        $eq = $db->prepare("SELECT a.session_id,
+                                   SUM(a.eval_result='pass') p, SUM(a.eval_result='fail') f,
+                                   SUM(a.eval_result='exempt') x, SUM(a.eval_result IS NULL OR a.eval_result='') n
+                            FROM training_attendee a JOIN training_session s ON s.session_id=a.session_id
+                            WHERE s.year=? GROUP BY a.session_id");
+        $eq->execute([$year]);
+        foreach ($eq->fetchAll(PDO::FETCH_ASSOC) as $e)
+            $evMap[(int)$e['session_id']] = ['pass'=>(int)$e['p'], 'fail'=>(int)$e['f'], 'exempt'=>(int)$e['x'], 'none'=>(int)$e['n']];
+    } catch (Throwable $e) {}
+    // 對象部門（複選）
+    $sq = $db->prepare("SELECT sd.session_id, sd.dept_id FROM training_session_dept sd
+                        JOIN training_session s ON s.session_id=sd.session_id WHERE s.year=?");
+    $sq->execute([$year]);
+    $sdMap = [];
+    foreach ($sq->fetchAll(PDO::FETCH_ASSOC) as $d) $sdMap[(int)$d['session_id']][] = (int)$d['dept_id'];
+
     $rows = [];
     $summary = [];
     for ($m = 1; $m <= 12; $m++) $summary[$m] = ['den'=>0, 'num'=>0];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $r['dept_name'] = $r['dept_id'] !== null ? ($deptMap[(int)$r['dept_id']] ?? '') : '全公司';
-        $r['days'] = $dayMap[(int)$r['session_id']] ?? [];
-        $r['attach_count'] = $attMap[(int)$r['session_id']] ?? 0;
+        $sid = (int)$r['session_id'];
+        $r['dept_ids'] = $sdMap[$sid] ?? ($r['dept_id'] !== null ? [(int)$r['dept_id']] : []);
+        $r['dept_name'] = $r['dept_ids']
+            ? implode('、', array_map(fn($d) => $deptMap[$d] ?? '', $r['dept_ids'])) : '全公司';
+        $r['days'] = $dayMap[$sid] ?? [];
+        $r['attach_count'] = $attMap[$sid] ?? 0;
+        $r['eval'] = $evMap[$sid] ?? ['pass'=>0,'fail'=>0,'exempt'=>0,'none'=>0];
         $rows[] = $r;
         $m = (int)$r['plan_month'];
         if ($r['status'] !== 'cancelled') $summary[$m]['den']++;
@@ -283,12 +397,24 @@ case 'list': {
 case 'save_session': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $sid = (int)($_POST['session_id'] ?? 0);
+    // 已排定/已完成的場次＝計畫已定案，只有訓練管理員能再改計畫內容（避免事後動到已成立的紀錄）
+    if ($sid > 0) {
+        $st = $db->prepare("SELECT status FROM training_session WHERE session_id=?");
+        $st->execute([$sid]);
+        $curSt = $st->fetchColumn();
+        if ($curSt === false) jerr('找不到場次');
+        if (in_array($curSt, ['scheduled','done'], true) && !$perms['canAdmin'])
+            jerr('此場次已「'.($curSt === 'done' ? '完成' : '排定開課').'」，計畫內容僅訓練管理員可修改；如需改期請用「實行資料」或先退回計畫中', 403);
+    }
     $year = (int)($_POST['year'] ?? 0);
     $month = (int)($_POST['plan_month'] ?? 0);
     $course = trim((string)($_POST['course_name'] ?? ''));
     if ($year < 2000 || $month < 1 || $month > 12) jerr('請選擇有效年月');
     if ($course === '') jerr('請填課程名稱');
-    $deptId = ($_POST['dept_id'] ?? '') === '' ? null : (int)$_POST['dept_id'];
+    // 對象部門複選（dept_ids）；相容舊呼叫的單一 dept_id
+    $deptIds = array_values(array_unique(array_filter(array_map('intval',
+        explode(',', (string)($_POST['dept_ids'] ?? ($_POST['dept_id'] ?? '')))))));
+    $deptId = $deptIds ? $deptIds[0] : null;
     $trainType = ($_POST['train_type'] ?? '') === 'external' ? 'external' : 'internal';
     $trainer = trim((string)($_POST['trainer'] ?? '')) ?: null;      // 內訓講師姓名
     $trainerId = ($_POST['trainer_id'] ?? '') === '' ? null : (int)$_POST['trainer_id'];
@@ -313,6 +439,7 @@ case 'save_session': {
                ->execute([$year,$month,$deptId,$course,$trainType,$trainer,$trainerId,$orgUnit,$hours,$planDays,$note,$uid,$uname]);
             $sid = (int)$db->lastInsertId();
         }
+        training_save_session_depts($db, $sid, $deptIds);      // 對象部門複選（同步主表 dept_id）
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout(['session_id'=>$sid]);
@@ -503,7 +630,9 @@ case 'save_attendees': {
            ->execute([$total, $att, $sid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存名單失敗：'.$e->getMessage(), 500); }
-    jout(['total'=>$total]);
+    // 行事曆事件的「發生者」＝內訓：講師＋參加人員／外訓：參加人員 → 名單改了要重寫一次
+    $ev = training_event_sync($db, $sid);
+    jout(['total'=>$total, 'events'=>$ev]);
 }
 
 /* 某位員工的受訓紀錄（供其他頁面查詢：員工資料、稽核佐證…）
@@ -533,6 +662,7 @@ case 'copy_session': {
                       $s['trainer_id'],$s['org_unit'],$s['hours'],$s['plan_days'],$s['note'],
                       $s['outline'] ?? null, $s['eval_method'] ?? null, $uid,$uname]);
         $newId = (int)$db->lastInsertId();
+        training_save_session_depts($db, $newId, training_session_depts($db, [$sid])[$sid] ?? []);   // 對象部門一併複製
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('複製失敗：'.$e->getMessage(), 500); }
     jout(['session_id'=>$newId]);
@@ -553,11 +683,12 @@ case 'delete_session': {
         $db->prepare("DELETE FROM training_attachment WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_attendee WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_session_day WHERE session_id=?")->execute([$sid]);
+        $db->prepare("DELETE FROM training_session_dept WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_session WHERE session_id=?")->execute([$sid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：'.$e->getMessage(), 500); }
     if ($attFiles) {
-        [$nasDir] = training_attach_dirs($db);
+        $nasDir = training_attach_dir($db);
         foreach ($attFiles as $fn) { $fp = $nasDir . $fn; if (is_file($fp)) @unlink($fp); }
     }
     jout([]);
