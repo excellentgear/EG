@@ -3530,15 +3530,23 @@ function renderViewPanel(q, contact, detail) {
         const desc = [leftSpec, it.process_names, it.specification].filter(Boolean).join(' / ');
         const descHtml = esc(desc);
         if (isTiered && it.tiers && it.tiers.length) {
+            // 比照列印版：每階顯示「數量區間｜單位｜單價」，金額不顯示（依訂購量另計）
+            const rangeTxt = t => {
+                const mn = fmtNum(Math.round(Number(t.qty_min || 0)));
+                return (t.qty_max === null || t.qty_max === undefined || t.qty_max === '')
+                    ? `${mn}以上` : `${mn}~${fmtNum(Math.round(Number(t.qty_max)))}`;
+            };
+            const tolTxt = t => (t.tolerance_value === null || t.tolerance_value === undefined || t.tolerance_value === '')
+                ? '' : `<div style="font-size:10px;color:#a06a1f;">容差±${fmtNum(t.tolerance_value)}${esc(t.tolerance_unit || '')}${t.tolerance_note ? '｜' + esc(t.tolerance_note) : ''}</div>`;
             it.tiers.forEach((t, ti) => {
                 itemsHtml += `<tr>
                     ${ti===0 ? `<td rowspan="${it.tiers.length}" style="vertical-align:middle;text-align:center;">${i+1}</td>
                         <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:12px;">${qlDrawingSpan(it.product_id)}</td>
-                        <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:11px;">${descHtml}</td>` : ''}
-                    <td class="text-right">${esc(t.qty_min)}+</td>
+                        <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:11px;">${descHtml}<div style="font-size:10px;color:#888;">（階梯報價，單價依訂購數量區間）</div></td>` : ''}
+                    <td class="text-right" style="white-space:nowrap;">${rangeTxt(t)}${tolTxt(t)}</td>
                     <td class="text-center">${esc(it.unit||'PCS')}</td>
                     <td class="text-right">${negLabel}${fmtNum(t.unit_price)}</td>
-                    <td class="text-right">${fmtNum(t.amount)}</td>
+                    <td></td>
                 </tr>`;
             });
         } else {
@@ -4852,10 +4860,8 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
                     + `
                     <td class="right">${rangeTxt(t)}${uniformTol ? '' : tolTxt(t)}</td>
                     <td class="center">${esc(unit)}</td>
-                    <td class="right">${negoTag}${fmtNum(t.unit_price || 0)}</td>`
-                    + (ti === 0 ? `
-                    <td rowspan="${n}"></td>` : '')
-                    + `
+                    <td class="right">${negoTag}${fmtNum(t.unit_price || 0)}</td>
+                    <td></td>
                 </tr>`;
             });
         } else {
