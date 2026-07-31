@@ -96,8 +96,11 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
         .src-pill { display:inline-block; font-size:11px; border-radius:10px; padding:1px 8px; }
         .src-part { background:#F7E0BD; color:#7a5217; }
         .src-quote { background:#FFF3E2; color:#C77C1A; border:1px solid #E4D3BC; }
-        .cat-pill { display:inline-block; font-size:11px; background:#FDF3E0; color:#8A5A2B; border:1px solid #EADFC8;
+        .cat-pill { display:inline-block; font-size:11px; border:1px solid rgba(122,82,23,.25);
             border-radius:10px; padding:1px 8px; margin:1px 2px; }
+        .cat-btn { height:26px; font-size:12px; padding:0 12px; border:1px solid rgba(122,82,23,.3);
+            border-radius:13px; cursor:pointer; opacity:.55; }
+        .cat-btn.active { opacity:1; box-shadow:0 0 0 2px #8A5A2B inset; font-weight:bold; }
         .xd-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
         .xd-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
@@ -140,6 +143,7 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
                 <button type="button" id="modeAll" title="列出所有掛了外來文件附件的料號">所有有附件的料號</button>
             </span>
             <label>客戶</label>
+            <input type="text" id="custKw" placeholder="ID/名稱模糊搜尋" style="height:30px;width:130px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;font-size:13px;">
             <select id="custSel"><option value="">全部客戶</option></select>
             <label>年度</label>
             <select id="yearSel"><option value="">全部年度</option></select>
@@ -155,6 +159,10 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
         <div class="xd-asdoc" id="asDocBar">AS 文件編號：<b id="asDocNo">尚未綁定</b>
             <span id="issueUnitBar" style="margin-left:14px;">發行單位：<b id="issueUnit">—</b></span></div>
 
+        <div id="catFilterBar" style="display:none;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:8px;font-size:13px;color:#5b3a1e;">
+            <span>類別：</span>
+        </div>
+
         <div class="xd-pagebar">
             <span id="totalInfo">共 0 筆</span>
             <label style="margin-left:8px;">每頁</label>
@@ -167,10 +175,10 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
         <div class="xd-table-wrap">
             <table class="xd-table" id="xdTable">
                 <thead><tr>
-                    <th>客戶</th><th>料號</th><th>文件名稱</th><th>外來文件類別</th>
+                    <th>客戶</th><th>料號</th><th>外來文件類別</th>
                     <th>發行日期</th><th>發行單位</th><th>來源</th>
                 </tr></thead>
-                <tbody id="xdBody"><tr><td colspan="7" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="xdBody"><tr><td colspan="6" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
@@ -227,6 +235,18 @@ $(document).ready(function(){
 var API = '../../src/store/ExternalDoc_API.php';
 var canView = <?= $canView ? 'true' : 'false' ?>;
 var MODE = 'bound', PAGE = 1, TOTAL = 0, AS_DOC = null, AS_DOCS = [], ISSUE_UNIT = '';
+var CAT = 0, CATS = [], CAT_COLOR = {}, COMPANY = '', CUSTOMERS = [];
+
+// 類別固定調色盤（暖色系，依 ai-rules/10；同類別同色，列表/篩選鈕/列印一致）
+var CAT_PALETTE = [
+    ['#F7E0BD','#6b4a1c'], ['#F0A24B','#ffffff'], ['#E07856','#ffffff'], ['#C77C1A','#ffffff'],
+    ['#F5C6A5','#7a4a1e'], ['#B85C38','#ffffff'], ['#9C6B3F','#ffffff'], ['#EAD3A2','#6b4a1c']
+];
+function catColor(cid){ return CAT_COLOR[cid] || CAT_PALETTE[0]; }
+function catPill(cid, name){
+    var c = catColor(cid);
+    return '<span class="cat-pill" style="background:'+c[0]+';color:'+c[1]+';">'+esc(name)+'</span>';
+}
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -234,24 +254,73 @@ function closeMask(id){ document.getElementById(id).style.display='none'; }
 function openMask(id){ document.getElementById(id).style.display='block'; }
 
 function filters(){
-    return { mode: MODE, customer_id: $('#custSel').val()||'', year: $('#yearSel').val()||0 };
+    return { mode: MODE, customer_id: $('#custSel').val()||'', year: $('#yearSel').val()||0, category: CAT };
 }
+
+function renderCustOptions(kw){
+    kw = (kw||'').toLowerCase();
+    var cur = $('#custSel').val();
+    var $s = $('#custSel').empty().append('<option value="">全部客戶</option>');
+    var hits = [];
+    CUSTOMERS.forEach(function(c){
+        if (kw && (c.customer_id+' '+c.customer).toLowerCase().indexOf(kw) === -1) return;
+        hits.push(c.customer_id);
+        $s.append('<option value="'+esc(c.customer_id)+'">'+esc(c.customer_id)+'　'+esc(c.customer)+'</option>');
+    });
+    // 原選擇仍在候選中就保留；模糊搜尋剛好剩一家＝直接選定
+    if (cur && hits.indexOf(cur) !== -1) $s.val(cur);
+    else if (kw && hits.length === 1) $s.val(hits[0]);
+    else $s.val('');
+}
+
+function renderCatBar(){
+    var $bar = $('#catFilterBar');
+    if (!CATS.length){ $bar.hide(); return; }
+    $bar.find('.cat-btn').remove();
+    var mk = function(id, name){
+        var c = id ? catColor(id) : ['#fff','#5b3a1e'];
+        return '<button type="button" class="cat-btn'+(CAT===id?' active':'')+'" data-cid="'+id+'"'
+             + ' style="background:'+c[0]+';color:'+c[1]+';">'+esc(name)+'</button>';
+    };
+    var h = mk(0, '全部');
+    CATS.forEach(function(c){ h += mk(c.id, c.name); });
+    $bar.append(h).css('display','flex');
+}
+$(document).on('click', '#catFilterBar .cat-btn', function(){
+    CAT = parseInt($(this).data('cid'))||0;
+    renderCatBar(); PAGE = 1; loadList();
+});
 
 function loadOptions(){
     $.post(API, {action:'get_options'}, function(res){
         if (!res.success) return;
-        (res.customers||[]).forEach(function(c){
-            $('#custSel').append('<option value="'+esc(c.customer_id)+'">'+esc(c.customer)+'</option>');
-        });
+        CUSTOMERS = res.customers||[];
+        renderCustOptions('');
         (res.years||[]).forEach(function(y){
             $('#yearSel').append('<option value="'+y+'">'+y+' 年</option>');
         });
+        CATS = res.categories||[];
+        CAT_COLOR = {};
+        CATS.forEach(function(c, i){ CAT_COLOR[c.id] = CAT_PALETTE[i % CAT_PALETTE.length]; });
+        renderCatBar();
+        COMPANY = res.company_name||'';
         AS_DOCS = res.as_docs||[];
         renderAsDoc(res.as_doc);
         ISSUE_UNIT = res.issue_unit||'';
         $('#issueUnit').text(ISSUE_UNIT || '（未設定業務單位）');
+        loadList();   // 類別配色載好才畫列表，確保標籤顏色一致
     }, 'json');
 }
+var custKwT = null;
+$('#custKw').on('input', function(){
+    var kw = $(this).val();
+    clearTimeout(custKwT);
+    custKwT = setTimeout(function(){
+        var before = $('#custSel').val();
+        renderCustOptions(kw);
+        if ($('#custSel').val() !== before){ PAGE = 1; loadList(); }
+    }, 250);
+});
 
 function renderAsDoc(doc){
     AS_DOC = doc || null;
@@ -263,27 +332,26 @@ function loadList(){
     f.action = 'get_list';
     f.page = PAGE;
     f.per_page = parseInt($('#perPageSel').val())||10;
-    $('#xdBody').html('<tr><td colspan="7" style="padding:20px;color:#8a6d45;">載入中…</td></tr>');
+    $('#xdBody').html('<tr><td colspan="6" style="padding:20px;color:#8a6d45;">載入中…</td></tr>');
     $.post(API, f, function(res){
-        if (!res.success){ $('#xdBody').html('<tr><td colspan="7" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
+        if (!res.success){ $('#xdBody').html('<tr><td colspan="6" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
         TOTAL = res.total;
         ISSUE_UNIT = res.issue_unit||ISSUE_UNIT;
         $('#issueUnit').text(ISSUE_UNIT || '（未設定業務單位）');
         renderAsDoc(res.as_doc);
         var h = '';
         (res.rows||[]).forEach(function(r){
-            var cats = (r.categories||[]).map(function(c){ return '<span class="cat-pill">'+esc(c)+'</span>'; }).join('');
+            var cats = (r.categories||[]).map(function(c, i){ return catPill((r.category_ids||[])[i], c); }).join('');
             var src = r.source==='part' ? '<span class="src-pill src-part">料號附件</span>'
                     : '<span class="src-pill src-quote" title="報價單 '+esc(r.quote_no)+'">報價附件</span>';
             h += '<tr><td class="t-left">'+esc(r.customer_name)+'</td>'
-               + '<td class="t-left">'+esc(r.part_no)+'</td>'
-               + '<td class="t-left" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;" title="'+esc(r.doc_name)+'">'+esc(r.doc_name)+'</td>'
+               + '<td class="t-left" title="'+esc(r.doc_name)+'">'+esc(r.part_no)+'</td>'
                + '<td>'+(cats||'<span style="color:#c9bda9;">—</span>')+'</td>'
                + '<td>'+esc(r.doc_date)+'</td>'
                + '<td>'+esc(ISSUE_UNIT)+'</td>'
                + '<td>'+src+'</td></tr>';
         });
-        $('#xdBody').html(h || '<tr><td colspan="7" style="padding:20px;color:#8a6d45;">無符合條件的外來文件（先到附件類別標籤設定勾選「列入外來文件清單」）</td></tr>');
+        $('#xdBody').html(h || '<tr><td colspan="6" style="padding:20px;color:#8a6d45;">無符合條件的外來文件（先到附件類別標籤設定勾選「列入外來文件清單」）</td></tr>');
         renderPager();
     }, 'json');
 }
@@ -320,25 +388,30 @@ $('#btnPrint').on('click', function(){
         var yearTxt = $('#yearSel').val() ? $('#yearSel').val()+' 年度' : '全部年度';
         var custTxt = $('#custSel').val() ? $('#custSel option:selected').text() : '全部客戶';
         var modeTxt = (MODE==='bound') ? '有訂單綁定的料號' : '所有有附件的料號';
+        var catTxt  = CAT ? ('類別：'+($('#catFilterBar .cat-btn.active').text()||'')) : '';
         var unit = res.issue_unit||'';
-        var body = '<div class="p-title">外來文件清單</div>'
-                 + '<div class="p-sub">'+esc(yearTxt)+'｜'+esc(custTxt)+'｜'+esc(modeTxt)+'｜共 '+res.total+' 筆'
+        var company = res.company_name || COMPANY || '';
+        var body = '<div class="p-comp">'+esc(company)+'</div>'
+                 + '<div class="p-title">外來文件清單</div>'
+                 + '<div class="p-sub">'+esc(yearTxt)+'｜'+esc(custTxt)+'｜'+esc(modeTxt)+(catTxt?'｜'+esc(catTxt):'')+'｜共 '+res.total+' 筆'
                  + '｜列印日期：'+new Date().toISOString().substr(0,10)+'</div>';
         (res.groups||[]).forEach(function(g){
             body += '<div class="p-cust">客戶：'+esc(g.customer_name)+'</div>';
-            body += '<table class="p-tb"><thead><tr><th style="width:16%;">料號</th><th>文件名稱</th>'
-                  + '<th style="width:14%;">外來文件類別</th><th style="width:10%;">發行日期</th><th style="width:10%;">發行單位</th></tr></thead><tbody>';
+            body += '<table class="p-tb"><thead><tr><th style="width:30%;">料號</th>'
+                  + '<th>外來文件類別</th><th style="width:16%;">發行日期</th><th style="width:16%;">發行單位</th></tr></thead><tbody>';
             g.rows.forEach(function(r){
-                body += '<tr><td>'+esc(r.part_no)+'</td><td class="tl">'+esc(r.doc_name)+'</td>'
-                      + '<td>'+esc((r.categories||[]).join('、'))+'</td><td>'+esc(r.doc_date)+'</td><td>'+esc(unit)+'</td></tr>';
+                var cats = (r.categories||[]).map(function(c, i){ return catPill((r.category_ids||[])[i], c); }).join('');
+                body += '<tr><td class="tl">'+esc(r.part_no)+'</td>'
+                      + '<td>'+cats+'</td><td>'+esc(r.doc_date)+'</td><td>'+esc(unit)+'</td></tr>';
             });
             body += '</tbody></table>';
         });
         if (!(res.groups||[]).length) body += '<div style="padding:20px;color:#666;">無符合條件的外來文件</div>';
-        var asTxt = res.as_doc ? esc(res.as_doc.doc_no) : '';
-        if (asTxt) body += '<div class="as-foot">'+asTxt+'</div>';
-        var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:10mm 8mm 14mm;color:#222;}'
-            + '.p-title{font-size:20px;font-weight:bold;text-align:center;margin-bottom:2px;}'
+        // 頁尾走 @page margin box（列印引擎繪製，每頁都有）：右下=AS 文件編號、左下=頁碼（多頁才顯示）
+        var asTxt = res.as_doc ? String(res.as_doc.doc_no).replace(/['\\]/g,'') : '';
+        var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+            + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
+            + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:6px;margin-bottom:2px;}'
             + '.p-sub{font-size:11px;text-align:center;color:#555;margin-bottom:10px;}'
             + '.p-cust{font-size:14px;font-weight:bold;margin:10px 0 3px;border-left:4px solid #F0A24B;padding-left:6px;break-after:avoid;}'
             + 'table.p-tb{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:6px;}'
@@ -346,11 +419,20 @@ $('#btnPrint').on('click', function(){
             + 'table.p-tb thead th{background:#f3ead6;}'
             + 'table.p-tb td.tl{text-align:left;word-break:break-all;}'
             + 'table.p-tb tr{break-inside:avoid;}'
-            + '.as-foot{position:fixed;bottom:2mm;right:4mm;font-size:11px;color:#333;}'
-            + '@page{margin:10mm 8mm 14mm;}';
+            + '.cat-pill{display:inline-block;font-size:10px;border:1px solid rgba(122,82,23,.25);border-radius:9px;padding:0 6px;margin:1px 2px;}'
+            + '@page{margin:12mm 8mm 16mm;'
+            + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
+            + '}';
         var w = window.open('', '_blank');
         w.document.write('<html><head><meta charset="utf-8"><title>外來文件清單</title><style>'+css+'</style></head><body>'+body
-            +'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+            +'<scr'+'ipt>window.onload=function(){'
+            // 內容超過一頁(以A4概算)才加頁碼——只影響顯示不影響分頁；counter(pages) 由列印引擎在列印當下計算
+            +'var onePageA4=(297-28)*96/25.4;'
+            +'if(document.body.scrollHeight>onePageA4*0.92){'
+            +'var st=document.createElement(\'style\');'
+            +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
+            +'document.head.appendChild(st);}'
+            +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
         w.document.close();
     }, 'json');
 });
@@ -380,7 +462,7 @@ function saveAsDoc(){
 $('#btnRoleHelp').on('click', function(){ openMask('helpMask'); });
 $('.xd-mask').on('click', function(e){ if (e.target === this) this.style.display='none'; });
 
-if (canView){ loadOptions(); loadList(); }
+if (canView){ loadOptions(); }   // 選項(含類別配色)載好後由 loadOptions 觸發 loadList
 </script>
 </body>
 </html>

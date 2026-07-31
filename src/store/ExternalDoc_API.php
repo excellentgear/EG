@@ -77,6 +77,16 @@ function extdoc_issue_unit(PDO $db): string {
     } catch (Exception $e) { return ''; }
 }
 
+// ── 共用：本公司名稱（列印大標題統一來源：customer_list.is_own_company=1 的 customer_full 客戶全名發票用）──
+function extdoc_company_name(PDO $db): string {
+    try {
+        $st = $db->query("SELECT customer_full, customer FROM customer_list WHERE is_own_company=1 LIMIT 1");
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if ($r) { $n = trim((string)($r['customer_full'] ?: $r['customer'])); if ($n !== '') return $n; }
+    } catch (Throwable $e) {}
+    return '超正齒輪科技有限公司';
+}
+
 // ── 共用：AS 文件編號綁定 ─────────────────────────────────────────────
 function extdoc_bound_asdoc(PDO $db): ?array {
     try {
@@ -117,6 +127,7 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
     $mode     = ($opt['mode'] ?? 'all') === 'bound' ? 'bound' : 'all';
     $custId   = trim((string)($opt['customer_id'] ?? ''));
     $year     = (int)($opt['year'] ?? 0);
+    $catId    = (int)($opt['category'] ?? 0);   // 外來文件類別篩選（quotation_file_categories.id，0=全部）
 
     // 標籤條件（category_ids 為逗號分隔字串，去空白後 FIND_IN_SET）
     $catCond = function(string $col, string $singleCol = '') use ($catIds): string {
@@ -219,6 +230,7 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
         if (!$names && $r['category_id_single'] !== '' && isset($cats[(int)$r['category_id_single']])) {
             $names[(int)$r['category_id_single']] = $cats[(int)$r['category_id_single']]['display'];
         }
+        if ($catId && !isset($names[$catId])) continue;   // 類別篩選（在完整資料上過濾）
         $out[] = [
             'source'        => $r['source'],
             'customer_id'   => (string)$r['customer_id'],
@@ -227,6 +239,7 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
             'doc_name'      => $r['doc_name'],
             'doc_date'      => substr((string)$r['uploaded_at'], 0, 10),
             'categories'    => array_values($names),
+            'category_ids'  => array_keys($names),
             'uploaded_by'   => $r['uploaded_by'],
             'quote_no'      => $r['quote_no'],
         ];
@@ -246,13 +259,19 @@ case 'get_options':
     if (!extCan('view')) jout(['success'=>false,'message'=>'無檢閱權限']);
     // 客戶下拉：只列「實際出現在外來文件清單」的客戶（依全部模式抓一次，不分年度）
     $all = extdoc_fetch_rows($db, ['mode'=>'all']);
-    $custs = []; $years = [];
+    $custs = []; $years = []; $presentCats = [];
     foreach ($all as $r) {
         if ($r['customer_id'] !== '') $custs[$r['customer_id']] = $r['customer_name'];
         $y = (int)substr($r['doc_date'], 0, 4);
         if ($y) $years[$y] = 1;
+        foreach ($r['category_ids'] as $cid) $presentCats[$cid] = 1;
     }
     asort($custs); krsort($years);
+    // 類別篩選鈕：只回傳「實際出現在外來文件內」的類別（依標籤設定順序）
+    $catList = [];
+    foreach (extdoc_categories($db) as $cid => $c) {
+        if (isset($presentCats[$cid])) $catList[] = ['id'=>$cid, 'name'=>$c['display']];
+    }
     $asDocs = [];
     if (extCan('manage')) {
         try {
@@ -264,6 +283,8 @@ case 'get_options':
         'success'    => true,
         'customers'  => array_map(fn($id) => ['customer_id'=>$id, 'customer'=>$custs[$id]], array_keys($custs)),
         'years'      => array_keys($years),
+        'categories' => $catList,
+        'company_name' => extdoc_company_name($db),
         'issue_unit' => extdoc_issue_unit($db),
         'as_doc'     => extdoc_bound_asdoc($db),
         'as_docs'    => $asDocs,
@@ -276,6 +297,7 @@ case 'get_list':
         'mode'        => $_POST['mode'] ?? 'all',
         'customer_id' => $_POST['customer_id'] ?? '',
         'year'        => (int)($_POST['year'] ?? 0),
+        'category'    => (int)($_POST['category'] ?? 0),
     ]);
     $total   = count($rows);
     $perPage = max(0, (int)($_POST['per_page'] ?? 10));
@@ -298,6 +320,7 @@ case 'get_print':
         'mode'        => $_POST['mode'] ?? 'all',
         'customer_id' => $_POST['customer_id'] ?? '',
         'year'        => (int)($_POST['year'] ?? 0),
+        'category'    => (int)($_POST['category'] ?? 0),
     ]);
     $groups = [];
     foreach ($rows as $r) {
@@ -306,11 +329,12 @@ case 'get_print':
         $groups[$key]['rows'][] = $r;
     }
     jout([
-        'success'    => true,
-        'groups'     => array_values($groups),
-        'total'      => count($rows),
-        'issue_unit' => extdoc_issue_unit($db),
-        'as_doc'     => extdoc_bound_asdoc($db),
+        'success'      => true,
+        'groups'       => array_values($groups),
+        'total'        => count($rows),
+        'issue_unit'   => extdoc_issue_unit($db),
+        'as_doc'       => extdoc_bound_asdoc($db),
+        'company_name' => extdoc_company_name($db),
     ]);
 
 case 'export_csv':
@@ -319,6 +343,7 @@ case 'export_csv':
         'mode'        => $_GET['mode'] ?? 'all',
         'customer_id' => $_GET['customer_id'] ?? '',
         'year'        => (int)($_GET['year'] ?? 0),
+        'category'    => (int)($_GET['category'] ?? 0),
     ]);
     $unit = extdoc_issue_unit($db);
     header('Content-Type: text/csv; charset=utf-8');
