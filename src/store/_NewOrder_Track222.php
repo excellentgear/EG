@@ -527,6 +527,47 @@ try {
             echo json_encode(['success' => false, 'message' => '未提供任何要轉單的料號項目']); exit;
         }
 
+        // 相容舊表：order_track.qty_over_range（轉單數量超出報價階梯區間旗標）首次執行自動補欄
+        try { $db->query("SELECT qty_over_range FROM order_track LIMIT 1"); }
+        catch (PDOException $e) {
+            try { $db->exec("ALTER TABLE order_track ADD COLUMN qty_over_range TINYINT(1) NOT NULL DEFAULT 0 COMMENT '轉單數量超出報價階梯區間(含容差後)=1,待補報價單'"); } catch (PDOException $e2) {}
+        }
+
+        // 階梯區間工具（與前端 opTolRange/opMatchTier 同邏輯；伺服器端為準）
+        $tolRange = function(array $t): array {
+            $mn = (int)round((float)($t['qty_min'] ?? 0));
+            $mx = ($t['qty_max'] === null || $t['qty_max'] === '') ? null : (int)round((float)$t['qty_max']);
+            $tv = ($t['tolerance_value'] === null || $t['tolerance_value'] === '') ? 0.0 : (float)$t['tolerance_value'];
+            $lo = $mn; $hi = $mx;
+            if ($tv > 0) {
+                if (($t['tolerance_unit'] ?? '') === '%') {
+                    $lo = max(1, (int)floor($mn * (1 - $tv / 100)));
+                    if ($hi !== null) $hi = (int)ceil($hi * (1 + $tv / 100));
+                } elseif (($t['tolerance_unit'] ?? '') === 'PCS') {
+                    $lo = max(1, $mn - (int)round($tv));
+                    if ($hi !== null) $hi = $hi + (int)round($tv);
+                }
+            }
+            return ['base_lo' => $mn, 'base_hi' => $mx, 'tol_lo' => $lo, 'tol_hi' => $hi];
+        };
+        $matchTier = function(array $tiers, int $qty, bool $useTol) use ($tolRange): ?array {
+            if ($qty <= 0) return null;
+            foreach ($tiers as $t) {
+                $r = $tolRange($t);
+                if ($qty >= $r['base_lo'] && ($r['base_hi'] === null || $qty <= $r['base_hi'])) return $t;
+            }
+            if (!$useTol) return null;
+            $best = null; $bestDist = PHP_INT_MAX;
+            foreach ($tiers as $t) {
+                $r = $tolRange($t);
+                if ($qty >= $r['tol_lo'] && ($r['tol_hi'] === null || $qty <= $r['tol_hi'])) {
+                    $dist = $qty < $r['base_lo'] ? ($r['base_lo'] - $qty) : ($r['base_hi'] === null ? 0 : $qty - $r['base_hi']);
+                    if ($dist < $bestDist) { $best = $t; $bestDist = $dist; }
+                }
+            }
+            return $best;
+        };
+
         $db->beginTransaction();
         try {
             $created = [];
@@ -553,7 +594,7 @@ try {
                 }
 
                 $qi = $db->prepare("SELECT qi.item_id, qi.quote_id, qi.product_id, qi.d_setting_d_id, qi.specification,
-                                            qi.quantity, qi.unit_price, qi.process_notes,
+                                            qi.quantity, qi.unit_price, qi.process_notes, qi.is_tiered,
                                             ql.quote_no, ql.client_name AS quote_client_name, ql.client_id AS quote_client_id,
                                             ds.D_Setting_Id, ds.Is_Assembly, ds.Customer_Id AS part_customer_id,
                                             c.customer AS part_customer_name
@@ -568,6 +609,33 @@ try {
                 if (empty($src['d_setting_d_id'])) throw new Exception('料號 ' . $src['product_id'] . ' 尚未綁定料號ID，無法轉單');
                 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $deliveryDate)) {
                     throw new Exception('料號 ' . $src['product_id'] . ' 交期格式錯誤（' . $deliveryDate . '），請重新選擇日期');
+                }
+
+                // ── 階梯報價：以使用者輸入數量對價（伺服器端重算為準，不採信前端價格）──
+                $ordQty   = $src['quantity'];
+                $ordPrice = $src['unit_price'];
+                $qtyOver  = 0;
+                if ((int)$src['is_tiered'] === 1) {
+                    $qtyIn    = (int)($row['qty'] ?? 0);
+                    $useTol   = (int)($row['tol_match'] ?? 0) === 1;
+                    if ($qtyIn <= 0) throw new Exception('料號 ' . $src['product_id'] . ' 為階梯報價，請輸入訂購數量');
+                    $stTier = $db->prepare("SELECT qty_min, qty_max, unit_price, tolerance_value, tolerance_unit
+                                            FROM quotation_item_tier WHERE item_id = ? ORDER BY sort_order ASC, qty_min ASC");
+                    $stTier->execute([$quoteItemId]);
+                    $tiers = $stTier->fetchAll(PDO::FETCH_ASSOC);
+                    if (!$tiers) throw new Exception('料號 ' . $src['product_id'] . ' 階梯報價缺少區間資料');
+                    $ordQty = $qtyIn;
+                    $m = $matchTier($tiers, $qtyIn, $useTol);
+                    if ($m) {
+                        $ordPrice = $m['unit_price'];
+                    } else {
+                        // 依報價區間（與使用者選的對價模式）都對不到：
+                        // 完全超出（含容差後）→ 無單價建立並標記，供列表紅字與篩選、後續補報價單
+                        $mTol = $matchTier($tiers, $qtyIn, true);
+                        if ($mTol && !$useTol) throw new Exception('料號 ' . $src['product_id'] . ' 數量 ' . $qtyIn . ' 僅落在容差後區間，請改用容差區間對價或修改數量');
+                        $ordPrice = null;
+                        $qtyOver  = 1;
+                    }
                 }
 
                 // 客戶：料號已綁定客戶則以料號客戶為準，否則沿用報價單客戶（比照新增訂單既有規則）
@@ -585,18 +653,20 @@ try {
                     unit_price=:unit_price, quote_no=:quote_no, quote_item_id=:quote_item_id,
                     Order_status=NULL, split_seq=1, parent_order_id=NULL,
                     Client_name_ID=:Client_name_ID, d_id_ID=:d_id_ID,
+                    qty_over_range=:qty_over_range,
                     Created_At=NOW(), Created_By=:Created_By");
                 $ins->execute([
                     ':Order_oo'         => $orderNo,
                     ':d_id'             => $src['D_Setting_Id'],
                     ':Order_ps'         => $orderPs !== '' ? $orderPs : null,
                     ':Client_name'      => $clientName,
-                    ':Qty'              => $src['quantity'],
+                    ':Qty'              => $ordQty,
                     ':Delivery_date'    => $deliveryDate,
                     ':Processing_items' => $processing_items,
                     ':ate'              => $ate,
                     ':ateGet'           => $ateGet,
-                    ':unit_price'       => $src['unit_price'],
+                    ':unit_price'       => $ordPrice,
+                    ':qty_over_range'   => $qtyOver,
                     ':quote_no'         => $src['quote_no'],
                     ':quote_item_id'    => $quoteItemId,
                     ':Client_name_ID'   => $clientId,
