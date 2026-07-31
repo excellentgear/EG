@@ -1864,7 +1864,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $exclude = intval($_POST['exclude_d_id'] ?? 0);
             if (empty($kw) && empty($cust_id)) { echo json_encode(['success'=>true,'data'=>[]]); exit; }
             $where = ['d.d_id != ?']; $params = [$exclude];
-            if ($kw)      { $where[] = '(d.D_Setting_Id LIKE ? OR d.Spec_No LIKE ?)'; $params[] = "%$kw%"; $params[] = "%$kw%"; }
+            if ($kw)      { $where[] = '(d.D_Setting_Id LIKE ? OR d.Spec_No LIKE ? OR d.Drawing_No LIKE ?)'; $params[] = "%$kw%"; $params[] = "%$kw%"; $params[] = "%$kw%"; }
             if ($cust_id) { $where[] = 'd.Customer_Id = ?'; $params[] = $cust_id; }
             $stmt = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Spec_No, d.Customer_Id, c.customer AS client_name FROM d_setting d LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id WHERE ".implode(' AND ', $where)." ORDER BY d.D_Setting_Id LIMIT 20");
             $stmt->execute($params);
@@ -1879,8 +1879,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $kw = trim($_POST['keyword'] ?? '');
             $exclude = intval($_POST['exclude_d_id'] ?? 0);
             if (empty($kw)) { echo json_encode(['success'=>true,'data'=>[]]); exit; }
-            $stmt = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Spec_No, c.customer AS client_name FROM d_setting d LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id WHERE (d.D_Setting_Id LIKE ? OR d.Spec_No LIKE ? OR d.Customer_Id LIKE ?) AND d.d_id <> ? AND d.Is_Assembly=0 LIMIT 15");
-            $stmt->execute(["%$kw%", "%$kw%", "%$kw%", $exclude]);
+            $stmt = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Spec_No, c.customer AS client_name FROM d_setting d LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id WHERE (d.D_Setting_Id LIKE ? OR d.Spec_No LIKE ? OR d.Customer_Id LIKE ? OR d.Drawing_No LIKE ?) AND d.d_id <> ? AND d.Is_Assembly=0 LIMIT 15");
+            $stmt->execute(["%$kw%", "%$kw%", "%$kw%", "%$kw%", $exclude]);
             echo json_encode(['success'=>true,'data'=>$stmt->fetchAll(PDO::FETCH_ASSOC)]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -1895,7 +1895,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $excl_id = intval($_POST['exclude_d_id'] ?? 0);
             $where   = ['d.d_id != ?'];
             $params  = [$excl_id];
-            if ($kw)      { $where[] = '(d.D_Setting_Id LIKE ? OR d.Spec_No LIKE ?)'; $params[] = "%$kw%"; $params[] = "%$kw%"; }
+            if ($kw)      { $where[] = '(d.D_Setting_Id LIKE ? OR d.Spec_No LIKE ? OR d.Drawing_No LIKE ?)'; $params[] = "%$kw%"; $params[] = "%$kw%"; $params[] = "%$kw%"; }
             if ($cust_kw) { $where[] = '(c.customer LIKE ? OR d.Customer_Id LIKE ?)'; $params[] = "%$cust_kw%"; $params[] = "%$cust_kw%"; }
             if ($type_f)  { $where[] = 'd.Type = ?'; $params[] = $type_f; }
             $whereSQL = implode(' AND ', $where);
@@ -2974,7 +2974,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         try {
             $kw = trim($_POST['kw'] ?? '');
             if ($kw === '') { echo json_encode(['success'=>true,'data'=>[]]); exit; }
-            $stmt = $pdo->prepare("SELECT D_Setting_Id AS part_id, Spec_No AS spec_no FROM d_setting WHERE (D_Setting_Id LIKE :kw OR Spec_No LIKE :kw) ORDER BY D_Setting_Id LIMIT 15");
+            $stmt = $pdo->prepare("SELECT D_Setting_Id AS part_id, Spec_No AS spec_no FROM d_setting WHERE (D_Setting_Id LIKE :kw OR Spec_No LIKE :kw OR Drawing_No LIKE :kw) ORDER BY D_Setting_Id LIMIT 15");
             $stmt->execute([':kw'=>"%$kw%"]);
             echo json_encode(['success'=>true,'data'=>$stmt->fetchAll(PDO::FETCH_ASSOC)]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
@@ -3016,7 +3016,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $kw = trim($_POST['kw'] ?? '');
             $exclude = intval($_POST['exclude_d_id'] ?? 0); // 排除自己，避免自我關聯
             if ($kw === '') { echo json_encode(['success'=>true,'data'=>[]]); exit; }
-            $sql = "SELECT d_id, D_Setting_Id AS part_id, COALESCE(Spec_No,'') AS spec_no FROM d_setting WHERE (D_Setting_Id LIKE :kw OR Spec_No LIKE :kw)";
+            $sql = "SELECT d_id, D_Setting_Id AS part_id, COALESCE(Spec_No,'') AS spec_no FROM d_setting WHERE (D_Setting_Id LIKE :kw OR Spec_No LIKE :kw OR Drawing_No LIKE :kw)";
             $params = [':kw'=>"%$kw%"];
             if ($exclude > 0) { $sql .= " AND d_id <> :exid"; $params[':exid'] = $exclude; }
             $sql .= " ORDER BY D_Setting_Id LIMIT 15";
@@ -3622,8 +3622,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $stmt->execute([$d_id]);
                 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             } elseif ($kw !== '') {
-                $stmt = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Customer_Id, COALESCE(c.customer,'') AS customer_name FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id WHERE d.D_Setting_Id LIKE ? OR d.Spec_No LIKE ? ORDER BY d.D_Setting_Id LIMIT 10");
-                $stmt->execute(["%$kw%","%$kw%"]);
+                $stmt = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Customer_Id, COALESCE(c.customer,'') AS customer_name FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id WHERE d.D_Setting_Id LIKE ? OR d.Spec_No LIKE ? OR d.Drawing_No LIKE ? ORDER BY d.D_Setting_Id LIMIT 10");
+                $stmt->execute(["%$kw%","%$kw%","%$kw%"]);
                 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             } else { echo json_encode(['success'=>true,'data'=>[]]); exit; }
             foreach ($rows as &$row) {
