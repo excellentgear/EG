@@ -289,6 +289,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <button class="btn-warm" id="rsAdd" style="display:none;"><i class="fa fa-plus"></i> 加入清冊廠商</button>
                 <button id="rsBatchGrade" style="display:none;"><i class="fa fa-pencil"></i> 批次設定等級</button>
                 <button id="rsClearGrade" style="display:none;"><i class="fa fa-eraser"></i> 清除採用改回建議</button>
+                <button id="rsStaleBtn" style="display:none;"><i class="fa fa-exclamation-triangle"></i> 檢查兩年未交易外包廠</button>
                 <button id="rsCsvBtn"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
                 <button id="rsPrintBtn"><i class="fa fa-print"></i> 列印清冊</button>
             </div>
@@ -397,6 +398,22 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <button class="b-cancel" onclick="printCurrentForm()"><i class="fa fa-print"></i> 列印本表</button>
         <button class="b-cancel" onclick="closeMask('recMask')">取消</button>
         <button class="b-ok" onclick="submitRec()">儲存</button>
+    </div>
+</div></div>
+
+<!-- 兩年未交易外包廠 modal -->
+<div class="va-mask" id="staleMask"><div class="va-modal wide">
+    <div class="m-head"><span>兩年未交易外包廠（建議移除）</span><span class="m-close" onclick="closeMask('staleMask')">✕</span></div>
+    <div class="m-body">
+        <div id="staleHint" style="font-size:12px;color:#8a6d45;margin-bottom:6px;"></div>
+        <div class="va-table-wrap"><table class="va-table"><thead><tr>
+            <th style="width:32px;"><input type="checkbox" id="staleAll"></th><th>大類</th><th>廠商ID</th><th>廠商名稱</th><th>最後發包日</th><th>類型</th>
+        </tr></thead><tbody id="staleBody"></tbody></table></div>
+        <div style="font-size:11px;color:#DD5138;margin-top:6px;">確認移除：取消納管＋移出合格清冊，並自稽核批次刪除尚未稽核之對象（已稽核紀錄保留）。</div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('staleMask')">取消</button>
+        <button class="b-ok" onclick="staleRemove()"><i class="fa fa-trash"></i> 確認移除勾選</button>
     </div>
 </div></div>
 
@@ -604,6 +621,7 @@ function loadMeta(cb){
         for (var yy=m.cur_year; yy>=m.cur_year-5; yy--){ $ey.append('<option value="'+yy+'">'+yy+'</option>'); $ry.append('<option value="'+yy+'">'+yy+'</option>'); }
         $ey.val(m.cur_year); $ry.val(m.cur_year);
         if (m.perms.canEdit){ $('#rsAdd,#rsBatchGrade,#rsClearGrade').show(); }
+        if (m.perms.canAdmin){ $('#rsStaleBtn').show(); }
         loadEvVendors('');
         if (cb) cb();
     });
@@ -1439,6 +1457,34 @@ $('#rsPrintBtn').on('click', function(){
     var footer='<div style="text-align:right;margin-top:12px;font-size:12px;">表單編號：'+esc(docNo)+'</div>';
     openPrintWindow(head+rows+sign+footer, '合格供應商清冊');
 });
+
+/* ---------- 兩年未交易外包廠 ---------- */
+$('#rsStaleBtn').on('click', function(){
+    $.getJSON(API, {action:'stale_vendors'}, function(res){
+        if(!res.ok){ alert(res.error||'查詢失敗'); return; }
+        $('#staleHint').html('最後發包日早於 <b>'+res.cutoff+'</b>（兩年前）的納管／在冊外包廠共 <b>'+res.rows.length+'</b> 家，請確認後移除：');
+        var h='';
+        res.rows.forEach(function(r){
+            h+='<tr><td><input type="checkbox" class="stale-ck" value="'+esc(r.maker_id_no)+'" checked></td>'
+              +'<td>'+esc(r.main_cat_name||'—')+'</td><td>'+esc(r.maker_id_no)+'</td><td class="t-left">'+esc(r.maker_id||'')+'</td>'
+              +'<td style="color:#DD5138;">'+esc(r.last_date||'—')+'</td>'
+              +'<td>'+(r.audit_managed?'納管':'')+(r.in_roster?(r.audit_managed?'+清冊':'手動列入'):'')+'</td></tr>';
+        });
+        $('#staleBody').html(h||'<tr><td colspan="6" style="padding:14px;color:#8a6d45;">無兩年未交易外包廠，清冊乾淨</td></tr>');
+        $('#staleAll').prop('checked', res.rows.length>0);
+        openMask('staleMask');
+    });
+});
+$('#staleAll').on('change', function(){ $('#staleBody .stale-ck').prop('checked', this.checked); });
+function staleRemove(){
+    var ids=$('#staleBody .stale-ck:checked').map(function(){return this.value;}).get();
+    if(!ids.length){ alert('請勾選要移除的廠商'); return; }
+    if(!confirm('確認移除勾選的 '+ids.length+' 家？（取消納管＋移出清冊＋刪未稽核對象）')) return;
+    $.post(API,{action:'stale_remove',maker_ids:ids.join(',')},function(res){
+        if(!res.ok){ alert(res.error||'移除失敗'); return; }
+        alert('已移除 '+res.removed+' 家'); closeMask('staleMask'); loadRoster();
+    },'json').fail(function(x){ alert('移除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
 
 $('#btnRoleHelp').on('click', function(){ openMask('helpMask'); });
 $('.va-mask').on('click', function(e){ if (e.target===this) this.style.display='none'; });

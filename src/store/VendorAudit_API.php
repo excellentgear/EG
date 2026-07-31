@@ -182,6 +182,37 @@ case 'roster_set_grade': {
     jout(['updated'=>count($ids)]);
 }
 
+/* 兩年未交易外包廠（有 bom_ing 發包史但最後發包 >2 年）：納管或在冊者，供確認後移除 */
+case 'stale_vendors': {
+    $st = $db->query("SELECT m.maker_id_no, m.maker_id, m.audit_managed, m.in_roster, dc.main_cat_name,
+                             MAX(bi.outsource_date) AS last_date
+                      FROM maker_list m
+                      JOIN bom_ing bi ON bi.maker_id_no=m.maker_id_no AND bi.outsource_date IS NOT NULL
+                      LEFT JOIN dict_maker_main_category dc ON dc.main_cat_id=m.main_category_id
+                      WHERE (m.status IS NULL OR m.status<>'" . VENDOR_AUDIT_DISABLED . "')
+                        AND (m.audit_managed=1 OR m.in_roster=1)
+                      GROUP BY m.maker_id_no, m.maker_id, m.audit_managed, m.in_roster, dc.main_cat_name
+                      HAVING MAX(bi.outsource_date) < DATE_SUB(CURDATE(), INTERVAL 2 YEAR)
+                      ORDER BY last_date");
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) { $r['audit_managed']=(int)$r['audit_managed']; $r['in_roster']=(int)$r['in_roster']; $r['last_date']=substr((string)$r['last_date'],0,10); }
+    jout(['rows'=>$rows, 'cutoff'=>date('Y-m-d', strtotime('-2 years'))]);
+}
+/* 確認移除：取消納管+移出清冊，並刪未稽核之稽核對象(已稽核者保留可追溯) */
+case 'stale_remove': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    $ids = va_ids($_POST['maker_ids'] ?? '');
+    if (!$ids) jerr('請選擇廠商');
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE maker_list SET audit_managed=0, in_roster=0 WHERE maker_id_no IN ($ph)")->execute($ids);
+        $db->prepare("DELETE FROM vendor_audit_target WHERE audit_date IS NULL AND maker_id_no IN ($ph)")->execute($ids);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('移除失敗：'.$e->getMessage(), 500); }
+    jout(['removed'=>count($ids)]);
+}
+
 /* 定期評核門檻設定（管理員） */
 case 'save_eval_settings': {
     if (!$perms['canAdmin']) jerr('無設定權限', 403);
