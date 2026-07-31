@@ -245,7 +245,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div class="tc-table-wrap">
             <table class="tc-table" id="tcTable">
                 <thead><tr>
-                    <th>量具編號</th><th>類別</th><th>採購料號／規格</th><th>週期(月)</th><th>校驗方式</th>
+                    <th>量具編號</th><th>類別</th><th>規格</th><th>週期(月)</th><th>校驗方式</th>
                     <th>下次應校驗月</th><th>狀態</th><th>最近校驗</th><th>列入校驗率統計</th><th>操作</th>
                 </tr></thead>
                 <tbody id="tcBody"><tr><td colspan="10" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
@@ -528,24 +528,40 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             全公司只留採購料號與產品料號兩種；<b>實體量具仍以量具編號為主</b>，這裡只是把它指向規格。<br>
             舊資料的規格是人工塞在量具編號裡（例 <code>A-200-Q 電子(0-25mm)</code>），
             按「<b>產生草稿</b>」會自動解析成 品項（＝類別）／規格文字（括號內）／型式（編號有「電子」者），
-            <b>廠牌與型號編號看不出來，請自行補</b>。<br>
+            <b>品牌與型號編號看不出來，請自行補</b>。<br>
+            <b>品牌 ≠ 購買廠商</b>：品牌是「誰做的」（Mitutoyo…），廠商是「跟誰買的」。品牌欄可直接打字，
+            也可從下拉挑<b>採購建立的品牌清單</b>；<b>品牌清單與「同一料號跟哪幾家買」都在「申請採購 → 採購品主檔」維護</b>（本頁只選不建）。<br>
             <b>確認無誤再按「確認並建立料號」才會寫入</b>：同名品項沿用既有、同品項＋同規格沿用既有規格，
-            重複執行不會產生重複料號。校驗週期仍維持「依類別設定」，不受本功能影響。
+            重複執行不會產生重複料號。校驗週期仍維持「依類別設定」，不受本功能影響。<br>
+            <b>單位預設 PCS</b>（量具以支計）；沿用既有料號時只補「目前空白」的單位，已設定過的不會被覆寫。
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px;font-size:12px;color:#5b3a1e;">
             <label style="margin:0;">採購品類別（新建品項掛在哪一類）</label>
             <select id="spCat" style="width:auto;height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;"></select>
-            <button type="button" id="spGen" style="height:26px;font-size:12px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;padding:0 12px;">
+            <label style="margin:0;">單位</label>
+            <select id="spUnit" style="width:auto;height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;"></select>
+            <button type="button" id="spGen" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;color:#5b3a1e;cursor:pointer;padding:0 12px;">
                 <i class="fa fa-magic"></i> 產生草稿</button>
             <label style="margin:0;font-weight:normal;"><input type="checkbox" id="spOnlyUnbound" checked> 只列尚未對應料號者</label>
             <span id="spHint" style="color:#b5762a;"></span>
+            <span id="spBrandHint" style="color:#8a6d45;"></span>
+            <datalist id="spBrandOptions"></datalist>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px;padding:6px 10px;
+                    border:1px dashed #D8BE93;border-radius:6px;background:#FDF8EF;font-size:12px;color:#5b3a1e;">
+            <b>批次自動建立</b>
+            <span style="color:#8a6d45;">不必逐列確認，直接依解析結果一次建立並綁定（品牌留空，日後可在「申請採購→採購品主檔」補）</span>
+            <button type="button" id="spAutoUnbound" style="height:26px;font-size:12px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;padding:0 12px;">
+                <i class="fa fa-bolt"></i> 自動建立「尚未對應」的量具</button>
+            <button type="button" id="spAutoAll" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;color:#5b3a1e;cursor:pointer;padding:0 12px;">
+                全部量具（含已對應者重新綁定）</button>
         </div>
         <div style="max-height:44vh;overflow:auto;">
             <table class="hist" id="spTable">
                 <thead><tr>
                     <th style="width:52px;">建立<br><label class="ck-all-lab"><input type="checkbox" id="spCkAll"> 全選</label></th>
                     <th style="text-align:left;">量具編號</th><th>品項名稱</th><th>規格文字</th>
-                    <th>型式</th><th>廠牌</th><th>型號</th><th style="text-align:left;">將建立／沿用的規格</th><th>目前對應</th>
+                    <th>型式</th><th>品牌</th><th>型號</th><th style="text-align:left;">將建立／沿用的規格</th><th>目前對應</th>
                 </tr></thead>
                 <tbody id="spBody"><tr><td colspan="9" style="padding:12px;color:#8a6d45;">請先按「產生草稿」</td></tr></tbody>
             </table>
@@ -626,6 +642,7 @@ var API = '../../src/store/ToolCalib_API.php';
 var META = null, ROWS = [], PERMS = null, CATS = [], TABS_DEF = [];
 var ATT_CFG = {types:[], ext:[], maxmb:20, dir:'', ext_raw:'', types_raw:''};
 var curTab = '';   // 目前分頁：'' 全部 ｜ 類別id ｜ 'other' 其他（需校驗但未設為分頁）
+var SEE_SPEC_CODE = false;   // 採購料號代碼只給採購看（後端 tool_calib_can_see_spec_code 決定）
 var canView = <?= $perms['canView'] ? 'true' : 'false' ?>;
 var RESULT_LABEL = {pass:'合格', pass_adjust:'校正後合格', fail:'不合格'};
 var STATUS_LABEL = {overdue:'逾期', soon:'即將到期', ok:'正常', nobaseline:'未設基準', unmanaged:'未列入統計'};
@@ -682,6 +699,7 @@ function loadList(){
         NProgress.done();
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         ROWS = res.rows; PERMS = res.perms;
+        SEE_SPEC_CODE = !!res.see_spec_code;
         if (res.tabs) TABS_DEF = res.tabs;
         if (res.categories) setCats(res.categories); else renderTabs();
         $('#tcExcluded').text(res.excluded > 0
@@ -809,12 +827,18 @@ function renderTable(){
     });
     $('#tcBody').html(html || '<tr><td colspan="10" style="padding:16px;color:#8a6d45;">無符合條件的儀器</td></tr>');
 }
-/** 採購料號／規格欄：未綁定者明講「未對應料號」（管理員可到設定→量具料號對應處理） */
+/**
+ * 規格欄：只顯示規格文字，**不重複顯示品項名稱（＝左邊「類別」欄已經有了）**。
+ * 採購料號代碼(spec_code)只給採購看得到，其他人用中文品名／規格查即可（使用者 2026-07-30 指示）。
+ */
 function specCell(r){
-    if (!r.purchase_spec_id || !r.spec_code)
-        return '<span style="color:#b0a390;">未對應料號</span>';
-    var t = $.trim((r.spec_item_name||'') + ' ' + (r.spec_text||''));
-    return '<span style="color:#8A5A2B;">'+esc(r.spec_code)+'</span>'+(t ? '　'+esc(t) : '');
+    if (!r.purchase_spec_id) return '<span style="color:#b0a390;">未對應料號</span>';
+    // 品牌是獨立欄位（≠ 購買廠商），跟規格文字一起顯示才看得出是哪一支
+    var t = $.trim(($.trim(r.spec_brand||'') + ' ' + $.trim(r.spec_text||''))) || '（未填規格）';
+    var h = esc(t);
+    if (SEE_SPEC_CODE && r.spec_code)
+        h += ' <span style="color:#b0a390;font-size:11px;">'+esc(r.spec_code)+'</span>';
+    return h;
 }
 
 $('#statSel').on('change', function(){ tcPage=1; renderTable(); });
@@ -1591,11 +1615,11 @@ function submitStaff(){
  * 使用者 2026-07-30 定案：量具規格掛到「採購料號」(purchase_item→purchase_spec)，不另建量具規格主檔；
  * 實體仍以量具編號為主。舊資料先「解析成草稿」給使用者改，確認後才寫入。
  */
-var SP_ROWS = [], SP_LOADED = false;
-/** 與後端 tool_calib_compose_spec_text() 同一套組法（廠牌 規格 型號 型式） */
+var SP_ROWS = [], SP_LOADED = false, SP_BRANDS = [];
+/** 與後端 tool_calib_compose_spec_text() 同一套組法（規格 型號 型式）——**品牌是獨立欄位，不併進來** */
 function spCompose(r){
     var p = [];
-    [r.brand, r.spec, r.model].forEach(function(v){ v = $.trim(v||''); if (v) p.push(v); });
+    [r.spec, r.model].forEach(function(v){ v = $.trim(v||''); if (v) p.push(v); });
     if ($.trim(r.type||'') === '電子') p.push('電子');
     return $.trim(p.join(' ').replace(/\s+/g, ' '));
 }
@@ -1610,6 +1634,17 @@ function loadSpecPane(){
                  + (Number(c.category_id)===Number(res.default_category_id)?' selected':'')+'>'
                  + esc(c.category_name)+(c.category_code?'（'+esc(c.category_code)+'）':'')+'</option>';
         }).join('') || '<option value="">（查無採購品類別）</option>');
+        // 單位預設 PCS（使用者指定；量具以支計）
+        $('#spUnit').html((res.units || []).map(function(u){
+            return '<option value="'+u.unit_id+'"'
+                 + (Number(u.unit_id)===Number(res.default_unit_id)?' selected':'')+'>'
+                 + esc(u.unit_name)+'</option>';
+        }).join('') || '<option value="">（查無單位）</option>');
+        // 品牌清單由採購維護（申請採購→採購品主檔→品牌清單），本頁只能選或手動打字
+        SP_BRANDS = res.brands || [];
+        $('#spBrandOptions').html(SP_BRANDS.map(function(b){ return '<option value="'+esc(b)+'">'; }).join(''));
+        $('#spBrandHint').text(SP_BRANDS.length ? ('品牌清單共 '+SP_BRANDS.length+' 個（由採購維護）')
+                                               : '採購尚未建立品牌清單，品牌欄可先手動輸入');
         SP_ROWS = (res.list || []).map(function(r){ r.pick = !r.bound; return r; });   // 已對應者預設不重做
         SP_LOADED = true;
         renderSpecBody();
@@ -1632,7 +1667,7 @@ function renderSpecBody(){
           + '<td><select class="sp-in sp-type" style="width:64px;">'
           + '<option value="機械"'+(r.type==='機械'?' selected':'')+'>機械</option>'
           + '<option value="電子"'+(r.type==='電子'?' selected':'')+'>電子</option></select></td>'
-          + '<td><input type="text" class="sp-in sp-brand" value="'+esc(r.brand)+'" maxlength="40" style="width:78px;" placeholder="待補"></td>'
+          + '<td><input type="text" class="sp-in sp-brand" list="spBrandOptions" value="'+esc(r.brand)+'" maxlength="60" style="width:96px;" placeholder="可打字或選"></td>'
           + '<td><input type="text" class="sp-in sp-model" value="'+esc(r.model)+'" maxlength="40" style="width:78px;"></td>'
           + '<td class="sp-prev" style="text-align:left;">'+esc(spPreview(r))+'</td>'
           + '<td>'+(r.bound ? '<span style="color:#8A5A2B;">'+esc(r.bound_code||'已對應')+'</span>'
@@ -1642,8 +1677,8 @@ function renderSpecBody(){
     syncSpCkAll(); updateSpInfo();
 }
 function spPreview(r){
-    var s = spCompose(r);
-    return $.trim($.trim(r.item_name||'') + ' ' + s) + (s ? '' : '（規格空白）');
+    var s = spCompose(r), b = $.trim(r.brand||'');
+    return $.trim($.trim(r.item_name||'') + ' ' + b + ' ' + s) + (s ? '' : '（規格空白）');
 }
 function updateSpInfo(){
     var n = SP_ROWS.filter(function(r){ return r.pick; }).length;
@@ -1695,10 +1730,15 @@ function submitSpec(){
         + '同名品項與同規格會沿用既有料號，不會重複建立。'
         + (noSpec ? '\n其中 '+noSpec+' 支規格空白，同類別的空白規格會共用同一個料號。' : '')
         + (redo  ? '\n其中 '+redo+' 支已對應過，將依目前內容重新綁定。' : ''))) return;
-    NProgress.start();
-    $.post(API, {action:'spec_apply', category_id:cat, items:JSON.stringify(picked.map(function(r){
+    specPost({action:'spec_apply', category_id:cat, unit_id:$('#spUnit').val()||0,
+              items:JSON.stringify(picked.map(function(r){
         return {tool_id:r.Tool_id, item_name:r.item_name, spec:r.spec, type:r.type, brand:r.brand, model:r.model};
-    }))}, function(res){
+    }))});
+}
+/** 送出建立料號的共用流程（逐列確認與批次自動建立共用） */
+function specPost(data){
+    NProgress.start();
+    $.post(API, data, function(res){
         NProgress.done();
         if (!res.ok){ alert(res.error||'建立失敗'); return; }
         alert('已完成：新建品項 '+res.new_items+' 個、新建規格（採購料號）'+res.new_specs+' 個、綁定量具 '+res.bound+' 支。'
@@ -1706,6 +1746,28 @@ function submitSpec(){
         SP_LOADED = false; loadSpecPane(); loadList();
     }, 'json').fail(function(x){ NProgress.done(); alert('建立失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
+/** 批次自動建立：不逐列確認，直接依後端解析結果整批建立並綁定 */
+function specAuto(scope){
+    var cat = parseInt($('#spCat').val(), 10) || 0;
+    if (!cat){ alert('請選擇採購品類別（新建品項要掛在哪一類）'); return; }
+    var unitTxt = $('#spUnit option:selected').text() || '（未設定）';
+    var n = SP_LOADED ? (scope === 'all' ? SP_ROWS.length : SP_ROWS.filter(function(r){ return !r.bound; }).length) : 0;
+    var noSpec = SP_LOADED ? SP_ROWS.filter(function(r){
+        return (scope === 'all' || !r.bound) && !spCompose(r); }).length : 0;
+    if (SP_LOADED && !n){ alert(scope === 'all' ? '目前沒有量具資料' : '沒有尚未對應料號的量具（全部都已對應）'); return; }
+    if (!confirm('批次自動建立採購料號\n\n範圍：' + (scope === 'all' ? '全部量具（已對應者會依解析結果重新綁定）' : '尚未對應料號的量具')
+        + (SP_LOADED ? '，共 ' + n + ' 支' : '')
+        + '\n採購品類別：' + ($('#spCat option:selected').text() || '')
+        + '\n單位：' + unitTxt
+        + '\n\n・品項名稱＝量具類別，規格＝編號括號內容，型式依「電子」判定'
+        + '\n・品牌一律留空（編號看不出來），日後可在「申請採購→採購品主檔」補'
+        + (noSpec ? '\n・其中 ' + noSpec + ' 支編號看不出規格，會建立規格空白的料號（同類別共用一個）' : '')
+        + '\n・同名品項／同規格一律沿用既有，不會產生重複料號'
+        + '\n\n確定執行？')) return;
+    specPost({action:'spec_apply', auto:1, scope:scope, category_id:cat, unit_id:$('#spUnit').val()||0});
+}
+$('#spAutoUnbound').on('click', function(){ specAuto('unbound'); });
+$('#spAutoAll').on('click', function(){ specAuto('all'); });
 
 /* ================= 清除測試資料（僅超級管理員 id=1；破壞性操作） ================= */
 function loadCleanPane(){
@@ -1930,15 +1992,18 @@ $('#yrCsv').on('click', function(){
 
 /* ---------- 匯出 CSV ---------- */
 $('#btnCsv').on('click', function(){
-    var rows = [['量具編號','類別','採購料號','規格','週期(月)','校驗方式','下次應校驗月','狀態','最近校驗日','最近結果','列入校驗率統計']];
+    // 採購料號代碼只有採購看得到 → 沒權限時連 CSV 也不出這一欄
+    var rows = [['量具編號','類別'].concat(SEE_SPEC_CODE ? ['採購料號'] : [])
+        .concat(['規格','週期(月)','校驗方式','下次應校驗月','狀態','最近校驗日','最近結果','列入校驗率統計'])];
     ROWS.forEach(function(r){
-        rows.push([r.Tool_No, r.category_name||'',
-            r.purchase_spec_id ? (r.spec_code||'') : '未對應料號',
-            $.trim((r.spec_item_name||'')+' '+(r.spec_text||'')),
+        rows.push([r.Tool_No, r.category_name||'']
+          .concat(SEE_SPEC_CODE ? [r.purchase_spec_id ? (r.spec_code||'') : ''] : [])
+          .concat([
+            r.purchase_spec_id ? $.trim(($.trim(r.spec_brand||'')+' '+$.trim(r.spec_text||''))) : '未對應料號',
             r.calib_cycle_months==null?'':r.calib_cycle_months,
             r.calib_method||'', fmtMonth(r.calibration_due), STATUS_LABEL[r.status]||r.status,
             r.last?fmtDate(r.last.calib_date):'', r.last?(RESULT_LABEL[r.last.result]||r.last.result):'',
-            r.calib_managed===1?'是':'否']);
+            r.calib_managed===1?'是':'否']));
     });
     var csv = '﻿' + rows.map(function(l){
         return l.map(function(v){ return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'; }).join(',');

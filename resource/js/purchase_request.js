@@ -254,6 +254,7 @@ function bindAll() {
     $('#btnSaveItem').on('click', saveItem);
     $('#btnAddSpec').on('click', function () { openSpec(0); });
     $('#btnSaveSpec').on('click', saveSpec);
+    $('#btnBrands').on('click', openBrandMgr);
     $('#btnTags').on('click', openTagMgr);
     $('#tgAdd').on('click', addTag);
     $('#btnAttrs').on('click', openAttrMgr);
@@ -1531,6 +1532,7 @@ function openItem(id) {
         $('#itUnit').val(it.default_unit_id || ''); $('#itNote').val(it.note || '');
         $('#itVendor').val(it.default_vendor_name || '').data('vid', it.default_vendor_id || '');
         ITEMEDIT.specs = it.specs || []; ITEMEDIT.attrs = it.attrs || [];
+        if (it.brands) { BRANDS = it.brands; renderBrandOptions(); }   // 規格編輯的品牌下拉來源
         renderTagPick(it.tag_ids || []);
         renderSpecs();
         openMask('mItem');
@@ -1547,12 +1549,18 @@ function renderTagPick(sel) {
 }
 function renderSpecs() {
     if (!ITEMEDIT.specs.length) {
-        $('#specBody').html('<tr><td colspan="8" class="pq-empty">尚無規格——按「新增規格」加尺寸／顏色等變體</td></tr>'); return;
+        $('#specBody').html('<tr><td colspan="10" class="pq-empty">尚無規格——按「新增規格」加尺寸／顏色等變體</td></tr>'); return;
     }
     var h = '';
     ITEMEDIT.specs.forEach(function (s, i) {
         var low = s.safety_qty && parseFloat(s.stock_qty) < parseFloat(s.safety_qty);
+        // 供應商：主要那家標星號，其餘只顯示家數（同規格可跟多家買）
+        var vs = s.vendors || [], pri = vs.filter(function (v) { return v.is_primary === 1; })[0] || vs[0];
+        var vTxt = !vs.length ? '<span class="hint">未設定</span>'
+            : (esc(pri.vendor_name || pri.vendor_id) + (vs.length > 1 ? ' <span class="hint">等 ' + vs.length + ' 家</span>' : ''));
         h += '<tr><td>' + esc(s.spec_code) + '</td><td class="l">' + esc(s.spec_text) + '</td>' +
+             '<td>' + (s.brand ? esc(s.brand) : '<span class="hint">—</span>') + '</td>' +
+             '<td class="l">' + vTxt + '</td>' +
              '<td>' + esc(unitLabel(s.unit_id)) + '</td><td>' + esc(s.location_code || '') + '</td>' +
              '<td class="r">' + nz(s.safety_qty) + '</td>' +
              '<td class="r">' + nz(s.stock_qty) + (low ? ' <span class="urg">低於安全量</span>' : '') + '</td>' +
@@ -1609,6 +1617,12 @@ function openSpec(spec) {
     });
     $('#spAttrs').html(h || '<div class="hint" style="grid-column:1/-1;">這個類別還沒設定規格屬性——可到「規格屬性設定」加（例：刀具＝直徑／長度／材質），或直接在下方輸入規格說明。</div>');
     $('#spAttrs').data('spec_id', s ? s.spec_id : 0);
+    // 品牌（可打字或從清單選）＋ 供應商（同規格可跟多家買）
+    $('#spBrand').val(s ? (s.brand || '') : '');
+    renderBrandOptions();
+    SV_ROWS = (s && s.vendors) ? s.vendors.map(function (v) { return $.extend({}, v); }) : [];
+    $('#svKw').val(''); $('#svVendorList').empty();
+    renderSpecVendors();
     openMask('mSpec');
 }
 function saveSpec() {
@@ -1617,9 +1631,131 @@ function saveSpec() {
     api('spec_save', { spec_id: $('#spAttrs').data('spec_id') || 0, item_id: ITEMEDIT.id,
         spec_text: $('#spText').val(), spec_code: $.trim($('#spCode').val()),
         attr_vals: JSON.stringify(vals), unit_id: $('#spUnit').val() || 0,
-        location_id: $('#spLoc').val() || 0, safety_qty: $('#spSafe').val() }, 'POST')
+        location_id: $('#spLoc').val() || 0, safety_qty: $('#spSafe').val(),
+        brand: $.trim($('#spBrand').val()), vendors: JSON.stringify(SV_ROWS) }, 'POST')
     .done(function (r) { closeMask('mSpec'); openItem(ITEMEDIT.id); }).fail(fail);
 }
+
+/* ── 品牌清單（採購維護）＋ 規格的供應商 ─────────────────
+ * 使用者 2026-07-30 指示：品牌 ≠ 購買廠商；品牌可手動輸入或從清單選，清單由採購建立。
+ */
+var BRANDS = [], SV_ROWS = [];
+function renderBrandOptions() {
+    $('#brandOptions').html(BRANDS.filter(function (b) { return b.is_active === 1; })
+        .map(function (b) { return '<option value="' + esc(b.brand_name) + '">'; }).join(''));
+}
+function loadBrands(cb) {
+    api('brand_list', { all: 1 }).done(function (r) {
+        BRANDS = r.brands || []; renderBrandOptions(); if (cb) cb();
+    }).fail(function () { if (cb) cb(); });
+}
+function openBrandMgr() { loadBrands(function () { renderBrands(); openMask('mBrandMgr'); }); }
+function renderBrands() {
+    var h = BRANDS.map(function (b) {
+        return '<tr data-id="' + b.brand_id + '"><td class="l">' + esc(b.brand_name) + '</td>' +
+               '<td class="l">' + esc(b.note || '') + '</td>' +
+               '<td>' + (b.use_cnt || 0) + '</td>' +
+               '<td>' + (b.is_active === 1 ? '啟用' : '<span class="hint">已停用</span>') + '</td>' +
+               '<td><button class="pq-btn bd-ren">改名</button> ' +
+               (b.is_active === 1 ? '<button class="pq-btn danger bd-del">刪除</button>'
+                                  : '<button class="pq-btn bd-on">啟用</button>') + '</td></tr>';
+    }).join('');
+    $('#bdBody').html(h || '<tr><td colspan="5" class="pq-empty">尚未建立品牌</td></tr>');
+}
+function addBrand() {
+    var n = $.trim($('#bdName').val());
+    if (!n) { alert('請輸入品牌名稱'); $('#bdName').focus(); return; }
+    api('brand_save', { brand_name: n, note: $.trim($('#bdNote').val()) }, 'POST').done(function (r) {
+        BRANDS = r.brands || []; $('#bdName,#bdNote').val(''); renderBrands(); renderBrandOptions();
+    }).fail(fail);
+}
+$(document).on('click', '#bdAdd', addBrand);
+$(document).on('click', '.bd-ren', function () {
+    var id = $(this).closest('tr').data('id');
+    var b = BRANDS.filter(function (x) { return String(x.brand_id) === String(id); })[0] || {};
+    var n = prompt('品牌改名：', b.brand_name || '');
+    if (n === null) return;
+    n = $.trim(n); if (!n) return;
+    if (b.use_cnt > 0 && !confirm('已有 ' + b.use_cnt + ' 個規格用這個品牌。\n改名只會改清單，既有規格上存的品牌名稱不會跟著改，確定？')) return;
+    api('brand_save', { brand_id: id, brand_name: n, note: b.note || '', is_active: b.is_active }, 'POST')
+        .done(function (r) { BRANDS = r.brands || []; renderBrands(); renderBrandOptions(); }).fail(fail);
+});
+$(document).on('click', '.bd-on', function () {
+    var id = $(this).closest('tr').data('id');
+    var b = BRANDS.filter(function (x) { return String(x.brand_id) === String(id); })[0] || {};
+    api('brand_save', { brand_id: id, brand_name: b.brand_name, note: b.note || '', is_active: 1 }, 'POST')
+        .done(function (r) { BRANDS = r.brands || []; renderBrands(); renderBrandOptions(); }).fail(fail);
+});
+$(document).on('click', '.bd-del', function () {
+    var id = $(this).closest('tr').data('id');
+    var b = BRANDS.filter(function (x) { return String(x.brand_id) === String(id); })[0] || {};
+    if (!confirm('刪除品牌「' + (b.brand_name || '') + '」？\n若已有規格使用，會改成「停用」而不是真的刪掉（既有規格顯示不受影響）。')) return;
+    api('brand_delete', { brand_id: id }, 'POST').done(function (r) {
+        BRANDS = r.brands || [];
+        if (r.disabled) alert('已有 ' + r.used + ' 個規格使用此品牌，已改為停用（不再出現在選單，既有資料不動）。');
+        renderBrands(); renderBrandOptions();
+    }).fail(fail);
+});
+
+/* 規格的供應商小表格 */
+function renderSpecVendors() {
+    if (!SV_ROWS.length) {
+        $('#svBody').html('<tr><td colspan="7" class="pq-empty">尚未設定供應商——用下方搜尋加入廠商</td></tr>');
+        return;
+    }
+    var h = SV_ROWS.map(function (v, i) {
+        return '<tr data-i="' + i + '">' +
+            '<td><input type="radio" name="svPri" class="sv-pri"' + (v.is_primary === 1 ? ' checked' : '') + '></td>' +
+            '<td class="l">' + esc(v.vendor_name || '') + ' <span class="hint">' + esc(v.vendor_id || '') + '</span></td>' +
+            '<td><input type="text" class="sv-pn" value="' + esc(v.vendor_part_no || '') + '" maxlength="60" style="width:110px;"></td>' +
+            '<td><input type="number" class="sv-price" value="' + (v.ref_price == null ? '' : v.ref_price) + '" step="0.0001" style="width:100px;"></td>' +
+            '<td><input type="date" class="sv-qd" value="' + esc((v.quote_date || '').substr(0, 10)) + '" style="width:140px;"></td>' +
+            '<td><input type="text" class="sv-note" value="' + esc(v.note || '') + '" maxlength="200" style="width:130px;"></td>' +
+            '<td class="no-print"><button class="pq-btn danger sv-del">移除</button></td></tr>';
+    }).join('');
+    $('#svBody').html(h);
+}
+$(document).on('change', '.sv-pri', function () {
+    var i = $(this).closest('tr').data('i');
+    SV_ROWS.forEach(function (v, k) { v.is_primary = (k === i) ? 1 : 0; });
+});
+$(document).on('input change', '.sv-pn, .sv-price, .sv-qd, .sv-note', function () {
+    var $tr = $(this).closest('tr'), v = SV_ROWS[$tr.data('i')];
+    if (!v) return;
+    v.vendor_part_no = $tr.find('.sv-pn').val();
+    v.ref_price      = $tr.find('.sv-price').val();
+    v.quote_date     = $tr.find('.sv-qd').val();
+    v.note           = $tr.find('.sv-note').val();
+});
+$(document).on('click', '.sv-del', function () {
+    SV_ROWS.splice($(this).closest('tr').data('i'), 1);
+    renderSpecVendors();
+});
+var _svTimer = null;
+$(document).on('input', '#svKw', function () {
+    var kw = $.trim(this.value);
+    clearTimeout(_svTimer);
+    if (!kw) { $('#svVendorList').empty(); return; }
+    _svTimer = setTimeout(function () {
+        api('search_vendor', { kw: kw }).done(function (r) {
+            var h = (r.vendors || []).map(function (v) {
+                return '<a href="#" class="sv-pick" data-id="' + esc(v.maker_id_no) + '" data-nm="' + esc(v.maker_id) + '" ' +
+                       'style="display:inline-block;margin:2px 6px 2px 0;color:#b5762a;">' +
+                       esc(v.maker_id) + '（' + esc(v.maker_id_no) + '）</a>';
+            }).join('');
+            $('#svVendorList').html(h || '<span class="hint">查無廠商</span>');
+        }).fail(function () { $('#svVendorList').html('<span class="hint">搜尋失敗</span>'); });
+    }, 250);
+});
+$(document).on('click', '.sv-pick', function (e) {
+    e.preventDefault();
+    var id = $(this).data('id'), nm = $(this).data('nm');
+    if (SV_ROWS.some(function (v) { return String(v.vendor_id) === String(id); })) { alert('這家廠商已經在清單裡了'); return; }
+    SV_ROWS.push({ vendor_id: id, vendor_name: nm, vendor_part_no: '', ref_price: '', quote_date: '',
+                   is_primary: SV_ROWS.length ? 0 : 1, note: '' });   // 第一家自動當主要供應商
+    $('#svKw').val(''); $('#svVendorList').empty();
+    renderSpecVendors();
+});
 
 /* ── 標籤 / 屬性 / 設定 ───────────────────── */
 function openTagMgr() { renderTags(); openMask('mTagMgr'); }

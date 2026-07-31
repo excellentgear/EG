@@ -255,6 +255,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <div class="pq-toolbar">
                 <?php if ($perms['canBuy']): ?>
                 <button class="pq-btn warm" id="btnNewItem"><i class="fa fa-plus"></i> 新增品項</button>
+                <button class="pq-btn" id="btnBrands"><i class="fa fa-copyright"></i> 品牌清單</button>
                 <?php endif; ?>
                 <?php if ($perms['canAdmin']): ?>
                 <button class="pq-btn" id="btnTags"><i class="fa fa-tags"></i> 標籤管理</button>
@@ -667,7 +668,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <h5>規格變體（＝實際採購料號；同一品項的不同尺寸放這裡，不用另建品項）</h5>
             <div class="pq-wrap">
                 <table class="pq-table" id="specTable">
-                    <thead><tr><th>採購料號</th><th>規格</th><th>單位</th><th>預設儲位</th>
+                    <thead><tr><th>採購料號</th><th>規格</th><th>品牌</th><th>供應商</th><th>單位</th><th>預設儲位</th>
                         <th>安全存量</th><th>目前庫存</th><th>最近採購價</th><th class="no-print">操作</th></tr></thead>
                     <tbody id="specBody"></tbody>
                 </table>
@@ -683,7 +684,7 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 </div></div>
 
 <!-- ══ 規格編輯 ══ -->
-<div class="pq-mask" id="mSpec"><div class="pq-modal">
+<div class="pq-mask" id="mSpec"><div class="pq-modal wide">
     <div class="m-head"><span id="spTitle">新增規格</span><span class="m-close" onclick="closeMask('mSpec')">✕</span></div>
     <div class="m-body">
         <div id="spAttrs" class="pq-grid"></div>
@@ -691,16 +692,56 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
             <div class="pq-fld"><label>規格說明（留白則由上方屬性自動組出）</label><input type="text" id="spText"></div>
             <div class="pq-fld"><label>採購料號（留白＝自動編號，可自行輸入公司慣用編號）</label>
                 <input type="text" id="spCode" maxlength="40" placeholder="留白＝自動編號"></div>
+            <div class="pq-fld"><label>品牌（可直接打字，或從清單選）</label>
+                <input type="text" id="spBrand" list="brandOptions" maxlength="60" placeholder="例：Mitutoyo" autocomplete="off">
+                <datalist id="brandOptions"></datalist></div>
             <div class="pq-fld"><label>單位</label><select id="spUnit"></select></div>
             <div class="pq-fld"><label>預設儲位</label><select id="spLoc"></select></div>
             <div class="pq-fld"><label>安全存量</label><input type="number" id="spSafe" step="0.01"></div>
         </div>
+
+        <div class="pq-sec">
+            <h5>供應商（同一個規格可以跟不同廠商買，這裡全部列出來）</h5>
+            <div class="pq-wrap">
+                <table class="pq-table" id="svTable">
+                    <thead><tr><th style="width:52px;">主要</th><th>廠商</th><th>廠商料號</th>
+                        <th>參考單價</th><th>報價日</th><th>備註</th><th class="no-print">操作</th></tr></thead>
+                    <tbody id="svBody"></tbody>
+                </table>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+                <input type="text" id="svKw" placeholder="輸入廠商ID或名稱搜尋…" autocomplete="off"
+                       style="width:240px;border:1px solid #D8BE93;border-radius:4px;padding:4px 8px;">
+                <div id="svVendorList"></div>
+            </div>
+            <p class="hint">「主要供應商」只會有一家（勾了別家會自動改過去）。<b>品牌不等於供應商</b>——品牌是誰做的，供應商是跟誰買的，同一個品牌也可能跟好幾家買。</p>
+        </div>
+
         <p class="hint">屬性欄位是依「類別」設定的（設定 → 規格屬性設定），這樣同類別的規格命名才會一致、之後也能依屬性篩選。</p>
     </div>
     <div class="m-foot">
         <button class="pq-btn" onclick="closeMask('mSpec')">取消</button>
         <button class="pq-btn warm" id="btnSaveSpec"><i class="fa fa-save"></i> 儲存規格</button>
     </div>
+</div></div>
+
+<!-- ══ 品牌清單（由採購維護；其他模組只能選不能建） ══ -->
+<div class="pq-mask" id="mBrandMgr"><div class="pq-modal">
+    <div class="m-head"><span>品牌清單</span><span class="m-close" onclick="closeMask('mBrandMgr')">✕</span></div>
+    <div class="m-body">
+        <p class="hint" style="margin-top:0;"><b>品牌 ≠ 購買廠商</b>：品牌是「誰做的」（Mitutoyo、三豐…），
+            廠商是「跟誰買的」（在規格的供應商那裡設定）。這份清單由採購維護，其他模組（例如量測儀器校驗的量具料號對應）只能選、不能新增。</p>
+        <div style="display:flex;gap:6px;margin-bottom:8px;">
+            <input type="text" id="bdName" placeholder="新品牌名稱（例：Mitutoyo）" maxlength="60"
+                   style="flex:1;border:1px solid #D8BE93;border-radius:4px;padding:4px 8px;">
+            <input type="text" id="bdNote" placeholder="備註（選填）" maxlength="200"
+                   style="flex:1;border:1px solid #D8BE93;border-radius:4px;padding:4px 8px;">
+            <button class="pq-btn warm" id="bdAdd"><i class="fa fa-plus"></i> 新增</button>
+        </div>
+        <div class="pq-wrap"><table class="pq-table"><thead><tr><th>品牌</th><th>備註</th><th>使用中規格</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody id="bdBody"></tbody></table></div>
+    </div>
+    <div class="m-foot"><button class="pq-btn" onclick="closeMask('mBrandMgr')">關閉</button></div>
 </div></div>
 
 <!-- ══ 標籤管理 ══ -->

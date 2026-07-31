@@ -139,6 +139,76 @@ case 'search_user': {
 }
 
 /* ============================================================
+ * 採購品主檔：品牌清單（使用者 2026-07-30 指示）
+ *   品牌 ≠ 購買廠商——品牌是「誰做的」，廠商是「跟誰買的」。
+ *   **清單由採購維護**，其他模組（例如量測儀器校驗的量具料號對應）只能選、不能建。
+ * ============================================================ */
+case 'brand_list': {
+    jout(['brands' => purchase_brand_list($db, ((int)($_GET['all'] ?? 0) === 1) ? false : true)]);
+}
+case 'brand_save': {
+    if (!$perms['canBuy']) jerr('無維護採購品主檔的權限', 403);
+    purchase_ensure_brand_vendor_schema($db);
+    $bid  = pint('brand_id');
+    $name = pv('brand_name');
+    if ($name === '') jerr('請輸入品牌名稱');
+    if (mb_strlen($name) > 60) jerr('品牌名稱最長 60 個字');
+    $chk = $db->prepare("SELECT brand_id FROM purchase_brand WHERE brand_name=? AND brand_id<>? LIMIT 1");
+    $chk->execute([$name, $bid]);
+    if ($chk->fetchColumn()) jerr('品牌已存在：' . $name);
+    $db->beginTransaction();
+    if ($bid > 0) {
+        $db->prepare("UPDATE purchase_brand SET brand_name=?, note=?, is_active=?, sort_order=? WHERE brand_id=?")
+           ->execute([$name, pv('note') ?: null, pint('is_active', 1), pint('sort_order'), $bid]);
+    } else {
+        $so = (int)$db->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM purchase_brand")->fetchColumn();
+        $db->prepare("INSERT INTO purchase_brand (brand_name, note, sort_order, Created_By) VALUES (?,?,?,?)")
+           ->execute([$name, pv('note') ?: null, $so, $uid]);
+        $bid = (int)$db->lastInsertId();
+    }
+    $db->commit();
+    jout(['brand_id' => $bid, 'brands' => purchase_brand_list($db, false)]);
+}
+case 'brand_delete': {
+    if (!$perms['canBuy']) jerr('無維護採購品主檔的權限', 403);
+    $bid = pint('brand_id');
+    $st = $db->prepare("SELECT brand_name FROM purchase_brand WHERE brand_id=?");
+    $st->execute([$bid]);
+    $name = $st->fetchColumn();
+    if ($name === false) jerr('找不到品牌');
+    // 已被規格用到就只停用，不真的刪掉（規格存的是名稱字串，刪了會查不到這個品牌是什麼）
+    $st = $db->prepare("SELECT COUNT(*) FROM purchase_spec WHERE brand=?");
+    $st->execute([$name]);
+    $used = (int)$st->fetchColumn();
+    if ($used > 0) {
+        $db->prepare("UPDATE purchase_brand SET is_active=0 WHERE brand_id=?")->execute([$bid]);
+        jout(['disabled' => 1, 'used' => $used, 'brands' => purchase_brand_list($db, false)]);
+    }
+    $db->prepare("DELETE FROM purchase_brand WHERE brand_id=?")->execute([$bid]);
+    jout(['deleted' => 1, 'brands' => purchase_brand_list($db, false)]);
+}
+
+/* ---------- 規格的供應商清單（同規格可跟多家買） ---------- */
+case 'spec_vendor_list': {
+    jout(['vendors' => purchase_spec_vendors($db, (int)($_GET['spec_id'] ?? 0))]);
+}
+case 'spec_vendor_save': {
+    if (!$perms['canBuy']) jerr('無維護採購品主檔的權限', 403);
+    $specId = pint('spec_id');
+    if ($specId <= 0) jerr('缺少規格');
+    $chk = $db->prepare("SELECT COUNT(*) FROM purchase_spec WHERE spec_id=?");
+    $chk->execute([$specId]);
+    if (!(int)$chk->fetchColumn()) jerr('找不到規格');
+    $vendors = pjson('vendors');
+    if (!is_array($vendors)) jerr('資料格式錯誤');
+    purchase_ensure_brand_vendor_schema($db);   // DDL 會隱含 commit → 一定要在交易外先做完
+    $db->beginTransaction();
+    $n = purchase_save_spec_vendors($db, $specId, $vendors, $uid);
+    $db->commit();
+    jout(['saved' => $n, 'vendors' => purchase_spec_vendors($db, $specId)]);
+}
+
+/* ============================================================
  * 採購品主檔：標籤 / 規格屬性
  * ============================================================ */
 case 'tag_save': {
@@ -261,6 +331,11 @@ case 'item_detail': {
                         WHERE s.item_id=? AND s.is_active=1 ORDER BY s.spec_code");
     $st->execute([$itemId]);
     $item['specs'] = $st->fetchAll(PDO::FETCH_ASSOC);
+    // 每個規格帶上供應商清單（同規格可跟多家買）；品牌已在 s.* 裡（purchase_spec.brand）
+    $vmap = purchase_spec_vendors_map($db, array_map(fn($s) => (int)$s['spec_id'], $item['specs']));
+    foreach ($item['specs'] as &$sp) { $sp['vendors'] = $vmap[(int)$sp['spec_id']] ?? []; }
+    unset($sp);
+    $item['brands'] = purchase_brand_list($db);
     $st = $db->prepare("SELECT tag_id FROM purchase_item_tag WHERE item_id=?");
     $st->execute([$itemId]);
     $item['tag_ids'] = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
@@ -359,23 +434,32 @@ case 'spec_save': {
             jerr('採購料號 ' . $code . ' 已經被「' . $dupC['item_name'] . '／' . $dupC['spec_text'] . '」用掉了，請換一個');
         }
     }
+    // 品牌：與購買廠商是兩件事；清單由採購維護，但這裡允許直接打清單外的品牌
+    $brand = mb_substr(pv('brand'), 0, 60);
+    purchase_ensure_brand_vendor_schema($db);   // DDL 會隱含 commit → 一定要在交易外先做完
     $db->beginTransaction();
     if ($specId > 0) {
         $db->prepare("UPDATE purchase_spec SET spec_code=COALESCE(NULLIF(?,''), spec_code), spec_text=?, attr_json=?,
-                      unit_id=?, location_id=?, safety_qty=?, is_active=?, Modified_By=? WHERE spec_id=?")
+                      unit_id=?, location_id=?, safety_qty=?, brand=?, is_active=?, Modified_By=? WHERE spec_id=?")
            ->execute([$code, $specText, $attrJson, pint('unit_id') ?: null, pint('location_id') ?: null,
-                      pnum('safety_qty'), pint('is_active', 1), $uid, $specId]);
+                      pnum('safety_qty'), $brand ?: null, pint('is_active', 1), $uid, $specId]);
     } else {
-        // 同品項同規格擋重複
-        $chk = $db->prepare("SELECT spec_code FROM purchase_spec WHERE item_id=? AND spec_text=? AND is_active=1 LIMIT 1");
-        $chk->execute([$itemId, $specText]);
+        // 同品項同規格擋重複（品牌不同就算不同料號，所以一起比）
+        $chk = $db->prepare("SELECT spec_code FROM purchase_spec
+                             WHERE item_id=? AND spec_text=? AND COALESCE(brand,'')=? AND is_active=1 LIMIT 1");
+        $chk->execute([$itemId, $specText, $brand]);
         if ($dup = $chk->fetchColumn()) { $db->rollBack(); jerr('此規格已存在：' . $dup); }
         if ($code === '') $code = purchase_next_spec_code($db, $itemId);
-        $db->prepare("INSERT INTO purchase_spec (item_id, spec_code, spec_text, attr_json, unit_id, location_id, safety_qty, Created_By)
-                      VALUES (?,?,?,?,?,?,?,?)")
+        $db->prepare("INSERT INTO purchase_spec (item_id, spec_code, spec_text, attr_json, unit_id, location_id, safety_qty, brand, Created_By)
+                      VALUES (?,?,?,?,?,?,?,?,?)")
            ->execute([$itemId, $code, $specText, $attrJson, pint('unit_id') ?: null,
-                      pint('location_id') ?: null, pnum('safety_qty'), $uid]);
+                      pint('location_id') ?: null, pnum('safety_qty'), $brand ?: null, $uid]);
         $specId = (int)$db->lastInsertId();
+    }
+    // 供應商清單（有送才處理；沒送就不動既有資料）
+    if (isset($_POST['vendors'])) {
+        $vs = pjson('vendors');
+        if (is_array($vs)) purchase_save_spec_vendors($db, $specId, $vs, $uid);
     }
     $db->commit();
     $st = $db->prepare("SELECT spec_code FROM purchase_spec WHERE spec_id=?");

@@ -152,6 +152,8 @@ function purchase_ensure_schema(PDO $db): void
         KEY idx_item (item_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='採購品規格變體(=採購料號，庫存以此計數)'");
 
+    purchase_ensure_brand_vendor_schema($db);
+
     // ── 申請單 ──
     $db->exec("CREATE TABLE IF NOT EXISTS purchase_request (
         req_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -457,6 +459,150 @@ function purchase_need_levels(float $grandTotal, float $l1, float $l2): int
     if ($grandTotal <= $l1) return 0;
     if ($grandTotal <= $l2) return 1;
     return 2;
+}
+
+/* ============================================================
+ * 品牌主檔 / 規格供應商（使用者 2026-07-30 定案）
+ *   ‧ 品牌 ≠ 購買廠商：品牌是「誰做的」(Mitutoyo)，廠商是「跟誰買的」(maker_list)
+ *   ‧ 品牌清單由**採購**維護，其他模組（例如量測儀器校驗的量具料號對應）只能選、不能建；
+ *     但欄位允許手動輸入清單外的品牌（規格上存的是名稱字串，不綁 brand_id）
+ *   ‧ 同一個採購料號的同規格可能跟多家買 → purchase_spec_vendor 一對多
+ * 這段獨立成函式，讓不載入整包採購模組的頁面也能在動到這些資料前確保表存在。
+ * ============================================================ */
+function purchase_ensure_brand_vendor_schema(PDO $db): void
+{
+    $db->exec("CREATE TABLE IF NOT EXISTS purchase_brand (
+        brand_id INT AUTO_INCREMENT PRIMARY KEY,
+        brand_name VARCHAR(60) NOT NULL COMMENT '品牌名稱(例 Mitutoyo)',
+        note VARCHAR(200) NULL,
+        is_active TINYINT NOT NULL DEFAULT 1,
+        sort_order INT NOT NULL DEFAULT 0,
+        Created_By INT NULL, Created_At TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_brand_name (brand_name)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='採購品牌主檔(清單由採購維護；品牌與購買廠商是兩件事)'");
+
+    // vendor_name 存快照，不跟 utf8mb3 的 maker_list 做 join（避免定序衝突，見 ai-rules/00 陷阱表）
+    $db->exec("CREATE TABLE IF NOT EXISTS purchase_spec_vendor (
+        sv_id INT AUTO_INCREMENT PRIMARY KEY,
+        spec_id INT NOT NULL COMMENT 'purchase_spec.spec_id',
+        vendor_id VARCHAR(11) NOT NULL COMMENT 'maker_list.maker_id_no',
+        vendor_name VARCHAR(120) NULL COMMENT '廠商顯示名稱(快照)',
+        vendor_part_no VARCHAR(60) NULL COMMENT '廠商料號(對方品號，叫貨用)',
+        ref_price DECIMAL(12,4) NULL COMMENT '參考單價',
+        quote_date DATE NULL COMMENT '參考單價的報價日',
+        is_primary TINYINT NOT NULL DEFAULT 0 COMMENT '主要供應商(同規格只留一家)',
+        note VARCHAR(200) NULL,
+        Created_By INT NULL, Created_At TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        Modified_By INT NULL, Modified_At TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_spec_vendor (spec_id, vendor_id),
+        KEY idx_spec (spec_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='採購料號(規格)的供應商清單，同規格可多家'");
+
+    // 規格加品牌欄（只加不改；既有資料 NULL＝未指定品牌，行為與加欄前相同）
+    foreach ([
+        "ALTER TABLE purchase_spec ADD COLUMN brand VARCHAR(60) NULL COMMENT '品牌(與購買廠商不同；清單見 purchase_brand)'",
+        "ALTER TABLE purchase_spec ADD INDEX idx_brand (brand)",
+    ] as $sql) {
+        try { $db->exec($sql); } catch (Throwable $e) { /* 已存在 */ }
+    }
+}
+
+/** 品牌清單（供下拉／datalist；表不存在時回空陣列，呼叫端不必特別處理） */
+function purchase_brand_list(PDO $db, bool $activeOnly = true): array
+{
+    try {
+        $sql = "SELECT brand_id, brand_name, note, is_active, sort_order FROM purchase_brand";
+        if ($activeOnly) $sql .= " WHERE is_active=1";
+        $sql .= " ORDER BY sort_order, brand_name";
+        $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    // 使用中規格數另外查，purchase_spec.brand 欄位還沒加的環境也不會整份清單掛掉
+    $used = [];
+    try {
+        foreach ($db->query("SELECT brand, COUNT(*) c FROM purchase_spec
+                             WHERE brand IS NOT NULL AND brand<>'' GROUP BY brand")->fetchAll(PDO::FETCH_ASSOC) as $u) {
+            $used[(string)$u['brand']] = (int)$u['c'];
+        }
+    } catch (Throwable $e) { /* 欄位尚未加 */ }
+    foreach ($rows as &$r) {
+        $r['brand_id'] = (int)$r['brand_id'];
+        $r['is_active'] = (int)$r['is_active'];
+        $r['sort_order'] = (int)$r['sort_order'];
+        $r['use_cnt'] = $used[(string)$r['brand_name']] ?? 0;
+    }
+    return $rows;
+}
+
+/** 某規格的供應商清單（主要供應商排最前） */
+function purchase_spec_vendors(PDO $db, int $specId): array
+{
+    if ($specId <= 0) return [];
+    try {
+        $st = $db->prepare("SELECT sv_id, spec_id, vendor_id, vendor_name, vendor_part_no,
+                                   ref_price, quote_date, is_primary, note
+                            FROM purchase_spec_vendor WHERE spec_id=?
+                            ORDER BY is_primary DESC, vendor_name, sv_id");
+        $st->execute([$specId]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    foreach ($rows as &$r) { $r['sv_id'] = (int)$r['sv_id']; $r['is_primary'] = (int)$r['is_primary']; }
+    return $rows;
+}
+
+/** 一次取多個規格的供應商（列表用；回 [spec_id => [...]]） */
+function purchase_spec_vendors_map(PDO $db, array $specIds): array
+{
+    $ids = array_values(array_filter(array_map('intval', $specIds)));
+    if (!$ids) return [];
+    $in = implode(',', $ids);
+    try {
+        $rows = $db->query("SELECT sv_id, spec_id, vendor_id, vendor_name, vendor_part_no,
+                                   ref_price, quote_date, is_primary, note
+                            FROM purchase_spec_vendor WHERE spec_id IN ($in)
+                            ORDER BY is_primary DESC, vendor_name, sv_id")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    $out = [];
+    foreach ($rows as $r) {
+        $r['sv_id'] = (int)$r['sv_id']; $r['is_primary'] = (int)$r['is_primary'];
+        $out[(int)$r['spec_id']][] = $r;
+    }
+    return $out;
+}
+
+/**
+ * 整批覆寫某規格的供應商清單（呼叫端負責權限與 transaction）
+ * $vendors = [['vendor_id','vendor_name','vendor_part_no','ref_price','quote_date','is_primary','note'], ...]
+ * 同一 vendor_id 只留一筆；is_primary 只會有一家（多勾時取第一家）。
+ *
+ * 注意：**本函式不建表**。purchase_ensure_brand_vendor_schema() 會跑 DDL，而 MySQL 的 DDL 會
+ * 觸發隱含 commit——在交易中呼叫會把交易做掉，之後 commit() 直接噴「There is no active transaction」，
+ * 而且前面的寫入已經無法 rollback。呼叫端請在 beginTransaction() **之前**自行確保 schema。
+ */
+function purchase_save_spec_vendors(PDO $db, int $specId, array $vendors, int $uid): int
+{
+    if ($specId <= 0) return 0;
+    $db->prepare("DELETE FROM purchase_spec_vendor WHERE spec_id=?")->execute([$specId]);
+    $ins = $db->prepare("INSERT INTO purchase_spec_vendor
+        (spec_id, vendor_id, vendor_name, vendor_part_no, ref_price, quote_date, is_primary, note, Created_By, Modified_By)
+        VALUES (?,?,?,?,?,?,?,?,?,?)");
+    $seen = []; $primaryUsed = false; $n = 0;
+    foreach ($vendors as $v) {
+        $vid = trim((string)($v['vendor_id'] ?? ''));
+        if ($vid === '' || isset($seen[$vid])) continue;
+        $seen[$vid] = 1;
+        $isPri = ((int)($v['is_primary'] ?? 0) === 1 && !$primaryUsed) ? 1 : 0;
+        if ($isPri) $primaryUsed = true;
+        $price = ($v['ref_price'] ?? '') === '' ? null : (float)$v['ref_price'];
+        $qd    = trim((string)($v['quote_date'] ?? ''));
+        $qd    = preg_match('/^\d{4}-\d{2}-\d{2}$/', $qd) ? $qd : null;
+        $ins->execute([$specId, mb_substr($vid, 0, 11),
+                       mb_substr(trim((string)($v['vendor_name'] ?? '')), 0, 120) ?: null,
+                       mb_substr(trim((string)($v['vendor_part_no'] ?? '')), 0, 60) ?: null,
+                       $price, $qd, $isPri,
+                       mb_substr(trim((string)($v['note'] ?? '')), 0, 200) ?: null, $uid, $uid]);
+        $n++;
+    }
+    return $n;
 }
 
 /* ============================================================

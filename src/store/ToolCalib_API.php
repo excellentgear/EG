@@ -248,14 +248,18 @@ case 'list': {
     [$y, $m] = array_map('intval', explode('-', $ym));
 
     // 採購料號（purchase_spec）尚未建表的環境不加 join，行為與加欄前相同
-    $hasSpecTbl = false;
-    try { $hasSpecTbl = (bool)$db->query("SHOW TABLES LIKE 'purchase_spec'")->fetchColumn(); } catch (Throwable $e) {}
+    $hasSpecTbl = false; $hasBrandCol = false;
+    try {
+        $hasSpecTbl = (bool)$db->query("SHOW TABLES LIKE 'purchase_spec'")->fetchColumn();
+        if ($hasSpecTbl) $hasBrandCol = (bool)$db->query("SHOW COLUMNS FROM purchase_spec LIKE 'brand'")->fetchColumn();
+    } catch (Throwable $e) {}
     $st = $db->query("SELECT t.Tool_id, t.Tool_No, t.QC_Tool_List_id, t.calibration_due,
                              t.calib_cycle_months, t.calib_managed, t.calib_method, t.purchase_spec_id,
                              l.QC_Tool AS category_name,
                              COALESCE(l.calib_required,1) AS cat_required,
                              COALESCE(l.calib_tab,0)      AS cat_tab"
-                     . ($hasSpecTbl ? ", ps.spec_code, ps.spec_text, pi.item_name AS spec_item_name" : "") . "
+                     . ($hasSpecTbl ? ", ps.spec_code, ps.spec_text, pi.item_name AS spec_item_name" : "")
+                     . ($hasBrandCol ? ", ps.brand AS spec_brand" : "") . "
                       FROM qc_tool t LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=t.QC_Tool_List_id"
                      . ($hasSpecTbl ? " LEFT JOIN purchase_spec ps ON ps.spec_id=t.purchase_spec_id
                                         LEFT JOIN purchase_item pi ON pi.item_id=ps.item_id" : "") . "
@@ -284,6 +288,7 @@ case 'list': {
 
     $stat = tool_calib_kpi_compute($db, $y, $m, []);
     jout(['rows'=>$rows, 'ym'=>$ym, 'stat'=>$stat, 'perms'=>$perms,
+          'see_spec_code'=>tool_calib_can_see_spec_code($db, $u, $perms),
           'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db), 'excluded'=>$excluded]);
 }
 
@@ -720,13 +725,24 @@ case 'delete_calib': {
  */
 case 'spec_draft': {
     if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    // 品牌清單由採購維護（purchase_brand），本頁只能選、不能建 → 只讀，不呼叫任何寫入
+    $brands = [];
+    try {
+        require_once $document_root . '/EGsystem/src/common/purchase_lib.php';
+        $brands = purchase_brand_list($db);
+    } catch (Throwable $e) { /* 採購模組尚未初始化 → 品牌欄仍可自由輸入 */ }
     jout(['list'=>tool_calib_spec_draft($db),
           'purchase_categories'=>tool_calib_purchase_categories($db),
-          'default_category_id'=>tool_calib_default_purchase_category($db)]);
+          'default_category_id'=>tool_calib_default_purchase_category($db),
+          'units'=>tool_calib_units($db),
+          'default_unit_id'=>tool_calib_default_unit_id($db),
+          'brands'=>array_column($brands, 'brand_name')]);
 }
 
 /* ---------- 量具料號對應：確認後寫入（管理員；單一 transaction） ----------
  * items = JSON [{tool_id, item_name, spec, type, model, brand}]
+ * auto=1 時忽略 items，直接用後端解析出來的草稿整批建立（scope: unbound=只做未對應者 / all=全部）
+ * unit_id = 建立時帶入的單位，**預設 PCS**（使用者 2026-07-30 指定）
  * 同名品項沿用既有、同 item+同 spec_text 沿用既有規格 → 重跑不會重複建立。
  */
 case 'spec_apply': {
@@ -738,17 +754,47 @@ case 'spec_apply': {
     $chk->execute([$catId]);
     if (!(int)$chk->fetchColumn()) jerr('找不到該採購品類別，請重新整理後再試');
 
-    $items = json_decode((string)($_POST['items'] ?? ''), true);
-    if (!is_array($items) || !$items) jerr('沒有要建立的資料（請先產生草稿並勾選）');
+    // 單位：沒帶或帶 0 一律回退成預設 PCS；有帶就先確認存在
+    $unitId = (int)($_POST['unit_id'] ?? 0);
+    if (!$unitId) $unitId = tool_calib_default_unit_id($db);
+    if ($unitId) {
+        $chk = $db->prepare("SELECT COUNT(*) FROM stock_units WHERE unit_id=?");
+        $chk->execute([$unitId]);
+        if (!(int)$chk->fetchColumn()) jerr('找不到該單位，請重新整理後再試');
+    }
+    $unitId = $unitId ?: null;
+
+    if ((int)($_POST['auto'] ?? 0) === 1) {
+        // 批次自動建立：直接用後端解析的草稿，不需逐列確認（廠牌一律留空，日後於採購品主檔補）
+        $scope = (($_POST['scope'] ?? 'unbound') === 'all') ? 'all' : 'unbound';
+        $items = [];
+        foreach (tool_calib_spec_draft($db) as $d) {
+            if ($scope === 'unbound' && (int)$d['bound'] === 1) continue;
+            $items[] = ['tool_id'=>$d['Tool_id'], 'item_name'=>$d['item_name'], 'spec'=>$d['spec'],
+                        'type'=>$d['type'], 'brand'=>$d['brand'], 'model'=>$d['model']];
+        }
+        if (!$items) jerr($scope === 'unbound' ? '沒有尚未對應料號的量具（全部都已對應）' : '目前沒有量具資料');
+    } else {
+        $items = json_decode((string)($_POST['items'] ?? ''), true);
+        if (!is_array($items) || !$items) jerr('沒有要建立的資料（請先產生草稿並勾選）');
+    }
+
+    // 品牌是 purchase_spec 的獨立欄位（不併進 spec_text）→ 先確保欄位/表存在
+    purchase_ensure_brand_vendor_schema($db);
 
     $newItems = 0; $newSpecs = 0; $bound = 0; $skipped = [];
     try {
         $db->beginTransaction();
         $findItem = $db->prepare("SELECT item_id FROM purchase_item WHERE category_id=? AND item_name=? ORDER BY item_id LIMIT 1");
-        $insItem  = $db->prepare("INSERT INTO purchase_item (item_code, category_id, item_name, note, Created_By)
-                                  VALUES (?,?,?,'由量測儀器校驗管理－量具料號對應建立',?)");
-        $findSpec = $db->prepare("SELECT spec_id FROM purchase_spec WHERE item_id=? AND spec_text=? ORDER BY spec_id LIMIT 1");
-        $insSpec  = $db->prepare("INSERT INTO purchase_spec (item_id, spec_code, spec_text, Created_By) VALUES (?,?,?,?)");
+        $insItem  = $db->prepare("INSERT INTO purchase_item (item_code, category_id, item_name, default_unit_id, note, Created_By)
+                                  VALUES (?,?,?,?,'由量測儀器校驗管理－量具料號對應建立',?)");
+        // 同品項＋同規格文字＋同品牌才算同一個料號（不同品牌＝不同料號）
+        $findSpec = $db->prepare("SELECT spec_id FROM purchase_spec
+                                  WHERE item_id=? AND spec_text=? AND COALESCE(brand,'')=? ORDER BY spec_id LIMIT 1");
+        $insSpec  = $db->prepare("INSERT INTO purchase_spec (item_id, spec_code, spec_text, brand, unit_id, Created_By) VALUES (?,?,?,?,?,?)");
+        // 沿用既有料號時只補「目前空白」的單位，已設定過的不覆寫（不破壞既有資料）
+        $fixItemUnit = $db->prepare("UPDATE purchase_item SET default_unit_id=? WHERE item_id=? AND default_unit_id IS NULL");
+        $fixSpecUnit = $db->prepare("UPDATE purchase_spec SET unit_id=? WHERE spec_id=? AND unit_id IS NULL");
         $updTool  = $db->prepare("UPDATE qc_tool SET purchase_spec_id=? WHERE Tool_id=?");
         $getTool  = $db->prepare("SELECT Tool_No FROM qc_tool WHERE Tool_id=? LIMIT 1");
 
@@ -762,30 +808,36 @@ case 'spec_apply': {
             // 交易中不可用 jerr()（會 exit 而不 rollback）→ 丟例外交給下面的 catch 統一回復
             if ($itemName === '') throw new RuntimeException('量具「'.$toolNo.'」的品項名稱不可空白');
             $specText = tool_calib_compose_spec_text([
-                'brand' => (string)($it['brand'] ?? ''), 'spec' => (string)($it['spec'] ?? ''),
+                'spec' => (string)($it['spec'] ?? ''),
                 'model' => (string)($it['model'] ?? ''), 'type' => (string)($it['type'] ?? ''),
             ]);
+            $brand = mb_substr(trim((string)($it['brand'] ?? '')), 0, 60);
 
             $findItem->execute([$catId, $itemName]);
             $itemId = (int)$findItem->fetchColumn();
             if (!$itemId) {
-                $insItem->execute([purchase_next_item_code($db, $catId), $catId, $itemName, $uid]);
+                $insItem->execute([purchase_next_item_code($db, $catId), $catId, $itemName, $unitId, $uid]);
                 $itemId = (int)$db->lastInsertId();
                 $newItems++;
+            } elseif ($unitId) {
+                $fixItemUnit->execute([$unitId, $itemId]);      // 既有品項單位空白才補
             }
-            $findSpec->execute([$itemId, $specText]);
+            $findSpec->execute([$itemId, $specText, $brand]);
             $specId = (int)$findSpec->fetchColumn();
             if (!$specId) {
-                $insSpec->execute([$itemId, purchase_next_spec_code($db, $itemId), $specText, $uid]);
+                $insSpec->execute([$itemId, purchase_next_spec_code($db, $itemId), $specText, $brand ?: null, $unitId, $uid]);
                 $specId = (int)$db->lastInsertId();
                 $newSpecs++;
+            } elseif ($unitId) {
+                $fixSpecUnit->execute([$unitId, $specId]);      // 既有規格單位空白才補
             }
             $updTool->execute([$specId, $tid]);
             $bound++;
         }
         $db->commit();
     } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('建立料號失敗：'.$e->getMessage(), 500); }
-    jout(['new_items'=>$newItems, 'new_specs'=>$newSpecs, 'bound'=>$bound, 'skipped'=>$skipped]);
+    jout(['new_items'=>$newItems, 'new_specs'=>$newSpecs, 'bound'=>$bound, 'skipped'=>$skipped,
+          'unit_id'=>$unitId, 'total'=>count($items)]);
 }
 
 /* ---------- 清除測試資料（僅超級管理員 id=1；只清本模組交易資料，設定類一律保留） ---------- */

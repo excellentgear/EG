@@ -557,10 +557,14 @@ function tool_calib_parse_tool_no(string $toolNo, string $catName = ''): array {
     return ['spec' => $spec, 'type' => $type, 'model' => $model, 'brand' => ''];
 }
 
-/** 由草稿欄位組出 purchase_spec.spec_text（廠牌 規格 型號 型式；空欄自動略過，上限 150 字） */
+/**
+ * 由草稿欄位組出 purchase_spec.spec_text（規格 型號 型式；空欄自動略過，上限 150 字）
+ * **品牌不併進來**——品牌是獨立欄位 purchase_spec.brand（使用者 2026-07-30：品牌 ≠ 購買廠商，
+ * 清單由採購維護），併進規格文字會讓同規格不同品牌無法分辨、也沒辦法依品牌查。
+ */
 function tool_calib_compose_spec_text(array $d): string {
     $parts = [];
-    foreach (['brand', 'spec', 'model'] as $k) {
+    foreach (['spec', 'model'] as $k) {
         $v = trim((string)($d[$k] ?? ''));
         if ($v !== '') $parts[] = $v;
     }
@@ -577,9 +581,14 @@ function tool_calib_compose_spec_text(array $d): string {
 function tool_calib_spec_draft(PDO $db): array {
     $hasSpecTbl = false;
     try { $hasSpecTbl = (bool)$db->query("SHOW TABLES LIKE 'purchase_spec'")->fetchColumn(); } catch (Throwable $e) {}
+    $hasBrandCol = false;
+    if ($hasSpecTbl) {
+        try { $hasBrandCol = (bool)$db->query("SHOW COLUMNS FROM purchase_spec LIKE 'brand'")->fetchColumn(); } catch (Throwable $e) {}
+    }
     $sql = "SELECT t.Tool_id, t.Tool_No, t.QC_Tool_List_id, t.purchase_spec_id,
                    l.QC_Tool AS category_name" .
-           ($hasSpecTbl ? ", ps.spec_code AS bound_code, ps.spec_text AS bound_text, pi.item_name AS bound_item" : "") . "
+           ($hasSpecTbl ? ", ps.spec_code AS bound_code, ps.spec_text AS bound_text, pi.item_name AS bound_item" : "") .
+           ($hasBrandCol ? ", ps.brand AS bound_brand" : "") . "
             FROM qc_tool t
             LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id = t.QC_Tool_List_id" .
            ($hasSpecTbl ? " LEFT JOIN purchase_spec ps ON ps.spec_id = t.purchase_spec_id
@@ -599,10 +608,12 @@ function tool_calib_spec_draft(PDO $db): array {
             'spec'          => $p['spec'],
             'type'          => $p['type'],
             'model'         => $p['model'],
-            'brand'         => $p['brand'],
+            // 已綁定者沿用規格上目前的品牌，重跑草稿不會把使用者補過的品牌洗掉
+            'brand'         => (string)($r['bound_brand'] ?? '') !== '' ? (string)$r['bound_brand'] : $p['brand'],
             'bound'         => $r['purchase_spec_id'] ? 1 : 0,
             'bound_code'    => (string)($r['bound_code'] ?? ''),
-            'bound_text'    => trim(((string)($r['bound_item'] ?? '')) . ' ' . ((string)($r['bound_text'] ?? ''))),
+            'bound_text'    => trim(((string)($r['bound_item'] ?? '')) . ' '
+                                  . ((string)($r['bound_brand'] ?? '')) . ' ' . ((string)($r['bound_text'] ?? ''))),
             'parsed'        => $p['spec'] !== '' ? 1 : 0,
         ];
         $d['spec_text_preview'] = tool_calib_compose_spec_text($d);
@@ -619,6 +630,55 @@ function tool_calib_purchase_categories(PDO $db): array {
     } catch (Throwable $e) { return []; }
     foreach ($rows as &$r) { $r['category_id'] = (int)$r['category_id']; }
     return $rows;
+}
+
+/**
+ * 是否看得到「採購料號代碼」(spec_code)——**只有採購看得懂料號 ID，其他人用中文品名／規格查就好**
+ * （使用者 2026-07-30 指示）。判定沿用採購模組的口徑：系統管理者，或具 purchase_buy／purchase_admin
+ * 功能碼（role_features 優先、舊 role_code 後援），不重寫一套權限規則。
+ */
+function tool_calib_can_see_spec_code(PDO $db, ?array $u, array $perms): bool {
+    if (!$u) return false;
+    if (!empty($perms['isAdmin'])) return true;
+    $uid = (int)$u['id'];
+    try {
+        require_once __DIR__ . '/role_features_helper.php';
+        $feat = rf_load_user_features_all($db, $uid);
+        foreach (['purchase_admin', 'purchase_buy'] as $c) { if (rf_has_feature($feat, $c)) return true; }
+    } catch (Throwable $e) { /* helper 不存在 → 只看舊 role_code */ }
+    try {
+        $st = $db->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                            WHERE ur.user_id=? AND r.module='purchase' AND r.role_code IN ('purchase_admin','purchase_buy')
+                            UNION
+                            SELECT 1 FROM user_department_position_map m
+                            JOIN position_roles pr ON pr.position_id=m.position_id
+                            JOIN roles r ON r.role_id=pr.role_id
+                            WHERE m.user_id=? AND r.module='purchase' AND r.role_code IN ('purchase_admin','purchase_buy')
+                            LIMIT 1");
+        $st->execute([$uid, $uid]);
+        return (bool)$st->fetchColumn();
+    } catch (Throwable $e) { return false; }
+}
+
+/** 單位清單（purchase_item.default_unit_id／purchase_spec.unit_id 用） */
+function tool_calib_units(PDO $db): array {
+    try {
+        $rows = $db->query("SELECT unit_id, unit_name, unit_symbol FROM stock_units
+                            WHERE is_active=1 ORDER BY sort_order, unit_id")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    foreach ($rows as &$r) { $r['unit_id'] = (int)$r['unit_id']; }
+    return $rows;
+}
+
+/** 量具的預設單位＝**PCS**（使用者 2026-07-30 指定）；查不到 PCS 才回 0 由使用者選 */
+function tool_calib_default_unit_id(PDO $db): int {
+    try {
+        $st = $db->prepare("SELECT unit_id FROM stock_units
+                            WHERE is_active=1 AND (UPPER(unit_name)='PCS' OR UPPER(unit_symbol)='PCS')
+                            ORDER BY unit_id LIMIT 1");
+        $st->execute();
+        return (int)$st->fetchColumn();
+    } catch (Throwable $e) { return 0; }
 }
 
 /** 預設採購品類別 id（優先 category_code='QC'，其次名稱含「量具」，都沒有回 0 由使用者選） */
