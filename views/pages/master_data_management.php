@@ -2089,6 +2089,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // ── 料號／圖面代號 重複判定（save_part 與即時檢查共用同一份規則）────────────
+    // 圖面代號必須能唯一對應到一筆料號，否則其他頁面用圖面代號綁定時會對到兩筆。
+    // 慣例：圖面代號＝自身料號視為「未設定」（畫面本來就不顯示），舊資料大量如此，不列入衝突對象。
+    function md_code_conflict($pdo, $d_id, $D_Setting_Id, $Drawing_No) {
+        $d_id = intval($d_id);
+        $D_Setting_Id = trim((string)$D_Setting_Id);
+        $Drawing_No   = trim((string)$Drawing_No);
+        if ($Drawing_No !== '' && $Drawing_No !== $D_Setting_Id) {
+            $q = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE Drawing_No=? AND Drawing_No<>D_Setting_Id AND d_id<>? LIMIT 1");
+            $q->execute([$Drawing_No, $d_id]);
+            if ($r = $q->fetch(PDO::FETCH_ASSOC))
+                return ['field'=>'Drawing_No','message'=>"圖面代號「{$Drawing_No}」已是料號「{$r['D_Setting_Id']}」的圖面代號，不可重複"];
+            $q = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE D_Setting_Id=? AND d_id<>? LIMIT 1");
+            $q->execute([$Drawing_No, $d_id]);
+            if ($q->fetch())
+                return ['field'=>'Drawing_No','message'=>"圖面代號「{$Drawing_No}」與現有料號同名，其他頁面會對應到兩筆資料，請改用別的代號"];
+        }
+        if ($D_Setting_Id !== '') {
+            $q = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE Drawing_No=? AND Drawing_No<>D_Setting_Id AND d_id<>? LIMIT 1");
+            $q->execute([$D_Setting_Id, $d_id]);
+            if ($r = $q->fetch(PDO::FETCH_ASSOC))
+                return ['field'=>'D_Setting_Id','message'=>"料號「{$D_Setting_Id}」已被料號「{$r['D_Setting_Id']}」拿去當圖面代號，請改用別的料號或先修改對方的圖面代號"];
+        }
+        return null;
+    }
+
+    // 即時檢查（輸入當下就回報原因，不必等到儲存）
+    if ($_POST['action'] === 'check_code_conflict') {
+        try {
+            $c = md_code_conflict($pdo, intval($_POST['d_id'] ?? 0), $_POST['D_Setting_Id'] ?? '', $_POST['Drawing_No'] ?? '');
+            echo json_encode(['success'=>true, 'conflict'=>$c ? true : false,
+                              'field'=>$c['field'] ?? '', 'message'=>$c['message'] ?? '']);
+        } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
     if ($_POST['action'] === 'save_part') {
         try {
             $d_id       = intval($_POST['d_id'] ?? 0);
@@ -2116,6 +2152,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             if (empty($D_Setting_Id)) throw new Exception('料號不可為空');
             if (empty($Customer_Id))  throw new Exception('客戶為必填欄位');
+
+            // 圖面代號＝料號本身＝沒設圖面代號，一律存 NULL（畫面本來就不顯示）
+            if ($Drawing_No !== null && $Drawing_No === $D_Setting_Id) $Drawing_No = null;
+            // 圖面代號不可重複（含不可與別筆料號同名），否則其他頁面用圖面代號綁不到唯一料號
+            $conf = md_code_conflict($pdo, $d_id, $D_Setting_Id, $Drawing_No);
+            if ($conf) throw new Exception($conf['message']);
 
             // 取得舊資料（用於 audit diff）
             $old_part_row = [];
@@ -6302,6 +6344,10 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 .modal-footer { border-top:1px solid var(--border); }
 .form-section-title { font-size:12px; font-weight:700; text-transform:uppercase; color:var(--accent); letter-spacing:.8px; margin:16px 0 8px; padding-bottom:4px; border-bottom:1px dashed var(--border); }
 .required-star { color:var(--danger); margin-left:2px; }
+/* 料號／圖面代號 重複即時提示 */
+.code-conflict-msg { display:none; margin-top:4px; font-size:12px; line-height:1.4; color:#DD5138; }
+.code-conflict-msg.show { display:block; }
+input.code-conflict { border-color:#DD5138 !important; background:#FDF1ED; }
 
 /* ── Empty State ── */
 .empty-state { text-align:center; padding:60px 20px; color:#aaa; }
@@ -7012,6 +7058,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
         <div class="form-group">
             <label>料號 <span class="required-star">*</span></label>
             <input type="text" class="form-control" id="pf-D_Setting_Id" name="D_Setting_Id" placeholder="例：A123-456" maxlength="30" required>
+            <div class="code-conflict-msg" id="pf-D_Setting_Id-err"></div>
         </div>
     </div>
     <div class="col-md-6">
@@ -7024,8 +7071,9 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 <div class="row">
     <div class="col-md-6">
         <div class="form-group">
-            <label>圖面代號 <small style="color:#888;font-weight:normal;">（選填，圖面上顯示的代替料號，可遮蔽真實料號）</small></label>
+            <label>圖面代號 <small style="color:#888;font-weight:normal;">（選填，圖面上顯示的代替料號，可遮蔽真實料號；全站不可重複）</small></label>
             <input type="text" class="form-control" id="pf-Drawing_No" name="Drawing_No" placeholder="留空則圖面使用料號本身" maxlength="30">
+            <div class="code-conflict-msg" id="pf-Drawing_No-err"></div>
         </div>
     </div>
     <div class="col-md-6">
@@ -13682,6 +13730,34 @@ function openPartModal(d_id) {
     }
 }
 
+// ── 料號／圖面代號 重複即時檢查（輸入當下就顯示原因，不等到儲存）──────────
+var _codeConflict = { D_Setting_Id:'', Drawing_No:'' };
+function _setCodeErr(fid, msg) {
+    _codeConflict[fid] = msg || '';
+    var el = document.getElementById('pf-'+fid), box = document.getElementById('pf-'+fid+'-err');
+    if (!el || !box) return;
+    if (msg) { box.textContent = msg; box.classList.add('show'); el.classList.add('code-conflict'); }
+    else     { box.textContent = '';  box.classList.remove('show'); el.classList.remove('code-conflict'); }
+}
+function clearCodeConflict() { _setCodeErr('D_Setting_Id',''); _setCodeErr('Drawing_No',''); }
+function checkCodeConflict() {
+    var pEl = document.getElementById('pf-D_Setting_Id'), dEl = document.getElementById('pf-Drawing_No');
+    if (!pEl || !dEl) return;
+    var part = pEl.value.trim(), dw = dEl.value.trim();
+    if (!part && !dw) { clearCodeConflict(); return; }
+    api({ action:'check_code_conflict', d_id:(document.getElementById('pf-d_id')||{value:0}).value,
+          D_Setting_Id:part, Drawing_No:dw })
+      .done(function(r){
+          if (!r || !r.success) return;
+          _setCodeErr('D_Setting_Id', (r.conflict && r.field === 'D_Setting_Id') ? r.message : '');
+          _setCodeErr('Drawing_No',   (r.conflict && r.field === 'Drawing_No')   ? r.message : '');
+      });
+}
+var _checkCodeConflictDebounced = debounce(checkCodeConflict, 350);
+$(document).on('input',    '#pf-D_Setting_Id, #pf-Drawing_No', _checkCodeConflictDebounced);
+$(document).on('focusout', '#pf-D_Setting_Id, #pf-Drawing_No', checkCodeConflict);
+$(document).on('shown.bs.modal', '#partModal', checkCodeConflict);
+
 function submitPartForm() {
     collectGearRows();
     // Validate
@@ -13726,6 +13802,8 @@ function submitPartForm() {
     };
     if (!data.D_Setting_Id) { showToast('料號不可為空','error'); return; }
     if (!data.Customer_Id) { showToast('客戶為必填欄位','error'); var _ce=document.getElementById('pf-customer-display'); if(_ce){_ce.focus();_ce.select();} return; }
+    if (_codeConflict.D_Setting_Id) { showToast(_codeConflict.D_Setting_Id,'error'); var _pe=document.getElementById('pf-D_Setting_Id'); if(_pe){_pe.focus();_pe.select();} return; }
+    if (_codeConflict.Drawing_No)   { showToast(_codeConflict.Drawing_No,'error');   var _de=document.getElementById('pf-Drawing_No');   if(_de){_de.focus();_de.select();} return; }
     var btn = document.querySelector('#partModal .btn-success');
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 儲存中…'; }
     var restore = function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="fa fa-save"></i> 儲存'; } };
