@@ -215,6 +215,7 @@ $rbacManagedPageIds = [
     101, // 個人工作紀錄 (personal_task)
     102, // 訂單毛利分析_TEST (Order_Profit_Analysis)
     100, // AS9100文件管理 (as_document_management)
+    128, // AS流程說明手冊 (as_flow_guide)；唯讀頁，與 100 共用 module='as_doc' 角色（asdoc_view 即可檢視）
 ];
 $rbacManagedModuleCodes = ['bom_track', 'personal_task'];  // 模組本身直連 RBAC 頁面者
 
@@ -1102,7 +1103,7 @@ $_quotDepts = array_keys($_deptSet);
                         $_rosterRoles, $_userRosterRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('asdoc', 'as_doc', 'AS9100 文件管理（個人指派，優先於職稱）', 'fa-folder-open-o', '#c0392b',
-                        '為使用者「個人」指派 AS 文件管理角色——<strong>個人有指派時以個人為準（覆蓋職稱）</strong>；未指派者自動套用下方「職稱權限」的設定。角色定義（名稱與功能勾選）請至 <strong>AS9100 文件管理頁 → 角色設定</strong>。',
+                        '為使用者「個人」指派 AS 文件管理角色——<strong>個人有指派時以個人為準（覆蓋職稱）</strong>；未指派者自動套用下方「職稱權限」的設定。角色定義（名稱與功能勾選）請至 <strong>AS9100 文件管理頁 → 角色設定</strong>。<br><strong>本區角色同時套用到「AS流程說明手冊」頁</strong>（各課室流程/表單說明＋待處理問題清單，唯讀）：有 <code>asdoc_view</code>（或該頁 ACRUD 的 A／R）即可檢視，管理者固定可看。',
                         $_asdocRoles, $_userAsdocRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('dbbk', 'db_backup', '資料庫備份管理', 'fa-database', '#b06f27',
