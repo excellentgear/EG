@@ -59,6 +59,7 @@ case 'meta': {
           'as_doc'=>vendor_audit_bound_asdoc($db),
           'eval_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_eval_as_doc_id'),
           'record_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_record_as_doc_id'),
+          'roster_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_roster_as_doc_id'),
           'company_name'=>vendor_audit_company_name($db),
           'items'=>vendor_audit_items(), 'item_max'=>VENDOR_AUDIT_ITEM_MAX,
           'total_max'=>VENDOR_AUDIT_TOTAL_MAX, 'pass_rate'=>VENDOR_AUDIT_PASS_RATE,
@@ -128,6 +129,57 @@ case 'periodic_eval_all': {
                   'months'=>$res['months'], 'halves'=>$res['halves'], 'fail'=>$fail];
     }
     jout(['year'=>$year, 'settings'=>$set, 'vendors'=>$out]);
+}
+
+/* ===== 合格供應商清冊（2-PH-01-04）===== */
+/* 清冊清單：納管 或 手動列入(in_roster)，非停用；含定期評核建議等級 + 手動覆寫 */
+case 'roster_list': {
+    $year = (int)($_GET['year'] ?? date('Y'));
+    $set = vendor_eval_settings($db);
+    $rows = $db->query("SELECT m.maker_id_no, m.maker_id, m.m_note, m.audit_managed, m.in_roster, m.roster_grade, m.main_category_id,
+                               dc.main_cat_name
+                        FROM maker_list m LEFT JOIN dict_maker_main_category dc ON dc.main_cat_id=m.main_category_id
+                        WHERE (m.status IS NULL OR m.status<>'" . VENDOR_AUDIT_DISABLED . "') AND (m.audit_managed=1 OR m.in_roster=1)
+                        ORDER BY m.main_category_id IS NULL, m.main_category_id, m.maker_id")->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $r) {
+        $ev = vendor_periodic_eval($db, $r['maker_id_no'], $year, $set);
+        $sg = $ev['full']['grade']; $ss = $ev['full']['score'];
+        $out[] = [
+            'maker_id_no'=>$r['maker_id_no'], 'maker_id'=>$r['maker_id'], 'm_note'=>$r['m_note'],
+            'main_cat_name'=>$r['main_cat_name'], 'is_managed'=>(int)$r['audit_managed'], 'in_roster'=>(int)$r['in_roster'],
+            'suggest_grade'=>$sg, 'suggest_score'=>$ss, 'roster_grade'=>$r['roster_grade'],
+            'final_grade'=>($r['roster_grade'] !== null && $r['roster_grade'] !== '') ? $r['roster_grade'] : $sg,
+        ];
+    }
+    jout(['year'=>$year, 'settings'=>$set, 'rows'=>$out]);
+}
+/* 加入清冊（手動列入非納管廠商） */
+case 'roster_add': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $ids = va_ids($_POST['maker_ids'] ?? '');
+    if (!$ids) jerr('請選擇廠商');
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $db->prepare("UPDATE maker_list SET in_roster=1 WHERE maker_id_no IN ($ph)")->execute($ids);
+    jout(['added'=>count($ids)]);
+}
+/* 移出清冊（僅清 in_roster；納管廠商仍會因 audit_managed 留在清冊） */
+case 'roster_remove': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $mid = trim((string)($_POST['maker_id_no'] ?? ''));
+    if ($mid==='') jerr('缺少廠商');
+    $db->prepare("UPDATE maker_list SET in_roster=0 WHERE maker_id_no=?")->execute([$mid]);
+    jout([]);
+}
+/* 批次設定/清除採用等級（覆寫建議；grade 空=清除改用建議值） */
+case 'roster_set_grade': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $ids = va_ids($_POST['maker_ids'] ?? '');
+    if (!$ids) jerr('請選擇廠商');
+    $g = trim((string)($_POST['grade'] ?? '')) ?: null;
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $db->prepare("UPDATE maker_list SET roster_grade=? WHERE maker_id_no IN ($ph)")->execute(array_merge([$g], $ids));
+    jout(['updated'=>count($ids)]);
 }
 
 /* 定期評核門檻設定（管理員） */
@@ -510,7 +562,7 @@ case 'save_cycle': {
                             ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
         $up->execute([$ab]);
     }
-    foreach (['as_doc_id'=>'vendor_audit_as_doc_id', 'record_as_doc_id'=>'vendor_record_as_doc_id'] as $pk=>$sk) {
+    foreach (['as_doc_id'=>'vendor_audit_as_doc_id', 'record_as_doc_id'=>'vendor_record_as_doc_id', 'roster_as_doc_id'=>'vendor_roster_as_doc_id'] as $pk=>$sk) {
         if (array_key_exists($pk, $_POST)) {
             $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
                                 ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
@@ -520,7 +572,8 @@ case 'save_cycle': {
     jout(['cycle_months'=>vendor_audit_cycle_months($db),
           'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', ''),
           'as_doc'=>vendor_audit_bound_asdoc($db),
-          'record_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_record_as_doc_id')]);
+          'record_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_record_as_doc_id'),
+          'roster_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_roster_as_doc_id')]);
 }
 
 /* 某廠商跨期稽核歷史 */

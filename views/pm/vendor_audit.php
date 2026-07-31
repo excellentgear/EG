@@ -201,6 +201,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div class="va-tabs">
             <button class="va-tab active" data-tab="audit"><i class="fa fa-check-square-o"></i> 稽核批次</button>
             <button class="va-tab" data-tab="eval"><i class="fa fa-line-chart"></i> 定期評核（月不良/遲交率）</button>
+            <button class="va-tab" data-tab="roster"><i class="fa fa-list-alt"></i> 合格供應商清冊</button>
         </div>
         <div id="tabAudit">
         <div class="va-toolbar">
@@ -280,6 +281,32 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 資料自 ERP（bom_ing）自動計算：品質依檢驗日歸月（不良=ng、特採=QQ）；交期＝發包日＋約定工作天為應交日，遲交＝回廠日晚於應交。半年判定依門檻（管理員可設）。
             </div>
         </div><!-- /tabEval -->
+
+        <div id="tabRoster" style="display:none;">
+            <div class="va-toolbar">
+                <label>評核年度</label>
+                <select id="rsYear"></select>
+                <button class="btn-warm" id="rsAdd" style="display:none;"><i class="fa fa-plus"></i> 加入清冊廠商</button>
+                <button id="rsBatchGrade" style="display:none;"><i class="fa fa-pencil"></i> 批次設定等級</button>
+                <button id="rsClearGrade" style="display:none;"><i class="fa fa-eraser"></i> 清除採用改回建議</button>
+                <button id="rsCsvBtn"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
+                <button id="rsPrintBtn"><i class="fa fa-print"></i> 列印清冊</button>
+            </div>
+            <div class="va-remind" id="rsRemind"></div>
+            <div class="va-table-wrap">
+                <table class="va-table" id="rosterTable">
+                    <thead><tr>
+                        <th style="width:32px;"><input type="checkbox" id="rsAllCk"></th>
+                        <th>大類</th><th>廠商ID</th><th>廠商名稱</th><th>廠商備註</th>
+                        <th>建議等級</th><th>採用等級</th><th>類型</th><th>操作</th>
+                    </tr></thead>
+                    <tbody id="rosterBody"><tr><td colspan="9" style="padding:18px;color:#8a6d45;">載入中…</td></tr></tbody>
+                </table>
+            </div>
+            <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
+                清冊＝納管廠商（固定稽核）＋手動列入之合格廠商（不需稽核者，靠定期評核績效監控）。建議等級來自定期評核全年成績；採用等級可批次覆寫。
+            </div>
+        </div><!-- /tabRoster -->
 <?php endif; ?>
     </div>
     <?php include '../partPage/footer.html' ?>
@@ -373,6 +400,22 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     </div>
 </div></div>
 
+<!-- 加入合格清冊 modal -->
+<div class="va-mask" id="rsAddMask"><div class="va-modal wide">
+    <div class="m-head"><span>加入合格清冊廠商（手動列入不需納管者）</span><span class="m-close" onclick="closeMask('rsAddMask')">✕</span></div>
+    <div class="m-body">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+            <input type="text" id="rsAddKw" placeholder="搜尋廠商名/編號" style="width:180px;height:28px;border:1px solid #D8BE93;border-radius:4px;padding:0 6px;">
+            <button class="b-att2" onclick="rsAddSearch()">查詢</button>
+            <label style="margin:0;font-size:12px;"><input type="checkbox" id="rsAddAll"> 全選</label>
+            <button class="b-att2" onclick="rsAddSelected()"><i class="fa fa-check"></i> 加入</button>
+            <span id="rsAddCnt" style="font-size:12px;color:#8a6d45;"></span>
+        </div>
+        <div class="pk-grid" id="rsAddBody"><div class="empty">輸入關鍵字查詢（已在清冊/停用者不列出）</div></div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('rsAddMask')">關閉</button></div>
+</div></div>
+
 <!-- 供應商品質系統評鑑記錄表 modal（2-PH-01-03，含雷達圖） -->
 <div class="va-mask" id="rsMask"><div class="va-modal xwide">
     <div class="m-head"><span id="rsTitle">供應商品質系統評鑑記錄表</span><span class="m-close" onclick="closeMask('rsMask')">✕</span></div>
@@ -419,6 +462,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
             <input type="text" id="cycRecKw" placeholder="搜尋文件編號/名稱" style="width:150px;">
             <select id="cycRecDoc" style="flex:1;min-width:200px;"><option value="0">（不綁定，用預設「供應商品質系統評鑑記錄表 / 2-PH-01-03」）</option></select>
+        </div>
+        <label style="margin-top:8px;">綁定 AS 表單（合格供應商清冊 2-PH-01-04）</label>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <input type="text" id="cycRosKw" placeholder="搜尋文件編號/名稱" style="width:150px;">
+            <select id="cycRosDoc" style="flex:1;min-width:200px;"><option value="0">（不綁定，用預設「合格供應商清冊 / 2-PH-01-04」）</option></select>
         </div>
         <div style="font-size:12px;color:#8a6d45;margin:4px 0 12px;">綁定後，AS 文件改名稱/改編號，列印文件會自動跟著變。</div>
         <label>佐證附件儲存路徑（base）—— 供應商自評等附件的實體存放資料夾</label>
@@ -552,9 +600,10 @@ function loadMeta(cb){
         $('#recPlanMonth').html(mo);
         if (m.perms.canEdit) $('#btnPick').show();
         if (m.perms.canAdmin){ $('#btnCycle').show(); $('#btnAuditor').show(); $('#pkManageGrp').show(); $('#evSet').show(); }
-        var $ey = $('#evYear').empty();
-        for (var yy=m.cur_year; yy>=m.cur_year-5; yy--) $ey.append('<option value="'+yy+'">'+yy+'</option>');
-        $ey.val(m.cur_year);
+        var $ey = $('#evYear').empty(), $ry = $('#rsYear').empty();
+        for (var yy=m.cur_year; yy>=m.cur_year-5; yy--){ $ey.append('<option value="'+yy+'">'+yy+'</option>'); $ry.append('<option value="'+yy+'">'+yy+'</option>'); }
+        $ey.val(m.cur_year); $ry.val(m.cur_year);
+        if (m.perms.canEdit){ $('#rsAdd,#rsBatchGrade,#rsClearGrade').show(); }
         loadEvVendors('');
         if (cb) cb();
     });
@@ -826,11 +875,13 @@ $('#btnCycle').on('click', function(){
     $('#cycVal').val(META.cycle_months); $('#cycAttachBase').val(META.attach_base||'');
     loadAsForms('#cycAsDoc', '', META.as_doc, '供應商評鑑稽核查表 / 2-PH-01-02');
     loadAsForms('#cycRecDoc', '', META.record_as_doc, '供應商品質系統評鑑記錄表 / 2-PH-01-03');
+    loadAsForms('#cycRosDoc', '', META.roster_as_doc, '合格供應商清冊 / 2-PH-01-04');
     openMask('cycMask');
 });
-var cycAsT=null, cycRecT=null;
+var cycAsT=null, cycRecT=null, cycRosT=null;
 $('#cycAsKw').on('input', function(){ clearTimeout(cycAsT); var k=$(this).val(); cycAsT=setTimeout(function(){ loadAsForms('#cycAsDoc', k, META.as_doc, '供應商評鑑稽核查表 / 2-PH-01-02', +$('#cycAsDoc').val()); }, 300); });
 $('#cycRecKw').on('input', function(){ clearTimeout(cycRecT); var k=$(this).val(); cycRecT=setTimeout(function(){ loadAsForms('#cycRecDoc', k, META.record_as_doc, '供應商品質系統評鑑記錄表 / 2-PH-01-03', +$('#cycRecDoc').val()); }, 300); });
+$('#cycRosKw').on('input', function(){ clearTimeout(cycRosT); var k=$(this).val(); cycRosT=setTimeout(function(){ loadAsForms('#cycRosDoc', k, META.roster_as_doc, '合格供應商清冊 / 2-PH-01-04', +$('#cycRosDoc').val()); }, 300); });
 function loadAsForms(sel, kw, curDoc, defLabel, keepId){
     var selId = keepId!=null ? keepId : (curDoc?curDoc.id:0);
     $.getJSON(API, {action:'as_forms', kw:kw||''}, function(res){
@@ -844,9 +895,9 @@ function loadAsForms(sel, kw, curDoc, defLabel, keepId){
 }
 function submitCycle(){
     $.post(API, {action:'save_cycle', cycle_months:$('#cycVal').val(), attach_base:$('#cycAttachBase').val(),
-        as_doc_id:$('#cycAsDoc').val(), record_as_doc_id:$('#cycRecDoc').val()}, function(res){
+        as_doc_id:$('#cycAsDoc').val(), record_as_doc_id:$('#cycRecDoc').val(), roster_as_doc_id:$('#cycRosDoc').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        META.cycle_months = res.cycle_months; META.attach_base = res.attach_base; META.as_doc = res.as_doc; META.record_as_doc = res.record_as_doc; closeMask('cycMask'); loadRound();
+        META.cycle_months = res.cycle_months; META.attach_base = res.attach_base; META.as_doc = res.as_doc; META.record_as_doc = res.record_as_doc; META.roster_as_doc = res.roster_as_doc; closeMask('cycMask'); loadRound();
     }, 'json');
 }
 
@@ -1049,8 +1100,9 @@ $('#btnCsv').on('click', function(){
 $('.va-tab').on('click', function(){
     $('.va-tab').removeClass('active'); $(this).addClass('active');
     var t=$(this).data('tab');
-    $('#tabAudit').toggle(t==='audit'); $('#tabEval').toggle(t==='eval');
+    $('#tabAudit').toggle(t==='audit'); $('#tabEval').toggle(t==='eval'); $('#tabRoster').toggle(t==='roster');
     if (t==='eval') loadEvVendors($('#evKw').val()||'');   // 切入時重抓納管廠商(納管可能剛變動)
+    if (t==='roster') loadRoster();
 });
 
 /* ---------- 定期評核 ---------- */
@@ -1303,6 +1355,89 @@ $(document).on('keydown', '#afBody input.af-score', function(e){
     var i = $col.index(this);
     var j = e.key==='ArrowDown' ? i+1 : i-1;
     if (j>=0 && j<$col.length){ var el=$col.eq(j); el.focus(); if(el[0].select) el[0].select(); }
+});
+
+/* ---------- 合格供應商清冊 ---------- */
+var ROSTER=null;
+$('#rsYear').on('change', loadRoster);
+function loadRoster(){
+    NProgress.start();
+    $.getJSON(API, {action:'roster_list', year:$('#rsYear').val()}, function(res){
+        NProgress.done();
+        if(!res.ok){ alert(res.error||'載入失敗'); return; }
+        ROSTER=res;
+        $('#rsRemind').html(res.year+' 年評核　共 <b>'+res.rows.length+'</b> 家（納管 '+res.rows.filter(function(r){return r.is_managed;}).length+' ＋ 手動列入 '+res.rows.filter(function(r){return !r.is_managed&&r.in_roster;}).length+'）　建議等級來自定期評核全年成績');
+        renderRoster();
+    }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function renderRoster(){
+    var h='';
+    ROSTER.rows.forEach(function(r){
+        var over=(r.roster_grade!=null&&r.roster_grade!=='');
+        h+='<tr><td><input type="checkbox" class="rs-ck" value="'+esc(r.maker_id_no)+'"></td>';
+        h+='<td>'+esc(r.main_cat_name||'—')+'</td><td>'+esc(r.maker_id_no)+'</td><td class="t-left"><b>'+esc(r.maker_id||'')+'</b></td>';
+        h+='<td class="t-left" style="max-width:200px;white-space:normal;">'+esc(r.m_note||'')+'</td>';
+        h+='<td>'+(r.suggest_grade?r.suggest_grade+'（'+(r.suggest_score==null?'—':r.suggest_score)+'）':'—')+'</td>';
+        h+='<td><b style="color:#8A5A2B;">'+esc(r.final_grade||'—')+'</b>'+(over?' <span style="font-size:10px;color:#c0762c;">手動</span>':'')+'</td>';
+        h+='<td>'+(r.is_managed?'<span class="st-pill st-done">納管</span>':'<span class="st-pill st-todo">手動列入</span>')+'</td>';
+        h+='<td>'+((!r.is_managed&&r.in_roster&&PERMS.canEdit)?'<span class="va-op" style="color:#DD5138;" onclick="rsRemove(\''+esc(r.maker_id_no)+'\')"><i class="fa fa-times"></i>移出</span>':'—')+'</td></tr>';
+    });
+    $('#rosterBody').html(h||'<tr><td colspan="9" style="padding:16px;color:#8a6d45;">清冊尚無廠商，請設定納管或「加入清冊廠商」</td></tr>');
+    $('#rsAllCk').prop('checked',false);
+}
+$('#rsAllCk').on('change', function(){ $('#rosterBody input.rs-ck').prop('checked', this.checked); });
+function rsChecked(){ return $('#rosterBody input.rs-ck:checked').map(function(){return this.value;}).get(); }
+$('#rsBatchGrade').on('click', function(){
+    var ids=rsChecked(); if(!ids.length){ alert('請勾選廠商'); return; }
+    var g=prompt('設定採用等級（例：'+(ROSTER.settings.grades||[]).map(function(x){return x.label;}).join('/')+'）：');
+    if(g===null) return; g=$.trim(g); if(!g){ alert('請輸入等級'); return; }
+    $.post(API,{action:'roster_set_grade',maker_ids:ids.join(','),grade:g},function(res){ if(!res.ok){alert(res.error||'失敗');return;} loadRoster(); },'json');
+});
+$('#rsClearGrade').on('click', function(){
+    var ids=rsChecked(); if(!ids.length){ alert('請勾選廠商'); return; }
+    $.post(API,{action:'roster_set_grade',maker_ids:ids.join(','),grade:''},function(res){ if(!res.ok){alert(res.error||'失敗');return;} loadRoster(); },'json');
+});
+function rsRemove(mid){
+    if(!confirm('將此廠商移出合格清冊？（納管廠商會保留）')) return;
+    $.post(API,{action:'roster_remove',maker_id_no:mid},function(res){ if(!res.ok){alert(res.error||'失敗');return;} loadRoster(); },'json');
+}
+$('#rsAdd').on('click', function(){ $('#rsAddBody').html('<div class="empty">輸入關鍵字查詢</div>'); $('#rsAddKw').val(''); $('#rsAddCnt').text(''); openMask('rsAddMask'); });
+$('#rsAddKw').on('keydown', function(e){ if(e.key==='Enter') rsAddSearch(); });
+function rsAddSearch(){
+    var kw=$.trim($('#rsAddKw').val()); if(!kw){ alert('請輸入關鍵字'); return; }
+    $.getJSON(API,{action:'eval_vendors',kw:kw},function(res){
+        if(!res.ok) return;
+        var have={}; (ROSTER?ROSTER.rows:[]).forEach(function(r){ have[r.maker_id_no]=1; });
+        var list=(res.vendors||[]).filter(function(v){ return !have[v.maker_id_no]; });
+        $('#rsAddCnt').text('符合 '+list.length+' 家（未在清冊）');
+        var h=''; list.forEach(function(v){ h+='<label class="pk-item"><input type="checkbox" class="rsa-ck" value="'+esc(v.maker_id_no)+'"><span class="no">'+esc(v.maker_id_no)+'</span><span class="nm">'+esc(v.maker_id||'')+'</span></label>'; });
+        $('#rsAddBody').html(h||'<div class="empty">無符合或皆已在清冊</div>'); $('#rsAddAll').prop('checked',false);
+    });
+}
+$('#rsAddAll').on('change', function(){ $('#rsAddBody .rsa-ck').prop('checked', this.checked); });
+function rsAddSelected(){
+    var ids=$('#rsAddBody .rsa-ck:checked').map(function(){return this.value;}).get();
+    if(!ids.length){ alert('請勾選廠商'); return; }
+    $.post(API,{action:'roster_add',maker_ids:ids.join(',')},function(res){ if(!res.ok){alert(res.error||'失敗');return;} closeMask('rsAddMask'); loadRoster(); },'json');
+}
+$('#rsCsvBtn').on('click', function(){
+    if(!ROSTER) return;
+    var rows=[['大類','廠商ID','廠商名稱','廠商備註','建議等級','採用等級','類型']];
+    ROSTER.rows.forEach(function(r){ rows.push([r.main_cat_name||'',r.maker_id_no,r.maker_id||'',r.m_note||'',(r.suggest_grade||'')+(r.suggest_score==null?'':'('+r.suggest_score+')'),r.final_grade||'',r.is_managed?'納管':'手動列入']); });
+    var csv='﻿'+rows.map(function(l){return l.map(function(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
+    var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'})); a.download='合格供應商清冊_'+$('#rsYear').val()+'.csv'; a.click();
+});
+$('#rsPrintBtn').on('click', function(){
+    if(!ROSTER||!ROSTER.rows.length){ alert('清冊無資料'); return; }
+    var doc=META.roster_as_doc, docName=(doc&&doc.doc_name)||'合格供應商清冊', docNo=(doc&&doc.doc_no)||'2-PH-01-04';
+    var head='<div style="text-align:center;"><div style="font-size:18px;font-weight:bold;">'+esc(META.company_name||'')+'</div>'
+        +'<div style="font-size:15px;margin-top:2px;">'+esc(docName)+'（'+ROSTER.year+' 年）</div></div>';
+    var rows='<table class="pf"><thead><tr><th style="width:40px;">序</th><th>大類</th><th>廠商ID</th><th>廠商名稱</th><th>廠商備註</th><th style="width:60px;">評核等級</th></tr></thead><tbody>';
+    ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td>'+esc(r.main_cat_name||'')+'</td><td>'+esc(r.maker_id_no)+'</td><td class="q">'+esc(r.maker_id||'')+'</td><td class="q">'+esc(r.m_note||'')+'</td><td>'+esc(r.final_grade||'—')+'</td></tr>'; });
+    rows+='</tbody></table>';
+    var sign='<table class="pf-sign"><tr><td>製表：____________</td><td>審核：____________</td><td>核准：____________</td></tr></table>';
+    var footer='<div style="text-align:right;margin-top:12px;font-size:12px;">表單編號：'+esc(docNo)+'</div>';
+    openPrintWindow(head+rows+sign+footer, '合格供應商清冊');
 });
 
 $('#btnRoleHelp').on('click', function(){ openMask('helpMask'); });
