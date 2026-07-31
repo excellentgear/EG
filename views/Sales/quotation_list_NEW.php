@@ -4113,10 +4113,44 @@ function openSortRuleSetting() {
     });
 }
 
+// 收集容差填寫不完整的階梯區間（容差值/容差單位任一未填即算不完整）
+function collectIncompleteTolerance() {
+    const miss = [];
+    $('#quoteItemsTable > tbody > tr.item-row').each(function () {
+        if (parseInt($(this).data('is-tiered')) !== 1) return;
+        const pid = $(this).find('.product_id_hidden').val() || '(未填料號)';
+        $(this).next('tr.tier-row').find('.tier-tbody tr.tier-input-row').each(function (i) {
+            const v = ($(this).find('.tier-tol-value').val() || '').trim();
+            const u = ($(this).find('.tier-tol-unit').val() || '').trim();
+            if (v === '' || u === '') miss.push(`${pid} 第${i + 1}區間`);
+        });
+    });
+    return miss;
+}
+
 function saveQuote(onSuccess) {
     if (!fixAllTiersBeforeSave()) {
         Swal.fire('錯誤', '階梯報價中有區間最小量未填，請補齊後再儲存', 'error'); return;
     }
+    // 階梯容差填寫不完整 → 提醒（可仍要存檔）
+    const tolMiss = collectIncompleteTolerance();
+    if (tolMiss.length) {
+        Swal.fire({
+            title: '容差填寫不完整',
+            html: '下列階梯區間的容差值／容差單位尚未填齊：<br><br>' +
+                  tolMiss.map(s => '・' + escapeHtml(s)).join('<br>') +
+                  '<br><br><small style="color:#888;">可用「套用容差」一鍵帶入預設容差。</small>',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonText: '仍要存檔',
+            cancelButtonText: '返回補填',
+            confirmButtonColor: '#F0A24B',
+        }).then(r => { if (r.isConfirmed) _saveQuoteNoteGate(onSuccess); });
+        return;
+    }
+    _saveQuoteNoteGate(onSuccess);
+}
+function _saveQuoteNoteGate(onSuccess) {
     // 備註為空時提示
     if (!$('#note').val().trim()) {
         Swal.fire({
@@ -4753,6 +4787,14 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
     const printItems  = tieredItems.concat(normalItems);
     let totalAmt = 0;
     let hasTiered = tieredItems.length > 0; // 有階梯報價項目時，合計加註「階梯項目依訂購量另計」
+    // 整筆訂單所有階梯區間的容差完全相同 → 各階不重複印小字，改在底下備註統一註明（含對應項次）
+    const _tolKey = t => {
+        const v = (t.tolerance_value === null || t.tolerance_value === undefined || t.tolerance_value === '') ? '' : String(parseFloat(t.tolerance_value));
+        return v === '' ? '' : v + '|' + (t.tolerance_unit || '') + '|' + (t.tolerance_note || '');
+    };
+    const _tolKeys   = [...new Set(tieredItems.flatMap(it => it.tiers.map(_tolKey)))];
+    const uniformTol = hasTiered && _tolKeys.length === 1 && _tolKeys[0] !== '';
+    const uniformTolSample = uniformTol ? tieredItems[0].tiers[0] : null;
     const itemChunks = []; // 每個元素＝{html, tiered}：一個主料號的所有列(含BOM子件續列)
     printItems.forEach((it, idx) => {
         const specNo   = it.spec_no       || '';
@@ -4808,10 +4850,8 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
                     <td rowspan="${n}">${pnCell(it.product_id)}</td>
                     <td rowspan="${n}">${esc(desc)}<div style="font-size:8.5pt;color:#333;">（階梯報價，單價依訂購數量區間）</div>${kidChunks[0] || ''}</td>` : '')
                     + `
-                    <td class="right">${rangeTxt(t)}${tolTxt(t)}</td>`
-                    + (ti === 0 ? `
-                    <td class="center" rowspan="${n}">${esc(unit)}</td>` : '')
-                    + `
+                    <td class="right">${rangeTxt(t)}${uniformTol ? '' : tolTxt(t)}</td>
+                    <td class="center">${esc(unit)}</td>
                     <td class="right">${negoTag}${fmtNum(t.unit_price || 0)}</td>`
                     + (ti === 0 ? `
                     <td rowspan="${n}"></td>` : '')
@@ -4819,7 +4859,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
                 </tr>`;
             });
         } else {
-            const divStyle = isGroupDivider ? ' style="border-top:2.5px solid #000;"' : '';
+            const divStyle = isGroupDivider ? ' style="border-top:4px double #000;"' : '';
             rowHtml = `<tr>
             <td class="center"${divStyle}>${idx+1}</td>
             <td${divStyle}>${pnCell(it.product_id)}</td>
@@ -4846,9 +4886,16 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
     const grand = totalAmt + tax;
     const allTiered = hasTiered && totalAmt === 0;
     const amtCell = v => allTiered ? '<span style="font-size:9pt;letter-spacing:1px;">依訂購量計</span>' : fmtNum(v);
-    const tierNoteHtml = hasTiered
+    // 整單容差一致時統一在備註註明（含對應項次；階梯項目固定排最前，項次即 1..n）
+    let uniformTolHtml = '';
+    if (uniformTol && uniformTolSample) {
+        const itemNos = tieredItems.map((_, i) => i + 1).join('、');
+        const noteTxt = uniformTolSample.tolerance_note ? `（${esc(uniformTolSample.tolerance_note)}）` : '';
+        uniformTolHtml = `<p style="margin:4px 0;font-size:9pt;"><strong>●數量容差：</strong>項次${itemNos} 各數量區間容差±${fmtNum(uniformTolSample.tolerance_value)}${esc(uniformTolSample.tolerance_unit || '')}${noteTxt}。</p>`;
+    }
+    const tierNoteHtml = (hasTiered
         ? `<p style="margin:4px 0;font-size:9pt;"><strong>●階梯報價：</strong>階梯項目金額依實際訂購數量與對應區間單價計算${allTiered ? '' : '，未列入合計'}。</p>`
-        : '';
+        : '') + uniformTolHtml;
     const remark = q.note || '';
     const remarkHtml = remark.split(/[；;]/).map(s => esc(s.trim())).filter(Boolean).join('<br>');
 
