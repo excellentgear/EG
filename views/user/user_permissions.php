@@ -351,6 +351,7 @@ $_shipRoles     = [];  $_userShipRoles   = [];
 $_accRoles      = [];  $_userAccRoles    = [];
 $_purcRoles     = [];  $_userPurcRoles   = [];
 $_kpiRoles      = [];  $_userKpiRoles    = [];
+$_extdocRoles   = [];  $_userExtdocRoles = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -383,6 +384,7 @@ try {
     $st->execute(['shipping']);    $_shipRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['purchase']);    $_purcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['accounting']);  $_accRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['external_doc']);$_extdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -494,6 +496,10 @@ try {
     $st->execute(['accounting']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userAccRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['external_doc']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userExtdocRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -705,6 +711,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'ship-role-section'      => '快速出貨',
                                         'purc-role-section'      => '申請採購',
                                         'acc-role-section'       => '會計',
+                                        'extdoc-role-section'    => '外來文件清單',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -1134,6 +1141,10 @@ $_quotDepts = array_keys($_deptSet);
                          <span style="color:#b06f27;">鎖帳規則</span>：對帳人員按「確認正確」即鎖帳，之後不可改單也不可再暫存，<strong>僅會計管理員可退回重對</strong>（須填原因）。已開立發票的憑證另有更硬的鎖——不提供解鎖，只能作廢／折讓／補開，因為帳面必須與國稅局申報一致。<br>
                          <span style="color:#b06f27;">為什麼要先維護客戶發票資料</span>：開立電子發票必須有買方統一編號與買方名稱，目前 925 家有效客戶只有 12 家資料完整、近一年有出貨的 175 家中有 171 家缺資料，補齊前發票轉出會被擋下。<strong>未被指派角色者無法進入這些頁面</strong>；管理者固定擁有全部權限。',
                         $_accRoles, $_userAccRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('extdoc', 'external_doc', '外來文件清單', 'fa-file-text-o', '#b06f27',
+                        '為每位使用者指派「外來文件清單」頁（業務 &gt; 外來文件清單，AS9100 外來文件管制）的操作角色。角色功能：<strong>外來文件檢閱</strong>＝檢視清單（依訂單綁定/客戶/年度篩選）、匯出 CSV、依客戶分組列印；<strong>外來文件管理</strong>＝檢閱＋綁定列印頁尾的 AS 文件編號。清單內容來自附件標籤有勾「列入外來文件清單」的料號附件與報價附件（標籤設定在報價單頁或主檔管理）。<strong>未被指派角色者無法檢視本頁</strong>；管理者固定擁有全部權限。',
+                        $_extdocRoles, $_userExtdocRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 
                     <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->
