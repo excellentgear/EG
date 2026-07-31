@@ -222,16 +222,11 @@ case 'save_eval_settings': {
         'vendor_eval_late_max'    => max(0, (float)($_POST['late_max'] ?? 30)),
         'vendor_eval_default_days'=> max(0, (int)($_POST['default_days'] ?? 7)),
     ]);
-    if (array_key_exists('as_doc_id', $_POST)) {
-        $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('vendor_eval_as_doc_id', ?)
-                            ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
-        $up->execute([(string)(int)$_POST['as_doc_id']]);
-    }
     if (array_key_exists('grades', $_POST)) {
         $g = json_decode((string)$_POST['grades'], true);
         if (is_array($g)) vendor_eval_save_grades($db, $g);
     }
-    jout(['settings'=>vendor_eval_settings($db), 'eval_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_eval_as_doc_id')]);
+    jout(['settings'=>vendor_eval_settings($db)]);
 }
 
 /* 某大類下的加工項目(小類) */
@@ -593,7 +588,8 @@ case 'save_cycle': {
                             ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
         $up->execute([$ab]);
     }
-    foreach (['as_doc_id'=>'vendor_audit_as_doc_id', 'record_as_doc_id'=>'vendor_record_as_doc_id', 'roster_as_doc_id'=>'vendor_roster_as_doc_id'] as $pk=>$sk) {
+    foreach (['as_doc_id'=>'vendor_audit_as_doc_id', 'record_as_doc_id'=>'vendor_record_as_doc_id',
+              'roster_as_doc_id'=>'vendor_roster_as_doc_id', 'eval_as_doc_id'=>'vendor_eval_as_doc_id'] as $pk=>$sk) {
         if (array_key_exists($pk, $_POST)) {
             $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
                                 ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
@@ -604,7 +600,8 @@ case 'save_cycle': {
           'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', ''),
           'as_doc'=>vendor_audit_bound_asdoc($db),
           'record_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_record_as_doc_id'),
-          'roster_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_roster_as_doc_id')]);
+          'roster_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_roster_as_doc_id'),
+          'eval_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_eval_as_doc_id')]);
 }
 
 /* 某廠商跨期稽核歷史 */

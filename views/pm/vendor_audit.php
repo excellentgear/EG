@@ -212,6 +212,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button class="btn-warm" id="btnPick" style="display:none;"><i class="fa fa-plus"></i> 加入稽核對象</button>
             <button id="btnAuditor" style="display:none;"><i class="fa fa-user-circle-o"></i> 稽核員設定</button>
             <button id="btnCycle" style="display:none;"><i class="fa fa-refresh"></i> 週期設定</button>
+            <button id="btnAttachSet" style="display:none;"><i class="fa fa-folder-open-o"></i> 附件路徑</button>
+            <button id="btnAsDoc" style="display:none;"><i class="fa fa-link"></i> AS文件綁定</button>
             <button id="btnBlank"><i class="fa fa-file-o"></i> 列印空白表單</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印清單</button>
@@ -469,30 +471,49 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-body">
         <label>稽核週期（月）—— 全公司共用，作為「多久辦一期」的參考與提醒</label>
         <input type="number" id="cycVal" step="1" min="1" style="width:120px;">
-        <div style="font-size:12px;color:#8a6d45;margin:4px 0 12px;">例：6＝每半年一期。此值僅供提醒，不會自動改變各期對象。</div>
-        <label>綁定 AS 表單（稽核查檢表 2-PH-01-02）</label>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-            <input type="text" id="cycAsKw" placeholder="搜尋文件編號/名稱" style="width:150px;">
-            <select id="cycAsDoc" style="flex:1;min-width:200px;"><option value="0">（不綁定，用預設「供應商評鑑稽核查表 / 2-PH-01-02」）</option></select>
-        </div>
-        <label style="margin-top:8px;">綁定 AS 表單（品質系統評鑑記錄表 2-PH-01-03）</label>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-            <input type="text" id="cycRecKw" placeholder="搜尋文件編號/名稱" style="width:150px;">
-            <select id="cycRecDoc" style="flex:1;min-width:200px;"><option value="0">（不綁定，用預設「供應商品質系統評鑑記錄表 / 2-PH-01-03」）</option></select>
-        </div>
-        <label style="margin-top:8px;">綁定 AS 表單（合格供應商清冊 2-PH-01-04）</label>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-            <input type="text" id="cycRosKw" placeholder="搜尋文件編號/名稱" style="width:150px;">
-            <select id="cycRosDoc" style="flex:1;min-width:200px;"><option value="0">（不綁定，用預設「合格供應商清冊 / 2-PH-01-04」）</option></select>
-        </div>
-        <div style="font-size:12px;color:#8a6d45;margin:4px 0 12px;">綁定後，AS 文件改名稱/改編號，列印文件會自動跟著變。</div>
+        <div style="font-size:12px;color:#8a6d45;margin-top:6px;">例：6＝每半年一期。此值僅供提醒，不會自動改變各期對象。</div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('cycMask')">取消</button>
+        <button class="b-ok" onclick="submitCycle()">儲存</button>
+    </div>
+</div></div>
+
+<!-- 附件路徑設定 modal -->
+<div class="va-mask" id="attMask"><div class="va-modal">
+    <div class="m-head"><span>佐證附件儲存路徑設定</span><span class="m-close" onclick="closeMask('attMask')">✕</span></div>
+    <div class="m-body">
         <label>佐證附件儲存路徑（base）—— 供應商自評等附件的實體存放資料夾</label>
         <input type="text" id="cycAttachBase" maxlength="255" placeholder="留空＝預設 uploads/vendor_audit_attach；可填 NAS 路徑如 \\NAS\品保\供應商稽核附件">
         <div style="font-size:12px;color:#8a6d45;margin-top:6px;">DB 只存檔名，完整路徑於讀取當下用此設定＋年度即時組出；換 NAS 只需改這裡（既有檔案需一併搬移）。</div>
     </div>
     <div class="m-foot">
-        <button class="b-cancel" onclick="closeMask('cycMask')">取消</button>
-        <button class="b-ok" onclick="submitCycle()">儲存</button>
+        <button class="b-cancel" onclick="closeMask('attMask')">取消</button>
+        <button class="b-ok" onclick="submitAttachBase()">儲存</button>
+    </div>
+</div></div>
+
+<!-- AS 文件綁定設定 modal（四份文件的名稱/編號連動 AS 文件管理） -->
+<div class="va-mask" id="asDocMask"><div class="va-modal">
+    <div class="m-head"><span>AS 文件綁定設定</span><span class="m-close" onclick="closeMask('asDocMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;">各文件列印的名稱與編號跟 AS 文件管理連動；AS 改名/改編號，列印自動跟著變。</div>
+        <label>稽核查檢表（2-PH-01-02）</label>
+        <div style="display:flex;gap:6px;align-items:center;"><input type="text" id="cycAsKw" placeholder="搜尋" style="width:120px;">
+            <select id="cycAsDoc" style="flex:1;min-width:180px;"><option value="0">（用預設 供應商評鑑稽核查表 / 2-PH-01-02）</option></select></div>
+        <label style="margin-top:8px;">品質系統評鑑記錄表（2-PH-01-03）</label>
+        <div style="display:flex;gap:6px;align-items:center;"><input type="text" id="cycRecKw" placeholder="搜尋" style="width:120px;">
+            <select id="cycRecDoc" style="flex:1;min-width:180px;"><option value="0">（用預設 品質系統評鑑記錄表 / 2-PH-01-03）</option></select></div>
+        <label style="margin-top:8px;">合格供應商清冊（2-PH-01-04）</label>
+        <div style="display:flex;gap:6px;align-items:center;"><input type="text" id="cycRosKw" placeholder="搜尋" style="width:120px;">
+            <select id="cycRosDoc" style="flex:1;min-width:180px;"><option value="0">（用預設 合格供應商清冊 / 2-PH-01-04）</option></select></div>
+        <label style="margin-top:8px;">供應商定期評核表（2-PH-01-05）</label>
+        <div style="display:flex;gap:6px;align-items:center;"><input type="text" id="cycEvKw" placeholder="搜尋" style="width:120px;">
+            <select id="cycEvDoc" style="flex:1;min-width:180px;"><option value="0">（用預設 供應商定期評核表 / 2-PH-01-05）</option></select></div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('asDocMask')">取消</button>
+        <button class="b-ok" onclick="submitAsDoc()">儲存</button>
     </div>
 </div></div>
 
@@ -534,13 +555,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div style="font-size:12px;color:#8a6d45;margin:8px 0 12px;">半年不良率／遲交率超過上限即判不合格；特採率上限設 100 表示不納入判定。約定工作天沿用 KPI#7 準交口徑。</div>
         <label>評核等級門檻（分數 ≥ 該值即為該等級，由高到低）</label>
         <div id="stGrades" style="border:1px solid #EADFC8;border-radius:6px;padding:6px 8px;"></div>
-        <div style="margin:4px 0 12px;"><button type="button" class="b-att2" onclick="gradeAddRow('',0)"><i class="fa fa-plus"></i> 新增等級</button>
+        <div style="margin:4px 0 4px;"><button type="button" class="b-att2" onclick="gradeAddRow('',0)"><i class="fa fa-plus"></i> 新增等級</button>
             <span style="font-size:11px;color:#8a6d45;">總分0~100；例：A≥90、B≥80、C≥70、D≥0</span></div>
-        <label>綁定 AS 表單 —— 全部列印的文件名稱/編號跟 AS 文件管理連動</label>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-            <input type="text" id="stAsKw" placeholder="搜尋文件編號/名稱" style="width:150px;">
-            <select id="stAsDoc" style="flex:1;min-width:200px;"><option value="0">（不綁定，用預設「供應商定期評核表 / 2-PH-01-05」）</option></select>
-        </div>
+        <div style="font-size:11px;color:#8a6d45;">AS 文件綁定（含定期評核表）已移至「稽核批次」工具列的「AS文件綁定」設定。</div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('evSetMask')">取消</button>
@@ -616,7 +633,7 @@ function loadMeta(cb){
         $('#pkMonth').html(mo).val(m.cur_month);
         $('#recPlanMonth').html(mo);
         if (m.perms.canEdit) $('#btnPick').show();
-        if (m.perms.canAdmin){ $('#btnCycle').show(); $('#btnAuditor').show(); $('#pkManageGrp').show(); $('#evSet').show(); }
+        if (m.perms.canAdmin){ $('#btnCycle').show(); $('#btnAttachSet').show(); $('#btnAsDoc').show(); $('#btnAuditor').show(); $('#pkManageGrp').show(); $('#evSet').show(); }
         var $ey = $('#evYear').empty(), $ry = $('#rsYear').empty();
         for (var yy=m.cur_year; yy>=m.cur_year-5; yy--){ $ey.append('<option value="'+yy+'">'+yy+'</option>'); $ry.append('<option value="'+yy+'">'+yy+'</option>'); }
         $ey.val(m.cur_year); $ry.val(m.cur_year);
@@ -889,33 +906,53 @@ function removeTarget(tid){
 }
 
 /* ---------- 週期設定 ---------- */
-$('#btnCycle').on('click', function(){
-    $('#cycVal').val(META.cycle_months); $('#cycAttachBase').val(META.attach_base||'');
+/* 週期設定 */
+$('#btnCycle').on('click', function(){ $('#cycVal').val(META.cycle_months); openMask('cycMask'); });
+function submitCycle(){
+    $.post(API, {action:'save_cycle', cycle_months:$('#cycVal').val()}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        META.cycle_months = res.cycle_months; closeMask('cycMask'); loadRound();
+    }, 'json');
+}
+/* 附件路徑設定 */
+$('#btnAttachSet').on('click', function(){ $('#cycAttachBase').val(META.attach_base||''); openMask('attMask'); });
+function submitAttachBase(){
+    $.post(API, {action:'save_cycle', cycle_months:META.cycle_months, attach_base:$('#cycAttachBase').val()}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        META.attach_base = res.attach_base; closeMask('attMask');
+    }, 'json');
+}
+/* AS 文件綁定設定（四份文件） */
+$('#btnAsDoc').on('click', function(){
     loadAsForms('#cycAsDoc', '', META.as_doc, '供應商評鑑稽核查表 / 2-PH-01-02');
     loadAsForms('#cycRecDoc', '', META.record_as_doc, '供應商品質系統評鑑記錄表 / 2-PH-01-03');
     loadAsForms('#cycRosDoc', '', META.roster_as_doc, '合格供應商清冊 / 2-PH-01-04');
-    openMask('cycMask');
+    loadAsForms('#cycEvDoc', '', META.eval_as_doc, '供應商定期評核表 / 2-PH-01-05');
+    openMask('asDocMask');
 });
-var cycAsT=null, cycRecT=null, cycRosT=null;
+var cycAsT=null, cycRecT=null, cycRosT=null, cycEvT=null;
 $('#cycAsKw').on('input', function(){ clearTimeout(cycAsT); var k=$(this).val(); cycAsT=setTimeout(function(){ loadAsForms('#cycAsDoc', k, META.as_doc, '供應商評鑑稽核查表 / 2-PH-01-02', +$('#cycAsDoc').val()); }, 300); });
 $('#cycRecKw').on('input', function(){ clearTimeout(cycRecT); var k=$(this).val(); cycRecT=setTimeout(function(){ loadAsForms('#cycRecDoc', k, META.record_as_doc, '供應商品質系統評鑑記錄表 / 2-PH-01-03', +$('#cycRecDoc').val()); }, 300); });
 $('#cycRosKw').on('input', function(){ clearTimeout(cycRosT); var k=$(this).val(); cycRosT=setTimeout(function(){ loadAsForms('#cycRosDoc', k, META.roster_as_doc, '合格供應商清冊 / 2-PH-01-04', +$('#cycRosDoc').val()); }, 300); });
+$('#cycEvKw').on('input', function(){ clearTimeout(cycEvT); var k=$(this).val(); cycEvT=setTimeout(function(){ loadAsForms('#cycEvDoc', k, META.eval_as_doc, '供應商定期評核表 / 2-PH-01-05', +$('#cycEvDoc').val()); }, 300); });
 function loadAsForms(sel, kw, curDoc, defLabel, keepId){
     var selId = keepId!=null ? keepId : (curDoc?curDoc.id:0);
     $.getJSON(API, {action:'as_forms', kw:kw||''}, function(res){
         if(!res.ok) return;
-        var $s=$(sel).html('<option value="0">（不綁定，用預設「'+defLabel+'」）</option>');
+        var $s=$(sel).html('<option value="0">（用預設「'+defLabel+'」）</option>');
         (res.forms||[]).forEach(function(f){ $s.append('<option value="'+f.id+'">'+esc(f.doc_no)+' '+esc(f.doc_name)+'</option>'); });
         if(selId && $s.find('option[value="'+selId+'"]').length===0 && curDoc)
             $s.append('<option value="'+curDoc.id+'">'+esc(curDoc.doc_no)+' '+esc(curDoc.doc_name)+'（目前綁定）</option>');
         $s.val(selId||0);
     });
 }
-function submitCycle(){
-    $.post(API, {action:'save_cycle', cycle_months:$('#cycVal').val(), attach_base:$('#cycAttachBase').val(),
-        as_doc_id:$('#cycAsDoc').val(), record_as_doc_id:$('#cycRecDoc').val(), roster_as_doc_id:$('#cycRosDoc').val()}, function(res){
+function submitAsDoc(){
+    $.post(API, {action:'save_cycle', cycle_months:META.cycle_months,
+        as_doc_id:$('#cycAsDoc').val(), record_as_doc_id:$('#cycRecDoc').val(),
+        roster_as_doc_id:$('#cycRosDoc').val(), eval_as_doc_id:$('#cycEvDoc').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        META.cycle_months = res.cycle_months; META.attach_base = res.attach_base; META.as_doc = res.as_doc; META.record_as_doc = res.record_as_doc; META.roster_as_doc = res.roster_as_doc; closeMask('cycMask'); loadRound();
+        META.as_doc=res.as_doc; META.record_as_doc=res.record_as_doc; META.roster_as_doc=res.roster_as_doc; META.eval_as_doc=res.eval_as_doc;
+        closeMask('asDocMask');
     }, 'json');
 }
 
@@ -1274,28 +1311,15 @@ $('#evSet').on('click', function(){
     var s=(EVAL&&EVAL.settings)||META.eval_settings||{ng_max:5,late_max:30,special_max:100,default_days:7};
     $('#stNgMax').val(s.ng_max); $('#stLateMax').val(s.late_max); $('#stSpMax').val(s.special_max); $('#stDays').val(s.default_days);
     $('#stGrades').empty(); ((s.grades&&s.grades.length)?s.grades:[{min:90,label:'A'},{min:80,label:'B'},{min:70,label:'C'},{min:0,label:'D'}]).forEach(function(g){ gradeAddRow(g.label,g.min); });
-    loadEvalAsForms('', META.eval_as_doc?META.eval_as_doc.id:0);
     openMask('evSetMask');
 });
-var stAsT=null;
-$('#stAsKw').on('input', function(){ clearTimeout(stAsT); var k=$(this).val(); stAsT=setTimeout(function(){ loadEvalAsForms(k, +$('#stAsDoc').val()); }, 300); });
-function loadEvalAsForms(kw, selId){
-    $.getJSON(API, {action:'as_forms', kw:kw||''}, function(res){
-        if(!res.ok) return;
-        var $s=$('#stAsDoc').html('<option value="0">（不綁定，用預設「供應商定期評核表 / 2-PH-01-05」）</option>');
-        (res.forms||[]).forEach(function(f){ $s.append('<option value="'+f.id+'">'+esc(f.doc_no)+' '+esc(f.doc_name)+'</option>'); });
-        if(selId && $s.find('option[value="'+selId+'"]').length===0 && META.eval_as_doc)
-            $s.append('<option value="'+META.eval_as_doc.id+'">'+esc(META.eval_as_doc.doc_no)+' '+esc(META.eval_as_doc.doc_name)+'（目前綁定）</option>');
-        $s.val(selId||0);
-    });
-}
 function submitEvSet(){
     var grades=[]; $('#stGrades .gr-row').each(function(){ var l=$.trim($(this).find('.gr-label').val()), mn=$(this).find('.gr-min').val();
         if(l!=='') grades.push({label:l, min:mn===''?0:+mn}); });
     $.post(API, {action:'save_eval_settings', ng_max:$('#stNgMax').val(), late_max:$('#stLateMax').val(),
-        special_max:$('#stSpMax').val(), default_days:$('#stDays').val(), as_doc_id:$('#stAsDoc').val(), grades:JSON.stringify(grades)}, function(res){
+        special_max:$('#stSpMax').val(), default_days:$('#stDays').val(), grades:JSON.stringify(grades)}, function(res){
         if(!res.ok){ alert(res.error||'儲存失敗'); return; }
-        META.eval_settings=res.settings; META.eval_as_doc=res.eval_as_doc; closeMask('evSetMask');
+        META.eval_settings=res.settings; closeMask('evSetMask');
         if(EVAL_ALL) $('#evAll').click(); else if($('#evVendor').val()) loadEval();
     }, 'json');
 }
