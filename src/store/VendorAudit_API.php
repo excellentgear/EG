@@ -58,6 +58,7 @@ case 'meta': {
           'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', ''),
           'as_doc'=>vendor_audit_bound_asdoc($db),
           'eval_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_eval_as_doc_id'),
+          'record_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_record_as_doc_id'),
           'company_name'=>vendor_audit_company_name($db),
           'items'=>vendor_audit_items(), 'item_max'=>VENDOR_AUDIT_ITEM_MAX,
           'total_max'=>VENDOR_AUDIT_TOTAL_MAX, 'pass_rate'=>VENDOR_AUDIT_PASS_RATE,
@@ -509,15 +510,17 @@ case 'save_cycle': {
                             ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
         $up->execute([$ab]);
     }
-    if (array_key_exists('as_doc_id', $_POST)) {
-        $adid = (int)$_POST['as_doc_id'];
-        $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('vendor_audit_as_doc_id', ?)
-                            ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
-        $up->execute([(string)$adid]);
+    foreach (['as_doc_id'=>'vendor_audit_as_doc_id', 'record_as_doc_id'=>'vendor_record_as_doc_id'] as $pk=>$sk) {
+        if (array_key_exists($pk, $_POST)) {
+            $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
+                                ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+            $up->execute([$sk, (string)(int)$_POST[$pk]]);
+        }
     }
     jout(['cycle_months'=>vendor_audit_cycle_months($db),
           'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', ''),
-          'as_doc'=>vendor_audit_bound_asdoc($db)]);
+          'as_doc'=>vendor_audit_bound_asdoc($db),
+          'record_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_record_as_doc_id')]);
 }
 
 /* 某廠商跨期稽核歷史 */

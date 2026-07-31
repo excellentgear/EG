@@ -373,6 +373,36 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     </div>
 </div></div>
 
+<!-- 供應商品質系統評鑑記錄表 modal（2-PH-01-03，含雷達圖） -->
+<div class="va-mask" id="rsMask"><div class="va-modal xwide">
+    <div class="m-head"><span id="rsTitle">供應商品質系統評鑑記錄表</span><span class="m-close" onclick="closeMask('rsMask')">✕</span></div>
+    <div class="m-body">
+        <div id="rsInfo" style="font-size:13px;color:#5b3a1e;margin-bottom:8px;"></div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
+            <div style="flex:1;min-width:280px;">
+                <table class="af-table" style="width:100%;"><thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th></tr></thead>
+                <tbody id="rsCatBody"></tbody></table>
+                <div id="rsConc" class="af-summary" style="margin-top:8px;"></div>
+            </div>
+            <div style="flex:0 0 360px;"><div id="rsChart" style="height:320px;"></div></div>
+        </div>
+        <div class="af-attach" id="rsAttachBox" style="margin-top:10px;">
+            <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;"><i class="fa fa-paperclip"></i> 佐證附件（列印後供應商簽名回傳掃描檔）</div>
+            <div id="rsAttachList" style="font-size:12px;"></div>
+            <div id="rsAttachUp" style="margin-top:5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                <input type="file" id="rsAttachFile" style="font-size:12px;">
+                <input type="text" id="rsAttachNote" maxlength="200" placeholder="附件說明(選填)" style="width:180px;">
+                <button type="button" class="b-att2" onclick="rsUploadAttach()"><i class="fa fa-upload"></i> 上傳</button>
+            </div>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="printRecordSheet()"><i class="fa fa-print"></i> 列印記錄表</button>
+        <button class="b-cancel" onclick="printAllDocs()"><i class="fa fa-print"></i> 一次印全部文件</button>
+        <button class="b-ok" onclick="closeMask('rsMask')">關閉</button>
+    </div>
+</div></div>
+
 <!-- 週期設定 modal -->
 <div class="va-mask" id="cycMask"><div class="va-modal">
     <div class="m-head"><span>共用稽核週期設定</span><span class="m-close" onclick="closeMask('cycMask')">✕</span></div>
@@ -380,12 +410,17 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <label>稽核週期（月）—— 全公司共用，作為「多久辦一期」的參考與提醒</label>
         <input type="number" id="cycVal" step="1" min="1" style="width:120px;">
         <div style="font-size:12px;color:#8a6d45;margin:4px 0 12px;">例：6＝每半年一期。此值僅供提醒，不會自動改變各期對象。</div>
-        <label>綁定 AS 表單 —— 列印表單的名稱與編號跟 AS 文件管理連動</label>
+        <label>綁定 AS 表單（稽核查檢表 2-PH-01-02）</label>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
             <input type="text" id="cycAsKw" placeholder="搜尋文件編號/名稱" style="width:150px;">
             <select id="cycAsDoc" style="flex:1;min-width:200px;"><option value="0">（不綁定，用預設「供應商評鑑稽核查表 / 2-PH-01-02」）</option></select>
         </div>
-        <div style="font-size:12px;color:#8a6d45;margin:4px 0 12px;">綁定後，AS 文件若改名稱/改編號，列印表單會自動跟著變。</div>
+        <label style="margin-top:8px;">綁定 AS 表單（品質系統評鑑記錄表 2-PH-01-03）</label>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            <input type="text" id="cycRecKw" placeholder="搜尋文件編號/名稱" style="width:150px;">
+            <select id="cycRecDoc" style="flex:1;min-width:200px;"><option value="0">（不綁定，用預設「供應商品質系統評鑑記錄表 / 2-PH-01-03」）</option></select>
+        </div>
+        <div style="font-size:12px;color:#8a6d45;margin:4px 0 12px;">綁定後，AS 文件改名稱/改編號，列印文件會自動跟著變。</div>
         <label>佐證附件儲存路徑（base）—— 供應商自評等附件的實體存放資料夾</label>
         <input type="text" id="cycAttachBase" maxlength="255" placeholder="留空＝預設 uploads/vendor_audit_attach；可填 NAS 路徑如 \\NAS\品保\供應商稽核附件">
         <div style="font-size:12px;color:#8a6d45;margin-top:6px;">DB 只存檔名，完整路徑於讀取當下用此設定＋年度即時組出；換 NAS 只需改這裡（既有檔案需一併搬移）。</div>
@@ -471,6 +506,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../code/highcharts.js"></script>
+<script src="../../code/highcharts-more.js"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -566,6 +603,7 @@ function renderTargets(){
         html += '<td>'+esc(t.auditor||'—')+'</td>';
         html += '<td>';
         if (PERMS.canEdit) html += '<span class="va-op" onclick="openRec('+t.target_id+')"><i class="fa fa-pencil"></i>登錄</span>';
+        if (t.audit_date) html += '<span class="va-op" onclick="openRecordSheet('+t.target_id+')"><i class="fa fa-file-text-o"></i>記錄表</span>';
         html += '<span class="va-op" onclick="openHis(\''+esc(t.maker_id_no)+'\')"><i class="fa fa-history"></i>歷史</span>';
         if (PERMS.canEdit) html += '<span class="va-op" style="color:#DD5138;" onclick="removeTarget('+t.target_id+')"><i class="fa fa-times"></i>移除</span>';
         html += '</td></tr>';
@@ -786,25 +824,29 @@ function removeTarget(tid){
 /* ---------- 週期設定 ---------- */
 $('#btnCycle').on('click', function(){
     $('#cycVal').val(META.cycle_months); $('#cycAttachBase').val(META.attach_base||'');
-    loadAsForms('', META.as_doc?META.as_doc.id:0);
+    loadAsForms('#cycAsDoc', '', META.as_doc, '供應商評鑑稽核查表 / 2-PH-01-02');
+    loadAsForms('#cycRecDoc', '', META.record_as_doc, '供應商品質系統評鑑記錄表 / 2-PH-01-03');
     openMask('cycMask');
 });
-var cycAsT=null;
-$('#cycAsKw').on('input', function(){ clearTimeout(cycAsT); var k=$(this).val(); cycAsT=setTimeout(function(){ loadAsForms(k, +$('#cycAsDoc').val()); }, 300); });
-function loadAsForms(kw, selId){
+var cycAsT=null, cycRecT=null;
+$('#cycAsKw').on('input', function(){ clearTimeout(cycAsT); var k=$(this).val(); cycAsT=setTimeout(function(){ loadAsForms('#cycAsDoc', k, META.as_doc, '供應商評鑑稽核查表 / 2-PH-01-02', +$('#cycAsDoc').val()); }, 300); });
+$('#cycRecKw').on('input', function(){ clearTimeout(cycRecT); var k=$(this).val(); cycRecT=setTimeout(function(){ loadAsForms('#cycRecDoc', k, META.record_as_doc, '供應商品質系統評鑑記錄表 / 2-PH-01-03', +$('#cycRecDoc').val()); }, 300); });
+function loadAsForms(sel, kw, curDoc, defLabel, keepId){
+    var selId = keepId!=null ? keepId : (curDoc?curDoc.id:0);
     $.getJSON(API, {action:'as_forms', kw:kw||''}, function(res){
         if(!res.ok) return;
-        var $s=$('#cycAsDoc').html('<option value="0">（不綁定，用預設「供應商評鑑稽核查表 / 2-PH-01-02」）</option>');
+        var $s=$(sel).html('<option value="0">（不綁定，用預設「'+defLabel+'」）</option>');
         (res.forms||[]).forEach(function(f){ $s.append('<option value="'+f.id+'">'+esc(f.doc_no)+' '+esc(f.doc_name)+'</option>'); });
-        if(selId && $s.find('option[value="'+selId+'"]').length===0 && META.as_doc)
-            $s.append('<option value="'+META.as_doc.id+'">'+esc(META.as_doc.doc_no)+' '+esc(META.as_doc.doc_name)+'（目前綁定）</option>');
+        if(selId && $s.find('option[value="'+selId+'"]').length===0 && curDoc)
+            $s.append('<option value="'+curDoc.id+'">'+esc(curDoc.doc_no)+' '+esc(curDoc.doc_name)+'（目前綁定）</option>');
         $s.val(selId||0);
     });
 }
 function submitCycle(){
-    $.post(API, {action:'save_cycle', cycle_months:$('#cycVal').val(), attach_base:$('#cycAttachBase').val(), as_doc_id:$('#cycAsDoc').val()}, function(res){
+    $.post(API, {action:'save_cycle', cycle_months:$('#cycVal').val(), attach_base:$('#cycAttachBase').val(),
+        as_doc_id:$('#cycAsDoc').val(), record_as_doc_id:$('#cycRecDoc').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        META.cycle_months = res.cycle_months; META.attach_base = res.attach_base; META.as_doc = res.as_doc; closeMask('cycMask'); loadRound();
+        META.cycle_months = res.cycle_months; META.attach_base = res.attach_base; META.as_doc = res.as_doc; META.record_as_doc = res.record_as_doc; closeMask('cycMask'); loadRound();
     }, 'json');
 }
 
@@ -880,6 +922,110 @@ function printCurrentForm(){
     }), '供應商評鑑稽核查表');
 }
 $('#btnBlank').on('click', printBlankForm);
+
+/* ---------- 評鑑記錄表（2-PH-01-03，雷達圖）---------- */
+var RS = null, rsChart = null;
+function computeCats(scores){
+    var cats=[], tSelf=0,tAudit=0,tMax=0, MAXI=META.item_max;
+    META.items.forEach(function(cat){
+        var items=cat[2], cMax=items.length*MAXI, cSelf=0,cAudit=0;
+        items.forEach(function(it){ var s=scores[it[0]]||{}; cSelf+=Math.max(0,Math.min(MAXI,+s.self||0)); cAudit+=Math.max(0,Math.min(MAXI,+s.audit||0)); });
+        cats.push({name:cat[1], max:cMax, self_rate:cMax?Math.round(cSelf/cMax*1000)/10:0, audit_rate:cMax?Math.round(cAudit/cMax*1000)/10:0});
+        tSelf+=cSelf;tAudit+=cAudit;tMax+=cMax;
+    });
+    var selfR=tMax?Math.round(tSelf/tMax*1000)/10:0, auditR=tMax?Math.round(tAudit/tMax*1000)/10:0;
+    var overall=Math.round((selfR*META.self_w+auditR*META.audit_w)*10)/10;
+    return {cats:cats, selfR:selfR, auditR:auditR, overall:overall, pass:overall>=META.pass_rate};
+}
+function openRecordSheet(tid){
+    $.getJSON(API, {action:'get_form', target_id:tid}, function(res){
+        if(!res.ok){ alert(res.error||'載入失敗'); return; }
+        var t=res.target, c=computeCats(t.scores||{});
+        RS={tid:tid, t:t, c:c};
+        var doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
+        $('#rsTitle').text(docName+'：'+t.maker_id+'（'+t.maker_id_no+'）');
+        var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'—';
+        $('#rsInfo').html('供應商：<b>'+esc(t.maker_id)+'</b>（'+esc(t.maker_id_no)+'）　稽核日期：'+(fmtDate(t.audit_date)||'—')+'　稽核狀況：'+modeL+'　稽核員：'+esc(t.auditor||'—'));
+        var rows='';
+        c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*META.self_w+k.audit_rate*META.audit_w)*10)/10;
+            rows+='<tr><td class="af-q">'+esc(k.name)+'</td><td class="af-sc">'+k.max+'</td><td class="af-sc">'+k.self_rate+'%</td><td class="af-sc">'+k.audit_rate+'%</td><td class="af-sc">'+comb+'%</td></tr>'; });
+        rows+='<tr class="af-cat"><td class="af-q">總成績</td><td class="af-sc">'+META.total_max+'</td><td class="af-sc">'+c.selfR+'%</td><td class="af-sc">'+c.auditR+'%</td><td class="af-sc">'+c.overall+'%</td></tr>';
+        $('#rsCatBody').html(rows);
+        $('#rsConc').html('綜合評鑑合格率（自評×'+META.self_w+'＋稽核×'+META.audit_w+'）：<b style="font-size:16px;">'+c.overall+'%</b>　判定：'
+            +(c.pass?'<span class="af-judge-pass">合格供應商 (≥'+META.pass_rate+'%)</span>':'<span class="af-judge-fail">不合格 (<'+META.pass_rate+'%)</span>')
+            +(t.conclusion?'　建議：'+esc(t.conclusion):''));
+        rsRenderAttach(tid, res.attaches||[]);
+        openMask('rsMask');
+        setTimeout(drawRadar, 60);
+    });
+}
+function drawRadar(){
+    if(!RS||typeof Highcharts==='undefined') return;
+    rsChart = Highcharts.chart('rsChart', {
+        chart:{polar:true, type:'line', backgroundColor:'transparent'},
+        title:{text:null}, credits:{enabled:false},
+        pane:{size:'80%'},
+        xAxis:{categories:RS.c.cats.map(function(k){return k.name;}), tickmarkPlacement:'on', lineWidth:0},
+        yAxis:{gridLineInterpolation:'polygon', min:0, max:100, tickInterval:20},
+        tooltip:{shared:true, valueSuffix:'%'},
+        series:[{name:'自評', data:RS.c.cats.map(function(k){return k.self_rate;}), color:'#E8C170', pointPlacement:'on'},
+                {name:'稽核', data:RS.c.cats.map(function(k){return k.audit_rate;}), color:'#F0A24B', pointPlacement:'on'}]
+    });
+}
+function rsRenderAttach(tid, list){
+    $('#rsAttachBox').data('tid', tid);
+    var h='';
+    (list||[]).forEach(function(a){
+        h+='<div style="display:flex;gap:8px;align-items:center;border-bottom:1px dashed #EADFC8;padding:3px 0;">';
+        h+=a.exists?'<a href="'+API+'?action=attach_open&attach_id='+a.attach_id+'" target="_blank" style="color:#b5762a;flex:1;">📄 '+esc(a.original_name||'')+'</a>'
+                   :'<span style="color:#c9bda9;text-decoration:line-through;flex:1;">📄 '+esc(a.original_name||'')+'</span>';
+        h+='<span style="color:#8a6d45;font-size:11px;">'+esc(a.note||'')+' '+esc(a.uploaded_by||'')+'</span>';
+        if(PERMS.canEdit) h+='<span class="af-del" style="color:#DD5138;cursor:pointer;" onclick="rsDelAttach('+a.attach_id+')"><i class="fa fa-trash"></i></span>';
+        h+='</div>';
+    });
+    $('#rsAttachList').html(h||'<span style="color:#8a6d45;">尚無附件</span>');
+    $('#rsAttachUp').toggle(!!PERMS.canEdit);
+}
+function rsUploadAttach(){
+    var tid=$('#rsAttachBox').data('tid'), f=document.getElementById('rsAttachFile');
+    if(!f.files.length){ alert('請選擇檔案'); return; }
+    var fd=new FormData(); fd.append('action','attach_upload'); fd.append('target_id',tid); fd.append('note',$('#rsAttachNote').val()); fd.append('file',f.files[0]);
+    NProgress.start();
+    $.ajax({url:API,method:'POST',data:fd,processData:false,contentType:false,dataType:'json'})
+     .done(function(res){ NProgress.done(); if(!res.ok){alert(res.error||'上傳失敗');return;} f.value='';$('#rsAttachNote').val('');
+        $.getJSON(API,{action:'get_form',target_id:tid},function(r){ if(r.ok) rsRenderAttach(tid,r.attaches); }); })
+     .fail(function(x){ NProgress.done(); alert('上傳失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function rsDelAttach(aid){
+    if(!confirm('刪除此附件？')) return;
+    $.post(API,{action:'attach_delete',attach_id:aid},function(res){ if(!res.ok){alert(res.error||'失敗');return;}
+        var tid=$('#rsAttachBox').data('tid'); $.getJSON(API,{action:'get_form',target_id:tid},function(r){ if(r.ok) rsRenderAttach(tid,r.attaches); }); },'json');
+}
+function recordSheetHTML(){
+    if(!RS) return '';
+    var t=RS.t, c=RS.c, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表', docNo=(doc&&doc.doc_no)||'2-PH-01-03';
+    var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'____';
+    var head='<div style="text-align:center;"><div style="font-size:18px;font-weight:bold;">'+esc(META.company_name||'')+'</div>'
+        +'<div style="font-size:15px;margin-top:2px;">'+esc(docName)+'</div></div>';
+    var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>稽核日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>稽核狀況：'+esc(modeL)+'</td></tr></table>';
+    var rows='<table class="pf"><thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th></tr></thead><tbody>';
+    c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*META.self_w+k.audit_rate*META.audit_w)*10)/10;
+        rows+='<tr><td class="q">'+esc(k.name)+'</td><td>'+k.max+'</td><td>'+k.self_rate+'%</td><td>'+k.audit_rate+'%</td><td>'+comb+'%</td></tr>'; });
+    rows+='<tr style="font-weight:bold;"><td class="q">總成績</td><td>'+META.total_max+'</td><td>'+c.selfR+'%</td><td>'+c.auditR+'%</td><td>'+c.overall+'%</td></tr></tbody></table>';
+    var svg = rsChart ? rsChart.container.querySelector('svg').outerHTML : '';
+    var chart='<div style="text-align:center;margin-top:8px;">'+svg+'</div>';
+    var conc='<div style="margin-top:8px;font-size:13px;">綜合評鑑合格率（自評×'+META.self_w+'＋稽核×'+META.audit_w+'）＝<b>'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+META.pass_rate+'% 始評定為合格供應商。判定：'+(c.pass?'合格供應商':'不合格')+(t.conclusion?'（'+esc(t.conclusion)+'）':'')+'</div>';
+    var sign='<table class="pf-sign"><tr><td>稽核員簽章：____________</td><td>供應商代表簽章：____________</td><td>資材課長：____________</td></tr></table>';
+    var footer='<div style="text-align:right;margin-top:14px;font-size:12px;">表單編號：'+esc(docNo)+'</div>';
+    return head+info+rows+chart+conc+sign+footer;
+}
+function printRecordSheet(){ if(!RS){alert('無資料');return;} openPrintWindow(recordSheetHTML(), '供應商品質系統評鑑記錄表'); }
+function printAllDocs(){
+    if(!RS){alert('無資料');return;}
+    var page1=auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores});
+    var body='<div style="page-break-after:always;">'+page1+'</div>'+recordSheetHTML();
+    openPrintWindow(body, '供應商稽核文件');
+}
 
 /* ---------- CSV ---------- */
 $('#btnCsv').on('click', function(){
