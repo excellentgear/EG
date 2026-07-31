@@ -65,6 +65,17 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
     <style>
         #sidebar-menu { visibility: hidden; }
         .right_col .page-title { margin:8px 0 4px; overflow:hidden; }
+        .page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
+            background:#F0A24B; color:#fff; cursor:pointer; }
+        .page-help-btn:hover { background:#d98a33; }
+        @media print { .page-help-btn { display:none !important; } }
+        .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
+        .help-doc h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
+        .help-doc h4:first-child { margin-top:0; }
+        .help-doc b { color:#8A5A2B; }
+        .help-doc ul { margin:4px 0 8px; padding-left:20px; }
+        .help-doc li { margin:2px 0; }
+        .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
         .xd-toolbar { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; clear:both;
             border:1.5px solid #E8D5B5; border-radius:8px; padding:8px 10px; margin-bottom:10px; background:#FDF8EF; }
         .xd-toolbar label { margin:0; font-size:13px; color:#5b3a1e; }
@@ -136,6 +147,7 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
         <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
             <h2 style="margin:6px 0;">外來文件清單
                 <small style="color:#8a6d45;">附件標籤勾選「列入外來文件」者自動彙整（AS9100 外來文件管制）</small></h2>
+            <button id="btnPageHelp" class="page-help-btn" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
         <div class="clearfix"></div>
 
@@ -217,6 +229,39 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
         <button class="b-ok" onclick="saveAsDoc()">儲存</button>
         <button class="b-no" onclick="closeMask('asMask')">取消</button>
     </div>
+</div></div>
+
+<!-- 頁面使用說明 -->
+<div class="xd-mask" id="helpUseMask"><div class="xd-modal" style="max-width:760px;">
+    <div class="m-head"><span><i class="fa fa-question-circle"></i> 外來文件清單 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
+    <div class="m-body help-doc">
+        <h4>一、這頁在做什麼</h4>
+        <p>依 AS9100 外來文件管制需求，把「客戶提供的文件」（客戶圖面、客供 3D、客戶規格…）自動彙整成一份清單。
+        資料來源＝<b>料號附件</b>與<b>報價單附件</b>中，附件標籤有勾「<b>列入外來文件清單</b>」的那些附件；不必另外登錄，附件上傳掛對標籤就會自動出現。</p>
+        <h4>二、操作</h4>
+        <ul>
+            <li><b>範圍</b>：「有訂單綁定的料號」＝該料號曾被任何訂單綁定過（正式生產過的）；「所有有附件的料號」＝包含只報過價的。</li>
+            <li><b>客戶</b>：可在搜尋框輸入客戶 ID 或名稱片段模糊過濾；<b>年度</b>＝附件上傳日期年度。</li>
+            <li><b>類別鈕</b>：點類別標籤只看該類別（顏色與列表標籤一致）。</li>
+            <li><b>點料號</b>＝開啟該份文件；<b>備註</b>點鉛筆直接輸入，Enter 儲存、Esc 取消，會回寫到附件本體（主檔/報價頁看到同一筆備註）。</li>
+            <li><b>排除</b>：同一份文件在報價單與料號兩邊都上傳過會重複出現，點「排除」把重複那筆移出清單；到「<b>已排除</b>」分頁可隨時「加回」。排除後列印與 CSV 也不會出現。</li>
+            <li><b>列印</b>：依客戶分組；大標題＝本公司全名（主檔客戶頁「定為本公司」者）、左下角頁碼、右下角綁定的 AS 文件編號；<b>不帶備註</b>。CSV 有帶備註與檔名。</li>
+        </ul>
+        <h4>三、設定入口</h4>
+        <ul>
+            <li><b>哪些標籤算外來文件</b>：報價單頁「附件類別」分頁，或主檔管理「附件類別標籤設定」——勾「列入外來文件清單」，可另設清單顯示用的類別名稱（兩邊同一組設定）。</li>
+            <li><b>AS 文件編號</b>：本頁「AS文件編號綁定」按鈕（需管理角色），從 AS9100 文件管理主檔挑選。</li>
+            <li><b>發行單位</b>：同 Sales_Track 的業務單位設定（BOM 總覽頁修改）。</li>
+        </ul>
+        <h4>四、權限角色</h4>
+        <ul>
+            <li><b>外來文件檢閱</b>：看清單、開文件、匯出、列印。</li>
+            <li><b>外來文件管理</b>：檢閱＋綁 AS 編號、編輯備註、排除/加回。</li>
+            <li>管理者固定全權；未指派角色者無法檢視本頁。指派入口：使用者權限設定 →「外來文件清單」區塊。</li>
+        </ul>
+        <div class="tip">發行日期＝附件上傳日期。若清單是空的，通常是還沒有任何標籤勾「列入外來文件清單」。</div>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">我知道了</button></div>
 </div></div>
 
 <!-- 角色說明 -->
@@ -557,6 +602,7 @@ function saveAsDoc(){
 }
 
 $('#btnRoleHelp').on('click', function(){ openMask('helpMask'); });
+$('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('.xd-mask').on('click', function(e){ if (e.target === this) this.style.display='none'; });
 
 if (canView){ loadOptions(); }   // 選項(含類別配色)載好後由 loadOptions 觸發 loadList
