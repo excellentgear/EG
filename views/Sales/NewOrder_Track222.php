@@ -13170,7 +13170,10 @@ function otLoadRolesPanel() {
                  + ' onclick="otSelectRole(' + r.role_id + ',' + (isSystem ? 1 : 0) + ')">'
                  + '<span class="ot-role-name" style="flex:1;font-size:13px;">' + escapeHtml(r.role_name)
                  + (isSystem ? '<span class="label label-warning" style="font-size:9px;margin-left:5px;vertical-align:middle;">系統</span>' : '') + '</span>'
-                 + (!isSystem ? '<button class="btn btn-xs btn-danger" style="opacity:.6;padding:1px 5px;"'
+                 + (!isSystem ? '<button class="btn btn-xs btn-default" style="opacity:.65;padding:1px 5px;margin-right:3px;" title="修改角色名稱"'
+                    + ' onclick="event.stopPropagation();otRenameRole(' + r.role_id + ',\'' + escapeHtml(r.role_name).replace(/'/g, "\\'") + '\')">'
+                    + '<i class="fa fa-pencil"></i></button>'
+                    + '<button class="btn btn-xs btn-danger" style="opacity:.6;padding:1px 5px;" title="刪除角色"'
                     + ' onclick="event.stopPropagation();otDeleteRole(' + r.role_id + ',\'' + escapeHtml(r.role_name).replace(/'/g, "\\'") + '\')">'
                     + '<i class="fa fa-times"></i></button>' : '')
                  + '</div>';
@@ -13232,6 +13235,21 @@ function otAddRole() {
     $.post(OT_ROLES_API, { action:'save_role', role_name: name, module:'order_track' }, function(res) {
         if (!res.success) { alert(res.message || '新增失敗'); return; }
         _otSelRoleId = res.role_id;
+        otLoadRolesPanel();
+    });
+}
+
+function otRenameRole(roleId, oldName) {
+    var name = prompt('修改角色名稱', oldName);
+    if (name === null) return;
+    name = name.trim();
+    if (!name) { alert('角色名稱不可空白'); return; }
+    if (name === oldName) return;
+    // Roles_API save_role 帶 role_id＝改名（不更動所屬模組與功能設定）
+    $.post(OT_ROLES_API, { action:'save_role', role_id: roleId, role_name: name }, function(res) {
+        if (!res.success) { alert(res.message || '修改失敗'); return; }
+        showToast('角色名稱已更新');
+        if (_otSelRoleId == roleId) $('#ot-role-feat-header').text('設定功能：' + name);
         otLoadRolesPanel();
     });
 }
