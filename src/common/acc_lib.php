@@ -113,6 +113,62 @@ function acc_ensure_schema(PDO $db): void
             KEY idx_alloc_inv  (invoice_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-收款沖帳明細（支援部分沖帳與一筆對多張）'");
 
+        /* 付款單（應付側，與收款單對稱）。
+           為什麼要有這一層：purchase_request.pay_status／pay_date 是單頭單一欄位，
+           表達不了「月結廠商一次匯款付掉五張採購單」或「先付一半」。
+           付款單＋沖帳明細才做得到一對多與部分付款。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_payment (
+            payment_id   INT NOT NULL AUTO_INCREMENT,
+            payment_no   VARCHAR(20)  NOT NULL,
+            vendor_id    VARCHAR(11)  DEFAULT NULL COMMENT 'maker_list.maker_id_no',
+            vendor_name  VARCHAR(120) NOT NULL,
+            pay_date     DATE         NOT NULL COMMENT '出帳日',
+            method       VARCHAR(20)  DEFAULT '匯款' COMMENT '匯款/支票/現金/其他',
+            amount       DECIMAL(14,2) NOT NULL DEFAULT 0 COMMENT '實付金額',
+            fee          DECIMAL(12,2) NOT NULL DEFAULT 0 COMMENT '匯費/手續費（我方另付的）',
+            bank         VARCHAR(50)  DEFAULT NULL,
+            check_no     VARCHAR(30)  DEFAULT NULL COMMENT '支票號碼',
+            check_due    DATE         DEFAULT NULL COMMENT '票期',
+            note         VARCHAR(200) DEFAULT NULL,
+            Created_By   VARCHAR(11)  DEFAULT NULL,
+            Created_At   DATETIME     DEFAULT CURRENT_TIMESTAMP,
+            Modified_By  VARCHAR(11)  DEFAULT NULL,
+            Modified_At  DATETIME     DEFAULT NULL,
+            PRIMARY KEY (payment_id),
+            UNIQUE KEY uq_pay_no (payment_no),
+            KEY idx_pay_vendor (vendor_id),
+            KEY idx_pay_date (pay_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-付款單（應付）'");
+
+        // 付款沖帳明細：一筆付款可沖多張採購單、一張採購單可被多次部分付款
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_payment_alloc (
+            alloc_id   INT NOT NULL AUTO_INCREMENT,
+            payment_id INT NOT NULL,
+            src_type   VARCHAR(6) NOT NULL DEFAULT 'PURC' COMMENT 'PURC=採購單 purchase_request',
+            src_id     INT NOT NULL COMMENT 'PURC 時為 purchase_request.req_id',
+            amount     DECIMAL(14,2) NOT NULL DEFAULT 0 COMMENT '本次沖銷金額（含稅）',
+            Created_By VARCHAR(11) DEFAULT NULL,
+            Created_At DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (alloc_id),
+            KEY idx_palloc_pay (payment_id),
+            KEY idx_palloc_src (src_type, src_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-付款沖帳明細（支援部分付款與一筆對多張）'");
+
+        /* 採購單的結帳方式（現金／月結）——會計端的判定與覆寫。
+           現場採購分兩種：現金(零用金，採購自己簡單記帳，不經會計) 與 月結(要經會計)。
+           purchase_request 目前沒有結帳方式欄位（pay_method 是自由文字），
+           所以預設用規則判（見 acc_purc_settle_mode），判錯時會計可在應付頁逐單覆寫。
+           覆寫存在會計自己的表，不動採購模組的資料表與檔案。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_purc_flag (
+            req_id      INT NOT NULL COMMENT 'purchase_request.req_id',
+            settle_mode VARCHAR(10) NOT NULL COMMENT 'CREDIT=月結(進應付) CASH=現金/零用金(不進應付)',
+            reason      VARCHAR(200) DEFAULT NULL,
+            set_by      INT          DEFAULT NULL,
+            set_by_name VARCHAR(50)  DEFAULT NULL,
+            set_at      DATETIME     DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (req_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-採購單結帳方式覆寫（現金不進應付）'");
+
         // 對帳狀態：業務(應收)／生管(應付)對完帳後標記，會計據此判斷可不可以開票／付款。
         // 刻意獨立成表而不加欄位到 is_list / ir_track / bom_ing_transfer_log——
         // 那三張是全系統重度使用的表，加欄位風險高；用 (src_type, src_id) 對應即可。
@@ -277,8 +333,10 @@ function acc_sheet_build(PDO $db, string $side, string $partyId, string $bm): ar
         $d = acc_ap_detail($db, $partyId, $bm);
         foreach ($d['items'] as $it) {
             $lines[] = [
-                'sort_order' => ++$i * 10, 'src_type' => 'TLOG', 'src_id' => (int)$it['transfer_id'],
-                'doc_no' => $it['transfer_no'], 'doc_date' => $it['d'], 'bom' => $it['bom'],
+                'sort_order' => ++$i * 10,
+                'src_type' => (string)($it['src'] ?? 'TLOG'),
+                'src_id' => (int)($it['src_id'] ?? $it['transfer_id']),
+                'doc_no' => $it['doc_no'] ?? $it['transfer_no'], 'doc_date' => $it['d'], 'bom' => $it['bom'],
                 'product_id' => $it['product_id'], 'spec' => $it['process_name'],
                 'orig_qty' => (int)$it['transfer_qty'], 'orig_price' => (float)$it['unit_price'],
                 'orig_amount' => (float)$it['process_amount'],
@@ -498,8 +556,8 @@ function acc_sheet_confirm(PDO $db, int $sheetId, ?array $user): array
         // 涵蓋的原始憑證標為已對完
         foreach ($lines as $l) {
             $t = strtoupper((string)$l['src_type']);
-            if (!in_array($t, ['IS', 'IR', 'TLOG'], true) || (int)$l['src_id'] <= 0) continue;
-            $side = ($t === 'TLOG') ? 'ap' : 'ar';
+            if (!in_array($t, ['IS', 'IR', 'TLOG', 'PURC'], true) || (int)$l['src_id'] <= 0) continue;
+            $side = in_array($t, ['TLOG', 'PURC'], true) ? 'ap' : 'ar';
             $db->prepare("INSERT INTO acc_recon (src_type, src_id, side, status, recon_by, recon_by_name, recon_at)
                           VALUES (?,?,?,'ok',?,?,NOW())
                           ON DUPLICATE KEY UPDATE status='ok', recon_by=VALUES(recon_by),
@@ -740,7 +798,14 @@ function acc_audit_search(PDO $db, array $f): array
  * 對帳：線上修改單據 + 對帳狀態
  * ============================================================ */
 
-/** 各來源可線上修改的欄位白名單。應收單價是 int（資料表型別限制），不接受小數。 */
+/**
+ * 各來源可線上修改的欄位白名單。應收單價是 int（資料表型別限制），不接受小數。
+ *
+ * PURC（採購單）刻意回空陣列＝**不可從會計端線上改金額**：
+ * purchase_request 的 subtotal/tax_amount/grand_total 是由 purchase_item 明細算出來的，
+ * 只改單頭會讓採購頁自己算的總額對不起來。要改請回採購頁改明細。
+ * 對帳時仍可用底稿的「調整」欄位（那只寫底稿、不寫回來源），所以不影響對帳。
+ */
 function acc_editable_fields(string $srcType): array
 {
     switch (strtoupper($srcType)) {
@@ -748,6 +813,7 @@ function acc_editable_fields(string $srcType): array
         case 'IR':   return ['Qty' => 'int', 'Unit_price' => 'int', 'IR_ps' => 'text'];
         case 'TLOG': return ['transfer_qty' => 'int', 'modified_unit_price' => 'dec',
                              'process_amount' => 'dec', 'tax_amount' => 'dec', 'note' => 'text'];
+        case 'PURC': return [];
         default:     return [];
     }
 }
@@ -759,6 +825,7 @@ function acc_src_table(string $srcType): array
         case 'IS':   return ['is_list', 'IS_id', 'IS_number'];
         case 'IR':   return ['ir_track', 'IR_id', 'IR_no'];
         case 'TLOG': return ['bom_ing_transfer_log', 'transfer_id', 'transfer_no'];
+        case 'PURC': return ['purchase_request', 'req_id', 'req_no'];
         default:     return [];
     }
 }
@@ -905,7 +972,7 @@ function acc_recon_set(PDO $db, string $srcType, int $id, string $status,
     if (!in_array($status, ['pending', 'ok', 'issue'], true)) {
         return ['success' => false, 'message' => '對帳狀態只能是 未對／已對完／有異常'];
     }
-    $side = ($srcType === 'TLOG') ? 'ap' : 'ar';
+    $side = in_array($srcType, ['TLOG', 'PURC'], true) ? 'ap' : 'ar';
     $note = ($note === null || trim($note) === '') ? null : mb_substr(trim($note), 0, 300);
 
     try {
@@ -2532,10 +2599,18 @@ function acc_receipt_delete(PDO $db, int $receiptId, string $userId): array
 
 /**
  * 應付彙總（廠商 × 發票年月）
- * @param array $f ym_from, ym_to (YYYY-MM), kw, sort, dir, page, per_page
+ *
+ * 來源有兩種，以 $f['src'] 切換：
+ *   TLOG＝廠商加工費（bom_ing_transfer_log）、PURC＝材料／其他採購（purchase_request，只算月結）、
+ *   all（預設）＝兩者合併成同一列（同一廠商同一月份本來就該收在同一份對帳單裡）。
+ * 每一列都帶 amt_tlog／amt_purc／cnt_tlog／cnt_purc 讓畫面看得出組成。
+ *
+ * @param array $f ym_from, ym_to (YYYY-MM), src, kw, only_gap, sort, dir, page, per_page
  */
 function acc_ap_summary(PDO $db, array $f): array
 {
+    $src = strtoupper(trim((string)($f['src'] ?? 'all')));
+    if (!in_array($src, ['TLOG', 'PURC', 'ALL'], true)) $src = 'ALL';
     $ymFrom = preg_match('/^\d{4}-\d{2}$/', (string)($f['ym_from'] ?? '')) ? $f['ym_from'] : date('Y-m');
     $ymTo   = preg_match('/^\d{4}-\d{2}$/', (string)($f['ym_to'] ?? ''))   ? $f['ym_to']   : $ymFrom;
     if ($ymTo < $ymFrom) [$ymFrom, $ymTo] = [$ymTo, $ymFrom];
@@ -2563,7 +2638,7 @@ function acc_ap_summary(PDO $db, array $f): array
         GROUP BY t.maker_from, ym
         ORDER BY amt DESC");
     $st->execute([$c1, $c2, $dFrom, $dTo]);
-    $raw = $st->fetchAll(PDO::FETCH_ASSOC);
+    $raw = ($src === 'PURC') ? [] : $st->fetchAll(PDO::FETCH_ASSOC);
 
     // 廠商主檔
     $mk = [];
@@ -2599,7 +2674,66 @@ function acc_ap_summary(PDO $db, array $f): array
             'no_inv_date'    => (int)$r['no_inv_date'],
             'date_range'     => substr((string)$r['d_min'], 0, 10) . ' ~ ' . substr((string)$r['d_max'], 0, 10),
             'has_tax_id'     => ($m && trim((string)$m['tax_id']) !== ''),
+            'src'            => 'TLOG',
+            'cnt_tlog'       => (int)$r['cnt'],  'amt_tlog' => $amt,
+            'cnt_purc'       => 0,               'amt_purc' => 0.0,
+            'paid_purc'      => 0.0,
         ];
+    }
+
+    /* 採購側：同一廠商同一月份若加工費那邊已經有一列，就併進同一列
+       （對帳時本來就是一份對帳單對一個廠商一個月，不該拆成兩列各對各的）。 */
+    if ($src !== 'TLOG') {
+        $idx = [];
+        foreach ($rows as $i => $r) $idx[$r['maker_id_no'] . '|' . $r['invoice_ym']] = $i;
+
+        foreach (acc_purc_rows($db, ['ym_from' => $ymFrom, 'ym_to' => $ymTo]) as $p) {
+            $id  = trim((string)$p['vendor_id']);
+            $ymF = $p['billing_month'];
+            $key = $id . '|' . $ymF;
+            $amt = (float)$p['subtotal'];
+            $tax = (float)$p['tax_amount'];
+
+            if (isset($idx[$key])) {
+                $r = &$rows[$idx[$key]];
+                $r['cnt']          += 1;
+                $r['amount']       += $amt;
+                $r['tax_amount']   += $tax;
+                $r['total_amount'] += $amt + $tax;
+                $r['cnt_purc']     += 1;
+                $r['amt_purc']     += $amt;
+                $r['paid_purc']    += (float)$p['paid_amt'];
+                if ($p['invoice_date'] === null || $p['invoice_date'] === '') $r['no_inv_date'] += 1;
+                $r['src'] = 'MIX';
+                unset($r);
+                continue;
+            }
+            $m = $mk[$id] ?? null;
+            $rows[] = [
+                'maker_id_no'    => $id,
+                'maker_name'     => $m['maker_id'] ?? ($p['vendor_name'] ?: ($id !== '' ? $id : '（未指定廠商）')),
+                'maker_full'     => $m['maker_id_all'] ?? null,
+                'tax_id'         => $m['tax_id']       ?? null,
+                'payment_method' => $m['payment_method'] ?? null,
+                'net_days'       => $m['net_days']     ?? null,
+                'in_master'      => (bool)$m,
+                'inactive'       => ($m && strtoupper(trim((string)$m['status'])) === 'X'),
+                'invoice_ym'     => $ymF,
+                'cnt'            => 1,
+                'qty'            => 0,
+                'amount'         => $amt,
+                'tax_amount'     => $tax,
+                'total_amount'   => $amt + $tax,
+                'no_inv_date'    => ($p['invoice_date'] === null || $p['invoice_date'] === '') ? 1 : 0,
+                'date_range'     => ($p['invoice_date'] ?: $p['ordered_at']) . ' ~ ' . ($p['invoice_date'] ?: $p['ordered_at']),
+                'has_tax_id'     => ($m && trim((string)$m['tax_id']) !== ''),
+                'src'            => 'PURC',
+                'cnt_tlog'       => 0, 'amt_tlog' => 0.0,
+                'cnt_purc'       => 1, 'amt_purc' => $amt,
+                'paid_purc'      => (float)$p['paid_amt'],
+            ];
+            $idx[$key] = count($rows) - 1;
+        }
     }
 
     $kw = trim((string)($f['kw'] ?? ''));
@@ -2615,7 +2749,8 @@ function acc_ap_summary(PDO $db, array $f): array
     }
 
     $summary = ['groups' => count($rows), 'cnt' => 0, 'amount' => 0.0, 'tax_amount' => 0.0,
-                'total_amount' => 0.0, 'not_in_master' => 0, 'no_tax_id' => 0, 'no_inv_date' => 0];
+                'total_amount' => 0.0, 'not_in_master' => 0, 'no_tax_id' => 0, 'no_inv_date' => 0,
+                'amt_tlog' => 0.0, 'amt_purc' => 0.0, 'cnt_tlog' => 0, 'cnt_purc' => 0, 'paid_purc' => 0.0];
     foreach ($rows as $r) {
         $summary['cnt']          += $r['cnt'];
         $summary['amount']       += $r['amount'];
@@ -2624,6 +2759,11 @@ function acc_ap_summary(PDO $db, array $f): array
         if (!$r['in_master'])  $summary['not_in_master']++;
         if (!$r['has_tax_id']) $summary['no_tax_id']++;
         $summary['no_inv_date'] += $r['no_inv_date'];
+        $summary['amt_tlog']    += $r['amt_tlog'];
+        $summary['amt_purc']    += $r['amt_purc'];
+        $summary['cnt_tlog']    += $r['cnt_tlog'];
+        $summary['cnt_purc']    += $r['cnt_purc'];
+        $summary['paid_purc']   += $r['paid_purc'];
     }
 
     $sort = $f['sort'] ?? 'total_amount';
@@ -2646,12 +2786,17 @@ function acc_ap_summary(PDO $db, array $f): array
     $page = max(1, (int)($f['page'] ?? 1));
     return ['rows' => array_slice($rows, ($page - 1) * $perPage, $perPage),
             'total' => $total, 'page' => $page, 'per_page' => $perPage,
-            'summary' => $summary, 'ym_from' => $ymFrom, 'ym_to' => $ymTo];
+            'summary' => $summary, 'ym_from' => $ymFrom, 'ym_to' => $ymTo, 'src' => $src];
 }
 
-/** 應付明細（單一廠商單一發票年月） */
-function acc_ap_detail(PDO $db, string $makerIdNo, string $ym): array
+/**
+ * 應付明細（單一廠商單一發票年月）
+ * @param string $src TLOG＝只加工費、PURC＝只採購、all（預設）＝兩者都列
+ */
+function acc_ap_detail(PDO $db, string $makerIdNo, string $ym, string $src = 'all'): array
 {
+    $src = strtoupper(trim($src));
+    if (!in_array($src, ['TLOG', 'PURC', 'ALL'], true)) $src = 'ALL';
     if (!preg_match('/^\d{4}-\d{2}$/', $ym)) return ['items' => [], 'head' => null];
     $c = str_replace('-', '', $ym);
     [$dFrom, $dTo] = acc_scan_range($ym, $ym);
@@ -2680,17 +2825,62 @@ function acc_ap_detail(PDO $db, string $makerIdNo, string $ym): array
         GROUP BY t.transfer_id
         ORDER BY t.transfer_date, t.transfer_no, t.transfer_id");
     $st->execute([$makerIdNo, $c, $dFrom, $dTo]);
-    $items = $st->fetchAll(PDO::FETCH_ASSOC);
+    $items = ($src === 'PURC') ? [] : $st->fetchAll(PDO::FETCH_ASSOC);
 
     $amt = 0.0; $tax = 0.0;
     foreach ($items as &$it) {
         $it['process_amount'] = (float)$it['process_amount'];
         $it['tax_amount']     = (float)$it['tax_amount'];
         $it['unit_price']     = (float)($it['modified_unit_price'] ?: $it['price']);
+        $it['src']            = 'TLOG';
+        $it['src_id']         = (int)$it['transfer_id'];
+        $it['doc_no']         = $it['transfer_no'];
         $amt += $it['process_amount'];
         $tax += $it['tax_amount'];
     }
     unset($it);
+
+    /* 採購（月結）也是這個廠商這個月的應付，同一份對帳單裡一起列，
+       欄位對齊加工費那側（src/src_id/doc_no/d/process_name/…），下游不必分兩套處理。 */
+    if ($src !== 'TLOG') {
+        foreach (acc_purc_rows($db, ['vendor_id' => $makerIdNo, 'ym_from' => $ym, 'ym_to' => $ym]) as $p) {
+            $items[] = [
+                'src'            => 'PURC',
+                'src_id'         => (int)$p['req_id'],
+                'transfer_id'    => null,
+                'transfer_no'    => $p['req_no'],
+                'doc_no'         => $p['req_no'],
+                'd'              => $p['invoice_date'] ?: $p['ordered_at'],
+                'bom'            => null,
+                'bom_sn'         => null,
+                'product_id'     => null,
+                'transfer_qty'   => 1,
+                'loss_qty'       => null,
+                'paid_qty'       => null,
+                'price'          => (float)$p['subtotal'],
+                'modified_unit_price' => null,
+                'unit_price'     => (float)$p['subtotal'],
+                'process_amount' => (float)$p['subtotal'],
+                'tax_amount'     => (float)$p['tax_amount'],
+                'inv_date'       => $p['invoice_date'],
+                'invoice_ym'     => str_replace('-', '', (string)$p['billing_month']),
+                'invoice_no'     => $p['invoice_no'],
+                'note'           => $p['title'],
+                'note2'          => $p['purpose_label'],
+                'order_no'       => null,
+                'process_name'   => $p['title'],
+                'purc_status'    => $p['status'],
+                'pay_status'     => $p['pay_status'],
+                'paid_amt'       => (float)$p['paid_amt'],
+                'open_amt'       => (float)$p['open_amt'],
+                'grand_total'    => (float)$p['grand_total'],
+            ];
+            $amt += (float)$p['subtotal'];
+            $tax += (float)$p['tax_amount'];
+        }
+        usort($items, fn($a, $b) => strcmp((string)$a['d'], (string)$b['d'])
+                                 ?: strcmp((string)$a['doc_no'], (string)$b['doc_no']));
+    }
 
     return [
         'head' => [
@@ -2709,6 +2899,529 @@ function acc_ap_detail(PDO $db, string $makerIdNo, string $ym): array
         'tax_amount'   => $tax,
         'total_amount' => $amt + $tax,
     ];
+}
+
+/* ============================================================
+ * 應付：材料／其他採購（來源 purchase_request）
+ *
+ * 現場採購分兩種（使用者 2026-07-30 說明）：
+ *   現金付款 → 採購自己做簡單的零用金記帳，**目前不經過會計**，所以不進應付。
+ *   月結     → 要經過會計，才是這裡要收的應付。
+ * purchase_request 沒有「結帳方式」這個結構化欄位（pay_method 是自由文字，
+ * 提示字是「匯款／月結／現金」），所以用規則判定＋會計可逐單覆寫（acc_purc_flag）。
+ * 判錯不會卡死：應付頁列得出被排除的單與排除原因，一鍵就能改判。
+ * 之後採購模組穩定了，正解是在採購頁加一個結帳方式下拉，這裡再改讀那個欄位。
+ *
+ * 應付成立時點：**已下單之後**（ordered_at 有值或狀態已到 ordered 以後）。
+ * 還在詢價／簽核／待下單的單子只是意向，不是負債，不列入應付。
+ *
+ * 帳款月份：優先用廠商發票日 invoice_date 的月份，沒有才用下單日 ordered_at 的月份，
+ * 與加工費那側「優先用 invoice_ym、沒有才用 transfer_date」同一套邏輯。
+ * ============================================================ */
+
+/** 被視為現金／零用金的付款方式關鍵字（比對 purchase_request.pay_method 自由文字） */
+function acc_purc_cash_keywords(): array
+{
+    return ['現金', '零用金', '小額', '代墊', 'petty', 'cash'];
+}
+
+/**
+ * 判定一張採購單的結帳方式。
+ * @param array       $r        purchase_request 的一列（要有 pay_method）
+ * @param string|null $override acc_purc_flag.settle_mode，有值就以它為準
+ * @return string 'CREDIT'（月結，進應付）或 'CASH'（現金／零用金，不進應付）
+ */
+function acc_purc_settle_mode(array $r, ?string $override = null): string
+{
+    $ov = strtoupper(trim((string)$override));
+    if ($ov === 'CREDIT' || $ov === 'CASH') return $ov;
+    $pm = trim((string)($r['pay_method'] ?? ''));
+    if ($pm !== '') {
+        foreach (acc_purc_cash_keywords() as $kw) {
+            if (mb_stripos($pm, $kw) !== false) return 'CASH';
+        }
+    }
+    return 'CREDIT';
+}
+
+/** 判定理由（給畫面顯示，讓會計看得出為什麼被排除／納入） */
+function acc_purc_mode_reason(array $r, ?string $override = null): string
+{
+    if (in_array(strtoupper(trim((string)$override)), ['CREDIT', 'CASH'], true)) return '會計手動指定';
+    $pm = trim((string)($r['pay_method'] ?? ''));
+    if ($pm === '') return '付款方式未填，預設當月結';
+    foreach (acc_purc_cash_keywords() as $kw) {
+        if (mb_stripos($pm, $kw) !== false) return '付款方式「' . $pm . '」含「' . $kw . '」';
+    }
+    return '付款方式「' . $pm . '」';
+}
+
+/** 採購單是否已成立應付（已下單之後、金額不為 0、未作廢） */
+function acc_purc_is_payable_stage(array $r): bool
+{
+    if ((int)($r['is_active'] ?? 1) !== 1) return false;
+    if (abs((float)($r['grand_total'] ?? 0)) < 0.005) return false;
+    $st = strtolower(trim((string)($r['status'] ?? '')));
+    if (in_array($st, ['rejected', 'canceled'], true)) return false;
+    if (!empty($r['ordered_at'])) return true;
+    return in_array($st, ['ordered', 'partial', 'received', 'closed'], true);
+}
+
+/** 採購單的帳款月份（YYYY-MM）：發票日優先，其次下單日，最後建立日 */
+function acc_purc_month(array $r): string
+{
+    foreach (['invoice_date', 'ordered_at', 'Created_At'] as $k) {
+        $v = trim((string)($r[$k] ?? ''));
+        if ($v !== '' && $v !== '0000-00-00' && strlen($v) >= 7) return substr($v, 0, 7);
+    }
+    return '';
+}
+
+/**
+ * 取出採購應付的原始資料（已判好結帳方式與帳款月份、已算好已付金額）。
+ * 這是採購側應付的唯一取數入口，彙總／明細／付款沖帳都吃它，口徑才不會各算各的。
+ *
+ * @param array $f vendor_id, ym_from, ym_to(YYYY-MM), req_id, include_cash(bool),
+ *                 only_open(bool 只列還沒付完的), req_ids(array)
+ */
+function acc_purc_rows(PDO $db, array $f = []): array
+{
+    acc_ensure_schema($db);
+    $where = ["p.is_active = 1"]; $params = [];
+    if (!empty($f['vendor_id'])) { $where[] = "p.vendor_id = ?"; $params[] = $f['vendor_id']; }
+    if (!empty($f['req_id']))    { $where[] = "p.req_id = ?";    $params[] = (int)$f['req_id']; }
+    if (!empty($f['req_ids']) && is_array($f['req_ids'])) {
+        $ids = array_values(array_filter(array_map('intval', $f['req_ids'])));
+        if (!$ids) return [];
+        $where[] = "p.req_id IN (" . implode(',', array_fill(0, count($ids), '?')) . ")";
+        foreach ($ids as $x) $params[] = $x;
+    }
+
+    $st = $db->prepare("
+        SELECT p.req_id, p.req_no, p.title, p.status, p.vendor_id, p.vendor_name,
+               p.tax_type, p.subtotal, p.tax_amount, p.grand_total,
+               p.invoice_no, DATE_FORMAT(p.invoice_date,'%Y-%m-%d')  AS invoice_date,
+               DATE_FORMAT(p.ordered_at,'%Y-%m-%d')                  AS ordered_at,
+               DATE_FORMAT(p.Created_At,'%Y-%m-%d')                  AS Created_At,
+               p.pay_status, DATE_FORMAT(p.pay_date,'%Y-%m-%d')      AS pay_date,
+               p.pay_method, p.is_active, p.requester_name, p.dept_name,
+               p.purpose_type, p.purpose_label,
+               f.settle_mode AS flag_mode, f.reason AS flag_reason, f.set_by_name AS flag_by,
+               COALESCE((SELECT SUM(a.amount) FROM acc_payment_alloc a
+                         WHERE a.src_type='PURC' AND a.src_id = p.req_id), 0) AS paid_amt,
+               (SELECT COUNT(*) FROM acc_payment_alloc a2
+                 WHERE a2.src_type='PURC' AND a2.src_id = p.req_id)           AS pay_cnt
+        FROM purchase_request p
+        LEFT JOIN acc_purc_flag f ON f.req_id = p.req_id
+        WHERE " . implode(' AND ', $where) . "
+        ORDER BY p.req_id");
+    $st->execute($params);
+
+    $ymFrom = preg_match('/^\d{4}-\d{2}$/', (string)($f['ym_from'] ?? '')) ? $f['ym_from'] : '';
+    $ymTo   = preg_match('/^\d{4}-\d{2}$/', (string)($f['ym_to'] ?? ''))   ? $f['ym_to']   : '';
+
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $r['settle_mode']   = acc_purc_settle_mode($r, $r['flag_mode']);
+        $r['mode_reason']   = acc_purc_mode_reason($r, $r['flag_mode']);
+        $r['mode_manual']   = in_array(strtoupper(trim((string)$r['flag_mode'])), ['CREDIT', 'CASH'], true);
+        $r['payable_stage'] = acc_purc_is_payable_stage($r);
+        $r['billing_month'] = acc_purc_month($r);
+        $r['subtotal']      = (float)$r['subtotal'];
+        $r['tax_amount']    = (float)$r['tax_amount'];
+        $r['grand_total']   = (float)$r['grand_total'];
+        $r['paid_amt']      = (float)$r['paid_amt'];
+        $r['pay_cnt']       = (int)$r['pay_cnt'];
+        $r['open_amt']      = round($r['grand_total'] - $r['paid_amt'], 2);
+
+        if (!$r['payable_stage']) continue;
+        if ($r['settle_mode'] === 'CASH' && empty($f['include_cash'])) continue;
+        if ($ymFrom !== '' && ($r['billing_month'] === '' || $r['billing_month'] < $ymFrom)) continue;
+        if ($ymTo   !== '' && ($r['billing_month'] === '' || $r['billing_month'] > $ymTo))   continue;
+        if (!empty($f['only_open']) && $r['open_amt'] <= 0.005) continue;
+        $out[] = $r;
+    }
+    return $out;
+}
+
+/** 被排除在應付之外的採購單（現金／零用金），讓會計看得到並可改判 */
+function acc_purc_cash_rows(PDO $db, array $f = []): array
+{
+    $rows = acc_purc_rows($db, array_merge($f, ['include_cash' => true, 'only_open' => false]));
+    return array_values(array_filter($rows, fn($r) => $r['settle_mode'] === 'CASH'));
+}
+
+/** 會計覆寫某張採購單的結帳方式（現金⇄月結），寫稽核 */
+function acc_purc_set_mode(PDO $db, int $reqId, string $mode, string $reason, ?array $user): array
+{
+    acc_ensure_schema($db);
+    $mode = strtoupper(trim($mode));
+    if ($reqId <= 0) return ['success' => false, 'message' => '缺少採購單'];
+    if (!in_array($mode, ['CREDIT', 'CASH', 'AUTO'], true)) {
+        return ['success' => false, 'message' => '結帳方式只能是 CREDIT（月結）／CASH（現金）／AUTO（回到自動判定）'];
+    }
+    $reason = trim($reason);
+    if ($mode !== 'AUTO' && mb_strlen($reason) < 2) {
+        return ['success' => false, 'message' => '請填寫原因（至少 2 個字），日後查帳要看得出為什麼這樣歸類'];
+    }
+
+    $st = $db->prepare("SELECT p.*, f.settle_mode AS flag_mode FROM purchase_request p
+                        LEFT JOIN acc_purc_flag f ON f.req_id = p.req_id
+                        WHERE p.req_id = ? LIMIT 1");
+    $st->execute([$reqId]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) return ['success' => false, 'message' => '找不到採購單'];
+
+    $old = acc_purc_settle_mode($r, $r['flag_mode']);
+    $paid = (float)$db->query("SELECT COALESCE(SUM(amount),0) FROM acc_payment_alloc
+                               WHERE src_type='PURC' AND src_id=" . (int)$reqId)->fetchColumn();
+    if ($mode === 'CASH' && $paid > 0.005) {
+        return ['success' => false, 'message' => '這張採購單已經有 ' . number_format($paid)
+                . ' 元的付款沖帳紀錄，不能改判成現金；請先刪掉相關付款沖帳'];
+    }
+
+    try {
+        $db->beginTransaction();
+        if ($mode === 'AUTO') {
+            $db->prepare("DELETE FROM acc_purc_flag WHERE req_id=?")->execute([$reqId]);
+        } else {
+            $db->prepare("INSERT INTO acc_purc_flag (req_id, settle_mode, reason, set_by, set_by_name, set_at)
+                          VALUES (?,?,?,?,?,NOW())
+                          ON DUPLICATE KEY UPDATE settle_mode=VALUES(settle_mode), reason=VALUES(reason),
+                            set_by=VALUES(set_by), set_by_name=VALUES(set_by_name), set_at=NOW()")
+               ->execute([$reqId, $mode, mb_substr($reason, 0, 200),
+                          $user ? (int)$user['id'] : null, $user ? (string)$user['user_cname'] : null]);
+        }
+        $st2 = $db->prepare("SELECT p.*, f.settle_mode AS flag_mode FROM purchase_request p
+                             LEFT JOIN acc_purc_flag f ON f.req_id = p.req_id WHERE p.req_id=? LIMIT 1");
+        $st2->execute([$reqId]);
+        $new = acc_purc_settle_mode($st2->fetch(PDO::FETCH_ASSOC) ?: $r, null);
+        if ($mode !== 'AUTO') $new = $mode;
+
+        acc_audit($db, 'ACC_EDIT', 'purchase_request', $reqId, (string)$r['req_no'],
+                  ['settle_mode' => ['old' => $old, 'new' => $new]],
+                  $mode === 'AUTO' ? '取消手動指定，回到自動判定' : $reason, $user);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '設定失敗：' . $e->getMessage()];
+    }
+    $lbl = ['CREDIT' => '月結（列入應付）', 'CASH' => '現金／零用金（不列入應付）'];
+    return ['success' => true, 'settle_mode' => $new,
+            'message' => '已設定為 ' . ($lbl[$new] ?? $new)];
+}
+
+/* ── 付款單與沖帳 ─────────────────────────────────────────── */
+
+/** 付款單號：PY + 民國年3碼 + MMDD + 3 碼流水（與收款單 RC 同一套規則） */
+function acc_payment_next_no(PDO $db, string $date): string
+{
+    $y      = (int)substr($date, 0, 4) - 1911;
+    $prefix = 'PY' . str_pad((string)$y, 3, '0', STR_PAD_LEFT) . substr($date, 5, 2) . substr($date, 8, 2);
+    $st = $db->prepare("SELECT MAX(CAST(SUBSTRING(payment_no, 10) AS UNSIGNED)) FROM acc_payment WHERE payment_no LIKE ?");
+    $st->execute([$prefix . '%']);
+    return $prefix . str_pad((string)((int)$st->fetchColumn() + 1), 3, '0', STR_PAD_LEFT);
+}
+
+/** 某廠商還沒付完的採購單（供付款沖帳挑選；編輯中的付款單要把自己已沖的算回額度） */
+function acc_open_purchases(PDO $db, string $vendorId, ?int $includePaymentId = null): array
+{
+    $rows = acc_purc_rows($db, ['vendor_id' => $vendorId]);
+    if (!$rows) return [];
+    $ids = array_column($rows, 'req_id');
+    $in  = implode(',', array_fill(0, count($ids), '?'));
+    $st  = $db->prepare("SELECT src_id, COALESCE(SUM(amount),0) AS amt FROM acc_payment_alloc
+                         WHERE src_type='PURC' AND payment_id = ? AND src_id IN ($in) GROUP BY src_id");
+    $st->execute(array_merge([$includePaymentId ?? 0], $ids));
+    $mine = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $x) $mine[(int)$x['src_id']] = (float)$x['amt'];
+
+    $out = [];
+    foreach ($rows as $r) {
+        $r['this_paid'] = $mine[(int)$r['req_id']] ?? 0.0;
+        $r['available'] = round($r['open_amt'] + $r['this_paid'], 2);
+        if ($r['available'] <= 0.005) continue;
+        $out[] = $r;
+    }
+    return $out;
+}
+
+/** 建立或更新付款單（不含沖帳明細，沖帳走 acc_payment_alloc_save） */
+function acc_payment_save(PDO $db, array $d, string $userId): array
+{
+    acc_ensure_schema($db);
+    $id   = (int)($d['payment_id'] ?? 0);
+    $name = trim((string)($d['vendor_name'] ?? ''));
+    $date = trim((string)($d['pay_date'] ?? ''));
+    $amt  = (float)($d['amount'] ?? 0);
+
+    if ($name === '')                                return ['success' => false, 'message' => '請填廠商'];
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) return ['success' => false, 'message' => '出帳日格式錯誤'];
+    if ($amt <= 0)                                   return ['success' => false, 'message' => '付款金額必須大於 0'];
+
+    $vid = trim((string)($d['vendor_id'] ?? ''));
+    if ($vid === '') {
+        $stv = $db->prepare("SELECT maker_id_no FROM maker_list WHERE maker_id = ? LIMIT 1");
+        $stv->execute([$name]);
+        $vid = (string)($stv->fetchColumn() ?: '');
+    }
+
+    $method = trim((string)($d['method'] ?? '匯款'));
+    $fee    = (float)($d['fee'] ?? 0);
+    $bank   = trim((string)($d['bank'] ?? ''));
+    $ckNo   = trim((string)($d['check_no'] ?? ''));
+    $ckDue  = trim((string)($d['check_due'] ?? ''));
+    $note   = trim((string)($d['note'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $ckDue)) $ckDue = null;
+
+    try {
+        $db->beginTransaction();
+        if ($id > 0) {
+            $alloc = (float)$db->query("SELECT COALESCE(SUM(amount),0) FROM acc_payment_alloc
+                                        WHERE payment_id = " . (int)$id)->fetchColumn();
+            if ($amt < $alloc - 0.005) {
+                $db->rollBack();
+                return ['success' => false, 'message' => '付款金額 ' . number_format($amt)
+                        . ' 小於已沖帳金額 ' . number_format($alloc) . '，請先調整沖帳明細'];
+            }
+            $st = $db->prepare("UPDATE acc_payment SET vendor_id=?, vendor_name=?, pay_date=?, method=?,
+                                amount=?, fee=?, bank=?, check_no=?, check_due=?, note=?,
+                                Modified_By=?, Modified_At=NOW() WHERE payment_id=?");
+            $st->execute([$vid ?: null, $name, $date, $method, $amt, $fee, $bank ?: null,
+                          $ckNo ?: null, $ckDue, $note ?: null, $userId, $id]);
+            $db->commit();
+            // 出帳日可能被改過，付款狀態要跟著重算
+            acc_purc_sync_pay_status($db, acc_payment_req_ids($db, $id));
+            return ['success' => true, 'payment_id' => $id, 'message' => '已更新付款單'];
+        }
+
+        $no = acc_payment_next_no($db, $date);
+        $st = $db->prepare("INSERT INTO acc_payment
+                            (payment_no, vendor_id, vendor_name, pay_date, method, amount,
+                             fee, bank, check_no, check_due, note, Created_By)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+        $st->execute([$no, $vid ?: null, $name, $date, $method, $amt, $fee, $bank ?: null,
+                      $ckNo ?: null, $ckDue, $note ?: null, $userId]);
+        $newId = (int)$db->lastInsertId();
+        $db->commit();
+        return ['success' => true, 'payment_id' => $newId, 'payment_no' => $no,
+                'message' => '已建立付款單 ' . $no];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '存檔失敗：' . $e->getMessage()];
+    }
+}
+
+/** 某張付款單沖到的採購單 req_id 清單 */
+function acc_payment_req_ids(PDO $db, int $paymentId): array
+{
+    $st = $db->prepare("SELECT DISTINCT src_id FROM acc_payment_alloc WHERE payment_id=? AND src_type='PURC'");
+    $st->execute([$paymentId]);
+    return array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+}
+
+/**
+ * 寫入付款沖帳明細（整批取代該付款單原有的沖帳）。
+ * 檢查：沖帳總額 ≤ 付款金額、每張採購單不可超付、採購單廠商需與付款單一致、
+ * 現金／零用金採購單不可沖（那本來就不經過會計）。
+ */
+function acc_payment_alloc_save(PDO $db, int $paymentId, array $allocs, string $userId): array
+{
+    acc_ensure_schema($db);
+    if ($paymentId <= 0) return ['success' => false, 'message' => '缺少付款單'];
+
+    $st = $db->prepare("SELECT * FROM acc_payment WHERE payment_id=? LIMIT 1");
+    $st->execute([$paymentId]);
+    $pay = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$pay) return ['success' => false, 'message' => '找不到付款單'];
+
+    $clean = [];
+    foreach ($allocs as $a) {
+        $rid = (int)($a['req_id'] ?? $a['src_id'] ?? 0);
+        $amt = round((float)($a['amount'] ?? 0), 2);
+        if ($rid <= 0 || abs($amt) < 0.005) continue;
+        $clean[$rid] = ($clean[$rid] ?? 0) + $amt;
+    }
+    $sum = array_sum($clean);
+    if ($sum > (float)$pay['amount'] + 0.005) {
+        return ['success' => false, 'message' => '沖帳總額 ' . number_format($sum)
+                . ' 超過付款金額 ' . number_format((float)$pay['amount'])];
+    }
+
+    $before = acc_payment_req_ids($db, $paymentId);
+    try {
+        $db->beginTransaction();
+        $db->prepare("DELETE FROM acc_payment_alloc WHERE payment_id=?")->execute([$paymentId]);
+        $ins = $db->prepare("INSERT INTO acc_payment_alloc (payment_id, src_type, src_id, amount, Created_By)
+                             VALUES (?,'PURC',?,?,?)");
+        foreach ($clean as $rid => $amt) {
+            $rows = acc_purc_rows($db, ['req_id' => $rid, 'include_cash' => true]);
+            $r = $rows[0] ?? null;
+            if (!$r) {
+                $db->rollBack();
+                return ['success' => false, 'message' => "採購單 #{$rid} 不存在、已作廢，或尚未下單（未成立應付）"];
+            }
+            if ($r['settle_mode'] === 'CASH') {
+                $db->rollBack();
+                return ['success' => false, 'message' => '採購單 ' . $r['req_no']
+                        . ' 是現金／零用金（' . $r['mode_reason'] . '），不經過會計付款；'
+                        . '若判定有誤請先在應付頁把它改判成月結'];
+            }
+            if (trim((string)$r['vendor_id']) !== '' && trim((string)$pay['vendor_id']) !== ''
+                && trim((string)$r['vendor_id']) !== trim((string)$pay['vendor_id'])) {
+                $db->rollBack();
+                return ['success' => false, 'message' => '採購單 ' . $r['req_no'] . ' 的廠商（'
+                        . $r['vendor_name'] . '）與付款單（' . $pay['vendor_name'] . '）不符'];
+            }
+            // 這張單扣掉「本付款單以外」的已沖金額，才是這次可沖的上限
+            $stO = $db->prepare("SELECT COALESCE(SUM(amount),0) FROM acc_payment_alloc
+                                 WHERE src_type='PURC' AND src_id=? AND payment_id<>?");
+            $stO->execute([$rid, $paymentId]);
+            $others = (float)$stO->fetchColumn();
+            $open   = round((float)$r['grand_total'] - $others, 2);
+            if ($amt > $open + 0.005) {
+                $db->rollBack();
+                return ['success' => false, 'message' => '採購單 ' . $r['req_no'] . ' 未付餘額只有 '
+                        . number_format($open) . '，不可沖 ' . number_format($amt)];
+            }
+            $ins->execute([$paymentId, $rid, $amt, $userId]);
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '沖帳失敗：' . $e->getMessage()];
+    }
+
+    // 這次沖到的、以及被拿掉的採購單，付款狀態都要重算
+    acc_purc_sync_pay_status($db, array_values(array_unique(array_merge($before, array_keys($clean)))));
+
+    $left = round((float)$pay['amount'] - $sum, 2);
+    return ['success' => true, 'allocated' => $sum, 'unallocated' => $left, 'count' => count($clean),
+            'message' => '已沖帳 ' . count($clean) . ' 張採購單、合計 ' . number_format($sum)
+                       . ($left > 0.005 ? '，尚有 ' . number_format($left) . ' 元未分配（暫付款）' : '')];
+}
+
+/**
+ * 依會計的沖帳結果回寫 purchase_request.pay_status／pay_date／pay_method。
+ * 使用者已拍板：月結採購走會計，所以會計的沖帳就是付款狀態的唯一真相，
+ * 採購頁只顯示結果，不再自己判一套。現金單不經會計，這裡完全不碰。
+ */
+function acc_purc_sync_pay_status(PDO $db, array $reqIds): int
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $reqIds))));
+    if (!$ids) return 0;
+    $n = 0;
+    foreach ($ids as $rid) {
+        $rows = acc_purc_rows($db, ['req_id' => $rid, 'include_cash' => true]);
+        $r = $rows[0] ?? null;
+        if (!$r || $r['settle_mode'] === 'CASH') continue;   // 現金單不碰
+        $st = $db->prepare("SELECT COALESCE(SUM(a.amount),0) AS paid, MAX(p.pay_date) AS last_date,
+                                   SUBSTRING_INDEX(GROUP_CONCAT(p.method ORDER BY p.pay_date DESC), ',', 1) AS last_method
+                            FROM acc_payment_alloc a JOIN acc_payment p ON p.payment_id = a.payment_id
+                            WHERE a.src_type='PURC' AND a.src_id = ?");
+        $st->execute([$rid]);
+        $x    = $st->fetch(PDO::FETCH_ASSOC) ?: ['paid' => 0, 'last_date' => null, 'last_method' => null];
+        $paid = (float)$x['paid'];
+        $full = ($paid >= (float)$r['grand_total'] - 0.005) && $paid > 0.005;
+
+        $db->prepare("UPDATE purchase_request SET pay_status=?, pay_date=?, pay_method=? WHERE req_id=?")
+           ->execute([$full ? 'paid' : 'unpaid',
+                      $full ? ($x['last_date'] ?: null) : null,
+                      $paid > 0.005 ? ($x['last_method'] ?: $r['pay_method']) : $r['pay_method'],
+                      $rid]);
+        $n++;
+    }
+    return $n;
+}
+
+/** 付款單清單（含已沖／未分配金額） */
+function acc_payment_list(PDO $db, array $f): array
+{
+    acc_ensure_schema($db);
+    $where = []; $params = [];
+    if (!empty($f['date_from'])) { $where[] = "p.pay_date >= ?"; $params[] = $f['date_from']; }
+    if (!empty($f['date_to']))   { $where[] = "p.pay_date <= ?"; $params[] = $f['date_to']; }
+    $kw = trim((string)($f['kw'] ?? ''));
+    if ($kw !== '') {
+        $where[] = "(p.payment_no LIKE ? OR p.vendor_name LIKE ? OR p.vendor_id LIKE ? OR p.bank LIKE ? OR p.check_no LIKE ?)";
+        for ($i = 0; $i < 5; $i++) $params[] = '%' . $kw . '%';
+    }
+    $ws = $where ? 'WHERE ' . implode(' AND ', $where) : '';
+
+    $st = $db->prepare("SELECT p.*,
+                          COALESCE((SELECT SUM(a.amount) FROM acc_payment_alloc a
+                                    WHERE a.payment_id = p.payment_id), 0) AS allocated,
+                          (SELECT COUNT(*) FROM acc_payment_alloc a2
+                           WHERE a2.payment_id = p.payment_id) AS alloc_cnt
+                        FROM acc_payment p $ws
+                        ORDER BY p.pay_date DESC, p.payment_id DESC");
+    $st->execute($params);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $r['amount']      = (float)$r['amount'];
+        $r['fee']         = (float)$r['fee'];
+        $r['allocated']   = (float)$r['allocated'];
+        $r['alloc_cnt']   = (int)$r['alloc_cnt'];
+        $r['unallocated'] = round($r['amount'] - $r['allocated'], 2);
+    }
+    unset($r);
+    if (!empty($f['only_unalloc'])) {
+        $rows = array_values(array_filter($rows, fn($r) => $r['unallocated'] > 0.005));
+    }
+
+    $summary = ['count' => count($rows), 'amount' => 0.0, 'allocated' => 0.0, 'unallocated' => 0.0, 'fee' => 0.0];
+    foreach ($rows as $r) {
+        $summary['amount']      += $r['amount'];
+        $summary['allocated']   += $r['allocated'];
+        $summary['unallocated'] += $r['unallocated'];
+        $summary['fee']         += $r['fee'];
+    }
+
+    $total   = count($rows);
+    $perPage = (int)($f['per_page'] ?? 20);
+    if ($perPage === 0) return ['rows' => $rows, 'total' => $total, 'page' => 1, 'per_page' => 0, 'summary' => $summary];
+    if (!in_array($perPage, [5, 10, 20, 50], true)) $perPage = 20;
+    $page = max(1, (int)($f['page'] ?? 1));
+    return ['rows' => array_slice($rows, ($page - 1) * $perPage, $perPage),
+            'total' => $total, 'page' => $page, 'per_page' => $perPage, 'summary' => $summary];
+}
+
+/** 某付款單的沖帳明細（帶採購單資訊） */
+function acc_payment_allocs(PDO $db, int $paymentId): array
+{
+    $st = $db->prepare("SELECT a.alloc_id, a.src_type, a.src_id AS req_id, a.amount,
+                               p.req_no, p.title, p.grand_total, p.status,
+                               DATE_FORMAT(p.invoice_date,'%Y-%m-%d') AS invoice_date, p.invoice_no
+                        FROM acc_payment_alloc a
+                        LEFT JOIN purchase_request p ON p.req_id = a.src_id
+                        WHERE a.payment_id = ? AND a.src_type='PURC'
+                        ORDER BY p.invoice_date, a.alloc_id");
+    $st->execute([$paymentId]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) { $r['amount'] = (float)$r['amount']; $r['grand_total'] = (float)$r['grand_total']; }
+    unset($r);
+    return $rows;
+}
+
+/** 刪除付款單（連同沖帳明細），並把受影響的採購單付款狀態重算回去 */
+function acc_payment_delete(PDO $db, int $paymentId, string $userId): array
+{
+    if ($paymentId <= 0) return ['success' => false, 'message' => '缺少付款單'];
+    $ids = acc_payment_req_ids($db, $paymentId);
+    try {
+        $db->beginTransaction();
+        $db->prepare("DELETE FROM acc_payment_alloc WHERE payment_id=?")->execute([$paymentId]);
+        $st = $db->prepare("DELETE FROM acc_payment WHERE payment_id=?");
+        $st->execute([$paymentId]);
+        $n = $st->rowCount();
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '刪除失敗：' . $e->getMessage()];
+    }
+    acc_purc_sync_pay_status($db, $ids);
+    return ['success' => true, 'deleted' => $n,
+            'message' => $n ? '已刪除付款單與其沖帳明細，相關採購單付款狀態已重算' : '找不到該付款單'];
 }
 
 /* ============================================================

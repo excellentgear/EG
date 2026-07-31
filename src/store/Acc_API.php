@@ -102,7 +102,7 @@ function acc_sheet_list_filter(): array {
 /** 依單據類型判斷該用哪一側的對帳權限（業務只能碰應收、生管只能碰應付）。
     與 acc_ar_filter 同理，必須定義在 switch 之外才會被宣告到。 */
 function acc_recon_guard(array $perms, string $srcType): void {
-    if (strtoupper(trim($srcType)) === 'TLOG') {
+    if (in_array(strtoupper(trim($srcType)), ['TLOG', 'PURC'], true)) {
         if (empty($perms['canReconAp'])) acc_err('無應付對帳權限（需「應付對帳(生管)」或會計登錄角色）', 403);
     } else {
         if (empty($perms['canReconAr'])) acc_err('無應收對帳權限（需「應收對帳(業務)」或會計登錄角色）', 403);
@@ -673,6 +673,7 @@ case 'ap_summary': {
     acc_out(acc_ap_summary($db, [
         'ym_from'  => trim((string)($s['ym_from'] ?? '')),
         'ym_to'    => trim((string)($s['ym_to'] ?? '')),
+        'src'      => trim((string)($s['src'] ?? 'all')),
         'kw'       => acc_u8(trim((string)($s['kw'] ?? ''))),
         'only_gap' => !empty($s['only_gap']),
         'sort'     => trim((string)($s['sort'] ?? 'total_amount')),
@@ -687,7 +688,7 @@ case 'ap_detail': {
     $mk = acc_u8(trim((string)($s['maker_id_no'] ?? '')));
     $ym = trim((string)($s['invoice_ym'] ?? ''));
     if ($mk === '' || !preg_match('/^\d{4}-\d{2}$/', $ym)) acc_err('缺少廠商或發票年月');
-    acc_out(acc_ap_detail($db, $mk, $ym));
+    acc_out(acc_ap_detail($db, $mk, $ym, trim((string)($s['src'] ?? 'all'))));
 }
 
 case 'ap_export': {
@@ -695,6 +696,7 @@ case 'ap_export': {
     $r = acc_ap_summary($db, [
         'ym_from'  => trim((string)($s['ym_from'] ?? '')),
         'ym_to'    => trim((string)($s['ym_to'] ?? '')),
+        'src'      => trim((string)($s['src'] ?? 'all')),
         'kw'       => acc_u8(trim((string)($s['kw'] ?? ''))),
         'only_gap' => !empty($s['only_gap']),
         'per_page' => 0,
@@ -703,17 +705,22 @@ case 'ap_export': {
     header('Content-Disposition: attachment; filename="應付對帳彙總_' . $r['ym_from'] . '_' . $r['ym_to'] . '.csv"');
     $o = fopen('php://output', 'w');
     fwrite($o, "\xEF\xBB\xBF");
+    $srcLbl = ['TLOG' => '加工費', 'PURC' => '採購', 'MIX' => '加工費＋採購'];
     fputcsv($o, ['發票年月', '廠商編號', '廠商簡稱', '廠商全稱', '統一編號', '付款方式', '月結天數',
-                 '加工筆數', '加工數量', '加工費(未稅)', '稅額', '應付含稅', '缺發票日期筆數', '加工日期範圍']);
+                 '來源', '筆數', '加工數量', '未稅金額', '其中加工費', '其中採購', '稅額', '應付含稅',
+                 '缺發票日期筆數', '日期範圍']);
     foreach ($r['rows'] as $x) {
         fputcsv($o, [$x['invoice_ym'], $x['maker_id_no'], $x['maker_name'], $x['maker_full'],
                      ($x['tax_id'] ? "\t" . $x['tax_id'] : ''), $x['payment_method'], $x['net_days'],
-                     $x['cnt'], $x['qty'], round($x['amount']), round($x['tax_amount']),
+                     $srcLbl[$x['src']] ?? $x['src'],
+                     $x['cnt'], $x['qty'], round($x['amount']),
+                     round($x['amt_tlog']), round($x['amt_purc']), round($x['tax_amount']),
                      round($x['total_amount']), $x['no_inv_date'], $x['date_range']]);
     }
     $s2 = $r['summary'];
     fputcsv($o, []);
-    fputcsv($o, ['合計', '', '', '', '', '', '', $s2['cnt'], '', round($s2['amount']),
+    fputcsv($o, ['合計', '', '', '', '', '', '', '', $s2['cnt'], '', round($s2['amount']),
+                 round($s2['amt_tlog']), round($s2['amt_purc']),
                  round($s2['tax_amount']), round($s2['total_amount']), $s2['no_inv_date'], '']);
     fclose($o);
     exit;
@@ -724,7 +731,7 @@ case 'ap_detail_export': {
     $mk = acc_u8(trim((string)($s['maker_id_no'] ?? '')));
     $ym = trim((string)($s['invoice_ym'] ?? ''));
     if ($mk === '' || !preg_match('/^\d{4}-\d{2}$/', $ym)) acc_err('缺少廠商或發票年月');
-    $d = acc_ap_detail($db, $mk, $ym);
+    $d = acc_ap_detail($db, $mk, $ym, trim((string)($s['src'] ?? 'all')));
 
     header('Content-Type: text/csv; charset=UTF-8');
     header('Content-Disposition: attachment; filename="應付對帳單_' . $d['head']['maker_name'] . '_' . $ym . '.csv"');
@@ -734,10 +741,11 @@ case 'ap_detail_export': {
     fputcsv($o, ['統一編號', $d['head']['tax_id'] ? "\t" . $d['head']['tax_id'] : '（未建）',
                  '付款方式', $d['head']['payment_method'], '月結天數', $d['head']['net_days']]);
     fputcsv($o, []);
-    fputcsv($o, ['加工日', '移轉單號', '製令', '料號', '製程', '加工數量', '損耗',
-                 '單價', '加工費', '稅額', '發票日期', '訂單號', '備註']);
+    fputcsv($o, ['來源', '日期', '單號', '製令', '料號', '製程／品名', '數量', '損耗',
+                 '單價', '未稅金額', '稅額', '發票日期', '訂單號', '備註']);
     foreach ($d['items'] as $i) {
-        fputcsv($o, [$i['d'], $i['transfer_no'], $i['bom'], $i['product_id'], $i['process_name'],
+        fputcsv($o, [($i['src'] ?? 'TLOG') === 'PURC' ? '採購' : '加工費',
+                     $i['d'], $i['doc_no'] ?? $i['transfer_no'], $i['bom'], $i['product_id'], $i['process_name'],
                      $i['transfer_qty'], $i['loss_qty'],
                      rtrim(rtrim(number_format((float)$i['unit_price'], 4, '.', ''), '0'), '.'),
                      round($i['process_amount']), round($i['tax_amount']),
@@ -747,6 +755,218 @@ case 'ap_detail_export': {
     fputcsv($o, ['', '', '', '', '', '', '', '加工費(未稅)', round($d['amount'])]);
     fputcsv($o, ['', '', '', '', '', '', '', '稅額', round($d['tax_amount'])]);
     fputcsv($o, ['', '', '', '', '', '', '', '應付含稅', round($d['total_amount'])]);
+    fclose($o);
+    exit;
+}
+
+/* ══ 應付：材料／其他採購（purchase_request）═══════════════════════════
+   現金／零用金採購不經會計，預設不列入應付；判定規則與覆寫見 acc_lib 的
+   acc_purc_settle_mode()。以下幾支都是「採購應付」與「付款沖帳」用的。 */
+
+/* 採購應付清單（月結）；帶 mode=cash 時改列被排除的現金單，讓會計看得到並可改判 */
+case 'purc_list': {
+    $s    = $_POST ?: $_GET;
+    $mode = strtolower(trim((string)($s['mode'] ?? 'credit')));
+    $f = [
+        'vendor_id' => acc_u8(trim((string)($s['vendor_id'] ?? ''))),
+        'ym_from'   => trim((string)($s['ym_from'] ?? '')),
+        'ym_to'     => trim((string)($s['ym_to'] ?? '')),
+        'only_open' => !empty($s['only_open']),
+    ];
+    $rows = ($mode === 'cash') ? acc_purc_cash_rows($db, $f) : acc_purc_rows($db, $f);
+
+    $kw = acc_u8(trim((string)($s['kw'] ?? '')));
+    if ($kw !== '') {
+        $rows = array_values(array_filter($rows, fn($r) =>
+            mb_stripos((string)$r['req_no'], $kw) !== false
+            || mb_stripos((string)$r['title'], $kw) !== false
+            || mb_stripos((string)$r['vendor_name'], $kw) !== false
+            || mb_stripos((string)$r['invoice_no'], $kw) !== false
+            || mb_stripos((string)$r['requester_name'], $kw) !== false));
+    }
+
+    $sum = ['count' => count($rows), 'grand_total' => 0.0, 'subtotal' => 0.0,
+            'tax_amount' => 0.0, 'paid' => 0.0, 'open' => 0.0];
+    foreach ($rows as $r) {
+        $sum['grand_total'] += $r['grand_total'];
+        $sum['subtotal']    += $r['subtotal'];
+        $sum['tax_amount']  += $r['tax_amount'];
+        $sum['paid']        += $r['paid_amt'];
+        $sum['open']        += max(0, $r['open_amt']);
+    }
+
+    $total   = count($rows);
+    $perPage = (int)($s['per_page'] ?? 20);
+    $page    = max(1, (int)($s['page'] ?? 1));
+    if ($perPage > 0) {
+        if (!in_array($perPage, [5, 10, 20, 50], true)) $perPage = 20;
+        $rows = array_slice($rows, ($page - 1) * $perPage, $perPage);
+    }
+    acc_out(['rows' => $rows, 'total' => $total, 'page' => $page,
+             'per_page' => $perPage, 'summary' => $sum, 'mode' => $mode]);
+}
+
+/* 會計改判某張採購單是月結還是現金（現金＝不進應付） */
+case 'purc_set_mode': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_purc_set_mode($db, (int)($_POST['req_id'] ?? 0),
+                           (string)($_POST['settle_mode'] ?? ''),
+                           acc_u8((string)($_POST['reason'] ?? '')), $u);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* ══ 付款與沖帳（應付側，與收款沖帳對稱）═════════════════════════════ */
+
+case 'payment_list': {
+    $s = $_POST ?: $_GET;
+    acc_out(acc_payment_list($db, [
+        'date_from'    => trim((string)($s['date_from'] ?? '')),
+        'date_to'      => trim((string)($s['date_to'] ?? '')),
+        'kw'           => acc_u8(trim((string)($s['kw'] ?? ''))),
+        'only_unalloc' => !empty($s['only_unalloc']),
+        'page'         => max(1, (int)($s['page'] ?? 1)),
+        'per_page'     => (int)($s['per_page'] ?? 20),
+    ]));
+}
+
+/* 某廠商還沒付完的採購單（挑要沖哪幾張用） */
+case 'open_purchases': {
+    $s   = $_POST ?: $_GET;
+    $vid = acc_u8(trim((string)($s['vendor_id'] ?? '')));
+    if ($vid === '') acc_err('請指定廠商');
+    acc_out(['rows' => acc_open_purchases($db, $vid, (int)($s['payment_id'] ?? 0) ?: null)]);
+}
+
+case 'payment_allocs': {
+    $s = $_POST ?: $_GET;
+    acc_out(['rows' => acc_payment_allocs($db, (int)($s['payment_id'] ?? 0))]);
+}
+
+/* 有未付月結採購單的廠商（開付款單時的下拉來源） */
+case 'ap_vendors': {
+    $g = [];
+    foreach (acc_purc_rows($db, ['only_open' => true]) as $r) {
+        $k = (string)$r['vendor_id'];
+        if (!isset($g[$k])) $g[$k] = ['vendor_id' => $r['vendor_id'], 'vendor_name' => $r['vendor_name'],
+                                      'cnt' => 0, 'open' => 0.0];
+        $g[$k]['cnt']++;
+        $g[$k]['open'] += $r['open_amt'];
+    }
+    usort($g, fn($a, $b) => $b['open'] <=> $a['open']);
+    acc_out(['vendors' => array_values($g)]);
+}
+
+/* 沖帳畫面一次要的三包資料：付款單本身、該廠商未付完的採購單、本單目前的沖帳明細 */
+case 'payment_alloc_options': {
+    $s   = $_POST ?: $_GET;
+    $pid = (int)($s['payment_id'] ?? 0);
+    if ($pid <= 0) acc_err('缺少付款單');
+    $st = $db->prepare("SELECT * FROM acc_payment WHERE payment_id=? LIMIT 1");
+    $st->execute([$pid]);
+    $pay = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$pay) acc_err('找不到付款單');
+    $pay['amount'] = (float)$pay['amount'];
+    $pay['fee']    = (float)$pay['fee'];
+
+    acc_out(['payment'   => $pay,
+             'purchases' => acc_open_purchases($db, (string)$pay['vendor_id'], $pid),
+             'allocs'    => acc_payment_allocs($db, $pid)]);
+}
+
+case 'payment_save': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限（付款屬會計作業）', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $d = [];
+    foreach (['payment_id', 'vendor_id', 'vendor_name', 'pay_date', 'method', 'amount',
+              'fee', 'bank', 'check_no', 'check_due', 'note'] as $k) {
+        $d[$k] = acc_u8((string)($_POST[$k] ?? ''));
+    }
+    $r = acc_payment_save($db, $d, (string)$uid);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'payment_alloc_save': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canEdit']) acc_err('無會計登錄權限（付款屬會計作業）', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $allocs = json_decode($_POST['allocs'] ?? '[]', true);
+    if (!is_array($allocs)) acc_err('資料格式錯誤');
+    $r = acc_payment_alloc_save($db, (int)($_POST['payment_id'] ?? 0), $allocs, (string)$uid);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'payment_delete': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('僅會計管理員可刪除付款單', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_payment_delete($db, (int)($_POST['payment_id'] ?? 0), (string)$uid);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+case 'payment_export': {
+    $s = $_GET ?: $_POST;
+    $r = acc_payment_list($db, [
+        'date_from'    => trim((string)($s['date_from'] ?? '')),
+        'date_to'      => trim((string)($s['date_to'] ?? '')),
+        'kw'           => acc_u8(trim((string)($s['kw'] ?? ''))),
+        'only_unalloc' => !empty($s['only_unalloc']),
+        'per_page'     => 0,
+    ]);
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="付款單_' . date('Ymd_Hi') . '.csv"');
+    $o = fopen('php://output', 'w');
+    fwrite($o, "\xEF\xBB\xBF");
+    fputcsv($o, ['付款單號', '出帳日', '廠商編號', '廠商', '付款方式', '付款金額', '匯費',
+                 '已沖帳', '未分配', '沖帳張數', '銀行', '支票號碼', '票期', '備註', '建立時間']);
+    foreach ($r['rows'] as $x) {
+        fputcsv($o, [$x['payment_no'], $x['pay_date'], $x['vendor_id'], $x['vendor_name'], $x['method'],
+                     round($x['amount']), round($x['fee']), round($x['allocated']),
+                     round($x['unallocated']), $x['alloc_cnt'], $x['bank'], $x['check_no'],
+                     $x['check_due'], $x['note'], $x['Created_At']]);
+    }
+    $s2 = $r['summary'];
+    fputcsv($o, []);
+    fputcsv($o, ['合計', '', '', '', '', round($s2['amount']), round($s2['fee']),
+                 round($s2['allocated']), round($s2['unallocated'])]);
+    fclose($o);
+    exit;
+}
+
+/* 採購應付匯出（含結帳方式判定與已付／未付） */
+case 'purc_export': {
+    $s    = $_GET ?: $_POST;
+    $mode = strtolower(trim((string)($s['mode'] ?? 'credit')));
+    $f = [
+        'vendor_id' => acc_u8(trim((string)($s['vendor_id'] ?? ''))),
+        'ym_from'   => trim((string)($s['ym_from'] ?? '')),
+        'ym_to'     => trim((string)($s['ym_to'] ?? '')),
+        'only_open' => !empty($s['only_open']),
+    ];
+    $rows = ($mode === 'cash') ? acc_purc_cash_rows($db, $f) : acc_purc_rows($db, $f);
+
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="採購應付_' . ($mode === 'cash' ? '現金零用金_' : '')
+           . date('Ymd_Hi') . '.csv"');
+    $o = fopen('php://output', 'w');
+    fwrite($o, "\xEF\xBB\xBF");
+    fputcsv($o, ['採購單號', '標題', '用途', '申請人', '部門', '廠商編號', '廠商', '狀態',
+                 '帳款月份', '發票號碼', '發票日期', '未稅', '稅額', '含稅總額',
+                 '結帳方式', '判定依據', '已付', '未付', '付款筆數']);
+    foreach ($rows as $x) {
+        fputcsv($o, [$x['req_no'], $x['title'], $x['purpose_label'], $x['requester_name'], $x['dept_name'],
+                     $x['vendor_id'], $x['vendor_name'], $x['status'], $x['billing_month'],
+                     $x['invoice_no'], $x['invoice_date'],
+                     round($x['subtotal']), round($x['tax_amount']), round($x['grand_total']),
+                     $x['settle_mode'] === 'CASH' ? '現金／零用金' : '月結',
+                     $x['mode_reason'], round($x['paid_amt']), round($x['open_amt']), $x['pay_cnt']]);
+    }
     fclose($o);
     exit;
 }
@@ -869,7 +1089,7 @@ case 'recon_set_bulk': {
     foreach ($items as $it) {
         $st = (string)($it['src_type'] ?? '');
         // 逐筆檢查權限，避免夾帶另一側的單據繞過
-        $isAp = (strtoupper(trim($st)) === 'TLOG');
+        $isAp = in_array(strtoupper(trim($st)), ['TLOG', 'PURC'], true);
         if (($isAp && empty($perms['canReconAp'])) || (!$isAp && empty($perms['canReconAr']))) {
             $fail++; if (count($errors) < 10) $errors[] = ($it['no'] ?? '?') . '：無此側對帳權限';
             continue;
@@ -906,9 +1126,16 @@ case 'recon_detail': {
         $mk = acc_u8(trim((string)($s['maker_id_no'] ?? '')));
         $ym = trim((string)($s['invoice_ym'] ?? ''));
         if ($mk === '' || !preg_match('/^\d{4}-\d{2}$/', $ym)) acc_err('缺少廠商或發票年月');
-        $d = acc_ap_detail($db, $mk, $ym);
-        $d['recon']    = acc_recon_map($db, 'TLOG', array_column($d['items'], 'transfer_id'));
-        $d['editable'] = ['TLOG' => acc_editable_fields('TLOG')];
+        $d = acc_ap_detail($db, $mk, $ym, trim((string)($s['src'] ?? 'all')));
+        $tlogIds = []; $purcIds = [];
+        foreach ($d['items'] as $it) {
+            if (($it['src'] ?? 'TLOG') === 'PURC') $purcIds[] = (int)$it['src_id'];
+            else                                   $tlogIds[] = (int)$it['src_id'];
+        }
+        $d['recon']    = array_merge(acc_recon_map($db, 'TLOG', $tlogIds),
+                                     acc_recon_map($db, 'PURC', $purcIds));
+        // 採購單金額不可從會計端線上改（總額由採購明細算出來），所以回空的欄位定義
+        $d['editable'] = ['TLOG' => acc_editable_fields('TLOG'), 'PURC' => acc_editable_fields('PURC')];
         $d['can_edit'] = (bool)$perms['canReconAp'];
         acc_out($d);
     }
