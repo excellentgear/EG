@@ -716,6 +716,12 @@ body { background:var(--bg); }
                                     <select class="form-control input-sm" id="contact_select" style="font-size:12px;" onchange="$('#contact_id').val(this.value)">
                                     </select>
                                 </div>
+                                <div style="margin-top:6px;">
+                                    <button type="button" class="btn btn-default btn-xs" id="btnAutoSortItems" onclick="autoSortQuoteItems()"
+                                        title="依「料號→製程→料號備註→數量→建檔順序」重新排列報價項目，並直接寫入資料庫排序號碼；列印一律依存檔的順序">
+                                        <i class="fa fa-sort-amount-asc"></i> 項目自動排序
+                                    </button>
+                                </div>
                             </div>
                             <div class="col-sm-3 form-group has-feedback">
                                 <label>客戶名稱 <i class="fa fa-check-circle" id="client-bound-check" style="color:#27ae60;display:none;font-size:13px;" title="已綁定客戶資料"></i></label>
@@ -3807,6 +3813,59 @@ function resetEditor() {
 // ══════════════════════════════════════════════════════
 // 儲存
 // ══════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+// 項目自動排序按鈕：依舊版「列印時自動排序」規則
+// （料號→製程→料號備註→數量→建檔順序）重排編輯畫面列，
+// 並把新順序直接寫入資料庫排序號碼（quotation_item.sort_order）。
+// 列印一律依存檔順序，不再於列印時自動排序。
+// ══════════════════════════════════════════════════════
+function autoSortQuoteItems() {
+    const $tbody = $('#quoteItemsTable > tbody');
+    const groups = [];
+    $tbody.find('> tr.item-row').each(function (idx) {
+        const $row = $(this);
+        const isTiered = parseInt($row.data('is-tiered')) === 1;
+        groups.push({
+            // item-row 連同其後的 tier-row / bom-row 一起搬動
+            $rows:         $row.add($row.nextUntil('tr.item-row')),
+            item_id:       parseInt($row.attr('data-item-id')) || Infinity, // 未存檔新列排最後
+            product_id:    ($row.find('.product_id_hidden').val() || '').toUpperCase(),
+            process_notes: ($row.find('.proc-subtags-hidden').val() || '').toUpperCase(),
+            specification: ($row.find('input[name="specification"]').val() || '').toUpperCase(),
+            quantity:      isTiered ? 0 : (parseFloat($row.find('.quantity').val()) || 0),
+            idx
+        });
+    });
+    if (groups.length < 2) {
+        Swal.fire({ toast:true, position:'top-end', icon:'info', title:'項目不足兩筆，無需排序', showConfirmButton:false, timer:1800 });
+        return;
+    }
+    const cmpStr = (a, b) => a < b ? -1 : (a > b ? 1 : 0);
+    groups.sort((a, b) =>
+        cmpStr(a.product_id, b.product_id) ||
+        cmpStr(a.process_notes, b.process_notes) ||
+        cmpStr(a.specification, b.specification) ||
+        (a.quantity - b.quantity) ||
+        (a.item_id === b.item_id ? (a.idx - b.idx) : (a.item_id - b.item_id))
+    );
+    groups.forEach(g => $tbody.append(g.$rows));
+
+    // 已存檔的報價單：把新順序直接寫入 DB 排序號碼；未存檔新列待儲存時依列順序補號
+    const quoteId    = parseInt($('#quote_id').val()) || 0;
+    const orderedIds = groups.map(g => parseInt(g.$rows.first().attr('data-item-id')) || 0).filter(x => x > 0);
+    if (quoteId && orderedIds.length) {
+        $.post(API_URL, { action:'save_item_sort', quote_id: quoteId, item_ids: JSON.stringify(orderedIds) }, res => {
+            if (res && res.success) {
+                Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已自動排序並寫入資料庫', showConfirmButton:false, timer:2200 });
+            } else {
+                Swal.fire('錯誤', (res && res.message) || '排序寫入資料庫失敗', 'error');
+            }
+        }, 'json').fail(() => Swal.fire('錯誤', '與伺服器通訊失敗', 'error'));
+    } else {
+        Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已自動排序（儲存後寫入排序號碼）', showConfirmButton:false, timer:2200 });
+    }
+}
+
 function saveQuote(onSuccess) {
     if (!fixAllTiersBeforeSave()) {
         Swal.fire('錯誤', '階梯報價中有區間最小量未填，請補齊後再儲存', 'error'); return;
