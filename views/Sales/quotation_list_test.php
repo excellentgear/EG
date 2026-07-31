@@ -1829,6 +1829,26 @@ $(document).ready(function () {
             const $rows   = $('#quoteItemsTable > tbody > tr.item-row:visible');
             const rowIdx  = $rows.index($row);
             const adjIdx  = key === 'ArrowUp' ? rowIdx - 1 : rowIdx + 1;
+
+            // ★ 可增列表格鐵則：最末列按 ↓ 自動新增一列並跳到同欄
+            if (key === 'ArrowDown' && adjIdx >= $rows.length) {
+                if (addItemRow() === false) return;   // 已達上限時不新增
+                const $newRow    = $('#quoteItemsTable > tbody > tr.item-row:visible').last();
+                const $newInputs = $newRow.find('input:not([type=hidden]):not([disabled]):visible');
+                const $t = $newInputs.eq(Math.min(idx, $newInputs.length - 1));
+                if ($t.length) $t.focus();
+                return;
+            }
+            // ★ 完全空白尚未輸入的列（料號/製程/料號備註/數量/單價/金額全空）按 ↑ 自動刪除該列並跳回上一列
+            if (key === 'ArrowUp' && rowIdx > 0 && quoteRowIsBlank($row)) {
+                removeItemRow(this);
+                const $left   = $('#quoteItemsTable > tbody > tr.item-row:visible');
+                const $pInputs = $left.eq(rowIdx - 1).find('input:not([type=hidden]):not([disabled]):visible');
+                const $t = $pInputs.eq(Math.min(idx, $pInputs.length - 1));
+                if ($t.length) $t.focus().select();
+                return;
+            }
+
             if (adjIdx < 0 || adjIdx >= $rows.length) return;
             const $adjRow    = $rows.eq(adjIdx);
             const $adjInputs = $adjRow.find('input:not([type=hidden]):not([disabled]):visible');
@@ -5122,6 +5142,22 @@ function removeItemRow(btn) {
     $row.nextUntil('tr.item-row', 'tr.bom-row').remove();
     $row.remove();
     calculateTotal();
+}
+
+// 項目列是否「完全空白尚未輸入」：料號、製程、料號備註、數量、單價、金額全空才算
+// （金額為唯讀自動計算欄，空字串或 0 視為空白；階梯模式一律視為已輸入）
+function quoteRowIsBlank($row) {
+    if (parseInt($row.data('is-tiered')) === 1) return false;
+    if (($row.find('.part-search').val() || '').trim() !== '') return false;              // 料號（輸入中文字）
+    if (($row.find('.product_id_hidden').val() || '').trim() !== '') return false;        // 料號（已綁定）
+    if (($row.find('.proc-subtags-hidden').val() || '').trim() !== '') return false;      // 製程
+    if (($row.find('.process-hidden').val() || '').trim() !== '') return false;           // 製程（舊資料值）
+    if (($row.find('input[name="specification"]').val() || '').trim() !== '') return false; // 料號備註
+    if (($row.find('.quantity').val() || '').trim() !== '') return false;                 // 數量
+    if (($row.find('.unit-price').val() || '').trim() !== '') return false;               // 單價
+    const amt = ($row.find('.amount').val() || '').replace(/,/g, '').trim();              // 金額
+    if (amt !== '' && parseFloat(amt) !== 0) return false;
+    return true;
 }
 
 // ══════════════════════════════════════════════════════
