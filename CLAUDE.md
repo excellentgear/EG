@@ -27,6 +27,7 @@ PHP + MySQL 內網 ERP（倉庫管理），MAMP 本地執行，Windows 10。**�
      - 注意：`views/ADM/db_backup.php` 的「GitHub 帳號綁定」只會覆寫 `origin` 的 token（保留 excellentgear/EG 路徑），不會動 `backup` remote。
    - 寫入 page_change_log（範本見下）
    - 若新增頁面：**頁面底部必須依序載入 `jquery.min.js`→`bootstrap.min.js`→`fastclick.js`→`nprogress.js`→`custom.min.js`（缺 custom.min.js 左側欄選單就死，已重複踩過兩次）；若你的 CSS 抄了 `#sidebar-menu{visibility:hidden;}`，就必須連同 `$(document).ready` 裡那段 `$('#sidebar-menu').css('visibility','visible')` 一起抄（只抄 CSS 沒抄 JS＝側欄整片消失，即使五支 JS 都載對了；照抄 `views/pm/vendor_audit.php` 底部）**；**收尾一定要跑側欄健檢：`& C:\MAMP\bin\php\php8.3.1\php.exe C:\MAMP\htdocs\EGsystem\ai-rules\tools\check_sidebar.php`，三項必須全是「（無）」才算過**（側欄已連四次出事，共三種根因；靠記得遵守擋不住，改用這支工具驗收——`php -l` 與看原始碼有沒有 `sidebar-menu` 字串都抓不到被 CSS 隱藏的情況）；到 `views/user/user_permissions.php` 仿照報價單加上該頁角色設定區塊；並登記進選單＝`system_module_pages` INSERT 一列（page_name＋page_url 格式 `/EGsystem/views/...`、sort_order=MAX+1）再把 group_id 綁到「測試功能」主項目（system_module_groups.group_name='測試功能'），等同 `views/admin/system_module_setting.php` 的「子頁面設定＋主項目綁定」操作；帶參數才能開的子頁（設計器/填寫頁等）不登記，只登記入口頁
+7. **每頁必附「使用說明」**（功能面，違反＝本次工作不合格）：任何有實質操作的頁面，一律在**頁首右上角**放一顆「使用說明」按鈕（`class="page-help-btn"`，`@media print` 隱藏），點擊開跳窗（`id="helpUseMask"`），內含**功能說明＋操作步驟＋重要行為/常見疑問＋設定入口＋權限角色**。位置與樣式**全站統一**：照抄 `views/pm/vendor_audit.php` 的 `.page-help-btn`／`.help-doc` CSS 與 `#helpUseMask` modal 結構（按鈕放 `.page-title` 內 `margin-left:auto` 靠右；handler `$('#btnPageHelp').on('click',…openMask('helpUseMask'))`）。改動頁面功能時說明內容要**同步更新**。既有頁面陸續補上。詳見記憶 [[page_usage_help]]。
 
 ## page_change_log 寫入範本
 ```

@@ -37,6 +37,17 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <style>
         #sidebar-menu { visibility: hidden; }
         .right_col .page-title { margin:8px 0 4px; overflow:hidden; }
+        .page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
+            background:#F0A24B; color:#fff; cursor:pointer; }
+        .page-help-btn:hover { background:#d98a33; }
+        @media print { .page-help-btn { display:none !important; } }
+        .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
+        .help-doc h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
+        .help-doc h4:first-child { margin-top:0; }
+        .help-doc b { color:#8A5A2B; }
+        .help-doc ul { margin:4px 0 8px; padding-left:20px; }
+        .help-doc li { margin:2px 0; }
+        .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
         .va-toolbar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; clear:both;
             border:1.5px solid #E8D5B5; border-radius:8px; padding:8px 10px; margin-bottom:10px; background:#FDF8EF; }
         .va-toolbar label { margin:0; font-size:13px; color:#5b3a1e; }
@@ -189,6 +200,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
             <h2 style="margin:6px 0;">供應商稽核管理
                 <small style="color:#8a6d45;">KPI 2-GM-04-01 #6 廠商稽核按時執行率 來源頁（半年一期，每期挑一批對象）</small></h2>
+            <button id="btnPageHelp" class="page-help-btn" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
         <div class="clearfix"></div>
 
@@ -582,6 +594,60 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <hr style="border-color:#EADFC8;">
         本頁為 KPI「廠商稽核按時執行率(#6)」來源；每期對象由本頁挑選，執行率＝已完成÷對象數。停用廠商不列入。
     </div>
+</div></div>
+
+<!-- 頁面使用說明 modal -->
+<div class="va-mask" id="helpUseMask"><div class="va-modal xwide">
+    <div class="m-head"><span><i class="fa fa-question-circle"></i> 供應商稽核管理 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
+    <div class="m-body help-doc">
+        <p>本頁為 KPI「2-GM-04-01 #6 廠商稽核按時執行率」的來源頁，並整合供應商評鑑相關 AS 表單。分三個分頁：<b>稽核批次</b>、<b>定期評核</b>、<b>合格供應商清冊</b>。</p>
+
+        <h4>一、稽核批次（實地稽核，半年一期）</h4>
+        <ul>
+            <li><b>模型</b>：每期（上半年 1–6 月／下半年 7–12 月）挑一批廠商稽核。KPI 執行率＝已完成 ÷ 本期對象數。</li>
+            <li><b>加入稽核對象</b>：依大類／加工項目篩選後多選加入，或隨機抽 N 家（自納管廠商）；可指定「預定稽核月份」。</li>
+            <li><b>登錄</b>：填「供應商評鑑稽核表」簡版 15 項，每項自評分＋稽核分各 0~7；系統自動算各類與綜合合格率（自評×0.3＋稽核×0.7），<b>≥75% 判合格</b>。</li>
+            <li><b>記錄表</b>（已稽核者）：由 15 項換算 5 大類合格率，含<b>雷達圖</b>；可「列印記錄表」或「一次印全部文件」（查檢表＋記錄表兩頁供簽名）；可上傳供應商簽名回傳掃描檔。</li>
+            <li><b>停用廠商</b>（master_data 客戶/廠商設為停用者）：灰底、不可加入、不列入 KPI。</li>
+        </ul>
+
+        <h4>二、定期評核（月不良／遲交率，ERP 自動算）</h4>
+        <ul>
+            <li><b>資料來源</b>：自 ERP（bom_ing）自動計算——品質依檢驗日歸月（不良＝ng、特採＝QQ 另計）；交期＝實際回廠日晚於「發包日＋約定工作天」為遲交。</li>
+            <li><b>分數／等級</b>：半年與全年各算，分數＝(1−不良率)×50 ＋ (1−遲交率)×50（四捨五入）；依等級門檻判 A/B/C/D。</li>
+            <li><b>全部納管廠商</b>：一次列出所有納管廠商，2 欄卡片；可「只看不合格」；橫式列印一頁 6 間。</li>
+            <li><b>單一廠商</b>：查一家的 12 個月明細，上方顯示上／下半年／全年分數與等級。</li>
+        </ul>
+
+        <h4>三、合格供應商清冊</h4>
+        <ul>
+            <li><b>組成</b>：清冊＝<b>納管廠商</b>（固定要稽核）∪ <b>手動列入</b>（不需納管但認定合格者，靠定期評核績效監控）。</li>
+            <li><b>評核等級</b>：建議等級來自定期評核全年成績；可勾選<b>批次設定採用等級</b>覆寫建議，或清除改回建議。</li>
+            <li><b>檢查兩年未交易外包廠</b>：列出納管/在冊、有發包史但最後發包超過兩年的外包廠（顯示最後發包日）；<b>需你勾選確認</b>後才移除（取消納管＋移出清冊＋刪未稽核對象），不會自動靜默移除。</li>
+        </ul>
+
+        <div class="tip">
+            <b>重要行為（常見疑問）</b>：<br>
+            ● 納管廠商<b>某年度完全沒有交易</b> → <b>不會</b>出現在「定期評核（全部納管）」（自動略過整年無資料者）。<br>
+            ● 但它<b>仍會</b>出現在<b>合格清冊</b>（納管＝固定要稽核的合格供應商，即使當年無交易仍列冊），其「建議等級」顯示「<b>—</b>」（無資料可算）；可手動設「採用等級」，或靠實地稽核判定。
+        </div>
+
+        <h4>四、設定（管理員，於稽核批次工具列）</h4>
+        <ul>
+            <li><b>稽核員設定</b>：按管理範圍（外包加工／採購／通用）指定部門與稽核員；離職者（在職狀態）自動不列入下拉。</li>
+            <li><b>週期設定</b>：共用稽核週期（月），僅供「多久辦一期」提醒。</li>
+            <li><b>附件路徑</b>：佐證附件實體存放資料夾（可填 NAS），DB 只存檔名、路徑即時組。</li>
+            <li><b>AS文件綁定</b>：四份文件（2-PH-01-02 查檢表／03 記錄表／04 清冊／05 定期評核表）的列印名稱與編號跟 AS 文件管理連動，AS 改名/改號自動跟著變。</li>
+            <li><b>門檻設定</b>（定期評核）：不良率／遲交率／特採率上限、約定工作天、評核等級門檻。</li>
+        </ul>
+
+        <h4>五、權限角色</h4>
+        <ul>
+            <li><b>稽核檢閱</b>：檢視/歷史/統計/匯出；<b>稽核登錄</b>：＋加入/移除對象、登錄稽核、上傳附件、清冊維護；<b>稽核管理員</b>：＋稽核員/週期/附件/AS綁定/門檻設定、兩年未交易移除；<b>管理者</b>固定全權。</li>
+        </ul>
+        <div style="font-size:11px;color:#8a6d45;margin-top:8px;">列印文件標頭一律取「本公司」（master_data 客戶分頁設為本公司之客戶全名/發票用）。</div>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">我知道了</button></div>
 </div></div>
 
 <script src="../../resource/js/jquery.min.js"></script>
@@ -1511,6 +1577,7 @@ function staleRemove(){
 }
 
 $('#btnRoleHelp').on('click', function(){ openMask('helpMask'); });
+$('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('.va-mask').on('click', function(e){ if (e.target===this) this.style.display='none'; });
 
 $(window).on('scroll', function(){ $('#vaToTop').toggle($(window).scrollTop()>200); });
