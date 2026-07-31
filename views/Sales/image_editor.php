@@ -744,11 +744,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $prefs = json_decode($_POST['prefs'] ?? '{}', true);
             if (!is_array($prefs)) $prefs = [];
             // 白名單欄位，避免被塞進奇怪的東西
-            $allowed = ['stroke', 'width', 'lineEnds', 'fill', 'fillOn', 'textColor', 'fontSize', 'bold',
+            $allowed = ['stroke', 'width', 'lineEnds', 'lineStyle', 'fill', 'fillOn', 'textColor', 'fontSize', 'bold', 'underline',
                         'textBg', 'textBgOn', 'balloonSize', 'dcShape', 'dcSize', 'stampSize', 'maskColor', 'cropTransparent',
                         'connectKind', 'dimStyle'];
             $clean = [];
             foreach ($allowed as $k) if (array_key_exists($k, $prefs)) $clean[$k] = $prefs[$k];
+            // 每個繪圖工具各自的線條設定（畫筆/直線/兩點連線/矩形/橢圓/標註各記各的，互不覆蓋）
+            $toolKeys  = ['draw', 'line', 'connect', 'rect', 'ellipse', 'dimdist', 'dimcircle', 'dimangle'];
+            $styleKeys = ['stroke', 'width', 'lineEnds', 'lineStyle', 'fill', 'fillOn'];
+            if (!empty($prefs['toolStyles']) && is_array($prefs['toolStyles'])) {
+                $ts = [];
+                foreach ($toolKeys as $tk) {
+                    $one = $prefs['toolStyles'][$tk] ?? null;
+                    if (!is_array($one)) continue;
+                    $row = [];
+                    foreach ($styleKeys as $sk) {
+                        if (!array_key_exists($sk, $one)) continue;
+                        $v = $one[$sk];
+                        if (is_bool($v)) $row[$sk] = $v;
+                        elseif (is_scalar($v)) $row[$sk] = mb_substr((string)$v, 0, 20);
+                    }
+                    if ($row) $ts[$tk] = $row;
+                }
+                if ($ts) $clean['toolStyles'] = $ts;
+            }
             $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by)
                            VALUES (?, ?, ?, ?)
                            ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
@@ -1053,7 +1072,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <div class="tool-group-sep"></div>
         <button class="tool-btn" id="tool-draw" onclick="setTool('draw')" title="畫筆（自由手繪）"><i class="fa fa-pencil"></i><span class="kbd">B</span></button>
         <button class="tool-btn" id="tool-line" onclick="setTool('line')" title="直線（可用「端點」下拉選無/單箭頭/雙箭頭）"><i class="fa fa-minus" style="transform:rotate(-45deg)"></i><span class="kbd">L</span></button>
-        <button class="tool-btn" id="tool-connect" onclick="setTool('connect')" title="兩點連線：點第一點→點第二點自動相連，可連續一直連（屬性列選直線/曲線與端點箭頭，選擇會記住）。連好後切回選取(V)雙擊該線＝編輯端點、拖節點調曲度。Esc 取消第一點" style="font-size:15px;font-weight:700;">⤳</button>
+        <button class="tool-btn" id="tool-connect" onclick="setTool('connect')" title="兩點連線：點第一點→點第二點自動相連，可連續一直連（屬性列選直線/曲線與端點箭頭，選擇會記住，且與直線工具的設定各自獨立、互不影響）。連好後切回選取(V)雙擊該線＝編輯端點、拖節點調曲度。Esc 取消第一點" style="font-size:15px;font-weight:700;">⤳</button>
         <button class="tool-btn" id="tool-rect" onclick="setTool('rect')" title="矩形"><i class="fa fa-square-o"></i><span class="kbd">R</span></button>
         <button class="tool-btn" id="tool-ellipse" onclick="setTool('ellipse')" title="橢圓"><i class="fa fa-circle-o"></i><span class="kbd">O</span></button>
         <div class="tool-group-sep"></div>
@@ -1109,7 +1128,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                         <option value="curve">曲線</option>
                     </select>
                 </label>
-                <span style="color:#8b949e;font-size:11px;">點第一點→點第二點自動相連，可連續；切回選取(V)雙擊該線＝編輯端點調曲度；Esc 取消第一點</span>
+                <span style="color:#8b949e;font-size:11px;">點第一點→點第二點自動相連，可連續；切回選取(V)雙擊該線＝編輯端點調曲度；Esc 取消第一點。此處的色/粗細/線型/端點與直線工具各自獨立記憶</span>
             </span>
             <!-- 直徑標註樣式 -->
             <span class="prop-sec" id="sec-dimstyle">
@@ -1687,6 +1706,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <b style="color:#6fc3ff;">② 編修與遮蓋</b>
             <ul style="padding-left:18px;margin:4px 0 10px;">
                 <li>畫筆(B)/直線(L)/矩形(R)/橢圓(O)；所有東西都是物件，隨時可移動、縮放、刪除；直線與畫筆都可在屬性列選<b>線型（實線/虛線/中心線）</b>與<b>端點（無/單箭頭/雙箭頭）</b></li>
+                <li><b>屬性列設定是「每個工具各記各的」</b>：畫筆／直線／兩點連線／矩形／橢圓／標註各自記住自己的外框色、粗細、線型、端點、填色，<b>在某個工具改的設定不會跑到別的工具</b>（例如改了兩點連線的端點，切回直線仍是直線原本的設定），切換工具時自動還原該工具上次的值，並依使用者記住到下次開啟。選取(V)狀態下改屬性列＝改「選取到的物件」，不會動到各工具的預設值</li>
                 <li><b>兩點連線（⤳）</b>：點第一點→點第二點自動相連、可連續一直連，屬性列選<b>直線或曲線</b>（直線也可帶箭頭端點；選擇會記住）。曲線＝沿真圓弧生成的圓潤勾線；連好後切回選取(V)<b>雙擊該線＝編輯端點</b>，拖節點調曲度/改位置、「＋」加節點；Esc 取消已點的第一點</li>
                 <li>遮蓋刪除客戶資料：矩形(M)或不規則套索圈選，遮蓋色可改，匯出時才壓平</li>
                 <li>框選複製(C)：框一個範圍變成新圖塊；<b>框選搬移(X)</b>＝小畫家式切下搬走，所見即所得——底圖挖空、<b>完整落在框內的物件（圓/矩形/線條/標籤/文字…）一起烙進切塊搬走</b>；只壓到框線一部分的物件不動。旁邊的<b>套索工具</b>是不規則形狀版，按住拖曳圈任意形狀後放開即可切下。兩者都可連續使用，Esc 或切別的工具才離開。跨視窗貼上用 <b>Ctrl+Shift+V</b>（Ctrl+V 優先貼系統剪貼簿）</li>
@@ -2055,9 +2075,42 @@ canvas.on('mouse:wheel', function (opt) {
     e.preventDefault(); e.stopPropagation();
 });
 
+/* ── 每個繪圖工具「各記各的」線條設定（使用者要求 2026-07-31）──────────────────
+   屬性列 sec-stroke（外框色/粗細/端點/線型/填色）原本是全站一組全域值，於是在
+   兩點連線改的端點、線型…切回直線時還留著，反之亦然。改成：切走工具時把目前
+   屬性列的值記到「上一個工具」名下，切到新工具時把該工具自己記住的值填回去。
+   ‧只有「畫圖工具」列入記憶；選取(V)的屬性列是回填「選取物」的屬性，不列入，
+     否則點到別人畫的粗紅線就會把工具預設值改掉。
+   ‧填回去用直接設 .value（不觸發 change），所以不會誤改到畫布上的物件。
+   ‧記憶內容隨個人偏好存進 system_settings（見 PREF_FIELDS / toolStyles），下次開啟沿用。 */
+const TOOL_STYLE_TOOLS  = ['draw', 'line', 'connect', 'rect', 'ellipse', 'dimdist', 'dimcircle', 'dimangle'];
+const TOOL_STYLE_FIELDS = [['p-stroke', 'stroke'], ['p-width', 'width'], ['p-line-ends', 'lineEnds'],
+                           ['p-line-style', 'lineStyle'], ['p-fill', 'fill'], ['p-fill-on', 'fillOn', true]];
+let toolStyles = {};   // { 工具代號: {stroke,width,lineEnds,lineStyle,fill,fillOn} }
+function captureToolStyle(t) {
+    if (!TOOL_STYLE_TOOLS.includes(t)) return;
+    const s = {};
+    TOOL_STYLE_FIELDS.forEach(([id, key, isCheckbox]) => {
+        const el = document.getElementById(id);
+        if (el) s[key] = isCheckbox ? el.checked : el.value;
+    });
+    toolStyles[t] = s;
+}
+function applyToolStyle(t) {
+    const s = toolStyles[t];
+    if (!s) return;   // 這個工具還沒用過＝沿用目前值（第一次使用不會有「怎麼跟剛剛不一樣」的意外）
+    TOOL_STYLE_FIELDS.forEach(([id, key, isCheckbox]) => {
+        const el = document.getElementById(id);
+        if (!el || s[key] === undefined || s[key] === null) return;
+        if (isCheckbox) el.checked = !!s[key]; else el.value = s[key];
+    });
+    document.getElementById('p-width-v').textContent = document.getElementById('p-width').value;
+}
+
 /* ── 工具切換 ── */
 function setTool(t) {
     if (t !== 'connect') clearConnectDraft();   // 切走工具時清掉兩點連線的第一點/預覽
+    if (t !== currentTool) { captureToolStyle(currentTool); applyToolStyle(t); }   // 各工具的線條設定互不覆蓋（畫筆的筆刷在下面才依填回的值重建）
     currentTool = t;
     document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
     const btn = document.getElementById('tool-' + t);
@@ -6853,6 +6906,8 @@ function applyUserPrefs() {
         if (isCheckbox) el.checked = !!v; else el.value = v;
     });
     document.getElementById('p-width-v').textContent = document.getElementById('p-width').value;
+    // 各繪圖工具自己的線條設定（見 captureToolStyle/applyToolStyle）
+    if (USER_PREFS.toolStyles && typeof USER_PREFS.toolStyles === 'object') toolStyles = USER_PREFS.toolStyles;
 }
 let prefsSaveTimer = null;
 function saveUserPrefsDebounced() {
@@ -6864,6 +6919,8 @@ function saveUserPrefsDebounced() {
             if (!el) return;
             prefs[key] = isCheckbox ? el.checked : el.value;
         });
+        captureToolStyle(currentTool);   // 現在正在用的工具剛改的值也要一起記起來（不必等切走工具）
+        prefs.toolStyles = toolStyles;
         const fd = new FormData();
         fd.append('action', 'save_user_prefs');
         fd.append('prefs', JSON.stringify(prefs));
