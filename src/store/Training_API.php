@@ -556,10 +556,40 @@ case 'set_status': {
 
 /* 部門人員（講師/參加人員選擇用）
    排除：離職(state=0)、共用帳號(is_shared_account=1)、系統/公用身分(user_status 9/90/9999)。
-   一併回傳該部門的職稱（同一人多職稱時取主要職務 is_main 優先）。 */
+   一併回傳該部門的職稱（同一人多職稱時取主要職務 is_main 優先）。
+   at_date（YYYY-MM-DD，選填）：補登舊訓練紀錄用——依 user_position_history 解析「當日」誰在此部門、
+   當時職稱為何（ai-rules/14；沒補登紀錄的人回現況）。此模式下已離職者若當日仍在職也會列出（標 resigned）。 */
 case 'people': {
     $deptId = (int)($_GET['dept_id'] ?? 0);
     if ($deptId <= 0) jout(['people'=>[]]);
+    $atDate = trim((string)($_GET['at_date'] ?? ''));
+    if ($atDate !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $atDate) && $atDate < date('Y-m-d')) {
+        require_once $document_root . '/EGsystem/src/common/position_history_lib.php';
+        $snaps = eg_position_snapshot_at_bulk($db, $atDate);
+        $us = $db->query("SELECT id, user_cname, state, leave_date FROM user
+                          WHERE user_cname IS NOT NULL AND user_cname<>''
+                            AND COALESCE(is_shared_account,0) <> 1
+                            AND COALESCE(user_status,0) NOT IN (9,90,9999)")->fetchAll(PDO::FETCH_ASSOC);
+        $people = [];
+        foreach ($us as $u) {
+            $uid2 = (int)$u['id'];
+            // 已離職且離職日早於上課日＝當時已不在職，不列
+            if ((int)($u['state'] ?? 1) === 0 && !empty($u['leave_date']) && $u['leave_date'] < $atDate) continue;
+            $pos = '';
+            $hit = false;
+            foreach (($snaps[$uid2] ?? []) as $s) {
+                if ((int)$s['department_id'] !== $deptId) continue;
+                $hit = true;
+                if ($pos === '' || $s['is_main']) $pos = $s['position_name'];   // 主職優先
+                if ($s['is_main']) break;
+            }
+            if (!$hit) continue;
+            $people[] = ['id' => $uid2, 'user_cname' => $u['user_cname'], 'position_name' => $pos,
+                         'resigned' => (int)($u['state'] ?? 1) === 0 ? 1 : 0];
+        }
+        usort($people, fn($a, $b) => strcmp($a['user_cname'], $b['user_cname']));
+        jout(['people' => $people, 'at_date' => $atDate]);
+    }
     $st = $db->prepare("SELECT u.id, u.user_cname,
                                SUBSTRING_INDEX(GROUP_CONCAT(p.name ORDER BY m.is_main DESC, p.sort_order, p.id SEPARATOR '|'), '|', 1) AS position_name
                         FROM user_department_position_map m
