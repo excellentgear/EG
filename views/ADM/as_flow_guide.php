@@ -91,9 +91,68 @@ if ($rawKey !== '') {
     exit;
 }
 
+// ══════════════ 文件／表單索引：讓 MD 內的文件編號變成可點（線上預覽＋線上表單）══════════════
+// 「有沒有線上表單」兩種來源：① as_form_template.form_doc_id（線上表單設計器做的）
+//                             ② as_document.linked_module（既有系統模組實作，如 CAR／品質異常單）
+$DOCMAP = [];
+try {
+    $sqlMap = "SELECT d.id, d.doc_no, d.doc_name, d.doc_level, d.doc_type, d.current_version,
+                      d.current_version_id, d.linked_module, p.doc_no AS parent_no,
+                      dept.name AS dept_name, v.file_name,
+                      t.id AS tpl_id, t.status AS tpl_status, t.published_version
+               FROM as_document d
+               LEFT JOIN department dept        ON dept.id = d.department_id
+               LEFT JOIN as_document p          ON p.id    = d.parent_doc_id
+               LEFT JOIN as_document_version v  ON v.id    = d.current_version_id
+               LEFT JOIN as_form_template t     ON t.form_doc_id = d.id AND t.is_deleted = 0
+               WHERE d.is_deleted = 0
+               ORDER BY d.doc_no, t.id DESC";
+    foreach ($conn->query($sqlMap, PDO::FETCH_ASSOC) as $r) {
+        $no = strtoupper(trim((string)$r['doc_no']));
+        if ($no === '' || isset($DOCMAP[$no])) { continue; }   // 同文件多模板：ORDER 已把最新排前，取第一筆
+        $mod = (string)($r['linked_module'] ?? '');
+        $DOCMAP[$no] = [
+            'id'   => (int)$r['id'],
+            'name' => (string)$r['doc_name'],
+            'lv'   => (string)($r['doc_level'] ?? ''),
+            'ty'   => (string)($r['doc_type'] ?? ''),
+            'dept' => (string)($r['dept_name'] ?? '') ?: '跨部門',
+            'par'  => (string)($r['parent_no'] ?? ''),
+            'ver'  => (string)($r['current_version'] ?? ''),
+            'vid'  => (int)($r['current_version_id'] ?? 0),
+            'file' => !empty($r['file_name']) ? 1 : 0,
+            'tpl'  => (int)($r['tpl_id'] ?? 0),
+            'tst'  => (string)($r['tpl_status'] ?? ''),
+            'pv'   => (int)($r['published_version'] ?? 0),
+            'mod'  => $mod,
+            'mn'   => $mod === 'car' ? '異常矯正處理單(CAR)' : ($mod === 'qa_abnormal' ? '品質異常處理單' : ''),
+            'mu'   => $mod === 'car' ? '../QA/correction_order.php' : ($mod === 'qa_abnormal' ? '../QA/qa_abnormal_view.php' : ''),
+        ];
+    }
+} catch (Exception $e) { error_log('as_flow_guide docmap: ' . $e->getMessage()); }
+
 /* ══════════════════ 極簡 Markdown → HTML（自製，不依賴外部套件） ══════════════════
    支援：# ~ #### 標題、表格、- / 1. 清單（含縮排）、> 引用（可含表格）、``` 區塊、
         --- 分隔線、**粗體**、`行內碼`、~~刪除線~~、[文字](連結)                        */
+/** 把文字中的 AS 文件／表單編號（2-QA-01、2-QA-01-01、2-PM-01-02-01、2-PH-01-04A…）
+ *  換成可點的 chip；資料庫查得到才換，查不到原樣保留（避免把範例格式也變成連結）。
+ *  有線上表單者加上閃電圖示。 */
+function egmd_docno($s) {
+    global $DOCMAP;
+    if (!$DOCMAP) { return $s; }
+    return preg_replace_callback(
+        '/(?<![0-9A-Za-z\-])(\d-[A-Z]{2}-\d{2}(?:-\d{2}){0,2})([A-Z]?)(?![0-9A-Za-z\-])/u',
+        function ($m) use ($DOCMAP) {
+            $key = $m[1];
+            if (!isset($DOCMAP[$key])) { return $m[0]; }
+            $d  = $DOCMAP[$key];
+            $on = ($d['tpl'] || $d['mod']);
+            return '<a href="#" class="docchip' . ($on ? ' has-online' : '') . '" data-no="' . $key . '"'
+                 . ' title="' . htmlspecialchars($d['name'], ENT_QUOTES, 'UTF-8')
+                 . ($on ? '（已有線上表單，點擊預覽）' : '（點擊線上預覽）') . '">'
+                 . $m[0] . ($on ? '<i class="fa fa-bolt"></i>' : '') . '</a>';
+        }, $s);
+}
 function egmd_inline($s) {
     $s = htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
     // 行內碼先抽出佔位，避免內部被其他規則吃掉
@@ -102,6 +161,8 @@ function egmd_inline($s) {
         $codes[] = $m[1];
         return "\x01" . (count($codes) - 1) . "\x02";
     }, $s);
+    // 文件／表單編號 → 可點（此步必須在連結轉換之前，否則會產生巢狀 <a>）
+    $s = egmd_docno($s);
     $s = preg_replace('/\*\*(.+?)\*\*/u', '<strong>$1</strong>', $s);
     $s = preg_replace('/~~(.+?)~~/u', '<del>$1</del>', $s);
     // 連結：內部 .md 轉成本頁分頁切換，其餘照常
@@ -276,6 +337,13 @@ $ISSUES = [
     ['低','管理課','管理課資料夾','存在無 AS 編號的檔案：「主管人員考核表.docx」「間接人員考核表.odt」','確認是否納編給號或移除'],
     ['低','總經理室','2-GM-02 §6.7.1','引用製程開發作業程序定義專案生命週期，但與 2-TD-02 五階段的整合方式未具體定義','補充對應關係'],
 ];
+// 四階表單清單（線上表單對照分頁用）：doc_no 有 3 段以上者＝表單
+$FORMS = [];
+foreach ($DOCMAP as $no => $d) {
+    if (substr_count($no, '-') >= 3) { $FORMS[$no] = $d; }
+}
+$onlineCnt = count(array_filter($FORMS, fn($d) => $d['tpl'] || $d['mod']));
+
 $cntHigh = count(array_filter($ISSUES, fn($r) => $r[0] === '高'));
 $cntMid  = count(array_filter($ISSUES, fn($r) => $r[0] === '中'));
 $cntLow  = count(array_filter($ISSUES, fn($r) => $r[0] === '低'));
@@ -305,9 +373,13 @@ $mdTime  = $mdExist ? date('Y-m-d H:i', filemtime($mdPath)) : '';
 html { overflow-x: hidden; }
 .right_col { background:#FBF6EE; font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif; color:#3F2E1B; padding:14px; min-height:100vh; }
 
-.fg-title { margin:0 0 10px; overflow:hidden; }
-.fg-title h2 { margin:0; font-size:20px; color:#7A4E17; float:left; }
-.fg-role { float:right; font-size:13px; color:#5B3A1E; background:#F7E0BD; border-radius:12px; padding:4px 12px; }
+/* 【Gentelella 陷阱】.top_nav 高度為 0（其子 .nav_menu 是 float:left;width:100% 溢出），
+   所以 .right_col 的「第一個子元素」若自成 BFC（overflow:hidden / display:flex / float），
+   會因為「BFC 盒不可與浮動重疊」被壓成寬度 0（標題被擠成一字一行的直條、後面元素被推下 260px）。
+   解法：第一個子元素一律加 clear:both，先清掉那個溢出的浮動再排版。 */
+.fg-title { clear:both; display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0 0 10px; }
+.fg-title h2 { margin:0; font-size:20px; color:#7A4E17; }
+.fg-role { flex:0 0 auto; font-size:13px; color:#5B3A1E; background:#F7E0BD; border-radius:12px; padding:4px 12px; }
 .fg-role .fa-question-circle { cursor:pointer; color:#B5762A; margin-left:5px; }
 
 .fg-tabs { display:flex; gap:4px; margin-bottom:10px; border-bottom:2px solid #E8D5B5; clear:both; }
@@ -367,6 +439,42 @@ html { overflow-x: hidden; }
 .md-body del { color:#A08b70; }
 mark.hit { background:#F0A24B; color:#fff; border-radius:2px; padding:0 2px; }
 
+/* ── 文件／表單編號 chip ── */
+a.docchip { display:inline-block; border-bottom:1px dotted #C89B5A; color:#8A5A2B; text-decoration:none;
+            padding:0 1px; border-radius:3px; }
+a.docchip:hover { background:#F7E0BD; color:#5A3D1E; text-decoration:none; }
+a.docchip.has-online { color:#B24A12; font-weight:bold; border-bottom:1px solid #F0A24B; }
+a.docchip.has-online i { color:#E08427; margin-left:3px; font-size:11px; }
+a.docchip.has-online:hover { background:#F0A24B; color:#fff; }
+a.docchip.has-online:hover i { color:#fff; }
+.chip-legend { font-size:12px; color:#8A6D45; background:#FFF7E8; border:1px dashed #F0A24B;
+               border-radius:6px; padding:5px 10px; margin:0 0 10px; }
+
+/* ── 線上表單對照 ── */
+.of-table { width:100%; border-collapse:collapse; font-size:13px; }
+.of-table th { background:#F7E0BD; color:#5A3D1E; padding:7px 9px; border:1px solid #E0CBA0; text-align:left; }
+.of-table td { padding:6px 9px; border:1px solid #E8D9B8; vertical-align:middle; }
+.of-table tbody tr:nth-child(even) { background:#FDF8EF; }
+.of-table tbody tr.has-on { background:#FFF3E0; }
+.of-table tbody tr:hover { background:#F7E0BD; }
+.on-yes { display:inline-block; background:#F0A24B; color:#4A2C0A; border-radius:9px; padding:1px 9px; font-size:11.5px; font-weight:bold; white-space:nowrap; }
+.on-no  { display:inline-block; background:#EFE7DA; color:#8A6D45; border-radius:9px; padding:1px 9px; font-size:11.5px; white-space:nowrap; }
+.btn-mini { display:inline-block; height:24px; line-height:22px; font-size:12px; padding:0 8px; border:1px solid #D8BE93;
+            border-radius:4px; background:#fff; color:#5B3A1E; cursor:pointer; text-decoration:none; margin-right:3px; }
+.btn-mini:hover { background:#F7E0BD; color:#5B3A1E; text-decoration:none; }
+.btn-mini.warm { background:#F0A24B; color:#fff; border-color:#D98A33; }
+.btn-mini.warm:hover { background:#D98A33; color:#fff; }
+
+/* ── 預覽跳窗 ── */
+#pvMask .box { max-width:1180px; width:94vw; padding:0; }
+.pv-head { background:#F7E0BD; border-radius:8px 8px 0 0; padding:10px 16px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.pv-head h4 { margin:0; border:none; font-size:16px; color:#7A4E17; }
+.pv-head .pv-meta { font-size:12px; color:#8A6D45; }
+.pv-head .pv-close { margin-left:auto; background:none; border:none; font-size:22px; color:#8A5A2B; cursor:pointer; line-height:1; }
+.pv-acts { padding:9px 16px; border-bottom:1px solid #F0E3CB; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.pv-frame { width:100%; height:62vh; border:none; background:#FBF6EE; display:block; }
+.pv-empty { padding:34px 16px; text-align:center; color:#8A6D45; font-size:13.5px; }
+
 /* ── 問題清單 ── */
 .iss-sum { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
 .iss-card { flex:1 1 150px; border-radius:8px; padding:10px 14px; color:#fff; }
@@ -409,6 +517,8 @@ mark.hit { background:#F0A24B; color:#fff; border-radius:2px; padding:0 2px; }
   <div class="fg-tab active" data-tab="doc"><i class="fa fa-file-text-o"></i> 課室說明文件</div>
   <div class="fg-tab" data-tab="iss"><i class="fa fa-exclamation-triangle"></i> 待處理問題
     <span class="badge-warm"><?= count($ISSUES) ?></span></div>
+  <div class="fg-tab" data-tab="onl"><i class="fa fa-bolt"></i> 線上表單對照
+    <span class="badge-warm"><?= $onlineCnt ?>/<?= count($FORMS) ?></span></div>
 </div>
 
 <!-- ═════════ 分頁：課室說明文件 ═════════ -->
@@ -435,6 +545,11 @@ mark.hit { background:#F0A24B; color:#fff; border-radius:2px; padding:0 2px; }
       <a class="btnlink" href="?dl=<?= $cur ?>"><i class="fa fa-download"></i> 下載 MD</a>
       <button id="btnPrint"><i class="fa fa-print"></i> 列印</button>
       <span class="fg-file"><?= htmlspecialchars($DOCS[$cur][1]) ?><?= $mdTime ? '｜更新 ' . $mdTime : '' ?></span>
+    </div>
+    <div class="chip-legend">
+      <i class="fa fa-hand-pointer-o"></i> 文中的<strong>文件／表單編號</strong>可直接點擊 → 開啟<strong>線上預覽</strong>（Office 檔自動轉 PDF）；
+      標成 <a href="#" class="docchip has-online" onclick="return false;">橘色粗體<i class="fa fa-bolt"></i></a> 者<strong>已有線上表單</strong>，可一鍵另開分頁填寫。
+      完整對照見上方「<i class="fa fa-bolt"></i> 線上表單對照」分頁。
     </div>
     <div class="md-body" id="mdBody">
       <?php if ($mdExist): ?><?= $mdHtml ?>
@@ -497,6 +612,75 @@ mark.hit { background:#F0A24B; color:#fff; border-radius:2px; padding:0 2px; }
   </div>
 </div>
 
+<!-- ═════════ 分頁：線上表單對照 ═════════ -->
+<div id="tabOnl" style="display:none;">
+  <div class="fg-main">
+    <div class="fg-bar">
+      <select id="onFilter" class="form-control input-sm" style="width:190px;height:30px;display:inline-block;">
+        <option value="">全部（<?= count($FORMS) ?>）</option>
+        <option value="1">已有線上表單（<?= $onlineCnt ?>）</option>
+        <option value="0">尚未建立（<?= count($FORMS) - $onlineCnt ?>）</option>
+      </select>
+      <select id="onDept" class="form-control input-sm" style="width:170px;height:30px;display:inline-block;">
+        <option value="">全部課室</option>
+        <?php foreach (array_unique(array_column($FORMS, 'dept')) as $dp): ?>
+          <option value="<?= htmlspecialchars($dp) ?>"><?= htmlspecialchars($dp) ?></option>
+        <?php endforeach; ?>
+      </select>
+      <input type="text" id="onKw" placeholder="搜尋表單編號／名稱…">
+      <button id="btnOnClear"><i class="fa fa-eraser"></i> 清除</button>
+      <a class="btnlink" href="as_form_list.php" target="_blank" rel="noopener"><i class="fa fa-plus"></i> 去建立線上表單</a>
+      <span class="fg-file">顯示 <span id="onCount"><?= count($FORMS) ?></span> 筆</span>
+    </div>
+
+    <div class="iss-sum">
+      <div class="iss-card c-mid"><b><?= $onlineCnt ?></b><span>已有線上表單，可直接點開填寫</span></div>
+      <div class="iss-card c-low"><b><?= count($FORMS) - $onlineCnt ?></b><span>尚未建立線上表單（仍為紙本／Office 檔）</span></div>
+      <?php $noFile = count(array_filter($FORMS, fn($d) => !$d['vid'] || !$d['file'])); ?>
+      <div class="iss-card <?= $noFile ? 'c-high' : 'c-low' ?>"><b><?= $noFile ?></b><span>系統內尚未上傳文件檔、無法線上預覽<?= $noFile ? '' : '（全數可預覽）' ?></span></div>
+    </div>
+
+    <p style="font-size:12.5px;color:#8A6D45;margin:0 0 10px;">
+      「已有線上表單」判定：① AS 線上表單設計器已建立並綁定此文件（<code>as_form_template.form_doc_id</code>）
+      ② 或此文件已連結既有電子化模組（<code>as_document.linked_module</code>，如 CAR／品質異常單）。
+      <strong>預覽</strong>＝開啟系統內該文件現行版檔案（Office 自動轉 PDF）；<strong>開線上表單</strong>＝另開分頁進入線上表單。</p>
+
+    <table class="of-table" id="onTable">
+      <thead><tr>
+        <th style="width:120px;">表單編號</th><th>表單名稱</th><th style="width:110px;">課室</th>
+        <th style="width:110px;">母文件</th><th style="width:70px;">版次</th>
+        <th style="width:150px;">線上表單</th><th style="width:250px;">操作</th>
+      </tr></thead>
+      <tbody>
+      <?php foreach ($FORMS as $no => $d):
+            $on = ($d['tpl'] || $d['mod']); ?>
+        <tr class="<?= $on ? 'has-on' : '' ?>" data-on="<?= $on ? 1 : 0 ?>" data-dept="<?= htmlspecialchars($d['dept']) ?>">
+          <td><strong><?= htmlspecialchars($no) ?></strong></td>
+          <td><?= htmlspecialchars($d['name']) ?></td>
+          <td><?= htmlspecialchars($d['dept']) ?></td>
+          <td style="color:#8A6D45;"><?= htmlspecialchars($d['par'] ?: '—') ?></td>
+          <td><?= htmlspecialchars($d['ver'] ?: '—') ?></td>
+          <td><?php if ($d['tpl']): ?>
+                <span class="on-yes"><i class="fa fa-bolt"></i> 線上表單<?= $d['tst'] === 'published' ? '（已發布）' : '（草稿）' ?></span>
+              <?php elseif ($d['mod']): ?>
+                <span class="on-yes"><i class="fa fa-cube"></i> <?= htmlspecialchars($d['mn']) ?></span>
+              <?php else: ?><span class="on-no">尚未建立</span><?php endif; ?></td>
+          <td>
+            <button class="btn-mini pv-open" data-no="<?= htmlspecialchars($no) ?>"><i class="fa fa-eye"></i> 預覽</button>
+            <?php if ($d['tpl']): ?>
+              <a class="btn-mini warm" target="_blank" rel="noopener" href="as_form_render.php?template_id=<?= $d['tpl'] ?>"><i class="fa fa-external-link"></i> 開線上表單</a>
+              <a class="btn-mini" target="_blank" rel="noopener" href="as_form_fill.php?template_id=<?= $d['tpl'] ?>"><i class="fa fa-pencil"></i> 新填一張</a>
+            <?php elseif ($d['mod']): ?>
+              <a class="btn-mini warm" target="_blank" rel="noopener" href="<?= htmlspecialchars($d['mu']) ?>"><i class="fa fa-external-link"></i> 前往模組頁</a>
+            <?php endif; ?>
+          </td>
+        </tr>
+      <?php endforeach; ?>
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <?php endif; ?>
 </div><!-- right_col -->
 </div></div>
@@ -518,6 +702,17 @@ mark.hit { background:#F0A24B; color:#fff; border-radius:2px; padding:0 2px; }
   <div style="text-align:right;"><button class="btn btn-sm btn-default" onclick="document.getElementById('roleMask').style.display='none'">關閉</button></div>
 </div></div>
 
+<!-- 文件／表單 線上預覽跳窗 -->
+<div class="fg-mask" id="pvMask"><div class="box">
+  <div class="pv-head">
+    <h4 id="pvTitle"></h4>
+    <span class="pv-meta" id="pvMeta"></span>
+    <button class="pv-close" id="pvClose" title="關閉">&times;</button>
+  </div>
+  <div class="pv-acts" id="pvActs"></div>
+  <div id="pvBody"></div>
+</div></div>
+
 <button id="fgTop" title="回到頂端"><i class="fa fa-arrow-up"></i></button>
 
 <script src="../../resource/js/jquery.min.js"></script>
@@ -536,7 +731,80 @@ $(document).ready(function () {
         var t = $(this).data('tab');
         $('#tabDoc').toggle(t === 'doc');
         $('#tabIss').toggle(t === 'iss');
+        $('#tabOnl').toggle(t === 'onl');
     });
+
+    // ══ 文件／表單 線上預覽 ══
+    var DOCMAP = <?= json_encode($DOCMAP, JSON_UNESCAPED_UNICODE) ?>;
+    var DOC_API = '../../src/store/AS_Document_API.php';
+    function pvUrl(d) { return DOC_API + '?action=download&version_id=' + d.vid + '&inline=1'; }
+    function esc(s) { return $('<i>').text(s == null ? '' : s).html(); }
+
+    function openPreview(no) {
+        var d = DOCMAP[no];
+        if (!d) { alert('系統內查無此文件編號：' + no); return; }
+        $('#pvTitle').html('<i class="fa fa-file-text-o"></i> ' + esc(no) + '　' + esc(d.name));
+        $('#pvMeta').text([d.lv, d.ty, d.dept, d.ver ? '版次 ' + d.ver : '', d.par ? '母文件 ' + d.par : '']
+                          .filter(Boolean).join('｜'));
+
+        // 操作列：先放線上表單（有才顯示），再放文件預覽相關
+        var a = [];
+        if (d.tpl) {
+            a.push('<span class="on-yes"><i class="fa fa-bolt"></i> 已有線上表單'
+                 + (d.tst === 'published' ? '（已發布 v' + d.pv + '）' : '（草稿）') + '</span>');
+            a.push('<a class="btn-mini warm" target="_blank" rel="noopener" href="as_form_render.php?template_id='
+                 + d.tpl + '"><i class="fa fa-external-link"></i> 另開線上表單</a>');
+            a.push('<a class="btn-mini" target="_blank" rel="noopener" href="as_form_fill.php?template_id='
+                 + d.tpl + '"><i class="fa fa-pencil"></i> 新填一張</a>');
+        } else if (d.mod) {
+            a.push('<span class="on-yes"><i class="fa fa-cube"></i> 已電子化：' + esc(d.mn) + '</span>');
+            a.push('<a class="btn-mini warm" target="_blank" rel="noopener" href="' + d.mu
+                 + '"><i class="fa fa-external-link"></i> 前往模組頁</a>');
+        } else {
+            a.push('<span class="on-no">尚未建立線上表單</span>');
+            a.push('<a class="btn-mini" target="_blank" rel="noopener" href="as_form_list.php"><i class="fa fa-plus"></i> 去建立</a>');
+        }
+        if (d.vid && d.file) {
+            a.push('<a class="btn-mini" target="_blank" rel="noopener" href="' + pvUrl(d)
+                 + '"><i class="fa fa-external-link"></i> 預覽另開分頁</a>');
+        }
+        a.push('<a class="btn-mini" target="_blank" rel="noopener" href="as_document_management.php'
+             + '"><i class="fa fa-folder-open-o"></i> AS 文件管理</a>');
+        $('#pvActs').html(a.join(''));
+
+        // 內容：有現行版檔案就 iframe 線上預覽（Office 由 API 轉 PDF）
+        if (d.vid && d.file) {
+            $('#pvBody').html('<iframe class="pv-frame" src="' + pvUrl(d) + '"></iframe>');
+        } else {
+            $('#pvBody').html('<div class="pv-empty"><i class="fa fa-file-o fa-2x"></i><br><br>'
+                + '此文件在系統內<strong>尚未上傳現行版檔案</strong>，無法線上預覽。<br>'
+                + '可到「AS 文件管理」以「改版／補檔」上傳後即可預覽。'
+                + (d.tpl || d.mod ? '<br><br>（此表單已有線上表單，可用上方按鈕直接開啟）' : '') + '</div>');
+        }
+        $('#pvMask').show();
+    }
+    $(document).on('click', 'a.docchip', function (e) { e.preventDefault(); openPreview($(this).data('no')); });
+    $(document).on('click', '.pv-open', function () { openPreview($(this).data('no')); });
+    $('#pvClose').on('click', function () { $('#pvMask').hide(); $('#pvBody').empty(); });
+    $('#pvMask').on('click', function (e) { if (e.target === this) { $(this).hide(); $('#pvBody').empty(); } });
+    $(document).on('keydown', function (e) { if (e.which === 27) { $('#pvMask').hide(); $('#pvBody').empty(); } });
+
+    // ── 線上表單對照篩選 ──
+    function onFilterRows() {
+        var on = $('#onFilter').val(), dp = $('#onDept').val(),
+            kw = $.trim($('#onKw').val()).toLowerCase(), n = 0;
+        $('#onTable tbody tr').each(function () {
+            var $t = $(this),
+                ok = (on === '' || String($t.data('on')) === on)
+                  && (!dp || String($t.data('dept')) === dp)
+                  && (!kw || $t.text().toLowerCase().indexOf(kw) >= 0);
+            $t.toggle(ok); if (ok) { n++; }
+        });
+        $('#onCount').text(n);
+    }
+    $('#onFilter,#onDept').on('change', onFilterRows);
+    $('#onKw').on('input', onFilterRows);
+    $('#btnOnClear').on('click', function () { $('#onFilter,#onDept').val(''); $('#onKw').val(''); onFilterRows(); });
 
     // 內部 MD 連結 → 切換課室
     var NAME2KEY = <?= json_encode(array_combine(array_column($DOCS,1), array_keys($DOCS)), JSON_UNESCAPED_UNICODE) ?>;
