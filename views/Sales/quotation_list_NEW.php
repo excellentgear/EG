@@ -4746,10 +4746,15 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
     // 只有引擎自己知道每張紙真正能印多少（字型渲染、列印縮放、各印表機可印範圍的差異它都會算進去），
     // 填滿才換頁；JS 在螢幕上量高度再自己切頁的作法，量測結果跟引擎實排永遠有落差，會提早換頁或內容溢出。
     const items = q.items || [];
+    // 階梯報價項目集中排在最上面（彼此依存檔排序），一般數量報價排在下方，兩群之間以粗線分隔
+    const _isTierFn   = it => it.is_tiered == 1 && (it.tiers || []).length > 0;
+    const tieredItems = items.filter(_isTierFn);
+    const normalItems = items.filter(it => !_isTierFn(it));
+    const printItems  = tieredItems.concat(normalItems);
     let totalAmt = 0;
-    let hasTiered = false; // 有階梯報價項目時，合計加註「階梯項目依訂購量另計」
-    const itemRowChunks = []; // 每個元素＝一個主料號的所有列(含BOM子件續列)組成的HTML字串
-    items.forEach((it, idx) => {
+    let hasTiered = tieredItems.length > 0; // 有階梯報價項目時，合計加註「階梯項目依訂購量另計」
+    const itemChunks = []; // 每個元素＝{html, tiered}：一個主料號的所有列(含BOM子件續列)
+    printItems.forEach((it, idx) => {
         const specNo   = it.spec_no       || '';
         const gearSpec = it.gear_spec     || '';
         const procStr  = it.process_names || '';
@@ -4757,7 +4762,9 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         // 料號規格+齒輪規格 / 製程 / 料號備註(報價單內)，無料號備註省略含分隔
         const leftSpec = [specNo, gearSpec].filter(Boolean).join(' ');
         const desc     = [leftSpec, procStr, specRmk].filter(Boolean).join(' / ');
-        const isTieredIt = it.is_tiered == 1 && (it.tiers || []).length > 0;
+        const isTieredIt = _isTierFn(it);
+        // 階梯群與一般群交界的第一筆一般項目：上緣加粗線分隔
+        const isGroupDivider = hasTiered && normalItems.length > 0 && idx === tieredItems.length;
         const qty    = it.quantity || 0;
         const price  = it.unit_price || 0;
         const amt    = parseFloat(it.amount || (qty * price));
@@ -4781,8 +4788,9 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         }
         let rowHtml = '';
         if (isTieredIt) {
-            // ── 階梯報價：每階一列。數量欄＝區間（含容差小字），單價欄＝該階單價，金額欄＝—（依訂購量另計）
-            hasTiered = true;
+            // ── 階梯報價：料號/品名/單位/金額用 rowspan 合併儲存格，每階一列「數量區間｜單價」；
+            //    金額欄不顯示（依訂購量另計）；區間右對齊讓各階數量對齊
+            const n = it.tiers.length;
             const rangeTxt = t => {
                 const mn = fmtNum(Math.round(Number(t.qty_min || 0)));
                 return (t.qty_max === null || t.qty_max === undefined || t.qty_max === '')
@@ -4794,25 +4802,32 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
                 return `<div style="font-size:8pt;color:#333;">容差±${fmtNum(t.tolerance_value)}${esc(t.tolerance_unit || '')}${note}</div>`;
             };
             it.tiers.forEach((t, ti) => {
-                rowHtml += `<tr>
-                    <td class="center">${ti === 0 ? idx + 1 : ''}</td>
-                    <td>${ti === 0 ? pnCell(it.product_id) : ''}</td>
-                    <td>${ti === 0 ? `${esc(desc)}<div style="font-size:8.5pt;color:#333;">（階梯報價，單價依訂購數量區間）</div>${kidChunks[0] || ''}` : ''}</td>
-                    <td class="right">${rangeTxt(t)}${tolTxt(t)}</td>
-                    <td class="center">${ti === 0 ? esc(unit) : ''}</td>
-                    <td class="right">${negoTag}${fmtNum(t.unit_price || 0)}</td>
-                    <td class="center" style="color:#666;">—</td>
+                rowHtml += '<tr>'
+                    + (ti === 0 ? `
+                    <td class="center" rowspan="${n}">${idx + 1}</td>
+                    <td rowspan="${n}">${pnCell(it.product_id)}</td>
+                    <td rowspan="${n}">${esc(desc)}<div style="font-size:8.5pt;color:#333;">（階梯報價，單價依訂購數量區間）</div>${kidChunks[0] || ''}</td>` : '')
+                    + `
+                    <td class="right">${rangeTxt(t)}${tolTxt(t)}</td>`
+                    + (ti === 0 ? `
+                    <td class="center" rowspan="${n}">${esc(unit)}</td>` : '')
+                    + `
+                    <td class="right">${negoTag}${fmtNum(t.unit_price || 0)}</td>`
+                    + (ti === 0 ? `
+                    <td rowspan="${n}"></td>` : '')
+                    + `
                 </tr>`;
             });
         } else {
+            const divStyle = isGroupDivider ? ' style="border-top:2.5px solid #000;"' : '';
             rowHtml = `<tr>
-            <td class="center">${idx+1}</td>
-            <td>${pnCell(it.product_id)}</td>
-            <td>${esc(desc)}${kidChunks[0] || ''}</td>
-            <td class="right">${fmtNum(qty)}</td>
-            <td class="center">${esc(unit)}</td>
-            <td class="right">${priceCell}</td>
-            <td class="right">${fmtNum(amt)}</td>
+            <td class="center"${divStyle}>${idx+1}</td>
+            <td${divStyle}>${pnCell(it.product_id)}</td>
+            <td${divStyle}>${esc(desc)}${kidChunks[0] || ''}</td>
+            <td class="right"${divStyle}>${fmtNum(qty)}</td>
+            <td class="center"${divStyle}>${esc(unit)}</td>
+            <td class="right"${divStyle}>${priceCell}</td>
+            <td class="right"${divStyle}>${fmtNum(amt)}</td>
         </tr>`;
         }
         kidChunks.slice(1).forEach(chunk => {
@@ -4823,7 +4838,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
                 <td></td><td></td><td></td><td></td>
             </tr>`;
         });
-        itemRowChunks.push(rowHtml);
+        itemChunks.push({ html: rowHtml, tiered: isTieredIt });
     });
 
     // 合計 / 稅額（5%）/ 總額（階梯項目不列入；全部都是階梯時金額欄顯示「依訂購量計」）
@@ -4832,7 +4847,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
     const allTiered = hasTiered && totalAmt === 0;
     const amtCell = v => allTiered ? '<span style="font-size:9pt;letter-spacing:1px;">依訂購量計</span>' : fmtNum(v);
     const tierNoteHtml = hasTiered
-        ? `<p style="margin:4px 0;font-size:9pt;"><strong>●階梯報價：</strong>標示「—」之項目金額依實際訂購數量與對應區間單價計算${allTiered ? '' : '，未列入合計'}。</p>`
+        ? `<p style="margin:4px 0;font-size:9pt;"><strong>●階梯報價：</strong>階梯項目金額依實際訂購數量與對應區間單價計算${allTiered ? '' : '，未列入合計'}。</p>`
         : '';
     const remark = q.note || '';
     const remarkHtml = remark.split(/[；;]/).map(s => esc(s.trim())).filter(Boolean).join('<br>');
@@ -4852,9 +4867,9 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
     // 欄寬一律由 colgroup 決定（table-layout:fixed 取第一列儲存格算欄寬）
     const contInfoTxt = `單號：${String(q.quote_no || '').replace(/['\\]/g, '')}　客戶：${String(custName || '').replace(/['\\]/g, '')}`;
     const itemsColgroupHtml = `<colgroup>
-        <col style="width:4%"><col style="width:20%"><col style="width:44%">
-        <col style="width:7%"><col style="width:5%"><col style="width:9%"><col style="width:11%">
-      </colgroup>`;
+        <col style="width:4%"><col style="width:20%"><col style="width:39%">
+        <col style="width:12%"><col style="width:5%"><col style="width:9%"><col style="width:11%">
+      </colgroup>`; // 數量欄 7→12%（放得下階梯區間如 1,001~10,000），由品名欄 44→39% 挪出
     const itemsTheadHtml = `<thead>
         <tr>
           <th>項次</th>
@@ -4962,7 +4977,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
 </style>
 </head><body>
 ${fullHeaderHtml}
-<table class="items">${itemsColgroupHtml}${itemsTheadHtml}<tbody>${itemRowChunks.join('')}${blankLineHtml}</tbody></table>
+<table class="items">${itemsColgroupHtml}${itemsTheadHtml}${itemChunks.map(c => `<tbody${c.tiered ? ' style="page-break-inside:avoid;"' : ''}>${c.html}</tbody>`).join('')}<tbody>${blankLineHtml}</tbody></table>
 <div class="sig-block">${sigRowHtml}</div>
 <script>
 // ★★ 本文件「零 JS 版面計算」鐵則 ★★
