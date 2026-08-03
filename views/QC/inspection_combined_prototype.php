@@ -795,7 +795,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // =====================================================================
         if ($_POST['action'] === 'get_tool_manage_data') {
             $categories = $pdo->query("SELECT * FROM qc_tool_list ORDER BY sort_order ASC, QC_Tool ASC")->fetchAll(PDO::FETCH_ASSOC);
-            $tools = $pdo->query("SELECT * FROM qc_tool ORDER BY Tool_No ASC")->fetchAll(PDO::FETCH_ASSOC);
+            // 量具規格＝校驗模組綁的採購料號（qc_tool.purchase_spec_id → purchase_spec，見 tool_calibration 量具料號對應）
+            // 未建表／未加欄的環境不 join，回傳內容與原本相同
+            $hasSpecJoin = false; $hasBrandCol = false;
+            try {
+                $hasSpecJoin = (bool)$pdo->query("SHOW COLUMNS FROM qc_tool LIKE 'purchase_spec_id'")->fetchColumn()
+                            && (bool)$pdo->query("SHOW TABLES LIKE 'purchase_spec'")->fetchColumn();
+                if ($hasSpecJoin) $hasBrandCol = (bool)$pdo->query("SHOW COLUMNS FROM purchase_spec LIKE 'brand'")->fetchColumn();
+            } catch (Throwable $e) {}
+            $tools = $pdo->query("SELECT t.*"
+                     . ($hasSpecJoin ? ", ps.spec_text" . ($hasBrandCol ? ", ps.brand AS spec_brand" : "") : "") . "
+                      FROM qc_tool t"
+                     . ($hasSpecJoin ? " LEFT JOIN purchase_spec ps ON ps.spec_id=t.purchase_spec_id" : "") . "
+                      ORDER BY t.Tool_No ASC")->fetchAll(PDO::FETCH_ASSOC);
             echo json_encode(['success'=>true, 'categories'=>$categories, 'tools'=>$tools], JSON_UNESCAPED_UNICODE);
             exit;
         }

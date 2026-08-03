@@ -558,7 +558,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 border-radius:6px; padding:7px 10px; font-size:14px; line-height:1.25; }
     .tool-btn:hover { background:var(--cream); border-color:var(--amber-d); }
     .tool-btn .tcat { font-weight:bold; }
-    .tool-btn .tno { color:#8a6a45; font-size:12px; }
+    .tool-btn { white-space:normal; }              /* 編號帶規格後字串較長，允許換行不撐破欄寬 */
+    .tool-btn .tno { color:#8a6a45; font-size:12px; margin-left:4px; }
     .tool-btn.none { color:#a08a6d; border-style:dashed; }
     #items-table .tool-btn { padding:4px 6px; font-size:12px; }
     /* 量具挑選跳窗：類型 → 編號，兩層都是大按鈕 */
@@ -1911,13 +1912,17 @@ $(function(){
     }
 
     // =====================================================================
-    // 量具（實例）：值＝Tool_id，顯示「類型 / 編號」，可追溯到實際那一支
+    // 量具（實例）：值＝Tool_id，顯示「類型 / 編號(規格)」，可追溯到實際那一支
+    // 規格來自校驗模組「量具料號對應」綁的採購料號（purchase_spec），沒綁就只顯示編號
     // =====================================================================
     function loadToolInstances(){
         $.post(API, { action:'get_tool_manage_data' }, function(res){
             if(!res || !res.success) return;
             var cats={}; (res.categories||[]).forEach(function(c){ cats[c.QC_Tool_List_id]=c.QC_Tool; });
-            TOOL_INSTANCES = (res.tools||[]).map(function(t){ return { id:String(t.Tool_id), no:t.Tool_No, cat:cats[t.QC_Tool_List_id]||'' }; });
+            TOOL_INSTANCES = (res.tools||[]).map(function(t){
+                var sp=((t.spec_brand||'')+' '+(t.spec_text||'')).replace(/\s+/g,' ').trim();
+                return { id:String(t.Tool_id), no:t.Tool_No, cat:cats[t.QC_Tool_List_id]||'', spec:sp };
+            });
             render();
         }, 'json');
     }
@@ -1926,11 +1931,19 @@ $(function(){
         for(var i=0;i<TOOL_INSTANCES.length;i++){ if(TOOL_INSTANCES[i].id===String(id)) return TOOL_INSTANCES[i]; }
         return null;
     }
+    // 量具編號的統一顯示格式：編號(規格)。舊資料編號本身已內含規格（例 A-002-Q (25-50mm)）就不重複附加
+    function toolNoSpec(t){
+        if(!t) return '';
+        var no=String(t.no||'');
+        if(!t.spec) return no;
+        if(no.replace(/\s+/g,'').toLowerCase().indexOf(t.spec.replace(/\s+/g,'').toLowerCase())>=0) return no;
+        return no+'('+t.spec+')';
+    }
     // 量具改用「按鈕 → 跳窗挑」：下拉選單選項太多又擠，現場很難點（2026-07-29 回饋）
     function toolBtn(i, r){
         var t = toolInstById(MODEL.items[i].readings[r].tool_id);
         return '<button type="button" class="tool-btn '+(t?'':'none')+'" data-i="'+i+'" data-r="'+r+'" title="點此選擇量具">'+
-               (t ? '<span class="tcat">'+esc(t.cat||'量具')+'</span><span class="tno">'+esc(t.no)+'</span>'
+               (t ? '<span class="tcat">'+esc(t.cat||'量具')+'</span><span class="tno">'+esc(toolNoSpec(t))+'</span>'
                   : '<i class="fa fa-wrench"></i> 點此選擇量具')+'</button>';
     }
     function firstInstOfCat(catName){
@@ -1940,7 +1953,7 @@ $(function(){
     }
     function toolLabelById(id){
         if(!id) return '';
-        for(var i=0;i<TOOL_INSTANCES.length;i++){ if(TOOL_INSTANCES[i].id===String(id)) return (TOOL_INSTANCES[i].cat?TOOL_INSTANCES[i].cat+' / ':'')+TOOL_INSTANCES[i].no; }
+        for(var i=0;i<TOOL_INSTANCES.length;i++){ if(TOOL_INSTANCES[i].id===String(id)) return (TOOL_INSTANCES[i].cat?TOOL_INSTANCES[i].cat+' / ':'')+toolNoSpec(TOOL_INSTANCES[i]); }
         return '';
     }
     function refreshToolSelects(){ render(); }   // 相容：量具設定存檔後重繪
@@ -2526,7 +2539,7 @@ $(function(){
         var cat=String($(this).attr('data-c'));
         var list=TOOL_INSTANCES.filter(function(t){ return (t.cat||'（未分類）')===cat; });
         $('#tp-nos').html(list.map(function(t){
-            return '<button type="button" class="tp-no" data-id="'+t.id+'">'+esc(t.no)+'<small>'+esc(t.cat||'')+'</small></button>';
+            return '<button type="button" class="tp-no" data-id="'+t.id+'">'+esc(toolNoSpec(t))+'<small>'+esc(t.cat||'')+'</small></button>';
         }).join(''));
         $('#tp-step1').hide(); $('#tp-step2').show();
     });
@@ -2548,7 +2561,7 @@ $(function(){
         $('#toolPickModal').modal('hide');
         render(); scheduleDraftSave();
         var t=toolInstById(tid);
-        if(n>1) flashMsg('已套用「'+((t?(t.cat+' / '+t.no):'未指定'))+'」到 '+n+' 個檢驗項目');
+        if(n>1) flashMsg('已套用「'+((t?((t.cat?t.cat+' / ':'')+toolNoSpec(t)):'未指定'))+'」到 '+n+' 個檢驗項目');
     }
     function flashMsg(msg){
         var $m=$('#flash-msg');
@@ -3752,11 +3765,11 @@ $(function(){
         });
         var tbl='<table class="pr-items"><thead><tr><th class="c-no">編號</th><th>檢驗項目</th><th class="c-std">標準</th>'+
                 '<th class="c-tol">公差</th><th class="c-tool">量具編號</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>'+body+'</tbody></table>';
-        // 量具對照（可追溯：編號 ＝ 類型）
+        // 量具對照（可追溯：編號 ＝ 類型(規格)）
         var tk=Object.keys(usedTools);
         var toolLegend = tk.length
             ? '<div class="pr-tools"><b>量具對照：</b>'+tk.map(function(k){
-                  var t=usedTools[k]; return esc(t.no)+'＝'+esc(t.cat||'');
+                  var t=usedTools[k]; return esc(t.no)+'＝'+esc((t.cat||'')+(t.spec?'('+t.spec+')':''));
               }).join('　｜　')+'</div>'
             : '';
         var insp = <?php echo json_encode($CURRENT_CNAME, JSON_UNESCAPED_UNICODE); ?>;
@@ -3951,7 +3964,9 @@ $(function(){
         $('#tool-instance-empty').hide(); $('#tool-instance-area').show();
         var list=toolMg.tools.filter(function(t){ return t.QC_Tool_List_id==catId; });
         $('#tool-inst-list').html(list.length ? list.map(function(t){
-            return '<tr><td>'+esc(t.Tool_No)+'</td><td>'+
+            var sp=((t.spec_brand||'')+' '+(t.spec_text||'')).replace(/\s+/g,' ').trim();
+            if(sp && String(t.Tool_No||'').replace(/\s+/g,'').toLowerCase().indexOf(sp.replace(/\s+/g,'').toLowerCase())>=0) sp='';
+            return '<tr><td>'+esc(t.Tool_No)+(sp?' <small class="text-muted">('+esc(sp)+')</small>':'')+'</td><td>'+
                 '<button class="btn btn-xs btn-info btn-edit-ti" data-id="'+t.Tool_id+'" data-no="'+esc(t.Tool_No)+'"><i class="fa fa-pencil"></i></button> '+
                 '<button class="btn btn-xs btn-danger btn-del-ti" data-id="'+t.Tool_id+'"><i class="fa fa-trash"></i></button></td></tr>';
         }).join('') : '<tr><td colspan="2" class="text-center text-muted">尚無編號</td></tr>');
