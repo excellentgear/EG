@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 /**
  * AS 流程說明手冊 —— 各課室 AS9100 流程／表單說明（讀取 MD 檔即時渲染）
  *
@@ -92,8 +92,40 @@ if ($rawKey !== '') {
 }
 
 // ══════════════ 文件／表單索引：讓 MD 內的文件編號變成可點（線上預覽＋線上表單）══════════════
-// 「有沒有線上表單」兩種來源：① as_form_template.form_doc_id（線上表單設計器做的）
-//                             ② as_document.linked_module（既有系統模組實作，如 CAR／品質異常單）
+// 「有沒有線上表單」三種來源，缺一不可：
+//   ① as_form_template.form_doc_id          — AS 線上表單設計器做出來的表單
+//   ② as_document.linked_module             — 既有電子化模組（car／qa_abnormal）
+//   ③ 各模組自己的「AS 文件綁定設定」        — 表單已由某個既有頁面實作（ai-rules/16：編號一律走 as_document 綁定）
+//      綁定值散在 system_settings 與 system_parameters，故用下表集中登記。
+//      **新增頁面綁定時，記得回來補一列，否則此頁會漏判成「尚未建立」。**
+$PAGE_BINDS = [
+    // [來源, 鍵（sp 用 群組|鍵）, 該頁對此文件的用途, 頁面網址（相對本頁）]
+    ['ss', 'vendor_audit_as_doc_id',  '供應商稽核管理 · 稽核查檢表',        '../pm/vendor_audit.php'],
+    ['ss', 'vendor_record_as_doc_id', '供應商稽核管理 · 品質系統評鑑記錄表', '../pm/vendor_audit.php'],
+    ['ss', 'vendor_roster_as_doc_id', '供應商稽核管理 · 合格供應商清冊',    '../pm/vendor_audit.php'],
+    ['ss', 'vendor_eval_as_doc_id',   '供應商稽核管理 · 定期評核表',        '../pm/vendor_audit.php'],
+    ['sp', 'EXTERNAL_DOC|as_doc_id',  '外來文件清單',                       '../Sales/external_doc_list.php'],
+    ['sp', 'QUOTATION|as_doc_id',     '報價單',                             '../Sales/quotation_list_NEW.php'],
+];
+$PGBIND = [];   // as_document.id => ['name'=>用途, 'url'=>頁面]
+foreach ($PAGE_BINDS as $b) {
+    try {
+        if ($b[0] === 'ss') {
+            $q = $conn->prepare("SELECT setting_value FROM system_settings WHERE setting_key=? LIMIT 1");
+            $q->execute([$b[1]]);
+            $val = (string)$q->fetchColumn();
+        } else {
+            [$grp, $key] = explode('|', $b[1]);
+            $q = $conn->prepare("SELECT param_value FROM system_parameters WHERE param_group=? AND param_key=? LIMIT 1");
+            $q->execute([$grp, $key]);
+            $raw = (string)$q->fetchColumn();
+            $val = (string)(json_decode($raw, true) ?? $raw);   // system_parameters 存的是 JSON
+        }
+        $did = (int)$val;
+        if ($did > 0) { $PGBIND[$did] = ['name' => $b[2], 'url' => $b[3]]; }
+    } catch (Exception $e) { error_log('as_flow_guide pagebind: ' . $e->getMessage()); }
+}
+
 $DOCMAP = [];
 try {
     $sqlMap = "SELECT d.id, d.doc_no, d.doc_name, d.doc_level, d.doc_type, d.current_version,
@@ -127,6 +159,8 @@ try {
             'mod'  => $mod,
             'mn'   => $mod === 'car' ? '異常矯正處理單(CAR)' : ($mod === 'qa_abnormal' ? '品質異常處理單' : ''),
             'mu'   => $mod === 'car' ? '../QA/correction_order.php' : ($mod === 'qa_abnormal' ? '../QA/qa_abnormal_view.php' : ''),
+            'pgn'  => $PGBIND[(int)$r['id']]['name'] ?? '',   // ③ 已綁定既有頁面
+            'pgu'  => $PGBIND[(int)$r['id']]['url']  ?? '',
         ];
     }
 } catch (Exception $e) { error_log('as_flow_guide docmap: ' . $e->getMessage()); }
@@ -146,7 +180,7 @@ function egmd_docno($s) {
             $key = $m[1];
             if (!isset($DOCMAP[$key])) { return $m[0]; }
             $d  = $DOCMAP[$key];
-            $on = ($d['tpl'] || $d['mod']);
+            $on = ($d['tpl'] || $d['mod'] || $d['pgn']);
             return '<a href="#" class="docchip' . ($on ? ' has-online' : '') . '" data-no="' . $key . '"'
                  . ' title="' . htmlspecialchars($d['name'], ENT_QUOTES, 'UTF-8')
                  . ($on ? '（已有線上表單，點擊預覽）' : '（點擊線上預覽）') . '">'
@@ -342,7 +376,7 @@ $FORMS = [];
 foreach ($DOCMAP as $no => $d) {
     if (substr_count($no, '-') >= 3) { $FORMS[$no] = $d; }
 }
-$onlineCnt = count(array_filter($FORMS, fn($d) => $d['tpl'] || $d['mod']));
+$onlineCnt = count(array_filter($FORMS, fn($d) => $d['tpl'] || $d['mod'] || $d['pgn']));
 
 $cntHigh = count(array_filter($ISSUES, fn($r) => $r[0] === '高'));
 $cntMid  = count(array_filter($ISSUES, fn($r) => $r[0] === '中'));
@@ -641,9 +675,12 @@ a.docchip.has-online:hover i { color:#fff; }
     </div>
 
     <p style="font-size:12.5px;color:#8A6D45;margin:0 0 10px;">
-      「已有線上表單」判定：① AS 線上表單設計器已建立並綁定此文件（<code>as_form_template.form_doc_id</code>）
-      ② 或此文件已連結既有電子化模組（<code>as_document.linked_module</code>，如 CAR／品質異常單）。
-      <strong>預覽</strong>＝開啟系統內該文件現行版檔案（Office 自動轉 PDF）；<strong>開線上表單</strong>＝另開分頁進入線上表單。</p>
+      「已有線上表單」三種判定，缺一不可：
+      ① AS 線上表單設計器已建立並綁定此文件（<code>as_form_template.form_doc_id</code>）；
+      ② 已連結既有電子化模組（<code>as_document.linked_module</code>，如 CAR／品質異常單）；
+      ③ <strong>此表單已由某個既有頁面實作並做了 AS 文件綁定</strong>（如供應商稽核管理的「AS文件綁定設定」、外來文件清單、報價單；
+      綁定值存在 <code>system_settings</code> / <code>system_parameters</code>，登記表在本頁原始碼 <code>$PAGE_BINDS</code>）。
+      <strong>預覽</strong>＝開啟系統內該文件現行版檔案（Office 自動轉 PDF）；右側按鈕＝另開分頁進入該線上表單／頁面。</p>
 
     <table class="of-table" id="onTable">
       <thead><tr>
@@ -653,7 +690,7 @@ a.docchip.has-online:hover i { color:#fff; }
       </tr></thead>
       <tbody>
       <?php foreach ($FORMS as $no => $d):
-            $on = ($d['tpl'] || $d['mod']); ?>
+            $on = ($d['tpl'] || $d['mod'] || $d['pgn']); ?>
         <tr class="<?= $on ? 'has-on' : '' ?>" data-on="<?= $on ? 1 : 0 ?>" data-dept="<?= htmlspecialchars($d['dept']) ?>">
           <td><strong><?= htmlspecialchars($no) ?></strong></td>
           <td><?= htmlspecialchars($d['name']) ?></td>
@@ -664,14 +701,20 @@ a.docchip.has-online:hover i { color:#fff; }
                 <span class="on-yes"><i class="fa fa-bolt"></i> 線上表單<?= $d['tst'] === 'published' ? '（已發布）' : '（草稿）' ?></span>
               <?php elseif ($d['mod']): ?>
                 <span class="on-yes"><i class="fa fa-cube"></i> <?= htmlspecialchars($d['mn']) ?></span>
+              <?php elseif ($d['pgn']): ?>
+                <span class="on-yes"><i class="fa fa-window-maximize"></i> 已綁定頁面</span>
+                <div style="font-size:11px;color:#8A5A2B;margin-top:2px;"><?= htmlspecialchars($d['pgn']) ?></div>
               <?php else: ?><span class="on-no">尚未建立</span><?php endif; ?></td>
           <td>
             <button class="btn-mini pv-open" data-no="<?= htmlspecialchars($no) ?>"><i class="fa fa-eye"></i> 預覽</button>
+            <a class="btn-mini" target="_blank" rel="noopener" href="as_document_management.php?kw=<?= urlencode($no) ?>" title="到 AS 文件管理定位此文件"><i class="fa fa-folder-open-o"></i> 文件管理</a>
             <?php if ($d['tpl']): ?>
               <a class="btn-mini warm" target="_blank" rel="noopener" href="as_form_render.php?template_id=<?= $d['tpl'] ?>"><i class="fa fa-external-link"></i> 開線上表單</a>
               <a class="btn-mini" target="_blank" rel="noopener" href="as_form_fill.php?template_id=<?= $d['tpl'] ?>"><i class="fa fa-pencil"></i> 新填一張</a>
             <?php elseif ($d['mod']): ?>
               <a class="btn-mini warm" target="_blank" rel="noopener" href="<?= htmlspecialchars($d['mu']) ?>"><i class="fa fa-external-link"></i> 前往模組頁</a>
+            <?php elseif ($d['pgn']): ?>
+              <a class="btn-mini warm" target="_blank" rel="noopener" href="<?= htmlspecialchars($d['pgu']) ?>"><i class="fa fa-external-link"></i> 開啟該頁面</a>
             <?php endif; ?>
           </td>
         </tr>
@@ -760,6 +803,10 @@ $(document).ready(function () {
             a.push('<span class="on-yes"><i class="fa fa-cube"></i> 已電子化：' + esc(d.mn) + '</span>');
             a.push('<a class="btn-mini warm" target="_blank" rel="noopener" href="' + d.mu
                  + '"><i class="fa fa-external-link"></i> 前往模組頁</a>');
+        } else if (d.pgn) {
+            a.push('<span class="on-yes"><i class="fa fa-window-maximize"></i> 已綁定頁面：' + esc(d.pgn) + '</span>');
+            a.push('<a class="btn-mini warm" target="_blank" rel="noopener" href="' + d.pgu
+                 + '"><i class="fa fa-external-link"></i> 開啟該頁面</a>');
         } else {
             a.push('<span class="on-no">尚未建立線上表單</span>');
             a.push('<a class="btn-mini" target="_blank" rel="noopener" href="as_form_list.php"><i class="fa fa-plus"></i> 去建立</a>');
@@ -768,8 +815,8 @@ $(document).ready(function () {
             a.push('<a class="btn-mini" target="_blank" rel="noopener" href="' + pvUrl(d)
                  + '"><i class="fa fa-external-link"></i> 預覽另開分頁</a>');
         }
-        a.push('<a class="btn-mini" target="_blank" rel="noopener" href="as_document_management.php'
-             + '"><i class="fa fa-folder-open-o"></i> AS 文件管理</a>');
+        a.push('<a class="btn-mini" target="_blank" rel="noopener" href="as_document_management.php?kw='
+             + encodeURIComponent(no) + '"><i class="fa fa-folder-open-o"></i> 到 AS 文件管理（定位此文件）</a>');
         $('#pvActs').html(a.join(''));
 
         // 內容：有現行版檔案就 iframe 線上預覽（Office 由 API 轉 PDF）

@@ -334,10 +334,38 @@ if ($deptPerm === 'R') {
         <p class="text-muted" style="font-size:12px;margin-bottom:8px;">
           📕手冊　📘程序書　📗標準書　📄表單｜點文件名稱＝跳至該文件；▸/▾ 可收合展開。
           <label style="font-weight:normal;margin-left:10px;"><input type="checkbox" id="treeShowDeleted"> 含已刪除</label>
+          <span style="margin-left:10px;">AS 文件編號：<b id="treeAsDocNo">尚未綁定</b></span>
         </p>
         <div id="treeBody" style="font-size:13px;line-height:1.9;"></div>
       </div>
-      <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-warning btn-sm" id="btnTreeAsDoc" style="display:none;"><i class="fa fa-link"></i> AS 文件編號綁定</button>
+        <button type="button" class="btn btn-primary btn-sm" id="btnTreePrint"><i class="fa fa-print"></i> 列印文件管制總覽表</button>
+        <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ 結構總覽列印：AS 文件編號綁定 Modal ═════════ -->
+<div class="modal fade" id="treeAsDocModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title">結構總覽列印－AS 文件編號綁定</h4>
+      </div>
+      <div class="modal-body">
+        <label>搜尋文件編號 / 名稱</label>
+        <input type="text" class="form-control" id="treeAsKw" placeholder="輸入關鍵字過濾" data-eg-skip>
+        <label style="margin-top:8px;">選擇 AS 文件</label>
+        <select class="form-control" id="treeAsSel" size="10" style="height:auto;"></select>
+        <div style="font-size:12px;color:#8a6d45;margin-top:6px;">綁定後：列印的<b>表頭（大標題下方）＝該文件的表單名稱</b>、頁尾右下角＝該文件編號。選「（不綁定）」＝清除綁定。</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" id="treeAsSave">儲存</button>
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1315,13 +1343,110 @@ $(function(){
     $('#treeBody').html(html ? header+html : '<div class="text-muted">尚無文件</div>');
     $('#treeInfo').text(`共 ${count} 份文件`);
   }
+  let TREE_DOCS = [], TREE_META = {company_name:'', as_doc:null, as_docs:[]};
   function loadTree(){
     $.getJSON(API+'?action=list_documents', {include_deleted: $('#treeShowDeleted').is(':checked')?'1':'0'}, r=>{
       if(r.status!=='success'){ alert(r.message||'讀取失敗'); return; }
-      renderTree(r.data||[]);
+      TREE_DOCS = r.data||[];
+      renderTree(TREE_DOCS);
     });
   }
-  $('#btnTree').on('click', function(){ loadTree(); $('#treeModal').modal('show'); });
+  function renderTreeAsDoc(){
+    const d = TREE_META.as_doc;
+    $('#treeAsDocNo').text(d ? (d.doc_no+'　'+d.doc_name) : '尚未綁定');
+  }
+  function loadTreeMeta(){
+    $.getJSON(API+'?action=tree_print_meta', r=>{
+      if(r.status!=='success') return;
+      TREE_META = {company_name:r.company_name||'', as_doc:r.as_doc||null, as_docs:r.as_docs||[]};
+      renderTreeAsDoc();
+    });
+  }
+  $('#btnTree').on('click', function(){ loadTree(); loadTreeMeta(); if(canS) $('#btnTreeAsDoc').show(); $('#treeModal').modal('show'); });
+
+  // ── AS 文件編號綁定 ──────────────────────────────────────────
+  function renderTreeAsSel(kw){
+    kw = (kw||'').toLowerCase();
+    const $s = $('#treeAsSel').html('<option value="0">（不綁定）</option>');
+    (TREE_META.as_docs||[]).forEach(d=>{
+      const t = (d.doc_no+' '+d.doc_name).toLowerCase();
+      if(kw && t.indexOf(kw)===-1) return;
+      $s.append(`<option value="${d.id}">${esc(d.doc_no)}　${esc(d.doc_name)}</option>`);
+    });
+    $s.val(TREE_META.as_doc ? String(TREE_META.as_doc.id) : '0');
+    if($s.val()===null) $s.val('0');
+  }
+  $('#btnTreeAsDoc').on('click', function(){ $('#treeAsKw').val(''); renderTreeAsSel(''); $('#treeAsDocModal').modal('show'); });
+  $('#treeAsKw').on('input', function(){ renderTreeAsSel($(this).val()); });
+  $('#treeAsSave').on('click', function(){
+    $.post(API, {action:'save_tree_as_doc', as_doc_id: $('#treeAsSel').val()||0}, r=>{
+      if(r.status!=='success'){ alert(r.message||'儲存失敗'); return; }
+      TREE_META.as_doc = r.as_doc||null; renderTreeAsDoc(); $('#treeAsDocModal').modal('hide');
+    }, 'json');
+  });
+
+  // ── 列印「文件管制總覽表」：一階/二階/三階各自一頁，階層自動勾選 ─────
+  // 大標題＝本公司全名（動態取，ai-rules/16）；表頭＝綁定 AS 文件的表單名稱；頁尾左下頁碼、右下 AS 編號
+  $('#btnTreePrint').on('click', function(){
+    if(!TREE_DOCS.length){ alert('尚無文件可列印'); return; }
+    const LEVELS = ['一階','二階','三階'];
+    const has4 = TREE_DOCS.some(d=>d.doc_level==='四階');
+    const pages = LEVELS.concat(has4?['四階']:[]);
+    const asDoc = TREE_META.as_doc;
+    const title = asDoc ? asDoc.doc_name : 'AS 文件結構總覽';
+    let body = '';
+    pages.forEach((lv, pi)=>{
+      const rows = TREE_DOCS.filter(d=>String(d.doc_level||'')===lv)
+                            .sort((a,b)=>String(a.doc_no).localeCompare(String(b.doc_no)));
+      const boxes = LEVELS.concat(has4?['四階']:[])
+        .map(l=>`<span class="p-box">${l===lv?'☑':'□'}${l}文件</span>`).join('');
+      body += `<div class="p-page">
+        <div class="p-comp">${esc(TREE_META.company_name||'')}</div>
+        <div class="p-title">${esc(title)}</div>
+        <div class="p-boxes">${boxes}</div>
+        <table class="p-tb"><thead><tr>
+          <th style="width:7%;">項次</th><th style="width:17%;">文件編號</th><th>文件名稱</th>
+          <th style="width:13%;">制訂單位</th><th style="width:8%;">版本</th>
+          <th style="width:14%;">發行日期</th><th style="width:15%;">備註</th></tr></thead><tbody>`;
+      if(rows.length){
+        rows.forEach((d,i)=>{
+          body += `<tr><td>${i+1}</td><td>${esc(d.doc_no)||''}</td><td class="tl">${esc(d.doc_name)||''}</td>`
+                + `<td>${esc(d.dept_name)||''}</td><td>${esc(d.current_version)||''}</td>`
+                + `<td>${esc(d.revised_date)||''}</td><td>${d.is_deleted==1?'已作廢':''}</td></tr>`;
+        });
+      } else {
+        body += `<tr><td colspan="7" style="height:24px;color:#666;">（無${lv}文件）</td></tr>`;
+      }
+      body += `</tbody></table></div>`;
+      if(pi < pages.length-1) body += '<div class="p-break"></div>';
+    });
+    const asTxt = asDoc ? String(asDoc.doc_no).replace(/['\\]/g,'') : '';
+    const css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+      + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}'
+      + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:6px;}'
+      + '.p-boxes{font-size:13px;margin:0 0 6px 2px;}'
+      + '.p-box{margin-right:18px;}'
+      + '.p-break{break-after:page;page-break-after:always;}'
+      + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;}'
+      + 'table.p-tb thead{display:table-header-group;}'
+      + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:3px 5px;text-align:center;overflow-wrap:anywhere;}'
+      + 'table.p-tb thead th{background:#f3ead6;}'
+      + 'table.p-tb td.tl{text-align:left;}'
+      + 'table.p-tb tr{break-inside:avoid;}'
+      + '@page{margin:12mm 10mm 18mm;'
+      + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
+      + '}';
+    const w = window.open('', '_blank');
+    w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'+body
+      +'<scr'+'ipt>window.onload=function(){'
+      +'var onePageA4=(297-30)*96/25.4;'
+      +'if(document.body.scrollHeight>onePageA4*0.92){'
+      +'var st=document.createElement(\'style\');'
+      +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
+      +'document.head.appendChild(st);}'
+      +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+    w.document.close();
+  });
   $('#treeShowDeleted').on('change', loadTree);
   $('#treeBody').on('click','.tree-toggle', function(){
     const $kids = $(this).closest('.tree-node').children('.tree-kids');
@@ -2282,6 +2407,8 @@ $(function(){
   $('#rbacHelp').on('click', function(e){ e.preventDefault(); alert('權限規則（職稱為主、個人優先）：\n1. 預設依「職稱」自動套用角色\n2. 個人另有指派角色時，以個人設定為準（覆蓋職稱）\n3. 職稱與個人的指派都在「權限設定頁 → AS9100 文件管理」區塊操作\n4. 管理員固定擁有全部權限\n\n可勾選的角色功能（本頁「角色設定」定義角色）：\n・檢閱/預覽＝線上預覽（不可下載原檔）\n・新增文件、改版/編輯、下載原檔（各自獨立）\n・刪除/還原\n・文管設定＝標籤/各文件開啟權限/NAS路徑/AS負責人/範本\n・線上開檔＝開工作副本直接打字列印'); });
 
   // init
+  // 外部帶入定位：?kw=文件編號（AS流程說明手冊的「到文件管理」鈕用；也可直接複製網址分享單一文件）
+  (function(){ var kw = new URLSearchParams(location.search).get('kw'); if (kw) { $('#searchKw').val(kw); } })();
   loadMeta(loadDocs);
 });
 </script>
