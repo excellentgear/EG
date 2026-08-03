@@ -689,6 +689,13 @@ if (isset($_POST['btn_go_events'])) {
                                                         <?php endforeach; ?>
                                                     </optgroup>
                                                 </select>
+                                                <div style="display:flex;align-items:center;gap:6px;margin-top:7px;flex-wrap:wrap;">
+                                                    <select id="target-preset-sel" class="eg-tool-select" style="min-width:170px;" title="套用自己的通知對象名單（僅自己可見）">
+                                                        <option value="">套用對象名單…</option>
+                                                    </select>
+                                                    <button type="button" id="target-preset-save" class="eg-tool-btn" title="把目前的對象＋通知方式存成個人名單（僅自己可見可用）"><i class="fa fa-star-o"></i> 儲存名單</button>
+                                                    <button type="button" id="target-preset-del" class="eg-tool-btn" title="刪除選取的對象名單"><i class="fa fa-trash-o"></i> 刪除名單</button>
+                                                </div>
                                             </div>
                                             <div class="eg-field">
                                                 <label>各對象通知方式 <span class="hint">拖曳標籤到區塊；可先點選多個再拖</span></label>
@@ -1333,6 +1340,59 @@ if (isset($_POST['btn_go_events'])) {
                 $.post(PRESET_API, { action: 'delete', id: pid }, function(res) {
                     if (!res || !res.ok) { alert(res && res.msg ? res.msg : '刪除失敗'); return; }
                     egLoadPresets();
+                }, 'json');
+            });
+
+            // ===== 通知對象名單（個人專用，module='notice_target'，一律私人：他人看不到也選不到）=====
+            function egLoadTargetPresets(sel) {
+                $.get(PRESET_API, { action: 'list', module: 'notice_target' }, function(res) {
+                    if (!res || !res.ok) return;
+                    var h = '<option value="">套用對象名單…</option>';
+                    (res.data || []).forEach(function(p) { h += '<option value="' + p.id + '">' + egEsc(p.name) + '</option>'; });
+                    $('#target-preset-sel').html(h);
+                    if (sel) $('#target-preset-sel').val(String(sel));
+                }, 'json');
+            }
+            egLoadTargetPresets();
+            $('#target-preset-sel').on('change', function() {
+                var pid = this.value;
+                if (!pid) return;
+                $.get(PRESET_API, { action: 'get', id: pid }, function(res) {
+                    if (!res || !res.ok) { alert(res && res.msg ? res.msg : '載入名單失敗'); return; }
+                    var codes = [], modes = {}, miss = [];
+                    (res.editors || []).forEach(function(e) {
+                        if (!$('#targets option[value="' + e.code + '"]').length) { miss.push(e.name || e.code); return; }
+                        codes.push(e.code);
+                        modes[e.code] = e.mode || 'read';
+                    });
+                    if (!codes.length) { alert('此名單的對象皆已不存在（可能已離職或部門異動）'); return; }
+                    targetModes = modes;
+                    $t.val(codes).trigger('change');
+                    if (miss.length) alert('以下對象已不存在，未套用：\n' + miss.join('、'));
+                }, 'json');
+            });
+            $('#target-preset-save').on('click', function() {
+                var data = ($t.length && $t.select2('data')) || [];
+                if (!data.length) { alert('請先選擇對象再儲存名單'); return; }
+                egSyncTargetModes();
+                var name = prompt('請輸入此通知對象名單的簡稱（僅自己看得到）：');
+                if (name === null) return;
+                name = name.trim();
+                if (!name) { alert('名單簡稱不可空白'); return; }
+                var list = data.map(function(o) { return { code: o.id, name: o.text, mode: targetModes[o.id] || 'read' }; });
+                $.post(PRESET_API, { action: 'save', module: 'notice_target', name: name, is_public: 0, editors: JSON.stringify(list) }, function(res) {
+                    if (!res || !res.ok) { alert(res && res.msg ? res.msg : '儲存失敗'); return; }
+                    egLoadTargetPresets(res.id);
+                    alert('個人名單「' + name + '」已儲存（同名會覆寫）');
+                }, 'json');
+            });
+            $('#target-preset-del').on('click', function() {
+                var pid = $('#target-preset-sel').val();
+                if (!pid) { alert('請先於下拉選單選取要刪除的名單'); return; }
+                if (!confirm('確認刪除名單「' + $('#target-preset-sel option:selected').text() + '」？')) return;
+                $.post(PRESET_API, { action: 'delete', id: pid }, function(res) {
+                    if (!res || !res.ok) { alert(res && res.msg ? res.msg : '刪除失敗'); return; }
+                    egLoadTargetPresets();
                 }, 'json');
             });
 

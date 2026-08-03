@@ -44,6 +44,28 @@ try {
         $editors = json_decode((string)($_POST['editors'] ?? '[]'), true);
         if ($name === '') { echo json_encode(['ok' => false, 'msg' => '名單簡稱不可空白']); exit(); }
         if (!is_array($editors) || empty($editors)) { echo json_encode(['ok' => false, 'msg' => '名單內容不可為空']); exit(); }
+        // 通知對象名單（module 以 _target 結尾）：存 code/name/mode，允許 all/status/dept/user 且不限人數
+        if (substr($module, -7) === '_target') {
+            $clean = [];
+            foreach ($editors as $e) {
+                $code = trim((string)($e['code'] ?? ''));
+                if ($code === '') continue;
+                $clean[] = ['code' => $code, 'name' => (string)($e['name'] ?? ''), 'mode' => (string)($e['mode'] ?? 'read')];
+            }
+            if (empty($clean)) { echo json_encode(['ok' => false, 'msg' => '名單內容不可為空']); exit(); }
+            $json = json_encode($clean, JSON_UNESCAPED_UNICODE);
+            $ck = $db->prepare("SELECT id FROM co_editor_preset WHERE module = ? AND owner_id = ? AND name = ?");
+            $ck->execute([$module, $uid, $name]);
+            if ($exist = (int)$ck->fetchColumn()) {
+                $db->prepare("UPDATE co_editor_preset SET is_public = 0, editors_json = ? WHERE id = ?")->execute([$json, $exist]);
+                echo json_encode(['ok' => true, 'id' => $exist]);
+            } else {
+                $db->prepare("INSERT INTO co_editor_preset (module, owner_id, name, is_public, editors_json) VALUES (?,?,?,0,?)")
+                   ->execute([$module, $uid, $name, $json]);
+                echo json_encode(['ok' => true, 'id' => (int)$db->lastInsertId()]);
+            }
+            exit();
+        }
         // 整理：只留 type/id/name，人員最多 5 位
         $clean = []; $userCount = 0;
         foreach ($editors as $e) {
