@@ -565,7 +565,7 @@ $('#btnPrint').on('click', function(){
         if (!(res.groups||[]).length) body += '<div style="padding:20px;color:#666;">無符合條件的外來文件</div>';
         // 頁尾走 @page margin box（列印引擎繪製，每頁都有）：右下=AS 文件編號、左下=頁碼（多頁才顯示）
         var asTxt = res.as_doc ? String(res.as_doc.doc_no).replace(/['\\]/g,'') : '';
-        var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding-top:10mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
             + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:6px;margin-bottom:2px;}'
             + '.p-sub{font-size:11px;text-align:center;color:#555;margin-bottom:10px;}'
@@ -578,7 +578,8 @@ $('#btnPrint').on('click', function(){
             + 'table.p-tb tr{break-inside:avoid;}'
             + '.cat-pill{display:inline-block;font-size:10px;border:1px solid rgba(122,82,23,.25);border-radius:9px;padding:0 6px;margin:1px 2px;}'
             // 左右邊界 10mm、下邊界 18mm：RICOH 等實體印表機邊緣約 4~5mm 印不到，太貼邊會被裁掉
-            + '@page{margin:12mm 10mm 18mm;'
+            // 上邊界設 0：瀏覽器的頁首（列印日期/標題/網址）畫在上邊界內，沒空間就不會印；改用 body padding-top 留白
+            + '@page{margin:0 10mm 18mm;'
             + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
             + '}';
         var w = window.open('', '_blank');
