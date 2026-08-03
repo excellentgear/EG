@@ -1049,10 +1049,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             if (!empty($global)) {
-                $global_like = '%' . $global . '%';
-                $whereClauses[] = "(ot.Order_date LIKE :global1 OR ot.Client_name LIKE :global2 OR ot.d_id LIKE :global3 OR ot.Processing_items LIKE :global4 OR ot.Order_ps LIKE :global5 OR u.user_cname LIKE :global6 OR ot.ateNote LIKE :global7 OR ot.Order_oo LIKE :global8 OR ot.C_order LIKE :global9)";
-                for ($i = 1; $i <= 9; $i++) {
-                    $params[':global' . $i] = $global_like;
+                // 與主列表同一套：LIKE 掃全部可見欄位、多關鍵字皆須命中（此查詢未 join customer_list）
+                $gFields = ['ot.d_id','ot.Client_name','ot.Processing_items','ot.Order_ps','ot.ateNote',
+                            'u.user_cname','ot.Order_oo','ot.C_order','ot.Containers','ot.Sample',
+                            'ot.JIG','ot.Order_date'];
+                $gTokens = preg_split('/\s+/u', trim($global), -1, PREG_SPLIT_NO_EMPTY) ?: [$global];
+                foreach ($gTokens as $ti => $tk) {
+                    $ors = [];
+                    foreach ($gFields as $fi => $f) {
+                        $ph = ":gg{$ti}_{$fi}";
+                        $ors[] = "$f LIKE $ph";
+                        $params[$ph] = "%$tk%";
+                    }
+                    $whereClauses[] = '(' . implode(' OR ', $ors) . ')';
                 }
             }
 
@@ -1897,24 +1906,22 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         $whereClauses[] = "(ot.pmGet IS NULL AND ot.in_review IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6))";
     }
     if (!empty($global)) {
-        // 每個空白分隔詞包成必要片語 +"詞"：片語內特殊字元（如 -）是字面值、每個詞都必須出現。
-        // 不可把 - 換成空格再丟進 BOOLEAN MODE——805-01-107 會拆成 805/01/107 任一命中即符合，等於沒篩。
-        $ft_parts = [];
-        foreach (preg_split('/\s+/u', trim(str_replace(['"', '\\'], ' ', $global)), -1, PREG_SPLIT_NO_EMPTY) as $ft_tk) {
-            if (mb_strlen($ft_tk, 'UTF-8') >= 2) $ft_parts[] = '+"' . $ft_tk . '"';
-        }
-        if (empty($ft_parts)) {
-            // 沒有任何 >= 2 字的詞（ngram FULLTEXT 不支援），退回全 LIKE
-            $whereClauses[] = "(ot.Order_date LIKE :g1 OR cl.customer LIKE :g2 OR ot.Client_name LIKE :g2b OR ot.d_id LIKE :g3 OR ot.Processing_items LIKE :g4 OR ot.Order_ps LIKE :g5 OR ot.ateNote LIKE :g6 OR u.user_cname LIKE :g7 OR ot.Order_oo LIKE :g8 OR ot.C_order LIKE :g9)";
-            for ($i=1; $i<=9; $i++) $params[":g$i"] = "%$global%";
-            $params[":g2b"] = "%$global%";
-        } else {
-            // order_track 欄位用 ngram FULLTEXT，跨表欄位仍 LIKE
-            $whereClauses[] = "(ot.Order_date LIKE :g1 OR cl.customer LIKE :g2 OR u.user_cname LIKE :g7 OR MATCH(ot.Client_name, ot.d_id, ot.Processing_items, ot.Order_ps, ot.ateNote, ot.Order_oo, ot.C_order) AGAINST(:g_ft IN BOOLEAN MODE))";
-            $params[':g1']   = "%$global%";
-            $params[':g2']   = "%$global%";
-            $params[':g7']   = "%$global%";
-            $params[':g_ft'] = implode(' ', $ft_parts);
+        // 全表搜尋一律用 LIKE 掃全部可見欄位。
+        // 【禁止改回 ngram FULLTEXT】MATCH ... AGAINST('+"RC105-N03-A"') 對含「-」的料號回傳 0 筆
+        // （ngram 把 - 當分隔字元，片語比對不成立），LIKE 才找得到；本表僅約 8500 列，LIKE 全掃夠快。
+        $gFields = ['ot.d_id','ot.Client_name','cl.customer','ot.Processing_items','ot.Order_ps',
+                    'ot.ateNote','u.user_cname','ot.Order_oo','ot.C_order','ot.Containers',
+                    'ot.Sample','ot.JIG','ot.Order_date'];
+        // 多個關鍵字＝每個字都要命中（可命中不同欄位）
+        $gTokens = preg_split('/\s+/u', trim($global), -1, PREG_SPLIT_NO_EMPTY) ?: [$global];
+        foreach ($gTokens as $ti => $tk) {
+            $ors = [];
+            foreach ($gFields as $fi => $f) {
+                $ph = ":g{$ti}_{$fi}";
+                $ors[] = "$f LIKE $ph";
+                $params[$ph] = "%$tk%";
+            }
+            $whereClauses[] = '(' . implode(' OR ', $ors) . ')';
         }
     }
 
