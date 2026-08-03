@@ -1783,10 +1783,14 @@ $(function(){
         $.post(QA_API, {action:'get_decision_setting'}, function(r){
             if (!r || !r.success){ alert('載入設定失敗'); return; }
             var qc = r.qc_dept_ids || [];
-            $('#qadc_depts').html((r.departments || []).map(function(d){
-                return '<label style="font-weight:normal;margin:0 0 3px;cursor:pointer;">'
-                     + '<input type="checkbox" class="qadc-dept" value="'+d.id+'" '+(qc.indexOf(d.id)>=0?'checked':'')+'> '+$('<i>').text(d.name).html()+'</label>';
-            }).join(''));
+            // 品管部門已改由全站「組織角色綁定設定」決定（含子部門），本頁只顯示不提供設定（2026-08-03）
+            var qcNames = (r.departments || []).filter(function(d){ return qc.indexOf(d.id) >= 0; })
+                                               .map(function(d){ return $('<i>').text(d.name).html(); });
+            $('#qadc_depts').html('<div style="grid-column:1/-1;">'
+                + (qcNames.length ? '<b>'+qcNames.join('、')+'</b>' : '<span style="color:#DD5138;">尚未設定</span>')
+                + '<div style="font-size:12px;color:#8a6d45;margin-top:4px;">此項目已統一由'
+                + '<a href="../admin/org_role_setting.php" target="_blank"><b>組織角色綁定設定</b></a>'
+                + '的「品管部門」決定（含其子部門），在本頁不再重複設定。</div></div>');
             function poolOpts(sel){
                 var h = '<option value="">請選擇...</option>';
                 (r.pool || []).forEach(function(p){

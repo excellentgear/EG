@@ -304,6 +304,11 @@ function tool_calib_status(array $tool, int $warnMonths = 1): string {
  * ============================================================ */
 /** 品管部門 id（qa_system_settings.qa_qc_dept_ids）＋其所有子部門 */
 function tool_calib_qc_dept_ids(PDO $db): array {
+    // 2026-08-03 起品管部門改由全站「組織角色綁定設定」的 qc_dept 決定（含子部門）；
+    // 舊 qa_qc_dept_ids 只當統一設定未綁定時的回退值。
+    require_once __DIR__ . '/org_role_lib.php';
+    $u = eg_org_dept_ids($db, 'qc_dept');
+    if ($u) return $u;
     $ids = [];
     try {
         $st = $db->prepare("SELECT setting_value FROM qa_system_settings WHERE setting_key='qa_qc_dept_ids'");

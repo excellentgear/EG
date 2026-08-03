@@ -1216,8 +1216,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             try { $pdo->exec("ALTER TABLE gear_hob_allowance_mn ADD COLUMN is_exact TINYINT(1) NOT NULL DEFAULT 0 COMMENT '精確匹配(=)'"); } catch(Exception $e){}
             $mn_rows = $pdo->query("SELECT * FROM gear_hob_allowance_mn ORDER BY is_exact DESC, mn_gt ASC, sort_order ASC")->fetchAll(PDO::FETCH_ASSOC);
             $da_rows = $pdo->query("SELECT * FROM gear_hob_allowance_da ORDER BY da_gt ASC, sort_order ASC")->fetchAll(PDO::FETCH_ASSOC);
-            $gs_row  = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='gear_tool_tech_dept_ids'")->fetch(PDO::FETCH_ASSOC);
-            $tech_ids = $gs_row ? (json_decode($gs_row['setting_value'], true) ?: []) : [];
+            // 技術部門一律讀全站「組織角色綁定設定」的 rd_dept（含子部門），本頁不再自設一份（2026-08-03）
+            require_once __DIR__ . '/../../src/common/org_role_lib.php';
+            $tech_ids = eg_org_dept_ids($pdo, 'rd_dept');
+            if (!$tech_ids) {
+                $gs_row  = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='gear_tool_tech_dept_ids'")->fetch(PDO::FETCH_ASSOC);
+                $tech_ids = $gs_row ? (json_decode($gs_row['setting_value'], true) ?: []) : [];
+            }
             $depts = $pdo->query("SELECT id, name, parent_id, level FROM department ORDER BY sort_order, level, id")->fetchAll(PDO::FETCH_ASSOC);
             echo json_encode(['success'=>true,'mn_rows'=>$mn_rows,'da_rows'=>$da_rows,'tech_dept_ids'=>$tech_ids,'depts'=>$depts]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
@@ -1303,6 +1308,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 齒輪工具：儲存技術課部門設定（管理員限定）──────────────────────────
     if ($_POST['action'] === 'gear_save_settings') {
         header('Content-Type: application/json');
+        // 2026-08-03 起技術部門統一在「組織角色綁定設定」維護，本端點停用（避免兩處設定打架）
+        echo json_encode(['success'=>false,'message'=>'技術部門已改由「組織角色綁定設定」統一維護，請至該頁設定「設計／技術部門」']);
+        exit;
         if (!in_array(intval($_SESSION['status']??0),[9,90])){echo json_encode(['success'=>false,'message'=>'無管理員權限']);exit;}
         try {
             $uid=intval($_SESSION['id']??0); $uname=$_SESSION['userName']??'';
@@ -1523,8 +1531,12 @@ $is_gear_admin  = in_array(intval($_SESSION['status'] ?? 0), [9, 90]);
 $show_gear_tool = $is_gear_admin; // 管理員一律可見
 if (!$show_gear_tool) {
     try {
-        $gs_r = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='gear_tool_tech_dept_ids'")->fetch(PDO::FETCH_ASSOC);
-        $gear_dept_ids = $gs_r ? (json_decode($gs_r['setting_value'], true) ?: []) : [];
+        require_once __DIR__ . '/../../src/common/org_role_lib.php';   // 技術部門統一設定（含子部門）
+        $gear_dept_ids = eg_org_dept_ids($db, 'rd_dept');
+        if (!$gear_dept_ids) {
+            $gs_r = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='gear_tool_tech_dept_ids'")->fetch(PDO::FETCH_ASSOC);
+            $gear_dept_ids = $gs_r ? (json_decode($gs_r['setting_value'], true) ?: []) : [];
+        }
         if (!empty($gear_dept_ids)) {
             $gph = implode(',', array_fill(0, count($gear_dept_ids), '?'));
             $gc  = $db->prepare("SELECT 1 FROM user_department_position_map WHERE user_id=? AND department_id IN ($gph) LIMIT 1");
@@ -8886,19 +8898,17 @@ foreach($dCounts as $c) {
         <span class="gear-hdr-title"><i class="fa fa-cog fa-spin" id="gear-hdr-icon"></i> 齒輪計算工具</span>
         <div class="gear-hdr-btns">
             <?php if ($is_gear_admin): ?>
-            <button id="gear-settings-toggle" onclick="toggleGearSettings(event)" title="技術課部門設定"><i class="fa fa-sliders"></i> 設定</button>
+            <button id="gear-settings-toggle" onclick="toggleGearSettings(event)" title="可使用本工具的部門（於組織角色綁定設定維護）"><i class="fa fa-sliders"></i> 設定</button>
             <?php endif; ?>
             <button onclick="closeGearTool()" title="關閉">✕ 關閉</button>
         </div>
         <?php if ($is_gear_admin): ?>
         <!-- 設定面板 -->
         <div id="gear-settings-panel">
-            <div style="font-weight:700;font-size:13px;color:#1a3a50;margin-bottom:6px;"><i class="fa fa-cog"></i> 技術課部門設定</div>
-            <div style="font-size:11px;color:#666;margin-bottom:6px;">勾選可使用齒輪計算工具的部門（多選）：</div>
+            <div style="font-weight:700;font-size:13px;color:#1a3a50;margin-bottom:6px;"><i class="fa fa-cog"></i> 可使用本工具的部門</div>
             <div class="gear-dept-list" id="gear-dept-list"><div style="color:#aaa;font-size:11px;padding:6px;">載入中…</div></div>
             <div style="margin-top:8px;display:flex;gap:6px;">
-                <button onclick="saveGearSettings()" class="btn-gear-save">儲存</button>
-                <button onclick="document.getElementById('gear-settings-panel').style.display='none'" class="btn-gear-cancel">取消</button>
+                <button onclick="document.getElementById('gear-settings-panel').style.display='none'" class="btn-gear-cancel">關閉</button>
             </div>
             <div id="gear-settings-msg" style="font-size:11px;margin-top:5px;"></div>
         </div>
@@ -11329,15 +11339,15 @@ foreach($dCounts as $c) {
                 if(res.success){ _allDepts=res.depts||[]; _techDeptIds=res.tech_dept_ids||[]; renderGearDeptList(); }
             },'json'); return;
         }
-        var html = '';
-        _allDepts.forEach(function(d) {
-            var checked = _techDeptIds.indexOf(parseInt(d.id)) !== -1 ? ' checked' : '';
-            var lv = parseInt(d.level) || 1; var cls = lv >= 2 ? ' level-'+lv : '';
-            html += '<label class="gear-dept-item'+cls+'">'
-                  + '<input type="checkbox" value="'+escGear(d.id)+'"'+checked+'> '
-                  + escGear(d.name) + '</label>';
-        });
-        el.innerHTML = html;
+        // 2026-08-03 起技術部門由全站「組織角色綁定設定」決定（含子部門），本頁只顯示不提供設定
+        var names = _allDepts.filter(function(d){ return _techDeptIds.indexOf(parseInt(d.id)) !== -1; })
+                             .map(function(d){ return escGear(d.name); });
+        el.innerHTML = '<div style="padding:8px 10px;background:#FDF8EF;border:1px solid #E8D5B5;border-radius:6px;color:#5b3a1e;font-size:12px;">'
+                     + (names.length ? '可使用本工具的部門：<b>'+names.join('、')+'</b>'
+                                     : '<span style="color:#DD5138;">尚未設定技術部門</span>')
+                     + '<div style="color:#8a6d45;margin-top:5px;">此項目已統一由'
+                     + '<a href="../admin/org_role_setting.php" target="_blank"><b>組織角色綁定設定</b></a>'
+                     + '的「設計／技術部門」決定（含其子部門），在本頁不再重複設定。</div></div>';
     }
     window.saveGearSettings = function() {
         var checkboxes = document.querySelectorAll('#gear-dept-list input[type=checkbox]:checked');

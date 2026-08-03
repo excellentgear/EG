@@ -1734,13 +1734,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 生產部門設定 讀取 ──────────────────────────────────────
     if ($action === 'get_prod_dept_setting') {
         try {
-            $val = $pdo->query("SELECT param_value FROM system_parameters WHERE param_group='KPI' AND param_key='prod_dept_ids' LIMIT 1")->fetchColumn();
-            $ids = [];
-            if ($val !== false) {
-                $decoded = json_decode($val, true);
-                if (is_array($decoded)) $ids = $decoded;
+            // 生產部門一律讀全站「組織角色綁定設定」的 prod_dept（含子部門），本頁不再自設一份（2026-08-03）；
+            // 舊 system_parameters KPI/prod_dept_ids 只在統一設定未綁定時當回退值。
+            require_once __DIR__ . '/../../src/common/org_role_lib.php';
+            $ids = eg_org_dept_ids($pdo, 'prod_dept');
+            if (!$ids) {
+                $val = $pdo->query("SELECT param_value FROM system_parameters WHERE param_group='KPI' AND param_key='prod_dept_ids' LIMIT 1")->fetchColumn();
+                if ($val !== false) {
+                    $decoded = json_decode($val, true);
+                    if (is_array($decoded)) $ids = $decoded;
+                }
             }
-            echo json_encode(['success'=>true,'ids'=>$ids]);
+            echo json_encode(['success'=>true,'ids'=>$ids,'unified'=>true]);
         } catch(Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage(),'ids'=>[]]); }
         exit;
     }
@@ -1749,6 +1754,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // 注意：prod_dept_ids 為 JSON 陣列，不可存入 kpi_standard_setting.setting_value（decimal 型別）
     // 改存至 system_parameters（param_value 為 json 型別，updated_by 為 varchar(50)）
     if ($action === 'upsert_prod_dept_setting') {
+        // 2026-08-03 起生產部門統一在「組織角色綁定設定」維護，本端點停用（避免兩處設定打架）
+        echo json_encode(['success'=>false,'message'=>'生產單位已改由「組織角色綁定設定」統一維護，請至該頁設定「生產部門」']);
+        exit;
         $ids = trim($_POST['ids'] ?? '[]');
         $updatedBy = strval($userId); // system_parameters.updated_by 是 varchar(50)
         try {
@@ -3158,10 +3166,9 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}.for
   <div id="sub-proddept" class="sub-pane">
     <div class="setting-card" style="max-width:600px;">
       <h5><i class="fa fa-building" style="color:var(--accent);margin-right:6px;"></i>生產單位設定
-        <small class="text-muted" style="font-size:12px;font-weight:400;">勾選後，KPI 人員彙總與篩選僅顯示這些部門的成員</small>
+        <small class="text-muted" style="font-size:12px;font-weight:400;">KPI 人員彙總與篩選只顯示這些部門的成員；部門由「組織角色綁定設定」統一維護</small>
       </h5>
       <div id="prod-dept-list" style="min-height:100px;"><div style="text-align:center;padding:20px;color:#aaa;"><i class="fa fa-spinner fa-spin"></i></div></div>
-      <button class="btn btn-success" id="btn-save-prod-depts" style="margin-top:12px;font-weight:600;"><i class="fa fa-save"></i> 儲存生產單位設定</button>
     </div>
   </div>
 
@@ -5559,17 +5566,18 @@ function loadProdDepts(){
     });
 }
 function renderProdDeptList(){
+    // 2026-08-03 起生產部門由全站「組織角色綁定設定」決定（含子部門），本頁只顯示不提供設定
     var depts = <?php echo json_encode($dept_list); ?>;
-    var h='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;">';
-    depts.forEach(function(d){
-        var dId = parseInt(d.id);
-        var chk = prodDeptIds.some(function(v){ return parseInt(v)===dId; });
-        h+='<label style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:#f8f9fc;border-radius:6px;border:1px solid var(--border);cursor:pointer;font-weight:600;font-size:13px;">'
-          +'<input type="checkbox" value="'+d.id+'" '+(chk?'checked ':'')+'style="cursor:pointer;">'
-          +d.name+'</label>';
-    });
-    h+='</div>';
-    $('#prod-dept-list').html(h);
+    var names = depts.filter(function(d){
+        return prodDeptIds.some(function(v){ return parseInt(v)===parseInt(d.id); });
+    }).map(function(d){ return d.name; });
+    $('#prod-dept-list').html(
+        '<div style="padding:10px 12px;background:#FDF8EF;border:1px solid #E8D5B5;border-radius:6px;color:#5b3a1e;">'
+      + (names.length ? '目前認列的生產單位：<b>'+names.join('、')+'</b>'
+                      : '<span style="color:#DD5138;">尚未設定生產部門</span>')
+      + '<div style="font-size:12px;color:#8a6d45;margin-top:6px;">此項目已統一由'
+      + '<a href="../admin/org_role_setting.php" target="_blank"><b>組織角色綁定設定</b></a>'
+      + '的「生產部門」決定（含其子部門，例：生產部＋生產1/2/3廠），在本頁不再重複設定。</div></div>');
     applyProdFilter();
 }
 function saveProdDepts(){

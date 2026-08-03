@@ -482,7 +482,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="cfg-pane" id="cfgStaff" style="display:none;">
 <div class="m-body">
         <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;line-height:1.7;">
-            候選名單＝<b>品管部門（含子部門）</b>底下<b>未離職</b>人員，依職稱排序（名單已限定在該部門，故不另列部門與職稱欄）；品管部門沿用「異常單處置決策設定」已設定的部門，本頁不另設一份。<br>
+            候選名單＝<b>品管部門（含子部門）</b>底下<b>未離職</b>人員，依職稱排序（名單已限定在該部門，故不另列部門與職稱欄）；品管部門一律沿用全站「組織角色綁定設定」的<b>品管部門</b>（含子部門），本頁不另設一份。<br>
             勾選者才會出現在「內校」的校驗人員下拉。長期請假（留職停薪／育嬰留停等）者會標記假別與期間，請自行判斷是否勾選。
         </div>
         <div id="staffHint" style="font-size:12px;color:#DD5138;margin-bottom:6px;"></div>
@@ -1480,7 +1480,7 @@ function opRender(boxId){
         if (!STAFF.length){
             h = '<div class="op-warn">尚無具校驗人員資格的人員'
               + ((PERMS && PERMS.canAdmin) ? '，請按工具列「校驗人員資格」設定' : '，請洽管理者設定')
-              + (QC_DEPT_SET ? '' : '；品管部門也尚未設定，請先於「異常單處置決策設定」設定品管部門') + '</div>';
+              + (QC_DEPT_SET ? '' : '；品管部門也尚未設定，請先於「組織角色綁定設定」設定品管部門') + '</div>';
         } else {
             // 名單已限定在品管部門底下，故不顯示部門與職稱（使用者 2026-07-30 指示）；
             // 排序仍依職稱(people_lib)，長期請假者仍標記假別與期間
@@ -1581,7 +1581,7 @@ function loadStaffPane(){
     $.getJSON(API, {action:'staff_candidates'}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         $('#staffHint').text(res.qc_dept_set ? ''
-            : '尚未設定品管部門：請先到「線上檢驗－異常單處置決策設定」設定品管單位部門，這裡才會出現候選人員。');
+            : '尚未設定品管部門：請先到「系統管理－組織角色綁定設定」設定「品管部門」，這裡才會出現候選人員。');
         // 名單已限定在品管部門底下 → 不顯示部門與職稱（仍依職稱排序）
         var h = res.list.map(function(u){
             return '<tr data-id="'+u.id+'"><td style="text-align:left;">'+esc(u.user_cname)+'</td>'

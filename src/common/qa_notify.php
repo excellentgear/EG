@@ -468,7 +468,11 @@ if (!function_exists('eg_qa_decision_setting')) {
                 return $st->fetchColumn();
             } catch (Throwable $e) { return null; }
         };
-        $deptIds = json_decode((string)$get('qa_qc_dept_ids'), true);
+        // 品管部門一律讀全站「組織角色綁定設定」的 qc_dept（含子部門），本模組不再自設一份（2026-08-03）；
+        // 舊 qa_system_settings.qa_qc_dept_ids 只在統一設定尚未綁定時當回退值，避免切換當下出現空窗。
+        require_once __DIR__ . '/org_role_lib.php';
+        $deptIds = eg_org_dept_ids($db, 'qc_dept');
+        if (!$deptIds) $deptIds = json_decode((string)$get('qa_qc_dept_ids'), true);
         $secondary = json_decode((string)$get('qa_secondary_deciders'), true);
         return [
             'qc_dept_ids' => is_array($deptIds) ? array_values(array_map('intval', $deptIds)) : [],

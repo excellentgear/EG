@@ -1027,7 +1027,9 @@ try {
                              fn($v) => $v > 0 && $v !== $primary && $v !== $final)) : [];
             $sv = $db->prepare("INSERT INTO qa_system_settings (setting_key, setting_value, updated_by) VALUES (?,?,?)
                                 ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value), updated_by=VALUES(updated_by), updated_at=NOW()");
-            $sv->execute(['qa_qc_dept_ids', json_encode($qcDepts), $userId]);
+            // 品管部門已移到全站「組織角色綁定設定」(views/admin/org_role_setting.php 的 qc_dept)，
+            // 本頁不再寫入 qa_qc_dept_ids，避免兩處設定打架（2026-08-03）。
+            unset($qcDepts);
             $sv->execute(['qa_primary_decider', (string)$primary, $userId]);
             $sv->execute(['qa_final_decider', (string)$final, $userId]);
             $sv->execute(['qa_secondary_deciders', json_encode($secondary), $userId]);
