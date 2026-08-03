@@ -791,8 +791,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         /* 畫面內容一律 display:none，**不可用 visibility:hidden**——後者被藏起來的元素仍佔版面高度，
            文件會比實際內容高出一大截，末尾就多印一頁全白的紙（2026-08-03 修） */
         body > *:not(#print-area) { display:none !important; }
-        #print-area { display:block; position:static; width:auto; color:#000; font-size:12px;
+        #print-area { display:block; position:static; width:auto; color:#000; font-size:12px; line-height:1.15;
                       padding:10mm 8mm 6mm; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+        /* 表格內換行/多行文字（量具三行、公差上下限、檢驗項目名稱過長換行、備註…）一律緊貼成一行的行距，
+           不要吃到 bootstrap body 的 line-height:1.42857（那是多行文字看起來一行一大格空白的根因） */
+        #print-area table.pr-items, #print-area table.pr-items * { line-height:1.15; }
         #print-area > *:last-child { margin-bottom:0; }
         /* 大標題＝本公司全名（動態取，禁寫死）；副標題＝綁定 AS 文件的表單名稱 */
         #print-area .pr-co { text-align:center; font-size:22px; font-weight:bold; letter-spacing:1px; }
@@ -801,11 +804,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         #print-area .pt-foot { position:fixed; right:8mm; bottom:5mm; font-size:9pt; color:#333; }
         #print-area table.pr-items th.c-tool, #print-area table.pr-items td.c-tool { width:66px; }
         /* 量具格：三行＝量具類別／量具規格／量具編號，字自動縮小、每行都完整顯示（不截字） */
-        #print-area .tool2 { font-size:8.5px; line-height:1.2; word-break:break-all; white-space:normal; }
+        #print-area .tool2 { font-size:8.5px; line-height:1.15; word-break:break-all; white-space:normal; }
         #print-area .tool2 span { display:block; }
         #print-area .c-tol .lo { display:block; }
         #print-area table.pr-items th.c-no { width:34px; }
         #print-area table.pr-items th.c-std, #print-area table.pr-items th.c-tol { width:56px; }
+        #print-area .pr-meta, #print-area .pr-meta * { line-height:1.15; }
         #print-area .pr-meta { width:100%; border-collapse:collapse; margin-bottom:6px; }
         #print-area .pr-meta td { border:1px solid #000; padding:3px 6px; }
         #print-area .pr-meta .k { background:#f0f0f0; font-weight:bold; white-space:nowrap; width:70px; }

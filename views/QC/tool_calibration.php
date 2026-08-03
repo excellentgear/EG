@@ -614,6 +614,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-body" id="hisBody" style="font-size:13px;color:#5b3a1e;"></div>
 </div></div>
 
+<!-- 使用紀錄 modal（此量具反查用在哪些檢驗單） -->
+<div class="tc-mask" id="useMask"><div class="tc-modal wide">
+    <div class="m-head"><span id="useTitle">使用紀錄</span><span class="m-close" onclick="closeMask('useMask')">✕</span></div>
+    <div class="m-body" id="useBody" style="font-size:13px;color:#5b3a1e;"></div>
+</div></div>
+
 <!-- 角色說明 modal -->
 <div class="tc-mask" id="helpMask"><div class="tc-modal">
     <div class="m-head"><span>角色權限說明</span><span class="m-close" onclick="closeMask('helpMask')">✕</span></div>
@@ -823,6 +829,7 @@ function renderTable(){
                         : '<span class="tc-op disabled"><i class="fa fa-pencil"></i>登錄</span>';
         html += canAdmin ? '<span class="tc-op" onclick="openSet('+r.Tool_id+')"><i class="fa fa-gear"></i>設定</span>' : '';
         html += '<span class="tc-op" onclick="openHis('+r.Tool_id+')"><i class="fa fa-history"></i>歷史</span>';
+        html += '<span class="tc-op" onclick="openUse('+r.Tool_id+')"><i class="fa fa-search"></i>使用紀錄</span>';
         html += '</td></tr>';
     });
     $('#tcBody').html(html || '<tr><td colspan="10" style="padding:16px;color:#8a6d45;">無符合條件的儀器</td></tr>');
@@ -1143,6 +1150,31 @@ function delCalib(cid){
         if (!res.ok){ alert(res.error||'刪除失敗'); return; }
         closeMask('hisMask'); loadList();
     }, 'json');
+}
+
+/* ---------- 使用紀錄（此量具反查用在哪些檢驗單，資料來自 qc_measurement.tool_id）---------- */
+function openUse(tid){
+    $.getJSON(API, {action:'usage_history', tool_id:tid}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        $('#useTitle').text('使用紀錄：'+res.tool.Tool_No+'（'+(res.tool.category_name||'')+'）');
+        if (!res.list.length){ $('#useBody').html('<div style="color:#8a6d45;padding:12px;">此量具尚未用於任何檢驗紀錄</div>'); openMask('useMask'); return; }
+        var h = '<div style="color:#8a6d45;margin-bottom:6px;">共 '+res.list.length+' 筆檢驗紀錄使用過此量具</div>'
+              + '<table class="hist"><thead><tr><th>檢驗日期</th><th>料號</th><th>製程</th>'
+              + '<th>測項數</th><th>整體判定</th><th>檢驗人員</th></tr></thead><tbody>';
+        res.list.forEach(function(a){
+            h += '<tr>';
+            h += '<td>'+fmtDate(a.check_date)+'</td>';
+            h += '<td class="t-left">'+esc(a.part_no||'—')+'</td>';
+            h += '<td class="t-left">'+esc(a.process_name||'—')+'</td>';
+            h += '<td>'+a.item_count+'</td>';
+            h += '<td>'+(a.check_result==='NG' ? '<span style="color:#DD5138;">不良</span>' : '<span style="color:#8A5A2B;">合格</span>')+'</td>';
+            h += '<td>'+esc(a.creator_name||'')+'</td>';
+            h += '</tr>';
+        });
+        h += '</tbody></table>';
+        $('#useBody').html(h);
+        openMask('useMask');
+    });
 }
 
 /* ================= 批次校驗（外校/廠內批量校驗：一次多支＋共用報告附件） ================= */

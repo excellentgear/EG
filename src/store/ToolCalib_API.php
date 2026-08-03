@@ -693,6 +693,41 @@ case 'history': {
           'list'=>$list, 'can_delete'=>$perms['canAdmin']]);
 }
 
+/* ---------- 使用紀錄（此量具反查用於哪些檢驗單；資料來自 qc_measurement.tool_id，見 CLAUDE.md 量具規格說明） ---------- */
+case 'usage_history': {
+    $tid = (int)($_GET['tool_id'] ?? 0);
+    $t = tc_get_tool($db, $tid);
+    if (!$t) jerr('找不到量具');
+    $st = $db->prepare("SELECT f.qc_form_id, f.check_date, f.created_at, f.process_name, f.check_result, f.created_by,
+                               ds.D_Setting_Id AS part_no,
+                               COUNT(DISTINCT m.item_id) AS item_count
+                        FROM qc_measurement m
+                        JOIN qc_check_form f ON f.qc_form_id = m.qc_form_id
+                        LEFT JOIN d_setting ds ON ds.d_id = f.d_id
+                        WHERE m.tool_id = ?
+                        GROUP BY f.qc_form_id, f.check_date, f.created_at, f.process_name, f.check_result, f.created_by, ds.D_Setting_Id
+                        ORDER BY COALESCE(f.check_date, f.created_at) DESC, f.qc_form_id DESC
+                        LIMIT 200");
+    $st->execute([$tid]);
+    $list = $st->fetchAll(PDO::FETCH_ASSOC);
+    $names = [];
+    if ($list) {
+        $ids = array_unique(array_column($list, 'created_by'));
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $ns = $db->prepare("SELECT id, COALESCE(NULLIF(user_cname,''), user_uname) AS nm FROM user WHERE id IN ($in)");
+        $ns->execute(array_values($ids));
+        foreach ($ns->fetchAll(PDO::FETCH_ASSOC) as $n) $names[$n['id']] = $n['nm'];
+    }
+    foreach ($list as &$r) {
+        $r['check_date'] = $r['check_date'] ?: substr((string)$r['created_at'], 0, 10);
+        $r['creator_name'] = $names[$r['created_by']] ?? $r['created_by'];
+        $r['item_count'] = (int)$r['item_count'];
+        unset($r['created_at'], $r['created_by']);
+    }
+    unset($r);
+    jout(['tool' => ['Tool_No' => $t['Tool_No'], 'category_name' => $t['category_name']], 'list' => $list]);
+}
+
 /* ---------- 刪除校驗紀錄（管理員；修正誤登） ---------- */
 case 'delete_calib': {
     if (!$perms['canAdmin']) jerr('無刪除權限', 403);
