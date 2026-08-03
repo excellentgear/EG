@@ -2343,10 +2343,17 @@ if ($reply_id != "") {
                     return;
                 }
 
-                // 從 allRawData 找到此筆資料
+                // 從 allRawData 找到此筆資料；若不在目前列表上（例如透過「新增報工（未在列表上）」
+                // 加入、尚未出現在待驗清單的項目），退而找 customBomData.processes
+                // （該筆最後一次查詢 BOM 時取得的製程資料，仍存於記憶體中）
                 var item = (window.allRawData || []).find(function(d) {
                     return String(d.bom_ing_fid) === String(bomIngFid);
                 });
+                if (!item && window.customBomData && window.customBomData.processes) {
+                    item = window.customBomData.processes.find(function(d) {
+                        return String(d.bom_ing_fid) === String(bomIngFid);
+                    });
+                }
                 if (!item) {
                     alert('找不到資料，請重新整理頁面');
                     return;
