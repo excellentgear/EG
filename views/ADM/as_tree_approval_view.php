@@ -80,11 +80,12 @@ body{font-family:"Microsoft JhengHei",sans-serif;background:#faf6ef;color:#3b2f2
 .p-title{font-size:16px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:8px;}
 .p-boxes{font-size:13px;margin:10px 0 4px;}
 .p-box{margin-right:16px;}
-table.p-tb{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:4px;}
+table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;margin-bottom:4px;}
+table.p-tb td{word-wrap:break-word;overflow-wrap:anywhere;}
 table.p-tb th,table.p-tb td{border:1px solid #999;padding:3px 5px;text-align:center;}
 table.p-tb thead th{background:#f3ead6;}
 table.p-tb td.tl{text-align:left;}
-.p-sign{display:flex;gap:28px;font-size:13px;margin-bottom:14px;}
+.p-sign{display:flex;justify-content:center;gap:75px;font-size:13px;margin-bottom:14px;}
 .bar{background:#fdf3e3;border:1px solid #e7cfa5;border-radius:4px;padding:8px 10px;margin-bottom:12px;font-size:13px;}
 .b-ok{background:#F0A24B;border:0;color:#fff;padding:6px 18px;border-radius:4px;font-weight:bold;}
 .b-no{background:#DD5138;border:0;color:#fff;padding:6px 18px;border-radius:4px;font-weight:bold;}
@@ -118,8 +119,9 @@ table.p-tb td.tl{text-align:left;}
       <?php foreach ($levels as $l): ?><span class="p-box"><?= $l===$lv?'☑':'□' ?><?= tv_esc($l) ?>文件</span><?php endforeach; ?>
     </div>
     <table class="p-tb">
-      <thead><tr><th style="width:6%;">項次</th><th style="width:16%;">文件編號</th><th>文件名稱</th>
-        <th style="width:13%;">制訂單位</th><th style="width:8%;">版本</th><th style="width:13%;">發行日期</th><th style="width:12%;">備註</th></tr></thead>
+      <colgroup><col style="width:6%"><col style="width:18%"><col style="width:30%"><col style="width:14%"><col style="width:7%"><col style="width:13%"><col style="width:12%"></colgroup>
+      <thead><tr><th>項次</th><th>文件編號</th><th>文件名稱</th>
+        <th>制訂單位</th><th>版本</th><th>發行日期</th><th>備註</th></tr></thead>
       <tbody>
       <?php foreach ($rows as $i=>$d): ?>
         <tr><td><?= $i+1 ?></td><td><?= tv_esc($d['doc_no']) ?></td><td class="tl"><?= tv_esc($d['doc_name']) ?></td>
