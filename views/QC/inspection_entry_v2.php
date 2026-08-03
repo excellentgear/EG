@@ -786,11 +786,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         /* @page margin:0 → 瀏覽器沒有空間印它自己的頁首頁尾（網址/日期/標題），版面留白改用 padding
            （ai-rules/16 第四之二節；代價是頁碼得用 position:fixed，單頁表單不印頁碼） */
         @page { size:A4 portrait; margin:0; }
-        body { background:#fff !important; padding-bottom:0 !important; }
-        body * { visibility:hidden; }
-        #print-area, #print-area * { visibility:visible; }
-        #print-area { display:block; position:absolute; left:0; top:0; width:100%; color:#000; font-size:12px;
-                      padding:10mm 8mm 12mm; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+        html, body { height:auto !important; overflow:visible !important; }
+        body { background:#fff !important; padding:0 !important; margin:0 !important; }
+        /* 畫面內容一律 display:none，**不可用 visibility:hidden**——後者被藏起來的元素仍佔版面高度，
+           文件會比實際內容高出一大截，末尾就多印一頁全白的紙（2026-08-03 修） */
+        body > *:not(#print-area) { display:none !important; }
+        #print-area { display:block; position:static; width:auto; color:#000; font-size:12px;
+                      padding:10mm 8mm 6mm; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+        #print-area > *:last-child { margin-bottom:0; }
         /* 大標題＝本公司全名（動態取，禁寫死）；副標題＝綁定 AS 文件的表單名稱 */
         #print-area .pr-co { text-align:center; font-size:22px; font-weight:bold; letter-spacing:1px; }
         #print-area .pr-title { text-align:center; font-size:16px; font-weight:bold; margin:2px 0 6px; }
