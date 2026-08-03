@@ -565,7 +565,8 @@ $('#btnPrint').on('click', function(){
         if (!(res.groups||[]).length) body += '<div style="padding:20px;color:#666;">無符合條件的外來文件</div>';
         // 頁尾走 @page margin box（列印引擎繪製，每頁都有）：右下=AS 文件編號、左下=頁碼（多頁才顯示）
         var asTxt = res.as_doc ? String(res.as_doc.doc_no).replace(/['\\]/g,'') : '';
-        var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        // 左右各留 6mm 安全邊：邊界選「最小值」時 @page 的 10mm 會被覆蓋，最右欄(發行單位)會被印表機不可印區裁掉
+        var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
             + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:6px;margin-bottom:2px;}'
             + '.p-sub{font-size:11px;text-align:center;color:#555;margin-bottom:10px;}'
