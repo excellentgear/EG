@@ -93,12 +93,86 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 
     try {
         $WRITE = ['sym_save', 'sym_delete', 'save_adhoc', 'log_sample_change', 'del_inspection',
-                  'dwg_confirm', 'std_item_save', 'std_item_delete', 'std_version_activate', 'std_version_delete'];
+                  'dwg_confirm', 'std_item_save', 'std_item_delete', 'std_version_activate', 'std_version_delete',
+                  'print_cfg_save'];
         if (in_array($act, $WRITE, true)) {
             $tok = $_POST['csrf'] ?? '';
             if (!is_string($tok) || $tok === '' || !hash_equals((string)($_SESSION['qc_csrf'] ?? ''), $tok)) {
                 throw new Exception('連線憑證失效或不符，請重新整理頁面後再試 (CSRF)');
             }
+        }
+
+        // ---- ⓪ 列印設定：公司全名／AS 文件綁定／主管自動核可（ai-rules/16 列印文件標準）----
+        //   公司全名與 AS 文件編號一律動態取、禁寫死；綁定只存 as_document.id
+        $v2Set = function ($pdo, $k, $d = '') {
+            try {
+                $s = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key=? LIMIT 1");
+                $s->execute([$k]); $v = $s->fetchColumn();
+                return ($v === false || $v === null || $v === '') ? $d : $v;
+            } catch (Exception $e) { return $d; }
+        };
+        if ($act === 'print_cfg_get') {
+            $canCfg = $isAdmin || $hasF('qc_print_approve_setting');
+            $company = '';
+            try {
+                $r = $pdo->query("SELECT customer_full, customer FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+                if ($r) $company = trim((string)($r['customer_full'] ?: $r['customer']));
+            } catch (Exception $e) {}
+            $docId = (int)$v2Set($pdo, 'qc_inspection_as_doc_id', 0);
+            $doc = ['id' => $docId, 'no' => '', 'name' => ''];
+            if ($docId) {
+                try {
+                    $d = $pdo->prepare("SELECT doc_no, doc_name FROM as_document WHERE id=?");
+                    $d->execute([$docId]);
+                    if ($x = $d->fetch(PDO::FETCH_ASSOC)) { $doc['no'] = $x['doc_no']; $doc['name'] = $x['doc_name']; }
+                } catch (Exception $e) {}
+            }
+            // 主管自動核可：勾選後主管審核欄自動蓋章（日期比照檢驗者的簽章日期認定方式）
+            $auto  = (int)$v2Set($pdo, 'qc_auto_approve', 0);
+            $appId = (int)$v2Set($pdo, 'qc_auto_approve_user', 0);
+            $sign  = ['name' => '', 'deputy' => 0];
+            if ($auto && $appId) {
+                $signerId = $appId; $isDep = false;
+                try {
+                    include_once '../../src/common/delegate_lib.php';
+                    // 代理一律走 delegate_lib（ai-rules/11）；本人今日有行程才會解析到代理人
+                    $rs = eg_resolve_signer($pdo, $appId, ['applicant_id' => (int)$uid, 'flow_key' => 'qc_inspection', 'log' => false]);
+                    $signerId = (int)$rs['signer_id']; $isDep = !empty($rs['is_delegated']);
+                } catch (Throwable $e) {}
+                try {
+                    $n = $pdo->prepare("SELECT COALESCE(NULLIF(user_cname,''), user_uname) FROM user WHERE id=?");
+                    $n->execute([$signerId]);
+                    $sign = ['name' => (string)$n->fetchColumn(), 'deputy' => $isDep ? 1 : 0];
+                } catch (Exception $e) {}
+            }
+            $people = [];
+            if ($canCfg) {
+                try {
+                    include_once '../../src/common/people_lib.php';
+                    foreach (eg_people_list($pdo, []) as $p) {
+                        $people[] = ['id' => (int)$p['id'], 'name' => (string)($p['display'] ?? $p['user_cname'])];
+                    }
+                } catch (Throwable $e) {}
+            }
+            echo json_encode(['success' => true, 'company' => $company, 'doc' => $doc,
+                              'auto_approve' => $auto, 'approver_id' => $appId, 'approver' => $sign,
+                              'can_cfg' => $canCfg, 'people' => $people], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'print_cfg_save') {
+            if (!$isAdmin && !$hasF('qc_print_approve_setting')) throw new Exception('您沒有「列印／主管自動核可設定」權限，請洽管理員於 設定 → 權限設定開通');
+            $auto  = (int)($_POST['auto_approve'] ?? 0) ? 1 : 0;
+            $appId = (int)($_POST['approver_id'] ?? 0);
+            if ($auto && !$appId) throw new Exception('勾選自動核可時必須指定核可主管');
+            $up = $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id) VALUES (?,?,?)
+                                 ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value), updated_by_id=VALUES(updated_by_id)");
+            $pdo->beginTransaction();
+            $up->execute(['qc_auto_approve', $auto, (int)$uid]);
+            $up->execute(['qc_auto_approve_user', $appId, (int)$uid]);
+            if (isset($_POST['as_doc_id'])) $up->execute(['qc_inspection_as_doc_id', (int)$_POST['as_doc_id'], (int)$uid]);
+            $pdo->commit();
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
         }
 
         // ---- ① 工程符號主檔 ----
@@ -692,17 +766,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     /* ---------- 列印：正式檢驗表版面（A4，交瀏覽器原生分頁，不用 JS 量高度） ---------- */
     #print-area { display:none; }
     @media print {
-        @page { size:A4 portrait; margin:12mm 10mm; }
+        /* @page margin:0 → 瀏覽器沒有空間印它自己的頁首頁尾（網址/日期/標題），版面留白改用 padding
+           （ai-rules/16 第四之二節；代價是頁碼得用 position:fixed，單頁表單不印頁碼） */
+        @page { size:A4 portrait; margin:0; }
         body { background:#fff !important; padding-bottom:0 !important; }
         body * { visibility:hidden; }
         #print-area, #print-area * { visibility:visible; }
-        #print-area { display:block; position:absolute; left:0; top:0; width:100%; color:#000; font-size:12px; }
-        #print-area .pr-title { text-align:center; font-size:18px; font-weight:bold; margin-bottom:6px; }
-        /* 表單編號移到表尾右下角（比照紙本表單慣例）；量具改印編號，全名放對照列，省欄寬 */
-        #print-area .pr-foot { margin-top:8px; font-size:11px; overflow:hidden; }
-        #print-area .pr-foot .fno { float:right; }
-        #print-area .pr-tools { font-size:11px; margin-top:4px; line-height:1.5; }
-        #print-area table.pr-items th.c-tool, #print-area table.pr-items td.c-tool { width:62px; font-size:11px; }
+        #print-area { display:block; position:absolute; left:0; top:0; width:100%; color:#000; font-size:12px;
+                      padding:10mm 8mm 12mm; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+        /* 大標題＝本公司全名（動態取，禁寫死）；副標題＝綁定 AS 文件的表單名稱 */
+        #print-area .pr-co { text-align:center; font-size:22px; font-weight:bold; letter-spacing:1px; }
+        #print-area .pr-title { text-align:center; font-size:16px; font-weight:bold; margin:2px 0 6px; }
+        /* AS 文件編號：每頁固定右下角 */
+        #print-area .pt-foot { position:fixed; right:8mm; bottom:5mm; font-size:9pt; color:#333; }
+        #print-area table.pr-items th.c-tool, #print-area table.pr-items td.c-tool { width:66px; }
+        /* 量具格：上＝檢具類型、下＝量具編號，字自動縮小且最多兩列 */
+        #print-area .tool2 { font-size:9px; line-height:1.15; word-break:break-all;
+                             display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; max-height:2.3em; }
+        #print-area .tool2 b { font-weight:normal; display:block; }
+        #print-area .c-tol .lo { display:block; }
         #print-area table.pr-items th.c-no { width:34px; }
         #print-area table.pr-items th.c-std, #print-area table.pr-items th.c-tol { width:56px; }
         #print-area .pr-meta { width:100%; border-collapse:collapse; margin-bottom:6px; }
@@ -715,7 +797,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         #print-area table.pr-items tr { page-break-inside:avoid; }
         #print-area .pr-ng { color:#000; font-weight:bold; text-decoration:underline; }
         #print-area .pr-sign { margin-top:14px; width:100%; border-collapse:collapse; }
-        #print-area .pr-sign td { border:1px solid #000; padding:14px 6px 4px; text-align:center; vertical-align:bottom; height:46px; }
+        #print-area .pr-sign td { border:1px solid #000; padding:6px 6px 4px; text-align:center; vertical-align:bottom; height:92px; width:50%; }
         #print-area .pr-sign .lbl { font-size:11px; color:#333; }
         #dock,#keypad { display:none !important; }
     }
@@ -744,6 +826,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                                 <li><a href="drawing_change_log.php" target="_blank"><i class="fa fa-exchange"></i> 圖面變更紀錄（AS 2-PD-01-07）</a></li>
                                 <li class="sampling-menu-item" style="display:none;"><a href="#" id="btn-sampling-setting"><i class="fa fa-list-ol"></i> 抽樣規則設定</a></li>
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-qadept-setting"><i class="fa fa-sitemap"></i> 異常單回覆部門設定</a></li>
+                                <li class="approve-menu-item" style="display:none;"><a href="#" id="btn-approve-setting"><i class="fa fa-check-square-o"></i> 主管審核自動核可設定</a></li>
                                 <li><a href="#" id="btn-qadecide-setting"><i class="fa fa-gavel"></i> 異常單處置決策設定</a></li>
                                 <li class="divider"></li>
                                 <li><a href="#" id="btn-perm-setting"><i class="fa fa-key"></i> 權限設定（角色）</a></li>
@@ -1208,6 +1291,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     </div></div>
 </div>
 
+<!-- 主管審核自動核可設定 Modal（權限：qc_print_approve_setting，管理員固定可用） -->
+<div class="modal fade" id="approveCfgModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header" style="background:#F0A24B;color:#4A3524;border-radius:6px 6px 0 0;">
+            <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+            <h4 class="modal-title"><i class="fa fa-check-square-o"></i> 主管審核自動核可設定</h4></div>
+        <div class="modal-body">
+            <p class="muted-help">勾選後，列印的檢驗記錄表「主管審核」欄會自動蓋上指定主管的簽章；
+               簽章日期比照檢驗者的認定方式（已存檔的紀錄用<b>檢驗日</b>、尚未存檔用<b>列印日</b>）。
+               若當日該主管已由代理人代理，系統會自動改蓋代理人的章，並在章的右下角加「<b>代</b>」字。</p>
+            <label style="font-weight:normal;"><input type="checkbox" id="ac-on"> 啟用主管審核自動核可</label>
+            <div class="form-group" style="margin-top:8px;">
+                <label>核可主管</label>
+                <select id="ac-user" class="form-control input-sm"></select>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-warning" id="ac-save"><i class="fa fa-save"></i> 儲存</button>
+        </div>
+    </div></div>
+</div>
+
 <!-- 量具設定 Modal（種類 + 編號；與 inspection_standard_setting.php 共用資料表） -->
 <div class="modal fade" id="toolManageModal" tabindex="-1" role="dialog">
     <div class="modal-dialog modal-lg"><div class="modal-content">
@@ -1339,6 +1445,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <?php include '../QA/qa_abnormal_modal.php'; // 共用「開立品質異常單」跳窗元件（QAAbnormalModal） ?>
 
 <!-- 異常單回覆部門設定 Modal（自 IR_Track 移入 2026-07-06；開單跳窗的「回覆部門」清單來源） -->
@@ -1812,6 +1919,15 @@ $(function(){
     //   ★ 三種檢視都只是這份模型的不同畫法，切換檢視不會遺失任何已填內容。
     // =====================================================================
     var ctx = null;
+    // 列印設定（公司全名／AS 文件／主管自動核可）：頁面載入時取一次，列印與設定跳窗共用
+    var PRINTCFG = { company:'', doc:{no:'',name:''}, auto_approve:0, approver_id:0, approver:{name:'',deputy:0}, can_cfg:false, people:[] };
+    function loadPrintCfg(cb){
+        $.post(V2API, { v2action:'print_cfg_get' }, function(res){
+            if(res && res.success){ PRINTCFG=res; window.__ownCompany=res.company||''; }
+            $('.approve-menu-item').toggle(!!(res&&res.can_cfg));
+            if(cb) cb();
+        },'json');
+    }
     var state = { sampleN:5, batches:[], curBatch:0, processes:[], curProc:0, demo:false,
                   is_supervisor:false, can_fill:true, canManageSettings:false, canManageSampling:false,
                   canView:true, editFormId:null, draftFormId:0 };
@@ -2828,6 +2944,7 @@ $(function(){
         }
     }, 'json');
     loadToolInstances();
+    loadPrintCfg();
     loadSymbols();
     applyKeypad();
 
@@ -3336,6 +3453,8 @@ $(function(){
             if(!res.can_edit){ alert('此筆已鎖定，請主管先開放修改。'); return; }
             var h=res.header;
             state.editFormId=qcFormId;
+            // 列印簽章用：已存檔紀錄的簽章日期＝檢驗日、檢驗員＝存檔者
+            state.editMeta={ check_date:h.check_date||'', creator_name:h.creator_name||'' };
             state.sampleN=h.sample_qty||state.sampleN;
             $('#inp-qty').val(h.incoming_qty||0);
             $('#inp-sample').val(state.sampleN);
@@ -3356,7 +3475,7 @@ $(function(){
         },'json').fail(function(x){ alert('載入錯誤：'+x.responseText); });
     }
     function exitEditMode(){
-        state.editFormId=null;
+        state.editFormId=null; state.editMeta=null;
         $('#edit-mode-banner').hide();
         $('#chk-save-std').prop('checked',true).closest('label').show();
         $('#btn-save').html('<i class="fa fa-save"></i> 儲存檢驗結果');
@@ -3727,23 +3846,29 @@ $(function(){
                  sample:parseInt($('#inp-sample').val())||0, remark:$('#inp-remark').val()||'',
                  judge:(MODEL.items.length && ngPcs>0)?'不良':'合格', ng:ngPcs };
     }
+    // 簽章日期：已存檔的紀錄一律用「檢驗日」，尚未存檔的現場列印才用今天（使用者 2026-08-03 定案）
+    function printSignDate(){
+        var cd = state.editMeta && state.editMeta.check_date;
+        if(cd) return String(cd).substring(0,10);
+        var now=new Date(), pad=function(x){ return ('0'+x).slice(-2); };
+        return now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate());
+    }
     function buildPrintHtml(){
         var m=currentMeta(), items=collectItems(), n=state.sampleN;
-        var now=new Date(), pad=function(x){ return ('0'+x).slice(-2); };
-        var dateStr=now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate());
-        var head='<div class="pr-title">品管檢驗記錄表</div>'+
+        var dateStr=printSignDate();
+        // 大標題＝本公司全名、副標題＝綁定 AS 文件的表單名稱（皆動態取，禁寫死；ai-rules/16）
+        var head='<div class="pr-co">'+esc(PRINTCFG.company||'')+'</div>'+
+            '<div class="pr-title">'+esc((PRINTCFG.doc&&PRINTCFG.doc.name)||'檢驗記錄表')+'</div>'+
             '<table class="pr-meta"><tr>'+
-            '<td class="k">料號</td><td>'+esc(m.part)+'</td><td class="k">客戶</td><td>'+esc(m.client)+'</td><td class="k">製令/BOM</td><td>'+esc(m.bom)+'</td></tr>'+
-            '<tr><td class="k">製程</td><td>'+esc(m.process)+'</td><td class="k">送驗數</td><td>'+m.incoming+'</td><td class="k">抽驗數</td><td>'+m.sample+'</td></tr>'+
-            '<tr><td class="k">日期</td><td>'+dateStr+'</td><td class="k">整體判定</td><td>'+m.judge+'（不良 '+m.ng+'）</td><td class="k">備註</td><td>'+esc(m.remark)+'</td></tr></table>';
+            '<td class="k">料號</td><td>'+esc(m.part)+'</td><td class="k">客戶</td><td>'+esc(m.client)+'</td><td class="k">日期</td><td>'+dateStr+'</td></tr>'+
+            '<tr><td class="k">製令/BOM</td><td>'+esc(m.bom)+'</td><td class="k">製程</td><td>'+esc(m.process)+'</td><td class="k">送驗數</td><td>'+m.incoming+'</td></tr>'+
+            '<tr><td class="k">抽驗數</td><td>'+m.sample+'</td><td class="k">整體判定</td><td>'+m.judge+'（不良 '+m.ng+'）</td><td class="k">備註</td><td>'+esc(m.remark)+'</td></tr></table>';
         var pcsHead=''; for(var i=1;i<=n;i++) pcsHead+='<th>'+i+'</th>';
-        // 量具欄只印「編號」，全名（類型/量程）集中放表格下方對照列 → 大幅省下欄寬
-        var usedTools={};
+        // 量具格：上＝檢具類型、下＝量具編號（字自動縮小、最多兩列），不再另印表格下方的量具對照列
         var toolNoOf=function(id){
             var t=toolInstById(id);
             if(!t) return '';
-            usedTools[t.id]=t;
-            return t.no;
+            return '<div class="tool2"><b>'+esc(t.cat||'')+'</b>'+esc(toolNoSpec(t))+'</div>';
         };
         var body='';
         items.forEach(function(it,idx){
@@ -3757,29 +3882,24 @@ $(function(){
                     cells+='<td'+((sv&&sv.r==='NG'&&v!=='')?' class="pr-ng"':'')+'>'+esc(v)+'</td>';
                 }
                 body+='<tr>'+
-                    (ri===0?('<td rowspan="'+readings.length+'">'+codeLabel(idx)+'</td><td rowspan="'+readings.length+'" style="text-align:left">'+esc(it.name)+'</td><td rowspan="'+readings.length+'">'+esc(it.std||'')+'</td><td rowspan="'+readings.length+'">'+esc((it.up||'')+(it.lo?(' / '+it.lo):''))+'</td>'):'')+
-                    '<td class="c-tool">'+esc(rd.tool||'')+'</td>'+cells+
+                    (ri===0?('<td rowspan="'+readings.length+'">'+codeLabel(idx)+'</td><td rowspan="'+readings.length+'" style="text-align:left">'+esc(it.name)+'</td><td rowspan="'+readings.length+'">'+esc(it.std||'')+'</td><td class="c-tol" rowspan="'+readings.length+'">'+esc(it.up||'')+(it.lo?('<span class="lo">'+esc(it.lo)+'</span>'):'')+'</td>'):'')+
+                    '<td class="c-tool">'+(rd.tool||'')+'</td>'+cells+
                     (ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'NG':'OK')+'</td>'):'')+'</tr>';
                 if(ri===0 && it.remark) body+='<tr><td colspan="'+(5+n)+'" style="text-align:left;font-size:11px">備註：'+esc(it.remark)+'</td></tr>';
             });
         });
         var tbl='<table class="pr-items"><thead><tr><th class="c-no">編號</th><th>檢驗項目</th><th class="c-std">標準</th>'+
-                '<th class="c-tol">公差</th><th class="c-tool">量具編號</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>'+body+'</tbody></table>';
-        // 量具對照（可追溯：編號 ＝ 類型(規格)）
-        var tk=Object.keys(usedTools);
-        var toolLegend = tk.length
-            ? '<div class="pr-tools"><b>量具對照：</b>'+tk.map(function(k){
-                  var t=usedTools[k]; return esc(t.no)+'＝'+esc((t.cat||'')+(t.spec?'('+t.spec+')':''));
-              }).join('　｜　')+'</div>'
-            : '';
-        var insp = <?php echo json_encode($CURRENT_CNAME, JSON_UNESCAPED_UNICODE); ?>;
+                '<th class="c-tol">公差</th><th class="c-tool">量具</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>'+body+'</tbody></table>';
+        // 簽章：印章本身自帶日期（故不再另設日期欄）；代理人代簽由 EGStamp 於右下角加「代」字
+        var insp = (state.editMeta && state.editMeta.creator_name) || <?php echo json_encode($CURRENT_CNAME, JSON_UNESCAPED_UNICODE); ?>;
+        var appr = (PRINTCFG.auto_approve && PRINTCFG.approver && PRINTCFG.approver.name)
+                 ? EGStamp.stamp(PRINTCFG.approver.name, dateStr, !!PRINTCFG.approver.deputy) : '';
         var sign='<table class="pr-sign"><tr>'+
-                 '<td>'+esc(insp)+'<div class="lbl">檢驗員 Inspector</div></td>'+
-                 '<td><div class="lbl">主管審核 Approved</div></td>'+
-                 '<td>'+dateStr+'<div class="lbl">日期 Date</div></td></tr></table>';
-        // 表單編號改放表尾右下角（比照紙本表單慣例）
-        var foot='<div class="pr-foot"><span class="fno">表單編號 2-QA-01-06（線上檢驗系統列印）</span></div>';
-        return head+tbl+toolLegend+sign+foot;
+                 '<td>'+EGStamp.stamp(insp, dateStr, false)+'<div class="lbl">檢驗員 Inspector</div></td>'+
+                 '<td>'+appr+'<div class="lbl">主管審核 Approved</div></td></tr></table>';
+        // AS 文件編號：每頁右下角，只印編號（ai-rules/16 第三節）
+        var dno=(PRINTCFG.doc&&PRINTCFG.doc.no)||'';
+        return head+tbl+sign+(dno?'<div class="pt-foot">'+esc(dno)+'</div>':'');
     }
     $('#btn-print').on('click', function(){
         if(!ctx){ alert('請先由待驗清單開啟一筆檢驗再列印。'); return; }
@@ -3822,7 +3942,8 @@ $(function(){
         { code:'qc_manage_sampling',   label:'抽樣規則設定（主管「修改/開放檢驗歷程」固定可用；此處可另單獨授權）' },
         { code:'qc_view_readonly',     label:'唯讀檢閱（僅可檢視檢驗表與異常單，不可修改/開單）' },
         { code:'qa_disposition_reply', label:'勾選 / 回覆異常單「異常處置方式、處置說明」' },
-        { code:'qc_supervisor',        label:'認定為主管（收到並核准異常單修改請求、可直接修改異常單；與管理員不同）' }
+        { code:'qc_supervisor',        label:'認定為主管（收到並核准異常單修改請求、可直接修改異常單；與管理員不同）' },
+        { code:'qc_print_approve_setting', label:'列印：主管審核自動核可設定（可指定核可主管）' }
     ];
     var QC_CODES = QC_FEATURES.map(function(f){ return f.code; });
     var _permRole = null, _permRoleCur = [], _permRolesData = [], _permRoleName = '', _permRoleSys = false;
@@ -3922,6 +4043,25 @@ $(function(){
             if(!res.success){ alert('儲存失敗：'+(res.message||'')); return; }
             alert('角色權限已儲存。'); _permRoleCur=merged;
         },'json').fail(function(x){ alert('儲存錯誤：'+x.responseText); });
+    });
+
+    // ============ 設定：主管審核自動核可 ============
+    $('#btn-approve-setting').on('click', function(e){
+        e.preventDefault();
+        loadPrintCfg(function(){
+            $('#ac-on').prop('checked', !!(PRINTCFG.auto_approve|0));
+            $('#ac-user').html('<option value="">（請選擇）</option>'+(PRINTCFG.people||[]).map(function(p){
+                return '<option value="'+p.id+'"'+(p.id==PRINTCFG.approver_id?' selected':'')+'>'+esc(p.name)+'</option>';
+            }).join(''));
+            $('#approveCfgModal').modal('show');
+        });
+    });
+    $('#ac-save').on('click', function(){
+        $.post(V2API,{ v2action:'print_cfg_save', csrf:CSRF, auto_approve:$('#ac-on').is(':checked')?1:0,
+                       approver_id:$('#ac-user').val()||0 }, function(res){
+            if(!res.success){ alert(res.message||'儲存失敗'); return; }
+            $('#approveCfgModal').modal('hide'); loadPrintCfg();
+        },'json').fail(function(x){ alert('儲存失敗：'+x.responseText); });
     });
 
     // ============ 設定：量具設定（種類/編號 CRUD、取代刪除） ============

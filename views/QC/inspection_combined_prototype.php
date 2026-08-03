@@ -617,6 +617,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'process_name'=>$form['process_name'], 'main_remark'=>$form['main_remark'],
                     'pcs_verdicts'=>(is_array($pv = json_decode($form['pcs_verdicts'] ?? '[]', true)) ? $pv : []),
                     'edit_unlocked'=>(int)$form['edit_unlocked'],
+                    // 列印簽章用：已存檔紀錄的簽章日期＝檢驗日，簽章人＝存檔者（v2 列印版）
+                    'check_date'=>$form['check_date'] ?? ($form['created_at'] ?? ''),
+                    'created_by'=>$form['created_by'] ?? '',
+                    'creator_name'=>(function() use ($pdo, $form) {
+                        try {
+                            $q = $pdo->prepare("SELECT COALESCE(NULLIF(user_cname,''), user_uname) FROM user WHERE id=?");
+                            $q->execute([(int)$form['created_by']]);
+                            return (string)($q->fetchColumn() ?: '');
+                        } catch (Exception $e) { return ''; }
+                    })(),
                     'last_edited_by'=>$form['last_edited_by'], 'last_edited_at'=>$form['last_edited_at'],
                     'ncr_decision'=>$form['ncr_decision'] ?? null,
                     'abnormal_order_id'=>isset($form['abnormal_order_id']) ? (int)$form['abnormal_order_id'] : 0,
