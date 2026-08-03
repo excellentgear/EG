@@ -148,6 +148,25 @@ switch ($action) {
     }
 
     // ── 下載備份檔 ──────────────────────────────────────────────────────────
+    // 新機器還原前置腳本（建 DB＋建帳號＋授權）。舊備份沒有這個檔就現算一份給他，
+    // 內容只跟目前設定有關、不含任何資料，隨時重產都正確。
+    case 'download_setup': {
+        $id = (int)($_GET['id'] ?? 0);
+        $st = $pdo->prepare("SELECT filename FROM db_backup_log WHERE id=?"); $st->execute([$id]);
+        $fname = (string)$st->fetchColumn();
+        if ($fname === '') { http_response_code(404); header('Content-Type:text/plain; charset=utf-8'); echo '找不到備份紀錄'; exit; }
+        $abs = BK_DUMPS . '\\' . $fname;
+        $setup = $abs . '.setup.sql';
+        if (!is_file($setup)) eg_bk_write_setup_sql($abs, $fname);
+        if (!is_file($setup)) { http_response_code(500); header('Content-Type:text/plain; charset=utf-8'); echo '前置腳本產生失敗'; exit; }
+        while (ob_get_level() > 0) { @ob_end_clean(); }
+        header('Content-Type: application/sql; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $fname . '.setup.sql"');
+        header('Content-Length: ' . filesize($setup));
+        header('X-Content-Type-Options: nosniff');
+        readfile($setup);
+        exit;
+    }
     case 'download': {
         $id = (int)($_GET['id'] ?? 0);
         $r = eg_bk_resolve_sql($pdo, $id);

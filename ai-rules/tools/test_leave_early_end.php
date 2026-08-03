@@ -32,6 +32,25 @@ function call_api(int $uid, array $req, array $post = []): array {
     return is_array($j) ? $j : ['__raw' => 'no-json'];
 }
 
+/* 共用的 API runner：test_leave_api.php 跑完會把它刪掉，所以每支測試都要自己確保它在。
+   （漏掉這段時，單獨跑會過、批次跑到 test_leave_api 之後就拿不到 JSON。） */
+file_put_contents(__DIR__ . '/_api_runner.php', <<<'PHP'
+<?php
+error_reporting(E_ALL & ~E_NOTICE & ~E_DEPRECATED);
+$_SERVER['DOCUMENT_ROOT'] = 'C:/MAMP/htdocs';
+$_SERVER['REQUEST_METHOD'] = 'POST';
+session_start();
+$_SESSION['id'] = (int)$argv[1];
+$_SESSION['userName'] = 'test';
+$req  = json_decode(base64_decode($argv[2]), true) ?: [];
+$post = json_decode(base64_decode($argv[3]), true) ?: [];
+$_GET = $req; $_POST = $post; $_REQUEST = array_merge($req, $post);
+ob_start();
+include 'C:/MAMP/htdocs/EGsystem/src/store/Leave_API.php';
+$o = ob_get_clean();
+echo $o;
+PHP);
+
 $PAR = $db->query("SELECT * FROM leave_type WHERE leave_name = '育嬰留停' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
 $created = [];
 $stateBefore = (int)$db->query("SELECT state FROM `user` WHERE id = $UID")->fetchColumn();

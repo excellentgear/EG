@@ -32,6 +32,74 @@ if (!defined('BK_MYSQLDUMP')) {
     define('BK_DB_PASS',   'excell30367593');
 }
 
+// ── 新機器還原前置腳本（2026-08-03 新增）──────────────────────────────────
+/**
+ * 產生與 dump 同名的 `<檔名>.setup.sql`：建資料庫、建帳號、給權限。
+ *
+ * 為什麼不直接在 mysqldump 加 --databases（那樣就會自帶 CREATE DATABASE / USE）：
+ *   本模組的「整表還原／部分還原」會把 dump 匯進**暫存預覽庫 egsystem_bkview**，
+ *   dump 裡若有 `USE \`EGsystem\``，那份匯入會直接打進正式庫，等於預覽一下就把
+ *   線上資料蓋掉。所以前置敘述一律獨立成另一個檔，要用的人自己先跑，不會被誤觸。
+ *
+ * 帳號密碼取自本檔的 BK_DB_PASS（與 DBConnection.php 同一組）。這組密碼本來就在
+ * 版控裡，寫進私有備份庫沒有新增暴露面；但這個檔案不要外流。
+ */
+function eg_bk_write_setup_sql(string $dumpAbsPath, string $dumpFilename): ?string {
+    $path = $dumpAbsPath . '.setup.sql';
+    $db   = BK_DB_NAME;
+    $user = BK_DB_USER;
+    $pass = BK_DB_PASS;
+    $esc  = function (string $s) { return str_replace(['\\', "'"], ['\\\\', "\\'"], $s); };
+    $sql  = <<<SQL
+-- ═══════════════════════════════════════════════════════════════════
+--  EGsystem 新機器還原前置腳本（由備份程式自動產生）
+--  對應備份檔：{$dumpFilename}
+--  產生時間：%s
+-- ═══════════════════════════════════════════════════════════════════
+--
+--  【什麼時候要用這個檔】
+--    只有在「全新的機器 / 全新的 MySQL」要還原時才需要先跑這一支。
+--    在原機器上做整庫還原、整表還原、部分還原都**不需要**（那些流程資料庫與帳號都已存在）。
+--
+--  【還原步驟】
+--    1. 安裝 MySQL 9.4 以上（dump 由 9.4 產生，舊版可能吃不下新語法）
+--    2. 用 root 執行本檔：
+--         mysql -u root -p < {$dumpFilename}.setup.sql
+--    3. 再匯入資料本體（這一步要指定資料庫名，因為 dump 本身沒有 USE 敘述）：
+--         mysql -u root -p {$db} < {$dumpFilename}
+--    4. 磁碟上的檔案要另外複製，見本檔最後的說明。
+--
+-- ── 1. 建立資料庫 ──────────────────────────────────────────────────
+CREATE DATABASE IF NOT EXISTS `{$db}`
+  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+
+-- ── 2. 建立應用程式帳號並授權 ──────────────────────────────────────
+--    本機連線（localhost / 127.0.0.1）兩個都建，避免 MySQL 把它們當成不同帳號。
+CREATE USER IF NOT EXISTS '%s'@'localhost' IDENTIFIED BY '%s';
+CREATE USER IF NOT EXISTS '%s'@'127.0.0.1' IDENTIFIED BY '%s';
+GRANT ALL PRIVILEGES ON `{$db}`.* TO '%s'@'localhost';
+GRANT ALL PRIVILEGES ON `{$db}`.* TO '%s'@'127.0.0.1';
+--    整表／部分還原會用到的暫存預覽庫（egsystem_bkview）也要給權限，
+--    否則備份管理頁的「還原前預覽」會失敗。
+CREATE DATABASE IF NOT EXISTS `egsystem_bkview`
+  DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+GRANT ALL PRIVILEGES ON `egsystem_bkview`.* TO '%s'@'localhost';
+GRANT ALL PRIVILEGES ON `egsystem_bkview`.* TO '%s'@'127.0.0.1';
+FLUSH PRIVILEGES;
+
+-- ── 3. 這個備份「沒有」包含的東西（一定要另外處理）────────────────
+--    ★ 磁碟上的檔案：附件、圖檔、批圖工作檔、NAS 上的資料通通不在 dump 裡。
+--      要完整搬機請改用備份管理頁的「🔁 路徑遷移工具」分頁
+--      （src/common/mig_backup_lib.php），那支才會連檔案一起打包。
+--    ★ 除了上面這個應用程式帳號以外的 MySQL 使用者與權限。
+--    ★ 排程／Windows 服務／Apache 與 PHP 設定。
+SQL;
+    $sql = sprintf($sql, date('Y-m-d H:i:s'),
+                   $esc($user), $esc($pass), $esc($user), $esc($pass),
+                   $esc($user), $esc($user), $esc($user), $esc($user));
+    return (@file_put_contents($path, $sql) !== false) ? $path : null;
+}
+
 // ── 設定值存取（db_backup_config 表）────────────────────────────────────────
 function eg_bk_cfg_get(PDO $pdo, string $key, string $default = ''): string {
     try {
@@ -143,6 +211,10 @@ function eg_bk_run(PDO $pdo, string $trigger, string $by): array {
         @unlink($errPath); // 成功時清掉空的 stderr 檔
         $size = filesize($absPath);
 
+        // 新機器還原前置腳本（建 DB＋建帳號＋授權）：與 dump 放在一起、一起進 git 與 NAS
+        $setupPath = eg_bk_write_setup_sql($absPath, $filename);
+        $setupRel  = $setupPath ? (BK_DUMPS_REL . '/' . $filename . '.setup.sql') : '';
+
         // ── 複製到 NAS（best-effort；不可用 is_writable 預檢——Windows UNC 上會誤報，直接嘗試複製）──
         $nas = trim(eg_bk_cfg_get($pdo, 'nas_path', ''));
         $nasNote = '';
@@ -150,6 +222,8 @@ function eg_bk_run(PDO $pdo, string $trigger, string $by): array {
             $nasDir = rtrim($nas, "\\/");
             if (@is_dir($nasDir)) {
                 if (!@copy($absPath, $nasDir . DIRECTORY_SEPARATOR . $filename)) $nasNote = 'NAS 複製失敗';
+                // 前置腳本一起複製；失敗不影響主備份（沒有它只是新機器要多打兩行 SQL）
+                if ($setupPath) @copy($setupPath, $nasDir . DIRECTORY_SEPARATOR . $filename . '.setup.sql');
             } else {
                 $nasNote = 'NAS 路徑不存在';
             }
@@ -157,6 +231,7 @@ function eg_bk_run(PDO $pdo, string $trigger, string $by): array {
 
         // ── git add + commit ──
         eg_bk_git(['add', '--', $relPath]);
+        if ($setupRel !== '') eg_bk_git(['add', '--', $setupRel]);
         [$cc, $cout] = eg_bk_git(['commit', '-m', "backup: {$filename} ({$trigger})"]);
         [, $hash] = eg_bk_git(['rev-parse', 'HEAD']);
         $hash = trim($hash);

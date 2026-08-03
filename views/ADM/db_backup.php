@@ -144,6 +144,23 @@ $roleBadge = $IS_ADMIN ? '管理員' : (empty($myRoleNames) ? '（未指派）' 
       <div style="font-size:12px;color:#9a7b4f;margin-top:8px;">
         <i class="fa fa-info-circle"></i> 備份由「有人開啟頁面」順路觸發：距上次備份達設定間隔才會自動跑；半夜無人使用不備份。備份檔存放在網站目錄之外的私有 Git 備份庫，僅能透過本頁下載。
       </div>
+      <!-- 換新電腦還原的完整說明（2026-08-03 新增）：備份檔本身只有資料庫內容，
+           另外兩件事（建 DB／建帳號、磁碟上的檔案）不講清楚，換機時一定會卡住。 -->
+      <div style="font-size:12.5px;color:#8a5a1a;background:#fdf6ea;border:1px solid #e9c98f;
+                  border-radius:5px;padding:9px 12px;margin-top:8px;">
+        <b><i class="fa fa-exclamation-triangle"></i> 要在「新電腦」還原整套系統時，請注意這三件事：</b>
+        <ol style="margin:6px 0 0 18px;padding:0;">
+          <li>每次備份都會同時產生一個 <b><code>檔名.setup.sql</code></b>（建資料庫＋建帳號＋授權），
+              在新機器上<b>先跑它</b>，再匯入備份本體。下載按鈕在下方清單每一列的
+              <i class="fa fa-download"></i> 旁邊（<i class="fa fa-wrench"></i> 那顆）。</li>
+          <li>匯入資料本體時<b>要指定資料庫名</b>：<code>mysql -u root -p EGsystem &lt; 備份檔.sql</code>。
+              備份檔刻意不含 <code>USE</code> 敘述，否則「還原前預覽」會直接打進正式庫。</li>
+          <li><b>磁碟上的檔案不在備份裡</b>——附件、圖檔、批圖工作檔、NAS 上的資料都不是資料庫內容。
+              要連檔案一起搬，請改用上方的
+              <b>「🔁 路徑遷移工具」</b>分頁，那支才會把檔案一起打包。</li>
+        </ol>
+        還原用的 MySQL 需為 <b>9.4 以上</b>（備份由官方 9.4 產生），不要用 MAMP 內建的 5.7。
+      </div>
     </div>
 
     <!-- GitHub 帳號綁定（僅管理員）-->
@@ -508,7 +525,11 @@ function loadList(){
       const stc = r.status==='success' && r.trigger_type==='pre-restore' ? ['st-pre','還原前快照'] : (stMap[r.status]||['st-running',r.status]);
       let act='';
       if(r.status==='success'){
-        act += '<a class="btn btn-xs btn-default" href="'+API+'?action=download&id='+r.id+'"><i class="fa fa-download"></i></a> ';
+        act += '<a class="btn btn-xs btn-default" href="'+API+'?action=download&id='+r.id+'" title="下載備份本體"><i class="fa fa-download"></i></a> ';
+        // 新機器還原前置腳本（建資料庫＋建帳號＋授權）；舊備份沒有檔案時後端會現算一份
+        act += '<a class="btn btn-xs btn-default" href="'+API+'?action=download_setup&id='+r.id+'" '
+             + 'title="下載新機器還原前置腳本(建資料庫+建帳號+授權)，在新電腦上要先跑這支再匯入備份本體">'
+             + '<i class="fa fa-wrench"></i></a> ';
         if(PERM.restore_partial) act += '<button class="btn btn-xs btn-default" onclick="viewLoad('+r.id+')" title="載入此備份到誤刪救援檢視區"><i class="fa fa-life-ring"></i> 載入救援</button> ';
         if(PERM.restore_table) act += '<button class="btn btn-xs btn-default" onclick="openRestoreTable('+r.id+',\''+esc(r.filename)+'\',\''+esc(r.created_at)+'\')">整表還原</button> ';
         if(PERM.restore_full)  act += '<button class="btn btn-xs btn-coral" onclick="openRestoreFull('+r.id+',\''+esc(r.filename)+'\',\''+esc(r.created_at)+'\')">整庫還原</button> ';
