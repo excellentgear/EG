@@ -187,6 +187,20 @@ function egmd_docno($s) {
                  . $m[0] . ($on ? '<i class="fa fa-bolt"></i>' : '') . '</a>';
         }, $s);
 }
+/** 待處理問題的「文件／位置」欄：把文件編號變成可點 → 另開 AS 文件管理並自動篩選到該筆 */
+function eg_doclink($txt) {
+    global $DOCMAP;
+    $s = htmlspecialchars($txt, ENT_QUOTES, 'UTF-8');
+    return preg_replace_callback(
+        '/(?<![0-9A-Za-z\-])(\d-[A-Z]{2}-\d{2}(?:-\d{2}){0,2})([A-Z]?)(?![0-9A-Za-z\-])/u',
+        function ($m) use ($DOCMAP) {
+            $known = isset($DOCMAP[$m[1]]);
+            return '<a class="doclink" target="_blank" rel="noopener"'
+                 . ' href="as_document_management.php?kw=' . urlencode($m[1]) . '"'
+                 . ' title="' . ($known ? htmlspecialchars($DOCMAP[$m[1]]['name'], ENT_QUOTES, 'UTF-8') . '｜' : '')
+                 . '另開 AS 文件管理並篩選到此筆">' . $m[0] . '<i class="fa fa-external-link"></i></a>';
+        }, $s);
+}
 function egmd_inline($s) {
     $s = htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
     // 行內碼先抽出佔位，避免內部被其他規則吃掉
@@ -521,6 +535,21 @@ a.docchip.has-online:hover i { color:#fff; }
 .iss-table tbody tr:nth-child(even) { background:#FDF8EF; }
 .lv { display:inline-block; padding:1px 9px; border-radius:9px; font-size:11.5px; font-weight:bold; white-space:nowrap; }
 .lv-高 { background:#DD5138; color:#fff; } .lv-中 { background:#F0A24B; color:#4A2C0A; } .lv-低 { background:#F7E0BD; color:#5A3D1E; }
+a.doclink { color:#B24A12; text-decoration:none; border-bottom:1px solid #F0A24B; }
+a.doclink:hover { background:#F0A24B; color:#fff; text-decoration:none; }
+a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
+
+.page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
+                 background:#F0A24B; color:#fff; cursor:pointer; }
+.page-help-btn:hover { background:#d98a33; }
+@media print { .page-help-btn { display:none !important; } }
+.help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
+.help-doc h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
+.help-doc h4:first-child { margin-top:0; }
+.help-doc b { color:#8A5A2B; }
+.help-doc ul { margin:4px 0 8px; padding-left:20px; }
+.help-doc li { margin:2px 0; }
+.help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
 
 .fg-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:9999; }
 .fg-mask .box { background:#fff; max-width:720px; margin:6vh auto; border-radius:8px; padding:18px 22px; max-height:84vh; overflow:auto; }
@@ -537,7 +566,10 @@ a.docchip.has-online:hover i { color:#fff; }
 
 <div class="fg-title">
   <h2><i class="fa fa-book"></i> AS 流程說明手冊</h2>
-  <div class="fg-role">目前角色：<?= htmlspecialchars($roleLabel) ?><i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></div>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <button class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
+    <span class="fg-role">目前角色：<?= htmlspecialchars($roleLabel) ?><i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
+  </div>
 </div>
 
 <?php if (!$canView): ?>
@@ -636,7 +668,7 @@ a.docchip.has-online:hover i { color:#fff; }
         <tr data-lv="<?= $r[0] ?>" data-dept="<?= htmlspecialchars($r[1]) ?>">
           <td><span class="lv lv-<?= $r[0] ?>"><?= $r[0] ?></span></td>
           <td><?= htmlspecialchars($r[1]) ?></td>
-          <td><strong><?= htmlspecialchars($r[2]) ?></strong></td>
+          <td><strong><?= eg_doclink($r[2]) ?></strong></td>
           <td><?= htmlspecialchars($r[3]) ?></td>
           <td style="color:#7A4E17;"><?= htmlspecialchars($r[4]) ?></td>
         </tr>
@@ -743,6 +775,41 @@ a.docchip.has-online:hover i { color:#fff; }
     本頁權限沿用「AS 文件管理」的 <code>as_doc</code> 模組角色與本頁 ACRUD 設定（有 A 或 R 即可檢視）。
     說明內容要修改，請直接編修 <code>FOR CODEING 說明文件/AS9100(各組維護版)/AS流程-*.md</code>，本頁即時反映。</p>
   <div style="text-align:right;"><button class="btn btn-sm btn-default" onclick="document.getElementById('roleMask').style.display='none'">關閉</button></div>
+</div></div>
+
+<!-- 使用說明（鐵律7：全站統一右上角按鈕＋跳窗） -->
+<div class="fg-mask" id="helpUseMask"><div class="box">
+  <h4><i class="fa fa-question-circle"></i> 使用說明 — AS 流程說明手冊</h4>
+  <div class="help-doc">
+    <h4>這頁是做什麼的</h4>
+    <p>把各課室的 AS9100 <b>程序書流程、使用表單、跨課室協作點</b>整理成可線上閱讀的說明手冊，
+       並標出<b>程序書與現況不一致的待處理問題</b>，以及每張表單<b>有沒有線上表單可用</b>。
+       內容來源是 <code>FOR CODEING 說明文件\AS9100(各組維護版)\AS流程-*.md</code>，<b>改了 MD 檔本頁立刻反映</b>，不需要動程式。</p>
+
+    <h4>三個分頁怎麼用</h4>
+    <ul>
+      <li><b>課室說明文件</b>：左側選課室，右側閱讀。可在本篇搜尋（Enter 逐筆跳）、看原始 MD、下載 MD、列印。</li>
+      <li><b>待處理問題</b>：比對程序書／實體表單檔／系統文件三方交叉檢查出的不一致，分高中低三級，可依優先度、課室、關鍵字篩選。
+          <b>點欄位裡的文件編號</b>會另開 AS 文件管理並自動篩選到該筆。</li>
+      <li><b>線上表單對照</b>：全部四階表單一覽，顯示是否已有線上表單，可直接開啟或新填一張。</li>
+    </ul>
+
+    <h4>點編號會發生什麼事</h4>
+    <ul>
+      <li>內文中的文件／表單編號 → 開<b>線上預覽跳窗</b>（Office 檔自動轉 PDF），跳窗內還可另開分頁、到文件管理定位。</li>
+      <li>標成<b>橘色粗體＋閃電</b>者代表<b>已有線上表單</b>，跳窗會直接給「另開線上表單／新填一張／開啟該頁面」。</li>
+      <li>待處理問題表格內的編號 → 直接另開 <b>AS 文件管理</b>並篩選到該筆（不開預覽）。</li>
+    </ul>
+
+    <h4>「已有線上表單」是怎麼判定的</h4>
+    <div class="tip">三種來源缺一不可：① AS 線上表單設計器已綁定此文件 ② 已連結電子化模組（CAR／品質異常單）
+      ③ <b>此表單已由既有頁面實作並做了 AS 文件綁定</b>（如供應商稽核管理、外來文件清單、報價單）。
+      第③類的登記表在本頁原始碼 <code>$PAGE_BINDS</code>——<b>日後有新的頁面綁定，要回來補一列</b>，否則會被誤判成「尚未建立」。</div>
+
+    <h4>權限</h4>
+    <p>沿用 AS 文件管理的 <code>as_doc</code> 模組角色與本頁 ACRUD：有 <b>A</b>／<b>R</b>／<code>asdoc_view</code> 即可檢視；管理者固定可看。本頁唯讀，不提供線上編輯。</p>
+  </div>
+  <div style="text-align:right;margin-top:10px;"><button class="btn btn-sm btn-default" onclick="document.getElementById('helpUseMask').style.display='none'">關閉</button></div>
 </div></div>
 
 <!-- 文件／表單 線上預覽跳窗 -->
@@ -927,6 +994,7 @@ $(document).ready(function () {
     });
 
     $('#btnRoleHelp').on('click', function () { $('#roleMask').show(); });
+    $('#btnPageHelp').on('click', function () { $('#helpUseMask').show(); });
     $('.fg-mask').on('click', function (e) { if (e.target === this) { this.style.display = 'none'; } });
 
     $(window).on('scroll', function () { $('#fgTop').toggle($(window).scrollTop() > 250); });
