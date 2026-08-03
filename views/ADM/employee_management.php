@@ -160,6 +160,12 @@ if ($hrUserPerm === 'R') {
         #employee-table-body tr.pending-leave:hover > td {
             background-color: #F2CBC1;
         }
+        /* 異動紀錄跳窗：內容多時跳窗不可撐破視窗高度，內文自己捲動
+           （否則底部的補登按鈕被螢幕下緣遮住按不到） */
+        #historyModal .modal-body {
+            max-height: calc(100vh - 200px);
+            overflow-y: auto;
+        }
         .scroll-to-top {
             position: fixed;
             bottom: 20px;
@@ -461,6 +467,7 @@ if ($hrUserPerm === 'R') {
                         <p class="text-muted" style="font-size:13px; margin-bottom:8px;">
                             教育訓練等頁補登舊資料時，會依這裡的紀錄解析出「當時」的部門與職稱；職位變動過的人請把過去的異動補登進來（生效日填當時實際生效的日期）。
                             系統異動當下自動寫入的紀錄不可刪除，只有補登列可刪。</p>
+                        <div id="posHistPager" class="text-right" style="margin-bottom:4px;"></div>
                         <table class="table table-condensed table-striped">
                             <thead><tr><th>生效日</th><th>類型</th><th>異動前</th><th>異動後</th><th>原因</th><th>來源</th><th style="width:50px;"></th></tr></thead>
                             <tbody id="posHistBody"></tbody>
@@ -500,6 +507,7 @@ if ($hrUserPerm === 'R') {
                         </div>
                         <hr>
                         <h4>在職狀態紀錄（離職／復職／留職停薪／育嬰留停）</h4>
+                        <div id="staHistPager" class="text-right" style="margin-bottom:4px;"></div>
                         <table class="table table-condensed table-striped">
                             <thead><tr><th>狀態</th><th>開始日</th><th>結束日</th><th>備註</th><th>來源</th><th style="width:50px;"></th></tr></thead>
                             <tbody id="staHistBody"></tbody>
@@ -1154,34 +1162,84 @@ $(document).ready(function() {
         $('#historyModal').modal('show');
     });
 
+    // 紀錄資料留在前端，分頁只是切片渲染（單人紀錄量小，API 一次已回全部）
+    let POS_HIST = [], STA_HIST = [];
+    const posPg = { page: 1, per: 10 }, staPg = { page: 1, per: 10 };
+
     function loadChangeHistory(userId) {
         callApi('get_change_history', 'GET', { id: userId }, function(res) {
             if (res.status !== 'success') { alert('讀取異動紀錄失敗: ' + res.message); return; }
-            let h = '';
-            res.position.forEach(function(r) {
-                h += '<tr><td>' + escapeHtml(r.effective_date) + '</td>'
-                  + '<td>' + escapeHtml(CHANGE_TYPE_LABEL[r.change_type] || r.change_type) + '</td>'
-                  + '<td>' + escapeHtml(r.before_label) + '</td><td>' + escapeHtml(r.after_label) + '</td>'
-                  + '<td>' + escapeHtml(r.reason || '') + '</td>'
-                  + '<td>' + (r.source === 'manual' ? '補登' : '系統') + (r.operator ? '<br><small>' + escapeHtml(r.operator) + '</small>' : '') + '</td>'
-                  + '<td>' + (r.source === 'manual' && canEditHist
-                        ? '<button type="button" class="btn btn-xs btn-danger btn-del-poshist" data-hid="' + r.id + '">刪</button>' : '') + '</td></tr>';
-            });
-            $('#posHistBody').html(h || '<tr><td colspan="7" class="text-muted">尚無職務調動紀錄（' +
-                '之後在上方表單改部門/職稱會自動寫入；更早以前的異動請由下方補登）</td></tr>');
-            let s = '';
-            res.state.forEach(function(r) {
-                s += '<tr><td>' + escapeHtml(STATUS_HIST_LABEL[parseInt(r.status)] || r.status) + '</td>'
-                  + '<td>' + escapeHtml(r.start_date || '') + '</td><td>' + escapeHtml(r.end_date || '') + '</td>'
-                  + '<td>' + escapeHtml(r.remark || '') + '</td>'
-                  + '<td>' + (r.is_backfill ? '補登' : '系統') + '</td>'
-                  + '<td>' + (r.is_backfill && canEditHist
-                        ? '<button type="button" class="btn btn-xs btn-danger btn-del-stahist" data-hid="' + r.id + '">刪</button>' : '') + '</td></tr>';
-            });
-            $('#staHistBody').html(s || '<tr><td colspan="6" class="text-muted">尚無在職狀態紀錄（' +
-                '之後改狀態會自動寫入；更早以前的請由下方補登）</td></tr>');
+            POS_HIST = res.position || []; STA_HIST = res.state || [];
+            posPg.page = 1; staPg.page = 1;
+            renderPosHist(); renderStaHist();
         });
     }
+
+    function pageSlice(arr, pg) {
+        const total = arr.length;
+        const pages = Math.max(1, Math.ceil(total / pg.per));
+        if (pg.page > pages) pg.page = pages;
+        if (pg.page < 1) pg.page = 1;
+        return { rows: arr.slice((pg.page - 1) * pg.per, pg.page * pg.per), pages: pages, total: total };
+    }
+
+    // 分頁列（列表右上）：總筆數＋每頁 5/10/20/50＋上一頁/下一頁
+    function histPagerHtml(kind, pg, s) {
+        let h = '<small class="text-muted">共 ' + s.total + ' 筆</small>　<small>每頁</small> '
+              + '<select class="hist-per" data-kind="' + kind + '" style="height:24px; padding:0 2px;">';
+        [5, 10, 20, 50].forEach(function(n) { h += '<option value="' + n + '"' + (pg.per === n ? ' selected' : '') + '>' + n + '</option>'; });
+        h += '</select>';
+        if (s.pages > 1) {
+            h += '　<button type="button" class="btn btn-xs btn-default hist-page-btn" data-kind="' + kind + '" data-d="-1"' + (pg.page <= 1 ? ' disabled' : '') + '>‹ 上一頁</button>'
+               + ' <span style="font-size:12px;">第 ' + pg.page + ' / ' + s.pages + ' 頁</span> '
+               + '<button type="button" class="btn btn-xs btn-default hist-page-btn" data-kind="' + kind + '" data-d="1"' + (pg.page >= s.pages ? ' disabled' : '') + '>下一頁 ›</button>';
+        }
+        return h;
+    }
+
+    function renderPosHist() {
+        const s = pageSlice(POS_HIST, posPg);
+        let h = '';
+        s.rows.forEach(function(r) {
+            h += '<tr><td>' + escapeHtml(r.effective_date) + '</td>'
+              + '<td>' + escapeHtml(CHANGE_TYPE_LABEL[r.change_type] || r.change_type) + '</td>'
+              + '<td>' + escapeHtml(r.before_label) + '</td><td>' + escapeHtml(r.after_label) + '</td>'
+              + '<td>' + escapeHtml(r.reason || '') + '</td>'
+              + '<td>' + (r.source === 'manual' ? '補登' : '系統') + (r.operator ? '<br><small>' + escapeHtml(r.operator) + '</small>' : '') + '</td>'
+              + '<td>' + (r.source === 'manual' && canEditHist
+                    ? '<button type="button" class="btn btn-xs btn-danger btn-del-poshist" data-hid="' + r.id + '">刪</button>' : '') + '</td></tr>';
+        });
+        $('#posHistBody').html(h || '<tr><td colspan="7" class="text-muted">尚無職務調動紀錄（' +
+            '之後在上方表單改部門/職稱會自動寫入；更早以前的異動請由下方補登）</td></tr>');
+        $('#posHistPager').html(s.total ? histPagerHtml('pos', posPg, s) : '');
+    }
+
+    function renderStaHist() {
+        const s = pageSlice(STA_HIST, staPg);
+        let h = '';
+        s.rows.forEach(function(r) {
+            h += '<tr><td>' + escapeHtml(STATUS_HIST_LABEL[parseInt(r.status)] || r.status) + '</td>'
+              + '<td>' + escapeHtml(r.start_date || '') + '</td><td>' + escapeHtml(r.end_date || '') + '</td>'
+              + '<td>' + escapeHtml(r.remark || '') + '</td>'
+              + '<td>' + (r.is_backfill ? '補登' : '系統') + '</td>'
+              + '<td>' + (r.is_backfill && canEditHist
+                    ? '<button type="button" class="btn btn-xs btn-danger btn-del-stahist" data-hid="' + r.id + '">刪</button>' : '') + '</td></tr>';
+        });
+        $('#staHistBody').html(h || '<tr><td colspan="6" class="text-muted">尚無在職狀態紀錄（' +
+            '之後改狀態會自動寫入；更早以前的請由下方補登）</td></tr>');
+        $('#staHistPager').html(s.total ? histPagerHtml('sta', staPg, s) : '');
+    }
+
+    $(document).on('change', '.hist-per', function() {
+        const kind = $(this).data('kind'), per = parseInt($(this).val());
+        if (kind === 'pos') { posPg.per = per; posPg.page = 1; renderPosHist(); }
+        else { staPg.per = per; staPg.page = 1; renderStaHist(); }
+    });
+    $(document).on('click', '.hist-page-btn', function() {
+        const kind = $(this).data('kind'), d = parseInt($(this).data('d'));
+        if (kind === 'pos') { posPg.page += d; renderPosHist(); }
+        else { staPg.page += d; renderStaHist(); }
+    });
 
     // 補登區的部門下拉（與員工表單的下拉分開，避免互相干擾）
     function loadHistDepts() {
