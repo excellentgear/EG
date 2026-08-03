@@ -90,6 +90,14 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             .ev-cards { gap:4px; }
             .ev-card:nth-child(4n) { page-break-after: always; }
         }
+        /* 客戶端分頁列（每頁10筆） */
+        .va-pager { display:flex; justify-content:flex-end; align-items:center; gap:5px; margin:10px 2px 4px; flex-wrap:wrap; }
+        .va-pager .pg-info { font-size:12px; color:#8a6d45; margin-right:auto; }
+        .va-pager button { min-width:30px; height:28px; padding:0 9px; border:1px solid #D8BE93; background:#fff; color:#5b3a1e; border-radius:4px; cursor:pointer; font-size:12px; }
+        .va-pager button:hover:not(:disabled) { background:#F7E0BD; }
+        .va-pager button.cur { background:#F0A24B; color:#fff; border-color:#F0A24B; font-weight:bold; }
+        .va-pager button:disabled { opacity:.4; cursor:default; }
+        @media print { .va-pager { display:none !important; } }
         .va-stat { display:flex; flex-wrap:wrap; gap:18px; align-items:center; margin-bottom:8px;
             border:1.5px solid #E8D5B5; border-radius:8px; padding:10px 14px; background:#FFF7E8; }
         .va-stat .s-num { font-size:22px; font-weight:bold; color:#8A5A2B; }
@@ -290,6 +298,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 </div>
             </div>
             <div id="evCards" class="ev-cards"></div>
+            <div id="evPager" class="va-pager" style="display:none;"></div>
             <div id="evEmpty" style="padding:18px;color:#8a6d45;">按「全部納管廠商」列出所有納管廠商評核，或選單一廠商查詢。（自動略過整年無資料廠商）</div>
             <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
                 資料自 ERP（bom_ing）自動計算：品質依檢驗日歸月（不良=ng、特採=QQ）；交期＝發包日＋約定工作天為應交日，遲交＝回廠日晚於應交。半年判定依門檻（管理員可設）。
@@ -318,6 +327,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                     <tbody id="rosterBody"><tr><td colspan="9" style="padding:18px;color:#8a6d45;">載入中…</td></tr></tbody>
                 </table>
             </div>
+            <div id="rsPager" class="va-pager" style="display:none;"></div>
             <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
                 清冊＝納管廠商（固定稽核）＋手動列入之合格廠商（不需稽核者，靠定期評核績效監控）。建議等級來自定期評核全年成績；採用等級可批次覆寫。
             </div>
@@ -615,13 +625,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <ul>
             <li><b>資料來源</b>：自 ERP（bom_ing）自動計算——品質依檢驗日歸月（不良＝ng、特採＝QQ 另計）；交期＝實際回廠日晚於「發包日＋約定工作天」為遲交。</li>
             <li><b>分數／等級</b>：半年與全年各算，分數＝(1−不良率)×50 ＋ (1−遲交率)×50（四捨五入）；依等級門檻判 A/B/C/D。</li>
-            <li><b>全部納管廠商</b>：一次列出所有納管廠商，2 欄卡片；可「只看不合格」；橫式列印一頁 6 間。</li>
+            <li><b>全部納管廠商</b>：一次列出所有納管廠商，2 欄卡片，<b>每頁 10 家</b>、下方可翻頁（只畫當頁避免一次載入過慢）；可「只看不合格」；橫式列印一頁 6 間（列印為全部廠商，不受翻頁影響）。</li>
             <li><b>單一廠商</b>：查一家的 12 個月明細，上方顯示上／下半年／全年分數與等級。</li>
         </ul>
 
         <h4>三、合格供應商清冊</h4>
         <ul>
-            <li><b>組成</b>：清冊＝<b>納管廠商</b>（固定要稽核）∪ <b>手動列入</b>（不需納管但認定合格者，靠定期評核績效監控）。</li>
+            <li><b>組成</b>：清冊＝<b>納管廠商</b>（固定要稽核）∪ <b>手動列入</b>（不需納管但認定合格者，靠定期評核績效監控）。清單<b>每頁 10 家</b>、下方可翻頁；匯出 CSV／列印清冊皆為全部廠商，不受翻頁影響。</li>
             <li><b>評核等級</b>：建議等級來自定期評核全年成績；可勾選<b>批次設定採用等級</b>覆寫建議，或清除改回建議。</li>
             <li><b>檢查兩年未交易外包廠</b>：列出納管/在冊、有發包史但最後發包超過兩年的外包廠（顯示最後發包日）；<b>需你勾選確認</b>後才移除（取消納管＋移出清冊＋刪未稽核對象），不會自動靜默移除。</li>
         </ul>
@@ -1048,8 +1058,8 @@ function auditFormHTML(o){
     var docName = (META.as_doc && META.as_doc.doc_name) || '供應商評鑑稽核查表';
     var docNo   = (META.as_doc && META.as_doc.doc_no)   || '2-PH-01-02';
     var head = '<div style="text-align:center;">'
-        + '<div style="font-size:18px;font-weight:bold;">'+esc(META.company_name||'')+'</div>'
-        + '<div style="font-size:15px;margin-top:2px;">'+esc(docName)+'</div></div>';
+        + '<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
+        + '<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
     var info = '<table class="pf-info"><tr>'
         + '<td>供應商：'+(o.maker?esc(o.maker):'________________')+'</td>'
         + '<td>日期：'+(o.dateStr?esc(o.dateStr):'____ / ____ / ____')+'</td></tr>'
@@ -1069,7 +1079,7 @@ function auditFormHTML(o){
     rows += '<tr><td colspan="2">合計</td><td style="text-align:right;">總分（滿分 '+META.total_max+'）／綜合合格率＝自評率×'+META.self_w+'＋稽核率×'+META.audit_w+'，≥'+META.pass_rate+'% 判合格</td><td></td><td></td><td></td></tr>';
     rows += '</tbody></table>';
     var sign = '<table class="pf-sign"><tr><td>供應商代表簽章：__________________</td><td>稽核員簽章：__________________</td></tr></table>';
-    var footer = '<div style="text-align:right;margin-top:22px;font-size:12px;color:#333;">表單編號：'+esc(docNo)+'</div>';
+    var footer = '<div style="text-align:right;margin-top:22px;font-size:12px;color:#333;">'+esc(docNo)+'</div>';
     return head + info + rows + sign + footer;
 }
 function openPrintWindow(bodyHtml, title){
@@ -1177,8 +1187,8 @@ function recordSheetHTML(){
     if(!RS) return '';
     var t=RS.t, c=RS.c, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表', docNo=(doc&&doc.doc_no)||'2-PH-01-03';
     var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'____';
-    var head='<div style="text-align:center;"><div style="font-size:18px;font-weight:bold;">'+esc(META.company_name||'')+'</div>'
-        +'<div style="font-size:15px;margin-top:2px;">'+esc(docName)+'</div></div>';
+    var head='<div style="text-align:center;"><div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
+        +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
     var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>稽核日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>稽核狀況：'+esc(modeL)+'</td></tr></table>';
     var rows='<table class="pf"><thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th></tr></thead><tbody>';
     c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*META.self_w+k.audit_rate*META.audit_w)*10)/10;
@@ -1188,7 +1198,7 @@ function recordSheetHTML(){
     var chart='<div style="text-align:center;margin-top:8px;">'+svg+'</div>';
     var conc='<div style="margin-top:8px;font-size:13px;">綜合評鑑合格率（自評×'+META.self_w+'＋稽核×'+META.audit_w+'）＝<b>'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+META.pass_rate+'% 始評定為合格供應商。判定：'+(c.pass?'合格供應商':'不合格')+(t.conclusion?'（'+esc(t.conclusion)+'）':'')+'</div>';
     var sign='<table class="pf-sign"><tr><td>稽核員簽章：____________</td><td>供應商代表簽章：____________</td><td>資材課長：____________</td></tr></table>';
-    var footer='<div style="text-align:right;margin-top:14px;font-size:12px;">表單編號：'+esc(docNo)+'</div>';
+    var footer='<div style="text-align:right;margin-top:14px;font-size:12px;">'+esc(docNo)+'</div>';
     return head+info+rows+chart+conc+sign+footer;
 }
 function printRecordSheet(){ if(!RS){alert('無資料');return;} openPrintWindow(recordSheetHTML(), '供應商品質系統評鑑記錄表'); }
@@ -1248,7 +1258,7 @@ function loadEval(){
         NProgress.done();
         if(!res.ok){ alert(res.error||'查詢失敗'); return; }
         EVAL=res; EVAL_ALL=null;
-        $('#evSingle').show(); $('#evCards').empty().hide(); $('#evEmpty').hide(); $('#evCsv').show(); $('#evFailBox').hide();
+        $('#evSingle').show(); $('#evCards').empty().hide(); $('#evPager').hide(); $('#evEmpty').hide(); $('#evCsv').show(); $('#evFailBox').hide();
         var s=res.settings;
         $('#evThresh').html('廠商：<b>'+esc(res.maker_name)+'</b>　'+res.year+' 年　門檻：不良率≤'+s.ng_max+'%、遲交率≤'+s.late_max+'%'
             +(s.special_max<100?('、特採率≤'+s.special_max+'%'):'（特採率不判定）')+'　約定工作天 '+s.default_days+' 天');
@@ -1293,17 +1303,39 @@ $('#evAll').on('click', function(){
         $('#evThresh').html(res.year+' 年　全部納管廠商（'+res.vendors.length+' 家有資料，已略過無資料者）　門檻：不良率≤'+s.ng_max+'%、遲交率≤'+s.late_max+'%'
             +(s.special_max<100?('、特採率≤'+s.special_max+'%'):'（特採率不判定）')+'　約定工作天 '+s.default_days+' 天');
         $('#evSingle').hide(); $('#evEmpty').hide(); $('#evCsv').hide(); $('#evFailBox').show(); $('#evCards').css('display','grid');
-        renderEvalCards();
+        evPage=1; renderEvalCards();
     }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 });
-$('#evFailOnly').on('change', renderEvalCards);
+$('#evFailOnly').on('change', function(){ evPage=1; renderEvalCards(); });
+/* ── 客戶端分頁列（每頁10筆，只渲染當頁避免一次畫太多列拖慢頁面） ── */
+var VA_PER = 10;
+function vaBuildPager(sel, total, page, onGo){
+    var pages=Math.max(1, Math.ceil(total/VA_PER));
+    if(page>pages) page=pages; if(page<1) page=1;
+    var $p=$(sel);
+    if(total<=VA_PER){ $p.hide().empty(); return page; }
+    var from=(page-1)*VA_PER+1, to=Math.min(page*VA_PER,total);
+    var h='<span class="pg-info">第 '+from+'–'+to+' 筆／共 '+total+' 筆（第 '+page+'／'+pages+' 頁）</span>';
+    h+='<button '+(page<=1?'disabled':'')+' data-go="'+(page-1)+'"><i class="fa fa-angle-left"></i></button>';
+    var st=Math.max(1,page-2), en=Math.min(pages,page+2);
+    if(st>1){ h+='<button data-go="1">1</button>'; if(st>2) h+='<span style="color:#c9b28c;">…</span>'; }
+    for(var i=st;i<=en;i++) h+='<button class="'+(i===page?'cur':'')+'" data-go="'+i+'">'+i+'</button>';
+    if(en<pages){ if(en<pages-1) h+='<span style="color:#c9b28c;">…</span>'; h+='<button data-go="'+pages+'">'+pages+'</button>'; }
+    h+='<button '+(page>=pages?'disabled':'')+' data-go="'+(page+1)+'"><i class="fa fa-angle-right"></i></button>';
+    $p.html(h).show();
+    $p.off('click').on('click','button[data-go]',function(){ onGo(+$(this).attr('data-go')); });
+    return page;
+}
+var evPage=1;
 function renderEvalCards(){
     if(!EVAL_ALL) return;
     var s=EVAL_ALL.settings, failOnly=$('#evFailOnly').is(':checked');
     var overNg=function(v){return v!=null&&v>s.ng_max;}, overLt=function(v){return v!=null&&v>s.late_max;}, overSp=function(v){return s.special_max<100&&v!=null&&v>s.special_max;};
     var list=EVAL_ALL.vendors.filter(function(v){ return !failOnly || v.fail; });
+    evPage=vaBuildPager('#evPager', list.length, evPage, function(p){ evPage=p; renderEvalCards(); var el=document.getElementById('evCards'); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}); });
+    var pageList=list.slice((evPage-1)*VA_PER, evPage*VA_PER);
     var html='';
-    list.forEach(function(v){
+    pageList.forEach(function(v){
         var g=v.full&&v.full.grade?('等級 <b style="color:'+(v.fail?'#DD5138':'#8A5A2B')+';">'+esc(v.full.grade)+'</b>（'+(v.full.score==null?'—':v.full.score)+'分）'):'';
         html+='<div class="ev-card"><div class="h"><span>'+esc(v.maker_name)+'（'+esc(v.maker_id_no)+'）</span><span>'+g+'</span></div>';
         html+='<table class="ev-mini"><thead><tr><th>月</th><th>檢驗</th><th>不良率</th><th>特採率</th><th>回廠</th><th>遲交率</th></tr></thead><tbody>';
@@ -1348,13 +1380,13 @@ function printEvalAll(){
         for(var k=p*per;k<Math.min((p+1)*per,list.length);k++) cards+=evCardPrintHTML(list[k]);
         body+='<div class="pg"><div class="pg-h"><div class="ttl"><div class="co">'+esc(META.company_name||'')+'</div><div class="dn">'+esc(docName)+'（'+EVAL_ALL.year+' 年 定期評核）</div></div>'
             +'<div class="pn">第 '+(p+1)+' / '+pages+' 頁</div></div>'
-            +'<div class="pg-cards">'+cards+'</div><div class="pg-f">表單編號：'+esc(docNo)+'</div></div>';
+            +'<div class="pg-cards">'+cards+'</div><div class="pg-f">'+esc(docNo)+'</div></div>';
     }
     var w=window.open('','_blank'); if(!w){alert('請允許彈出視窗');return;}
     var css='@page{size:A4 landscape;margin:8mm;} body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;margin:0;}'
         +'.pg{page-break-after:always;padding:2mm;} .pg:last-child{page-break-after:auto;}'
         +'.pg-h{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #333;padding-bottom:3px;margin-bottom:5px;}'
-        +'.pg-h .co{font-size:15px;font-weight:bold;} .pg-h .dn{font-size:12px;} .pg-h .pn{font-size:12px;font-weight:bold;}'
+        +'.pg-h .co{font-size:22px;font-weight:bold;letter-spacing:1px;} .pg-h .dn{font-size:16px;font-weight:bold;margin-top:2px;} .pg-h .pn{font-size:12px;font-weight:bold;}'
         +'.pg-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;}'
         +'.pc{border:1px solid #333;border-radius:3px;padding:3px 4px;break-inside:avoid;}'
         +'.pc-h{font-weight:bold;font-size:12px;margin-bottom:2px;display:flex;justify-content:space-between;}'
@@ -1475,12 +1507,16 @@ function loadRoster(){
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         ROSTER=res;
         $('#rsRemind').html(res.year+' 年評核　共 <b>'+res.rows.length+'</b> 家（納管 '+res.rows.filter(function(r){return r.is_managed;}).length+' ＋ 手動列入 '+res.rows.filter(function(r){return !r.is_managed&&r.in_roster;}).length+'）　建議等級來自定期評核全年成績');
-        renderRoster();
+        rsPage=1; renderRoster();
     }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
+var rsPage=1;
 function renderRoster(){
+    var all=ROSTER.rows;
+    rsPage=vaBuildPager('#rsPager', all.length, rsPage, function(p){ rsPage=p; renderRoster(); var el=document.getElementById('rosterTable'); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}); });
+    var rows=all.slice((rsPage-1)*VA_PER, rsPage*VA_PER);
     var h='';
-    ROSTER.rows.forEach(function(r){
+    rows.forEach(function(r){
         var over=(r.roster_grade!=null&&r.roster_grade!=='');
         h+='<tr><td><input type="checkbox" class="rs-ck" value="'+esc(r.maker_id_no)+'"></td>';
         h+='<td>'+esc(r.main_cat_name||'—')+'</td><td>'+esc(r.maker_id_no)+'</td><td class="t-left"><b>'+esc(r.maker_id||'')+'</b></td>';
@@ -1538,13 +1574,13 @@ $('#rsCsvBtn').on('click', function(){
 $('#rsPrintBtn').on('click', function(){
     if(!ROSTER||!ROSTER.rows.length){ alert('清冊無資料'); return; }
     var doc=META.roster_as_doc, docName=(doc&&doc.doc_name)||'合格供應商清冊', docNo=(doc&&doc.doc_no)||'2-PH-01-04';
-    var head='<div style="text-align:center;"><div style="font-size:18px;font-weight:bold;">'+esc(META.company_name||'')+'</div>'
-        +'<div style="font-size:15px;margin-top:2px;">'+esc(docName)+'（'+ROSTER.year+' 年）</div></div>';
+    var head='<div style="text-align:center;"><div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
+        +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'（'+ROSTER.year+' 年）</div></div>';
     var rows='<table class="pf"><thead><tr><th style="width:40px;">序</th><th>大類</th><th>廠商ID</th><th>廠商名稱</th><th>廠商備註</th><th style="width:60px;">評核等級</th></tr></thead><tbody>';
     ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td>'+esc(r.main_cat_name||'')+'</td><td>'+esc(r.maker_id_no)+'</td><td class="q">'+esc(r.maker_id||'')+'</td><td class="q">'+esc(r.m_note||'')+'</td><td>'+esc(r.final_grade||'—')+'</td></tr>'; });
     rows+='</tbody></table>';
     var sign='<table class="pf-sign"><tr><td>製表：____________</td><td>審核：____________</td><td>核准：____________</td></tr></table>';
-    var footer='<div style="text-align:right;margin-top:12px;font-size:12px;">表單編號：'+esc(docNo)+'</div>';
+    var footer='<div style="text-align:right;margin-top:12px;font-size:12px;">'+esc(docNo)+'</div>';
     openPrintWindow(head+rows+sign+footer, '合格供應商清冊');
 });
 
