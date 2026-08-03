@@ -5566,18 +5566,21 @@ function loadProdDepts(){
     });
 }
 function renderProdDeptList(){
-    // 2026-08-03 起生產部門由全站「組織角色綁定設定」決定（含子部門），本頁只顯示不提供設定
+    // 2026-08-03 起生產部門由全站「組織角色綁定設定」決定（含子部門）→ 本頁一律反灰唯讀
     var depts = <?php echo json_encode($dept_list); ?>;
-    var names = depts.filter(function(d){
-        return prodDeptIds.some(function(v){ return parseInt(v)===parseInt(d.id); });
-    }).map(function(d){ return d.name; });
-    $('#prod-dept-list').html(
-        '<div style="padding:10px 12px;background:#FDF8EF;border:1px solid #E8D5B5;border-radius:6px;color:#5b3a1e;">'
-      + (names.length ? '目前認列的生產單位：<b>'+names.join('、')+'</b>'
-                      : '<span style="color:#DD5138;">尚未設定生產部門</span>')
-      + '<div style="font-size:12px;color:#8a6d45;margin-top:6px;">此項目已統一由'
-      + '<a href="../admin/org_role_setting.php" target="_blank"><b>組織角色綁定設定</b></a>'
-      + '的「生產部門」決定（含其子部門，例：生產部＋生產1/2/3廠），在本頁不再重複設定。</div></div>');
+    var h='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;">';
+    depts.forEach(function(d){
+        var dId = parseInt(d.id);
+        var chk = prodDeptIds.some(function(v){ return parseInt(v)===dId; });
+        h+='<label style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:#f1f1f1;border-radius:6px;'
+          +'border:1px solid var(--border);cursor:not-allowed;font-weight:600;font-size:13px;color:#999;">'
+          +'<input type="checkbox" value="'+d.id+'" '+(chk?'checked ':'')+'disabled style="cursor:not-allowed;">'
+          +d.name+'</label>';
+    });
+    h+='</div><div style="font-size:12px;color:#8a6d45;margin-top:8px;">此項目已統一由'
+      +'<a href="../admin/org_role_setting.php" target="_blank"><b>組織角色綁定設定</b></a>'
+      +'的「生產部門」決定（含其子部門，例：生產部＋生產1/2/3廠），僅能在該頁修改。</div>';
+    $('#prod-dept-list').html(h);
     applyProdFilter();
 }
 function saveProdDepts(){

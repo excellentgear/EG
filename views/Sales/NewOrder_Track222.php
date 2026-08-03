@@ -1239,8 +1239,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             try { $pdo->exec("ALTER TABLE gear_hob_allowance_mn ADD COLUMN is_exact TINYINT(1) NOT NULL DEFAULT 0 COMMENT '精確匹配(=)'"); } catch(Exception $e){}
             $mn_rows = $pdo->query("SELECT * FROM gear_hob_allowance_mn ORDER BY is_exact DESC, mn_gt ASC, sort_order ASC")->fetchAll(PDO::FETCH_ASSOC);
             $da_rows = $pdo->query("SELECT * FROM gear_hob_allowance_da ORDER BY da_gt ASC, sort_order ASC")->fetchAll(PDO::FETCH_ASSOC);
-            $gs_row  = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='gear_tool_tech_dept_ids'")->fetch(PDO::FETCH_ASSOC);
-            $tech_ids = $gs_row ? (json_decode($gs_row['setting_value'], true) ?: []) : [];
+            // 技術部門一律讀全站「組織角色綁定設定」的 rd_dept（含子部門），本頁不再自設一份（2026-08-03）
+            require_once __DIR__ . '/../../src/common/org_role_lib.php';
+            $tech_ids = eg_org_dept_ids($pdo, 'rd_dept');
+            if (!$tech_ids) {
+                $gs_row  = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='gear_tool_tech_dept_ids'")->fetch(PDO::FETCH_ASSOC);
+                $tech_ids = $gs_row ? (json_decode($gs_row['setting_value'], true) ?: []) : [];
+            }
             $depts = $pdo->query("SELECT id, name, parent_id, level FROM department ORDER BY sort_order, level, id")->fetchAll(PDO::FETCH_ASSOC);
             echo json_encode(['success'=>true,'mn_rows'=>$mn_rows,'da_rows'=>$da_rows,'tech_dept_ids'=>$tech_ids,'depts'=>$depts]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
@@ -1326,6 +1331,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 齒輪工具：儲存技術課部門設定（管理員限定）──────────────────────────
     if ($_POST['action'] === 'gear_save_settings') {
         header('Content-Type: application/json');
+        // 2026-08-03 起技術部門統一在「組織角色綁定設定」維護，本端點停用（避免兩處設定打架）
+        echo json_encode(['success'=>false,'message'=>'技術部門已改由「組織角色綁定設定」統一維護，請至該頁設定「設計／技術部門」']);
+        exit;
         if (!in_array(intval($_SESSION['status']??0),[9,90])){echo json_encode(['success'=>false,'message'=>'無管理員權限']);exit;}
         try {
             $uid=intval($_SESSION['id']??0); $uname=$_SESSION['userName']??'';
@@ -1546,8 +1554,12 @@ $is_gear_admin  = in_array(intval($_SESSION['status'] ?? 0), [9, 90]);
 $show_gear_tool = $is_gear_admin; // 管理員一律可見
 if (!$show_gear_tool) {
     try {
-        $gs_r = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='gear_tool_tech_dept_ids'")->fetch(PDO::FETCH_ASSOC);
-        $gear_dept_ids = $gs_r ? (json_decode($gs_r['setting_value'], true) ?: []) : [];
+        require_once __DIR__ . '/../../src/common/org_role_lib.php';   // 技術部門統一設定（含子部門）
+        $gear_dept_ids = eg_org_dept_ids($db, 'rd_dept');
+        if (!$gear_dept_ids) {
+            $gs_r = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='gear_tool_tech_dept_ids'")->fetch(PDO::FETCH_ASSOC);
+            $gear_dept_ids = $gs_r ? (json_decode($gs_r['setting_value'], true) ?: []) : [];
+        }
         if (!empty($gear_dept_ids)) {
             $gph = implode(',', array_fill(0, count($gear_dept_ids), '?'));
             $gc  = $db->prepare("SELECT 1 FROM user_department_position_map WHERE user_id=? AND department_id IN ($gph) LIMIT 1");
@@ -8473,17 +8485,25 @@ foreach($dCounts as $c) {
               <div style="font-size:10px;color:#aaa;margin-top:4px;">伺服器須能存取此路徑（依各程序帳號權限）；附件會以 變更單ID 建立子資料夾存放。</div>
             </div>
             <div class="main-card" style="margin-bottom:10px;">
-              <div style="font-weight:700;color:#444;margin-bottom:6px;"><i class="fa fa-print"></i> 訂單變更列印表頭 / 表尾</div>
+              <div style="font-weight:700;color:#444;margin-bottom:6px;"><i class="fa fa-print"></i> 訂單變更列印文件（AS 文件綁定）</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
                 <div>
-                  <div style="font-size:12px;color:#666;margin-bottom:4px;">列印表頭（置中、加大顯示）</div>
-                  <textarea id="ocs-print-header" class="form-control input-sm" rows="2" placeholder="例：超正齒輪股份有限公司　訂單變更紀錄"></textarea>
+                  <div style="font-size:12px;color:#666;margin-bottom:4px;">列印表頭（＝綁定 AS 文件的表單名稱，系統自動帶入）</div>
+                  <input id="ocs-print-header" class="form-control input-sm" readonly disabled
+                         style="background:#eee;color:#888;cursor:not-allowed;">
                 </div>
                 <div>
-                  <div style="font-size:12px;color:#666;margin-bottom:4px;">列印表尾（靠右下、正常字級）</div>
-                  <textarea id="ocs-print-footer" class="form-control input-sm" rows="2" placeholder="例：製表單位：業務部"></textarea>
+                  <div style="font-size:12px;color:#666;margin-bottom:4px;">綁定的 AS 文件編號（印在每頁頁尾右下角）</div>
+                  <div style="display:flex;gap:6px;">
+                    <input id="ocs-print-footer" class="form-control input-sm" readonly disabled
+                           style="background:#eee;color:#888;cursor:not-allowed;">
+                    <button type="button" class="btn btn-warning btn-sm" style="white-space:nowrap;" onclick="ocsPickAsDoc()">
+                      <i class="fa fa-link"></i> 綁定…</button>
+                  </div>
                 </div>
               </div>
+              <div style="font-size:10px;color:#aaa;margin-top:4px;">
+                列印大標題固定為本公司全名（發票用全名，取自客戶主檔）；表頭與頁尾編號一律取自綁定的 AS 文件，皆不可手填（全站列印標準 ai-rules/16）。</div>
             </div>
             <div class="main-card">
               <div style="font-weight:700;color:#444;margin-bottom:6px;"><i class="fa fa-users"></i> 可選通知對象設定</div>
@@ -8585,7 +8605,10 @@ foreach($dCounts as $c) {
     </div>
 
     <!-- ═══ 訂單變更系統 JS ═══════════════════════════════════════════════════ -->
+    <!-- AS 文件編號綁定選擇器（全站共用，可輸入編號/名稱即時篩選；見 ai-rules/16） -->
+    <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
     <script>
+    var ocsAsDocs = [], ocsAsDocId = 0;   // 訂單變更列印綁定的 AS 文件（清單／目前 id）
     (function(){
         var OC_API = '../../src/store/_OrderChange_API.php';
         function ocEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -8969,8 +8992,10 @@ foreach($dCounts as $c) {
             ocApi('get_settings', {}).then(function(res){
                 if(!res.success){ ocToast(res.message||'讀取設定失敗'); return; }
                 document.getElementById('ocs-path').value = res.attach_dir||'';
-                document.getElementById('ocs-print-header').value = res.print_header||'';
-                document.getElementById('ocs-print-footer').value = res.print_footer||'';
+                // 表頭/表尾改由 AS 文件綁定推導（唯讀反灰），綁定用共用選擇器 EGAsDoc（可打編號篩選）
+                ocsAsDocs  = res.as_docs || [];
+                ocsAsDocId = res.as_doc ? parseInt(res.as_doc.id, 10) : 0;
+                ocsShowAsDoc(res.as_doc);
                 document.getElementById('ocs-allow-all').checked = !!(res.config&&res.config.allow_all);
                 var selD=((res.config&&res.config.depts)||[]).map(String);
                 var selU=((res.config&&res.config.users)||[]).map(String);
@@ -9001,10 +9026,8 @@ foreach($dCounts as $c) {
             var users=Array.from(ocsUserSel);
             var allow= document.getElementById('ocs-allow-all').checked? '1':'0';
             var path=document.getElementById('ocs-path').value.trim();
-            var ph=document.getElementById('ocs-print-header').value;
-            var pf=document.getElementById('ocs-print-footer').value;
             var msg=document.getElementById('ocs-msg'); msg.style.color='#888'; msg.textContent='儲存中…';
-            ocApi('save_settings', {allow_all:allow, depts:depts, users:users, attach_dir:path, print_header:ph, print_footer:pf}).then(function(res){
+            ocApi('save_settings', {allow_all:allow, depts:depts, users:users, attach_dir:path, as_doc_id:ocsAsDocId}).then(function(res){
                 if(!res.success){ msg.style.color='#c0392b'; msg.textContent=res.message||'儲存失敗'; return; }
                 msg.style.color='#1e7e34'; msg.textContent='已儲存';
                 setTimeout(function(){ $('#changeSettingsModal').modal('hide'); }, 700);
@@ -9027,6 +9050,7 @@ foreach($dCounts as $c) {
                 if(!res.success){ tb.innerHTML='<tr><td colspan="13" class="text-center" style="color:#c0392b;">'+ocEsc(res.message||'讀取失敗')+'</td></tr>'; return; }
                 och_state.total=res.total; och_state.rows=res.data; ocCache(res.data);
                 och_state.print_header=res.print_header||''; och_state.print_footer=res.print_footer||'';
+                och_state.company=res.company||'';
                 if(!res.data.length){ tb.innerHTML='<tr><td colspan="13" class="text-center" style="padding:16px;color:#aaa;">無資料</td></tr>'; }
                 else tb.innerHTML = res.data.map(function(r){
                     var diffs=[]; try{ diffs=JSON.parse(r.changes_json||'[]'); }catch(e){}
@@ -9094,21 +9118,43 @@ foreach($dCounts as $c) {
                 });
             });
         };
+        // ── AS 文件編號綁定（列印表頭＝doc_name、頁尾右下＝doc_no；選擇器一律走共用檔 eg_asdoc_picker.js）──
+        window.ocsShowAsDoc = function(doc){
+            document.getElementById('ocs-print-header').value = doc ? (doc.doc_name||'') : '（尚未綁定 AS 文件）';
+            document.getElementById('ocs-print-footer').value = doc ? EGAsDoc.label(doc) : '尚未綁定';
+        };
+        window.ocsPickAsDoc = function(){
+            EGAsDoc.open({docs: ocsAsDocs, current: ocsAsDocId, title:'訂單變更列印文件 — AS 文件編號綁定',
+                onSave: function(id, doc){ ocsAsDocId = id; ocsShowAsDoc(doc); }});
+        };
+        // 列印：大標題＝本公司全名／表頭＝綁定 AS 文件的表單名稱／頁尾右下＝doc_no、左下＝頁碼（ai-rules/16）
         window.exportChangeHistoryPDF = function(){
             var tbl=document.querySelector('#changeHistoryModal table').outerHTML;
-            var hdr=(och_state.print_header||'').trim();
-            var ftr=(och_state.print_footer||'').trim();
-            var hdrHtml = hdr? ('<div class="pf-header">'+ocEsc(hdr).replace(/\n/g,'<br>')+'</div>') : '<div class="pf-header">訂單變更歷史</div>';
-            var ftrHtml = ftr? ('<div class="pf-footer">'+ocEsc(ftr).replace(/\n/g,'<br>')+'</div>') : '';
+            var comp=(och_state.company||'').trim();
+            var hdr=(och_state.print_header||'').trim() || '訂單變更歷史';
+            var asTxt=(och_state.print_footer||'').trim().replace(/['\\]/g,'');
             var w=window.open('','_blank');
             w.document.write('<html><head><meta charset="utf-8"><title>訂單變更歷史</title>'
-                +'<style>body{font-family:"Microsoft JhengHei",sans-serif;padding:16px;}'
-                +'table{width:100%;border-collapse:collapse;font-size:12px;}th,td{border:1px solid #ccc;padding:4px 6px;text-align:left;}th{background:#f0f0f0;}'
-                +'.pf-header{text-align:center;font-size:22px;font-weight:700;margin:0 0 14px;}'
-                +'.pf-footer{text-align:right;font-size:12px;color:#333;margin-top:18px;}'
+                +'<style>body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;}'
+                +'table{width:100%;border-collapse:collapse;font-size:12px;}'
+                +'table thead{display:table-header-group;}'
+                +'th,td{border:1px solid #ccc;padding:4px 6px;text-align:left;}th{background:#f0f0f0;}'
+                +'.p-comp{text-align:center;font-size:22px;font-weight:bold;margin-bottom:1px;}'
+                +'.p-title{text-align:center;font-size:17px;font-weight:bold;letter-spacing:6px;margin-bottom:10px;}'
+                +'@page{margin:12mm 10mm 18mm;'
+                + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
+                +'}'
                 +'</style></head><body>'
-                + hdrHtml + tbl + ftrHtml + '</body></html>');
-            w.document.close(); w.focus(); setTimeout(function(){ w.print(); }, 300);
+                + (comp? '<div class="p-comp">'+ocEsc(comp)+'</div>':'')
+                + '<div class="p-title">'+ocEsc(hdr)+'</div>' + tbl
+                +'<scr'+'ipt>window.onload=function(){'          // 超過一頁才加頁碼（counter(pages) 由列印引擎算）
+                +'var onePageA4=(297-30)*96/25.4;'
+                +'if(document.body.scrollHeight>onePageA4*0.92){'
+                +'var st=document.createElement(\'style\');'
+                +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
+                +'document.head.appendChild(st);}'
+                +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+            w.document.close(); w.focus();
         };
     })();
     </script>
@@ -9121,19 +9167,17 @@ foreach($dCounts as $c) {
         <span class="gear-hdr-title"><i class="fa fa-cog fa-spin" id="gear-hdr-icon"></i> 齒輪計算工具</span>
         <div class="gear-hdr-btns">
             <?php if ($is_gear_admin): ?>
-            <button id="gear-settings-toggle" onclick="toggleGearSettings(event)" title="技術課部門設定"><i class="fa fa-sliders"></i> 設定</button>
+            <button id="gear-settings-toggle" onclick="toggleGearSettings(event)" title="可使用本工具的部門（於組織角色綁定設定維護）"><i class="fa fa-sliders"></i> 設定</button>
             <?php endif; ?>
             <button onclick="closeGearTool()" title="關閉">✕ 關閉</button>
         </div>
         <?php if ($is_gear_admin): ?>
         <!-- 設定面板 -->
         <div id="gear-settings-panel">
-            <div style="font-weight:700;font-size:13px;color:#1a3a50;margin-bottom:6px;"><i class="fa fa-cog"></i> 技術課部門設定</div>
-            <div style="font-size:11px;color:#666;margin-bottom:6px;">勾選可使用齒輪計算工具的部門（多選）：</div>
+            <div style="font-weight:700;font-size:13px;color:#1a3a50;margin-bottom:6px;"><i class="fa fa-cog"></i> 可使用本工具的部門</div>
             <div class="gear-dept-list" id="gear-dept-list"><div style="color:#aaa;font-size:11px;padding:6px;">載入中…</div></div>
             <div style="margin-top:8px;display:flex;gap:6px;">
-                <button onclick="saveGearSettings()" class="btn-gear-save">儲存</button>
-                <button onclick="document.getElementById('gear-settings-panel').style.display='none'" class="btn-gear-cancel">取消</button>
+                <button onclick="document.getElementById('gear-settings-panel').style.display='none'" class="btn-gear-cancel">關閉</button>
             </div>
             <div id="gear-settings-msg" style="font-size:11px;margin-top:5px;"></div>
         </div>
@@ -11564,15 +11608,19 @@ foreach($dCounts as $c) {
                 if(res.success){ _allDepts=res.depts||[]; _techDeptIds=res.tech_dept_ids||[]; renderGearDeptList(); }
             },'json'); return;
         }
+        // 2026-08-03 起技術部門由全站「組織角色綁定設定」決定（含子部門）→ 本頁一律反灰唯讀
         var html = '';
         _allDepts.forEach(function(d) {
             var checked = _techDeptIds.indexOf(parseInt(d.id)) !== -1 ? ' checked' : '';
             var lv = parseInt(d.level) || 1; var cls = lv >= 2 ? ' level-'+lv : '';
-            html += '<label class="gear-dept-item'+cls+'">'
-                  + '<input type="checkbox" value="'+escGear(d.id)+'"'+checked+'> '
+            html += '<label class="gear-dept-item'+cls+'" style="color:#999;cursor:not-allowed;">'
+                  + '<input type="checkbox" value="'+escGear(d.id)+'"'+checked+' disabled> '
                   + escGear(d.name) + '</label>';
         });
-        el.innerHTML = html;
+        el.innerHTML = html
+                     + '<div style="font-size:11px;color:#8a6d45;margin-top:6px;">此項目已統一由'
+                     + '<a href="../admin/org_role_setting.php" target="_blank"><b>組織角色綁定設定</b></a>'
+                     + '的「設計／技術部門」決定（含其子部門），僅能在該頁修改。</div>';
     }
     window.saveGearSettings = function() {
         var checkboxes = document.querySelectorAll('#gear-dept-list input[type=checkbox]:checked');

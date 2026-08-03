@@ -800,10 +800,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         /* AS 文件編號：每頁固定右下角 */
         #print-area .pt-foot { position:fixed; right:8mm; bottom:5mm; font-size:9pt; color:#333; }
         #print-area table.pr-items th.c-tool, #print-area table.pr-items td.c-tool { width:66px; }
-        /* 量具格：上＝檢具類型、下＝量具編號，字自動縮小且最多兩列 */
-        #print-area .tool2 { font-size:9px; line-height:1.15; word-break:break-all;
-                             display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; max-height:2.3em; }
-        #print-area .tool2 b { font-weight:normal; display:block; }
+        /* 量具格：三行＝量具類別／量具規格／量具編號，字自動縮小、每行都完整顯示（不截字） */
+        #print-area .tool2 { font-size:8.5px; line-height:1.2; word-break:break-all; white-space:normal; }
+        #print-area .tool2 span { display:block; }
         #print-area .c-tol .lo { display:block; }
         #print-area table.pr-items th.c-no { width:34px; }
         #print-area table.pr-items th.c-std, #print-area table.pr-items th.c-tol { width:56px; }
@@ -1717,14 +1716,15 @@ $(function(){
         $.post(QA_API, {action:'get_decision_setting'}, function(r){
             if (!r || !r.success){ alert('載入設定失敗'); return; }
             var qc = r.qc_dept_ids || [];
-            // 品管部門已改由全站「組織角色綁定設定」決定（含子部門），本頁只顯示不提供設定（2026-08-03）
-            var qcNames = (r.departments || []).filter(function(d){ return qc.indexOf(d.id) >= 0; })
-                                               .map(function(d){ return $('<i>').text(d.name).html(); });
-            $('#qadc_depts').html('<div style="grid-column:1/-1;">'
-                + (qcNames.length ? '<b>'+qcNames.join('、')+'</b>' : '<span style="color:#DD5138;">尚未設定</span>')
-                + '<div style="font-size:12px;color:#8a6d45;margin-top:4px;">此項目已統一由'
-                + '<a href="../admin/org_role_setting.php" target="_blank"><b>組織角色綁定設定</b></a>'
-                + '的「品管部門」決定（含其子部門），在本頁不再重複設定。</div></div>');
+            // 品管部門已改由全站「組織角色綁定設定」決定（含子部門）→ 本頁一律反灰唯讀（2026-08-03）
+            $('#qadc_depts').html((r.departments || []).map(function(d){
+                return '<label style="font-weight:normal;margin:0 0 3px;color:#999;cursor:not-allowed;">'
+                     + '<input type="checkbox" class="qadc-dept" value="'+d.id+'" '+(qc.indexOf(d.id)>=0?'checked':'')
+                     + ' disabled> '+$('<i>').text(d.name).html()+'</label>';
+            }).join('')
+            + '<div style="grid-column:1/-1;font-size:12px;color:#8a6d45;margin-top:4px;">此項目已統一由'
+            + '<a href="../admin/org_role_setting.php" target="_blank"><b>組織角色綁定設定</b></a>'
+            + '的「品管部門」決定（含其子部門），僅能在該頁修改。</div>');
             function poolOpts(sel){
                 var h = '<option value="">請選擇...</option>';
                 (r.pool || []).forEach(function(p){
@@ -3891,11 +3891,16 @@ $(function(){
             '<tr><td class="k">製令/BOM</td><td>'+esc(m.bom)+'</td><td class="k">製程</td><td>'+esc(m.process)+'</td><td class="k">送驗數</td><td>'+m.incoming+'</td></tr>'+
             '<tr><td class="k">抽驗數</td><td>'+m.sample+'</td><td class="k">整體判定</td><td>'+m.judge+'（不良 '+m.ng+'）</td><td class="k">備註</td><td>'+esc(m.remark)+'</td></tr></table>';
         var pcsHead=''; for(var i=1;i<=n;i++) pcsHead+='<th>'+i+'</th>';
-        // 量具格：上＝檢具類型、下＝量具編號（字自動縮小、最多兩列），不再另印表格下方的量具對照列
+        // 量具格：三行＝量具類別／量具規格／量具編號，字自動縮小換行，不再另印表格下方的量具對照列
+        //   舊資料的規格是人工塞在編號括號裡（例 B-008-Q (0-25mm)）→ 拆出來當規格行，編號行只留編號本體
         var toolNoOf=function(id){
             var t=toolInstById(id);
             if(!t) return '';
-            return '<div class="tool2"><b>'+esc(t.cat||'')+'</b>'+esc(toolNoSpec(t))+'</div>';
+            var no=String(t.no||'').trim(), spec=t.spec||'';
+            var m=no.match(/[（(]([^）)]*)[）)]\s*$/);
+            if(m){ if(!spec) spec=m[1].trim(); no=no.slice(0,m.index).trim(); }
+            return '<div class="tool2">'+[t.cat||'', spec, no].filter(function(s){ return s!==''; })
+                   .map(function(s){ return '<span>'+esc(s)+'</span>'; }).join('')+'</div>';
         };
         var body='';
         items.forEach(function(it,idx){
