@@ -171,13 +171,23 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .dp-list div { padding:4px 9px; font-size:12.5px; color:#5b3a1e; cursor:pointer; }
         .dp-list div:hover { background:#FBF0DD; }
         .dp-list div.on { color:#b0a390; }
+        /* 角色設定（沿用全站 Roles_API + role_features，比照 purchase_request.php 的角色管理三欄樣式） */
+        #roleList { max-height:280px; overflow-y:auto; }
+        .role-item { padding:6px 10px; border-bottom:1px solid #EADFC8; cursor:pointer; font-size:13px; }
+        .role-item:hover { background:#FFF3E0; }
+        .role-item.on { background:#F0A24B; color:#fff; font-weight:bold; }
+        .role-item.sys { color:#b0a390; cursor:not-allowed; }
+        .role-feat { display:block; font-size:13px; font-weight:normal; padding:2px 0; cursor:pointer; }
+        .role-feat input { width:auto; margin:0 6px 0 0; }
         /* 目標設定：週期與次數同一列並排，不要上下堆疊 */
+        /* 目標設定表：table-layout:fixed + 百分比欄寬，避免欄位亂飄出現大片空白與橫向拉桿 */
+        #tgSetTbl { table-layout:fixed; width:100%; }
+        #tgSetTbl th, #tgSetTbl td { padding:5px 6px; overflow:hidden; }
         td.tg-cell { white-space:nowrap; }
-        td.tg-cell select { width:74px; height:26px; border:1px solid #D8BE93; border-radius:4px; font-size:12.5px; padding:0 4px; }
-        td.tg-cell input { width:56px; height:26px; border:1px solid #D8BE93; border-radius:4px; font-size:12.5px;
-            padding:0 5px; margin:0 4px; text-align:center; }
-        td.tg-cell span { font-size:12.5px; color:#5b3a1e; }
-        #tgSetTbl th, #tgSetTbl td { padding:5px 8px; }
+        td.tg-cell select { width:64px; height:26px; border:1px solid #D8BE93; border-radius:4px; font-size:12px; padding:0 2px; }
+        td.tg-cell input { width:42px; height:26px; border:1px solid #D8BE93; border-radius:4px; font-size:12px;
+            padding:0 3px; margin:0 3px; text-align:center; }
+        td.tg-cell span { font-size:12px; color:#5b3a1e; }
         /* 部門合併設定：跳窗放高、群組內部不再出現第二層捲軸 */
         .grp-box .att-people { max-height:none !important; overflow:visible !important; }
         #grpList { max-height:none; }
@@ -523,6 +533,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <span class="tab on set-tab" data-p="1">一般</span>
             <span class="tab set-tab" data-p="2">達標統計</span>
             <span class="tab set-tab" data-p="3">文件編號與送審</span>
+            <span class="tab set-tab" data-p="4" id="setTab4" style="display:none;">角色設定</span>
         </div>
         <div id="setPane1">
         <label>預設套用班別（只用來帶入上下班時間；休息一律由下方「休息時段」計算）</label>
@@ -606,6 +617,41 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">開啟設定頁</a>，本模組不另外設定，改組織只要改那一頁。
             </div>
         </div>
+
+        <div id="setPane4" style="display:none;">
+            <p class="tr-hint" style="margin:0 0 8px;">左邊選或新增角色 → 右邊改名稱、勾這個角色能看到什麼／能做什麼。
+                <b>權限由上而下包含</b>：勾了「訓練管理員」就自動含登錄與檢閱，不必逐個勾。「管理者」固定擁有全部權限、不可修改。</p>
+            <p class="tr-hint" style="margin:0 0 8px;background:#FFF7EA;">
+                <i class="fa fa-info-circle"></i> <b>「誰擁有這個角色」不在這裡設定</b>——人員對應角色全站統一在
+                <a href="../user/user_permissions.php" target="_blank">人員權限設定頁</a>的「教育訓練管理 角色指派」區塊，
+                這裡只負責定義角色的名稱與內容。</p>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+                <div style="border:1px solid #E8D5B5;border-radius:6px;background:#fff;flex:0 0 190px;">
+                    <div style="background:#F7E0BD;color:#5b3a1e;font-size:12px;font-weight:bold;padding:5px 10px;
+                        border-radius:6px 6px 0 0;display:flex;justify-content:space-between;align-items:center;">角色
+                        <button type="button" class="b-att nw" id="btnRoleAdd" style="padding:1px 8px;">＋ 新增</button></div>
+                    <div id="roleList"></div>
+                </div>
+                <div style="border:1px solid #E8D5B5;border-radius:6px;background:#fff;flex:1;min-width:260px;">
+                    <div style="background:#F7E0BD;color:#5b3a1e;font-size:12px;font-weight:bold;padding:5px 10px;border-radius:6px 6px 0 0;">角色內容</div>
+                    <div id="roleEdit" style="display:none;padding:10px;">
+                        <label>角色名稱</label>
+                        <div style="display:flex;gap:6px;">
+                            <input type="text" id="roleName" style="flex:1;">
+                            <button type="button" class="b-att nw" id="btnRoleRename">改名</button>
+                            <button type="button" class="b-att nw" style="color:#DD5138;" id="btnRoleDel">刪除</button>
+                        </div>
+                        <div style="font-size:12px;font-weight:bold;color:#8A5A2B;margin:10px 0 4px;">可視內容（看得到什麼）</div>
+                        <div id="featView"></div>
+                        <div style="font-size:12px;font-weight:bold;color:#8A5A2B;margin:10px 0 4px;">可操作（能做什麼）</div>
+                        <div id="featOp"></div>
+                        <button type="button" class="b-att nw" id="btnRoleFeatSave" style="margin-top:10px;background:#F0A24B;color:#fff;">
+                            <i class="fa fa-save"></i> 儲存功能</button>
+                    </div>
+                    <div id="roleEditHint" style="padding:24px;text-align:center;color:#8a6d45;">請在左側選一個角色，或按「＋ 新增」</div>
+                </div>
+            </div>
+        </div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('setMask')">取消</button>
@@ -640,8 +686,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             某個單位要不一樣，就把該列的「套用統一」取消勾選再填數字。週期可各自選「每月」或「每年」。</div>
         <div class="att-list-wrap" style="max-height:400px;">
             <table class="att-tbl" id="tgSetTbl">
-                <thead><tr><th class="t-left">單位</th><th style="width:96px;">套用統一</th>
-                    <th style="width:150px;">內訓目標</th><th style="width:150px;">外訓目標</th></tr></thead>
+                <thead><tr><th class="t-left" style="width:30%;">單位</th><th style="width:14%;">套用統一</th>
+                    <th style="width:28%;">內訓目標</th><th style="width:28%;">外訓目標</th></tr></thead>
                 <tbody id="tgSetBody"></tbody>
             </table>
         </div>
@@ -810,6 +856,7 @@ function loadMeta(cb){
         ATT_DIRS = {nas:m.attach_nas_dir||'', root:m.attach_root||''};
         GROUPS = m.dept_groups || []; UNITS = m.units || [];
         AS_DOCS = m.as_docs || []; DOC_NO = m.doc_no || {}; COMPANY = m.company_name || '';
+        TR_FEATURES = m.features || [];
         window.__ownCompany = COMPANY;      // eg_stamp.js 畫章時要用（公司全名）
         SIGNERS = m.plan_signers || {}; PLAN_APPR = m.plan_approval || {status:'none'};
         PLAN_LASTMOD = m.plan_last_modified || '';
@@ -824,6 +871,8 @@ function loadMeta(cb){
         if (m.perms.canEdit) $('#btnAdd').show();
         if (m.perms.canAdmin) { $('#btnSetting').show(); $('#btnTarget').show(); $('#btnGroup').show(); }
         if (m.perms.canApply) $('#btnReqAdd').show();
+        // 角色設定（改名/勾功能）實際寫入 Roles_API 要求「系統管理者」，訓練管理員(canAdmin)看得到模組設定但這個分頁只給真正的系統管理者
+        if (m.perms.isAdmin) $('#setTab4').show();
         applyUrlParams();
         if (cb) cb();
     });
@@ -1531,7 +1580,8 @@ $('#btnSubmitPlan').on('click', function(){
 $(document).on('click', '.set-tab', function(){
     var p=$(this).data('p');
     $('.set-tab').removeClass('on'); $(this).addClass('on');
-    $('#setPane1,#setPane2,#setPane3').hide(); $('#setPane'+p).show();
+    $('#setPane1,#setPane2,#setPane3,#setPane4').hide(); $('#setPane'+p).show();
+    if (String(p)==='4' && !ROLES.length) loadRoles();
 });
 
 /* ================= 達標狀況（各單位每月/每年內外訓次數） ================= */
@@ -2487,6 +2537,77 @@ function printRequestForm(){
         + '</tr></table>';
     egPrintWindow('教育訓練需求申請單', body, '', DOC_NO.request, false);
 }
+
+/* ================= 角色設定（角色名稱與功能都可自訂，沿用全站 Roles_API + role_features，比照 purchase_request.php） ================= */
+var RAPI = '../../src/store/Roles_API.php';
+var ROLES = [], CURROLE = 0, TR_FEATURES = [];
+function loadRoles(then){
+    $.getJSON(RAPI, {action:'get_roles', module:'training'}, function(res){
+        ROLES = res.data || [];
+        var h = '';
+        ROLES.forEach(function(r){
+            var sys = String(r.is_system)==='1';
+            h += '<div class="role-item'+(sys?' sys':'')+'" data-id="'+r.role_id+'">'
+               + esc(r.role_name)+(sys?'（系統．固定全權）':'')+'</div>';
+        });
+        $('#roleList').html(h || '<div style="padding:10px;color:#8a6d45;">尚無角色</div>');
+        if (CURROLE) $('.role-item[data-id="'+CURROLE+'"]').addClass('on');
+        if (typeof then==='function') then();
+    });
+}
+function selRole(id){
+    var r = ROLES.filter(function(x){ return String(x.role_id)===String(id); })[0];
+    if (!r) return;
+    if (String(r.is_system)==='1'){ alert('系統角色「'+r.role_name+'」固定擁有全部權限，不可修改'); return; }
+    CURROLE = id;
+    $('.role-item').removeClass('on'); $('.role-item[data-id="'+id+'"]').addClass('on');
+    $('#roleEditHint').hide(); $('#roleEdit').show();
+    $('#roleName').val(r.role_name);
+    var vh='', oh='';
+    (TR_FEATURES||[]).forEach(function(f){
+        var row = '<label class="role-feat"><input type="checkbox" class="featcb" value="'+esc(f.code)+'"> '+esc(f.label)+'</label>';
+        if (f.group==='view') vh += row; else oh += row;
+    });
+    $('#featView').html(vh); $('#featOp').html(oh);
+    $.getJSON(RAPI, {action:'get_role_features', role_id:id}, function(res){
+        var has = res.data || [];
+        $('.featcb').each(function(){ $(this).prop('checked', has.indexOf(this.value)>-1 || has.indexOf('all')>-1); });
+    });
+}
+$(document).on('click', '#roleList .role-item', function(){ selRole($(this).data('id')); });
+$('#btnRoleAdd').on('click', function(){
+    var n = prompt('新角色名稱（例：品管代訓、僅檢視統計）：');
+    if (!n || !$.trim(n)) return;
+    $.post(RAPI, {action:'save_role', role_name:$.trim(n), module:'training'}, function(r){
+        if (!r.success){ alert(r.message); return; }
+        loadRoles(function(){ selRole(r.role_id); });
+    }, 'json');
+});
+$('#btnRoleRename').on('click', function(){
+    if (!CURROLE) return;
+    var n = $.trim($('#roleName').val()||'');
+    if (!n){ alert('請輸入角色名稱'); return; }
+    $.post(RAPI, {action:'save_role', role_id:CURROLE, role_name:n}, function(r){
+        if (!r.success){ alert(r.message); return; }
+        loadRoles(); alert('已改名');
+    }, 'json');
+});
+$('#btnRoleDel').on('click', function(){
+    if (!CURROLE) return;
+    if (!confirm('確定刪除此角色？擁有此角色的人會失去對應權限（不會刪到使用者本身）。')) return;
+    $.post(RAPI, {action:'delete_role', role_id:CURROLE}, function(r){
+        if (!r.success){ alert(r.message); return; }
+        CURROLE = 0; $('#roleEdit').hide(); $('#roleEditHint').show();
+        loadRoles();
+    }, 'json');
+});
+$('#btnRoleFeatSave').on('click', function(){
+    if (!CURROLE) return;
+    var feats = $('.featcb:checked').map(function(){ return this.value; }).get();
+    $.post(RAPI, {action:'save_role_features', role_id:CURROLE, features:JSON.stringify(feats)}, function(r){
+        alert(r.success ? '已儲存。受影響的人重新整理頁面後生效。' : r.message);
+    }, 'json');
+});
 
 /* ---------- CSV ---------- */
 $('#btnCsv').on('click', function(){

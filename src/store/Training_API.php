@@ -108,6 +108,7 @@ case 'meta': {
           'plan_approval'=>training_plan_approval($db, (int)($_GET['year'] ?? date('Y'))),
           'plan_last_modified'=>training_plan_last_modified($db, (int)($_GET['year'] ?? date('Y'))),
           'my_dept_id'=>tr_user_dept_id($db, $uid), 'my_dept_name'=>tr_user_dept_name($db, $uid),
+          'features'=>TRAINING_FEATURES,
           'attach_nas_dir'=>$perms['canAdmin'] ? training_attach_dir($db) : null,
           'attach_root'=>$perms['canAdmin'] ? eg_attach_root($db) : null,
           'cur_year'=>$cy, 'cur_month'=>(int)date('n'), 'today'=>date('Y-m-d'), 'uid'=>$uid]);

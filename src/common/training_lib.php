@@ -16,6 +16,23 @@
 include_once __DIR__ . '/attach_lib.php';     // 附件根路徑（鐵律5：只存檔名、路徑即時組）
 include_once __DIR__ . '/org_role_lib.php';   // 人事部門/最高核准人員等全站組織綁定（禁止各頁寫死）
 include_once __DIR__ . '/approval_lib.php';   // 簽核紀錄 approval_record
+include_once __DIR__ . '/role_features_helper.php';   // 角色可自訂名稱＋自訂功能（role_features，見 memory rbac_custom_roles）
+
+/** 本模組的功能碼（角色可自訂名稱＋自己勾要哪些功能，存 role_features；沿用 purchase 模組同一套做法）
+ *  group：view＝可視內容／op＝可操作。權限「由上而下包含」：勾了訓練管理員就自動含登錄與檢閱，不必逐個勾。 */
+const TRAINING_FEATURES = [
+    ['code'=>'training_view',   'group'=>'view', 'label'=>'檢閱訓練場次列表與達標狀況（沒勾也看得到自己送出的需求申請單）'],
+    ['code'=>'training_apply',  'group'=>'op',   'label'=>'提出／修改自己的教育訓練需求申請單'],
+    ['code'=>'training_edit',   'group'=>'op',   'label'=>'新增/編輯計畫、確認開課、登錄完成、送審計劃表、核准需求申請單、轉為計畫'],
+    ['code'=>'training_admin',  'group'=>'op',   'label'=>'模組設定、刪除場次、修改已排定/已完成的計畫'],
+];
+/** 預設角色一次建立時附帶的功能碼（既有角色沿用原本行為，不改變任何人現有權限） */
+const TRAINING_DEFAULT_ROLE_FEATURES = [
+    'training_view'   => ['training_view'],
+    'training_apply'  => ['training_apply'],
+    'training_edit'   => ['training_edit', 'training_view'],
+    'training_admin'  => ['training_admin', 'training_edit', 'training_view'],
+];
 
 /* ============================================================
  * Schema
@@ -188,12 +205,24 @@ function training_ensure_schema(PDO $db): void {
 
     foreach ([['training_view','訓練檢閱'],['training_edit','訓練登錄'],['training_admin','訓練管理員'],
               ['training_apply','訓練需求申請人']] as $r) {
-        $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='training' LIMIT 1");
+        $st = $db->prepare("SELECT role_id FROM roles WHERE role_code=? AND module='training' LIMIT 1");
         $st->execute([$r[0]]);
-        if (!$st->fetchColumn()) {
+        $rid = (int)$st->fetchColumn();
+        if (!$rid) {
             $db->prepare("INSERT INTO roles (role_code, role_name, module) VALUES (?,?, 'training')")
                ->execute([$r[0], $r[1]]);
+            $rid = (int)$db->lastInsertId();
         }
+        // 角色名稱與功能都可由管理員自訂；只在該角色完全沒有功能碼時植入預設值，
+        // 避免程式覆寫掉管理員已經調整過的勾選（比照 purchase 模組）。
+        try {
+            $cnt = $db->prepare("SELECT COUNT(*) FROM role_features WHERE role_id=?");
+            $cnt->execute([$rid]);
+            if ((int)$cnt->fetchColumn() === 0) {
+                $ins = $db->prepare("INSERT IGNORE INTO role_features (role_id, feature_code) VALUES (?,?)");
+                foreach (TRAINING_DEFAULT_ROLE_FEATURES[$r[0]] ?? [$r[0]] as $fc) $ins->execute([$rid, $fc]);
+            }
+        } catch (Throwable $e) {}
     }
 
     // live_event.ref_type 原本 varchar(20)，本模組的 TRAINING_PLAN_APPROVAL(23)/TRAINING_REQUEST_APPROVAL(26)
@@ -799,12 +828,22 @@ function training_perms(PDO $db, ?array $u): array {
         $st->execute([$uid]);
         $isAdmin = (bool)$st->fetchColumn();
     }
-    $canAdmin = $isAdmin || training_has_role($db, $uid, ['training_admin']);
-    $canEdit  = $canAdmin || training_has_role($db, $uid, ['training_edit']);
+    // 權限判定：以「角色勾選的功能碼」(role_features) 為主，role_code 當後援——
+    // 管理員把角色改名、或自己建新角色，都不影響判定；角色若還沒勾任何功能碼，也照舊有行為運作（比照 purchase 模組）。
+    $feat = rf_load_user_features_all($db, $uid);      // 個人指派 ∪ 職稱指派（功能碼）
+    $codes = training_has_role($db, $uid, ['training_admin']) ? ['training_admin'] : [];
+    if (training_has_role($db, $uid, ['training_edit']))  $codes[] = 'training_edit';
+    if (training_has_role($db, $uid, ['training_apply'])) $codes[] = 'training_apply';
+    if (training_has_role($db, $uid, ['training_view']))  $codes[] = 'training_view';
+    $has = function (string $code) use ($feat, $codes): bool {
+        return rf_has_feature($feat, $code) || in_array($code, $codes, true);
+    };
+    $canAdmin = $isAdmin || $has('training_admin');
+    $canEdit  = $canAdmin || $has('training_edit');
     // 訓練需求申請人：獨立角色，只能填/送/看自己的申請單，不等於也不授予登錄/管理權限，
     // 但比照使用者要求，可看訓練場次列表(唯讀) → 併入 canView。
-    $canApply = $canEdit || training_has_role($db, $uid, ['training_apply']);
-    $canView  = $canEdit || $canApply || training_has_role($db, $uid, ['training_view']);
+    $canApply = $canEdit || $has('training_apply');
+    $canView  = $canEdit || $canApply || $has('training_view');
     return ['isAdmin'=>$isAdmin,'canAdmin'=>$canAdmin,'canEdit'=>$canEdit,'canView'=>$canView,'canApply'=>$canApply];
 }
 
