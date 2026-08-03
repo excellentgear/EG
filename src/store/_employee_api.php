@@ -586,6 +586,11 @@ function _backfillBaseSnapshot(PDO $db, int $userId, string $eff): array {
     return eg_position_snapshot_at($db, $userId, $prevDate);
 }
 
+/** 從快照中移除指定部門/職稱那一筆，供補登兼任新增/移除/更動時重組快照用 */
+function _snapWithoutItem(array $snap, int $depId, int $posId): array {
+    return array_values(array_filter($snap, fn($s) => !($s['department_id'] === $depId && $s['position_id'] === $posId)));
+}
+
 /** 查某人在某日期之前的職務快照（補登表單開日期時的參考／核對用） */
 function getPositionSnapshotAt() {
     global $db;
@@ -605,6 +610,9 @@ function getPositionSnapshotAt() {
  * change_kind：transfer(主職調動) / concurrent_add(新增兼任) / concurrent_remove(移除兼任) / concurrent_change(更動兼任)。
  * 兼任三種一律以「生效日前一天」解析出的快照為基準，套用差異後存成完整快照（主職＋所有兼任），
  * 這樣主職調動也會把既有兼任職務原樣帶過去，不會因為補登主職異動而把兼任紀錄弄丟。
+ * 兼任三種不檢查「基準快照裡有沒有這筆」就擋下——補登本來就是要覆蓋系統對過去日期的預設猜測
+ * （無紀錄時 eg_position_snapshot_at 會回現況，若現況剛好已有/已無這筆，會被誤判成「重複/找不到」）；
+ * 一律強制寫成使用者指定的「異動前/異動後」狀態即可，不論基準快照原本是什麼。
  */
 function backfillPositionHistory() {
     global $db;
@@ -651,27 +659,21 @@ function backfillPositionHistory() {
         if ($aDep <= 0 || $aPos <= 0) { echo json_encode(['status' => 'error', 'message' => '請選擇要新增的兼任職務。'], JSON_UNESCAPED_UNICODE); return; }
         $item = _backfillSnapItem($db, $aDep, $aPos, 0);
         if ($item === null) { echo json_encode(['status' => 'error', 'message' => '部門或職稱不存在。'], JSON_UNESCAPED_UNICODE); return; }
-        $before = _backfillBaseSnapshot($db, $id, $eff);
-        foreach ($before as $s) {
-            if ($s['department_id'] === $aDep && $s['position_id'] === $aPos) {
-                echo json_encode(['status' => 'error', 'message' => '該日期之前已經有這個職務了，不需要新增（請確認生效日或改選其他異動類型）。'], JSON_UNESCAPED_UNICODE); return;
-            }
-        }
-        $after = array_merge($before, [$item]);
+        // 補登的意義就是「系統原本不知道這件事」：不論目前依現有紀錄解析出的快照有沒有這筆，
+        // 一律強制設成「異動前無、異動後有」，藉此覆蓋掉系統對過去日期的預設猜測（無紀錄一律回現況）
+        $rest = _snapWithoutItem(_backfillBaseSnapshot($db, $id, $eff), $aDep, $aPos);
+        $before = $rest;
+        $after = array_merge($rest, [$item]);
 
     } elseif ($kind === 'concurrent_remove') {
         $rDep = (int)($_POST['remove_department_id'] ?? 0);
         $rPos = (int)($_POST['remove_position_id'] ?? 0);
         if ($rDep <= 0 || $rPos <= 0) { echo json_encode(['status' => 'error', 'message' => '請選擇要移除的兼任職務。'], JSON_UNESCAPED_UNICODE); return; }
-        $before = _backfillBaseSnapshot($db, $id, $eff);
-        $found = false; $after = [];
-        foreach ($before as $s) {
-            if (!$found && !$s['is_main'] && $s['department_id'] === $rDep && $s['position_id'] === $rPos) { $found = true; continue; }
-            $after[] = $s;
-        }
-        if (!$found) {
-            echo json_encode(['status' => 'error', 'message' => '在該日期之前的快照中找不到這個兼任職務（可能是生效日填錯，或這其實是主職）。可先看上方預覽核對當時狀態。'], JSON_UNESCAPED_UNICODE); return;
-        }
+        $item = _backfillSnapItem($db, $rDep, $rPos, 0);
+        if ($item === null) { echo json_encode(['status' => 'error', 'message' => '部門或職稱不存在。'], JSON_UNESCAPED_UNICODE); return; }
+        $rest = _snapWithoutItem(_backfillBaseSnapshot($db, $id, $eff), $rDep, $rPos);
+        $before = array_merge($rest, [$item]);
+        $after = $rest;
 
     } elseif ($kind === 'concurrent_change') {
         $fDep = (int)($_POST['from_department_id'] ?? 0);
@@ -681,23 +683,12 @@ function backfillPositionHistory() {
         if ($fDep <= 0 || $fPos <= 0) { echo json_encode(['status' => 'error', 'message' => '請選擇「原本的兼任職務」。'], JSON_UNESCAPED_UNICODE); return; }
         if ($tDep <= 0 || $tPos <= 0) { echo json_encode(['status' => 'error', 'message' => '請選擇「更動後的兼任職務」。'], JSON_UNESCAPED_UNICODE); return; }
         if ($fDep === $tDep && $fPos === $tPos) { echo json_encode(['status' => 'error', 'message' => '更動前後的職務相同，沒有實質變動。'], JSON_UNESCAPED_UNICODE); return; }
+        $fromItem = _backfillSnapItem($db, $fDep, $fPos, 0);
         $toItem = _backfillSnapItem($db, $tDep, $tPos, 0);
-        if ($toItem === null) { echo json_encode(['status' => 'error', 'message' => '更動後的部門或職稱不存在。'], JSON_UNESCAPED_UNICODE); return; }
-        $before = _backfillBaseSnapshot($db, $id, $eff);
-        $found = false; $after = [];
-        foreach ($before as $s) {
-            if (!$found && !$s['is_main'] && $s['department_id'] === $fDep && $s['position_id'] === $fPos) { $found = true; continue; }
-            $after[] = $s;
-        }
-        if (!$found) {
-            echo json_encode(['status' => 'error', 'message' => '在該日期之前的快照中找不到「原本的兼任職務」（可能是生效日填錯）。可先看上方預覽核對當時狀態。'], JSON_UNESCAPED_UNICODE); return;
-        }
-        foreach ($after as $s) {
-            if ($s['department_id'] === $tDep && $s['position_id'] === $tPos) {
-                echo json_encode(['status' => 'error', 'message' => '該日期之前已經有更動後的這個職務了。'], JSON_UNESCAPED_UNICODE); return;
-            }
-        }
-        $after[] = $toItem;
+        if ($fromItem === null || $toItem === null) { echo json_encode(['status' => 'error', 'message' => '部門或職稱不存在。'], JSON_UNESCAPED_UNICODE); return; }
+        $rest = _snapWithoutItem(_snapWithoutItem(_backfillBaseSnapshot($db, $id, $eff), $fDep, $fPos), $tDep, $tPos);
+        $before = array_merge($rest, [$fromItem]);
+        $after = array_merge($rest, [$toItem]);
     } else {
         echo json_encode(['status' => 'error', 'message' => '未知的異動類型。'], JSON_UNESCAPED_UNICODE); return;
     }
@@ -730,14 +721,17 @@ function deletePositionHistory() {
         $st->execute([$hid]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
         if (!$row) { echo json_encode(['status' => 'error', 'message' => '找不到該筆紀錄。'], JSON_UNESCAPED_UNICODE); return; }
-        if ($row['source'] !== 'manual') {
+        // 系統自動寫入的紀錄原則上不可刪（稽核軌跡）；僅超級管理員(id=1)可強制刪除以清理測試/錯誤資料，並照樣留稽核紀錄
+        $isSuperAdmin = isset($_SESSION['id']) && (int)$_SESSION['id'] === 1;
+        if ($row['source'] !== 'manual' && !$isSuperAdmin) {
             echo json_encode(['status' => 'error', 'message' => '系統自動寫入的異動紀錄不可刪除（稽核軌跡）。'], JSON_UNESCAPED_UNICODE); return;
         }
         $db->beginTransaction();
         $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
                       VALUES ('POSITION_CHANGE_DEL', 'user', ?, '', ?, ?, ?, NOW())")
            ->execute([(string)$row['user_id'],
-                      json_encode(['deleted_hist_id' => $hid, 'effective_date' => $row['effective_date'],
+                      json_encode(['deleted_hist_id' => $hid, 'effective_date' => $row['effective_date'], 'source' => $row['source'],
+                                   'force_by_super_admin' => ($row['source'] !== 'manual' && $isSuperAdmin),
                                    'before' => $row['before_json'], 'after' => $row['after_json']], JSON_UNESCAPED_UNICODE),
                       isset($_SESSION['id']) ? (int)$_SESSION['id'] : null, $_SESSION['user_cname'] ?? '']);
         $db->prepare("DELETE FROM user_position_history WHERE id = ?")->execute([$hid]);
@@ -797,13 +791,17 @@ function deleteStatusHistory() {
         $st->execute([$hid]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
         if (!$row) { echo json_encode(['status' => 'error', 'message' => '找不到該筆紀錄。'], JSON_UNESCAPED_UNICODE); return; }
-        if (strpos((string)$row['remark'], '[補登') !== 0) {
+        // 系統自動寫入的紀錄原則上不可刪（稽核軌跡）；僅超級管理員(id=1)可強制刪除以清理測試/錯誤資料，並照樣留稽核紀錄
+        $isSuperAdmin = isset($_SESSION['id']) && (int)$_SESSION['id'] === 1;
+        $isBackfill = strpos((string)$row['remark'], '[補登') === 0;
+        if (!$isBackfill && !$isSuperAdmin) {
             echo json_encode(['status' => 'error', 'message' => '系統自動寫入的狀態紀錄不可刪除（稽核軌跡）。'], JSON_UNESCAPED_UNICODE); return;
         }
         $db->beginTransaction();
         $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
                       VALUES ('STATUS_BACKFILL_DEL', 'user', ?, '', ?, ?, ?, NOW())")
-           ->execute([(string)$row['user_id'], json_encode($row + ['deleted_hist_id' => $hid], JSON_UNESCAPED_UNICODE),
+           ->execute([(string)$row['user_id'],
+                      json_encode($row + ['deleted_hist_id' => $hid, 'force_by_super_admin' => (!$isBackfill && $isSuperAdmin)], JSON_UNESCAPED_UNICODE),
                       isset($_SESSION['id']) ? (int)$_SESSION['id'] : null, $_SESSION['user_cname'] ?? '']);
         $db->prepare("DELETE FROM user_status_history WHERE id = ?")->execute([$hid]);
         $db->commit();

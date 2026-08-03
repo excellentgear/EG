@@ -467,7 +467,7 @@ if ($hrUserPerm === 'R') {
                         <p class="text-muted" style="font-size:13px; margin-bottom:8px;">
                             教育訓練等頁補登舊資料時，會依這裡的紀錄解析出「當時」的部門與職稱；職位變動過的人請把過去的異動補登進來（生效日填當時實際生效的日期）。
                             主職有換人才選「主職調動」；只是兼任職務有增減或換人、主職沒變，選對應的兼任類型即可，系統會自動算出完整的前後快照。
-                            系統異動當下自動寫入的紀錄不可刪除，只有補登列可刪。</p>
+                            系統異動當下自動寫入的紀錄原則上不可刪除（稽核軌跡），只有補登列可刪；僅超級管理員可強制刪除系統紀錄，供清理測試/錯誤資料用。</p>
                         <div id="posHistPager" class="text-right" style="margin-bottom:4px;"></div>
                         <table class="table table-condensed table-striped">
                             <thead><tr><th>生效日</th><th>類型</th><th>異動前</th><th>異動後</th><th>原因</th><th>來源</th><th style="width:50px;"></th></tr></thead>
@@ -623,6 +623,7 @@ if ($hrUserPerm === 'R') {
 <script>
     // 將後端權限資料注入到全域變數
     window.hrUserPerm = "<?php echo $hrUserPerm ? $hrUserPerm : ''; ?>";
+    window.currentUserId = <?php echo (int)$id; ?>;
 </script>
 
 <script>
@@ -1206,7 +1207,8 @@ $(document).ready(function() {
     const CHANGE_TYPE_LABEL = { transfer: '調動', concurrent_add: '兼任新增', concurrent_remove: '兼任移除', concurrent_change: '兼任異動',
                                 backfill: '補登', resign: '離職', reinstate: '復職' };
     const STATUS_HIST_LABEL = { 0: '離職', 1: '在職（復職）', 2: '留職停薪', 3: '育嬰留停' };
-    const canEditHist = window.hrUserPerm.includes('A') || window.hrUserPerm.includes('U');
+    const isSuperAdmin = window.currentUserId === 1; // 超級管理員固定 id=1，補登異動紀錄一律放行，方便補足/修正資料
+    const canEditHist = window.hrUserPerm.includes('A') || window.hrUserPerm.includes('U') || isSuperAdmin;
 
     $('#btn-history').on('click', function() {
         const userId = $(this).data('id');
@@ -1265,7 +1267,7 @@ $(document).ready(function() {
               + '<td>' + escapeHtml(r.before_label) + '</td><td>' + escapeHtml(r.after_label) + '</td>'
               + '<td>' + escapeHtml(r.reason || '') + '</td>'
               + '<td>' + (r.source === 'manual' ? '補登' : '系統') + (r.operator ? '<br><small>' + escapeHtml(r.operator) + '</small>' : '') + '</td>'
-              + '<td>' + (r.source === 'manual' && canEditHist
+              + '<td>' + ((r.source === 'manual' && canEditHist) || isSuperAdmin
                     ? '<button type="button" class="btn btn-xs btn-danger btn-del-poshist" data-hid="' + r.id + '">刪</button>' : '') + '</td></tr>';
         });
         $('#posHistBody').html(h || '<tr><td colspan="7" class="text-muted">尚無職務調動紀錄（' +
@@ -1281,7 +1283,7 @@ $(document).ready(function() {
               + '<td>' + escapeHtml(r.start_date || '') + '</td><td>' + escapeHtml(r.end_date || '') + '</td>'
               + '<td>' + escapeHtml(r.remark || '') + '</td>'
               + '<td>' + (r.is_backfill ? '補登' : '系統') + '</td>'
-              + '<td>' + (r.is_backfill && canEditHist
+              + '<td>' + ((r.is_backfill && canEditHist) || isSuperAdmin
                     ? '<button type="button" class="btn btn-xs btn-danger btn-del-stahist" data-hid="' + r.id + '">刪</button>' : '') + '</td></tr>';
         });
         $('#staHistBody').html(h || '<tr><td colspan="6" class="text-muted">尚無在職狀態紀錄（' +
