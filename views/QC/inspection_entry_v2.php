@@ -145,18 +145,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                     $sign = ['name' => (string)$n->fetchColumn(), 'deputy' => $isDep ? 1 : 0];
                 } catch (Exception $e) {}
             }
-            $people = [];
+            // 可選的核可主管＝「品管部門（含子部門）」底下所有主管，依職級由大到小
+            //   品管部門是哪一個部門一律取自 views/admin/org_role_setting.php 的綁定（禁止各頁寫死部門 id）
+            $people = []; $peopleHint = '';
             if ($canCfg) {
                 try {
+                    include_once '../../src/common/org_role_lib.php';
                     include_once '../../src/common/people_lib.php';
-                    foreach (eg_people_list($pdo, []) as $p) {
-                        $people[] = ['id' => (int)$p['id'], 'name' => (string)($p['display'] ?? $p['user_cname'])];
+                    $qcDepts = eg_org_dept_ids($pdo, 'qc_dept');
+                    if (!$qcDepts) {
+                        $peopleHint = '尚未設定「品管部門」，請先到 系統管理 → 組織角色設定 綁定品管部門。';
+                    } else {
+                        $mgrs = eg_org_dept_managers($pdo, $qcDepts);       // 已依職級大到小
+                        if (!$mgrs) {
+                            $peopleHint = '品管部門底下沒有任何具主管職稱（經理／課長／組長…）的在職人員，請先於人事設定職稱與職級。';
+                        } else {
+                            $lv = []; foreach ($mgrs as $mg) $lv[(int)$mg['id']] = (int)$mg['level'];
+                            // 人員列表一律走 people_lib（只列在職、標記長期請假、顯示職稱）
+                            $rows = eg_people_list($pdo, ['dept_ids' => $qcDepts, 'user_ids' => array_keys($lv)]);
+                            usort($rows, function ($a, $b) use ($lv) {
+                                return ($lv[$a['id']] <=> $lv[$b['id']]) ?: ($a['position_sort'] <=> $b['position_sort']) ?: ($a['id'] <=> $b['id']);
+                            });
+                            foreach ($rows as $p) $people[] = ['id' => (int)$p['id'], 'name' => (string)($p['display'] ?? $p['user_cname'])];
+                        }
                     }
-                } catch (Throwable $e) {}
+                } catch (Throwable $e) { $peopleHint = '主管名單載入失敗：' . $e->getMessage(); }
             }
             echo json_encode(['success' => true, 'company' => $company, 'doc' => $doc,
                               'auto_approve' => $auto, 'approver_id' => $appId, 'approver' => $sign,
-                              'can_cfg' => $canCfg, 'people' => $people], JSON_UNESCAPED_UNICODE);
+                              'can_cfg' => $canCfg, 'people' => $people, 'people_hint' => $peopleHint], JSON_UNESCAPED_UNICODE);
             exit;
         }
         if ($act === 'print_cfg_save') {
@@ -1304,7 +1321,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             <label style="font-weight:normal;"><input type="checkbox" id="ac-on"> 啟用主管審核自動核可</label>
             <div class="form-group" style="margin-top:8px;">
                 <label>核可主管</label>
-                <select id="ac-user" class="form-control input-sm"></select>
+                <select id="ac-user" class="form-control input-sm" data-eg-filter="輸入姓名篩選…"></select>
+                <p class="muted-help" style="margin-top:4px;">名單＝<b>品管部門（含子部門）底下所有主管</b>，依職級由大到小排列；
+                   品管部門是哪一個部門取自 <a href="../admin/org_role_setting.php" target="_blank">系統管理 → 組織角色設定</a>。</p>
+                <p class="text-danger" id="ac-hint" style="display:none;"></p>
             </div>
         </div>
         <div class="modal-footer">
@@ -4057,6 +4077,7 @@ $(function(){
             $('#ac-user').html('<option value="">（請選擇）</option>'+(PRINTCFG.people||[]).map(function(p){
                 return '<option value="'+p.id+'"'+(p.id==PRINTCFG.approver_id?' selected':'')+'>'+esc(p.name)+'</option>';
             }).join(''));
+            $('#ac-hint').toggle(!!PRINTCFG.people_hint).text(PRINTCFG.people_hint||'');
             $('#approveCfgModal').modal('show');
         });
     });

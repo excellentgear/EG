@@ -150,6 +150,38 @@ function eg_org_dept_manager(PDO $db, $dept): ?array {
 }
 
 /**
+ * 某部門（可含子部門）的**所有主管**，依職級由大到小排序（經理→課長→組長）。
+ * 「主管」＝該職稱在 position_level 有設 level（目前僅經理/副理/課長/副課長/組長/副組長有），
+ * 所以同一個部門會有多位（課長、副課長、組長…）——**要讓使用者自己挑哪一位簽章時用本函式**；
+ * 只要一位（自動推算部門主管）時用 eg_org_dept_manager()。
+ * $dept 傳 int 或 int[]（含子部門請用 eg_org_dept_ids() 展開）。
+ * 回傳每列：id, user_cname, position_id, position_name, level, department_id
+ */
+function eg_org_dept_managers(PDO $db, $dept): array {
+    $ids = is_array($dept) ? array_values(array_filter(array_map('intval', $dept))) : ($dept ? [(int)$dept] : []);
+    if (!$ids) return [];
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    try {
+        // 一人可能在多個子部門掛多個主管職稱 → 一律取職級最高的那個（欄位全部聚合，避免 ONLY_FULL_GROUP_BY 報錯）
+        $st = $db->prepare("SELECT u.id, u.user_cname,
+                                   MIN(pl.level) AS level,
+                                   MIN(COALESCE(p.sort_order,999)) AS pos_sort,
+                                   SUBSTRING_INDEX(GROUP_CONCAT(p.name ORDER BY pl.level ASC, COALESCE(p.sort_order,999) ASC),',',1) AS position_name,
+                                   SUBSTRING_INDEX(GROUP_CONCAT(m.position_id ORDER BY pl.level ASC),',',1) AS position_id,
+                                   SUBSTRING_INDEX(GROUP_CONCAT(m.department_id ORDER BY pl.level ASC),',',1) AS department_id
+                            FROM user_department_position_map m
+                            JOIN user u ON u.id=m.user_id
+                            LEFT JOIN position p ON p.id=m.position_id
+                            JOIN position_level pl ON pl.position_id=m.position_id AND pl.level IS NOT NULL
+                            WHERE m.department_id IN ($in) AND COALESCE(u.state,1) NOT IN (0,90)
+                            GROUP BY u.id, u.user_cname
+                            ORDER BY level ASC, pos_sort ASC, u.id");
+        $st->execute($ids);
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+/**
  * 儲存一筆綁定（$deptId/$userId 依角色 type 擇一；傳 null＝清除設定）
  * 注意：本函式**不可**呼叫 eg_org_ensure_schema()——CREATE TABLE 是 DDL，MySQL 會隱式 commit，
  * 呼叫端包在 transaction 裡時就會在 commit() 爆 "There is no active transaction"（2026-08-03 儲存失敗 500 的根因）。
