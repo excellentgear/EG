@@ -653,6 +653,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .tool-btn .tno { color:#8a6a45; font-size:12px; margin-left:4px; }
     .tool-btn.none { color:#a08a6d; border-style:dashed; }
     #items-table .tool-btn { padding:4px 6px; font-size:12px; }
+    /* 總表量具欄：比照列印版排版，類別/規格/編號各一行、字縮小、行距縮緊，減少總表逐列高度 */
+    #items-table .tool-btn-compact { padding:2px 4px; line-height:1.15; }
+    #items-table .tool-btn-compact span { display:block; font-size:11px; }
     /* 量具挑選跳窗：類型 → 編號，兩層都是大按鈕 */
     .tpick-grid { display:flex; flex-wrap:wrap; gap:8px; }
     .tpick-grid button { min-width:130px; min-height:52px; border:1px solid var(--line); background:#fff; color:var(--ink);
@@ -993,10 +996,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <input type="number" class="form-control input-sm" id="inp-sample" value="5"></div>
             <div class="col-sm-2 form-group"><label class="muted-help">不良數（自動）</label>
                 <input type="number" class="form-control input-sm" id="inp-ng" value="0" readonly></div>
-            <div class="col-sm-2 form-group"><label class="muted-help">整體判定</label><div>
-                <label class="radio-inline"><input type="radio" name="judge" value="OK" checked> 合格</label>
-                <label class="radio-inline"><input type="radio" name="judge" value="NG"> 不良</label></div></div>
-            <div class="col-sm-4 form-group"><label class="muted-help">處置 / 備註</label>
+            <div class="col-sm-6 form-group"><label class="muted-help">處置 / 備註</label>
                 <input type="text" class="form-control input-sm" id="inp-remark" placeholder="例：尺寸 A 超差，退回重做…"></div>
         </div>
         <div class="row">
@@ -1229,8 +1229,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             </div>
             <div class="tpick-scope" id="tp-scope">
                 <b>套用範圍</b>　<span class="muted-help">同一支量具常常好幾個尺寸共用，不必一欄一欄設</span>
-                <label><input type="radio" name="tpscope" value="blank" checked> 套用到<b>所有尚未指定量具</b>的檢驗項目</label>
-                <label><input type="radio" name="tpscope" value="one"> 只設定<b>這一個</b>項目</label>
+                <label><input type="radio" name="tpscope" value="blank"> 套用到<b>所有尚未指定量具</b>的檢驗項目</label>
+                <label><input type="radio" name="tpscope" value="one" checked> 只設定<b>這一個</b>項目</label>
                 <label><input type="radio" name="tpscope" value="all"> 套用到<b>全部</b>檢驗項目（覆蓋既有設定）</label>
             </div>
         </div>
@@ -2115,11 +2115,23 @@ $(function(){
         return no+'('+t.spec+')';
     }
     // 量具改用「按鈕 → 跳窗挑」：下拉選單選項太多又擠，現場很難點（2026-07-29 回饋）
-    function toolBtn(i, r){
+    // compact=true（總表用）：比照列印版量具格排版，類別/規格/編號各自一行、字縮小、行距縮緊，
+    // 節省總表逐列高度；逐項/逐件視圖字級較大、單一情境不必省版面，維持原本樣式
+    function toolBtn(i, r, compact){
         var t = toolInstById(MODEL.items[i].readings[r].tool_id);
-        return '<button type="button" class="tool-btn '+(t?'':'none')+'" data-i="'+i+'" data-r="'+r+'" title="點此選擇量具">'+
-               (t ? '<span class="tcat">'+esc(t.cat||'量具')+'</span><span class="tno">'+esc(toolNoSpec(t))+'</span>'
-                  : '<i class="fa fa-wrench"></i> 點此選擇量具')+'</button>';
+        if(!t){
+            return '<button type="button" class="tool-btn none" data-i="'+i+'" data-r="'+r+'" title="點此選擇量具"><i class="fa fa-wrench"></i> 點此選擇量具</button>';
+        }
+        if(compact){
+            var no=String(t.no||'').trim(), spec=t.spec||'';
+            var mm=no.match(/[（(]([^）)]*)[）)]\s*$/);
+            if(mm){ if(!spec) spec=mm[1].trim(); no=no.slice(0,mm.index).trim(); }
+            var lines=[t.cat||'', spec, no].filter(function(s){ return s!==''; })
+                      .map(function(s){ return '<span>'+esc(s)+'</span>'; }).join('');
+            return '<button type="button" class="tool-btn tool-btn-compact" data-i="'+i+'" data-r="'+r+'" title="點此選擇量具">'+lines+'</button>';
+        }
+        return '<button type="button" class="tool-btn" data-i="'+i+'" data-r="'+r+'" title="點此選擇量具">'+
+               '<span class="tcat">'+esc(t.cat||'量具')+'</span><span class="tno">'+esc(toolNoSpec(t))+'</span></button>';
     }
     function firstInstOfCat(catName){
         if(!catName) return '';
@@ -2429,7 +2441,7 @@ $(function(){
                         '<td><input class="table-input f-std" data-i="'+i+'" value="'+esc(it.std)+'"></td>'+
                         '<td><input class="table-input f-up" data-i="'+i+'" value="'+esc(it.up)+'" '+(it.type==='OKNG'?'readonly':'')+'></td>'+
                         '<td><input class="table-input f-lo" data-i="'+i+'" value="'+esc(it.lo)+'" '+(it.type==='OKNG'?'readonly':'')+'></td>'+
-                        '<td>'+toolBtn(i,0)+'</td>'+
+                        '<td>'+toolBtn(i,0,true)+'</td>'+
                         '<td><select class="table-input f-type" data-i="'+i+'">'+
                           '<option value="NUM" '+(it.type==='NUM'?'selected':'')+'>數值</option>'+
                           '<option value="OKNG" '+(it.type==='OKNG'?'selected':'')+'>OK/NG</option></select></td>';
@@ -2437,7 +2449,7 @@ $(function(){
                 body += '<td class="g-name">'+esc(it.name||'（未命名）')+rowActs(it,i)+'</td>'+
                         '<td class="g-spec">'+(it.type==='OKNG' ? esc(it.std||'OK/NG')
                             : (esc(trimNum(it.std)||'—')+(L?('<br><span class="muted-help">'+trimNum(L.low.toFixed(4))+' ~ '+trimNum(L.hi.toFixed(4))+'</span>'):'')))+'</td>'+
-                        '<td>'+toolBtn(i,0)+'</td>';
+                        '<td>'+toolBtn(i,0,true)+'</td>';
             }
             var cells=''; for(var s=0;s<state.sampleN;s++) cells+=cellHtml(it,i,0,s,false);
             body += '<td><div class="gcells">'+cells+'</div></td>'+
@@ -2449,7 +2461,7 @@ $(function(){
                 var afterTool = (colsBefore - toolCol - 1); // 量具與實測值之間還有幾欄（型態）
                 body += '<tr style="background:#FBF7F1;"><td></td><td colspan="'+(toolCol-2)+'" class="text-right muted-help">↳ 加量測 '+r+
                         ' <a href="#" class="btn-del-reading" data-i="'+i+'" data-r="'+r+'" style="color:var(--coral);"><i class="fa fa-trash"></i></a></td>'+
-                        '<td>'+toolBtn(i,r)+'</td>'+ (afterTool>0 ? '<td></td>' : '') +
+                        '<td>'+toolBtn(i,r,true)+'</td>'+ (afterTool>0 ? '<td></td>' : '') +
                         '<td><div class="gcells">'+sub+'</div></td><td></td></tr>';
             }
         });
@@ -2746,6 +2758,17 @@ $(function(){
         $m.text(msg).stop(true,true).fadeIn(120).delay(2000).fadeOut(400);
     }
     $(document).on('input', '.f-name', function(){ var i=+$(this).data('i'); MODEL.items[i].name=$(this).val(); scheduleDraftSave(); });
+    // 檢驗項目常與標準值同一個數字（例：Ø12.2、60°）。離開項目名稱欄時，若標準值仍空白
+    // 且型態＝數值，自動去除符號取剩餘數字帶入標準值；標準值一旦有值就不再覆蓋（使用者填的優先）。
+    $(document).on('blur', '.f-name', function(){
+        var i=+$(this).data('i'), it=MODEL.items[i]; if(!it) return;
+        if(it.type==='OKNG' || (it.std!=null && String(it.std).trim()!=='')) return;
+        var m=String(it.name||'').match(/-?\d+(\.\d+)?/);
+        if(!m) return;
+        it.std=m[0];
+        $('input.f-std[data-i="'+i+'"]').val(it.std);
+        repaintItem(i);
+    });
     $(document).on('input', '.f-std',  function(){ var i=+$(this).data('i'); MODEL.items[i].std =$(this).val(); repaintItem(i); });
     $(document).on('input', '.f-up',   function(){ var i=+$(this).data('i'); MODEL.items[i].up  =$(this).val(); repaintItem(i); });
     $(document).on('input', '.f-lo',   function(){ var i=+$(this).data('i'); MODEL.items[i].lo  =$(this).val(); repaintItem(i); });
@@ -4490,16 +4513,16 @@ $(function(){
     function renderHistDetail(res){
         var h=res.header, its=res.items||[];
         var out='<div class="well well-sm" style="margin-bottom:8px;"><b>逐項實測</b>（單號 '+h.qc_form_id+'；送驗 '+(h.incoming_qty||0)+'／抽驗 '+(h.sample_qty||0)+'；整體 '+(h.check_result==='NG'?'<span class="text-danger">不良</span>':'合格')+'）</div>';
-        out+='<div style="max-height:300px;overflow:auto;"><table class="table table-condensed table-bordered"><thead><tr><th>項目</th><th>標準</th><th>量具</th><th>實測（各PCS）</th><th>判定</th></tr></thead><tbody>';
-        its.forEach(function(it){
+        out+='<div style="max-height:300px;overflow:auto;"><table class="table table-condensed table-bordered"><thead><tr><th>項次</th><th>項目</th><th>標準</th><th>量具</th><th>實測（各PCS）</th><th>判定</th></tr></thead><tbody>';
+        its.forEach(function(it,idx){
             var readings=[{tool:(it.tool||''), samples:it.samples}];
             (it.extra||[]).forEach(function(ex){ readings.push({tool:(ex.method||ex.tool_no||''), samples:ex.samples}); });
             readings.forEach(function(rd,ri){
                 var vals=(rd.samples||[]).map(function(s){ return (s&&s.v!==''&&s.v!=null)?('<span class="'+((s.r==='NG')?'text-danger':'')+'">'+esc(s.v)+'</span>'):'·'; }).join('　');
-                out+='<tr>'+(ri===0?('<td rowspan="'+readings.length+'">'+esc(it.name)+'</td><td rowspan="'+readings.length+'">'+esc(it.std||'')+((it.up||it.lo)?(' ('+esc(it.up||'')+'/'+esc(it.lo||'')+')'):'')+'</td>'):'')+
+                out+='<tr>'+(ri===0?('<td rowspan="'+readings.length+'">'+esc(codeLabel(idx))+'</td><td rowspan="'+readings.length+'">'+esc(it.name)+'</td><td rowspan="'+readings.length+'">'+esc(it.std||'')+((it.up||it.lo)?(' ('+esc(it.up||'')+'/'+esc(it.lo||'')+')'):'')+'</td>'):'')+
                     '<td>'+esc(rd.tool||'')+'</td><td>'+vals+'</td>'+(ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'<span class="text-danger">NG</span>':(it.verdict==='AOD'?'特採':'OK'))+'</td>'):'')+'</tr>';
             });
-            if(it.remark) out+='<tr><td colspan="5" class="text-muted" style="font-size:12px">備註：'+esc(it.remark)+'</td></tr>';
+            if(it.remark) out+='<tr><td colspan="6" class="text-muted" style="font-size:12px">備註：'+esc(it.remark)+'</td></tr>';
         });
         out+='</tbody></table></div>';
         return out;
