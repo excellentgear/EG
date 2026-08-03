@@ -13,7 +13,9 @@
  *   - 對象部門為**複選**（training_session_dept），每個被列入的部門都認定有做這場訓練；
  *     達標統計以「顯示單位」為準（部門合併群組 training_dept_group，未分組部門自成一單位）。
  */
-include_once __DIR__ . '/attach_lib.php';   // 附件根路徑（鐵律5：只存檔名、路徑即時組）
+include_once __DIR__ . '/attach_lib.php';     // 附件根路徑（鐵律5：只存檔名、路徑即時組）
+include_once __DIR__ . '/org_role_lib.php';   // 人事部門/最高核准人員等全站組織綁定（禁止各頁寫死）
+include_once __DIR__ . '/approval_lib.php';   // 簽核紀錄 approval_record
 
 /* ============================================================
  * Schema
@@ -198,14 +200,20 @@ function training_ensure_schema(PDO $db): void {
  * 模組設定（system_settings）：預設班別、行事曆類別綁定
  *   一律存「id」不存名稱——類別/班別日後改名，綁定仍然有效（使用者明確要求）。
  * ============================================================ */
-const TRAINING_SETTING_KEYS = ['training_default_shift_id', 'training_cat_internal', 'training_cat_external'];
+const TRAINING_SETTING_KEYS = ['training_default_shift_id', 'training_cat_internal', 'training_cat_external',
+    // 各分頁/報表綁定的 AS 文件（存 as_document.id，列印時才解出 doc_no；未設定＝該表不印文件編號）
+    'training_as_doc_plan', 'training_as_doc_result', 'training_as_doc_target',
+    'training_need_approval'];   // 1=訓練計劃表需要送審（審核→核准）；0=不送審，列印直接顯示簽章
 /* 休息時段（HH:MM 字串，不是 id）：上課時間與此時段重疊幾分鐘就扣幾分鐘。
    兩欄都留空＝完全不扣休息。預設 12:00~13:00（＝日班的午休）。 */
-const TRAINING_SETTING_STR_KEYS = ['training_break_start', 'training_break_end'];
+const TRAINING_SETTING_STR_KEYS = ['training_break_start', 'training_break_end',
+    'training_exclude_depts'];   // 不列入教育訓練達標統計的部門（csv dept_id）
 const TRAINING_BREAK_DEFAULT = ['training_break_start'=>'12:00', 'training_break_end'=>'13:00'];
 
 function training_settings(PDO $db): array {
-    $out = ['training_default_shift_id'=>null, 'training_cat_internal'=>null, 'training_cat_external'=>null];
+    $out = ['training_default_shift_id'=>null, 'training_cat_internal'=>null, 'training_cat_external'=>null,
+            'training_as_doc_plan'=>null, 'training_as_doc_result'=>null, 'training_as_doc_target'=>null,
+            'training_need_approval'=>null, 'training_exclude_depts'=>''];
     $out += TRAINING_BREAK_DEFAULT;      // 沒設定過才用預設；設定成空字串＝管理員刻意關閉，不可再被預設蓋回去
     try {
         $keys = array_merge(TRAINING_SETTING_KEYS, TRAINING_SETTING_STR_KEYS);
@@ -377,17 +385,113 @@ function training_dept_groups(PDO $db): array {
 function training_units(PDO $db): array {
     $units = [];
     $inGroup = [];
+    $ex = training_excluded_depts($db);          // 不列入教育訓練的部門
     foreach (training_dept_groups($db) as $g) {
+        $ids = array_values(array_diff($g['dept_ids'], $ex));
         foreach ($g['dept_ids'] as $d) $inGroup[$d] = true;
-        $units[] = ['key'=>'G'.$g['group_id'], 'name'=>$g['group_name'], 'dept_ids'=>$g['dept_ids'], 'is_group'=>1];
+        if (!$ids) continue;                      // 整個群組都被排除就不顯示
+        $units[] = ['key'=>'G'.$g['group_id'], 'name'=>$g['group_name'], 'dept_ids'=>$ids, 'is_group'=>1];
     }
     try {
         foreach ($db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC) as $d) {
-            if (isset($inGroup[(int)$d['id']])) continue;
-            $units[] = ['key'=>'D'.$d['id'], 'name'=>$d['name'], 'dept_ids'=>[(int)$d['id']], 'is_group'=>0];
+            $id = (int)$d['id'];
+            if (isset($inGroup[$id]) || in_array($id, $ex, true)) continue;
+            $units[] = ['key'=>'D'.$id, 'name'=>$d['name'], 'dept_ids'=>[$id], 'is_group'=>0];
         }
     } catch (Throwable $e) {}
     return $units;
+}
+
+/** 不列入教育訓練達標統計的部門 id 陣列 */
+function training_excluded_depts(PDO $db): array {
+    $s = (string)(training_settings($db)['training_exclude_depts'] ?? '');
+    return array_values(array_filter(array_map('intval', explode(',', $s))));
+}
+
+/** 綁定的 AS 文件編號（$which = plan|result|target）；未綁定或查無回 '' */
+function training_as_doc_no(PDO $db, string $which): string {
+    $id = (int)(training_settings($db)['training_as_doc_'.$which] ?? 0);
+    if (!$id) return '';
+    try {
+        $st = $db->prepare("SELECT doc_no FROM as_document WHERE id=? AND COALESCE(is_deleted,0)=0");
+        $st->execute([$id]);
+        return (string)($st->fetchColumn() ?: '');
+    } catch (Throwable $e) { return ''; }
+}
+
+/* ============================================================
+ * 年度訓練計劃表送審（module='training_plan'、entity_id=年度）
+ *   審核＝人事表單審核者（未指定則自動取人事部門主管）；核准＝最高核准人員；人事章＝人事簽章人員。
+ *   通知規則見 ai-rules/17-審核通知標準.md（通知要看得到內容、有核准/退回、退回填原因）。
+ * ============================================================ */
+function training_plan_signers(PDO $db): array {
+    $hrDept  = eg_org_dept($db, 'hr_dept');
+    $review  = eg_org_user($db, 'hr_reviewer') ?: eg_org_dept_manager($db, $hrDept);
+    return [
+        'reviewer'  => $review ? ['id'=>(int)$review['id'], 'name'=>$review['user_cname']] : null,
+        'approver'  => (function($u){ return $u ? ['id'=>(int)$u['id'], 'name'=>$u['user_cname']] : null; })(eg_org_user($db, 'top_approver')),
+        'hr_signer' => (function($u){ return $u ? ['id'=>(int)$u['id'], 'name'=>$u['user_cname']] : null; })(eg_org_user($db, 'hr_signer')),
+        'hr_dept_id'=> $hrDept,
+    ];
+}
+
+/** 某年度訓練計劃表的簽核現況（最新一筆 review / approve） */
+function training_plan_approval(PDO $db, int $year): array {
+    $rev = eg_approval_latest($db, 'training_plan', $year, 'review');
+    $app = eg_approval_latest($db, 'training_plan', $year, 'approve');
+    $status = 'none';
+    if ($rev) $status = $rev['status'] === 'pending' ? 'review_pending'
+                      : ($rev['status'] === 'rejected' ? 'rejected' : 'reviewed');
+    if ($app) $status = $app['status'] === 'pending' ? 'approve_pending'
+                      : ($app['status'] === 'rejected' ? 'rejected' : 'approved');
+    return ['status'=>$status, 'review'=>$rev, 'approve'=>$app];
+}
+
+/** 送審/決行通知（依 ai-rules/17：通知帶內容摘要，點進去是可核准/退回的檢視頁） */
+function training_plan_notify(PDO $db, int $year, string $stage, int $toUid, string $title, string $content, int $fromUid): int {
+    if (!$toUid) return 0;
+    try {
+        $db->prepare("UPDATE live_event SET enddate=DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                      WHERE ref_type='TRAINING_PLAN_APPROVAL' AND ref_id=? AND (enddate IS NULL OR enddate>=CURDATE())")
+           ->execute([$year]);
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, ?, '教育訓練計畫簽核', 1, 'TRAINING_PLAN_APPROVAL', ?)")
+           ->execute([$title, $content, $fromUid, $year]);
+        $eid = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'sign')")
+           ->execute([$eid, $toUid]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
+        } catch (Throwable $e) {}
+        return $eid;
+    } catch (Throwable $e) { return 0; }
+}
+
+/** 結束某年度計畫的待簽核通知 */
+function training_plan_close_notice(PDO $db, int $year): void {
+    try {
+        $db->prepare("UPDATE live_event SET enddate=DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                      WHERE ref_type='TRAINING_PLAN_APPROVAL' AND ref_id=? AND (enddate IS NULL OR enddate>=CURDATE())")
+           ->execute([$year]);
+    } catch (Throwable $e) {}
+}
+
+/** 結果通知（核准/退回都要回報送審者，退回一定帶原因） */
+function training_plan_notify_result(PDO $db, int $year, int $toUid, string $title, string $content, int $fromUid): void {
+    if (!$toUid) return;
+    try {
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, ?, '教育訓練計畫簽核', 1, 'TRAINING_PLAN_RESULT', ?)")
+           ->execute([$title, $content, $fromUid, $year]);
+        $eid = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'read')")
+           ->execute([$eid, $toUid]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
+        } catch (Throwable $e) {}
+    } catch (Throwable $e) {}
 }
 
 /** 某年度的目標設定（unit_key => 設定列）；'ALL' 為未個別設定時的預設 */

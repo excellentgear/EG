@@ -168,6 +168,8 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             // 報價單待簽核／簽核結果 → 專屬審核頁（左右分欄RWD，手機自動改上下堆疊）
             if (rt === 'QUOTATION_APPROVAL' || rt === 'QUOTATION_APPROVAL_RESULT'){ location.href = '../Sales/quotation_approval_view.php?event=' + $(this).data('id'); return; }
             // 報價單補件待審／補件結果 → 補件專屬審核頁
+            // 年度教育訓練計畫表待審核／結果 → 專屬審核頁（可直接核准/退回，見 ai-rules/17）
+            if (rt === 'TRAINING_PLAN_APPROVAL' || rt === 'TRAINING_PLAN_RESULT'){ location.href = '../ADM/training_plan_approval_view.php?event=' + $(this).data('id'); return; }
             if (rt === 'QUOTATION_SUPP' || rt === 'QUOTATION_SUPP_RESULT'){ location.href = '../Sales/quotation_supplement_view.php?event=' + $(this).data('id'); return; }
             openDetail($(this).data('id'));
         });
@@ -197,6 +199,7 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             if (e.ref_type === 'QA_EDIT_REQ'){ location.href = '../QC/inspection_combined_prototype.php?edit_request=' + (e.ref_id || 0); return; }
             if (e.ref_type === 'QA_EDIT_OK'){ location.href = '../QC/inspection_combined_prototype.php?edit_abnormal=' + (e.ref_id || 0); return; }
             if (e.ref_type === 'QUOTATION_APPROVAL' || e.ref_type === 'QUOTATION_APPROVAL_RESULT'){ location.href = '../Sales/quotation_approval_view.php?event=' + e.id; return; }
+            if (e.ref_type === 'TRAINING_PLAN_APPROVAL' || e.ref_type === 'TRAINING_PLAN_RESULT'){ location.href = '../ADM/training_plan_approval_view.php?event=' + e.id; return; }
             if (e.ref_type === 'QUOTATION_SUPP' || e.ref_type === 'QUOTATION_SUPP_RESULT'){ location.href = '../Sales/quotation_supplement_view.php?event=' + e.id; return; }
             h += '<div class="d-title">' + esc(e.title) + '</div>';
             var meta = [];

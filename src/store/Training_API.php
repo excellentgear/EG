@@ -53,7 +53,7 @@ function tr_norm_time(?string $t): ?string {
 switch ($action) {
 
 case 'meta': {
-    $depts = $db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    $depts = $db->query("SELECT id, name, parent_id, level FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     $years = $db->query("SELECT DISTINCT year FROM training_session ORDER BY year DESC")->fetchAll(PDO::FETCH_COLUMN);
     $cy = (int)date('Y');
     $years = array_values(array_unique(array_merge([$cy], array_map('intval', $years))));
@@ -67,6 +67,14 @@ case 'meta': {
           'cat_internal_eff'=>training_category_id($db, 'internal'), 'cat_external_eff'=>training_category_id($db, 'external'),
           'att_cats'=>TRAINING_ATT_CATS, 'eval_methods'=>TRAINING_EVAL_METHODS,
           'dept_groups'=>training_dept_groups($db), 'units'=>training_units($db),
+          'as_docs'=>(function($db){ try { return $db->query("SELECT id, doc_no, doc_name FROM as_document
+                        WHERE COALESCE(is_deleted,0)=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC); }
+                        catch (Throwable $e) { return []; } })($db),
+          'doc_no'=>['plan'=>training_as_doc_no($db,'plan'), 'result'=>training_as_doc_no($db,'result'),
+                     'target'=>training_as_doc_no($db,'target')],
+          'company_name'=>eg_company_full_name($db),
+          'plan_signers'=>training_plan_signers($db),
+          'plan_approval'=>training_plan_approval($db, (int)($_GET['year'] ?? date('Y'))),
           'attach_nas_dir'=>$perms['canAdmin'] ? training_attach_dir($db) : null,
           'attach_root'=>$perms['canAdmin'] ? eg_attach_root($db) : null,
           'cur_year'=>$cy, 'cur_month'=>(int)date('n'), 'today'=>date('Y-m-d')]);
@@ -76,7 +84,9 @@ case 'meta': {
 case 'save_settings': {
     if (!$perms['canAdmin']) jerr('無管理權限（設定限訓練管理員）', 403);
     $map = ['default_shift_id'=>'training_default_shift_id',
-            'cat_internal'=>'training_cat_internal', 'cat_external'=>'training_cat_external'];
+            'cat_internal'=>'training_cat_internal', 'cat_external'=>'training_cat_external',
+            'as_doc_plan'=>'training_as_doc_plan', 'as_doc_result'=>'training_as_doc_result',
+            'as_doc_target'=>'training_as_doc_target', 'need_approval'=>'training_need_approval'];
     // 休息時段（HH:MM 字串）：兩欄都空＝不扣休息；只填一欄視為未設定
     $bs = tr_norm_time($_POST['break_start'] ?? null);
     $be = tr_norm_time($_POST['break_end'] ?? null);
@@ -97,10 +107,83 @@ case 'save_settings': {
             training_setting_save($db, 'training_break_start', $bs === null ? '' : $bs, $uid, $uname);
             training_setting_save($db, 'training_break_end',   $be === null ? '' : $be, $uid, $uname);
         }
+        if (array_key_exists('exclude_depts', $_POST)) {
+            $ex = implode(',', array_values(array_filter(array_map('intval', explode(',', (string)$_POST['exclude_depts'])))));
+            training_setting_save($db, 'training_exclude_depts', $ex, $uid, $uname);
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('設定儲存失敗：'.$e->getMessage(), 500); }
-    jout(['settings'=>training_settings($db),
+    jout(['settings'=>training_settings($db), 'units'=>training_units($db),
+          'doc_no'=>['plan'=>training_as_doc_no($db,'plan'), 'result'=>training_as_doc_no($db,'result'),
+                     'target'=>training_as_doc_no($db,'target')],
           'cat_internal_eff'=>training_category_id($db, 'internal'), 'cat_external_eff'=>training_category_id($db, 'external')]);
+}
+
+/* ---------- 年度訓練計劃表送審（見 ai-rules/17-審核通知標準） ---------- */
+case 'plan_status': {
+    $year = (int)($_GET['year'] ?? date('Y'));
+    jout(['year'=>$year, 'approval'=>training_plan_approval($db, $year), 'signers'=>training_plan_signers($db),
+          'need_approval'=>(int)(training_settings($db)['training_need_approval'] ?? 0)]);
+}
+
+case 'plan_submit': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $year = (int)($_POST['year'] ?? 0);
+    if ($year < 2000) jerr('請指定年度');
+    $need = (int)(training_settings($db)['training_need_approval'] ?? 0) === 1;
+    $sg = training_plan_signers($db);
+    $cur = training_plan_approval($db, $year);
+    if (in_array($cur['status'], ['review_pending','approve_pending'], true)) jerr('本年度計畫已在簽核中，請勿重複送審');
+    if (!$need) {
+        // 不需送審：直接視為完成（送審日＝簽章日期），列印時所有簽章欄一起顯示
+        $id = eg_approval_submit($db, 'training_plan', $year, 'approve', $uid, $uname);
+        eg_approval_decide($db, $id, $uid, $uname, 'approved', '模組設定為「不需送審」，送出即視同完成');
+        jout(['status'=>'approved', 'need_approval'=>0]);
+    }
+    if (!$sg['reviewer']) jerr('尚未設定「人事表單審核者」或人事部門主管，請先到「組織角色綁定設定」設定', 400);
+    $id = eg_approval_submit($db, 'training_plan', $year, 'review', $uid, $uname);
+    $ev = training_plan_notify($db, $year, 'review', $sg['reviewer']['id'],
+        $year.' 年度教育訓練計畫表待審核',
+        $uname.' 送出 '.$year.' 年度教育訓練計畫表，請審核（點入可看完整計畫內容與附件，並直接核准或退回）。', $uid);
+    if ($ev) eg_approval_set_live_event($db, $id, $ev);
+    jout(['status'=>'review_pending', 'approval_id'=>$id, 'need_approval'=>1]);
+}
+
+/* 核准／退回（審核檢視頁使用）：退回一定要填原因 */
+case 'plan_decide': {
+    $year = (int)($_POST['year'] ?? 0);
+    $decision = (string)($_POST['decision'] ?? '');
+    $note = trim((string)($_POST['note'] ?? ''));
+    if (!in_array($decision, ['approved','rejected'], true)) jerr('決定值不正確');
+    if ($decision === 'rejected' && $note === '') jerr('退回必須填寫原因');
+    $cur = training_plan_approval($db, $year);
+    $sg  = training_plan_signers($db);
+    $stage = $cur['status'] === 'review_pending' ? 'review' : ($cur['status'] === 'approve_pending' ? 'approve' : '');
+    if ($stage === '') jerr('此年度計畫目前沒有待簽核的項目');
+    $rec = $cur[$stage === 'review' ? 'review' : 'approve'];
+    $who = $stage === 'review' ? $sg['reviewer'] : $sg['approver'];
+    if (!$perms['isAdmin'] && (!$who || (int)$who['id'] !== $uid)) jerr('您不是本階段的簽核人', 403);
+    $r = eg_approval_decide($db, (int)$rec['id'], $uid, $uname, $decision, $note ?: null);
+    if (!$r['success']) jerr($r['message']);
+    training_plan_close_notice($db, $year);
+    $submitter = (int)$rec['submitted_by'];
+    if ($decision === 'rejected') {
+        training_plan_notify_result($db, $year, $submitter, $year.' 年度教育訓練計畫表被退回',
+            $uname.' 退回 '.$year.' 年度教育訓練計畫表。退回原因：'.$note, $uid);
+        jout(['status'=>'rejected']);
+    }
+    if ($stage === 'review') {
+        if (!$sg['approver']) jerr('尚未設定「最高核准人員」，請先到「組織角色綁定設定」設定', 400);
+        $id = eg_approval_submit($db, 'training_plan', $year, 'approve', $submitter, (string)$rec['submitted_by_name']);
+        $ev = training_plan_notify($db, $year, 'approve', $sg['approver']['id'],
+            $year.' 年度教育訓練計畫表待核准',
+            $uname.' 已審核通過 '.$year.' 年度教育訓練計畫表，請核准（點入可看完整計畫內容與附件）。', $uid);
+        if ($ev) eg_approval_set_live_event($db, $id, $ev);
+        jout(['status'=>'approve_pending']);
+    }
+    training_plan_notify_result($db, $year, $submitter, $year.' 年度教育訓練計畫表已核准',
+        $uname.' 已核准 '.$year.' 年度教育訓練計畫表。'.($note ? '意見：'.$note : ''), $uid);
+    jout(['status'=>'approved']);
 }
 
 /* ---------- 場次附件（簽到表掃描/教材/試卷）：DB 只存檔名，路徑即時組（鐵律5） ---------- */
