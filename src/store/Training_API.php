@@ -78,6 +78,12 @@ function tr_request_row(PDO $db, int $id): ?array {
     if (!$r) return null;
     $r['dept_name'] = $r['dept_id'] !== null ? ($deptMap[(int)$r['dept_id']] ?? '') : '';
     $r['approval'] = eg_approval_latest($db, 'training_request', $id, 'manager');
+    $dq = $db->prepare("SELECT * FROM training_request_day WHERE request_id=? ORDER BY day_no");
+    $dq->execute([$id]);
+    $r['days'] = $dq->fetchAll(PDO::FETCH_ASSOC);
+    $tq = $db->prepare("SELECT * FROM training_request_trainee WHERE request_id=? ORDER BY rt_id");
+    $tq->execute([$id]);
+    $r['trainees_list'] = $tq->fetchAll(PDO::FETCH_ASSOC);
     return $r;
 }
 
@@ -102,13 +108,16 @@ case 'meta': {
                         WHERE COALESCE(is_deleted,0)=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC); }
                         catch (Throwable $e) { return []; } })($db),
           'doc_no'=>['plan'=>training_as_doc_no($db,'plan'), 'result'=>training_as_doc_no($db,'result'),
-                     'target'=>training_as_doc_no($db,'target'), 'request'=>training_as_doc_no($db,'request')],
+                     'target'=>training_as_doc_no($db,'target'), 'request'=>training_as_doc_no($db,'request'),
+                     'signsheet'=>training_as_doc_no($db,'signsheet')],
           'company_name'=>eg_company_full_name($db),
           'plan_signers'=>training_plan_signers($db),
           'plan_approval'=>training_plan_approval($db, (int)($_GET['year'] ?? date('Y'))),
           'plan_last_modified'=>training_plan_last_modified($db, (int)($_GET['year'] ?? date('Y'))),
           'my_dept_id'=>tr_user_dept_id($db, $uid), 'my_dept_name'=>tr_user_dept_name($db, $uid),
+          'my_depts'=>training_user_depts($db, $uid),
           'features'=>TRAINING_FEATURES,
+          'request_signers'=>['top_approver'=>eg_org_user($db,'top_approver'), 'hr_signer'=>training_hr_signer_effective($db)],
           'attach_nas_dir'=>$perms['canAdmin'] ? training_attach_dir($db) : null,
           'attach_root'=>$perms['canAdmin'] ? eg_attach_root($db) : null,
           'cur_year'=>$cy, 'cur_month'=>(int)date('n'), 'today'=>date('Y-m-d'), 'uid'=>$uid]);
@@ -121,7 +130,8 @@ case 'save_settings': {
             'cat_internal'=>'training_cat_internal', 'cat_external'=>'training_cat_external',
             'as_doc_plan'=>'training_as_doc_plan', 'as_doc_result'=>'training_as_doc_result',
             'as_doc_target'=>'training_as_doc_target', 'need_approval'=>'training_need_approval',
-            'as_doc_request'=>'training_as_doc_request', 'request_need_approval'=>'training_request_need_approval'];
+            'as_doc_request'=>'training_as_doc_request', 'request_need_approval'=>'training_request_need_approval',
+            'as_doc_signsheet'=>'training_as_doc_signsheet'];
     // 休息時段（HH:MM 字串）：兩欄都空＝不扣休息；只填一欄視為未設定
     $bs = tr_norm_time($_POST['break_start'] ?? null);
     $be = tr_norm_time($_POST['break_end'] ?? null);
@@ -155,7 +165,8 @@ case 'save_settings': {
     } catch (Throwable $e) { $db->rollBack(); jerr('設定儲存失敗：'.$e->getMessage(), 500); }
     jout(['settings'=>training_settings($db), 'units'=>training_units($db),
           'doc_no'=>['plan'=>training_as_doc_no($db,'plan'), 'result'=>training_as_doc_no($db,'result'),
-                     'target'=>training_as_doc_no($db,'target')],
+                     'target'=>training_as_doc_no($db,'target'), 'request'=>training_as_doc_no($db,'request'),
+                     'signsheet'=>training_as_doc_no($db,'signsheet')],
           'cat_internal_eff'=>training_category_id($db, 'internal'), 'cat_external_eff'=>training_category_id($db, 'external')]);
 }
 
@@ -689,11 +700,25 @@ case 'request_list': {
     $deptMap = tr_dept_map($db);
     $st = $db->query("SELECT * FROM training_request ORDER BY request_id DESC");
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $ids = array_column($rows, 'request_id');
+    $trMap = []; $dyMap = [];
+    if ($ids) {
+        $in = implode(',', array_map('intval', $ids));
+        foreach ($db->query("SELECT * FROM training_request_trainee WHERE request_id IN ($in) ORDER BY rt_id")->fetchAll(PDO::FETCH_ASSOC) as $t)
+            $trMap[(int)$t['request_id']][] = $t;
+        foreach ($db->query("SELECT * FROM training_request_day WHERE request_id IN ($in) ORDER BY day_no")->fetchAll(PDO::FETCH_ASSOC) as $d)
+            $dyMap[(int)$d['request_id']][] = $d;
+    }
     foreach ($rows as &$r) {
+        $rid = (int)$r['request_id'];
         $r['dept_name'] = $r['dept_id'] !== null ? ($deptMap[(int)$r['dept_id']] ?? '') : '';
-        $rec = eg_approval_latest($db, 'training_request', (int)$r['request_id'], 'manager');
+        $rec = eg_approval_latest($db, 'training_request', $rid, 'manager');
         $r['approver_name'] = $rec['approver_name'] ?? null;
         $r['reject_note'] = ($rec && $rec['status'] === 'rejected') ? $rec['note'] : null;
+        $r['trainees_list'] = $trMap[$rid] ?? [];
+        $r['days'] = $dyMap[$rid] ?? [];
+        $signer = training_request_signer($db, $r['dept_id'] !== null ? (int)$r['dept_id'] : null, (int)$r['user_id']);
+        $r['dept_signer_name'] = $signer['name'] ?? null;
     }
     unset($r);
     jout(['requests'=>$rows]);
@@ -711,18 +736,59 @@ case 'request_save': {
     $subject = trim((string)($_POST['subject'] ?? ''));
     if ($subject === '') jerr('請填主旨');
     $deptId = ($_POST['dept_id'] ?? '') === '' ? null : (int)$_POST['dept_id'];
+    // 申請單位只能是自己所屬的部門（含兼職）；訓練管理員/系統管理者可以幫忙代填任何部門
+    if ($deptId !== null && !$perms['canAdmin']) {
+        $myDeptIds = array_map(fn($d) => (int)$d['id'], training_user_depts($db, $uid));
+        if (!in_array($deptId, $myDeptIds, true)) jerr('申請單位只能選自己所屬的部門');
+    }
     $applyDate = trim((string)($_POST['apply_date'] ?? date('Y-m-d')));
-    $sd = trim((string)($_POST['start_date'] ?? '')) ?: null;
-    $ed = trim((string)($_POST['end_date'] ?? '')) ?: null;
-    if ($sd && $ed && $ed < $sd) jerr('受訓時間迄不可早於起');
-    $days  = ($_POST['days'] ?? '') === '' ? null : max(1, (int)$_POST['days']);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $applyDate)) jerr('申請日期格式不正確');
+
+    // 每日上課時間（比照確認開課的逐日設定；申請階段不設休息）
+    $days = json_decode((string)($_POST['days'] ?? '[]'), true);
+    if (!is_array($days)) $days = [];
+    if (count($days) > 60) jerr('受訓天數請勿超過 60 天');
+    $cleanDays = []; $seenDates = [];
+    foreach ($days as $i => $d) {
+        $n = $i + 1;
+        $dt = trim((string)($d['day_date'] ?? ''));
+        if ($dt === '') jerr("第 {$n} 天：請填上課日期");
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dt)) jerr("第 {$n} 天：日期格式不正確");
+        [$yy,$mm,$dd] = array_map('intval', explode('-', $dt));
+        if (!checkdate($mm, $dd, $yy)) jerr("第 {$n} 天：日期不存在（{$dt}）");
+        if (isset($seenDates[$dt])) jerr("第 {$n} 天：日期重複（{$dt}）");
+        $seenDates[$dt] = true;
+        $s = tr_norm_time($d['start_time'] ?? ''); $e = tr_norm_time($d['end_time'] ?? '');
+        if (!tr_valid_time($s)) jerr("第 {$n} 天：開始時間不是合法時刻");
+        if (!tr_valid_time($e)) jerr("第 {$n} 天：結束時間不是合法時刻");
+        if ($s && $e && $e <= $s) jerr("第 {$n} 天：結束時間不可早於或等於開始時間");
+        $cleanDays[] = ['date'=>$dt, 'start'=>$s, 'end'=>$e];
+    }
+    usort($cleanDays, fn($a,$b) => strcmp($a['date'], $b['date']));
+    $sd = $cleanDays ? $cleanDays[0]['date'] : null;
+    $ed = $cleanDays ? end($cleanDays)['date'] : null;
+    $planDays = $cleanDays ? count($cleanDays) : null;
     $hours = ($_POST['hours'] ?? '') === '' ? null : (float)$_POST['hours'];
+
+    // 受訓人員（結構化；限申請單位底下人員，不排除申請人本人，前端已用確認開課的同一套人員選擇器）
+    $trainees = json_decode((string)($_POST['trainees'] ?? '[]'), true);
+    if (!is_array($trainees)) $trainees = [];
+    $traineeRows = []; $traineeNames = [];
+    foreach ($trainees as $t) {
+        $tuid = (int)($t['user_id'] ?? 0);
+        if ($tuid <= 0) continue;
+        $tn = trim((string)($t['user_name'] ?? ''));
+        $traineeRows[] = [$tuid, $tn ?: null, trim((string)($t['dept_name'] ?? '')) ?: null, trim((string)($t['position_name'] ?? '')) ?: null];
+        if ($tn) $traineeNames[] = $tn;
+    }
+
     $fields = [$deptId, $applyDate, $subject,
         trim((string)($_POST['content'] ?? '')) ?: null, trim((string)($_POST['focus'] ?? '')) ?: null,
-        trim((string)($_POST['trainees'] ?? '')) ?: null, $sd, $ed, $days, $hours,
+        $traineeNames ? implode('、', $traineeNames) : null, $sd, $ed, $planDays, $hours,
         trim((string)($_POST['location'] ?? '')) ?: null, trim((string)($_POST['cost'] ?? '')) ?: null,
         ($_POST['brochure_count'] ?? '') === '' ? null : (int)$_POST['brochure_count']];
     try {
+        $db->beginTransaction();
         if ($rid > 0) {
             $db->prepare("UPDATE training_request SET dept_id=?,apply_date=?,subject=?,content=?,focus=?,trainees=?,
                           start_date=?,end_date=?,days=?,hours=?,location=?,cost=?,brochure_count=?,updated_at=NOW()
@@ -734,8 +800,27 @@ case 'request_save': {
                ->execute(array_merge($fields, [$uid, $uname]));
             $rid = (int)$db->lastInsertId();
         }
-    } catch (Throwable $e) { jerr('儲存失敗：'.$e->getMessage(), 500); }
+        $db->prepare("DELETE FROM training_request_day WHERE request_id=?")->execute([$rid]);
+        $insD = $db->prepare("INSERT INTO training_request_day (request_id, day_no, day_date, start_time, end_time) VALUES (?,?,?,?,?)");
+        foreach ($cleanDays as $i => $d) $insD->execute([$rid, $i+1, $d['date'], $d['start'], $d['end']]);
+        $db->prepare("DELETE FROM training_request_trainee WHERE request_id=?")->execute([$rid]);
+        $insT = $db->prepare("INSERT INTO training_request_trainee (request_id, user_id, user_name, dept_name, position_name) VALUES (?,?,?,?,?)");
+        foreach ($traineeRows as $t) $insT->execute(array_merge([$rid], $t));
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout(['request_id'=>$rid]);
+}
+
+/* 修改申請日期（補登舊文件用）：不受一般「已送審不可改」的限制，僅需 canEditApplyDate/isAdmin */
+case 'request_set_apply_date': {
+    if (!$perms['isAdmin'] && !$perms['canEditApplyDate']) jerr('無修改申請日期權限', 403);
+    $rid = (int)($_POST['request_id'] ?? 0);
+    $d = trim((string)($_POST['apply_date'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) jerr('日期格式不正確');
+    $r = tr_request_row($db, $rid);
+    if (!$r) jerr('找不到申請單');
+    $db->prepare("UPDATE training_request SET apply_date=?, updated_at=NOW() WHERE request_id=?")->execute([$d, $rid]);
+    jout(['apply_date'=>$d]);
 }
 
 /* 送出審核：依模組設定決定要不要真的送主管，免簽核／抓不到主管／申請人就是主管 → 直接視為核准 */
@@ -788,6 +873,8 @@ case 'request_decide': {
 }
 
 /* 轉為計畫：由「新增計畫」跳窗預填申請單資料後正常存檔，存檔成功後呼叫本動作把申請單標記為已轉 */
+/* 轉為計畫：把申請單的每日時間與受訓人員原封帶入新計畫（training_session_day/training_attendee），
+   確認開課時就已經是排好的，不必重選日期、名單「可另外增減」而不是從零重建。 */
 case 'request_mark_converted': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $rid = (int)($_POST['request_id'] ?? 0);
@@ -795,8 +882,28 @@ case 'request_mark_converted': {
     $r = tr_request_row($db, $rid);
     if (!$r) jerr('找不到申請單');
     if ($r['status'] !== 'approved') jerr('只有已核准的申請單可以轉為計畫');
-    $db->prepare("UPDATE training_request SET status='converted', session_id=?, updated_at=NOW() WHERE request_id=?")->execute([$sid, $rid]);
-    jout([]);
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE training_request SET status='converted', session_id=?, updated_at=NOW() WHERE request_id=?")->execute([$sid, $rid]);
+        $db->prepare("UPDATE training_session SET from_request_id=? WHERE session_id=?")->execute([$rid, $sid]);
+        if ($r['days']) {
+            $db->prepare("DELETE FROM training_session_day WHERE session_id=?")->execute([$sid]);
+            $ins = $db->prepare("INSERT INTO training_session_day (session_id, day_no, day_date, start_time, end_time, break_minutes)
+                                 VALUES (?,?,?,?,?,0)");
+            foreach ($r['days'] as $i => $d) $ins->execute([$sid, $i+1, $d['day_date'], $d['start_time'], $d['end_time']]);
+            $first = $r['days'][0];
+            $db->prepare("UPDATE training_session SET done_date=?, start_time=?, end_time=?, plan_days=? WHERE session_id=?")
+               ->execute([$first['day_date'], $first['start_time'], $first['end_time'], count($r['days']), $sid]);
+        }
+        if ($r['trainees_list']) {
+            $db->prepare("DELETE FROM training_attendee WHERE session_id=?")->execute([$sid]);
+            $ins = $db->prepare("INSERT INTO training_attendee (session_id, user_id, user_name, dept_name, position_name, attended, signed)
+                                 VALUES (?,?,?,?,?,0,0)");
+            foreach ($r['trainees_list'] as $t) $ins->execute([$sid, $t['user_id'], $t['user_name'], $t['dept_name'], $t['position_name']]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('轉換失敗：'.$e->getMessage(), 500); }
+    jout(['days'=>count($r['days']), 'trainees'=>count($r['trainees_list'])]);
 }
 
 case 'request_delete': {
@@ -804,7 +911,13 @@ case 'request_delete': {
     $r = tr_request_row($db, $rid);
     if (!$r) jerr('找不到申請單');
     if (!$perms['canAdmin'] && !((int)$r['user_id'] === $uid && $r['status'] === 'draft')) jerr('僅本人的草稿或訓練管理員可刪除', 403);
-    $db->prepare("DELETE FROM training_request WHERE request_id=?")->execute([$rid]);
+    try {
+        $db->beginTransaction();
+        $db->prepare("DELETE FROM training_request_day WHERE request_id=?")->execute([$rid]);
+        $db->prepare("DELETE FROM training_request_trainee WHERE request_id=?")->execute([$rid]);
+        $db->prepare("DELETE FROM training_request WHERE request_id=?")->execute([$rid]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：'.$e->getMessage(), 500); }
     jout([]);
 }
 

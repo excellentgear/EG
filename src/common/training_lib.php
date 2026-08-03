@@ -23,15 +23,17 @@ include_once __DIR__ . '/role_features_helper.php';   // 角色可自訂名稱�
 const TRAINING_FEATURES = [
     ['code'=>'training_view',   'group'=>'view', 'label'=>'檢閱訓練場次列表與達標狀況（沒勾也看得到自己送出的需求申請單）'],
     ['code'=>'training_apply',  'group'=>'op',   'label'=>'提出／修改自己的教育訓練需求申請單'],
+    ['code'=>'training_print',  'group'=>'op',   'label'=>'列印（訓練計劃表／結果明細表／簽到表／訓練紀錄／需求申請單）'],
     ['code'=>'training_edit',   'group'=>'op',   'label'=>'新增/編輯計畫、確認開課、登錄完成、送審計劃表、核准需求申請單、轉為計畫'],
     ['code'=>'training_admin',  'group'=>'op',   'label'=>'模組設定、刪除場次、修改已排定/已完成的計畫'],
+    ['code'=>'training_edit_apply_date', 'group'=>'op', 'label'=>'可修改需求申請單的「申請日期」（含已送出/已核准的單，用於補登舊文件；一般人只有草稿能改）'],
 ];
 /** 預設角色一次建立時附帶的功能碼（既有角色沿用原本行為，不改變任何人現有權限） */
 const TRAINING_DEFAULT_ROLE_FEATURES = [
-    'training_view'   => ['training_view'],
-    'training_apply'  => ['training_apply'],
-    'training_edit'   => ['training_edit', 'training_view'],
-    'training_admin'  => ['training_admin', 'training_edit', 'training_view'],
+    'training_view'   => ['training_view', 'training_print'],
+    'training_apply'  => ['training_apply', 'training_print'],
+    'training_edit'   => ['training_edit', 'training_view', 'training_print'],
+    'training_admin'  => ['training_admin', 'training_edit', 'training_view', 'training_print', 'training_edit_apply_date'],
 ];
 
 /* ============================================================
@@ -203,27 +205,59 @@ function training_ensure_schema(PDO $db): void {
         UNIQUE KEY uq_year_unit (year, unit_key)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練次數目標(內訓/外訓,每月或每年)'");
 
-    foreach ([['training_view','訓練檢閱'],['training_edit','訓練登錄'],['training_admin','訓練管理員'],
-              ['training_apply','訓練需求申請人']] as $r) {
-        $st = $db->prepare("SELECT role_id FROM roles WHERE role_code=? AND module='training' LIMIT 1");
-        $st->execute([$r[0]]);
-        $rid = (int)$st->fetchColumn();
-        if (!$rid) {
-            $db->prepare("INSERT INTO roles (role_code, role_name, module) VALUES (?,?, 'training')")
-               ->execute([$r[0], $r[1]]);
-            $rid = (int)$db->lastInsertId();
-        }
-        // 角色名稱與功能都可由管理員自訂；只在該角色完全沒有功能碼時植入預設值，
-        // 避免程式覆寫掉管理員已經調整過的勾選（比照 purchase 模組）。
-        try {
-            $cnt = $db->prepare("SELECT COUNT(*) FROM role_features WHERE role_id=?");
-            $cnt->execute([$rid]);
-            if ((int)$cnt->fetchColumn() === 0) {
-                $ins = $db->prepare("INSERT IGNORE INTO role_features (role_id, feature_code) VALUES (?,?)");
-                foreach (TRAINING_DEFAULT_ROLE_FEATURES[$r[0]] ?? [$r[0]] as $fc) $ins->execute([$rid, $fc]);
+    // 內建 4 個角色只在「本模組第一次啟用」時建立一次（旗標擋住，比照 training_dept_backfilled 的做法）。
+    // 這裡原本每次呼叫都會「role_code 查無就補建」，導致管理員在「角色設定」把某個內建角色刪掉後，
+    // 下一次任何人載入本頁/呼叫 API 又會把它重新生出來——刪除形同無效，且會一路帶著使用者權限設定頁的
+    // 角色指派清單一起「陰魂不散」。改成只在從未種過的情況下種一次，種過之後刪除就真的是刪除。
+    try {
+        $seeded = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='training_roles_seeded'")->fetchColumn();
+        if (!$seeded) {
+            foreach ([['training_view','訓練檢閱'],['training_edit','訓練登錄'],['training_admin','訓練管理員'],
+                      ['training_apply','訓練需求申請人']] as $r) {
+                $st = $db->prepare("SELECT role_id FROM roles WHERE role_code=? AND module='training' LIMIT 1");
+                $st->execute([$r[0]]);
+                $rid = (int)$st->fetchColumn();
+                if (!$rid) {
+                    $db->prepare("INSERT INTO roles (role_code, role_name, module) VALUES (?,?, 'training')")
+                       ->execute([$r[0], $r[1]]);
+                    $rid = (int)$db->lastInsertId();
+                }
+                $cnt = $db->prepare("SELECT COUNT(*) FROM role_features WHERE role_id=?");
+                $cnt->execute([$rid]);
+                if ((int)$cnt->fetchColumn() === 0) {
+                    $ins = $db->prepare("INSERT IGNORE INTO role_features (role_id, feature_code) VALUES (?,?)");
+                    foreach (TRAINING_DEFAULT_ROLE_FEATURES[$r[0]] ?? [$r[0]] as $fc) $ins->execute([$rid, $fc]);
+                }
             }
-        } catch (Throwable $e) {}
-    }
+            $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('training_roles_seeded','1')
+                          ON DUPLICATE KEY UPDATE setting_value='1'")->execute();
+        }
+    } catch (Throwable $e) {}
+
+    // 「列印」拆成獨立功能碼是後補的（本模組首次上線時列印本來就不設防，任何看得到的人都能印）。
+    // 一次性把它加回既有 4 個內建角色（不動管理員後續自訂調整），比照上面同一招用旗標擋只跑一次。
+    try {
+        $done = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='training_print_feature_migrated'")->fetchColumn();
+        if (!$done) {
+            $ins = $db->prepare("INSERT IGNORE INTO role_features (role_id, feature_code)
+                                 SELECT role_id, 'training_print' FROM roles WHERE module='training'");
+            $ins->execute();
+            $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('training_print_feature_migrated','1')
+                          ON DUPLICATE KEY UPDATE setting_value='1'")->execute();
+        }
+    } catch (Throwable $e) {}
+
+    // 「可修改申請日期」也是後補的功能碼：只給訓練管理員角色當預設（補登文件本來就該是管理職才做），一次性、之後管理員調整不再覆寫。
+    try {
+        $done = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='training_apply_date_feature_migrated'")->fetchColumn();
+        if (!$done) {
+            $ins = $db->prepare("INSERT IGNORE INTO role_features (role_id, feature_code)
+                                 SELECT role_id, 'training_edit_apply_date' FROM roles WHERE module='training' AND role_code='training_admin'");
+            $ins->execute();
+            $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('training_apply_date_feature_migrated','1')
+                          ON DUPLICATE KEY UPDATE setting_value='1'")->execute();
+        }
+    } catch (Throwable $e) {}
 
     // live_event.ref_type 原本 varchar(20)，本模組的 TRAINING_PLAN_APPROVAL(23)/TRAINING_REQUEST_APPROVAL(26)
     // 等值超長會整筆 INSERT 失敗(SQLSTATE 22001)、通知悄悄消失卻不報錯，故放寬到 40（純加大，不影響既有資料/程式）。
@@ -253,6 +287,32 @@ function training_ensure_schema(PDO $db): void {
         updated_at DATETIME NULL,
         KEY idx_status (status), KEY idx_dept (dept_id), KEY idx_user (user_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練需求申請單(2-MM-01-05)'");
+
+    // 受訓人員（結構化，才能在轉為計畫時直接帶進 training_attendee；限申請單位底下人員，不排除申請人本人）
+    $db->exec("CREATE TABLE IF NOT EXISTS training_request_trainee (
+        rt_id INT AUTO_INCREMENT PRIMARY KEY,
+        request_id INT NOT NULL,
+        user_id INT NOT NULL,
+        user_name VARCHAR(50) NULL,
+        dept_name VARCHAR(50) NULL,
+        position_name VARCHAR(50) NULL,
+        KEY idx_request (request_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練需求申請單-受訓人員'");
+
+    // 每日上課時間（比照 training_session_day，但申請階段不設休息/時數，那要等實際開課才算）
+    $db->exec("CREATE TABLE IF NOT EXISTS training_request_day (
+        rd_id INT AUTO_INCREMENT PRIMARY KEY,
+        request_id INT NOT NULL,
+        day_no INT NOT NULL DEFAULT 1,
+        day_date DATE NOT NULL,
+        start_time VARCHAR(5) NULL,
+        end_time VARCHAR(5) NULL,
+        KEY idx_request (request_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練需求申請單-每日上課時間'");
+
+    // 計畫回指來源申請單（列印/畫面顯示用，不再塞進備註文字）；轉計畫時順便把申請單的人員與日期原封帶入
+    try { $db->exec("ALTER TABLE training_session ADD COLUMN from_request_id INT NULL COMMENT '來源需求申請單 training_request.request_id'"); }
+    catch (Throwable $e) {}
 }
 
 /* ============================================================
@@ -264,6 +324,7 @@ const TRAINING_SETTING_KEYS = ['training_default_shift_id', 'training_cat_intern
     'training_as_doc_plan', 'training_as_doc_result', 'training_as_doc_target',
     'training_need_approval',    // 1=訓練計劃表需要送審（審核→核准）；0=不送審，列印直接顯示簽章
     'training_as_doc_request',   // 需求申請單綁定的 AS 文件 id（2-MM-01-05）
+    'training_as_doc_signsheet', // 簽到表綁定的 AS 文件 id
     'training_request_need_approval'];  // 1=需求申請單需要部門主管核准；0=免簽核，送出即視同核准
 /* 休息時段（HH:MM 字串，不是 id）：上課時間與此時段重疊幾分鐘就扣幾分鐘。
    兩欄都留空＝完全不扣休息。預設 12:00~13:00（＝日班的午休）。 */
@@ -276,7 +337,7 @@ function training_settings(PDO $db): array {
     $out = ['training_default_shift_id'=>null, 'training_cat_internal'=>null, 'training_cat_external'=>null,
             'training_as_doc_plan'=>null, 'training_as_doc_result'=>null, 'training_as_doc_target'=>null,
             'training_need_approval'=>null, 'training_exclude_depts'=>'', 'training_plan_sign_date'=>'',
-            'training_as_doc_request'=>null, 'training_request_need_approval'=>1];
+            'training_as_doc_request'=>null, 'training_as_doc_signsheet'=>null, 'training_request_need_approval'=>1];
     $out += TRAINING_BREAK_DEFAULT;      // 沒設定過才用預設；設定成空字串＝管理員刻意關閉，不可再被預設蓋回去
     try {
         $keys = array_merge(TRAINING_SETTING_KEYS, TRAINING_SETTING_STR_KEYS);
@@ -522,6 +583,34 @@ function training_plan_approval(PDO $db, int $year): array {
     if ($app) $status = $app['status'] === 'pending' ? 'approve_pending'
                       : ($app['status'] === 'rejected' ? 'rejected' : 'approved');
     return ['status'=>$status, 'review'=>$rev, 'approve'=>$app];
+}
+
+/** 某使用者所屬的所有部門（含兼職部門，不只主要職務）——需求申請單「申請單位」只能選自己所屬的部門 */
+function training_user_depts(PDO $db, int $uid): array {
+    try {
+        $st = $db->prepare("SELECT DISTINCT d.id, d.name, d.sort_order FROM user_department_position_map m
+                            JOIN department d ON d.id=m.department_id WHERE m.user_id=? ORDER BY d.sort_order, d.id");
+        $st->execute([$uid]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/** 會辦（人事）簽章人——若本人今日有行程忙碌，走 delegate_lib 解析代理人，禁止各頁自己猜 */
+function training_hr_signer_effective(PDO $db): ?array {
+    $hr = eg_org_user($db, 'hr_signer');
+    if (!$hr) return null;
+    try {
+        require_once __DIR__ . '/delegate_lib.php';
+        $r = eg_resolve_signer($db, (int)$hr['id'], ['flow_key'=>'training_request_hr']);
+        $sid = (int)($r['signer_id'] ?? $hr['id']);
+        if ($sid === (int)$hr['id']) return ['id'=>(int)$hr['id'], 'name'=>$hr['user_cname'], 'is_delegated'=>false];
+        $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+        $st->execute([$sid]);
+        $nm = $st->fetchColumn();
+        return ['id'=>$sid, 'name'=>$nm ?: $hr['user_cname'], 'is_delegated'=>true];
+    } catch (Throwable $e) {
+        return ['id'=>(int)$hr['id'], 'name'=>$hr['user_cname'], 'is_delegated'=>false];
+    }
 }
 
 /** 送審/決行通知（依 ai-rules/17：通知帶內容摘要，點進去是可核准/退回的檢視頁） */
@@ -844,7 +933,11 @@ function training_perms(PDO $db, ?array $u): array {
     // 但比照使用者要求，可看訓練場次列表(唯讀) → 併入 canView。
     $canApply = $canEdit || $has('training_apply');
     $canView  = $canEdit || $canApply || $has('training_view');
-    return ['isAdmin'=>$isAdmin,'canAdmin'=>$canAdmin,'canEdit'=>$canEdit,'canView'=>$canView,'canApply'=>$canApply];
+    // 列印是獨立功能碼（使用者明確要求拉出來單獨勾選）：管理員/登錄一律含列印；檢閱/申請人則看有沒有勾。
+    $canPrint = $canEdit || $has('training_print');
+    $canEditApplyDate = $isAdmin || $has('training_edit_apply_date');
+    return ['isAdmin'=>$isAdmin,'canAdmin'=>$canAdmin,'canEdit'=>$canEdit,'canView'=>$canView,
+            'canApply'=>$canApply,'canPrint'=>$canPrint,'canEditApplyDate'=>$canEditApplyDate];
 }
 
 /* ============================================================
