@@ -207,13 +207,14 @@ const TRAINING_SETTING_KEYS = ['training_default_shift_id', 'training_cat_intern
 /* 休息時段（HH:MM 字串，不是 id）：上課時間與此時段重疊幾分鐘就扣幾分鐘。
    兩欄都留空＝完全不扣休息。預設 12:00~13:00（＝日班的午休）。 */
 const TRAINING_SETTING_STR_KEYS = ['training_break_start', 'training_break_end',
-    'training_exclude_depts'];   // 不列入教育訓練達標統計的部門（csv dept_id）
+    'training_exclude_depts',    // 不列入教育訓練達標統計的部門（csv dept_id）
+    'training_plan_sign_date'];  // 免送審時計劃表的簽章日期（YYYY-MM-DD；留空＝自動取該年度最後異動日）
 const TRAINING_BREAK_DEFAULT = ['training_break_start'=>'12:00', 'training_break_end'=>'13:00'];
 
 function training_settings(PDO $db): array {
     $out = ['training_default_shift_id'=>null, 'training_cat_internal'=>null, 'training_cat_external'=>null,
             'training_as_doc_plan'=>null, 'training_as_doc_result'=>null, 'training_as_doc_target'=>null,
-            'training_need_approval'=>null, 'training_exclude_depts'=>''];
+            'training_need_approval'=>null, 'training_exclude_depts'=>'', 'training_plan_sign_date'=>''];
     $out += TRAINING_BREAK_DEFAULT;      // 沒設定過才用預設；設定成空字串＝管理員刻意關閉，不可再被預設蓋回去
     try {
         $keys = array_merge(TRAINING_SETTING_KEYS, TRAINING_SETTING_STR_KEYS);
@@ -406,6 +407,20 @@ function training_units(PDO $db): array {
 function training_excluded_depts(PDO $db): array {
     $s = (string)(training_settings($db)['training_exclude_depts'] ?? '');
     return array_values(array_filter(array_map('intval', explode(',', $s))));
+}
+
+/** 某年度計畫的「最後異動日」（免送審時當簽章日期用）；查無回 '' */
+function training_plan_last_modified(PDO $db, int $year): string {
+    try {
+        $st = $db->prepare("SELECT GREATEST(
+                                COALESCE(MAX(s.created_at),'1970-01-01'),
+                                COALESCE((SELECT MAX(a.created_at) FROM training_attachment a
+                                          JOIN training_session s2 ON s2.session_id=a.session_id WHERE s2.year=?),'1970-01-01')
+                            ) FROM training_session s WHERE s.year=?");
+        $st->execute([$year, $year]);
+        $v = (string)$st->fetchColumn();
+        return ($v && substr($v,0,4) !== '1970') ? substr($v, 0, 10) : '';
+    } catch (Throwable $e) { return ''; }
 }
 
 /** 綁定的 AS 文件編號（$which = plan|result|target）；未綁定或查無回 '' */

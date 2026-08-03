@@ -75,6 +75,7 @@ case 'meta': {
           'company_name'=>eg_company_full_name($db),
           'plan_signers'=>training_plan_signers($db),
           'plan_approval'=>training_plan_approval($db, (int)($_GET['year'] ?? date('Y'))),
+          'plan_last_modified'=>training_plan_last_modified($db, (int)($_GET['year'] ?? date('Y'))),
           'attach_nas_dir'=>$perms['canAdmin'] ? training_attach_dir($db) : null,
           'attach_root'=>$perms['canAdmin'] ? eg_attach_root($db) : null,
           'cur_year'=>$cy, 'cur_month'=>(int)date('n'), 'today'=>date('Y-m-d')]);
@@ -107,6 +108,11 @@ case 'save_settings': {
             training_setting_save($db, 'training_break_start', $bs === null ? '' : $bs, $uid, $uname);
             training_setting_save($db, 'training_break_end',   $be === null ? '' : $be, $uid, $uname);
         }
+        if (array_key_exists('plan_sign_date', $_POST)) {
+            $sd = trim((string)$_POST['plan_sign_date']);
+            if ($sd !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $sd)) jerr('簽章日期格式應為 YYYY-MM-DD');
+            training_setting_save($db, 'training_plan_sign_date', $sd, $uid, $uname);
+        }
         if (array_key_exists('exclude_depts', $_POST)) {
             $ex = implode(',', array_values(array_filter(array_map('intval', explode(',', (string)$_POST['exclude_depts'])))));
             training_setting_save($db, 'training_exclude_depts', $ex, $uid, $uname);
@@ -123,7 +129,9 @@ case 'save_settings': {
 case 'plan_status': {
     $year = (int)($_GET['year'] ?? date('Y'));
     jout(['year'=>$year, 'approval'=>training_plan_approval($db, $year), 'signers'=>training_plan_signers($db),
-          'need_approval'=>(int)(training_settings($db)['training_need_approval'] ?? 0)]);
+          'need_approval'=>(int)(training_settings($db)['training_need_approval'] ?? 0),
+          'plan_last_modified'=>training_plan_last_modified($db, $year),
+          'plan_sign_date'=>(string)(training_settings($db)['training_plan_sign_date'] ?? '')]);
 }
 
 case 'plan_submit': {

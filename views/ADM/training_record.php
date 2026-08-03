@@ -224,15 +224,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button class="btn-warm" id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增訓練場次</button>
             <button id="btnSetting" style="display:none;"><i class="fa fa-sliders"></i> 模組設定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
-            <button id="btnPrintPlan"><i class="fa fa-print"></i> 訓練計劃表</button>
-            <button id="btnPrintResult"><i class="fa fa-print"></i> 訓練結果明細表</button>
+            <button id="btnPrintPlan"><i class="fa fa-print"></i> 列印訓練計劃表</button>
+            <button id="btnPrintResult" style="display:none;"><i class="fa fa-print"></i> 列印訓練結果明細表</button>
             <button id="btnSubmitPlan" style="display:none;"><i class="fa fa-paper-plane"></i> 送審計劃表</button>
             <span id="planStat" style="font-size:12px;color:#8a6d45;"></span>
             <span class="tr-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
                 <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
         </div>
 
-        <div class="tr-tabs">
+        <div class="tr-tabs" id="mainTabs">
             <span class="tab on" data-tab="list">訓練場次</span>
             <span class="tab" data-tab="target">達標狀況（各部門訓練次數）</span>
         </div>
@@ -531,6 +531,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <option value="0">不需送審（列印時直接顯示全部簽章，日期＝送審日）</option>
                 <option value="1">需要送審（審核 → 核准，依序通知）</option>
             </select>
+            <label>計劃表簽章日期（免送審時列印用；留空＝自動取該年度計畫的最後異動日）</label>
+            <div style="display:flex;gap:6px;align-items:center;">
+                <input type="date" id="setSignDate" max="9999-12-31" style="max-width:180px;">
+                <span id="setSignAuto" style="font-size:12px;color:#8a6d45;"></span>
+            </div>
+
             <div class="tr-hint" style="margin-top:6px;">
                 送審流程：送審 → 通知<b id="setSgReview">（未設定審核者）</b>審核 → 通過後通知 <b id="setSgApprover">（未設定核准者）</b>核准。
                 通知可直接<b>核准／退回</b>，退回必須填原因並會通知送審者（見 <b>ai-rules/17 審核通知標準</b>）。<br>
@@ -735,6 +741,7 @@ function loadMeta(cb){
         GROUPS = m.dept_groups || []; UNITS = m.units || [];
         AS_DOCS = m.as_docs || []; DOC_NO = m.doc_no || {}; COMPANY = m.company_name || '';
         SIGNERS = m.plan_signers || {}; PLAN_APPR = m.plan_approval || {status:'none'};
+        PLAN_LASTMOD = m.plan_last_modified || '';
         renderPlanStatus();
         var eh='<option value="">（未指定）</option>', ah='';
         $.each(EVAL_METHODS, function(k,v){ eh += '<option value="'+k+'">'+esc(v)+'</option>'; });
@@ -1385,7 +1392,7 @@ function attCount(){
 function attDel(i){ ATT.splice(i,1); renderAtt(); if($('#attDept').val()) $('#attDept').trigger('change'); }
 
 /* ================= 年度訓練計劃表：送審與簽章（見 ai-rules/17） ================= */
-var AS_DOCS = [], DOC_NO = {}, COMPANY = '', SIGNERS = {}, PLAN_APPR = {status:'none'};
+var AS_DOCS = [], DOC_NO = {}, COMPANY = '', SIGNERS = {}, PLAN_APPR = {status:'none'}, PLAN_LASTMOD = '';
 var APPR_LABEL = {none:'尚未送審', review_pending:'審核中', reviewed:'審核通過，待核准',
                   approve_pending:'待核准', approved:'已核准', rejected:'已退回'};
 function loadPlanStatus(){
@@ -1393,6 +1400,8 @@ function loadPlanStatus(){
         if (!res.ok) return;
         PLAN_APPR = res.approval || {status:'none'};
         SIGNERS = res.signers || {};
+        PLAN_LASTMOD = res.plan_last_modified || '';
+        if (SETTINGS) SETTINGS.training_plan_sign_date = res.plan_sign_date || '';
         if (SETTINGS) SETTINGS.training_need_approval = res.need_approval;
         renderPlanStatus();
     });
@@ -1435,10 +1444,14 @@ $(document).on('click', '.set-tab', function(){
 
 /* ================= 達標狀況（各單位每月/每年內外訓次數） ================= */
 var UNITS = [], GROUPS = [], DEPTS = [], TGSTATS = null, TGTARGETS = {}, TGMON = 0;   // TGMON: 0=全年
-$('.tr-tabs .tab').on('click', function(){
+/* 只綁主分頁（設定跳窗內也有 .tab，不能一起被清掉選取狀態） */
+$('#mainTabs .tab').on('click', function(){
     var t = $(this).data('tab');
-    $('.tr-tabs .tab').removeClass('on'); $(this).addClass('on');
+    $('#mainTabs .tab').removeClass('on'); $(this).addClass('on');
     $('#paneList').toggle(t==='list'); $('#paneTarget').toggle(t==='target');
+    // 列印鈕依目前分頁切換，一次只出現一顆
+    $('#btnPrintPlan').toggle(t==='list');
+    $('#btnPrintResult').toggle(t==='target');
     if (t==='target' && !TGSTATS) loadTargetStats();
 });
 function loadTargetStats(){
@@ -1796,6 +1809,8 @@ function openSetting(){
     $('#setNeedAppr').val(String(SETTINGS.training_need_approval||0));
     $('#setSgReview').text(SIGNERS.reviewer ? SIGNERS.reviewer.name : '（未設定審核者）');
     $('#setSgApprover').text(SIGNERS.approver ? SIGNERS.approver.name : '（未設定核准者）');
+    $('#setSignDate').val(SETTINGS.training_plan_sign_date || '');
+    $('#setSignAuto').text(PLAN_LASTMOD ? '（留空時自動採用：'+PLAN_LASTMOD+'）' : '（本年度尚無資料，留空時採用今天）');
     $('#setBrkStart').val(SETTINGS.training_break_start||'');
     $('#setBrkEnd').val(SETTINGS.training_break_end||'');
     setBrkCheck();
@@ -1835,7 +1850,8 @@ function saveSettings(){
         cat_internal:$('#setCatIn').val(), cat_external:$('#setCatEx').val(),
         break_start:bs.val, break_end:be.val, exclude_depts:exIds.join(','),
         as_doc_plan:$('#setDocPlan').val(), as_doc_result:$('#setDocResult').val(),
-        as_doc_target:$('#setDocTarget').val(), need_approval:$('#setNeedAppr').val()}, function(res){
+        as_doc_target:$('#setDocTarget').val(), need_approval:$('#setNeedAppr').val(),
+        plan_sign_date:$('#setSignDate').val()}, function(res){
         if (!res.ok){ alert(res.error||'設定儲存失敗'); return; }
         SETTINGS = res.settings||{}; UNITS = res.units||UNITS; DOC_NO = res.doc_no||DOC_NO;
         TGSTATS = null; if ($('#paneTarget').is(':visible')) loadTargetStats();
@@ -1979,32 +1995,37 @@ function printSignSheet(){
 }
 /* 刪除：兩次都要輸入大寫 Y 才執行（連同上課日、參加名單、附件實體檔一起刪，無法復原） */
 /* ================= 列印（依 ai-rules/16：大標題＝公司全名、頁碼左下、AS文件編號右下） ================= */
-function egPrintWindow(title, bodyHtml, extraCss, docNo){
-    var as = String(docNo||'').replace(/['\\]/g,'');
-    var css = 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;margin:0;color:#000;'
-            + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-            + '.pt-head{text-align:center;}.pt-head .co{font-size:17px;font-weight:bold;}'
-            + '.pt-head .tt{font-size:15px;margin-top:2px;}'
-            + 'table.pt{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}'
-            + 'table.pt th,table.pt td{border:1px solid #333;padding:4px 5px;text-align:center;}'
-            + 'table.pt th{background:#EFEFEF;}'
-            + '.pt-legend{font-size:11px;margin-top:6px;line-height:1.8;}'
-            + '.pt-sign{margin-top:14px;font-size:12px;width:100%;border-collapse:collapse;}'
-            + '.pt-sign td{border:1px solid #333;height:52px;vertical-align:top;padding:3px 6px;width:33.33%;}'
+/* 共用列印視窗：
+   ・@page margin:0 ＋ body padding ＝ 瀏覽器不再印自己的頁首/頁尾（網址、標題、日期），版面才乾淨
+   ・大標題（公司全名）與副標題（表單名稱）拉出字級層次
+   ・文件編號印在每頁右下（position:fixed 會在每一頁重複）
+   ・欄寬用 table-layout:fixed 明確配置，避免中文被擠成一長條直排 */
+function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
+    var as = esc(String(docNo||''));
+    var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:0;}'
+            + 'html,body{margin:0;padding:0;}'
+            + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;'
+            + 'padding:10mm 8mm 12mm;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+            + '.pt-head{text-align:center;margin-bottom:6px;}'
+            + '.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}'
+            + '.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
+            + '.pt-head .sub{font-size:11px;color:#444;margin-top:2px;}'
+            + 'table.pt{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;table-layout:fixed;}'
+            + 'table.pt th,table.pt td{border:1px solid #333;padding:3px 4px;text-align:center;'
+            + 'word-wrap:break-word;overflow-wrap:break-word;line-height:1.35;}'
+            + 'table.pt th{background:#EFEFEF;font-weight:bold;}'
+            + 'table.pt td.l{text-align:left;}'
+            + '.pt-legend{font-size:11px;margin-top:6px;line-height:1.7;}'
+            + '.pt-sign{margin-top:12px;font-size:12px;width:100%;border-collapse:collapse;table-layout:fixed;}'
+            + '.pt-sign td{border:1px solid #333;height:54px;vertical-align:top;padding:3px 6px;width:33.33%;}'
             + '.pt-sign .lb{font-size:11px;color:#333;}'
-            + (extraCss||'')
-            + '@page{margin:12mm 8mm 16mm;' + (as ? " @bottom-right{ content:'"+as+"'; font-size:9pt; color:#333; }" : '') + '}';
+            + '.pt-foot{position:fixed;right:8mm;bottom:5mm;font-size:9pt;color:#333;}'
+            + (extraCss||'');
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
     w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
-        + bodyHtml
-        + '<scr'+'ipt>window.onload=function(){'
-        + 'var onePageA4=(297-28)*96/25.4;'
-        + 'if(document.body.scrollHeight>onePageA4*0.92){'
-        + 'var st=document.createElement(\'style\');'
-        + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
-        + 'document.head.appendChild(st);}'
-        + 'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+        + bodyHtml + (as ? '<div class="pt-foot">'+as+'</div>' : '')
+        + '<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
     w.document.close();
 }
 /* 簽章區：核准（最高核准人員）／審核（人事表單審核者）／人事（人事簽章人員）
@@ -2014,14 +2035,19 @@ function signRowHtml(){
     var ap = s.approve || {}, rv = s.review || {};
     var d10 = function(x){ return String(x||'').substr(0,10); };
     var appr, rev, hr, dt = d10(ap.decided_at || ap.submitted_at || rv.submitted_at);
-    if (!need) {   // 不需送審：送出即視同全簽，日期統一為送審日
+    if (!need) {
+        // 免送審：三個簽章欄直接顯示綁定的人（不必先按送審）；
+        // 日期優先序＝設定的簽章日期 → 該年度計畫最後異動日 → 今天
         appr = (SIGNERS.approver && SIGNERS.approver.name) || '';
         rev  = (SIGNERS.reviewer && SIGNERS.reviewer.name) || '';
         hr   = (SIGNERS.hr_signer && SIGNERS.hr_signer.name) || '';
+        dt   = d10(SETTINGS.training_plan_sign_date || PLAN_LASTMOD || META.today);
     } else {
+        // 需送審：依實際簽核結果顯示，沒簽到的欄位留白給紙本蓋章
         appr = (s.status==='approved') ? (ap.approver_name||'') : '';
         rev  = (s.status==='approved' || s.status==='approve_pending' || s.status==='reviewed') ? (rv.approver_name||'') : '';
         hr   = (SIGNERS.hr_signer && SIGNERS.hr_signer.name) || '';
+        if (!dt) dt = d10(SETTINGS.training_plan_sign_date || PLAN_LASTMOD || META.today);
     }
     var cell = function(lb, nm){
         return '<td><div class="lb">'+lb+'</div><div style="font-size:14px;margin-top:6px;">'+esc(nm||'')+'</div>'
@@ -2032,10 +2058,16 @@ function signRowHtml(){
 /* ① 年度教育訓練計畫表（AS 必備）：計畫月份用 ◎、已實施用 ✔ */
 function printPlanTable(){
     var year=$('#yearSel').val(), rows=ROWS.filter(function(r){ return r.status!=='cancelled'; });
-    var body='<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div><div class="tt">'+year+' 年度教育訓練計畫表</div></div>';
-    var mh=''; for (var m=1;m<=12;m++) mh += '<th style="width:26px;">'+m+'</th>';
-    body += '<table class="pt"><thead><tr><th style="width:32px;">NO.</th><th>課程名稱</th><th style="width:130px;">訓練對象</th>'
-         + '<th style="width:56px;">實施方式</th>'+mh+'<th style="width:80px;">備註</th></tr></thead><tbody>';
+    signWarn();
+    var body='<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
+           + '<div class="tt">'+year+' 年度教育訓練計畫表</div></div>';
+    // 欄寬用 % 明確配置（table-layout:fixed），課程名稱與訓練對象留足寬度才不會被擠成直排
+    var cols = '<colgroup><col style="width:4%"><col style="width:26%"><col style="width:16%"><col style="width:7%">';
+    for (var c=1;c<=12;c++) cols += '<col style="width:3.2%">';
+    cols += '<col style="width:8.6%"></colgroup>';
+    var mh=''; for (var m=1;m<=12;m++) mh += '<th>'+m+'</th>';
+    body += '<table class="pt">'+cols+'<thead><tr><th>NO.</th><th>課程名稱</th><th>訓練對象</th>'
+         + '<th>實施方式</th>'+mh+'<th>備註</th></tr></thead><tbody>';
     if (!rows.length) body += '<tr><td colspan="17" style="height:24px;">（本年度尚無訓練計畫）</td></tr>';
     rows.forEach(function(r,i){
         var doneM = {};
@@ -2050,10 +2082,10 @@ function printPlanTable(){
             var mark = (k===+r.plan_month ? '◎' : '') + (doneM[k] ? '✔' : '');
             cells += '<td style="font-size:13px;">'+mark+'</td>';
         }
-        body += '<tr><td>'+(i+1)+'</td><td style="text-align:left;">'+esc(r.course_name)+'</td>'
-             + '<td style="text-align:left;">'+esc(r.dept_name||'全公司')+'</td>'
+        body += '<tr><td>'+(i+1)+'</td><td class="l">'+esc(r.course_name)+'</td>'
+             + '<td class="l">'+esc(r.dept_name||'全公司')+'</td>'
              + '<td>'+(r.train_type==='external'?'外訓':'內訓')+'</td>'+cells
-             + '<td style="text-align:left;font-size:11px;">'+esc(r.note||'')+'</td></tr>';
+             + '<td class="l" style="font-size:11px;">'+esc(r.note||'')+'</td></tr>';
     });
     body += '</tbody></table>'
          + '<div class="pt-legend"><b>圖示說明：</b>'
@@ -2061,16 +2093,29 @@ function printPlanTable(){
          + '<span style="font-size:14px;">✔</span> ＝ 實際已實施（已完成）　'
          + '同一格同時出現 ◎✔ ＝ 該月依計畫完成；只有 ✔ ＝ 實際實施月份與原計畫不同。</div>'
          + signRowHtml();
-    egPrintWindow(year+' 年度教育訓練計畫表', body, '', DOC_NO.plan);
+    egPrintWindow(year+' 年度教育訓練計畫表', body, '', DOC_NO.plan, true);
+}
+/* 免送審卻沒綁簽章人時提醒一次（否則印出來三個欄位都空白） */
+function signWarn(){
+    if (+(SETTINGS.training_need_approval||0)) return;
+    if ((SIGNERS.approver&&SIGNERS.approver.name) || (SIGNERS.reviewer&&SIGNERS.reviewer.name)
+        || (SIGNERS.hr_signer&&SIGNERS.hr_signer.name)) return;
+    alert('提醒：目前設定為「不需送審」，但尚未指定簽章人員，列印出來的核准／審核／人事欄會是空白。\n'
+        + '請到「組織角色綁定設定」指定最高核准人員、人事表單審核者與人事簽章人員。');
 }
 /* ② 訓練結果明細表：只列已完成，含實施結果與評鑑 */
 function printResultTable(){
     var year=$('#yearSel').val(), rows=ROWS.filter(function(r){ return r.status==='done'; });
-    var body='<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div><div class="tt">'+year+' 年度教育訓練結果明細表</div></div>';
-    body += '<table class="pt"><thead><tr><th style="width:32px;">NO.</th><th style="width:34px;">月</th><th>課程名稱</th>'
-         + '<th style="width:120px;">訓練對象</th><th style="width:48px;">方式</th><th style="width:96px;">講師/開課單位</th>'
-         + '<th style="width:80px;">上課日期</th><th style="width:40px;">時數</th><th style="width:36px;">應到</th>'
-         + '<th style="width:36px;">實到</th><th style="width:56px;">評鑑方式</th><th style="width:96px;">評鑑結果</th></tr></thead><tbody>';
+    signWarn();
+    var body='<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
+           + '<div class="tt">'+year+' 年度教育訓練結果明細表</div></div>';
+    body += '<table class="pt"><colgroup><col style="width:4%"><col style="width:4%"><col style="width:20%">'
+         + '<col style="width:13%"><col style="width:6%"><col style="width:11%"><col style="width:12%">'
+         + '<col style="width:5%"><col style="width:5%"><col style="width:5%"><col style="width:6%"><col style="width:9%">'
+         + '</colgroup><thead><tr><th>NO.</th><th>月</th><th>課程名稱</th>'
+         + '<th>訓練對象</th><th>方式</th><th>講師/開課單位</th>'
+         + '<th>上課日期</th><th>時數</th><th>應到</th>'
+         + '<th>實到</th><th>評鑑方式</th><th>評鑑結果</th></tr></thead><tbody>';
     if (!rows.length) body += '<tr><td colspan="12" style="height:24px;">（本年度尚無已完成的訓練）</td></tr>';
     rows.forEach(function(r,i){
         var ds=(r.days||[]).map(function(d){ return fmtDate(d.day_date); }).filter(Boolean).sort();
@@ -2078,10 +2123,10 @@ function printResultTable(){
         if (r.eval_method==='notice') ev.push('免評鑑');
         else { if(e.pass) ev.push('合格 '+e.pass); if(e.fail) ev.push('不合格 '+e.fail);
                if(e.exempt) ev.push('免評 '+e.exempt); if(e.none) ev.push('未評 '+e.none); }
-        body += '<tr><td>'+(i+1)+'</td><td>'+r.plan_month+'</td><td style="text-align:left;">'+esc(r.course_name)+'</td>'
-             + '<td style="text-align:left;">'+esc(r.dept_name||'全公司')+'</td>'
+        body += '<tr><td>'+(i+1)+'</td><td>'+r.plan_month+'</td><td class="l">'+esc(r.course_name)+'</td>'
+             + '<td class="l">'+esc(r.dept_name||'全公司')+'</td>'
              + '<td>'+(r.train_type==='external'?'外訓':'內訓')+'</td>'
-             + '<td style="text-align:left;">'+esc((r.train_type==='external'?r.org_unit:r.trainer)||'')+'</td>'
+             + '<td class="l">'+esc((r.train_type==='external'?r.org_unit:r.trainer)||'')+'</td>'
              + '<td style="font-size:11px;">'+esc(ds.length?(ds[0]+(ds.length>1?'~'+ds[ds.length-1].substr(5):'')):fmtDate(r.done_date))+'</td>'
              + '<td>'+(r.actual_hours==null?'':numTrim(r.actual_hours))+'</td>'
              + '<td>'+(r.target_headcount==null?'':r.target_headcount)+'</td>'
@@ -2090,7 +2135,7 @@ function printResultTable(){
              + '<td style="font-size:11px;">'+esc(ev.join('　'))+'</td></tr>';
     });
     body += '</tbody></table>' + signRowHtml();
-    egPrintWindow(year+' 年度教育訓練結果明細表', body, '', DOC_NO.result);
+    egPrintWindow(year+' 年度教育訓練結果明細表', body, '', DOC_NO.result, true);
 }
 $('#btnPrintPlan').on('click', printPlanTable);
 $('#btnPrintResult').on('click', printResultTable);
