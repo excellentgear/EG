@@ -90,6 +90,23 @@ function asGetSetting(PDO $db, string $key): string {
         return ($v !== false && $v !== null) ? trim($v) : '';
     } catch (Exception $e) { return ''; }
 }
+/** 本公司全名（發票用）：唯一來源 customer_list.is_own_company=1，禁寫死（ai-rules/16 第一節） */
+function asOwnCompanyName(PDO $db): string {
+    try {
+        $r = $db->query("SELECT customer_full, customer FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        if ($r) return trim($r['customer_full'] ?: $r['customer']);
+    } catch (Exception $e) {}
+    return '';
+}
+/** 結構總覽列印綁定的 AS 文件（未綁定回 null） */
+function asTreeBoundDoc(PDO $db): ?array {
+    $id = (int)asGetSetting($db, 'as_doc_tree_print_as_doc_id');
+    if ($id <= 0) return null;
+    $s = $db->prepare("SELECT id, doc_no, doc_name, current_version FROM as_document WHERE id=? AND is_deleted=0");
+    $s->execute([$id]);
+    $r = $s->fetch(PDO::FETCH_ASSOC);
+    return $r ?: null;
+}
 function asSetSetting(PDO $db, string $key, string $val): void {
     $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?)
                   ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)")
@@ -279,6 +296,7 @@ $asGate = [
     'add_tag'=>'settings', 'update_tag'=>'settings', 'delete_tag'=>'settings',
     'get_perms'=>'settings', 'save_perms'=>'settings',
     'get_settings'=>'settings', 'save_settings'=>'settings', 'upload_template'=>'settings',
+    'tree_print_meta'=>'view', 'save_tree_as_doc'=>'settings',
     'save_dept_codes'=>'settings',
     'form_records_list'=>'view', 'form_records_upload'=>'create', 'form_record_delete'=>'delete',
     'set_linked_module'=>'settings',
@@ -755,6 +773,25 @@ case 'save_perms':
     } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
 
 // ══════════════ 系統設定（NAS 路徑 / AS 負責人 / 代理人 / 申請單範本） ══════════════
+// ══════════════ 結構總覽列印：公司全名＋綁定的 AS 文件編號 ══════════════
+// 依 ai-rules/16：大標題＝本公司全名（customer_list.is_own_company=1，禁寫死）、
+// 表頭＝已綁定 AS 文件的「表單名稱」、頁尾右下＝該文件編號
+case 'tree_print_meta':
+    jout(['status'=>'success',
+          'company_name'=>asOwnCompanyName($db),
+          'as_doc'=>asTreeBoundDoc($db),
+          'as_docs'=>$db->query("SELECT id, doc_no, doc_name FROM as_document WHERE is_deleted=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC)]);
+
+case 'save_tree_as_doc':
+    $docId = (int)($_POST['as_doc_id'] ?? 0);
+    if ($docId > 0) {
+        $s = $db->prepare("SELECT COUNT(*) FROM as_document WHERE id=? AND is_deleted=0");
+        $s->execute([$docId]);
+        if (!$s->fetchColumn()) jout(['status'=>'error','message'=>'找不到該 AS 文件']);
+    }
+    asSetSetting($db, 'as_doc_tree_print_as_doc_id', (string)$docId);
+    jout(['status'=>'success','message'=>$docId ? '已綁定' : '已解除綁定','as_doc'=>asTreeBoundDoc($db)]);
+
 case 'get_settings':
     $ownerId  = asGetSetting($db,'as_doc_owner_user_id');
     $deputyId = asGetSetting($db,'as_doc_deputy_user_id');
