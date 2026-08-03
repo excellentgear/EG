@@ -4185,6 +4185,11 @@ if ($reply_id != "") {
                 customBomData = null; // 清除暫存資料
             });
 
+            // Modal 完全展開後，游標自動對焦到 BOM 查詢輸入框
+            $(document).on('shown.bs.modal', '#myModal_reply_custom', function() {
+                $('#input-bom-query').trigger('focus');
+            });
+
             // BOM 查詢欄位按 Enter 視同點擊「更新」
             $(document).on('keydown', '#input-bom-query', function(e) {
                 if (e.which === 13) {
@@ -4234,23 +4239,19 @@ if ($reply_id != "") {
                             if (qcCheck === 'AOD') return '特採';
                             const totalQty = parseFloat(item.sqty) || 0;
                             const checkedQty = (parseFloat(item.QC_QQ_sqty) || 0) + (parseFloat(item.QC_ok_sqty) || 0);
-                            if (totalQty > 0 && checkedQty >= totalQty) return '已檢驗';
-                            if (checkedQty > 0) return '部分檢驗';
+                            if (totalQty > 0 && checkedQty >= totalQty) return '已驗';
+                            if (checkedQty > 0) return '部分';
                             return '待驗';
                         };
-                        let maxTagLength = 0;
                         let maxProcessLength = 0;
                         data.processes.forEach(item => {
                             item._inspectTag = getInspectStatusTag(item);
-                            const tagLen = getVisualLength(`[${item._inspectTag}]`);
-                            if (tagLen > maxTagLength) maxTagLength = tagLen;
                             const processPart = `[${item.bom_sn}] ${item.process_no} ${item.ProcessName}`;
                             const len = getVisualLength(processPart);
                             if (len > maxProcessLength) maxProcessLength = len;
                         });
                         data.processes.forEach(function(item) {
                             const tagPart = `[${item._inspectTag}]`;
-                            const tagPadding = ' '.repeat(Math.max(0, maxTagLength - getVisualLength(tagPart)));
                             const processPart = `[${item.bom_sn}] ${item.process_no} ${item.ProcessName}`;
                             const currentLength = getVisualLength(processPart);
                             const paddingCount = maxProcessLength > currentLength ? maxProcessLength - currentLength : 0;
@@ -4258,7 +4259,7 @@ if ($reply_id != "") {
                             const makerDisplay = (item.maker_id && String(item.maker_id).trim() !== '')
                                 ? item.maker_id
                                 : (item.maker_id_no || '');
-                            let displayText = tagPart + tagPadding + ' ' + processPart + padding;
+                            let displayText = tagPart + ' ' + processPart + padding;
                             if (makerDisplay) displayText += '\u3000' + makerDisplay;
                             $sel.append($('<option>').val(item.bom_ing_fid).text(displayText));
                         });
