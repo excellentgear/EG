@@ -1563,6 +1563,119 @@ if (!function_exists('eg_leave_cancel')) {
     }
 }
 
+// ============================== 提前結束（留停提早復職） ==============================
+
+if (!function_exists('eg_leave_early_end')) {
+    /**
+     * 人事把一張「已核准」的長假提前結束（2026-07-31 使用者定案）。
+     *
+     * 為什麼不用銷假：留職停薪／育嬰留停的人**帳號被封鎖、根本登不進系統**
+     * （user_active_lib 把 state 2/3 列入封鎖），本人不可能自己撤回；而整張銷假會讓
+     * 「已經休過的那段留停」在系統上完全消失，變成有休假沒紀錄。所以正解是
+     * **縮短結束日**：原訂到 X、實際到 Y，兩個日期都留著看得到。
+     *
+     * 一併做的事：重算時數天數、縮短行事曆事件、寫簽章軌跡（step 97）、
+     * 通知申請人與已簽核的主管與代理人，並把 user.state 從留停(2)/育嬰留停(3) 改回在職(1)。
+     *
+     * @param string $newEndDate 實際結束日 Y-m-d（時間沿用原結束時間，例如原本 17:00 就還是 17:00）
+     * @param bool   $restoreState 是否把在職狀態改回在職
+     */
+    function eg_leave_early_end(PDO $db, int $requestId, int $operatorId, string $newEndDate,
+                                string $reason, bool $restoreState = true): array {
+        $st = $db->prepare("SELECT lr.*, lt.leave_name, lt.unit_type FROM leave_request lr
+                            JOIN leave_type lt ON lt.id = lr.leave_type_id WHERE lr.id = ? LIMIT 1");
+        $st->execute([$requestId]);
+        $req = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$req) return ['ok' => false, 'msg' => '請假單不存在'];
+        if ($req['status'] !== 'approved') return ['ok' => false, 'msg' => '只有「已核准」的請假單可以提前結束（目前狀態：' . $req['status'] . '）'];
+        if (trim($reason) === '') return ['ok' => false, 'msg' => '請填寫提前結束的原因（例如：提早復職）'];
+
+        $newEndDate = substr(trim($newEndDate), 0, 10);
+        if (strtotime($newEndDate) === false) return ['ok' => false, 'msg' => '實際結束日格式不正確'];
+        $sd = substr((string)$req['start_datetime'], 0, 10);
+        $ed = substr((string)$req['end_datetime'], 0, 10);
+        if ($newEndDate < $sd) return ['ok' => false, 'msg' => "實際結束日（{$newEndDate}）不可早於請假開始日（{$sd}）"];
+        if ($newEndDate >= $ed) return ['ok' => false, 'msg' => "實際結束日（{$newEndDate}）必須早於原結束日（{$ed}）；沒有提前就不需要用這個功能"];
+
+        // 時間沿用原結束時間，避免把「17:00 下班」變成「00:00」
+        $newEnd = $newEndDate . ' ' . substr((string)$req['end_datetime'], 11, 8);
+        $amt = eg_leave_calc_amount($db, (string)$req['unit_type'], (string)$req['start_datetime'], $newEnd);
+
+        $uid = (int)$req['employee_id'];
+        // 原結束時間只在第一次提前結束時記錄；再提前一次時要保留最初的原訂日
+        $origEnd = $req['orig_end_datetime'] ?: $req['end_datetime'];
+        $stateBefore = null; $stateChanged = false;
+        try {
+            $db->beginTransaction();
+            $db->prepare("UPDATE leave_request
+                          SET end_datetime = ?, total_hours = ?, total_days = ?,
+                              orig_end_datetime = ?, early_end_at = NOW(), early_end_by = ?,
+                              early_end_reason = ?, last_update = NOW()
+                          WHERE id = ?")
+               ->execute([$newEnd, $amt['hours'], $amt['days'], $origEnd, $operatorId, $reason, $requestId]);
+
+            // 行事曆：縮短同一筆事件（不新增也不刪除，行事曆上看到的就是實際休假期間）
+            if (!empty($req['evenement_id'])) {
+                try {
+                    $db->prepare("UPDATE evenement SET `end` = ? WHERE id = ?")
+                       ->execute([$newEnd, (int)$req['evenement_id']]);
+                } catch (Throwable $e) { /* 事件已被刪或欄位異動；失敗不影響單據本身 */ }
+            }
+
+            // 簽章軌跡：step 97＝提前結束（98 修改／99 撤回已被用掉）
+            try {
+                $db->prepare("INSERT INTO leave_sign_record (leave_request_id, step_no, signer_id, action, remark, signed_at)
+                              VALUES (?, 97, ?, 'edited', ?, NOW())")
+                   ->execute([$requestId, $operatorId,
+                              "提前結束：原訂至 " . substr($origEnd, 0, 10) . "，實際至 {$newEndDate}。原因：{$reason}"]);
+            } catch (Throwable $e) {}
+
+            // 在職狀態復職：留職停薪(2)／育嬰留停(3) 才動，其他狀態一律不碰
+            if ($restoreState) {
+                $s = $db->prepare("SELECT state FROM `user` WHERE id = ? LIMIT 1");
+                $s->execute([$uid]);
+                $stateBefore = (int)$s->fetchColumn();
+                if (in_array($stateBefore, [2, 3], true)) {
+                    $db->prepare("UPDATE `user` SET state = 1 WHERE id = ?")->execute([$uid]);
+                    $stateChanged = true;
+                }
+            }
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            return ['ok' => false, 'msg' => '提前結束失敗：' . $e->getMessage()];
+        }
+
+        // 通知（transaction 外）：申請人＋已簽核的主管＋代理人，讓相關人知道人回來了
+        try {
+            $targets = [$uid];
+            $q = $db->prepare("SELECT DISTINCT approver_id FROM leave_approval
+                               WHERE leave_request_id = ? AND approver_id IS NOT NULL");
+            $q->execute([$requestId]);
+            foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $a) $targets[] = (int)$a;
+            $q = $db->prepare("SELECT DISTINCT agent_user_id FROM leave_request_agent
+                               WHERE leave_request_id = ? AND agent_user_id IS NOT NULL");
+            $q->execute([$requestId]);
+            foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $a) $targets[] = (int)$a;
+            $n = $db->prepare("SELECT user_cname FROM `user` WHERE id = ?");
+            $n->execute([$uid]);
+            $who = (string)$n->fetchColumn();
+            eg_leave_notify($db, $requestId, "↩️ 請假單 #{$requestId} 已提前結束",
+                "員　工：{$who}\n假　別：{$req['leave_name']}\n原訂結束：" . substr($origEnd, 0, 10)
+                . "\n實際結束：{$newEndDate}\n原　因：{$reason}"
+                . ($stateChanged ? "\n在職狀態已自動改回「在職」。" : ''),
+                array_values(array_unique($targets)), $operatorId, $reason);
+        } catch (Throwable $e) {}
+
+        return ['ok' => true,
+                'msg' => sprintf('已提前結束：原訂至 %s，實際至 %s，時數重算為 %s 小時（%s 天）%s',
+                    substr($origEnd, 0, 10), $newEndDate,
+                    eg_leave_rule_fmt((float)$amt['hours']), eg_leave_rule_fmt((float)$amt['days']),
+                    $stateChanged ? '；在職狀態已改回「在職」，該員工可以重新登入。' : '。'),
+                'state_changed' => $stateChanged, 'state_before' => $stateBefore];
+    }
+}
+
 // ============================== 徹底刪除（僅管理員／測試用） ==============================
 
 if (!function_exists('eg_leave_is_superadmin')) {

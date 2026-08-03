@@ -528,6 +528,12 @@ input[type=number]{-moz-appearance:textfield;}
     <button class="btn btn-amber" id="btnEditLeave" style="display:none;" onclick="startEdit()"><i class="fa fa-pencil"></i> 修改內容</button>
     <button class="btn btn-amber" id="btnReqChange" style="display:none;" onclick="requestChange()"><i class="fa fa-refresh"></i> 申請修改</button>
     <button class="btn btn-coral" id="btnCancelLeave" style="display:none;" onclick="doCancel()"></button>
+    <?php if ($VIEW_ALL): ?>
+    <button class="btn btn-amber" id="btnEarlyEnd" style="display:none;" onclick="openEarlyEnd()"
+            title="長假提早回來：縮短結束日、重算天數、同步行事曆，並可把在職狀態改回在職">
+      <i class="fa fa-sign-in"></i> 提前結束
+    </button>
+    <?php endif; ?>
     <?php if ($IS_SUPERADMIN): ?>
     <button class="btn btn-coral" id="btnDeleteLeave" style="display:none;" onclick="doDelete()"
             title="徹底刪除此單及其通知、簽核紀錄、行事曆事件與附件（不可回復，僅最高權限帳號測試用）">
@@ -558,6 +564,42 @@ input[type=number]{-moz-appearance:textfield;}
   <div class="modal-footer">
     <button class="btn btn-default" data-dismiss="modal">取消</button>
     <button class="btn btn-coral" onclick="doDeleteConfirm()"><i class="fa fa-trash"></i> 確認徹底刪除</button>
+  </div>
+</div></div></div>
+<?php endif; ?>
+
+<?php if ($VIEW_ALL): ?>
+<!-- ═══ 提前結束 Modal（人事／管理員）═══ -->
+<div class="modal fade" id="earlyEndModal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header" style="background:var(--sand);">
+    <button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title" style="color:var(--amber-d);"><i class="fa fa-sign-in"></i> 提前結束 <span id="eeReqNo"></span></h4>
+  </div>
+  <div class="modal-body lv-form">
+    <div style="background:#fdf6ea;border:1px solid #e9c98f;color:#8a5a1a;padding:9px 12px;border-radius:5px;font-size:13px;margin-bottom:12px;">
+      用在<b>留職停薪／育嬰留停等長假提早回來</b>的情況。系統會把結束日縮短到實際復職日、重算時數天數、
+      同步縮短行事曆，並保留「原訂到 X、實際到 Y」的紀錄——<b>不是銷假</b>，已經休過的那段仍留在系統裡。
+    </div>
+    <div id="eePeriod" style="font-size:13px;color:#6b5638;margin-bottom:10px;"></div>
+    <label>實際結束日（最後一天休假日） <span style="color:var(--coral);">*</span></label>
+    <input type="date" class="form-control input-sm eg-inp" id="eeDate" max="9999-12-31">
+    <div id="eeDateErr" style="font-size:11.5px;color:#a3341f;margin-top:3px;"></div>
+    <label style="margin-top:10px;">原因 <span style="color:var(--coral);">*</span></label>
+    <input type="text" class="form-control input-sm eg-inp" id="eeReason" maxlength="200" placeholder="例：提早復職">
+    <div class="checkbox" style="margin-top:10px;">
+      <label style="font-weight:400;font-size:13px;color:#6b5638;">
+        <input type="checkbox" id="eeRestore" data-eg-skip checked>
+        同時把在職狀態從「留職停薪／育嬰留停」改回「在職」
+      </label>
+      <div style="font-size:11.5px;color:#9a7b4f;margin-left:20px;">
+        留停期間帳號是被封鎖的，不改回來該員工登不進系統。只有目前狀態是留職停薪或育嬰留停時才會改動。
+      </div>
+    </div>
+    <div id="eeMsg" style="font-size:12.5px;margin-top:8px;min-height:18px;"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-default" data-dismiss="modal">取消</button>
+    <button class="btn btn-amber" onclick="doEarlyEnd()"><i class="fa fa-check"></i> 確認提前結束</button>
   </div>
 </div></div></div>
 <?php endif; ?>
@@ -1259,7 +1301,7 @@ function savePrintSetting(){
 function openDetail(id){
   curDetailId = id;
   // 先把所有動作鈕收起來，避免上一張單的按鈕殘留在這張單上
-  $('#btnCancelLeave, #btnEditLeave, #btnReqChange, #btnDeleteLeave').hide();
+  $('#btnCancelLeave, #btnEditLeave, #btnReqChange, #btnDeleteLeave, #btnEarlyEnd').hide();
   $('#editHint').text('');
   $('#detailBody').html('<div class="empty-note">載入中…</div>');
   $('#detailModal').modal('show');
@@ -1276,6 +1318,15 @@ function openDetail(id){
              + (isFullDayLeave(o) ? ' <span class="tag-soft">整天</span>' : '')
              + (+o.is_backdated===1 ? ' <span class="tag-soft">補請假</span>' : ''));
     h += row('時數／天數', num(o.total_hours)+' 小時 / '+num(o.total_days)+' 天');
+    // 提前結束：原訂到哪天要看得見，否則「已休過的那段」在畫面上等於消失
+    if(o.orig_end_datetime){
+      h += row('提前結束', '<span class="tag-warn">提前結束</span> 原訂至 <b>'
+             + esc(String(o.orig_end_datetime).substring(0,10)) + '</b>，實際至 <b>'
+             + esc(String(o.end_datetime).substring(0,10)) + '</b>'
+             + '<div style="font-size:12px;color:#9a7b4f;">原因：' + esc(o.early_end_reason||'—')
+             + '　辦理人：' + esc(o.early_end_by_name||'—')
+             + '　' + esc(String(o.early_end_at||'').substring(0,16)) + '</div>');
+    }
     // 職務代理人：每個職務身分各一位（系統依人事設定順位自動解析），舊單退回單一欄位
     let agentHtml = '';
     if((r.agents||[]).length){
@@ -1382,10 +1433,52 @@ function openDetail(id){
     // 修改：審核前（且尚無人簽核）可直接改；已核准提供「申請修改」
     curDetailReq = o;
     if(IS_SUPERADMIN) $('#btnDeleteLeave').show();
+    // 提前結束：只對「已核准」且還沒結束（或期間內）的單開放給人事；已過期的長假也可補辦，故不擋結束日
+    if(CAN_EARLY_END && o.status === 'approved') $('#btnEarlyEnd').show();
     $('#btnEditLeave').toggle(!!r.can_edit);
     $('#btnReqChange').toggle(!!r.can_request_change);
     $('#editHint').text((!r.can_edit && r.edit_reason && String(o.employee_id)===String(ME.id)) ? r.edit_reason : '');
   });
+}
+
+// ── 提前結束（人事／管理員）：長假提早回來時縮短結束日，不是銷假 ──
+const CAN_EARLY_END = <?= $VIEW_ALL ? 'true' : 'false' ?>;
+function openEarlyEnd(){
+  const o = curDetailReq; if(!o) return;
+  $('#eeReqNo').text('#' + o.id);
+  const sd = String(o.start_datetime||'').substring(0,10), ed = String(o.end_datetime||'').substring(0,10);
+  $('#eePeriod').html('員工：<b>'+esc(o.applicant_name)+'</b>　假別：<b>'+esc(o.leave_name)+'</b><br>'
+    + '目前期間：'+esc(sd)+' ~ '+esc(ed)+'（'+num(o.total_days)+' 天）'
+    + (o.orig_end_datetime ? '<br><span style="color:#8a5a1a;">此單先前已提前結束過，原訂結束日為 '
+        + esc(String(o.orig_end_datetime).substring(0,10)) + '</span>' : ''));
+  // 實際結束日必須落在「開始日」到「原結束日前一天」之間，直接用瀏覽器的日期範圍擋掉多數誤填
+  $('#eeDate').val('').attr('min', sd)
+              .attr('max', new Date(new Date(ed).getTime()-86400000).toISOString().substring(0,10));
+  $('#eeReason').val(''); $('#eeMsg').empty(); $('#eeDateErr').empty(); $('#eeRestore').prop('checked', true);
+  $('#detailModal').one('hidden.bs.modal', function(){ $('#earlyEndModal').modal('show'); }).modal('hide');
+}
+$(document).on('change', '#eeDate', function(){
+  const o = curDetailReq; if(!o) return;
+  const v = this.value, sd = String(o.start_datetime||'').substring(0,10), ed = String(o.end_datetime||'').substring(0,10);
+  if(!v){ $('#eeDateErr').empty(); return; }
+  if(v < sd) $('#eeDateErr').text('實際結束日不可早於請假開始日（'+sd+'）');
+  else if(v >= ed) $('#eeDateErr').text('實際結束日必須早於原結束日（'+ed+'），沒有提前就不需要用這個功能');
+  else $('#eeDateErr').empty();
+});
+function doEarlyEnd(){
+  const o = curDetailReq; if(!o) return;
+  const d = $('#eeDate').val(), rs = $('#eeReason').val().trim();
+  if(!d){ $('#eeMsg').html('<span style="color:#a3341f;">請填實際結束日</span>'); $('#eeDate').focus(); return; }
+  if($('#eeDateErr').text()){ $('#eeMsg').html('<span style="color:#a3341f;">請先修正日期</span>'); $('#eeDate').focus(); return; }
+  if(!rs){ $('#eeMsg').html('<span style="color:#a3341f;">請填原因</span>'); $('#eeReason').focus(); return; }
+  $('#eeMsg').text('處理中…');
+  $.post(API, {action:'early_end', csrf:CSRF, id:o.id, new_end_date:d, reason:rs,
+               restore_state: $('#eeRestore').is(':checked') ? 1 : 0}, function(r){
+    if(!r.success){ $('#eeMsg').html('<span style="color:#a3341f;">'+esc(r.message)+'</span>'); return; }
+    $('#earlyEndModal').modal('hide');
+    alert(r.message);
+    loadList();
+  }, 'json').fail(function(){ $('#eeMsg').html('<span style="color:#a3341f;">處理失敗</span>'); });
 }
 
 // ── 徹底刪除（僅管理者，測試用）：連通知、簽核紀錄、行事曆事件、附件一起刪，不可回復 ──

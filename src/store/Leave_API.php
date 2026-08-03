@@ -279,6 +279,21 @@ case 'cancel': {
     out(['success' => $r['ok'], 'message' => $r['msg']]);
 }
 
+// ════════════════ 提前結束（留停提早復職；人事／管理員） ════════════════
+// 留停期間本人帳號被封鎖登不進來，不可能自己撤回；整張銷假又會讓已休過的那段消失，
+// 所以由人事縮短結束日，原訂日與實際日兩個都留著（見 eg_leave_early_end 的說明）。
+case 'early_end': {
+    need_csrf();
+    if (!$VIEW_ALL) bad('只有人事或管理員可以辦理提前結束');
+    $reqId = (int)($_POST['id'] ?? 0);
+    if (!$reqId) bad('缺少參數');
+    $r = eg_leave_early_end($db, $reqId, $user_id,
+                            (string)($_POST['new_end_date'] ?? ''),
+                            trim((string)($_POST['reason'] ?? '')),
+                            ((string)($_POST['restore_state'] ?? '1')) === '1');
+    out(['success' => $r['ok'], 'message' => $r['msg'], 'state_changed' => $r['state_changed'] ?? false]);
+}
+
 // ════════════════ 徹底刪除（僅管理者／測試用） ════════════════
 case 'delete': {
     need_csrf();
