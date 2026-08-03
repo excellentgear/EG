@@ -1542,7 +1542,7 @@ $(function(){
             ? EGStamp.stamp(nm, dot, false).replace(/(href|src)="\//g, '$1="'+location.origin+'/')
             : '<span class="p-blank"></span>';
       body += `</tbody></table>
-        <div class="p-sign"><div class="s-cell">核准：${st(apName)}</div><div class="s-cell s-r">修改：${st(edName)}</div></div>
+        <div class="p-sign"><div class="s-cell">核准：${st(apName)}</div><div class="s-cell">修改：${st(edName)}</div></div>
       </div>`;
       if(pi < pages.length-1) body += '<div class="p-break"></div>';
     });
@@ -1567,9 +1567,8 @@ $(function(){
       + 'table.p-tb thead th{background:#f3ead6;}'
       + 'table.p-tb td.tl{text-align:left;}'
       + 'table.p-tb tr{break-inside:avoid;}'
-      + '.p-sign{display:flex;margin-top:8px;break-inside:avoid;}'
-      + '.p-sign .s-cell{flex:1;font-size:13px;display:flex;align-items:center;min-height:80px;}'
-      + '.p-sign .s-r{justify-content:flex-end;}'
+      + '.p-sign{display:flex;gap:28px;margin-top:8px;break-inside:avoid;}'   // 核准/修改並排靠左，不要左右撐開
+      + '.p-sign .s-cell{font-size:13px;display:flex;align-items:center;min-height:80px;}'
       + '.p-blank{display:inline-block;width:150px;border-bottom:1px solid #999;height:1px;margin-left:6px;}'
       + '.car-stamp{opacity:.92;vertical-align:middle;}'
       + '.stamp-wrap{display:inline-block;text-align:center;margin:0 8px;}'

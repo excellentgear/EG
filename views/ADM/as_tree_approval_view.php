@@ -84,9 +84,7 @@ table.p-tb{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:4px;
 table.p-tb th,table.p-tb td{border:1px solid #999;padding:3px 5px;text-align:center;}
 table.p-tb thead th{background:#f3ead6;}
 table.p-tb td.tl{text-align:left;}
-.p-sign{display:flex;font-size:13px;margin-bottom:14px;}
-.p-sign div{flex:1;}
-.p-sign .s-r{text-align:right;}
+.p-sign{display:flex;gap:28px;font-size:13px;margin-bottom:14px;}
 .bar{background:#fdf3e3;border:1px solid #e7cfa5;border-radius:4px;padding:8px 10px;margin-bottom:12px;font-size:13px;}
 .b-ok{background:#F0A24B;border:0;color:#fff;padding:6px 18px;border-radius:4px;font-weight:bold;}
 .b-no{background:#DD5138;border:0;color:#fff;padding:6px 18px;border-radius:4px;font-weight:bold;}
@@ -132,7 +130,7 @@ table.p-tb td.tl{text-align:left;}
     </table>
     <div class="p-sign">
       <div>核准：<?= tv_esc($snap['approver_name'] ?? '') ?>（<?= tv_esc($dateOf[$lv] ?? '') ?>）</div>
-      <div class="s-r">修改：<?= tv_esc($snap['editor_name'] ?? '') ?>（<?= tv_esc($dateOf[$lv] ?? '') ?>）</div>
+      <div>修改：<?= tv_esc($snap['editor_name'] ?? '') ?>（<?= tv_esc($dateOf[$lv] ?? '') ?>）</div>
     </div>
   <?php endforeach; ?>
 
