@@ -23,6 +23,7 @@ if (!defined('EG_ORG_ROLES')) define('EG_ORG_ROLES', [
     'pm_dept'       => ['label'=>'生管部門',       'type'=>'dept', 'desc'=>'排程、發包、交期'],
     'purchase_dept' => ['label'=>'採購部門',       'type'=>'dept', 'desc'=>'請購、採購、供應商'],
     'acc_dept'      => ['label'=>'會計部門',       'type'=>'dept', 'desc'=>'應收應付、對帳、發票'],
+    'wh_dept'       => ['label'=>'倉管部門',       'type'=>'dept', 'desc'=>'入庫、出庫、庫存盤點、料件保管'],
     'prod_dept'     => ['label'=>'生產部門',       'type'=>'dept', 'desc'=>'現場製造'],
     'rd_dept'       => ['label'=>'設計／技術部門', 'type'=>'dept', 'desc'=>'圖面、技術文件'],
     'doc_dept'      => ['label'=>'文管中心',       'type'=>'dept', 'desc'=>'AS9100 文件管制'],
@@ -41,11 +42,31 @@ function eg_org_ensure_schema(PDO $db): void {
             role_key VARCHAR(40) NOT NULL PRIMARY KEY COMMENT '見 EG_ORG_ROLES',
             dept_id INT NULL COMMENT 'type=dept 時的 department.id',
             user_id INT NULL COMMENT 'type=user 時的 user.id',
+            include_sub TINYINT NOT NULL DEFAULT 1 COMMENT '1=連同該部門底下所有子部門一併認列',
             note VARCHAR(150) NULL,
             updated_at DATETIME NULL,
             updated_by VARCHAR(50) NULL
         ) DEFAULT CHARSET=utf8mb4 COMMENT='全站組織角色綁定(哪個部門是人事部門/誰是最高核准人)'");
+        try { $db->exec("ALTER TABLE org_role_binding ADD COLUMN include_sub TINYINT NOT NULL DEFAULT 1
+                         COMMENT '1=連同該部門底下所有子部門一併認列' AFTER user_id"); } catch (Throwable $e) {}
     } catch (Throwable $e) {}
+}
+
+/**
+ * 某部門＋其底下所有子部門的 id（含自己）。
+ * 組織是樹狀（department.parent_id）：品管部底下還有品管組、資材部底下有生管/採購/倉管組，
+ * 綁「品管部」時多數情境要連品管組的人一起算，所以判定一律用本函式展開，不要只比對單一 id。
+ */
+function eg_dept_subtree_ids(PDO $db, ?int $deptId): array {
+    if (!$deptId) return [];
+    try {
+        $st = $db->prepare("WITH RECURSIVE t AS (
+                                SELECT id FROM department WHERE id=?
+                                UNION ALL SELECT d.id FROM department d JOIN t ON d.parent_id=t.id)
+                            SELECT id FROM t");
+        $st->execute([$deptId]);
+        return array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) { return [$deptId]; }
 }
 
 /** 全部綁定：role_key => ['dept_id'=>?, 'user_id'=>?, 'note'=>?] */
@@ -68,6 +89,27 @@ function eg_org_dept(PDO $db, string $key): ?int {
     } catch (Throwable $e) { return null; }
 }
 
+/**
+ * 某角色「認列」的部門 id 陣列（未設定回空陣列）。
+ * 預設含子部門（org_role_binding.include_sub=1）：綁「品管部」＝品管部＋品管組都算品管部門。
+ * **凡是要判斷「這個人／這張單屬不屬於品管部門」一律用本函式，不要用 eg_org_dept() 的單一 id 去比對**，
+ * 否則子部門（品管組、生管組、倉管組…）的人會被判成「不是該部門」。
+ */
+function eg_org_dept_ids(PDO $db, string $key): array {
+    try {
+        $st = $db->prepare("SELECT dept_id, COALESCE(include_sub,1) AS inc FROM org_role_binding WHERE role_key=?");
+        $st->execute([$key]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r || empty($r['dept_id'])) return [];
+        return (int)$r['inc'] ? eg_dept_subtree_ids($db, (int)$r['dept_id']) : [(int)$r['dept_id']];
+    } catch (Throwable $e) { return []; }
+}
+
+/** 某部門 id 是否被認列為該角色（含子部門判定） */
+function eg_org_in_dept(PDO $db, string $key, ?int $deptId): bool {
+    return $deptId && in_array((int)$deptId, eg_org_dept_ids($db, $key), true);
+}
+
 /** 某角色綁定的人員（回 user 列或 null；只回在職者，離職/特殊帳號視同未設定） */
 function eg_org_user(PDO $db, string $key): ?array {
     try {
@@ -83,9 +125,13 @@ function eg_org_user(PDO $db, string $key): ?array {
  * 某部門的「部門主管」：該部門內職級最高（position_level.level 最小）者；
  * 同級時優先取 department_position.primary_user_id（指定負責人）。找不到回 null。
  * 判定邏輯比照 delegate_lib 的上一級主管解析，不另外發明規則。
+ * $dept 可傳 int（單一部門）或 int[]（含子部門，用 eg_org_dept_ids() 取得）——
+ * 傳陣列時取整個子樹裡職級最高的人（例：品管部沒設職級、品管組組長有設，就抓得到組長）。
  */
-function eg_org_dept_manager(PDO $db, ?int $deptId): ?array {
-    if (!$deptId) return null;
+function eg_org_dept_manager(PDO $db, $dept): ?array {
+    $ids = is_array($dept) ? array_values(array_filter(array_map('intval', $dept))) : ($dept ? [(int)$dept] : []);
+    if (!$ids) return null;
+    $in = implode(',', array_fill(0, count($ids), '?'));
     try {
         $st = $db->prepare("SELECT u.id, u.user_cname, p.name AS position_name, pl.level,
                                    (SELECT dp.primary_user_id FROM department_position dp
@@ -94,30 +140,35 @@ function eg_org_dept_manager(PDO $db, ?int $deptId): ?array {
                             JOIN user u ON u.id=m.user_id
                             LEFT JOIN position p ON p.id=m.position_id
                             LEFT JOIN position_level pl ON pl.position_id=m.position_id
-                            WHERE m.department_id=? AND COALESCE(u.state,1) NOT IN (0,90)
+                            WHERE m.department_id IN ($in) AND COALESCE(u.state,1) NOT IN (0,90)
                               AND pl.level IS NOT NULL
                             ORDER BY pl.level ASC, (primary_uid = u.id) DESC, u.id
                             LIMIT 1");
-        $st->execute([$deptId]);
+        $st->execute($ids);
         return $st->fetch(PDO::FETCH_ASSOC) ?: null;
     } catch (Throwable $e) { return null; }
 }
 
-/** 儲存一筆綁定（$deptId/$userId 依角色 type 擇一；傳 null＝清除設定） */
-function eg_org_save(PDO $db, string $key, ?int $deptId, ?int $userId, string $byName): void {
-    if (!isset(EG_ORG_ROLES[$key])) return;
-    eg_org_ensure_schema($db);
-    $type = EG_ORG_ROLES[$key]['type'];
+/**
+ * 儲存一筆綁定（$deptId/$userId 依角色 type 擇一；傳 null＝清除設定）
+ * 注意：本函式**不可**呼叫 eg_org_ensure_schema()——CREATE TABLE 是 DDL，MySQL 會隱式 commit，
+ * 呼叫端包在 transaction 裡時就會在 commit() 爆 "There is no active transaction"（2026-08-03 儲存失敗 500 的根因）。
+ * 建表請由呼叫端在開 transaction 之前先做。
+ */
+function eg_org_save(PDO $db, string $key, ?int $deptId, ?int $userId, string $byName, int $includeSub = 1): void {
+    $roles = EG_ORG_ROLES;
+    if (!isset($roles[$key])) return;
+    $type = $roles[$key]['type'];
     if ($type === 'dept') $userId = null; else $deptId = null;
     if ($deptId === null && $userId === null) {
         $db->prepare("DELETE FROM org_role_binding WHERE role_key=?")->execute([$key]);
         return;
     }
-    $db->prepare("INSERT INTO org_role_binding (role_key, dept_id, user_id, updated_at, updated_by)
-                  VALUES (?,?,?,NOW(),?)
+    $db->prepare("INSERT INTO org_role_binding (role_key, dept_id, user_id, include_sub, updated_at, updated_by)
+                  VALUES (?,?,?,?,NOW(),?)
                   ON DUPLICATE KEY UPDATE dept_id=VALUES(dept_id), user_id=VALUES(user_id),
-                      updated_at=NOW(), updated_by=VALUES(updated_by)")
-       ->execute([$key, $deptId, $userId, $byName]);
+                      include_sub=VALUES(include_sub), updated_at=NOW(), updated_by=VALUES(updated_by)")
+       ->execute([$key, $deptId, $userId, $includeSub ? 1 : 0, $byName]);
 }
 
 /** 公司全名（列印大標題用；唯一來源 customer_list.is_own_company=1，見 ai-rules/16） */

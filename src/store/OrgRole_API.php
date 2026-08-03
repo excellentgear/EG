@@ -38,7 +38,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 switch ($action) {
 
 case 'meta': {
-    $depts = $db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    $depts = $db->query("SELECT id, name, parent_id, level FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     // 人員一律走 people_lib（只列未離職、依職稱排序、跨部門顯示部門）
     $people = [];
     try { $people = eg_people_list($db, ['multi_dept'=>true]); } catch (Throwable $e) {
@@ -48,14 +48,17 @@ case 'meta': {
     }
     $bind = eg_org_bindings($db);
     // 每個部門類綁定順便解出目前的部門主管，讓設定頁看得到「審核會是誰」
-    $mgr = [];
+    $mgr = []; $sub = [];
     foreach (EG_ORG_ROLES as $k => $r) {
         if ($r['type'] !== 'dept') continue;
         $d = $bind[$k]['dept_id'] ?? null;
-        if ($d) $mgr[$k] = eg_org_dept_manager($db, (int)$d);
+        if (!$d) continue;
+        $ids = eg_org_dept_ids($db, $k);          // 含子部門（include_sub=1 時）
+        $sub[$k] = $ids;
+        $mgr[$k] = eg_org_dept_manager($db, $ids ?: (int)$d);
     }
     ojout(['roles'=>EG_ORG_ROLES, 'departments'=>$depts, 'people'=>$people,
-           'bindings'=>$bind, 'managers'=>$mgr, 'is_admin'=>$isAdmin]);
+           'bindings'=>$bind, 'managers'=>$mgr, 'sub_depts'=>$sub, 'is_admin'=>$isAdmin]);
 }
 
 case 'save': {
@@ -69,18 +72,22 @@ case 'save': {
             if (!isset(EG_ORG_ROLES[$k])) continue;
             $d = ($b['dept_id'] ?? '') === '' ? null : (int)$b['dept_id'];
             $u = ($b['user_id'] ?? '') === '' ? null : (int)$b['user_id'];
-            eg_org_save($db, $k, $d, $u, (string)$me['user_cname']);
+            $s = isset($b['include_sub']) ? (int)$b['include_sub'] : 1;
+            eg_org_save($db, $k, $d, $u, (string)$me['user_cname'], $s);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); ojerr('儲存失敗：'.$e->getMessage(), 500); }
     $bind = eg_org_bindings($db);
-    $mgr = [];
+    $mgr = []; $sub = [];
     foreach (EG_ORG_ROLES as $k => $r) {
         if ($r['type'] !== 'dept') continue;
         $d = $bind[$k]['dept_id'] ?? null;
-        if ($d) $mgr[$k] = eg_org_dept_manager($db, (int)$d);
+        if (!$d) continue;
+        $ids = eg_org_dept_ids($db, $k);          // 含子部門（include_sub=1 時）
+        $sub[$k] = $ids;
+        $mgr[$k] = eg_org_dept_manager($db, $ids ?: (int)$d);
     }
-    ojout(['bindings'=>$bind, 'managers'=>$mgr]);
+    ojout(['bindings'=>$bind, 'managers'=>$mgr, 'sub_depts'=>$sub]);
 }
 
 default:

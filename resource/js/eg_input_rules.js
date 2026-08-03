@@ -16,6 +16,7 @@
  *   4. 多列輸入表格內 ↑↓ 切換上下列同欄（日期欄會攔截原生 ↑↓ 改日，否則會變成改日期）
  *   5. 數字欄：隱藏上下增減鈕、離開欄位時小數尾 0 省略（3.50→3.5、3.00→3）
  *   6. 可增列表格：在最末列按 ↓ 自動新增一列並跳過去；在「沒填東西的最末列」按 ↑ 自動移除該列並跳回上一列
+ *   7. 長清單下拉可打字篩選：<select data-eg-filter> 自動長出一個篩選輸入框（人員／料號／客戶等清單一多就找不到人）
  *
  * 個別欄位要排除：加 data-eg-skip
  * 整個區塊要排除：在祖先元素加 data-eg-skip
@@ -304,6 +305,82 @@
         (document.head || document.documentElement).appendChild(st);
     })();
 
+    /* ── 規則 7：長清單下拉可打字篩選 ─────────────────────────────────
+     * 為什麼：人員／料號／客戶這種下拉，清單一多就要在幾十筆裡用眼睛找，非常難用
+     * （使用者反覆反映過同一件事）。凡是 <select data-eg-filter> 一律自動長出一個
+     * 篩選輸入框，打字即過濾選項（多關鍵字空白分隔＝每個都要命中）。
+     * 頁面不要自己刻：新畫出來的 select（AJAX/重繪）由 MutationObserver 自動接手。
+     * 篩選框上按 Enter／↓＝跳進 select；清空篩選＝還原全部選項；目前選中的選項永遠保留。
+     */
+    function egFilterEnhance(sel) {
+        if (!sel || sel.tagName !== 'SELECT' || sel.egFiltered || skipped(sel)) return;
+        sel.egFiltered = true;
+        var box = document.createElement('input');
+        box.type = 'text';
+        box.className = 'eg-filter-box';
+        box.placeholder = sel.getAttribute('data-eg-filter') || '輸入關鍵字篩選…';
+        box.setAttribute('data-eg-skip', '1');                 // 篩選框本身不套 Enter 跳欄等規則
+        sel.parentNode.insertBefore(box, sel);
+        var all = [];                                          // 完整選項快照
+        function snap() {
+            all = [];
+            for (var i = 0; i < sel.options.length; i++)
+                all.push({v: sel.options[i].value, t: sel.options[i].text});
+        }
+        snap();
+        function apply() {
+            var kw = box.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+            var cur = sel.value, html = '', hit = [];
+            all.forEach(function (o) {
+                var t = o.t.toLowerCase();
+                var ok = !kw.length || kw.every(function (k) { return t.indexOf(k) >= 0; });
+                if (!ok && o.v !== cur) return;                 // 目前選中的一定留著，免得存檔被清掉
+                if (ok && o.v !== '') hit.push(o.v);
+                html += '<option value="' + o.v.replace(/"/g, '&quot;') + '">' + o.t + '</option>';
+            });
+            sel.innerHTML = html;
+            if (kw.length && hit.length === 1) sel.value = hit[0];   // 只剩一個就直接選起來
+            else sel.value = cur;
+            if (sel.value !== cur) fire(sel, 'change');              // 值真的變了才發事件，免得誤觸頁面既有 change
+        }
+        box.addEventListener('input', apply);
+        box.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); sel.focus(); }
+        });
+        sel.egFilterResnap = function () { snap(); apply(); };   // 頁面自行換掉整批選項後可呼叫
+    }
+    window.egSelectFilterScan = function (root) {
+        var list = (root || document).querySelectorAll('select[data-eg-filter]');
+        for (var i = 0; i < list.length; i++) egFilterEnhance(list[i]);
+    };
+    document.addEventListener('DOMContentLoaded', function () { window.egSelectFilterScan(); });
+    if (window.MutationObserver) {
+        new MutationObserver(function (muts) {
+            for (var i = 0; i < muts.length; i++) {
+                var ad = muts[i].addedNodes;
+                for (var j = 0; j < ad.length; j++) {
+                    var n = ad[j];
+                    if (!n || n.nodeType !== 1) continue;
+                    if (n.tagName === 'SELECT') egFilterEnhance(n);
+                    else if (n.querySelectorAll) window.egSelectFilterScan(n);
+                }
+            }
+        }).observe(document.documentElement, {childList: true, subtree: true});
+    }
+
+    /* 規則 7 的預設樣式（頁面可自行覆蓋 .eg-filter-box） */
+    (function injectFilterCss() {
+        if (document.getElementById('eg-filter-css')) return;
+        var st = document.createElement('style');
+        st.id = 'eg-filter-css';
+        st.appendChild(document.createTextNode(
+            '.eg-filter-box{display:block;width:100%;max-width:280px;margin:0 0 3px;padding:3px 6px;'
+            + 'font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#FFFDF8;color:#5b3a1e;}'
+            + '.eg-filter-box::placeholder{color:#b59b74;}'
+            + '@media print{.eg-filter-box{display:none;}}'));
+        (document.head || document.documentElement).appendChild(st);
+    })();
+
     /* 對外留一個旗標，檢查工具與頁面都可判斷本檔是否已載入 */
-    window.EG_INPUT_RULES = {version: 2};
+    window.EG_INPUT_RULES = {version: 3};
 })();

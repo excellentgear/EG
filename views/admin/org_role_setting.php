@@ -99,8 +99,9 @@ if (!$isAdmin && !empty($me['id'])) {
         <div class="or-sec">一、部門綁定（系統認定的某某部門）</div>
         <div class="or-wrap">
             <table class="or-tbl">
-                <thead><tr><th style="width:190px;">用途</th><th style="width:300px;">對應部門</th><th>說明／目前部門主管</th></tr></thead>
-                <tbody id="deptBody"><tr><td colspan="3">載入中…</td></tr></tbody>
+                <thead><tr><th style="width:170px;">用途</th><th style="width:300px;">對應部門</th>
+                    <th style="width:190px;">子部門認列</th><th>說明／目前部門主管</th></tr></thead>
+                <tbody id="deptBody"><tr><td colspan="4">載入中…</td></tr></tbody>
             </table>
         </div>
 
@@ -125,11 +126,17 @@ if (!$isAdmin && !empty($me['id'])) {
         很多表單需要知道「人事部門是哪一個部門」「核准欄要蓋誰的章」。過去每個頁面各自寫死，組織一調整就要一頁一頁改。
         本頁把這些綁定<b>集中在一處</b>，全站頁面一律讀這裡。
         <h4>操作步驟</h4>
-        1. 在「部門綁定」把每個用途對應到實際部門（可留空＝未設定）。<br>
-        2. 在「關鍵人員綁定」指定簽章人員。<br>
+        1. 在「部門綁定」把每個用途對應到實際部門（可留空＝未設定），並確認<b>含子部門</b>要不要勾。<br>
+        2. 在「關鍵人員綁定」指定簽章人員；下拉上方有<b>篩選框</b>，直接打姓名即可過濾，不用在幾十個人裡找。<br>
         3. 按<b>儲存設定</b>。存檔後全站立即生效，不需要各頁另外設定。
         <h4>重要行為</h4>
-        ・部門綁定右欄會顯示<b>目前該部門的部門主管</b>（職級最高者，同級優先取指定負責人）——表單的「審核」欄多半就是這個人。<br>
+        ・<b>含子部門（預設開啟）</b>：組織是樹狀的，綁「品管部」時預設連底下的<b>品管組</b>一起認列為品管部門；
+        綁「資材部」則生管組／採購組／倉管組都算。只想認列該部門本身時才取消勾選。設定右側會列出實際會被一併認列的子部門。<br>
+        ・<b>一個部門身兼多種職能時</b>（例：管理部同時管會計、人事、總務，底下沒再分組），
+        「人事部門」和「會計部門」可以<b>同時綁到管理部</b>，這在系統裡沒有問題——部門綁定只回答「哪個部門負責」。
+        但這樣兩者的部門主管會是<b>同一個人</b>；若人事表單和會計表單要蓋<b>不同人</b>的章，
+        請到下方「關鍵人員綁定」直接指定該欄位的簽章人（人員綁定優先於部門主管推算）。<br>
+        ・部門綁定右欄會顯示<b>目前該部門的部門主管</b>（職級最高者，同級優先取指定負責人；含子部門時會在整個子樹裡找職級最高者）——表單的「審核」欄多半就是這個人。<br>
         ・若該部門沒有設定職級（position_level）而抓不到主管，請改用「人事表單審核者」直接指定人員。<br>
         ・被綁定的人若離職，讀取時視同未設定（不會蓋到離職者的章），請回來重設。
         <h4>權限</h4>
@@ -150,7 +157,7 @@ $(document).ready(function(){
     if ($am.length) { $am.removeClass('active').find('ul.child_menu').hide(); $am.find('li.current-page').removeClass('current-page'); }
     $('#sidebar-menu').css('visibility','visible');
 });
-var API='../../src/store/OrgRole_API.php', ROLES={}, BIND={}, MGR={}, DEPTS=[], PEOPLE=[];
+var API='../../src/store/OrgRole_API.php', ROLES={}, BIND={}, MGR={}, DEPTS=[], PEOPLE=[], SUBD={};
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function closeMask(id){ document.getElementById(id).style.display='none'; }
@@ -160,17 +167,22 @@ $('.or-mask').on('click', function(e){ if (e.target===this) this.style.display='
 function load(){
     $.getJSON(API, {action:'meta'}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
-        ROLES=res.roles; BIND=res.bindings||{}; MGR=res.managers||{}; DEPTS=res.departments||[]; PEOPLE=res.people||[];
+        ROLES=res.roles; BIND=res.bindings||{}; MGR=res.managers||{}; DEPTS=res.departments||[];
+        PEOPLE=res.people||[]; SUBD=res.sub_depts||{};
         render();
     });
 }
 function deptSel(key, cur){
-    var h='<select data-key="'+key+'" class="or-dept"><option value="">（未設定）</option>';
-    DEPTS.forEach(function(d){ h+='<option value="'+d.id+'"'+(String(cur)===String(d.id)?' selected':'')+'>'+esc(d.name)+'</option>'; });
+    // data-eg-filter：篩選框由共用檔 eg_input_rules.js 自動長出來（規則 7），本頁不自刻
+    var h='<select data-key="'+key+'" class="or-dept" data-eg-filter="輸入部門名稱篩選…"><option value="">（未設定）</option>';
+    DEPTS.forEach(function(d){
+        var pad = new Array(Math.max(0,(parseInt(d.level,10)||1)-1)+1).join('　');   // 依組織階層縮排
+        h+='<option value="'+d.id+'"'+(String(cur)===String(d.id)?' selected':'')+'>'+pad+esc(d.name)+'</option>';
+    });
     return h+'</select>';
 }
 function userSel(key, cur){
-    var h='<select data-key="'+key+'" class="or-user"><option value="">（未設定）</option>';
+    var h='<select data-key="'+key+'" class="or-user" data-eg-filter="輸入人員姓名篩選…"><option value="">（未設定）</option>';
     PEOPLE.forEach(function(p){
         var label = p.user_cname + (p.position_name?'（'+p.position_name+'）':'') + (p.dept_name?'／'+p.dept_name:'')
                   + (p.leave_note?'　'+p.leave_note:'');
@@ -178,13 +190,32 @@ function userSel(key, cur){
     });
     return h+'</select>';
 }
+/** 該部門底下所有子部門的名稱（顯示「一併認列」哪些；與後端 eg_dept_subtree_ids 同一套遞迴規則） */
+function subNames(deptId){
+    if (!deptId) return [];
+    var out=[], layer=[String(deptId)];
+    while (layer.length){
+        var next=[];
+        DEPTS.forEach(function(d){
+            if (layer.indexOf(String(d.parent_id))>=0){ out.push(d.name); next.push(String(d.id)); }
+        });
+        layer=next;
+    }
+    return out;
+}
 function render(){
     var dh='', uh='';
     $.each(ROLES, function(k, r){
         var b = BIND[k]||{};
         if (r.type==='dept'){
-            var m = MGR[k];
+            var m = MGR[k], inc = (b.include_sub==null? 1 : parseInt(b.include_sub,10));
+            var subs = subNames(b.dept_id);
             dh += '<tr><td><b>'+esc(r.label)+'</b></td><td>'+deptSel(k, b.dept_id||'')+'</td>'
+               +  '<td style="text-align:center;"><label style="font-weight:normal;cursor:pointer;">'
+               +  '<input type="checkbox" class="or-sub" data-key="'+k+'"'+(inc?' checked':'')+'> 含子部門</label>'
+               +  '<div class="or-desc">'+(b.dept_id
+                     ? (inc ? (subs.length?'一併認列：'+esc(subs.join('、')):'（此部門無子部門）') : '只認列該部門本身')
+                     : '') + '</div></td>'
                +  '<td><div class="or-desc">'+esc(r.desc)+'</div>'
                +  '<div class="or-mgr">目前部門主管：'
                +  (m ? esc(m.user_cname)+(m.position_name?'（'+esc(m.position_name)+'）':'')
@@ -195,16 +226,28 @@ function render(){
                +  '<td class="or-desc">'+esc(r.desc)+'</td></tr>';
         }
     });
-    $('#deptBody').html(dh||'<tr><td colspan="3">無資料</td></tr>');
+    $('#deptBody').html(dh||'<tr><td colspan="4">無資料</td></tr>');
     $('#userBody').html(uh||'<tr><td colspan="3">無資料</td></tr>');
 }
+/* 改部門或切換「含子部門」時，右邊的認列說明即時跟著變（推導欄位鐵則：來源一改就重算） */
+$(document).on('change', '.or-dept, .or-sub', function(){
+    var $tr=$(this).closest('tr'), v=$tr.find('.or-dept').val(), subs=subNames(v);
+    $tr.find('td:eq(2) .or-desc').text(!v ? ''
+        : ($tr.find('.or-sub').prop('checked')
+             ? (subs.length ? '一併認列：'+subs.join('、') : '（此部門無子部門）')
+             : '只認列該部門本身'));
+});
 $('#btnSave').on('click', function(){
     var list=[];
-    $('.or-dept').each(function(){ list.push({role_key:$(this).data('key'), dept_id:this.value, user_id:''}); });
+    $('.or-dept').each(function(){
+        var k=$(this).data('key');
+        list.push({role_key:k, dept_id:this.value, user_id:'',
+                   include_sub: $('.or-sub[data-key="'+k+'"]').prop('checked') ? 1 : 0});
+    });
     $('.or-user').each(function(){ list.push({role_key:$(this).data('key'), dept_id:'', user_id:this.value}); });
     $.post(API, {action:'save', bindings:JSON.stringify(list)}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        BIND=res.bindings||{}; MGR=res.managers||{}; render();
+        BIND=res.bindings||{}; MGR=res.managers||{}; SUBD=res.sub_depts||{}; render();
         alert('已儲存，全站立即生效。');
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 });
