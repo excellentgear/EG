@@ -554,11 +554,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true, 'parts' => $st->fetchAll(PDO::FETCH_ASSOC)]);
         } elseif ($act === 'save_workfile') {
             // 存成料號附件：壓平 PNG（附件系統可見）＋ .egwork.json 工作檔（批圖編輯器可重開繼續編輯）
+            // no_workfile=1：只存壓平 PNG，不產生 .egwork.json（單純留一張成品圖，不需要之後回編輯器改）
             $dId = (int)($_POST['d_id'] ?? 0);
             $name = trim($_POST['name'] ?? '') ?: ('批圖_' . date('Ymd_Hi'));
             $png = $_POST['png'] ?? '';
-            $work = $_POST['work'] ?? '';
+            $noWorkfile = !empty($_POST['no_workfile']);
+            $work = $noWorkfile ? '' : ($_POST['work'] ?? '');
             // 分享範圍：私人／部門共用（預設）／指定人員；沒有「全公司共用」，避免任何人都能改到
+            // （這組範圍只管工作檔的可見性，no_workfile 時不建工作檔、以下欄位不使用）
             $scope = in_array($_POST['scope'] ?? 'dept', ['private', 'dept', 'custom'], true) ? $_POST['scope'] : 'dept';
             $shareIds = json_decode($_POST['share_user_ids'] ?? '[]', true);
             if (!is_array($shareIds)) $shareIds = [];
@@ -582,7 +585,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($issueDate === '') $issueDate = null;
             $dwgVerdict = dwg_classify_upload($pdo, $dId, $catIds, $issueDate);
             if (strpos($png, 'data:image/png;base64,') !== 0) throw new Exception('圖檔資料異常');
-            if (json_decode($work) === null) throw new Exception('工作檔資料異常');
+            if (!$noWorkfile && json_decode($work) === null) throw new Exception('工作檔資料異常');
             $pb = imgedit_part_base($pdo);
             if ($pb === '') throw new Exception('尚未設定料號附件儲存路徑（附件系統設定）');
             $dir = $pb . DIRECTORY_SEPARATOR . $dId;
@@ -592,11 +595,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $bin = base64_decode(substr($png, strpos($png, ',') + 1));
             if ($bin === false || @file_put_contents($dir . DIRECTORY_SEPARATOR . $pngFile, $bin) === false) throw new Exception('圖檔寫入失敗');
             // 工作檔：抽離內嵌底圖 → 同目錄實體檔，JSON 只留引用
-            $workArr = json_decode($work, true);
             $n = 0;
-            imgedit_extract_images($workArr, $dir, 'image_editor.php?action=part_file&d=' . $dId . '&f=', $n);
-            $workFile = 'egdraw_' . $stamp . '.egwork.json';
-            if (@file_put_contents($dir . DIRECTORY_SEPARATOR . $workFile, json_encode($workArr, JSON_UNESCAPED_UNICODE)) === false) throw new Exception('工作檔寫入失敗');
+            $workFile = null;
+            if (!$noWorkfile) {
+                $workArr = json_decode($work, true);
+                imgedit_extract_images($workArr, $dir, 'image_editor.php?action=part_file&d=' . $dId . '&f=', $n);
+                $workFile = 'egdraw_' . $stamp . '.egwork.json';
+                if (@file_put_contents($dir . DIRECTORY_SEPARATOR . $workFile, json_encode($workArr, JSON_UNESCAPED_UNICODE)) === false) throw new Exception('工作檔寫入失敗');
+            }
             $pdo->beginTransaction();
             $ins = $pdo->prepare("INSERT INTO part_attachments (d_id, filename, original_name, category_ids, issue_stamp_date, note, uploaded_by, uploaded_by_id, uploaded_at)
                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
@@ -604,31 +610,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             //（它不是圖面，檢視端一律不列，見 imgedit_strip_workfiles，也不該參與圖面變更判定）
             $ins->execute([$dId, $pngFile, $name . '.png', $catStr, $issueDate, '批圖編輯器輸出圖', $userName, $uid]);
             $pngId = $pdo->lastInsertId();
-            $ins->execute([$dId, $workFile, $name . '.egwork.json', null, null, '批圖工作檔（可用批圖編輯器重新開啟，標籤仍可編輯）', $userName, $uid]);
-            $workId = $pdo->lastInsertId();
-            $pdo->prepare("INSERT INTO imgedit_workfile_meta (attachment_id, owner_type, owner_dept_id) VALUES (?, ?, ?)")
-                ->execute([$workId, $scope, ($scope === 'dept' && $deptId) ? $deptId : null]);
-            if ($scope === 'custom' && $shareIds) {
-                $shareIns = $pdo->prepare("INSERT IGNORE INTO imgedit_workfile_share (attachment_id, user_id) VALUES (?, ?)");
-                foreach ($shareIds as $sid) { if ($sid > 0) $shareIns->execute([$workId, $sid]); }
-            }
-            // 保留上限：同一料號工作檔數量超過上限時，砍掉最舊的（絕不會刪到剛存好的這份）
-            // 輸出圖 PNG 與工作檔成對（同 egdraw_ 檔名主幹），工作檔被清理時 PNG 一併軟刪除，
-            // 避免歷次儲存的過程圖永遠堆在附件列表
-            $allIds = $pdo->prepare("SELECT id, filename FROM part_attachments
-                                     WHERE d_id = ? AND deleted_at IS NULL AND filename LIKE '%.egwork.json'
-                                     ORDER BY id DESC");
-            $allIds->execute([$dId]);
-            $existing = $allIds->fetchAll(PDO::FETCH_ASSOC);
+            $workId = null;
             $removed = 0;
-            if (count($existing) > $workfileMaxCount) {
-                $delSt  = $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE id = ?");
-                $delPng = $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE d_id = ? AND filename = ? AND deleted_at IS NULL");
-                foreach (array_slice($existing, $workfileMaxCount) as $old) {
-                    $delSt->execute([$userName . '（系統自動：超過保留上限 ' . $workfileMaxCount . ' 份）', $old['id']]);
-                    $delPng->execute([$userName . '（系統自動：隨工作檔清理）', $dId,
-                                      preg_replace('/\.egwork\.json$/', '.png', $old['filename'])]);
-                    $removed++;
+            if (!$noWorkfile) {
+                $ins->execute([$dId, $workFile, $name . '.egwork.json', null, null, '批圖工作檔（可用批圖編輯器重新開啟，標籤仍可編輯）', $userName, $uid]);
+                $workId = $pdo->lastInsertId();
+                $pdo->prepare("INSERT INTO imgedit_workfile_meta (attachment_id, owner_type, owner_dept_id) VALUES (?, ?, ?)")
+                    ->execute([$workId, $scope, ($scope === 'dept' && $deptId) ? $deptId : null]);
+                if ($scope === 'custom' && $shareIds) {
+                    $shareIns = $pdo->prepare("INSERT IGNORE INTO imgedit_workfile_share (attachment_id, user_id) VALUES (?, ?)");
+                    foreach ($shareIds as $sid) { if ($sid > 0) $shareIns->execute([$workId, $sid]); }
+                }
+                // 保留上限：同一料號工作檔數量超過上限時，砍掉最舊的（絕不會刪到剛存好的這份）
+                // 輸出圖 PNG 與工作檔成對（同 egdraw_ 檔名主幹），工作檔被清理時 PNG 一併軟刪除，
+                // 避免歷次儲存的過程圖永遠堆在附件列表
+                $allIds = $pdo->prepare("SELECT id, filename FROM part_attachments
+                                         WHERE d_id = ? AND deleted_at IS NULL AND filename LIKE '%.egwork.json'
+                                         ORDER BY id DESC");
+                $allIds->execute([$dId]);
+                $existing = $allIds->fetchAll(PDO::FETCH_ASSOC);
+                if (count($existing) > $workfileMaxCount) {
+                    $delSt  = $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE id = ?");
+                    $delPng = $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE d_id = ? AND filename = ? AND deleted_at IS NULL");
+                    foreach (array_slice($existing, $workfileMaxCount) as $old) {
+                        $delSt->execute([$userName . '（系統自動：超過保留上限 ' . $workfileMaxCount . ' 份）', $old['id']]);
+                        $delPng->execute([$userName . '（系統自動：隨工作檔清理）', $dId,
+                                          preg_replace('/\.egwork\.json$/', '.png', $old['filename'])]);
+                        $removed++;
+                    }
                 }
             }
             $pdo->commit();
@@ -1527,19 +1536,24 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                     <div id="pf-issue-hint" style="font-size:11.5px;margin-top:3px;"></div>
                 </div>
             </div>
-            <div class="frm-row"><label>分享範圍</label>
-                <select id="pf-scope" style="flex:1;" onchange="pfOnScopeChange()">
-                    <option value="private">私人（只有自己看得到）</option>
-                    <option value="dept" selected>部門共用（同部門看得到）</option>
-                    <option value="custom">指定人員（自選要分享給誰）</option>
-                </select>
-                <select id="pf-dept" style="display:none;"></select>
+            <div class="frm-row">
+                <label style="min-width:0;"><input type="checkbox" id="pf-no-workfile" onchange="pfOnNoWorkfileChange()"> 只存圖片，不建立工作檔</label>
             </div>
-            <div id="pf-share-box" style="display:none;margin:6px 0 4px;">
-                <input type="text" id="pf-share-q" placeholder="搜尋姓名篩選" style="width:100%;margin-bottom:4px;" oninput="pfRenderShareUsers()">
-                <div id="pf-share-list" style="max-height:130px;overflow-y:auto;border:1px solid #45494f;border-radius:4px;padding:6px;">載入中…</div>
+            <div id="pf-scope-box">
+                <div class="frm-row"><label>分享範圍</label>
+                    <select id="pf-scope" style="flex:1;" onchange="pfOnScopeChange()">
+                        <option value="private">私人（只有自己看得到）</option>
+                        <option value="dept" selected>部門共用（同部門看得到）</option>
+                        <option value="custom">指定人員（自選要分享給誰）</option>
+                    </select>
+                    <select id="pf-dept" style="display:none;"></select>
+                </div>
+                <div id="pf-share-box" style="display:none;margin:6px 0 4px;">
+                    <input type="text" id="pf-share-q" placeholder="搜尋姓名篩選" style="width:100%;margin-bottom:4px;" oninput="pfRenderShareUsers()">
+                    <div id="pf-share-list" style="max-height:130px;overflow-y:auto;border:1px solid #45494f;border-radius:4px;padding:6px;">載入中…</div>
+                </div>
             </div>
-            <div style="font-size:11.5px;color:#8b949e;margin-bottom:10px;">
+            <div id="pf-save-hint" style="font-size:11.5px;color:#8b949e;margin-bottom:10px;">
                 會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印，上面選的<b>附件標籤掛在它身上</b>）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔不是圖面、只有這個編輯器打得開，所以<b>不會出現在圖面檢視跳窗</b>裡，也不需要標籤。工作檔沒有「全公司共用」，避免所有人都能改到；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。
             </div>
             <hr style="border-color:#3c4046;margin:10px 0;">
@@ -5889,6 +5903,13 @@ function pfOnScopeChange() {
     document.getElementById('pf-share-box').style.display = (scope === 'custom') ? '' : 'none';
     if (scope === 'custom' && !pfAllUsers) loadPfShareUsers();
 }
+function pfOnNoWorkfileChange() {
+    const noWf = document.getElementById('pf-no-workfile').checked;
+    document.getElementById('pf-scope-box').style.display = noWf ? 'none' : '';
+    document.getElementById('pf-save-hint').innerHTML = noWf
+        ? '只存<b>壓平 PNG</b> 到料號附件（上面選的<b>附件標籤掛在它身上</b>），不產生 .egwork.json 工作檔，之後不能再用批圖編輯器打開重改。'
+        : '會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印，上面選的<b>附件標籤掛在它身上</b>）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔不是圖面、只有這個編輯器打得開，所以<b>不會出現在圖面檢視跳窗</b>裡，也不需要標籤。工作檔沒有「全公司共用」，避免所有人都能改到；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。';
+}
 async function loadPfShareUsers() {
     document.getElementById('pf-share-list').innerHTML = '載入中…';
     try {
@@ -5953,8 +5974,9 @@ async function pfSave() {
     const d = document.getElementById('pf-part').value;
     if (!d) { toast('請先搜尋並選擇料號'); return; }
     const name = document.getElementById('pf-name').value.trim() || defaultFileName();
+    const noWorkfile = document.getElementById('pf-no-workfile').checked;
     const scope = document.getElementById('pf-scope').value;
-    if (scope === 'custom' && !pfShareSelected.size) { toast('請至少勾選一位要分享的人員，或改選別的範圍'); return; }
+    if (!noWorkfile && scope === 'custom' && !pfShareSelected.size) { toast('請至少勾選一位要分享的人員，或改選別的範圍'); return; }
     const cats = pfSelectedCats();
     if (!cats.length) { pfRenderCatHint(); document.getElementById('pf-cats').scrollIntoView({block:'nearest'}); toast('請至少選擇一個附件標籤'); return; }
     if (!pfSyncIssueRow()) { document.getElementById('pf-issue-date').focus(); toast('請確認發行章日期'); return; }
@@ -5966,22 +5988,26 @@ async function pfSave() {
         // 超大圖面自動降回 2 倍（單邊超過 8192px 的 PNG 上傳體積會爆量，2 倍已相當於掃描原檔解析度）
         const pngMult = Math.max(2, Math.min(3, 8192 / Math.max(artW, artH, 1)));
         const png = exportRegionDataURL(artboard.left, artboard.top, artW, artH, 'png', pngMult);
-        const work = JSON.stringify(canvas.toJSON(SNAP_PROPS));
         const fd = new FormData();
         fd.append('action', 'save_workfile');
         fd.append('d_id', d);
         fd.append('name', name);
         fd.append('png', png);
-        fd.append('work', work);
-        fd.append('scope', scope);
-        fd.append('dept_id', document.getElementById('pf-dept').value || '0');
-        fd.append('share_user_ids', JSON.stringify(Array.from(pfShareSelected)));
+        fd.append('no_workfile', noWorkfile ? '1' : '');
+        if (!noWorkfile) {
+            fd.append('work', JSON.stringify(canvas.toJSON(SNAP_PROPS)));
+            fd.append('scope', scope);
+            fd.append('dept_id', document.getElementById('pf-dept').value || '0');
+            fd.append('share_user_ids', JSON.stringify(Array.from(pfShareSelected)));
+        }
         fd.append('category_ids', cats.join(','));
         fd.append('issue_stamp_date', issueDate);
         const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
         if (!res.success) throw new Error(res.message || '');
-        toast('已存入料號附件：壓平圖＋工作檔（底圖抽離 ' + (res.extracted || 0) + ' 張）' +
-            (res.auto_removed ? '，並自動清掉 ' + res.auto_removed + ' 份超過保留上限的舊工作檔' : ''));
+        toast(noWorkfile
+            ? '已存入料號附件：壓平圖'
+            : '已存入料號附件：壓平圖＋工作檔（底圖抽離 ' + (res.extracted || 0) + ' 張）' +
+              (res.auto_removed ? '，並自動清掉 ' + res.auto_removed + ' 份超過保留上限的舊工作檔' : ''));
         // 圖面變更判定：本頁不做登錄表單（欄位多、跳窗會蓋住畫布），改提示到料號附件頁登錄
         const v = res.dwg_verdict || {};
         if (v.kind === 'change') {
