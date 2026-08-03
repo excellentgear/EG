@@ -76,7 +76,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         table.tr-table tbody tr:hover { background:#FBF0DD; }
         table.tr-table td.t-left { text-align:left; }
         .st-pill { display:inline-block; font-size:12px; border-radius:10px; padding:2px 9px; }
-        .st-planned { background:#FFF8ED; color:#8A5A2B; border:1px solid #E8D5B5; }
+        /* 計畫中：使用者明確要求淺綠底以利辨識，取偏黃的暖調橄欖綠(非藍調薄荷綠)，盡量貼近全站暖色調性 */
+        .st-planned { background:#D9E6B8; color:#4B5A20; border:1px solid #B9CC85; font-weight:bold; }
         .st-scheduled { background:#E8B77A; color:#4d2f10; }
         .st-done { background:#F0A24B; color:#fff; }
         .st-cancelled { background:#efe7d8; color:#b0a390; text-decoration:line-through; }
