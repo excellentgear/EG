@@ -7257,9 +7257,12 @@ $(document).on('input', '.part-search', function () {
             }
             res.data.forEach(p => {
                 // 有客戶篩選時只顯示料號+規格；無篩選時也顯示客戶名稱
-                const label = clientId
+                // 用客戶代號／等同料號命中時，標示「＝被查到的代號」，選取後仍綁我方正確料號
+                const aliasTag = p.alias_hit
+                    ? ` <span style="color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;font-size:11px;">＝${escapeHtml(p.alias_hit)}</span>` : '';
+                const label = (clientId
                     ? `${escapeHtml(p.D_Setting_Id)}　<small style="color:#aaa;">${escapeHtml(p.Spec_No||'')}</small>`
-                    : `${escapeHtml(p.D_Setting_Id)} <small style="color:#aaa;">(${escapeHtml(p.Spec_No||'N/A')})</small> — ${escapeHtml(p.Client_Name||'無客戶')}`;
+                    : `${escapeHtml(p.D_Setting_Id)} <small style="color:#aaa;">(${escapeHtml(p.Spec_No||'N/A')})</small> — ${escapeHtml(p.Client_Name||'無客戶')}`) + aliasTag;
                 html += `<div class="suggestion-item"
                     data-part-id="${escapeHtml(p.D_Setting_Id)}"
                     data-d-id="${escapeHtml(p.d_id||'')}"
@@ -7502,9 +7505,10 @@ function doBatchPartSearch() {
         let html = '';
         res.data.forEach(p => {
             const isChecked = !!_batchSelected[p.D_Setting_Id];
-            const label = clientId
+            const label = (clientId
                 ? `${escapeHtml(p.D_Setting_Id)}　<small style="color:#aaa;">${escapeHtml(p.Spec_No||'')}</small>`
-                : `${escapeHtml(p.D_Setting_Id)} <small style="color:#aaa;">(${escapeHtml(p.Spec_No||'N/A')})</small> — ${escapeHtml(p.Client_Name||'無客戶')}`;
+                : `${escapeHtml(p.D_Setting_Id)} <small style="color:#aaa;">(${escapeHtml(p.Spec_No||'N/A')})</small> — ${escapeHtml(p.Client_Name||'無客戶')}`)
+                + (p.alias_hit ? ` <span style="color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;font-size:11px;">＝${escapeHtml(p.alias_hit)}</span>` : '');
             html += `<label style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #f0f0f0;cursor:pointer;margin:0;"
                 class="batch-part-item ${isChecked ? 'bg-info' : ''}"
                 data-part-id="${escapeHtml(p.D_Setting_Id)}"

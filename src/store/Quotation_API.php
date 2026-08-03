@@ -1294,25 +1294,31 @@ try {
                 $custId = $_GET['customer_id'] ?? '';
                 if ($custId !== '') {
                     // 有客戶篩選：只搜尋此客戶的料號（料號 or 規格模糊）
+                    // alias_hit：命中的客戶代號／等同料號（見 src/common/part_alias_lib.php），
+                    // 前端顯示成「正確料號（＝等同料號）」，讓使用者用客戶的叫法也找得到我方料號
                     $stmt = $pdo->prepare("
                         SELECT d.d_id, d.D_Setting_Id, d.Spec_No, d.Type, d.Revision,
-                               c.customer AS Client_Name, c.customer_id
+                               c.customer AS Client_Name, c.customer_id,
+                               (SELECT a.alias_code FROM d_setting_alias a WHERE a.d_id=d.d_id AND a.alias_code LIKE :t LIMIT 1) AS alias_hit
                         FROM d_setting d
                         LEFT JOIN customer_list c ON d.Customer_Id = c.customer_id
-                        WHERE (d.D_Setting_Id LIKE :t OR d.Spec_No LIKE :t)
+                        WHERE (d.D_Setting_Id LIKE :t OR d.Spec_No LIKE :t
+                               OR EXISTS (SELECT 1 FROM d_setting_alias a2 WHERE a2.d_id=d.d_id AND a2.alias_code LIKE :t))
                           AND d.Customer_Id = :cid
-                        ORDER BY d.D_Setting_Id ASC LIMIT 30
+                        ORDER BY (alias_hit IS NOT NULL), d.D_Setting_Id ASC LIMIT 30
                     ");
                     $stmt->execute(['t' => $t, 'cid' => $custId]);
                 } else {
                     // 無客戶篩選：原行為（料號 or 規格 or 客戶名稱）
                     $stmt = $pdo->prepare("
                         SELECT d.d_id, d.D_Setting_Id, d.Spec_No, d.Type, d.Revision,
-                               c.customer AS Client_Name, c.customer_id
+                               c.customer AS Client_Name, c.customer_id,
+                               (SELECT a.alias_code FROM d_setting_alias a WHERE a.d_id=d.d_id AND a.alias_code LIKE :t LIMIT 1) AS alias_hit
                         FROM d_setting d
                         LEFT JOIN customer_list c ON d.Customer_Id = c.customer_id
                         WHERE d.D_Setting_Id LIKE :t OR d.Spec_No LIKE :t OR c.customer LIKE :t
-                        ORDER BY d.D_Setting_Id ASC LIMIT 30
+                              OR EXISTS (SELECT 1 FROM d_setting_alias a2 WHERE a2.d_id=d.d_id AND a2.alias_code LIKE :t)
+                        ORDER BY (alias_hit IS NOT NULL), d.D_Setting_Id ASC LIMIT 30
                     ");
                     $stmt->execute(['t' => $t]);
                 }

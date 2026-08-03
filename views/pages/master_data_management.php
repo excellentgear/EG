@@ -1212,6 +1212,9 @@ $is_admin       = ($permission_code === 'A');   // 本頁等效管理員（全�
 // 圖面：一律開放。報價：需 quotation_view（沿用報價單檢視權限）。
 // 其他附件：過渡期 — 未指派 master_data 角色者維持開放；已指派則需 md_attach_view。
 require_once __DIR__ . '/../../src/common/rbac.php';
+// 料號別名（客戶代號／等同料號）：唯一實作點，禁止各頁自寫別名 SQL
+require_once __DIR__ . '/../../src/common/part_alias_lib.php';
+eg_part_alias_ensure_table($pdo);
 $_mdFeats = [];
 try { $_mdFeats = rbac_user_features($pdo, (int)$user_id); } catch (Exception $_e) {}
 $_mdRbacAll = in_array('all', $_mdFeats, true);
@@ -1261,13 +1264,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 foreach ($kws as $ki => $kw_i) {
                     $kk = ":kw$ki";
                     // 直接欄位命中，或身為「命中關鍵字之組合件」的子件（d_setting_bom 反查）亦納入
+                    // 客戶代號／等同料號（別名）也算命中：客戶用他們自己的編號來找，一樣要找得到我方料號
                     $kw_ors[] = "((d.D_Setting_Id LIKE $kk OR d.Drawing_No LIKE $kk OR d.Spec_No LIKE $kk OR d.Remark LIKE $kk OR d.Customer_Id LIKE $kk OR c.customer LIKE $kk)"
+                              . " OR EXISTS (SELECT 1 FROM d_setting_alias akw$ki WHERE akw$ki.d_id=d.d_id AND akw$ki.alias_code LIKE $kk)"
                               . " OR EXISTS (SELECT 1 FROM d_setting_bom bkw$ki JOIN d_setting pkw$ki ON pkw$ki.d_id=bkw$ki.parent_d_id"
                               . "   WHERE bkw$ki.child_d_id=d.d_id AND pkw$ki.Is_Assembly=1"
                               . "   AND (pkw$ki.D_Setting_Id LIKE :kwp$ki OR pkw$ki.Drawing_No LIKE :kwp$ki OR pkw$ki.Spec_No LIKE :kwp$ki OR pkw$ki.Remark LIKE :kwp$ki)))";
                     $params[$kk] = "%$kw_i%";
                     $params[":kwp$ki"] = "%$kw_i%";
-                    $kw_direct_ors[] = "(d.D_Setting_Id LIKE :kws$ki OR d.Drawing_No LIKE :kws$ki OR d.Spec_No LIKE :kws$ki OR d.Remark LIKE :kws$ki OR d.Customer_Id LIKE :kws$ki OR c.customer LIKE :kws$ki)";
+                    $kw_direct_ors[] = "(d.D_Setting_Id LIKE :kws$ki OR d.Drawing_No LIKE :kws$ki OR d.Spec_No LIKE :kws$ki OR d.Remark LIKE :kws$ki OR d.Customer_Id LIKE :kws$ki OR c.customer LIKE :kws$ki"
+                                     . " OR EXISTS (SELECT 1 FROM d_setting_alias aks$ki WHERE aks$ki.d_id=d.d_id AND aks$ki.alias_code LIKE :kws$ki))";
                     $params_sel[":kws$ki"] = "%$kw_i%";
                     $kw_parent_ors[] = "(pks.D_Setting_Id LIKE :kwm$ki OR pks.Drawing_No LIKE :kwm$ki OR pks.Spec_No LIKE :kwm$ki OR pks.Remark LIKE :kwm$ki)";
                     $params_sel[":kwm$ki"] = "%$kw_i%";
@@ -1644,6 +1650,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                        (SELECT GROUP_CONCAT(DISTINCT pa.D_Setting_Id ORDER BY pa.D_Setting_Id SEPARATOR ',')
                         FROM d_setting_bom ba JOIN d_setting pa ON pa.d_id=ba.parent_d_id
                         WHERE ba.child_d_id=d.d_id AND pa.Is_Assembly=1) AS parent_assemblies,
+                       (SELECT GROUP_CONCAT(CONCAT(al.alias_code, IFNULL(CONCAT(' / ', alc.customer), ''))
+                               ORDER BY al.sort_order, al.alias_id SEPARATOR '||')
+                        FROM d_setting_alias al LEFT JOIN customer_list alc ON alc.customer_id=al.customer_id
+                        WHERE al.d_id=d.d_id) AS alias_str,
                        $kw_direct_sql AS kw_direct,
                        $kw_parent_src_sql AS kw_parent_srcs,
                        d.Modified_At, d.Created_At, d.Weight_Kg,
@@ -1817,6 +1827,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $olq->execute([$d_id]);
                 $row['old_part_links'] = $olq->fetchAll(PDO::FETCH_ASSOC);
             } catch (Exception $ex) { $row['old_part_links'] = []; }
+            // 客戶代號／等同料號（別名）——舊料號已於 2026-07-31 併入此處
+            $row['aliases'] = eg_part_alias_list($pdo, (int)$d_id);
             // 廠商對應（含每廠商單價）
             try {
                 $vq = $pdo->prepare("SELECT vm.maker_id_no, vm.price, COALESCE(ml.maker_id,'') AS maker_short, COALESCE(ml.maker_id_all,'') AS maker_full
@@ -2367,14 +2379,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
 
-            // 儲存舊料號
-            $old_links_raw = trim($_POST['old_part_links'] ?? '[]');
-            $old_links_arr = json_decode($old_links_raw, true) ?: [];
-            $pdo->prepare("DELETE FROM d_setting_old_part_links WHERE d_id=?")->execute([$d_id]);
-            $ins_ol = $pdo->prepare("INSERT IGNORE INTO d_setting_old_part_links (d_id, old_d_id, sort_order) VALUES (?,?,?)");
-            foreach (array_values(array_slice($old_links_arr, 0, 3)) as $k => $ol) {
-                $old_did = intval($ol['old_d_id'] ?? 0);
-                if ($old_did && $old_did !== $d_id) $ins_ol->execute([$d_id, $old_did, $k]);
+            // 儲存客戶代號／等同料號（別名）。2026-07-31 起「舊料號」併入別名，
+            // 舊表 d_setting_old_part_links 只在舊版表單（沒送 aliases）時才會被寫入，保留供回溯。
+            if (isset($_POST['aliases'])) {
+                $alias_arr = json_decode(trim($_POST['aliases']) ?: '[]', true) ?: [];
+                eg_part_alias_save($pdo, $d_id, $alias_arr, $uid);   // 代號衝突會丟 Exception，訊息直接顯示
+            } else {
+                $old_links_raw = trim($_POST['old_part_links'] ?? '[]');
+                $old_links_arr = json_decode($old_links_raw, true) ?: [];
+                $pdo->prepare("DELETE FROM d_setting_old_part_links WHERE d_id=?")->execute([$d_id]);
+                $ins_ol = $pdo->prepare("INSERT IGNORE INTO d_setting_old_part_links (d_id, old_d_id, sort_order) VALUES (?,?,?)");
+                foreach (array_values(array_slice($old_links_arr, 0, 3)) as $k => $ol) {
+                    $old_did = intval($ol['old_d_id'] ?? 0);
+                    if ($old_did && $old_did !== $d_id) $ins_ol->execute([$d_id, $old_did, $k]);
+                }
             }
 
             // ── 廠商對應（含每廠商單價）── d_setting_vendor_map
@@ -7138,12 +7156,31 @@ input.code-conflict { border-color:#DD5138 !important; background:#FDF1ED; }
         </div>
     </div>
 </div>
-<!-- ─ 舊料號 ─ -->
+<!-- ─ 客戶代號／等同料號（別名）─
+     一個代號要能唯一對應到我方料號：客戶圖上印的編號多半沒建成料號，
+     客戶改料號沒改圖時新舊其實同一個東西，報價料號與訂單料號也常不同。
+     全部收在這一區，實作見 src/common/part_alias_lib.php。 -->
 <div class="form-group" style="margin-bottom:8px;">
-    <label style="font-size:12px;"><i class="fa fa-history" style="color:#888;margin-right:4px;"></i>舊料號 <span style="font-weight:normal;color:#aaa;font-size:11px;">（最多3個）</span></label>
-    <div id="pf-old-parts-area"></div>
-    <button type="button" id="pf-old-add-btn" onclick="addOldPartRow()" style="margin-top:2px;padding:1px 10px;font-size:12px;background:#f0f4ff;border:1px solid #aab4d4;color:#555;border-radius:3px;cursor:pointer;"><i class="fa fa-plus"></i> 新增舊料號</button>
-    <input type="hidden" id="pf-old-part-links" name="old_part_links" value="[]">
+    <label style="font-size:12px;"><i class="fa fa-exchange" style="color:#888;margin-right:4px;"></i>客戶代號／等同料號
+        <span style="font-weight:normal;color:#aaa;font-size:11px;">（客戶料號、圖面編號、舊料號、報價料號…登記後用任一代號都查得到這個料號）</span></label>
+    <div style="border:1px solid #E4D3BC;border-radius:4px;overflow:hidden;">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;" id="pf-alias-table">
+            <thead><tr style="background:#FFF3E2;color:#6B4423;">
+                <th style="padding:4px 6px;text-align:left;">代號 <span style="color:#DD5138;">*</span></th>
+                <th style="padding:4px 6px;text-align:left;width:110px;">類型</th>
+                <th style="padding:4px 6px;text-align:left;width:170px;">哪家客戶在用
+                    <span style="font-weight:normal;color:#a5865e;font-size:10px;">（預設本料號客戶，可清成通用）</span></th>
+                <th style="padding:4px 6px;text-align:left;width:230px;">這個代號在系統裡也是一筆料號？
+                    <span style="font-weight:normal;color:#a5865e;font-size:10px;">（選填，綁了才撈得到它底下的舊訂單）</span></th>
+                <th style="padding:4px 6px;text-align:left;">備註</th>
+                <th style="padding:4px 6px;width:34px;"></th>
+            </tr></thead>
+            <tbody id="pf-alias-body"></tbody>
+        </table>
+    </div>
+    <button type="button" id="pf-alias-add-btn" onclick="addAliasRow()" style="margin-top:4px;padding:1px 10px;font-size:12px;background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;border-radius:3px;cursor:pointer;"><i class="fa fa-plus"></i> 新增代號</button>
+    <span id="pf-alias-err" style="display:none;margin-left:8px;font-size:12px;color:#DD5138;"></span>
+    <input type="hidden" id="pf-aliases" name="aliases" value="[]">
 </div>
 
 <!-- ─ 依工件種類字典設定顯示：廠商 / 專用料號 / 專用機台 / 價格（顯示於備註上方）─ -->
@@ -11329,6 +11366,13 @@ function renderPartsTable(rows, total, pg, pages) {
             var dIdBadge = '<span style="font-size:10px;color:#bbb;font-family:Consolas,monospace;letter-spacing:.3px;display:block;line-height:1.2;margin-top:1px;">id:'+r.d_id+'</span>';
             var drawingBadge = (r.Drawing_No && r.Drawing_No !== r.D_Setting_Id)
                 ? '<span style="font-size:10px;color:#1a7abf;display:block;line-height:1.2;margin-top:1px;" title="圖面代號">代：'+escHtml(r.Drawing_No)+'</span>' : '';
+            // 客戶代號／等同料號：讓人看得出這個料號還被誰用什麼編號叫
+            if (r.alias_str) {
+                r.alias_str.split('||').forEach(function(a){
+                    if (!a) return;
+                    drawingBadge += '<span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;display:inline-block;line-height:1.4;margin-top:2px;margin-right:3px;" title="客戶代號／等同料號">＝'+escHtml(a)+'</span>';
+                });
+            }
             if (r.has_drawing || (MD_CAN_OTHER && r.has_attach) || (MD_CAN_QUOTE && r.has_quote)) {
                 html += '<td style="max-width:160px;line-height:1.3;"><strong class="part-drawing-link" onclick="openPartDrawing(\''+escHtml(r.D_Setting_Id)+'\')" title="點擊開啟圖面 / 附件">'+escHtml(r.D_Setting_Id)+'</strong>'+dIdBadge+drawingBadge+gearSpec+'</td>';
             } else {
@@ -13389,9 +13433,11 @@ function renderBomRows() {
     wrap.innerHTML = html;
 }
 
-// ── 舊料號 helpers ─────────────────────────────────────────────────────────
+// ── 舊料號 helpers（2026-07-31 起停用：已併入下方「客戶代號／等同料號」別名區塊）──────
+//    保留程式碼與 d_setting_old_part_links 資料表僅供回溯，畫面已無入口、不再被呼叫。
 function fillOldPartLinks(links) {
     var area = document.getElementById('pf-old-parts-area');
+    if (!area) return;
     // 清除現有 rows
     area.querySelectorAll('.pf-old-part-row').forEach(function(r){ r.remove(); });
     // 有幾筆 link 建幾個 row，最少 1 個
@@ -13507,6 +13553,203 @@ function syncOldPartLinksHidden() {
     });
     var h = document.getElementById('pf-old-part-links');
     if (h) h.value = JSON.stringify(links);
+}
+
+// ── 客戶代號／等同料號（別名）helpers ────────────────────────────────────────
+//    一列＝一個外部代號。客戶欄留空＝通用代號；「這個代號本身也有料號」用來把
+//    舊料號那一筆掛起來，之後撈歷史資料才找得到（part_alias_lib 的 linked_d_id）。
+var ALIAS_TYPES = <?= json_encode(function_exists('eg_part_alias_types') ? eg_part_alias_types() : ['customer_part'=>'客戶料號','drawing'=>'圖面編號','old_part'=>'舊料號','quote_part'=>'報價料號','other'=>'其他代號'], JSON_UNESCAPED_UNICODE) ?>;
+var _aliasCusts = null, _aliasSearchTimer = null, _aliasCustTimer = null;
+
+function _ensureAliasCusts(cb) {
+    if (_aliasCusts) { cb(_aliasCusts); return; }
+    api({ action:'list_customers', keywords_p:'', page:1, lmt:999 }).done(function(r){
+        _aliasCusts = (r && r.success && r.data) ? r.data : [];
+        cb(_aliasCusts);
+    }).fail(function(){ _aliasCusts = []; cb(_aliasCusts); });
+}
+
+function _aliasCustName(id) {
+    if (!id) return '';
+    var hit = (_aliasCusts||[]).find(function(c){ return String(c.customer_id||c.Customer_Id) === String(id); });
+    var nm = hit ? (hit.customer || hit.customer_name || '') : '';
+    return nm ? (nm + ' (' + id + ')') : id;
+}
+
+// 客戶欄：輸入客戶ID或名稱模糊查詢 → 點選（不用下拉選單，客戶數量多時才好找）
+function _aliasSearchCust(tr, kw) {
+    clearTimeout(_aliasCustTimer);
+    var dd = tr.querySelector('.al-cust-dd');
+    kw = (kw||'').trim();
+    if (!kw) { if (dd) dd.style.display='none'; return; }
+    _aliasCustTimer = setTimeout(function(){
+        api({ action:'list_customers', keywords_p:kw, page:1, lmt:15 }).done(function(r){
+            if (!dd) return;
+            var list = (r && r.success && r.data) ? r.data : [];
+            if (!list.length) { dd.innerHTML='<div style="padding:6px 10px;color:#aaa;">查無客戶</div>'; dd.style.display=''; return; }
+            dd.innerHTML = list.map(function(c){
+                var id = c.customer_id||c.Customer_Id||'', nm = c.customer||c.customer_name||id;
+                return '<div class="al-cust-item" style="padding:5px 10px;cursor:pointer;border-bottom:1px solid #f5f5f5;" data-id="'+escAttr(id)+'" data-nm="'+escAttr(nm)+'">'+
+                       '<strong>'+escHtml(nm)+'</strong> <span style="color:#aaa;font-size:11px;">'+escHtml(id)+'</span></div>';
+            }).join('');
+            dd.querySelectorAll('.al-cust-item').forEach(function(it){
+                it.addEventListener('mousedown', function(){
+                    tr.dataset.custId = it.dataset.id;
+                    tr.querySelector('.al-cust-kw').value = it.dataset.nm + ' (' + it.dataset.id + ')';
+                    dd.style.display = 'none';
+                    syncAliasesHidden();
+                });
+            });
+            dd.style.display = '';
+        });
+    }, 250);
+}
+
+function _createAliasRow(d) {
+    d = d || {};
+    var tr = document.createElement('tr');
+    tr.className = 'pf-alias-row';
+    tr.style.borderBottom = '1px solid #F2E6D5';
+    tr.dataset.linkedDid  = d.linked_d_id || '0';
+    tr.dataset.custId     = d.customer_id || '';
+    var custShown = d.customer_id ? ((d.customer_name ? d.customer_name + ' ' : '') + '(' + d.customer_id + ')') : '';
+    var typeOpts = '';
+    Object.keys(ALIAS_TYPES).forEach(function(k){
+        typeOpts += '<option value="'+k+'"'+((d.alias_type||'customer_part')===k?' selected':'')+'>'+escHtml(ALIAS_TYPES[k])+'</option>';
+    });
+    tr.innerHTML =
+      '<td style="padding:3px 5px;"><input type="text" class="form-control input-sm al-code" maxlength="100" placeholder="客戶叫的編號" value="'+escAttr(d.alias_code||'')+'" style="font-size:12px;"></td>'+
+      '<td style="padding:3px 5px;"><select class="form-control input-sm al-type" style="font-size:12px;">'+typeOpts+'</select></td>'+
+      '<td style="padding:3px 5px;position:relative;">'+
+        '<input type="text" class="form-control input-sm al-cust-kw" placeholder="客戶ID或名稱，留空＝通用" autocomplete="off" value="'+escAttr(custShown)+'" style="font-size:11px;">'+
+        '<div class="al-cust-dd" style="display:none;position:absolute;z-index:1060;width:280px;background:#fff;border:1px solid #ddd;max-height:190px;overflow-y:auto;border-radius:0 0 6px 6px;box-shadow:0 4px 12px rgba(0,0,0,.12);font-size:12px;"></div>'+
+      '</td>'+
+      '<td style="padding:3px 5px;position:relative;">'+
+        '<span class="al-bound" style="font-size:11px;color:#1ABB9C;display:'+(d.linked_d_id?'inline-block':'none')+';max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+
+          escHtml((d.linked_part_no||'')+(d.linked_customer_name?' ('+d.linked_customer_name+')':''))+
+          ' <a href="javascript:;" class="al-unlink" style="color:#DD5138;">取消</a></span>'+
+        '<input type="text" class="form-control input-sm al-link-kw" placeholder="選填：搜尋這個代號自己的料號" autocomplete="off" style="font-size:11px;display:'+(d.linked_d_id?'none':'block')+';">'+
+        '<div class="al-link-dd" style="display:none;position:absolute;z-index:1060;width:340px;background:#fff;border:1px solid #ddd;max-height:200px;overflow-y:auto;border-radius:0 0 6px 6px;box-shadow:0 4px 12px rgba(0,0,0,.12);font-size:12px;"></div>'+
+      '</td>'+
+      '<td style="padding:3px 5px;"><input type="text" class="form-control input-sm al-note" maxlength="200" placeholder="選填" value="'+escAttr(d.note||'')+'" style="font-size:12px;"></td>'+
+      '<td style="padding:3px 5px;text-align:center;"><button type="button" class="btn btn-xs btn-danger al-del"><i class="fa fa-minus"></i></button></td>';
+
+    tr.querySelector('.al-del').addEventListener('click', function(){ tr.remove(); syncAliasesHidden(); });
+    var unlink = tr.querySelector('.al-unlink');
+    if (unlink) unlink.addEventListener('click', function(){
+        tr.dataset.linkedDid = '0';
+        tr.querySelector('.al-bound').style.display = 'none';
+        var kwEl = tr.querySelector('.al-link-kw'); kwEl.style.display = 'block'; kwEl.value = '';
+        syncAliasesHidden();
+    });
+    var kw = tr.querySelector('.al-link-kw');
+    kw.addEventListener('input', function(){ _aliasSearchLinked(tr, this.value); });
+    kw.addEventListener('blur',  function(){ setTimeout(function(){ var dd=tr.querySelector('.al-link-dd'); if(dd) dd.style.display='none'; }, 200); });
+    var ck = tr.querySelector('.al-cust-kw');
+    ck.addEventListener('input', function(){
+        if (!this.value.trim()) { tr.dataset.custId = ''; syncAliasesHidden(); }   // 清空＝通用代號
+        _aliasSearchCust(tr, this.value);
+    });
+    ck.addEventListener('blur', function(){
+        var self = this;
+        setTimeout(function(){
+            var dd = tr.querySelector('.al-cust-dd'); if (dd) dd.style.display='none';
+            // 沒選到客戶就把沒對應的字清掉，避免看起來有填其實沒綁
+            if (!tr.dataset.custId) self.value = '';
+        }, 200);
+    });
+    ['.al-code','.al-type','.al-note'].forEach(function(s){
+        var el = tr.querySelector(s);
+        if (el) el.addEventListener('change', syncAliasesHidden);
+        if (el && el.tagName === 'INPUT') el.addEventListener('input', syncAliasesHidden);
+    });
+    return tr;
+}
+
+function _aliasSearchLinked(tr, kw) {
+    clearTimeout(_aliasSearchTimer);
+    var dd = tr.querySelector('.al-link-dd');
+    kw = (kw||'').trim();
+    if (!kw) { if (dd) dd.style.display = 'none'; return; }
+    var curDid = parseInt(document.getElementById('pf-d_id').value||'0');
+    _aliasSearchTimer = setTimeout(function(){
+        api({ action:'search_old_parts', keyword:kw, exclude_d_id:curDid }).done(function(r){
+            if (!dd) return;
+            if (!r.success || !r.data.length) { dd.innerHTML = '<div style="padding:8px 12px;color:#aaa;">無符合料號</div>'; dd.style.display=''; return; }
+            dd.innerHTML = r.data.map(function(d){
+                var cust = d.client_name ? '<span style="color:#1ABB9C;font-size:11px;margin-left:6px;">'+escHtml(d.client_name)+'</span>' : '';
+                return '<div class="al-dd-item" style="padding:6px 12px;cursor:pointer;border-bottom:1px solid #f5f5f5;" data-did="'+d.d_id+'" data-pn="'+escAttr(d.D_Setting_Id)+'" data-cn="'+escAttr(d.client_name||'')+'">'+
+                       '<strong style="font-size:13px;">'+escHtml(d.D_Setting_Id)+'</strong>'+cust+'</div>';
+            }).join('');
+            dd.querySelectorAll('.al-dd-item').forEach(function(it){
+                it.addEventListener('mousedown', function(){
+                    tr.dataset.linkedDid = it.dataset.did;
+                    var bd = tr.querySelector('.al-bound');
+                    bd.innerHTML = escHtml(it.dataset.pn + (it.dataset.cn ? ' ('+it.dataset.cn+')' : '')) +
+                                   ' <a href="javascript:;" class="al-unlink" style="color:#DD5138;">取消</a>';
+                    bd.style.display = 'inline-block';
+                    bd.querySelector('.al-unlink').addEventListener('click', function(){
+                        tr.dataset.linkedDid = '0'; bd.style.display='none';
+                        var k = tr.querySelector('.al-link-kw'); k.style.display='block'; k.value='';
+                        syncAliasesHidden();
+                    });
+                    var k = tr.querySelector('.al-link-kw'); k.style.display='none'; k.value='';
+                    dd.style.display = 'none';
+                    // 代號欄還空著就自動帶入所選料號，省一次打字
+                    var codeEl = tr.querySelector('.al-code');
+                    if (codeEl && !codeEl.value.trim()) codeEl.value = it.dataset.pn;
+                    syncAliasesHidden();
+                });
+            });
+            dd.style.display = '';
+        });
+    }, 280);
+}
+
+function fillAliasRows(list) {
+    var body = document.getElementById('pf-alias-body');
+    if (!body) return;
+    body.innerHTML = '';
+    (list||[]).forEach(function(d){ body.appendChild(_createAliasRow(d)); });
+    syncAliasesHidden();
+    _setAliasErr('');
+}
+
+function addAliasRow() {
+    var body = document.getElementById('pf-alias-body');
+    if (!body) return;
+    // 新列預設帶目前料號的客戶（多數情況就是這家客戶在用這個代號），要改成通用把它清空即可
+    var curCust = (document.getElementById('pf-Customer_Id')||{value:''}).value;
+    var curName = (document.getElementById('pf-customer-display')||{value:''}).value;
+    var tr = _createAliasRow({ customer_id: curCust, customer_name: curName ? curName.replace(/\s*\(.*\)\s*$/, '') : '' });
+    body.appendChild(tr);
+    var c = tr.querySelector('.al-code'); if (c) c.focus();
+    syncAliasesHidden();
+}
+
+function _setAliasErr(msg) {
+    var el = document.getElementById('pf-alias-err');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.display = msg ? 'inline' : 'none';
+}
+
+function syncAliasesHidden() {
+    var rows = [];
+    document.querySelectorAll('#pf-alias-body .pf-alias-row').forEach(function(tr){
+        var code = (tr.querySelector('.al-code')||{value:''}).value.trim();
+        if (!code) return;
+        rows.push({
+            alias_code : code,
+            alias_type : (tr.querySelector('.al-type')||{value:'customer_part'}).value,
+            customer_id: tr.dataset.custId || '',
+            linked_d_id: parseInt(tr.dataset.linkedDid||'0') || 0,
+            note       : (tr.querySelector('.al-note')||{value:''}).value.trim()
+        });
+    });
+    var h = document.getElementById('pf-aliases');
+    if (h) h.value = JSON.stringify(rows);
+    return rows;
 }
 
 var childSearchTimer;
@@ -13662,7 +13905,7 @@ function openPartModal(d_id) {
             if (cpBtn)   cpBtn.style.display   = '';
             document.getElementById('pf-weight-source').value    = d.weight_source||'manual';
             document.getElementById('pf-weight-calc-json').value = '';
-            fillOldPartLinks(d.old_part_links || []);
+            fillAliasRows(d.aliases || []);
             document.getElementById('pf-Customer_Id').value    = d.Customer_Id||'';
             document.getElementById('pf-customer-display').value = d.client_name ? (d.client_name+' ('+d.Customer_Id+')') : (d.Customer_Id||'');
             document.getElementById('pf-cust-hint').textContent = d.Customer_Id ? ('目前綁定：'+d.Customer_Id) : '';
@@ -13715,7 +13958,7 @@ function openPartModal(d_id) {
         if (_nm_cpBtn) _nm_cpBtn.style.display  = '';
         document.getElementById('pf-weight-source').value    = 'manual';
         document.getElementById('pf-weight-calc-json').value = '';
-        fillOldPartLinks([]);
+        fillAliasRows([]);
         renderGearRows();
         renderBomRows();
         var pdWrap = document.getElementById('part-design-note-wrap');
@@ -13795,7 +14038,7 @@ function submitPartForm() {
         gears:        JSON.stringify(gearRows),
         bom_children: JSON.stringify(bomRows),
         labels:       (document.getElementById('pf-labels-json')||{value:'[]'}).value,
-        old_part_links: (document.getElementById('pf-old-part-links')||{value:'[]'}).value,
+        aliases:      JSON.stringify(syncAliasesHidden()),
         vendor_map:         (document.getElementById('pf-vendor-map')||{value:'[]'}).value,
         dedicated_part_map: (document.getElementById('pf-dedicated-part-map')||{value:'[]'}).value,
         machine_map:        (document.getElementById('pf-machine-map')||{value:'[]'}).value

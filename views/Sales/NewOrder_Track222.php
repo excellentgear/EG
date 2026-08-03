@@ -238,20 +238,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $customer_id_filter = trim($_POST['customer_id'] ?? '');
                 if (!empty($customer_id_filter)) {
                     // 客戶已選定：只搜尋此客戶底下的料號
+                    // alias_hit：命中的客戶代號／等同料號（src/common/part_alias_lib.php），前端顯示「正確料號（＝等同料號）」
                     $query = "SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Spec_No, d.Revision, d.Customer_Id, c.customer as Client_Name,
                                      d.Is_Assembly,
+                                     (SELECT a.alias_code FROM d_setting_alias a WHERE a.d_id=d.d_id AND a.alias_code LIKE :term LIMIT 1) AS alias_hit,
                                      EXISTS(SELECT 1 FROM d_setting_bom bb WHERE bb.child_d_id = d.d_id) AS Is_Bom_Child
                               FROM d_setting d LEFT JOIN customer_list c ON d.Customer_Id = c.customer_id
-                              WHERE (d.D_Setting_Id LIKE :term OR d.Drawing_No LIKE :term OR d.Spec_No LIKE :term) AND d.Customer_Id = :cid
+                              WHERE (d.D_Setting_Id LIKE :term OR d.Drawing_No LIKE :term OR d.Spec_No LIKE :term
+                                     OR EXISTS(SELECT 1 FROM d_setting_alias a2 WHERE a2.d_id=d.d_id AND a2.alias_code LIKE :term)) AND d.Customer_Id = :cid
                               LIMIT 50";
                     $stmt = $pdo->prepare($query);
                     $stmt->execute([':term' => "%$term%", ':cid' => $customer_id_filter]);
                 } else {
                     $query = "SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Spec_No, d.Revision, d.Customer_Id, c.customer as Client_Name,
                                      d.Is_Assembly,
+                                     (SELECT a.alias_code FROM d_setting_alias a WHERE a.d_id=d.d_id AND a.alias_code LIKE :term LIMIT 1) AS alias_hit,
                                      EXISTS(SELECT 1 FROM d_setting_bom bb WHERE bb.child_d_id = d.d_id) AS Is_Bom_Child
                               FROM d_setting d LEFT JOIN customer_list c ON d.Customer_Id = c.customer_id
-                              WHERE (d.D_Setting_Id LIKE :term OR d.Drawing_No LIKE :term OR d.Spec_No LIKE :term)
+                              WHERE (d.D_Setting_Id LIKE :term OR d.Drawing_No LIKE :term OR d.Spec_No LIKE :term
+                                     OR EXISTS(SELECT 1 FROM d_setting_alias a2 WHERE a2.d_id=d.d_id AND a2.alias_code LIKE :term))
                               LIMIT 20";
                     $stmt = $pdo->prepare($query);
                     $stmt->execute([':term' => "%$term%"]);
@@ -814,24 +819,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     // 客戶已綁定：同時篩選此客戶底下的料號
                     $stmt = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Spec_No, d.Customer_Id AS customer_id, c.customer AS client_name,
                                                   d.Is_Assembly,
+                                                  (SELECT a.alias_code FROM d_setting_alias a WHERE a.d_id=d.d_id AND a.alias_code LIKE ? LIMIT 1) AS alias_hit,
                                                   EXISTS(SELECT 1 FROM d_setting_bom bb WHERE bb.child_d_id = d.d_id) AS Is_Bom_Child
                                            FROM d_setting d
                                            LEFT JOIN customer_list c ON d.Customer_Id = c.customer_id
-                                           WHERE (d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ?) AND d.Customer_Id = ?
+                                           WHERE (d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ?
+                                                  OR EXISTS(SELECT 1 FROM d_setting_alias a2 WHERE a2.d_id=d.d_id AND a2.alias_code LIKE ?)) AND d.Customer_Id = ?
                                            ORDER BY CASE WHEN d.D_Setting_Id = ? THEN 0 ELSE 1 END, d.D_Setting_Id
                                            LIMIT 50");
-                    $stmt->execute(["%$d_id_text%", "%$d_id_text%", $bound_customer_id, $d_id_text]);
+                    $stmt->execute(["%$d_id_text%", "%$d_id_text%", "%$d_id_text%", "%$d_id_text%", $bound_customer_id, $d_id_text]);
                 } else {
                     // 無綁定客戶：全範圍模糊搜尋
                     $stmt = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Spec_No, d.Customer_Id AS customer_id, c.customer AS client_name,
                                                   d.Is_Assembly,
+                                                  (SELECT a.alias_code FROM d_setting_alias a WHERE a.d_id=d.d_id AND a.alias_code LIKE ? LIMIT 1) AS alias_hit,
                                                   EXISTS(SELECT 1 FROM d_setting_bom bb WHERE bb.child_d_id = d.d_id) AS Is_Bom_Child
                                            FROM d_setting d
                                            LEFT JOIN customer_list c ON d.Customer_Id = c.customer_id
-                                           WHERE (d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ?)
+                                           WHERE (d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ?
+                                                  OR EXISTS(SELECT 1 FROM d_setting_alias a2 WHERE a2.d_id=d.d_id AND a2.alias_code LIKE ?))
                                            ORDER BY CASE WHEN d.D_Setting_Id = ? THEN 0 ELSE 1 END, d.D_Setting_Id
                                            LIMIT 50");
-                    $stmt->execute(["%$d_id_text%", "%$d_id_text%", $d_id_text]);
+                    $stmt->execute(["%$d_id_text%", "%$d_id_text%", "%$d_id_text%", "%$d_id_text%", $d_id_text]);
                 }
                 $parts = $stmt->fetchAll(PDO::FETCH_ASSOC);
             }
@@ -5575,11 +5584,13 @@ foreach($dCounts as $c) {
                     qbSelectedPart = res.parts[0];
                     var _p0 = res.parts[0];
                     var _p0dn = (_p0.Drawing_No && _p0.Drawing_No !== _p0.D_Setting_Id) ? ' <span style="color:#b8d4f0;">代：' + escapeHtml(_p0.Drawing_No) + '</span>' : '';
+                    if (_p0.alias_hit) _p0dn += ' <span style="color:#FFF3E2;">＝' + escapeHtml(_p0.alias_hit) + '</span>';
                     var _p0bom = qbBomMark(_p0);
                     $pl.html('<span class="label label-success" style="font-size:11px;"><i class="fa fa-check"></i> ' + escapeHtml(_p0.D_Setting_Id) + _p0dn + _p0bom + (_p0.client_name ? ' (' + escapeHtml(_p0.client_name) + ')' : '') + '</span>');
                 } else {
                     res.parts.forEach(function(p) {
                         var _pdn = (p.Drawing_No && p.Drawing_No !== p.D_Setting_Id) ? ' 代：' + p.Drawing_No : '';
+                        if (p.alias_hit) _pdn += '（＝' + p.alias_hit + '）';
                         var label = p.D_Setting_Id + _pdn + qbBomMarkText(p) + (p.Spec_No ? '/' + p.Spec_No : '') + (p.client_name ? ' (' + p.client_name + ')' : '');
                         $('<button type="button" class="btn btn-default btn-xs qb-part-btn" style="margin:2px 2px 2px 0;font-size:11px;"></button>')
                             .text(label)
@@ -7929,7 +7940,11 @@ foreach($dCounts as $c) {
                                 const safeClientId = $('<div>').text(item.Customer_Id).html();
                                 const safeClientName = $('<div>').text(item.Client_Name).html();
                                 const safeDrawingNo = (item.Drawing_No && item.Drawing_No !== item.D_Setting_Id) ? $('<div>').text(item.Drawing_No).html() : '';
-                                const drawingNoBadge = safeDrawingNo ? ` <span style="font-size:10px;color:#1a7abf;">代：${safeDrawingNo}</span>` : '';
+                                let drawingNoBadge = safeDrawingNo ? ` <span style="font-size:10px;color:#1a7abf;">代：${safeDrawingNo}</span>` : '';
+                                // 用客戶代號／等同料號查到的：標示「＝被查到的代號」，選取後綁的仍是我方正確料號
+                                if (item.alias_hit) {
+                                    drawingNoBadge += ` <span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;">＝${$('<div>').text(item.alias_hit).html()}</span>`;
+                                }
                                 // 組合件 / 子件標籤（子件＝出現在任一組合件 BOM 中的料號）
                                 let bomBadge = '';
                                 if (parseInt(item.Is_Assembly) === 1) {
