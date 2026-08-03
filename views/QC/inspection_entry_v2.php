@@ -94,7 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     try {
         $WRITE = ['sym_save', 'sym_delete', 'save_adhoc', 'log_sample_change', 'del_inspection',
                   'dwg_confirm', 'std_item_save', 'std_item_delete', 'std_version_activate', 'std_version_delete',
-                  'print_cfg_save'];
+                  'print_cfg_save', 'tol_table_save', 'tol_table_delete'];
         if (in_array($act, $WRITE, true)) {
             $tok = $_POST['csrf'] ?? '';
             if (!is_string($tok) || $tok === '' || !hash_equals((string)($_SESSION['qc_csrf'] ?? ''), $tok)) {
@@ -561,6 +561,90 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             exit;
         }
 
+        // ---- ⑦ 標準公差／客戶公差表：「自動套用公差」用（依標準值落在哪個區間帶入上下公差）----
+        if ($act === 'tol_tables') {
+            $rows = $pdo->query(
+                "SELECT t.id, t.name, t.customer_id, c.customer AS customer_name,
+                        (SELECT COUNT(*) FROM qc_tolerance_band b WHERE b.tolerance_table_id=t.id) AS band_count
+                 FROM qc_tolerance_table t
+                 LEFT JOIN customer_list c ON c.customer_id=t.customer_id
+                 WHERE t.is_active=1
+                 ORDER BY (t.customer_id IS NULL) ASC, t.name ASC"
+            )->fetchAll(PDO::FETCH_ASSOC);
+            // 依目前料件客戶名稱找對應的客戶專屬公差表，供前端預選/標記推薦
+            $clientName = trim((string)($_POST['client'] ?? ''));
+            $matchId = 0;
+            if ($clientName !== '') {
+                foreach ($rows as $r) {
+                    if ($r['customer_id'] && trim((string)$r['customer_name']) !== ''
+                        && mb_strtolower(trim($r['customer_name'])) === mb_strtolower($clientName)) { $matchId = (int)$r['id']; break; }
+                }
+            }
+            echo json_encode(['success'=>true, 'rows'=>$rows, 'match_id'=>$matchId,
+                              'can_manage'=>($isAdmin || $hasF('qc_manage_settings'))], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'tol_bands') {
+            $tid = (int)($_POST['table_id'] ?? 0);
+            $s = $pdo->prepare("SELECT id, min_value, max_value, plus_tolerance, minus_tolerance FROM qc_tolerance_band WHERE tolerance_table_id=? ORDER BY min_value ASC");
+            $s->execute([$tid]);
+            echo json_encode(['success'=>true, 'rows'=>$s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'tol_customer_options') {
+            if (!$isAdmin && !$hasF('qc_manage_settings')) throw new Exception('需要「管理檢驗設定」權限');
+            $rows = $pdo->query("SELECT customer_id, customer FROM customer_list WHERE is_inactive=0 AND is_own_company=0 ORDER BY customer ASC")->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success'=>true, 'rows'=>$rows], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'tol_table_save') {
+            if (!$isAdmin && !$hasF('qc_manage_settings')) throw new Exception('需要「管理檢驗設定」權限');
+            $id   = (int)($_POST['id'] ?? 0);
+            $name = trim($_POST['name'] ?? '');
+            $cust = trim($_POST['customer_id'] ?? '');
+            if ($name === '') throw new Exception('請輸入公差表名稱');
+            $bands = json_decode($_POST['bands'] ?? '[]', true);
+            if (!is_array($bands) || !count($bands)) throw new Exception('請至少新增一個公差區間');
+            $clean = [];
+            foreach ($bands as $b) {
+                $mn = $b['min_value'] ?? null; $mx = $b['max_value'] ?? null;
+                $pu = $b['plus_tolerance'] ?? null; $mi = $b['minus_tolerance'] ?? null;
+                if ($mn === '' || $mn === null || $mx === '' || $mx === null || $pu === '' || $pu === null || $mi === '' || $mi === null) {
+                    throw new Exception('公差區間欄位不可空白');
+                }
+                if (!is_numeric($mn) || !is_numeric($mx) || !is_numeric($pu) || !is_numeric($mi)) throw new Exception('公差區間必須是數字');
+                if ((float)$mn > (float)$mx) throw new Exception('區間下限不可大於上限（' . $mn . ' ~ ' . $mx . '）');
+                $clean[] = [(float)$mn, (float)$mx, (float)$pu, (float)$mi];
+            }
+            usort($clean, function ($a, $b) { return $a[0] <=> $b[0]; });
+            $pdo->beginTransaction();
+            if ($id) {
+                $pdo->prepare("UPDATE qc_tolerance_table SET name=?, customer_id=?, updated_by=?, updated_at=NOW() WHERE id=?")
+                    ->execute([$name, $cust !== '' ? $cust : null, $uid, $id]);
+                $pdo->prepare("DELETE FROM qc_tolerance_band WHERE tolerance_table_id=?")->execute([$id]);
+            } else {
+                $pdo->prepare("INSERT INTO qc_tolerance_table (name, customer_id, is_active, created_by, created_at) VALUES (?, ?, 1, ?, NOW())")
+                    ->execute([$name, $cust !== '' ? $cust : null, $uid]);
+                $id = (int)$pdo->lastInsertId();
+            }
+            $insB = $pdo->prepare("INSERT INTO qc_tolerance_band (tolerance_table_id, min_value, max_value, plus_tolerance, minus_tolerance, sort_order) VALUES (?, ?, ?, ?, ?, ?)");
+            foreach ($clean as $i => $b) $insB->execute([$id, $b[0], $b[1], $b[2], $b[3], ($i + 1) * 10]);
+            $pdo->commit();
+            echo json_encode(['success'=>true, 'id'=>$id], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($act === 'tol_table_delete') {
+            if (!$isAdmin && !$hasF('qc_manage_settings')) throw new Exception('需要「管理檢驗設定」權限');
+            $id = (int)($_POST['id'] ?? 0);
+            if (!$id) throw new Exception('缺少公差表 id');
+            $pdo->beginTransaction();
+            $pdo->prepare("DELETE FROM qc_tolerance_band WHERE tolerance_table_id=?")->execute([$id]);
+            $pdo->prepare("DELETE FROM qc_tolerance_table WHERE id=?")->execute([$id]);
+            $pdo->commit();
+            echo json_encode(['success'=>true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
         throw new Exception('未知的 v2action: ' . $act);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -936,6 +1020,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                         <button class="btn btn-default btn-sm" id="btn-sym" title="插入工程符號（Ø ± ▽ …）到游標處">Ø± 符號</button>
                         <button class="btn btn-default btn-sm" id="btn-code-mode2" title="切換檢驗項目編號顯示方式"></button>
                     </span>
+                    <button class="btn btn-default btn-sm" id="btn-apply-tol" title="依標準值自動帶入上下公差（只套用在上下限都還沒填的欄位）"><i class="fa fa-magic"></i> 自動套用公差</button>
                     <button class="btn btn-default btn-sm" id="btn-keypad"><i class="fa fa-keyboard-o"></i> 數字鍵盤</button>
                     <span class="muted-help" id="view-hint"></span>
                 </div>
@@ -1246,6 +1331,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     <div class="modal-dialog modal-sm"><div class="modal-content">
         <div class="modal-header"><button class="close" data-dismiss="modal">&times;</button><h4 class="modal-title">選擇通用樣板</h4></div>
         <div class="modal-body"><div class="list-group" id="tpl-list"></div></div>
+    </div></div>
+</div>
+
+<!-- 自動套用公差：選擇要套用的公差表 -->
+<div class="modal fade" id="tolPickModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
+            <button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-magic"></i> 自動套用公差</h4>
+        </div>
+        <div class="modal-body">
+            <div class="muted-help" style="margin-bottom:8px;">依各檢驗項目的<b>標準值</b>落在哪個區間，帶入上/下公差；<b>只套用在上下限都還沒填的欄位</b>，已填的不會被覆蓋。</div>
+            <div id="tol-pick-list"></div>
+            <div class="text-center" id="tol-pick-manage-wrap" style="margin-top:10px;display:none;">
+                <a href="#" id="btn-tol-manage">管理公差表 →</a>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-warm" id="btn-tol-apply-go">套用</button>
+        </div>
+    </div></div>
+</div>
+
+<!-- 公差表管理（新增/編輯/刪除；僅具「管理檢驗設定」權限者可用） -->
+<div class="modal fade" id="tolManageModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog modal-lg"><div class="modal-content">
+        <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
+            <button type="button" class="close" data-dismiss="modal">&times;</button>
+            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-sliders"></i> 公差表管理</h4>
+        </div>
+        <div class="modal-body">
+            <div class="row">
+                <div class="col-sm-4" style="border-right:1px solid var(--line);">
+                    <div id="tol-mg-list" style="max-height:420px;overflow:auto;"></div>
+                    <button class="btn btn-warm-o btn-sm btn-block" id="btn-tol-mg-new" style="margin-top:8px;"><i class="fa fa-plus"></i> 新增公差表</button>
+                </div>
+                <div class="col-sm-8">
+                    <div id="tol-mg-editor"><div class="text-muted">請於左側選擇一個公差表，或新增一個。</div></div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
     </div></div>
 </div>
 
@@ -3678,6 +3806,183 @@ $(function(){
             focusItem=0; $('#no-std-hint').hide(); $('#tplModal').modal('hide'); render(); scheduleDraftSave();
         },'json');
     });
+
+    // =====================================================================
+    // 標準公差／客戶公差：自動套用（依標準值落在哪個區間帶入上下公差）
+    //   只套用在上下限都還沒填的欄位，已填的一律保留不覆蓋（使用者填的優先）
+    // =====================================================================
+    var TOL_TABLES = [];      // 目前可用公差表清單（含 customer_name/band_count）
+    var TOL_CAN_MANAGE = false;
+    var TOL_MATCH_ID = 0;
+    var tolMgCustOptions = null;
+
+    function openTolPick(){
+        $('#tol-pick-list').html('<div class="text-muted">載入中…</div>');
+        $('#tolPickModal').modal('show');
+        $.post(V2API, { v2action:'tol_tables', client:(ctx&&ctx.client)||'' }, function(res){
+            if(!res.success){ $('#tol-pick-list').html('<div class="text-danger">載入失敗：'+esc(res.message||'')+'</div>'); return; }
+            TOL_TABLES = res.rows||[]; TOL_CAN_MANAGE = !!res.can_manage; TOL_MATCH_ID = res.match_id||0;
+            $('#tol-pick-manage-wrap').toggle(TOL_CAN_MANAGE);
+            if(!TOL_TABLES.length){
+                $('#tol-pick-list').html('<div class="text-muted">尚未設定任何公差表。'+(TOL_CAN_MANAGE?'請按下方「管理公差表」新增。':'請洽管理員設定。')+'</div>');
+                return;
+            }
+            $('#tol-pick-list').html(TOL_TABLES.map(function(t){
+                var recommended = (TOL_MATCH_ID && t.id==TOL_MATCH_ID);
+                var label = esc(t.name) + (t.customer_name? '　<span class="muted-help">（客戶：'+esc(t.customer_name)+'）</span>' : '　<span class="muted-help">（通用標準）</span>')
+                            + '　<span class="muted-help">共 '+(t.band_count||0)+' 個區間</span>'
+                            + (recommended? '　<span style="color:#3c763d;font-weight:bold;">★建議（客戶專屬）</span>' : '');
+                return '<label class="radio" style="display:block;padding:6px 4px;border-bottom:1px solid #eee;">'
+                     + '<input type="radio" name="tolpick" value="'+t.id+'" '+(recommended?'checked':'')+'> '+label+'</label>';
+            }).join(''));
+            if(!TOL_MATCH_ID){ $('#tol-pick-list input[name=tolpick]').first().prop('checked', true); }
+        }, 'json');
+    }
+    $(document).on('click', '#btn-apply-tol', function(){ openTolPick(); });
+
+    $(document).on('click', '#btn-tol-apply-go', function(){
+        var tid = $('input[name=tolpick]:checked').val();
+        if(!tid){ alert('請選擇一個公差表'); return; }
+        $.post(V2API, { v2action:'tol_bands', table_id:tid }, function(res){
+            if(!res.success){ alert('載入公差區間失敗：'+(res.message||'')); return; }
+            var bands=(res.rows||[]).map(function(b){ return { lo:parseFloat(b.min_value), hi:parseFloat(b.max_value), up:b.plus_tolerance, mi:b.minus_tolerance }; });
+            var applied=0, outOfRange=0;
+            MODEL.items.forEach(function(it){
+                if(it.type==='OKNG') return;
+                if(String(it.up).trim()!=='' || String(it.lo).trim()!=='') return; // 已填不覆蓋
+                var v = parseFloat(it.std);
+                if(isNaN(v)) return;
+                var b = bands.find(function(x){ return v>=x.lo && v<=x.hi; });
+                if(!b){ outOfRange++; return; }
+                it.up=trimNum(String(b.up)); it.lo=trimNum(String(b.mi));
+                applied++;
+            });
+            $('#tolPickModal').modal('hide');
+            render(); scheduleDraftSave();
+            var msg='已套用 '+applied+' 個項目的上下公差。';
+            if(outOfRange>0) msg+='\n另有 '+outOfRange+' 個項目的標準值不在此公差表任何區間內，請自行填寫。';
+            alert(msg);
+        }, 'json');
+    });
+
+    $(document).on('click', '#btn-tol-manage', function(e){
+        e.preventDefault();
+        $('#tolPickModal').modal('hide');
+        openTolManage();
+    });
+
+    function openTolManage(){
+        $('#tolManageModal').modal('show');
+        renderTolMgList();
+        renderTolMgEditor(null);
+    }
+    function renderTolMgList(){
+        $('#tol-mg-list').html(TOL_TABLES.map(function(t){
+            return '<a href="#" class="list-group-item tol-mg-pick" data-id="'+t.id+'">'+esc(t.name)
+                 + (t.customer_name?'<br><small class="text-muted">客戶：'+esc(t.customer_name)+'</small>':'<br><small class="text-muted">通用標準</small>')+'</a>';
+        }).join('') || '<div class="text-muted" style="padding:8px;">尚無公差表</div>');
+    }
+    function loadTolCustomerOptions(cb){
+        if(tolMgCustOptions){ cb(tolMgCustOptions); return; }
+        $.post(V2API,{v2action:'tol_customer_options'}, function(res){
+            tolMgCustOptions = (res&&res.success)? (res.rows||[]) : [];
+            cb(tolMgCustOptions);
+        }, 'json');
+    }
+    function tolBandRowHtml(b){
+        b=b||{};
+        return '<tr><td><input type="number" step="any" class="form-control input-sm tb-min" value="'+esc(b.min_value!=null?b.min_value:'')+'"></td>'
+             + '<td><input type="number" step="any" class="form-control input-sm tb-max" value="'+esc(b.max_value!=null?b.max_value:'')+'"></td>'
+             + '<td><input type="number" step="any" class="form-control input-sm tb-plus" value="'+esc(b.plus_tolerance!=null?b.plus_tolerance:'')+'"></td>'
+             + '<td><input type="number" step="any" class="form-control input-sm tb-minus" value="'+esc(b.minus_tolerance!=null?b.minus_tolerance:'')+'"></td>'
+             + '<td><a href="#" class="tb-del text-danger"><i class="fa fa-trash"></i></a></td></tr>';
+    }
+    function renderTolEditorShell(t, bands){
+        t=t||{id:0,name:'',customer_id:''};
+        var html = '<div class="form-group"><label>公差表名稱</label><input type="text" class="form-control input-sm" id="tol-ed-name" value="'+esc(t.name||'')+'"></div>'
+          + '<div class="form-group"><label>對應客戶（選填，留空＝通用標準）</label>'
+          + '<div style="display:flex;gap:6px;align-items:center;">'
+          + '<input type="text" class="form-control input-sm" id="tol-ed-cust-filter" placeholder="輸入客戶名稱篩選…" style="max-width:220px;">'
+          + '<select class="form-control input-sm" id="tol-ed-cust" style="flex:1;"><option value="">（通用標準，不指定客戶）</option></select>'
+          + '</div></div>'
+          + '<table class="table table-condensed"><thead><tr><th>標準值下限</th><th>標準值上限</th><th>上公差</th><th>下公差</th><th></th></tr></thead>'
+          + '<tbody id="tol-ed-bands">'+(bands&&bands.length? bands.map(tolBandRowHtml).join('') : tolBandRowHtml())+'</tbody></table>'
+          + '<button class="btn btn-default btn-sm" id="btn-tol-ed-addrow"><i class="fa fa-plus"></i> 新增區間</button>'
+          + '<div style="margin-top:12px;text-align:right;">'
+          + (t.id? '<button class="btn btn-default" id="btn-tol-ed-del" style="color:#DD5138;margin-right:8px;"><i class="fa fa-trash"></i> 刪除此公差表</button>' : '')
+          + '<button class="btn btn-warm" id="btn-tol-ed-save">儲存</button></div>';
+        $('#tol-mg-editor').html(html).data('id', t.id||0);
+        loadTolCustomerOptions(function(rows){
+            var $sel=$('#tol-ed-cust');
+            rows.forEach(function(r){ $sel.append($('<option>').val(r.customer_id).text(r.customer)); });
+            if(t.customer_id) $sel.val(t.customer_id);
+        });
+    }
+    function renderTolMgEditor(t){
+        if(!t){ renderTolEditorShell(null, null); return; }
+        $('#tol-mg-editor').html('<div class="text-muted">載入中…</div>');
+        $.post(V2API,{v2action:'tol_bands', table_id:t.id}, function(res){
+            renderTolEditorShell(t, (res&&res.success)? res.rows : []);
+        }, 'json');
+    }
+    $(document).on('click', '.tol-mg-pick', function(e){
+        e.preventDefault();
+        var id=+$(this).data('id');
+        var t=TOL_TABLES.find(function(x){ return x.id==id; });
+        renderTolMgEditor(t);
+    });
+    $(document).on('click', '#btn-tol-mg-new', function(){ renderTolMgEditor(null); });
+    $(document).on('click', '#btn-tol-ed-addrow', function(){ $('#tol-ed-bands').append(tolBandRowHtml()); });
+    $(document).on('click', '.tb-del', function(e){
+        e.preventDefault();
+        var $tb=$('#tol-ed-bands');
+        if($tb.find('tr').length<=1){ $(this).closest('tr').find('input').val(''); return; }
+        $(this).closest('tr').remove();
+    });
+    // 客戶下拉打字篩選：此頁未載入全站共用 eg_input_rules.js（已有大量現有鍵盤/Enter流程，
+    // 硬套可能改變既有輸入行為），這裡僅針對本篩選框做最小範圍的本地實作，符合「長清單可打字篩選」的精神
+    $(document).on('input', '#tol-ed-cust-filter', function(){
+        var kw=$(this).val().trim().toLowerCase();
+        $('#tol-ed-cust option').each(function(){
+            if($(this).val()==='') return; // 永遠保留「通用標準」選項
+            var show = !kw || $(this).text().toLowerCase().indexOf(kw)>=0;
+            $(this).toggle(show);
+        });
+    });
+    $(document).on('click', '#btn-tol-ed-save', function(){
+        var id=$('#tol-mg-editor').data('id')||0;
+        var name=$('#tol-ed-name').val().trim();
+        if(!name){ alert('請輸入公差表名稱'); return; }
+        var custId=$('#tol-ed-cust').val()||'';
+        var bands=[];
+        $('#tol-ed-bands tr').each(function(){
+            var $tr=$(this);
+            var mn=$tr.find('.tb-min').val(), mx=$tr.find('.tb-max').val(), pu=$tr.find('.tb-plus').val(), mi=$tr.find('.tb-minus').val();
+            if(mn===''&&mx===''&&pu===''&&mi==='') return; // 整列空白略過
+            bands.push({min_value:mn, max_value:mx, plus_tolerance:pu, minus_tolerance:mi});
+        });
+        if(!bands.length){ alert('請至少填寫一個公差區間'); return; }
+        $.post(V2API, { v2action:'tol_table_save', id:id, name:name, customer_id:custId, bands:JSON.stringify(bands) }, function(res){
+            if(!res.success){ alert('儲存失敗：'+(res.message||'')); return; }
+            alert('已儲存');
+            refreshTolTables(function(){ renderTolMgList(); var t=TOL_TABLES.find(function(x){return x.id==res.id;}); if(t) renderTolMgEditor(t); });
+        }, 'json');
+    });
+    $(document).on('click', '#btn-tol-ed-del', function(){
+        var id=$('#tol-mg-editor').data('id')||0;
+        if(!id) return;
+        if(!confirm('確定要刪除此公差表？此動作無法復原。')) return;
+        $.post(V2API,{v2action:'tol_table_delete', id:id}, function(res){
+            if(!res.success){ alert('刪除失敗：'+(res.message||'')); return; }
+            refreshTolTables(function(){ renderTolMgList(); renderTolMgEditor(null); });
+        }, 'json');
+    });
+    function refreshTolTables(cb){
+        $.post(V2API,{v2action:'tol_tables', client:(ctx&&ctx.client)||''}, function(res){
+            if(res&&res.success){ TOL_TABLES=res.rows||[]; TOL_CAN_MANAGE=!!res.can_manage; TOL_MATCH_ID=res.match_id||0; }
+            if(cb) cb();
+        }, 'json');
+    }
 
     // =====================================================================
     // 存檔前檢核：把「缺了什麼、缺在哪一項」講清楚，而不是存進去才發現沒有量具可追溯
