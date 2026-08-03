@@ -939,6 +939,7 @@ if ($reply_id != "") {
                                             <td style="vertical-align:middle;">操作</td>
                                             <td>
                                                 <div class="qc-action-group">
+                                                    <button type="button" class="btn btn-primary btn-sm btn-option-inspect" title="開啟檢驗結果輸入（設定+輸入合一）">檢驗</button>
                                                     <button type="button" class="btn btn-warning btn-sm btn-option-abnormal">異常</button>
                                                     <button type="button" class="btn btn-success btn-sm btn-option-accept">允收</button>
                                                 </div>
@@ -4184,6 +4185,14 @@ if ($reply_id != "") {
                 customBomData = null; // 清除暫存資料
             });
 
+            // BOM 查詢欄位按 Enter 視同點擊「更新」
+            $(document).on('keydown', '#input-bom-query', function(e) {
+                if (e.which === 13) {
+                    e.preventDefault();
+                    $('#btn-bom-update').click();
+                }
+            });
+
             // 更新 BOM 資料
             $(document).on('click', '#btn-bom-update', function() {
                 const bom = $('#input-bom-query').val().trim();
@@ -4218,14 +4227,26 @@ if ($reply_id != "") {
                             if (!str) return 0;
                             return str.replace(/[^\x00-\xff]/g, "aa").length;
                         };
+                        // 已檢驗狀態（同主列表「狀態/檢驗」欄邏輯，顯示於製程下拉每個選項前）
+                        const getInspectStatusTag = (item) => {
+                            const qcCheck = (item.QC_check || '').trim();
+                            if (qcCheck === 'ng') return '不良';
+                            if (qcCheck === 'AOD') return '特採';
+                            const totalQty = parseFloat(item.sqty) || 0;
+                            const checkedQty = (parseFloat(item.QC_QQ_sqty) || 0) + (parseFloat(item.QC_ok_sqty) || 0);
+                            if (totalQty > 0 && checkedQty >= totalQty) return '已檢驗';
+                            if (checkedQty > 0) return '部分檢驗';
+                            return '待驗';
+                        };
                         let maxProcessLength = 0;
                         data.processes.forEach(item => {
-                            const processPart = `[${item.bom_sn}] ${item.process_no} ${item.ProcessName}`;
+                            item._inspectTag = getInspectStatusTag(item);
+                            const processPart = `【${item._inspectTag}】[${item.bom_sn}] ${item.process_no} ${item.ProcessName}`;
                             const len = getVisualLength(processPart);
                             if (len > maxProcessLength) maxProcessLength = len;
                         });
                         data.processes.forEach(function(item) {
-                            const processPart = `[${item.bom_sn}] ${item.process_no} ${item.ProcessName}`;
+                            const processPart = `【${item._inspectTag}】[${item.bom_sn}] ${item.process_no} ${item.ProcessName}`;
                             const currentLength = getVisualLength(processPart);
                             const paddingCount = maxProcessLength > currentLength ? maxProcessLength - currentLength : 0;
                             const padding = '\u00a0'.repeat(paddingCount);
@@ -4247,6 +4268,17 @@ if ($reply_id != "") {
                     customBomData = null;
                     alert('伺服器錯誤，無法取得BOM資料。');
                 });
+            });
+
+            // 在 myModal_reply_custom 中，檢驗 按鈕直接開啟檢驗結果輸入視窗（同列表上的「檢驗」鈕）
+            $(document).on('click', '#myModal_reply_custom .btn-option-inspect', function() {
+                var selectedFid = $('#select-bom-ing').val();
+                if (!selectedFid) {
+                    alert('請先選擇製程');
+                    return;
+                }
+                $('#myModal_reply_custom').modal('hide');
+                openInspectionEntry(selectedFid);
             });
 
             // 在 myModal_reply_custom 中，異常/允收 按鈕觸發 lazy modal
