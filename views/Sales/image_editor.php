@@ -318,9 +318,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json; charset=utf-8');
     // 儲存料號附件時會匯出大張 PNG＋整份 JSON 工作檔，預設 128M/60s 對大圖可能不夠；
     // 這裡只針對這支 AJAX 端點放寬，不動全域 php.ini
-    @ini_set('memory_limit', '512M');
+    @ini_set('memory_limit', '2048M');
     @ini_set('max_execution_time', 180);
-    // 若仍然爆掉（記憶體不足/逾時等 Fatal Error），display_errors 關閉下前端只會拿到空白內容
+    // 檔頭 ini_set('display_errors',1) 是全站設定，但這支端點一律回 JSON——只要有任何 Warning/Fatal
+    // 被印成 HTML（"<br /><b>Warning</b>..."）夾在輸出裡，前端 fetch().json() 就會整包解析失敗
+    // （症狀：Unexpected token '<' ... is not valid JSON）。這裡只在本端點局部關閉，錯誤仍會寫進
+    // php_error.log（log_errors 沒關），不影響除錯。
+    @ini_set('display_errors', '0');
+    // 若仍然爆掉（記憶體不足/逾時等 Fatal Error），前端會拿到空白內容
     // 造成 fetch().json() 丟出「Unexpected end of JSON input」；這裡攔截 Fatal Error 改回傳有意義的 JSON 錯誤
     register_shutdown_function(function () {
         $err = error_get_last();
@@ -561,8 +566,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $noWorkfile = !empty($_POST['no_workfile']);
             $work = $noWorkfile ? '' : ($_POST['work'] ?? '');
             // 分享範圍：私人／部門共用（預設）／指定人員；沒有「全公司共用」，避免任何人都能改到
-            // （這組範圍只管工作檔的可見性，no_workfile 時不建工作檔、以下欄位不使用）
-            $scope = in_array($_POST['scope'] ?? 'dept', ['private', 'dept', 'custom'], true) ? $_POST['scope'] : 'dept';
+            // （這組範圍只管工作檔的可見性，no_workfile 時不建工作檔、前端不會送這欄，故先取一次值再判斷，避免 undefined key）
+            $scopeRaw = $_POST['scope'] ?? 'dept';
+            $scope = in_array($scopeRaw, ['private', 'dept', 'custom'], true) ? $scopeRaw : 'dept';
             $shareIds = json_decode($_POST['share_user_ids'] ?? '[]', true);
             if (!is_array($shareIds)) $shareIds = [];
             $shareIds = array_values(array_unique(array_map('intval', $shareIds)));
