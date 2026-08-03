@@ -449,6 +449,38 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                         </div>
                     </div>
 
+                    <!-- 5.5 喪假親等與天數上限（2026-07-31 新增）-->
+                    <div id="bereavement-section" class="col-md-12 col-sm-12 col-xs-12">
+                        <div class="x_panel">
+                            <div class="x_title">
+                                <h2>喪假親等與天數上限
+                                    <small style="color:#8a6d45;">喪假可請幾天依亡故親屬的關係而定；預設依勞工請假規則第 3 條（8／6／3 日），可自行調整</small></h2>
+                                <ul class="nav navbar-right panel_toolbox">
+                                    <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
+                                </ul>
+                                <div class="clearfix"></div>
+                            </div>
+                            <div class="x_content">
+                                <?php if (strpos($leaveTypePerm, 'A') !== false || strpos($leaveTypePerm, 'C') !== false): ?>
+                                <button type="button" class="btn btn-primary" style="margin-bottom:12px;" id="btnAddGrade">新增親屬關係</button>
+                                <?php endif; ?>
+                                <table class="table table-striped table-hover">
+                                    <thead><tr>
+                                        <th style="width:80px;">順序</th><th>亡故親屬關係</th>
+                                        <th style="width:110px;">天數上限</th><th style="width:90px;">狀態</th>
+                                        <th style="width:110px;">已用於單據</th><th style="width:150px;">操作</th>
+                                    </tr></thead>
+                                    <tbody id="grade-table-body"></tbody>
+                                </table>
+                                <div class="text-muted" style="font-size:12px;">
+                                    <i class="fa fa-info-circle"></i>
+                                    這張表只在「特殊規則＝喪假」的假別上生效。已被請假單引用的關係不能刪除，只能<b>停用</b>
+                                    （停用後申請頁不再出現，但舊單仍讀得到關係名稱）。
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- 6. 請假系統設定（2026-07-29 新增）-->
                     <div id="leave-setting-section" class="col-md-12 col-sm-12 col-xs-12">
                         <div class="x_panel">
@@ -666,6 +698,70 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                                     <div class="text-muted" style="font-size:12px;margin-left:20px;">
                                         不勾選＝沒附證明就不能送出。勾選時單據會標記「待補證明」，但不影響主管簽核。
                                     </div>
+                                </div>
+                            </div>
+                            <hr>
+                            <!-- 假別特殊規則（2026-07-31）：喪假／育嬰類。判定實作在 src/common/leave_rules_lib.php -->
+                            <div class="form-group">
+                                <label for="rule_kind">特殊規則</label>
+                                <select class="form-control" id="rule_kind" name="rule_kind">
+                                    <option value="">無（一般假別）</option>
+                                    <option value="bereavement">喪假：依亡故親屬關係決定天數上限＋死亡日起 N 日內請畢</option>
+                                    <option value="parental">育嬰類：依子女出生日歸戶，子女滿 N 歲前＋每一子女上限</option>
+                                </select>
+                                <div class="text-muted" style="font-size:12px;">
+                                    選了規則後，申請頁會多出對應的必填欄位（喪假＝親屬關係＋死亡日期；育嬰類＝子女出生日期），
+                                    <b>違反規則一律擋下不給送出</b>，前端即時顯示原因、後端送審時再驗一次。
+                                </div>
+                            </div>
+                            <div id="ruleOpts" style="margin-left:20px;display:none;">
+                                <div class="row">
+                                    <div class="col-md-6 form-group" id="ruleMaxWrap">
+                                        <label style="font-weight:400;">每一事件／每一子女的上限</label>
+                                        <div style="display:flex;gap:6px;">
+                                            <input type="number" class="form-control" id="rule_max_value" name="rule_max_value"
+                                                   min="0" step="0.5" placeholder="留空＝不設上限" style="max-width:130px;">
+                                            <select class="form-control" id="rule_max_unit" name="rule_max_unit" style="max-width:110px;">
+                                                <option value="day">天</option>
+                                                <option value="month">月</option>
+                                                <option value="year">年</option>
+                                                <option value="hour">小時</option>
+                                            </select>
+                                        </div>
+                                        <div class="text-muted" style="font-size:12px;" id="ruleUnitHint"></div>
+                                    </div>
+                                    <div class="col-md-6 form-group" id="ruleDeadlineWrap">
+                                        <label style="font-weight:400;">自事件日（死亡日）起幾日內須請畢</label>
+                                        <input type="number" class="form-control" id="rule_deadline_days" name="rule_deadline_days"
+                                               min="0" step="1" placeholder="留空＝不限" style="max-width:160px;">
+                                        <div class="text-muted" style="font-size:12px;">勞工請假規則慣例為 100 日。</div>
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6 form-group" id="ruleAgeWrap">
+                                        <label style="font-weight:400;">子女滿幾歲前可請</label>
+                                        <input type="number" class="form-control" id="rule_child_age_years" name="rule_child_age_years"
+                                               min="0" step="0.5" placeholder="留空＝不限" style="max-width:160px;">
+                                        <div class="text-muted" style="font-size:12px;">育嬰留停依法為 3 歲；結束日不得晚於該子女生日當天。</div>
+                                    </div>
+                                    <div class="col-md-6 form-group" id="ruleMinWrap">
+                                        <label style="font-weight:400;">單次不得少於幾日（曆日）</label>
+                                        <input type="number" class="form-control" id="rule_min_days" name="rule_min_days"
+                                               min="0" step="1" placeholder="留空＝不限" style="max-width:160px;">
+                                        <div class="text-muted" style="font-size:12px;">育嬰留停依法單次不得低於 30 日；含假日一起算。</div>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label style="font-weight:400;">申請頁顯示的規則說明</label>
+                                    <input type="text" class="form-control" id="rule_note" name="rule_note" maxlength="255">
+                                    <div class="text-muted" style="font-size:12px;">會顯示在申請頁的規則區塊，讓填單的人知道限制是什麼。</div>
+                                </div>
+                                <div class="alert" style="background:#fdf6ea;border:1px solid #e9c98f;color:#8a5a1a;font-size:12.5px;padding:8px 12px;">
+                                    <b>上限的累計方式跟著單位走：</b>
+                                    「年／月」以<b>曆日</b>累計（長假講的是實際經過了多久，跳過假日算不出 2 年）；
+                                    「天」以<b>系統算出的請假天數（只計工作日）</b>累計，與特休同一把尺；
+                                    「小時」以<b>時數</b>累計。<br>
+                                    <b>喪假的天數上限不看這裡</b>，一律取自下方「喪假親等與天數上限」那張表，因為不同關係天數不同。
                                 </div>
                             </div>
                         </div>
@@ -1679,6 +1775,7 @@ $(function () {
             modal.find('#leave_type_id').val('');
             var form = modal.find('form');
             $('#attachOpts').toggle($('#require_attachment').is(':checked'));   // 依勾選顯示證明文件細部設定
+            $('#rule_kind').val('').trigger('change');                          // 規則欄位一併回到預設
             if (action === 'add') {
                 modal.find('.modal-title').text('新增假別');
                 form.data('action', 'add_leave_type'); // 設定 action
@@ -1699,6 +1796,15 @@ $(function () {
                         $('#require_attachment').prop('checked', parseInt(d.require_attachment) === 1).trigger('change');
                         $('#attach_min_days').val(parseFloat(d.attach_min_days || 0));
                         $('#allow_attach_later').prop('checked', parseInt(d.allow_attach_later) === 1);
+                        // 假別特殊規則（null 一律填空字串＝不設限，別填 0，0 會變成「上限 0」）
+                        $('#rule_kind').val(d.rule_kind || '');
+                        $('#rule_max_value').val(d.rule_max_value === null ? '' : parseFloat(d.rule_max_value));
+                        $('#rule_max_unit').val(d.rule_max_unit || 'day');
+                        $('#rule_deadline_days').val(d.rule_deadline_days === null ? '' : d.rule_deadline_days);
+                        $('#rule_child_age_years').val(d.rule_child_age_years === null ? '' : parseFloat(d.rule_child_age_years));
+                        $('#rule_min_days').val(d.rule_min_days === null ? '' : parseFloat(d.rule_min_days));
+                        $('#rule_note').val(d.rule_note || '');
+                        $('#rule_kind').trigger('change');
                     } else { alert('讀取資料失敗: ' + response.message); modal.modal('hide'); }
                 });
             }
@@ -1722,6 +1828,71 @@ $(function () {
                     { id: $b.data('id'), dir: $b.data('dir') }, function(res) {
                 if (res.status === 'success') loadLeaveTypes();   // 重載時會重新算按鈕可否點
                 else { alert('順序調整失敗: ' + res.message); $('.btn-move-leave-type').prop('disabled', false); }
+            });
+        });
+
+        // ── 假別特殊規則（2026-07-31）：只顯示該規則用得到的欄位，避免人事填了不生效的值 ──
+        $('#rule_kind').on('change', function(){
+            const k = this.value;
+            $('#ruleOpts').toggle(k !== '');
+            $('#ruleMaxWrap').toggle(k === 'parental');        // 喪假上限來自親等表，不在這裡填
+            $('#ruleDeadlineWrap').toggle(k === 'bereavement');
+            $('#ruleAgeWrap, #ruleMinWrap').toggle(k === 'parental');
+        });
+        $('#rule_max_unit').on('change', function(){
+            const m = {day:'以「請假天數（只計工作日）」累計，與特休同一把尺。',
+                       month:'以「曆日」累計，1 月＝30 曆日。',
+                       year:'以「曆日」累計，1 年＝365 曆日（2 年＝730 曆日）。',
+                       hour:'以「時數」累計。'};
+            $('#ruleUnitHint').text(m[this.value] || '');
+        }).trigger('change');
+
+        // ── 喪假親等與天數上限（2026-07-31）──────────────────────
+        function loadGrades() {
+            callApi(LEAVE_API_URL, 'get_bereavement_grades', 'GET', null, function(res) {
+                if (res.status !== 'success') { $('#grade-table-body').html('<tr><td colspan="6">讀取失敗</td></tr>'); return; }
+                const p = window.currentUserPerms.leave_type || '';
+                const canEdit = p.indexOf('A') >= 0 || p.indexOf('U') >= 0;
+                const canDel  = p.indexOf('A') >= 0 || p.indexOf('D') >= 0;
+                $('#grade-table-body').html((res.data || []).map(function(g) {
+                    const used = parseInt(g.used_count, 10) || 0;
+                    return '<tr><td>' + g.sort_order + '</td>'
+                        + '<td>' + $('<div>').text(g.grade_name).html() + '</td>'
+                        + '<td>' + parseFloat(g.max_days) + ' 天</td>'
+                        + '<td>' + (parseInt(g.is_active,10) === 1
+                              ? '<span class="label label-success">啟用</span>'
+                              : '<span class="label label-default">停用</span>') + '</td>'
+                        + '<td>' + (used ? (used + ' 張') : '—') + '</td>'
+                        + '<td>'
+                        + (canEdit ? '<button class="btn btn-xs btn-info btn-edit-grade" data-g=\''
+                              + JSON.stringify(g).replace(/'/g, '&#39;') + '\'>編輯</button> ' : '')
+                        + (canDel && !used ? '<button class="btn btn-xs btn-danger btn-del-grade" data-id="'
+                              + g.id + '">刪除</button>' : '')
+                        + '</td></tr>';
+                }).join('') || '<tr><td colspan="6">尚無資料</td></tr>');
+            });
+        }
+        function gradePrompt(g) {
+            g = g || {id:0, grade_name:'', max_days:'', sort_order:0, is_active:1};
+            const name = prompt('亡故親屬關係（例：父母、養父母、繼父母、配偶）', g.grade_name);
+            if (name === null) return;
+            const days = prompt('天數上限（日）', g.max_days === '' ? '' : parseFloat(g.max_days));
+            if (days === null) return;
+            const sort = prompt('顯示順序（數字小的排前面）', g.sort_order);
+            if (sort === null) return;
+            const act = confirm('要「啟用」這個關係嗎？\n\n確定＝啟用（申請頁看得到）\n取消＝停用（申請頁不出現，舊單仍讀得到）');
+            callApi(LEAVE_API_URL, 'save_bereavement_grade', 'POST',
+                {id:g.id, grade_name:name, max_days:days, sort_order:sort, is_active: act ? 1 : 0},
+                function(res) {
+                    if (res.status === 'success') loadGrades(); else alert('操作失敗: ' + res.message);
+                });
+        }
+        $('#btnAddGrade').on('click', function(){ gradePrompt(null); });
+        $(document).on('click', '.btn-edit-grade', function(){ gradePrompt($(this).data('g')); });
+        $(document).on('click', '.btn-del-grade', function(){
+            if (!confirm('確定刪除這個親屬關係？')) return;
+            callApi(LEAVE_API_URL, 'delete_bereavement_grade', 'POST', {id: $(this).data('id')}, function(res) {
+                if (res.status === 'success') loadGrades(); else alert('刪除失敗: ' + res.message);
             });
         });
 
@@ -1803,6 +1974,7 @@ $(function () {
             });
         });
         loadLeaveSettings();
+        loadGrades();
 
         $(document).on('click', '.btn-delete-leave-type', function() {
             if (confirm('您確定要刪除此假別嗎？')) {

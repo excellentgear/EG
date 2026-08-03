@@ -48,9 +48,83 @@ switch ($action) {
     case 'move_leave_type':
         moveLeaveType($db);
         break;
+    // ── 喪假親等與天數上限（2026-07-31 新增）──
+    case 'get_bereavement_grades':
+        getBereavementGrades($db);
+        break;
+    case 'save_bereavement_grade':
+        saveBereavementGrade($db);
+        break;
+    case 'delete_bereavement_grade':
+        deleteBereavementGrade($db);
+        break;
     default:
         echo json_encode(['status' => 'error', 'message' => '無效的操作。']);
         break;
+}
+
+/* ═══ 喪假親等（leave_bereavement_grade）═══
+   喪假可請幾天依亡故親屬的關係而定，一個數字表達不了，所以獨立成表由人事維護。
+   預設三級依勞工請假規則第 3 條（8/6/3 日）。 */
+function getBereavementGrades($db) {
+    if (!isset($_SESSION['id'])) { echo json_encode(['status' => 'error', 'message' => '尚未登入。']); exit; }
+    try {
+        $rows = $db->query("SELECT g.*,
+                    (SELECT COUNT(*) FROM leave_request r WHERE r.rel_grade_id = g.id) AS used_count
+                 FROM leave_bereavement_grade g ORDER BY g.sort_order, g.id")->fetchAll(PDO::FETCH_ASSOC);
+        echo json_encode(['status' => 'success', 'data' => $rows], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        echo json_encode(['status' => 'error', 'message' => '讀取失敗: ' . $e->getMessage()]);
+    }
+    exit;
+}
+function saveBereavementGrade($db) {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status' => 'error', 'message' => '僅接受 POST。']); exit; }
+    $id   = isset($_POST['id']) ? (int)$_POST['id'] : 0;
+    $name = isset($_POST['grade_name']) ? trim((string)$_POST['grade_name']) : '';
+    $days = isset($_POST['max_days']) ? max(0, (float)$_POST['max_days']) : 0;
+    $sort = isset($_POST['sort_order']) ? (int)$_POST['sort_order'] : 0;
+    $act  = empty($_POST['is_active']) ? 0 : 1;
+    if ($name === '') { echo json_encode(['status' => 'error', 'message' => '親屬關係不可為空。']); exit; }
+    if ($days <= 0)   { echo json_encode(['status' => 'error', 'message' => '天數上限必須大於 0，否則這個關係等於請不了假。']); exit; }
+    try {
+        $chk = $db->prepare("SELECT COUNT(*) FROM leave_bereavement_grade WHERE grade_name = ? AND id <> ?");
+        $chk->execute([$name, $id]);
+        if ($chk->fetchColumn() > 0) { echo json_encode(['status' => 'error', 'message' => '這個親屬關係已存在。']); exit; }
+        if ($id > 0) {
+            $db->prepare("UPDATE leave_bereavement_grade SET grade_name=?, max_days=?, sort_order=?, is_active=? WHERE id=?")
+               ->execute([$name, $days, $sort, $act, $id]);
+            echo json_encode(['status' => 'success', 'message' => '已更新。']);
+        } else {
+            $db->prepare("INSERT INTO leave_bereavement_grade (grade_name, max_days, sort_order, is_active) VALUES (?,?,?,?)")
+               ->execute([$name, $days, $sort, $act]);
+            echo json_encode(['status' => 'success', 'message' => '已新增。']);
+        }
+    } catch (PDOException $e) {
+        echo json_encode(['status' => 'error', 'message' => '資料庫錯誤: ' . $e->getMessage()]);
+    }
+    exit;
+}
+function deleteBereavementGrade($db) {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { echo json_encode(['status' => 'error', 'message' => '僅接受 POST。']); exit; }
+    $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
+    if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '無效的 ID。']); exit; }
+    try {
+        // 已被請假單引用就不能刪，否則舊單上的關係名稱會消失（比照假別刪除的防呆）
+        $st = $db->prepare("SELECT COUNT(*) FROM leave_request WHERE rel_grade_id = ?");
+        $st->execute([$id]);
+        $n = (int)$st->fetchColumn();
+        if ($n > 0) {
+            echo json_encode(['status' => 'error',
+                'message' => "已有 {$n} 張請假單使用此關係，不能刪除。若不想再讓人選到，請改成「停用」。"]);
+            exit;
+        }
+        $db->prepare("DELETE FROM leave_bereavement_grade WHERE id = ?")->execute([$id]);
+        echo json_encode(['status' => 'success', 'message' => '已刪除。']);
+    } catch (PDOException $e) {
+        echo json_encode(['status' => 'error', 'message' => '資料庫錯誤: ' . $e->getMessage()]);
+    }
+    exit;
 }
 
 /**
@@ -66,7 +140,49 @@ function leaveTypeExtraFields(): array {
         'attach_min_days'    => isset($_POST['attach_min_days']) ? max(0, (float)$_POST['attach_min_days']) : 0,
         // 沒送這個欄位時預設允許補件（比較寬鬆，不會卡住使用者送單）
         'allow_attach_later' => array_key_exists('allow_attach_later', $_POST) ? (empty($_POST['allow_attach_later']) ? 0 : 1) : 1,
+    ] + leaveTypeRuleFields();
+}
+
+/**
+ * 假別特殊規則參數（2026-07-31 新增）：喪假／育嬰類。
+ * 規則的實際判定在 src/common/leave_rules_lib.php，這裡只負責存設定值。
+ * 空字串一律存 NULL（＝不設限），不要存 0 —— 0 會被當成「上限 0」，人事會請不了假。
+ */
+function leaveTypeRuleFields(): array {
+    $kind = isset($_POST['rule_kind']) ? trim((string)$_POST['rule_kind']) : '';
+    if (!in_array($kind, ['', 'bereavement', 'parental'], true)) $kind = '';
+    $unit = isset($_POST['rule_max_unit']) ? trim((string)$_POST['rule_max_unit']) : 'day';
+    if (!in_array($unit, ['day', 'month', 'year', 'hour'], true)) $unit = 'day';
+    $numOrNull = function ($k) {
+        if (!isset($_POST[$k])) return null;
+        $v = trim((string)$_POST[$k]);
+        return ($v === '') ? null : max(0, (float)$v);
+    };
+    $intOrNull = function ($k) {
+        if (!isset($_POST[$k])) return null;
+        $v = trim((string)$_POST[$k]);
+        return ($v === '') ? null : max(0, (int)$v);
+    };
+    return [
+        'rule_kind'            => $kind,
+        'rule_max_value'       => $numOrNull('rule_max_value'),
+        'rule_max_unit'        => $unit,
+        'rule_deadline_days'   => $intOrNull('rule_deadline_days'),
+        'rule_child_age_years' => $numOrNull('rule_child_age_years'),
+        'rule_min_days'        => $numOrNull('rule_min_days'),
+        'rule_note'            => isset($_POST['rule_note']) ? mb_substr(trim((string)$_POST['rule_note']), 0, 255) : '',
     ];
+}
+
+/** 規則欄位的 SQL 片段與繫結（新增/更新共用，避免兩邊漏欄位） */
+function bindLeaveTypeRules(PDOStatement $stmt, array $ext): void {
+    $stmt->bindValue(':rule_kind',  $ext['rule_kind'], PDO::PARAM_STR);
+    $stmt->bindValue(':rule_max_unit', $ext['rule_max_unit'], PDO::PARAM_STR);
+    $stmt->bindValue(':rule_note', $ext['rule_note'], PDO::PARAM_STR);
+    foreach (['rule_max_value', 'rule_deadline_days', 'rule_child_age_years', 'rule_min_days'] as $k) {
+        if ($ext[$k] === null) $stmt->bindValue(':' . $k, null, PDO::PARAM_NULL);
+        else $stmt->bindValue(':' . $k, $ext[$k]);
+    }
 }
 
 /**
@@ -231,9 +347,14 @@ function addLeaveType($db) { // 改為只接收 $db
         $ext = leaveTypeExtraFields();
         $stmt = $db->prepare(
             "INSERT INTO leave_type (leave_name, need_approval, agent, max_approval_level,
-                                     unit_type, require_attachment, attach_min_days, allow_attach_later)
-             VALUES (:name, :need_approval, :agent, :max_level, :unit_type, :req_att, :att_min, :att_later)"
+                                     unit_type, require_attachment, attach_min_days, allow_attach_later,
+                                     rule_kind, rule_max_value, rule_max_unit, rule_deadline_days,
+                                     rule_child_age_years, rule_min_days, rule_note)
+             VALUES (:name, :need_approval, :agent, :max_level, :unit_type, :req_att, :att_min, :att_later,
+                     :rule_kind, :rule_max_value, :rule_max_unit, :rule_deadline_days,
+                     :rule_child_age_years, :rule_min_days, :rule_note)"
         );
+        bindLeaveTypeRules($stmt, $ext);
         $stmt->bindParam(':name', $name, PDO::PARAM_STR);
         $stmt->bindParam(':need_approval', $need_approval, PDO::PARAM_INT);
         $stmt->bindParam(':agent', $agent, PDO::PARAM_INT);
@@ -263,7 +384,9 @@ function getLeaveTypeDetails($db) { // 改為只接收 $db
 
     try {
         $stmt = $db->prepare("SELECT id, leave_name, need_approval, agent, max_approval_level,
-                  unit_type, require_attachment, attach_min_days, allow_attach_later, sort_order
+                  unit_type, require_attachment, attach_min_days, allow_attach_later, sort_order,
+                  rule_kind, rule_max_value, rule_max_unit, rule_deadline_days,
+                  rule_child_age_years, rule_min_days, rule_note
            FROM leave_type WHERE id = :id");
         $stmt->bindParam(':id', $id, PDO::PARAM_INT);
         $stmt->execute();
@@ -324,9 +447,14 @@ function updateLeaveType($db) { // 改為只接收 $db
             "UPDATE leave_type SET leave_name = :name, need_approval = :need_approval, agent = :agent,
                                    max_approval_level = :max_level, unit_type = :unit_type,
                                    require_attachment = :req_att, attach_min_days = :att_min,
-                                   allow_attach_later = :att_later
+                                   allow_attach_later = :att_later,
+                                   rule_kind = :rule_kind, rule_max_value = :rule_max_value,
+                                   rule_max_unit = :rule_max_unit, rule_deadline_days = :rule_deadline_days,
+                                   rule_child_age_years = :rule_child_age_years,
+                                   rule_min_days = :rule_min_days, rule_note = :rule_note
              WHERE id = :id"
         );
+        bindLeaveTypeRules($stmt, $ext);
         $stmt->bindParam(':name', $name, PDO::PARAM_STR);
         $stmt->bindParam(':need_approval', $need_approval, PDO::PARAM_INT);
         $stmt->bindParam(':agent', $agent, PDO::PARAM_INT);

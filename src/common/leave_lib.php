@@ -25,6 +25,7 @@
 
 require_once __DIR__ . '/delegate_lib.php';
 require_once __DIR__ . '/annual_leave_lib.php';
+require_once __DIR__ . '/leave_rules_lib.php';   // 喪假／育嬰類的假別特殊規則（唯一守門處）
 
 // ============================== 設定 ==============================
 
@@ -826,8 +827,9 @@ if (!function_exists('eg_leave_submit')) {
     /**
      * 送審請假單（transaction）。
      * $in = ['employee_id','leave_type_id','start_datetime','end_datetime','reason',
-     *        'agent_user_id'(假別 agent=1 必填，須為候選代理人之一)，'upload_token'(暫存附件批次)]
-     * 回傳 ['ok'=>bool,'id'=>int,'msg'=>string,'need_attach_later'=>bool]
+     *        'agent_user_id'(假別 agent=1 必填，須為候選代理人之一)，'upload_token'(暫存附件批次),
+     *        'rel_grade_id','deceased_date'(喪假)，'child_birthday'(育嬰類)]
+     * 回傳 ['ok'=>bool,'id'=>int,'msg'=>string,'need_attach_later'=>bool,'warns'=>string[]]
      */
     function eg_leave_submit(PDO $db, array $in): array {
         $uid   = (int)($in['employee_id'] ?? 0);
@@ -837,6 +839,8 @@ if (!function_exists('eg_leave_submit')) {
         $reason = trim((string)($in['reason'] ?? ''));
         $agentId = (int)($in['agent_user_id'] ?? 0);
         $token = trim((string)($in['upload_token'] ?? ''));
+        // 假別特殊規則欄位（喪假的親等/死亡日、育嬰類的子女出生日）
+        $extra = eg_leave_rule_extra_in($in);
         $cfg = eg_leave_settings($db);
 
         if (!$uid || !$tid || !$start || !$end) return ['ok' => false, 'msg' => '缺少必要欄位'];
@@ -882,6 +886,12 @@ if (!function_exists('eg_leave_submit')) {
             }
         }
 
+        // 假別特殊規則（喪假親等天數/百日期限、育嬰類子女年齡與每一子女上限）
+        // 前端已經即時驗過一次，這裡是唯一守門處，不採信前端送來的任何判斷結果。
+        $ruleChk = eg_leave_rule_check($db, $uid, $type, $start, $end, $amt, $extra);
+        if (!$ruleChk['ok']) return ['ok' => false, 'msg' => $ruleChk['msg']];
+        $store = eg_leave_rule_extra_store($type, $extra);
+
         // 代理人（2026-07-30 使用者定案：**不由申請人挑選**）
         // 人事設定已有優先順序，系統自動取第一順位；該順位若在本期間也請假就往下一位；
         // 多個職務身分（主職＋兼任）各自解析一位。無任何代理設定＝此職務不需代理，放行不擋。
@@ -923,10 +933,12 @@ if (!function_exists('eg_leave_submit')) {
 
             $db->prepare("INSERT INTO leave_request
                             (employee_id, leave_type_id, start_datetime, end_datetime, reason, status,
-                             agent_user_id, total_hours, total_days, is_backdated, attach_status, submit_time, last_update)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())")
+                             agent_user_id, total_hours, total_days, is_backdated, attach_status,
+                             rel_grade_id, deceased_date, child_birthday, submit_time, last_update)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())")
                ->execute([$uid, $tid, $start, $end, $reason, $needApproval ? 'pending' : 'approved',
-                          $agentId ?: null, $amt['hours'], $amt['days'], $isBackdated, $attachStatus]);
+                          $agentId ?: null, $amt['hours'], $amt['days'], $isBackdated, $attachStatus,
+                          $store['rel_grade_id'], $store['deceased_date'], $store['child_birthday']]);
             $reqId = (int)$db->lastInsertId();
 
             // leave_approval：每層一列一次建好（流程狀態表）。approver_id=該層應簽主管（本人），
@@ -990,7 +1002,8 @@ if (!function_exists('eg_leave_submit')) {
         }
 
         return ['ok' => true, 'id' => $reqId, 'msg' => $needApproval ? '已送審' : '已核准（此假別免簽）',
-                'need_attach_later' => ($attachStatus === 'pending')];
+                'need_attach_later' => ($attachStatus === 'pending'),
+                'warns' => $ruleChk['warns']];   // 例如多子女育嬰須合併計算的提醒（不擋單，但要讓人看到）
     }
 }
 
@@ -1080,6 +1093,12 @@ if (!function_exists('eg_leave_update')) {
             }
         }
 
+        // 假別特殊規則：改單一樣要驗（排除自己這張單，否則會拿自己去撞自己的累計上限）
+        $extra = eg_leave_rule_extra_in($in);
+        $ruleChk = eg_leave_rule_check($db, $uid, $type, $start, $end, $amt, $extra, $requestId);
+        if (!$ruleChk['ok']) return ['ok' => false, 'msg' => $ruleChk['msg']];
+        $store = eg_leave_rule_extra_store($type, $extra);
+
         // 代理人：改單後期間可能變了，重新自動解析（排除本單自己，否則會判定「代理人也請假」）
         $agents = ((int)$type['agent'] === 1) ? eg_leave_resolve_agents($db, $uid, $start, $end, $requestId) : [];
         $agentId = null;
@@ -1111,11 +1130,13 @@ if (!function_exists('eg_leave_update')) {
             $db->prepare("UPDATE leave_request
                           SET leave_type_id = ?, start_datetime = ?, end_datetime = ?, reason = ?,
                               agent_user_id = ?, total_hours = ?, total_days = ?, is_backdated = ?,
-                              attach_status = ?, status = ?, last_update = NOW()
+                              attach_status = ?, status = ?,
+                              rel_grade_id = ?, deceased_date = ?, child_birthday = ?, last_update = NOW()
                           WHERE id = ?")
                ->execute([$tid, $start, $end, trim((string)($in['reason'] ?? '')), $agentId ?: null,
                           $amt['hours'], $amt['days'], $isBackdated, $attachStatus,
-                          $needApproval ? 'pending' : 'approved', $requestId]);
+                          $needApproval ? 'pending' : 'approved',
+                          $store['rel_grade_id'], $store['deceased_date'], $store['child_birthday'], $requestId]);
 
             // 簽核鏈重建（假別可能換成需簽不同層數；此時尚無人簽過，直接重建最單純）
             $db->prepare("DELETE FROM leave_approval WHERE leave_request_id = ?")->execute([$requestId]);
@@ -1165,7 +1186,7 @@ if (!function_exists('eg_leave_update')) {
             eg_leave_notify($db, $requestId, "✏️ 請假單 #{$requestId} 已修改，待您簽核", $body,
                             [$r['signer_id']], $uid, (string)($in['reason'] ?? ''), 'sign', 'LEAVE_APPROVAL');
         }
-        return ['ok' => true, 'msg' => '已修改並重新送審', 'id' => $requestId];
+        return ['ok' => true, 'msg' => '已修改並重新送審', 'id' => $requestId, 'warns' => $ruleChk['warns']];
     }
 }
 

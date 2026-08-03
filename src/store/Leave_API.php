@@ -72,7 +72,9 @@ switch ($action) {
 case 'bootstrap': {
     // 假別清單
     $types = $db->query("SELECT id, leave_name, agent, need_approval, max_approval_level,
-                                unit_type, require_attachment, attach_min_days, allow_attach_later
+                                unit_type, require_attachment, attach_min_days, allow_attach_later,
+                                rule_kind, rule_max_value, rule_max_unit, rule_deadline_days,
+                                rule_child_age_years, rule_min_days, rule_note
                          FROM leave_type ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     // 我的候選代理人（唯讀，來自 delegate_lib）
     $cands = eg_person_delegate_candidates($db, $user_id);
@@ -95,6 +97,8 @@ case 'bootstrap': {
          'year_usage' => $yearUsage,
          'my_years' => $myYears,
          'cur_year' => (int)date('Y'),
+         // 喪假親等（申請頁下拉用；只給啟用中的）
+         'grades' => eg_leave_rule_grades($db, true),
          'settings' => [
              'backdate_limit_days' => (int)$cfg['leave_backdate_limit_days'],
              'hours_per_day' => (float)$cfg['leave_hours_per_day'],
@@ -153,6 +157,27 @@ case 'preview': {
         $ret['agents'] = [];
     }
     $ret['agent_required'] = ((int)$type['agent'] === 1);
+
+    // ── 假別特殊規則（喪假／育嬰類）：即時回檢查結果與剩餘額度，前端當下就顯示原因 ──
+    // 這裡跟送審走的是同一支 eg_leave_rule_check()，所以畫面說可以送、後端就一定收得下；
+    // 反過來說前端要是被人繞過，送審那關仍會用同一套規則擋下。
+    $ret['rule_kind'] = (string)$type['rule_kind'];
+    $ret['rule_note'] = (string)$type['rule_note'];
+    if ($type['rule_kind'] !== '') {
+        $extra = eg_leave_rule_extra_in($_GET);
+        $ret['rule_extra'] = $extra;
+        $editId = (int)($_GET['edit_id'] ?? 0);   // 修改既有單時要排除自己
+        $q = eg_leave_rule_quota($db, $user_id, $type, $extra, $editId ?: null);
+        $ret['rule_quota'] = $q;
+        if ($start && $end && isset($ret['amount'])) {
+            $chk = eg_leave_rule_check($db, $user_id, $type, $start, $end, $ret['amount'], $extra, $editId ?: null);
+            $ret['rule_ok'] = $chk['ok'];
+            $ret['rule_msg'] = $chk['msg'];
+            $ret['rule_warns'] = $chk['warns'];
+        }
+        // 喪假：親等決定天數上限，畫面要能顯示「這個關係可請幾天」
+        if ($type['rule_kind'] === 'bereavement') $ret['grades'] = eg_leave_rule_grades($db, true);
+    }
     out($ret);
 }
 
@@ -179,6 +204,10 @@ case 'submit': {
         'reason'         => trim((string)($_POST['reason'] ?? '')),
         // 代理人不再由前端傳入：系統依人事設定的順位自動解析（2026-07-30 定案）
         'upload_token'   => $token,
+        // 假別特殊規則欄位；是否採用由後端依該假別的 rule_kind 決定（前端亂送也不會亂存）
+        'rel_grade_id'   => $_POST['rel_grade_id'] ?? '',
+        'deceased_date'  => $_POST['deceased_date'] ?? '',
+        'child_birthday' => $_POST['child_birthday'] ?? '',
     ]);
     // 送審成功：把 temp 目錄的實體檔搬到正式目錄 req_<id>（DB 轉正已在 lib 的 transaction 內完成）
     if ($r['ok'] && $token !== '') {
@@ -202,7 +231,8 @@ case 'submit': {
         } catch (Throwable $e) { /* 搬檔失敗不影響單據；下載時會提示檔案不存在再人工處理 */ }
     }
     out(['success' => $r['ok'], 'message' => $r['msg'], 'id' => $r['id'] ?? null,
-         'need_attach_later' => $r['need_attach_later'] ?? false]);
+         'need_attach_later' => $r['need_attach_later'] ?? false,
+         'warns' => $r['warns'] ?? []]);
 }
 
 // ════════════════ 修改（審核前） ════════════════
@@ -216,8 +246,12 @@ case 'update': {
         'end_datetime'   => trim((string)($_POST['end_datetime'] ?? '')),
         'reason'         => trim((string)($_POST['reason'] ?? '')),
         // 代理人不再由前端傳入：系統依人事設定的順位自動解析（2026-07-30 定案）
+        'rel_grade_id'   => $_POST['rel_grade_id'] ?? '',
+        'deceased_date'  => $_POST['deceased_date'] ?? '',
+        'child_birthday' => $_POST['child_birthday'] ?? '',
     ], $IS_ADMIN);
-    out(['success' => $r['ok'], 'message' => $r['msg'], 'id' => $r['id'] ?? null]);
+    out(['success' => $r['ok'], 'message' => $r['msg'], 'id' => $r['id'] ?? null,
+         'warns' => $r['warns'] ?? []]);
 }
 
 // ════════════════ 簽核 ════════════════
@@ -391,12 +425,16 @@ case 'detail': {
     $reqId = (int)($_GET['id'] ?? 0);
     if (!$reqId) bad('缺少參數');
     $st = $db->prepare(
-        "SELECT lr.*, lt.leave_name, lt.unit_type, lt.require_attachment, u.user_cname AS applicant_name,
-                ag.user_cname AS agent_name
+        "SELECT lr.*, lt.leave_name, lt.unit_type, lt.require_attachment, lt.rule_kind,
+                u.user_cname AS applicant_name, ag.user_cname AS agent_name,
+                bg.grade_name AS rel_grade_name, bg.max_days AS rel_grade_days,
+                eb.user_cname AS early_end_by_name
          FROM leave_request lr
          JOIN leave_type lt ON lt.id = lr.leave_type_id
          JOIN user u ON u.id = lr.employee_id
          LEFT JOIN user ag ON ag.id = lr.agent_user_id
+         LEFT JOIN leave_bereavement_grade bg ON bg.id = lr.rel_grade_id
+         LEFT JOIN user eb ON eb.id = lr.early_end_by
          WHERE lr.id = ? LIMIT 1");
     $st->execute([$reqId]);
     $req = $st->fetch(PDO::FETCH_ASSOC);

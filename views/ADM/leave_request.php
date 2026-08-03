@@ -131,6 +131,14 @@ input[type=number]{-moz-appearance:textfield;}
 .scope-btn,.status-btn{background:#fffdf9;border:1px solid var(--sand-d);color:#8a6d45;font-size:12.5px;}
 .scope-btn:hover,.status-btn:hover{background:#f7e9d5;color:#6b5638;}
 .scope-btn.on,.status-btn.on{background:var(--amber);border-color:var(--amber-d);color:#fff;font-weight:600;}
+/* ── 假別特殊規則（喪假／育嬰類）── */
+.rule-box{background:#fdf6ea;border:1px solid #e9c98f;border-radius:6px;padding:10px 12px;}
+.rule-box label{font-size:12.5px;color:#6b5638;margin-bottom:3px;font-weight:600;display:block;}
+.rule-err{background:#fbe6df;border:1px solid #e0a795;color:#a3341f;border-radius:5px;padding:6px 10px;}
+.rule-ok{color:#4d6b2e;}
+.rule-warn{background:#fdf0dc;border:1px solid #e9c98f;color:#8a5a1a;border-radius:5px;padding:6px 10px;margin-top:5px;}
+.quota-pill{display:inline-block;background:#fff;border:1px solid var(--sand-d);border-radius:12px;
+            padding:2px 10px;margin-right:6px;white-space:nowrap;}
 /* ── 請假統計 ── */
 .chart-box{position:relative;height:300px;}                 /* Chart.js 需要固定高度的容器 */
 .chart-box canvas{max-width:100%;}
@@ -234,6 +242,34 @@ input[type=number]{-moz-appearance:textfield;}
           選好開始日期後，系統會依您當天的<b>固定班別排班</b>自動帶出整天的起訖（時間以半小時為單位）；
           只請半天或幾小時，直接改時間即可。
           <button type="button" class="btn btn-xs btn-default" style="margin-left:6px;" onclick="applyShift(true)">重新帶入排班時間</button>
+        </div>
+
+        <!-- 假別特殊規則欄位：喪假＝亡故親屬關係＋死亡日期；育嬰類＝子女出生日期。
+             只有該假別在「人事設定→假別設定」設了規則種類才會出現整個區塊。
+             這裡的即時檢查與送審用的是同一支後端規則（preview 回傳），畫面說可以送就一定送得出去。 -->
+        <div class="row" id="ruleBlock" style="display:none;">
+          <div class="col-md-12" style="margin-bottom:10px;">
+            <div class="rule-box">
+              <div style="font-size:12.5px;color:#8a5a1a;margin-bottom:8px;" id="ruleNote"></div>
+              <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+                <div id="ruleGradeWrap" style="display:none;min-width:280px;flex:1 1 320px;">
+                  <label>亡故親屬關係 <span style="color:var(--coral);">*</span></label>
+                  <select class="form-control input-sm eg-inp" id="fRelGrade"></select>
+                </div>
+                <div id="ruleDeceasedWrap" style="display:none;min-width:170px;">
+                  <label>死亡日期 <span style="color:var(--coral);">*</span></label>
+                  <input type="date" class="form-control input-sm eg-inp" id="fDeceasedDate" max="9999-12-31">
+                </div>
+                <div id="ruleChildWrap" style="display:none;min-width:190px;">
+                  <label>子女出生日期 <span style="color:var(--coral);">*</span></label>
+                  <input type="date" class="form-control input-sm eg-inp" id="fChildBirthday" max="9999-12-31">
+                  <div style="font-size:11px;color:#9a7b4f;margin-top:2px;">依出生日歸戶累計，不需填姓名</div>
+                </div>
+                <div id="ruleQuota" style="flex:1;min-width:230px;font-size:12.5px;color:#6b5638;"></div>
+              </div>
+              <div id="ruleMsg" style="margin-top:8px;font-size:12.5px;"></div>
+            </div>
+          </div>
         </div>
 
         <div class="row">
@@ -579,7 +615,7 @@ input[type=number]{-moz-appearance:textfield;}
 const API = '../../src/store/Leave_API.php';
 const IS_ADMIN = <?= $IS_ADMIN ? 'true' : 'false' ?>;
 const IS_SUPERADMIN = <?= $IS_SUPERADMIN ? 'true' : 'false' ?>;   // 僅 id=1 且 state=99，可徹底刪除
-let CSRF = '', TYPES = [], AGENTS = [], SETTINGS = {}, ME = {};
+let CSRF = '', TYPES = [], AGENTS = [], SETTINGS = {}, ME = {}, GRADES = [];
 let CUR_YEAR = (new Date()).getFullYear();
 let uploadToken = '';
 let listPage = 1, listTotal = 0, curDetailId = 0, curDetailCanCancel = false, curDetailStatus = '';
@@ -617,6 +653,7 @@ function boot(){
   $.getJSON(API, {action:'bootstrap'}, function(r){
     if(!r.success){ alert(r.message||'載入失敗'); return; }
     CSRF = r.csrf; TYPES = r.leave_types||[]; AGENTS = r.agent_candidates||[]; SETTINGS = r.settings||{}; ME = r.me||{};
+    GRADES = r.grades||[];   // 喪假親等（人事設定維護）
     // 假別下拉
     const $t = $('#fType').empty().append('<option value="">請選擇假別</option>');
     TYPES.forEach(t => $t.append('<option value="'+t.id+'">'+esc(t.leave_name)+'</option>'));
@@ -672,7 +709,8 @@ function renderYearUsage(list){
 $(document).on('change', '#fType', function(){
   const t = TYPES.find(x => String(x.id) === String(this.value));
   if(!t){ $('#typeHint').text(''); $('#attReq').hide(); $('#attachBlock').hide();
-          $('#signerPrev').hide(); $('#agentPrev').hide(); return; }
+          $('#signerPrev').hide(); $('#agentPrev').hide(); $('#ruleBlock').hide(); ruleOk = true; return; }
+  renderRuleFields(t);
   const unit = {hour:'可請時假（以半小時為單位）', halfday:'以半天為單位（不足半天以半天計）', day:'以整天為單位'}[t.unit_type] || '';
   let hint = unit;
   if(+t.need_approval === 0) hint += '｜此假別免主管簽核';
@@ -697,6 +735,63 @@ $(document).on('change', '#fType', function(){
   }
   doPreview();
 });
+/* ══ 假別特殊規則（喪假／育嬰類）══
+   規則參數放在每一個假別上（leave_type.rule_*），所以這裡完全不寫死假別名稱——
+   人事之後新增別的假別套同一套規則，這段程式不用改。 */
+let ruleOk = true;      // 目前規則檢查是否通過（false 時擋住送出）
+function renderRuleFields(t){
+  const kind = String(t.rule_kind || '');
+  if(!kind){ $('#ruleBlock').hide(); ruleOk = true; return; }
+  $('#ruleBlock').show();
+  $('#ruleNote').html(t.rule_note ? ('<i class="fa fa-info-circle"></i> ' + esc(t.rule_note)) : '');
+  const isBer = (kind === 'bereavement');
+  $('#ruleGradeWrap, #ruleDeceasedWrap').toggle(isBer);
+  $('#ruleChildWrap').toggle(!isBer);
+  if(isBer && !$('#fRelGrade option').length){
+    $('#fRelGrade').html('<option value="">請選擇亡故親屬關係</option>'
+      + (GRADES||[]).map(g => '<option value="'+g.id+'">'+esc(g.grade_name)+'（'+num(g.max_days)+' 天）</option>').join(''));
+  }
+  $('#ruleMsg').empty(); $('#ruleQuota').empty();
+}
+function ruleExtra(){
+  return {rel_grade_id: $('#fRelGrade').val() || '',
+          deceased_date: $('#fDeceasedDate').val() || '',
+          child_birthday: $('#fChildBirthday').val() || ''};
+}
+// 規則欄位一改就重新試算＋重驗（推導出來的剩餘額度不可留舊值）
+$(document).on('change', '#fRelGrade, #fDeceasedDate, #fChildBirthday', function(){ doPreview(); });
+function renderRuleResult(r){
+  if(!r.rule_kind){ ruleOk = true; return; }
+  const q = r.rule_quota;
+  if(q){
+    $('#ruleQuota').html(
+      '<span class="quota-pill">上限 <b>'+num(q.cap)+'</b> '+esc(q.unit_word)+'</span>'
+    + '<span class="quota-pill">已請 <b>'+num(q.used)+'</b> '+esc(q.unit_word)+'</span>'
+    + '<span class="quota-pill" style="border-color:var(--amber);">剩餘 <b style="color:var(--amber-d);">'
+      + num(q.remaining)+'</b> '+esc(q.unit_word)+'</span>'
+    + '<div style="font-size:11px;color:#9a7b4f;margin-top:3px;">累計方式：'+esc(q.measure)
+    + (q.existing ? ('　已有 '+q.existing+' 張相關單據') : '') + '</div>');
+  } else {
+    $('#ruleQuota').html('<span style="color:#9a7b4f;font-size:12px;">'
+      + (r.rule_kind === 'bereavement' ? '選好親屬關係與死亡日期後，這裡會顯示可請天數與已用量。'
+                                       : '填好子女出生日期後，這裡會顯示該子女的累計上限與剩餘。') + '</span>');
+  }
+  let h = '';
+  if(r.rule_ok === false){
+    ruleOk = false;
+    h = '<div class="rule-err"><i class="fa fa-times-circle"></i> ' + esc(r.rule_msg) + '</div>';
+  } else if(r.rule_ok === true){
+    ruleOk = true;
+    h = '<div class="rule-ok"><i class="fa fa-check-circle"></i> 符合此假別的規定。</div>';
+  } else {
+    ruleOk = true;   // 尚未填齊，交給送出時的必填檢查
+  }
+  (r.rule_warns || []).forEach(function(w){
+    h += '<div class="rule-warn"><i class="fa fa-exclamation-triangle"></i> ' + esc(w) + '</div>';
+  });
+  $('#ruleMsg').html(h);
+}
+
 /* ── 時間：直接輸入（09:00 / 0900 / 9 都可），禁用下拉；離開欄位才正規化，即時說明錯誤原因
       規範見 ai-rules/08 第二之二節；實作比照 views/ADM/training_record.php 的 parseTime() ── */
 function parseTime(v){
@@ -841,8 +936,11 @@ function doPreview(){
   previewTimer = setTimeout(function(){
     const tid = $('#fType').val(), s = startDT(), e = endDT();
     if(!tid){ return; }
-    $.getJSON(API, {action:'preview', leave_type_id:tid, start:s, end:e}, function(r){
+    const q = $.extend({action:'preview', leave_type_id:tid, start:s, end:e}, ruleExtra());
+    if(editingId) q.edit_id = editingId;   // 修改既有單時，累計上限要把自己排除
+    $.getJSON(API, q, function(r){
       if(!r.success) return;
+      renderRuleResult(r);
       if(r.amount){
         $('#fAmount').val(r.amount.hours>0 ? (num(r.amount.hours)+' 小時（'+num(r.amount.days)+' 天，'+r.amount.workdays+' 個工作日）') : '時段內無工作日');
       } else $('#fAmount').val('');
@@ -914,12 +1012,27 @@ function submitLeave(){
   if(!pt.ok){ timeErr('fTimeTo', pt.msg); $('#fTimeTo').focus(); return; }
   if(!checkTimeOrder()){ $('#fTimeTo').focus(); return; }
   if(!s || !e){ $('#applyMsg').html('<span style="color:#a3341f;">請填寫完整的開始與結束日期時間</span>'); return; }
+  // 假別特殊規則的必填與檢查結果（後端送審時會用同一套規則再驗一次）
+  const rt = TYPES.find(x => String(x.id) === String(tid));
+  if(rt && rt.rule_kind === 'bereavement'){
+    if(!$('#fRelGrade').val()){ $('#applyMsg').html('<span style="color:#a3341f;">請選擇亡故親屬關係</span>'); $('#fRelGrade').focus(); return; }
+    if(!$('#fDeceasedDate').val()){ $('#applyMsg').html('<span style="color:#a3341f;">請填寫死亡日期</span>'); $('#fDeceasedDate').focus(); return; }
+  }
+  if(rt && rt.rule_kind === 'parental'){
+    if(!$('#fChildBirthday').val()){ $('#applyMsg').html('<span style="color:#a3341f;">請填寫子女出生日期</span>'); $('#fChildBirthday').focus(); return; }
+  }
+  if(!ruleOk){
+    $('#applyMsg').html('<span style="color:#a3341f;"><i class="fa fa-times-circle"></i> '
+      + '不符合此假別的規定，請看上方紅字說明後修正。</span>');
+    $('html, body').animate({scrollTop: $('#ruleBlock').offset().top - 120}, 250);
+    return;
+  }
   $('#btnSubmit').prop('disabled', true);
   $('#applyMsg').html(editingId ? '儲存中…' : '送出中…');
-  const payload = {
+  const payload = $.extend({
     csrf:CSRF, leave_type_id:tid, start_datetime: s, end_datetime: e,
     reason: $('#fReason').val()   // 代理人由後端自動解析，不從前端傳
-  };
+  }, ruleExtra());
   if(editingId){ payload.action = 'update'; payload.id = editingId; }
   else { payload.action = 'submit'; payload.upload_token = uploadToken; }
   $.post(API, payload, function(r){
@@ -934,6 +1047,7 @@ function submitLeave(){
     }
     let msg = '<span style="color:#4d6b2e;"><i class="fa fa-check-circle"></i> '+esc(r.message)+'（單號 #'+r.id+'）行事曆已標示為「申請中」。</span>';
     if(r.need_attach_later) msg += '<br><span class="tag-warn">待補證明</span> <span style="color:#8a5a1a;">請盡快到「我的請假單」開啟本單補上傳證明文件。</span>';
+    (r.warns||[]).forEach(function(w){ msg += '<div class="rule-warn" style="margin-top:6px;"><i class="fa fa-exclamation-triangle"></i> '+esc(w)+'</div>'; });
     $('#applyMsg').html(msg);
     resetForm(true);
     refreshPendingCount();
@@ -945,6 +1059,9 @@ function resetForm(keepMsg){
   $('#fReason').val(''); $('#tempList').empty();
   $('#signerPrev').hide(); $('#agentPrev').hide(); $('#typeHint').text('');
   $('#attReq').hide(); $('#attachBlock').hide(); $('#attMsg').text('');
+  // 規則欄位一併清掉：換一張單就是換一個事件／換一個子女，留著舊值等於帶錯資料
+  $('#ruleBlock').hide(); $('#fRelGrade').val(''); $('#fDeceasedDate').val(''); $('#fChildBirthday').val('');
+  $('#ruleMsg').empty(); $('#ruleQuota').empty(); ruleOk = true;
   const ff0 = document.getElementById('fFile'); if(ff0) ff0.value = '';
   if(!keepMsg) $('#applyMsg').empty();
   uploadToken = newToken();
@@ -1172,6 +1289,13 @@ function openDetail(id){
       agentHtml = esc(o.agent_name || '—');
     }
     h += row('職務代理人', agentHtml);
+    // 假別特殊規則欄位（有填才顯示，舊單沒有這些欄位就不會多出空白列）
+    if(o.rel_grade_name || o.deceased_date){
+      h += row('亡故親屬關係', esc(o.rel_grade_name||'—')
+             + (o.rel_grade_days ? ' <span class="tag-soft">上限 '+num(o.rel_grade_days)+' 天</span>' : ''));
+      h += row('死亡日期', esc(o.deceased_date||'—'));
+    }
+    if(o.child_birthday) h += row('子女出生日期', esc(o.child_birthday));
     h += row('請假原因', esc(o.reason||'—'));
     if(o.status === 'canceled') h += row('銷假原因', esc(o.cancel_reason||'—') + '（' + esc(String(o.canceled_at||'').substring(0,16)) + '）');
     h += '</tbody></table>';
@@ -1289,6 +1413,12 @@ function doDeleteConfirm(){
 
 // ── 修改審核前的單：把原內容帶回申請分頁，改成「儲存修改」模式 ──
 let editingId = 0, curDetailReq = null;
+// 把單上的規則欄位帶回表單（修改／申請修改共用；trigger('change') 已先畫好對應欄位）
+function fillRuleFields(o){
+  $('#fRelGrade').val(o.rel_grade_id || '');
+  $('#fDeceasedDate').val(o.deceased_date || '');
+  $('#fChildBirthday').val(o.child_birthday || '');
+}
 function startEdit(){
   const o = curDetailReq; if(!o) return;
   $('#detailModal').modal('hide');
@@ -1301,6 +1431,7 @@ function startEdit(){
   $('#fDateTo').val(ed.substring(0,10) === sd.substring(0,10) ? '' : ed.substring(0,10));
   $('#fTimeTo').val(ed.substring(11,16));
   $('#fReason').val(o.reason || '');
+  fillRuleFields(o);
   shiftApplied = true;        // 帶回原值後不要被排班覆蓋（代理人由後端依新期間重算）
   doPreview();
   $('#btnSubmit').html('<i class="fa fa-save"></i> 儲存修改（重新送審）');
@@ -1338,6 +1469,7 @@ function requestChange(){
     $('#fDateTo').val(ed.substring(0,10) === sd.substring(0,10) ? '' : ed.substring(0,10));
     $('#fTimeTo').val(ed.substring(11,16));
     $('#fReason').val(o.reason || '');
+    fillRuleFields(o);
     shiftApplied = true; doPreview();
     $('#applyMsg').html('<span style="color:#8a5a1a;">原單 #'+o.id+' 已銷假，已帶回原內容，請調整後送出新的請假單。</span>');
     $('html, body').animate({scrollTop: 0}, 300);
