@@ -2101,47 +2101,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
-    // ── 料號／圖面代號 重複判定（save_part 與即時檢查共用同一份規則）────────────
-    // 圖面代號必須能唯一對應到一筆料號，否則其他頁面用圖面代號綁定時會對到兩筆。
-    // 慣例：圖面代號＝自身料號視為「未設定」（畫面本來就不顯示），舊資料大量如此，不列入衝突對象。
-    function md_code_conflict($pdo, $d_id, $D_Setting_Id, $Drawing_No) {
-        $d_id = intval($d_id);
-        $D_Setting_Id = trim((string)$D_Setting_Id);
-        $Drawing_No   = trim((string)$Drawing_No);
-        if ($Drawing_No !== '' && $Drawing_No !== $D_Setting_Id) {
-            $q = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE Drawing_No=? AND Drawing_No<>D_Setting_Id AND d_id<>? LIMIT 1");
-            $q->execute([$Drawing_No, $d_id]);
-            if ($r = $q->fetch(PDO::FETCH_ASSOC))
-                return ['field'=>'Drawing_No','message'=>"圖面代號「{$Drawing_No}」已是料號「{$r['D_Setting_Id']}」的圖面代號，不可重複"];
-            $q = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE D_Setting_Id=? AND d_id<>? LIMIT 1");
-            $q->execute([$Drawing_No, $d_id]);
-            if ($q->fetch())
-                return ['field'=>'Drawing_No','message'=>"圖面代號「{$Drawing_No}」與現有料號同名，其他頁面會對應到兩筆資料，請改用別的代號"];
-        }
-        if ($D_Setting_Id !== '') {
-            $q = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE Drawing_No=? AND Drawing_No<>D_Setting_Id AND d_id<>? LIMIT 1");
-            $q->execute([$D_Setting_Id, $d_id]);
-            if ($r = $q->fetch(PDO::FETCH_ASSOC))
-                return ['field'=>'D_Setting_Id','message'=>"料號「{$D_Setting_Id}」已被料號「{$r['D_Setting_Id']}」拿去當圖面代號，請改用別的料號或先修改對方的圖面代號"];
-        }
-        return null;
-    }
-
-    // 即時檢查（輸入當下就回報原因，不必等到儲存）
-    if ($_POST['action'] === 'check_code_conflict') {
-        try {
-            $c = md_code_conflict($pdo, intval($_POST['d_id'] ?? 0), $_POST['D_Setting_Id'] ?? '', $_POST['Drawing_No'] ?? '');
-            echo json_encode(['success'=>true, 'conflict'=>$c ? true : false,
-                              'field'=>$c['field'] ?? '', 'message'=>$c['message'] ?? '']);
-        } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
-        exit;
-    }
+    // 圖面代號（Drawing_No）功能已於 2026-08-03 取消，併入「客戶代號／等同料號」別名機制
+    // （src/common/part_alias_lib.php）。舊資料已遷移，欄位不再由本頁讀寫，全庫維持 NULL。
 
     if ($_POST['action'] === 'save_part') {
         try {
             $d_id       = intval($_POST['d_id'] ?? 0);
             $D_Setting_Id = trim($_POST['D_Setting_Id'] ?? '');
-            $Drawing_No   = trim($_POST['Drawing_No']   ?? '') ?: null;
             $Spec_No    = trim($_POST['Spec_No'] ?? '');
             $Revision   = trim($_POST['Revision'] ?? '');
             $Issue_Date = trim($_POST['Issue_Date'] ?? '') ?: null;
@@ -2165,12 +2131,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (empty($D_Setting_Id)) throw new Exception('料號不可為空');
             if (empty($Customer_Id))  throw new Exception('客戶為必填欄位');
 
-            // 圖面代號＝料號本身＝沒設圖面代號，一律存 NULL（畫面本來就不顯示）
-            if ($Drawing_No !== null && $Drawing_No === $D_Setting_Id) $Drawing_No = null;
-            // 圖面代號不可重複（含不可與別筆料號同名），否則其他頁面用圖面代號綁不到唯一料號
-            $conf = md_code_conflict($pdo, $d_id, $D_Setting_Id, $Drawing_No);
-            if ($conf) throw new Exception($conf['message']);
-
             // 取得舊資料（用於 audit diff）
             $old_part_row = [];
             if ($d_id > 0) {
@@ -2191,15 +2151,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $ck = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND d_id<>? AND (Customer_Id <=> ?) AND (Spec_No <=> ?) AND (Revision <=> ?)");
                 $ck->execute([$D_Setting_Id, $d_id, $CustIdForCheck, $SpecForCheck, $RevForCheck]);
                 if ($ck->fetch()) throw new Exception("料號「$D_Setting_Id」已存在（同客戶、同規格、同版次）");
-                $pdo->prepare("UPDATE d_setting SET D_Setting_Id=?,Drawing_No=?,Spec_No=?,Revision=?,Issue_Date=?,Type=?,Is_Assembly=?,workpiece_sub_type_id=?,Customer_Id=?,Remark=?,Weight_Kg=?,weight_source=?,weight_calc_json=?,Modified_By=?,Modified_At=NOW() WHERE d_id=?")
-                    ->execute([$D_Setting_Id,$Drawing_No,$Spec_No,$Revision,$Issue_Date,$Type,$Is_Assembly,$sub_type_id,$Customer_Id,$Remark,$Weight_Kg,$weight_source,$weight_calc_json,$uid,$d_id]);
+                $pdo->prepare("UPDATE d_setting SET D_Setting_Id=?,Spec_No=?,Revision=?,Issue_Date=?,Type=?,Is_Assembly=?,workpiece_sub_type_id=?,Customer_Id=?,Remark=?,Weight_Kg=?,weight_source=?,weight_calc_json=?,Modified_By=?,Modified_At=NOW() WHERE d_id=?")
+                    ->execute([$D_Setting_Id,$Spec_No,$Revision,$Issue_Date,$Type,$Is_Assembly,$sub_type_id,$Customer_Id,$Remark,$Weight_Kg,$weight_source,$weight_calc_json,$uid,$d_id]);
             } else {
                 if (!$can_create) throw new Exception('無新增權限');
                 $ck = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND (Customer_Id <=> ?) AND (Spec_No <=> ?) AND (Revision <=> ?)");
                 $ck->execute([$D_Setting_Id, $CustIdForCheck, $SpecForCheck, $RevForCheck]);
                 if ($ck->fetch()) throw new Exception("料號「$D_Setting_Id」已存在（同客戶、同規格、同版次）");
-                $pdo->prepare("INSERT INTO d_setting (D_Setting_Id,Drawing_No,Spec_No,Revision,Issue_Date,Type,Is_Assembly,workpiece_sub_type_id,Customer_Id,Remark,Weight_Kg,weight_source,weight_calc_json,Created_By,Created_At) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
-                    ->execute([$D_Setting_Id,$Drawing_No,$Spec_No,$Revision,$Issue_Date,$Type,$Is_Assembly,$sub_type_id,$Customer_Id,$Remark,$Weight_Kg,$weight_source,$weight_calc_json,$uid]);
+                $pdo->prepare("INSERT INTO d_setting (D_Setting_Id,Spec_No,Revision,Issue_Date,Type,Is_Assembly,workpiece_sub_type_id,Customer_Id,Remark,Weight_Kg,weight_source,weight_calc_json,Created_By,Created_At) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+                    ->execute([$D_Setting_Id,$Spec_No,$Revision,$Issue_Date,$Type,$Is_Assembly,$sub_type_id,$Customer_Id,$Remark,$Weight_Kg,$weight_source,$weight_calc_json,$uid]);
                 $d_id = (int)$pdo->lastInsertId();
             }
 
@@ -6363,9 +6323,6 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 .form-section-title { font-size:12px; font-weight:700; text-transform:uppercase; color:var(--accent); letter-spacing:.8px; margin:16px 0 8px; padding-bottom:4px; border-bottom:1px dashed var(--border); }
 .required-star { color:var(--danger); margin-left:2px; }
 /* 料號／圖面代號 重複即時提示 */
-.code-conflict-msg { display:none; margin-top:4px; font-size:12px; line-height:1.4; color:#DD5138; }
-.code-conflict-msg.show { display:block; }
-input.code-conflict { border-color:#DD5138 !important; background:#FDF1ED; }
 
 /* ── Empty State ── */
 .empty-state { text-align:center; padding:60px 20px; color:#aaa; }
@@ -7076,7 +7033,6 @@ input.code-conflict { border-color:#DD5138 !important; background:#FDF1ED; }
         <div class="form-group">
             <label>料號 <span class="required-star">*</span></label>
             <input type="text" class="form-control" id="pf-D_Setting_Id" name="D_Setting_Id" placeholder="例：A123-456" maxlength="30" required>
-            <div class="code-conflict-msg" id="pf-D_Setting_Id-err"></div>
         </div>
     </div>
     <div class="col-md-6">
@@ -7087,18 +7043,8 @@ input.code-conflict { border-color:#DD5138 !important; background:#FDF1ED; }
     </div>
 </div>
 <div class="row">
-    <div class="col-md-6">
-        <div class="form-group">
-            <label>圖面代號 <small style="color:#888;font-weight:normal;">（選填，圖面上顯示的代替料號，可遮蔽真實料號；全站不可重複）</small></label>
-            <input type="text" class="form-control" id="pf-Drawing_No" name="Drawing_No" placeholder="留空則圖面使用料號本身" maxlength="30">
-            <div class="code-conflict-msg" id="pf-Drawing_No-err"></div>
-        </div>
-    </div>
-    <div class="col-md-6">
-        <div class="form-group">
-            <label style="color:transparent;display:block;">-</label>
-            <div id="spec-quick-btns-row" style="display:none;flex-wrap:wrap;gap:4px;padding-top:2px;"></div>
-        </div>
+    <div class="col-md-12">
+        <div id="spec-quick-btns-row" style="display:none;flex-wrap:wrap;gap:4px;padding-top:2px;"></div>
     </div>
 </div>
 <div class="row">
@@ -7166,14 +7112,14 @@ input.code-conflict { border-color:#DD5138 !important; background:#FDF1ED; }
     <div style="border:1px solid #E4D3BC;border-radius:4px;overflow:hidden;">
         <table style="width:100%;border-collapse:collapse;font-size:12px;" id="pf-alias-table">
             <thead><tr style="background:#FFF3E2;color:#6B4423;">
-                <th style="padding:4px 6px;text-align:left;">代號 <span style="color:#DD5138;">*</span></th>
-                <th style="padding:4px 6px;text-align:left;width:110px;">類型</th>
-                <th style="padding:4px 6px;text-align:left;width:170px;">哪家客戶在用
+                <th style="padding:4px 6px;text-align:left;width:340px;">代號 <span style="color:#DD5138;">*</span></th>
+                <th style="padding:4px 6px;text-align:left;width:100px;">類型</th>
+                <th style="padding:4px 6px;text-align:left;width:150px;">哪家客戶在用
                     <span style="font-weight:normal;color:#a5865e;font-size:10px;">（預設本料號客戶，可清成通用）</span></th>
-                <th style="padding:4px 6px;text-align:left;width:230px;">這個代號在系統裡也是一筆料號？
+                <th style="padding:4px 6px;text-align:left;width:200px;">這個代號在系統裡也是一筆料號？
                     <span style="font-weight:normal;color:#a5865e;font-size:10px;">（選填，綁了才撈得到它底下的舊訂單）</span></th>
-                <th style="padding:4px 6px;text-align:left;">備註</th>
-                <th style="padding:4px 6px;width:34px;"></th>
+                <th style="padding:4px 6px;text-align:left;width:90px;">備註</th>
+                <th style="padding:4px 6px;width:30px;"></th>
             </tr></thead>
             <tbody id="pf-alias-body"></tbody>
         </table>
@@ -11364,8 +11310,7 @@ function renderPartsTable(rows, total, pg, pages) {
             var gearSpec = (r.Type==='G' && r.gear_spec_str)
                 ? '<span style="font-size:10px;color:#888;font-family:Consolas,monospace;letter-spacing:.3px;display:block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.2;margin-top:1px;" title="'+escHtml(r.gear_spec_str)+'">'+escHtml(r.gear_spec_str)+'</span>' : '';
             var dIdBadge = '<span style="font-size:10px;color:#bbb;font-family:Consolas,monospace;letter-spacing:.3px;display:block;line-height:1.2;margin-top:1px;">id:'+r.d_id+'</span>';
-            var drawingBadge = (r.Drawing_No && r.Drawing_No !== r.D_Setting_Id)
-                ? '<span style="font-size:10px;color:#1a7abf;display:block;line-height:1.2;margin-top:1px;" title="圖面代號">代：'+escHtml(r.Drawing_No)+'</span>' : '';
+            var drawingBadge = '';
             // 客戶代號／等同料號：讓人看得出這個料號還被誰用什麼編號叫
             if (r.alias_str) {
                 r.alias_str.split('||').forEach(function(a){
@@ -13631,7 +13576,7 @@ function _createAliasRow(d) {
         '<input type="text" class="form-control input-sm al-link-kw" placeholder="選填：搜尋這個代號自己的料號" autocomplete="off" style="font-size:11px;display:'+(d.linked_d_id?'none':'block')+';">'+
         '<div class="al-link-dd" style="display:none;position:absolute;z-index:1060;width:340px;background:#fff;border:1px solid #ddd;max-height:200px;overflow-y:auto;border-radius:0 0 6px 6px;box-shadow:0 4px 12px rgba(0,0,0,.12);font-size:12px;"></div>'+
       '</td>'+
-      '<td style="padding:3px 5px;"><input type="text" class="form-control input-sm al-note" maxlength="200" placeholder="選填" value="'+escAttr(d.note||'')+'" style="font-size:12px;"></td>'+
+      '<td style="padding:3px 5px;"><input type="text" class="form-control input-sm al-note" maxlength="100" placeholder="選填" value="'+escAttr(d.note||'')+'" style="font-size:11px;"></td>'+
       '<td style="padding:3px 5px;text-align:center;"><button type="button" class="btn btn-xs btn-danger al-del"><i class="fa fa-minus"></i></button></td>';
 
     tr.querySelector('.al-del').addEventListener('click', function(){ tr.remove(); syncAliasesHidden(); });
@@ -13881,7 +13826,6 @@ function openPartModal(d_id) {
             document.getElementById('partModal-title').textContent = '編輯料號';
             document.getElementById('pf-d_id').value           = d.d_id;
             document.getElementById('pf-D_Setting_Id').value   = d.D_Setting_Id;
-            document.getElementById('pf-Drawing_No').value     = (d.Drawing_No && d.Drawing_No !== d.D_Setting_Id) ? d.Drawing_No : '';
             document.getElementById('pf-Spec_No').value        = d.Spec_No||'';
             document.getElementById('pf-Revision').value       = d.Revision||'';
             setIssueDateFields(d.Issue_Date||'');
@@ -13973,34 +13917,6 @@ function openPartModal(d_id) {
     }
 }
 
-// ── 料號／圖面代號 重複即時檢查（輸入當下就顯示原因，不等到儲存）──────────
-var _codeConflict = { D_Setting_Id:'', Drawing_No:'' };
-function _setCodeErr(fid, msg) {
-    _codeConflict[fid] = msg || '';
-    var el = document.getElementById('pf-'+fid), box = document.getElementById('pf-'+fid+'-err');
-    if (!el || !box) return;
-    if (msg) { box.textContent = msg; box.classList.add('show'); el.classList.add('code-conflict'); }
-    else     { box.textContent = '';  box.classList.remove('show'); el.classList.remove('code-conflict'); }
-}
-function clearCodeConflict() { _setCodeErr('D_Setting_Id',''); _setCodeErr('Drawing_No',''); }
-function checkCodeConflict() {
-    var pEl = document.getElementById('pf-D_Setting_Id'), dEl = document.getElementById('pf-Drawing_No');
-    if (!pEl || !dEl) return;
-    var part = pEl.value.trim(), dw = dEl.value.trim();
-    if (!part && !dw) { clearCodeConflict(); return; }
-    api({ action:'check_code_conflict', d_id:(document.getElementById('pf-d_id')||{value:0}).value,
-          D_Setting_Id:part, Drawing_No:dw })
-      .done(function(r){
-          if (!r || !r.success) return;
-          _setCodeErr('D_Setting_Id', (r.conflict && r.field === 'D_Setting_Id') ? r.message : '');
-          _setCodeErr('Drawing_No',   (r.conflict && r.field === 'Drawing_No')   ? r.message : '');
-      });
-}
-var _checkCodeConflictDebounced = debounce(checkCodeConflict, 350);
-$(document).on('input',    '#pf-D_Setting_Id, #pf-Drawing_No', _checkCodeConflictDebounced);
-$(document).on('focusout', '#pf-D_Setting_Id, #pf-Drawing_No', checkCodeConflict);
-$(document).on('shown.bs.modal', '#partModal', checkCodeConflict);
-
 function submitPartForm() {
     collectGearRows();
     // Validate
@@ -14025,7 +13941,6 @@ function submitPartForm() {
         action:       'save_part',
         d_id:         document.getElementById('pf-d_id').value,
         D_Setting_Id: document.getElementById('pf-D_Setting_Id').value.trim(),
-        Drawing_No:   document.getElementById('pf-Drawing_No').value.trim(),
         Spec_No:      document.getElementById('pf-Spec_No').value,
         Revision:     document.getElementById('pf-Revision').value,
         Issue_Date:   document.getElementById('pf-Issue_Date').value,
@@ -14045,8 +13960,6 @@ function submitPartForm() {
     };
     if (!data.D_Setting_Id) { showToast('料號不可為空','error'); return; }
     if (!data.Customer_Id) { showToast('客戶為必填欄位','error'); var _ce=document.getElementById('pf-customer-display'); if(_ce){_ce.focus();_ce.select();} return; }
-    if (_codeConflict.D_Setting_Id) { showToast(_codeConflict.D_Setting_Id,'error'); var _pe=document.getElementById('pf-D_Setting_Id'); if(_pe){_pe.focus();_pe.select();} return; }
-    if (_codeConflict.Drawing_No)   { showToast(_codeConflict.Drawing_No,'error');   var _de=document.getElementById('pf-Drawing_No');   if(_de){_de.focus();_de.select();} return; }
     var btn = document.querySelector('#partModal .btn-success');
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 儲存中…'; }
     var restore = function(){ if(btn){ btn.disabled=false; btn.innerHTML='<i class="fa fa-save"></i> 儲存'; } };
@@ -14179,7 +14092,6 @@ function copyPartModal(d_id) {
         document.getElementById('pf-d_id').value = '0';  // 新增，非更新
         document.getElementById('pf-D_Setting_Id').value = d.D_Setting_Id||''; // 複製來源料號，供使用者修改
         document.getElementById('pf-D_Setting_Id').placeholder = '請修改料號（不可與來源重複）';
-        document.getElementById('pf-Drawing_No').value  = '';
         document.getElementById('pf-Spec_No').value     = d.Spec_No||'';
         document.getElementById('pf-Revision').value    = d.Revision||'';
         setIssueDateFields(d.Issue_Date||'');
