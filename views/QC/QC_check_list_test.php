@@ -4238,22 +4238,27 @@ if ($reply_id != "") {
                             if (checkedQty > 0) return '部分檢驗';
                             return '待驗';
                         };
+                        let maxTagLength = 0;
                         let maxProcessLength = 0;
                         data.processes.forEach(item => {
                             item._inspectTag = getInspectStatusTag(item);
-                            const processPart = `【${item._inspectTag}】[${item.bom_sn}] ${item.process_no} ${item.ProcessName}`;
+                            const tagLen = getVisualLength(`[${item._inspectTag}]`);
+                            if (tagLen > maxTagLength) maxTagLength = tagLen;
+                            const processPart = `[${item.bom_sn}] ${item.process_no} ${item.ProcessName}`;
                             const len = getVisualLength(processPart);
                             if (len > maxProcessLength) maxProcessLength = len;
                         });
                         data.processes.forEach(function(item) {
-                            const processPart = `【${item._inspectTag}】[${item.bom_sn}] ${item.process_no} ${item.ProcessName}`;
+                            const tagPart = `[${item._inspectTag}]`;
+                            const tagPadding = ' '.repeat(Math.max(0, maxTagLength - getVisualLength(tagPart)));
+                            const processPart = `[${item.bom_sn}] ${item.process_no} ${item.ProcessName}`;
                             const currentLength = getVisualLength(processPart);
                             const paddingCount = maxProcessLength > currentLength ? maxProcessLength - currentLength : 0;
                             const padding = '\u00a0'.repeat(paddingCount);
                             const makerDisplay = (item.maker_id && String(item.maker_id).trim() !== '')
                                 ? item.maker_id
                                 : (item.maker_id_no || '');
-                            let displayText = processPart + padding;
+                            let displayText = tagPart + tagPadding + ' ' + processPart + padding;
                             if (makerDisplay) displayText += '\u3000' + makerDisplay;
                             $sel.append($('<option>').val(item.bom_ing_fid).text(displayText));
                         });
