@@ -17,6 +17,13 @@
  *
  * 行為（全站一致）：輸入框打編號或名稱即時篩選（多關鍵字空白分隔＝每個都要命中）、
  * 清單直接點選、Enter＝只剩一筆時直接選起來、Esc 或點遮罩＝取消。
+ *
+ * 【踩坑】從 Bootstrap modal 內開本選擇器時，篩選框會「點得到但打不了字」：
+ * BS3 modal.js 的 enforceFocus 監聽 document 的 focusin，只要判定「焦點跑到 this.$element 之外」
+ * 就會把焦點搶回 modal（見 bootstrap.min.js：`this.$element.has(a.target).length` 為否就 trigger('focus')）。
+ * 一開始想用 stopPropagation 擋事件冒泡，但賭事件傳遞順序不夠可靠。**正解是把本遮罩直接塞進
+ * 目前開著的 Bootstrap modal 元素裡**，讓 `.has(a.target)` 判定為真，Bootstrap 自然不會搶焦點——
+ * 不需要跟 Bootstrap 的內部事件機制打架。
  */
 (function () {
     'use strict';
@@ -34,20 +41,20 @@
         st.appendChild(document.createTextNode(
             '.eg-asdoc-mask{position:fixed;inset:0;background:rgba(60,40,20,.45);z-index:12000;display:block;}'
           + '.eg-asdoc-box{background:#fff;border-radius:8px;max-width:620px;margin:60px auto;'
-          + 'box-shadow:0 5px 25px rgba(0,0,0,.3);display:flex;flex-direction:column;max-height:80vh;}'
-          + '.eg-asdoc-box .h{background:#F7E0BD;color:#5b3a1e;font-weight:bold;padding:10px 15px;'
+          + 'box-shadow:0 5px 25px rgba(0,0,0,.3);display:flex;flex-direction:column;max-height:80vh;position:relative;}'
+          + '.eg-asdoc-hd{background:#F7E0BD;color:#5b3a1e;font-weight:bold;padding:10px 15px;'
           + 'border-radius:8px 8px 0 0;display:flex;justify-content:space-between;}'
-          + '.eg-asdoc-box .h .x{cursor:pointer;color:#b5762a;}'
-          + '.eg-asdoc-box .b{padding:14px 15px;overflow-y:auto;}'
-          + '.eg-asdoc-box .f{padding:10px 15px;border-top:1px solid #EADFC8;text-align:right;}'
-          + '.eg-asdoc-box input.kw{width:100%;padding:6px 9px;font-size:13px;border:1px solid #D8BE93;'
-          + 'border-radius:4px;background:#FFFDF8;color:#5b3a1e;margin-bottom:8px;}'
-          + '.eg-asdoc-box select.lst{width:100%;font-size:13px;border:1px solid #D8BE93;border-radius:4px;'
+          + '.eg-asdoc-hd .eg-asdoc-close{cursor:pointer;color:#b5762a;}'
+          + '.eg-asdoc-bd{padding:14px 15px;overflow-y:auto;}'
+          + '.eg-asdoc-ft{padding:10px 15px;border-top:1px solid #EADFC8;text-align:right;}'
+          + '.eg-asdoc-kw{width:100%;padding:6px 9px;font-size:13px;border:1px solid #D8BE93;'
+          + 'border-radius:4px;background:#FFFDF8;color:#5b3a1e;margin-bottom:8px;box-sizing:border-box;}'
+          + '.eg-asdoc-lst{width:100%;font-size:13px;border:1px solid #D8BE93;border-radius:4px;'
           + 'padding:4px;color:#5b3a1e;}'
-          + '.eg-asdoc-box .cnt{font-size:12px;color:#8a6d45;margin-top:5px;}'
-          + '.eg-asdoc-box button{height:30px;padding:0 16px;border-radius:4px;font-size:13px;cursor:pointer;}'
-          + '.eg-asdoc-box .ok{border:1px solid #d98a33;background:#F0A24B;color:#fff;margin-left:6px;}'
-          + '.eg-asdoc-box .no{border:1px solid #D8BE93;background:#fff;color:#5b3a1e;}'));
+          + '.eg-asdoc-cnt{font-size:12px;color:#8a6d45;margin-top:5px;}'
+          + '.eg-asdoc-ft button{height:30px;padding:0 16px;border-radius:4px;font-size:13px;cursor:pointer;}'
+          + '.eg-asdoc-btn-ok{border:1px solid #d98a33;background:#F0A24B;color:#fff;margin-left:6px;}'
+          + '.eg-asdoc-btn-no{border:1px solid #D8BE93;background:#fff;color:#5b3a1e;}'));
         (document.head || document.documentElement).appendChild(st);
     }
 
@@ -62,24 +69,34 @@
             var docs = opt.docs || [], cur = String(opt.current || 0);
             injectCss();
 
+            // 同時只允許一個篩選跳窗，避免重複開啟疊出多層擋住點擊
+            var stale = document.querySelectorAll('.eg-asdoc-mask');
+            for (var i = 0; i < stale.length; i++) if (stale[i].parentNode) stale[i].parentNode.removeChild(stale[i]);
+
             var mask = document.createElement('div');
             mask.className = 'eg-asdoc-mask';
             mask.innerHTML =
                 '<div class="eg-asdoc-box">'
-              + '<div class="h"><span>' + esc(opt.title || 'AS 文件編號綁定') + '</span><span class="x">✕</span></div>'
-              + '<div class="b">'
-              + '<input type="text" class="kw" data-eg-skip="1" placeholder="輸入文件編號或名稱即可篩選（例：2-SM 或 訂單變更）">'
-              + '<select class="lst" size="12"></select>'
-              + '<div class="cnt"></div>'
-              + '<div class="cnt">綁定後：列印表頭自動顯示該文件的<b>表單名稱</b>，頁尾右下角自動印<b>文件編號</b>（全站列印標準 ai-rules/16）。</div>'
+              + '<div class="eg-asdoc-hd"><span>' + esc(opt.title || 'AS 文件編號綁定') + '</span>'
+              + '<span class="eg-asdoc-close">✕</span></div>'
+              + '<div class="eg-asdoc-bd">'
+              + '<input type="text" class="eg-asdoc-kw" data-eg-skip="1" placeholder="輸入文件編號或名稱即可篩選（例：2-SM 或 訂單變更）">'
+              + '<select class="eg-asdoc-lst" size="12"></select>'
+              + '<div class="eg-asdoc-cnt eg-asdoc-cnt1"></div>'
+              + '<div class="eg-asdoc-cnt">綁定後：列印表頭自動顯示該文件的<b>表單名稱</b>，頁尾右下角自動印<b>文件編號</b>（全站列印標準 ai-rules/16）。</div>'
               + '</div>'
-              + '<div class="f"><button class="no">取消</button><button class="ok">儲存綁定</button></div>'
+              + '<div class="eg-asdoc-ft"><button type="button" class="eg-asdoc-btn-no">取消</button>'
+              + '<button type="button" class="eg-asdoc-btn-ok">儲存綁定</button></div>'
               + '</div>';
-            document.body.appendChild(mask);
 
-            var kw = mask.querySelector('input.kw'),
-                lst = mask.querySelector('select.lst'),
-                cnt = mask.querySelector('.cnt');
+            // 若目前有開著的 Bootstrap(v3) modal，把本遮罩塞進去（見檔頭踩坑說明），
+            // 否則掛在 body 下即可（獨立頁面、非 modal 情境）。
+            var hostModal = document.querySelector('.modal.in, .modal.show');
+            (hostModal || document.body).appendChild(mask);
+
+            var kw = mask.querySelector('.eg-asdoc-kw'),
+                lst = mask.querySelector('.eg-asdoc-lst'),
+                cnt = mask.querySelector('.eg-asdoc-cnt1');
 
             function render() {
                 var terms = kw.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -98,7 +115,10 @@
             }
             render();
 
-            function close() { if (mask.parentNode) mask.parentNode.removeChild(mask); }
+            function close() {
+                document.removeEventListener('keydown', esckey);
+                if (mask.parentNode) mask.parentNode.removeChild(mask);
+            }
             function save() {
                 var id = parseInt(lst.value, 10) || 0;
                 var doc = null;
@@ -106,12 +126,7 @@
                 close();
                 if (typeof opt.onSave === 'function') opt.onSave(id, doc);
             }
-
-            // 【踩坑】本選擇器常被從 Bootstrap modal 內叫出來，而 BS modal 的 enforceFocus 會監聽
-            // document 的 focusin、把焦點搶回 modal 裡 → 篩選框「點得到但打不了字」。
-            // 攔在自己的遮罩上把 focusin 停止冒泡，document 上的 handler 就收不到，不必去改 Bootstrap 全域行為。
-            mask.addEventListener('focusin', function (e) { e.stopPropagation(); });
-            mask.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+            function esckey(e) { if (e.key === 'Escape') close(); }
 
             kw.addEventListener('input', render);
             kw.addEventListener('keydown', function (e) {
@@ -122,13 +137,11 @@
                 }
             });
             lst.addEventListener('dblclick', save);
-            mask.querySelector('.ok').addEventListener('click', save);
-            mask.querySelector('.no').addEventListener('click', close);
-            mask.querySelector('.x').addEventListener('click', close);
+            mask.querySelector('.eg-asdoc-btn-ok').addEventListener('click', save);
+            mask.querySelector('.eg-asdoc-btn-no').addEventListener('click', close);
+            mask.querySelector('.eg-asdoc-close').addEventListener('click', close);
             mask.addEventListener('click', function (e) { if (e.target === mask) close(); });
-            document.addEventListener('keydown', function esckey(e) {
-                if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esckey); }
-            });
+            document.addEventListener('keydown', esckey);
             setTimeout(function () { kw.focus(); }, 30);
         }
     };
