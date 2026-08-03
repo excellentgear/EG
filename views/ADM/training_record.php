@@ -74,6 +74,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         table.tr-table thead th { position:sticky; top:0; z-index:5; background:#F7E0BD; color:#5b3a1e; font-weight:bold; }
         table.tr-table tbody tr:nth-child(even) { background:#FBF6EC; }
         table.tr-table tbody tr:hover { background:#FBF0DD; }
+        /* 計畫中：整列底色淺綠(暖調橄欖綠)，蓋過斑馬紋與 hover，一眼辨識哪些場次還沒排定 */
+        table.tr-table tbody tr.row-planned,
+        table.tr-table tbody tr.row-planned:nth-child(even),
+        table.tr-table tbody tr.row-planned:hover { background:#E4EED0; }
         table.tr-table td.t-left { text-align:left; }
         .st-pill { display:inline-block; font-size:12px; border-radius:10px; padding:2px 9px; }
         /* 計畫中：使用者明確要求淺綠底以利辨識，取偏黃的暖調橄欖綠(非藍調薄荷綠)，盡量貼近全站暖色調性 */
@@ -982,7 +986,7 @@ function renderTable(){
         if (stt && r.status!==stt) return;
         if (kw && String(r.course_name).toLowerCase().indexOf(kw)<0) return;
         var ext = r.train_type==='external';
-        html += '<tr class="tr-clickable" onclick="toggleDetail(event,'+r.session_id+')">';
+        html += '<tr class="tr-clickable'+(r.status==='planned'?' row-planned':'')+'" onclick="toggleDetail(event,'+r.session_id+')">';
         html += '<td>'+r.plan_month+'月</td>';
         html += '<td>'+esc(r.dept_name||'')+'</td>';
         html += '<td class="t-left"><b>'+esc(r.course_name)+'</b>'
