@@ -429,6 +429,13 @@ body { background:var(--bg); }
     border-radius:10px; margin-left:5px; vertical-align:middle;
     font-weight:600; white-space:nowrap;
 }
+/* ── 暫存 badge（內容尚未填完，先存起來續填）── */
+.tempsave-badge {
+    display:inline-block; font-size:10px; padding:1px 7px;
+    background:#F7E0BD; color:#7a4a00; border:1px solid #e8c98f;
+    border-radius:10px; margin-left:5px; vertical-align:middle;
+    font-weight:600; white-space:nowrap;
+}
 .source-badge {
     display:inline-block; font-size:10px; padding:1px 5px;
     background:#e0e0e0; color:#888; border-radius:3px;
@@ -477,7 +484,11 @@ body { background:var(--bg); }
                     <i class="fa fa-inbox"></i> 待處理單據
                     <span id="pendingDocBadge" style="display:none;position:absolute;top:-7px;right:-7px;background:#b5651d;color:#fff;border-radius:10px;font-size:10px;padding:0 5px;font-weight:700;">0</span>
                 </button>
-                <button class="btn btn-default btn-sm" id="showAllDocBtn" onclick="clearPendingFilter()" title="取消篩選，顯示全部報價單" style="display:none;">
+                <button class="btn btn-sm" id="tempSaveDocBtn" onclick="applyTempSaveFilter()" title="只顯示我暫存中尚未完成的報價單" style="position:relative;font-weight:600;background:#F7E0BD;color:#7a4a00;border:1px solid #e8c98f;">
+                    <i class="fa fa-clock-o"></i> 暫存未完成
+                    <span id="tempSaveDocBadge" style="display:none;position:absolute;top:-7px;right:-7px;background:#b5651d;color:#fff;border-radius:10px;font-size:10px;padding:0 5px;font-weight:700;">0</span>
+                </button>
+                <button class="btn btn-default btn-sm" id="showAllDocBtn" onclick="clearDocFilters()" title="取消篩選，顯示全部報價單" style="display:none;">
                     <i class="fa fa-list"></i> 顯示全部
                 </button>
                 <?php endif; ?>
@@ -648,6 +659,9 @@ body { background:var(--bg); }
                                 <i class="fa fa-times"></i>
                             </button>
                             <?php if ($CAN_CREATE || $CAN_EDIT): ?>
+                            <button class="btn btn-default btn-sm" id="tempSaveQuoteBtn" onclick="tempSaveQuote()" title="內容還沒填完也能先存起來，之後再繼續填寫；不會列印、不會送審">
+                                <i class="fa fa-clock-o"></i> 暫存
+                            </button>
                             <button class="btn btn-primary btn-sm" id="saveQuoteBtn" onclick="saveQuote()">
                                 <i class="fa fa-save"></i> 儲存
                             </button>
@@ -1666,6 +1680,7 @@ let processTagTree = [];        // 製程標籤樹 [{group_id,group_name,sub_tag
 let allYearsData   = null;      // 全年份快取
 let isAllYearsMode = false;
 let pendingFilterMode = false;  // 待處理單據篩選模式（每次進站預設 false＝全部顯示；篩選報價單本身待審/被駁回）
+let tempSaveFilterMode = false; // 暫存未完成篩選模式（只顯示自己暫存中尚未完成的報價單）
 let pendingAlertData  = { rejected: [], pending: [] }; // 進站提醒資料（補件被駁回/待審）
 let allProcesses   = [];        // [{id, text}]
 let allUnits         = [];        // [{unit_id, unit_name, unit_symbol}]
@@ -3310,8 +3325,11 @@ function renderQuoteList(quotes, filter) {
     let filtered = quotes;
     // 待處理單據＝報價單「本身」簽核狀態為待審核(pending)或被駁回(rejected)；已核准者不列入（補件待審另有專屬入口）
     if (pendingFilterMode) filtered = filtered.filter(q => q.approval_status === 'pending' || q.approval_status === 'rejected');
+    // 暫存未完成＝自己建立、內容尚未填完仍先存檔的報價單（is_temp_save）
+    if (tempSaveFilterMode) filtered = filtered.filter(q => q.is_temp_save == 1 && Number(q.created_by) === CURRENT_UID);
     if (clientF) filtered = filtered.filter(q => (q.client_name || '') === clientF);
     refreshPendingDocBadge();
+    refreshTempSaveDocBadge();
     if (f) filtered = filtered.filter(q =>
         ((q.quote_no || '') + (q.note || '') + (q.search_keywords || '')).toLowerCase().includes(f)
     );
@@ -3361,6 +3379,7 @@ function buildQuoteCard(q) {
     const isActive  = currentEditId && currentEditId == q.quote_id;
     const negoBadge   = q.is_negotiation == 1 ? '<span class="nego-badge" style="font-size:9px;">議價</span>' : '';
     const draftBadge  = q.is_draft == 1 ? '<span class="draft-badge" style="font-size:9px;" title="必備附件缺漏，儲存為草稿">草稿</span>' : '';
+    const tempBadge   = q.is_temp_save == 1 ? '<span class="tempsave-badge" style="font-size:9px;" title="內容尚未填完，先暫存續填">暫存</span>' : '';
     const srcBadge    = q.source_quote_id
         ? `<span class="source-badge" title="複製自 ${escapeHtml(q.source_quote_no||'')}" style="font-size:9px;"><i class="fa fa-copy"></i></span>`
         : '';
@@ -3372,7 +3391,7 @@ function buildQuoteCard(q) {
     // 有客戶篩選時不重複顯示客戶名稱
     const clientRow = clientF ? '' : `<div class="qli-client">${escapeHtml(q.client_name || '（無客戶）')}</div>`;
     return `<div class="qli-card ${isActive ? 'active' : ''}" onclick="openEditor(${q.quote_id})">
-        <div class="qli-no">${escapeHtml(q.quote_no)}${negoBadge}${draftBadge}${approvalBadgeHtml(q)}${srcBadge}${attachBadge}</div>
+        <div class="qli-no">${escapeHtml(q.quote_no)}${negoBadge}${draftBadge}${tempBadge}${approvalBadgeHtml(q)}${srcBadge}${attachBadge}</div>
         ${clientRow}
         <div class="qli-foot">
             <span class="qli-date">${escapeHtml(q.quote_date)}</span>
@@ -3495,7 +3514,8 @@ function openViewMode(quote_id) {
 function renderViewPanel(q, contact, detail) {
     const neg = q.is_negotiation == 1 ? '<span class="nego-badge" style="font-size:9px;">議價</span>' : '';
     const draft = q.is_draft == 1 ? '<span class="draft-badge" style="font-size:9px;" title="必備附件缺漏，儲存為草稿">草稿</span>' : '';
-    $('#viewTitle').html(`<i class="fa fa-eye" style="color:var(--accent);margin-right:6px;"></i>${escapeHtml(q.quote_no||'')} ${neg}${draft}${approvalBadgeHtml(q)}`);
+    const temp  = q.is_temp_save == 1 ? '<span class="tempsave-badge" style="font-size:9px;" title="內容尚未填完，先暫存續填">暫存</span>' : '';
+    $('#viewTitle').html(`<i class="fa fa-eye" style="color:var(--accent);margin-right:6px;"></i>${escapeHtml(q.quote_no||'')} ${neg}${draft}${temp}${approvalBadgeHtml(q)}`);
     $('#viewClientTag').text(q.client_name ? ' — ' + q.client_name : '');
     renderApprovalBar(q, detail);
     updatePrintGate(q);
@@ -3647,12 +3667,13 @@ function updatePrintGate(q) {
     window._lastPrintGateQuote = q;   // 記住最後閘門判斷的單，設定切換時能立即重套用
     const $btn = $('#printQuoteBtn');
     if (!$btn.length) return;
-    const ok = q.is_draft != 1 && (!printNeedApproval || q.approval_status === 'approved');
+    const ok = q.is_draft != 1 && q.is_temp_save != 1 && (!printNeedApproval || q.approval_status === 'approved');
     $btn.prop('disabled', !ok);
     if (ok) {
         $btn.removeAttr('title').css({opacity:'', cursor:''});
     } else {
-        const reason = q.is_draft == 1 ? '草稿不能列印，請先存為正式報價單' : '尚未通過主管審核，核准後才能列印';
+        const reason = q.is_draft == 1 ? '草稿不能列印，請先存為正式報價單'
+            : (q.is_temp_save == 1 ? '暫存尚未完成，請先補齊內容並正式存檔' : '尚未通過主管審核，核准後才能列印');
         $btn.attr('title', reason).css({opacity:0.5, cursor:'not-allowed'});
     }
 }
@@ -4402,6 +4423,77 @@ function _postQuoteSave(qd, onSuccess) {
 }
 
 // ══════════════════════════════════════════════════════
+// ★ 暫存（內容尚未填完也能先存起來，續填後再正式存檔；不驗證必填欄位、不進簽核、不能列印）
+// ══════════════════════════════════════════════════════
+function tempSaveQuote() {
+    const qd = {
+        quote_id:      $('#quote_id').val(),
+        quote_no:      $('#quote_no').val().trim(),
+        quote_date:    $('#quote_date').val(),
+        valid_until:   $('#valid_until').val(),
+        client_name:   $('#client_name').val(),
+        client_id:     $('#client_id').val(),
+        contact_id:    $('#contact_id').val() || null,
+        inquiry_no:    $('#inquiry_no').val().trim(),
+        currency:      $('#currency').val(),
+        exchange_rate: $('#exchange_rate').val(),
+        note:          $('#note').val(),
+        is_negotiation:  $('#is_negotiation').is(':checked') ? 1 : 0,
+        total_amount:    parseFloat($('#totalAmountDisplay').text().replace(/,/g, '')) || 0,
+        source_quote_id: $('#source_quote_id').val() || null,
+        last_updated_at: $('#last_updated_at').val() || '',
+        is_temp_save:    1,
+        items: []
+    };
+    if (!qd.quote_no || !qd.quote_date) {
+        Swal.fire('錯誤', '報價單號和報價日期為必填', 'error'); return;
+    }
+    $('#quoteItemsTable > tbody > tr.item-row').each(function () {
+        const $row = $(this);
+        const pid  = $row.find('.product_id_hidden').val();
+        if (!pid) return; // 暫存允許料號未綁定的空白列，該列不存入明細
+        const isTiered = parseInt($row.data('is-tiered')) === 1;
+        const item = {
+            item_id:            $row.data('item-id') || null,
+            product_id:         pid,
+            d_setting_d_id:     parseInt($row.find('.d_setting_d_id_hidden').val()) || null,
+            specification:      $row.find('input[name="specification"]').val(),
+            processes:          $row.find('.process-hidden').val(),
+            quantity:            isTiered ? 0 : ($row.find('.quantity').val() || 0),
+            unit:               $row.find('.item-unit').val() || 'PCS',
+            unit_price:         isTiered ? 0 : ($row.find('.unit-price').val() || 0),
+            amount:             ($row.find('.amount').val() || '0').replace(/,/g, ''),
+            process_group_type: $row.find('.proc-group-type-hidden').val() || 'single_process',
+            process_notes:      $row.find('.proc-subtags-hidden').val(),
+            is_tiered:          isTiered ? 1 : 0,
+            show_bom:           $row.find('.show-bom-hidden').val() === '1' ? 1 : 0,
+            print_bom:          $row.find('.print-bom-hidden').val() === '1' ? 1 : 0,
+            tiers: []
+        };
+        if (isTiered) {
+            $row.next('tr.tier-row').find('.tier-tbody tr.tier-input-row').each(function () {
+                const $tr = $(this);
+                const rawQmax = ($tr.find('.tier-qty-max').val() || '').trim();
+                item.tiers.push({
+                    qty_min:         Math.round(parseFloat($tr.find('.tier-qty-min').val())) || 0,
+                    qty_max:         rawQmax !== '' ? Math.round(parseFloat(rawQmax)) : '',
+                    unit_price:      $tr.find('.tier-unit-price').val(),
+                    tolerance_value: $tr.find('.tier-tol-value').val(),
+                    tolerance_unit:  $tr.find('.tier-tol-unit').val(),
+                    tolerance_note:  $tr.find('.tier-tol-note').val(),
+                });
+            });
+        }
+        qd.items.push(item);
+    });
+    const hasContent = !!(qd.client_name.trim() || qd.note.trim() || qd.inquiry_no || qd.items.length);
+    if (!hasContent) {
+        Swal.fire('提示', '目前尚無任何內容，無法暫存', 'warning'); return;
+    }
+    _postQuoteSave(qd);
+}
+
+// ══════════════════════════════════════════════════════
 // 刪除
 // ══════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════
@@ -4636,6 +4728,12 @@ function refreshPendingDocBadge() {
     const $b = $('#pendingDocBadge');
     if (n > 0) $b.text(n).show(); else $b.hide();
 }
+// 「暫存未完成」按鈕徽章＝自己建立、內容尚未填完仍先存檔的張數
+function refreshTempSaveDocBadge() {
+    const n = allQuotes.filter(q => q.is_temp_save == 1 && Number(q.created_by) === CURRENT_UID).length;
+    const $b = $('#tempSaveDocBadge');
+    if (n > 0) $b.text(n).show(); else $b.hide();
+}
 
 function showPendingAlertModal() {
     renderPendingAlertBody();
@@ -4679,21 +4777,37 @@ function applyPendingFilter() {
         Swal.fire({ toast:true, position:'top-end', icon:'info', title:'目前沒有待處理（待審核/被駁回）的報價單', showConfirmButton:false, timer:2500 });
         return;
     }
+    tempSaveFilterMode = false;
     pendingFilterMode = true;
     $('#showAllDocBtn').show();   // 篩選中的狀態指示＝出現「顯示全部」鈕（按鈕本身樣式維持一致，不變色）
     renderQuoteList(allQuotes, $('#listSearch').val().trim());
     Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已篩選待處理單據（報價單待審核/被駁回），點「顯示全部」可還原', showConfirmButton:false, timer:2800 });
 }
-// 取消篩選，還原全部
-function clearPendingFilter() {
+// 篩選：只顯示自己暫存中尚未完成的報價單
+function applyTempSaveFilter() {
+    const n = allQuotes.filter(q => q.is_temp_save == 1 && Number(q.created_by) === CURRENT_UID).length;
+    if (n === 0) {
+        Swal.fire({ toast:true, position:'top-end', icon:'info', title:'目前沒有暫存未完成的報價單', showConfirmButton:false, timer:2500 });
+        return;
+    }
     pendingFilterMode = false;
+    tempSaveFilterMode = true;
+    $('#showAllDocBtn').show();
+    renderQuoteList(allQuotes, $('#listSearch').val().trim());
+    Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已篩選您暫存未完成的報價單，點「顯示全部」可還原', showConfirmButton:false, timer:2800 });
+}
+// 取消篩選，還原全部
+function clearDocFilters() {
+    pendingFilterMode = false;
+    tempSaveFilterMode = false;
     $('#showAllDocBtn').hide();
     renderQuoteList(allQuotes, $('#listSearch').val().trim());
 }
 // 篩選畫面下操作提醒（3 秒自動消失）
 function _pendingFilterHint() {
-    if (!pendingFilterMode) return;
-    Swal.fire({ toast:true, position:'top-end', icon:'info', title:'目前在「待處理單據」篩選畫面下', showConfirmButton:false, timer:3000 });
+    if (!pendingFilterMode && !tempSaveFilterMode) return;
+    const title = pendingFilterMode ? '目前在「待處理單據」篩選畫面下' : '目前在「暫存未完成」篩選畫面下';
+    Swal.fire({ toast:true, position:'top-end', icon:'info', title, showConfirmButton:false, timer:3000 });
 }
 
 // 補件 modal 上傳區事件綁定 + 待審徽章初始化
@@ -4722,8 +4836,9 @@ function printQuote() {
         if (!res.success) { Swal.fire('錯誤', res.message || '無法取得資料', 'error'); return; }
         const { quote, customer, contact, company, form_number, as_doc_no } = res;
         // 伺服器端資料為準的最後防線：草稿一律擋下；「需審核通過才能列印」開關開啟時未核准也擋（前端按鈕閘門可能被繞過）
-        if (quote.is_draft == 1 || (printNeedApproval && quote.approval_status !== 'approved')) {
-            const reason = quote.is_draft == 1 ? '草稿不能列印，請先存為正式報價單。' : '尚未通過主管審核，核准後才能列印。';
+        if (quote.is_draft == 1 || quote.is_temp_save == 1 || (printNeedApproval && quote.approval_status !== 'approved')) {
+            const reason = quote.is_draft == 1 ? '草稿不能列印，請先存為正式報價單。'
+                : (quote.is_temp_save == 1 ? '暫存尚未完成，請先補齊內容並正式存檔。' : '尚未通過主管審核，核准後才能列印。');
             Swal.fire('無法列印', reason, 'warning');
             return;
         }
@@ -5170,7 +5285,7 @@ function cloneQuote() {
             resetEditor();
             currentEditId = null;
             $('#editorTitle').html('<i class="fa fa-plus-circle" style="color:var(--accent);margin-right:6px;"></i>新增報價單');
-            $('#changeLogBtn, #delQuoteBtn, #cloneQuoteBtn, #printQuoteBtn').hide();
+            $('#changeLogBtn, #delQuoteBtn, #cloneQuoteBtn').hide();
             const _today = todayStr();
             $('#quote_date').val(_today);
             autoFillValidUntil();
