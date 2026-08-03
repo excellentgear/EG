@@ -348,6 +348,7 @@ try {
             try { $pdo->exec("ALTER TABLE quotation_list ADD COLUMN client_id CHAR(11) NULL COMMENT '客戶編號' AFTER client_name"); } catch(PDOException $e){}
             try { $pdo->exec("ALTER TABLE quotation_list ADD COLUMN contact_id INT NULL COMMENT '聯絡人主鍵' AFTER client_id"); } catch(PDOException $e){}
             try { $pdo->exec("ALTER TABLE quotation_list ADD COLUMN is_draft TINYINT(1) NOT NULL DEFAULT 0 COMMENT '草稿：必備附件缺漏仍執意儲存=1，補齊後儲存自動歸0'"); } catch(PDOException $e){}
+            try { $pdo->exec("ALTER TABLE quotation_list ADD COLUMN is_temp_save TINYINT(1) NOT NULL DEFAULT 0 COMMENT '暫存：內容尚未填完仍先存檔=1，之後按正式儲存會自動歸0'"); } catch(PDOException $e){}
 
             $quote_id = intval($data['quote_id'] ?? 0) ?: null;
             $items    = $data['items'] ?? [];
@@ -366,6 +367,7 @@ try {
             $missingAttach = $isNegotiation ? [] : eg_quotation_missing_required_attach($pdo, (string)($data['quote_no'] ?? ''), $submittedProductIds);
             $forcedDraft = false;
             $finalIsDraft = !empty($data['is_draft']) ? 1 : 0;
+            $isTempSave   = !empty($data['is_temp_save']) ? 1 : 0; // 暫存：內容不完整也允許先存檔，簽核流程一律不啟動
 
             // ── 主管簽核狀態轉場（比照本次定案規則）：草稿一律 none；有簽核權限者自己送等於自己核准免審；
             //    非草稿且原本是 approved → 內容變了自動打回 pending 重審；原本 rejected → 維持不自動重送；
@@ -381,7 +383,7 @@ try {
             $newApprovalStatus = 'none';
             $newApprovedBy = null; $newApprovedByName = null; $newApprovedAt = null;
             $needSubmitPending = false;
-            if ($finalIsDraft) {
+            if ($finalIsDraft || $isTempSave) {
                 $newApprovalStatus = 'none';
             } elseif ($userCanSign) {
                 $newApprovalStatus = 'approved';
@@ -434,6 +436,7 @@ try {
                 'note'           => $data['note'],
                 'is_negotiation' => $isNegotiation,
                 'is_draft'       => $finalIsDraft,
+                'is_temp_save'   => $isTempSave,
                 'approval_status'  => $newApprovalStatus,
                 'approved_by'      => $newApprovedBy,
                 'approved_by_name' => $newApprovedByName,
@@ -449,7 +452,7 @@ try {
                     $db_ua  = trim((string)($db_row['updated_at'] ?? ''));
                     if ($db_ua && $db_ua !== $last_ua) {
                         $pdo->rollBack();
-                        $fieldMap = ['quote_date'=>'報價日期','client_name'=>'客戶','note'=>'備註','is_negotiation'=>'議價','currency'=>'幣別','exchange_rate'=>'匯率','valid_until'=>'有效日期','is_draft'=>'草稿'];
+                        $fieldMap = ['quote_date'=>'報價日期','client_name'=>'客戶','note'=>'備註','is_negotiation'=>'議價','currency'=>'幣別','exchange_rate'=>'匯率','valid_until'=>'有效日期','is_draft'=>'草稿','is_temp_save'=>'暫存'];
                         $diffs = [];
                         foreach ($fieldMap as $fk => $flabel) {
                             $ov = (string)($db_row[$fk] ?? '');
@@ -469,7 +472,7 @@ try {
                     $oldQ = $pdo->prepare("SELECT * FROM quotation_list WHERE quote_id=?");
                     $oldQ->execute([$quote_id]);
                     $oldRow = $oldQ->fetch(PDO::FETCH_ASSOC) ?: [];
-                    $trackFields = ['quote_date','valid_until','client_name','client_id','inquiry_no','currency','exchange_rate','total_amount','note','is_negotiation','is_draft'];
+                    $trackFields = ['quote_date','valid_until','client_name','client_id','inquiry_no','currency','exchange_rate','total_amount','note','is_negotiation','is_draft','is_temp_save'];
                     $diffArr = []; $summaryParts = [];
                     foreach ($trackFields as $fk) {
                         $ov = (string)($oldRow[$fk] ?? ''); $nv = (string)($mf[$fk] ?? '');
@@ -485,7 +488,7 @@ try {
                 } catch(Exception $_cle){}
                 $mf['updated_by'] = $user_id;
                 $mf['quote_id']   = $quote_id;
-                $pdo->prepare("UPDATE quotation_list SET quote_no=:quote_no,quote_date=:quote_date,valid_until=:valid_until,client_name=:client_name,client_id=:client_id,contact_id=:contact_id,inquiry_no=:inquiry_no,currency=:currency,exchange_rate=:exchange_rate,total_amount=:total_amount,note=:note,is_negotiation=:is_negotiation,is_draft=:is_draft,approval_status=:approval_status,approved_by=:approved_by,approved_by_name=:approved_by_name,approved_at=:approved_at,updated_by=:updated_by,updated_at=NOW() WHERE quote_id=:quote_id")->execute($mf);
+                $pdo->prepare("UPDATE quotation_list SET quote_no=:quote_no,quote_date=:quote_date,valid_until=:valid_until,client_name=:client_name,client_id=:client_id,contact_id=:contact_id,inquiry_no=:inquiry_no,currency=:currency,exchange_rate=:exchange_rate,total_amount=:total_amount,note=:note,is_negotiation=:is_negotiation,is_draft=:is_draft,is_temp_save=:is_temp_save,approval_status=:approval_status,approved_by=:approved_by,approved_by_name=:approved_by_name,approved_at=:approved_at,updated_by=:updated_by,updated_at=NOW() WHERE quote_id=:quote_id")->execute($mf);
             } else {
                 // ── INSERT: Advisory Lock 已持有，直接取最新流水號（不需 FOR UPDATE）──
                 if ($pfx9) {
@@ -497,7 +500,7 @@ try {
                 }
                 $mf['created_by']      = $user_id;
                 $mf['source_quote_id'] = intval($data['source_quote_id'] ?? 0) ?: null;
-                $pdo->prepare("INSERT INTO quotation_list (quote_no,quote_date,valid_until,client_name,client_id,contact_id,inquiry_no,currency,exchange_rate,total_amount,note,is_negotiation,is_draft,approval_status,approved_by,approved_by_name,approved_at,created_by,source_quote_id,created_at) VALUES (:quote_no,:quote_date,:valid_until,:client_name,:client_id,:contact_id,:inquiry_no,:currency,:exchange_rate,:total_amount,:note,:is_negotiation,:is_draft,:approval_status,:approved_by,:approved_by_name,:approved_at,:created_by,:source_quote_id,NOW())")->execute($mf);
+                $pdo->prepare("INSERT INTO quotation_list (quote_no,quote_date,valid_until,client_name,client_id,contact_id,inquiry_no,currency,exchange_rate,total_amount,note,is_negotiation,is_draft,is_temp_save,approval_status,approved_by,approved_by_name,approved_at,created_by,source_quote_id,created_at) VALUES (:quote_no,:quote_date,:valid_until,:client_name,:client_id,:contact_id,:inquiry_no,:currency,:exchange_rate,:total_amount,:note,:is_negotiation,:is_draft,:is_temp_save,:approval_status,:approved_by,:approved_by_name,:approved_at,:created_by,:source_quote_id,NOW())")->execute($mf);
                 $quote_id = (int)$pdo->lastInsertId();
             }
 
@@ -624,7 +627,7 @@ try {
                 eg_quotation_close_approval_notice($pdo, $quote_id, $user_id);
             }
 
-            $response = ['success' => true, 'message' => '報價單儲存成功。',
+            $response = ['success' => true, 'message' => $isTempSave ? '已暫存，內容尚未完整，可稍後繼續填寫。' : '報價單儲存成功。',
                          'new_id' => $quote_id, 'quote_no' => $mf['quote_no'],
                          'forced_draft' => $forcedDraft,
                          'missing_attach_count' => count($missingAttach),
