@@ -55,8 +55,11 @@ switch ($action) {
     case 'get_change_history':       // 異動紀錄（職務調動＋在職狀態）
         getChangeHistory();
         break;
-    case 'backfill_position_history': // 補登過去的職務異動（生效日可為過去）
+    case 'backfill_position_history': // 補登過去的職務異動（生效日可為過去；主職調動／兼任新增／兼任移除／兼任更動）
         backfillPositionHistory();
+        break;
+    case 'get_position_snapshot_at':  // 查某人在某日期之前的職務快照（補登表單用，供核對/自動算兼任異動基準）
+        getPositionSnapshotAt();
         break;
     case 'delete_position_history':   // 刪除補登列（source='manual' 才可刪，系統自動寫的不可）
         deletePositionHistory();
@@ -564,8 +567,8 @@ function getChangeHistory() {
     }
 }
 
-/** 補登快照用：查部門/職稱名稱，組成單一職務(主職)的快照列；查不到名稱回 null */
-function _backfillSnapItem(PDO $db, int $depId, int $posId): ?array {
+/** 補登快照用：查部門/職稱名稱，組成一筆快照列（$isMain 決定主/兼）；查不到名稱回 null */
+function _backfillSnapItem(PDO $db, int $depId, int $posId, int $isMain = 1): ?array {
     $d = $db->prepare("SELECT name FROM department WHERE id = ?");
     $d->execute([$depId]);
     $dn = $d->fetchColumn();
@@ -574,17 +577,39 @@ function _backfillSnapItem(PDO $db, int $depId, int $posId): ?array {
     $pn = $p->fetchColumn();
     if ($dn === false || $pn === false) return null;
     return ['department_id' => $depId, 'department_name' => (string)$dn,
-            'position_id' => $posId, 'position_name' => (string)$pn, 'is_main' => 1];
+            'position_id' => $posId, 'position_name' => (string)$pn, 'is_main' => $isMain];
+}
+
+/** 補登基準快照：取「生效日前一天」依既有歷史紀錄解析出的職務（無紀錄則退回現況，與全站「當時職務」解析規則一致） */
+function _backfillBaseSnapshot(PDO $db, int $userId, string $eff): array {
+    $prevDate = date('Y-m-d', strtotime($eff . ' -1 day'));
+    return eg_position_snapshot_at($db, $userId, $prevDate);
+}
+
+/** 查某人在某日期之前的職務快照（補登表單開日期時的參考／核對用） */
+function getPositionSnapshotAt() {
+    global $db;
+    $id = (int)($_REQUEST['id'] ?? 0);
+    $eff = trim((string)($_REQUEST['effective_date'] ?? ''));
+    if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。']); return; }
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $eff)) {
+        echo json_encode(['status' => 'error', 'message' => '日期格式不正確（YYYY-MM-DD）。'], JSON_UNESCAPED_UNICODE); return;
+    }
+    $snap = _backfillBaseSnapshot($db, $id, $eff);
+    echo json_encode(['status' => 'success', 'data' => $snap, 'label' => eg_position_snapshot_label($snap)], JSON_UNESCAPED_UNICODE);
 }
 
 /**
  * 補登過去的職務異動（生效日可為過去日期）。
  * 補了之後，教育訓練等頁依日期解析（eg_position_snapshot_at）才能抓到「當時」的部門職稱。
- * 異動前職務可留空（＝當時之前無職務紀錄或不確定）；異動後職務必填。
+ * change_kind：transfer(主職調動) / concurrent_add(新增兼任) / concurrent_remove(移除兼任) / concurrent_change(更動兼任)。
+ * 兼任三種一律以「生效日前一天」解析出的快照為基準，套用差異後存成完整快照（主職＋所有兼任），
+ * 這樣主職調動也會把既有兼任職務原樣帶過去，不會因為補登主職異動而把兼任紀錄弄丟。
  */
 function backfillPositionHistory() {
     global $db;
     $id = (int)($_POST['id'] ?? 0);
+    $kind = trim((string)($_POST['change_kind'] ?? 'transfer'));
     $eff = trim((string)($_POST['effective_date'] ?? ''));
     $reason = trim((string)($_POST['reason'] ?? ''));
     if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。']); return; }
@@ -594,28 +619,97 @@ function backfillPositionHistory() {
     [$y, $m, $d] = array_map('intval', explode('-', $eff));
     if (!checkdate($m, $d, $y)) { echo json_encode(['status' => 'error', 'message' => '生效日不存在（' . $eff . '）。'], JSON_UNESCAPED_UNICODE); return; }
 
-    $aDep = (int)($_POST['after_department_id'] ?? 0);
-    $aPos = (int)($_POST['after_position_id'] ?? 0);
-    if ($aDep <= 0 || $aPos <= 0) {
-        echo json_encode(['status' => 'error', 'message' => '請選擇「異動後」的部門與職稱。'], JSON_UNESCAPED_UNICODE); return;
-    }
-    $after = _backfillSnapItem($db, $aDep, $aPos);
-    if ($after === null) { echo json_encode(['status' => 'error', 'message' => '異動後的部門或職稱不存在。'], JSON_UNESCAPED_UNICODE); return; }
+    $before = []; $after = [];
 
-    $bDep = (int)($_POST['before_department_id'] ?? 0);
-    $bPos = (int)($_POST['before_position_id'] ?? 0);
-    $before = [];
-    if ($bDep > 0 || $bPos > 0) {
-        if ($bDep <= 0 || $bPos <= 0) {
-            echo json_encode(['status' => 'error', 'message' => '「異動前」的部門與職稱請兩個都選，或兩個都留空（＝之前無紀錄）。'], JSON_UNESCAPED_UNICODE); return;
+    if ($kind === 'transfer') {
+        $aDep = (int)($_POST['after_department_id'] ?? 0);
+        $aPos = (int)($_POST['after_position_id'] ?? 0);
+        if ($aDep <= 0 || $aPos <= 0) {
+            echo json_encode(['status' => 'error', 'message' => '請選擇「主職異動後」的部門與職稱。'], JSON_UNESCAPED_UNICODE); return;
         }
-        $item = _backfillSnapItem($db, $bDep, $bPos);
-        if ($item === null) { echo json_encode(['status' => 'error', 'message' => '異動前的部門或職稱不存在。'], JSON_UNESCAPED_UNICODE); return; }
-        $before = [$item];
+        $afterMain = _backfillSnapItem($db, $aDep, $aPos, 1);
+        if ($afterMain === null) { echo json_encode(['status' => 'error', 'message' => '異動後的部門或職稱不存在。'], JSON_UNESCAPED_UNICODE); return; }
+
+        $bDep = (int)($_POST['before_department_id'] ?? 0);
+        $bPos = (int)($_POST['before_position_id'] ?? 0);
+        if ($bDep > 0 || $bPos > 0) {
+            if ($bDep <= 0 || $bPos <= 0) {
+                echo json_encode(['status' => 'error', 'message' => '「主職異動前」的部門與職稱請兩個都選，或兩個都留空（＝之前無紀錄）。'], JSON_UNESCAPED_UNICODE); return;
+            }
+            $beforeMain = _backfillSnapItem($db, $bDep, $bPos, 1);
+            if ($beforeMain === null) { echo json_encode(['status' => 'error', 'message' => '異動前的部門或職稱不存在。'], JSON_UNESCAPED_UNICODE); return; }
+            // 主職異動前有填才帶入基準快照裡「當時的兼任職務」一起保留；完全留空＝之前無任何紀錄，維持舊行為
+            $concurrentOnly = array_values(array_filter(_backfillBaseSnapshot($db, $id, $eff), fn($s) => !$s['is_main']));
+            $before = array_merge([$beforeMain], $concurrentOnly);
+        }
+        $concurrentOnly = array_values(array_filter(_backfillBaseSnapshot($db, $id, $eff), fn($s) => !$s['is_main']));
+        $after = array_merge([$afterMain], $concurrentOnly);
+
+    } elseif ($kind === 'concurrent_add') {
+        $aDep = (int)($_POST['add_department_id'] ?? 0);
+        $aPos = (int)($_POST['add_position_id'] ?? 0);
+        if ($aDep <= 0 || $aPos <= 0) { echo json_encode(['status' => 'error', 'message' => '請選擇要新增的兼任職務。'], JSON_UNESCAPED_UNICODE); return; }
+        $item = _backfillSnapItem($db, $aDep, $aPos, 0);
+        if ($item === null) { echo json_encode(['status' => 'error', 'message' => '部門或職稱不存在。'], JSON_UNESCAPED_UNICODE); return; }
+        $before = _backfillBaseSnapshot($db, $id, $eff);
+        foreach ($before as $s) {
+            if ($s['department_id'] === $aDep && $s['position_id'] === $aPos) {
+                echo json_encode(['status' => 'error', 'message' => '該日期之前已經有這個職務了，不需要新增（請確認生效日或改選其他異動類型）。'], JSON_UNESCAPED_UNICODE); return;
+            }
+        }
+        $after = array_merge($before, [$item]);
+
+    } elseif ($kind === 'concurrent_remove') {
+        $rDep = (int)($_POST['remove_department_id'] ?? 0);
+        $rPos = (int)($_POST['remove_position_id'] ?? 0);
+        if ($rDep <= 0 || $rPos <= 0) { echo json_encode(['status' => 'error', 'message' => '請選擇要移除的兼任職務。'], JSON_UNESCAPED_UNICODE); return; }
+        $before = _backfillBaseSnapshot($db, $id, $eff);
+        $found = false; $after = [];
+        foreach ($before as $s) {
+            if (!$found && !$s['is_main'] && $s['department_id'] === $rDep && $s['position_id'] === $rPos) { $found = true; continue; }
+            $after[] = $s;
+        }
+        if (!$found) {
+            echo json_encode(['status' => 'error', 'message' => '在該日期之前的快照中找不到這個兼任職務（可能是生效日填錯，或這其實是主職）。可先看上方預覽核對當時狀態。'], JSON_UNESCAPED_UNICODE); return;
+        }
+
+    } elseif ($kind === 'concurrent_change') {
+        $fDep = (int)($_POST['from_department_id'] ?? 0);
+        $fPos = (int)($_POST['from_position_id'] ?? 0);
+        $tDep = (int)($_POST['to_department_id'] ?? 0);
+        $tPos = (int)($_POST['to_position_id'] ?? 0);
+        if ($fDep <= 0 || $fPos <= 0) { echo json_encode(['status' => 'error', 'message' => '請選擇「原本的兼任職務」。'], JSON_UNESCAPED_UNICODE); return; }
+        if ($tDep <= 0 || $tPos <= 0) { echo json_encode(['status' => 'error', 'message' => '請選擇「更動後的兼任職務」。'], JSON_UNESCAPED_UNICODE); return; }
+        if ($fDep === $tDep && $fPos === $tPos) { echo json_encode(['status' => 'error', 'message' => '更動前後的職務相同，沒有實質變動。'], JSON_UNESCAPED_UNICODE); return; }
+        $toItem = _backfillSnapItem($db, $tDep, $tPos, 0);
+        if ($toItem === null) { echo json_encode(['status' => 'error', 'message' => '更動後的部門或職稱不存在。'], JSON_UNESCAPED_UNICODE); return; }
+        $before = _backfillBaseSnapshot($db, $id, $eff);
+        $found = false; $after = [];
+        foreach ($before as $s) {
+            if (!$found && !$s['is_main'] && $s['department_id'] === $fDep && $s['position_id'] === $fPos) { $found = true; continue; }
+            $after[] = $s;
+        }
+        if (!$found) {
+            echo json_encode(['status' => 'error', 'message' => '在該日期之前的快照中找不到「原本的兼任職務」（可能是生效日填錯）。可先看上方預覽核對當時狀態。'], JSON_UNESCAPED_UNICODE); return;
+        }
+        foreach ($after as $s) {
+            if ($s['department_id'] === $tDep && $s['position_id'] === $tPos) {
+                echo json_encode(['status' => 'error', 'message' => '該日期之前已經有更動後的這個職務了。'], JSON_UNESCAPED_UNICODE); return;
+            }
+        }
+        $after[] = $toItem;
+    } else {
+        echo json_encode(['status' => 'error', 'message' => '未知的異動類型。'], JSON_UNESCAPED_UNICODE); return;
     }
+
+    if (!eg_position_snapshot_changed($before, $after)) {
+        echo json_encode(['status' => 'error', 'message' => '異動前後沒有差異，未寫入。'], JSON_UNESCAPED_UNICODE); return;
+    }
+    $changeType = eg_position_change_type($before, $after);
+
     try {
         $db->beginTransaction();
-        $hid = eg_position_history_write($db, $id, 'backfill', $before, [$after], $eff,
+        $hid = eg_position_history_write($db, $id, $changeType, $before, $after, $eff,
             $reason !== '' ? $reason : '人事補登', 'manual',
             isset($_SESSION['id']) ? (int)$_SESSION['id'] : null, $_SESSION['user_cname'] ?? '');
         $db->commit();

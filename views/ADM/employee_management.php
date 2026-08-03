@@ -466,6 +466,7 @@ if ($hrUserPerm === 'R') {
                         <h4 style="margin-top:0;">職務調動紀錄</h4>
                         <p class="text-muted" style="font-size:13px; margin-bottom:8px;">
                             教育訓練等頁補登舊資料時，會依這裡的紀錄解析出「當時」的部門與職稱；職位變動過的人請把過去的異動補登進來（生效日填當時實際生效的日期）。
+                            主職有換人才選「主職調動」；只是兼任職務有增減或換人、主職沒變，選對應的兼任類型即可，系統會自動算出完整的前後快照。
                             系統異動當下自動寫入的紀錄不可刪除，只有補登列可刪。</p>
                         <div id="posHistPager" class="text-right" style="margin-bottom:4px;"></div>
                         <table class="table table-condensed table-striped">
@@ -476,24 +477,78 @@ if ($hrUserPerm === 'R') {
                             <b>補登職務異動</b>
                             <div class="row" style="margin-top:8px;">
                                 <div class="col-md-3 form-group">
+                                    <label>異動類型</label>
+                                    <select id="bfChangeKind" class="form-control input-sm">
+                                        <option value="transfer">主職調動</option>
+                                        <option value="concurrent_add">新增兼任</option>
+                                        <option value="concurrent_remove">移除兼任</option>
+                                        <option value="concurrent_change">更動兼任</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3 form-group">
                                     <label>生效日</label>
                                     <input type="date" max="9999-12-31" class="form-control input-sm" id="bfEffDate">
                                 </div>
+                                <div class="col-md-6 form-group">
+                                    <label>該日期之前的職務（系統依紀錄自動解析，供核對）</label>
+                                    <div id="bfSnapshotPreview" style="font-size:12px; color:#777; padding-top:6px;">請先選生效日</div>
+                                </div>
+                            </div>
+
+                            <div class="row bf-kind-row" data-kind="transfer">
                                 <div class="col-md-4 form-group">
-                                    <label>異動前（可都留空＝之前無紀錄）</label>
+                                    <label>主職異動前（可留空＝之前無主職紀錄）</label>
                                     <div class="row">
                                         <div class="col-xs-6" style="padding-right:4px;"><select id="bfBeforeDept" class="form-control input-sm hist-dept" data-pos-target="#bfBeforePos"><option value="">部門…</option></select></div>
                                         <div class="col-xs-6" style="padding-left:4px;"><select id="bfBeforePos" class="form-control input-sm"><option value="">職稱…</option></select></div>
                                     </div>
                                 </div>
                                 <div class="col-md-4 form-group">
-                                    <label>異動後（必填）</label>
+                                    <label>主職異動後（必填）</label>
                                     <div class="row">
                                         <div class="col-xs-6" style="padding-right:4px;"><select id="bfAfterDept" class="form-control input-sm hist-dept" data-pos-target="#bfAfterPos"><option value="">部門…</option></select></div>
                                         <div class="col-xs-6" style="padding-left:4px;"><select id="bfAfterPos" class="form-control input-sm"><option value="">職稱…</option></select></div>
                                     </div>
                                 </div>
                             </div>
+
+                            <div class="row bf-kind-row" data-kind="concurrent_add" style="display:none;">
+                                <div class="col-md-6 form-group">
+                                    <label>新增的兼任職務（必填）</label>
+                                    <div class="row">
+                                        <div class="col-xs-6" style="padding-right:4px;"><select id="bfAddDept" class="form-control input-sm hist-dept" data-pos-target="#bfAddPos"><option value="">部門…</option></select></div>
+                                        <div class="col-xs-6" style="padding-left:4px;"><select id="bfAddPos" class="form-control input-sm"><option value="">職稱…</option></select></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row bf-kind-row" data-kind="concurrent_remove" style="display:none;">
+                                <div class="col-md-6 form-group">
+                                    <label>要移除的兼任職務（必填，須是上方預覽中列出的兼任項目）</label>
+                                    <div class="row">
+                                        <div class="col-xs-6" style="padding-right:4px;"><select id="bfRemoveDept" class="form-control input-sm hist-dept" data-pos-target="#bfRemovePos"><option value="">部門…</option></select></div>
+                                        <div class="col-xs-6" style="padding-left:4px;"><select id="bfRemovePos" class="form-control input-sm"><option value="">職稱…</option></select></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row bf-kind-row" data-kind="concurrent_change" style="display:none;">
+                                <div class="col-md-4 form-group">
+                                    <label>原本的兼任職務（必填，須是上方預覽中列出的兼任項目）</label>
+                                    <div class="row">
+                                        <div class="col-xs-6" style="padding-right:4px;"><select id="bfChgFromDept" class="form-control input-sm hist-dept" data-pos-target="#bfChgFromPos"><option value="">部門…</option></select></div>
+                                        <div class="col-xs-6" style="padding-left:4px;"><select id="bfChgFromPos" class="form-control input-sm"><option value="">職稱…</option></select></div>
+                                    </div>
+                                </div>
+                                <div class="col-md-4 form-group">
+                                    <label>更動後的兼任職務（必填）</label>
+                                    <div class="row">
+                                        <div class="col-xs-6" style="padding-right:4px;"><select id="bfChgToDept" class="form-control input-sm hist-dept" data-pos-target="#bfChgToPos"><option value="">部門…</option></select></div>
+                                        <div class="col-xs-6" style="padding-left:4px;"><select id="bfChgToPos" class="form-control input-sm"><option value="">職稱…</option></select></div>
+                                    </div>
+                                </div>
+                            </div>
+
                             <div class="row">
                                 <div class="col-md-8 form-group">
                                     <label>原因（選填）</label>
@@ -1148,7 +1203,7 @@ $(document).ready(function() {
     });
 
     // --- 異動紀錄（職務調動＋在職狀態；ai-rules/14 P1）---
-    const CHANGE_TYPE_LABEL = { transfer: '調動', concurrent_add: '兼任新增', concurrent_remove: '兼任移除',
+    const CHANGE_TYPE_LABEL = { transfer: '調動', concurrent_add: '兼任新增', concurrent_remove: '兼任移除', concurrent_change: '兼任異動',
                                 backfill: '補登', resign: '離職', reinstate: '復職' };
     const STATUS_HIST_LABEL = { 0: '離職', 1: '在職（復職）', 2: '留職停薪', 3: '育嬰留停' };
     const canEditHist = window.hrUserPerm.includes('A') || window.hrUserPerm.includes('U');
@@ -1160,6 +1215,7 @@ $(document).ready(function() {
         $('#employeeModal').modal('hide');
         $('#bfPosErr, #bfStaErr').text('');
         $('#posBackfillBox, #staBackfillBox').toggle(canEditHist);
+        resetPosBackfillForm();
         loadHistDepts();
         loadChangeHistory(userId);
         $('#historyModal').modal('show');
@@ -1266,22 +1322,66 @@ $(document).ready(function() {
         });
     });
 
+    // 異動類型切換：只顯示對應的欄位區塊
+    $(document).on('change', '#bfChangeKind', function() {
+        const k = $(this).val();
+        $('.bf-kind-row').hide();
+        $('.bf-kind-row[data-kind="' + k + '"]').show();
+    });
+
+    // 該日期之前的職務快照（供核對，兼任新增/移除/更動要選的職務都以此為準）
+    function loadBfSnapshotPreview() {
+        const userId = $('#historyModal').data('id');
+        const eff = $('#bfEffDate').val();
+        if (!userId || !eff) { $('#bfSnapshotPreview').text('請先選生效日'); return; }
+        callApi('get_position_snapshot_at', 'GET', { id: userId, effective_date: eff }, function(res) {
+            $('#bfSnapshotPreview').text(res.status === 'success' ? res.label : ('讀取失敗: ' + res.message));
+        });
+    }
+    $(document).on('change', '#bfEffDate', loadBfSnapshotPreview);
+
+    function resetPosBackfillForm() {
+        $('#bfChangeKind').val('transfer').trigger('change');
+        $('#bfEffDate, #bfReason').val('');
+        $('#bfSnapshotPreview').text('請先選生效日');
+        $('#bfBeforeDept, #bfAfterDept, #bfAddDept, #bfRemoveDept, #bfChgFromDept, #bfChgToDept').val('');
+        $('#bfBeforePos, #bfAfterPos, #bfAddPos, #bfRemovePos, #bfChgFromPos, #bfChgToPos')
+            .empty().append('<option value="">職稱…</option>');
+    }
+
     // 補登職務異動（表單三總則：當下驗證、紅字寫原因）
     $('#btnBackfillPos').on('click', function() {
         const userId = $('#historyModal').data('id');
         const $err = $('#bfPosErr').text('');
         const eff = $('#bfEffDate').val();
         if (!eff) { $err.text('請填生效日（當時實際生效的日期）'); return; }
-        if (!$('#bfAfterDept').val() || !$('#bfAfterPos').val()) { $err.text('「異動後」的部門與職稱必填'); return; }
-        const bD = $('#bfBeforeDept').val(), bP = $('#bfBeforePos').val();
-        if ((bD && !bP) || (!bD && bP)) { $err.text('「異動前」請部門與職稱都選，或兩個都留空'); return; }
-        callApi('backfill_position_history', 'POST', {
-            id: userId, effective_date: eff,
-            before_department_id: bD || 0, before_position_id: bP || 0,
-            after_department_id: $('#bfAfterDept').val(), after_position_id: $('#bfAfterPos').val(),
-            reason: $('#bfReason').val()
-        }, function(res) {
-            if (res.status === 'success') { $('#bfEffDate, #bfReason').val(''); loadChangeHistory(userId); }
+        const kind = $('#bfChangeKind').val();
+        const payload = { id: userId, effective_date: eff, change_kind: kind, reason: $('#bfReason').val() };
+
+        if (kind === 'transfer') {
+            if (!$('#bfAfterDept').val() || !$('#bfAfterPos').val()) { $err.text('「主職異動後」的部門與職稱必填'); return; }
+            const bD = $('#bfBeforeDept').val(), bP = $('#bfBeforePos').val();
+            if ((bD && !bP) || (!bD && bP)) { $err.text('「主職異動前」請部門與職稱都選，或兩個都留空'); return; }
+            payload.before_department_id = bD || 0; payload.before_position_id = bP || 0;
+            payload.after_department_id = $('#bfAfterDept').val(); payload.after_position_id = $('#bfAfterPos').val();
+        } else if (kind === 'concurrent_add') {
+            if (!$('#bfAddDept').val() || !$('#bfAddPos').val()) { $err.text('請選擇新增的兼任職務'); return; }
+            payload.add_department_id = $('#bfAddDept').val(); payload.add_position_id = $('#bfAddPos').val();
+        } else if (kind === 'concurrent_remove') {
+            if (!$('#bfRemoveDept').val() || !$('#bfRemovePos').val()) { $err.text('請選擇要移除的兼任職務'); return; }
+            payload.remove_department_id = $('#bfRemoveDept').val(); payload.remove_position_id = $('#bfRemovePos').val();
+        } else { // concurrent_change
+            if (!$('#bfChgFromDept').val() || !$('#bfChgFromPos').val()) { $err.text('請選擇「原本的兼任職務」'); return; }
+            if (!$('#bfChgToDept').val() || !$('#bfChgToPos').val()) { $err.text('請選擇「更動後的兼任職務」'); return; }
+            payload.from_department_id = $('#bfChgFromDept').val(); payload.from_position_id = $('#bfChgFromPos').val();
+            payload.to_department_id = $('#bfChgToDept').val(); payload.to_position_id = $('#bfChgToPos').val();
+        }
+
+        callApi('backfill_position_history', 'POST', payload, function(res) {
+            if (res.status === 'success') {
+                resetPosBackfillForm();
+                loadChangeHistory(userId);
+            }
             else $err.text(res.message);
         });
     });

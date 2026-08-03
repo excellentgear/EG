@@ -104,7 +104,7 @@ function eg_position_snapshot_changed(array $before, array $after): bool {
     return $a !== $b;
 }
 
-/** 依前後快照推導異動類型：主職有動＝transfer，否則看兼任增減 */
+/** 依前後快照推導異動類型：主職有動＝transfer，否則看兼任增減／更動 */
 function eg_position_change_type(array $before, array $after): string {
     $main = function (array $snap) {
         foreach ($snap as $s) if ($s['is_main']) return $s['department_id'] . ':' . $s['position_id'];
@@ -116,6 +116,7 @@ function eg_position_change_type(array $before, array $after): string {
     $added = array_diff($a, $b); $removed = array_diff($b, $a);
     if ($added && !$removed) return 'concurrent_add';
     if ($removed && !$added) return 'concurrent_remove';
+    if ($added && $removed) return 'concurrent_change';   // 主職不變，兼任從一個換成另一個（非真調動）
     return 'transfer';
 }
 
