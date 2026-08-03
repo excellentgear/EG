@@ -662,6 +662,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <script src="../../resource/js/custom.min.js"></script>
 <!-- 全站輸入欄位規則（雙擊清空/自動全選/Enter 跳欄/表格 ↑↓ 換列與自動增刪列）：CLAUDE.md「UI 規則」唯一實作 -->
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
+<!-- 共用簽章圖章（有上傳掃描章的人自動換成實體章＋動態日期帶）：簽章一律用章，不可只印姓名文字 -->
+<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -740,6 +742,7 @@ function loadMeta(cb){
         ATT_DIRS = {nas:m.attach_nas_dir||'', root:m.attach_root||''};
         GROUPS = m.dept_groups || []; UNITS = m.units || [];
         AS_DOCS = m.as_docs || []; DOC_NO = m.doc_no || {}; COMPANY = m.company_name || '';
+        window.__ownCompany = COMPANY;      // eg_stamp.js 畫章時要用（公司全名）
         SIGNERS = m.plan_signers || {}; PLAN_APPR = m.plan_approval || {status:'none'};
         PLAN_LASTMOD = m.plan_last_modified || '';
         renderPlanStatus();
@@ -2017,8 +2020,10 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
             + 'table.pt td.l{text-align:left;}'
             + '.pt-legend{font-size:11px;margin-top:6px;line-height:1.7;}'
             + '.pt-sign{margin-top:12px;font-size:12px;width:100%;border-collapse:collapse;table-layout:fixed;}'
-            + '.pt-sign td{border:1px solid #333;height:54px;vertical-align:top;padding:3px 6px;width:33.33%;}'
+            + '.pt-sign td{border:1px solid #333;height:76px;vertical-align:top;padding:3px 6px;width:33.33%;}'
             + '.pt-sign .lb{font-size:11px;color:#333;}'
+            + '.pt-sign .stamp-box{text-align:center;margin-top:2px;}'
+            + '.stamp-wrap svg,svg.car-stamp{width:66px;height:66px;}'
             + '.pt-foot{position:fixed;right:8mm;bottom:5mm;font-size:9pt;color:#333;}'
             + (extraCss||'');
     var w = window.open('', '_blank');
@@ -2030,6 +2035,14 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
 }
 /* 簽章區：核准（最高核准人員）／審核（人事表單審核者）／人事（人事簽章人員）
    免送審＝三欄一起顯示、日期同送審日；需送審＝依實際簽核結果顯示 */
+/* 產生一顆簽章圖章（走共用 eg_stamp.js；載不到時退回姓名文字，至少不會整格空白） */
+function egStampHtml(name, date){
+    try {
+        if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, date || '', false);
+    } catch (e) {}
+    return '<span style="font-size:14px;">'+esc(name)+'</span>'
+         + (date ? '<div style="font-size:10px;color:#555;">'+esc(date)+'</div>' : '');
+}
 function signRowHtml(){
     var s = PLAN_APPR || {}, need = +(SETTINGS.training_need_approval||0);
     var ap = s.approve || {}, rv = s.review || {};
@@ -2049,9 +2062,10 @@ function signRowHtml(){
         hr   = (SIGNERS.hr_signer && SIGNERS.hr_signer.name) || '';
         if (!dt) dt = d10(SETTINGS.training_plan_sign_date || PLAN_LASTMOD || META.today);
     }
+    // 簽章一律蓋「圖章」（有上傳掃描章的人自動用實體章，其餘用共用回墨印 SVG），不是印姓名文字
     var cell = function(lb, nm){
-        return '<td><div class="lb">'+lb+'</div><div style="font-size:14px;margin-top:6px;">'+esc(nm||'')+'</div>'
-             + (nm && dt ? '<div style="font-size:10px;color:#555;">'+esc(dt)+'</div>' : '') + '</td>';
+        var st = nm ? egStampHtml(nm, dt) : '';
+        return '<td><div class="lb">'+lb+'</div><div class="stamp-box">'+st+'</div></td>';
     };
     return '<table class="pt-sign"><tr>'+cell('核准', appr)+cell('審核', rev)+cell('人事', hr)+'</tr></table>';
 }
