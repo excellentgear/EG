@@ -999,6 +999,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             <div class="col-sm-4 form-group"><label class="muted-help">處置 / 備註</label>
                 <input type="text" class="form-control input-sm" id="inp-remark" placeholder="例：尺寸 A 超差，退回重做…"></div>
         </div>
+        <div class="row">
+            <div class="col-sm-3 form-group"><label class="muted-help">容器 1（選填，供應用）</label>
+                <div style="display:flex;gap:6px;">
+                    <select class="form-control input-sm" id="insp-container-1" style="width:110px;">
+                        <option value="">請選擇</option>
+                        <option value="P">PP箱</option>
+                        <option value="E">蝴蝶籠</option>
+                        <option value="T">鐵桶</option>
+                        <option value="板">棧板</option>
+                    </select>
+                    <input type="number" class="form-control input-sm" id="insp-quantity-1" min="0" step="1" placeholder="箱數" style="width:80px;">
+                </div>
+            </div>
+            <div class="col-sm-3 form-group"><label class="muted-help">容器 2（選填）</label>
+                <div style="display:flex;gap:6px;">
+                    <select class="form-control input-sm" id="insp-container-2" style="width:110px;">
+                        <option value="">請選擇</option>
+                        <option value="P">PP箱</option>
+                        <option value="E">蝴蝶籠</option>
+                        <option value="T">鐵桶</option>
+                        <option value="板">棧板</option>
+                    </select>
+                    <input type="number" class="form-control input-sm" id="insp-quantity-2" min="0" step="1" placeholder="箱數" style="width:80px;">
+                </div>
+            </div>
+        </div>
         <label style="font-weight:normal;"><input type="checkbox" id="chk-save-std" checked> 存檔時同步更新此料號的檢驗標準（下次自動帶出）</label>
     </div>
 </div>
@@ -1924,6 +1950,8 @@ $(function(){
     // 超級管理員＝id 1 ＋ user_status 9 ＋ 在職（後端會再驗一次，這裡只決定按鈕顯不顯示）
     var IS_SUPER = <?php echo $IS_SUPER ? 'true' : 'false'; ?>;
     var CSRF = <?php echo json_encode($CSRF, JSON_UNESCAPED_SLASHES); ?>;
+    // 存檔後自動建立允收/異常彙總紀錄要用（同舊頁 _updateQC_check_list_ok/qq.php 的 id= 參數）
+    var CURRENT_UID = <?php echo json_encode((int)($_SESSION['id'] ?? 0)); ?>;
     $.ajaxPrefilter(function(opts){
         var m = (opts.type || opts.method || 'GET').toUpperCase();
         if (m !== 'POST') return;
@@ -3016,6 +3044,8 @@ $(function(){
             $('#main-area').show(); $('#dock').show(); syncDockPad();
             $('#inp-qty').val(ctx.order_qty || 0);
             $('#inp-sample').val(state.sampleN);
+            $('#insp-container-1,#insp-container-2').val('');
+            $('#insp-quantity-1,#insp-quantity-2').val('');
             renderBatches();
             renderItems(res.items || []);
             $('#no-std-hint').toggle(!res.has_std);
@@ -3685,6 +3715,42 @@ $(function(){
     });
 
     // =====================================================================
+    // 存檔後自動建立允收(OK)/異常(QQ)彙總紀錄，取代人工在待驗清單重複輸入一次
+    // 數量邏輯（2026-08 使用者定案）：不良數(ng_qty)→異常；送驗數-不良數→允收；
+    // 兩者可同時成立（同批部分合格部分不良），皆為 0 則略過該筆。
+    // 容器僅隨允收(OK)寫入（沿用舊頁 _updateQC_check_list_ok.php 的 container/quantity 欄位）。
+    // 沿用既有 store 端點，不重寫寫入邏輯；退回重做(asRedo)與臨時檢驗單(adhoc)不觸發。
+    // =====================================================================
+    function autoSubmitQcResult(fid, goodQty, badQty, remark, doneCb){
+        if(!fid){ doneCb(null); return; }
+        var containers = [$('#insp-container-1').val()||'', $('#insp-container-2').val()||''];
+        var quantities = [$('#insp-quantity-1').val()||'', $('#insp-quantity-2').val()||''];
+        var tasks=[];
+        if(goodQty>0) tasks.push({ url:'../../src/store/_updateQC_check_list_ok.php', qtyField:'ok_total_qty', qty:goodQty, label:'允收', withContainer:true });
+        if(badQty>0)  tasks.push({ url:'../../src/store/_updateQC_check_list_qq.php',  qtyField:'qq_total_qty', qty:badQty,  label:'異常', withContainer:false });
+        if(!tasks.length){ doneCb({ skipped:true, goodQty:0, badQty:0, errors:[] }); return; }
+
+        var errors=[];
+        function runNext(idx){
+            if(idx>=tasks.length){ doneCb({ skipped:false, goodQty:goodQty, badQty:badQty, errors:errors }); return; }
+            var t=tasks[idx];
+            var data={};
+            data[t.qtyField]=[t.qty];
+            data.QCmessage=[remark||''];
+            data.qc_check_id=[''];
+            if(t.withContainer){ data.container=containers; data.quantity=quantities; }
+            $.post(t.url+'?bi='+encodeURIComponent(fid)+'&id='+encodeURIComponent(CURRENT_UID), data, function(res){
+                if(!res || !res.success) errors.push(t.label+'：'+((res&&res.message)||'未知錯誤'));
+                runNext(idx+1);
+            },'json').fail(function(){
+                errors.push(t.label+'：伺服器錯誤');
+                runNext(idx+1);
+            });
+        }
+        runNext(0);
+    }
+
+    // =====================================================================
     // 儲存 / 退回重做
     // =====================================================================
     function doSave(asRedo){
@@ -3771,24 +3837,41 @@ $(function(){
             b.status = asRedo ? 'REDO' : s.check_result;
             renderBatches();
             var hasOpener = window.opener && !window.opener.closed;
-            if(hasOpener){
-                try{ window.opener.postMessage({ type:'qc_inspection_done', bom_ing_fid:s.bom_ing_fid, summary:s, qc_form_id:res.qc_form_id, redo:!!asRedo }, '*'); }catch(e){}
-            }
-            function finishSave(){
-                if(asRedo){ alert('已記錄退回重做（qc_form_id='+res.qc_form_id+'）。重做送回後可再驗一次。'); return; }
+
+            function afterAutoSubmit(autoResult){
                 if(hasOpener){
-                    try{ window.opener.focus(); }catch(e){}
-                    window.close();
-                    setTimeout(function(){
-                        if(confirm('檢驗結果已儲存並回傳待驗清單。\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty+'\n按確定關閉本視窗。')) window.close();
-                    }, 400);
-                } else {
-                    alert('已儲存（qc_form_id='+res.qc_form_id+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty+'　允收(讓步)：'+s.aod_qty);
-                    reloadContext();
+                    try{ window.opener.postMessage({ type:'qc_inspection_done', bom_ing_fid:s.bom_ing_fid, summary:s, qc_form_id:res.qc_form_id, redo:!!asRedo, autoSubmit:autoResult }, '*'); }catch(e){}
                 }
+                function autoMsg(){
+                    if(!autoResult || autoResult.skipped) return '';
+                    var t='\n已自動送出：允收 '+autoResult.goodQty+'　異常 '+autoResult.badQty;
+                    if(autoResult.errors && autoResult.errors.length) t+='\n⚠ 部分自動送出失敗，請至待驗清單該列手動確認（'+autoResult.errors.join('；')+'）';
+                    return t;
+                }
+                function finishSave(){
+                    if(asRedo){ alert('已記錄退回重做（qc_form_id='+res.qc_form_id+'）。重做送回後可再驗一次。'); return; }
+                    if(hasOpener){
+                        try{ window.opener.focus(); }catch(e){}
+                        window.close();
+                        setTimeout(function(){
+                            if(confirm('檢驗結果已儲存並回傳待驗清單。\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty+autoMsg()+'\n按確定關閉本視窗。')) window.close();
+                        }, 400);
+                    } else {
+                        alert('已儲存（qc_form_id='+res.qc_form_id+'）\n判定：'+(s.check_result==='NG'?'不良':'合格')+'　不良數：'+s.ng_qty+'　允收(讓步)：'+s.aod_qty+autoMsg());
+                        reloadContext();
+                    }
+                }
+                if(s.check_result==='NG') openNgAsk(res.qc_form_id, s, items, finishSave);
+                else finishSave();
             }
-            if(s.check_result==='NG') openNgAsk(res.qc_form_id, s, items, finishSave);
-            else finishSave();
+
+            if(asRedo){
+                afterAutoSubmit(null); // 退回重做不自動建立允收/異常紀錄，維持人工判斷
+            } else {
+                var goodQty = Math.max(0, (parseInt($('#inp-qty').val())||0) - (s.ng_qty||0));
+                var badQty  = s.ng_qty||0;
+                autoSubmitQcResult(s.bom_ing_fid, goodQty, badQty, $('#inp-remark').val(), afterAutoSubmit);
+            }
         },'json').fail(function(x){ $btn.prop('disabled',false); alert('儲存錯誤：'+x.responseText); });
     }
     $('#btn-save').on('click', function(){ doSave(false); });

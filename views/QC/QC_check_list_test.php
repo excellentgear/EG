@@ -2299,7 +2299,7 @@ if ($reply_id != "") {
                 var s = d.summary || {};
                 window.qcInspectionResults[d.bom_ing_fid] = s;
                 window.focus();
-                showInspectionResultBanner(d.bom_ing_fid, s, d.redo);
+                showInspectionResultBanner(d.bom_ing_fid, s, d.redo, d.autoSubmit);
                 // 高亮對應待驗列(若找得到)
                 try {
                     var $row = $('#qc-data-table tbody tr').filter(function(){ return $(this).find('td:first').text().trim() === String(d.bom_ing_fid); });
@@ -2307,12 +2307,39 @@ if ($reply_id != "") {
                 } catch(e){}
             });
 
-            // 常駐結果橫幅（需手動關閉），提示 QC 點既有 允收/異常/驗退/特採 送出
-            function showInspectionResultBanner(fid, s, isRedo){
+            // 常駐結果橫幅（需手動關閉）
+            // 2026-08 起：檢驗結果已由 inspection_entry_v2.php 存檔時自動送出允收/異常，
+            // 此橫幅只顯示自動送出的結果；只有自動送出失敗（或退回重做）才提示手動點列確認。
+            function showInspectionResultBanner(fid, s, isRedo, autoSubmit){
                 $('#inspection-result-banner').remove();
                 var isNG = s.check_result === 'NG';
                 var head = isRedo ? '已退回重做' : (isNG ? '檢驗結果：不良' : '檢驗結果：合格');
                 var color = isRedo ? '#f0ad4e' : (isNG ? '#d9534f' : '#5cb85c');
+                var hasErrors = autoSubmit && autoSubmit.errors && autoSubmit.errors.length;
+
+                var actionHtml;
+                if (isRedo || !autoSubmit) {
+                    // 退回重做、或舊版彈窗尚未回傳 autoSubmit 資訊：維持原本手動送出流程
+                    actionHtml = '<div style="margin-top:8px;color:#555;">請於此列點 <b>允收 / 異常 / 驗退 / 特採</b> 確認並送出（既有流程）。</div>'
+                        + '<div style="margin-top:10px;text-align:right;">'
+                        +   '<button class="btn btn-success btn-sm" onclick="openQCModal(\''+(isNG?'qq':'ok')+'\',\''+fid+'\');$(\'#inspection-result-banner\').remove();">'
+                        +     '前往「'+(isNG?'異常':'允收')+'」送出</button> '
+                        +   '<button class="btn btn-default btn-sm" onclick="$(\'#inspection-result-banner\').remove()">關閉</button>'
+                        + '</div>';
+                } else if (hasErrors) {
+                    actionHtml = '<div style="margin-top:8px;color:#d9534f;">⚠ 自動送出部分失敗：'+autoSubmit.errors.join('；')+'<br>請於此列點 <b>允收 / 異常</b> 手動確認補齊。</div>'
+                        + '<div style="margin-top:10px;text-align:right;">'
+                        +   '<button class="btn btn-warning btn-sm" onclick="openQCModal(\''+(isNG?'qq':'ok')+'\',\''+fid+'\');$(\'#inspection-result-banner\').remove();">前往手動確認</button> '
+                        +   '<button class="btn btn-default btn-sm" onclick="$(\'#inspection-result-banner\').remove()">關閉</button>'
+                        + '</div>';
+                } else {
+                    actionHtml = '<div style="margin-top:8px;color:#3c763d;">已自動送出：允收 <b>'+(autoSubmit.goodQty||0)+'</b>　異常 <b>'+(autoSubmit.badQty||0)+'</b>，不需再手動輸入一次。</div>'
+                        + '<div style="margin-top:10px;text-align:right;">'
+                        +   '<button class="btn btn-default btn-sm" onclick="openQCModal(\''+(isNG?'qq':'ok')+'\',\''+fid+'\');$(\'#inspection-result-banner\').remove();">查看/調整紀錄</button> '
+                        +   '<button class="btn btn-default btn-sm" onclick="$(\'#inspection-result-banner\').remove()">關閉</button>'
+                        + '</div>';
+                }
+
                 var html = '<div id="inspection-result-banner" style="position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:10999;'
                     + 'min-width:420px;max-width:90%;background:#fff;border:2px solid '+color+';border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.25);">'
                     + '<div style="background:'+color+';color:#fff;padding:8px 14px;font-weight:bold;font-size:15px;border-radius:3px 3px 0 0;">'
@@ -2322,12 +2349,7 @@ if ($reply_id != "") {
                     +   '不良數：<b style="color:'+(s.ng_qty>0?'#d9534f':'#333')+'">'+(s.ng_qty||0)+'</b>'
                     +   '　允收(讓步)：<b>'+(s.aod_qty||0)+'</b>'
                     +   '　送驗數：'+(s.incoming_qty||0)+'　抽驗：'+(s.sample_qty||0)+'<br>'
-                    +   '<div style="margin-top:8px;color:#555;">請於此列點 <b>允收 / 異常 / 驗退 / 特採</b> 確認並送出（既有流程）。</div>'
-                    +   '<div style="margin-top:10px;text-align:right;">'
-                    +     '<button class="btn btn-success btn-sm" onclick="openQCModal(\''+(isNG?'qq':'ok')+'\',\''+fid+'\');$(\'#inspection-result-banner\').remove();">'
-                    +       '前往「'+(isNG?'異常':'允收')+'」送出</button> '
-                    +     '<button class="btn btn-default btn-sm" onclick="$(\'#inspection-result-banner\').remove()">關閉</button>'
-                    +   '</div>'
+                    +   actionHtml
                     + '</div></div>';
                 $('body').append(html);
             }
