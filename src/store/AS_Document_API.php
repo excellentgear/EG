@@ -296,7 +296,9 @@ $asGate = [
     'add_tag'=>'settings', 'update_tag'=>'settings', 'delete_tag'=>'settings',
     'get_perms'=>'settings', 'save_perms'=>'settings',
     'get_settings'=>'settings', 'save_settings'=>'settings', 'upload_template'=>'settings',
-    'tree_print_meta'=>'view', 'save_tree_as_doc'=>'settings',
+    'tree_print_meta'=>'view', 'save_tree_as_doc'=>'settings', 'tree_signers'=>'view',
+    'save_tree_auto'=>'settings', 'tree_submit_approval'=>'update',
+    // tree_approval_decide 於 case 內檢查（核准人本人／管理員），核准人不一定有 AS 文件角色
     'save_dept_codes'=>'settings',
     'form_records_list'=>'view', 'form_records_upload'=>'create', 'form_record_delete'=>'delete',
     'set_linked_module'=>'settings',
@@ -777,10 +779,161 @@ case 'save_perms':
 // 依 ai-rules/16：大標題＝本公司全名（customer_list.is_own_company=1，禁寫死）、
 // 表頭＝已綁定 AS 文件的「表單名稱」、頁尾右下＝該文件編號
 case 'tree_print_meta':
+    $pendId = (int)asGetSetting($db,'as_doc_tree_pending_id');
+    $pending = null;
+    if ($pendId > 0) {
+        require_once __DIR__ . '/../common/approval_lib.php';
+        $rec = eg_approval_latest($db, 'as_doc_tree', 0, 'approve');
+        if ($rec && $rec['status']==='pending') $pending = ['id'=>(int)$rec['id'],'submitted_at'=>substr((string)$rec['submitted_at'],0,16),'submitted_by_name'=>$rec['submitted_by_name']];
+        else asSetSetting($db,'as_doc_tree_pending_id','0');
+    }
     jout(['status'=>'success',
           'company_name'=>asOwnCompanyName($db),
           'as_doc'=>asTreeBoundDoc($db),
+          'auto_approve'=>asGetSetting($db,'as_doc_tree_auto_approve')==='1',
+          'approved'=>json_decode(asGetSetting($db,'as_doc_tree_approved') ?: 'null', true),
+          'pending'=>$pending,
           'as_docs'=>$db->query("SELECT id, doc_no, doc_name FROM as_document WHERE is_deleted=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC)]);
+
+case 'save_tree_auto':
+    asSetSetting($db, 'as_doc_tree_auto_approve', ($_POST['auto'] ?? '0')==='1' ? '1' : '0');
+    jout(['status'=>'success']);
+
+// 送出審核（未開「自動核可」時）：留 approval_record＋發待簽核通知給最高核准人員（ai-rules/17）
+case 'tree_submit_approval':
+    require_once __DIR__ . '/../common/approval_lib.php';
+    require_once __DIR__ . '/../common/org_role_lib.php';
+    $pages = json_decode((string)($_POST['pages'] ?? '[]'), true);
+    if (!is_array($pages) || !$pages) jout(['status'=>'error','message'=>'沒有可送審的內容']);
+    $edId = (int)($_POST['editor_id'] ?? 0);
+    $st = $db->prepare("SELECT user_cname FROM user WHERE id=?"); $st->execute([$edId]);
+    $edName = (string)($st->fetchColumn() ?: '');
+    if ($edName==='') jout(['status'=>'error','message'=>'請選擇修改簽章人員']);
+    $ap = eg_org_user($db, 'top_approver');
+    if (!$ap) jout(['status'=>'error','message'=>'尚未綁定「最高核准人員」，請先至組織角色設定頁設定']);
+
+    $old = eg_approval_latest($db, 'as_doc_tree', 0, 'approve');
+    if ($old && $old['status']==='pending') jout(['status'=>'error','message'=>'已有一筆審核中的送審，請等待核准或退回']);
+
+    $apId = eg_approval_submit($db, 'as_doc_tree', 0, 'approve', $currentUserId, $currentCname);
+    asSetSetting($db, 'as_doc_tree_pending_id', (string)$apId);
+    asSetSetting($db, 'as_doc_tree_pending', json_encode([
+        'approval_id'=>$apId, 'pages'=>$pages, 'editor_id'=>$edId, 'editor_name'=>$edName,
+        'approver_id'=>(int)$ap['id'], 'approver_name'=>$ap['user_cname'],
+        'submitted_by'=>$currentUserId, 'submitted_by_name'=>$currentCname, 'submitted_at'=>date('Y-m-d H:i'),
+    ], JSON_UNESCAPED_UNICODE));
+
+    // 通知（點進去＝結構總覽審核頁，內容完整可看＋核准/退回鈕）
+    $lvTxt = implode('、', array_map(fn($p)=>($p['level'].'（'.$p['count'].'份，最新修改 '.$p['date'].'）'), $pages));
+    $title = 'AS 文件結構總覽待核准';
+    $content = $currentCname.' 送出「文件管制總覽表」變更請核准：'.$lvTxt.'；修改簽章人員：'.$edName.'。';
+    $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                  WHERE ref_type='AS_TREE_APPROVAL' AND (enddate IS NULL OR enddate >= CURDATE())")->execute();
+    $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                  VALUES (CURDATE(), NULL, ?, ?, 0, ?, 'AS文件結構總覽', 1, 'AS_TREE_APPROVAL', ?)")
+       ->execute([$title, $content, $currentUserId, $apId]);
+    $eventId = (int)$db->lastInsertId();
+    $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'sign')")
+       ->execute([$eventId, (int)$ap['id']]);
+    eg_approval_set_live_event($db, $apId, $eventId);
+    try {
+        require_once __DIR__ . '/../push/push_send.php';
+        eg_push_send_to_users($db, eg_push_event_recipients($db, $eventId), ['title'=>$title, 'body'=>mb_substr($content,0,480)]);
+    } catch (Throwable $e) {}
+    jout(['status'=>'success','pending'=>['id'=>$apId,'submitted_at'=>date('Y-m-d H:i'),'submitted_by_name'=>$currentCname]]);
+
+// 核准／退回（由審核檢視頁按鈕呼叫）：核准才把快照轉正，列印才會蓋章
+case 'tree_approval_decide':
+    require_once __DIR__ . '/../common/approval_lib.php';
+    $apId = (int)($_POST['approval_id'] ?? 0);
+    $dec  = ($_POST['decision'] ?? '')==='approved' ? 'approved' : 'rejected';
+    $note = trim((string)($_POST['note'] ?? ''));
+    if ($dec==='rejected' && $note==='') jout(['status'=>'error','message'=>'退回必須填寫原因']);
+    $snap = json_decode(asGetSetting($db,'as_doc_tree_pending') ?: 'null', true);
+    if (!$snap || (int)($snap['approval_id'] ?? 0) !== $apId) jout(['status'=>'error','message'=>'找不到對應的送審內容（可能已被處理）']);
+    if ((int)$snap['approver_id'] !== $currentUserId && !$asIsRoleAdmin) jout(['status'=>'error','message'=>'只有指定的核准人員可以決行']);
+
+    $res = eg_approval_decide($db, $apId, $currentUserId, $currentCname, $dec, $note ?: null);
+    if (!$res['success']) jout(['status'=>'error','message'=>$res['message']]);
+    if ($dec === 'approved') {
+        $snap['approved_at'] = date('Y-m-d H:i');
+        $snap['approver_name'] = $currentCname;
+        asSetSetting($db, 'as_doc_tree_approved', json_encode($snap, JSON_UNESCAPED_UNICODE));
+    }
+    asSetSetting($db, 'as_doc_tree_pending', '');
+    asSetSetting($db, 'as_doc_tree_pending_id', '0');
+    // 舊通知結束＋回發結果通知給送審者（ai-rules/17 第五條）
+    $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                  WHERE ref_type='AS_TREE_APPROVAL' AND ref_id=? AND (enddate IS NULL OR enddate >= CURDATE())")->execute([$apId]);
+    $rTitle = $dec==='approved' ? 'AS 文件結構總覽已核准' : 'AS 文件結構總覽被退回';
+    $rBody  = $dec==='approved' ? ($currentCname.' 已核准文件結構總覽，列印時會顯示簽章。'.($note?'（意見：'.$note.'）':''))
+                                : ($currentCname.' 退回文件結構總覽，原因：'.$note.'，請修正後重新送出審核。');
+    $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                  VALUES (CURDATE(), NULL, ?, ?, 0, NULL, 'AS文件結構總覽', 1, 'AS_TREE_RESULT', ?)")
+       ->execute([$rTitle, $rBody, $apId]);
+    $rEid = (int)$db->lastInsertId();
+    $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'read')")
+       ->execute([$rEid, (int)$snap['submitted_by']]);
+    try {
+        require_once __DIR__ . '/../push/push_send.php';
+        eg_push_send_to_users($db, eg_push_event_recipients($db, $rEid), ['title'=>$rTitle, 'body'=>mb_substr($rBody,0,480)]);
+    } catch (Throwable $e) {}
+    jout(['status'=>'success','message'=>$dec==='approved'?'已核准':'已退回']);
+
+// 結構總覽列印的簽章人：核准＝組織綁定「最高核准人員」；修改＝user_permissions 指派為「AS負責人」者
+// dates=YYYY-MM-DD,... （各階最新修改日期）；每人回傳各日期是否可簽（在職＋當天沒請假/留停）
+case 'tree_signers':
+    $dates = array_values(array_filter(array_map('trim', explode(',', (string)($_GET['dates'] ?? ''))),
+                                       fn($d)=>preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)));
+    require_once __DIR__ . '/../common/org_role_lib.php';
+    require_once __DIR__ . '/../common/leave_lib.php';
+    require_once __DIR__ . '/../common/user_active_lib.php';
+
+    /** 某人在各日期能否簽章（不在職＝全部不可；當天有請假/留停＝該日不可） */
+    $availOf = function(int $uid) use ($db, $dates): array {
+        $out = [];
+        if (!eg_user_is_active($db, $uid)) {
+            foreach ($dates as $d) $out[$d] = ['ok'=>false, 'why'=>'非在職（離職／留職停薪）'];
+            return $out;
+        }
+        foreach ($dates as $d) {
+            $busy = eg_leave_user_busy_in_range($db, $uid, $d.' 00:00:00', $d.' 23:59:59');
+            $out[$d] = $busy ? ['ok'=>false, 'why'=>($busy['leave_name'] ?: '請假').'（'.substr($busy['start_datetime'],0,10).'~'.substr($busy['end_datetime'],0,10).'）']
+                             : ['ok'=>true, 'why'=>''];
+        }
+        return $out;
+    };
+
+    // 核准：組織綁定 top_approver（設定頁 views/admin/org_role_setting.php，禁寫死人名）
+    $ap = eg_org_user($db, 'top_approver');
+    $approver = $ap ? ['id'=>(int)$ap['id'], 'name'=>$ap['user_cname'], 'avail'=>$availOf((int)$ap['id'])] : null;
+
+    // 修改：AS負責人（as_doc 模組角色 asdoc_editor）——個人指派(user_roles)優先，無個人指派才看職稱指派
+    $personal = [];  // uid => [role_code,...]
+    $st = $db->query("SELECT ur.user_id, r.role_code FROM user_roles ur
+                      JOIN roles r ON r.role_id=ur.role_id AND r.is_system=0 AND r.module='as_doc'");
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $personal[(int)$r['user_id']][] = $r['role_code'];
+    $byPos = [];
+    $st = $db->query("SELECT m.user_id, r.role_code FROM user_department_position_map m
+                      JOIN position_roles pr ON pr.position_id=m.position_id
+                      JOIN roles r ON r.role_id=pr.role_id AND r.module='as_doc'");
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $byPos[(int)$r['user_id']][] = $r['role_code'];
+
+    $editorIds = [];
+    foreach (array_unique(array_merge(array_keys($personal), array_keys($byPos))) as $uid) {
+        $eff = !empty($personal[$uid]) ? $personal[$uid] : ($byPos[$uid] ?? []);
+        if (in_array('asdoc_editor', $eff, true)) $editorIds[] = (int)$uid;
+    }
+    $editors = [];
+    if ($editorIds) {
+        $ph = implode(',', array_fill(0, count($editorIds), '?'));
+        $st = $db->prepare("SELECT id, user_cname FROM user WHERE id IN ($ph) ORDER BY user_cname");
+        $st->execute($editorIds);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $u) {
+            $editors[] = ['id'=>(int)$u['id'], 'name'=>$u['user_cname'], 'avail'=>$availOf((int)$u['id'])];
+        }
+    }
+    jout(['status'=>'success', 'approver'=>$approver, 'editors'=>$editors, 'dates'=>$dates]);
 
 case 'save_tree_as_doc':
     $docId = (int)($_POST['as_doc_id'] ?? 0);

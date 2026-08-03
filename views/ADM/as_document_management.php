@@ -339,6 +339,16 @@ if ($deptPerm === 'R') {
         <div id="treeBody" style="font-size:13px;line-height:1.9;"></div>
       </div>
       <div class="modal-footer">
+        <!-- 左下：簽章人員選擇＋送審（未開自動核可時） -->
+        <div style="float:left;text-align:left;font-size:12px;line-height:1.8;">
+          <span>修改簽章人員：</span>
+          <select id="treeSigner" class="form-control input-sm" style="display:inline-block;width:auto;min-width:130px;"></select>
+          <span id="treeApproverTxt" class="text-muted" style="margin-left:6px;"></span>
+          <div id="treeApprovalBar" style="margin-top:4px;display:none;">
+            <button type="button" class="btn btn-danger btn-sm" id="btnTreeSubmitApproval"><i class="fa fa-paper-plane"></i> 變更送出審核</button>
+            <span id="treeApprovalStatus" class="text-muted" style="margin-left:6px;"></span>
+          </div>
+        </div>
         <button type="button" class="btn btn-warning btn-sm" id="btnTreeAsDoc" style="display:none;"><i class="fa fa-link"></i> AS 文件編號綁定</button>
         <button type="button" class="btn btn-primary btn-sm" id="btnTreePrint"><i class="fa fa-print"></i> 列印文件管制總覽表</button>
         <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
@@ -756,6 +766,15 @@ if ($deptPerm === 'R') {
         <h4 class="modal-title">系統設定</h4>
       </div>
       <div class="modal-body">
+        <!-- 分頁式：設定項目多，分頁避免擠在一起 -->
+        <ul class="nav nav-tabs" id="setTabs" style="margin-bottom:12px;">
+          <li class="active"><a href="#setTabStore" data-toggle="tab"><i class="fa fa-hdd-o"></i> 儲存與負責人</a></li>
+          <li><a href="#setTabCode" data-toggle="tab"><i class="fa fa-hashtag"></i> 部門文件代碼</a></li>
+          <li><a href="#setTabTpl" data-toggle="tab"><i class="fa fa-file-text-o"></i> 範本</a></li>
+          <li><a href="#setTabPrint" data-toggle="tab"><i class="fa fa-print"></i> 結構總覽列印</a></li>
+        </ul>
+        <div class="tab-content">
+        <div class="tab-pane active" id="setTabStore">
         <div class="form-group">
           <label>NAS 儲存根路徑</label>
           <input type="text" class="form-control" id="set_nas_dir">
@@ -769,7 +788,8 @@ if ($deptPerm === 'R') {
           <label>代理人（可不設定）</label>
           <select class="form-control" id="set_deputy"><option value="">-- 無 --</option></select>
         </div>
-        <hr>
+        </div><!-- /儲存與負責人 -->
+        <div class="tab-pane" id="setTabCode">
         <div class="form-group">
           <label>部門文件代碼（自動編號用；同部門可多組，如 資材課=PD 廠內／PH 委外）</label>
           <p class="text-muted" style="font-size:11px;margin:0 0 4px;">同一代碼掛多個部門時（如 SM＝業務部/倉管組），<strong>清單中排較前者＝由編號反查部門時的預設</strong>（該情況下部門欄不鎖定、可下拉更改）。</p>
@@ -782,7 +802,8 @@ if ($deptPerm === 'R') {
           <button type="button" class="btn btn-sm btn-success" id="deptCodeAddRow" style="margin-top:6px;"><i class="fa fa-plus"></i> 加一組</button>
           <button type="button" class="btn btn-sm btn-info" id="deptCodeSave" style="margin-top:6px;">儲存部門代碼</button>
         </div>
-        <hr>
+        </div><!-- /部門文件代碼 -->
+        <div class="tab-pane" id="setTabTpl">
         <div class="form-group">
           <label>文件制修申請單（附件一）範本</label>
           <div>目前範本：<span id="tplStatus" class="text-muted">未上傳</span>
@@ -791,6 +812,24 @@ if ($deptPerm === 'R') {
           <input type="file" id="tplFile" style="margin-top:6px;">
           <button class="btn btn-sm btn-info" id="tplUpload" style="margin-top:6px;">上傳範本</button>
         </div>
+        </div><!-- /範本 -->
+        <div class="tab-pane" id="setTabPrint">
+          <div class="form-group">
+            <label>AS 文件結構總覽－簽章核可方式</label>
+            <div class="checkbox" style="margin-top:0;">
+              <label><input type="checkbox" id="set_tree_auto"> <b>自動核可</b>（勾選＝列印時直接帶出核准／修改簽章，日期＝該階文件最新修改日期）</label>
+            </div>
+            <p class="text-muted" style="font-size:12px;margin:0;">
+              不勾選＝需送審：於「結構總覽」跳窗左下按「變更送出審核」，由<b>最高核准人員</b>（組織角色設定頁綁定）於通知上核准／退回，
+              <b>核准後列印才會顯示簽章</b>；文件內容有異動（各階最新修改日期改變）需重新送審。
+            </p>
+          </div>
+          <div class="form-group">
+            <label>列印綁定的 AS 文件編號</label>
+            <p class="text-muted" style="font-size:12px;margin:0;">於「結構總覽」跳窗底部的「AS 文件編號綁定」設定；綁定後大標題下方表頭＝該文件名稱、頁尾右下＝該文件編號。</p>
+          </div>
+        </div><!-- /結構總覽列印 -->
+        </div><!-- /tab-content -->
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
@@ -805,6 +844,7 @@ if ($deptPerm === 'R') {
 <script src="../../resource/js/fastclick.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script>
 window.asPerm = <?php echo json_encode($asCaps); ?>;
 $(function(){
@@ -1343,12 +1383,49 @@ $(function(){
     $('#treeBody').html(html ? header+html : '<div class="text-muted">尚無文件</div>');
     $('#treeInfo').text(`共 ${count} 份文件`);
   }
-  let TREE_DOCS = [], TREE_META = {company_name:'', as_doc:null, as_docs:[]};
+  let TREE_DOCS = [], TREE_META = {company_name:'', as_doc:null, as_docs:[]}, TREE_SIGN = {approver:null, editors:[]};
+  const TREE_LEVELS = ['一階','二階','三階','四階'];
+  /** 要印的階層（沒有文件的階不印）＋各階最新修改日期 */
+  function treePages(){
+    return TREE_LEVELS.map(lv=>{
+      const rows = TREE_DOCS.filter(d=>String(d.doc_level||'')===lv)
+                            .sort((a,b)=>String(a.doc_no).localeCompare(String(b.doc_no)));
+      const dates = rows.map(d=>(d.revised_date||'').substring(0,10)).filter(Boolean).sort();
+      return {level:lv, rows:rows, date: dates.length ? dates[dates.length-1] : ''};
+    }).filter(p=>p.rows.length);   // 無文件的階不印那一頁
+  }
   function loadTree(){
     $.getJSON(API+'?action=list_documents', {include_deleted: $('#treeShowDeleted').is(':checked')?'1':'0'}, r=>{
       if(r.status!=='success'){ alert(r.message||'讀取失敗'); return; }
       TREE_DOCS = r.data||[];
       renderTree(TREE_DOCS);
+      loadTreeSigners();
+    });
+  }
+  /** 簽章人員：核准＝最高核准人員；修改＝AS負責人（只列各階簽章日期當天在職且未請假者） */
+  function loadTreeSigners(){
+    const dates = [...new Set(treePages().map(p=>p.date).filter(Boolean))];
+    $.getJSON(API+'?action=tree_signers', {dates: dates.join(',')}, r=>{
+      if(r.status!=='success') return;
+      TREE_SIGN = {approver:r.approver||null, editors:r.editors||[]};
+      const okAll = u => dates.length ? dates.every(d=>u.avail && u.avail[d] && u.avail[d].ok) : true;
+      const $s = $('#treeSigner').empty();
+      const usable = (TREE_SIGN.editors||[]).filter(okAll);
+      if(!usable.length){
+        $s.append('<option value="">（無可簽章人員）</option>');
+      } else {
+        usable.forEach(u=>$s.append(`<option value="${u.id}">${esc(u.name)}</option>`));
+      }
+      // 不可簽者也列出但停用，讓使用者知道為什麼沒出現
+      (TREE_SIGN.editors||[]).filter(u=>!okAll(u)).forEach(u=>{
+        const why = dates.map(d=>(u.avail&&u.avail[d]&&!u.avail[d].ok)?u.avail[d].why:'').filter(Boolean)[0]||'當日不在';
+        $s.append(`<option value="${u.id}" disabled>${esc(u.name)}（${esc(why)}）</option>`);
+      });
+      const ap = TREE_SIGN.approver;
+      const apOk = ap && okAll(ap);
+      $('#treeApproverTxt').html(ap ? ('核准：'+esc(ap.name)+(apOk?'':'<span style="color:#DD5138;">（'+esc(Object.values(ap.avail||{}).filter(v=>!v.ok).map(v=>v.why)[0]||'當日不在')+'）</span>'))
+                                   : '<span style="color:#DD5138;">核准人未設定（請至組織角色設定頁綁定「最高核准人員」）</span>');
+      renderTreeApprovalBar();
     });
   }
   function renderTreeAsDoc(){
@@ -1358,10 +1435,55 @@ $(function(){
   function loadTreeMeta(){
     $.getJSON(API+'?action=tree_print_meta', r=>{
       if(r.status!=='success') return;
-      TREE_META = {company_name:r.company_name||'', as_doc:r.as_doc||null, as_docs:r.as_docs||[]};
+      TREE_META = {company_name:r.company_name||'', as_doc:r.as_doc||null, as_docs:r.as_docs||[],
+                   auto_approve: !!r.auto_approve, approved: r.approved||null, pending: r.pending||null};
+      window.__ownCompany = TREE_META.company_name;   // eg_stamp.js 畫章時用
+      $('#set_tree_auto').prop('checked', TREE_META.auto_approve);
       renderTreeAsDoc();
+      renderTreeApprovalBar();
     });
   }
+  /** 左下審核區：自動核可＝不顯示；需送審＝顯示送審鈕與目前狀態 */
+  function renderTreeApprovalBar(){
+    if(TREE_META.auto_approve){ $('#treeApprovalBar').hide(); return; }
+    $('#treeApprovalBar').show();
+    const cur = JSON.stringify(treePages().map(p=>[p.level,p.date]));
+    const ap = TREE_META.approved, pd = TREE_META.pending;
+    let txt = '';
+    if(pd) txt = `<span style="color:#F0A24B;">審核中（${esc(pd.submitted_at||'')} 由 ${esc(pd.submitted_by_name||'')} 送出，待 ${esc((TREE_SIGN.approver||{}).name||'核准人')} 核准）</span>`;
+    else if(ap && JSON.stringify((ap.pages||[]).map(p=>[p.level,p.date]))===cur)
+      txt = `<span style="color:#2e7d32;">已核准（${esc(ap.approved_at||'')} ${esc(ap.approver_name||'')}）－列印會顯示簽章</span>`;
+    else if(ap) txt = '<span style="color:#DD5138;">文件已變更，核准內容已失效－請重新送出審核（列印不顯示簽章）</span>';
+    else txt = '<span class="text-muted">尚未送審－列印不顯示簽章</span>';
+    $('#treeApprovalStatus').html(txt);
+    $('#btnTreeSubmitApproval').prop('disabled', !!pd);
+  }
+  /** 目前的核准快照是否對應現在的內容（決定列印要不要蓋章） */
+  function treeApprovedNow(){
+    if(TREE_META.auto_approve) return true;
+    const ap = TREE_META.approved;
+    if(!ap) return false;
+    return JSON.stringify((ap.pages||[]).map(p=>[p.level,p.date])) === JSON.stringify(treePages().map(p=>[p.level,p.date]));
+  }
+  $('#btnTreeSubmitApproval').on('click', function(){
+    const pages = treePages().map(p=>({level:p.level, date:p.date, count:p.rows.length}));
+    if(!pages.length){ alert('尚無文件可送審'); return; }
+    const sid = $('#treeSigner').val();
+    if(!sid){ alert('沒有可簽章的 AS 負責人（當日需在職且未請假），無法送審'); return; }
+    if(!confirm('確定將目前的文件結構總覽送出審核？\n核准後列印才會顯示核准／修改簽章。')) return;
+    $.post(API, {action:'tree_submit_approval', pages: JSON.stringify(pages), editor_id: sid}, r=>{
+      if(r.status!=='success'){ alert(r.message||'送審失敗'); return; }
+      TREE_META.pending = r.pending||null; renderTreeApprovalBar();
+      alert('已送出審核，並已通知核准人員。');
+    }, 'json');
+  });
+  $('#set_tree_auto').on('change', function(){
+    const v = $(this).is(':checked') ? 1 : 0;
+    $.post(API, {action:'save_tree_auto', auto: v}, r=>{
+      if(r.status!=='success'){ alert(r.message||'儲存失敗'); $('#set_tree_auto').prop('checked', !v); return; }
+      TREE_META.auto_approve = !!v; renderTreeApprovalBar();
+    }, 'json');
+  });
   $('#btnTree').on('click', function(){ loadTree(); loadTreeMeta(); if(canS) $('#btnTreeAsDoc').show(); $('#treeModal').modal('show'); });
 
   // ── AS 文件編號綁定 ──────────────────────────────────────────
@@ -1387,19 +1509,20 @@ $(function(){
 
   // ── 列印「文件管制總覽表」：一階/二階/三階各自一頁，階層自動勾選 ─────
   // 大標題＝本公司全名（動態取，ai-rules/16）；表頭＝綁定 AS 文件的表單名稱；頁尾左下頁碼、右下 AS 編號
-  $('#btnTreePrint').on('click', function(){
-    if(!TREE_DOCS.length){ alert('尚無文件可列印'); return; }
-    const LEVELS = ['一階','二階','三階'];
-    const has4 = TREE_DOCS.some(d=>d.doc_level==='四階');
-    const pages = LEVELS.concat(has4?['四階']:[]);
+  window.treePrintBody = function(forApproval){
+    const pages = treePages();
     const asDoc = TREE_META.as_doc;
     const title = asDoc ? asDoc.doc_name : 'AS 文件結構總覽';
+    const showSign = forApproval ? true : treeApprovedNow();
+    const ap = TREE_SIGN.approver, apName = (TREE_META.approved && !TREE_META.auto_approve && !forApproval)
+                 ? (TREE_META.approved.approver_name||'') : (ap?ap.name:'');
+    const $sel = $('#treeSigner option:selected');
+    const edName = (TREE_META.approved && !TREE_META.auto_approve && !forApproval)
+                 ? (TREE_META.approved.editor_name||'')
+                 : (($('#treeSigner').val() && !$sel.prop('disabled')) ? $sel.text() : '');
     let body = '';
-    pages.forEach((lv, pi)=>{
-      const rows = TREE_DOCS.filter(d=>String(d.doc_level||'')===lv)
-                            .sort((a,b)=>String(a.doc_no).localeCompare(String(b.doc_no)));
-      const boxes = LEVELS.concat(has4?['四階']:[])
-        .map(l=>`<span class="p-box">${l===lv?'☑':'□'}${l}文件</span>`).join('');
+    pages.forEach((p, pi)=>{
+      const boxes = pages.map(x=>`<span class="p-box">${x.level===p.level?'☑':'□'}${x.level}文件</span>`).join('');
       body += `<div class="p-page">
         <div class="p-comp">${esc(TREE_META.company_name||'')}</div>
         <div class="p-title">${esc(title)}</div>
@@ -1408,18 +1531,29 @@ $(function(){
           <th style="width:7%;">項次</th><th style="width:17%;">文件編號</th><th>文件名稱</th>
           <th style="width:13%;">制訂單位</th><th style="width:8%;">版本</th>
           <th style="width:14%;">發行日期</th><th style="width:15%;">備註</th></tr></thead><tbody>`;
-      if(rows.length){
-        rows.forEach((d,i)=>{
-          body += `<tr><td>${i+1}</td><td>${esc(d.doc_no)||''}</td><td class="tl">${esc(d.doc_name)||''}</td>`
-                + `<td>${esc(d.dept_name)||''}</td><td>${esc(d.current_version)||''}</td>`
-                + `<td>${esc(d.revised_date)||''}</td><td>${d.is_deleted==1?'已作廢':''}</td></tr>`;
-        });
-      } else {
-        body += `<tr><td colspan="7" style="height:24px;color:#666;">（無${lv}文件）</td></tr>`;
-      }
-      body += `</tbody></table></div>`;
+      p.rows.forEach((d,i)=>{
+        body += `<tr><td>${i+1}</td><td>${esc(d.doc_no)||''}</td><td class="tl">${esc(d.doc_name)||''}</td>`
+              + `<td>${esc(d.dept_name)||''}</td><td>${esc(d.current_version)||''}</td>`
+              + `<td>${esc(d.revised_date)||''}</td><td>${d.is_deleted==1?'已作廢':''}</td></tr>`;
+      });
+      // 簽章列：左＝核准、右＝修改；日期＝該階文件最新修改日期（未核准則不蓋章）
+      const dot = (p.date||'').replace(/-/g,'.');
+      const st = (nm)=> (showSign && nm && window.EGStamp)
+            ? EGStamp.stamp(nm, dot, false).replace(/(href|src)="\//g, '$1="'+location.origin+'/')
+            : '<span class="p-blank"></span>';
+      body += `</tbody></table>
+        <div class="p-sign"><div class="s-cell">核准：${st(apName)}</div><div class="s-cell s-r">修改：${st(edName)}</div></div>
+      </div>`;
       if(pi < pages.length-1) body += '<div class="p-break"></div>';
     });
+    return body;
+  };
+  $('#btnTreePrint').on('click', function(){
+    if(!treePages().length){ alert('尚無文件可列印'); return; }
+    const asDoc = TREE_META.as_doc;
+    if(!TREE_META.auto_approve && !treeApprovedNow()
+       && !confirm('目前的結構總覽尚未（或已失效）核准，列印將不顯示簽章。仍要列印嗎？')) return;
+    const body = window.treePrintBody(false);
     const asTxt = asDoc ? String(asDoc.doc_no).replace(/['\\]/g,'') : '';
     const css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
       + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}'
@@ -1433,11 +1567,19 @@ $(function(){
       + 'table.p-tb thead th{background:#f3ead6;}'
       + 'table.p-tb td.tl{text-align:left;}'
       + 'table.p-tb tr{break-inside:avoid;}'
+      + '.p-sign{display:flex;margin-top:8px;break-inside:avoid;}'
+      + '.p-sign .s-cell{flex:1;font-size:13px;display:flex;align-items:center;min-height:80px;}'
+      + '.p-sign .s-r{justify-content:flex-end;}'
+      + '.p-blank{display:inline-block;width:150px;border-bottom:1px solid #999;height:1px;margin-left:6px;}'
+      + '.car-stamp{opacity:.92;vertical-align:middle;}'
+      + '.stamp-wrap{display:inline-block;text-align:center;margin:0 8px;}'
+      + '.stamp-wrap .stamp-title{display:none;}'
       + '@page{margin:12mm 10mm 18mm;'
       + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
       + '}';
     const w = window.open('', '_blank');
-    w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'+body
+    // 標題留空：瀏覽器列印頁首會印出網頁標題（＋日期），使用者要求頁首不出現文件名稱與日期
+    w.document.write('<html><head><meta charset="utf-8"><title></title><style>'+css+'</style></head><body>'+body
       +'<scr'+'ipt>window.onload=function(){'
       +'var onePageA4=(297-30)*96/25.4;'
       +'if(document.body.scrollHeight>onePageA4*0.92){'
