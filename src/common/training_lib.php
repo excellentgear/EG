@@ -186,7 +186,8 @@ function training_ensure_schema(PDO $db): void {
         UNIQUE KEY uq_year_unit (year, unit_key)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練次數目標(內訓/外訓,每月或每年)'");
 
-    foreach ([['training_view','訓練檢閱'],['training_edit','訓練登錄'],['training_admin','訓練管理員']] as $r) {
+    foreach ([['training_view','訓練檢閱'],['training_edit','訓練登錄'],['training_admin','訓練管理員'],
+              ['training_apply','訓練需求申請人']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='training' LIMIT 1");
         $st->execute([$r[0]]);
         if (!$st->fetchColumn()) {
@@ -194,6 +195,35 @@ function training_ensure_schema(PDO $db): void {
                ->execute([$r[0], $r[1]]);
         }
     }
+
+    // live_event.ref_type 原本 varchar(20)，本模組的 TRAINING_PLAN_APPROVAL(23)/TRAINING_REQUEST_APPROVAL(26)
+    // 等值超長會整筆 INSERT 失敗(SQLSTATE 22001)、通知悄悄消失卻不報錯，故放寬到 40（純加大，不影響既有資料/程式）。
+    try { $db->exec("ALTER TABLE live_event MODIFY COLUMN ref_type VARCHAR(40) NULL"); } catch (Throwable $e) {}
+
+    // 教育訓練需求申請單（2-MM-01-05，線上化）：申請→(可設免簽核)部門主管核准→訓練管理員轉為計畫
+    $db->exec("CREATE TABLE IF NOT EXISTS training_request (
+        request_id INT AUTO_INCREMENT PRIMARY KEY,
+        dept_id INT NULL COMMENT '申請單位 department.id',
+        user_id INT NOT NULL COMMENT '申請人 user.id',
+        user_name VARCHAR(50) NULL,
+        apply_date DATE NOT NULL,
+        subject VARCHAR(100) NOT NULL COMMENT '主旨',
+        content TEXT NULL COMMENT '一、簡述內容',
+        focus TEXT NULL COMMENT '二、主管要求學習重點',
+        trainees VARCHAR(300) NULL COMMENT '三、受訓人員(文字，尚未進入排課階段)',
+        start_date DATE NULL COMMENT '四、受訓時間起',
+        end_date DATE NULL COMMENT '受訓時間迄',
+        days INT NULL,
+        hours DECIMAL(5,1) NULL COMMENT '總計時數',
+        location VARCHAR(100) NULL COMMENT '四、受訓地點',
+        cost VARCHAR(100) NULL COMMENT '五、受訓費用',
+        brochure_count INT NULL COMMENT '會辦管理:簡章 X 份',
+        status VARCHAR(16) NOT NULL DEFAULT 'draft' COMMENT 'draft/submitted/approved/rejected/converted/cancelled',
+        session_id INT NULL COMMENT '已轉為的 training_session.session_id',
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NULL,
+        KEY idx_status (status), KEY idx_dept (dept_id), KEY idx_user (user_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練需求申請單(2-MM-01-05)'");
 }
 
 /* ============================================================
@@ -203,7 +233,9 @@ function training_ensure_schema(PDO $db): void {
 const TRAINING_SETTING_KEYS = ['training_default_shift_id', 'training_cat_internal', 'training_cat_external',
     // 各分頁/報表綁定的 AS 文件（存 as_document.id，列印時才解出 doc_no；未設定＝該表不印文件編號）
     'training_as_doc_plan', 'training_as_doc_result', 'training_as_doc_target',
-    'training_need_approval'];   // 1=訓練計劃表需要送審（審核→核准）；0=不送審，列印直接顯示簽章
+    'training_need_approval',    // 1=訓練計劃表需要送審（審核→核准）；0=不送審，列印直接顯示簽章
+    'training_as_doc_request',   // 需求申請單綁定的 AS 文件 id（2-MM-01-05）
+    'training_request_need_approval'];  // 1=需求申請單需要部門主管核准；0=免簽核，送出即視同核准
 /* 休息時段（HH:MM 字串，不是 id）：上課時間與此時段重疊幾分鐘就扣幾分鐘。
    兩欄都留空＝完全不扣休息。預設 12:00~13:00（＝日班的午休）。 */
 const TRAINING_SETTING_STR_KEYS = ['training_break_start', 'training_break_end',
@@ -214,7 +246,8 @@ const TRAINING_BREAK_DEFAULT = ['training_break_start'=>'12:00', 'training_break
 function training_settings(PDO $db): array {
     $out = ['training_default_shift_id'=>null, 'training_cat_internal'=>null, 'training_cat_external'=>null,
             'training_as_doc_plan'=>null, 'training_as_doc_result'=>null, 'training_as_doc_target'=>null,
-            'training_need_approval'=>null, 'training_exclude_depts'=>'', 'training_plan_sign_date'=>''];
+            'training_need_approval'=>null, 'training_exclude_depts'=>'', 'training_plan_sign_date'=>'',
+            'training_as_doc_request'=>null, 'training_request_need_approval'=>1];
     $out += TRAINING_BREAK_DEFAULT;      // 沒設定過才用預設；設定成空字串＝管理員刻意關閉，不可再被預設蓋回去
     try {
         $keys = array_merge(TRAINING_SETTING_KEYS, TRAINING_SETTING_STR_KEYS);
@@ -509,6 +542,62 @@ function training_plan_notify_result(PDO $db, int $year, int $toUid, string $tit
     } catch (Throwable $e) {}
 }
 
+/* ============================================================
+ * 教育訓練需求申請單（2-MM-01-05 線上化）：module='training_request'、entity_id=request_id
+ *   單層核准＝申請部門的部門主管；可於模組設定切換「免簽核」，免簽核時送出即視同核准（列印仍蓋章，比照計畫表）。
+ *   通知＝比照 training_plan_notify 系列但一次性事件（非年度），故另建一套 ref_type=TRAINING_REQUEST_*。
+ * ============================================================ */
+/** 某申請單位的核准人＝該部門主管；抓不到或就是申請人本人 → 視為免審（回 null，呼叫端自動核准） */
+function training_request_signer(PDO $db, ?int $deptId, int $requesterId): ?array {
+    $m = eg_org_dept_manager($db, $deptId);
+    if (!$m || (int)$m['id'] === $requesterId) return null;
+    return ['id'=>(int)$m['id'], 'name'=>$m['user_cname']];
+}
+
+function training_request_notify(PDO $db, int $reqId, int $toUid, string $title, string $content, int $fromUid): int {
+    if (!$toUid) return 0;
+    try {
+        $db->prepare("UPDATE live_event SET enddate=DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                      WHERE ref_type='TRAINING_REQUEST_APPROVAL' AND ref_id=? AND (enddate IS NULL OR enddate>=CURDATE())")
+           ->execute([$reqId]);
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, ?, '教育訓練需求申請', 1, 'TRAINING_REQUEST_APPROVAL', ?)")
+           ->execute([$title, $content, $fromUid, $reqId]);
+        $eid = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'sign')")
+           ->execute([$eid, $toUid]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
+        } catch (Throwable $e) {}
+        return $eid;
+    } catch (Throwable $e) { return 0; }
+}
+
+function training_request_close_notice(PDO $db, int $reqId): void {
+    try {
+        $db->prepare("UPDATE live_event SET enddate=DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                      WHERE ref_type='TRAINING_REQUEST_APPROVAL' AND ref_id=? AND (enddate IS NULL OR enddate>=CURDATE())")
+           ->execute([$reqId]);
+    } catch (Throwable $e) {}
+}
+
+function training_request_notify_result(PDO $db, int $reqId, int $toUid, string $title, string $content, int $fromUid): void {
+    if (!$toUid) return;
+    try {
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, ?, '教育訓練需求申請', 1, 'TRAINING_REQUEST_RESULT', ?)")
+           ->execute([$title, $content, $fromUid, $reqId]);
+        $eid = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'read')")
+           ->execute([$eid, $toUid]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
+        } catch (Throwable $e) {}
+    } catch (Throwable $e) {}
+}
+
 /** 某年度的目標設定（unit_key => 設定列）；'ALL' 為未個別設定時的預設 */
 function training_targets(PDO $db, int $year): array {
     $out = [];
@@ -712,8 +801,11 @@ function training_perms(PDO $db, ?array $u): array {
     }
     $canAdmin = $isAdmin || training_has_role($db, $uid, ['training_admin']);
     $canEdit  = $canAdmin || training_has_role($db, $uid, ['training_edit']);
-    $canView  = $canEdit  || training_has_role($db, $uid, ['training_view']);
-    return ['isAdmin'=>$isAdmin,'canAdmin'=>$canAdmin,'canEdit'=>$canEdit,'canView'=>$canView];
+    // 訓練需求申請人：獨立角色，只能填/送/看自己的申請單，不等於也不授予登錄/管理權限，
+    // 但比照使用者要求，可看訓練場次列表(唯讀) → 併入 canView。
+    $canApply = $canEdit || training_has_role($db, $uid, ['training_apply']);
+    $canView  = $canEdit || $canApply || training_has_role($db, $uid, ['training_view']);
+    return ['isAdmin'=>$isAdmin,'canAdmin'=>$canAdmin,'canEdit'=>$canEdit,'canView'=>$canView,'canApply'=>$canApply];
 }
 
 /* ============================================================

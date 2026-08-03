@@ -24,9 +24,28 @@ if (!$u) jerr('未登入', 401);
 $uid = (int)$u['id'];
 $uname = (string)$u['user_cname'];
 $perms = training_perms($db, $u);
-if (!$perms['canView']) jerr('無教育訓練檢閱權限', 403);
-
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
+// 需求申請單的核准人（申請單位部門主管）多半沒有教育訓練模組任何角色，只是被指派決行一筆申請單，
+// 不能卡在「無教育訓練檢閱權限」——這兩個動作各自在 case 內再驗一次「是不是被指派的那個人」。
+$publicActions = ['request_decide'];
+if (!$perms['canView'] && !in_array($action, $publicActions, true)) jerr('無教育訓練檢閱權限', 403);
+
+/** 申請人的主要部門（申請單「申請單位」預設值） */
+function tr_user_dept_id(PDO $db, int $uid): ?int {
+    try {
+        $st = $db->prepare("SELECT department_id FROM user_department_position_map WHERE user_id=? ORDER BY is_main DESC, id LIMIT 1");
+        $st->execute([$uid]);
+        $v = $st->fetchColumn();
+        return $v ? (int)$v : null;
+    } catch (Throwable $e) { return null; }
+}
+function tr_user_dept_name(PDO $db, int $uid): string {
+    $id = tr_user_dept_id($db, $uid);
+    if (!$id) return '';
+    $st = $db->prepare("SELECT name FROM department WHERE id=?");
+    $st->execute([$id]);
+    return (string)($st->fetchColumn() ?: '');
+}
 
 function tr_dept_map(PDO $db): array {
     $m = [];
@@ -50,6 +69,18 @@ function tr_norm_time(?string $t): ?string {
     return sprintf('%02d:%02d', (int)$m[1], (int)$m[2]);
 }
 
+/** 需求申請單一列（含部門名稱與最新一筆主管簽核紀錄），供多個 request_* action 共用 */
+function tr_request_row(PDO $db, int $id): ?array {
+    $deptMap = tr_dept_map($db);
+    $st = $db->prepare("SELECT * FROM training_request WHERE request_id=?");
+    $st->execute([$id]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) return null;
+    $r['dept_name'] = $r['dept_id'] !== null ? ($deptMap[(int)$r['dept_id']] ?? '') : '';
+    $r['approval'] = eg_approval_latest($db, 'training_request', $id, 'manager');
+    return $r;
+}
+
 switch ($action) {
 
 case 'meta': {
@@ -71,14 +102,15 @@ case 'meta': {
                         WHERE COALESCE(is_deleted,0)=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC); }
                         catch (Throwable $e) { return []; } })($db),
           'doc_no'=>['plan'=>training_as_doc_no($db,'plan'), 'result'=>training_as_doc_no($db,'result'),
-                     'target'=>training_as_doc_no($db,'target')],
+                     'target'=>training_as_doc_no($db,'target'), 'request'=>training_as_doc_no($db,'request')],
           'company_name'=>eg_company_full_name($db),
           'plan_signers'=>training_plan_signers($db),
           'plan_approval'=>training_plan_approval($db, (int)($_GET['year'] ?? date('Y'))),
           'plan_last_modified'=>training_plan_last_modified($db, (int)($_GET['year'] ?? date('Y'))),
+          'my_dept_id'=>tr_user_dept_id($db, $uid), 'my_dept_name'=>tr_user_dept_name($db, $uid),
           'attach_nas_dir'=>$perms['canAdmin'] ? training_attach_dir($db) : null,
           'attach_root'=>$perms['canAdmin'] ? eg_attach_root($db) : null,
-          'cur_year'=>$cy, 'cur_month'=>(int)date('n'), 'today'=>date('Y-m-d')]);
+          'cur_year'=>$cy, 'cur_month'=>(int)date('n'), 'today'=>date('Y-m-d'), 'uid'=>$uid]);
 }
 
 /* 模組設定（限訓練管理員）：預設班別、行事曆類別綁定（存 id 不存名稱） */
@@ -87,7 +119,8 @@ case 'save_settings': {
     $map = ['default_shift_id'=>'training_default_shift_id',
             'cat_internal'=>'training_cat_internal', 'cat_external'=>'training_cat_external',
             'as_doc_plan'=>'training_as_doc_plan', 'as_doc_result'=>'training_as_doc_result',
-            'as_doc_target'=>'training_as_doc_target', 'need_approval'=>'training_need_approval'];
+            'as_doc_target'=>'training_as_doc_target', 'need_approval'=>'training_need_approval',
+            'as_doc_request'=>'training_as_doc_request', 'request_need_approval'=>'training_request_need_approval'];
     // 休息時段（HH:MM 字串）：兩欄都空＝不扣休息；只填一欄視為未設定
     $bs = tr_norm_time($_POST['break_start'] ?? null);
     $be = tr_norm_time($_POST['break_end'] ?? null);
@@ -643,6 +676,135 @@ case 'set_status': {
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('狀態變更失敗：'.$e->getMessage(), 500); }
     jout(['session_id'=>$sid, 'status'=>$status]);
+}
+
+/* ============================================================
+ * 教育訓練需求申請單（2-MM-01-05 線上化）
+ *   draft(草稿,僅本人可見可改) → submitted/approved(視是否需簽核) → 由訓練管理員轉為計畫(converted)
+ *   權限：canApply(含 canEdit) 才可新增/送出；canView 皆可看清單(唯讀)；決行限被指派的部門主管或管理員；
+ *        轉計畫/刪除限 canEdit/canAdmin。
+ * ============================================================ */
+case 'request_list': {
+    $deptMap = tr_dept_map($db);
+    $st = $db->query("SELECT * FROM training_request ORDER BY request_id DESC");
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $r['dept_name'] = $r['dept_id'] !== null ? ($deptMap[(int)$r['dept_id']] ?? '') : '';
+        $rec = eg_approval_latest($db, 'training_request', (int)$r['request_id'], 'manager');
+        $r['approver_name'] = $rec['approver_name'] ?? null;
+        $r['reject_note'] = ($rec && $rec['status'] === 'rejected') ? $rec['note'] : null;
+    }
+    unset($r);
+    jout(['requests'=>$rows]);
+}
+
+case 'request_save': {
+    if (!$perms['canApply']) jerr('無需求申請權限', 403);
+    $rid = (int)($_POST['request_id'] ?? 0);
+    if ($rid > 0) {
+        $old = tr_request_row($db, $rid);
+        if (!$old) jerr('找不到申請單');
+        if (!in_array($old['status'], ['draft','rejected'], true) && !$perms['canAdmin']) jerr('此申請單已送審，不可修改（如需異動請先撤回或請訓練管理員協助）');
+        if ((int)$old['user_id'] !== $uid && !$perms['canAdmin']) jerr('只能修改自己的申請單', 403);
+    }
+    $subject = trim((string)($_POST['subject'] ?? ''));
+    if ($subject === '') jerr('請填主旨');
+    $deptId = ($_POST['dept_id'] ?? '') === '' ? null : (int)$_POST['dept_id'];
+    $applyDate = trim((string)($_POST['apply_date'] ?? date('Y-m-d')));
+    $sd = trim((string)($_POST['start_date'] ?? '')) ?: null;
+    $ed = trim((string)($_POST['end_date'] ?? '')) ?: null;
+    if ($sd && $ed && $ed < $sd) jerr('受訓時間迄不可早於起');
+    $days  = ($_POST['days'] ?? '') === '' ? null : max(1, (int)$_POST['days']);
+    $hours = ($_POST['hours'] ?? '') === '' ? null : (float)$_POST['hours'];
+    $fields = [$deptId, $applyDate, $subject,
+        trim((string)($_POST['content'] ?? '')) ?: null, trim((string)($_POST['focus'] ?? '')) ?: null,
+        trim((string)($_POST['trainees'] ?? '')) ?: null, $sd, $ed, $days, $hours,
+        trim((string)($_POST['location'] ?? '')) ?: null, trim((string)($_POST['cost'] ?? '')) ?: null,
+        ($_POST['brochure_count'] ?? '') === '' ? null : (int)$_POST['brochure_count']];
+    try {
+        if ($rid > 0) {
+            $db->prepare("UPDATE training_request SET dept_id=?,apply_date=?,subject=?,content=?,focus=?,trainees=?,
+                          start_date=?,end_date=?,days=?,hours=?,location=?,cost=?,brochure_count=?,updated_at=NOW()
+                          WHERE request_id=?")->execute(array_merge($fields, [$rid]));
+        } else {
+            $db->prepare("INSERT INTO training_request (dept_id,apply_date,subject,content,focus,trainees,
+                          start_date,end_date,days,hours,location,cost,brochure_count,user_id,user_name,status)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft')")
+               ->execute(array_merge($fields, [$uid, $uname]));
+            $rid = (int)$db->lastInsertId();
+        }
+    } catch (Throwable $e) { jerr('儲存失敗：'.$e->getMessage(), 500); }
+    jout(['request_id'=>$rid]);
+}
+
+/* 送出審核：依模組設定決定要不要真的送主管，免簽核／抓不到主管／申請人就是主管 → 直接視為核准 */
+case 'request_submit': {
+    if (!$perms['canApply']) jerr('無需求申請權限', 403);
+    $rid = (int)($_POST['request_id'] ?? 0);
+    $r = tr_request_row($db, $rid);
+    if (!$r) jerr('找不到申請單');
+    if ((int)$r['user_id'] !== $uid && !$perms['canAdmin']) jerr('只能送出自己的申請單', 403);
+    if (!in_array($r['status'], ['draft','rejected'], true)) jerr('此申請單目前狀態不可送出');
+    $needAppr = (int)(training_settings($db)['training_request_need_approval'] ?? 1) === 1;
+    $signer = $needAppr ? training_request_signer($db, $r['dept_id'] !== null ? (int)$r['dept_id'] : null, (int)$r['user_id']) : null;
+    try {
+        if (!$signer) {
+            $note = $needAppr ? '找不到申請單位的部門主管，系統自動核准' : '模組設定為「免簽核」，送出即視同核准';
+            $aid = eg_approval_submit($db, 'training_request', $rid, 'manager', $uid, $uname);
+            eg_approval_decide($db, $aid, $uid, $uname, 'approved', $note);
+            $db->prepare("UPDATE training_request SET status='approved', updated_at=NOW() WHERE request_id=?")->execute([$rid]);
+            jout(['status'=>'approved']);
+        }
+        $aid = eg_approval_submit($db, 'training_request', $rid, 'manager', $uid, $uname);
+        $db->prepare("UPDATE training_request SET status='submitted', updated_at=NOW() WHERE request_id=?")->execute([$rid]);
+        $ev = training_request_notify($db, $rid, $signer['id'],
+            '教育訓練需求申請待核准：'.$r['subject'],
+            $uname.'（'.($r['dept_name']?:'').'）送出教育訓練需求申請「'.$r['subject'].'」，請核准。', $uid);
+        if ($ev) eg_approval_set_live_event($db, $aid, $ev);
+    } catch (Throwable $e) { jerr('送出失敗：'.$e->getMessage(), 500); }
+    jout(['status'=>'submitted']);
+}
+
+/* 核准／退回：只有被指派的部門主管或管理員可決行；退回強制填原因（ai-rules/17） */
+case 'request_decide': {
+    $rid = (int)($_POST['request_id'] ?? 0);
+    $decision = (string)($_POST['decision'] ?? '');
+    $note = trim((string)($_POST['note'] ?? ''));
+    if (!in_array($decision, ['approved','rejected'], true)) jerr('決定值不正確');
+    if ($decision === 'rejected' && $note === '') jerr('退回必須填寫原因');
+    $r = tr_request_row($db, $rid);
+    if (!$r || $r['status'] !== 'submitted' || !$r['approval'] || $r['approval']['status'] !== 'pending') jerr('此申請單目前沒有待核准的項目');
+    $signer = training_request_signer($db, $r['dept_id'] !== null ? (int)$r['dept_id'] : null, (int)$r['user_id']);
+    if (!$perms['isAdmin'] && (!$signer || (int)$signer['id'] !== $uid)) jerr('您不是此申請單的核准人', 403);
+    $ret = eg_approval_decide($db, (int)$r['approval']['id'], $uid, $uname, $decision, $note ?: null);
+    if (!$ret['success']) jerr($ret['message']);
+    $db->prepare("UPDATE training_request SET status=?, updated_at=NOW() WHERE request_id=?")->execute([$decision === 'approved' ? 'approved' : 'rejected', $rid]);
+    training_request_close_notice($db, $rid);
+    training_request_notify_result($db, $rid, (int)$r['user_id'],
+        '教育訓練需求申請「'.$r['subject'].'」已'.($decision==='approved'?'核准':'退回'),
+        $uname.($decision==='approved' ? ' 已核准您的申請。'.($note?'意見：'.$note:'') : ' 已退回您的申請。退回原因：'.$note), $uid);
+    jout(['status'=>$decision === 'approved' ? 'approved' : 'rejected']);
+}
+
+/* 轉為計畫：由「新增計畫」跳窗預填申請單資料後正常存檔，存檔成功後呼叫本動作把申請單標記為已轉 */
+case 'request_mark_converted': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $rid = (int)($_POST['request_id'] ?? 0);
+    $sid = (int)($_POST['session_id'] ?? 0);
+    $r = tr_request_row($db, $rid);
+    if (!$r) jerr('找不到申請單');
+    if ($r['status'] !== 'approved') jerr('只有已核准的申請單可以轉為計畫');
+    $db->prepare("UPDATE training_request SET status='converted', session_id=?, updated_at=NOW() WHERE request_id=?")->execute([$sid, $rid]);
+    jout([]);
+}
+
+case 'request_delete': {
+    $rid = (int)($_POST['request_id'] ?? 0);
+    $r = tr_request_row($db, $rid);
+    if (!$r) jerr('找不到申請單');
+    if (!$perms['canAdmin'] && !((int)$r['user_id'] === $uid && $r['status'] === 'draft')) jerr('僅本人的草稿或訓練管理員可刪除', 403);
+    $db->prepare("DELETE FROM training_request WHERE request_id=?")->execute([$rid]);
+    jout([]);
 }
 
 /* 部門人員（講師/參加人員選擇用）

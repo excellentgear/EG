@@ -21,7 +21,8 @@ $perms = training_perms($db, $trUser);
 $roleLabel = $perms['isAdmin'] ? '管理者'
            : ($perms['canAdmin'] ? '訓練管理員'
            : ($perms['canEdit'] ? '訓練登錄'
-           : ($perms['canView'] ? '訓練檢閱' : '無權限')));
+           : ($perms['canApply'] ? '訓練需求申請人'
+           : ($perms['canView'] ? '訓練檢閱' : '無權限'))));
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -235,6 +236,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div class="tr-tabs" id="mainTabs">
             <span class="tab on" data-tab="list">訓練場次</span>
             <span class="tab" data-tab="target">達標狀況（各部門訓練次數）</span>
+            <span class="tab" data-tab="apply">教育訓練需求申請</span>
         </div>
 
 <div id="paneList">
@@ -272,6 +274,26 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
             達標判定：目標設「每月 N 次」→ 逐月各自要 N 次；設「每年 N 次」→ 看年度累計。
             <span class="ok-yes">達標</span>／<span class="ok-no">未達標</span>；括號內為該月已排定或計畫中的場次（尚未完成，不計入達標）。
+        </div>
+</div>
+
+<div id="paneApply" style="display:none;">
+        <div class="tr-toolbar">
+            <button id="btnReqAdd" style="display:none;"><i class="fa fa-plus"></i> 新增申請單</button>
+            <span style="font-size:12px;color:#8a6d45;">2-MM-01-05 教育訓練需求申請單線上化：填寫送出 → <span id="reqFlowHint"></span> → 訓練管理員核准後可轉為訓練計畫。</span>
+        </div>
+        <div class="tr-table-wrap">
+            <table class="tr-table" id="reqTable">
+                <thead><tr><th>申請日期</th><th>申請單位</th><th>主旨</th><th>受訓人員</th><th>受訓時間</th>
+                    <th>狀態</th><th>操作</th></tr></thead>
+                <tbody id="reqBody"><tr><td colspan="7" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+            </table>
+        </div>
+        <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
+            狀態：<span class="st-pill st-planned">草稿</span> <span class="st-pill st-scheduled">待核准</span>
+            <span class="st-pill st-done">已核准</span> <span class="st-pill st-cancelled">已駁回</span>
+            <span class="st-pill" style="background:#F0A24B;color:#fff;">已轉計畫</span>。
+            草稿僅本人可編輯；送出後由申請單位主管核准（可於模組設定切換免簽核）；訓練管理員將已核准的申請轉為訓練計畫。
         </div>
 </div>
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
@@ -335,6 +357,36 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('edMask')">取消</button>
         <button class="b-ok" onclick="submitEd()">儲存計畫</button>
+    </div>
+</div></div>
+
+<!-- 教育訓練需求申請單 modal（2-MM-01-05 線上化，仿新增計畫跳窗樣式） -->
+<div class="tr-mask" id="reqMask"><div class="tr-modal" data-eg-form data-eg-submit=".m-foot .b-ok">
+    <div class="m-head"><span id="reqTitle">新增教育訓練需求申請單</span><span class="m-close" onclick="closeMask('reqMask')">✕</span></div>
+    <div class="m-body">
+        <div class="grid2">
+            <div><label>申請單位 *</label><select id="reqDept"><option value="">請選擇</option></select></div>
+            <div><label>申請日期 *</label><input type="date" id="reqApplyDate" max="9999-12-31"></div>
+            <div style="grid-column:1/3;"><label>主旨 *</label><input type="text" id="reqSubject" maxlength="100"></div>
+            <div style="grid-column:1/3;"><label>一、簡述內容</label><textarea id="reqContent" rows="2" maxlength="2000"></textarea></div>
+            <div style="grid-column:1/3;"><label>二、主管要求學習重點</label><textarea id="reqFocus" rows="2" maxlength="2000"></textarea></div>
+            <div style="grid-column:1/3;"><label>三、受訓人員</label><input type="text" id="reqTrainees" maxlength="300" placeholder="例：張三、李四（尚未排課階段，先列預計人員即可）"></div>
+            <div><label>四、受訓時間 起 *</label><input type="date" id="reqStart" max="9999-12-31"></div>
+            <div><label>受訓時間 迄 *</label><input type="date" id="reqEnd" max="9999-12-31">
+                <div class="errmsg" id="errReqEnd"></div></div>
+            <div><label>共幾天</label><input type="number" id="reqDays" min="1" max="60" step="1"></div>
+            <div><label>總計時數</label><input type="number" id="reqHours" min="0" step="any"></div>
+            <div><label>四、受訓地點</label><input type="text" id="reqLocation" maxlength="100"></div>
+            <div><label>五、受訓費用</label><input type="text" id="reqCost" maxlength="100" placeholder="例：免費／$3,000"></div>
+            <div><label>會辦管理：簡章份數</label><input type="number" id="reqBrochure" min="0" step="1"></div>
+        </div>
+        <div class="tr-hint" id="reqStatusHint" style="display:none;"></div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="printRequestForm()"><i class="fa fa-print"></i> 列印</button>
+        <button class="b-cancel" onclick="closeMask('reqMask')">取消</button>
+        <button class="b-ok" id="reqSaveBtn" onclick="submitReq(0)">儲存草稿</button>
+        <button class="b-ok" id="reqSubmitBtn" style="margin-left:6px;" onclick="submitReq(1)"><i class="fa fa-paper-plane"></i> 儲存並送出</button>
     </div>
 </div></div>
 
@@ -522,8 +574,18 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <select id="setDocResult"><option value="">（未對應）</option></select>
             <label>「達標狀況」分頁 — AS 文件編號</label>
             <select id="setDocTarget"><option value="">（未對應）</option></select>
+            <label>教育訓練需求申請單 — AS 文件編號</label>
+            <select id="setDocRequest"><option value="">（未對應）</option></select>
             <div class="tr-hint" style="margin-top:6px;">綁定的是 AS 文件<b>本身（存 id）</b>，列印時才解出編號印在<b>頁尾右下角</b>；
                 文件改編號不必回來改設定。未對應＝該表不印文件編號（見 <b>ai-rules/16 列印文件標準</b>）。</div>
+
+            <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
+            <label>教育訓練需求申請單是否需要主管簽核</label>
+            <select id="setReqNeedAppr">
+                <option value="0">免簽核（送出即視同核准，列印仍自動蓋上核准圖章＝申請單位主管）</option>
+                <option value="1">需要簽核（送出後通知申請單位主管核准／退回）</option>
+            </select>
+            <div class="tr-hint" style="margin-top:6px;">找不到申請單位的部門主管、或申請人本人就是主管時，一律自動核准（不論此設定），避免卡關。此設定僅系統管理者可改。</div>
 
             <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
             <label>年度訓練計劃表是否需要送審</label>
@@ -625,8 +687,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <b>①計畫</b>：新增訓練場次，填年月、課程、<b>對象部門（可多選，打字搜尋）</b>、講師/開課單位、時數。<br>
         <b>②確認開課</b>：填上課日期時段、地點、課程大綱、評鑑方式、參加人員 → 狀態轉「已排定」，可印簽到表、自動寫入行事曆。<br>
         <b>③登錄完成</b>：上完課勾實到、填評鑑結果（可批次）、上傳簽到表掃描等附件 → 狀態轉「已完成」，才計入達成率。<br>
-        <b>④送審計劃表</b>：工具列「送審計劃表」把年度計畫送審核→核准（是否需要送審在模組設定切換）。
+        <b>④送審計劃表</b>：工具列「送審計劃表」把年度計畫送審核→核准（是否需要送審在模組設定切換）。<br>
+        <b>⑤教育訓練需求申請單</b>（2-MM-01-05）：「需求申請」分頁可新增申請單（草稿）、儲存並送出（申請單位主管核准，或模組設定免簽核自動核准），
+        訓練管理員將已核准的申請按「轉為計畫」帶入①的新增計畫視窗確認後存檔即完成轉換。
         <h4>重要行為</h4>
+        ・<b>訓練需求申請人</b>是獨立角色（在使用者權限設定的「教育訓練管理」角色指派裡指派），只能新增/送出/檢視申請單，
+        看得到訓練場次列表（唯讀）但**不能**修改計畫或任何設定，避免誤把整頁編輯權限一起給出去。<br>
         ・休息時間<b>系統自動算</b>（上課時間 ∩ 休息時段），欄位灰底不可改。<br>
         ・已排定/已完成的場次，<b>計畫內容僅訓練管理員可改</b>。<br>
         ・刪除場次要連續兩次輸入大寫 <b>Y</b>，且會一併刪除附件實體檔。<br>
@@ -674,6 +740,7 @@ $(document).ready(function(){
 var API = '../../src/store/Training_API.php';
 var META = null, ROWS = [], PERMS = null;
 var canView = <?= $perms['canView'] ? 'true' : 'false' ?>;
+var canApply = <?= $perms['canApply'] ? 'true' : 'false' ?>;
 var STATUS_LABEL = {planned:'計畫中', scheduled:'已排定', done:'已完成', cancelled:'取消'};
 
 /* ---------- 時間：直接輸入（09:00 / 0900 / 9 都可），即時檢查合理性 ----------
@@ -725,12 +792,13 @@ function loadMeta(cb){
         var $y = $('#yearSel').empty();
         m.years.forEach(function(y){ $y.append('<option value="'+y+'">'+y+'</option>'); });
         $y.val(m.cur_year);
-        var $d = $('#deptSel'), $td = $('#edTrainerDept'), $ad = $('#attDept'), dh='';
+        var $d = $('#deptSel'), $td = $('#edTrainerDept'), $ad = $('#attDept'), $rd = $('#reqDept'), dh='';
         DEPTS = m.departments || [];
         DEPTS.forEach(function(d){
             $d.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
             $td.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
             $ad.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
+            $rd.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
         });
         edDeptRender();
         var $em = $('#edMonth').empty();
@@ -755,6 +823,8 @@ function loadMeta(cb){
         renderShiftSel();
         if (m.perms.canEdit) $('#btnAdd').show();
         if (m.perms.canAdmin) { $('#btnSetting').show(); $('#btnTarget').show(); $('#btnGroup').show(); }
+        if (m.perms.canApply) $('#btnReqAdd').show();
+        applyUrlParams();
         if (cb) cb();
     });
 }
@@ -945,7 +1015,7 @@ $('#edType').on('change', applyType);
 function openEd(sid){
     var r = sid ? ROWS.find(function(x){ return String(x.session_id)===String(sid); }) : null;
     $('#edTitle').text(r ? '編輯訓練計畫' : '新增訓練計畫');
-    $('#edMask').data('sid', r ? r.session_id : 0);
+    $('#edMask').data('sid', r ? r.session_id : 0).removeData('fromRequestId');
     $('#edYear').val(r ? r.year : $('#yearSel').val());
     $('#edMonth').val(r ? r.plan_month : (META.cur_month));
     edDeptSet((r && r.dept_ids) ? r.dept_ids : []);
@@ -962,6 +1032,25 @@ function openEd(sid){
     setTimeout(function(){ $('#edCourse').focus(); }, 100);
 }
 $('#btnAdd').on('click', function(){ openEd(0); });
+/* 需求申請單「轉為計畫」：預填新增計畫跳窗，讓訓練管理員確認/補齊(講師、內外訓等申請單沒有的欄位)後再存檔 */
+function openEdFromRequest(req){
+    openEd(0);
+    $('#edMask').data('fromRequestId', req.request_id);
+    $('#edCourse').val(req.subject);
+    var y = (req.start_date||req.apply_date||'').substr(0,4), m = (req.start_date||req.apply_date||'').substr(5,2);
+    if (y) $('#edYear').val(y);
+    if (m) $('#edMonth').val(parseInt(m,10));
+    edDeptSet(req.dept_id ? [req.dept_id] : []);
+    if (req.days) $('#edDays').val(req.days);
+    if (req.hours!=null && req.hours!=='') $('#edHours').val(numTrim(req.hours));
+    var noteParts=[];
+    if (req.trainees) noteParts.push('受訓人員：'+req.trainees);
+    if (req.location) noteParts.push('受訓地點：'+req.location);
+    if (req.cost) noteParts.push('受訓費用：'+req.cost);
+    noteParts.push('（由需求申請單 #'+req.request_id+' 轉入，請確認講師/內外訓等欄位）');
+    $('#edNote').val(noteParts.join('；'));
+    edValidate();
+}
 /* ---------- 對象部門：可搜尋多選 ---------- */
 var ED_DEPTS = [];      // 已選 dept_id 字串陣列
 function edDeptSet(ids){ ED_DEPTS = (ids||[]).map(String); edDeptRender(); }
@@ -1451,11 +1540,12 @@ var UNITS = [], GROUPS = [], DEPTS = [], TGSTATS = null, TGTARGETS = {}, TGMON =
 $('#mainTabs .tab').on('click', function(){
     var t = $(this).data('tab');
     $('#mainTabs .tab').removeClass('on'); $(this).addClass('on');
-    $('#paneList').toggle(t==='list'); $('#paneTarget').toggle(t==='target');
-    // 列印鈕依目前分頁切換，一次只出現一顆
+    $('#paneList').toggle(t==='list'); $('#paneTarget').toggle(t==='target'); $('#paneApply').toggle(t==='apply');
+    // 列印鈕依目前分頁切換，一次只出現一顆（需求申請單改列印個別單據，見清單操作欄）
     $('#btnPrintPlan').toggle(t==='list');
     $('#btnPrintResult').toggle(t==='target');
     if (t==='target' && !TGSTATS) loadTargetStats();
+    if (t==='apply' && !REQUESTS) loadRequests();
 });
 function loadTargetStats(){
     NProgress.start();
@@ -1730,7 +1820,13 @@ function submitEd(){
         hours:$('#edHours').val(), plan_days:$('#edDays').val(), note:$('#edNote').val()},
     function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        var fromReq = $('#edMask').data('fromRequestId');
         closeMask('edMask'); loadList();
+        if (fromReq) {   // 由需求申請單轉來的計畫：存檔成功後回填申請單狀態＝已轉
+            $.post(API, {action:'request_mark_converted', request_id:fromReq, session_id:res.session_id}, function(){
+                $('#edMask').removeData('fromRequestId'); loadRequests();
+            }, 'json');
+        }
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
@@ -1809,7 +1905,9 @@ function openSetting(){
     $('#setDocPlan').html(dh).val(SETTINGS.training_as_doc_plan||'');
     $('#setDocResult').html(dh).val(SETTINGS.training_as_doc_result||'');
     $('#setDocTarget').html(dh).val(SETTINGS.training_as_doc_target||'');
+    $('#setDocRequest').html(dh).val(SETTINGS.training_as_doc_request||'');
     $('#setNeedAppr').val(String(SETTINGS.training_need_approval||0));
+    $('#setReqNeedAppr').val(String(SETTINGS.training_request_need_approval==null?1:SETTINGS.training_request_need_approval));
     $('#setSgReview').text(SIGNERS.reviewer ? SIGNERS.reviewer.name : '（未設定審核者）');
     $('#setSgApprover').text(SIGNERS.approver ? SIGNERS.approver.name : '（未設定核准者）');
     $('#setSignDate').val(SETTINGS.training_plan_sign_date || '');
@@ -1854,13 +1952,14 @@ function saveSettings(){
         break_start:bs.val, break_end:be.val, exclude_depts:exIds.join(','),
         as_doc_plan:$('#setDocPlan').val(), as_doc_result:$('#setDocResult').val(),
         as_doc_target:$('#setDocTarget').val(), need_approval:$('#setNeedAppr').val(),
+        as_doc_request:$('#setDocRequest').val(), request_need_approval:$('#setReqNeedAppr').val(),
         plan_sign_date:$('#setSignDate').val()}, function(res){
         if (!res.ok){ alert(res.error||'設定儲存失敗'); return; }
         SETTINGS = res.settings||{}; UNITS = res.units||UNITS; DOC_NO = res.doc_no||DOC_NO;
         TGSTATS = null; if ($('#paneTarget').is(':visible')) loadTargetStats();
         loadPlanStatus();
         CAT_EFF = {internal:res.cat_internal_eff||null, external:res.cat_external_eff||null};
-        renderShiftSel(); applyBreakSetting();
+        renderShiftSel(); applyBreakSetting(); renderReqFlowHint(); if (REQUESTS) renderRequestList();
         if (DAYS.length){ DAYS.forEach(function(d){ dayRecalc(d); }); renderDays(); }   // 設定改了，開著的實行畫面同步重算
         saveAttachPath(function(){ closeMask('setMask');
             alert('設定已儲存。日後行事曆類別改名不影響綁定（存的是類別 id）；附件路徑改變不影響舊附件（DB 只存檔名）。'); });
@@ -2219,6 +2318,174 @@ function printRecord(){
     w.document.write('<html><head><meta charset="utf-8"><title>教育訓練紀錄表</title><style>'+css+'</style></head><body>'+html
         +'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},150);};</scr'+'ipt></body></html>');
     w.document.close();
+}
+
+/* 通知深連結：?tab=apply 開需求申請分頁；?apply_req=ID 直接開該筆申請單（唯讀或可編視狀態而定） */
+function applyUrlParams(){
+    var qs = new URLSearchParams(location.search);
+    var tab = qs.get('tab'), rid = qs.get('apply_req');
+    if (tab === 'apply' || rid) {
+        $('#mainTabs .tab[data-tab=apply]').trigger('click');
+        if (rid) loadRequests(function(){ openReq(parseInt(rid,10)); });
+    }
+}
+/* ================= 教育訓練需求申請單（2-MM-01-05 線上化） ================= */
+var REQUESTS = null;
+var REQ_STATUS_LABEL = {draft:'草稿', submitted:'待核准', approved:'已核准', rejected:'已駁回', converted:'已轉計畫'};
+function reqStatusPill(s){
+    var cls = {draft:'st-planned', submitted:'st-scheduled', approved:'st-done', rejected:'st-cancelled', converted:'st-done'}[s] || 'st-planned';
+    var extra = s==='converted' ? ' style="background:#F0A24B;color:#fff;"' : '';
+    return '<span class="st-pill '+cls+'"'+extra+'>'+(REQ_STATUS_LABEL[s]||s)+'</span>';
+}
+function renderReqFlowHint(){
+    $('#reqFlowHint').text(+(SETTINGS.training_request_need_approval==null?1:SETTINGS.training_request_need_approval)
+        ? '申請單位主管核准' : '（模組設定為免簽核，送出即視同核准）');
+}
+function loadRequests(cb){
+    $.getJSON(API, {action:'request_list'}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        REQUESTS = res.requests || [];
+        renderRequestList();
+        if (cb) cb();
+    });
+}
+function renderRequestList(){
+    var h = '';
+    (REQUESTS||[]).forEach(function(r){
+        var mine = +r.user_id === +(META.uid||0);
+        var canEditRow = (mine || PERMS.canAdmin) && (r.status==='draft' || r.status==='rejected');
+        var canDecideRow = r.status==='submitted' && PERMS.canAdmin;   // 一般核准走通知裡的獨立審核頁；本頁管理員可直接處理
+        var canConvert = r.status==='approved' && PERMS.canEdit;
+        var canDel = (mine && r.status==='draft') || PERMS.canAdmin;
+        h += '<tr><td>'+esc(r.apply_date)+'</td><td>'+esc(r.dept_name||'')+'</td><td class="t-left">'+esc(r.subject)+'</td>'
+           + '<td class="t-left">'+esc(r.trainees||'')+'</td>'
+           + '<td>'+esc((r.start_date||'')+(r.end_date?'~'+r.end_date:''))+(r.days?'（'+r.days+'天）':'')+'</td>'
+           + '<td>'+reqStatusPill(r.status)+(r.status==='rejected'&&r.reject_note?' <span title="'+esc(r.reject_note)+'" style="color:#DD5138;"><i class="fa fa-info-circle"></i></span>':'')+'</td>'
+           + '<td style="white-space:nowrap;">'
+           + '<span class="tr-op" onclick="openReq('+r.request_id+')"><i class="fa fa-search-plus"></i>檢視</span>';
+        if (canEditRow) h += '<span class="tr-op" onclick="openReq('+r.request_id+')"><i class="fa fa-pencil"></i>編輯</span>';
+        if (canDecideRow) h += '<span class="tr-op" onclick="reqDecideQuick('+r.request_id+',\'approved\')"><i class="fa fa-check"></i>核准</span>'
+                              + '<span class="tr-op" style="color:#DD5138;" onclick="reqDecideQuick('+r.request_id+',\'rejected\')"><i class="fa fa-undo"></i>退回</span>';
+        if (canConvert) h += '<span class="tr-op" onclick="reqConvert('+r.request_id+')"><i class="fa fa-share-square-o"></i>轉為計畫</span>';
+        if (canDel) h += '<span class="tr-op" style="color:#DD5138;" onclick="reqDelete('+r.request_id+')"><i class="fa fa-trash"></i></span>';
+        h += '</td></tr>';
+    });
+    $('#reqBody').html(h || '<tr><td colspan="7" style="padding:16px;color:#8a6d45;">尚無申請單</td></tr>');
+    renderReqFlowHint();
+}
+function reqFind(id){ return (REQUESTS||[]).find(function(x){ return +x.request_id===+id; }); }
+var REQ_CUR = null;
+function openReq(id){
+    var r = reqFind(id);
+    if (!r) return;
+    REQ_CUR = r;
+    var mine = +r.user_id === +(META.uid||0);
+    var editable = (mine || PERMS.canAdmin) && (r.status==='draft' || r.status==='rejected');
+    $('#reqMask').data('rid', id);
+    $('#reqTitle').text((editable?'編輯':'檢視')+'教育訓練需求申請單'+(r.status!=='draft'?'（'+(REQ_STATUS_LABEL[r.status]||r.status)+'）':''));
+    $('#reqDept').val(r.dept_id||'');
+    $('#reqApplyDate').val(r.apply_date||'');
+    $('#reqSubject').val(r.subject||'');
+    $('#reqContent').val(r.content||'');
+    $('#reqFocus').val(r.focus||'');
+    $('#reqTrainees').val(r.trainees||'');
+    $('#reqStart').val(r.start_date||''); $('#reqEnd').val(r.end_date||'');
+    $('#reqDays').val(r.days||''); $('#reqHours').val(r.hours!=null?numTrim(r.hours):'');
+    $('#reqLocation').val(r.location||''); $('#reqCost').val(r.cost||'');
+    $('#reqBrochure').val(r.brochure_count!=null?r.brochure_count:'');
+    $('#reqMask .m-body input,#reqMask .m-body textarea,#reqMask .m-body select').prop('disabled', !editable);
+    $('#reqSaveBtn,#reqSubmitBtn').toggle(editable);
+    $('#reqStatusHint').toggle(!editable).html(!editable
+        ? '狀態：<b>'+(REQ_STATUS_LABEL[r.status]||r.status)+'</b>'+(r.status==='rejected'&&r.reject_note?'　退回原因：'+esc(r.reject_note):'')
+          +(r.approver_name?'　核准/處理人：'+esc(r.approver_name):'') : '');
+    openMask('reqMask');
+}
+$('#btnReqAdd').on('click', function(){
+    REQ_CUR = null;
+    $('#reqMask').data('rid', 0);
+    $('#reqTitle').text('新增教育訓練需求申請單');
+    $('#reqDept').val(META.my_dept_id||'');
+    $('#reqApplyDate').val(META.today);
+    ['#reqSubject','#reqContent','#reqFocus','#reqTrainees','#reqStart','#reqEnd','#reqDays','#reqHours','#reqLocation','#reqCost','#reqBrochure']
+        .forEach(function(sel){ $(sel).val(''); });
+    $('#reqMask .m-body input,#reqMask .m-body textarea,#reqMask .m-body select').prop('disabled', false);
+    $('#reqSaveBtn,#reqSubmitBtn').show(); $('#reqStatusHint').hide();
+    openMask('reqMask');
+    setTimeout(function(){ $('#reqSubject').focus(); }, 100);
+});
+/* mode: 0=只存草稿 1=存檔並送出審核 */
+function submitReq(mode){
+    if (!$.trim($('#reqSubject').val())){ alert('請填主旨'); $('#reqSubject').focus(); return; }
+    if (!$('#reqStart').val() || !$('#reqEnd').val()){ alert('請填受訓時間起迄'); return; }
+    if ($('#reqEnd').val() < $('#reqStart').val()){ setErr($('#reqEnd'),'errReqEnd','迄不可早於起'); return; }
+    setErr($('#reqEnd'),'errReqEnd','');
+    $.post(API, {action:'request_save', request_id:$('#reqMask').data('rid'), dept_id:$('#reqDept').val(),
+        apply_date:$('#reqApplyDate').val(), subject:$('#reqSubject').val(), content:$('#reqContent').val(),
+        focus:$('#reqFocus').val(), trainees:$('#reqTrainees').val(), start_date:$('#reqStart').val(),
+        end_date:$('#reqEnd').val(), days:$('#reqDays').val(), hours:$('#reqHours').val(),
+        location:$('#reqLocation').val(), cost:$('#reqCost').val(), brochure_count:$('#reqBrochure').val()},
+    function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        if (!mode){ closeMask('reqMask'); loadRequests(); return; }
+        $.post(API, {action:'request_submit', request_id:res.request_id}, function(res2){
+            if (!res2.ok){ alert('已存草稿，但送出失敗：'+(res2.error||'')); closeMask('reqMask'); loadRequests(); return; }
+            closeMask('reqMask'); loadRequests();
+            alert(res2.status==='approved' ? '已送出並自動核准。' : '已送出，已通知申請單位主管核准。');
+        }, 'json');
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+/* 清單上的快速核准/退回（僅訓練管理員；一般核准走通知裡的獨立審核頁） */
+function reqDecideQuick(id, decision){
+    var note = '';
+    if (decision==='rejected'){ note = prompt('退回原因（必填）：'); if (note===null) return; note=$.trim(note); if (!note){ alert('請填寫退回原因'); return; } }
+    else if (!confirm('確定核准此申請單？')) return;
+    $.post(API, {action:'request_decide', request_id:id, decision:decision, note:note}, function(res){
+        if (!res.ok){ alert(res.error||'處理失敗'); return; }
+        loadRequests();
+    }, 'json').fail(function(x){ alert('處理失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function reqConvert(id){
+    var r = reqFind(id);
+    if (!r) return;
+    if (!confirm('開啟「新增計畫」並帶入此申請單內容，確認/補齊講師、內外訓等欄位後儲存即完成轉換？')) return;
+    openEdFromRequest(r);
+}
+function reqDelete(id){
+    if (!confirm('刪除此申請單？（僅刪申請單本身，不影響已轉出的計畫）')) return;
+    $.post(API, {action:'request_delete', request_id:id}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+        loadRequests();
+    }, 'json').fail(function(x){ alert('刪除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+/* 列印單張申請單（依 ai-rules/16 大標題/頁碼/文件編號、ai-rules/18 簽章圖章） */
+function printRequestForm(){
+    var r = REQ_CUR;
+    if (!r){ alert('請先開啟一筆申請單'); return; }
+    var deptName = $('#reqDept option:selected').text() || r.dept_name || '';
+    var body = '<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div><div class="tt">教育訓練需求申請單</div>'
+        + '<div class="sub">申請單位：'+esc(deptName)+'　　申請日期：'+esc(r.apply_date||'')+'</div></div>';
+    var kv = function(lb, v){ return '<tr><th style="width:110px;background:#fff;text-align:right;border:none;">'+lb+'</th>'
+        + '<td class="l" style="border:1px solid #333;">'+esc(v||'')+'</td></tr>'; };
+    body += '<table class="pt" style="margin-top:10px;">'
+        + kv('主旨', r.subject)
+        + kv('一、簡述內容', r.content)
+        + kv('二、主管要求學習重點', r.focus)
+        + kv('三、受訓人員', r.trainees)
+        + kv('四、受訓時間', (r.start_date||'')+' ~ '+(r.end_date||'')+'，共 '+(r.days||'')+' 天（總計時數 '+(r.hours!=null?numTrim(r.hours):'')+' 小時）')
+        + kv('受訓地點', r.location)
+        + kv('受訓費用', r.cost)
+        + kv('會辦管理', '簡章 '+(r.brochure_count!=null?r.brochure_count:0)+' 份')
+        + '</table>';
+    // 批示：申請人／核准（申請單位主管）圖章；免簽核或已核准都直接蓋章，狀態為草稿/待核准則留白待簽
+    var applicantStamp = (r.status==='draft') ? '' : egStampHtml(r.user_name, r.apply_date);
+    var approverName = r.approver_name || '';
+    var approverDate = (r.status==='approved'||r.status==='converted') ? (r.apply_date||META.today) : '';
+    var approverStamp = approverName ? egStampHtml(approverName, approverDate) : '';
+    body += '<table class="pt-sign" style="margin-top:16px;"><tr>'
+        + '<td><div class="lb">申請人</div><div class="stamp-box">'+applicantStamp+'</div></td>'
+        + '<td><div class="lb">核准（申請單位主管）</div><div class="stamp-box">'+approverStamp+'</div></td>'
+        + '</tr></table>';
+    egPrintWindow('教育訓練需求申請單', body, '', DOC_NO.request, false);
 }
 
 /* ---------- CSV ---------- */
