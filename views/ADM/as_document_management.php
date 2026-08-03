@@ -1556,7 +1556,8 @@ $(function(){
        && !confirm('目前的結構總覽尚未（或已失效）核准，列印將不顯示簽章。仍要列印嗎？')) return;
     const body = window.treePrintBody(false);
     const asTxt = asDoc ? String(asDoc.doc_no).replace(/['\\]/g,'') : '';
-    const css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+    // body 固定 186mm＝A4 210mm 扣掉左右各 12mm 頁邊，畫面上與列印同寬，表格不會撐出紙外
+    const css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0 auto;width:186mm;max-width:100%;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
       + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}'
       + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:6px;}'
       + '.p-boxes{font-size:13px;margin:0 0 6px 2px;}'
@@ -1568,13 +1569,14 @@ $(function(){
       + 'table.p-tb thead th{background:#f3ead6;}'
       + 'table.p-tb td.tl{text-align:left;}'
       + 'table.p-tb tr{break-inside:avoid;}'
-      + '.p-sign{display:flex;justify-content:center;gap:75px;margin-top:8px;break-inside:avoid;}'   // 核准/修改並排置中
+      + '.p-sign{display:flex;justify-content:center;gap:150px;margin-top:8px;break-inside:avoid;}'   // 核准/修改並排置中
       + '.p-sign .s-cell{font-size:13px;display:flex;align-items:center;min-height:80px;}'
       + '.p-blank{display:inline-block;width:150px;border-bottom:1px solid #999;height:1px;margin-left:6px;}'
       + '.car-stamp{opacity:.92;vertical-align:middle;}'
       + '.stamp-wrap{display:inline-block;text-align:center;margin:0 8px;}'
       + '.stamp-wrap .stamp-title{display:none;}'
-      + '@page{margin:12mm 10mm 18mm;'
+      + 'table.p-tb th,table.p-tb td{word-break:break-all;}'   // 長編號不撐寬欄位
+      + '@page{margin:12mm 12mm 18mm;'
       + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
       + '}';
     const w = window.open('', '_blank');

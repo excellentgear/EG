@@ -85,7 +85,7 @@ table.p-tb td{word-wrap:break-word;overflow-wrap:anywhere;}
 table.p-tb th,table.p-tb td{border:1px solid #999;padding:3px 5px;text-align:center;}
 table.p-tb thead th{background:#f3ead6;}
 table.p-tb td.tl{text-align:left;}
-.p-sign{display:flex;justify-content:center;gap:75px;font-size:13px;margin-bottom:14px;}
+.p-sign{display:flex;justify-content:center;gap:150px;font-size:13px;margin-bottom:14px;}
 .bar{background:#fdf3e3;border:1px solid #e7cfa5;border-radius:4px;padding:8px 10px;margin-bottom:12px;font-size:13px;}
 .b-ok{background:#F0A24B;border:0;color:#fff;padding:6px 18px;border-radius:4px;font-weight:bold;}
 .b-no{background:#DD5138;border:0;color:#fff;padding:6px 18px;border-radius:4px;font-weight:bold;}
