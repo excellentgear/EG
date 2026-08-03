@@ -107,6 +107,12 @@
                 if (typeof opt.onSave === 'function') opt.onSave(id, doc);
             }
 
+            // 【踩坑】本選擇器常被從 Bootstrap modal 內叫出來，而 BS modal 的 enforceFocus 會監聽
+            // document 的 focusin、把焦點搶回 modal 裡 → 篩選框「點得到但打不了字」。
+            // 攔在自己的遮罩上把 focusin 停止冒泡，document 上的 handler 就收不到，不必去改 Bootstrap 全域行為。
+            mask.addEventListener('focusin', function (e) { e.stopPropagation(); });
+            mask.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+
             kw.addEventListener('input', render);
             kw.addEventListener('keydown', function (e) {
                 if (e.key === 'ArrowDown') { e.preventDefault(); lst.focus(); }

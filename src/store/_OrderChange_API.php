@@ -922,13 +922,14 @@ try {
         // 列印三固定元素一律動態取（ai-rules/16）：大標題＝本公司全名、表頭＝綁定 AS 文件的表單名稱、頁尾右下＝doc_no
         require_once __DIR__ . '/../common/asdoc_lib.php';
         require_once __DIR__ . '/../common/org_role_lib.php';
-        $ocDoc = eg_asdoc_get($pdo, 'order_change');
+        $ocDoc  = eg_asdoc_get($pdo, 'order_change');
+        $ocHist = eg_asdoc_get($pdo, 'order_change_history');   // 歷史清單另有自己的 AS 表單編號
         echo json_encode(['success' => true, 'data' => $data,
                           'total' => $total, 'page' => $page, 'size' => $size,
                           'company'  => eg_company_full_name($pdo),
-                          'as_doc'   => $ocDoc,
-                          'print_header' => $ocDoc ? $ocDoc['doc_name'] : '',
-                          'print_footer' => $ocDoc ? $ocDoc['doc_no'] : '']);
+                          'as_doc'   => $ocDoc, 'as_doc_hist' => $ocHist,
+                          'print_header' => $ocHist ? $ocHist['doc_name'] : '',
+                          'print_footer' => $ocHist ? $ocHist['doc_no'] : '']);
         exit;
     }
 
@@ -1016,12 +1017,10 @@ try {
         $userRows = oc_user_memberships($pdo, null);
         // 列印表頭/表尾不再手填：表頭＝綁定 AS 文件的表單名稱、表尾（頁尾右下）＝該文件編號（ai-rules/16）
         require_once __DIR__ . '/../common/asdoc_lib.php';
-        $ocDoc = eg_asdoc_get($pdo, 'order_change');
         echo json_encode(['success' => true, 'config' => $cfg, 'attach_dir' => $path,
-            'as_doc'   => $ocDoc,
-            'as_docs'  => eg_asdoc_list($pdo),
-            'print_header' => $ocDoc ? $ocDoc['doc_name'] : '',
-            'print_footer' => $ocDoc ? $ocDoc['doc_no'] : '',
+            'as_doc'      => eg_asdoc_get($pdo, 'order_change'),           // 訂單變更單
+            'as_doc_hist' => eg_asdoc_get($pdo, 'order_change_history'),   // 訂單變更歷史清單
+            'as_docs'     => eg_asdoc_list($pdo),
             'depts' => $depts, 'user_rows' => $userRows]);
         exit;
     }
@@ -1042,11 +1041,11 @@ try {
         oc_save_setting($pdo, 'order_change_attach_dir', $path, $uid, $uname);
         // 表頭/表尾不再手填（改由 AS 文件綁定推導）；這裡只存綁定的 as_document.id
         require_once __DIR__ . '/../common/asdoc_lib.php';
-        if (isset($_POST['as_doc_id'])) eg_asdoc_save($pdo, 'order_change', (int)$_POST['as_doc_id'], (string)$uname);
-        $ocDoc = eg_asdoc_get($pdo, 'order_change');
-        echo json_encode(['success' => true, 'as_doc' => $ocDoc,
-                          'print_header' => $ocDoc ? $ocDoc['doc_name'] : '',
-                          'print_footer' => $ocDoc ? $ocDoc['doc_no'] : '']);
+        if (isset($_POST['as_doc_id']))      eg_asdoc_save($pdo, 'order_change',         (int)$_POST['as_doc_id'],      (string)$uname);
+        if (isset($_POST['as_doc_hist_id'])) eg_asdoc_save($pdo, 'order_change_history', (int)$_POST['as_doc_hist_id'], (string)$uname);
+        echo json_encode(['success' => true,
+                          'as_doc'      => eg_asdoc_get($pdo, 'order_change'),
+                          'as_doc_hist' => eg_asdoc_get($pdo, 'order_change_history')]);
         exit;
     }
 

@@ -217,7 +217,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
             $config_row = $pdo->query("SELECT param_value FROM system_parameters WHERE param_group = 'DESIGNER_SETTING' AND param_key = 'designer_config'")->fetch(PDO::FETCH_ASSOC);
-            echo json_encode(['success' => true, 'depts' => $depts, 'users' => $users, 'config' => $config_row ? json_decode($config_row['param_value'], true) : null]);
+            // 主要設計部門＝全站「組織角色綁定設定」的設計／技術部門，本頁不可改（2026-08-03）
+            require_once __DIR__ . '/../../src/common/org_role_lib.php';
+            echo json_encode(['success' => true, 'depts' => $depts, 'users' => $users,
+                'rd_dept_id' => eg_org_dept($pdo, 'rd_dept'),
+                'config' => $config_row ? json_decode($config_row['param_value'], true) : null]);
         } catch (Exception $e) { echo json_encode(['success' => false, 'message' => $e->getMessage()]); }
         exit;
     }
@@ -7515,8 +7519,21 @@ foreach($dCounts as $c) {
                     res.depts.forEach(function(d) { opts += '<option value="' + d.id + '">' + d.name + '</option>'; });
                     $('#design_dept_select, #extra1_dept_select, #extra2_dept_select').html(opts);
                     
+                    // 主要設計部門：一律取全站「組織角色綁定設定」的設計／技術部門，本頁反灰不可改（2026-08-03）
+                    if (res.rd_dept_id) {
+                        $('#design_dept_select').val(String(res.rd_dept_id))
+                            .prop('disabled', true)
+                            .css({background:'#eee', color:'#888', cursor:'not-allowed'});
+                        if (!$('#design_dept_lock').length) {
+                            $('#design_dept_select').after('<div id="design_dept_lock" style="font-size:11px;color:#8a6d45;margin-top:4px;">'
+                                + '此部門由<a href="../admin/org_role_setting.php" target="_blank"><b>組織角色綁定設定</b></a>的'
+                                + '「設計／技術部門」統一決定，僅能在該頁修改；底下的人員仍可自行勾選。</div>');
+                        }
+                        loadDeptUsers(res.rd_dept_id, 'design_users_container', false,
+                                      (res.config && res.config.design_users) || []);
+                    }
                     if (res.config) {
-                        if (res.config.design_dept_id) {
+                        if (res.config.design_dept_id && !res.rd_dept_id) {
                             $('#design_dept_select').val(res.config.design_dept_id);
                             loadDeptUsers(res.config.design_dept_id, 'design_users_container', false, res.config.design_users);
                         }
@@ -8251,18 +8268,34 @@ foreach($dCounts as $c) {
             </div>
             <div class="main-card" style="margin-bottom:10px;">
               <div style="font-weight:700;color:#444;margin-bottom:6px;"><i class="fa fa-print"></i> 訂單變更列印文件（AS 文件綁定）</div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
                 <div>
-                  <div style="font-size:12px;color:#666;margin-bottom:4px;">列印表頭（＝綁定 AS 文件的表單名稱，系統自動帶入）</div>
+                  <div style="font-size:12px;color:#666;margin-bottom:4px;"><b>訂單變更單</b>－列印表頭（＝綁定 AS 文件的表單名稱）</div>
                   <input id="ocs-print-header" class="form-control input-sm" readonly disabled
                          style="background:#eee;color:#888;cursor:not-allowed;">
                 </div>
                 <div>
-                  <div style="font-size:12px;color:#666;margin-bottom:4px;">綁定的 AS 文件編號（印在每頁頁尾右下角）</div>
+                  <div style="font-size:12px;color:#666;margin-bottom:4px;"><b>訂單變更單</b>－AS 文件編號（每頁頁尾右下角）</div>
                   <div style="display:flex;gap:6px;">
                     <input id="ocs-print-footer" class="form-control input-sm" readonly disabled
                            style="background:#eee;color:#888;cursor:not-allowed;">
                     <button type="button" class="btn btn-warning btn-sm" style="white-space:nowrap;" onclick="ocsPickAsDoc()">
+                      <i class="fa fa-link"></i> 綁定…</button>
+                  </div>
+                </div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                <div>
+                  <div style="font-size:12px;color:#666;margin-bottom:4px;"><b>訂單變更歷史清單</b>－列印表頭（橫式列印）</div>
+                  <input id="ocs-hist-header" class="form-control input-sm" readonly disabled
+                         style="background:#eee;color:#888;cursor:not-allowed;">
+                </div>
+                <div>
+                  <div style="font-size:12px;color:#666;margin-bottom:4px;"><b>訂單變更歷史清單</b>－AS 文件編號（每頁頁尾右下角）</div>
+                  <div style="display:flex;gap:6px;">
+                    <input id="ocs-hist-footer" class="form-control input-sm" readonly disabled
+                           style="background:#eee;color:#888;cursor:not-allowed;">
+                    <button type="button" class="btn btn-warning btn-sm" style="white-space:nowrap;" onclick="ocsPickAsDocHist()">
                       <i class="fa fa-link"></i> 綁定…</button>
                   </div>
                 </div>
@@ -8373,7 +8406,8 @@ foreach($dCounts as $c) {
     <!-- AS 文件編號綁定選擇器（全站共用，可輸入編號/名稱即時篩選；見 ai-rules/16） -->
     <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
     <script>
-    var ocsAsDocs = [], ocsAsDocId = 0;   // 訂單變更列印綁定的 AS 文件（清單／目前 id）
+    // 訂單變更列印綁定的 AS 文件：ocsAsDocId＝變更單、ocsAsDocHistId＝歷史清單（兩者各自綁定）
+    var ocsAsDocs = [], ocsAsDocId = 0, ocsAsDocHistId = 0;
     (function(){
         var OC_API = '../../src/store/_OrderChange_API.php';
         function ocEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -8758,9 +8792,10 @@ foreach($dCounts as $c) {
                 if(!res.success){ ocToast(res.message||'讀取設定失敗'); return; }
                 document.getElementById('ocs-path').value = res.attach_dir||'';
                 // 表頭/表尾改由 AS 文件綁定推導（唯讀反灰），綁定用共用選擇器 EGAsDoc（可打編號篩選）
-                ocsAsDocs  = res.as_docs || [];
-                ocsAsDocId = res.as_doc ? parseInt(res.as_doc.id, 10) : 0;
-                ocsShowAsDoc(res.as_doc);
+                ocsAsDocs      = res.as_docs || [];
+                ocsAsDocId     = res.as_doc      ? parseInt(res.as_doc.id, 10) : 0;
+                ocsAsDocHistId = res.as_doc_hist ? parseInt(res.as_doc_hist.id, 10) : 0;
+                ocsShowAsDoc(res.as_doc); ocsShowAsDocHist(res.as_doc_hist);
                 document.getElementById('ocs-allow-all').checked = !!(res.config&&res.config.allow_all);
                 var selD=((res.config&&res.config.depts)||[]).map(String);
                 var selU=((res.config&&res.config.users)||[]).map(String);
@@ -8792,7 +8827,8 @@ foreach($dCounts as $c) {
             var allow= document.getElementById('ocs-allow-all').checked? '1':'0';
             var path=document.getElementById('ocs-path').value.trim();
             var msg=document.getElementById('ocs-msg'); msg.style.color='#888'; msg.textContent='儲存中…';
-            ocApi('save_settings', {allow_all:allow, depts:depts, users:users, attach_dir:path, as_doc_id:ocsAsDocId}).then(function(res){
+            ocApi('save_settings', {allow_all:allow, depts:depts, users:users, attach_dir:path,
+                                    as_doc_id:ocsAsDocId, as_doc_hist_id:ocsAsDocHistId}).then(function(res){
                 if(!res.success){ msg.style.color='#c0392b'; msg.textContent=res.message||'儲存失敗'; return; }
                 msg.style.color='#1e7e34'; msg.textContent='已儲存';
                 setTimeout(function(){ $('#changeSettingsModal').modal('hide'); }, 700);
@@ -8889,8 +8925,16 @@ foreach($dCounts as $c) {
             document.getElementById('ocs-print-footer').value = doc ? EGAsDoc.label(doc) : '尚未綁定';
         };
         window.ocsPickAsDoc = function(){
-            EGAsDoc.open({docs: ocsAsDocs, current: ocsAsDocId, title:'訂單變更列印文件 — AS 文件編號綁定',
+            EGAsDoc.open({docs: ocsAsDocs, current: ocsAsDocId, title:'訂單變更單 — AS 文件編號綁定',
                 onSave: function(id, doc){ ocsAsDocId = id; ocsShowAsDoc(doc); }});
+        };
+        window.ocsShowAsDocHist = function(doc){
+            document.getElementById('ocs-hist-header').value = doc ? (doc.doc_name||'') : '（尚未綁定，預設印「訂單變更歷史」）';
+            document.getElementById('ocs-hist-footer').value = doc ? EGAsDoc.label(doc) : '尚未綁定';
+        };
+        window.ocsPickAsDocHist = function(){
+            EGAsDoc.open({docs: ocsAsDocs, current: ocsAsDocHistId, title:'訂單變更歷史清單 — AS 文件編號綁定',
+                onSave: function(id, doc){ ocsAsDocHistId = id; ocsShowAsDocHist(doc); }});
         };
         // 列印：大標題＝本公司全名／表頭＝綁定 AS 文件的表單名稱／頁尾右下＝doc_no、左下＝頁碼（ai-rules/16）
         window.exportChangeHistoryPDF = function(){
@@ -8906,14 +8950,14 @@ foreach($dCounts as $c) {
                 +'th,td{border:1px solid #ccc;padding:4px 6px;text-align:left;}th{background:#f0f0f0;}'
                 +'.p-comp{text-align:center;font-size:22px;font-weight:bold;margin-bottom:1px;}'
                 +'.p-title{text-align:center;font-size:17px;font-weight:bold;letter-spacing:6px;margin-bottom:10px;}'
-                +'@page{margin:12mm 10mm 18mm;'
+                +'@page{size:A4 landscape;margin:12mm 10mm 18mm;'   // 歷史清單欄位多，預設橫式
                 + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
                 +'}'
                 +'</style></head><body>'
                 + (comp? '<div class="p-comp">'+ocEsc(comp)+'</div>':'')
                 + '<div class="p-title">'+ocEsc(hdr)+'</div>' + tbl
                 +'<scr'+'ipt>window.onload=function(){'          // 超過一頁才加頁碼（counter(pages) 由列印引擎算）
-                +'var onePageA4=(297-30)*96/25.4;'
+                +'var onePageA4=(210-30)*96/25.4;'               // 橫式：可用高度＝A4 短邊 210mm 扣上下邊界
                 +'if(document.body.scrollHeight>onePageA4*0.92){'
                 +'var st=document.createElement(\'style\');'
                 +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
