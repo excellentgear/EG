@@ -6649,7 +6649,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                     <i class="fa fa-search" style="color:#aaa;flex-shrink:0;"></i>
                     <span id="parts-search-chips" class="kw-chips" style="display:inline-flex;flex-wrap:wrap;gap:3px;"></span>
                     <input type="text" id="parts-search" class="multi-kw-input" placeholder="搜尋料號、規格、備註…"
-                           oninput="onPartsSearchInput(this.value);debounce(()=>loadParts(1),350)()"
+                           oninput="onPartsSearchInput(this.value)"
                            onkeydown="onKwKeydown(event,'parts')"
                            ondblclick="if(this.value){this.value='';loadParts(1);}">
                     <div id="parts-search-dd" class="parts-cust-dropdown" style="top:100%;left:0;right:0;width:auto;max-width:none;min-width:220px;"></div>
@@ -6789,7 +6789,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                     <i class="fa fa-search" style="color:#aaa;flex-shrink:0;"></i>
                     <span id="cust-search-chips" class="kw-chips" style="display:inline-flex;flex-wrap:wrap;gap:3px;"></span>
                     <input type="text" id="customers-search" class="multi-kw-input" placeholder="搜尋客戶代碼、名稱、地址…"
-                           oninput="onCustSearchInput(this.value);debounce(()=>loadCustomers(1),350)()"
+                           oninput="onCustSearchInput(this.value)"
                            onkeydown="onKwKeydown(event,'cust')"
                            ondblclick="if(this.value){this.value='';loadCustomers(1);}">
                     <div id="cust-search-dd" class="parts-cust-dropdown" style="top:100%;left:0;right:0;width:auto;max-width:none;min-width:220px;"></div>
@@ -6862,7 +6862,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                     <i class="fa fa-search" style="color:#aaa;flex-shrink:0;"></i>
                     <span id="makers-search-chips" class="kw-chips" style="display:inline-flex;flex-wrap:wrap;gap:3px;"></span>
                     <input type="text" id="makers-search" class="multi-kw-input" placeholder="搜尋廠商編號、簡稱、全稱、加工類別…"
-                           oninput="onMakersSearchInput(this.value);debounce(()=>loadMakers(1),350)()"
+                           oninput="onMakersSearchInput(this.value)"
                            onkeydown="onKwKeydown(event,'makers')"
                            ondblclick="if(this.value){this.value='';loadMakers(1);}">
                     <div id="makers-search-dd" class="parts-cust-dropdown" style="top:100%;left:0;right:0;width:auto;max-width:none;min-width:220px;"></div>
