@@ -744,7 +744,8 @@ $(document).ready(function() {
             if (response.status === 'success') {
                 $(selector).each(function() {
                     const select = $(this);
-                    const originalValue = select.val();
+                    // 待套用值優先（員工資料可能比部門清單先回來，此時 val() 會落空）
+                    const originalValue = select.data('pending-val') || select.val();
                     const isOptional = !select.prop('required');
                     
                     select.empty();
@@ -762,6 +763,7 @@ $(document).ready(function() {
                     if (originalValue) {
                         select.val(originalValue);
                     }
+                    select.removeData('pending-val');
                 });
             }
         });
@@ -875,7 +877,8 @@ $(document).ready(function() {
             }
         });
 
-        // 載入所有部門選項
+        // 載入所有部門選項（先清掉上一次殘留的待套用值，避免沿用前一位員工的部門）
+        $('.department-select').removeData('pending-val').val('');
         loadDepartmentsToSelects('.department-select');
 
         if (action === 'add') {
@@ -919,7 +922,7 @@ $(document).ready(function() {
 
                     // 設定主職務
                     if (emp.main_department_id) {
-                        $('#main_department_id').val(emp.main_department_id);
+                        $('#main_department_id').data('pending-val', String(emp.main_department_id)).val(emp.main_department_id);
                         loadPositionsForDepartment(emp.main_department_id, '#main_position_id', emp.main_position_id);
                     }
 
@@ -928,7 +931,7 @@ $(document).ready(function() {
                         emp.concurrent_positions.forEach((pos, index) => {
                             if (index < 3) {
                                 const i = index + 1;
-                                $(`#concurrent_department_id_${i}`).val(pos.department_id);
+                                $(`#concurrent_department_id_${i}`).data('pending-val', String(pos.department_id)).val(pos.department_id);
                                 loadPositionsForDepartment(pos.department_id, `#concurrent_position_id_${i}`, pos.position_id);
                             }
                         });
