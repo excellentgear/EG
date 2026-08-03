@@ -1026,10 +1026,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             if (!empty($global)) {
-                $global_like = '%' . $global . '%';
-                $whereClauses[] = "(ot.Order_date LIKE :global1 OR ot.Client_name LIKE :global2 OR ot.d_id LIKE :global3 OR ot.Processing_items LIKE :global4 OR ot.Order_ps LIKE :global5 OR u.user_cname LIKE :global6 OR ot.ateNote LIKE :global7 OR ot.Order_oo LIKE :global8 OR ot.C_order LIKE :global9)";
-                for ($i = 1; $i <= 9; $i++) {
-                    $params[':global' . $i] = $global_like;
+                // 與主列表同一套：LIKE 掃全部可見欄位、多關鍵字皆須命中（此查詢未 join customer_list）
+                $gFields = ['ot.d_id','ot.Client_name','ot.Processing_items','ot.Order_ps','ot.ateNote',
+                            'u.user_cname','ot.Order_oo','ot.C_order','ot.Containers','ot.Sample',
+                            'ot.JIG','ot.Order_date'];
+                $gTokens = preg_split('/\s+/u', trim($global), -1, PREG_SPLIT_NO_EMPTY) ?: [$global];
+                foreach ($gTokens as $ti => $tk) {
+                    $ors = [];
+                    foreach ($gFields as $fi => $f) {
+                        $ph = ":gg{$ti}_{$fi}";
+                        $ors[] = "$f LIKE $ph";
+                        $params[$ph] = "%$tk%";
+                    }
+                    $whereClauses[] = '(' . implode(' OR ', $ors) . ')';
                 }
             }
 
@@ -1536,6 +1545,87 @@ if ($permission_code === 'A') {
     $display_permission_code = implode('+', $parts);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// RBAC 角色權限（module='order_track'）
+// 目前本頁功能權限檢查仍走 user_module_permissions（上方 $can_* 變數），
+// 這裡先建立「角色設定」介面與資料；待 user_permissions.php 完成本頁
+// 人員與角色對照後，把下方 $OT_USE_RBAC 改為 true 即切換成角色制檢查。
+// ══════════════════════════════════════════════════════════════════════════
+$OT_USE_RBAC = false; // ★切換開關：true = 改用 roles/role_features 檢查功能權限
+
+$_ot_uid       = intval($_SESSION['id'] ?? 0);
+$_ot_features  = [];
+$_ot_my_roles  = [];
+$_ot_has_roles = false;
+$IS_OT_RBAC_ADMIN = false;
+try {
+    $_ot_chk = $db->prepare("SELECT 1 FROM user_roles WHERE user_id=? LIMIT 1");
+    $_ot_chk->execute([$_ot_uid]);
+    $_ot_has_roles = (bool)$_ot_chk->fetchColumn();
+    if ($_ot_has_roles) {
+        $_ot_st = $db->prepare("
+            SELECT DISTINCT r.role_name, rf.feature_code
+            FROM user_roles ur
+            JOIN roles r ON r.role_id = ur.role_id
+            JOIN role_features rf ON rf.role_id = ur.role_id
+            WHERE ur.user_id = ?");
+        $_ot_st->execute([$_ot_uid]);
+        foreach ($_ot_st->fetchAll(PDO::FETCH_ASSOC) as $_ot_r) {
+            $_ot_features[] = $_ot_r['feature_code'];
+            // 只把「對本頁有權限」的角色列為本頁角色，避免帶入其他模組的角色
+            if ($_ot_r['feature_code'] === 'all' || strpos((string)$_ot_r['feature_code'], 'ot_') === 0) {
+                $_ot_my_roles[] = $_ot_r['role_name'];
+            }
+        }
+        $_ot_features = array_unique($_ot_features);
+        $_ot_my_roles = array_unique($_ot_my_roles);
+        $IS_OT_RBAC_ADMIN = in_array('all', $_ot_features, true);
+    }
+} catch (Exception $_ot_e) {}
+
+function ot_hasF(string $f): bool {
+    global $_ot_features;
+    return in_array('all', $_ot_features, true) || in_array($f, $_ot_features, true);
+}
+
+// ── 本頁功能清單（角色設定勾選用；依功能分組）────────────────────────────
+$OT_PAGE_FEATURES = [
+    ['group'=>'訂單基本操作', 'code'=>'ot_view',                 'label'=>'檢視訂單'],
+    ['group'=>'訂單基本操作', 'code'=>'ot_edit',                 'label'=>'新建/編輯訂單'],
+    ['group'=>'訂單基本操作', 'code'=>'ot_delete',               'label'=>'刪除訂單按鈕'],
+    ['group'=>'訂單基本操作', 'code'=>'ot_view_amount',          'label'=>'顯示訂單金額（單價）'],
+    ['group'=>'訂單流程',     'code'=>'ot_batch_draw',           'label'=>'批圖按鈕（審圖/取消審圖）'],
+    ['group'=>'訂單流程',     'code'=>'ot_to_pm',                'label'=>'轉生管按鈕（含取消轉生管）'],
+    ['group'=>'訂單流程',     'code'=>'ot_close',                'label'=>'結案按鈕（訂單完結/解除完結）'],
+    ['group'=>'訂單流程',     'code'=>'ot_cancel',               'label'=>'取消訂單按鈕（暫停/取消/解除）'],
+    ['group'=>'訂單流程',     'code'=>'ot_op_convert',           'label'=>'OP轉訂單'],
+    ['group'=>'訂單變更',     'code'=>'ot_order_change',         'label'=>'訂單變更'],
+    ['group'=>'訂單變更',     'code'=>'ot_order_change_setting', 'label'=>'訂單變更設定'],
+    ['group'=>'設計與批圖',   'code'=>'ot_design_note',          'label'=>'設計備註（編輯）'],
+    ['group'=>'設計與批圖',   'code'=>'ot_img_editor',           'label'=>'批圖編輯器'],
+    ['group'=>'設計與批圖',   'code'=>'ot_master_edit',          'label'=>'前往料號主檔編輯按鈕'],
+    ['group'=>'計算工具',     'code'=>'ot_gear_calc',            'label'=>'齒輪計算'],
+    ['group'=>'計算工具',     'code'=>'ot_keyway_calc',          'label'=>'鍵槽計算'],
+];
+
+// ── 已寫好、尚未啟用的 RBAC 權限檢查（$OT_USE_RBAC = true 時生效）─────────
+// 切換時：PHP 端以下列覆寫為準；細部按鈕（審圖/轉生管/結案/取消/訂單變更/
+// OP轉訂單/金額顯示等）需把頁面裡的 `$permission_code === 'A'`、$can_update
+// 判斷改為對應 ot_hasF()；JS 端以 window.OT_FEAT（見頁尾 script）判斷。
+if ($OT_USE_RBAC) {
+    $can_create       = ot_hasF('ot_edit');
+    $can_update       = ot_hasF('ot_edit');
+    $can_delete       = ot_hasF('ot_delete');
+    $can_edit_ateNote = ot_hasF('ot_design_note');
+    $show_op_col      = ($can_create || $can_update);
+    $show_gear_tool   = $IS_OT_RBAC_ADMIN || ot_hasF('ot_gear_calc'); // 齒輪計算改由角色控制
+    if (!$IS_OT_RBAC_ADMIN && !ot_hasF('ot_view')) {
+        header('HTTP/1.1 403 Forbidden');
+        echo '您沒有瀏覽此頁面的權限。';
+        exit;
+    }
+}
+
 if (!($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']))) {
     $ate_list = $conn->getAll("SELECT `user_cname`,`user_uname`,`id` FROM `user` WHERE `user_status`=63");
 
@@ -1784,24 +1874,22 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         $whereClauses[] = "(ot.pmGet IS NULL AND ot.in_review IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6))";
     }
     if (!empty($global)) {
-        // 每個空白分隔詞包成必要片語 +"詞"：片語內特殊字元（如 -）是字面值、每個詞都必須出現。
-        // 不可把 - 換成空格再丟進 BOOLEAN MODE——805-01-107 會拆成 805/01/107 任一命中即符合，等於沒篩。
-        $ft_parts = [];
-        foreach (preg_split('/\s+/u', trim(str_replace(['"', '\\'], ' ', $global)), -1, PREG_SPLIT_NO_EMPTY) as $ft_tk) {
-            if (mb_strlen($ft_tk, 'UTF-8') >= 2) $ft_parts[] = '+"' . $ft_tk . '"';
-        }
-        if (empty($ft_parts)) {
-            // 沒有任何 >= 2 字的詞（ngram FULLTEXT 不支援），退回全 LIKE
-            $whereClauses[] = "(ot.Order_date LIKE :g1 OR cl.customer LIKE :g2 OR ot.Client_name LIKE :g2b OR ot.d_id LIKE :g3 OR ot.Processing_items LIKE :g4 OR ot.Order_ps LIKE :g5 OR ot.ateNote LIKE :g6 OR u.user_cname LIKE :g7 OR ot.Order_oo LIKE :g8 OR ot.C_order LIKE :g9)";
-            for ($i=1; $i<=9; $i++) $params[":g$i"] = "%$global%";
-            $params[":g2b"] = "%$global%";
-        } else {
-            // order_track 欄位用 ngram FULLTEXT，跨表欄位仍 LIKE
-            $whereClauses[] = "(ot.Order_date LIKE :g1 OR cl.customer LIKE :g2 OR u.user_cname LIKE :g7 OR MATCH(ot.Client_name, ot.d_id, ot.Processing_items, ot.Order_ps, ot.ateNote, ot.Order_oo, ot.C_order) AGAINST(:g_ft IN BOOLEAN MODE))";
-            $params[':g1']   = "%$global%";
-            $params[':g2']   = "%$global%";
-            $params[':g7']   = "%$global%";
-            $params[':g_ft'] = implode(' ', $ft_parts);
+        // 全表搜尋一律用 LIKE 掃全部可見欄位。
+        // 【禁止改回 ngram FULLTEXT】MATCH ... AGAINST('+"RC105-N03-A"') 對含「-」的料號回傳 0 筆
+        // （ngram 把 - 當分隔字元，片語比對不成立），LIKE 才找得到；本表僅約 8500 列，LIKE 全掃夠快。
+        $gFields = ['ot.d_id','ot.Client_name','cl.customer','ot.Processing_items','ot.Order_ps',
+                    'ot.ateNote','u.user_cname','ot.Order_oo','ot.C_order','ot.Containers',
+                    'ot.Sample','ot.JIG','ot.Order_date'];
+        // 多個關鍵字＝每個字都要命中（可命中不同欄位）
+        $gTokens = preg_split('/\s+/u', trim($global), -1, PREG_SPLIT_NO_EMPTY) ?: [$global];
+        foreach ($gTokens as $ti => $tk) {
+            $ors = [];
+            foreach ($gFields as $fi => $f) {
+                $ph = ":g{$ti}_{$fi}";
+                $ors[] = "$f LIKE $ph";
+                $params[$ph] = "%$tk%";
+            }
+            $whereClauses[] = '(' . implode(' OR ', $ors) . ')';
         }
     }
 
@@ -3443,8 +3531,14 @@ foreach($dCounts as $c) {
                     </div>
 
                     <!-- Filter Bar -->
-                    <div class="filter-bar" style="background: #fff; padding: 10px; border-radius: 8px; margin-bottom: 15px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
-                        <select id="year-select" class="form-control input-sm" style="width: 100px; display: inline-block;">
+                    <style>
+                    /* 篩選列自適應：一行放不下時加上 .fb-compact，按鈕只顯示圖示（滑鼠移過看 title 名稱） */
+                    .filter-bar.fb-compact .fb-txt { display:none; }
+                    /* 圖示化後仍塞不下而換行：分頁不再靠右推出大片空白，改為緊接按鈕排列 */
+                    .filter-bar.fb-packed #pagination-container { margin-left:0 !important; }
+                    </style>
+                    <div class="filter-bar" style="background: #fff; padding: 8px 10px; border-radius: 8px; margin-bottom: 15px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
+                        <select id="year-select" class="form-control input-sm" style="width: 92px; display: inline-block;">
                             <option value="ALL" <?= $selectedYear === 'ALL' ? 'selected' : '' ?>>全部年份</option>
                             <?php 
                             $currY = date('Y');
@@ -3468,42 +3562,42 @@ foreach($dCounts as $c) {
                             <?php endforeach; ?>
                         </select>
                         <div style="position:relative;display:inline-block;vertical-align:middle;">
-                            <input type="text" id="filter-client" class="form-control input-sm" placeholder="搜尋客戶(名稱/ID)" style="width:130px;" autocomplete="off">
+                            <input type="text" id="filter-client" class="form-control input-sm" placeholder="搜尋客戶(名稱/ID)" style="width:115px;" autocomplete="off">
                             <div id="filter-client-dd" style="display:none;position:absolute;top:100%;left:0;z-index:9999;background:#fff;border:1px solid #ccc;border-radius:4px;box-shadow:0 3px 8px rgba(0,0,0,.15);min-width:220px;max-height:220px;overflow-y:auto;font-size:12px;"></div>
                         </div>
-                        <input type="text" id="filter-part" class="form-control input-sm" placeholder="搜尋料號" style="width: 120px;">
-                        <input type="text" id="filter-global" class="form-control input-sm" placeholder="全表搜尋" style="width: 150px;">
+                        <input type="text" id="filter-part" class="form-control input-sm" placeholder="搜尋料號" style="width: 105px;">
+                        <input type="text" id="filter-global" class="form-control input-sm" placeholder="全表搜尋" style="width: 130px;">
                         <button type="button" class="btn btn-warning btn-sm" id="filter-unbound" style="margin:0;" title="篩選尚未綁定客戶ID或料號ID的訂單">
-                            <i class="fa fa-unlink"></i> 未綁定
+                            <i class="fa fa-unlink"></i><span class="fb-txt"> 未綁定</span>
                         </button>
-                        <button type="button" class="btn btn-danger btn-sm" id="clear-filters" style="margin: 0;"><i class="fa fa-times"></i> 取消</button>
+                        <button type="button" class="btn btn-danger btn-sm" id="clear-filters" style="margin: 0;" title="清除篩選條件"><i class="fa fa-times"></i><span class="fb-txt"> 取消</span></button>
                         <?php if ($show_gear_tool): ?>
                         <button type="button" id="btn-open-gear-tool"
                             onclick="openGearTool()"
                             title="齒輪計算工具（技術課專用）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#1a252f,#2980b9);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-cog" style="font-size:13px;"></i> 齒輪計算
+                            <i class="fa fa-cog" style="font-size:13px;"></i><span class="fb-txt"> 齒輪計算</span>
                         </button>
                         <?php endif; ?>
                         <button type="button" id="btn-open-kw-tool"
                             onclick="openKwTool()"
                             title="軸件鍵槽計算工具"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#1a3a2a,#27ae60);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-key" style="font-size:13px;"></i> 鍵槽計算
+                            <i class="fa fa-key" style="font-size:13px;"></i><span class="fb-txt"> 鍵槽計算</span>
                         </button>
                         <!-- 訂單變更：變更(全部歷史) + 設定(限A權限)，緊鄰鍵槽計算右側 -->
                         <button type="button" id="btn-order-change-history"
                             onclick="openChangeHistory()"
                             title="全部訂單變更歷史紀錄"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#5d4037,#a1887f);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-history" style="font-size:13px;"></i> 變更
+                            <i class="fa fa-history" style="font-size:13px;"></i><span class="fb-txt"> 變更</span>
                         </button>
                         <?php if ($permission_code === 'A'): ?>
                         <button type="button" id="btn-order-change-settings"
                             onclick="openChangeSettings()"
                             title="訂單變更設定（通知對象、附件路徑、列印表頭表尾）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#37474f,#607d8b);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-cog" style="font-size:13px;"></i> 設定
+                            <i class="fa fa-cog" style="font-size:13px;"></i><span class="fb-txt"> 設定</span>
                         </button>
                         <?php endif; ?>
                         <!-- 批圖編輯器：獨立跳窗（可拖到另一個螢幕），小畫家+Figma 混合式圖面編輯 -->
@@ -3511,8 +3605,17 @@ foreach($dCounts as $c) {
                             onclick="window.open('image_editor.php', 'egImgEditor_' + Date.now(), 'width=1280,height=860,menubar=no,toolbar=no,location=no,status=no,resizable=yes')"
                             title="批圖編輯器（貼上/拖入圖面、遮蓋客戶資料、加標籤文字、球標與設變標示、多圖合併、列印/另存）"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#6a1b9a,#ab47bc);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
-                            <i class="fa fa-paint-brush" style="font-size:13px;"></i> 批圖
+                            <i class="fa fa-paint-brush" style="font-size:13px;"></i><span class="fb-txt"> 批圖</span>
                         </button>
+                        <?php if ($IS_OT_RBAC_ADMIN): ?>
+                        <!-- 角色設定：僅管理員可見，設定本頁各功能的角色權限 -->
+                        <button type="button" id="btn-ot-role-settings"
+                            onclick="otOpenRoleModal()"
+                            title="角色設定（本頁各功能的角色權限，僅管理員）"
+                            style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#8a5a2b,#c0762c);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
+                            <i class="fa fa-key" style="font-size:13px;"></i><span class="fb-txt"> 角色設定</span>
+                        </button>
+                        <?php endif; ?>
                         <!-- 分頁控制：推到最右側與按鈕同列 -->
                         <div id="pagination-container" style="margin-left:auto; display:flex; align-items:center; white-space:nowrap;"></div>
                     </div><!-- /filter-bar -->
@@ -12985,6 +13088,241 @@ foreach($dCounts as $c) {
             document.removeEventListener('mousemove', onDrag);
             document.removeEventListener('mouseup',   onDrop);
         }
+    }
+})();
+</script>
+
+<?php if ($IS_OT_RBAC_ADMIN): ?>
+<!-- ═══ 角色設定 Modal（訂單追蹤，僅管理員）═══════════════════════════════ -->
+<div class="modal fade" id="otRoleModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:900px;max-width:96vw;" role="document">
+    <div class="modal-content">
+      <div class="modal-header" style="background:#8a5a2b;color:#fff;padding:12px 18px;">
+        <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.8;"><span>&times;</span></button>
+        <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-key" style="margin-right:7px;"></i>訂單追蹤－角色設定</h4>
+      </div>
+      <div class="modal-body" style="padding:0;">
+        <div style="display:flex;gap:0;height:420px;font-size:13px;">
+          <!-- 左：角色清單 -->
+          <div style="width:200px;min-width:200px;border-right:1px solid #ddd;display:flex;flex-direction:column;">
+            <div style="padding:8px 10px;background:#f8f9fa;border-bottom:1px solid #ddd;display:flex;justify-content:space-between;align-items:center;">
+              <span style="font-weight:600;font-size:12px;">角色清單</span>
+              <button class="btn btn-xs btn-success" onclick="otAddRole()"><i class="fa fa-plus"></i> 新增</button>
+            </div>
+            <div id="ot-roles-list" style="flex:1;overflow-y:auto;padding:4px 0;">
+              <div class="text-center text-muted" style="padding:20px;font-size:12px;">載入中...</div>
+            </div>
+          </div>
+          <!-- 右：功能勾選（依功能分組） -->
+          <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+            <div id="ot-role-feat-header" style="padding:8px 14px;background:#f8f9fa;border-bottom:1px solid #ddd;font-weight:600;font-size:12px;color:#555;">
+              ← 請選擇角色
+            </div>
+            <div id="ot-role-feat-body" style="flex:1;overflow-y:auto;padding:10px 14px;">
+              <?php
+              $_ot_grps = [];
+              foreach ($OT_PAGE_FEATURES as $_ot_f) $_ot_grps[$_ot_f['group']][] = $_ot_f;
+              foreach ($_ot_grps as $_ot_gname => $_ot_items): ?>
+              <div style="margin-bottom:12px;">
+                <div style="font-weight:600;color:#8a5a2b;margin-bottom:6px;font-size:12px;letter-spacing:.5px;border-bottom:1px dashed #e0d5c5;padding-bottom:3px;">
+                  <i class="fa fa-folder-o"></i> <?= htmlspecialchars($_ot_gname) ?>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px 24px;">
+                <?php foreach ($_ot_items as $_ot_feat): ?>
+                  <label style="font-weight:normal;cursor:pointer;display:flex;align-items:center;gap:5px;margin:0;">
+                    <input type="checkbox" class="ot-role-feat-cb"
+                      value="<?= htmlspecialchars($_ot_feat['code']) ?>"
+                      data-label="<?= htmlspecialchars($_ot_feat['label']) ?>">
+                    <?= htmlspecialchars($_ot_feat['label']) ?>
+                  </label>
+                <?php endforeach; ?>
+                </div>
+              </div>
+              <?php endforeach; ?>
+            </div>
+            <div id="ot-role-feat-footer" style="padding:8px 14px;border-top:1px solid #ddd;background:#f8f9fa;display:none;">
+              <small class="text-muted" id="ot-role-feat-note" style="float:left;line-height:28px;"></small>
+              <div style="display:flex;gap:6px;justify-content:flex-end;">
+                <button class="btn btn-default btn-sm" id="ot-btn-check-all" onclick="otToggleAllFeat(true)">
+                  <i class="fa fa-check-square-o"></i> 全選
+                </button>
+                <button class="btn btn-default btn-sm" id="ot-btn-uncheck-all" onclick="otToggleAllFeat(false)">
+                  <i class="fa fa-square-o"></i> 取消全選
+                </button>
+                <button class="btn btn-primary btn-sm" id="ot-btn-save-role-feat" onclick="otSaveRoleFeatures()">
+                  <i class="fa fa-save"></i> 儲存角色設定
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p style="font-size:11px;color:#aaa;padding:6px 12px;border-top:1px solid #eee;margin:0;">
+          <i class="fa fa-info-circle"></i> 使用者指派角色請至 <strong>管理設定 → 使用者權限</strong> 頁面操作。目前本頁權限檢查尚未切換為角色制，勾選設定將於切換後生效。
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ══ 角色設定（訂單追蹤 module='order_track'，僅管理員）════════════════════
+var OT_ROLES_API = '../../src/store/Roles_API.php';
+var _otSelRoleId = null;
+
+function otOpenRoleModal() {
+    $('#otRoleModal').modal('show');
+    otLoadRolesPanel();
+}
+
+function otLoadRolesPanel() {
+    $('#ot-roles-list').html('<div class="text-center text-muted" style="padding:20px;font-size:12px;"><i class="fa fa-spinner fa-spin"></i></div>');
+    $.get(OT_ROLES_API, { action:'get_roles', module:'order_track' }, function(res) {
+        if (!res.success) { $('#ot-roles-list').html('<div class="text-danger" style="padding:10px;">載入失敗</div>'); return; }
+        var html = '';
+        res.data.forEach(function(r) {
+            var isSystem = r.is_system == 1;
+            var active = _otSelRoleId == r.role_id ? 'background:#f5ead9;font-weight:600;' : '';
+            html += '<div class="ot-role-item" data-id="' + r.role_id + '"'
+                 + ' style="padding:7px 10px;cursor:pointer;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between;' + active + '"'
+                 + ' onclick="otSelectRole(' + r.role_id + ',' + (isSystem ? 1 : 0) + ')">'
+                 + '<span class="ot-role-name" style="flex:1;font-size:13px;">' + escapeHtml(r.role_name)
+                 + (isSystem ? '<span class="label label-warning" style="font-size:9px;margin-left:5px;vertical-align:middle;">系統</span>' : '') + '</span>'
+                 + (!isSystem ? '<button class="btn btn-xs btn-default" style="opacity:.65;padding:1px 5px;margin-right:3px;" title="修改角色名稱"'
+                    + ' onclick="event.stopPropagation();otRenameRole(' + r.role_id + ',\'' + escapeHtml(r.role_name).replace(/'/g, "\\'") + '\')">'
+                    + '<i class="fa fa-pencil"></i></button>'
+                    + '<button class="btn btn-xs btn-danger" style="opacity:.6;padding:1px 5px;" title="刪除角色"'
+                    + ' onclick="event.stopPropagation();otDeleteRole(' + r.role_id + ',\'' + escapeHtml(r.role_name).replace(/'/g, "\\'") + '\')">'
+                    + '<i class="fa fa-times"></i></button>' : '')
+                 + '</div>';
+        });
+        $('#ot-roles-list').html(html || '<div class="text-muted" style="padding:10px;font-size:12px;">尚無角色，請按右上「新增」建立</div>');
+        if (_otSelRoleId) {
+            var $cur = $('#ot-roles-list .ot-role-item[data-id="' + _otSelRoleId + '"]');
+            if (!$cur.length) { _otSelRoleId = null; $('#ot-role-feat-header').text('← 請選擇角色'); $('#ot-role-feat-footer').hide(); }
+        }
+    });
+}
+
+function otSelectRole(roleId, isSystem) {
+    _otSelRoleId = roleId;
+    $('#ot-roles-list .ot-role-item').css({'background':'','font-weight':''});
+    var $item = $('#ot-roles-list .ot-role-item[data-id="' + roleId + '"]');
+    $item.css({'background':'#f5ead9','font-weight':'600'});
+    var displayName = $item.find('.ot-role-name').clone().children().remove().end().text().trim();
+    $('#ot-role-feat-header').text('設定功能：' + displayName);
+    $('.ot-role-feat-cb').prop('checked', false).prop('disabled', !!isSystem);
+    $('#ot-role-feat-footer').show();
+    if (isSystem) {
+        // 管理員系統角色 → 全勾且不可修改
+        $('.ot-role-feat-cb').prop('checked', true);
+        $('#ot-role-feat-note').text('系統角色不可修改（擁有全部功能）');
+        $('#ot-role-feat-footer button').prop('disabled', true);
+        return;
+    }
+    $('#ot-role-feat-note').text('');
+    $('#ot-role-feat-footer button').prop('disabled', false);
+    $.get(OT_ROLES_API, { action:'get_role_features', role_id: roleId }, function(res) {
+        if (res.success && res.data) {
+            res.data.forEach(function(code) {
+                $('.ot-role-feat-cb[value="' + code + '"]').prop('checked', true);
+            });
+        }
+    });
+}
+
+function otToggleAllFeat(checked) {
+    $('.ot-role-feat-cb:not(:disabled)').prop('checked', checked);
+}
+
+function otSaveRoleFeatures() {
+    if (!_otSelRoleId) return;
+    var codes = [];
+    $('.ot-role-feat-cb:checked').each(function() { codes.push($(this).val()); });
+    $.post(OT_ROLES_API, { action:'save_role_features', role_id:_otSelRoleId, features: JSON.stringify(codes) }, function(res) {
+        if (res.success) { showToast('角色設定已儲存'); }
+        else { alert(res.message || '儲存失敗'); }
+    });
+}
+
+function otAddRole() {
+    var name = prompt('請輸入新角色名稱（例：業務助理、設計人員）');
+    if (name === null) return;
+    name = name.trim();
+    if (!name) { alert('角色名稱不可空白'); return; }
+    $.post(OT_ROLES_API, { action:'save_role', role_name: name, module:'order_track' }, function(res) {
+        if (!res.success) { alert(res.message || '新增失敗'); return; }
+        _otSelRoleId = res.role_id;
+        otLoadRolesPanel();
+    });
+}
+
+function otRenameRole(roleId, oldName) {
+    var name = prompt('修改角色名稱', oldName);
+    if (name === null) return;
+    name = name.trim();
+    if (!name) { alert('角色名稱不可空白'); return; }
+    if (name === oldName) return;
+    // Roles_API save_role 帶 role_id＝改名（不更動所屬模組與功能設定）
+    $.post(OT_ROLES_API, { action:'save_role', role_id: roleId, role_name: name }, function(res) {
+        if (!res.success) { alert(res.message || '修改失敗'); return; }
+        showToast('角色名稱已更新');
+        if (_otSelRoleId == roleId) $('#ot-role-feat-header').text('設定功能：' + name);
+        otLoadRolesPanel();
+    });
+}
+
+function otDeleteRole(roleId, roleName) {
+    if (!confirm('刪除角色「' + roleName + '」？\n此角色的功能設定將一併刪除，已指派此角色的使用者將失去對應權限。')) return;
+    $.post(OT_ROLES_API, { action:'delete_role', role_id: roleId }, function(res) {
+        if (!res.success) { alert(res.message || '刪除失敗'); return; }
+        if (_otSelRoleId == roleId) { _otSelRoleId = null; $('#ot-role-feat-header').text('← 請選擇角色'); $('#ot-role-feat-footer').hide(); }
+        otLoadRolesPanel();
+    });
+}
+</script>
+<?php endif; ?>
+
+<script>
+// ══ RBAC 功能旗標（供切換角色制後 JS 端判斷；$OT_USE_RBAC=false 時僅供參考）══
+window.OT_USE_RBAC = <?= json_encode($OT_USE_RBAC) ?>;
+window.OT_IS_RBAC_ADMIN = <?= json_encode($IS_OT_RBAC_ADMIN) ?>;
+window.OT_FEAT = <?= json_encode(array_values(array_map('strval', $_ot_features)), JSON_UNESCAPED_UNICODE) ?>;
+window.otHasFeat = function(code) {
+    return window.OT_FEAT.indexOf('all') !== -1 || window.OT_FEAT.indexOf(code) !== -1;
+};
+
+// ── 篩選列自適應：一行放不下時按鈕改只顯示圖示（.fb-compact 隱藏 .fb-txt）──
+(function() {
+    var fbFitTimer = null;
+    function fbFit() {
+        var bar = document.querySelector('.filter-bar');
+        if (!bar) return;
+        bar.classList.remove('fb-compact');
+        bar.classList.remove('fb-packed');
+        // 單行高度約 46px（input-sm 30 + 上下 padding 16）；超過即代表換行了
+        if (bar.offsetHeight > 56) {
+            bar.classList.add('fb-compact');           // 先把按鈕文字收成圖示
+            if (bar.offsetHeight > 56) {               // 仍放不下 → 分頁不靠右，避免第二行整排空白
+                bar.classList.add('fb-packed');
+            }
+        }
+    }
+    window.addEventListener('resize', function() {
+        clearTimeout(fbFitTimer);
+        fbFitTimer = setTimeout(fbFit, 120);
+    });
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', fbFit);
+    } else {
+        fbFit();
+    }
+    // 分頁是 AJAX 後才畫入、筆數變動時寬度會變 → 監聽分頁容器重繪後重新偵測
+    var pc = document.getElementById('pagination-container');
+    if (pc && window.MutationObserver) {
+        new MutationObserver(function() {
+            clearTimeout(fbFitTimer);
+            fbFitTimer = setTimeout(fbFit, 60);
+        }).observe(pc, { childList: true, subtree: true });
     }
 })();
 </script>
