@@ -94,6 +94,15 @@ foreach ($roleRows as $rr) {
         .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
         .grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:0 14px; }
         .errmsg { color:#DD5138; font-size:11.5px; line-height:1.5; }
+        input.ro-auto, input.ro-auto:focus { background:#EFEAE1 !important; color:#7a7166 !important;
+            border-color:#D9D1C4 !important; cursor:not-allowed; }
+        .time-in { letter-spacing:.5px; text-align:center; }
+        .stat-filter { display:flex; gap:5px; flex-wrap:wrap; }
+        .sf-btn { cursor:pointer; font-size:12px; border:1.5px solid transparent; border-radius:12px; padding:3px 10px;
+            opacity:.55; transition:opacity .15s; }
+        .sf-btn:hover { opacity:.85; }
+        .sf-btn.on { opacity:1; border-color:#8A5A2B; box-shadow:inset 0 0 0 1px #fff; font-weight:bold; }
+        .sf-btn b { margin-left:3px; font-weight:normal; }
         .mt-modal .m-body input.inv, .mt-modal .m-body select.inv { border-color:#DD5138 !important; background:#FFF4F0; }
         .mt-hint { margin-top:10px; font-size:12px; color:#8a6d45; background:#FDF8EF; border:1px dashed #E8D5B5;
             border-radius:6px; padding:7px 10px; line-height:1.6; }
@@ -187,16 +196,9 @@ foreach ($roleRows as $rr) {
 <?php else: ?>
         <div class="mt-toolbar">
             <label>年度</label><select id="yearSel"></select>
-            <label>狀態</label>
-            <select id="statSel">
-                <option value="">全部</option>
-                <option value="draft">草稿</option>
-                <option value="submitted">待主席簽章</option>
-                <option value="chair_done">待總經理簽章</option>
-                <option value="done">已完成</option>
-                <option value="rejected">已退回</option>
-            </select>
-            <button class="btn-warm" id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增會議紀錄</button>
+            <label>狀態（可複選篩選）</label>
+            <div class="stat-filter" id="statFilter"></div>
+            <button class="btn-warm" id="btnAdd" style="display:none;margin-left:auto;"><i class="fa fa-plus"></i> 新增會議紀錄</button>
         </div>
         <div class="mt-table-wrap">
             <table class="mt-table">
@@ -214,15 +216,19 @@ foreach ($roleRows as $rr) {
     <div class="m-head"><span id="edTitle">新增會議紀錄</span><span class="m-close" onclick="closeMask('edMask')">✕</span></div>
     <div class="m-body">
         <div class="grid3">
-            <div style="grid-column:span 2;"><label>會議主題 *</label><input type="text" id="edSubject" maxlength="100">
+            <div style="grid-column:span 2;"><label>會議主題 *
+                <select id="edPreset" style="width:auto;display:inline-block;height:20px;font-size:11px;padding:0 4px;margin-left:6px;"><option value="">套用常用設定…</option></select></label>
+                <input type="text" id="edSubject" maxlength="100" list="edSubjectTags"><datalist id="edSubjectTags"></datalist>
                 <div class="errmsg" id="errEdSubject"></div></div>
             <div><label>會議日期 *</label><input type="date" id="edDate" max="9999-12-31">
                 <div class="errmsg" id="errEdDate"></div></div>
-            <div><label>開始時間</label><input type="text" id="edStart" class="time-in" maxlength="5" placeholder="09:00"></div>
-            <div><label>結束時間</label><input type="text" id="edEnd" class="time-in" maxlength="5" placeholder="17:00"></div>
-            <div><label>地點</label><input type="text" id="edLoc" maxlength="100"></div>
+            <div><label>開始時間</label><input type="text" id="edStart" class="time-in" maxlength="5" placeholder="09:00">
+                <div class="errmsg" id="errEdStart"></div></div>
+            <div><label>結束時間</label><input type="text" id="edEnd" class="time-in" maxlength="5" placeholder="17:00">
+                <div class="errmsg" id="errEdEnd"></div></div>
+            <div><label>地點</label><input type="text" id="edLoc" maxlength="100" list="edLocTags"><datalist id="edLocTags"></datalist></div>
             <div><label>主席（出席人員內選一位） *</label><select id="edChair"><option value="">請先加入出席人員</option></select></div>
-            <div><label>記錄</label><input type="text" id="edRecorder" maxlength="50"></div>
+            <div><label>記錄</label><input type="text" id="edRecorder" maxlength="50" class="ro-auto" readonly tabindex="-1" data-eg-skip title="自動帶入目前登入者，不可修改"></div>
         </div>
 
         <div class="mt-sec">
@@ -346,7 +352,20 @@ function parseTime(v){
     if (mm>59) return {ok:false, msg:'分鐘 '+mm+' 不存在，須 0~59'};
     return {ok:true, val:(hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm};
 }
-$('#edStart,#edEnd').on('change', function(){ var p=parseTime($(this).val()); if(p.ok) $(this).val(p.val); else alert(p.msg); });
+function edTimeValidate(){
+    var ok = true, bs = parseTime($('#edStart').val()), be = parseTime($('#edEnd').val());
+    ok = setErr($('#edStart'),'errEdStart', bs.ok?'':bs.msg) && ok;
+    ok = setErr($('#edEnd'),'errEdEnd', be.ok?'':be.msg) && ok;
+    if (ok && bs.val && be.val && be.val<=bs.val) {
+        ok = setErr($('#edEnd'),'errEdEnd','結束時間不可早於或等於開始時間') && false;
+    }
+    return ok;
+}
+$('#edStart,#edEnd').on('change', function(){
+    var p = parseTime($(this).val());
+    if (p.ok) $(this).val(p.val);
+    edTimeValidate();
+});
 
 function loadMeta(cb){
     $.getJSON(API, {action:'meta'}, function(m){
@@ -361,7 +380,7 @@ function loadMeta(cb){
         if (cb) cb();
     });
 }
-$('#yearSel,#statSel').on('change', function(){ loadList(); });
+$('#yearSel').on('change', function(){ loadList(); });
 $('#btnAdd').on('click', openCreate);
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 
@@ -371,12 +390,30 @@ function loadList(){
         NProgress.done();
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         MEETINGS = res.meetings||[];
-        renderList();
+        renderStatFilter(); renderList();
     });
 }
+/* 狀態篩選：按鈕點選可複選，每顆顯示目前年度符合筆數；未選任何顆＝顯示全部 */
+var STAT_FILTER = new Set();
+function renderStatFilter(){
+    var counts = {};
+    Object.keys(STATUS_LABEL).forEach(function(k){ counts[k] = 0; });
+    MEETINGS.forEach(function(m){ counts[m.approval_status] = (counts[m.approval_status]||0) + 1; });
+    var h = '';
+    Object.keys(STATUS_LABEL).forEach(function(k){
+        h += '<span class="sf-btn st-'+k+(STAT_FILTER.has(k)?' on':'')+'" data-v="'+k+'">'
+           + STATUS_LABEL[k] + '<b>×' + counts[k] + '</b></span>';
+    });
+    $('#statFilter').html(h);
+}
+$(document).on('click', '#statFilter .sf-btn', function(){
+    var v = $(this).data('v');
+    if (STAT_FILTER.has(v)) STAT_FILTER.delete(v); else STAT_FILTER.add(v);
+    renderStatFilter(); renderList();
+});
 function renderList(){
-    var st = $('#statSel').val(), h = '';
-    var rows = MEETINGS.filter(function(m){ return !st || m.approval_status===st; });
+    var h = '';
+    var rows = MEETINGS.filter(function(m){ return !STAT_FILTER.size || STAT_FILTER.has(m.approval_status); });
     rows.forEach(function(m){
         h += '<tr><td>'+fmtDate(m.meeting_date)+'</td><td class="t-left">'+esc(m.subject)+'</td>'
            + '<td>'+esc(m.chair_name||'—')+'</td><td>'+esc(m.recorder_name||'')+'</td>'
@@ -583,6 +620,7 @@ function saveDraft(thenSubmit){
     setErr($('#edSubject'),'errEdSubject','');
     if (!$('#edDate').val()){ setErr($('#edDate'),'errEdDate','請選擇會議日期'); return; }
     setErr($('#edDate'),'errEdDate','');
+    if (!edTimeValidate()){ alert('時間欄位有誤，請先修正'); return; }
     if (thenSubmit && !$('#edChair').val()){ alert('送出前請先指定主席'); return; }
     if (thenSubmit && !ATT.length){ alert('送出前請先加入出席人員'); return; }
     $.post(API, gatherPayload(), function(res){

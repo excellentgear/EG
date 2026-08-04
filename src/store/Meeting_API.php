@@ -99,6 +99,10 @@ case 'get_detail': {
     $m['chair_approval'] = $ap['chair'];
     $m['gm_approval'] = $ap['gm'];
     $m['can_edit'] = ((int)$m['recorder_user_id'] === $uid || $perms['canAdmin']) && in_array($m['status'], ['draft','rejected'], true);
+    // 解出「目前實際該簽的人」(含代理)，前端才能正確顯示簽核按鈕給代理人看，不只給原本的主席/總經理
+    $m['chair_signer_id'] = $m['chair_user_id'] ? meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name'])['id'] : null;
+    $gmSigner = meeting_gm_signer_effective($db);
+    $m['gm_signer_id'] = $gmSigner['id'] ?? null;
     jout(['meeting'=>$m, 'items'=>meeting_items($db, $id), 'attendees'=>meeting_attendees($db, $id)]);
 }
 
@@ -112,14 +116,19 @@ case 'save': {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) jerr('請選擇正確的會議日期');
     $start = trim((string)($_POST['start_time'] ?? '')) ?: null;
     $end = trim((string)($_POST['end_time'] ?? '')) ?: null;
+    foreach (['start_time'=>$start, 'end_time'=>$end] as $lbl => $v) {
+        if ($v !== null && !preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $v)) jerr('時間格式不正確（'.$lbl.'）');
+    }
+    if ($start !== null && $end !== null && $end <= $start) jerr('結束時間不可早於或等於開始時間');
     $loc = trim((string)($_POST['location'] ?? '')) ?: null;
-    $recorderName = trim((string)($_POST['recorder_name'] ?? '')) ?: $uname;
 
     if ($id > 0) {
         $m = meeting_load($db, $id);
         if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可編輯', 403);
         if (!in_array($m['status'], ['draft','rejected'], true)) jerr('此會議記錄已送出，無法編輯（如需修改請先請主席/總經理退回）');
     }
+    // 記錄一律自動帶入建立者，不接受前端覆寫（避免代填他人姓名）；新建時＝目前登入者，編輯時沿用原記錄人
+    $recorderName = $id > 0 ? (string)($m['recorder_name'] ?? $uname) : $uname;
 
     $attendees = json_decode((string)($_POST['attendees'] ?? '[]'), true);
     if (!is_array($attendees)) $attendees = [];
