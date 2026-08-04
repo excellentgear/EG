@@ -346,6 +346,7 @@ $_rosterRoles   = [];  $_userRosterRoles = [];
 $_dcRoles       = [];  $_userDcRoles     = [];
 $_tcalRoles     = [];  $_userTcalRoles   = [];
 $_trainRoles    = [];  $_userTrainRoles  = [];
+$_meetRoles     = [];  $_userMeetRoles   = [];
 $_vaudRoles     = [];  $_userVaudRoles   = [];
 $_leaveRoles    = [];  $_userLeaveRoles  = [];
 $_shipRoles     = [];  $_userShipRoles   = [];
@@ -382,6 +383,7 @@ try {
     $st->execute(['data_console']);$_dcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['tool_calib']);  $_tcalRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['training']);    $_trainRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['meeting']);     $_meetRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['vendor_audit']);$_vaudRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['leave']);       $_leaveRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['shipping']);    $_shipRoles = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -484,6 +486,10 @@ try {
     $st->execute(['training']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userTrainRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['meeting']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userMeetRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
     $st->execute(['vendor_audit']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
@@ -718,6 +724,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'kpi-role-section'        => 'KPI績效指標',
                                         'tcal-role-section'      => '量測儀器校驗',
                                         'train-role-section'     => '教育訓練',
+                                        'meet-role-section'      => '會議紀錄',
                                         'vaud-role-section'      => '供應商稽核',
                                         'leave-role-section'     => '請假系統',
                                         'ship-role-section'      => '快速出貨',
@@ -1130,6 +1137,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('train', 'training', '教育訓練管理', 'fa-graduation-cap', '#b06f27',
                         '為每位使用者指派「教育訓練管理」頁的操作角色（KPI #19 人員教育訓練達成率的來源頁）。角色功能：<strong>訓練檢閱</strong>＝檢視訓練計畫/紀錄、月達成率與匯出；<strong>訓練登錄</strong>＝檢閱＋新增/編輯訓練場次、登錄完成；<strong>訓練管理員</strong>＝登錄＋刪除場次。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         $_trainRoles, $_userTrainRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('meet', 'meeting', '會議紀錄管理', 'fa-users', '#8A5A2B',
+                        '為每位使用者指派「會議紀錄管理」頁的操作角色（2-GM-05-01 會議記錄）。角色功能：<strong>會議記錄檢閱</strong>＝檢視會議記錄（草稿僅記錄人本人看得到，出席人員／主席／總經理對相關會議自動有唯讀權限，不受此角色限制）；<strong>會議記錄登錄</strong>＝檢閱＋新增/編輯/送出自己的會議記錄；<strong>會議記錄管理員</strong>＝登錄＋檢視全部人員記錄、刪除、修改他人已送出的記錄。<strong>未被指派角色者仍可看到自己的草稿與相關會議</strong>，但看不到其他人的記錄列表；管理者固定擁有全部權限。',
+                        $_meetRoles, $_userMeetRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('vaud', 'vendor_audit', '供應商稽核管理', 'fa-clipboard', '#b06f27',
                         '為每位使用者指派「供應商稽核管理」頁的操作角色（KPI #6 廠商稽核按時執行率的來源頁）。角色功能：<strong>稽核檢閱</strong>＝檢視廠商清單/稽核歷史/半年統計與匯出；<strong>稽核登錄</strong>＝檢閱＋登錄各廠商稽核完成紀錄；<strong>稽核管理員</strong>＝登錄＋設定週期/納管/基準到期日、刪除誤登紀錄。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
