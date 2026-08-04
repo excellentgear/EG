@@ -69,6 +69,13 @@ function eg_asdoc_get(PDO $db, string $module): ?array {
     } catch (Throwable $e) { return null; }
 }
 
+/** 列印用文件編號：doc_no 後方直接附加 current_version（無版次不附加，例 2-MM-01-11 / 2-MM-01-11B）。
+ *  凡是把綁定的 AS 文件編號印在頁尾/表頭的地方，一律用這支組出字串，不要只印 doc_no。 */
+function eg_asdoc_no(?array $doc): string {
+    if (!$doc || empty($doc['doc_no'])) return '';
+    return (string)$doc['doc_no'] . (string)($doc['current_version'] ?? '');
+}
+
 /** 存綁定（$docId=0 代表取消綁定） */
 function eg_asdoc_save(PDO $db, string $module, int $docId, string $by = ''): void {
     try {

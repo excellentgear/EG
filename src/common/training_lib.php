@@ -558,14 +558,16 @@ function training_plan_last_modified(PDO $db, int $year): string {
     } catch (Throwable $e) { return ''; }
 }
 
-/** 綁定的 AS 文件編號（$which = plan|result|target）；未綁定或查無回 '' */
+/** 綁定的 AS 文件編號（$which = plan|result|target），編號後方附加版次（無版次時不附加，例 2-MM-01-11 / 2-MM-01-11B）；未綁定或查無回 '' */
 function training_as_doc_no(PDO $db, string $which): string {
     $id = (int)(training_settings($db)['training_as_doc_'.$which] ?? 0);
     if (!$id) return '';
     try {
-        $st = $db->prepare("SELECT doc_no FROM as_document WHERE id=? AND COALESCE(is_deleted,0)=0");
+        $st = $db->prepare("SELECT doc_no, current_version FROM as_document WHERE id=? AND COALESCE(is_deleted,0)=0");
         $st->execute([$id]);
-        return (string)($st->fetchColumn() ?: '');
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return '';
+        return (string)$r['doc_no'] . (string)($r['current_version'] ?? '');
     } catch (Throwable $e) { return ''; }
 }
 

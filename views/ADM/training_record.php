@@ -2399,7 +2399,7 @@ function printSignSheet(blankOnly){
         html+='<div class="pg'+(di>0?' pgbrk':'')+'">'
             +'<table class="sf"><thead>'
             +'<tr><th colspan="7" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
-            +'<div class="tt">教育訓練簽到表'+(blankOnly?'（空白）':'')+'</div></div></th></tr>'
+            +'<div class="tt">簽到表</div></div></th></tr>'
             +'<tr><td colspan="7" class="sf-i">課程名稱：'+esc(course)+(ds.length>1?'　（第 '+(di+1)+' / '+ds.length+' 天）':'')+'</td></tr>'
             +(allDatesLine?'<tr><td colspan="7" class="sf-i">'+esc(allDatesLine)+'</td></tr>':'')
             +'<tr><td colspan="7" class="sf-i">評鑑方式：'+esc(emLabel)+'</td></tr>'
@@ -2418,7 +2418,7 @@ function printSignSheet(blankOnly){
         +'table.sf td.sf-i.ol{white-space:pre-wrap;line-height:1.5;}'
         +'.pgbrk{page-break-before:always;}';
     // 人數多會跨頁，用 pageCount 模式（真頁碼＋表頭自動重印每一頁）
-    egPrintWindow('教育訓練簽到表'+(blankOnly?'（空白）':''), html, css, DOC_NO.signsheet, false, true);
+    egPrintWindow('簽到表', html, css, DOC_NO.signsheet, false, true);
 }
 /* 刪除：兩次都要輸入大寫 Y 才執行（連同上課日、參加名單、附件實體檔一起刪，無法復原） */
 /* ================= 列印（依 ai-rules/16：大標題＝公司全名、頁碼左下、AS文件編號右下） ================= */
