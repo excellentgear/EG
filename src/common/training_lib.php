@@ -571,6 +571,17 @@ function training_as_doc_no(PDO $db, string $which): string {
     } catch (Throwable $e) { return ''; }
 }
 
+/** 綁定的 AS 文件表單名稱（doc_name）；列印表頭一律用這個動態帶出，不可頁面寫死標題（ai-rules/16 第一之二節）。未綁定或查無回 '' */
+function training_as_doc_name(PDO $db, string $which): string {
+    $id = (int)(training_settings($db)['training_as_doc_'.$which] ?? 0);
+    if (!$id) return '';
+    try {
+        $st = $db->prepare("SELECT doc_name FROM as_document WHERE id=? AND COALESCE(is_deleted,0)=0");
+        $st->execute([$id]);
+        return (string)($st->fetchColumn() ?: '');
+    } catch (Throwable $e) { return ''; }
+}
+
 /* ============================================================
  * 年度訓練計劃表送審（module='training_plan'、entity_id=年度）
  *   審核＝人事表單審核者（未指定則自動取人事部門主管）；核准＝最高核准人員；人事章＝人事簽章人員。

@@ -115,6 +115,9 @@ case 'meta': {
           'doc_no'=>['plan'=>training_as_doc_no($db,'plan'), 'result'=>training_as_doc_no($db,'result'),
                      'target'=>training_as_doc_no($db,'target'), 'request'=>training_as_doc_no($db,'request'),
                      'signsheet'=>training_as_doc_no($db,'signsheet')],
+          'doc_name'=>['plan'=>training_as_doc_name($db,'plan'), 'result'=>training_as_doc_name($db,'result'),
+                     'target'=>training_as_doc_name($db,'target'), 'request'=>training_as_doc_name($db,'request'),
+                     'signsheet'=>training_as_doc_name($db,'signsheet')],
           'company_name'=>eg_company_full_name($db),
           'plan_signers'=>training_plan_signers($db),
           'plan_approval'=>training_plan_approval($db, (int)($_GET['year'] ?? date('Y'))),
@@ -177,6 +180,9 @@ case 'save_settings': {
           'doc_no'=>['plan'=>training_as_doc_no($db,'plan'), 'result'=>training_as_doc_no($db,'result'),
                      'target'=>training_as_doc_no($db,'target'), 'request'=>training_as_doc_no($db,'request'),
                      'signsheet'=>training_as_doc_no($db,'signsheet')],
+          'doc_name'=>['plan'=>training_as_doc_name($db,'plan'), 'result'=>training_as_doc_name($db,'result'),
+                     'target'=>training_as_doc_name($db,'target'), 'request'=>training_as_doc_name($db,'request'),
+                     'signsheet'=>training_as_doc_name($db,'signsheet')],
           'cat_internal_eff'=>training_category_id($db, 'internal'), 'cat_external_eff'=>training_category_id($db, 'external')]);
 }
 

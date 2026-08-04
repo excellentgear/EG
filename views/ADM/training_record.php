@@ -977,7 +977,7 @@ function loadMeta(cb){
         ATT_CATS = m.att_cats || {}; EVAL_METHODS = m.eval_methods || {}; OJT_TYPES = m.ojt_item_types || {};
         ATT_DIRS = {nas:m.attach_nas_dir||'', root:m.attach_root||''};
         GROUPS = m.dept_groups || []; UNITS = m.units || [];
-        AS_DOCS = m.as_docs || []; DOC_NO = m.doc_no || {}; COMPANY = m.company_name || '';
+        AS_DOCS = m.as_docs || []; DOC_NO = m.doc_no || {}; DOC_NAME = m.doc_name || {}; COMPANY = m.company_name || '';
         TR_FEATURES = m.features || [];
         MY_DEPTS = m.my_depts || []; REQ_SIGNERS = m.request_signers || {};
         window.__ownCompany = COMPANY;      // eg_stamp.js 畫章時要用（公司全名）
@@ -1695,7 +1695,7 @@ function attCount(){
 function attDel(i){ ATT.splice(i,1); renderAtt(); if($('#attDept').val()) $('#attDept').trigger('change'); }
 
 /* ================= 年度訓練計劃表：送審與簽章（見 ai-rules/17） ================= */
-var AS_DOCS = [], DOC_NO = {}, COMPANY = '', SIGNERS = {}, PLAN_APPR = {status:'none'}, PLAN_LASTMOD = '';
+var AS_DOCS = [], DOC_NO = {}, DOC_NAME = {}, COMPANY = '', SIGNERS = {}, PLAN_APPR = {status:'none'}, PLAN_LASTMOD = '';
 var APPR_LABEL = {none:'尚未送審', review_pending:'審核中', reviewed:'審核通過，待核准',
                   approve_pending:'待核准', approved:'已核准', rejected:'已退回'};
 function loadPlanStatus(){
@@ -2263,7 +2263,7 @@ function saveSettings(){
             return m==='fill16' ? 'fill16' : (m==='fixed' ? ($('#setSignBlankN').val()||'0') : '0'); })(),
         plan_sign_date:$('#setSignDate').val()}, function(res){
         if (!res.ok){ alert(res.error||'設定儲存失敗'); return; }
-        SETTINGS = res.settings||{}; UNITS = res.units||UNITS; DOC_NO = res.doc_no||DOC_NO;
+        SETTINGS = res.settings||{}; UNITS = res.units||UNITS; DOC_NO = res.doc_no||DOC_NO; DOC_NAME = res.doc_name||DOC_NAME;
         TGSTATS = null; if ($('#paneTarget').is(':visible')) loadTargetStats();
         loadPlanStatus();
         CAT_EFF = {internal:res.cat_internal_eff||null, external:res.cat_external_eff||null};
@@ -2364,6 +2364,7 @@ function copySession(sid){
    多天課程：一天仍是一個獨立表格（page-break-before 換頁），該表格自己的表頭永遠只描述那一天，跨頁時也還是同一天的資訊。 */
 function printSignSheet(blankOnly){
     var r = EXROW || {};
+    var docTitle = DOC_NAME.signsheet || '簽到表';   // 有綁定AS文件時表頭一律用其doc_name，不寫死（ai-rules/16 第一之二節）
     var course=r.course_name||'（課程名稱）';
     var ext=r.train_type==='external';
     var lect=ext?('外訓／開課單位：'+(r.org_unit||'')):('講師：'+(r.trainer||''));
@@ -2402,7 +2403,7 @@ function printSignSheet(blankOnly){
         html+='<div class="pg'+(di>0?' pgbrk':'')+'">'
             +'<table class="sf"><thead>'
             +'<tr><th colspan="7" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
-            +'<div class="tt">簽到表</div></div></th></tr>'
+            +'<div class="tt">'+esc(docTitle)+'</div></div></th></tr>'
             +'<tr><td colspan="7" class="sf-i">課程名稱：'+esc(course)+(ds.length>1?'　（第 '+(di+1)+' / '+ds.length+' 天）':'')+'</td></tr>'
             +(allDatesLine?'<tr><td colspan="7" class="sf-i">'+esc(allDatesLine)+'</td></tr>':'')
             +'<tr><td colspan="7" class="sf-i">評鑑方式：'+esc(emLabel)+'</td></tr>'
@@ -2421,7 +2422,7 @@ function printSignSheet(blankOnly){
         +'table.sf td.sf-i.ol{white-space:pre-wrap;line-height:1.5;}'
         +'.pgbrk{page-break-before:always;}';
     // 人數多會跨頁，用 pageCount 模式（真頁碼＋表頭自動重印每一頁）
-    egPrintWindow('簽到表', html, css, DOC_NO.signsheet, false, true);
+    egPrintWindow(docTitle, html, css, DOC_NO.signsheet, false, true);
 }
 /* 刪除：兩次都要輸入大寫 Y 才執行（連同上課日、參加名單、附件實體檔一起刪，無法復原） */
 /* ================= 列印（依 ai-rules/16：大標題＝公司全名、頁碼左下、AS文件編號右下） ================= */
@@ -2516,8 +2517,9 @@ function signRowHtml(){
 function printPlanTable(){
     var year=$('#yearSel').val(), rows=ROWS.filter(function(r){ return r.status!=='cancelled'; });
     signWarn();
+    var docTitle = DOC_NAME.plan || '教育訓練計畫表';   // 表頭一律用綁定AS文件的doc_name，不寫死（ai-rules/16 第一之二節）
     var body='<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
-           + '<div class="tt">'+year+' 年度教育訓練計畫表</div></div>';
+           + '<div class="tt">'+esc(docTitle)+'</div><div class="sub">'+year+' 年</div></div>';
     // 欄寬用 % 明確配置（table-layout:fixed），課程名稱與訓練對象留足寬度才不會被擠成直排
     var cols = '<colgroup><col style="width:4%"><col style="width:26%"><col style="width:16%"><col style="width:7%">';
     for (var c=1;c<=12;c++) cols += '<col style="width:3.2%">';
@@ -2553,7 +2555,7 @@ function printPlanTable(){
          + '<span style="font-size:14px;">✔</span> ＝ 實際已實施（已完成）　'
          + '同一格同時出現 ◎✔ ＝ 該月依計畫完成；只有 ✔ ＝ 實際實施月份與原計畫不同。</div>'
          + signRowHtml();
-    egPrintWindow(year+' 年度教育訓練計畫表', body, '', DOC_NO.plan, true);
+    egPrintWindow(year+' '+docTitle, body, '', DOC_NO.plan, true);
 }
 /* 免送審卻沒綁簽章人時提醒一次（否則印出來三個欄位都空白） */
 function signWarn(){
@@ -2567,8 +2569,9 @@ function signWarn(){
 function printResultTable(){
     var year=$('#yearSel').val(), rows=ROWS.filter(function(r){ return r.status==='done'; });
     signWarn();
+    var docTitle = DOC_NAME.result || '教育訓練結果明細表';   // 表頭一律用綁定AS文件的doc_name，不寫死（ai-rules/16 第一之二節）
     var body='<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
-           + '<div class="tt">'+year+' 年度教育訓練結果明細表</div></div>';
+           + '<div class="tt">'+esc(docTitle)+'</div><div class="sub">'+year+' 年</div></div>';
     body += '<table class="pt"><colgroup><col style="width:4%"><col style="width:4%"><col style="width:20%">'
          + '<col style="width:13%"><col style="width:6%"><col style="width:11%"><col style="width:12%">'
          + '<col style="width:5%"><col style="width:5%"><col style="width:5%"><col style="width:6%"><col style="width:9%">'
@@ -2595,7 +2598,7 @@ function printResultTable(){
              + '<td style="font-size:11px;">'+esc(ev.join('　'))+'</td></tr>';
     });
     body += '</tbody></table>' + signRowHtml();
-    egPrintWindow(year+' 年度教育訓練結果明細表', body, '', DOC_NO.result, true);
+    egPrintWindow(year+' '+docTitle, body, '', DOC_NO.result, true);
 }
 $('#btnPrintPlan').on('click', printPlanTable);
 $('#btnPrintResult').on('click', printResultTable);
