@@ -74,17 +74,22 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         table.tr-table thead th { position:sticky; top:0; z-index:5; background:#F7E0BD; color:#5b3a1e; font-weight:bold; }
         table.tr-table tbody tr:nth-child(even) { background:#FBF6EC; }
         table.tr-table tbody tr:hover { background:#FBF0DD; }
-        /* 計畫中：整列底色淺綠(暖調橄欖綠)，蓋過斑馬紋與 hover，一眼辨識哪些場次還沒排定 */
+        /* 計畫中：整列底色淺金黃，蓋過斑馬紋與 hover，一眼辨識哪些場次還沒排定。
+           改過兩次：綠色不搭全站暖色調、珊瑚紅在傳產現場會被誤讀成「NG／不良」，改用不帶紅色的暖金黃色。 */
         table.tr-table tbody tr.row-planned,
         table.tr-table tbody tr.row-planned:nth-child(even),
-        table.tr-table tbody tr.row-planned:hover { background:#E4EED0; }
+        table.tr-table tbody tr.row-planned:hover { background:#FBEFD1; }
         table.tr-table td.t-left { text-align:left; }
         .st-pill { display:inline-block; font-size:12px; border-radius:10px; padding:2px 9px; }
-        /* 計畫中：使用者明確要求淺綠底以利辨識，取偏黃的暖調橄欖綠(非藍調薄荷綠)，盡量貼近全站暖色調性 */
-        .st-planned { background:#D9E6B8; color:#4B5A20; border:1px solid #B9CC85; font-weight:bold; }
+        .st-planned { background:#F2C86D; color:#5C3D00; border:1px solid #D9A233; font-weight:bold; }
         .st-scheduled { background:#E8B77A; color:#4d2f10; }
         .st-done { background:#F0A24B; color:#fff; }
         .st-cancelled { background:#efe7d8; color:#b0a390; text-decoration:line-through; }
+        /* 狀態點擊篩選鈕：沿用狀態徽章配色，加游標與選中態(暗邊框+內縮陰影)方便辨識目前篩選中的是哪個 */
+        .stat-filter { display:inline-flex; gap:5px; }
+        .sf-btn { cursor:pointer; opacity:.55; border:1.5px solid transparent; transition:opacity .15s; }
+        .sf-btn:hover { opacity:.85; }
+        .sf-btn.on { opacity:1; border-color:#8A5A2B; box-shadow:inset 0 0 0 1px #fff; }
         .tr-op { color:#b5762a; cursor:pointer; margin:0 4px; }
         .tr-op:hover { color:#8A5A2B; text-decoration:underline; }
         input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
@@ -238,11 +243,17 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <label>部門</label>
             <select id="deptSel"><option value="">全部</option></select>
             <label>狀態</label>
-            <select id="statSel">
+            <select id="statSel" style="display:none;">
                 <option value="">全部</option><option value="planned">計畫中</option>
                 <option value="scheduled">已排定</option>
                 <option value="done">已完成</option><option value="cancelled">取消</option>
             </select>
+            <span class="stat-filter" id="statFilter">
+                <span class="sf-btn st-planned" data-v="planned">計畫中</span>
+                <span class="sf-btn st-scheduled" data-v="scheduled">已排定</span>
+                <span class="sf-btn st-done" data-v="done">已完成</span>
+                <span class="sf-btn st-cancelled" data-v="cancelled">取消</span>
+            </span>
             <input type="text" id="kwSel" placeholder="搜尋課程" style="width:130px;">
             <button class="btn-warm" id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增訓練場次</button>
             <button id="btnSetting" style="display:none;"><i class="fa fa-sliders"></i> 模組設定</button>
@@ -635,6 +646,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <select id="setDocRequest"><option value="">（未對應）</option></select>
             <label>簽到表 — AS 文件編號</label>
             <select id="setDocSignsheet"><option value="">（未對應）</option></select>
+            <label>簽到表空白列（簽名+簽日期欄位較高，太少人時可加列讓紙本看起來完整）</label>
+            <div style="display:flex;gap:6px;align-items:center;">
+                <select id="setSignBlankMode" style="max-width:220px;">
+                    <option value="0">不自動加空白列</option>
+                    <option value="fixed">固定加幾列</option>
+                    <option value="fill16">補到滿頁（最多 16 列，含實際人數）</option>
+                </select>
+                <input type="number" id="setSignBlankN" min="0" max="16" step="1" style="width:70px;display:none;" placeholder="列數">
+            </div>
             <div class="tr-hint" style="margin-top:6px;">綁定的是 AS 文件<b>本身（存 id）</b>，列印時才解出編號印在<b>頁尾右下角</b>；
                 文件改編號不必回來改設定。未對應＝該表不印文件編號（見 <b>ai-rules/16 列印文件標準</b>）。</div>
 
@@ -1096,6 +1116,13 @@ function catLabels(cat){
 }
 
 $('#deptSel,#statSel').on('change', renderTable);
+/* 狀態點擊篩選鈕：點一下＝篩選該狀態，再點一次同一個＝取消篩選(顯示全部) */
+$('#statFilter .sf-btn').on('click', function(){
+    var v = $(this).data('v'), cur = $('#statSel').val();
+    $('#statSel').val(cur===v ? '' : v).trigger('change');
+    $('#statFilter .sf-btn').removeClass('on');
+    if (cur!==v) $(this).addClass('on');
+});
 $('#kwSel').on('input', renderTable);
 $('#yearSel').on('change', function(){
     loadList();
@@ -2007,6 +2034,11 @@ function openSetting(){
     $('#setDocTarget').html(dh).val(SETTINGS.training_as_doc_target||'');
     $('#setDocRequest').html(dh).val(SETTINGS.training_as_doc_request||'');
     $('#setDocSignsheet').html(dh).val(SETTINGS.training_as_doc_signsheet||'');
+    var sbr = String(SETTINGS.training_signsheet_blank_rows||'0');
+    if (sbr==='fill16'){ $('#setSignBlankMode').val('fill16'); $('#setSignBlankN').val(''); }
+    else if (sbr && sbr!=='0'){ $('#setSignBlankMode').val('fixed'); $('#setSignBlankN').val(sbr); }
+    else { $('#setSignBlankMode').val('0'); $('#setSignBlankN').val(''); }
+    $('#setSignBlankMode').trigger('change');
     $('#setNeedAppr').val(String(SETTINGS.training_need_approval||0));
     $('#setReqNeedAppr').val(String(SETTINGS.training_request_need_approval==null?1:SETTINGS.training_request_need_approval));
     $('#setSgReview').text(SIGNERS.reviewer ? SIGNERS.reviewer.name : '（未設定審核者）');
@@ -2022,6 +2054,7 @@ function openSetting(){
     openMask('setMask');
 }
 $('#btnSetting').on('click', openSetting);
+$('#setSignBlankMode').on('change', function(){ $('#setSignBlankN').toggle(this.value==='fixed'); });
 /* 休息時段即時檢查＋與所選班別休息分鐘的對照（不一致只是提醒，不擋存檔） */
 function setBrkCheck(){
     var ps=parseTime($('#setBrkStart').val()), pe=parseTime($('#setBrkEnd').val());
@@ -2055,6 +2088,8 @@ function saveSettings(){
         as_doc_target:$('#setDocTarget').val(), need_approval:$('#setNeedAppr').val(),
         as_doc_request:$('#setDocRequest').val(), request_need_approval:$('#setReqNeedAppr').val(),
         as_doc_signsheet:$('#setDocSignsheet').val(),
+        signsheet_blank_rows:(function(){ var m=$('#setSignBlankMode').val();
+            return m==='fill16' ? 'fill16' : (m==='fixed' ? ($('#setSignBlankN').val()||'0') : '0'); })(),
         plan_sign_date:$('#setSignDate').val()}, function(res){
         if (!res.ok){ alert(res.error||'設定儲存失敗'); return; }
         SETTINGS = res.settings||{}; UNITS = res.units||UNITS; DOC_NO = res.doc_no||DOC_NO;
@@ -2158,7 +2193,13 @@ function printSignSheet(){
     var ext=r.train_type==='external';
     var lect=ext?('外訓／開課單位：'+(r.org_unit||'')):('講師：'+(r.trainer||''));
     var loc=$('#exLocSel').val()||'____________';
-    var list=(ATT.length?ATT:[{},{},{},{},{},{},{},{},{},{}]);
+    // 空白列：模組設定可選「不加」／「固定加 N 列」／「補到滿頁最多16列」，絕不刪減實際名單
+    var list = ATT.length ? ATT.slice() : [];
+    var blankMode = String(SETTINGS.training_signsheet_blank_rows||'0');
+    var blanks = 0;
+    if (blankMode==='fill16') blanks = Math.max(0, 16 - list.length);
+    else { var bn = parseInt(blankMode,10); if (!isNaN(bn) && bn>0) blanks = Math.min(16, bn); }
+    for (var bi=0; bi<blanks; bi++) list.push({});
     var ds=(DAYS.length?DAYS:[{date:'', start:'', end:'', hours:''}]);
     var em=$('#exEvalMethod').val(), emLabel=em?(EVAL_METHODS[em]||em):'';
     var outline=$.trim($('#exOutline').val()||'');
@@ -2186,8 +2227,10 @@ function printSignSheet(){
             +'<th>評鑑結果</th><th>備註</th></tr></thead><tbody>'+rows+'</tbody></table>'
             +'</div>';
     });
-    var css='table.sf{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}table.sf th,table.sf td{border:1px solid #333;padding:6px;text-align:center;height:30px;}'
-        +'table.sf-info{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;}table.sf-info td{border:1px solid #999;padding:5px 8px;text-align:left;}'
+    // 簽名＋簽日期要有足夠空間書寫：字級加大、列高至少 1.5 倍（30px→46px）
+    var css='table.sf{width:100%;border-collapse:collapse;font-size:15px;margin-top:8px;}'
+        +'table.sf th,table.sf td{border:1px solid #333;padding:10px 6px;text-align:center;height:46px;}'
+        +'table.sf-info{width:100%;border-collapse:collapse;font-size:14px;margin-top:10px;}table.sf-info td{border:1px solid #999;padding:6px 8px;text-align:left;}'
         +'table.sf-info td.ol{white-space:pre-wrap;line-height:1.6;}'
         +'.pgbrk{page-break-before:always;}';
     egPrintWindow('教育訓練簽到表', html, css, DOC_NO.signsheet, false);
@@ -2393,8 +2436,7 @@ function printRecord(){
             +'<td>'+(a.eval_score==null?'':numTrim(a.eval_score))+'</td><td>'+esc(a.eval_note||'')+'</td></tr>';
     });
     var days=(res.days||[]).map(function(d){ return fmtDate(d.day_date)+' '+((d.start_time||'')+(d.end_time?'~'+d.end_time:'')); }).join('　');
-    var html='<div style="text-align:center;"><div style="font-size:18px;font-weight:bold;">超正齒輪科技有限公司</div>'
-        +'<div style="font-size:15px;margin-top:2px;">教育訓練紀錄表</div></div>'
+    var html='<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div><div class="tt">教育訓練紀錄表</div></div>'
         +'<table class="sf-info"><tr><td colspan="2">課程名稱：'+esc(s.course_name)+'</td></tr>'
         +'<tr><td>'+(ext?'外訓／開課單位：'+esc(s.org_unit||''):'內訓／講師：'+esc(s.trainer||''))+'</td>'
         +'<td>對象部門：'+esc((res.dept_names&&res.dept_names.length)?res.dept_names.join('、'):'全公司')+'</td></tr>'
@@ -2406,15 +2448,10 @@ function printRecord(){
         +'<th style="width:44px;">實到</th><th style="width:70px;">評鑑結果</th><th style="width:50px;">分數</th><th>備註</th></tr></thead>'
         +'<tbody>'+(rows||'<tr><td colspan="8">（無名單）</td></tr>')+'</tbody></table>'
         +'<div style="margin-top:14px;font-size:13px;">講師/主辦簽章：______________　　單位主管簽章：______________　　管理代表：______________</div>';
-    var w=window.open('','_blank'); if(!w){alert('請允許彈出視窗');return;}
-    var css='body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:14px;}'
-        +'table.sf{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}table.sf th,table.sf td{border:1px solid #333;padding:5px;text-align:center;}'
+    var css='table.sf{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}table.sf th,table.sf td{border:1px solid #333;padding:5px;text-align:center;}'
         +'table.sf-info{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;}table.sf-info td{border:1px solid #999;padding:5px 8px;text-align:left;}'
-        +'table.sf-info td.ol{white-space:pre-wrap;line-height:1.6;}'
-        +'@media print{@page{size:A4;margin:12mm;}}';
-    w.document.write('<html><head><meta charset="utf-8"><title>教育訓練紀錄表</title><style>'+css+'</style></head><body>'+html
-        +'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},150);};</scr'+'ipt></body></html>');
-    w.document.close();
+        +'table.sf-info td.ol{white-space:pre-wrap;line-height:1.6;}';
+    egPrintWindow('教育訓練紀錄表', html, css, '', false);
 }
 
 /* 通知深連結：?tab=apply 開需求申請分頁；?apply_req=ID 直接開該筆申請單（唯讀或可編視狀態而定） */

@@ -330,14 +330,16 @@ const TRAINING_SETTING_KEYS = ['training_default_shift_id', 'training_cat_intern
    兩欄都留空＝完全不扣休息。預設 12:00~13:00（＝日班的午休）。 */
 const TRAINING_SETTING_STR_KEYS = ['training_break_start', 'training_break_end',
     'training_exclude_depts',    // 不列入教育訓練達標統計的部門（csv dept_id）
-    'training_plan_sign_date'];  // 免送審時計劃表的簽章日期（YYYY-MM-DD；留空＝自動取該年度最後異動日）
+    'training_plan_sign_date',   // 免送審時計劃表的簽章日期（YYYY-MM-DD；留空＝自動取該年度最後異動日）
+    'training_signsheet_blank_rows'];  // 簽到表空白列：''/'0'=不加、數字N=固定加N列、'fill16'=補到滿頁16列（不刪減既有名單）
 const TRAINING_BREAK_DEFAULT = ['training_break_start'=>'12:00', 'training_break_end'=>'13:00'];
 
 function training_settings(PDO $db): array {
     $out = ['training_default_shift_id'=>null, 'training_cat_internal'=>null, 'training_cat_external'=>null,
             'training_as_doc_plan'=>null, 'training_as_doc_result'=>null, 'training_as_doc_target'=>null,
             'training_need_approval'=>null, 'training_exclude_depts'=>'', 'training_plan_sign_date'=>'',
-            'training_as_doc_request'=>null, 'training_as_doc_signsheet'=>null, 'training_request_need_approval'=>1];
+            'training_as_doc_request'=>null, 'training_as_doc_signsheet'=>null, 'training_request_need_approval'=>1,
+            'training_signsheet_blank_rows'=>'0'];
     $out += TRAINING_BREAK_DEFAULT;      // 沒設定過才用預設；設定成空字串＝管理員刻意關閉，不可再被預設蓋回去
     try {
         $keys = array_merge(TRAINING_SETTING_KEYS, TRAINING_SETTING_STR_KEYS);

@@ -161,6 +161,11 @@ case 'save_settings': {
             $ex = implode(',', array_values(array_filter(array_map('intval', explode(',', (string)$_POST['exclude_depts'])))));
             training_setting_save($db, 'training_exclude_depts', $ex, $uid, $uname);
         }
+        if (array_key_exists('signsheet_blank_rows', $_POST)) {
+            $sb = trim((string)$_POST['signsheet_blank_rows']);
+            if ($sb !== '' && $sb !== 'fill16' && (!ctype_digit($sb) || (int)$sb > 16)) jerr('簽到表空白列數請填 0~16 的整數，或選擇補滿頁');
+            training_setting_save($db, 'training_signsheet_blank_rows', $sb, $uid, $uname);
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('設定儲存失敗：'.$e->getMessage(), 500); }
     jout(['settings'=>training_settings($db), 'units'=>training_units($db),
