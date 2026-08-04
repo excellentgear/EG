@@ -2480,24 +2480,30 @@ function egStampHtml(name, date){
     return '<span style="font-size:14px;">'+esc(name)+'</span>'
          + (date ? '<div style="font-size:10px;color:#555;">'+esc(date)+'</div>' : '');
 }
-function signRowHtml(){
+/* 年度計畫表的圖章日期（免送審＝設定的簽章日期/計畫最後異動日/今天；需送審＝實際簽核日期），
+   訓練計畫表的「已完成✔」判定也要用同一個日期基準：圖章日期(含)之後才實施的不算數(見 printPlanTable)。 */
+function planSignDate(){
     var s = PLAN_APPR || {}, need = +(SETTINGS.training_need_approval||0);
     var ap = s.approve || {}, rv = s.review || {};
     var d10 = function(x){ return String(x||'').substr(0,10); };
-    var appr, rev, hr, dt = d10(ap.decided_at || ap.submitted_at || rv.submitted_at);
+    var dt = d10(ap.decided_at || ap.submitted_at || rv.submitted_at);
+    if (!need || !dt) dt = d10(SETTINGS.training_plan_sign_date || PLAN_LASTMOD || META.today);
+    return dt;
+}
+function signRowHtml(){
+    var s = PLAN_APPR || {}, need = +(SETTINGS.training_need_approval||0);
+    var ap = s.approve || {}, rv = s.review || {};
+    var dt = planSignDate(), appr, rev, hr;
     if (!need) {
-        // 免送審：三個簽章欄直接顯示綁定的人（不必先按送審）；
-        // 日期優先序＝設定的簽章日期 → 該年度計畫最後異動日 → 今天
+        // 免送審：三個簽章欄直接顯示綁定的人（不必先按送審）
         appr = (SIGNERS.approver && SIGNERS.approver.name) || '';
         rev  = (SIGNERS.reviewer && SIGNERS.reviewer.name) || '';
         hr   = (SIGNERS.hr_signer && SIGNERS.hr_signer.name) || '';
-        dt   = d10(SETTINGS.training_plan_sign_date || PLAN_LASTMOD || META.today);
     } else {
         // 需送審：依實際簽核結果顯示，沒簽到的欄位留白給紙本蓋章
         appr = (s.status==='approved') ? (ap.approver_name||'') : '';
         rev  = (s.status==='approved' || s.status==='approve_pending' || s.status==='reviewed') ? (rv.approver_name||'') : '';
         hr   = (SIGNERS.hr_signer && SIGNERS.hr_signer.name) || '';
-        if (!dt) dt = d10(SETTINGS.training_plan_sign_date || PLAN_LASTMOD || META.today);
     }
     // 簽章一律蓋「圖章」（有上傳掃描章的人自動用實體章，其餘用共用回墨印 SVG），不是印姓名文字
     var cell = function(lb, nm){
@@ -2520,13 +2526,16 @@ function printPlanTable(){
     body += '<table class="pt">'+cols+'<thead><tr><th>NO.</th><th>課程名稱</th><th>訓練對象</th>'
          + '<th>實施方式</th>'+mh+'<th>備註</th></tr></thead><tbody>';
     if (!rows.length) body += '<tr><td colspan="17" style="height:24px;">（本年度尚無訓練計畫）</td></tr>';
+    var signDt = planSignDate();
     rows.forEach(function(r,i){
         var doneM = {};
         if (r.status==='done') {
+            // 圖章日期(含)之後才實施的不算「已完成」——本表印出來的日期就是圖章日期，
+            // 之後才做完的事在蓋章當下還沒發生，不可以顯示成已完成。
             var ds=(r.days||[]).map(function(d){ return fmtDate(d.day_date); }).filter(Boolean);
             if (!ds.length && r.done_date) ds=[fmtDate(r.done_date)];
+            ds = ds.filter(function(d){ return d && d < signDt; });
             ds.forEach(function(d){ doneM[parseInt(d.substr(5,2),10)]=1; });
-            if (!ds.length) doneM[+r.plan_month]=1;
         }
         var cells='';
         for (var k=1;k<=12;k++){
