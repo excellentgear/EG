@@ -570,7 +570,7 @@ function kpiRemove(){
 /* 存草稿／送出 */
 function gatherPayload(){
     return {
-        meeting_id: EDIT_ID, subject: $('#edSubject').val(), meeting_date: $('#edDate').val(),
+        action:'save', meeting_id: EDIT_ID, subject: $('#edSubject').val(), meeting_date: $('#edDate').val(),
         start_time: $('#edStart').val(), end_time: $('#edEnd').val(), location: $('#edLoc').val(),
         chair_user_id: $('#edChair').val(), recorder_name: $('#edRecorder').val(),
         attendees: JSON.stringify(ATT),
