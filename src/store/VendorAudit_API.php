@@ -24,7 +24,21 @@ if (!$u) jerr('未登入', 401);
 $uid = (int)$u['id'];
 $uname = (string)$u['user_cname'];
 $perms = vendor_audit_perms($db, $u);
-if (!$perms['canView']) jerr('無供應商稽核檢閱權限', 403);
+if (!$perms['canView']) {
+    // 沒有本模組角色，但目前是「簽核設定」解析出的簽核人(含代理)時，仍放行檢閱層級——
+    // 否則被指派簽核的主管收到通知點進來卻進不了頁面，違反 ai-rules/17「通知要能直接看到內容並決行」。
+    $isResolvedSigner = false;
+    try {
+        $topApprover = eg_org_user($db, 'top_approver');
+        if ($topApprover && (int)$topApprover['id'] === $uid) $isResolvedSigner = true;
+        if (!$isResolvedSigner) {
+            $sg = vendor_audit_resolve_signer($db, 0);
+            if ($sg && (int)$sg['id'] === $uid) $isResolvedSigner = true;
+        }
+    } catch (Throwable $e) {}
+    if (!$isResolvedSigner) jerr('無供應商稽核檢閱權限', 403);
+    $perms = ['isAdmin'=>false, 'canAdmin'=>false, 'canEdit'=>false, 'canView'=>true];
+}
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
@@ -798,7 +812,8 @@ case 'plan_submit': {
     if ($lock['status'] === 'pending') {
         $approver = eg_org_user($db, 'top_approver');
         if (!$approver) jerr('尚未設定最高核准人員，請聯絡管理員先於「組織角色綁定」設定');
-        vendor_audit_notify_plan_sign($db, $year, (int)$approver['id'], $uid, $uname);
+        $sg = eg_resolve_signer($db, (int)$approver['id'], ['applicant_id'=>$uid, 'flow_key'=>'vendor_audit_plan', 'log'=>true]);
+        vendor_audit_notify_plan_sign($db, $year, (int)$sg['signer_id'], $uid, $uname);
     }
     jout(['lock'=>$lock]);
 }
@@ -809,7 +824,9 @@ case 'plan_decide': {
     if (!in_array($decision, ['approved','rejected'], true)) jerr('無效的決定');
     if ($decision === 'rejected' && $noteIn === '') jerr('退回必須填寫原因');
     $approver = eg_org_user($db, 'top_approver');
-    if (!$perms['canAdmin'] && (!$approver || (int)$approver['id'] !== $uid)) jerr('您不是最高核准人員', 403);
+    $resolvedApproverId = null;
+    if ($approver) { $sg = eg_resolve_signer($db, (int)$approver['id'], ['applicant_id'=>0, 'flow_key'=>'vendor_audit_plan', 'log'=>false]); $resolvedApproverId = (int)$sg['signer_id']; }
+    if (!$perms['canAdmin'] && $resolvedApproverId !== $uid) jerr('您不是最高核准人員', 403);
     $lock = vendor_audit_plan_lock_get($db, $year);
     if (!$lock || $lock['status'] !== 'pending') jerr('此年度計劃目前無待核准紀錄');
     if ($decision === 'approved') {

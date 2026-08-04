@@ -18,6 +18,19 @@ $db = (new DBConnection())->getPDO();
 vendor_audit_ensure_schema($db);
 $vaUser = vendor_audit_current_user($db);
 $perms = vendor_audit_perms($db, $vaUser);
+if (!$perms['canView'] && $vaUser) {
+    // 沒有本模組角色，但目前是「簽核設定」解析出的簽核人(含代理)時，仍放行檢閱層級——
+    // 否則被指派簽核的主管收到通知點進來卻進不了頁面，違反 ai-rules/17「通知要能直接看到內容並決行」。
+    $vaUid = (int)$vaUser['id'];
+    try {
+        $topApprover = eg_org_user($db, 'top_approver');
+        if ($topApprover && (int)$topApprover['id'] === $vaUid) $perms['canView'] = true;
+        if (!$perms['canView']) {
+            $sg = vendor_audit_resolve_signer($db, 0);
+            if ($sg && (int)$sg['id'] === $vaUid) $perms['canView'] = true;
+        }
+    } catch (Throwable $e) {}
+}
 $roleLabel = $perms['isAdmin'] ? '管理者'
            : ($perms['canAdmin'] ? '稽核管理員'
            : ($perms['canEdit'] ? '稽核登錄'
@@ -958,7 +971,6 @@ function scoreCheck(el){
     $(el).toggleClass('af-invalid', bad);
     return !bad;
 }
-var RECT = null;
 function renderRecStatus(t){
     var st = t.status||'draft';
     var locked = (st==='pending'||st==='approved');
@@ -984,7 +996,6 @@ function openRec(tid){
     $.getJSON(API, {action:'get_form', target_id:tid}, function(res){
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         var t = res.target;
-        RECT = t;
         CUR_CFG = t.checklist_cfg || {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
         $('#recTitle').text('稽核評鑑表單：'+t.maker_id+'（'+t.maker_id_no+'）');
         $('#recPlanMonth').val(t.plan_month||'');
@@ -1867,7 +1878,8 @@ function renderPlan(res){
     $('#planLockInfo').text(lockInfo);
     $('#planSubmitBtn').toggle(!!(PERMS.canEdit && !res.locked));
     $('#planDecideBtn').remove();
-    if (res.lock && res.lock.status==='pending' && PERMS.canAdmin) {
+    if (res.lock && res.lock.status==='pending') {
+        // 顯示給所有看得到本頁的人；實際是否有權核准由後端 plan_decide 再驗一次(canAdmin 或最高核准人員本人/代理)
         $('<button id="planDecideBtn" class="b-att2" style="margin-left:8px;">核准/退回</button>').on('click', openPlanDecideMask).insertAfter('#planLockInfo');
     }
 }
