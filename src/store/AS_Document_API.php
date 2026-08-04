@@ -292,7 +292,7 @@ $asGate = [
     'create_document'=>'create', 'create_documents_batch'=>'create',
     'add_version'=>'update', 'update_document_meta'=>'update',
     'open_online'=>'edit_online',
-    'delete_document'=>'delete', 'restore_document'=>'delete',
+    'delete_document'=>'delete', 'restore_document'=>'delete', 'delete_document_permanent'=>'delete',
     'add_tag'=>'settings', 'update_tag'=>'settings', 'delete_tag'=>'settings',
     'get_perms'=>'settings', 'save_perms'=>'settings',
     'get_settings'=>'settings', 'save_settings'=>'settings', 'upload_template'=>'settings',
@@ -698,6 +698,52 @@ case 'restore_document':
     $id = (int)($_POST['id'] ?? 0);
     if ($id<=0) jout(['status'=>'error','message'=>'無效 ID']);
     $db->prepare("UPDATE as_document SET is_deleted=0, updated_at=NOW() WHERE id=?")->execute([$id]);
+    jout(['status'=>'success']);
+
+// ══════════════ 永久刪除（含改版紀錄與檔案；僅超級管理員，用於傳錯文件） ══════════════
+case 'delete_document_permanent':
+    $isSuper = ($currentUserId === 1 && $asIsRoleAdmin);
+    if (!$isSuper) jout(['status'=>'error','message'=>'僅超級管理員可永久刪除文件']);
+    $id  = (int)($_POST['id'] ?? 0);
+    $pwd = (string)($_POST['password'] ?? '');
+    if ($id<=0) jout(['status'=>'error','message'=>'無效 ID']);
+    if ($pwd==='') jout(['status'=>'error','message'=>'請輸入超級管理員密碼']);
+    $realPwd = $db->prepare("SELECT user_password FROM `user` WHERE id=1");
+    $realPwd->execute();
+    $realPwd = $realPwd->fetchColumn();
+    if ($realPwd===false || !hash_equals((string)$realPwd, $pwd)) jout(['status'=>'error','message'=>'密碼錯誤，未執行刪除']);
+
+    $doc = $db->prepare("SELECT doc_no, doc_name FROM as_document WHERE id=?");
+    $doc->execute([$id]);
+    $doc = $doc->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
+
+    $chk = function(string $sql, string $msg) use ($db,$id) {
+        $s = $db->prepare($sql); $s->execute([$id]);
+        if ($s->fetchColumn() > 0) jout(['status'=>'error','message'=>$msg]);
+    };
+    $chk("SELECT COUNT(*) FROM as_document WHERE parent_doc_id=? AND is_deleted=0", '此文件仍有子文件（表單），請先處理子文件');
+    $chk("SELECT COUNT(*) FROM as_form_template WHERE form_doc_id=? AND is_deleted=0", '此文件已綁定線上表單設計，請先於表單設計器刪除該設計');
+    $chk("SELECT COUNT(*) FROM as_form_record WHERE form_doc_id=? AND is_deleted=0", '此文件仍有填寫紀錄／附件，請先刪除');
+    $chk("SELECT COUNT(*) FROM as_form_instance WHERE form_doc_id=? AND is_deleted=0", '此文件仍有線上表單填寫紀錄，請先處理');
+    $bindChk = $db->prepare("SELECT param_key FROM system_parameters WHERE param_group='AS_DOC_BIND' AND param_value=? LIMIT 1");
+    $bindChk->execute([(string)$id]);
+    if ($bindKey = $bindChk->fetchColumn()) jout(['status'=>'error','message'=>"此文件已被其他模組（{$bindKey}）綁定為 AS 文件依據，請先解除綁定"]);
+
+    try {
+        $db->beginTransaction();
+        $db->prepare("DELETE FROM as_doc_tag_map WHERE doc_id=?")->execute([$id]);
+        $db->prepare("DELETE FROM as_doc_perm WHERE doc_id=?")->execute([$id]);
+        $db->prepare("DELETE FROM as_document_version WHERE doc_id=?")->execute([$id]);
+        $db->prepare("DELETE FROM as_document WHERE id=?")->execute([$id]);
+        $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
+                      VALUES ('views/ADM/as_document_management.php', ?, ?, NOW(), ?)")
+           ->execute(['永久刪除文件（傳錯文件）', "doc_no={$doc['doc_no']} doc_name={$doc['doc_name']}", $currentCname ?: $currentUserName]);
+        $db->commit();
+    } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
+
+    require_once __DIR__ . '/../common/attachment_lib.php';
+    eg_att_rrmdir(asDocDir($db, $id));
     jout(['status'=>'success']);
 
 // ══════════════ 下載：某版本文件 / 申請單 / 目前版 ══════════════

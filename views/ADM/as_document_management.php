@@ -73,6 +73,8 @@ $asCaps = [
     'no_attach' => in_array('asdoc_no_attach', $asFeatures, true),
     // 管理員（系統角色或頁面A權）：批次補建版本/程序書快速建檔 專用
     'admin' => $asIsRoleAdmin || strpos($pp,'A')!==false,
+    // 永久刪除（含改版紀錄，不可復原）：僅超級管理員 id=1 本人且具管理者權限，用於傳錯文件
+    'super_delete' => ($id == 1 && $asIsRoleAdmin),
 ];
 
 if (!$asCaps['view']) {
@@ -1054,6 +1056,7 @@ $(function(){
           ? `<li><a href="javascript:void(0)" class="op-restore" data-id="${d.id}"><i class="fa fa-undo"></i> 還原文件</a></li>`
           : `<li><a href="javascript:void(0)" class="op-del" data-id="${d.id}" style="color:#d9534f;"><i class="fa fa-trash"></i> 刪除文件</a></li>`;
       }
+      if(window.asPerm.super_delete) mgmt += `<li><a href="javascript:void(0)" class="op-del-permanent" data-id="${d.id}" data-name="${esc(d.doc_name)}" style="color:#a94442;"><i class="fa fa-trash-o"></i> 永久刪除（含改版紀錄，不可復原）</a></li>`;
       const sGear = mgmt
         ? `<div class="btn-group"><button class="btn btn-xs btn-default dropdown-toggle" data-toggle="dropdown" title="管理（編輯/權限/刪除）"><i class="fa fa-cog"></i> <span class="caret"></span></button><ul class="dropdown-menu dropdown-menu-right">${mgmt}</ul></div>` : '';
       ops = slot(sPrev,32)+slot(sDl,32)+slot(sHist,32)+slot(sVer,46)+slot(sRec,60)+slot(sGear,44);
@@ -2060,6 +2063,15 @@ $(function(){
   });
   $('#docTableBody').on('click','.op-restore', function(){
     $.post(API+'?action=restore_document',{id:$(this).data('id')}, r=>{ if(r.status==='success') loadDocs(true); else alert(r.message); },'json');
+  });
+  $('#docTableBody').on('click','.op-del-permanent', function(){
+    const id=$(this).data('id'), name=$(this).data('name');
+    if(!confirm(`【永久刪除】${name}\n將連同所有改版紀錄與檔案一併刪除，無法復原！\n（僅限傳錯文件時使用，若已被其他資料引用會被系統擋下）\n\n確定要繼續？`)) return;
+    const pwd = prompt('請輸入超級管理員密碼以確認：');
+    if(pwd===null || pwd==='') return;
+    $.post(API+'?action=delete_document_permanent',{id, password:pwd}, r=>{
+      if(r.status==='success'){ showToast('已永久刪除'); loadDocs(true); } else alert(r.message);
+    },'json');
   });
 
   // ── 權限設定 ──
