@@ -104,6 +104,7 @@ $PAGE_BINDS = [
     ['ss', 'vendor_record_as_doc_id', '供應商稽核管理 · 品質系統評鑑記錄表', '../pm/vendor_audit.php'],
     ['ss', 'vendor_roster_as_doc_id', '供應商稽核管理 · 合格供應商清冊',    '../pm/vendor_audit.php'],
     ['ss', 'vendor_eval_as_doc_id',   '供應商稽核管理 · 定期評核表',        '../pm/vendor_audit.php'],
+    ['ss', 'vendor_plan_as_doc_id',   '供應商稽核管理 · 供應商稽核計劃',    '../pm/vendor_audit.php'],
     ['sp', 'EXTERNAL_DOC|as_doc_id',  '外來文件清單',                       '../Sales/external_doc_list.php'],
     ['sp', 'QUOTATION|as_doc_id',     '報價單',                             '../Sales/quotation_list_NEW.php'],
 ];
