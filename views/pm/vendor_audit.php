@@ -1321,8 +1321,9 @@ function openPrintWindow(bodyHtml, title, docNo, landscape){
         + 'table.pf th,table.pf td{border:1px solid #333;padding:4px 6px;text-align:center;vertical-align:middle;}'
         + 'table.pf td.q{text-align:left;}'
         + 'table.pf-info{width:100%;font-size:13px;margin-top:12px;border-collapse:collapse;}table.pf-info td{padding:4px 6px;border:1px solid #999;}'
-        + 'table.pf-sign{width:100%;margin-top:46px;font-size:13px;}table.pf-sign td{padding:30px 6px 10px;}'
-        + '.stamp-wrap svg,svg.car-stamp{width:60px;height:60px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + 'table.pf-sign{width:100%;margin-top:46px;font-size:13px;page-break-inside:avoid;}table.pf-sign td{padding:30px 6px 10px;}'
+        + '.stamp-wrap svg,svg.car-stamp{width:80px;height:80px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + '.rs-chart-wrap{width:200px;}.rs-chart-wrap svg{width:100% !important;height:auto !important;}'
         + '@media print{@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;'
         + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
         + '}}';
@@ -1449,16 +1450,17 @@ function recordSheetHTML(){
         rows+='<tr><td class="q">'+esc(k.name)+'</td><td>'+k.max+'</td><td>'+k.self_rate+'%</td><td>'+k.audit_rate+'%</td><td>'+comb+'%</td></tr>'; });
     rows+='<tr style="font-weight:bold;"><td class="q">總成績</td><td>'+c.total_max+'</td><td>'+c.selfR+'%</td><td>'+c.auditR+'%</td><td>'+c.overall+'%</td></tr></tbody></table>';
     var svg = rsChart ? rsChart.container.querySelector('svg').outerHTML : '';
-    var body = '<div style="display:flex;gap:18px;align-items:flex-start;margin-top:8px;">'
+    var body = '<div style="display:flex;gap:18px;align-items:flex-start;margin-top:6px;">'
         + '<div style="flex:1;min-width:0;">'+rows+'</div>'
-        + '<div style="flex:0 0 320px;text-align:center;">'+svg+'</div></div>';
-    var conc='<div style="margin-top:10px;font-size:13px;">綜合評鑑合格率（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）＝<b style="font-size:16px;">'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+cfg.pass_rate+'%'+(t.conclusion?'；建議：'+esc(t.conclusion):'')+'</div>'
-        +'<div style="margin-top:6px;">判定：'+vaJudgeBadgeHtml(c.pass)+'</div>';
+        + '<div class="rs-chart-wrap" style="text-align:center;">'+svg+'</div></div>';
+    var conc='<div style="margin-top:8px;font-size:13px;">綜合評鑑合格率（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）＝<b style="font-size:16px;">'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+cfg.pass_rate+'%'+(t.conclusion?'；建議：'+esc(t.conclusion):'')+'</div>'
+        +'<div style="margin-top:4px;">判定：'+vaJudgeBadgeHtml(c.pass)+'</div>';
     var mgrStamp = (t.status==='approved' && t.signed_by_name) ? vaStampHtml(t.signed_by_name, (t.signed_at||'').substr(0,10), !!t.signed_is_deputy) : '';
     var audStamp = t.auditor ? vaStampHtml(t.auditor, fmtDate(t.audit_date)||'') : '';
-    var sign='<table class="pf-sign"><tr>'
-        +'<td><div style="font-size:11px;color:#555;">主管</div><div style="margin-top:2px;min-height:70px;">'+mgrStamp+'</div></td>'
-        +'<td><div style="font-size:11px;color:#555;">稽核員</div><div style="margin-top:2px;min-height:70px;">'+audStamp+'</div></td>'
+    // 這裡是數位自動蓋章(非人工實體蓋印)，不需要 pf-sign 預設給實體印章留的大留白，改用 inline 覆寫縮小版面避免跨頁
+    var sign='<table class="pf-sign" style="margin-top:14px;page-break-inside:avoid;"><tr>'
+        +'<td style="padding:6px 8px;"><div style="font-size:11px;color:#555;">主管</div><div style="margin-top:2px;min-height:90px;">'+mgrStamp+'</div></td>'
+        +'<td style="padding:6px 8px;"><div style="font-size:11px;color:#555;">稽核員</div><div style="margin-top:2px;min-height:90px;">'+audStamp+'</div></td>'
         +'</tr></table>';
     return head+info+body+conc+sign;
 }
