@@ -111,6 +111,7 @@ switch ($action) {
         // 發行章日期：屬於「自家出的圖」標籤時必填（判準見 ai-rules/15-圖面變更判定依據.md）。
         // 檔案還沒搬進去之前先擋，免得擋下來還留下孤兒檔。
         $upCatIds  = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['category_ids'] ?? '')))));
+        if (!$upCatIds) { echo json_encode(['success'=>false,'message'=>'請至少選擇一個附件類別標籤']); exit; }
         $upIssue   = trim($_POST['issue_stamp_date'] ?? '');
         if ($upIssue !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $upIssue)) {
             echo json_encode(['success'=>false,'message'=>'發行章日期格式錯誤（需 YYYY-MM-DD）']); exit;
@@ -532,6 +533,7 @@ switch ($action) {
             echo json_encode(['success'=>false,'message'=>'發行章日期格式錯誤（需 YYYY-MM-DD）']); exit;
         }
         $mCatIds = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['category_ids'] ?? '')))));
+        if (!$mCatIds) { echo json_encode(['success'=>false,'message'=>'請至少選擇一個附件類別標籤']); exit; }
         if (dwg_needs_issue_date($pdo, $mCatIds) && $mIssue === '') {
             echo json_encode(['success'=>false,'message'=>'此標籤屬於「自家出的圖」，請填發行章日期']); exit;
         }

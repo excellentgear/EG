@@ -8828,8 +8828,9 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
     <!-- 單檔模式（相容舊版） -->
     <div id="pau-single-mode">
         <div class="form-group" style="margin-bottom:8px;">
-            <label style="font-size:12px;">附件類別標籤 <small style="color:#aaa;">（可多選）</small></label>
+            <label style="font-size:12px;">附件類別標籤 <span style="color:#e74c3c;">*</span> <small style="color:#aaa;">（可多選）</small></label>
             <div id="pau-cat-chips" style="display:flex;flex-wrap:wrap;gap:5px;padding:6px;background:#f9fafb;border:1px solid #e4e8ed;border-radius:4px;min-height:34px;"></div>
+            <div id="pau-cat-err" style="font-size:11px;color:#e74c3c;margin-top:3px;display:none;">請至少選擇一個附件類別標籤——沒有標籤的附件之後很難分類與查找</div>
         </div>
         <div id="pau-vars-section" style="display:none;margin-bottom:8px;">
             <div style="font-size:11px;font-weight:700;color:#2980b9;margin-bottom:6px;"><i class="fa fa-pencil-square-o"></i> 附加資訊（變數）</div>
@@ -8950,8 +8951,9 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 <div class="modal-body">
     <input type="hidden" id="pae-id">
     <div class="form-group">
-        <label style="font-size:12px;font-weight:700;color:#555;">附件類別標籤 <small style="color:#aaa;">（可多選）</small></label>
+        <label style="font-size:12px;font-weight:700;color:#555;">附件類別標籤 <span style="color:#e74c3c;">*</span> <small style="color:#aaa;">（可多選）</small></label>
         <div id="pae-cat-chips" style="display:flex;flex-wrap:wrap;gap:5px;padding:6px;background:#f9fafb;border:1px solid #e4e8ed;border-radius:4px;min-height:34px;"></div>
+        <div id="pae-cat-err" style="font-size:11px;color:#e74c3c;margin-top:3px;display:none;">請至少選擇一個附件類別標籤</div>
     </div>
     <div class="form-group" id="pae-issue-wrap" style="display:none;">
         <label style="font-size:12px;font-weight:700;color:#555;">發行章日期 <span style="color:#e74c3c;">*</span>
@@ -18450,11 +18452,11 @@ function openPartAttachUpload(dId, partNo) {
 
 // 建立單一檔案列的類別 chips HTML
 function _pauBuildFileCatChips(fileIdx, cats, checkedIds) {
-    var html = '<div style="display:flex;flex-wrap:wrap;gap:3px;">';
+    var html = '<div id="pau-row-cat-wrap-'+fileIdx+'" style="display:flex;flex-wrap:wrap;gap:3px;">';
     cats.forEach(function(c) {
         var ck = (checkedIds||[]).indexOf(String(c.id)) >= 0 ? 'checked' : '';
         html += '<label style="display:inline-flex;align-items:center;gap:3px;background:#f0f8ff;color:#1a5276;border:1px solid #aed6f1;border-radius:8px;padding:1px 8px;cursor:pointer;font-weight:normal;font-size:11px;margin-bottom:2px;">'
-              + '<input type="checkbox" value="'+c.id+'" class="pau-row-cat" data-fidx="'+fileIdx+'" '+ck+' onchange="refreshPauIssueRow()" style="cursor:pointer;">'
+              + '<input type="checkbox" value="'+c.id+'" class="pau-row-cat" data-fidx="'+fileIdx+'" '+ck+' onchange="refreshPauIssueRow();validatePauCat();" style="cursor:pointer;">'
               + escHtml(c.category_name)+'</label>';
     });
     html += '</div>';
@@ -18546,6 +18548,8 @@ function _openPartAttachUploadModal(dId, partNo, preselectedFiles) {
     document.getElementById('pau-vars-inputs').innerHTML = '';
     document.getElementById('pau-file-rows').style.display = 'none';
     document.getElementById('pau-file-rows').innerHTML = '';
+    var _pauCatBox = document.getElementById('pau-cat-chips'); if (_pauCatBox) _pauCatBox.style.borderColor = '';
+    var _pauCatErr = document.getElementById('pau-cat-err'); if (_pauCatErr) _pauCatErr.style.display = 'none';
     var single = document.getElementById('pau-single-mode');
     if (single) single.style.display = '';
     var fileArr = Array.isArray(preselectedFiles) ? preselectedFiles : (preselectedFiles ? [preselectedFiles] : []);
@@ -18582,6 +18586,8 @@ function onPauFileChange(input) {
     loadActiveCatsForUpload(function(cats) {
         document.getElementById('pau-note').value = '';
         document.getElementById('pau-vars-section').style.display = 'none';
+        var _pauCatBox = document.getElementById('pau-cat-chips'); if (_pauCatBox) _pauCatBox.style.borderColor = '';
+        var _pauCatErr = document.getElementById('pau-cat-err'); if (_pauCatErr) _pauCatErr.style.display = 'none';
         var single = document.getElementById('pau-single-mode');
         if (fileArr.length > 1) {
             _pauRenderFileRows(fileArr, cats);
@@ -18646,7 +18652,27 @@ function validatePauIssue() {
     return true;
 }
 
+/* 每個附件都要選標籤，不給空著存檔（CLAUDE.md 鐵律：附件標籤必填） */
+function validatePauCat() {
+    var isMulti = document.getElementById('pau-file-rows').style.display !== 'none';
+    if (!isMulti) {
+        var any = document.querySelectorAll('.pau-cat-chk:checked').length > 0;
+        var box = document.getElementById('pau-cat-chips'), err = document.getElementById('pau-cat-err');
+        if (box) box.style.borderColor = any ? '' : '#e74c3c';
+        if (err) err.style.display = any ? 'none' : '';
+        return any;
+    }
+    var ok = true, total = (window._pauFiles||[]).length;
+    for (var i = 0; i < total; i++) {
+        var any = document.querySelectorAll('.pau-row-cat[data-fidx="'+i+'"]:checked').length > 0;
+        var wrap = document.getElementById('pau-row-cat-wrap-'+i);
+        if (wrap) wrap.style.outline = any ? '' : '2px solid #e74c3c';
+        if (!any) ok = false;
+    }
+    return ok;
+}
 function onPauCatChange() {
+    validatePauCat();
     refreshPauIssueRow();
     var selectedIds = [];
     document.querySelectorAll('.pau-cat-chk:checked').forEach(function(cb){ selectedIds.push(cb.value); });
@@ -18684,6 +18710,7 @@ function submitPartAttachUpload() {
               : (document.getElementById('pau-file-input').files ? Array.from(document.getElementById('pau-file-input').files) : []);
     if (!dId)          { showToast('缺少料號 ID','error'); return; }
     if (!files.length) { showToast('請選擇檔案','error'); return; }
+    if (!validatePauCat()) { showToast('請至少為每個檔案選擇一個附件類別標籤','error'); return; }
     if (!validatePauIssue()) { document.getElementById('pau-issue-date').focus(); showToast('請先填寫發行章日期','error'); return; }
     var issueDate = (document.getElementById('pau-issue-wrap').style.display !== 'none')
                   ? (document.getElementById('pau-issue-date').value||'') : '';
@@ -18840,6 +18867,8 @@ function pavEditMeta() {
     // 版次 0 也要帶回編輯框（不可用 || ''）
     document.getElementById('pae-revision').value = (f.revision === null || f.revision === undefined) ? '' : String(f.revision);
     document.getElementById('pae-issue-date').value = (f.issue_stamp_date || '').substring(0,10);
+    var _paeBox0 = document.getElementById('pae-cat-chips'); if (_paeBox0) _paeBox0.style.borderColor = '';
+    var _paeErr0 = document.getElementById('pae-cat-err'); if (_paeErr0) _paeErr0.style.display = 'none';
     loadActiveCatsForUpload(function(cats) {
         var chips = document.getElementById('pae-cat-chips');
         if (!chips) return;
@@ -18854,7 +18883,7 @@ function pavEditMeta() {
                     : 'background:#f0f8ff;color:#1a5276;border:1px solid #aed6f1;');
             var ck = checked.indexOf(String(c.id)) >= 0 ? 'checked' : '';
             var label = isObsCat ? '⊘ 作廢' : escHtml(c.category_name);
-            lbl.innerHTML = '<input type="checkbox" value="'+c.id+'" class="pae-cat-chk" '+ck+' onchange="refreshPaeIssueRow()" style="cursor:pointer;accent-color:#e74c3c;"> '+label;
+            lbl.innerHTML = '<input type="checkbox" value="'+c.id+'" class="pae-cat-chk" '+ck+' onchange="refreshPaeIssueRow();var _b=document.getElementById(&quot;pae-cat-chips&quot;),_e=document.getElementById(&quot;pae-cat-err&quot;);if(document.querySelectorAll(&quot;.pae-cat-chk:checked&quot;).length){if(_b)_b.style.borderColor=&quot;&quot;;if(_e)_e.style.display=&quot;none&quot;;}" style="cursor:pointer;accent-color:#e74c3c;"> '+label;
             chips.appendChild(lbl);
         });
         refreshPaeIssueRow();
@@ -18897,6 +18926,15 @@ function submitAttachEdit() {
     if (!id) return;
     var catIds = [];
     document.querySelectorAll('.pae-cat-chk:checked').forEach(function(cb){ catIds.push(cb.value); });
+    var _paeBox = document.getElementById('pae-cat-chips'), _paeErr = document.getElementById('pae-cat-err');
+    if (!catIds.length) {
+        if (_paeBox) _paeBox.style.borderColor = '#e74c3c';
+        if (_paeErr) _paeErr.style.display = '';
+        showToast('請至少選擇一個附件類別標籤','error');
+        return;
+    }
+    if (_paeBox) _paeBox.style.borderColor = '';
+    if (_paeErr) _paeErr.style.display = 'none';
     var note = (document.getElementById('pae-note').value||'').trim();
     var revision = (document.getElementById('pae-revision').value||'').trim();
     if (!validatePaeIssue()) { document.getElementById('pae-issue-date').focus(); return; }
