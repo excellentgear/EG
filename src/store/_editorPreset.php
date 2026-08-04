@@ -10,6 +10,18 @@ if (!isset($_SESSION['id'])) { echo json_encode(['ok' => false, 'msg' => '尚未
 $uid = (int)$_SESSION['id'];
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 
+// module 原本是 varchar(20)，較長的模組名（如 meeting_attendee_target，23字）存進去會被 MySQL 靜默截斷成
+// meeting_attendee_tar，導致存跟查用的字串對不起來、群組永遠找不到（2026-08-04 使用者回報套用群組無效查出此因）。
+// 放寬成 varchar(60) 一次解決，並修復既有已被截斷、變成孤兒資料的列。只在欄寬還不夠時才 ALTER，避免每次請求都跑一次 DDL。
+try {
+    $len = $db->query("SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS
+                       WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='co_editor_preset' AND COLUMN_NAME='module'")->fetchColumn();
+    if ($len !== false && (int)$len < 60) {
+        $db->exec("ALTER TABLE co_editor_preset MODIFY module VARCHAR(60) NOT NULL");
+        $db->exec("UPDATE co_editor_preset SET module='meeting_attendee_target' WHERE module='meeting_attendee_tar'");
+    }
+} catch (Throwable $e) {}
+
 try {
     if ($action === 'list') {
         $module = trim($_GET['module'] ?? $_POST['module'] ?? 'notice');
