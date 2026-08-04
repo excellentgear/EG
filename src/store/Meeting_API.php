@@ -68,9 +68,45 @@ case 'meta': {
     $years = array_values(array_unique(array_merge([$cy], array_map('intval', $years))));
     rsort($years);
     $gm = eg_org_user($db, 'top_approver');
+    $presets = $db->query("SELECT preset_id, subject, location, start_time, end_time FROM meeting_preset ORDER BY sort_order, preset_id")->fetchAll(PDO::FETCH_ASSOC);
     jout(['perms'=>$perms, 'departments'=>$depts, 'years'=>$years,
           'uid'=>$uid, 'uname'=>$uname, 'today'=>date('Y-m-d'), 'cur_year'=>$cy,
-          'gm_name'=>$gm ? $gm['user_cname'] : null]);
+          'gm_name'=>$gm ? $gm['user_cname'] : null, 'presets'=>$presets]);
+}
+
+/* 常用設定（主題綁地點綁時間）：管理員維護 */
+case 'preset_save': {
+    if (!$perms['canAdmin']) jerr('僅管理員可維護常用設定', 403);
+    $id = (int)($_POST['preset_id'] ?? 0);
+    $subject = trim((string)($_POST['subject'] ?? ''));
+    if ($subject === '') jerr('請輸入主題');
+    $loc = trim((string)($_POST['location'] ?? '')) ?: null;
+    $start = trim((string)($_POST['start_time'] ?? '')) ?: null;
+    $end = trim((string)($_POST['end_time'] ?? '')) ?: null;
+    if ($id > 0) {
+        $db->prepare("UPDATE meeting_preset SET subject=?, location=?, start_time=?, end_time=? WHERE preset_id=?")
+           ->execute([$subject, $loc, $start, $end, $id]);
+    } else {
+        $n = (int)$db->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM meeting_preset")->fetchColumn();
+        $db->prepare("INSERT INTO meeting_preset (subject, location, start_time, end_time, sort_order, created_by, created_at)
+                      VALUES (?,?,?,?,?,?,NOW())")->execute([$subject, $loc, $start, $end, $n, $uid]);
+        $id = (int)$db->lastInsertId();
+    }
+    jout(['preset_id'=>$id]);
+}
+case 'preset_delete': {
+    if (!$perms['canAdmin']) jerr('僅管理員可維護常用設定', 403);
+    $db->prepare("DELETE FROM meeting_preset WHERE preset_id=?")->execute([(int)($_POST['preset_id'] ?? 0)]);
+    jout([]);
+}
+
+/* 依 user_id 清單重新解析目前的部門/職稱（出席人員群組套用用；資料以「現況」為準，不是群組儲存當下的舊快照） */
+case 'resolve_people': {
+    $ids = array_values(array_filter(array_map('intval', explode(',', (string)($_GET['user_ids'] ?? '')))));
+    if (!$ids) jout(['people'=>[]]);
+    $rows = eg_people_list($db, ['user_ids'=>$ids]);
+    jout(['people'=>array_map(fn($r) => ['id'=>$r['id'], 'user_cname'=>$r['user_cname'],
+        'position_name'=>$r['position_name'] ?? '', 'dept_name'=>$r['dept_name'] ?? ''], $rows)]);
 }
 
 /* 會議記錄列表：只回傳目前使用者有權看到的（草稿僅本人／管理員；其餘依 meeting_can_view 逐筆判斷） */

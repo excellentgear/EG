@@ -81,6 +81,18 @@ function meeting_ensure_schema(PDO $db): void {
         KEY idx_meeting (meeting_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='會議記錄項目(上級指示要項/會議要項)'");
 
+    // 常用設定：主題綁地點綁時間，套用後仍可自行修改（管理員維護）
+    $db->exec("CREATE TABLE IF NOT EXISTS meeting_preset (
+        preset_id INT AUTO_INCREMENT PRIMARY KEY,
+        subject VARCHAR(100) NOT NULL,
+        location VARCHAR(100) NULL,
+        start_time VARCHAR(5) NULL,
+        end_time VARCHAR(5) NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        created_by INT NULL,
+        created_at DATETIME NULL
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='會議常用設定(主題/地點/時間組合)，套用後仍可自行修改'");
+
     // 內建 3 個角色只在模組第一次啟用時種一次（比照 training_roles_seeded 的做法：種過之後管理員刪除就是真的刪除）
     try {
         $seeded = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='meeting_roles_seeded'")->fetchColumn();

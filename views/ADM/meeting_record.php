@@ -217,7 +217,8 @@ foreach ($roleRows as $rr) {
     <div class="m-body">
         <div class="grid3">
             <div style="grid-column:span 2;"><label>會議主題 *
-                <select id="edPreset" style="width:auto;display:inline-block;height:20px;font-size:11px;padding:0 4px;margin-left:6px;"><option value="">套用常用設定…</option></select></label>
+                <select id="edPreset" style="width:auto;display:inline-block;height:20px;font-size:11px;padding:0 4px;margin-left:6px;"><option value="">套用常用設定…</option></select>
+                <a href="javascript:;" id="btnPresetMgr" style="display:none;font-size:11px;color:#b5762a;margin-left:4px;" onclick="openPresetMgr()"><i class="fa fa-cog"></i> 管理</a></label>
                 <input type="text" id="edSubject" maxlength="100" list="edSubjectTags"><datalist id="edSubjectTags"></datalist>
                 <div class="errmsg" id="errEdSubject"></div></div>
             <div><label>會議日期 *</label><input type="date" id="edDate" max="9999-12-31">
@@ -233,6 +234,11 @@ foreach ($roleRows as $rr) {
 
         <div class="mt-sec">
             <div class="mt-sec-title">出席人員 <small id="attCount" style="color:#8a6d45;font-weight:normal;"></small></div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
+                <select id="attGroupSel" style="width:170px;height:28px;border:1px solid #D8BE93;border-radius:4px;"><option value="">套用已存的群組…</option></select>
+                <button type="button" class="b-att wt" onclick="groupApply()"><i class="fa fa-users"></i> 套用</button>
+                <button type="button" class="b-att wt" onclick="openGroupSave()" title="把目前出席人員清單存成群組，下次可直接套用"><i class="fa fa-save"></i> 另存為群組</button>
+            </div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
                 <select id="attDept" style="width:150px;height:28px;border:1px solid #D8BE93;border-radius:4px;"><option value="">選部門載入人員…</option></select>
                 <button type="button" class="b-att" onclick="attAddChecked()"><i class="fa fa-user-plus"></i> 加入勾選人員</button>
@@ -288,6 +294,36 @@ foreach ($roleRows as $rr) {
         <button class="b-cancel" onclick="printMeetingRecord()"><i class="fa fa-print"></i> 列印會議紀錄</button>
         <button class="b-ok" onclick="closeMask('viewMask')">關閉</button>
     </div>
+</div></div>
+
+<!-- 常用設定管理（主題綁地點綁時間，管理員維護，套用後仍可自行修改） -->
+<div class="mt-mask" id="presetMask"><div class="mt-modal">
+    <div class="m-head"><span>常用設定管理</span><span class="m-close" onclick="closeMask('presetMask')">✕</span></div>
+    <div class="m-body">
+        <div class="att-list-wrap" style="max-height:220px;">
+            <table class="att-tbl"><thead><tr><th>主題</th><th>地點</th><th style="width:100px;">時間</th><th style="width:26px;"></th></tr></thead>
+            <tbody id="presetBody"></tbody></table>
+        </div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;">
+            <input type="text" id="pstSubject" placeholder="主題" style="flex:1 1 120px;">
+            <input type="text" id="pstLoc" placeholder="地點" style="flex:1 1 100px;">
+            <input type="text" id="pstStart" class="time-in" maxlength="5" placeholder="09:00" style="width:66px;">
+            <input type="text" id="pstEnd" class="time-in" maxlength="5" placeholder="17:00" style="width:66px;">
+            <button type="button" class="b-att" onclick="presetAdd()"><i class="fa fa-plus"></i> 新增</button>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('presetMask')">關閉</button></div>
+</div></div>
+
+<!-- 出席人員群組（仿通知功能：公開/私人自訂群組，重用共用 co_editor_preset） -->
+<div class="mt-mask" id="groupSaveMask"><div class="mt-modal" style="max-width:380px;">
+    <div class="m-head"><span>另存為群組</span><span class="m-close" onclick="closeMask('groupSaveMask')">✕</span></div>
+    <div class="m-body">
+        <label>群組名稱</label><input type="text" id="grpName" maxlength="50">
+        <label style="margin-top:10px;"><input type="checkbox" id="grpPublic" style="width:auto;margin-right:5px;"> 公開（所有人可選用；不勾＝僅自己看得到）</label>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('groupSaveMask')">取消</button>
+        <button class="b-ok" onclick="groupSaveConfirm()">儲存</button></div>
 </div></div>
 
 <!-- 使用說明 modal（鐵律7） -->
@@ -367,19 +403,46 @@ $('#edStart,#edEnd').on('change', function(){
     edTimeValidate();
 });
 
+var PRESETS = [];
 function loadMeta(cb){
     $.getJSON(API, {action:'meta'}, function(m){
         if (!m.ok){ alert(m.error||'載入失敗'); return; }
-        META = m; PERMS = m.perms; DEPTS = m.departments||[];
+        META = m; PERMS = m.perms; DEPTS = m.departments||[]; PRESETS = m.presets||[];
         var $y = $('#yearSel').empty();
         (m.years||[]).forEach(function(y){ $y.append('<option value="'+y+'">'+y+' 年</option>'); });
         $y.val(m.cur_year);
         var $ad = $('#attDept').empty().append('<option value="">選部門載入人員…</option>');
         DEPTS.forEach(function(d){ $ad.append('<option value="'+d.id+'">'+esc(d.name)+'</option>'); });
         if (m.perms.canEdit) $('#btnAdd').show();
+        if (m.perms.canAdmin) $('#btnPresetMgr').show();
+        renderPresetUI();
+        loadGroups();
         if (cb) cb();
     });
 }
+/* 常用設定：主題綁地點綁時間，套用後仍可自行修改；輸入框同時提供 datalist 建議（打字篩選＋手動輸入並存） */
+function renderPresetUI(){
+    var subj = {}, loc = {};
+    PRESETS.forEach(function(p){ subj[p.subject]=1; if(p.location) loc[p.location]=1; });
+    $('#edSubjectTags').html(Object.keys(subj).map(function(s){ return '<option value="'+esc(s)+'">'; }).join(''));
+    $('#edLocTags').html(Object.keys(loc).map(function(s){ return '<option value="'+esc(s)+'">'; }).join(''));
+    var h = '<option value="">套用常用設定…</option>';
+    PRESETS.forEach(function(p){
+        var tm = p.start_time ? (p.start_time+(p.end_time?'~'+p.end_time:'')) : '';
+        h += '<option value="'+p.preset_id+'">'+esc(p.subject)+(p.location?'｜'+esc(p.location):'')+(tm?'｜'+esc(tm):'')+'</option>';
+    });
+    $('#edPreset').html(h);
+}
+$('#edPreset').on('change', function(){
+    var p = PRESETS.find(function(x){ return String(x.preset_id)===$('#edPreset').val(); });
+    if (!p) return;
+    $('#edSubject').val(p.subject);
+    if (p.location) $('#edLoc').val(p.location);
+    if (p.start_time) $('#edStart').val(p.start_time);
+    if (p.end_time) $('#edEnd').val(p.end_time);
+    edTimeValidate();
+    $(this).val('');
+});
 $('#yearSel').on('change', function(){ loadList(); });
 $('#btnAdd').on('click', openCreate);
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
@@ -519,6 +582,82 @@ function renderChairSel(){
     var h = '<option value="">請選擇主席</option>';
     ATT.forEach(function(a){ h += '<option value="'+a.user_id+'">'+esc(a.user_name)+'（'+esc(a.dept_name||'')+'）</option>'; });
     $('#edChair').html(h).val(cur);
+}
+
+/* ---------- 常用設定管理（主題綁地點綁時間，管理員維護） ---------- */
+function openPresetMgr(){ renderPresetList(); openMask('presetMask'); }
+function renderPresetList(){
+    var h = '';
+    PRESETS.forEach(function(p){
+        var tm = p.start_time ? (p.start_time+(p.end_time?'~'+p.end_time:'')) : '';
+        h += '<tr><td class="t-left">'+esc(p.subject)+'</td><td>'+esc(p.location||'')+'</td><td>'+esc(tm)+'</td>'
+           + '<td><span class="att-del" onclick="presetDel('+p.preset_id+')"><i class="fa fa-times"></i></span></td></tr>';
+    });
+    $('#presetBody').html(h || '<tr><td colspan="4" style="color:#8a6d45;padding:6px;">尚未建立常用設定</td></tr>');
+}
+function presetAdd(){
+    var subject = $.trim($('#pstSubject').val());
+    if (!subject){ alert('請輸入主題'); return; }
+    var bs = parseTime($('#pstStart').val()), be = parseTime($('#pstEnd').val());
+    if (!bs.ok){ alert('開始時間：'+bs.msg); return; }
+    if (!be.ok){ alert('結束時間：'+be.msg); return; }
+    $.post(API, {action:'preset_save', subject:subject, location:$('#pstLoc').val(), start_time:bs.val, end_time:be.val}, function(res){
+        if (!res.ok){ alert(res.error||'新增失敗'); return; }
+        $('#pstSubject,#pstLoc,#pstStart,#pstEnd').val('');
+        loadMeta(function(){ renderPresetList(); });
+    }, 'json');
+}
+function presetDel(id){
+    if (!confirm('刪除此常用設定？')) return;
+    $.post(API, {action:'preset_delete', preset_id:id}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+        loadMeta(function(){ renderPresetList(); });
+    }, 'json');
+}
+
+/* ---------- 出席人員群組（仿通知功能：公開/私人自訂群組，重用共用 co_editor_preset／_editorPreset.php） ---------- */
+var GROUP_API = '../../src/store/_editorPreset.php';
+function loadGroups(){
+    $.getJSON(GROUP_API, {action:'list', module:'meeting_attendee_target'}, function(res){
+        if (!res.ok) return;
+        var h = '<option value="">套用已存的群組…</option>';
+        (res.data||[]).forEach(function(g){
+            h += '<option value="'+g.id+'">'+(g.is_public?'':'【私人】')+esc(g.name)+'</option>';
+        });
+        $('#attGroupSel').html(h);
+    });
+}
+function groupApply(){
+    var id = $('#attGroupSel').val();
+    if (!id){ alert('請先選擇群組'); return; }
+    $.getJSON(GROUP_API, {action:'get', id:id}, function(res){
+        if (!res.ok){ alert(res.msg||'載入群組失敗'); return; }
+        var ids = (res.editors||[]).map(function(e){ return String(e.code||'').replace(/^u/,''); }).filter(function(x){ return x && !isNaN(x); });
+        if (!ids.length){ alert('此群組沒有可用的人員'); return; }
+        $.getJSON(API, {action:'resolve_people', user_ids:ids.join(',')}, function(r2){
+            if (!r2.ok) return;
+            (r2.people||[]).forEach(function(p){
+                if (!ATT.some(function(a){ return a.user_id===p.id; }))
+                    ATT.push({user_id:p.id, user_name:p.user_cname, dept_name:p.dept_name, position_name:p.position_name});
+            });
+            renderAtt(); renderChairSel();
+        });
+    });
+}
+function openGroupSave(){
+    if (!ATT.length){ alert('請先加入出席人員再另存為群組'); return; }
+    $('#grpName').val(''); $('#grpPublic').prop('checked', false);
+    openMask('groupSaveMask');
+}
+function groupSaveConfirm(){
+    var name = $.trim($('#grpName').val());
+    if (!name){ alert('請輸入群組名稱'); return; }
+    var editors = ATT.map(function(a){ return {code:'u'+a.user_id, name:a.user_name, mode:'read'}; });
+    $.post(GROUP_API, {action:'save', module:'meeting_attendee_target', name:name,
+        is_public:$('#grpPublic').prop('checked')?1:0, editors:JSON.stringify(editors)}, function(res){
+        if (!res.ok){ alert(res.msg||'儲存失敗'); return; }
+        closeMask('groupSaveMask'); loadGroups(); alert('已儲存群組。');
+    }, 'json');
 }
 
 /* 會議要項雙表格：上級指示要項(kind=directive) / 會議要項(kind=general) */
