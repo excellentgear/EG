@@ -596,7 +596,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 <button type="button" class="b-att nw" style="background:#fff;color:#8A5A2B;" onclick="printOjtSheet()"><i class="fa fa-print"></i> 列印考核表</button>
                 <span id="ojtMsg" style="font-size:12px;color:#8a6d45;"></span>
             </div>
-            <div style="font-size:11px;color:#8a6d45;margin-top:3px;">列印表單<b>不含分數/評鑑結果</b>，供現場考核時手寫勾選合格／不合格並評分；每位參加人員各印一份（考核項目少時自動併印多人於同一頁節省紙張；未實到者印「未到考」）。
+            <div style="font-size:11px;color:#8a6d45;margin-top:3px;">列印表單<b>不含分數/評鑑結果</b>，供現場考核時手寫勾選合格／不合格並評分；每位參加人員各印一份（考核項目少時自動併印多人於同一頁節省紙張），表單上附「未到考」勾選欄供考官現場勾填。
                 考核完成掃描後，請至下方「附件」上傳並勾選「考核表」類別佐證，作為簽到表評鑑結果的客觀證據。</div>
         </div>
 
@@ -2016,27 +2016,24 @@ function printOjtSheet(){
     var assessor = $('#ojtAssessor').val() || r.trainer || '';
     var loc = $('#exLocSel option:selected').text() || r.location || '';
     var perPage = OJT_ITEMS.length<=3 ? 3 : (OJT_ITEMS.length<=6 ? 2 : 1);
-    function rowsFor(absent){
-        return OJT_ITEMS.map(function(it,i){
-            return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content||'')+'</td>'
-                 + '<td>'+esc(OJT_TYPES[it.item_type]||it.item_type)+'</td>'
-                 + (absent ? '<td colspan="3" style="color:#888;">未到考</td>'
-                    : '<td></td><td style="white-space:nowrap;">☐合格　☐不合格</td><td></td>') + '</tr>';
-        }).join('');
-    }
+    var itemRows = OJT_ITEMS.map(function(it,i){
+        return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content||'')+'</td>'
+             + '<td>'+esc(OJT_TYPES[it.item_type]||it.item_type)+'</td>'
+             + '<td></td><td style="white-space:nowrap;">☐合格　☐不合格</td><td></td></tr>';
+    }).join('');
     var html = '';
     list.forEach(function(a, idx){
-        var absent = !+a.attended;
         var brk = (idx>0 && idx % perPage === 0) ? ' pgbrk' : '';
         html += '<div class="pg'+brk+'"><table class="sf"><thead>'
             + '<tr><th colspan="6" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
-            + '<div class="tt">考核表'+(absent?'（未到考）':'')+'</div></div></th></tr>'
+            + '<div class="tt">考核表</div></div></th></tr>'
             + '<tr><td colspan="6" class="sf-i">課程名稱：'+esc(course)+'　　地點：'+esc(loc||'—')+'　　考核日期：'+esc(lastDay||'____-__-__')+'</td></tr>'
-            + '<tr><td colspan="6" class="sf-i">受訓人員：'+esc(a.dept_name||'')+'　'+esc(a.position_name||'')+'　'+esc(a.user_name||'')+(absent?'　（本次未到考）':'')+'</td></tr>'
+            + '<tr><td colspan="6" class="sf-i">受訓人員：'+esc(a.dept_name||'')+'　'+esc(a.position_name||'')+'　'+esc(a.user_name||'')
+            + '　　<b>☐ 未到考（未到考者以下免填）</b></td></tr>'
             + '<tr><th style="width:32px;">項次</th><th>考核／口試重點</th><th style="width:76px;">方式</th>'
             + '<th style="width:50px;">分數</th><th style="width:150px;">評鑑結果</th><th style="width:100px;">備註</th></tr>'
-            + '</thead><tbody>'+rowsFor(absent)+'</tbody></table>'
-            + (absent ? '' : '<div style="margin-top:8px;font-size:13px;">總體評核結果：☐ 判定合格（已具備獨立作業能力）　☐ 需再進行補訓／複考</div>')
+            + '</thead><tbody>'+itemRows+'</tbody></table>'
+            + '<div style="margin-top:8px;font-size:13px;">總體評核結果：☐ 判定合格（已具備獨立作業能力）　☐ 需再進行補訓／複考</div>'
             + '<div style="margin-top:16px;font-size:13px;display:flex;align-items:flex-end;gap:10px;">考官簽章：'+egStampHtml(assessor, lastDay)+'</div>'
             + '</div>';
     });
