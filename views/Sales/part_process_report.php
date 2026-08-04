@@ -282,13 +282,19 @@ if ($isAjax) {
 
     try {
         if ($action === 'parts_list') {
-            $rows = $pdo->query("SELECT d_id, D_Setting_Id, Drawing_No, Spec_No, Type FROM d_setting ORDER BY D_Setting_Id ASC")->fetchAll(PDO::FETCH_ASSOC);
+            $rows = $pdo->query("
+                SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Spec_No, d.Type, d.Customer_Id,
+                       c.customer AS customer_name
+                FROM d_setting d
+                LEFT JOIN customer_list c ON c.customer_id = d.Customer_Id
+                ORDER BY d.D_Setting_Id ASC")->fetchAll(PDO::FETCH_ASSOC);
             $parts = [];
             foreach ($rows as $r) {
                 $label = $r['D_Setting_Id'];
                 if ($r['Drawing_No']) $label .= ' / '.$r['Drawing_No'];
                 if ($r['Spec_No']) $label .= '（'.$r['Spec_No'].'）';
-                $parts[] = ['id'=>(int)$r['d_id'], 'label'=>$label];
+                $label .= ' — '.($r['customer_name'] ?: '未指定客戶');
+                $parts[] = ['id'=>(int)$r['d_id'], 'label'=>$label, 'customer_id'=>$r['Customer_Id'], 'customer_name'=>$r['customer_name'] ?: '未指定客戶'];
             }
             echo json_encode(['success'=>true, 'parts'=>$parts]);
             exit;
@@ -504,6 +510,8 @@ if ($isAjax) {
 <?php else: ?>
         <div class="ppr-toolbar">
             <div class="row2">
+                <label>客戶</label>
+                <select id="pprClient" data-eg-filter="輸入客戶篩選…"><option value="">— 全部客戶 —</option></select>
                 <label>料號</label>
                 <select id="pprPart" data-eg-filter="輸入料號/規格篩選…"><option value="">— 請選擇 —</option></select>
                 <label>期間</label>
@@ -578,15 +586,46 @@ function openMask(id){ document.getElementById(id).style.display='block'; }
 var PPR_API = 'part_process_report.php';
 var PPR_ROWS = [];
 var PPR_DRAWING_CHOICE = {};
+var PPR_PARTS = [];   // 全部料號快照，供客戶篩選時在前端重新篩選用
+
+// data-eg-filter 產生的篩選框只在 select 出現當下拍一次快照；options 用 JS 整批換掉後
+// 必須呼叫 egFilterResnap() 讓篩選框重新拍照，否則打字篩選會用到舊快照、把剛塞進去的選項洗掉。
+function pprResnap(selId){
+    var el = document.getElementById(selId);
+    if (el && typeof el.egFilterResnap === 'function') el.egFilterResnap();
+}
+
+function pprFillPartSelect(customerId){
+    var $sel = $('#pprPart').empty().append('<option value="">— 請選擇 —</option>');
+    PPR_PARTS.forEach(function(p){
+        if (customerId && String(p.customer_id||'') !== String(customerId)) return;
+        $sel.append($('<option>').val(p.id).text(p.label));
+    });
+    pprResnap('pprPart');
+}
 
 function pprLoadParts(){
     $.post(PPR_API, {action:'parts_list'}, function(res){
         if (!res.success) return;
-        var $sel = $('#pprPart');
-        res.parts.forEach(function(p){ $sel.append($('<option>').val(p.id).text(p.label)); });
+        PPR_PARTS = res.parts;
+
+        var clients = {};   // customer_id => customer_name（去重）
+        PPR_PARTS.forEach(function(p){
+            if (p.customer_id) clients[p.customer_id] = p.customer_name;
+        });
+        var $client = $('#pprClient');
+        Object.keys(clients).sort(function(a,b){ return clients[a].localeCompare(clients[b], 'zh-Hant'); })
+            .forEach(function(cid){ $client.append($('<option>').val(cid).text(clients[cid])); });
+        pprResnap('pprClient');
+
+        pprFillPartSelect('');
     }, 'json');
 }
 pprLoadParts();
+
+$('#pprClient').on('change', function(){
+    pprFillPartSelect($(this).val());
+});
 
 $('#pprSearchBtn').on('click', function(){
     var did = $('#pprPart').val();
