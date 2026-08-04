@@ -1056,14 +1056,15 @@ function openHis(mid){
 function auditFormHTML(o){
     o = o || {};
     var docName = (META.as_doc && META.as_doc.doc_name) || '供應商評鑑稽核查表';
-    var docNo   = (META.as_doc && META.as_doc.doc_no)   || '2-PH-01-02';
     var head = '<div style="text-align:center;">'
         + '<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         + '<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
+    var modeMap = {first:'首次稽核', again:'次稽核', self:'自我評量'};
+    var modeBoxes = ['first','again','self'].map(function(k){ return (o.mode===k?'☑':'□')+modeMap[k]; }).join('　');
     var info = '<table class="pf-info"><tr>'
         + '<td>供應商：'+(o.maker?esc(o.maker):'________________')+'</td>'
         + '<td>日期：'+(o.dateStr?esc(o.dateStr):'____ / ____ / ____')+'</td></tr>'
-        + '<tr><td colspan="2">稽核狀況：□首次稽核　□次稽核　□自我評量　　　評分：每項 0~7 分（0＝最差、7＝最佳；無此流程填 NA）</td></tr></table>';
+        + '<tr><td colspan="2">稽核狀況：'+modeBoxes+'　　評分：每項 0~7 分（0＝最差、7＝最佳；無此流程填 NA）</td></tr></table>';
     var rows = '<table class="pf"><thead><tr><th style="width:70px;">項目</th><th style="width:34px;">項次</th><th>查核問題</th>'
         + '<th style="width:44px;">自評分</th><th style="width:44px;">稽核分</th><th style="width:180px;">佐證／觀察結果</th></tr></thead><tbody>';
     META.items.forEach(function(cat){
@@ -1079,29 +1080,38 @@ function auditFormHTML(o){
     rows += '<tr><td colspan="2">合計</td><td style="text-align:right;">總分（滿分 '+META.total_max+'）／綜合合格率＝自評率×'+META.self_w+'＋稽核率×'+META.audit_w+'，≥'+META.pass_rate+'% 判合格</td><td></td><td></td><td></td></tr>';
     rows += '</tbody></table>';
     var sign = '<table class="pf-sign"><tr><td>供應商代表簽章：__________________</td><td>稽核員簽章：__________________</td></tr></table>';
-    var footer = '<div style="text-align:right;margin-top:22px;font-size:12px;color:#333;">'+esc(docNo)+'</div>';
-    return head + info + rows + sign + footer;
+    return head + info + rows + sign;
 }
-function openPrintWindow(bodyHtml, title){
+function openPrintWindow(bodyHtml, title, docNo){
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗以列印'); return; }
+    var asTxt = String(docNo||'').replace(/['\\]/g,'');
     var css = 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:14px;}'
         + 'table.pf{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}'
         + 'table.pf th,table.pf td{border:1px solid #333;padding:4px 6px;text-align:center;vertical-align:middle;}'
         + 'table.pf td.q{text-align:left;}'
         + 'table.pf-info{width:100%;font-size:13px;margin-top:12px;border-collapse:collapse;}table.pf-info td{padding:4px 6px;border:1px solid #999;}'
         + 'table.pf-sign{width:100%;margin-top:18px;font-size:13px;}table.pf-sign td{padding:12px 6px;}'
-        + '@media print{@page{size:A4;margin:12mm;}}';
+        + '@media print{@page{size:A4;margin:12mm 8mm 16mm;'
+        + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
+        + '}}';
     w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
-        + bodyHtml + '<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},150);};</scr'+'ipt></body></html>');
+        + bodyHtml
+        + '<scr'+'ipt>window.onload=function(){'
+        + 'var onePageA4=(297-28)*96/25.4;'
+        + 'if(document.body.scrollHeight>onePageA4*0.92){'
+        + 'var st=document.createElement(\'style\');'
+        + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
+        + 'document.head.appendChild(st);}'
+        + 'setTimeout(function(){window.print();},150);};</scr'+'ipt></body></html>');
     w.document.close();
 }
-function printBlankForm(){ openPrintWindow(auditFormHTML({}), '供應商評鑑稽核查表'); }
+function printBlankForm(){ openPrintWindow(auditFormHTML({}), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02'); }
 function printCurrentForm(){
     openPrintWindow(auditFormHTML({
         maker: $('#recTitle').text().replace('稽核評鑑表單：',''),
-        dateStr: $('#recDate').val(), scores: collectScores()
-    }), '供應商評鑑稽核查表');
+        dateStr: $('#recDate').val(), scores: collectScores(), mode: $('#recMode').val()
+    }), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02');
 }
 $('#btnBlank').on('click', printBlankForm);
 
@@ -1185,7 +1195,7 @@ function rsDelAttach(aid){
 }
 function recordSheetHTML(){
     if(!RS) return '';
-    var t=RS.t, c=RS.c, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表', docNo=(doc&&doc.doc_no)||'2-PH-01-03';
+    var t=RS.t, c=RS.c, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
     var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'____';
     var head='<div style="text-align:center;"><div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
@@ -1198,14 +1208,16 @@ function recordSheetHTML(){
     var chart='<div style="text-align:center;margin-top:8px;">'+svg+'</div>';
     var conc='<div style="margin-top:8px;font-size:13px;">綜合評鑑合格率（自評×'+META.self_w+'＋稽核×'+META.audit_w+'）＝<b>'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+META.pass_rate+'% 始評定為合格供應商。判定：'+(c.pass?'合格供應商':'不合格')+(t.conclusion?'（'+esc(t.conclusion)+'）':'')+'</div>';
     var sign='<table class="pf-sign"><tr><td>稽核員簽章：____________</td><td>供應商代表簽章：____________</td><td>資材課長：____________</td></tr></table>';
-    var footer='<div style="text-align:right;margin-top:14px;font-size:12px;">'+esc(docNo)+'</div>';
-    return head+info+rows+chart+conc+sign+footer;
+    return head+info+rows+chart+conc+sign;
 }
-function printRecordSheet(){ if(!RS){alert('無資料');return;} openPrintWindow(recordSheetHTML(), '供應商品質系統評鑑記錄表'); }
+function printRecordSheet(){ if(!RS){alert('無資料');return;} openPrintWindow(recordSheetHTML(), '供應商品質系統評鑑記錄表', (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03'); }
 function printAllDocs(){
     if(!RS){alert('無資料');return;}
-    var page1=auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores});
-    var body='<div style="page-break-after:always;">'+page1+'</div>'+recordSheetHTML();
+    var docNo1=(META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2=(META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
+    var page1=auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode});
+    var body='<div style="page-break-after:always;">'+page1
+        +'<div style="text-align:right;margin-top:22px;font-size:12px;color:#333;">'+esc(docNo1)+'</div></div>'
+        +recordSheetHTML()+'<div style="text-align:right;margin-top:14px;font-size:12px;color:#333;">'+esc(docNo2)+'</div>';
     openPrintWindow(body, '供應商稽核文件');
 }
 
@@ -1580,8 +1592,7 @@ $('#rsPrintBtn').on('click', function(){
     ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td>'+esc(r.main_cat_name||'')+'</td><td>'+esc(r.maker_id_no)+'</td><td class="q">'+esc(r.maker_id||'')+'</td><td class="q">'+esc(r.m_note||'')+'</td><td>'+esc(r.final_grade||'—')+'</td></tr>'; });
     rows+='</tbody></table>';
     var sign='<table class="pf-sign"><tr><td>製表：____________</td><td>審核：____________</td><td>核准：____________</td></tr></table>';
-    var footer='<div style="text-align:right;margin-top:12px;font-size:12px;">'+esc(docNo)+'</div>';
-    openPrintWindow(head+rows+sign+footer, '合格供應商清冊');
+    openPrintWindow(head+rows+sign, '合格供應商清冊', docNo);
 });
 
 /* ---------- 兩年未交易外包廠 ---------- */
