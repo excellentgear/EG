@@ -18,18 +18,44 @@ $db = (new DBConnection())->getPDO();
 training_ensure_schema($db);
 $trUser = training_current_user($db);
 $perms = training_perms($db, $trUser);
-// 角色名稱一律用「角色設定」裡管理員目前實際命名的名稱，不寫死預設字（改名後這裡要跟著變）
-$roleNames = ['training_admin'=>'訓練管理員', 'training_edit'=>'訓練登錄', 'training_apply'=>'訓練需求申請人', 'training_view'=>'訓練檢閱'];
+// 角色說明一律「當下查資料庫現況」組出，不寫死角色清單——管理員在角色設定改名/合併/刪除角色後，
+// 這裡要立刻跟著變，不可以讓已經砍掉的角色繼續出現在說明文字裡（鐵律4：改動可自訂設定時不可留一份寫死的對照表）。
+$roleRows = [];
 try {
-    $rn = $db->query("SELECT role_code, role_name FROM roles WHERE module='training' AND role_code IN
-                      ('training_admin','training_edit','training_apply','training_view')")->fetchAll(PDO::FETCH_KEY_PAIR);
-    foreach ($rn as $code => $name) $roleNames[$code] = $name;
+    $roleRows = $db->query("SELECT role_id, role_code, role_name, is_system FROM roles
+                            WHERE module='training' OR is_system=1 ORDER BY is_system DESC, role_id")->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {}
-$roleLabel = $perms['isAdmin'] ? '管理者'
-           : ($perms['canAdmin'] ? $roleNames['training_admin']
-           : ($perms['canEdit'] ? $roleNames['training_edit']
-           : ($perms['canApply'] ? $roleNames['training_apply']
-           : ($perms['canView'] ? $roleNames['training_view'] : '無權限'))));
+$featLabel = [];
+foreach (TRAINING_FEATURES as $f) $featLabel[$f['code']] = $f['label'];
+$roleExplain = [];   // [role_name, 說明字串]
+foreach ($roleRows as $rr) {
+    if ((int)$rr['is_system'] === 1) { $roleExplain[] = [$rr['role_name'], '系統角色，固定擁有全部權限（不可修改）']; continue; }
+    $codes = [];
+    try {
+        $fc = $db->prepare("SELECT feature_code FROM role_features WHERE role_id=?");
+        $fc->execute([(int)$rr['role_id']]);
+        $codes = $fc->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) {}
+    if (in_array('all', $codes, true)) $desc = '固定擁有全部權限';
+    else {
+        $labels = array_values(array_filter(array_map(fn($c) => $featLabel[$c] ?? null, $codes)));
+        $desc = $labels ? implode('；', $labels) : '（尚未在「角色設定」勾選任何功能，目前無任何權限）';
+    }
+    $roleExplain[] = [$rr['role_name'], $desc];
+}
+// 目前角色徽章：秀出「本人實際被指派」的角色名稱（可能不只一個），而不是用權限高低猜一個固定字——
+// 這樣即使管理員把原本 4 個內建角色合併改名，這裡顯示的永遠是實際存在的角色名。
+$myRoleNames = [];
+if ($trUser) {
+    try {
+        $st = $db->prepare("SELECT DISTINCT r.role_name FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                            WHERE ur.user_id=? AND (r.module='training' OR (r.role_code='admin' AND r.is_system=1))");
+        $st->execute([(int)$trUser['id']]);
+        $myRoleNames = $st->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) {}
+}
+$roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : '管理者')
+           : ($myRoleNames ? implode('、', $myRoleNames) : ($perms['canView'] ? '（角色已被刪除，權限來自職稱指派）' : '無權限'));
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -826,12 +852,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <div class="tr-mask" id="helpMask"><div class="tr-modal">
     <div class="m-head"><span>角色權限說明</span><span class="m-close" onclick="closeMask('helpMask')">✕</span></div>
     <div class="m-body" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
-        <b><?= htmlspecialchars($roleNames['training_view']) ?></b>：檢視訓練計畫/紀錄、月達成率與匯出。<br>
-        <b><?= htmlspecialchars($roleNames['training_apply']) ?></b>：檢視＋提出/送出教育訓練需求申請單。<br>
-        <b><?= htmlspecialchars($roleNames['training_edit']) ?></b>：檢閱＋新增/編輯計畫、確認實行（確定開課）、登錄完成、核准需求申請單、轉為計畫、列印。<br>
-        <b><?= htmlspecialchars($roleNames['training_admin']) ?></b>：登錄＋刪除場次、模組設定、角色設定。<br>
-        <b>管理者</b>：系統管理者固定擁有全部權限。<br>
-        <p style="font-size:12px;color:#8a6d45;margin:4px 0 0;">以上名稱會依「模組設定 → 角色設定」目前的命名即時顯示；角色實際可用的功能一律以該分頁勾選的內容為準。</p>
+        <?php if (!$roleExplain): ?>
+            <p style="color:#8a6d45;">尚未建立任何角色，請洽系統管理者到「模組設定 → 角色設定」建立。</p>
+        <?php else: foreach ($roleExplain as $re): ?>
+            <div><b><?= htmlspecialchars($re[0]) ?></b>：<?= htmlspecialchars($re[1]) ?></div>
+        <?php endforeach; endif; ?>
+        <p style="font-size:12px;color:#8a6d45;margin:6px 0 0;">以上直接讀取「模組設定 → 角色設定」目前實際存在的角色與勾選內容，改名／合併／刪除角色後這裡會立即跟著變，不會殘留已刪除的角色。</p>
         <hr style="border-color:#EADFC8;">
         本頁資料為 KPI「人員教育訓練達成率(#19)」計算來源；達成率依「計畫月份」歸月計算。<br>
         作業流程：<b>計畫</b>（要辦什麼）→ <b>確認實行</b>（確定開課，狀態「已排定」，可印簽到表）→ <b>登錄完成</b>（上完課、勾實到，狀態「已完成」才計入達成率）。
