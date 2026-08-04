@@ -222,6 +222,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button class="va-tab active" data-tab="audit"><i class="fa fa-check-square-o"></i> 稽核批次</button>
             <button class="va-tab" data-tab="eval"><i class="fa fa-line-chart"></i> 定期評核（月不良/遲交率）</button>
             <button class="va-tab" data-tab="roster"><i class="fa fa-list-alt"></i> 合格供應商清冊</button>
+            <button class="va-tab" data-tab="plan"><i class="fa fa-calendar"></i> 供應商稽核計劃</button>
         </div>
         <div id="tabAudit">
         <div class="va-toolbar">
@@ -234,6 +235,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button id="btnCycle" style="display:none;"><i class="fa fa-refresh"></i> 週期設定</button>
             <button id="btnAttachSet" style="display:none;"><i class="fa fa-folder-open-o"></i> 附件路徑</button>
             <button id="btnAsDoc" style="display:none;"><i class="fa fa-link"></i> AS文件綁定</button>
+            <button id="btnChecklist" style="display:none;"><i class="fa fa-list-ol"></i> 查核表設定</button>
+            <button id="btnSignSetting" style="display:none;"><i class="fa fa-pencil-square-o"></i> 簽核設定</button>
             <button id="btnBlank"><i class="fa fa-file-o"></i> 列印空白表單</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印清單</button>
@@ -252,7 +255,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div class="va-table-wrap">
             <table class="va-table" id="vaTable">
                 <thead><tr>
-                    <th>廠商編號</th><th>廠商名稱</th><th>大類</th><th>預定月份</th><th>稽核狀態</th>
+                    <th>廠商編號</th><th>廠商名稱</th><th>加工項目</th><th>預定月份</th><th>稽核狀態</th>
                     <th>稽核日</th><th>綜合合格率</th><th>判定</th><th>稽核員</th><th>操作</th>
                 </tr></thead>
                 <tbody id="vaBody"><tr><td colspan="10" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
@@ -321,7 +324,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <table class="va-table" id="rosterTable">
                     <thead><tr>
                         <th style="width:32px;"><input type="checkbox" id="rsAllCk"></th>
-                        <th>大類</th><th>廠商ID</th><th>廠商名稱</th><th>廠商備註</th>
+                        <th>加工項目</th><th>廠商ID</th><th>廠商名稱</th><th>廠商備註</th>
                         <th>建議等級</th><th>採用等級</th><th>類型</th><th>操作</th>
                     </tr></thead>
                     <tbody id="rosterBody"><tr><td colspan="9" style="padding:18px;color:#8a6d45;">載入中…</td></tr></tbody>
@@ -332,6 +335,25 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 清冊＝納管廠商（固定稽核）＋手動列入之合格廠商（不需稽核者，靠定期評核績效監控）。建議等級來自定期評核全年成績；採用等級可批次覆寫。
             </div>
         </div><!-- /tabRoster -->
+
+        <div id="tabPlan" style="display:none;">
+            <div class="va-toolbar">
+                <label>年度</label>
+                <select id="planYear"></select>
+                <button id="planPrintBtn"><i class="fa fa-print"></i> 列印計劃</button>
+                <button class="btn-warm" id="planSubmitBtn" style="display:none;"><i class="fa fa-send"></i> 送出計畫</button>
+                <span id="planLockInfo" style="font-size:12px;color:#8a6d45;"></span>
+            </div>
+            <div class="va-table-wrap">
+                <table class="va-table" id="planTable">
+                    <thead><tr id="planHeadRow"></tr></thead>
+                    <tbody id="planBody"><tr><td style="padding:18px;color:#8a6d45;">載入中…</td></tr></tbody>
+                </table>
+            </div>
+            <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
+                依「加入稽核對象」時設定的預定稽核月份彙總全年度計畫（不分上下半年）；送出計畫後將鎖定該年度不可再增列對象。
+            </div>
+        </div><!-- /tabPlan -->
 <?php endif; ?>
     </div>
     <?php include '../partPage/footer.html' ?>
@@ -379,6 +401,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <div class="va-mask" id="recMask"><div class="va-modal xwide">
     <div class="m-head"><span id="recTitle">稽核評鑑表單</span><span class="m-close" onclick="closeMask('recMask')">✕</span></div>
     <div class="m-body">
+        <div id="recStatusBox" style="display:none;margin-bottom:8px;"></div>
         <div class="af-head">
             <div><label>預定稽核月份</label><select id="recPlanMonth"></select></div>
             <div><label>稽核日期（留空=尚未稽核，月內完成即準時）</label><input type="date" id="recDate"></div>
@@ -401,7 +424,14 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             </div>
         </div>
         <div style="font-size:11px;color:#8a6d45;margin:6px 0;">
-            每項自評/稽核各評 0~7 分（0=最差、7=最佳）；綜合合格率＝自評率×0.3＋稽核率×0.7，<b>≥75% 判合格</b>。
+            每項依單項滿分評自評/稽核分（0＝最差）；綜合合格率＝自評率×自評權重＋稽核率×稽核權重，達門檻才判合格。
+        </div>
+        <div class="af-quickfill" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:12px;color:#5b3a1e;">
+            <span>自評快速套用：<input type="number" id="qfSelf" min="0" style="width:56px;">
+                <button type="button" class="b-att2" onclick="quickFillScore('self')">套用全部</button></span>
+            <span>稽核快速套用：<input type="number" id="qfAudit" min="0" style="width:56px;">
+                <button type="button" class="b-att2" onclick="quickFillScore('audit')">套用全部</button></span>
+            <span style="color:#b0a390;">(套用後仍可個別修改)</span>
         </div>
         <div class="af-table-wrap">
             <table class="af-table" id="afTable"><tbody id="afBody"></tbody></table>
@@ -421,7 +451,26 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-foot">
         <button class="b-cancel" onclick="printCurrentForm()"><i class="fa fa-print"></i> 列印本表</button>
         <button class="b-cancel" onclick="closeMask('recMask')">取消</button>
-        <button class="b-ok" onclick="submitRec()">儲存</button>
+        <button class="b-ok" id="btnRecSave" onclick="submitRec()">儲存</button>
+        <button class="b-ok" id="btnRecComplete" style="background:#8A5A2B;" onclick="completeRec()">完成</button>
+        <button class="b-ok" id="btnRecSubmitSign" style="background:#DD8A38;display:none;" onclick="submitSign()">送審核</button>
+    </div>
+</div></div>
+
+<!-- 稽核簽核決行 modal（由通知連結 ?sign=target_id 開啟，或由列表待簽核列點開） -->
+<div class="va-mask" id="signMask"><div class="va-modal wide">
+    <div class="m-head"><span id="signTitle">供應商稽核簽核</span><span class="m-close" onclick="closeMask('signMask')">✕</span></div>
+    <div class="m-body">
+        <div id="signInfo" style="font-size:13px;color:#5b3a1e;margin-bottom:8px;"></div>
+        <table class="af-table" style="width:100%;"><thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th></tr></thead><tbody id="signCatBody"></tbody></table>
+        <div id="signConc" class="af-summary" style="margin-top:8px;"></div>
+        <div style="margin-top:10px;"><label>意見／退回原因（核准可留空，退回必填）</label>
+            <textarea id="signNote" rows="2" style="width:100%;"></textarea></div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('signMask')">關閉</button>
+        <button class="b-cancel" style="background:#DD5138;color:#fff;" onclick="signDecideAction('rejected')">退回</button>
+        <button class="b-ok" onclick="signDecideAction('approved')">核准</button>
     </div>
 </div></div>
 
@@ -431,7 +480,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-body">
         <div id="staleHint" style="font-size:12px;color:#8a6d45;margin-bottom:6px;"></div>
         <div class="va-table-wrap"><table class="va-table"><thead><tr>
-            <th style="width:32px;"><input type="checkbox" id="staleAll"></th><th>大類</th><th>廠商ID</th><th>廠商名稱</th><th>最後發包日</th><th>類型</th>
+            <th style="width:32px;"><input type="checkbox" id="staleAll"></th><th>加工項目</th><th>廠商ID</th><th>廠商名稱</th><th>最後發包日</th><th>類型</th>
         </tr></thead><tbody id="staleBody"></tbody></table></div>
         <div style="font-size:11px;color:#DD5138;margin-top:6px;">確認移除：取消納管＋移出合格清冊，並自稽核批次刪除尚未稽核之對象（已稽核紀錄保留）。</div>
     </div>
@@ -532,10 +581,56 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <label style="margin-top:8px;">供應商定期評核表（2-PH-01-05）</label>
         <div style="display:flex;gap:6px;align-items:center;"><input type="text" id="cycEvKw" placeholder="搜尋" style="width:120px;">
             <select id="cycEvDoc" style="flex:1;min-width:180px;"><option value="0">（用預設 供應商定期評核表 / 2-PH-01-05）</option></select></div>
+        <label style="margin-top:8px;">供應商稽核計劃（2-PH-01-06）</label>
+        <div style="display:flex;gap:6px;align-items:center;"><input type="text" id="cycPlanKw" placeholder="搜尋" style="width:120px;">
+            <select id="cycPlanDoc" style="flex:1;min-width:180px;"><option value="0">（用預設 供應商稽核計劃 / 2-PH-01-06）</option></select></div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('asDocMask')">取消</button>
         <button class="b-ok" onclick="submitAsDoc()">儲存</button>
+    </div>
+</div></div>
+
+<!-- 查核表設定 modal（類別/項次/單項滿分 可設定化） -->
+<div class="va-mask" id="checklistMask"><div class="va-modal xwide">
+    <div class="m-head"><span>查核表設定</span><span class="m-close" onclick="closeMask('checklistMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;">
+            可調整每個類別/項次的文字與單項滿分；總分滿分由系統依所有項次滿分加總自動計算。<br>
+            <b>已完成評分的稽核紀錄會凍結當時的查核表內容，之後在此調整不會影響舊紀錄。</b>
+        </div>
+        <div id="clCatsBox"></div>
+        <button type="button" class="b-att2" onclick="clAddCat()"><i class="fa fa-plus"></i> 新增類別</button>
+        <div style="margin-top:14px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+            <label>自評權重 <input type="number" id="clSelfW" step="0.05" min="0" max="1" style="width:70px;"></label>
+            <label>稽核權重 <input type="number" id="clAuditW" step="0.05" min="0" max="1" style="width:70px;"></label>
+            <label>合格率門檻% <input type="number" id="clPassRate" step="0.5" min="0" max="100" style="width:70px;"></label>
+            <span>總分滿分：<b id="clTotalMax">0</b>（系統自動計算）</span>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('checklistMask')">取消</button>
+        <button class="b-ok" onclick="submitChecklist()">儲存</button>
+    </div>
+</div></div>
+
+<!-- 簽核設定 modal（稽核評鑑表單自動簽核/簽核部門 + 稽核計劃是否需核准） -->
+<div class="va-mask" id="signSetMask"><div class="va-modal">
+    <div class="m-head"><span>簽核設定</span><span class="m-close" onclick="closeMask('signSetMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;">稽核評鑑表單「完成」後的簽核</div>
+        <label><input type="checkbox" id="ssAuto"> 自動簽核（系統依下方部門自動解析主管蓋章，不需人工核准）</label>
+        <div style="margin-top:6px;"><label>簽核部門（依組織角色綁定「生管部門」往上取，只能選生管組本身或上層部門）</label>
+            <select id="ssDept" style="width:100%;"><option value="">（尚未設定）</option></select>
+        </div>
+        <div style="font-size:11px;color:#8a6d45;margin-top:4px;">不論是否自動簽核，「誰簽」都是解析這裡設定的部門主管（含代理/迴避）；未勾自動簽核時，完成後需按「送審核」通知該主管簽核。</div>
+        <hr style="margin:14px 0;border-color:#EADFC8;">
+        <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;">供應商稽核計劃送出後是否需要核准</div>
+        <label><input type="checkbox" id="ssPlanNeed"> 需要最高核准人員核准（不勾＝送出即生效）</label>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('signSetMask')">取消</button>
+        <button class="b-ok" onclick="submitSignSetting()">儲存</button>
     </div>
 </div></div>
 
@@ -664,6 +759,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../code/highcharts.js"></script>
 <script src="../../code/highcharts-more.js"></script>
 <script>
@@ -674,7 +770,7 @@ $(document).ready(function(){
 });
 
 var API = '../../src/store/VendorAudit_API.php';
-var META = null, TARGETS = [], PERMS = null, POOL = [], ROUND_YEAR = null;
+var META = null, TARGETS = [], PERMS = null, POOL = [], ROUND_YEAR = null, CUR_CFG = null;
 function planTimeliness(t){
     if (!t.plan_month) return '';
     var planYM = ROUND_YEAR+'-'+('0'+t.plan_month).slice(-2);
@@ -685,6 +781,7 @@ function planTimeliness(t){
     return nowYM>planYM ? ' <span class="af-judge-fail" style="font-size:11px;">逾期未做</span>' : '';
 }
 var canView = <?= $perms['canView'] ? 'true' : 'false' ?>;
+var CUR_USER_NAME = <?= json_encode($vaUser['user_cname'] ?? '', JSON_UNESCAPED_UNICODE) ?>;
 var RESULT_LABEL = {pass:'合格', conditional:'限期改善', fail:'不合格'};
 
 function closeMask(id){ document.getElementById(id).style.display='none'; }
@@ -697,6 +794,7 @@ function loadMeta(cb){
     $.getJSON(API, {action:'meta'}, function(m){
         if (!m.ok){ alert(m.error||'載入失敗'); return; }
         META = m; PERMS = m.perms;
+        window.__ownCompany = m.company_name;
         var $y = $('#yearSel').empty(), cy = m.cur_year;
         for (var y=cy; y>=cy-5; y--) $y.append('<option value="'+y+'">'+y+'</option>');
         $y.val(cy);
@@ -709,10 +807,11 @@ function loadMeta(cb){
         $('#pkMonth').html(mo).val(m.cur_month);
         $('#recPlanMonth').html(mo);
         if (m.perms.canEdit) $('#btnPick').show();
-        if (m.perms.canAdmin){ $('#btnCycle').show(); $('#btnAttachSet').show(); $('#btnAsDoc').show(); $('#btnAuditor').show(); $('#pkManageGrp').show(); $('#evSet').show(); }
-        var $ey = $('#evYear').empty(), $ry = $('#rsYear').empty();
-        for (var yy=m.cur_year; yy>=m.cur_year-5; yy--){ $ey.append('<option value="'+yy+'">'+yy+'</option>'); $ry.append('<option value="'+yy+'">'+yy+'</option>'); }
-        $ey.val(m.cur_year); $ry.val(m.cur_year);
+        if (m.perms.canAdmin){ $('#btnCycle').show(); $('#btnAttachSet').show(); $('#btnAsDoc').show(); $('#btnAuditor').show();
+            $('#btnChecklist').show(); $('#btnSignSetting').show(); $('#pkManageGrp').show(); $('#evSet').show(); }
+        var $ey = $('#evYear').empty(), $ry = $('#rsYear').empty(), $py = $('#planYear').empty();
+        for (var yy=m.cur_year; yy>=m.cur_year-5; yy--){ $ey.append('<option value="'+yy+'">'+yy+'</option>'); $ry.append('<option value="'+yy+'">'+yy+'</option>'); $py.append('<option value="'+yy+'">'+yy+'</option>'); }
+        $ey.val(m.cur_year); $ry.val(m.cur_year); $py.val(m.cur_year);
         if (m.perms.canEdit){ $('#rsAdd,#rsBatchGrade,#rsClearGrade').show(); }
         if (m.perms.canAdmin){ $('#rsStaleBtn').show(); }
         loadEvVendors('');
@@ -745,12 +844,17 @@ function renderRemind(res){
     $('#remind').html(h);
 }
 
+function signStatusPill(status){
+    var map = {completed:['st-todo','待送審核'], pending:['st-todo','待簽核'], approved:['st-done','已核准'], rejected:['st-dis','已退回']};
+    var m = map[status] || ['st-done','已完成'];
+    return '<span class="st-pill '+m[0]+'">'+m[1]+'</span>';
+}
 function renderTargets(){
     var html = '';
     TARGETS.forEach(function(t){
         var done = !!t.audit_date;
         var stat = t.disabled ? '<span class="st-pill st-dis">停用</span>'
-                 : (done ? '<span class="st-pill st-done">已完成</span>' : '<span class="st-pill st-todo">未稽核</span>');
+                 : (done ? signStatusPill(t.status) : '<span class="st-pill st-todo">未稽核</span>');
         html += '<tr'+(t.disabled?' class="dis"':'')+'>';
         html += '<td>'+esc(t.maker_id_no)+'</td>';
         html += '<td class="t-left"><b>'+esc(t.maker_id||'')+'</b></td>';
@@ -763,6 +867,7 @@ function renderTargets(){
         html += '<td>'+esc(t.auditor||'—')+'</td>';
         html += '<td>';
         if (PERMS.canEdit) html += '<span class="va-op" onclick="openRec('+t.target_id+')"><i class="fa fa-pencil"></i>登錄</span>';
+        if (t.status==='pending') html += '<span class="va-op" style="color:#DD8A38;" onclick="openSignMask('+t.target_id+')"><i class="fa fa-check-square-o"></i>簽核</span>';
         if (t.audit_date) html += '<span class="va-op" onclick="openRecordSheet('+t.target_id+')"><i class="fa fa-file-text-o"></i>記錄表</span>';
         html += '<span class="va-op" onclick="openHis(\''+esc(t.maker_id_no)+'\')"><i class="fa fa-history"></i>歷史</span>';
         if (PERMS.canEdit) html += '<span class="va-op" style="color:#DD5138;" onclick="removeTarget('+t.target_id+')"><i class="fa fa-times"></i>移除</span>';
@@ -848,15 +953,39 @@ function bulkManaged(v){
 var recTid = null;
 function scoreCheck(el){
     var v = $.trim($(el).val());
-    var bad = v!=='' && (!/^\d+$/.test(v) || +v<0 || +v>META.item_max);
+    var mx = +($(el).data('max')) || 7;
+    var bad = v!=='' && (!/^\d+$/.test(v) || +v<0 || +v>mx);
     $(el).toggleClass('af-invalid', bad);
     return !bad;
+}
+var RECT = null;
+function renderRecStatus(t){
+    var st = t.status||'draft';
+    var locked = (st==='pending'||st==='approved');
+    var label = {completed:'已完成，待送審核', pending:'已送審核，待簽核', approved:'已核准'}[st] || '';
+    var html='';
+    if (st==='rejected' && t.reject_info){
+        html = '<div style="background:#FDEAE6;border:1px solid #DD5138;border-radius:6px;padding:8px 10px;color:#a83a2a;">'
+            + '<b>已退回</b>（'+esc(t.reject_info.by||'')+'　'+fmtDate(t.reject_info.at)+'）原因：'+esc(t.reject_info.note||'')
+            + '，請修改後重新按「完成」送審。</div>';
+    } else if (label){
+        html = '<div style="background:#FFF7E8;border:1px solid #E8D5B5;border-radius:6px;padding:6px 10px;color:#8A5A2B;font-weight:bold;">目前狀態：'+label
+            + (st==='approved' && t.signed_by_name ? '（主管：'+esc(t.signed_by_name)+' '+(fmtDate(t.signed_at)||'')+'）' : '') + '</div>';
+    }
+    $('#recStatusBox').html(html).toggle(!!html);
+    $('#afBody input, #recPlanMonth, #recDate, #recMode, #recAuditor, #recSelfEval, #recReport, #recConclusion, #recNote, #qfSelf, #qfAudit')
+        .prop('disabled', locked);
+    $('.af-quickfill button').prop('disabled', locked);
+    $('#btnRecSave, #btnRecComplete').toggle(!locked);
+    $('#btnRecSubmitSign').toggle(st==='completed');
 }
 function openRec(tid){
     recTid = tid;
     $.getJSON(API, {action:'get_form', target_id:tid}, function(res){
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         var t = res.target;
+        RECT = t;
+        CUR_CFG = t.checklist_cfg || {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
         $('#recTitle').text('稽核評鑑表單：'+t.maker_id+'（'+t.maker_id_no+'）');
         $('#recPlanMonth').val(t.plan_month||'');
         $('#recDate').val(fmtDate(t.audit_date)||META.today);
@@ -875,6 +1004,7 @@ function openRec(tid){
         $('#recConclusion').val(t.conclusion||''); $('#recNote').val(t.note||'');
         renderAttach(t.target_id, res.attaches||[]);
         renderForm(t.scores||{});
+        renderRecStatus(t);
         openMask('recMask');
     });
 }
@@ -918,14 +1048,15 @@ function reloadAttach(tid){
 }
 function renderForm(scores){
     var html='';
-    META.items.forEach(function(cat){
+    var cfg = CUR_CFG || {items:META.items};
+    cfg.items.forEach(function(cat){
         html+='<tr class="af-cat"><td class="af-q">'+esc(cat[1])+'</td><td class="af-sc">自評</td><td class="af-sc">稽核</td></tr>';
         cat[2].forEach(function(it){
-            var iid=it[0], s=scores[iid]||{};
+            var iid=it[0], no=it[1], q=it[2], mx=it[3], s=scores[iid]||{};
             html+='<tr data-iid="'+iid+'">';
-            html+='<td class="af-q">'+iid+'. '+esc(it[1])+'</td>';
-            html+='<td class="af-sc"><input type="number" class="af-self af-score" min="0" max="'+META.item_max+'" step="1" placeholder="0~'+META.item_max+'" value="'+(s.self==null?'':s.self)+'" oninput="scoreCheck(this);recompute()"></td>';
-            html+='<td class="af-sc"><input type="number" class="af-audit af-score" min="0" max="'+META.item_max+'" step="1" placeholder="0~'+META.item_max+'" value="'+(s.audit==null?'':s.audit)+'" oninput="scoreCheck(this);recompute()"></td>';
+            html+='<td class="af-q">'+esc(no)+'. '+esc(q)+'</td>';
+            html+='<td class="af-sc"><input type="number" class="af-self af-score" data-max="'+mx+'" min="0" max="'+mx+'" step="1" placeholder="0~'+mx+'" value="'+(s.self==null?'':s.self)+'" oninput="scoreCheck(this);recompute()"></td>';
+            html+='<td class="af-sc"><input type="number" class="af-audit af-score" data-max="'+mx+'" min="0" max="'+mx+'" step="1" placeholder="0~'+mx+'" value="'+(s.audit==null?'':s.audit)+'" oninput="scoreCheck(this);recompute()"></td>';
             html+='</tr>';
         });
     });
@@ -940,14 +1071,27 @@ function collectScores(){
     });
     return scores;
 }
+function quickFillScore(kind){
+    var v = $('#qf'+(kind==='self'?'Self':'Audit')).val();
+    if (v===''){ alert('請輸入分數'); return; }
+    v = +v;
+    if (isNaN(v) || v<0){ alert('請輸入 0 以上的整數'); return; }
+    $('#afBody .af-'+kind).each(function(){
+        var mx = +$(this).data('max') || 7;
+        $(this).val(Math.min(v, mx));
+        scoreCheck(this);
+    });
+    recompute();
+}
 function recompute(){
-    var MAXI=META.item_max, pass=META.pass_rate, sw=META.self_w, aw=META.audit_w, scores=collectScores();
+    var cfg = CUR_CFG || {items:META.items, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
+    var pass=cfg.pass_rate, sw=cfg.self_w, aw=cfg.audit_w, scores=collectScores();
     var rows='<table><tr><th>分類</th><th>滿分</th><th>自評分</th><th>稽核分</th><th>自評率</th><th>稽核率</th></tr>';
     var tSelf=0,tAudit=0,tMax=0;
-    META.items.forEach(function(cat){
-        var items=cat[2], cMax=items.length*MAXI, cSelf=0, cAudit=0;
-        items.forEach(function(it){ var s=scores[it[0]]||{};
-            cSelf+=Math.max(0,Math.min(MAXI,+s.self||0)); cAudit+=Math.max(0,Math.min(MAXI,+s.audit||0)); });
+    cfg.items.forEach(function(cat){
+        var items=cat[2], cMax=0, cSelf=0, cAudit=0;
+        items.forEach(function(it){ var mx=it[3], s=scores[it[0]]||{};
+            cMax+=mx; cSelf+=Math.max(0,Math.min(mx,+s.self||0)); cAudit+=Math.max(0,Math.min(mx,+s.audit||0)); });
         tSelf+=cSelf; tAudit+=cAudit; tMax+=cMax;
         rows+='<tr><td>'+esc(cat[1])+'</td><td>'+cMax+'</td><td>'+cSelf+'</td><td>'+cAudit+'</td><td>'+(cMax?Math.round(cSelf/cMax*1000)/10:0)+'%</td><td>'+(cMax?Math.round(cAudit/cMax*1000)/10:0)+'%</td></tr>';
     });
@@ -959,10 +1103,11 @@ function recompute(){
     $('#afSummary').html(rows);
 }
 function submitRec(){
-    // 送出前全面驗證，有超出範圍即阻擋
+    // 儲存(草稿)：只做基本檢查，不檢查評分內容/結果——完整性檢查留給「完成」按鈕
+    if ($('#recDate').val() && !$('#recAuditor').val()){ alert('請選擇稽核員'); return; }
     var bad=0;
     $('#afBody .af-score').each(function(){ if(!scoreCheck(this)) bad++; });
-    if(bad){ alert('有 '+bad+' 個分數超出範圍或非整數（限 0~'+META.item_max+'），已標紅，請修正後再儲存'); return; }
+    if(bad){ alert('有 '+bad+' 個分數超出範圍或非整數，已標紅，請修正後再儲存'); return; }
     var scores=collectScores();
     $.post(API, {action:'record_target', target_id:recTid, audit_date:$('#recDate').val(), plan_month:$('#recPlanMonth').val(),
         audit_mode:$('#recMode').val(), auditor:$('#recAuditor').val(),
@@ -972,6 +1117,75 @@ function submitRec(){
         if(!res.ok){ alert(res.error||'儲存失敗'); return; }
         closeMask('recMask'); loadRound();
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+/** 完成前的完整性檢查：稽核員/建議結論/所有項次自評稽核分皆需填寫且在單項滿分內，回傳缺漏說明陣列(空=通過) */
+function recCompleteErrors(){
+    var errs=[];
+    if (!$('#recAuditor').val()) errs.push('請填寫稽核員');
+    if (!$('#recDate').val()) errs.push('請先填寫稽核日期');
+    if (!$('#recConclusion').val()) errs.push('請選擇建議評鑑結果');
+    var scores=collectScores(), badSelf=0, badAudit=0;
+    (CUR_CFG&&CUR_CFG.items||[]).forEach(function(cat){
+        cat[2].forEach(function(it){
+            var iid=it[0], mx=it[3], s=scores[iid]||{};
+            var ok=function(v){ return v!=null && v!=='' && /^\d+$/.test(String(v)) && +v>=0 && +v<=mx; };
+            if(!ok(s.self)) badSelf++;
+            if(!ok(s.audit)) badAudit++;
+        });
+    });
+    if (badSelf) errs.push('尚有 '+badSelf+' 項自評分未填寫或超出範圍');
+    if (badAudit) errs.push('尚有 '+badAudit+' 項稽核分未填寫或超出範圍');
+    return errs;
+}
+function completeRec(){
+    var errs = recCompleteErrors();
+    if (errs.length){ alert('尚未完成，請先修正：\n'+errs.join('\n')); return; }
+    var scores=collectScores();
+    $.post(API, {action:'complete_target', target_id:recTid, audit_date:$('#recDate').val(), plan_month:$('#recPlanMonth').val(),
+        audit_mode:$('#recMode').val(), auditor:$('#recAuditor').val(),
+        self_evaluator:$('#recSelfEval').val(), report_no:$('#recReport').val(),
+        conclusion:$('#recConclusion').val(), note:$('#recNote').val(), scores:JSON.stringify(scores)},
+    function(res){
+        if(!res.ok){ alert(res.error||'完成失敗'); return; }
+        alert(res.status==='approved' ? '已完成並自動核可' : '已完成，請按「送審核」送出簽核');
+        closeMask('recMask'); loadRound();
+    }, 'json').fail(function(x){ alert('完成失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function submitSign(){
+    if (!confirm('確定送出簽核？送出後將鎖定此筆，需等待主管核准或退回。')) return;
+    $.post(API, {action:'submit_sign', target_id:recTid}, function(res){
+        if(!res.ok){ alert(res.error||'送出失敗'); return; }
+        alert('已送出簽核通知');
+        closeMask('recMask'); loadRound();
+    }, 'json').fail(function(x){ alert('送出失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+/* ---------- 簽核決行(通知連結 ?sign=target_id) ---------- */
+var SIGN_TID = null;
+function openSignMask(tid){
+    $.getJSON(API, {action:'get_form', target_id:tid}, function(res){
+        if(!res.ok){ alert(res.error||'載入失敗'); return; }
+        var t = res.target, cfg = t.checklist_cfg, c = computeCats(t.scores||{}, cfg);
+        SIGN_TID = tid;
+        $('#signTitle').text('供應商稽核簽核：'+t.maker_id+'（'+t.maker_id_no+'）');
+        var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'—';
+        $('#signInfo').html('稽核日期：'+(fmtDate(t.audit_date)||'—')+'　稽核狀況：'+modeL+'　稽核員：'+esc(t.auditor||'—')+'　建議結論：'+esc(t.conclusion||'—'));
+        var rows='';
+        c.cats.forEach(function(k){ rows+='<tr><td class="af-q">'+esc(k.name)+'</td><td class="af-sc">'+k.max+'</td><td class="af-sc">'+k.self_rate+'%</td><td class="af-sc">'+k.audit_rate+'%</td></tr>'; });
+        $('#signCatBody').html(rows);
+        $('#signConc').html('綜合合格率：<b style="font-size:16px;">'+c.overall+'%</b>　判定：'+vaJudgeBadgeHtml(c.pass));
+        $('#signNote').val('');
+        if (t.status !== 'pending') alert('此筆目前狀態非「待簽核」（目前：'+(t.status||'draft')+'），可能已被處理過，請確認後再決行');
+        openMask('signMask');
+    });
+}
+function signDecideAction(decision){
+    if (decision==='rejected' && !$('#signNote').val().trim()){ alert('退回必須填寫原因'); return; }
+    if (!confirm(decision==='approved' ? '確定核准？' : '確定退回？')) return;
+    $.post(API, {action:'sign_decide', target_id:SIGN_TID, decision:decision, note:$('#signNote').val()}, function(res){
+        if(!res.ok){ alert(res.error||'處理失敗'); return; }
+        alert(decision==='approved' ? '已核准' : '已退回');
+        closeMask('signMask'); loadRound();
+    }, 'json').fail(function(x){ alert('處理失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 function removeTarget(tid){
     if (!confirm('將此廠商移出本期稽核對象？')) return;
@@ -1004,13 +1218,15 @@ $('#btnAsDoc').on('click', function(){
     loadAsForms('#cycRecDoc', '', META.record_as_doc, '供應商品質系統評鑑記錄表 / 2-PH-01-03');
     loadAsForms('#cycRosDoc', '', META.roster_as_doc, '合格供應商清冊 / 2-PH-01-04');
     loadAsForms('#cycEvDoc', '', META.eval_as_doc, '供應商定期評核表 / 2-PH-01-05');
+    loadAsForms('#cycPlanDoc', '', META.plan_as_doc, '供應商稽核計劃 / 2-PH-01-06');
     openMask('asDocMask');
 });
-var cycAsT=null, cycRecT=null, cycRosT=null, cycEvT=null;
+var cycAsT=null, cycRecT=null, cycRosT=null, cycEvT=null, cycPlanT=null;
 $('#cycAsKw').on('input', function(){ clearTimeout(cycAsT); var k=$(this).val(); cycAsT=setTimeout(function(){ loadAsForms('#cycAsDoc', k, META.as_doc, '供應商評鑑稽核查表 / 2-PH-01-02', +$('#cycAsDoc').val()); }, 300); });
 $('#cycRecKw').on('input', function(){ clearTimeout(cycRecT); var k=$(this).val(); cycRecT=setTimeout(function(){ loadAsForms('#cycRecDoc', k, META.record_as_doc, '供應商品質系統評鑑記錄表 / 2-PH-01-03', +$('#cycRecDoc').val()); }, 300); });
 $('#cycRosKw').on('input', function(){ clearTimeout(cycRosT); var k=$(this).val(); cycRosT=setTimeout(function(){ loadAsForms('#cycRosDoc', k, META.roster_as_doc, '合格供應商清冊 / 2-PH-01-04', +$('#cycRosDoc').val()); }, 300); });
 $('#cycEvKw').on('input', function(){ clearTimeout(cycEvT); var k=$(this).val(); cycEvT=setTimeout(function(){ loadAsForms('#cycEvDoc', k, META.eval_as_doc, '供應商定期評核表 / 2-PH-01-05', +$('#cycEvDoc').val()); }, 300); });
+$('#cycPlanKw').on('input', function(){ clearTimeout(cycPlanT); var k=$(this).val(); cycPlanT=setTimeout(function(){ loadAsForms('#cycPlanDoc', k, META.plan_as_doc, '供應商稽核計劃 / 2-PH-01-06', +$('#cycPlanDoc').val()); }, 300); });
 function loadAsForms(sel, kw, curDoc, defLabel, keepId){
     var selId = keepId!=null ? keepId : (curDoc?curDoc.id:0);
     $.getJSON(API, {action:'as_forms', kw:kw||''}, function(res){
@@ -1025,9 +1241,11 @@ function loadAsForms(sel, kw, curDoc, defLabel, keepId){
 function submitAsDoc(){
     $.post(API, {action:'save_cycle', cycle_months:META.cycle_months,
         as_doc_id:$('#cycAsDoc').val(), record_as_doc_id:$('#cycRecDoc').val(),
-        roster_as_doc_id:$('#cycRosDoc').val(), eval_as_doc_id:$('#cycEvDoc').val()}, function(res){
+        roster_as_doc_id:$('#cycRosDoc').val(), eval_as_doc_id:$('#cycEvDoc').val(),
+        plan_as_doc_id:$('#cycPlanDoc').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         META.as_doc=res.as_doc; META.record_as_doc=res.record_as_doc; META.roster_as_doc=res.roster_as_doc; META.eval_as_doc=res.eval_as_doc;
+        META.plan_as_doc=res.plan_as_doc;
         closeMask('asDocMask');
     }, 'json');
 }
@@ -1055,6 +1273,7 @@ function openHis(mid){
 /* ---------- 列印評鑑表單 ---------- */
 function auditFormHTML(o){
     o = o || {};
+    var cfg = o.cfg || CUR_CFG || {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
     var docName = (META.as_doc && META.as_doc.doc_name) || '供應商評鑑稽核查表';
     var head = '<div style="text-align:center;">'
         + '<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
@@ -1064,25 +1283,25 @@ function auditFormHTML(o){
     var info = '<table class="pf-info"><tr>'
         + '<td>供應商：'+(o.maker?esc(o.maker):'________________')+'</td>'
         + '<td>日期：'+(o.dateStr?esc(o.dateStr):'____ / ____ / ____')+'</td></tr>'
-        + '<tr><td colspan="2">稽核狀況：'+modeBoxes+'　　評分：每項 0~7 分（0＝最差、7＝最佳；無此流程填 NA）</td></tr></table>';
+        + '<tr><td colspan="2">稽核狀況：'+modeBoxes+'　　評分：每項依單項滿分評分（0＝最差；無此流程填 NA）</td></tr></table>';
     var rows = '<table class="pf"><thead><tr><th style="width:70px;">項目</th><th style="width:34px;">項次</th><th>查核問題</th>'
         + '<th style="width:44px;">自評分</th><th style="width:44px;">稽核分</th><th style="width:180px;">佐證／觀察結果</th></tr></thead><tbody>';
-    META.items.forEach(function(cat){
+    cfg.items.forEach(function(cat){
         var items = cat[2];
         items.forEach(function(it, idx){
             var s = (o.scores && o.scores[it[0]]) || {};
             rows += '<tr>';
             if (idx===0) rows += '<td rowspan="'+items.length+'" style="vertical-align:middle;font-weight:bold;">'+esc(cat[1])+'</td>';
-            rows += '<td>'+it[0]+'</td><td class="q">'+esc(it[1])+'</td>'
+            rows += '<td>'+esc(it[1])+'</td><td class="q">'+esc(it[2])+'</td>'
                 + '<td>'+(s.self!=null?s.self:'')+'</td><td>'+(s.audit!=null?s.audit:'')+'</td><td></td></tr>';
         });
     });
-    rows += '<tr><td colspan="2">合計</td><td style="text-align:right;">總分（滿分 '+META.total_max+'）／綜合合格率＝自評率×'+META.self_w+'＋稽核率×'+META.audit_w+'，≥'+META.pass_rate+'% 判合格</td><td></td><td></td><td></td></tr>';
+    rows += '<tr><td colspan="2">合計</td><td style="text-align:right;">總分（滿分 '+cfg.total_max+'）／綜合合格率＝自評率×'+cfg.self_w+'＋稽核率×'+cfg.audit_w+'，≥'+cfg.pass_rate+'% 判合格</td><td></td><td></td><td></td></tr>';
     rows += '</tbody></table>';
     var sign = '<table class="pf-sign"><tr><td>供應商代表簽章：__________________</td><td>稽核員簽章：__________________</td></tr></table>';
     return head + info + rows + sign;
 }
-function openPrintWindow(bodyHtml, title, docNo){
+function openPrintWindow(bodyHtml, title, docNo, landscape){
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗以列印'); return; }
     var asTxt = String(docNo||'').replace(/['\\]/g,'');
@@ -1091,8 +1310,9 @@ function openPrintWindow(bodyHtml, title, docNo){
         + 'table.pf th,table.pf td{border:1px solid #333;padding:4px 6px;text-align:center;vertical-align:middle;}'
         + 'table.pf td.q{text-align:left;}'
         + 'table.pf-info{width:100%;font-size:13px;margin-top:12px;border-collapse:collapse;}table.pf-info td{padding:4px 6px;border:1px solid #999;}'
-        + 'table.pf-sign{width:100%;margin-top:18px;font-size:13px;}table.pf-sign td{padding:12px 6px;}'
-        + '@media print{@page{size:A4;margin:12mm 8mm 16mm;'
+        + 'table.pf-sign{width:100%;margin-top:46px;font-size:13px;}table.pf-sign td{padding:30px 6px 10px;}'
+        + '.stamp-wrap svg,svg.car-stamp{width:60px;height:60px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + '@media print{@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;'
         + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
         + '}}';
     w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
@@ -1106,7 +1326,10 @@ function openPrintWindow(bodyHtml, title, docNo){
         + 'setTimeout(function(){window.print();},150);};</scr'+'ipt></body></html>');
     w.document.close();
 }
-function printBlankForm(){ openPrintWindow(auditFormHTML({}), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02'); }
+function printBlankForm(){
+    var cfg = {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
+    openPrintWindow(auditFormHTML({cfg:cfg}), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02');
+}
 function printCurrentForm(){
     openPrintWindow(auditFormHTML({
         maker: $('#recTitle').text().replace('稽核評鑑表單：',''),
@@ -1117,35 +1340,36 @@ $('#btnBlank').on('click', printBlankForm);
 
 /* ---------- 評鑑記錄表（2-PH-01-03，雷達圖）---------- */
 var RS = null, rsChart = null;
-function computeCats(scores){
-    var cats=[], tSelf=0,tAudit=0,tMax=0, MAXI=META.item_max;
-    META.items.forEach(function(cat){
-        var items=cat[2], cMax=items.length*MAXI, cSelf=0,cAudit=0;
-        items.forEach(function(it){ var s=scores[it[0]]||{}; cSelf+=Math.max(0,Math.min(MAXI,+s.self||0)); cAudit+=Math.max(0,Math.min(MAXI,+s.audit||0)); });
+function computeCats(scores, cfg){
+    cfg = cfg || {items:META.items, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
+    var cats=[], tSelf=0,tAudit=0,tMax=0;
+    cfg.items.forEach(function(cat){
+        var items=cat[2], cMax=0, cSelf=0,cAudit=0;
+        items.forEach(function(it){ var mx=it[3], s=scores[it[0]]||{}; cMax+=mx; cSelf+=Math.max(0,Math.min(mx,+s.self||0)); cAudit+=Math.max(0,Math.min(mx,+s.audit||0)); });
         cats.push({name:cat[1], max:cMax, self_rate:cMax?Math.round(cSelf/cMax*1000)/10:0, audit_rate:cMax?Math.round(cAudit/cMax*1000)/10:0});
         tSelf+=cSelf;tAudit+=cAudit;tMax+=cMax;
     });
     var selfR=tMax?Math.round(tSelf/tMax*1000)/10:0, auditR=tMax?Math.round(tAudit/tMax*1000)/10:0;
-    var overall=Math.round((selfR*META.self_w+auditR*META.audit_w)*10)/10;
-    return {cats:cats, selfR:selfR, auditR:auditR, overall:overall, pass:overall>=META.pass_rate};
+    var overall=Math.round((selfR*cfg.self_w+auditR*cfg.audit_w)*10)/10;
+    return {cats:cats, selfR:selfR, auditR:auditR, overall:overall, pass:overall>=cfg.pass_rate, total_max:tMax};
 }
 function openRecordSheet(tid){
     $.getJSON(API, {action:'get_form', target_id:tid}, function(res){
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
-        var t=res.target, c=computeCats(t.scores||{});
-        RS={tid:tid, t:t, c:c};
+        var t=res.target, cfg=t.checklist_cfg, c=computeCats(t.scores||{}, cfg);
+        RS={tid:tid, t:t, c:c, cfg:cfg};
         var doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
         $('#rsTitle').text(docName+'：'+t.maker_id+'（'+t.maker_id_no+'）');
         var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'—';
         $('#rsInfo').html('供應商：<b>'+esc(t.maker_id)+'</b>（'+esc(t.maker_id_no)+'）　稽核日期：'+(fmtDate(t.audit_date)||'—')+'　稽核狀況：'+modeL+'　稽核員：'+esc(t.auditor||'—'));
         var rows='';
-        c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*META.self_w+k.audit_rate*META.audit_w)*10)/10;
+        c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*cfg.self_w+k.audit_rate*cfg.audit_w)*10)/10;
             rows+='<tr><td class="af-q">'+esc(k.name)+'</td><td class="af-sc">'+k.max+'</td><td class="af-sc">'+k.self_rate+'%</td><td class="af-sc">'+k.audit_rate+'%</td><td class="af-sc">'+comb+'%</td></tr>'; });
-        rows+='<tr class="af-cat"><td class="af-q">總成績</td><td class="af-sc">'+META.total_max+'</td><td class="af-sc">'+c.selfR+'%</td><td class="af-sc">'+c.auditR+'%</td><td class="af-sc">'+c.overall+'%</td></tr>';
+        rows+='<tr class="af-cat"><td class="af-q">總成績</td><td class="af-sc">'+c.total_max+'</td><td class="af-sc">'+c.selfR+'%</td><td class="af-sc">'+c.auditR+'%</td><td class="af-sc">'+c.overall+'%</td></tr>';
         $('#rsCatBody').html(rows);
-        $('#rsConc').html('綜合評鑑合格率（自評×'+META.self_w+'＋稽核×'+META.audit_w+'）：<b style="font-size:16px;">'+c.overall+'%</b>　判定：'
-            +(c.pass?'<span class="af-judge-pass">合格供應商 (≥'+META.pass_rate+'%)</span>':'<span class="af-judge-fail">不合格 (<'+META.pass_rate+'%)</span>')
-            +(t.conclusion?'　建議：'+esc(t.conclusion):''));
+        $('#rsConc').html('綜合評鑑合格率（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）：<b style="font-size:16px;">'+c.overall+'%</b>'
+            +'（核准條件 ≥'+cfg.pass_rate+'%）'+(t.conclusion?'　建議：'+esc(t.conclusion):'')
+            +'<div style="margin-top:6px;">判定：'+vaJudgeBadgeHtml(c.pass)+'</div>');
         rsRenderAttach(tid, res.attaches||[]);
         openMask('rsMask');
         setTimeout(drawRadar, 60);
@@ -1193,28 +1417,45 @@ function rsDelAttach(aid){
     $.post(API,{action:'attach_delete',attach_id:aid},function(res){ if(!res.ok){alert(res.error||'失敗');return;}
         var tid=$('#rsAttachBox').data('tid'); $.getJSON(API,{action:'get_form',target_id:tid},function(r){ if(r.ok) rsRenderAttach(tid,r.attaches); }); },'json');
 }
+function vaStampHtml(name, date, isDeputy){
+    try { if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, date||'', !!isDeputy); } catch(e){}
+    return name ? ('<span style="font-size:14px;">'+esc(name)+'</span>'+(date?'<div style="font-size:10px;color:#555;">'+esc(date)+'</div>':'')) : '';
+}
+function vaJudgeBadgeHtml(pass){
+    return '<span style="display:inline-block;font-size:19px;font-weight:bold;padding:3px 16px;border-radius:6px;border:2px solid '
+        +(pass?'#8A5A2B;color:#8A5A2B;background:#FBEBD2;':'#DD5138;color:#DD5138;background:#FDEAE6;')+'">'
+        +(pass?'合格供應商':'不合格')+'</span>';
+}
 function recordSheetHTML(){
     if(!RS) return '';
-    var t=RS.t, c=RS.c, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
+    var t=RS.t, c=RS.c, cfg=RS.cfg, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
     var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'____';
     var head='<div style="text-align:center;"><div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
     var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>稽核日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>稽核狀況：'+esc(modeL)+'</td></tr></table>';
     var rows='<table class="pf"><thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th></tr></thead><tbody>';
-    c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*META.self_w+k.audit_rate*META.audit_w)*10)/10;
+    c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*cfg.self_w+k.audit_rate*cfg.audit_w)*10)/10;
         rows+='<tr><td class="q">'+esc(k.name)+'</td><td>'+k.max+'</td><td>'+k.self_rate+'%</td><td>'+k.audit_rate+'%</td><td>'+comb+'%</td></tr>'; });
-    rows+='<tr style="font-weight:bold;"><td class="q">總成績</td><td>'+META.total_max+'</td><td>'+c.selfR+'%</td><td>'+c.auditR+'%</td><td>'+c.overall+'%</td></tr></tbody></table>';
+    rows+='<tr style="font-weight:bold;"><td class="q">總成績</td><td>'+c.total_max+'</td><td>'+c.selfR+'%</td><td>'+c.auditR+'%</td><td>'+c.overall+'%</td></tr></tbody></table>';
     var svg = rsChart ? rsChart.container.querySelector('svg').outerHTML : '';
-    var chart='<div style="text-align:center;margin-top:8px;">'+svg+'</div>';
-    var conc='<div style="margin-top:8px;font-size:13px;">綜合評鑑合格率（自評×'+META.self_w+'＋稽核×'+META.audit_w+'）＝<b>'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+META.pass_rate+'% 始評定為合格供應商。判定：'+(c.pass?'合格供應商':'不合格')+(t.conclusion?'（'+esc(t.conclusion)+'）':'')+'</div>';
-    var sign='<table class="pf-sign"><tr><td>稽核員簽章：____________</td><td>供應商代表簽章：____________</td><td>資材課長：____________</td></tr></table>';
-    return head+info+rows+chart+conc+sign;
+    var body = '<div style="display:flex;gap:18px;align-items:flex-start;margin-top:8px;">'
+        + '<div style="flex:1;min-width:0;">'+rows+'</div>'
+        + '<div style="flex:0 0 320px;text-align:center;">'+svg+'</div></div>';
+    var conc='<div style="margin-top:10px;font-size:13px;">綜合評鑑合格率（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）＝<b style="font-size:16px;">'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+cfg.pass_rate+'%'+(t.conclusion?'；建議：'+esc(t.conclusion):'')+'</div>'
+        +'<div style="margin-top:6px;">判定：'+vaJudgeBadgeHtml(c.pass)+'</div>';
+    var mgrStamp = (t.status==='approved' && t.signed_by_name) ? vaStampHtml(t.signed_by_name, (t.signed_at||'').substr(0,10), !!t.signed_is_deputy) : '';
+    var audStamp = t.auditor ? vaStampHtml(t.auditor, fmtDate(t.audit_date)||'') : '';
+    var sign='<table class="pf-sign"><tr>'
+        +'<td><div style="font-size:11px;color:#555;">主管</div><div style="margin-top:2px;min-height:70px;">'+mgrStamp+'</div></td>'
+        +'<td><div style="font-size:11px;color:#555;">稽核員</div><div style="margin-top:2px;min-height:70px;">'+audStamp+'</div></td>'
+        +'</tr></table>';
+    return head+info+body+conc+sign;
 }
-function printRecordSheet(){ if(!RS){alert('無資料');return;} openPrintWindow(recordSheetHTML(), '供應商品質系統評鑑記錄表', (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03'); }
+function printRecordSheet(){ if(!RS){alert('無資料');return;} openPrintWindow(recordSheetHTML(), '供應商品質系統評鑑記錄表', (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03', true); }
 function printAllDocs(){
     if(!RS){alert('無資料');return;}
     var docNo1=(META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2=(META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
-    var page1=auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode});
+    var page1=auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg});
     var body='<div style="page-break-after:always;">'+page1
         +'<div style="text-align:right;margin-top:22px;font-size:12px;color:#333;">'+esc(docNo1)+'</div></div>'
         +recordSheetHTML()+'<div style="text-align:right;margin-top:14px;font-size:12px;color:#333;">'+esc(docNo2)+'</div>';
@@ -1223,7 +1464,7 @@ function printAllDocs(){
 
 /* ---------- CSV ---------- */
 $('#btnCsv').on('click', function(){
-    var rows = [['廠商編號','廠商名稱','大類','預定月份','稽核狀態','稽核日','綜合合格率','判定','稽核員','報告編號','備註']];
+    var rows = [['廠商編號','廠商名稱','加工項目','預定月份','稽核狀態','稽核日','綜合合格率','判定','稽核員','報告編號','備註']];
     TARGETS.forEach(function(t){
         rows.push([t.maker_id_no, t.maker_id||'', t.main_cat_name||'', t.plan_month?t.plan_month+'月':'',
             t.disabled?'停用':(t.audit_date?'已完成':'未稽核'), fmtDate(t.audit_date),
@@ -1243,9 +1484,10 @@ $('#btnCsv').on('click', function(){
 $('.va-tab').on('click', function(){
     $('.va-tab').removeClass('active'); $(this).addClass('active');
     var t=$(this).data('tab');
-    $('#tabAudit').toggle(t==='audit'); $('#tabEval').toggle(t==='eval'); $('#tabRoster').toggle(t==='roster');
+    $('#tabAudit').toggle(t==='audit'); $('#tabEval').toggle(t==='eval'); $('#tabRoster').toggle(t==='roster'); $('#tabPlan').toggle(t==='plan');
     if (t==='eval') loadEvVendors($('#evKw').val()||'');   // 切入時重抓納管廠商(納管可能剛變動)
     if (t==='roster') loadRoster();
+    if (t==='plan') loadPlan();
 });
 
 /* ---------- 定期評核 ---------- */
@@ -1578,7 +1820,7 @@ function rsAddSelected(){
 }
 $('#rsCsvBtn').on('click', function(){
     if(!ROSTER) return;
-    var rows=[['大類','廠商ID','廠商名稱','廠商備註','建議等級','採用等級','類型']];
+    var rows=[['加工項目','廠商ID','廠商名稱','廠商備註','建議等級','採用等級','類型']];
     ROSTER.rows.forEach(function(r){ rows.push([r.main_cat_name||'',r.maker_id_no,r.maker_id||'',r.m_note||'',(r.suggest_grade||'')+(r.suggest_score==null?'':'('+r.suggest_score+')'),r.final_grade||'',r.is_managed?'納管':'手動列入']); });
     var csv='﻿'+rows.map(function(l){return l.map(function(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
     var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'})); a.download='合格供應商清冊_'+$('#rsYear').val()+'.csv'; a.click();
@@ -1588,12 +1830,197 @@ $('#rsPrintBtn').on('click', function(){
     var doc=META.roster_as_doc, docName=(doc&&doc.doc_name)||'合格供應商清冊', docNo=(doc&&doc.doc_no)||'2-PH-01-04';
     var head='<div style="text-align:center;"><div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'（'+ROSTER.year+' 年）</div></div>';
-    var rows='<table class="pf"><thead><tr><th style="width:40px;">序</th><th>大類</th><th>廠商ID</th><th>廠商名稱</th><th>廠商備註</th><th style="width:60px;">評核等級</th></tr></thead><tbody>';
+    var rows='<table class="pf"><thead><tr><th style="width:40px;">序</th><th>加工項目</th><th>廠商ID</th><th>廠商名稱</th><th>廠商備註</th><th style="width:60px;">評核等級</th></tr></thead><tbody>';
     ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td>'+esc(r.main_cat_name||'')+'</td><td>'+esc(r.maker_id_no)+'</td><td class="q">'+esc(r.maker_id||'')+'</td><td class="q">'+esc(r.m_note||'')+'</td><td>'+esc(r.final_grade||'—')+'</td></tr>'; });
     rows+='</tbody></table>';
     var sign='<table class="pf-sign"><tr><td>製表：____________</td><td>審核：____________</td><td>核准：____________</td></tr></table>';
     openPrintWindow(head+rows+sign, '合格供應商清冊', docNo);
 });
+
+/* ---------- 供應商稽核計劃(2-PH-01-06,年度版) ---------- */
+var PLANDATA = null;
+function loadPlan(){
+    var year = $('#planYear').val() || META.cur_year;
+    NProgress.start();
+    $.getJSON(API, {action:'plan_data', year:year}, function(res){
+        NProgress.done();
+        if(!res.ok){ alert(res.error||'載入失敗'); return; }
+        PLANDATA = res;
+        renderPlan(res);
+    }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function renderPlan(res){
+    var head = '<th style="text-align:left;">供應商名稱</th>';
+    for (var m=1;m<=12;m++) head += '<th>'+m+'月</th>';
+    head += '<th>備註</th>';
+    $('#planHeadRow').html(head);
+    var body='';
+    (res.rows||[]).forEach(function(r){
+        body += '<tr><td class="t-left"><b>'+esc(r.maker_id||'')+'</b></td>';
+        for (var m=1;m<=12;m++) body += '<td>'+(r.months&&r.months[m]?'V':'')+'</td>';
+        body += '<td class="t-left">'+esc(r.sub_cat_names||'')+'</td></tr>';
+    });
+    $('#planBody').html(body||'<tr><td colspan="14" style="padding:16px;color:#8a6d45;">本年度尚無稽核計畫對象</td></tr>');
+    var stMap={pending:'待核准',approved:'已核准',rejected:'已退回(修改後可重新送出)'};
+    var lockInfo = res.lock ? ('送出日期：'+fmtDate(res.lock.submit_date)+'　狀態：'+(stMap[res.lock.status]||res.lock.status)
+        + (res.lock.status==='approved'&&res.lock.approved_by_name ? '（核准：'+esc(res.lock.approved_by_name)+' '+fmtDate(res.lock.approved_at)+'）' : '')) : '尚未送出（可持續增列對象）';
+    $('#planLockInfo').text(lockInfo);
+    $('#planSubmitBtn').toggle(!!(PERMS.canEdit && !res.locked));
+    $('#planDecideBtn').remove();
+    if (res.lock && res.lock.status==='pending' && PERMS.canAdmin) {
+        $('<button id="planDecideBtn" class="b-att2" style="margin-left:8px;">核准/退回</button>').on('click', openPlanDecideMask).insertAfter('#planLockInfo');
+    }
+}
+$('#planYear').on('change', loadPlan);
+$('#planSubmitBtn').on('click', function(){
+    var d = prompt('請輸入送出計畫日期(YYYY-MM-DD)，留空＝今天：', META.today);
+    if (d===null) return;
+    d = d.trim() || META.today;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)){ alert('日期格式不正確'); return; }
+    if (!confirm('確定送出 '+$('#planYear').val()+' 年度稽核計畫？送出後將鎖定，不可再增列對象。')) return;
+    $.post(API, {action:'plan_submit', year:$('#planYear').val(), submit_date:d}, function(res){
+        if(!res.ok){ alert(res.error||'送出失敗'); return; }
+        alert(res.lock.status==='approved' ? '已送出並生效' : '已送出，待核准');
+        loadPlan();
+    }, 'json').fail(function(x){ alert('送出失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+});
+function openPlanDecideMask(){
+    if (confirm('要核准這份年度稽核計畫嗎？（取消可改為輸入退回原因）')) {
+        planDecideAction('approved', '');
+    } else {
+        var note = prompt('請輸入退回原因：');
+        if (!note || !note.trim()){ alert('退回必須填寫原因，已取消'); return; }
+        planDecideAction('rejected', note.trim());
+    }
+}
+function planDecideAction(decision, note){
+    $.post(API, {action:'plan_decide', year:$('#planYear').val(), decision:decision, note:note||''}, function(res){
+        if(!res.ok){ alert(res.error||'處理失敗'); return; }
+        alert(decision==='approved' ? '已核准' : '已退回');
+        loadPlan();
+    }, 'json').fail(function(x){ alert('處理失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+$('#planPrintBtn').on('click', function(){
+    if (!PLANDATA){ alert('請先載入資料'); return; }
+    var docName=(PLANDATA.plan_as_doc&&PLANDATA.plan_as_doc.doc_name)||'供應商稽核計劃';
+    var docNo=(PLANDATA.plan_as_doc&&PLANDATA.plan_as_doc.doc_no)||'2-PH-01-06';
+    var year=$('#planYear').val();
+    var head='<div style="text-align:center;"><div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(PLANDATA.company_name||'')+'</div>'
+        +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div>'
+        +'<div style="margin-top:4px;font-size:13px;">'+year+' 年</div></div>';
+    var rows='<table class="pf" style="table-layout:fixed;"><colgroup><col style="width:15%;">';
+    for (var m=1;m<=12;m++) rows+='<col>';
+    rows+='<col style="width:16%;"></colgroup><thead><tr><th>供應商名稱</th>';
+    for (m=1;m<=12;m++) rows+='<th>'+m+'月</th>';
+    rows+='<th>備註</th></tr></thead><tbody>';
+    (PLANDATA.rows||[]).forEach(function(r){
+        rows+='<tr><td class="q">'+esc(r.maker_id||'')+'</td>';
+        for (m=1;m<=12;m++) rows+='<td>'+(r.months&&r.months[m]?'V':'')+'</td>';
+        rows+='<td class="q">'+esc(r.sub_cat_names||'')+'</td></tr>';
+    });
+    rows+='</tbody></table>';
+    var lock = PLANDATA.lock;
+    var approveStamp = (lock && lock.status==='approved' && lock.approved_by_name)
+        ? vaStampHtml(lock.approved_by_name, fmtDate(lock.approved_at)||'') : '';
+    var maker = lock ? (lock.submitted_by_name||'') : CUR_USER_NAME;
+    var makeStamp = maker ? vaStampHtml(maker, fmtDate(lock?lock.submit_date:META.today)||'') : '';
+    var sign='<table class="pf-sign"><tr>'
+        +'<td style="width:50%;"><div style="font-size:11px;color:#555;">核准</div><div style="margin-top:2px;min-height:70px;">'+approveStamp+'</div></td>'
+        +'<td style="width:50%;"><div style="font-size:11px;color:#555;">製表人</div><div style="margin-top:2px;min-height:70px;">'+makeStamp+'</div></td>'
+        +'</tr></table>';
+    openPrintWindow(head+rows+sign, '供應商稽核計劃', docNo, true);
+});
+
+/* ---------- 查核表設定(管理員) ---------- */
+var CL_CATS = [];
+$('#btnChecklist').on('click', function(){
+    $.getJSON(API, {action:'get_checklist'}, function(res){
+        if(!res.ok){ alert(res.error||'載入失敗'); return; }
+        CL_CATS = (res.items||[]).map(function(cat){
+            return {code:cat[0], name:cat[1], items:cat[2].map(function(it){ return {item_id:+it[0], item_no:it[1], question:it[2], item_max:it[3]}; })};
+        });
+        $('#clSelfW').val(res.self_w); $('#clAuditW').val(res.audit_w); $('#clPassRate').val(res.pass_rate);
+        clRenderCats();
+        openMask('checklistMask');
+    });
+});
+function clRenderCats(){
+    var html='';
+    CL_CATS.forEach(function(cat, ci){
+        html += '<div style="border:1px solid #EADFC8;border-radius:6px;padding:8px;margin-bottom:8px;">';
+        html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">'
+            + '<input type="text" data-ci="'+ci+'" class="cl-code" placeholder="代碼(如A)" style="width:60px;" value="'+esc(cat.code||'')+'">'
+            + '<input type="text" data-ci="'+ci+'" class="cl-name" placeholder="類別名稱" style="flex:1;" value="'+esc(cat.name||'')+'">'
+            + '<span class="va-op" style="color:#DD5138;" onclick="clDelCat('+ci+')"><i class="fa fa-times"></i>刪除類別</span></div>';
+        html += '<table style="width:100%;font-size:12px;"><thead><tr><th style="width:60px;">項次</th><th>查核問題</th><th style="width:90px;">單項滿分</th><th style="width:40px;"></th></tr></thead><tbody>';
+        cat.items.forEach(function(it, ii){
+            html += '<tr><td><input type="text" data-ci="'+ci+'" data-ii="'+ii+'" class="cl-no" value="'+esc(it.item_no||'')+'" style="width:50px;"></td>'
+                + '<td><input type="text" data-ci="'+ci+'" data-ii="'+ii+'" class="cl-q" value="'+esc(it.question||'')+'" style="width:100%;"></td>'
+                + '<td><input type="number" data-ci="'+ci+'" data-ii="'+ii+'" class="cl-max" min="1" step="0.5" value="'+it.item_max+'" style="width:70px;"></td>'
+                + '<td><span class="va-op" style="color:#DD5138;" onclick="clDelItem('+ci+','+ii+')"><i class="fa fa-times"></i></span></td></tr>';
+        });
+        html += '</tbody></table><button type="button" class="b-att2" style="margin-top:6px;" onclick="clAddItem('+ci+')"><i class="fa fa-plus"></i> 新增項次</button>';
+        html += '</div>';
+    });
+    $('#clCatsBox').html(html);
+    clBindInputs();
+    clRecalcTotal();
+}
+function clBindInputs(){
+    $('.cl-code').off('input').on('input', function(){ CL_CATS[+$(this).data('ci')].code = $(this).val(); });
+    $('.cl-name').off('input').on('input', function(){ CL_CATS[+$(this).data('ci')].name = $(this).val(); });
+    $('.cl-no').off('input').on('input', function(){ CL_CATS[+$(this).data('ci')].items[+$(this).data('ii')].item_no = $(this).val(); });
+    $('.cl-q').off('input').on('input', function(){ CL_CATS[+$(this).data('ci')].items[+$(this).data('ii')].question = $(this).val(); });
+    $('.cl-max').off('input').on('input', function(){ CL_CATS[+$(this).data('ci')].items[+$(this).data('ii')].item_max = +$(this).val()||1; clRecalcTotal(); });
+}
+function clRecalcTotal(){
+    var t=0; CL_CATS.forEach(function(cat){ cat.items.forEach(function(it){ t+=(+it.item_max||0); }); });
+    $('#clTotalMax').text(t);
+}
+function clAddCat(){ CL_CATS.push({code:'', name:'新類別', items:[{item_id:0,item_no:'1',question:'',item_max:7}]}); clRenderCats(); }
+function clDelCat(ci){ if(CL_CATS.length<=1){alert('至少要保留一個類別');return;} CL_CATS.splice(ci,1); clRenderCats(); }
+function clAddItem(ci){ CL_CATS[ci].items.push({item_id:0, item_no:String(CL_CATS[ci].items.length+1), question:'', item_max:7}); clRenderCats(); }
+function clDelItem(ci,ii){ if(CL_CATS[ci].items.length<=1){alert('該類別至少要保留一個項次');return;} CL_CATS[ci].items.splice(ii,1); clRenderCats(); }
+function submitChecklist(){
+    for (var i=0;i<CL_CATS.length;i++){
+        if (!CL_CATS[i].name.trim()){ alert('類別名稱不可空白'); return; }
+        for (var j=0;j<CL_CATS[i].items.length;j++){
+            if (!CL_CATS[i].items[j].question.trim()){ alert('查核問題不可空白'); return; }
+            if (!(+CL_CATS[i].items[j].item_max>0)){ alert('單項滿分需大於0'); return; }
+        }
+    }
+    $.post(API, {action:'save_checklist', cats:JSON.stringify(CL_CATS),
+        self_w:$('#clSelfW').val(), audit_w:$('#clAuditW').val(), pass_rate:$('#clPassRate').val()}, function(res){
+        if(!res.ok){ alert(res.error||'儲存失敗'); return; }
+        META.items=res.items; META.total_max=res.total_max; META.self_w=res.self_w; META.audit_w=res.audit_w; META.pass_rate=res.pass_rate;
+        closeMask('checklistMask');
+        alert('已儲存（已完成評分的紀錄不受影響）');
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
+/* ---------- 簽核設定(管理員) ---------- */
+$('#btnSignSetting').on('click', function(){
+    $('#ssAuto').prop('checked', !!(META.sign_setting && META.sign_setting.auto));
+    $('#ssPlanNeed').prop('checked', !!(META.plan_sign_setting && META.plan_sign_setting.need));
+    $.getJSON(API, {action:'sign_dept_options'}, function(res){
+        if(!res.ok) return;
+        var $s=$('#ssDept').html('<option value="">（尚未設定）</option>');
+        (res.options||[]).forEach(function(o){ $s.append('<option value="'+o.id+'">'+esc(o.name)+'</option>'); });
+        $s.val((META.sign_setting && META.sign_setting.dept_id) || '');
+    });
+    openMask('signSetMask');
+});
+function submitSignSetting(){
+    $.post(API, {action:'save_sign_setting', auto:$('#ssAuto').is(':checked')?1:0, dept_id:$('#ssDept').val()||0}, function(res){
+        if(!res.ok){ alert(res.error||'儲存失敗'); return; }
+        META.sign_setting = res.setting;
+        $.post(API, {action:'save_plan_sign_setting', need:$('#ssPlanNeed').is(':checked')?1:0}, function(res2){
+            if(!res2.ok){ alert(res2.error||'儲存失敗'); return; }
+            META.plan_sign_setting = res2.setting;
+            closeMask('signSetMask');
+        }, 'json');
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
 
 /* ---------- 兩年未交易外包廠 ---------- */
 $('#rsStaleBtn').on('click', function(){
@@ -1629,7 +2056,11 @@ $('.va-mask').on('click', function(e){ if (e.target===this) this.style.display='
 
 $(window).on('scroll', function(){ $('#vaToTop').toggle($(window).scrollTop()>200); });
 
-if (canView) loadMeta(function(){ loadRound(); });
+if (canView) loadMeta(function(){
+    loadRound();
+    var m = /[?&]sign=(\d+)/.exec(location.search);
+    if (m) openSignMask(+m[1]);
+});
 </script>
 </body>
 </html>

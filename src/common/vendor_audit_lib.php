@@ -15,6 +15,10 @@
  * KPI：den=該期對象數(排除停用)；num=其中已稽核(audit_date 非空)者。
  */
 
+require_once __DIR__ . '/approval_lib.php';
+require_once __DIR__ . '/delegate_lib.php';
+require_once __DIR__ . '/org_role_lib.php';
+
 // maker_list.status='X' 代表停用（比照 master_data 廠商分頁：讀取一律 status<>'X'）
 const VENDOR_AUDIT_DISABLED = 'X';
 
@@ -103,6 +107,50 @@ function vendor_audit_ensure_schema(PDO $db): void {
         KEY idx_target (target_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='供應商稽核佐證附件(供應商自評等)'");
 
+    // 查核表題庫(可設定化)：類別/項次/單項滿分皆可調整；已評分的稽核紀錄改用凍結快照,不受後續調整影響
+    $db->exec("CREATE TABLE IF NOT EXISTS vendor_audit_checklist_cat (
+        cat_id INT AUTO_INCREMENT PRIMARY KEY,
+        code VARCHAR(10) NULL,
+        name VARCHAR(60) NOT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='供應商稽核查核表-類別(可設定化)'");
+    $db->exec("CREATE TABLE IF NOT EXISTS vendor_audit_checklist_item (
+        item_id INT AUTO_INCREMENT PRIMARY KEY,
+        cat_id INT NOT NULL,
+        item_no VARCHAR(10) NOT NULL COMMENT '顯示用項次編號(管理員可自訂,非資料庫鍵)',
+        question VARCHAR(300) NOT NULL,
+        item_max DECIMAL(5,1) NOT NULL DEFAULT 7,
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        KEY idx_cat (cat_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='供應商稽核查核表-項次(可設定化,含單項滿分)'");
+    // 稽核紀錄：完成流程/簽核狀態 + 題庫快照(凍結當時查核表內容,不受後續調整影響)
+    foreach ([
+        "ALTER TABLE vendor_audit_target ADD COLUMN status VARCHAR(12) NOT NULL DEFAULT 'draft' COMMENT 'draft/completed/pending/approved/rejected'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN checklist_snapshot MEDIUMTEXT NULL COMMENT '首次登錄分數時凍結的查核表內容(類別/項次/滿分/權重/合格率) JSON'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN signed_by_name VARCHAR(50) NULL COMMENT '主管簽核人姓名(核准/自動核可時寫入)'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN signed_at DATETIME NULL COMMENT '主管簽核時間'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN signed_is_deputy TINYINT NULL COMMENT '是否代理人代簽'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN completed_at DATETIME NULL COMMENT '按下完成的時間'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN completed_by INT NULL COMMENT '按下完成的使用者id'",
+        "ALTER TABLE vendor_audit_target ADD COLUMN completed_by_name VARCHAR(50) NULL",
+    ] as $sql) {
+        try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
+    }
+
+    // 供應商稽核計劃(2-PH-01-06,年度版)：送出後鎖定當年度不可再增列稽核對象
+    $db->exec("CREATE TABLE IF NOT EXISTS vendor_audit_plan_lock (
+        year INT PRIMARY KEY,
+        status VARCHAR(12) NOT NULL DEFAULT 'approved' COMMENT 'pending=待核准 approved=已核准(含免簽核直接生效) rejected=已退回(視同解鎖)',
+        submit_date DATE NOT NULL COMMENT '送出計畫日期(使用者可選,非一定是今天)',
+        submitted_at DATETIME NOT NULL,
+        submitted_by INT NULL,
+        submitted_by_name VARCHAR(50) NULL,
+        approved_by_name VARCHAR(50) NULL,
+        approved_at DATETIME NULL
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='供應商稽核計劃-年度送出鎖定'");
+
     foreach ([['vendor_audit_view','稽核檢閱'],['vendor_audit_edit','稽核登錄'],['vendor_audit_admin','稽核管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='vendor_audit' LIMIT 1");
         $st->execute([$r[0]]);
@@ -124,14 +172,17 @@ function vendor_audit_company_name(PDO $db): string {
 }
 
 /* ---- 綁定的 AS 表單（列印表單名稱/編號與 AS 文件管理連動）---- */
+/** 綁定的 AS 文件；doc_no 已附加版次供直接列印用（見 ai-rules/16 第三節，無版次不附加） */
 function vendor_audit_bound_asdoc(PDO $db, string $key = 'vendor_audit_as_doc_id'): ?array {
     $id = (int)vendor_eval_setting($db, $key, 0);
     if ($id <= 0) return null;
     try {
-        $st = $db->prepare("SELECT id, doc_no, doc_name FROM as_document WHERE id=? AND (is_deleted IS NULL OR is_deleted=0) LIMIT 1");
+        $st = $db->prepare("SELECT id, doc_no, doc_name, current_version FROM as_document WHERE id=? AND (is_deleted IS NULL OR is_deleted=0) LIMIT 1");
         $st->execute([$id]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
-        return $r ?: null;
+        if (!$r) return null;
+        $r['doc_no'] = $r['doc_no'] . (string)($r['current_version'] ?? '');
+        return $r;
     } catch (Throwable $e) { return null; }
 }
 
@@ -208,19 +259,23 @@ function vendor_audit_items(): array {
     ];
 }
 
-/** 由 scores_json（{item_id:{self,audit}}）計算各類與總合格率、判定。分數留空以0計。 */
-function vendor_audit_compute_rates(array $scores): array {
+/** 由 scores_json（{item_id:{self,audit}}）+ 查核表設定($cfg，見 vendor_audit_resolve_cfg)計算各類與總合格率、判定。分數留空以0計。 */
+function vendor_audit_compute_rates(array $scores, array $cfg): array {
     $cats = [];
     $tSelf = 0; $tAudit = 0; $tMax = 0;
-    foreach (vendor_audit_items() as $cat) {
+    $selfW = (float)($cfg['self_w'] ?? VENDOR_AUDIT_SELF_W);
+    $auditW = (float)($cfg['audit_w'] ?? VENDOR_AUDIT_AUDIT_W);
+    $passRate = (float)($cfg['pass_rate'] ?? VENDOR_AUDIT_PASS_RATE);
+    foreach (($cfg['items'] ?? []) as $cat) {
         [$code, $name, $items] = $cat;
         $cSelf = 0; $cAudit = 0; $cMax = 0;
         foreach ($items as $it) {
             $iid = (string)$it[0];
-            $cMax += VENDOR_AUDIT_ITEM_MAX;
+            $iMax = (float)($it[3] ?? VENDOR_AUDIT_ITEM_MAX);
+            $cMax += $iMax;
             $s = $scores[$iid] ?? null;
-            $sv = (is_array($s) && isset($s['self'])  && is_numeric($s['self']))  ? max(0, min(VENDOR_AUDIT_ITEM_MAX, (float)$s['self']))  : 0;
-            $av = (is_array($s) && isset($s['audit']) && is_numeric($s['audit'])) ? max(0, min(VENDOR_AUDIT_ITEM_MAX, (float)$s['audit'])) : 0;
+            $sv = (is_array($s) && isset($s['self'])  && is_numeric($s['self']))  ? max(0, min($iMax, (float)$s['self']))  : 0;
+            $av = (is_array($s) && isset($s['audit']) && is_numeric($s['audit'])) ? max(0, min($iMax, (float)$s['audit'])) : 0;
             $cSelf += $sv; $cAudit += $av;
         }
         $cats[] = [
@@ -233,14 +288,282 @@ function vendor_audit_compute_rates(array $scores): array {
     }
     $selfRate  = $tMax ? round($tSelf/$tMax*100, 1) : 0;
     $auditRate = $tMax ? round($tAudit/$tMax*100, 1) : 0;
-    $overall   = round($selfRate*VENDOR_AUDIT_SELF_W + $auditRate*VENDOR_AUDIT_AUDIT_W, 1);
+    $overall   = round($selfRate*$selfW + $auditRate*$auditW, 1);
     return [
         'categories'=>$cats,
         'total'=>['max'=>$tMax, 'self_sum'=>$tSelf, 'audit_sum'=>$tAudit,
                   'self_rate'=>$selfRate, 'audit_rate'=>$auditRate,
-                  'overall_rate'=>$overall, 'judge'=>$overall >= VENDOR_AUDIT_PASS_RATE ? 'pass' : 'fail'],
+                  'overall_rate'=>$overall, 'judge'=>$overall >= $passRate ? 'pass' : 'fail'],
     ];
 }
+
+/* ============================================================
+ * 查核表題庫(可設定化)：類別/項次/單項滿分/權重/合格率皆可由管理員調整。
+ * 總分滿分＝所有生效項次滿分加總,系統自動算(不可手填)。
+ * 已進行過評分的稽核紀錄一律凍結當時的查核表內容(vendor_audit_target.checklist_snapshot)，
+ * 之後管理員再調整查核表/權重都不會回頭影響舊紀錄——見 vendor_audit_resolve_cfg()。
+ * ============================================================ */
+function vendor_audit_checklist_ensure_seed(PDO $db): void {
+    $n = (int)$db->query("SELECT COUNT(*) FROM vendor_audit_checklist_item")->fetchColumn();
+    if ($n > 0) return;
+    $sort = 0;
+    foreach (vendor_audit_items() as $cat) {
+        [$code, $name, $items] = $cat;
+        $sort += 10;
+        $db->prepare("INSERT INTO vendor_audit_checklist_cat (code, name, sort_order, is_active) VALUES (?,?,?,1)")
+           ->execute([$code, $name, $sort]);
+        $catId = (int)$db->lastInsertId();
+        $isort = 0;
+        foreach ($items as $it) {
+            $isort += 10;
+            $db->prepare("INSERT INTO vendor_audit_checklist_item (cat_id, item_no, question, item_max, sort_order, is_active) VALUES (?,?,?,?,?,1)")
+               ->execute([$catId, (string)$it[0], $it[1], VENDOR_AUDIT_ITEM_MAX, $isort]);
+        }
+    }
+}
+
+/** 自評/稽核權重與合格率門檻(可由管理員調整；預設沿用原本常數) */
+function vendor_audit_weights(PDO $db): array {
+    return [
+        'self_w'    => (float)vendor_eval_setting($db, 'vendor_audit_self_w', VENDOR_AUDIT_SELF_W),
+        'audit_w'   => (float)vendor_eval_setting($db, 'vendor_audit_audit_w', VENDOR_AUDIT_AUDIT_W),
+        'pass_rate' => (float)vendor_eval_setting($db, 'vendor_audit_pass_rate', VENDOR_AUDIT_PASS_RATE),
+    ];
+}
+function vendor_audit_save_weights(PDO $db, float $selfW, float $auditW, float $passRate): void {
+    $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
+                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+    $up->execute(['vendor_audit_self_w', (string)$selfW]);
+    $up->execute(['vendor_audit_audit_w', (string)$auditW]);
+    $up->execute(['vendor_audit_pass_rate', (string)$passRate]);
+}
+
+/** 目前生效中的查核表：[[code,name,[[item_id,item_no,question,item_max],...]],...] */
+function vendor_audit_checklist_live(PDO $db): array {
+    vendor_audit_checklist_ensure_seed($db);
+    $cats = $db->query("SELECT cat_id, code, name FROM vendor_audit_checklist_cat WHERE is_active=1 ORDER BY sort_order, cat_id")->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    $ist = $db->prepare("SELECT item_id, item_no, question, item_max FROM vendor_audit_checklist_item WHERE cat_id=? AND is_active=1 ORDER BY sort_order, item_id");
+    foreach ($cats as $c) {
+        $ist->execute([$c['cat_id']]);
+        $items = [];
+        foreach ($ist->fetchAll(PDO::FETCH_ASSOC) as $it) {
+            $items[] = [(string)$it['item_id'], (string)$it['item_no'], $it['question'], (float)$it['item_max']];
+        }
+        if ($items) $out[] = [$c['code'], $c['name'], $items];
+    }
+    return $out;
+}
+
+/** 目前生效中的完整查核表設定(給新草稿使用；已凍結快照的目標請用 vendor_audit_resolve_cfg) */
+function vendor_audit_checklist_config(PDO $db): array {
+    $items = vendor_audit_checklist_live($db);
+    $w = vendor_audit_weights($db);
+    $total = 0;
+    foreach ($items as $cat) foreach ($cat[2] as $it) $total += $it[3];
+    return ['items'=>$items, 'total_max'=>$total, 'self_w'=>$w['self_w'], 'audit_w'=>$w['audit_w'], 'pass_rate'=>$w['pass_rate']];
+}
+
+/** 解析某稽核目標「當時應採用」的查核表設定：已有快照就回放凍結內容，否則採用目前生效版本 */
+function vendor_audit_resolve_cfg(PDO $db, ?string $snapshotJson): array {
+    if ($snapshotJson) {
+        $d = json_decode($snapshotJson, true);
+        if (is_array($d) && !empty($d['items'])) return $d;
+    }
+    return vendor_audit_checklist_config($db);
+}
+
+/** 管理員儲存查核表(類別/項次/單項滿分)：整批覆蓋現行生效版本；不影響已凍結快照的舊紀錄 */
+function vendor_audit_checklist_save(PDO $db, array $cats): void {
+    vendor_audit_checklist_ensure_seed($db);
+    $db->exec("UPDATE vendor_audit_checklist_cat SET is_active=0");
+    $db->exec("UPDATE vendor_audit_checklist_item SET is_active=0");
+    $sort = 0;
+    foreach ($cats as $cat) {
+        $code = trim((string)($cat['code'] ?? ''));
+        $name = trim((string)($cat['name'] ?? ''));
+        if ($name === '') continue;
+        $sort += 10;
+        $catId = (int)($cat['cat_id'] ?? 0);
+        $hit = false;
+        if ($catId > 0) {
+            $up = $db->prepare("UPDATE vendor_audit_checklist_cat SET code=?, name=?, sort_order=?, is_active=1 WHERE cat_id=?");
+            $up->execute([$code, $name, $sort, $catId]);
+            $hit = $up->rowCount() > 0;
+        }
+        if (!$hit) {
+            $db->prepare("INSERT INTO vendor_audit_checklist_cat (code, name, sort_order, is_active) VALUES (?,?,?,1)")
+               ->execute([$code, $name, $sort]);
+            $catId = (int)$db->lastInsertId();
+        }
+        $isort = 0;
+        foreach (($cat['items'] ?? []) as $it) {
+            $q = trim((string)($it['question'] ?? ''));
+            if ($q === '') continue;
+            $max = max(1, (float)($it['item_max'] ?? VENDOR_AUDIT_ITEM_MAX));
+            $isort += 10;
+            $itemNo = trim((string)($it['item_no'] ?? '')) ?: (string)$isort;
+            $itemId = (int)($it['item_id'] ?? 0);
+            $ihit = false;
+            if ($itemId > 0) {
+                $up = $db->prepare("UPDATE vendor_audit_checklist_item SET item_no=?, question=?, item_max=?, sort_order=?, is_active=1 WHERE item_id=? AND cat_id=?");
+                $up->execute([$itemNo, $q, $max, $isort, $itemId, $catId]);
+                $ihit = $up->rowCount() > 0;
+            }
+            if (!$ihit) {
+                $db->prepare("INSERT INTO vendor_audit_checklist_item (cat_id, item_no, question, item_max, sort_order, is_active) VALUES (?,?,?,?,?,1)")
+                   ->execute([$catId, $itemNo, $q, $max, $isort]);
+            }
+        }
+    }
+}
+
+/** 逐項驗證「完成」前的完整性：稽核員/建議結論必填,所有生效項次自評/稽核分皆需在 0~單項滿分內的整數 */
+function vendor_audit_validate_complete(array $post, array $cfg): array {
+    $errs = [];
+    if (trim((string)($post['auditor'] ?? '')) === '') $errs[] = '請填寫稽核員';
+    if (trim((string)($post['conclusion'] ?? '')) === '') $errs[] = '請選擇建議評鑑結果';
+    $scores = is_array($post['scores'] ?? null) ? $post['scores'] : [];
+    $badSelf = 0; $badAudit = 0;
+    foreach (($cfg['items'] ?? []) as $cat) {
+        foreach ($cat[2] as $it) {
+            $iid = (string)$it[0];
+            $iMax = (float)($it[3] ?? VENDOR_AUDIT_ITEM_MAX);
+            $s = $scores[$iid] ?? null;
+            $sv = is_array($s) ? ($s['self'] ?? null) : null;
+            $av = is_array($s) ? ($s['audit'] ?? null) : null;
+            $ok = function($v) use ($iMax) {
+                return $v !== null && $v !== '' && is_numeric($v) && (float)$v >= 0 && (float)$v <= $iMax && (float)$v == (int)$v;
+            };
+            if (!$ok($sv)) $badSelf++;
+            if (!$ok($av)) $badAudit++;
+        }
+    }
+    if ($badSelf)  $errs[] = "尚有 {$badSelf} 項自評分未填寫或超出範圍";
+    if ($badAudit) $errs[] = "尚有 {$badAudit} 項稽核分未填寫或超出範圍";
+    return $errs;
+}
+
+/* ============================================================
+ * 稽核紀錄簽核（完成後自動核可 或 送審核給生管部門往上主管；OR-gate 單層，見 approval_lib.php）
+ * ============================================================ */
+/** 簽核設定：自動簽核開關 + 簽核部門(管理員從「生管組或往上部門」擇一) */
+function vendor_audit_sign_setting(PDO $db): array {
+    $raw = json_decode((string)vendor_eval_setting($db, 'VENDOR_AUDIT_SIGN', ''), true);
+    $auto = (is_array($raw) && !empty($raw['auto'])) ? 1 : 0;
+    $deptId = (is_array($raw) && !empty($raw['dept_id'])) ? (int)$raw['dept_id'] : null;
+    $deptName = null;
+    if ($deptId) {
+        try { $st = $db->prepare("SELECT name FROM department WHERE id=?"); $st->execute([$deptId]); $deptName = $st->fetchColumn() ?: null; } catch (Throwable $e) {}
+    }
+    return ['auto'=>$auto, 'dept_id'=>$deptId, 'dept_name'=>$deptName];
+}
+function vendor_audit_sign_save_setting(PDO $db, int $auto, ?int $deptId): void {
+    $val = json_encode(['auto'=>$auto?1:0, 'dept_id'=>$deptId], JSON_UNESCAPED_UNICODE);
+    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('VENDOR_AUDIT_SIGN', ?)
+                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+    $st->execute([$val]);
+}
+/** 簽核部門下拉選項：從「生管部門」(org_role pm_dept)出發沿 department.parent_id 往上收集(含自己)，上限8層防呆 */
+function vendor_audit_sign_dept_options(PDO $db): array {
+    $startId = eg_org_dept($db, 'pm_dept');
+    if (!$startId) return [];
+    $out = []; $cur = $startId;
+    for ($hop = 0; $hop < 8 && $cur; $hop++) {
+        try {
+            $st = $db->prepare("SELECT id, name, parent_id FROM department WHERE id=?");
+            $st->execute([$cur]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { $r = false; }
+        if (!$r) break;
+        $out[] = ['id'=>(int)$r['id'], 'name'=>$r['name']];
+        $cur = $r['parent_id'] ? (int)$r['parent_id'] : null;
+    }
+    return $out;
+}
+/** 解析目前設定下實際該簽核的人（含代理/迴避解析）；找不到部門或主管回 null */
+function vendor_audit_resolve_signer(PDO $db, int $applicantUserId = 0): ?array {
+    $set = vendor_audit_sign_setting($db);
+    if (!$set['dept_id']) return null;
+    $mgr = eg_org_dept_manager($db, $set['dept_id']);
+    if (!$mgr) return null;
+    $res = eg_resolve_signer($db, (int)$mgr['id'], ['applicant_id'=>$applicantUserId, 'flow_key'=>'vendor_audit_sign', 'log'=>true]);
+    $sid = (int)$res['signer_id'];
+    $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+    $st->execute([$sid]);
+    $name = $st->fetchColumn();
+    return ['id'=>$sid, 'name'=>(string)($name ?: ''), 'is_deputy'=>!empty($res['is_delegated'])];
+}
+
+if (!function_exists('vendor_audit_notify_sign')) {
+/** 建立簽核通知（送給解析出的簽核人，mode=sign 動作完成前不消失）。回傳 live_event id（失敗回 0）。 */
+function vendor_audit_notify_sign(PDO $db, int $targetId, int $signerId, string $makerName, ?int $submittedByUid, string $submittedByName): int {
+    try {
+        $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                      WHERE ref_type='VENDOR_AUDIT_SIGN' AND ref_id=? AND (enddate IS NULL OR enddate >= CURDATE())")
+           ->execute([$targetId]);
+        $title = '供應商稽核待簽核：' . $makerName;
+        $content = $submittedByName . ' 完成供應商 ' . $makerName . ' 的稽核評鑑，請簽核。';
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, ?, '供應商稽核簽核', 1, 'VENDOR_AUDIT_SIGN', ?)")
+           ->execute([$title, $content, $submittedByUid, $targetId]);
+        $eventId = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'sign')")
+           ->execute([$eventId, $signerId]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            $recipients = eg_push_event_recipients($db, $eventId);
+            eg_push_send_to_users($db, $recipients, ['title'=>$title, 'body'=>mb_substr($content,0,480)]);
+        } catch (Throwable $e) {}
+        return $eventId;
+    } catch (Throwable $e) { error_log('[vendor_audit] notify_sign failed: ' . $e->getMessage()); return 0; }
+}}
+
+if (!function_exists('vendor_audit_close_sign_notice')) {
+/** 簽核人決行後結束此筆待簽核通知 */
+function vendor_audit_close_sign_notice(PDO $db, int $targetId, int $deciderUid): void {
+    try {
+        $st = $db->prepare("SELECT id FROM live_event WHERE ref_type='VENDOR_AUDIT_SIGN' AND ref_id=? AND (enddate IS NULL OR enddate >= CURDATE())");
+        $st->execute([$targetId]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $eid) {
+            $eid = (int)$eid;
+            $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY) WHERE id=?")->execute([$eid]);
+            $rs = $db->prepare("SELECT id FROM live_event_response WHERE live_event_id=? AND user_id=?");
+            $rs->execute([$eid, $deciderUid]);
+            if ($rid = $rs->fetchColumn()) {
+                $db->prepare("UPDATE live_event_response SET read_at=COALESCE(read_at,NOW()), signed_at=COALESCE(signed_at,NOW()) WHERE id=?")->execute([$rid]);
+            } else {
+                $db->prepare("INSERT INTO live_event_response (live_event_id, user_id, read_at, signed_at) VALUES (?,?,NOW(),NOW())")->execute([$eid, $deciderUid]);
+            }
+        }
+    } catch (Throwable $e) { error_log('[vendor_audit] close_sign_notice failed: ' . $e->getMessage()); }
+}}
+
+if (!function_exists('vendor_audit_notify_sign_result')) {
+/** 核准/退回結果通知原完成該筆的人（mode=read） */
+function vendor_audit_notify_sign_result(PDO $db, int $targetId, string $makerName, ?int $submittedByUid, string $deciderName, string $decision, ?string $note): void {
+    if (!$submittedByUid) return;
+    try {
+        if ($decision === 'approved') {
+            $title = '供應商稽核已核准：' . $makerName;
+            $content = $deciderName . ' 已核准供應商 ' . $makerName . ' 的稽核評鑑' . ($note ? '（意見：' . $note . '）' : '');
+        } else {
+            $title = '供應商稽核被退回：' . $makerName;
+            $content = $deciderName . ' 退回了供應商 ' . $makerName . ' 的稽核評鑑，原因：' . ($note ?: '（未填寫原因）') . '，請修改後重新完成送審。';
+        }
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, NULL, '供應商稽核簽核', 1, 'VENDOR_AUDIT_SIGN_RESULT', ?)")
+           ->execute([$title, $content, $targetId]);
+        $eventId = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'read')")
+           ->execute([$eventId, $submittedByUid]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            $recipients = eg_push_event_recipients($db, $eventId);
+            eg_push_send_to_users($db, $recipients, ['title'=>$title, 'body'=>mb_substr($content,0,480)]);
+        } catch (Throwable $e) {}
+    } catch (Throwable $e) { error_log('[vendor_audit] notify_sign_result failed: ' . $e->getMessage()); }
+}}
 
 /* ============================================================
  * 使用者 / 權限（roles module='vendor_audit'；admin⊃edit⊃view）
@@ -469,3 +792,134 @@ function vendor_audit_kpi_compute(PDO $db, int $year, int $month, array $params)
     $num = (int)($r['num'] ?? 0);
     return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];
 }
+
+/* ============================================================
+ * 供應商稽核計劃（2-PH-01-06，年度版：廠商×1~12月 V 標記，只顯示計畫不顯示結果）
+ * 送出計畫＝鎖定該年度不可再增列稽核對象；可設定是否需要核准(最高核准人員 org_role top_approver)簽核。
+ * ============================================================ */
+/** 是否需要核准簽核(不需=送出即視同已核准) */
+function vendor_audit_plan_sign_setting(PDO $db): array {
+    $raw = json_decode((string)vendor_eval_setting($db, 'VENDOR_AUDIT_PLAN_SIGN', ''), true);
+    return ['need' => (is_array($raw) && !empty($raw['need'])) ? 1 : 0];
+}
+function vendor_audit_plan_sign_save_setting(PDO $db, int $need): void {
+    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('VENDOR_AUDIT_PLAN_SIGN', ?)
+                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+    $st->execute([json_encode(['need'=>$need?1:0])]);
+}
+function vendor_audit_plan_lock_get(PDO $db, int $year): ?array {
+    $st = $db->prepare("SELECT * FROM vendor_audit_plan_lock WHERE year=?");
+    $st->execute([$year]);
+    return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+/** 該年度目前是否鎖定(不可再增列稽核對象)：pending/approved 都算鎖定，rejected 視同解鎖可修改重送 */
+function vendor_audit_plan_locked(PDO $db, int $year): bool {
+    $lock = vendor_audit_plan_lock_get($db, $year);
+    return $lock !== null && in_array($lock['status'], ['pending','approved'], true);
+}
+/** 送出年度計畫：一律立即鎖定；不需簽核者直接視為已核准，需簽核者狀態=待核准並回傳待通知的簽核人 */
+function vendor_audit_plan_submit(PDO $db, int $year, string $submitDate, int $byUid, string $byName): array {
+    $need = vendor_audit_plan_sign_setting($db)['need'];
+    $status = $need ? 'pending' : 'approved';
+    $approvedName = $need ? null : $byName;
+    $approvedAt   = $need ? null : date('Y-m-d H:i:s');
+    $st = $db->prepare("INSERT INTO vendor_audit_plan_lock (year, status, submit_date, submitted_at, submitted_by, submitted_by_name, approved_by_name, approved_at)
+                        VALUES (?,?,?,NOW(),?,?,?,?)
+                        ON DUPLICATE KEY UPDATE status=VALUES(status), submit_date=VALUES(submit_date), submitted_at=NOW(),
+                            submitted_by=VALUES(submitted_by), submitted_by_name=VALUES(submitted_by_name),
+                            approved_by_name=VALUES(approved_by_name), approved_at=VALUES(approved_at)");
+    $st->execute([$year, $status, $submitDate, $byUid, $byName, $approvedName, $approvedAt]);
+    return vendor_audit_plan_lock_get($db, $year);
+}
+/** 年度計畫資料(給列印用)：彙總該年度(不分上下半年)所有目標的預定月份標記 + 廠商小類 */
+function vendor_audit_plan_data(PDO $db, int $year): array {
+    $st = $db->prepare("SELECT t.maker_id_no, m.maker_id, sc.sub_cat_names, t.plan_month
+                        FROM vendor_audit_target t
+                        JOIN vendor_audit_round r ON r.round_id=t.round_id AND r.year=?
+                        JOIN maker_list m ON m.maker_id_no=t.maker_id_no
+                        " . vendor_audit_subcat_join() . "
+                        WHERE t.plan_month IS NOT NULL
+                        ORDER BY m.maker_id");
+    $st->execute([$year]);
+    $rows = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $mid = $r['maker_id_no'];
+        if (!isset($rows[$mid])) $rows[$mid] = ['maker_id_no'=>$mid, 'maker_id'=>$r['maker_id'], 'sub_cat_names'=>$r['sub_cat_names'], 'months'=>[]];
+        $rows[$mid]['months'][(int)$r['plan_month']] = true;
+    }
+    return array_values($rows);
+}
+/** 廠商小類(加工項目)彙總 JOIN 片段：多個小類以「、」串接。大類本身不對外顯示(小類即代表加工項目)。別名固定用 m 代表 maker_list。 */
+function vendor_audit_subcat_join(): string {
+    return "LEFT JOIN (SELECT mp.maker_id_no, GROUP_CONCAT(s.sub_cat_name ORDER BY s.sub_cat_id SEPARATOR '、') AS sub_cat_names
+                        FROM maker_sub_category_mapping mp
+                        JOIN dict_maker_sub_category s ON s.sub_cat_id=mp.sub_cat_id AND s.is_active=1
+                        GROUP BY mp.maker_id_no) sc ON sc.maker_id_no = m.maker_id_no";
+}
+
+if (!function_exists('vendor_audit_notify_plan_sign')) {
+function vendor_audit_notify_plan_sign(PDO $db, int $year, int $signerId, ?int $submittedByUid, string $submittedByName): int {
+    try {
+        $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                      WHERE ref_type='VENDOR_AUDIT_PLAN' AND ref_id=? AND (enddate IS NULL OR enddate >= CURDATE())")
+           ->execute([$year]);
+        $title = $year . ' 年供應商稽核計劃待核准';
+        $content = $submittedByName . ' 送出 ' . $year . ' 年供應商稽核計劃，請核准。';
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, ?, '供應商稽核計劃', 1, 'VENDOR_AUDIT_PLAN', ?)")
+           ->execute([$title, $content, $submittedByUid, $year]);
+        $eventId = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'sign')")
+           ->execute([$eventId, $signerId]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            $recipients = eg_push_event_recipients($db, $eventId);
+            eg_push_send_to_users($db, $recipients, ['title'=>$title, 'body'=>mb_substr($content,0,480)]);
+        } catch (Throwable $e) {}
+        return $eventId;
+    } catch (Throwable $e) { error_log('[vendor_audit] notify_plan_sign failed: ' . $e->getMessage()); return 0; }
+}}
+
+if (!function_exists('vendor_audit_close_plan_notice')) {
+function vendor_audit_close_plan_notice(PDO $db, int $year, int $deciderUid): void {
+    try {
+        $st = $db->prepare("SELECT id FROM live_event WHERE ref_type='VENDOR_AUDIT_PLAN' AND ref_id=? AND (enddate IS NULL OR enddate >= CURDATE())");
+        $st->execute([$year]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $eid) {
+            $eid = (int)$eid;
+            $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY) WHERE id=?")->execute([$eid]);
+            $rs = $db->prepare("SELECT id FROM live_event_response WHERE live_event_id=? AND user_id=?");
+            $rs->execute([$eid, $deciderUid]);
+            if ($rid = $rs->fetchColumn()) {
+                $db->prepare("UPDATE live_event_response SET read_at=COALESCE(read_at,NOW()), signed_at=COALESCE(signed_at,NOW()) WHERE id=?")->execute([$rid]);
+            } else {
+                $db->prepare("INSERT INTO live_event_response (live_event_id, user_id, read_at, signed_at) VALUES (?,?,NOW(),NOW())")->execute([$eid, $deciderUid]);
+            }
+        }
+    } catch (Throwable $e) { error_log('[vendor_audit] close_plan_notice failed: ' . $e->getMessage()); }
+}}
+
+if (!function_exists('vendor_audit_notify_plan_result')) {
+function vendor_audit_notify_plan_result(PDO $db, int $year, ?int $submittedByUid, string $deciderName, string $decision, ?string $note): void {
+    if (!$submittedByUid) return;
+    try {
+        if ($decision === 'approved') {
+            $title = $year . ' 年供應商稽核計劃已核准';
+            $content = $deciderName . ' 已核准 ' . $year . ' 年供應商稽核計劃' . ($note ? '（意見：' . $note . '）' : '');
+        } else {
+            $title = $year . ' 年供應商稽核計劃被退回';
+            $content = $deciderName . ' 退回了 ' . $year . ' 年供應商稽核計劃，原因：' . ($note ?: '（未填寫原因）') . '，請修改後重新送出。';
+        }
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, NULL, '供應商稽核計劃', 1, 'VENDOR_AUDIT_PLAN_RESULT', ?)")
+           ->execute([$title, $content, $year]);
+        $eventId = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'read')")
+           ->execute([$eventId, $submittedByUid]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            $recipients = eg_push_event_recipients($db, $eventId);
+            eg_push_send_to_users($db, $recipients, ['title'=>$title, 'body'=>mb_substr($content,0,480)]);
+        } catch (Throwable $e) {}
+    } catch (Throwable $e) { error_log('[vendor_audit] notify_plan_result failed: ' . $e->getMessage()); }
+}}
