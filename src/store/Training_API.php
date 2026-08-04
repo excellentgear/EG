@@ -107,7 +107,7 @@ case 'meta': {
     jout(['perms'=>$perms, 'departments'=>$depts, 'years'=>$years, 'locations'=>tr_locations($db),
           'shifts'=>training_shifts($db), 'settings'=>training_settings($db), 'event_categories'=>$cats,
           'cat_internal_eff'=>training_category_id($db, 'internal'), 'cat_external_eff'=>training_category_id($db, 'external'),
-          'att_cats'=>TRAINING_ATT_CATS, 'eval_methods'=>TRAINING_EVAL_METHODS,
+          'att_cats'=>TRAINING_ATT_CATS, 'eval_methods'=>TRAINING_EVAL_METHODS, 'ojt_item_types'=>TRAINING_OJT_ITEM_TYPES,
           'dept_groups'=>training_dept_groups($db), 'units'=>training_units($db),
           'as_docs'=>(function($db){ try { return $db->query("SELECT id, doc_no, doc_name FROM as_document
                         WHERE COALESCE(is_deleted,0)=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC); }
@@ -267,7 +267,8 @@ case 'upload_attach': {
     // 類別可複選（同一份掃描 PDF 可能同時是簽到表＋試卷），存逗號分隔
     $cats = array_values(array_filter(array_map('trim', explode(',', (string)($_POST['cat'] ?? ''))),
                                       fn($c) => isset(TRAINING_ATT_CATS[$c])));
-    $cat = $cats ? implode(',', array_unique($cats)) : 'other';
+    if (!$cats) jerr('請至少勾選一個附件類別');   // 鐵律8附件標籤鐵則：後端同步擋，避免略過前端直打 API
+    $cat = implode(',', array_unique($cats));
     if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
         $err = $_FILES['file']['error'] ?? -1;
         jerr($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE
@@ -439,9 +440,15 @@ case 'session_detail': {
         $in = implode(',', $deptIds);
         $dnames = $db->query("SELECT name FROM department WHERE id IN ({$in}) ORDER BY sort_order, id")->fetchAll(PDO::FETCH_COLUMN);
     }
+    $oq = $db->prepare("SELECT item_id, item_type, content FROM training_ojt_item WHERE session_id=? ORDER BY sort_order, item_id");
+    $oq->execute([$sid]);
+    $oh = $db->prepare("SELECT assessor_name FROM training_ojt_checklist WHERE session_id=?");
+    $oh->execute([$sid]);
+    $ohRow = $oh->fetch(PDO::FETCH_ASSOC);
     jout(['session'=>$s, 'dept_ids'=>$deptIds, 'dept_names'=>$dnames,
           'days'=>$dq->fetchAll(PDO::FETCH_ASSOC), 'attendees'=>$aq->fetchAll(PDO::FETCH_ASSOC),
-          'attachments'=>training_attachments($db, $sid)]);
+          'attachments'=>training_attachments($db, $sid),
+          'ojt_items'=>$oq->fetchAll(PDO::FETCH_ASSOC), 'ojt_assessor_name'=>$ohRow['assessor_name'] ?? '']);
 }
 
 /* ---------- 上課地點主檔（設定後可下拉選擇） ---------- */
@@ -1008,6 +1015,47 @@ case 'get_attendees': {
     jout(['attendees'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
 }
 
+/* OJT/實作口試考核表：考核項目清單＋考官姓名（僅內訓；建立者＝內訓講師本人或訓練管理員） */
+case 'ojt_list': {
+    $sid = (int)($_GET['session_id'] ?? 0);
+    $items = $db->prepare("SELECT item_id, item_type, content FROM training_ojt_item WHERE session_id=? ORDER BY sort_order, item_id");
+    $items->execute([$sid]);
+    $hd = $db->prepare("SELECT assessor_name FROM training_ojt_checklist WHERE session_id=?");
+    $hd->execute([$sid]);
+    $h = $hd->fetch(PDO::FETCH_ASSOC);
+    jout(['items'=>$items->fetchAll(PDO::FETCH_ASSOC), 'assessor_name'=>$h['assessor_name'] ?? '']);
+}
+
+/* 儲存 OJT 考核項目清單（整批取代） */
+case 'ojt_save': {
+    $sid = (int)($_POST['session_id'] ?? 0);
+    $st = $db->prepare("SELECT train_type, trainer_id FROM training_session WHERE session_id=?");
+    $st->execute([$sid]);
+    $session = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$session) jerr('找不到場次');
+    if (!training_ojt_can_edit($perms, $session, $uid)) jerr('無此場次 OJT 考核表編輯權限（僅內訓講師本人或訓練管理員）', 403);
+    $assessor = trim((string)($_POST['assessor_name'] ?? ''));
+    $items = json_decode((string)($_POST['items'] ?? '[]'), true);
+    if (!is_array($items)) $items = [];
+    try {
+        $db->beginTransaction();
+        $db->prepare("REPLACE INTO training_ojt_checklist (session_id, assessor_name, updated_at, updated_by, updated_by_name)
+                      VALUES (?,?,NOW(),?,?)")->execute([$sid, $assessor ?: null, $uid, $uname]);
+        $db->prepare("DELETE FROM training_ojt_item WHERE session_id=?")->execute([$sid]);
+        $ins = $db->prepare("INSERT INTO training_ojt_item (session_id, sort_order, item_type, content) VALUES (?,?,?,?)");
+        $n = 0;
+        foreach ($items as $it) {
+            $content = trim((string)($it['content'] ?? ''));
+            if ($content === '') continue;
+            $type = ($it['item_type'] ?? '') === 'oral' ? 'oral' : 'practice';
+            $ins->execute([$sid, $n, $type, $content]);
+            $n++;
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存考核項目失敗：'.$e->getMessage(), 500); }
+    jout(['total'=>$n]);
+}
+
 /* 儲存參加人員名單（整批取代；同步應到/實到人數） */
 case 'save_attendees': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
@@ -1107,6 +1155,8 @@ case 'delete_session': {
         $db->prepare("DELETE FROM training_attendee WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_session_day WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_session_dept WHERE session_id=?")->execute([$sid]);
+        $db->prepare("DELETE FROM training_ojt_item WHERE session_id=?")->execute([$sid]);
+        $db->prepare("DELETE FROM training_ojt_checklist WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_session WHERE session_id=?")->execute([$sid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：'.$e->getMessage(), 500); }

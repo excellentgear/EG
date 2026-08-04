@@ -426,13 +426,23 @@ function training_shifts(PDO $db): array {
  * 附件（鐵律5／ai-rules/07）：DB 只存檔名，完整路徑一律在讀取當下用「目前設定值」現場組出。
  *   換 NAS 磁碟或搬資料夾時只要改設定值，舊附件立刻讀得到，不必動 DB。
  * ============================================================ */
-const TRAINING_ATT_CATS = ['sign'=>'簽到表', 'material'=>'教材/講義', 'exam'=>'試卷/測驗', 'photo'=>'上課照片', 'other'=>'其他'];
+const TRAINING_ATT_CATS = ['sign'=>'簽到表', 'material'=>'教材/講義', 'exam'=>'試卷/測驗', 'photo'=>'上課照片', 'ojt'=>'OJT/實作口試考核表', 'other'=>'其他'];
+/* OJT/實作口試考核表 考核方式 */
+const TRAINING_OJT_ITEM_TYPES = ['practice'=>'實作演練', 'oral'=>'口試詢問'];
 /* 評鑑方式（確認開課時選定）；notice=宣導＝免評鑑，選了它參加人員一律記 exempt */
 const TRAINING_EVAL_METHODS = ['exam'=>'試券', 'report'=>'心得', 'practice'=>'實作', 'oral'=>'口試', 'notice'=>'宣導（免評鑑）'];
 
 /** 附件目錄（寫檔／讀檔皆用這支；預設＝全站附件根資料夾＼教育訓練＼，見 attach_lib.php） */
 function training_attach_dir(PDO $db): string {
     return eg_attach_dir($db, 'training_nas_dir', '教育訓練');
+}
+
+/** OJT/實作口試考核表 建立/編輯權限：內訓講師本人或訓練管理員；外訓不適用 */
+function training_ojt_can_edit(array $perms, array $session, int $uid): bool {
+    if (empty($perms['canEdit'])) return false;
+    if (($session['train_type'] ?? '') !== 'internal') return false;
+    if (!empty($perms['canAdmin'])) return true;
+    return !empty($session['trainer_id']) && (int)$session['trainer_id'] === $uid;
 }
 /** 相容舊呼叫：回傳 [實體目錄, URL前綴]（附件一律走 API download_attach，URL 前綴已不使用） */
 function training_attach_dirs(PDO $db): array {
