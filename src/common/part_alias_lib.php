@@ -261,6 +261,75 @@ if (!function_exists('eg_part_alias_related_dids')) {
     }
 }
 
+if (!function_exists('eg_part_alias_linked_part_nos')) {
+    /**
+     * 給一個料號文字，找出透過「客戶代號／等同料號」綁定（linked_d_id）而來的其他料號
+     * （雙向：這個料號綁去的、或別的料號綁來這個料號的）。
+     * 用於合併顯示圖面／報價／附件：查資料時除了這個料號本身，也要含這些綁定料號，
+     * 呼叫端可用回傳的 part_no/customer_name 組出「來自綁定料號 XXX」標示。
+     * @return array 每列 ['d_id'=>int,'part_no'=>string,'customer_name'=>?string]（不含自己）
+     */
+    function eg_part_alias_linked_part_nos(PDO $db, string $partNo): array {
+        $partNo = trim($partNo);
+        if ($partNo === '') return [];
+        try {
+            $st = $db->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id = ?");
+            $st->execute([$partNo]);
+            $baseDids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+            if (!$baseDids) return [];
+            $extra = [];
+            foreach ($baseDids as $bd) {
+                foreach (eg_part_alias_related_dids($db, $bd) as $rid) {
+                    if (!in_array($rid, $baseDids, true)) $extra[$rid] = true;
+                }
+            }
+            if (!$extra) return [];
+            $ph = implode(',', array_fill(0, count($extra), '?'));
+            $q = $db->prepare("SELECT d.d_id, d.D_Setting_Id, c.customer AS customer_name
+                                FROM d_setting d LEFT JOIN customer_list c ON c.customer_id = d.Customer_Id
+                                WHERE d.d_id IN ($ph)");
+            $q->execute(array_keys($extra));
+            $out = [];
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                // 綁到的另一筆料號剛好跟自己同字串（不同客戶各自建檔）不算「綁定帶入」，
+                // 那本來就會被原本的文字比對撈到，混進來反而會誤標成綁定來源
+                if (strcasecmp($r['D_Setting_Id'], $partNo) === 0) continue;
+                $out[] = ['d_id' => (int)$r['d_id'], 'part_no' => $r['D_Setting_Id'], 'customer_name' => $r['customer_name']];
+            }
+            return $out;
+        } catch (Exception $e) { return []; }
+    }
+}
+
+if (!function_exists('eg_part_alias_canonical')) {
+    /**
+     * 這個 d_id 是否被別的料號登記為別名（linked_d_id）＝現行正確料號另有其人？
+     * 用途：報價當年用的是舊／客戶料號（自己也有建過 d_setting，例如 22*30*35-BASE），
+     * 後來才建立現行正式料號（例如 P60-045-01）並把舊料號登記成它的別名（linked_d_id 指回舊料號）。
+     * 這種報價項目拿去轉訂單時，要自動更正成現行料號，不可繼續使用舊料號建單。
+     * 只在「即將寫入正式單據」的最後一步呼叫（如 OP轉訂單建單時）；不要用來改報價單本身的顯示。
+     * 同一 linked_d_id 若被多個料號登記（少見），取最近登記的一筆（alias_id 最大）。
+     * @return array ['d_id'=>正確料號id, 'corrected'=>bool, 'via_code'=>觸發更正的代號, 'from_part_no'=>原料號]
+     */
+    function eg_part_alias_canonical(PDO $db, int $d_id): array {
+        $out = ['d_id' => $d_id, 'corrected' => false, 'via_code' => null, 'from_part_no' => null];
+        if ($d_id <= 0) return $out;
+        try {
+            $st = $db->prepare("SELECT a.d_id, a.alias_code, d.D_Setting_Id AS from_part_no
+                                FROM d_setting_alias a LEFT JOIN d_setting d ON d.d_id = a.linked_d_id
+                                WHERE a.linked_d_id = ? ORDER BY a.alias_id DESC LIMIT 1");
+            $st->execute([$d_id]);
+            if ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+                $out['d_id']         = (int)$r['d_id'];
+                $out['corrected']    = true;
+                $out['via_code']     = $r['alias_code'];
+                $out['from_part_no'] = $r['from_part_no'];
+            }
+        } catch (Exception $e) { /* ignore */ }
+        return $out;
+    }
+}
+
 if (!function_exists('eg_part_alias_mask_code')) {
     /**
      * 加工單用：這個料號對外（給廠商的加工單）要印的「遮蔽料號」。
