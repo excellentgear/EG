@@ -580,19 +580,25 @@ function showFile(path, type, name) {
     if (_isPaintable) { $('#btn-paint').show(); }
 }
 
-// ── 開啟批圖編輯器（自動帶入目前預覽的圖檔）────────────────────────────────
+// ── 開啟批圖編輯器（自動帶入目前預覽的圖檔＋料號）────────────────────────────
 function openImageEditor() {
     var url = '../Sales/image_editor.php';
+    var params = [];
     // 圖片直接帶入；PDF 也帶入（編輯器端會用 pdf.js 轉成圖檔，多頁會跳窗問要開哪幾頁）；其他格式開空白編輯器
     var _type = (_currentType || '').toLowerCase();
     var _imgTypes = ['jpg','jpeg','png','gif','bmp'];
     if (_currentPath && (_imgTypes.indexOf(_type) !== -1 || _type === 'pdf')) {
         // 本頁在 views/pm/，編輯器在 views/Sales/，相對路徑無法共用；一律換算成絕對 URL 再傳
         var absSrc = new URL(_currentPath, window.location.href).href;
-        url += '?preload=' + encodeURIComponent(absSrc)
-             + '&preload_name=' + encodeURIComponent(_currentName || '')
-             + (_type === 'pdf' ? '&preload_type=pdf' : '');   // 走 API 下載端點的網址不一定有 .pdf 副檔名，型別直接註明
+        params.push('preload=' + encodeURIComponent(absSrc));
+        params.push('preload_name=' + encodeURIComponent(_currentName || ''));
+        if (_type === 'pdf') params.push('preload_type=pdf');   // 走 API 下載端點的網址不一定有 .pdf 副檔名，型別直接註明
     }
+    // 本頁看的就是這個料號，編輯器那邊「料號附件」存檔跳窗開啟時自動搜尋/選好這個料號、
+    // 檔名也預設帶入，不用使用者自己再打一次（見 image_editor.php 的 PRELOAD_PART_NO）
+    var _partNo = (_mode === 'did') ? _d_id : _bom;
+    if (_partNo) params.push('part_no=' + encodeURIComponent(_partNo));
+    if (params.length) url += '?' + params.join('&');
     window.open(url, 'egImgEditor_' + Date.now(),
         'width=1280,height=860,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
 }

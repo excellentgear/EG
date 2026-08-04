@@ -1520,7 +1520,10 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <div style="font-weight:700;color:#6fc3ff;font-size:12.5px;margin-bottom:6px;"><i class="fa fa-save"></i> 儲存目前畫布到此料號</div>
             <div class="frm-row"><label>檔名</label>
                 <input type="text" id="pf-name" style="flex:1;">
-                <button class="tb-btn primary" onclick="pfSave()"><i class="fa fa-save"></i> 儲存</button>
+                <button class="tb-btn primary" id="pf-save-btn" onclick="pfSave()"><i class="fa fa-save"></i> 儲存</button>
+            </div>
+            <div class="frm-row"><label></label>
+                <span id="pf-save-status" style="font-size:11.5px;color:#8b949e;"></span>
             </div>
             <div class="frm-row" style="align-items:flex-start;"><label>附件標籤 <span style="color:#ff8a80;">*</span></label>
                 <div style="flex:1;">
@@ -1899,6 +1902,9 @@ const MY_DEPTS = <?= json_encode($myDepts, JSON_UNESCAPED_UNICODE) ?>;
 const MY_MAIN_DEPT_ID = <?= (int)$myMainDeptId ?>;
 const CLIP_KEY = 'eg_imgedit_clip';           // 跨視窗剪貼簿（localStorage，同網域共用）
 const DIRDB = 'eg_imgedit_fs';                // IndexedDB：預設儲存資料夾 handle
+// 由圖面檢視（bom_viewer.php）等頁面帶入的料號：?part_no=料號文字，開「料號附件」存檔跳窗時
+// 自動搜尋/選好這個料號、檔名也直接帶入，不用使用者自己再打一次
+const PRELOAD_PART_NO = new URLSearchParams(window.location.search).get('part_no') || '';
 
 let artW = 1600, artH = 1200;                 // 畫布（工作區）尺寸
 let currentTool = 'select';
@@ -5847,10 +5853,14 @@ function doPrintVector() {
 
 /* ── 料號附件：儲存（壓平PNG＋工作檔）與開啟工作檔 ── */
 function openPartModal() {
-    document.getElementById('pf-name').value = defaultFileName();
+    // 檔名預設：有帶入料號就直接用料號當檔名（現場慣例本來就是打料號當檔名），沒有才退回時間戳記
+    document.getElementById('pf-name').value = PRELOAD_PART_NO || defaultFileName();
     document.getElementById('pf-scope').value = 'dept';
+    document.getElementById('pf-no-workfile').checked = false;
+    document.getElementById('pf-save-status').textContent = '';
     document.querySelectorAll('.pf-cat').forEach(c => { c.checked = false; });
     const _pfIss = document.getElementById('pf-issue-date'); if (_pfIss) _pfIss.value = '';
+    pfOnNoWorkfileChange();
     pfRenderCatHint();
     pfShareSelected = new Set();
     document.getElementById('pf-share-q').value = '';
@@ -5859,7 +5869,12 @@ function openPartModal() {
     if (MY_MAIN_DEPT_ID) pd.value = String(MY_MAIN_DEPT_ID);   // 預設主要職務部門
     pfOnScopeChange();
     showModal('partfile-modal');
-    document.getElementById('pf-q').focus();
+    if (PRELOAD_PART_NO) {
+        document.getElementById('pf-q').value = PRELOAD_PART_NO;
+        pfSearch(true);
+    } else {
+        document.getElementById('pf-q').focus();
+    }
 }
 /* 附件標籤：邊選邊回饋（錯誤即時顯示原因，CLAUDE.md 表單三總則③） */
 function pfSelectedCats() {
@@ -5940,9 +5955,9 @@ function pfRenderShareUsers() {
     }).join('')
         : '<span style="color:#8b949e;font-size:12px;">查無符合的人員（可能是對方沒有批圖編輯器使用權）</span>';
 }
-async function pfSearch() {
+async function pfSearch(auto) {
     const q = document.getElementById('pf-q').value.trim();
-    if (!q) { toast('請輸入料號或圖號關鍵字'); return; }
+    if (!q) { if (!auto) toast('請輸入料號或圖號關鍵字'); return; }
     try {
         const fd = new FormData();
         fd.append('action', 'part_search'); fd.append('q', q);
@@ -5952,8 +5967,14 @@ async function pfSearch() {
         sel.innerHTML = res.parts.length
             ? res.parts.map(p => '<option value="' + p.d_id + '">' + escHtml(p.D_Setting_Id + (p.Drawing_No ? '｜' + p.Drawing_No : '')) + '</option>').join('')
             : '<option value="">查無符合料號</option>';
+        // 自動帶入時（從圖面檢視開啟）：料號可能對到多筆不同客戶，優先選「料號完全相同」那筆，
+        // 而不是搜尋結果預設選到的第一筆（LIKE 排序不保證是同一顆料號）
+        if (auto && PRELOAD_PART_NO) {
+            const exact = res.parts.find(p => p.D_Setting_Id === PRELOAD_PART_NO);
+            if (exact) sel.value = String(exact.d_id);
+        }
         pfLoadWorkfiles();
-    } catch (e) { toast('搜尋失敗：' + (e.message || '')); }
+    } catch (e) { if (!auto) toast('搜尋失敗：' + (e.message || '')); }
 }
 const PF_SCOPE_LABEL = { private: '私人', dept: '部門共用', custom: '指定人員', company: '公司共用（舊資料）' };
 async function pfLoadWorkfiles() {
@@ -5976,6 +5997,10 @@ async function pfLoadWorkfiles() {
             : '<span style="color:#8b949e;">此料號尚無你看得到的批圖工作檔</span>';
     } catch (e) { box.innerHTML = '載入失敗'; toast('工作檔列表載入失敗：' + (e.message || '')); }
 }
+function nowTimeStr() {
+    const d = new Date();
+    return ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2) + ':' + ('0'+d.getSeconds()).slice(-2);
+}
 async function pfSave() {
     const d = document.getElementById('pf-part').value;
     if (!d) { toast('請先搜尋並選擇料號'); return; }
@@ -5988,8 +6013,15 @@ async function pfSave() {
     if (!pfSyncIssueRow()) { document.getElementById('pf-issue-date').focus(); toast('請確認發行章日期'); return; }
     const issueDate = (document.getElementById('pf-issue-row').style.display !== 'none')
                     ? (document.getElementById('pf-issue-date').value || '') : '';
+    // 存檔要跑一段時間（大圖匯出＋上傳），期間按鈕維持在畫面上不消失、狀態列一路顯示到底──
+    // 不能只靠會自動消失的 toast，使用者盯著跳窗容易錯過（見使用者回報）
+    const btn = document.getElementById('pf-save-btn');
+    const status = document.getElementById('pf-save-status');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 儲存中…';
+    status.style.color = '#8b949e';
+    status.textContent = '儲存中，請稍候…（大圖需要幾秒到幾十秒）';
     try {
-        toast('儲存中…');
         // 壓平圖解析度：一般畫布用 3 倍（小畫家貼圖縮小擺放後，存檔的圖與文字仍清晰）；
         // 超大圖面自動降回 2 倍（單邊超過 8192px 的 PNG 上傳體積會爆量，2 倍已相當於掃描原檔解析度）
         const pngMult = Math.max(2, Math.min(3, 8192 / Math.max(artW, artH, 1)));
@@ -6010,10 +6042,13 @@ async function pfSave() {
         fd.append('issue_stamp_date', issueDate);
         const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
         if (!res.success) throw new Error(res.message || '');
+        const savedAt = nowTimeStr();
         toast(noWorkfile
             ? '已存入料號附件：壓平圖'
             : '已存入料號附件：壓平圖＋工作檔（底圖抽離 ' + (res.extracted || 0) + ' 張）' +
               (res.auto_removed ? '，並自動清掉 ' + res.auto_removed + ' 份超過保留上限的舊工作檔' : ''));
+        status.style.color = '#7ed957';
+        status.innerHTML = '<i class="fa fa-check-circle"></i> 已於 ' + savedAt + ' 儲存成功' + (noWorkfile ? '（僅圖片）' : '（圖片＋工作檔）');
         // 圖面變更判定：本頁不做登錄表單（欄位多、跳窗會蓋住畫布），改提示到料號附件頁登錄
         const v = res.dwg_verdict || {};
         if (v.kind === 'change') {
@@ -6025,7 +6060,14 @@ async function pfSave() {
             toast('已記錄為首次發行（此料號第一張帶發行章日期的自家圖面）');
         }
         pfLoadWorkfiles();
-    } catch (e) { toast('儲存失敗：' + (e.message || '')); }
+    } catch (e) {
+        toast('儲存失敗：' + (e.message || ''));
+        status.style.color = '#ff8a80';
+        status.innerHTML = '<i class="fa fa-times-circle"></i> ' + nowTimeStr() + ' 儲存失敗：' + escHtml(e.message || '');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa fa-save"></i> 儲存';
+    }
 }
 async function pfOpenWork(wid) {
     if (!confirm('開啟工作檔會取代目前畫布內容（未儲存的變更會消失），確定？')) return;
