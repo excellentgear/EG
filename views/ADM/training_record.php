@@ -2044,7 +2044,7 @@ function printOjtSheet(){
         + 'table.sf th,table.sf td{border:1px solid #333;padding:6px;text-align:center;}'
         + 'table.sf td.t-left{text-align:left;}'
         + 'table.sf td.sf-i{border:1px solid #999;padding:5px 8px;text-align:left;font-size:12.5px;background:#fff;}'
-        + '.pgbrk{page-break-before:always;}.pg{margin-bottom:14px;}';
+        + '.pgbrk{page-break-before:always;}.pg{margin-bottom:14px;page-break-inside:avoid;break-inside:avoid;}';
     egPrintWindow('考核表', html, css, '', false, true);
 }
 function loadAttach(sid){
