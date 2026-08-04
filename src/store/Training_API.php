@@ -81,7 +81,12 @@ function tr_request_row(PDO $db, int $id): ?array {
     $dq = $db->prepare("SELECT * FROM training_request_day WHERE request_id=? ORDER BY day_no");
     $dq->execute([$id]);
     $r['days'] = $dq->fetchAll(PDO::FETCH_ASSOC);
-    $tq = $db->prepare("SELECT * FROM training_request_trainee WHERE request_id=? ORDER BY rt_id");
+    $tq = $db->prepare("SELECT t.* FROM training_request_trainee t
+                        LEFT JOIN user_department_position_map m ON m.user_id=t.user_id AND m.is_main=1
+                        LEFT JOIN department d ON d.id=m.department_id
+                        LEFT JOIN position p ON p.id=m.position_id
+                        WHERE t.request_id=?
+                        ORDER BY COALESCE(d.sort_order,999), COALESCE(p.sort_order,999), t.user_name");
     $tq->execute([$id]);
     $r['trainees_list'] = $tq->fetchAll(PDO::FETCH_ASSOC);
     return $r;
@@ -420,8 +425,13 @@ case 'session_detail': {
     $dq = $db->prepare("SELECT day_no, day_date, start_time, end_time, break_minutes, hours FROM training_session_day
                         WHERE session_id=? ORDER BY day_no, day_date");
     $dq->execute([$sid]);
-    $aq = $db->prepare("SELECT user_id, user_name, dept_name, position_name, attended, signed, eval_result, eval_score, eval_note
-                        FROM training_attendee WHERE session_id=? ORDER BY dept_name, user_name");
+    $aq = $db->prepare("SELECT a.user_id, a.user_name, a.dept_name, a.position_name, a.attended, a.signed, a.eval_result, a.eval_score, a.eval_note
+                        FROM training_attendee a
+                        LEFT JOIN user_department_position_map m ON m.user_id=a.user_id AND m.is_main=1
+                        LEFT JOIN department d ON d.id=m.department_id
+                        LEFT JOIN position p ON p.id=m.position_id
+                        WHERE a.session_id=?
+                        ORDER BY COALESCE(d.sort_order,999), COALESCE(p.sort_order,999), a.user_name");
     $aq->execute([$sid]);
     $deptIds = training_session_depts($db, [$sid])[$sid] ?? [];
     $dnames = [];
@@ -709,7 +719,12 @@ case 'request_list': {
     $trMap = []; $dyMap = [];
     if ($ids) {
         $in = implode(',', array_map('intval', $ids));
-        foreach ($db->query("SELECT * FROM training_request_trainee WHERE request_id IN ($in) ORDER BY rt_id")->fetchAll(PDO::FETCH_ASSOC) as $t)
+        foreach ($db->query("SELECT t.* FROM training_request_trainee t
+                             LEFT JOIN user_department_position_map m ON m.user_id=t.user_id AND m.is_main=1
+                             LEFT JOIN department d ON d.id=m.department_id
+                             LEFT JOIN position p ON p.id=m.position_id
+                             WHERE t.request_id IN ($in)
+                             ORDER BY COALESCE(d.sort_order,999), COALESCE(p.sort_order,999), t.user_name")->fetchAll(PDO::FETCH_ASSOC) as $t)
             $trMap[(int)$t['request_id']][] = $t;
         foreach ($db->query("SELECT * FROM training_request_day WHERE request_id IN ($in) ORDER BY day_no")->fetchAll(PDO::FETCH_ASSOC) as $d)
             $dyMap[(int)$d['request_id']][] = $d;
@@ -980,9 +995,15 @@ case 'people': {
 /* 場次參加人員名單 */
 case 'get_attendees': {
     $sid = (int)($_GET['session_id'] ?? 0);
-    $st = $db->prepare("SELECT att_id, user_id, user_name, dept_name, position_name, attended, signed, signed_at, sign_method,
-                               eval_result, eval_score, eval_note
-                        FROM training_attendee WHERE session_id=? ORDER BY dept_name, user_name");
+    // 人員列表鐵則(ai-rules/08 第五節)：依部門→職稱高低排序，非目前所屬部門/職稱(未匹配)排最後不報錯
+    $st = $db->prepare("SELECT a.att_id, a.user_id, a.user_name, a.dept_name, a.position_name, a.attended, a.signed, a.signed_at, a.sign_method,
+                               a.eval_result, a.eval_score, a.eval_note
+                        FROM training_attendee a
+                        LEFT JOIN user_department_position_map m ON m.user_id=a.user_id AND m.is_main=1
+                        LEFT JOIN department d ON d.id=m.department_id
+                        LEFT JOIN position p ON p.id=m.position_id
+                        WHERE a.session_id=?
+                        ORDER BY COALESCE(d.sort_order,999), COALESCE(p.sort_order,999), a.user_name");
     $st->execute([$sid]);
     jout(['attendees'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
 }
