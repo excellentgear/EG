@@ -14,10 +14,11 @@ if (!defined('PPR_BOM_SCAN_DIR')) {
 if (!function_exists('ppr_ensure_schema')) {
 
 function ppr_ensure_schema(PDO $db): void {
-    $st = $db->prepare("SELECT 1 FROM roles WHERE role_code='ppr_view' AND module='part_process_report' LIMIT 1");
+    // role_code 在 roles 表是全站唯一(非僅模組內唯一)，一律加模組前綴避免撞名
+    $st = $db->prepare("SELECT 1 FROM roles WHERE role_code='part_process_report_view' LIMIT 1");
     $st->execute();
     if (!$st->fetchColumn()) {
-        $db->prepare("INSERT INTO roles (role_code, role_name, module) VALUES ('ppr_view','料號製程履歷報告-檢視','part_process_report')")->execute();
+        $db->prepare("INSERT INTO roles (role_code, role_name, module) VALUES ('part_process_report_view','料號製程履歷報告-檢視','part_process_report')")->execute();
     }
 }
 
@@ -73,7 +74,7 @@ function ppr_drawing_orientation(string $absPath, string $ext): string {
 function ppr_bom_processes(PDO $db, string $bomNo): array {
     $st = $db->prepare("
         SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.process_no, pn.ProcessName,
-               bi.maker_id_no, ml.maker AS maker_name, COALESCE(ml.internal,0) AS is_internal,
+               bi.maker_id_no, ml.maker_id AS maker_name, COALESCE(ml.internal,0) AS is_internal,
                bi.machine_id, mc.machine AS machine_name,
                bi.processing_sequence, bi.processing_state, bi.QC_check, bi.QC_check_date,
                bi.outsource_date, bi.return_date, bi.qc_completed, bi.batch_label
@@ -96,7 +97,7 @@ function ppr_qc_history(PDO $db, int $bomIngFid): array {
     try {
         $st = $db->prepare("
             SELECT qc_form_id, batch_no, round_no, check_result, ng_qty, status,
-                   pcs_verdicts, created_at, ncr_decision
+                   pcs_verdicts, check_date, created_at, ncr_decision
             FROM qc_check_form
             WHERE bom_ing_fid = ? AND status IN ('SUBMITTED','LOCKED')
             ORDER BY batch_no ASC, round_no ASC");
@@ -122,7 +123,7 @@ function ppr_qc_history(PDO $db, int $bomIngFid): array {
             'check_result' => $r['check_result'],
             'ng_qty'       => (int)$r['ng_qty'],
             'is_aod'       => $hasAod,
-            'date'         => substr((string)$r['created_at'], 0, 16),
+            'date'         => $r['check_date'] ?: substr((string)$r['created_at'], 0, 16),
             'ncr_decision' => $r['ncr_decision'],
         ];
     }

@@ -372,6 +372,7 @@ try {
     $st->execute(['bom_track']); $_bomtrkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['personal_task']); $_ptaskRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['order_profit']); $_profitRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['part_process_report']); $_pprRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['as_doc']);    $_asdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['master_data']); $_mdataRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['db_backup']);   $_dbbkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -443,6 +444,10 @@ try {
     $st->execute(['order_profit']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userProfitRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['part_process_report']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userPprRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
     $st->execute(['as_doc']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
@@ -1085,6 +1090,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('profit', 'order_profit', '訂單毛利分析', 'fa-line-chart', '#c0392b',
                         '為每位使用者指派「訂單毛利分析」頁的檢視資格。<strong>毛利屬敏感資料</strong>，未被指派角色者無法開啟本頁；此功能不分細部操作。管理者固定可用。',
                         $_profitRoles, $_userProfitRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('ppr', 'part_process_report', '料號製程履歷報告', 'fa-file-text-o', '#c0392b',
+                        '為每位使用者指派「料號製程履歷報告」頁的使用資格。<strong>整頁單一權限</strong>（含成本毛利，不分層），未被指派角色者無法開啟本頁。管理者固定可用。',
+                        $_pprRoles, $_userPprRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('stamp', 'stamp', '圖章管理', 'fa-certificate', '#c0762c',
                         '圖章管理頁角色：「圖章檢閱」＝唯讀（檢閱清冊/匯出）；「圖章管理員」＝登記核發（個人章/部門章）、種類管理、掃描實體章上傳。<strong>未被指派任何角色者看不到清冊內容</strong>（避免圖章被瀏覽轉存惡意複製）；簽核單據上的印章顯示不受此限。管理者固定可管理。',
