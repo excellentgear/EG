@@ -12,6 +12,7 @@
  */
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
+date_default_timezone_set('Asia/Taipei'); // 期間預設值用本地時區（PHP 預設 UTC 會差 8 小時，跨日邊界會抓錯天）
 
 session_start();
 
@@ -39,6 +40,44 @@ ppr_ensure_schema($pdo);
 $has_access = rf_has_module_role($pdo, $my_id, 'part_process_report');
 
 function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+
+/* ══════════════════════════ 客戶地址 → 地區（同名客戶用來區分） ══════════════════════════ */
+
+/** 縣/市＋區/鄉/鎮/市（例：台中市西屯區） */
+function ppr_addr_region(string $address): string {
+    if (trim($address) === '') return '';
+    if (!preg_match('/^(.{2,4}[縣市])/u', $address, $m1)) return '';
+    $region = $m1[1];
+    $rest = substr($address, strlen($m1[1]));
+    if (preg_match('/^(.{1,4}[區鄉鎮市])/u', $rest, $m2)) $region .= $m2[1];
+    return $region;
+}
+
+/** 縣/市＋區/鄉/鎮/市＋路/街（同名同區時進一步區分用） */
+function ppr_addr_region_ext(string $address): string {
+    $region = ppr_addr_region($address);
+    if ($region === '') return '';
+    $rest = substr($address, strlen($region));
+    if (preg_match('/^(.{1,8}[路街])/u', $rest, $m3)) return $region . $m3[1];
+    return $region;
+}
+
+/** 客戶搜尋結果去混淆：同名同區者才進一步顯示到路/街 */
+function ppr_disambiguate_clients(array $rows): array {
+    $groups = [];
+    foreach ($rows as $i => $r) {
+        $region = ppr_addr_region((string)($r['customer_address'] ?? ''));
+        $groups[$r['customer'] . '|' . $region][] = $i;
+    }
+    $out = [];
+    foreach ($rows as $i => $r) {
+        $region = ppr_addr_region((string)($r['customer_address'] ?? ''));
+        $key = $r['customer'] . '|' . $region;
+        if (count($groups[$key]) > 1) $region = ppr_addr_region_ext((string)($r['customer_address'] ?? ''));
+        $out[] = ['id'=>$r['customer_id'], 'name'=>$r['customer'], 'region'=>$region];
+    }
+    return $out;
+}
 
 /* ══════════════════════════ 渲染輔助 ══════════════════════════ */
 
@@ -281,22 +320,48 @@ if ($isAjax) {
     if (!$has_access) { echo json_encode(['success'=>false,'error'=>'無此頁面使用權限']); exit; }
 
     try {
-        if ($action === 'parts_list') {
-            $rows = $pdo->query("
-                SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Spec_No, d.Type, d.Customer_Id,
-                       c.customer AS customer_name
+        if ($action === 'search_clients') {
+            $term = trim($_POST['term'] ?? '');
+            if ($term === '') { echo json_encode(['success'=>true, 'items'=>[]]); exit; }
+            $kw = '%'.$term.'%';
+            $st = $pdo->prepare("SELECT customer_id, customer, customer_address FROM customer_list
+                WHERE is_inactive=0 AND (customer_id LIKE ? OR customer LIKE ? OR customer_full LIKE ?)
+                ORDER BY customer ASC LIMIT 20");
+            $st->execute([$kw, $kw, $kw]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            $items = [];
+            foreach (ppr_disambiguate_clients($rows) as $c) {
+                $text = $c['name'] . ($c['region'] !== '' ? '（'.$c['region'].'）' : '');
+                $items[] = ['id'=>$c['id'], 'text'=>$text, 'html'=>h($c['name']).' <small style="color:#8a6d45;">'.h($c['id']).($c['region']!==''?' ／ '.h($c['region']):'').'</small>'];
+            }
+            echo json_encode(['success'=>true, 'items'=>$items]);
+            exit;
+        }
+
+        if ($action === 'search_parts') {
+            $term = trim($_POST['term'] ?? '');
+            $clientId = trim($_POST['customer_id'] ?? '');
+            if ($term === '') { echo json_encode(['success'=>true, 'items'=>[]]); exit; }
+            $kw = '%'.$term.'%';
+            $where = ["(d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ? OR d.Spec_No LIKE ?)"];
+            $params = [$kw, $kw, $kw];
+            if ($clientId !== '') { $where[] = "d.Customer_Id = ?"; $params[] = $clientId; }
+            $st = $pdo->prepare("
+                SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Spec_No, c.customer AS customer_name
                 FROM d_setting d
                 LEFT JOIN customer_list c ON c.customer_id = d.Customer_Id
-                ORDER BY d.D_Setting_Id ASC")->fetchAll(PDO::FETCH_ASSOC);
-            $parts = [];
-            foreach ($rows as $r) {
+                WHERE ".implode(' AND ', $where)."
+                ORDER BY d.D_Setting_Id ASC LIMIT 20");
+            $st->execute($params);
+            $items = [];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $label = $r['D_Setting_Id'];
                 if ($r['Drawing_No']) $label .= ' / '.$r['Drawing_No'];
                 if ($r['Spec_No']) $label .= '（'.$r['Spec_No'].'）';
-                $label .= ' — '.($r['customer_name'] ?: '未指定客戶');
-                $parts[] = ['id'=>(int)$r['d_id'], 'label'=>$label, 'customer_id'=>$r['Customer_Id'], 'customer_name'=>$r['customer_name'] ?: '未指定客戶'];
+                $cust = $r['customer_name'] ?: '未指定客戶';
+                $items[] = ['id'=>(int)$r['d_id'], 'text'=>$label.' — '.$cust, 'html'=>h($label).' <small style="color:#8a6d45;">'.h($cust).'</small>'];
             }
-            echo json_encode(['success'=>true, 'parts'=>$parts]);
+            echo json_encode(['success'=>true, 'items'=>$items]);
             exit;
         }
 
@@ -421,10 +486,18 @@ if ($isAjax) {
         .ppr-toolbar { border:1.5px solid #E8D5B5; border-radius:8px; padding:10px 12px; margin-bottom:12px; background:#FDF8EF; }
         .ppr-toolbar .row2 { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:8px; }
         .ppr-toolbar label { margin:0; font-size:13px; color:#5b3a1e; }
-        .ppr-toolbar select, .ppr-toolbar input[type=date], .ppr-toolbar button { height:30px; font-size:13px; padding:0 10px; border:1px solid #D8BE93; border-radius:4px; background:#fff; color:#5b3a1e; }
+        .ppr-toolbar select, .ppr-toolbar input[type=date], .ppr-toolbar input[type=text], .ppr-toolbar button { height:30px; font-size:13px; padding:0 10px; border:1px solid #D8BE93; border-radius:4px; background:#fff; color:#5b3a1e; }
         .ppr-toolbar button { background:#F0A24B; color:#fff; border-color:#d98a33; cursor:pointer; }
         .ppr-toolbar button:hover { background:#d98a33; }
-        .ppr-toolbar select#pprPart { width:340px; }
+        .ppr-typeahead { position:relative; }
+        #pprClientInput { width:200px; }
+        #pprPartInput { width:280px; }
+        .ppr-suggest { display:none; position:absolute; top:100%; left:0; z-index:80; background:#fff; border:1px solid #D8BE93; border-radius:4px;
+            max-height:260px; overflow-y:auto; min-width:260px; box-shadow:0 3px 12px rgba(0,0,0,.18); margin-top:2px; }
+        .ppr-suggest .item { padding:5px 10px; font-size:12px; cursor:pointer; border-bottom:1px solid #F3E9D6; }
+        .ppr-suggest .item:last-child { border-bottom:none; }
+        .ppr-suggest .item:hover { background:#FBF0DD; }
+        .ppr-suggest .empty { padding:6px 10px; font-size:12px; color:#999; }
 
         .ppr-bom-list { border:1px solid #EADFC8; border-radius:6px; }
         .ppr-bom-row { display:flex; align-items:center; gap:10px; padding:6px 10px; border-bottom:1px solid #F3E9D6; font-size:13px; }
@@ -511,11 +584,19 @@ if ($isAjax) {
         <div class="ppr-toolbar">
             <div class="row2">
                 <label>客戶</label>
-                <select id="pprClient" data-eg-filter="輸入客戶篩選…"><option value="">— 全部客戶 —</option></select>
+                <span class="ppr-typeahead">
+                    <input type="text" id="pprClientInput" placeholder="輸入客戶ID/名稱…" autocomplete="off">
+                    <input type="hidden" id="pprClientId">
+                    <div class="ppr-suggest" id="pprClientSuggest"></div>
+                </span>
                 <label>料號</label>
-                <select id="pprPart" data-eg-filter="輸入料號/規格篩選…"><option value="">— 請選擇 —</option></select>
+                <span class="ppr-typeahead">
+                    <input type="text" id="pprPartInput" placeholder="輸入料號/圖號/規格…" autocomplete="off">
+                    <input type="hidden" id="pprPartId">
+                    <div class="ppr-suggest" id="pprPartSuggest"></div>
+                </span>
                 <label>期間</label>
-                <input type="date" id="pprDateFrom">～<input type="date" id="pprDateTo">
+                <input type="date" id="pprDateFrom" value="<?= date('Y-m-01') ?>">～<input type="date" id="pprDateTo" value="<?= date('Y-m-d') ?>">
                 <button id="pprSearchBtn"><i class="fa fa-search"></i> 查詢筆數</button>
             </div>
             <div class="row2">
@@ -586,50 +667,58 @@ function openMask(id){ document.getElementById(id).style.display='block'; }
 var PPR_API = 'part_process_report.php';
 var PPR_ROWS = [];
 var PPR_DRAWING_CHOICE = {};
-var PPR_PARTS = [];   // 全部料號快照，供客戶篩選時在前端重新篩選用
 
-// data-eg-filter 產生的篩選框只在 select 出現當下拍一次快照；options 用 JS 整批換掉後
-// 必須呼叫 egFilterResnap() 讓篩選框重新拍照，否則打字篩選會用到舊快照、把剛塞進去的選項洗掉。
-function pprResnap(selId){
-    var el = document.getElementById(selId);
-    if (el && typeof el.egFilterResnap === 'function') el.egFilterResnap();
+function pprDebounce(fn, wait){
+    var t;
+    return function(){
+        var args = arguments, ctx = this;
+        clearTimeout(t);
+        t = setTimeout(function(){ fn.apply(ctx, args); }, wait);
+    };
 }
 
-function pprFillPartSelect(customerId){
-    var $sel = $('#pprPart').empty().append('<option value="">— 請選擇 —</option>');
-    PPR_PARTS.forEach(function(p){
-        if (customerId && String(p.customer_id||'') !== String(customerId)) return;
-        $sel.append($('<option>').val(p.id).text(p.label));
+/** 輸入框下方浮動建議清單（打字模糊篩選，點選才帶入值；不使用下拉選單） */
+function pprSetupTypeahead(opt){
+    var $input = $(opt.inputSel), $hidden = $(opt.hiddenSel), $box = $(opt.boxSel);
+    var items = [];
+    function close(){ $box.hide().empty(); }
+    var doSearch = pprDebounce(function(){
+        var term = $input.val().trim();
+        if (!term) { close(); return; }
+        var params = $.extend({action: opt.action, term: term}, opt.extraParams ? opt.extraParams() : {});
+        $.post(PPR_API, params, function(res){
+            if (!res.success || !res.items.length) { $box.html('<div class="empty">查無符合項目</div>').show(); items = []; return; }
+            items = res.items;
+            var html = '';
+            items.forEach(function(it, i){ html += '<div class="item" data-i="'+i+'">'+it.html+'</div>'; });
+            $box.html(html).show();
+        }, 'json');
+    }, 250);
+    $input.on('input', function(){ $hidden.val(''); if (opt.onClear) opt.onClear(); doSearch(); });
+    $input.on('focus', function(){ if ($input.val().trim() && items.length) $box.show(); });
+    $box.on('click', '.item', function(){
+        var it = items[$(this).data('i')];
+        $input.val(it.text); $hidden.val(it.id);
+        close();
+        if (opt.onPick) opt.onPick(it);
     });
-    pprResnap('pprPart');
+    $(document).on('click', function(e){
+        if (!$(e.target).closest($input).length && !$(e.target).closest($box).length) close();
+    });
 }
 
-function pprLoadParts(){
-    $.post(PPR_API, {action:'parts_list'}, function(res){
-        if (!res.success) return;
-        PPR_PARTS = res.parts;
-
-        var clients = {};   // customer_id => customer_name（去重）
-        PPR_PARTS.forEach(function(p){
-            if (p.customer_id) clients[p.customer_id] = p.customer_name;
-        });
-        var $client = $('#pprClient');
-        Object.keys(clients).sort(function(a,b){ return clients[a].localeCompare(clients[b], 'zh-Hant'); })
-            .forEach(function(cid){ $client.append($('<option>').val(cid).text(clients[cid])); });
-        pprResnap('pprClient');
-
-        pprFillPartSelect('');
-    }, 'json');
-}
-pprLoadParts();
-
-$('#pprClient').on('change', function(){
-    pprFillPartSelect($(this).val());
+pprSetupTypeahead({
+    inputSel:'#pprClientInput', hiddenSel:'#pprClientId', boxSel:'#pprClientSuggest', action:'search_clients',
+    onClear:function(){ $('#pprPartInput').val(''); $('#pprPartId').val(''); }
+});
+pprSetupTypeahead({
+    inputSel:'#pprPartInput', hiddenSel:'#pprPartId', boxSel:'#pprPartSuggest', action:'search_parts',
+    extraParams:function(){ return {customer_id: $('#pprClientId').val()}; }
 });
 
 $('#pprSearchBtn').on('click', function(){
-    var did = $('#pprPart').val();
-    if (!did) { alert('請先選擇料號'); return; }
+    var did = $('#pprPartId').val();
+    if (!did) { alert('請先從建議清單選擇一個料號'); return; }
     var from = $('#pprDateFrom').val(), to = $('#pprDateTo').val();
     $.post(PPR_API, {action:'list_boms', d_id:did, date_from:from, date_to:to}, function(res){
         if (!res.success) { alert(res.error||'查詢失敗'); return; }
@@ -691,7 +780,7 @@ $('#pprGenBtn').on('click', function(){
     });
     if (missing.length) { alert('以下製令有多個圖面候選，請先選擇要使用哪一份：\n'+missing.join('、')); return; }
 
-    var did = $('#pprPart').val();
+    var did = $('#pprPartId').val();
     $.post(PPR_API, {
         action:'render_report', d_id:did, boms: JSON.stringify(boms),
         drawing_choice: JSON.stringify(PPR_DRAWING_CHOICE),
