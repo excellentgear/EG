@@ -703,17 +703,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($part_text === '' && !$d_id_id) { echo json_encode(['success' => true, 'data' => []]); exit; }
 
             $base_sql = "SELECT ql.quote_id, ql.quote_no, ql.quote_date, ql.client_name, ql.is_negotiation,
-                                qi.item_id, qi.product_id, qi.specification, qi.quantity, qi.unit_price, qi.process_notes
+                                qi.item_id, qi.d_setting_d_id, qi.product_id, qi.specification, qi.quantity, qi.unit_price, qi.process_notes
                          FROM quotation_list ql
                          JOIN quotation_item qi ON ql.quote_id = qi.quote_id";
+            $aliasMap = [];
             if ($d_id_id > 0) {
                 $stmt = $pdo->prepare($base_sql . " WHERE qi.d_setting_d_id = :term ORDER BY ql.quote_date DESC, ql.quote_id DESC LIMIT 50");
                 $stmt->execute([':term' => $d_id_id]);
             } else {
-                $stmt = $pdo->prepare($base_sql . " WHERE qi.product_id LIKE :term ORDER BY ql.quote_date DESC, ql.quote_id DESC LIMIT 50");
-                $stmt->execute([':term' => "%$part_text%"]);
+                $like = "%$part_text%";
+                // 客戶代號／等同料號（src/common/part_alias_lib.php 的 d_setting_alias）：
+                // 業務報價打的料號常跟客戶代號不同，光比對 product_id 文字找不到，故一併查出對應的我方料號 d_id 納入搜尋範圍
+                $stA = $pdo->prepare("SELECT DISTINCT d_id, alias_code FROM d_setting_alias WHERE alias_code LIKE :term");
+                $stA->execute([':term' => $like]);
+                foreach ($stA->fetchAll(PDO::FETCH_ASSOC) as $ar) { $aliasMap[(int)$ar['d_id']] = $ar['alias_code']; }
+
+                if ($aliasMap) {
+                    $ph = implode(',', array_fill(0, count($aliasMap), '?'));
+                    $stmt = $pdo->prepare($base_sql . " WHERE qi.product_id LIKE ? OR qi.d_setting_d_id IN ($ph)
+                                                         ORDER BY ql.quote_date DESC, ql.quote_id DESC LIMIT 50");
+                    $stmt->execute(array_merge([$like], array_keys($aliasMap)));
+                } else {
+                    $stmt = $pdo->prepare($base_sql . " WHERE qi.product_id LIKE :term ORDER BY ql.quote_date DESC, ql.quote_id DESC LIMIT 50");
+                    $stmt->execute([':term' => $like]);
+                }
             }
             $rows = eg_build_process_names($pdo, $stmt->fetchAll(PDO::FETCH_ASSOC));
+            if ($aliasMap) {
+                foreach ($rows as &$r) {
+                    $did = (int)($r['d_setting_d_id'] ?? 0);
+                    $r['alias_hit'] = ($did && isset($aliasMap[$did])) ? $aliasMap[$did] : null;
+                }
+                unset($r);
+            }
             echo json_encode(['success' => true, 'data' => $rows]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -4440,7 +4462,7 @@ foreach($dCounts as $c) {
 
                         <div id="op-search-by-part" style="display:none;">
                             <div class="input-group input-group-sm" style="max-width:360px;">
-                                <input type="text" class="form-control" id="op-search-part-input" placeholder="輸入料號關鍵字，按Enter搜尋">
+                                <input type="text" class="form-control" id="op-search-part-input" placeholder="輸入料號／客戶代號／等同料號，按Enter搜尋">
                                 <span class="input-group-btn"><button type="button" class="btn btn-primary" onclick="opSearchByPart()"><i class="fa fa-search"></i></button></span>
                             </div>
                             <div id="op-search-part-result" style="margin-top:12px;max-height:420px;overflow-y:auto;"></div>
@@ -7419,10 +7441,12 @@ foreach($dCounts as $c) {
                 res.data.forEach(function(q) {
                     var price = parseFloat(q.unit_price);
                     var priceStr = price > 0 ? formatPrice(price) : '-';
+                    // 用客戶代號／等同料號查到的：標示「＝被查到的代號」，選取後帶的仍是報價單上的正確料號
+                    var aliasBadge = q.alias_hit ? ' <span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;">＝' + escapeHtml(q.alias_hit) + '</span>' : '';
                     html += '<tr style="cursor:pointer;" onclick="opSelectQuote(' + q.quote_id + ')">' +
                         '<td><strong>' + escapeHtml(q.quote_no) + '</strong>' + opNegoBadge(q.is_negotiation) + '<div style="color:#999;font-size:10px;">' + (q.quote_date||'') + '</div></td>' +
                         '<td>' + escapeHtml(q.client_name || '') + '</td>' +
-                        '<td>' + escapeHtml(q.product_id || '') + '</td>' +
+                        '<td>' + escapeHtml(q.product_id || '') + aliasBadge + '</td>' +
                         '<td>' + escapeHtml(q.processes || '') + '</td>' +
                         '<td>' + escapeHtml((q.specification||'').substring(0,30)) + '</td>' +
                         '<td style="text-align:right;">' + (parseInt(q.quantity)||0) + '</td>' +
