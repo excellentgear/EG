@@ -575,13 +575,13 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 名單一律綁員工 ID，日後可依人查詢受訓紀錄。分數為選填（0~100）。</div>
         </div>
 
-        <!-- OJT／實作口試考核表：僅內訓、已排定開課後可建立（本場講師本人或訓練管理員）。
-             印出的表單不含分數/結果數位紀錄，供現場手寫勾選，考核完成後掃描回來以附件上傳佐證。 -->
+        <!-- 考核表（原OJT/實作口試考核表；未來可能與其他頁面通用）：僅內訓、已排定開課後可建立（本場講師本人或訓練管理員）。
+             印出的表單不含分數/評鑑結果數位紀錄，供現場手寫勾選，考核完成後掃描回來以附件上傳佐證。 -->
         <div class="att-sec" id="ojtSec" style="display:none;">
-            <div style="font-weight:bold;color:#5b3a1e;margin:12px 0 4px;">OJT／實作口試考核表 <small id="ojtCount" style="color:#8a6d45;font-weight:normal;"></small></div>
-            <div id="ojtLockHint" style="font-size:12px;color:#DD5138;display:none;margin-bottom:4px;">此場次的 OJT 考核項目僅本場講師本人或訓練管理員可編輯。</div>
+            <div style="font-weight:bold;color:#5b3a1e;margin:12px 0 4px;">考核表 <small id="ojtCount" style="color:#8a6d45;font-weight:normal;"></small></div>
+            <div id="ojtLockHint" style="font-size:12px;color:#DD5138;display:none;margin-bottom:4px;">此場次的考核項目僅本場講師本人或訓練管理員可編輯。</div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
-                <label style="margin:0;font-size:12px;color:#5b3a1e;">考官／主管</label>
+                <label style="margin:0;font-size:12px;color:#5b3a1e;">考官</label>
                 <input type="text" id="ojtAssessor" maxlength="50" placeholder="預設帶入講師姓名，可修改" style="width:170px;">
             </div>
             <div class="att-list-wrap" style="max-height:210px;">
@@ -593,11 +593,11 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <div id="ojtOps" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 2px;">
                 <button type="button" class="b-att nw" onclick="ojtAdd()"><i class="fa fa-plus"></i> 新增項目</button>
                 <button type="button" class="b-att nw" onclick="ojtSave()"><i class="fa fa-save"></i> 儲存考核項目清單</button>
-                <button type="button" class="b-att nw" style="background:#fff;color:#8A5A2B;" onclick="printOjtSheet()"><i class="fa fa-print"></i> 列印OJT考核表</button>
+                <button type="button" class="b-att nw" style="background:#fff;color:#8A5A2B;" onclick="printOjtSheet()"><i class="fa fa-print"></i> 列印考核表</button>
                 <span id="ojtMsg" style="font-size:12px;color:#8a6d45;"></span>
             </div>
-            <div style="font-size:11px;color:#8a6d45;margin-top:3px;">列印表單<b>不含分數/結果</b>，供現場考核時手寫勾選合格／不合格／N/A並評分；每位參加人員各印一份（考核項目少時自動併印多人於同一頁節省紙張）。
-                考核完成掃描後，請至下方「附件」上傳並勾選「OJT/實作口試考核表」類別佐證，作為簽到表評鑑結果的客觀證據。</div>
+            <div style="font-size:11px;color:#8a6d45;margin-top:3px;">列印表單<b>不含分數/評鑑結果</b>，供現場考核時手寫勾選合格／不合格並評分；每位參加人員各印一份（考核項目少時自動併印多人於同一頁節省紙張；未實到者印「未到考」）。
+                考核完成掃描後，請至下方「附件」上傳並勾選「考核表」類別佐證，作為簽到表評鑑結果的客觀證據。</div>
         </div>
 
         <!-- 附件：簽到表掃描、教材、試卷…（DB 只存檔名，路徑由模組設定即時組出） -->
@@ -2007,7 +2007,7 @@ function ojtSave(){
    考核項目少時併印多人於同一頁節省紙張（結構固定分頁，非量測高度，符合 print_pagination 鐵則精神）。 */
 function printOjtSheet(){
     var r = EXROW || {};
-    if (r.train_type==='external'){ alert('外訓不提供 OJT 考核表'); return; }
+    if (r.train_type==='external'){ alert('外訓不提供考核表'); return; }
     if (!OJT_ITEMS.length){ alert('請先建立至少一項考核項目並儲存'); return; }
     var list = ATT.length ? ATT.slice() : [];
     if (!list.length){ alert('尚未加入參加人員，無法列印'); return; }
@@ -2016,25 +2016,28 @@ function printOjtSheet(){
     var assessor = $('#ojtAssessor').val() || r.trainer || '';
     var loc = $('#exLocSel option:selected').text() || r.location || '';
     var perPage = OJT_ITEMS.length<=3 ? 3 : (OJT_ITEMS.length<=6 ? 2 : 1);
-    var itemRows = OJT_ITEMS.map(function(it,i){
-        return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content||'')+'</td>'
-             + '<td>'+esc(OJT_TYPES[it.item_type]||it.item_type)+'</td>'
-             + '<td></td><td style="white-space:nowrap;">☐合格　☐不合格　☐N/A</td><td></td></tr>';
-    }).join('');
+    function rowsFor(absent){
+        return OJT_ITEMS.map(function(it,i){
+            return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content||'')+'</td>'
+                 + '<td>'+esc(OJT_TYPES[it.item_type]||it.item_type)+'</td>'
+                 + (absent ? '<td colspan="3" style="color:#888;">未到考</td>'
+                    : '<td></td><td style="white-space:nowrap;">☐合格　☐不合格</td><td></td>') + '</tr>';
+        }).join('');
+    }
     var html = '';
     list.forEach(function(a, idx){
+        var absent = !+a.attended;
         var brk = (idx>0 && idx % perPage === 0) ? ' pgbrk' : '';
         html += '<div class="pg'+brk+'"><table class="sf"><thead>'
             + '<tr><th colspan="6" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
-            + '<div class="tt">OJT／實作口試考核表</div></div></th></tr>'
-            + '<tr><td colspan="6" class="sf-i">課程名稱：'+esc(course)+'　　考核日期：'+esc(lastDay||'____-__-__')+'</td></tr>'
-            + '<tr><td colspan="6" class="sf-i">受訓人員：'+esc(a.dept_name||'')+'　'+esc(a.position_name||'')+'　'+esc(a.user_name||'')+'　　地點：'+esc(loc||'—')+'</td></tr>'
-            + '<tr><td colspan="6" class="sf-i">考官／主管：'+esc(assessor||'____________')+'</td></tr>'
+            + '<div class="tt">考核表'+(absent?'（未到考）':'')+'</div></div></th></tr>'
+            + '<tr><td colspan="6" class="sf-i">課程名稱：'+esc(course)+'　　地點：'+esc(loc||'—')+'　　考核日期：'+esc(lastDay||'____-__-__')+'</td></tr>'
+            + '<tr><td colspan="6" class="sf-i">受訓人員：'+esc(a.dept_name||'')+'　'+esc(a.position_name||'')+'　'+esc(a.user_name||'')+(absent?'　（本次未到考）':'')+'</td></tr>'
             + '<tr><th style="width:32px;">項次</th><th>考核／口試重點</th><th style="width:76px;">方式</th>'
-            + '<th style="width:50px;">分數</th><th style="width:150px;">結果</th><th style="width:100px;">備註</th></tr>'
-            + '</thead><tbody>'+itemRows+'</tbody></table>'
-            + '<div style="margin-top:8px;font-size:13px;">總體評核結果：☐ 判定合格（已具備獨立作業能力）　☐ 需再進行補訓／複考</div>'
-            + '<div style="margin-top:18px;font-size:13px;">考官／主管簽章：______________________　　日期：______________</div>'
+            + '<th style="width:50px;">分數</th><th style="width:150px;">評鑑結果</th><th style="width:100px;">備註</th></tr>'
+            + '</thead><tbody>'+rowsFor(absent)+'</tbody></table>'
+            + (absent ? '' : '<div style="margin-top:8px;font-size:13px;">總體評核結果：☐ 判定合格（已具備獨立作業能力）　☐ 需再進行補訓／複考</div>')
+            + '<div style="margin-top:16px;font-size:13px;display:flex;align-items:flex-end;gap:10px;">考官簽章：'+egStampHtml(assessor, lastDay)+'</div>'
             + '</div>';
     });
     var css = 'table.sf{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}'
@@ -2042,7 +2045,7 @@ function printOjtSheet(){
         + 'table.sf td.t-left{text-align:left;}'
         + 'table.sf td.sf-i{border:1px solid #999;padding:5px 8px;text-align:left;font-size:12.5px;background:#fff;}'
         + '.pgbrk{page-break-before:always;}.pg{margin-bottom:14px;}';
-    egPrintWindow('OJT／實作口試考核表', html, css, '', false, true);
+    egPrintWindow('考核表', html, css, '', false, true);
 }
 function loadAttach(sid){
     FILES = []; renderAttach();

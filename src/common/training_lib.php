@@ -426,7 +426,7 @@ function training_shifts(PDO $db): array {
  * 附件（鐵律5／ai-rules/07）：DB 只存檔名，完整路徑一律在讀取當下用「目前設定值」現場組出。
  *   換 NAS 磁碟或搬資料夾時只要改設定值，舊附件立刻讀得到，不必動 DB。
  * ============================================================ */
-const TRAINING_ATT_CATS = ['sign'=>'簽到表', 'material'=>'教材/講義', 'exam'=>'試卷/測驗', 'photo'=>'上課照片', 'ojt'=>'OJT/實作口試考核表', 'other'=>'其他'];
+const TRAINING_ATT_CATS = ['sign'=>'簽到表', 'material'=>'教材/講義', 'exam'=>'試卷/測驗', 'photo'=>'上課照片', 'ojt'=>'考核表', 'other'=>'其他'];
 /* OJT/實作口試考核表 考核方式 */
 const TRAINING_OJT_ITEM_TYPES = ['practice'=>'實作演練', 'oral'=>'口試詢問'];
 /* 評鑑方式（確認開課時選定）；notice=宣導＝免評鑑，選了它參加人員一律記 exempt */
