@@ -448,7 +448,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             </div>
             <div id="reqAttPeopleBox" class="att-people"></div>
             <div class="att-list-wrap" style="max-height:130px;">
-                <table class="att-tbl"><thead><tr><th>姓名</th><th>部門</th><th>職稱</th><th style="width:26px;"></th></tr></thead>
+                <table class="att-tbl"><thead><tr><th>部門</th><th>職稱</th><th>姓名</th><th style="width:26px;"></th></tr></thead>
                 <tbody id="reqAttBody"></tbody></table>
             </div>
         </div>
@@ -566,7 +566,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 <span id="evalSummary" style="color:#8A5A2B;"></span>
             </div>
             <div class="att-list-wrap">
-                <table class="att-tbl"><thead><tr><th>姓名</th><th>部門</th><th>職稱</th><th style="width:42px;">實到</th>
+                <table class="att-tbl"><thead><tr><th>部門</th><th>職稱</th><th>姓名</th><th style="width:42px;">實到</th>
                     <th style="width:96px;">評鑑結果</th><th style="width:58px;">分數</th><th style="width:120px;">備註</th>
                     <th style="width:46px;">簽名</th><th style="width:26px;"></th></tr></thead>
                 <tbody id="attBody"></tbody></table>
@@ -600,7 +600,8 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <b style="color:#8A5A2B;">登錄完成</b>＝<u>課已經上完</u>、實到也勾好了（狀態→已完成，<b>此時才計入當月教育訓練達成率</b>）。
             當天上完課可直接按「登錄完成」，不必先按「確認開課」。
         </div>
-        <button class="b-cancel" onclick="printSignSheet()"><i class="fa fa-print"></i> 列印簽到表</button>
+        <button class="b-cancel" onclick="printSignSheet(false)"><i class="fa fa-print"></i> 列印簽到表</button>
+        <button class="b-cancel" onclick="printSignSheet(true)" title="不帶目前名單，整張印成空白列供現場手寫簽到"><i class="fa fa-file-o"></i> 列印空白簽到表</button>
         <button class="b-cancel" id="exRevert" style="display:none;color:#DD5138;" onclick="revertPlanned()"><i class="fa fa-undo"></i> 退回計畫中</button>
         <button class="b-cancel" onclick="closeMask('exMask')">取消</button>
         <button class="b-ok" id="exSave" onclick="submitEx(0)" title="課還沒上：確定要開這堂課（狀態→已排定，可印簽到表）">確認開課</button>
@@ -1115,9 +1116,9 @@ function detailHtml(res){
     h+='<h5 style="margin-top:8px;">參加人員（'+(res.attendees||[]).length+' 人）</h5>';
     if (!(res.attendees||[]).length) h+='<div style="color:#8a6d45;">尚未建立名單</div>';
     else {
-        h+='<table><tr><th>姓名</th><th>部門</th><th>職稱</th><th>實到</th><th>評鑑結果</th><th>分數</th><th>備註</th></tr>';
+        h+='<table><tr><th>部門</th><th>職稱</th><th>姓名</th><th>實到</th><th>評鑑結果</th><th>分數</th><th>備註</th></tr>';
         res.attendees.forEach(function(a){
-            h+='<tr><td>'+esc(a.user_name||'')+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td>'
+            h+='<tr><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
              +'<td>'+(+a.attended?'✔':'—')+'</td><td>'+evalPill(a.eval_result)+'</td>'
              +'<td>'+(a.eval_score==null?'':numTrim(a.eval_score))+'</td><td>'+esc(a.eval_note||'')+'</td></tr>';
         });
@@ -1257,7 +1258,30 @@ $('#edDays,#edHours').on('input change', edValidate);
    語意：確認實行＝「確定要開這堂課」（狀態轉已排定，可先印簽到表）；
         上完課後回到同一畫面勾實到、按「登錄完成」才轉已完成（計入 KPI）。 */
 var EXROW = null;
+/* 點「確認實行/實行資料」一律先向後端要一次這筆場次的最新狀態才開窗——
+   避免 A 剛把這筆改成「已排定/已完成」，B 手上還是舊快取、點開來還是「計畫中」的畫面繼續填，
+   兩人同時存檔會互相覆蓋或重複寫入。發現狀態跟畫面上顯示的不一樣，就擋下來、告知、刷新清單，不開窗。
+   （鐵則見 ai-rules/08 第六節：會造成資料重複/動作重複又存不進去的按鈕，一律點下去當下先向後端抓最新狀態） */
 function openEx(sid){
+    var was = (ROWS.find(function(x){ return String(x.session_id)===String(sid); })||{}).status;
+    NProgress.start();
+    $.getJSON(API, {action:'session_detail', session_id:sid}, function(res){
+        NProgress.done();
+        if (!res.ok){ alert(res.error||'載入失敗，請重試'); return; }
+        var idx = ROWS.findIndex(function(x){ return String(x.session_id)===String(sid); });
+        var fresh = $.extend({}, idx>=0?ROWS[idx]:{}, res.session);
+        fresh.days = res.days;
+        fresh.dept_name = (res.dept_names&&res.dept_names.length) ? res.dept_names.join('、') : (fresh.dept_id==null?'全公司':fresh.dept_name);
+        if (idx>=0) ROWS[idx]=fresh; else ROWS.push(fresh);
+        if (was && was!==fresh.status){
+            renderTable();
+            alert('這筆場次的狀態剛被更新為「'+(STATUS_LABEL[fresh.status]||fresh.status)+'」（可能是其他人剛處理過），畫面已重新整理，請確認最新狀態後再操作。');
+            return;
+        }
+        openExBody(sid);
+    }).fail(function(){ NProgress.done(); alert('載入失敗，請重試'); });
+}
+function openExBody(sid){
     var r = ROWS.find(function(x){ return String(x.session_id)===String(sid); });
     if (!r) return;
     EXROW = r;
@@ -1610,8 +1634,8 @@ function renderAtt(){
                 + '<option value="pass"'+(ev==='pass'?' selected':'')+'>合格</option>'
                 + '<option value="fail"'+(ev==='fail'?' selected':'')+'>不合格</option>'
                 + '<option value="exempt"'+(ev==='exempt'?' selected':'')+'>免評鑑</option></select>';
-        h+='<tr><td class="t-left">'+esc(a.user_name||'')+'</td><td>'+esc(a.dept_name||'')+'</td>'
-          +'<td>'+esc(a.position_name||'—')+'</td>'
+        h+='<tr><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'—')+'</td>'
+          +'<td class="t-left">'+esc(a.user_name||'')+'</td>'
           +'<td><input type="checkbox" '+(a.attended?'checked':'')+' onchange="ATT['+i+'].attended=this.checked?1:0;attCount()"></td>'
           +'<td>'+sel+'</td>'
           +'<td><input type="number" step="any" min="0" max="100" style="width:52px;" value="'+esc(a.eval_score==null?'':a.eval_score)
@@ -1690,6 +1714,9 @@ $(document).on('click', '.set-tab', function(){
 /* ================= 達標狀況（各單位每月/每年內外訓次數） ================= */
 var UNITS = [], GROUPS = [], DEPTS = [], TGSTATS = null, TGTARGETS = {}, TGMON = 0;   // TGMON: 0=全年
 /* 只綁主分頁（設定跳窗內也有 .tab，不能一起被清掉選取狀態） */
+/* 切換分頁＝所有分頁的資料一律重新整理（不只是使用者切過去看的那個），只是畫面仍停在切換到的那個分頁。
+   起因：A 已把「計畫中」場次確認開課，B 若還停在舊快取，點開的仍是「計畫中」的確認實行畫面，
+   兩人同時送出容易互相覆蓋／重複寫入。切分頁是使用者操作中最自然會發生、頻率也夠高的時機，藉此順便同步全頁資料。 */
 $('#mainTabs .tab').on('click', function(){
     var t = $(this).data('tab');
     $('#mainTabs .tab').removeClass('on'); $(this).addClass('on');
@@ -1697,8 +1724,7 @@ $('#mainTabs .tab').on('click', function(){
     // 列印鈕依目前分頁切換，一次只出現一顆（需求申請單改列印個別單據，見清單操作欄）
     $('#btnPrintPlan').toggle(t==='list');
     $('#btnPrintResult').toggle(t==='target');
-    if (t==='target' && !TGSTATS) loadTargetStats();
-    if (t==='apply') loadRequests();   // 每次切換都重新整理，不快取
+    loadList(); loadTargetStats(); loadRequests();
 });
 function loadTargetStats(){
     NProgress.start();
@@ -2213,53 +2239,70 @@ function copySession(sid){
 /* 列印簽到表（確認實行 modal 中的場次＋名單）
    多天課程＝一天一頁（每天各自簽名），單天＝一頁 */
 /* 簽到表：學員自己的簽名欄就是簽到證明，不需要另外留一行講師/主管簽名底線；依 ai-rules/16 綁 AS 文件編號 */
-function printSignSheet(){
+/* blankOnly=true：不帶目前名單，整張印成空白列供現場手寫（開課前臨時要一張空白簽到表時用）。 */
+/* 課程資訊放進 <thead>（跟欄位標題同一張表），若當天簽到表人數多印到第二頁，
+   瀏覽器分頁引擎會把整個 <thead> 原樣重印在每一頁——不必自己判斷有沒有跨頁，也不會有「第二頁不知道在簽什麼」的問題。
+   多天課程：一天仍是一個獨立表格（page-break-before 換頁），該表格自己的表頭永遠只描述那一天，跨頁時也還是同一天的資訊。 */
+function printSignSheet(blankOnly){
     var r = EXROW || {};
     var course=r.course_name||'（課程名稱）';
     var ext=r.train_type==='external';
     var lect=ext?('外訓／開課單位：'+(r.org_unit||'')):('講師：'+(r.trainer||''));
     var loc=$('#exLocSel').val()||'____________';
-    // 空白列：模組設定可選「不加」／「固定加 N 列」／「補到滿頁最多16列」，絕不刪減實際名單
-    var list = ATT.length ? ATT.slice() : [];
+    // 空白列：模組設定可選「不加」／「固定加 N 列」／「補到滿頁最多16列」，絕不刪減實際名單；
+    // 空白簽到表模式一律印滿（沿用設定的固定列數，未設定或設不加時退回 16 列，畢竟印「空白」表就是要給人寫的）。
+    var list = blankOnly ? [] : (ATT.length ? ATT.slice() : []);
     var blankMode = String(SETTINGS.training_signsheet_blank_rows||'0');
     var blanks = 0;
     if (blankMode==='fill16') blanks = Math.max(0, 16 - list.length);
     else { var bn = parseInt(blankMode,10); if (!isNaN(bn) && bn>0) blanks = Math.min(16, bn); }
+    if (blankOnly && blanks===0) blanks = 16;
     for (var bi=0; bi<blanks; bi++) list.push({});
     var ds=(DAYS.length?DAYS:[{date:'', start:'', end:'', hours:''}]);
-    var em=$('#exEvalMethod').val(), emLabel=em?(EVAL_METHODS[em]||em):'';
+    var em=$('#exEvalMethod').val(), emLabel=em?(EVAL_METHODS[em]||em):'（未設定）';
     var outline=$.trim($('#exOutline').val()||'');
+    // 多天課程：每個表頭都附一行「全部上課日期」，方便第 3 天才簽的人也看得到整體排程；
+    // 天數不多(≤6)逐一列出、換行不了就用頓號分隔；太多天(>6)改用「首~末（共N天）」範圍格式，避免那一行印成一長串。
+    var allDates = ds.map(function(d){ return d.date||'?'; });
+    var allDatesLine = ds.length<=1 ? '' : (ds.length<=6
+        ? '全部上課日期：'+allDates.join('、')
+        : '全部上課日期：'+allDates[0]+' ~ '+allDates[allDates.length-1]+'（共 '+ds.length+' 天）');
     var html='';
     ds.forEach(function(d, di){
         var tm=(d.start||'')+(d.end?'~'+d.end:'');
-        var when='日期：'+(d.date||'____-__-__')+(tm?'  '+tm:'');
         var hh=d.hours||'';
-        var where='地點：'+loc+'　時數：'+(hh||'__')+' 小時'+(emLabel?'　評鑑方式：'+emLabel:'');
+        var when='日期：'+(d.date||'____-__-__')+(tm?'　'+tm:'')+'　時數：'+(hh||'__')+' 小時';
         var rows='';
         list.forEach(function(a,i){
             // 評鑑結果一律印成空白勾選框讓現場圈選（紙本才是正本；線上已填的另有系統紀錄）
-            rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.user_name||'')+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td>'
+            rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
                 +'<td style="width:130px;"></td>'
                 +'<td style="width:112px;white-space:nowrap;">☐ 合格　☐ 不合格</td>'
                 +'<td style="width:120px;"></td></tr>';
         });
         html+='<div class="pg'+(di>0?' pgbrk':'')+'">'
-            +'<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div><div class="tt">教育訓練簽到表</div></div>'
-            +'<table class="sf-info"><tr><td colspan="2">課程名稱：'+esc(course)
-            +(ds.length>1?'　（第 '+(di+1)+' / '+ds.length+' 天）':'')+'</td></tr>'
-            +'<tr><td>'+esc(lect)+'</td><td>'+esc(where)+'</td></tr><tr><td colspan="2">'+esc(when)+'</td></tr>'
-            +(outline?'<tr><td colspan="2" class="ol">課程大綱：'+esc(outline)+'</td></tr>':'')+'</table>'
-            +'<table class="sf"><thead><tr><th style="width:36px;">序</th><th>姓名</th><th>部門</th><th>職稱</th><th>簽名</th>'
-            +'<th>評鑑結果</th><th>備註</th></tr></thead><tbody>'+rows+'</tbody></table>'
+            +'<table class="sf"><thead>'
+            +'<tr><th colspan="7" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
+            +'<div class="tt">教育訓練簽到表'+(blankOnly?'（空白）':'')+'</div></div></th></tr>'
+            +'<tr><td colspan="7" class="sf-i">課程名稱：'+esc(course)+(ds.length>1?'　（第 '+(di+1)+' / '+ds.length+' 天）':'')+'</td></tr>'
+            +(allDatesLine?'<tr><td colspan="7" class="sf-i">'+esc(allDatesLine)+'</td></tr>':'')
+            +'<tr><td colspan="7" class="sf-i">評鑑方式：'+esc(emLabel)+'</td></tr>'
+            +'<tr><td colspan="7" class="sf-i">'+esc(lect)+'　地點：'+esc(loc)+'</td></tr>'
+            +'<tr><td colspan="7" class="sf-i">'+esc(when)+'</td></tr>'
+            +(outline?'<tr><td colspan="7" class="sf-i ol">課程大綱：'+esc(outline)+'</td></tr>':'')
+            +'<tr><th style="width:36px;">序</th><th>部門</th><th>職稱</th><th>姓名</th><th>簽名</th>'
+            +'<th>評鑑結果</th><th>備註</th></tr>'
+            +'</thead><tbody>'+rows+'</tbody></table>'
             +'</div>';
     });
     // 簽名＋簽日期要有足夠空間書寫：字級加大、列高至少 1.5 倍（30px→46px）
     var css='table.sf{width:100%;border-collapse:collapse;font-size:15px;margin-top:8px;}'
         +'table.sf th,table.sf td{border:1px solid #333;padding:10px 6px;text-align:center;height:46px;}'
-        +'table.sf-info{width:100%;border-collapse:collapse;font-size:14px;margin-top:10px;}table.sf-info td{border:1px solid #999;padding:6px 8px;text-align:left;}'
-        +'table.sf-info td.ol{white-space:pre-wrap;line-height:1.6;}'
+        +'table.sf td.sf-i{border:1px solid #999;padding:5px 8px;text-align:left;font-size:13px;height:auto;background:#fff;}'
+        +'table.sf td.sf-i.ol{white-space:pre-wrap;line-height:1.5;}'
         +'.pgbrk{page-break-before:always;}';
-    egPrintWindow('教育訓練簽到表', html, css, DOC_NO.signsheet, false);
+    // 人數多會跨頁，用 pageCount 模式（真頁碼＋表頭自動重印每一頁）
+    egPrintWindow('教育訓練簽到表'+(blankOnly?'（空白）':''), html, css, DOC_NO.signsheet, false, true);
 }
 /* 刪除：兩次都要輸入大寫 Y 才執行（連同上課日、參加名單、附件實體檔一起刪，無法復原） */
 /* ================= 列印（依 ai-rules/16：大標題＝公司全名、頁碼左下、AS文件編號右下） ================= */
@@ -2268,12 +2311,22 @@ function printSignSheet(){
    ・大標題（公司全名）與副標題（表單名稱）拉出字級層次
    ・文件編號印在每頁右下（position:fixed 會在每一頁重複）
    ・欄寬用 table-layout:fixed 明確配置，避免中文被擠成一長條直排 */
-function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
-    var as = esc(String(docNo||''));
-    var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:0;}'
-            + 'html,body{margin:0;padding:0;}'
+/* pageCount=true：確定會分頁的報表（如簽到表人數多會跨頁）要用這個模式——
+   放棄「margin:0 藏瀏覽器頁首頁尾」的乾淨版面，換取真的「第 X 頁／共 Y 頁」（ai-rules/16 四之二已預留此二選一）。
+   此時課程資訊務必寫在該表格的 <thead> 裡（不是外面另一張表），瀏覽器分頁引擎才會自動把 thead 原樣重印在每一頁。 */
+function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount){
+    var asCss = String(docNo||'').replace(/['\\]/g,'');   // 塞進 CSS content 字串用
+    var asHtml = esc(String(docNo||''));                   // 塞進 HTML 用
+    var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';'
+            + (pageCount
+                ? 'margin:12mm 8mm 16mm;'
+                  + " @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#333; }"
+                  + (asCss ? " @bottom-right{ content:'"+asCss+"'; font-size:9pt; color:#333; }" : '')
+                : 'margin:0;')
+            + '}'
+            + (pageCount ? '' : 'html,body{margin:0;padding:0;}')
             + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;'
-            + 'padding:10mm 8mm 12mm;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+            + (pageCount ? '' : 'padding:10mm 8mm 12mm;') + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.pt-head{text-align:center;margin-bottom:6px;}'
             + '.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}'
             + '.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
@@ -2294,7 +2347,7 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
     w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
-        + bodyHtml + (as ? '<div class="pt-foot">'+as+'</div>' : '')
+        + bodyHtml + (!pageCount && asHtml ? '<div class="pt-foot">'+asHtml+'</div>' : '')
         + '<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
     w.document.close();
 }
@@ -2456,7 +2509,7 @@ function printRecord(){
     var res=VIEW_RES, s=res.session, ext=s.train_type==='external';
     var rows='';
     (res.attendees||[]).forEach(function(a,i){
-        rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.user_name||'')+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td>'
+        rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
             +'<td>'+(+a.attended?'✔':'')+'</td>'
             +'<td>'+(a.eval_result==='pass'?'合格':a.eval_result==='fail'?'不合格':a.eval_result==='exempt'?'免評鑑':'')+'</td>'
             +'<td>'+(a.eval_score==null?'':numTrim(a.eval_score))+'</td><td>'+esc(a.eval_note||'')+'</td></tr>';
@@ -2470,7 +2523,7 @@ function printRecord(){
         +'　時數：'+(s.actual_hours==null?'—':numTrim(s.actual_hours))+'</td></tr>'
         +'<tr><td colspan="2">評鑑方式：'+(s.eval_method?esc(EVAL_METHODS[s.eval_method]||s.eval_method):'—')+'</td></tr>'
         +(s.outline?'<tr><td colspan="2" class="ol">課程大綱：'+esc(s.outline)+'</td></tr>':'')+'</table>'
-        +'<table class="sf"><thead><tr><th style="width:36px;">序</th><th>姓名</th><th>部門</th><th>職稱</th>'
+        +'<table class="sf"><thead><tr><th style="width:36px;">序</th><th>部門</th><th>職稱</th><th>姓名</th>'
         +'<th style="width:44px;">實到</th><th style="width:70px;">評鑑結果</th><th style="width:50px;">分數</th><th>備註</th></tr></thead>'
         +'<tbody>'+(rows||'<tr><td colspan="8">（無名單）</td></tr>')+'</tbody></table>'
         +'<div style="margin-top:14px;font-size:13px;">講師/主辦簽章：______________　　單位主管簽章：______________　　管理代表：______________</div>';
@@ -2553,7 +2606,7 @@ function reqDeptOptionsFill(){
 function reqAttRender(editable){
     var h='';
     REQ_ATT.forEach(function(a,i){
-        h += '<tr><td class="t-left">'+esc(a.user_name||'')+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'—')+'</td>'
+        h += '<tr><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'—')+'</td><td class="t-left">'+esc(a.user_name||'')+'</td>'
            + '<td>'+(editable?'<span class="att-del" onclick="reqAttDel('+i+')"><i class="fa fa-times"></i></span>':'')+'</td></tr>';
     });
     $('#reqAttBody').html(h || '<tr><td colspan="4" style="color:#8a6d45;padding:6px;">尚未加入人員</td></tr>');
@@ -2733,20 +2786,36 @@ function reqSetApplyDate(){
     }, 'json').fail(function(x){ alert('更新失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 /* 清單上的快速核准/退回（僅訓練管理員；一般核准走通知裡的獨立審核頁） */
+/* 核准/退回、轉為計畫都先向後端刷新一次最新狀態再往下走，避免另一人剛決行過／已轉過計畫，
+   這裡還停在舊快取繼續操作造成重複決行或重複轉出（ai-rules/08 第六節鐵則）。 */
 function reqDecideQuick(id, decision){
-    var note = '';
-    if (decision==='rejected'){ note = prompt('退回原因（必填）：'); if (note===null) return; note=$.trim(note); if (!note){ alert('請填寫退回原因'); return; } }
-    else if (!confirm('確定核准此申請單？')) return;
-    $.post(API, {action:'request_decide', request_id:id, decision:decision, note:note}, function(res){
-        if (!res.ok){ alert(res.error||'處理失敗'); return; }
-        loadRequests();
-    }, 'json').fail(function(x){ alert('處理失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    loadRequests(function(){
+        var r = reqFind(id);
+        if (!r){ alert('找不到此申請單，畫面已重新整理。'); return; }
+        if (r.status!=='submitted'){
+            alert('這筆申請單目前狀態已是「'+(REQ_STATUS_LABEL[r.status]||r.status)+'」，可能已被處理過，畫面已重新整理。');
+            return;
+        }
+        var note = '';
+        if (decision==='rejected'){ note = prompt('退回原因（必填）：'); if (note===null) return; note=$.trim(note); if (!note){ alert('請填寫退回原因'); return; } }
+        else if (!confirm('確定核准此申請單？')) return;
+        $.post(API, {action:'request_decide', request_id:id, decision:decision, note:note}, function(res){
+            if (!res.ok){ alert(res.error||'處理失敗'); return; }
+            loadRequests();
+        }, 'json').fail(function(x){ alert('處理失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    });
 }
 function reqConvert(id){
-    var r = reqFind(id);
-    if (!r) return;
-    if (!confirm('開啟「新增計畫」並帶入此申請單內容，確認/補齊講師、內外訓等欄位後儲存即完成轉換？')) return;
-    openEdFromRequest(r);
+    loadRequests(function(){
+        var r = reqFind(id);
+        if (!r){ alert('找不到此申請單，畫面已重新整理。'); return; }
+        if (r.status!=='approved'){
+            alert('這筆申請單目前狀態已是「'+(REQ_STATUS_LABEL[r.status]||r.status)+'」，可能已被轉過計畫或退回，畫面已重新整理。');
+            return;
+        }
+        if (!confirm('開啟「新增計畫」並帶入此申請單內容，確認/補齊講師、內外訓等欄位後儲存即完成轉換？')) return;
+        openEdFromRequest(r);
+    });
 }
 function reqDelete(id){
     if (!confirm('刪除此申請單？（僅刪申請單本身，不影響已轉出的計畫）')) return;
