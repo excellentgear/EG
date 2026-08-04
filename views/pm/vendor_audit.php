@@ -210,6 +210,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             .va-toolbar, .nav_menu, .left_col, footer, .va-role-badge .fa-question-circle, .va-op { display:none !important; }
             .right_col { margin:0 !important; padding:0 !important; }
             table.va-table thead th { position:static; }
+            /* 非目前分頁與任何遮罩即使被遺留在DOM中也強制不印，避免多出空白頁 */
+            #tabEval, #tabRoster, #tabPlan, .va-mask, .va-totop { display:none !important; }
+            body, .right_col, .container.body, .main_container { min-height:0 !important; height:auto !important; }
+            #vaListPrintHead { display:block !important; text-align:center; margin-bottom:8px; }
+            #vaListPrintHead .co { font-size:22px; font-weight:bold; letter-spacing:1px; }
+            #vaListPrintHead .tt { font-size:16px; font-weight:bold; margin-top:3px; }
+            #vaListPrintHead .sub { font-size:11px; color:#444; margin-top:2px; }
         }
     </style>
 </head>
@@ -265,6 +272,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         </div>
         <div class="va-remind" id="remind"></div>
 
+        <div id="vaListPrintHead" style="display:none;"></div>
         <div class="va-table-wrap">
             <table class="va-table" id="vaTable">
                 <thead><tr>
@@ -556,6 +564,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <label>稽核週期（月）—— 全公司共用，作為「多久辦一期」的參考與提醒</label>
         <input type="number" id="cycVal" step="1" min="1" style="width:120px;">
         <div style="font-size:12px;color:#8a6d45;margin-top:6px;">例：6＝每半年一期。此值僅供提醒，不會自動改變各期對象。</div>
+        <label style="margin-top:10px;">「列印清單」標題（本期稽核批次清單列印時顯示的文件名稱）</label>
+        <input type="text" id="cycListTitle" maxlength="60" style="width:100%;" placeholder="供應商稽核計畫實施結果">
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('cycMask')">取消</button>
@@ -838,8 +848,14 @@ function loadRound(){
         NProgress.done();
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         TARGETS = res.targets; PERMS = res.perms; ROUND_YEAR = res.year;
-        renderStat(res); renderRemind(res); renderTargets();
+        renderStat(res); renderRemind(res); renderTargets(); renderListPrintHead(res.year, res.half);
     }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function renderListPrintHead(year, half){
+    var title = META.list_print_title || '供應商稽核計畫實施結果';
+    $('#vaListPrintHead').html('<div class="co">'+esc(META.company_name||'')+'</div>'
+        + '<div class="tt">'+esc(title)+'</div>'
+        + '<div class="sub">'+year+' 年　'+(half===1?'上半年':'下半年')+'</div>');
 }
 
 function renderStat(res){
@@ -867,7 +883,7 @@ function renderTargets(){
     TARGETS.forEach(function(t){
         var done = !!t.audit_date;
         var stat = t.disabled ? '<span class="st-pill st-dis">停用</span>'
-                 : (done ? signStatusPill(t.status) : '<span class="st-pill st-todo">未稽核</span>');
+                 : (done ? signStatusPill(t.sign_status) : '<span class="st-pill st-todo">未稽核</span>');
         html += '<tr'+(t.disabled?' class="dis"':'')+'>';
         html += '<td>'+esc(t.maker_id_no)+'</td>';
         html += '<td class="t-left"><b>'+esc(t.maker_id||'')+'</b></td>';
@@ -880,8 +896,8 @@ function renderTargets(){
         html += '<td>'+esc(t.auditor||'—')+'</td>';
         html += '<td>';
         if (PERMS.canEdit) html += '<span class="va-op" onclick="openRec('+t.target_id+')"><i class="fa fa-pencil"></i>登錄</span>';
-        if (t.status==='pending') html += '<span class="va-op" style="color:#DD8A38;" onclick="openSignMask('+t.target_id+')"><i class="fa fa-check-square-o"></i>簽核</span>';
-        if (t.audit_date) html += '<span class="va-op" onclick="openRecordSheet('+t.target_id+')"><i class="fa fa-file-text-o"></i>記錄表</span>';
+        if (t.sign_status==='pending') html += '<span class="va-op" style="color:#DD8A38;" onclick="openSignMask('+t.target_id+')"><i class="fa fa-check-square-o"></i>簽核</span>';
+        if (t.audit_date && t.sign_status!=='draft') html += '<span class="va-op" onclick="openRecordSheet('+t.target_id+')"><i class="fa fa-file-text-o"></i>記錄表</span>';
         html += '<span class="va-op" onclick="openHis(\''+esc(t.maker_id_no)+'\')"><i class="fa fa-history"></i>歷史</span>';
         if (PERMS.canEdit) html += '<span class="va-op" style="color:#DD5138;" onclick="removeTarget('+t.target_id+')"><i class="fa fa-times"></i>移除</span>';
         html += '</td></tr>';
@@ -1208,11 +1224,12 @@ function removeTarget(tid){
 
 /* ---------- 週期設定 ---------- */
 /* 週期設定 */
-$('#btnCycle').on('click', function(){ $('#cycVal').val(META.cycle_months); openMask('cycMask'); });
+$('#btnCycle').on('click', function(){ $('#cycVal').val(META.cycle_months); $('#cycListTitle').val(META.list_print_title||''); openMask('cycMask'); });
 function submitCycle(){
-    $.post(API, {action:'save_cycle', cycle_months:$('#cycVal').val()}, function(res){
+    $.post(API, {action:'save_cycle', cycle_months:$('#cycVal').val(), list_print_title:$('#cycListTitle').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        META.cycle_months = res.cycle_months; closeMask('cycMask'); loadRound();
+        META.cycle_months = res.cycle_months; META.list_print_title = res.list_print_title; closeMask('cycMask'); loadRound();
+        renderListPrintHead();
     }, 'json');
 }
 /* 附件路徑設定 */

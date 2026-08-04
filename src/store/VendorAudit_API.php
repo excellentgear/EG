@@ -71,6 +71,7 @@ case 'meta': {
           'cur_half'=>((int)date('n') <= 6 ? 1 : 2), 'today'=>date('Y-m-d'),
           'cycle_months'=>vendor_audit_cycle_months($db), 'main_categories'=>$cats,
           'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', ''),
+          'list_print_title'=>vendor_eval_setting($db, 'vendor_audit_list_print_title', ''),
           'as_doc'=>vendor_audit_bound_asdoc($db),
           'eval_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_eval_as_doc_id'),
           'record_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_record_as_doc_id'),
@@ -269,8 +270,8 @@ case 'round': {
         $st = $db->prepare("SELECT t.target_id, t.maker_id_no, t.audit_date, t.auditor, t.plan_month,
                                    t.report_no, t.note, t.added_by_name,
                                    t.overall_rate, t.self_rate, t.audit_rate, t.judge, t.audit_mode, t.conclusion,
-                                   t.status, t.signed_by_name, t.signed_at, t.signed_is_deputy,
-                                   m.maker_id, m.status, sc.sub_cat_names
+                                   t.status AS sign_status, t.signed_by_name, t.signed_at, t.signed_is_deputy,
+                                   m.maker_id, m.status, sc.sub_cat_names AS main_cat_name
                             FROM vendor_audit_target t
                             JOIN maker_list m ON m.maker_id_no=t.maker_id_no
                             " . vendor_audit_subcat_join() . "
@@ -771,6 +772,12 @@ case 'save_cycle': {
                             ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
         $up->execute([$ab]);
     }
+    if (array_key_exists('list_print_title', $_POST)) {
+        $lt = trim((string)$_POST['list_print_title']);
+        $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('vendor_audit_list_print_title', ?)
+                            ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+        $up->execute([$lt]);
+    }
     foreach (['as_doc_id'=>'vendor_audit_as_doc_id', 'record_as_doc_id'=>'vendor_record_as_doc_id',
               'roster_as_doc_id'=>'vendor_roster_as_doc_id', 'eval_as_doc_id'=>'vendor_eval_as_doc_id',
               'plan_as_doc_id'=>'vendor_plan_as_doc_id'] as $pk=>$sk) {
@@ -782,6 +789,7 @@ case 'save_cycle': {
     }
     jout(['cycle_months'=>vendor_audit_cycle_months($db),
           'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', ''),
+          'list_print_title'=>vendor_eval_setting($db, 'vendor_audit_list_print_title', ''),
           'as_doc'=>vendor_audit_bound_asdoc($db),
           'record_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_record_as_doc_id'),
           'roster_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_roster_as_doc_id'),
