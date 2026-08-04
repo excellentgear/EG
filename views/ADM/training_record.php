@@ -1648,6 +1648,9 @@ function applyEvalMethod(){
                   : '評鑑方式：<b>'+esc(EVAL_METHODS[m]||m)+'</b>；上完課於下方名單逐人填合格／不合格（可批次）'));
     $('#evalBatchBox').css('opacity', notice?0.5:1);
     $('#evalBatchBox button, #evalOnlyAttended').prop('disabled', notice);
+    // 宣導(免評鑑)課程不需要考核表：直接隱藏整個考核表區塊，避免建了考核項目卻用不到
+    if (notice) $('#ojtSec').hide();
+    else if (EXROW && EXROW.train_type!=='external') $('#ojtSec').show();
     renderAtt();
 }
 $('#exEvalMethod').on('change', applyEvalMethod);
@@ -2375,7 +2378,7 @@ function printSignSheet(blankOnly){
     if (blankOnly && blanks===0) blanks = 16;
     for (var bi=0; bi<blanks; bi++) list.push({});
     var ds=(DAYS.length?DAYS:[{date:'', start:'', end:'', hours:''}]);
-    var em=$('#exEvalMethod').val(), emLabel=em?(EVAL_METHODS[em]||em):'（未設定）';
+    var em=$('#exEvalMethod').val(), emLabel=em?(EVAL_METHODS[em]||em):'（未設定）', noticeCourse=(em==='notice');
     var outline=$.trim($('#exOutline').val()||'');
     // 多天課程：每個表頭都附一行「全部上課日期」，方便第 3 天才簽的人也看得到整體排程；
     // 天數不多(≤6)逐一列出、換行不了就用頓號分隔；太多天(>6)改用「首~末（共N天）」範圍格式，避免那一行印成一長串。
@@ -2390,10 +2393,10 @@ function printSignSheet(blankOnly){
         var when='日期：'+(d.date||'____-__-__')+(tm?'　'+tm:'')+'　時數：'+(hh||'__')+' 小時';
         var rows='';
         list.forEach(function(a,i){
-            // 評鑑結果一律印成空白勾選框讓現場圈選（紙本才是正本；線上已填的另有系統紀錄）
+            // 評鑑結果一律印成空白勾選框讓現場圈選（紙本才是正本；線上已填的另有系統紀錄）；宣導(免評鑑)課程直接印「不須評鑑」不留勾選框
             rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
                 +'<td style="width:130px;"></td>'
-                +'<td style="width:112px;white-space:nowrap;">☐ 合格　☐ 不合格</td>'
+                +'<td style="width:112px;white-space:nowrap;">'+(noticeCourse?'不須評鑑':'☐ 合格　☐ 不合格')+'</td>'
                 +'<td style="width:120px;"></td></tr>';
         });
         html+='<div class="pg'+(di>0?' pgbrk':'')+'">'
