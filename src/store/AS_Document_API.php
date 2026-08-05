@@ -10,6 +10,7 @@ $document_root = $_SERVER['DOCUMENT_ROOT'];
 session_start();
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
+include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
 
 $db_connection = new DBConnection();
 $db = $db_connection->getPDO();
@@ -98,14 +99,16 @@ function asOwnCompanyName(PDO $db): string {
     } catch (Exception $e) {}
     return '';
 }
-/** 結構總覽列印綁定的 AS 文件（未綁定回 null） */
+/** 結構總覽列印綁定的 AS 文件（未綁定回 null）；doc_no 已依 eg_asdoc_no() 規則附加版次（僅四階文件，見 ai-rules/16 第三節） */
 function asTreeBoundDoc(PDO $db): ?array {
     $id = (int)asGetSetting($db, 'as_doc_tree_print_as_doc_id');
     if ($id <= 0) return null;
-    $s = $db->prepare("SELECT id, doc_no, doc_name, current_version FROM as_document WHERE id=? AND is_deleted=0");
+    $s = $db->prepare("SELECT id, doc_no, doc_name, current_version, doc_level FROM as_document WHERE id=? AND is_deleted=0");
     $s->execute([$id]);
     $r = $s->fetch(PDO::FETCH_ASSOC);
-    return $r ?: null;
+    if (!$r) return null;
+    $r['doc_no'] = eg_asdoc_no($r);
+    return $r;
 }
 function asSetSetting(PDO $db, string $key, string $val): void {
     $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?)
@@ -293,6 +296,7 @@ $asGate = [
     'add_version'=>'update', 'update_document_meta'=>'update',
     'open_online'=>'edit_online',
     'delete_document'=>'delete', 'restore_document'=>'delete', 'delete_document_permanent'=>'delete',
+    'delete_version_permanent'=>'delete',
     'add_tag'=>'settings', 'update_tag'=>'settings', 'delete_tag'=>'settings',
     'get_perms'=>'settings', 'save_perms'=>'settings',
     'get_settings'=>'settings', 'save_settings'=>'settings', 'upload_template'=>'settings',
@@ -744,6 +748,58 @@ case 'delete_document_permanent':
 
     require_once __DIR__ . '/../common/attachment_lib.php';
     eg_att_rrmdir(asDocDir($db, $id));
+    jout(['status'=>'success']);
+
+// ══════════════ 永久刪除單一改版紀錄（含附件；僅超級管理員，用於傳錯版本） ══════════════
+case 'delete_version_permanent':
+    $isSuper = ($currentUserId === 1 && $asIsRoleAdmin);
+    if (!$isSuper) jout(['status'=>'error','message'=>'僅超級管理員可永久刪除改版紀錄']);
+    $verId = (int)($_POST['version_id'] ?? 0);
+    $pwd   = (string)($_POST['password'] ?? '');
+    if ($verId<=0) jout(['status'=>'error','message'=>'無效版本 ID']);
+    if ($pwd==='') jout(['status'=>'error','message'=>'請輸入超級管理員密碼']);
+    $realPwd = $db->prepare("SELECT user_password FROM `user` WHERE id=1");
+    $realPwd->execute();
+    $realPwd = $realPwd->fetchColumn();
+    if ($realPwd===false || !hash_equals((string)$realPwd, $pwd)) jout(['status'=>'error','message'=>'密碼錯誤，未執行刪除']);
+
+    $ver = $db->prepare("SELECT * FROM as_document_version WHERE id=?");
+    $ver->execute([$verId]);
+    $ver = $ver->fetch(PDO::FETCH_ASSOC);
+    if (!$ver) jout(['status'=>'error','message'=>'此改版紀錄不存在']);
+    $docId = (int)$ver['doc_id'];
+
+    $doc = $db->prepare("SELECT doc_no, doc_name, current_version_id FROM as_document WHERE id=?");
+    $doc->execute([$docId]);
+    $doc = $doc->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
+
+    try {
+        $db->beginTransaction();
+        $db->prepare("DELETE FROM as_document_version WHERE id=?")->execute([$verId]);
+        // 若刪的正好是目前版本，改指向剩餘版本中最新建立的一筆(沒有則清空目前版本)
+        if ((int)$doc['current_version_id'] === $verId) {
+            $next = $db->prepare("SELECT id, version FROM as_document_version WHERE doc_id=? ORDER BY id DESC LIMIT 1");
+            $next->execute([$docId]);
+            $next = $next->fetch(PDO::FETCH_ASSOC);
+            $db->prepare("UPDATE as_document SET current_version=?, current_version_id=?, updated_at=NOW() WHERE id=?")
+               ->execute([$next['version'] ?? null, $next['id'] ?? null, $docId]);
+        }
+        $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
+                      VALUES ('views/ADM/as_document_management.php', ?, ?, NOW(), ?)")
+           ->execute(['永久刪除改版紀錄（傳錯版本）',
+               "doc_no={$doc['doc_no']} doc_name={$doc['doc_name']} version={$ver['version']}",
+               $currentCname ?: $currentUserName]);
+        $db->commit();
+    } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
+
+    // 刪該版本自己的檔案(文件檔/申請單/預覽快取)，同資料夾內其他版本檔名不同不受影響
+    $dir = asDocDir($db, $docId);
+    foreach ([$ver['file_name'], $ver['apply_form_file_name']] as $fn) {
+        if (!$fn) continue;
+        @unlink($dir . DIRECTORY_SEPARATOR . $fn);
+        @unlink($dir . DIRECTORY_SEPARATOR . 'preview_' . pathinfo($fn, PATHINFO_FILENAME) . '.pdf');
+    }
     jout(['status'=>'success']);
 
 // ══════════════ 下載：某版本文件 / 申請單 / 目前版 ══════════════
