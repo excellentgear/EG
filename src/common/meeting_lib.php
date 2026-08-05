@@ -436,6 +436,31 @@ function meeting_setting_save(PDO $db, string $key, string $value): void {
 }
 
 /* ============================================================
+ * 超級管理員：補齊/修改簽章日期（僅員工id=1且state=99；2026-08-05使用者明確要求，比照
+ * eg_leave_verify_superadmin_password 慣例不另發明一套）。用途：出席簽到/項目確認簽名/主席
+ * 總經理簽核忘記簽或日期需要更正時的救濟，密碼每次呼叫都驗證(fail-closed)，前端只需畫面上輸入一次重複帶入即可。
+ * ============================================================ */
+function meeting_is_superadmin(PDO $db, int $uid): bool {
+    if ($uid !== 1) return false;
+    try {
+        $st = $db->prepare("SELECT state FROM user WHERE id=1 LIMIT 1");
+        $st->execute();
+        return (int)$st->fetchColumn() === 99;
+    } catch (Throwable $e) { return false; }
+}
+function meeting_verify_superadmin_password(PDO $db, string $password): array {
+    if ($password === '') return ['ok'=>false, 'msg'=>'請輸入超級管理員密碼'];
+    try {
+        $st = $db->prepare("SELECT user_password FROM `user` WHERE id=1 LIMIT 1");
+        $st->execute();
+        $real = $st->fetchColumn();
+        if ($real === false) return ['ok'=>false, 'msg'=>'查無超級管理員帳號'];
+        if (!hash_equals((string)$real, $password)) return ['ok'=>false, 'msg'=>'密碼錯誤'];
+    } catch (Throwable $e) { return ['ok'=>false, 'msg'=>'密碼驗證失敗']; }
+    return ['ok'=>true, 'msg'=>''];
+}
+
+/* ============================================================
  * 合併列印「製表人」解析：出席者中屬於業務部門(含子部門)、且在職務職稱設定裡職稱有設職級者，
  * 取職級最低(最基層主管)的那一位；同職級多人時全部回傳讓使用者選。
  * ============================================================ */

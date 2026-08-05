@@ -79,7 +79,7 @@ case 'meta': {
             $stTpl = ['id'=>(int)$r['id'], 'tpl_name'=>$r['tpl_name'], 'schema'=>json_decode((string)$r['schema_json'], true)];
         }
     }
-    jout(['perms'=>$perms, 'departments'=>$depts, 'years'=>$years,
+    jout(['perms'=>$perms, 'departments'=>$depts, 'years'=>$years, 'is_superadmin'=>meeting_is_superadmin($db, $uid),
           'uid'=>$uid, 'uname'=>$uname, 'today'=>date('Y-m-d'), 'cur_year'=>$cy,
           'gm_name'=>$gm ? $gm['user_cname'] : null, 'gm_id'=>$gm ? (int)$gm['id'] : null, 'presets'=>$presets,
           'company_name'=>eg_company_full_name($db), 'features'=>MEETING_FEATURES,
@@ -692,6 +692,111 @@ case 'calendar_meetings': {
     foreach ($events as &$e) { $e['actors'] = $actorsByEvent[(int)$e['id']] ?? []; }
     unset($e);
     jout(['events'=>$events]);
+}
+
+/* ===== 超級管理員：補齊/修改簽章日期(2026-08-05使用者明確要求) =====
+   scope: attendee/item/chair/gm/all；target_id 個別指定(att_id 或 item_id)，留空=該範圍全部(批次)。
+   使用者已確認：尚未簽核的部分(未簽到/未確認/主席總經理未核准)一併視同補簽，不是只改已簽過的日期；
+   主席/總經理若該階段從未送出過(approval_record查無紀錄)不硬造，維持原樣。 */
+case 'admin_backfill': {
+    if (!meeting_is_superadmin($db, $uid)) jerr('僅超級管理員可使用此功能', 403);
+    $v = meeting_verify_superadmin_password($db, (string)($_POST['password'] ?? ''));
+    if (!$v['ok']) jerr($v['msg']);
+    $id = (int)($_POST['meeting_id'] ?? 0);
+    $m = meeting_load($db, $id);
+    $date = trim((string)($_POST['date'] ?? '')) ?: (string)$m['meeting_date'];
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) jerr('日期格式不正確');
+    $scope = (string)($_POST['scope'] ?? 'all');
+    $targetId = (int)($_POST['target_id'] ?? 0);
+    if (!in_array($scope, ['attendee','item','chair','gm','all'], true)) jerr('範圍參數不正確');
+
+    try {
+        $db->beginTransaction();
+
+        if ($scope === 'attendee' || $scope === 'all') {
+            $sql = "UPDATE meeting_attendee SET signed=1, signed_at=CONCAT(?,' ',TIME(COALESCE(signed_at,NOW()))) WHERE meeting_id=?";
+            $params = [$date, $id];
+            if ($scope === 'attendee' && $targetId) { $sql .= " AND att_id=?"; $params[] = $targetId; }
+            $db->prepare($sql)->execute($params);
+        }
+
+        if ($scope === 'item' || $scope === 'all') {
+            if ($scope === 'item' && $targetId) {
+                $iq = $db->prepare("SELECT * FROM meeting_item WHERE meeting_id=? AND item_id=?");
+                $iq->execute([$id, $targetId]);
+            } else {
+                $iq = $db->prepare("SELECT * FROM meeting_item WHERE meeting_id=?");
+                $iq->execute([$id]);
+            }
+            $pickUid = (int)($_POST['confirm_user_id'] ?? 0); // 個別指定要歸給誰簽(可選，批次時無效)
+            $updI = $db->prepare("UPDATE meeting_item SET confirm_user_id=?, confirm_user_name=?,
+                                   confirm_at=CONCAT(?,' ',TIME(COALESCE(confirm_at,NOW()))) WHERE item_id=?");
+            foreach ($iq->fetchAll(PDO::FETCH_ASSOC) as $it) {
+                $cuid = (int)$it['confirm_user_id'];
+                $cname = (string)$it['confirm_user_name'];
+                if (!$cuid) {
+                    if ($pickUid && $scope === 'item' && $targetId) {
+                        $cuid = $pickUid;
+                    } else {
+                        $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
+                        if ($ownerIds) {
+                            $inDept = implode(',', $ownerIds);
+                            $eaStmt = $db->prepare("SELECT a.user_id FROM meeting_attendee a WHERE a.meeting_id=? AND EXISTS(
+                                                        SELECT 1 FROM user_department_position_map mp WHERE mp.user_id=a.user_id AND mp.department_id IN ($inDept)
+                                                    ) LIMIT 1");
+                            $eaStmt->execute([$id]);
+                            $cuid = (int)$eaStmt->fetchColumn();
+                        }
+                    }
+                    if (!$cuid) continue; // 找不到可歸屬的人選(通常是無負責部門的項目，本就不需要確認簽名)，略過
+                    $nameSt = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+                    $nameSt->execute([$cuid]);
+                    $cname = (string)($nameSt->fetchColumn() ?: '');
+                }
+                $updI->execute([$cuid, $cname, $date, (int)$it['item_id']]);
+            }
+        }
+
+        foreach (['chair','gm'] as $lvl) {
+            if ($scope !== $lvl && $scope !== 'all') continue;
+            $rec = eg_approval_latest($db, 'meeting', $id, $lvl);
+            if (!$rec) continue; // 此階段從未送出過，無紀錄可補，不硬造
+            if ($rec['status'] === 'pending') {
+                if ($lvl === 'chair') {
+                    $signer = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
+                    $r = eg_approval_decide($db, (int)$rec['id'], (int)$signer['id'], (string)$signer['name'], 'approved', null);
+                    if ($r['success']) {
+                        $gm = meeting_gm_signer_effective($db);
+                        if ($gm && !eg_approval_latest($db, 'meeting', $id, 'gm')) {
+                            eg_approval_submit($db, 'meeting', $id, 'gm', (int)$m['recorder_user_id'], (string)$m['recorder_name']);
+                        }
+                        $db->prepare("UPDATE meeting_record SET status='chair_done', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+                    }
+                } else {
+                    $gm = meeting_gm_signer_effective($db);
+                    if (!$gm) continue; // 尚未設定「最高核准人員」，無法代簽，維持pending
+                    $r = eg_approval_decide($db, (int)$rec['id'], (int)$gm['id'], (string)$gm['name'], 'approved', null);
+                    if ($r['success']) $db->prepare("UPDATE meeting_record SET status='done', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+                }
+                $rec = eg_approval_latest($db, 'meeting', $id, $lvl);
+            }
+            if ($rec && $rec['status'] === 'approved') {
+                $db->prepare("UPDATE approval_record SET decided_at=CONCAT(?,' ',TIME(COALESCE(decided_at,NOW()))) WHERE id=?")
+                   ->execute([$date, (int)$rec['id']]);
+            }
+        }
+
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('補登失敗：'.$e->getMessage(), 500); }
+
+    try {
+        $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
+                      VALUES ('views/ADM/meeting_record.php', '超級管理員補齊簽章日期', ?, NOW(), ?)")
+           ->execute(["meeting_id={$id}, scope={$scope}, target_id={$targetId}, date={$date}", $uname]);
+    } catch (Throwable $e) {}
+
+    $ap = meeting_approval_status($db, $id);
+    jout(['status'=>$ap['status']]);
 }
 
 default: jerr('未知的操作：'.$action);
