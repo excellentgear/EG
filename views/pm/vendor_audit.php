@@ -1417,7 +1417,7 @@ function printCurrentForm(){
         dateStr: $('#recDate').val(), scores: collectScores(), mode: $('#recMode').val(),
         prodType: CUR_PROD_TYPE, auditorName: $('#recAuditor').val(),
         mgrApproved: !!(CUR_REC && CUR_REC.status==='approved' && CUR_REC.signed_by_name),
-        mgrName: CUR_REC && CUR_REC.signed_by_name, mgrDate: CUR_REC && (CUR_REC.signed_at||'').substr(0,10),
+        mgrName: CUR_REC && CUR_REC.signed_by_name, mgrDate: $('#recDate').val(),
         mgrIsDeputy: CUR_REC && !!CUR_REC.signed_is_deputy
     }), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02');
 }
@@ -1529,7 +1529,7 @@ function recordSheetHTML(){
         + '<div class="rs-chart-wrap" style="text-align:center;flex:1;">'+svg+'</div></div>';
     var conc='<div style="margin-top:8px;font-size:13px;">綜合評鑑合格率（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）＝<b style="font-size:16px;">'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+cfg.pass_rate+'%'+(t.conclusion?'；建議：'+esc(t.conclusion):'')+'</div>'
         +'<div style="margin-top:4px;">判定：'+vaJudgeBadgeHtml(c.pass)+'</div>';
-    var mgrStamp = (t.status==='approved' && t.signed_by_name) ? vaStampHtml(t.signed_by_name, (t.signed_at||'').substr(0,10), !!t.signed_is_deputy) : '';
+    var mgrStamp = (t.status==='approved' && t.signed_by_name) ? vaStampHtml(t.signed_by_name, fmtDate(t.audit_date)||'', !!t.signed_is_deputy) : '';
     var audStamp = t.auditor ? vaStampHtml(t.auditor, fmtDate(t.audit_date)||'') : '';
     // 這裡是數位自動蓋章(非人工實體蓋印)，不需要 pf-sign 預設給實體印章留的大留白，改用 inline 覆寫縮小版面避免跨頁
     var sign='<table class="pf-sign" style="margin-top:14px;page-break-inside:avoid;"><tr>'
@@ -1543,7 +1543,7 @@ function printAllDocs(){
     if(!RS){alert('無資料');return;}
     var docNo1=(META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2=(META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
     var page1=auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg, prodType:RS.t.prod_type, auditorName:RS.t.auditor,
-        mgrApproved: !!(RS.t.status==='approved' && RS.t.signed_by_name), mgrName:RS.t.signed_by_name, mgrDate:(RS.t.signed_at||'').substr(0,10), mgrIsDeputy:!!RS.t.signed_is_deputy});
+        mgrApproved: !!(RS.t.status==='approved' && RS.t.signed_by_name), mgrName:RS.t.signed_by_name, mgrDate:fmtDate(RS.t.audit_date), mgrIsDeputy:!!RS.t.signed_is_deputy});
     var body='<div style="page-break-after:always;">'+page1
         +'<div style="text-align:right;margin-top:22px;font-size:12px;color:#333;">'+esc(docNo1)+'</div></div>'
         +recordSheetHTML()+'<div style="text-align:right;margin-top:14px;font-size:12px;color:#333;">'+esc(docNo2)+'</div>';
