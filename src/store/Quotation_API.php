@@ -5,6 +5,7 @@ header('Content-Type: application/json');
 
 include '../common/DBConnection.php';
 require_once '../common/quotation_approval.php';
+require_once '../common/asdoc_lib.php';
 
 $db  = new DBConnection();
 $pdo = $db->getPDO();
@@ -1237,9 +1238,9 @@ try {
                 $ad_stmt = $pdo->query("SELECT param_value FROM system_parameters WHERE param_group='QUOTATION' AND param_key='as_doc_id' LIMIT 1");
                 $ad_id = (int)json_decode((string)$ad_stmt->fetchColumn(), true);
                 if ($ad_id) {
-                    $ad2 = $pdo->prepare("SELECT doc_no FROM as_document WHERE id=? AND is_deleted=0");
+                    $ad2 = $pdo->prepare("SELECT doc_no, current_version, doc_level FROM as_document WHERE id=? AND is_deleted=0");
                     $ad2->execute([$ad_id]);
-                    $as_doc_no = (string)($ad2->fetchColumn() ?: '');
+                    $as_doc_no = eg_asdoc_no($ad2->fetch(PDO::FETCH_ASSOC) ?: null);
                 }
             } catch (Exception $_e) {}
             $response = ['success' => true, 'quote' => $quote, 'customer' => $cust, 'contact' => $contact, 'company' => $company, 'form_number' => $form_number, 'as_doc_no' => $as_doc_no];

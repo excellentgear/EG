@@ -13,6 +13,7 @@ $document_root = $_SERVER['DOCUMENT_ROOT'];
 session_start();
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
+include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
 
 if (!isset($_SESSION['userName'])) {
     http_response_code(403);
@@ -87,16 +88,18 @@ function extdoc_company_name(PDO $db): string {
     return '超正齒輪科技有限公司';
 }
 
-// ── 共用：AS 文件編號綁定 ─────────────────────────────────────────────
+// ── 共用：AS 文件編號綁定（doc_no 已依 eg_asdoc_no() 規則附加版次，僅四階文件，見 ai-rules/16 第三節） ──
 function extdoc_bound_asdoc(PDO $db): ?array {
     try {
         $st = $db->query("SELECT param_value FROM system_parameters WHERE param_group='EXTERNAL_DOC' AND param_key='as_doc_id' LIMIT 1");
         $docId = (int)json_decode((string)$st->fetchColumn(), true);
         if (!$docId) return null;
-        $st = $db->prepare("SELECT id, doc_no, doc_name, current_version FROM as_document WHERE id=? AND is_deleted=0");
+        $st = $db->prepare("SELECT id, doc_no, doc_name, current_version, doc_level FROM as_document WHERE id=? AND is_deleted=0");
         $st->execute([$docId]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
-        return $row ?: null;
+        if (!$row) return null;
+        $row['doc_no'] = eg_asdoc_no($row);
+        return $row;
     } catch (Exception $e) { return null; }
 }
 

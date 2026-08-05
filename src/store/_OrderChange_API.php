@@ -929,7 +929,7 @@ try {
                           'company'  => eg_company_full_name($pdo),
                           'as_doc'   => $ocDoc, 'as_doc_hist' => $ocHist,
                           'print_header' => $ocHist ? $ocHist['doc_name'] : '',
-                          'print_footer' => $ocHist ? $ocHist['doc_no'] : '']);
+                          'print_footer' => $ocHist ? eg_asdoc_no($ocHist) : '']);
         exit;
     }
 
