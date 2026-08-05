@@ -694,7 +694,7 @@ if ($deptPerm === 'R') {
         <div class="table-responsive">
           <table class="table table-bordered table-condensed">
             <thead><tr>
-              <th>版本</th><th>狀況</th><th>階級</th><th>部門</th><th>修訂日期</th><th>制修訂頁次</th><th>制修訂摘要</th><th>上傳者</th><th>文件</th><th>申請單</th>
+              <th>版本</th><th>狀況</th><th>階級</th><th>部門</th><th>修訂日期</th><th>制修訂頁次</th><th>制修訂摘要</th><th>上傳者</th><th>文件</th><th>申請單</th><?= $asCaps['super_delete'] ? '<th>永久刪除</th>' : '' ?>
             </tr></thead>
             <tbody id="historyBody"></tbody>
           </table>
@@ -1575,7 +1575,7 @@ $(function(){
       + '.p-sign{display:flex;justify-content:center;gap:150px;margin-top:8px;break-inside:avoid;}'   // 核准/修改並排置中
       + '.p-sign .s-cell{font-size:13px;display:flex;align-items:center;min-height:80px;}'
       + '.p-blank{display:inline-block;width:150px;border-bottom:1px solid #999;height:1px;margin-left:6px;}'
-      + '.car-stamp{opacity:.92;vertical-align:middle;}'
+      + 'svg.car-stamp{width:91px !important;height:91px !important;opacity:.92;vertical-align:middle;}'
       + '.stamp-wrap{display:inline-block;text-align:center;margin:0 8px;}'
       + '.stamp-wrap .stamp-title{display:none;}'
       + 'table.p-tb th,table.p-tb td{word-break:break-all;}'   // 長編號不撐寬欄位
@@ -1813,6 +1813,8 @@ $(function(){
         } else if(canU){
           af = `<label class="btn btn-xs btn-default" style="margin:0;" title="補上傳此版本的制修申請單">補申請單<input type="file" class="ver-attach" data-ver="${v.id}" data-which="apply" style="display:none;"></label>`;
         }
+        const verDel = window.asPerm.super_delete
+          ? `<td><a href="javascript:void(0)" class="btn btn-xs btn-danger op-ver-del" data-id="${v.id}" data-version="${esc(v.version)}" title="永久刪除此改版紀錄與附件（不可復原）"><i class="fa fa-trash-o"></i></a></td>` : '';
         tb.append(`<tr>
           <td><span class="label label-info">${esc(v.version)}</span></td>
           <td>${esc(v.change_status)||'-'}</td>
@@ -1822,7 +1824,7 @@ $(function(){
           <td>${esc(v.revised_pages)||'-'}</td>
           <td>${esc(v.revised_summary)||'-'}</td>
           <td>${esc(v.uploaded_by)||'-'}</td>
-          <td>${dl}</td><td>${af}</td>
+          <td>${dl}</td><td>${af}</td>${verDel}
         </tr>`);
       });
       if((r.data.versions||[]).length===0) tb.append('<tr><td colspan="10" class="text-center text-muted">無版本</td></tr>');
@@ -1836,6 +1838,15 @@ $(function(){
   }
   $('#docTableBody').on('click','.op-hist', function(){
     openHistory($(this).data('id'), $(this).data('name'));
+  });
+  $(document).on('click','#historyBody .op-ver-del', function(){
+    const verId=$(this).data('id'), verName=$(this).data('version');
+    if(!confirm(`【永久刪除改版紀錄】版本 ${verName}\n將連同該版附件一併刪除，無法復原！\n若刪的是目前版本，系統會自動改指向次新版本。\n\n確定要繼續？`)) return;
+    const pwd = prompt('請輸入超級管理員密碼以確認：');
+    if(pwd===null || pwd==='') return;
+    $.post(API+'?action=delete_version_permanent',{version_id:verId, password:pwd}, r=>{
+      if(r.status==='success'){ showToast('已永久刪除該版本'); openHistory(curHistDocId, curHistDocName); loadDocs(true); } else alert(r.message);
+    },'json');
   });
 
   // 版本補檔：選檔即上傳（只允許補空缺）
