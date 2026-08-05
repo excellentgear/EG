@@ -233,7 +233,7 @@ foreach ($roleRows as $rr) {
             <div style="grid-column:span 2;"><label>會議主題 *
                 <select id="edPreset" style="width:auto;display:inline-block;height:20px;font-size:11px;padding:0 4px;margin-left:6px;"><option value="">套用常用設定…</option></select>
                 <a href="javascript:;" id="btnPresetMgr" style="display:none;font-size:11px;color:#b5762a;margin-left:4px;" onclick="openPresetMgr()"><i class="fa fa-cog"></i> 管理</a>
-                <select id="edCalPick" style="width:auto;display:inline-block;height:20px;font-size:11px;padding:0 4px;margin-left:6px;" title="從行事曆挑選尚未發生的會議，自動帶入日期/時間/主題/出席人員"><option value="">從行事曆選會議…</option></select></label>
+                <select id="edCalPick" style="width:auto;display:inline-block;height:20px;font-size:11px;padding:0 4px;margin-left:6px;" title="只列出今天的行事曆會議，自動帶入日期/時間/主題/出席人員"><option value="">從行事曆選今天的會議…</option></select></label>
                 <input type="text" id="edSubject" maxlength="100" list="edSubjectTags"><datalist id="edSubjectTags"></datalist>
                 <div class="errmsg" id="errEdSubject"></div></div>
             <div><label>會議日期 *</label><input type="date" id="edDate" max="9999-12-31">
@@ -603,13 +603,13 @@ function openCreate(){
     loadCalendarMeetings();
     openMask('edMask');
 }
-/* 從行事曆挑選尚未發生(含今天)的「會議」類別事件，自動帶入日期/時間/主題/出席人員（只在新增時提供，編輯既有記錄不覆蓋） */
+/* 從行事曆挑選「今天」的會議類別事件，自動帶入日期/時間/主題/出席人員（使用者明確要求限當天；只在新增時提供，編輯既有記錄不覆蓋） */
 var CAL_EVENTS = [];
 function loadCalendarMeetings(){
     $.getJSON(API, {action:'calendar_meetings'}, function(res){
         if (!res.ok) return;
         CAL_EVENTS = res.events||[];
-        var h = '<option value="">從行事曆選會議…</option>';
+        var h = '<option value="">從行事曆選今天的會議…</option>';
         CAL_EVENTS.forEach(function(e){
             var d = String(e.start).substr(0,10), t = String(e.start).substr(11,5);
             h += '<option value="'+e.id+'">'+esc(d)+' '+esc(t)+'　'+esc(e.title)+'</option>';

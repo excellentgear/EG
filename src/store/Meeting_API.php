@@ -594,10 +594,10 @@ case 'preparer_candidates': {
     jout(['candidates'=>meeting_preparer_candidates($db, $mid)]);
 }
 
-/* 新增會議紀錄時可從行事曆挑選「尚未發生(含今天)的會議」事件自動帶入日期/時間/主題/出席人員；
+/* 新增會議紀錄時可從行事曆挑選「當天」的會議事件自動帶入日期/時間/主題/出席人員(使用者明確要求限當天,不含未來)；
    行事曆會議類別 category_id=2(event_category)；出席人員來自 evenement_actor，禁止自己寫死。 */
 case 'calendar_meetings': {
-    $st = $db->query("SELECT id, title, start, end FROM evenement WHERE category_id=2 AND DATE(start)>=CURDATE() ORDER BY start LIMIT 50");
+    $st = $db->query("SELECT id, title, start, end FROM evenement WHERE category_id=2 AND DATE(start)=CURDATE() ORDER BY start LIMIT 50");
     $events = $st->fetchAll(PDO::FETCH_ASSOC);
     $ids = array_column($events, 'id');
     $actorsByEvent = [];
