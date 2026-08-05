@@ -1255,7 +1255,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       +'.sec{white-space:pre-wrap;min-height:42px;}'
       +'.srow{display:flex;justify-content:flex-end;align-items:flex-end;gap:4px;margin-top:1px;}'
       +'.srow2{display:flex;justify-content:space-between;align-items:flex-end;margin-top:1px;}'   /* 左=預定完成日、右=印章 */
-      +'svg.car-stamp{width:66px !important;height:66px !important;}'
+      +'svg.car-stamp{width:91px !important;height:91px !important;}'
       +'h2{font-size:16px;}'
       +'</style></head><body>'
       +(header?'<div class="hd">'+esc(header)+'</div>':'')
