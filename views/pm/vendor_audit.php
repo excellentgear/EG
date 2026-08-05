@@ -1104,10 +1104,12 @@ function renderForm(scores){
     applyReviewTypeCols();
     recompute();
 }
-/** 異常檢核只需稽核分：切換審查類別時隱藏/顯示自評欄（僅畫面隱藏，資料仍在，切回其他類別會還原） */
+/** 異常檢核只需稽核分：切換審查類別時隱藏/顯示自評欄（僅畫面隱藏，資料仍在，切回其他類別會還原）；
+ *  供應商自主評核對應的稽核狀況固定是「自我評量」，選到此審查類別時自動帶入。 */
 function applyReviewTypeCols(){
     var rt = $('input[name=recReviewType]:checked').val();
     $('#afTable').toggleClass('va-abnormal', rt==='abnormal');
+    if (rt === 'self') $('#recMode').val('self');
 }
 $(document).on('change', 'input[name=recReviewType]', applyReviewTypeCols);
 function collectScores(){
@@ -1349,7 +1351,7 @@ function auditFormOneVersion(o, mode){
     var scoreLabel = mode==='site' ? '稽核分' : '自評分';
     var tSelf = 0, tAudit = 0;
     var rows = '<table class="pf" style="table-layout:fixed;"><colgroup><col style="width:60px;"><col style="width:34px;"><col>'
-        + '<col style="width:70px;"><col style="width:55px;"></colgroup>'
+        + '<col style="width:70px;"><col style="width:100px;"></colgroup>'
         + '<thead><tr><th>項目</th><th>項次</th><th>查核問題</th><th>單項滿分</th><th>'+scoreLabel+'</th></tr></thead><tbody>';
     cfg.items.forEach(function(cat){
         var items = cat[2];
