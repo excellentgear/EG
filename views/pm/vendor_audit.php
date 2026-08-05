@@ -801,7 +801,7 @@ $(document).ready(function(){
 });
 
 var API = '../../src/store/VendorAudit_API.php';
-var META = null, TARGETS = [], PERMS = null, POOL = [], ROUND_YEAR = null, CUR_CFG = null, CUR_PROD_TYPE = null;
+var META = null, TARGETS = [], PERMS = null, POOL = [], ROUND_YEAR = null, CUR_CFG = null, CUR_PROD_TYPE = null, CUR_REC = null;
 function planTimeliness(t){
     if (!t.plan_month) return '';
     var planYM = ROUND_YEAR+'-'+('0'+t.plan_month).slice(-2);
@@ -1022,6 +1022,7 @@ function openRec(tid){
         var t = res.target;
         CUR_CFG = t.checklist_cfg || {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
         CUR_PROD_TYPE = t.prod_type || null;
+        CUR_REC = t;
         $('#recTitle').text('稽核評鑑表單：'+t.maker_id+'（'+t.maker_id_no+'）');
         $('#recPlanMonth').val(t.plan_month||'');
         $('#recDate').val(fmtDate(t.audit_date)||META.today);
@@ -1358,8 +1359,9 @@ function auditFormOneVersion(o, mode){
         + '<td>'+(showScores?(mode==='site'?tAudit:tSelf):'')+'</td></tr>';
     rows += '</tbody></table>';
     var madeCell = mode==='site' ? (o.auditorName ? vaStampHtml(o.auditorName, o.dateStr||'') : '__________________')
-                 : (mode==='self' ? 'N/A' : '__________________');
-    var mgrCell = mode==='self' ? 'N/A' : '__________________';
+                 : (mode==='self' ? '' : '__________________');
+    var mgrCell = mode==='self' ? 'N/A'
+                : (o.mgrApproved && o.mgrName ? vaStampHtml(o.mgrName, o.mgrDate||'', o.mgrIsDeputy) : '__________________');
     var sign = '<table class="pf-sign"><tr>'
         + '<td style="width:50%;">主管簽核：'+mgrCell+'</td>'
         + '<td style="width:50%;">製表：'+madeCell+'</td></tr></table>';
@@ -1404,7 +1406,10 @@ function printCurrentForm(){
     openPrintWindow(auditFormHTML({
         maker: $('#recTitle').text().replace('稽核評鑑表單：',''),
         dateStr: $('#recDate').val(), scores: collectScores(), mode: $('#recMode').val(),
-        prodType: CUR_PROD_TYPE, auditorName: $('#recAuditor').val()
+        prodType: CUR_PROD_TYPE, auditorName: $('#recAuditor').val(),
+        mgrApproved: !!(CUR_REC && CUR_REC.status==='approved' && CUR_REC.signed_by_name),
+        mgrName: CUR_REC && CUR_REC.signed_by_name, mgrDate: CUR_REC && (CUR_REC.signed_at||'').substr(0,10),
+        mgrIsDeputy: CUR_REC && !!CUR_REC.signed_is_deputy
     }), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02');
 }
 $('#btnBlank').on('click', printBlankForm);
@@ -1528,7 +1533,8 @@ function printRecordSheet(){ if(!RS){alert('無資料');return;} openPrintWindow
 function printAllDocs(){
     if(!RS){alert('無資料');return;}
     var docNo1=(META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2=(META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
-    var page1=auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg, prodType:RS.t.prod_type, auditorName:RS.t.auditor});
+    var page1=auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg, prodType:RS.t.prod_type, auditorName:RS.t.auditor,
+        mgrApproved: !!(RS.t.status==='approved' && RS.t.signed_by_name), mgrName:RS.t.signed_by_name, mgrDate:(RS.t.signed_at||'').substr(0,10), mgrIsDeputy:!!RS.t.signed_is_deputy});
     var body='<div style="page-break-after:always;">'+page1
         +'<div style="text-align:right;margin-top:22px;font-size:12px;color:#333;">'+esc(docNo1)+'</div></div>'
         +recordSheetHTML()+'<div style="text-align:right;margin-top:14px;font-size:12px;color:#333;">'+esc(docNo2)+'</div>';
