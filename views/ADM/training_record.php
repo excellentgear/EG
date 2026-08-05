@@ -883,7 +883,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         ・刪除場次要連續兩次輸入大寫 <b>Y</b>，且會一併刪除附件實體檔。<br>
         ・點清單任一列可展開該場次明細（大綱、時段、名單與評鑑、附件）。<br>
         ・「達標狀況」分頁依顯示單位統計；子部門可合併成一列，也可排除不列入的部門。<br>
-        ・「檢視」內的「列印訓練紀錄」版面比照簽到表（課程資訊、逐天分頁、序/部門/職稱/姓名/簽名/評鑑結果/備註），現場簽到過的人自動印出印章，表尾為人資主管／講師兩格印章；此表目前沿用簽到表的表頭名稱、不單獨印文件編號。
+        ・「檢視」內的「列印訓練紀錄」版面比照簽到表（課程資訊、逐天分頁、序/部門/職稱/姓名/簽名/評鑑結果/備註），現場簽到過的人自動印出印章，表尾為審核（人事表單審核者）／講師兩格印章；此表目前沿用簽到表的表頭名稱、不單獨印文件編號。
         <h4>設定入口</h4>
         工具列「模組設定」：班別／休息時段／行事曆類別／附件路徑（一般）、排除部門（達標統計）、AS 文件編號與是否送審（文件編號與送審）、<b>簽到表/訓練紀錄的簽名圖章樣式</b>（套用「圖章管理→線上圖章設計」哪個模板；未設定＝預設印章樣式）。<br>
         簽章人員（人事／審核／核准）一律取自全站
@@ -2727,11 +2727,11 @@ function printRecord(){
             +'</thead><tbody>'+(rows||'<tr><td colspan="7">（無名單）</td></tr>')+'</tbody></table>'
             +'</div>';
     });
-    // 表尾兩格圖章：人資主管（org_role_lib 解出的人資簽章人）／講師（外訓沒有系統內人員可蓋章，改印開課單位純文字）
+    // 表尾兩格圖章：審核（org_role_setting.php 設定的「人事表單審核者」＝ SIGNERS.reviewer）／講師（外訓沒有系統內人員可蓋章，改印開課單位純文字）
     var signDt = fmtDate(s.done_date) || META.today;
     html += '<table class="pt-sign"><tr>'
-        + '<td><div class="lb">人資主管</div><div class="stamp-box">'
-        + ((SIGNERS.hr_signer&&SIGNERS.hr_signer.name)?egStampHtml(SIGNERS.hr_signer.name, signDt):'')+'</div></td>'
+        + '<td><div class="lb">審核</div><div class="stamp-box">'
+        + ((SIGNERS.reviewer&&SIGNERS.reviewer.name)?egStampHtml(SIGNERS.reviewer.name, signDt):'')+'</div></td>'
         + '<td><div class="lb">講師</div><div class="stamp-box">'
         + (ext ? esc(s.org_unit||'') : (s.trainer?egStampHtml(s.trainer, signDt):''))+'</div></td>'
         + '</tr></table>';
