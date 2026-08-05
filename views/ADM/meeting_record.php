@@ -452,7 +452,10 @@ foreach ($roleRows as $rr) {
         <b>③現場簽到</b>：開啟「檢視」，出席人員名單旁各自輸入<b>本人密碼</b>簽到（共用一台裝置輪流簽，用選人不用密碼反查身分，不會有密碼重複無法辨識的問題）。<br>
         <b>④存草稿或送出</b>：草稿只有記錄人自己看得到，可隨時修改；<b>送出</b>後鎖定內容並通知主席確認簽章 → 主席簽章後自動通知總經理確認簽章（總經理可逐筆或整體回覆意見）→ 完成。
         任一階段可退回，退回後記錄人可修改並重新送出。<br>
-        <b>⑤部門指派項目確認</b>：要項若指派「負責部門」（可多選），<b>每個負責部門各要一位代表簽名</b>——優先由該部門本次有出席的主管簽（有設職級的職稱，如經理/副理/課長/組長等），該部門沒有主管出席才由任一位出席人員代表簽；系統會自動算出該部門要簽的人，現場只有那位本人能輸入密碼簽這格。負責部門本次完全沒人出席時，改發通知給該部門成員回簽（任一人回覆即算完成）。<br>
+        <b>⑤負責人/部門項目確認</b>：要項的「負責人/部門」欄可點連結<b>切換兩種模式（二擇一，切換會清空另一種的選擇）</b>：<br>
+        　－<b>選部門</b>（可多選）：<b>每個負責部門各要一位代表簽名</b>，系統依序自動算出誰要簽（現場只有算出的那位本人能輸入密碼簽這格）：①該部門本次以<b>主要角色</b>出席的主管優先（有設職級的職稱，如經理/副理/課長/組長等）②該部門沒有主要角色主管出席，才由<b>兼任</b>該部門主管的出席者代簽（章旁標示「(兼)」）③連兼任主管都沒有，才由該部門出席人員中職稱排序最高者代簽（標示「(代)」）。<br>
+        　－<b>指定人員</b>（可多選、可打字搜尋全公司人員）：直接指名的人只要本次有出席就是必簽者，不套用主管優先判定；沒指定到部門，不論那位人員屬於哪個部門都是他本人簽。<br>
+        兩種模式下，負責人（部門或指定人員）本次完全沒人出席時，都會改發通知給對方回簽（任一人回覆即算完成）。<br>
         <b>⑥插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。
         <h4>重要行為</h4>
         ・草稿只有記錄人本人看得到；送出後，出席人員／主席／總經理都自動有唯讀權限，其餘人是否看得到全部會議記錄依角色設定的「檢視全部」功能。<br>
@@ -485,7 +488,7 @@ $(document).ready(function(){
 });
 
 var API = '../../src/store/Meeting_API.php';
-var META = null, PERMS = null, DEPTS = [];
+var META = null, PERMS = null, DEPTS = [], ALL_PEOPLE = [];
 var MEETINGS = [];
 var STATUS_LABEL = {draft:'草稿', submitted:'待主席簽章', chair_done:'待總經理簽章', done:'已完成', rejected:'已退回'};
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
@@ -539,6 +542,7 @@ function loadMeta(cb){
         $('#mtHeaderDocNo').text(m.as_doc_record && m.as_doc_record.doc_no ? (m.as_doc_record.doc_no+' ') : '');
         renderPresetUI();
         loadGroups();
+        $.getJSON(API, {action:'people_all'}, function(r){ if (r.ok) ALL_PEOPLE = r.people||[]; });
         if (cb) cb();
     });
 }
@@ -668,7 +672,8 @@ function openEdit(id){
         ITEMS_D = []; ITEMS_G = []; ITEMS_A = [];
         (res.items||[]).forEach(function(it){
             var row = {item_id:it.item_id, content:it.content, due_date:fmtDate(it.due_date),
-                owner_depts:(it.owner_depts?String(it.owner_depts).split(','):[]), remark:it.remark||'',
+                owner_depts:(it.owner_depts?String(it.owner_depts).split(','):[]),
+                owner_users:(it.owner_users?String(it.owner_users).split(','):[]), remark:it.remark||'',
                 confirm_slots:it.confirm_slots||[]};
             var target = it.kind==='directive' ? ITEMS_D : (it.kind==='announce' ? ITEMS_A : ITEMS_G);
             target.push(row);
@@ -817,7 +822,7 @@ function groupSaveConfirm(){
 /* 會議要項三表格：宣布事項(kind=announce,無應完成日期/負責部門/簽名) / 上級指示要項(kind=directive) / 會議要項(kind=general) */
 function itemsArr(kind){ return kind==='directive' ? ITEMS_D : (kind==='announce' ? ITEMS_A : ITEMS_G); }
 function itemBodySel(kind){ return '#itmBody'+(kind==='directive'?'D':(kind==='announce'?'A':'G')); }
-function itemAdd(kind){ itemsArr(kind).push({item_id:0, content:'', due_date:'', owner_depts:[], remark:''}); renderItems(kind); }
+function itemAdd(kind){ itemsArr(kind).push({item_id:0, content:'', due_date:'', owner_depts:[], owner_users:[], remark:''}); renderItems(kind); }
 function itemDelLast(kind){ var a=itemsArr(kind); if (a.length) a.pop(); renderItems(kind); }
 function itemDel(kind,i){ itemsArr(kind).splice(i,1); renderItems(kind); }
 function itemEdit(kind,i,key,val){ var a=itemsArr(kind); if (a[i]) a[i][key]=val; }
@@ -841,15 +846,31 @@ function renderItems(kind){
     }
     a.forEach(function(it,i){
         var slots = it.confirm_slots||[], doneN = slots.filter(function(s){ return s.signed; }).length;
-        var confirmTxt = slots.length ? ('<span class="'+(doneN===slots.length?'confirm-yes':'confirm-no')+'">部門代表已簽 '+doneN+'/'+slots.length+'</span>') : '<span class="confirm-no">未指派負責部門</span>';
+        var hasOwner = (it.owner_depts&&it.owner_depts.length) || (it.owner_users&&it.owner_users.length);
+        var confirmTxt = slots.length ? ('<span class="'+(doneN===slots.length?'confirm-yes':'confirm-no')+'">已簽 '+doneN+'/'+slots.length+'</span>')
+                        : (hasOwner ? '<span class="confirm-no">負責人本次未出席</span>' : '<span class="confirm-no">未指派負責人</span>');
         h += '<tr><td style="text-align:center;">'+(i+1)+'</td>'
            + '<td><textarea onchange="itemEdit(\''+kind+'\','+i+',\'content\',this.value)">'+esc(it.content||'')+'</textarea></td>'
            + '<td><input type="date" max="9999-12-31" value="'+esc(it.due_date||'')+'" onchange="itemEdit(\''+kind+'\','+i+',\'due_date\',this.value)"></td>'
-           + '<td>'+deptPickHtml(kind,i,it.owner_depts||[])+'</td>'
+           + '<td>'+ownerPickHtml(kind,i,it)+'</td>'
            + '<td><input type="text" maxlength="200" value="'+esc(it.remark||'')+'" onchange="itemEdit(\''+kind+'\','+i+',\'remark\',this.value)" placeholder="'+confirmTxt.replace(/<[^>]+>/g,'')+'"></td>'
            + '<td><span class="att-del" onclick="itemDel(\''+kind+'\','+i+')"><i class="fa fa-times"></i></span></td></tr>';
     });
     $(itemBodySel(kind)).html(h || '<tr><td colspan="6" style="color:#8a6d45;padding:6px;text-align:center;">尚未建立項目</td></tr>');
+}
+/* 負責人二擇一(2026-08-05使用者明確要求)：部門模式(自動判定主要角色主管優先→兼任主管→職稱排序最高者)，
+   或指定人員模式(直接指名，本次只要有出席就是必簽者，完全取代部門判定)；用切換連結決定畫哪一種挑選器。 */
+function ownerPickHtml(kind,i,it){
+    var mode = (it.owner_users&&it.owner_users.length) ? 'user' : 'dept';
+    var toggle = '<a href="javascript:void(0)" style="font-size:11px;display:block;" onclick="toggleOwnerMode(\''+kind+'\','+i+')">切換：'+(mode==='dept'?'改指定人員':'改選部門')+'</a>';
+    return toggle + (mode==='user' ? userPickHtml(kind,i,it.owner_users||[]) : deptPickHtml(kind,i,it.owner_depts||[]));
+}
+function toggleOwnerMode(kind,i){
+    var a = itemsArr(kind)[i]; if (!a) return;
+    // 切換模式時清空另一種資料重新挑選，避免存檔時殘留(後端也會以owner_users有值時完全取代owner_depts，這裡雙保險)
+    if (a.owner_users && a.owner_users.length) { a.owner_users = []; a.owner_depts = a.owner_depts || []; }
+    else { a.owner_depts = []; a.owner_users = a.owner_users || []; }
+    renderItems(kind);
 }
 function deptPickHtml(kind,i,ids){
     var tags = '';
@@ -881,6 +902,49 @@ $(document).on('click', '.itm-dp .dp-list div[data-id]', function(){
     if (idx>=0) a.owner_depts.splice(idx,1); else a.owner_depts.push(id);
     renderItems(kind);
 });
+/* 指定人員挑選器：與部門挑選器同一套UI模式(標籤+打字篩選)，資料來源改用全員清單 ALL_PEOPLE(超過10筆一律可打字篩選，鐵則見ai-rules/08)。 */
+function personById(id){ for (var i=0;i<ALL_PEOPLE.length;i++) if (String(ALL_PEOPLE[i].id)===String(id)) return ALL_PEOPLE[i]; return null; }
+/* 「負責人/部門」欄顯示文字：指定人員模式列人名，部門模式列部門名(二擇一，owner_users有值時優先)。 */
+function ownerDisplayText(it){
+    var ownerUsers = it.owner_users ? String(it.owner_users).split(',') : [];
+    if (ownerUsers.length) {
+        return ownerUsers.map(function(id){ var p=personById(id); return p?p.user_cname:''; }).filter(Boolean).join('、');
+    }
+    return (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
+}
+function userPickHtml(kind,i,ids){
+    var tags = '';
+    ids.forEach(function(id){ var p=personById(id); if(p) tags += '<span class="tg">'+esc(p.user_cname)+(p.dept_name?'('+esc(p.dept_name)+')':'')+'<i class="fa fa-times" onclick="itmUserDel(\''+kind+'\','+i+',\''+id+'\')"></i></span>'; });
+    return '<div class="dp-pick itm-up" data-kind="'+kind+'" data-i="'+i+'"><div class="dp-tags">'+tags+'</div>'
+         + '<input type="text" class="itm-up-kw" placeholder="搜尋人員姓名…" data-eg-skip autocomplete="off"><div class="dp-list"></div></div>';
+}
+function itmUserDel(kind,i,id){
+    var a = itemsArr(kind)[i]; if (!a) return;
+    a.owner_users = a.owner_users.filter(function(x){ return String(x)!==String(id); });
+    renderItems(kind);
+}
+$(document).on('focus input', '.itm-up-kw', function(){
+    var $pick = $(this).closest('.itm-up'), kind = $pick.data('kind'), i = $pick.data('i');
+    var a = itemsArr(kind)[i]; if (!a) return;
+    var kw = $.trim($(this).val()).toLowerCase(), h = '', n = 0;
+    ALL_PEOPLE.forEach(function(p){
+        if (n >= 30) return; // 全員清單可能上百筆，篩選後只列前30筆避免卡頓，打更精確的關鍵字即可縮小範圍
+        if (kw && p.user_cname.toLowerCase().indexOf(kw)<0) return;
+        var on = (a.owner_users||[]).some(function(x){ return String(x)===String(p.id); });
+        h += '<div data-id="'+p.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(p.user_cname)+(p.dept_name?'（'+esc(p.dept_name)+'）':'')+'</div>';
+        n++;
+    });
+    $pick.find('.dp-list').html(h || '<div style="color:#b0a390;">查無人員</div>').show();
+});
+$(document).on('click', '.itm-up .dp-list div[data-id]', function(){
+    var $pick = $(this).closest('.itm-up'), kind = $pick.data('kind'), i = $pick.data('i'), id = String($(this).data('id'));
+    var a = itemsArr(kind)[i]; if (!a) return;
+    a.owner_users = a.owner_users || [];
+    var idx = a.owner_users.findIndex(function(x){ return String(x)===id; });
+    if (idx>=0) a.owner_users.splice(idx,1); else a.owner_users.push(id);
+    renderItems(kind);
+});
+$(document).on('click', function(e){ if (!$(e.target).closest('.itm-up').length) $('.itm-up .dp-list').hide(); });
 $(document).on('click', function(e){ if (!$(e.target).closest('.itm-dp').length) $('.itm-dp .dp-list').hide(); });
 
 /* 出貨目標達成率快照：內容與 Shipping_Analysis_new.php 的「月份出貨KPI週報」完全相同(4週明細+合計+大額前三名)，
@@ -1066,10 +1130,10 @@ function viewHtml(res){
     function itemsTable(kind, title) {
         var rows = (res.items||[]).filter(function(it){ return it.kind===kind; });
         if (!rows.length) return '';
-        var t = '<h5>'+title+'</h5><table><tr><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人</th><th>確認簽名／回簽狀態</th><th>備註</th>'
+        var t = '<h5>'+title+'</h5><table><tr><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人/部門</th><th>確認簽名／回簽狀態</th><th>備註</th>'
               + (m.approval_status==='chair_done'||m.approval_status==='done' ? '<th>總經理意見</th>' : '') + '</tr>';
         rows.forEach(function(it, idx){
-            var deptNames = (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
+            var deptNames = ownerDisplayText(it);
             t += '<tr><td>'+(idx+1)+'</td><td>'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+fmtDate(it.due_date)+'</td>'
                + '<td>'+esc(deptNames||'—')+'</td>'
                + '<td>'+itemConfirmCellHtml(it)+'</td>'
@@ -1144,15 +1208,16 @@ function signAttendee(mid, uidv){
    沒主管出席才由代表簽(後端 meeting_item_required_signers 算出，前端不用自己挑人)；限被算出的那位本人現場輸入密碼確認
    (比照簽到表密碼驗證，避免共用裝置分不清是誰簽的)。負責部門本次完全沒人出席時無簽名槽，改走送出會議記錄時自動發出的
    通知系統回簽，狀態一併顯示在同一格內。 */
+function slotTag(s){ return !s.is_manager ? '(代)' : (s.is_main ? '' : '(兼)'); }
 function itemConfirmCellHtml(it){
     var slots = it.confirm_slots || [];
     var h = slots.map(function(s){
         if (s.signed) {
             return '<div class="confirm-yes">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, String(s.confirmed_at||'').substr(0,10), false, mStampSchema(), s.dept_name):esc(s.user_name))
-                 + ' <span style="font-size:11px;">'+esc(s.dept_name||'')+(s.is_manager?'':'代')+'</span>'
+                 + ' <span style="font-size:11px;">'+esc(s.dept_name||'')+slotTag(s)+'</span>'
                  + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[改日期]</a>':'')+'</div>';
         }
-        return '<div class="item-confirm-box"><span style="font-size:11px;">'+esc(s.dept_name||'')+'：'+esc(s.user_name)+(s.is_manager?'':'(代)')+'</span>'
+        return '<div class="item-confirm-box"><span style="font-size:11px;">'+esc(s.dept_name||'')+'：'+esc(s.user_name)+slotTag(s)+'</span>'
              + '<input type="password" id="pwConfirm'+it.item_id+'_'+s.user_id+'" placeholder="密碼" style="width:70px;" data-eg-skip'
              + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();confirmItemWithPassword('+it.item_id+','+s.user_id+');}">'
              + '<button type="button" onclick="confirmItemWithPassword('+it.item_id+','+s.user_id+')">確認</button></div>';
@@ -1282,9 +1347,11 @@ function meetingItemGroupRows(items, kind, groupLabel){
     var rows = (items||[]).filter(function(it){ return it.kind===kind; });
     if (!rows.length) return '';
     return rows.map(function(it,i){
-        var deptNames = (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
+        var deptNames = ownerDisplayText(it);
         var confirmHtml = (it.confirm_slots||[]).filter(function(s){ return s.signed; }).map(function(s){
-            return (window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, String(s.confirmed_at||'').substr(0,10), false, mStampSchema(), s.dept_name):esc(s.user_name);
+            var tag = slotTag(s);
+            return ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, String(s.confirmed_at||'').substr(0,10), false, mStampSchema(), s.dept_name):esc(s.user_name))
+                 + (tag?'<span style="font-size:10px;">'+tag+'</span>':'');
         }).join('');
         return '<tr>' + (i===0 ? '<td class="mr-grp" rowspan="'+rows.length+'">'+groupLabel+'</td>' : '')
              + '<td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td>'
@@ -1325,7 +1392,7 @@ function meetingRecordPageHtml(m, res, inlineDocNo){
         + '</table>'
         + (announceBody ? '<table class="mr-announce"><thead><tr><th style="width:32px;">序</th><th>宣布事項</th><th style="width:120px;">備註</th></tr></thead><tbody>'+announceBody+'</tbody></table>' : '')
         + (announceBody && itemBody ? '<div class="mr-gap"></div>' : '')
-        + (itemBody ? '<table class="mr-items"><thead><tr><th class="mr-grp-hd"></th><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人</th><th>確認簽名</th><th>備註</th></tr></thead><tbody>'+itemBody+'</tbody></table>' : '')
+        + (itemBody ? '<table class="mr-items"><thead><tr><th class="mr-grp-hd"></th><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人/部門</th><th>確認簽名</th><th>備註</th></tr></thead><tbody>'+itemBody+'</tbody></table>' : '')
         + '<table class="mr-foot"><tr><td>總經理：'+gmStamp+'</td><td>主席：'+chairStamp+'</td><td class="mr-foot-prep">製表：'+madeStamp+'</td></tr></table>'
         + (inlineDocNo && META.as_doc_record_no ? '<div class="mr-bottom-note"><span></span><span>'+esc(META.as_doc_record_no)+'</span></div>' : '')
         + '</div>';

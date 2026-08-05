@@ -170,18 +170,18 @@ case 'get_detail': {
     foreach ($items as &$it) {
         $ntStmt->execute([(int)$it['item_id']]);
         $it['notify_targets'] = $ntStmt->fetchAll(PDO::FETCH_ASSOC);
-        // 依負責部門(可多個)算出每部門各一格簽名槽(該部門本次有出席的主管優先，沒主管出席才由代表簽)，
-        // 對照 meeting_item_confirm 已簽名單標記每格是否已簽(2026-08-05改版：部門代表制，取代舊版任一人簽即完成)
-        $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
+        // 依負責部門/指定人員算出每格簽名槽(meeting_item_required_signers_for 統一入口，兩模式擇一)，
+        // 對照 meeting_item_confirm 已簽名單標記每格是否已簽(2026-08-05改版：部門代表制/指定人員制，取代舊版任一人簽即完成)
+        $req = meeting_item_required_signers_for($db, $id, $it);
         $slots = [];
-        if ($ownerIds) {
+        if ($req) {
             $confStmt->execute([(int)$it['item_id']]);
             $signedById = [];
             foreach ($confStmt->fetchAll(PDO::FETCH_ASSOC) as $sr) $signedById[(int)$sr['user_id']] = $sr;
-            foreach (meeting_item_required_signers($db, $id, $ownerIds) as $deptId => $signer) {
+            foreach ($req as $key => $signer) {
                 $sr = $signedById[$signer['user_id']] ?? null;
-                $slots[] = ['dept_id'=>$deptId, 'dept_name'=>$signer['dept_name'], 'user_id'=>$signer['user_id'],
-                            'user_name'=>$signer['user_name'], 'is_manager'=>$signer['is_manager'],
+                $slots[] = ['dept_id'=>$key, 'dept_name'=>$signer['dept_name'], 'user_id'=>$signer['user_id'],
+                            'user_name'=>$signer['user_name'], 'is_manager'=>$signer['is_manager'], 'is_main'=>$signer['is_main'],
                             'signed'=>(bool)$sr, 'confirmed_at'=>$sr['confirmed_at'] ?? null];
             }
         }
@@ -264,8 +264,8 @@ case 'save': {
         $iq->execute([$id]);
         foreach ($iq->fetchAll(PDO::FETCH_ASSOC) as $o) $oldItems[(int)$o['item_id']] = $o;
         $db->prepare("DELETE FROM meeting_item WHERE meeting_id=?")->execute([$id]);
-        $insI = $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, remark, gm_comment)
-                              VALUES (?,?,?,?,?,?,?,?,?)");
+        $insI = $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, owner_users, remark, gm_comment)
+                              VALUES (?,?,?,?,?,?,?,?,?,?)");
         $n = 0;
         $keptOldIds = [];
         foreach ($items as $it) {
@@ -274,12 +274,15 @@ case 'save': {
             $kind = in_array($it['kind'] ?? '', ['directive','announce'], true) ? $it['kind'] : 'general';
             $due = trim((string)($it['due_date'] ?? '')) ?: null;
             if ($due && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $due)) $due = null;
-            $ownerIds = array_values(array_filter(array_map('intval', (array)($it['owner_depts'] ?? []))));
+            // 負責人二擇一(2026-08-05使用者明確要求)：owner_users(指定人員)有值時完全取代 owner_depts(部門自動判定)
+            $ownerUserIds = array_values(array_filter(array_map('intval', (array)($it['owner_users'] ?? []))));
+            $ownerIds = $ownerUserIds ? [] : array_values(array_filter(array_map('intval', (array)($it['owner_depts'] ?? []))));
             $ownerNames = trim((string)($it['owner_dept_names'] ?? '')) ?: null;
             $remark = trim((string)($it['remark'] ?? '')) ?: null;
             $prevId = (int)($it['item_id'] ?? 0);
             $prev = $oldItems[$prevId] ?? null;
-            $insI->execute([$id, $kind, $n, $content, $due, $ownerIds ? implode(',', $ownerIds) : null, $ownerNames, $remark, $prev['gm_comment'] ?? null]);
+            $insI->execute([$id, $kind, $n, $content, $due, $ownerIds ? implode(',', $ownerIds) : null, $ownerNames,
+                $ownerUserIds ? implode(',', $ownerUserIds) : null, $remark, $prev['gm_comment'] ?? null]);
             if ($prev) {
                 $keptOldIds[] = $prevId;
                 $db->prepare("UPDATE meeting_item_confirm SET item_id=? WHERE item_id=?")->execute([(int)$db->lastInsertId(), $prevId]);
@@ -328,6 +331,13 @@ case 'people': {
         'position_name'=>$r['position_name'] ?? '', 'dept_name'=>$r['dept_name'] ?? ''], $rows)]);
 }
 
+/* 全員人員清單（負責人「指定人員」模式搜尋選擇器用；2026-08-05使用者明確要求）：比照鐵則走 eg_people_list，不自己拼SQL。 */
+case 'people_all': {
+    $rows = eg_people_list($db, []);
+    jout(['people'=>array_map(fn($r) => ['id'=>$r['id'], 'user_cname'=>$r['user_cname'],
+        'position_name'=>$r['position_name'] ?? '', 'dept_name'=>$r['dept_name'] ?? ''], $rows)]);
+}
+
 /* 與會者本人密碼簽到（共用裝置輪流簽）：身分＝選人，密碼只驗證是本人，不做密碼反查 */
 case 'sign': {
     $id = (int)($_POST['meeting_id'] ?? 0);
@@ -362,10 +372,8 @@ case 'submit': {
     $unsigned->execute([$id]);
     if ((int)$unsigned->fetchColumn() > 0) jerr('尚有出席人員未完成現場簽到，請先完成全部出席人員簽到再送出');
     foreach (meeting_items($db, $id) as $it) {
-        $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
-        if (!$ownerIds) continue;
-        $req = meeting_item_required_signers($db, $id, $ownerIds);
-        if (!$req) continue; // 負責部門本次都沒人出席，不卡送出(維持既有：改走通知系統回簽)
+        $req = meeting_item_required_signers_for($db, $id, $it);
+        if (!$req) continue; // 未指派負責人，或負責部門/指定人員本次都沒人出席，不卡送出(維持既有：改走通知系統回簽)
         $cst = $db->prepare("SELECT user_id FROM meeting_item_confirm WHERE item_id=?");
         $cst->execute([(int)$it['item_id']]);
         $signedIds = array_map('intval', $cst->fetchAll(PDO::FETCH_COLUMN));
@@ -374,7 +382,7 @@ case 'submit': {
             if (!in_array($signer['user_id'], $signedIds, true)) $missing[] = $signer['dept_name'].'('.$signer['user_name'].')';
         }
         if ($missing) {
-            jerr('項目「'.mb_substr((string)$it['content'], 0, 20).'…」尚有負責部門代表未現場確認簽名：'.implode('、', $missing));
+            jerr('項目「'.mb_substr((string)$it['content'], 0, 20).'…」尚有負責人未現場確認簽名：'.implode('、', $missing));
         }
     }
 
@@ -389,17 +397,23 @@ case 'submit': {
 
     // 逐項通知：負責部門中「本次未出席」的成員走通知系統回簽；有出席的成員已可在會議記錄畫面現場用密碼確認，不重複通知
     foreach (meeting_items($db, $id) as $it) {
-        $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
-        if (!$ownerIds) continue;
-        $targets = meeting_dept_nonattendee_targets($db, $id, $ownerIds);
+        $targets = meeting_item_owner_notify_targets($db, $id, $it);
         if (!$targets) continue;
-        $inDept = implode(',', $ownerIds);
-        $deptNames = $db->query("SELECT name FROM department WHERE id IN ($inDept)")->fetchAll(PDO::FETCH_COLUMN);
+        $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
+        if ($ownerIds) {
+            $inDept = implode(',', $ownerIds);
+            $ownerLabel = '負責部門：'.implode('、', $db->query("SELECT name FROM department WHERE id IN ($inDept)")->fetchAll(PDO::FETCH_COLUMN));
+        } else {
+            $ownerLabel = '負責人：'.implode('、', array_map(function($tid) use ($db) {
+                $st = $db->prepare("SELECT user_cname FROM user WHERE id=?"); $st->execute([$tid]);
+                return (string)($st->fetchColumn() ?: $tid);
+            }, $targets));
+        }
         meeting_notify_item_owners($db, (int)$it['item_id'], $targets,
             '「'.$m['subject'].'」會議記錄項目待確認：'.mb_substr((string)$it['content'], 0, 30),
-            '「'.$m['subject'].'」（'.$m['meeting_date'].'）會議記錄的以下負責部門項目請確認並回簽：'."\n".$it['content']
+            '「'.$m['subject'].'」（'.$m['meeting_date'].'）會議記錄的以下負責項目請確認並回簽：'."\n".$it['content']
             .($it['due_date'] ? ("\n應完成日期：".$it['due_date']) : '')
-            ."\n負責部門：".implode('、', $deptNames)
+            ."\n".$ownerLabel
             .(count($targets) > 1 ? "\n（任一人回簽即完成，不需每人都簽）" : ''),
             $uid);
     }
@@ -486,10 +500,11 @@ case 'decide': {
     jout(['status'=>'done']);
 }
 
-/* 部門指派項目現場確認簽名(2026-08-05改版，使用者明確要求)：每個負責部門各一位簽名槽(該部門本次有出席的主管優先，
-   沒主管出席才由代表簽)，限「本次出席人員」用本人密碼確認(比照簽到表的密碼驗證，共用裝置也知道究竟是誰簽的)；
-   只有被算出為該部門簽名槽的那個人才能簽這格，其餘同部門出席者不可代簽(避免跟另一部門搶著簽同一格)。
-   未出席的部門成員無法在現場輸入密碼，一律改走通知系統回簽(送出會議記錄時自動發送，見 submit 與 _eventRespond.php 的 MEETING_ITEM_CONFIRM 掛勾)。 */
+/* 負責人項目現場確認簽名(2026-08-05改版，使用者明確要求)：部門模式每個負責部門各一位簽名槽(該部門本次有出席的
+   主要角色主管優先，沒有才由兼任該部門的主管，再沒有才由職稱排序最高者代簽)；指定人員模式則被指名的人各一格，
+   限「本次出席人員」用本人密碼確認(比照簽到表的密碼驗證，共用裝置也知道究竟是誰簽的)；
+   只有被算出/指名為該格的那個人才能簽，其餘人不可代簽(避免搶簽同一格)。
+   未出席者無法在現場輸入密碼，一律改走通知系統回簽(送出會議記錄時自動發送，見 submit 與 _eventRespond.php 的 MEETING_ITEM_CONFIRM 掛勾)。 */
 case 'item_confirm': {
     $itemId = (int)($_POST['item_id'] ?? 0);
     $forUid = (int)($_POST['user_id'] ?? 0);
@@ -498,12 +513,11 @@ case 'item_confirm': {
     $st->execute([$itemId]);
     $item = $st->fetch(PDO::FETCH_ASSOC);
     if (!$item) jerr('找不到此項目');
-    $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$item['owner_depts']))));
-    if (!$ownerIds) jerr('此項目未指派負責部門');
-    $req = meeting_item_required_signers($db, (int)$item['meeting_id'], $ownerIds);
+    $req = meeting_item_required_signers_for($db, (int)$item['meeting_id'], $item);
+    if (!$req) jerr('此項目未指派負責人，或負責人本次未出席');
     $signer = null;
     foreach ($req as $s) if ($s['user_id'] === $forUid) { $signer = $s; break; }
-    if (!$signer) jerr('您不是此項目負責部門本次應簽名的代表，如需更換簽署人請洽記錄人調整出席名單', 403);
+    if (!$signer) jerr('您不是此項目本次應簽名的人，如需更換簽署人請洽記錄人調整出席名單/負責人設定', 403);
     $already = $db->prepare("SELECT 1 FROM meeting_item_confirm WHERE item_id=? AND user_id=?");
     $already->execute([$itemId, $forUid]);
     if ($already->fetchColumn()) jerr('您已經簽過此項目');
@@ -742,14 +756,12 @@ case 'admin_backfill': {
                 $iq = $db->prepare("SELECT * FROM meeting_item WHERE meeting_id=?");
                 $iq->execute([$id]);
             }
-            // 每個負責部門各一格簽名槽(該部門本次有出席的主管優先，沒主管出席才由代表簽)，全部視同已簽並套用$date
+            // 每格簽名槽(部門模式代表制或指定人員模式，見 meeting_item_required_signers_for)全部視同已簽並套用$date
             $upsertC = $db->prepare("INSERT INTO meeting_item_confirm (item_id, user_id, user_name, dept_name, confirmed_at)
                                       VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE confirmed_at=VALUES(confirmed_at)");
             $dt = $date . ' ' . date('H:i:s');
             foreach ($iq->fetchAll(PDO::FETCH_ASSOC) as $it) {
-                $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
-                if (!$ownerIds) continue; // 未指派負責部門，本就不需要確認簽名
-                foreach (meeting_item_required_signers($db, $id, $ownerIds) as $signer) {
+                foreach (meeting_item_required_signers_for($db, $id, $it) as $signer) {
                     $upsertC->execute([(int)$it['item_id'], $signer['user_id'], $signer['user_name'], $signer['dept_name'], $dt]);
                 }
             }

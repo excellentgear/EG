@@ -98,6 +98,17 @@ function meeting_ensure_schema(PDO $db): void {
         UNIQUE KEY uq_ic (item_id, user_id),
         KEY idx_item (item_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='會議記錄項目確認簽名(依負責部門各一位,manager優先)'");
+    // 負責人「指定人員」模式(2026-08-05使用者明確要求)：有值時完全取代 owner_depts 的部門自動判定，
+    // 直接指定的人只要本次有出席就是必簽者(不套用主管優先的判定，因為是特別指名的)。
+    // 既有表加欄位一律先查 information_schema 再 ALTER(MySQL 無 ADD COLUMN IF NOT EXISTS)，比照 homepage.php 慣例。
+    try {
+        $c = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_item' AND COLUMN_NAME='owner_users'")->fetchColumn();
+        if ($c === 0) {
+            $db->exec("ALTER TABLE meeting_item ADD COLUMN owner_users VARCHAR(200) NULL
+                       COMMENT '直接指定負責人員 user.id 逗號分隔(與owner_depts二擇一,有值時完全取代部門判定)' AFTER owner_dept_names");
+        }
+    } catch (Throwable $e) {}
     // 舊資料一次性搬移(只搬一次)：把舊單欄位 confirm_user_id 的既有簽名保留下來，避免改版後歷史紀錄的簽名憑空消失
     try {
         $migrated = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='meeting_item_confirm_migrated'")->fetchColumn();
@@ -362,48 +373,112 @@ function meeting_dept_nonattendee_targets(PDO $db, int $meetingId, array $ownerD
     return array_values(array_diff($memberIds, $attendeeIds));
 }
 
+/** 統一入口：算出這個項目要發「未出席回簽」通知的對象——指定人員模式(owner_users有值)＝名單中本次沒出席的人；
+ *  部門模式＝負責部門中本次沒出席的成員(既有 meeting_dept_nonattendee_targets，含子部門/以會議當天歸屬為準)。 */
+function meeting_item_owner_notify_targets(PDO $db, int $meetingId, array $item): array {
+    $ownerUserIds = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_users'] ?? '')))));
+    if ($ownerUserIds) {
+        $st = $db->prepare("SELECT user_id FROM meeting_attendee WHERE meeting_id=?");
+        $st->execute([$meetingId]);
+        $attendeeIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+        return array_values(array_diff($ownerUserIds, $attendeeIds));
+    }
+    $ownerDeptIds = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_depts'] ?? '')))));
+    return $ownerDeptIds ? meeting_dept_nonattendee_targets($db, $meetingId, $ownerDeptIds) : [];
+}
+
 /**
- * 依負責部門(可多個)算出「每個部門各一位必須現場簽名的人」(2026-08-05改版，使用者明確要求)：
- * 優先取該部門「本次有出席」的主管(position_level有設level，取level最小＝職級最高)；
- * 該部門沒有主管出席時，改由該部門任一位出席人員代表(user_id最小者)。
- * 只回傳「該部門本次確實有人出席」的部門；完全沒人出席的部門不會出現在結果中，
+ * 依負責部門(可多個)算出「每個部門各一位必須現場簽名的人」(2026-08-05改版，使用者再次明確要求優先序)：
+ * ①該部門(主要角色 is_main=1)本次有出席的主管優先(position_level有設level，取level最小＝職級最高)
+ * ②該部門完全沒人以「主要角色」出席、或出席的主要角色member都不是主管，才輪到「兼任」(is_main=0)該部門的主管代簽
+ * ③連兼任主管都沒有，才依職稱 position.sort_order 由高到低，取該部門(主要優先)出席人員中職稱排序最高者代簽
+ * 回傳的 dept_name 一律是「要求簽章的部門」本身名稱(不是簽署人自己的主要部門)，is_main=false 代表這是用兼任身分代簽，
+ * 前端需標示清楚(如「生管組(兼)」)避免跟簽署人實際所屬部門搞混。
+ * 只回傳「該部門本次確實有人出席(含兼任)」的部門；完全沒人出席的部門不會出現在結果中，
  * 那種情況改走既有的通知系統回簽(meeting_dept_nonattendee_targets/meeting_item_confirm_via_notify)。
- * 回傳 [dept_id => ['user_id','user_name','dept_name','is_manager']]。
+ * 回傳 [dept_id => ['user_id','user_name','dept_name','is_manager','is_main']]。
  */
 function meeting_item_required_signers(PDO $db, int $meetingId, array $ownerDeptIds): array {
     $out = [];
     foreach (array_unique(array_map('intval', $ownerDeptIds)) as $deptId) {
         if ($deptId <= 0) continue;
-        $st = $db->prepare("SELECT a.user_id, a.user_name, a.dept_name, pl.level
+        $st = $db->prepare("SELECT a.user_id, a.user_name, d.name AS dept_name, m.is_main, pl.level
                              FROM meeting_attendee a
                              JOIN user_department_position_map m ON m.user_id=a.user_id AND m.department_id=?
+                             JOIN department d ON d.id=m.department_id
+                             LEFT JOIN position p ON p.id=m.position_id
                              LEFT JOIN position_level pl ON pl.position_id=m.position_id
                              WHERE a.meeting_id=?
-                             ORDER BY (pl.level IS NULL) ASC, pl.level ASC, a.user_id ASC
+                             ORDER BY
+                               CASE WHEN m.is_main=1 AND pl.level IS NOT NULL THEN 0
+                                    WHEN m.is_main=0 AND pl.level IS NOT NULL THEN 1
+                                    WHEN m.is_main=1 THEN 2
+                                    ELSE 3 END ASC,
+                               COALESCE(pl.level, 999) ASC,
+                               COALESCE(p.sort_order, 999) ASC,
+                               a.user_id ASC
                              LIMIT 1");
         $st->execute([$deptId, $meetingId]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if ($r) $out[$deptId] = ['user_id'=>(int)$r['user_id'], 'user_name'=>(string)$r['user_name'],
-                                  'dept_name'=>(string)($r['dept_name'] ?: ''), 'is_manager'=>$r['level'] !== null];
+                                  'dept_name'=>(string)($r['dept_name'] ?: ''), 'is_manager'=>$r['level'] !== null,
+                                  'is_main'=>(int)$r['is_main'] === 1];
     }
     return $out;
+}
+
+/**
+ * 「指定人員」模式(2026-08-05使用者明確要求，與 owner_depts 部門模式二擇一，完全取代)：
+ * 直接列出的人只要本次有出席就是必簽者，不套用主管優先判定(特別指名的，信任記錄人的判斷)。
+ * 只回傳「本次有出席」的人；沒出席的人不會出現在結果中，改走通知系統回簽。
+ * 回傳 [user_id => ['user_id','user_name','dept_name','is_manager'=true,'is_main'=true]]（is_manager/is_main
+ * 固定回true讓前端不顯示「(代)/(兼)」標記，因為是指名而非自動判定出來的代理）。
+ */
+function meeting_item_required_signers_by_users(PDO $db, int $meetingId, array $userIds): array {
+    $out = [];
+    $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
+    if (!$userIds) return $out;
+    $in = implode(',', array_fill(0, count($userIds), '?'));
+    $st = $db->prepare("SELECT user_id, user_name, dept_name FROM meeting_attendee WHERE meeting_id=? AND user_id IN ($in)");
+    $st->execute(array_merge([$meetingId], $userIds));
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[(int)$r['user_id']] = ['user_id'=>(int)$r['user_id'], 'user_name'=>(string)$r['user_name'],
+                                     'dept_name'=>(string)($r['dept_name'] ?: ''), 'is_manager'=>true, 'is_main'=>true];
+    }
+    return $out;
+}
+
+/** 統一入口：依項目的 owner_users(指定人員模式，優先/完全取代) 或 owner_depts(部門自動判定模式) 算出必簽名單，兩者擇一。
+ *  呼叫端一律用這支，不要自己 if/else 判斷 owner_users 是否有值，避免各處判斷邏輯漏改不一致。$item 需含 owner_users/owner_depts 欄位。 */
+function meeting_item_required_signers_for(PDO $db, int $meetingId, array $item): array {
+    $ownerUserIds = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_users'] ?? '')))));
+    if ($ownerUserIds) return meeting_item_required_signers_by_users($db, $meetingId, $ownerUserIds);
+    $ownerDeptIds = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_depts'] ?? '')))));
+    if ($ownerDeptIds) return meeting_item_required_signers($db, $meetingId, $ownerDeptIds);
+    return [];
 }
 
 /** 未出席部門成員透過通知系統回簽（_eventRespond.php 的 MEETING_ITEM_CONFIRM 掛勾呼叫）：屬補充性質的異步回應留痕，
  *  跟「現場部門代表簽名」(meeting_item_required_signers，只認本次出席者)彼此獨立互不影響，任一人回覆都直接記錄一列。 */
 function meeting_item_confirm_via_notify(PDO $db, int $itemId, int $uid, string $uname): void {
-    $st = $db->prepare("SELECT owner_depts FROM meeting_item WHERE item_id=?");
+    $st = $db->prepare("SELECT owner_depts, owner_users FROM meeting_item WHERE item_id=?");
     $st->execute([$itemId]);
     $item = $st->fetch(PDO::FETCH_ASSOC);
     if (!$item) return;
-    $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$item['owner_depts']))));
-    if (!$ownerIds) return;
-    $in = implode(',', array_fill(0, count($ownerIds), '?'));
-    $chk = $db->prepare("SELECT d.name FROM user_department_position_map m JOIN department d ON d.id=m.department_id
-                          WHERE m.user_id=? AND m.department_id IN ($in) LIMIT 1");
-    $chk->execute(array_merge([$uid], $ownerIds));
-    $deptName = $chk->fetchColumn();
-    if ($deptName === false) return; // 不屬於此項目的負責部門，不接受回簽
+    $ownerUserIds = array_values(array_filter(array_map('intval', explode(',', (string)$item['owner_users']))));
+    if ($ownerUserIds) {
+        if (!in_array($uid, $ownerUserIds, true)) return; // 指定人員模式：不是被指名的人，不接受回簽
+        $deptName = null; // 指名模式不特別標部門，蓋章不帶部門
+    } else {
+        $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$item['owner_depts']))));
+        if (!$ownerIds) return;
+        $in = implode(',', array_fill(0, count($ownerIds), '?'));
+        $chk = $db->prepare("SELECT d.name FROM user_department_position_map m JOIN department d ON d.id=m.department_id
+                              WHERE m.user_id=? AND m.department_id IN ($in) LIMIT 1");
+        $chk->execute(array_merge([$uid], $ownerIds));
+        $deptName = $chk->fetchColumn();
+        if ($deptName === false) return; // 不屬於此項目的負責部門，不接受回簽
+    }
     $db->prepare("INSERT IGNORE INTO meeting_item_confirm (item_id, user_id, user_name, dept_name, confirmed_at) VALUES (?,?,?,?,NOW())")
        ->execute([$itemId, $uid, $uname, $deptName]);
 }
