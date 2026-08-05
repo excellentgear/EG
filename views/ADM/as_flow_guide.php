@@ -96,8 +96,36 @@ if ($rawKey !== '') {
 //   ① as_form_template.form_doc_id          — AS 線上表單設計器做出來的表單
 //   ② as_document.linked_module             — 既有電子化模組（car／qa_abnormal）
 //   ③ 各模組自己的「AS 文件綁定設定」        — 表單已由某個既有頁面實作（ai-rules/16：編號一律走 as_document 綁定）
-//      綁定值散在 system_settings 與 system_parameters，故用下表集中登記。
-//      **新增頁面綁定時，記得回來補一列，否則此頁會漏判成「尚未建立」。**
+//
+// ③ 分兩種來源：
+//   (a) 統一綁定庫 asdoc_lib.php（system_parameters param_group='AS_DOC_BIND'）——2026-08-03後的新模組都走這裡，
+//       **直接掃整個 AS_DOC_BIND group 動態判斷已綁定，不需要每加一個模組就回來手動登記一列**
+//       （曾發生：meeting_signsheet/meeting_record/order_change_history 綁定後這頁沒更新，因為漏登記——
+//       只維護「模組代碼→顯示用途/連結」的名稱對照，即使忘記補這個對照表，已綁定狀態仍會正確顯示，只是名稱退回顯示模組代碼）。
+//   (b) 尚未遷移到統一庫的舊模組（vendor_audit 存在 system_settings、EXTERNAL_DOC/QUOTATION 存在各自的 param_group）——
+//       這些沒有共同的 group 可以整批掃，只能繼續手動登記；**新增此類舊式綁定時才需要回來補一列**。
+$PGBIND = [];   // as_document.id => ['name'=>用途, 'url'=>頁面]
+
+// (a) 統一綁定庫：動態掃描，永遠不漏
+$ASDOC_MODULE_LABELS = [
+    // 模組代碼(=eg_asdoc_save的第二參數) => [顯示用途, 頁面網址（相對本頁）]
+    'meeting_signsheet'   => ['會議管理 · 簽到表',       '../ADM/meeting_record.php'],
+    'meeting_record'      => ['會議管理 · 會議紀錄表',   '../ADM/meeting_record.php'],
+    'part_process_report' => ['零件製程報告',            '../Sales/part_process_report.php'],
+    'order_change'        => ['訂單變更 · 變更單',       '../Sales/NewOrder_Track.php'],
+    'order_change_history'=> ['訂單變更 · 歷史清單',     '../Sales/NewOrder_Track.php'],
+];
+try {
+    foreach ($conn->query("SELECT param_key, param_value FROM system_parameters WHERE param_group='AS_DOC_BIND'") as $r) {
+        $did = (int)(json_decode((string)$r['param_value'], true) ?? $r['param_value']);
+        if ($did > 0) {
+            $lbl = $ASDOC_MODULE_LABELS[$r['param_key']] ?? [$r['param_key'], ''];
+            $PGBIND[$did] = ['name' => $lbl[0], 'url' => $lbl[1]];
+        }
+    }
+} catch (Exception $e) { error_log('as_flow_guide pagebind(asdoc_lib): ' . $e->getMessage()); }
+
+// (b) 舊式各自存放（尚未遷移到 AS_DOC_BIND，需手動登記）
 $PAGE_BINDS = [
     // [來源, 鍵（sp 用 群組|鍵）, 該頁對此文件的用途, 頁面網址（相對本頁）]
     ['ss', 'vendor_audit_as_doc_id',  '供應商稽核管理 · 稽核查檢表',        '../pm/vendor_audit.php'],
@@ -108,7 +136,6 @@ $PAGE_BINDS = [
     ['sp', 'EXTERNAL_DOC|as_doc_id',  '外來文件清單',                       '../Sales/external_doc_list.php'],
     ['sp', 'QUOTATION|as_doc_id',     '報價單',                             '../Sales/quotation_list_NEW.php'],
 ];
-$PGBIND = [];   // as_document.id => ['name'=>用途, 'url'=>頁面]
 foreach ($PAGE_BINDS as $b) {
     try {
         if ($b[0] === 'ss') {
