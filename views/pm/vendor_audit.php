@@ -455,9 +455,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         </div>
         <div class="af-quickfill" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:12px;color:#5b3a1e;">
             <span>自評快速套用：<input type="number" id="qfSelf" min="0" style="width:56px;">
-                <button type="button" class="b-att2" onclick="quickFillScore('self')">套用全部</button></span>
+                <button type="button" class="b-att2" onclick="quickFillScore('self')">套用全部</button>
+                <button type="button" class="b-att2" style="color:#DD5138;" onclick="quickClearScore('self')">清空</button></span>
             <span>稽核快速套用：<input type="number" id="qfAudit" min="0" style="width:56px;">
-                <button type="button" class="b-att2" onclick="quickFillScore('audit')">套用全部</button></span>
+                <button type="button" class="b-att2" onclick="quickFillScore('audit')">套用全部</button>
+                <button type="button" class="b-att2" style="color:#DD5138;" onclick="quickClearScore('audit')">清空</button></span>
             <span style="color:#b0a390;">(套用後仍可個別修改)</span>
         </div>
         <div class="af-table-wrap">
@@ -799,7 +801,7 @@ $(document).ready(function(){
 });
 
 var API = '../../src/store/VendorAudit_API.php';
-var META = null, TARGETS = [], PERMS = null, POOL = [], ROUND_YEAR = null, CUR_CFG = null;
+var META = null, TARGETS = [], PERMS = null, POOL = [], ROUND_YEAR = null, CUR_CFG = null, CUR_PROD_TYPE = null;
 function planTimeliness(t){
     if (!t.plan_month) return '';
     var planYM = ROUND_YEAR+'-'+('0'+t.plan_month).slice(-2);
@@ -1019,6 +1021,7 @@ function openRec(tid){
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         var t = res.target;
         CUR_CFG = t.checklist_cfg || {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
+        CUR_PROD_TYPE = t.prod_type || null;
         $('#recTitle').text('稽核評鑑表單：'+t.maker_id+'（'+t.maker_id_no+'）');
         $('#recPlanMonth').val(t.plan_month||'');
         $('#recDate').val(fmtDate(t.audit_date)||META.today);
@@ -1116,6 +1119,11 @@ function quickFillScore(kind){
         $(this).val(Math.min(v, mx));
         scoreCheck(this);
     });
+    recompute();
+}
+function quickClearScore(kind){
+    if (!confirm((kind==='self'?'自評分':'稽核分')+'全部清空？（清空後仍可個別重新填寫）')) return;
+    $('#afBody .af-'+kind).each(function(){ $(this).val(''); scoreCheck(this); });
     recompute();
 }
 function recompute(){
@@ -1308,35 +1316,57 @@ function openHis(mid){
 }
 
 /* ---------- 列印評鑑表單 ---------- */
-function auditFormHTML(o){
-    o = o || {};
+/** 查核表單一版本(mode='self'=供應商主自評核版,全部留白；mode='site'=人員實地審查版,顯示分數) */
+function auditFormOneVersion(o, mode){
     var cfg = o.cfg || CUR_CFG || {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
     var docName = (META.as_doc && META.as_doc.doc_name) || '供應商評鑑稽核查表';
     var head = '<div style="text-align:center;">'
         + '<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         + '<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
+    var reviewMap = {site:'人員實地審查', self:'供應商主自評核', abnormal:'異常檢核'};
+    var reviewBoxes = ['site','self','abnormal'].map(function(k){ return (mode===k?'☑':'□')+reviewMap[k]; }).join('　');
+    var prodMap = {raw:'原料', outsource:'委外加工件', packaging:'包材'};
+    var prodBoxes = ['raw','outsource','packaging'].map(function(k){ return (o.prodType===k?'☑':'□')+prodMap[k]; }).join('　');
     var modeMap = {first:'首次稽核', again:'次稽核', self:'自我評量'};
     var modeBoxes = ['first','again','self'].map(function(k){ return (o.mode===k?'☑':'□')+modeMap[k]; }).join('　');
     var info = '<table class="pf-info"><tr>'
         + '<td>供應商：'+(o.maker?esc(o.maker):'________________')+'</td>'
         + '<td>日期：'+(o.dateStr?esc(o.dateStr):'____ / ____ / ____')+'</td></tr>'
-        + '<tr><td colspan="2">稽核狀況：'+modeBoxes+'　　評分：每項依單項滿分評分（0＝最差；無此流程填 NA）</td></tr></table>';
-    var rows = '<table class="pf"><thead><tr><th style="width:70px;">項目</th><th style="width:34px;">項次</th><th>查核問題</th>'
-        + '<th style="width:44px;">自評分</th><th style="width:44px;">稽核分</th><th style="width:180px;">佐證／觀察結果</th></tr></thead><tbody>';
+        + '<tr><td colspan="2">審查類別：'+reviewBoxes+'</td></tr>'
+        + '<tr><td colspan="2">生產類別：'+prodBoxes+'</td></tr>'
+        + '<tr><td colspan="2">稽核狀況：'+modeBoxes+'</td></tr></table>';
+    var showScores = (mode === 'site');
+    var tSelf = 0, tAudit = 0;
+    var rows = '<table class="pf" style="table-layout:fixed;"><colgroup><col style="width:60px;"><col style="width:34px;"><col>'
+        + '<col style="width:70px;"><col style="width:50px;"><col style="width:50px;"></colgroup>'
+        + '<thead><tr><th>項目</th><th>項次</th><th>查核問題</th><th>單項滿分</th><th>自評分</th><th>稽核分</th></tr></thead><tbody>';
     cfg.items.forEach(function(cat){
         var items = cat[2];
         items.forEach(function(it, idx){
             var s = (o.scores && o.scores[it[0]]) || {};
+            if (s.self != null && s.self !== '') tSelf += +s.self;
+            if (s.audit != null && s.audit !== '') tAudit += +s.audit;
             rows += '<tr>';
             if (idx===0) rows += '<td rowspan="'+items.length+'" style="vertical-align:middle;font-weight:bold;">'+esc(cat[1])+'</td>';
-            rows += '<td>'+esc(it[1])+'</td><td class="q">'+esc(it[2])+'</td>'
-                + '<td>'+(s.self!=null?s.self:'')+'</td><td>'+(s.audit!=null?s.audit:'')+'</td><td></td></tr>';
+            rows += '<td>'+esc(it[1])+'</td><td class="q">'+esc(it[2])+'</td><td>'+it[3]+'</td>'
+                + '<td>'+(showScores && s.self!=null?s.self:'')+'</td><td>'+(showScores && s.audit!=null?s.audit:'')+'</td></tr>';
         });
     });
-    rows += '<tr><td colspan="2">合計</td><td style="text-align:right;">總分（滿分 '+cfg.total_max+'）／綜合合格率＝自評率×'+cfg.self_w+'＋稽核率×'+cfg.audit_w+'，≥'+cfg.pass_rate+'% 判合格</td><td></td><td></td><td></td></tr>';
+    rows += '<tr style="font-weight:bold;"><td colspan="3">合計</td><td>'+cfg.total_max+'</td>'
+        + '<td>'+(showScores?tSelf:'')+'</td><td>'+(showScores?tAudit:'')+'</td></tr>';
     rows += '</tbody></table>';
-    var sign = '<table class="pf-sign"><tr><td>供應商代表簽章：__________________</td><td>稽核員簽章：__________________</td></tr></table>';
+    var madeCell = mode==='site' ? (o.auditorName ? vaStampHtml(o.auditorName, o.dateStr||'') : '__________________')
+                 : (mode==='self' ? 'N/A' : '__________________');
+    var mgrCell = mode==='self' ? 'N/A' : '__________________';
+    var sign = '<table class="pf-sign"><tr>'
+        + '<td style="width:50%;">主管簽核：'+mgrCell+'</td>'
+        + '<td style="width:50%;">製表：'+madeCell+'</td></tr></table>';
     return head + info + rows + sign;
+}
+/** 查核表列印一律一次印兩個版本：供應商主自評核版(全空白給供應商填)＋人員實地審查版(顯示分數,製表=稽核員) */
+function auditFormHTML(o){
+    o = o || {};
+    return '<div style="page-break-after:always;">'+auditFormOneVersion(o,'self')+'</div>'+auditFormOneVersion(o,'site');
 }
 function openPrintWindow(bodyHtml, title, docNo, landscape){
     var w = window.open('', '_blank');
@@ -1371,7 +1401,8 @@ function printBlankForm(){
 function printCurrentForm(){
     openPrintWindow(auditFormHTML({
         maker: $('#recTitle').text().replace('稽核評鑑表單：',''),
-        dateStr: $('#recDate').val(), scores: collectScores(), mode: $('#recMode').val()
+        dateStr: $('#recDate').val(), scores: collectScores(), mode: $('#recMode').val(),
+        prodType: CUR_PROD_TYPE, auditorName: $('#recAuditor').val()
     }), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02');
 }
 $('#btnBlank').on('click', printBlankForm);
@@ -1495,7 +1526,7 @@ function printRecordSheet(){ if(!RS){alert('無資料');return;} openPrintWindow
 function printAllDocs(){
     if(!RS){alert('無資料');return;}
     var docNo1=(META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2=(META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
-    var page1=auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg});
+    var page1=auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg, prodType:RS.t.prod_type, auditorName:RS.t.auditor});
     var body='<div style="page-break-after:always;">'+page1
         +'<div style="text-align:right;margin-top:22px;font-size:12px;color:#333;">'+esc(docNo1)+'</div></div>'
         +recordSheetHTML()+'<div style="text-align:right;margin-top:14px;font-size:12px;color:#333;">'+esc(docNo2)+'</div>';
