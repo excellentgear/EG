@@ -409,15 +409,25 @@ switch ($action) {
         if (!is_array($quoteNos)) $quoteNos = [];
         $quoteNos = array_values(array_unique(array_filter(array_map('trim', $quoteNos))));
         // 解析要過濾的整數 d_id 清單：優先 part_no（可多筆，跨客戶），否則單一 d_id
-        $dIds = [];
+        $dIds = []; $ownDids = []; $bindLabelByDid = [];
         if ($partNo !== '') {
             try {
                 $dsP = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id = ?");
                 $dsP->execute([$partNo]);
-                $dIds = array_map('intval', $dsP->fetchAll(PDO::FETCH_COLUMN));
+                $ownDids = array_map('intval', $dsP->fetchAll(PDO::FETCH_COLUMN));
             } catch(Throwable $_e) {}
+            $dIds = $ownDids;
+            // 客戶代號／等同料號綁定的其他料號報價也一併撈出（合併顯示，標明來源）
+            try {
+                require_once __DIR__ . '/../common/part_alias_lib.php';
+                foreach (eg_part_alias_linked_part_nos($pdo, $partNo) as $lp) {
+                    $bindLabelByDid[$lp['d_id']] = $lp['part_no'] . ($lp['customer_name'] ? '／' . $lp['customer_name'] : '');
+                    $dIds[] = $lp['d_id'];
+                }
+            } catch(Throwable $_e) {}
+            $dIds = array_values(array_unique($dIds));
         } elseif ($dId > 0) {
-            $dIds = [$dId];
+            $dIds = [$dId]; $ownDids = [$dId];
         }
         // quote_nos 為空但有 d_id → 直接撈此料號所有報價單號
         if (empty($quoteNos) && !empty($dIds)) {
@@ -445,7 +455,7 @@ switch ($action) {
 
             // 報價品項（含製程，依 d_id 過濾；part_no 模式可多個 d_id）
             $dFilter = !empty($dIds) ? ("AND qi.d_setting_d_id IN (" . implode(',', array_fill(0, count($dIds), '?')) . ")") : "";
-            $qiStmt = $pdo->prepare("SELECT qi.item_id, qi.quote_id, ql2.quote_no, qi.product_id,
+            $qiStmt = $pdo->prepare("SELECT qi.item_id, qi.quote_id, ql2.quote_no, qi.product_id, qi.d_setting_d_id,
                     qi.specification, qi.quantity, qi.unit, qi.unit_price, qi.is_tiered,
                     qi.process_group_type, qi.process_notes,
                     GROUP_CONCAT(
@@ -464,7 +474,7 @@ switch ($action) {
             $qiParams = $quoteNos;
             if (!empty($dIds)) $qiParams = array_merge($qiParams, $dIds);
             $qiStmt->execute($qiParams);
-            $items = [];
+            $items = []; $qnoDids = [];
             foreach ($qiStmt->fetchAll(PDO::FETCH_ASSOC) as $it) {
                 $it['processes'] = [];
                 if ($it['process_list']) {
@@ -474,7 +484,17 @@ switch ($action) {
                     }
                 }
                 unset($it['process_list']);
+                $qnoDids[$it['quote_no']][] = (int)$it['d_setting_d_id'];
+                unset($it['d_setting_d_id']);
                 $items[$it['quote_no']][] = $it;
+            }
+            // 這張報價單的品項是否「只透過綁定料號才對得上」，供前端標示來源用
+            $quoteBindLabel = [];
+            if ($bindLabelByDid) {
+                foreach ($qnoDids as $qno => $dl) {
+                    if (array_intersect($dl, $ownDids)) continue;
+                    foreach ($dl as $d0) { if (isset($bindLabelByDid[$d0])) { $quoteBindLabel[$qno] = $bindLabelByDid[$d0]; break; } }
+                }
             }
 
             // 批次查 process_notes sub-tag 名稱
@@ -514,6 +534,7 @@ switch ($action) {
             foreach ($headers as $qno => $h) {
                 $result[$qno] = $h;
                 $result[$qno]['items'] = $items[$qno] ?? [];
+                $result[$qno]['bind_from'] = $quoteBindLabel[$qno] ?? null;
             }
             echo json_encode(['success'=>true,'data'=>$result]);
         } catch(Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
