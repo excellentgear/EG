@@ -896,7 +896,7 @@ function renderTargets(){
         html += '<tr'+(t.disabled?' class="dis"':'')+'>';
         html += '<td>'+esc(t.maker_id_no)+'</td>';
         html += '<td class="t-left"><b>'+esc(t.maker_id||'')+'</b></td>';
-        html += '<td>'+esc(t.main_cat_name||'—')+'</td>';
+        html += '<td class="t-left">'+esc(t.main_cat_name||'—')+'</td>';
         html += '<td>'+(t.plan_month?t.plan_month+'月':'—')+'</td>';
         html += '<td>'+stat+(t.disabled?'':planTimeliness(t))+'</td>';
         html += '<td>'+(fmtDate(t.audit_date)||'—')+'</td>';
