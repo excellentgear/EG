@@ -52,6 +52,8 @@ try {
     .container.body,.main_container{margin:0;padding:0;background:#fff;}
     .form-sheet{box-shadow:none;margin:0;max-width:none;padding:0;}
     .eg-form td{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    /* 簽章圖章列印尺寸全站統一 91px（ai-rules/18 第6條）；畫面預覽維持 eg_stamp.js 內建預設 */
+    svg.car-stamp{width:91px !important;height:91px !important;}
   }
 </style>
 </head>
