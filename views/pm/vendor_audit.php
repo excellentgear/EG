@@ -345,10 +345,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <table class="va-table" id="rosterTable">
                     <thead><tr>
                         <th style="width:32px;"><input type="checkbox" id="rsAllCk"></th>
-                        <th>加工項目</th><th>廠商ID</th><th>廠商名稱</th><th>廠商備註</th>
+                        <th style="text-align:left;">加工項目</th><th>廠商</th><th>廠商備註</th>
                         <th>建議等級</th><th>採用等級</th><th>類型</th><th>操作</th>
                     </tr></thead>
-                    <tbody id="rosterBody"><tr><td colspan="9" style="padding:18px;color:#8a6d45;">載入中…</td></tr></tbody>
+                    <tbody id="rosterBody"><tr><td colspan="8" style="padding:18px;color:#8a6d45;">載入中…</td></tr></tbody>
                 </table>
             </div>
             <div id="rsPager" class="va-pager" style="display:none;"></div>
@@ -1334,13 +1334,13 @@ function openPrintWindow(bodyHtml, title, docNo, landscape){
     if (!w){ alert('請允許彈出視窗以列印'); return; }
     var asTxt = String(docNo||'').replace(/['\\]/g,'');
     var css = 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:14px;}'
-        + 'table.pf{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}'
-        + 'table.pf th,table.pf td{border:1px solid #333;padding:4px 6px;text-align:center;vertical-align:middle;}'
+        + 'table.pf{width:100%;border-collapse:collapse;font-size:15px;margin-top:8px;}'
+        + 'table.pf th,table.pf td{border:1px solid #333;padding:10px 6px;height:40px;text-align:center;vertical-align:middle;}'
         + 'table.pf td.q{text-align:left;}'
-        + 'table.pf-info{width:100%;font-size:13px;margin-top:12px;border-collapse:collapse;}table.pf-info td{padding:4px 6px;border:1px solid #999;}'
+        + 'table.pf-info{width:100%;font-size:14px;margin-top:12px;border-collapse:collapse;}table.pf-info td{padding:8px 6px;border:1px solid #999;}'
         + 'table.pf-sign{width:100%;margin-top:46px;font-size:13px;page-break-inside:avoid;}table.pf-sign td{padding:30px 6px 10px;}'
         + '.stamp-wrap svg,svg.car-stamp{width:80px;height:80px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-        + '.rs-chart-wrap{width:200px;}.rs-chart-wrap svg{width:100% !important;height:auto !important;}'
+        + '.rs-chart-wrap{max-width:320px;margin:0 auto;}.rs-chart-wrap svg{width:100% !important;height:auto !important;}'
         + '@media print{@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;'
         + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
         + '}}';
@@ -1461,15 +1461,16 @@ function recordSheetHTML(){
     var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'____';
     var head='<div style="text-align:center;"><div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
-    var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>稽核日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>稽核狀況：'+esc(modeL)+'</td></tr></table>';
-    var rows='<table class="pf"><thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th></tr></thead><tbody>';
+    var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>加工項目：'+esc(t.main_cat_name||'—')+'</td><td>稽核日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>稽核狀況：'+esc(modeL)+'</td></tr></table>';
+    var rows='<table class="pf" style="table-layout:fixed;"><colgroup><col style="width:38%;"><col style="width:14%;"><col style="width:16%;"><col style="width:16%;"><col style="width:16%;"></colgroup>'
+        +'<thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th></tr></thead><tbody>';
     c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*cfg.self_w+k.audit_rate*cfg.audit_w)*10)/10;
         rows+='<tr><td class="q">'+esc(k.name)+'</td><td>'+k.max+'</td><td>'+k.self_rate+'%</td><td>'+k.audit_rate+'%</td><td>'+comb+'%</td></tr>'; });
     rows+='<tr style="font-weight:bold;"><td class="q">總成績</td><td>'+c.total_max+'</td><td>'+c.selfR+'%</td><td>'+c.auditR+'%</td><td>'+c.overall+'%</td></tr></tbody></table>';
     var svg = rsChart ? rsChart.container.querySelector('svg').outerHTML : '';
     var body = '<div style="display:flex;gap:18px;align-items:flex-start;margin-top:6px;">'
-        + '<div style="flex:1;min-width:0;">'+rows+'</div>'
-        + '<div class="rs-chart-wrap" style="text-align:center;">'+svg+'</div></div>';
+        + '<div style="flex:0 0 46%;min-width:0;">'+rows+'</div>'
+        + '<div class="rs-chart-wrap" style="text-align:center;flex:1;">'+svg+'</div></div>';
     var conc='<div style="margin-top:8px;font-size:13px;">綜合評鑑合格率（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）＝<b style="font-size:16px;">'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+cfg.pass_rate+'%'+(t.conclusion?'；建議：'+esc(t.conclusion):'')+'</div>'
         +'<div style="margin-top:4px;">判定：'+vaJudgeBadgeHtml(c.pass)+'</div>';
     var mgrStamp = (t.status==='approved' && t.signed_by_name) ? vaStampHtml(t.signed_by_name, (t.signed_at||'').substr(0,10), !!t.signed_is_deputy) : '';
@@ -1662,22 +1663,25 @@ function printEvalAll(){
     for(var p=0;p<pages;p++){
         var cards='';
         for(var k=p*per;k<Math.min((p+1)*per,list.length);k++) cards+=evCardPrintHTML(list[k]);
-        body+='<div class="pg"><div class="pg-h"><div class="ttl"><div class="co">'+esc(META.company_name||'')+'</div><div class="dn">'+esc(docName)+'（'+EVAL_ALL.year+' 年 定期評核）</div></div>'
-            +'<div class="pn">第 '+(p+1)+' / '+pages+' 頁</div></div>'
-            +'<div class="pg-cards">'+cards+'</div><div class="pg-f">'+esc(docNo)+'</div></div>';
+        body+='<div class="pg"><div class="pg-h"><div class="ttl"><div class="co">'+esc(META.company_name||'')+'</div><div class="dn">'+esc(docName)+'</div></div>'
+            +'<div class="yr">'+EVAL_ALL.year+' 年</div></div>'
+            +'<div class="pg-cards">'+cards+'</div></div>';
     }
+    var asTxt = String(docNo||'').replace(/['\\]/g,'');
     var w=window.open('','_blank'); if(!w){alert('請允許彈出視窗');return;}
-    var css='@page{size:A4 landscape;margin:8mm;} body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;margin:0;}'
+    var css='@page{size:A4 landscape;margin:8mm 8mm 14mm;'
+        +" @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#333; }"
+        +(asTxt?" @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }":'')
+        +'} body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;margin:0;}'
         +'.pg{page-break-after:always;padding:2mm;} .pg:last-child{page-break-after:auto;}'
         +'.pg-h{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #333;padding-bottom:3px;margin-bottom:5px;}'
-        +'.pg-h .co{font-size:22px;font-weight:bold;letter-spacing:1px;} .pg-h .dn{font-size:16px;font-weight:bold;margin-top:2px;} .pg-h .pn{font-size:12px;font-weight:bold;}'
+        +'.pg-h .co{font-size:22px;font-weight:bold;letter-spacing:1px;} .pg-h .dn{font-size:16px;font-weight:bold;margin-top:2px;} .pg-h .yr{font-size:13px;font-weight:bold;}'
         +'.pg-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;}'
         +'.pc{border:1px solid #333;border-radius:3px;padding:3px 4px;break-inside:avoid;}'
         +'.pc-h{font-weight:bold;font-size:12px;margin-bottom:2px;display:flex;justify-content:space-between;}'
         +'.pc .jf{color:#c00;} .pc .jp{color:#282;}'
         +'table.pm{width:100%;border-collapse:collapse;font-size:10px;} table.pm th,table.pm td{border:1px solid #999;padding:0 2px;text-align:center;}'
-        +'table.pm thead th{background:#eee;} table.pm tr.ph td{background:#f3ead6;font-weight:bold;} table.pm td.over{color:#c00;font-weight:bold;}'
-        +'.pg-f{text-align:right;font-size:11px;margin-top:6px;}';
+        +'table.pm thead th{background:#eee;} table.pm tr.ph td{background:#f3ead6;font-weight:bold;} table.pm td.over{color:#c00;font-weight:bold;}';
     w.document.write('<html><head><meta charset="utf-8"><title>供應商定期評核</title><style>'+css+'</style></head><body>'+body
         +'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
     w.document.close();
@@ -1803,7 +1807,8 @@ function renderRoster(){
     rows.forEach(function(r){
         var over=(r.roster_grade!=null&&r.roster_grade!=='');
         h+='<tr><td><input type="checkbox" class="rs-ck" value="'+esc(r.maker_id_no)+'"></td>';
-        h+='<td>'+esc(r.main_cat_name||'—')+'</td><td>'+esc(r.maker_id_no)+'</td><td class="t-left"><b>'+esc(r.maker_id||'')+'</b></td>';
+        h+='<td class="t-left">'+esc(r.main_cat_name||'—')+'</td>';
+        h+='<td class="t-left"><b>'+esc(r.maker_id||'')+'</b><div style="font-size:11px;color:#8a6d45;">'+esc(r.maker_id_no)+'</div></td>';
         h+='<td class="t-left" style="max-width:200px;white-space:normal;">'+esc(r.m_note||'')+'</td>';
         h+='<td>'+(r.suggest_grade?r.suggest_grade+'（'+(r.suggest_score==null?'—':r.suggest_score)+'）':'—')+'</td>';
         h+='<td><b style="color:#8A5A2B;">'+esc(r.final_grade||'—')+'</b>'+(over?' <span style="font-size:10px;color:#c0762c;">手動</span>':'')+'</td>';
@@ -1858,12 +1863,16 @@ $('#rsCsvBtn').on('click', function(){
 $('#rsPrintBtn').on('click', function(){
     if(!ROSTER||!ROSTER.rows.length){ alert('清冊無資料'); return; }
     var doc=META.roster_as_doc, docName=(doc&&doc.doc_name)||'合格供應商清冊', docNo=(doc&&doc.doc_no)||'2-PH-01-04';
-    var head='<div style="text-align:center;"><div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
-        +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'（'+ROSTER.year+' 年）</div></div>';
-    var rows='<table class="pf"><thead><tr><th style="width:40px;">序</th><th>加工項目</th><th>廠商ID</th><th>廠商名稱</th><th>廠商備註</th><th style="width:60px;">評核等級</th></tr></thead><tbody>';
-    ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td>'+esc(r.main_cat_name||'')+'</td><td>'+esc(r.maker_id_no)+'</td><td class="q">'+esc(r.maker_id||'')+'</td><td class="q">'+esc(r.m_note||'')+'</td><td>'+esc(r.final_grade||'—')+'</td></tr>'; });
+    var head='<div style="position:relative;text-align:center;">'
+        +'<div style="position:absolute;left:0;top:4px;font-size:14px;font-weight:bold;">'+ROSTER.year+' 年</div>'
+        +'<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
+        +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
+    var rows='<table class="pf"><thead><tr><th style="width:40px;">序</th><th style="text-align:left;">加工項目</th><th>廠商</th><th>廠商備註</th><th style="width:60px;">評核等級</th></tr></thead><tbody>';
+    ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td class="q">'+esc(r.main_cat_name||'')+'</td>'
+        +'<td class="q"><b>'+esc(r.maker_id||'')+'</b><div style="font-size:11px;color:#555;">'+esc(r.maker_id_no)+'</div></td>'
+        +'<td class="q">'+esc(r.m_note||'')+'</td><td>'+esc(r.final_grade||'—')+'</td></tr>'; });
     rows+='</tbody></table>';
-    var sign='<table class="pf-sign"><tr><td>製表：____________</td><td>審核：____________</td><td>核准：____________</td></tr></table>';
+    var sign='<table class="pf-sign" style="page-break-inside:avoid;"><tr><td>製表：____________</td><td>審核：____________</td><td>核准：____________</td></tr></table>';
     openPrintWindow(head+rows+sign, '合格供應商清冊', docNo);
 });
 
@@ -1936,30 +1945,33 @@ $('#planPrintBtn').on('click', function(){
     var docName=(PLANDATA.plan_as_doc&&PLANDATA.plan_as_doc.doc_name)||'供應商稽核計劃';
     var docNo=(PLANDATA.plan_as_doc&&PLANDATA.plan_as_doc.doc_no)||'2-PH-01-06';
     var year=$('#planYear').val();
-    var head='<div style="text-align:center;"><div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(PLANDATA.company_name||'')+'</div>'
-        +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div>'
-        +'<div style="margin-top:4px;font-size:13px;">'+year+' 年</div></div>';
-    var rows='<table class="pf" style="table-layout:fixed;"><colgroup><col style="width:15%;">';
-    for (var m=1;m<=12;m++) rows+='<col>';
-    rows+='<col style="width:16%;"></colgroup><thead><tr><th>供應商名稱</th>';
-    for (m=1;m<=12;m++) rows+='<th>'+m+'月</th>';
-    rows+='<th>備註</th></tr></thead><tbody>';
-    (PLANDATA.rows||[]).forEach(function(r){
-        rows+='<tr><td class="q">'+esc(r.maker_id||'')+'</td>';
-        for (m=1;m<=12;m++) rows+='<td>'+(r.months&&r.months[m]?'V':'')+'</td>';
-        rows+='<td class="q">'+esc(r.sub_cat_names||'')+'</td></tr>';
-    });
-    rows+='</tbody></table>';
     var lock = PLANDATA.lock;
     var approveStamp = (lock && lock.status==='approved' && lock.approved_by_name)
         ? vaStampHtml(lock.approved_by_name, fmtDate(lock.approved_at)||'') : '';
     var maker = lock ? (lock.submitted_by_name||'') : CUR_USER_NAME;
     var makeStamp = maker ? vaStampHtml(maker, fmtDate(lock?lock.submit_date:META.today)||'') : '';
-    var sign='<table class="pf-sign"><tr>'
-        +'<td style="width:50%;"><div style="font-size:11px;color:#555;">核准</div><div style="margin-top:2px;min-height:70px;">'+approveStamp+'</div></td>'
-        +'<td style="width:50%;"><div style="font-size:11px;color:#555;">製表人</div><div style="margin-top:2px;min-height:70px;">'+makeStamp+'</div></td>'
+    // 大標題/簽章用 position:fixed 讓多頁列印時每一頁都重複出現（見 ai-rules/16 第四之五節）
+    var fixedHead = '<div style="position:fixed;top:0;left:0;right:0;text-align:center;background:#fff;">'
+        +'<div style="position:absolute;left:0;top:2mm;font-size:14px;font-weight:bold;">'+year+' 年</div>'
+        +'<div style="font-size:22px;font-weight:bold;letter-spacing:1px;">'+esc(PLANDATA.company_name||'')+'</div>'
+        +'<div style="font-size:16px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
+    var fixedFoot = '<table class="pf-sign" style="position:fixed;left:0;right:0;bottom:0;background:#fff;page-break-inside:avoid;"><tr>'
+        +'<td style="width:33%;"><div style="font-size:11px;color:#555;">核准</div><div style="margin-top:2px;min-height:60px;">'+approveStamp+'</div></td>'
+        +'<td style="width:34%;"></td>'
+        +'<td style="width:33%;"><div style="font-size:11px;color:#555;">製表人</div><div style="margin-top:2px;min-height:60px;">'+makeStamp+'</div></td>'
         +'</tr></table>';
-    openPrintWindow(head+rows+sign, '供應商稽核計劃', docNo, true);
+    var rows='<div style="margin-top:32mm;margin-bottom:34mm;"><table class="pf" style="table-layout:fixed;"><colgroup><col style="width:15%;">';
+    for (var m=1;m<=12;m++) rows+='<col>';
+    rows+='<col style="width:16%;"></colgroup><thead><tr><th>供應商名稱</th>';
+    for (m=1;m<=12;m++) rows+='<th>'+m+'月</th>';
+    rows+='<th style="text-align:left;">加工項目</th></tr></thead><tbody>';
+    (PLANDATA.rows||[]).forEach(function(r){
+        rows+='<tr><td class="q">'+esc(r.maker_id||'')+'</td>';
+        for (m=1;m<=12;m++) rows+='<td>'+(r.months&&r.months[m]?'V':'')+'</td>';
+        rows+='<td class="q">'+esc(r.sub_cat_names||'')+'</td></tr>';
+    });
+    rows+='</tbody></table></div>';
+    openPrintWindow(fixedHead+rows+fixedFoot, '供應商稽核計劃', docNo, true);
 });
 
 /* ---------- 查核表設定(管理員) ---------- */

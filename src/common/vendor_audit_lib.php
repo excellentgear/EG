@@ -172,16 +172,18 @@ function vendor_audit_company_name(PDO $db): string {
 }
 
 /* ---- 綁定的 AS 表單（列印表單名稱/編號與 AS 文件管理連動）---- */
-/** 綁定的 AS 文件；doc_no 已附加版次供直接列印用（見 ai-rules/16 第三節，無版次不附加） */
+/** 綁定的 AS 文件；僅四階文件（表單/記錄表）doc_no 附加版次供直接列印用（見 ai-rules/16 第三節，二階以上不附加、無版次不附加） */
 function vendor_audit_bound_asdoc(PDO $db, string $key = 'vendor_audit_as_doc_id'): ?array {
     $id = (int)vendor_eval_setting($db, $key, 0);
     if ($id <= 0) return null;
     try {
-        $st = $db->prepare("SELECT id, doc_no, doc_name, current_version FROM as_document WHERE id=? AND (is_deleted IS NULL OR is_deleted=0) LIMIT 1");
+        $st = $db->prepare("SELECT id, doc_no, doc_name, current_version, doc_level FROM as_document WHERE id=? AND (is_deleted IS NULL OR is_deleted=0) LIMIT 1");
         $st->execute([$id]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return null;
-        $r['doc_no'] = $r['doc_no'] . (string)($r['current_version'] ?? '');
+        if (($r['doc_level'] ?? '') === '四階') {
+            $r['doc_no'] = $r['doc_no'] . (string)($r['current_version'] ?? '');
+        }
         return $r;
     } catch (Throwable $e) { return null; }
 }
@@ -847,7 +849,14 @@ function vendor_audit_plan_data(PDO $db, int $year): array {
         if (!isset($rows[$mid])) $rows[$mid] = ['maker_id_no'=>$mid, 'maker_id'=>$r['maker_id'], 'sub_cat_names'=>$r['sub_cat_names'], 'months'=>[]];
         $rows[$mid]['months'][(int)$r['plan_month']] = true;
     }
-    return array_values($rows);
+    $rows = array_values($rows);
+    // 依稽核月份(取最早的預定月份)由小到大排序；相同月份內依加工項目排在一起
+    usort($rows, function($a, $b) {
+        $ma = min(array_keys($a['months'])); $mb = min(array_keys($b['months']));
+        if ($ma !== $mb) return $ma <=> $mb;
+        return strcmp((string)$a['sub_cat_names'], (string)$b['sub_cat_names']);
+    });
+    return $rows;
 }
 /** 廠商小類(加工項目)彙總 JOIN 片段：多個小類以「、」串接。大類本身不對外顯示(小類即代表加工項目)。別名固定用 m 代表 maker_list。 */
 function vendor_audit_subcat_join(): string {
