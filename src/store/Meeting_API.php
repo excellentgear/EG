@@ -74,8 +74,8 @@ case 'meta': {
           'gm_name'=>$gm ? $gm['user_cname'] : null, 'gm_id'=>$gm ? (int)$gm['id'] : null, 'presets'=>$presets,
           'company_name'=>eg_company_full_name($db), 'features'=>MEETING_FEATURES,
           'attach_nas_dir'=>$perms['canAdmin'] ? meeting_setting_get($db, 'meeting_nas_dir', '') : null,
-          'as_doc_signsheet'=>eg_asdoc_get($db, 'meeting_signsheet'),
-          'as_doc_record'=>eg_asdoc_get($db, 'meeting_record')]);
+          'as_doc_signsheet'=>($asSign = eg_asdoc_get($db, 'meeting_signsheet')), 'as_doc_signsheet_no'=>eg_asdoc_no($asSign),
+          'as_doc_record'=>($asRec = eg_asdoc_get($db, 'meeting_record')), 'as_doc_record_no'=>eg_asdoc_no($asRec)]);
 }
 
 /* 常用設定（主題綁地點綁時間）：管理員維護 */

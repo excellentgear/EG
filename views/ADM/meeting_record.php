@@ -1167,11 +1167,12 @@ function meetingItemGroupRows(items, kind, groupLabel){
              + '<td>'+fmtDate(it.due_date)+'</td><td>'+esc(deptNames)+'</td><td>'+confirmHtml+'</td><td>'+esc(it.remark||'')+'</td></tr>';
     }).join('');
 }
-function meetingRecordPageHtml(m, res){
-    var announceRows = (res.items||[]).filter(function(it){ return it.kind==='announce'; }).map(function(it,i){
-        return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+esc(it.remark||'')+'</td></tr>';
-    }).join('');
-    var itemBody = meetingItemGroupRows(res.items, 'directive', '上級指示要項') + meetingItemGroupRows(res.items, 'general', '會議要項');
+/* inlineDocNo=true 才在版面內文手動印AS編號＋切結文字(僅合併列印用，因單一列印工作混三份不同編號的文件，
+   CSS @page 頁尾無法依頁面切換內容，只能用內文取代)；一般單獨列印一律靠 egPrintWindow 的 docNo 參數(頁尾右下角，ai-rules/16第三節)。 */
+function meetingRecordPageHtml(m, res, inlineDocNo){
+    var itemBody = meetingItemGroupRows(res.items, 'announce', '宣布事項')
+        + meetingItemGroupRows(res.items, 'directive', '上級指示要項')
+        + meetingItemGroupRows(res.items, 'general', '會議要項');
     var chairApp = m.chair_approval, gmApp = m.gm_approval;
     var chairStamp = (chairApp && chairApp.approver_name)
         ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(chairApp.approver_name, String(chairApp.decided_at||'').substr(0,10), String(chairApp.approver_id)!==String(m.chair_user_id)):esc(chairApp.approver_name))
@@ -1180,9 +1181,9 @@ function meetingRecordPageHtml(m, res){
         ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(gmApp.approver_name, String(gmApp.decided_at||'').substr(0,10), META.gm_id!=null && String(gmApp.approver_id)!==String(META.gm_id)):esc(gmApp.approver_name))
         : '____________';
     var madeStamp = (window.EGStamp&&EGStamp.stamp && m.recorder_name) ? EGStamp.stamp(m.recorder_name, fmtDate(m.meeting_date)) : esc(m.recorder_name||'');
-    var recordDocNo = (META.as_doc_record && META.as_doc_record.doc_no) || '';
+    var recordTitle = (META.as_doc_record && META.as_doc_record.doc_name) ? META.as_doc_record.doc_name : '會議記錄';
     var attendeeNames = (res.attendees||[]).map(function(a){ return esc(a.user_name); }).join('、') || '—';
-    return '<div class="mr-title">'+esc(META.company_name||'')+'-會議記錄</div>'
+    return '<div class="mr-title">'+esc(META.company_name||'')+'-'+esc(recordTitle)+'</div>'
         + '<table class="mr-head">'
         + '<tr><th>主題</th><td class="val">'+esc(m.subject)+'</td><th>日期</th><td class="val">'+fmtDate(m.meeting_date)+'</td>'
         +   '<th>主席</th><td class="val">'+esc(m.chair_name||'')+'</td>'
@@ -1191,12 +1192,11 @@ function meetingRecordPageHtml(m, res){
         +   '<th>時間</th><td class="val">'+(m.start_time?(esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')+'</td>'
         +   '<th>記錄</th><td class="val">'+esc(m.recorder_name||'')+'</td></tr>'
         + '</table>'
-        + (announceRows ? '<h5>宣布事項</h5><table class="sf"><tr><th>序</th><th>內容</th><th>備註</th></tr>'+announceRows+'</table>' : '')
         + (itemBody ? '<table class="mr-items"><thead><tr><th class="mr-grp-hd"></th><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人</th><th>確認簽名</th><th>備註</th></tr></thead><tbody>'+itemBody+'</tbody></table>' : '')
         + '<table class="mr-foot"><tr><td>總經理確認：'+gmStamp+'</td><td>主席確認：'+chairStamp+'</td><td class="mr-foot-prep">製表：'+madeStamp+'</td></tr></table>'
-        + '<div class="mr-bottom-note"><span>（本記錄不得擅自塗改）</span><span>'+esc(recordDocNo)+'</span></div>';
+        + (inlineDocNo ? '<div class="mr-bottom-note"><span>（本記錄不得擅自塗改）</span><span>'+esc(META.as_doc_record_no||'')+'</span></div>' : '<div class="mr-bottom-note"><span>（本記錄不得擅自塗改）</span><span></span></div>');
 }
-function signSheetPageHtml(m, attendees, withSignatures){
+function signSheetPageHtml(m, attendees, withSignatures, inlineDocNo){
     var rows = (attendees||[]).map(function(a,i){
         var sigHtml = '';
         if (withSignatures) {
@@ -1205,23 +1205,23 @@ function signSheetPageHtml(m, attendees, withSignatures){
         }
         return '<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+(a.is_chair?'（主席）':'')+'</td><td>'+sigHtml+'</td></tr>';
     }).join('');
-    var signDocNo = (META.as_doc_signsheet && META.as_doc_signsheet.doc_no) || '';
-    return '<div class="mr-title">'+esc(META.company_name||'')+'-會議簽到表</div>'
+    var signTitle = (META.as_doc_signsheet && META.as_doc_signsheet.doc_name) ? META.as_doc_signsheet.doc_name : '會議簽到表';
+    return '<div class="mr-title">'+esc(META.company_name||'')+'-'+esc(signTitle)+'</div>'
         + '<table class="ss-head">'
         + '<tr><td colspan="2">主題：'+esc(m.subject)+'</td></tr>'
         + '<tr><td colspan="2">日期時間：'+fmtDate(m.meeting_date)+(m.start_time?('　'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')+'</td></tr>'
         + '<tr><td>地點：'+esc(m.location||'—')+'</td><td>主席：'+esc(m.chair_name||'')+'</td></tr>'
         + '</table>'
         + '<table class="sf"><tr><th style="width:36px;">序</th><th>部門</th><th>職稱</th><th>姓名</th><th style="width:130px;">簽名</th></tr>'+rows+'</table>'
-        + '<div class="mr-bottom-note"><span></span><span>'+esc(signDocNo)+'</span></div>';
+        + (inlineDocNo ? '<div class="mr-bottom-note"><span></span><span>'+esc(META.as_doc_signsheet_no||'')+'</span></div>' : '');
 }
 function printMeetingRecord(){
     if (!VIEW) return;
-    egPrintWindow('會議記錄', meetingRecordPageHtml(VIEW.meeting, VIEW), mrCss(), '', true);
+    egPrintWindow('會議記錄', meetingRecordPageHtml(VIEW.meeting, VIEW, false), mrCss(), META.as_doc_record_no||'', true, true);
 }
 function printBlankSignSheet(){
     if (!VIEW) return;
-    egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, false), mrCss(), '', true);
+    egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, false, false), mrCss(), META.as_doc_signsheet_no||'', false, true);
 }
 
 /* ---------- 合併列印(簽到表→會議紀錄→出貨目標達成率)：僅主席+總經理皆簽核完成(done)才可列印，簽章一律用真圖章 ---------- */
@@ -1239,13 +1239,15 @@ function printFullRecord(){
         doPrintFullRecord($.trim(pick) || cands[0].name);
     });
 }
+/* 合併列印同一份工作內混三種文件(簽到表要直式/會議記錄與KPI要橫式)：CSS @page 只能設一種預設方向，
+   簽到表頁改用「具名頁」(page:mr-portrait) 覆蓋成直式，其餘頁沿用預設橫式；三份文件編號各不同，改在版面內文各自印(見 inlineDocNo)。 */
 function doPrintFullRecord(preparerName){
     var m = VIEW.meeting, res = VIEW;
-    var page1 = signSheetPageHtml(m, res.attendees, true);
-    var page2 = meetingRecordPageHtml(m, res);
+    var page1 = signSheetPageHtml(m, res.attendees, true, true);
+    var page2 = meetingRecordPageHtml(m, res, true);
 
     var hasKpi = !!m.kpi_snapshot_json;
-    var body = '<div style="page-break-after:always;">'+page1+'</div><div'+(hasKpi?' style="page-break-after:always;"':'')+'>'+page2+'</div>';
+    var body = '<div class="mr-portrait-page" style="page-break-after:always;">'+page1+'</div><div'+(hasKpi?' style="page-break-after:always;"':'')+'>'+page2+'</div>';
     if (hasKpi) {
         var k = JSON.parse(m.kpi_snapshot_json);
         var madeStamp = preparerName ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(preparerName, k.data_asof||META.today):esc(preparerName)) : '____________';
@@ -1255,7 +1257,9 @@ function doPrintFullRecord(preparerName){
     }
     var css = mrCss() + kpiCss()
         + '.pt-head{text-align:center;margin-bottom:6px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
-        + 'table.pt-sign td{padding:14px 6px;}';
+        + 'table.pt-sign td{padding:14px 6px;}'
+        + '@page mr-portrait{size:A4 portrait;margin:12mm 8mm 16mm;}'
+        + '.mr-portrait-page{page:mr-portrait;}';
     egPrintWindow('會議紀錄完整版', body, css, '', true, true);
 }
 
