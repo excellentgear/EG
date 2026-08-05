@@ -744,7 +744,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li><b>模型</b>：每期（上半年 1–6 月／下半年 7–12 月）挑一批廠商稽核。KPI 執行率＝已完成 ÷ 本期對象數。</li>
             <li><b>加入稽核對象</b>：依大類／加工項目篩選後多選加入，或隨機抽 N 家（自納管廠商）；可指定「預定稽核月份」。</li>
             <li><b>登錄</b>：填「供應商評鑑稽核表」簡版 15 項，每項自評分＋稽核分各 0~7；系統自動算各類與綜合合格率（自評×0.3＋稽核×0.7），<b>≥75% 判合格</b>。</li>
-            <li><b>記錄表</b>（已稽核者）：由 15 項換算 5 大類合格率，含<b>雷達圖</b>；可「列印記錄表」或「一次印全部文件」（查檢表＋記錄表兩頁供簽名）；可上傳供應商簽名回傳掃描檔。</li>
+            <li><b>記錄表</b>（已稽核者）：由 15 項換算 5 大類合格率，含<b>雷達圖</b>；可「列印記錄表」或「一次印全部文件」（查核表＋記錄表為不同文件，各自跳出一個列印視窗；記錄表若有上傳佐證附件會一併接續印出，圖片與 PDF 可直接預覽，其他類型僅顯示檔名）；可上傳供應商簽名回傳掃描檔。</li>
             <li><b>停用廠商</b>（master_data 客戶/廠商設為停用者）：灰底、不可加入、不列入 KPI。</li>
         </ul>
 
@@ -1381,9 +1381,9 @@ function auditFormHTML(o){
     o = o || {};
     return '<div style="page-break-after:always;">'+auditFormOneVersion(o,'self')+'</div>'+auditFormOneVersion(o,'site');
 }
-function openPrintWindow(bodyHtml, title, docNo, landscape){
-    var w = window.open('', '_blank');
-    if (!w){ alert('請允許彈出視窗以列印'); return; }
+/** noPageCount=true：本印出的內容本來就是多份各自獨立的文件(如查核表自評版+審查版)串接列印，
+ *  不是同一份文件跨頁，不該顯示「第X頁/共Y頁」(即使實體紙張超過一張) */
+function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount){
     var asTxt = String(docNo||'').replace(/['\\]/g,'');
     var css = 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:14px;}'
         + 'table.pf{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}'
@@ -1393,23 +1393,32 @@ function openPrintWindow(bodyHtml, title, docNo, landscape){
         + 'table.pf-sign{width:100%;margin-top:20px;font-size:13px;page-break-inside:avoid;}table.pf-sign td{padding:14px 6px 8px;}'
         + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
         + '.rs-chart-wrap{max-width:320px;margin:0 auto;}.rs-chart-wrap svg{width:100% !important;height:auto !important;}'
+        + '.attach-page{page-break-before:always;}'
         + '@media print{@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;'
         + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
         + '}}';
+    w.document.open();
     w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
         + bodyHtml
         + '<scr'+'ipt>window.onload=function(){'
-        + 'var onePageA4=(297-28)*96/25.4;'
+        + (noPageCount ? '' :
+          'var onePageA4=(297-28)*96/25.4;'
         + 'if(document.body.scrollHeight>onePageA4*0.92){'
         + 'var st=document.createElement(\'style\');'
         + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
-        + 'document.head.appendChild(st);}'
+        + 'document.head.appendChild(st);}')
         + 'setTimeout(function(){window.print();},150);};</scr'+'ipt></body></html>');
     w.document.close();
 }
+function openPrintWindow(bodyHtml, title, docNo, landscape, noPageCount){
+    var w = window.open('', '_blank');
+    if (!w){ alert('請允許彈出視窗以列印'); return null; }
+    writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount);
+    return w;
+}
 function printBlankForm(){
     var cfg = {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
-    openPrintWindow(auditFormHTML({cfg:cfg}), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02');
+    openPrintWindow(auditFormHTML({cfg:cfg}), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', false, true);
 }
 function printCurrentForm(){
     openPrintWindow(auditFormHTML({
@@ -1419,7 +1428,7 @@ function printCurrentForm(){
         mgrApproved: !!(CUR_REC && CUR_REC.status==='approved' && CUR_REC.signed_by_name),
         mgrName: CUR_REC && CUR_REC.signed_by_name, mgrDate: $('#recDate').val(),
         mgrIsDeputy: CUR_REC && !!CUR_REC.signed_is_deputy
-    }), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02');
+    }), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', false, true);
 }
 $('#btnBlank').on('click', printBlankForm);
 
@@ -1442,7 +1451,7 @@ function openRecordSheet(tid){
     $.getJSON(API, {action:'get_form', target_id:tid}, function(res){
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         var t=res.target, cfg=t.checklist_cfg, c=computeCats(t.scores||{}, cfg);
-        RS={tid:tid, t:t, c:c, cfg:cfg};
+        RS={tid:tid, t:t, c:c, cfg:cfg, attaches:res.attaches||[]};
         var doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
         $('#rsTitle').text(docName+'：'+t.maker_id+'（'+t.maker_id_no+'）');
         var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'—';
@@ -1494,13 +1503,13 @@ function rsUploadAttach(){
     NProgress.start();
     $.ajax({url:API,method:'POST',data:fd,processData:false,contentType:false,dataType:'json'})
      .done(function(res){ NProgress.done(); if(!res.ok){alert(res.error||'上傳失敗');return;} f.value='';$('#rsAttachNote').val('');
-        $.getJSON(API,{action:'get_form',target_id:tid},function(r){ if(r.ok) rsRenderAttach(tid,r.attaches); }); })
+        $.getJSON(API,{action:'get_form',target_id:tid},function(r){ if(r.ok){ rsRenderAttach(tid,r.attaches); if(RS) RS.attaches=r.attaches||[]; } }); })
      .fail(function(x){ NProgress.done(); alert('上傳失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 function rsDelAttach(aid){
     if(!confirm('刪除此附件？')) return;
     $.post(API,{action:'attach_delete',attach_id:aid},function(res){ if(!res.ok){alert(res.error||'失敗');return;}
-        var tid=$('#rsAttachBox').data('tid'); $.getJSON(API,{action:'get_form',target_id:tid},function(r){ if(r.ok) rsRenderAttach(tid,r.attaches); }); },'json');
+        var tid=$('#rsAttachBox').data('tid'); $.getJSON(API,{action:'get_form',target_id:tid},function(r){ if(r.ok){ rsRenderAttach(tid,r.attaches); if(RS) RS.attaches=r.attaches||[]; } }); },'json');
 }
 function vaStampHtml(name, date, isDeputy){
     try { if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, date||'', !!isDeputy); } catch(e){}
@@ -1538,16 +1547,109 @@ function recordSheetHTML(){
         +'</tr></table>';
     return head+info+body+conc+sign;
 }
-function printRecordSheet(){ if(!RS){alert('無資料');return;} openPrintWindow(recordSheetHTML(), '供應商品質系統評鑑記錄表', (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03', true); }
-function printAllDocs(){
-    if(!RS){alert('無資料');return;}
-    var docNo1=(META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2=(META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
-    var page1=auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg, prodType:RS.t.prod_type, auditorName:RS.t.auditor,
+function printRecordSheet(){ if(!RS){alert('無資料');return;} openPrintWindow(recordSheetHTML(), '供應商品質系統評鑑記錄表', (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03', true, true); }
+
+/* ---------- 記錄表列印附加佐證附件（圖片直接嵌入／PDF 用 pdf.js 轉圖，其餘類型不支援預覽） ---------- */
+var VA_IMG_EXT = ['jpg','jpeg','png','gif','bmp','webp'];
+function vaAttachExt(name){ var m = String(name||'').match(/\.([a-z0-9]+)$/i); return m ? m[1].toLowerCase() : ''; }
+function vaImgToDataURL(url){
+    return new Promise(function(resolve){
+        var img = new Image();
+        img.onload = function(){
+            try {
+                var cv = document.createElement('canvas'); cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+                cv.getContext('2d').drawImage(img, 0, 0);
+                resolve(cv.toDataURL('image/jpeg', 0.92));
+            } catch (e) { resolve(null); }
+        };
+        img.onerror = function(){ resolve(null); };
+        img.src = url;
+    });
+}
+var VA_PDFJS_BASE = '../../resource/js/pdfjs/';
+var VA_PDFJS_V = <?= json_encode((int)(@filemtime(__DIR__.'/../../resource/js/pdfjs/pdf.min.js') ?: 0)) ?>;
+var vaPdfjsLoading = null;
+function vaEnsurePdfJs(){
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (vaPdfjsLoading) return vaPdfjsLoading;
+    vaPdfjsLoading = new Promise(function(resolve, reject){
+        var s = document.createElement('script');
+        s.src = VA_PDFJS_BASE + 'pdf.min.js?v=' + VA_PDFJS_V;
+        s.onload = function(){
+            if (!window.pdfjsLib) { vaPdfjsLoading = null; reject(new Error('pdfjsLib 未載入')); return; }
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = VA_PDFJS_BASE + 'pdf.worker.min.js?v=' + VA_PDFJS_V;
+            resolve(window.pdfjsLib);
+        };
+        s.onerror = function(){ vaPdfjsLoading = null; reject(new Error('找不到 pdfjs')); };
+        document.head.appendChild(s);
+    });
+    return vaPdfjsLoading;
+}
+async function vaPdfToDataURLs(url){
+    var lib = await vaEnsurePdfJs();
+    var doc = await lib.getDocument({url: url, withCredentials: true}).promise;
+    var out = [];
+    for (var i = 1; i <= doc.numPages; i++) {
+        var page = await doc.getPage(i);
+        var vp = page.getViewport({scale: 2});
+        var cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+        var ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+        await page.render({canvasContext: ctx, viewport: vp}).promise;
+        out.push(cv.toDataURL('image/jpeg', 0.92));
+    }
+    return out;
+}
+/** 把佐證附件清單轉成可直接塞進列印視窗 body 的 HTML（每份附件另起一頁）；圖片/PDF 皆轉成內嵌 dataURL，
+ *  不需要列印視窗再等非同步載入完成才能列印。其餘類型（doc/xls等）僅顯示檔名提示，不支援線上預覽。 */
+async function vaBuildAttachPrintHTML(attaches){
+    var parts = [];
+    for (var i = 0; i < (attaches||[]).length; i++) {
+        var a = attaches[i];
+        if (!a.exists) continue;
+        var ext = vaAttachExt(a.original_name);
+        var url = API + '?action=attach_open&attach_id=' + a.attach_id;
+        var label = '<div style="font-size:11px;color:#666;margin:4px 0 6px;">附件：' + esc(a.original_name||'') + (a.note ? '（' + esc(a.note) + '）' : '') + '</div>';
+        var imgStyle = 'max-width:100%;max-height:250mm;display:block;margin:0 auto;';
+        if (VA_IMG_EXT.indexOf(ext) !== -1) {
+            var durl = await vaImgToDataURL(url);
+            parts.push('<div class="attach-page">' + label + (durl
+                ? '<img src="'+durl+'" style="'+imgStyle+'">'
+                : '<div style="color:#c00;">（圖片載入失敗，請至系統下載查看）</div>') + '</div>');
+        } else if (ext === 'pdf') {
+            try {
+                var pages = await vaPdfToDataURLs(url);
+                pages.forEach(function(durl, pi){
+                    parts.push('<div class="attach-page">' + (pi===0 ? label : '') + '<img src="'+durl+'" style="'+imgStyle+'"></div>');
+                });
+            } catch (e) {
+                parts.push('<div class="attach-page">' + label + '<div style="color:#c00;">（PDF 轉圖失敗，請至系統下載查看）</div></div>');
+            }
+        } else {
+            parts.push('<div class="attach-page">' + label + '<div style="color:#8a6d45;">（此類型不支援線上預覽，請至系統下載查看原始檔）</div></div>');
+        }
+    }
+    return parts.join('');
+}
+
+/** 一次印全部文件＝查核表(直式)＋記錄表(橫式)是兩份不同文件，瀏覽器對同一列印工作中途切換橫直式支援不穩定，
+ *  改拆成兩個列印視窗各自跳出列印；記錄表視窗先同步開空白，避免附件非同步處理完才 window.open 被攔截。 */
+async function printAllDocs(){
+    if (!RS) { alert('無資料'); return; }
+    var docNo1 = (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2 = (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
+    var page1 = auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg, prodType:RS.t.prod_type, auditorName:RS.t.auditor,
         mgrApproved: !!(RS.t.status==='approved' && RS.t.signed_by_name), mgrName:RS.t.signed_by_name, mgrDate:fmtDate(RS.t.audit_date), mgrIsDeputy:!!RS.t.signed_is_deputy});
-    var body='<div style="page-break-after:always;">'+page1
-        +'<div style="text-align:right;margin-top:22px;font-size:12px;color:#333;">'+esc(docNo1)+'</div></div>'
-        +recordSheetHTML()+'<div style="text-align:right;margin-top:14px;font-size:12px;color:#333;">'+esc(docNo2)+'</div>';
-    openPrintWindow(body, '供應商稽核文件');
+    openPrintWindow(page1, '供應商評鑑稽核查表', docNo1, false, true);
+
+    var w2 = window.open('', '_blank');
+    if (!w2) { alert('請允許彈出視窗以列印'); return; }
+    w2.document.write('<html><head><meta charset="utf-8"><title>供應商品質系統評鑑記錄表</title></head><body style="font-family:\'Microsoft JhengHei\',sans-serif;padding:20px;color:#666;">附件整理中，請稍候…</body></html>');
+
+    var attachHtml = '';
+    if ((RS.attaches||[]).length) {
+        try { attachHtml = await vaBuildAttachPrintHTML(RS.attaches); }
+        catch (e) { attachHtml = '<div style="color:#c00;">附件載入發生錯誤，部分附件可能未列印，請至系統個別下載查看。</div>'; }
+    }
+    writePrintWindow(w2, recordSheetHTML() + attachHtml, '供應商品質系統評鑑記錄表', docNo2, true, true);
 }
 
 /* ---------- CSV ---------- */
