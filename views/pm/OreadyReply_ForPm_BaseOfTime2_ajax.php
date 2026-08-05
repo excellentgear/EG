@@ -360,6 +360,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'transfer_process') {
         exit;
     }
 
+    require_once '../../src/common/bom_outsource_lib.php';
+
     $bom_ing_fid = $_POST['bom_ing_fid'];
     $transfer_datetime = $_POST['transfer_date'] . ' 00:00:00';
     $maker_no = trim($_POST['maker_no']);
@@ -379,6 +381,12 @@ else if (isset($_POST['action']) && $_POST['action'] === 'transfer_process') {
                 WHERE bom_ing_fid = :bom_ing_fid";
         $stmt = $db->prepare($sql);
         $stmt->execute([':transfer_date' => $transfer_datetime, ':maker_no' => $maker_no, ':maker_name' => $maker_name, ':user_id' => $user_id, ':bom_ing_fid' => $bom_ing_fid]);
+        // 開一筆加工單流水帳（送出數量先用 sqty；Phase 2 的快速開立加工單頁面才會支援分批送出不同數量）
+        $sqtyRow = $db->prepare("SELECT sqty FROM bom_ing WHERE bom_ing_fid=?");
+        $sqtyRow->execute([$bom_ing_fid]);
+        $sqty = (float)($sqtyRow->fetchColumn() ?: 0);
+        eg_bom_outsource_open_batch($db, (int)$bom_ing_fid, $maker_no, $maker_name, $sqty, $_POST['transfer_date'], null, null, $user_id);
+        eg_bom_outsource_stamp_manual($db, (int)$bom_ing_fid, $user_id);
         $response['success'] = true;
         $response['message'] = '製程已成功移轉。';
     } catch (PDOException $e) {
@@ -421,6 +429,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'quick_sync_transfer') 
         echo json_encode($response);
         exit;
     }
+
+    require_once '../../src/common/bom_outsource_lib.php';
 
     $qs_fid = (int)$_POST['bom_ing_fid'];
     $qs_transfer_datetime = $_POST['transfer_date'] . ' 00:00:00';
@@ -478,6 +488,11 @@ else if (isset($_POST['action']) && $_POST['action'] === 'quick_sync_transfer') 
             ':note' => $qs_note,
             ':uid' => $qs_user_id,
         ]);
+
+        // 同步開一筆加工單流水帳並直接記回廠日=今天（quick sync 本來就是「補登已經回廠」的情境）
+        $qs_batch_id = eg_bom_outsource_open_batch($db, $qs_fid, $qs_maker_no, $qs_maker_name, (float)$qs_row['sqty'], $_POST['transfer_date'], null, '快速移轉自動補登', $qs_user_id);
+        $db->prepare("UPDATE bom_ing_outsource_batch SET return_qty=send_qty, status='closed', updated_at=NOW() WHERE batch_id=?")->execute([$qs_batch_id]);
+        eg_bom_outsource_stamp_manual($db, $qs_fid, $qs_user_id);
 
         $db->commit();
         $response['success'] = true;
@@ -1481,12 +1496,14 @@ else if (isset($_POST['action']) && $_POST['action'] === 'cancel_transfer') {
     session_write_close();
     include_once '../../src/common/DBConnection.php';
     include_once '../../src/common/_config.php';
+    require_once '../../src/common/bom_outsource_lib.php';
     header('Content-Type: application/json; charset=utf-8');
     if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
     $fid = trim($_POST['bom_ing_fid'] ?? '');
     $uid = $_SESSION['id'] ?? 'system';
     if (empty($fid)) { echo json_encode(['success'=>false,'message'=>'缺少fid']); exit; }
     try {
+        eg_bom_outsource_stamp_manual($db, (int)$fid, $uid);
         // 先確認 bom_ing_fid 存在
         $chk = $db->prepare("SELECT bom_ing_fid, processing_state FROM bom_ing WHERE bom_ing_fid = ?");
         $chk->execute([$fid]);

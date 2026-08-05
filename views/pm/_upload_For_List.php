@@ -10,7 +10,9 @@ error_reporting(E_ALL);
 
 require '../../vendor/autoload.php'; // 確認引用正確路徑
 require_once '../../src/common/qc_form_generator.php'; // QC 檢驗紀錄表 .xlsm 產生器（BOM ERP匯入用）
+require_once '../../src/common/bom_outsource_lib.php'; // manual_seq_override_at 欄位／人工異動保護（Transfer_ERP_Commit 用）
 use PhpOffice\PhpSpreadsheet\IOFactory; // 使用 PhpSpreadsheet 的 IOFactory 來載入 Excel 檔案
+if (isset($db)) { eg_bom_outsource_ensure_schema($db); }
 
 // 開啟輸出緩衝，避免 header() 前有輸出導致錯誤
 ob_start();
@@ -3084,10 +3086,14 @@ if (!function_exists('transferErpValidBizDate')) {
 }
 
 // Phase B 覆蓋判定：對既有 bom_ing 列決定本次移轉該怎麼處理。
-// 回傳 'insert'（列不存在）| 'write'（寫入/覆蓋）| 'skip_dup'（同一加工單號、重複匯入）| 'skip_stale'（舊檔，防回捲）。
-// $existing = 既有列 assoc（含 transfer_no/transfer_changed_at/QC_check/return_date/qc_completed）或 null。
+// 回傳 'insert'（列不存在）| 'write'（寫入/覆蓋）| 'skip_dup'（同一加工單號、重複匯入）
+//     | 'skip_stale'（舊檔，防回捲）| 'skip_manual'（人工異動保護，見下）。
+// $existing = 既有列 assoc（含 transfer_no/transfer_changed_at/QC_check/return_date/qc_completed/manual_seq_override_at）或 null。
 // 規則：
 //  - 同加工單號 → 冪等跳過（bom_ing 不動，價格可另補）。
+//  - 人工異動保護（2026-08-03 新增）：生管在 EGsystem 內手動移轉/跳關/快速同步過這一列
+//    （見 src/common/bom_outsource_lib.php 的 eg_bom_outsource_stamp_manual），且時間比這次匯入的異動時間新
+//    → 一律跳過，不讓內網ERP把 processing_sequence 清空、狀態打回 ing，蓋掉生管剛做的排序異動。
 //  - 已有進度（QC_check/return_date/qc_completed）→ 僅在「本次異動時間 ≥ 已記錄」才覆蓋，否則跳過保護（含 legacy 無時間列一律保護）。
 //  - 無進度 → 除非本次比已記錄舊，否則寫入（涵蓋 Phase A 全新 maker 空列、legacy 未移轉列）。
 if (!function_exists('transferErpClassify')) {
@@ -3095,6 +3101,8 @@ if (!function_exists('transferErpClassify')) {
         if (empty($existing)) return 'insert';
         $exNo = $existing['transfer_no'] ?? null;
         if ($inTransferNo !== null && $exNo !== null && $exNo === $inTransferNo) return 'skip_dup';
+        $manualAt = $existing['manual_seq_override_at'] ?? null;
+        if (!empty($manualAt) && $inChangedTs < $manualAt) return 'skip_manual';
         $exChanged   = $existing['transfer_changed_at'] ?? null;
         $hasProgress = !empty($existing['QC_check']) || !empty($existing['return_date']) || (int)($existing['qc_completed'] ?? 0) === 1;
         if ($hasProgress) {
@@ -3196,10 +3204,10 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Preview') {
         }
 
         // 既有 bom_ing 檢查（用 Phase B 覆蓋判定分類）＋ bom 主檔存在檢查
-        $insertCount = 0; $writeCount = 0; $skipDupCount = 0; $skipStaleCount = 0;
+        $insertCount = 0; $writeCount = 0; $skipDupCount = 0; $skipStaleCount = 0; $skipManualCount = 0;
         $staleSamples = [];
         $missingBoms = [];
-        $ingChk = $db->prepare("SELECT transfer_no, transfer_changed_at, QC_check, return_date, qc_completed
+        $ingChk = $db->prepare("SELECT transfer_no, transfer_changed_at, QC_check, return_date, qc_completed, manual_seq_override_at
                                 FROM bom_ing WHERE bom = ? AND bom_sn = ?");
         $bomChk = $db->prepare("SELECT bom FROM bom WHERE bom = ?");
         $bomSeen = [];
@@ -3212,6 +3220,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Preview') {
             elseif ($action === 'write')       $writeCount++;
             elseif ($action === 'skip_dup')    $skipDupCount++;
             elseif ($action === 'skip_stale') { $skipStaleCount++; if (count($staleSamples) < 5) $staleSamples[] = $row['bom'] . '-' . $row['bom_sn']; }
+            elseif ($action === 'skip_manual') { $skipManualCount++; if (count($staleSamples) < 5) $staleSamples[] = $row['bom'] . '-' . $row['bom_sn'] . '（人工異動保護）'; }
             if (!isset($bomSeen[$row['bom']])) {
                 $bomChk->execute([$row['bom']]);
                 $bomSeen[$row['bom']] = (bool)$bomChk->fetchColumn();
@@ -3238,11 +3247,12 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Preview') {
         if ($stats['dedup_dropped'] > 0)   $warnings[] = "同製令+序號重複 {$stats['dedup_dropped']} 列，只取異動時間最新一筆";
         if ($skipDupCount > 0)             $warnings[] = "同加工單號、已匯入過 {$skipDupCount} 列 → 跳過（不重複覆蓋）";
         if ($skipStaleCount > 0)           $warnings[] = "偵測到 {$skipStaleCount} 列疑似舊檔/較舊移轉（已有較新進度或檢驗）→ 跳過保護，避免回捲洗掉資料" . (!empty($staleSamples) ? '（例：' . implode('、', $staleSamples) . '）' : '');
+        if ($skipManualCount > 0)          $warnings[] = "偵測到 {$skipManualCount} 列這邊系統內已被人工異動過（移轉/跳關/快速同步）→ 跳過保護，避免蓋掉生管剛做的排序異動" . (!empty($staleSamples) ? '（例：' . implode('、', $staleSamples) . '）' : '');
         if (!empty($unknownMakers))        $warnings[] = '生產單位查無廠商主檔（' . implode('、', array_keys($unknownMakers)) . '），maker_id 簡稱將留空';
         if (!empty($missingBoms))          $warnings[] = 'BOM 主檔不存在（' . implode('、', $missingBoms) . '），製程列仍會建立，建議先執行 BOM ERP匯入';
 
         $previewRows = [];
-        $actionLabel = ['insert' => '新增', 'write' => '覆蓋更新', 'skip_dup' => '重複跳過', 'skip_stale' => '舊檔跳過'];
+        $actionLabel = ['insert' => '新增', 'write' => '覆蓋更新', 'skip_dup' => '重複跳過', 'skip_stale' => '舊檔跳過', 'skip_manual' => '人工異動保護跳過'];
         foreach (array_slice($rows, 0, 10) as $row) {
             $previewRows[] = [
                 'bom'         => $row['bom'],
@@ -3266,6 +3276,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Preview') {
             'write_count'    => $writeCount,
             'skip_dup_count' => $skipDupCount,
             'skip_stale_count' => $skipStaleCount,
+            'skip_manual_count' => $skipManualCount,
             'warnings'       => $warnings,
             'preview_rows'   => $previewRows,
         ]);
@@ -3311,8 +3322,8 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
             return $userCache[$cname];
         };
 
-        // Phase B：抓判定用欄位（transfer_no/transfer_changed_at/QC_check/return_date/qc_completed）
-        $ingChk = $db->prepare("SELECT bom_ing_fid, transfer_no, transfer_changed_at, QC_check, return_date, qc_completed
+        // Phase B：抓判定用欄位（transfer_no/transfer_changed_at/QC_check/return_date/qc_completed/manual_seq_override_at）
+        $ingChk = $db->prepare("SELECT bom_ing_fid, transfer_no, transfer_changed_at, QC_check, return_date, qc_completed, manual_seq_override_at
                                 FROM bom_ing WHERE bom = ? AND bom_sn = ?");
         // 覆蓋（write）：連未帶值欄位一併清 NULL（同 u5「重新開始一道製程」語意），QC_ps 不動；
         // 並寫入 transfer_no/transfer_changed_at 供下次判定。
@@ -3332,8 +3343,8 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
         // 原因：當天移轉是「加工單號 I 系列」一單一列，月結是「單號 J 系列」一單可多列（一張加工單被拆多筆移轉），
         // 兩者顆粒度不同會在同一 (bom,bom_sn) 下並存；成本分析(Order_Profit_Analysis)對 (bom,bom_sn) 算加權平均，
         // 會把當天發包估價與月結最終價混在一起平均而失真。早填成本需另設計，勿在此重啟。
-        $inserted = 0; $written = 0; $skippedDup = 0; $skippedStale = 0;
-        $staleSamples = [];
+        $inserted = 0; $written = 0; $skippedDup = 0; $skippedStale = 0; $skippedManual = 0;
+        $staleSamples = []; $manualSamples = [];
         foreach ($rows as $row) {
             $makerId = $makerNames[$row['maker_id_no']] ?? null;
             $userId  = $lookupUser($row['changer_name']);
@@ -3359,6 +3370,10 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
                 $written++;
             } elseif ($action === 'skip_dup') {
                 $skippedDup++;   // 同加工單號、已匯入過：bom_ing 不動（價格仍下方補）
+            } elseif ($action === 'skip_manual') {
+                // 生管在系統內人工異動過（移轉/跳關/快速同步），且時間比這次匯入新：保護不覆蓋
+                $skippedManual++;
+                if (count($manualSamples) < 5) $manualSamples[] = $row['bom'] . '-' . $row['bom_sn'];
             } else { // skip_stale
                 $skippedStale++;
                 if (count($staleSamples) < 5) $staleSamples[] = $row['bom'] . '-' . $row['bom_sn'];
@@ -3371,6 +3386,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
         $msg = "移轉匯入完成！新增 {$inserted} 筆、覆蓋更新 {$written} 筆";
         if ($skippedDup > 0)   $msg .= "、重複跳過 {$skippedDup} 筆";
         if ($skippedStale > 0) $msg .= "、舊檔保護跳過 {$skippedStale} 筆" . (!empty($staleSamples) ? '（例：' . implode('、', $staleSamples) . '）' : '');
+        if ($skippedManual > 0) $msg .= "、人工異動保護跳過 {$skippedManual} 筆" . (!empty($manualSamples) ? '（例：' . implode('、', $manualSamples) . '）' : '');
         if (!empty($unknownChangers)) {
             $msg .= "。⚠ 異動人員 [" . implode('、', array_keys($unknownChangers)) . "] 查無此人，以預設人員(99991)記錄";
         }
