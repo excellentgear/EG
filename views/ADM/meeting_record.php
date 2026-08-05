@@ -232,7 +232,8 @@ foreach ($roleRows as $rr) {
         <div class="grid3">
             <div style="grid-column:span 2;"><label>會議主題 *
                 <select id="edPreset" style="width:auto;display:inline-block;height:20px;font-size:11px;padding:0 4px;margin-left:6px;"><option value="">套用常用設定…</option></select>
-                <a href="javascript:;" id="btnPresetMgr" style="display:none;font-size:11px;color:#b5762a;margin-left:4px;" onclick="openPresetMgr()"><i class="fa fa-cog"></i> 管理</a></label>
+                <a href="javascript:;" id="btnPresetMgr" style="display:none;font-size:11px;color:#b5762a;margin-left:4px;" onclick="openPresetMgr()"><i class="fa fa-cog"></i> 管理</a>
+                <select id="edCalPick" style="width:auto;display:inline-block;height:20px;font-size:11px;padding:0 4px;margin-left:6px;" title="從行事曆挑選尚未發生的會議，自動帶入日期/時間/主題/出席人員"><option value="">從行事曆選會議…</option></select></label>
                 <input type="text" id="edSubject" maxlength="100" list="edSubjectTags"><datalist id="edSubjectTags"></datalist>
                 <div class="errmsg" id="errEdSubject"></div></div>
             <div><label>會議日期 *</label><input type="date" id="edDate" max="9999-12-31">
@@ -599,8 +600,38 @@ function openCreate(){
     $('#edLoc').val(''); $('#edRecorder').val(META.uname);
     renderAtt(); renderItems('directive'); renderItems('general'); renderItems('announce'); renderChairSel(); renderKpiBox(); renderEdAttach();
     $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
+    loadCalendarMeetings();
     openMask('edMask');
 }
+/* 從行事曆挑選尚未發生(含今天)的「會議」類別事件，自動帶入日期/時間/主題/出席人員（只在新增時提供，編輯既有記錄不覆蓋） */
+var CAL_EVENTS = [];
+function loadCalendarMeetings(){
+    $.getJSON(API, {action:'calendar_meetings'}, function(res){
+        if (!res.ok) return;
+        CAL_EVENTS = res.events||[];
+        var h = '<option value="">從行事曆選會議…</option>';
+        CAL_EVENTS.forEach(function(e){
+            var d = String(e.start).substr(0,10), t = String(e.start).substr(11,5);
+            h += '<option value="'+e.id+'">'+esc(d)+' '+esc(t)+'　'+esc(e.title)+'</option>';
+        });
+        $('#edCalPick').html(h);
+    });
+}
+$('#edCalPick').on('change', function(){
+    var ev = CAL_EVENTS.find(function(x){ return String(x.id)===$('#edCalPick').val(); });
+    $(this).val('');
+    if (!ev) return;
+    $('#edSubject').val(ev.title);
+    $('#edDate').val(String(ev.start).substr(0,10));
+    $('#edStart').val(String(ev.start).substr(11,5));
+    $('#edEnd').val(String(ev.end).substr(11,5));
+    edTimeValidate();
+    (ev.actors||[]).forEach(function(a){
+        if (!ATT.some(function(x){ return x.user_id===a.user_id; }))
+            ATT.push({user_id:a.user_id, user_name:a.user_name, dept_name:a.dept_name, position_name:a.position_name});
+    });
+    renderAtt(); renderChairSel();
+});
 function openEdit(id){
     $.getJSON(API, {action:'get_detail', meeting_id:id}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
@@ -856,7 +887,9 @@ function kpiReportHtml(k){
              + '<table class="kpi-top3-tbl"><tr><th>NO</th><th>日期</th><th>客戶</th><th>料號</th><th>金額</th></tr>'+r+'</table></div>';
     }
     return '<div class="kpi-meta"><b>帳款月：</b>'+esc(k.billing_start)+' ~ '+esc(k.billing_end)
-        + (k.data_asof ? ('　<b>資料基準日：</b>'+esc(k.data_asof)) : '') + '</div>'
+        + '　<b>資料基準日：</b>'+esc(META.today||'')
+        + (k.ship_latest ? ('　<b>出貨單最新日期：</b>'+esc(k.ship_latest)) : '')
+        + (k.return_latest ? ('　<b>退貨單最新日期：</b>'+esc(k.return_latest)) : '') + '</div>'
         + '<table class="kpi-week-tbl"><tr><th>週別／期間</th><th>期目標</th><th>接單金額</th><th>接單達成率</th>'
         + '<th>出貨金額</th><th>退貨金額</th><th>當期營收</th><th>累計營收</th><th>目標達成率</th><th>與上月同週</th></tr>'
         + rows + totalRow + '</table>'
@@ -993,7 +1026,7 @@ function viewHtml(res){
     (res.attendees||[]).forEach(function(a){
         var signed = +a.signed === 1;
         h += '<tr data-uid="'+a.user_id+'"><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td>'
-           + '<td>'+esc(a.user_name||'')+(a.is_chair?'（主席）':'')+'</td>'
+           + '<td>'+esc(a.user_name||'')+'</td>'
            + '<td>'+(signed ? '<span class="sign-ok">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name,String(a.signed_at||'').substr(0,10)):'<i class="fa fa-check"></i>')
                 + ' <span style="font-size:11px;">'+esc(String(a.signed_at||'').substr(0,16))+'</span></span>'
                 : '<span class="sign-row"><input type="password" placeholder="本人密碼，按Enter簽到" id="pw-'+a.user_id+'" data-eg-skip'
@@ -1130,29 +1163,37 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount){
     w.document.close();
 }
 /* 會議記錄/簽到表 列印共用版面：完全比照公司實體表單附件(2-GM-05-01)，橫式列印。
-   主題/日期/主席＋地點/時間/記錄＋出席人員 2列表頭；項目表左側「上級指示要項/會議要項」直書跨列標籤；
-   底部總經理確認/主席確認/製表 三欄簽章；AS文件編號＋「本記錄不得擅自塗改」印在右下角。 */
+   主題/日期/主席＋地點/時間/記錄＋出席人員 2列表頭；宣布事項獨立表格(無應完成日期/負責人/確認簽名欄)、與下方
+   上級指示要項/會議要項合併表(左側直書跨列標籤)中間留間隔列；底部總經理/主席/製表 三欄簽章，用 flex+margin-top:auto
+   固定貼在版面最下方（.mr-page 撐滿版心高度，簽章列自動被推到底，不因項目/KPI內容多寡而移動位置）。 */
 function mrCss(){
-    return '.mr-title{text-align:center;font-size:20px;font-weight:bold;letter-spacing:2px;margin-bottom:8px;}'
+    return '.mr-page{display:flex;flex-direction:column;min-height:172mm;}'
+        + '.pt-head{text-align:center;margin-bottom:8px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
+        + '.mr-title{text-align:center;font-size:20px;font-weight:bold;letter-spacing:2px;margin-bottom:8px;}'
         + 'table.mr-head{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;}'
         + 'table.mr-head th{background:#fff;font-weight:bold;border:1px solid #333;padding:5px 6px;width:56px;text-align:center;}'
         + 'table.mr-head td.val{border:1px solid #333;padding:5px 8px;text-align:left;}'
         + 'table.mr-head th.att-lbl{width:64px;}'
         + 'table.mr-head td.att-val{border:1px solid #333;padding:5px 8px;text-align:left;vertical-align:top;width:220px;}'
+        + 'table.mr-announce{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}'
+        + 'table.mr-announce th,table.mr-announce td{border:1px solid #333;padding:5px;text-align:center;}'
+        + 'table.mr-announce td.t-left{text-align:left;}'
+        + '.mr-gap{height:12px;}'
         + 'table.mr-items{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}'
         + 'table.mr-items th,table.mr-items td{border:1px solid #333;padding:5px;text-align:center;}'
         + 'table.mr-items td.t-left{text-align:left;}'
         + 'table.mr-items th.mr-grp-hd{width:32px;}'
         + 'table.mr-items td.mr-grp{width:32px;writing-mode:vertical-rl;text-orientation:upright;font-weight:bold;letter-spacing:4px;}'
-        + 'table.mr-foot{width:100%;margin-top:16px;font-size:13px;}'
+        + 'table.mr-foot{width:100%;margin-top:16px;font-size:13px;margin-top:auto;}'
         + 'table.mr-foot td{padding:10px 6px;width:33.33%;}'
         + 'table.mr-foot td.mr-foot-prep{text-align:right;}'
-        + '.mr-bottom-note{margin-top:8px;font-size:11px;color:#666;display:flex;justify-content:space-between;}'
+        + '.mr-bottom-note{margin-top:4px;font-size:11px;color:#666;display:flex;justify-content:space-between;}'
         + 'table.ss-head{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:6px;}'
         + 'table.ss-head td{border:1px solid #333;padding:6px 8px;text-align:left;width:50%;}'
         + 'table.sf{width:100%;border-collapse:collapse;font-size:12.5px;}table.sf th,table.sf td{border:1px solid #333;padding:6px;text-align:center;}'
         + 'h5{font-size:13px;margin:10px 0 3px;}'
-        + '.stamp-wrap svg,svg.car-stamp{width:64px;height:64px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
+        + '.stamp-wrap svg,svg.car-stamp{width:64px;height:64px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + kpiCss();
 }
 function meetingItemGroupRows(items, kind, groupLabel){
     var rows = (items||[]).filter(function(it){ return it.kind===kind; });
@@ -1167,23 +1208,32 @@ function meetingItemGroupRows(items, kind, groupLabel){
              + '<td>'+fmtDate(it.due_date)+'</td><td>'+esc(deptNames)+'</td><td>'+confirmHtml+'</td><td>'+esc(it.remark||'')+'</td></tr>';
     }).join('');
 }
-/* inlineDocNo=true 才在版面內文手動印AS編號＋切結文字(僅合併列印用，因單一列印工作混三份不同編號的文件，
-   CSS @page 頁尾無法依頁面切換內容，只能用內文取代)；一般單獨列印一律靠 egPrintWindow 的 docNo 參數(頁尾右下角，ai-rules/16第三節)。 */
-function meetingRecordPageHtml(m, res, inlineDocNo){
-    var itemBody = meetingItemGroupRows(res.items, 'announce', '宣布事項')
-        + meetingItemGroupRows(res.items, 'directive', '上級指示要項')
-        + meetingItemGroupRows(res.items, 'general', '會議要項');
+/* 宣布事項獨立表格用：只有序/內容/備註三欄，不含應完成日期/負責人/確認簽名(該三欄對宣布事項無意義)。 */
+function announceItemRows(items){
+    return (items||[]).filter(function(it){ return it.kind==='announce'; }).map(function(it,i){
+        return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+esc(it.remark||'')+'</td></tr>';
+    }).join('');
+}
+/* inlineDocNo=true 才在版面內文手動印AS編號(僅合併列印用，因單一列印工作混三份不同編號的文件，
+   CSS @page 頁尾無法依頁面切換內容，只能用內文取代)；一般單獨列印一律靠 egPrintWindow 的 docNo 參數(頁尾右下角，ai-rules/16第三節)。
+   簽章列(總經理/主席/製表)用 flex+margin-top:auto 固定貼在版面最下方，不因項目/KPI內容多寡而移動位置(見 .mr-page/.mr-foot 樣式)。 */
+function meetingRecordPageHtml(m, res, inlineDocNo, preparerName){
+    var announceBody = announceItemRows(res.items);
+    var itemBody = meetingItemGroupRows(res.items, 'directive', '上級指示要項') + meetingItemGroupRows(res.items, 'general', '會議要項');
     var chairApp = m.chair_approval, gmApp = m.gm_approval;
     var chairStamp = (chairApp && chairApp.approver_name)
-        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(chairApp.approver_name, String(chairApp.decided_at||'').substr(0,10), String(chairApp.approver_id)!==String(m.chair_user_id)):esc(chairApp.approver_name))
-        : '____________';
+        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(chairApp.approver_name, String(chairApp.decided_at||'').substr(0,10), String(chairApp.approver_id)!==String(m.chair_user_id)):'')
+        : '';
     var gmStamp = (gmApp && gmApp.approver_name)
-        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(gmApp.approver_name, String(gmApp.decided_at||'').substr(0,10), META.gm_id!=null && String(gmApp.approver_id)!==String(META.gm_id)):esc(gmApp.approver_name))
-        : '____________';
-    var madeStamp = (window.EGStamp&&EGStamp.stamp && m.recorder_name) ? EGStamp.stamp(m.recorder_name, fmtDate(m.meeting_date)) : esc(m.recorder_name||'');
+        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(gmApp.approver_name, String(gmApp.decided_at||'').substr(0,10), META.gm_id!=null && String(gmApp.approver_id)!==String(META.gm_id)):'')
+        : '';
+    var madeName = (m.kpi_snapshot_json && preparerName) ? preparerName : m.recorder_name;
+    var madeStamp = (window.EGStamp&&EGStamp.stamp && madeName) ? EGStamp.stamp(madeName, fmtDate(m.meeting_date)) : '';
     var recordTitle = (META.as_doc_record && META.as_doc_record.doc_name) ? META.as_doc_record.doc_name : '會議記錄';
     var attendeeNames = (res.attendees||[]).map(function(a){ return esc(a.user_name); }).join('、') || '—';
-    return '<div class="mr-title">'+esc(META.company_name||'')+'-'+esc(recordTitle)+'</div>'
+    var kpiBlock = m.kpi_snapshot_json ? ('<h5 style="margin-top:14px;">出貨目標達成率</h5>' + kpiReportHtml(JSON.parse(m.kpi_snapshot_json))) : '';
+    return '<div class="mr-page">'
+        + '<div class="mr-title">'+esc(META.company_name||'')+'-'+esc(recordTitle)+'</div>'
         + '<table class="mr-head">'
         + '<tr><th>主題</th><td class="val">'+esc(m.subject)+'</td><th>日期</th><td class="val">'+fmtDate(m.meeting_date)+'</td>'
         +   '<th>主席</th><td class="val">'+esc(m.chair_name||'')+'</td>'
@@ -1192,9 +1242,13 @@ function meetingRecordPageHtml(m, res, inlineDocNo){
         +   '<th>時間</th><td class="val">'+(m.start_time?(esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')+'</td>'
         +   '<th>記錄</th><td class="val">'+esc(m.recorder_name||'')+'</td></tr>'
         + '</table>'
+        + (announceBody ? '<table class="mr-announce"><thead><tr><th style="width:32px;">序</th><th>宣布事項</th><th style="width:120px;">備註</th></tr></thead><tbody>'+announceBody+'</tbody></table>' : '')
+        + (announceBody && itemBody ? '<div class="mr-gap"></div>' : '')
         + (itemBody ? '<table class="mr-items"><thead><tr><th class="mr-grp-hd"></th><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人</th><th>確認簽名</th><th>備註</th></tr></thead><tbody>'+itemBody+'</tbody></table>' : '')
-        + '<table class="mr-foot"><tr><td>總經理確認：'+gmStamp+'</td><td>主席確認：'+chairStamp+'</td><td class="mr-foot-prep">製表：'+madeStamp+'</td></tr></table>'
-        + (inlineDocNo ? '<div class="mr-bottom-note"><span>（本記錄不得擅自塗改）</span><span>'+esc(META.as_doc_record_no||'')+'</span></div>' : '<div class="mr-bottom-note"><span>（本記錄不得擅自塗改）</span><span></span></div>');
+        + kpiBlock
+        + '<table class="mr-foot"><tr><td>總經理：'+gmStamp+'</td><td>主席：'+chairStamp+'</td><td class="mr-foot-prep">製表：'+madeStamp+'</td></tr></table>'
+        + (inlineDocNo && META.as_doc_record_no ? '<div class="mr-bottom-note"><span></span><span>'+esc(META.as_doc_record_no)+'</span></div>' : '')
+        + '</div>';
 }
 function signSheetPageHtml(m, attendees, withSignatures, inlineDocNo){
     var rows = (attendees||[]).map(function(a,i){
@@ -1203,10 +1257,10 @@ function signSheetPageHtml(m, attendees, withSignatures, inlineDocNo){
             var signed = +a.signed===1;
             sigHtml = signed ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name, String(a.signed_at||'').substr(0,10)):esc(a.user_name)) : '';
         }
-        return '<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+(a.is_chair?'（主席）':'')+'</td><td>'+sigHtml+'</td></tr>';
+        return '<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td><td>'+sigHtml+'</td></tr>';
     }).join('');
     var signTitle = (META.as_doc_signsheet && META.as_doc_signsheet.doc_name) ? META.as_doc_signsheet.doc_name : '會議簽到表';
-    return '<div class="mr-title">'+esc(META.company_name||'')+'-'+esc(signTitle)+'</div>'
+    return '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">'+esc(signTitle)+'</div></div>'
         + '<table class="ss-head">'
         + '<tr><td colspan="2">主題：'+esc(m.subject)+'</td></tr>'
         + '<tr><td colspan="2">日期時間：'+fmtDate(m.meeting_date)+(m.start_time?('　'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')+'</td></tr>'
@@ -1215,49 +1269,45 @@ function signSheetPageHtml(m, attendees, withSignatures, inlineDocNo){
         + '<table class="sf"><tr><th style="width:36px;">序</th><th>部門</th><th>職稱</th><th>姓名</th><th style="width:130px;">簽名</th></tr>'+rows+'</table>'
         + (inlineDocNo ? '<div class="mr-bottom-note"><span></span><span>'+esc(META.as_doc_signsheet_no||'')+'</span></div>' : '');
 }
+/* 有出貨目標達成率快照時，「製表」改用業務部門最基層主管(meeting_preparer_candidates 解析)；沒有KPI就不用問，直接印(製表退回記錄人)。 */
+function resolvePreparerThenPrint(cb){
+    var m = VIEW.meeting;
+    if (!m.kpi_snapshot_json) { cb(''); return; }
+    $.getJSON(API, {action:'preparer_candidates', meeting_id:m.meeting_id}, function(res){
+        if (!res.ok) { cb(''); return; }
+        var cands = res.candidates||[];
+        if (cands.length <= 1) { cb(cands.length ? cands[0].name : ''); return; }
+        var names = cands.map(function(c){ return c.name; }).join('、');
+        var pick = prompt('本次會議業務製表人有多位，請輸入其中一位姓名：\n'+names, cands[0].name);
+        cb(pick===null ? '' : ($.trim(pick) || cands[0].name));
+    });
+}
 function printMeetingRecord(){
     if (!VIEW) return;
-    egPrintWindow('會議記錄', meetingRecordPageHtml(VIEW.meeting, VIEW, false), mrCss(), META.as_doc_record_no||'', true, true);
+    resolvePreparerThenPrint(function(preparerName){
+        egPrintWindow('會議記錄', meetingRecordPageHtml(VIEW.meeting, VIEW, false, preparerName), mrCss(), META.as_doc_record_no||'', true, true);
+    });
 }
 function printBlankSignSheet(){
     if (!VIEW) return;
     egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, false, false), mrCss(), META.as_doc_signsheet_no||'', false, true);
 }
 
-/* ---------- 合併列印(簽到表→會議紀錄→出貨目標達成率)：僅主席+總經理皆簽核完成(done)才可列印，簽章一律用真圖章 ---------- */
+/* ---------- 合併列印(簽到表→會議紀錄，含出貨目標達成率併入同一頁)：僅主席+總經理皆簽核完成(done)才可列印，簽章一律用真圖章 ---------- */
 function printFullRecord(){
     if (!VIEW) return;
     var m = VIEW.meeting;
     if (m.approval_status !== 'done') { alert('需主席與總經理皆簽核完成才能列印完整紀錄'); return; }
-    $.getJSON(API, {action:'preparer_candidates', meeting_id:m.meeting_id}, function(res){
-        if (!res.ok) { alert(res.error||'載入製表人失敗'); return; }
-        var cands = res.candidates||[];
-        if (cands.length <= 1) { doPrintFullRecord(cands.length ? cands[0].name : ''); return; }
-        var names = cands.map(function(c){ return c.name; }).join('、');
-        var pick = prompt('本次會議業務製表人有多位，請輸入其中一位姓名：\n'+names, cands[0].name);
-        if (pick === null) return;
-        doPrintFullRecord($.trim(pick) || cands[0].name);
-    });
+    resolvePreparerThenPrint(function(preparerName){ doPrintFullRecord(preparerName); });
 }
-/* 合併列印同一份工作內混三種文件(簽到表要直式/會議記錄與KPI要橫式)：CSS @page 只能設一種預設方向，
-   簽到表頁改用「具名頁」(page:mr-portrait) 覆蓋成直式，其餘頁沿用預設橫式；三份文件編號各不同，改在版面內文各自印(見 inlineDocNo)。 */
+/* 合併列印同一份工作內混兩種文件(簽到表要直式/會議記錄含KPI要橫式)：CSS @page 只能設一種預設方向，
+   簽到表頁改用「具名頁」(page:mr-portrait) 覆蓋成直式，其餘頁沿用預設橫式；兩份文件編號各不同，改在版面內文各自印(見 inlineDocNo)。 */
 function doPrintFullRecord(preparerName){
     var m = VIEW.meeting, res = VIEW;
     var page1 = signSheetPageHtml(m, res.attendees, true, true);
-    var page2 = meetingRecordPageHtml(m, res, true);
-
-    var hasKpi = !!m.kpi_snapshot_json;
-    var body = '<div class="mr-portrait-page" style="page-break-after:always;">'+page1+'</div><div'+(hasKpi?' style="page-break-after:always;"':'')+'>'+page2+'</div>';
-    if (hasKpi) {
-        var k = JSON.parse(m.kpi_snapshot_json);
-        var madeStamp = preparerName ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(preparerName, k.data_asof||META.today):esc(preparerName)) : '____________';
-        body += '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">出貨目標達成率</div></div>'
-            + kpiReportHtml(k)
-            + '<table class="pt-sign" style="width:100%;margin-top:18px;"><tr><td>製表：'+madeStamp+'</td></tr></table>';
-    }
-    var css = mrCss() + kpiCss()
-        + '.pt-head{text-align:center;margin-bottom:6px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
-        + 'table.pt-sign td{padding:14px 6px;}'
+    var page2 = meetingRecordPageHtml(m, res, true, preparerName);
+    var body = '<div class="mr-portrait-page" style="page-break-after:always;">'+page1+'</div><div>'+page2+'</div>';
+    var css = mrCss()
         + '@page mr-portrait{size:A4 portrait;margin:12mm 8mm 16mm;}'
         + '.mr-portrait-page{page:mr-portrait;}';
     egPrintWindow('會議紀錄完整版', body, css, '', true, true);

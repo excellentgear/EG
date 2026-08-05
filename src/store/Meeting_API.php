@@ -475,6 +475,8 @@ case 'kpi_insert': {
     $snap = meeting_kpi_snapshot($db, (int)$ymd[0], (int)$ymd[1]);
     $snap['generated_at'] = date('Y-m-d H:i');
     $snap['data_asof'] = $fresh['latest'];
+    $snap['ship_latest'] = $fresh['latest'];
+    try { $snap['return_latest'] = $db->query("SELECT MAX(IR_date) FROM ir_track")->fetchColumn() ?: null; } catch (Throwable $e) { $snap['return_latest'] = null; }
     $db->prepare("UPDATE meeting_record SET kpi_snapshot_json=?, kpi_snapshot_asof=?, updated_at=NOW() WHERE meeting_id=?")
        ->execute([json_encode($snap, JSON_UNESCAPED_UNICODE), $fresh['latest'], $id]);
     jout(['snapshot'=>$snap]);
@@ -590,6 +592,30 @@ case 'preparer_candidates': {
     $m = meeting_load($db, $mid);
     if (!meeting_can_view($db, $uid, $perms, $m)) jerr('無權檢視此會議記錄', 403);
     jout(['candidates'=>meeting_preparer_candidates($db, $mid)]);
+}
+
+/* 新增會議紀錄時可從行事曆挑選「尚未發生(含今天)的會議」事件自動帶入日期/時間/主題/出席人員；
+   行事曆會議類別 category_id=2(event_category)；出席人員來自 evenement_actor，禁止自己寫死。 */
+case 'calendar_meetings': {
+    $st = $db->query("SELECT id, title, start, end FROM evenement WHERE category_id=2 AND DATE(start)>=CURDATE() ORDER BY start LIMIT 50");
+    $events = $st->fetchAll(PDO::FETCH_ASSOC);
+    $ids = array_column($events, 'id');
+    $actorsByEvent = [];
+    if ($ids) {
+        $in = implode(',', array_map('intval', $ids));
+        $ast = $db->query("SELECT ea.event_id, u.id AS user_id, u.user_cname AS user_name,
+                                   d.name AS dept_name, p.name AS position_name
+                            FROM evenement_actor ea
+                            JOIN `user` u ON u.id=ea.user_id
+                            LEFT JOIN user_department_position_map m ON m.user_id=u.id AND m.is_main=1
+                            LEFT JOIN department d ON d.id=m.department_id
+                            LEFT JOIN position p ON p.id=m.position_id
+                            WHERE ea.event_id IN ($in)");
+        foreach ($ast->fetchAll(PDO::FETCH_ASSOC) as $a) $actorsByEvent[(int)$a['event_id']][] = $a;
+    }
+    foreach ($events as &$e) { $e['actors'] = $actorsByEvent[(int)$e['id']] ?? []; }
+    unset($e);
+    jout(['events'=>$events]);
 }
 
 default: jerr('未知的操作：'.$action);
