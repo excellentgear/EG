@@ -545,6 +545,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <div class="va-mask" id="rsMask"><div class="va-modal xwide">
     <div class="m-head"><span id="rsTitle">供應商品質系統評鑑記錄表</span><span class="m-close" onclick="closeMask('rsMask')">✕</span></div>
     <div class="m-body">
+        <div id="rsPrintHead" style="display:none;text-align:center;"></div>
         <div id="rsInfo" style="font-size:13px;color:#5b3a1e;margin-bottom:8px;"></div>
         <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
             <div style="flex:1;min-width:280px;">
@@ -563,6 +564,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <button type="button" class="b-att2" onclick="rsUploadAttach()"><i class="fa fa-upload"></i> 上傳</button>
             </div>
         </div>
+        <div id="rsSignBox" style="display:none;"></div>
+        <div id="rsAttachPrintBox" style="display:none;"></div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="printRecordSheet()"><i class="fa fa-print"></i> 列印記錄表</button>
@@ -2110,6 +2113,10 @@ function planDecideAction(decision, note){
         loadPlan();
     }, 'json').fail(function(x){ alert('處理失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
+/** 供應商稽核計劃列印：每16家一頁，超過自動換頁；每頁自帶大標題(年度置左對齊供應商名稱欄、公司名/文件名置中)，
+ *  簽核區只出現在最後一頁且不可被切斷。禁用 position:fixed 頁首頁尾（見 ai-rules/16、[[print_pagination]]，
+ *  fixed 定位在不同印表機/列印引擎下排版不穩定，是先前版面跑掉的根因）；改用逐頁分段 page-break-after 的做法，
+ *  和本檔 printEvalAll() 相同手法。 */
 $('#planPrintBtn').on('click', function(){
     if (!PLANDATA){ alert('請先載入資料'); return; }
     var docName=(PLANDATA.plan_as_doc&&PLANDATA.plan_as_doc.doc_name)||'供應商稽核計劃';
@@ -2120,28 +2127,36 @@ $('#planPrintBtn').on('click', function(){
         ? vaStampHtml(lock.approved_by_name, fmtDate(lock.approved_at)||'') : '';
     var maker = lock ? (lock.submitted_by_name||'') : CUR_USER_NAME;
     var makeStamp = maker ? vaStampHtml(maker, fmtDate(lock?lock.submit_date:META.today)||'') : '';
-    // 大標題/簽章用 position:fixed 讓多頁列印時每一頁都重複出現（見 ai-rules/16 第四之五節）
-    var fixedHead = '<div style="position:fixed;top:0;left:0;right:0;text-align:center;background:#fff;">'
-        +'<div style="position:absolute;left:0;top:2mm;font-size:14px;font-weight:bold;">'+year+' 年</div>'
-        +'<div style="font-size:22px;font-weight:bold;letter-spacing:1px;">'+esc(PLANDATA.company_name||'')+'</div>'
-        +'<div style="font-size:16px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
-    var fixedFoot = '<table class="pf-sign" style="position:fixed;left:0;right:0;bottom:0;background:#fff;page-break-inside:avoid;"><tr>'
-        +'<td style="width:33%;"><div style="font-size:11px;color:#555;">核准</div><div style="margin-top:2px;min-height:60px;">'+approveStamp+'</div></td>'
-        +'<td style="width:34%;"></td>'
-        +'<td style="width:33%;"><div style="font-size:11px;color:#555;">製表人</div><div style="margin-top:2px;min-height:60px;">'+makeStamp+'</div></td>'
-        +'</tr></table>';
-    var rows='<div style="margin-top:32mm;margin-bottom:34mm;"><table class="pf" style="table-layout:fixed;"><colgroup><col style="width:15%;">';
-    for (var m=1;m<=12;m++) rows+='<col>';
-    rows+='<col style="width:16%;"></colgroup><thead><tr><th>供應商名稱</th>';
-    for (m=1;m<=12;m++) rows+='<th>'+m+'月</th>';
-    rows+='<th style="text-align:left;">加工項目</th></tr></thead><tbody>';
-    (PLANDATA.rows||[]).forEach(function(r){
-        rows+='<tr><td class="q">'+esc(r.maker_id||'')+'</td>';
-        for (m=1;m<=12;m++) rows+='<td>'+(r.months&&r.months[m]?'V':'')+'</td>';
-        rows+='<td class="q">'+esc(r.sub_cat_names||'')+'</td></tr>';
-    });
-    rows+='</tbody></table></div>';
-    openPrintWindow(fixedHead+rows+fixedFoot, '供應商稽核計劃', docNo, true);
+    var rowsAll = PLANDATA.rows||[];
+    var PER_PAGE = 16;
+    var pageCount = Math.max(1, Math.ceil(rowsAll.length/PER_PAGE));
+    var body = '';
+    for (var p=0; p<pageCount; p++){
+        var chunk = rowsAll.slice(p*PER_PAGE, (p+1)*PER_PAGE);
+        var isLast = (p === pageCount-1);
+        var head = '<div style="text-align:center;">'
+            + '<div style="font-size:13px;font-weight:bold;text-align:left;">'+esc(year)+' 年</div>'
+            + '<div style="font-size:22px;font-weight:bold;letter-spacing:1px;">'+esc(PLANDATA.company_name||'')+'</div>'
+            + '<div style="font-size:16px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
+        var table = '<table class="pf" style="table-layout:fixed;margin-top:8px;"><colgroup><col style="width:15%;">';
+        for (var m=1;m<=12;m++) table += '<col>';
+        table += '<col style="width:16%;"></colgroup><thead><tr><th>供應商名稱</th>';
+        for (m=1;m<=12;m++) table += '<th>'+m+'月</th>';
+        table += '<th style="text-align:left;">加工項目</th></tr></thead><tbody>';
+        chunk.forEach(function(r){
+            table += '<tr><td class="q">'+esc(r.maker_id||'')+'</td>';
+            for (var mm=1;mm<=12;mm++) table += '<td>'+(r.months&&r.months[mm]?'V':'')+'</td>';
+            table += '<td class="q">'+esc(r.sub_cat_names||'')+'</td></tr>';
+        });
+        table += '</tbody></table>';
+        var sign = isLast ? ('<table class="pf-sign" style="margin-top:14px;page-break-inside:avoid;"><tr>'
+            +'<td style="width:33%;"><div style="font-size:11px;color:#555;">核准</div><div style="margin-top:2px;min-height:60px;">'+approveStamp+'</div></td>'
+            +'<td style="width:34%;"></td>'
+            +'<td style="width:33%;"><div style="font-size:11px;color:#555;">製表人</div><div style="margin-top:2px;min-height:60px;">'+makeStamp+'</div></td>'
+            +'</tr></table>') : '';
+        body += '<div'+(isLast?'':' style="page-break-after:always;"')+'>'+head+table+sign+'</div>';
+    }
+    openPrintWindow(body, '供應商稽核計劃', docNo, true);
 });
 
 /* ---------- 查核表設定(管理員) ---------- */
