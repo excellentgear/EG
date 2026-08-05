@@ -491,7 +491,8 @@ case 'checkin_meta': {
           'stamp_template'=>training_stamp_template($db)]);
 }
 
-/* 現場簽到：選人（不是密碼反查身分）→ 輸入本人密碼驗證 → 寫入 signed/signed_at/sign_method，比照 meeting_record 的密碼簽到模式 */
+/* 現場簽到：選人（不是密碼反查身分）→ 輸入本人密碼驗證 → 寫入 signed/signed_at/sign_method，比照 meeting_record 的密碼簽到模式；
+   有簽到＝人確實到場，一併勾實到(attended)，訓練管理員之後在「實行資料」不必再手動補勾。 */
 case 'sign_attendee': {
     $sid = (int)($_POST['session_id'] ?? 0);
     $forUid = (int)($_POST['user_id'] ?? 0);
@@ -502,7 +503,7 @@ case 'sign_attendee': {
     if (!$attId) jerr('此人員不在本次名單內');
     $v = training_verify_own_password($db, $forUid, $password);
     if (!$v['ok']) jerr($v['msg']);
-    $db->prepare("UPDATE training_attendee SET signed=1, signed_at=NOW(), sign_method='pwd' WHERE att_id=?")->execute([$attId]);
+    $db->prepare("UPDATE training_attendee SET signed=1, signed_at=NOW(), sign_method='pwd', attended=1 WHERE att_id=?")->execute([$attId]);
     jout(['att_id'=>$attId, 'signed_at'=>date('Y-m-d H:i:s')]);
 }
 

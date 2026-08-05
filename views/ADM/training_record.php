@@ -918,6 +918,8 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <!-- 共用簽章圖章（有上傳掃描章的人自動換成實體章＋動態日期帶）：簽章一律用章，不可只印姓名文字 -->
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<!-- 圖章模板設計器渲染引擎：沒掃描實體章時，模組設定選的「簽名圖章樣式」要靠這支才畫得出來（漏載會靜默退回泛用SVG章） -->
+<script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -1394,7 +1396,7 @@ function openExBody(sid){
     $('#attNote').text('');
     $.getJSON(API, {action:'get_attendees', session_id:r.session_id}, function(res){
         if (res.ok) ATT = res.attendees.map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name,
-            position_name:a.position_name||'', attended:+a.attended, signed:+a.signed,
+            position_name:a.position_name||'', attended:+a.attended, signed:+a.signed, signed_at:a.signed_at||'',
             eval_result:a.eval_result||'', eval_score:(a.eval_score==null?'':numTrim(a.eval_score)), eval_note:a.eval_note||''}; });
         // 講師不算參加人員（是上課的人，不是受訓的人）→ 名單內若有講師一律剔除
         var cut = [];
@@ -2435,8 +2437,9 @@ function printSignSheet(blankOnly){
         var rows='';
         list.forEach(function(a,i){
             // 評鑑結果一律印成空白勾選框讓現場圈選（紙本才是正本；線上已填的另有系統紀錄）；宣導(免評鑑)課程直接印「不須評鑑」不留勾選框
+            // 簽名欄：現場密碼簽到過的人直接印出簽到章；還沒簽到的人維持空白供紙本簽名
             rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
-                +'<td style="width:130px;"></td>'
+                +'<td style="width:130px;">'+(+a.signed?egStampHtml(a.user_name, fmtDate(a.signed_at)):'')+'</td>'
                 +'<td style="width:112px;white-space:nowrap;">'+(noticeCourse?'不須評鑑':'☐ 合格　☐ 不合格')+'</td>'
                 +'<td style="width:120px;"></td></tr>';
         });
