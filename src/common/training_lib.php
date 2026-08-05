@@ -138,6 +138,18 @@ function training_ensure_schema(PDO $db): void {
         try { $db->exec($sql); } catch (Throwable $e) {}
     }
 
+    // 逐日簽到（多天課程一天要簽一次；日期一律=課程當天，不是按鈕按下的當下時間）
+    $db->exec("CREATE TABLE IF NOT EXISTS training_attendee_day_sign (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        session_id INT NOT NULL,
+        user_id INT NOT NULL,
+        day_date DATE NOT NULL COMMENT '簽到對應的上課日期(=training_session_day.day_date)',
+        signed_at DATETIME NOT NULL COMMENT '實際簽到時間戳(僅供稽核,列印日期一律用day_date)',
+        sign_method VARCHAR(10) NULL COMMENT 'online=線上密碼',
+        UNIQUE KEY uq_sd (session_id, user_id, day_date),
+        KEY idx_session (session_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練逐日簽到記錄(多天課程一天一次)'");
+
     // 場次附件（簽到表掃描、教材、試卷…）：DB 只存檔名，完整路徑一律讀取當下組出（鐵律5／ai-rules/07）
     $db->exec("CREATE TABLE IF NOT EXISTS training_attachment (
         att_id INT AUTO_INCREMENT PRIMARY KEY,

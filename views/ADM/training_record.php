@@ -854,6 +854,11 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
     <div class="m-head"><span>現場簽到</span><span class="m-close" onclick="closeMask('checkinMask')">✕</span></div>
     <div class="m-body">
         <div id="checkinInfo" style="margin-bottom:8px;color:#5b3a1e;"></div>
+        <div id="checkinDayBox" style="margin-bottom:8px;display:none;">
+            <label style="display:inline;margin-right:6px;">上課日期</label>
+            <select id="checkinDaySel" onchange="checkinDayChange()"></select>
+            <span style="font-size:11px;color:#8a6d45;margin-left:6px;">多天課程一天要簽一次，逐日各自簽到</span>
+        </div>
         <table class="att-tbl"><thead><tr><th>部門</th><th>職稱</th><th>姓名</th><th style="width:180px;">簽到</th></tr></thead>
             <tbody id="checkinBody"></tbody></table>
         <div class="tr-hint" style="margin-top:8px;">共用一台裝置輪流簽：選自己的姓名那一列，輸入<b>本人密碼</b>按 Enter 即完成簽到（不是密碼反查身分，密碼只用來驗證是不是本人）。</div>
@@ -1213,6 +1218,8 @@ $('#yearSel').on('change', function(){
 
 /* ---------- 新增/編輯 ---------- */
 var ATT = [];   // 應參加名單 [{user_id,user_name,dept_name,attended,signed}]
+var DAY_SIGNS = {};   // 逐日簽到 {user_id_日期: signed_at}，多天課程一天一次；由 day_signs 陣列組出，見 daySignMap()
+function daySignMap(rows){ var m={}; (rows||[]).forEach(function(r){ m[r.user_id+'_'+r.day_date]=r.signed_at; }); return m; }
 function applyType(){
     var ext = $('#edType').val()==='external';
     $('#edExternalBox').toggle(ext);
@@ -1394,10 +1401,12 @@ function openExBody(sid){
     $('#attPickAll').prop('checked', false);
     ATT = [];
     $('#attNote').text('');
+    DAY_SIGNS = {};
     $.getJSON(API, {action:'get_attendees', session_id:r.session_id}, function(res){
         if (res.ok) ATT = res.attendees.map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name,
             position_name:a.position_name||'', attended:+a.attended, signed:+a.signed, signed_at:a.signed_at||'',
             eval_result:a.eval_result||'', eval_score:(a.eval_score==null?'':numTrim(a.eval_score)), eval_note:a.eval_note||''}; });
+        if (res.ok) DAY_SIGNS = daySignMap(res.day_signs);
         // 講師不算參加人員（是上課的人，不是受訓的人）→ 名單內若有講師一律剔除
         var cut = [];
         ATT = ATT.filter(function(a){ if (isTrainer(a.user_id, a.user_name)){ cut.push(a.user_name); return false; } return true; });
@@ -2437,9 +2446,10 @@ function printSignSheet(blankOnly){
         var rows='';
         list.forEach(function(a,i){
             // 評鑑結果一律印成空白勾選框讓現場圈選（紙本才是正本；線上已填的另有系統紀錄）；宣導(免評鑑)課程直接印「不須評鑑」不留勾選框
-            // 簽名欄：現場密碼簽到過的人直接印出簽到章；還沒簽到的人維持空白供紙本簽名
+            // 簽名欄：該天現場密碼簽到過的人印出簽到章(章上日期＝該堂課的上課日，不是按鈕按下當下的日期)；還沒簽到的人維持空白供紙本簽名
+            var daySigned = a.user_id!=null && d.date && DAY_SIGNS[a.user_id+'_'+d.date];
             rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
-                +'<td style="width:130px;">'+(+a.signed?egStampHtml(a.user_name, fmtDate(a.signed_at)):'')+'</td>'
+                +'<td style="width:130px;">'+(daySigned?egStampHtml(a.user_name, fmtDate(d.date)):'')+'</td>'
                 +'<td style="width:112px;white-space:nowrap;">'+(noticeCourse?'不須評鑑':'☐ 合格　☐ 不合格')+'</td>'
                 +'<td style="width:120px;"></td></tr>';
         });
@@ -2702,6 +2712,7 @@ function printRecord(){
         ? '全部上課日期：'+allDates.join('、')
         : '全部上課日期：'+allDates[0]+' ~ '+allDates[allDates.length-1]+'（共 '+ds.length+' 天）');
     var list = res.attendees || [];
+    var recDaySigns = daySignMap(res.day_signs);
     var html='';
     ds.forEach(function(d, di){
         var tm=(d.start_time||'')+(d.end_time?'~'+d.end_time:'');
@@ -2710,8 +2721,10 @@ function printRecord(){
         var rows='';
         list.forEach(function(a,i){
             var ev = a.eval_result==='pass'?'合格':a.eval_result==='fail'?'不合格':a.eval_result==='exempt'?'免評鑑':'—';
+            // 簽名章：該天有電子簽到才印，章上日期＝該堂課的上課日(d.day_date)，不是簽到按鈕按下當下的日期
+            var daySigned = d.day_date && recDaySigns[a.user_id+'_'+d.day_date];
             rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
-                +'<td>'+(+a.signed?egStampHtml(a.user_name, fmtDate(a.signed_at)):'')+'</td>'
+                +'<td>'+(daySigned?egStampHtml(a.user_name, fmtDate(d.day_date)):'')+'</td>'
                 +'<td>'+ev+'</td>'
                 +'<td>'+esc(a.eval_note||'')+'</td></tr>';
         });
@@ -2747,26 +2760,36 @@ function printRecord(){
     egPrintWindow(docTitle, html, css, '', false, true);
 }
 
-/* ---------- 現場簽到（免 training_edit 權限；後端 checkin_meta/sign_attendee 已在 $publicActions 白名單） ---------- */
-var CHECKIN = null;
+/* ---------- 現場簽到（免 training_edit 權限；後端 checkin_meta/sign_attendee 已在 $publicActions 白名單） ----------
+   多天課程一天一張簽到表就要簽一次：CHECKIN_DAY＝目前選的上課日，簽到章日期一律印該日期，不是按鈕按下當下的日期。 */
+var CHECKIN = null, CHECKIN_DAY_SIGNS = {}, CHECKIN_DAY = '';
 function openCheckin(sid){
-    CHECKIN = null;
-    $('#checkinInfo').text('載入中…'); $('#checkinBody').html('');
+    CHECKIN = null; CHECKIN_DAY_SIGNS = {}; CHECKIN_DAY = '';
+    $('#checkinInfo').text('載入中…'); $('#checkinBody').html(''); $('#checkinDayBox').hide();
     openMask('checkinMask');
     $.getJSON(API, {action:'checkin_meta', session_id:sid}, function(res){
         if (!res.ok){ $('#checkinInfo').html('<span style="color:#DD5138;">'+esc(res.error||'載入失敗')+'</span>'); return; }
         CHECKIN = res;
+        CHECKIN_DAY_SIGNS = daySignMap(res.day_signs);
         $('#checkinInfo').html('<b>'+esc(res.session.course_name)+'</b>　'+res.session.year+' 年 '+res.session.plan_month+' 月');
+        var days = res.days||[], today = META.today;
+        var cur = days.filter(function(d){ return d.day_date===today; })[0];
+        CHECKIN_DAY = cur ? cur.day_date : (days[0] ? days[0].day_date : '');
+        if (days.length>1){
+            var h=''; days.forEach(function(d){ h+='<option value="'+d.day_date+'"'+(d.day_date===CHECKIN_DAY?' selected':'')+'>'+fmtDate(d.day_date)+'</option>'; });
+            $('#checkinDaySel').html(h); $('#checkinDayBox').show();
+        }
         renderCheckinBody();
     }).fail(function(x){ $('#checkinInfo').html('<span style="color:#DD5138;">'+esc(x.responseJSON&&x.responseJSON.error||'載入失敗')+'</span>'); });
 }
+function checkinDayChange(){ CHECKIN_DAY = $('#checkinDaySel').val(); renderCheckinBody(); }
 function renderCheckinBody(){
     var sid = CHECKIN.session.session_id, h='';
     (CHECKIN.attendees||[]).forEach(function(a){
-        var signed = +a.signed===1;
+        var signed = CHECKIN_DAY_SIGNS[a.user_id+'_'+CHECKIN_DAY];
         h += '<tr data-uid="'+a.user_id+'"><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
            + '<td>'+(signed
-                ? egStampHtml(a.user_name, fmtDate(a.signed_at))
+                ? egStampHtml(a.user_name, fmtDate(CHECKIN_DAY))
                 : '<input type="password" placeholder="本人密碼，按Enter簽到" id="ck-pw-'+a.user_id+'" data-eg-skip'
                   + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();checkinSign('+sid+','+a.user_id+');}">')+'</td></tr>';
     });
@@ -2775,14 +2798,15 @@ function renderCheckinBody(){
 function checkinSign(sid, uidv){
     var pw = $('#ck-pw-'+uidv).val();
     if (!pw){ alert('請輸入密碼'); return; }
-    $.post(API, {action:'sign_attendee', session_id:sid, user_id:uidv, password:pw}, function(res){
+    if (!CHECKIN_DAY){ alert('查無上課日期'); return; }
+    $.post(API, {action:'sign_attendee', session_id:sid, user_id:uidv, day_date:CHECKIN_DAY, password:pw}, function(res){
         if (!res.ok){ alert(res.error||'簽到失敗'); $('#ck-pw-'+uidv).val('').select(); return; }
+        CHECKIN_DAY_SIGNS[uidv+'_'+CHECKIN_DAY] = res.day_date;
         var a = (CHECKIN.attendees||[]).filter(function(x){ return String(x.user_id)===String(uidv); })[0];
-        if (a) { a.signed = 1; a.signed_at = res.signed_at; }
-        $('tr[data-uid="'+uidv+'"] td:last-child').html(egStampHtml(a?a.user_name:'', fmtDate(res.signed_at)));
-        var next = (CHECKIN.attendees||[]).filter(function(x){ return !(+x.signed); })[0];
+        $('tr[data-uid="'+uidv+'"] td:last-child').html(egStampHtml(a?a.user_name:'', fmtDate(CHECKIN_DAY)));
+        var next = (CHECKIN.attendees||[]).filter(function(x){ return !CHECKIN_DAY_SIGNS[x.user_id+'_'+CHECKIN_DAY]; })[0];
         if (next) setTimeout(function(){ $('#ck-pw-'+next.user_id).focus(); }, 30);
-        else alert('全員已簽到');
+        else alert('本日全員已簽到');
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '簽到失敗'); $('#ck-pw-'+uidv).val('').select(); });
 }
 

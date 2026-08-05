@@ -461,8 +461,11 @@ case 'session_detail': {
     $oh = $db->prepare("SELECT assessor_name FROM training_ojt_checklist WHERE session_id=?");
     $oh->execute([$sid]);
     $ohRow = $oh->fetch(PDO::FETCH_ASSOC);
+    $sq = $db->prepare("SELECT user_id, day_date, signed_at FROM training_attendee_day_sign WHERE session_id=?");
+    $sq->execute([$sid]);
     jout(['session'=>$s, 'dept_ids'=>$deptIds, 'dept_names'=>$dnames,
           'days'=>$dq->fetchAll(PDO::FETCH_ASSOC), 'attendees'=>$aq->fetchAll(PDO::FETCH_ASSOC),
+          'day_signs'=>$sq->fetchAll(PDO::FETCH_ASSOC),
           'attachments'=>training_attachments($db, $sid),
           'ojt_items'=>$oq->fetchAll(PDO::FETCH_ASSOC), 'ojt_assessor_name'=>$ohRow['assessor_name'] ?? '']);
 }
@@ -479,7 +482,7 @@ case 'checkin_meta': {
     if (!in_array($s['status'], ['scheduled','done'], true)) jerr('此場次尚未確認開課，尚無可簽到名單');
     $dq = $db->prepare("SELECT day_no, day_date, start_time, end_time FROM training_session_day WHERE session_id=? ORDER BY day_no, day_date");
     $dq->execute([$sid]);
-    $aq = $db->prepare("SELECT a.user_id, a.user_name, a.dept_name, a.position_name, a.signed, a.signed_at
+    $aq = $db->prepare("SELECT a.user_id, a.user_name, a.dept_name, a.position_name
                         FROM training_attendee a
                         LEFT JOIN user_department_position_map m ON m.user_id=a.user_id AND m.is_main=1
                         LEFT JOIN department d ON d.id=m.department_id
@@ -487,24 +490,35 @@ case 'checkin_meta': {
                         WHERE a.session_id=?
                         ORDER BY COALESCE(d.sort_order,999), COALESCE(p.sort_order,999), a.user_name");
     $aq->execute([$sid]);
+    $sq = $db->prepare("SELECT user_id, day_date, signed_at FROM training_attendee_day_sign WHERE session_id=?");
+    $sq->execute([$sid]);
     jout(['session'=>$s, 'days'=>$dq->fetchAll(PDO::FETCH_ASSOC), 'attendees'=>$aq->fetchAll(PDO::FETCH_ASSOC),
-          'stamp_template'=>training_stamp_template($db)]);
+          'day_signs'=>$sq->fetchAll(PDO::FETCH_ASSOC), 'stamp_template'=>training_stamp_template($db)]);
 }
 
-/* 現場簽到：選人（不是密碼反查身分）→ 輸入本人密碼驗證 → 寫入 signed/signed_at/sign_method，比照 meeting_record 的密碼簽到模式；
-   有簽到＝人確實到場，一併勾實到(attended)，訓練管理員之後在「實行資料」不必再手動補勾。 */
+/* 現場簽到：選人（不是密碼反查身分）→ 輸入本人密碼驗證 → 寫入 training_attendee_day_sign，比照 meeting_record 的密碼簽到模式；
+   多天課程一天一張簽到表就要簽一次，簽到日期一律=該堂課的上課日(day_date)，不是按下按鈕當下的日期。
+   有簽到＝人確實到場，一併勾 training_attendee.attended，訓練管理員之後在「實行資料」不必再手動補勾。 */
 case 'sign_attendee': {
     $sid = (int)($_POST['session_id'] ?? 0);
     $forUid = (int)($_POST['user_id'] ?? 0);
+    $dayDate = (string)($_POST['day_date'] ?? '');
     $password = (string)($_POST['password'] ?? '');
     $st = $db->prepare("SELECT att_id FROM training_attendee WHERE session_id=? AND user_id=?");
     $st->execute([$sid, $forUid]);
     $attId = (int)$st->fetchColumn();
     if (!$attId) jerr('此人員不在本次名單內');
+    $dq = $db->prepare("SELECT 1 FROM training_session_day WHERE session_id=? AND day_date=?");
+    $dq->execute([$sid, $dayDate]);
+    if (!$dq->fetchColumn()) jerr('日期不是本場次的上課日');
     $v = training_verify_own_password($db, $forUid, $password);
     if (!$v['ok']) jerr($v['msg']);
-    $db->prepare("UPDATE training_attendee SET signed=1, signed_at=NOW(), sign_method='pwd', attended=1 WHERE att_id=?")->execute([$attId]);
-    jout(['att_id'=>$attId, 'signed_at'=>date('Y-m-d H:i:s')]);
+    $db->prepare("INSERT INTO training_attendee_day_sign (session_id, user_id, day_date, signed_at, sign_method)
+                  VALUES (?,?,?,NOW(),'online')
+                  ON DUPLICATE KEY UPDATE signed_at=VALUES(signed_at), sign_method=VALUES(sign_method)")
+       ->execute([$sid, $forUid, $dayDate]);
+    $db->prepare("UPDATE training_attendee SET signed=1, signed_at=NOW(), sign_method='online', attended=1 WHERE att_id=?")->execute([$attId]);
+    jout(['att_id'=>$attId, 'day_date'=>$dayDate]);
 }
 
 /* ---------- 上課地點主檔（設定後可下拉選擇） ---------- */
@@ -1069,7 +1083,9 @@ case 'get_attendees': {
                         WHERE a.session_id=?
                         ORDER BY COALESCE(d.sort_order,999), COALESCE(p.sort_order,999), a.user_name");
     $st->execute([$sid]);
-    jout(['attendees'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+    $sq = $db->prepare("SELECT user_id, day_date, signed_at FROM training_attendee_day_sign WHERE session_id=?");
+    $sq->execute([$sid]);
+    jout(['attendees'=>$st->fetchAll(PDO::FETCH_ASSOC), 'day_signs'=>$sq->fetchAll(PDO::FETCH_ASSOC)]);
 }
 
 /* OJT/實作口試考核表：考核項目清單＋考官姓名（僅內訓；建立者＝內訓講師本人或訓練管理員） */
