@@ -1336,24 +1336,26 @@ function auditFormOneVersion(o, mode){
         + '<tr><td colspan="2">生產類別：'+prodBoxes+'</td></tr>'
         + '<tr><td colspan="2">稽核狀況：'+modeBoxes+'</td></tr></table>';
     var showScores = (mode === 'site');
+    var scoreLabel = mode==='site' ? '稽核分' : '自評分';
     var tSelf = 0, tAudit = 0;
     var rows = '<table class="pf" style="table-layout:fixed;"><colgroup><col style="width:60px;"><col style="width:34px;"><col>'
-        + '<col style="width:70px;"><col style="width:50px;"><col style="width:50px;"></colgroup>'
-        + '<thead><tr><th>項目</th><th>項次</th><th>查核問題</th><th>單項滿分</th><th>自評分</th><th>稽核分</th></tr></thead><tbody>';
+        + '<col style="width:70px;"><col style="width:55px;"></colgroup>'
+        + '<thead><tr><th>項目</th><th>項次</th><th>查核問題</th><th>單項滿分</th><th>'+scoreLabel+'</th></tr></thead><tbody>';
     cfg.items.forEach(function(cat){
         var items = cat[2];
         items.forEach(function(it, idx){
             var s = (o.scores && o.scores[it[0]]) || {};
             if (s.self != null && s.self !== '') tSelf += +s.self;
             if (s.audit != null && s.audit !== '') tAudit += +s.audit;
+            var sv = mode==='site' ? s.audit : s.self;
             rows += '<tr>';
             if (idx===0) rows += '<td rowspan="'+items.length+'" style="vertical-align:middle;font-weight:bold;">'+esc(cat[1])+'</td>';
             rows += '<td>'+esc(it[1])+'</td><td class="q">'+esc(it[2])+'</td><td>'+it[3]+'</td>'
-                + '<td>'+(showScores && s.self!=null?s.self:'')+'</td><td>'+(showScores && s.audit!=null?s.audit:'')+'</td></tr>';
+                + '<td>'+(showScores && sv!=null?sv:'')+'</td></tr>';
         });
     });
     rows += '<tr style="font-weight:bold;"><td colspan="3">合計</td><td>'+cfg.total_max+'</td>'
-        + '<td>'+(showScores?tSelf:'')+'</td><td>'+(showScores?tAudit:'')+'</td></tr>';
+        + '<td>'+(showScores?(mode==='site'?tAudit:tSelf):'')+'</td></tr>';
     rows += '</tbody></table>';
     var madeCell = mode==='site' ? (o.auditorName ? vaStampHtml(o.auditorName, o.dateStr||'') : '__________________')
                  : (mode==='self' ? 'N/A' : '__________________');
@@ -1373,12 +1375,12 @@ function openPrintWindow(bodyHtml, title, docNo, landscape){
     if (!w){ alert('請允許彈出視窗以列印'); return; }
     var asTxt = String(docNo||'').replace(/['\\]/g,'');
     var css = 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:14px;}'
-        + 'table.pf{width:100%;border-collapse:collapse;font-size:15px;margin-top:8px;}'
-        + 'table.pf th,table.pf td{border:1px solid #333;padding:10px 6px;height:40px;text-align:center;vertical-align:middle;}'
+        + 'table.pf{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}'
+        + 'table.pf th,table.pf td{border:1px solid #333;padding:3px 6px;height:22px;text-align:center;vertical-align:middle;}'
         + 'table.pf td.q{text-align:left;}'
-        + 'table.pf-info{width:100%;font-size:14px;margin-top:12px;border-collapse:collapse;}table.pf-info td{padding:8px 6px;border:1px solid #999;}'
-        + 'table.pf-sign{width:100%;margin-top:46px;font-size:13px;page-break-inside:avoid;}table.pf-sign td{padding:30px 6px 10px;}'
-        + '.stamp-wrap svg,svg.car-stamp{width:80px;height:80px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + 'table.pf-info{width:100%;font-size:13px;margin-top:10px;border-collapse:collapse;}table.pf-info td{padding:5px 6px;border:1px solid #999;}'
+        + 'table.pf-sign{width:100%;margin-top:20px;font-size:13px;page-break-inside:avoid;}table.pf-sign td{padding:14px 6px 8px;}'
+        + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
         + '.rs-chart-wrap{max-width:320px;margin:0 auto;}.rs-chart-wrap svg{width:100% !important;height:auto !important;}'
         + '@media print{@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;'
         + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
