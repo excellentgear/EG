@@ -71,7 +71,10 @@ case 'meta': {
     $presets = $db->query("SELECT preset_id, subject, location, start_time, end_time FROM meeting_preset ORDER BY sort_order, preset_id")->fetchAll(PDO::FETCH_ASSOC);
     jout(['perms'=>$perms, 'departments'=>$depts, 'years'=>$years,
           'uid'=>$uid, 'uname'=>$uname, 'today'=>date('Y-m-d'), 'cur_year'=>$cy,
-          'gm_name'=>$gm ? $gm['user_cname'] : null, 'presets'=>$presets]);
+          'gm_name'=>$gm ? $gm['user_cname'] : null, 'presets'=>$presets,
+          'company_name'=>eg_company_full_name($db), 'features'=>MEETING_FEATURES,
+          'attach_nas_dir'=>$perms['canAdmin'] ? meeting_setting_get($db, 'meeting_nas_dir', '') : null,
+          'as_doc_signsheet'=>eg_asdoc_get($db, 'meeting_signsheet')]);
 }
 
 /* 常用設定（主題綁地點綁時間）：管理員維護 */
@@ -139,7 +142,17 @@ case 'get_detail': {
     $m['chair_signer_id'] = $m['chair_user_id'] ? meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name'])['id'] : null;
     $gmSigner = meeting_gm_signer_effective($db);
     $m['gm_signer_id'] = $gmSigner['id'] ?? null;
-    jout(['meeting'=>$m, 'items'=>meeting_items($db, $id), 'attendees'=>meeting_attendees($db, $id)]);
+    $at = $db->prepare("SELECT attach_id, original_name, attach_type, file_name, created_by_name, created_at
+                        FROM meeting_attach WHERE meeting_id=? AND status='active' ORDER BY attach_id");
+    $at->execute([$id]);
+    $dir = meeting_attach_dir($db);
+    $attaches = [];
+    foreach ($at->fetchAll(PDO::FETCH_ASSOC) as $a) {
+        $a['exists'] = is_file($dir . basename((string)$a['file_name']));
+        unset($a['file_name']);
+        $attaches[] = $a;
+    }
+    jout(['meeting'=>$m, 'items'=>meeting_items($db, $id), 'attendees'=>meeting_attendees($db, $id), 'attaches'=>$attaches]);
 }
 
 /* 建立/編輯草稿（id=0＝新建）：只有 draft/rejected 狀態可編（送出後鎖定，需退回才能再改） */
@@ -219,7 +232,7 @@ case 'save': {
         foreach ($items as $it) {
             $content = trim((string)($it['content'] ?? ''));
             if ($content === '') continue;
-            $kind = ($it['kind'] ?? '') === 'directive' ? 'directive' : 'general';
+            $kind = in_array($it['kind'] ?? '', ['directive','announce'], true) ? $it['kind'] : 'general';
             $due = trim((string)($it['due_date'] ?? '')) ?: null;
             if ($due && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $due)) $due = null;
             $ownerIds = array_values(array_filter(array_map('intval', (array)($it['owner_depts'] ?? []))));
@@ -230,6 +243,13 @@ case 'save': {
             $insI->execute([$id, $kind, $n, $content, $due, $ownerIds ? implode(',', $ownerIds) : null, $ownerNames, $remark,
                 $prev['confirm_user_id'] ?? null, $prev['confirm_user_name'] ?? null, $prev['confirm_at'] ?? null, $prev['gm_comment'] ?? null]);
             $n++;
+        }
+        // 暫存附件轉正（與主單同一筆交易內；限本人上傳的 temp）
+        $tempIds = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['temp_attach_ids'] ?? '')))));
+        if ($tempIds) {
+            $in = implode(',', $tempIds);
+            $db->prepare("UPDATE meeting_attach SET meeting_id=?, status='active', expire_at=NULL
+                          WHERE attach_id IN ({$in}) AND created_by=? AND status='temp'")->execute([$id, $uid]);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
@@ -390,6 +410,7 @@ case 'kpi_check': {
 
 /* 插入本月出貨目標達成率快照：先驗新鮮度，未達標直接擋（提示還差幾天） */
 case 'kpi_insert': {
+    if (empty($perms['canKpiInsert'])) jerr('您沒有插入出貨目標達成率的權限，請洽管理員於「角色設定」開放', 403);
     $id = (int)($_POST['meeting_id'] ?? 0);
     $m = meeting_load($db, $id);
     if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可插入', 403);
@@ -415,6 +436,104 @@ case 'kpi_remove': {
     if (!in_array($m['status'], ['draft','rejected'], true)) jerr('此會議記錄已送出，無法再修改');
     $db->prepare("UPDATE meeting_record SET kpi_snapshot_json=NULL, kpi_snapshot_asof=NULL WHERE meeting_id=?")->execute([$id]);
     jout([]);
+}
+
+/* ===== 附件（手動輸入類型/說明，無固定分類；草稿階段 meeting_id=0 暫存，存檔時轉正） ===== */
+case 'attach_upload': {
+    if (!$perms['canEdit']) jerr('無編輯權限', 403);
+    $mid = (int)($_POST['meeting_id'] ?? 0);
+    if ($mid > 0) {
+        $st = $db->prepare("SELECT 1 FROM meeting_record WHERE meeting_id=?");
+        $st->execute([$mid]);
+        if (!$st->fetchColumn()) jerr('找不到會議記錄');
+    }
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) jerr('請選擇檔案');
+    if ((int)$_FILES['file']['size'] > 20*1024*1024) jerr('單檔上限 20MB');
+    $orig = basename((string)$_FILES['file']['name']);
+    $ext = pathinfo($orig, PATHINFO_EXTENSION);
+    $fname = date('Ymd_His_') . bin2hex(random_bytes(4)) . ($ext !== '' ? '.' . preg_replace('/[^A-Za-z0-9]/', '', $ext) : '');
+    $dir = meeting_attach_dir($db);
+    if (!eg_attach_ensure_dir($dir)) jerr('無法建立附件目錄，請確認「附件路徑設定」（含網路磁碟權限）：'.$dir, 500);
+    if (!@move_uploaded_file($_FILES['file']['tmp_name'], $dir . $fname)) jerr('存檔失敗（請確認附件路徑設定與權限）', 500);
+    $attachType = trim((string)($_POST['attach_type'] ?? '')) ?: null;
+    if ($mid > 0) {
+        $db->prepare("INSERT INTO meeting_attach (meeting_id, file_name, original_name, attach_type, status, created_by, created_by_name)
+                      VALUES (?,?,?,?,'active',?,?)")->execute([$mid, $fname, $orig, $attachType, $uid, $uname]);
+    } else {
+        $db->prepare("INSERT INTO meeting_attach (meeting_id, file_name, original_name, attach_type, status, expire_at, created_by, created_by_name)
+                      VALUES (0,?,?,?,'temp', DATE_ADD(NOW(), INTERVAL 2 DAY),?,?)")->execute([$fname, $orig, $attachType, $uid, $uname]);
+    }
+    jout(['attach_id'=>(int)$db->lastInsertId()]);
+}
+case 'attach_delete': {
+    if (!$perms['canEdit']) jerr('無編輯權限', 403);
+    $aid = (int)($_POST['attach_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM meeting_attach WHERE attach_id=?");
+    $st->execute([$aid]);
+    $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('找不到附件');
+    $fp = meeting_attach_dir($db) . basename((string)$a['file_name']);
+    if (is_file($fp)) @unlink($fp);
+    $db->prepare("DELETE FROM meeting_attach WHERE attach_id=?")->execute([$aid]);
+    jout([]);
+}
+case 'attach_list': {
+    $mid = (int)($_GET['meeting_id'] ?? 0);
+    if ($mid <= 0) jout(['attaches'=>[]]);
+    $st = $db->prepare("SELECT attach_id, original_name, attach_type, file_name, created_by_name, created_at
+                        FROM meeting_attach WHERE meeting_id=? AND status='active' ORDER BY attach_id");
+    $st->execute([$mid]);
+    $out = [];
+    $dir = meeting_attach_dir($db);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $a) {
+        $a['exists'] = is_file($dir . basename((string)$a['file_name']));
+        unset($a['file_name']);
+        $out[] = $a;
+    }
+    jout(['attaches'=>$out]);
+}
+case 'download_attach': {
+    $aid = (int)($_GET['attach_id'] ?? 0);
+    $st = $db->prepare("SELECT file_name, original_name FROM meeting_attach WHERE attach_id=?");
+    $st->execute([$aid]);
+    $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('找不到附件', 404);
+    $fp = meeting_attach_dir($db) . basename((string)$a['file_name']);
+    if (!is_file($fp)) jerr('檔案不存在（可能已被移動或附件路徑設定已變更）：'.$a['file_name'], 404);
+    $ext = strtolower(pathinfo($a['file_name'], PATHINFO_EXTENSION));
+    $mime = ['pdf'=>'application/pdf','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png',
+             'gif'=>'image/gif','webp'=>'image/webp','bmp'=>'image/bmp','txt'=>'text/plain; charset=utf-8'][$ext] ?? 'application/octet-stream';
+    $inline = (bool)preg_match('#^(image/|application/pdf|text/)#', $mime);
+    header_remove('Content-Type');
+    header('Content-Type: '.$mime);
+    header('Content-Length: '.filesize($fp));
+    header('Content-Disposition: '.($inline ? 'inline' : 'attachment').'; filename*=UTF-8\'\''.rawurlencode((string)($a['original_name'] ?: $a['file_name'])));
+    readfile($fp);
+    exit;
+}
+
+/* ===== 附件儲存路徑 / 簽到表 AS 文件綁定設定（限管理員） ===== */
+case 'attach_setting_save': {
+    if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
+    meeting_setting_save($db, 'meeting_nas_dir', trim((string)($_POST['nas_dir'] ?? '')));
+    jout(['attach_nas_dir'=>meeting_setting_get($db, 'meeting_nas_dir', '')]);
+}
+case 'as_doc_signsheet_save': {
+    if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
+    eg_asdoc_save($db, 'meeting_signsheet', (int)($_POST['doc_id'] ?? 0), $uname);
+    jout(['as_doc_signsheet'=>eg_asdoc_get($db, 'meeting_signsheet')]);
+}
+case 'asdoc_list': {
+    if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
+    jout(['docs'=>eg_asdoc_list($db)]);
+}
+
+/* 合併列印「製表人」候選：出席者中屬於業務部門(含子部門)且職稱有設職級者，取職級最基層的那一位(多人時列出讓使用者選) */
+case 'preparer_candidates': {
+    $mid = (int)($_GET['meeting_id'] ?? 0);
+    $m = meeting_load($db, $mid);
+    if (!meeting_can_view($db, $uid, $perms, $m)) jerr('無權檢視此會議記錄', 403);
+    jout(['candidates'=>meeting_preparer_candidates($db, $mid)]);
 }
 
 default: jerr('未知的操作：'.$action);

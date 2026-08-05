@@ -8,18 +8,21 @@
 include_once __DIR__ . '/approval_lib.php';
 include_once __DIR__ . '/org_role_lib.php';
 include_once __DIR__ . '/role_features_helper.php';
+include_once __DIR__ . '/attach_lib.php';
+include_once __DIR__ . '/asdoc_lib.php';
 
 const MEETING_FEATURES = [
     ['code'=>'meeting_view',      'group'=>'view', 'label'=>'檢閱會議記錄列表（沒勾也看得到自己的草稿、有簽核/出席到的會議）'],
     ['code'=>'meeting_view_all',  'group'=>'view', 'label'=>'檢視全部人員建立的會議記錄（不含他人尚未送出的草稿）'],
     ['code'=>'meeting_edit',      'group'=>'op',   'label'=>'新增/編輯/送出會議記錄'],
     ['code'=>'meeting_print',     'group'=>'op',   'label'=>'列印（會議記錄／空白簽到表）'],
+    ['code'=>'meeting_kpi_insert','group'=>'op',   'label'=>'可將本月出貨目標達成率插入會議記錄'],
     ['code'=>'meeting_admin',     'group'=>'op',   'label'=>'模組設定、刪除會議記錄、修改他人已送出的記錄'],
 ];
 const MEETING_DEFAULT_ROLE_FEATURES = [
     'meeting_view'  => ['meeting_view'],
     'meeting_edit'  => ['meeting_edit', 'meeting_view', 'meeting_print'],
-    'meeting_admin' => ['meeting_admin', 'meeting_edit', 'meeting_view', 'meeting_view_all', 'meeting_print'],
+    'meeting_admin' => ['meeting_admin', 'meeting_edit', 'meeting_view', 'meeting_view_all', 'meeting_print', 'meeting_kpi_insert'],
 ];
 
 /* ============================================================
@@ -80,6 +83,21 @@ function meeting_ensure_schema(PDO $db): void {
         gm_comment TEXT NULL COMMENT '總經理逐筆回覆意見(選填)',
         KEY idx_meeting (meeting_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='會議記錄項目(上級指示要項/會議要項)'");
+
+    // 附件（手動輸入類型/說明的自由文字，非固定分類）；status: temp=草稿暫存(meeting_id=0)、active=已隨會議存檔
+    $db->exec("CREATE TABLE IF NOT EXISTS meeting_attach (
+        attach_id INT AUTO_INCREMENT PRIMARY KEY,
+        meeting_id INT NOT NULL DEFAULT 0,
+        file_name VARCHAR(120) NOT NULL COMMENT '實體檔名(亂數,只存檔名不存路徑)',
+        original_name VARCHAR(200) NULL,
+        attach_type VARCHAR(100) NULL COMMENT '附件類型/說明(使用者手動輸入)',
+        file_size INT NULL,
+        status VARCHAR(10) NOT NULL DEFAULT 'active',
+        expire_at DATETIME NULL COMMENT 'temp暫存到期時間(轉正時清空)',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        KEY idx_meeting (meeting_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='會議記錄附件'");
 
     // 常用設定：主題綁地點綁時間，套用後仍可自行修改（管理員維護）
     $db->exec("CREATE TABLE IF NOT EXISTS meeting_preset (
@@ -149,6 +167,7 @@ function meeting_perms(PDO $db, ?array $u): array {
         'canView'    => $has('meeting_view') || $has('meeting_edit') || $has('meeting_admin') || true,   // 每個登入者至少看得到自己的草稿/相關會議
         'canViewAll' => $has('meeting_view_all') || $has('meeting_admin'),
         'canPrint'   => $has('meeting_print') || $has('meeting_admin'),
+        'canKpiInsert' => $has('meeting_kpi_insert') || $has('meeting_admin'),
     ];
 }
 
@@ -369,4 +388,46 @@ function meeting_kpi_month_summary(PDO $db, int $year, int $month): array {
         'ship_amount'=>round($shipAmount), 'return_amount'=>round($returnAmount), 'revenue'=>round($revenue),
         'achieve_rate'=>$targetAmount > 0 ? round($revenue / $targetAmount * 100, 2) : 0,
     ];
+}
+
+/* ============================================================
+ * 附件路徑（比照 ai-rules/07，DB只存檔名，路徑即時組）
+ * ============================================================ */
+function meeting_attach_dir(PDO $db): string {
+    return eg_attach_dir($db, 'meeting_nas_dir', '會議紀錄');
+}
+function meeting_setting_get(PDO $db, string $key, string $default = ''): string {
+    try {
+        $st = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key=?");
+        $st->execute([$key]);
+        $v = $st->fetchColumn();
+        return ($v === false || $v === null) ? $default : (string)$v;
+    } catch (Throwable $e) { return $default; }
+}
+function meeting_setting_save(PDO $db, string $key, string $value): void {
+    $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
+                  ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)")->execute([$key, $value]);
+}
+
+/* ============================================================
+ * 合併列印「製表人」解析：出席者中屬於業務部門(含子部門)、且在職務職稱設定裡職稱有設職級者，
+ * 取職級最低(最基層主管)的那一位；同職級多人時全部回傳讓使用者選。
+ * ============================================================ */
+function meeting_preparer_candidates(PDO $db, int $meetingId): array {
+    $deptIds = eg_org_dept_ids($db, 'sales_dept');
+    if (!$deptIds) return [];
+    $in = implode(',', array_fill(0, count($deptIds), '?'));
+    $st = $db->prepare("SELECT a.user_id, a.user_name, MIN(pl.level) AS best_level
+                        FROM meeting_attendee a
+                        JOIN user_department_position_map m ON m.user_id=a.user_id AND m.department_id IN ($in)
+                        JOIN position_level pl ON pl.position_id=m.position_id AND pl.level IS NOT NULL
+                        WHERE a.meeting_id=?
+                        GROUP BY a.user_id, a.user_name");
+    $st->execute(array_merge($deptIds, [$meetingId]));
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return [];
+    $maxLevel = max(array_map(fn($r) => (int)$r['best_level'], $rows)); // level 數字越大＝職級越基層
+    $out = [];
+    foreach ($rows as $r) if ((int)$r['best_level'] === $maxLevel) $out[] = ['id'=>(int)$r['user_id'], 'name'=>$r['user_name']];
+    return $out;
 }
