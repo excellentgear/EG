@@ -9976,6 +9976,18 @@ echo "</script>\n";
                 transferBtn.textContent = '移';
                 btnCol.appendChild(transferBtn);
 
+                // 回廠／報廢：這一關已經送出去過（曾指定廠商）才顯示，記錄回廠數量/報廢數量到加工單流水帳
+                if (proc.maker_id_no) {
+                    var returnBtn = document.createElement('button');
+                    returnBtn.type = 'button';
+                    returnBtn.className = 'btn btn-default btn-xs';
+                    returnBtn.style.cssText = 'background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;';
+                    returnBtn.title = '記錄回廠數量／報廢數量';
+                    returnBtn.textContent = '回廠';
+                    (function(p, rd){ returnBtn.onclick = function(){ openOutsourceReturnModal(p, rd); }; })(proc, rowData);
+                    btnCol.appendChild(returnBtn);
+                }
+
         }
         div.appendChild(btnCol);
 
@@ -10025,6 +10037,77 @@ echo "</script>\n";
             div.title = '目前製程';
         }
         return div;
+    }
+
+    // ── 回廠／報廢 Modal（加工單流水帳：src/common/bom_outsource_lib.php）──────────
+    // 「本次回廠/報廢」＝累加（廠商分批補件時可按多次，累加到等於送出數量才自動結清）；
+    // 「直接修正報廢總數」＝覆蓋，供數量填錯時的手動訂正，不影響已記錄的回廠數量。
+    function openOutsourceReturnModal(proc, rowData) {
+        var ex = document.getElementById('outsource-return-modal');
+        if (ex) ex.remove();
+        var overlay = document.createElement('div');
+        overlay.id = 'outsource-return-modal';
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;justify-content:center;align-items:flex-start;z-index:10070;padding:40px 0;overflow-y:auto;';
+        overlay.onclick = function(e){ if (e.target === overlay) overlay.remove(); };
+        var box = document.createElement('div');
+        box.style.cssText = 'background:#fff;padding:20px;border-radius:6px;box-shadow:0 4px 20px rgba(0,0,0,.3);width:420px;max-width:95%;';
+        box.onclick = function(e){ e.stopPropagation(); };
+        box.innerHTML =
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #E4D3BC;">'
+          + '  <h4 style="margin:0;color:#6B4423;">回廠／報廢：' + escapeHtml(rowData.bom) + ' / ' + escapeHtml(proc.process_no) + ' ' + escapeHtml(proc.ProcessName||'') + '</h4>'
+          + '  <button type="button" id="orm-close" style="background:none;border:none;font-size:1.6rem;cursor:pointer;color:#aaa;line-height:1;">&times;</button>'
+          + '</div>'
+          + '<div id="orm-status" style="font-size:12px;color:#888;margin-bottom:10px;">載入中…</div>'
+          + '<div style="font-size:13px;font-weight:bold;color:#555;margin-bottom:6px;">本次回廠／報廢（累加）</div>'
+          + '<div style="display:flex;gap:8px;margin-bottom:10px;">'
+          + '  <div style="flex:1;"><label style="font-size:12px;">本次回廠數量</label><input type="number" min="0" id="orm-return-qty" class="form-control" value="0"></div>'
+          + '  <div style="flex:1;"><label style="font-size:12px;">本次報廢數量</label><input type="number" min="0" id="orm-scrap-qty" class="form-control" value="0"></div>'
+          + '</div>'
+          + '<button type="button" class="btn btn-primary btn-sm" id="orm-submit-add">確認記錄</button>'
+          + '<hr style="margin:14px 0;">'
+          + '<div style="font-size:13px;font-weight:bold;color:#555;margin-bottom:6px;">直接修正報廢總數 <small style="font-weight:normal;color:#aaa;">（訂正填錯用，覆蓋不累加，不影響回廠數量）</small></div>'
+          + '<div style="display:flex;gap:8px;align-items:flex-end;">'
+          + '  <div style="flex:1;"><label style="font-size:12px;">報廢總數應為</label><input type="number" min="0" id="orm-scrap-fix" class="form-control"></div>'
+          + '  <button type="button" class="btn btn-warning btn-sm" id="orm-submit-fix">確認修正</button>'
+          + '</div>';
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        document.getElementById('orm-close').onclick = function(){ overlay.remove(); };
+
+        var _selfUrl = window.location.pathname.split('/').pop() || 'OreadyReply_ForPm_BaseOfTime2.php';
+        function _refreshStatus() {
+            $.post(_selfUrl, { action: 'get_outsource_batch', bom_ing_fid: proc.bom_ing_fid }, function(r) {
+                var el = document.getElementById('orm-status');
+                if (!el) return;
+                if (!r.success) { el.textContent = '讀取失敗：' + (r.message||''); return; }
+                var ob = r.open_batch;
+                if (!ob) { el.textContent = '尚無流水帳資料（下方送出/回廠功能仍可使用，送出時會自動補建）。'; return; }
+                el.innerHTML = '送出數量 <b>' + ob.send_qty + '</b>　已回廠 <b>' + ob.return_qty + '</b>　已報廢 <b>' + ob.scrap_qty
+                              + '</b>　狀態 <b>' + (ob.status === 'closed' ? '已結清' : '未結清') + '</b>　剩餘良品數量預估 <b>' + r.remaining_good_qty + '</b>';
+                var fixInp = document.getElementById('orm-scrap-fix');
+                if (fixInp && fixInp.value === '') fixInp.placeholder = '目前 ' + ob.scrap_qty;
+            }, 'json');
+        }
+        _refreshStatus();
+
+        document.getElementById('orm-submit-add').onclick = function(){
+            var rq = parseFloat(document.getElementById('orm-return-qty').value) || 0;
+            var sq = parseFloat(document.getElementById('orm-scrap-qty').value) || 0;
+            if (rq <= 0 && sq <= 0) { showTemporaryMessage('回廠數量與報廢數量至少要填一個', false); return; }
+            $.post(_selfUrl, { action: 'record_outsource_return', mode: 'add', bom_ing_fid: proc.bom_ing_fid, return_qty: rq, scrap_qty: sq }, function(r) {
+                showTemporaryMessage(r.message || (r.success ? '已記錄' : '失敗'), !!r.success);
+                if (r.success) { document.getElementById('orm-return-qty').value = 0; document.getElementById('orm-scrap-qty').value = 0; _refreshStatus(); }
+            }, 'json');
+        };
+        document.getElementById('orm-submit-fix').onclick = function(){
+            var abs = document.getElementById('orm-scrap-fix').value;
+            if (abs === '' || parseFloat(abs) < 0) { showTemporaryMessage('請輸入報廢總數', false); return; }
+            if (!confirm('確定要把報廢總數直接修正為 ' + abs + '？（覆蓋，不是累加）')) return;
+            $.post(_selfUrl, { action: 'record_outsource_return', mode: 'fix', bom_ing_fid: proc.bom_ing_fid, scrap_qty_abs: abs }, function(r) {
+                showTemporaryMessage(r.message || (r.success ? '已修正' : '失敗'), !!r.success);
+                if (r.success) { document.getElementById('orm-scrap-fix').value = ''; _refreshStatus(); }
+            }, 'json');
+        };
     }
 
     // ── 新增 BOM Modal ───────────────────────────────────────────────────────

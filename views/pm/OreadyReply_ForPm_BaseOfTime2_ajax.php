@@ -1550,6 +1550,58 @@ else if (isset($_POST['action']) && $_POST['action'] === 'cancel_transfer') {
     exit;
 }
 
+// ── 加工單流水帳：查詢目前這筆製程的送出/回廠/報廢累積數量（回廠按鈕開窗用）──────
+else if (isset($_POST['action']) && $_POST['action'] === 'get_outsource_batch') {
+    session_write_close();
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    require_once '../../src/common/bom_outsource_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $fid = (int)($_POST['bom_ing_fid'] ?? 0);
+    if (!$fid) { echo json_encode(['success'=>false,'message'=>'缺少fid']); exit; }
+    try {
+        $list = eg_bom_outsource_list($db, $fid);
+        $open = eg_bom_outsource_latest_open_batch($db, $fid);
+        echo json_encode(['success'=>true, 'batches'=>$list, 'open_batch'=>$open,
+                          'remaining_good_qty'=>eg_bom_outsource_remaining_good_qty($db, $fid)]);
+    } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
+// ── 加工單流水帳：回廠按鈕──記錄本次回廠數量／報廢數量（累加），或直接修正報廢總數 ────
+else if (isset($_POST['action']) && $_POST['action'] === 'record_outsource_return') {
+    session_write_close();
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    require_once '../../src/common/bom_outsource_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    $fid = (int)($_POST['bom_ing_fid'] ?? 0);
+    $uid = $_SESSION['id'] ?? 'system';
+    if (!$fid) { echo json_encode(['success'=>false,'message'=>'缺少fid']); exit; }
+    try {
+        // 兩種互斥模式：mode=add 本次累加回廠/報廢；mode=fix 直接修正報廢總數（手動訂正用，不影響回廠數量）
+        $mode = ($_POST['mode'] ?? 'add') === 'fix' ? 'fix' : 'add';
+        if ($mode === 'fix') {
+            $scrapAbs = (float)($_POST['scrap_qty_abs'] ?? -1);
+            if ($scrapAbs < 0) { echo json_encode(['success'=>false,'message'=>'請輸入報廢總數']); exit; }
+            $r = eg_bom_outsource_set_scrap($db, $fid, $scrapAbs, $uid);
+            if (!$r) { echo json_encode(['success'=>false,'message'=>'找不到這筆製程的加工單流水帳，無法修正']); exit; }
+            echo json_encode(['success'=>true, 'message'=>'報廢總數已修正為 '.$scrapAbs, 'result'=>$r]);
+        } else {
+            $returnQty = (float)($_POST['return_qty'] ?? 0);
+            $scrapQty  = (float)($_POST['scrap_qty'] ?? 0);
+            if ($returnQty <= 0 && $scrapQty <= 0) { echo json_encode(['success'=>false,'message'=>'回廠數量與報廢數量至少要填一個']); exit; }
+            $r = eg_bom_outsource_record_return($db, $fid, $returnQty, $scrapQty, $uid);
+            $msg = '已記錄回廠 '.$returnQty.'、報廢 '.$scrapQty.'（累積回廠 '.$r['return_qty'].'、累積報廢 '.$r['scrap_qty'].' / 送出 '.$r['send_qty'].'）';
+            if ($r['closed']) $msg .= '，此批已結清。';
+            echo json_encode(['success'=>true, 'message'=>$msg, 'result'=>$r]);
+        }
+    } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
 // ── 標記跳過（僅限N狀態，尚未發包的製程；例如趕件改製程/漏送，確定本站不加工）────
 else if (isset($_POST['action']) && $_POST['action'] === 'mark_skip') {
     session_write_close();
