@@ -33,6 +33,48 @@ if (!function_exists('eg_stamp_base')) {
         } catch (Exception $e) { return null; }
     }
 
+    // 各模組「簽名圖章樣式」設定所使用的 system_settings key → 說明文字。
+    // 新增模組要納入刪除模板前的套用檢查，只要把該模組的設定 key 加進這裡即可，不必動 eg_stamp_template_usages() 本身。
+    if (!defined('EG_STAMP_TPL_SETTINGS')) {
+        define('EG_STAMP_TPL_SETTINGS', [
+            'meeting_stamp_tpl_id'  => '會議紀錄／出席簽到、項目確認簽名',
+            'training_stamp_tpl_id' => '教育訓練／簽到表、訓練紀錄',
+        ]);
+    }
+
+    // 某圖章模板目前被哪些地方套用（清冊登記中 + 各模組簽名圖章樣式設定）；回傳空陣列＝沒有任何套用，可安全刪除。
+    function eg_stamp_template_usages(PDO $db, int $templateId): array {
+        $out = [];
+        if ($templateId <= 0) return $out;
+        try {
+            $st = $db->prepare("SELECT
+                                   CASE WHEN r.position_id IS NOT NULL THEN CONCAT(d.name,'／',p.name)
+                                        WHEN r.user_id IS NOT NULL AND r.dept_id IS NOT NULL THEN CONCAT(u.user_cname,'（',d.name,'）')
+                                        ELSE COALESCE(u.user_cname, d.name) END AS holder_name
+                                 FROM stamp_register r
+                                 LEFT JOIN user u ON u.id = r.user_id
+                                 LEFT JOIN department d ON d.id = r.dept_id
+                                 LEFT JOIN position p ON p.id = r.position_id
+                                 WHERE r.template_id = ? AND r.status = 'active'");
+            $st->execute([$templateId]);
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $name) {
+                $out[] = '清冊登記：' . $name;
+            }
+        } catch (Exception $e) {}
+        try {
+            if (EG_STAMP_TPL_SETTINGS) {
+                $keys = array_keys(EG_STAMP_TPL_SETTINGS);
+                $in = implode(',', array_fill(0, count($keys), '?'));
+                $st = $db->prepare("SELECT setting_key FROM system_settings WHERE setting_key IN ($in) AND setting_value = ?");
+                $st->execute(array_merge($keys, [(string)$templateId]));
+                foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $key) {
+                    $out[] = '模組設定：' . (EG_STAMP_TPL_SETTINGS[$key] ?? $key);
+                }
+            }
+        } catch (Exception $e) {}
+        return $out;
+    }
+
     // 全部掃描章資產對照表（給 eg_stamp.js：姓名→資產）。
     // 只回傳檔案實際存在者；t=檔案 mtime 供前端快取破壞。
     function eg_stamp_asset_map(PDO $db): array {

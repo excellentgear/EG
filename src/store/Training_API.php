@@ -27,7 +27,7 @@ $perms = training_perms($db, $u);
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 // 需求申請單的核准人（申請單位部門主管）多半沒有教育訓練模組任何角色，只是被指派決行一筆申請單，
 // 不能卡在「無教育訓練檢閱權限」——這兩個動作各自在 case 內再驗一次「是不是被指派的那個人」。
-$publicActions = ['request_decide'];
+$publicActions = ['request_decide', 'checkin_meta', 'sign_attendee'];
 if (!$perms['canView'] && !in_array($action, $publicActions, true)) jerr('無教育訓練檢閱權限', 403);
 
 /** 申請人的主要部門（申請單「申請單位」預設值） */
@@ -119,6 +119,7 @@ case 'meta': {
                      'target'=>training_as_doc_name($db,'target'), 'request'=>training_as_doc_name($db,'request'),
                      'signsheet'=>training_as_doc_name($db,'signsheet')],
           'company_name'=>eg_company_full_name($db),
+          'stamp_template'=>training_stamp_template($db),
           'plan_signers'=>training_plan_signers($db),
           'plan_approval'=>training_plan_approval($db, (int)($_GET['year'] ?? date('Y'))),
           'plan_last_modified'=>training_plan_last_modified($db, (int)($_GET['year'] ?? date('Y'))),
@@ -139,7 +140,7 @@ case 'save_settings': {
             'as_doc_plan'=>'training_as_doc_plan', 'as_doc_result'=>'training_as_doc_result',
             'as_doc_target'=>'training_as_doc_target', 'need_approval'=>'training_need_approval',
             'as_doc_request'=>'training_as_doc_request', 'request_need_approval'=>'training_request_need_approval',
-            'as_doc_signsheet'=>'training_as_doc_signsheet'];
+            'as_doc_signsheet'=>'training_as_doc_signsheet', 'stamp_tpl_id'=>'training_stamp_tpl_id'];
     // 休息時段（HH:MM 字串）：兩欄都空＝不扣休息；只填一欄視為未設定
     $bs = tr_norm_time($_POST['break_start'] ?? null);
     $be = tr_norm_time($_POST['break_end'] ?? null);
@@ -183,7 +184,16 @@ case 'save_settings': {
           'doc_name'=>['plan'=>training_as_doc_name($db,'plan'), 'result'=>training_as_doc_name($db,'result'),
                      'target'=>training_as_doc_name($db,'target'), 'request'=>training_as_doc_name($db,'request'),
                      'signsheet'=>training_as_doc_name($db,'signsheet')],
+          'stamp_template'=>training_stamp_template($db),
           'cat_internal_eff'=>training_category_id($db, 'internal'), 'cat_external_eff'=>training_category_id($db, 'external')]);
+}
+
+/* 簽名圖章樣式可選清單（限訓練管理員；圖章管理→線上圖章設計 的啟用中模板） */
+case 'stamp_tpl_options': {
+    if (!$perms['canAdmin']) jerr('無設定權限（限訓練管理員）', 403);
+    jout(['templates'=>$db->query("SELECT p.id, p.tpl_name, t.type_name
+                                    FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
+                                    WHERE p.is_active=1 ORDER BY p.tpl_name")->fetchAll(PDO::FETCH_ASSOC)]);
 }
 
 /* ---------- 年度訓練計劃表送審（見 ai-rules/17-審核通知標準） ---------- */
@@ -432,7 +442,7 @@ case 'session_detail': {
     $dq = $db->prepare("SELECT day_no, day_date, start_time, end_time, break_minutes, hours FROM training_session_day
                         WHERE session_id=? ORDER BY day_no, day_date");
     $dq->execute([$sid]);
-    $aq = $db->prepare("SELECT a.user_id, a.user_name, a.dept_name, a.position_name, a.attended, a.signed, a.eval_result, a.eval_score, a.eval_note
+    $aq = $db->prepare("SELECT a.user_id, a.user_name, a.dept_name, a.position_name, a.attended, a.signed, a.signed_at, a.eval_result, a.eval_score, a.eval_note
                         FROM training_attendee a
                         LEFT JOIN user_department_position_map m ON m.user_id=a.user_id AND m.is_main=1
                         LEFT JOIN department d ON d.id=m.department_id
@@ -455,6 +465,45 @@ case 'session_detail': {
           'days'=>$dq->fetchAll(PDO::FETCH_ASSOC), 'attendees'=>$aq->fetchAll(PDO::FETCH_ASSOC),
           'attachments'=>training_attachments($db, $sid),
           'ojt_items'=>$oq->fetchAll(PDO::FETCH_ASSOC), 'ojt_assessor_name'=>$ohRow['assessor_name'] ?? '']);
+}
+
+/* 現場簽到頁 meta：場次基本資料＋名單（含簽到狀態）。免 training_edit 權限（見 $publicActions）——
+   任何登入者都能看到「這場要簽到的人」，但要簽到必須輸入本人密碼才會真的寫入(見 sign_attendee)。 */
+case 'checkin_meta': {
+    $sid = (int)($_GET['session_id'] ?? 0);
+    $st = $db->prepare("SELECT session_id, course_name, year, plan_month, status, train_type, trainer, org_unit
+                        FROM training_session WHERE session_id=?");
+    $st->execute([$sid]);
+    $s = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$s) jerr('找不到場次');
+    if (!in_array($s['status'], ['scheduled','done'], true)) jerr('此場次尚未確認開課，尚無可簽到名單');
+    $dq = $db->prepare("SELECT day_no, day_date, start_time, end_time FROM training_session_day WHERE session_id=? ORDER BY day_no, day_date");
+    $dq->execute([$sid]);
+    $aq = $db->prepare("SELECT a.user_id, a.user_name, a.dept_name, a.position_name, a.signed, a.signed_at
+                        FROM training_attendee a
+                        LEFT JOIN user_department_position_map m ON m.user_id=a.user_id AND m.is_main=1
+                        LEFT JOIN department d ON d.id=m.department_id
+                        LEFT JOIN position p ON p.id=m.position_id
+                        WHERE a.session_id=?
+                        ORDER BY COALESCE(d.sort_order,999), COALESCE(p.sort_order,999), a.user_name");
+    $aq->execute([$sid]);
+    jout(['session'=>$s, 'days'=>$dq->fetchAll(PDO::FETCH_ASSOC), 'attendees'=>$aq->fetchAll(PDO::FETCH_ASSOC),
+          'stamp_template'=>training_stamp_template($db)]);
+}
+
+/* 現場簽到：選人（不是密碼反查身分）→ 輸入本人密碼驗證 → 寫入 signed/signed_at/sign_method，比照 meeting_record 的密碼簽到模式 */
+case 'sign_attendee': {
+    $sid = (int)($_POST['session_id'] ?? 0);
+    $forUid = (int)($_POST['user_id'] ?? 0);
+    $password = (string)($_POST['password'] ?? '');
+    $st = $db->prepare("SELECT att_id FROM training_attendee WHERE session_id=? AND user_id=?");
+    $st->execute([$sid, $forUid]);
+    $attId = (int)$st->fetchColumn();
+    if (!$attId) jerr('此人員不在本次名單內');
+    $v = training_verify_own_password($db, $forUid, $password);
+    if (!$v['ok']) jerr($v['msg']);
+    $db->prepare("UPDATE training_attendee SET signed=1, signed_at=NOW(), sign_method='pwd' WHERE att_id=?")->execute([$attId]);
+    jout(['att_id'=>$attId, 'signed_at'=>date('Y-m-d H:i:s')]);
 }
 
 /* ---------- 上課地點主檔（設定後可下拉選擇） ---------- */

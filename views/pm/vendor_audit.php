@@ -1345,7 +1345,10 @@ function auditFormOneVersion(o, mode){
     var prodMap = {raw:'原料', outsource:'委外加工件', packaging:'包材'};
     var prodBoxes = ['raw','outsource','packaging'].map(function(k){ return (o.prodType===k?'☑':'□')+prodMap[k]; }).join('　');
     var modeMap = {first:'首次稽核', again:'次稽核', self:'自我評量'};
-    var modeBoxes = ['first','again','self'].map(function(k){ return (o.mode===k?'☑':'□')+modeMap[k]; }).join('　');
+    // 供應商自主評核版(mode==='self')本來就只有「自我評量」這一種可能，固定勾選；
+    // 人員實地審查/異常檢核版依該筆紀錄真實的稽核狀況(o.mode)顯示（可能是首次或次稽核）
+    var modeForBoxes = (mode === 'self') ? 'self' : o.mode;
+    var modeBoxes = ['first','again','self'].map(function(k){ return (modeForBoxes===k?'☑':'□')+modeMap[k]; }).join('　');
     var info = '<table class="pf-info"><tr>'
         + '<td>供應商：'+(o.maker?esc(o.maker):'________________')+'</td>'
         + '<td>日期：'+(o.dateStr?esc(o.dateStr):'____ / ____ / ____')+'</td></tr>'

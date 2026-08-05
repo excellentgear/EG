@@ -712,6 +712,11 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 文件改編號不必回來改設定。未對應＝該表不印文件編號（見 <b>ai-rules/16 列印文件標準</b>）。</div>
 
             <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
+            <label>簽到表／訓練紀錄等自動產生的簽名圖章樣式</label>
+            <select id="setStampTpl"><option value="0">（預設印章樣式）</option></select>
+            <div class="tr-hint" style="margin-top:6px;">套用哪個模板請到「圖章管理 → 線上圖章設計」建立/挑選；有上傳掃描實體章的人一律優先用掃描章，這裡只影響沒掃描章時自動產生的印章樣式。</div>
+
+            <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
             <label>教育訓練需求申請單是否需要主管簽核</label>
             <select id="setReqNeedAppr">
                 <option value="0">免簽核（送出即視同核准，列印仍自動蓋上核准圖章＝申請單位主管）</option>
@@ -844,6 +849,18 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
     </div>
 </div></div>
 
+<!-- 現場簽到（免編輯權限；選人→輸入本人密碼→Enter，比照會議記錄的密碼簽到模式） -->
+<div class="tr-mask" id="checkinMask"><div class="tr-modal">
+    <div class="m-head"><span>現場簽到</span><span class="m-close" onclick="closeMask('checkinMask')">✕</span></div>
+    <div class="m-body">
+        <div id="checkinInfo" style="margin-bottom:8px;color:#5b3a1e;"></div>
+        <table class="att-tbl"><thead><tr><th>部門</th><th>職稱</th><th>姓名</th><th style="width:180px;">簽到</th></tr></thead>
+            <tbody id="checkinBody"></tbody></table>
+        <div class="tr-hint" style="margin-top:8px;">共用一台裝置輪流簽：選自己的姓名那一列，輸入<b>本人密碼</b>按 Enter 即完成簽到（不是密碼反查身分，密碼只用來驗證是不是本人）。</div>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('checkinMask')">關閉</button></div>
+</div></div>
+
 <!-- 使用說明 modal（鐵律7） -->
 <div class="tr-mask" id="helpUseMask"><div class="tr-modal wide">
     <div class="m-head"><span>使用說明 — 教育訓練管理</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
@@ -856,7 +873,8 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         <b>③登錄完成</b>：上完課勾實到、填評鑑結果（可批次）、上傳簽到表掃描等附件 → 狀態轉「已完成」，才計入達成率。<br>
         <b>④送審計劃表</b>：工具列「送審計劃表」把年度計畫送審核→核准（是否需要送審在模組設定切換）。<br>
         <b>⑤教育訓練需求申請單</b>（2-MM-01-05）：「需求申請」分頁可新增申請單（草稿）、儲存並送出（申請單位主管核准，或模組設定免簽核自動核准），
-        訓練管理員將已核准的申請按「轉為計畫」帶入①的新增計畫視窗確認後存檔即完成轉換。
+        訓練管理員將已核准的申請按「轉為計畫」帶入①的新增計畫視窗確認後存檔即完成轉換。<br>
+        <b>⑥現場簽到</b>：場次為「已排定」或「已完成」時，清單上會出現「現場簽到」按鈕，開啟後不需要編輯權限，共用一台裝置給學員自己選姓名、輸入<b>本人密碼</b>按 Enter 完成電子簽到（密碼只驗證是不是本人，不是密碼反查身分）。
         <h4>重要行為</h4>
         ・<b>訓練需求申請人</b>是獨立角色（在使用者權限設定的「教育訓練管理」角色指派裡指派），只能新增/送出/檢視申請單，
         看得到訓練場次列表（唯讀）但**不能**修改計畫或任何設定，避免誤把整頁編輯權限一起給出去。<br>
@@ -864,9 +882,10 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         ・已排定/已完成的場次，<b>計畫內容僅訓練管理員可改</b>。<br>
         ・刪除場次要連續兩次輸入大寫 <b>Y</b>，且會一併刪除附件實體檔。<br>
         ・點清單任一列可展開該場次明細（大綱、時段、名單與評鑑、附件）。<br>
-        ・「達標狀況」分頁依顯示單位統計；子部門可合併成一列，也可排除不列入的部門。
+        ・「達標狀況」分頁依顯示單位統計；子部門可合併成一列，也可排除不列入的部門。<br>
+        ・「檢視」內的「列印訓練紀錄」版面比照簽到表（課程資訊、逐天分頁、序/部門/職稱/姓名/簽名/評鑑結果/備註），現場簽到過的人自動印出印章，表尾為人資主管／講師兩格印章；此表目前沿用簽到表的表頭名稱、不單獨印文件編號。
         <h4>設定入口</h4>
-        工具列「模組設定」：班別／休息時段／行事曆類別／附件路徑（一般）、排除部門（達標統計）、AS 文件編號與是否送審（文件編號與送審）。<br>
+        工具列「模組設定」：班別／休息時段／行事曆類別／附件路徑（一般）、排除部門（達標統計）、AS 文件編號與是否送審（文件編號與送審）、<b>簽到表/訓練紀錄的簽名圖章樣式</b>（套用「圖章管理→線上圖章設計」哪個模板；未設定＝預設印章樣式）。<br>
         簽章人員（人事／審核／核准）一律取自全站
         <a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>，本頁不另外設定。
         <h4>權限角色</h4>
@@ -979,6 +998,7 @@ function loadMeta(cb){
         ATT_DIRS = {nas:m.attach_nas_dir||'', root:m.attach_root||''};
         GROUPS = m.dept_groups || []; UNITS = m.units || [];
         AS_DOCS = m.as_docs || []; DOC_NO = m.doc_no || {}; DOC_NAME = m.doc_name || {}; COMPANY = m.company_name || '';
+        SETTINGS.stamp_template = m.stamp_template || null;
         TR_FEATURES = m.features || [];
         MY_DEPTS = m.my_depts || []; REQ_SIGNERS = m.request_signers || {};
         window.__ownCompany = COMPANY;      // eg_stamp.js 畫章時要用（公司全名）
@@ -1081,6 +1101,10 @@ function renderTable(){
         html += '<td>'+dateRangeText(r)+'</td>';
         html += '<td style="white-space:nowrap;" onclick="event.stopPropagation();">';
         html += '<span class="tr-op" onclick="openView('+r.session_id+')" title="檢視完整內容（含名單與評鑑結果）"><i class="fa fa-search-plus"></i>檢視</span>';
+        if (r.status==='scheduled' || r.status==='done') {
+            // 免編輯權限：現場裝置給學員自己選人輸入密碼簽到，不需要 training_edit
+            html += '<span class="tr-op" onclick="openCheckin('+r.session_id+')" title="現場裝置給學員自己選人輸入本人密碼簽到"><i class="fa fa-pencil-square-o"></i>現場簽到</span>';
+        }
         if (PERMS.canEdit) {
             // 已排定/已完成＝計畫已定案，只有訓練管理員可再改計畫內容
             var lock = (r.status==='scheduled' || r.status==='done') && !PERMS.canAdmin;
@@ -2207,6 +2231,7 @@ function openSetting(){
     $('#setDocTarget').html(dh).val(SETTINGS.training_as_doc_target||'');
     $('#setDocRequest').html(dh).val(SETTINGS.training_as_doc_request||'');
     $('#setDocSignsheet').html(dh).val(SETTINGS.training_as_doc_signsheet||'');
+    loadStampTplOptions();
     var sbr = String(SETTINGS.training_signsheet_blank_rows||'0');
     if (sbr==='fill16'){ $('#setSignBlankMode').val('fill16'); $('#setSignBlankN').val(''); }
     else if (sbr && sbr!=='0'){ $('#setSignBlankMode').val('fixed'); $('#setSignBlankN').val(sbr); }
@@ -2260,12 +2285,13 @@ function saveSettings(){
         as_doc_plan:$('#setDocPlan').val(), as_doc_result:$('#setDocResult').val(),
         as_doc_target:$('#setDocTarget').val(), need_approval:$('#setNeedAppr').val(),
         as_doc_request:$('#setDocRequest').val(), request_need_approval:$('#setReqNeedAppr').val(),
-        as_doc_signsheet:$('#setDocSignsheet').val(),
+        as_doc_signsheet:$('#setDocSignsheet').val(), stamp_tpl_id:$('#setStampTpl').val(),
         signsheet_blank_rows:(function(){ var m=$('#setSignBlankMode').val();
             return m==='fill16' ? 'fill16' : (m==='fixed' ? ($('#setSignBlankN').val()||'0') : '0'); })(),
         plan_sign_date:$('#setSignDate').val()}, function(res){
         if (!res.ok){ alert(res.error||'設定儲存失敗'); return; }
         SETTINGS = res.settings||{}; UNITS = res.units||UNITS; DOC_NO = res.doc_no||DOC_NO; DOC_NAME = res.doc_name||DOC_NAME;
+        SETTINGS.stamp_template = res.stamp_template || null;
         TGSTATS = null; if ($('#paneTarget').is(':visible')) loadTargetStats();
         loadPlanStatus();
         CAT_EFF = {internal:res.cat_internal_eff||null, external:res.cat_external_eff||null};
@@ -2274,6 +2300,18 @@ function saveSettings(){
         saveAttachPath(function(){ closeMask('setMask');
             alert('設定已儲存。日後行事曆類別改名不影響綁定（存的是類別 id）；附件路徑改變不影響舊附件（DB 只存檔名）。'); });
     }, 'json').fail(function(x){ alert('設定儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+/* 簽到表/訓練紀錄等自動產生印章要套用的模板：SETTINGS.stamp_template 由 meta/save_settings 帶回（見 trStampSchema/egStampHtml） */
+function loadStampTplOptions(){
+    $.getJSON(API, {action:'stamp_tpl_options'}, function(res){
+        if (!res.ok) return;
+        var cur = SETTINGS.stamp_template ? SETTINGS.stamp_template.id : 0;
+        var h = '<option value="0">（預設印章樣式）</option>';
+        (res.templates||[]).forEach(function(t){
+            h += '<option value="'+t.id+'"'+(String(t.id)===String(cur)?' selected':'')+'>'+(t.type_name?esc(t.type_name)+'｜':'')+esc(t.tpl_name)+'</option>';
+        });
+        $('#setStampTpl').html(h);
+    });
 }
 /* 附件路徑（限訓練管理員；沒改就不打這支 API） */
 function saveAttachPath(cb){
@@ -2475,10 +2513,13 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount){
 }
 /* 簽章區：核准（最高核准人員）／審核（人事表單審核者）／人事（人事簽章人員）
    免送審＝三欄一起顯示、日期同送審日；需送審＝依實際簽核結果顯示 */
-/* 產生一顆簽章圖章（走共用 eg_stamp.js；載不到時退回姓名文字，至少不會整格空白） */
-function egStampHtml(name, date){
+/* 簽名圖章樣式：模組設定選的「圖章管理→線上圖章設計」模板（未設定＝null，EGStamp.stamp 會退回預設印章樣式） */
+function trStampSchema(){ return SETTINGS.stamp_template ? SETTINGS.stamp_template.schema : null; }
+/* 產生一顆簽章圖章（走共用 eg_stamp.js；載不到時退回姓名文字，至少不會整格空白）；
+   有上傳掃描實體章的人一律優先用掃描章，trStampSchema() 只影響沒掃描章時自動產生的印章樣式。 */
+function egStampHtml(name, date, isDeputy){
     try {
-        if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, date || '', false);
+        if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, date || '', !!isDeputy, trStampSchema());
     } catch (e) {}
     return '<span style="font-size:14px;">'+esc(name)+'</span>'
          + (date ? '<div style="font-size:10px;color:#555;">'+esc(date)+'</div>' : '');
@@ -2640,34 +2681,106 @@ function openView(sid){
             + detailHtml(res));
     }).fail(function(){ $('#viewBody').html('<span style="color:#DD5138;">載入失敗</span>'); });
 }
-/* 列印訓練紀錄（含名單與評鑑結果，AS9100 品質紀錄用） */
+/* 列印訓練紀錄（比照簽到表格式，含名單/簽到章/評鑑結果，AS9100 品質紀錄用）。
+   表頭沿用簽到表已綁定的 AS 文件名稱（DOC_NAME.signsheet），但本表目前無獨立 AS 文件綁定，不印頁尾編號（doc_no 傳空字串）。
+   TODO: 未來若要讓「訓練紀錄表」有自己的文件編號頁尾，需另外新增一組 as_doc 綁定設定（比照 training_as_doc_signsheet 的做法）。 */
 function printRecord(){
     if (!VIEW_RES){ alert('資料尚未載入完成'); return; }
     var res=VIEW_RES, s=res.session, ext=s.train_type==='external';
-    var rows='';
-    (res.attendees||[]).forEach(function(a,i){
-        rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
-            +'<td>'+(+a.attended?'✔':'')+'</td>'
-            +'<td>'+(a.eval_result==='pass'?'合格':a.eval_result==='fail'?'不合格':a.eval_result==='exempt'?'免評鑑':'')+'</td>'
-            +'<td>'+(a.eval_score==null?'':numTrim(a.eval_score))+'</td><td>'+esc(a.eval_note||'')+'</td></tr>';
+    var docTitle = DOC_NAME.signsheet || '簽到表';
+    var course=s.course_name||'（課程名稱）';
+    var lect=ext?('外訓／開課單位：'+(s.org_unit||'')):('講師：'+(s.trainer||''));
+    var emLabel = s.eval_method ? (EVAL_METHODS[s.eval_method]||s.eval_method) : '（未設定）';
+    var outline = $.trim(s.outline||'');
+    var ds = (res.days&&res.days.length) ? res.days
+        : [{day_date:s.done_date||'', start_time:s.start_time||'', end_time:s.end_time||'', hours:s.actual_hours}];
+    var allDates = ds.map(function(d){ return fmtDate(d.day_date)||'?'; });
+    var allDatesLine = ds.length<=1 ? '' : (ds.length<=6
+        ? '全部上課日期：'+allDates.join('、')
+        : '全部上課日期：'+allDates[0]+' ~ '+allDates[allDates.length-1]+'（共 '+ds.length+' 天）');
+    var list = res.attendees || [];
+    var html='';
+    ds.forEach(function(d, di){
+        var tm=(d.start_time||'')+(d.end_time?'~'+d.end_time:'');
+        var hh=(d.hours==null?'':numTrim(d.hours));
+        var when='日期：'+(fmtDate(d.day_date)||'—')+(tm?'　'+tm:'')+'　時數：'+(hh||'—')+' 小時';
+        var rows='';
+        list.forEach(function(a,i){
+            var ev = a.eval_result==='pass'?'合格':a.eval_result==='fail'?'不合格':a.eval_result==='exempt'?'免評鑑':'—';
+            rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
+                +'<td>'+(+a.signed?egStampHtml(a.user_name, fmtDate(a.signed_at)):'')+'</td>'
+                +'<td>'+ev+'</td>'
+                +'<td>'+esc(a.eval_note||'')+'</td></tr>';
+        });
+        html+='<div class="pg'+(di>0?' pgbrk':'')+'">'
+            +'<table class="sf"><thead>'
+            +'<tr><th colspan="7" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
+            +'<div class="tt">'+esc(docTitle)+'</div></div></th></tr>'
+            +'<tr><td colspan="7" class="sf-i">課程名稱：'+esc(course)+(ds.length>1?'　（第 '+(di+1)+' / '+ds.length+' 天）':'')+'</td></tr>'
+            +(allDatesLine?'<tr><td colspan="7" class="sf-i">'+esc(allDatesLine)+'</td></tr>':'')
+            +'<tr><td colspan="7" class="sf-i">評鑑方式：'+esc(emLabel)+'</td></tr>'
+            +'<tr><td colspan="7" class="sf-i">'+esc(lect)+'　地點：'+esc(s.location||'—')+'</td></tr>'
+            +'<tr><td colspan="7" class="sf-i">'+esc(when)+'</td></tr>'
+            +(outline?'<tr><td colspan="7" class="sf-i ol">課程大綱：'+esc(outline)+'</td></tr>':'')
+            +'<tr><th style="width:36px;">序</th><th>部門</th><th>職稱</th><th>姓名</th><th>簽名</th>'
+            +'<th>評鑑結果</th><th>備註</th></tr>'
+            +'</thead><tbody>'+(rows||'<tr><td colspan="7">（無名單）</td></tr>')+'</tbody></table>'
+            +'</div>';
     });
-    var days=(res.days||[]).map(function(d){ return fmtDate(d.day_date)+' '+((d.start_time||'')+(d.end_time?'~'+d.end_time:'')); }).join('　');
-    var html='<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div><div class="tt">教育訓練紀錄表</div></div>'
-        +'<table class="sf-info"><tr><td colspan="2">課程名稱：'+esc(s.course_name)+'</td></tr>'
-        +'<tr><td>'+(ext?'外訓／開課單位：'+esc(s.org_unit||''):'內訓／講師：'+esc(s.trainer||''))+'</td>'
-        +'<td>對象部門：'+esc((res.dept_names&&res.dept_names.length)?res.dept_names.join('、'):'全公司')+'</td></tr>'
-        +'<tr><td>上課日期：'+esc(days||'—')+'</td><td>地點：'+esc(s.location||'—')
-        +'　時數：'+(s.actual_hours==null?'—':numTrim(s.actual_hours))+'</td></tr>'
-        +'<tr><td colspan="2">評鑑方式：'+(s.eval_method?esc(EVAL_METHODS[s.eval_method]||s.eval_method):'—')+'</td></tr>'
-        +(s.outline?'<tr><td colspan="2" class="ol">課程大綱：'+esc(s.outline)+'</td></tr>':'')+'</table>'
-        +'<table class="sf"><thead><tr><th style="width:36px;">序</th><th>部門</th><th>職稱</th><th>姓名</th>'
-        +'<th style="width:44px;">實到</th><th style="width:70px;">評鑑結果</th><th style="width:50px;">分數</th><th>備註</th></tr></thead>'
-        +'<tbody>'+(rows||'<tr><td colspan="8">（無名單）</td></tr>')+'</tbody></table>'
-        +'<div style="margin-top:14px;font-size:13px;">講師/主辦簽章：______________　　單位主管簽章：______________　　管理代表：______________</div>';
-    var css='table.sf{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}table.sf th,table.sf td{border:1px solid #333;padding:5px;text-align:center;}'
-        +'table.sf-info{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;}table.sf-info td{border:1px solid #999;padding:5px 8px;text-align:left;}'
-        +'table.sf-info td.ol{white-space:pre-wrap;line-height:1.6;}';
-    egPrintWindow('教育訓練紀錄表', html, css, '', false);
+    // 表尾兩格圖章：人資主管（org_role_lib 解出的人資簽章人）／講師（外訓沒有系統內人員可蓋章，改印開課單位純文字）
+    var signDt = fmtDate(s.done_date) || META.today;
+    html += '<table class="pt-sign"><tr>'
+        + '<td><div class="lb">人資主管</div><div class="stamp-box">'
+        + ((SIGNERS.hr_signer&&SIGNERS.hr_signer.name)?egStampHtml(SIGNERS.hr_signer.name, signDt):'')+'</div></td>'
+        + '<td><div class="lb">講師</div><div class="stamp-box">'
+        + (ext ? esc(s.org_unit||'') : (s.trainer?egStampHtml(s.trainer, signDt):''))+'</div></td>'
+        + '</tr></table>';
+    var css='table.sf{width:100%;border-collapse:collapse;font-size:15px;margin-top:8px;}'
+        +'table.sf th,table.sf td{border:1px solid #333;padding:10px 6px;text-align:center;height:46px;}'
+        +'table.sf td.sf-i{border:1px solid #999;padding:5px 8px;text-align:left;font-size:13px;height:auto;background:#fff;}'
+        +'table.sf td.sf-i.ol{white-space:pre-wrap;line-height:1.5;}'
+        +'.pgbrk{page-break-before:always;}'
+        +'.pt-sign td{width:50%;}';
+    egPrintWindow(docTitle, html, css, '', false, true);
+}
+
+/* ---------- 現場簽到（免 training_edit 權限；後端 checkin_meta/sign_attendee 已在 $publicActions 白名單） ---------- */
+var CHECKIN = null;
+function openCheckin(sid){
+    CHECKIN = null;
+    $('#checkinInfo').text('載入中…'); $('#checkinBody').html('');
+    openMask('checkinMask');
+    $.getJSON(API, {action:'checkin_meta', session_id:sid}, function(res){
+        if (!res.ok){ $('#checkinInfo').html('<span style="color:#DD5138;">'+esc(res.error||'載入失敗')+'</span>'); return; }
+        CHECKIN = res;
+        $('#checkinInfo').html('<b>'+esc(res.session.course_name)+'</b>　'+res.session.year+' 年 '+res.session.plan_month+' 月');
+        renderCheckinBody();
+    }).fail(function(x){ $('#checkinInfo').html('<span style="color:#DD5138;">'+esc(x.responseJSON&&x.responseJSON.error||'載入失敗')+'</span>'); });
+}
+function renderCheckinBody(){
+    var sid = CHECKIN.session.session_id, h='';
+    (CHECKIN.attendees||[]).forEach(function(a){
+        var signed = +a.signed===1;
+        h += '<tr data-uid="'+a.user_id+'"><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
+           + '<td>'+(signed
+                ? egStampHtml(a.user_name, fmtDate(a.signed_at))
+                : '<input type="password" placeholder="本人密碼，按Enter簽到" id="ck-pw-'+a.user_id+'" data-eg-skip'
+                  + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();checkinSign('+sid+','+a.user_id+');}">')+'</td></tr>';
+    });
+    $('#checkinBody').html(h || '<tr><td colspan="4" style="color:#8a6d45;padding:8px;">尚無名單</td></tr>');
+}
+function checkinSign(sid, uidv){
+    var pw = $('#ck-pw-'+uidv).val();
+    if (!pw){ alert('請輸入密碼'); return; }
+    $.post(API, {action:'sign_attendee', session_id:sid, user_id:uidv, password:pw}, function(res){
+        if (!res.ok){ alert(res.error||'簽到失敗'); $('#ck-pw-'+uidv).val('').select(); return; }
+        var a = (CHECKIN.attendees||[]).filter(function(x){ return String(x.user_id)===String(uidv); })[0];
+        if (a) { a.signed = 1; a.signed_at = res.signed_at; }
+        $('tr[data-uid="'+uidv+'"] td:last-child').html(egStampHtml(a?a.user_name:'', fmtDate(res.signed_at)));
+        var next = (CHECKIN.attendees||[]).filter(function(x){ return !(+x.signed); })[0];
+        if (next) setTimeout(function(){ $('#ck-pw-'+next.user_id).focus(); }, 30);
+        else alert('全員已簽到');
+    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '簽到失敗'); $('#ck-pw-'+uidv).val('').select(); });
 }
 
 /* 通知深連結：?tab=apply 開需求申請分頁；?apply_req=ID 直接開該筆申請單（唯讀或可編視狀態而定） */

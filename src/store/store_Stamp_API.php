@@ -523,6 +523,8 @@ case 'tpl_delete': {
     needManage($canManage);
     $tid = (int)($_POST['id'] ?? 0);
     if ($tid <= 0) jerr('參數錯誤');
+    $usages = eg_stamp_template_usages($db, $tid);
+    if ($usages) jerr("此模板已被套用，無法刪除：\n" . implode("\n", $usages) . "\n請先移除套用後再刪除。");
     $db->beginTransaction();
     $db->prepare("DELETE FROM stamp_serial WHERE template_id=?")->execute([$tid]);
     $db->prepare("DELETE FROM stamp_template WHERE id=?")->execute([$tid]);
