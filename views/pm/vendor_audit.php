@@ -224,6 +224,30 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             #vaListPrintHead .tt { font-size:16px; font-weight:bold; margin-top:3px; }
             #vaListPrintHead .sub { font-size:11px; color:#444; margin-top:2px; }
         }
+        /* 供應商品質系統評鑑記錄表「直接列印跳窗畫面」：列印時只留 #rsMask 本身內容，
+           退掉遮罩/彈窗外觀讓它以一般文件方式排版，交給瀏覽器橫式A4原生縮放，不再另建隱藏視窗手工拼版面尺寸。
+           啟用方式：JS 於列印前對 <body> 加上 va-print-rs class，列印完成後移除。 */
+        #rsPrintHead, #rsSignBox, #rsAttachPrintBox { display:none; }
+        @media print {
+            body.va-print-rs .nav_menu, body.va-print-rs .left_col, body.va-print-rs footer,
+            body.va-print-rs .page-title, body.va-print-rs .va-toolbar, body.va-print-rs .va-tabs,
+            body.va-print-rs .va-stat, body.va-print-rs .va-remind, body.va-print-rs .va-table-wrap,
+            body.va-print-rs .va-pager, body.va-print-rs #vaListPrintHead,
+            body.va-print-rs .va-mask:not(#rsMask) { display:none !important; }
+            body.va-print-rs #rsMask { display:block !important; position:static !important; inset:auto !important;
+                background:none !important; z-index:auto !important; }
+            body.va-print-rs #rsMask .va-modal { max-width:none !important; max-height:none !important; margin:0 !important;
+                box-shadow:none !important; border-radius:0 !important; display:block !important; }
+            body.va-print-rs #rsMask .m-head, body.va-print-rs #rsMask .m-foot,
+            body.va-print-rs #rsMask #rsAttachBox { display:none !important; }
+            body.va-print-rs #rsMask .m-body { overflow:visible !important; padding:0 !important; }
+            body.va-print-rs #rsPrintHead, body.va-print-rs #rsSignBox, body.va-print-rs #rsAttachPrintBox { display:block !important; }
+            body.va-print-rs .rs-chart-wrap-live { flex:0 0 420px !important; }
+            body.va-print-rs .rs-chart-wrap-live svg { width:100% !important; height:auto !important; }
+            body.va-print-rs #rsMask table.af-table { font-size:15px !important; }
+            body.va-print-rs #rsMask table.af-table th, body.va-print-rs #rsMask table.af-table td { padding:7px 8px !important; }
+            body.va-print-rs .attach-page { page-break-before:always; }
+        }
     </style>
 </head>
 <body class="nav-sm">
@@ -553,7 +577,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <tbody id="rsCatBody"></tbody></table>
                 <div id="rsConc" class="af-summary" style="margin-top:8px;"></div>
             </div>
-            <div style="flex:0 0 360px;"><div id="rsChart" style="height:320px;"></div></div>
+            <div class="rs-chart-wrap-live" style="flex:0 0 360px;"><div id="rsChart" style="height:320px;"></div></div>
         </div>
         <div class="af-attach" id="rsAttachBox" style="margin-top:10px;">
             <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;"><i class="fa fa-paperclip"></i> 佐證附件（列印後供應商簽名回傳掃描檔）</div>
@@ -1405,8 +1429,6 @@ function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount){
         + 'table.pf-info{width:100%;font-size:13px;margin-top:10px;border-collapse:collapse;}table.pf-info td{padding:5px 6px;border:1px solid #999;}'
         + 'table.pf-sign{width:100%;margin-top:20px;font-size:13px;page-break-inside:avoid;}table.pf-sign td{padding:14px 6px 8px;}'
         + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-        + 'table.pf.rs-table{font-size:15px;}table.pf.rs-table th,table.pf.rs-table td{padding:6px 8px;height:28px;}'
-        + '.rs-chart-wrap{max-width:400px;margin:0 auto;}.rs-chart-wrap svg{width:100% !important;height:auto !important;}'
         + '.attach-page{page-break-before:always;}'
         + '@media print{@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;'
         + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
@@ -1534,34 +1556,43 @@ function vaJudgeBadgeHtml(pass){
         +(pass?'#8A5A2B;color:#8A5A2B;background:#FBEBD2;':'#DD5138;color:#DD5138;background:#FDEAE6;')+'">'
         +(pass?'合格供應商':'不合格')+'</span>';
 }
-function recordSheetHTML(){
-    if(!RS) return '';
-    var t=RS.t, c=RS.c, cfg=RS.cfg, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
-    var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'____';
-    var head='<div style="text-align:center;"><div style="font-size:25px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
-        +'<div style="font-size:19px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
-    var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>加工項目：'+esc(t.main_cat_name||'—')+'</td><td>稽核日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>稽核狀況：'+esc(modeL)+'</td></tr></table>';
-    var rows='<table class="pf rs-table" style="table-layout:fixed;"><colgroup><col style="width:38%;"><col style="width:14%;"><col style="width:16%;"><col style="width:16%;"><col style="width:16%;"></colgroup>'
-        +'<thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th></tr></thead><tbody>';
-    c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*cfg.self_w+k.audit_rate*cfg.audit_w)*10)/10;
-        rows+='<tr><td class="q">'+esc(k.name)+'</td><td>'+k.max+'</td><td>'+k.self_rate+'%</td><td>'+k.audit_rate+'%</td><td>'+comb+'%</td></tr>'; });
-    rows+='<tr style="font-weight:bold;"><td class="q">總成績</td><td>'+c.total_max+'</td><td>'+c.selfR+'%</td><td>'+c.auditR+'%</td><td>'+c.overall+'%</td></tr></tbody></table>';
-    var svg = rsChart ? rsChart.container.querySelector('svg').outerHTML : '';
-    var body = '<div style="display:flex;gap:20px;align-items:center;margin-top:8px;">'
-        + '<div style="flex:0 0 42%;min-width:0;">'+rows+'</div>'
-        + '<div class="rs-chart-wrap" style="text-align:center;flex:1;">'+svg+'</div></div>';
-    var conc='<div style="margin-top:8px;font-size:13px;">綜合評鑑合格率（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）＝<b style="font-size:16px;">'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+cfg.pass_rate+'%'+(t.conclusion?'；建議：'+esc(t.conclusion):'')+'</div>'
-        +'<div style="margin-top:4px;">判定：'+vaJudgeBadgeHtml(c.pass)+'</div>';
+/** 記錄表「直接列印跳窗畫面」：把公司抬頭/簽核印章/附件填進 #rsMask 內原本隱藏的印刷專用區塊，
+ *  加上 body.va-print-rs 後直接 window.print()，讓瀏覽器把畫面上實際看到的表格/雷達圖橫式縮放印出——
+ *  不再另建隱藏視窗手工拼版面尺寸(先前兩次調整仍超出一頁的根源)。CSS 規則見本檔 <style> 內 body.va-print-rs 區塊。 */
+function rsApplyPrintExtras(attachHtml){
+    var t = RS.t, doc = META.record_as_doc, docName = (doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
+    $('#rsPrintHead').html('<div style="font-size:25px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
+        +'<div style="font-size:19px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div>');
     var mgrStamp = (t.status==='approved' && t.signed_by_name) ? vaStampHtml(t.signed_by_name, fmtDate(t.audit_date)||'', !!t.signed_is_deputy) : '';
     var audStamp = t.auditor ? vaStampHtml(t.auditor, fmtDate(t.audit_date)||'') : '';
-    // 這裡是數位自動蓋章(非人工實體蓋印)，不需要 pf-sign 預設給實體印章留的大留白，改用 inline 覆寫縮小版面避免跨頁
-    var sign='<table class="pf-sign" style="margin-top:14px;page-break-inside:avoid;"><tr>'
-        +'<td style="padding:6px 8px;"><div style="font-size:11px;color:#555;">主管</div><div style="margin-top:2px;min-height:90px;">'+mgrStamp+'</div></td>'
-        +'<td style="padding:6px 8px;"><div style="font-size:11px;color:#555;">稽核員</div><div style="margin-top:2px;min-height:90px;">'+audStamp+'</div></td>'
-        +'</tr></table>';
-    return head+info+body+conc+sign;
+    $('#rsSignBox').html('<table class="pf-sign" style="margin-top:14px;page-break-inside:avoid;"><tr>'
+        +'<td style="width:50%;padding:6px 8px;"><div style="font-size:11px;color:#555;">主管</div><div style="margin-top:2px;min-height:90px;">'+mgrStamp+'</div></td>'
+        +'<td style="width:50%;padding:6px 8px;"><div style="font-size:11px;color:#555;">稽核員</div><div style="margin-top:2px;min-height:90px;">'+audStamp+'</div></td>'
+        +'</tr></table>');
+    $('#rsAttachPrintBox').html(attachHtml||'');
 }
-function printRecordSheet(){ if(!RS){alert('無資料');return;} openPrintWindow(recordSheetHTML(), '供應商品質系統評鑑記錄表', (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03', true, true); }
+function rsDirectPrint(docNo){
+    var asTxt = String(docNo||'').replace(/['\\]/g,'');
+    var st = document.getElementById('rsPrintPageStyle');
+    if (!st) { st = document.createElement('style'); st.id = 'rsPrintPageStyle'; document.head.appendChild(st); }
+    st.textContent = '@page{size:A4 landscape;margin:12mm 8mm 16mm;'
+        + (asTxt ? " @bottom-right{content:'"+asTxt+"';font-size:9pt;color:#333;}" : '')
+        + '}';
+    document.body.classList.add('va-print-rs');
+    var cleaned = false;
+    var cleanup = function(){
+        if (cleaned) return; cleaned = true;
+        document.body.classList.remove('va-print-rs');
+        window.removeEventListener('afterprint', cleanup);
+    };
+    window.addEventListener('afterprint', cleanup);
+    setTimeout(function(){ window.print(); setTimeout(cleanup, 1000); }, 50);
+}
+function printRecordSheet(){
+    if (!RS) { alert('無資料'); return; }
+    rsApplyPrintExtras('');
+    rsDirectPrint((META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03');
+}
 
 /* ---------- 記錄表列印附加佐證附件（圖片直接嵌入／PDF 用 pdf.js 轉圖，其餘類型不支援預覽） ---------- */
 var VA_IMG_EXT = ['jpg','jpeg','png','gif','bmp','webp'];
@@ -1645,8 +1676,8 @@ async function vaBuildAttachPrintHTML(attaches){
     return parts.join('');
 }
 
-/** 一次印全部文件＝查核表(直式)＋記錄表(橫式)是兩份不同文件，瀏覽器對同一列印工作中途切換橫直式支援不穩定，
- *  改拆成兩個列印視窗各自跳出列印；記錄表視窗先同步開空白，避免附件非同步處理完才 window.open 被攔截。 */
+/** 一次印全部文件＝查核表(直式,走隱藏視窗手工拼版)＋記錄表(橫式,直接列印#rsMask跳窗畫面本身)是兩份不同文件，
+ *  瀏覽器對同一列印工作中途切換橫直式支援不穩定，改各自獨立跳出列印。 */
 async function printAllDocs(){
     if (!RS) { alert('無資料'); return; }
     var docNo1 = (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2 = (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
@@ -1654,16 +1685,13 @@ async function printAllDocs(){
         mgrApproved: !!(RS.t.status==='approved' && RS.t.signed_by_name), mgrName:RS.t.signed_by_name, mgrDate:fmtDate(RS.t.audit_date), mgrIsDeputy:!!RS.t.signed_is_deputy});
     openPrintWindow(page1, '供應商評鑑稽核查表', docNo1, false, true);
 
-    var w2 = window.open('', '_blank');
-    if (!w2) { alert('請允許彈出視窗以列印'); return; }
-    w2.document.write('<html><head><meta charset="utf-8"><title>供應商品質系統評鑑記錄表</title></head><body style="font-family:\'Microsoft JhengHei\',sans-serif;padding:20px;color:#666;">附件整理中，請稍候…</body></html>');
-
     var attachHtml = '';
     if ((RS.attaches||[]).length) {
         try { attachHtml = await vaBuildAttachPrintHTML(RS.attaches); }
         catch (e) { attachHtml = '<div style="color:#c00;">附件載入發生錯誤，部分附件可能未列印，請至系統個別下載查看。</div>'; }
     }
-    writePrintWindow(w2, recordSheetHTML() + attachHtml, '供應商品質系統評鑑記錄表', docNo2, true, true);
+    rsApplyPrintExtras(attachHtml);
+    rsDirectPrint(docNo2);
 }
 
 /* ---------- CSV ---------- */
