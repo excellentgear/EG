@@ -69,11 +69,11 @@ try {
             $ck = $db->prepare("SELECT id FROM co_editor_preset WHERE module = ? AND owner_id = ? AND name = ?");
             $ck->execute([$module, $uid, $name]);
             if ($exist = (int)$ck->fetchColumn()) {
-                $db->prepare("UPDATE co_editor_preset SET is_public = 0, editors_json = ? WHERE id = ?")->execute([$json, $exist]);
+                $db->prepare("UPDATE co_editor_preset SET is_public = ?, editors_json = ? WHERE id = ?")->execute([$isPublic, $json, $exist]);
                 echo json_encode(['ok' => true, 'id' => $exist]);
             } else {
-                $db->prepare("INSERT INTO co_editor_preset (module, owner_id, name, is_public, editors_json) VALUES (?,?,?,0,?)")
-                   ->execute([$module, $uid, $name, $json]);
+                $db->prepare("INSERT INTO co_editor_preset (module, owner_id, name, is_public, editors_json) VALUES (?,?,?,?,?)")
+                   ->execute([$module, $uid, $name, $isPublic, $json]);
                 echo json_encode(['ok' => true, 'id' => (int)$db->lastInsertId()]);
             }
             exit();

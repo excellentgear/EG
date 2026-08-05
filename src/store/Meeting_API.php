@@ -74,7 +74,8 @@ case 'meta': {
           'gm_name'=>$gm ? $gm['user_cname'] : null, 'gm_id'=>$gm ? (int)$gm['id'] : null, 'presets'=>$presets,
           'company_name'=>eg_company_full_name($db), 'features'=>MEETING_FEATURES,
           'attach_nas_dir'=>$perms['canAdmin'] ? meeting_setting_get($db, 'meeting_nas_dir', '') : null,
-          'as_doc_signsheet'=>eg_asdoc_get($db, 'meeting_signsheet')]);
+          'as_doc_signsheet'=>eg_asdoc_get($db, 'meeting_signsheet'),
+          'as_doc_record'=>eg_asdoc_get($db, 'meeting_record')]);
 }
 
 /* 常用設定（主題綁地點綁時間）：管理員維護 */
@@ -421,7 +422,7 @@ case 'kpi_insert': {
             .'），請確認匯入作業完成後再插入，避免會議引用到不完整的數字。');
     }
     $ymd = explode('-', $m['meeting_date']);
-    $snap = meeting_kpi_month_summary($db, (int)$ymd[0], (int)$ymd[1]);
+    $snap = meeting_kpi_snapshot($db, (int)$ymd[0], (int)$ymd[1]);
     $snap['generated_at'] = date('Y-m-d H:i');
     $snap['data_asof'] = $fresh['latest'];
     $db->prepare("UPDATE meeting_record SET kpi_snapshot_json=?, kpi_snapshot_asof=?, updated_at=NOW() WHERE meeting_id=?")
@@ -522,6 +523,11 @@ case 'as_doc_signsheet_save': {
     if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
     eg_asdoc_save($db, 'meeting_signsheet', (int)($_POST['doc_id'] ?? 0), $uname);
     jout(['as_doc_signsheet'=>eg_asdoc_get($db, 'meeting_signsheet')]);
+}
+case 'as_doc_record_save': {
+    if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
+    eg_asdoc_save($db, 'meeting_record', (int)($_POST['doc_id'] ?? 0), $uname);
+    jout(['as_doc_record'=>eg_asdoc_get($db, 'meeting_record')]);
 }
 case 'asdoc_list': {
     if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);

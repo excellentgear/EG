@@ -10,6 +10,7 @@ include_once __DIR__ . '/org_role_lib.php';
 include_once __DIR__ . '/role_features_helper.php';
 include_once __DIR__ . '/attach_lib.php';
 include_once __DIR__ . '/asdoc_lib.php';
+include_once __DIR__ . '/kpi_lib.php';
 
 const MEETING_FEATURES = [
     ['code'=>'meeting_view',      'group'=>'view', 'label'=>'檢閱會議記錄列表（沒勾也看得到自己的草稿、有簽核/出席到的會議）'],
@@ -345,49 +346,12 @@ function meeting_kpi_freshness(PDO $db, string $today): array {
 }
 
 /**
- * 出貨目標達成率（帳款月整月彙總，一行摘要，供產銷會議紀錄插入用）。
- * 計算邏輯與 views/Sales/Shipping_Analysis_new.php 的 get_kpi_data（4週明細）完全比照
- * （帳款月起訖判定、target 金額來源、revenue=出貨-退貨），只是不拆成 4 週、彙總整個帳款月一行，
- * 避免另刻一套算法造成兩頁數字兜不起來。
+ * 出貨目標達成率快照，供產銷會議紀錄插入用：直接呼叫共用 kpi_weekly_report()（與
+ * views/Sales/Shipping_Analysis_new.php 的 KPI 週報同一套函式），4 週明細＋合計＋大額前三名
+ * 全部一併存進快照，畫面/列印顯示的內容才會跟該頁「月份出貨KPI週報」完全一致。
  */
-function meeting_kpi_month_summary(PDO $db, int $year, int $month): array {
-    $gCutoff = 0;
-    try { $gCutoff = (int)$db->query("SELECT setting_value FROM system_settings WHERE setting_key='billing_cutoff_day' LIMIT 1")->fetchColumn(); } catch (Throwable $e) {}
-    $targetAmount = 0.0;
-    try {
-        $t = $db->query("SELECT param_value FROM system_parameters WHERE param_group='SHIPPING_ANALYSIS' AND param_key='KPI_TARGET' LIMIT 1")->fetchColumn();
-        if ($t !== false) $targetAmount = (float)$t;
-    } catch (Throwable $e) {}
-    $startDay = $gCutoff > 0 ? $gCutoff + 1 : 1;
-    try {
-        $st = $db->prepare("SELECT start_day FROM kpi_monthly_targets WHERE year=? AND month=?");
-        $st->execute([$year, $month]);
-        $sv = $st->fetch(PDO::FETCH_ASSOC);
-        if ($sv) $startDay = (int)$sv['start_day'];
-    } catch (Throwable $e) {}
-    if ($startDay > 28) $startDay = 1;
-    $cutoff = $startDay > 1 ? $startDay - 1 : 31;
-    $prevMonth = $month - 1; $prevYear = $year;
-    if ($prevMonth < 1) { $prevMonth = 12; $prevYear--; }
-    $bdStart = new DateTime(sprintf('%04d-%02d-%02d', $prevYear, $prevMonth, $startDay));
-    $endDay = min($cutoff, (int)(new DateTime(sprintf('%04d-%02d-01', $year, $month)))->format('t'));
-    $bdEnd = new DateTime(sprintf('%04d-%02d-%02d', $year, $month, $endDay));
-    $ws = $bdStart->format('Y-m-d'); $we = $bdEnd->format('Y-m-d');
-
-    $s1 = $db->prepare("SELECT COALESCE(SUM(Qty*Unit_price),0) FROM is_list WHERE Order_date BETWEEN ? AND ? AND Unit_price > 0");
-    $s1->execute([$ws, $we]); $shipAmount = (float)$s1->fetchColumn();
-    $s2 = $db->prepare("SELECT COALESCE(SUM(Qty*unit_price),0) FROM order_track WHERE Delivery_date BETWEEN ? AND ? AND (Order_status IS NULL OR Order_status!=9) AND unit_price>0");
-    $s2->execute([$ws, $we]); $orderAmount = (float)$s2->fetchColumn();
-    $s3 = $db->prepare("SELECT COALESCE(SUM(Qty*Unit_price),0) FROM ir_track WHERE IR_date BETWEEN ? AND ? AND Unit_price>0");
-    $s3->execute([$ws, $we]); $returnAmount = (float)$s3->fetchColumn();
-    $revenue = $shipAmount - $returnAmount;
-
-    return [
-        'billing_month_start'=>$ws, 'billing_month_end'=>$we,
-        'target_amount'=>round($targetAmount), 'order_amount'=>round($orderAmount),
-        'ship_amount'=>round($shipAmount), 'return_amount'=>round($returnAmount), 'revenue'=>round($revenue),
-        'achieve_rate'=>$targetAmount > 0 ? round($revenue / $targetAmount * 100, 2) : 0,
-    ];
+function meeting_kpi_snapshot(PDO $db, int $year, int $month): array {
+    return kpi_weekly_report($db, $year, $month);
 }
 
 /* ============================================================

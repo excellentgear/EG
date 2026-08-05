@@ -150,8 +150,9 @@ foreach ($roleRows as $rr) {
         .st-chair_done { background:#E8B77A; color:#4d2f10; font-weight:bold; }
         .st-done { background:#F0A24B; color:#fff; }
         .st-rejected { background:#DD5138; color:#fff; }
-        .mt-op { color:#b5762a; cursor:pointer; margin:0 4px; }
+        .mt-op { color:#b5762a; cursor:pointer; }
         .mt-op:hover { color:#8A5A2B; text-decoration:underline; }
+        .mt-op-wrap { display:flex; gap:12px; align-items:center; white-space:nowrap; }
         .view-box { font-size:12.5px; color:#5b3a1e; line-height:1.7; }
         .view-box h5 { margin:10px 0 4px; font-size:13px; color:#8A5A2B; font-weight:bold; }
         .view-box .kv { margin-bottom:6px; }
@@ -168,6 +169,15 @@ foreach ($roleRows as $rr) {
         .kpi-box { border:1.5px solid #D8BE93; border-radius:6px; background:#FDF8EF; padding:8px 10px; margin-top:8px; font-size:12.5px; }
         .kpi-box table { width:100%; border-collapse:collapse; font-size:12px; margin-top:4px; }
         .kpi-box table th, .kpi-box table td { border:1px solid #EADFC8; padding:4px 7px; text-align:center; }
+        .kpi-meta { font-size:12px; margin-bottom:4px; }
+        .kpi-week-tbl { width:100%; border-collapse:collapse; font-size:11.5px; }
+        .kpi-week-tbl th, .kpi-week-tbl td { border:1px solid #D8BE93; padding:4px 6px; text-align:center; }
+        .kpi-total-row { font-weight:bold; background:#FFF3DE; }
+        .kpi-top3-wrap { display:flex; gap:10px; margin-top:8px; flex-wrap:wrap; }
+        .kpi-top3 { flex:1 1 220px; padding-left:6px; }
+        .kpi-top3-tt { font-weight:bold; font-size:12px; margin-bottom:3px; }
+        .kpi-top3-tbl { width:100%; border-collapse:collapse; font-size:11px; }
+        .kpi-top3-tbl th, .kpi-top3-tbl td { border:1px solid #EADFC8; padding:3px 5px; text-align:center; }
         .mt-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
         @media print {
@@ -183,7 +193,7 @@ foreach ($roleRows as $rr) {
     <div class="right_col" role="main">
         <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
             <h2 style="margin:6px 0;">會議紀錄管理
-                <small style="color:#8a6d45;">2-GM-05-01 會議記錄／2-GM-05-03 會議通知單</small></h2>
+                <small style="color:#8a6d45;"><span id="mtHeaderDocNo"></span>會議記錄／2-GM-05-03 會議通知單</small></h2>
             <button class="page-help-btn" id="btnPageHelp" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
         <div class="clearfix"></div>
@@ -203,8 +213,8 @@ foreach ($roleRows as $rr) {
         </div>
         <div class="mt-table-wrap">
             <table class="mt-table">
-                <thead><tr><th style="width:100px;">日期</th><th>主題</th><th style="width:90px;">主席</th>
-                    <th style="width:90px;">記錄</th><th style="width:100px;">狀態</th><th style="width:150px;">操作</th></tr></thead>
+                <thead><tr><th style="width:100px;">日期</th><th style="width:34%;">主題</th><th style="width:90px;">主席</th>
+                    <th style="width:90px;">記錄</th><th style="width:100px;">狀態</th><th style="width:200px;">操作</th></tr></thead>
                 <tbody id="listBody"></tbody>
             </table>
         </div>
@@ -376,6 +386,13 @@ foreach ($roleRows as $rr) {
             <input type="text" id="setNasDir" style="width:100%;" placeholder="\\excellentnas\...\會議紀錄">
             <button type="button" class="b-att" style="margin-top:6px;" onclick="submitNasDir()">儲存路徑</button>
             <div style="margin-top:16px;">
+                <label>會議記錄 AS 文件編號綁定</label>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <span id="recordDocLabel" style="flex:1;padding:6px 8px;border:1px solid #D8BE93;border-radius:4px;background:#FFF7E8;">（尚未綁定）</span>
+                    <button type="button" class="b-att" onclick="openRecordDocPicker()">選擇</button>
+                </div>
+            </div>
+            <div style="margin-top:16px;">
                 <label>簽到表 AS 文件編號綁定</label>
                 <div style="display:flex;gap:6px;align-items:center;">
                     <span id="signsheetDocLabel" style="flex:1;padding:6px 8px;border:1px solid #D8BE93;border-radius:4px;background:#FFF7E8;">（尚未綁定）</span>
@@ -492,6 +509,7 @@ function loadMeta(cb){
         DEPTS.forEach(function(d){ $ad.append('<option value="'+d.id+'">'+esc(d.name)+'</option>'); });
         if (m.perms.canEdit) $('#btnAdd').show();
         if (m.perms.canAdmin) { $('#btnPresetMgr').show(); $('#btnMtSetting').show(); }
+        $('#mtHeaderDocNo').text(m.as_doc_record && m.as_doc_record.doc_no ? (m.as_doc_record.doc_no+' ') : '');
         renderPresetUI();
         loadGroups();
         if (cb) cb();
@@ -558,13 +576,13 @@ function renderList(){
         h += '<tr><td>'+fmtDate(m.meeting_date)+'</td><td class="t-left">'+esc(m.subject)+'</td>'
            + '<td>'+esc(m.chair_name||'—')+'</td><td>'+esc(m.recorder_name||'')+'</td>'
            + '<td><span class="st-pill st-'+m.approval_status+'">'+(STATUS_LABEL[m.approval_status]||m.approval_status)+'</span></td>'
-           + '<td>'
+           + '<td><div class="mt-op-wrap">'
            + '<span class="mt-op" onclick="openView('+m.meeting_id+')"><i class="fa fa-search-plus"></i> 檢視</span>';
         var canEditRow = (m.is_mine || PERMS.canAdmin) && (m.approval_status==='draft' || m.approval_status==='rejected');
         if (canEditRow) h += '<span class="mt-op" onclick="openEdit('+m.meeting_id+')"><i class="fa fa-pencil"></i> 編輯</span>';
         if (m.approval_status==='draft' && (m.is_mine || PERMS.canAdmin))
             h += '<span class="mt-op" style="color:#DD5138;" onclick="deleteMeeting('+m.meeting_id+')"><i class="fa fa-trash"></i> 刪除</span>';
-        h += '</td></tr>';
+        h += '</div></td></tr>';
     });
     $('#listBody').html(h || '<tr><td colspan="6" style="color:#8a6d45;padding:14px;">本年度尚無會議記錄</td></tr>');
 }
@@ -807,16 +825,57 @@ $(document).on('click', '.itm-dp .dp-list div[data-id]', function(){
 });
 $(document).on('click', function(e){ if (!$(e.target).closest('.itm-dp').length) $('.itm-dp .dp-list').hide(); });
 
-/* 出貨目標達成率快照 */
+/* 出貨目標達成率快照：內容與 Shipping_Analysis_new.php 的「月份出貨KPI週報」完全相同(4週明細+合計+大額前三名)，
+   共用同一份 kpi_lib.php 算出的資料結構，畫面/檢視/列印三處都呼叫這支 kpiReportHtml() 產生內容，避免各刻一份對不起來。 */
+function kpiReportHtml(k){
+    var rows = (k.weeks||[]).map(function(w){
+        var chg = (w.change_rate===null || w.change_rate===undefined) ? '—' : ((w.change_rate>=0?'▲':'▼')+Math.abs(w.change_rate)+'%');
+        return '<tr><td>W'+w.no+'　'+fmtDate(w.start)+'~'+fmtDate(w.end)+'</td>'
+             + '<td>'+w.week_target.toLocaleString()+'</td>'
+             + '<td>'+w.order_amount.toLocaleString()+'</td><td>'+w.order_rate+'%</td>'
+             + '<td>'+w.ship_amount.toLocaleString()+'</td><td>'+w.return_amount.toLocaleString()+'</td>'
+             + '<td>'+w.revenue.toLocaleString()+'</td><td>'+w.cum_revenue.toLocaleString()+'</td>'
+             + '<td><b>'+w.revenue_rate+'%</b></td><td>'+chg+'</td></tr>';
+    }).join('');
+    var t = k.totals || {};
+    var totalRow = '<tr class="kpi-total-row"><td>合計</td><td>'+(t.cum_target||0).toLocaleString()+'</td>'
+        + '<td>'+(t.order_amount||0).toLocaleString()+'</td><td>'+(t.order_rate||0)+'%</td>'
+        + '<td>'+(t.ship_amount||0).toLocaleString()+'</td><td>'+(t.return_amount||0).toLocaleString()+'</td>'
+        + '<td>'+(t.revenue||0).toLocaleString()+'</td><td>—</td><td>'+(t.revenue_rate||0)+'%</td><td>—</td></tr>';
+    function top3(list, label, color){
+        if (!list || !list.length) return '';
+        var r = list.map(function(x,i){
+            var d = x.Order_date || x.date || '';
+            return '<tr><td>'+(i+1)+'</td><td>'+fmtDate(d)+'</td><td>'+esc(x.Client_name||'')+'</td><td>'+esc(x.Product_id||'')+'</td><td style="text-align:right;">'+Number(x.amount).toLocaleString()+'</td></tr>';
+        }).join('');
+        return '<div class="kpi-top3" style="border-left:3px solid '+color+';">'
+             + '<div class="kpi-top3-tt" style="color:'+color+';">'+label+'</div>'
+             + '<table class="kpi-top3-tbl"><tr><th>NO</th><th>日期</th><th>客戶</th><th>料號</th><th>金額</th></tr>'+r+'</table></div>';
+    }
+    return '<div class="kpi-meta"><b>帳款月：</b>'+esc(k.billing_start)+' ~ '+esc(k.billing_end)
+        + (k.data_asof ? ('　<b>資料基準日：</b>'+esc(k.data_asof)) : '') + '</div>'
+        + '<table class="kpi-week-tbl"><tr><th>週別／期間</th><th>期目標</th><th>接單金額</th><th>接單達成率</th>'
+        + '<th>出貨金額</th><th>退貨金額</th><th>當期營收</th><th>累計營收</th><th>目標達成率</th><th>與上月同週</th></tr>'
+        + rows + totalRow + '</table>'
+        + '<div class="kpi-top3-wrap">'
+        + top3(k.top_ship, '出貨大額前三名', '#3498db') + top3(k.top_order, '訂單大額前三名', '#27ae60') + top3(k.top_return, '退貨大額前三名', '#e74c3c')
+        + '</div>';
+}
+function kpiCss(){
+    return '.kpi-meta{font-size:12px;margin-bottom:4px;}'
+        + '.kpi-week-tbl{width:100%;border-collapse:collapse;font-size:11.5px;}'
+        + '.kpi-week-tbl th,.kpi-week-tbl td{border:1px solid #999;padding:4px 6px;text-align:center;}'
+        + '.kpi-total-row{font-weight:bold;background:#FFF3DE;}'
+        + '.kpi-top3-wrap{display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;}'
+        + '.kpi-top3{flex:1 1 220px;padding-left:6px;}'
+        + '.kpi-top3-tt{font-weight:bold;font-size:12px;margin-bottom:3px;}'
+        + '.kpi-top3-tbl{width:100%;border-collapse:collapse;font-size:11px;}'
+        + '.kpi-top3-tbl th,.kpi-top3-tbl td{border:1px solid #999;padding:3px 5px;text-align:center;}';
+}
 function renderKpiBox(){
     var h = '';
     if (KPI_SNAP) {
-        h += '<div class="kpi-box"><b>帳款月：</b>'+esc(KPI_SNAP.billing_month_start)+' ~ '+esc(KPI_SNAP.billing_month_end)
-           + '　<b>資料基準日：</b>'+esc(KPI_SNAP.data_asof||'—')
-           + '<table><tr><th>目標金額</th><th>接單金額</th><th>出貨金額</th><th>退貨金額</th><th>淨營收</th><th>達成率</th></tr>'
-           + '<tr><td>'+KPI_SNAP.target_amount.toLocaleString()+'</td><td>'+KPI_SNAP.order_amount.toLocaleString()+'</td>'
-           + '<td>'+KPI_SNAP.ship_amount.toLocaleString()+'</td><td>'+KPI_SNAP.return_amount.toLocaleString()+'</td>'
-           + '<td>'+KPI_SNAP.revenue.toLocaleString()+'</td><td><b>'+KPI_SNAP.achieve_rate+'%</b></td></tr></table>'
+        h += '<div class="kpi-box">' + kpiReportHtml(KPI_SNAP)
            + '<div style="margin-top:6px;"><button type="button" class="b-att wt" onclick="kpiRemove()"><i class="fa fa-times"></i> 移除</button></div></div>';
     } else {
         h += '<button type="button" class="b-att" onclick="kpiInsert()"><i class="fa fa-line-chart"></i> 插入本月出貨目標達成率</button>'
@@ -959,11 +1018,7 @@ function viewHtml(res){
     h += itemsTable('directive','上級指示要項') + itemsTable('general','會議要項');
 
     if (m.kpi_snapshot_json) {
-        var k = JSON.parse(m.kpi_snapshot_json);
-        h += '<h5>出貨目標達成率</h5><table><tr><th>帳款月</th><th>目標</th><th>接單</th><th>出貨</th><th>退貨</th><th>淨營收</th><th>達成率</th></tr>'
-           + '<tr><td>'+esc(k.billing_month_start)+'~'+esc(k.billing_month_end)+'</td><td>'+k.target_amount.toLocaleString()
-           + '</td><td>'+k.order_amount.toLocaleString()+'</td><td>'+k.ship_amount.toLocaleString()+'</td><td>'+k.return_amount.toLocaleString()
-           + '</td><td>'+k.revenue.toLocaleString()+'</td><td><b>'+k.achieve_rate+'%</b></td></tr></table>';
+        h += '<h5>出貨目標達成率</h5>' + kpiReportHtml(JSON.parse(m.kpi_snapshot_json));
     }
 
     // 主席／總經理簽核區
@@ -1098,6 +1153,7 @@ function printFullRecord(){
 function doPrintFullRecord(preparerName){
     var m = VIEW.meeting, res = VIEW;
     var signDocNo = (META.as_doc_signsheet && META.as_doc_signsheet.doc_no) || '';
+    var recordDocNo = (META.as_doc_record && META.as_doc_record.doc_no) || '';
     var rows1 = (res.attendees||[]).map(function(a,i){
         var signed = +a.signed===1;
         var stamp = signed ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name, String(a.signed_at||'').substr(0,10)):esc(a.user_name)) : '';
@@ -1135,7 +1191,7 @@ function doPrintFullRecord(preparerName){
         + (itemRows('directive') ? '<h5>上級指示要項</h5><table class="sf"><tr><th>NO</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責部門</th><th>確認簽名</th><th>備註</th></tr>'+itemRows('directive')+'</table>' : '')
         + (itemRows('general') ? '<h5>會議要項</h5><table class="sf"><tr><th>NO</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責部門</th><th>確認簽名</th><th>備註</th></tr>'+itemRows('general')+'</table>' : '')
         + '<table class="pt-sign" style="width:100%;margin-top:18px;"><tr><td style="width:50%;">主席確認：'+chairStamp+'</td><td style="width:50%;">總經理確認：'+gmStamp+'</td></tr></table>'
-        + '<div style="text-align:right;margin-top:10px;font-size:12px;color:#333;">2-GM-05-01</div>';
+        + (recordDocNo ? '<div style="text-align:right;margin-top:10px;font-size:12px;color:#333;">'+esc(recordDocNo)+'</div>' : '');
 
     var hasKpi = !!m.kpi_snapshot_json;
     var body = '<div style="page-break-after:always;">'+page1+'</div><div'+(hasKpi?' style="page-break-after:always;"':'')+'>'+page2+'</div>';
@@ -1143,16 +1199,14 @@ function doPrintFullRecord(preparerName){
         var k = JSON.parse(m.kpi_snapshot_json);
         var madeStamp = preparerName ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(preparerName, k.data_asof||META.today):esc(preparerName)) : '____________';
         body += '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">出貨目標達成率</div></div>'
-            + '<table class="sf-info"><tr><td>帳款月：'+esc(k.billing_month_start)+' ~ '+esc(k.billing_month_end)+'</td><td>資料基準日：'+esc(k.data_asof||'—')+'</td></tr></table>'
-            + '<table class="sf"><tr><th>目標金額</th><th>接單金額</th><th>出貨金額</th><th>退貨金額</th><th>淨營收</th><th>達成率</th></tr>'
-            + '<tr><td>'+k.target_amount.toLocaleString()+'</td><td>'+k.order_amount.toLocaleString()+'</td><td>'+k.ship_amount.toLocaleString()
-            + '</td><td>'+k.return_amount.toLocaleString()+'</td><td>'+k.revenue.toLocaleString()+'</td><td><b>'+k.achieve_rate+'%</b></td></tr></table>'
+            + kpiReportHtml(k)
             + '<table class="pt-sign" style="width:100%;margin-top:18px;"><tr><td>製表：'+madeStamp+'</td></tr></table>';
     }
     var css = 'table.sf-info{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}table.sf-info td{border:1px solid #999;padding:5px 8px;text-align:left;}'
         + 'h5{font-size:13px;margin:10px 0 3px;}'
         + 'table.sf{width:100%;border-collapse:collapse;font-size:12.5px;}table.sf th,table.sf td{border:1px solid #333;padding:5px;text-align:center;}table.sf td.t-left{text-align:left;}'
-        + 'table.pt-sign td{padding:14px 6px;} .stamp-wrap svg,svg.car-stamp{width:70px;height:70px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
+        + 'table.pt-sign td{padding:14px 6px;} .stamp-wrap svg,svg.car-stamp{width:70px;height:70px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + kpiCss();
     egPrintWindow('會議紀錄完整版', body, css, '', false, true);
 }
 
@@ -1238,6 +1292,7 @@ function submitNasDir(){
 }
 function renderSignsheetLabel(){
     $('#signsheetDocLabel').text(EGAsDoc.label(META.as_doc_signsheet));
+    $('#recordDocLabel').text(EGAsDoc.label(META.as_doc_record));
 }
 function openSignsheetPicker(){
     $.getJSON(API, {action:'asdoc_list'}, function(res){
@@ -1249,6 +1304,22 @@ function openSignsheetPicker(){
                 $.post(API, {action:'as_doc_signsheet_save', doc_id:id}, function(r){
                     if (!r.ok){ alert(r.error||'儲存失敗'); return; }
                     META.as_doc_signsheet = r.as_doc_signsheet; renderSignsheetLabel();
+                }, 'json');
+            }
+        });
+    });
+}
+function openRecordDocPicker(){
+    $.getJSON(API, {action:'asdoc_list'}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        EGAsDoc.open({
+            docs: res.docs||[], current: META.as_doc_record ? META.as_doc_record.id : 0,
+            title: '會議記錄 AS 文件綁定',
+            onSave: function(id, doc){
+                $.post(API, {action:'as_doc_record_save', doc_id:id}, function(r){
+                    if (!r.ok){ alert(r.error||'儲存失敗'); return; }
+                    META.as_doc_record = r.as_doc_record; renderSignsheetLabel();
+                    $('#mtHeaderDocNo').text(META.as_doc_record && META.as_doc_record.doc_no ? META.as_doc_record.doc_no : '');
                 }, 'json');
             }
         });
