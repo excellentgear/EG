@@ -1217,7 +1217,7 @@ function announceItemRows(items){
 /* inlineDocNo=true 才在版面內文手動印AS編號(僅合併列印用，因單一列印工作混三份不同編號的文件，
    CSS @page 頁尾無法依頁面切換內容，只能用內文取代)；一般單獨列印一律靠 egPrintWindow 的 docNo 參數(頁尾右下角，ai-rules/16第三節)。
    簽章列(總經理/主席/製表)用 flex+margin-top:auto 固定貼在版面最下方，不因項目/KPI內容多寡而移動位置(見 .mr-page/.mr-foot 樣式)。 */
-function meetingRecordPageHtml(m, res, inlineDocNo, preparerName){
+function meetingRecordPageHtml(m, res, inlineDocNo){
     var announceBody = announceItemRows(res.items);
     var itemBody = meetingItemGroupRows(res.items, 'directive', '上級指示要項') + meetingItemGroupRows(res.items, 'general', '會議要項');
     var chairApp = m.chair_approval, gmApp = m.gm_approval;
@@ -1227,11 +1227,9 @@ function meetingRecordPageHtml(m, res, inlineDocNo, preparerName){
     var gmStamp = (gmApp && gmApp.approver_name)
         ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(gmApp.approver_name, String(gmApp.decided_at||'').substr(0,10), META.gm_id!=null && String(gmApp.approver_id)!==String(META.gm_id)):'')
         : '';
-    var madeName = (m.kpi_snapshot_json && preparerName) ? preparerName : m.recorder_name;
-    var madeStamp = (window.EGStamp&&EGStamp.stamp && madeName) ? EGStamp.stamp(madeName, fmtDate(m.meeting_date)) : '';
+    var madeStamp = (window.EGStamp&&EGStamp.stamp && m.recorder_name) ? EGStamp.stamp(m.recorder_name, fmtDate(m.meeting_date)) : '';
     var recordTitle = (META.as_doc_record && META.as_doc_record.doc_name) ? META.as_doc_record.doc_name : '會議記錄';
     var attendeeNames = (res.attendees||[]).map(function(a){ return esc(a.user_name); }).join('、') || '—';
-    var kpiBlock = m.kpi_snapshot_json ? ('<h5 style="margin-top:14px;">出貨目標達成率</h5>' + kpiReportHtml(JSON.parse(m.kpi_snapshot_json))) : '';
     return '<div class="mr-page">'
         + '<div class="mr-title">'+esc(META.company_name||'')+'-'+esc(recordTitle)+'</div>'
         + '<table class="mr-head">'
@@ -1245,9 +1243,18 @@ function meetingRecordPageHtml(m, res, inlineDocNo, preparerName){
         + (announceBody ? '<table class="mr-announce"><thead><tr><th style="width:32px;">序</th><th>宣布事項</th><th style="width:120px;">備註</th></tr></thead><tbody>'+announceBody+'</tbody></table>' : '')
         + (announceBody && itemBody ? '<div class="mr-gap"></div>' : '')
         + (itemBody ? '<table class="mr-items"><thead><tr><th class="mr-grp-hd"></th><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人</th><th>確認簽名</th><th>備註</th></tr></thead><tbody>'+itemBody+'</tbody></table>' : '')
-        + kpiBlock
         + '<table class="mr-foot"><tr><td>總經理：'+gmStamp+'</td><td>主席：'+chairStamp+'</td><td class="mr-foot-prep">製表：'+madeStamp+'</td></tr></table>'
         + (inlineDocNo && META.as_doc_record_no ? '<div class="mr-bottom-note"><span></span><span>'+esc(META.as_doc_record_no)+'</span></div>' : '')
+        + '</div>';
+}
+/* 出貨目標達成率獨立一頁(有自己的簽章，只有「製表」一欄)，跟會議記錄各自一張A4，不再併頁(使用者明確要求)。 */
+function kpiPageHtml(m, preparerName){
+    var k = JSON.parse(m.kpi_snapshot_json);
+    var madeStamp = (window.EGStamp&&EGStamp.stamp && preparerName) ? EGStamp.stamp(preparerName, fmtDate(m.meeting_date)) : '';
+    return '<div class="mr-page">'
+        + '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">出貨目標達成率</div></div>'
+        + kpiReportHtml(k)
+        + '<table class="mr-foot"><tr><td></td><td></td><td class="mr-foot-prep">製表：'+madeStamp+'</td></tr></table>'
         + '</div>';
 }
 function signSheetPageHtml(m, attendees, withSignatures, inlineDocNo){
@@ -1282,10 +1289,18 @@ function resolvePreparerThenPrint(cb){
         cb(pick===null ? '' : ($.trim(pick) || cands[0].name));
     });
 }
+/* 印多份文件合在一次列印工作時(如會議記錄+出貨目標達成率、或再加簽到表)，每份各自一張A4、各自的頁尾內容(見 inlineDocNo)，
+   彼此不算同一份報表的第幾頁，所以不印「第X頁/共Y頁」——蓋掉 egPrintWindow 內建的 @bottom-left 頁碼(但仍靠 pageCount=true 拿到穩定的多頁邊界)。 */
+var NO_PAGE_COUNTER_CSS = '@page{ @bottom-left{ content:none; } }';
 function printMeetingRecord(){
     if (!VIEW) return;
     resolvePreparerThenPrint(function(preparerName){
-        egPrintWindow('會議記錄', meetingRecordPageHtml(VIEW.meeting, VIEW, false, preparerName), mrCss(), META.as_doc_record_no||'', true, true);
+        var m = VIEW.meeting, res = VIEW;
+        var hasKpi = !!m.kpi_snapshot_json;
+        var page1 = meetingRecordPageHtml(m, res, hasKpi);
+        var body = hasKpi ? ('<div style="page-break-after:always;">'+page1+'</div><div>'+kpiPageHtml(m, preparerName)+'</div>') : page1;
+        var css = mrCss() + (hasKpi ? NO_PAGE_COUNTER_CSS : '');
+        egPrintWindow('會議記錄', body, css, hasKpi ? '' : (META.as_doc_record_no||''), true, true);
     });
 }
 function printBlankSignSheet(){
@@ -1293,21 +1308,24 @@ function printBlankSignSheet(){
     egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, false, false), mrCss(), META.as_doc_signsheet_no||'', false, true);
 }
 
-/* ---------- 合併列印(簽到表→會議紀錄，含出貨目標達成率併入同一頁)：僅主席+總經理皆簽核完成(done)才可列印，簽章一律用真圖章 ---------- */
+/* ---------- 合併列印(簽到表／會議記錄／出貨目標達成率，三份各自一張A4)：僅主席+總經理皆簽核完成(done)才可列印，簽章一律用真圖章 ---------- */
 function printFullRecord(){
     if (!VIEW) return;
     var m = VIEW.meeting;
     if (m.approval_status !== 'done') { alert('需主席與總經理皆簽核完成才能列印完整紀錄'); return; }
     resolvePreparerThenPrint(function(preparerName){ doPrintFullRecord(preparerName); });
 }
-/* 合併列印同一份工作內混兩種文件(簽到表要直式/會議記錄含KPI要橫式)：CSS @page 只能設一種預設方向，
-   簽到表頁改用「具名頁」(page:mr-portrait) 覆蓋成直式，其餘頁沿用預設橫式；兩份文件編號各不同，改在版面內文各自印(見 inlineDocNo)。 */
+/* 合併列印同一份工作內混兩種方向(簽到表要直式/會議記錄與KPI要橫式)：CSS @page 只能設一種預設方向，
+   簽到表頁改用「具名頁」(page:mr-portrait) 覆蓋成直式，其餘頁沿用預設橫式；各份文件編號各不同，改在版面內文各自印(見 inlineDocNo)；
+   三份都是各自獨立的A4文件只是排在同一次列印工作，不印跨文件的頁碼。 */
 function doPrintFullRecord(preparerName){
     var m = VIEW.meeting, res = VIEW;
     var page1 = signSheetPageHtml(m, res.attendees, true, true);
-    var page2 = meetingRecordPageHtml(m, res, true, preparerName);
-    var body = '<div class="mr-portrait-page" style="page-break-after:always;">'+page1+'</div><div>'+page2+'</div>';
-    var css = mrCss()
+    var page2 = meetingRecordPageHtml(m, res, true);
+    var hasKpi = !!m.kpi_snapshot_json;
+    var body = '<div class="mr-portrait-page" style="page-break-after:always;">'+page1+'</div><div'+(hasKpi?' style="page-break-after:always;"':'')+'>'+page2+'</div>'
+        + (hasKpi ? ('<div>'+kpiPageHtml(m, preparerName)+'</div>') : '');
+    var css = mrCss() + NO_PAGE_COUNTER_CSS
         + '@page mr-portrait{size:A4 portrait;margin:12mm 8mm 16mm;}'
         + '.mr-portrait-page{page:mr-portrait;}';
     egPrintWindow('會議紀錄完整版', body, css, '', true, true);
