@@ -434,6 +434,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>自評人員</label><input type="text" id="recSelfEval" maxlength="50"></div>
             <div><label>報告編號 <span style="font-size:11px;color:#8a6d45;">(稽核報告文件編號,選填)</span></label><input type="text" id="recReport" maxlength="50"></div>
         </div>
+        <div style="margin:8px 0;">
+            <label>審查類別（必選一項）</label>
+            <label style="display:inline-block;margin:0 14px 0 0;font-weight:normal;"><input type="radio" name="recReviewType" value="site"> 人員實地審查</label>
+            <label style="display:inline-block;margin:0 14px 0 0;font-weight:normal;"><input type="radio" name="recReviewType" value="self"> 供應商主自評核</label>
+            <label style="display:inline-block;font-weight:normal;"><input type="radio" name="recReviewType" value="abnormal"> 異常檢核</label>
+        </div>
         <div class="af-attach" id="afAttachBox">
             <div style="font-weight:bold;color:#5b3a1e;margin:10px 0 4px;"><i class="fa fa-paperclip"></i> 佐證附件（供應商自評表等）</div>
             <div id="afAttachList" style="font-size:12px;"></div>
@@ -1001,7 +1007,7 @@ function renderRecStatus(t){
             + (st==='approved' && t.signed_by_name ? '（主管：'+esc(t.signed_by_name)+' '+(fmtDate(t.signed_at)||'')+'）' : '') + '</div>';
     }
     $('#recStatusBox').html(html).toggle(!!html);
-    $('#afBody input, #recPlanMonth, #recDate, #recMode, #recAuditor, #recSelfEval, #recReport, #recConclusion, #recNote, #qfSelf, #qfAudit')
+    $('#afBody input, #recPlanMonth, #recDate, #recMode, #recAuditor, #recSelfEval, #recReport, #recConclusion, #recNote, #qfSelf, #qfAudit, input[name=recReviewType]')
         .prop('disabled', locked);
     $('.af-quickfill button').prop('disabled', locked);
     $('#btnRecSave, #btnRecComplete').toggle(!locked);
@@ -1029,6 +1035,8 @@ function openRec(tid){
         $('#recScopeHint').text('本供應商屬「'+(t.scope_label||'')+'」'+((res.auditors||[]).length?'':'—尚未設定稽核員，請先按工具列「稽核員設定」'));
         $('#recSelfEval').val(t.self_evaluator||''); $('#recReport').val(t.report_no||'');
         $('#recConclusion').val(t.conclusion||''); $('#recNote').val(t.note||'');
+        $('input[name=recReviewType]').prop('checked', false);
+        if (t.review_type) $('input[name=recReviewType][value="'+t.review_type+'"]').prop('checked', true);
         renderAttach(t.target_id, res.attaches||[]);
         renderForm(t.scores||{});
         renderRecStatus(t);
@@ -1137,7 +1145,7 @@ function submitRec(){
     if(bad){ alert('有 '+bad+' 個分數超出範圍或非整數，已標紅，請修正後再儲存'); return; }
     var scores=collectScores();
     $.post(API, {action:'record_target', target_id:recTid, audit_date:$('#recDate').val(), plan_month:$('#recPlanMonth').val(),
-        audit_mode:$('#recMode').val(), auditor:$('#recAuditor').val(),
+        audit_mode:$('#recMode').val(), auditor:$('#recAuditor').val(), review_type:$('input[name=recReviewType]:checked').val()||'',
         self_evaluator:$('#recSelfEval').val(), report_no:$('#recReport').val(),
         conclusion:$('#recConclusion').val(), note:$('#recNote').val(), scores:JSON.stringify(scores)},
     function(res){
@@ -1151,6 +1159,7 @@ function recCompleteErrors(){
     if (!$('#recAuditor').val()) errs.push('請填寫稽核員');
     if (!$('#recDate').val()) errs.push('請先填寫稽核日期');
     if (!$('#recConclusion').val()) errs.push('請選擇建議評鑑結果');
+    if (!$('input[name=recReviewType]:checked').length) errs.push('請選擇審查類別（人員實地審查／供應商主自評核／異常檢核）');
     var scores=collectScores(), badSelf=0, badAudit=0;
     (CUR_CFG&&CUR_CFG.items||[]).forEach(function(cat){
         cat[2].forEach(function(it){
@@ -1169,12 +1178,12 @@ function completeRec(){
     if (errs.length){ alert('尚未完成，請先修正：\n'+errs.join('\n')); return; }
     var scores=collectScores();
     $.post(API, {action:'complete_target', target_id:recTid, audit_date:$('#recDate').val(), plan_month:$('#recPlanMonth').val(),
-        audit_mode:$('#recMode').val(), auditor:$('#recAuditor').val(),
+        audit_mode:$('#recMode').val(), auditor:$('#recAuditor').val(), review_type:$('input[name=recReviewType]:checked').val()||'',
         self_evaluator:$('#recSelfEval').val(), report_no:$('#recReport').val(),
         conclusion:$('#recConclusion').val(), note:$('#recNote').val(), scores:JSON.stringify(scores)},
     function(res){
         if(!res.ok){ alert(res.error||'完成失敗'); return; }
-        alert(res.status==='approved' ? '已完成並自動核可' : '已完成，請按「送審核」送出簽核');
+        alert(res.status==='approved' ? '已完成並自動核可' : '已完成，已自動通知主管簽核');
         closeMask('recMask'); loadRound();
     }, 'json').fail(function(x){ alert('完成失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }

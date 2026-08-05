@@ -135,6 +135,7 @@ function vendor_audit_ensure_schema(PDO $db): void {
         "ALTER TABLE vendor_audit_target ADD COLUMN completed_at DATETIME NULL COMMENT '按下完成的時間'",
         "ALTER TABLE vendor_audit_target ADD COLUMN completed_by INT NULL COMMENT '按下完成的使用者id'",
         "ALTER TABLE vendor_audit_target ADD COLUMN completed_by_name VARCHAR(50) NULL",
+        "ALTER TABLE vendor_audit_target ADD COLUMN review_type VARCHAR(10) NULL COMMENT 'site=人員實地審查 self=供應商主自評核 abnormal=異常檢核'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
     }
@@ -425,6 +426,7 @@ function vendor_audit_validate_complete(array $post, array $cfg): array {
     $errs = [];
     if (trim((string)($post['auditor'] ?? '')) === '') $errs[] = '請填寫稽核員';
     if (trim((string)($post['conclusion'] ?? '')) === '') $errs[] = '請選擇建議評鑑結果';
+    if (!in_array($post['review_type'] ?? '', ['site','self','abnormal'], true)) $errs[] = '請選擇審查類別（人員實地審查／供應商主自評核／異常檢核）';
     $scores = is_array($post['scores'] ?? null) ? $post['scores'] : [];
     $badSelf = 0; $badAudit = 0;
     foreach (($cfg['items'] ?? []) as $cat) {
@@ -444,6 +446,16 @@ function vendor_audit_validate_complete(array $post, array $cfg): array {
     if ($badSelf)  $errs[] = "尚有 {$badSelf} 項自評分未填寫或超出範圍";
     if ($badAudit) $errs[] = "尚有 {$badAudit} 項稽核分未填寫或超出範圍";
     return $errs;
+}
+
+/** 查核表「生產類別」自動勾選：依供應商主檔大類名稱比對原料/委外加工件/包材，比對不到回 null(不自動勾) */
+function vendor_audit_prod_type(?string $mainCatName): ?string {
+    $n = (string)$mainCatName;
+    if ($n === '') return null;
+    if (mb_strpos($n, '委外') !== false || mb_strpos($n, '加工') !== false) return 'outsource';
+    if (mb_strpos($n, '包材') !== false) return 'packaging';
+    if (mb_strpos($n, '原料') !== false) return 'raw';
+    return null;
 }
 
 /* ============================================================
@@ -484,17 +496,35 @@ function vendor_audit_sign_dept_options(PDO $db): array {
     return $out;
 }
 /** 解析目前設定下實際該簽核的人（含代理/迴避解析）；找不到部門或主管回 null */
+/**
+ * 解析目前設定下實際該簽核的人（含代理/迴避解析）。
+ * 若設定部門「無主管」或解析出的簽核人剛好就是製表人(申請人)本人，自動往上一個部門找主管，
+ * 一路往上找到不同於申請人的人就用；若找到最上層仍是同一人(或整段都無主管)，
+ * 允許回退成同一人(使用者已明確要求「若無上方部門時可允許同一人」)；完全找不到任何主管才回 null。
+ */
 function vendor_audit_resolve_signer(PDO $db, int $applicantUserId = 0): ?array {
     $set = vendor_audit_sign_setting($db);
     if (!$set['dept_id']) return null;
-    $mgr = eg_org_dept_manager($db, $set['dept_id']);
-    if (!$mgr) return null;
-    $res = eg_resolve_signer($db, (int)$mgr['id'], ['applicant_id'=>$applicantUserId, 'flow_key'=>'vendor_audit_sign', 'log'=>true]);
-    $sid = (int)$res['signer_id'];
-    $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
-    $st->execute([$sid]);
-    $name = $st->fetchColumn();
-    return ['id'=>$sid, 'name'=>(string)($name ?: ''), 'is_deputy'=>!empty($res['is_delegated'])];
+    $deptId = $set['dept_id'];
+    $fallback = null;
+    for ($hop = 0; $hop < 8 && $deptId; $hop++) {
+        $mgr = eg_org_dept_manager($db, $deptId);
+        if ($mgr) {
+            $res = eg_resolve_signer($db, (int)$mgr['id'], ['applicant_id'=>$applicantUserId, 'flow_key'=>'vendor_audit_sign', 'log'=>true]);
+            $sid = (int)$res['signer_id'];
+            $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+            $st->execute([$sid]);
+            $cand = ['id'=>$sid, 'name'=>(string)($st->fetchColumn() ?: ''), 'is_deputy'=>!empty($res['is_delegated'])];
+            if ($sid !== $applicantUserId) return $cand;
+            $fallback = $cand;
+        }
+        try {
+            $pst = $db->prepare("SELECT parent_id FROM department WHERE id=?");
+            $pst->execute([$deptId]);
+            $deptId = (int)($pst->fetchColumn() ?: 0) ?: null;
+        } catch (Throwable $e) { $deptId = null; }
+    }
+    return $fallback;
 }
 
 if (!function_exists('vendor_audit_notify_sign')) {

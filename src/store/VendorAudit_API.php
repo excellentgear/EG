@@ -402,9 +402,10 @@ case 'remove_target': {
 /* 讀取某對象的完整評鑑表單（供編輯） */
 case 'get_form': {
     $tid = (int)($_GET['target_id'] ?? 0);
-    $st = $db->prepare("SELECT t.*, m.maker_id, m.main_category_id, sc.sub_cat_names AS main_cat_name
+    $st = $db->prepare("SELECT t.*, m.maker_id, m.main_category_id, sc.sub_cat_names AS main_cat_name, dc.main_cat_name AS main_category_name
                         FROM vendor_audit_target t
                         JOIN maker_list m ON m.maker_id_no=t.maker_id_no
+                        LEFT JOIN dict_maker_main_category dc ON dc.main_cat_id=m.main_category_id
                         " . vendor_audit_subcat_join() . "
                         WHERE t.target_id=?");
     $st->execute([$tid]);
@@ -434,7 +435,8 @@ case 'get_form': {
         'main_cat_name'=>$t['main_cat_name'], 'scope'=>$scope, 'scope_label'=>vendor_audit_scope_label($scope),
         'audit_date'=>$t['audit_date'], 'auditor'=>$t['auditor'],
         'report_no'=>$t['report_no'], 'note'=>$t['note'], 'audit_mode'=>$t['audit_mode'], 'plan_month'=>$t['plan_month'],
-        'self_evaluator'=>$t['self_evaluator'], 'conclusion'=>$t['conclusion'],
+        'self_evaluator'=>$t['self_evaluator'], 'conclusion'=>$t['conclusion'], 'review_type'=>$t['review_type'],
+        'prod_type'=>vendor_audit_prod_type($t['main_category_name']),
         'self_rate'=>$t['self_rate'], 'audit_rate'=>$t['audit_rate'], 'overall_rate'=>$t['overall_rate'], 'judge'=>$t['judge'],
         'scores'=>is_array($scores) ? $scores : new stdClass(),
         'status'=>$t['status'] ?: 'draft', 'signed_by_name'=>$t['signed_by_name'], 'signed_at'=>$t['signed_at'],
@@ -558,6 +560,7 @@ case 'record_target': {
     $selfEval = trim((string)($_POST['self_evaluator'] ?? '')) ?: null;
     $supplierRep = trim((string)($_POST['supplier_rep'] ?? '')) ?: null;
     $conclusion = trim((string)($_POST['conclusion'] ?? '')) ?: null;
+    $reviewType = in_array($_POST['review_type'] ?? '', ['site','self','abnormal'], true) ? $_POST['review_type'] : null;
     $pm = (int)($_POST['plan_month'] ?? 0); $pm = ($pm >= 1 && $pm <= 12) ? $pm : null;
 
     // scores：{item_id:{self,audit,note}}
@@ -576,8 +579,8 @@ case 'record_target': {
             $db->beginTransaction();
             $db->prepare("UPDATE vendor_audit_target SET audit_date=NULL, scores_json=NULL, self_rate=NULL, audit_rate=NULL,
                           overall_rate=NULL, judge=NULL, plan_month=?, audit_mode=?, self_evaluator=?, supplier_rep=?, conclusion=?,
-                          auditor=?, report_no=?, note=?, status='draft', checklist_snapshot=NULL WHERE target_id=?")
-               ->execute([$pm,$auditMode,$selfEval,$supplierRep,$conclusion,$auditor,$reportNo,$note,$tid]);
+                          auditor=?, report_no=?, note=?, review_type=?, status='draft', checklist_snapshot=NULL WHERE target_id=?")
+               ->execute([$pm,$auditMode,$selfEval,$supplierRep,$conclusion,$auditor,$reportNo,$note,$reviewType,$tid]);
             $db->commit();
         } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
         jout(['cleared'=>true]);
@@ -588,12 +591,12 @@ case 'record_target': {
         $db->beginTransaction();
         $db->prepare("UPDATE vendor_audit_target SET audit_date=?, scores_json=?, self_rate=?, audit_rate=?, overall_rate=?,
                       judge=?, plan_month=?, audit_mode=?, self_evaluator=?, supplier_rep=?, conclusion=?, auditor=?, report_no=?, note=?,
-                      checklist_snapshot=? WHERE target_id=?")
+                      review_type=?, checklist_snapshot=? WHERE target_id=?")
            ->execute([$auditDate, $hasScore ? json_encode($scores, JSON_UNESCAPED_UNICODE) : null,
                       $hasScore ? $tt['self_rate'] : null, $hasScore ? $tt['audit_rate'] : null,
                       $hasScore ? $tt['overall_rate'] : null, $hasScore ? $tt['judge'] : null,
                       $pm, $auditMode, $selfEval, $supplierRep, $conclusion, $auditor, $reportNo, $note,
-                      $snapshotToSave, $tid]);
+                      $reviewType, $snapshotToSave, $tid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout(['rates'=>$rates]);
@@ -636,29 +639,38 @@ case 'complete_target': {
         $set = vendor_audit_sign_setting($db);
         $signer = vendor_audit_resolve_signer($db, $uid);
         $autoApprove = !empty($set['auto']) || ($signer && (int)$signer['id'] === $uid);
-        $newStatus = $autoApprove ? 'approved' : 'completed';
+        if (!$autoApprove && !$signer) { $db->rollBack(); jerr('尚未設定簽核部門，請聯絡管理員先於「簽核設定」指定簽核部門'); }
+        $newStatus = $autoApprove ? 'approved' : 'pending';
         $signedByName = $autoApprove ? ($signer ? $signer['name'] : $uname) : null;
         $signedIsDeputy = $autoApprove && $signer ? (!empty($signer['is_deputy']) ? 1 : 0) : null;
         $signedAt = $autoApprove ? date('Y-m-d H:i:s') : null;
 
         $db->prepare("UPDATE vendor_audit_target SET audit_date=?, scores_json=?, self_rate=?, audit_rate=?, overall_rate=?,
                       judge=?, plan_month=?, audit_mode=?, self_evaluator=?, supplier_rep=?, conclusion=?, auditor=?, report_no=?, note=?,
-                      checklist_snapshot=?, status=?, completed_at=NOW(), completed_by=?, completed_by_name=?,
+                      review_type=?, checklist_snapshot=?, status=?, completed_at=NOW(), completed_by=?, completed_by_name=?,
                       signed_by_name=?, signed_at=?, signed_is_deputy=? WHERE target_id=?")
            ->execute([$auditDate, json_encode($scores, JSON_UNESCAPED_UNICODE), $tt['self_rate'], $tt['audit_rate'],
                       $tt['overall_rate'], $tt['judge'], $pm, $auditMode, $selfEval, $supplierRep, $conclusion, $auditor, $reportNo, $note,
-                      $snapshotToSave, $newStatus, $uid, $uname, $signedByName, $signedAt, $signedIsDeputy, $tid]);
+                      $reviewType, $snapshotToSave, $newStatus, $uid, $uname, $signedByName, $signedAt, $signedIsDeputy, $tid]);
 
+        $aid = eg_approval_submit($db, 'vendor_audit_sign', $tid, 'manager', $uid, $uname);
         if ($autoApprove) {
-            $aid = eg_approval_submit($db, 'vendor_audit_sign', $tid, 'manager', $uid, $uname);
             eg_approval_decide($db, $aid, $signer ? (int)$signer['id'] : $uid, $signedByName ?: $uname, 'approved', '系統自動核可/送審人即簽核人免審');
         }
         $db->commit();
+        // 需簽核者：完成當下直接自動通知解析出的簽核人，不必再多按一次「送審核」
+        if (!$autoApprove && $signer) {
+            $mk = $db->prepare("SELECT maker_id FROM maker_list WHERE maker_id_no=(SELECT maker_id_no FROM vendor_audit_target WHERE target_id=?)");
+            $mk->execute([$tid]);
+            $makerId = (string)($mk->fetchColumn() ?: '');
+            $leId = vendor_audit_notify_sign($db, $tid, (int)$signer['id'], $makerId, $uid, $uname);
+            if ($leId) eg_approval_set_live_event($db, $aid, $leId);
+        }
     } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout(['status'=>$newStatus]);
 }
 
-/* 送審核：完成待審者由此送出通知給解析出的簽核人 */
+/* 送審核：完成待審者由此送出通知給解析出的簽核人（保留供舊流程/意外中斷後補送使用） */
 case 'submit_sign': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $tid = (int)($_POST['target_id'] ?? 0);
