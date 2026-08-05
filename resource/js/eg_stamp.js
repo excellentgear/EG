@@ -12,10 +12,26 @@
 
     // 簽章印章 SVG（回墨印）：上=公司全名分兩列(上4字/下最多6字,自動縮字)、中=日期、下=人員中文名
     // 字體標楷體；不另顯示部門/職稱。isDeputy=true 時右下角加「代」字（代理人代簽）。
-    function stamp(name, date, isDeputy) {
+    // tplSchema：選用，某些模組(如會議紀錄的出席簽到/項目確認簽名)可在設定內指定改用「圖章模板設計」(eg_stamp_tpl.js)的樣式；
+    // 有掃描實體章仍優先用掃描章(不受模板影響，因為那是真實蓋出來的章)，只有沒掃描章時才套用模板產生 SVG。
+    function stamp(name, date, isDeputy, tplSchema) {
         var a = ASSETS && name ? ASSETS[name] : null;
         if (a) return scanStamp(name, date, isDeputy, a);
+        if (tplSchema && global.EGStampTpl) return tplStamp(name, date, isDeputy, tplSchema);
         return svgStamp(name, date, isDeputy);
+    }
+
+    function tplStamp(name, date, isDeputy, schema) {
+        var ctx = { company: global.__ownCompany || '', name: name || '', date: date || '' };
+        var svg = global.EGStampTpl.render(schema, ctx);
+        if (isDeputy) {
+            var ratio = Math.min(3, Math.max(0.3, +schema.ratio || 1));
+            var h = Math.round(100 * ratio);
+            var color = schema.color || '#cf3a2b';
+            svg = svg.replace('</svg>', '<text x="92" y="' + (h - 4) + '" text-anchor="end" font-size="13" fill="' + color
+                + '" font-weight="bold" font-family="DFKai-SB,BiauKai,KaiTi,&quot;標楷體&quot;,serif">代</text></svg>');
+        }
+        return wrap(svg, name, date, isDeputy);
     }
 
     // 掃描實體章：去背 PNG 當底圖，日期帶區域鋪白遮罩蓋掉掃描件上的舊日期，再壓動態日期（圖章系統說明.md 第二節）

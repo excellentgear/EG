@@ -4,6 +4,50 @@
  * 讓該頁與會議紀錄模組(meeting_lib.php)共用同一套邏輯，避免各自維護、也不受該頁未來存廢影響。
  */
 
+/** kpi_monthly_targets 表若不存在就建立(原本只有 Shipping_Analysis_new.php 頂層程式碼會建，該頁存廢不應影響本函式庫可用性)。 */
+function kpi_ensure_schema(PDO $pdo): void {
+    try { $pdo->query("SELECT id FROM kpi_monthly_targets LIMIT 1"); return; } catch (Throwable $e) {}
+    try {
+        $pdo->exec("CREATE TABLE kpi_monthly_targets (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            year SMALLINT NOT NULL,
+            month TINYINT NOT NULL,
+            target_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+            start_day TINYINT NOT NULL DEFAULT 1 COMMENT '帳款月起始日（截止日+1），獨立儲存避免後續變更截止日影響歷史紀錄',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_ym (year, month)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='月份出貨KPI目標設定'");
+    } catch (Throwable $e) {}
+}
+
+/** 出貨目標達成率週報的基礎設定：週目標金額(全域，system_parameters)＋該月帳款起始日(kpi_monthly_targets，可逐月覆蓋)。
+ *  被 Shipping_Analysis_new.php(週報頁)、meeting_lib.php(會議插入用)、kpi_as_lib.php(AS9100 KPI資料來源)共用讀取；
+ *  寫入一律走 kpi_target_save()，不要各頁自己拼 SQL，任何頁面要做設定UI都呼叫這兩支即可。 */
+function kpi_target_get(PDO $pdo, int $year, int $month): array {
+    $target = 0.0;
+    try {
+        $t = $pdo->query("SELECT param_value FROM system_parameters WHERE param_group='SHIPPING_ANALYSIS' AND param_key='KPI_TARGET' LIMIT 1")->fetchColumn();
+        if ($t !== false) $target = (float)$t;
+    } catch (Throwable $e) {}
+    $startDay = 0;
+    try {
+        $st = $pdo->prepare("SELECT start_day FROM kpi_monthly_targets WHERE year=? AND month=?");
+        $st->execute([$year, $month]);
+        $sv = $st->fetchColumn();
+        if ($sv !== false) $startDay = (int)$sv;
+    } catch (Throwable $e) {}
+    return ['target_amount'=>$target, 'start_day'=>$startDay];
+}
+function kpi_target_save(PDO $pdo, int $year, int $month, float $target, int $startDay): void {
+    kpi_ensure_schema($pdo);
+    $pdo->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description)
+        VALUES ('SHIPPING_ANALYSIS','KPI_TARGET',?,'KPI月目標金額（全域）')
+        ON DUPLICATE KEY UPDATE param_value=VALUES(param_value)")->execute([$target]);
+    $pdo->prepare("INSERT INTO kpi_monthly_targets (year,month,target_amount,start_day) VALUES (?,?,0,?)
+        ON DUPLICATE KEY UPDATE start_day=VALUES(start_day), updated_at=NOW()")->execute([$year, $month, $startDay]);
+}
+
 function kpi_query_week(PDO $pdo, string $ws, string $we): array {
     $s1 = $pdo->prepare("SELECT COALESCE(SUM(Qty*Unit_price),0) AS amt, COALESCE(SUM(Qty),0) AS qty, COUNT(*) AS cnt FROM is_list WHERE Order_date BETWEEN ? AND ? AND Unit_price > 0");
     $s1->execute([$ws, $we]); $r1 = $s1->fetch(PDO::FETCH_ASSOC);
@@ -26,6 +70,7 @@ function kpi_query_week(PDO $pdo, string $ws, string $we): array {
  * (只是不含該頁專屬的表尾設定 footer，footer 由頁面自己讀，不屬於 KPI 計算的一部分)。
  */
 function kpi_weekly_report(PDO $pdo, int $year, int $month): array {
+    kpi_ensure_schema($pdo);
     $g_cutoff = 0;
     try { $g_cutoff = intval($pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='billing_cutoff_day' LIMIT 1")->fetchColumn()); } catch (Throwable $e) {}
 

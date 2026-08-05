@@ -795,23 +795,7 @@ try { $conn->getPDO()->query("SELECT exclude_top10 FROM is_sale_type LIMIT 1"); 
     try { $conn->getPDO()->exec("ALTER TABLE is_sale_type ADD COLUMN exclude_top10 tinyint(1) NOT NULL DEFAULT 0 COMMENT '排除十大熱銷產品統計'"); } catch (Exception $_ae) {}
 }
 
-// 確保 kpi_monthly_targets 資料表存在
-try {
-    $conn->getPDO()->query("SELECT id FROM kpi_monthly_targets LIMIT 1");
-} catch (Exception $_ke) {
-    try {
-        $conn->getPDO()->exec("CREATE TABLE kpi_monthly_targets (
-            id           INT AUTO_INCREMENT PRIMARY KEY,
-            year         SMALLINT     NOT NULL,
-            month        TINYINT      NOT NULL,
-            target_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-            start_day    TINYINT      NOT NULL DEFAULT 1 COMMENT '帳款月起始日（截止日+1），獨立儲存避免後續變更截止日影響歷史紀錄',
-            created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            UNIQUE KEY uk_ym (year, month)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='月份出貨KPI目標設定'");
-    } catch (Exception $_kae) {}
-}
+// kpi_monthly_targets 資料表自動建立已收斂進 src/common/kpi_lib.php 的 kpi_ensure_schema()（get_kpi_data/save_kpi_target 都會呼叫到），不在此重複維護
 
 // ── AJAX: 取得 KPI 週報資料 ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_kpi_data') {
@@ -841,25 +825,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_k
     exit;
 }
 
-// ── AJAX: 儲存 KPI 月份目標 ──
+// ── AJAX: 儲存 KPI 月份目標（共用 kpi_lib.php 的 kpi_target_save，Shipping_Analysis_new.php/會議紀錄/AS9100 KPI 設定頁都走同一支寫入邏輯）──
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_kpi_target') {
     header('Content-Type: application/json');
+    require_once '../../src/common/kpi_lib.php';
     try {
-        $pdo       = $conn->getPDO();
-        $year      = intval($_POST['year']);
-        $month     = intval($_POST['month']);
-        $target    = floatval($_POST['target_amount'] ?? 0);
-        $start_day = intval($_POST['start_day'] ?? 1);
-
-        // 目標金額全域儲存（所有月份共用）
-        $pdo->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description)
-            VALUES ('SHIPPING_ANALYSIS','KPI_TARGET',?,'KPI月目標金額（全域）')
-            ON DUPLICATE KEY UPDATE param_value=VALUES(param_value)")
-            ->execute([$target]);
-
-        // 起始日仍保持各月獨立儲存
-        $pdo->prepare("INSERT INTO kpi_monthly_targets (year,month,target_amount,start_day) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE start_day=VALUES(start_day), updated_at=NOW()")
-            ->execute([$year, $month, 0, $start_day]);
+        $pdo = $conn->getPDO();
+        kpi_target_save($pdo, intval($_POST['year']), intval($_POST['month']),
+            floatval($_POST['target_amount'] ?? 0), intval($_POST['start_day'] ?? 1));
         echo json_encode(['success' => true]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);

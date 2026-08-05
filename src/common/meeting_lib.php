@@ -217,17 +217,13 @@ function meeting_verify_own_password(PDO $db, int $forUid, string $password): ar
  * ============================================================ */
 
 /** 主席簽核人（含代理解析）：主席本人今日有行程忙碌時，改由代理人簽 */
+/** 主席簽核人：一律直送主席本人，不走代理判定(使用者明確要求的特例，2026-08-05)。
+ *  理由：會議記錄的主席＝該場會議行事曆上實際出席主持的人，delegate_lib 的「今日行程忙碌」判定
+ *  對這裡完全不適用(忙碌判定本身可能就是因為他正在開這場會，反而被誤判成沒空)；曾發生代理人被誤轉去某位
+ *  當天請假、根本不知情的員工，主席本人反而完全沒收到待簽通知。往後若要恢復代理判定需使用者另外確認。 */
 function meeting_chair_signer_effective(PDO $db, int $chairUid, string $chairName): array {
     if ($chairUid <= 0) return ['id'=>0, 'name'=>'', 'is_delegated'=>false];
-    try {
-        require_once __DIR__ . '/delegate_lib.php';
-        $r = eg_resolve_signer($db, $chairUid, ['flow_key'=>'meeting_chair']);
-        $sid = (int)($r['signer_id'] ?? $chairUid);
-        if ($sid === $chairUid) return ['id'=>$chairUid, 'name'=>$chairName, 'is_delegated'=>false];
-        $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
-        $st->execute([$sid]);
-        return ['id'=>$sid, 'name'=>(string)($st->fetchColumn() ?: $chairName), 'is_delegated'=>true];
-    } catch (Throwable $e) { return ['id'=>$chairUid, 'name'=>$chairName, 'is_delegated'=>false]; }
+    return ['id'=>$chairUid, 'name'=>$chairName, 'is_delegated'=>false];
 }
 
 /** 總經理（最高核准人員，org_role_lib 'top_approver'）簽核人，含代理解析 */
@@ -275,6 +271,19 @@ function meeting_close_notice(PDO $db, int $meetingId): void {
     } catch (Throwable $e) {}
 }
 
+/** 撤回時一併關閉本次送出所發出的「項目待確認回簽」通知(MEETING_ITEM_CONFIRM，ref_id=item_id) */
+function meeting_close_item_notices(PDO $db, int $meetingId): void {
+    try {
+        $ids = $db->prepare("SELECT item_id FROM meeting_item WHERE meeting_id=?");
+        $ids->execute([$meetingId]);
+        $itemIds = array_map('intval', $ids->fetchAll(PDO::FETCH_COLUMN));
+        if (!$itemIds) return;
+        $in = implode(',', $itemIds);
+        $db->exec("UPDATE live_event SET enddate=DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                   WHERE ref_type='MEETING_ITEM_CONFIRM' AND ref_id IN ($in) AND (enddate IS NULL OR enddate>=CURDATE())");
+    } catch (Throwable $e) {}
+}
+
 /**
  * 部門指派項目待確認通知：發給該（多）負責部門「本次未出席」的成員，走一般通知系統回簽（ref_type='MEETING_ITEM_CONFIRM'，ref_id=項目id）。
  * 有出席的部門成員一律在會議記錄現場用本人密碼確認（item_confirm，見 Meeting_API.php），不走這條通知路線，
@@ -297,13 +306,32 @@ function meeting_notify_item_owners(PDO $db, int $itemId, array $toUids, string 
     } catch (Throwable $e) { return 0; }
 }
 
-/** 負責部門(含子項目)中「本次未出席」的成員 id 清單，用來決定要發通知給誰回簽 */
+/** 負責部門(含子項目)中「本次未出席」的成員 id 清單，用來決定要發通知給誰回簽。
+ *  部門成員一律以「會議當天」的部門歸屬為準(ai-rules/14，走 position_history_lib.php 的
+ *  eg_position_snapshot_at_bulk())，不可用查詢當下(送出時)的現況——否則像 8/3 才兼任業務職務的人，
+ *  會被誤通知去確認 7/28 那場會議的業務部門項目(2026-08-05 使用者實際回報的案例)。 */
 function meeting_dept_nonattendee_targets(PDO $db, int $meetingId, array $ownerDeptIds): array {
-    require_once __DIR__ . '/people_lib.php';
+    require_once __DIR__ . '/position_history_lib.php';
     if (!$ownerDeptIds) return [];
-    $members = eg_people_list($db, ['dept_ids'=>$ownerDeptIds]);
-    $memberIds = array_map('intval', array_column($members, 'id'));
+    $mst = $db->prepare("SELECT meeting_date FROM meeting_record WHERE meeting_id=?");
+    $mst->execute([$meetingId]);
+    $meetingDate = (string)($mst->fetchColumn() ?: date('Y-m-d'));
+
+    $snapAll = eg_position_snapshot_at_bulk($db, $meetingDate);
+    $deptSet = array_flip($ownerDeptIds);
+    $memberIds = [];
+    foreach ($snapAll as $memberUid => $snap) {
+        foreach ($snap as $row) {
+            if (isset($deptSet[(int)$row['department_id']])) { $memberIds[] = (int)$memberUid; break; }
+        }
+    }
     if (!$memberIds) return [];
+    // 排除離職／特殊帳號（歷史快照不含在職狀態，仍須另外過濾，不可通知已離職的人）
+    $in = implode(',', $memberIds);
+    $active = $db->query("SELECT id FROM `user` WHERE id IN ($in) AND state NOT IN (0,90)")->fetchAll(PDO::FETCH_COLUMN);
+    $memberIds = array_map('intval', $active);
+    if (!$memberIds) return [];
+
     $st = $db->prepare("SELECT user_id FROM meeting_attendee WHERE meeting_id=?");
     $st->execute([$meetingId]);
     $attendeeIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));

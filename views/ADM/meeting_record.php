@@ -403,6 +403,25 @@ foreach ($roleRows as $rr) {
                     <button type="button" class="b-att" onclick="openSignsheetPicker()">選擇</button>
                 </div>
             </div>
+            <div style="margin-top:16px;">
+                <label>出席人員／簽到、負責人／確認簽名 的簽名圖章樣式</label>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <select id="setStampTpl" style="flex:1;"><option value="0">（預設印章樣式）</option></select>
+                    <button type="button" class="b-att" onclick="submitStampTpl()">儲存</button>
+                </div>
+                <p class="text-muted" style="font-size:11.5px;margin:4px 0 0;">套用哪個模板請到「圖章管理 → 線上圖章設計」建立/挑選；有上傳掃描實體章的人一律優先用掃描章，這裡只影響沒掃描章時自動產生的印章樣式。</p>
+            </div>
+            <div style="margin-top:16px;">
+                <label>出貨目標達成率 基礎設定（週目標金額／帳款起始日）</label>
+                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                    <select id="kpiTgtYear" style="width:80px;"></select>
+                    <select id="kpiTgtMonth" style="width:70px;"></select>
+                    <span>週目標金額</span><input type="number" id="kpiTgtAmount" style="width:120px;" min="0">
+                    <span>帳款起始日</span><input type="number" id="kpiTgtStartDay" style="width:60px;" min="1" max="28">
+                    <button type="button" class="b-att" onclick="submitKpiTarget()">儲存</button>
+                </div>
+                <p class="text-muted" style="font-size:11.5px;margin:4px 0 0;">此設定與 KPI 設定頁（AS9100 關鍵績效指標）共用同一組設定，兩邊改其中一處即可，出貨目標達成率週報頁面(Shipping_Analysis_new.php)存廢不影響。</p>
+            </div>
         </div>
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('mtSetMask')">關閉</button></div>
@@ -453,6 +472,7 @@ foreach ($roleRows as $rr) {
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script>
 $(document).ready(function(){
@@ -1027,7 +1047,7 @@ function viewHtml(res){
         var signed = +a.signed === 1;
         h += '<tr data-uid="'+a.user_id+'"><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td>'
            + '<td>'+esc(a.user_name||'')+'</td>'
-           + '<td>'+(signed ? '<span class="sign-ok">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name,String(a.signed_at||'').substr(0,10)):'<i class="fa fa-check"></i>')
+           + '<td>'+(signed ? '<span class="sign-ok">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name,String(a.signed_at||'').substr(0,10),false,mStampSchema()):'<i class="fa fa-check"></i>')
                 + ' <span style="font-size:11px;">'+esc(String(a.signed_at||'').substr(0,16))+'</span></span>'
                 : '<span class="sign-row"><input type="password" placeholder="本人密碼，按Enter簽到" id="pw-'+a.user_id+'" data-eg-skip'
                   + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();signAttendee('+m.meeting_id+','+a.user_id+');}"></span>')+'</td></tr>';
@@ -1061,7 +1081,18 @@ function viewHtml(res){
     } else if (m.approval_status==='chair_done' && (+m.gm_signer_id===META.uid || PERMS.canAdmin)) {
         h += decideBoxHtml(m.meeting_id, 'gm', '總經理確認簽章', true);
     }
+    // 撤回：僅「待主席簽章且尚未任何人簽核」時、記錄人本人或管理員可撤回(退回draft修改後重新送出)
+    if (m.approval_status==='submitted' && (+m.recorder_user_id===META.uid || PERMS.canAdmin)) {
+        h += '<div style="margin-top:10px;"><button type="button" class="b-att wt" style="color:#DD5138;border-color:#DD5138;" onclick="withdrawMeeting('+m.meeting_id+')"><i class="fa fa-reply"></i> 撤回（送錯了/送早了，改回草稿）</button></div>';
+    }
     return h;
+}
+function withdrawMeeting(mid){
+    if (!confirm('確定撤回？將取消目前的主席待簽通知，退回草稿狀態，可修改後重新送出。')) return;
+    $.post(API, {action:'withdraw', meeting_id:mid}, function(res){
+        if (!res.ok){ alert(res.error||'撤回失敗'); return; }
+        alert('已撤回，改為草稿狀態。'); closeMask('viewMask'); loadList();
+    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '撤回失敗'); });
 }
 function decideBoxHtml(mid, level, title, withItemComments){
     var h = '<div class="decide-box"><b>'+title+'</b>';
@@ -1082,7 +1113,7 @@ function signAttendee(mid, uidv){
         var att = (VIEW.attendees||[]).filter(function(a){ return String(a.user_id)===String(uidv); })[0];
         var nowStr = new Date().toISOString().slice(0,16).replace('T',' ');
         if (att) { att.signed = 1; att.signed_at = nowStr; }
-        var stampHtml = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(att?att.user_name:'', nowStr.substr(0,10)) : '<i class="fa fa-check"></i>';
+        var stampHtml = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(att?att.user_name:'', nowStr.substr(0,10), false, mStampSchema()) : '<i class="fa fa-check"></i>';
         $('tr[data-uid="'+uidv+'"] td:last-child').html('<span class="sign-ok">'+stampHtml+' <span style="font-size:11px;">'+esc(nowStr)+'</span></span>');
         var next = (VIEW.attendees||[]).filter(function(a){ return !(+a.signed); })[0];
         if (next) setTimeout(function(){ $('#pw-'+next.user_id).focus(); }, 30);
@@ -1201,7 +1232,7 @@ function meetingItemGroupRows(items, kind, groupLabel){
     return rows.map(function(it,i){
         var deptNames = (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
         var confirmHtml = it.confirm_user_name
-            ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(it.confirm_user_name, String(it.confirm_at||'').substr(0,10)):esc(it.confirm_user_name))
+            ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(it.confirm_user_name, String(it.confirm_at||'').substr(0,10), false, mStampSchema()):esc(it.confirm_user_name))
             : '';
         return '<tr>' + (i===0 ? '<td class="mr-grp" rowspan="'+rows.length+'">'+groupLabel+'</td>' : '')
              + '<td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td>'
@@ -1262,7 +1293,7 @@ function signSheetPageHtml(m, attendees, withSignatures, inlineDocNo){
         var sigHtml = '';
         if (withSignatures) {
             var signed = +a.signed===1;
-            sigHtml = signed ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name, String(a.signed_at||'').substr(0,10)):esc(a.user_name)) : '';
+            sigHtml = signed ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name, String(a.signed_at||'').substr(0,10), false, mStampSchema()):esc(a.user_name)) : '';
         }
         return '<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td><td>'+sigHtml+'</td></tr>';
     }).join('');
@@ -1332,7 +1363,7 @@ function doPrintFullRecord(preparerName){
 }
 
 /* ---------- 模組設定：角色設定(仿 training_record.php) + 附件路徑/簽到表AS綁定 ---------- */
-$('#btnMtSetting').on('click', function(){ setTabSwitch('role'); loadRoles(); $('#setNasDir').val(META.attach_nas_dir||''); renderSignsheetLabel(); openMask('mtSetMask'); });
+$('#btnMtSetting').on('click', function(){ setTabSwitch('role'); loadRoles(); $('#setNasDir').val(META.attach_nas_dir||''); renderSignsheetLabel(); loadStampTplOptions(); loadKpiTargetUI(); openMask('mtSetMask'); });
 function setTabSwitch(tab){
     $('.set-tab').removeClass('active'); $('.set-tab[data-tab="'+tab+'"]').addClass('active');
     $('#setPaneRole').toggle(tab==='role'); $('#setPaneAttach').toggle(tab==='attach');
@@ -1409,6 +1440,48 @@ function submitNasDir(){
     $.post(API, {action:'attach_setting_save', nas_dir:$('#setNasDir').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         META.attach_nas_dir = res.attach_nas_dir; alert('已儲存');
+    }, 'json');
+}
+/* 出席簽到／項目確認簽名要不要套用自訂圖章模板：META.stamp_template 由模組設定頁指定(見 loadStampTplOptions/submitStampTpl) */
+function mStampSchema(){ return META.stamp_template ? META.stamp_template.schema : null; }
+function loadStampTplOptions(){
+    $.getJSON(API, {action:'stamp_tpl_options'}, function(res){
+        if (!res.ok) return;
+        var cur = META.stamp_template ? META.stamp_template.id : 0;
+        var h = '<option value="0">（預設印章樣式）</option>';
+        (res.templates||[]).forEach(function(t){
+            h += '<option value="'+t.id+'"'+(String(t.id)===String(cur)?' selected':'')+'>'+(t.type_name?esc(t.type_name)+'｜':'')+esc(t.tpl_name)+'</option>';
+        });
+        $('#setStampTpl').html(h);
+    });
+}
+function submitStampTpl(){
+    $.post(API, {action:'stamp_tpl_save', template_id:$('#setStampTpl').val()}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        loadMeta(function(){ alert('已儲存，重新整理頁面後對出席簽到/項目確認簽名生效'); });
+    }, 'json');
+}
+function loadKpiTargetUI(){
+    var y0 = +String(META.today||'').substr(0,4) || new Date().getFullYear();
+    var $y = $('#kpiTgtYear').empty(), $m = $('#kpiTgtMonth').empty();
+    for (var y=y0-1; y<=y0+1; y++) $y.append('<option value="'+y+'"'+(y===y0?' selected':'')+'>'+y+' 年</option>');
+    for (var mo=1; mo<=12; mo++) $m.append('<option value="'+mo+'">'+mo+' 月</option>');
+    $m.val(+String(META.today||'').substr(5,2) || (new Date().getMonth()+1));
+    loadKpiTargetValues();
+}
+function loadKpiTargetValues(){
+    $.getJSON(API, {action:'kpi_target_get', year:$('#kpiTgtYear').val(), month:$('#kpiTgtMonth').val()}, function(res){
+        if (!res.ok) return;
+        $('#kpiTgtAmount').val(res.target_amount||0);
+        $('#kpiTgtStartDay').val(res.start_day||1);
+    });
+}
+$(document).on('change', '#kpiTgtYear,#kpiTgtMonth', loadKpiTargetValues);
+function submitKpiTarget(){
+    $.post(API, {action:'kpi_target_save', year:$('#kpiTgtYear').val(), month:$('#kpiTgtMonth').val(),
+        target_amount:$('#kpiTgtAmount').val(), start_day:$('#kpiTgtStartDay').val()}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        alert('已儲存');
     }, 'json');
 }
 function renderSignsheetLabel(){

@@ -166,6 +166,24 @@ $kpiPerms = kpi_as_perms($db, $kpiUser);
             </div>
         </div>
 
+        <!-- 出貨目標達成率基礎設定 -->
+        <div class="ks-panel">
+            <div class="p-head"><i class="fa fa-line-chart"></i> 出貨目標達成率 基礎設定（週目標金額／帳款起始日）</div>
+            <div class="p-body" style="max-width:760px;">
+                <label style="font-size:13px;color:#5b3a1e;">年月</label>
+                <select id="kpiTgtYear" style="border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;"></select>
+                <select id="kpiTgtMonth" style="border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;"></select>
+                <label style="font-size:13px;color:#5b3a1e;margin-left:10px;">週目標金額（全域）</label>
+                <input type="number" id="kpiTgtAmount" min="0" style="width:130px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
+                <label style="font-size:13px;color:#5b3a1e;margin-left:10px;">帳款起始日</label>
+                <input type="number" id="kpiTgtStartDay" min="1" max="28" style="width:70px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
+                <div style="margin-top:8px;">
+                    <button class="ks-btn" id="btnSaveKpiTarget">儲存</button>
+                </div>
+                <div class="param-hint">此設定與會議紀錄模組共用同一組設定(兩邊改其中一處即可)，也是「月份出貨KPI週報」(Shipping_Analysis_new.php)頁面的資料來源；該頁若日後移除不影響這裡設定。</div>
+            </div>
+        </div>
+
         <!-- 附件設定 -->
         <div class="ks-panel">
             <div class="p-head"><i class="fa fa-paperclip"></i> 佐證附件設定</div>
@@ -1004,7 +1022,31 @@ function delField(fid){
     }, 'json');
 }
 
-if (canAdmin) { loadAll(); loadCatalog(); }
+function loadKpiTargetUI(){
+    var y0 = new Date().getFullYear();
+    var $y = $('#kpiTgtYear').empty(), $m = $('#kpiTgtMonth').empty();
+    for (var y=y0-1; y<=y0+1; y++) $y.append('<option value="'+y+'"'+(y===y0?' selected':'')+'>'+y+' 年</option>');
+    for (var mo=1; mo<=12; mo++) $m.append('<option value="'+mo+'">'+mo+' 月</option>');
+    $m.val(new Date().getMonth()+1);
+    loadKpiTargetValues();
+}
+function loadKpiTargetValues(){
+    $.getJSON(API, {action:'kpi_target_get', year:$('#kpiTgtYear').val(), month:$('#kpiTgtMonth').val()}, function(res){
+        if (!res.ok) return;
+        $('#kpiTgtAmount').val(res.target_amount||0);
+        $('#kpiTgtStartDay').val(res.start_day||1);
+    });
+}
+$(document).on('change', '#kpiTgtYear,#kpiTgtMonth', loadKpiTargetValues);
+$('#btnSaveKpiTarget').on('click', function(){
+    $.post(API, {action:'kpi_target_save', year:$('#kpiTgtYear').val(), month:$('#kpiTgtMonth').val(),
+        target_amount:$('#kpiTgtAmount').val(), start_day:$('#kpiTgtStartDay').val()}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        alert('已儲存');
+    }, 'json');
+});
+
+if (canAdmin) { loadAll(); loadCatalog(); loadKpiTargetUI(); }
 </script>
 </body>
 </html>

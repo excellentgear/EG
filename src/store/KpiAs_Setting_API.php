@@ -246,6 +246,22 @@ case 'save_settings': {
     jout(['attach_base_effective'=>kpi_as_attach_base($db), 'attach_base_ok'=>is_dir(kpi_as_attach_base($db))]);
 }
 
+/* ---------- 出貨目標達成率(週報)基礎設定：週目標金額/帳款起始日，共用 kpi_lib.php，Shipping_Analysis_new.php 存廢不影響這裡 ---------- */
+case 'kpi_target_get': {
+    require_once $document_root . '/EGsystem/src/common/kpi_lib.php';
+    $y = (int)($_GET['year'] ?? $curY);
+    $m = (int)($_GET['month'] ?? date('n'));
+    jout(kpi_target_get($db, $y, $m));
+}
+case 'kpi_target_save': {
+    require_once $document_root . '/EGsystem/src/common/kpi_lib.php';
+    $y = (int)($_POST['year'] ?? 0);
+    $m = (int)($_POST['month'] ?? 0);
+    if ($y < 2000 || $m < 1 || $m > 12) jerr('年月參數錯誤');
+    kpi_target_save($db, $y, $m, (float)($_POST['target_amount'] ?? 0), (int)($_POST['start_day'] ?? 1));
+    jout([]);
+}
+
 /* ---------- 權限規則 ---------- */
 case 'perm_add': {
     $pt = in_array($_POST['perm_type'] ?? '', ['view','fill','admin'], true) ? $_POST['perm_type'] : '';

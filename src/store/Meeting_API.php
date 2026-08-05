@@ -69,13 +69,24 @@ case 'meta': {
     rsort($years);
     $gm = eg_org_user($db, 'top_approver');
     $presets = $db->query("SELECT preset_id, subject, location, start_time, end_time FROM meeting_preset ORDER BY sort_order, preset_id")->fetchAll(PDO::FETCH_ASSOC);
+    // 出席簽到／項目確認簽名要套用哪個圖章模板(圖章管理→線上圖章設計)；未設定則維持預設的回墨印SVG
+    $stTplId = (int)meeting_setting_get($db, 'meeting_stamp_tpl_id', '0');
+    $stTpl = null;
+    if ($stTplId) {
+        $stt = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
+        $stt->execute([$stTplId]);
+        if ($r = $stt->fetch(PDO::FETCH_ASSOC)) {
+            $stTpl = ['id'=>(int)$r['id'], 'tpl_name'=>$r['tpl_name'], 'schema'=>json_decode((string)$r['schema_json'], true)];
+        }
+    }
     jout(['perms'=>$perms, 'departments'=>$depts, 'years'=>$years,
           'uid'=>$uid, 'uname'=>$uname, 'today'=>date('Y-m-d'), 'cur_year'=>$cy,
           'gm_name'=>$gm ? $gm['user_cname'] : null, 'gm_id'=>$gm ? (int)$gm['id'] : null, 'presets'=>$presets,
           'company_name'=>eg_company_full_name($db), 'features'=>MEETING_FEATURES,
           'attach_nas_dir'=>$perms['canAdmin'] ? meeting_setting_get($db, 'meeting_nas_dir', '') : null,
           'as_doc_signsheet'=>($asSign = eg_asdoc_get($db, 'meeting_signsheet')), 'as_doc_signsheet_no'=>eg_asdoc_no($asSign),
-          'as_doc_record'=>($asRec = eg_asdoc_get($db, 'meeting_record')), 'as_doc_record_no'=>eg_asdoc_no($asRec)]);
+          'as_doc_record'=>($asRec = eg_asdoc_get($db, 'meeting_record')), 'as_doc_record_no'=>eg_asdoc_no($asRec),
+          'stamp_template'=>$stTpl]);
 }
 
 /* 常用設定（主題綁地點綁時間）：管理員維護 */
@@ -337,6 +348,25 @@ case 'submit': {
     $itc = $db->prepare("SELECT COUNT(*) FROM meeting_item WHERE meeting_id=?"); $itc->execute([$id]);
     if ((int)$itc->fetchColumn() === 0) jerr('請至少建立一項會議要項或上級指示要項');
 
+    // 送出前置檢查(2026-08-05 使用者明確要求)：①出席人員全部簽到 ②有指派負責部門且該部門在本次出席人員內者，該項目須已現場確認簽名。
+    // 未出席的負責部門成員不受此檢查限制，維持送出後才發通知回簽的既有設計，避免卡死無法送出。
+    $unsigned = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=? AND signed=0");
+    $unsigned->execute([$id]);
+    if ((int)$unsigned->fetchColumn() > 0) jerr('尚有出席人員未完成現場簽到，請先完成全部出席人員簽到再送出');
+    foreach (meeting_items($db, $id) as $it) {
+        if ($it['confirm_user_id']) continue;
+        $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
+        if (!$ownerIds) continue;
+        $inDept = implode(',', $ownerIds);
+        $elig = $db->prepare("SELECT COUNT(*) FROM meeting_attendee a WHERE a.meeting_id=? AND EXISTS(
+                                   SELECT 1 FROM user_department_position_map m WHERE m.user_id=a.user_id AND m.department_id IN ($inDept)
+                               )");
+        $elig->execute([$id]);
+        if ((int)$elig->fetchColumn() > 0) {
+            jerr('項目「'.mb_substr((string)$it['content'], 0, 20).'…」的負責部門有出席人員尚未現場確認簽名，請先完成確認再送出');
+        }
+    }
+
     $chair = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
     if (!$chair['id']) jerr('找不到主席簽核人');
     $id2 = eg_approval_submit($db, 'meeting', $id, 'chair', $uid, $uname);
@@ -365,6 +395,23 @@ case 'submit': {
 
     $db->prepare("UPDATE meeting_record SET status='submitted', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
     jout(['status'=>'submitted']);
+}
+
+/* 撤回已送出但「尚未任何人簽核」的會議記錄(2026-08-05 使用者明確要求)：
+   限 approval_status==='submitted'(僅主席待簽、連主席都還沒簽)才可撤回；一旦有人簽過(chair_done/done/rejected)一律不可撤回，
+   避免破壞已存在的簽核歷程。刪除待簽核的 chair 簽核紀錄、關閉主席簽核通知與本次送出所發的項目確認回簽通知，狀態退回 draft
+   供記錄人修改(如負責部門/主席人選)後重新送出。權限比照編輯/刪除：記錄人本人或管理員。 */
+case 'withdraw': {
+    $id = (int)($_POST['meeting_id'] ?? 0);
+    $m = meeting_load($db, $id);
+    if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可撤回', 403);
+    $ap = meeting_approval_status($db, $id);
+    if ($ap['status'] !== 'submitted') jerr('僅「待主席簽章」且尚未有人簽核時可撤回，此記錄目前狀態不允許撤回');
+    if ($ap['chair']) $db->prepare("DELETE FROM approval_record WHERE id=?")->execute([(int)$ap['chair']['id']]);
+    meeting_close_notice($db, $id);
+    meeting_close_item_notices($db, $id);
+    $db->prepare("UPDATE meeting_record SET status='draft', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+    jout(['status'=>'draft']);
 }
 
 /* 主席／總經理 確認簽章或退回：退回一定要填原因，退回後記錄人可修改後重新送出 */
@@ -580,6 +627,35 @@ case 'as_doc_record_save': {
     if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
     eg_asdoc_save($db, 'meeting_record', (int)($_POST['doc_id'] ?? 0), $uname);
     jout(['as_doc_record'=>eg_asdoc_get($db, 'meeting_record')]);
+}
+/* 出席簽到／項目確認簽名要套用哪個圖章模板：清單只給啟用中的模板讓管理員挑（模板本身在圖章管理頁「線上圖章設計」維護，這裡不重刻） */
+case 'stamp_tpl_options': {
+    if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
+    jout(['templates'=>$db->query("SELECT p.id, p.tpl_name, t.type_name
+                                    FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
+                                    WHERE p.is_active=1 ORDER BY p.tpl_name")->fetchAll(PDO::FETCH_ASSOC)]);
+}
+case 'stamp_tpl_save': {
+    if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
+    $tid = (int)($_POST['template_id'] ?? 0);
+    meeting_setting_save($db, 'meeting_stamp_tpl_id', (string)$tid);
+    jout([]);
+}
+/* 出貨目標達成率(週報)基礎設定：週目標金額/帳款起始日，與 AS9100 KPI 設定頁(KpiAs_Setting_API.php)共用同一組 kpi_lib.php 函式，
+   兩邊都留入口方便維護，不因 Shipping_Analysis_new.php 存廢而找不到地方改。 */
+case 'kpi_target_get': {
+    if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
+    $y = (int)($_GET['year'] ?? date('Y'));
+    $m = (int)($_GET['month'] ?? date('n'));
+    jout(kpi_target_get($db, $y, $m));
+}
+case 'kpi_target_save': {
+    if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
+    $y = (int)($_POST['year'] ?? 0);
+    $m = (int)($_POST['month'] ?? 0);
+    if ($y < 2000 || $m < 1 || $m > 12) jerr('年月參數錯誤');
+    kpi_target_save($db, $y, $m, (float)($_POST['target_amount'] ?? 0), (int)($_POST['start_day'] ?? 1));
+    jout([]);
 }
 case 'asdoc_list': {
     if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
