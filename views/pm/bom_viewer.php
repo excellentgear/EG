@@ -49,9 +49,19 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
         $did = trim($_POST['d_id'] ?? '');
         if (empty($did)) throw new Exception('缺少 d_id');
         include_once '../../src/common/DBConnection.php';
+        require_once '../../src/common/part_alias_lib.php';
         $pdo2 = (new DBConnection())->getPDO();
-        $stmt = $pdo2->prepare("SELECT bom, sqty FROM bom WHERE d_id = ? ORDER BY Created_At DESC");
-        $stmt->execute([$did]);
+        // 客戶代號／等同料號綁定的其他料號圖檔也一併撈出（合併顯示，標明來源）
+        $bindLabelByPartNo = [];
+        $partNos = [$did];
+        foreach (eg_part_alias_linked_part_nos($pdo2, $did) as $lp) {
+            $bindLabelByPartNo[$lp['part_no']] = $lp['part_no'] . ($lp['customer_name'] ? '／' . $lp['customer_name'] : '');
+            $partNos[] = $lp['part_no'];
+        }
+        $partNos = array_values(array_unique($partNos));
+        $phBom = implode(',', array_fill(0, count($partNos), '?'));
+        $stmt = $pdo2->prepare("SELECT bom, sqty, d_id FROM bom WHERE d_id IN ($phBom) ORDER BY Created_At DESC");
+        $stmt->execute($partNos);
         $bom_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         $scan_dir = 'Z:/BOM/'; $url_dir = '/nas/';
         $files = [];
@@ -79,6 +89,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
             $allF = scandir($scan_dir);
             foreach ($bom_rows as $row) {
                 $bname = $row['bom']; $sqty = $row['sqty'];
+                $bindFrom = $bindLabelByPartNo[$row['d_id']] ?? null;
                 foreach ($allF as $fn) {
                     if ($fn==='.'||$fn==='..') continue;
                     if (strpos($fn, $bname) === 0) {
@@ -87,7 +98,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
                             $label = $bname . ($sqty !== null ? ' (Qty:'.$sqty.')' : '');
                             $files[] = ['path'=>$url_dir.$fn, 'type'=>$ext, 'name'=>$fn,
                                         'label'=>$label, 'tags'=>$applyTags($fn), 'is_plus'=>false,
-                                        'bom'=>$bname];
+                                        'bom'=>$bname, 'bind_from'=>$bindFrom];
                         }
                     }
                 }
@@ -117,11 +128,19 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
         $partNo = trim($_POST['d_id'] ?? '');
         if (!$partNo) throw new Exception('缺少料號');
         include_once '../../src/common/DBConnection.php';
+        require_once '../../src/common/part_alias_lib.php';
         $pdo2 = (new DBConnection())->getPDO();
         // 找出所有符合此料號的 d_setting.d_id（可能有多筆，不同客戶）
         $dsStmt = $pdo2->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id = ?");
         $dsStmt->execute([$partNo]);
-        $dids = $dsStmt->fetchAll(PDO::FETCH_COLUMN);
+        $dids = array_map('intval', $dsStmt->fetchAll(PDO::FETCH_COLUMN));
+        // 客戶代號／等同料號綁定的其他料號附件也一併撈出（合併顯示，標明來源）
+        $bindLabelByDid = [];
+        foreach (eg_part_alias_linked_part_nos($pdo2, $partNo) as $lp) {
+            $bindLabelByDid[$lp['d_id']] = $lp['part_no'] . ($lp['customer_name'] ? '／' . $lp['customer_name'] : '');
+            $dids[] = $lp['d_id'];
+        }
+        $dids = array_values(array_unique($dids));
         if (empty($dids)) {
             echo json_encode(['success' => true, 'attachments' => []]);
             exit;
@@ -177,6 +196,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 'uploaded_by'    => $r['uploaded_by'] ?: '',
                 'uploaded_at'    => substr($r['uploaded_at'] ?: '', 0, 16),
                 'category_names' => $catNames,
+                'bind_from'      => $bindLabelByDid[(int)$r['d_id']] ?? null,
             ];
         }
         echo json_encode(['success' => true, 'attachments' => $result]);
@@ -194,6 +214,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
         if (!$partNo) throw new Exception('缺少料號');
         include_once '../../src/common/DBConnection.php';
         require_once __DIR__ . '/../../src/common/rbac.php';
+        require_once __DIR__ . '/../../src/common/part_alias_lib.php';
         $pdo2 = (new DBConnection())->getPDO();
         // 權限守門：報價資料查閱沿用報價單「檢視」權限（quotation_view）；無權限一律回空
         $feats = rbac_user_features($pdo2, (int)($_SESSION['id'] ?? 0));
@@ -204,25 +225,58 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
         // 找出所有符合此料號的 d_setting.d_id（可能多筆，不同客戶）
         $dsStmt = $pdo2->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id = ?");
         $dsStmt->execute([$partNo]);
-        $dids = $dsStmt->fetchAll(PDO::FETCH_COLUMN);
-        if (empty($dids)) { echo json_encode(['success' => true, 'attachments' => []]); exit; }
+        $ownDids = array_map('intval', $dsStmt->fetchAll(PDO::FETCH_COLUMN));
+        if (empty($ownDids)) { echo json_encode(['success' => true, 'attachments' => []]); exit; }
+        // 客戶代號／等同料號綁定的其他料號報價也一併撈出（合併顯示，標明來源）
+        $linkedParts = eg_part_alias_linked_part_nos($pdo2, $partNo);
+        $bindLabelByPartNo = []; $bindLabelByDid = []; $allPartNos = [$partNo]; $dids = $ownDids;
+        foreach ($linkedParts as $lp) {
+            $label = $lp['part_no'] . ($lp['customer_name'] ? '／' . $lp['customer_name'] : '');
+            $bindLabelByPartNo[$lp['part_no']] = $label;
+            $bindLabelByDid[$lp['d_id']] = $label;
+            $allPartNos[] = $lp['part_no'];
+            $dids[] = $lp['d_id'];
+        }
+        $dids = array_values(array_unique($dids));
         $ph = implode(',', array_fill(0, count($dids), '?'));
-        // 報價附件：linked_parts JSON 含此料號，或 linked_parts NULL 且該報價單包含此料號
+        $jsonConds = implode(' OR ', array_fill(0, count($allPartNos), 'JSON_CONTAINS(a.linked_parts, ?)'));
+        // 報價附件：linked_parts JSON 含此料號（或綁定料號），或 linked_parts NULL 且該報價單包含此料號（或綁定料號）
         // status='active'：只顯示正式附件，隱藏 temp(未存檔)/pending(補件待審)/trash(已否決)
-        $sql = "SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size, a.quote_no,
+        $sql = "SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size, a.quote_no, a.linked_parts,
                        COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, a.uploaded_at
                 FROM quotation_attachments a
                 LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
                 WHERE a.status = 'active' AND (
-                      (a.linked_parts IS NOT NULL AND JSON_CONTAINS(a.linked_parts, ?))
+                      (a.linked_parts IS NOT NULL AND ($jsonConds))
                    OR (a.linked_parts IS NULL AND a.quote_no IN (
                         SELECT ql.quote_no FROM quotation_item qi
                         JOIN quotation_list ql ON ql.quote_id = qi.quote_id
                         WHERE qi.d_setting_d_id IN ($ph))))
                 ORDER BY a.uploaded_at DESC";
         $stmt = $pdo2->prepare($sql);
-        $stmt->execute(array_merge([json_encode($partNo)], $dids));
+        $stmt->execute(array_merge(array_map('json_encode', $allPartNos), $dids));
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // linked_parts 為 NULL 分支：靠 quote_no 對應的品項料號判斷是否「只透過綁定料號才對得上」
+        $quoteBindLabel = [];
+        if ($linkedParts) {
+            try {
+                $qnos = array_values(array_unique(array_column($rows, 'quote_no')));
+                if ($qnos) {
+                    $qph = implode(',', array_fill(0, count($qnos), '?'));
+                    $mapStmt = $pdo2->prepare("SELECT DISTINCT ql.quote_no, qi.d_setting_d_id FROM quotation_item qi
+                                                JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                                                WHERE ql.quote_no IN ($qph)");
+                    $mapStmt->execute($qnos);
+                    $qnoDids = [];
+                    foreach ($mapStmt->fetchAll(PDO::FETCH_ASSOC) as $m) $qnoDids[$m['quote_no']][] = (int)$m['d_setting_d_id'];
+                    foreach ($qnoDids as $qno => $dl) {
+                        if (array_intersect($dl, $ownDids)) continue;   // 本身料號的品項就對得上，不算綁定帶入
+                        foreach ($dl as $d0) { if (isset($bindLabelByDid[$d0])) { $quoteBindLabel[$qno] = $bindLabelByDid[$d0]; break; } }
+                    }
+                }
+            } catch (Exception $_e) {}
+        }
         // 類別名稱對照
         $cats = [];
         try {
@@ -241,6 +295,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
                     if (isset($cats[$cid])) $catNames[] = $cats[$cid];
                 }
             }
+            $bindFrom = null;
+            $lpJson = $r['linked_parts'] ? json_decode($r['linked_parts'], true) : null;
+            if (is_array($lpJson)) {
+                if (!in_array($partNo, $lpJson, true)) {
+                    foreach ($lpJson as $x) { if (isset($bindLabelByPartNo[$x])) { $bindFrom = $bindLabelByPartNo[$x]; break; } }
+                }
+            } else {
+                $bindFrom = $quoteBindLabel[$r['quote_no']] ?? null;
+            }
             $result[] = [
                 'id'             => (int)$r['id'],
                 'filename'       => $r['filename'],
@@ -253,6 +316,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
                 'uploaded_at'    => substr($r['uploaded_at'] ?: '', 0, 16),
                 'category_names' => $catNames,
                 'quote_no'       => $r['quote_no'],
+                'bind_from'      => $bindFrom,
             ];
         }
         echo json_encode(['success' => true, 'attachments' => $result]);
@@ -787,11 +851,12 @@ function makeItem(f, active) {
         });
     }
     var displayName = (f.label && _mode === 'did') ? f.label + ' / ' + f.name : f.name;
+    var bindTag = f.bind_from ? '<br><span style="font-size:10px;color:#1ABB9C;"><i class="fa fa-link"></i> 來自綁定料號 '+escapeHtml(f.bind_from)+'</span>' : '';
     return '<a href="#" class="list-group-item bom-file-item'+(active?' active':'')+'"'
         +' data-path="'+escapeHtml(f.path)+'"'
         +' data-type="'+escapeHtml(f.type)+'"'
         +' data-name="'+escapeHtml(f.name)+'">'
-        +'<p class="list-group-item-text">'+label+escapeHtml(displayName)+'</p></a>';
+        +'<p class="list-group-item-text">'+label+escapeHtml(displayName)+bindTag+'</p></a>';
 }
 
 // 附件（報價/其他）項目
@@ -805,6 +870,7 @@ function makeAttItem(att) {
     var info = [att.uploaded_at, att.uploaded_by, att.file_size, att.note].filter(Boolean).join(' · ');
     var isObs = (att.category_names || []).indexOf('作廢') >= 0;
     var st = isObs ? 'background:#fff0f0;border-left:3px solid #e74c3c;' : '';
+    var bindTag = att.bind_from ? '<br><span style="font-size:10px;color:#1ABB9C;"><i class="fa fa-link"></i> 來自綁定料號 '+escapeHtml(att.bind_from)+'</span>' : '';
     return '<a href="#" class="list-group-item bom-file-item att-file-item"'
         + ' data-path="'+escapeHtml(att.url)+'"'
         + ' data-type="'+escapeHtml(att.ext)+'"'
@@ -815,6 +881,7 @@ function makeAttItem(att) {
         + '<p class="list-group-item-text" style="'+(isObs?'color:#c0392b;text-decoration:line-through;':'')+'">'
         + extBadge + catBadges + escapeHtml(att.display_name)
         + (info ? '<br><small style="color:#aaa;font-size:10px;">'+escapeHtml(info)+'</small>' : '')
+        + bindTag
         + '</p></a>';
 }
 
@@ -916,6 +983,7 @@ function renderQuoteTab() {
         html += '<span style="font-size:12px;font-weight:700;color:#8a4b0f;font-family:Consolas,monospace;">' + escapeHtml(qno) + '</span>';
         if (qs && qs.total_amount) html += '<span style="font-size:11px;color:#c0392b;font-weight:600;white-space:nowrap;">$' + Number(qs.total_amount).toLocaleString() + '</span>';
         html += '</div>';
+        if (qs && qs.bind_from) html += '<div style="font-size:10px;color:#1ABB9C;margin-top:2px;"><i class="fa fa-link"></i> 來自綁定料號 ' + escapeHtml(qs.bind_from) + '</div>';
         if (qProcs.length) {
             html += '<div style="margin-top:2px;display:flex;flex-direction:column;gap:1px;">';
             qProcs.forEach(function(p) { html += '<span style="font-size:10px;font-weight:600;color:#1b5e20;background:#e8f5e9;border-radius:3px;padding:0 5px;line-height:1.7;align-self:flex-start;">' + p.label + '</span>'; });
@@ -946,7 +1014,10 @@ function showQuoteDetail(qno) {
     $('#viewer-title').text(qno === '__unknown__' ? '（未知報價單）' : qno);
 
     var html = '<div style="width:100%;height:100%;overflow-y:auto;padding:16px;background:#fff;">';
-    html += '<div style="font-size:15px;font-weight:700;color:#8a4b0f;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #e6c9a0;"><i class="fa fa-file-text-o" style="margin-right:6px;"></i>' + escapeHtml(qno === '__unknown__' ? '（未知報價單）' : qno) + '</div>';
+    html += '<div style="margin-bottom:12px;">';
+    html += '<div style="font-size:15px;font-weight:700;color:#8a4b0f;padding-bottom:8px;border-bottom:2px solid #e6c9a0;"><i class="fa fa-file-text-o" style="margin-right:6px;"></i>' + escapeHtml(qno === '__unknown__' ? '（未知報價單）' : qno) + '</div>';
+    if (qs && qs.bind_from) html += '<div style="font-size:11px;color:#1ABB9C;margin-top:4px;"><i class="fa fa-link"></i> 來自綁定料號 ' + escapeHtml(qs.bind_from) + '</div>';
+    html += '</div>';
     if (!qs) {
         html += '<div style="color:#aaa;font-size:12px;">此報價單無明細資料（可能僅有附件）。</div>';
     } else {
