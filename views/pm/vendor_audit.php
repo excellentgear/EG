@@ -1402,8 +1402,8 @@ function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount){
         + 'table.pf-info{width:100%;font-size:13px;margin-top:10px;border-collapse:collapse;}table.pf-info td{padding:5px 6px;border:1px solid #999;}'
         + 'table.pf-sign{width:100%;margin-top:20px;font-size:13px;page-break-inside:avoid;}table.pf-sign td{padding:14px 6px 8px;}'
         + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-        + 'table.pf.rs-table{font-size:20px;}table.pf.rs-table th,table.pf.rs-table td{padding:16px 12px;height:44px;}'
-        + '.rs-chart-wrap{max-width:620px;margin:0 auto;}.rs-chart-wrap svg{width:100% !important;height:auto !important;}'
+        + 'table.pf.rs-table{font-size:15px;}table.pf.rs-table th,table.pf.rs-table td{padding:6px 8px;height:28px;}'
+        + '.rs-chart-wrap{max-width:400px;margin:0 auto;}.rs-chart-wrap svg{width:100% !important;height:auto !important;}'
         + '.attach-page{page-break-before:always;}'
         + '@media print{@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;'
         + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
@@ -1535,20 +1535,20 @@ function recordSheetHTML(){
     if(!RS) return '';
     var t=RS.t, c=RS.c, cfg=RS.cfg, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
     var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'____';
-    var head='<div style="text-align:center;"><div style="font-size:30px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
-        +'<div style="font-size:22px;font-weight:bold;margin-top:4px;">'+esc(docName)+'</div></div>';
-    var info='<table class="pf-info" style="font-size:16px;"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>加工項目：'+esc(t.main_cat_name||'—')+'</td><td>稽核日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>稽核狀況：'+esc(modeL)+'</td></tr></table>';
+    var head='<div style="text-align:center;"><div style="font-size:25px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
+        +'<div style="font-size:19px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
+    var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>加工項目：'+esc(t.main_cat_name||'—')+'</td><td>稽核日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>稽核狀況：'+esc(modeL)+'</td></tr></table>';
     var rows='<table class="pf rs-table" style="table-layout:fixed;"><colgroup><col style="width:38%;"><col style="width:14%;"><col style="width:16%;"><col style="width:16%;"><col style="width:16%;"></colgroup>'
         +'<thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th></tr></thead><tbody>';
     c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*cfg.self_w+k.audit_rate*cfg.audit_w)*10)/10;
         rows+='<tr><td class="q">'+esc(k.name)+'</td><td>'+k.max+'</td><td>'+k.self_rate+'%</td><td>'+k.audit_rate+'%</td><td>'+comb+'%</td></tr>'; });
     rows+='<tr style="font-weight:bold;"><td class="q">總成績</td><td>'+c.total_max+'</td><td>'+c.selfR+'%</td><td>'+c.auditR+'%</td><td>'+c.overall+'%</td></tr></tbody></table>';
     var svg = rsChart ? rsChart.container.querySelector('svg').outerHTML : '';
-    var body = '<div style="display:flex;gap:34px;align-items:center;margin-top:18px;">'
+    var body = '<div style="display:flex;gap:20px;align-items:center;margin-top:8px;">'
         + '<div style="flex:0 0 42%;min-width:0;">'+rows+'</div>'
         + '<div class="rs-chart-wrap" style="text-align:center;flex:1;">'+svg+'</div></div>';
-    var conc='<div style="margin-top:18px;font-size:17px;">綜合評鑑合格率（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）＝<b style="font-size:20px;">'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+cfg.pass_rate+'%'+(t.conclusion?'；建議：'+esc(t.conclusion):'')+'</div>'
-        +'<div style="margin-top:8px;">判定：'+vaJudgeBadgeHtml(c.pass)+'</div>';
+    var conc='<div style="margin-top:8px;font-size:13px;">綜合評鑑合格率（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）＝<b style="font-size:16px;">'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+cfg.pass_rate+'%'+(t.conclusion?'；建議：'+esc(t.conclusion):'')+'</div>'
+        +'<div style="margin-top:4px;">判定：'+vaJudgeBadgeHtml(c.pass)+'</div>';
     var mgrStamp = (t.status==='approved' && t.signed_by_name) ? vaStampHtml(t.signed_by_name, fmtDate(t.audit_date)||'', !!t.signed_is_deputy) : '';
     var audStamp = t.auditor ? vaStampHtml(t.auditor, fmtDate(t.audit_date)||'') : '';
     // 這裡是數位自動蓋章(非人工實體蓋印)，不需要 pf-sign 預設給實體印章留的大留白，改用 inline 覆寫縮小版面避免跨頁
