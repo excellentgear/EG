@@ -88,47 +88,76 @@ function ppr_qc_badge(?string $qcCheck, $qcCompleted): array {
     return ['待驗','#999'];
 }
 
+/** 流程總覽步驟條：每個製程一個圓點+名稱，中間連接線；點的顏色反映該製程彙總狀態 */
 function ppr_render_flow_bar(array $processes): string {
     if (empty($processes)) return '<div class="ppr-muted">此製令尚無製程資料。</div>';
-    $chips = [];
+    $steps = [];
     $i = 0;
     foreach ($processes as $p) {
         $i++;
-        [$label, $color] = ppr_qc_badge($p['QC_check'], $p['qc_completed']);
-        $kind = ((int)$p['is_internal'] === 1) ? '廠內' : '外包';
-        $chips[] = '<div class="ppr-flow-chip" style="border-color:'.$color.';">'
-            .'<span class="ppr-flow-no">'.$i.'</span>'
-            .'<span class="ppr-flow-name">'.h($p['ProcessName'] ?: ('製程#'.$p['process_no'])).'</span>'
-            .'<span class="ppr-flow-kind">'.$kind.'</span>'
-            .'<span class="ppr-flow-status" style="color:'.$color.';">'.$label.'</span>'
+        $st = ppr_group_status($p['batches']);
+        $kindSet = [];
+        foreach ($p['batches'] as $b) $kindSet[((int)$b['is_internal']===1)?'廠內':'外包'] = true;
+        $kind = implode('/', array_keys($kindSet));
+        $split = count($p['batches']) > 1 ? '（拆'.count($p['batches']).'批）' : '';
+        $steps[] = '<div class="ppr-step">'
+            .'<div class="dot" style="border-color:'.$st['color'].';color:'.$st['color'].';">'.$i.'</div>'
+            .'<div class="name">'.h($p['ProcessName'] ?: ('製程#'.$p['process_no'])).$split.'</div>'
+            .'<div class="kind">'.h($kind).'</div>'
+            .'<div class="stat" style="background:'.$st['color'].';">'.h($st['label']).'</div>'
             .'</div>';
     }
-    return '<div class="ppr-flow-bar">'.implode('<span class="ppr-flow-arrow">→</span>', $chips).'</div>';
+    $html = '<div class="ppr-stepper">';
+    foreach ($steps as $idx => $s) {
+        if ($idx > 0) $html .= '<div class="ppr-step-line"></div>';
+        $html .= $s;
+    }
+    return $html . '</div>';
 }
 
-function ppr_render_qc_history(array $batches): string {
-    if (empty($batches)) return '<div class="ppr-muted">尚無檢驗紀錄。</div>';
-    $out = '<div class="ppr-qc-hist">';
-    foreach ($batches as $b) {
-        $out .= '<div class="ppr-qc-batch"><b>批次 '.h($b['batch_no']).'</b>：';
-        $rounds = [];
-        foreach ($b['rounds'] as $r) {
+/** 單一輪檢驗的量測明細（項目/標準/實測值/判定），沒有明細資料就不顯示表格 */
+function ppr_render_qc_measurements(PDO $pdo, int $qcFormId): string {
+    $meas = ppr_qc_measurements($pdo, $qcFormId);
+    if (empty($meas)) return '';
+    $out = '<table class="ppr-meas-table"><thead><tr><th>檢驗項目</th><th>標準</th><th>抽樣</th><th>實測值</th><th>判定</th></tr></thead><tbody>';
+    foreach ($meas as $m) {
+        $mv = $m['item_verdict'] ?: $m['result'];
+        $mColor = $mv==='OK' ? '#8a6d2f' : ($mv==='NG' ? '#DD5138' : ($mv==='AOD' ? '#F0A24B' : '#999'));
+        $std = $m['standard_text'] ?: (($m['min_value']!==null || $m['max_value']!==null) ? (h($m['min_value']).'~'.h($m['max_value'])) : '—');
+        $out .= '<tr><td>'.h($m['item_name']).'</td><td>'.$std.'</td><td>#'.h($m['sample_no']).'</td><td>'.h($m['measured_value']).'</td>'
+              . '<td style="color:'.$mColor.';font-weight:600;">'.h($mv ?: '—').'</td></tr>';
+    }
+    return $out . '</tbody></table>';
+}
+
+/** 一個批次的檢驗歷程（依批次分組、輪次序列），含量測明細 */
+function ppr_render_qc_history(PDO $pdo, array $qcBatches): string {
+    if (empty($qcBatches)) return '<div class="ppr-muted">尚無檢驗紀錄。</div>';
+    $out = '';
+    foreach ($qcBatches as $qb) {
+        $out .= '<div class="ppr-qc-batch"><div class="ppr-qc-batch-title">到貨批次 '.h($qb['batch_no']).'</div>';
+        foreach ($qb['rounds'] as $r) {
             $result = $r['check_result'];
             $resLabel = $result === 'OK' ? '合格' : ($result === 'NG' ? ('不良'.($r['ng_qty']>0?' x'.$r['ng_qty']:'')) : '待判定');
             $color = $result === 'OK' ? '#8a6d2f' : ($result === 'NG' ? '#DD5138' : '#999');
-            $txt = '第'.$r['round_no'].'次'.($r['is_aod'] ? '<span style="color:#F0A24B;">(特採)</span>' : '').'：'
-                 .'<span style="color:'.$color.';">'.$resLabel.'</span>';
-            $rounds[] = $txt;
+            $out .= '<div class="ppr-qc-round">'
+                . '<span class="ppr-qc-round-tag">第'.$r['round_no'].'次</span> '
+                . '<span class="ppr-qc-round-date">'.h($r['date']).'</span> '
+                . '<span style="color:'.$color.';font-weight:600;">'.$resLabel.'</span>'
+                . ($r['is_aod'] ? ' <span class="ppr-aod-tag">特採</span>' : '');
+            $out .= ppr_render_qc_measurements($pdo, (int)$r['qc_form_id']);
+            $out .= '</div>';
         }
-        $out .= implode(' <span class="ppr-flow-arrow">→</span> ', $rounds) . '</div>';
+        $out .= '</div>';
     }
-    return $out . '</div>';
+    return $out;
 }
 
-function ppr_render_work_summary(?array $w): string {
+function ppr_render_work_summary(?array $w, ?string $batchLabel = null): string {
     if (!$w) return '';
-    $eff = $w['rel_efficiency'] !== null ? ($w['rel_efficiency'].'%（與歷史平均比較之相對值，非官方標準工時）') : '無比較基準';
-    return '<table class="ppr-work-table"><tr>'
+    $eff = $w['rel_efficiency'] !== null ? ($w['rel_efficiency'].'%（與歷史平均相對值，非官方標準工時）') : '無比較基準';
+    $title = $batchLabel ? ('報工簡表（批次 '.h($batchLabel).'）') : '報工簡表';
+    return '<div class="ppr-work-title">'.$title.'</div><table class="ppr-work-table"><tr>'
         .'<th>機台</th><td>'.h($w['machines'] ?: '—').'</td>'
         .'<th>人員</th><td>'.h($w['operators'] ?: '—').'</td></tr><tr>'
         .'<th>日期區間</th><td>'.h($w['date_from']).' ~ '.h($w['date_to']).'</td>'
@@ -139,24 +168,30 @@ function ppr_render_work_summary(?array $w): string {
         .'<th>相對效率</th><td>'.h($eff).'</td></tr></table>';
 }
 
-function ppr_render_process_cards(PDO $pdo, array $processes, string $workReport): string {
+/** 製程詳細卡片：每張卡＝一個製程站(bom_sn)，卡內依批次(拆批時多筆)分別列出廠內外/機台廠商/狀態/檢驗歷程/報工 */
+function ppr_render_process_cards(PDO $pdo, array $processes, string $workReport, bool $showQc): string {
     if (empty($processes)) return '';
     $out = '';
     $i = 0;
     foreach ($processes as $p) {
         $i++;
-        [$label, $color] = ppr_qc_badge($p['QC_check'], $p['qc_completed']);
-        $kind = ((int)$p['is_internal'] === 1) ? ('廠內／'.h($p['machine_name'] ?: '未指定機台')) : ('外包／'.h($p['maker_name'] ?: '未指定廠商'));
-        $out .= '<div class="ppr-proc-card">';
+        $gst = ppr_group_status($p['batches']);
+        $out .= '<div class="ppr-proc-card" style="border-left-color:'.$gst['color'].';">';
         $out .= '<div class="ppr-proc-head"><span class="ppr-proc-idx">'.$i.'</span> '
               . '<b>'.h($p['ProcessName'] ?: ('製程#'.$p['process_no'])).'</b>'
-              . '<span class="ppr-proc-kind">'.$kind.'</span>'
-              . '<span class="ppr-proc-status" style="background:'.$color.';">'.$label.'</span></div>';
-        $history = ppr_qc_history($pdo, (int)$p['bom_ing_fid']);
-        $out .= '<div class="ppr-proc-body">' . ppr_render_qc_history($history);
-        if ($workReport !== 'none') {
-            $w = ppr_report_work_summary($pdo, (int)$p['bom_ing_fid'], (int)$p['process_no']);
-            $out .= ppr_render_work_summary($w);
+              . '<span class="ppr-proc-status" style="background:'.$gst['color'].';">'.h($gst['label']).'</span></div>';
+        $out .= '<div class="ppr-proc-body">';
+        foreach ($p['batches'] as $b) {
+            $kind = ((int)$b['is_internal']===1) ? ('廠內／'.h($b['machine_name'] ?: '未指定機台')) : ('外包／'.h($b['maker_name'] ?: '未指定廠商'));
+            [$label, $color] = ppr_qc_badge($b['QC_check'], $b['qc_completed']);
+            $batchTag = $b['batch_label'] ? ('<b>批次 '.h($b['batch_label']).'</b>　') : '';
+            $consumedNote = ((int)$b['is_consumed'] === 1) ? '<span class="ppr-consumed-tag">歷史批次（已拆分/合併）</span>' : '';
+            $out .= '<div class="ppr-batch-row">';
+            $out .= '<div class="ppr-batch-head">'.$batchTag.$kind.($b['sqty']?('　數量 '.h($b['sqty'])):'').' '
+                  . '<span style="color:'.$color.';font-weight:600;">'.h($label).'</span> '.$consumedNote.'</div>';
+            if ($showQc) $out .= ppr_render_qc_history($pdo, ppr_qc_history($pdo, (int)$b['bom_ing_fid']));
+            if ($workReport !== 'none') $out .= ppr_render_work_summary(ppr_report_work_summary($pdo, (int)$b['bom_ing_fid'], (int)$p['process_no']), $b['batch_label']);
+            $out .= '</div>';
         }
         $out .= '</div></div>';
     }
@@ -238,21 +273,25 @@ function ppr_render_bom_page(PDO $pdo, array $bomRow, array $partInfo, ?array $d
     }
 
     $out = '<div class="ppr-page">';
+    $out .= '<div class="ppr-head-block">';
     $out .= '<div class="ppr-doc-head"><div class="ppr-company">'.h($company).'</div><div class="ppr-doctitle">'.h($docTitle).'</div></div>';
-    $out .= '<table class="ppr-basic"><tr>'
-        .'<th>料號</th><td>'.h($partInfo['D_Setting_Id']).'</td>'
-        .'<th>規格</th><td>'.h($partInfo['Spec_No']).'</td>'
-        .'<th>製令</th><td>'.h($bomRow['bom']).'</td></tr><tr>'
-        .'<th>客戶</th><td>'.h($bomRow['Client_Name']).'</td>'
-        .'<th>數量</th><td>'.h($bomRow['sqty']).'</td>'
-        .'<th>製令建立日</th><td>'.h(substr((string)$bomRow['Created_At'],0,10)).'</td></tr></table>';
+    $out .= '<div class="ppr-info-grid">'
+        .'<div class="ppr-info-item"><span class="k">料號</span><span class="v">'.h($partInfo['D_Setting_Id']).'</span></div>'
+        .'<div class="ppr-info-item"><span class="k">規格</span><span class="v">'.h($partInfo['Spec_No'] ?: '—').'</span></div>'
+        .'<div class="ppr-info-item"><span class="k">製令</span><span class="v">'.h($bomRow['bom']).'</span></div>'
+        .'<div class="ppr-info-item"><span class="k">客戶</span><span class="v">'.h($bomRow['Client_Name']).'</span></div>'
+        .'<div class="ppr-info-item"><span class="k">數量</span><span class="v">'.h($bomRow['sqty']).'</span></div>'
+        .'<div class="ppr-info-item"><span class="k">製令建立日</span><span class="v">'.h(substr((string)$bomRow['Created_At'],0,10)).'</span></div>'
+        .'</div>';
 
     $out .= '<div class="ppr-body" style="flex-direction:'.$flexDir.';">';
     $out .= '<div class="ppr-drawing-box">'.$drawingHtml.'</div>';
     $out .= '<div class="ppr-flow-box"><h4>製程流程總覽</h4>'.ppr_render_flow_bar($processes).'</div>';
     $out .= '</div>';
+    $out .= '</div>'; // .ppr-head-block（表頭+圖面+流程總覽不可跨頁截斷）
 
-    $out .= '<div class="ppr-section"><h4>製程詳細資料</h4>'.ppr_render_process_cards($pdo, $processes, $opts['work_report']).'</div>';
+    $out .= '<div class="ppr-section"><h4>製程詳細資料</h4><div class="ppr-proc-cards">'
+          . ppr_render_process_cards($pdo, $processes, $opts['work_report'], !empty($opts['show_qc'])) . '</div></div>';
 
     if (!empty($opts['show_cost'])) {
         $out .= ppr_render_cost_block($pdo, $bomRow);
@@ -289,8 +328,7 @@ function ppr_render_summary_page(PDO $pdo, array $bomRows, array $partInfo): str
     $orderStat = ppr_order_history($pdo, (int)$partInfo['d_id']);
     $shipStat  = ppr_ship_history($pdo, (int)$partInfo['d_id']);
 
-    $paperClass = count($bomRows) > 15 ? 'ppr-a3-landscape' : '';
-    $out = '<div class="ppr-page '.$paperClass.'">';
+    $out = '<div class="ppr-page ppr-summary-page">';
     $out .= '<div class="ppr-doc-head"><div class="ppr-company">'.h(vendor_audit_company_name($pdo)).'</div><div class="ppr-doctitle">總體分析（'.h($partInfo['D_Setting_Id']).'，共 '.count($bomRows).' 筆製令）</div></div>';
     $out .= '<div class="ppr-summary-charts">';
     $out .= '<div class="ppr-chart-box"><h4>加工價格 / 成本趨勢</h4><canvas class="ppr-chart" data-chart="cost" data-points=\''.h(json_encode($trend, JSON_UNESCAPED_UNICODE)).'\'></canvas></div>';
@@ -341,6 +379,8 @@ if ($isAjax) {
         if ($action === 'search_parts') {
             $term = trim($_POST['term'] ?? '');
             $clientId = trim($_POST['customer_id'] ?? '');
+            $from = trim($_POST['date_from'] ?? '');
+            $to   = trim($_POST['date_to'] ?? '');
             if ($term === '') { echo json_encode(['success'=>true, 'items'=>[]]); exit; }
             $kw = '%'.$term.'%';
             $where = ["(d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ? OR d.Spec_No LIKE ?)"];
@@ -359,9 +399,51 @@ if ($isAjax) {
                 if ($r['Drawing_No']) $label .= ' / '.$r['Drawing_No'];
                 if ($r['Spec_No']) $label .= '（'.$r['Spec_No'].'）';
                 $cust = $r['customer_name'] ?: '未指定客戶';
-                $items[] = ['id'=>(int)$r['d_id'], 'text'=>$label.' — '.$cust, 'html'=>h($label).' <small style="color:#8a6d45;">'.h($cust).'</small>'];
+                $cnt = ppr_bom_count_in_range($pdo, (int)$r['d_id'], $from, $to);
+                $cntTxt = $cnt > 0 ? ('期間內 '.$cnt.' 筆BOM') : '期間內無BOM';
+                $items[] = ['id'=>(int)$r['d_id'], 'text'=>$label.' — '.$cust,
+                    'html'=>h($label).' <small style="color:#8a6d45;">'.h($cust).'　'.($cnt>0?'<b style="color:#8a6d2f;">':'<span style="color:#999;">').h($cntTxt).($cnt>0?'</b>':'</span>').'</small>'];
             }
             echo json_encode(['success'=>true, 'items'=>$items]);
+            exit;
+        }
+
+        if ($action === 'search_boms') {
+            $term = trim($_POST['term'] ?? '');
+            if ($term === '') { echo json_encode(['success'=>true, 'items'=>[]]); exit; }
+            $kw = '%'.$term.'%';
+            $st = $pdo->prepare("
+                SELECT b.bom, b.d_setting_id, d.D_Setting_Id, d.Spec_No, b.Created_At, b.sqty, b.Client_Name
+                FROM bom b
+                LEFT JOIN d_setting d ON d.d_id = b.d_setting_id
+                WHERE b.bom LIKE ? ORDER BY b.Created_At DESC LIMIT 20");
+            $st->execute([$kw]);
+            $items = [];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $label = $r['bom'].' — '.($r['D_Setting_Id'] ?: '未知料號').'（'.h($r['Client_Name']).'，'.substr((string)$r['Created_At'],0,10).'）';
+                $items[] = ['id'=>(int)$r['d_setting_id'], 'bom'=>$r['bom'], 'text'=>$r['D_Setting_Id'].' — '.$r['Client_Name'],
+                    'html'=>'<b>'.h($r['bom']).'</b> '.h($r['D_Setting_Id']).' <small style="color:#8a6d45;">'.h($r['Client_Name']).'　'.substr((string)$r['Created_At'],0,10).'</small>'];
+            }
+            echo json_encode(['success'=>true, 'items'=>$items]);
+            exit;
+        }
+
+        if ($action === 'browse_customer_boms') {
+            $clientId = trim($_POST['customer_id'] ?? '');
+            $from = trim($_POST['date_from'] ?? '');
+            $to   = trim($_POST['date_to'] ?? '');
+            if ($clientId === '') { echo json_encode(['success'=>false,'error'=>'請先選擇客戶']); exit; }
+            $where = ["d.Customer_Id = ?"]; $params = [$clientId];
+            if ($from !== '') { $where[] = "b.Created_At >= ?"; $params[] = $from.' 00:00:00'; }
+            if ($to   !== '') { $where[] = "b.Created_At <= ?"; $params[] = $to.' 23:59:59'; }
+            $st = $pdo->prepare("
+                SELECT b.bom, b.d_setting_id, d.D_Setting_Id, b.sqty, b.Created_At
+                FROM bom b JOIN d_setting d ON d.d_id = b.d_setting_id
+                WHERE ".implode(' AND ', $where)."
+                ORDER BY b.Created_At DESC LIMIT 100");
+            $st->execute($params);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode(['success'=>true, 'rows'=>$rows, 'total'=>count($rows)]);
             exit;
         }
 
@@ -407,7 +489,7 @@ if ($isAjax) {
                 'work_report' => in_array($_POST['work_report'] ?? '', ['simple'], true) ? 'simple' : 'none',
                 'show_cost'   => !empty($_POST['show_cost']) ? 1 : 0,
                 'show_freq'   => !empty($_POST['show_freq']) ? 1 : 0,
-                'paper'       => ($_POST['paper'] ?? 'A4') === 'A3' ? 'A3' : 'A4',
+                'show_qc'     => !empty($_POST['show_qc']) ? 1 : 0,
             ];
             if (!$did || empty($bomList)) { echo json_encode(['success'=>false,'error'=>'缺少料號或製令']); exit; }
             if (count($bomList) > PPR_MAX_BATCH_COUNT) {
@@ -491,7 +573,12 @@ if ($isAjax) {
         .ppr-toolbar button:hover { background:#d98a33; }
         .ppr-typeahead { position:relative; }
         #pprClientInput { width:200px; }
-        #pprPartInput { width:280px; }
+        #pprPartInput { width:260px; }
+        #pprBomInput { width:200px; }
+        .ppr-paper-toggle { display:inline-flex; border:1px solid #D8BE93; border-radius:4px; overflow:hidden; }
+        .ppr-paper-btn { height:28px; border:none; border-radius:0; background:#fff; color:#5b3a1e; padding:0 12px; cursor:pointer; }
+        .ppr-paper-btn + .ppr-paper-btn { border-left:1px solid #D8BE93; }
+        .ppr-paper-btn.active { background:#F0A24B; color:#fff; }
         .ppr-suggest { display:none; position:absolute; top:100%; left:0; z-index:80; background:#fff; border:1px solid #D8BE93; border-radius:4px;
             max-height:260px; overflow-y:auto; min-width:260px; box-shadow:0 3px 12px rgba(0,0,0,.18); margin-top:2px; }
         .ppr-suggest .item { padding:5px 10px; font-size:12px; cursor:pointer; border-bottom:1px solid #F3E9D6; }
@@ -509,59 +596,94 @@ if ($isAjax) {
         .ppr-dw-pick label { display:flex; align-items:center; gap:4px; font-size:12px; border:1px solid #D8BE93; border-radius:4px; padding:3px 6px; cursor:pointer; }
         .ppr-count-bar { font-size:12px; color:#8a6d45; margin:6px 0; }
 
-        .ppr-report-area { background:#fff; }
-        .ppr-page { padding:14mm; border:1px solid #eee; margin-bottom:14px; }
-        @media print { .ppr-page { border:none; margin:0; page-break-after:always; } }
-        .ppr-doc-head { display:flex; justify-content:space-between; align-items:baseline; border-bottom:2px solid #8A5A2B; padding-bottom:6px; margin-bottom:8px; }
-        .ppr-company { font-size:18px; font-weight:bold; color:#5b3a1e; }
-        .ppr-doctitle { font-size:14px; color:#8a6d45; }
-        table.ppr-basic { width:100%; border-collapse:collapse; font-size:12px; margin-bottom:10px; }
-        table.ppr-basic th, table.ppr-basic td { border:1px solid #EADFC8; padding:4px 8px; text-align:left; }
-        table.ppr-basic th { background:#F7E0BD; color:#5b3a1e; width:70px; }
-        .ppr-body { display:flex; gap:12px; margin-bottom:10px; }
-        .ppr-drawing-box { flex:1 1 45%; border:1px solid #EADFC8; border-radius:6px; min-height:200px; display:flex; align-items:center; justify-content:center; background:#FAFAFA; }
-        .ppr-drawing-img { max-width:100%; max-height:360px; object-fit:contain; }
-        .ppr-drawing-frame { width:100%; height:360px; border:none; }
-        .ppr-drawing-empty { color:#999; padding:20px; }
-        .ppr-flow-box { flex:1 1 55%; }
-        .ppr-flow-bar { display:flex; flex-wrap:wrap; align-items:center; gap:4px; }
-        .ppr-flow-chip { border:2px solid #ccc; border-radius:6px; padding:4px 8px; font-size:11px; display:flex; flex-direction:column; gap:2px; background:#fff; min-width:70px; }
-        .ppr-flow-no { font-weight:bold; color:#8A5A2B; }
-        .ppr-flow-kind { color:#8a6d45; }
-        .ppr-flow-arrow { color:#D8BE93; font-weight:bold; }
-        .ppr-section { margin:12px 0; }
-        .ppr-section h4 { color:#8A5A2B; border-bottom:1px solid #F7E0BD; padding-bottom:3px; font-size:14px; }
-        .ppr-proc-card { border:1px solid #EADFC8; border-radius:6px; margin-bottom:8px; page-break-inside:avoid; }
-        .ppr-proc-head { background:#FDF8EF; padding:6px 10px; display:flex; align-items:center; gap:10px; font-size:13px; }
-        .ppr-proc-idx { background:#8A5A2B; color:#fff; border-radius:50%; width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; font-size:11px; }
-        .ppr-proc-kind { color:#8a6d45; font-size:12px; }
-        .ppr-proc-status { margin-left:auto; color:#fff; border-radius:10px; padding:1px 10px; font-size:12px; }
-        .ppr-proc-body { padding:8px 10px; font-size:12px; }
-        .ppr-qc-hist { margin-bottom:6px; }
-        .ppr-qc-batch { margin-bottom:3px; }
-        table.ppr-work-table { width:100%; border-collapse:collapse; font-size:11px; margin-top:4px; }
-        table.ppr-work-table th, table.ppr-work-table td { border:1px solid #EADFC8; padding:3px 6px; text-align:left; }
-        table.ppr-work-table th { background:#FAF3E4; width:90px; color:#5b3a1e; }
-        table.ppr-cost-table { width:100%; border-collapse:collapse; font-size:12px; margin-bottom:6px; }
-        table.ppr-cost-table th, table.ppr-cost-table td { border:1px solid #EADFC8; padding:4px 8px; }
-        table.ppr-cost-table th { background:#F7E0BD; width:110px; text-align:left; }
-        table.ppr-cost-detail { width:100%; border-collapse:collapse; font-size:11px; }
-        table.ppr-cost-detail th, table.ppr-cost-detail td { border:1px solid #EADFC8; padding:3px 6px; text-align:left; }
-        table.ppr-cost-detail th { background:#FAF3E4; }
+        /* ══════ 報告版面（螢幕預覽用陰影卡片；列印時去邊框改用 @page 分頁） ══════ */
+        .ppr-report-area { background:#EDE6D8; padding:16px 0; }
+        .ppr-page { width:210mm; min-height:297mm; margin:0 auto 20px; padding:16mm 14mm; background:#fff;
+            box-shadow:0 2px 10px rgba(90,60,20,.18); box-sizing:border-box; font-size:12.5px; color:#382a1a; }
+        .ppr-report-area.ppr-paper-a3 .ppr-page { width:297mm; min-height:420mm; font-size:14px; }
+        @media print {
+            .ppr-report-area { background:none; padding:0; }
+            .ppr-page { box-shadow:none; margin:0; width:auto; min-height:0; page-break-after:always; }
+            .ppr-page:last-child { page-break-after:auto; }
+        }
+
+        .ppr-head-block { page-break-inside:avoid; }
+        .ppr-doc-head { display:flex; justify-content:space-between; align-items:baseline; border-bottom:3px solid #8A5A2B; padding-bottom:8px; margin-bottom:10px; }
+        .ppr-company { font-size:20px; font-weight:bold; color:#4a2f16; letter-spacing:.5px; }
+        .ppr-doctitle { font-size:13px; color:#8a6d45; }
+
+        .ppr-info-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:1px; background:#EADFC8;
+            border:1px solid #EADFC8; border-radius:6px; overflow:hidden; margin-bottom:14px; }
+        .ppr-info-item { background:#fff; padding:6px 12px; display:flex; flex-direction:column; gap:1px; }
+        .ppr-info-item .k { font-size:10.5px; color:#a3865c; }
+        .ppr-info-item .v { font-size:13.5px; color:#382a1a; font-weight:600; }
+
+        .ppr-body { display:flex; gap:16px; margin-bottom:16px; }
+        .ppr-drawing-box { flex:1 1 46%; border:1px solid #EADFC8; border-radius:8px; min-height:220px; display:flex;
+            align-items:center; justify-content:center; background:#FBFAF7; padding:8px; }
+        .ppr-drawing-img { max-width:100%; max-height:380px; object-fit:contain; }
+        .ppr-drawing-frame { width:100%; height:380px; border:none; }
+        .ppr-drawing-empty { color:#b0a68f; font-size:13px; }
+        .ppr-flow-box { flex:1 1 54%; }
+        .ppr-flow-box h4, .ppr-section h4 { color:#8A5A2B; font-size:13.5px; font-weight:700; letter-spacing:.5px;
+            margin:0 0 8px; padding-bottom:5px; border-bottom:2px solid #F7E0BD; }
+        .ppr-section { margin:16px 0; page-break-inside:avoid; }
+
+        /* 流程總覽：步驟條 */
+        .ppr-stepper { display:flex; align-items:flex-start; flex-wrap:wrap; }
+        .ppr-step { display:flex; flex-direction:column; align-items:center; width:88px; text-align:center; }
+        .ppr-step .dot { width:26px; height:26px; border-radius:50%; background:#fff; border:2.5px solid #999;
+            display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px; }
+        .ppr-step .name { font-size:11px; margin-top:5px; color:#382a1a; font-weight:600; line-height:1.3; }
+        .ppr-step .kind { font-size:10px; color:#a3865c; margin-top:1px; }
+        .ppr-step .stat { font-size:10px; margin-top:3px; padding:1px 7px; border-radius:8px; color:#fff; }
+        .ppr-step-line { flex:0 0 auto; width:16px; height:2.5px; background:#D8BE93; margin-top:13px; }
+
+        /* 製程詳細卡片 */
+        .ppr-proc-cards { display:flex; flex-direction:column; gap:10px; }
+        .ppr-report-area.ppr-paper-a3 .ppr-proc-cards { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+        .ppr-proc-card { border:1px solid #EADFC8; border-left:4px solid #999; border-radius:6px; page-break-inside:avoid; overflow:hidden; }
+        .ppr-proc-head { background:#FDF8EF; padding:7px 12px; display:flex; align-items:center; gap:8px; font-size:13px; }
+        .ppr-proc-idx { background:#8A5A2B; color:#fff; border-radius:50%; width:19px; height:19px; flex:0 0 auto;
+            display:inline-flex; align-items:center; justify-content:center; font-size:10.5px; }
+        .ppr-proc-status { margin-left:auto; color:#fff; border-radius:10px; padding:2px 10px; font-size:11px; white-space:nowrap; }
+        .ppr-proc-body { padding:8px 12px; }
+        .ppr-batch-row { border-top:1px dashed #EADFC8; padding:6px 0; font-size:12px; }
+        .ppr-batch-row:first-child { border-top:none; padding-top:0; }
+        .ppr-batch-head { color:#5b3a1e; margin-bottom:3px; }
+        .ppr-consumed-tag { font-size:10px; color:#a3865c; background:#F3EDE1; border-radius:8px; padding:1px 7px; margin-left:4px; }
+        .ppr-qc-batch { margin:4px 0 4px 4px; }
+        .ppr-qc-batch-title { font-size:11px; color:#8a6d45; font-weight:600; margin-bottom:2px; }
+        .ppr-qc-round { font-size:11.5px; margin:2px 0 2px 8px; }
+        .ppr-qc-round-tag { background:#F7E0BD; color:#5b3a1e; border-radius:4px; padding:0 6px; font-size:10.5px; }
+        .ppr-qc-round-date { color:#a3865c; }
+        .ppr-aod-tag { background:#F0A24B; color:#fff; border-radius:8px; padding:0 6px; font-size:10px; }
+        .ppr-work-title { font-size:11px; color:#8a6d45; font-weight:600; margin:4px 0 2px; }
+
+        table.ppr-meas-table, table.ppr-work-table, table.ppr-cost-table, table.ppr-cost-detail, table.ppr-freq-table {
+            width:100%; border-collapse:collapse; font-size:11px; margin:3px 0; }
+        table.ppr-meas-table th, table.ppr-meas-table td,
+        table.ppr-work-table th, table.ppr-work-table td,
+        table.ppr-cost-table th, table.ppr-cost-table td,
+        table.ppr-cost-detail th, table.ppr-cost-detail td,
+        table.ppr-freq-table th, table.ppr-freq-table td { border:1px solid #EFE7D8; padding:3px 7px; text-align:left; }
+        table.ppr-meas-table th, table.ppr-work-table th, table.ppr-cost-detail th, table.ppr-freq-table th { background:#FAF3E4; color:#8a6d45; font-weight:600; }
+        table.ppr-cost-table th { background:#F7E0BD; width:110px; color:#5b3a1e; }
+        table.ppr-work-table th { width:80px; }
+        table.ppr-meas-table tbody tr:nth-child(even), table.ppr-freq-table tbody tr:nth-child(even) { background:#FCFAF5; }
+
         .ppr-freq-cols { display:flex; gap:16px; }
         .ppr-freq-cols > div { flex:1; }
+        .ppr-freq-cols b { font-size:12.5px; color:#5b3a1e; }
         .ppr-freq-meta { font-size:11px; color:#8a6d45; margin:4px 0; }
-        table.ppr-freq-table { width:100%; border-collapse:collapse; font-size:11px; }
-        table.ppr-freq-table th, table.ppr-freq-table td { border:1px solid #EADFC8; padding:3px 6px; }
-        table.ppr-freq-table th { background:#FAF3E4; }
-        .ppr-muted { color:#999; font-size:12px; }
-        .ppr-summary-charts { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:10px; }
-        .ppr-chart-box { flex:1 1 30%; min-width:260px; border:1px solid #EADFC8; border-radius:6px; padding:8px; }
-        .ppr-chart-box h4 { margin-top:0; font-size:13px; color:#8A5A2B; }
+        .ppr-muted { color:#b0a68f; font-size:12px; }
+
+        .ppr-summary-charts { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:14px; }
+        .ppr-chart-box { flex:1 1 30%; min-width:260px; border:1px solid #EADFC8; border-radius:8px; padding:10px; page-break-inside:avoid; }
+        .ppr-chart-box h4 { margin:0 0 6px; font-size:12.5px; color:#8A5A2B; font-weight:700; }
         canvas.ppr-chart { width:100% !important; height:200px !important; }
-        @media print { .ppr-summary-charts { page-break-inside:avoid; } }
     </style>
-    <style id="pprPageSizeStyle"></style>
+    <style id="pprPageSizeStyle">@page { size:A4 portrait; margin:12mm; }</style>
 </head>
 <body class="nav-sm">
 <div class="container body">
@@ -595,19 +717,36 @@ if ($isAjax) {
                     <input type="hidden" id="pprPartId">
                     <div class="ppr-suggest" id="pprPartSuggest"></div>
                 </span>
-                <label>期間</label>
-                <input type="date" id="pprDateFrom" value="<?= date('Y-m-01') ?>">～<input type="date" id="pprDateTo" value="<?= date('Y-m-d') ?>">
-                <button id="pprSearchBtn"><i class="fa fa-search"></i> 查詢筆數</button>
+                <label>或製令號</label>
+                <span class="ppr-typeahead">
+                    <input type="text" id="pprBomInput" placeholder="輸入製令(BOM)號碼…" autocomplete="off">
+                    <input type="hidden" id="pprBomHidden">
+                    <div class="ppr-suggest" id="pprBomSuggest"></div>
+                </span>
             </div>
             <div class="row2">
+                <label>期間</label>
+                <input type="date" id="pprDateFrom" value="<?= date('Y-m-01') ?>">～<input type="date" id="pprDateTo" value="<?= date('Y-m-d') ?>">
+                <button id="pprSearchBtn"><i class="fa fa-search"></i> 查詢此料號筆數</button>
+                <button id="pprBrowseClientBtn" style="display:none;"><i class="fa fa-list"></i> 瀏覽此客戶期間內所有BOM</button>
+            </div>
+            <div class="row2">
+                <label><input type="checkbox" id="pprOptQc" value="1" checked> 顯示QC檢驗內容</label>
                 <label><input type="checkbox" id="pprOptWork" value="1"> 帶入報工簡表</label>
                 <label><input type="checkbox" id="pprOptCost" value="1" checked> 顯示成本毛利</label>
                 <label><input type="checkbox" id="pprOptFreq" value="1" checked> 顯示訂單/出貨頻率（僅單筆模式）</label>
                 <label>紙張</label>
-                <select id="pprPaper"><option value="A4">A4</option><option value="A3">A3（批次多筆建議）</option></select>
+                <span class="ppr-paper-toggle">
+                    <button type="button" class="ppr-paper-btn active" data-size="A4">A4</button>
+                    <button type="button" class="ppr-paper-btn" data-size="A3">A3（多筆或大圖適用）</button>
+                </span>
+            </div>
+            <div id="pprClientBrowseWrap" style="display:none;">
+                <div class="ppr-count-bar" id="pprClientBrowseCount"></div>
+                <div class="ppr-bom-list" id="pprClientBrowseList"></div>
             </div>
             <div id="pprBomListWrap" style="display:none;">
-                <div class="ppr-count-bar"><label><input type="checkbox" id="pprSelAll"> 全選</label>　已選 <span id="pprSelCount">0</span> / 上限 <span id="pprMaxCount">30</span> 筆</div>
+                <div class="ppr-count-bar"><b id="pprBomListTitle"></b>　<label><input type="checkbox" id="pprSelAll"> 全選</label>　已選 <span id="pprSelCount">0</span> / 上限 <span id="pprMaxCount">30</span> 筆</div>
                 <div class="ppr-bom-list" id="pprBomList"></div>
                 <div style="margin-top:8px;"><button id="pprGenBtn"><i class="fa fa-file-text-o"></i> 產生報告</button>
                     <button id="pprPrintBtn" style="display:none;"><i class="fa fa-print"></i> 列印 / 產生PDF</button></div>
@@ -626,15 +765,20 @@ if ($isAjax) {
     <div class="m-body help-doc">
         <h4>一、功能說明</h4>
         <p>把單一料號的圖面、製程順序、檢驗（含複驗）、報工、成本毛利、訂單/出貨歷史整合成一張可列印的 A4/A3 履歷報告，供品質追溯與成本檢視使用。</p>
-        <h4>二、操作步驟</h4>
+        <h4>二、操作步驟（三種找到料號的方式，任選一種）</h4>
         <ul>
-            <li>選擇料號＋期間，按「查詢筆數」列出該期間內的製令(BOM)清單。</li>
-            <li>若某製令的圖面在 Z:/BOM/ 有多個副檔名的精確匹配檔（檔名去副檔名剛好等於製令號碼者），會列出候選清單，需先選定要用哪一個才能產生報告；找不到精確匹配檔則顯示「找不到圖面」。</li>
-            <li>期間內只有 1 筆 → 直接產生單筆報告（可另外顯示訂單/出貨頻率分析）。多筆 → 勾選要產生的製令（可全選），按「產生報告」；同一份文件內連續呈現，最後加一頁總體趨勢分析，按「列印」一次印完全部。</li>
+            <li><b>直接打料號</b>：輸入框下方會即時跳出符合的料號建議清單（含所屬客戶名稱、目前選定期間內有幾筆BOM，避免同料號不同客戶混淆或打了半天沒資料）。</li>
+            <li><b>先選客戶</b>：客戶欄一樣打字模糊搜尋（同名客戶會自動標示縣市/區，甚至到路名區分）；選定後按「瀏覽此客戶期間內所有BOM」，下方直接列出清單點選即可，不必再猜料號怎麼打。</li>
+            <li><b>直接打製令(BOM)號碼</b>：右側「或製令號」欄可直接搜尋 BOM 號碼，選到後會自動帶入對應料號並查詢，該筆也會自動勾選。</li>
+            <li>找到料號後按「查詢此料號筆數」列出期間內的製令(BOM)清單（清單標題會顯示共有幾筆）。若某製令的圖面在 Z:/BOM/ 有多個副檔名的精確匹配檔，會列出候選清單，需先選定要用哪一個才能產生報告；找不到精確匹配檔則顯示「找不到圖面」。</li>
+            <li>期間內只有 1 筆 → 直接產生單筆報告（可另外顯示訂單/出貨頻率分析）。多筆 → 勾選要產生的製令（可全選，上限 <?= PPR_MAX_BATCH_COUNT ?> 筆），按「產生報告」；同一份文件內連續呈現，最後加一頁總體趨勢分析。</li>
+            <li><b>紙張大小</b>：報告產生後可隨時點「A4」／「A3」按鈕即時切換排版（A3 會把製程卡片改雙欄呈現，不是單純放大留白），選好再按「列印/產生PDF」。</li>
         </ul>
         <h4>三、重要行為 / 常見疑問</h4>
         <div class="tip">
             <b>圖面判定</b>：只認「檔名去副檔名恰好等於製令號碼」的檔案，任何帶後綴的變體檔名一律不算候選。<br>
+            <b>拆批/複驗歷程</b>：製程若曾被拆成多批（A/B/C），卡片內會列出每個批次各自的檢驗歷程與判定，即使該批次後續已被合併消耗（歷史批次仍標示「已拆分/合併」但檢驗紀錄不會被隱藏）。<br>
+            <b>QC檢驗內容</b>：勾選「顯示QC檢驗內容」會列出每輪檢驗的批次/輪次判定，若該輪有逐項量測資料（項目/標準/實測值/判定）也會一併列出。<br>
             <b>批次上限</b>：單次最多產生 <?= PPR_MAX_BATCH_COUNT ?> 筆，超過請縮小期間或減少勾選。<br>
             <b>成本口徑</b>：與「訂單毛利分析」頁完全相同（外包實價優先→廠內報工推算→固定單價設定），客供料製程不計成本。<br>
             <b>報工效率</b>：因全站無官方標準工時可比，效率為「與該製程歷史平均單顆工時比較」的相對值，非絕對標準。
@@ -709,24 +853,63 @@ function pprSetupTypeahead(opt){
 
 pprSetupTypeahead({
     inputSel:'#pprClientInput', hiddenSel:'#pprClientId', boxSel:'#pprClientSuggest', action:'search_clients',
-    onClear:function(){ $('#pprPartInput').val(''); $('#pprPartId').val(''); }
+    onClear:function(){ $('#pprPartInput').val(''); $('#pprPartId').val(''); $('#pprBrowseClientBtn').hide(); $('#pprClientBrowseWrap').hide(); },
+    onPick:function(){ $('#pprBrowseClientBtn').show(); }
 });
 pprSetupTypeahead({
     inputSel:'#pprPartInput', hiddenSel:'#pprPartId', boxSel:'#pprPartSuggest', action:'search_parts',
-    extraParams:function(){ return {customer_id: $('#pprClientId').val()}; }
+    extraParams:function(){ return {customer_id: $('#pprClientId').val(), date_from: $('#pprDateFrom').val(), date_to: $('#pprDateTo').val()}; }
+});
+pprSetupTypeahead({
+    inputSel:'#pprBomInput', hiddenSel:'#pprBomHidden', boxSel:'#pprBomSuggest', action:'search_boms',
+    onPick:function(it){
+        $('#pprPartInput').val(it.text); $('#pprPartId').val(it.id);
+        $('#pprBomInput').val('');
+        pprDoSearch(it.bom);
+    }
 });
 
-$('#pprSearchBtn').on('click', function(){
+var PPR_HIGHLIGHT_BOM = null;
+
+function pprDoSearch(highlightBom){
     var did = $('#pprPartId').val();
     if (!did) { alert('請先從建議清單選擇一個料號'); return; }
+    PPR_HIGHLIGHT_BOM = highlightBom || null;
     var from = $('#pprDateFrom').val(), to = $('#pprDateTo').val();
     $.post(PPR_API, {action:'list_boms', d_id:did, date_from:from, date_to:to}, function(res){
         if (!res.success) { alert(res.error||'查詢失敗'); return; }
         PPR_ROWS = res.rows; PPR_DRAWING_CHOICE = {};
         $('#pprMaxCount').text(res.max_batch);
+        $('#pprBomListTitle').text('「'+$('#pprPartInput').val()+'」期間內共 '+PPR_ROWS.length+' 筆 BOM');
         pprRenderBomList();
         $('#pprBomListWrap').show();
+        $('#pprClientBrowseWrap').hide();
         $('#pprReportArea').empty(); $('#pprPrintBtn').hide();
+    }, 'json');
+}
+$('#pprSearchBtn').on('click', function(){ pprDoSearch(); });
+
+$('#pprBrowseClientBtn').on('click', function(){
+    var cid = $('#pprClientId').val();
+    if (!cid) { alert('請先從建議清單選擇一個客戶'); return; }
+    var from = $('#pprDateFrom').val(), to = $('#pprDateTo').val();
+    $.post(PPR_API, {action:'browse_customer_boms', customer_id:cid, date_from:from, date_to:to}, function(res){
+        if (!res.success) { alert(res.error||'查詢失敗'); return; }
+        $('#pprClientBrowseCount').text('此客戶期間內共 '+res.total+' 筆 BOM（點選一筆即可帶入料號並查詢）'+(res.total>=100?'（僅顯示前100筆）':''));
+        var $wrap = $('#pprClientBrowseList').empty();
+        if (!res.rows.length) { $wrap.html('<div class="ppr-bom-row">此期間查無資料。</div>'); }
+        res.rows.forEach(function(r){
+            var $row = $('<div class="ppr-bom-row" style="cursor:pointer;">'
+                + '<b>'+r.bom+'</b> '+r.D_Setting_Id+' 數量'+r.sqty+' '+String(r.Created_At).substring(0,10)
+                + '</div>');
+            $row.on('click', function(){
+                $('#pprPartInput').val(r.D_Setting_Id); $('#pprPartId').val(r.d_setting_id);
+                pprDoSearch(r.bom);
+            });
+            $wrap.append($row);
+        });
+        $('#pprClientBrowseWrap').show();
+        $('#pprBomListWrap').hide();
     }, 'json');
 });
 
@@ -738,11 +921,12 @@ function pprRenderBomList(){
         var dwText = dwStatus==='none' ? '<span class="dw-status-none">找不到圖面</span>'
                    : dwStatus==='single' ? '<span class="dw-status-single">圖面：'+r.drawing.candidates[0].filename+'</span>'
                    : '<span class="dw-status-multiple">圖面：'+r.drawing.candidates.length+' 個候選，請選擇 →</span>';
-        var checked = PPR_ROWS.length===1 ? 'checked' : '';
+        var checked = (PPR_ROWS.length===1 || r.bom===PPR_HIGHLIGHT_BOM) ? 'checked' : '';
         var $row = $('<div class="ppr-bom-row">'
             + '<input type="checkbox" class="ppr-bom-chk" data-bom="'+r.bom+'" '+checked+'>'
             + '<b>'+r.bom+'</b> '+r.created_at+' 數量'+r.sqty+' '+(r.client||'')+' '+dwText
             + '</div>');
+        if (r.bom === PPR_HIGHLIGHT_BOM) $row.css({background:'#FFF7E8'});
         $wrap.append($row);
         if (dwStatus === 'multiple') {
             var $pick = $('<div class="ppr-dw-pick"></div>');
@@ -787,22 +971,29 @@ $('#pprGenBtn').on('click', function(){
         work_report: $('#pprOptWork').is(':checked') ? 'simple' : 'none',
         show_cost: $('#pprOptCost').is(':checked') ? 1 : 0,
         show_freq: $('#pprOptFreq').is(':checked') ? 1 : 0,
-        paper: $('#pprPaper').val()
+        show_qc: $('#pprOptQc').is(':checked') ? 1 : 0
     }, function(res){
         if (!res.success) { alert(res.error||'產生失敗'); return; }
         $('#pprReportArea').html(res.html);
-        pprSetPaperSize($('#pprPaper').val());
+        pprApplyPaperState();
         pprInitCharts();
         $('#pprPrintBtn').show();
         $('html,body').animate({scrollTop: $('#pprReportArea').offset().top - 60}, 300);
     }, 'json');
 });
 
-function pprSetPaperSize(size){
-    var css = size === 'A3' ? '@page{size:A3 portrait;}' : '@page{size:A4 portrait;}';
+/* 紙張大小：純前端切換（不需重新向後端要資料），點了立即重排版，A3 額外套用寬版排版(製程卡片雙欄) */
+function pprApplyPaperState(){
+    var size = $('.ppr-paper-btn.active').data('size') || 'A4';
+    var css = size === 'A3' ? '@page { size:A3 portrait; margin:14mm; }' : '@page { size:A4 portrait; margin:12mm; }';
     $('#pprPageSizeStyle').text(css);
+    $('#pprReportArea').toggleClass('ppr-paper-a3', size === 'A3');
 }
-$('#pprPaper').on('change', function(){ pprSetPaperSize($(this).val()); });
+$('.ppr-paper-btn').on('click', function(){
+    $('.ppr-paper-btn').removeClass('active');
+    $(this).addClass('active');
+    pprApplyPaperState();
+});
 
 $('#pprPrintBtn').on('click', function(){ window.print(); });
 
