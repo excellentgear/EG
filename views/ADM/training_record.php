@@ -309,10 +309,10 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         <div class="tr-table-wrap">
             <table class="tr-table" id="trTable">
                 <thead><tr>
-                    <th>月份</th><th>對象部門</th><th>課程名稱</th><th>類型</th><th>講師/開課單位</th><th>時數</th>
+                    <th>月份</th><th>對象部門</th><th>課程名稱</th><th>類型</th><th>講師/開課單位</th><th>時數</th><th>費用</th>
                     <th>應到</th><th>實到</th><th>評鑑</th><th>狀態</th><th>開課日期</th><th>操作</th>
                 </tr></thead>
-                <tbody id="trBody"><tr><td colspan="12" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="trBody"><tr><td colspan="13" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
         <div style="font-size:11px;color:#8a6d45;margin-top:3px;">點任一列可展開該場次明細（課程大綱、上課時段、參加人員與評鑑結果、附件）。</div>
@@ -396,6 +396,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 <div class="errmsg" id="errEdDays"></div></div>
             <div><label>預計總時數</label><input type="number" id="edHours" step="any" min="0">
                 <div class="errmsg" id="errEdHours"></div></div>
+            <div><label>訓練費用</label><input type="number" id="edCost" step="any" min="0" placeholder="0"></div>
             <div style="display:flex;align-items:flex-end;padding-bottom:8px;font-size:12px;color:#8a6d45;">
                 <span id="edDayHint"></span></div>
         </div>
@@ -1072,6 +1073,7 @@ function renderTable(){
             && Math.abs(parseFloat(r.actual_hours)-parseFloat(r.hours))>0.05;
         html += '<td'+(diffH?' title="計畫時數 '+numTrim(r.hours)+'，實際 '+numTrim(r.actual_hours)+'"':'')+'>'
              +  (showH==null?'—':numTrim(showH))+(diffH?' <span style="color:#DD5138;">*</span>':'')+'</td>';
+        html += '<td>'+(r.cost==null||r.cost===''?'—':numTrim(r.cost))+'</td>';
         html += '<td>'+(r.target_headcount==null?'—':r.target_headcount)+'</td>';
         html += '<td>'+(r.actual_headcount==null?'—':r.actual_headcount)+'</td>';
         html += '<td>'+evalCell(r)+'</td>';
@@ -1100,7 +1102,7 @@ function renderTable(){
         if (PERMS.canAdmin) html += '<span class="tr-op" style="color:#DD5138;" onclick="delSession('+r.session_id+')" title="刪除場次"><i class="fa fa-trash"></i></span>';
         html += '</td></tr>';
     });
-    $('#trBody').html(html || '<tr><td colspan="12" style="padding:16px;color:#8a6d45;">無符合條件的訓練場次</td></tr>');
+    $('#trBody').html(html || '<tr><td colspan="13" style="padding:16px;color:#8a6d45;">無符合條件的訓練場次</td></tr>');
     OPEN_DET = {};
 }
 /* ---------- 點列展開明細（課程大綱/時段/名單與評鑑/附件） ---------- */
@@ -1109,7 +1111,7 @@ function toggleDetail(ev, sid){
     var $tr = $(ev.currentTarget);
     if (OPEN_DET[sid]){ $tr.next('tr.det-row').remove(); delete OPEN_DET[sid]; return; }
     OPEN_DET[sid] = 1;
-    $tr.after('<tr class="det-row"><td colspan="12"><span style="color:#8a6d45;">載入中…</span></td></tr>');
+    $tr.after('<tr class="det-row"><td colspan="13"><span style="color:#8a6d45;">載入中…</span></td></tr>');
     var $td = $tr.next('tr.det-row').find('td');
     $.getJSON(API, {action:'session_detail', session_id:sid}, function(res){
         if (!res.ok){ $td.html('<span style="color:#DD5138;">'+esc(res.error||'載入失敗')+'</span>'); return; }
@@ -1206,6 +1208,7 @@ function openEd(sid){
     $('#edTrainer').val(r ? (r.trainer||'') : ''); $('#edTrainerDept').val(''); $('#edTrainerPerson').html('<option value="">人員</option>');
     $('#edOrgUnit').val(r ? (r.org_unit||'') : '');
     $('#edHours').val(r && r.hours!=null ? numTrim(r.hours) : '');
+    $('#edCost').val(r && r.cost!=null ? numTrim(r.cost) : '');
     $('#edDays').val(r && r.plan_days!=null ? r.plan_days : '');
     $('#edNote').val(r ? (r.note||'') : '');
     edValidate();
@@ -2007,7 +2010,8 @@ function ojtSave(){
         }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); $('#ojtMsg').text(''); });
 }
 /* 列印：一人一份，不含分數/結果（供現場手寫），考核日期固定為課程最後一天；
-   考核項目少時併印多人於同一頁節省紙張（結構固定分頁，非量測高度，符合 print_pagination 鐵則精神）。 */
+   每份考核表卡片標記「不可被分頁切開」，實際每頁塞幾份交給瀏覽器依內容高度原生分頁決定，
+   不用考核項目數猜頁數（猜錯會跟瀏覽器實際分頁打架，見 print_pagination 鐵則）。 */
 function printOjtSheet(){
     var r = EXROW || {};
     if (r.train_type==='external'){ alert('外訓不提供考核表'); return; }
@@ -2018,7 +2022,6 @@ function printOjtSheet(){
     var lastDay = (DAYS.length ? DAYS[DAYS.length-1].date : '') || fmtDate(r.done_date) || '';
     var assessor = $('#ojtAssessor').val() || r.trainer || '';
     var loc = $('#exLocSel option:selected').text() || r.location || '';
-    var perPage = OJT_ITEMS.length<=3 ? 3 : (OJT_ITEMS.length<=6 ? 2 : 1);
     var itemRows = OJT_ITEMS.map(function(it,i){
         return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content||'')+'</td>'
              + '<td>'+esc(OJT_TYPES[it.item_type]||it.item_type)+'</td>'
@@ -2026,8 +2029,7 @@ function printOjtSheet(){
     }).join('');
     var html = '';
     list.forEach(function(a, idx){
-        var brk = (idx>0 && idx % perPage === 0) ? ' pgbrk' : '';
-        html += '<div class="pg'+brk+'"><table class="sf"><thead>'
+        html += '<div class="pg"><table class="sf"><thead>'
             + '<tr><th colspan="6" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
             + '<div class="tt">考核表</div></div></th></tr>'
             + '<tr><td colspan="6" class="sf-i">課程名稱：'+esc(course)+'　　地點：'+esc(loc||'—')+'　　考核日期：'+esc(lastDay||'____-__-__')+'</td></tr>'
@@ -2044,7 +2046,7 @@ function printOjtSheet(){
         + 'table.sf th,table.sf td{border:1px solid #333;padding:6px;text-align:center;}'
         + 'table.sf td.t-left{text-align:left;}'
         + 'table.sf td.sf-i{border:1px solid #999;padding:5px 8px;text-align:left;font-size:12.5px;background:#fff;}'
-        + '.pgbrk{page-break-before:always;}.pg{margin-bottom:14px;page-break-inside:avoid;break-inside:avoid;}';
+        + '.pg{margin-bottom:14px;page-break-inside:avoid;break-inside:avoid;}';
     egPrintWindow('考核表', html, css, '', false, true);
 }
 function loadAttach(sid){
@@ -2115,7 +2117,7 @@ function submitEd(){
         year:$('#edYear').val(), plan_month:$('#edMonth').val(), dept_ids:edDeptIds().join(','),
         course_name:$('#edCourse').val(), train_type:$('#edType').val(),
         trainer:$('#edTrainer').val(), trainer_id:$('#edTrainerPerson').val(), org_unit:$('#edOrgUnit').val(),
-        hours:$('#edHours').val(), plan_days:$('#edDays').val(), note:$('#edNote').val()},
+        hours:$('#edHours').val(), cost:$('#edCost').val(), plan_days:$('#edDays').val(), note:$('#edNote').val()},
     function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         var fromReq = $('#edMask').data('fromRequestId');
@@ -2461,7 +2463,7 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount){
             + '.pt-sign td{border:1px solid #333;height:76px;vertical-align:top;padding:3px 6px;width:33.33%;}'
             + '.pt-sign .lb{font-size:11px;color:#333;}'
             + '.pt-sign .stamp-box{text-align:center;margin-top:2px;}'
-            + '.stamp-wrap svg,svg.car-stamp{width:66px;height:66px;}'
+            + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;}'
             + '.pt-foot{position:fixed;right:8mm;bottom:5mm;font-size:9pt;color:#333;}'
             + (extraCss||'');
     var w = window.open('', '_blank');
@@ -2519,15 +2521,18 @@ function printPlanTable(){
     signWarn();
     var docTitle = DOC_NAME.plan || '教育訓練計畫表';   // 表頭一律用綁定AS文件的doc_name，不寫死（ai-rules/16 第一之二節）
     var body='<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
-           + '<div class="tt">'+esc(docTitle)+'</div><div class="sub">'+year+' 年</div></div>';
+           + '<div class="tt">'+esc(docTitle)+'</div></div>'
+           + '<div style="text-align:left;font-size:13px;font-weight:bold;margin:4px 0 2px;">'+year+' 年</div>';
     // 欄寬用 % 明確配置（table-layout:fixed），課程名稱與訓練對象留足寬度才不會被擠成直排
-    var cols = '<colgroup><col style="width:4%"><col style="width:26%"><col style="width:16%"><col style="width:7%">';
-    for (var c=1;c<=12;c++) cols += '<col style="width:3.2%">';
-    cols += '<col style="width:8.6%"></colgroup>';
+    var cols = '<colgroup><col style="width:3%"><col style="width:20%"><col style="width:12%"><col style="width:6%">';
+    for (var c=1;c<=12;c++) cols += '<col style="width:3%">';
+    cols += '<col style="width:8%"><col style="width:13%"></colgroup>';
     var mh=''; for (var m=1;m<=12;m++) mh += '<th>'+m+'</th>';
-    body += '<table class="pt">'+cols+'<thead><tr><th>NO.</th><th>課程名稱</th><th>訓練對象</th>'
-         + '<th>實施方式</th>'+mh+'<th>備註</th></tr></thead><tbody>';
-    if (!rows.length) body += '<tr><td colspan="17" style="height:24px;">（本年度尚無訓練計畫）</td></tr>';
+    body += '<table class="pt">'+cols+'<thead>'
+         + '<tr><th rowspan="2">NO.</th><th rowspan="2">課程名稱</th><th rowspan="2">訓練對象</th>'
+         + '<th rowspan="2">實施方式</th><th colspan="12">計畫實施月份</th><th rowspan="2">費用</th><th rowspan="2">備註</th></tr>'
+         + '<tr>'+mh+'</tr></thead><tbody>';
+    if (!rows.length) body += '<tr><td colspan="18" style="height:24px;">（本年度尚無訓練計畫）</td></tr>';
     var signDt = planSignDate();
     rows.forEach(function(r,i){
         var doneM = {};
@@ -2547,6 +2552,7 @@ function printPlanTable(){
         body += '<tr><td>'+(i+1)+'</td><td class="l">'+esc(r.course_name)+'</td>'
              + '<td class="l">'+esc(r.dept_name||'全公司')+'</td>'
              + '<td>'+(r.train_type==='external'?'外訓':'內訓')+'</td>'+cells
+             + '<td>'+(r.cost!=null && r.cost!=='' ? numTrim(r.cost) : '')+'</td>'
              + '<td class="l" style="font-size:11px;">'+esc(r.note||'')+'</td></tr>';
     });
     body += '</tbody></table>'

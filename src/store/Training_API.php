@@ -587,6 +587,7 @@ case 'save_session': {
     else { $orgUnit = null; }
     if ($trainType === 'external' && $orgUnit === null) jerr('外訓請填開課單位');
     $hours = ($_POST['hours'] ?? '') === '' ? null : (float)$_POST['hours'];
+    $cost = ($_POST['cost'] ?? '') === '' ? null : (float)$_POST['cost'];
     $planDays = ($_POST['plan_days'] ?? '') === '' ? null : max(1, (int)$_POST['plan_days']);
     if ($planDays !== null && $planDays > 60) jerr('計畫天數請勿超過 60 天');
     $note = trim((string)($_POST['note'] ?? '')) ?: null;
@@ -594,13 +595,13 @@ case 'save_session': {
         $db->beginTransaction();
         if ($sid > 0) {
             $db->prepare("UPDATE training_session SET year=?, plan_month=?, dept_id=?, course_name=?, train_type=?, trainer=?, trainer_id=?, org_unit=?,
-                          hours=?, plan_days=?, note=? WHERE session_id=?")
-               ->execute([$year,$month,$deptId,$course,$trainType,$trainer,$trainerId,$orgUnit,$hours,$planDays,$note,$sid]);
+                          hours=?, cost=?, plan_days=?, note=? WHERE session_id=?")
+               ->execute([$year,$month,$deptId,$course,$trainType,$trainer,$trainerId,$orgUnit,$hours,$cost,$planDays,$note,$sid]);
         } else {
             $db->prepare("INSERT INTO training_session
-                (year,plan_month,dept_id,course_name,train_type,trainer,trainer_id,org_unit,hours,plan_days,status,note,created_by,created_by_name)
-                VALUES (?,?,?,?,?,?,?,?,?,?, 'planned', ?,?,?)")
-               ->execute([$year,$month,$deptId,$course,$trainType,$trainer,$trainerId,$orgUnit,$hours,$planDays,$note,$uid,$uname]);
+                (year,plan_month,dept_id,course_name,train_type,trainer,trainer_id,org_unit,hours,cost,plan_days,status,note,created_by,created_by_name)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?, 'planned', ?,?,?)")
+               ->execute([$year,$month,$deptId,$course,$trainType,$trainer,$trainerId,$orgUnit,$hours,$cost,$planDays,$note,$uid,$uname]);
             $sid = (int)$db->lastInsertId();
         }
         training_save_session_depts($db, $sid, $deptIds);      // 對象部門複選（同步主表 dept_id）
@@ -1133,10 +1134,10 @@ case 'copy_session': {
     try {
         $db->beginTransaction();
         $db->prepare("INSERT INTO training_session
-            (year,plan_month,dept_id,course_name,train_type,trainer,trainer_id,org_unit,hours,plan_days,status,note,outline,eval_method,created_by,created_by_name)
-            VALUES (?,?,?,?,?,?,?,?,?,?, 'planned', ?, ?, ?, ?, ?)")
+            (year,plan_month,dept_id,course_name,train_type,trainer,trainer_id,org_unit,hours,cost,plan_days,status,note,outline,eval_method,created_by,created_by_name)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?, 'planned', ?, ?, ?, ?, ?)")
            ->execute([$s['year'],$s['plan_month'],$s['dept_id'],$s['course_name'],$s['train_type'],$s['trainer'],
-                      $s['trainer_id'],$s['org_unit'],$s['hours'],$s['plan_days'],$s['note'],
+                      $s['trainer_id'],$s['org_unit'],$s['hours'],$s['cost'] ?? null,$s['plan_days'],$s['note'],
                       $s['outline'] ?? null, $s['eval_method'] ?? null, $uid,$uname]);
         $newId = (int)$db->lastInsertId();
         training_save_session_depts($db, $newId, training_session_depts($db, [$sid])[$sid] ?? []);   // 對象部門一併複製
