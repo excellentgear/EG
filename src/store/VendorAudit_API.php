@@ -615,6 +615,7 @@ case 'complete_target': {
     $selfEval = trim((string)($_POST['self_evaluator'] ?? '')) ?: null;
     $supplierRep = trim((string)($_POST['supplier_rep'] ?? '')) ?: null;
     $conclusion = trim((string)($_POST['conclusion'] ?? '')) ?: null;
+    $reviewType = in_array($_POST['review_type'] ?? '', ['site','self','abnormal'], true) ? $_POST['review_type'] : null;
     $pm = (int)($_POST['plan_month'] ?? 0); $pm = ($pm >= 1 && $pm <= 12) ? $pm : null;
     $scores = json_decode((string)($_POST['scores'] ?? ''), true);
     if (!is_array($scores)) $scores = [];
@@ -629,7 +630,7 @@ case 'complete_target': {
             $db->rollBack(); jerr('此筆狀態已變更(可能已完成/送審核)，請重新整理後再試');
         }
         $cfg = vendor_audit_resolve_cfg($db, $cur['checklist_snapshot']);
-        $errs = vendor_audit_validate_complete(['auditor'=>$auditor, 'conclusion'=>$conclusion, 'scores'=>$scores], $cfg);
+        $errs = vendor_audit_validate_complete(['auditor'=>$auditor, 'conclusion'=>$conclusion, 'review_type'=>$reviewType, 'scores'=>$scores], $cfg);
         if ($errs) { $db->rollBack(); jerr(implode('；', $errs)); }
 
         $rates = vendor_audit_compute_rates($scores, $cfg);
