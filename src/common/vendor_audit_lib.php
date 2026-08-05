@@ -502,6 +502,8 @@ function vendor_audit_sign_dept_options(PDO $db): array {
  * 若設定部門「無主管」或解析出的簽核人剛好就是製表人(申請人)本人，自動往上一個部門找主管，
  * 一路往上找到不同於申請人的人就用；若找到最上層仍是同一人(或整段都無主管)，
  * 允許回退成同一人(使用者已明確要求「若無上方部門時可允許同一人」)；完全找不到任何主管才回 null。
+ * 若目前「自動簽核」開關(set.auto)為開，帶給 eg_resolve_signer() 的行程閘門是 auto_sign 模式
+ * （只看主管今天是否請假，忽略開會等一般行程），因為自動簽核是系統當下直接數位蓋章，不需要主管人在場。
  */
 function vendor_audit_resolve_signer(PDO $db, int $applicantUserId = 0): ?array {
     $set = vendor_audit_sign_setting($db);
@@ -511,7 +513,7 @@ function vendor_audit_resolve_signer(PDO $db, int $applicantUserId = 0): ?array 
     for ($hop = 0; $hop < 8 && $deptId; $hop++) {
         $mgr = eg_org_dept_manager($db, $deptId);
         if ($mgr) {
-            $res = eg_resolve_signer($db, (int)$mgr['id'], ['applicant_id'=>$applicantUserId, 'flow_key'=>'vendor_audit_sign', 'log'=>true]);
+            $res = eg_resolve_signer($db, (int)$mgr['id'], ['applicant_id'=>$applicantUserId, 'flow_key'=>'vendor_audit_sign', 'log'=>true, 'auto_sign'=>!empty($set['auto'])]);
             $sid = (int)$res['signer_id'];
             $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
             $st->execute([$sid]);

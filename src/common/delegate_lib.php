@@ -8,10 +8,12 @@
  *
  * 解析優先順序（見 §4）：
  *   1. 判定任務身分（主職 or 指定兼任 scope）
- *   2. 行程閘門：被代理人今日無行程 → 回本人（代理不啟用）
+ *   2. 行程閘門：被代理人今日無行程 → 回本人（代理不啟用）；
+ *      ctx['auto_sign']=true（系統當下直接數位蓋章，無需真人即時操作）時改成只看「今天是否請假/特休」，
+ *      開會等一般行程不算——自動簽核不該因為被簽核人今天有會議就轉去找代理人
  *   3. BY_PERSON：user_delegate（依 scope + 日期 + active + priority）
  *   4. BY_POSITION：position_delegate → department_position.primary_user_id 解析成人
- *   5. SoD：候選 == 申請人 → 跳過；全數被排除 → 直升上一級主管
+ *   5. SoD：候選 == 申請人 → 跳過；候選本人今天也請假 → 跳過；全數被排除 → 直升上一級主管
  *   6. 寫 audit_log，回傳結果
  *
  * 所有函式皆 fail-open（查詢失敗不擋流程，退回本人），並以 function_exists 包覆避免重複載入衝突。
@@ -28,6 +30,9 @@ if (!function_exists('eg_user_busy_today')) {
         $now = date('Y-m-d H:i:s');
         $dayEnd = date('Y-m-d') . ' 23:59:59';
         try {
+            // 全天事件(allday=1)的 end 欄位存的是「結束當天 00:00:00」(非23:59:59)，
+            // 若直接拿 e.end>=now 比對，同一天內只要過了 00:00:00(幾乎永遠成立)就會判定「已結束」，
+            // 導致單日請假/特休整天都測不到自己在忙——一律改用日期比對(DATE(e.end)>=CURDATE())。
             $st = $db->prepare("SELECT e.title, e.start, e.end, e.allday, ec.category_name
                                 FROM evenement e
                                 JOIN evenement_actor a ON a.event_id = e.id
@@ -36,7 +41,8 @@ if (!function_exists('eg_user_busy_today')) {
                                   AND (ec.day_type IS NULL OR ec.day_type = '')
                                   AND ec.category_name <> '通知'
                                   AND ec.category_name <> '請假申請中'
-                                  AND e.start <= ? AND e.end >= ?");
+                                  AND ((e.allday = 1 AND DATE(e.start) <= CURDATE() AND DATE(e.end) >= CURDATE())
+                                    OR (e.allday = 0 AND e.start <= ? AND e.end >= ?))");
             $st->execute([$uid, $dayEnd, $now]);
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $e) {
                 $busy[] = [
@@ -63,6 +69,21 @@ if (!function_exists('eg_user_busy_today')) {
             }
         } catch (Throwable $e) { /* 請假單查詢失敗不擋流程 */ }
         return $busy;
+    }
+}
+
+if (!function_exists('eg_user_on_leave_today')) {
+    /**
+     * 某人「今天」是否請假／特休整天或涵蓋現在（不含一般會議等單純行程）。
+     * 用途：自動簽核（無需真人即時操作的場景）判斷本人是否真的不在（休假/請假），
+     *       而不是被 eg_user_busy_today() 的「今天有任何行程(含開會)」全量判定誤擋——
+     *       開會不代表人整天不在公司，不該讓自動簽核也轉去找代理人。
+     */
+    function eg_user_on_leave_today(PDO $db, int $uid): bool {
+        foreach (eg_user_busy_today($db, $uid) as $b) {
+            if (!empty($b['leave'])) return true;
+        }
+        return false;
     }
 }
 
@@ -347,6 +368,8 @@ if (!function_exists('eg_resolve_signer')) {
      *    'flow_key'            => string// 'quotation'|'car'|'leave'|'as_form'|'qa'...
      *    'doc_id'              => mixed // 單據識別（稽核用，可省略）
      *    'log'                 => bool  // 是否寫 audit_log（預設 true）
+     *    'auto_sign'           => bool  // true=系統自動簽核(無需真人即時操作)，行程閘門只看今天是否請假，
+     *                                    //   忽略開會等一般行程；預設 false=沿用原本「今天有任何行程就轉代理」判定
      * ]
      * @return array ['signer_id'=>int,'is_delegated'=>bool,'is_sod_escalated'=>bool,'reason'=>string]
      */
@@ -356,6 +379,7 @@ if (!function_exists('eg_resolve_signer')) {
         $scopePos    = isset($ctx['scope_position_id'])   ? ($ctx['scope_position_id'] === null   ? null : (int)$ctx['scope_position_id'])   : null;
         $flowKey     = (string)($ctx['flow_key'] ?? '');
         $doLog       = $ctx['log'] ?? true;
+        $autoSign    = !empty($ctx['auto_sign']);
 
         $ret = function (int $id, bool $del, bool $sod, string $reason) use ($db, $targetUserId, $flowKey, $ctx, $doLog) {
             if ($doLog && ($del || $sod)) {
@@ -366,10 +390,12 @@ if (!function_exists('eg_resolve_signer')) {
             return ['signer_id' => $id, 'is_delegated' => $del, 'is_sod_escalated' => $sod, 'reason' => $reason];
         };
 
-        // 2. 行程閘門：本人今日無行程 → 由本人簽核（代理不啟用）
-        $busy = eg_user_busy_today($db, $targetUserId);
-        if (empty($busy)) {
-            return $ret($targetUserId, false, false, '本人今日無行程，由本人簽核');
+        // 2. 行程閘門：一般(人工簽核，需要真人即時點擊)看「今日有無任何行程(含開會)」；
+        //    自動簽核(ctx['auto_sign']=true，系統當下直接數位蓋章、不需要人在不在場)只看本人今天是否
+        //    真的請假/特休整天——開會不代表人整天不在，不該讓自動簽核也被轉去找代理人。
+        $unavailable = $autoSign ? eg_user_on_leave_today($db, $targetUserId) : !empty(eg_user_busy_today($db, $targetUserId));
+        if (!$unavailable) {
+            return $ret($targetUserId, false, false, $autoSign ? '本人今日未請假，由本人自動簽核' : '本人今日無行程，由本人簽核');
         }
 
         // 3. BY_PERSON → 4. BY_POSITION
@@ -380,24 +406,25 @@ if (!function_exists('eg_resolve_signer')) {
             $source = 'BY_POSITION';
         }
 
-        // 5. SoD 過濾：候選 == 申請人（或就是本人）→ 跳過
+        // 5. SoD 過濾：候選 == 申請人（或就是本人）→ 跳過；代理人本人今天也請假 → 一併跳過(不能找一個也不在的人代簽)
         foreach ($candidates as $cand) {
             if ($cand === $targetUserId) continue;
             if ($applicantId && $cand === $applicantId) continue;
+            if (eg_user_on_leave_today($db, $cand)) continue;
             return $ret($cand, true, false, "由代理人代簽（{$source}）");
         }
 
-        // 全部候選被 SoD 排除（或無候選）→ 直升上一級主管
+        // 全部候選被排除（SoD 迴避或代理人本人也請假、或無候選）→ 直升上一級主管
         if (!empty($candidates)) {
             $sup = eg_resolve_supervisor($db, $targetUserId, $scopeDep);
             if ($sup && $sup !== $applicantId) {
-                return $ret($sup, false, true, '因權責分離迴避（代理人即申請人），簽核點直升上一級主管');
+                return $ret($sup, false, true, '代理人皆無法代簽（權責迴避或本人也請假），簽核點直升上一級主管');
             }
             // 上一級也等於申請人或無法解析 → 兜底回本人並標記
-            return $ret($targetUserId, false, false, '代理人觸發權責迴避且無法解析上一級，暫由本人/管理員處理');
+            return $ret($targetUserId, false, false, '代理人皆無法代簽且無法解析上一級，暫由本人/管理員處理');
         }
 
-        // 本人有行程但完全無代理設定 → 仍回本人（維持現狀，不強造代理）
-        return $ret($targetUserId, false, false, '本人今日有行程但未設定代理人，仍由本人簽核');
+        // 完全無代理設定 → 仍回本人（維持現狀，不強造代理）
+        return $ret($targetUserId, false, false, $autoSign ? '本人今日請假但未設定代理人，暫由本人自動簽核' : '本人今日有行程但未設定代理人，仍由本人簽核');
     }
 }
