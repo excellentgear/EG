@@ -52,13 +52,6 @@ function meeting_attendees(PDO $db, int $id): array {
     $st->execute([$id]);
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
-/** 此人目前所屬部門 id 清單（含兼職）；item_confirm 用來判斷是否屬於負責部門 */
-function meeting_user_depts(PDO $db, int $uid): array {
-    $st = $db->prepare("SELECT DISTINCT department_id FROM user_department_position_map WHERE user_id=?");
-    $st->execute([$uid]);
-    return array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
-}
-
 switch ($action) {
 
 case 'meta': {
@@ -173,22 +166,26 @@ case 'get_detail': {
                              LEFT JOIN `user` u ON u.id = lt.target_id
                              WHERE le.ref_type='MEETING_ITEM_CONFIRM' AND le.ref_id=?
                              ORDER BY lt.id");
+    $confStmt = $db->prepare("SELECT user_id, user_name, dept_name, confirmed_at FROM meeting_item_confirm WHERE item_id=?");
     foreach ($items as &$it) {
         $ntStmt->execute([(int)$it['item_id']]);
         $it['notify_targets'] = $ntStmt->fetchAll(PDO::FETCH_ASSOC);
-        // 本次出席人員中，現況部門屬於此項目負責部門者：可在現場用本人密碼確認(item_confirm)
+        // 依負責部門(可多個)算出每部門各一格簽名槽(該部門本次有出席的主管優先，沒主管出席才由代表簽)，
+        // 對照 meeting_item_confirm 已簽名單標記每格是否已簽(2026-08-05改版：部門代表制，取代舊版任一人簽即完成)
         $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
+        $slots = [];
         if ($ownerIds) {
-            $inDept = implode(',', $ownerIds);
-            $eaStmt = $db->prepare("SELECT DISTINCT a.user_id, a.user_name FROM meeting_attendee a
-                                     WHERE a.meeting_id=? AND EXISTS(
-                                         SELECT 1 FROM user_department_position_map m WHERE m.user_id=a.user_id AND m.department_id IN ($inDept)
-                                     )");
-            $eaStmt->execute([$id]);
-            $it['eligible_attendees'] = $eaStmt->fetchAll(PDO::FETCH_ASSOC);
-        } else {
-            $it['eligible_attendees'] = [];
+            $confStmt->execute([(int)$it['item_id']]);
+            $signedById = [];
+            foreach ($confStmt->fetchAll(PDO::FETCH_ASSOC) as $sr) $signedById[(int)$sr['user_id']] = $sr;
+            foreach (meeting_item_required_signers($db, $id, $ownerIds) as $deptId => $signer) {
+                $sr = $signedById[$signer['user_id']] ?? null;
+                $slots[] = ['dept_id'=>$deptId, 'dept_name'=>$signer['dept_name'], 'user_id'=>$signer['user_id'],
+                            'user_name'=>$signer['user_name'], 'is_manager'=>$signer['is_manager'],
+                            'signed'=>(bool)$sr, 'confirmed_at'=>$sr['confirmed_at'] ?? null];
+            }
         }
+        $it['confirm_slots'] = $slots;
     }
     unset($it);
     jout(['meeting'=>$m, 'items'=>$items, 'attendees'=>meeting_attendees($db, $id), 'attaches'=>$attaches]);
@@ -259,15 +256,18 @@ case 'save': {
                 $auid === $chairUid ? 1 : 0, $o ? (int)$o['signed'] : 0, $o ? $o['signed_at'] : null]);
         }
 
-        // 會議項目：整批取代（保留已確認簽名狀態，用內容+kind+sort比對太脆弱，改用 item_id 對應；沒有 item_id 的視為新增）
+        // 會議項目：整批取代（用 item_id 對應保留 gm_comment；沒有 item_id 的視為新增）。
+        // item_id 每次存檔都變(delete+insert新auto_increment)，所以確認簽名(meeting_item_confirm)要跟著把 item_id 改指到新的一列，
+        // 這次被拿掉的項目(使用者刪除)則連同其確認簽名一起清掉，避免變成指向不存在項目的孤兒列。
         $oldItems = [];
-        $iq = $db->prepare("SELECT item_id, confirm_user_id, confirm_user_name, confirm_at, gm_comment FROM meeting_item WHERE meeting_id=?");
+        $iq = $db->prepare("SELECT item_id, gm_comment FROM meeting_item WHERE meeting_id=?");
         $iq->execute([$id]);
         foreach ($iq->fetchAll(PDO::FETCH_ASSOC) as $o) $oldItems[(int)$o['item_id']] = $o;
         $db->prepare("DELETE FROM meeting_item WHERE meeting_id=?")->execute([$id]);
-        $insI = $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, remark,
-                              confirm_user_id, confirm_user_name, confirm_at, gm_comment) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+        $insI = $db->prepare("INSERT INTO meeting_item (meeting_id, kind, sort_order, content, due_date, owner_depts, owner_dept_names, remark, gm_comment)
+                              VALUES (?,?,?,?,?,?,?,?,?)");
         $n = 0;
+        $keptOldIds = [];
         foreach ($items as $it) {
             $content = trim((string)($it['content'] ?? ''));
             if ($content === '') continue;
@@ -279,9 +279,17 @@ case 'save': {
             $remark = trim((string)($it['remark'] ?? '')) ?: null;
             $prevId = (int)($it['item_id'] ?? 0);
             $prev = $oldItems[$prevId] ?? null;
-            $insI->execute([$id, $kind, $n, $content, $due, $ownerIds ? implode(',', $ownerIds) : null, $ownerNames, $remark,
-                $prev['confirm_user_id'] ?? null, $prev['confirm_user_name'] ?? null, $prev['confirm_at'] ?? null, $prev['gm_comment'] ?? null]);
+            $insI->execute([$id, $kind, $n, $content, $due, $ownerIds ? implode(',', $ownerIds) : null, $ownerNames, $remark, $prev['gm_comment'] ?? null]);
+            if ($prev) {
+                $keptOldIds[] = $prevId;
+                $db->prepare("UPDATE meeting_item_confirm SET item_id=? WHERE item_id=?")->execute([(int)$db->lastInsertId(), $prevId]);
+            }
             $n++;
+        }
+        $goneIds = array_diff(array_keys($oldItems), $keptOldIds);
+        if ($goneIds) {
+            $in = implode(',', array_map('intval', $goneIds));
+            $db->exec("DELETE FROM meeting_item_confirm WHERE item_id IN ($in)");
         }
         // 暫存附件轉正（與主單同一筆交易內；限本人上傳的 temp）
         $tempIds = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['temp_attach_ids'] ?? '')))));
@@ -354,16 +362,19 @@ case 'submit': {
     $unsigned->execute([$id]);
     if ((int)$unsigned->fetchColumn() > 0) jerr('尚有出席人員未完成現場簽到，請先完成全部出席人員簽到再送出');
     foreach (meeting_items($db, $id) as $it) {
-        if ($it['confirm_user_id']) continue;
         $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
         if (!$ownerIds) continue;
-        $inDept = implode(',', $ownerIds);
-        $elig = $db->prepare("SELECT COUNT(*) FROM meeting_attendee a WHERE a.meeting_id=? AND EXISTS(
-                                   SELECT 1 FROM user_department_position_map m WHERE m.user_id=a.user_id AND m.department_id IN ($inDept)
-                               )");
-        $elig->execute([$id]);
-        if ((int)$elig->fetchColumn() > 0) {
-            jerr('項目「'.mb_substr((string)$it['content'], 0, 20).'…」的負責部門有出席人員尚未現場確認簽名，請先完成確認再送出');
+        $req = meeting_item_required_signers($db, $id, $ownerIds);
+        if (!$req) continue; // 負責部門本次都沒人出席，不卡送出(維持既有：改走通知系統回簽)
+        $cst = $db->prepare("SELECT user_id FROM meeting_item_confirm WHERE item_id=?");
+        $cst->execute([(int)$it['item_id']]);
+        $signedIds = array_map('intval', $cst->fetchAll(PDO::FETCH_COLUMN));
+        $missing = [];
+        foreach ($req as $signer) {
+            if (!in_array($signer['user_id'], $signedIds, true)) $missing[] = $signer['dept_name'].'('.$signer['user_name'].')';
+        }
+        if ($missing) {
+            jerr('項目「'.mb_substr((string)$it['content'], 0, 20).'…」尚有負責部門代表未現場確認簽名：'.implode('、', $missing));
         }
     }
 
@@ -475,7 +486,9 @@ case 'decide': {
     jout(['status'=>'done']);
 }
 
-/* 部門指派項目現場確認簽名：限「本次出席人員」用本人密碼確認(比照簽到表的密碼驗證，共用裝置也知道究竟是誰簽的)。
+/* 部門指派項目現場確認簽名(2026-08-05改版，使用者明確要求)：每個負責部門各一位簽名槽(該部門本次有出席的主管優先，
+   沒主管出席才由代表簽)，限「本次出席人員」用本人密碼確認(比照簽到表的密碼驗證，共用裝置也知道究竟是誰簽的)；
+   只有被算出為該部門簽名槽的那個人才能簽這格，其餘同部門出席者不可代簽(避免跟另一部門搶著簽同一格)。
    未出席的部門成員無法在現場輸入密碼，一律改走通知系統回簽(送出會議記錄時自動發送，見 submit 與 _eventRespond.php 的 MEETING_ITEM_CONFIRM 掛勾)。 */
 case 'item_confirm': {
     $itemId = (int)($_POST['item_id'] ?? 0);
@@ -485,19 +498,19 @@ case 'item_confirm': {
     $st->execute([$itemId]);
     $item = $st->fetch(PDO::FETCH_ASSOC);
     if (!$item) jerr('找不到此項目');
-    if ($item['confirm_user_id']) jerr('此項目已由 '.$item['confirm_user_name'].' 確認簽名過');
     $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$item['owner_depts']))));
     if (!$ownerIds) jerr('此項目未指派負責部門');
-    $ac = $db->prepare("SELECT user_name FROM meeting_attendee WHERE meeting_id=? AND user_id=?");
-    $ac->execute([(int)$item['meeting_id'], $forUid]);
-    $attName = $ac->fetchColumn();
-    if (!$attName) jerr('此人不是本次會議出席人員，無法現場確認；請改由通知系統回簽', 403);
-    $myDepts = meeting_user_depts($db, $forUid);
-    if (!array_intersect($ownerIds, $myDepts)) jerr('此人不屬於此項目的負責部門', 403);
+    $req = meeting_item_required_signers($db, (int)$item['meeting_id'], $ownerIds);
+    $signer = null;
+    foreach ($req as $s) if ($s['user_id'] === $forUid) { $signer = $s; break; }
+    if (!$signer) jerr('您不是此項目負責部門本次應簽名的代表，如需更換簽署人請洽記錄人調整出席名單', 403);
+    $already = $db->prepare("SELECT 1 FROM meeting_item_confirm WHERE item_id=? AND user_id=?");
+    $already->execute([$itemId, $forUid]);
+    if ($already->fetchColumn()) jerr('您已經簽過此項目');
     $v = meeting_verify_own_password($db, $forUid, $password);
     if (!$v['ok']) jerr($v['msg']);
-    $db->prepare("UPDATE meeting_item SET confirm_user_id=?, confirm_user_name=?, confirm_at=NOW() WHERE item_id=? AND confirm_user_id IS NULL")
-       ->execute([$forUid, $attName, $itemId]);
+    $db->prepare("INSERT IGNORE INTO meeting_item_confirm (item_id, user_id, user_name, dept_name, confirmed_at) VALUES (?,?,?,?,NOW())")
+       ->execute([$itemId, $forUid, $signer['user_name'], $signer['dept_name']]);
     jout([]);
 }
 
@@ -697,7 +710,8 @@ case 'calendar_meetings': {
 /* ===== 超級管理員：補齊/修改簽章日期(2026-08-05使用者明確要求) =====
    scope: attendee/item/chair/gm/all；target_id 個別指定(att_id 或 item_id)，留空=該範圍全部(批次)。
    使用者已確認：尚未簽核的部分(未簽到/未確認/主席總經理未核准)一併視同補簽，不是只改已簽過的日期；
-   主席/總經理若該階段從未送出過(approval_record查無紀錄)不硬造，維持原樣。 */
+   主席/總經理若該階段從未送出過(approval_record查無紀錄)也一併自動送審＋自動核准(見 $ensureAndApprove，
+   總經理階段會先遞迴確保主席已核准)，不會卡在「查無紀錄不處理」。 */
 case 'admin_backfill': {
     if (!meeting_is_superadmin($db, $uid)) jerr('僅超級管理員可使用此功能', 403);
     $v = meeting_verify_superadmin_password($db, (string)($_POST['password'] ?? ''));
@@ -728,53 +742,42 @@ case 'admin_backfill': {
                 $iq = $db->prepare("SELECT * FROM meeting_item WHERE meeting_id=?");
                 $iq->execute([$id]);
             }
-            $pickUid = (int)($_POST['confirm_user_id'] ?? 0); // 個別指定要歸給誰簽(可選，批次時無效)
-            $updI = $db->prepare("UPDATE meeting_item SET confirm_user_id=?, confirm_user_name=?,
-                                   confirm_at=CONCAT(?,' ',TIME(COALESCE(confirm_at,NOW()))) WHERE item_id=?");
+            // 每個負責部門各一格簽名槽(該部門本次有出席的主管優先，沒主管出席才由代表簽)，全部視同已簽並套用$date
+            $upsertC = $db->prepare("INSERT INTO meeting_item_confirm (item_id, user_id, user_name, dept_name, confirmed_at)
+                                      VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE confirmed_at=VALUES(confirmed_at)");
+            $dt = $date . ' ' . date('H:i:s');
             foreach ($iq->fetchAll(PDO::FETCH_ASSOC) as $it) {
-                $cuid = (int)$it['confirm_user_id'];
-                $cname = (string)$it['confirm_user_name'];
-                if (!$cuid) {
-                    if ($pickUid && $scope === 'item' && $targetId) {
-                        $cuid = $pickUid;
-                    } else {
-                        $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
-                        if ($ownerIds) {
-                            $inDept = implode(',', $ownerIds);
-                            $eaStmt = $db->prepare("SELECT a.user_id FROM meeting_attendee a WHERE a.meeting_id=? AND EXISTS(
-                                                        SELECT 1 FROM user_department_position_map mp WHERE mp.user_id=a.user_id AND mp.department_id IN ($inDept)
-                                                    ) LIMIT 1");
-                            $eaStmt->execute([$id]);
-                            $cuid = (int)$eaStmt->fetchColumn();
-                        }
-                    }
-                    if (!$cuid) continue; // 找不到可歸屬的人選(通常是無負責部門的項目，本就不需要確認簽名)，略過
-                    $nameSt = $db->prepare("SELECT user_cname FROM user WHERE id=?");
-                    $nameSt->execute([$cuid]);
-                    $cname = (string)($nameSt->fetchColumn() ?: '');
+                $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
+                if (!$ownerIds) continue; // 未指派負責部門，本就不需要確認簽名
+                foreach (meeting_item_required_signers($db, $id, $ownerIds) as $signer) {
+                    $upsertC->execute([(int)$it['item_id'], $signer['user_id'], $signer['user_name'], $signer['dept_name'], $dt]);
                 }
-                $updI->execute([$cuid, $cname, $date, (int)$it['item_id']]);
             }
         }
 
-        foreach (['chair','gm'] as $lvl) {
-            if ($scope !== $lvl && $scope !== 'all') continue;
+        // 主席／總經理若該階段從未送出過，也一併自動送審＋自動核准(2026-08-05使用者明確要求「一鍵補齊全部」要含未送審的)；
+        // 總經理一定要主席先核准過才能送出，所以 gm 階段查無紀錄時會先遞迴補上主席那關(同一個 $date)。
+        $ensureAndApprove = function(string $lvl) use ($db, $id, $m, $date, &$ensureAndApprove) {
             $rec = eg_approval_latest($db, 'meeting', $id, $lvl);
-            if (!$rec) continue; // 此階段從未送出過，無紀錄可補，不硬造
+            if (!$rec) {
+                if ($lvl === 'chair') {
+                    if (!$m['chair_user_id']) jerr('尚未指定主席，無法補簽主席簽核');
+                    eg_approval_submit($db, 'meeting', $id, 'chair', (int)$m['recorder_user_id'], (string)$m['recorder_name']);
+                } else {
+                    $ensureAndApprove('chair');
+                    if (!meeting_gm_signer_effective($db)) jerr('尚未設定「最高核准人員」，請先到組織角色綁定設定設定');
+                    eg_approval_submit($db, 'meeting', $id, 'gm', (int)$m['recorder_user_id'], (string)$m['recorder_name']);
+                }
+                $rec = eg_approval_latest($db, 'meeting', $id, $lvl);
+            }
             if ($rec['status'] === 'pending') {
                 if ($lvl === 'chair') {
                     $signer = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
                     $r = eg_approval_decide($db, (int)$rec['id'], (int)$signer['id'], (string)$signer['name'], 'approved', null);
-                    if ($r['success']) {
-                        $gm = meeting_gm_signer_effective($db);
-                        if ($gm && !eg_approval_latest($db, 'meeting', $id, 'gm')) {
-                            eg_approval_submit($db, 'meeting', $id, 'gm', (int)$m['recorder_user_id'], (string)$m['recorder_name']);
-                        }
-                        $db->prepare("UPDATE meeting_record SET status='chair_done', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
-                    }
+                    if ($r['success']) $db->prepare("UPDATE meeting_record SET status='chair_done', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
                 } else {
                     $gm = meeting_gm_signer_effective($db);
-                    if (!$gm) continue; // 尚未設定「最高核准人員」，無法代簽，維持pending
+                    if (!$gm) jerr('尚未設定「最高核准人員」，無法補簽總經理簽核');
                     $r = eg_approval_decide($db, (int)$rec['id'], (int)$gm['id'], (string)$gm['name'], 'approved', null);
                     if ($r['success']) $db->prepare("UPDATE meeting_record SET status='done', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
                 }
@@ -784,6 +787,10 @@ case 'admin_backfill': {
                 $db->prepare("UPDATE approval_record SET decided_at=CONCAT(?,' ',TIME(COALESCE(decided_at,NOW()))) WHERE id=?")
                    ->execute([$date, (int)$rec['id']]);
             }
+        };
+        foreach (['chair','gm'] as $lvl) {
+            if ($scope !== $lvl && $scope !== 'all') continue;
+            $ensureAndApprove($lvl);
         }
 
         $db->commit();

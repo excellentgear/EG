@@ -1,6 +1,8 @@
 // eg_stamp.js — 共用簽章印章產生器（抽自 views/QA/correction_order.php carStamp()/stampRow()）
 // 依賴：jQuery（用於 HTML escape）、全域變數 window.__ownCompany（本公司全名，各頁自行查 customer_list.is_own_company=1 設定）
 // 用法：EGStamp.stamp(name, date, isDeputy) 產生印章 HTML；EGStamp.row(stampHtml, leftHtml) 產生「簽章：」排版列
+// 選用第5/6參數 dept, position：EGStamp.stamp(name, date, isDeputy, tplSchema, dept, position)——只有第4參數帶「圖章模板設計」的
+// schema 且模板內有 {部門}/{職稱} token 才會顯示，掃描章／預設回墨印SVG本身沒有部門欄位、傳了也不影響。
 // 掃描實體章（2026-07-23 圖章管理模組）：載入本檔時自動向 store_Stamp_API.php?action=asset_map 抓「姓名→掃描章」對照表，
 // 有掃描章的人 stamp() 自動改用去背 PNG 底圖＋動態日期帶（白遮罩蓋舊日期再壓日期字）；沒上傳的人維持純 SVG 章。
 // 對照表是非同步載入——已渲染在畫面上的章（span 帶 data-sname）會在載到後自動升級替換，各呼叫端不需改程式。
@@ -14,17 +16,18 @@
     // 字體標楷體；不另顯示部門/職稱。isDeputy=true 時右下角加「代」字（代理人代簽）。
     // tplSchema：選用，某些模組(如會議紀錄的出席簽到/項目確認簽名)可在設定內指定改用「圖章模板設計」(eg_stamp_tpl.js)的樣式；
     // 有掃描實體章仍優先用掃描章(不受模板影響，因為那是真實蓋出來的章)，只有沒掃描章時才套用模板產生 SVG。
-    function stamp(name, date, isDeputy, tplSchema) {
+    // dept/position：選用，僅套用「圖章模板設計」且模板內有 {部門}/{職稱} token 時才會顯示；不影響掃描章與預設回墨印SVG(本無此欄位)。
+    function stamp(name, date, isDeputy, tplSchema, dept, position) {
         var a = ASSETS && name ? ASSETS[name] : null;
         if (a) return scanStamp(name, date, isDeputy, a);
-        if (tplSchema && global.EGStampTpl) return tplStamp(name, date, isDeputy, tplSchema);
+        if (tplSchema && global.EGStampTpl) return tplStamp(name, date, isDeputy, tplSchema, dept, position);
         return svgStamp(name, date, isDeputy);
     }
 
     // 填滿列高比例：模板可設定 fillRatio(0.1~1，預設0.9)＝蓋在有固定列高的格子裡時自動縮放成該比例；
     // noScale=true 則一律用模板設計的實際大小，不自動縮放（可能蓋出格子外）。見圖章管理「線上圖章設計」。
-    function tplStamp(name, date, isDeputy, schema) {
-        var ctx = { company: global.__ownCompany || '', name: name || '', date: date || '' };
+    function tplStamp(name, date, isDeputy, schema, dept, position) {
+        var ctx = { company: global.__ownCompany || '', name: name || '', date: date || '', dept: dept || '', position: position || '' };
         var svg = global.EGStampTpl.render(schema, ctx);
         if (isDeputy) {
             var ratio = Math.min(3, Math.max(0.3, +schema.ratio || 1));

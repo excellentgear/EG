@@ -325,6 +325,7 @@ foreach ($roleRows as $rr) {
     <div class="m-body view-box" id="viewBody"></div>
     <div class="m-foot">
         <button class="b-cancel" onclick="printBlankSignSheet()"><i class="fa fa-file-o"></i> 列印空白簽到表</button>
+        <button class="b-cancel" id="btnPrintSignedSheet" style="display:none;" onclick="printSignedSignSheet()"><i class="fa fa-file-text-o"></i> 列印簽到表</button>
         <button class="b-cancel" onclick="printMeetingRecord()"><i class="fa fa-print"></i> 列印會議紀錄(預覽用)</button>
         <button class="b-cancel" id="btnPrintFull" style="display:none;background:#F0A24B;color:#fff;" onclick="printFullRecord()"><i class="fa fa-print"></i> 列印完整紀錄(簽到表＋會議紀錄＋KPI)</button>
         <button class="b-ok" onclick="closeMask('viewMask')">關閉</button>
@@ -451,11 +452,11 @@ foreach ($roleRows as $rr) {
         <b>③現場簽到</b>：開啟「檢視」，出席人員名單旁各自輸入<b>本人密碼</b>簽到（共用一台裝置輪流簽，用選人不用密碼反查身分，不會有密碼重複無法辨識的問題）。<br>
         <b>④存草稿或送出</b>：草稿只有記錄人自己看得到，可隨時修改；<b>送出</b>後鎖定內容並通知主席確認簽章 → 主席簽章後自動通知總經理確認簽章（總經理可逐筆或整體回覆意見）→ 完成。
         任一階段可退回，退回後記錄人可修改並重新送出。<br>
-        <b>⑤部門指派項目確認</b>：要項若指派「負責部門」，該部門本次出席人員都會收到通知，任一人簽名確認即完成。<br>
+        <b>⑤部門指派項目確認</b>：要項若指派「負責部門」（可多選），<b>每個負責部門各要一位代表簽名</b>——優先由該部門本次有出席的主管簽（有設職級的職稱，如經理/副理/課長/組長等），該部門沒有主管出席才由任一位出席人員代表簽；系統會自動算出該部門要簽的人，現場只有那位本人能輸入密碼簽這格。負責部門本次完全沒人出席時，改發通知給該部門成員回簽（任一人回覆即算完成）。<br>
         <b>⑥插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。
         <h4>重要行為</h4>
         ・草稿只有記錄人本人看得到；送出後，出席人員／主席／總經理都自動有唯讀權限，其餘人是否看得到全部會議記錄依角色設定的「檢視全部」功能。<br>
-        ・列印的會議記錄／空白簽到表<b>不含電子簽章</b>，供現場紙本簽名或掃描存查；主席／總經理的簽核仍在系統內完成並自動蓋章存證。<br>
+        ・列印的會議記錄／空白簽到表<b>不含電子簽章</b>，供現場紙本簽名或掃描存查；主席／總經理的簽核仍在系統內完成並自動蓋章存證；出席人員<b>全部完成電子簽到</b>後會多一顆「列印簽到表」按鈕，印出來的是已蓋章版。<br>
         ・主席或總經理今日若有請假等行程，會自動由代理人處理（依「代理系統設定」解析，不必自己找人代簽）。<br>
         ・清單上方「狀態」按鈕可複選篩選（點選切換開關），每顆按鈕會顯示目前年度符合筆數。<br>
         ・出席簽到蓋章的日期一律顯示<b>會議日期</b>（不論實際點擊簽到當下是哪一天），實際簽到時間僅另外標示供稽核參考。
@@ -463,7 +464,7 @@ foreach ($roleRows as $rr) {
         「常用設定」（主題旁的齒輪連結，僅管理員看得到）：維護主題+地點+時間的組合，供新增會議時一鍵套用（套用後仍可自行修改，不會鎖死）。
         <h4>權限角色</h4>
         會議記錄檢閱＝看（草稿仍僅本人）；會議記錄登錄＝新增/編輯/送出；會議記錄管理員＝＋檢視全部人員記錄、刪除、修改他人已送出記錄、維護常用設定；管理者全權。<br>
-        ・<b>超級管理員（帳號e）專屬</b>：檢視畫面內出席簽到／項目確認簽名旁會多出「[改日期/補簽]」連結，可個別或用「一鍵補齊全部簽章日期」批次補齊漏簽/校正日期，尚未簽核的部分會視同已完成一併補簽（含主席／總經理簽核），操作前需輸入超級管理員密碼，且會留下 page_change_log 紀錄可追溯。
+        ・<b>超級管理員（帳號e）專屬</b>：檢視畫面內出席簽到／項目確認簽名旁會多出「[改日期/補簽]」連結，可個別或用「一鍵補齊全部簽章日期」批次補齊漏簽/校正日期，尚未簽核的部分會視同已完成一併補簽；主席／總經理若該場會議從未送出過，也會自動送審＋自動核准（總經理階段會先確保主席已核准），不會卡在「查無紀錄無法補」。操作前需輸入超級管理員密碼，且會留下 page_change_log 紀錄可追溯。
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">關閉</button></div>
 </div></div>
@@ -668,7 +669,7 @@ function openEdit(id){
         (res.items||[]).forEach(function(it){
             var row = {item_id:it.item_id, content:it.content, due_date:fmtDate(it.due_date),
                 owner_depts:(it.owner_depts?String(it.owner_depts).split(','):[]), remark:it.remark||'',
-                confirm_user_name:it.confirm_user_name, confirm_at:it.confirm_at};
+                confirm_slots:it.confirm_slots||[]};
             var target = it.kind==='directive' ? ITEMS_D : (it.kind==='announce' ? ITEMS_A : ITEMS_G);
             target.push(row);
         });
@@ -839,7 +840,8 @@ function renderItems(kind){
         return;
     }
     a.forEach(function(it,i){
-        var confirmTxt = it.confirm_user_name ? ('<span class="confirm-yes">'+esc(it.confirm_user_name)+' 已確認</span>') : '<span class="confirm-no">未確認</span>';
+        var slots = it.confirm_slots||[], doneN = slots.filter(function(s){ return s.signed; }).length;
+        var confirmTxt = slots.length ? ('<span class="'+(doneN===slots.length?'confirm-yes':'confirm-no')+'">部門代表已簽 '+doneN+'/'+slots.length+'</span>') : '<span class="confirm-no">未指派負責部門</span>';
         h += '<tr><td style="text-align:center;">'+(i+1)+'</td>'
            + '<td><textarea onchange="itemEdit(\''+kind+'\','+i+',\'content\',this.value)">'+esc(it.content||'')+'</textarea></td>'
            + '<td><input type="date" max="9999-12-31" value="'+esc(it.due_date||'')+'" onchange="itemEdit(\''+kind+'\','+i+',\'due_date\',this.value)"></td>'
@@ -1033,6 +1035,8 @@ function openView(id){
         $('#viewTitle').text(res.meeting.subject);
         $('#viewBody').html(viewHtml(res));
         $('#btnPrintFull').toggle(res.meeting.approval_status==='done');
+        var allSigned = (res.attendees||[]).length>0 && (res.attendees||[]).every(function(a){ return +a.signed===1; });
+        $('#btnPrintSignedSheet').toggle(allSigned);
         openMask('viewMask');
     });
 }
@@ -1049,7 +1053,7 @@ function viewHtml(res){
         var signed = +a.signed === 1;
         h += '<tr data-uid="'+a.user_id+'"><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td>'
            + '<td>'+esc(a.user_name||'')+'</td>'
-           + '<td>'+(signed ? '<span class="sign-ok">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name,fmtDate(m.meeting_date),false,mStampSchema()):'<i class="fa fa-check"></i>')
+           + '<td>'+(signed ? '<span class="sign-ok">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name,fmtDate(m.meeting_date),false,mStampSchema(),a.dept_name,a.position_name):'<i class="fa fa-check"></i>')
                 + ' <span style="font-size:11px;" title="實際簽到時間(僅供稽核，蓋章日期一律採會議日期)">'+esc(String(a.signed_at||'').substr(0,16))+'</span>'
                 + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'attendee\','+a.att_id+')" style="font-size:11px;">[改日期/補簽]</a>':'')+'</span>'
                 : '<span class="sign-row"><input type="password" placeholder="本人密碼，按Enter簽到" id="pw-'+a.user_id+'" data-eg-skip'
@@ -1094,10 +1098,10 @@ function viewHtml(res){
     if (META.is_superadmin) {
         h += '<div style="margin-top:12px;padding:8px;border:1px dashed #c9a06a;font-size:12px;">'
            + '<b>超級管理員工具</b>　'
-           + '主席：'+(m.chair_approval?(esc(m.chair_approval.approver_name||'')+'（'+esc(String(m.chair_approval.decided_at||'').substr(0,10)||'待簽')+'）'
-                + ' <a href="javascript:void(0)" onclick="adminBackfillRow(\'chair\',0)">[改日期/補簽]</a>') : '（尚未送出）')
-           + '　總經理：'+(m.gm_approval?(esc(m.gm_approval.approver_name||'')+'（'+esc(String(m.gm_approval.decided_at||'').substr(0,10)||'待簽')+'）'
-                + ' <a href="javascript:void(0)" onclick="adminBackfillRow(\'gm\',0)">[改日期/補簽]</a>') : '（尚未送出）')
+           + '主席：'+(m.chair_approval?esc(m.chair_approval.approver_name||'')+'（'+esc(String(m.chair_approval.decided_at||'').substr(0,10)||'待簽')+'）':'（尚未送出）')
+                + ' <a href="javascript:void(0)" onclick="adminBackfillRow(\'chair\',0)">[改日期/補簽]</a>'
+           + '　總經理：'+(m.gm_approval?esc(m.gm_approval.approver_name||'')+'（'+esc(String(m.gm_approval.decided_at||'').substr(0,10)||'待簽')+'）':'（尚未送出）')
+                + ' <a href="javascript:void(0)" onclick="adminBackfillRow(\'gm\',0)">[改日期/補簽]</a>'
            + '　<button type="button" class="b-att" onclick="adminBackfillAll()" style="margin-left:8px;"><i class="fa fa-magic"></i> 一鍵補齊全部簽章日期</button>'
            + '</div>';
     }
@@ -1129,32 +1133,30 @@ function signAttendee(mid, uidv){
         var att = (VIEW.attendees||[]).filter(function(a){ return String(a.user_id)===String(uidv); })[0];
         var nowStr = new Date().toISOString().slice(0,16).replace('T',' ');
         if (att) { att.signed = 1; att.signed_at = nowStr; }
-        var stampHtml = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(att?att.user_name:'', fmtDate(VIEW.meeting.meeting_date), false, mStampSchema()) : '<i class="fa fa-check"></i>';
+        var stampHtml = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(att?att.user_name:'', fmtDate(VIEW.meeting.meeting_date), false, mStampSchema(), att?att.dept_name:'', att?att.position_name:'') : '<i class="fa fa-check"></i>';
         $('tr[data-uid="'+uidv+'"] td:last-child').html('<span class="sign-ok">'+stampHtml+' <span style="font-size:11px;">'+esc(nowStr)+'</span></span>');
         var next = (VIEW.attendees||[]).filter(function(a){ return !(+a.signed); })[0];
         if (next) setTimeout(function(){ $('#pw-'+next.user_id).focus(); }, 30);
         else alert('全員已簽到');
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '簽到失敗'); $('#pw-'+uidv).val('').select(); });
 }
-/* 部門指派項目「確認簽名」：限本次出席人員現場選自己姓名＋輸入本人密碼確認(比照簽到表密碼驗證，避免共用裝置分不清是誰簽的)；
-   未出席的負責部門成員無法在此現場確認，一律改走送出會議記錄時自動發出的通知系統回簽，狀態一併顯示在同一格內。 */
+/* 部門指派項目「確認簽名」(2026-08-05改版，使用者明確要求)：每個負責部門各一格簽名槽，該部門本次有出席的主管優先、
+   沒主管出席才由代表簽(後端 meeting_item_required_signers 算出，前端不用自己挑人)；限被算出的那位本人現場輸入密碼確認
+   (比照簽到表密碼驗證，避免共用裝置分不清是誰簽的)。負責部門本次完全沒人出席時無簽名槽，改走送出會議記錄時自動發出的
+   通知系統回簽，狀態一併顯示在同一格內。 */
 function itemConfirmCellHtml(it){
-    if (it.confirm_user_id) {
-        return '<span class="confirm-yes">'+esc(it.confirm_user_name)+'（'+esc(String(it.confirm_at||'').substr(0,16))+'）</span>'
-             + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[改日期]</a>':'');
-    }
-    var h = '';
-    var elig = it.eligible_attendees || [];
-    if (elig.length) {
-        h += '<div class="item-confirm-box">'
-           + '<select id="selConfirm'+it.item_id+'" style="width:90px;"><option value="">本人姓名</option>'
-           + elig.map(function(a){ return '<option value="'+a.user_id+'">'+esc(a.user_name)+'</option>'; }).join('')
-           + '</select>'
-           + '<input type="password" id="pwConfirm'+it.item_id+'" placeholder="密碼" style="width:70px;" data-eg-skip'
-           + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();confirmItemWithPassword('+it.item_id+');}">'
-           + '<button type="button" onclick="confirmItemWithPassword('+it.item_id+')">確認</button>'
-           + '</div>';
-    }
+    var slots = it.confirm_slots || [];
+    var h = slots.map(function(s){
+        if (s.signed) {
+            return '<div class="confirm-yes">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, String(s.confirmed_at||'').substr(0,10), false, mStampSchema(), s.dept_name):esc(s.user_name))
+                 + ' <span style="font-size:11px;">'+esc(s.dept_name||'')+(s.is_manager?'':'代')+'</span>'
+                 + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[改日期]</a>':'')+'</div>';
+        }
+        return '<div class="item-confirm-box"><span style="font-size:11px;">'+esc(s.dept_name||'')+'：'+esc(s.user_name)+(s.is_manager?'':'(代)')+'</span>'
+             + '<input type="password" id="pwConfirm'+it.item_id+'_'+s.user_id+'" placeholder="密碼" style="width:70px;" data-eg-skip'
+             + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();confirmItemWithPassword('+it.item_id+','+s.user_id+');}">'
+             + '<button type="button" onclick="confirmItemWithPassword('+it.item_id+','+s.user_id+')">確認</button></div>';
+    }).join('');
     var nt = it.notify_targets || [];
     if (nt.length) {
         h += '<div class="item-notify-status">' + nt.map(function(t){
@@ -1162,7 +1164,7 @@ function itemConfirmCellHtml(it){
             return esc(t.user_name)+'：'+st;
         }).join('　') + '</div>';
     }
-    if (META.is_superadmin) h += '<div><a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[超管補簽]</a></div>';
+    if (META.is_superadmin) h += '<div><a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[超管補齊此項目]</a></div>';
     if (!h) h = '<span class="confirm-no">—</span>';
     return h;
 }
@@ -1184,7 +1186,7 @@ function adminBackfillRow(scope, targetId){
 /* 超級管理員：一次補齊整場會議的簽章日期(出席簽到＋項目確認＋主席＋總經理)，同樣視同未簽者一併補簽。 */
 function adminBackfillAll(){
     var m = VIEW.meeting;
-    if (!confirm('確定要補齊「'+m.subject+'」整場會議的簽到／項目確認／主席／總經理簽章日期？尚未簽核的部分將視同已完成一併補簽，此操作會留下稽核紀錄。')) return;
+    if (!confirm('確定要補齊「'+m.subject+'」整場會議的簽到／項目確認／主席／總經理簽章日期？尚未簽核的部分將視同已完成一併補簽（主席／總經理若還沒送出過也會自動送審＋自動核准），此操作會留下稽核紀錄。')) return;
     if (!ADMIN_PW) ADMIN_PW = prompt('請輸入超級管理員密碼：') || '';
     if (!ADMIN_PW) return;
     var date = prompt('請輸入要套用的日期(YYYY-MM-DD)：', m.meeting_date ? fmtDate(m.meeting_date) : '');
@@ -1196,15 +1198,13 @@ function adminBackfillAll(){
         openView(m.meeting_id);
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '補登失敗'); ADMIN_PW=''; });
 }
-function confirmItemWithPassword(itemId){
-    var uidv = $('#selConfirm'+itemId).val();
-    var pw = $('#pwConfirm'+itemId).val();
-    if (!uidv){ alert('請選擇本人姓名'); return; }
+function confirmItemWithPassword(itemId, uidv){
+    var pw = $('#pwConfirm'+itemId+'_'+uidv).val();
     if (!pw){ alert('請輸入密碼'); return; }
     $.post(API, {action:'item_confirm', item_id:itemId, user_id:uidv, password:pw}, function(res){
         if (!res.ok){ alert(res.error||'確認失敗'); return; }
         openView(VIEW.meeting.meeting_id);
-    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '確認失敗'); $('#pwConfirm'+itemId).val('').select(); });
+    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '確認失敗'); $('#pwConfirm'+itemId+'_'+uidv).val('').select(); });
 }
 function decide(mid, level, decision){
     var note = $('#decideNote').val();
@@ -1269,9 +1269,13 @@ function mrCss(){
         + '.mr-bottom-note{margin-top:4px;font-size:11px;color:#666;display:flex;justify-content:space-between;}'
         + 'table.ss-head{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:6px;}'
         + 'table.ss-head td{border:1px solid #333;padding:6px 8px;text-align:left;width:50%;}'
-        + 'table.sf{width:100%;border-collapse:collapse;font-size:12.5px;}table.sf th,table.sf td{border:1px solid #333;padding:6px;text-align:center;}'
+        + 'table.sf{width:100%;border-collapse:collapse;font-size:12.5px;}table.sf th,table.sf td{border:1px solid #333;padding:6px;text-align:center;height:44px;overflow:hidden;}'
         + 'h5{font-size:13px;margin:10px 0 3px;}'
-        + '.stamp-wrap svg,svg.car-stamp{width:64px;height:64px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        // 圖章尺寸(ai-rules/18)：有充足空間的簽核欄(主席/總經理/製表)一律91px；密集逐列表格(簽到表/項目確認多人簽章)改用填滿列高比例，不可套固定px
+        + '.mr-foot .stamp-wrap svg,.mr-foot svg.car-stamp{width:91px !important;height:91px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + 'table.sf .stamp-wrap,table.mr-items .mr-confirm-cell .stamp-wrap{height:90%;display:inline-flex;align-items:center;margin:0 4px 0 0;}'
+        + 'table.sf .stamp-wrap svg,table.sf svg.car-stamp,table.mr-items .mr-confirm-cell .stamp-wrap svg,table.mr-items .mr-confirm-cell svg.car-stamp{height:100%;width:auto;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + 'table.mr-items .mr-confirm-cell{height:44px;overflow:hidden;white-space:nowrap;}'
         + kpiCss();
 }
 function meetingItemGroupRows(items, kind, groupLabel){
@@ -1279,12 +1283,12 @@ function meetingItemGroupRows(items, kind, groupLabel){
     if (!rows.length) return '';
     return rows.map(function(it,i){
         var deptNames = (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
-        var confirmHtml = it.confirm_user_name
-            ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(it.confirm_user_name, String(it.confirm_at||'').substr(0,10), false, mStampSchema()):esc(it.confirm_user_name))
-            : '';
+        var confirmHtml = (it.confirm_slots||[]).filter(function(s){ return s.signed; }).map(function(s){
+            return (window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, String(s.confirmed_at||'').substr(0,10), false, mStampSchema(), s.dept_name):esc(s.user_name);
+        }).join('');
         return '<tr>' + (i===0 ? '<td class="mr-grp" rowspan="'+rows.length+'">'+groupLabel+'</td>' : '')
              + '<td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td>'
-             + '<td>'+fmtDate(it.due_date)+'</td><td>'+esc(deptNames)+'</td><td>'+confirmHtml+'</td><td>'+esc(it.remark||'')+'</td></tr>';
+             + '<td>'+fmtDate(it.due_date)+'</td><td>'+esc(deptNames)+'</td><td class="mr-confirm-cell">'+confirmHtml+'</td><td>'+esc(it.remark||'')+'</td></tr>';
     }).join('');
 }
 /* 宣布事項獨立表格用：只有序/內容/備註三欄，不含應完成日期/負責人/確認簽名(該三欄對宣布事項無意義)。 */
@@ -1341,7 +1345,7 @@ function signSheetPageHtml(m, attendees, withSignatures, inlineDocNo){
         var sigHtml = '';
         if (withSignatures) {
             var signed = +a.signed===1;
-            sigHtml = signed ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name, fmtDate(m.meeting_date), false, mStampSchema()):esc(a.user_name)) : '';
+            sigHtml = signed ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name, fmtDate(m.meeting_date), false, mStampSchema(), a.dept_name, a.position_name):esc(a.user_name)) : '';
         }
         return '<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td><td>'+sigHtml+'</td></tr>';
     }).join('');
@@ -1385,6 +1389,11 @@ function printMeetingRecord(){
 function printBlankSignSheet(){
     if (!VIEW) return;
     egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, false, false), mrCss(), META.as_doc_signsheet_no||'', false, true);
+}
+/* 簽到表(已簽署版)：出席人員電子簽到全部完成才會顯示按鈕(openView時判斷)，含真圖章。 */
+function printSignedSignSheet(){
+    if (!VIEW) return;
+    egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, true, false), mrCss(), META.as_doc_signsheet_no||'', false, true);
 }
 
 /* ---------- 合併列印(簽到表／會議記錄／出貨目標達成率，三份各自一張A4)：僅主席+總經理皆簽核完成(done)才可列印，簽章一律用真圖章 ---------- */

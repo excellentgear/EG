@@ -79,12 +79,36 @@ function meeting_ensure_schema(PDO $db): void {
         owner_depts VARCHAR(200) NULL COMMENT '負責部門 department.id 逗號分隔(可多選)',
         owner_dept_names VARCHAR(200) NULL COMMENT '負責部門名稱(冗餘顯示用)',
         remark VARCHAR(200) NULL,
-        confirm_user_id INT NULL COMMENT '確認簽名者(負責部門任一與會者簽名即完成)',
-        confirm_user_name VARCHAR(50) NULL,
-        confirm_at DATETIME NULL,
+        confirm_user_id INT NULL COMMENT '(舊,已停用)確認簽名者：改用 meeting_item_confirm 一人一部門一列',
+        confirm_user_name VARCHAR(50) NULL COMMENT '(舊,已停用)',
+        confirm_at DATETIME NULL COMMENT '(舊,已停用)',
         gm_comment TEXT NULL COMMENT '總經理逐筆回覆意見(選填)',
         KEY idx_meeting (meeting_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='會議記錄項目(上級指示要項/會議要項)'");
+
+    // 項目確認簽名(2026-08-05改版，使用者明確要求)：負責部門每部門各一位簽名(該部門有出席的主管優先，沒有主管出席才由任一出席人員代表)，
+    // 一部門一列，(item_id,user_id) 唯一；取代舊版 meeting_item.confirm_user_id 的「任一人簽即整項完成」單欄位設計。
+    $db->exec("CREATE TABLE IF NOT EXISTS meeting_item_confirm (
+        confirm_id INT AUTO_INCREMENT PRIMARY KEY,
+        item_id INT NOT NULL,
+        user_id INT NOT NULL,
+        user_name VARCHAR(50) NULL,
+        dept_name VARCHAR(50) NULL,
+        confirmed_at DATETIME NOT NULL,
+        UNIQUE KEY uq_ic (item_id, user_id),
+        KEY idx_item (item_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='會議記錄項目確認簽名(依負責部門各一位,manager優先)'");
+    // 舊資料一次性搬移(只搬一次)：把舊單欄位 confirm_user_id 的既有簽名保留下來，避免改版後歷史紀錄的簽名憑空消失
+    try {
+        $migrated = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='meeting_item_confirm_migrated'")->fetchColumn();
+        if (!$migrated) {
+            $db->exec("INSERT IGNORE INTO meeting_item_confirm (item_id, user_id, user_name, dept_name, confirmed_at)
+                       SELECT item_id, confirm_user_id, confirm_user_name, NULL, COALESCE(confirm_at, NOW())
+                       FROM meeting_item WHERE confirm_user_id IS NOT NULL");
+            $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('meeting_item_confirm_migrated','1')
+                          ON DUPLICATE KEY UPDATE setting_value='1'")->execute();
+        }
+    } catch (Throwable $e) {}
 
     // 附件（手動輸入類型/說明的自由文字，非固定分類）；status: temp=草稿暫存(meeting_id=0)、active=已隨會議存檔
     $db->exec("CREATE TABLE IF NOT EXISTS meeting_attach (
@@ -338,20 +362,50 @@ function meeting_dept_nonattendee_targets(PDO $db, int $meetingId, array $ownerD
     return array_values(array_diff($memberIds, $attendeeIds));
 }
 
-/** 未出席部門成員透過通知系統回簽（_eventRespond.php 的 MEETING_ITEM_CONFIRM 掛勾呼叫）：任一人簽名即完成，比照現場確認同一套 OR-gate */
+/**
+ * 依負責部門(可多個)算出「每個部門各一位必須現場簽名的人」(2026-08-05改版，使用者明確要求)：
+ * 優先取該部門「本次有出席」的主管(position_level有設level，取level最小＝職級最高)；
+ * 該部門沒有主管出席時，改由該部門任一位出席人員代表(user_id最小者)。
+ * 只回傳「該部門本次確實有人出席」的部門；完全沒人出席的部門不會出現在結果中，
+ * 那種情況改走既有的通知系統回簽(meeting_dept_nonattendee_targets/meeting_item_confirm_via_notify)。
+ * 回傳 [dept_id => ['user_id','user_name','dept_name','is_manager']]。
+ */
+function meeting_item_required_signers(PDO $db, int $meetingId, array $ownerDeptIds): array {
+    $out = [];
+    foreach (array_unique(array_map('intval', $ownerDeptIds)) as $deptId) {
+        if ($deptId <= 0) continue;
+        $st = $db->prepare("SELECT a.user_id, a.user_name, a.dept_name, pl.level
+                             FROM meeting_attendee a
+                             JOIN user_department_position_map m ON m.user_id=a.user_id AND m.department_id=?
+                             LEFT JOIN position_level pl ON pl.position_id=m.position_id
+                             WHERE a.meeting_id=?
+                             ORDER BY (pl.level IS NULL) ASC, pl.level ASC, a.user_id ASC
+                             LIMIT 1");
+        $st->execute([$deptId, $meetingId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if ($r) $out[$deptId] = ['user_id'=>(int)$r['user_id'], 'user_name'=>(string)$r['user_name'],
+                                  'dept_name'=>(string)($r['dept_name'] ?: ''), 'is_manager'=>$r['level'] !== null];
+    }
+    return $out;
+}
+
+/** 未出席部門成員透過通知系統回簽（_eventRespond.php 的 MEETING_ITEM_CONFIRM 掛勾呼叫）：屬補充性質的異步回應留痕，
+ *  跟「現場部門代表簽名」(meeting_item_required_signers，只認本次出席者)彼此獨立互不影響，任一人回覆都直接記錄一列。 */
 function meeting_item_confirm_via_notify(PDO $db, int $itemId, int $uid, string $uname): void {
-    $st = $db->prepare("SELECT owner_depts, confirm_user_id FROM meeting_item WHERE item_id=?");
+    $st = $db->prepare("SELECT owner_depts FROM meeting_item WHERE item_id=?");
     $st->execute([$itemId]);
     $item = $st->fetch(PDO::FETCH_ASSOC);
-    if (!$item || $item['confirm_user_id']) return;
+    if (!$item) return;
     $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$item['owner_depts']))));
     if (!$ownerIds) return;
     $in = implode(',', array_fill(0, count($ownerIds), '?'));
-    $chk = $db->prepare("SELECT 1 FROM user_department_position_map WHERE user_id=? AND department_id IN ($in)");
+    $chk = $db->prepare("SELECT d.name FROM user_department_position_map m JOIN department d ON d.id=m.department_id
+                          WHERE m.user_id=? AND m.department_id IN ($in) LIMIT 1");
     $chk->execute(array_merge([$uid], $ownerIds));
-    if (!$chk->fetchColumn()) return;
-    $db->prepare("UPDATE meeting_item SET confirm_user_id=?, confirm_user_name=?, confirm_at=NOW() WHERE item_id=? AND confirm_user_id IS NULL")
-       ->execute([$uid, $uname, $itemId]);
+    $deptName = $chk->fetchColumn();
+    if ($deptName === false) return; // 不屬於此項目的負責部門，不接受回簽
+    $db->prepare("INSERT IGNORE INTO meeting_item_confirm (item_id, user_id, user_name, dept_name, confirmed_at) VALUES (?,?,?,?,NOW())")
+       ->execute([$itemId, $uid, $uname, $deptName]);
 }
 
 /** 結果通知（核准/退回/項目已確認 都要回報，退回一定帶原因） */
