@@ -65,6 +65,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     include_once '../../src/common/DBConnection.php';
     include_once '../../src/common/rbac.php';
     include_once '../../src/common/qc_inspection_lib.php'; // 共用：後端重算判定＋寫 qc_measurement
+    include_once '../../src/common/asdoc_lib.php';
 
     $pdo = (new DBConnection())->getPDO();
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -122,9 +123,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             $doc = ['id' => $docId, 'no' => '', 'name' => ''];
             if ($docId) {
                 try {
-                    $d = $pdo->prepare("SELECT doc_no, doc_name FROM as_document WHERE id=?");
+                    $d = $pdo->prepare("SELECT doc_no, doc_name, current_version, doc_level FROM as_document WHERE id=?");
                     $d->execute([$docId]);
-                    if ($x = $d->fetch(PDO::FETCH_ASSOC)) { $doc['no'] = $x['doc_no']; $doc['name'] = $x['doc_name']; }
+                    if ($x = $d->fetch(PDO::FETCH_ASSOC)) { $doc['no'] = eg_asdoc_no($x); $doc['name'] = $x['doc_name']; }
                 } catch (Exception $e) {}
             }
             // 主管自動核可：勾選後主管審核欄自動蓋章（日期比照檢驗者的簽章日期認定方式）
@@ -889,6 +890,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         #print-area .pr-title { text-align:center; font-size:16px; font-weight:bold; margin:2px 0 6px; }
         /* AS 文件編號：每頁固定右下角 */
         #print-area .pt-foot { position:fixed; right:8mm; bottom:5mm; font-size:9pt; color:#333; }
+        /* 簽章圖章尺寸全站統一 91px（ai-rules/18 第6條） */
+        #print-area svg.car-stamp { width:91px !important; height:91px !important; }
         #print-area table.pr-items th.c-tool, #print-area table.pr-items td.c-tool { width:66px; }
         /* 量具格：三行＝量具類別／量具規格／量具編號，字自動縮小、每行都完整顯示（不截字） */
         #print-area .tool2 { font-size:8.5px; line-height:1.15; word-break:break-all; white-space:normal; }
@@ -926,6 +929,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                         <button class="btn btn-default btn-sm" id="btn-print"><i class="fa fa-print"></i> 列印</button>
                         <button class="btn btn-default btn-sm" id="btn-csv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
                         <button class="btn btn-default btn-sm" id="btn-history"><i class="fa fa-history"></i> 歷史紀錄</button>
+                        <button class="btn btn-default btn-sm" id="btn-print-multi" title="本張製令(BOM)所有製程合併列印，自動帶入圖面"><i class="fa fa-files-o"></i> 全製程合併列印</button>
                         <div class="btn-group">
                             <button class="btn btn-default btn-sm dropdown-toggle" data-toggle="dropdown"><i class="fa fa-cog"></i> 設定 <span class="caret"></span></button>
                             <ul class="dropdown-menu dropdown-menu-right">
@@ -4353,6 +4357,10 @@ $(function(){
         if(!collectItems().length){ alert('尚無檢驗項目可列印。'); return; }
         $('#print-area').html(buildPrintHtml());
         window.print();
+    });
+    $('#btn-print-multi').on('click', function(){
+        if(!ctx || !ctx.bom){ alert('臨時檢驗單（無製令/無BOM）沒有多製程可合併列印。請由待驗清單開啟正常製令的檢驗項目。'); return; }
+        window.open('inspection_print_multi.php?bom='+encodeURIComponent(ctx.bom), '_blank');
     });
     $('#btn-csv').on('click', function(){
         if(!ctx){ alert('請先開啟一筆檢驗再匯出。'); return; }
