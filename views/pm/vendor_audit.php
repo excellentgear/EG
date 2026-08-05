@@ -3,6 +3,11 @@
  * 供應商稽核管理（KPI 2-GM-04-01 第6項 廠商稽核按時執行率 的來源頁）—— 稽核批次模型
  * 每期(上/下半年)挑一批稽核對象(手動多選/隨機抽取)；大類/加工項目階層篩選(比照 master_data)。
  * 資料一律走 src/store/VendorAudit_API.php；權限 vendor_audit_lib.php
+ *
+ * 【待辦，2026-08-05 使用者提出，尚未實作】次稽核自動產生：首次稽核(audit_mode='first')分數達合格
+ * 門檻(pass_rate)者，系統應自動產生一筆「次稽核」對象(audit_mode='again')，含人員實地審查／供應商
+ * 自主評核兩份文件；由稽核員填上次稽核日期後，一樣可走既有「稽核評鑑表單」流程完成、自動簽核與列印。
+ * 可參考 openRec()/completeRec() 既有的稽核評鑑表單填寫→完成→簽核路徑複用，不要另開一套。
  */
 session_start();
 if (!isset($_SESSION['userName'])) {
