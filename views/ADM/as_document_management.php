@@ -705,6 +705,27 @@ if ($deptPerm === 'R') {
   </div>
 </div>
 
+<!-- ═════════ 超級管理員密碼確認 Modal（永久刪除用，密碼一律遮罩顯示） ═════════ -->
+<div class="modal fade" id="superPwdModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-sm" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title">超級管理員密碼確認</h4>
+      </div>
+      <div class="modal-body">
+        <p id="superPwdMsg" style="white-space:pre-line;"></p>
+        <input type="password" class="form-control" id="superPwdInput" autocomplete="new-password" placeholder="請輸入超級管理員密碼">
+        <div id="superPwdErr" class="text-danger" style="margin-top:6px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-danger" id="superPwdOk">確定刪除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════ 權限設定 Modal ═════════ -->
 <div class="modal fade" id="permModal" tabindex="-1" role="dialog">
   <div class="modal-dialog modal-lg" role="document">
@@ -1842,11 +1863,11 @@ $(function(){
   $(document).on('click','#historyBody .op-ver-del', function(){
     const verId=$(this).data('id'), verName=$(this).data('version');
     if(!confirm(`【永久刪除改版紀錄】版本 ${verName}\n將連同該版附件一併刪除，無法復原！\n若刪的是目前版本，系統會自動改指向次新版本。\n\n確定要繼續？`)) return;
-    const pwd = prompt('請輸入超級管理員密碼以確認：');
-    if(pwd===null || pwd==='') return;
-    $.post(API+'?action=delete_version_permanent',{version_id:verId, password:pwd}, r=>{
-      if(r.status==='success'){ showToast('已永久刪除該版本'); openHistory(curHistDocId, curHistDocName); loadDocs(true); } else alert(r.message);
-    },'json');
+    askSuperPwd('請輸入超級管理員密碼以確認永久刪除此改版紀錄：', pwd=>{
+      $.post(API+'?action=delete_version_permanent',{version_id:verId, password:pwd}, r=>{
+        if(r.status==='success'){ showToast('已永久刪除該版本'); openHistory(curHistDocId, curHistDocName); loadDocs(true); } else alert(r.message);
+      },'json');
+    });
   });
 
   // 版本補檔：選檔即上傳（只允許補空缺）
@@ -2075,14 +2096,29 @@ $(function(){
   $('#docTableBody').on('click','.op-restore', function(){
     $.post(API+'?action=restore_document',{id:$(this).data('id')}, r=>{ if(r.status==='success') loadDocs(true); else alert(r.message); },'json');
   });
+  // 超級管理員密碼確認（永久刪除用，密碼一律用 password 欄位遮罩顯示，不用 window.prompt 明碼）
+  function askSuperPwd(msg, onConfirm){
+    $('#superPwdMsg').text(msg); $('#superPwdInput').val(''); $('#superPwdErr').text('');
+    $('#superPwdModal').data('onConfirm', onConfirm).modal('show');
+    setTimeout(()=>$('#superPwdInput').trigger('focus'), 300);
+  }
+  $('#superPwdOk').on('click', function(){
+    const pwd = $('#superPwdInput').val();
+    if(!pwd){ $('#superPwdErr').text('請輸入密碼'); return; }
+    const cb = $('#superPwdModal').data('onConfirm');
+    $('#superPwdModal').modal('hide');
+    if(cb) cb(pwd);
+  });
+  $('#superPwdInput').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); $('#superPwdOk').trigger('click'); } });
+
   $('#docTableBody').on('click','.op-del-permanent', function(){
     const id=$(this).data('id'), name=$(this).data('name');
     if(!confirm(`【永久刪除】${name}\n將連同所有改版紀錄與檔案一併刪除，無法復原！\n（僅限傳錯文件時使用，若已被其他資料引用會被系統擋下）\n\n確定要繼續？`)) return;
-    const pwd = prompt('請輸入超級管理員密碼以確認：');
-    if(pwd===null || pwd==='') return;
-    $.post(API+'?action=delete_document_permanent',{id, password:pwd}, r=>{
-      if(r.status==='success'){ showToast('已永久刪除'); loadDocs(true); } else alert(r.message);
-    },'json');
+    askSuperPwd('請輸入超級管理員密碼以確認永久刪除文件：', pwd=>{
+      $.post(API+'?action=delete_document_permanent',{id, password:pwd}, r=>{
+        if(r.status==='success'){ showToast('已永久刪除'); loadDocs(true); } else alert(r.message);
+      },'json');
+    });
   });
 
   // ── 權限設定 ──
