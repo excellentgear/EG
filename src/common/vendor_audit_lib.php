@@ -426,7 +426,8 @@ function vendor_audit_validate_complete(array $post, array $cfg): array {
     $errs = [];
     if (trim((string)($post['auditor'] ?? '')) === '') $errs[] = '請填寫稽核員';
     if (trim((string)($post['conclusion'] ?? '')) === '') $errs[] = '請選擇建議評鑑結果';
-    if (!in_array($post['review_type'] ?? '', ['site','self','abnormal'], true)) $errs[] = '請選擇審查類別（人員實地審查／供應商主自評核／異常檢核）';
+    $reviewType = $post['review_type'] ?? '';
+    if (!in_array($reviewType, ['site','self','abnormal'], true)) $errs[] = '請選擇審查類別（人員實地審查／供應商自主評核／異常檢核）';
     $scores = is_array($post['scores'] ?? null) ? $post['scores'] : [];
     $badSelf = 0; $badAudit = 0;
     foreach (($cfg['items'] ?? []) as $cat) {
@@ -439,7 +440,7 @@ function vendor_audit_validate_complete(array $post, array $cfg): array {
             $ok = function($v) use ($iMax) {
                 return $v !== null && $v !== '' && is_numeric($v) && (float)$v >= 0 && (float)$v <= $iMax && (float)$v == (int)$v;
             };
-            if (!$ok($sv)) $badSelf++;
+            if ($reviewType !== 'abnormal' && !$ok($sv)) $badSelf++;
             if (!$ok($av)) $badAudit++;
         }
     }

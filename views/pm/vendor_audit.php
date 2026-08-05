@@ -165,6 +165,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         table.af-table input.af-score { height:26px; font-size:13px; text-align:center; border:1px solid #D8BE93; border-radius:4px; width:60px; padding:0 4px; }
         table.af-table input.af-score:focus { outline:2px solid #F0A24B; outline-offset:-1px; }
         table.af-table input.af-invalid { background:#ffd6d6; color:#DD5138; border-color:#DD5138; font-weight:bold; }
+        #afTable.va-abnormal .af-self-col { display:none; }
         .af-summary { margin-top:8px; border:1.5px solid #E8D5B5; border-radius:8px; background:#FFF7E8; padding:8px 12px; font-size:12px; color:#5b3a1e; }
         .af-summary table { width:100%; border-collapse:collapse; }
         .af-summary td, .af-summary th { padding:3px 6px; text-align:center; border-bottom:1px solid #F0E7D5; }
@@ -437,8 +438,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div style="margin:8px 0;">
             <label>審查類別（必選一項）</label>
             <label style="display:inline-block;margin:0 14px 0 0;font-weight:normal;"><input type="radio" name="recReviewType" value="site"> 人員實地審查</label>
-            <label style="display:inline-block;margin:0 14px 0 0;font-weight:normal;"><input type="radio" name="recReviewType" value="self"> 供應商主自評核</label>
-            <label style="display:inline-block;font-weight:normal;"><input type="radio" name="recReviewType" value="abnormal"> 異常檢核</label>
+            <label style="display:inline-block;margin:0 14px 0 0;font-weight:normal;"><input type="radio" name="recReviewType" value="self"> 供應商自主評核</label>
+            <label style="display:inline-block;font-weight:normal;"><input type="radio" name="recReviewType" value="abnormal"> 異常檢核（僅需稽核分）</label>
         </div>
         <div class="af-attach" id="afAttachBox">
             <div style="font-weight:bold;color:#5b3a1e;margin:10px 0 4px;"><i class="fa fa-paperclip"></i> 佐證附件（供應商自評表等）</div>
@@ -1089,19 +1090,26 @@ function renderForm(scores){
     var html='';
     var cfg = CUR_CFG || {items:META.items};
     cfg.items.forEach(function(cat){
-        html+='<tr class="af-cat"><td class="af-q">'+esc(cat[1])+'</td><td class="af-sc">自評</td><td class="af-sc">稽核</td></tr>';
+        html+='<tr class="af-cat"><td class="af-q">'+esc(cat[1])+'</td><td class="af-sc af-self-col">自評</td><td class="af-sc af-audit-col">稽核</td></tr>';
         cat[2].forEach(function(it){
             var iid=it[0], no=it[1], q=it[2], mx=it[3], s=scores[iid]||{};
             html+='<tr data-iid="'+iid+'">';
             html+='<td class="af-q">'+esc(no)+'. '+esc(q)+'</td>';
-            html+='<td class="af-sc"><input type="number" class="af-self af-score" data-max="'+mx+'" min="0" max="'+mx+'" step="1" placeholder="0~'+mx+'" value="'+(s.self==null?'':s.self)+'" oninput="scoreCheck(this);recompute()"></td>';
-            html+='<td class="af-sc"><input type="number" class="af-audit af-score" data-max="'+mx+'" min="0" max="'+mx+'" step="1" placeholder="0~'+mx+'" value="'+(s.audit==null?'':s.audit)+'" oninput="scoreCheck(this);recompute()"></td>';
+            html+='<td class="af-sc af-self-col"><input type="number" class="af-self af-score" data-max="'+mx+'" min="0" max="'+mx+'" step="1" placeholder="0~'+mx+'" value="'+(s.self==null?'':s.self)+'" oninput="scoreCheck(this);recompute()"></td>';
+            html+='<td class="af-sc af-audit-col"><input type="number" class="af-audit af-score" data-max="'+mx+'" min="0" max="'+mx+'" step="1" placeholder="0~'+mx+'" value="'+(s.audit==null?'':s.audit)+'" oninput="scoreCheck(this);recompute()"></td>';
             html+='</tr>';
         });
     });
     $('#afBody').html(html);
+    applyReviewTypeCols();
     recompute();
 }
+/** 異常檢核只需稽核分：切換審查類別時隱藏/顯示自評欄（僅畫面隱藏，資料仍在，切回其他類別會還原） */
+function applyReviewTypeCols(){
+    var rt = $('input[name=recReviewType]:checked').val();
+    $('#afTable').toggleClass('va-abnormal', rt==='abnormal');
+}
+$(document).on('change', 'input[name=recReviewType]', applyReviewTypeCols);
 function collectScores(){
     var scores={};
     $('#afBody tr[data-iid]').each(function(){
@@ -1168,13 +1176,14 @@ function recCompleteErrors(){
     if (!$('#recAuditor').val()) errs.push('請填寫稽核員');
     if (!$('#recDate').val()) errs.push('請先填寫稽核日期');
     if (!$('#recConclusion').val()) errs.push('請選擇建議評鑑結果');
-    if (!$('input[name=recReviewType]:checked').length) errs.push('請選擇審查類別（人員實地審查／供應商主自評核／異常檢核）');
+    if (!$('input[name=recReviewType]:checked').length) errs.push('請選擇審查類別（人員實地審查／供應商自主評核／異常檢核）');
+    var reviewType = $('input[name=recReviewType]:checked').val();
     var scores=collectScores(), badSelf=0, badAudit=0;
     (CUR_CFG&&CUR_CFG.items||[]).forEach(function(cat){
         cat[2].forEach(function(it){
             var iid=it[0], mx=it[3], s=scores[iid]||{};
             var ok=function(v){ return v!=null && v!=='' && /^\d+$/.test(String(v)) && +v>=0 && +v<=mx; };
-            if(!ok(s.self)) badSelf++;
+            if(reviewType!=='abnormal' && !ok(s.self)) badSelf++;
             if(!ok(s.audit)) badAudit++;
         });
     });
@@ -1317,14 +1326,14 @@ function openHis(mid){
 }
 
 /* ---------- 列印評鑑表單 ---------- */
-/** 查核表單一版本(mode='self'=供應商主自評核版,全部留白；mode='site'=人員實地審查版,顯示分數) */
+/** 查核表單一版本(mode='self'=供應商自主評核版,全部留白；mode='site'=人員實地審查版,顯示分數) */
 function auditFormOneVersion(o, mode){
     var cfg = o.cfg || CUR_CFG || {items:META.items, total_max:META.total_max, self_w:META.self_w, audit_w:META.audit_w, pass_rate:META.pass_rate};
     var docName = (META.as_doc && META.as_doc.doc_name) || '供應商評鑑稽核查表';
     var head = '<div style="text-align:center;">'
         + '<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
         + '<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
-    var reviewMap = {site:'人員實地審查', self:'供應商主自評核', abnormal:'異常檢核'};
+    var reviewMap = {site:'人員實地審查', self:'供應商自主評核', abnormal:'異常檢核'};
     var reviewBoxes = ['site','self','abnormal'].map(function(k){ return (mode===k?'☑':'□')+reviewMap[k]; }).join('　');
     var prodMap = {raw:'原料', outsource:'委外加工件', packaging:'包材'};
     var prodBoxes = ['raw','outsource','packaging'].map(function(k){ return (o.prodType===k?'☑':'□')+prodMap[k]; }).join('　');
@@ -1367,7 +1376,7 @@ function auditFormOneVersion(o, mode){
         + '<td style="width:50%;">製表：'+madeCell+'</td></tr></table>';
     return head + info + rows + sign;
 }
-/** 查核表列印一律一次印兩個版本：供應商主自評核版(全空白給供應商填)＋人員實地審查版(顯示分數,製表=稽核員) */
+/** 查核表列印一律一次印兩個版本：供應商自主評核版(全空白給供應商填)＋人員實地審查版(顯示分數,製表=稽核員) */
 function auditFormHTML(o){
     o = o || {};
     return '<div style="page-break-after:always;">'+auditFormOneVersion(o,'self')+'</div>'+auditFormOneVersion(o,'site');
