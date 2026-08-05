@@ -5028,10 +5028,8 @@ echo "</script>\n";
             tdBom.setAttribute('name', 'BOM');
             tdBom.innerHTML = generateBomHtml(row, baseExcelUrl); // 假設 generateBomHtml 返回安全的 HTML
             // ── 批次管理按鈕（BOM 欄底部）──
-            // 2026-07-16 拆批/合併功能停用：僅測試資料使用過、正式 BOM 未使用，
-            // 依使用者指示註解掉操作入口（Modal、後端 API、拆分批次顯示邏輯均保留，
-            // 要恢復功能只需解除本段註解）。
-            /*
+            // 2026-08-03 恢復拆批/合併功能（開立加工單專案案例B：廠商整批報廢、生管重新叫料重跑）。
+            // 曾於 2026-07-16 停用（commit 508e77c，理由僅「未在正式BOM用過」非結構性缺陷，見該次commit說明）。
             if (window.userStatus == 1 || window.featBatchOp) {
                 var batchBtn = document.createElement('button');
                 batchBtn.type = 'button';
@@ -5042,7 +5040,6 @@ echo "</script>\n";
                 (function(b){ batchBtn.onclick = function(e){ e.stopPropagation(); openBatchMgmt(b); }; })(row.bom);
                 tdBom.appendChild(batchBtn);
             }
-            */
             tr.appendChild(tdBom);
 
             // --- 新增：BOM 欄位雙擊事件監聽器 ---
@@ -15337,8 +15334,7 @@ echo "</script>\n";
             {code:'oready_manual_close',       label:'人工結案'},
             {code:'oready_mark_returned',      label:'回廠標記'},
             {code:'oready_transfer',           label:'移轉 / 取消移轉製程'},
-            // 2026-07-16 拆批/合併功能停用（操作按鈕已註解），角色設定清單一併隱藏此功能碼；恢復時解除註解
-            // {code:'oready_batch_split_merge',  label:'拆批 / 合併'},
+            {code:'oready_batch_split_merge',  label:'拆批 / 合併'}, // 2026-08-03 恢復（開立加工單專案案例B用）
             {code:'oready_view_price',         label:'查看加工單價'},
             {code:'oready_process_settings',   label:'製程設定 / 內製製程例外設定'}
         ];

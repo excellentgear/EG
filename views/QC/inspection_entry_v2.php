@@ -3186,6 +3186,12 @@ $(function(){
                 alert('載入失敗：'+res.message); return;
             }
             ctx = res.context;
+            // 拆批時的批次代號：同一製程可能有好幾批同時待驗，標籤讓檢驗人員看得出是哪一批（避免與其他批混淆）
+            if(ctx.batch_label){
+                $('#mode-banner').html('<i class="fa fa-link"></i> 來自待驗清單：bom_ing_fid = <b>'+esc(fid)+'</b>　'+
+                    '<span style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;border-radius:3px;padding:0 6px;font-weight:bold;">拆批：第'+esc(ctx.batch_label)+'批</span>'+
+                    '；資料為真實內容，儲存會寫入正式檢驗表。');
+            }
             if(res.tools && res.tools.length) TOOLS = res.tools;
             state.is_supervisor = !!res.is_supervisor;
             state.can_fill = res.can_fill !== false;
@@ -3393,7 +3399,9 @@ $(function(){
             var d=res.data||[];
             if(!d.length){ $('#search-results').html('<div class="search-result-item muted-help">查無待驗項目</div>'); return; }
             $('#search-results').html(d.map(function(r){
-                return '<div class="search-result-item" data-fid="'+r.bom_ing_fid+'"><b>'+esc(r.bom)+'</b> ／ 料號 '+esc(r.part_no||'')+' ／ '+esc(r.client||'')+
+                // 拆批標籤：同一製程可能同時有好幾批待驗，不標出來會分不清是哪一批
+                var batchTag = r.batch_label ? ' <span style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;border-radius:3px;padding:0 4px;font-size:11px;">第'+esc(r.batch_label)+'批</span>' : '';
+                return '<div class="search-result-item" data-fid="'+r.bom_ing_fid+'"><b>'+esc(r.bom)+'</b>'+batchTag+' ／ 料號 '+esc(r.part_no||'')+' ／ '+esc(r.client||'')+
                        ' <span class="muted-help">'+esc(r.process||'')+' · 數量'+(r.sqty||0)+'</span></div>';
             }).join(''));
         },'json').fail(function(){ $('#search-results').html('<div class="search-result-item text-danger">搜尋錯誤</div>'); });

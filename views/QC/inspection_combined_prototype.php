@@ -170,7 +170,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 exit;
             }
 
-            $sql = "SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.process_no,
+            $sql = "SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.process_no, bi.batch_label,
                            b.d_id AS part_no, b.Client_Name,
                            d.d_id AS d_setting_pk, d.D_Setting_Id, d.Revision,
                            pn.ProcessName
@@ -269,6 +269,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'client'      => $ctx['Client_Name'],
                     'order_qty'   => (int)$ctx['sqty'],
                     'process'     => $process,
+                    'batch_label' => $ctx['batch_label'],  // 拆批時的批次代號，同製程有多批送驗要能分辨是哪一批
                     'd_id'        => $d_id,
                     'version_id'  => $version_id,
                     'form_type_id'=> $form_type_id,
@@ -295,7 +296,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if ($_POST['action'] === 'search_pending') {
             requireViewPerm($pdo, $user_id);
             $kw = trim($_POST['keyword'] ?? '');
-            $sql = "SELECT bi.bom_ing_fid, bi.bom, b.d_id AS part_no, b.Client_Name AS client, pn.ProcessName AS process, bi.sqty
+            $sql = "SELECT bi.bom_ing_fid, bi.bom, b.d_id AS part_no, b.Client_Name AS client, pn.ProcessName AS process, bi.sqty, bi.batch_label
                     FROM bom_ing bi
                     LEFT JOIN bom b ON bi.bom = b.bom
                     LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
