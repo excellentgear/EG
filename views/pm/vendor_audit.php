@@ -312,7 +312,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <tbody id="vaBody"><tr><td colspan="10" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
-        <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
+        <div class="va-remind" style="font-size:11px;color:#8a6d45;margin-top:4px;">
             每期(上/下半年)由「加入稽核對象」挑一批廠商（大類/加工項目篩選後多選，或隨機抽 N 家），逐一登錄稽核結果。
             KPI 執行率＝已完成 ÷ 本期對象數（<span class="st-pill st-dis">停用</span>廠商不列入）。
         </div>
@@ -354,7 +354,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div id="evCards" class="ev-cards"></div>
             <div id="evPager" class="va-pager" style="display:none;"></div>
             <div id="evEmpty" style="padding:18px;color:#8a6d45;">按「全部納管廠商」列出所有納管廠商評核，或選單一廠商查詢。（自動略過整年無資料廠商）</div>
-            <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
+            <div class="va-remind" style="font-size:11px;color:#8a6d45;margin-top:4px;">
                 資料自 ERP（bom_ing）自動計算：品質依檢驗日歸月（不良=ng、特採=QQ）；交期＝發包日＋約定工作天為應交日，遲交＝回廠日晚於應交。半年判定依門檻（管理員可設）。
             </div>
         </div><!-- /tabEval -->
@@ -382,7 +382,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 </table>
             </div>
             <div id="rsPager" class="va-pager" style="display:none;"></div>
-            <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
+            <div class="va-remind" style="font-size:11px;color:#8a6d45;margin-top:4px;">
                 清冊＝納管廠商（固定稽核）＋手動列入之合格廠商（不需稽核者，靠定期評核績效監控）。建議等級來自定期評核全年成績；採用等級可批次覆寫。
             </div>
         </div><!-- /tabRoster -->
@@ -401,7 +401,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                     <tbody id="planBody"><tr><td style="padding:18px;color:#8a6d45;">載入中…</td></tr></tbody>
                 </table>
             </div>
-            <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
+            <div class="va-remind" style="font-size:11px;color:#8a6d45;margin-top:4px;">
                 依「加入稽核對象」時設定的預定稽核月份彙總全年度計畫（不分上下半年）；送出計畫後將鎖定該年度不可再增列對象。
             </div>
         </div><!-- /tabPlan -->
@@ -1565,9 +1565,11 @@ function rsApplyPrintExtras(attachHtml){
         +'<div style="font-size:19px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div>');
     var mgrStamp = (t.status==='approved' && t.signed_by_name) ? vaStampHtml(t.signed_by_name, fmtDate(t.audit_date)||'', !!t.signed_is_deputy) : '';
     var audStamp = t.auditor ? vaStampHtml(t.auditor, fmtDate(t.audit_date)||'') : '';
-    $('#rsSignBox').html('<table class="pf-sign" style="margin-top:14px;page-break-inside:avoid;"><tr>'
-        +'<td style="width:50%;padding:6px 8px;"><div style="font-size:11px;color:#555;">主管</div><div style="margin-top:2px;min-height:90px;">'+mgrStamp+'</div></td>'
-        +'<td style="width:50%;padding:6px 8px;"><div style="font-size:11px;color:#555;">稽核員</div><div style="margin-top:2px;min-height:90px;">'+audStamp+'</div></td>'
+    // 比照本檔供應商稽核計劃列印(fixedFoot)既有規則：簽章列分三欄(左欄/中間留白/右欄)，不加框線
+    $('#rsSignBox').html('<table style="width:100%;margin-top:14px;border-collapse:collapse;border:none;page-break-inside:avoid;"><tr>'
+        +'<td style="width:33%;border:none;padding:6px 8px;"><div style="font-size:11px;color:#555;">主管</div><div style="margin-top:2px;min-height:90px;">'+mgrStamp+'</div></td>'
+        +'<td style="width:34%;border:none;"></td>'
+        +'<td style="width:33%;border:none;padding:6px 8px;"><div style="font-size:11px;color:#555;">稽核員</div><div style="margin-top:2px;min-height:90px;">'+audStamp+'</div></td>'
         +'</tr></table>');
     $('#rsAttachPrintBox').html(attachHtml||'');
 }
