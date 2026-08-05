@@ -13565,7 +13565,8 @@ function _createAliasRow(d) {
         typeOpts += '<option value="'+k+'"'+((d.alias_type||'customer_part')===k?' selected':'')+'>'+escHtml(ALIAS_TYPES[k])+'</option>';
     });
     tr.innerHTML =
-      '<td style="padding:3px 5px;"><input type="text" class="form-control input-sm al-code" maxlength="100" placeholder="客戶叫的編號" value="'+escAttr(d.alias_code||'')+'" style="font-size:12px;"></td>'+
+      '<td style="padding:3px 5px;"><input type="text" class="form-control input-sm al-code" maxlength="100" placeholder="客戶叫的編號" value="'+escAttr(d.alias_code||'')+'" style="font-size:12px;">'+
+        '<div class="al-code-suggest" style="display:none;font-size:10px;color:#8a5a2b;margin-top:2px;"></div></td>'+
       '<td style="padding:3px 5px;"><select class="form-control input-sm al-type" style="font-size:12px;">'+typeOpts+'</select></td>'+
       '<td style="padding:3px 5px;position:relative;">'+
         '<input type="text" class="form-control input-sm al-cust-kw" placeholder="客戶ID或名稱，留空＝通用" autocomplete="off" value="'+escAttr(custShown)+'" style="font-size:11px;">'+
@@ -13610,7 +13611,26 @@ function _createAliasRow(d) {
         if (el) el.addEventListener('change', syncAliasesHidden);
         if (el && el.tagName === 'INPUT') el.addEventListener('input', syncAliasesHidden);
     });
+    // 打字比對：代號跟既有料號完全相同時跳出「要綁定嗎」提示（綁定後圖檔/報價/附件才會連動合併顯示）
+    var codeForMatch = tr.querySelector('.al-code');
+    if (codeForMatch) codeForMatch.addEventListener('input', function(){ _aliasCheckCodeMatch(tr); });
     return tr;
+}
+
+// 套用綁定（供手動搜尋選取／自動比對提示的「綁定」按鈕共用）
+function _aliasApplyLink(tr, did, pn, cn) {
+    tr.dataset.linkedDid = String(did);
+    var bd = tr.querySelector('.al-bound');
+    bd.innerHTML = escHtml(pn + (cn ? ' ('+cn+')' : '')) + ' <a href="javascript:;" class="al-unlink" style="color:#DD5138;">取消</a>';
+    bd.style.display = 'inline-block';
+    bd.querySelector('.al-unlink').addEventListener('click', function(){
+        tr.dataset.linkedDid = '0'; bd.style.display='none';
+        var k = tr.querySelector('.al-link-kw'); k.style.display='block'; k.value='';
+        syncAliasesHidden();
+    });
+    var k = tr.querySelector('.al-link-kw'); k.style.display='none'; k.value='';
+    var sg = tr.querySelector('.al-code-suggest'); if (sg) { sg.style.display='none'; sg.innerHTML=''; }
+    syncAliasesHidden();
 }
 
 function _aliasSearchLinked(tr, kw) {
@@ -13630,17 +13650,7 @@ function _aliasSearchLinked(tr, kw) {
             }).join('');
             dd.querySelectorAll('.al-dd-item').forEach(function(it){
                 it.addEventListener('mousedown', function(){
-                    tr.dataset.linkedDid = it.dataset.did;
-                    var bd = tr.querySelector('.al-bound');
-                    bd.innerHTML = escHtml(it.dataset.pn + (it.dataset.cn ? ' ('+it.dataset.cn+')' : '')) +
-                                   ' <a href="javascript:;" class="al-unlink" style="color:#DD5138;">取消</a>';
-                    bd.style.display = 'inline-block';
-                    bd.querySelector('.al-unlink').addEventListener('click', function(){
-                        tr.dataset.linkedDid = '0'; bd.style.display='none';
-                        var k = tr.querySelector('.al-link-kw'); k.style.display='block'; k.value='';
-                        syncAliasesHidden();
-                    });
-                    var k = tr.querySelector('.al-link-kw'); k.style.display='none'; k.value='';
+                    _aliasApplyLink(tr, it.dataset.did, it.dataset.pn, it.dataset.cn);
                     dd.style.display = 'none';
                     // 代號欄還空著就自動帶入所選料號，省一次打字
                     var codeEl = tr.querySelector('.al-code');
@@ -13651,6 +13661,35 @@ function _aliasSearchLinked(tr, kw) {
             dd.style.display = '';
         });
     }, 280);
+}
+
+// 打字比對：debounce 後查是否有完全同名的既有料號，有就顯示「綁定」提示（不強制，使用者可忽略）
+var _aliasCodeMatchTimer;
+function _aliasCheckCodeMatch(tr) {
+    clearTimeout(_aliasCodeMatchTimer);
+    var sg = tr.querySelector('.al-code-suggest');
+    if (!sg) return;
+    if (tr.dataset.linkedDid && tr.dataset.linkedDid !== '0') { sg.style.display = 'none'; return; }
+    var code = (tr.querySelector('.al-code')||{value:''}).value.trim();
+    if (!code) { sg.style.display = 'none'; sg.innerHTML = ''; return; }
+    _aliasCodeMatchTimer = setTimeout(function(){
+        var curDid = parseInt(document.getElementById('pf-d_id').value||'0');
+        api({ action:'search_old_parts', keyword:code, exclude_d_id:curDid }).done(function(r){
+            if (tr.dataset.linkedDid && tr.dataset.linkedDid !== '0') return;                 // 這期間使用者已手動綁定
+            var curCode = (tr.querySelector('.al-code')||{value:''}).value.trim();
+            if (curCode !== code) return;                                                     // 使用者已改字，結果過期
+            var hit = (r && r.success ? r.data : []).find(function(d){ return d.D_Setting_Id && d.D_Setting_Id.toLowerCase() === code.toLowerCase(); });
+            if (!hit) { sg.style.display = 'none'; sg.innerHTML = ''; return; }
+            var cn = hit.client_name || '';
+            sg.innerHTML = '這是既有料號「'+escHtml(hit.D_Setting_Id)+'」'+(cn?'（'+escHtml(cn)+'）':'')+'，要綁定連動圖檔/報價/附件嗎？ '
+                          + '<a href="javascript:;" class="al-code-bind-yes" style="color:#1ABB9C;font-weight:bold;">綁定</a>';
+            sg.style.display = 'block';
+            sg.querySelector('.al-code-bind-yes').addEventListener('mousedown', function(e){
+                e.preventDefault();
+                _aliasApplyLink(tr, hit.d_id, hit.D_Setting_Id, cn);
+            });
+        });
+    }, 400);
 }
 
 function fillAliasRows(list) {
