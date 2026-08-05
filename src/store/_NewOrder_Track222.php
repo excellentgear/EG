@@ -3,6 +3,7 @@
 session_start();
 include '../../src/common/DBConnection.php';
 include '../../src/common/_config.php';
+require_once '../../src/common/part_alias_lib.php';
 
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
@@ -607,6 +608,25 @@ try {
                 $src = $qi->fetch(PDO::FETCH_ASSOC);
                 if (!$src) throw new Exception("找不到報價項目（ID {$quoteItemId}）");
                 if (empty($src['d_setting_d_id'])) throw new Exception('料號 ' . $src['product_id'] . ' 尚未綁定料號ID，無法轉單');
+
+                // 客戶代號／等同料號自動更正（伺服器端為準）：報價當年用的料號如果後來被登記成
+                // 別的料號的別名（linked_d_id），一律改用現行正確料號建單，不可繼續拿舊料號建單
+                $canon = eg_part_alias_canonical($db, (int)$src['d_setting_d_id']);
+                if ($canon['corrected']) {
+                    $cd = $db->prepare("SELECT ds.D_Setting_Id, ds.Is_Assembly, ds.Customer_Id AS part_customer_id, c.customer AS part_customer_name
+                                        FROM d_setting ds LEFT JOIN customer_list c ON c.customer_id = ds.Customer_Id
+                                        WHERE ds.d_id = ?");
+                    $cd->execute([$canon['d_id']]);
+                    if ($cr = $cd->fetch(PDO::FETCH_ASSOC)) {
+                        $originalPartNo        = $src['D_Setting_Id'];
+                        $src['d_setting_d_id']  = $canon['d_id'];
+                        $src['D_Setting_Id']    = $cr['D_Setting_Id'];
+                        $src['Is_Assembly']     = $cr['Is_Assembly'];
+                        $src['part_customer_id']   = $cr['part_customer_id'];
+                        $src['part_customer_name'] = $cr['part_customer_name'];
+                        $orderPs = trim($orderPs . '（料號已依客戶代號／等同料號綁定，由「' . $originalPartNo . '」自動更正為「' . $src['D_Setting_Id'] . '」）');
+                    }
+                }
                 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $deliveryDate)) {
                     throw new Exception('料號 ' . $src['product_id'] . ' 交期格式錯誤（' . $deliveryDate . '），請重新選擇日期');
                 }

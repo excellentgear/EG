@@ -58,6 +58,7 @@ function eg_build_process_names($pdo, array $rows) {
 include '../../src/common/DBConnection.php';
 include '../../src/store/_setting.php';
 include '../../src/common/_config.php';
+require_once '../../src/common/part_alias_lib.php';
 
 $conn = new DBConnection();
 
@@ -572,21 +573,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $d_id_id   = intval($_POST['d_id_id'] ?? 0);
 
             // Step 1: 查報價單主體
-            // 有精準料號ID：只比對 d_setting_d_id 完全相同者，避免不同料號被文字模糊誤配
+            // 有精準料號ID：連同「客戶代號／等同料號」綁定的其他 d_id 一併比對（part_alias_lib.php），
+            // 否則報價當年用的是舊／客戶代號料號時，換成現行料號查詢會找不到相關報價單
             $base_sql = "SELECT ql.quote_no, ql.quote_date, ql.client_name, ql.note AS quote_note,
                                 ql.is_negotiation,
-                                qi.item_id, qi.product_id, qi.specification,
+                                qi.item_id, qi.d_setting_d_id, qi.product_id, qi.specification,
                                 qi.quantity, qi.unit_price, qi.process_notes
                          FROM quotation_list ql
                          JOIN quotation_item qi ON ql.quote_id = qi.quote_id";
             if ($d_id_id > 0) {
-                $stmt = $pdo->prepare($base_sql . " WHERE qi.d_setting_d_id = :term ORDER BY ql.quote_date DESC, ql.quote_id DESC LIMIT 20");
-                $stmt->execute([':term' => $d_id_id]);
+                $relatedIds = eg_part_alias_related_dids($pdo, $d_id_id);
+                $ph = implode(',', array_fill(0, count($relatedIds), '?'));
+                $stmt = $pdo->prepare($base_sql . " WHERE qi.d_setting_d_id IN ($ph) ORDER BY ql.quote_date DESC, ql.quote_id DESC LIMIT 20");
+                $stmt->execute($relatedIds);
             } else {
                 $stmt = $pdo->prepare($base_sql . " WHERE qi.product_id LIKE :term ORDER BY ql.quote_date DESC, ql.quote_id DESC LIMIT 20");
                 $stmt->execute([':term' => "%$part_text%"]);
             }
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            // 標示透過「客戶代號／等同料號」帶入、料號跟目前選定料號不同的項目
+            if ($d_id_id > 0) {
+                foreach ($rows as &$r) {
+                    $r['alias_hit'] = ((int)$r['d_setting_d_id'] !== $d_id_id) ? $r['product_id'] : null;
+                }
+                unset($r);
+            }
 
             // Step 2: 收集所有 sub_tag_id（來自 process_notes 欄位），批次查名稱
             $allSubTagIds = [];
@@ -706,36 +717,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                 qi.item_id, qi.d_setting_d_id, qi.product_id, qi.specification, qi.quantity, qi.unit_price, qi.process_notes
                          FROM quotation_list ql
                          JOIN quotation_item qi ON ql.quote_id = qi.quote_id";
-            $aliasMap = [];
             if ($d_id_id > 0) {
-                $stmt = $pdo->prepare($base_sql . " WHERE qi.d_setting_d_id = :term ORDER BY ql.quote_date DESC, ql.quote_id DESC LIMIT 50");
-                $stmt->execute([':term' => $d_id_id]);
+                $relatedIds = eg_part_alias_related_dids($pdo, $d_id_id);
+                $ph = implode(',', array_fill(0, count($relatedIds), '?'));
+                $stmt = $pdo->prepare($base_sql . " WHERE qi.d_setting_d_id IN ($ph) ORDER BY ql.quote_date DESC, ql.quote_id DESC LIMIT 50");
+                $stmt->execute($relatedIds);
             } else {
                 $like = "%$part_text%";
-                // 客戶代號／等同料號（src/common/part_alias_lib.php 的 d_setting_alias）：
-                // 業務報價打的料號常跟客戶代號不同，光比對 product_id 文字找不到，故一併查出對應的我方料號 d_id 納入搜尋範圍
-                $stA = $pdo->prepare("SELECT DISTINCT d_id, alias_code FROM d_setting_alias WHERE alias_code LIKE :term");
+                // 客戶代號／等同料號（src/common/part_alias_lib.php）：報價可能是用「舊／客戶代號」自己的
+                // 料號建的（該代號本身也有 d_setting 記錄），現行正確料號另有其人時，兩邊互查都要找得到彼此，
+                // 故先找出文字命中的 d_id（料號本身或別名代號），再展開成同一實體的完整料號家族一併搜尋
+                $seedIds = [];
+                $stD = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id LIKE :term");
+                $stD->execute([':term' => $like]);
+                foreach ($stD->fetchAll(PDO::FETCH_COLUMN) as $x) $seedIds[(int)$x] = true;
+                $stA = $pdo->prepare("SELECT DISTINCT d_id FROM d_setting_alias WHERE alias_code LIKE :term");
                 $stA->execute([':term' => $like]);
-                foreach ($stA->fetchAll(PDO::FETCH_ASSOC) as $ar) { $aliasMap[(int)$ar['d_id']] = $ar['alias_code']; }
+                foreach ($stA->fetchAll(PDO::FETCH_COLUMN) as $x) $seedIds[(int)$x] = true;
 
-                if ($aliasMap) {
-                    $ph = implode(',', array_fill(0, count($aliasMap), '?'));
+                $relatedIds = [];
+                foreach (array_keys($seedIds) as $sid) {
+                    foreach (eg_part_alias_related_dids($pdo, $sid) as $rid) $relatedIds[$rid] = true;
+                }
+                $relatedIds = array_keys($relatedIds);
+
+                if ($relatedIds) {
+                    $ph = implode(',', array_fill(0, count($relatedIds), '?'));
                     $stmt = $pdo->prepare($base_sql . " WHERE qi.product_id LIKE ? OR qi.d_setting_d_id IN ($ph)
                                                          ORDER BY ql.quote_date DESC, ql.quote_id DESC LIMIT 50");
-                    $stmt->execute(array_merge([$like], array_keys($aliasMap)));
+                    $stmt->execute(array_merge([$like], $relatedIds));
                 } else {
                     $stmt = $pdo->prepare($base_sql . " WHERE qi.product_id LIKE :term ORDER BY ql.quote_date DESC, ql.quote_id DESC LIMIT 50");
                     $stmt->execute([':term' => $like]);
                 }
             }
             $rows = eg_build_process_names($pdo, $stmt->fetchAll(PDO::FETCH_ASSOC));
-            if ($aliasMap) {
-                foreach ($rows as &$r) {
-                    $did = (int)($r['d_setting_d_id'] ?? 0);
-                    $r['alias_hit'] = ($did && isset($aliasMap[$did])) ? $aliasMap[$did] : null;
+            // 標示轉單時會自動更正的料號（part_alias_lib.php eg_part_alias_canonical，與 op_get_items 同邏輯）
+            $canonicalCache = [];
+            foreach ($rows as &$r) {
+                $srcDid = (int)($r['d_setting_d_id'] ?? 0);
+                $r['corrected_to'] = null;
+                if ($srcDid <= 0) continue;
+                if (!isset($canonicalCache[$srcDid])) $canonicalCache[$srcDid] = eg_part_alias_canonical($pdo, $srcDid);
+                $c = $canonicalCache[$srcDid];
+                if ($c['corrected']) {
+                    $cd = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id = ?");
+                    $cd->execute([$c['d_id']]);
+                    $r['corrected_to'] = (string)$cd->fetchColumn();
                 }
-                unset($r);
             }
+            unset($r);
             echo json_encode(['success' => true, 'data' => $rows]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -765,6 +796,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                     ORDER BY qi.sort_order ASC, qi.item_id ASC");
             $stmt->execute([$quote_id]);
             $rows = eg_build_process_names($pdo, $stmt->fetchAll(PDO::FETCH_ASSOC));
+            // 客戶代號／等同料號自動更正：報價當年用的料號如果後來被登記成別的料號的別名（linked_d_id），
+            // 轉訂單一律改用現行正確料號，不可繼續拿舊料號建單（part_alias_lib.php eg_part_alias_canonical）
+            $canonicalCache = [];
+            foreach ($rows as &$r) {
+                $srcDid = (int)($r['d_setting_d_id'] ?? 0);
+                $r['corrected_from'] = null;
+                if ($srcDid <= 0) continue;
+                if (!isset($canonicalCache[$srcDid])) $canonicalCache[$srcDid] = eg_part_alias_canonical($pdo, $srcDid);
+                $c = $canonicalCache[$srcDid];
+                if ($c['corrected']) {
+                    $cd = $pdo->prepare("SELECT D_Setting_Id, Is_Assembly FROM d_setting WHERE d_id = ?");
+                    $cd->execute([$c['d_id']]);
+                    if ($cr = $cd->fetch(PDO::FETCH_ASSOC)) {
+                        $r['corrected_from'] = $r['D_Setting_Id'];
+                        $r['D_Setting_Id']   = $cr['D_Setting_Id'];
+                        $r['Is_Assembly']    = $cr['Is_Assembly'];
+                        $r['d_setting_d_id'] = $c['d_id'];
+                    }
+                }
+            }
+            unset($r);
             // 階梯報價項目：附上各區間（含容差），供轉單時輸入數量自動對價
             $tieredIds = [];
             foreach ($rows as $r) { if (!empty($r['is_tiered'])) $tieredIds[] = (int)$r['item_id']; }
@@ -5266,6 +5318,10 @@ foreach($dCounts as $c) {
                             : '';
 
                         var negoBadge = q.is_negotiation == 1 ? ' <span style="display:inline-block;font-size:9px;padding:1px 6px;background:#e8f8f0;color:#1e8449;border:1px solid #a9dfbf;border-radius:10px;font-weight:600;white-space:nowrap;">議價</span>' : '';
+                        // 透過客戶代號／等同料號帶入的報價（報價料號跟目前選定料號不同）：標示原報價料號
+                        var aliasHtml = q.alias_hit
+                            ? '<div style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;display:inline-block;margin-top:2px;">報價料號：' + escapeHtml(q.alias_hit) + '</div>'
+                            : '';
                         var $item = $('<div class="quote-item-row" style="padding:5px 7px;border:1px solid #e0e0e0;border-radius:4px;margin-bottom:4px;cursor:pointer;background:#fff;transition:background .15s;">' +
                             '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:4px;">' +
                             '<strong style="font-size:11px;">' + escapeHtml(q.quote_no) + '</strong>' + negoBadge +
@@ -5273,7 +5329,7 @@ foreach($dCounts as $c) {
                             '<span style="font-size:12px;font-weight:700;color:' + priceColor + ';">$' + priceDisplay + '</span>' +
                             '<span style="font-size:10px;color:#888;">' + qtyStr + '</span>' +
                             '</div>' +
-                            procHtml + noteHtml +
+                            aliasHtml + procHtml + noteHtml +
                             '</div>');
                         $item.data('quote', q);
                         $item.on('mouseenter', function() { $(this).css('background','#f0f8ff'); });
@@ -5685,6 +5741,9 @@ foreach($dCounts as $c) {
                         var noteText = (q.quote_note || '').trim();
                         var noteHtml = noteText ? '<div style="font-size:10px;color:#aaa;font-style:italic;"><i class="fa fa-sticky-note-o"></i> ' + escapeHtml(noteText.substring(0, 40)) + '</div>' : '';
                         var negoBadge = q.is_negotiation == 1 ? ' <span style="display:inline-block;font-size:9px;padding:1px 6px;background:#e8f8f0;color:#1e8449;border:1px solid #a9dfbf;border-radius:10px;font-weight:600;white-space:nowrap;">議價</span>' : '';
+                        var aliasHtml = q.alias_hit
+                            ? '<div style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;display:inline-block;margin-top:2px;">報價料號：' + escapeHtml(q.alias_hit) + '</div>'
+                            : '';
 
                         var $item = $('<div class="qb-quote-row" style="padding:4px 6px;border:1px solid #e0e0e0;border-radius:3px;margin-bottom:3px;cursor:pointer;background:#fff;font-size:11px;">' +
                             '<div style="display:flex;justify-content:space-between;align-items:center;">' +
@@ -5692,7 +5751,7 @@ foreach($dCounts as $c) {
                             '<span style="color:#999;font-size:10px;">' + (q.quote_date || '') + '</span>' +
                             priceStr +
                             '<span style="color:#888;font-size:10px;">x' + (parseInt(q.quantity)||0) + '</span>' +
-                            '</div>' + procHtml + noteHtml + '</div>');
+                            '</div>' + aliasHtml + procHtml + noteHtml + '</div>');
                         $item.data('quote', q);
                         $item.on('mouseenter', function() { if (!$(this).hasClass('qb-quote-selected')) $(this).css('background','#f0f8ff'); });
                         $item.on('mouseleave', function() { if (!$(this).hasClass('qb-quote-selected')) $(this).css('background','#fff'); });
@@ -7441,12 +7500,12 @@ foreach($dCounts as $c) {
                 res.data.forEach(function(q) {
                     var price = parseFloat(q.unit_price);
                     var priceStr = price > 0 ? formatPrice(price) : '-';
-                    // 用客戶代號／等同料號查到的：標示「＝被查到的代號」，選取後帶的仍是報價單上的正確料號
-                    var aliasBadge = q.alias_hit ? ' <span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;">＝' + escapeHtml(q.alias_hit) + '</span>' : '';
+                    // 報價料號跟目前現行正確料號不同（客戶代號／等同料號綁定）：轉單時會自動更正，先標示提醒
+                    var corrBadge = q.corrected_to ? ' <span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;" title="轉單時將自動更正為現行正確料號">→' + escapeHtml(q.corrected_to) + '</span>' : '';
                     html += '<tr style="cursor:pointer;" onclick="opSelectQuote(' + q.quote_id + ')">' +
                         '<td><strong>' + escapeHtml(q.quote_no) + '</strong>' + opNegoBadge(q.is_negotiation) + '<div style="color:#999;font-size:10px;">' + (q.quote_date||'') + '</div></td>' +
                         '<td>' + escapeHtml(q.client_name || '') + '</td>' +
-                        '<td>' + escapeHtml(q.product_id || '') + aliasBadge + '</td>' +
+                        '<td>' + escapeHtml(q.product_id || '') + corrBadge + '</td>' +
                         '<td>' + escapeHtml(q.processes || '') + '</td>' +
                         '<td>' + escapeHtml((q.specification||'').substring(0,30)) + '</td>' +
                         '<td style="text-align:right;">' + (parseInt(q.quantity)||0) + '</td>' +
@@ -7544,10 +7603,14 @@ foreach($dCounts as $c) {
                     ? ' <span style="background:#3498db;color:#fff;border-radius:3px;padding:0 4px;font-size:9px;"><i class="fa fa-cubes" style="font-size:8px;"></i> 組合件</span>' : '';
                 var convBadge = converted
                     ? ' <span style="background:#bbb;color:#fff;border-radius:3px;padding:0 4px;font-size:9px;" title="已轉訂單：' + escapeHtml(it.converted_order_oo) + '">已轉訂單</span>' : '';
+                // 客戶代號／等同料號自動更正：報價當年用的料號已被登記成別的現行料號的別名，轉單一律改用現行正確料號
+                var corrBadge = it.corrected_from
+                    ? '<div style="font-size:9px;color:#a06a1f;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;margin-top:2px;" title="報價當時用的料號是「' + escapeHtml(it.corrected_from) + '」，已依客戶代號／等同料號綁定自動更正為現行正確料號">已更正：' + escapeHtml(it.corrected_from) + ' → ' + escapeHtml(it.D_Setting_Id) + '</div>'
+                    : '';
                 var $tr = $('<tr></tr>').data('item', it);
                 if (converted) $tr.css({'background':'#f5f5f5', 'color':'#aaa'});
                 $tr.append('<td><input type="checkbox" class="op-row-check"' + (converted ? ' disabled' : '') + '></td>');
-                $tr.append('<td>' + escapeHtml(it.D_Setting_Id || it.product_id || '') + bomBadge + convBadge + '</td>');
+                $tr.append('<td>' + escapeHtml(it.D_Setting_Id || it.product_id || '') + bomBadge + convBadge + corrBadge + '</td>');
                 $tr.append('<td>' + escapeHtml((opCurrentQuote && opCurrentQuote.client_name) || '') + '</td>');
                 $tr.append('<td>' + escapeHtml(it.processes || '') + '</td>');
                 $tr.append('<td>' + escapeHtml((it.specification||'').substring(0,40)) + '</td>');
