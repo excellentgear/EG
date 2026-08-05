@@ -672,7 +672,7 @@ function openEdit(id){
         });
         KPI_SNAP = m.kpi_snapshot_json ? JSON.parse(m.kpi_snapshot_json) : null;
         EDIT_ATTACHES = res.attaches||[]; TEMP_ATTACH_IDS = [];
-        renderAtt(); renderItems('directive'); renderItems('general'); renderItems('announce'); renderKpiBox(); renderEdAttach();
+        renderAtt(); renderItems('directive'); renderItems('general'); renderItems('announce'); renderChairSel(); renderKpiBox(); renderEdAttach();
         $('#edChair').val(m.chair_user_id||'');
         $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
         openMask('edMask');
