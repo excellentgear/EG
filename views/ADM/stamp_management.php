@@ -244,6 +244,12 @@ try {
           <span>字體 <select id="tplFont" class="form-control input-sm" style="width:80px;display:inline-block;">
             <option value="kai">楷體</option><option value="ming">明體</option><option value="hei">黑體</option></select></span>
         </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+          <span title="蓋在有固定列高的表格/欄位裡時(如簽到表)，自動縮放成填滿該格高度的比例；不影響本設計器預覽與有充足空間的簽核欄位">
+            填滿列高比例 <input type="number" id="tplFillRatio" class="form-control input-sm" style="width:60px;display:inline-block;" value="90" min="10" max="100" step="1">%</span>
+          <label style="font-weight:normal;margin:0;" title="勾選後蓋章一律用本模板設計的實際大小(大小(px)×高/寬比)，即使蓋出超過欄位高度也不縮小">
+            <input type="checkbox" id="tplNoScale"> 不可縮放（可蓋出格子欄位外）</label>
+        </div>
         <div style="margin-bottom:6px;">
           <strong style="color:#7a4e17;font-size:13px;">分割列（由上而下；高度為比例）</strong>
           <span class="text-muted" style="font-size:11.5px;">　點內容框後按變數鈕插入：</span>
@@ -799,7 +805,8 @@ function tplSchemaFromUI(){
                wrapn:+$(this).find('.tpl-wrapn').val()||0});
   });
   return {shape:$('#tplShape').val(), color:$('#tplColor').val(), size:+$('#tplSize').val()||100,
-          ratio:+$('#tplRatio').val()||1, stroke:+$('#tplStroke').val()||2.6, font:$('#tplFont').val(), rows};
+          ratio:+$('#tplRatio').val()||1, stroke:+$('#tplStroke').val()||2.6, font:$('#tplFont').val(), rows,
+          fillRatio:Math.min(100,Math.max(10,+$('#tplFillRatio').val()||90))/100, noScale:$('#tplNoScale').is(':checked')};
 }
 function tplPreview(){
   $('#tplPreview').html(EGStampTpl.render(tplSchemaFromUI(), sampleCtx()));
@@ -851,6 +858,7 @@ function openTplModal(t){
   $('#tplShape').val(sc.shape||'circle'); $('#tplColor').val(sc.color||'#cf3a2b');
   $('#tplSize').val(sc.size||100); $('#tplRatio').val(sc.ratio||1);
   $('#tplStroke').val(sc.stroke||2.6); $('#tplFont').val(sc.font||'kai');
+  $('#tplFillRatio').val(Math.round((sc.fillRatio!=null?sc.fillRatio:0.9)*100)); $('#tplNoScale').prop('checked', !!sc.noScale);
   $('#tplRows').html((sc.rows&&sc.rows.length?sc.rows:[{h:100,text:''}]).map(r=>tplRowHtml(r.h,r.text,+r.fs||0,r.mode||'shrink',+r.wrapn||0)).join(''));
   $('#serPrefix').val(t?t.serial_prefix:''); $('#serDigits').val(t?t.serial_digits:3);
   $('#serStart').val(t?t.serial_start:1); $('#serStep').val(t?t.serial_step:1);

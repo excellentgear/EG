@@ -21,6 +21,8 @@
         return svgStamp(name, date, isDeputy);
     }
 
+    // 填滿列高比例：模板可設定 fillRatio(0.1~1，預設0.9)＝蓋在有固定列高的格子裡時自動縮放成該比例；
+    // noScale=true 則一律用模板設計的實際大小，不自動縮放（可能蓋出格子外）。見圖章管理「線上圖章設計」。
     function tplStamp(name, date, isDeputy, schema) {
         var ctx = { company: global.__ownCompany || '', name: name || '', date: date || '' };
         var svg = global.EGStampTpl.render(schema, ctx);
@@ -31,7 +33,8 @@
             svg = svg.replace('</svg>', '<text x="92" y="' + (h - 4) + '" text-anchor="end" font-size="13" fill="' + color
                 + '" font-weight="bold" font-family="DFKai-SB,BiauKai,KaiTi,&quot;標楷體&quot;,serif">代</text></svg>');
         }
-        return wrap(svg, name, date, isDeputy);
+        var fillPct = schema.noScale ? null : Math.round((schema.fillRatio != null ? +schema.fillRatio : 0.9) * 100);
+        return wrap(svg, name, date, isDeputy, fillPct);
     }
 
     // 掃描實體章：去背 PNG 當底圖，日期帶區域鋪白遮罩蓋掉掃描件上的舊日期，再壓動態日期（圖章系統說明.md 第二節）
@@ -53,8 +56,12 @@
         return wrap(svg, name, date, isDeputy);
     }
 
-    function wrap(svg, name, date, isDeputy) {
-        return '<span class="stamp-wrap" data-sname="' + esc(name || '') + '" data-sdate="' + esc(date || '') + '" data-sdep="' + (isDeputy ? 1 : 0) + '">' + svg + '</span>';
+    // fillPct：非 null 時＝在有固定高度的容器(如表格列)內自動縮放成該容器高度的百分比(容器沒有明確高度時此設定不生效，維持原樣大小)；
+    // null＝不縮放，一律用 svg 本身設計的大小（noScale 或掃描章/泛用SVG章走這條路徑，維持既有行為不受影響）。
+    function wrap(svg, name, date, isDeputy, fillPct) {
+        var cls = 'stamp-wrap' + (fillPct != null ? ' stamp-fill' : '');
+        var style = fillPct != null ? ' style="height:' + fillPct + '%;"' : '';
+        return '<span class="' + cls + '"' + style + ' data-sname="' + esc(name || '') + '" data-sdate="' + esc(date || '') + '" data-sdep="' + (isDeputy ? 1 : 0) + '">' + svg + '</span>';
     }
 
     function svgStamp(name, date, isDeputy) {
@@ -148,7 +155,10 @@
         style.textContent =
             '.car-stamp{ opacity:.92; vertical-align:middle; filter:drop-shadow(0 1px 1px rgba(0,0,0,.1)); }' +
             '.stamp-wrap{ display:inline-block; text-align:center; margin:2px 10px 2px 0; }' +
-            '.stamp-wrap .stamp-title{ display:block; font-size:11px; color:#999; margin-top:1px; }';
+            '.stamp-wrap .stamp-title{ display:block; font-size:11px; color:#999; margin-top:1px; }' +
+            // stamp-fill：容器(如表格列)有明確高度時，章依 fillRatio 縮放至該高度比例；容器無明確高度時 height:% 無效，退回原尺寸不受影響
+            '.stamp-wrap.stamp-fill{ display:inline-flex; align-items:center; margin:0; }' +
+            '.stamp-wrap.stamp-fill svg,.stamp-wrap.stamp-fill img{ height:100%; width:auto; max-width:none; }';
         document.head.appendChild(style);
     }
     injectCss();

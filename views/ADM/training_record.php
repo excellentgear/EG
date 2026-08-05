@@ -2474,7 +2474,8 @@ function printSignSheet(blankOnly){
         +'table.sf td.sf-i{border:1px solid #999;padding:5px 8px;text-align:left;font-size:13px;height:auto;background:#fff;overflow:visible;}'
         +'table.sf td.sf-i.ol{white-space:pre-wrap;line-height:1.5;}'
         // 簽到章不可把列高撐大：列高固定跟空白簽到表一樣，章縮小塞進既有列高內（覆蓋 egPrintWindow 內建的 91px 預設章尺寸）
-        +'table.sf .stamp-wrap{margin:0;line-height:0;}table.sf .stamp-wrap svg,table.sf svg.car-stamp{width:34px;height:34px;}'
+        // 掃描實體章/泛用SVG章沒有模板自帶的填滿比例可用，這裡統一給 90% 當退回值；有模板 fillRatio 的走 eg_stamp.js 自己的 inline style（優先權更高，不受這裡影響）
+        +'table.sf .stamp-wrap{height:90%;display:inline-flex;align-items:center;margin:0;}table.sf .stamp-wrap svg,table.sf svg.car-stamp{height:100%;width:auto;}'
         +'.pgbrk{page-break-before:always;}';
     // 人數多會跨頁，用 pageCount 模式（真頁碼＋表頭自動重印每一頁）
     egPrintWindow(docTitle, html, css, DOC_NO.signsheet, false, true);
@@ -2758,7 +2759,8 @@ function printRecord(){
         +'table.sf td.sf-i{border:1px solid #999;padding:5px 8px;text-align:left;font-size:13px;height:auto;background:#fff;overflow:visible;}'
         +'table.sf td.sf-i.ol{white-space:pre-wrap;line-height:1.5;}'
         // 簽到章不可把列高撐大：列高固定跟空白簽到表一樣，章縮小塞進既有列高內（表尾審核/講師章維持原尺寸，不受影響）
-        +'table.sf .stamp-wrap{margin:0;line-height:0;}table.sf .stamp-wrap svg,table.sf svg.car-stamp{width:34px;height:34px;}'
+        // 掃描實體章/泛用SVG章沒有模板自帶的填滿比例可用，這裡統一給 90% 當退回值；有模板 fillRatio 的走 eg_stamp.js 自己的 inline style（優先權更高，不受這裡影響）
+        +'table.sf .stamp-wrap{height:90%;display:inline-flex;align-items:center;margin:0;}table.sf .stamp-wrap svg,table.sf svg.car-stamp{height:100%;width:auto;}'
         +'.pgbrk{page-break-before:always;}'
         +'.pt-sign td{width:50%;}';
     egPrintWindow(docTitle, html, css, '', false, true);
