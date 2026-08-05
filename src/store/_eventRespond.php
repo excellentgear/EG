@@ -101,6 +101,17 @@ try {
         }
     }
 
+    // 會議記錄項目確認通知(ref_type='MEETING_ITEM_CONFIRM')的回簽 → 寫回 meeting_item 的確認簽名(任一人回簽即完成)
+    if ($action === 'sign' && ($event['ref_type'] ?? '') === 'MEETING_ITEM_CONFIRM' && (int)($event['ref_id'] ?? 0) > 0) {
+        try {
+            require_once __DIR__ . '/../common/meeting_lib.php';
+            $uname = $_SESSION['user_cname'] ?? ('U' . $uid);
+            meeting_item_confirm_via_notify($db, (int)$event['ref_id'], $uid, $uname);
+        } catch (Throwable $e) {
+            error_log('[meeting_notify] respond hook failed: ' . $e->getMessage());
+        }
+    }
+
     echo json_encode(['ok' => true]);
 } catch (PDOException $e) {
     echo json_encode(['ok' => false, 'msg' => '資料庫錯誤']);

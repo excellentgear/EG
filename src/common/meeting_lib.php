@@ -11,6 +11,7 @@ include_once __DIR__ . '/role_features_helper.php';
 include_once __DIR__ . '/attach_lib.php';
 include_once __DIR__ . '/asdoc_lib.php';
 include_once __DIR__ . '/kpi_lib.php';
+include_once __DIR__ . '/people_lib.php';
 
 const MEETING_FEATURES = [
     ['code'=>'meeting_view',      'group'=>'view', 'label'=>'檢閱會議記錄列表（沒勾也看得到自己的草稿、有簽核/出席到的會議）'],
@@ -274,22 +275,55 @@ function meeting_close_notice(PDO $db, int $meetingId): void {
     } catch (Throwable $e) {}
 }
 
-/** 部門指派項目待確認通知：發給該（多）部門所有本次與會者，任一人簽名即完成 */
-function meeting_notify_item_owners(PDO $db, int $meetingId, array $toUids, string $title, string $content, int $fromUid): int {
+/**
+ * 部門指派項目待確認通知：發給該（多）負責部門「本次未出席」的成員，走一般通知系統回簽（ref_type='MEETING_ITEM_CONFIRM'，ref_id=項目id）。
+ * 有出席的部門成員一律在會議記錄現場用本人密碼確認（item_confirm，見 Meeting_API.php），不走這條通知路線，
+ * 避免「按鈕點一下不知道是誰簽」的問題；未出席者無法現場輸入密碼，才改用通知系統的回簽功能。
+ */
+function meeting_notify_item_owners(PDO $db, int $itemId, array $toUids, string $title, string $content, int $fromUid): int {
     if (!$toUids) return 0;
     try {
         $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
                       VALUES (CURDATE(), NULL, ?, ?, 0, ?, '會議記錄項目確認', 1, 'MEETING_ITEM_CONFIRM', ?)")
-           ->execute([$title, $content, $fromUid, $meetingId]);
+           ->execute([$title, $content, $fromUid, $itemId]);
         $eid = (int)$db->lastInsertId();
         $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'sign')");
-        foreach (array_unique(array_map('intval', $toUids)) as $uid) $ins->execute([$eid, $uid]);
+        foreach (array_unique(array_map('intval', $toUids)) as $tuid) $ins->execute([$eid, $tuid]);
         try {
             require_once __DIR__ . '/../push/push_send.php';
             eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
         } catch (Throwable $e) {}
         return $eid;
     } catch (Throwable $e) { return 0; }
+}
+
+/** 負責部門(含子項目)中「本次未出席」的成員 id 清單，用來決定要發通知給誰回簽 */
+function meeting_dept_nonattendee_targets(PDO $db, int $meetingId, array $ownerDeptIds): array {
+    require_once __DIR__ . '/people_lib.php';
+    if (!$ownerDeptIds) return [];
+    $members = eg_people_list($db, ['dept_ids'=>$ownerDeptIds]);
+    $memberIds = array_map('intval', array_column($members, 'id'));
+    if (!$memberIds) return [];
+    $st = $db->prepare("SELECT user_id FROM meeting_attendee WHERE meeting_id=?");
+    $st->execute([$meetingId]);
+    $attendeeIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    return array_values(array_diff($memberIds, $attendeeIds));
+}
+
+/** 未出席部門成員透過通知系統回簽（_eventRespond.php 的 MEETING_ITEM_CONFIRM 掛勾呼叫）：任一人簽名即完成，比照現場確認同一套 OR-gate */
+function meeting_item_confirm_via_notify(PDO $db, int $itemId, int $uid, string $uname): void {
+    $st = $db->prepare("SELECT owner_depts, confirm_user_id FROM meeting_item WHERE item_id=?");
+    $st->execute([$itemId]);
+    $item = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$item || $item['confirm_user_id']) return;
+    $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$item['owner_depts']))));
+    if (!$ownerIds) return;
+    $in = implode(',', array_fill(0, count($ownerIds), '?'));
+    $chk = $db->prepare("SELECT 1 FROM user_department_position_map WHERE user_id=? AND department_id IN ($in)");
+    $chk->execute(array_merge([$uid], $ownerIds));
+    if (!$chk->fetchColumn()) return;
+    $db->prepare("UPDATE meeting_item SET confirm_user_id=?, confirm_user_name=?, confirm_at=NOW() WHERE item_id=? AND confirm_user_id IS NULL")
+       ->execute([$uid, $uname, $itemId]);
 }
 
 /** 結果通知（核准/退回/項目已確認 都要回報，退回一定帶原因） */

@@ -178,6 +178,9 @@ foreach ($roleRows as $rr) {
         .kpi-top3-tt { font-weight:bold; font-size:12px; margin-bottom:3px; }
         .kpi-top3-tbl { width:100%; border-collapse:collapse; font-size:11px; }
         .kpi-top3-tbl th, .kpi-top3-tbl td { border:1px solid #EADFC8; padding:3px 5px; text-align:center; }
+        .item-confirm-box { display:flex; gap:3px; align-items:center; flex-wrap:wrap; justify-content:center; }
+        .item-confirm-box select, .item-confirm-box input, .item-confirm-box button { font-size:11.5px; }
+        .item-notify-status { font-size:10.5px; color:#8a6d45; margin-top:3px; }
         .mt-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
         @media print {
@@ -1001,15 +1004,13 @@ function viewHtml(res){
     function itemsTable(kind, title) {
         var rows = (res.items||[]).filter(function(it){ return it.kind===kind; });
         if (!rows.length) return '';
-        var t = '<h5>'+title+'</h5><table><tr><th>NO</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責部門</th><th>確認簽名</th><th>備註</th>'
+        var t = '<h5>'+title+'</h5><table><tr><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人</th><th>確認簽名／回簽狀態</th><th>備註</th>'
               + (m.approval_status==='chair_done'||m.approval_status==='done' ? '<th>總經理意見</th>' : '') + '</tr>';
         rows.forEach(function(it, idx){
             var deptNames = (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
-            var canConfirm = !it.confirm_user_id && it.owner_depts;
             t += '<tr><td>'+(idx+1)+'</td><td>'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+fmtDate(it.due_date)+'</td>'
                + '<td>'+esc(deptNames||'—')+'</td>'
-               + '<td>'+(it.confirm_user_id ? ('<span class="confirm-yes">'+esc(it.confirm_user_name)+'（'+esc(String(it.confirm_at||'').substr(0,16))+'）</span>')
-                    : (canConfirm ? '<button type="button" onclick="confirmItem('+it.item_id+')">確認簽名</button>' : '<span class="confirm-no">—</span>'))+'</td>'
+               + '<td>'+itemConfirmCellHtml(it)+'</td>'
                + '<td>'+esc(it.remark||'')+'</td>'
                + (m.approval_status==='chair_done'||m.approval_status==='done' ? '<td>'+esc(it.gm_comment||'')+'</td>' : '') + '</tr>';
         });
@@ -1055,11 +1056,43 @@ function signAttendee(mid, uidv){
         else alert('全員已簽到');
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '簽到失敗'); $('#pw-'+uidv).val('').select(); });
 }
-function confirmItem(itemId){
-    $.post(API, {action:'item_confirm', item_id:itemId}, function(res){
+/* 部門指派項目「確認簽名」：限本次出席人員現場選自己姓名＋輸入本人密碼確認(比照簽到表密碼驗證，避免共用裝置分不清是誰簽的)；
+   未出席的負責部門成員無法在此現場確認，一律改走送出會議記錄時自動發出的通知系統回簽，狀態一併顯示在同一格內。 */
+function itemConfirmCellHtml(it){
+    if (it.confirm_user_id) {
+        return '<span class="confirm-yes">'+esc(it.confirm_user_name)+'（'+esc(String(it.confirm_at||'').substr(0,16))+'）</span>';
+    }
+    var h = '';
+    var elig = it.eligible_attendees || [];
+    if (elig.length) {
+        h += '<div class="item-confirm-box">'
+           + '<select id="selConfirm'+it.item_id+'" style="width:90px;"><option value="">本人姓名</option>'
+           + elig.map(function(a){ return '<option value="'+a.user_id+'">'+esc(a.user_name)+'</option>'; }).join('')
+           + '</select>'
+           + '<input type="password" id="pwConfirm'+it.item_id+'" placeholder="密碼" style="width:70px;" data-eg-skip'
+           + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();confirmItemWithPassword('+it.item_id+');}">'
+           + '<button type="button" onclick="confirmItemWithPassword('+it.item_id+')">確認</button>'
+           + '</div>';
+    }
+    var nt = it.notify_targets || [];
+    if (nt.length) {
+        h += '<div class="item-notify-status">' + nt.map(function(t){
+            var st = t.signed_at ? ('已回簽 '+String(t.signed_at).substr(0,10)) : (t.read_at ? '已閱未回簽' : '未讀');
+            return esc(t.user_name)+'：'+st;
+        }).join('　') + '</div>';
+    }
+    if (!h) h = '<span class="confirm-no">—</span>';
+    return h;
+}
+function confirmItemWithPassword(itemId){
+    var uidv = $('#selConfirm'+itemId).val();
+    var pw = $('#pwConfirm'+itemId).val();
+    if (!uidv){ alert('請選擇本人姓名'); return; }
+    if (!pw){ alert('請輸入密碼'); return; }
+    $.post(API, {action:'item_confirm', item_id:itemId, user_id:uidv, password:pw}, function(res){
         if (!res.ok){ alert(res.error||'確認失敗'); return; }
         openView(VIEW.meeting.meeting_id);
-    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '確認失敗'); });
+    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '確認失敗'); $('#pwConfirm'+itemId).val('').select(); });
 }
 function decide(mid, level, decision){
     var note = $('#decideNote').val();
@@ -1096,43 +1129,99 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount){
         + '<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
     w.document.close();
 }
+/* 會議記錄/簽到表 列印共用版面：完全比照公司實體表單附件(2-GM-05-01)，橫式列印。
+   主題/日期/主席＋地點/時間/記錄＋出席人員 2列表頭；項目表左側「上級指示要項/會議要項」直書跨列標籤；
+   底部總經理確認/主席確認/製表 三欄簽章；AS文件編號＋「本記錄不得擅自塗改」印在右下角。 */
+function mrCss(){
+    return '.mr-title{text-align:center;font-size:20px;font-weight:bold;letter-spacing:2px;margin-bottom:8px;}'
+        + 'table.mr-head{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;}'
+        + 'table.mr-head th{background:#fff;font-weight:bold;border:1px solid #333;padding:5px 6px;width:56px;text-align:center;}'
+        + 'table.mr-head td.val{border:1px solid #333;padding:5px 8px;text-align:left;}'
+        + 'table.mr-head th.att-lbl{width:64px;}'
+        + 'table.mr-head td.att-val{border:1px solid #333;padding:5px 8px;text-align:left;vertical-align:top;width:220px;}'
+        + 'table.mr-items{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}'
+        + 'table.mr-items th,table.mr-items td{border:1px solid #333;padding:5px;text-align:center;}'
+        + 'table.mr-items td.t-left{text-align:left;}'
+        + 'table.mr-items th.mr-grp-hd{width:32px;}'
+        + 'table.mr-items td.mr-grp{width:32px;writing-mode:vertical-rl;text-orientation:upright;font-weight:bold;letter-spacing:4px;}'
+        + 'table.mr-foot{width:100%;margin-top:16px;font-size:13px;}'
+        + 'table.mr-foot td{padding:10px 6px;width:33.33%;}'
+        + 'table.mr-foot td.mr-foot-prep{text-align:right;}'
+        + '.mr-bottom-note{margin-top:8px;font-size:11px;color:#666;display:flex;justify-content:space-between;}'
+        + 'table.ss-head{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:6px;}'
+        + 'table.ss-head td{border:1px solid #333;padding:6px 8px;text-align:left;width:50%;}'
+        + 'table.sf{width:100%;border-collapse:collapse;font-size:12.5px;}table.sf th,table.sf td{border:1px solid #333;padding:6px;text-align:center;}'
+        + 'h5{font-size:13px;margin:10px 0 3px;}'
+        + '.stamp-wrap svg,svg.car-stamp{width:64px;height:64px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
+}
+function meetingItemGroupRows(items, kind, groupLabel){
+    var rows = (items||[]).filter(function(it){ return it.kind===kind; });
+    if (!rows.length) return '';
+    return rows.map(function(it,i){
+        var deptNames = (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
+        var confirmHtml = it.confirm_user_name
+            ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(it.confirm_user_name, String(it.confirm_at||'').substr(0,10)):esc(it.confirm_user_name))
+            : '';
+        return '<tr>' + (i===0 ? '<td class="mr-grp" rowspan="'+rows.length+'">'+groupLabel+'</td>' : '')
+             + '<td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td>'
+             + '<td>'+fmtDate(it.due_date)+'</td><td>'+esc(deptNames)+'</td><td>'+confirmHtml+'</td><td>'+esc(it.remark||'')+'</td></tr>';
+    }).join('');
+}
+function meetingRecordPageHtml(m, res){
+    var announceRows = (res.items||[]).filter(function(it){ return it.kind==='announce'; }).map(function(it,i){
+        return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+esc(it.remark||'')+'</td></tr>';
+    }).join('');
+    var itemBody = meetingItemGroupRows(res.items, 'directive', '上級指示要項') + meetingItemGroupRows(res.items, 'general', '會議要項');
+    var chairApp = m.chair_approval, gmApp = m.gm_approval;
+    var chairStamp = (chairApp && chairApp.approver_name)
+        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(chairApp.approver_name, String(chairApp.decided_at||'').substr(0,10), String(chairApp.approver_id)!==String(m.chair_user_id)):esc(chairApp.approver_name))
+        : '____________';
+    var gmStamp = (gmApp && gmApp.approver_name)
+        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(gmApp.approver_name, String(gmApp.decided_at||'').substr(0,10), META.gm_id!=null && String(gmApp.approver_id)!==String(META.gm_id)):esc(gmApp.approver_name))
+        : '____________';
+    var madeStamp = (window.EGStamp&&EGStamp.stamp && m.recorder_name) ? EGStamp.stamp(m.recorder_name, fmtDate(m.meeting_date)) : esc(m.recorder_name||'');
+    var recordDocNo = (META.as_doc_record && META.as_doc_record.doc_no) || '';
+    var attendeeNames = (res.attendees||[]).map(function(a){ return esc(a.user_name); }).join('、') || '—';
+    return '<div class="mr-title">'+esc(META.company_name||'')+'-會議記錄</div>'
+        + '<table class="mr-head">'
+        + '<tr><th>主題</th><td class="val">'+esc(m.subject)+'</td><th>日期</th><td class="val">'+fmtDate(m.meeting_date)+'</td>'
+        +   '<th>主席</th><td class="val">'+esc(m.chair_name||'')+'</td>'
+        +   '<th class="att-lbl" rowspan="2">出席人員</th><td class="att-val" rowspan="2">'+attendeeNames+'</td></tr>'
+        + '<tr><th>地點</th><td class="val">'+esc(m.location||'—')+'</td>'
+        +   '<th>時間</th><td class="val">'+(m.start_time?(esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')+'</td>'
+        +   '<th>記錄</th><td class="val">'+esc(m.recorder_name||'')+'</td></tr>'
+        + '</table>'
+        + (announceRows ? '<h5>宣布事項</h5><table class="sf"><tr><th>序</th><th>內容</th><th>備註</th></tr>'+announceRows+'</table>' : '')
+        + (itemBody ? '<table class="mr-items"><thead><tr><th class="mr-grp-hd"></th><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人</th><th>確認簽名</th><th>備註</th></tr></thead><tbody>'+itemBody+'</tbody></table>' : '')
+        + '<table class="mr-foot"><tr><td>總經理確認：'+gmStamp+'</td><td>主席確認：'+chairStamp+'</td><td class="mr-foot-prep">製表：'+madeStamp+'</td></tr></table>'
+        + '<div class="mr-bottom-note"><span>（本記錄不得擅自塗改）</span><span>'+esc(recordDocNo)+'</span></div>';
+}
+function signSheetPageHtml(m, attendees, withSignatures){
+    var rows = (attendees||[]).map(function(a,i){
+        var sigHtml = '';
+        if (withSignatures) {
+            var signed = +a.signed===1;
+            sigHtml = signed ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name, String(a.signed_at||'').substr(0,10)):esc(a.user_name)) : '';
+        }
+        return '<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+(a.is_chair?'（主席）':'')+'</td><td>'+sigHtml+'</td></tr>';
+    }).join('');
+    var signDocNo = (META.as_doc_signsheet && META.as_doc_signsheet.doc_no) || '';
+    return '<div class="mr-title">'+esc(META.company_name||'')+'-會議簽到表</div>'
+        + '<table class="ss-head">'
+        + '<tr><td colspan="2">主題：'+esc(m.subject)+'</td></tr>'
+        + '<tr><td colspan="2">日期時間：'+fmtDate(m.meeting_date)+(m.start_time?('　'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')+'</td></tr>'
+        + '<tr><td>地點：'+esc(m.location||'—')+'</td><td>主席：'+esc(m.chair_name||'')+'</td></tr>'
+        + '</table>'
+        + '<table class="sf"><tr><th style="width:36px;">序</th><th>部門</th><th>職稱</th><th>姓名</th><th style="width:130px;">簽名</th></tr>'+rows+'</table>'
+        + '<div class="mr-bottom-note"><span></span><span>'+esc(signDocNo)+'</span></div>';
+}
 function printMeetingRecord(){
     if (!VIEW) return;
-    var m = VIEW.meeting, res = VIEW;
-    function itemRows(kind){
-        return (res.items||[]).filter(function(it){ return it.kind===kind; }).map(function(it,i){
-            var deptNames = (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
-            return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+fmtDate(it.due_date)+'</td>'
-                 + '<td>'+esc(deptNames)+'</td><td>'+esc(it.confirm_user_name||'')+'</td><td>'+esc(it.remark||'')+'</td></tr>';
-        }).join('');
-    }
-    var html = '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">會議記錄</div></div>'
-        + '<table class="sf-info"><tr><td>主題：'+esc(m.subject)+'</td><td>日期：'+fmtDate(m.meeting_date)+'</td></tr>'
-        + '<tr><td>主席：'+esc(m.chair_name||'')+'</td><td>記錄：'+esc(m.recorder_name||'')+'</td></tr>'
-        + '<tr><td colspan="2">地點：'+esc(m.location||'—')+(m.start_time?('　時間：'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')
-        + '　出席人員：'+((res.attendees||[]).map(function(a){ return esc(a.user_name); }).join('、')||'—')+'</td></tr></table>'
-        + (itemRows('directive') ? '<h5>上級指示要項</h5><table class="sf"><tr><th>NO</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責部門</th><th>確認簽名</th><th>備註</th></tr>'+itemRows('directive')+'</table>' : '')
-        + (itemRows('general') ? '<h5>會議要項</h5><table class="sf"><tr><th>NO</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責部門</th><th>確認簽名</th><th>備註</th></tr>'+itemRows('general')+'</table>' : '')
-        + '<div style="margin-top:16px;font-size:13px;">主席確認：______________　　總經理確認：______________　　製表：'+esc(m.recorder_name||'')+'</div>'
-        + '<div style="margin-top:6px;font-size:11px;color:#666;">（本記錄不得擅自塗改）</div>';
-    var css = 'table.sf-info{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}table.sf-info td{border:1px solid #999;padding:5px 8px;text-align:left;}'
-        + 'h5{font-size:13px;margin:10px 0 3px;}'
-        + 'table.sf{width:100%;border-collapse:collapse;font-size:12.5px;}table.sf th,table.sf td{border:1px solid #333;padding:5px;text-align:center;}table.sf td.t-left{text-align:left;}';
-    egPrintWindow('會議記錄', html, css, '', false);
+    egPrintWindow('會議記錄', meetingRecordPageHtml(VIEW.meeting, VIEW), mrCss(), '', true);
 }
 function printBlankSignSheet(){
     if (!VIEW) return;
-    var m = VIEW.meeting;
-    var rows = (VIEW.attendees||[]).map(function(a){
-        return '<tr><td></td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td><td></td></tr>';
-    }).join('');
-    var html = '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">會議簽到表</div></div>'
-        + '<table class="sf-info"><tr><td>主題：'+esc(m.subject)+'</td><td>日期：'+fmtDate(m.meeting_date)+'</td></tr>'
-        + '<tr><td colspan="2">地點：'+esc(m.location||'—')+(m.start_time?('　時間：'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')+'</td></tr></table>'
-        + '<table class="sf"><tr><th style="width:36px;">NO</th><th>部門</th><th>職稱</th><th>姓名</th><th style="width:130px;">簽名</th></tr>'+rows+'</table>';
-    var css = 'table.sf-info{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}table.sf-info td{border:1px solid #999;padding:5px 8px;text-align:left;}'
-        + 'table.sf{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px;}table.sf th,table.sf td{border:1px solid #333;padding:9px 6px;text-align:center;}';
-    egPrintWindow('會議簽到表', html, css, '', false);
+    egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, false), mrCss(), '', true);
 }
 
 /* ---------- 合併列印(簽到表→會議紀錄→出貨目標達成率)：僅主席+總經理皆簽核完成(done)才可列印，簽章一律用真圖章 ---------- */
@@ -1152,46 +1241,8 @@ function printFullRecord(){
 }
 function doPrintFullRecord(preparerName){
     var m = VIEW.meeting, res = VIEW;
-    var signDocNo = (META.as_doc_signsheet && META.as_doc_signsheet.doc_no) || '';
-    var recordDocNo = (META.as_doc_record && META.as_doc_record.doc_no) || '';
-    var rows1 = (res.attendees||[]).map(function(a,i){
-        var signed = +a.signed===1;
-        var stamp = signed ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name, String(a.signed_at||'').substr(0,10)):esc(a.user_name)) : '';
-        return '<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+(a.is_chair?'（主席）':'')+'</td><td>'+stamp+'</td></tr>';
-    }).join('');
-    var page1 = '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">會議簽到表</div></div>'
-        + '<table class="sf-info"><tr><td>主題：'+esc(m.subject)+'</td><td>日期：'+fmtDate(m.meeting_date)+'</td></tr>'
-        + '<tr><td colspan="2">地點：'+esc(m.location||'—')+(m.start_time?('　時間：'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')+'</td></tr></table>'
-        + '<table class="sf"><tr><th style="width:36px;">NO</th><th>部門</th><th>職稱</th><th>姓名</th><th style="width:130px;">簽名</th></tr>'+rows1+'</table>'
-        + (signDocNo ? '<div style="text-align:right;margin-top:10px;font-size:12px;color:#333;">'+esc(signDocNo)+'</div>' : '');
-
-    function itemRows(kind){
-        return (res.items||[]).filter(function(it){ return it.kind===kind; }).map(function(it,i){
-            var deptNames = (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
-            return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+fmtDate(it.due_date)+'</td>'
-                 + '<td>'+esc(deptNames)+'</td><td>'+esc(it.confirm_user_name||'')+'</td><td>'+esc(it.remark||'')+'</td></tr>';
-        }).join('');
-    }
-    var announceRows = (res.items||[]).filter(function(it){ return it.kind==='announce'; }).map(function(it,i){
-        return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+esc(it.remark||'')+'</td></tr>';
-    }).join('');
-    var chairApp = m.chair_approval, gmApp = m.gm_approval;
-    var chairStamp = (chairApp && chairApp.approver_name)
-        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(chairApp.approver_name, String(chairApp.decided_at||'').substr(0,10), String(chairApp.approver_id)!==String(m.chair_user_id)):esc(chairApp.approver_name))
-        : '____________';
-    var gmStamp = (gmApp && gmApp.approver_name)
-        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(gmApp.approver_name, String(gmApp.decided_at||'').substr(0,10), META.gm_id!=null && String(gmApp.approver_id)!==String(META.gm_id)):esc(gmApp.approver_name))
-        : '____________';
-    var page2 = '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">會議記錄</div></div>'
-        + '<table class="sf-info"><tr><td>主題：'+esc(m.subject)+'</td><td>日期：'+fmtDate(m.meeting_date)+'</td></tr>'
-        + '<tr><td>主席：'+esc(m.chair_name||'')+'</td><td>記錄：'+esc(m.recorder_name||'')+'</td></tr>'
-        + '<tr><td colspan="2">地點：'+esc(m.location||'—')+(m.start_time?('　時間：'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')
-        + '　出席人員：'+((res.attendees||[]).map(function(a){ return esc(a.user_name); }).join('、')||'—')+'</td></tr></table>'
-        + (announceRows ? '<h5>宣布事項</h5><table class="sf"><tr><th>NO</th><th>內容</th><th>備註</th></tr>'+announceRows+'</table>' : '')
-        + (itemRows('directive') ? '<h5>上級指示要項</h5><table class="sf"><tr><th>NO</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責部門</th><th>確認簽名</th><th>備註</th></tr>'+itemRows('directive')+'</table>' : '')
-        + (itemRows('general') ? '<h5>會議要項</h5><table class="sf"><tr><th>NO</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責部門</th><th>確認簽名</th><th>備註</th></tr>'+itemRows('general')+'</table>' : '')
-        + '<table class="pt-sign" style="width:100%;margin-top:18px;"><tr><td style="width:50%;">主席確認：'+chairStamp+'</td><td style="width:50%;">總經理確認：'+gmStamp+'</td></tr></table>'
-        + (recordDocNo ? '<div style="text-align:right;margin-top:10px;font-size:12px;color:#333;">'+esc(recordDocNo)+'</div>' : '');
+    var page1 = signSheetPageHtml(m, res.attendees, true);
+    var page2 = meetingRecordPageHtml(m, res);
 
     var hasKpi = !!m.kpi_snapshot_json;
     var body = '<div style="page-break-after:always;">'+page1+'</div><div'+(hasKpi?' style="page-break-after:always;"':'')+'>'+page2+'</div>';
@@ -1202,12 +1253,10 @@ function doPrintFullRecord(preparerName){
             + kpiReportHtml(k)
             + '<table class="pt-sign" style="width:100%;margin-top:18px;"><tr><td>製表：'+madeStamp+'</td></tr></table>';
     }
-    var css = 'table.sf-info{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}table.sf-info td{border:1px solid #999;padding:5px 8px;text-align:left;}'
-        + 'h5{font-size:13px;margin:10px 0 3px;}'
-        + 'table.sf{width:100%;border-collapse:collapse;font-size:12.5px;}table.sf th,table.sf td{border:1px solid #333;padding:5px;text-align:center;}table.sf td.t-left{text-align:left;}'
-        + 'table.pt-sign td{padding:14px 6px;} .stamp-wrap svg,svg.car-stamp{width:70px;height:70px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-        + kpiCss();
-    egPrintWindow('會議紀錄完整版', body, css, '', false, true);
+    var css = mrCss() + kpiCss()
+        + '.pt-head{text-align:center;margin-bottom:6px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
+        + 'table.pt-sign td{padding:14px 6px;}';
+    egPrintWindow('會議紀錄完整版', body, css, '', true, true);
 }
 
 /* ---------- 模組設定：角色設定(仿 training_record.php) + 附件路徑/簽到表AS綁定 ---------- */

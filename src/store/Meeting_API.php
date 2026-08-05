@@ -153,7 +153,34 @@ case 'get_detail': {
         unset($a['file_name']);
         $attaches[] = $a;
     }
-    jout(['meeting'=>$m, 'items'=>meeting_items($db, $id), 'attendees'=>meeting_attendees($db, $id), 'attaches'=>$attaches]);
+    // 每個項目附上「未出席部門成員」的回簽狀態(通知系統)，供畫面顯示回簽者/回簽日期
+    $items = meeting_items($db, $id);
+    $ntStmt = $db->prepare("SELECT lt.target_id AS user_id, u.user_cname AS user_name, lr.read_at, lr.signed_at
+                             FROM live_event le
+                             JOIN live_event_target lt ON lt.live_event_id = le.id
+                             LEFT JOIN live_event_response lr ON lr.live_event_id = le.id AND lr.user_id = lt.target_id
+                             LEFT JOIN `user` u ON u.id = lt.target_id
+                             WHERE le.ref_type='MEETING_ITEM_CONFIRM' AND le.ref_id=?
+                             ORDER BY lt.id");
+    foreach ($items as &$it) {
+        $ntStmt->execute([(int)$it['item_id']]);
+        $it['notify_targets'] = $ntStmt->fetchAll(PDO::FETCH_ASSOC);
+        // 本次出席人員中，現況部門屬於此項目負責部門者：可在現場用本人密碼確認(item_confirm)
+        $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
+        if ($ownerIds) {
+            $inDept = implode(',', $ownerIds);
+            $eaStmt = $db->prepare("SELECT DISTINCT a.user_id, a.user_name FROM meeting_attendee a
+                                     WHERE a.meeting_id=? AND EXISTS(
+                                         SELECT 1 FROM user_department_position_map m WHERE m.user_id=a.user_id AND m.department_id IN ($inDept)
+                                     )");
+            $eaStmt->execute([$id]);
+            $it['eligible_attendees'] = $eaStmt->fetchAll(PDO::FETCH_ASSOC);
+        } else {
+            $it['eligible_attendees'] = [];
+        }
+    }
+    unset($it);
+    jout(['meeting'=>$m, 'items'=>$items, 'attendees'=>meeting_attendees($db, $id), 'attaches'=>$attaches]);
 }
 
 /* 建立/編輯草稿（id=0＝新建）：只有 draft/rejected 狀態可編（送出後鎖定，需退回才能再改） */
@@ -318,6 +345,24 @@ case 'submit': {
         $uname.' 送出「'.$m['subject'].'」（'.$m['meeting_date'].'）會議記錄，請確認內容並簽章（點入可看完整會議要項，並直接確認或退回）。'
         .($chair['is_delegated'] ? '（原主席今日行程忙碌，已轉由代理人處理）' : ''), $uid);
     if ($ev) eg_approval_set_live_event($db, $id2, $ev);
+
+    // 逐項通知：負責部門中「本次未出席」的成員走通知系統回簽；有出席的成員已可在會議記錄畫面現場用密碼確認，不重複通知
+    foreach (meeting_items($db, $id) as $it) {
+        $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
+        if (!$ownerIds) continue;
+        $targets = meeting_dept_nonattendee_targets($db, $id, $ownerIds);
+        if (!$targets) continue;
+        $inDept = implode(',', $ownerIds);
+        $deptNames = $db->query("SELECT name FROM department WHERE id IN ($inDept)")->fetchAll(PDO::FETCH_COLUMN);
+        meeting_notify_item_owners($db, (int)$it['item_id'], $targets,
+            '「'.$m['subject'].'」會議記錄項目待確認：'.mb_substr((string)$it['content'], 0, 30),
+            '「'.$m['subject'].'」（'.$m['meeting_date'].'）會議記錄的以下負責部門項目請確認並回簽：'."\n".$it['content']
+            .($it['due_date'] ? ("\n應完成日期：".$it['due_date']) : '')
+            ."\n負責部門：".implode('、', $deptNames)
+            .(count($targets) > 1 ? "\n（任一人回簽即完成，不需每人都簽）" : ''),
+            $uid);
+    }
+
     $db->prepare("UPDATE meeting_record SET status='submitted', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
     jout(['status'=>'submitted']);
 }
@@ -383,24 +428,29 @@ case 'decide': {
     jout(['status'=>'done']);
 }
 
-/* 部門指派項目確認簽名：任一位屬於該（多）負責部門、且是本次出席人員的人簽名即完成（不需密碼，走正常登入身分） */
+/* 部門指派項目現場確認簽名：限「本次出席人員」用本人密碼確認(比照簽到表的密碼驗證，共用裝置也知道究竟是誰簽的)。
+   未出席的部門成員無法在現場輸入密碼，一律改走通知系統回簽(送出會議記錄時自動發送，見 submit 與 _eventRespond.php 的 MEETING_ITEM_CONFIRM 掛勾)。 */
 case 'item_confirm': {
     $itemId = (int)($_POST['item_id'] ?? 0);
+    $forUid = (int)($_POST['user_id'] ?? 0);
+    $password = (string)($_POST['password'] ?? '');
     $st = $db->prepare("SELECT * FROM meeting_item WHERE item_id=?");
     $st->execute([$itemId]);
     $item = $st->fetch(PDO::FETCH_ASSOC);
     if (!$item) jerr('找不到此項目');
     if ($item['confirm_user_id']) jerr('此項目已由 '.$item['confirm_user_name'].' 確認簽名過');
-    $m = meeting_load($db, (int)$item['meeting_id']);
     $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$item['owner_depts']))));
     if (!$ownerIds) jerr('此項目未指派負責部門');
-    $myDepts = meeting_user_depts($db, $uid);
-    if (!array_intersect($ownerIds, $myDepts) && !$perms['canAdmin']) jerr('您不屬於此項目的負責部門', 403);
-    $ac = $db->prepare("SELECT 1 FROM meeting_attendee WHERE meeting_id=? AND user_id=?");
-    $ac->execute([(int)$item['meeting_id'], $uid]);
-    if (!$ac->fetchColumn() && !$perms['canAdmin']) jerr('您不是本次會議出席人員', 403);
+    $ac = $db->prepare("SELECT user_name FROM meeting_attendee WHERE meeting_id=? AND user_id=?");
+    $ac->execute([(int)$item['meeting_id'], $forUid]);
+    $attName = $ac->fetchColumn();
+    if (!$attName) jerr('此人不是本次會議出席人員，無法現場確認；請改由通知系統回簽', 403);
+    $myDepts = meeting_user_depts($db, $forUid);
+    if (!array_intersect($ownerIds, $myDepts)) jerr('此人不屬於此項目的負責部門', 403);
+    $v = meeting_verify_own_password($db, $forUid, $password);
+    if (!$v['ok']) jerr($v['msg']);
     $db->prepare("UPDATE meeting_item SET confirm_user_id=?, confirm_user_name=?, confirm_at=NOW() WHERE item_id=? AND confirm_user_id IS NULL")
-       ->execute([$uid, $uname, $itemId]);
+       ->execute([$forUid, $attName, $itemId]);
     jout([]);
 }
 
