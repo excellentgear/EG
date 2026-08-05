@@ -198,7 +198,8 @@ foreach ($roleRows as $rr) {
             <label>年度</label><select id="yearSel"></select>
             <label>狀態（可複選篩選）</label>
             <div class="stat-filter" id="statFilter"></div>
-            <button class="btn-warm" id="btnAdd" style="display:none;margin-left:auto;"><i class="fa fa-plus"></i> 新增會議紀錄</button>
+            <button id="btnMtSetting" style="display:none;margin-left:auto;"><i class="fa fa-cog"></i> 模組設定</button>
+            <button class="btn-warm" id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增會議紀錄</button>
         </div>
         <div class="mt-table-wrap">
             <table class="mt-table">
@@ -252,11 +253,19 @@ foreach ($roleRows as $rr) {
         </div>
 
         <div class="mt-sec">
+            <div class="mt-sec-title">宣布事項</div>
+            <table class="itm-tbl">
+                <thead><tr><th style="width:30px;">NO</th><th>內容</th><th style="width:160px;">備註</th><th style="width:24px;"></th></tr></thead>
+                <tbody id="itmBodyA" data-eg-row-add="itemAddAnnounce" data-eg-row-del="itemDelLastAnnounce"></tbody>
+            </table>
+            <button type="button" class="b-att wt" onclick="itemAdd('announce')"><i class="fa fa-plus"></i> 新增宣布事項</button>
+        </div>
+        <div class="mt-sec">
             <div class="mt-sec-title">上級指示要項</div>
             <table class="itm-tbl">
                 <thead><tr><th style="width:30px;">NO</th><th>報告要點及決議事項</th><th style="width:96px;">應完成日期</th>
                     <th style="width:130px;">負責部門</th><th style="width:120px;">備註</th><th style="width:24px;"></th></tr></thead>
-                <tbody id="itmBodyD"></tbody>
+                <tbody id="itmBodyD" data-eg-row-add="itemAddDirective" data-eg-row-del="itemDelLastDirective"></tbody>
             </table>
             <button type="button" class="b-att wt" onclick="itemAdd('directive')"><i class="fa fa-plus"></i> 新增上級指示項目</button>
         </div>
@@ -265,7 +274,7 @@ foreach ($roleRows as $rr) {
             <table class="itm-tbl">
                 <thead><tr><th style="width:30px;">NO</th><th>報告要點及決議事項</th><th style="width:96px;">應完成日期</th>
                     <th style="width:130px;">負責部門</th><th style="width:120px;">備註</th><th style="width:24px;"></th></tr></thead>
-                <tbody id="itmBodyG"></tbody>
+                <tbody id="itmBodyG" data-eg-row-add="itemAddGeneral" data-eg-row-del="itemDelLastGeneral"></tbody>
             </table>
             <button type="button" class="b-att wt" onclick="itemAdd('general')"><i class="fa fa-plus"></i> 新增會議要項</button>
         </div>
@@ -273,6 +282,17 @@ foreach ($roleRows as $rr) {
         <div class="mt-sec">
             <div class="mt-sec-title">出貨目標達成率（產銷會議可插入本月數據佐證，非必要可略過）</div>
             <div id="kpiBox"></div>
+        </div>
+
+        <div class="mt-sec">
+            <div class="mt-sec-title">附件</div>
+            <div id="edAttachList" style="font-size:12px;"></div>
+            <div style="margin-top:5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                <input type="file" id="edAttachFile" style="font-size:12px;">
+                <input type="text" id="edAttachType" maxlength="100" placeholder="附件類型／說明(自由輸入，選填)" style="width:220px;">
+                <button type="button" class="b-att" onclick="edUploadAttach()"><i class="fa fa-upload"></i> 上傳</button>
+                <span style="font-size:11px;color:#8a6d45;">單檔上限 20MB</span>
+            </div>
         </div>
     </div>
     <div class="m-foot">
@@ -291,7 +311,8 @@ foreach ($roleRows as $rr) {
     <div class="m-body view-box" id="viewBody"></div>
     <div class="m-foot">
         <button class="b-cancel" onclick="printBlankSignSheet()"><i class="fa fa-file-o"></i> 列印空白簽到表</button>
-        <button class="b-cancel" onclick="printMeetingRecord()"><i class="fa fa-print"></i> 列印會議紀錄</button>
+        <button class="b-cancel" onclick="printMeetingRecord()"><i class="fa fa-print"></i> 列印會議紀錄(預覽用)</button>
+        <button class="b-cancel" id="btnPrintFull" style="display:none;background:#F0A24B;color:#fff;" onclick="printFullRecord()"><i class="fa fa-print"></i> 列印完整紀錄(簽到表＋會議紀錄＋KPI)</button>
         <button class="b-ok" onclick="closeMask('viewMask')">關閉</button>
     </div>
 </div></div>
@@ -313,6 +334,57 @@ foreach ($roleRows as $rr) {
         </div>
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('presetMask')">關閉</button></div>
+</div></div>
+
+<!-- 模組設定（管理員）：角色設定／附件與AS文件綁定，兩個分頁在同一顆按鈕內 -->
+<div class="mt-mask" id="mtSetMask"><div class="mt-modal wide">
+    <div class="m-head"><span>模組設定</span><span class="m-close" onclick="closeMask('mtSetMask')">✕</span></div>
+    <div class="m-body">
+        <div class="va-tabs" style="display:flex;gap:4px;margin-bottom:10px;border-bottom:2px solid #E8D5B5;">
+            <button type="button" class="set-tab active" data-tab="role" onclick="setTabSwitch('role')">角色設定</button>
+            <button type="button" class="set-tab" data-tab="attach" onclick="setTabSwitch('attach')">附件與簽到表AS文件綁定</button>
+        </div>
+        <div id="setPaneRole">
+            <p style="font-size:12px;color:#8a6d45;margin:0 0 8px;">左邊選或新增角色 → 右邊改名稱、勾這個角色能看到什麼／能做什麼。權限由上而下包含：勾了「會議記錄管理員」自動含登錄與檢閱。「誰擁有這個角色」在<a href="../user/user_permissions.php" target="_blank">人員權限設定頁</a>設定，這裡只定義角色內容。</p>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+                <div style="border:1px solid #E8D5B5;border-radius:6px;background:#fff;flex:0 0 190px;">
+                    <div style="background:#F7E0BD;color:#5b3a1e;font-size:12px;font-weight:bold;padding:5px 10px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between;align-items:center;">角色
+                        <button type="button" class="b-att" id="btnRoleAdd" style="padding:1px 8px;">＋ 新增</button></div>
+                    <div id="roleList" style="max-height:280px;overflow-y:auto;"></div>
+                </div>
+                <div style="border:1px solid #E8D5B5;border-radius:6px;background:#fff;flex:1;min-width:260px;">
+                    <div style="background:#F7E0BD;color:#5b3a1e;font-size:12px;font-weight:bold;padding:5px 10px;border-radius:6px 6px 0 0;">角色內容</div>
+                    <div id="roleEdit" style="display:none;padding:10px;">
+                        <label>角色名稱</label>
+                        <div style="display:flex;gap:6px;">
+                            <input type="text" id="roleName" style="flex:1;">
+                            <button type="button" class="b-att" id="btnRoleRename">改名</button>
+                            <button type="button" class="b-att" style="color:#DD5138;" id="btnRoleDel">刪除</button>
+                        </div>
+                        <div style="font-size:12px;font-weight:bold;color:#8A5A2B;margin:10px 0 4px;">可視內容（看得到什麼）</div>
+                        <div id="featView"></div>
+                        <div style="font-size:12px;font-weight:bold;color:#8A5A2B;margin:10px 0 4px;">可操作（能做什麼）</div>
+                        <div id="featOp"></div>
+                        <button type="button" class="b-att" id="btnRoleFeatSave" style="margin-top:10px;background:#F0A24B;color:#fff;"><i class="fa fa-save"></i> 儲存功能</button>
+                    </div>
+                    <div id="roleEditHint" style="padding:24px;text-align:center;color:#8a6d45;">請在左側選一個角色，或按「＋ 新增」</div>
+                </div>
+            </div>
+        </div>
+        <div id="setPaneAttach" style="display:none;">
+            <label>附件儲存路徑（留空＝用全站預設根目錄＋「會議紀錄」子資料夾）</label>
+            <input type="text" id="setNasDir" style="width:100%;" placeholder="\\excellentnas\...\會議紀錄">
+            <button type="button" class="b-att" style="margin-top:6px;" onclick="submitNasDir()">儲存路徑</button>
+            <div style="margin-top:16px;">
+                <label>簽到表 AS 文件編號綁定</label>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <span id="signsheetDocLabel" style="flex:1;padding:6px 8px;border:1px solid #D8BE93;border-radius:4px;background:#FFF7E8;">（尚未綁定）</span>
+                    <button type="button" class="b-att" onclick="openSignsheetPicker()">選擇</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('mtSetMask')">關閉</button></div>
 </div></div>
 
 <!-- 出席人員群組（仿通知功能：公開/私人自訂群組，重用共用 co_editor_preset） -->
@@ -360,6 +432,7 @@ foreach ($roleRows as $rr) {
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -411,13 +484,14 @@ function loadMeta(cb){
     $.getJSON(API, {action:'meta'}, function(m){
         if (!m.ok){ alert(m.error||'載入失敗'); return; }
         META = m; PERMS = m.perms; DEPTS = m.departments||[]; PRESETS = m.presets||[];
+        window.__ownCompany = m.company_name;
         var $y = $('#yearSel').empty();
         (m.years||[]).forEach(function(y){ $y.append('<option value="'+y+'">'+y+' 年</option>'); });
         $y.val(m.cur_year);
         var $ad = $('#attDept').empty().append('<option value="">選部門載入人員…</option>');
         DEPTS.forEach(function(d){ $ad.append('<option value="'+d.id+'">'+esc(d.name)+'</option>'); });
         if (m.perms.canEdit) $('#btnAdd').show();
-        if (m.perms.canAdmin) $('#btnPresetMgr').show();
+        if (m.perms.canAdmin) { $('#btnPresetMgr').show(); $('#btnMtSetting').show(); }
         renderPresetUI();
         loadGroups();
         if (cb) cb();
@@ -496,13 +570,13 @@ function renderList(){
 }
 
 /* ---------- 建立/編輯 ---------- */
-var EDIT_ID = 0, ATT = [], ITEMS_D = [], ITEMS_G = [], KPI_SNAP = null;
+var EDIT_ID = 0, ATT = [], ITEMS_D = [], ITEMS_G = [], ITEMS_A = [], KPI_SNAP = null, EDIT_ATTACHES = [], TEMP_ATTACH_IDS = [];
 function openCreate(){
-    EDIT_ID = 0; ATT = []; ITEMS_D = []; ITEMS_G = []; KPI_SNAP = null;
+    EDIT_ID = 0; ATT = []; ITEMS_D = []; ITEMS_G = []; ITEMS_A = []; KPI_SNAP = null; EDIT_ATTACHES = []; TEMP_ATTACH_IDS = [];
     $('#edTitle').text('新增會議紀錄');
     $('#edSubject').val(''); $('#edDate').val(META.today); $('#edStart').val(''); $('#edEnd').val('');
     $('#edLoc').val(''); $('#edRecorder').val(META.uname);
-    renderAtt(); renderItems('directive'); renderItems('general'); renderChairSel(); renderKpiBox();
+    renderAtt(); renderItems('directive'); renderItems('general'); renderItems('announce'); renderChairSel(); renderKpiBox(); renderEdAttach();
     $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
     openMask('edMask');
 }
@@ -516,15 +590,17 @@ function openEdit(id){
         $('#edStart').val(m.start_time||''); $('#edEnd').val(m.end_time||''); $('#edLoc').val(m.location||'');
         $('#edRecorder').val(m.recorder_name||'');
         ATT = (res.attendees||[]).map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name, position_name:a.position_name||''}; });
-        ITEMS_D = []; ITEMS_G = [];
+        ITEMS_D = []; ITEMS_G = []; ITEMS_A = [];
         (res.items||[]).forEach(function(it){
             var row = {item_id:it.item_id, content:it.content, due_date:fmtDate(it.due_date),
                 owner_depts:(it.owner_depts?String(it.owner_depts).split(','):[]), remark:it.remark||'',
                 confirm_user_name:it.confirm_user_name, confirm_at:it.confirm_at};
-            (it.kind==='directive'?ITEMS_D:ITEMS_G).push(row);
+            var target = it.kind==='directive' ? ITEMS_D : (it.kind==='announce' ? ITEMS_A : ITEMS_G);
+            target.push(row);
         });
         KPI_SNAP = m.kpi_snapshot_json ? JSON.parse(m.kpi_snapshot_json) : null;
-        renderAtt(); renderItems('directive'); renderItems('general'); renderKpiBox();
+        EDIT_ATTACHES = res.attaches||[]; TEMP_ATTACH_IDS = [];
+        renderAtt(); renderItems('directive'); renderItems('general'); renderItems('announce'); renderKpiBox(); renderEdAttach();
         $('#edChair').val(m.chair_user_id||'');
         $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
         openMask('edMask');
@@ -663,14 +739,31 @@ function groupSaveConfirm(){
     }, 'json');
 }
 
-/* 會議要項雙表格：上級指示要項(kind=directive) / 會議要項(kind=general) */
-function itemsArr(kind){ return kind==='directive' ? ITEMS_D : ITEMS_G; }
+/* 會議要項三表格：宣布事項(kind=announce,無應完成日期/負責部門/簽名) / 上級指示要項(kind=directive) / 會議要項(kind=general) */
+function itemsArr(kind){ return kind==='directive' ? ITEMS_D : (kind==='announce' ? ITEMS_A : ITEMS_G); }
+function itemBodySel(kind){ return '#itmBody'+(kind==='directive'?'D':(kind==='announce'?'A':'G')); }
 function itemAdd(kind){ itemsArr(kind).push({item_id:0, content:'', due_date:'', owner_depts:[], remark:''}); renderItems(kind); }
 function itemDelLast(kind){ var a=itemsArr(kind); if (a.length) a.pop(); renderItems(kind); }
 function itemDel(kind,i){ itemsArr(kind).splice(i,1); renderItems(kind); }
 function itemEdit(kind,i,key,val){ var a=itemsArr(kind); if (a[i]) a[i][key]=val; }
+function itemAddDirective(){ itemAdd('directive'); }
+function itemDelLastDirective(){ itemDelLast('directive'); }
+function itemAddGeneral(){ itemAdd('general'); }
+function itemDelLastGeneral(){ itemDelLast('general'); }
+function itemAddAnnounce(){ itemAdd('announce'); }
+function itemDelLastAnnounce(){ itemDelLast('announce'); }
 function renderItems(kind){
     var a = itemsArr(kind), h = '';
+    if (kind === 'announce') {
+        a.forEach(function(it,i){
+            h += '<tr><td style="text-align:center;">'+(i+1)+'</td>'
+               + '<td><textarea onchange="itemEdit(\'announce\','+i+',\'content\',this.value)">'+esc(it.content||'')+'</textarea></td>'
+               + '<td><input type="text" maxlength="200" value="'+esc(it.remark||'')+'" onchange="itemEdit(\'announce\','+i+',\'remark\',this.value)"></td>'
+               + '<td><span class="att-del" onclick="itemDel(\'announce\','+i+')"><i class="fa fa-times"></i></span></td></tr>';
+        });
+        $(itemBodySel(kind)).html(h || '<tr><td colspan="4" style="color:#8a6d45;padding:6px;text-align:center;">尚未建立項目</td></tr>');
+        return;
+    }
     a.forEach(function(it,i){
         var confirmTxt = it.confirm_user_name ? ('<span class="confirm-yes">'+esc(it.confirm_user_name)+' 已確認</span>') : '<span class="confirm-no">未確認</span>';
         h += '<tr><td style="text-align:center;">'+(i+1)+'</td>'
@@ -680,7 +773,7 @@ function renderItems(kind){
            + '<td><input type="text" maxlength="200" value="'+esc(it.remark||'')+'" onchange="itemEdit(\''+kind+'\','+i+',\'remark\',this.value)" placeholder="'+confirmTxt.replace(/<[^>]+>/g,'')+'"></td>'
            + '<td><span class="att-del" onclick="itemDel(\''+kind+'\','+i+')"><i class="fa fa-times"></i></span></td></tr>';
     });
-    $('#itmBody'+(kind==='directive'?'D':'G')).html(h || '<tr><td colspan="6" style="color:#8a6d45;padding:6px;text-align:center;">尚未建立項目</td></tr>');
+    $(itemBodySel(kind)).html(h || '<tr><td colspan="6" style="color:#8a6d45;padding:6px;text-align:center;">尚未建立項目</td></tr>');
 }
 function deptPickHtml(kind,i,ids){
     var tags = '';
@@ -753,9 +846,47 @@ function gatherPayload(){
         start_time: $('#edStart').val(), end_time: $('#edEnd').val(), location: $('#edLoc').val(),
         chair_user_id: $('#edChair').val(), recorder_name: $('#edRecorder').val(),
         attendees: JSON.stringify(ATT),
-        items: JSON.stringify(ITEMS_D.map(function(it){ return $.extend({kind:'directive'}, it); })
-                    .concat(ITEMS_G.map(function(it){ return $.extend({kind:'general'}, it); })))
+        items: JSON.stringify(ITEMS_A.map(function(it){ return $.extend({kind:'announce'}, it); })
+                    .concat(ITEMS_D.map(function(it){ return $.extend({kind:'directive'}, it); }))
+                    .concat(ITEMS_G.map(function(it){ return $.extend({kind:'general'}, it); }))),
+        temp_attach_ids: TEMP_ATTACH_IDS.join(',')
     };
+}
+/* ---------- 附件（手動輸入類型/說明，草稿階段先暫存 meeting_id=0，存檔時轉正） ---------- */
+function renderEdAttach(){
+    var h='';
+    (EDIT_ATTACHES||[]).forEach(function(a){
+        h+='<div style="display:flex;gap:8px;align-items:center;border-bottom:1px dashed #EADFC8;padding:3px 0;">';
+        h+=a.exists?'<a href="'+API+'?action=download_attach&attach_id='+a.attach_id+'" target="_blank" style="color:#b5762a;flex:1;">📄 '+esc(a.original_name||'')+'</a>'
+                   :'<span style="color:#c9bda9;text-decoration:line-through;flex:1;">📄 '+esc(a.original_name||'')+'(檔案不存在)</span>';
+        h+='<span style="color:#8a6d45;font-size:11px;">'+esc(a.attach_type||'')+'　'+esc(a.created_by_name||'')+'</span>';
+        h+='<span class="att-del" style="cursor:pointer;" onclick="edDelAttach('+a.attach_id+')"><i class="fa fa-trash"></i></span></div>';
+    });
+    $('#edAttachList').html(h||'<span style="color:#8a6d45;">尚無附件</span>');
+}
+function edUploadAttach(){
+    var f=document.getElementById('edAttachFile');
+    if(!f.files.length){ alert('請選擇檔案'); return; }
+    var fd=new FormData();
+    fd.append('action','attach_upload'); fd.append('meeting_id', EDIT_ID||0);
+    fd.append('attach_type', $('#edAttachType').val()); fd.append('file', f.files[0]);
+    $.ajax({url:API,method:'POST',data:fd,processData:false,contentType:false,dataType:'json'})
+     .done(function(res){
+        if(!res.ok){ alert(res.error||'上傳失敗'); return; }
+        if (!EDIT_ID) TEMP_ATTACH_IDS.push(res.attach_id);
+        EDIT_ATTACHES.push({attach_id:res.attach_id, original_name:f.files[0].name, attach_type:$('#edAttachType').val(), exists:true, created_by_name:META.uname});
+        f.value=''; $('#edAttachType').val(''); renderEdAttach();
+     })
+     .fail(function(x){ alert('上傳失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function edDelAttach(aid){
+    if(!confirm('刪除此附件？')) return;
+    $.post(API,{action:'attach_delete',attach_id:aid},function(res){
+        if(!res.ok){ alert(res.error||'刪除失敗'); return; }
+        EDIT_ATTACHES = EDIT_ATTACHES.filter(function(a){ return a.attach_id!==aid; });
+        TEMP_ATTACH_IDS = TEMP_ATTACH_IDS.filter(function(x){ return x!==aid; });
+        renderEdAttach();
+    },'json');
 }
 function saveDraft(thenSubmit){
     if (!$.trim($('#edSubject').val())){ setErr($('#edSubject'),'errEdSubject','請輸入會議主題'); return; }
@@ -784,6 +915,7 @@ function openView(id){
         VIEW = res;
         $('#viewTitle').text(res.meeting.subject);
         $('#viewBody').html(viewHtml(res));
+        $('#btnPrintFull').toggle(res.meeting.approval_status==='done');
         openMask('viewMask');
     });
 }
@@ -798,11 +930,12 @@ function viewHtml(res){
     h += '<h5>出席人員／簽到</h5><table><tr><th>部門</th><th>職稱</th><th>姓名</th><th>簽到</th></tr>';
     (res.attendees||[]).forEach(function(a){
         var signed = +a.signed === 1;
-        h += '<tr><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td>'
+        h += '<tr data-uid="'+a.user_id+'"><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td>'
            + '<td>'+esc(a.user_name||'')+(a.is_chair?'（主席）':'')+'</td>'
-           + '<td>'+(signed ? '<span class="sign-ok"><i class="fa fa-check"></i> 已簽到（'+esc(String(a.signed_at||'').substr(0,16))+'）</span>'
-                : '<span class="sign-row"><input type="password" placeholder="本人密碼" id="pw-'+a.user_id+'">'
-                  + '<button type="button" onclick="signAttendee('+m.meeting_id+','+a.user_id+')">簽到</button></span>')+'</td></tr>';
+           + '<td>'+(signed ? '<span class="sign-ok">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name,String(a.signed_at||'').substr(0,10)):'<i class="fa fa-check"></i>')
+                + ' <span style="font-size:11px;">'+esc(String(a.signed_at||'').substr(0,16))+'</span></span>'
+                : '<span class="sign-row"><input type="password" placeholder="本人密碼，按Enter簽到" id="pw-'+a.user_id+'" data-eg-skip'
+                  + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();signAttendee('+m.meeting_id+','+a.user_id+');}"></span>')+'</td></tr>';
     });
     h += '</table>';
 
@@ -855,9 +988,17 @@ function signAttendee(mid, uidv){
     var pw = $('#pw-'+uidv).val();
     if (!pw){ alert('請輸入密碼'); return; }
     $.post(API, {action:'sign', meeting_id:mid, user_id:uidv, password:pw}, function(res){
-        if (!res.ok){ alert(res.error||'簽到失敗'); return; }
-        openView(mid);
-    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '簽到失敗'); });
+        if (!res.ok){ alert(res.error||'簽到失敗'); $('#pw-'+uidv).val('').select(); return; }
+        // 局部更新：不整個重繪(openView)避免打斷聚焦體驗，直接換掉該列＋自動蓋章＋跳到下一位未簽到欄位
+        var att = (VIEW.attendees||[]).filter(function(a){ return String(a.user_id)===String(uidv); })[0];
+        var nowStr = new Date().toISOString().slice(0,16).replace('T',' ');
+        if (att) { att.signed = 1; att.signed_at = nowStr; }
+        var stampHtml = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(att?att.user_name:'', nowStr.substr(0,10)) : '<i class="fa fa-check"></i>';
+        $('tr[data-uid="'+uidv+'"] td:last-child').html('<span class="sign-ok">'+stampHtml+' <span style="font-size:11px;">'+esc(nowStr)+'</span></span>');
+        var next = (VIEW.attendees||[]).filter(function(a){ return !(+a.signed); })[0];
+        if (next) setTimeout(function(){ $('#pw-'+next.user_id).focus(); }, 30);
+        else alert('全員已簽到');
+    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '簽到失敗'); $('#pw-'+uidv).val('').select(); });
 }
 function confirmItem(itemId){
     $.post(API, {action:'item_confirm', item_id:itemId}, function(res){
@@ -937,6 +1078,181 @@ function printBlankSignSheet(){
     var css = 'table.sf-info{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}table.sf-info td{border:1px solid #999;padding:5px 8px;text-align:left;}'
         + 'table.sf{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px;}table.sf th,table.sf td{border:1px solid #333;padding:9px 6px;text-align:center;}';
     egPrintWindow('會議簽到表', html, css, '', false);
+}
+
+/* ---------- 合併列印(簽到表→會議紀錄→出貨目標達成率)：僅主席+總經理皆簽核完成(done)才可列印，簽章一律用真圖章 ---------- */
+function printFullRecord(){
+    if (!VIEW) return;
+    var m = VIEW.meeting;
+    if (m.approval_status !== 'done') { alert('需主席與總經理皆簽核完成才能列印完整紀錄'); return; }
+    $.getJSON(API, {action:'preparer_candidates', meeting_id:m.meeting_id}, function(res){
+        if (!res.ok) { alert(res.error||'載入製表人失敗'); return; }
+        var cands = res.candidates||[];
+        if (cands.length <= 1) { doPrintFullRecord(cands.length ? cands[0].name : ''); return; }
+        var names = cands.map(function(c){ return c.name; }).join('、');
+        var pick = prompt('本次會議業務製表人有多位，請輸入其中一位姓名：\n'+names, cands[0].name);
+        if (pick === null) return;
+        doPrintFullRecord($.trim(pick) || cands[0].name);
+    });
+}
+function doPrintFullRecord(preparerName){
+    var m = VIEW.meeting, res = VIEW;
+    var signDocNo = (META.as_doc_signsheet && META.as_doc_signsheet.doc_no) || '';
+    var rows1 = (res.attendees||[]).map(function(a,i){
+        var signed = +a.signed===1;
+        var stamp = signed ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name, String(a.signed_at||'').substr(0,10)):esc(a.user_name)) : '';
+        return '<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+(a.is_chair?'（主席）':'')+'</td><td>'+stamp+'</td></tr>';
+    }).join('');
+    var page1 = '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">會議簽到表</div></div>'
+        + '<table class="sf-info"><tr><td>主題：'+esc(m.subject)+'</td><td>日期：'+fmtDate(m.meeting_date)+'</td></tr>'
+        + '<tr><td colspan="2">地點：'+esc(m.location||'—')+(m.start_time?('　時間：'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')+'</td></tr></table>'
+        + '<table class="sf"><tr><th style="width:36px;">NO</th><th>部門</th><th>職稱</th><th>姓名</th><th style="width:130px;">簽名</th></tr>'+rows1+'</table>'
+        + (signDocNo ? '<div style="text-align:right;margin-top:10px;font-size:12px;color:#333;">'+esc(signDocNo)+'</div>' : '');
+
+    function itemRows(kind){
+        return (res.items||[]).filter(function(it){ return it.kind===kind; }).map(function(it,i){
+            var deptNames = (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
+            return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+fmtDate(it.due_date)+'</td>'
+                 + '<td>'+esc(deptNames)+'</td><td>'+esc(it.confirm_user_name||'')+'</td><td>'+esc(it.remark||'')+'</td></tr>';
+        }).join('');
+    }
+    var announceRows = (res.items||[]).filter(function(it){ return it.kind==='announce'; }).map(function(it,i){
+        return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+esc(it.remark||'')+'</td></tr>';
+    }).join('');
+    var chairApp = m.chair_approval, gmApp = m.gm_approval;
+    var chairStamp = (chairApp && chairApp.approver_name)
+        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(chairApp.approver_name, String(chairApp.decided_at||'').substr(0,10), String(chairApp.approver_id)!==String(m.chair_user_id)):esc(chairApp.approver_name))
+        : '____________';
+    var gmStamp = (gmApp && gmApp.approver_name)
+        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(gmApp.approver_name, String(gmApp.decided_at||'').substr(0,10), META.gm_id!=null && String(gmApp.approver_id)!==String(META.gm_id)):esc(gmApp.approver_name))
+        : '____________';
+    var page2 = '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">會議記錄</div></div>'
+        + '<table class="sf-info"><tr><td>主題：'+esc(m.subject)+'</td><td>日期：'+fmtDate(m.meeting_date)+'</td></tr>'
+        + '<tr><td>主席：'+esc(m.chair_name||'')+'</td><td>記錄：'+esc(m.recorder_name||'')+'</td></tr>'
+        + '<tr><td colspan="2">地點：'+esc(m.location||'—')+(m.start_time?('　時間：'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')
+        + '　出席人員：'+((res.attendees||[]).map(function(a){ return esc(a.user_name); }).join('、')||'—')+'</td></tr></table>'
+        + (announceRows ? '<h5>宣布事項</h5><table class="sf"><tr><th>NO</th><th>內容</th><th>備註</th></tr>'+announceRows+'</table>' : '')
+        + (itemRows('directive') ? '<h5>上級指示要項</h5><table class="sf"><tr><th>NO</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責部門</th><th>確認簽名</th><th>備註</th></tr>'+itemRows('directive')+'</table>' : '')
+        + (itemRows('general') ? '<h5>會議要項</h5><table class="sf"><tr><th>NO</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責部門</th><th>確認簽名</th><th>備註</th></tr>'+itemRows('general')+'</table>' : '')
+        + '<table class="pt-sign" style="width:100%;margin-top:18px;"><tr><td style="width:50%;">主席確認：'+chairStamp+'</td><td style="width:50%;">總經理確認：'+gmStamp+'</td></tr></table>'
+        + '<div style="text-align:right;margin-top:10px;font-size:12px;color:#333;">2-GM-05-01</div>';
+
+    var hasKpi = !!m.kpi_snapshot_json;
+    var body = '<div style="page-break-after:always;">'+page1+'</div><div'+(hasKpi?' style="page-break-after:always;"':'')+'>'+page2+'</div>';
+    if (hasKpi) {
+        var k = JSON.parse(m.kpi_snapshot_json);
+        var madeStamp = preparerName ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(preparerName, k.data_asof||META.today):esc(preparerName)) : '____________';
+        body += '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">出貨目標達成率</div></div>'
+            + '<table class="sf-info"><tr><td>帳款月：'+esc(k.billing_month_start)+' ~ '+esc(k.billing_month_end)+'</td><td>資料基準日：'+esc(k.data_asof||'—')+'</td></tr></table>'
+            + '<table class="sf"><tr><th>目標金額</th><th>接單金額</th><th>出貨金額</th><th>退貨金額</th><th>淨營收</th><th>達成率</th></tr>'
+            + '<tr><td>'+k.target_amount.toLocaleString()+'</td><td>'+k.order_amount.toLocaleString()+'</td><td>'+k.ship_amount.toLocaleString()
+            + '</td><td>'+k.return_amount.toLocaleString()+'</td><td>'+k.revenue.toLocaleString()+'</td><td><b>'+k.achieve_rate+'%</b></td></tr></table>'
+            + '<table class="pt-sign" style="width:100%;margin-top:18px;"><tr><td>製表：'+madeStamp+'</td></tr></table>';
+    }
+    var css = 'table.sf-info{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}table.sf-info td{border:1px solid #999;padding:5px 8px;text-align:left;}'
+        + 'h5{font-size:13px;margin:10px 0 3px;}'
+        + 'table.sf{width:100%;border-collapse:collapse;font-size:12.5px;}table.sf th,table.sf td{border:1px solid #333;padding:5px;text-align:center;}table.sf td.t-left{text-align:left;}'
+        + 'table.pt-sign td{padding:14px 6px;} .stamp-wrap svg,svg.car-stamp{width:70px;height:70px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
+    egPrintWindow('會議紀錄完整版', body, css, '', false, true);
+}
+
+/* ---------- 模組設定：角色設定(仿 training_record.php) + 附件路徑/簽到表AS綁定 ---------- */
+$('#btnMtSetting').on('click', function(){ setTabSwitch('role'); loadRoles(); $('#setNasDir').val(META.attach_nas_dir||''); renderSignsheetLabel(); openMask('mtSetMask'); });
+function setTabSwitch(tab){
+    $('.set-tab').removeClass('active'); $('.set-tab[data-tab="'+tab+'"]').addClass('active');
+    $('#setPaneRole').toggle(tab==='role'); $('#setPaneAttach').toggle(tab==='attach');
+}
+var RAPI = '../../src/store/Roles_API.php';
+var ROLES = [], CURROLE = 0;
+function loadRoles(then){
+    $.getJSON(RAPI, {action:'get_roles', module:'meeting'}, function(res){
+        ROLES = res.data || [];
+        var h = '';
+        ROLES.forEach(function(r){
+            var sys = String(r.is_system)==='1';
+            h += '<div class="role-item'+(sys?' sys':'')+'" data-id="'+r.role_id+'">'+esc(r.role_name)+(sys?'（系統．固定全權）':'')+'</div>';
+        });
+        $('#roleList').html(h || '<div style="padding:10px;color:#8a6d45;">尚無角色</div>');
+        if (CURROLE) $('.role-item[data-id="'+CURROLE+'"]').addClass('on');
+        if (typeof then==='function') then();
+    });
+}
+function selRole(id){
+    var r = ROLES.filter(function(x){ return String(x.role_id)===String(id); })[0];
+    if (!r) return;
+    if (String(r.is_system)==='1'){ alert('系統角色「'+r.role_name+'」固定擁有全部權限，不可修改'); return; }
+    CURROLE = id;
+    $('.role-item').removeClass('on'); $('.role-item[data-id="'+id+'"]').addClass('on');
+    $('#roleEditHint').hide(); $('#roleEdit').show();
+    $('#roleName').val(r.role_name);
+    var vh='', oh='';
+    (META.features||[]).forEach(function(f){
+        var row = '<label class="role-feat" style="display:block;font-weight:normal;padding:2px 0;"><input type="checkbox" class="featcb" value="'+esc(f.code)+'"> '+esc(f.label)+'</label>';
+        if (f.group==='view') vh += row; else oh += row;
+    });
+    $('#featView').html(vh); $('#featOp').html(oh);
+    $.getJSON(RAPI, {action:'get_role_features', role_id:id}, function(res){
+        var has = res.data || [];
+        $('.featcb').each(function(){ $(this).prop('checked', has.indexOf(this.value)>-1 || has.indexOf('all')>-1); });
+    });
+}
+$(document).on('click', '#roleList .role-item', function(){ selRole($(this).data('id')); });
+$('#btnRoleAdd').on('click', function(){
+    var n = prompt('新角色名稱：');
+    if (!n || !$.trim(n)) return;
+    $.post(RAPI, {action:'save_role', role_name:$.trim(n), module:'meeting'}, function(r){
+        if (!r.success){ alert(r.message); return; }
+        loadRoles(function(){ selRole(r.role_id); });
+    }, 'json');
+});
+$('#btnRoleRename').on('click', function(){
+    if (!CURROLE) return;
+    var n = $.trim($('#roleName').val()||'');
+    if (!n){ alert('請輸入角色名稱'); return; }
+    $.post(RAPI, {action:'save_role', role_id:CURROLE, role_name:n}, function(r){
+        if (!r.success){ alert(r.message); return; }
+        loadRoles(); alert('已改名');
+    }, 'json');
+});
+$('#btnRoleDel').on('click', function(){
+    if (!CURROLE) return;
+    if (!confirm('確定刪除此角色？擁有此角色的人會失去對應權限。')) return;
+    $.post(RAPI, {action:'delete_role', role_id:CURROLE}, function(r){
+        if (!r.success){ alert(r.message); return; }
+        CURROLE = 0; $('#roleEdit').hide(); $('#roleEditHint').show();
+        loadRoles();
+    }, 'json');
+});
+$('#btnRoleFeatSave').on('click', function(){
+    if (!CURROLE) return;
+    var feats = $('.featcb:checked').map(function(){ return this.value; }).get();
+    $.post(RAPI, {action:'save_role_features', role_id:CURROLE, features:JSON.stringify(feats)}, function(r){
+        alert(r.success ? '已儲存。受影響的人重新整理頁面後生效。' : r.message);
+    }, 'json');
+});
+function submitNasDir(){
+    $.post(API, {action:'attach_setting_save', nas_dir:$('#setNasDir').val()}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        META.attach_nas_dir = res.attach_nas_dir; alert('已儲存');
+    }, 'json');
+}
+function renderSignsheetLabel(){
+    $('#signsheetDocLabel').text(EGAsDoc.label(META.as_doc_signsheet));
+}
+function openSignsheetPicker(){
+    $.getJSON(API, {action:'asdoc_list'}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        EGAsDoc.open({
+            docs: res.docs||[], current: META.as_doc_signsheet ? META.as_doc_signsheet.id : 0,
+            title: '會議簽到表 AS 文件綁定',
+            onSave: function(id, doc){
+                $.post(API, {action:'as_doc_signsheet_save', doc_id:id}, function(r){
+                    if (!r.ok){ alert(r.error||'儲存失敗'); return; }
+                    META.as_doc_signsheet = r.as_doc_signsheet; renderSignsheetLabel();
+                }, 'json');
+            }
+        });
+    });
 }
 
 loadMeta(function(){ loadList(); });

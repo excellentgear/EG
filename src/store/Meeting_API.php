@@ -71,7 +71,7 @@ case 'meta': {
     $presets = $db->query("SELECT preset_id, subject, location, start_time, end_time FROM meeting_preset ORDER BY sort_order, preset_id")->fetchAll(PDO::FETCH_ASSOC);
     jout(['perms'=>$perms, 'departments'=>$depts, 'years'=>$years,
           'uid'=>$uid, 'uname'=>$uname, 'today'=>date('Y-m-d'), 'cur_year'=>$cy,
-          'gm_name'=>$gm ? $gm['user_cname'] : null, 'presets'=>$presets,
+          'gm_name'=>$gm ? $gm['user_cname'] : null, 'gm_id'=>$gm ? (int)$gm['id'] : null, 'presets'=>$presets,
           'company_name'=>eg_company_full_name($db), 'features'=>MEETING_FEATURES,
           'attach_nas_dir'=>$perms['canAdmin'] ? meeting_setting_get($db, 'meeting_nas_dir', '') : null,
           'as_doc_signsheet'=>eg_asdoc_get($db, 'meeting_signsheet')]);
