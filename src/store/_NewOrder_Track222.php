@@ -74,6 +74,20 @@ try {
         return count($chgs);
     }
 
+    // 附件標籤鐵則（CLAUDE.md 鐵律8）：存檔/建單前確認符合條件的附件都已設定至少一個類別標籤，
+    // 防止略過前端直接呼叫 API 繞過（前端 Order_Attachment_API.php 允許先上傳、之後才點開設標籤，
+    // 但正式存檔這一關一定要補齊）。回傳 null＝通過；否則為列出未設標籤檔名的錯誤訊息。
+    function eg_order_attach_check_tagged(PDO $db, string $whereSql, array $params): ?string {
+        try {
+            $st = $db->prepare("SELECT original_name, filename FROM order_attachments WHERE $whereSql AND (category_ids IS NULL OR category_ids='')");
+            $st->execute($params);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) { return null; } // 表尚未建立＝該功能尚未使用過，視為通過
+        if (!$rows) return null;
+        $names = array_map(fn($r) => $r['original_name'] ?: $r['filename'], $rows);
+        return '下列附件尚未設定類別標籤，請設定後再存檔：' . implode('、', $names);
+    }
+
     // OP轉訂單用：把報價項目 process_notes（逗號分隔 sub_tag_id）轉成製程名稱字串（・連接）
     function eg_process_names_for(PDO $db, ?string $process_notes): string {
         if (empty($process_notes)) return '';
@@ -95,6 +109,12 @@ try {
 
     // ── 新增 ──────────────────────────────────────────────────────────
     if (isset($_POST['or_new']) || isset($_POST['or_new_copy'])) {
+        // 附件標籤鐵則：這批暫存附件全部設好標籤才能存檔，否則擋下（不建立訂單）
+        $batchKey = trim($_POST['batch_key'] ?? '');
+        if ($batchKey !== '') {
+            $tagErr = eg_order_attach_check_tagged($db, "batch_key=? AND status='temp'", [$batchKey]);
+            if ($tagErr !== null) { echo json_encode(['success' => false, 'message' => $tagErr]); exit; }
+        }
         $sql = "INSERT INTO order_track SET
                     Order_oo         = :OrderNo,
                     d_id             = :d_id,
@@ -149,7 +169,6 @@ try {
         $stmt->execute();
         $newId = $db->lastInsertId();
         // 新增訂單附件暫存轉正：畫面開啟時前端產生 batch_key，存檔前上傳的附件先存 temp，這裡歸給剛建立的訂單
-        $batchKey = trim($_POST['batch_key'] ?? '');
         if ($batchKey !== '') {
             try {
                 $db->prepare("UPDATE order_attachments SET order_id=?, status='active', expire_at=NULL, batch_key=NULL WHERE batch_key=? AND status='temp'")
@@ -162,6 +181,10 @@ try {
 
     // ── 更新 ──────────────────────────────────────────────────────────
     if (isset($_POST['or_update'])) {
+        // 附件標籤鐵則：這張訂單目前的正式附件全部設好標籤才能存檔
+        $tagErr = eg_order_attach_check_tagged($db, "order_id=? AND status='active'", [intval($_POST['Order_id'])]);
+        if ($tagErr !== null) { echo json_encode(['success' => false, 'message' => $tagErr]); exit; }
+
         $selStmt = $db->prepare("SELECT Delivery_date, Delivery_date_2 FROM order_track WHERE Order_id = ?");
         $selStmt->execute([intval($_POST['Order_id'])]);
         $row = $selStmt->fetch(PDO::FETCH_ASSOC);
@@ -536,6 +559,13 @@ try {
             echo json_encode(['success' => false, 'message' => '未提供任何要轉單的料號項目']); exit;
         }
 
+        // 附件標籤鐵則：這批暫存附件全部設好標籤才能建單，否則整批擋下（不建立任何一筆訂單）
+        $opBatchKey = trim($_POST['batch_key'] ?? '');
+        if ($opBatchKey !== '') {
+            $tagErr = eg_order_attach_check_tagged($db, "batch_key=? AND status='temp'", [$opBatchKey]);
+            if ($tagErr !== null) { echo json_encode(['success' => false, 'message' => $tagErr]); exit; }
+        }
+
         // 相容舊表：order_track.qty_over_range（轉單數量超出報價階梯區間旗標）首次執行自動補欄
         try { $db->query("SELECT qty_over_range FROM order_track LIMIT 1"); }
         catch (PDOException $e) {
@@ -712,15 +742,14 @@ try {
             // 附件歸屬：OP轉訂單畫面二上傳的附件先存在暫存批次(batch_key)，這裡依料號歸給剛建立的訂單。
             // linked_part_no 有值＝只歸給該料號對應的新訂單；NULL(共用/全部)＝這批新建的訂單都要有，
             // 一個實體檔可以被多筆 order_attachments 列共用參照（filename 相同），不必複製檔案。
-            $batchKey = trim($_POST['batch_key'] ?? '');
-            if ($batchKey !== '' && $created) {
+            if ($opBatchKey !== '' && $created) {
                 try {
                     $partToOrderIds = [];
                     foreach ($created as $c) { $partToOrderIds[$c['d_id']][] = $c['order_id']; }
                     $allOrderIds = array_column($created, 'order_id');
                     $st = $db->prepare("SELECT id, linked_part_no, filename, original_name, category_ids, file_size, uploaded_by
                                         FROM order_attachments WHERE batch_key=? AND status='temp'");
-                    $st->execute([$batchKey]);
+                    $st->execute([$opBatchKey]);
                     $upd = $db->prepare("UPDATE order_attachments SET order_id=?, status='active', expire_at=NULL, batch_key=NULL WHERE id=?");
                     $ins = $db->prepare("INSERT INTO order_attachments (order_id, linked_part_no, filename, original_name, category_ids, file_size, uploaded_by, status)
                                         VALUES (?,?,?,?,?,?,?,'active')");

@@ -34,6 +34,18 @@ function _oaIsAdmin(PDO $pdo, int $uid): bool {
     catch (Exception $e) { return true; }
 }
 
+// 本頁使用的附件標籤子集（避免共用類別表全部~16筆一次列出很混亂）；
+// 未設定過（system_settings 沒有這筆或空字串）＝尚未客製化，顯示全部類別
+function oaEnabledCatIds(PDO $pdo): ?array {
+    try {
+        $st = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key='order_attach_enabled_cats'");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if ($v === false || $v === null || trim((string)$v) === '') return null;
+        return array_values(array_filter(array_map('intval', explode(',', $v))));
+    } catch (Exception $e) { return null; }
+}
+
 function oaFmtSize(int $bytes): string {
     if ($bytes < 1024)      return $bytes . ' B';
     if ($bytes < 1024*1024) return round($bytes/1024, 1) . ' KB';
@@ -85,13 +97,52 @@ oaPurgeExpired($pdo, $dir);
 
 switch ($action) {
 
-    // ── 取得類別清單（共用報價單的 quotation_file_categories）──────────
+    // ── 取得類別清單（共用報價單的 quotation_file_categories；依本頁客製化子集過濾）──
     case 'get_categories':
         try {
-            $rows = $pdo->query("SELECT id, category_name, sort_order FROM quotation_file_categories WHERE is_active=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+            $enabled = oaEnabledCatIds($pdo);
+            if ($enabled !== null && !$enabled) {
+                $rows = []; // 已客製化但一個都沒勾（極少見）：不擋，顯示空清單即可
+            } else {
+                $sql = "SELECT id, category_name, sort_order FROM quotation_file_categories WHERE is_active=1";
+                $par = [];
+                if ($enabled !== null) {
+                    $ph = implode(',', array_fill(0, count($enabled), '?'));
+                    $sql .= " AND id IN ($ph)";
+                    $par = $enabled;
+                }
+                $sql .= " ORDER BY sort_order, id";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($par);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            }
         } catch (Exception $e) { $rows = []; }
         echo json_encode(['success' => true, 'categories' => $rows]);
         break;
+
+    // ── 本頁使用的附件標籤設定：取得全部類別＋目前已啟用的子集（設定跳窗用）──
+    case 'get_categories_setting': {
+        try {
+            $all = $pdo->query("SELECT id, category_name, sort_order FROM quotation_file_categories WHERE is_active=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) { $all = []; }
+        $enabled = oaEnabledCatIds($pdo);
+        echo json_encode(['success' => true, 'categories' => $all, 'enabled_ids' => $enabled, 'customized' => $enabled !== null]);
+        break;
+    }
+    // ── 儲存本頁使用的附件標籤子集（僅管理員）───────────────────
+    case 'save_categories_setting': {
+        if (!_oaIsAdmin($pdo, $uid)) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'僅管理員可設定']); break; }
+        $ids = array_values(array_filter(array_map('intval', explode(',', trim($_POST['category_ids'] ?? '')))));
+        $val = implode(',', $ids); // 允許存空字串＝客製化但目前一個都沒勾
+        $uname = $_SESSION['user_cname'] ?? ($_SESSION['userName'] ?? 'system');
+        $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by, updated_at)
+                       VALUES ('order_attach_enabled_cats', ?, ?, ?, NOW())
+                       ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value),
+                          updated_by_id=VALUES(updated_by_id), updated_by=VALUES(updated_by), updated_at=NOW()")
+            ->execute([$val, ($uid ?: null), $uname]);
+        echo json_encode(['success' => true, 'message' => '已儲存']);
+        break;
+    }
 
     // ── 上傳檔案 ─────────────────────────────────────────────
     case 'upload_file': {
@@ -99,10 +150,10 @@ switch ($action) {
         $orderId  = intval($_POST['order_id'] ?? 0);
         $batchKey = trim($_POST['batch_key'] ?? '');
         $linkPart = trim($_POST['linked_part_no'] ?? '') ?: null;
-        // 附件標籤鐵則（CLAUDE.md 鐵律8）：沒有勾選至少一個類別標籤一律不准存檔，後端與前端雙重擋
+        // 附件標籤鐵則（CLAUDE.md 鐵律8）：允許先批次上傳再逐一點開設定標籤，但存檔/建單前
+        // 一律要補齊（見 _NewOrder_Track222.php 的 or_new/or_update/create_orders_from_quotes 檢查）
         $catIds = array_values(array_filter(array_map('intval', explode(',', trim($_POST['category_ids'] ?? '')))));
-        if (!$catIds) { echo json_encode(['success'=>false,'message'=>'請先勾選至少一個附件類別標籤']); break; }
-        $catStr = implode(',', $catIds);
+        $catStr = $catIds ? implode(',', $catIds) : null;
         if ($orderId <= 0 && $batchKey === '') { echo json_encode(['success'=>false,'message'=>'缺少訂單ID或暫存批次碼']); break; }
         if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
             echo json_encode(['success'=>false,'message'=>'上傳失敗（檔案錯誤）']); break;
