@@ -7065,8 +7065,9 @@ foreach($dCounts as $c) {
                 // 拆批按鈕：編輯模式下顯示
                 $('#btn-open-split').show().data('order-id', data.Order_id);
 
-                // 附件：編輯模式已有真實 Order_id，直接載入正式附件（不使用暫存批次碼）
-                $('#order_attach_batch_key').val('');
+                // 附件：既有正式附件直接載入；本次編輯中新上傳的附件仍先走暫存批次碼，
+                // 按「確認更新」才歸給這張訂單，不按存檔就關閉視窗＝暫存到期自動清除（比照新增訂單）
+                $('#order_attach_batch_key').val(orderAttachNewBatchKey());
                 orderAttachRefresh(data.Order_id);
 
                 $('#newOrderModal').modal('show');
@@ -7130,7 +7131,7 @@ foreach($dCounts as $c) {
                 '<span class="oa-tag-toggle" style="cursor:pointer;color:#337ab7;font-size:10px;"><i class="fa fa-tags"></i> 標籤</span>' +
                 '<span class="oa-file-del" style="margin-left:auto;color:#c0392b;cursor:pointer;"><i class="fa fa-trash"></i></span>' +
                 '</div>' +
-                '<div class="oa-tag-panel" style="display:none;padding:4px 0 4px 22px;">' + panelHtml +
+                '<div class="oa-tag-panel" style="display:' + (tagged ? 'none' : 'block') + ';padding:4px 0 4px 22px;">' + panelHtml +
                 '<button type="button" class="btn btn-xs btn-primary oa-tag-apply" style="margin-left:4px;">套用</button></div>' +
                 '</div>';
         }
@@ -7173,9 +7174,11 @@ foreach($dCounts as $c) {
             if (!files || !files.length) { $list.html('<span style="color:#aaa;">尚無附件</span>'); return; }
             $list.html(files.map(function(f) { return oaBuildFileRowHtml(f, orderAttachCats, false); }).join(''));
         }
-        // orderId 有值＝編輯模式（正式附件）；未傳＝新增模式，用目前的 batch_key 查暫存附件
+        // orderId 有值＝編輯模式，合併顯示既有正式附件(order_id)＋本次編輯中新上傳尚未存檔的暫存附件(batch_key)；
+        // 新增模式 orderId 為空，只查 batch_key
         function orderAttachRefresh(orderId) {
-            var params = orderId ? { action: 'list_files', order_id: orderId } : { action: 'list_files', batch_key: $('#order_attach_batch_key').val() };
+            var params = { action: 'list_files', batch_key: $('#order_attach_batch_key').val() || '' };
+            if (orderId) params.order_id = orderId;
             function doList() {
                 $.post(ORDER_ATTACH_API, params, function(res) {
                     orderAttachRenderList(res.success ? res.files : []);
@@ -7190,18 +7193,20 @@ foreach($dCounts as $c) {
                 doList();
             }
         }
-        // 批次上傳：可一次選多檔；預設標籤（若有勾選）套用到全部檔案，不勾也能先上傳、之後再逐一設定
+        // 批次上傳：可一次選多檔；預設標籤（若有勾選）套用到全部檔案，不勾也能先上傳、之後再逐一設定。
+        // 一律走暫存批次碼（即使是編輯既有訂單）：要按「確認更新/新增」才轉正歸屬到訂單，不按存檔就關閉視窗
+        // 暫存到期(3天)自動清除，避免半路關視窗卻已經憑空掛上訂單。
         function orderAttachUpload(fileList) {
             if (!fileList || !fileList.length) return;
             var presetCats = [];
             $('#order-attach-cats input:checked').each(function() { presetCats.push($(this).val()); });
-            var orderId = parseInt($('#hidden_Order_id').val()) || 0;
             var batchKey = $('#order_attach_batch_key').val() || '';
+            var orderIdForRefresh = parseInt($('#hidden_Order_id').val()) || 0;
             var tasks = [];
             Array.prototype.forEach.call(fileList, function(file) {
                 var fd = new FormData();
                 fd.append('action', 'upload_file');
-                fd.append('order_id', orderId);
+                fd.append('order_id', 0);
                 fd.append('batch_key', batchKey);
                 fd.append('category_ids', presetCats.join(','));
                 fd.append('file', file);
@@ -7209,7 +7214,7 @@ foreach($dCounts as $c) {
             });
             $.when.apply($, tasks).always(function() {
                 $('#order-attach-file-input').val('');
-                orderAttachRefresh(orderId || null);
+                orderAttachRefresh(orderIdForRefresh || null);
             });
         }
         // 訂單附件儲存路徑設定（訂單頁「設定」跳窗內的獨立區塊，與訂單變更設定分開儲存，僅管理員可存）

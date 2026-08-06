@@ -181,8 +181,13 @@ try {
 
     // ── 更新 ──────────────────────────────────────────────────────────
     if (isset($_POST['or_update'])) {
-        // 附件標籤鐵則：這張訂單目前的正式附件全部設好標籤才能存檔
-        $tagErr = eg_order_attach_check_tagged($db, "order_id=? AND status='active'", [intval($_POST['Order_id'])]);
+        $editOrderId = intval($_POST['Order_id']);
+        $editBatchKey = trim($_POST['batch_key'] ?? '');
+        // 附件標籤鐵則：這張訂單既有的正式附件、以及這次編輯中新上傳尚未存檔的暫存附件，全部設好標籤才能存檔
+        $tagErr = eg_order_attach_check_tagged($db, "order_id=? AND status='active'", [$editOrderId]);
+        if ($tagErr === null && $editBatchKey !== '') {
+            $tagErr = eg_order_attach_check_tagged($db, "batch_key=? AND status='temp'", [$editBatchKey]);
+        }
         if ($tagErr !== null) { echo json_encode(['success' => false, 'message' => $tagErr]); exit; }
 
         $selStmt = $db->prepare("SELECT Delivery_date, Delivery_date_2 FROM order_track WHERE Order_id = ?");
@@ -245,6 +250,14 @@ try {
             $stmt->bindParam(':Delivery_date', $_POST['orderDdate']);
         }
         $stmt->execute();
+        // 編輯訂單附件暫存轉正：這次編輯中上傳的附件先存 temp，按下更新才歸給這張既有訂單；
+        // 沒按更新就關閉視窗＝暫存到期(3天)自動清除，不會憑空掛到訂單上
+        if ($editBatchKey !== '') {
+            try {
+                $db->prepare("UPDATE order_attachments SET order_id=?, status='active', expire_at=NULL, batch_key=NULL WHERE batch_key=? AND status='temp'")
+                   ->execute([$editOrderId, $editBatchKey]);
+            } catch (PDOException $e) { /* order_attachments 尚未建表（該功能尚未使用過）：略過 */ }
+        }
         echo json_encode(['success' => true, 'message' => '更新成功']);
         exit;
     }

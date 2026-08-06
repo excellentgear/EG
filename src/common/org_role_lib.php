@@ -32,6 +32,9 @@ if (!defined('EG_ORG_ROLES')) define('EG_ORG_ROLES', [
     'mgmt_rep'      => ['label'=>'管理代表',     'type'=>'user', 'desc'=>'AS9100 管理代表'],
     'hr_signer'     => ['label'=>'人事簽章人員', 'type'=>'user', 'desc'=>'人事表單「人事」欄的簽章人；應同時具備 HR 相關頁面的管理員權限'],
     'hr_reviewer'   => ['label'=>'人事表單審核者', 'type'=>'user', 'desc'=>'人事表單「審核」欄；留空＝自動取「人事／管理部門」的部門主管'],
+    // ── 部門或人員擇一類（「部門內任一主管，或固定某關鍵人員，都未設定則自動判斷」）──
+    'vendor_audit_plan_approver' => ['label'=>'供應商稽核計劃核准', 'type'=>'dept_or_user',
+        'desc'=>'年度稽核計劃送出後的核准人。綁部門＝該部門(含子部門)內任一主管皆可核准(核准人職級不可低於送出者)；綁人員＝固定該人核准；兩者都未設定＝自動依「供應商稽核計劃」目前綁定的 AS 文件(2-PH-01-06)所屬部門，套用同一套「部門內任一主管」規則。'],
 ]);
 
 if (!function_exists('eg_org_ensure_schema')) {
@@ -191,7 +194,9 @@ function eg_org_save(PDO $db, string $key, ?int $deptId, ?int $userId, string $b
     $roles = EG_ORG_ROLES;
     if (!isset($roles[$key])) return;
     $type = $roles[$key]['type'];
-    if ($type === 'dept') $userId = null; else $deptId = null;
+    if ($type === 'dept') $userId = null;
+    elseif ($type === 'user') $deptId = null;
+    elseif ($type === 'dept_or_user' && $deptId) $userId = null; // 兩者都填時部門優先，人員視為未設定
     if ($deptId === null && $userId === null) {
         $db->prepare("DELETE FROM org_role_binding WHERE role_key=?")->execute([$key]);
         return;

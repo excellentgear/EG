@@ -182,30 +182,35 @@ switch ($action) {
                 ->execute([$orderId, $linkPart, $catStr, $fname, $orig, $sizeStr, $uid]);
         } else {
             $pdo->prepare("INSERT INTO order_attachments (order_id, batch_key, linked_part_no, category_ids, filename, original_name, file_size, uploaded_by, status, expire_at)
-                           VALUES (0,?,?,?,?,?,?,?,'temp', DATE_ADD(NOW(), INTERVAL 2 DAY))")
+                           VALUES (0,?,?,?,?,?,?,?,'temp', DATE_ADD(NOW(), INTERVAL 3 DAY))")
                 ->execute([$batchKey, $linkPart, $catStr, $fname, $orig, $sizeStr, $uid]);
         }
         echo json_encode(['success' => true, 'id' => (int)$pdo->lastInsertId()]);
         break;
     }
 
-    // ── 列出附件（依 order_id 或 batch_key）──────────────────
+    // ── 列出附件（依 order_id 或 batch_key，兩者可同時給）──────
+    // 編輯既有訂單時：既有正式附件(order_id)＋這次編輯中新上傳、尚未按更新前的暫存附件(batch_key)要合併顯示，
+    // 上傳一律先進暫存，按「確認更新/新增」才轉正歸屬到這張訂單；不存檔就關閉視窗＝暫存到期自動清除（見鐵律5）。
     case 'list_files': {
         $orderId  = intval($_POST['order_id'] ?? $_GET['order_id'] ?? 0);
         $batchKey = trim($_POST['batch_key'] ?? $_GET['batch_key'] ?? '');
         if ($orderId <= 0 && $batchKey === '') { echo json_encode(['success'=>true,'files'=>[]]); break; }
+        $rows = [];
         if ($orderId > 0) {
             $stmt = $pdo->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.category_ids, a.linked_part_no, a.status,
                                           DATE_FORMAT(a.uploaded_at,'%Y-%m-%d %H:%i') AS uploaded_at
                                    FROM order_attachments a WHERE a.order_id=? AND a.status='active' ORDER BY a.id");
             $stmt->execute([$orderId]);
-        } else {
-            $stmt = $pdo->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.category_ids, a.linked_part_no, a.status,
-                                          DATE_FORMAT(a.uploaded_at,'%Y-%m-%d %H:%i') AS uploaded_at
-                                   FROM order_attachments a WHERE a.batch_key=? AND a.status='temp' ORDER BY a.id");
-            $stmt->execute([$batchKey]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         }
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if ($batchKey !== '') {
+            $stmt2 = $pdo->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.category_ids, a.linked_part_no, a.status,
+                                           DATE_FORMAT(a.uploaded_at,'%Y-%m-%d %H:%i') AS uploaded_at
+                                    FROM order_attachments a WHERE a.batch_key=? AND a.status='temp' ORDER BY a.id");
+            $stmt2->execute([$batchKey]);
+            $rows = array_merge($rows, $stmt2->fetchAll(PDO::FETCH_ASSOC));
+        }
         $catMap = [];
         try {
             foreach ($pdo->query("SELECT id, category_name FROM quotation_file_categories")->fetchAll(PDO::FETCH_ASSOC) as $c) {
