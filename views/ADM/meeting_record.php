@@ -1302,14 +1302,16 @@ function decide(mid, level, decision){
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '處理失敗'); });
 }
 
-/* ---------- 列印（不含電子簽章，供現場紙本簽名／掃描） ---------- */
-function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount){
+/* ---------- 列印（不含電子簽章，供現場紙本簽名／掃描） ----------
+   showPageCounter(2026-08-06使用者明確要求寫進規則，比照ai-rules/16第二節「多頁才顯示」)：只有一頁的表單不印「第X頁/共Y頁」，
+   用 onload 後量測 document.body.scrollHeight 是否超過單頁可用高度，超過才動態插入 @bottom-left 頁碼CSS；
+   不傳(undefined)＝預設開啟此判斷，doPrintFullRecord()等合併多份獨立文件的情境需明確傳 false 整個關掉(彼此不算同一份報表頁數)。 */
+function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount, showPageCounter){
+    if (showPageCounter === undefined) showPageCounter = true;
     var asCss = String(docNo||'').replace(/['\\]/g,'');
     var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';'
             + (pageCount
-                ? 'margin:12mm 8mm 16mm;'
-                  + " @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#333; }"
-                  + (asCss ? " @bottom-right{ content:'"+asCss+"'; font-size:9pt; color:#333; }" : '')
+                ? 'margin:12mm 8mm 16mm;' + (asCss ? " @bottom-right{ content:'"+asCss+"'; font-size:9pt; color:#333; }" : '')
                 : 'margin:0;')
             + '}'
             + (pageCount ? '' : 'html,body{margin:0;padding:0;}')
@@ -1321,9 +1323,16 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount){
             + (extraCss||'');
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
+    var onloadJs = (pageCount && showPageCounter)
+        ? ('var onePageA4=('+(landscape?'210':'297')+'-28)*96/25.4;'
+          +'if(document.body.scrollHeight>onePageA4*0.92){'
+          +'var st=document.createElement(\'style\');'
+          +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
+          +'document.head.appendChild(st);}')
+        : '';
     w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
         + bodyHtml
-        + '<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+        + '<scr'+'ipt>window.onload=function(){'+onloadJs+'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
     w.document.close();
 }
 /* 會議記錄/簽到表 列印共用版面：完全比照公司實體表單附件(2-GM-05-01)，橫式列印。
@@ -1468,9 +1477,8 @@ function resolvePreparerThenPrint(cb){
         cb(pick===null ? '' : ($.trim(pick) || cands[0].name));
     });
 }
-/* 印多份文件合在一次列印工作時(如會議記錄+出貨目標達成率、或再加簽到表)，每份各自一張A4、各自的頁尾內容(見 docNoMode='inline')，
-   彼此不算同一份報表的第幾頁，所以不印「第X頁/共Y頁」——蓋掉 egPrintWindow 內建的 @bottom-left 頁碼(但仍靠 pageCount=true 拿到穩定的多頁邊界)。 */
-var NO_PAGE_COUNTER_CSS = '@page{ @bottom-left{ content:none; } }';
+/* 印多份文件合在一次列印工作時(如會議記錄+出貨目標達成率、或再加簽到表)，每份各自一張A4，
+   彼此不算同一份報表的第幾頁，所以一律不印「第X頁/共Y頁」(egPrintWindow 第7參數 showPageCounter=false)。 */
 function printMeetingRecord(){
     if (!VIEW) return;
     resolvePreparerThenPrint(function(preparerName){
@@ -1480,8 +1488,7 @@ function printMeetingRecord(){
         // 不能緊接在表格/簽章後面)，不再靠 egPrintWindow 的 @page bottom-right(Chrome列印對此支援不穩定)
         var page1 = meetingRecordPageHtml(m, res, 'fixed');
         var body = hasKpi ? ('<div style="page-break-after:always;">'+page1+'</div><div>'+kpiPageHtml(m, preparerName)+'</div>') : page1;
-        var css = mrCss() + (hasKpi ? NO_PAGE_COUNTER_CSS : '');
-        egPrintWindow('會議記錄', body, css, '', true, true);
+        egPrintWindow('會議記錄', body, mrCss(), '', true, true, !hasKpi);
     });
 }
 function printBlankSignSheet(){
@@ -1503,19 +1510,20 @@ function printFullRecord(){
     resolvePreparerThenPrint(function(preparerName){ doPrintFullRecord(preparerName); });
 }
 /* 合併列印同一份工作內混兩種方向(簽到表要直式/會議記錄與KPI要橫式)：CSS @page 只能設一種預設方向，
-   簽到表頁改用「具名頁」(page:mr-portrait) 覆蓋成直式，其餘頁沿用預設橫式；各份文件編號各不同，改在版面內文各自印(docNoMode='inline')；
-   三份都是各自獨立的A4文件只是排在同一次列印工作，不印跨文件的頁碼。 */
+   簽到表頁改用「具名頁」(page:mr-portrait) 覆蓋成直式，其餘頁沿用預設橫式；各份文件編號各自用 position:fixed 釘在
+   自己那一頁的右下角(docNoMode='fixed'，2026-08-06使用者實測要求：合併列印時也要跟單獨列印一樣釘右下角，內文寫法不行)；
+   三份都是各自獨立的A4文件只是排在同一次列印工作，不印跨文件的頁碼(showPageCounter=false)。 */
 function doPrintFullRecord(preparerName){
     var m = VIEW.meeting, res = VIEW;
-    var page1 = signSheetPageHtml(m, res.attendees, true, 'inline');
-    var page2 = meetingRecordPageHtml(m, res, 'inline');
+    var page1 = signSheetPageHtml(m, res.attendees, true, 'fixed');
+    var page2 = meetingRecordPageHtml(m, res, 'fixed');
     var hasKpi = !!m.kpi_snapshot_json;
     var body = '<div class="mr-portrait-page" style="page-break-after:always;">'+page1+'</div><div'+(hasKpi?' style="page-break-after:always;"':'')+'>'+page2+'</div>'
         + (hasKpi ? ('<div>'+kpiPageHtml(m, preparerName)+'</div>') : '');
-    var css = mrCss() + NO_PAGE_COUNTER_CSS
+    var css = mrCss()
         + '@page mr-portrait{size:A4 portrait;margin:12mm 8mm 16mm;}'
         + '.mr-portrait-page{page:mr-portrait;}';
-    egPrintWindow('會議紀錄完整版', body, css, '', true, true);
+    egPrintWindow('會議紀錄完整版', body, css, '', true, true, false);
 }
 
 /* ---------- 模組設定：角色設定(仿 training_record.php) + 附件路徑/簽到表AS綁定 ---------- */
