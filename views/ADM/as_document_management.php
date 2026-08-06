@@ -570,6 +570,10 @@ if ($deptPerm === 'R') {
           <strong>個人另有指派時以個人為準（覆蓋職稱）</strong>；管理員恆有全部權限。此處管理「角色定義」與「個人指派」。
         </p>
         <h4><i class="fa fa-id-badge"></i> 角色與功能</h4>
+        <p class="text-muted" style="font-size:12px;">
+          <i class="fa fa-info-circle"></i> 「上傳紀錄」＝表單填寫紀錄／留存附件的上傳（紀錄按鈕內），與「新增文件」（開新的 AS 文件編號）已分開設定；
+          唯一相容例外：<strong>勾了「新增文件」會自動一併具備「上傳紀錄」</strong>（沿用舊版行為），但反過來只勾「上傳紀錄」<strong>不會</strong>取得「新增文件」的權限，兩者非對等互授。
+        </p>
         <table class="table table-bordered table-condensed" style="font-size:13px;">
           <thead><tr><th style="width:160px;">角色</th><th>功能</th><th style="width:120px;">操作</th></tr></thead>
           <tbody id="roleDefBody"></tbody>
