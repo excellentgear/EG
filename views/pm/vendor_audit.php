@@ -224,34 +224,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             #vaListPrintHead .tt { font-size:16px; font-weight:bold; margin-top:3px; }
             #vaListPrintHead .sub { font-size:11px; color:#444; margin-top:2px; }
         }
-        /* 供應商品質系統評鑑記錄表「直接列印跳窗畫面」：列印時只留 #rsMask 本身內容，
-           退掉遮罩/彈窗外觀讓它以一般文件方式排版，交給瀏覽器橫式A4原生縮放，不再另建隱藏視窗手工拼版面尺寸。
-           啟用方式：JS 於列印前對 <body> 加上 va-print-rs class，列印完成後移除。 */
-        #rsPrintHead, #rsSignBox, #rsAttachPrintBox { display:none; }
-        @media print {
-            body.va-print-rs .nav_menu, body.va-print-rs .left_col, body.va-print-rs footer,
-            body.va-print-rs .page-title, body.va-print-rs .va-toolbar, body.va-print-rs .va-tabs,
-            body.va-print-rs .va-stat, body.va-print-rs .va-remind, body.va-print-rs .va-table-wrap,
-            body.va-print-rs .va-pager, body.va-print-rs #vaListPrintHead,
-            body.va-print-rs .va-mask:not(#rsMask) { display:none !important; }
-            body.va-print-rs #rsMask { display:block !important; position:static !important; inset:auto !important;
-                background:none !important; z-index:auto !important; }
-            body.va-print-rs #rsMask .va-modal { max-width:none !important; max-height:none !important; margin:0 !important;
-                box-shadow:none !important; border-radius:0 !important; display:block !important; }
-            body.va-print-rs #rsMask .m-head, body.va-print-rs #rsMask .m-foot,
-            body.va-print-rs #rsMask #rsAttachBox { display:none !important; }
-            body.va-print-rs #rsMask .m-body { overflow:visible !important; padding:0 !important; }
-            body.va-print-rs #rsPrintHead, body.va-print-rs #rsSignBox, body.va-print-rs #rsAttachPrintBox { display:block !important; }
-            body.va-print-rs .rs-chart-wrap-live { flex:0 0 420px !important; }
-            body.va-print-rs .rs-chart-wrap-live svg { width:100% !important; height:auto !important; }
-            body.va-print-rs #rsMask table.af-table { font-size:15px !important; }
-            body.va-print-rs #rsMask table.af-table th, body.va-print-rs #rsMask table.af-table td { padding:7px 8px !important; }
-            body.va-print-rs .attach-page { page-break-before:always; }
-            /* 圖章列印尺寸全站統一91px正方形(ai-rules/18第6條)，畫面顯示尺寸(eg_stamp.js預設76px)不受此限，
-               僅列印時覆蓋；此頁直接列印#rsMask前一直漏了這條，導致印出來章比規定小 */
-            body.va-print-rs .stamp-wrap svg, body.va-print-rs svg.car-stamp { width:91px !important; height:91px !important;
-                -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
-        }
     </style>
 </head>
 <body class="nav-sm">
@@ -573,7 +545,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <div class="va-mask" id="rsMask"><div class="va-modal xwide">
     <div class="m-head"><span id="rsTitle">供應商品質系統評鑑記錄表</span><span class="m-close" onclick="closeMask('rsMask')">✕</span></div>
     <div class="m-body">
-        <div id="rsPrintHead" style="display:none;text-align:center;"></div>
         <div id="rsInfo" style="font-size:13px;color:#5b3a1e;margin-bottom:8px;"></div>
         <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
             <div style="flex:1;min-width:280px;">
@@ -581,7 +552,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <tbody id="rsCatBody"></tbody></table>
                 <div id="rsConc" class="af-summary" style="margin-top:8px;"></div>
             </div>
-            <div class="rs-chart-wrap-live" style="flex:0 0 360px;"><div id="rsChart" style="height:320px;"></div></div>
+            <div style="flex:0 0 360px;"><div id="rsChart" style="height:320px;"></div></div>
         </div>
         <div class="af-attach" id="rsAttachBox" style="margin-top:10px;">
             <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;"><i class="fa fa-paperclip"></i> 佐證附件（列印後供應商簽名回傳掃描檔）</div>
@@ -592,8 +563,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <button type="button" class="b-att2" onclick="rsUploadAttach()"><i class="fa fa-upload"></i> 上傳</button>
             </div>
         </div>
-        <div id="rsSignBox" style="display:none;"></div>
-        <div id="rsAttachPrintBox" style="display:none;"></div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="printRecordSheet()"><i class="fa fa-print"></i> 列印記錄表</button>
@@ -1424,7 +1393,10 @@ function auditFormHTML(o){
 }
 /** noPageCount=true：本印出的內容本來就是多份各自獨立的文件(如查核表自評版+審查版)串接列印，
  *  不是同一份文件跨頁，不該顯示「第X頁/共Y頁」(即使實體紙張超過一張) */
-function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount){
+/** extraCss：額外CSS，供混合橫直式列印用「具名頁」覆蓋(比照 meeting_record.php 的 egPrintWindow/doPrintFullRecord，
+ *  同一份列印工作內用 @page 具名規則(如 @page va-landscape{size:A4 landscape;...})+對應元素套 page:va-landscape
+ *  達成同一次列印混排直式/橫式，實測穩定可行，不需要拆成多個列印視窗)。 */
+function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount, extraCss){
     var asTxt = String(docNo||'').replace(/['\\]/g,'');
     var css = 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:14px;}'
         + 'table.pf{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}'
@@ -1434,10 +1406,12 @@ function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount){
         + 'table.pf-info{width:100%;font-size:13px;margin-top:10px;border-collapse:collapse;}table.pf-info td{padding:5px 6px;border:1px solid #999;}'
         + 'table.pf-sign{width:100%;margin-top:20px;font-size:13px;page-break-inside:avoid;}table.pf-sign td{padding:14px 6px 8px;}'
         + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + '.rs-chart-wrap{max-width:400px;margin:0 auto;}.rs-chart-wrap svg{width:100% !important;height:auto !important;}'
+        + 'table.pf.rs-table{font-size:15px;}table.pf.rs-table th,table.pf.rs-table td{padding:6px 8px;height:28px;}'
         + '.attach-page{page-break-before:always;}'
         + '@media print{@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;'
         + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
-        + '}}';
+        + '}' + (extraCss||'') + '}';
     w.document.open();
     w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
         + bodyHtml
@@ -1451,10 +1425,10 @@ function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount){
         + 'setTimeout(function(){window.print();},150);};</scr'+'ipt></body></html>');
     w.document.close();
 }
-function openPrintWindow(bodyHtml, title, docNo, landscape, noPageCount){
+function openPrintWindow(bodyHtml, title, docNo, landscape, noPageCount, extraCss){
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗以列印'); return null; }
-    writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount);
+    writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount, extraCss);
     return w;
 }
 function printBlankForm(){
@@ -1561,44 +1535,40 @@ function vaJudgeBadgeHtml(pass){
         +(pass?'#8A5A2B;color:#8A5A2B;background:#FBEBD2;':'#DD5138;color:#DD5138;background:#FDEAE6;')+'">'
         +(pass?'合格供應商':'不合格')+'</span>';
 }
-/** 記錄表「直接列印跳窗畫面」：把公司抬頭/簽核印章/附件填進 #rsMask 內原本隱藏的印刷專用區塊，
- *  加上 body.va-print-rs 後直接 window.print()，讓瀏覽器把畫面上實際看到的表格/雷達圖橫式縮放印出——
- *  不再另建隱藏視窗手工拼版面尺寸(先前兩次調整仍超出一頁的根源)。CSS 規則見本檔 <style> 內 body.va-print-rs 區塊。 */
-function rsApplyPrintExtras(attachHtml){
-    var t = RS.t, doc = META.record_as_doc, docName = (doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
-    $('#rsPrintHead').html('<div style="font-size:25px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
-        +'<div style="font-size:19px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div>');
+/** 記錄表列印內容(拼接HTML字串，非直接列印畫面)：雷達圖抓當下畫面已渲染的live SVG(rsChart)嵌入，
+ *  其餘表格/文字重新組版——比照 meeting_record.php 的作法，同一份文件的內容用字串組出來，
+ *  才能跟查核表一起放進同一個列印視窗、用具名頁(@page)混排橫直式(見 printAllDocs())。
+ *  簽章列分三欄(左欄/中間留白/右欄)，比照本檔供應商稽核計劃列印(fixedFoot)既有規則。 */
+function recordSheetHTML(){
+    if (!RS) return '';
+    var t=RS.t, c=RS.c, cfg=RS.cfg, doc=META.record_as_doc, docName=(doc&&doc.doc_name)||'供應商品質系統評鑑記錄表';
+    var modeL={first:'首次稽核',again:'次稽核',self:'自我評量'}[t.audit_mode]||'____';
+    var head='<div style="text-align:center;"><div style="font-size:25px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
+        +'<div style="font-size:19px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
+    var info='<table class="pf-info"><tr><td>供應商：'+esc(t.maker_id)+'（'+esc(t.maker_id_no)+'）</td><td>加工項目：'+esc(t.main_cat_name||'—')+'</td><td>稽核日期：'+(fmtDate(t.audit_date)||'____')+'</td><td>稽核狀況：'+esc(modeL)+'</td></tr></table>';
+    var rows='<table class="pf rs-table" style="table-layout:fixed;"><colgroup><col style="width:38%;"><col style="width:14%;"><col style="width:16%;"><col style="width:16%;"><col style="width:16%;"></colgroup>'
+        +'<thead><tr><th>評鑑項目</th><th>單項滿分</th><th>自評合格率</th><th>稽核合格率</th><th>綜合合格率</th></tr></thead><tbody>';
+    c.cats.forEach(function(k){ var comb=Math.round((k.self_rate*cfg.self_w+k.audit_rate*cfg.audit_w)*10)/10;
+        rows+='<tr><td class="q">'+esc(k.name)+'</td><td>'+k.max+'</td><td>'+k.self_rate+'%</td><td>'+k.audit_rate+'%</td><td>'+comb+'%</td></tr>'; });
+    rows+='<tr style="font-weight:bold;"><td class="q">總成績</td><td>'+c.total_max+'</td><td>'+c.selfR+'%</td><td>'+c.auditR+'%</td><td>'+c.overall+'%</td></tr></tbody></table>';
+    var svg = rsChart ? rsChart.container.querySelector('svg').outerHTML : '';
+    var body = '<div style="display:flex;gap:20px;align-items:center;margin-top:8px;">'
+        + '<div style="flex:0 0 42%;min-width:0;">'+rows+'</div>'
+        + '<div class="rs-chart-wrap" style="text-align:center;flex:1;">'+svg+'</div></div>';
+    var conc='<div style="margin-top:8px;font-size:13px;">綜合評鑑合格率（自評×'+cfg.self_w+'＋稽核×'+cfg.audit_w+'）＝<b style="font-size:16px;">'+c.overall+'%</b>；核准條件：綜合合格率 ≥'+cfg.pass_rate+'%'+(t.conclusion?'；建議：'+esc(t.conclusion):'')+'</div>'
+        +'<div style="margin-top:4px;">判定：'+vaJudgeBadgeHtml(c.pass)+'</div>';
     var mgrStamp = (t.status==='approved' && t.signed_by_name) ? vaStampHtml(t.signed_by_name, fmtDate(t.audit_date)||'', !!t.signed_is_deputy) : '';
     var audStamp = t.auditor ? vaStampHtml(t.auditor, fmtDate(t.audit_date)||'') : '';
-    // 比照本檔供應商稽核計劃列印(fixedFoot)既有規則：簽章列分三欄(左欄/中間留白/右欄)，不加框線
-    $('#rsSignBox').html('<table style="width:100%;margin-top:14px;border-collapse:collapse;border:none;page-break-inside:avoid;"><tr>'
-        +'<td style="width:33%;border:none;padding:6px 8px;"><div style="font-size:11px;color:#555;">主管</div><div style="margin-top:2px;min-height:100px;">'+mgrStamp+'</div></td>'
+    var sign='<table class="pf-sign" style="margin-top:14px;border:none;page-break-inside:avoid;"><tr>'
+        +'<td style="width:33%;border:none;"><div style="font-size:11px;color:#555;">主管</div><div style="margin-top:2px;min-height:91px;">'+mgrStamp+'</div></td>'
         +'<td style="width:34%;border:none;"></td>'
-        +'<td style="width:33%;border:none;padding:6px 8px;"><div style="font-size:11px;color:#555;">稽核員</div><div style="margin-top:2px;min-height:100px;">'+audStamp+'</div></td>'
-        +'</tr></table>');
-    $('#rsAttachPrintBox').html(attachHtml||'');
-}
-function rsDirectPrint(docNo){
-    var asTxt = String(docNo||'').replace(/['\\]/g,'');
-    var st = document.getElementById('rsPrintPageStyle');
-    if (!st) { st = document.createElement('style'); st.id = 'rsPrintPageStyle'; document.head.appendChild(st); }
-    st.textContent = '@page{size:A4 landscape;margin:12mm 8mm 16mm;'
-        + (asTxt ? " @bottom-right{content:'"+asTxt+"';font-size:9pt;color:#333;}" : '')
-        + '}';
-    document.body.classList.add('va-print-rs');
-    var cleaned = false;
-    var cleanup = function(){
-        if (cleaned) return; cleaned = true;
-        document.body.classList.remove('va-print-rs');
-        window.removeEventListener('afterprint', cleanup);
-    };
-    window.addEventListener('afterprint', cleanup);
-    setTimeout(function(){ window.print(); setTimeout(cleanup, 1000); }, 50);
+        +'<td style="width:33%;border:none;"><div style="font-size:11px;color:#555;">稽核員</div><div style="margin-top:2px;min-height:91px;">'+audStamp+'</div></td>'
+        +'</tr></table>';
+    return head+info+body+conc+sign;
 }
 function printRecordSheet(){
     if (!RS) { alert('無資料'); return; }
-    rsApplyPrintExtras('');
-    rsDirectPrint((META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03');
+    openPrintWindow(recordSheetHTML(), '供應商品質系統評鑑記錄表', (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03', true, true);
 }
 
 /* ---------- 記錄表列印附加佐證附件（圖片直接嵌入／PDF 用 pdf.js 轉圖，其餘類型不支援預覽） ---------- */
@@ -1683,22 +1653,27 @@ async function vaBuildAttachPrintHTML(attaches){
     return parts.join('');
 }
 
-/** 一次印全部文件＝查核表(直式,走隱藏視窗手工拼版)＋記錄表(橫式,直接列印#rsMask跳窗畫面本身)是兩份不同文件，
- *  瀏覽器對同一列印工作中途切換橫直式支援不穩定，改各自獨立跳出列印。 */
+/** 一次印全部文件＝查核表(直式)＋記錄表(橫式)+附件，合成同一份列印工作、同一個視窗跳出列印。
+ *  比照 meeting_record.php 的 doPrintFullRecord()：用具名頁(@page va-landscape)覆蓋成橫式，
+ *  套在記錄表+附件的外層 div 上，其餘(查核表兩頁)沿用預設直式；兩種文件的AS編號各自在對應
+ *  的@page規則(預設頁/具名頁)各自設定右下角頁尾，不會互相覆蓋。 */
 async function printAllDocs(){
     if (!RS) { alert('無資料'); return; }
     var docNo1 = (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2 = (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
     var page1 = auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg, prodType:RS.t.prod_type, auditorName:RS.t.auditor,
         mgrApproved: !!(RS.t.status==='approved' && RS.t.signed_by_name), mgrName:RS.t.signed_by_name, mgrDate:fmtDate(RS.t.audit_date), mgrIsDeputy:!!RS.t.signed_is_deputy});
-    openPrintWindow(page1, '供應商評鑑稽核查表', docNo1, false, true);
 
     var attachHtml = '';
     if ((RS.attaches||[]).length) {
         try { attachHtml = await vaBuildAttachPrintHTML(RS.attaches); }
         catch (e) { attachHtml = '<div style="color:#c00;">附件載入發生錯誤，部分附件可能未列印，請至系統個別下載查看。</div>'; }
     }
-    rsApplyPrintExtras(attachHtml);
-    rsDirectPrint(docNo2);
+    var asTxt2 = String(docNo2||'').replace(/['\\]/g,'');
+    var extraCss = '@page va-landscape{size:A4 landscape;margin:12mm 8mm 16mm;'
+        + (asTxt2 ? " @bottom-right{ content:'"+asTxt2+"'; font-size:9pt; color:#333; }" : '')
+        + '} .va-landscape-page{page:va-landscape;}';
+    var body = page1 + '<div class="va-landscape-page" style="page-break-before:always;">' + recordSheetHTML() + attachHtml + '</div>';
+    openPrintWindow(body, '供應商稽核文件', docNo1, false, true, extraCss);
 }
 
 /* ---------- CSV ---------- */
