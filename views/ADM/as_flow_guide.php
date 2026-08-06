@@ -16,11 +16,12 @@ include_once '../../src/common/_config.php';
 include_once '../../src/common/DBConnection.php';
 $conn = (new DBConnection())->getPDO();
 
-$stmt = $conn->prepare("SELECT id FROM user WHERE user_uname = ?");
+$stmt = $conn->prepare("SELECT id, user_cname FROM user WHERE user_uname = ?");
 $stmt->execute([$_SESSION['userName']]);
 $currentUser = $stmt->fetch(PDO::FETCH_ASSOC);
 if (!$currentUser) { header("Location:../../index.php"); exit; }
 $uid = $currentUser['id'];
+$currentCname = (string)($currentUser['user_cname'] ?: $_SESSION['userName']);
 
 // ── 頁面權限（同 as_document_management.php 慣例；本頁唯讀，有 A 或 R 即可看）──
 $deptPerm = null;
@@ -769,7 +770,7 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       ① AS 線上表單設計器已建立並綁定此文件（<code>as_form_template.form_doc_id</code>）；
       ② 已連結既有電子化模組（<code>as_document.linked_module</code>，如 CAR／品質異常單）；
       ③ <strong>此表單已由某個既有頁面實作並做了 AS 文件綁定</strong>（如供應商稽核管理的「AS文件綁定設定」、外來文件清單、報價單；
-      綁定值存在 <code>system_settings</code> / <code>system_parameters</code>，登記表在本頁原始碼 <code>$PAGE_BINDS</code>）。
+      新模組一律走統一庫 <code>system_parameters(AS_DOC_BIND)</code> 自動掃描，少數尚未遷移的舊模組登記在本頁原始碼 <code>$PAGE_BINDS</code>）。
       <strong>預覽</strong>＝開啟系統內該文件現行版檔案（Office 自動轉 PDF）；右側按鈕＝另開分頁進入該線上表單／頁面。</p>
 
     <table class="of-table" id="onTable">
@@ -780,7 +781,18 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
         <th style="width:250px;">操作</th>
       </tr></thead>
       <tbody>
-      <?php foreach ($FORMS as $no => $d):
+      <?php
+      $chkBtn = function ($d, $field, $onLabel, $offLabel, $okKey, $byKey, $atKey) use ($isRoleAdmin, $currentCname) {
+          $ok = $d[$okKey]; $by = $d[$byKey]; $at = $d[$atKey];
+          $canCancel = $isRoleAdmin || ($ok && $by === $currentCname);
+          echo '<button class="btn-mini chk-btn' . ($ok ? ' warm' : '') . '" data-id="' . $d['id'] . '" data-field="' . $field . '"'
+             . ' data-on-label="' . htmlspecialchars($onLabel) . '" data-off-label="' . htmlspecialchars($offLabel) . '"'
+             . ' data-val="' . $ok . '" data-cancancel="' . ($canCancel ? 1 : 0) . '"'
+             . ($ok && !$canCancel ? ' disabled title="僅原確認人或管理者可取消"' : '') . '>'
+             . '<i class="fa ' . ($ok ? 'fa-check-circle' : 'fa-circle-o') . '"></i> ' . ($ok ? $onLabel : $offLabel) . '</button>'
+             . '<div class="chk-meta" style="font-size:11px;color:#8A5A2B;margin-top:2px;">' . ($ok ? htmlspecialchars($by . ' ' . $at) : '') . '</div>';
+      };
+      foreach ($FORMS as $no => $d):
             $on = ($d['tpl'] || $d['mod'] || $d['pgn']); ?>
         <tr class="<?= $on ? 'has-on' : '' ?>" data-on="<?= $on ? 1 : 0 ?>" data-dept="<?= htmlspecialchars($d['dept']) ?>"
             data-formok="<?= $d['fok'] ?>" data-dataok="<?= $d['dok'] ?>">
@@ -797,16 +809,8 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
                 <span class="on-yes"><i class="fa fa-window-maximize"></i> 已綁定頁面</span>
                 <div style="font-size:11px;color:#8A5A2B;margin-top:2px;"><?= htmlspecialchars($d['pgn']) ?></div>
               <?php else: ?><span class="on-no">尚未建立</span><?php endif; ?></td>
-          <td>
-            <button class="btn-mini chk-btn <?= $d['fok'] ? 'warm' : '' ?>" data-id="<?= $d['id'] ?>" data-field="form_ok" data-val="<?= $d['fok'] ?>"
-              title="<?= $d['fok'] ? htmlspecialchars($d['fokby'].' '.$d['fokat']) : '' ?>">
-              <i class="fa <?= $d['fok'] ? 'fa-check-circle' : 'fa-circle-o' ?>"></i> <?= $d['fok'] ? '已確認正確' : '表單正確' ?></button>
-          </td>
-          <td>
-            <button class="btn-mini chk-btn <?= $d['dok'] ? 'warm' : '' ?>" data-id="<?= $d['id'] ?>" data-field="data_ok" data-val="<?= $d['dok'] ?>"
-              title="<?= $d['dok'] ? htmlspecialchars($d['dokby'].' '.$d['dokat']) : '' ?>">
-              <i class="fa <?= $d['dok'] ? 'fa-check-circle' : 'fa-circle-o' ?>"></i> <?= $d['dok'] ? '已確認齊全' : '確認資料齊全' ?></button>
-          </td>
+          <td><?php $chkBtn($d, 'form_ok', '已確認正確', '表單正確', 'fok', 'fokby', 'fokat'); ?></td>
+          <td><?php $chkBtn($d, 'data_ok', '已確認齊全', '資料齊全', 'dok', 'dokby', 'dokat'); ?></td>
           <td>
             <button class="btn-mini pv-open" data-no="<?= htmlspecialchars($no) ?>"><i class="fa fa-eye"></i> 預覽</button>
             <a class="btn-mini" target="_blank" rel="noopener" href="as_document_management.php?kw=<?= urlencode($no) ?>" title="到 AS 文件管理定位此文件"><i class="fa fa-folder-open-o"></i> 文件管理</a>
@@ -862,7 +866,7 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       <li><b>待處理問題</b>：比對程序書／實體表單檔／系統文件三方交叉檢查出的不一致，分高中低三級，可依優先度、課室、關鍵字篩選。
           <b>點欄位裡的文件編號</b>會另開 AS 文件管理並自動篩選到該筆。</li>
       <li><b>線上表單對照</b>：全部四階表單一覽，顯示是否已有線上表單，可直接開啟或新填一張；
-          可對每張表單按<b>「表單正確」</b>／<b>「確認資料齊全」</b>做點檢確認（會記錄確認人與時間，再按一次可取消），
+          可對每張表單按<b>「表單正確」</b>／<b>「資料齊全」</b>做點檢確認（會記錄確認人與時間；只有原確認人本人或管理者可再按一次取消），
           兩者都可加入篩選條件（已確認正確／已確認齊全／尚未確認）。</li>
     </ul>
 
@@ -888,7 +892,7 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 
     <h4>權限</h4>
     <p>沿用 AS 文件管理的 <code>as_doc</code> 模組角色與本頁 ACRUD：有 <b>A</b>／<b>R</b>／<code>asdoc_view</code> 即可檢視；管理者固定可看。
-       本頁以唯讀說明為主，僅「表單正確」／「確認資料齊全」點檢按鈕會寫入資料（沿用同一權限）。</p>
+       本頁以唯讀說明為主，僅「表單正確」／「資料齊全」點檢按鈕會寫入資料（沿用同一權限；取消確認另限原確認人或管理者）。</p>
   </div>
   <div style="text-align:right;margin-top:10px;"><button class="btn btn-sm btn-default" onclick="document.getElementById('helpUseMask').style.display='none'">關閉</button></div>
 </div></div>
@@ -1004,22 +1008,22 @@ $(document).ready(function () {
     $('#onKw').on('input', onFilterRows);
     $('#btnOnClear').on('click', function () { $('#onFilter,#onDept,#onFormOk,#onDataOk').val(''); $('#onKw').val(''); onFilterRows(); });
 
-    // ── 點檢按鈕：表單正確／確認資料齊全（切換確認狀態，寫入 as_flow_form_check）──
+    // ── 點檢按鈕：表單正確／資料齊全（切換確認狀態，寫入 as_flow_form_check）──
     $(document).on('click', '.chk-btn', function () {
-        var $b = $(this), $tr = $b.closest('tr'), field = $b.data('field'),
+        var $b = $(this), $tr = $b.closest('tr'), $meta = $b.next('.chk-meta'), field = $b.data('field'),
             cur = parseInt($b.data('val'), 10) || 0, next = cur ? 0 : 1,
-            label = field === 'form_ok' ? '表單正確' : '確認資料齊全';
-        if (cur && !confirm('要取消「' + label + '」的確認狀態嗎？')) { return; }
+            onLabel = $b.data('on-label'), offLabel = $b.data('off-label');
+        if (cur && !confirm('要取消「' + offLabel + '」的確認狀態嗎？')) { return; }
         $b.prop('disabled', true);
         $.post(DOC_API, {action: 'flow_check_toggle', doc_id: $b.data('id'), field: field, value: next}, function (r) {
-            if (r.status !== 'success') { alert(r.message || '操作失敗'); $b.prop('disabled', false); return; }
-            $b.data('val', r.value);
+            if (r.status !== 'success') { alert(r.message || '操作失敗'); $b.prop('disabled', cur ? true : false); return; }
+            $b.data('val', r.value).data('cancancel', 1);   // 剛確認/取消的人，下次一定能操作自己這筆
             var dataKey = field === 'form_ok' ? 'formok' : 'dataok';
             $tr.attr('data-' + dataKey, r.value).data(dataKey, r.value);
             $b.toggleClass('warm', !!r.value)
-              .attr('title', r.value ? (r.by + ' ' + r.at) : '')
               .html('<i class="fa ' + (r.value ? 'fa-check-circle' : 'fa-circle-o') + '"></i> ' +
-                    (r.value ? (field === 'form_ok' ? '已確認正確' : '已確認齊全') : label));
+                    (r.value ? onLabel : offLabel));
+            $meta.text(r.value ? (r.by + ' ' + r.at) : '');
             $b.prop('disabled', false);
         }, 'json').fail(function () { alert('請求失敗'); $b.prop('disabled', false); });
     });

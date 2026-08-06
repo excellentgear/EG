@@ -1655,6 +1655,14 @@ case 'flow_check_toggle':   // AS流程總覽·線上表單對照：表單正確
     if ($docId<=0) jout(['status'=>'error','message'=>'無效 ID']);
     if (!in_array($field, ['form_ok','data_ok'], true)) jout(['status'=>'error','message'=>'欄位錯誤']);
     $byCol = $field.'_by'; $atCol = $field.'_at';
+    if ($val === 0 && !$asIsRoleAdmin) {   // 取消確認：只有原確認人本人或管理者可取消
+        $chk = $db->prepare("SELECT $byCol FROM as_flow_form_check WHERE as_document_id=?");
+        $chk->execute([$docId]);
+        $curBy = (string)($chk->fetchColumn() ?: '');
+        if ($curBy !== '' && $curBy !== $currentCname) {
+            jout(['status'=>'error','message'=>'僅原確認人「'.$curBy.'」或管理者可取消']);
+        }
+    }
     $by = $val ? $currentCname : null;
     $st = $db->prepare("INSERT INTO as_flow_form_check (as_document_id, $field, $byCol, $atCol)
                         VALUES (?, ?, ?, ".($val ? "NOW()" : "NULL").")
