@@ -453,10 +453,10 @@ foreach ($roleRows as $rr) {
         <b>④存草稿或送出</b>：草稿只有記錄人自己看得到，可隨時修改；<b>送出</b>後鎖定內容並通知主席確認簽章 → 主席簽章後自動通知總經理確認簽章（總經理可逐筆或整體回覆意見）→ 完成。
         任一階段可退回，退回後記錄人可修改並重新送出。<br>
         <b>⑤負責人/部門項目確認</b>：要項的「負責人/部門」欄可點連結<b>切換兩種模式（二擇一，切換會清空另一種的選擇）</b>：<br>
-        　－<b>選部門</b>（可多選）：<b>每個負責部門各要一位代表簽名</b>，系統依序自動算出誰要簽（現場只有算出的那位本人能輸入密碼簽這格）：①該部門本次以<b>主要角色</b>出席的主管優先（有設職級的職稱，如經理/副理/課長/組長等）②該部門沒有主要角色主管出席，才由<b>兼任</b>該部門主管的出席者代簽（章旁標示「(兼)」）③連兼任主管都沒有，才由該部門出席人員中職稱排序最高者代簽（標示「(代)」）。<br>
+        　－<b>選部門</b>（可多選）：<b>每個負責部門各要一位代表簽名</b>，系統依序自動算出誰要簽（現場只有算出的那位本人能輸入密碼簽這格）：①該部門本次以<b>主要角色</b>出席的主管優先（有設職級的職稱，如經理/副理/課長/組長等）②該部門沒有主要角色主管出席，才由<b>兼任</b>該部門主管的出席者代簽 ③連兼任主管都沒有，才由該部門出席人員中職稱排序最高者代簽（②③兩種情況章旁都標示「(代)」，不特別區分是否兼任）。<br>
         　－<b>指定人員</b>（可多選、可打字搜尋全公司人員）：直接指名的人只要本次有出席就是必簽者，不套用主管優先判定；沒指定到部門，不論那位人員屬於哪個部門都是他本人簽。<br>
         兩種模式下，負責人（部門或指定人員）本次完全沒人出席時，都會改發通知給對方回簽（任一人回覆即算完成）。<br>
-        <b>⑥插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。
+        <b>⑥插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。已完成核准的會議記錄在「檢視」畫面也能再插入/更新：一般人插入後會<b>清空目前簽核紀錄改回草稿</b>，需重新送出取得主席／總經理簽章；<b>超級管理員</b>插入後<b>維持已核准狀態</b>，不需重新送審。
         <h4>重要行為</h4>
         ・草稿只有記錄人本人看得到；送出後，出席人員／主席／總經理都自動有唯讀權限，其餘人是否看得到全部會議記錄依角色設定的「檢視全部」功能。<br>
         ・列印的會議記錄／空白簽到表<b>不含電子簽章</b>，供現場紙本簽名或掃描存查；主席／總經理的簽核仍在系統內完成並自動蓋章存證；出席人員<b>全部完成電子簽到</b>後會多一顆「列印簽到表」按鈕，印出來的是已蓋章版。<br>
@@ -1021,6 +1021,17 @@ function kpiRemove(){
         KPI_SNAP = null; renderKpiBox();
     }, 'json');
 }
+/* 已完成核准(done)後插入/更新出貨目標達成率(檢視畫面用，非編輯表單)：一般人會清空簽核改回草稿，超級管理員維持已核准。 */
+function kpiInsertAfterDone(mid){
+    if (!confirm(META.is_superadmin
+        ? '確定要插入/更新出貨目標達成率？（超級管理員身分：將維持已核准狀態，不需重新送審）'
+        : '確定要插入/更新出貨目標達成率？此會議記錄已完成核准，插入後會清空目前簽核紀錄、改回草稿狀態，需要重新送出取得主席／總經理簽章。')) return;
+    $.post(API, {action:'kpi_insert', meeting_id:mid}, function(res){
+        if (!res.ok){ alert(res.error||'插入失敗'); return; }
+        if (res.reset_note) alert(res.reset_note);
+        openView(mid); loadList();
+    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '插入失敗'); });
+}
 
 /* 存草稿／送出 */
 function gatherPayload(){
@@ -1147,6 +1158,15 @@ function viewHtml(res){
     if (m.kpi_snapshot_json) {
         h += '<h5>出貨目標達成率</h5>' + kpiReportHtml(JSON.parse(m.kpi_snapshot_json));
     }
+    // 已完成核准(done)後仍可插入/更新出貨目標達成率(2026-08-06使用者明確要求)：一般人插入後會清掉舊簽核改回草稿需重新送審；
+    // 超級管理員插入後維持已核准狀態，不必重跑簽核。草稿/退回階段的插入按鈕在編輯畫面(renderKpiBox)，這裡只處理done之後的情況。
+    if (m.approval_status==='done' && PERMS.canKpiInsert && (+m.recorder_user_id===META.uid || PERMS.canAdmin)) {
+        h += '<div style="margin-top:8px;"><button type="button" class="b-att" onclick="kpiInsertAfterDone('+m.meeting_id+')"><i class="fa fa-line-chart"></i> '
+           + (m.kpi_snapshot_json?'更新':'插入') + '出貨目標達成率</button>'
+           + '<span style="font-size:11px;color:#8a6d45;margin-left:6px;">'
+           + (META.is_superadmin ? '超級管理員身分：插入後維持已核准狀態，不需重新送審' : '插入後會清空目前簽核紀錄改回草稿，需重新送出取得簽章')
+           + '</span></div>';
+    }
 
     // 主席／總經理簽核區
     if (m.approval_status==='submitted' && (+m.chair_signer_id===META.uid || PERMS.canAdmin)) {
@@ -1208,7 +1228,7 @@ function signAttendee(mid, uidv){
    沒主管出席才由代表簽(後端 meeting_item_required_signers 算出，前端不用自己挑人)；限被算出的那位本人現場輸入密碼確認
    (比照簽到表密碼驗證，避免共用裝置分不清是誰簽的)。負責部門本次完全沒人出席時無簽名槽，改走送出會議記錄時自動發出的
    通知系統回簽，狀態一併顯示在同一格內。 */
-function slotTag(s){ return !s.is_manager ? '(代)' : (s.is_main ? '' : '(兼)'); }
+function slotTag(s){ return !s.is_manager ? '(代)' : ''; }
 function itemConfirmCellHtml(it){
     var slots = it.confirm_slots || [];
     var h = slots.map(function(s){
@@ -1334,7 +1354,9 @@ function mrCss(){
         + '.mr-bottom-note{margin-top:4px;font-size:11px;color:#666;display:flex;justify-content:space-between;}'
         + 'table.ss-head{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:6px;}'
         + 'table.ss-head td{border:1px solid #333;padding:6px 8px;text-align:left;width:50%;}'
-        + 'table.sf{width:100%;border-collapse:collapse;font-size:12.5px;}table.sf th,table.sf td{border:1px solid #333;padding:6px;text-align:center;height:44px;overflow:hidden;}'
+        // 字級/列高只有這一份定義，空白簽到表與已簽署簽到表共用同一支 signSheetPageHtml()+這份CSS，兩者格式(含欄位高度)一律相同，
+        // 不可分開各自調整(AS文件格式規定表格不可因狀態不同而改變版面)——要調大只在這裡改一次。
+        + 'table.sf{width:100%;border-collapse:collapse;font-size:15px;}table.sf th,table.sf td{border:1px solid #333;padding:6px;text-align:center;height:52px;overflow:hidden;}'
         + 'h5{font-size:13px;margin:10px 0 3px;}'
         // 圖章尺寸(ai-rules/18)：有充足空間的簽核欄(主席/總經理/製表)一律91px；密集逐列表格(簽到表/項目確認多人簽章)改用填滿列高比例，不可套固定px
         + '.mr-foot .stamp-wrap svg,.mr-foot svg.car-stamp{width:91px !important;height:91px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'

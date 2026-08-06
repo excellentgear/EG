@@ -534,12 +534,21 @@ case 'kpi_check': {
 }
 
 /* 插入本月出貨目標達成率快照：先驗新鮮度，未達標直接擋（提示還差幾天） */
+/* 插入出貨目標達成率(2026-08-06使用者明確要求擴充)：draft/rejected 一律可插；已完成核准(done)後也可插，但：
+   一般使用者插入後視同內容變動，清掉舊的主席/總經理簽核紀錄退回草稿，需重新送出取得簽章；
+   超級管理員插入後維持done狀態不動簽核(視同「已核准」直接生效，不必重跑簽核流程)。
+   簽核中(submitted/chair_done)一律不可插，避免跟正在進行的簽核動作衝突。 */
 case 'kpi_insert': {
     if (empty($perms['canKpiInsert'])) jerr('您沒有插入出貨目標達成率的權限，請洽管理員於「角色設定」開放', 403);
     $id = (int)($_POST['meeting_id'] ?? 0);
     $m = meeting_load($db, $id);
     if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可插入', 403);
-    if (!in_array($m['status'], ['draft','rejected'], true)) jerr('此會議記錄已送出，無法再修改');
+    $ap = meeting_approval_status($db, $id);
+    $isDone = $ap['status'] === 'done';
+    if (!in_array($ap['status'], ['draft','rejected'], true) && !$isDone) {
+        jerr('此會議記錄簽核進行中，無法插入；僅草稿/退回，或已完成核准後可插入');
+    }
+    $isSuperadmin = meeting_is_superadmin($db, $uid);
     $fresh = meeting_kpi_freshness($db, date('Y-m-d'));
     if (!$fresh['ok']) {
         jerr('出貨資料尚未更新至前一個工作天（需至 '.$fresh['need_asof'].'，目前最新僅到 '.($fresh['latest'] ?: '無資料')
@@ -553,7 +562,25 @@ case 'kpi_insert': {
     try { $snap['return_latest'] = $db->query("SELECT MAX(IR_date) FROM ir_track")->fetchColumn() ?: null; } catch (Throwable $e) { $snap['return_latest'] = null; }
     $db->prepare("UPDATE meeting_record SET kpi_snapshot_json=?, kpi_snapshot_asof=?, updated_at=NOW() WHERE meeting_id=?")
        ->execute([json_encode($snap, JSON_UNESCAPED_UNICODE), $fresh['latest'], $id]);
-    jout(['snapshot'=>$snap]);
+    $resetNote = null;
+    $newStatus = $ap['status'];
+    if ($isDone && !$isSuperadmin) {
+        if ($ap['chair']) $db->prepare("DELETE FROM approval_record WHERE id=?")->execute([(int)$ap['chair']['id']]);
+        if ($ap['gm']) $db->prepare("DELETE FROM approval_record WHERE id=?")->execute([(int)$ap['gm']['id']]);
+        meeting_close_notice($db, $id);
+        $db->prepare("UPDATE meeting_record SET status='draft', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+        $resetNote = '此會議記錄先前已完成簽核，插入新數據後已重置為草稿狀態，請重新送出以取得主席／總經理簽章。';
+        $newStatus = 'draft';
+    }
+    if ($isDone) {
+        try {
+            $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
+                          VALUES ('views/ADM/meeting_record.php', ?, ?, NOW(), ?)")
+               ->execute([$isSuperadmin ? '超級管理員於結案後插入出貨目標達成率(維持已核准)' : '已核准會議記錄插入出貨目標達成率(重置為草稿重新送審)',
+                          "meeting_id={$id}", $uname]);
+        } catch (Throwable $e) {}
+    }
+    jout(['snapshot'=>$snap, 'status'=>$newStatus, 'reset_note'=>$resetNote]);
 }
 
 case 'kpi_remove': {
