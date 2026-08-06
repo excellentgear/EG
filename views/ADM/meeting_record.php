@@ -1469,20 +1469,23 @@ function printMeetingRecord(){
     resolvePreparerThenPrint(function(preparerName){
         var m = VIEW.meeting, res = VIEW;
         var hasKpi = !!m.kpi_snapshot_json;
-        var page1 = meetingRecordPageHtml(m, res, hasKpi);
+        // AS文件編號一律用內文列印(.mr-bottom-note，接近頁尾但非頁角)，不再靠 egPrintWindow 的 @page bottom-right
+        // (2026-08-06使用者明確指出跑版，改採本頁合併列印早已驗證可行的內文寫法，全站標準@page做法不受影響)
+        var page1 = meetingRecordPageHtml(m, res, true);
         var body = hasKpi ? ('<div style="page-break-after:always;">'+page1+'</div><div>'+kpiPageHtml(m, preparerName)+'</div>') : page1;
         var css = mrCss() + (hasKpi ? NO_PAGE_COUNTER_CSS : '');
-        egPrintWindow('會議記錄', body, css, hasKpi ? '' : (META.as_doc_record_no||''), true, true);
+        egPrintWindow('會議記錄', body, css, '', true, true);
     });
 }
 function printBlankSignSheet(){
     if (!VIEW) return;
-    egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, false, false), mrCss(), META.as_doc_signsheet_no||'', false, true);
+    // AS文件編號改用內文列印(.mr-bottom-note)，不靠@page bottom-right，理由同printMeetingRecord()
+    egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, false, true), mrCss(), '', false, true);
 }
 /* 簽到表(已簽署版)：出席人員電子簽到全部完成才會顯示按鈕(openView時判斷)，含真圖章。 */
 function printSignedSignSheet(){
     if (!VIEW) return;
-    egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, true, false), mrCss(), META.as_doc_signsheet_no||'', false, true);
+    egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, true, true), mrCss(), '', false, true);
 }
 
 /* ---------- 合併列印(簽到表／會議記錄／出貨目標達成率，三份各自一張A4)：僅主席+總經理皆簽核完成(done)才可列印，簽章一律用真圖章 ---------- */
