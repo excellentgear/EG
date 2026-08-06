@@ -18,6 +18,7 @@
 require_once __DIR__ . '/approval_lib.php';
 require_once __DIR__ . '/delegate_lib.php';
 require_once __DIR__ . '/org_role_lib.php';
+require_once __DIR__ . '/confirm_password_lib.php';
 
 // maker_list.status='X' 代表停用（比照 master_data 廠商分頁：讀取一律 status<>'X'）
 const VENDOR_AUDIT_DISABLED = 'X';
@@ -173,8 +174,10 @@ function vendor_audit_company_name(PDO $db): string {
 }
 
 /* ---- 綁定的 AS 表單（列印表單名稱/編號與 AS 文件管理連動）---- */
-/** 綁定的 AS 文件；僅四階文件（表單/記錄表）doc_no 附加版次供直接列印用（見 ai-rules/16 第三節，二階以上不附加、無版次不附加） */
-function vendor_audit_bound_asdoc(PDO $db, string $key = 'vendor_audit_as_doc_id'): ?array {
+/** 綁定的 AS 文件；僅四階文件（表單/記錄表）doc_no 附加版次供直接列印用（見 ai-rules/16 第三節，二階以上不附加、無版次不附加）。
+ *  $bizDate：印某一筆有自己業務日期的紀錄（稽核日期/評核日期…）時傳入，doc_no 版次會回推到當時生效的版次
+ *  （ai-rules/16 第三之二節）；不傳＝維持印現在最新版（沿用舊行為，供設定頁等「顯示目前版本」場景使用）。 */
+function vendor_audit_bound_asdoc(PDO $db, string $key = 'vendor_audit_as_doc_id', ?string $bizDate = null): ?array {
     $id = (int)vendor_eval_setting($db, $key, 0);
     if ($id <= 0) return null;
     try {
@@ -183,6 +186,11 @@ function vendor_audit_bound_asdoc(PDO $db, string $key = 'vendor_audit_as_doc_id
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return null;
         if (($r['doc_level'] ?? '') === '四階') {
+            if ($bizDate !== null) {
+                include_once __DIR__ . '/asdoc_lib.php';
+                $v = eg_asdoc_version_asof($db, $id, $bizDate);
+                if ($v !== null) $r['current_version'] = $v;
+            }
             $r['doc_no'] = $r['doc_no'] . (string)($r['current_version'] ?? '');
         }
         return $r;
@@ -841,27 +849,6 @@ function vendor_audit_plan_sign_save_setting(PDO $db, int $need): void {
     $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('VENDOR_AUDIT_PLAN_SIGN', ?)
                         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
     $st->execute([json_encode(['need'=>$need?1:0])]);
-}
-/** 是否為超級管理員(全站固定 id=1 帳號e，且 state=99 特殊帳號狀態)；比照 meeting_lib.php 既有同款寫法。
- *  用於「取消送出/已核准的年度計畫」這類需要最高權限才能覆寫既定簽核結果的操作。 */
-function vendor_audit_is_superadmin(PDO $db, int $uid): bool {
-    if ($uid !== 1) return false;
-    try {
-        $st = $db->prepare("SELECT state FROM user WHERE id=1 LIMIT 1");
-        $st->execute();
-        return (int)$st->fetchColumn() === 99;
-    } catch (Throwable $e) { return false; }
-}
-function vendor_audit_verify_superadmin_password(PDO $db, string $password): array {
-    if ($password === '') return ['ok'=>false, 'msg'=>'請輸入超級管理員密碼'];
-    try {
-        $st = $db->prepare("SELECT user_password FROM `user` WHERE id=1 LIMIT 1");
-        $st->execute();
-        $real = $st->fetchColumn();
-        if ($real === false) return ['ok'=>false, 'msg'=>'查無超級管理員帳號'];
-        if (!hash_equals((string)$real, $password)) return ['ok'=>false, 'msg'=>'密碼錯誤'];
-    } catch (Throwable $e) { return ['ok'=>false, 'msg'=>'密碼驗證失敗']; }
-    return ['ok'=>true, 'msg'=>''];
 }
 /**
  * 供應商稽核計劃「核准人員」解析（org_role_binding role_key='vendor_audit_plan_approver'，見 org_role_lib.php）。

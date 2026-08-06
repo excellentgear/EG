@@ -571,9 +571,11 @@ function training_plan_last_modified(PDO $db, int $year): string {
     } catch (Throwable $e) { return ''; }
 }
 
-/** 綁定的 AS 文件編號（$which = plan|result|target），僅四階文件（表單/記錄表）編號後方附加版次
- *  （二階以上不附加、無版次不附加，例 2-MM-01-11 / 2-MM-01-11B，見 ai-rules/16 第三節）；未綁定或查無回 '' */
-function training_as_doc_no(PDO $db, string $which): string {
+/** 綁定的 AS 文件編號（$which = plan|result|target|request|signsheet），僅四階文件（表單/記錄表）編號後方附加版次
+ *  （二階以上不附加、無版次不附加，例 2-MM-01-11 / 2-MM-01-11B，見 ai-rules/16 第三節）；未綁定或查無回 ''。
+ *  $bizDate：印某一筆有自己業務日期的紀錄（開課日期/考核日期…）時傳入，版次會回推到當時生效的版次
+ *  （ai-rules/16 第三之二節）；不傳＝維持印現在最新版（沿用舊行為）。 */
+function training_as_doc_no(PDO $db, string $which, ?string $bizDate = null): string {
     $id = (int)(training_settings($db)['training_as_doc_'.$which] ?? 0);
     if (!$id) return '';
     try {
@@ -582,7 +584,15 @@ function training_as_doc_no(PDO $db, string $which): string {
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return '';
         $no = (string)$r['doc_no'];
-        if (($r['doc_level'] ?? '') === '四階') $no .= (string)($r['current_version'] ?? '');
+        if (($r['doc_level'] ?? '') === '四階') {
+            $ver = $r['current_version'] ?? '';
+            if ($bizDate !== null) {
+                include_once __DIR__ . '/asdoc_lib.php';
+                $v = eg_asdoc_version_asof($db, $id, $bizDate);
+                if ($v !== null) $ver = $v;
+            }
+            $no .= (string)$ver;
+        }
         return $no;
     } catch (Throwable $e) { return ''; }
 }
