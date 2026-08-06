@@ -823,6 +823,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../code/highcharts.js"></script>
 <script src="../../code/highcharts-more.js"></script>
 <script>
@@ -851,7 +852,7 @@ function closeMask(id){ document.getElementById(id).style.display='none'; }
 function openMask(id){ document.getElementById(id).style.display='block'; }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
-function fmtDate(d){ return d ? String(d).substr(0,10) : ''; }
+function fmtDate(d){ return d ? egFmtDate(d) : ''; }
 
 function loadMeta(cb){
     $.getJSON(API, {action:'meta'}, function(m){
@@ -1489,7 +1490,7 @@ function printCurrentForm(){
         mgrApproved: !!(CUR_REC && CUR_REC.status==='approved' && CUR_REC.signed_by_name),
         mgrName: CUR_REC && CUR_REC.signed_by_name, mgrDate: $('#recDate').val(),
         mgrIsDeputy: CUR_REC && !!CUR_REC.signed_is_deputy
-    }), '供應商評鑑稽核查表', (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', false, true);
+    }), '供應商評鑑稽核查表', (CUR_REC&&CUR_REC.as_doc_no)||(META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', false, true);
 }
 $('#btnBlank').on('click', printBlankForm);
 
@@ -1615,7 +1616,7 @@ function recordSheetHTML(){
  *  用具名頁 va-portrait 覆蓋回直式，比照 printAllDocs() 混排橫直式的既有做法。 */
 async function printRecordSheet(){
     if (!RS) { alert('無資料'); return; }
-    var docNo = (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
+    var docNo = (RS.t&&RS.t.record_as_doc_no)||(META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
     var attachHtml = '';
     if ((RS.attaches||[]).length) {
         try { attachHtml = await vaBuildAttachPrintHTML(RS.attaches); }
@@ -1720,7 +1721,7 @@ async function vaBuildAttachPrintHTML(attaches){
  *  的@page規則(預設頁/具名頁)各自設定右下角頁尾，不會互相覆蓋。 */
 async function printAllDocs(){
     if (!RS) { alert('無資料'); return; }
-    var docNo1 = (META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2 = (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
+    var docNo1 = (RS.t&&RS.t.as_doc_no)||(META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', docNo2 = (RS.t&&RS.t.record_as_doc_no)||(META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
     var page1 = auditFormHTML({maker:RS.t.maker_id+'（'+RS.t.maker_id_no+'）', dateStr:fmtDate(RS.t.audit_date), scores:RS.t.scores, mode:RS.t.audit_mode, cfg:RS.cfg, prodType:RS.t.prod_type, auditorName:RS.t.auditor,
         mgrApproved: !!(RS.t.status==='approved' && RS.t.signed_by_name), mgrName:RS.t.signed_by_name, mgrDate:fmtDate(RS.t.audit_date), mgrIsDeputy:!!RS.t.signed_is_deputy});
 
