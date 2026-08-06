@@ -1430,6 +1430,7 @@ function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount){
         + 'table.pf{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}'
         + 'table.pf th,table.pf td{border:1px solid #333;padding:3px 6px;height:22px;text-align:center;vertical-align:middle;}'
         + 'table.pf td.q{text-align:left;}'
+        + 'table.pf.plan-table th,table.pf.plan-table td{padding:2px 5px;height:16px;}'
         + 'table.pf-info{width:100%;font-size:13px;margin-top:10px;border-collapse:collapse;}table.pf-info td{padding:5px 6px;border:1px solid #999;}'
         + 'table.pf-sign{width:100%;margin-top:20px;font-size:13px;page-break-inside:avoid;}table.pf-sign td{padding:14px 6px 8px;}'
         + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
@@ -2169,10 +2170,10 @@ $('#planPrintBtn').on('click', function(){
         var chunk = rowsAll.slice(p*PER_PAGE, (p+1)*PER_PAGE);
         var isLast = (p === pageCount-1);
         var head = '<div style="text-align:center;">'
-            + '<div style="font-size:13px;font-weight:bold;text-align:left;">'+esc(year)+' 年</div>'
-            + '<div style="font-size:22px;font-weight:bold;letter-spacing:1px;">'+esc(PLANDATA.company_name||'')+'</div>'
-            + '<div style="font-size:16px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
-        var table = '<table class="pf" style="table-layout:fixed;margin-top:8px;"><colgroup><col style="width:15%;">';
+            + '<div style="font-size:12px;font-weight:bold;text-align:left;">'+esc(year)+' 年</div>'
+            + '<div style="font-size:20px;font-weight:bold;letter-spacing:1px;">'+esc(PLANDATA.company_name||'')+'</div>'
+            + '<div style="font-size:14px;font-weight:bold;margin-top:2px;">'+esc(docName)+'</div></div>';
+        var table = '<table class="pf plan-table" style="table-layout:fixed;margin-top:4px;"><colgroup><col style="width:15%;">';
         for (var m=1;m<=12;m++) table += '<col>';
         table += '<col style="width:16%;"></colgroup><thead><tr><th>供應商名稱</th>';
         for (m=1;m<=12;m++) table += '<th>'+m+'月</th>';
@@ -2183,10 +2184,12 @@ $('#planPrintBtn').on('click', function(){
             table += '<td class="q">'+esc(r.sub_cat_names||'')+'</td></tr>';
         });
         table += '</tbody></table>';
-        var sign = isLast ? ('<table class="pf-sign" style="margin-top:14px;page-break-inside:avoid;"><tr>'
-            +'<td style="width:33%;"><div style="font-size:11px;color:#555;">核准</div><div style="margin-top:2px;min-height:60px;">'+approveStamp+'</div></td>'
+        // 91px圖章比60px留白高，簽章區實際高度以章為準(見ai-rules/16第6條圖章列印統一91px)；
+        // 這裡的min-height只是版面美觀的最小值，不是真正的高度上限，故估算頁面總高時要用圖章實際尺寸
+        var sign = isLast ? ('<table class="pf-sign" style="margin-top:8px;page-break-inside:avoid;"><tr>'
+            +'<td style="width:33%;"><div style="font-size:11px;color:#555;">核准</div><div style="margin-top:2px;min-height:91px;">'+approveStamp+'</div></td>'
             +'<td style="width:34%;"></td>'
-            +'<td style="width:33%;"><div style="font-size:11px;color:#555;">製表人</div><div style="margin-top:2px;min-height:60px;">'+makeStamp+'</div></td>'
+            +'<td style="width:33%;"><div style="font-size:11px;color:#555;">製表人</div><div style="margin-top:2px;min-height:91px;">'+makeStamp+'</div></td>'
             +'</tr></table>') : '';
         body += '<div'+(isLast?'':' style="page-break-after:always;"')+'>'+head+table+sign+'</div>';
     }
