@@ -22,14 +22,25 @@ $pdo = $db->getPDO();
 
 $uid = (int)($_SESSION['id'] ?? 0);
 
-// 訂單編輯權限（沿用本頁既有 RBAC 功能碼 ot_edit；判定失敗採寬鬆，避免鎖死既有功能）
+// 訂單編輯權限：本頁目前仍是舊版 permission_code 機制在把關（$OT_USE_RBAC 尚未啟用，
+// user_roles/role_features 對大多數使用者是空的），不能用 rbac_user_features 判斷，否則一律403。
+// 沿用 NewOrder_Track222.php 寫入 session 的權限快取（_OrderChange_API.php 也是這樣沿用，見該檔 oc_perm_code）。
+function _oaPermCode(int $uid): string {
+    $key = 'perm_code_newordertrack_' . $uid;
+    return (isset($_SESSION[$key]) && is_string($_SESSION[$key])) ? $_SESSION[$key] : '';
+}
 function _oaCanEdit(PDO $pdo, int $uid): bool {
+    $code = _oaPermCode($uid);
+    if ($code !== '') return $code === 'A' || strpos($code, 'U') !== false;
+    // 沒有快取（例如尚未開過訂單頁就直接呼叫）：退回 RBAC 判斷，仍找不到就寬鬆放行避免鎖死
     try {
         $feats = rbac_user_features($pdo, $uid);
         return rbac_has($feats, 'all') || rbac_has($feats, 'ot_edit');
     } catch (Exception $e) { return true; }
 }
 function _oaIsAdmin(PDO $pdo, int $uid): bool {
+    if (_oaPermCode($uid) === 'A') return true;
+    if (in_array((int)($_SESSION['status'] ?? 0), [9, 90], true)) return true;
     try { return rbac_has(rbac_user_features($pdo, $uid), 'all'); }
     catch (Exception $e) { return true; }
 }
