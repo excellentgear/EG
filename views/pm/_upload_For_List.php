@@ -3402,3 +3402,293 @@ if (isset($_GET['but']) && $_GET['but'] === 'Transfer_ERP_Commit') {
     }
     exit;
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ERP 報價單匯入 (quotation_list/quotation_item) — 只新增，補建舊資料用
+// 已存在之 quote_no 一律跳過不動（鐵律：既有單號不可修改/刪除），與出貨單匯入
+// 「清空重匯」不同，此處純 INSERT。來源：ERP「客戶報價單日報表」，報表型別
+// 必須選「客戶別 明細表」才會逐列印出「客戶編號：」群組標頭（唯一的客戶來源）。
+// ══════════════════════════════════════════════════════════════════════════════
+
+// 解析整張工作表 → 依 quote_no 分組，每組含單頭資訊 + 明細列陣列
+// $stats（傳址）回傳 skip_invalid_no：單號非 OP 開頭（ERP 常見用「.」代表尚未取號）而整列無法安全歸戶跳過的筆數/範例
+if (!function_exists('parseQuotationErpRows')) {
+    function parseQuotationErpRows($allRows, array &$stats = []) {
+        $groups = [];
+        $lastDate = $lastQuoteNo = null;
+        $curClientId = null; $curClientName = null;
+        $stats['skip_invalid_no'] = 0;
+        $stats['skip_invalid_no_sample'] = [];
+
+        foreach ($allRows as $row) {
+            $r    = array_pad(array_values($row), 10, null);
+            $colA = trim((string)($r[0] ?? ''));
+            $colB = trim((string)($r[1] ?? ''));
+            $colC = trim((string)($r[2] ?? ''));
+            $colD = trim((string)($r[3] ?? ''));
+            $colE = trim((string)($r[4] ?? ''));
+            $colF = trim((string)($r[5] ?? ''));
+            $colG = trim((string)($r[6] ?? ''));
+            $colI = trim((string)($r[8] ?? ''));
+            $colJ = trim((string)($r[9] ?? ''));
+
+            // 客戶群組標頭列：A=客戶編號： B=客戶代碼 C=客戶全名（此列之後直到下一個客戶標頭前的資料列都屬於此客戶）
+            if ($colA === '客戶編號：') {
+                $curClientId   = $colB !== '' ? mb_substr($colB, 0, 11) : null;
+                $curClientName = $colC !== '' ? mb_substr($colC, 0, 50) : null;
+                continue;
+            }
+
+            // 有效資料列必須有產品編號；跳過頁首/頁尾/合計列/空白列/欄位標題列
+            if ($colD === '' || $colD === '產品編號' || mb_strpos($colD, '合計') !== false) continue;
+
+            $qty = parseERPQty_erp($colF);
+            if ($qty === null) continue;
+
+            if ($colB !== '') {
+                if (!preg_match('/^OP/', $colB)) {
+                    // 單號不是 OP 開頭（例如「.」代表 ERP 尚未取號）：這列資料無法安全歸戶到任何報價單，
+                    // 也不可誤當作延續列併入前一張（前一張可能屬於不同客戶），故整列跳過並記錄供預覽提示。
+                    $stats['skip_invalid_no']++;
+                    if (count($stats['skip_invalid_no_sample']) < 5) {
+                        $stats['skip_invalid_no_sample'][] = "{$colD}（{$curClientName}）";
+                    }
+                    $lastQuoteNo = null;
+                    continue;
+                }
+                $lastQuoteNo = $colB;
+                if ($colA !== '') $lastDate = parseERPDate_erp($colA);
+            }
+            if ($lastQuoteNo === null) continue;
+
+            if (!isset($groups[$lastQuoteNo])) {
+                $groups[$lastQuoteNo] = [
+                    'quote_no'      => mb_substr($lastQuoteNo, 0, 30),
+                    'quote_date'    => $lastDate,
+                    'valid_until'   => parseERPDate_erp($colC),
+                    'client_id'     => $curClientId,
+                    'client_name'   => $curClientName,
+                    'currency'      => ($colI === '' || $colI === '台幣') ? 'TWD' : mb_substr($colI, 0, 10),
+                    'exchange_rate' => is_numeric($colJ) ? (float)$colJ : 1.0,
+                    'rows'          => [],
+                ];
+            }
+
+            $priceRaw = str_replace(',', '', $colG);
+            $groups[$lastQuoteNo]['rows'][] = [
+                'product_id'    => mb_substr($colD, 0, 30),
+                'specification' => $colE !== '' ? mb_substr($colE, 0, 100) : null,
+                'quantity'      => (int)$qty,
+                'unit_price'    => is_numeric($priceRaw) ? (float)$priceRaw : 0,
+            ];
+        }
+        return $groups;
+    }
+}
+
+// ── AJAX 預覽：解析 + 阻擋性驗證 + 既有單號檢查 + 暫存 Session（30分鐘）──────
+if (isset($_GET['but']) && $_GET['but'] === 'Quotation_ERP_Preview') {
+    header('Content-Type: application/json; charset=utf-8');
+    set_time_limit(120);
+    ini_set('memory_limit', '512M');
+
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+        echo json_encode(['success' => false, 'message' => '請選擇要上傳的檔案']); exit;
+    }
+
+    try {
+        $spreadsheet = IOFactory::load($_FILES['file']['tmp_name']);
+        $allRows     = $spreadsheet->getActiveSheet()->toArray();
+
+        // 1. 必要字樣掃描（前30行）— 阻擋性驗證
+        $scannedText = '';
+        foreach ($allRows as $i => $row) {
+            if ($i >= 30) break;
+            foreach ($row as $cell) { $scannedText .= (string)($cell ?? '') . '|'; }
+        }
+        $blockErrors = [];
+        if (mb_strpos($scannedText, '客戶報價單日報表') === false)
+            $blockErrors[] = '找不到「客戶報價單日報表」字樣，請確認是否為正確的 ERP 報價單日報表';
+        if (mb_strpos($scannedText, '客戶別') === false || mb_strpos($scannedText, '明細表') === false)
+            $blockErrors[] = '找不到「單據型別: 客戶別 明細表」字樣，ERP匯出時報表型別請選「客戶別」（需逐列含客戶群組才能匯入客戶資料）';
+        if (!empty($blockErrors)) {
+            echo json_encode(['success' => false, 'message' => '檔案格式驗證失敗', 'errors' => $blockErrors]); exit;
+        }
+
+        // 2. 解析分組（單號非 OP 開頭的列在 parse 階段已安全跳過，統計見 $parseStats）
+        $parseStats = [];
+        $groups = parseQuotationErpRows($allRows, $parseStats);
+        if (empty($groups)) {
+            echo json_encode(['success' => false, 'message' => '未找到有效資料列，請確認是否為 ERP 客戶報價單日報表']); exit;
+        }
+        $allQuoteNos = array_keys($groups);
+
+        // 3. 既有 quote_no 檢查（鐵律：已存在單號一律跳過，不可修改/刪除）
+        $existing = [];
+        foreach (array_chunk($allQuoteNos, 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT quote_no FROM quotation_list WHERE quote_no IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $q) $existing[$q] = true;
+        }
+
+        // 5. 客戶代碼是否存在於 customer_list（僅檢查將新增的單）
+        $clientIdsToCheck = array_values(array_unique(array_filter(array_map(fn($g) => $g['client_id'], $groups))));
+        $validClientIds = [];
+        foreach (array_chunk($clientIdsToCheck, 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT customer_id FROM customer_list WHERE customer_id IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $c) $validClientIds[$c] = true;
+        }
+
+        $newCount = 0; $skipCount = 0; $skipSample = [];
+        $totalItemRows = 0; $noClientCount = 0; $unmatchedClientIds = [];
+        foreach ($groups as $qno => $grp) {
+            if (isset($existing[$qno])) {
+                $skipCount++;
+                if (count($skipSample) < 10) $skipSample[] = $qno;
+                continue;
+            }
+            $newCount++;
+            $totalItemRows += count($grp['rows']);
+            if (empty($grp['client_id'])) $noClientCount++;
+            elseif (!isset($validClientIds[$grp['client_id']])) $unmatchedClientIds[$grp['client_id']] = true;
+        }
+
+        $dates = array_filter(array_column($groups, 'quote_date'));
+        sort($dates);
+
+        $warnings = [];
+        if ($skipCount > 0) $warnings[] = "共 {$skipCount} 張單號已存在資料庫，將跳過不動（既有資料不可修改/刪除）" . (!empty($skipSample) ? '（例：' . implode('、', $skipSample) . ($skipCount > count($skipSample) ? '…' : '') . '）' : '');
+        if ($noClientCount > 0) $warnings[] = "共 {$noClientCount} 張報價單找不到所屬客戶群組（不在任何「客戶編號：」標頭下），client_name/client_id 將留空";
+        if (!empty($unmatchedClientIds)) $warnings[] = "客戶代碼查無 customer_list 對應（" . implode('、', array_slice(array_keys($unmatchedClientIds), 0, 10)) . "），該幾張報價單 client_id 將留空、僅保留 ERP 客戶名稱文字";
+        if (!empty($parseStats['skip_invalid_no'])) $warnings[] = "共 {$parseStats['skip_invalid_no']} 筆資料列單號不是 OP 開頭（ERP 常見用「.」代表尚未取號），這幾筆料號無法安全歸戶已整列跳過不匯入" . (!empty($parseStats['skip_invalid_no_sample']) ? '（例：' . implode('、', $parseStats['skip_invalid_no_sample']) . '）' : '');
+
+        $previewRows = [];
+        foreach ($groups as $qno => $grp) {
+            if (isset($existing[$qno])) continue;
+            $previewRows[] = [
+                'quote_no'    => $qno,
+                'quote_date'  => $grp['quote_date'],
+                'client_id'   => $grp['client_id'],
+                'client_name' => $grp['client_name'],
+                'item_count'  => count($grp['rows']),
+                'first_item'  => $grp['rows'][0]['product_id'] ?? '',
+            ];
+            if (count($previewRows) >= 5) break;
+        }
+
+        $_SESSION['quotation_erp_import_groups'] = $groups;
+        $_SESSION['quotation_erp_import_ts']     = time();
+
+        echo json_encode([
+            'success'           => true,
+            'total_quote_count' => count($groups),
+            'new_quote_count'   => $newCount,
+            'skip_quote_count'  => $skipCount,
+            'skip_sample'       => $skipSample,
+            'total_item_rows'   => $totalItemRows,
+            'date_min'          => $dates[0] ?? null,
+            'date_max'          => $dates ? end($dates) : null,
+            'warnings'          => $warnings,
+            'preview_rows'      => $previewRows,
+        ]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => '解析失敗：' . $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── AJAX 確認匯入：讀 Session → 只 INSERT 新單號 + 明細，已存在單號跳過 ──────
+if (isset($_GET['but']) && $_GET['but'] === 'Quotation_ERP_Commit') {
+    header('Content-Type: application/json; charset=utf-8');
+    set_time_limit(300);
+    ini_set('memory_limit', '512M');
+
+    if (!isset($_SESSION['quotation_erp_import_groups']) || time() - (int)($_SESSION['quotation_erp_import_ts'] ?? 0) > 1800) {
+        echo json_encode(['success' => false, 'message' => '預覽資料已過期（超過30分鐘），請重新上傳檔案']); exit;
+    }
+
+    $groups = $_SESSION['quotation_erp_import_groups'];
+    $userId = $_SESSION['id'] ?? 'excel_import';
+    unset($_SESSION['quotation_erp_import_groups'], $_SESSION['quotation_erp_import_ts']);
+
+    try {
+        $db->beginTransaction();
+
+        // 既有 quote_no 重新查一次（避免 Preview→Commit 時間差造成重複建立）
+        $allQuoteNos = array_keys($groups);
+        $existing = [];
+        foreach (array_chunk($allQuoteNos, 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT quote_no FROM quotation_list WHERE quote_no IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $q) $existing[$q] = true;
+        }
+
+        // 客戶代碼重新確認（存在才綁 client_id，否則只留 ERP 抓到的名稱文字）
+        $clientIds = array_values(array_unique(array_filter(array_map(fn($g) => $g['client_id'], $groups))));
+        $validClients = [];
+        foreach (array_chunk($clientIds, 500) as $chunk) {
+            $ph = implode(',', array_fill(0, count($chunk), '?'));
+            $st = $db->prepare("SELECT customer_id, customer FROM customer_list WHERE customer_id IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) $validClients[$row['customer_id']] = $row['customer'];
+        }
+
+        $insQuote = $db->prepare("INSERT INTO quotation_list
+            (quote_no, quote_date, valid_until, client_name, client_id, currency, exchange_rate, total_amount, note, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+        $insItem = $db->prepare("INSERT INTO quotation_item
+            (quote_id, product_id, specification, quantity, unit, unit_price, amount, sort_order)
+            VALUES (?, ?, ?, ?, 'PCS', ?, ?, ?)");
+
+        $insertedQuoteCount = 0; $insertedItemCount = 0; $skippedList = [];
+
+        foreach ($groups as $qno => $grp) {
+            if (isset($existing[$qno])) { $skippedList[] = $qno; continue; }
+
+            $clientId   = ($grp['client_id'] && isset($validClients[$grp['client_id']])) ? $grp['client_id'] : null;
+            $clientName = $clientId ? $validClients[$clientId] : $grp['client_name'];
+
+            $totalAmount = 0;
+            foreach ($grp['rows'] as $r) $totalAmount += $r['quantity'] * $r['unit_price'];
+
+            $insQuote->execute([
+                $qno, $grp['quote_date'], $grp['valid_until'], $clientName, $clientId,
+                $grp['currency'], $grp['exchange_rate'], round($totalAmount, 2),
+                'ERP直接匯入補建歷史資料', $userId,
+            ]);
+            $quoteId = (int)$db->lastInsertId();
+            $insertedQuoteCount++;
+
+            $sortOrder = 0;
+            foreach ($grp['rows'] as $r) {
+                $sortOrder++;
+                $amount = round($r['quantity'] * $r['unit_price'], 2);
+                $insItem->execute([$quoteId, $r['product_id'], $r['specification'], $r['quantity'], $r['unit_price'], $amount, $sortOrder]);
+                $insertedItemCount++;
+            }
+        }
+
+        $db->commit();
+        recordUploadLog($db, 'upload_quotation_erp');
+
+        $msg = "匯入完成！新增 {$insertedQuoteCount} 張報價單，共 {$insertedItemCount} 筆明細";
+        if (!empty($skippedList)) $msg .= "；跳過 " . count($skippedList) . " 張已存在的單號（既有資料未變動）";
+
+        echo json_encode([
+            'success'              => true,
+            'inserted_quote_count' => $insertedQuoteCount,
+            'inserted_item_count'  => $insertedItemCount,
+            'skipped_count'        => count($skippedList),
+            'skipped_list'         => $skippedList,
+            'message'              => $msg,
+        ]);
+    } catch (Exception $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        echo json_encode(['success' => false, 'message' => '匯入失敗（資料未寫入）：' . $e->getMessage()]);
+    }
+    exit;
+}

@@ -35,7 +35,8 @@ try {
                      WHERE setting_key IN (
                          'upload_bom_nb','upload_bom_ing_new','upload_bom_ing_s',
                          'upload_bom_nb_ok','upload_transfer_log','upload_transfer_log_raw',
-                         'upload_is_erp','upload_ir_erp','upload_bom_erp','upload_bom_ing_s_erp'
+                         'upload_is_erp','upload_ir_erp','upload_bom_erp','upload_bom_ing_s_erp',
+                         'upload_quotation_erp'
                      )");
     while ($row = $r->fetch(PDO::FETCH_ASSOC)) {
         $uploadLogs[$row['setting_key']] = $row;
@@ -53,6 +54,7 @@ $isLastImport          = $uploadLogs['upload_is_erp']       ?? null;
 $irLastImport          = $uploadLogs['upload_ir_erp']       ?? null;
 $bomErpLastImport      = $uploadLogs['upload_bom_erp']      ?? null;
 $transferErpLastImport = $uploadLogs['upload_bom_ing_s_erp'] ?? null;
+$quotationErpLastImport = $uploadLogs['upload_quotation_erp'] ?? null;
 
 /* 匯入者姓名對應表
  * _upload_For_List.php 的 recordUploadLog() 寫的是：
@@ -494,6 +496,28 @@ function lastUpdateBadge($info, $color = '#555') {
                                     </form>
                                     </div><!-- /粉紅底 -->
 
+                                    <!-- 上傳-報價單 ERP直接匯入 (quotation_list，只新增不覆蓋既有單號，補建舊資料用) -->
+                                    <div style="background:#F7E0BD;border:2px solid #E4C293;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+                                    <form id="form_quotation_erp" action="_upload_For_List.php?but=Quotation_ERP_Preview" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate>
+                                        <div class="item form-group" style="margin-bottom:0">
+                                            <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file_quotation_erp">
+                                                報價單 <b>ERP直接匯入</b><small>(只接受.xls/.xlsx)</small><br>
+                                                <span class="required">*</span>
+                                                <span class="text-muted" style="font-size:11px;">ERP匯出「客戶報價單日報表」(型別需選客戶別明細表)<br>只新增，已存在單號一律跳過不動，用於補建舊資料</span>
+                                            </label>
+                                            <div class="col-md-4 col-sm-4 col-xs-8">
+                                                <div class="input-group">
+                                                    <input type="file" id="file_quotation_erp" name="file" accept=".xls,.xlsx" class="form-control short-input">
+                                                    <span class="input-group-btn">
+                                                        <button type="submit" id="btn_upload_quotation_erp" class="btn btn-warning">ERP匯入</button>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-5 col-sm-5 hidden-xs" style="padding-top:7px"><?= lastUpdateBadge($quotationErpLastImport, '#8a5a2b') ?></div>
+                                        </div>
+                                    </form>
+                                    </div><!-- /暖砂琥珀底 -->
+
                                     <!-- 上傳-出貨單 (is_list) — 已由 ERP直接匯入 取代，暫時隱藏 -->
                                     <form action="_upload_For_List.php?but=IS_List" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate style="display:none">
                                         <div class="item form-group">
@@ -613,6 +637,7 @@ document.addEventListener('DOMContentLoaded', function() {
         { inputId: 'file_reply_tg', buttonId: 'btn_upload_reply_tg' },
         { inputId: 'file_is_list_erp', buttonId: 'btn_upload_is_list_erp' },
         { inputId: 'file_ir_list_erp', buttonId: 'btn_upload_ir_list_erp' },
+        { inputId: 'file_quotation_erp', buttonId: 'btn_upload_quotation_erp' },
         { inputId: 'file_is_list', buttonId: 'btn_upload_is_list' },
         { inputId: 'file_transfer_log', buttonId: 'btn_upload_transfer_log' },
         { inputId: 'file_transfer_log_raw', buttonId: 'btn_upload_transfer_log_raw' }
@@ -1193,6 +1218,130 @@ $(document).ready(function() {
             }
         });
     });
+
+    // ── 報價單 ERP直接匯入：兩步驟 AJAX（預覽 → 確認，只新增不覆蓋既有單號）──
+    $('#form_quotation_erp').on('submit', function(e) {
+        e.preventDefault();
+
+        var fileInput = document.getElementById('file_quotation_erp');
+        if (!fileInput || !fileInput.files.length) {
+            alert('請選擇檔案');
+            return;
+        }
+
+        $('#quotationErpModalBody').html(
+            '<div class="text-center" style="padding:20px">' +
+            '<i class="fa fa-spinner fa-spin fa-3x"></i>' +
+            '<p style="margin-top:15px">正在解析檔案，請稍候...</p>' +
+            '</div>'
+        );
+        $('#btnQuotationErpConfirm').hide();
+        $('#quotationErpImportModal').modal('show');
+
+        var fd = new FormData();
+        fd.append('file', fileInput.files[0]);
+
+        $.ajax({
+            url: '_upload_For_List.php?but=Quotation_ERP_Preview',
+            type: 'POST',
+            data: fd,
+            processData: false,
+            contentType: false,
+            dataType: 'json',
+            success: function(res) {
+                if (!res.success) {
+                    var errHtml = '<div class="alert alert-danger"><strong>無法匯入，驗證失敗</strong>';
+                    if (res.errors && res.errors.length) {
+                        errHtml += '<ul style="margin:8px 0 0 0;padding-left:18px">';
+                        res.errors.forEach(function(e) { errHtml += '<li>' + e + '</li>'; });
+                        errHtml += '</ul>';
+                    } else {
+                        errHtml += '<br>' + res.message;
+                    }
+                    errHtml += '</div>';
+                    $('#quotationErpModalBody').html(errHtml);
+                    return;
+                }
+
+                var html = '<table class="table table-condensed table-bordered" style="font-size:13px">';
+                html += '<tr><td>解析到的報價單數</td><td><strong>' + res.total_quote_count + ' 張</strong></td></tr>';
+                html += '<tr><td>資料日期範圍</td><td>' + (res.date_min || '') + ' ～ ' + (res.date_max || '') + '</td></tr>';
+                html += '<tr class="success"><td>將新增的報價單</td><td><strong>' + res.new_quote_count + ' 張</strong>（共 ' + res.total_item_rows + ' 筆明細）</td></tr>';
+                if (res.skip_quote_count > 0) {
+                    html += '<tr class="warning"><td>已存在，將跳過不動</td><td><strong>' + res.skip_quote_count + ' 張</strong>' +
+                            (res.skip_sample && res.skip_sample.length ? '（例：' + res.skip_sample.join('、') + (res.skip_quote_count > res.skip_sample.length ? '…' : '') + '）' : '') + '</td></tr>';
+                }
+                html += '</table>';
+
+                if (res.warnings && res.warnings.length) {
+                    html += '<div class="alert alert-warning" style="font-size:13px"><strong>⚠ 注意事項</strong><ul style="margin:5px 0 0 0;padding-left:18px">';
+                    res.warnings.forEach(function(w) { html += '<li>' + w + '</li>'; });
+                    html += '</ul></div>';
+                }
+
+                if (res.preview_rows && res.preview_rows.length) {
+                    html += '<div class="panel panel-default" style="margin-top:8px">';
+                    html += '<div class="panel-heading" style="padding:6px 10px;cursor:pointer;font-size:12px;background:#F7E0BD" onclick="$(this).next().toggle()">' +
+                            '▶ DEBUG：前 5 張新增報價單預覽（點擊展開/收合）</div>';
+                    html += '<div class="panel-body" style="padding:5px;display:block;overflow-x:auto">';
+                    html += '<table class="table table-condensed table-striped" style="font-size:11px;white-space:nowrap;margin:0">';
+                    html += '<thead><tr><th>#</th><th>單據日期</th><th>報價單號</th><th>客戶代碼</th><th>客戶名稱</th><th>明細筆數</th><th>首筆料號</th></tr></thead><tbody>';
+                    res.preview_rows.forEach(function(r, i) {
+                        html += '<tr>';
+                        html += '<td>' + (i + 1) + '</td>';
+                        html += '<td>' + (r.quote_date || '') + '</td>';
+                        html += '<td>' + (r.quote_no || '') + '</td>';
+                        html += '<td>' + (r.client_id || '<em style="color:#999">查無</em>') + '</td>';
+                        html += '<td>' + (r.client_name || '<em style="color:#999">查無</em>') + '</td>';
+                        html += '<td>' + (r.item_count || 0) + '</td>';
+                        html += '<td>' + (r.first_item || '') + '</td>';
+                        html += '</tr>';
+                    });
+                    html += '</tbody></table></div></div>';
+                }
+
+                html += '<div class="alert alert-danger" style="font-size:12px;margin-bottom:0">' +
+                        '<strong>此操作僅會新增資料，不會刪除或修改任何既有報價單。</strong>確認後將立即寫入新報價單。' +
+                        '</div>';
+
+                $('#quotationErpModalBody').html(html);
+                $('#btnQuotationErpConfirm').show();
+            },
+            error: function() {
+                $('#quotationErpModalBody').html('<div class="alert alert-danger">伺服器錯誤，請稍後再試</div>');
+            }
+        });
+    });
+
+    $('#btnQuotationErpConfirm').on('click', function() {
+        $(this).prop('disabled', true).text('匯入中...');
+        $('#quotationErpModalBody').html(
+            '<div class="text-center" style="padding:20px">' +
+            '<i class="fa fa-spinner fa-spin fa-3x"></i>' +
+            '<p style="margin-top:15px">正在匯入資料，請勿關閉視窗...</p>' +
+            '</div>'
+        );
+
+        $.ajax({
+            url: '_upload_For_List.php?but=Quotation_ERP_Commit',
+            type: 'POST',
+            dataType: 'json',
+            success: function(res) {
+                if (res.success) {
+                    $('#quotationErpModalBody').html('<div class="alert alert-success"><strong>匯入成功！</strong><br>' + res.message + '</div>');
+                    $('#btnQuotationErpConfirm').hide();
+                    setTimeout(function() { window.location.reload(); }, 2000);
+                } else {
+                    $('#quotationErpModalBody').html('<div class="alert alert-danger"><strong>匯入失敗</strong><br>' + res.message + '</div>');
+                    $('#btnQuotationErpConfirm').prop('disabled', false).text('確認匯入');
+                }
+            },
+            error: function() {
+                $('#quotationErpModalBody').html('<div class="alert alert-danger">伺服器錯誤，請稍後再試</div>');
+                $('#btnQuotationErpConfirm').prop('disabled', false).text('確認匯入');
+            }
+        });
+    });
 });
 </script>
 
@@ -1263,6 +1412,24 @@ $(document).ready(function() {
             <div class="modal-footer" style="padding:10px 15px">
                 <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
                 <button type="button" class="btn btn-danger" id="btnIRConfirm" style="display:none">確認匯入</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 報價單 ERP匯入預覽 Modal -->
+<div class="modal fade" id="quotationErpImportModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document" style="width:640px">
+        <div class="modal-content">
+            <div class="modal-header" style="background:#8a5a2b;color:#fff;padding:12px 15px">
+                <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:1">&times;</button>
+                <h4 class="modal-title"><strong>報價單 ERP直接匯入確認</strong></h4>
+            </div>
+            <div class="modal-body" id="quotationErpModalBody" style="padding:15px;max-height:70vh;overflow-y:auto">
+            </div>
+            <div class="modal-footer" style="padding:10px 15px">
+                <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-danger" id="btnQuotationErpConfirm" style="display:none">確認匯入</button>
             </div>
         </div>
     </div>

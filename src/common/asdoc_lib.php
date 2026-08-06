@@ -63,17 +63,71 @@ function eg_asdoc_get(PDO $db, string $module): ?array {
     $id = eg_asdoc_id($db, $module);
     if (!$id) return null;
     try {
-        $st = $db->prepare("SELECT id, doc_no, doc_name, current_version FROM as_document WHERE id=? AND is_deleted=0");
+        $st = $db->prepare("SELECT id, doc_no, doc_name, current_version, doc_level FROM as_document WHERE id=? AND is_deleted=0");
         $st->execute([$id]);
         return $st->fetch(PDO::FETCH_ASSOC) ?: null;
     } catch (Throwable $e) { return null; }
 }
 
-/** 列印用文件編號：doc_no 後方直接附加 current_version（無版次不附加，例 2-MM-01-11 / 2-MM-01-11B）。
- *  凡是把綁定的 AS 文件編號印在頁尾/表頭的地方，一律用這支組出字串，不要只印 doc_no。 */
+/** 列印用文件編號：僅**四階文件**（表單/記錄表）在 doc_no 後方附加 current_version，
+ *  一階/二階（手冊/程序書）不附加；無版次時也不附加（例：2-MM-01-11 二階不附加／2-MM-01-11B 四階有版次 B）（見 ai-rules/16 第三節）。
+ *  凡是把綁定的 AS 文件編號印在頁尾/表頭的地方，一律用這支組出字串，不要只印 doc_no。
+ *  $doc 需含 doc_no、doc_level、current_version（eg_asdoc_get() 已含這些欄位）。 */
 function eg_asdoc_no(?array $doc): string {
     if (!$doc || empty($doc['doc_no'])) return '';
-    return (string)$doc['doc_no'] . (string)($doc['current_version'] ?? '');
+    $no = (string)$doc['doc_no'];
+    if (($doc['doc_level'] ?? '') === '四階') {
+        $no .= (string)($doc['current_version'] ?? '');
+    }
+    return $no;
+}
+
+/** 依「業務日期」回推該文件當時生效的版次（2026-08-06 使用者明確要求：列印舊單據要顯示該單據業務日期當時生效的版次，
+ *  不能一律顯示現在最新版——例如會議記錄 AS 表單 A 版 2025.01.01 生效、B 版 2025.12.09 生效，列印 2025.09.08 的
+ *  會議紀錄要顯示 A 版，列印 2025.12.09（含）之後的要顯示 B 版，即改版生效日當天就啟用新版）。
+ *  用 as_document_version.revised_date（改版生效日）挑出「revised_date <= 業務日期」中最新的一筆版次。
+ *  傳回 null＝該文件完全無版本履歷資料（as_document_version 尚未補建），呼叫端應以 as_document.current_version 回退；
+ *  傳回字串（可能是空字串，代表當時該文件尚無版次）＝查到的正確答案，不可再退回 current_version。
+ *  $bizDate 傳 null／空字串＝視為今天（等同舊行為：印目前最新版）。 */
+function eg_asdoc_version_asof(PDO $db, int $docId, ?string $bizDate): ?string {
+    if (!$docId) return null;
+    try {
+        $st = $db->prepare("SELECT version FROM as_document_version WHERE doc_id=? AND revised_date<=? ORDER BY revised_date DESC, id DESC LIMIT 1");
+        $st->execute([$docId, $bizDate ?: date('Y-m-d')]);
+        $v = $st->fetchColumn();
+        if ($v !== false) return (string)$v;
+        // 業務日期早於該文件最早一筆改版紀錄（例如單據日期比文件第一次建檔還早）：退回最早一筆版次
+        $st2 = $db->prepare("SELECT version FROM as_document_version WHERE doc_id=? ORDER BY revised_date ASC, id ASC LIMIT 1");
+        $st2->execute([$docId]);
+        $v2 = $st2->fetchColumn();
+        if ($v2 !== false) return (string)$v2;
+    } catch (Throwable $e) {}
+    return null;
+}
+
+/** 依 as_document.id 直接組出「該業務日期」應印出的文件編號（含版次，僅四階附加，規則同 eg_asdoc_no()）。
+ *  凡是列印「單一筆有自己業務日期的單據」（會議紀錄的會議日期、報價單的報價日期、檢驗記錄的檢驗日期…），
+ *  頁尾/表頭的 AS 文件編號一律呼叫這支並帶入該筆單據自己的業務日期，不要再呼叫 eg_asdoc_no() 印「現在最新版」。
+ *  業務日期認定：優先用單據本身的日期欄位；單據沒有日期欄位（罕見）才用單據建立日期；
+ *  尚未存檔的新單據預覽列印用列印當下（傳 null）。
+ *  多筆彙總的清單型列印（如AS文件結構總覽、外來文件清單、訂單變更歷史清單）不適用本函式——那種列印本來
+ *  就是「印出當下的現況清單」，本來就該用今天最新版，直接用 eg_asdoc_no() 即可，見 ai-rules/16 第三之二節。 */
+function eg_asdoc_no_asof_id(PDO $db, int $docId, ?string $bizDate = null): string {
+    if (!$docId) return '';
+    try {
+        $st = $db->prepare("SELECT doc_no, doc_level, current_version FROM as_document WHERE id=? AND is_deleted=0");
+        $st->execute([$docId]);
+        $doc = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$doc) return '';
+    } catch (Throwable $e) { return ''; }
+    $v = eg_asdoc_version_asof($db, $docId, $bizDate);
+    if ($v !== null) $doc['current_version'] = $v;
+    return eg_asdoc_no($doc);
+}
+
+/** 依模組代碼＋業務日期組出文件編號，等同 eg_asdoc_no_asof_id(eg_asdoc_id($db,$module), $bizDate)。 */
+function eg_asdoc_no_asof(PDO $db, string $module, ?string $bizDate = null): string {
+    return eg_asdoc_no_asof_id($db, eg_asdoc_id($db, $module), $bizDate);
 }
 
 /** 存綁定（$docId=0 代表取消綁定） */
