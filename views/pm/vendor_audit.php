@@ -663,7 +663,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">不論是否自動簽核，「誰簽」都是解析這裡設定的部門主管（含代理/迴避）；未勾自動簽核時，完成後需按「送審核」通知該主管簽核。</div>
         <hr style="margin:14px 0;border-color:#EADFC8;">
         <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;">供應商稽核計劃送出後是否需要核准</div>
-        <label><input type="checkbox" id="ssPlanNeed"> 需要最高核准人員核准（不勾＝送出即生效）</label>
+        <label><input type="checkbox" id="ssPlanNeed"> 需要最終決策者核准（不勾＝送出即生效）</label>
+        <div style="font-size:11px;color:#8a6d45;margin-top:4px;">目前的最終決策者：<b id="ssTopApprover">—</b>（依「組織角色綁定設定」的「最高核准人員」解析，含代理/迴避；要換人請到該設定頁改，不在這裡設定）</div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('signSetMask')">取消</button>
@@ -2089,10 +2090,27 @@ function renderPlan(res){
     $('#planLockInfo').text(lockInfo);
     $('#planSubmitBtn').toggle(!!(PERMS.canEdit && !res.locked));
     $('#planDecideBtn').remove();
+    $('#planCancelBtn').remove();
     if (res.lock && res.lock.status==='pending') {
         // 顯示給所有看得到本頁的人；實際是否有權核准由後端 plan_decide 再驗一次(canAdmin 或最高核准人員本人/代理)
         $('<button id="planDecideBtn" class="b-att2" style="margin-left:8px;">核准/退回</button>').on('click', openPlanDecideMask).insertAfter('#planLockInfo');
     }
+    if (res.lock && (res.lock.status==='pending'||res.lock.status==='approved') && META.is_superadmin) {
+        // 只有超級管理員看得到；取消後解除鎖定回到可增列對象狀態，需輸入超級管理員密碼(2026-08-06使用者明確要求)
+        $('<button id="planCancelBtn" class="b-att2" style="margin-left:8px;color:#DD5138;">取消送出</button>').on('click', cancelPlan).insertAfter($('#planDecideBtn').length?'#planDecideBtn':'#planLockInfo');
+    }
+}
+var PLAN_ADMIN_PW = '';
+function cancelPlan(){
+    var year = $('#planYear').val();
+    if (!confirm('確定要取消 '+year+' 年度稽核計畫的送出/核准狀態嗎？取消後會解除鎖定，可重新增列對象並重新送出，此操作會留下紀錄。')) return;
+    if (!PLAN_ADMIN_PW) PLAN_ADMIN_PW = prompt('請輸入超級管理員密碼：') || '';
+    if (!PLAN_ADMIN_PW) return;
+    $.post(API, {action:'plan_cancel', year:year, password:PLAN_ADMIN_PW}, function(res){
+        if (!res.ok){ alert(res.error||'取消失敗'); PLAN_ADMIN_PW=''; return; }
+        alert('已取消，該年度計畫已解除鎖定。');
+        loadPlan();
+    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '取消失敗'); PLAN_ADMIN_PW=''; });
 }
 $('#planYear').on('change', loadPlan);
 $('#planSubmitBtn').on('click', function(){
@@ -2242,6 +2260,7 @@ function submitChecklist(){
 $('#btnSignSetting').on('click', function(){
     $('#ssAuto').prop('checked', !!(META.sign_setting && META.sign_setting.auto));
     $('#ssPlanNeed').prop('checked', !!(META.plan_sign_setting && META.plan_sign_setting.need));
+    $('#ssTopApprover').text(META.top_approver_name || '（尚未設定，請先到「組織角色綁定設定」指定最高核准人員）');
     $.getJSON(API, {action:'sign_dept_options'}, function(res){
         if(!res.ok) return;
         var $s=$('#ssDept').html('<option value="">（尚未設定）</option>');

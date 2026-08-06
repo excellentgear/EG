@@ -842,6 +842,27 @@ function vendor_audit_plan_sign_save_setting(PDO $db, int $need): void {
                         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
     $st->execute([json_encode(['need'=>$need?1:0])]);
 }
+/** 是否為超級管理員(全站固定 id=1 帳號e，且 state=99 特殊帳號狀態)；比照 meeting_lib.php 既有同款寫法。
+ *  用於「取消送出/已核准的年度計畫」這類需要最高權限才能覆寫既定簽核結果的操作。 */
+function vendor_audit_is_superadmin(PDO $db, int $uid): bool {
+    if ($uid !== 1) return false;
+    try {
+        $st = $db->prepare("SELECT state FROM user WHERE id=1 LIMIT 1");
+        $st->execute();
+        return (int)$st->fetchColumn() === 99;
+    } catch (Throwable $e) { return false; }
+}
+function vendor_audit_verify_superadmin_password(PDO $db, string $password): array {
+    if ($password === '') return ['ok'=>false, 'msg'=>'請輸入超級管理員密碼'];
+    try {
+        $st = $db->prepare("SELECT user_password FROM `user` WHERE id=1 LIMIT 1");
+        $st->execute();
+        $real = $st->fetchColumn();
+        if ($real === false) return ['ok'=>false, 'msg'=>'查無超級管理員帳號'];
+        if (!hash_equals((string)$real, $password)) return ['ok'=>false, 'msg'=>'密碼錯誤'];
+    } catch (Throwable $e) { return ['ok'=>false, 'msg'=>'密碼驗證失敗']; }
+    return ['ok'=>true, 'msg'=>''];
+}
 function vendor_audit_plan_lock_get(PDO $db, int $year): ?array {
     $st = $db->prepare("SELECT * FROM vendor_audit_plan_lock WHERE year=?");
     $st->execute([$year]);

@@ -80,6 +80,8 @@ case 'meta': {
           'company_name'=>vendor_audit_company_name($db),
           'sign_setting'=>$perms['canAdmin'] ? vendor_audit_sign_setting($db) : null,
           'plan_sign_setting'=>$perms['canAdmin'] ? vendor_audit_plan_sign_setting($db) : null,
+          'top_approver_name'=>$perms['canAdmin'] ? (eg_org_user($db, 'top_approver')['user_cname'] ?? null) : null,
+          'is_superadmin'=>vendor_audit_is_superadmin($db, $uid),
           'eval_settings'=>vendor_eval_settings($db),
         ], vendor_audit_checklist_config($db)));
 }
@@ -858,6 +860,20 @@ case 'plan_decide': {
     vendor_audit_close_plan_notice($db, $year, $uid);
     vendor_audit_notify_plan_result($db, $year, $lock['submitted_by'] ? (int)$lock['submitted_by'] : null, $uname, $decision, $noteIn ?: null);
     jout(['status'=>$decision]);
+}
+/* 超級管理員：取消已送出/已核准的年度計畫，解除鎖定回到可增列對象的狀態(2026-08-06使用者明確要求) */
+case 'plan_cancel': {
+    if (!vendor_audit_is_superadmin($db, $uid)) jerr('僅超級管理員可取消已送出的計畫', 403);
+    $pwCheck = vendor_audit_verify_superadmin_password($db, (string)($_POST['password'] ?? ''));
+    if (!$pwCheck['ok']) jerr($pwCheck['msg']);
+    $year = (int)($_POST['year'] ?? 0);
+    if ($year < 2000) jerr('年度不正確');
+    $lock = vendor_audit_plan_lock_get($db, $year);
+    if (!$lock) jerr('此年度計畫尚未送出，無需取消');
+    $db->prepare("DELETE FROM vendor_audit_plan_lock WHERE year=?")->execute([$year]);
+    $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by) VALUES ('views/pm/vendor_audit.php', ?, ?, NOW(), ?)")
+       ->execute(['超級管理員取消送出計畫', $year.'年度稽核計畫原狀態：'.$lock['status'].'，已由超級管理員取消鎖定，可重新增列對象/送出', $uname]);
+    jout(['ok'=>true]);
 }
 case 'save_plan_sign_setting': {
     if (!$perms['canAdmin']) jerr('無設定權限', 403);
