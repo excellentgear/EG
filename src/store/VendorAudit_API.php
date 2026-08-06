@@ -29,11 +29,15 @@ if (!$perms['canView']) {
     // 否則被指派簽核的主管收到通知點進來卻進不了頁面，違反 ai-rules/17「通知要能直接看到內容並決行」。
     $isResolvedSigner = false;
     try {
-        $topApprover = eg_org_user($db, 'top_approver');
-        if ($topApprover && (int)$topApprover['id'] === $uid) $isResolvedSigner = true;
+        $sg = vendor_audit_resolve_signer($db, 0);
+        if ($sg && (int)$sg['id'] === $uid) $isResolvedSigner = true;
         if (!$isResolvedSigner) {
-            $sg = vendor_audit_resolve_signer($db, 0);
-            if ($sg && (int)$sg['id'] === $uid) $isResolvedSigner = true;
+            // 稽核計劃核准人現在是「部門內任一主管」的一批人(見 vendor_audit_plan_approver_pool)，
+            // 不是單一固定的人，用「是否實際被通知去核准某年度計劃」判斷比重算整批人選更直接準確。
+            $st = $db->prepare("SELECT 1 FROM live_event_target t JOIN live_event e ON e.id=t.live_event_id
+                                WHERE e.ref_type='VENDOR_AUDIT_PLAN' AND t.target_id=? AND (e.enddate IS NULL OR e.enddate>=CURDATE()) LIMIT 1");
+            $st->execute([$uid]);
+            if ($st->fetchColumn()) $isResolvedSigner = true;
         }
     } catch (Throwable $e) {}
     if (!$isResolvedSigner) jerr('無供應商稽核檢閱權限', 403);
@@ -80,7 +84,7 @@ case 'meta': {
           'company_name'=>vendor_audit_company_name($db),
           'sign_setting'=>$perms['canAdmin'] ? vendor_audit_sign_setting($db) : null,
           'plan_sign_setting'=>$perms['canAdmin'] ? vendor_audit_plan_sign_setting($db) : null,
-          'top_approver_name'=>$perms['canAdmin'] ? (eg_org_user($db, 'top_approver')['user_cname'] ?? null) : null,
+          'plan_approver_names'=>$perms['canAdmin'] ? array_column(vendor_audit_plan_approver_pool($db, $uid), 'user_cname') : [],
           'is_superadmin'=>vendor_audit_is_superadmin($db, $uid),
           'eval_settings'=>vendor_eval_settings($db),
         ], vendor_audit_checklist_config($db)));
@@ -816,10 +820,18 @@ case 'save_cycle': {
 case 'plan_data': {
     $year = (int)($_GET['year'] ?? date('Y'));
     $signSet = vendor_audit_plan_sign_setting($db);
-    $approver = $signSet['need'] ? eg_org_user($db, 'top_approver') : null;
-    jout(['year'=>$year, 'rows'=>vendor_audit_plan_data($db, $year), 'lock'=>vendor_audit_plan_lock_get($db, $year),
+    $lock = vendor_audit_plan_lock_get($db, $year);
+    // 待核准中：顯示這筆實際的合格核准人清單(依送出者職級解析)；尚未送出：用目前使用者身分預覽會是誰(僅供參考)
+    $approverNames = [];
+    if ($signSet['need']) {
+        $approverNames = array_column(
+            vendor_audit_plan_approver_pool($db, $lock && !empty($lock['submitted_by']) ? (int)$lock['submitted_by'] : $uid),
+            'user_cname'
+        );
+    }
+    jout(['year'=>$year, 'rows'=>vendor_audit_plan_data($db, $year), 'lock'=>$lock,
           'locked'=>vendor_audit_plan_locked($db, $year), 'sign_setting'=>$signSet,
-          'approver_name'=>$approver['user_cname'] ?? null,
+          'approver_names'=>$approverNames,
           'plan_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_plan_as_doc_id'),
           'company_name'=>vendor_audit_company_name($db)]);
 }
@@ -831,12 +843,15 @@ case 'plan_submit': {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $submitDate)) jerr('日期格式不正確');
     $lock = vendor_audit_plan_lock_get($db, $year);
     if ($lock && in_array($lock['status'], ['pending','approved'], true)) jerr('此年度計劃已送出，請重新整理確認狀態');
+    $need = vendor_audit_plan_sign_setting($db)['need'];
+    $pool = [];
+    if ($need) {
+        $pool = vendor_audit_plan_approver_pool($db, $uid);
+        if (!$pool) jerr('尚未設定核准人員，請聯絡管理員先於「組織角色綁定設定」的「供應商稽核計劃核准」指定部門或人員');
+    }
     $lock = vendor_audit_plan_submit($db, $year, $submitDate, $uid, $uname);
     if ($lock['status'] === 'pending') {
-        $approver = eg_org_user($db, 'top_approver');
-        if (!$approver) jerr('尚未設定最高核准人員，請聯絡管理員先於「組織角色綁定」設定');
-        $sg = eg_resolve_signer($db, (int)$approver['id'], ['applicant_id'=>$uid, 'flow_key'=>'vendor_audit_plan', 'log'=>true]);
-        vendor_audit_notify_plan_sign($db, $year, (int)$sg['signer_id'], $uid, $uname);
+        vendor_audit_notify_plan_sign($db, $year, array_column($pool, 'id'), $uid, $uname);
     }
     jout(['lock'=>$lock]);
 }
@@ -846,12 +861,10 @@ case 'plan_decide': {
     $noteIn = trim((string)($_POST['note'] ?? ''));
     if (!in_array($decision, ['approved','rejected'], true)) jerr('無效的決定');
     if ($decision === 'rejected' && $noteIn === '') jerr('退回必須填寫原因');
-    $approver = eg_org_user($db, 'top_approver');
-    $resolvedApproverId = null;
-    if ($approver) { $sg = eg_resolve_signer($db, (int)$approver['id'], ['applicant_id'=>0, 'flow_key'=>'vendor_audit_plan', 'log'=>false]); $resolvedApproverId = (int)$sg['signer_id']; }
-    if (!$perms['canAdmin'] && $resolvedApproverId !== $uid) jerr('您不是最高核准人員', 403);
     $lock = vendor_audit_plan_lock_get($db, $year);
     if (!$lock || $lock['status'] !== 'pending') jerr('此年度計劃目前無待核准紀錄');
+    $pool = vendor_audit_plan_approver_pool($db, (int)($lock['submitted_by'] ?? 0));
+    if (!$perms['canAdmin'] && !in_array($uid, array_column($pool, 'id'), true)) jerr('您不是本計劃的核准人員', 403);
     if ($decision === 'approved') {
         $db->prepare("UPDATE vendor_audit_plan_lock SET status='approved', approved_by_name=?, approved_at=NOW() WHERE year=?")->execute([$uname, $year]);
     } else {
