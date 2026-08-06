@@ -59,6 +59,9 @@ $pp = $deptPerm ?: '';
 $canView = $isRoleAdmin || strpos($pp, 'A') !== false || strpos($pp, 'R') !== false
         || in_array('asdoc_view', $asFeatures, true);
 $roleLabel = $isRoleAdmin ? '管理者' : ($canView ? '檢閱' : '無權限');
+// 「線上表單模板」（AS 線上表單設計器）尚未正式導入，預設隱藏；管理員可在 AS 文件管理→角色設定
+// 勾選功能碼 asdoc_online_form_beta 開放給特定角色測試（含本頁「去建立線上表單」「開線上表單」「新填一張」按鈕）。
+$showOnlineForm = $isRoleAdmin || in_array('asdoc_online_form_beta', $asFeatures, true);
 
 // ── MD 檔白名單（key => [顯示名稱, 檔名, 圖示]）——只允許這幾支，杜絕路徑穿越 ──
 $MD_DIR = __DIR__ . '/../../FOR CODEING 說明文件/AS9100(各組維護版)/';
@@ -166,12 +169,14 @@ try {
     $sqlMap = "SELECT d.id, d.doc_no, d.doc_name, d.doc_level, d.doc_type, d.current_version,
                       d.current_version_id, d.linked_module, p.doc_no AS parent_no,
                       dept.name AS dept_name, v.file_name,
-                      t.id AS tpl_id, t.status AS tpl_status, t.published_version
+                      t.id AS tpl_id, t.status AS tpl_status, t.published_version,
+                      c.form_ok, c.form_ok_by, c.form_ok_at, c.data_ok, c.data_ok_by, c.data_ok_at
                FROM as_document d
                LEFT JOIN department dept        ON dept.id = d.department_id
                LEFT JOIN as_document p          ON p.id    = d.parent_doc_id
                LEFT JOIN as_document_version v  ON v.id    = d.current_version_id
                LEFT JOIN as_form_template t     ON t.form_doc_id = d.id AND t.is_deleted = 0
+               LEFT JOIN as_flow_form_check c    ON c.as_document_id = d.id
                WHERE d.is_deleted = 0
                ORDER BY d.doc_no, t.id DESC";
     foreach ($conn->query($sqlMap, PDO::FETCH_ASSOC) as $r) {
@@ -196,6 +201,12 @@ try {
             'mu'   => $mod === 'car' ? '../QA/correction_order.php' : ($mod === 'qa_abnormal' ? '../QA/qa_abnormal_view.php' : ''),
             'pgn'  => $PGBIND[(int)$r['id']]['name'] ?? '',   // ③ 已綁定既有頁面
             'pgu'  => $PGBIND[(int)$r['id']]['url']  ?? '',
+            'fok'   => (int)($r['form_ok'] ?? 0),                 // 點檢：表單正確
+            'fokby' => (string)($r['form_ok_by'] ?? ''),
+            'fokat' => (string)($r['form_ok_at'] ?? ''),
+            'dok'   => (int)($r['data_ok'] ?? 0),                 // 點檢：確認資料齊全
+            'dokby' => (string)($r['data_ok_by'] ?? ''),
+            'dokat' => (string)($r['data_ok_at'] ?? ''),
         ];
     }
 } catch (Exception $e) { error_log('as_flow_guide docmap: ' . $e->getMessage()); }
@@ -728,9 +739,21 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
           <option value="<?= htmlspecialchars($dp) ?>"><?= htmlspecialchars($dp) ?></option>
         <?php endforeach; ?>
       </select>
+      <select id="onFormOk" class="form-control input-sm" style="width:150px;height:30px;display:inline-block;">
+        <option value="">表單正確：全部</option>
+        <option value="1">已確認正確</option>
+        <option value="0">尚未確認</option>
+      </select>
+      <select id="onDataOk" class="form-control input-sm" style="width:150px;height:30px;display:inline-block;">
+        <option value="">資料齊全：全部</option>
+        <option value="1">已確認齊全</option>
+        <option value="0">尚未確認</option>
+      </select>
       <input type="text" id="onKw" placeholder="搜尋表單編號／名稱…">
       <button id="btnOnClear"><i class="fa fa-eraser"></i> 清除</button>
+      <?php if ($showOnlineForm): ?>
       <a class="btnlink" href="as_form_list.php" target="_blank" rel="noopener"><i class="fa fa-plus"></i> 去建立線上表單</a>
+      <?php endif; ?>
       <span class="fg-file">顯示 <span id="onCount"><?= count($FORMS) ?></span> 筆</span>
     </div>
 
@@ -753,12 +776,14 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       <thead><tr>
         <th style="width:120px;">表單編號</th><th>表單名稱</th><th style="width:110px;">課室</th>
         <th style="width:110px;">母文件</th><th style="width:70px;">版次</th>
-        <th style="width:150px;">線上表單</th><th style="width:250px;">操作</th>
+        <th style="width:150px;">線上表單</th><th style="width:120px;">表單正確</th><th style="width:120px;">資料齊全</th>
+        <th style="width:250px;">操作</th>
       </tr></thead>
       <tbody>
       <?php foreach ($FORMS as $no => $d):
             $on = ($d['tpl'] || $d['mod'] || $d['pgn']); ?>
-        <tr class="<?= $on ? 'has-on' : '' ?>" data-on="<?= $on ? 1 : 0 ?>" data-dept="<?= htmlspecialchars($d['dept']) ?>">
+        <tr class="<?= $on ? 'has-on' : '' ?>" data-on="<?= $on ? 1 : 0 ?>" data-dept="<?= htmlspecialchars($d['dept']) ?>"
+            data-formok="<?= $d['fok'] ?>" data-dataok="<?= $d['dok'] ?>">
           <td><strong><?= htmlspecialchars($no) ?></strong></td>
           <td><?= htmlspecialchars($d['name']) ?></td>
           <td><?= htmlspecialchars($d['dept']) ?></td>
@@ -773,9 +798,19 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
                 <div style="font-size:11px;color:#8A5A2B;margin-top:2px;"><?= htmlspecialchars($d['pgn']) ?></div>
               <?php else: ?><span class="on-no">尚未建立</span><?php endif; ?></td>
           <td>
+            <button class="btn-mini chk-btn <?= $d['fok'] ? 'warm' : '' ?>" data-id="<?= $d['id'] ?>" data-field="form_ok" data-val="<?= $d['fok'] ?>"
+              title="<?= $d['fok'] ? htmlspecialchars($d['fokby'].' '.$d['fokat']) : '' ?>">
+              <i class="fa <?= $d['fok'] ? 'fa-check-circle' : 'fa-circle-o' ?>"></i> <?= $d['fok'] ? '已確認正確' : '表單正確' ?></button>
+          </td>
+          <td>
+            <button class="btn-mini chk-btn <?= $d['dok'] ? 'warm' : '' ?>" data-id="<?= $d['id'] ?>" data-field="data_ok" data-val="<?= $d['dok'] ?>"
+              title="<?= $d['dok'] ? htmlspecialchars($d['dokby'].' '.$d['dokat']) : '' ?>">
+              <i class="fa <?= $d['dok'] ? 'fa-check-circle' : 'fa-circle-o' ?>"></i> <?= $d['dok'] ? '已確認齊全' : '確認資料齊全' ?></button>
+          </td>
+          <td>
             <button class="btn-mini pv-open" data-no="<?= htmlspecialchars($no) ?>"><i class="fa fa-eye"></i> 預覽</button>
             <a class="btn-mini" target="_blank" rel="noopener" href="as_document_management.php?kw=<?= urlencode($no) ?>" title="到 AS 文件管理定位此文件"><i class="fa fa-folder-open-o"></i> 文件管理</a>
-            <?php if ($d['tpl']): ?>
+            <?php if ($d['tpl'] && $showOnlineForm): ?>
               <a class="btn-mini warm" target="_blank" rel="noopener" href="as_form_render.php?template_id=<?= $d['tpl'] ?>"><i class="fa fa-external-link"></i> 開線上表單</a>
               <a class="btn-mini" target="_blank" rel="noopener" href="as_form_fill.php?template_id=<?= $d['tpl'] ?>"><i class="fa fa-pencil"></i> 新填一張</a>
             <?php elseif ($d['mod']): ?>
@@ -826,7 +861,9 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       <li><b>課室說明文件</b>：左側選課室，右側閱讀。可在本篇搜尋（Enter 逐筆跳）、看原始 MD、下載 MD、列印。</li>
       <li><b>待處理問題</b>：比對程序書／實體表單檔／系統文件三方交叉檢查出的不一致，分高中低三級，可依優先度、課室、關鍵字篩選。
           <b>點欄位裡的文件編號</b>會另開 AS 文件管理並自動篩選到該筆。</li>
-      <li><b>線上表單對照</b>：全部四階表單一覽，顯示是否已有線上表單，可直接開啟或新填一張。</li>
+      <li><b>線上表單對照</b>：全部四階表單一覽，顯示是否已有線上表單，可直接開啟或新填一張；
+          可對每張表單按<b>「表單正確」</b>／<b>「確認資料齊全」</b>做點檢確認（會記錄確認人與時間，再按一次可取消），
+          兩者都可加入篩選條件（已確認正確／已確認齊全／尚未確認）。</li>
     </ul>
 
     <h4>點編號會發生什麼事</h4>
@@ -839,10 +876,19 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
     <h4>「已有線上表單」是怎麼判定的</h4>
     <div class="tip">三種來源缺一不可：① AS 線上表單設計器已綁定此文件 ② 已連結電子化模組（CAR／品質異常單）
       ③ <b>此表單已由既有頁面實作並做了 AS 文件綁定</b>（如供應商稽核管理、外來文件清單、報價單）。
-      第③類的登記表在本頁原始碼 <code>$PAGE_BINDS</code>——<b>日後有新的頁面綁定，要回來補一列</b>，否則會被誤判成「尚未建立」。</div>
+      第③類綁定值存在 <code>system_settings</code> / <code>system_parameters</code>：2026-08-03後新模組一律走統一庫
+      <code>system_parameters(param_group='AS_DOC_BIND')</code>，本頁<b>動態掃描該群組，不需要手動登記</b>；
+      少數尚未遷移的舊模組（供應商稽核管理／外來文件清單／報價單…）仍手動登記於本頁原始碼 <code>$PAGE_BINDS</code>，
+      這類舊式綁定若日後有新頁面才需要回來補一列。</div>
+
+    <h4>「線上表單模板」功能尚未正式導入</h4>
+    <p>AS 線上表單設計器（線上表單模板）仍在測試階段，預設對一般角色隱藏——「去建立線上表單」工具列按鈕、
+       各筆表單「操作」欄的「開線上表單」／「新填一張」都不會顯示。管理員可到「AS 文件管理」角色設定，
+       為特定角色勾選功能碼 <code>asdoc_online_form_beta</code> 開放測試；管理者固定可見。</p>
 
     <h4>權限</h4>
-    <p>沿用 AS 文件管理的 <code>as_doc</code> 模組角色與本頁 ACRUD：有 <b>A</b>／<b>R</b>／<code>asdoc_view</code> 即可檢視；管理者固定可看。本頁唯讀，不提供線上編輯。</p>
+    <p>沿用 AS 文件管理的 <code>as_doc</code> 模組角色與本頁 ACRUD：有 <b>A</b>／<b>R</b>／<code>asdoc_view</code> 即可檢視；管理者固定可看。
+       本頁以唯讀說明為主，僅「表單正確」／「確認資料齊全」點檢按鈕會寫入資料（沿用同一權限）。</p>
   </div>
   <div style="text-align:right;margin-top:10px;"><button class="btn btn-sm btn-default" onclick="document.getElementById('helpUseMask').style.display='none'">關閉</button></div>
 </div></div>
@@ -941,19 +987,42 @@ $(document).ready(function () {
     // ── 線上表單對照篩選 ──
     function onFilterRows() {
         var on = $('#onFilter').val(), dp = $('#onDept').val(),
+            fo = $('#onFormOk').val(), dok = $('#onDataOk').val(),
             kw = $.trim($('#onKw').val()).toLowerCase(), n = 0;
         $('#onTable tbody tr').each(function () {
             var $t = $(this),
                 ok = (on === '' || String($t.data('on')) === on)
                   && (!dp || String($t.data('dept')) === dp)
+                  && (fo === '' || String($t.data('formok')) === fo)
+                  && (dok === '' || String($t.data('dataok')) === dok)
                   && (!kw || $t.text().toLowerCase().indexOf(kw) >= 0);
             $t.toggle(ok); if (ok) { n++; }
         });
         $('#onCount').text(n);
     }
-    $('#onFilter,#onDept').on('change', onFilterRows);
+    $('#onFilter,#onDept,#onFormOk,#onDataOk').on('change', onFilterRows);
     $('#onKw').on('input', onFilterRows);
-    $('#btnOnClear').on('click', function () { $('#onFilter,#onDept').val(''); $('#onKw').val(''); onFilterRows(); });
+    $('#btnOnClear').on('click', function () { $('#onFilter,#onDept,#onFormOk,#onDataOk').val(''); $('#onKw').val(''); onFilterRows(); });
+
+    // ── 點檢按鈕：表單正確／確認資料齊全（切換確認狀態，寫入 as_flow_form_check）──
+    $(document).on('click', '.chk-btn', function () {
+        var $b = $(this), $tr = $b.closest('tr'), field = $b.data('field'),
+            cur = parseInt($b.data('val'), 10) || 0, next = cur ? 0 : 1,
+            label = field === 'form_ok' ? '表單正確' : '確認資料齊全';
+        if (cur && !confirm('要取消「' + label + '」的確認狀態嗎？')) { return; }
+        $b.prop('disabled', true);
+        $.post(DOC_API, {action: 'flow_check_toggle', doc_id: $b.data('id'), field: field, value: next}, function (r) {
+            if (r.status !== 'success') { alert(r.message || '操作失敗'); $b.prop('disabled', false); return; }
+            $b.data('val', r.value);
+            var dataKey = field === 'form_ok' ? 'formok' : 'dataok';
+            $tr.attr('data-' + dataKey, r.value).data(dataKey, r.value);
+            $b.toggleClass('warm', !!r.value)
+              .attr('title', r.value ? (r.by + ' ' + r.at) : '')
+              .html('<i class="fa ' + (r.value ? 'fa-check-circle' : 'fa-circle-o') + '"></i> ' +
+                    (r.value ? (field === 'form_ok' ? '已確認正確' : '已確認齊全') : label));
+            $b.prop('disabled', false);
+        }, 'json').fail(function () { alert('請求失敗'); $b.prop('disabled', false); });
+    });
 
     // 內部 MD 連結 → 切換課室
     var NAME2KEY = <?= json_encode(array_combine(array_column($DOCS,1), array_keys($DOCS)), JSON_UNESCAPED_UNICODE) ?>;

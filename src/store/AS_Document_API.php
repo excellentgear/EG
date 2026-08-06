@@ -1647,6 +1647,22 @@ case 'set_linked_module':
     $db->prepare("UPDATE as_document SET linked_module=?, updated_at=NOW() WHERE id=?")->execute([$module ?: null, $docId]);
     jout(['status'=>'success']);
 
+case 'flow_check_toggle':   // AS流程總覽·線上表單對照：表單正確／資料齊全 點檢（views/ADM/as_flow_guide.php）
+    if (!asCan('view')) jout(['status'=>'error','message'=>'無權限']);
+    $docId = (int)($_POST['doc_id'] ?? 0);
+    $field = trim($_POST['field'] ?? '');
+    $val   = (int)($_POST['value'] ?? 0) ? 1 : 0;
+    if ($docId<=0) jout(['status'=>'error','message'=>'無效 ID']);
+    if (!in_array($field, ['form_ok','data_ok'], true)) jout(['status'=>'error','message'=>'欄位錯誤']);
+    $byCol = $field.'_by'; $atCol = $field.'_at';
+    $by = $val ? $currentCname : null;
+    $st = $db->prepare("INSERT INTO as_flow_form_check (as_document_id, $field, $byCol, $atCol)
+                        VALUES (?, ?, ?, ".($val ? "NOW()" : "NULL").")
+                        ON DUPLICATE KEY UPDATE $field=VALUES($field), $byCol=VALUES($byCol),
+                            $atCol=".($val ? "NOW()" : "NULL"));
+    $st->execute([$docId, $val, $by]);
+    jout(['status'=>'success', 'value'=>$val, 'by'=>$by, 'at'=>$val ? date('Y-m-d H:i') : null]);
+
 default:
     jout(['status'=>'error','message'=>'無效的操作']);
 }
