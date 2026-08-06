@@ -663,8 +663,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">不論是否自動簽核，「誰簽」都是解析這裡設定的部門主管（含代理/迴避）；未勾自動簽核時，完成後需按「送審核」通知該主管簽核。</div>
         <hr style="margin:14px 0;border-color:#EADFC8;">
         <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;">供應商稽核計劃送出後是否需要核准</div>
-        <label><input type="checkbox" id="ssPlanNeed"> 需要最終決策者核准（不勾＝送出即生效）</label>
-        <div style="font-size:11px;color:#8a6d45;margin-top:4px;">目前的最終決策者：<b id="ssTopApprover">—</b>（依「組織角色綁定設定」的「最高核准人員」解析，含代理/迴避；要換人請到該設定頁改，不在這裡設定）</div>
+        <label><input type="checkbox" id="ssPlanNeed"> 需要核准（不勾＝送出即生效）</label>
+        <div style="font-size:11px;color:#8a6d45;margin-top:4px;">目前符合資格的核准人：<b id="ssTopApprover">—</b>（任一人核准即生效；規則依「組織角色綁定設定」第三節「供應商稽核計劃核准」解析——綁部門＝該部門任一職級不低於送出者的主管，綁人員＝固定該人，都未設定＝自動依本計劃綁定的AS文件所屬部門判斷。要改請到該設定頁，不在這裡設定）</div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('signSetMask')">取消</button>
@@ -2101,7 +2101,8 @@ function renderPlan(res){
     $('#planBody').html(body||'<tr><td colspan="14" style="padding:16px;color:#8a6d45;">本年度尚無稽核計畫對象</td></tr>');
     var stMap={pending:'待核准',approved:'已核准',rejected:'已退回(修改後可重新送出)'};
     var lockInfo = res.lock ? ('送出日期：'+fmtDate(res.lock.submit_date)+'　狀態：'+(stMap[res.lock.status]||res.lock.status)
-        + (res.lock.status==='approved'&&res.lock.approved_by_name ? '（核准：'+esc(res.lock.approved_by_name)+' '+fmtDate(res.lock.approved_at)+'）' : '')) : '尚未送出（可持續增列對象）';
+        + (res.lock.status==='approved'&&res.lock.approved_by_name ? '（核准：'+esc(res.lock.approved_by_name)+' '+fmtDate(res.lock.approved_at)+'）' : '')
+        + (res.lock.status==='pending'&&res.approver_names&&res.approver_names.length ? '（可核准：'+esc(res.approver_names.join('、'))+'）' : '')) : '尚未送出（可持續增列對象）';
     $('#planLockInfo').text(lockInfo);
     $('#planSubmitBtn').toggle(!!(PERMS.canEdit && !res.locked));
     $('#planDecideBtn').remove();
@@ -2290,7 +2291,8 @@ function submitChecklist(){
 $('#btnSignSetting').on('click', function(){
     $('#ssAuto').prop('checked', !!(META.sign_setting && META.sign_setting.auto));
     $('#ssPlanNeed').prop('checked', !!(META.plan_sign_setting && META.plan_sign_setting.need));
-    $('#ssTopApprover').text(META.top_approver_name || '（尚未設定，請先到「組織角色綁定設定」指定最高核准人員）');
+    $('#ssTopApprover').text((META.plan_approver_names && META.plan_approver_names.length) ? META.plan_approver_names.join('、')
+        : '（目前解析不到任何合格人選，請先到「組織角色綁定設定」的「供應商稽核計劃核准」指定部門或人員）');
     $.getJSON(API, {action:'sign_dept_options'}, function(res){
         if(!res.ok) return;
         var $s=$('#ssDept').html('<option value="">（尚未設定）</option>');
