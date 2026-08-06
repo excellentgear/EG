@@ -151,17 +151,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['revokeConfirmPw']) &&
     }
 }
 
-// 超級管理員的授權名單管理需要候選人清單(管理員角色的人)＋目前已授權者
+// 超級管理員的授權名單管理需要候選人清單＋目前已授權者。
+// 候選人不限「管理員角色」——超級管理員應該可以直接打姓名篩選、指定任何在職人員，人數也不限制；
+// 名單一律走共用的 people_lib.php（ai-rules/08 第五節人員列表鐵則，禁止各頁自己拼人員 SQL）。
 $grantCandidates = [];
 $grantedList = [];
 if ($isSuperadmin) {
+    require_once '../../src/common/people_lib.php';
     $grantedList = eg_confirm_password_grant_list($conn_pdo);
     try {
-        $grantCandidates = $conn_pdo->query("SELECT DISTINCT u.id, u.user_cname, u.user_uname FROM user u
-                                             JOIN user_roles ur ON ur.user_id=u.id
-                                             JOIN roles r ON r.role_id=ur.role_id AND r.is_system=1 AND r.role_code='admin'
-                                             WHERE u.id<>1 AND COALESCE(u.state,1) NOT IN (0,90)
-                                             ORDER BY u.user_cname")->fetchAll(PDO::FETCH_ASSOC);
+        $grantCandidates = array_values(array_filter(
+            eg_people_list($conn_pdo, ['multi_dept' => true]),
+            function ($p) { return (int)$p['id'] !== 1; }
+        ));
     } catch (Exception $e) { $grantCandidates = []; }
 }
 ?>
@@ -346,17 +348,22 @@ if ($isSuperadmin) {
                                     </table>
 
                                     <form class="form-inline" method="POST" action="user.php">
-                                        <select name="target_uid" class="form-control" required>
-                                            <option value="">選擇要授權的管理員…</option>
-                                            <?php foreach ($grantCandidates as $c): ?>
-                                                <option value="<?= (int)$c['id'] ?>"><?= htmlspecialchars($c['user_cname']) ?>（<?= htmlspecialchars($c['user_uname']) ?>）</option>
+                                        <select name="target_uid" class="form-control" data-eg-filter="輸入姓名篩選…" required>
+                                            <option value="">選擇要授權的人員…</option>
+                                            <?php foreach ($grantCandidates as $c):
+                                                $label = $c['user_cname']
+                                                    . ($c['position_name'] ? '（' . $c['position_name'] . '）' : '')
+                                                    . ($c['dept_name'] ? '／' . $c['dept_name'] : '')
+                                                    . (!empty($c['leave_note']) ? '　' . $c['leave_note'] : '');
+                                            ?>
+                                                <option value="<?= (int)$c['id'] ?>"><?= htmlspecialchars($label) ?></option>
                                             <?php endforeach; ?>
                                         </select>
                                         <button type="submit" name="grantConfirmPw" class="btn btn-primary">
                                             <i class="fa fa-plus"></i> 新增授權
                                         </button>
                                     </form>
-                                    <p class="text-muted" style="margin-top:6px;">候選名單只列有「管理員」角色、未離職的帳號。</p>
+                                    <p class="text-muted" style="margin-top:6px;">候選名單為全公司在職人員（可直接打姓名篩選），不限「管理員」角色；授權人數沒有上限。</p>
                                 </div>
                             </div>
                         </div>
@@ -378,6 +385,7 @@ if ($isSuperadmin) {
     <script src="../../resource/js/bootstrap.min.js"></script>
     <!-- Custom Theme Scripts -->
     <script src="../../resource/js/custom.min.js"></script>
+    <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 
     <script>
         // 前端即時檢查：新密碼與確認密碼是否一致
