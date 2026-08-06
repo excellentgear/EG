@@ -1233,14 +1233,13 @@ try {
             $fn_stmt->execute();
             $form_number = json_decode($fn_stmt->fetchColumn() ?: '""', true) ?: '';
             // 綁定的 AS 文件編號（ai-rules/16：編號一律走 as_document 綁定，禁寫死；有綁定時優先於手動表單編號）
+            // 版次依「這張報價單自己的報價日期」回推當時生效的版次列印，不是印現在最新版（ai-rules/16 第三之二節）
             $as_doc_no = '';
             try {
                 $ad_stmt = $pdo->query("SELECT param_value FROM system_parameters WHERE param_group='QUOTATION' AND param_key='as_doc_id' LIMIT 1");
                 $ad_id = (int)json_decode((string)$ad_stmt->fetchColumn(), true);
                 if ($ad_id) {
-                    $ad2 = $pdo->prepare("SELECT doc_no, current_version, doc_level FROM as_document WHERE id=? AND is_deleted=0");
-                    $ad2->execute([$ad_id]);
-                    $as_doc_no = eg_asdoc_no($ad2->fetch(PDO::FETCH_ASSOC) ?: null);
+                    $as_doc_no = eg_asdoc_no_asof_id($pdo, $ad_id, (string)($quote['quote_date'] ?? ''));
                 }
             } catch (Exception $_e) {}
             $response = ['success' => true, 'quote' => $quote, 'customer' => $cust, 'contact' => $contact, 'company' => $company, 'form_number' => $form_number, 'as_doc_no' => $as_doc_no];
