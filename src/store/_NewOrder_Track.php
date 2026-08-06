@@ -3,6 +3,7 @@
 session_start();
 include '../../src/common/DBConnection.php';
 include '../../src/common/_config.php';
+require_once '../../src/common/part_alias_lib.php';
 
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
@@ -73,6 +74,44 @@ try {
         return count($chgs);
     }
 
+    // 附件標籤鐵則（CLAUDE.md 鐵律8）：存檔/建單前確認符合條件的附件都已設定至少一個類別標籤，
+    // 防止略過前端直接呼叫 API 繞過（前端 Order_Attachment_API.php 允許先上傳、之後才點開設標籤，
+    // 但正式存檔這一關一定要補齊）。回傳 null＝通過；否則為列出未設標籤檔名的錯誤訊息。
+    function eg_order_attach_check_tagged(PDO $db, string $whereSql, array $params): ?string {
+        try {
+            $st = $db->prepare("SELECT original_name, filename FROM order_attachments WHERE $whereSql AND (category_ids IS NULL OR category_ids='')");
+            $st->execute($params);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) { return null; } // 表尚未建立＝該功能尚未使用過，視為通過
+        if (!$rows) return null;
+        $names = array_map(fn($r) => $r['original_name'] ?: $r['filename'], $rows);
+        return '下列附件尚未設定類別標籤，請設定後再存檔：' . implode('、', $names);
+    }
+
+    // 沿用報價單既有「必備類別，需連結單一料號」設定（system_parameters QUOTATION/required_attach_cats，
+    // quotation_list_NEW.php 維護）：OP轉訂單批次內若真的有多種料號，這些類別的附件不可設為「共用（全部）」，
+    // 一定要挑對應料號，否則將來 bom_viewer 圖面查閱頁無法正確歸戶到單一料號。只在批次真的有多料號時才擋，
+    // 單一料號訂單/批次沒有這個歧義問題，不受影響。回傳 null＝通過；否則為錯誤訊息。
+    function eg_order_attach_check_required_part(PDO $db, string $batchKey): ?string {
+        try {
+            $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='QUOTATION' AND param_key='required_attach_cats'");
+            $st->execute();
+            $v = $st->fetchColumn();
+            $reqIds = $v ? array_map('intval', (json_decode($v, true) ?: [])) : [];
+            if (!$reqIds) return null;
+            $st2 = $db->prepare("SELECT original_name, filename, category_ids FROM order_attachments
+                                 WHERE batch_key=? AND status='temp' AND (linked_part_no IS NULL OR linked_part_no='')");
+            $st2->execute([$batchKey]);
+            $bad = [];
+            foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $cats = array_map('intval', array_filter(explode(',', (string)$r['category_ids'])));
+                if (array_intersect($cats, $reqIds)) $bad[] = $r['original_name'] ?: $r['filename'];
+            }
+            if (!$bad) return null;
+            return '下列附件的類別需要指定對應料號（批次內有多筆料號，不可設為共用）：' . implode('、', $bad);
+        } catch (PDOException $e) { return null; }
+    }
+
     // OP轉訂單用：把報價項目 process_notes（逗號分隔 sub_tag_id）轉成製程名稱字串（・連接）
     function eg_process_names_for(PDO $db, ?string $process_notes): string {
         if (empty($process_notes)) return '';
@@ -94,6 +133,12 @@ try {
 
     // ── 新增 ──────────────────────────────────────────────────────────
     if (isset($_POST['or_new']) || isset($_POST['or_new_copy'])) {
+        // 附件標籤鐵則：這批暫存附件全部設好標籤才能存檔，否則擋下（不建立訂單）
+        $batchKey = trim($_POST['batch_key'] ?? '');
+        if ($batchKey !== '') {
+            $tagErr = eg_order_attach_check_tagged($db, "batch_key=? AND status='temp'", [$batchKey]);
+            if ($tagErr !== null) { echo json_encode(['success' => false, 'message' => $tagErr]); exit; }
+        }
         $sql = "INSERT INTO order_track SET
                     Order_oo         = :OrderNo,
                     d_id             = :d_id,
@@ -147,12 +192,28 @@ try {
         $stmt->bindValue(':quote_item_id',    $quoteItemId);
         $stmt->execute();
         $newId = $db->lastInsertId();
+        // 新增訂單附件暫存轉正：畫面開啟時前端產生 batch_key，存檔前上傳的附件先存 temp，這裡歸給剛建立的訂單
+        if ($batchKey !== '') {
+            try {
+                $db->prepare("UPDATE order_attachments SET order_id=?, status='active', expire_at=NULL, batch_key=NULL WHERE batch_key=? AND status='temp'")
+                   ->execute([$newId, $batchKey]);
+            } catch (PDOException $e) { /* order_attachments 尚未建表（該功能尚未使用過）：略過 */ }
+        }
         echo json_encode(['success' => true, 'new_order_id' => $newId, 'message' => isset($_POST['or_new_copy']) ? '新增並複製成功' : '新增成功']);
         exit;
     }
 
     // ── 更新 ──────────────────────────────────────────────────────────
     if (isset($_POST['or_update'])) {
+        $editOrderId = intval($_POST['Order_id']);
+        $editBatchKey = trim($_POST['batch_key'] ?? '');
+        // 附件標籤鐵則：這張訂單既有的正式附件、以及這次編輯中新上傳尚未存檔的暫存附件，全部設好標籤才能存檔
+        $tagErr = eg_order_attach_check_tagged($db, "order_id=? AND status='active'", [$editOrderId]);
+        if ($tagErr === null && $editBatchKey !== '') {
+            $tagErr = eg_order_attach_check_tagged($db, "batch_key=? AND status='temp'", [$editBatchKey]);
+        }
+        if ($tagErr !== null) { echo json_encode(['success' => false, 'message' => $tagErr]); exit; }
+
         $selStmt = $db->prepare("SELECT Delivery_date, Delivery_date_2 FROM order_track WHERE Order_id = ?");
         $selStmt->execute([intval($_POST['Order_id'])]);
         $row = $selStmt->fetch(PDO::FETCH_ASSOC);
@@ -213,6 +274,14 @@ try {
             $stmt->bindParam(':Delivery_date', $_POST['orderDdate']);
         }
         $stmt->execute();
+        // 編輯訂單附件暫存轉正：這次編輯中上傳的附件先存 temp，按下更新才歸給這張既有訂單；
+        // 沒按更新就關閉視窗＝暫存到期(3天)自動清除，不會憑空掛到訂單上
+        if ($editBatchKey !== '') {
+            try {
+                $db->prepare("UPDATE order_attachments SET order_id=?, status='active', expire_at=NULL, batch_key=NULL WHERE batch_key=? AND status='temp'")
+                   ->execute([$editOrderId, $editBatchKey]);
+            } catch (PDOException $e) { /* order_attachments 尚未建表（該功能尚未使用過）：略過 */ }
+        }
         echo json_encode(['success' => true, 'message' => '更新成功']);
         exit;
     }
@@ -527,6 +596,67 @@ try {
             echo json_encode(['success' => false, 'message' => '未提供任何要轉單的料號項目']); exit;
         }
 
+        // 附件標籤鐵則：這批暫存附件全部設好標籤才能建單，否則整批擋下（不建立任何一筆訂單）
+        $opBatchKey = trim($_POST['batch_key'] ?? '');
+        if ($opBatchKey !== '') {
+            $tagErr = eg_order_attach_check_tagged($db, "batch_key=? AND status='temp'", [$opBatchKey]);
+            if ($tagErr !== null) { echo json_encode(['success' => false, 'message' => $tagErr]); exit; }
+
+            // 批次內若真的有多種料號，沿用報價單「必備類別，需連結單一料號」的設定，這些類別不可設為共用
+            $quoteItemIds = array_values(array_filter(array_map(fn($r) => intval($r['quote_item_id'] ?? 0), $items)));
+            if ($quoteItemIds) {
+                $phQ = implode(',', array_fill(0, count($quoteItemIds), '?'));
+                $dpStmt = $db->prepare("SELECT COUNT(DISTINCT d_setting_d_id) FROM quotation_item WHERE item_id IN ($phQ)");
+                $dpStmt->execute($quoteItemIds);
+                $distinctParts = (int)$dpStmt->fetchColumn();
+                if ($distinctParts > 1) {
+                    $reqErr = eg_order_attach_check_required_part($db, $opBatchKey);
+                    if ($reqErr !== null) { echo json_encode(['success' => false, 'message' => $reqErr]); exit; }
+                }
+            }
+        }
+
+        // 相容舊表：order_track.qty_over_range（轉單數量超出報價階梯區間旗標）首次執行自動補欄
+        try { $db->query("SELECT qty_over_range FROM order_track LIMIT 1"); }
+        catch (PDOException $e) {
+            try { $db->exec("ALTER TABLE order_track ADD COLUMN qty_over_range TINYINT(1) NOT NULL DEFAULT 0 COMMENT '轉單數量超出報價階梯區間(含容差後)=1,待補報價單'"); } catch (PDOException $e2) {}
+        }
+
+        // 階梯區間工具（與前端 opTolRange/opMatchTier 同邏輯；伺服器端為準）
+        $tolRange = function(array $t): array {
+            $mn = (int)round((float)($t['qty_min'] ?? 0));
+            $mx = ($t['qty_max'] === null || $t['qty_max'] === '') ? null : (int)round((float)$t['qty_max']);
+            $tv = ($t['tolerance_value'] === null || $t['tolerance_value'] === '') ? 0.0 : (float)$t['tolerance_value'];
+            $lo = $mn; $hi = $mx;
+            if ($tv > 0) {
+                if (($t['tolerance_unit'] ?? '') === '%') {
+                    $lo = max(1, (int)floor($mn * (1 - $tv / 100)));
+                    if ($hi !== null) $hi = (int)ceil($hi * (1 + $tv / 100));
+                } elseif (($t['tolerance_unit'] ?? '') === 'PCS') {
+                    $lo = max(1, $mn - (int)round($tv));
+                    if ($hi !== null) $hi = $hi + (int)round($tv);
+                }
+            }
+            return ['base_lo' => $mn, 'base_hi' => $mx, 'tol_lo' => $lo, 'tol_hi' => $hi];
+        };
+        $matchTier = function(array $tiers, int $qty, bool $useTol) use ($tolRange): ?array {
+            if ($qty <= 0) return null;
+            foreach ($tiers as $t) {
+                $r = $tolRange($t);
+                if ($qty >= $r['base_lo'] && ($r['base_hi'] === null || $qty <= $r['base_hi'])) return $t;
+            }
+            if (!$useTol) return null;
+            $best = null; $bestDist = PHP_INT_MAX;
+            foreach ($tiers as $t) {
+                $r = $tolRange($t);
+                if ($qty >= $r['tol_lo'] && ($r['tol_hi'] === null || $qty <= $r['tol_hi'])) {
+                    $dist = $qty < $r['base_lo'] ? ($r['base_lo'] - $qty) : ($r['base_hi'] === null ? 0 : $qty - $r['base_hi']);
+                    if ($dist < $bestDist) { $best = $t; $bestDist = $dist; }
+                }
+            }
+            return $best;
+        };
+
         $db->beginTransaction();
         try {
             $created = [];
@@ -553,7 +683,7 @@ try {
                 }
 
                 $qi = $db->prepare("SELECT qi.item_id, qi.quote_id, qi.product_id, qi.d_setting_d_id, qi.specification,
-                                            qi.quantity, qi.unit_price, qi.process_notes,
+                                            qi.quantity, qi.unit_price, qi.process_notes, qi.is_tiered,
                                             ql.quote_no, ql.client_name AS quote_client_name, ql.client_id AS quote_client_id,
                                             ds.D_Setting_Id, ds.Is_Assembly, ds.Customer_Id AS part_customer_id,
                                             c.customer AS part_customer_name
@@ -566,8 +696,54 @@ try {
                 $src = $qi->fetch(PDO::FETCH_ASSOC);
                 if (!$src) throw new Exception("找不到報價項目（ID {$quoteItemId}）");
                 if (empty($src['d_setting_d_id'])) throw new Exception('料號 ' . $src['product_id'] . ' 尚未綁定料號ID，無法轉單');
+
+                // 客戶代號／等同料號自動更正（伺服器端為準）：報價當年用的料號如果後來被登記成
+                // 別的料號的別名（linked_d_id），一律改用現行正確料號建單，不可繼續拿舊料號建單
+                $canon = eg_part_alias_canonical($db, (int)$src['d_setting_d_id']);
+                if ($canon['corrected']) {
+                    $cd = $db->prepare("SELECT ds.D_Setting_Id, ds.Is_Assembly, ds.Customer_Id AS part_customer_id, c.customer AS part_customer_name
+                                        FROM d_setting ds LEFT JOIN customer_list c ON c.customer_id = ds.Customer_Id
+                                        WHERE ds.d_id = ?");
+                    $cd->execute([$canon['d_id']]);
+                    if ($cr = $cd->fetch(PDO::FETCH_ASSOC)) {
+                        $originalPartNo        = $src['D_Setting_Id'];
+                        $src['d_setting_d_id']  = $canon['d_id'];
+                        $src['D_Setting_Id']    = $cr['D_Setting_Id'];
+                        $src['Is_Assembly']     = $cr['Is_Assembly'];
+                        $src['part_customer_id']   = $cr['part_customer_id'];
+                        $src['part_customer_name'] = $cr['part_customer_name'];
+                        $orderPs = trim($orderPs . '（料號已依客戶代號／等同料號綁定，由「' . $originalPartNo . '」自動更正為「' . $src['D_Setting_Id'] . '」）');
+                    }
+                }
                 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $deliveryDate)) {
                     throw new Exception('料號 ' . $src['product_id'] . ' 交期格式錯誤（' . $deliveryDate . '），請重新選擇日期');
+                }
+
+                // ── 階梯報價：以使用者輸入數量對價（伺服器端重算為準，不採信前端價格）──
+                $ordQty   = $src['quantity'];
+                $ordPrice = $src['unit_price'];
+                $qtyOver  = 0;
+                if ((int)$src['is_tiered'] === 1) {
+                    $qtyIn    = (int)($row['qty'] ?? 0);
+                    $useTol   = (int)($row['tol_match'] ?? 0) === 1;
+                    if ($qtyIn <= 0) throw new Exception('料號 ' . $src['product_id'] . ' 為階梯報價，請輸入訂購數量');
+                    $stTier = $db->prepare("SELECT qty_min, qty_max, unit_price, tolerance_value, tolerance_unit
+                                            FROM quotation_item_tier WHERE item_id = ? ORDER BY sort_order ASC, qty_min ASC");
+                    $stTier->execute([$quoteItemId]);
+                    $tiers = $stTier->fetchAll(PDO::FETCH_ASSOC);
+                    if (!$tiers) throw new Exception('料號 ' . $src['product_id'] . ' 階梯報價缺少區間資料');
+                    $ordQty = $qtyIn;
+                    $m = $matchTier($tiers, $qtyIn, $useTol);
+                    if ($m) {
+                        $ordPrice = $m['unit_price'];
+                    } else {
+                        // 依報價區間（與使用者選的對價模式）都對不到：
+                        // 完全超出（含容差後）→ 無單價建立並標記，供列表紅字與篩選、後續補報價單
+                        $mTol = $matchTier($tiers, $qtyIn, true);
+                        if ($mTol && !$useTol) throw new Exception('料號 ' . $src['product_id'] . ' 數量 ' . $qtyIn . ' 僅落在容差後區間，請改用容差區間對價或修改數量');
+                        $ordPrice = null;
+                        $qtyOver  = 1;
+                    }
                 }
 
                 // 客戶：料號已綁定客戶則以料號客戶為準，否則沿用報價單客戶（比照新增訂單既有規則）
@@ -585,18 +761,20 @@ try {
                     unit_price=:unit_price, quote_no=:quote_no, quote_item_id=:quote_item_id,
                     Order_status=NULL, split_seq=1, parent_order_id=NULL,
                     Client_name_ID=:Client_name_ID, d_id_ID=:d_id_ID,
+                    qty_over_range=:qty_over_range,
                     Created_At=NOW(), Created_By=:Created_By");
                 $ins->execute([
                     ':Order_oo'         => $orderNo,
                     ':d_id'             => $src['D_Setting_Id'],
                     ':Order_ps'         => $orderPs !== '' ? $orderPs : null,
                     ':Client_name'      => $clientName,
-                    ':Qty'              => $src['quantity'],
+                    ':Qty'              => $ordQty,
                     ':Delivery_date'    => $deliveryDate,
                     ':Processing_items' => $processing_items,
                     ':ate'              => $ate,
                     ':ateGet'           => $ateGet,
-                    ':unit_price'       => $src['unit_price'],
+                    ':unit_price'       => $ordPrice,
+                    ':qty_over_range'   => $qtyOver,
                     ':quote_no'         => $src['quote_no'],
                     ':quote_item_id'    => $quoteItemId,
                     ':Client_name_ID'   => $clientId,
@@ -610,6 +788,34 @@ try {
                     'is_assembly' => intval($src['Is_Assembly']) === 1,
                 ];
             }
+
+            // 附件歸屬：OP轉訂單畫面二上傳的附件先存在暫存批次(batch_key)，這裡依料號歸給剛建立的訂單。
+            // linked_part_no 有值＝只歸給該料號對應的新訂單；NULL(共用/全部)＝這批新建的訂單都要有，
+            // 一個實體檔可以被多筆 order_attachments 列共用參照（filename 相同），不必複製檔案。
+            if ($opBatchKey !== '' && $created) {
+                try {
+                    $partToOrderIds = [];
+                    foreach ($created as $c) { $partToOrderIds[$c['d_id']][] = $c['order_id']; }
+                    $allOrderIds = array_column($created, 'order_id');
+                    $st = $db->prepare("SELECT id, linked_part_no, filename, original_name, category_ids, file_size, uploaded_by
+                                        FROM order_attachments WHERE batch_key=? AND status='temp'");
+                    $st->execute([$opBatchKey]);
+                    $upd = $db->prepare("UPDATE order_attachments SET order_id=?, status='active', expire_at=NULL, batch_key=NULL WHERE id=?");
+                    $ins = $db->prepare("INSERT INTO order_attachments (order_id, linked_part_no, filename, original_name, category_ids, file_size, uploaded_by, status)
+                                        VALUES (?,?,?,?,?,?,?,'active')");
+                    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $t) {
+                        $part = $t['linked_part_no'];
+                        $targetIds = ($part !== null && $part !== '') ? ($partToOrderIds[$part] ?? []) : $allOrderIds;
+                        if (!$targetIds) continue; // 該料號這批沒有真的建成訂單：附件留在temp，逾期由懶惰清除機制回收
+                        $firstId = array_shift($targetIds);
+                        $upd->execute([$firstId, $t['id']]);
+                        foreach ($targetIds as $extraOid) {
+                            $ins->execute([$extraOid, $part, $t['filename'], $t['original_name'], $t['category_ids'], $t['file_size'], $t['uploaded_by']]);
+                        }
+                    }
+                } catch (PDOException $e) { /* order_attachments 尚未建表（該功能尚未使用過）：略過 */ }
+            }
+
             $db->commit();
             echo json_encode(['success' => true, 'created' => $created, 'message' => '已建立 ' . count($created) . ' 筆訂單']);
         } catch (PDOException $e) {
