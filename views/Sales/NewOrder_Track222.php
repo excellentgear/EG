@@ -7108,7 +7108,8 @@ foreach($dCounts as $c) {
         function orderAttachNewBatchKey() { return 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
 
         // 產生單一附件列的 HTML（tagToggle/tagApply/fileDel 走事件委派，data-id 標記附件ID）
-        function oaBuildFileRowHtml(f, cats, showPart) {
+        // availableParts：showPart 情境下這批目前有哪些料號可選（>1 筆才顯示下拉，讓使用者事後改料號連結）
+        function oaBuildFileRowHtml(f, cats, showPart, availableParts) {
             var tagged = !!f.category_name;
             var checkedIds = String(f.category_ids || '').split(',').filter(Boolean);
             var panelHtml = (cats || []).map(function(c) {
@@ -7117,8 +7118,14 @@ foreach($dCounts as $c) {
                     '<input type="checkbox" value="' + c.id + '"' + ck + '>' + escapeHtml(c.category_name) +
                     (c.required ? ' <span style="color:#DD5138;" title="必備類別，需連結單一料號">*</span>' : '') + '</label>';
             }).join('') || '<span style="color:#aaa;">尚未設定本頁可用標籤，請至「設定」跳窗設定</span>';
+            var parts = availableParts || [];
             var partTag = showPart
-                ? '<span style="font-size:10px;color:#999;">' + (f.linked_part_no ? ('料號：' + escapeHtml(f.linked_part_no)) : '共用（全部）') + '</span>'
+                ? (parts.length > 1
+                    ? '<select class="oa-part-select" style="font-size:10px;padding:0 2px;">' +
+                        '<option value="">共用（全部）</option>' +
+                        parts.map(function(p) { return '<option value="' + escapeHtml(p) + '"' + (f.linked_part_no === p ? ' selected' : '') + '>' + escapeHtml(p) + '</option>'; }).join('') +
+                      '</select>'
+                    : '<span style="font-size:10px;color:#999;">' + (f.linked_part_no ? ('料號：' + escapeHtml(f.linked_part_no)) : '共用（全部）') + '</span>')
                 : '';
             return '<div class="oa-file-row" data-id="' + f.id + '" style="padding:4px 0;border-bottom:1px dotted #eee;' + (tagged ? '' : 'background:#FFF6F0;') + '">' +
                 '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
@@ -7136,6 +7143,20 @@ foreach($dCounts as $c) {
                 '</div>';
         }
         function oaHasUntagged(files) { return (files || []).some(function(f) { return !f.category_name; }); }
+        // 事後改料號連結（多料號批次時的下拉選單，change 即時存檔）
+        $(document).on('change', '.oa-part-select', function() {
+            var $row = $(this).closest('.oa-file-row');
+            var attId = $row.data('id');
+            var newPart = $(this).val();
+            var catIds = [];
+            $row.find('.oa-tag-panel input:checked').each(function() { catIds.push($(this).val()); });
+            $.post(ORDER_ATTACH_API, { action: 'update_attachment', attachment_id: attId, category_ids: catIds.join(','), linked_part_no: newPart }, function(res) {
+                if (!res.success) { showToast(res.message || '設定失敗', 'info'); return; }
+                [orderAttachFiles, opAttachFilesCache].forEach(function(arr) {
+                    (arr || []).forEach(function(f) { if (String(f.id) === String(attId)) f.linked_part_no = newPart || null; });
+                });
+            }, 'json');
+        });
         // 目前有哪些附件清單快取存放這筆 attId（同時可能存在於訂單附件與OP附件），存回去讓存檔前檢查看到最新狀態
         function oaSyncCachedFile(attId, categoryName, categoryIds) {
             [orderAttachFiles, opAttachFilesCache].forEach(function(arr) {
@@ -7906,6 +7927,8 @@ foreach($dCounts as $c) {
 
         // ── OP轉訂單附件（整批共用一個暫存批次；多料號時可指定對應料號或「共用(全部)」）──
         var opAttachBatchKey = null;
+        var opAttachMultiPart = false; // 這批是否有 >1 種料號；影響「必備類別是否可設為共用」的檢查
+        var opAttachPartsList = [];    // 這批目前有哪些料號（供附件列表的料號下拉使用）
         function opAttachRefreshCats() {
             if (orderAttachCats === null) {
                 $.post(ORDER_ATTACH_API, { action: 'get_categories' }, function(res) {
@@ -7921,6 +7944,8 @@ foreach($dCounts as $c) {
                 var p = it.D_Setting_Id || it.product_id || '';
                 if (p && parts.indexOf(p) === -1) parts.push(p);
             });
+            opAttachMultiPart = parts.length > 1;
+            opAttachPartsList = parts;
             var $sel = $('#op-attach-part').empty();
             if (parts.length > 1) {
                 $sel.append('<option value="">共用（全部）</option>');
@@ -7930,11 +7955,23 @@ foreach($dCounts as $c) {
                 $('#op-attach-part-wrap').hide();
             }
         }
+        // 必備類別（reqCats，沿用報價單 required_attach_cats）在批次真的有多種料號時不可設為共用；
+        // 只有單一料號時已自動視為該料號，不會落入這個問題
+        function oaHasUnboundRequired(files) {
+            if (!opAttachMultiPart) return false;
+            var reqIds = (orderAttachCats || []).filter(function(c) { return c.required; }).map(function(c) { return String(c.id); });
+            if (!reqIds.length) return false;
+            return (files || []).some(function(f) {
+                if (f.linked_part_no) return false;
+                var catIds = String(f.category_ids || '').split(',').filter(Boolean);
+                return catIds.some(function(id) { return reqIds.indexOf(id) !== -1; });
+            });
+        }
         function opAttachRenderList(files) {
             opAttachFilesCache = files || [];
             var $list = $('#op-attach-list');
             if (!files || !files.length) { $list.html('<span style="color:#aaa;">尚無附件</span>'); return; }
-            $list.html(files.map(function(f) { return oaBuildFileRowHtml(f, orderAttachCats, true); }).join(''));
+            $list.html(files.map(function(f) { return oaBuildFileRowHtml(f, orderAttachCats, true, opAttachPartsList); }).join(''));
         }
         function opAttachRefreshList() {
             $.post(ORDER_ATTACH_API, { action: 'list_files', batch_key: opAttachBatchKey }, function(res) {
@@ -7999,6 +8036,11 @@ foreach($dCounts as $c) {
             // 附件標籤鐵則：存檔前先擋（後端 create_orders_from_quotes 仍會再驗一次，防止繞過前端直打API）
             if (oaHasUntagged(opAttachFilesCache)) {
                 $('#op-create-error').text('尚有附件未設定類別標籤，請點附件列的「標籤」設定後再建立訂單。').show();
+                return;
+            }
+            // 必備類別附件在多料號批次中不可設為共用，必須指定對應料號
+            if (oaHasUnboundRequired(opAttachFilesCache)) {
+                $('#op-create-error').text('這批有多種料號，含必備類別的附件必須指定對應料號（不可設為共用），請在附件列的料號下拉選擇後再建立訂單。').show();
                 return;
             }
 

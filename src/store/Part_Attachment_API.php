@@ -637,19 +637,44 @@ switch ($action) {
         try {
             $proc = $pdo->query("SELECT ProcessNo, ProcessName FROM process_no ORDER BY ProcessNo")->fetchAll(PDO::FETCH_ASSOC);
         } catch (Throwable $e) { $proc = []; }
-        $people = [];
+        $people = []; $depts = [];
         try {
             require_once __DIR__ . '/../common/people_lib.php';
+            require_once __DIR__ . '/../common/org_role_lib.php';
             $rows = eg_people_list($pdo);
-            $multiDept = function_exists('eg_people_multi_dept') ? eg_people_multi_dept($rows) : false;
+            // 欄位順序固定「部門／職稱／姓名」，排序依 sort_order 不是姓名筆畫（人員列表鐵則第 6 條）
             foreach ($rows as $r) {
-                $label = $r['user_cname'] . ($r['position_name'] ? '（' . $r['position_name'] . '）' : '');
-                if ($multiDept && $r['dept_name']) $label = $r['dept_name'] . '　' . $label;
-                if (!empty($r['leave_note'])) $label .= '　※' . $r['leave_note'];
-                $people[] = ['id' => $r['id'], 'label' => $label];
+                $people[] = [
+                    'id'        => $r['id'],
+                    'name'      => $r['user_cname'],
+                    'dept_id'   => $r['dept_id'],
+                    'dept_name' => $r['dept_name'],
+                    'position'  => $r['position_name'],
+                    'leave_note'=> $r['leave_note'] ?? '',
+                ];
+            }
+            // 部門：帶「含子部門」的實際在職成員 id，讓前端算得出涵蓋範圍並把已被涵蓋的人反灰
+            $byDept = [];
+            foreach ($rows as $r) { if ($r['dept_id']) $byDept[(int)$r['dept_id']][] = (int)$r['id']; }
+            $dRows = $pdo->query("SELECT id, name, parent_id, COALESCE(sort_order,999) AS sort_order FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+            $nameById = []; $parentById = [];
+            foreach ($dRows as $d) { $nameById[(int)$d['id']] = $d['name']; $parentById[(int)$d['id']] = (int)($d['parent_id'] ?? 0); }
+            foreach ($dRows as $d) {
+                $ids = eg_dept_subtree_ids($pdo, (int)$d['id']);
+                $members = [];
+                foreach ($ids as $sub) { foreach (($byDept[$sub] ?? []) as $u) $members[$u] = true; }
+                if (!$members) continue;                      // 沒有在職成員的部門不列，避免選了卻沒人收到
+                // 路徑（上層部門／本部門），讓同名子部門分得出來；用已抓到的 parent 對照表組，不再逐層查 DB
+                $path = $d['name']; $p = $parentById[(int)$d['id']]; $guard = 0;
+                while ($p && isset($nameById[$p]) && $guard++ < 10) {
+                    $path = $nameById[$p] . ' / ' . $path;
+                    $p = $parentById[$p] ?? 0;
+                }
+                $depts[] = ['id'=>(int)$d['id'], 'name'=>$d['name'], 'path'=>$path,
+                            'user_ids'=>array_keys($members), 'count'=>count($members)];
             }
         } catch (Throwable $e) {}
-        echo json_encode(['success'=>true,'processes'=>$proc,'people'=>$people], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['success'=>true,'processes'=>$proc,'people'=>$people,'departments'=>$depts], JSON_UNESCAPED_UNICODE);
         break;
 
     // ── 圖面變更：由附件上傳的自動判定產生一筆變更紀錄 ─────────────
@@ -672,6 +697,7 @@ switch ($action) {
                 'customer_doc_no'       => ($_POST['customer_doc_no'] ?? ''),
                 'from_process_no'       => ($_POST['from_process_no'] ?? ''),
                 'ack_users'             => (array)($_POST['ack_users'] ?? []),
+                'ack_depts'             => (array)($_POST['ack_depts'] ?? []),
                 'created_by'            => $uploadedById,
                 'trigger_attachment_id' => (int)$att['id'],
             ]);
