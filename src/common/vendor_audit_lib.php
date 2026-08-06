@@ -178,7 +178,7 @@ function vendor_audit_bound_asdoc(PDO $db, string $key = 'vendor_audit_as_doc_id
     $id = (int)vendor_eval_setting($db, $key, 0);
     if ($id <= 0) return null;
     try {
-        $st = $db->prepare("SELECT id, doc_no, doc_name, current_version, doc_level FROM as_document WHERE id=? AND (is_deleted IS NULL OR is_deleted=0) LIMIT 1");
+        $st = $db->prepare("SELECT id, doc_no, doc_name, current_version, doc_level, department_id FROM as_document WHERE id=? AND (is_deleted IS NULL OR is_deleted=0) LIMIT 1");
         $st->execute([$id]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return null;
@@ -863,6 +863,56 @@ function vendor_audit_verify_superadmin_password(PDO $db, string $password): arr
     } catch (Throwable $e) { return ['ok'=>false, 'msg'=>'密碼驗證失敗']; }
     return ['ok'=>true, 'msg'=>''];
 }
+/**
+ * 供應商稽核計劃「核准人員」解析（org_role_binding role_key='vendor_audit_plan_approver'，見 org_role_lib.php）。
+ * 規則（使用者 2026-08-06 明確要求，設定入口在 views/admin/org_role_setting.php 第三節）：
+ *   1. 綁「人員」→ 固定該人（僅此一人合格）。
+ *   2. 綁「部門」→ 該部門(含子部門)內**所有**職級不低於送出者的主管都合格，任一人核准即生效(OR-gate)，
+ *      不是只認部門主管(職級最高者)一人——這樣同職級的其他主管、或更高職級的人都能代為核准，不會卡在單一個人身上。
+ *   3. 部門與人員都未設定 → 自動抓本模組目前綁定的 AS 文件(system_settings vendor_plan_as_doc_id)的
+ *      as_document.department_id 當作部門，套用規則 2 同一套邏輯。
+ * 送出者若本身沒有主管職級(非管理職)，視為無下限(該部門任一主管都合格)。
+ * @return array 合格核准人清單 [['id'=>int,'user_cname'=>string], ...]；解析不到回傳空陣列。
+ */
+function vendor_audit_plan_approver_pool(PDO $db, int $submitterUid): array {
+    $bind = eg_org_bindings($db)['vendor_audit_plan_approver'] ?? null;
+    $deptId = !empty($bind['dept_id']) ? (int)$bind['dept_id'] : null;
+    $userId = !empty($bind['user_id']) ? (int)$bind['user_id'] : null;
+    if ($userId) {
+        try {
+            $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+            $st->execute([$userId]);
+            $u = $st->fetch(PDO::FETCH_ASSOC);
+            return $u ? [$u] : [];
+        } catch (Throwable $e) { return []; }
+    }
+    if (!$deptId) {
+        $doc = vendor_audit_bound_asdoc($db, 'vendor_plan_as_doc_id');
+        if ($doc && !empty($doc['department_id'])) $deptId = (int)$doc['department_id'];
+    }
+    if (!$deptId) return [];
+    $identity = eg_user_main_identity($db, $submitterUid);
+    $submitterLevel = $identity['level'] ?? null; // null=送出者非主管職，不設下限(該部門任一主管皆合格)
+    $deptIds = eg_dept_subtree_ids($db, $deptId);
+    if (!$deptIds) return [];
+    try {
+        $in = implode(',', array_fill(0, count($deptIds), '?'));
+        $st = $db->prepare("SELECT u.id, u.user_cname, MIN(pl.level) AS lvl
+                            FROM user_department_position_map m
+                            JOIN user u ON u.id=m.user_id
+                            JOIN position_level pl ON pl.position_id=m.position_id AND pl.level IS NOT NULL
+                            WHERE m.department_id IN ($in) AND COALESCE(u.state,1) NOT IN (0,90)
+                            GROUP BY u.id, u.user_cname");
+        $st->execute($deptIds);
+        $pool = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if ($submitterLevel === null || (int)$r['lvl'] <= (int)$submitterLevel) {
+                $pool[] = ['id'=>(int)$r['id'], 'user_cname'=>$r['user_cname']];
+            }
+        }
+        return $pool;
+    } catch (Throwable $e) { return []; }
+}
 function vendor_audit_plan_lock_get(PDO $db, int $year): ?array {
     $st = $db->prepare("SELECT * FROM vendor_audit_plan_lock WHERE year=?");
     $st->execute([$year]);
@@ -921,7 +971,10 @@ function vendor_audit_subcat_join(): string {
 }
 
 if (!function_exists('vendor_audit_notify_plan_sign')) {
-function vendor_audit_notify_plan_sign(PDO $db, int $year, int $signerId, ?int $submittedByUid, string $submittedByName): int {
+/** $signerIds：合格核准人 id 陣列(見 vendor_audit_plan_approver_pool())，任一人簽核即生效(OR-gate)，全部都收到通知。 */
+function vendor_audit_notify_plan_sign(PDO $db, int $year, array $signerIds, ?int $submittedByUid, string $submittedByName): int {
+    $signerIds = array_values(array_unique(array_filter(array_map('intval', $signerIds))));
+    if (!$signerIds) return 0;
     try {
         $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
                       WHERE ref_type='VENDOR_AUDIT_PLAN' AND ref_id=? AND (enddate IS NULL OR enddate >= CURDATE())")
@@ -932,8 +985,8 @@ function vendor_audit_notify_plan_sign(PDO $db, int $year, int $signerId, ?int $
                       VALUES (CURDATE(), NULL, ?, ?, 0, ?, '供應商稽核計劃', 1, 'VENDOR_AUDIT_PLAN', ?)")
            ->execute([$title, $content, $submittedByUid, $year]);
         $eventId = (int)$db->lastInsertId();
-        $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'sign')")
-           ->execute([$eventId, $signerId]);
+        $insTarget = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'sign')");
+        foreach ($signerIds as $sid) $insTarget->execute([$eventId, $sid]);
         try {
             require_once __DIR__ . '/../push/push_send.php';
             $recipients = eg_push_event_recipients($db, $eventId);
