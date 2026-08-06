@@ -7126,31 +7126,46 @@ foreach($dCounts as $c) {
                 '<a href="' + ORDER_ATTACH_API + '?action=download&id=' + f.id + '" target="_blank" style="color:#337ab7;">' + escapeHtml(f.original_name || f.filename) + '</a>' +
                 '<span style="color:#aaa;">' + (f.file_size || '') + '</span>' +
                 partTag +
-                (tagged
+                '<span class="oa-tag-badge">' + (tagged
                     ? '<span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;">' + escapeHtml(f.category_name) + '</span>'
-                    : '<span style="font-size:10px;color:#c0392b;font-weight:600;"><i class="fa fa-exclamation-circle"></i> 尚未設定標籤</span>') +
+                    : '<span style="font-size:10px;color:#c0392b;font-weight:600;"><i class="fa fa-exclamation-circle"></i> 尚未設定標籤</span>') + '</span>' +
                 '<span class="oa-tag-toggle" style="cursor:pointer;color:#337ab7;font-size:10px;"><i class="fa fa-tags"></i> 標籤</span>' +
                 '<span class="oa-file-del" style="margin-left:auto;color:#c0392b;cursor:pointer;"><i class="fa fa-trash"></i></span>' +
                 '</div>' +
-                '<div class="oa-tag-panel" style="display:' + (tagged ? 'none' : 'block') + ';padding:4px 0 4px 22px;">' + panelHtml +
-                '<button type="button" class="btn btn-xs btn-primary oa-tag-apply" style="margin-left:4px;">套用</button></div>' +
+                '<div class="oa-tag-panel" style="display:' + (tagged ? 'none' : 'block') + ';padding:4px 0 4px 22px;">' + panelHtml + '</div>' +
                 '</div>';
         }
         function oaHasUntagged(files) { return (files || []).some(function(f) { return !f.category_name; }); }
+        // 目前有哪些附件清單快取存放這筆 attId（同時可能存在於訂單附件與OP附件），存回去讓存檔前檢查看到最新狀態
+        function oaSyncCachedFile(attId, categoryName, categoryIds) {
+            [orderAttachFiles, opAttachFilesCache].forEach(function(arr) {
+                (arr || []).forEach(function(f) { if (String(f.id) === String(attId)) { f.category_name = categoryName; f.category_ids = categoryIds; } });
+            });
+        }
 
         // ── 事件委派（訂單附件／OP附件共用；一次綁定即可）──────────────────
         $(document).on('click', '.oa-tag-toggle', function() {
             $(this).closest('.oa-file-row').find('.oa-tag-panel').toggle();
         });
-        $(document).on('click', '.oa-tag-apply', function() {
+        // 勾選/取消勾選類別標籤即時存檔，不需要另外按「套用」；只在至少保留一個勾選時才送出
+        // （後端不允許清空成沒有任何標籤，全部取消勾選時先不送、等使用者勾回至少一個）
+        $(document).on('change', '.oa-tag-panel input[type="checkbox"]', function() {
             var $row = $(this).closest('.oa-file-row');
             var attId = $row.data('id');
+            var $checked = $row.find('.oa-tag-panel input:checked');
+            if (!$checked.length) return;
             var ids = [];
-            $row.find('.oa-tag-panel input:checked').each(function() { ids.push($(this).val()); });
-            if (!ids.length) { showToast('請至少勾選一個類別標籤', 'info'); return; }
+            $checked.each(function() { ids.push($(this).val()); });
+            var names = ids.map(function(id) {
+                var c = (orderAttachCats || []).filter(function(x) { return String(x.id) === String(id); })[0];
+                return c ? c.category_name : '';
+            }).filter(Boolean);
             $.post(ORDER_ATTACH_API, { action: 'update_attachment', attachment_id: attId, category_ids: ids.join(',') }, function(res) {
                 if (!res.success) { showToast(res.message || '設定失敗', 'info'); return; }
-                oaRefreshScopeOf($row);
+                var nameStr = names.join('、');
+                $row.find('.oa-tag-badge').html('<span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;">' + escapeHtml(nameStr) + '</span>');
+                $row.css('background', '');
+                oaSyncCachedFile(attId, nameStr, ids.join(','));
             }, 'json');
         });
         $(document).on('click', '.oa-file-del', function() {
