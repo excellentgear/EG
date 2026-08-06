@@ -1120,8 +1120,10 @@ try {
                 $gs_did = $pdo->prepare(
                     "SELECT d_id, Spec_No FROM d_setting WHERE D_Setting_Id=? ORDER BY d_id DESC LIMIT 1"
                 );
+                // 原寫 order_list，但該表根本沒有 d_setting_id 欄位（order_list/order_track 都沒有）；
+                // 真正有此欄位可查詢料號↔d_setting 歷史對應的是 is_list（出貨紀錄），改用它。
                 $gs_fallback = $pdo->prepare(
-                    "SELECT DISTINCT d_setting_id FROM order_list WHERE d_id=? AND d_setting_id IS NOT NULL ORDER BY d_setting_id DESC LIMIT 1"
+                    "SELECT DISTINCT d_setting_id FROM is_list WHERE Product_id=? AND d_setting_id IS NOT NULL ORDER BY d_setting_id DESC LIMIT 1"
                 );
                 $gs_fallback_spec = $pdo->prepare(
                     "SELECT d_id, Spec_No FROM d_setting WHERE d_id=? LIMIT 1"
