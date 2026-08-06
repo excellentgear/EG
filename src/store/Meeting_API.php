@@ -188,6 +188,10 @@ case 'get_detail': {
         $it['confirm_slots'] = $slots;
     }
     unset($it);
+    // AS 文件編號一律依「這筆會議記錄自己的會議日期」回推當時生效的版次列印，不是印現在最新版
+    // （ai-rules/16 第三之二節；例：A 版 2025.01.01 生效、B 版 2025.12.09 生效，列印 2025.09.08 的會議紀錄要印 A 版）
+    $m['as_doc_record_no'] = eg_asdoc_no_asof($db, 'meeting_record', (string)$m['meeting_date']);
+    $m['as_doc_signsheet_no'] = eg_asdoc_no_asof($db, 'meeting_signsheet', (string)$m['meeting_date']);
     jout(['meeting'=>$m, 'items'=>$items, 'attendees'=>meeting_attendees($db, $id), 'attaches'=>$attaches]);
 }
 

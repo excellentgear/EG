@@ -1432,8 +1432,8 @@ function meetingRecordPageHtml(m, res, docNoMode){
         + (announceBody && itemBody ? '<div class="mr-gap"></div>' : '')
         + (itemBody ? '<table class="mr-items"><thead><tr><th class="mr-grp-hd"></th><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人/部門</th><th>確認簽名</th><th>備註</th></tr></thead><tbody>'+itemBody+'</tbody></table>' : '')
         + '<table class="mr-foot"><tr><td>總經理：'+gmStamp+'</td><td>主席：'+chairStamp+'</td><td class="mr-foot-prep">製表：'+madeStamp+'</td></tr></table>'
-        + (docNoMode==='inline' && META.as_doc_record_no ? '<div class="mr-bottom-note"><span></span><span>'+esc(META.as_doc_record_no)+'</span></div>' : '')
-        + (docNoMode==='fixed' && META.as_doc_record_no ? '<div class="as-doc-fixed">'+esc(META.as_doc_record_no)+'</div>' : '')
+        + (docNoMode==='inline' && m.as_doc_record_no ? '<div class="mr-bottom-note"><span></span><span>'+esc(m.as_doc_record_no)+'</span></div>' : '')
+        + (docNoMode==='fixed' && m.as_doc_record_no ? '<div class="as-doc-fixed">'+esc(m.as_doc_record_no)+'</div>' : '')
         + '</div>';
 }
 /* 出貨目標達成率獨立一頁(有自己的簽章，只有「製表」一欄)，跟會議記錄各自一張A4，不再併頁(使用者明確要求)。 */
@@ -1463,8 +1463,8 @@ function signSheetPageHtml(m, attendees, withSignatures, docNoMode){
         + '<tr><td>地點：'+esc(m.location||'—')+'</td><td>主席：'+esc(m.chair_name||'')+'</td></tr>'
         + '</table>'
         + '<table class="sf"><tr><th style="width:36px;">序</th><th>部門</th><th>職稱</th><th>姓名</th><th style="width:130px;">簽名</th></tr>'+rows+'</table>'
-        + (docNoMode==='inline' ? '<div class="mr-bottom-note"><span></span><span>'+esc(META.as_doc_signsheet_no||'')+'</span></div>' : '')
-        + (docNoMode==='fixed' ? '<div class="as-doc-fixed">'+esc(META.as_doc_signsheet_no||'')+'</div>' : '');
+        + (docNoMode==='inline' ? '<div class="mr-bottom-note"><span></span><span>'+esc(m.as_doc_signsheet_no||'')+'</span></div>' : '')
+        + (docNoMode==='fixed' ? '<div class="as-doc-fixed">'+esc(m.as_doc_signsheet_no||'')+'</div>' : '');
 }
 /* 有出貨目標達成率快照時，「製表」改用業務部門最基層主管(meeting_preparer_candidates 解析)；沒有KPI就不用問，直接印(製表退回記錄人)。 */
 function resolvePreparerThenPrint(cb){
