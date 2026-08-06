@@ -152,9 +152,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $docId = (int)($s->fetchColumn() ?: 0);
         $asDocNo = '';
         if ($docId) {
-            $d = $pdo->prepare("SELECT doc_no, doc_name, current_version, doc_level FROM as_document WHERE id=?");
+            // 本頁合併多製程、每製程各自的檢驗日期不同，版次以「這批合印資料中最新一筆檢驗日期」回推
+            // （ai-rules/16 第三之二節；單一製程列印才用該筆自己的檢驗日期，見 inspection_entry_v2.php）
+            $latestCheckDate = null;
+            foreach ($formsByFid as $rows) foreach ($rows as $fr) {
+                if (!empty($fr['check_date'])) {
+                    $cd = substr((string)$fr['check_date'], 0, 10);
+                    if ($latestCheckDate === null || $cd > $latestCheckDate) $latestCheckDate = $cd;
+                }
+            }
+            $asDocNo = eg_asdoc_no_asof_id($pdo, $docId, $latestCheckDate);
+            $d = $pdo->prepare("SELECT doc_name FROM as_document WHERE id=?");
             $d->execute([$docId]);
-            if ($x = $d->fetch(PDO::FETCH_ASSOC)) { $asDocNo = eg_asdoc_no($x); if ($x['doc_name']) $docName = $x['doc_name']; }
+            if ($dn = $d->fetchColumn()) $docName = $dn;
         }
 
         $processes = [];

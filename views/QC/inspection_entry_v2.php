@@ -123,9 +123,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             $doc = ['id' => $docId, 'no' => '', 'name' => ''];
             if ($docId) {
                 try {
-                    $d = $pdo->prepare("SELECT doc_no, doc_name, current_version, doc_level FROM as_document WHERE id=?");
+                    // 版次依「這筆檢驗記錄自己的業務日期」回推當時生效的版次（ai-rules/16 第三之二節）；
+                    // biz_date 由前端傳入該筆記錄的檢驗日期（已存檔）或列印當天（未存檔），比照簽章日期認定方式
+                    $bizDate = trim((string)($_POST['biz_date'] ?? ''));
+                    $doc['no'] = eg_asdoc_no_asof_id($pdo, $docId, $bizDate);
+                    $d = $pdo->prepare("SELECT doc_name FROM as_document WHERE id=?");
                     $d->execute([$docId]);
-                    if ($x = $d->fetch(PDO::FETCH_ASSOC)) { $doc['no'] = eg_asdoc_no($x); $doc['name'] = $x['doc_name']; }
+                    $doc['name'] = (string)($d->fetchColumn() ?: '');
                 } catch (Exception $e) {}
             }
             // 主管自動核可：勾選後主管審核欄自動蓋章（日期比照檢驗者的簽章日期認定方式）
@@ -2129,8 +2133,8 @@ $(function(){
     var ctx = null;
     // 列印設定（公司全名／AS 文件／主管自動核可）：頁面載入時取一次，列印與設定跳窗共用
     var PRINTCFG = { company:'', doc:{no:'',name:''}, auto_approve:0, approver_id:0, approver:{name:'',deputy:0}, can_cfg:false, people:[] };
-    function loadPrintCfg(cb){
-        $.post(V2API, { v2action:'print_cfg_get' }, function(res){
+    function loadPrintCfg(cb, bizDate){
+        $.post(V2API, { v2action:'print_cfg_get', biz_date: bizDate||'' }, function(res){
             if(res && res.success){ PRINTCFG=res; window.__ownCompany=res.company||''; }
             $('.approve-menu-item').toggle(!!(res&&res.can_cfg));
             if(cb) cb();
@@ -4408,8 +4412,11 @@ $(function(){
     $('#btn-print').on('click', function(){
         if(!ctx){ alert('請先由待驗清單開啟一筆檢驗再列印。'); return; }
         if(!collectItems().length){ alert('尚無檢驗項目可列印。'); return; }
-        $('#print-area').html(buildPrintHtml());
-        window.print();
+        // AS 文件編號要依這筆記錄自己的業務日期回推當時生效的版次，列印前先重取一次（ai-rules/16 第三之二節）
+        loadPrintCfg(function(){
+            $('#print-area').html(buildPrintHtml());
+            window.print();
+        }, printSignDate());
     });
     $('#btn-print-multi').on('click', function(){
         if(!ctx || !ctx.bom){ alert('臨時檢驗單（無製令/無BOM）沒有多製程可合併列印。請由待驗清單開啟正常製令的檢驗項目。'); return; }
