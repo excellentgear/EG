@@ -3851,6 +3851,7 @@ foreach($dCounts as $c) {
                                 <input type="hidden" name="d_id_ID"             id="selected_part_pk">
                                 <input type="hidden" name="bound_quote_item_id" id="bound_quote_item_id">
                                 <input type="hidden" name="quote_no"            id="hidden_quote_no">
+                                <input type="hidden" name="batch_key"           id="order_attach_batch_key">
                                 <div class="row" style="margin:0 -5px;">
 
                                     <!-- Row 1: 訂單編號 | 客戶單號 -->
@@ -4009,6 +4010,20 @@ foreach($dCounts as $c) {
                             </div>
                         </div>
 
+                    </div>
+
+                    <!-- 附件（新增/編輯訂單皆可用；類別共用報價單附件類別；新增中未存檔先暫存，存檔後自動歸屬） -->
+                    <div id="order-attach-section" style="margin:10px 0 0;padding-top:10px;border-top:1px solid #ddd;">
+                        <div style="font-weight:700;font-size:12px;color:#2A3F54;margin-bottom:6px;">
+                            <i class="fa fa-paperclip"></i> 附件
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                            <span style="font-size:11px;color:#888;">類別：</span>
+                            <div id="order-attach-cats" style="display:flex;gap:8px;flex-wrap:wrap;font-size:11px;"></div>
+                            <button type="button" class="btn btn-xs btn-default" onclick="orderAttachTriggerUpload()"><i class="fa fa-upload"></i> 上傳</button>
+                            <input type="file" id="order-attach-file-input" style="display:none;" onchange="orderAttachUpload(this.files)">
+                        </div>
+                        <div id="order-attach-list" style="font-size:11px;color:#aaa;">尚無附件</div>
                     </div>
                 </div>
                 <div class="modal-footer" style="padding:8px 15px;">
@@ -4604,6 +4619,25 @@ foreach($dCounts as $c) {
                                     </div>
                                 </div>
                             </div>
+                        </div>
+
+                        <!-- 附件（整批共用一個暫存批次；批次內只有一種料號時免選、多種料號才要選對應料號或「共用」）-->
+                        <div style="background:#fff;border-radius:6px;padding:10px 14px;border:1px solid #e0e0e0;margin-top:10px;">
+                            <div style="font-weight:600;font-size:12px;color:#2A3F54;margin-bottom:8px;">
+                                <i class="fa fa-paperclip" style="color:#1ABB9C;"></i> 附件
+                                <small style="font-weight:400;color:#999;">（隨這批轉單一起建立；建單後自動歸屬到對應的新訂單）</small>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                                <span style="font-size:11px;color:#888;">類別：</span>
+                                <div id="op-attach-cats" style="display:flex;gap:8px;flex-wrap:wrap;font-size:11px;"></div>
+                                <span id="op-attach-part-wrap" style="display:none;align-items:center;gap:4px;">
+                                    <span style="font-size:11px;color:#888;">對應料號：</span>
+                                    <select id="op-attach-part" class="form-control input-sm" style="width:auto;display:inline-block;"></select>
+                                </span>
+                                <button type="button" class="btn btn-xs btn-default" onclick="opAttachTriggerUpload()"><i class="fa fa-upload"></i> 上傳</button>
+                                <input type="file" id="op-attach-file-input" style="display:none;" onchange="opAttachUpload(this.files)">
+                            </div>
+                            <div id="op-attach-list" style="font-size:11px;color:#aaa;">尚無附件</div>
                         </div>
 
                         <div id="op-create-error" class="alert alert-danger" style="display:none;margin:10px 0 0;padding:6px 10px;font-size:12px;"></div>
@@ -6972,6 +7006,11 @@ foreach($dCounts as $c) {
             var today = new Date().toISOString().split('T')[0];
             $('input[name="orderindate"]').val(today);
             $('input[name="datepicker_ate"]').val(today);
+
+            // 附件：新增模式尚無 Order_id，先產生暫存批次碼，存檔後由後端歸屬到新訂單
+            $('#order_attach_batch_key').val(orderAttachNewBatchKey());
+            orderAttachRefresh();
+
             $('#newOrderModal').modal('show');
         }
 
@@ -7024,6 +7063,11 @@ foreach($dCounts as $c) {
                 _lastLoadedPart = '';
                 // 拆批按鈕：編輯模式下顯示
                 $('#btn-open-split').show().data('order-id', data.Order_id);
+
+                // 附件：編輯模式已有真實 Order_id，直接載入正式附件（不使用暫存批次碼）
+                $('#order_attach_batch_key').val('');
+                orderAttachRefresh(data.Order_id);
+
                 $('#newOrderModal').modal('show');
 
                 // ※ 新增：若客戶名稱有值但客戶ID為空，開啟後自動查詢嘗試綁定
@@ -7050,6 +7094,107 @@ foreach($dCounts as $c) {
                     setTimeout(function() { updateIdBadges(); }, 100);
                 }
             }, 'json').fail(function() { alert('讀取資料失敗'); });
+        }
+
+        // ═══ 訂單附件（新增/編輯訂單皆可用；類別共用報價單附件類別，不需另設審核流程）═══
+        var ORDER_ATTACH_API = '../../src/store/Order_Attachment_API.php';
+        var orderAttachCats = null; // 類別清單快取（get_categories 只需載入一次）
+        function orderAttachNewBatchKey() { return 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
+        function orderAttachSelectedCatIds() {
+            var ids = [];
+            $('#order-attach-cats input:checked').each(function() { ids.push($(this).val()); });
+            return ids;
+        }
+        function orderAttachRenderCats() {
+            var $box = $('#order-attach-cats').empty();
+            (orderAttachCats || []).forEach(function(c) {
+                $box.append('<label style="font-weight:400;display:inline-flex;align-items:center;gap:3px;margin:0;cursor:pointer;">' +
+                    '<input type="checkbox" value="' + c.id + '">' + escapeHtml(c.category_name) + '</label>');
+            });
+        }
+        function orderAttachTriggerUpload() {
+            if (orderAttachSelectedCatIds().length === 0) {
+                showToast('請先勾選至少一個附件類別標籤，再選擇要上傳的檔案。', 'info');
+                return;
+            }
+            $('#order-attach-file-input').click();
+        }
+        function orderAttachRenderList(files) {
+            var $list = $('#order-attach-list');
+            if (!files || !files.length) { $list.html('<span style="color:#aaa;">尚無附件</span>'); return; }
+            var html = '';
+            files.forEach(function(f) {
+                html += '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px dotted #eee;">' +
+                    '<i class="fa fa-file-o" style="color:#999;"></i>' +
+                    '<a href="' + ORDER_ATTACH_API + '?action=download&id=' + f.id + '" target="_blank" style="color:#337ab7;">' + escapeHtml(f.original_name || f.filename) + '</a>' +
+                    '<span style="color:#aaa;">' + (f.file_size || '') + '</span>' +
+                    (f.category_name ? '<span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;">' + escapeHtml(f.category_name) + '</span>' : '') +
+                    '<span style="margin-left:auto;color:#c0392b;cursor:pointer;" onclick="orderAttachDelete(' + f.id + ')" title="刪除"><i class="fa fa-trash"></i></span>' +
+                    '</div>';
+            });
+            $list.html(html);
+        }
+        // orderId 有值＝編輯模式（正式附件）；未傳＝新增模式，用目前的 batch_key 查暫存附件
+        function orderAttachRefresh(orderId) {
+            var params = orderId ? { action: 'list_files', order_id: orderId } : { action: 'list_files', batch_key: $('#order_attach_batch_key').val() };
+            function doList() {
+                $.post(ORDER_ATTACH_API, params, function(res) {
+                    orderAttachRenderList(res.success ? res.files : []);
+                }, 'json');
+            }
+            if (orderAttachCats === null) {
+                $.post(ORDER_ATTACH_API, { action: 'get_categories' }, function(res) {
+                    orderAttachCats = (res.success && res.categories) ? res.categories : [];
+                    orderAttachRenderCats();
+                    doList();
+                }, 'json');
+            } else {
+                doList();
+            }
+        }
+        function orderAttachUpload(fileList) {
+            if (!fileList || !fileList.length) return;
+            var catIds = orderAttachSelectedCatIds();
+            if (catIds.length === 0) { showToast('請先勾選至少一個附件類別標籤。', 'info'); return; }
+            var orderId = parseInt($('#hidden_Order_id').val()) || 0;
+            var fd = new FormData();
+            fd.append('action', 'upload_file');
+            fd.append('order_id', orderId);
+            fd.append('batch_key', $('#order_attach_batch_key').val() || '');
+            fd.append('category_ids', catIds.join(','));
+            fd.append('file', fileList[0]);
+            $.ajax({ url: ORDER_ATTACH_API, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
+                .done(function(res) {
+                    if (!res.success) { showToast(res.message || '上傳失敗', 'info'); return; }
+                    $('#order-attach-file-input').val('');
+                    orderAttachRefresh(orderId || null);
+                })
+                .fail(function() { showToast('上傳失敗，請稍後再試', 'info'); });
+        }
+        function orderAttachDelete(attId) {
+            if (!confirm('確定要刪除這份附件？')) return;
+            $.post(ORDER_ATTACH_API, { action: 'delete_file', attachment_id: attId }, function(res) {
+                if (!res.success) { showToast(res.message || '刪除失敗', 'info'); return; }
+                var orderId = parseInt($('#hidden_Order_id').val()) || 0;
+                orderAttachRefresh(orderId || null);
+            }, 'json');
+        }
+        // 訂單附件儲存路徑設定（訂單頁「設定」跳窗內的獨立區塊，與訂單變更設定分開儲存，僅管理員可存）
+        function orderAttachLoadPathSetting() {
+            $.post(ORDER_ATTACH_API, { action: 'get_settings' }, function(res) {
+                if (!res.success) return;
+                $('#oat-path').val(res.path || '');
+                $('#oat-path-resolved').text('目前實際生效路徑：' + (res.resolved_dir || ''));
+                $('#oat-path-msg').text('');
+            }, 'json');
+        }
+        function orderAttachSavePathSetting() {
+            $.post(ORDER_ATTACH_API, { action: 'save_settings', path: $('#oat-path').val().trim() }, function(res) {
+                var $msg = $('#oat-path-msg');
+                if (!res.success) { $msg.css('color', '#c0392b').text(res.message || '儲存失敗'); return; }
+                $msg.css('color', '#27ae60').text('已儲存');
+                orderAttachLoadPathSetting();
+            }, 'json');
         }
 
         function copyOrder(orderId) {
@@ -7099,6 +7244,11 @@ foreach($dCounts as $c) {
                 $('#btn-toggle-closed').hide();
                 $('#newOrderForm').find('input, textarea, select').prop('readonly', false).prop('disabled', false);
                 $('#btn-save, #btn-save-copy').prop('disabled', false);
+
+                // 複製為新訂單：附件不繼承，重新產生暫存批次碼（同新增模式）
+                $('#order_attach_batch_key').val(orderAttachNewBatchKey());
+                orderAttachRefresh();
+
                 $('#newOrderModal').modal('show');
                 setTimeout(function() { updateIdBadges(); }, 100);
             }, 'json').fail(function() { alert('讀取資料失敗'); });
@@ -7267,6 +7417,8 @@ foreach($dCounts as $c) {
                             } else {
                                 showToast('新增成功！您可以繼續編輯下一筆。');
                             }
+                            // 剛剛的附件已隨訂單存檔轉正，清空畫面上的暫存附件清單（batch_key 字串不變，下一筆仍可續用）
+                            orderAttachRenderList([]);
                             refreshOrderTable();
                             // 詢問過程會先收起訂單編輯 Modal，複製模式需重新開啟供繼續編輯
                             if (promptShown) {
@@ -7439,6 +7591,13 @@ foreach($dCounts as $c) {
             $('#op-batch-ate').val('2');
             opCurrentQuote = null;
             opSwitchSearchTab('no');
+
+            // 附件：整批(從開啟這個Modal到建單/關閉)共用一個暫存批次碼
+            opAttachBatchKey = orderAttachNewBatchKey();
+            $('#op-attach-list').html('<span style="color:#aaa;">尚無附件</span>');
+            $('#op-attach-part-wrap').hide();
+            $('#op-attach-file-input').val('');
+            opAttachRefreshCats();
         }
 
         function opSwitchSearchTab(mode) {
@@ -7597,6 +7756,7 @@ foreach($dCounts as $c) {
             $('#op-batch-ate').html(ateOptionsHtml);
             var todayStr = new Date().toISOString().split('T')[0];
             $('#op-batch-ateget').val(todayStr);
+            opAttachUpdatePartPicker(items);
             items.forEach(function(it) {
                 var converted = !!it.converted_order_oo;
                 var bomBadge = parseInt(it.Is_Assembly) === 1
@@ -7648,6 +7808,95 @@ foreach($dCounts as $c) {
                 $tb.append($tr);
             });
             $('#op-check-all').prop('checked', false);
+        }
+
+        // ── OP轉訂單附件（整批共用一個暫存批次；多料號時可指定對應料號或「共用(全部)」）──
+        var opAttachBatchKey = null;
+        function opAttachRefreshCats() {
+            function render() {
+                var $box = $('#op-attach-cats').empty();
+                (orderAttachCats || []).forEach(function(c) {
+                    $box.append('<label style="font-weight:400;display:inline-flex;align-items:center;gap:3px;margin:0;cursor:pointer;">' +
+                        '<input type="checkbox" value="' + c.id + '">' + escapeHtml(c.category_name) + '</label>');
+                });
+            }
+            if (orderAttachCats === null) {
+                $.post(ORDER_ATTACH_API, { action: 'get_categories' }, function(res) {
+                    orderAttachCats = (res.success && res.categories) ? res.categories : [];
+                    render();
+                }, 'json');
+            } else { render(); }
+        }
+        // 批次內出現多種料號才顯示下拉（含「共用(全部)」）；只有一種料號時隱藏、自動視為該料號整批共用
+        function opAttachUpdatePartPicker(items) {
+            var parts = [];
+            (items || []).forEach(function(it) {
+                var p = it.D_Setting_Id || it.product_id || '';
+                if (p && parts.indexOf(p) === -1) parts.push(p);
+            });
+            var $sel = $('#op-attach-part').empty();
+            if (parts.length > 1) {
+                $sel.append('<option value="">共用（全部）</option>');
+                parts.forEach(function(p) { $sel.append('<option value="' + escapeHtml(p) + '">' + escapeHtml(p) + '</option>'); });
+                $('#op-attach-part-wrap').css('display', 'inline-flex');
+            } else {
+                $('#op-attach-part-wrap').hide();
+            }
+        }
+        function opAttachTriggerUpload() {
+            var catIds = [];
+            $('#op-attach-cats input:checked').each(function() { catIds.push($(this).val()); });
+            if (catIds.length === 0) { showToast('請先勾選至少一個附件類別標籤，再選擇要上傳的檔案。', 'info'); return; }
+            $('#op-attach-file-input').click();
+        }
+        function opAttachRenderList(files) {
+            var $list = $('#op-attach-list');
+            if (!files || !files.length) { $list.html('<span style="color:#aaa;">尚無附件</span>'); return; }
+            var html = '';
+            files.forEach(function(f) {
+                html += '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px dotted #eee;">' +
+                    '<i class="fa fa-file-o" style="color:#999;"></i>' +
+                    '<a href="' + ORDER_ATTACH_API + '?action=download&id=' + f.id + '" target="_blank" style="color:#337ab7;">' + escapeHtml(f.original_name || f.filename) + '</a>' +
+                    '<span style="color:#aaa;">' + (f.file_size || '') + '</span>' +
+                    (f.category_name ? '<span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;">' + escapeHtml(f.category_name) + '</span>' : '') +
+                    '<span style="font-size:10px;color:#999;">' + (f.linked_part_no ? ('料號：' + escapeHtml(f.linked_part_no)) : '共用（全部）') + '</span>' +
+                    '<span style="margin-left:auto;color:#c0392b;cursor:pointer;" onclick="opAttachDelete(' + f.id + ')" title="刪除"><i class="fa fa-trash"></i></span>' +
+                    '</div>';
+            });
+            $list.html(html);
+        }
+        function opAttachRefreshList() {
+            $.post(ORDER_ATTACH_API, { action: 'list_files', batch_key: opAttachBatchKey }, function(res) {
+                opAttachRenderList(res.success ? res.files : []);
+            }, 'json');
+        }
+        function opAttachUpload(fileList) {
+            if (!fileList || !fileList.length) return;
+            var catIds = [];
+            $('#op-attach-cats input:checked').each(function() { catIds.push($(this).val()); });
+            if (catIds.length === 0) { showToast('請先勾選至少一個附件類別標籤。', 'info'); return; }
+            var linkPart = $('#op-attach-part-wrap').is(':visible') ? $('#op-attach-part').val() : '';
+            var fd = new FormData();
+            fd.append('action', 'upload_file');
+            fd.append('order_id', 0);
+            fd.append('batch_key', opAttachBatchKey);
+            fd.append('linked_part_no', linkPart || '');
+            fd.append('category_ids', catIds.join(','));
+            fd.append('file', fileList[0]);
+            $.ajax({ url: ORDER_ATTACH_API, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
+                .done(function(res) {
+                    if (!res.success) { showToast(res.message || '上傳失敗', 'info'); return; }
+                    $('#op-attach-file-input').val('');
+                    opAttachRefreshList();
+                })
+                .fail(function() { showToast('上傳失敗，請稍後再試', 'info'); });
+        }
+        function opAttachDelete(attId) {
+            if (!confirm('確定要刪除這份附件？')) return;
+            $.post(ORDER_ATTACH_API, { action: 'delete_file', attachment_id: attId }, function(res) {
+                if (!res.success) { showToast(res.message || '刪除失敗', 'info'); return; }
+                opAttachRefreshList();
+            }, 'json');
         }
 
         function opToggleAll(cb) {
@@ -7759,7 +8008,8 @@ foreach($dCounts as $c) {
             $btn.prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 建立中...');
             $.post('../../src/store/_NewOrder_Track222.php', {
                 action: 'create_orders_from_quotes',
-                items: JSON.stringify(items)
+                items: JSON.stringify(items),
+                batch_key: opAttachBatchKey || ''
             }, function(res) {
                 $btn.prop('disabled', false).html('<i class="fa fa-check"></i> 確認建立訂單');
                 if (!res.success) { $('#op-create-error').text(res.message || '建立失敗，請稍後再試').show(); return; }
@@ -8589,6 +8839,16 @@ foreach($dCounts as $c) {
               <div style="font-size:10px;color:#aaa;margin-top:4px;">伺服器須能存取此路徑（依各程序帳號權限）；附件會以 變更單ID 建立子資料夾存放。</div>
             </div>
             <div class="main-card" style="margin-bottom:10px;">
+              <div style="font-weight:700;color:#444;margin-bottom:6px;"><i class="fa fa-paperclip"></i> 訂單附件儲存路徑</div>
+              <div style="font-size:11px;color:#888;margin-bottom:6px;">「新增/編輯訂單」與「OP轉訂單」上傳的附件存放位置；留空則用全站附件根目錄下的「訂單」資料夾（預設值，多數情況不必另外設定）。</div>
+              <div class="input-group input-group-sm">
+                <input type="text" id="oat-path" class="form-control" placeholder="留空＝使用預設路徑">
+                <span class="input-group-btn"><button type="button" class="btn btn-primary" onclick="orderAttachSavePathSetting()">儲存</button></span>
+              </div>
+              <div id="oat-path-resolved" style="font-size:10px;color:#aaa;margin-top:4px;"></div>
+              <div id="oat-path-msg" style="font-size:11px;margin-top:4px;"></div>
+            </div>
+            <div class="main-card" style="margin-bottom:10px;">
               <div style="font-weight:700;color:#444;margin-bottom:6px;"><i class="fa fa-print"></i> 訂單變更列印文件（AS 文件綁定）</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
                 <div>
@@ -9110,6 +9370,7 @@ foreach($dCounts as $c) {
         window.openChangeSettings = function(){
             $('#changeSettingsModal').modal('show');
             document.getElementById('ocs-msg').textContent='';
+            orderAttachLoadPathSetting();
             ocApi('get_settings', {}).then(function(res){
                 if(!res.success){ ocToast(res.message||'讀取設定失敗'); return; }
                 document.getElementById('ocs-path').value = res.attach_dir||'';

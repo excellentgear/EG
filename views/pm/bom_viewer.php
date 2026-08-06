@@ -326,6 +326,84 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
     exit;
 }
 
+// ── AJAX：取得訂單附件（訂單附件分頁，唯讀）─────────────────────────────
+if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_did') {
+    header('Content-Type: application/json');
+    try {
+        $partNo = trim($_POST['d_id'] ?? '');
+        if (!$partNo) throw new Exception('缺少料號');
+        include_once '../../src/common/DBConnection.php';
+        require_once __DIR__ . '/../../src/common/part_alias_lib.php';
+        $pdo2 = (new DBConnection())->getPDO();
+
+        $dsStmt = $pdo2->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id = ?");
+        $dsStmt->execute([$partNo]);
+        $ownDids = array_map('intval', $dsStmt->fetchAll(PDO::FETCH_COLUMN));
+        if (empty($ownDids)) { echo json_encode(['success' => true, 'attachments' => []]); exit; }
+
+        // 客戶代號／等同料號綁定的其他料號訂單也一併撈出（合併顯示，標明來源）
+        $bindLabelByDid = []; $dids = $ownDids;
+        foreach (eg_part_alias_linked_part_nos($pdo2, $partNo) as $lp) {
+            $bindLabelByDid[$lp['d_id']] = $lp['part_no'] . ($lp['customer_name'] ? '／' . $lp['customer_name'] : '');
+            $dids[] = $lp['d_id'];
+        }
+        $dids = array_values(array_unique($dids));
+        $ph = implode(',', array_fill(0, count($dids), '?'));
+
+        // order_attachments 建單當下就已把料號歸屬解析為真實 order_id（見 _NewOrder_Track222.php 的
+        // create_orders_from_quotes／or_new），這裡直接 join order_track 依 d_id_ID 找即可，
+        // 不需要像報價附件那樣另外解析 linked_parts JSON
+        $sql = "SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size,
+                       COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, a.uploaded_at,
+                       ot.Order_oo, ot.d_id_ID
+                FROM order_attachments a
+                JOIN order_track ot ON ot.Order_id = a.order_id
+                LEFT JOIN user u ON u.id = a.uploaded_by
+                WHERE a.status='active' AND ot.d_id_ID IN ($ph)
+                ORDER BY a.uploaded_at DESC";
+        $stmt = $pdo2->prepare($sql);
+        $stmt->execute($dids);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $cats = [];
+        try {
+            foreach ($pdo2->query("SELECT id, category_name FROM quotation_file_categories WHERE is_active=1")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+                $cats[(int)$c['id']] = $c['category_name'];
+            }
+        } catch (Exception $_e) {}
+        $dlBase = '../../src/store/Order_Attachment_API.php';
+        $result = [];
+        foreach ($rows as $r) {
+            $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
+            $catNames = [];
+            if ($r['category_ids']) {
+                foreach (explode(',', $r['category_ids']) as $cid) {
+                    $cid = (int)trim($cid);
+                    if (isset($cats[$cid])) $catNames[] = $cats[$cid];
+                }
+            }
+            $bindFrom = isset($bindLabelByDid[(int)$r['d_id_ID']]) ? $bindLabelByDid[(int)$r['d_id_ID']] : null;
+            $result[] = [
+                'id'             => (int)$r['id'],
+                'filename'       => $r['filename'],
+                'display_name'   => $r['original_name'] ?: $r['filename'],
+                'url'            => $dlBase . '?action=download&id=' . (int)$r['id'],
+                'ext'            => $ext,
+                'file_size'      => $r['file_size'] ?: '',
+                'note'           => '訂單 ' . $r['Order_oo'],
+                'uploaded_by'    => $r['uploaded_by'] ?: '',
+                'uploaded_at'    => substr($r['uploaded_at'] ?: '', 0, 16),
+                'category_names' => $catNames,
+                'bind_from'      => $bindFrom,
+            ];
+        }
+        echo json_encode(['success' => true, 'attachments' => $result]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // ── 模式判斷：?bom=… 或 ?d_id=… ─────────────────────────────────────────
 $bom  = trim($_GET['bom']  ?? '');
 $d_id = trim($_GET['d_id'] ?? '');
@@ -385,9 +463,9 @@ try {
     $canOtherView = $isAdminF || !$hasMdRole || rbac_has($featsF, 'md_attach_view');
 } catch (Exception $_e) { $canQuoteView = false; $canOtherView = true; }
 
-// 開啟時預選分頁：?tab=drawing|quote|other（預設自動挑第一個有資料的分頁）
+// 開啟時預選分頁：?tab=drawing|quote|other|order_attach（預設自動挑第一個有資料的分頁）
 $initTab = trim($_GET['tab'] ?? '');
-if (!in_array($initTab, ['drawing','quote','other'], true)) $initTab = '';
+if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $initTab = '';
 ?>
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -594,7 +672,8 @@ var _mode       = <?= json_encode($mode) ?>;   // 'bom' | 'did'
 var _d_id       = <?= json_encode($d_id) ?>;   // only in did mode
 var _canQuote   = <?= $canQuoteView ? 'true' : 'false' ?>;   // 報價資料分頁權限（quotation_view）
 var _canOther   = <?= $canOtherView ? 'true' : 'false' ?>;   // 其他附件分頁權限（md_attach_view，過渡期開放）
-var _initTab    = <?= json_encode($initTab) ?>;              // 預選分頁 drawing|quote|other
+var _canOrder   = <?= $canOtherView ? 'true' : 'false' ?>;   // 訂單附件分頁權限（沿用其他附件同一組權限，不新增角色碼）
+var _initTab    = <?= json_encode($initTab) ?>;              // 預選分頁 drawing|quote|other|order_attach
 var _sc         = 1, _tx = 0, _ty = 0;
 var _currentType = '';
 var _currentPath = '';
@@ -808,13 +887,14 @@ $(document).on('click', '.bom-file-item', function(e) {
 });
 
 // ── 三分頁：資料桶、渲染與切換（did 模式）；bom 模式維持單清單 ─────────────
-var _tabData    = { drawing: null, other: [], quote: [], quoteSummaries: {} };
-var _tabEnabled = { drawing: true, other: (_mode === 'did' && _canOther), quote: (_mode === 'did' && _canQuote) };
+var _tabData    = { drawing: null, other: [], quote: [], quoteSummaries: {}, order_attach: [] };
+var _tabEnabled = { drawing: true, other: (_mode === 'did' && _canOther), quote: (_mode === 'did' && _canQuote), order_attach: (_mode === 'did' && _canOrder) };
 var _activeTab  = 'drawing';
 var _tabMeta = {
-    drawing: { label: '圖面查閱', icon: 'fa-picture-o' },
-    quote:   { label: '報價資料', icon: 'fa-usd' },
-    other:   { label: '其他附件', icon: 'fa-paperclip' }
+    drawing:      { label: '圖面查閱', icon: 'fa-picture-o' },
+    quote:        { label: '報價資料', icon: 'fa-usd' },
+    other:        { label: '其他附件', icon: 'fa-paperclip' },
+    order_attach: { label: '訂單附件', icon: 'fa-truck' }
 };
 
 function tabCount(tab) {
@@ -832,7 +912,7 @@ function tabCount(tab) {
 function renderTabbar() {
     if (_mode !== 'did') return;
     var html = '';
-    ['drawing','quote','other'].forEach(function(t) {
+    ['drawing','quote','other','order_attach'].forEach(function(t) {
         if (!_tabEnabled[t]) return;
         html += '<div class="bom-tab'+(t===_activeTab?' active':'')+'" data-tab="'+t+'">'
              +  '<i class="fa '+_tabMeta[t].icon+'"></i> '+_tabMeta[t].label
@@ -931,7 +1011,7 @@ function renderDrawingList() {
 function renderAttList(tab) {
     var arr = _tabData[tab] || [];
     if (arr.length === 0) {
-        var msg = (tab === 'quote') ? '無報價資料' : '無其他附件';
+        var msg = (tab === 'quote') ? '無報價資料' : (tab === 'order_attach' ? '無訂單附件' : '無其他附件');
         $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">'+msg+'</div>');
         showEmpty(msg); return;
     }
@@ -1080,7 +1160,7 @@ function loadBomMode() {
 }
 
 function loadDidMode() {
-    var pending = 1 + (_tabEnabled.other ? 1 : 0) + (_tabEnabled.quote ? 1 : 0);
+    var pending = 1 + (_tabEnabled.other ? 1 : 0) + (_tabEnabled.quote ? 1 : 0) + (_tabEnabled.order_attach ? 1 : 0);
     var done = function() { if (--pending <= 0) finishDidLoad(); };
     // 圖面（一律載入）
     $.post('', { action: 'get_files_by_did', d_id: _d_id }, function(res) {
@@ -1105,13 +1185,19 @@ function loadDidMode() {
         }, 'json');
         $.when(pQAtt, pQSum).always(function() { renderTabbar(); done(); });
     }
+    // 訂單附件
+    if (_tabEnabled.order_attach) {
+        $.post('', { action: 'get_order_attachments_by_did', d_id: _d_id }, function(res) {
+            _tabData.order_attach = (res && res.success && res.attachments) ? res.attachments : [];
+        }, 'json').always(function() { renderTabbar(); done(); });
+    }
     renderTabbar();
 }
 
 function finishDidLoad() {
     renderTabbar();
     // 預選：指定 tab 優先；否則第一個「啟用且有資料」的分頁；再否則圖面
-    var order = ['drawing','quote','other'], pick = '';
+    var order = ['drawing','quote','other','order_attach'], pick = '';
     if (_initTab && _tabEnabled[_initTab]) pick = _initTab;
     if (!pick) { for (var i = 0; i < order.length; i++) { if (_tabEnabled[order[i]] && tabCount(order[i]) > 0) { pick = order[i]; break; } } }
     if (!pick) pick = 'drawing';

@@ -148,6 +148,14 @@ try {
         $stmt->bindValue(':quote_item_id',    $quoteItemId);
         $stmt->execute();
         $newId = $db->lastInsertId();
+        // 新增訂單附件暫存轉正：畫面開啟時前端產生 batch_key，存檔前上傳的附件先存 temp，這裡歸給剛建立的訂單
+        $batchKey = trim($_POST['batch_key'] ?? '');
+        if ($batchKey !== '') {
+            try {
+                $db->prepare("UPDATE order_attachments SET order_id=?, status='active', expire_at=NULL, batch_key=NULL WHERE batch_key=? AND status='temp'")
+                   ->execute([$newId, $batchKey]);
+            } catch (PDOException $e) { /* order_attachments 尚未建表（該功能尚未使用過）：略過 */ }
+        }
         echo json_encode(['success' => true, 'new_order_id' => $newId, 'message' => isset($_POST['or_new_copy']) ? '新增並複製成功' : '新增成功']);
         exit;
     }
@@ -700,6 +708,35 @@ try {
                     'is_assembly' => intval($src['Is_Assembly']) === 1,
                 ];
             }
+
+            // 附件歸屬：OP轉訂單畫面二上傳的附件先存在暫存批次(batch_key)，這裡依料號歸給剛建立的訂單。
+            // linked_part_no 有值＝只歸給該料號對應的新訂單；NULL(共用/全部)＝這批新建的訂單都要有，
+            // 一個實體檔可以被多筆 order_attachments 列共用參照（filename 相同），不必複製檔案。
+            $batchKey = trim($_POST['batch_key'] ?? '');
+            if ($batchKey !== '' && $created) {
+                try {
+                    $partToOrderIds = [];
+                    foreach ($created as $c) { $partToOrderIds[$c['d_id']][] = $c['order_id']; }
+                    $allOrderIds = array_column($created, 'order_id');
+                    $st = $db->prepare("SELECT id, linked_part_no, filename, original_name, category_ids, file_size, uploaded_by
+                                        FROM order_attachments WHERE batch_key=? AND status='temp'");
+                    $st->execute([$batchKey]);
+                    $upd = $db->prepare("UPDATE order_attachments SET order_id=?, status='active', expire_at=NULL, batch_key=NULL WHERE id=?");
+                    $ins = $db->prepare("INSERT INTO order_attachments (order_id, linked_part_no, filename, original_name, category_ids, file_size, uploaded_by, status)
+                                        VALUES (?,?,?,?,?,?,?,'active')");
+                    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $t) {
+                        $part = $t['linked_part_no'];
+                        $targetIds = ($part !== null && $part !== '') ? ($partToOrderIds[$part] ?? []) : $allOrderIds;
+                        if (!$targetIds) continue; // 該料號這批沒有真的建成訂單：附件留在temp，逾期由懶惰清除機制回收
+                        $firstId = array_shift($targetIds);
+                        $upd->execute([$firstId, $t['id']]);
+                        foreach ($targetIds as $extraOid) {
+                            $ins->execute([$extraOid, $part, $t['filename'], $t['original_name'], $t['category_ids'], $t['file_size'], $t['uploaded_by']]);
+                        }
+                    }
+                } catch (PDOException $e) { /* order_attachments 尚未建表（該功能尚未使用過）：略過 */ }
+            }
+
             $db->commit();
             echo json_encode(['success' => true, 'created' => $created, 'message' => '已建立 ' . count($created) . ' 筆訂單']);
         } catch (PDOException $e) {
