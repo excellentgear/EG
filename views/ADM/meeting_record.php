@@ -327,7 +327,7 @@ foreach ($roleRows as $rr) {
         <button class="b-cancel" onclick="printBlankSignSheet()"><i class="fa fa-file-o"></i> 列印空白簽到表</button>
         <button class="b-cancel" id="btnPrintSignedSheet" style="display:none;" onclick="printSignedSignSheet()"><i class="fa fa-file-text-o"></i> 列印簽到表</button>
         <button class="b-cancel" onclick="printMeetingRecord()"><i class="fa fa-print"></i> 列印會議紀錄(預覽用)</button>
-        <button class="b-cancel" id="btnPrintFull" style="display:none;background:#F0A24B;color:#fff;" onclick="printFullRecord()"><i class="fa fa-print"></i> 列印完整紀錄(簽到表＋會議紀錄＋KPI)</button>
+        <button class="b-cancel" id="btnPrintKpi" style="display:none;" onclick="printKpiOnly()"><i class="fa fa-line-chart"></i> 列印出貨目標達成率</button>
         <button class="b-ok" onclick="closeMask('viewMask')">關閉</button>
     </div>
 </div></div>
@@ -459,7 +459,7 @@ foreach ($roleRows as $rr) {
         <b>⑥插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。已完成核准的會議記錄在「檢視」畫面也能再插入/更新：一般人插入後會<b>清空目前簽核紀錄改回草稿</b>，需重新送出取得主席／總經理簽章；<b>超級管理員</b>插入後<b>維持已核准狀態</b>，不需重新送審。
         <h4>重要行為</h4>
         ・草稿只有記錄人本人看得到；送出後，出席人員／主席／總經理都自動有唯讀權限，其餘人是否看得到全部會議記錄依角色設定的「檢視全部」功能。<br>
-        ・列印的會議記錄／空白簽到表<b>不含電子簽章</b>，供現場紙本簽名或掃描存查；主席／總經理的簽核仍在系統內完成並自動蓋章存證；出席人員<b>全部完成電子簽到</b>後會多一顆「列印簽到表」按鈕，印出來的是已蓋章版。<br>
+        ・列印的會議記錄／空白簽到表<b>不含電子簽章</b>，供現場紙本簽名或掃描存查；主席／總經理的簽核仍在系統內完成並自動蓋章存證；出席人員<b>全部完成電子簽到</b>後會多一顆「列印簽到表」按鈕，印出來的是已蓋章版；有插入出貨目標達成率時會多一顆「列印出貨目標達成率」按鈕。<b>每顆列印按鈕各自印一份文件</b>（不提供多份文件合併列印），確保各自的AS文件編號都能正確印在頁面右下角。<br>
         ・主席或總經理今日若有請假等行程，會自動由代理人處理（依「代理系統設定」解析，不必自己找人代簽）。<br>
         ・清單上方「狀態」按鈕可複選篩選（點選切換開關），每顆按鈕會顯示目前年度符合筆數。<br>
         ・出席簽到蓋章的日期一律顯示<b>會議日期</b>（不論實際點擊簽到當下是哪一天），實際簽到時間僅另外標示供稽核參考。
@@ -1109,7 +1109,7 @@ function openView(id){
         VIEW = res;
         $('#viewTitle').text(res.meeting.subject);
         $('#viewBody').html(viewHtml(res));
-        $('#btnPrintFull').toggle(res.meeting.approval_status==='done');
+        $('#btnPrintKpi').toggle(!!res.meeting.kpi_snapshot_json);
         var allSigned = (res.attendees||[]).length>0 && (res.attendees||[]).every(function(a){ return +a.signed===1; });
         $('#btnPrintSignedSheet').toggle(allSigned);
         openMask('viewMask');
@@ -1305,7 +1305,7 @@ function decide(mid, level, decision){
 /* ---------- 列印（不含電子簽章，供現場紙本簽名／掃描） ----------
    showPageCounter(2026-08-06使用者明確要求寫進規則，比照ai-rules/16第二節「多頁才顯示」)：只有一頁的表單不印「第X頁/共Y頁」，
    用 onload 後量測 document.body.scrollHeight 是否超過單頁可用高度，超過才動態插入 @bottom-left 頁碼CSS；
-   不傳(undefined)＝預設開啟此判斷，doPrintFullRecord()等合併多份獨立文件的情境需明確傳 false 整個關掉(彼此不算同一份報表頁數)。 */
+   不傳(undefined)＝預設開啟此判斷；若未來又出現合併多份獨立文件的列印情境，該情境需明確傳 false 整個關掉(彼此不算同一份報表頁數)。 */
 function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount, showPageCounter){
     if (showPageCounter === undefined) showPageCounter = true;
     var asCss = String(docNo||'').replace(/['\\]/g,'');
@@ -1363,7 +1363,9 @@ function mrCss(){
         + '.mr-bottom-note{margin-top:4px;font-size:11px;color:#666;display:flex;justify-content:space-between;}'
         // AS文件編號固定貼在頁面實際右下角(2026-08-06使用者明確要求：不論表格內容長短都要在右下角，不是緊接在表格後面)。
         // Chrome列印對 @page{@bottom-right{content:...}} 支援不穩定(本頁曾實測跑位)，改用 position:fixed 釘住視窗座標；
-        // 僅用於單頁列印(會議記錄/簽到表單獨列印)，合併列印(doPrintFullRecord)因跨頁不穩定風險仍維持既有的內文寫法(.mr-bottom-note)。
+        // 前提是整次列印工作從頭到尾只對應同一份文件(position:fixed在Chrome列印中的範圍是整個列印工作，不是單一頁面，
+        // 混排不同文件會疊字，2026-08-06實測確認)——本頁已把每個列印按鈕都拆成剛好一份文件，不再有混排情境，
+        // 故本頁全部用fixed；.mr-bottom-note(內文寫法)仍保留給函式的'inline'模式，供日後若真的需要合併列印時使用。
         + '.as-doc-fixed{position:fixed;right:8mm;bottom:6mm;font-size:9pt;color:#333;}'
         + 'table.ss-head{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:6px;}'
         + 'table.ss-head td{border:1px solid #333;padding:6px 8px;text-align:left;width:50%;}'
@@ -1477,26 +1479,19 @@ function resolvePreparerThenPrint(cb){
         cb(pick===null ? '' : ($.trim(pick) || cands[0].name));
     });
 }
-/* 印多份文件合在一次列印工作時(如會議記錄+出貨目標達成率、或再加簽到表)，每份各自一張A4，
-   彼此不算同一份報表的第幾頁，所以一律不印「第X頁/共Y頁」(egPrintWindow 第7參數 showPageCounter=false)。 */
+/* 列印策略(2026-08-06四次修正，徹底解法)：position:fixed 釘右下角的AS編號只能用在「整次列印工作從頭到尾只對應
+   同一份文件、同一組編號」的情境；一旦同一次列印工作混了不同文件或含無編號的頁(如會議記錄+KPI合印)，position:fixed
+   會疊到其他頁去(2026-08-06實測確認)，改用內文寫法又會離頁面角落有距離，兩種都不完美。與其在這兩個妥協方案來回，
+   直接讓「每個列印按鈕＝剛好一份文件」——會議記錄、簽到表(空白/已簽署)、出貨目標達成率各自獨立成單一列印工作，
+   不再有「一次列印多份文件」的按鈕，AS編號全部用 position:fixed 就能保證正確，不必再判斷內文/fixed兩種模式。
+   使用者需要看多份文件時分別點對應按鈕列印即可(原「列印完整紀錄」按鈕已移除)。 */
 function printMeetingRecord(){
     if (!VIEW) return;
-    resolvePreparerThenPrint(function(preparerName){
-        var m = VIEW.meeting, res = VIEW;
-        var hasKpi = !!m.kpi_snapshot_json;
-        // AS文件編號定位(2026-08-06三次修正，實測釐清根因)：position:fixed 在 Chrome 列印中不是「只出現在它被寫在哪一頁」，
-        // 而是整個列印工作(同一次window.print())全部頁面都會重複疊上去——單一文件(不管會不會自己溢到第2頁)用fixed沒問題，
-        // 因為全程只有一組編號；但這裡 hasKpi=true 時同一次列印工作混了「會議記錄(有編號)」+「KPI頁(沒有綁定編號)」兩種不同頁，
-        // fixed會把會議記錄的編號疊到KPI頁上(使用者實測回報)。混排不同文件/含無編號頁時一律改用內文寫法(docNoMode='inline')，
-        // 只有整個列印工作從頭到尾只有一組編號時才能用'fixed'。
-        var page1 = meetingRecordPageHtml(m, res, hasKpi ? 'inline' : 'fixed');
-        var body = hasKpi ? ('<div style="page-break-after:always;">'+page1+'</div><div>'+kpiPageHtml(m, preparerName)+'</div>') : page1;
-        egPrintWindow('會議記錄', body, mrCss(), '', true, true, !hasKpi);
-    });
+    var m = VIEW.meeting, res = VIEW;
+    egPrintWindow('會議記錄', meetingRecordPageHtml(m, res, 'fixed'), mrCss(), '', true, true);
 }
 function printBlankSignSheet(){
     if (!VIEW) return;
-    // AS文件編號改用position:fixed釘右下角，理由同printMeetingRecord()
     egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, false, 'fixed'), mrCss(), '', false, true);
 }
 /* 簽到表(已簽署版)：出席人員電子簽到全部完成才會顯示按鈕(openView時判斷)，含真圖章。 */
@@ -1504,30 +1499,12 @@ function printSignedSignSheet(){
     if (!VIEW) return;
     egPrintWindow('會議簽到表', signSheetPageHtml(VIEW.meeting, VIEW.attendees, true, 'fixed'), mrCss(), '', false, true);
 }
-
-/* ---------- 合併列印(簽到表／會議記錄／出貨目標達成率，三份各自一張A4)：僅主席+總經理皆簽核完成(done)才可列印，簽章一律用真圖章 ---------- */
-function printFullRecord(){
-    if (!VIEW) return;
-    var m = VIEW.meeting;
-    if (m.approval_status !== 'done') { alert('需主席與總經理皆簽核完成才能列印完整紀錄'); return; }
-    resolvePreparerThenPrint(function(preparerName){ doPrintFullRecord(preparerName); });
-}
-/* 合併列印同一份工作內混兩種方向(簽到表要直式/會議記錄與KPI要橫式)：CSS @page 只能設一種預設方向，
-   簽到表頁改用「具名頁」(page:mr-portrait) 覆蓋成直式，其餘頁沿用預設橫式；每份文件各自不同編號(或KPI頁根本沒編號)，
-   position:fixed 在同一次列印工作內會疊到其他頁(2026-08-06實測確認，見 printMeetingRecord() 的說明)，
-   混排多份不同文件一律用內文寫法(docNoMode='inline')，不可用'fixed'；
-   三份都是各自獨立的A4文件只是排在同一次列印工作，不印跨文件的頁碼(showPageCounter=false)。 */
-function doPrintFullRecord(preparerName){
-    var m = VIEW.meeting, res = VIEW;
-    var page1 = signSheetPageHtml(m, res.attendees, true, 'inline');
-    var page2 = meetingRecordPageHtml(m, res, 'inline');
-    var hasKpi = !!m.kpi_snapshot_json;
-    var body = '<div class="mr-portrait-page" style="page-break-after:always;">'+page1+'</div><div'+(hasKpi?' style="page-break-after:always;"':'')+'>'+page2+'</div>'
-        + (hasKpi ? ('<div>'+kpiPageHtml(m, preparerName)+'</div>') : '');
-    var css = mrCss()
-        + '@page mr-portrait{size:A4 portrait;margin:12mm 8mm 16mm;}'
-        + '.mr-portrait-page{page:mr-portrait;}';
-    egPrintWindow('會議紀錄完整版', body, css, '', true, true, false);
+/* 出貨目標達成率獨立列印(openView時依 kpi_snapshot_json 是否存在決定按鈕顯示)：本身沒有綁定AS編號，不受上述問題影響。 */
+function printKpiOnly(){
+    if (!VIEW || !VIEW.meeting.kpi_snapshot_json) return;
+    resolvePreparerThenPrint(function(preparerName){
+        egPrintWindow('出貨目標達成率', kpiPageHtml(VIEW.meeting, preparerName), mrCss(), '', true, true);
+    });
 }
 
 /* ---------- 模組設定：角色設定(仿 training_record.php) + 附件路徑/簽到表AS綁定 ---------- */
