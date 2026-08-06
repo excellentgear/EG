@@ -571,6 +571,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     </div>
 </div></div>
 
+<!-- 附件預覽 modal：圖片/PDF 點擊直接預覽，不觸發瀏覽器下載 -->
+<div class="va-mask" id="vaPrevMask"><div class="va-modal xwide">
+    <div class="m-head"><span id="vaPrevTitle">附件預覽</span><span class="m-close" onclick="vaClosePreview()">✕</span></div>
+    <div class="m-body" style="text-align:center;max-height:78vh;overflow:auto;background:#525659;">
+        <img id="vaPrevImg" style="max-width:100%;display:none;">
+        <iframe id="vaPrevFrame" style="width:100%;height:75vh;border:none;display:none;background:#fff;"></iframe>
+    </div>
+</div></div>
+
 <!-- 週期設定 modal -->
 <div class="va-mask" id="cycMask"><div class="va-modal">
     <div class="m-head"><span>共用稽核週期設定</span><span class="m-close" onclick="closeMask('cycMask')">✕</span></div>
@@ -672,12 +681,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     </div>
 </div></div>
 
-<!-- 超級管理員密碼確認 modal（密碼一律用 password 欄位遮罩顯示，不用 window.prompt 明碼；比照 as_document_management.php 的 askSuperPwd） -->
+<!-- 操作確認密碼 modal（密碼一律用 password 欄位遮罩顯示，不用 window.prompt 明碼；比照 as_document_management.php 的 askSuperPwd，
+     驗證改走全站共用的 src/common/confirm_password_lib.php，超級管理員或被授權的管理員都可以輸入自己的操作確認密碼） -->
 <div class="va-mask" id="pwMask"><div class="va-modal">
-    <div class="m-head"><span>超級管理員密碼確認</span><span class="m-close" onclick="closeMask('pwMask')">✕</span></div>
+    <div class="m-head"><span>操作確認密碼</span><span class="m-close" onclick="closeMask('pwMask')">✕</span></div>
     <div class="m-body">
         <p id="pwMsg" style="white-space:pre-line;color:#5b3a1e;margin:0 0 8px;"></p>
-        <input type="password" id="pwInput" autocomplete="new-password" placeholder="請輸入超級管理員密碼"
+        <input type="password" id="pwInput" autocomplete="new-password" placeholder="請輸入操作確認密碼"
             style="width:100%;border:1px solid #D8BE93;border-radius:4px;padding:6px 8px;font-size:13px;box-sizing:border-box;">
         <div id="pwErr" style="color:#DD5138;margin-top:6px;font-size:12px;"></div>
     </div>
@@ -1071,13 +1081,33 @@ function openRec(tid){
 }
 function scopeLabel(s){ return {outsource:'外包加工',purchase:'採購',all:'通用'}[s]||s; }
 /* ---------- 佐證附件 ---------- */
+/** 附件連結：圖片/PDF 點擊開跳窗預覽(vaPreviewAttach)，不觸發瀏覽器下載；其餘類型維持開新分頁
+ *  (瀏覽器本來就無法預覽，交給瀏覽器自行下載或開啟)。afAttachList/rsAttachList 共用。 */
+function vaAttachLinkHtml(a){
+    if (!a.exists) return '<span style="color:#c9bda9;text-decoration:line-through;flex:1;overflow:hidden;text-overflow:ellipsis;">📄 '+esc(a.original_name||'')+'(檔案不存在)</span>';
+    var url = API+'?action=attach_open&attach_id='+a.attach_id, ext = vaAttachExt(a.original_name);
+    if (VA_IMG_EXT.indexOf(ext)!==-1 || ext==='pdf') {
+        return '<a href="'+esc(url)+'" class="va-attach-prev" data-url="'+esc(url)+'" data-ext="'+esc(ext)+'" data-name="'+esc(a.original_name||'')+'" style="color:#b5762a;flex:1;overflow:hidden;text-overflow:ellipsis;">📄 '+esc(a.original_name||'')+'</a>';
+    }
+    return '<a href="'+esc(url)+'" target="_blank" style="color:#b5762a;flex:1;overflow:hidden;text-overflow:ellipsis;">📄 '+esc(a.original_name||'')+'</a>';
+}
+$(document).on('click', 'a.va-attach-prev', function(e){
+    e.preventDefault();
+    vaPreviewAttach($(this).data('url'), $(this).data('name'), $(this).data('ext'));
+});
+function vaPreviewAttach(url, name, ext){
+    $('#vaPrevTitle').text(name||'附件預覽');
+    if (ext==='pdf') { $('#vaPrevImg').hide().attr('src',''); $('#vaPrevFrame').attr('src', url).show(); }
+    else { $('#vaPrevFrame').hide().attr('src',''); $('#vaPrevImg').attr('src', url).show(); }
+    openMask('vaPrevMask');
+}
+function vaClosePreview(){ $('#vaPrevFrame').attr('src',''); closeMask('vaPrevMask'); }
 function renderAttach(tid, list){
     $('#afAttachBox').data('tid', tid);
     var h='';
     (list||[]).forEach(function(a){
         h += '<div style="display:flex;gap:8px;align-items:center;border-bottom:1px dashed #EADFC8;padding:3px 0;">';
-        h += a.exists ? '<a href="'+API+'?action=attach_open&attach_id='+a.attach_id+'" target="_blank" style="color:#b5762a;flex:1;overflow:hidden;text-overflow:ellipsis;">📄 '+esc(a.original_name||'')+'</a>'
-                      : '<span style="color:#c9bda9;text-decoration:line-through;flex:1;">📄 '+esc(a.original_name||'')+'(檔案不存在)</span>';
+        h += vaAttachLinkHtml(a);
         h += '<span style="color:#8a6d45;font-size:11px;">'+esc(a.note||'')+'　'+esc(a.uploaded_by||'')+'</span>';
         if (PERMS.canEdit) h += '<span class="af-del" style="color:#DD5138;cursor:pointer;" onclick="delAttach('+a.attach_id+')"><i class="fa fa-trash"></i></span>';
         h += '</div>';
@@ -1422,7 +1452,7 @@ function writePrintWindow(w, bodyHtml, title, docNo, landscape, noPageCount, ext
         + 'table.pf-info{width:100%;font-size:13px;margin-top:10px;border-collapse:collapse;}table.pf-info td{padding:5px 6px;border:1px solid #999;}'
         + 'table.pf-sign{width:100%;margin-top:20px;font-size:13px;page-break-inside:avoid;}table.pf-sign td{padding:14px 6px 8px;}'
         + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-        + '.rs-chart-wrap{max-width:400px;margin:0 auto;}.rs-chart-wrap svg{width:100% !important;height:auto !important;}'
+        + '.rs-chart-wrap{margin:0 auto;}.rs-chart-wrap svg{width:auto !important;height:230px !important;max-width:100% !important;}'
         + 'table.pf.rs-table{font-size:15px;}table.pf.rs-table th,table.pf.rs-table td{padding:6px 8px;height:28px;}'
         + '.attach-page{page-break-before:always;}'
         + '@media print{@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;'
@@ -1518,8 +1548,7 @@ function rsRenderAttach(tid, list){
     var h='';
     (list||[]).forEach(function(a){
         h+='<div style="display:flex;gap:8px;align-items:center;border-bottom:1px dashed #EADFC8;padding:3px 0;">';
-        h+=a.exists?'<a href="'+API+'?action=attach_open&attach_id='+a.attach_id+'" target="_blank" style="color:#b5762a;flex:1;">📄 '+esc(a.original_name||'')+'</a>'
-                   :'<span style="color:#c9bda9;text-decoration:line-through;flex:1;">📄 '+esc(a.original_name||'')+'</span>';
+        h+=vaAttachLinkHtml(a);
         h+='<span style="color:#8a6d45;font-size:11px;">'+esc(a.note||'')+' '+esc(a.uploaded_by||'')+'</span>';
         if(PERMS.canEdit) h+='<span class="af-del" style="color:#DD5138;cursor:pointer;" onclick="rsDelAttach('+a.attach_id+')"><i class="fa fa-trash"></i></span>';
         h+='</div>';
@@ -1582,9 +1611,25 @@ function recordSheetHTML(){
         +'</tr></table>';
     return head+info+body+conc+sign;
 }
-function printRecordSheet(){
+/** 記錄表本身橫式，但附件一律直式（圖面/掃描件多為直式拍攝，橫式反而縮得更小），
+ *  用具名頁 va-portrait 覆蓋回直式，比照 printAllDocs() 混排橫直式的既有做法。 */
+async function printRecordSheet(){
     if (!RS) { alert('無資料'); return; }
-    openPrintWindow(recordSheetHTML(), '供應商品質系統評鑑記錄表', (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03', true, true);
+    var docNo = (META.record_as_doc&&META.record_as_doc.doc_no)||'2-PH-01-03';
+    var attachHtml = '';
+    if ((RS.attaches||[]).length) {
+        try { attachHtml = await vaBuildAttachPrintHTML(RS.attaches); }
+        catch (e) { attachHtml = '<div style="color:#c00;">附件載入發生錯誤，部分附件可能未列印，請至系統個別下載查看。</div>'; }
+    }
+    var extraCss = '';
+    if (attachHtml) {
+        var asTxt = String(docNo||'').replace(/['\\]/g,'');
+        extraCss = '@page va-portrait{size:A4 portrait;margin:12mm 8mm 16mm;'
+            + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; }" : '')
+            + '} .va-portrait-page{page:va-portrait;}';
+    }
+    var body = recordSheetHTML() + (attachHtml ? '<div class="va-portrait-page">' + attachHtml + '</div>' : '');
+    openPrintWindow(body, '供應商品質系統評鑑記錄表', docNo, true, true, extraCss);
 }
 
 /* ---------- 記錄表列印附加佐證附件（圖片直接嵌入／PDF 用 pdf.js 轉圖，其餘類型不支援預覽） ---------- */
@@ -1688,7 +1733,9 @@ async function printAllDocs(){
     var extraCss = '@page va-landscape{size:A4 landscape;margin:12mm 8mm 16mm;'
         + (asTxt2 ? " @bottom-right{ content:'"+asTxt2+"'; font-size:9pt; color:#333; }" : '')
         + '} .va-landscape-page{page:va-landscape;}';
-    var body = page1 + '<div class="va-landscape-page" style="page-break-before:always;">' + recordSheetHTML() + attachHtml + '</div>';
+    // 附件不放進 .va-landscape-page：查核表本來就是預設頁(直式)，附件跟著沿用預設頁直式，
+    // 不會被記錄表的橫式具名頁帶偏(每份附件各自的 .attach-page 已強制分頁)。
+    var body = page1 + '<div class="va-landscape-page" style="page-break-before:always;">' + recordSheetHTML() + '</div>' + attachHtml;
     openPrintWindow(body, '供應商稽核文件', docNo1, false, true, extraCss);
 }
 
@@ -2111,13 +2158,14 @@ function renderPlan(res){
         // 顯示給所有看得到本頁的人；實際是否有權核准由後端 plan_decide 再驗一次(canAdmin 或最高核准人員本人/代理)
         $('<button id="planDecideBtn" class="b-att2" style="margin-left:8px;">核准/退回</button>').on('click', openPlanDecideMask).insertAfter('#planLockInfo');
     }
-    if (res.lock && (res.lock.status==='pending'||res.lock.status==='approved') && META.is_superadmin) {
-        // 只有超級管理員看得到；取消後解除鎖定回到可增列對象狀態，需輸入超級管理員密碼(2026-08-06使用者明確要求)
+    if (res.lock && (res.lock.status==='pending'||res.lock.status==='approved') && META.confirm_pw_allowed) {
+        // 只有超級管理員或被授權的管理員看得到；取消後解除鎖定回到可增列對象狀態，需輸入操作確認密碼
         $('<button id="planCancelBtn" class="b-att2" style="margin-left:8px;color:#DD5138;">取消送出</button>').on('click', cancelPlan).insertAfter($('#planDecideBtn').length?'#planDecideBtn':'#planLockInfo');
     }
 }
-/** 超級管理員密碼確認：密碼一律用 password 欄位遮罩顯示，不用 window.prompt 明碼(會外洩)——
- *  比照 as_document_management.php 的 askSuperPwd()，全站任何要輸入密碼確認的地方都應該用這種寫法。 */
+/** 操作確認密碼：密碼一律用 password 欄位遮罩顯示，不用 window.prompt 明碼(會外洩)——
+ *  比照 as_document_management.php 的 askSuperPwd()，全站任何要輸入密碼確認的地方都應該用這種寫法；
+ *  實際驗證走 src/common/confirm_password_lib.php，超級管理員或被授權的管理員都能用自己的密碼。 */
 function askSuperPwd(msg, onConfirm){
     $('#pwMsg').text(msg); $('#pwInput').val(''); $('#pwErr').text('');
     $('#pwMask').data('onConfirm', onConfirm);
@@ -2135,7 +2183,7 @@ $(document).on('keydown', '#pwInput', function(e){ if (e.key==='Enter'){ e.preve
 function cancelPlan(){
     var year = $('#planYear').val();
     if (!confirm('確定要取消 '+year+' 年度稽核計畫的送出/核准狀態嗎？取消後會解除鎖定，可重新增列對象並重新送出，此操作會留下紀錄。')) return;
-    askSuperPwd('請輸入超級管理員密碼以確認取消 '+year+' 年度稽核計畫：', function(pwd){
+    askSuperPwd('請輸入操作確認密碼以確認取消 '+year+' 年度稽核計畫：', function(pwd){
         $.post(API, {action:'plan_cancel', year:year, password:pwd}, function(res){
             if (!res.ok){ alert(res.error||'取消失敗'); return; }
             alert('已取消，該年度計畫已解除鎖定。');
