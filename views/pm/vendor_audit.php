@@ -672,6 +672,21 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     </div>
 </div></div>
 
+<!-- 超級管理員密碼確認 modal（密碼一律用 password 欄位遮罩顯示，不用 window.prompt 明碼；比照 as_document_management.php 的 askSuperPwd） -->
+<div class="va-mask" id="pwMask"><div class="va-modal">
+    <div class="m-head"><span>超級管理員密碼確認</span><span class="m-close" onclick="closeMask('pwMask')">✕</span></div>
+    <div class="m-body">
+        <p id="pwMsg" style="white-space:pre-line;color:#5b3a1e;margin:0 0 8px;"></p>
+        <input type="password" id="pwInput" autocomplete="new-password" placeholder="請輸入超級管理員密碼"
+            style="width:100%;border:1px solid #D8BE93;border-radius:4px;padding:6px 8px;font-size:13px;box-sizing:border-box;">
+        <div id="pwErr" style="color:#DD5138;margin-top:6px;font-size:12px;"></div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('pwMask')">取消</button>
+        <button class="b-ok" id="pwOk">確定</button>
+    </div>
+</div></div>
+
 <!-- 稽核員資格設定 modal -->
 <div class="va-mask" id="audMask"><div class="va-modal wide">
     <div class="m-head"><span>稽核員資格設定</span><span class="m-close" onclick="closeMask('audMask')">✕</span></div>
@@ -2100,17 +2115,32 @@ function renderPlan(res){
         $('<button id="planCancelBtn" class="b-att2" style="margin-left:8px;color:#DD5138;">取消送出</button>').on('click', cancelPlan).insertAfter($('#planDecideBtn').length?'#planDecideBtn':'#planLockInfo');
     }
 }
-var PLAN_ADMIN_PW = '';
+/** 超級管理員密碼確認：密碼一律用 password 欄位遮罩顯示，不用 window.prompt 明碼(會外洩)——
+ *  比照 as_document_management.php 的 askSuperPwd()，全站任何要輸入密碼確認的地方都應該用這種寫法。 */
+function askSuperPwd(msg, onConfirm){
+    $('#pwMsg').text(msg); $('#pwInput').val(''); $('#pwErr').text('');
+    $('#pwMask').data('onConfirm', onConfirm);
+    openMask('pwMask');
+    setTimeout(function(){ $('#pwInput').trigger('focus'); }, 200);
+}
+$('#pwOk').on('click', function(){
+    var pwd = $('#pwInput').val();
+    if (!pwd) { $('#pwErr').text('請輸入密碼'); return; }
+    var cb = $('#pwMask').data('onConfirm');
+    closeMask('pwMask');
+    if (cb) cb(pwd);
+});
+$(document).on('keydown', '#pwInput', function(e){ if (e.key==='Enter'){ e.preventDefault(); $('#pwOk').trigger('click'); } });
 function cancelPlan(){
     var year = $('#planYear').val();
     if (!confirm('確定要取消 '+year+' 年度稽核計畫的送出/核准狀態嗎？取消後會解除鎖定，可重新增列對象並重新送出，此操作會留下紀錄。')) return;
-    if (!PLAN_ADMIN_PW) PLAN_ADMIN_PW = prompt('請輸入超級管理員密碼：') || '';
-    if (!PLAN_ADMIN_PW) return;
-    $.post(API, {action:'plan_cancel', year:year, password:PLAN_ADMIN_PW}, function(res){
-        if (!res.ok){ alert(res.error||'取消失敗'); PLAN_ADMIN_PW=''; return; }
-        alert('已取消，該年度計畫已解除鎖定。');
-        loadPlan();
-    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '取消失敗'); PLAN_ADMIN_PW=''; });
+    askSuperPwd('請輸入超級管理員密碼以確認取消 '+year+' 年度稽核計畫：', function(pwd){
+        $.post(API, {action:'plan_cancel', year:year, password:pwd}, function(res){
+            if (!res.ok){ alert(res.error||'取消失敗'); return; }
+            alert('已取消，該年度計畫已解除鎖定。');
+            loadPlan();
+        }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '取消失敗'); });
+    });
 }
 $('#planYear').on('change', loadPlan);
 $('#planSubmitBtn').on('click', function(){
