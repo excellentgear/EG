@@ -6621,7 +6621,24 @@ function loadFileList(quoteNo, isViewMode) {
         refreshPartAttachBadges();
     });
 }
+// 含必備類別的附件：只有單一料號時不需要使用者手動選，直接自動綁定該料號（多料號仍必須手動選）。
+// 會直接改寫 f.linked_parts；若有 attachment_id 一併存回 DB。回傳（可能更新過的）linked_parts JSON 字串或 null。
+function autoBindSinglePartLinkedParts(f) {
+    const catIds = (f.category_ids || (f.category_id ? String(f.category_id) : '')).split(',').map(s => s.trim()).filter(Boolean);
+    const reqCats = effectiveRequiredCats();
+    const hasReq = catIds.some(id => reqCats.some(r => Number(r) === Number(id)));
+    if (!hasReq) return f.linked_parts || null;
+    const quoteParts = getQuoteParts();
+    if (quoteParts.length !== 1) return f.linked_parts || null;
+    const cur = f.linked_parts ? JSON.parse(f.linked_parts) : null;
+    if (cur && cur.length === 1 && String(cur[0]) === String(quoteParts[0])) return f.linked_parts;
+    const newVal = JSON.stringify([quoteParts[0]]);
+    f.linked_parts = newVal;
+    if (f.attachment_id) saveAttachmentMeta(f.attachment_id, catIds.join(','), newVal);
+    return newVal;
+}
 function appendFileItem(f, quoteNo) {
+    autoBindSinglePartLinkedParts(f);
     const ext  = (f.filename.split('.').pop() || '').toLowerCase();
     const icon = ['pdf'].includes(ext) ? 'fa-file-pdf-o text-danger'
                : ['xls','xlsx'].includes(ext) ? 'fa-file-excel-o text-success'
@@ -6798,8 +6815,8 @@ function appendFileItemView(f, quoteNo) {
 // ── 渲染標籤面板（類別按鈕 + 料號連結）──────────────────────
 function renderFileTagPanel($wrap, f, quoteNo) {
     const attachId     = $wrap.data('attach-id');
-    const linkedParts  = f.linked_parts ? JSON.parse(f.linked_parts) : null;
-    const allLinked    = !linkedParts;
+    let linkedParts    = f.linked_parts ? JSON.parse(f.linked_parts) : null;
+    let allLinked      = !linkedParts;
     const quoteParts   = getQuoteParts();
 
     // 類別按鈕（多選）
@@ -6822,6 +6839,14 @@ function renderFileTagPanel($wrap, f, quoteNo) {
     // 含必備類別的附件：不可為「全部料號」，必須連結單一料號
     const reqCats    = effectiveRequiredCats();
     const hasReqCat  = curCatIds.some(id => reqCats.some(r => Number(r) === Number(id)));
+
+    // 只有單一料號時不需要使用者手動選，直接自動綁定該料號（多料號情況仍必須手動選）
+    const autoBound = autoBindSinglePartLinkedParts(f);
+    if (autoBound !== (linkedParts ? JSON.stringify(linkedParts) : null)) {
+        linkedParts = autoBound ? JSON.parse(autoBound) : null;
+        allLinked = !linkedParts;
+        $wrap.data('linked-parts', autoBound || '');
+    }
 
     // 料號按鈕
     let partsHtml = '';
