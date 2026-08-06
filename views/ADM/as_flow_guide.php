@@ -133,6 +133,13 @@ $PAGE_BINDS = [
     ['ss', 'vendor_roster_as_doc_id', '供應商稽核管理 · 合格供應商清冊',    '../pm/vendor_audit.php'],
     ['ss', 'vendor_eval_as_doc_id',   '供應商稽核管理 · 定期評核表',        '../pm/vendor_audit.php'],
     ['ss', 'vendor_plan_as_doc_id',   '供應商稽核管理 · 供應商稽核計劃',    '../pm/vendor_audit.php'],
+    ['ss', 'as_doc_tree_print_as_doc_id', 'AS文件審核樹 · 列印版',          '../ADM/as_tree_approval_view.php'],
+    ['ss', 'qc_inspection_as_doc_id', '線上檢驗記錄表',                     '../QC/inspection_entry_v2.php'],
+    ['ss', 'training_as_doc_plan',    '教育訓練 · 訓練計劃表',              '../ADM/training_record.php'],
+    ['ss', 'training_as_doc_result',  '教育訓練 · 訓練成果表',              '../ADM/training_record.php'],
+    ['ss', 'training_as_doc_target',  '教育訓練 · 訓練目標表',              '../ADM/training_record.php'],
+    ['ss', 'training_as_doc_request', '教育訓練 · 需求申請單',              '../ADM/training_record.php'],
+    ['ss', 'training_as_doc_signsheet', '教育訓練 · 簽到表',                '../ADM/training_record.php'],
     ['sp', 'EXTERNAL_DOC|as_doc_id',  '外來文件清單',                       '../Sales/external_doc_list.php'],
     ['sp', 'QUOTATION|as_doc_id',     '報價單',                             '../Sales/quotation_list_NEW.php'],
 ];
