@@ -530,11 +530,79 @@ switch ($action) {
             }
             unset($it2, $qItems);
 
+            // 品項是否已轉訂單（OP轉訂單）：報價資料分頁要合併顯示報價/訂單，已轉者改依訂單排序、
+            // 並在下方一併顯示訂單資料與訂單附件（見 bom_viewer.php renderQuoteTab/showQuoteDetail）
+            $allItemIds = [];
+            foreach ($items as $qItems) foreach ($qItems as $it3) $allItemIds[] = (int)$it3['item_id'];
+            $orderByItemId = [];
+            if ($allItemIds) {
+                try {
+                    $phI = implode(',', array_fill(0, count($allItemIds), '?'));
+                    $ordStmt = $pdo->prepare("SELECT quote_item_id, Order_id, Order_oo, Order_date, Delivery_date, Qty, unit_price
+                        FROM order_track WHERE quote_item_id IN ($phI)
+                        ORDER BY (parent_order_id IS NULL) DESC, Order_id ASC");
+                    $ordStmt->execute($allItemIds);
+                    foreach ($ordStmt->fetchAll(PDO::FETCH_ASSOC) as $o) {
+                        $qiid = (int)$o['quote_item_id'];
+                        if (!isset($orderByItemId[$qiid])) $orderByItemId[$qiid] = $o; // 每個報價品項只取第一筆(根批次)
+                    }
+                } catch (Throwable $_e) {}
+            }
+            // 批次撈這些訂單的正式附件（共用 quotation_file_categories 類別表）
+            $orderIds = array_values(array_unique(array_map(fn($o) => (int)$o['Order_id'], $orderByItemId)));
+            $orderAttachByOrderId = [];
+            if ($orderIds) {
+                try {
+                    $phO = implode(',', array_fill(0, count($orderIds), '?'));
+                    $oaStmt = $pdo->prepare("SELECT id, order_id, filename, original_name, category_ids, file_size, uploaded_at
+                        FROM order_attachments WHERE status='active' AND order_id IN ($phO)");
+                    $oaStmt->execute($orderIds);
+                    $catMap2 = [];
+                    foreach ($pdo->query("SELECT id, category_name FROM quotation_file_categories WHERE is_active=1")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+                        $catMap2[(int)$c['id']] = $c['category_name'];
+                    }
+                    foreach ($oaStmt->fetchAll(PDO::FETCH_ASSOC) as $oa) {
+                        $ext = strtolower(pathinfo($oa['filename'], PATHINFO_EXTENSION));
+                        $catNames = [];
+                        foreach (array_filter(explode(',', (string)$oa['category_ids'])) as $cid) {
+                            if (isset($catMap2[(int)$cid])) $catNames[] = $catMap2[(int)$cid];
+                        }
+                        $orderAttachByOrderId[(int)$oa['order_id']][] = [
+                            'id'             => (int)$oa['id'],
+                            'display_name'   => $oa['original_name'] ?: $oa['filename'],
+                            'url'            => '../../src/store/Order_Attachment_API.php?action=download&id=' . (int)$oa['id'],
+                            'ext'            => $ext,
+                            'file_size'      => $oa['file_size'] ?: '',
+                            'uploaded_at'    => substr($oa['uploaded_at'] ?: '', 0, 16),
+                            'category_names' => $catNames,
+                        ];
+                    }
+                } catch (Throwable $_e) {}
+            }
+            foreach ($items as $qno => &$qItems) {
+                foreach ($qItems as &$it4) {
+                    $ord = $orderByItemId[(int)$it4['item_id']] ?? null;
+                    if ($ord) {
+                        $it4['order_oo']          = $ord['Order_oo'];
+                        $it4['order_date']        = $ord['Order_date'];
+                        $it4['order_delivery']    = $ord['Delivery_date'];
+                        $it4['order_qty']         = $ord['Qty'];
+                        $it4['order_unit_price']  = $ord['unit_price'];
+                        $it4['order_attachments'] = $orderAttachByOrderId[(int)$ord['Order_id']] ?? [];
+                    }
+                }
+            }
+            unset($qItems, $it4);
+
             $result = [];
             foreach ($headers as $qno => $h) {
                 $result[$qno] = $h;
                 $result[$qno]['items'] = $items[$qno] ?? [];
                 $result[$qno]['bind_from'] = $quoteBindLabel[$qno] ?? null;
+                // 這張報價單只要有任一品項已轉訂單，就取「最早轉的那筆」訂單日期供列表排序用
+                $ordDates = [];
+                foreach ($result[$qno]['items'] as $it5) { if (!empty($it5['order_date'])) $ordDates[] = $it5['order_date']; }
+                $result[$qno]['order_date'] = $ordDates ? min($ordDates) : null;
             }
             echo json_encode(['success'=>true,'data'=>$result]);
         } catch(Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }

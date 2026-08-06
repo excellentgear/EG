@@ -197,8 +197,75 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 'uploaded_at'    => substr($r['uploaded_at'] ?: '', 0, 16),
                 'category_names' => $catNames,
                 'bind_from'      => $bindLabelByDid[(int)$r['d_id']] ?? null,
+                'source'         => 'other',
             ];
         }
+        // 併入標記「show_in_other_attach」的報價附件／訂單附件（master_data_management.php 類別字典設定），
+        // 不影響它們原本上傳位置（報價資料／訂單附件分頁）仍然照常顯示，這裡只是額外一併帶出。
+        try {
+            $showOtherIds = array_map('intval', $pdo2->query("SELECT id FROM quotation_file_categories WHERE show_in_other_attach=1")->fetchAll(PDO::FETCH_COLUMN));
+            if ($showOtherIds && $dids) {
+                $phD2 = implode(',', array_fill(0, count($dids), '?'));
+                $catCond = implode(' OR ', array_fill(0, count($showOtherIds), 'FIND_IN_SET(?, a.category_ids)'));
+
+                $qStmt = $pdo2->prepare("SELECT DISTINCT a.id, a.filename, a.original_name, a.category_ids, a.file_size, a.uploaded_at,
+                                                COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, a.quote_no
+                                         FROM quotation_attachments a
+                                         LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
+                                         JOIN quotation_list ql ON ql.quote_no = a.quote_no
+                                         JOIN quotation_item qi ON qi.quote_id = ql.quote_id
+                                         WHERE a.status='active' AND qi.d_setting_d_id IN ($phD2) AND ($catCond)");
+                $qStmt->execute(array_merge($dids, $showOtherIds));
+                foreach ($qStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
+                    $catNames = [];
+                    foreach (array_filter(explode(',', (string)$r['category_ids'])) as $cid) { if (isset($cats[(int)$cid])) $catNames[] = $cats[(int)$cid]; }
+                    $result[] = [
+                        'id'             => 'q' . $r['id'],
+                        'filename'       => $r['filename'],
+                        'display_name'   => $r['original_name'] ?: $r['filename'],
+                        'url'            => '../../src/store/Quotation_File_API.php?action=download&quote_no=' . urlencode($r['quote_no']) . '&filename=' . urlencode($r['filename']),
+                        'ext'            => $ext,
+                        'type'           => in_array($ext, ['jpg','jpeg','png','gif','webp','bmp']) ? 'image' : ($ext === 'pdf' ? 'pdf' : 'other'),
+                        'file_size'      => $r['file_size'] ?: '',
+                        'note'           => '來自報價單 ' . $r['quote_no'],
+                        'uploaded_by'    => $r['uploaded_by'] ?: '',
+                        'uploaded_at'    => substr($r['uploaded_at'] ?: '', 0, 16),
+                        'category_names' => $catNames,
+                        'bind_from'      => null,
+                        'source'         => 'quote',
+                    ];
+                }
+
+                $oStmt = $pdo2->prepare("SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size, a.uploaded_at,
+                                                COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, ot.Order_oo
+                                         FROM order_attachments a
+                                         JOIN order_track ot ON ot.Order_id = a.order_id
+                                         LEFT JOIN user u ON u.id = a.uploaded_by
+                                         WHERE a.status='active' AND ot.d_id_ID IN ($phD2) AND ($catCond)");
+                $oStmt->execute(array_merge($dids, $showOtherIds));
+                foreach ($oStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
+                    $catNames = [];
+                    foreach (array_filter(explode(',', (string)$r['category_ids'])) as $cid) { if (isset($cats[(int)$cid])) $catNames[] = $cats[(int)$cid]; }
+                    $result[] = [
+                        'id'             => 'o' . $r['id'],
+                        'filename'       => $r['filename'],
+                        'display_name'   => $r['original_name'] ?: $r['filename'],
+                        'url'            => '../../src/store/Order_Attachment_API.php?action=download&id=' . (int)$r['id'],
+                        'ext'            => $ext,
+                        'type'           => in_array($ext, ['jpg','jpeg','png','gif','webp','bmp']) ? 'image' : ($ext === 'pdf' ? 'pdf' : 'other'),
+                        'file_size'      => $r['file_size'] ?: '',
+                        'note'           => '來自訂單 ' . $r['Order_oo'],
+                        'uploaded_by'    => $r['uploaded_by'] ?: '',
+                        'uploaded_at'    => substr($r['uploaded_at'] ?: '', 0, 16),
+                        'category_names' => $catNames,
+                        'bind_from'      => null,
+                        'source'         => 'order',
+                    ];
+                }
+            }
+        } catch (Exception $_e) {}
         echo json_encode(['success' => true, 'attachments' => $result]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -317,6 +384,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
                 'category_names' => $catNames,
                 'quote_no'       => $r['quote_no'],
                 'bind_from'      => $bindFrom,
+                'source'         => 'quote',
             ];
         }
         echo json_encode(['success' => true, 'attachments' => $result]);
@@ -395,6 +463,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
                 'uploaded_at'    => substr($r['uploaded_at'] ?: '', 0, 16),
                 'category_names' => $catNames,
                 'bind_from'      => $bindFrom,
+                'source'         => 'order',
             ];
         }
         echo json_encode(['success' => true, 'attachments' => $result]);
@@ -570,6 +639,7 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
     <div id="file-panel">
         <div id="file-panel-heading"><i class="fa fa-folder-open-o"></i> <?= $bom_safe ?></div>
         <div id="bom-tabbar" style="display:none;"></div>
+        <div id="bom-tag-filter-bar" style="display:none;padding:5px 8px;background:#fbf7ef;border-bottom:1px solid #e6c9a0;font-size:11px;"></div>
         <div id="bom-file-list">
             <p class="text-center" style="margin-top:24px; color:#999;">
                 <i class="fa fa-spinner fa-spin"></i> 載入中...
@@ -940,13 +1010,22 @@ function makeItem(f, active) {
 }
 
 // 附件（報價/其他）項目
-function makeAttItem(att) {
+// showSource=true 時前面加上來源徽章（訂單/報價/其他）：跨分頁全域標籤篩選結果用，
+// 平常各分頁自己顯示時不需要（同分頁內來源已經很清楚）
+var _bomSourceLabel = { quote: '報價', order: '訂單', other: '其他' };
+var _bomSourceColor = { quote: '#8a4b0f', order: '#1ABB9C', other: '#7d3c98' };
+function makeAttItem(att, showSource) {
     var catBadges = '';
     (att.category_names || []).forEach(function(cn) {
         if (cn === '作廢') return;
         catBadges += '<span class="label label-info" style="margin-right:2px;font-size:10px;">'+escapeHtml(cn)+'</span>';
     });
     var extBadge = '<span class="label label-default" style="margin-right:4px;font-size:10px;">'+escapeHtml((att.ext||'').toUpperCase())+'</span>';
+    var srcBadge = '';
+    if (showSource) {
+        var src = att.source || 'other';
+        srcBadge = '<span style="font-size:9px;font-weight:700;color:#fff;background:'+(_bomSourceColor[src]||'#999')+';border-radius:3px;padding:0 4px;margin-right:4px;">'+(_bomSourceLabel[src]||src)+'</span>';
+    }
     var info = [att.uploaded_at, att.uploaded_by, att.file_size, att.note].filter(Boolean).join(' · ');
     var isObs = (att.category_names || []).indexOf('作廢') >= 0;
     var st = isObs ? 'background:#fff0f0;border-left:3px solid #e74c3c;' : '';
@@ -959,7 +1038,7 @@ function makeAttItem(att) {
         + ' style="'+st+'">'
         + (isObs ? '<div style="display:inline-block;background:#e74c3c;color:#fff;font-size:10px;font-weight:700;padding:0 7px;border-radius:3px;letter-spacing:1px;margin-bottom:3px;">⊘ 作廢</div><br>' : '')
         + '<p class="list-group-item-text" style="'+(isObs?'color:#c0392b;text-decoration:line-through;':'')+'">'
-        + extBadge + catBadges + escapeHtml(att.display_name)
+        + srcBadge + extBadge + catBadges + escapeHtml(att.display_name)
         + (info ? '<br><small style="color:#aaa;font-size:10px;">'+escapeHtml(info)+'</small>' : '')
         + bindTag
         + '</p></a>';
@@ -1031,11 +1110,15 @@ function renderQuoteTab() {
     var groups = {};
     atts.forEach(function(f) { var q = f.quote_no || '__unknown__'; (groups[q] = groups[q] || []).push(f); });
     Object.keys(summaries).forEach(function(q) { if (!groups[q]) groups[q] = []; });
+    // 排序鍵：已轉訂單者用訂單日期(order_date)排序，未轉的仍用報價日期/附件上傳日期排序
+    function qSortKey(q) {
+        if (summaries[q] && summaries[q].order_date) return summaries[q].order_date;
+        var d = (summaries[q] && summaries[q].quote_date) || '';
+        (groups[q] || []).forEach(function(f) { if (f.uploaded_at > d) d = f.uploaded_at; });
+        return d;
+    }
     var qnos = Object.keys(groups).filter(function(q) { return q !== '__unknown__'; }).sort(function(a, b) {
-        var ad = (summaries[a] && summaries[a].quote_date) || '';
-        var bd = (summaries[b] && summaries[b].quote_date) || '';
-        groups[a].forEach(function(f) { if (f.uploaded_at > ad) ad = f.uploaded_at; });
-        groups[b].forEach(function(f) { if (f.uploaded_at > bd) bd = f.uploaded_at; });
+        var ad = qSortKey(a), bd = qSortKey(b);
         return bd > ad ? 1 : (bd < ad ? -1 : b.localeCompare(a));
     });
     if (groups['__unknown__'] && groups['__unknown__'].length) qnos.push('__unknown__');
@@ -1058,11 +1141,21 @@ function renderQuoteTab() {
                 if (qProcs.filter(function(x) { return x.key === key; }).length === 0) qProcs.push({ key: key, label: label });
             });
         }
+        // 已轉訂單的品項（可能不只一筆，同批多料號各轉各的訂單）：彙整不重複的訂單編號
+        var qOrderNos = [];
+        if (qs && qs.items) {
+            qs.items.forEach(function(it) { if (it.order_oo && qOrderNos.indexOf(it.order_oo) === -1) qOrderNos.push(it.order_oo); });
+        }
         html += '<div class="bom-quote-head" data-qno="' + escapeHtml(qno) + '" style="background:#faf1e0;border-bottom:2px solid #e6c9a0;padding:8px 10px;cursor:pointer;">';
         html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">';
         html += '<span style="font-size:12px;font-weight:700;color:#8a4b0f;font-family:Consolas,monospace;">' + escapeHtml(qno) + '</span>';
         if (qs && qs.total_amount) html += '<span style="font-size:11px;color:#c0392b;font-weight:600;white-space:nowrap;">$' + Number(qs.total_amount).toLocaleString() + '</span>';
         html += '</div>';
+        if (qOrderNos.length) {
+            html += '<div style="margin-top:2px;">' + qOrderNos.map(function(o) {
+                return '<span style="font-size:10px;font-weight:700;color:#fff;background:#1ABB9C;border-radius:3px;padding:0 5px;margin-right:3px;"><i class="fa fa-exchange"></i> ' + escapeHtml(o) + '</span>';
+            }).join('') + '</div>';
+        }
         if (qs && qs.bind_from) html += '<div style="font-size:10px;color:#1ABB9C;margin-top:2px;"><i class="fa fa-link"></i> 來自綁定料號 ' + escapeHtml(qs.bind_from) + '</div>';
         if (qProcs.length) {
             html += '<div style="margin-top:2px;display:flex;flex-direction:column;gap:1px;">';
@@ -1127,6 +1220,31 @@ function showQuoteDetail(qno) {
                 html += '<td style="padding:4px 6px;text-align:right;">' + escapeHtml(String(it.quantity || '')) + ' ' + (it.unit || '') + '</td>';
                 html += '<td style="padding:4px 6px;text-align:right;color:' + (it.is_tiered ? '#888' : '#c0392b') + ';">' + (it.is_tiered ? '(階梯)' : (it.unit_price ? '$' + Number(it.unit_price).toLocaleString() : '—')) + '</td>';
                 html += '</tr>';
+                // 已轉訂單：下方一併顯示該筆訂單資料與訂單附件
+                if (it.order_oo) {
+                    html += '<tr style="border-bottom:1px solid #f0f0f0;background:#eafaf6;">';
+                    html += '<td colspan="4" style="padding:5px 6px;">';
+                    html += '<div style="font-size:11px;color:#1ABB9C;font-weight:700;"><i class="fa fa-exchange"></i> 訂單 ' + escapeHtml(it.order_oo) + '</div>';
+                    var oInfo = [];
+                    if (it.order_date)     oInfo.push('訂單日期：' + it.order_date);
+                    if (it.order_delivery) oInfo.push('交期：' + it.order_delivery);
+                    if (it.order_qty)      oInfo.push('數量：' + it.order_qty);
+                    if (it.order_unit_price) oInfo.push('單價：$' + Number(it.order_unit_price).toLocaleString());
+                    if (oInfo.length) html += '<div style="font-size:10px;color:#555;margin-top:2px;">' + oInfo.map(escapeHtml).join('　') + '</div>';
+                    if (it.order_attachments && it.order_attachments.length) {
+                        html += '<div style="font-size:10px;color:#666;margin-top:3px;">';
+                        html += it.order_attachments.map(function(oa) {
+                            var catBadge = (oa.category_names || []).map(function(cn) {
+                                return '<span style="background:#FFF3E2;border:1px solid #E4D3BC;color:#8a5a2b;border-radius:3px;padding:0 3px;margin-right:2px;">' + escapeHtml(cn) + '</span>';
+                            }).join('');
+                            return '<div style="margin-top:2px;"><i class="fa fa-file-o"></i> <a href="' + oa.url + '" target="_blank" style="color:#337ab7;">' + escapeHtml(oa.display_name) + '</a> ' + catBadge + '</div>';
+                        }).join('');
+                        html += '</div>';
+                    } else {
+                        html += '<div style="font-size:10px;color:#aaa;margin-top:3px;">（此訂單尚無附件）</div>';
+                    }
+                    html += '</td></tr>';
+                }
             });
             html += '</tbody></table>';
         }
@@ -1137,6 +1255,8 @@ function showQuoteDetail(qno) {
 
 function switchTab(tab) {
     if (!_tabEnabled[tab]) return;
+    _tagFilterActive = null; // 切換分頁＝離開全域篩選結果檢視，回到該分頁正常顯示
+    renderTagFilterBar();
     _activeTab = tab;
     $('#bom-tabbar .bom-tab').removeClass('active').filter('[data-tab="'+tab+'"]').addClass('active');
     if (tab === 'drawing') renderDrawingList();
@@ -1145,6 +1265,50 @@ function switchTab(tab) {
 }
 $(document).on('click', '#bom-tabbar .bom-tab', function() { switchTab($(this).data('tab')); });
 $(document).on('click', '.bom-quote-head', function() { showQuoteDetail($(this).data('qno')); });
+
+// ── 頂列跨分頁全域標籤篩選（報價/其他/訂單附件三個分頁的附件類別標籤一起篩，圖面分頁的圖檔沒有這種標籤不參與）──
+var _tagFilterActive = null; // 目前套用的標籤名稱；null=未篩選
+function renderTagFilterBar() {
+    if (_mode !== 'did') { $('#bom-tag-filter-bar').hide(); return; }
+    var tagSet = {};
+    ['quote', 'other', 'order_attach'].forEach(function(t) {
+        (_tabData[t] || []).forEach(function(f) { (f.category_names || []).forEach(function(cn) { if (cn !== '作廢') tagSet[cn] = true; }); });
+    });
+    var tags = Object.keys(tagSet).sort();
+    if (!tags.length) { $('#bom-tag-filter-bar').hide(); return; }
+    var html = '<span style="color:#8a5a2b;font-weight:700;margin-right:4px;"><i class="fa fa-filter"></i> 標籤篩選：</span>';
+    tags.forEach(function(t) {
+        var active = (_tagFilterActive === t);
+        html += '<span class="bom-tag-chip" data-tag="' + escapeHtml(t) + '" style="display:inline-block;cursor:pointer;margin:0 4px 4px 0;padding:1px 8px;border-radius:10px;font-size:11px;'
+            + (active ? 'background:#d4761a;color:#fff;' : 'background:#fff;color:#8a5a2b;border:1px solid #e6c9a0;') + '">' + escapeHtml(t) + '</span>';
+    });
+    if (_tagFilterActive) html += '<span id="bom-tag-clear" style="cursor:pointer;color:#c0392b;font-size:11px;margin-left:6px;"><i class="fa fa-times-circle"></i> 清除篩選</span>';
+    $('#bom-tag-filter-bar').html(html).show();
+}
+function renderTagFilterResults() {
+    $('#bom-tabbar .bom-tab').removeClass('active');
+    var items = [];
+    ['quote', 'other', 'order_attach'].forEach(function(t) {
+        (_tabData[t] || []).forEach(function(f) { if ((f.category_names || []).indexOf(_tagFilterActive) !== -1) items.push(f); });
+    });
+    if (!items.length) { $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">此標籤沒有符合的附件</div>'); showEmpty('此標籤沒有符合的附件'); return; }
+    $('#bom-file-list').html(items.map(function(f) { return makeAttItem(f, true); }).join(''));
+    var f0 = items[0];
+    $('#bom-file-list .bom-file-item').first().addClass('active');
+    showFile(f0.url, f0.ext, f0.display_name);
+    applyObsoleteOverlay((f0.category_names || []).indexOf('作廢') >= 0);
+}
+$(document).on('click', '.bom-tag-chip', function() {
+    var t = $(this).data('tag');
+    _tagFilterActive = (_tagFilterActive === t) ? null : t;
+    renderTagFilterBar();
+    if (_tagFilterActive) renderTagFilterResults(); else switchTab(_activeTab);
+});
+$(document).on('click', '#bom-tag-clear', function() {
+    _tagFilterActive = null;
+    renderTagFilterBar();
+    switchTab(_activeTab);
+});
 
 // ── 載入 ───────────────────────────────────────────────────────────────
 function loadBomMode() {
@@ -1196,6 +1360,7 @@ function loadDidMode() {
 
 function finishDidLoad() {
     renderTabbar();
+    renderTagFilterBar();
     // 預選：指定 tab 優先；否則第一個「啟用且有資料」的分頁；再否則圖面
     var order = ['drawing','quote','other','order_attach'], pick = '';
     if (_initTab && _tabEnabled[_initTab]) pick = _initTab;

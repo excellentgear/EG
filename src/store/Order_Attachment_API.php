@@ -128,6 +128,15 @@ switch ($action) {
                 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             }
         } catch (Exception $e) { $rows = []; }
+        // 標記沿用報價單「必備類別，需連結單一料號」設定（quotation_list_NEW.php 維護）：
+        // 這些類別在批次真的有多種料號時不可設為共用，前端用來顯示 * 提示與擋料號選擇未填的送出
+        $reqIds = [];
+        try {
+            $rv = $pdo->query("SELECT param_value FROM system_parameters WHERE param_group='QUOTATION' AND param_key='required_attach_cats'")->fetchColumn();
+            if ($rv) $reqIds = array_map('intval', (json_decode($rv, true) ?: []));
+        } catch (Exception $e) {}
+        foreach ($rows as &$r) { $r['required'] = in_array((int)$r['id'], $reqIds, true); }
+        unset($r);
         echo json_encode(['success' => true, 'categories' => $rows]);
         break;
 

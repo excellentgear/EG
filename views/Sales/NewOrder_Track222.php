@@ -7114,7 +7114,8 @@ foreach($dCounts as $c) {
             var panelHtml = (cats || []).map(function(c) {
                 var ck = checkedIds.indexOf(String(c.id)) !== -1 ? ' checked' : '';
                 return '<label style="font-weight:400;display:inline-flex;align-items:center;gap:3px;margin:0 10px 4px 0;cursor:pointer;">' +
-                    '<input type="checkbox" value="' + c.id + '"' + ck + '>' + escapeHtml(c.category_name) + '</label>';
+                    '<input type="checkbox" value="' + c.id + '"' + ck + '>' + escapeHtml(c.category_name) +
+                    (c.required ? ' <span style="color:#DD5138;" title="必備類別，需連結單一料號">*</span>' : '') + '</label>';
             }).join('') || '<span style="color:#aaa;">尚未設定本頁可用標籤，請至「設定」跳窗設定</span>';
             var partTag = showPart
                 ? '<span style="font-size:10px;color:#999;">' + (f.linked_part_no ? ('料號：' + escapeHtml(f.linked_part_no)) : '共用（全部）') + '</span>'
@@ -7187,11 +7188,21 @@ foreach($dCounts as $c) {
             if (orderAttachCats === null) {
                 $.post(ORDER_ATTACH_API, { action: 'get_categories' }, function(res) {
                     orderAttachCats = (res.success && res.categories) ? res.categories : [];
+                    oaRenderPresetCats('#order-attach-cats');
                     doList();
                 }, 'json');
             } else {
+                oaRenderPresetCats('#order-attach-cats');
                 doList();
             }
+        }
+        // 上傳前的「預設標籤」勾選區塊（訂單/OP轉訂單共用）；必備類別（沿用報價單 required_attach_cats）標紅色 *
+        function oaRenderPresetCats(selector) {
+            $(selector).html((orderAttachCats || []).map(function(c) {
+                return '<label style="font-weight:400;display:inline-flex;align-items:center;gap:3px;margin:0;cursor:pointer;">' +
+                    '<input type="checkbox" value="' + c.id + '">' + escapeHtml(c.category_name) +
+                    (c.required ? ' <span style="color:#DD5138;" title="必備類別，需連結單一料號">*</span>' : '') + '</label>';
+            }).join(''));
         }
         // 批次上傳：可一次選多檔；預設標籤（若有勾選）套用到全部檔案，不勾也能先上傳、之後再逐一設定。
         // 一律走暫存批次碼（即使是編輯既有訂單）：要按「確認更新/新增」才轉正歸屬到訂單，不按存檔就關閉視窗
@@ -7881,16 +7892,12 @@ foreach($dCounts as $c) {
         // ── OP轉訂單附件（整批共用一個暫存批次；多料號時可指定對應料號或「共用(全部)」）──
         var opAttachBatchKey = null;
         function opAttachRefreshCats() {
-            function render() { $('#op-attach-cats').html((orderAttachCats || []).map(function(c) {
-                return '<label style="font-weight:400;display:inline-flex;align-items:center;gap:3px;margin:0;cursor:pointer;">' +
-                    '<input type="checkbox" value="' + c.id + '">' + escapeHtml(c.category_name) + '</label>';
-            }).join('')); }
             if (orderAttachCats === null) {
                 $.post(ORDER_ATTACH_API, { action: 'get_categories' }, function(res) {
                     orderAttachCats = (res.success && res.categories) ? res.categories : [];
-                    render();
+                    oaRenderPresetCats('#op-attach-cats');
                 }, 'json');
-            } else { render(); }
+            } else { oaRenderPresetCats('#op-attach-cats'); }
         }
         // 批次內出現多種料號才顯示下拉（含「共用(全部)」）；只有一種料號時隱藏、自動視為該料號整批共用
         function opAttachUpdatePartPicker(items) {

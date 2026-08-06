@@ -88,6 +88,30 @@ try {
         return '下列附件尚未設定類別標籤，請設定後再存檔：' . implode('、', $names);
     }
 
+    // 沿用報價單既有「必備類別，需連結單一料號」設定（system_parameters QUOTATION/required_attach_cats，
+    // quotation_list_NEW.php 維護）：OP轉訂單批次內若真的有多種料號，這些類別的附件不可設為「共用（全部）」，
+    // 一定要挑對應料號，否則將來 bom_viewer 圖面查閱頁無法正確歸戶到單一料號。只在批次真的有多料號時才擋，
+    // 單一料號訂單/批次沒有這個歧義問題，不受影響。回傳 null＝通過；否則為錯誤訊息。
+    function eg_order_attach_check_required_part(PDO $db, string $batchKey): ?string {
+        try {
+            $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='QUOTATION' AND param_key='required_attach_cats'");
+            $st->execute();
+            $v = $st->fetchColumn();
+            $reqIds = $v ? array_map('intval', (json_decode($v, true) ?: [])) : [];
+            if (!$reqIds) return null;
+            $st2 = $db->prepare("SELECT original_name, filename, category_ids FROM order_attachments
+                                 WHERE batch_key=? AND status='temp' AND (linked_part_no IS NULL OR linked_part_no='')");
+            $st2->execute([$batchKey]);
+            $bad = [];
+            foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $cats = array_map('intval', array_filter(explode(',', (string)$r['category_ids'])));
+                if (array_intersect($cats, $reqIds)) $bad[] = $r['original_name'] ?: $r['filename'];
+            }
+            if (!$bad) return null;
+            return '下列附件的類別需要指定對應料號（批次內有多筆料號，不可設為共用）：' . implode('、', $bad);
+        } catch (PDOException $e) { return null; }
+    }
+
     // OP轉訂單用：把報價項目 process_notes（逗號分隔 sub_tag_id）轉成製程名稱字串（・連接）
     function eg_process_names_for(PDO $db, ?string $process_notes): string {
         if (empty($process_notes)) return '';
@@ -577,6 +601,19 @@ try {
         if ($opBatchKey !== '') {
             $tagErr = eg_order_attach_check_tagged($db, "batch_key=? AND status='temp'", [$opBatchKey]);
             if ($tagErr !== null) { echo json_encode(['success' => false, 'message' => $tagErr]); exit; }
+
+            // 批次內若真的有多種料號，沿用報價單「必備類別，需連結單一料號」的設定，這些類別不可設為共用
+            $quoteItemIds = array_values(array_filter(array_map(fn($r) => intval($r['quote_item_id'] ?? 0), $items)));
+            if ($quoteItemIds) {
+                $phQ = implode(',', array_fill(0, count($quoteItemIds), '?'));
+                $dpStmt = $db->prepare("SELECT COUNT(DISTINCT d_setting_d_id) FROM quotation_item WHERE item_id IN ($phQ)");
+                $dpStmt->execute($quoteItemIds);
+                $distinctParts = (int)$dpStmt->fetchColumn();
+                if ($distinctParts > 1) {
+                    $reqErr = eg_order_attach_check_required_part($db, $opBatchKey);
+                    if ($reqErr !== null) { echo json_encode(['success' => false, 'message' => $reqErr]); exit; }
+                }
+            }
         }
 
         // 相容舊表：order_track.qty_over_range（轉單數量超出報價階梯區間旗標）首次執行自動補欄
