@@ -182,7 +182,7 @@ switch ($action) {
                 ->execute([$orderId, $linkPart, $catStr, $fname, $orig, $sizeStr, $uid]);
         } else {
             $pdo->prepare("INSERT INTO order_attachments (order_id, batch_key, linked_part_no, category_ids, filename, original_name, file_size, uploaded_by, status, expire_at)
-                           VALUES (0,?,?,?,?,?,?,'temp', DATE_ADD(NOW(), INTERVAL 2 DAY))")
+                           VALUES (0,?,?,?,?,?,?,?,'temp', DATE_ADD(NOW(), INTERVAL 2 DAY))")
                 ->execute([$batchKey, $linkPart, $catStr, $fname, $orig, $sizeStr, $uid]);
         }
         echo json_encode(['success' => true, 'id' => (int)$pdo->lastInsertId()]);
