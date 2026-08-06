@@ -247,6 +247,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             body.va-print-rs #rsMask table.af-table { font-size:15px !important; }
             body.va-print-rs #rsMask table.af-table th, body.va-print-rs #rsMask table.af-table td { padding:7px 8px !important; }
             body.va-print-rs .attach-page { page-break-before:always; }
+            /* 圖章列印尺寸全站統一91px正方形(ai-rules/18第6條)，畫面顯示尺寸(eg_stamp.js預設76px)不受此限，
+               僅列印時覆蓋；此頁直接列印#rsMask前一直漏了這條，導致印出來章比規定小 */
+            body.va-print-rs .stamp-wrap svg, body.va-print-rs svg.car-stamp { width:91px !important; height:91px !important;
+                -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
         }
     </style>
 </head>
@@ -1567,9 +1571,9 @@ function rsApplyPrintExtras(attachHtml){
     var audStamp = t.auditor ? vaStampHtml(t.auditor, fmtDate(t.audit_date)||'') : '';
     // 比照本檔供應商稽核計劃列印(fixedFoot)既有規則：簽章列分三欄(左欄/中間留白/右欄)，不加框線
     $('#rsSignBox').html('<table style="width:100%;margin-top:14px;border-collapse:collapse;border:none;page-break-inside:avoid;"><tr>'
-        +'<td style="width:33%;border:none;padding:6px 8px;"><div style="font-size:11px;color:#555;">主管</div><div style="margin-top:2px;min-height:90px;">'+mgrStamp+'</div></td>'
+        +'<td style="width:33%;border:none;padding:6px 8px;"><div style="font-size:11px;color:#555;">主管</div><div style="margin-top:2px;min-height:100px;">'+mgrStamp+'</div></td>'
         +'<td style="width:34%;border:none;"></td>'
-        +'<td style="width:33%;border:none;padding:6px 8px;"><div style="font-size:11px;color:#555;">稽核員</div><div style="margin-top:2px;min-height:90px;">'+audStamp+'</div></td>'
+        +'<td style="width:33%;border:none;padding:6px 8px;"><div style="font-size:11px;color:#555;">稽核員</div><div style="margin-top:2px;min-height:100px;">'+audStamp+'</div></td>'
         +'</tr></table>');
     $('#rsAttachPrintBox').html(attachHtml||'');
 }

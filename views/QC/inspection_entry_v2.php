@@ -646,6 +646,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             exit;
         }
 
+        // ---- ⑧ 同一 BOM 的其他製程清單：填寫頁「製程切換」下拉用 ----
+        if ($act === 'sibling_processes') {
+            $bomSw = trim($_POST['bom'] ?? '');
+            if ($bomSw === '') { echo json_encode(['success' => true, 'rows' => []], JSON_UNESCAPED_UNICODE); exit; }
+            $sw = $pdo->prepare("
+                SELECT bi.bom_ing_fid, bi.bom_sn, bi.process_no, pn.ProcessName,
+                       (SELECT f.check_result FROM qc_check_form f WHERE f.bom_ing_fid = bi.bom_ing_fid AND f.status <> 'DRAFT'
+                        ORDER BY f.batch_no DESC, f.round_no DESC LIMIT 1) AS last_result
+                FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                WHERE bi.bom = ?
+                ORDER BY bi.bom_sn ASC
+            ");
+            $sw->execute([$bomSw]);
+            echo json_encode(['success' => true, 'rows' => $sw->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
         throw new Exception('未知的 v2action: ' . $act);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -3376,10 +3393,38 @@ $(function(){
             '<div><b>料號</b>'+partCell+'</div>'+
             (ctx.adhoc ? '' : '<div><b>客戶</b><span class="cv">'+esc(ctx.client||'—')+'</span></div>')+
             '<div><b>製令 / BOM</b><span class="cv">'+esc(ctx.bom||'—')+'</span></div>'+
-            '<div><b>'+(ctx.adhoc?'檢驗類型（無製程）':'製程')+'</b><span class="cv">'+esc(ctx.process||'—')+'</span></div>'+
+            '<div><b>'+(ctx.adhoc?'檢驗類型（無製程）':'製程')+'</b><span class="cv">'+
+                (ctx.adhoc ? esc(ctx.process||'—')
+                    : '<select id="sel-switch-process" class="form-control input-sm" style="display:inline-block;width:auto;min-width:170px;font-weight:bold;"><option value="">'+esc(ctx.process||'載入中…')+'</option></select>')
+            +'</span></div>'+
             '<div><b>'+(ctx.adhoc?'送驗數':'訂單數')+'</b><span class="cv">'+(ctx.order_qty||0)+'</span></div>'+
             '<div><b>'+(ctx.adhoc?'抽驗數':'建議抽驗')+'</b><span class="cv">'+(ctx.sample_qty||0)+' 件</span></div>');
+        if(!ctx.adhoc) loadSiblingProcesses();
     }
+    // ---------- 製程切換（同一 BOM 的其他製程，不用回待驗清單重找）----------
+    // 防呆：切換前若目前這筆有還沒存檔的填寫內容，先跳確認，避免誤點跑錯製程（2026-08 使用者需求）
+    function loadSiblingProcesses(){
+        if(!ctx || !ctx.bom) return;
+        $.post(V2API, { v2action:'sibling_processes', bom:ctx.bom }, function(res){
+            var $sel=$('#sel-switch-process');
+            if(!res || !res.success || !$sel.length) return;
+            $sel.html((res.rows||[]).map(function(r){
+                var tag = r.last_result==='NG' ? '✘' : (r.last_result==='OK' ? '✔' : '·');
+                return '<option value="'+r.bom_ing_fid+'">'+tag+' ['+esc(r.bom_sn)+'] '+esc(r.ProcessName||('製程'+r.process_no))+'</option>';
+            }).join(''));
+            $sel.val(ctx.bom_ing_fid);
+        }, 'json');
+    }
+    $(document).on('change', '#sel-switch-process', function(){
+        var $sel=$(this), newFid=$sel.val();
+        if(!newFid || String(newFid)===String(ctx.bom_ing_fid)) return;
+        var hasProgress = MODEL.items && MODEL.items.some(function(it){ return itemFilledCount(it)>0; });
+        if(hasProgress && !confirm('目前這筆檢驗尚有還沒存檔的填寫內容，切換製程會離開此頁面。\n（內容已自動存成草稿，之後回來這個製程仍可繼續）\n確定要切換嗎？')){
+            $sel.val(ctx.bom_ing_fid);
+            return;
+        }
+        loadContext(newFid);
+    });
     $('#ctx-bar').on('click','#lnk-part-drawing', function(){
         if(!ctx || !ctx.part_no) return;
         var w=screen.availWidth, h=screen.availHeight;
