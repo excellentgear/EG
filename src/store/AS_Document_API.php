@@ -74,6 +74,8 @@ function asCan(string $what): bool {
     if ($asIsRoleAdmin || strpos($asPagePerm, 'A') !== false) return true;
     $charMap = ['view'=>'R', 'create'=>'C', 'update'=>'U', 'delete'=>'D'];
     if (isset($charMap[$what]) && strpos($asPagePerm, $charMap[$what]) !== false) return true;
+    // 上傳紀錄：與「新增文件」分開設定，但相容既有已具新增文件權限者
+    if ($what === 'upload_record') return in_array('asdoc_upload_record', $asFeatures, true) || asCan('create');
     return in_array('asdoc_' . $what, $asFeatures, true);
 }
 
@@ -304,7 +306,7 @@ $asGate = [
     'save_tree_auto'=>'settings', 'tree_submit_approval'=>'update',
     // tree_approval_decide 於 case 內檢查（核准人本人／管理員），核准人不一定有 AS 文件角色
     'save_dept_codes'=>'settings',
-    'form_records_list'=>'view', 'form_records_upload'=>'create', 'form_record_delete'=>'delete',
+    'form_records_list'=>'view', 'form_records_upload'=>'upload_record', 'form_record_delete'=>'delete',
     'set_linked_module'=>'settings',
     'phrase_add'=>'update', 'phrase_delete'=>'update',
     'version_attach_file'=>'update', 'docs_add_tags'=>'update',

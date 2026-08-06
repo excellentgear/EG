@@ -71,6 +71,9 @@ $asCaps = [
     'download' => $asIsRoleAdmin || strpos($pp,'A')!==false || in_array('asdoc_download', $asFeatures, true),
     // 免附件補登：只認明確功能碼，管理員不自動豁免（維持改版必附申請單的管控）
     'no_attach' => in_array('asdoc_no_attach', $asFeatures, true),
+    // 上傳紀錄（表單填寫紀錄/留存附件）：與「新增文件」分開設定，但仍相容既有已勾選新增文件者
+    'upload_record' => $asIsRoleAdmin || strpos($pp,'A')!==false || strpos($pp,'C')!==false
+        || in_array('asdoc_upload_record', $asFeatures, true) || in_array('asdoc_create', $asFeatures, true),
     // 管理員（系統角色或頁面A權）：批次補建版本/程序書快速建檔 專用
     'admin' => $asIsRoleAdmin || strpos($pp,'A')!==false,
     // 永久刪除（含改版紀錄，不可復原）：僅超級管理員 id=1 本人且具管理者權限，用於傳錯文件
@@ -879,6 +882,7 @@ $(function(){
   const canEO = !!window.asPerm.edit_online;
   const canDL = !!window.asPerm.download;
   const canNA = !!window.asPerm.no_attach; // 免附件補登
+  const canRecUp = !!window.asPerm.upload_record; // 上傳紀錄（與新增文件分開設定）
 
   // 操作欄 ⚙ 下拉在 .table-responsive 內會被裁切：展開時暫時放開 overflow
   $(document).on('show.bs.dropdown', '#docTableBody .btn-group', function(){
@@ -2417,8 +2421,8 @@ $(function(){
         if(i===1||i===pages||Math.abs(i-recPage)<=2) pg.append(`<li class="${i===recPage?'active':''}"><a href="#" data-p="${i}">${i}</a></li>`);
         else if(Math.abs(i-recPage)===3) pg.append('<li class="disabled"><a>…</a></li>');
       }
-      // 上傳區依權限
-      $('#recUploadBlock').toggle(canC);
+      // 上傳區依權限（上傳紀錄與新增文件分開設定）
+      $('#recUploadBlock').toggle(canRecUp);
     });
   }
   $('#docTableBody').on('click','.op-record', function(){
@@ -2503,6 +2507,7 @@ $(function(){
     {code:'asdoc_settings',    label:'文管設定'},
     {code:'asdoc_edit_online', label:'線上開檔'},
     {code:'asdoc_no_attach',   label:'免附件補登'},
+    {code:'asdoc_upload_record', label:'上傳紀錄'},
     {code:'asdoc_online_form_beta', label:'線上表單模板(測試功能)'}
   ];
   let AS_ROLES = [];
