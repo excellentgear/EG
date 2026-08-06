@@ -1484,9 +1484,12 @@ function printMeetingRecord(){
     resolvePreparerThenPrint(function(preparerName){
         var m = VIEW.meeting, res = VIEW;
         var hasKpi = !!m.kpi_snapshot_json;
-        // AS文件編號改用position:fixed釘在頁面實際右下角(2026-08-06使用者明確要求：不論表格內容長短都要在右下角，
-        // 不能緊接在表格/簽章後面)，不再靠 egPrintWindow 的 @page bottom-right(Chrome列印對此支援不穩定)
-        var page1 = meetingRecordPageHtml(m, res, 'fixed');
+        // AS文件編號定位(2026-08-06三次修正，實測釐清根因)：position:fixed 在 Chrome 列印中不是「只出現在它被寫在哪一頁」，
+        // 而是整個列印工作(同一次window.print())全部頁面都會重複疊上去——單一文件(不管會不會自己溢到第2頁)用fixed沒問題，
+        // 因為全程只有一組編號；但這裡 hasKpi=true 時同一次列印工作混了「會議記錄(有編號)」+「KPI頁(沒有綁定編號)」兩種不同頁，
+        // fixed會把會議記錄的編號疊到KPI頁上(使用者實測回報)。混排不同文件/含無編號頁時一律改用內文寫法(docNoMode='inline')，
+        // 只有整個列印工作從頭到尾只有一組編號時才能用'fixed'。
+        var page1 = meetingRecordPageHtml(m, res, hasKpi ? 'inline' : 'fixed');
         var body = hasKpi ? ('<div style="page-break-after:always;">'+page1+'</div><div>'+kpiPageHtml(m, preparerName)+'</div>') : page1;
         egPrintWindow('會議記錄', body, mrCss(), '', true, true, !hasKpi);
     });
@@ -1510,13 +1513,14 @@ function printFullRecord(){
     resolvePreparerThenPrint(function(preparerName){ doPrintFullRecord(preparerName); });
 }
 /* 合併列印同一份工作內混兩種方向(簽到表要直式/會議記錄與KPI要橫式)：CSS @page 只能設一種預設方向，
-   簽到表頁改用「具名頁」(page:mr-portrait) 覆蓋成直式，其餘頁沿用預設橫式；各份文件編號各自用 position:fixed 釘在
-   自己那一頁的右下角(docNoMode='fixed'，2026-08-06使用者實測要求：合併列印時也要跟單獨列印一樣釘右下角，內文寫法不行)；
+   簽到表頁改用「具名頁」(page:mr-portrait) 覆蓋成直式，其餘頁沿用預設橫式；每份文件各自不同編號(或KPI頁根本沒編號)，
+   position:fixed 在同一次列印工作內會疊到其他頁(2026-08-06實測確認，見 printMeetingRecord() 的說明)，
+   混排多份不同文件一律用內文寫法(docNoMode='inline')，不可用'fixed'；
    三份都是各自獨立的A4文件只是排在同一次列印工作，不印跨文件的頁碼(showPageCounter=false)。 */
 function doPrintFullRecord(preparerName){
     var m = VIEW.meeting, res = VIEW;
-    var page1 = signSheetPageHtml(m, res.attendees, true, 'fixed');
-    var page2 = meetingRecordPageHtml(m, res, 'fixed');
+    var page1 = signSheetPageHtml(m, res.attendees, true, 'inline');
+    var page2 = meetingRecordPageHtml(m, res, 'inline');
     var hasKpi = !!m.kpi_snapshot_json;
     var body = '<div class="mr-portrait-page" style="page-break-after:always;">'+page1+'</div><div'+(hasKpi?' style="page-break-after:always;"':'')+'>'+page2+'</div>'
         + (hasKpi ? ('<div>'+kpiPageHtml(m, preparerName)+'</div>') : '');
