@@ -113,6 +113,15 @@ if (!$isAdmin && !empty($me['id'])) {
             </table>
         </div>
         <div style="font-size:11.5px;color:#8a6d45;">人員清單只列未離職者，依職稱排序並顯示部門與職稱（走共用的人員清單規則）。</div>
+
+        <div class="or-sec">三、部門或人員擇一綁定（部門內任一主管皆可，或固定某關鍵人員）</div>
+        <div class="or-wrap">
+            <table class="or-tbl">
+                <thead><tr><th style="width:170px;">用途</th><th style="width:260px;">對應部門（擇一）</th><th style="width:260px;">或對應人員（擇一）</th><th>說明</th></tr></thead>
+                <tbody id="mixBody"><tr><td colspan="4">載入中…</td></tr></tbody>
+            </table>
+        </div>
+        <div style="font-size:11.5px;color:#8a6d45;">兩欄只能擇一填；同時填了以「部門」為準。兩者都未設定時，各用途各自有其專屬的自動判斷規則（見說明欄）。</div>
 <?php endif; ?>
     </div>
     <?php include '../partPage/footer.html' ?>
@@ -172,17 +181,17 @@ function load(){
         render();
     });
 }
-function deptSel(key, cur){
+function deptSel(key, cur, cls){
     // data-eg-filter：篩選框由共用檔 eg_input_rules.js 自動長出來（規則 7），本頁不自刻
-    var h='<select data-key="'+key+'" class="or-dept" data-eg-filter="輸入部門名稱篩選…"><option value="">（未設定）</option>';
+    var h='<select data-key="'+key+'" class="'+(cls||'or-dept')+'" data-eg-filter="輸入部門名稱篩選…"><option value="">（未設定）</option>';
     DEPTS.forEach(function(d){
         var pad = new Array(Math.max(0,(parseInt(d.level,10)||1)-1)+1).join('　');   // 依組織階層縮排
         h+='<option value="'+d.id+'"'+(String(cur)===String(d.id)?' selected':'')+'>'+pad+esc(d.name)+'</option>';
     });
     return h+'</select>';
 }
-function userSel(key, cur){
-    var h='<select data-key="'+key+'" class="or-user" data-eg-filter="輸入人員姓名篩選…"><option value="">（未設定）</option>';
+function userSel(key, cur, cls){
+    var h='<select data-key="'+key+'" class="'+(cls||'or-user')+'" data-eg-filter="輸入人員姓名篩選…"><option value="">（未設定）</option>';
     PEOPLE.forEach(function(p){
         var label = p.user_cname + (p.position_name?'（'+p.position_name+'）':'') + (p.dept_name?'／'+p.dept_name:'')
                   + (p.leave_note?'　'+p.leave_note:'');
@@ -204,7 +213,7 @@ function subNames(deptId){
     return out;
 }
 function render(){
-    var dh='', uh='';
+    var dh='', uh='', mh='';
     $.each(ROLES, function(k, r){
         var b = BIND[k]||{};
         if (r.type==='dept'){
@@ -221,13 +230,19 @@ function render(){
                +  (m ? esc(m.user_cname)+(m.position_name?'（'+esc(m.position_name)+'）':'')
                      : '<span style="color:#DD5138;">抓不到（該部門無職級設定，請改用下方「人事表單審核者」指定）</span>')
                +  '</div></td></tr>';
-        } else {
+        } else if (r.type==='user') {
             uh += '<tr><td><b>'+esc(r.label)+'</b></td><td>'+userSel(k, b.user_id||'')+'</td>'
+               +  '<td class="or-desc">'+esc(r.desc)+'</td></tr>';
+        } else if (r.type==='dept_or_user') {
+            mh += '<tr><td><b>'+esc(r.label)+'</b></td>'
+               +  '<td>'+deptSel(k, b.dept_id||'', 'or-mix-dept')+'</td>'
+               +  '<td>'+userSel(k, b.user_id||'', 'or-mix-user')+'</td>'
                +  '<td class="or-desc">'+esc(r.desc)+'</td></tr>';
         }
     });
     $('#deptBody').html(dh||'<tr><td colspan="4">無資料</td></tr>');
     $('#userBody').html(uh||'<tr><td colspan="3">無資料</td></tr>');
+    $('#mixBody').html(mh||'<tr><td colspan="4">無資料</td></tr>');
 }
 /* 改部門或切換「含子部門」時，右邊的認列說明即時跟著變（推導欄位鐵則：來源一改就重算） */
 $(document).on('change', '.or-dept, .or-sub', function(){
@@ -245,6 +260,13 @@ $('#btnSave').on('click', function(){
                    include_sub: $('.or-sub[data-key="'+k+'"]').prop('checked') ? 1 : 0});
     });
     $('.or-user').each(function(){ list.push({role_key:$(this).data('key'), dept_id:'', user_id:this.value}); });
+    // 部門或人員擇一：兩個下拉共用同一個 role_key，合成同一筆(部門優先)，不能像上面兩段各自獨立push，
+    // 否則後端依 role_key 覆寫時後寫的那段會蓋掉先寫的
+    $('.or-mix-dept').each(function(){
+        var k=$(this).data('key');
+        var userVal = $('.or-mix-user[data-key="'+k+'"]').val();
+        list.push({role_key:k, dept_id:this.value, user_id: this.value ? '' : userVal, include_sub:1});
+    });
     $.post(API, {action:'save', bindings:JSON.stringify(list)}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         BIND=res.bindings||{}; MGR=res.managers||{}; SUBD=res.sub_depts||{}; render();
