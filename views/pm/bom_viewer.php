@@ -423,7 +423,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
         // 不需要像報價附件那樣另外解析 linked_parts JSON
         $sql = "SELECT a.id, a.filename, a.original_name, a.category_ids, a.file_size,
                        COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by, a.uploaded_at,
-                       ot.Order_oo, ot.d_id_ID
+                       ot.Order_oo, ot.d_id_ID, ot.Order_date, ot.Delivery_date, ot.Qty, ot.Client_name, ot.quote_no
                 FROM order_attachments a
                 JOIN order_track ot ON ot.Order_id = a.order_id
                 LEFT JOIN user u ON u.id = a.uploaded_by
@@ -464,6 +464,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
                 'category_names' => $catNames,
                 'bind_from'      => $bindFrom,
                 'source'         => 'order',
+                'order_oo'       => $r['Order_oo'],
+                'order_date'     => $r['Order_date'] ? substr($r['Order_date'], 0, 10) : null,
+                'delivery_date'  => $r['Delivery_date'] ? substr($r['Delivery_date'], 0, 10) : null,
+                'qty'            => $r['Qty'] !== null ? (int)$r['Qty'] : null,
+                'client_name'    => $r['Client_name'] ?: null,
+                'quote_no'       => $r['quote_no'] ?: null,
             ];
         }
         echo json_encode(['success' => true, 'attachments' => $result]);
@@ -511,8 +517,8 @@ try {
     $imgeditCanUse = false;
 }
 
-// ── 分頁權限（僅 did 模式有「報價資料 / 其他附件」分頁；唯讀查閱）────────────
-// 圖面：一律開放。報價：需 quotation_view（沿用報價單檢視權限）。
+// ── 分頁權限（僅 did 模式有「訂單／報價 / 其他附件」分頁；唯讀查閱）────────────
+// 圖面：一律開放。報價（訂單／報價分頁內的報價區塊）：需 quotation_view（沿用報價單檢視權限）。
 // 其他附件：過渡期 — 未指派 master_data 角色者維持開放；已指派則需 md_attach_view。
 $canQuoteView = false;
 $canOtherView = true;
@@ -617,7 +623,7 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
         #save-dialog .btn-row { text-align: right; margin-top: 16px; }
         #save-dialog .btn-row .btn { min-width: 72px; }
 
-        /* ── 三分頁切換列（僅 did 模式：圖面查閱 / 報價資料 / 其他附件）── */
+        /* ── 分頁切換列（僅 did 模式：圖面查閱 / 訂單／報價 / 其他附件）── */
         #bom-tabbar { display: flex; border-bottom: 1px solid #e0d3c0; background: #faf5ec; }
         .bom-tab {
             flex: 1; text-align: center; padding: 8px 4px; font-size: 12.5px; cursor: pointer;
@@ -637,9 +643,9 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
 
     <!-- 左側：檔案清單 -->
     <div id="file-panel">
+        <div id="bom-tag-filter-bar" style="display:none;padding:5px 8px;background:#fbf7ef;border-bottom:1px solid #e6c9a0;font-size:11px;"></div>
         <div id="file-panel-heading"><i class="fa fa-folder-open-o"></i> <?= $bom_safe ?></div>
         <div id="bom-tabbar" style="display:none;"></div>
-        <div id="bom-tag-filter-bar" style="display:none;padding:5px 8px;background:#fbf7ef;border-bottom:1px solid #e6c9a0;font-size:11px;"></div>
         <div id="bom-file-list">
             <p class="text-center" style="margin-top:24px; color:#999;">
                 <i class="fa fa-spinner fa-spin"></i> 載入中...
@@ -740,10 +746,11 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
 var _bom        = <?= json_encode($bom) ?>;
 var _mode       = <?= json_encode($mode) ?>;   // 'bom' | 'did'
 var _d_id       = <?= json_encode($d_id) ?>;   // only in did mode
-var _canQuote   = <?= $canQuoteView ? 'true' : 'false' ?>;   // 報價資料分頁權限（quotation_view）
+var _canQuote   = <?= $canQuoteView ? 'true' : 'false' ?>;   // 報價資料權限（quotation_view，併入訂單／報價分頁）
 var _canOther   = <?= $canOtherView ? 'true' : 'false' ?>;   // 其他附件分頁權限（md_attach_view，過渡期開放）
-var _canOrder   = <?= $canOtherView ? 'true' : 'false' ?>;   // 訂單附件分頁權限（沿用其他附件同一組權限，不新增角色碼）
-var _initTab    = <?= json_encode($initTab) ?>;              // 預選分頁 drawing|quote|other|order_attach
+var _canOrder   = <?= $canOtherView ? 'true' : 'false' ?>;   // 訂單附件權限（沿用其他附件同一組權限，不新增角色碼）
+var _initTab    = <?= json_encode($initTab) ?>;              // 預選分頁 drawing|quote|other|order_attach（quote 為舊連結相容值）
+if (_initTab === 'quote') _initTab = 'order_attach';         // 舊版分頁鍵相容：報價資料已併入訂單／報價分頁
 var _sc         = 1, _tx = 0, _ty = 0;
 var _currentType = '';
 var _currentPath = '';
@@ -956,15 +963,17 @@ $(document).on('click', '.bom-file-item', function(e) {
     }
 });
 
-// ── 三分頁：資料桶、渲染與切換（did 模式）；bom 模式維持單清單 ─────────────
+// ── 分頁：資料桶、渲染與切換（did 模式）；bom 模式維持單清單 ─────────────
+// 訂單附件與報價資料自 2026-08 起合併為單一「訂單／報價」分頁：以訂單為主要分組，
+// 若訂單來源是報價單（order_track.quote_no）則該報價單巢狀顯示在該訂單底下；
+// 尚未轉單的報價單仍獨立列出。詳見 buildOrderQuoteGroups()/renderOrderQuoteTab()。
 var _tabData    = { drawing: null, other: [], quote: [], quoteSummaries: {}, order_attach: [] };
-var _tabEnabled = { drawing: true, other: (_mode === 'did' && _canOther), quote: (_mode === 'did' && _canQuote), order_attach: (_mode === 'did' && _canOrder) };
+var _tabEnabled = { drawing: true, other: (_mode === 'did' && _canOther), order_attach: (_mode === 'did' && (_canOrder || _canQuote)) };
 var _activeTab  = 'drawing';
 var _tabMeta = {
     drawing:      { label: '圖面查閱', icon: 'fa-picture-o' },
-    quote:        { label: '報價資料', icon: 'fa-usd' },
-    other:        { label: '其他附件', icon: 'fa-paperclip' },
-    order_attach: { label: '訂單附件', icon: 'fa-truck' }
+    order_attach: { label: '訂單／報價', icon: 'fa-truck' },
+    other:        { label: '其他附件', icon: 'fa-paperclip' }
 };
 
 function tabCount(tab) {
@@ -972,9 +981,9 @@ function tabCount(tab) {
         var d = _tabData.drawing || {};
         return (d.files ? d.files.length : 0) + (d.erp_files ? d.erp_files.length : 0);
     }
-    if (tab === 'quote') {
-        var qc = _tabData.quoteSummaries ? Object.keys(_tabData.quoteSummaries).length : 0;
-        return qc || (_tabData.quote || []).length;
+    if (tab === 'order_attach') {
+        var g = buildOrderQuoteGroups();
+        return Object.keys(g.orderGroups).length + g.standaloneQnos.length;
     }
     return (_tabData[tab] || []).length;
 }
@@ -982,7 +991,7 @@ function tabCount(tab) {
 function renderTabbar() {
     if (_mode !== 'did') return;
     var html = '';
-    ['drawing','quote','other','order_attach'].forEach(function(t) {
+    ['drawing','order_attach','other'].forEach(function(t) {
         if (!_tabEnabled[t]) return;
         html += '<div class="bom-tab'+(t===_activeTab?' active':'')+'" data-tab="'+t+'">'
              +  '<i class="fa '+_tabMeta[t].icon+'"></i> '+_tabMeta[t].label
@@ -1090,7 +1099,7 @@ function renderDrawingList() {
 function renderAttList(tab) {
     var arr = _tabData[tab] || [];
     if (arr.length === 0) {
-        var msg = (tab === 'quote') ? '無報價資料' : (tab === 'order_attach' ? '無訂單附件' : '無其他附件');
+        var msg = '無其他附件';
         $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">'+msg+'</div>');
         showEmpty(msg); return;
     }
@@ -1103,77 +1112,161 @@ function renderAttList(tab) {
     applyObsoleteOverlay((f0.category_names || []).indexOf('作廢') >= 0);
 }
 
-// ── 報價資料分頁：報價明細（明細＋附件，最新在上，仿附件二報價跳窗）──────────
-function renderQuoteTab() {
-    var atts = _tabData.quote || [];
+// ── 訂單／報價分頁：以訂單為主分組，訂單來源報價單(order_track.quote_no)巢狀顯示於該訂單底下；
+// 尚未轉單的報價單獨立列出（明細＋附件，仿附件二報價跳窗）──────────────────
+function buildOrderQuoteGroups() {
+    var oAtts = _tabData.order_attach || [];
+    var qAtts = _tabData.quote || [];
     var summaries = _tabData.quoteSummaries || {};
-    var groups = {};
-    atts.forEach(function(f) { var q = f.quote_no || '__unknown__'; (groups[q] = groups[q] || []).push(f); });
-    Object.keys(summaries).forEach(function(q) { if (!groups[q]) groups[q] = []; });
-    // 排序鍵：已轉訂單者用訂單日期(order_date)排序，未轉的仍用報價日期/附件上傳日期排序
-    function qSortKey(q) {
-        if (summaries[q] && summaries[q].order_date) return summaries[q].order_date;
-        var d = (summaries[q] && summaries[q].quote_date) || '';
-        (groups[q] || []).forEach(function(f) { if (f.uploaded_at > d) d = f.uploaded_at; });
+
+    var orderGroups = {};
+    oAtts.forEach(function(a) {
+        var oo = a.order_oo || '__unknown__';
+        if (!orderGroups[oo]) {
+            orderGroups[oo] = { order_oo: oo, order_date: a.order_date, delivery_date: a.delivery_date,
+                                 qty: a.qty, client_name: a.client_name, quote_no: a.quote_no || null, files: [] };
+        }
+        orderGroups[oo].files.push(a);
+    });
+
+    var quoteGroups = {};
+    qAtts.forEach(function(f) { var q = f.quote_no || '__unknown__'; (quoteGroups[q] = quoteGroups[q] || []).push(f); });
+    Object.keys(summaries).forEach(function(q) { if (!quoteGroups[q]) quoteGroups[q] = []; });
+
+    // 已被某訂單巢狀帶出的報價單號不再重複於獨立清單出現
+    var consumed = {};
+    Object.keys(orderGroups).forEach(function(oo) { var qn = orderGroups[oo].quote_no; if (qn) consumed[qn] = true; });
+    var standaloneQnos = Object.keys(quoteGroups).filter(function(q) { return !consumed[q]; });
+
+    return { orderGroups: orderGroups, quoteGroups: quoteGroups, summaries: summaries, standaloneQnos: standaloneQnos };
+}
+
+// nested=true 時縮排＋加註「來自報價」，用於巢狀顯示在訂單底下；平常獨立顯示不需要
+function quoteHeadHtml(qno, qs, nested) {
+    var qProcs = [];
+    if (qs && qs.items) {
+        qs.items.forEach(function(it) {
+            var procParts = (it.processes || []).map(function(p) { return p.name; });
+            var subParts  = (it.subtags || []);
+            if (!procParts.length && !subParts.length) return;
+            var key = procParts.concat(subParts).join('|');
+            var label = procParts.map(escapeHtml).join('・');
+            if (subParts.length) label += '<span style="color:#555;">・' + subParts.map(escapeHtml).join('・') + '</span>';
+            if (qProcs.filter(function(x) { return x.key === key; }).length === 0) qProcs.push({ key: key, label: label });
+        });
+    }
+    var qOrderNos = [];
+    if (qs && qs.items) {
+        qs.items.forEach(function(it) { if (it.order_oo && qOrderNos.indexOf(it.order_oo) === -1) qOrderNos.push(it.order_oo); });
+    }
+    var html = '<div class="bom-quote-head" data-qno="' + escapeHtml(qno) + '" style="background:'
+        + (nested ? '#fbf7ef' : '#faf1e0') + ';border-bottom:2px solid #e6c9a0;padding:' + (nested ? '6px 8px' : '8px 10px')
+        + ';cursor:pointer;' + (nested ? 'border-left:3px solid #d4a24b;margin-left:10px;' : '') + '">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">';
+    html += '<span style="font-size:' + (nested ? '11px' : '12px') + ';font-weight:700;color:#8a4b0f;font-family:Consolas,monospace;">'
+        + (nested ? '<i class="fa fa-level-up fa-rotate-90" style="margin-right:3px;color:#c99a55;"></i>來自報價 ' : '')
+        + escapeHtml(qno === '__unknown__' ? '（未知報價單）' : qno) + '</span>';
+    if (qs && qs.total_amount) html += '<span style="font-size:11px;color:#c0392b;font-weight:600;white-space:nowrap;">$' + Number(qs.total_amount).toLocaleString() + '</span>';
+    html += '</div>';
+    if (qOrderNos.length) {
+        html += '<div style="margin-top:2px;">' + qOrderNos.map(function(o) {
+            return '<span style="font-size:10px;font-weight:700;color:#fff;background:#1ABB9C;border-radius:3px;padding:0 5px;margin-right:3px;"><i class="fa fa-exchange"></i> ' + escapeHtml(o) + '</span>';
+        }).join('') + '</div>';
+    }
+    if (qs && qs.bind_from) html += '<div style="font-size:10px;color:#1ABB9C;margin-top:2px;"><i class="fa fa-link"></i> 來自綁定料號 ' + escapeHtml(qs.bind_from) + '</div>';
+    if (qProcs.length) {
+        html += '<div style="margin-top:2px;display:flex;flex-direction:column;gap:1px;">';
+        qProcs.forEach(function(p) { html += '<span style="font-size:10px;font-weight:600;color:#1b5e20;background:#e8f5e9;border-radius:3px;padding:0 5px;line-height:1.7;align-self:flex-start;">' + p.label + '</span>'; });
+        html += '</div>';
+    }
+    if (qs) {
+        html += '<div style="font-size:11px;color:#666;margin-top:2px;display:flex;gap:8px;flex-wrap:wrap;">';
+        if (qs.quote_date)  html += '<span><i class="fa fa-calendar" style="color:#bbb;margin-right:2px;"></i>' + escapeHtml(qs.quote_date) + '</span>';
+        if (qs.client_name) html += '<span><i class="fa fa-building-o" style="color:#bbb;margin-right:2px;"></i>' + escapeHtml(qs.client_name) + '</span>';
+        html += '</div>';
+    }
+    html += '<div style="font-size:10px;color:#b5793a;margin-top:3px;"><i class="fa fa-eye"></i> 點此看報價明細</div>';
+    html += '</div>';
+    return html;
+}
+
+function orderGroupHtml(og, quoteGroups, summaries) {
+    var html = '<div class="bom-order-head" style="background:#eafaf6;border-bottom:2px solid #b6e6da;padding:8px 10px;">';
+    html += '<span style="font-size:12px;font-weight:700;color:#0e8c73;font-family:Consolas,monospace;"><i class="fa fa-truck"></i> '
+        + escapeHtml(og.order_oo === '__unknown__' ? '（未知訂單）' : og.order_oo) + '</span>';
+    var info = [];
+    if (og.order_date) info.push(og.order_date);
+    if (og.client_name) info.push(og.client_name);
+    if (og.qty) info.push('數量 ' + og.qty);
+    if (og.delivery_date) info.push('交期 ' + og.delivery_date);
+    if (info.length) html += '<div style="font-size:11px;color:#666;margin-top:2px;">' + info.map(escapeHtml).join('　') + '</div>';
+    html += '</div>';
+    og.files.forEach(function(f) { html += makeAttItem(f); });
+    if (og.quote_no && quoteGroups.hasOwnProperty(og.quote_no)) {
+        html += quoteHeadHtml(og.quote_no, summaries[og.quote_no], true);
+        (quoteGroups[og.quote_no] || []).forEach(function(f) { html += makeAttItem(f); });
+    }
+    return html;
+}
+
+function renderOrderQuoteTab() {
+    var g = buildOrderQuoteGroups();
+    var orderOos = Object.keys(g.orderGroups);
+
+    // 排序鍵：訂單用訂單日期，尚未轉單的報價單用報價日期/附件上傳日期
+    function sortKeyOrder(oo) {
+        var og = g.orderGroups[oo];
+        if (og.order_date) return og.order_date;
+        var d = '';
+        og.files.forEach(function(f) { if (f.uploaded_at > d) d = f.uploaded_at; });
         return d;
     }
-    var qnos = Object.keys(groups).filter(function(q) { return q !== '__unknown__'; }).sort(function(a, b) {
-        var ad = qSortKey(a), bd = qSortKey(b);
-        return bd > ad ? 1 : (bd < ad ? -1 : b.localeCompare(a));
-    });
-    if (groups['__unknown__'] && groups['__unknown__'].length) qnos.push('__unknown__');
-    if (!qnos.length) { $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">無報價資料</div>'); showEmpty('無報價資料'); return; }
+    function sortKeyQuote(q) {
+        var qs = g.summaries[q];
+        var d = (qs && qs.quote_date) || '';
+        (g.quoteGroups[q] || []).forEach(function(f) { if (f.uploaded_at > d) d = f.uploaded_at; });
+        return d;
+    }
+
+    var entries = orderOos.filter(function(o) { return o !== '__unknown__'; })
+        .map(function(o) { return { type: 'order', key: o, sortKey: sortKeyOrder(o) }; })
+        .concat(g.standaloneQnos.filter(function(q) { return q !== '__unknown__'; })
+        .map(function(q) { return { type: 'quote', key: q, sortKey: sortKeyQuote(q) }; }));
+    if (g.orderGroups['__unknown__']) entries.push({ type: 'order', key: '__unknown__', sortKey: '' });
+    if (g.standaloneQnos.indexOf('__unknown__') !== -1 && (g.quoteGroups['__unknown__'] || []).length) {
+        entries.push({ type: 'quote', key: '__unknown__', sortKey: '' });
+    }
+    entries.sort(function(a, b) { return b.sortKey > a.sortKey ? 1 : (b.sortKey < a.sortKey ? -1 : 0); });
+
+    if (!entries.length) {
+        $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">無訂單附件或報價資料</div>');
+        showEmpty('無訂單附件或報價資料'); return;
+    }
 
     var html = '';
-    qnos.forEach(function(qno) {
-        var qs = summaries[qno] || null;
-        var grpFiles = groups[qno];
-        // 製程標籤（彙整品項）
-        var qProcs = [];
-        if (qs && qs.items) {
-            qs.items.forEach(function(it) {
-                var procParts = (it.processes || []).map(function(p) { return p.name; });
-                var subParts  = (it.subtags || []);
-                if (!procParts.length && !subParts.length) return;
-                var key = procParts.concat(subParts).join('|');
-                var label = procParts.map(escapeHtml).join('・');
-                if (subParts.length) label += '<span style="color:#555;">・' + subParts.map(escapeHtml).join('・') + '</span>';
-                if (qProcs.filter(function(x) { return x.key === key; }).length === 0) qProcs.push({ key: key, label: label });
-            });
+    entries.forEach(function(e) {
+        if (e.type === 'order') {
+            html += orderGroupHtml(g.orderGroups[e.key], g.quoteGroups, g.summaries);
+        } else {
+            html += quoteHeadHtml(e.key, g.summaries[e.key], false);
+            (g.quoteGroups[e.key] || []).forEach(function(f) { html += makeAttItem(f); });
         }
-        // 已轉訂單的品項（可能不只一筆，同批多料號各轉各的訂單）：彙整不重複的訂單編號
-        var qOrderNos = [];
-        if (qs && qs.items) {
-            qs.items.forEach(function(it) { if (it.order_oo && qOrderNos.indexOf(it.order_oo) === -1) qOrderNos.push(it.order_oo); });
-        }
-        html += '<div class="bom-quote-head" data-qno="' + escapeHtml(qno) + '" style="background:#faf1e0;border-bottom:2px solid #e6c9a0;padding:8px 10px;cursor:pointer;">';
-        html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">';
-        html += '<span style="font-size:12px;font-weight:700;color:#8a4b0f;font-family:Consolas,monospace;">' + escapeHtml(qno) + '</span>';
-        if (qs && qs.total_amount) html += '<span style="font-size:11px;color:#c0392b;font-weight:600;white-space:nowrap;">$' + Number(qs.total_amount).toLocaleString() + '</span>';
-        html += '</div>';
-        if (qOrderNos.length) {
-            html += '<div style="margin-top:2px;">' + qOrderNos.map(function(o) {
-                return '<span style="font-size:10px;font-weight:700;color:#fff;background:#1ABB9C;border-radius:3px;padding:0 5px;margin-right:3px;"><i class="fa fa-exchange"></i> ' + escapeHtml(o) + '</span>';
-            }).join('') + '</div>';
-        }
-        if (qs && qs.bind_from) html += '<div style="font-size:10px;color:#1ABB9C;margin-top:2px;"><i class="fa fa-link"></i> 來自綁定料號 ' + escapeHtml(qs.bind_from) + '</div>';
-        if (qProcs.length) {
-            html += '<div style="margin-top:2px;display:flex;flex-direction:column;gap:1px;">';
-            qProcs.forEach(function(p) { html += '<span style="font-size:10px;font-weight:600;color:#1b5e20;background:#e8f5e9;border-radius:3px;padding:0 5px;line-height:1.7;align-self:flex-start;">' + p.label + '</span>'; });
-            html += '</div>';
-        }
-        if (qs) {
-            html += '<div style="font-size:11px;color:#666;margin-top:2px;display:flex;gap:8px;flex-wrap:wrap;">';
-            if (qs.quote_date)  html += '<span><i class="fa fa-calendar" style="color:#bbb;margin-right:2px;"></i>' + escapeHtml(qs.quote_date) + '</span>';
-            if (qs.client_name) html += '<span><i class="fa fa-building-o" style="color:#bbb;margin-right:2px;"></i>' + escapeHtml(qs.client_name) + '</span>';
-            html += '</div>';
-        }
-        html += '<div style="font-size:10px;color:#b5793a;margin-top:3px;"><i class="fa fa-eye"></i> 點此看報價明細</div>';
-        html += '</div>';
-        grpFiles.forEach(function(f) { html += makeAttItem(f); });
     });
     $('#bom-file-list').html(html);
-    showQuoteDetail(qnos[0]);
+
+    var first = entries[0];
+    if (first.type === 'order') {
+        var og = g.orderGroups[first.key];
+        if (og.files.length) {
+            $('#bom-file-list .bom-file-item').first().addClass('active');
+            showFile(og.files[0].url, og.files[0].ext, og.files[0].display_name);
+            applyObsoleteOverlay((og.files[0].category_names || []).indexOf('作廢') >= 0);
+        } else if (og.quote_no) {
+            showQuoteDetail(og.quote_no);
+        }
+    } else {
+        showQuoteDetail(first.key);
+    }
 }
 
 function showQuoteDetail(qno) {
@@ -1260,13 +1353,13 @@ function switchTab(tab) {
     _activeTab = tab;
     $('#bom-tabbar .bom-tab').removeClass('active').filter('[data-tab="'+tab+'"]').addClass('active');
     if (tab === 'drawing') renderDrawingList();
-    else if (tab === 'quote') renderQuoteTab();
+    else if (tab === 'order_attach') renderOrderQuoteTab();
     else renderAttList(tab);
 }
 $(document).on('click', '#bom-tabbar .bom-tab', function() { switchTab($(this).data('tab')); });
 $(document).on('click', '.bom-quote-head', function() { showQuoteDetail($(this).data('qno')); });
 
-// ── 頂列跨分頁全域標籤篩選（報價/其他/訂單附件三個分頁的附件類別標籤一起篩，圖面分頁的圖檔沒有這種標籤不參與）──
+// ── 頂列跨分頁全域標籤篩選（報價/其他/訂單附件三種來源的附件類別標籤一起篩，圖面分頁的圖檔沒有這種標籤不參與）──
 var _tagFilterActive = null; // 目前套用的標籤名稱；null=未篩選
 function renderTagFilterBar() {
     if (_mode !== 'did') { $('#bom-tag-filter-bar').hide(); return; }
@@ -1324,7 +1417,7 @@ function loadBomMode() {
 }
 
 function loadDidMode() {
-    var pending = 1 + (_tabEnabled.other ? 1 : 0) + (_tabEnabled.quote ? 1 : 0) + (_tabEnabled.order_attach ? 1 : 0);
+    var pending = 1 + (_tabEnabled.other ? 1 : 0) + (_tabEnabled.order_attach ? 1 : 0);
     var done = function() { if (--pending <= 0) finishDidLoad(); };
     // 圖面（一律載入）
     $.post('', { action: 'get_files_by_did', d_id: _d_id }, function(res) {
@@ -1339,21 +1432,23 @@ function loadDidMode() {
             _tabData.other = (res && res.success && res.attachments) ? res.attachments : [];
         }, 'json').always(function() { renderTabbar(); done(); });
     }
-    // 報價資料：附件檔 + 報價明細（get_quote_summaries 以文字料號跨客戶查）
-    if (_tabEnabled.quote) {
-        var pQAtt = $.post('', { action: 'get_quote_attachments_by_did', d_id: _d_id }, function(res) {
-            _tabData.quote = (res && res.success && res.attachments) ? res.attachments : [];
-        }, 'json');
-        var pQSum = $.post('../../src/store/Part_Attachment_API.php', { action: 'get_quote_summaries', part_no: _d_id }, function(res) {
-            _tabData.quoteSummaries = (res && res.success && res.data && typeof res.data === 'object' && !Array.isArray(res.data)) ? res.data : {};
-        }, 'json');
-        $.when(pQAtt, pQSum).always(function() { renderTabbar(); done(); });
-    }
-    // 訂單附件
+    // 訂單／報價合併分頁：訂單附件（_canOrder）＋報價附件/明細（_canQuote，get_quote_summaries 以文字料號跨客戶查）
     if (_tabEnabled.order_attach) {
-        $.post('', { action: 'get_order_attachments_by_did', d_id: _d_id }, function(res) {
-            _tabData.order_attach = (res && res.success && res.attachments) ? res.attachments : [];
-        }, 'json').always(function() { renderTabbar(); done(); });
+        var reqs = [];
+        if (_canOrder) {
+            reqs.push($.post('', { action: 'get_order_attachments_by_did', d_id: _d_id }, function(res) {
+                _tabData.order_attach = (res && res.success && res.attachments) ? res.attachments : [];
+            }, 'json'));
+        }
+        if (_canQuote) {
+            reqs.push($.post('', { action: 'get_quote_attachments_by_did', d_id: _d_id }, function(res) {
+                _tabData.quote = (res && res.success && res.attachments) ? res.attachments : [];
+            }, 'json'));
+            reqs.push($.post('../../src/store/Part_Attachment_API.php', { action: 'get_quote_summaries', part_no: _d_id }, function(res) {
+                _tabData.quoteSummaries = (res && res.success && res.data && typeof res.data === 'object' && !Array.isArray(res.data)) ? res.data : {};
+            }, 'json'));
+        }
+        $.when.apply($, reqs).always(function() { renderTabbar(); done(); });
     }
     renderTabbar();
 }
@@ -1362,7 +1457,7 @@ function finishDidLoad() {
     renderTabbar();
     renderTagFilterBar();
     // 預選：指定 tab 優先；否則第一個「啟用且有資料」的分頁；再否則圖面
-    var order = ['drawing','quote','other','order_attach'], pick = '';
+    var order = ['drawing','order_attach','other'], pick = '';
     if (_initTab && _tabEnabled[_initTab]) pick = _initTab;
     if (!pick) { for (var i = 0; i < order.length; i++) { if (_tabEnabled[order[i]] && tabCount(order[i]) > 0) { pick = order[i]; break; } } }
     if (!pick) pick = 'drawing';
