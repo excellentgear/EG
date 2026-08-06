@@ -929,7 +929,10 @@ try {
                           'company'  => eg_company_full_name($pdo),
                           'as_doc'   => $ocDoc, 'as_doc_hist' => $ocHist,
                           'print_header' => $ocHist ? $ocHist['doc_name'] : '',
-                          'print_footer' => $ocHist ? eg_asdoc_no($ocHist) : '']);
+                          'print_footer' => $ocHist ? eg_asdoc_no($ocHist) : '',
+                          // 單筆「訂單變更單」列印用（與歷史清單列印分開綁定，見 ocs-print-header/ocs-print-footer）
+                          'print_header_one' => $ocDoc ? $ocDoc['doc_name'] : '',
+                          'print_footer_one' => $ocDoc ? eg_asdoc_no($ocDoc) : '']);
         exit;
     }
 

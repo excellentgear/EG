@@ -9485,6 +9485,7 @@ foreach($dCounts as $c) {
                 if(!res.success){ tb.innerHTML='<tr><td colspan="13" class="text-center" style="color:#c0392b;">'+ocEsc(res.message||'讀取失敗')+'</td></tr>'; return; }
                 och_state.total=res.total; och_state.rows=res.data; ocCache(res.data);
                 och_state.print_header=res.print_header||''; och_state.print_footer=res.print_footer||'';
+                och_state.print_header_one=res.print_header_one||''; och_state.print_footer_one=res.print_footer_one||'';
                 och_state.company=res.company||'';
                 if(!res.data.length){ tb.innerHTML='<tr><td colspan="13" class="text-center" style="padding:16px;color:#aaa;">無資料</td></tr>'; }
                 else tb.innerHTML = res.data.map(function(r){
@@ -9502,13 +9503,12 @@ foreach($dCounts as $c) {
                         : '<span style="color:#bbb;">未通知</span>';
                     var isVoid = String(r.is_void)==='1';
                     var voidTag = isVoid? '<span class="oc-diff-tag" style="background:#fdecea;border-color:#f5b7b1;color:#c0392b;font-weight:700;" title="'+ocEsc((r.voided_at||'')+' '+(r.voided_by||'')+(r.void_reason?('：'+r.void_reason):''))+'">作廢</span> ' : '';
-                    var opCell='';
-                    if(isVoid){ opCell='<span style="color:#c0392b;font-size:11px;" title="'+ocEsc((r.voided_at||'')+' '+(r.voided_by||'')+(r.void_reason?('：'+r.void_reason):''))+'">已作廢</span>'; }
+                    var opCell='<a href="javascript:;" onclick="ocPrintOneChange('+r.id+')" title="單獨列印這筆訂單變更單" style="margin-right:8px;color:#5d4037;"><i class="fa fa-print"></i></a>';
+                    if(isVoid){ opCell+='<span style="color:#c0392b;font-size:11px;" title="'+ocEsc((r.voided_at||'')+' '+(r.voided_by||'')+(r.void_reason?('：'+r.void_reason):''))+'">已作廢</span>'; }
                     else {
                         if(window.canUpdate) opCell+='<a href="javascript:;" onclick="ocEditChange('+r.id+')" title="修改備註（欄位變更為稽核紀錄不可改）" style="margin-right:8px;"><i class="fa fa-pencil"></i></a>';
                         if(window.canUpdate) opCell+='<a href="javascript:;" onclick="ocEditTargets('+r.id+')" title="修改通知對象（可新增/刪除）" style="margin-right:8px;color:#e67e22;"><i class="fa fa-bell-o"></i></a>';
                         if(window.canDelete) opCell+='<a href="javascript:;" onclick="ocVoidChange('+r.id+')" title="刪除（作廢，連動移除通知）" style="color:#c0392b;"><i class="fa fa-trash"></i></a>';
-                        if(!opCell) opCell='<span style="color:#bbb;">—</span>';
                     }
                     return '<tr'+(isVoid?' style="opacity:.55;"':'')+'><td style="white-space:nowrap;">'+ocEsc(r.created_at)+'</td>'
                         + '<td style="white-space:nowrap;font-family:Consolas,monospace;color:#5d4037;font-weight:600;">'+voidTag+ocEsc(r.change_no||'—')+'</td>'
@@ -9592,6 +9592,58 @@ foreach($dCounts as $c) {
                 + '<div class="p-title">'+ocEsc(hdr)+'</div>' + tbl
                 +'<scr'+'ipt>window.onload=function(){'          // 超過一頁才加頁碼（counter(pages) 由列印引擎算）
                 +'var onePageA4=(210-30)*96/25.4;'               // 橫式：可用高度＝A4 短邊 210mm 扣上下邊界
+                +'if(document.body.scrollHeight>onePageA4*0.92){'
+                +'var st=document.createElement(\'style\');'
+                +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
+                +'document.head.appendChild(st);}'
+                +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+            w.document.close(); w.focus();
+        };
+
+        // 單筆「訂單變更單」列印：大標題＝本公司全名／表頭＝綁定 AS 文件的表單名稱／頁尾右下＝doc_no、左下＝頁碼（ai-rules/16）
+        // 與 exportChangeHistoryPDF（歷史清單，橫式表格）分開綁定；直式單頁文件版面。
+        window.ocPrintOneChange = function(changeId){
+            var r = ocRowCache[changeId];
+            if (!r) { ocToast('找不到這筆變更資料，請重新整理列表後再試'); return; }
+            var diffs=[]; try{ diffs=JSON.parse(r.changes_json||'[]'); }catch(e){}
+            var diffRows = diffs.length
+                ? diffs.map(function(d){ return '<tr><td>'+ocEsc(d.label)+'</td><td style="color:#999;">'+ocEsc(d.old||'空')+'</td><td style="color:#1e7e34;font-weight:600;">'+ocEsc(d.new||'空')+'</td></tr>'; }).join('')
+                : '<tr><td colspan="3" style="text-align:center;color:#aaa;">（本筆無欄位變更，僅備註）</td></tr>';
+            var voidBar = (String(r.is_void)==='1')
+                ? '<div style="border:1px solid #c0392b;color:#c0392b;font-weight:700;padding:6px 9px;margin-bottom:10px;">已作廢'+(r.void_reason?('：'+ocEsc(r.void_reason)):'')+'</div>'
+                : '';
+            var comp=(och_state.company||'').trim();
+            var hdr=(och_state.print_header_one||'').trim() || '訂單變更單';
+            var asTxt=(och_state.print_footer_one||'').trim().replace(/['\\]/g,'');
+            var w=window.open('','_blank');
+            w.document.write('<html><head><meta charset="utf-8"><title>訂單變更單 '+ocEsc(r.change_no||'')+'</title>'
+                +'<style>body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 10mm;color:#222;}'
+                +'table{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px;}'
+                +'th,td{border:1px solid #ccc;padding:5px 8px;text-align:left;}th{background:#f0f0f0;}'
+                +'.p-comp{text-align:center;font-size:22px;font-weight:bold;margin-bottom:1px;}'
+                +'.p-title{text-align:center;font-size:17px;font-weight:bold;letter-spacing:6px;margin-bottom:14px;}'
+                +'.p-meta{font-size:13px;color:#333;line-height:1.9;border-bottom:1px solid #ccc;padding-bottom:8px;margin-bottom:6px;}'
+                +'.p-meta b{display:inline-block;width:80px;color:#555;}'
+                +'.p-note{margin-top:10px;font-size:12px;background:#fff8f0;border:1px solid #f0c891;padding:6px 9px;}'
+                +'@page{size:A4 portrait;margin:15mm 12mm 18mm;'
+                + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
+                +'}'
+                +'</style></head><body>'
+                + (comp? '<div class="p-comp">'+ocEsc(comp)+'</div>':'')
+                + '<div class="p-title">'+ocEsc(hdr)+'</div>'
+                + voidBar
+                + '<div class="p-meta">'
+                + '<div><b>變更單號</b>'+ocEsc(r.change_no||'—')+'</div>'
+                + '<div><b>訂單編號</b>'+ocEsc(r.order_no||'')+'</div>'
+                + '<div><b>客戶</b>'+ocEsc(r.client_name||'')+'</div>'
+                + '<div><b>料號</b>'+ocEsc(r.d_id||'')+'</div>'
+                + '<div><b>變更人</b>'+ocEsc(r.created_by||'')+'</div>'
+                + '<div><b>時間</b>'+ocEsc(r.created_at||'')+'</div>'
+                + '</div>'
+                + '<table><thead><tr><th>欄位</th><th>原值</th><th>新值</th></tr></thead><tbody>'+diffRows+'</tbody></table>'
+                + (r.note? ('<div class="p-note">備註：'+ocEsc(r.note)+'</div>') : '')
+                +'<scr'+'ipt>window.onload=function(){'          // 超過一頁才加頁碼（counter(pages) 由列印引擎算）
+                +'var onePageA4=(297-33)*96/25.4;'               // 直式：可用高度＝A4 長邊 297mm 扣上下邊界
                 +'if(document.body.scrollHeight>onePageA4*0.92){'
                 +'var st=document.createElement(\'style\');'
                 +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
