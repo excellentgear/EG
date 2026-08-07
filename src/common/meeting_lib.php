@@ -393,7 +393,17 @@ function meeting_item_pending_notify_targets(PDO $db, int $meetingId, array $ite
                               JOIN position_level pl ON pl.position_id=m.position_id
                               WHERE m.department_id=? AND pl.level IS NOT NULL");
         $mst->execute([$deptId]);
-        foreach ($mst->fetchAll(PDO::FETCH_COLUMN) as $u) $targets[] = (int)$u;
+        $deptManagers = $mst->fetchAll(PDO::FETCH_COLUMN);
+        // 該部門沒有任何職稱有登記在 position_level 的人(該表只涵蓋經理/副理/課長/副課長/組長/副組長，
+        // 董事長室/總經理室/文管中心/採購組等部門的主要職稱不在其中)——退而求其次通知該部門所有「主要角色」
+        // 成員，確保至少有人收到通知，不會因為「查無主管」就整個部門都沒人被通知(2026-08-07實測回報的案例：
+        // 董事長室指派給未出席，因查無position_level主管而完全沒發出通知)。
+        if (!$deptManagers) {
+            $fst = $db->prepare("SELECT DISTINCT user_id FROM user_department_position_map WHERE department_id=? AND is_main=1");
+            $fst->execute([$deptId]);
+            $deptManagers = $fst->fetchAll(PDO::FETCH_COLUMN);
+        }
+        foreach ($deptManagers as $u) $targets[] = (int)$u;
     }
     $targets = array_values(array_unique($targets));
     if (!$targets) return [];
