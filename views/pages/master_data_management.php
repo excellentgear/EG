@@ -18573,6 +18573,29 @@ function pavZoomIn()  { _pavZoom.scale = Math.min(20, _pavZoom.scale * 1.3); _pa
 function pavZoomOut() { _pavZoom.scale = Math.max(0.05, _pavZoom.scale / 1.3); if (_pavZoom.scale < 1.05) { _pavZoom.tx=0; _pavZoom.ty=0; } _pavApplyZoom(); }
 function pavZoomFit() { _pavZoom.scale = 1; _pavZoom.tx = 0; _pavZoom.ty = 0; _pavApplyZoom(); }
 
+/* 列印用縮圖：批圖編輯器存出來的圖最長邊可達 8192px、數十 MB，直接整張塞給印表機驅動
+   常常卡在「準備列印時出現錯誤」或預覽跑很久（2026-08-07 使用者回報）。列印只需印表機
+   實際解析度用得到的像素（4000px 長邊已相當於 A3 300dpi 有餘），這裡不動存檔原圖／縮放
+   檢視／下載，只在按下「列印」這一刻另外產生一張縮小版餵給瀏覽器列印。縮圖失敗（跨網域
+   等意外）就退回原圖網址，至少還能印，不讓列印整個失敗。 */
+function _pavShrinkForPrint(url, cb) {
+    var MAXD = 4000;
+    var img = new Image();
+    img.onload = function () {
+        if (img.naturalWidth <= MAXD && img.naturalHeight <= MAXD) { cb(url); return; }
+        var scale = MAXD / Math.max(img.naturalWidth, img.naturalHeight);
+        var cv = document.createElement('canvas');
+        cv.width = Math.round(img.naturalWidth * scale);
+        cv.height = Math.round(img.naturalHeight * scale);
+        var ctx = cv.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        try { ctx.drawImage(img, 0, 0, cv.width, cv.height); } catch (e) { cb(url); return; }
+        cv.toBlob(function (blob) { cb(blob ? URL.createObjectURL(blob) : url); }, 'image/png');
+    };
+    img.onerror = function () { cb(url); };
+    img.src = url;
+}
 function pavPrint() {
     var frame = document.getElementById('pav-preview-frame');
     var img   = document.getElementById('pav-preview-img');
@@ -18586,38 +18609,32 @@ function pavPrint() {
     }
     if (img && _pav.currentFile) {
         var isObs = _pavIsObsolete(_pav.currentFile);
-        if (isObs) {
-            // 開新視窗，在圖片上疊加作廢浮水印再列印
-            var fname = escHtml(_pav.currentFile.original_name || _pav.currentFile.filename || '');
-            var _pc = '@page{margin:0;}html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;}body{display:flex;align-items:center;justify-content:center;}img{display:block;max-width:100%;max-height:100%;object-fit:contain;}';
+        if (isObs && !confirm('此為「作廢」附件，確定要列印？')) return;
+        var fname = escHtml(_pav.currentFile.original_name || _pav.currentFile.filename || '');
+        var _pc = '@page{margin:0;}html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;}body{display:flex;align-items:center;justify-content:center;}img{display:block;max-width:100%;max-height:100%;object-fit:contain;}';
+        var wmCss = isObs
+            ? '.wm{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-20deg);'
+                + 'color:rgba(220,53,69,0.38);font-size:130px;font-weight:900;letter-spacing:16px;'
+                + 'pointer-events:none;white-space:nowrap;z-index:999;user-select:none;font-family:Arial,sans-serif;}'
+            : '';
+        var wmHtml = isObs ? '<div class="wm">作廢</div>' : '';
+        _pavShrinkForPrint(_pav.currentFile.url, function (printUrl) {
             var w = window.open('', '_blank');
-            if (w) {
-                w.document.write(
-                    '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>列印 - ' + fname + '</title>'
-                    + '<style>' + _pc
-                    + '.wm{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-20deg);'
-                    +     'color:rgba(220,53,69,0.38);font-size:130px;font-weight:900;letter-spacing:16px;'
-                    +     'pointer-events:none;white-space:nowrap;z-index:999;user-select:none;font-family:Arial,sans-serif;}'
-                    + '</style></head><body>'
-                    + '<img src="' + escHtml(_pav.currentFile.url) + '" onload="window.print();">'
-                    + '<div class="wm">作廢</div>'
-                    + '</body></html>'
-                );
-                w.document.close();
-            }
-            return;
-        }
-        var _pc2 = '@page{margin:0;}html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;}body{display:flex;align-items:center;justify-content:center;}img{display:block;max-width:100%;max-height:100%;object-fit:contain;}';
-        var w = window.open('', '_blank');
-        if (w) {
+            if (!w) { if (printUrl.indexOf('blob:') === 0) URL.revokeObjectURL(printUrl); return; }
             w.document.write(
-                '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>列印</title>'
-                + '<style>' + _pc2 + '</style></head><body>'
-                + '<img src="' + escHtml(_pav.currentFile.url) + '" onload="window.print();">'
+                '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>列印' + (fname ? ' - ' + fname : '') + '</title>'
+                + '<style>' + _pc + wmCss + '</style></head><body>'
+                + '<img src="' + printUrl + '" onload="setTimeout(function(){window.focus();window.print();},100)">'
+                + wmHtml
                 + '</body></html>'
             );
             w.document.close();
-        }
+            if (printUrl.indexOf('blob:') === 0) {
+                var revoke = function () { URL.revokeObjectURL(printUrl); };
+                try { w.addEventListener('afterprint', function () { setTimeout(revoke, 1000); }); } catch (e) {}
+                setTimeout(revoke, 120000);
+            }
+        });
         return;
     }
     if (_pav.currentFile) window.open(_pav.currentFile.url, '_blank');

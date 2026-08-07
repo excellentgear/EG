@@ -6031,6 +6031,25 @@ function nowTimeStr() {
     const d = new Date();
     return ('0'+d.getHours()).slice(-2) + ':' + ('0'+d.getMinutes()).slice(-2) + ':' + ('0'+d.getSeconds()).slice(-2);
 }
+/* 壓平圖存檔倍率：文字/線條等向量物件放大幾倍都清晰，但底圖若是掃描/拍照的相片，
+   原本就有的雜訊、暈影會被同比放大變得明顯（2026-08-07 使用者回報手寫字旁出現陰影狀瑕疵）。
+   做法：先算「一般畫布用 3 倍、超大畫布降到 2 倍（單邊超過 8192px 上傳體積會爆量）」這個上限，
+   再另外抓畫布上面積最大那張相片的「原生像素／目前顯示尺寸」比率當作天花板——相片本身沒有
+   的細節，放大倍率不該超過它原生就有的解析度，超過只是把既有瑕疵等比放大，不是加畫質。
+   小張的貼圖/圖示（面積 <30% 畫布）忽略，只看主要底圖，避免被小圖拖累整體倍率。 */
+function computeSaveMult() {
+    let mult = Math.max(2, Math.min(3, 8192 / Math.max(artW, artH, 1)));
+    let srcCap = Infinity;
+    const minArea = artW * artH * 0.3;
+    canvas.getObjects().forEach(o => {
+        if (o.type !== 'image' || !o.width || !o.height) return;
+        const dispW = o.getScaledWidth() || 1, dispH = o.getScaledHeight() || 1;
+        if (dispW * dispH < minArea) return;
+        srcCap = Math.min(srcCap, o.width / dispW, o.height / dispH);
+    });
+    if (isFinite(srcCap) && srcCap > 0) mult = Math.min(mult, Math.max(1, srcCap));
+    return mult;
+}
 async function pfSave() {
     const d = document.getElementById('pf-part').value;
     if (!d) { toast('請先搜尋並選擇料號'); return; }
@@ -6052,9 +6071,7 @@ async function pfSave() {
     status.style.color = '#8b949e';
     status.textContent = '儲存中，請稍候…（大圖需要幾秒到幾十秒）';
     try {
-        // 壓平圖解析度：一般畫布用 3 倍（小畫家貼圖縮小擺放後，存檔的圖與文字仍清晰）；
-        // 超大圖面自動降回 2 倍（單邊超過 8192px 的 PNG 上傳體積會爆量，2 倍已相當於掃描原檔解析度）
-        const pngMult = Math.max(2, Math.min(3, 8192 / Math.max(artW, artH, 1)));
+        const pngMult = computeSaveMult();
         const png = exportRegionDataURL(artboard.left, artboard.top, artW, artH, 'png', pngMult);
         const fd = new FormData();
         fd.append('action', 'save_workfile');

@@ -854,6 +854,29 @@ $('#btn-zoom-in').on('click',    function() { _sc = Math.min(10, _sc + 0.2); app
 $('#btn-zoom-out').on('click',   function() { _sc = Math.max(0.1, _sc - 0.2); applyTransform(); });
 $('#btn-zoom-reset').on('click', resetTransform);
 
+// ── 列印用縮圖 ────────────────────────────────────────────────────────────
+// 批圖編輯器存出來的圖最長邊可達 8192px、數十 MB，直接整張塞給印表機驅動常常卡在
+// 「準備列印時出現錯誤」或預覽跑很久（2026-08-07 使用者回報）。列印只需印表機實際
+// 解析度用得到的像素（4000px 長邊已相當於 A3 300dpi 有餘），這裡不動縮放檢視／下載，
+// 只在按下「列印」這一刻另外產生一張縮小版餵給瀏覽器列印；縮圖失敗就退回原圖網址。
+function _bomShrinkForPrint(url, cb) {
+    var MAXD = 4000;
+    var img = new Image();
+    img.onload = function() {
+        if (img.naturalWidth <= MAXD && img.naturalHeight <= MAXD) { cb(url); return; }
+        var scale = MAXD / Math.max(img.naturalWidth, img.naturalHeight);
+        var cv = document.createElement('canvas');
+        cv.width = Math.round(img.naturalWidth * scale);
+        cv.height = Math.round(img.naturalHeight * scale);
+        var ctx = cv.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        try { ctx.drawImage(img, 0, 0, cv.width, cv.height); } catch (e) { cb(url); return; }
+        cv.toBlob(function(blob) { cb(blob ? URL.createObjectURL(blob) : url); }, 'image/png');
+    };
+    img.onerror = function() { cb(url); };
+    img.src = url;
+}
 // ── 列印 ──────────────────────────────────────────────────────────────────
 $('#btn-print').on('click', function() {
     var isObs = $('.bom-file-item.active').data('obsolete') === '1' || $('.bom-file-item.active').data('obsolete') === 1;
@@ -871,23 +894,29 @@ $('#btn-print').on('click', function() {
                 + 'pointer-events:none;white-space:nowrap;z-index:999;user-select:none;font-family:Arial,sans-serif;}'
             : '';
         var _wmHtml = isObs ? '<div class="wm">作廢</div>' : '';
-        // 用隱藏 iframe 列印，避免另開分頁（列印/取消後仍停留在本視窗）
-        var _old = document.getElementById('bom-print-frame');
-        if (_old) _old.parentNode.removeChild(_old);
-        var ifr = document.createElement('iframe');
-        ifr.id = 'bom-print-frame';
-        ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
-        document.body.appendChild(ifr);
-        var doc = ifr.contentWindow.document;
-        doc.open();
-        doc.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>列印</title><style>'
-            + _printCss + _wmCss + '</style></head><body><img src="' + escapeHtml(src) + '">'
-            + _wmHtml + '</body></html>');
-        doc.close();
-        var _doPrint = function() { try { ifr.contentWindow.focus(); ifr.contentWindow.print(); } catch(e) { window.print(); } };
-        var _img = doc.querySelector('img');
-        if (_img && !_img.complete) { _img.onload = _doPrint; _img.onerror = _doPrint; }
-        else { setTimeout(_doPrint, 60); }
+        _bomShrinkForPrint(src, function(printSrc) {
+            // 用隱藏 iframe 列印，避免另開分頁（列印/取消後仍停留在本視窗）
+            var _old = document.getElementById('bom-print-frame');
+            if (_old) _old.parentNode.removeChild(_old);
+            var ifr = document.createElement('iframe');
+            ifr.id = 'bom-print-frame';
+            ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+            document.body.appendChild(ifr);
+            var doc = ifr.contentWindow.document;
+            doc.open();
+            doc.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>列印</title><style>'
+                + _printCss + _wmCss + '</style></head><body><img src="' + escapeHtml(printSrc) + '">'
+                + _wmHtml + '</body></html>');
+            doc.close();
+            var _doPrint = function() { try { ifr.contentWindow.focus(); ifr.contentWindow.print(); } catch(e) { window.print(); } };
+            var _img = doc.querySelector('img');
+            if (_img && !_img.complete) { _img.onload = _doPrint; _img.onerror = _doPrint; }
+            else { setTimeout(_doPrint, 60); }
+            if (printSrc.indexOf('blob:') === 0) {
+                var revoke = function() { URL.revokeObjectURL(printSrc); };
+                setTimeout(revoke, 120000);
+            }
+        });
     }
 });
 
