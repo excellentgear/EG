@@ -6268,6 +6268,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     if (isset($_POST[$k])) {
                         $val = trim($_POST[$k]);
                         if ($val !== '') {
+                            // 路徑類設定存檔前先確認讀得到，設錯當場擋下，
+                            // 不用等使用者發現備註圖片全部破圖才知道
+                            if ($k === 'notes_nas_dir' && !is_dir(rtrim($val, '/\\'))) {
+                                throw new Exception('這個位置讀不到，請確認路徑正確且伺服器有權限存取：' . $val);
+                            }
                             $old_val = _get_setting($pdo, $k);
                             _save_setting($pdo, $k, $val, $uid, $op);
                             if ($old_val !== $val) {
@@ -8449,16 +8454,22 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
             <!-- 基本設定 panel（僅製程大類顯示）-->
             <div id="dict-settings-extra" style="display:none;padding:12px 20px;background:#fff8f3;border-bottom:1px solid #ffe0b2;">
                 <div style="font-size:12px;font-weight:700;color:#e65100;margin-bottom:8px;"><i class="fa fa-folder-open"></i> 基本設定</div>
+                <!-- 只留這一個欄位：備註圖片已改走讀檔 API，不再靠 Apache 的 /nas 別名直連，
+                     所以「URL 顯示路徑」已無作用（留著使用者會以為改它有效）。位置只由這一欄決定。 -->
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <label style="font-size:12px;color:#555;margin:0;white-space:nowrap;">圖檔儲存路徑（伺服器）</label>
-                    <input type="text" id="dict-nas-path" class="form-control input-sm" style="flex:1;min-width:200px;max-width:360px;font-family:monospace;" placeholder="例：Z:/BOM/ERP/技術/" <?php if(!$can_dict_edit): ?>readonly style="background:#f5f5f5;"<?php endif; ?>>
-                    <label style="font-size:12px;color:#555;margin:0;white-space:nowrap;">URL 顯示路徑</label>
-                    <input type="text" id="dict-url-path" class="form-control input-sm" style="flex:1;min-width:150px;max-width:260px;font-family:monospace;" placeholder="例：/nas/ERP/技術/" <?php if(!$can_dict_edit): ?>readonly style="background:#f5f5f5;"<?php endif; ?>>
+                    <label style="font-size:12px;color:#555;margin:0;white-space:nowrap;">備註圖片存放位置</label>
+                    <input type="text" id="dict-nas-path" class="form-control input-sm" style="flex:1;min-width:320px;max-width:520px;font-family:monospace;" placeholder="例：\\excellentnas\生產課\BOM\ERP\技術" <?php if(!$can_dict_edit): ?>readonly style="background:#f5f5f5;"<?php endif; ?>>
                     <?php if ($can_dict_edit): ?>
                     <button type="button" class="btn btn-xs btn-warning" onclick="saveNasPathSetting()" style="white-space:nowrap;"><i class="fa fa-save"></i> 儲存設定</button>
                     <?php endif; ?>
                 </div>
-                <div style="font-size:10px;color:#aaa;margin-top:5px;">伺服器路徑：PHP 寫入檔案時使用的實體路徑；URL 路徑：瀏覽器顯示圖片時使用的網址前綴。<br><?php if(!$can_dict_edit): ?><span style="color:#e65100;">需 A 或 CDRU 權限才可修改</span><?php endif; ?></div>
+                <div style="font-size:11px;color:#7f8c8d;margin-top:5px;line-height:1.5;">
+                    設計／製程備註上傳的圖片存放在這裡（平鋪，不分子資料夾）。
+                    可用網路路徑（<code>\\主機名\分享名\資料夾</code>）或磁碟機代號（<code>Z:\…</code>），
+                    <b>建議用網路路徑</b>——磁碟機代號是每台電腦各自對應的，換機或對應掉了就整批讀不到。
+                    資料庫只記檔名，所以<b>改這裡即可整批換位置，不需要改資料庫</b>；但既有檔案要自己先搬到新位置（同一個位置換寫法則不用搬）。
+                    <?php if(!$can_dict_edit): ?><br><span style="color:#e65100;">需 A 或 CDRU 權限才可修改</span><?php endif; ?>
+                </div>
             </div>
 
             <!-- 廠商大類製程設定 panel -->
@@ -9369,7 +9380,9 @@ var CAN_PART_ATTACH     = <?= json_encode($can_part_attach) ?>;
 var MD_CAN_QUOTE        = <?= json_encode($can_view_quote) ?>;   // 報價資料分頁（quotation_view）
 var MD_CAN_OTHER        = <?= json_encode($can_view_other) ?>;   // 其他附件分頁（md_attach_view，過渡期開放）
 var MD_IS_ADMIN         = <?= json_encode($is_admin) ?>;
-var NAS_URL_DIR = <?= json_encode(_get_setting($pdo, 'notes_url_dir', '/nas/ERP/技術/')) ?>;
+// 備註圖片改走讀檔 API（不再用 Apache /nas 別名直連）：存放位置只由 notes_nas_dir 決定，
+// 換 NAS 免改 httpd.conf、也不綁磁碟機代號。前綴後面接檔名即可，用法與原本相同。
+var NAS_URL_DIR = '../../src/store/NoteImage_API.php?f=';
 var SYS_VENDOR_DEFAULT_SETTLEMENT_MODE = <?= json_encode(_get_setting($pdo, 'vendor_default_settlement_mode', 'FIXED')) ?>;
 var SYS_VENDOR_DEFAULT_SETTLEMENT_DAY  = <?= json_encode(_get_setting($pdo, 'vendor_default_settlement_day', '25')) ?>;
 var SYS_VENDOR_DEFAULT_PAYMENT_METHOD  = <?= json_encode(_get_setting($pdo, 'vendor_default_payment_method', '匯款')) ?>;
@@ -17580,9 +17593,7 @@ function loadDict(type, navBtn) {
             api({ action:'manage_system_settings', op:'get' }).done(function(r) {
                 if (r.success && r.data) {
                     var nasEl = document.getElementById('dict-nas-path');
-                    var urlEl = document.getElementById('dict-url-path');
-                    if (nasEl) nasEl.value = r.data.notes_nas_dir || '';
-                    if (urlEl) urlEl.value = r.data.notes_url_dir || '';
+                    if (nasEl) nasEl.value = r.data.notes_nas_dir || '';   // URL 顯示路徑欄位已移除
                 }
             });
         } else {
@@ -17611,11 +17622,11 @@ function loadDict(type, navBtn) {
 }
 
 function saveNasPathSetting() {
-    var nasPath = (document.getElementById('dict-nas-path')||{}).value || '';
-    var urlPath = (document.getElementById('dict-url-path')||{}).value || '';
-    if (!nasPath || !urlPath) { showToast('路徑不可為空','error'); return; }
-    api({ action:'manage_system_settings', op:'save', notes_nas_dir:nasPath, notes_url_dir:urlPath }).done(function(r) {
-        if (r.success) { showToast('設定已儲存'); NAS_URL_DIR = urlPath; }
+    var nasPath = ((document.getElementById('dict-nas-path')||{}).value || '').trim();
+    if (!nasPath) { showToast('存放位置不可為空','error'); return; }
+    // URL 顯示路徑已無作用（圖片改走讀檔 API），不再送出；後端會先確認位置讀得到才存
+    api({ action:'manage_system_settings', op:'save', notes_nas_dir:nasPath }).done(function(r) {
+        if (r.success) showToast('設定已儲存');
         else showToast(r.message||'儲存失敗','error');
     });
 }

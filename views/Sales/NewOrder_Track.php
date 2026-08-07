@@ -1217,12 +1217,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         try {
             $part_id = trim($_POST['part_id'] ?? '');
             $cust_id = trim($_POST['cust_id'] ?? '');
-            // 供檔網址目錄與主檔管理共用同一設定值（notes_url_dir），即時讀取、不寫死
-            $nas_url = '/nas/ERP/技術/';
-            try {
-                $nu = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='notes_url_dir'")->fetchColumn();
-                if ($nu !== false && $nu !== null && $nu !== '') $nas_url = $nu;
-            } catch (Exception $e) {}
+            // 備註圖片改走讀檔 API（與主檔管理同一支），不再用 Apache /nas 別名直連：
+            // 存放位置只由 notes_nas_dir 決定，換 NAS 免改 httpd.conf 也不綁磁碟機代號
+            $nas_url = '../../src/store/NoteImage_API.php?f=';
             $result  = ['part_notes' => [], 'cust_notes' => [], 'nas_url' => $nas_url];
             $imgStmt = $pdo->prepare("SELECT img_id, file_name, original_name FROM note_images
                 WHERE note_id=? AND note_type=? ORDER BY sort_order, img_id");
@@ -8709,7 +8706,7 @@ foreach($dCounts as $c) {
             });
         }
 
-        var _otDnNasUrl = '/nas/ERP/技術/';  // 實際值由 get_design_notes_ot 回傳（notes_url_dir 設定）
+        var _otDnNasUrl = '../../src/store/NoteImage_API.php?f=';  // 實際值由 get_design_notes_ot 回傳
 
         // 附件渲染：圖片直接縮圖、PDF/Office 等顯示檔案圖示（仿主檔管理 _noteFileHtml，唯讀）
         function _otDnFileHtml(img, url) {
