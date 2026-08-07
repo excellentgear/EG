@@ -315,7 +315,7 @@ foreach ($roleRows as $rr) {
         </div>
         <button class="b-cancel" onclick="closeMask('edMask')">取消</button>
         <button class="b-ok" style="background:#fff;color:#8A5A2B;" onclick="saveDraft(false)">存草稿</button>
-        <button class="b-ok" onclick="saveDraft(true)"><i class="fa fa-paper-plane"></i> 存檔並送出</button>
+        <button class="b-ok" id="btnEdSubmit" onclick="saveDraft(true)"><i class="fa fa-paper-plane"></i> 存檔並送出</button>
     </div>
 </div></div>
 
@@ -655,7 +655,7 @@ $('#edCalPick').on('change', function(){
     edTimeValidate();
     (ev.actors||[]).forEach(function(a){
         if (!ATT.some(function(x){ return x.user_id===a.user_id; }))
-            ATT.push({user_id:a.user_id, user_name:a.user_name, dept_name:a.dept_name, position_name:a.position_name});
+            ATT.push({user_id:a.user_id, user_name:a.user_name, dept_name:a.dept_name, position_name:a.position_name, signed:0});
     });
     renderAtt(); renderChairSel();
 });
@@ -668,12 +668,13 @@ function openEdit(id){
         $('#edSubject').val(m.subject); $('#edDate').val(fmtDate(m.meeting_date));
         $('#edStart').val(m.start_time||''); $('#edEnd').val(m.end_time||''); $('#edLoc').val(m.location||'');
         $('#edRecorder').val(m.recorder_name||'');
-        ATT = (res.attendees||[]).map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name, position_name:a.position_name||''}; });
+        ATT = (res.attendees||[]).map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name, position_name:a.position_name||'', signed:+a.signed===1?1:0}; });
         ITEMS_D = []; ITEMS_G = []; ITEMS_A = [];
         (res.items||[]).forEach(function(it){
             var row = {item_id:it.item_id, content:it.content, due_date:fmtDate(it.due_date),
                 owner_depts:(it.owner_depts?String(it.owner_depts).split(','):[]),
                 owner_users:(it.owner_users?String(it.owner_users).split(','):[]), remark:it.remark||'',
+                owner_mode: it.owner_users ? 'user' : 'dept',
                 confirm_slots:it.confirm_slots||[]};
             var target = it.kind==='directive' ? ITEMS_D : (it.kind==='announce' ? ITEMS_A : ITEMS_G);
             target.push(row);
@@ -694,12 +695,15 @@ function deleteMeeting(id){
     }, 'json');
 }
 
-/* 出席人員：部門挑選 → 勾選加入（同 training 模組模式） */
-$('#attDept').on('change', function(){
-    var did = $(this).val();
+/* 出席人員：部門挑選 → 勾選加入（同 training 模組模式）。2026-08-06使用者明確要求：不列會議當天時段有請假
+   的人員，一律帶目前表單上的日期/時間查詢(由後端 meeting_filter_available_people 過濾)；日期/時間改變時
+   若已選了部門，重新載入該部門名單，避免名單跟已改過的日期時間對不上。 */
+function attDeptReload(){
+    var did = $('#attDept').val();
     if (!did){ $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>'); return; }
+    if (!$('#edDate').val()){ $('#attPeopleBox').html('<span class="empty">請先填會議日期，才能排除當天請假人員</span>'); return; }
     $('#attPeopleBox').html('<span class="empty">載入中…</span>');
-    $.getJSON(API, {action:'people', dept_id:did}, function(res){
+    $.getJSON(API, {action:'people', dept_id:did, meeting_date:$('#edDate').val(), start_time:$('#edStart').val(), end_time:$('#edEnd').val()}, function(res){
         if (!res.ok){ $('#attPeopleBox').html('<span class="empty">載入失敗</span>'); return; }
         var h = '';
         res.people.forEach(function(u){
@@ -708,16 +712,18 @@ $('#attDept').on('change', function(){
                + ' data-dept="'+esc($('#attDept option:selected').text())+'" data-pos="'+esc(u.position_name||'')+'"'+(inList?' checked disabled':'')+'> '
                + esc(u.user_cname)+(u.position_name?'<span style="color:#8a6d45;">（'+esc(u.position_name)+'）</span>':'')+(inList?'(已加)':'')+'</label>';
         });
-        $('#attPeopleBox').html(h || '<span class="empty">此部門無人員</span>');
+        $('#attPeopleBox').html(h || '<span class="empty">此部門無可選人員(可能全數請假或僅剩超級管理員)</span>');
         $('#attPickAll').prop('checked', false);
     });
-});
+}
+$('#attDept').on('change', attDeptReload);
+$('#edDate,#edStart,#edEnd').on('change', function(){ if ($('#attDept').val()) attDeptReload(); });
 $('#attPickAll').on('change', function(){ $('#attPeopleBox .att-ck:not(:disabled)').prop('checked', this.checked); });
 function attAddChecked(){
     $('#attPeopleBox .att-ck:checked:not(:disabled)').each(function(){
         var id = +$(this).val();
         if (!ATT.some(function(a){ return a.user_id===id; }))
-            ATT.push({user_id:id, user_name:$(this).data('name'), dept_name:$(this).data('dept'), position_name:$(this).data('pos')||''});
+            ATT.push({user_id:id, user_name:$(this).data('name'), dept_name:$(this).data('dept'), position_name:$(this).data('pos')||'', signed:0});
     });
     renderAtt(); renderChairSel(); $('#attDept').trigger('change');
 }
@@ -730,11 +736,33 @@ function attDel(i){
 function renderAtt(){
     var h = '';
     ATT.forEach(function(a,i){
-        h += '<tr><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'—')+'</td><td class="t-left">'+esc(a.user_name||'')+'</td>'
+        h += '<tr><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'—')+'</td><td class="t-left">'+esc(a.user_name||'')
+           + (+a.signed===1 ? ' <span style="color:#7a5217;font-size:11px;">（已簽到）</span>' : '') + '</td>'
            + '<td><span class="att-del" onclick="attDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
     });
     $('#attBody').html(h || '<tr><td colspan="4" style="color:#8a6d45;padding:6px;">尚未加入出席人員</td></tr>');
     $('#attCount').text(ATT.length ? '（共 '+ATT.length+' 人）' : '');
+    refreshEdSubmitBtn();
+}
+/* 送出按鈕動態標籤(2026-08-06使用者明確要求)：出席人員全部簽到、且負責部門/指定人員也都簽完 → 存檔並送出；
+   全部簽到但還有負責人未簽 → 存檔並通知(送出後會另行擴大通知相關人員回簽，不再擋下送出)。
+   這裡只用來決定按鈕文字(best-effort，資料來源是畫面上目前的 ATT/ITEMS，可能因為使用者剛編輯過而與後端存檔前的狀態略有落差)，
+   真正是否需要通知一律由後端 submit 當下重新算(meeting_item_pending_notify_targets)，不受這裡影響。 */
+function mtReadiness(){
+    var allSigned = ATT.length>0 && ATT.every(function(a){ return +a.signed===1; });
+    var pending = ITEMS_D.concat(ITEMS_G).filter(function(it){
+        var hasOwner = (it.owner_depts&&it.owner_depts.length) || (it.owner_users&&it.owner_users.length);
+        if (!hasOwner) return false;
+        var slots = it.confirm_slots||[];
+        return !(slots.length>0 && slots.every(function(s){ return s.signed; }));
+    }).length;
+    return {allSigned:allSigned, pending:pending};
+}
+function refreshEdSubmitBtn(){
+    var r = mtReadiness();
+    $('#btnEdSubmit').html(r.allSigned && r.pending>0
+        ? '<i class="fa fa-bullhorn"></i> 存檔並通知'
+        : '<i class="fa fa-paper-plane"></i> 存檔並送出');
 }
 function renderChairSel(){
     var cur = $('#edChair').val();
@@ -789,17 +817,19 @@ function loadGroups(){
 function groupApply(){
     var id = $('#attGroupSel').val();
     if (!id){ alert('請先選擇群組'); return; }
+    if (!$('#edDate').val()){ alert('請先填會議日期，套用群組時才能排除當天請假的人員'); return; }
     $.getJSON(GROUP_API, {action:'get', id:id}, function(res){
         if (!res.ok){ alert(res.msg||'載入群組失敗'); return; }
         var ids = (res.editors||[]).map(function(e){ return String(e.code||'').replace(/^u/,''); }).filter(function(x){ return x && !isNaN(x); });
         if (!ids.length){ alert('此群組沒有可用的人員'); return; }
-        $.getJSON(API, {action:'resolve_people', user_ids:ids.join(',')}, function(r2){
+        $.getJSON(API, {action:'resolve_people', user_ids:ids.join(','), meeting_date:$('#edDate').val(), start_time:$('#edStart').val(), end_time:$('#edEnd').val()}, function(r2){
             if (!r2.ok) return;
             (r2.people||[]).forEach(function(p){
                 if (!ATT.some(function(a){ return a.user_id===p.id; }))
-                    ATT.push({user_id:p.id, user_name:p.user_cname, dept_name:p.dept_name, position_name:p.position_name});
+                    ATT.push({user_id:p.id, user_name:p.user_cname, dept_name:p.dept_name, position_name:p.position_name, signed:0});
             });
             renderAtt(); renderChairSel();
+            if (r2.people.length < ids.length) alert('已套用群組（其中 '+(ids.length-r2.people.length)+' 位因會議當天請假、超級管理員或已離職，未加入名單）。');
         });
     });
 }
@@ -822,7 +852,7 @@ function groupSaveConfirm(){
 /* 會議要項三表格：宣布事項(kind=announce,無應完成日期/負責部門/簽名) / 上級指示要項(kind=directive) / 會議要項(kind=general) */
 function itemsArr(kind){ return kind==='directive' ? ITEMS_D : (kind==='announce' ? ITEMS_A : ITEMS_G); }
 function itemBodySel(kind){ return '#itmBody'+(kind==='directive'?'D':(kind==='announce'?'A':'G')); }
-function itemAdd(kind){ itemsArr(kind).push({item_id:0, content:'', due_date:'', owner_depts:[], owner_users:[], remark:''}); renderItems(kind); }
+function itemAdd(kind){ itemsArr(kind).push({item_id:0, content:'', due_date:'', owner_depts:[], owner_users:[], owner_mode:'dept', remark:''}); renderItems(kind); }
 function itemDelLast(kind){ var a=itemsArr(kind); if (a.length) a.pop(); renderItems(kind); }
 function itemDel(kind,i){ itemsArr(kind).splice(i,1); renderItems(kind); }
 function itemEdit(kind,i,key,val){ var a=itemsArr(kind); if (a[i]) a[i][key]=val; }
@@ -842,6 +872,7 @@ function renderItems(kind){
                + '<td><span class="att-del" onclick="itemDel(\'announce\','+i+')"><i class="fa fa-times"></i></span></td></tr>';
         });
         $(itemBodySel(kind)).html(h || '<tr><td colspan="4" style="color:#8a6d45;padding:6px;text-align:center;">尚未建立項目</td></tr>');
+        refreshEdSubmitBtn();
         return;
     }
     a.forEach(function(it,i){
@@ -857,19 +888,24 @@ function renderItems(kind){
            + '<td><span class="att-del" onclick="itemDel(\''+kind+'\','+i+')"><i class="fa fa-times"></i></span></td></tr>';
     });
     $(itemBodySel(kind)).html(h || '<tr><td colspan="6" style="color:#8a6d45;padding:6px;text-align:center;">尚未建立項目</td></tr>');
+    refreshEdSubmitBtn();
 }
 /* 負責人二擇一(2026-08-05使用者明確要求)：部門模式(自動判定主要角色主管優先→兼任主管→職稱排序最高者)，
    或指定人員模式(直接指名，本次只要有出席就是必簽者，完全取代部門判定)；用切換連結決定畫哪一種挑選器。 */
+/* owner_mode 是畫面切換用的明確狀態(2026-08-06修正)：舊版沒有這個欄位，純粹用「owner_users是否有值」反推目前該顯示
+   哪種挑選器，導致切換成指定人員模式後(此時owner_users還是空陣列)，mode又被反推回dept、畫面沒有真的換成人員挑選器，
+   使用者只看到部門被清空、以為按鈕沒反應。owner_mode 只是前端顯示用的暫存狀態，不會送給後端(後端仍以陣列內容判斷)。 */
 function ownerPickHtml(kind,i,it){
-    var mode = (it.owner_users&&it.owner_users.length) ? 'user' : 'dept';
+    var mode = it.owner_mode || ((it.owner_users&&it.owner_users.length) ? 'user' : 'dept');
     var toggle = '<a href="javascript:void(0)" style="font-size:11px;display:block;" onclick="toggleOwnerMode(\''+kind+'\','+i+')">切換：'+(mode==='dept'?'改指定人員':'改選部門')+'</a>';
     return toggle + (mode==='user' ? userPickHtml(kind,i,it.owner_users||[]) : deptPickHtml(kind,i,it.owner_depts||[]));
 }
 function toggleOwnerMode(kind,i){
     var a = itemsArr(kind)[i]; if (!a) return;
+    var curMode = a.owner_mode || ((a.owner_users&&a.owner_users.length) ? 'user' : 'dept');
     // 切換模式時清空另一種資料重新挑選，避免存檔時殘留(後端也會以owner_users有值時完全取代owner_depts，這裡雙保險)
-    if (a.owner_users && a.owner_users.length) { a.owner_users = []; a.owner_depts = a.owner_depts || []; }
-    else { a.owner_depts = []; a.owner_users = a.owner_users || []; }
+    if (curMode === 'user') { a.owner_mode = 'dept'; a.owner_users = []; a.owner_depts = a.owner_depts || []; }
+    else { a.owner_mode = 'user'; a.owner_depts = []; a.owner_users = a.owner_users || []; }
     renderItems(kind);
 }
 function deptPickHtml(kind,i,ids){
@@ -1082,6 +1118,16 @@ function edDelAttach(aid){
         renderEdAttach();
     },'json');
 }
+/* 送出（送簽核/存檔並通知共用）：一律用 .fail() 接住後端擋下的驗證錯誤(如尚未全部簽到)，避免點下去沒有任何反應。
+   後端已不再因負責部門/指定人員尚未現場簽名而擋下送出，改為擴大通知相關人員回簽，pending_items 是還有幾項待回簽。 */
+function submitMeeting(id, cb){
+    $.post(API, {action:'submit', meeting_id:id}, function(r2){
+        if (!r2.ok){ cb(false, r2.error||'送出失敗'); return; }
+        var msg = '已送出，已通知主席確認簽章。';
+        if (r2.pending_items) msg += '尚有 '+r2.pending_items+' 項負責部門／指定人員未現場簽名，已另行通知相關人員回簽。';
+        cb(true, msg);
+    }, 'json').fail(function(x){ cb(false, (x.responseJSON&&x.responseJSON.error)||('連線失敗(HTTP '+x.status+')')); });
+}
 function saveDraft(thenSubmit){
     if (!$.trim($('#edSubject').val())){ setErr($('#edSubject'),'errEdSubject','請輸入會議主題'); return; }
     setErr($('#edSubject'),'errEdSubject','');
@@ -1094,10 +1140,10 @@ function saveDraft(thenSubmit){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         EDIT_ID = res.meeting_id;
         if (!thenSubmit){ alert('已儲存草稿。'); closeMask('edMask'); loadList(); return; }
-        $.post(API, {action:'submit', meeting_id:EDIT_ID}, function(r2){
-            if (!r2.ok){ alert('草稿已存，但送出失敗：'+(r2.error||'')); closeMask('edMask'); loadList(); return; }
-            alert('已送出，已通知主席確認簽章。'); closeMask('edMask'); loadList();
-        }, 'json');
+        submitMeeting(EDIT_ID, function(ok, msg){
+            if (!ok){ alert('草稿已存，但送出失敗：'+msg); closeMask('edMask'); loadList(); return; }
+            alert(msg); closeMask('edMask'); loadList();
+        });
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
@@ -1168,6 +1214,22 @@ function viewHtml(res){
            + '</span></div>';
     }
 
+    // 送簽核／存檔並通知(2026-08-06使用者明確要求)：避免現場簽到/項目確認都在檢視畫面完成後，
+    // 還要跳回編輯畫面才能送出。全部出席人員簽到才能送出；負責部門/指定人員若還沒簽完，
+    // 按鈕改標「存檔並通知」，送出後會另行擴大通知相關人員回簽（不再擋下送出）。
+    if (m.can_edit) {
+        var rdy = mtReadinessFromView(res);
+        if (!rdy.allSigned) {
+            h += '<div class="mt-hint">尚有出席人員未完成現場簽到，全部簽到後才能送出。</div>';
+        } else {
+            h += '<div style="margin-top:10px;">'
+               + '<button type="button" class="b-att" onclick="viewSubmit('+m.meeting_id+')">'
+               + (rdy.pending>0 ? '<i class="fa fa-bullhorn"></i> 存檔並通知' : '<i class="fa fa-paper-plane"></i> 送簽核') + '</button>'
+               + (rdy.pending>0 ? '<span style="font-size:11px;color:#8a6d45;margin-left:8px;">尚有 '+rdy.pending+' 項負責部門／指定人員未現場簽名，送出後將另行通知相關人員回簽。</span>' : '')
+               + '</div>';
+        }
+    }
+
     // 主席／總經理簽核區
     if (m.approval_status==='submitted' && (+m.chair_signer_id===META.uid || PERMS.canAdmin)) {
         h += decideBoxHtml(m.meeting_id, 'chair', '主席確認簽章', false);
@@ -1190,6 +1252,25 @@ function viewHtml(res){
            + '</div>';
     }
     return h;
+}
+/* 檢視畫面用的送出就緒判斷：資料來自 get_detail 回傳的伺服器現況(比編輯畫面的 mtReadiness 準確，不會有前端暫存過期問題)。 */
+function mtReadinessFromView(res){
+    var atts = res.attendees||[];
+    var allSigned = atts.length>0 && atts.every(function(a){ return +a.signed===1; });
+    var pending = (res.items||[]).filter(function(it){ return it.kind!=='announce'; }).filter(function(it){
+        if (!it.owner_depts && !it.owner_users) return false;
+        var slots = it.confirm_slots||[];
+        return !(slots.length>0 && slots.every(function(s){ return s.signed; }));
+    }).length;
+    return {allSigned:allSigned, pending:pending};
+}
+/* 檢視畫面直接送出(2026-08-06使用者明確要求)：內容已存檔，不需再gather表單，直接呼叫 submit 動作即可。 */
+function viewSubmit(mid){
+    if (!confirm('確定送出？送出後將鎖定內容，並通知主席確認簽章。')) return;
+    submitMeeting(mid, function(ok, msg){
+        if (!ok){ alert('送出失敗：'+msg); return; }
+        alert(msg); closeMask('viewMask'); loadList();
+    });
 }
 function withdrawMeeting(mid){
     if (!confirm('確定撤回？將取消目前的主席待簽通知，退回草稿狀態，可修改後重新送出。')) return;
@@ -1233,9 +1314,12 @@ function itemConfirmCellHtml(it){
     var slots = it.confirm_slots || [];
     var h = slots.map(function(s){
         if (s.signed) {
+            // 2026-08-06改版：實際簽名者不一定是系統原本挑出的那位代表(部門任一出席人員/主管透過通知回覆都算數)，
+            // s.user_name 已是後端依 dept_id 比對出的實際簽名人；有 reply_content 代表是透過通知回覆完成，顯示在下方。
             return '<div class="confirm-yes">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, String(s.confirmed_at||'').substr(0,10), false, mStampSchema(), s.dept_name):esc(s.user_name))
                  + ' <span style="font-size:11px;">'+esc(s.dept_name||'')+slotTag(s)+'</span>'
-                 + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[改日期]</a>':'')+'</div>';
+                 + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[改日期]</a>':'')+'</div>'
+                 + (s.reply_content ? '<div style="font-size:11px;color:#5b3a1e;margin-top:2px;">💬 '+esc(s.reply_content)+'</div>' : '');
         }
         return '<div class="item-confirm-box"><span style="font-size:11px;">'+esc(s.dept_name||'')+'：'+esc(s.user_name)+slotTag(s)+'</span>'
              + '<input type="password" id="pwConfirm'+it.item_id+'_'+s.user_id+'" placeholder="密碼" style="width:70px;" data-eg-skip'
@@ -1245,8 +1329,8 @@ function itemConfirmCellHtml(it){
     var nt = it.notify_targets || [];
     if (nt.length) {
         h += '<div class="item-notify-status">' + nt.map(function(t){
-            var st = t.signed_at ? ('已回簽 '+String(t.signed_at).substr(0,10)) : (t.read_at ? '已閱未回簽' : '未讀');
-            return esc(t.user_name)+'：'+st;
+            var st = t.replied_at ? ('已回覆 '+String(t.replied_at).substr(0,10)) : (t.read_at ? '已閱未回覆' : '未讀');
+            return esc(t.user_name)+'：'+st + (t.reply_content ? ('<div style="margin-top:2px;">💬 '+esc(t.reply_content)+'</div>') : '');
         }).join('　') + '</div>';
     }
     if (META.is_superadmin) h += '<div><a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[超管補齊此項目]</a></div>';
@@ -1665,7 +1749,25 @@ function openRecordDocPicker(){
     });
 }
 
-loadMeta(function(){ loadList(); });
+/* 通知置頂欄「待簽章」點進來會帶 ?sign=meeting_id&event=xxx（見 sideAndTopBarMenu.html 的 MEETING_APPROVAL 路由）：
+   載入完成後自動開啟該筆檢視並捲動到簽名區，不必再自己從清單裡找。event 參數只是給該通知系統識別用，這裡不需要。 */
+var URL_SIGN_ID = (function(){
+    var m = String(location.search||'').match(/[?&]sign=(\d+)/);
+    return m ? parseInt(m[1], 10) : 0;
+})();
+loadMeta(function(){
+    loadList();
+    if (URL_SIGN_ID) {
+        openView(URL_SIGN_ID);
+        setTimeout(function(){
+            var $box = $('#viewBody .decide-box');
+            if ($box.length) {
+                $box[0].scrollIntoView({behavior:'smooth', block:'center'});
+                $box.css({'box-shadow':'0 0 0 3px #F0A24B', 'transition':'box-shadow .3s'});
+            }
+        }, 400);
+    }
+});
 </script>
 </body>
 </html>
