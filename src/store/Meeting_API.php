@@ -200,6 +200,19 @@ case 'get_detail': {
             }
         }
         $it['confirm_slots'] = $slots;
+        // 送出前預覽「若現在送出會通知誰」(2026-08-07使用者實測回報：董事長室這種未出席部門，送出前完全看不出
+        // 會通知誰，還以為設定沒生效)：只在還沒真的發過通知(notify_targets為空)時才算，已送出過的一律照實際
+        // 通知紀錄顯示，不要疊加預覽造成混淆。
+        $hasOwner = trim((string)($it['owner_depts'] ?? '')) !== '' || trim((string)($it['owner_users'] ?? '')) !== '';
+        if ($hasOwner && !$it['notify_targets']) {
+            $pids = meeting_item_pending_notify_targets($db, $id, $it);
+            if ($pids) {
+                $in = implode(',', $pids);
+                $it['notify_preview'] = $db->query("SELECT user_cname FROM `user` WHERE id IN ($in)")->fetchAll(PDO::FETCH_COLUMN);
+            } else {
+                $it['notify_preview'] = [];
+            }
+        }
     }
     unset($it);
     // AS 文件編號一律依「這筆會議記錄自己的會議日期」回推當時生效的版次列印，不是印現在最新版
