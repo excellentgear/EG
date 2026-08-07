@@ -1911,6 +1911,19 @@ let artW = 1600, artH = 1200;                 // 畫布（工作區）尺寸
 let currentTool = 'select';
 let spaceDown = false;
 
+// fabric.js 只設 imageSmoothingEnabled，沒設 imageSmoothingQuality（瀏覽器預設='low'）。
+// 存檔/列印都會把畫布以 2~4 倍放大匯出（見 exportRegionDataURL），若來源是掃描/拍照 JPG，
+// 低品質內插會把原本不明顯的 JPEG 8x8 壓縮方格等比放大變成清楚可見的色塊——這一步發生在
+// 每次 render（含 toDataURL 匯出用的暫存畫布），所以在 fabric 的共用函式補上 'high' 才能
+// 一次涵蓋畫面顯示＋存檔＋列印全部路徑，不必每個匯出呼叫點各自設定。
+(function () {
+    const orig = fabric.util.setImageSmoothing;
+    fabric.util.setImageSmoothing = function (ctx, value) {
+        orig(ctx, value);
+        try { ctx.imageSmoothingQuality = 'high'; } catch (e) {}
+    };
+})();
+
 const canvas = new fabric.Canvas('c', {
     backgroundColor: null,
     preserveObjectStacking: true,
