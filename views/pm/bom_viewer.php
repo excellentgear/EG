@@ -773,6 +773,14 @@ function showFile(path, type, name) {
     _currentType = (type || '').toLowerCase();
     var _isImg = ['jpg','jpeg','png','gif','bmp'].indexOf(_currentType) !== -1;
 
+    // 圖面/ERP 檔案原本是 /nas/ 別名（走 Z: 磁碟機代號）直連，Z: 是使用者 session 層級的
+    // 持續連線，實測過 `net use` 顯示狀態「無法使用」，造成圖面切換/列印時好時壞的慢；
+    // 改走 bom_download.php（inline=1）以 UNC 路徑讀取＋可快取，跟附件分頁走 API 同一套穩定做法。
+    // 附件分頁（其他附件/報價/訂單）的 path 本來就已經是 API 網址，不受影響。
+    var viewPath = (path && path.indexOf('/nas/') === 0)
+        ? 'bom_download.php?path=' + encodeURIComponent(path) + '&filename=' + encodeURIComponent(name || '') + '&inline=1'
+        : path;
+
     $('#viewer-title').text(_currentName);
     $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder, #bom-quote-detail').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
@@ -783,15 +791,15 @@ function showFile(path, type, name) {
     var _isPaintable   = _paintFormats.indexOf(_currentType) !== -1;
 
     if (_currentType === 'pdf') {
-        $('#bom-pdf-frame').attr('src', path).show();
+        $('#bom-pdf-frame').attr('src', viewPath).show();
         $('#btn-save, #btn-print').show();
     } else if (_isImg) {
-        $('#bom-zoom-img').attr('src', path);
+        $('#bom-zoom-img').attr('src', viewPath);
         $('#img-zoom-wrap').css('display', 'flex');
         $('#btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-print').show();
     } else {
         $('#viewer-placeholder')
-            .html('<i class="fa fa-download"></i> 不支援預覽，<a href="'+escapeHtml(path)+'" target="_blank">點此下載</a>')
+            .html('<i class="fa fa-download"></i> 不支援預覽，<a href="'+escapeHtml(viewPath)+'" target="_blank">點此下載</a>')
             .show();
         $('#btn-save').show();
     }
