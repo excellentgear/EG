@@ -101,12 +101,15 @@ try {
         }
     }
 
-    // 會議記錄項目確認通知(ref_type='MEETING_ITEM_CONFIRM')的回簽 → 寫回 meeting_item 的確認簽名(任一人回簽即完成)
-    if ($action === 'sign' && ($event['ref_type'] ?? '') === 'MEETING_ITEM_CONFIRM' && (int)($event['ref_id'] ?? 0) > 0) {
+    // 會議記錄項目確認通知(ref_type='MEETING_ITEM_CONFIRM')的回簽/回覆 → 寫回 meeting_item 的確認簽名(任一人回覆即完成)。
+    // 2026-08-06改版(使用者明確要求)：通知一律用 reply 模式(見 meeting_notify_item_owners)，讓對方留下回覆內容，
+    // 顯示在會議記錄項目下方；仍相容 sign(舊資料或其他呼叫路徑)，此時無回覆內容。
+    if (($action === 'sign' || $action === 'reply') && ($event['ref_type'] ?? '') === 'MEETING_ITEM_CONFIRM' && (int)($event['ref_id'] ?? 0) > 0) {
         try {
             require_once __DIR__ . '/../common/meeting_lib.php';
             $uname = $_SESSION['user_cname'] ?? ('U' . $uid);
-            meeting_item_confirm_via_notify($db, (int)$event['ref_id'], $uid, $uname);
+            $replyContent = $action === 'reply' ? trim($_POST['reply_content'] ?? '') : null;
+            meeting_item_confirm_via_notify($db, (int)$event['ref_id'], $uid, $uname, $replyContent !== '' ? $replyContent : null);
         } catch (Throwable $e) {
             error_log('[meeting_notify] respond hook failed: ' . $e->getMessage());
         }

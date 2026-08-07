@@ -1540,7 +1540,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <!-- 發行章日期：自家出的圖必填，是圖面變更的新舊依據（見 ai-rules/15-圖面變更判定依據.md） -->
             <div class="frm-row" id="pf-issue-row" style="display:none;"><label>發行章日期 <span style="color:#ff8a80;">*</span></label>
                 <div style="flex:1;">
-                    <input type="date" id="pf-issue-date" style="width:170px;" onchange="pfOnIssueDateChange()">
+                    <input type="date" id="pf-issue-date" max="9999-12-31" style="width:170px;" onchange="pfOnIssueDateChange()">
                     <span style="font-size:11.5px;color:#8b949e;margin-left:6px;">預設今天，請改成圖上實際蓋章日</span>
                     <div id="pf-issue-hint" style="font-size:11.5px;margin-top:3px;"></div>
                 </div>
@@ -7045,36 +7045,6 @@ document.addEventListener('keydown', function (e) {
 document.addEventListener('keyup', function (e) {
     if (e.code === 'Space') { spaceDown = false; canvas.defaultCursor = (currentTool === 'pan') ? 'grab' : 'default'; }
 });
-
-/* ── 日期欄位：輸入年份4碼後自動跳月份（比照 NewOrder_Track222.php 同一套行為，讓 20260806 可連續輸入）
-   本頁沒載入 jQuery（Fabric 畫布頁面），改用原生事件寫同一套邏輯 ── */
-(function () {
-    const yBuf = new WeakMap();
-    const isDateInput = el => el && el.matches && el.matches('input[type="date"]');
-    ['focus', 'blur'].forEach(evt => document.addEventListener(evt, function (e) {
-        if (isDateInput(e.target)) yBuf.set(e.target, '');
-    }, true));
-    document.addEventListener('click', function (e) { if (isDateInput(e.target)) yBuf.set(e.target, ''); });
-    document.addEventListener('keydown', function (e) {
-        const el = e.target;
-        if (!isDateInput(el)) return;
-        if (/^[0-9]$/.test(e.key)) {
-            const buf = (yBuf.get(el) || '') + e.key;
-            if (buf.length >= 4) {
-                yBuf.set(el, '');
-                setTimeout(function () {
-                    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true, cancelable: true }));
-                }, 30);
-            } else {
-                yBuf.set(el, buf);
-            }
-        } else if (e.key === 'Backspace') {
-            yBuf.set(el, (yBuf.get(el) || '').slice(0, -1));
-        } else if (e.key !== 'Tab' && !e.key.startsWith('Arrow')) {
-            yBuf.set(el, '');
-        }
-    });
-})();
 
 /* ── 跳窗 / 畫布設定 / 其他 ── */
 function showModal(id) {
