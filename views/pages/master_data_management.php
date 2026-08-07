@@ -3689,7 +3689,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             // ── 料號附件與其他直接綁定表（2026-08-07 補齊，避免移轉後變孤兒）──────
             $skipped = [];
-            // 附件：直接改指向目標料號，實體檔案路徑與 d_id 無關，不需搬檔案
+            // 附件：改指向目標料號。**實體檔案必須跟著搬**——附件是存在
+            // `<part_attach_nas_dir>/<d_id>/<filename>`，只改 DB 不搬檔，網址會指到新的
+            // d_id 資料夾而檔案還留在舊的，附件就變成 404 打不開（2026-08-07 實際踩到）。
+            // 先把檔名撈起來（UPDATE 之後就查不到誰原本屬於來源料號了），commit 後再搬。
+            $attachToMove = $pdo->prepare("SELECT filename FROM part_attachments WHERE d_id=?");
+            $attachToMove->execute([$src_id]);
+            $attachFiles = $attachToMove->fetchAll(PDO::FETCH_COLUMN);
             $pdo->prepare("UPDATE part_attachments SET d_id=? WHERE d_id=?")->execute([$tgt_id,$src_id]);
             // 料號別名／舊料號／專用料號／專用機台／廠商單價／標籤／齒輪參數／QC進貨檢驗表：一對多，直接搬
             $pdo->prepare("UPDATE d_setting_alias SET d_id=? WHERE d_id=?")->execute([$tgt_id,$src_id]);
@@ -3726,11 +3732,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             $pdo->commit();
+
+            // ── 附件實體檔案搬家：<根目錄>/<來源d_id>/ → <根目錄>/<目標d_id>/ ──
+            // 放在 commit 之後：檔案系統不能參與 transaction，先確保 DB 狀態底定再搬；
+            // 搬失敗的檔案逐一回報給操作者（不吞掉），DB 已經指向目標料號，補搬即可修好。
+            $moved = 0; $moveFail = [];
+            if ($attachFiles) {
+                $atBase = rtrim((string)_get_setting($pdo, 'part_attach_nas_dir', ''), "/\\");
+                if ($atBase === '') {
+                    $moveFail[] = '未設定附件儲存路徑，檔案未搬移';
+                } else {
+                    $srcDir = $atBase . DIRECTORY_SEPARATOR . $src_id;
+                    $tgtDir = $atBase . DIRECTORY_SEPARATOR . $tgt_id;
+                    if (!is_dir($tgtDir)) @mkdir($tgtDir, 0777, true);
+                    foreach ($attachFiles as $fn) {
+                        $from = $srcDir . DIRECTORY_SEPARATOR . $fn;
+                        $to   = $tgtDir . DIRECTORY_SEPARATOR . $fn;
+                        if (is_file($to)) { $moved++; continue; }          // 已經在目的地
+                        if (!is_file($from)) { $moveFail[] = $fn . '（來源檔不存在）'; continue; }
+                        if (@rename($from, $to)) { $moved++; }
+                        elseif (@copy($from, $to)) { @unlink($from); $moved++; }   // 跨磁碟時 rename 會失敗
+                        else { $moveFail[] = $fn; }
+                    }
+                }
+            }
+
             $op_name = _get_operator($pdo, $uid);
             $cust_note = $sync_cust ? ('，客戶一併改為「'.($tgt_cust_name ?: $tgt_cust_id).'」') : '';
             $skip_note = $skipped ? ('；以下表因目標料號已有重複資料未能自動合併，請至該功能手動檢查：'.implode('、',array_unique($skipped))) : '';
-            _log_audit($pdo,'update','part',$src['D_Setting_Id'],null,[['field'=>'綁定移轉','old'=>$src['D_Setting_Id'],'new'=>$tds.'（所有關聯資料'.$cust_note.'）'.$skip_note]],$uid,$op_name);
-            echo json_encode(['success'=>true,'message'=>'移轉完成，所有關聯資料（含附件）已改為指向「'.$tds.'」'.$cust_note.$skip_note]);
+            $file_note = '';
+            if ($moved)     $file_note .= '；附件檔案已搬移 '.$moved.' 個';
+            if ($moveFail)  $file_note .= '；**下列附件檔案搬移失敗，請手動處理否則會打不開**：'.implode('、', $moveFail);
+            _log_audit($pdo,'update','part',$src['D_Setting_Id'],null,[['field'=>'綁定移轉','old'=>$src['D_Setting_Id'],'new'=>$tds.'（所有關聯資料'.$cust_note.'）'.$skip_note.$file_note]],$uid,$op_name);
+            echo json_encode(['success'=>true,'message'=>'移轉完成，所有關聯資料（含附件）已改為指向「'.$tds.'」'.$cust_note.$skip_note.$file_note]);
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
