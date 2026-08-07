@@ -1507,7 +1507,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <!-- 料號附件：儲存 / 開啟工作檔 -->
 <div class="modal-mask" id="partfile-modal">
     <div class="modal-box" style="min-width:480px;">
-        <h3><i class="fa fa-archive"></i> 料號附件</h3>
+        <h3 style="display:flex;align-items:center;justify-content:space-between;"><span><i class="fa fa-archive"></i> 料號附件</span><span style="cursor:pointer;color:#8b949e;" onclick="hideModal('partfile-modal')" title="關閉"><i class="fa fa-times"></i></span></h3>
         <div class="modal-body">
             <div class="frm-row"><label>料號/圖號</label>
                 <input type="text" id="pf-q" style="flex:1;" placeholder="輸入料號或圖號關鍵字後按搜尋">
