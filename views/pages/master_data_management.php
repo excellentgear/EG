@@ -6180,12 +6180,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } elseif ($op_code === 'save_path') {
                 if ($permission_code !== 'A') throw new Exception('僅限 A 等級修改儲存路徑');
                 $nas = trim($_POST['nas_dir'] ?? '');
-                $url = trim($_POST['url_dir'] ?? '');
-                if (!$nas || !$url) throw new Exception('路徑不可為空');
+                if (!$nas) throw new Exception('存放位置不可為空');
+                // 存檔前先確認讀得到，否則設錯了要等使用者打不開附件才發現
+                if (!is_dir(rtrim($nas, '/\\'))) throw new Exception('這個位置讀不到，請確認路徑正確且伺服器有權限存取：' . $nas);
                 $op_name = _get_operator($pdo,$uid);
                 $ups = $pdo->prepare("INSERT INTO system_settings (setting_key,setting_value) VALUES (?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
                 $ups->execute(['part_attach_nas_dir', $nas]);
-                $ups->execute(['part_attach_url_dir', $url]);
+                // part_attach_url_dir 不再寫入：附件已改走下載 API，瀏覽器不再直連 /nas 別名。
+                // 舊值留在 system_settings 不刪，萬一要回退直連版本還在。
                 _log_audit($pdo,'update','settings','part_attach_path','料號附件儲存路徑',null,$uid,$op_name);
                 echo json_encode(['success'=>true]);
             } elseif ($op_code === 'get_path') {
@@ -8503,16 +8505,22 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                 <!-- 儲存路徑 -->
                 <div style="margin-bottom:16px;background:#f0f8ff;padding:12px;border-radius:6px;border:1px solid #bde0f7;">
                     <div style="font-size:12px;font-weight:700;color:#2471a3;margin-bottom:8px;"><i class="fa fa-folder-open"></i> 料號附件儲存路徑</div>
+                    <!-- 只留這一個欄位：附件已改走下載 API 讀檔，不再靠 Apache 的 /nas 別名讓瀏覽器直連，
+                         所以「URL 前綴」已無作用（留著使用者會以為改它有效）。位置只由這一欄決定。 -->
                     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                        <label style="font-size:12px;color:#555;margin:0;white-space:nowrap;">NAS 路徑</label>
-                        <input type="text" id="acat-nas-path" class="form-control input-sm" style="flex:1;min-width:200px;font-family:monospace;" placeholder="例：Z:/BOM/ERP/業務/料號資料/" <?php if($permission_code!=='A'):?>readonly style="background:#f5f5f5;"<?php endif;?>>
-                        <label style="font-size:12px;color:#555;margin:0;white-space:nowrap;">URL 前綴</label>
-                        <input type="text" id="acat-url-path" class="form-control input-sm" style="flex:1;min-width:150px;font-family:monospace;" placeholder="例：/nas/ERP/業務/料號資料/" <?php if($permission_code!=='A'):?>readonly style="background:#f5f5f5;"<?php endif;?>>
+                        <label style="font-size:12px;color:#555;margin:0;white-space:nowrap;">存放位置</label>
+                        <input type="text" id="acat-nas-path" class="form-control input-sm" style="flex:1;min-width:320px;font-family:monospace;" placeholder="例：\\excellentnas\生產課\BOM\ERP\業務\料號資料" <?php if($permission_code!=='A'):?>readonly style="background:#f5f5f5;"<?php endif;?>>
                         <?php if ($permission_code==='A'): ?>
                         <button type="button" class="btn btn-xs btn-warning" onclick="saveAttachCatPath()"><i class="fa fa-save"></i> 儲存路徑</button>
                         <?php endif; ?>
                     </div>
-                    <div style="font-size:10px;color:#aaa;margin-top:4px;"><?php if($permission_code!=='A'):?>需 A 等級才可修改路徑<?php endif;?></div>
+                    <div style="font-size:11px;color:#7f8c8d;margin-top:5px;line-height:1.5;">
+                        可用網路路徑（<code>\\主機名\分享名\資料夾</code>）或磁碟機代號（<code>Z:\…</code>）。
+                        <b>建議用網路路徑</b>——磁碟機代號是每台電腦各自對應的，換機或對應掉了就整批讀不到。
+                        檔案實際存在「這個位置\料號ID\檔名」，資料庫只記檔名，所以<b>改這裡即可整批換位置，不需要改資料庫</b>；
+                        但既有檔案要自己先搬到新位置（同一個位置換寫法則不用搬）。
+                        <?php if($permission_code!=='A'):?><br><span style="color:#aaa;">需 A 等級才可修改路徑</span><?php endif;?>
+                    </div>
                 </div>
                 <!-- 類別清單 + 編輯表單 -->
                 <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
@@ -17767,8 +17775,8 @@ var _attachCats = [];  // [{id,category_name,show_in_list,tag_variables,is_activ
 function loadAttachCatPanel() {
     api({ action:'manage_attach_categories', op:'get_path' }).done(function(r) {
         if (r.success) {
-            var n = document.getElementById('acat-nas-path'), u = document.getElementById('acat-url-path');
-            if (n) n.value = r.nas_dir || ''; if (u) u.value = r.url_dir || '';
+            var n = document.getElementById('acat-nas-path');
+            if (n) n.value = r.nas_dir || '';   // URL 前綴欄位已移除（附件改走下載 API，不再直連）
         }
     });
     loadAttachCatTable();
@@ -17838,10 +17846,10 @@ function initAcatTableDrag() {
 }
 
 function saveAttachCatPath() {
-    var nas = (document.getElementById('acat-nas-path')||{}).value||'';
-    var url = (document.getElementById('acat-url-path')||{}).value||'';
-    if (!nas||!url) { showToast('路徑不可為空','error'); return; }
-    api({ action:'manage_attach_categories', op:'save_path', nas_dir:nas, url_dir:url }).done(function(r) {
+    var nas = ((document.getElementById('acat-nas-path')||{}).value||'').trim();
+    if (!nas) { showToast('存放位置不可為空','error'); return; }
+    // 後端會先確認這個位置讀得到才存，設錯會當場擋下而不是等使用者打不開附件才發現
+    api({ action:'manage_attach_categories', op:'save_path', nas_dir:nas }).done(function(r) {
         if (r.success) showToast('路徑已儲存');
         else showToast(r.message||'儲存失敗','error');
     });

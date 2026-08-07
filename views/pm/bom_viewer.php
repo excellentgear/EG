@@ -145,11 +145,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
             echo json_encode(['success' => true, 'attachments' => []]);
             exit;
         }
-        // URL 目錄（以第一筆 d_id 為主，實際檔案存放路徑）
-        $urlStmt = $pdo2->prepare("SELECT setting_value FROM system_settings WHERE setting_key='part_attach_url_dir'");
-        $urlStmt->execute();
-        $urlBase = rtrim((string)($urlStmt->fetchColumn() ?: ''), '/\\');
-        // 附件需依各 d_id 子目錄取 URL，記錄時一起帶 d_id
+        // 附件連結改走 Part_Attachment_API 的 download（見下方），不再需要 part_attach_url_dir 前綴
         // 附件清單（支援多筆 d_id）
         $ph = implode(',', array_fill(0, count($dids), '?'));
         $stmt = $pdo2->prepare("SELECT pa.id, pa.d_id, pa.filename, pa.original_name, pa.category_ids, pa.file_size, pa.note,
