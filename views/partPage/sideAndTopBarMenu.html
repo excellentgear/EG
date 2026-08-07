@@ -519,6 +519,17 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 }
                 return;
             }
+            if (refType === 'MEETING_APPROVAL') {
+                // 會議記錄主席/總經理待簽章：開會議記錄頁並帶 sign=meeting_id，頁面會自動開啟該筆檢視並捲動到簽名區。
+                // 2026-08-06修正(使用者實測回報)：改走通用的一般通知(直接呼叫_eventRespond.php action=sign)只會
+                // 標記這則通知已回簽，並不會真的觸發 Meeting_API 的 decide 動作，導致「按核可」卻沒有真的簽名。
+                // 比照請假/報價單既有作法：開專屬頁面讓頁面自己呼叫正確的業務API；核可/退回完成前不從置頂欄移除。
+                window.open('../ADM/meeting_record.php?sign=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) {
+                    nmMarkRead(nmRemoveFromList);
+                }
+                return;
+            }
             if (refType === 'LEAVE_APPROVAL') {
                 // 請假單待簽核：開請假系統的「待我簽核」分頁並直接展開該單的簽核面板。
                 // mode=sign → 真正核准/退回完成前不從置頂欄未讀清單移除（比照報價單）。
