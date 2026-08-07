@@ -778,6 +778,7 @@ switch ($action) {
         header('Content-Type: '.$mime);
         header('Content-Disposition: inline; filename="'.rawurlencode($rec['original_name'] ?: $rec['filename']).'"');
         header('Content-Length: '.filesize($fp));
+        header('Cache-Control: private, max-age=3600');
         readfile($fp);
         exit;
 
