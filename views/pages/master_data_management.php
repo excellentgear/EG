@@ -8921,10 +8921,17 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
         <textarea id="dwg-detail" class="form-control input-sm" rows="2" placeholder="選填"></textarea>
     </div>
     <div class="form-group" style="margin-bottom:0;">
-        <label style="font-size:12px;font-weight:700;color:#555;">需簽收人員
-            <small style="color:#aaa;font-weight:normal;">（未簽收會一直留在置頂未讀）</small></label>
-        <input type="text" id="dwg-people-q" class="form-control input-sm" placeholder="輸入姓名篩選" style="margin-bottom:4px;" oninput="renderDwgPeople()">
-        <div id="dwg-people" style="max-height:150px;overflow:auto;border:1px solid #e4e8ed;border-radius:4px;padding:6px;">載入中…</div>
+        <label style="font-size:12px;font-weight:700;color:#555;">需簽收對象
+            <small style="color:#aaa;font-weight:normal;">（可混合指定部門與個人；未簽收會一直留在置頂未讀）</small></label>
+        <div id="dwg-chips" style="display:flex;flex-wrap:wrap;gap:4px;padding:5px;background:#fafbfc;border:1px solid #e4e8ed;border-radius:4px;min-height:32px;margin-bottom:4px;"></div>
+        <div style="position:relative;">
+            <input type="text" id="dwg-people-q" class="form-control input-sm" autocomplete="off"
+                   placeholder="輸入姓名或部門名稱篩選，點選加入（選部門＝該部門含子部門的在職人員全收到）"
+                   oninput="renderDwgPicker()" onfocus="renderDwgPicker()">
+            <div id="dwg-picker" style="display:none;position:absolute;z-index:1060;left:0;right:0;top:100%;background:#fff;
+                 border:1px solid #e4e8ed;border-radius:0 0 4px 4px;max-height:210px;overflow:auto;box-shadow:0 6px 14px rgba(0,0,0,.12);"></div>
+        </div>
+        <div id="dwg-ack-summary" style="font-size:11px;color:#7f8c8d;margin-top:4px;">尚未指定簽收對象——不指定就不會有人收到通知</div>
     </div>
 </div>
 <div class="modal-footer" style="padding:8px 16px;">
@@ -9161,6 +9168,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/o3dv.min.js"></script>
 
 <script>
@@ -18842,9 +18850,9 @@ function openDwgChangeModal(ctx) {
     _dwgCtx = ctx;
     document.getElementById('dwg-attach-id').value = ctx.attachId;
     document.getElementById('dwg-why').innerHTML =
-        '<b>' + escHtml(ctx.fileName) + '</b> 的發行章日期是 <b>' + escHtml(ctx.verdict.issue_date || '') + '</b>，'
+        '<b>' + escHtml(ctx.fileName) + '</b> 的發行章日期是 <b>' + escHtml(egFmtDate(ctx.verdict.issue_date)) + '</b>，'
         + '比這個料號現有最新的自家圖面（' + escHtml(ctx.verdict.prev_name||'') + '，'
-        + escHtml(ctx.verdict.prev_date||'') + '）新，所以判定為<b>圖面變更</b>。<br>'
+        + escHtml(egFmtDate(ctx.verdict.prev_date)) + '）新，所以判定為<b>圖面變更</b>。<br>'
         + '只有你知道這次改了什麼、哪些製程受影響，請填一下；送出後會自動把檢驗標準複製成新版次並通知簽收。';
     document.getElementById('dwg-summary').value = '';
     document.getElementById('dwg-detail').value  = '';
@@ -18855,26 +18863,130 @@ function openDwgChangeModal(ctx) {
     document.getElementById('dwg-people-q').value = '';
     document.getElementById('dwg-summary-err').style.display = 'none';
     document.getElementById('dwg-summary').style.borderColor = '';
+    _dwgPickedUsers = []; _dwgPickedDepts = [];
+    document.getElementById('dwg-picker').style.display = 'none';
+    renderDwgChips();
     $.post(PART_ATTACH_API_URL, { action:'dwg_lookups' }, function(r) {
         if (!r || !r.success) return;
         document.getElementById('dwg-fromproc').innerHTML = '<option value="">（全部製程都提醒）</option>'
             + (r.processes||[]).map(function(p){ return '<option value="'+p.ProcessNo+'">'+escHtml(p.ProcessName)+'</option>'; }).join('');
-        _dwgPeople = r.people || [];
-        renderDwgPeople();
+        _dwgPeople     = r.people || [];
+        _dwgPickDepts  = r.departments || [];
     }, 'json');
     $('#dwgChangeModal').modal('show');
 }
-function renderDwgPeople() {
-    if (!_dwgPeople) return;
+// 點挑選清單以外的地方就收起來（點到清單本身要留著，否則 onclick 來不及觸發）
+$(document).on('mousedown', function(e) {
+    if (!$(e.target).closest('#dwg-picker,#dwg-people-q').length) {
+        var b = document.getElementById('dwg-picker');
+        if (b) b.style.display = 'none';
+    }
+});
+/* ── 簽收對象挑選：部門與個人混合，已選或已被部門涵蓋者反灰不可重複選 ──────
+   部門一律連子部門（組織是樹狀），後端 dwg_lookups 已把每個部門的實際在職成員
+   user_ids 一起送過來，所以前端算得出「這個人已經被某個部門涵蓋了」。 */
+var _dwgPickDepts = [], _dwgPickedUsers = [], _dwgPickedDepts = [];
+
+/** 目前已被選中的部門所涵蓋的 user_id 集合 */
+function _dwgCoveredByDept() {
+    var cov = {};
+    _dwgPickedDepts.forEach(function(d){ (d.user_ids||[]).forEach(function(u){ cov[u] = d; }); });
+    return cov;
+}
+function renderDwgPicker() {
+    var box = document.getElementById('dwg-picker');
+    if (!_dwgPeople) { box.style.display='none'; return; }
     var q = (document.getElementById('dwg-people-q').value||'').trim();
-    var list = q ? _dwgPeople.filter(function(p){ return p.label.indexOf(q) >= 0; }) : _dwgPeople;
-    var box = document.getElementById('dwg-people');
-    var picked = {};
-    document.querySelectorAll('.dwg-ack:checked').forEach(function(cb){ picked[cb.value] = 1; });
-    box.innerHTML = list.length ? list.map(function(p) {
-        return '<label style="display:inline-block;width:48%;font-weight:normal;font-size:12px;margin:2px 0;cursor:pointer;">'
-             + '<input type="checkbox" class="dwg-ack" value="'+p.id+'"'+(picked[p.id]?' checked':'')+'> ' + escHtml(p.label) + '</label>';
-    }).join('') : '<span style="color:#aaa;font-size:12px;">查無符合人員</span>';
+    var cov = _dwgCoveredByDept();
+    var pickedU = {}; _dwgPickedUsers.forEach(function(p){ pickedU[p.id] = 1; });
+    var pickedD = {}; _dwgPickedDepts.forEach(function(d){ pickedD[d.id] = 1; });
+
+    function row(disabled, reason, onclick, html) {
+        return '<div ' + (disabled ? '' : 'onclick="'+onclick+'" ') + 'style="padding:5px 9px;font-size:12px;border-bottom:1px solid #f2f4f6;'
+             + (disabled ? 'color:#c3c9d0;background:#fafbfc;cursor:not-allowed;' : 'cursor:pointer;color:#333;')
+             + '" ' + (disabled ? '' : 'onmouseover="this.style.background=\'#fff7ec\'" onmouseout="this.style.background=\'\'"') + '>'
+             + html + (reason ? ' <span style="font-size:10px;color:#c3c9d0;">'+escHtml(reason)+'</span>' : '') + '</div>';
+    }
+    var html = '';
+    // 部門
+    var ds = _dwgPickDepts.filter(function(d){ return !q || d.path.indexOf(q) >= 0; });
+    if (ds.length) {
+        html += '<div style="padding:3px 9px;font-size:10px;color:#999;background:#f7f9fa;font-weight:700;">部門</div>';
+        ds.forEach(function(d) {
+            var dis = !!pickedD[d.id];
+            html += row(dis, dis ? '已選' : '', 'dwgPickDept('+d.id+')',
+                '<i class="fa fa-sitemap" style="color:#C77C1A;"></i> ' + escHtml(d.path)
+                + ' <span style="font-size:10px;color:#95a5a6;">' + d.count + ' 人</span>');
+        });
+    }
+    // 人員：欄位順序固定「部門／職稱／姓名」（人員列表鐵則）
+    var ps = _dwgPeople.filter(function(p){
+        if (!q) return true;
+        return (p.name||'').indexOf(q) >= 0 || (p.dept_name||'').indexOf(q) >= 0 || (p.position||'').indexOf(q) >= 0;
+    });
+    if (ps.length) {
+        html += '<div style="padding:3px 9px;font-size:10px;color:#999;background:#f7f9fa;font-weight:700;">人員</div>';
+        ps.forEach(function(p) {
+            var byDept = cov[p.id];
+            var dis = !!pickedU[p.id] || !!byDept;
+            var reason = pickedU[p.id] ? '已選' : (byDept ? '已含在「'+byDept.name+'」內' : '');
+            html += row(dis, reason, 'dwgPickUser('+p.id+')',
+                '<span style="color:#8e6b45;">' + escHtml(p.dept_name||'—') + '</span>　'
+                + '<span style="color:#95a5a6;">' + escHtml(p.position||'') + '</span>　'
+                + '<b>' + escHtml(p.name||'') + '</b>'
+                + (p.leave_note ? ' <span style="font-size:10px;color:#e67e22;">※'+escHtml(p.leave_note)+'</span>' : ''));
+        });
+    }
+    box.innerHTML = html || '<div style="padding:8px 9px;font-size:12px;color:#aaa;">查無符合的部門或人員</div>';
+    box.style.display = '';
+}
+function dwgPickDept(id) {
+    var d = _dwgPickDepts.find(function(x){ return x.id===id; });
+    if (!d || _dwgPickedDepts.some(function(x){ return x.id===id; })) return;
+    _dwgPickedDepts.push(d);
+    // 被這個部門涵蓋的個人選擇就多餘了，移掉避免同一人出現兩次來源
+    var cov = {}; (d.user_ids||[]).forEach(function(u){ cov[u]=1; });
+    _dwgPickedUsers = _dwgPickedUsers.filter(function(p){ return !cov[p.id]; });
+    renderDwgChips(); renderDwgPicker();
+}
+function dwgPickUser(id) {
+    var p = _dwgPeople.find(function(x){ return x.id===id; });
+    if (!p || _dwgPickedUsers.some(function(x){ return x.id===id; })) return;
+    if (_dwgCoveredByDept()[id]) return;                 // 已被部門涵蓋，不重複加
+    _dwgPickedUsers.push(p);
+    renderDwgChips(); renderDwgPicker();
+}
+function dwgRemoveDept(id) {
+    _dwgPickedDepts = _dwgPickedDepts.filter(function(d){ return d.id!==id; });
+    renderDwgChips(); renderDwgPicker();
+}
+function dwgRemoveUser(id) {
+    _dwgPickedUsers = _dwgPickedUsers.filter(function(p){ return p.id!==id; });
+    renderDwgChips(); renderDwgPicker();
+}
+function renderDwgChips() {
+    var box = document.getElementById('dwg-chips');
+    var h = '';
+    _dwgPickedDepts.forEach(function(d) {
+        h += '<span style="display:inline-flex;align-items:center;gap:4px;background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;border-radius:11px;padding:1px 8px;font-size:12px;">'
+           + '<i class="fa fa-sitemap"></i>' + escHtml(d.path) + '（' + d.count + '人）'
+           + '<a href="javascript:void(0)" onclick="dwgRemoveDept('+d.id+')" style="color:#c0392b;text-decoration:none;font-weight:700;">&times;</a></span>';
+    });
+    _dwgPickedUsers.forEach(function(p) {
+        h += '<span style="display:inline-flex;align-items:center;gap:4px;background:#f0f8ff;color:#1a5276;border:1px solid #aed6f1;border-radius:11px;padding:1px 8px;font-size:12px;">'
+           + escHtml((p.dept_name?p.dept_name+' ':'') + (p.position?p.position+' ':'') + p.name)
+           + '<a href="javascript:void(0)" onclick="dwgRemoveUser('+p.id+')" style="color:#c0392b;text-decoration:none;font-weight:700;">&times;</a></span>';
+    });
+    box.innerHTML = h || '<span style="color:#bbb;font-size:12px;padding:2px 4px;">尚未選擇（下方輸入姓名或部門名稱來加入）</span>';
+    // 實際會通知幾個人：部門展開後與個人合併去重（跟後端 dwg_expand_ack_targets 同一套算法）
+    var all = {};
+    _dwgPickedDepts.forEach(function(d){ (d.user_ids||[]).forEach(function(u){ all[u]=1; }); });
+    _dwgPickedUsers.forEach(function(p){ all[p.id]=1; });
+    var n = Object.keys(all).length;
+    var sum = document.getElementById('dwg-ack-summary');
+    sum.style.color = n ? '#27ae60' : '#7f8c8d';
+    sum.textContent = n ? ('實際會通知 ' + n + ' 人（部門展開後去重，同一人只會收到一次）')
+                        : '尚未指定簽收對象——不指定就不會有人收到通知';
 }
 function submitDwgChange() {
     var summary = (document.getElementById('dwg-summary').value||'').trim();
@@ -18884,8 +18996,8 @@ function submitDwgChange() {
         document.getElementById('dwg-summary').focus();
         return;
     }
-    var acks = [];
-    document.querySelectorAll('.dwg-ack:checked').forEach(function(cb){ acks.push(cb.value); });
+    var acks  = _dwgPickedUsers.map(function(p){ return p.id; });
+    var adepts = _dwgPickedDepts.map(function(d){ return d.id; });
     var btn = document.getElementById('dwg-save-btn');
     btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 建立中…';
     $.post(PART_ATTACH_API_URL, {
@@ -18898,7 +19010,8 @@ function submitDwgChange() {
         source: document.getElementById('dwg-source').value,
         customer_doc_no: (document.getElementById('dwg-cdoc').value||'').trim(),
         from_process_no: document.getElementById('dwg-fromproc').value,
-        ack_users: acks
+        ack_users: acks,
+        ack_depts: adepts
     }, function(r) {
         btn.disabled = false; btn.innerHTML = '<i class="fa fa-check"></i> 建立變更紀錄並通知簽收';
         if (!r || !r.success) { showToast((r && r.message) || '建立失敗','error'); return; }

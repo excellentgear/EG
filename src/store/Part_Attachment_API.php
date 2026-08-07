@@ -653,9 +653,21 @@ switch ($action) {
                     'leave_note'=> $r['leave_note'] ?? '',
                 ];
             }
-            // 部門：帶「含子部門」的實際在職成員 id，讓前端算得出涵蓋範圍並把已被涵蓋的人反灰
+            // 部門：帶「含子部門」的實際在職成員 id，讓前端算得出涵蓋範圍並把已被涵蓋的人反灰。
+            // 成員要用 user_department_position_map 的「全部」對應，不能只用 people_lib 挑出來的
+            // 主要職務部門——一人可掛多個部門，後端 dwg_expand_ack_targets 走
+            // eg_people_list(['dept_ids'=>…]) 是「任一對應命中就算」，只看主要部門會少算，
+            // 造成畫面顯示的人數比實際通知人數少。
             $byDept = [];
-            foreach ($rows as $r) { if ($r['dept_id']) $byDept[(int)$r['dept_id']][] = (int)$r['id']; }
+            $liveIds = array_map(function ($r) { return (int)$r['id']; }, $rows);
+            if ($liveIds) {
+                $ph = implode(',', array_fill(0, count($liveIds), '?'));
+                $mp = $pdo->prepare("SELECT DISTINCT user_id, department_id FROM user_department_position_map WHERE user_id IN ($ph)");
+                $mp->execute($liveIds);
+                foreach ($mp->fetchAll(PDO::FETCH_ASSOC) as $m) {
+                    if ($m['department_id']) $byDept[(int)$m['department_id']][] = (int)$m['user_id'];
+                }
+            }
             $dRows = $pdo->query("SELECT id, name, parent_id, COALESCE(sort_order,999) AS sort_order FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
             $nameById = []; $parentById = [];
             foreach ($dRows as $d) { $nameById[(int)$d['id']] = $d['name']; $parentById[(int)$d['id']] = (int)($d['parent_id'] ?? 0); }

@@ -14,6 +14,7 @@
  */
 
 require_once __DIR__ . '/dwg_notify.php';
+require_once __DIR__ . '/date_fmt_lib.php';   // 日期顯示一律 YYYY.MM.DD（ai-rules/20）
 
 if (!function_exists('dwg_ensure_schema')) {
 
@@ -85,18 +86,44 @@ function dwg_classify_upload(PDO $pdo, int $dId, array $catIds, ?string $issueDa
     }
     $out['prev_date'] = (string)$prev['issue_stamp_date'];
     $out['prev_name'] = (string)($prev['original_name'] ?? '');
-    $cmp = strcmp($issueDate, $out['prev_date']);
+    // 比大小用原始 Y-m-d，顯示才轉 YYYY.MM.DD（ai-rules/20：只管顯示，不動查詢與儲存）
+    $cmp  = strcmp($issueDate, $out['prev_date']);
+    $prevShow = eg_fmt_date($out['prev_date']);
     if ($cmp > 0) {
         $out['kind'] = 'change';
-        $out['message'] = '發行章日期比前一版（' . $out['prev_date'] . '）新＝這是一次圖面變更，請填寫變更內容。';
+        $out['message'] = '發行章日期比前一版（' . $prevShow . '）新＝這是一次圖面變更，請填寫變更內容。';
     } elseif ($cmp === 0) {
         $out['kind'] = 'same';
-        $out['message'] = '發行章日期與前一版相同（' . $out['prev_date'] . '）＝視為補件／重掃，不另開變更紀錄。';
+        $out['message'] = '發行章日期與前一版相同（' . $prevShow . '）＝視為補件／重掃，不另開變更紀錄。';
     } else {
         $out['kind'] = 'older';
-        $out['message'] = '發行章日期比現有最新版（' . $out['prev_date'] . '）舊＝視為補登舊版，不另開變更紀錄。';
+        $out['message'] = '發行章日期比現有最新版（' . $prevShow . '）舊＝視為補登舊版，不另開變更紀錄。';
     }
     return $out;
+}
+
+/**
+ * 簽收對象展開：可以指定「部門」也可以指定「個人」，兩者混合。
+ *
+ * 部門一律連子部門一起算（組織是樹狀：資材部→生管/採購/倉管組），
+ * 沿用 org_role_lib 的 eg_dept_subtree_ids()，不要只比對單一 department_id。
+ * 部門展開出來的人一律走 people_lib（人員列表鐵則：離職與特殊帳號不列）。
+ *
+ * @return int[] 去重後的 user_id
+ */
+function dwg_expand_ack_targets(PDO $pdo, array $userIds, array $deptIds): array {
+    $out = array_values(array_unique(array_filter(array_map('intval', $userIds))));
+    $deptIds = array_values(array_unique(array_filter(array_map('intval', $deptIds))));
+    if ($deptIds) {
+        require_once __DIR__ . '/org_role_lib.php';
+        require_once __DIR__ . '/people_lib.php';
+        $all = [];
+        foreach ($deptIds as $d) { foreach (eg_dept_subtree_ids($pdo, $d) as $sub) $all[$sub] = true; }
+        if ($all) {
+            foreach (eg_people_list($pdo, ['dept_ids' => array_keys($all)]) as $p) $out[] = (int)$p['id'];
+        }
+    }
+    return array_values(array_unique(array_filter($out)));
 }
 
 /**
@@ -121,7 +148,8 @@ function dwg_create_change(PDO $pdo, array $p): array {
     $newRev = trim((string)($p['new_revision'] ?? ''));
     $fromP  = (($p['from_process_no'] ?? '') === '' || $p['from_process_no'] === null) ? null : (int)$p['from_process_no'];
     $uid    = (int)($p['created_by'] ?? 0);
-    $ackIds = array_values(array_unique(array_filter(array_map('intval', (array)($p['ack_users'] ?? [])))));
+    // 簽收對象可以混合指定部門與個人；部門在這裡展開成人員（含子部門、只列在職）
+    $ackIds = dwg_expand_ack_targets($pdo, (array)($p['ack_users'] ?? []), (array)($p['ack_depts'] ?? []));
     $trigId = ($p['trigger_attachment_id'] ?? null) ? (int)$p['trigger_attachment_id'] : null;
 
     $pdo->beginTransaction();
