@@ -42,6 +42,29 @@ function dwg_own_drawing_cat_ids(PDO $pdo): array {
     } catch (Throwable $e) { return []; }
 }
 
+/**
+ * 同一個料號（D_Setting_Id）底下的所有 d_setting.d_id。
+ *
+ * 為什麼要有這支：同一個料號常常有多筆 d_setting（不同客戶，或不小心建重複的），
+ * 圖面卻是同一張。圖面檢視（bom_viewer/part_viewer）本來就是依 D_Setting_Id 把
+ * 各 d_id 的附件合併顯示，所以圖面變更判定也必須跟著看整組，
+ * 否則會出現「畫面明明看得到舊圖，系統卻說這是首次發行」。
+ * 查不到料號字串時回退成只有自己，行為與舊版相同。
+ *
+ * @return int[] 至少包含傳入的 $dId
+ */
+function dwg_sibling_d_ids(PDO $pdo, int $dId): array {
+    try {
+        $st = $pdo->prepare("SELECT s.d_id FROM d_setting s
+                             WHERE s.D_Setting_Id = (SELECT D_Setting_Id FROM d_setting WHERE d_id=?)
+                               AND s.D_Setting_Id IS NOT NULL AND s.D_Setting_Id <> ''");
+        $st->execute([$dId]);
+        $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) { $ids = []; }
+    if (!in_array($dId, $ids, true)) $ids[] = $dId;
+    return array_values(array_unique($ids));
+}
+
 /** 傳入的標籤裡有沒有「自家出的圖」——有就代表這次上傳要填發行章日期 */
 function dwg_needs_issue_date(PDO $pdo, array $catIds): bool {
     $own = dwg_own_drawing_cat_ids($pdo);
@@ -60,7 +83,8 @@ function dwg_needs_issue_date(PDO $pdo, array $catIds): bool {
  */
 function dwg_classify_upload(PDO $pdo, int $dId, array $catIds, ?string $issueDate): array {
     $out = ['kind' => 'none', 'prev_date' => null, 'prev_name' => null, 'message' => '',
-            'needs_date' => false, 'issue_date' => $issueDate];
+            'needs_date' => false, 'issue_date' => $issueDate,
+            'prev_other_d_id' => null, 'prev_other_note' => ''];
     if (!dwg_needs_issue_date($pdo, $catIds)) return $out;
     $out['needs_date'] = true;
     if (!$issueDate) { $out['message'] = '此標籤屬於「自家出的圖」，必須填發行章日期'; return $out; }
@@ -68,15 +92,23 @@ function dwg_classify_upload(PDO $pdo, int $dId, array $catIds, ?string $issueDa
     $own = dwg_own_drawing_cat_ids($pdo);
     $prev = null;
     try {
+        // 比對範圍要涵蓋「同一個料號的所有 d_setting 列」，不能只看傳進來的 d_id。
+        // 同一個料號常常有多筆 d_setting（不同客戶、或建重複），圖卻是同一張；
+        // 只比單一 d_id 會把「其實已經有舊圖」誤判成首次發行而不跳變更登錄。
+        // 圖面檢視（bom_viewer/part_viewer）本來就是把同料號各 d_id 的附件合併顯示，
+        // 判定跟著一致才不會出現「畫面看得到舊圖、系統卻說這是首次發行」。
+        $dIds = dwg_sibling_d_ids($pdo, $dId);
+        $dPh  = implode(',', array_fill(0, count($dIds), '?'));
         // FIND_IN_SET 逐一比對（category_ids 是逗號字串），取發行章日期最新的一筆
         $ors = implode(' OR ', array_fill(0, count($own), 'FIND_IN_SET(?, pa.category_ids)'));
-        $st = $pdo->prepare("SELECT pa.id, pa.original_name, pa.issue_stamp_date
+        $st = $pdo->prepare("SELECT pa.id, pa.d_id, pa.original_name, pa.issue_stamp_date
                              FROM part_attachments pa
-                             WHERE pa.d_id=? AND pa.deleted_at IS NULL
+                             WHERE pa.d_id IN ($dPh) AND pa.deleted_at IS NULL
                                AND pa.issue_stamp_date IS NOT NULL AND ($ors)
                              ORDER BY pa.issue_stamp_date DESC, pa.id DESC LIMIT 1");
-        $st->execute(array_merge([$dId], $own));
+        $st->execute(array_merge($dIds, $own));
         $prev = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+        if ($prev && (int)$prev['d_id'] !== $dId) $out['prev_other_d_id'] = (int)$prev['d_id'];
     } catch (Throwable $e) { return $out; }
 
     if (!$prev) {
@@ -86,9 +118,19 @@ function dwg_classify_upload(PDO $pdo, int $dId, array $catIds, ?string $issueDa
     }
     $out['prev_date'] = (string)$prev['issue_stamp_date'];
     $out['prev_name'] = (string)($prev['original_name'] ?? '');
+    // 舊圖掛在同料號的另一筆 d_setting（多客戶或重複建檔）時要講明白，否則使用者會覺得莫名其妙
+    if (!empty($out['prev_other_d_id'])) {
+        try {
+            $cq = $pdo->prepare("SELECT COALESCE(c.customer,'（未設客戶）') FROM d_setting s
+                                 LEFT JOIN customer_list c ON c.customer_id=s.Customer_Id WHERE s.d_id=?");
+            $cq->execute([$out['prev_other_d_id']]);
+            $out['prev_other_note'] = '（前一版掛在同料號的另一筆料號主檔：' . (string)$cq->fetchColumn()
+                                    . '，d_id ' . $out['prev_other_d_id'] . '）';
+        } catch (Throwable $e) {}
+    }
     // 比大小用原始 Y-m-d，顯示才轉 YYYY.MM.DD（ai-rules/20：只管顯示，不動查詢與儲存）
     $cmp  = strcmp($issueDate, $out['prev_date']);
-    $prevShow = eg_fmt_date($out['prev_date']);
+    $prevShow = eg_fmt_date($out['prev_date']) . $out['prev_other_note'];
     if ($cmp > 0) {
         $out['kind'] = 'change';
         $out['message'] = '發行章日期比前一版（' . $prevShow . '）新＝這是一次圖面變更，請填寫變更內容。';

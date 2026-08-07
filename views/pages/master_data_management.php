@@ -18315,6 +18315,14 @@ function _pavRenderList() {
         // 版次 0 也要顯示：不可用 if(f.revision) 判斷（0 / "0" 會被當成沒填）
         if (f.revision !== null && f.revision !== undefined && String(f.revision) !== '')
             html += '<span style="flex-shrink:0;background:#eef4fb;color:#1a5276;font-size:10px;font-weight:600;padding:0 5px;border-radius:3px;" title="版次">Rev.'+escHtml(f.revision)+'</span>';
+        // 發行章日期：圖面變更的新舊依據，要能一眼看出哪些附件還沒設定。
+        // 自家出的圖沒設定＝之後偵測不到圖面變更，所以用紅字明講，不是只留白。
+        if (f.source !== 'quote') {
+            if (f.issue_stamp_date)
+                html += '<span style="flex-shrink:0;background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;font-size:10px;font-weight:600;padding:0 5px;border-radius:3px;" title="發行章日期（圖面變更的新舊依據）">發行 '+escHtml(egFmtDate(f.issue_stamp_date))+'</span>';
+            else if (_pavIsOwnDrawing(f))
+                html += '<span style="flex-shrink:0;background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;font-size:10px;font-weight:600;padding:0 5px;border-radius:3px;" title="自家出的圖但沒有發行章日期，無法偵測圖面變更——請按編輯補上">未設發行日</span>';
+        }
         html += '</div>';
         // 第二行：日期 · 上傳者 · 標籤（單行）
         html += '<div style="display:flex;gap:5px;margin-top:1px;align-items:center;flex-wrap:wrap;font-size:10px;color:#aaa;line-height:1.3;">';
@@ -18816,6 +18824,12 @@ function onPauFileChange(input) {
 /* ── 發行章日期：只有勾到「自家出的圖」標籤才要求填 ──────────────────────
    判準與適用標籤見 ai-rules/15-圖面變更判定依據.md。哪些標籤算自家出的圖，
    由 quotation_file_categories.is_own_drawing 決定（附件類別設定可調），不寫死 id。 */
+/** 這個附件的標籤裡有沒有「自家出的圖」（決定要不要要求發行章日期） */
+function _pavIsOwnDrawing(f) {
+    var own = _pauOwnDrawingCatIds();
+    if (!own.length) return false;
+    return String(f.category_ids||'').split(',').some(function(x){ return own.indexOf(x.trim()) >= 0; });
+}
 function _pauOwnDrawingCatIds() {
     return (_attachCatsCache||[]).filter(function(c){ return c.is_own_drawing==1||c.is_own_drawing==='1'; })
                                  .map(function(c){ return String(c.id); });
@@ -19071,6 +19085,7 @@ function dwgSkipChange() {
     if (_dwgCtx) setTimeout(function(){ openAttachAllView(_dwgCtx.dId, _pav.partNo||''); }, 200);
 }
 
+var _paeStoredIssue = '';   // 目前編輯中附件原本存的發行章日期（不可被「預設今天」蓋掉）
 function pavEditMeta() {
     var f = _pav.currentFile;
     if (!f || f.source === 'quote') return;
@@ -19078,7 +19093,8 @@ function pavEditMeta() {
     document.getElementById('pae-note').value = (f.note === null || f.note === undefined) ? '' : String(f.note);
     // 版次 0 也要帶回編輯框（不可用 || ''）
     document.getElementById('pae-revision').value = (f.revision === null || f.revision === undefined) ? '' : String(f.revision);
-    document.getElementById('pae-issue-date').value = (f.issue_stamp_date || '').substring(0,10);
+    _paeStoredIssue = (f.issue_stamp_date || '').substring(0,10);   // 這筆附件原本存的發行章日期
+    document.getElementById('pae-issue-date').value = _paeStoredIssue;
     var _paeBox0 = document.getElementById('pae-cat-chips'); if (_paeBox0) _paeBox0.style.borderColor = '';
     var _paeErr0 = document.getElementById('pae-cat-err'); if (_paeErr0) _paeErr0.style.display = 'none';
     loadActiveCatsForUpload(function(cats) {
@@ -19112,8 +19128,11 @@ function refreshPaeIssueRow() {
     var need = ids.some(function(id){ return own.indexOf(id)>=0; });
     wrap.style.display = need ? '' : 'none';
     if (!need) return;
+    // 編輯既有附件時，一律顯示它原本存的發行章日期，不可自動蓋成今天
+    //（原本會蓋今天，等於把「這張圖是哪一天發行的」偷偷改掉，且使用者不會發現）。
+    // 只有原本就沒存過日期的附件才帶今天當預設。
     var inp = document.getElementById('pae-issue-date');
-    if (inp && !inp.value) inp.value = _todayStr();
+    if (inp && !inp.value) inp.value = _paeStoredIssue || _todayStr();
     validatePaeIssue();
 }
 function validatePaeIssue() {
@@ -19150,13 +19169,20 @@ function submitAttachEdit() {
     var note = (document.getElementById('pae-note').value||'').trim();
     var revision = (document.getElementById('pae-revision').value||'').trim();
     if (!validatePaeIssue()) { document.getElementById('pae-issue-date').focus(); return; }
-    var issueDate = (document.getElementById('pae-issue-wrap').style.display !== 'none')
-                  ? (document.getElementById('pae-issue-date').value||'') : '';
-    $.post(PART_ATTACH_API_URL, { action:'update_meta', id:id, category_ids:catIds.join(','), note:note, revision:revision, issue_stamp_date:issueDate }, function(r) {
+    // 欄位沒顯示（這次的標籤不是自家出的圖）時**不送這個參數**，後端就會維持原值。
+    // 送空字串會把原本存好的發行章日期清成 NULL，而使用者只是改了標籤、完全不會發現。
+    var shownIssue = (document.getElementById('pae-issue-wrap').style.display !== 'none');
+    var issueDate  = shownIssue ? (document.getElementById('pae-issue-date').value||'') : null;
+    var payload = { action:'update_meta', id:id, category_ids:catIds.join(','), note:note, revision:revision };
+    if (shownIssue) payload.issue_stamp_date = issueDate;
+    $.post(PART_ATTACH_API_URL, payload, function(r) {
         if (!r.success) { showToast(r.message||'儲存失敗','error'); return; }
         // 更新本地資料
         var f = _pav.currentFile;
-        if (f) { f.category_ids = catIds.join(','); f.note = note; f.revision = revision; f.issue_stamp_date = issueDate; }
+        if (f) {
+            f.category_ids = catIds.join(','); f.note = note; f.revision = revision;
+            if (shownIssue) f.issue_stamp_date = issueDate;   // 沒送就別動本地快取，否則下次開編輯又會變成空的
+        }
         showToast('已儲存');
         $('#partAttachEditModal').modal('hide');
         _refreshPartAttachCell(_pav.dId);

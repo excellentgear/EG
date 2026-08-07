@@ -616,18 +616,32 @@ switch ($action) {
         // 同上：版次 "0" 是合法值，禁用 ?: null
         $note    = (trim($_POST['note']     ?? '') !== '') ? trim($_POST['note'])     : null;
         $revision = (trim($_POST['revision'] ?? '') !== '') ? trim($_POST['revision']) : null;
-        $mIssue   = trim($_POST['issue_stamp_date'] ?? '');
         if (!$id) { echo json_encode(['success'=>false,'message'=>'缺少 ID']); exit; }
-        if ($mIssue !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $mIssue)) {
+        // 沒送 issue_stamp_date 這個欄位＝這次不動它（前端在欄位隱藏時就不送）。
+        // 不可把「沒送」當成「清空」，否則使用者只是改個標籤，就把發行章日期洗掉而不自知。
+        $hasIssue = array_key_exists('issue_stamp_date', $_POST);
+        $mIssue   = $hasIssue ? trim((string)$_POST['issue_stamp_date']) : '';
+        if ($hasIssue && $mIssue !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $mIssue)) {
             echo json_encode(['success'=>false,'message'=>'發行章日期格式錯誤（需 YYYY-MM-DD）']); exit;
         }
         $mCatIds = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['category_ids'] ?? '')))));
         if (!$mCatIds) { echo json_encode(['success'=>false,'message'=>'請至少選擇一個附件類別標籤']); exit; }
-        if (dwg_needs_issue_date($pdo, $mCatIds) && $mIssue === '') {
-            echo json_encode(['success'=>false,'message'=>'此標籤屬於「自家出的圖」，請填發行章日期']); exit;
+        if (dwg_needs_issue_date($pdo, $mCatIds)) {
+            // 標籤是（或被改成）「自家出的圖」時一定要有日期；這次沒送就看資料庫原本有沒有
+            $cur = $mIssue;
+            if (!$hasIssue) {
+                $q = $pdo->prepare("SELECT issue_stamp_date FROM part_attachments WHERE id=?");
+                $q->execute([$id]); $cur = (string)$q->fetchColumn();
+            }
+            if ($cur === '') { echo json_encode(['success'=>false,'message'=>'此標籤屬於「自家出的圖」，請填發行章日期']); exit; }
         }
-        $pdo->prepare("UPDATE part_attachments SET category_ids=?,tag_var_values=?,note=?,revision=?,issue_stamp_date=? WHERE id=?")
-            ->execute([$catIds, $tagVals, $note, $revision, ($mIssue !== '' ? $mIssue : null), $id]);
+        if ($hasIssue) {
+            $pdo->prepare("UPDATE part_attachments SET category_ids=?,tag_var_values=?,note=?,revision=?,issue_stamp_date=? WHERE id=?")
+                ->execute([$catIds, $tagVals, $note, $revision, ($mIssue !== '' ? $mIssue : null), $id]);
+        } else {
+            $pdo->prepare("UPDATE part_attachments SET category_ids=?,tag_var_values=?,note=?,revision=? WHERE id=?")
+                ->execute([$catIds, $tagVals, $note, $revision, $id]);
+        }
         echo json_encode(['success'=>true]);
         break;
 
