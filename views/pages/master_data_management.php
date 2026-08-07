@@ -1215,6 +1215,8 @@ require_once __DIR__ . '/../../src/common/rbac.php';
 // 料號別名（客戶代號／等同料號）：唯一實作點，禁止各頁自寫別名 SQL
 require_once __DIR__ . '/../../src/common/part_alias_lib.php';
 eg_part_alias_ensure_table($pdo);
+// 移轉綁定前「查看完整綁定清單」沿用資料急救台的關聯掃描引擎，不重寫一套
+require_once __DIR__ . '/../../src/common/data_console_lib.php';
 $_mdFeats = [];
 try { $_mdFeats = rbac_user_features($pdo, (int)$user_id); } catch (Exception $_e) {}
 $_mdRbacAll = in_array('all', $_mdFeats, true);
@@ -3578,11 +3580,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $pdo->prepare("UPDATE order_track    SET Client_name_ID=? WHERE Client_name_ID=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE is_list        SET Client_id=?       WHERE Client_id=?")->execute([$tgt_id,$src_id]);
             $pdo->prepare("UPDATE quotation_list SET client_id=?       WHERE client_id=?")->execute([$tgt_id,$src_id]);
+            // ── 客戶其他直接綁定表（2026-08-07 補齊，避免移轉後變孤兒）───────────
+            $pdo->prepare("UPDATE acc_invoice SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE acc_receipt SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE customer_account_terms SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE customer_contacts SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE customer_settlement_exceptions SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE qc_tolerance_table SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE sales_track SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE stock_items SET client_id=? WHERE client_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE d_setting_alias SET customer_id=? WHERE customer_id=?")->execute([$tgt_id,$src_id]);
+            // 以下有唯一鍵限制，兩邊若剛好有重複分類會衝突：捕捉後跳過，不讓單一表擋下整筆移轉
+            $custSkipped = [];
+            $custUniqueTables = [
+                ['customer_industry_mapping', "UPDATE customer_industry_mapping SET customer_id=? WHERE customer_id=?"],
+                ['customer_industry_sub_mapping', "UPDATE customer_industry_sub_mapping SET customer_id=? WHERE customer_id=?"],
+                ['customer_sales', "UPDATE customer_sales SET customer_id=? WHERE customer_id=?"],
+            ];
+            foreach ($custUniqueTables as [$label,$sql]) {
+                try { $pdo->prepare($sql)->execute([$tgt_id,$src_id]); }
+                catch (Throwable $ue) { $custSkipped[] = $label; }
+            }
             // 記錄 alias，供歷史查詢追溯
             try { $pdo->prepare("INSERT INTO customer_aliases (old_id,new_id,created_by) VALUES (?,?,?)")->execute([$src_id,$tgt_id,$uid]); } catch(Exception $ae){}
             $pdo->commit();
-            _log_audit($pdo,'update','customer',$src_id,$src['customer'],[['field'=>'綁定移轉','old'=>$src_id,'new'=>$tgt_id.'（所有關聯資料）']],$uid,_get_operator($pdo,$uid));
-            echo json_encode(['success'=>true,'message'=>'移轉完成，所有關聯資料已改為指向「'.$tgt['customer'].'（'.$tgt_id.'）」']);
+            $cust_skip_note = $custSkipped ? ('；以下表因目標客戶已有重複資料未能自動合併，請至該功能手動檢查：'.implode('、',array_unique($custSkipped))) : '';
+            _log_audit($pdo,'update','customer',$src_id,$src['customer'],[['field'=>'綁定移轉','old'=>$src_id,'new'=>$tgt_id.'（所有關聯資料）'.$cust_skip_note]],$uid,_get_operator($pdo,$uid));
+            echo json_encode(['success'=>true,'message'=>'移轉完成，所有關聯資料已改為指向「'.$tgt['customer'].'（'.$tgt_id.'）」'.$cust_skip_note]);
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
@@ -3662,11 +3686,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 註：qc_inspection_version（檢驗標準版本）刻意不自動搬——目標料號通常已有自己的生效版本，
             //     兩邊合併會出現兩個 is_active=1，屬品質決策，需人工到「檢驗標準管理」處理。
             try { $pdo->prepare("UPDATE qc_drawing_change SET d_id=? WHERE d_id=?")->execute([$tgt_id,$src_id]); } catch (Exception $qe) {}
+
+            // ── 料號附件與其他直接綁定表（2026-08-07 補齊，避免移轉後變孤兒）──────
+            $skipped = [];
+            // 附件：直接改指向目標料號，實體檔案路徑與 d_id 無關，不需搬檔案
+            $pdo->prepare("UPDATE part_attachments SET d_id=? WHERE d_id=?")->execute([$tgt_id,$src_id]);
+            // 料號別名／舊料號／專用料號／專用機台／廠商單價／標籤／齒輪參數／QC進貨檢驗表：一對多，直接搬
+            $pdo->prepare("UPDATE d_setting_alias SET d_id=? WHERE d_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE d_setting_alias SET linked_d_id=? WHERE linked_d_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE d_setting_machine_map SET d_id=? WHERE d_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE d_setting_vendor_map SET d_id=? WHERE d_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE item_label_map SET d_id=? WHERE d_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE d_setting_gear SET d_setting_id=? WHERE d_setting_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE qc_check_form SET d_id=? WHERE d_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE sales_track SET d_setting_id=? WHERE d_setting_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE d_setting_dedicated_part_map SET d_id=? WHERE d_id=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE d_setting_dedicated_part_map SET ref_d_id=? WHERE ref_d_id=?")->execute([$tgt_id,$src_id]);
+            // 設計備註：target_id 是料號/客戶共用的多型欄位，用 target_type='part' 限定範圍避免誤改客戶備註
+            $pdo->prepare("UPDATE design_notes SET target_id=? WHERE target_type='part' AND target_id=?")->execute([$tds,$src['D_Setting_Id']]);
+            // 以下有唯一鍵限制，兩邊若剛好有重複資料會衝突：捕捉後跳過，不讓單一表擋下整筆移轉
+            $uniqueTables = [
+                ['d_setting_old_part_links', "UPDATE d_setting_old_part_links SET d_id=? WHERE d_id=?", [$tgt_id,$src_id]],
+                ['d_setting_old_part_links(舊料號)', "UPDATE d_setting_old_part_links SET old_d_id=? WHERE old_d_id=?", [$tgt_id,$src_id]],
+                ['stock_item_units', "UPDATE stock_item_units SET d_setting_id=? WHERE d_setting_id=?", [$tgt_id,$src_id]],
+                ['stock_safety_stock', "UPDATE stock_safety_stock SET d_id=?, d_setting_id=? WHERE d_setting_id=?", [$tds,$tgt_id,$src_id]],
+            ];
+            foreach ($uniqueTables as [$label,$sql,$params]) {
+                try { $pdo->prepare($sql)->execute($params); }
+                catch (Throwable $ue) { $skipped[] = $label; }
+            }
+            // 報價附件的 linked_parts 是料號字串清單（JSON），要把來源料號字串換成目標料號字串，否則移轉後變孤兒字串
+            $qaStmt = $pdo->prepare("SELECT id, linked_parts FROM quotation_attachments WHERE linked_parts IS NOT NULL AND JSON_CONTAINS(linked_parts, JSON_QUOTE(?))");
+            $qaStmt->execute([$src['D_Setting_Id']]);
+            foreach ($qaStmt->fetchAll(PDO::FETCH_ASSOC) as $qaRow) {
+                $parts = json_decode($qaRow['linked_parts'], true);
+                if (!is_array($parts)) continue;
+                $parts = array_values(array_unique(array_map(fn($p) => $p === $src['D_Setting_Id'] ? $tds : $p, $parts)));
+                $pdo->prepare("UPDATE quotation_attachments SET linked_parts=? WHERE id=?")->execute([json_encode($parts, JSON_UNESCAPED_UNICODE), $qaRow['id']]);
+            }
+
             $pdo->commit();
             $op_name = _get_operator($pdo, $uid);
             $cust_note = $sync_cust ? ('，客戶一併改為「'.($tgt_cust_name ?: $tgt_cust_id).'」') : '';
-            _log_audit($pdo,'update','part',$src['D_Setting_Id'],null,[['field'=>'綁定移轉','old'=>$src['D_Setting_Id'],'new'=>$tds.'（所有關聯資料'.$cust_note.'）']],$uid,$op_name);
-            echo json_encode(['success'=>true,'message'=>'移轉完成，所有關聯資料已改為指向「'.$tds.'」'.$cust_note]);
+            $skip_note = $skipped ? ('；以下表因目標料號已有重複資料未能自動合併，請至該功能手動檢查：'.implode('、',array_unique($skipped))) : '';
+            _log_audit($pdo,'update','part',$src['D_Setting_Id'],null,[['field'=>'綁定移轉','old'=>$src['D_Setting_Id'],'new'=>$tds.'（所有關聯資料'.$cust_note.'）'.$skip_note]],$uid,$op_name);
+            echo json_encode(['success'=>true,'message'=>'移轉完成，所有關聯資料（含附件）已改為指向「'.$tds.'」'.$cust_note.$skip_note]);
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
@@ -3710,6 +3774,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // ── 完整綁定清單（料號/客戶/廠商共用）：沿用資料急救台的關聯掃描引擎 dc_referencing_columns，
+    //    自動找出全站所有引用該主體表的表與欄位，不需要每個模組各自維護清單，新模組加欄位也會自動被抓到。
+    if ($_POST['action'] === 'get_binding_report') {
+        try {
+            $entityMap = ['part' => 'd_setting', 'customer' => 'customer_list', 'maker' => 'maker_list'];
+            $entity = trim($_POST['entity'] ?? '');
+            if (!isset($entityMap[$entity])) throw new Exception('未知的綁定類型');
+            $table  = $entityMap[$entity];
+            $idVal  = trim($_POST['id'] ?? '');       // 整數 id（料號用 d_id）
+            $strVal = trim($_POST['str_id'] ?? '');   // 字串 id（料號用 D_Setting_Id、客戶/廠商用其代號）
+            if ($idVal === '' && $strVal === '') throw new Exception('缺少查詢 id');
+            $refs = dc_referencing_columns($pdo, $table);
+            $rows = [];
+            foreach ($refs as $r) {
+                $t = $r['table']; $c = $r['column'];
+                try {
+                    if ($idVal !== '' && $strVal !== '') {
+                        $q = $pdo->prepare("SELECT COUNT(*) FROM `$t` WHERE `$c`=? OR `$c`=?");
+                        $q->execute([$idVal, $strVal]);
+                    } else {
+                        $q = $pdo->prepare("SELECT COUNT(*) FROM `$t` WHERE `$c`=?");
+                        $q->execute([$idVal !== '' ? $idVal : $strVal]);
+                    }
+                    $n = (int)$q->fetchColumn();
+                } catch (Throwable $qe) { $n = 0; }
+                if ($n > 0) $rows[] = ['table' => $t, 'column' => $c, 'count' => $n];
+            }
+            usort($rows, fn($a,$b) => $b['count'] <=> $a['count']);
+            echo json_encode(['success'=>true,'rows'=>$rows]);
+        } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
     // ── 廠商綁定移轉（不可逆，需 A 或 CDRU 權限）────────────────────────────
     if ($_POST['action'] === 'transfer_maker_binding') {
         try {
@@ -3724,11 +3821,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$tgt) throw new Exception('找不到目標廠商');
             $pdo->beginTransaction();
             $pdo->prepare("UPDATE bom_ing SET maker_id_no=?, maker_id=? WHERE maker_id_no=?")->execute([$tgt_id,$tgt['maker_id'],$src_id]);
+            // ── 廠商其他直接綁定表（2026-08-07 補齊，避免移轉後變孤兒）───────────
+            $pdo->prepare("UPDATE bom_ing_outsource_batch SET maker_id_no=?, maker_id=? WHERE maker_id_no=?")->execute([$tgt_id,$tgt['maker_id'],$src_id]);
+            $pdo->prepare("UPDATE d_setting_vendor_map SET maker_id_no=? WHERE maker_id_no=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE maker_contacts SET maker_id_no=? WHERE maker_id_no=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE maker_main_cat_process_tag SET maker_id_no=? WHERE maker_id_no=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE maker_proc_label_map SET maker_id_no=? WHERE maker_id_no=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE vendor_audit SET maker_id_no=? WHERE maker_id_no=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE vendor_audit_target SET maker_id_no=? WHERE maker_id_no=?")->execute([$tgt_id,$src_id]);
+            $pdo->prepare("UPDATE kpi_excluded_maker SET maker_id_no=?, maker_id=? WHERE maker_id_no=?")->execute([$tgt_id,$tgt['maker_id'],$src_id]);
+            // 以下有唯一鍵限制，兩邊若剛好有重複資料會衝突：捕捉後跳過，不讓單一表擋下整筆移轉
+            $makerSkipped = [];
+            $makerUniqueTables = [
+                ['maker_proc_process_assignment', "UPDATE maker_proc_process_assignment SET maker_id_no=? WHERE maker_id_no=?", [$tgt_id,$src_id]],
+                ['maker_sub_category_mapping', "UPDATE maker_sub_category_mapping SET maker_id_no=? WHERE maker_id_no=?", [$tgt_id,$src_id]],
+                ['kpi_special_maker', "UPDATE kpi_special_maker SET maker_id_no=?, maker_id=? WHERE maker_id_no=?", [$tgt_id,$tgt['maker_id'],$src_id]],
+            ];
+            foreach ($makerUniqueTables as [$label,$sql,$params]) {
+                try { $pdo->prepare($sql)->execute($params); }
+                catch (Throwable $ue) { $makerSkipped[] = $label; }
+            }
             // 記錄 alias，供歷史查詢追溯
             try { $pdo->prepare("INSERT INTO maker_aliases (old_id,new_id,created_by) VALUES (?,?,?)")->execute([$src_id,$tgt_id,$uid]); } catch(Exception $ae){}
             $pdo->commit();
-            _log_audit($pdo,'update','vendor',$src_id,$src['maker_id'],[['field'=>'綁定移轉','old'=>$src_id,'new'=>$tgt_id.'（所有加工單）']],$uid,_get_operator($pdo,$uid));
-            echo json_encode(['success'=>true,'message'=>'移轉完成，所有加工單已改為指向「'.$tgt['maker_id'].'（'.$tgt_id.'）」']);
+            $maker_skip_note = $makerSkipped ? ('；以下表因目標廠商已有重複資料未能自動合併，請至該功能手動檢查：'.implode('、',array_unique($makerSkipped))) : '';
+            _log_audit($pdo,'update','vendor',$src_id,$src['maker_id'],[['field'=>'綁定移轉','old'=>$src_id,'new'=>$tgt_id.'（所有加工單）'.$maker_skip_note]],$uid,_get_operator($pdo,$uid));
+            echo json_encode(['success'=>true,'message'=>'移轉完成，所有加工單已改為指向「'.$tgt['maker_id'].'（'.$tgt_id.'）」'.$maker_skip_note]);
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
@@ -8080,6 +8198,10 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
         </div>
         <div class="alert alert-warning" style="margin-top:10px;font-size:12px;padding:8px 12px;"><i class="fa fa-warning"></i> 此操作<strong>不可逆</strong>，移轉後所有訂單/生產/出貨/報價/退貨單將指向目標料號，無法還原。</div>
         <div style="margin-top:8px;">
+            <button class="btn btn-default btn-xs" onclick="loadBindingReport('part', _dpm_d_id, _dpm_name, 'dpm-binding-report')"><i class="fa fa-search"></i> 查看完整綁定清單（含附件）</button>
+        </div>
+        <div id="dpm-binding-report" style="margin-top:6px;"></div>
+        <div style="margin-top:8px;">
             <span style="font-size:12px;color:#555;">請輸入大寫 <strong>OK</strong> 確認移轉：</span>
             <input type="text" id="dpm-transfer-ok" class="form-control" placeholder="輸入 OK" maxlength="5" style="width:100px;display:inline-block;margin:0 8px;text-transform:uppercase;">
             <button class="btn btn-warning btn-sm" onclick="doTransferPart()"><i class="fa fa-exchange"></i> 確認移轉</button>
@@ -8137,6 +8259,10 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
         </div>
         <div class="alert alert-warning" style="margin-top:10px;font-size:12px;padding:8px 12px;"><i class="fa fa-warning"></i> 此操作<strong>不可逆</strong>，移轉後所有料號/訂單/出貨/報價單將指向目標客戶，無法還原。</div>
         <div style="margin-top:8px;">
+            <button class="btn btn-default btn-xs" onclick="loadBindingReport('customer', '', _dcm_id, 'dcm-binding-report')"><i class="fa fa-search"></i> 查看完整綁定清單</button>
+        </div>
+        <div id="dcm-binding-report" style="margin-top:6px;"></div>
+        <div style="margin-top:8px;">
             <span style="font-size:12px;color:#555;">請輸入大寫 <strong>OK</strong> 確認移轉：</span>
             <input type="text" id="dcm-transfer-ok" class="form-control" placeholder="輸入 OK" maxlength="5" style="width:100px;display:inline-block;margin:0 8px;text-transform:uppercase;">
             <button class="btn btn-warning btn-sm" onclick="doTransferCust()"><i class="fa fa-exchange"></i> 確認移轉</button>
@@ -8190,6 +8316,10 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
             </div>
         </div>
         <div class="alert alert-warning" style="margin-top:10px;font-size:12px;padding:8px 12px;"><i class="fa fa-warning"></i> 此操作<strong>不可逆</strong>，移轉後所有加工單將指向目標廠商，無法還原。</div>
+        <div style="margin-top:8px;">
+            <button class="btn btn-default btn-xs" onclick="loadBindingReport('maker', '', _dmkm_id, 'dmkm-binding-report')"><i class="fa fa-search"></i> 查看完整綁定清單</button>
+        </div>
+        <div id="dmkm-binding-report" style="margin-top:6px;"></div>
         <div style="margin-top:8px;">
             <span style="font-size:12px;color:#555;">請輸入大寫 <strong>OK</strong> 確認移轉：</span>
             <input type="text" id="dmkm-transfer-ok" class="form-control" placeholder="輸入 OK" maxlength="5" style="width:100px;display:inline-block;margin:0 8px;text-transform:uppercase;">
@@ -8926,8 +9056,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
         <div id="dwg-chips" style="display:flex;flex-wrap:wrap;gap:4px;padding:5px;background:#fafbfc;border:1px solid #e4e8ed;border-radius:4px;min-height:32px;margin-bottom:4px;"></div>
         <div style="position:relative;">
             <input type="text" id="dwg-people-q" class="form-control input-sm" autocomplete="off"
-                   placeholder="輸入姓名或部門名稱篩選，點選加入（選部門＝該部門含子部門的在職人員全收到）"
-                   oninput="renderDwgPicker()" onfocus="renderDwgPicker()">
+                   placeholder="輸入姓名或部門名稱篩選，點選加入（選部門＝該部門含子部門的在職人員全收到）">
             <div id="dwg-picker" style="display:none;position:absolute;z-index:1060;left:0;right:0;top:100%;background:#fff;
                  border:1px solid #e4e8ed;border-radius:0 0 4px 4px;max-height:210px;overflow:auto;box-shadow:0 6px 14px rgba(0,0,0,.12);"></div>
         </div>
@@ -9169,6 +9298,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_ack_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_ack_picker.js') ?>"></script>
 <script src="../../resource/js/o3dv.min.js"></script>
 
 <script>
@@ -14071,6 +14201,7 @@ function deletePart(d_id, name) {
 function showPartTransferSection() {
     document.getElementById('dpm-blocked').style.display = 'none';
     document.getElementById('dpm-transfer').style.display = '';
+    document.getElementById('dpm-binding-report').innerHTML = '';
 }
 
 var _dpmTgtTimer = null;
@@ -14120,6 +14251,23 @@ function doDeletePart() {
     api({ action:'delete_part', d_id:_dpm_d_id }).done(function(r) {
         if (r.success) { showToast(r.message,'success'); _afterPartOp(); }
         else showToast(r.message,'error');
+    });
+}
+
+// 移轉/刪除前查看完整綁定清單：料號/客戶/廠商共用，後端沿用資料急救台的關聯掃描引擎
+function loadBindingReport(entity, idVal, strVal, containerId) {
+    var box = document.getElementById(containerId);
+    box.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 全站掃描中…';
+    api({ action:'get_binding_report', entity:entity, id:idVal||'', str_id:strVal||'' }).done(function(r) {
+        if (!r.success) { box.innerHTML = '<span style="color:#c0392b;">'+escHtml(r.message||'查詢失敗')+'</span>'; return; }
+        if (!r.rows || !r.rows.length) { box.innerHTML = '<span style="color:#888;font-size:11px;">全站掃描：查無其他表引用此筆資料</span>'; return; }
+        var html = '<div style="font-size:11px;color:#888;margin-bottom:4px;">全站掃描結果（含附件，共 '+r.rows.length+' 張表有綁定）：</div>'
+                 + '<table class="table table-condensed table-bordered" style="font-size:11px;margin-bottom:0;"><thead><tr><th>資料表</th><th>欄位</th><th>筆數</th></tr></thead><tbody>';
+        r.rows.forEach(function(row){
+            html += '<tr><td>'+escHtml(row.table)+'</td><td>'+escHtml(row.column)+'</td><td>'+row.count+'</td></tr>';
+        });
+        html += '</tbody></table>';
+        box.innerHTML = html;
     });
 }
 
@@ -15022,6 +15170,7 @@ function deleteCustomer(id, name) {
 function showCustTransferSection() {
     document.getElementById('dcm-blocked').style.display = 'none';
     document.getElementById('dcm-transfer').style.display = '';
+    document.getElementById('dcm-binding-report').innerHTML = '';
 }
 
 var _dcmTgtTimer = null;
@@ -15119,6 +15268,7 @@ function deleteMaker(id, name) {
 function showMakerTransferSection() {
     document.getElementById('dmkm-blocked').style.display = 'none';
     document.getElementById('dmkm-transfer').style.display = '';
+    document.getElementById('dmkm-binding-report').innerHTML = '';
 }
 
 var _dmkmTgtTimer = null;
@@ -18845,7 +18995,7 @@ function submitPartAttachUpload() {
 }
 
 /* ── 圖面變更登錄跳窗（附件上傳判定為「變更」時自動跳出）────────────────── */
-var _dwgCtx = null, _dwgPeople = null;
+var _dwgCtx = null;
 function openDwgChangeModal(ctx) {
     _dwgCtx = ctx;
     document.getElementById('dwg-attach-id').value = ctx.attachId;
@@ -18860,133 +19010,27 @@ function openDwgChangeModal(ctx) {
     document.getElementById('dwg-newrev').value  = '';
     document.getElementById('dwg-cdoc').value    = '';
     document.getElementById('dwg-source').value  = '客戶';
-    document.getElementById('dwg-people-q').value = '';
     document.getElementById('dwg-summary-err').style.display = 'none';
     document.getElementById('dwg-summary').style.borderColor = '';
-    _dwgPickedUsers = []; _dwgPickedDepts = [];
-    document.getElementById('dwg-picker').style.display = 'none';
-    renderDwgChips();
+    _dwgEnsurePicker().clear();
     $.post(PART_ATTACH_API_URL, { action:'dwg_lookups' }, function(r) {
         if (!r || !r.success) return;
         document.getElementById('dwg-fromproc').innerHTML = '<option value="">（全部製程都提醒）</option>'
             + (r.processes||[]).map(function(p){ return '<option value="'+p.ProcessNo+'">'+escHtml(p.ProcessName)+'</option>'; }).join('');
-        _dwgPeople     = r.people || [];
-        _dwgPickDepts  = r.departments || [];
+        _dwgEnsurePicker().setData(r);
     }, 'json');
     $('#dwgChangeModal').modal('show');
 }
-// 點挑選清單以外的地方就收起來（點到清單本身要留著，否則 onclick 來不及觸發）
-$(document).on('mousedown', function(e) {
-    if (!$(e.target).closest('#dwg-picker,#dwg-people-q').length) {
-        var b = document.getElementById('dwg-picker');
-        if (b) b.style.display = 'none';
-    }
-});
-/* ── 簽收對象挑選：部門與個人混合，已選或已被部門涵蓋者反灰不可重複選 ──────
-   部門一律連子部門（組織是樹狀），後端 dwg_lookups 已把每個部門的實際在職成員
-   user_ids 一起送過來，所以前端算得出「這個人已經被某個部門涵蓋了」。 */
-var _dwgPickDepts = [], _dwgPickedUsers = [], _dwgPickedDepts = [];
-
-/** 目前已被選中的部門所涵蓋的 user_id 集合 */
-function _dwgCoveredByDept() {
-    var cov = {};
-    _dwgPickedDepts.forEach(function(d){ (d.user_ids||[]).forEach(function(u){ cov[u] = d; }); });
-    return cov;
-}
-function renderDwgPicker() {
-    var box = document.getElementById('dwg-picker');
-    if (!_dwgPeople) { box.style.display='none'; return; }
-    var q = (document.getElementById('dwg-people-q').value||'').trim();
-    var cov = _dwgCoveredByDept();
-    var pickedU = {}; _dwgPickedUsers.forEach(function(p){ pickedU[p.id] = 1; });
-    var pickedD = {}; _dwgPickedDepts.forEach(function(d){ pickedD[d.id] = 1; });
-
-    function row(disabled, reason, onclick, html) {
-        return '<div ' + (disabled ? '' : 'onclick="'+onclick+'" ') + 'style="padding:5px 9px;font-size:12px;border-bottom:1px solid #f2f4f6;'
-             + (disabled ? 'color:#c3c9d0;background:#fafbfc;cursor:not-allowed;' : 'cursor:pointer;color:#333;')
-             + '" ' + (disabled ? '' : 'onmouseover="this.style.background=\'#fff7ec\'" onmouseout="this.style.background=\'\'"') + '>'
-             + html + (reason ? ' <span style="font-size:10px;color:#c3c9d0;">'+escHtml(reason)+'</span>' : '') + '</div>';
-    }
-    var html = '';
-    // 部門
-    var ds = _dwgPickDepts.filter(function(d){ return !q || d.path.indexOf(q) >= 0; });
-    if (ds.length) {
-        html += '<div style="padding:3px 9px;font-size:10px;color:#999;background:#f7f9fa;font-weight:700;">部門</div>';
-        ds.forEach(function(d) {
-            var dis = !!pickedD[d.id];
-            html += row(dis, dis ? '已選' : '', 'dwgPickDept('+d.id+')',
-                '<i class="fa fa-sitemap" style="color:#C77C1A;"></i> ' + escHtml(d.path)
-                + ' <span style="font-size:10px;color:#95a5a6;">' + d.count + ' 人</span>');
+/* 簽收對象挑選器：走共用檔 resource/js/eg_ack_picker.js（部門＋人員混合、已選反灰、
+   人員被部門涵蓋也反灰）。圖面變更紀錄頁也用同一支，所以不在各頁自刻。 */
+var _dwgPicker = null;
+function _dwgEnsurePicker() {
+    if (!_dwgPicker) {
+        _dwgPicker = EGAckPicker.create({
+            chips:'#dwg-chips', input:'#dwg-people-q', dropdown:'#dwg-picker', summary:'#dwg-ack-summary'
         });
     }
-    // 人員：欄位順序固定「部門／職稱／姓名」（人員列表鐵則）
-    var ps = _dwgPeople.filter(function(p){
-        if (!q) return true;
-        return (p.name||'').indexOf(q) >= 0 || (p.dept_name||'').indexOf(q) >= 0 || (p.position||'').indexOf(q) >= 0;
-    });
-    if (ps.length) {
-        html += '<div style="padding:3px 9px;font-size:10px;color:#999;background:#f7f9fa;font-weight:700;">人員</div>';
-        ps.forEach(function(p) {
-            var byDept = cov[p.id];
-            var dis = !!pickedU[p.id] || !!byDept;
-            var reason = pickedU[p.id] ? '已選' : (byDept ? '已含在「'+byDept.name+'」內' : '');
-            html += row(dis, reason, 'dwgPickUser('+p.id+')',
-                '<span style="color:#8e6b45;">' + escHtml(p.dept_name||'—') + '</span>　'
-                + '<span style="color:#95a5a6;">' + escHtml(p.position||'') + '</span>　'
-                + '<b>' + escHtml(p.name||'') + '</b>'
-                + (p.leave_note ? ' <span style="font-size:10px;color:#e67e22;">※'+escHtml(p.leave_note)+'</span>' : ''));
-        });
-    }
-    box.innerHTML = html || '<div style="padding:8px 9px;font-size:12px;color:#aaa;">查無符合的部門或人員</div>';
-    box.style.display = '';
-}
-function dwgPickDept(id) {
-    var d = _dwgPickDepts.find(function(x){ return x.id===id; });
-    if (!d || _dwgPickedDepts.some(function(x){ return x.id===id; })) return;
-    _dwgPickedDepts.push(d);
-    // 被這個部門涵蓋的個人選擇就多餘了，移掉避免同一人出現兩次來源
-    var cov = {}; (d.user_ids||[]).forEach(function(u){ cov[u]=1; });
-    _dwgPickedUsers = _dwgPickedUsers.filter(function(p){ return !cov[p.id]; });
-    renderDwgChips(); renderDwgPicker();
-}
-function dwgPickUser(id) {
-    var p = _dwgPeople.find(function(x){ return x.id===id; });
-    if (!p || _dwgPickedUsers.some(function(x){ return x.id===id; })) return;
-    if (_dwgCoveredByDept()[id]) return;                 // 已被部門涵蓋，不重複加
-    _dwgPickedUsers.push(p);
-    renderDwgChips(); renderDwgPicker();
-}
-function dwgRemoveDept(id) {
-    _dwgPickedDepts = _dwgPickedDepts.filter(function(d){ return d.id!==id; });
-    renderDwgChips(); renderDwgPicker();
-}
-function dwgRemoveUser(id) {
-    _dwgPickedUsers = _dwgPickedUsers.filter(function(p){ return p.id!==id; });
-    renderDwgChips(); renderDwgPicker();
-}
-function renderDwgChips() {
-    var box = document.getElementById('dwg-chips');
-    var h = '';
-    _dwgPickedDepts.forEach(function(d) {
-        h += '<span style="display:inline-flex;align-items:center;gap:4px;background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;border-radius:11px;padding:1px 8px;font-size:12px;">'
-           + '<i class="fa fa-sitemap"></i>' + escHtml(d.path) + '（' + d.count + '人）'
-           + '<a href="javascript:void(0)" onclick="dwgRemoveDept('+d.id+')" style="color:#c0392b;text-decoration:none;font-weight:700;">&times;</a></span>';
-    });
-    _dwgPickedUsers.forEach(function(p) {
-        h += '<span style="display:inline-flex;align-items:center;gap:4px;background:#f0f8ff;color:#1a5276;border:1px solid #aed6f1;border-radius:11px;padding:1px 8px;font-size:12px;">'
-           + escHtml((p.dept_name?p.dept_name+' ':'') + (p.position?p.position+' ':'') + p.name)
-           + '<a href="javascript:void(0)" onclick="dwgRemoveUser('+p.id+')" style="color:#c0392b;text-decoration:none;font-weight:700;">&times;</a></span>';
-    });
-    box.innerHTML = h || '<span style="color:#bbb;font-size:12px;padding:2px 4px;">尚未選擇（下方輸入姓名或部門名稱來加入）</span>';
-    // 實際會通知幾個人：部門展開後與個人合併去重（跟後端 dwg_expand_ack_targets 同一套算法）
-    var all = {};
-    _dwgPickedDepts.forEach(function(d){ (d.user_ids||[]).forEach(function(u){ all[u]=1; }); });
-    _dwgPickedUsers.forEach(function(p){ all[p.id]=1; });
-    var n = Object.keys(all).length;
-    var sum = document.getElementById('dwg-ack-summary');
-    sum.style.color = n ? '#27ae60' : '#7f8c8d';
-    sum.textContent = n ? ('實際會通知 ' + n + ' 人（部門展開後去重，同一人只會收到一次）')
-                        : '尚未指定簽收對象——不指定就不會有人收到通知';
+    return _dwgPicker;
 }
 function submitDwgChange() {
     var summary = (document.getElementById('dwg-summary').value||'').trim();
@@ -18996,8 +19040,8 @@ function submitDwgChange() {
         document.getElementById('dwg-summary').focus();
         return;
     }
-    var acks  = _dwgPickedUsers.map(function(p){ return p.id; });
-    var adepts = _dwgPickedDepts.map(function(d){ return d.id; });
+    var sel = _dwgEnsurePicker().getSelection();
+    var acks = sel.users, adepts = sel.depts;
     var btn = document.getElementById('dwg-save-btn');
     btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 建立中…';
     $.post(PART_ATTACH_API_URL, {

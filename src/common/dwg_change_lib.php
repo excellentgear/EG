@@ -127,6 +127,64 @@ function dwg_expand_ack_targets(PDO $pdo, array $userIds, array $deptIds): array
 }
 
 /**
+ * 簽收對象挑選器（resource/js/eg_ack_picker.js）用的人員與部門清單。
+ *
+ * 兩個入口共用（圖面變更紀錄頁的 lookups、料號附件的 dwg_lookups），
+ * 免得一邊改了另一邊沒改。人員一律走 people_lib（人員列表鐵則：不列離職與特殊帳號、
+ * 標記長期請假、依部門/職稱 sort_order 排序，欄位順序部門／職稱／姓名）。
+ *
+ * 部門成員必須用 user_department_position_map 的**全部**對應，不能只用 people_lib
+ * 挑出來的主要職務部門——一人可掛多個部門，而 dwg_expand_ack_targets() 走
+ * eg_people_list(['dept_ids'=>…]) 是「任一對應命中就算」，只看主要部門會少算，
+ * 造成畫面顯示的人數比實際通知人數少，也會讓某些部門整個不出現在清單裡。
+ *
+ * @return array{people:array, departments:array}
+ */
+function dwg_ack_lookup_data(PDO $pdo): array {
+    $people = []; $depts = [];
+    try {
+        require_once __DIR__ . '/people_lib.php';
+        require_once __DIR__ . '/org_role_lib.php';
+        $rows = eg_people_list($pdo);
+        foreach ($rows as $r) {
+            $people[] = [
+                'id'         => $r['id'],
+                'name'       => $r['user_cname'],
+                'dept_id'    => $r['dept_id'],
+                'dept_name'  => $r['dept_name'],
+                'position'   => $r['position_name'],
+                'leave_note' => $r['leave_note'] ?? '',
+            ];
+        }
+        $byDept  = [];
+        $liveIds = array_map(function ($r) { return (int)$r['id']; }, $rows);
+        if ($liveIds) {
+            $ph = implode(',', array_fill(0, count($liveIds), '?'));
+            $mp = $pdo->prepare("SELECT DISTINCT user_id, department_id FROM user_department_position_map WHERE user_id IN ($ph)");
+            $mp->execute($liveIds);
+            foreach ($mp->fetchAll(PDO::FETCH_ASSOC) as $m) {
+                if ($m['department_id']) $byDept[(int)$m['department_id']][] = (int)$m['user_id'];
+            }
+        }
+        $dRows = $pdo->query("SELECT id, name, parent_id, COALESCE(sort_order,999) AS sort_order FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+        $nameById = []; $parentById = [];
+        foreach ($dRows as $d) { $nameById[(int)$d['id']] = $d['name']; $parentById[(int)$d['id']] = (int)($d['parent_id'] ?? 0); }
+        foreach ($dRows as $d) {
+            $members = [];
+            foreach (eg_dept_subtree_ids($pdo, (int)$d['id']) as $sub) {
+                foreach (($byDept[$sub] ?? []) as $u) $members[$u] = true;
+            }
+            if (!$members) continue;                       // 沒有在職成員的部門不列，避免選了卻沒人收到
+            $path = $d['name']; $p = $parentById[(int)$d['id']]; $guard = 0;
+            while ($p && isset($nameById[$p]) && $guard++ < 10) { $path = $nameById[$p] . ' / ' . $path; $p = $parentById[$p] ?? 0; }
+            $depts[] = ['id' => (int)$d['id'], 'name' => $d['name'], 'path' => $path,
+                        'user_ids' => array_keys($members), 'count' => count($members)];
+        }
+    } catch (Throwable $e) {}
+    return ['people' => $people, 'departments' => $depts];
+}
+
+/**
  * 建立一筆圖面變更紀錄，並做三件事（與 views/QC/drawing_change_log.php 手動登錄同一套）：
  *   ① 把該料號目前生效的檢驗標準整組複製成新版次，舊版停用但保留（舊檢驗紀錄仍追溯得到當時標準）
  *   ② 寫入簽收名單

@@ -98,7 +98,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $oldRev  = trim($_POST['old_revision'] ?? '');
             $newRev  = trim($_POST['new_revision'] ?? '');
             $fromP   = ($_POST['from_process_no'] ?? '') === '' ? null : (int)$_POST['from_process_no'];
-            $ackIds  = array_values(array_unique(array_filter(array_map('intval', (array)($_POST['ack_users'] ?? [])))));
+            // 簽收對象可混合指定部門與個人；部門在這裡展開成人員（含子部門、只列在職）
+            $ackIds  = dwg_expand_ack_targets($pdo, (array)($_POST['ack_users'] ?? []), (array)($_POST['ack_depts'] ?? []));
 
             // ── 新建：走共用 lib（與「料號附件上傳自動判定」產生的變更同一套邏輯）──
             // 建立單號、檢驗標準整組複製成新版次、簽收名單、通知都在 src/common/dwg_change_lib.php，
@@ -114,7 +115,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'customer_doc_no' => ($_POST['customer_doc_no'] ?? ''),
                     'from_process_no' => ($_POST['from_process_no'] ?? ''),
                     'detail'          => ($_POST['detail'] ?? ''),
-                    'ack_users'       => $ackIds,
+                    'ack_users'       => $ackIds,   // 已展開，lib 內再展開一次也是同一個結果（冪等）
                     'created_by'      => (int)$uid,
                 ]);
                 echo json_encode(['success' => true, 'id' => $r['id']], JSON_UNESCAPED_UNICODE);
@@ -199,8 +200,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
         if ($act === 'lookups') {
             $proc = $pdo->query("SELECT ProcessNo, ProcessName FROM process_no ORDER BY ProcessNo")->fetchAll(PDO::FETCH_ASSOC);
-            $users = $pdo->query("SELECT id, user_cname FROM user WHERE user_cname IS NOT NULL AND user_cname<>'' ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
-            echo json_encode(['success' => true, 'processes' => $proc, 'users' => $users, 'can_manage' => $canManage], JSON_UNESCAPED_UNICODE);
+            // 人員與部門一律走共用函式（人員列表鐵則：不列離職／標記長期請假／依部門職稱排序），
+            // 不要在這裡自己寫 user 表的 SQL——舊版就是那樣寫，會把離職者一起列出來。
+            $lk = dwg_ack_lookup_data($pdo);
+            echo json_encode(['success' => true, 'processes' => $proc,
+                              'people' => $lk['people'], 'departments' => $lk['departments'],
+                              'can_manage' => $canManage], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
@@ -334,8 +339,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <input type="text" class="form-control input-sm" id="f-summary" placeholder="例：外徑由 Ø25±0.1 改為 Ø24.8±0.05，並新增同心度 0.02"></div>
             <div class="form-group"><label>變更內容明細</label>
                 <textarea class="form-control" id="f-detail" rows="3"></textarea></div>
-            <div class="form-group"><label>需簽收人員（會收到通知，未簽收會一直顯示在置頂未讀）</label>
-                <div class="userpick" id="f-users"></div></div>
+            <div class="form-group"><label>需簽收對象（可混合指定部門與個人；未簽收會一直顯示在置頂未讀）</label>
+                <div id="f-ack-chips" style="display:flex;flex-wrap:wrap;gap:4px;padding:5px;background:#FCF7F0;
+                     border:1px solid var(--line);border-radius:6px;min-height:32px;margin-bottom:4px;"></div>
+                <div style="position:relative;">
+                    <input type="text" id="f-ack-q" class="form-control input-sm" autocomplete="off"
+                           placeholder="輸入姓名或部門名稱篩選，點選加入（選部門＝該部門含子部門的在職人員全收到）">
+                    <div id="f-ack-dd" style="display:none;position:absolute;z-index:1060;left:0;right:0;top:100%;
+                         background:#fff;border:1px solid var(--line);border-radius:0 0 6px 6px;max-height:210px;
+                         overflow:auto;box-shadow:0 6px 14px rgba(74,53,36,.18);"></div>
+                </div>
+                <div id="f-ack-sum" class="muted-help" style="margin-top:4px;"></div>
+            </div>
             <div class="alert" style="background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;" id="ver-hint">
                 <i class="fa fa-magic"></i> 建立後會自動把此料號目前的檢驗標準<b>整組複製成新版次</b>，舊版停用但保留；
                 QC 只要到「檢驗標準管理」改動有變的尺寸即可。<b>修改既有紀錄時不會再複製一次。</b>
@@ -372,6 +387,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
+<script src="../../resource/js/eg_ack_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_ack_picker.js') ?>"></script>
 <script>
 $(function(){
     'use strict';
@@ -383,18 +399,23 @@ $(function(){
     });
     function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c];}); }
 
-    var LOOK={processes:[],users:[]}, CAN_MANAGE=false, pickedPart=null, curId=null, ME=0;
+    var LOOK={processes:[],people:[],departments:[]}, CAN_MANAGE=false, pickedPart=null, curId=null, ME=0;
+    var PENDING_ACK = null;   // lookups 尚未回來就開窗時，先記著等資料到了再套用
     var partTimer=null, partSeq=0, partRows=[], partActive=-1;   // 料號即時搜尋用
 
+    // 簽收對象挑選器：共用檔 resource/js/eg_ack_picker.js（部門＋人員混合、已選反灰、
+    // 人員被部門涵蓋也反灰）。料號附件上傳的變更登錄跳窗用的是同一支，不各頁自刻。
+    var ACK = EGAckPicker.create({
+        chips:'#f-ack-chips', input:'#f-ack-q', dropdown:'#f-ack-dd', summary:'#f-ack-sum'
+    });
     $.post(API,{action:'lookups'},function(r){
         if(!r.success) return;
         LOOK=r; CAN_MANAGE=!!r.can_manage;
         $('#btn-new').toggle(CAN_MANAGE);
         $('#f-fromproc').html('<option value="">（全部製程都提醒）</option>'+
             (r.processes||[]).map(function(p){ return '<option value="'+p.ProcessNo+'">'+esc(p.ProcessName)+'</option>'; }).join(''));
-        $('#f-users').html((r.users||[]).map(function(u){
-            return '<label><input type="checkbox" class="ack-u" value="'+u.id+'"> '+esc(u.user_cname)+'</label>';
-        }).join(''));
+        ACK.setData(r);
+        if (PENDING_ACK) { ACK.setSelection(PENDING_ACK); PENDING_ACK = null; }   // lookups 還沒回來就開窗的情況
     },'json');
 
     function load(){
@@ -426,7 +447,7 @@ $(function(){
 
     // ---- 登錄 / 修改 ----
     $('#btn-new').on('click', function(){ openEdit(null); });
-    function openEdit(row){
+    function openEdit(row, acks){
         $('#f-id').val(row?row.id:'');
         pickedPart = row ? {d_id:parseInt(row.d_id,10), part_no:String(row.part_no||'')} : null;
         $('#part-results').hide().empty(); partRows=[]; partActive=-1;
@@ -437,7 +458,13 @@ $(function(){
         $('#f-source').val(row?(row.source||'客戶'):'客戶');
         $('#f-cdoc').val(row?row.customer_doc_no:''); $('#f-fromproc').val(row&&row.from_process_no?row.from_process_no:'');
         $('#f-summary').val(row?row.summary:''); $('#f-detail').val(row?row.detail:'');
-        $('.ack-u').prop('checked', false);
+        // 修改既有紀錄時要把原本的簽收名單帶回來——不帶回來的話，存檔會把名單整個洗掉
+        //（存檔是「重設名單」，送什麼就是什麼）。簽收表只存 user_id，所以部門選擇無法還原，
+        // 但那些人本來就已經被展開成個人存進名單了，不影響結果。
+        var ackIdsNow = (acks||[]).map(function(a){ return parseInt(a.user_id,10); }).filter(Boolean);
+        ACK.clear();
+        if (LOOK.people && LOOK.people.length) ACK.setSelection({users:ackIdsNow, depts:[]});
+        else PENDING_ACK = {users:ackIdsNow, depts:[]};
         $('#ver-hint').toggle(!row);
         $('#detailModal').modal('hide');
         $('#editModal').modal('show');
@@ -518,17 +545,19 @@ $(function(){
     $('#btn-save').on('click', function(){
         if(!pickedPart){ renderPicked(); $('#f-part-kw').focus(); alert('請從即時搜尋清單中點選料號（需綁定料號 ID）'); return; }
         if(!$('#f-summary').val().trim()){ alert('請填寫變更摘要'); $('#f-summary').focus(); return; }
-        var users=$('.ack-u:checked').map(function(){ return this.value; }).get();
+        var ackSel=ACK.getSelection();
         var $b=$(this).prop('disabled',true);
         $.post(API,{ action:'save_change', id:$('#f-id').val(), d_id:pickedPart.d_id,
             old_revision:$('#f-oldrev').val(), new_revision:$('#f-newrev').val(), change_date:$('#f-date').val(),
             source:$('#f-source').val(), customer_doc_no:$('#f-cdoc').val(), from_process_no:$('#f-fromproc').val(),
-            summary:$('#f-summary').val(), detail:$('#f-detail').val(), ack_users:users
+            summary:$('#f-summary').val(), detail:$('#f-detail').val(),
+            ack_users:ackSel.users, ack_depts:ackSel.depts
         }, function(r){
             $b.prop('disabled',false);
             if(!r.success){ alert('儲存失敗：'+r.message); return; }
             $('#editModal').modal('hide'); load();
-            alert('已儲存'+(users.length?('，並已通知 '+users.length+' 位人員簽收'):''));
+            var n=ACK.count();
+            alert('已儲存'+(n?('，並已通知 '+n+' 位人員簽收'):''));
         },'json').fail(function(x){ $b.prop('disabled',false); alert('儲存錯誤：'+x.responseText); });
     });
 
@@ -566,7 +595,7 @@ $(function(){
             $('#detail-body').html(h);
             if(myAck && !myAck.acked_at) $('#btn-ack').show();
             if(r.can_manage){
-                $('#btn-edit').show().off('click').on('click', function(){ openEdit(c); });
+                $('#btn-edit').show().off('click').on('click', function(){ openEdit(c, acks); });
                 $('#btn-close-chg').show().text(c.status==='CLOSED'?'重新開啟':'標記為已結案').off('click').on('click', function(){
                     $.post(API,{action:'close_change', id:c.id, reopen:(c.status==='CLOSED'?'1':'0')}, function(){ $('#detailModal').modal('hide'); load(); },'json');
                 });

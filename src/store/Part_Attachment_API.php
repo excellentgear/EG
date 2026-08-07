@@ -637,56 +637,10 @@ switch ($action) {
         try {
             $proc = $pdo->query("SELECT ProcessNo, ProcessName FROM process_no ORDER BY ProcessNo")->fetchAll(PDO::FETCH_ASSOC);
         } catch (Throwable $e) { $proc = []; }
-        $people = []; $depts = [];
-        try {
-            require_once __DIR__ . '/../common/people_lib.php';
-            require_once __DIR__ . '/../common/org_role_lib.php';
-            $rows = eg_people_list($pdo);
-            // 欄位順序固定「部門／職稱／姓名」，排序依 sort_order 不是姓名筆畫（人員列表鐵則第 6 條）
-            foreach ($rows as $r) {
-                $people[] = [
-                    'id'        => $r['id'],
-                    'name'      => $r['user_cname'],
-                    'dept_id'   => $r['dept_id'],
-                    'dept_name' => $r['dept_name'],
-                    'position'  => $r['position_name'],
-                    'leave_note'=> $r['leave_note'] ?? '',
-                ];
-            }
-            // 部門：帶「含子部門」的實際在職成員 id，讓前端算得出涵蓋範圍並把已被涵蓋的人反灰。
-            // 成員要用 user_department_position_map 的「全部」對應，不能只用 people_lib 挑出來的
-            // 主要職務部門——一人可掛多個部門，後端 dwg_expand_ack_targets 走
-            // eg_people_list(['dept_ids'=>…]) 是「任一對應命中就算」，只看主要部門會少算，
-            // 造成畫面顯示的人數比實際通知人數少。
-            $byDept = [];
-            $liveIds = array_map(function ($r) { return (int)$r['id']; }, $rows);
-            if ($liveIds) {
-                $ph = implode(',', array_fill(0, count($liveIds), '?'));
-                $mp = $pdo->prepare("SELECT DISTINCT user_id, department_id FROM user_department_position_map WHERE user_id IN ($ph)");
-                $mp->execute($liveIds);
-                foreach ($mp->fetchAll(PDO::FETCH_ASSOC) as $m) {
-                    if ($m['department_id']) $byDept[(int)$m['department_id']][] = (int)$m['user_id'];
-                }
-            }
-            $dRows = $pdo->query("SELECT id, name, parent_id, COALESCE(sort_order,999) AS sort_order FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
-            $nameById = []; $parentById = [];
-            foreach ($dRows as $d) { $nameById[(int)$d['id']] = $d['name']; $parentById[(int)$d['id']] = (int)($d['parent_id'] ?? 0); }
-            foreach ($dRows as $d) {
-                $ids = eg_dept_subtree_ids($pdo, (int)$d['id']);
-                $members = [];
-                foreach ($ids as $sub) { foreach (($byDept[$sub] ?? []) as $u) $members[$u] = true; }
-                if (!$members) continue;                      // 沒有在職成員的部門不列，避免選了卻沒人收到
-                // 路徑（上層部門／本部門），讓同名子部門分得出來；用已抓到的 parent 對照表組，不再逐層查 DB
-                $path = $d['name']; $p = $parentById[(int)$d['id']]; $guard = 0;
-                while ($p && isset($nameById[$p]) && $guard++ < 10) {
-                    $path = $nameById[$p] . ' / ' . $path;
-                    $p = $parentById[$p] ?? 0;
-                }
-                $depts[] = ['id'=>(int)$d['id'], 'name'=>$d['name'], 'path'=>$path,
-                            'user_ids'=>array_keys($members), 'count'=>count($members)];
-            }
-        } catch (Throwable $e) {}
-        echo json_encode(['success'=>true,'processes'=>$proc,'people'=>$people,'departments'=>$depts], JSON_UNESCAPED_UNICODE);
+        // 人員與部門清單走共用函式（與圖面變更紀錄頁的 lookups 同一支，避免只改到一邊）
+        $lk = dwg_ack_lookup_data($pdo);
+        echo json_encode(['success'=>true,'processes'=>$proc,
+                          'people'=>$lk['people'],'departments'=>$lk['departments']], JSON_UNESCAPED_UNICODE);
         break;
 
     // ── 圖面變更：由附件上傳的自動判定產生一筆變更紀錄 ─────────────
