@@ -108,11 +108,15 @@ case 'preset_delete': {
     jout([]);
 }
 
-/* 依 user_id 清單重新解析目前的部門/職稱（出席人員群組套用用；資料以「現況」為準，不是群組儲存當下的舊快照） */
+/* 依 user_id 清單重新解析目前的部門/職稱（出席人員群組套用用；資料以「現況」為準，不是群組儲存當下的舊快照）。
+   2026-08-06使用者明確要求：出席人員不應該選得到會議當天時段有請假的人，也不列超級管理員(states排除99)；
+   套用群組也是「加入出席人員」的一種途徑，一併過濾。有帶會議日期才做請假過濾，沒帶就不過濾(避免誤擋)。 */
 case 'resolve_people': {
     $ids = array_values(array_filter(array_map('intval', explode(',', (string)($_GET['user_ids'] ?? '')))));
     if (!$ids) jout(['people'=>[]]);
-    $rows = eg_people_list($db, ['user_ids'=>$ids]);
+    $rows = eg_people_list($db, ['user_ids'=>$ids, 'states'=>[1,2,3]]);
+    $mDate = trim((string)($_GET['meeting_date'] ?? ''));
+    if ($mDate !== '') $rows = meeting_filter_available_people($db, $rows, $mDate, $_GET['start_time'] ?? null, $_GET['end_time'] ?? null);
     jout(['people'=>array_map(fn($r) => ['id'=>$r['id'], 'user_cname'=>$r['user_cname'],
         'position_name'=>$r['position_name'] ?? '', 'dept_name'=>$r['dept_name'] ?? ''], $rows)]);
 }
@@ -157,32 +161,42 @@ case 'get_detail': {
         unset($a['file_name']);
         $attaches[] = $a;
     }
-    // 每個項目附上「未出席部門成員」的回簽狀態(通知系統)，供畫面顯示回簽者/回簽日期
+    // 每個項目附上通知系統的回覆狀態(含回覆內容)，供畫面顯示回覆者/回覆日期/回覆了什麼
     $items = meeting_items($db, $id);
-    $ntStmt = $db->prepare("SELECT lt.target_id AS user_id, u.user_cname AS user_name, lr.read_at, lr.signed_at
+    $ntStmt = $db->prepare("SELECT lt.target_id AS user_id, u.user_cname AS user_name, lr.read_at, lr.signed_at,
+                                    lr.reply_content, lr.replied_at
                              FROM live_event le
                              JOIN live_event_target lt ON lt.live_event_id = le.id
                              LEFT JOIN live_event_response lr ON lr.live_event_id = le.id AND lr.user_id = lt.target_id
                              LEFT JOIN `user` u ON u.id = lt.target_id
                              WHERE le.ref_type='MEETING_ITEM_CONFIRM' AND le.ref_id=?
                              ORDER BY lt.id");
-    $confStmt = $db->prepare("SELECT user_id, user_name, dept_name, confirmed_at FROM meeting_item_confirm WHERE item_id=?");
+    $confStmt = $db->prepare("SELECT user_id, user_name, dept_name, dept_id, confirmed_at, reply_content FROM meeting_item_confirm WHERE item_id=?");
     foreach ($items as &$it) {
         $ntStmt->execute([(int)$it['item_id']]);
         $it['notify_targets'] = $ntStmt->fetchAll(PDO::FETCH_ASSOC);
         // 依負責部門/指定人員算出每格簽名槽(meeting_item_required_signers_for 統一入口，兩模式擇一)，
-        // 對照 meeting_item_confirm 已簽名單標記每格是否已簽(2026-08-05改版：部門代表制/指定人員制，取代舊版任一人簽即完成)
+        // 對照 meeting_item_confirm 已簽名單標記每格是否已簽。2026-08-06改版：送出時通知對象已擴大到
+        // 部門所有出席人員＋部門主管，實際簽名的人不一定是系統原本挑出的那位代表，所以部門模式改用
+        // dept_id 比對(誰簽都算這格已完成)，只有指定人員模式(dept_id=null)才需要精準比對 user_id。
         $req = meeting_item_required_signers_for($db, $id, $it);
         $slots = [];
         if ($req) {
             $confStmt->execute([(int)$it['item_id']]);
-            $signedById = [];
-            foreach ($confStmt->fetchAll(PDO::FETCH_ASSOC) as $sr) $signedById[(int)$sr['user_id']] = $sr;
-            foreach ($req as $key => $signer) {
-                $sr = $signedById[$signer['user_id']] ?? null;
-                $slots[] = ['dept_id'=>$key, 'dept_name'=>$signer['dept_name'], 'user_id'=>$signer['user_id'],
-                            'user_name'=>$signer['user_name'], 'is_manager'=>$signer['is_manager'], 'is_main'=>$signer['is_main'],
-                            'signed'=>(bool)$sr, 'confirmed_at'=>$sr['confirmed_at'] ?? null];
+            $confirmRows = $confStmt->fetchAll(PDO::FETCH_ASSOC);
+            $signedByDept = []; $signedByUser = [];
+            foreach ($confirmRows as $sr) {
+                if ($sr['dept_id'] !== null) { $d = (int)$sr['dept_id']; if (!isset($signedByDept[$d])) $signedByDept[$d] = $sr; }
+                $signedByUser[(int)$sr['user_id']] = $sr;
+            }
+            foreach ($req as $signer) {
+                $sr = $signer['dept_id'] !== null ? ($signedByDept[$signer['dept_id']] ?? null) : ($signedByUser[$signer['user_id']] ?? null);
+                $slots[] = ['dept_id'=>$signer['dept_id'], 'dept_name'=>$signer['dept_name'],
+                            'user_id'=>$sr ? (int)$sr['user_id'] : $signer['user_id'],
+                            'user_name'=>$sr ? $sr['user_name'] : $signer['user_name'],
+                            'is_manager'=>$signer['is_manager'], 'is_main'=>$signer['is_main'],
+                            'signed'=>(bool)$sr, 'confirmed_at'=>$sr['confirmed_at'] ?? null,
+                            'reply_content'=>$sr['reply_content'] ?? null];
             }
         }
         $it['confirm_slots'] = $slots;
@@ -326,18 +340,23 @@ case 'delete': {
     jout([]);
 }
 
-/* 部門人員（出席人員挑選用；比照鐵則走 eg_people_list，不自己拼人員 SQL） */
+/* 部門人員（出席人員挑選用；比照鐵則走 eg_people_list，不自己拼人員 SQL）。
+   2026-08-06使用者明確要求：不列超級管理員(states排除99)，且不應選得到會議當天時段有請假的人
+   (有帶 meeting_date 才過濾，前端在使用者尚未選日期前不應呼叫)。 */
 case 'people': {
     $deptId = (int)($_GET['dept_id'] ?? 0);
     if ($deptId <= 0) jout(['people'=>[]]);
-    $rows = eg_people_list($db, ['dept_ids'=>[$deptId]]);
+    $rows = eg_people_list($db, ['dept_ids'=>[$deptId], 'states'=>[1,2,3]]);
+    $mDate = trim((string)($_GET['meeting_date'] ?? ''));
+    if ($mDate !== '') $rows = meeting_filter_available_people($db, $rows, $mDate, $_GET['start_time'] ?? null, $_GET['end_time'] ?? null);
     jout(['people'=>array_map(fn($r) => ['id'=>$r['id'], 'user_cname'=>$r['user_cname'],
         'position_name'=>$r['position_name'] ?? '', 'dept_name'=>$r['dept_name'] ?? ''], $rows)]);
 }
 
-/* 全員人員清單（負責人「指定人員」模式搜尋選擇器用；2026-08-05使用者明確要求）：比照鐵則走 eg_people_list，不自己拼SQL。 */
+/* 全員人員清單（負責人「指定人員」模式搜尋選擇器用；2026-08-05使用者明確要求）：比照鐵則走 eg_people_list，不自己拼SQL。
+   這裡是指派任務負責人用，不是出席人員選取，不做請假時段過濾；但超級管理員一樣不列入選單(states排除99)。 */
 case 'people_all': {
-    $rows = eg_people_list($db, []);
+    $rows = eg_people_list($db, ['states'=>[1,2,3]]);
     jout(['people'=>array_map(fn($r) => ['id'=>$r['id'], 'user_cname'=>$r['user_cname'],
         'position_name'=>$r['position_name'] ?? '', 'dept_name'=>$r['dept_name'] ?? ''], $rows)]);
 }
@@ -370,25 +389,12 @@ case 'submit': {
     $itc = $db->prepare("SELECT COUNT(*) FROM meeting_item WHERE meeting_id=?"); $itc->execute([$id]);
     if ((int)$itc->fetchColumn() === 0) jerr('請至少建立一項會議要項或上級指示要項');
 
-    // 送出前置檢查(2026-08-05 使用者明確要求)：①出席人員全部簽到 ②有指派負責部門且該部門在本次出席人員內者，該項目須已現場確認簽名。
-    // 未出席的負責部門成員不受此檢查限制，維持送出後才發通知回簽的既有設計，避免卡死無法送出。
+    // 送出前置檢查：①出席人員全部簽到（2026-08-05使用者要求，仍然保留）。
+    // ②負責部門/指定人員尚未現場確認簽名的部分，2026-08-06改版(使用者明確要求)不再擋下送出，
+    // 改成送出時一併擴大通知相關人員回簽(見下方逐項通知迴圈與 meeting_item_pending_notify_targets)。
     $unsigned = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=? AND signed=0");
     $unsigned->execute([$id]);
     if ((int)$unsigned->fetchColumn() > 0) jerr('尚有出席人員未完成現場簽到，請先完成全部出席人員簽到再送出');
-    foreach (meeting_items($db, $id) as $it) {
-        $req = meeting_item_required_signers_for($db, $id, $it);
-        if (!$req) continue; // 未指派負責人，或負責部門/指定人員本次都沒人出席，不卡送出(維持既有：改走通知系統回簽)
-        $cst = $db->prepare("SELECT user_id FROM meeting_item_confirm WHERE item_id=?");
-        $cst->execute([(int)$it['item_id']]);
-        $signedIds = array_map('intval', $cst->fetchAll(PDO::FETCH_COLUMN));
-        $missing = [];
-        foreach ($req as $signer) {
-            if (!in_array($signer['user_id'], $signedIds, true)) $missing[] = $signer['dept_name'].'('.$signer['user_name'].')';
-        }
-        if ($missing) {
-            jerr('項目「'.mb_substr((string)$it['content'], 0, 20).'…」尚有負責人未現場確認簽名：'.implode('、', $missing));
-        }
-    }
 
     $chair = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
     if (!$chair['id']) jerr('找不到主席簽核人');
@@ -399,10 +405,13 @@ case 'submit': {
         .($chair['is_delegated'] ? '（原主席今日行程忙碌，已轉由代理人處理）' : ''), $uid);
     if ($ev) eg_approval_set_live_event($db, $id2, $ev);
 
-    // 逐項通知：負責部門中「本次未出席」的成員走通知系統回簽；有出席的成員已可在會議記錄畫面現場用密碼確認，不重複通知
+    // 逐項通知(2026-08-06改版)：負責部門/指定人員尚未現場簽名完成的項目，一律擴大通知(該部門本次所有出席
+    // 人員＋部門主管，或指定人員本人)，任一人透過通知回覆即完成，不再要求一定要是現場那位代表親自簽。
+    $pendingItems = 0;
     foreach (meeting_items($db, $id) as $it) {
-        $targets = meeting_item_owner_notify_targets($db, $id, $it);
+        $targets = meeting_item_pending_notify_targets($db, $id, $it);
         if (!$targets) continue;
+        $pendingItems++;
         $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
         if ($ownerIds) {
             $inDept = implode(',', $ownerIds);
@@ -415,15 +424,15 @@ case 'submit': {
         }
         meeting_notify_item_owners($db, (int)$it['item_id'], $targets,
             '「'.$m['subject'].'」會議記錄項目待確認：'.mb_substr((string)$it['content'], 0, 30),
-            '「'.$m['subject'].'」（'.$m['meeting_date'].'）會議記錄的以下負責項目請確認並回簽：'."\n".$it['content']
+            '「'.$m['subject'].'」（'.$m['meeting_date'].'）會議記錄的以下負責項目請確認並回覆：'."\n".$it['content']
             .($it['due_date'] ? ("\n應完成日期：".$it['due_date']) : '')
             ."\n".$ownerLabel
-            .(count($targets) > 1 ? "\n（任一人回簽即完成，不需每人都簽）" : ''),
+            .(count($targets) > 1 ? "\n（任一人回覆即完成，不需每人都回）" : ''),
             $uid);
     }
 
     $db->prepare("UPDATE meeting_record SET status='submitted', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
-    jout(['status'=>'submitted']);
+    jout(['status'=>'submitted', 'pending_items'=>$pendingItems]);
 }
 
 /* 撤回已送出但「尚未任何人簽核」的會議記錄(2026-08-05 使用者明確要求)：
@@ -527,8 +536,8 @@ case 'item_confirm': {
     if ($already->fetchColumn()) jerr('您已經簽過此項目');
     $v = meeting_verify_own_password($db, $forUid, $password);
     if (!$v['ok']) jerr($v['msg']);
-    $db->prepare("INSERT IGNORE INTO meeting_item_confirm (item_id, user_id, user_name, dept_name, confirmed_at) VALUES (?,?,?,?,NOW())")
-       ->execute([$itemId, $forUid, $signer['user_name'], $signer['dept_name']]);
+    $db->prepare("INSERT IGNORE INTO meeting_item_confirm (item_id, user_id, user_name, dept_name, dept_id, confirmed_at) VALUES (?,?,?,?,?,NOW())")
+       ->execute([$itemId, $forUid, $signer['user_name'], $signer['dept_name'], $signer['dept_id']]);
     jout([]);
 }
 
@@ -788,12 +797,12 @@ case 'admin_backfill': {
                 $iq->execute([$id]);
             }
             // 每格簽名槽(部門模式代表制或指定人員模式，見 meeting_item_required_signers_for)全部視同已簽並套用$date
-            $upsertC = $db->prepare("INSERT INTO meeting_item_confirm (item_id, user_id, user_name, dept_name, confirmed_at)
-                                      VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE confirmed_at=VALUES(confirmed_at)");
+            $upsertC = $db->prepare("INSERT INTO meeting_item_confirm (item_id, user_id, user_name, dept_name, dept_id, confirmed_at)
+                                      VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE confirmed_at=VALUES(confirmed_at)");
             $dt = $date . ' ' . date('H:i:s');
             foreach ($iq->fetchAll(PDO::FETCH_ASSOC) as $it) {
                 foreach (meeting_item_required_signers_for($db, $id, $it) as $signer) {
-                    $upsertC->execute([(int)$it['item_id'], $signer['user_id'], $signer['user_name'], $signer['dept_name'], $dt]);
+                    $upsertC->execute([(int)$it['item_id'], $signer['user_id'], $signer['user_name'], $signer['dept_name'], $signer['dept_id'], $dt]);
                 }
             }
         }
