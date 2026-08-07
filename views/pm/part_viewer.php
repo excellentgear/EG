@@ -206,7 +206,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
             $type = in_array($ext, ['jpg','jpeg','png','gif','webp','bmp']) ? 'image'
                   : ($ext === 'pdf' ? 'pdf' : 'other');
             // 每個附件依其 d_id 子目錄取 URL
-            $fileUrl = $urlBase . '/' . $r['d_id'] . '/' . $r['filename'];
+            // 走附件 API 讀檔（inline 輸出），不再用 Apache /nas 別名直連：
+            // 附件位置只由 part_attach_nas_dir 決定，換 NAS 免改 httpd.conf 也不綁磁碟機代號
+            $fileUrl = '../../src/store/Part_Attachment_API.php?action=download&id=' . (int)$r['id'];
             $result[] = [
                 'id'             => (int)$r['id'],
                 'filename'       => $r['filename'],

@@ -37,6 +37,9 @@ function getPartAttachBase(PDO $pdo): string {
         return ($v !== false && $v !== null) ? trim($v) : '';
     } catch (Exception $_e) { return ''; }
 }
+// 附件下載端點（相對路徑）：呼叫端都在 views/xxx/ 底下兩層，與既有的 Quotation_File_API 寫法一致
+if (!defined('PART_ATTACH_DL')) define('PART_ATTACH_DL', '../../src/store/Part_Attachment_API.php');
+
 function getPartAttachUrlDir(PDO $pdo): string {
     try {
         $s = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key='part_attach_url_dir'");
@@ -227,11 +230,13 @@ switch ($action) {
         // 依上傳時間排序
         usort($data, function($a, $b) { return strcmp($b['uploaded_at'], $a['uploaded_at']); });
 
-        $urlDir  = getPartAttachUrlDir($pdo);
         $qDlBase = '../../src/store/Quotation_File_API.php';
         foreach ($data as &$row) {
             if ($row['source'] === 'part') {
-                $row['url'] = rtrim($urlDir,'/') . '/' . $dId . '/' . rawurlencode($row['filename']);
+                // 走本 API 讀檔（inline 輸出，可直接餵 <img>／PDF 檢視），不再用 Apache 的
+                // /nas 別名讓瀏覽器直連。這樣附件實體位置只由 part_attach_nas_dir 一個設定決定，
+                // 換 NAS 不必改 httpd.conf、也不受磁碟機代號（Z:）綁死；順帶把繞過權限的直連封掉。
+                $row['url'] = PART_ATTACH_DL . '?action=download&id=' . (int)$row['id'];
             } else {
                 $row['url'] = $qDlBase . '?action=download&quote_no=' . urlencode($row['quote_no']) . '&filename=' . urlencode($row['filename']);
             }
@@ -366,6 +371,8 @@ switch ($action) {
             foreach ($qiCntStmt->fetchAll(PDO::FETCH_ASSOC) as $qc) { $quoteCounts[(int)$qc['d_setting_d_id']] = (int)$qc['cnt']; }
         } catch (Exception $_e) {}
 
+        // url_base 目前已無消費端（前端一律用每筆的 url），保留欄位避免動到未知呼叫端；
+        // 每一筆檔案的 url 已改走下載 API，不再依賴這個前綴
         $urlDir  = getPartAttachUrlDir($pdo);
         $qDlBase = '../../src/store/Quotation_File_API.php';
         $result  = [];
@@ -373,7 +380,7 @@ switch ($action) {
             // 加 URL
             foreach ($files as &$f) {
                 if ($f['source'] === 'part') {
-                    $f['url'] = rtrim($urlDir,'/') . '/' . $did . '/' . rawurlencode($f['filename']);
+                    $f['url'] = PART_ATTACH_DL . '?action=download&id=' . (int)$f['id'];   // 同上，走 API 不直連
                 } else {
                     $f['url'] = $qDlBase . '?action=download&quote_no=' . urlencode($f['quote_no']) . '&filename=' . urlencode($f['filename']);
                 }

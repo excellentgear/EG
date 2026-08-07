@@ -255,9 +255,10 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
         $exKey = $r['source'].'|'.$r['attach_id'].'|'.$r['ds_pk'];
         $isExcluded = isset($excludes[$exKey]);
         if ($show === 'excluded' ? !$isExcluded : $isExcluded) continue;
-        // 檔案連結：料號附件走 URL 根＋d_id 子資料夾；報價附件走下載 API（皆即時組，鐵律5）
+        // 檔案連結：兩種來源都走各自的下載 API（鐵律5：不設 URL 前綴讓瀏覽器直連，
+        // 附件位置只由 *_nas_dir 設定決定，換 NAS 免改 httpd.conf 也不綁磁碟機代號）
         $fileUrl = $r['source'] === 'part'
-            ? ($urlBase !== '' ? $urlBase.'/'.$r['ds_pk'].'/'.$r['filename'] : '')
+            ? '../../src/store/Part_Attachment_API.php?action=download&id='.(int)$r['attach_id']
             : '../../src/store/Quotation_File_API.php?action=download&quote_no='.rawurlencode($r['quote_no']).'&filename='.rawurlencode($r['filename']);
         $out[] = [
             'source'        => $r['source'],
