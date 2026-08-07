@@ -1514,7 +1514,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <button class="tb-btn" onclick="pfSearch()"><i class="fa fa-search"></i> 搜尋</button>
             </div>
             <div class="frm-row"><label>選擇料號</label>
-                <select id="pf-part" style="flex:1;" onchange="pfLoadWorkfiles()"><option value="">— 請先搜尋 —</option></select>
+                <select id="pf-part" style="flex:1;" onchange="pfApplyPartToName(); pfLoadWorkfiles()"><option value="">— 請先搜尋 —</option></select>
             </div>
             <hr style="border-color:#3c4046;margin:10px 0;">
             <div style="font-weight:700;color:#6fc3ff;font-size:12.5px;margin-bottom:6px;"><i class="fa fa-save"></i> 儲存目前畫布到此料號</div>
@@ -1540,7 +1540,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <!-- 發行章日期：自家出的圖必填，是圖面變更的新舊依據（見 ai-rules/15-圖面變更判定依據.md） -->
             <div class="frm-row" id="pf-issue-row" style="display:none;"><label>發行章日期 <span style="color:#ff8a80;">*</span></label>
                 <div style="flex:1;">
-                    <input type="date" id="pf-issue-date" style="width:170px;" onchange="pfRenderCatHint()">
+                    <input type="date" id="pf-issue-date" style="width:170px;" onchange="pfOnIssueDateChange()">
                     <span style="font-size:11.5px;color:#8b949e;margin-left:6px;">預設今天，請改成圖上實際蓋章日</span>
                     <div id="pf-issue-hint" style="font-size:11.5px;margin-top:3px;"></div>
                 </div>
@@ -1817,6 +1817,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 
 <script src="../../resource/js/fabric.min.js?v=<?= filemtime(__DIR__ . '/../../resource/js/fabric.min.js') ?>"></script><!-- 帶檔案時間當版本參數：修過的 fabric 才不會被瀏覽器快取的舊檔蓋掉 -->
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_stamp_tpl.js') ?>"></script><!-- 圖章模板渲染器（蓋章工具「模板章」用，與圖章管理頁共用） -->
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_date_fmt.js') ?>"></script><!-- 日期顯示一律 YYYY.MM.DD（ai-rules/20） -->
 <script src="../../resource/js/pdfmake.min.js"></script><!-- 列印走 PDF 管線用（已含字型 vfs）：把畫布高解析影像包成 PDF 再列印，畫質最接近「存檔後本機列印」 -->
 <script>
 'use strict';
@@ -5884,15 +5885,22 @@ function pfTodayStr() {
     const d = new Date();
     return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
 }
-/** 勾到「自家出的圖」才要發行章日期；回傳是否通過驗證 */
+/** 勾到「自家出的圖」才要發行章日期；回傳是否通過驗證。只在標籤勾選變動（欄位剛顯示）時預設今天，
+ *  不要掛在日期欄自己的 onchange 上——不然打字打到一半、瀏覽器對未完成日期觸發 change 給空字串，
+ *  會被這裡的「空值補今天」蓋掉使用者正在打的內容，變成畫面上的日期一直跳掉。 */
 function pfSyncIssueRow() {
     const need = Array.from(document.querySelectorAll('.pf-cat:checked')).some(c => c.dataset.own === '1');
-    const row = document.getElementById('pf-issue-row'), inp = document.getElementById('pf-issue-date'),
-          hint = document.getElementById('pf-issue-hint');
+    const row = document.getElementById('pf-issue-row'), inp = document.getElementById('pf-issue-date');
     row.style.display = need ? '' : 'none';
     if (!need) return true;
     if (!inp.value) inp.value = pfTodayStr();          // 預設今天，可改
-    if (inp.value > pfTodayStr()) {
+    return pfValidateIssueDate();
+}
+/** 日期欄本身 onchange：只驗證＋更新提示文字，不動 value（避免蓋掉使用者輸入中的內容） */
+function pfOnIssueDateChange() { pfValidateIssueDate(); }
+function pfValidateIssueDate() {
+    const inp = document.getElementById('pf-issue-date'), hint = document.getElementById('pf-issue-hint');
+    if (inp.value && inp.value > pfTodayStr()) {
         inp.style.borderColor = '#ff8a80';
         hint.style.color = '#ff8a80'; hint.textContent = '發行章日期不可以是未來日期';
         return false;
@@ -5955,6 +5963,7 @@ function pfRenderShareUsers() {
     }).join('')
         : '<span style="color:#8b949e;font-size:12px;">查無符合的人員（可能是對方沒有批圖編輯器使用權）</span>';
 }
+let pfPartsMap = {};   // d_id -> D_Setting_Id，搜尋後供 pfApplyPartToName() 把檔名帶成料號
 async function pfSearch(auto) {
     const q = document.getElementById('pf-q').value.trim();
     if (!q) { if (!auto) toast('請輸入料號或圖號關鍵字'); return; }
@@ -5964,6 +5973,8 @@ async function pfSearch(auto) {
         const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
         if (!res.success) throw new Error(res.message || '');
         const sel = document.getElementById('pf-part');
+        pfPartsMap = {};
+        res.parts.forEach(p => { pfPartsMap[p.d_id] = p.D_Setting_Id; });
         sel.innerHTML = res.parts.length
             ? res.parts.map(p => '<option value="' + p.d_id + '">' + escHtml(p.D_Setting_Id + (p.Drawing_No ? '｜' + p.Drawing_No : '')) + '</option>').join('')
             : '<option value="">查無符合料號</option>';
@@ -5973,8 +5984,14 @@ async function pfSearch(auto) {
             const exact = res.parts.find(p => p.D_Setting_Id === PRELOAD_PART_NO);
             if (exact) sel.value = String(exact.d_id);
         }
+        pfApplyPartToName();   // 搜尋出結果後，檔名自動帶成選到的料號（現場慣例打料號當檔名，見 pf-name 預設註解）
         pfLoadWorkfiles();
     } catch (e) { if (!auto) toast('搜尋失敗：' + (e.message || '')); }
+}
+/** 搜尋/切換選到的料號時，把「檔名」自動帶成該料號（使用者可再手動改） */
+function pfApplyPartToName() {
+    const partNo = pfPartsMap[document.getElementById('pf-part').value];
+    if (partNo) document.getElementById('pf-name').value = partNo;
 }
 const PF_SCOPE_LABEL = { private: '私人', dept: '部門共用', custom: '指定人員', company: '公司共用（舊資料）' };
 async function pfLoadWorkfiles() {
@@ -6052,8 +6069,8 @@ async function pfSave() {
         // 圖面變更判定：本頁不做登錄表單（欄位多、跳窗會蓋住畫布），改提示到料號附件頁登錄
         const v = res.dwg_verdict || {};
         if (v.kind === 'change') {
-            alert('偵測到圖面變更\n\n這張圖的發行章日期（' + (v.issue_date||'') + '）比此料號現有最新的自家圖面（'
-                + (v.prev_name||'') + '，' + (v.prev_date||'') + '）新。\n\n'
+            alert('偵測到圖面變更\n\n這張圖的發行章日期（' + egFmtDate(v.issue_date) + '）比此料號現有最新的自家圖面（'
+                + (v.prev_name||'') + '，' + egFmtDate(v.prev_date) + '）新。\n\n'
                 + '請到「圖面變更紀錄」頁登錄這次改了什麼、從哪個製程開始受影響，\n'
                 + '系統才會複製檢驗標準新版次並通知相關人員簽收。');
         } else if (v.kind === 'first') {
@@ -7028,6 +7045,36 @@ document.addEventListener('keydown', function (e) {
 document.addEventListener('keyup', function (e) {
     if (e.code === 'Space') { spaceDown = false; canvas.defaultCursor = (currentTool === 'pan') ? 'grab' : 'default'; }
 });
+
+/* ── 日期欄位：輸入年份4碼後自動跳月份（比照 NewOrder_Track222.php 同一套行為，讓 20260806 可連續輸入）
+   本頁沒載入 jQuery（Fabric 畫布頁面），改用原生事件寫同一套邏輯 ── */
+(function () {
+    const yBuf = new WeakMap();
+    const isDateInput = el => el && el.matches && el.matches('input[type="date"]');
+    ['focus', 'blur'].forEach(evt => document.addEventListener(evt, function (e) {
+        if (isDateInput(e.target)) yBuf.set(e.target, '');
+    }, true));
+    document.addEventListener('click', function (e) { if (isDateInput(e.target)) yBuf.set(e.target, ''); });
+    document.addEventListener('keydown', function (e) {
+        const el = e.target;
+        if (!isDateInput(el)) return;
+        if (/^[0-9]$/.test(e.key)) {
+            const buf = (yBuf.get(el) || '') + e.key;
+            if (buf.length >= 4) {
+                yBuf.set(el, '');
+                setTimeout(function () {
+                    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true, cancelable: true }));
+                }, 30);
+            } else {
+                yBuf.set(el, buf);
+            }
+        } else if (e.key === 'Backspace') {
+            yBuf.set(el, (yBuf.get(el) || '').slice(0, -1));
+        } else if (e.key !== 'Tab' && !e.key.startsWith('Arrow')) {
+            yBuf.set(el, '');
+        }
+    });
+})();
 
 /* ── 跳窗 / 畫布設定 / 其他 ── */
 function showModal(id) {
