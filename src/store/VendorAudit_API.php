@@ -151,7 +151,12 @@ case 'periodic_eval_all': {
         $out[] = ['maker_id_no'=>$m['maker_id_no'], 'maker_name'=>$m['maker_id'],
                   'months'=>$res['months'], 'halves'=>$res['halves'], 'fail'=>$fail];
     }
-    jout(['year'=>$year, 'settings'=>$set, 'vendors'=>$out]);
+    // 定期評核表本身沒有單筆業務日期(選定年度的全廠商彙總報表)，比照該年度稽核計畫的送出日期回推
+    // AS 編號版次(使用者明確要求：兩者用同一套業務日期認定，ai-rules/16 第三之四節)。
+    $evalLock = vendor_audit_plan_lock_get($db, $year);
+    $evalBizDate = $evalLock['submit_date'] ?? null;
+    jout(['year'=>$year, 'settings'=>$set, 'vendors'=>$out,
+          'eval_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_eval_as_doc_id', $evalBizDate)]);
 }
 
 /* ===== 合格供應商清冊（2-PH-01-04）===== */
@@ -436,6 +441,10 @@ case 'get_form': {
         $ap = eg_approval_latest($db, 'vendor_audit_sign', $tid, 'manager');
         if ($ap && $ap['status'] === 'rejected') $rejectInfo = ['by'=>$ap['approver_name'], 'at'=>$ap['decided_at'], 'note'=>$ap['note']];
     }
+    // 查核表/記錄表都是「單一筆有自己稽核日期」的單據，AS 編號版次依該筆 audit_date 回推（ai-rules/16 第三之四節）
+    $bizDate = $t['audit_date'] ?: null;
+    $asDoc = vendor_audit_bound_asdoc($db, 'vendor_audit_as_doc_id', $bizDate);
+    $recordDoc = vendor_audit_bound_asdoc($db, 'vendor_record_as_doc_id', $bizDate);
     jout(['target'=>[
         'target_id'=>(int)$t['target_id'], 'maker_id_no'=>$t['maker_id_no'], 'maker_id'=>$t['maker_id'],
         'main_cat_name'=>$t['main_cat_name'], 'scope'=>$scope, 'scope_label'=>vendor_audit_scope_label($scope),
@@ -448,6 +457,7 @@ case 'get_form': {
         'status'=>$t['status'] ?: 'draft', 'signed_by_name'=>$t['signed_by_name'], 'signed_at'=>$t['signed_at'],
         'signed_is_deputy'=>$t['signed_is_deputy'] ? true : false, 'reject_info'=>$rejectInfo,
         'checklist_cfg'=>$cfg,
+        'as_doc_no'=>$asDoc['doc_no'] ?? '', 'record_as_doc_no'=>$recordDoc['doc_no'] ?? '',
     ], 'auditors'=>$auditors, 'attaches'=>$attaches]);
 }
 
@@ -829,10 +839,13 @@ case 'plan_data': {
             'user_cname'
         );
     }
+    // 年度計畫本身沒有單筆業務日期，但「送出計畫」是明確的定案事件，AS 編號版次依 submit_date 回推
+    // （ai-rules/16 第三之四節）；尚未送出時沒有 submit_date，退回今天最新版（等同現行行為）。
+    $planBizDate = $lock['submit_date'] ?? null;
     jout(['year'=>$year, 'rows'=>vendor_audit_plan_data($db, $year), 'lock'=>$lock,
           'locked'=>vendor_audit_plan_locked($db, $year), 'sign_setting'=>$signSet,
           'approver_names'=>$approverNames,
-          'plan_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_plan_as_doc_id'),
+          'plan_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_plan_as_doc_id', $planBizDate),
           'company_name'=>vendor_audit_company_name($db)]);
 }
 case 'plan_submit': {

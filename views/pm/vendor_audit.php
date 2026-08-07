@@ -1905,7 +1905,7 @@ function printEvalAll(){
     if(!EVAL_ALL) return;
     var list=EVAL_ALL.vendors.filter(function(v){ return !$('#evFailOnly').is(':checked')||v.fail; });
     if(!list.length){ alert('無資料可列印'); return; }
-    var doc=META.eval_as_doc, docName=(doc&&doc.doc_name)||'供應商定期評核表', docNo=(doc&&doc.doc_no)||'2-PH-01-05';
+    var doc=EVAL_ALL.eval_as_doc||META.eval_as_doc, docName=(doc&&doc.doc_name)||'供應商定期評核表', docNo=(doc&&doc.doc_no)||'2-PH-01-05';
     var per=6, pages=Math.ceil(list.length/per), body='';
     for(var p=0;p<pages;p++){
         var cards='';
