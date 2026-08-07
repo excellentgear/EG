@@ -1322,14 +1322,10 @@ function loadSettingsTab(tab, btn) {
             var did   = r.dept_id   || '—';
             $.post(API, {action:'get_settings'}, function(s) {
                 var nasDir = (s.data && s.data.sales_nas_dir) || 'Z:/BOM/ERP/業務/';
-                var urlDir = (s.data && s.data.sales_url_dir) || '/nas/ERP/業務/';
                 var isA = (PERM === 'A');
                 var nasInput = isA ?
                     '<div style="display:flex;gap:6px;margin-top:4px;"><input type="text" class="form-control input-sm" id="cfg-nas-dir" value="'+esc(nasDir)+'" style="flex:1;font-family:monospace;"><button class="btn btn-xs btn-primary" onclick="saveSettingKey(\'sales_nas_dir\',\'cfg-nas-dir\')"><i class="fa fa-save"></i> 儲存</button></div>' :
                     '<div style="font-family:monospace;font-size:12px;color:#333;background:#f5f5f5;padding:4px 8px;border-radius:4px;margin-top:4px;">'+esc(nasDir)+'</div>';
-                var urlInput = isA ?
-                    '<div style="display:flex;gap:6px;margin-top:4px;"><input type="text" class="form-control input-sm" id="cfg-url-dir" value="'+esc(urlDir)+'" style="flex:1;font-family:monospace;"><button class="btn btn-xs btn-primary" onclick="saveSettingKey(\'sales_url_dir\',\'cfg-url-dir\')"><i class="fa fa-save"></i> 儲存</button></div>' :
-                    '<div style="font-family:monospace;font-size:12px;color:#333;background:#f5f5f5;padding:4px 8px;border-radius:4px;margin-top:4px;">'+esc(urlDir)+'</div>';
                 var bossUserId   = (s.data && s.data.boss_review_user_id)   || '';
                 var bossUserName = (s.data && s.data.boss_review_user_name) || '';
                 var bossDeptId   = (s.data && s.data.boss_review_dept_id)   || '';
@@ -1364,14 +1360,9 @@ function loadSettingsTab(tab, btn) {
                     '<div style="font-size:11px;font-weight:700;color:#7fa8c9;letter-spacing:.6px;margin-bottom:6px;"><i class="fa fa-folder-open-o"></i> 圖片儲存路徑</div>'+
                     '<div style="border:1px solid #e4e8ed;border-radius:6px;padding:14px 16px;background:#fff;">'+
                         '<div style="margin-bottom:12px;">'+
-                            '<label style="font-size:12px;color:#555;margin-bottom:0;">NAS 實體路徑（後端寫檔）</label>'+
+                            '<label style="font-size:12px;color:#555;margin-bottom:0;">圖片存放位置</label>'+
                             nasInput+
-                            '<div style="font-size:10px;color:#bbb;margin-top:2px;">例：Z:/BOM/ERP/業務/</div>'+
-                        '</div>'+
-                        '<div>'+
-                            '<label style="font-size:12px;color:#555;margin-bottom:0;">URL 前綴（前端顯示）</label>'+
-                            urlInput+
-                            '<div style="font-size:10px;color:#bbb;margin-top:2px;">例：/nas/ERP/業務/</div>'+
+                            '<div style="font-size:11px;color:#7f8c8d;margin-top:3px;line-height:1.5;">可用網路路徑（<code>\\主機名\分享名\資料夾</code>）或磁碟機代號。<b>建議用網路路徑</b>——代號是每台電腦各自對應的，換機或對應掉了就整批讀不到。資料庫只記檔名，改這裡即可整批換位置，但既有檔案要自己先搬（同位置換寫法則免搬）。</div>'+
                         '</div>'+
                         (!isA ? '<div style="margin-top:10px;font-size:11px;color:#bbb;"><i class="fa fa-lock"></i> 僅權限 A 可修改路徑設定</div>' : '')+
                     '</div>'

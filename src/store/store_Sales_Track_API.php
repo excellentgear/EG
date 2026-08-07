@@ -297,10 +297,8 @@ try {
             $trackImgMap = [];
             $noteImgMap  = [];
             if (!empty($rows)) {
-                try {
-                    $urlRow = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='sales_url_dir' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-                    $url_dir = $urlRow ? rtrim($urlRow['setting_value'],'/') . '/' : '/nas/ERP/業務/';
-                } catch(Exception $e) { $url_dir = '/nas/ERP/業務/'; }
+                // 圖片改走讀檔 API（不再直連 /nas 別名）：位置只由 sales_nas_dir 決定
+                $url_dir = '../../src/store/SalesImage_API.php?f=';
 
                 $trackIds = implode(',', array_map('intval', array_column($rows, 'track_id')));
                 $tiRows = $pdo->query("SELECT target_id, img_id, file_name, original_name FROM sales_track_images WHERE target_type='track' AND target_id IN ($trackIds) ORDER BY target_id, sort_order, img_id")->fetchAll(PDO::FETCH_ASSOC);
@@ -480,10 +478,8 @@ try {
             $stmt->execute([$track_id]);
             $notes = $stmt->fetchAll(PDO::FETCH_ASSOC);
             // 附加圖片 URL
-            try {
-                $urlRow = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='sales_url_dir' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-                $url_dir = $urlRow ? rtrim($urlRow['setting_value'],'/') . '/' : '/nas/ERP/業務/';
-            } catch(Exception $e) { $url_dir = '/nas/ERP/業務/'; }
+            // 圖片改走讀檔 API（不再直連 /nas 別名）：位置只由 sales_nas_dir 決定
+            $url_dir = '../../src/store/SalesImage_API.php?f=';
             $imgQ = $pdo->prepare("SELECT img_id, file_name, original_name FROM sales_track_images WHERE target_type='note' AND target_id=? ORDER BY sort_order, img_id");
             foreach ($notes as &$n) {
                 $imgQ->execute([$n['note_id']]);
@@ -720,10 +716,8 @@ try {
             $target_type = in_array($_POST['target_type']??'', ['track','note']) ? $_POST['target_type'] : null;
             $target_id   = intval($_POST['target_id'] ?? 0);
             if (!$target_type || !$target_id) { echo json_encode(['success'=>true,'data'=>[]]); break; }
-            try {
-                $urlRow = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='sales_url_dir' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-                $url_dir = $urlRow ? rtrim($urlRow['setting_value'],'/') . '/' : '/nas/ERP/業務/';
-            } catch(Exception $e) { $url_dir = '/nas/ERP/業務/'; }
+            // 圖片改走讀檔 API（不再直連 /nas 別名）：位置只由 sales_nas_dir 決定
+            $url_dir = '../../src/store/SalesImage_API.php?f=';
             $s = $pdo->prepare("SELECT img_id, file_name, original_name FROM sales_track_images WHERE target_type=? AND target_id=? ORDER BY sort_order, img_id");
             $s->execute([$target_type, $target_id]);
             $imgs = array_map(fn($r) => array_merge($r, ['url'=>$url_dir.$r['file_name']]), $s->fetchAll(PDO::FETCH_ASSOC));
@@ -744,9 +738,9 @@ try {
             try {
                 $nasRow = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='sales_nas_dir' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
                 $nas_dir = $nasRow ? $nasRow['setting_value'] : 'Z:/BOM/ERP/業務/';
-                $urlRow = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='sales_url_dir' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
-                $url_dir = $urlRow ? rtrim($urlRow['setting_value'],'/') . '/' : '/nas/ERP/業務/';
-            } catch(Exception $e) { $nas_dir='Z:/BOM/ERP/業務/'; $url_dir='/nas/ERP/業務/'; }
+                // 圖片改走讀檔 API（不再直連 /nas 別名）：位置只由 sales_nas_dir 決定
+                $url_dir = '../../src/store/SalesImage_API.php?f=';
+            } catch(Exception $e) { $nas_dir='Z:/BOM/ERP/業務/'; $url_dir='../../src/store/SalesImage_API.php?f='; }
             if (!is_dir($nas_dir)) { if (!mkdir($nas_dir, 0777, true)) throw new Exception('無法建立目錄'); }
             $fname = date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ext;
             if (!move_uploaded_file($_FILES['image']['tmp_name'], $nas_dir . $fname)) throw new Exception('檔案移動失敗');
@@ -898,7 +892,7 @@ try {
                 foreach ($pdo->query("SELECT m.track_id, l.label_id, l.label_name, l.color FROM sales_track_label_map m JOIN sales_track_label l ON l.label_id=m.label_id WHERE m.track_id IN ($tids)")->fetchAll(PDO::FETCH_ASSOC) as $lr) $labelMap2[$lr['track_id']][] = $lr;
                 $noteMap2 = [];
                 foreach ($pdo->query("SELECT n.track_id, n.note_id, n.note_text, n.created_by_name, n.created_at, n.updated_by_name, n.updated_at FROM sales_track_note n INNER JOIN (SELECT track_id, MAX(note_id) max_id FROM sales_track_note WHERE track_id IN ($tids) GROUP BY track_id) t ON t.track_id=n.track_id AND t.max_id=n.note_id")->fetchAll(PDO::FETCH_ASSOC) as $nr) $noteMap2[$nr['track_id']] = $nr;
-                try { $urlRow2=$pdo->query("SELECT setting_value FROM system_settings WHERE setting_key='sales_url_dir' LIMIT 1")->fetch(PDO::FETCH_ASSOC); $url_dir2=$urlRow2?rtrim($urlRow2['setting_value'],'/').'/' :'/nas/ERP/業務/'; } catch(Exception $e2){ $url_dir2='/nas/ERP/業務/'; }
+                $url_dir2 = '../../src/store/SalesImage_API.php?f=';   // 圖片改走讀檔 API，不再直連 /nas 別名
                 $trackImgMap2 = [];
                 foreach ($pdo->query("SELECT target_id, img_id, file_name, original_name FROM sales_track_images WHERE target_type='track' AND target_id IN ($tids) ORDER BY target_id, sort_order, img_id")->fetchAll(PDO::FETCH_ASSOC) as $ti) $trackImgMap2[intval($ti['target_id'])][] = array_merge($ti, ['url'=>$url_dir2.$ti['file_name']]);
                 $noteImgMap2 = [];

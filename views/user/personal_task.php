@@ -471,14 +471,15 @@ $has_access = rf_has_module_role($pdo2, $my_id, 'personal_task');
         <div id="attachPathBox" style="display:none; border-top:1px dashed #ddd; margin-top:12px; padding-top:10px;">
           <div style="font-weight:700; font-size:13px; margin-bottom:6px;"><i class="fa fa-folder-open-o"></i> 附件儲存路徑（全系統設定，僅管理員可見）</div>
           <div class="form-group" style="margin-bottom:8px;">
-            <label style="font-size:12px; margin-bottom:2px;">NAS 實體路徑（後端寫檔）</label>
-            <input type="text" id="setNasDir" class="form-control input-sm" placeholder="例：Z:/BOM/ERP/個人工作/">
+            <!-- 只留這一欄：附圖已改走讀檔 API，不再靠 Apache /nas 別名直連，
+                 「URL 前綴」已無作用（留著使用者會以為改它有效） -->
+            <label style="font-size:12px; margin-bottom:2px;">附圖存放位置</label>
+            <input type="text" id="setNasDir" class="form-control input-sm" placeholder="例：\\excellentnas\生產課\BOM\ERP\個人工作">
           </div>
-          <div class="form-group" style="margin-bottom:6px;">
-            <label style="font-size:12px; margin-bottom:2px;">URL 前綴（前端顯示）</label>
-            <input type="text" id="setUrlDir" class="form-control input-sm" placeholder="例：/nas/ERP/個人工作/">
-          </div>
-          <p style="color:#888;font-size:11px;margin:0;">資料庫只存檔名，顯示時用此設定即時組出路徑；修改後所有附件（含既有）一律改讀新路徑，搬移 NAS 資料夾時請把既有檔案一併搬過去。</p>
+          <p style="color:#888;font-size:11px;margin:0;line-height:1.5;">
+            可用網路路徑（<code>\\主機名\分享名\資料夾</code>）或磁碟機代號。<b>建議用網路路徑</b>——磁碟機代號是每台電腦各自對應的，換機或對應掉了就整批讀不到。<br>
+            資料庫只存檔名、顯示時即時組出路徑，所以改這裡即可整批換位置；<b>搬移資料夾時請把既有檔案一併搬過去</b>（同一位置只是換寫法則不用搬）。存檔前系統會先確認這個位置讀得到。
+          </p>
         </div>
       </div>
       <div class="modal-footer">
@@ -1804,8 +1805,7 @@ $('#btnSettings').on('click', function () {
         $('#setUrgentDays').val(res.urgent_days != null ? res.urgent_days : 3);
         if (res.is_admin) {
             $('#attachPathBox').show();
-            $('#setNasDir').val(res.attach_nas_dir || '');
-            $('#setUrlDir').val(res.attach_url_dir || '');
+            $('#setNasDir').val(res.attach_nas_dir || '');   // URL 前綴欄位已移除（附圖改走讀檔 API）
         } else {
             $('#attachPathBox').hide();
         }
@@ -1817,7 +1817,7 @@ $('#btnSaveSetting').on('click', function () {
         if (!res.success) { alert(res.message || '儲存失敗'); return; }
         var finish = function () { $('#settingModal').modal('hide'); toast('已儲存設定'); loadList(); };
         if ($('#attachPathBox').is(':visible')) {
-            apiPost('save_attach_path', { nas_dir: $('#setNasDir').val(), url_dir: $('#setUrlDir').val() }).done(function (r2) {
+            apiPost('save_attach_path', { nas_dir: $('#setNasDir').val() }).done(function (r2) {
                 if (!r2.success) { alert(r2.message || '附件路徑儲存失敗'); return; }
                 finish();
             });

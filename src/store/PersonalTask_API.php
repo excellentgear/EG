@@ -253,15 +253,17 @@ function pt_is_admin(PDO $db, int $userId): bool {
 // 回傳 [NAS實體路徑(寫檔用), URL前綴(前端顯示用)]，皆保證以 / 結尾
 function pt_attach_dirs(PDO $db): array {
     $nas = 'Z:/BOM/ERP/個人工作/';
-    $url = '/nas/ERP/個人工作/';
+    // 附圖改走讀檔 API（不再用 Apache /nas 別名讓瀏覽器直連）：
+    // 位置只由 ptask_nas_dir 決定，換 NAS 免改 httpd.conf、也不綁磁碟機代號；
+    // 而且個人工作紀錄「僅本人可見」，走 API 才擋得住別人直接用網址看別人的附圖。
+    $url = '../../src/store/PtaskImage_API.php?f=';
     try {
         $rows = $db->query("SELECT setting_key, setting_value FROM system_settings
-                            WHERE setting_key IN ('ptask_nas_dir','ptask_url_dir')")->fetchAll(PDO::FETCH_KEY_PAIR);
+                            WHERE setting_key IN ('ptask_nas_dir')")->fetchAll(PDO::FETCH_KEY_PAIR);
         if (!empty($rows['ptask_nas_dir'])) $nas = trim($rows['ptask_nas_dir']);
-        if (!empty($rows['ptask_url_dir'])) $url = trim($rows['ptask_url_dir']);
     } catch (Exception $e) {}
     if (!preg_match('#[/\\\\]$#', $nas)) $nas .= '/';
-    return [$nas, rtrim($url, '/') . '/'];
+    return [$nas, $url];
 }
 
 // 取多筆紀錄的附圖（task_id => 附圖陣列，url 即時組出；只取正式 active）
@@ -314,12 +316,13 @@ try {
     if ($action === 'save_attach_path') {
         if (!pt_is_admin($db, $user_id)) throw new Exception('僅管理員可修改附件儲存路徑');
         $nasDir = trim((string)($_POST['nas_dir'] ?? ''));
-        $urlDir = trim((string)($_POST['url_dir'] ?? ''));
-        if ($nasDir === '' || $urlDir === '') throw new Exception('路徑不可為空');
+        if ($nasDir === '') throw new Exception('存放位置不可為空');
+        // 存檔前先確認讀得到，設錯當場擋下，不用等使用者發現附圖全破圖才知道
+        if (!is_dir(rtrim($nasDir, '/\\'))) throw new Exception('這個位置讀不到，請確認路徑正確且伺服器有權限存取：' . $nasDir);
         $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
                             ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)");
         $st->execute(['ptask_nas_dir', $nasDir]);
-        $st->execute(['ptask_url_dir', $urlDir]);
+        // ptask_url_dir 不再寫入（附圖已改走讀檔 API）；舊值保留在 system_settings 供回退
         echo json_encode(['success' => true]);
         exit;
     }
