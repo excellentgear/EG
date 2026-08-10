@@ -2231,10 +2231,13 @@ $('#planPrintBtn').on('click', function(){
     var docNo=(PLANDATA.plan_as_doc&&PLANDATA.plan_as_doc.doc_no)||'2-PH-01-06';
     var year=$('#planYear').val();
     var lock = PLANDATA.lock;
+    // 核准與製表人同印一份文件的日期，兩欄一律用同一個日期（該計劃的業務日期＝送出日，比照ai-rules/18簽章日期規則），
+    // 不印核准當下真正點擊的日期，避免同一張計劃上出現兩個不同日期。
+    var planDate = fmtDate(lock ? lock.submit_date : META.today) || '';
     var approveStamp = (lock && lock.status==='approved' && lock.approved_by_name)
-        ? vaStampHtml(lock.approved_by_name, fmtDate(lock.approved_at)||'') : '';
+        ? vaStampHtml(lock.approved_by_name, planDate) : '';
     var maker = lock ? (lock.submitted_by_name||'') : CUR_USER_NAME;
-    var makeStamp = maker ? vaStampHtml(maker, fmtDate(lock?lock.submit_date:META.today)||'') : '';
+    var makeStamp = maker ? vaStampHtml(maker, planDate) : '';
     var rowsAll = PLANDATA.rows||[];
     var PER_PAGE = 16;
     var pageCount = Math.max(1, Math.ceil(rowsAll.length/PER_PAGE));
