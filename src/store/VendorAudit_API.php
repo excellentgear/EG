@@ -893,14 +893,21 @@ case 'plan_decide': {
     $lock = vendor_audit_plan_lock_get($db, $year);
     if (!$lock || $lock['status'] !== 'pending') jerr('此年度計劃目前無待核准紀錄');
     $submittedBy = (int)($lock['submitted_by'] ?? 0);
-    $pool = vendor_audit_plan_approver_pool($db, $submittedBy);
-    // 球員兼裁判：$pool 已排除送出者本人；若還有其他合格人選，即使是管理者也不准自己核准自己送出的計劃，
-    // 只有全公司真的找不到別人(pool為空)時才放行讓送出者(仍須canAdmin)自行核准，避免卡死(使用者2026-08-10明確要求)。
-    if ($uid === $submittedBy) {
-        if ($pool) jerr('您是本計劃的送出人，請改由其他核准人員核准，避免球員兼裁判', 403);
-        if (!$perms['canAdmin']) jerr('您不是本計劃的核准人員', 403);
-    } elseif (!$perms['canAdmin'] && !in_array($uid, array_column($pool, 'id'), true)) {
-        jerr('您不是本計劃的核准人員', 403);
+    $pool = vendor_audit_plan_approver_pool($db, $submittedBy); // 已排除送出者本人
+    $isSubmitter = ($uid === $submittedBy);
+    $inPool = in_array($uid, array_column($pool, 'id'), true);
+    if ($decision === 'approved') {
+        // 球員兼裁判只擋「核准」：若還有其他合格人選，即使是管理者也不准自己核准自己送出的計劃，
+        // 只有全公司真的找不到別人(pool為空)時才放行讓送出者(仍須canAdmin)自行核准，避免卡死(使用者2026-08-10明確要求)。
+        if ($isSubmitter) {
+            if ($pool) jerr('您是本計劃的送出人，請改由其他核准人員核准，避免球員兼裁判', 403);
+            if (!$perms['canAdmin']) jerr('您不是本計劃的核准人員', 403);
+        } elseif (!$perms['canAdmin'] && !$inPool) {
+            jerr('您不是本計劃的核准人員', 403);
+        }
+    } else {
+        // 退回不算球員兼裁判：送出人自己撤回等同簡化版取消送出，允許；合格核准人/管理者也能退回。
+        if (!$isSubmitter && !$inPool && !$perms['canAdmin']) jerr('您不是本計劃的核准人員', 403);
     }
     if ($decision === 'approved') {
         $db->prepare("UPDATE vendor_audit_plan_lock SET status='approved', approved_by_name=?, approved_at=NOW(), approved_date=? WHERE year=?")
