@@ -1058,7 +1058,7 @@ function openRec(tid){
         CUR_REC = t;
         $('#recTitle').text('稽核評鑑表單：'+t.maker_id+'（'+t.maker_id_no+'）');
         $('#recPlanMonth').val(t.plan_month||'');
-        $('#recDate').val(fmtDate(t.audit_date)||META.today);
+        $('#recDate').val((t.audit_date?String(t.audit_date).substr(0,10):'')||META.today);
         $('#recMode').val(t.audit_mode||'first');
         // 稽核員下拉：只列該供應商 scope(外包加工/採購)＋通用 的有資格者
         var $au = $('#recAuditor').html('<option value="">—</option>');
@@ -1485,10 +1485,10 @@ function printBlankForm(){
 function printCurrentForm(){
     openPrintWindow(auditFormHTML({
         maker: $('#recTitle').text().replace('稽核評鑑表單：',''),
-        dateStr: $('#recDate').val(), scores: collectScores(), mode: $('#recMode').val(),
+        dateStr: fmtDate($('#recDate').val()), scores: collectScores(), mode: $('#recMode').val(),
         prodType: CUR_PROD_TYPE, auditorName: $('#recAuditor').val(),
         mgrApproved: !!(CUR_REC && CUR_REC.status==='approved' && CUR_REC.signed_by_name),
-        mgrName: CUR_REC && CUR_REC.signed_by_name, mgrDate: $('#recDate').val(),
+        mgrName: CUR_REC && CUR_REC.signed_by_name, mgrDate: fmtDate($('#recDate').val()),
         mgrIsDeputy: CUR_REC && !!CUR_REC.signed_is_deputy
     }), '供應商評鑑稽核查表', (CUR_REC&&CUR_REC.as_doc_no)||(META.as_doc&&META.as_doc.doc_no)||'2-PH-01-02', false, true);
 }
