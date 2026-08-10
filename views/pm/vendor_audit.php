@@ -2308,10 +2308,10 @@ $('#planPrintBtn').on('click', function(){
         var chunk = rowsAll.slice(p*PER_PAGE, (p+1)*PER_PAGE);
         var isLast = (p === pageCount-1);
         var head = '<div style="text-align:center;">'
-            + '<div style="font-size:12px;font-weight:bold;text-align:left;">'+esc(year)+' 年</div>'
             + '<div style="font-size:20px;font-weight:bold;letter-spacing:1px;">'+esc(PLANDATA.company_name||'')+'</div>'
-            + '<div style="font-size:14px;font-weight:bold;margin-top:2px;">'+esc(docName)+'</div></div>';
-        var table = '<table class="pf plan-table" style="table-layout:fixed;margin-top:4px;"><colgroup><col style="width:15%;">';
+            + '<div style="font-size:14px;font-weight:bold;margin-top:2px;">'+esc(docName)+'</div></div>'
+            + '<div style="text-align:left;font-size:14px;font-weight:bold;margin-top:8px;">'+esc(year)+' 年</div>';
+        var table = '<table class="pf plan-table" style="table-layout:fixed;margin-top:2px;"><colgroup><col style="width:15%;">';
         for (var m=1;m<=12;m++) table += '<col>';
         table += '<col style="width:16%;"></colgroup><thead><tr><th>供應商名稱</th>';
         for (m=1;m<=12;m++) table += '<th>'+m+'月</th>';
