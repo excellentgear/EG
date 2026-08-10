@@ -436,12 +436,17 @@ case 'submit': {
     $itc = $db->prepare("SELECT COUNT(*) FROM meeting_item WHERE meeting_id=?"); $itc->execute([$id]);
     if ((int)$itc->fetchColumn() === 0) jerr('請至少建立一項會議要項或上級指示要項');
 
-    // 送出前置檢查：①出席人員全部簽到（2026-08-05使用者要求，仍然保留）。
-    // ②負責部門/指定人員尚未現場確認簽名的部分，2026-08-06改版(使用者明確要求)不再擋下送出，
-    // 改成送出時一併擴大通知相關人員回簽(見下方逐項通知迴圈與 meeting_item_pending_notify_targets)。
+    // 送出前置檢查：①出席人員全部簽到 ②負責部門/指定人員全部確認回簽(2026-08-10使用者明確要求恢復此擋卡：
+    // 負責單位/人員還沒確認與回覆前不應送主席簽核；還沒確認完的請先用「存檔並通知」action=notify_pending_items
+    // 通知對方回覆，待全部確認完成後才能送出)。
     $unsigned = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=? AND signed=0");
     $unsigned->execute([$id]);
     if ((int)$unsigned->fetchColumn() > 0) jerr('尚有出席人員未完成現場簽到，請先完成全部出席人員簽到再送出');
+    foreach (meeting_items($db, $id) as $it) {
+        if (!meeting_item_is_confirmed($db, $it)) {
+            jerr('項目「'.mb_substr((string)$it['content'], 0, 20).'…」尚有負責部門/指定人員未確認回簽，請先「存檔並通知」，待對方回覆確認後再送出');
+        }
+    }
 
     $chair = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
     if (!$chair['id']) jerr('找不到主席簽核人');
@@ -452,13 +457,34 @@ case 'submit': {
         .($chair['is_delegated'] ? '（原主席今日行程忙碌，已轉由代理人處理）' : ''), $uid);
     if ($ev) eg_approval_set_live_event($db, $id2, $ev);
 
-    // 逐項通知(2026-08-06改版)：負責部門/指定人員尚未現場簽名完成的項目，一律擴大通知(該部門本次所有出席
-    // 人員＋部門主管，或指定人員本人)，任一人透過通知回覆即完成，不再要求一定要是現場那位代表親自簽。
-    $pendingItems = 0;
+    $db->prepare("UPDATE meeting_record SET status='submitted', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+    jout(['status'=>'submitted']);
+}
+
+/* 存檔並通知(2026-08-10新增，使用者明確要求)：出席人員全部簽到後，若負責部門/指定人員尚未確認回簽，
+   一律先「存檔並通知」而不是直接送主席簽核——通知該部門本次所有出席人員＋部門主管(或指定人員本人)，
+   任一人回覆即完成該項目；全部項目都確認後才能真正 action=submit 送交主席簽核。
+   不會重複灌通知：已確認完成的項目跳過；已經有一則還在生效中的通知（尚未關閉）也跳過，避免每點一次就轟炸一次。 */
+case 'notify_pending_items': {
+    $id = (int)($_POST['meeting_id'] ?? 0);
+    $m = meeting_load($db, $id);
+    if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可通知', 403);
+    if (!in_array($m['status'], ['draft','rejected'], true)) jerr('此會議記錄已送出，無法再通知');
+    $unsigned = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=? AND signed=0");
+    $unsigned->execute([$id]);
+    if ((int)$unsigned->fetchColumn() > 0) jerr('尚有出席人員未完成現場簽到，請先完成全部出席人員簽到');
+
+    $notified = 0;
+    $activeStmt = $db->prepare("SELECT 1 FROM live_event WHERE ref_type='MEETING_ITEM_CONFIRM' AND ref_id=?
+                                 AND (enddate IS NULL OR enddate>=CURDATE()) LIMIT 1");
     foreach (meeting_items($db, $id) as $it) {
+        if (meeting_item_is_confirmed($db, $it)) continue; // 已全部確認完成，不必再通知
+        $activeStmt->execute([(int)$it['item_id']]);
+        if ($activeStmt->fetchColumn()) continue; // 已有一則還在等回覆的通知，不重複發
+
         $targets = meeting_item_pending_notify_targets($db, $id, $it);
         if (!$targets) continue;
-        $pendingItems++;
+        $notified++;
         $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
         if ($ownerIds) {
             $inDept = implode(',', $ownerIds);
@@ -477,9 +503,7 @@ case 'submit': {
             .(count($targets) > 1 ? "\n（任一人回覆即完成，不需每人都回）" : ''),
             $uid);
     }
-
-    $db->prepare("UPDATE meeting_record SET status='submitted', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
-    jout(['status'=>'submitted', 'pending_items'=>$pendingItems]);
+    jout(['notified_items'=>$notified]);
 }
 
 /* 撤回已送出但「尚未任何人簽核」的會議記錄(2026-08-05 使用者明確要求)：
