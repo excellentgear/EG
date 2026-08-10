@@ -4,12 +4,13 @@
  * 逐筆列出 pm_process_daily_report 每一筆報工紀錄（含臨時加工），供查找/列印用；
  * 與 process_schedule.php 的「查詢已報工工單」跳窗不同——那支是依工單(bom_ing_fid)彙總、
  * 用來恢復任務/改綁BOM等操作，這支是純瀏覽/列印每一筆報工紀錄，兩者並存不互相取代。
- * 篩選：日期區間(預設近30天，清空=不限日期查全部)、製程、機台、人員(設置/生產人員合併比對)、備註。
+ * 篩選：日期區間(預設近30天，清空=不限日期查全部)、製程、機台、人員(架機/生產人員合併比對)、備註。
  * 分頁走後端(不一次撈全部)；列印/CSV匯出走後端依目前篩選條件抓「全部」符合筆數(不受分頁限制)。
+ * 製程/機台/人員三個篩選皆為「動態連動清單」（get_facets action）：只列目前其餘篩選條件下仍有資料的選項，
+ * 選了製程會連動縮小機台/人員清單，反之亦然，比照 pivot table 的 facet filter 做法，避免選出兜不出資料的組合。
  */
 include_once '../../src/common/_config.php';
 include "../../src/common/DBConnection.php";
-include_once '../../src/common/people_lib.php';
 
 // 登入檢查（比照 process_schedule.php，AJAX-aware）
 if (!isset($_SESSION['user_id']) && !isset($_SESSION['id'])) {
@@ -84,21 +85,33 @@ if (is_null($permission_code)) {
     exit;
 }
 
-// ================= 共用：組出篩選條件（list / get_print / export_csv 三處共用，避免各自重寫一份） =================
-function prq_build_filter($p) {
+// ================= 共用：組出篩選條件（list / get_print / export_csv / get_facets 共用，避免各自重寫一份） =================
+// $exclude：計算某個篩選欄位自己的可選清單(facet)時，要排除該欄位自己的條件，只套用「其餘」條件
+function prq_build_filter($p, $exclude = []) {
     $where = [];
     $params = [];
-    if (!empty($p['date_from'])) { $where[] = 'pdr.report_date >= ?'; $params[] = $p['date_from']; }
-    if (!empty($p['date_to']))   { $where[] = 'pdr.report_date <= ?'; $params[] = $p['date_to']; }
-    if (!empty($p['process_no'])) { $where[] = 'pdr.process_no = ?'; $params[] = intval($p['process_no']); }
-    if (!empty($p['machine_id'])) { $where[] = 'pdr.machine_id = ?'; $params[] = intval($p['machine_id']); }
-    if (!empty($p['person'])) {
+    if (!in_array('date', $exclude, true)) {
+        if (!empty($p['date_from'])) { $where[] = 'pdr.report_date >= ?'; $params[] = $p['date_from']; }
+        if (!empty($p['date_to']))   { $where[] = 'pdr.report_date <= ?'; $params[] = $p['date_to']; }
+    }
+    if (!in_array('process_no', $exclude, true) && !empty($p['process_no'])) { $where[] = 'pdr.process_no = ?'; $params[] = intval($p['process_no']); }
+    if (!in_array('machine_id', $exclude, true) && !empty($p['machine_id'])) { $where[] = 'pdr.machine_id = ?'; $params[] = intval($p['machine_id']); }
+    if (!in_array('person', $exclude, true) && !empty($p['person'])) {
         $where[] = '(CONVERT(u1.user_cname USING utf8mb4) LIKE ? OR CONVERT(u2.user_cname USING utf8mb4) LIKE ?)';
         $like = '%' . $p['person'] . '%';
         $params[] = $like; $params[] = $like;
     }
-    if (!empty($p['remark'])) { $where[] = 'pdr.remark LIKE ?'; $params[] = '%' . $p['remark'] . '%'; }
+    if (!in_array('remark', $exclude, true) && !empty($p['remark'])) { $where[] = 'pdr.remark LIKE ?'; $params[] = '%' . $p['remark'] . '%'; }
     return [$where ? ('WHERE ' . implode(' AND ', $where)) : '', $params];
+}
+function prq_append_where($whereSql, $extra) {
+    return $whereSql ? ($whereSql . ' AND ' . $extra) : ('WHERE ' . $extra);
+}
+function prq_time_range($start, $end) {
+    $s = $start ? substr($start, 11, 5) : '';
+    $e = $end ? substr($end, 11, 5) : '';
+    if (!$s && !$e) return '';
+    return $s . '~' . $e;
 }
 
 $PRQ_FROM = "FROM pm_process_daily_report pdr
@@ -111,6 +124,7 @@ $PRQ_FROM = "FROM pm_process_daily_report pdr
 
 $PRQ_COLS = "pdr.report_id, pdr.report_date, pdr.report_source, pdr.remark, pdr.produced_qty, pdr.is_finished,
     pdr.process_face, pdr.source_reason,
+    pdr.setup_start_time, pdr.setup_end_time, pdr.production_start_time, pdr.production_end_time,
     m.machine, u1.user_cname AS setup_user, u2.user_cname AS prod_user, pn.ProcessName,
     bi.bom, b.d_id, b.Client_Name";
 
@@ -128,17 +142,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             header('Content-Disposition: attachment; filename="process_report_' . date('YmdHis') . '.csv"');
             echo "\xEF\xBB\xBF"; // Excel 判讀 UTF-8 BOM
             $out = fopen('php://output', 'w');
-            fputcsv($out, ['日期', '製程', '機台', '工單/料號', '客戶', '設置人員', '生產人員', '生產數量', '完工', '加工面', '備註']);
+            fputcsv($out, ['日期', '製程', '機台', '工單', '料號', '客戶', '架機人員', '架機時間', '生產人員', '生產時間', '生產數量', '完工', '加工面', '備註']);
             while ($r = $stmt->fetch(PDO::FETCH_ASSOC)) {
                 $isTemp = $r['report_source'] === 'TEMP';
                 fputcsv($out, [
                     $r['report_date'],
                     $r['ProcessName'],
                     $r['machine'],
-                    $isTemp ? '臨時加工' : ($r['bom'] . ($r['d_id'] ? (' / ' . $r['d_id']) : '')),
+                    $isTemp ? '臨時加工' : $r['bom'],
+                    $isTemp ? '' : $r['d_id'],
                     $isTemp ? ($r['source_reason'] ?: '') : $r['Client_Name'],
                     $r['setup_user'],
+                    prq_time_range($r['setup_start_time'], $r['setup_end_time']),
                     $r['prod_user'],
+                    prq_time_range($r['production_start_time'], $r['production_end_time']),
                     $r['produced_qty'],
                     $r['is_finished'] ? '是' : '否',
                     $r['process_face'],
@@ -184,6 +201,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($cr) $company = $cr['customer_full'];
 
             echo json_encode(['success' => true, 'rows' => $rows, 'total' => count($rows), 'company_name' => $company]);
+        } elseif ($action === 'get_facets') {
+            // 每個維度各自排除「自己」的篩選條件，只套用其餘條件，才能算出「若改選這個，還會有資料」的清單（雙向連動）
+            list($whereP, $paramsP) = prq_build_filter($_POST, ['process_no']);
+            $stmtP = $pdo->prepare("SELECT pdr.process_no, pn.ProcessName, COUNT(*) cnt $PRQ_FROM $whereP GROUP BY pdr.process_no, pn.ProcessName ORDER BY pn.ProcessName");
+            $stmtP->execute($paramsP);
+            $processes = $stmtP->fetchAll(PDO::FETCH_ASSOC);
+
+            list($whereM, $paramsM) = prq_build_filter($_POST, ['machine_id']);
+            $stmtM = $pdo->prepare("SELECT pdr.machine_id, m.machine, COUNT(*) cnt $PRQ_FROM $whereM GROUP BY pdr.machine_id, m.machine ORDER BY m.position");
+            $stmtM->execute($paramsM);
+            $machines = $stmtM->fetchAll(PDO::FETCH_ASSOC);
+
+            list($whereU, $paramsU) = prq_build_filter($_POST, ['person']);
+            $whereU1 = prq_append_where($whereU, "u1.user_cname IS NOT NULL AND u1.user_cname<>''");
+            $whereU2 = prq_append_where($whereU, "u2.user_cname IS NOT NULL AND u2.user_cname<>''");
+            $stmtU = $pdo->prepare("(SELECT DISTINCT u1.user_cname AS nm $PRQ_FROM $whereU1) UNION (SELECT DISTINCT u2.user_cname AS nm $PRQ_FROM $whereU2) ORDER BY nm");
+            $stmtU->execute(array_merge($paramsU, $paramsU));
+            $people = $stmtU->fetchAll(PDO::FETCH_COLUMN);
+
+            echo json_encode(['success' => true, 'processes' => $processes, 'machines' => $machines, 'people' => $people]);
         } else {
             echo json_encode(['success' => false, 'message' => '未知操作']);
         }
@@ -193,10 +230,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     exit;
 }
 
-// ================= 頁面初次載入：預備篩選下拉選單資料 =================
-$process_list = $pdo->query("SELECT ProcessNo, ProcessName FROM process_no ORDER BY ProcessName")->fetchAll(PDO::FETCH_ASSOC);
-$machine_list = $pdo->query("SELECT machine_id, machine FROM machine_list WHERE (state IS NULL OR state != '1') ORDER BY position")->fetchAll(PDO::FETCH_ASSOC);
-$people_list = eg_people_list($pdo);
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -223,6 +256,12 @@ $people_list = eg_people_list($pdo);
         .help-doc ul { margin: 4px 0 8px; padding-left: 20px; }
         .help-doc li { margin: 2px 0; }
         .help-doc .tip { background: #FFF7E8; border: 1px dashed #F0A24B; border-radius: 6px; padding: 6px 10px; margin: 6px 0; }
+        .prq-tabs { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; clear: both;
+            border: 1.5px solid #E8D5B5; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: #FDF8EF; }
+        .prq-tab { height: 28px; font-size: 12px; line-height: 1; padding: 0 12px; border: 1px solid #D8BE93; border-radius: 14px;
+            background: #fff; color: #5b3a1e; cursor: pointer; }
+        .prq-tab:hover { background: #F7E0BD; }
+        .prq-tab.active { background: #F0A24B; color: #fff; border-color: #d98a33; font-weight: bold; }
         .prq-toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; clear: both;
             border: 1.5px solid #E8D5B5; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; background: #FDF8EF; }
         .prq-toolbar label { margin: 0 0 0 6px; font-size: 13px; color: #5b3a1e; }
@@ -273,38 +312,33 @@ $people_list = eg_people_list($pdo);
         </div>
         <div class="clearfix"></div>
 
+        <!-- 製程：比照 process_schedule.php 上方頁籤按鈕，只列目前其餘篩選條件下「有資料」的製程（雙向連動） -->
+        <div class="prq-tabs" id="processTabs">
+            <button class="prq-tab active" data-pn="">全部</button>
+        </div>
+
         <div class="prq-toolbar">
-            <label>日期</label>
-            <input type="date" id="fDateFrom" max="9999-12-31">
-            <span>～</span>
-            <input type="date" id="fDateTo" max="9999-12-31">
-            <label>製程</label>
-            <select id="fProcess" data-eg-filter="輸入製程名稱篩選…" style="min-width:140px;">
-                <option value="">（全部）</option>
-                <?php foreach ($process_list as $p): ?>
-                <option value="<?= (int)$p['ProcessNo'] ?>"><?= htmlspecialchars($p['ProcessName']) ?></option>
-                <?php endforeach; ?>
-            </select>
-            <label>機台</label>
-            <select id="fMachine" data-eg-filter="輸入機台名稱篩選…" style="min-width:120px;">
-                <option value="">（全部）</option>
-                <?php foreach ($machine_list as $m): ?>
-                <option value="<?= (int)$m['machine_id'] ?>"><?= htmlspecialchars($m['machine']) ?></option>
-                <?php endforeach; ?>
-            </select>
-            <label>人員</label>
-            <input type="text" id="fPerson" list="prqPeopleList" placeholder="設置或生產人員姓名" style="width:120px;">
-            <datalist id="prqPeopleList">
-                <?php foreach ($people_list as $pp): ?>
-                <option value="<?= htmlspecialchars($pp['user_cname']) ?>">
-                <?php endforeach; ?>
-            </datalist>
-            <label>備註</label>
-            <input type="text" id="fRemark" placeholder="關鍵字" style="width:120px;">
-            <button class="btn-warm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
-            <button id="btnClear"><i class="fa fa-eraser"></i> 清除篩選(查全部)</button>
-            <button id="btnPrint" style="margin-left:auto;"><i class="fa fa-print"></i> 列印</button>
-            <button id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;">
+                <label>日期</label>
+                <input type="date" id="fDateFrom" max="9999-12-31">
+                <span>～</span>
+                <input type="date" id="fDateTo" max="9999-12-31">
+                <label>機台</label>
+                <select id="fMachine" data-eg-filter="輸入機台名稱篩選…" style="min-width:150px;">
+                    <option value="">（全部）</option>
+                </select>
+                <label>備註</label>
+                <input type="text" id="fRemark" placeholder="關鍵字" style="width:120px;">
+                <button class="btn-warm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
+                <button id="btnClear"><i class="fa fa-eraser"></i> 清除篩選(查全部)</button>
+                <button id="btnPrint" style="margin-left:auto;"><i class="fa fa-print"></i> 列印</button>
+                <button id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;margin-top:6px;padding-top:6px;border-top:1px dashed #EADFC8;">
+                <label style="margin-left:0;">人員</label>
+                <input type="text" id="fPerson" list="prqPeopleList" placeholder="架機或生產人員姓名（目前篩選結果內才會出現在建議清單）" style="width:280px;">
+                <datalist id="prqPeopleList"></datalist>
+            </div>
         </div>
 
         <div class="prq-stat">
@@ -322,10 +356,10 @@ $people_list = eg_people_list($pdo);
         <div class="prq-table-wrap">
             <table class="prq-table" id="prqTable">
                 <thead><tr>
-                    <th>日期</th><th>製程</th><th>機台</th><th class="t-left">工單/料號</th><th>客戶</th>
-                    <th>設置人員</th><th>生產人員</th><th>生產數量</th><th>完工</th><th>加工面</th><th class="t-left">備註</th>
+                    <th>日期</th><th>製程</th><th>機台</th><th class="t-left">工單</th><th class="t-left">料號</th><th>客戶</th>
+                    <th>架機人員</th><th>架機時間</th><th>生產人員</th><th>生產時間</th><th>生產數量</th><th>完工</th><th>加工面</th><th class="t-left">備註</th>
                 </tr></thead>
-                <tbody id="prqTbody"><tr><td colspan="11" class="prq-empty">請設定篩選條件後查詢</td></tr></tbody>
+                <tbody id="prqTbody"><tr><td colspan="14" class="prq-empty">請設定篩選條件後查詢</td></tr></tbody>
             </table>
         </div>
         <div class="prq-pager" id="prqPager"></div>
@@ -340,7 +374,8 @@ $people_list = eg_people_list($pdo);
         <p>逐筆列出「加工排程看板」每一筆報工紀錄（含臨時加工），供查找特定日期/人員/製程/機台的報工內容並列印或匯出，與看板上「查詢已報工工單」跳窗（依工單彙總、用於恢復任務/改綁BOM）用途不同、互不影響。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>上方篩選列可組合使用：日期區間、製程、機台、人員（同時比對設置/生產人員）、備註關鍵字。</li>
+            <li>上方篩選可組合使用：製程（頁籤按鈕）、日期區間、機台、人員（同時比對架機/生產人員）、備註關鍵字。</li>
+            <li>製程、機台、人員的可選清單會依「目前其餘篩選條件」動態連動——只列真的有資料的選項，選了製程會連動縮小機台/人員清單，反之亦然。</li>
             <li>日期區間預設近30天；按「清除篩選(查全部)」可清空所有條件、改查全部歷史資料。</li>
             <li>列表分頁顯示（避免一次載入全部拖慢速度），可調整每頁筆數。</li>
             <li>「列印」「匯出CSV」皆依目前篩選條件抓「全部」符合筆數（不受分頁限制）。</li>
@@ -348,7 +383,8 @@ $people_list = eg_people_list($pdo);
         <h4>重要行為/常見疑問</h4>
         <div class="tip">若篩選結果筆數較多（超過3000筆），列印/匯出前會先跳出確認提示，避免不小心產生過大的列印工作。</div>
         <ul>
-            <li>臨時加工（無綁定工單）的「工單/料號」欄會顯示「臨時加工」，客戶欄改顯示加工原因。</li>
+            <li>臨時加工（無綁定工單）的「工單」欄會顯示「臨時加工」、「料號」欄留空，客戶欄改顯示加工原因。</li>
+            <li>「架機人員」＝原「設置人員」正名；架機/生產時間欄留空代表該筆報工未填該項時間。</li>
         </ul>
         <h4>設定入口</h4>
         <p>無需另外設定，資料即時取自報工系統。</p>
@@ -374,11 +410,22 @@ $(document).ready(function(){
 var COMPANY = '';
 var lastTotal = 0;
 var curPage = 1;
+var curProcess = ''; // 製程改用頁籤按鈕，不再是 <select>，用全域變數記目前選中的 process_no
 
 function esc(s){ return $('<div>').text(s==null?'':String(s)).html(); }
 
 function todayStr(){ var d=new Date(); return d.toISOString().substr(0,10); }
 function addDaysStr(days){ var d=new Date(); d.setDate(d.getDate()+days); return d.toISOString().substr(0,10); }
+function hm(dt){ // 只取 HH:MM
+    if (!dt) return '';
+    var m = String(dt).match(/(\d{2}):(\d{2})/);
+    return m ? (m[1]+':'+m[2]) : '';
+}
+function timeRange(s, e){
+    var a = hm(s), b = hm(e);
+    if (!a && !b) return '-';
+    return a + '~' + b;
+}
 
 // 預設近30天
 $('#fDateFrom').val(addDaysStr(-29));
@@ -388,7 +435,7 @@ function curFilters(){
     return {
         date_from: $('#fDateFrom').val(),
         date_to: $('#fDateTo').val(),
-        process_no: $('#fProcess').val(),
+        process_no: curProcess,
         machine_id: $('#fMachine').val(),
         person: $.trim($('#fPerson').val()),
         remark: $.trim($('#fRemark').val())
@@ -397,16 +444,20 @@ function curFilters(){
 
 function rowToTr(r){
     var isTemp = r.report_source === 'TEMP';
-    var bomTxt = isTemp ? '臨時加工' : (esc(r.bom) + (r.d_id ? (' / ' + esc(r.d_id)) : ''));
+    var bomTxt = isTemp ? '臨時加工' : esc(r.bom);
+    var didTxt = isTemp ? '' : esc(r.d_id);
     var custTxt = isTemp ? esc(r.source_reason || '') : esc(r.Client_Name);
     return '<tr>'
         + '<td>' + esc(egFmtDate(r.report_date)) + '</td>'
         + '<td>' + esc(r.ProcessName) + '</td>'
         + '<td>' + esc(r.machine) + '</td>'
         + '<td class="t-left">' + bomTxt + '</td>'
+        + '<td class="t-left">' + didTxt + '</td>'
         + '<td>' + custTxt + '</td>'
         + '<td>' + esc(r.setup_user) + '</td>'
+        + '<td>' + esc(timeRange(r.setup_start_time, r.setup_end_time)) + '</td>'
         + '<td>' + esc(r.prod_user) + '</td>'
+        + '<td>' + esc(timeRange(r.production_start_time, r.production_end_time)) + '</td>'
         + '<td>' + esc(r.produced_qty) + '</td>'
         + '<td>' + (r.is_finished ? '是' : '否') + '</td>'
         + '<td>' + esc(r.process_face || '-') + '</td>'
@@ -439,13 +490,13 @@ function loadList(page){
     f.action = 'list';
     f.page = page;
     f.page_size = $('#pageSizeSel').val();
-    $('#prqTbody').html('<tr><td colspan="11" class="prq-empty"><i class="fa fa-spinner fa-spin"></i> 載入中...</td></tr>');
+    $('#prqTbody').html('<tr><td colspan="14" class="prq-empty"><i class="fa fa-spinner fa-spin"></i> 載入中...</td></tr>');
     $.post('', f, function(res){
-        if (!res.success){ $('#prqTbody').html('<tr><td colspan="11" class="prq-empty">' + esc(res.message||'查詢失敗') + '</td></tr>'); return; }
+        if (!res.success){ $('#prqTbody').html('<tr><td colspan="14" class="prq-empty">' + esc(res.message||'查詢失敗') + '</td></tr>'); return; }
         lastTotal = res.total;
         $('#statTotal').text(res.total);
         if (!res.rows.length){
-            $('#prqTbody').html('<tr><td colspan="11" class="prq-empty">查無符合條件的報工紀錄</td></tr>');
+            $('#prqTbody').html('<tr><td colspan="14" class="prq-empty">查無符合條件的報工紀錄</td></tr>');
         } else {
             $('#prqTbody').html(res.rows.map(rowToTr).join(''));
         }
@@ -453,25 +504,73 @@ function loadList(page){
     }, 'json');
 }
 
-$('#btnSearch').on('click', function(){ loadList(1); });
-['#fDateFrom','#fDateTo','#fProcess','#fMachine'].forEach(function(sel){
-    $(sel).on('change', function(){ loadList(1); });
+// ── 動態連動篩選（facet）：製程頁籤／機台下拉／人員建議清單，皆依「目前其餘篩選條件」重新計算 ──
+// 只列有資料的選項；若目前選中的製程/機台在新清單裡消失了(跟其他篩選兜不出資料)，自動改回「全部」。
+function renderProcessTabs(list){
+    var $t = $('#processTabs').empty();
+    var total = 0;
+    list.forEach(function(p){ total += p.cnt; });
+    $('<button class="prq-tab' + (curProcess===''?' active':'') + '">全部（' + total + '）</button>')
+        .on('click', function(){ curProcess=''; applyFilters(); }).appendTo($t);
+    var stillValid = false;
+    list.forEach(function(p){
+        var pn = String(p.process_no);
+        if (pn === curProcess) stillValid = true;
+        $('<button class="prq-tab' + (pn===curProcess?' active':'') + '">' + esc(p.ProcessName) + '（' + p.cnt + '）</button>')
+            .on('click', function(){ curProcess=pn; applyFilters(); }).appendTo($t);
+    });
+    if (curProcess !== '' && !stillValid) curProcess = ''; // 跟其他篩選兜不出資料，自動改回全部
+}
+function renderMachineOptions(list){
+    var $sel = $('#fMachine');
+    var cur = $sel.val();
+    var html = '<option value="">（全部）</option>';
+    var stillValid = false;
+    list.forEach(function(m){
+        var id = String(m.machine_id);
+        if (id === cur) stillValid = true;
+        html += '<option value="' + id + '">' + esc(m.machine) + '（' + m.cnt + '）</option>';
+    });
+    $sel[0].innerHTML = html;
+    $sel.val(stillValid ? cur : '');
+    if ($sel[0].egFilterResnap) $sel[0].egFilterResnap();
+}
+function renderPeopleDatalist(list){
+    $('#prqPeopleList').html(list.map(function(nm){ return '<option value="' + esc(nm) + '">'; }).join(''));
+}
+
+function refreshFacets(cb){
+    var f = curFilters();
+    f.action = 'get_facets';
+    $.post('', f, function(res){
+        if (res.success){
+            renderProcessTabs(res.processes || []);
+            renderMachineOptions(res.machines || []);
+            renderPeopleDatalist(res.people || []);
+        }
+        if (cb) cb();
+    }, 'json');
+}
+
+function applyFilters(){ refreshFacets(function(){ loadList(1); }); }
+
+$('#btnSearch').on('click', applyFilters);
+['#fDateFrom','#fDateTo','#fMachine'].forEach(function(sel){
+    $(sel).on('change', applyFilters);
 });
 ['#fPerson','#fRemark'].forEach(function(sel){
-    $(sel).on('keyup', function(e){ if (e.key==='Enter') loadList(1); });
+    $(sel).on('keyup', function(e){ if (e.key==='Enter') applyFilters(); });
 });
 $('#pageSizeSel').on('change', function(){ loadList(1); });
 
 $('#btnClear').on('click', function(){
     $('#fDateFrom, #fDateTo, #fPerson, #fRemark').val('');
-    ['fProcess','fMachine'].forEach(function(id){
-        var sel = document.getElementById(id);
-        var box = sel.previousElementSibling;
-        if (box && box.className && box.className.indexOf('eg-filter-box') >= 0) box.value = '';
-        if (sel.egFilterResnap) sel.egFilterResnap();
-        sel.value = '';
-    });
-    loadList(1);
+    curProcess = '';
+    var sel = document.getElementById('fMachine');
+    var box = sel.previousElementSibling;
+    if (box && box.className && box.className.indexOf('eg-filter-box') >= 0) box.value = '';
+    sel.value = '';
+    applyFilters();
 });
 
 function confirmLargeResult(actionLabel){
@@ -493,14 +592,17 @@ $('#btnPrint').on('click', function(){
         var body = '<div class="p-comp">' + esc(res.company_name||'') + '</div>'
                  + '<div class="p-title">報工紀錄查詢列印</div>'
                  + '<div class="p-sub">' + esc(sub) + '</div>';
-        body += '<table class="p-tb"><thead><tr><th>日期</th><th>製程</th><th>機台</th><th>工單/料號</th><th>客戶</th>'
-              + '<th>設置人員</th><th>生產人員</th><th>數量</th><th>完工</th><th>備註</th></tr></thead><tbody>';
+        body += '<table class="p-tb"><thead><tr><th>日期</th><th>製程</th><th>機台</th><th>工單</th><th>料號</th><th>客戶</th>'
+              + '<th>架機人員</th><th>架機時間</th><th>生產人員</th><th>生產時間</th><th>數量</th><th>完工</th><th>備註</th></tr></thead><tbody>';
         res.rows.forEach(function(r){
             var isTemp = r.report_source === 'TEMP';
-            var bomTxt = isTemp ? '臨時加工' : (esc(r.bom) + (r.d_id ? (' / '+esc(r.d_id)) : ''));
+            var bomTxt = isTemp ? '臨時加工' : esc(r.bom);
+            var didTxt = isTemp ? '' : esc(r.d_id);
             var custTxt = isTemp ? esc(r.source_reason||'') : esc(r.Client_Name);
             body += '<tr><td>'+esc(egFmtDate(r.report_date))+'</td><td>'+esc(r.ProcessName)+'</td><td>'+esc(r.machine)+'</td>'
-                  + '<td class="tl">'+bomTxt+'</td><td>'+custTxt+'</td><td>'+esc(r.setup_user)+'</td><td>'+esc(r.prod_user)+'</td>'
+                  + '<td class="tl">'+bomTxt+'</td><td class="tl">'+didTxt+'</td><td>'+custTxt+'</td>'
+                  + '<td>'+esc(r.setup_user)+'</td><td>'+esc(timeRange(r.setup_start_time, r.setup_end_time))+'</td>'
+                  + '<td>'+esc(r.prod_user)+'</td><td>'+esc(timeRange(r.production_start_time, r.production_end_time))+'</td>'
                   + '<td>'+esc(r.produced_qty)+'</td><td>'+(r.is_finished?'是':'否')+'</td><td class="tl">'+esc(r.remark||'')+'</td></tr>';
         });
         body += '</tbody></table>';
@@ -544,7 +646,7 @@ $('#btnExportCsv').on('click', function(){
 
 $('#btnPageHelp').on('click', function(){ $('#helpUseMask').css('display','block'); });
 
-loadList(1);
+applyFilters();
 </script>
 </body>
 </html>
