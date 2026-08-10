@@ -577,7 +577,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         </div>
 
         <!-- 考核表（原OJT/實作口試考核表；未來可能與其他頁面通用）：僅內訓、已排定開課後可建立（本場講師本人或訓練管理員）。
-             印出的表單不含分數/評鑑結果數位紀錄，供現場手寫勾選，考核完成後掃描回來以附件上傳佐證。 -->
+             各考核細項仍留白供現場手寫評分，考核完成後掃描回來以附件上傳佐證；表尾總體評核結果／分數若上方「參加人員」名單已填則直接印出。 -->
         <div class="att-sec" id="ojtSec" style="display:none;">
             <div style="font-weight:bold;color:#5b3a1e;margin:12px 0 4px;">考核表 <small id="ojtCount" style="color:#8a6d45;font-weight:normal;"></small></div>
             <div id="ojtLockHint" style="font-size:12px;color:#DD5138;display:none;margin-bottom:4px;">此場次的考核項目僅本場講師本人或訓練管理員可編輯。</div>
@@ -597,7 +597,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 <button type="button" class="b-att nw" style="background:#fff;color:#8A5A2B;" onclick="printOjtSheet()"><i class="fa fa-print"></i> 列印考核表</button>
                 <span id="ojtMsg" style="font-size:12px;color:#8a6d45;"></span>
             </div>
-            <div style="font-size:11px;color:#8a6d45;margin-top:3px;">列印表單<b>不含分數/評鑑結果</b>，供現場考核時手寫勾選合格／不合格並評分；每位參加人員各印一份（考核項目少時自動併印多人於同一頁節省紙張），表單上附「未到考」勾選欄供考官現場勾填。
+            <div style="font-size:11px;color:#8a6d45;margin-top:3px;">列印表單<b>各考核細項</b>仍留白，供現場考核時手寫勾選合格／不合格並評分；表尾「總體評核結果」與分數<b>會直接印出上方「參加人員」名單已填的評鑑結果／分數</b>（尚未填則留白）；每位參加人員各印一份（考核項目少時自動併印多人於同一頁節省紙張），表單上附「未到考」勾選欄供考官現場勾填。
                 考核完成掃描後，請至下方「附件」上傳並勾選「考核表」類別佐證，作為簽到表評鑑結果的客觀證據。</div>
         </div>
 
@@ -844,7 +844,8 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
     <div class="m-head"><span>訓練場次檢視</span><span class="m-close" onclick="closeMask('viewMask')">✕</span></div>
     <div class="m-body" id="viewBody"></div>
     <div class="m-foot">
-        <button class="b-cancel" onclick="printRecord()"><i class="fa fa-print"></i> 列印訓練紀錄</button>
+        <button class="b-cancel" onclick="printViewSignSheet()"><i class="fa fa-print"></i> 列印簽到表</button>
+        <button class="b-cancel" id="viewOjtBtn" onclick="printViewOjtSheet()"><i class="fa fa-print"></i> 列印考核表</button>
         <button class="b-ok" onclick="closeMask('viewMask')">關閉</button>
     </div>
 </div></div>
@@ -888,7 +889,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         ・刪除場次要連續兩次輸入大寫 <b>Y</b>，且會一併刪除附件實體檔。<br>
         ・點清單任一列可展開該場次明細（大綱、時段、名單與評鑑、附件）。<br>
         ・「達標狀況」分頁依顯示單位統計；子部門可合併成一列，也可排除不列入的部門。<br>
-        ・「檢視」內的「列印訓練紀錄」版面比照簽到表（課程資訊、逐天分頁、序/部門/職稱/姓名/簽名/評鑑結果/備註），現場簽到過的人自動印出印章，表尾為審核（人事表單審核者）／講師兩格印章；此表目前沿用簽到表的表頭名稱、不單獨印文件編號。
+        ・「檢視」內的「列印簽到表」「列印考核表」跟「實行資料」modal 裡的同名按鈕輸出完全相同（共用同一份版面），差別只在「檢視」是唯讀場次可隨時重印，不需要先開編輯畫面。
         <h4>設定入口</h4>
         工具列「模組設定」：班別／休息時段／行事曆類別／附件路徑（一般）、排除部門（達標統計）、AS 文件編號與是否送審（文件編號與送審）、<b>簽到表/訓練紀錄的簽名圖章樣式</b>（套用「圖章管理→線上圖章設計」哪個模板；未設定＝預設印章樣式）。<br>
         簽章人員（人事／審核／核准）一律取自全站
@@ -2047,26 +2048,36 @@ function ojtSave(){
             $('#ojtMsg').text('已儲存'); setTimeout(function(){ $('#ojtMsg').text(''); }, 3000);
         }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); $('#ojtMsg').text(''); });
 }
-/* 列印：一人一份，不含分數/結果（供現場手寫），考核日期固定為課程最後一天；
+/* 列印：一人一份，考核日期固定為課程最後一天；各考核細項仍留白供現場手寫評分（現場口試/實作逐項考核用途不變），
+   但表尾「總體評核結果」若參加人員名單（實行紀錄）已填評鑑結果／分數，直接印出既有結果，不必再手抄一次；未填則留白供事後填寫。
    每份考核表卡片標記「不可被分頁切開」，實際每頁塞幾份交給瀏覽器依內容高度原生分頁決定，
-   不用考核項目數猜頁數（猜錯會跟瀏覽器實際分頁打架，見 print_pagination 鐵則）。 */
-function printOjtSheet(){
-    var r = EXROW || {};
+   不用考核項目數猜頁數（猜錯會跟瀏覽器實際分頁打架，見 print_pagination 鐵則）。
+   src：選用，訓練場次檢視（唯讀）呼叫時帶入 {r,days,attendees,ojtItems,assessor} 取代 EXROW/DAYS/ATT/OJT_ITEMS 與表單欄位當下值，
+   確保「訓練場次檢視」與「實行資料」的列印考核表輸出一致。 */
+function printOjtSheet(src){
+    var r = (src && src.r) || EXROW || {};
     if (r.train_type==='external'){ alert('外訓不提供考核表'); return; }
-    if (!OJT_ITEMS.length){ alert('請先建立至少一項考核項目並儲存'); return; }
-    var list = ATT.length ? ATT.slice() : [];
+    var items = src ? (src.ojtItems||[]) : OJT_ITEMS;
+    if (!items.length){ alert('請先建立至少一項考核項目並儲存'); return; }
+    var days = src ? (src.days||[]) : DAYS;
+    var attendees = src ? (src.attendees||[]) : ATT;
+    var list = attendees.length ? attendees.slice() : [];
     if (!list.length){ alert('尚未加入參加人員，無法列印'); return; }
     var course = r.course_name || '（課程名稱）';
-    var lastDay = dispDate((DAYS.length ? DAYS[DAYS.length-1].date : '') || r.done_date || '');
-    var assessor = $('#ojtAssessor').val() || r.trainer || '';
-    var loc = $('#exLocSel option:selected').text() || r.location || '';
-    var itemRows = OJT_ITEMS.map(function(it,i){
+    var lastDay = dispDate((days.length ? days[days.length-1].date : '') || r.done_date || '');
+    var assessor = (src ? src.assessor : $('#ojtAssessor').val()) || r.trainer || '';
+    var loc = src ? (r.location||'') : ($('#exLocSel option:selected').text() || r.location || '');
+    var itemRows = items.map(function(it,i){
         return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content||'')+'</td>'
              + '<td>'+esc(OJT_TYPES[it.item_type]||it.item_type)+'</td>'
              + '<td></td><td style="white-space:nowrap;">☐合格　☐不合格</td><td></td></tr>';
     }).join('');
     var html = '';
     list.forEach(function(a, idx){
+        var passChk = a.eval_result==='pass' ? '☑' : '☐';
+        var failChk = a.eval_result==='fail' ? '☑' : '☐';
+        var scoreTxt = (a.eval_score!=null && a.eval_score!=='') ? '　總分：'+esc(numTrim(a.eval_score)) : '';
+        var exemptTxt = a.eval_result==='exempt' ? '　（列為免評鑑）' : '';
         html += '<div class="pg"><table class="sf"><thead>'
             + '<tr><th colspan="6" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
             + '<div class="tt">考核表</div></div></th></tr>'
@@ -2076,7 +2087,7 @@ function printOjtSheet(){
             + '<tr><th style="width:32px;">項次</th><th>考核／口試重點</th><th style="width:76px;">方式</th>'
             + '<th style="width:50px;">分數</th><th style="width:150px;">評鑑結果</th><th style="width:100px;">備註</th></tr>'
             + '</thead><tbody>'+itemRows+'</tbody></table>'
-            + '<div style="margin-top:8px;font-size:13px;">總體評核結果：☐ 判定合格（已具備獨立作業能力）　☐ 需再進行補訓／複考</div>'
+            + '<div style="margin-top:8px;font-size:13px;">總體評核結果：'+passChk+' 判定合格（已具備獨立作業能力）　'+failChk+' 需再進行補訓／複考'+scoreTxt+exemptTxt+'</div>'
             + '<div style="margin-top:16px;font-size:13px;display:flex;align-items:flex-end;gap:10px;">考官簽章：'+egStampHtml(assessor, lastDay)+'</div>'
             + '</div>';
     });
@@ -2409,32 +2420,37 @@ function copySession(sid){
         loadList(); alert('已複製為新場次，可再編輯調整並另建參加名單');
     }, 'json').fail(function(x){ alert('複製失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
-/* 列印簽到表（確認實行 modal 中的場次＋名單）
+/* 列印簽到表（確認實行 modal 中的場次＋名單；「訓練場次檢視」的列印簽到表也共用本函式，見 viewPrintSrc()，
+   確保兩處輸出一致，不重複維護兩份版面）
    多天課程＝一天一頁（每天各自簽名），單天＝一頁 */
 /* 簽到表：學員自己的簽名欄就是簽到證明，不需要另外留一行講師/主管簽名底線；依 ai-rules/16 綁 AS 文件編號 */
-/* blankOnly=true：不帶目前名單，整張印成空白列供現場手寫（開課前臨時要一張空白簽到表時用）。 */
+/* blankOnly=true：不帶目前名單，整張印成空白列供現場手寫（開課前臨時要一張空白簽到表時用）。
+   src：選用，訓練場次檢視（唯讀）呼叫時帶入 {r,days,attendees,daySigns}取代 EXROW/DAYS/ATT/DAY_SIGNS 與表單欄位當下值。 */
 /* 課程資訊放進 <thead>（跟欄位標題同一張表），若當天簽到表人數多印到第二頁，
    瀏覽器分頁引擎會把整個 <thead> 原樣重印在每一頁——不必自己判斷有沒有跨頁，也不會有「第二頁不知道在簽什麼」的問題。
    多天課程：一天仍是一個獨立表格（page-break-before 換頁），該表格自己的表頭永遠只描述那一天，跨頁時也還是同一天的資訊。 */
-function printSignSheet(blankOnly){
-    var r = EXROW || {};
+function printSignSheet(blankOnly, src){
+    var r = (src && src.r) || EXROW || {};
     var docTitle = DOC_NAME.signsheet || '簽到表';   // 有綁定AS文件時表頭一律用其doc_name，不寫死（ai-rules/16 第一之二節）
     var course=r.course_name||'（課程名稱）';
     var ext=r.train_type==='external';
     var lect=ext?('外訓／開課單位：'+(r.org_unit||'')):('講師：'+(r.trainer||''));
-    var loc=$('#exLocSel').val()||'____________';
+    var loc=(src ? r.location : $('#exLocSel').val())||'____________';
+    var attendees = src ? (src.attendees||[]) : ATT;
+    var daySigns = src ? (src.daySigns||{}) : DAY_SIGNS;
     // 空白列：模組設定可選「不加」／「固定加 N 列」／「補到滿頁最多16列」，絕不刪減實際名單；
     // 空白簽到表模式一律印滿（沿用設定的固定列數，未設定或設不加時退回 16 列，畢竟印「空白」表就是要給人寫的）。
-    var list = blankOnly ? [] : (ATT.length ? ATT.slice() : []);
+    var list = blankOnly ? [] : (attendees.length ? attendees.slice() : []);
     var blankMode = String(SETTINGS.training_signsheet_blank_rows||'0');
     var blanks = 0;
     if (blankMode==='fill16') blanks = Math.max(0, 16 - list.length);
     else { var bn = parseInt(blankMode,10); if (!isNaN(bn) && bn>0) blanks = Math.min(16, bn); }
     if (blankOnly && blanks===0) blanks = 16;
     for (var bi=0; bi<blanks; bi++) list.push({});
-    var ds=(DAYS.length?DAYS:[{date:'', start:'', end:'', hours:''}]);
-    var em=$('#exEvalMethod').val(), emLabel=em?(EVAL_METHODS[em]||em):'（未設定）', noticeCourse=(em==='notice');
-    var outline=$.trim($('#exOutline').val()||'');
+    var days = src ? (src.days||[]) : DAYS;
+    var ds=(days.length?days:[{date:'', start:'', end:'', hours:''}]);
+    var em=src ? r.eval_method : $('#exEvalMethod').val(), emLabel=em?(EVAL_METHODS[em]||em):'（未設定）', noticeCourse=(em==='notice');
+    var outline=$.trim((src ? r.outline : $('#exOutline').val())||'');
     // 多天課程：每個表頭都附一行「全部上課日期」，方便第 3 天才簽的人也看得到整體排程；
     // 天數不多(≤6)逐一列出、換行不了就用頓號分隔；太多天(>6)改用「首~末（共N天）」範圍格式，避免那一行印成一長串。
     var allDates = ds.map(function(d){ return dispDate(d.date)||'?'; });
@@ -2450,7 +2466,7 @@ function printSignSheet(blankOnly){
         list.forEach(function(a,i){
             // 評鑑結果一律印成空白勾選框讓現場圈選（紙本才是正本；線上已填的另有系統紀錄）；宣導(免評鑑)課程直接印「不須評鑑」不留勾選框
             // 簽名欄：該天現場密碼簽到過的人印出簽到章(章上日期＝該堂課的上課日，不是按鈕按下當下的日期)；還沒簽到的人維持空白供紙本簽名
-            var daySigned = a.user_id!=null && d.date && DAY_SIGNS[a.user_id+'_'+d.date];
+            var daySigned = a.user_id!=null && d.date && daySigns[a.user_id+'_'+d.date];
             rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
                 +'<td style="width:130px;">'+(daySigned?egStampHtml(a.user_name, dispDate(d.date), false, a.dept_name):'')+'</td>'
                 +'<td style="width:112px;white-space:nowrap;">'+(noticeCourse?'不須評鑑':'☐ 合格　☐ 不合格')+'</td>'
@@ -2481,7 +2497,7 @@ function printSignSheet(blankOnly){
         +'table.sf .stamp-wrap{height:90%;display:inline-flex;align-items:center;margin:0;}table.sf .stamp-wrap svg,table.sf svg.car-stamp{height:100%;width:auto;}'
         +'.pgbrk{page-break-before:always;}';
     // 人數多會跨頁，用 pageCount 模式（真頁碼＋表頭自動重印每一頁）
-    egPrintWindow(docTitle, html, css, (EXROW&&EXROW.as_doc_signsheet_no)||DOC_NO.signsheet, false, true);
+    egPrintWindow(docTitle, html, css, r.as_doc_signsheet_no||DOC_NO.signsheet, false, true);
 }
 /* 刪除：兩次都要輸入大寫 Y 才執行（連同上課日、參加名單、附件實體檔一起刪，無法復原） */
 /* ================= 列印（依 ai-rules/16：大標題＝公司全名、頁碼左下、AS文件編號右下） ================= */
@@ -2694,79 +2710,29 @@ function openView(sid){
         if (!res.ok){ $('#viewBody').html('<span style="color:#DD5138;">'+esc(res.error||'載入失敗')+'</span>'); return; }
         VIEW_RES = res;
         var s=res.session, ext=s.train_type==='external';
+        $('#viewOjtBtn').toggle(!ext);
         $('#viewBody').html('<div class="ex-plan"><div><b>'+esc(s.course_name)+'</b> '+statPill(s.status)+'</div>'
             +'<div>計畫：'+s.year+' 年 '+s.plan_month+' 月　類型：'+(ext?'外訓':'內訓')
             +'　計畫時數：'+(s.hours==null?'—':numTrim(s.hours))+'　開課日：'+(dispDate(s.done_date)||'—')+'</div></div>'
             + detailHtml(res));
     }).fail(function(){ $('#viewBody').html('<span style="color:#DD5138;">載入失敗</span>'); });
 }
-/* 列印訓練紀錄（比照簽到表格式，含名單/簽到章/評鑑結果，AS9100 品質紀錄用）。
-   表頭沿用簽到表已綁定的 AS 文件名稱（DOC_NAME.signsheet），但本表目前無獨立 AS 文件綁定，不印頁尾編號（doc_no 傳空字串）。
-   TODO: 未來若要讓「訓練紀錄表」有自己的文件編號頁尾，需另外新增一組 as_doc 綁定設定（比照 training_as_doc_signsheet 的做法）。 */
-function printRecord(){
+/* 「訓練場次檢視」的列印簽到表／列印考核表：直接呼叫 printSignSheet()/printOjtSheet() 共用同一份版面（src 參數見各自定義處），
+   確保跟「實行資料」modal 內的列印輸出一致，不重複維護第二份版面（原本各自獨立一份的 printRecord() 已移除）。
+   VIEW_RES 的 days/attendees 欄位直接沿用 API 原始命名（day_date/start_time/end_time），這裡轉成 printSignSheet/printOjtSheet 共用的 {date,start,end,hours} 形狀。 */
+function viewPrintSrc(){
+    var res = VIEW_RES, s = res.session;
+    var days = (res.days||[]).map(function(d){ return {date:d.day_date, start:d.start_time||'', end:d.end_time||'', hours:d.hours==null?'':numTrim(d.hours)}; });
+    return {r:s, days:days, attendees:res.attendees||[], daySigns:daySignMap(res.day_signs),
+            ojtItems:res.ojt_items||[], assessor:res.ojt_assessor_name||''};
+}
+function printViewSignSheet(){
     if (!VIEW_RES){ alert('資料尚未載入完成'); return; }
-    var res=VIEW_RES, s=res.session, ext=s.train_type==='external';
-    var docTitle = DOC_NAME.signsheet || '簽到表';
-    var course=s.course_name||'（課程名稱）';
-    var lect=ext?('外訓／開課單位：'+(s.org_unit||'')):('講師：'+(s.trainer||''));
-    var emLabel = s.eval_method ? (EVAL_METHODS[s.eval_method]||s.eval_method) : '（未設定）';
-    var outline = $.trim(s.outline||'');
-    var ds = (res.days&&res.days.length) ? res.days
-        : [{day_date:s.done_date||'', start_time:s.start_time||'', end_time:s.end_time||'', hours:s.actual_hours}];
-    var allDates = ds.map(function(d){ return dispDate(d.day_date)||'?'; });
-    var allDatesLine = ds.length<=1 ? '' : (ds.length<=6
-        ? '全部上課日期：'+allDates.join('、')
-        : '全部上課日期：'+allDates[0]+' ~ '+allDates[allDates.length-1]+'（共 '+ds.length+' 天）');
-    var list = res.attendees || [];
-    var recDaySigns = daySignMap(res.day_signs);
-    var html='';
-    ds.forEach(function(d, di){
-        var tm=(d.start_time||'')+(d.end_time?'~'+d.end_time:'');
-        var hh=(d.hours==null?'':numTrim(d.hours));
-        var when='日期：'+(dispDate(d.day_date)||'—')+(tm?'　'+tm:'')+'　時數：'+(hh||'—')+' 小時';
-        var rows='';
-        list.forEach(function(a,i){
-            var ev = a.eval_result==='pass'?'合格':a.eval_result==='fail'?'不合格':a.eval_result==='exempt'?'免評鑑':'—';
-            // 簽名章：該天有電子簽到才印，章上日期＝該堂課的上課日(d.day_date)，不是簽到按鈕按下當下的日期
-            var daySigned = d.day_date && recDaySigns[a.user_id+'_'+d.day_date];
-            rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
-                +'<td>'+(daySigned?egStampHtml(a.user_name, dispDate(d.day_date), false, a.dept_name):'')+'</td>'
-                +'<td>'+ev+'</td>'
-                +'<td>'+esc(a.eval_note||'')+'</td></tr>';
-        });
-        html+='<div class="pg'+(di>0?' pgbrk':'')+'">'
-            +'<table class="sf"><thead>'
-            +'<tr><th colspan="7" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
-            +'<div class="tt">'+esc(docTitle)+'</div></div></th></tr>'
-            +'<tr><td colspan="7" class="sf-i">課程名稱：'+esc(course)+(ds.length>1?'　（第 '+(di+1)+' / '+ds.length+' 天）':'')+'</td></tr>'
-            +(allDatesLine?'<tr><td colspan="7" class="sf-i">'+esc(allDatesLine)+'</td></tr>':'')
-            +'<tr><td colspan="7" class="sf-i">評鑑方式：'+esc(emLabel)+'</td></tr>'
-            +'<tr><td colspan="7" class="sf-i">'+esc(lect)+'　地點：'+esc(s.location||'—')+'</td></tr>'
-            +'<tr><td colspan="7" class="sf-i">'+esc(when)+'</td></tr>'
-            +(outline?'<tr><td colspan="7" class="sf-i ol">課程大綱：'+esc(outline)+'</td></tr>':'')
-            +'<tr><th style="width:36px;">序</th><th>部門</th><th>職稱</th><th>姓名</th><th>簽名</th>'
-            +'<th>評鑑結果</th><th>備註</th></tr>'
-            +'</thead><tbody>'+(rows||'<tr><td colspan="7">（無名單）</td></tr>')+'</tbody></table>'
-            +'</div>';
-    });
-    // 表尾兩格圖章：審核（org_role_setting.php 設定的「人事表單審核者」＝ SIGNERS.reviewer）／講師（外訓沒有系統內人員可蓋章，改印開課單位純文字）
-    var signDt = dispDate(s.done_date || META.today);
-    html += '<table class="pt-sign"><tr>'
-        + '<td><div class="lb">審核</div><div class="stamp-box">'
-        + ((SIGNERS.reviewer&&SIGNERS.reviewer.name)?egStampHtml(SIGNERS.reviewer.name, signDt):'')+'</div></td>'
-        + '<td><div class="lb">講師</div><div class="stamp-box">'
-        + (ext ? esc(s.org_unit||'') : (s.trainer?egStampHtml(s.trainer, signDt):''))+'</div></td>'
-        + '</tr></table>';
-    var css='table.sf{width:100%;border-collapse:collapse;font-size:15px;margin-top:8px;}'
-        +'table.sf th,table.sf td{border:1px solid #333;padding:10px 6px;text-align:center;height:46px;overflow:hidden;}'
-        +'table.sf td.sf-i{border:1px solid #999;padding:5px 8px;text-align:left;font-size:13px;height:auto;background:#fff;overflow:visible;}'
-        +'table.sf td.sf-i.ol{white-space:pre-wrap;line-height:1.5;}'
-        // 簽到章不可把列高撐大：列高固定跟空白簽到表一樣，章縮小塞進既有列高內（表尾審核/講師章維持原尺寸，不受影響）
-        // 掃描實體章/泛用SVG章沒有模板自帶的填滿比例可用，這裡統一給 90% 當退回值；有模板 fillRatio 的走 eg_stamp.js 自己的 inline style（優先權更高，不受這裡影響）
-        +'table.sf .stamp-wrap{height:90%;display:inline-flex;align-items:center;margin:0;}table.sf .stamp-wrap svg,table.sf svg.car-stamp{height:100%;width:auto;}'
-        +'.pgbrk{page-break-before:always;}'
-        +'.pt-sign td{width:50%;}';
-    egPrintWindow(docTitle, html, css, '', false, true);
+    printSignSheet(false, viewPrintSrc());
+}
+function printViewOjtSheet(){
+    if (!VIEW_RES){ alert('資料尚未載入完成'); return; }
+    printOjtSheet(viewPrintSrc());
 }
 
 /* ---------- 現場簽到（免 training_edit 權限；後端 checkin_meta/sign_attendee 已在 $publicActions 白名單） ----------
@@ -2898,14 +2864,19 @@ function reqAttRender(editable){
     $('#reqAttBody').html(h || '<tr><td colspan="4" style="color:#8a6d45;padding:6px;">尚未加入人員</td></tr>');
     $('#reqAttCount').text(REQ_ATT.length ? '（共 '+REQ_ATT.length+' 人）' : '');
 }
+/* 受訓人員名單要依「申請日期」當時的部門人員顯示，不是一律列目前現況——補登舊申請單或申請日期填過去日期時，
+   當時在此部門、現在已調走／離職的人也該列得出來（比照確認實行 modal 的 classAtDate() 同一套做法，ai-rules/14）。 */
 function reqAttLoadPeople(){
     var did = $('#reqDept').val();
     if (!did){ $('#reqAttPeopleBox').html('<span class="empty">請先選申請單位</span>'); $('#reqAttDeptHint').text('請先選申請單位'); return; }
+    var atDate = $('#reqApplyDate').val() || META.today;
     $('#reqAttDeptHint').text('僅列出「'+$('#reqDept option:selected').text()+'」部門人員（含申請人本人）');
     $('#reqAttPeopleBox').html('<span class="empty">載入中…</span>');
-    $.getJSON(API, {action:'people', dept_id:did}, function(res){
+    $.getJSON(API, {action:'people', dept_id:did, at_date:atDate}, function(res){
         if (!res.ok){ $('#reqAttPeopleBox').html('<span class="empty">載入失敗</span>'); return; }
-        var h=''; res.people.forEach(function(u){
+        var h='';
+        if (res.at_date) h+='<div style="flex-basis:100%;color:#8a6d45;font-size:12px;">名單依 '+esc(res.at_date)+'（申請日期）當時職務顯示（依職務異動紀錄解析；已離職但當時在職者也會列出）</div>';
+        res.people.forEach(function(u){
             var inList = REQ_ATT.some(function(a){ return a.user_id===+u.id; });
             var pos = u.position_name||'';
             h += '<label><input type="checkbox" class="req-att-ck" value="'+u.id+'" data-name="'+esc(u.user_cname)+'" '
@@ -2917,6 +2888,8 @@ function reqAttLoadPeople(){
     });
 }
 $('#reqDept').on('change', function(){ REQ_ATT = []; reqAttRender(true); reqAttLoadPeople(); });
+// 申請日期一改，人員候選名單要跟著換成「當時」的部門人員（已勾選加入的受訓人員不連動移除，只換候選清單）
+$('#reqApplyDate').on('change', function(){ if ($('#reqDept').val()) reqAttLoadPeople(); });
 $('#reqAttPickAll').on('change', function(){ $('#reqAttPeopleBox .req-att-ck:not(:disabled)').prop('checked', this.checked); });
 function reqAttAddChecked(){
     $('#reqAttPeopleBox .req-att-ck:checked:not(:disabled)').each(function(){
