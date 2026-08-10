@@ -428,7 +428,7 @@ function meeting_item_required_signers(PDO $db, int $meetingId, array $ownerDept
     $out = [];
     foreach (array_unique(array_map('intval', $ownerDeptIds)) as $deptId) {
         if ($deptId <= 0) continue;
-        $st = $db->prepare("SELECT a.user_id, a.user_name, d.name AS dept_name, m.is_main, pl.level
+        $st = $db->prepare("SELECT a.user_id, a.user_name, d.name AS dept_name, p.name AS position_name, m.is_main, pl.level
                              FROM meeting_attendee a
                              JOIN user_department_position_map m ON m.user_id=a.user_id AND m.department_id=?
                              JOIN department d ON d.id=m.department_id
@@ -447,7 +447,8 @@ function meeting_item_required_signers(PDO $db, int $meetingId, array $ownerDept
         $st->execute([$deptId, $meetingId]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if ($r) $out[$deptId] = ['user_id'=>(int)$r['user_id'], 'user_name'=>(string)$r['user_name'],
-                                  'dept_name'=>(string)($r['dept_name'] ?: ''), 'is_manager'=>$r['level'] !== null,
+                                  'dept_name'=>(string)($r['dept_name'] ?: ''), 'position_name'=>(string)($r['position_name'] ?: ''),
+                                  'is_manager'=>$r['level'] !== null,
                                   'is_main'=>(int)$r['is_main'] === 1, 'dept_id'=>$deptId];
     }
     return $out;
@@ -465,11 +466,12 @@ function meeting_item_required_signers_by_users(PDO $db, int $meetingId, array $
     $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
     if (!$userIds) return $out;
     $in = implode(',', array_fill(0, count($userIds), '?'));
-    $st = $db->prepare("SELECT user_id, user_name, dept_name FROM meeting_attendee WHERE meeting_id=? AND user_id IN ($in)");
+    $st = $db->prepare("SELECT user_id, user_name, dept_name, position_name FROM meeting_attendee WHERE meeting_id=? AND user_id IN ($in)");
     $st->execute(array_merge([$meetingId], $userIds));
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $out[(int)$r['user_id']] = ['user_id'=>(int)$r['user_id'], 'user_name'=>(string)$r['user_name'],
-                                     'dept_name'=>(string)($r['dept_name'] ?: ''), 'is_manager'=>true, 'is_main'=>true, 'dept_id'=>null];
+                                     'dept_name'=>(string)($r['dept_name'] ?: ''), 'position_name'=>(string)($r['position_name'] ?: ''),
+                                     'is_manager'=>true, 'is_main'=>true, 'dept_id'=>null];
     }
     return $out;
 }

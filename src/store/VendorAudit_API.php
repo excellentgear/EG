@@ -861,8 +861,15 @@ case 'plan_data': {
     $canDecide = false;
     if ($lock && $lock['status'] === 'pending') {
         $submittedBy = (int)($lock['submitted_by'] ?? 0);
-        $decidePool = vendor_audit_plan_approver_pool($db, $submittedBy);
-        $canDecide = $perms['canAdmin'] || $uid === $submittedBy || in_array($uid, array_column($decidePool, 'id'), true);
+        $decidePool = vendor_audit_plan_approver_pool($db, $submittedBy); // 已排除送出者本人
+        if ($uid === $submittedBy) {
+            // 送出者(常常同時是稽核員/管理者)一律不顯示核准/退回按鈕，避免誤按；
+            // 除非真的完全解析不到其他合格核准人(pool為空)且本人是管理者，才放行讓送出者自己
+            // 處理，避免計劃卡死——跟plan_decide的「除非真的不可避免」規則一致(使用者2026-08-10明確要求)。
+            $canDecide = !$decidePool && $perms['canAdmin'];
+        } else {
+            $canDecide = $perms['canAdmin'] || in_array($uid, array_column($decidePool, 'id'), true);
+        }
     }
     jout(['year'=>$year, 'rows'=>vendor_audit_plan_data($db, $year), 'lock'=>$lock,
           'locked'=>vendor_audit_plan_locked($db, $year), 'sign_setting'=>$signSet,

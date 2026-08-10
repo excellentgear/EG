@@ -3,14 +3,23 @@
     session_start();
  }
 
+ // 在職狀態守門的共用函式（含 eg_login_url() 絕對路徑登入頁網址）：先載入，讓下面未登入檢查也能用
+ @include_once __DIR__ . '/../../src/common/user_active_lib.php';
+
  if(!isset($_SESSION['id']) && !isset($_SESSION['user_password'])) {
-     header("Location:../../../index.php");
+     // 記錄目前頁面（含查詢字串），登入後導回原頁；未登入者若此鍵已由個別頁面設定則不覆蓋
+     if (!isset($_SESSION['lastpage']) && isset($_SERVER['REQUEST_URI'])) {
+         $_SESSION['lastpage'] = $_SERVER['REQUEST_URI'];
+     }
+     // 絕對路徑導回登入頁：原本用 "../../../index.php" 相對路徑，在本檔實際被包含的頁面深度（views/XX/xxx.php，僅 2 層）
+     // 會多跳一層跑到網站根目錄外，404 顯示成 MAMP 預設頁面；改用 eg_login_url() 現場算絕對路徑，各層級頁面都正確
+     $loginUrl = function_exists('eg_login_url') ? eg_login_url() : '/EGsystem/index.php';
+     header("Location: " . $loginUrl);
      exit();   // 原本沒有 exit，導頁後整頁程式仍繼續跑（未登入者照樣觸發頁面內的查詢與寫入）
  }
 
  // 在職狀態守門：登入後才被改成離職/留停的人，翻下一頁就會被銷毀 session 踢出，不必等 session 過期。
  // 全站唯一共同進入點在此，所以掛這一處等於全站生效。
- @include_once __DIR__ . '/../../src/common/user_active_lib.php';
  if (function_exists('eg_guard_active_session') && class_exists('DBConnection')) {
      try { eg_guard_active_session((new DBConnection())->getPDO()); } catch (Throwable $e) { /* DB異常不擋人 */ }
  }
@@ -572,6 +581,23 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             if (refType === 'QUOTATION_SUPP_RESULT') {
                 // 補件核准/駁回結果通知（給上傳者）：純資訊型，開同一頁檢視結果後標記已讀移除
                 window.open('../Sales/quotation_supplement_view.php?event=' + nmId);
+                nmMarkRead(nmRemoveFromList);
+                return;
+            }
+            if (refType === 'VENDOR_AUDIT_PLAN') {
+                // 供應商稽核計劃待核准：比照MEETING_APPROVAL修正(2026-08-10使用者實測回報同一種bug)——
+                // 通用回覆/回簽只會標記通知本身，不會真的呼叫plan_decide。改開稽核管理頁帶
+                // plan_approve=year，頁面會自動切到「供應商稽核計劃」分頁並跳出核准/退回跳窗；
+                // 核准/退回完成前不移除(mode=sign)。
+                window.open('../pm/vendor_audit.php?plan_approve=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) {
+                    nmMarkRead(nmRemoveFromList);
+                }
+                return;
+            }
+            if (refType === 'VENDOR_AUDIT_PLAN_RESULT') {
+                // 核准/退回結果通知（給送出人）：純資訊型，開對應年度分頁後標記已讀移除
+                window.open('../pm/vendor_audit.php?plan_year=' + ($(this).data('refid') || 0) + '&event=' + nmId);
                 nmMarkRead(nmRemoveFromList);
                 return;
             }
