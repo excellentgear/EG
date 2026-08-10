@@ -1341,7 +1341,9 @@ function itemConfirmCellHtml(it){
         if (s.signed) {
             // 2026-08-06改版：實際簽名者不一定是系統原本挑出的那位代表(部門任一出席人員/主管透過通知回覆都算數)，
             // s.user_name 已是後端依 dept_id 比對出的實際簽名人；有 reply_content 代表是透過通知回覆完成，顯示在下方。
-            return '<div class="confirm-yes">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, dispDate(s.confirmed_at), false, mStampSchema(), s.dept_name):esc(s.user_name))
+            // 2026-08-10修正：補上 s.position_name(職稱)，比照簽到表的 EGStamp.stamp() 呼叫方式(name,date,isDeputy,schema,dept,position)，
+            // 圖章模板若有設定{職稱}token 才會顯示，格式跟簽到表一致。
+            return '<div class="confirm-yes">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, dispDate(s.confirmed_at), false, mStampSchema(), s.dept_name, s.position_name):esc(s.user_name))
                  + ' <span style="font-size:11px;">'+esc(s.dept_name||'')+slotTag(s)+'</span>'
                  + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[改日期]</a>':'')+'</div>'
                  + (s.reply_content ? '<div style="font-size:11px;color:#5b3a1e;margin-top:2px;">💬 '+esc(s.reply_content)+'</div>' : '');
@@ -1510,7 +1512,7 @@ function meetingItemGroupRows(items, kind, groupLabel){
         var deptNames = ownerDisplayText(it);
         var confirmHtml = (it.confirm_slots||[]).filter(function(s){ return s.signed; }).map(function(s){
             var tag = slotTag(s);
-            return ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, String(s.confirmed_at||'').substr(0,10), false, mStampSchema(), s.dept_name):esc(s.user_name))
+            return ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, dispDate(s.confirmed_at), false, mStampSchema(), s.dept_name, s.position_name):esc(s.user_name))
                  + (tag?'<span style="font-size:10px;">'+tag+'</span>':'');
         }).join('');
         return '<tr>' + (i===0 ? '<td class="mr-grp" rowspan="'+rows.length+'">'+groupLabel+'</td>' : '')
