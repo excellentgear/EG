@@ -338,6 +338,21 @@ function meeting_close_item_notices(PDO $db, int $meetingId): void {
 }
 
 /**
+ * 這筆會議記錄目前是否還有「項目待確認回覆」的通知還在生效中(2026-08-10使用者明確要求新增)：
+ * 「存檔並通知」送出後，在對方回覆確認完成、或記錄人主動撤回之前，畫面應鎖定不可編輯、狀態顯示「回簽中」，
+ * 避免記錄人在別人還在看/回覆這份內容時又把內容改掉，讓對方回覆的是舊版內容。
+ */
+function meeting_has_active_item_notices(PDO $db, int $meetingId): bool {
+    try {
+        $st = $db->prepare("SELECT 1 FROM live_event le JOIN meeting_item mi ON mi.item_id=le.ref_id
+                             WHERE le.ref_type='MEETING_ITEM_CONFIRM' AND mi.meeting_id=?
+                             AND (le.enddate IS NULL OR le.enddate>=CURDATE()) LIMIT 1");
+        $st->execute([$meetingId]);
+        return (bool)$st->fetchColumn();
+    } catch (Throwable $e) { return false; }
+}
+
+/**
  * 項目待確認通知(2026-08-06改版，使用者明確要求)：送出時若負責部門/指定人員尚未現場簽名完成，
  * 一律改發通知請對方回覆確認，不再擋下送出；對象範圍見 meeting_item_pending_notify_targets()
  * （未出席者本身／部門主管／已出席但尚未簽的部門成員或指定人員，任一人回覆即完成該項目）。
