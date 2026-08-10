@@ -1325,6 +1325,11 @@ function itemConfirmCellHtml(it){
                  + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[改日期]</a>':'')+'</div>'
                  + (s.reply_content ? '<div style="font-size:11px;color:#5b3a1e;margin-top:2px;">💬 '+esc(s.reply_content)+'</div>' : '');
         }
+        // can_sign_in_person=false：這個部門/指定人員本次沒有可現場輸入密碼的人(2026-08-10修正)，
+        // 不畫密碼框(反正沒人能簽)，改顯示等待通知回覆的提示，實際狀態看下方 notify_targets/notify_preview。
+        if (!s.can_sign_in_person) {
+            return '<div style="font-size:11px;color:#8a6d45;">'+esc(s.dept_name||s.user_name||'')+'：尚未回覆（已另行通知相關人員）</div>';
+        }
         return '<div class="item-confirm-box"><span style="font-size:11px;">'+esc(s.dept_name||'')+'：'+esc(s.user_name)+slotTag(s)+'</span>'
              + '<input type="password" id="pwConfirm'+it.item_id+'_'+s.user_id+'" placeholder="密碼" style="width:70px;" data-eg-skip'
              + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();confirmItemWithPassword('+it.item_id+','+s.user_id+');}">'
@@ -1334,7 +1339,10 @@ function itemConfirmCellHtml(it){
     if (nt.length) {
         h += '<div class="item-notify-status">' + nt.map(function(t){
             var st = t.replied_at ? ('已回覆 '+dispDate(t.replied_at)) : (t.read_at ? '已閱未回覆' : '未讀');
-            return esc(t.user_name)+'：'+st + (t.reply_content ? ('<div style="margin-top:2px;">💬 '+esc(t.reply_content)+'</div>') : '');
+            var filesHtml = (t.files||[]).map(function(f){
+                return '<a href="../../src/store/_eventFile.php?t=r&id='+f.id+'" target="_blank" style="margin-left:4px;">📎'+esc(f.file_name)+'</a>';
+            }).join('');
+            return esc(t.user_name)+'：'+st + filesHtml + (t.reply_content ? ('<div style="margin-top:2px;">💬 '+esc(t.reply_content)+'</div>') : '');
         }).join('　') + '</div>';
     } else if (it.notify_preview) {
         // 2026-08-07修正：還沒送出過(沒有真正的通知紀錄)時，讓使用者能預覽「現在送出會通知誰」，
