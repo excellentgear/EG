@@ -514,6 +514,37 @@ foreach ((glob($MD_DIR . '已修改/AI檢查報告-*.md') ?: []) as $f) {
 }
 usort($AI_CHECK_REPORTS, fn($a, $b) => strcmp($b['name'], $a['name']));
 
+// ── AI 檢查報告：另開整頁全寬檢視（?ai_report=檔名，白名單比對 $AI_CHECK_REPORTS，避免路徑穿越）──
+if (isset($_GET['ai_report'])) {
+    if (!$canView) { http_response_code(403); exit('無權限'); }
+    $wantName = (string)$_GET['ai_report'];
+    $rep = null;
+    foreach ($AI_CHECK_REPORTS as $r) { if ($r['name'] === $wantName) { $rep = $r; break; } }
+    if (!$rep) { http_response_code(404); exit('查無此檢查報告'); }
+    ?><!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8">
+    <title><?= htmlspecialchars($rep['name']) ?></title>
+    <link href="../../resource/css/bootstrap.css" rel="stylesheet">
+    <style>
+    body{background:#FBF6EE;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3F2E1B;padding:24px 5vw;}
+    .md-body{font-size:14px;line-height:1.85;max-width:1400px;margin:0 auto;}
+    .md-h{font-family:"Microsoft JhengHei",sans-serif;}
+    .md-h2{font-size:22px;color:#7A4E17;border-bottom:3px solid #F0A24B;padding-bottom:6px;margin:4px 0 14px;}
+    .md-h3{font-size:18px;color:#8A5A2B;border-left:5px solid #F0A24B;padding-left:10px;margin:26px 0 10px;}
+    .md-p{margin:7px 0;} .md-list{margin:6px 0 10px;padding-left:24px;} .md-list li{margin:3px 0;}
+    .md-hr{border:0;border-top:2px dashed #E8D5B5;margin:22px 0;}
+    .md-body strong{color:#8A5A2B;}
+    .md-body code{background:#FDF3E3;color:#8A4B12;border:1px solid #F0E0C4;border-radius:3px;padding:1px 5px;font-size:13px;}
+    .md-tablewrap{overflow-x:auto;margin:10px 0 16px;}
+    .md-table{border-collapse:collapse;font-size:14px;min-width:100%;}
+    .md-table th{background:#F7E0BD;color:#5A3D1E;padding:8px 12px;border:1px solid #E0CBA0;text-align:left;white-space:nowrap;}
+    .md-table td{padding:8px 12px;border:1px solid #E8D9B8;vertical-align:top;}
+    .md-table tbody tr:nth-child(even){background:#FDF8EF;}
+    </style></head><body>
+    <div class="md-body"><?= $rep['html'] ?></div>
+    </body></html><?php
+    exit;
+}
+
 // 四階表單清單（線上表單對照分頁用）：doc_no 有 3 段以上者＝表單
 $FORMS = [];
 foreach ($DOCMAP as $no => $d) {
@@ -646,6 +677,7 @@ a.docchip.has-online:hover i { color:#fff; }
 
 /* ── 預覽跳窗 ── */
 #pvMask .box { max-width:1180px; width:94vw; padding:0; }
+#aiCheckMask .box { max-width:1300px; width:94vw; }
 .pv-head { background:#F7E0BD; border-radius:8px 8px 0 0; padding:10px 16px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .pv-head h4 { margin:0; border:none; font-size:16px; color:#7A4E17; }
 .pv-head .pv-meta { font-size:12px; color:#8A6D45; }
@@ -1014,14 +1046,17 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 </div></div>
 
 <!-- AI 檢查檔案跳窗（待處理問題分頁「AI檢查檔案」鈕） -->
-<div class="fg-mask" id="aiCheckMask"><div class="box" style="max-width:920px;">
+<div class="fg-mask" id="aiCheckMask"><div class="box">
   <h4><i class="fa fa-search"></i> AI 檢查檔案</h4>
   <?php if (!$AI_CHECK_REPORTS): ?>
     <p style="color:#8A6D45;">目前尚無 AI 檢查紀錄。AI 核對「已修改」資料夾內的文件後，會在此資料夾產生檢查報告檔並顯示於此。</p>
   <?php else: foreach ($AI_CHECK_REPORTS as $rep): ?>
     <div style="margin-bottom:18px;">
-      <div style="font-size:12px;color:#8A6D45;margin-bottom:4px;">
-        <i class="fa fa-file-text-o"></i> <?= htmlspecialchars($rep['name']) ?>（檔案時間 <?= $rep['time'] ?>）</div>
+      <div style="font-size:12px;color:#8A6D45;margin-bottom:4px;display:flex;align-items:center;gap:10px;">
+        <span><i class="fa fa-file-text-o"></i> <?= htmlspecialchars($rep['name']) ?>（檔案時間 <?= $rep['time'] ?>）</span>
+        <a class="btnlink" target="_blank" rel="noopener" href="?ai_report=<?= urlencode($rep['name']) ?>"
+           style="height:24px;line-height:22px;font-size:12px;padding:0 10px;"><i class="fa fa-external-link"></i> 另開整頁（較寬，方便看表格）</a>
+      </div>
       <div class="md-body"><?= $rep['html'] ?></div>
     </div>
     <hr class="md-hr">
