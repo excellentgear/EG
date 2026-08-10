@@ -2338,6 +2338,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $row['machine_id'] = null; // 重置為未指派
         $row['processing_state'] = 'ing'; // 狀態為加工中(待指派)
         $row['ps'] = ($row['ps'] ? $row['ps'] . ' ' : '') . '(拆分工單)'; // 標記為拆分
+        $row['is_schedule_split'] = 1; // 標記為報工排程拆分，不列入BOM製程顯示
         $row['Created_At'] = date('Y-m-d H:i:s');
         $row['Created_By'] = $_SESSION['user_id'] ?? $_SESSION['id'] ?? 'System';
 
