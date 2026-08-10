@@ -494,6 +494,10 @@ var STATUS_LABEL = {draft:'草稿', submitted:'待主席簽章', chair_done:'待
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtDate(d){ return d ? String(d).substr(0,10) : ''; }
+/** 顯示用日期格式(ai-rules/20：西元年顯示一律YYYY.MM.DD)。fmtDate()本身維持Y-m-d不動，
+ *  因為部分呼叫點把它的結果塞進<input type=date>(如#edDate)或prompt()預設值送回後端，改了會壞；
+ *  純畫面顯示(列表/圖章)一律改呼叫這支。 */
+function dispDate(d){ return fmtDate(d).replace(/-/g,'.'); }
 function setErr($el, msgBoxId, msg){ $el.toggleClass('inv', !!msg); if (msgBoxId) $('#'+msgBoxId).text(msg||''); return !msg; }
 function closeMask(id){ document.getElementById(id).style.display='none'; }
 function openMask(id){ document.getElementById(id).style.display='block'; }
@@ -604,7 +608,7 @@ function renderList(){
     var h = '';
     var rows = MEETINGS.filter(function(m){ return !STAT_FILTER.size || STAT_FILTER.has(m.approval_status); });
     rows.forEach(function(m){
-        h += '<tr><td>'+fmtDate(m.meeting_date)+'</td><td class="t-left">'+esc(m.subject)+'</td>'
+        h += '<tr><td>'+dispDate(m.meeting_date)+'</td><td class="t-left">'+esc(m.subject)+'</td>'
            + '<td>'+esc(m.chair_name||'—')+'</td><td>'+esc(m.recorder_name||'')+'</td>'
            + '<td><span class="st-pill st-'+m.approval_status+'">'+(STATUS_LABEL[m.approval_status]||m.approval_status)+'</span></td>'
            + '<td><div class="mt-op-wrap">'
@@ -988,7 +992,7 @@ $(document).on('click', function(e){ if (!$(e.target).closest('.itm-dp').length)
 function kpiReportHtml(k){
     var rows = (k.weeks||[]).map(function(w){
         var chg = (w.change_rate===null || w.change_rate===undefined) ? '—' : ((w.change_rate>=0?'▲':'▼')+Math.abs(w.change_rate)+'%');
-        return '<tr><td>W'+w.no+'　'+fmtDate(w.start)+'~'+fmtDate(w.end)+'</td>'
+        return '<tr><td>W'+w.no+'　'+dispDate(w.start)+'~'+dispDate(w.end)+'</td>'
              + '<td>'+w.week_target.toLocaleString()+'</td>'
              + '<td>'+w.order_amount.toLocaleString()+'</td><td>'+w.order_rate+'%</td>'
              + '<td>'+w.ship_amount.toLocaleString()+'</td><td>'+w.return_amount.toLocaleString()+'</td>'
@@ -1004,7 +1008,7 @@ function kpiReportHtml(k){
         if (!list || !list.length) return '';
         var r = list.map(function(x,i){
             var d = x.Order_date || x.date || '';
-            return '<tr><td>'+(i+1)+'</td><td>'+fmtDate(d)+'</td><td>'+esc(x.Client_name||'')+'</td><td>'+esc(x.Product_id||'')+'</td><td style="text-align:right;">'+Number(x.amount).toLocaleString()+'</td></tr>';
+            return '<tr><td>'+(i+1)+'</td><td>'+dispDate(d)+'</td><td>'+esc(x.Client_name||'')+'</td><td>'+esc(x.Product_id||'')+'</td><td style="text-align:right;">'+Number(x.amount).toLocaleString()+'</td></tr>';
         }).join('');
         return '<div class="kpi-top3" style="border-left:3px solid '+color+';">'
              + '<div class="kpi-top3-tt" style="color:'+color+';">'+label+'</div>'
@@ -1163,7 +1167,7 @@ function openView(id){
 }
 function viewHtml(res){
     var m = res.meeting, ext = false;
-    var h = '<div class="kv"><b>主題：</b>'+esc(m.subject)+'　<b>日期：</b>'+fmtDate(m.meeting_date)
+    var h = '<div class="kv"><b>主題：</b>'+esc(m.subject)+'　<b>日期：</b>'+dispDate(m.meeting_date)
         + (m.start_time?('　<b>時間：</b>'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')
         + '　<b>地點：</b>'+esc(m.location||'—')+'</div>'
         + '<div class="kv"><b>主席：</b>'+esc(m.chair_name||'—')+'　<b>記錄：</b>'+esc(m.recorder_name||'')
@@ -1174,7 +1178,7 @@ function viewHtml(res){
         var signed = +a.signed === 1;
         h += '<tr data-uid="'+a.user_id+'"><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td>'
            + '<td>'+esc(a.user_name||'')+'</td>'
-           + '<td>'+(signed ? '<span class="sign-ok">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name,fmtDate(m.meeting_date),false,mStampSchema(),a.dept_name,a.position_name):'<i class="fa fa-check"></i>')
+           + '<td>'+(signed ? '<span class="sign-ok">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name,dispDate(m.meeting_date),false,mStampSchema(),a.dept_name,a.position_name):'<i class="fa fa-check"></i>')
                 + ' <span style="font-size:11px;" title="實際簽到時間(僅供稽核，蓋章日期一律採會議日期)">'+esc(String(a.signed_at||'').substr(0,16))+'</span>'
                 + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'attendee\','+a.att_id+')" style="font-size:11px;">[改日期/補簽]</a>':'')+'</span>'
                 : '<span class="sign-row"><input type="password" placeholder="本人密碼，按Enter簽到" id="pw-'+a.user_id+'" data-eg-skip'
@@ -1191,7 +1195,7 @@ function viewHtml(res){
               + (m.approval_status==='chair_done'||m.approval_status==='done' ? '<th>總經理意見</th>' : '') + '</tr>';
         rows.forEach(function(it, idx){
             var deptNames = ownerDisplayText(it);
-            t += '<tr><td>'+(idx+1)+'</td><td>'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+fmtDate(it.due_date)+'</td>'
+            t += '<tr><td>'+(idx+1)+'</td><td>'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+dispDate(it.due_date)+'</td>'
                + '<td>'+esc(deptNames||'—')+'</td>'
                + '<td>'+itemConfirmCellHtml(it)+'</td>'
                + '<td>'+esc(it.remark||'')+'</td>'
@@ -1244,9 +1248,9 @@ function viewHtml(res){
     if (META.is_superadmin) {
         h += '<div style="margin-top:12px;padding:8px;border:1px dashed #c9a06a;font-size:12px;">'
            + '<b>超級管理員工具</b>　'
-           + '主席：'+(m.chair_approval?esc(m.chair_approval.approver_name||'')+'（'+esc(String(m.chair_approval.decided_at||'').substr(0,10)||'待簽')+'）':'（尚未送出）')
+           + '主席：'+(m.chair_approval?esc(m.chair_approval.approver_name||'')+'（'+esc(dispDate(m.chair_approval.decided_at)||'待簽')+'）':'（尚未送出）')
                 + ' <a href="javascript:void(0)" onclick="adminBackfillRow(\'chair\',0)">[改日期/補簽]</a>'
-           + '　總經理：'+(m.gm_approval?esc(m.gm_approval.approver_name||'')+'（'+esc(String(m.gm_approval.decided_at||'').substr(0,10)||'待簽')+'）':'（尚未送出）')
+           + '　總經理：'+(m.gm_approval?esc(m.gm_approval.approver_name||'')+'（'+esc(dispDate(m.gm_approval.decided_at)||'待簽')+'）':'（尚未送出）')
                 + ' <a href="javascript:void(0)" onclick="adminBackfillRow(\'gm\',0)">[改日期/補簽]</a>'
            + '　<button type="button" class="b-att" onclick="adminBackfillAll()" style="margin-left:8px;"><i class="fa fa-magic"></i> 一鍵補齊全部簽章日期</button>'
            + '</div>';
@@ -1298,7 +1302,7 @@ function signAttendee(mid, uidv){
         var att = (VIEW.attendees||[]).filter(function(a){ return String(a.user_id)===String(uidv); })[0];
         var nowStr = new Date().toISOString().slice(0,16).replace('T',' ');
         if (att) { att.signed = 1; att.signed_at = nowStr; }
-        var stampHtml = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(att?att.user_name:'', fmtDate(VIEW.meeting.meeting_date), false, mStampSchema(), att?att.dept_name:'', att?att.position_name:'') : '<i class="fa fa-check"></i>';
+        var stampHtml = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(att?att.user_name:'', dispDate(VIEW.meeting.meeting_date), false, mStampSchema(), att?att.dept_name:'', att?att.position_name:'') : '<i class="fa fa-check"></i>';
         $('tr[data-uid="'+uidv+'"] td:last-child').html('<span class="sign-ok">'+stampHtml+' <span style="font-size:11px;">'+esc(nowStr)+'</span></span>');
         var next = (VIEW.attendees||[]).filter(function(a){ return !(+a.signed); })[0];
         if (next) setTimeout(function(){ $('#pw-'+next.user_id).focus(); }, 30);
@@ -1316,7 +1320,7 @@ function itemConfirmCellHtml(it){
         if (s.signed) {
             // 2026-08-06改版：實際簽名者不一定是系統原本挑出的那位代表(部門任一出席人員/主管透過通知回覆都算數)，
             // s.user_name 已是後端依 dept_id 比對出的實際簽名人；有 reply_content 代表是透過通知回覆完成，顯示在下方。
-            return '<div class="confirm-yes">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, String(s.confirmed_at||'').substr(0,10), false, mStampSchema(), s.dept_name):esc(s.user_name))
+            return '<div class="confirm-yes">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, dispDate(s.confirmed_at), false, mStampSchema(), s.dept_name):esc(s.user_name))
                  + ' <span style="font-size:11px;">'+esc(s.dept_name||'')+slotTag(s)+'</span>'
                  + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[改日期]</a>':'')+'</div>'
                  + (s.reply_content ? '<div style="font-size:11px;color:#5b3a1e;margin-top:2px;">💬 '+esc(s.reply_content)+'</div>' : '');
@@ -1329,9 +1333,15 @@ function itemConfirmCellHtml(it){
     var nt = it.notify_targets || [];
     if (nt.length) {
         h += '<div class="item-notify-status">' + nt.map(function(t){
-            var st = t.replied_at ? ('已回覆 '+String(t.replied_at).substr(0,10)) : (t.read_at ? '已閱未回覆' : '未讀');
+            var st = t.replied_at ? ('已回覆 '+dispDate(t.replied_at)) : (t.read_at ? '已閱未回覆' : '未讀');
             return esc(t.user_name)+'：'+st + (t.reply_content ? ('<div style="margin-top:2px;">💬 '+esc(t.reply_content)+'</div>') : '');
         }).join('　') + '</div>';
+    } else if (it.notify_preview) {
+        // 2026-08-07修正：還沒送出過(沒有真正的通知紀錄)時，讓使用者能預覽「現在送出會通知誰」，
+        // 否則像董事長室這種本次未出席的部門，畫面上完全看不出設定有沒有生效，容易誤以為沒設定成功。
+        h += it.notify_preview.length
+            ? '<div class="item-notify-status">送出後將通知：' + it.notify_preview.map(esc).join('、') + '</div>'
+            : '<div class="item-notify-status" style="color:#DD5138;">⚠ 此部門查無可通知人員，請確認部門是否有指派人員</div>';
     }
     if (META.is_superadmin) h += '<div><a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[超管補齊此項目]</a></div>';
     if (!h) h = '<span class="confirm-no">—</span>';
@@ -1476,7 +1486,7 @@ function meetingItemGroupRows(items, kind, groupLabel){
         }).join('');
         return '<tr>' + (i===0 ? '<td class="mr-grp" rowspan="'+rows.length+'">'+groupLabel+'</td>' : '')
              + '<td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td>'
-             + '<td>'+fmtDate(it.due_date)+'</td><td>'+esc(deptNames)+'</td><td class="mr-confirm-cell">'+confirmHtml+'</td><td>'+esc(it.remark||'')+'</td></tr>';
+             + '<td>'+dispDate(it.due_date)+'</td><td>'+esc(deptNames)+'</td><td class="mr-confirm-cell">'+confirmHtml+'</td><td>'+esc(it.remark||'')+'</td></tr>';
     }).join('');
 }
 /* 宣布事項獨立表格用：只有序/內容/備註三欄，不含應完成日期/負責人/確認簽名(該三欄對宣布事項無意義)。 */
@@ -1494,18 +1504,18 @@ function meetingRecordPageHtml(m, res, docNoMode){
     var itemBody = meetingItemGroupRows(res.items, 'directive', '上級指示要項') + meetingItemGroupRows(res.items, 'general', '會議要項');
     var chairApp = m.chair_approval, gmApp = m.gm_approval;
     var chairStamp = (chairApp && chairApp.approver_name)
-        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(chairApp.approver_name, String(chairApp.decided_at||'').substr(0,10), String(chairApp.approver_id)!==String(m.chair_user_id)):'')
+        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(chairApp.approver_name, dispDate(chairApp.decided_at), String(chairApp.approver_id)!==String(m.chair_user_id)):'')
         : '';
     var gmStamp = (gmApp && gmApp.approver_name)
-        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(gmApp.approver_name, String(gmApp.decided_at||'').substr(0,10), META.gm_id!=null && String(gmApp.approver_id)!==String(META.gm_id)):'')
+        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(gmApp.approver_name, dispDate(gmApp.decided_at), META.gm_id!=null && String(gmApp.approver_id)!==String(META.gm_id)):'')
         : '';
-    var madeStamp = (window.EGStamp&&EGStamp.stamp && m.recorder_name) ? EGStamp.stamp(m.recorder_name, fmtDate(m.meeting_date)) : '';
+    var madeStamp = (window.EGStamp&&EGStamp.stamp && m.recorder_name) ? EGStamp.stamp(m.recorder_name, dispDate(m.meeting_date)) : '';
     var recordTitle = (META.as_doc_record && META.as_doc_record.doc_name) ? META.as_doc_record.doc_name : '會議記錄';
     var attendeeNames = (res.attendees||[]).map(function(a){ return esc(a.user_name); }).join('、') || '—';
     return '<div class="mr-page">'
         + '<div class="mr-title">'+esc(META.company_name||'')+'-'+esc(recordTitle)+'</div>'
         + '<table class="mr-head">'
-        + '<tr><th>主題</th><td class="val">'+esc(m.subject)+'</td><th>日期</th><td class="val">'+fmtDate(m.meeting_date)+'</td>'
+        + '<tr><th>主題</th><td class="val">'+esc(m.subject)+'</td><th>日期</th><td class="val">'+dispDate(m.meeting_date)+'</td>'
         +   '<th>主席</th><td class="val">'+esc(m.chair_name||'')+'</td>'
         +   '<th class="att-lbl" rowspan="2">出席人員</th><td class="att-val" rowspan="2">'+attendeeNames+'</td></tr>'
         + '<tr><th>地點</th><td class="val">'+esc(m.location||'—')+'</td>'
@@ -1523,7 +1533,7 @@ function meetingRecordPageHtml(m, res, docNoMode){
 /* 出貨目標達成率獨立一頁(有自己的簽章，只有「製表」一欄)，跟會議記錄各自一張A4，不再併頁(使用者明確要求)。 */
 function kpiPageHtml(m, preparerName){
     var k = JSON.parse(m.kpi_snapshot_json);
-    var madeStamp = (window.EGStamp&&EGStamp.stamp && preparerName) ? EGStamp.stamp(preparerName, fmtDate(m.meeting_date)) : '';
+    var madeStamp = (window.EGStamp&&EGStamp.stamp && preparerName) ? EGStamp.stamp(preparerName, dispDate(m.meeting_date)) : '';
     return '<div class="mr-page">'
         + '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">出貨目標達成率</div></div>'
         + kpiReportHtml(k)
@@ -1535,7 +1545,7 @@ function signSheetPageHtml(m, attendees, withSignatures, docNoMode){
         var sigHtml = '';
         if (withSignatures) {
             var signed = +a.signed===1;
-            sigHtml = signed ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name, fmtDate(m.meeting_date), false, mStampSchema(), a.dept_name, a.position_name):esc(a.user_name)) : '';
+            sigHtml = signed ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name, dispDate(m.meeting_date), false, mStampSchema(), a.dept_name, a.position_name):esc(a.user_name)) : '';
         }
         return '<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td><td>'+sigHtml+'</td></tr>';
     }).join('');
@@ -1543,7 +1553,7 @@ function signSheetPageHtml(m, attendees, withSignatures, docNoMode){
     return '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">'+esc(signTitle)+'</div></div>'
         + '<table class="ss-head">'
         + '<tr><td colspan="2">主題：'+esc(m.subject)+'</td></tr>'
-        + '<tr><td colspan="2">日期時間：'+fmtDate(m.meeting_date)+(m.start_time?('　'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')+'</td></tr>'
+        + '<tr><td colspan="2">日期時間：'+dispDate(m.meeting_date)+(m.start_time?('　'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')+'</td></tr>'
         + '<tr><td>地點：'+esc(m.location||'—')+'</td><td>主席：'+esc(m.chair_name||'')+'</td></tr>'
         + '</table>'
         + '<table class="sf"><tr><th style="width:36px;">序</th><th>部門</th><th>職稱</th><th>姓名</th><th style="width:130px;">簽名</th></tr>'+rows+'</table>'
