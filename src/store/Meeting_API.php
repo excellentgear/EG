@@ -131,7 +131,11 @@ case 'list': {
     foreach ($rows as $m) {
         if (!meeting_can_view($db, $uid, $perms, $m)) continue;
         $ap = meeting_approval_status($db, (int)$m['meeting_id']);
-        $m['approval_status'] = $ap['status'];
+        // 「回簽中」(2026-08-10使用者明確要求新增)：存檔並通知後、負責人尚未全部回覆確認前，狀態顯示改成
+        // 回簽中(不是草稿)，且鎖定不可編輯，避免記錄人趁對方還在回覆時把內容改掉。
+        $notifying = in_array($ap['status'], ['draft','rejected'], true) && meeting_has_active_item_notices($db, (int)$m['meeting_id']);
+        $m['approval_status'] = $notifying ? 'notifying' : $ap['status'];
+        $m['notifying'] = $notifying;
         $m['is_mine'] = (int)$m['recorder_user_id'] === $uid;
         $out[] = $m;
     }
@@ -143,10 +147,12 @@ case 'get_detail': {
     $m = meeting_load($db, $id);
     if (!meeting_can_view($db, $uid, $perms, $m)) jerr('無權檢視此會議記錄', 403);
     $ap = meeting_approval_status($db, $id);
-    $m['approval_status'] = $ap['status'];
+    $notifying = in_array($ap['status'], ['draft','rejected'], true) && meeting_has_active_item_notices($db, $id);
+    $m['approval_status'] = $notifying ? 'notifying' : $ap['status'];
+    $m['notifying'] = $notifying;
     $m['chair_approval'] = $ap['chair'];
     $m['gm_approval'] = $ap['gm'];
-    $m['can_edit'] = ((int)$m['recorder_user_id'] === $uid || $perms['canAdmin']) && in_array($m['status'], ['draft','rejected'], true);
+    $m['can_edit'] = ((int)$m['recorder_user_id'] === $uid || $perms['canAdmin']) && in_array($m['status'], ['draft','rejected'], true) && !$notifying;
     // 解出「目前實際該簽的人」(含代理)，前端才能正確顯示簽核按鈕給代理人看，不只給原本的主席/總經理
     $m['chair_signer_id'] = $m['chair_user_id'] ? meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name'])['id'] : null;
     $gmSigner = meeting_gm_signer_effective($db);
@@ -302,6 +308,9 @@ case 'save': {
         $m = meeting_load($db, $id);
         if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可編輯', 403);
         if (!in_array($m['status'], ['draft','rejected'], true)) jerr('此會議記錄已送出，無法編輯（如需修改請先請主席/總經理退回）');
+        // 「回簽中」鎖定(2026-08-10使用者明確要求)：存檔並通知後，負責人尚未全部回覆確認前不可編輯，
+        // 避免對方回覆的是已經被改掉的舊內容；要改內容請先按「撤回」解除鎖定。
+        if (meeting_has_active_item_notices($db, $id)) jerr('此會議記錄「存檔並通知」後正在回簽中，無法編輯；如需修改請先按「撤回」解除鎖定');
     }
     // 記錄一律自動帶入建立者，不接受前端覆寫（避免代填他人姓名）；新建時＝目前登入者，編輯時沿用原記錄人
     $recorderName = $id > 0 ? (string)($m['recorder_name'] ?? $uname) : $uname;
@@ -417,6 +426,7 @@ case 'delete': {
     $m = meeting_load($db, $id);
     if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可刪除', 403);
     if ($m['status'] !== 'draft' && !$perms['canAdmin']) jerr('已送出的會議記錄僅管理員可刪除');
+    meeting_close_item_notices($db, $id); // 項目資料列即將刪除，先關閉還在生效中的回簽通知(要在刪 meeting_item 之前查)
     try {
         $db->beginTransaction();
         $db->prepare("DELETE FROM meeting_attendee WHERE meeting_id=?")->execute([$id]);
@@ -551,17 +561,28 @@ case 'notify_pending_items': {
    限 approval_status==='submitted'(僅主席待簽、連主席都還沒簽)才可撤回；一旦有人簽過(chair_done/done/rejected)一律不可撤回，
    避免破壞已存在的簽核歷程。刪除待簽核的 chair 簽核紀錄、關閉主席簽核通知與本次送出所發的項目確認回簽通知，狀態退回 draft
    供記錄人修改(如負責部門/主席人選)後重新送出。權限比照編輯/刪除：記錄人本人或管理員。 */
+/* 撤回(2026-08-10使用者明確要求擴充)：兩種情況都可撤回——①已送出「待主席簽章」且尚未有人簽核 ②「回簽中」
+   (存檔並通知後，負責部門/指定人員尚未全部回覆確認)。兩者都只是關閉相關通知，不動已經回覆/簽到的既有紀錄
+   (使用者明確要求：撤回本身不清舊簽章，只在後續編輯時若該項目內容/負責人真的有異動才會清該項目的舊確認，見save動作)。 */
 case 'withdraw': {
     $id = (int)($_POST['meeting_id'] ?? 0);
     $m = meeting_load($db, $id);
     if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可撤回', 403);
     $ap = meeting_approval_status($db, $id);
-    if ($ap['status'] !== 'submitted') jerr('僅「待主席簽章」且尚未有人簽核時可撤回，此記錄目前狀態不允許撤回');
-    if ($ap['chair']) $db->prepare("DELETE FROM approval_record WHERE id=?")->execute([(int)$ap['chair']['id']]);
-    meeting_close_notice($db, $id);
-    meeting_close_item_notices($db, $id);
-    $db->prepare("UPDATE meeting_record SET status='draft', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
-    jout(['status'=>'draft']);
+    $notifying = in_array($ap['status'], ['draft','rejected'], true) && meeting_has_active_item_notices($db, $id);
+    if ($ap['status'] === 'submitted') {
+        if ($ap['chair']) $db->prepare("DELETE FROM approval_record WHERE id=?")->execute([(int)$ap['chair']['id']]);
+        meeting_close_notice($db, $id);
+        meeting_close_item_notices($db, $id);
+        $db->prepare("UPDATE meeting_record SET status='draft', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+        jout(['status'=>'draft']);
+    }
+    if ($notifying) {
+        meeting_close_item_notices($db, $id);
+        $db->prepare("UPDATE meeting_record SET updated_at=NOW() WHERE meeting_id=?")->execute([$id]); // 狀態本來就是draft，只是解除回簽中鎖定
+        jout(['status'=>'draft']);
+    }
+    jerr('僅「待主席簽章」或「回簽中」狀態可撤回，此記錄目前狀態不允許撤回');
 }
 
 /* 主席／總經理 確認簽章或退回：退回一定要填原因，退回後記錄人可修改後重新送出 */
