@@ -4358,7 +4358,9 @@ $(function(){
     }
     function buildPrintHtml(){
         var m=currentMeta(), items=collectItems(), n=state.sampleN;
-        var dateStr=printSignDate();
+        // 顯示用一律 YYYY.MM.DD（ai-rules/20）；printSignDate()本身仍回傳原始Y-m-d，因為它另外被當bizDate送給
+        // loadPrintCfg()做AS編號版次回推比對，不能改格式，只在這裡(純顯示用途)轉點分格式。
+        var dateStr=printSignDate().replace(/-/g,'.');
         // 大標題＝本公司全名、副標題＝綁定 AS 文件的表單名稱（皆動態取，禁寫死；ai-rules/16）
         var head='<div class="pr-co">'+esc(PRINTCFG.company||'')+'</div>'+
             '<div class="pr-title">'+esc((PRINTCFG.doc&&PRINTCFG.doc.name)||'檢驗記錄表')+'</div>'+
