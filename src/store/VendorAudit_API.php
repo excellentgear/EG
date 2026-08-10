@@ -162,7 +162,7 @@ case 'periodic_eval_all': {
 /* ===== 合格供應商清冊（2-PH-01-04）===== */
 /* 清冊清單：納管 或 手動列入(in_roster)，非停用；含定期評核建議等級 + 手動覆寫 */
 case 'roster_list': {
-    $year = (int)($_GET['year'] ?? date('Y'));
+    $year = (int)($_GET['year'] ?? '') ?: (int)date('Y');
     $set = vendor_eval_settings($db);
     $rows = $db->query("SELECT m.maker_id_no, m.maker_id, m.m_note, m.audit_managed, m.in_roster, m.roster_grade, m.main_category_id,
                                sc.sub_cat_names

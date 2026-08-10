@@ -2066,7 +2066,8 @@ var ROSTER=null;
 $('#rsYear').on('change', loadRoster);
 function loadRoster(){
     NProgress.start();
-    $.getJSON(API, {action:'roster_list', year:$('#rsYear').val()}, function(res){
+    var rsYr = $('#rsYear').val() || new Date().getFullYear();
+    $.getJSON(API, {action:'roster_list', year:rsYr}, function(res){
         NProgress.done();
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         ROSTER=res;
@@ -2134,7 +2135,7 @@ $('#rsCsvBtn').on('click', function(){
     var rows=[['加工項目','廠商ID','廠商名稱','廠商備註','建議等級','採用等級','類型']];
     ROSTER.rows.forEach(function(r){ rows.push([r.main_cat_name||'',r.maker_id_no,r.maker_id||'',r.m_note||'',(r.suggest_grade||'')+(r.suggest_score==null?'':'('+r.suggest_score+')'),r.final_grade||'',r.is_managed?'納管':'手動列入']); });
     var csv='﻿'+rows.map(function(l){return l.map(function(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
-    var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'})); a.download='合格供應商清冊_'+$('#rsYear').val()+'.csv'; a.click();
+    var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'})); a.download='合格供應商清冊_'+ROSTER.year+'.csv'; a.click();
 });
 /** 合格供應商清冊三欄簽章：製表＝目前登入者，審核＝eg_resolve_supervisor()解析的部門上一階主管
  *  (若解不到就退回製表人本人)，核准＝全站共用「最高核准人員」(org_role_lib top_approver)；
@@ -2153,11 +2154,11 @@ $('#rsPrintBtn').on('click', function(){
         var reviewStamp = reviewName ? vaStampHtml(reviewName, dateStr) : '__________________';
         var approveStamp = res.approver_name ? vaStampHtml(res.approver_name, dateStr) : '__________________';
         var doc=META.roster_as_doc, docName=(doc&&doc.doc_name)||'合格供應商清冊', docNo=(doc&&doc.doc_no)||'2-PH-01-04';
-        var head='<div style="position:relative;text-align:center;">'
-            +'<div style="position:absolute;left:0;top:4px;font-size:14px;font-weight:bold;">'+ROSTER.year+' 年</div>'
+        var head='<div style="text-align:center;">'
             +'<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
-            +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
-        var rows='<table class="pf" style="table-layout:fixed;"><colgroup><col style="width:5%;"><col style="width:26%;">'
+            +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>'
+            +'<div style="text-align:left;font-size:14px;font-weight:bold;margin-top:8px;">'+(ROSTER.year||new Date().getFullYear())+' 年</div>';
+        var rows='<table class="pf" style="table-layout:fixed;margin-top:2px;"><colgroup><col style="width:5%;"><col style="width:26%;">'
             +'<col style="width:13%;"><col style="width:46%;"><col style="width:10%;"></colgroup>'
             +'<thead><tr><th>序</th><th style="text-align:left;">加工項目</th><th>廠商</th><th>廠商備註</th><th>評核等級</th></tr></thead><tbody>';
         ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td class="q">'+esc(r.main_cat_name||'')+'</td>'
