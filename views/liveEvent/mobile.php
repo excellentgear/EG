@@ -204,6 +204,9 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             if (e.ref_type === 'TRAINING_PLAN_APPROVAL' || e.ref_type === 'TRAINING_PLAN_RESULT'){ location.href = '../ADM/training_plan_approval_view.php?event=' + e.id; return; }
             if (e.ref_type === 'AS_TREE_APPROVAL' || e.ref_type === 'AS_TREE_RESULT'){ location.href = '../ADM/as_tree_approval_view.php?event=' + e.id; return; }
             if (e.ref_type === 'QUOTATION_SUPP' || e.ref_type === 'QUOTATION_SUPP_RESULT'){ location.href = '../Sales/quotation_supplement_view.php?event=' + e.id; return; }
+            // 供應商稽核計劃待核准／結果：直接導到管理頁的「供應商稽核計劃」分頁，待核准且本人有權核准時自動跳出核准/退回跳窗
+            if (e.ref_type === 'VENDOR_AUDIT_PLAN'){ location.href = '../pm/vendor_audit.php?plan_approve=' + (e.ref_id || 0); return; }
+            if (e.ref_type === 'VENDOR_AUDIT_PLAN_RESULT'){ location.href = '../pm/vendor_audit.php?plan_year=' + (e.ref_id || 0); return; }
             h += '<div class="d-title">' + esc(e.title) + '</div>';
             var meta = [];
             if (e.source) meta.push('來源：' + esc(e.source));

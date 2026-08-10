@@ -2176,7 +2176,7 @@ $('#rsPrintBtn').on('click', function(){
 
 /* ---------- 供應商稽核計劃(2-PH-01-06,年度版) ---------- */
 var PLANDATA = null;
-function loadPlan(){
+function loadPlan(cb){
     var year = $('#planYear').val() || META.cur_year;
     NProgress.start();
     $.getJSON(API, {action:'plan_data', year:year}, function(res){
@@ -2184,6 +2184,7 @@ function loadPlan(){
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         PLANDATA = res;
         renderPlan(res);
+        if (cb) cb(res);
     }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 function renderPlan(res){
@@ -2489,6 +2490,18 @@ if (canView) loadMeta(function(){
     loadRound();
     var m = /[?&]sign=(\d+)/.exec(location.search);
     if (m) openSignMask(+m[1]);
+    // 供應商稽核計劃通知深連結：從通知點進來直接切到「供應商稽核計劃」分頁＋對應年度，
+    // 待核准且本人有權核准時自動跳出核准/退回跳窗，不要求使用者自己找分頁點（ai-rules/17）。
+    var pa = /[?&]plan_approve=(\d+)/.exec(location.search), py = /[?&]plan_year=(\d+)/.exec(location.search);
+    if (pa || py) {
+        $('.va-tab').removeClass('active'); $('.va-tab[data-tab="plan"]').addClass('active');
+        $('#tabAudit,#tabEval,#tabRoster').hide(); $('#tabPlan').show();
+        $('#planYear').val(+((pa||py)[1]));
+        loadPlan(pa ? function(res){
+            if (res.lock && res.lock.status==='pending' && res.can_decide) openPlanDecideMask();
+            else if (res.lock && res.lock.status!=='pending') alert('此年度計劃目前狀態為「'+({approved:'已核准',rejected:'已退回'}[res.lock.status]||res.lock.status)+'」，無待核准項目');
+        } : null);
+    }
 });
 </script>
 </body>
