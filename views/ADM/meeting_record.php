@@ -146,6 +146,7 @@ foreach ($roleRows as $rr) {
         table.mt-table td.t-left { text-align:left; }
         .st-pill { display:inline-block; font-size:12px; border-radius:10px; padding:2px 9px; }
         .st-draft { background:#efe7d8; color:#7a6d5a; }
+        .st-notifying { background:#F0C987; color:#5C3D00; }
         .st-submitted { background:#F2C86D; color:#5C3D00; font-weight:bold; }
         .st-chair_done { background:#E8B77A; color:#4d2f10; font-weight:bold; }
         .st-done { background:#F0A24B; color:#fff; }
@@ -452,6 +453,7 @@ foreach ($roleRows as $rr) {
         <b>③現場簽到</b>：開啟「檢視」，出席人員名單旁各自輸入<b>本人密碼</b>簽到（共用一台裝置輪流簽，用選人不用密碼反查身分，不會有密碼重複無法辨識的問題）。<br>
         <b>④存草稿或送出</b>：草稿只有記錄人自己看得到，可隨時修改。<b>出席人員全部簽到、且負責部門/指定人員也全部確認回簽後</b>才能真正<b>送簽核</b>，鎖定內容並通知主席確認簽章 → 主席簽章後自動通知總經理確認簽章（總經理可逐筆或整體回覆意見）→ 完成。
         負責人尚未全部確認回簽時，按鈕會改標<b>「存檔並通知」</b>：只發通知請對方回覆確認，<b>不會</b>送交主席簽核；全部確認完成後按鈕才會變回「送簽核」。任一階段可退回，退回後記錄人可修改並重新送出。<br>
+        按下「存檔並通知」後，狀態會變成<b>「回簽中」</b>，內容<b>鎖定不可編輯</b>（避免對方回覆的是已經被改掉的舊內容）；待負責人全部回覆確認後自動解鎖可送簽核，或記錄人可按「撤回」提前解除鎖定改回可編輯草稿（已完成的簽到/確認簽名不會被清除；之後若真的改了某項目的內容或負責部門/指定人員，只有<b>該項目</b>的舊確認會被清空要求重新確認，其餘項目不受影響）。<br>
         <b>⑤負責人/部門項目確認</b>：要項的「負責人/部門」欄可點連結<b>切換兩種模式（二擇一，切換會清空另一種的選擇）</b>：<br>
         　－<b>選部門</b>（可多選）：<b>每個負責部門各要一位代表簽名</b>，系統依序自動算出誰要簽（現場只有算出的那位本人能輸入密碼簽這格）：①該部門本次以<b>主要角色</b>出席的主管優先（有設職級的職稱，如經理/副理/課長/組長等）②該部門沒有主要角色主管出席，才由<b>兼任</b>該部門主管的出席者代簽 ③連兼任主管都沒有，才由該部門出席人員中職稱排序最高者代簽（②③兩種情況章旁都標示「(代)」，不特別區分是否兼任）。<br>
         　－<b>指定人員</b>（可多選、可打字搜尋全公司人員）：直接指名的人只要本次有出席就是必簽者，不套用主管優先判定；沒指定到部門，不論那位人員屬於哪個部門都是他本人簽。<br>
@@ -490,7 +492,7 @@ $(document).ready(function(){
 var API = '../../src/store/Meeting_API.php';
 var META = null, PERMS = null, DEPTS = [], ALL_PEOPLE = [];
 var MEETINGS = [];
-var STATUS_LABEL = {draft:'草稿', submitted:'待主席簽章', chair_done:'待總經理簽章', done:'已完成', rejected:'已退回'};
+var STATUS_LABEL = {draft:'草稿', notifying:'回簽中', submitted:'待主席簽章', chair_done:'待總經理簽章', done:'已完成', rejected:'已退回'};
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtDate(d){ return d ? String(d).substr(0,10) : ''; }
@@ -667,6 +669,10 @@ function openEdit(id){
     $.getJSON(API, {action:'get_detail', meeting_id:id}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         var m = res.meeting;
+        if (!m.can_edit) {
+            alert(m.notifying ? '此會議記錄「存檔並通知」後正在回簽中，內容已鎖定無法編輯；請先在檢視畫面按「撤回」解除鎖定。' : '此會議記錄目前無法編輯。');
+            return;
+        }
         EDIT_ID = m.meeting_id;
         $('#edTitle').text('編輯會議紀錄');
         $('#edSubject').val(m.subject); $('#edDate').val(fmtDate(m.meeting_date));
@@ -1229,6 +1235,11 @@ function viewHtml(res){
            + '</span></div>';
     }
 
+    // 回簽中鎖定提示(2026-08-10使用者明確要求)：存檔並通知後，內容鎖定不可編輯，直到負責人全部回覆確認
+    // (自動解鎖，可以送簽核)或記錄人按撤回(解除鎖定改回可編輯草稿)。
+    if (m.approval_status==='notifying') {
+        h += '<div class="mt-hint">此會議記錄「存檔並通知」後正在回簽中，內容已鎖定無法編輯；待負責部門/指定人員全部回覆確認後即可送簽核，或按下方「撤回」解除鎖定修改內容。</div>';
+    }
     // 送簽核／存檔並通知(2026-08-06使用者明確要求新增按鈕；2026-08-10使用者明確要求修正流程)：
     // 避免現場簽到/項目確認都在檢視畫面完成後，還要跳回編輯畫面才能送出。
     // 全部出席人員簽到才能操作；負責部門/指定人員若還沒全部確認回簽，只能「存檔並通知」（只發通知，
@@ -1252,9 +1263,11 @@ function viewHtml(res){
     } else if (m.approval_status==='chair_done' && (+m.gm_signer_id===META.uid || PERMS.canAdmin)) {
         h += decideBoxHtml(m.meeting_id, 'gm', '總經理確認簽章', true);
     }
-    // 撤回：僅「待主席簽章且尚未任何人簽核」時、記錄人本人或管理員可撤回(退回draft修改後重新送出)
-    if (m.approval_status==='submitted' && (+m.recorder_user_id===META.uid || PERMS.canAdmin)) {
-        h += '<div style="margin-top:10px;"><button type="button" class="b-att wt" style="color:#DD5138;border-color:#DD5138;" onclick="withdrawMeeting('+m.meeting_id+')"><i class="fa fa-reply"></i> 撤回（送錯了/送早了，改回草稿）</button></div>';
+    // 撤回：①「待主席簽章且尚未任何人簽核」②「回簽中」(存檔並通知後負責人尚未全部回覆)，記錄人本人或管理員可撤回。
+    // 2026-08-10使用者明確要求：回簽中鎖定編輯，只有撤回才能解鎖修改內容(避免對方回覆的是已經被改掉的舊內容)。
+    if ((m.approval_status==='submitted' || m.approval_status==='notifying') && (+m.recorder_user_id===META.uid || PERMS.canAdmin)) {
+        h += '<div style="margin-top:10px;"><button type="button" class="b-att wt" style="color:#DD5138;border-color:#DD5138;" onclick="withdrawMeeting('+m.meeting_id+')"><i class="fa fa-reply"></i> '
+           + (m.approval_status==='notifying' ? '撤回（解除鎖定，改回可編輯草稿）' : '撤回（送錯了/送早了，改回草稿）') + '</button></div>';
     }
     // 超級管理員：補齊/修改主席/總經理簽核日期＋一鍵補齊整場(2026-08-05使用者明確要求)
     if (META.is_superadmin) {
@@ -1298,10 +1311,10 @@ function viewSubmit(mid, hasPending){
     });
 }
 function withdrawMeeting(mid){
-    if (!confirm('確定撤回？將取消目前的主席待簽通知，退回草稿狀態，可修改後重新送出。')) return;
+    if (!confirm('確定撤回？將取消目前尚未完成的簽核/回覆通知，退回可編輯草稿狀態；已經完成的簽到/確認簽名不會被清除。')) return;
     $.post(API, {action:'withdraw', meeting_id:mid}, function(res){
         if (!res.ok){ alert(res.error||'撤回失敗'); return; }
-        alert('已撤回，改為草稿狀態。'); closeMask('viewMask'); loadList();
+        alert('已撤回，改為可編輯草稿狀態。'); closeMask('viewMask'); loadList();
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '撤回失敗'); });
 }
 function decideBoxHtml(mid, level, title, withItemComments){
