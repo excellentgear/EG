@@ -311,7 +311,7 @@ foreach ($roleRows as $rr) {
     </div>
     <div class="m-foot">
         <div style="text-align:left;font-size:11.5px;color:#8a6d45;line-height:1.6;margin-bottom:6px;">
-            <b style="color:#8A5A2B;">存草稿</b>＝可隨時再修改；<b style="color:#8A5A2B;">送出</b>＝鎖定內容並通知主席確認簽章，之後需退回才能再改。
+            <b style="color:#8A5A2B;">存草稿</b>＝可隨時再修改；出席人員全部簽到且負責部門/指定人員全部確認回簽後，右下角按鈕才會變成<b style="color:#8A5A2B;">送出</b>並鎖定內容通知主席確認簽章（之後需退回才能再改）；負責人尚未確認完成前，按鈕是<b style="color:#8A5A2B;">存檔並通知</b>，只發通知不會送交主席。
         </div>
         <button class="b-cancel" onclick="closeMask('edMask')">取消</button>
         <button class="b-ok" style="background:#fff;color:#8A5A2B;" onclick="saveDraft(false)">存草稿</button>
@@ -450,12 +450,12 @@ foreach ($roleRows as $rr) {
         <b>①新增</b>：填主題/日期/時間/地點（主題、地點可打字自由輸入，也可從曾用過的建議清單挑；有設定「常用設定」時可一鍵套用主題+地點+時間，套用後仍可自行修改），加入出席人員（依部門挑選，或套用已存的<b>公開/私人群組</b>——把常開會的一批人存成群組，下次直接套用，也可另存新群組），指定主席。日期時間存檔前後端都會檢查合理性（結束不可早於或等於開始）。「記錄」欄固定為目前登入者，不可修改。<br>
         <b>②建立要項</b>：分「上級指示要項」與「會議要項」兩張表，每項可填應完成日期、負責部門（可多選）、備註。<br>
         <b>③現場簽到</b>：開啟「檢視」，出席人員名單旁各自輸入<b>本人密碼</b>簽到（共用一台裝置輪流簽，用選人不用密碼反查身分，不會有密碼重複無法辨識的問題）。<br>
-        <b>④存草稿或送出</b>：草稿只有記錄人自己看得到，可隨時修改；<b>送出</b>後鎖定內容並通知主席確認簽章 → 主席簽章後自動通知總經理確認簽章（總經理可逐筆或整體回覆意見）→ 完成。
-        任一階段可退回，退回後記錄人可修改並重新送出。<br>
+        <b>④存草稿或送出</b>：草稿只有記錄人自己看得到，可隨時修改。<b>出席人員全部簽到、且負責部門/指定人員也全部確認回簽後</b>才能真正<b>送簽核</b>，鎖定內容並通知主席確認簽章 → 主席簽章後自動通知總經理確認簽章（總經理可逐筆或整體回覆意見）→ 完成。
+        負責人尚未全部確認回簽時，按鈕會改標<b>「存檔並通知」</b>：只發通知請對方回覆確認，<b>不會</b>送交主席簽核；全部確認完成後按鈕才會變回「送簽核」。任一階段可退回，退回後記錄人可修改並重新送出。<br>
         <b>⑤負責人/部門項目確認</b>：要項的「負責人/部門」欄可點連結<b>切換兩種模式（二擇一，切換會清空另一種的選擇）</b>：<br>
         　－<b>選部門</b>（可多選）：<b>每個負責部門各要一位代表簽名</b>，系統依序自動算出誰要簽（現場只有算出的那位本人能輸入密碼簽這格）：①該部門本次以<b>主要角色</b>出席的主管優先（有設職級的職稱，如經理/副理/課長/組長等）②該部門沒有主要角色主管出席，才由<b>兼任</b>該部門主管的出席者代簽 ③連兼任主管都沒有，才由該部門出席人員中職稱排序最高者代簽（②③兩種情況章旁都標示「(代)」，不特別區分是否兼任）。<br>
         　－<b>指定人員</b>（可多選、可打字搜尋全公司人員）：直接指名的人只要本次有出席就是必簽者，不套用主管優先判定；沒指定到部門，不論那位人員屬於哪個部門都是他本人簽。<br>
-        兩種模式下，負責人（部門或指定人員）本次完全沒人出席時，都會改發通知給對方回簽（任一人回覆即算完成）。<br>
+        兩種模式下，負責人（部門或指定人員）本次沒有人出席、或現場代表尚未來得及簽名時，「存檔並通知」都會改發通知（該部門本次所有出席人員＋部門主管，或指定人員本人）請對方回覆確認，任一人回覆即算完成，回覆內容會顯示在項目下方；同一份通知一旦有人完成回覆就會自動關閉，其他被通知的人之後開啟只會看到唯讀狀態，不會再重複送出回覆蓋掉別人。<br>
         <b>⑥插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。已完成核准的會議記錄在「檢視」畫面也能再插入/更新：一般人插入後會<b>清空目前簽核紀錄改回草稿</b>，需重新送出取得主席／總經理簽章；<b>超級管理員</b>插入後<b>維持已核准狀態</b>，不需重新送審。
         <h4>重要行為</h4>
         ・草稿只有記錄人本人看得到；送出後，出席人員／主席／總經理都自動有唯讀權限，其餘人是否看得到全部會議記錄依角色設定的「檢視全部」功能。<br>
@@ -748,10 +748,10 @@ function renderAtt(){
     $('#attCount').text(ATT.length ? '（共 '+ATT.length+' 人）' : '');
     refreshEdSubmitBtn();
 }
-/* 送出按鈕動態標籤(2026-08-06使用者明確要求)：出席人員全部簽到、且負責部門/指定人員也都簽完 → 存檔並送出；
-   全部簽到但還有負責人未簽 → 存檔並通知(送出後會另行擴大通知相關人員回簽，不再擋下送出)。
-   這裡只用來決定按鈕文字(best-effort，資料來源是畫面上目前的 ATT/ITEMS，可能因為使用者剛編輯過而與後端存檔前的狀態略有落差)，
-   真正是否需要通知一律由後端 submit 當下重新算(meeting_item_pending_notify_targets)，不受這裡影響。 */
+/* 送出按鈕動態標籤(2026-08-06新增；2026-08-10使用者明確要求修正流程)：出席人員全部簽到、且負責部門/指定人員
+   也都確認完成 → 存檔並送出(真正送交主席簽核)；全部簽到但還有負責人未確認 → 存檔並通知(只發通知，不送主席，
+   後端 submit 也會擋下)。這裡只用來決定按鈕該呼叫哪個 action(best-effort，資料來源是畫面上目前的 ATT/ITEMS，
+   可能因為使用者剛編輯過而與後端存檔後的狀態略有落差)，真正能不能送主席一律由後端 submit 當下重新驗證。 */
 function mtReadiness(){
     var allSigned = ATT.length>0 && ATT.every(function(a){ return +a.signed===1; });
     var pending = ITEMS_D.concat(ITEMS_G).filter(function(it){
@@ -1122,14 +1122,23 @@ function edDelAttach(aid){
         renderEdAttach();
     },'json');
 }
-/* 送出（送簽核/存檔並通知共用）：一律用 .fail() 接住後端擋下的驗證錯誤(如尚未全部簽到)，避免點下去沒有任何反應。
-   後端已不再因負責部門/指定人員尚未現場簽名而擋下送出，改為擴大通知相關人員回簽，pending_items 是還有幾項待回簽。 */
+/* 送簽核：一律用 .fail() 接住後端擋下的驗證錯誤(如尚未全部簽到/負責人尚未確認)，避免點下去沒有任何反應。
+   2026-08-10改版(使用者明確要求恢復)：負責部門/指定人員全部確認回簽前，後端會擋下不給真的送交主席簽核，
+   請改呼叫 notifyPendingItems() 通知對方回覆，全部確認完成後才能送出。 */
 function submitMeeting(id, cb){
     $.post(API, {action:'submit', meeting_id:id}, function(r2){
         if (!r2.ok){ cb(false, r2.error||'送出失敗'); return; }
-        var msg = '已送出，已通知主席確認簽章。';
-        if (r2.pending_items) msg += '尚有 '+r2.pending_items+' 項負責部門／指定人員未現場簽名，已另行通知相關人員回簽。';
-        cb(true, msg);
+        cb(true, '已送出，已通知主席確認簽章。');
+    }, 'json').fail(function(x){ cb(false, (x.responseJSON&&x.responseJSON.error)||('連線失敗(HTTP '+x.status+')')); });
+}
+/* 存檔並通知：只發通知請負責部門/指定人員回覆確認，不送交主席簽核(2026-08-10使用者明確要求：負責單位/人員
+   還沒確認與回覆前不應送主席簽核)。已全部確認完成或已經有通知還在等回覆的項目後端會自動略過，不會重複灌通知。 */
+function notifyPendingItems(id, cb){
+    $.post(API, {action:'notify_pending_items', meeting_id:id}, function(r2){
+        if (!r2.ok){ cb(false, r2.error||'通知失敗'); return; }
+        cb(true, r2.notified_items
+            ? ('已通知 '+r2.notified_items+' 項負責部門／指定人員回覆確認，待對方回覆確認後即可送出主席簽核。')
+            : '已儲存（目前沒有需要通知的項目，或先前的通知都還在等待回覆中）。');
     }, 'json').fail(function(x){ cb(false, (x.responseJSON&&x.responseJSON.error)||('連線失敗(HTTP '+x.status+')')); });
 }
 function saveDraft(thenSubmit){
@@ -1144,8 +1153,10 @@ function saveDraft(thenSubmit){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         EDIT_ID = res.meeting_id;
         if (!thenSubmit){ alert('已儲存草稿。'); closeMask('edMask'); loadList(); return; }
-        submitMeeting(EDIT_ID, function(ok, msg){
-            if (!ok){ alert('草稿已存，但送出失敗：'+msg); closeMask('edMask'); loadList(); return; }
+        var rdy = mtReadiness();
+        var doIt = (rdy.allSigned && rdy.pending>0) ? notifyPendingItems : submitMeeting;
+        doIt(EDIT_ID, function(ok, msg){
+            if (!ok){ alert('草稿已存，但處理失敗：'+msg); closeMask('edMask'); loadList(); return; }
             alert(msg); closeMask('edMask'); loadList();
         });
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
@@ -1218,18 +1229,19 @@ function viewHtml(res){
            + '</span></div>';
     }
 
-    // 送簽核／存檔並通知(2026-08-06使用者明確要求)：避免現場簽到/項目確認都在檢視畫面完成後，
-    // 還要跳回編輯畫面才能送出。全部出席人員簽到才能送出；負責部門/指定人員若還沒簽完，
-    // 按鈕改標「存檔並通知」，送出後會另行擴大通知相關人員回簽（不再擋下送出）。
+    // 送簽核／存檔並通知(2026-08-06使用者明確要求新增按鈕；2026-08-10使用者明確要求修正流程)：
+    // 避免現場簽到/項目確認都在檢視畫面完成後，還要跳回編輯畫面才能送出。
+    // 全部出席人員簽到才能操作；負責部門/指定人員若還沒全部確認回簽，只能「存檔並通知」（只發通知，
+    // 不送交主席簽核）；全部確認完成後才會顯示「送簽核」真正送交主席簽核。
     if (m.can_edit) {
         var rdy = mtReadinessFromView(res);
         if (!rdy.allSigned) {
             h += '<div class="mt-hint">尚有出席人員未完成現場簽到，全部簽到後才能送出。</div>';
         } else {
             h += '<div style="margin-top:10px;">'
-               + '<button type="button" class="b-att" onclick="viewSubmit('+m.meeting_id+')">'
+               + '<button type="button" class="b-att" onclick="viewSubmit('+m.meeting_id+','+(rdy.pending>0?1:0)+')">'
                + (rdy.pending>0 ? '<i class="fa fa-bullhorn"></i> 存檔並通知' : '<i class="fa fa-paper-plane"></i> 送簽核') + '</button>'
-               + (rdy.pending>0 ? '<span style="font-size:11px;color:#8a6d45;margin-left:8px;">尚有 '+rdy.pending+' 項負責部門／指定人員未現場簽名，送出後將另行通知相關人員回簽。</span>' : '')
+               + (rdy.pending>0 ? '<span style="font-size:11px;color:#8a6d45;margin-left:8px;">尚有 '+rdy.pending+' 項負責部門／指定人員未確認回簽，需全部確認後才能送交主席簽核。</span>' : '')
                + '</div>';
         }
     }
@@ -1268,8 +1280,17 @@ function mtReadinessFromView(res){
     }).length;
     return {allSigned:allSigned, pending:pending};
 }
-/* 檢視畫面直接送出(2026-08-06使用者明確要求)：內容已存檔，不需再gather表單，直接呼叫 submit 動作即可。 */
-function viewSubmit(mid){
+/* 檢視畫面直接送出(2026-08-06使用者明確要求)：內容已存檔，不需再gather表單，直接呼叫對應動作即可。
+   hasPending=1 時只能存檔並通知(後端 submit 會擋下，不允許負責人未全部確認就送主席簽核)。 */
+function viewSubmit(mid, hasPending){
+    if (hasPending) {
+        if (!confirm('目前仍有負責部門／指定人員尚未確認回簽，確定要（重新）通知相關人員嗎？\n（全部確認完成後才能送交主席簽核）')) return;
+        notifyPendingItems(mid, function(ok, msg){
+            if (!ok){ alert('通知失敗：'+msg); return; }
+            alert(msg); openView(mid);
+        });
+        return;
+    }
     if (!confirm('確定送出？送出後將鎖定內容，並通知主席確認簽章。')) return;
     submitMeeting(mid, function(ok, msg){
         if (!ok){ alert('送出失敗：'+msg); return; }
