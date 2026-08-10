@@ -789,7 +789,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt = $pdo->prepare("SELECT qi.item_id, qi.product_id, qi.d_setting_d_id, qi.specification,
                                            qi.quantity, qi.unit_price, qi.process_notes, qi.is_tiered,
                                            ds.D_Setting_Id, ds.Is_Assembly,
-                                           (SELECT ot2.Order_oo FROM order_track ot2 WHERE ot2.quote_item_id = qi.item_id ORDER BY ot2.Order_id DESC LIMIT 1) AS converted_order_oo
+                                           (SELECT COUNT(*) FROM order_track ot2 WHERE ot2.quote_item_id = qi.item_id) AS converted_count,
+                                           (SELECT GROUP_CONCAT(ot2.Order_oo ORDER BY ot2.Order_id ASC SEPARATOR '、') FROM order_track ot2 WHERE ot2.quote_item_id = qi.item_id) AS converted_order_oo
                                     FROM quotation_item qi
                                     LEFT JOIN d_setting ds ON ds.d_id = qi.d_setting_d_id
                                     WHERE qi.quote_id = ?
@@ -1928,6 +1929,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     catch (Exception $_eQov) {
         try { $pdo->exec("ALTER TABLE order_track ADD COLUMN qty_over_range TINYINT(1) NOT NULL DEFAULT 0 COMMENT '轉單數量超出報價階梯區間(含容差後)=1,待補報價單'"); } catch (Exception $_eQov2) {}
     }
+    // 相容舊表：is_repeat_conversion（OP追加轉單旗標）首次執行自動補欄
+    try { $pdo->query("SELECT is_repeat_conversion FROM order_track LIMIT 1"); }
+    catch (Exception $_eRep) {
+        try { $pdo->exec("ALTER TABLE order_track ADD COLUMN is_repeat_conversion TINYINT(1) NOT NULL DEFAULT 0 COMMENT '同一報價項目先前已轉過訂單、此為追加訂單=1(不影響KPI報價轉訂單比例統計)'"); } catch (Exception $_eRep2) {}
+    }
 
     $whereClauses = ["1=1", "(ot.parent_order_id IS NULL OR ot.parent_order_id = 0)"];
     $params = [];
@@ -2841,7 +2847,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     <?php endif; ?>
                 </td>
                 <td class="col-process"><?= safe_html($order['Processing_items']) ?></td>
-                <td class="col-qty"><?= number_format($order['Qty'] ?? 0) ?><?php if (!empty($order['qty_over_range'])): ?><br><span style="color:#DD5138;font-size:10px;font-weight:600;white-space:nowrap;" title="OP轉訂單時輸入的數量超出報價階梯區間（含容差後區間），請補報價單">數量超出區間</span><?php endif; ?></td>
+                <td class="col-qty"><?= number_format($order['Qty'] ?? 0) ?><?php if (!empty($order['qty_over_range'])): ?><br><span style="color:#DD5138;font-size:10px;font-weight:600;white-space:nowrap;" title="OP轉訂單時輸入的數量超出報價階梯區間（含容差後區間），請補報價單">數量超出區間</span><?php endif; ?><?php if (!empty($order['is_repeat_conversion'])): ?><br><span style="color:#F0A24B;font-size:10px;font-weight:600;white-space:nowrap;" title="同一報價項目先前已轉過訂單，這是同一組合的追加訂單">追加訂單</span><?php endif; ?></td>
                 <?php
                 $upDisplay = '';
                 $upRaw = $order['display_unit_price'] ?? $order['unit_price'] ?? '';
@@ -3000,6 +3006,11 @@ $yearCondInit = ($selectedYear !== 'ALL') ? "WHERE YEAR(ot.Order_date) = " . int
 try { $conn->getPDO()->query("SELECT qty_over_range FROM order_track LIMIT 1"); }
 catch (Exception $_eQov) {
     try { $conn->getPDO()->exec("ALTER TABLE order_track ADD COLUMN qty_over_range TINYINT(1) NOT NULL DEFAULT 0 COMMENT '轉單數量超出報價階梯區間(含容差後)=1,待補報價單'"); } catch (Exception $_eQov2) {}
+}
+// 相容舊表：is_repeat_conversion（OP追加轉單旗標）首次載入自動補欄
+try { $conn->getPDO()->query("SELECT is_repeat_conversion FROM order_track LIMIT 1"); }
+catch (Exception $_eRep) {
+    try { $conn->getPDO()->exec("ALTER TABLE order_track ADD COLUMN is_repeat_conversion TINYINT(1) NOT NULL DEFAULT 0 COMMENT '同一報價項目先前已轉過訂單、此為追加訂單=1(不影響KPI報價轉訂單比例統計)'"); } catch (Exception $_eRep2) {}
 }
 $initStatsSql = "SELECT
     COUNT(*) as total_records,
@@ -7870,18 +7881,21 @@ foreach($dCounts as $c) {
             $('#op-batch-ateget').val(todayStr);
             opAttachUpdatePartPicker(items);
             items.forEach(function(it) {
+                // 已轉過訂單的料號不再整列鎖死：客戶可能重複下單同一組合，允許再次勾選建立「追加訂單」；
+                // 是否重複轉單只看 converted_order_oo 是否有值，不影響 KPI 報價轉訂單比例（quote_to_order 是用 quote_no 判斷 EXISTS，不是算次數）
                 var converted = !!it.converted_order_oo;
                 var bomBadge = parseInt(it.Is_Assembly) === 1
                     ? ' <span style="background:#3498db;color:#fff;border-radius:3px;padding:0 4px;font-size:9px;"><i class="fa fa-cubes" style="font-size:8px;"></i> 組合件</span>' : '';
                 var convBadge = converted
-                    ? ' <span style="background:#bbb;color:#fff;border-radius:3px;padding:0 4px;font-size:9px;" title="已轉訂單：' + escapeHtml(it.converted_order_oo) + '">已轉訂單</span>' : '';
+                    ? ' <span style="background:#F0A24B;color:#fff;border-radius:3px;padding:0 4px;font-size:9px;" title="先前已轉過訂單：' + escapeHtml(it.converted_order_oo) + '（勾選此列將建立追加訂單，不影響報價轉訂單比例統計）"><i class="fa fa-refresh" style="font-size:8px;"></i> 已轉訂單×' + (parseInt(it.converted_count) || 1) + '</span>' : '';
                 // 客戶代號／等同料號自動更正：報價當年用的料號已被登記成別的現行料號的別名，轉單一律改用現行正確料號
                 var corrBadge = it.corrected_from
                     ? '<div style="font-size:9px;color:#a06a1f;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;margin-top:2px;" title="報價當時用的料號是「' + escapeHtml(it.corrected_from) + '」，已依客戶代號／等同料號綁定自動更正為現行正確料號">已更正：' + escapeHtml(it.corrected_from) + ' → ' + escapeHtml(it.D_Setting_Id) + '</div>'
                     : '';
                 var $tr = $('<tr></tr>').data('item', it);
-                if (converted) $tr.css({'background':'#f5f5f5', 'color':'#aaa'});
-                $tr.append('<td><input type="checkbox" class="op-row-check"' + (converted ? ' disabled' : '') + '></td>');
+                // 已轉過的列不再整列 disabled：改用較淡的提示底色，讓使用者知道「這是追加」但仍可正常填寫、送出
+                if (converted) $tr.css({'background':'#FFF8ED'});
+                $tr.append('<td><input type="checkbox" class="op-row-check"></td>');
                 $tr.append('<td>' + escapeHtml(it.D_Setting_Id || it.product_id || '') + bomBadge + convBadge + corrBadge + '</td>');
                 $tr.append('<td>' + escapeHtml((opCurrentQuote && opCurrentQuote.client_name) || '') + '</td>');
                 $tr.append('<td>' + escapeHtml(it.processes || '') + '</td>');
@@ -7898,25 +7912,23 @@ foreach($dCounts as $c) {
                                '區間' + (i + 1) + '：' + baseTxt + ' @' + formatPrice(parseFloat(t.unit_price) || 0) + tolTxt + '</div>';
                     }).join('');
                     var $qtyTd = $('<td style="text-align:right;min-width:150px;"></td>');
-                    $qtyTd.append($('<input type="number" class="form-control input-sm op-f-qty" placeholder="輸入數量" min="1" step="1">').prop('disabled', converted));
+                    $qtyTd.append($('<input type="number" class="form-control input-sm op-f-qty" placeholder="輸入數量" min="1" step="1">'));
                     $qtyTd.append('<div style="text-align:left;margin-top:2px;">' + rangeLines + '</div>');
                     $tr.append($qtyTd);
                     var $priceTd = $('<td style="text-align:right;min-width:100px;"></td>');
                     $priceTd.append('<div class="op-f-price-display" style="font-weight:600;">-</div>');
-                    if (!converted) {
-                        $priceTd.append('<label style="font-weight:400;font-size:10px;display:flex;align-items:center;gap:3px;justify-content:flex-end;cursor:pointer;margin:2px 0 0;white-space:nowrap;" title="數量落在容差後區間內也視為對應該區間取價">' +
-                            '<input type="checkbox" class="op-f-tolmatch" style="margin:0;">容差區間對價</label>');
-                    }
+                    $priceTd.append('<label style="font-weight:400;font-size:10px;display:flex;align-items:center;gap:3px;justify-content:flex-end;cursor:pointer;margin:2px 0 0;white-space:nowrap;" title="數量落在容差後區間內也視為對應該區間取價">' +
+                        '<input type="checkbox" class="op-f-tolmatch" style="margin:0;">容差區間對價</label>');
                     $tr.append($priceTd);
                 } else {
                     $tr.append('<td style="text-align:right;">' + (parseInt(it.quantity)||0) + '</td>');
                     $tr.append('<td style="text-align:right;">' + (parseFloat(it.unit_price) > 0 ? formatPrice(parseFloat(it.unit_price)) : '-') + '</td>');
                 }
-                $tr.append($('<td></td>').append($('<input type="date" class="form-control input-sm op-f-delivery">').prop('disabled', converted)));
-                $tr.append($('<td></td>').append($('<input type="text" class="form-control input-sm op-f-ps">').prop('disabled', converted)));
-                $tr.append($('<td></td>').append($('<select class="form-control input-sm op-f-ate"></select>').html(ateOptionsHtml).prop('disabled', converted)));
-                $tr.append($('<td></td>').append($('<input type="date" class="form-control input-sm op-f-ateget">').val(todayStr).prop('disabled', converted)));
-                $tr.append($('<td></td>').append($('<input type="text" class="form-control input-sm op-f-orderno" placeholder="OO...">').prop('disabled', converted)));
+                $tr.append($('<td></td>').append($('<input type="date" class="form-control input-sm op-f-delivery">')));
+                $tr.append($('<td></td>').append($('<input type="text" class="form-control input-sm op-f-ps">')));
+                $tr.append($('<td></td>').append($('<select class="form-control input-sm op-f-ate"></select>').html(ateOptionsHtml)));
+                $tr.append($('<td></td>').append($('<input type="date" class="form-control input-sm op-f-ateget">').val(todayStr)));
+                $tr.append($('<td></td>').append($('<input type="text" class="form-control input-sm op-f-orderno" placeholder="OO...">')));
                 $tb.append($tr);
             });
             $('#op-check-all').prop('checked', false);
@@ -7999,7 +8011,13 @@ foreach($dCounts as $c) {
         }
 
         function opToggleAll(cb) {
-            $('#op-items-tbody .op-row-check:not(:disabled)').prop('checked', cb.checked);
+            // 全選時跳過已轉過訂單的列（追加訂單需使用者逐列主動勾選，避免不小心整批重複下單）；取消全選則一律清空
+            $('#op-items-tbody tr').each(function() {
+                var $tr = $(this);
+                var it = $tr.data('item') || {};
+                if (cb.checked && it.converted_order_oo) return;
+                $tr.find('.op-row-check').prop('checked', cb.checked);
+            });
         }
 
         function opApplyBatch(field) {
@@ -8044,6 +8062,7 @@ foreach($dCounts as $c) {
             var items = [];
             var errMsg = '';
             var overRangeLabels = []; // 完全超出區間（含容差後）仍執意轉單的料號，確認後存檔並標記
+            var repeatLabels = [];    // 已轉過訂單、這次是追加訂單的料號，確認後存檔並標記（不計入報價轉訂單比例）
             $checked.each(function() {
                 if (errMsg) return;
                 var $tr = $(this);
@@ -8064,6 +8083,10 @@ foreach($dCounts as $c) {
                     if (!vr.valid) { errMsg = '料號 ' + label + ' 訂單編號有誤：' + vr.msg; return; }
                 }
                 var payload = { quote_item_id: it.item_id, order_no: orderNo, delivery_date: delivery, order_ps: ps, ate: ate, ateget: ateget };
+                if (it.converted_order_oo) {
+                    payload.repeat_confirm = 1;
+                    repeatLabels.push(label + '（先前：' + it.converted_order_oo + '）');
+                }
                 if (opIsTieredItem(it)) {
                     var qtyIn  = parseInt($tr.find('.op-f-qty').val()) || 0;
                     var useTol = $tr.find('.op-f-tolmatch').is(':checked');
@@ -8081,12 +8104,18 @@ foreach($dCounts as $c) {
                 items.push(payload);
             });
             if (errMsg) { $('#op-create-error').text(errMsg).show(); return; }
+            // 超出區間／追加訂單兩種情況都要先跳窗提醒使用者確認，再存檔（可能同時發生，訊息合併成一個跳窗）
+            var warnBlocks = [];
+            if (repeatLabels.length) {
+                warnBlocks.push('下列料號<b style="color:#F0A24B;">先前已轉過訂單</b>，這次將建立<b>追加訂單</b>（不會重複計入報價轉訂單比例統計）：<br>' +
+                    repeatLabels.map(function(s){ return '・' + escapeHtml(s); }).join('<br>'));
+            }
             if (overRangeLabels.length) {
-                // 完全超出（報價區間與容差後區間都不含此數量）→ 提醒後仍可繼續存檔，訂單標記「數量超出區間」待補報價
-                opConfirm('下列料號輸入的數量<b style="color:#DD5138;">超出階梯報價區間範圍（含容差後區間）</b>：<br><br>' +
-                    overRangeLabels.map(function(s){ return '・' + escapeHtml(s); }).join('<br>') +
-                    '<br><br>繼續存檔將以<b>無單價</b>建立訂單並標記「數量超出區間」，之後請補報價單。',
-                    function() { opSubmitOrders(items); });
+                warnBlocks.push('下列料號輸入的數量<b style="color:#DD5138;">超出階梯報價區間範圍（含容差後區間）</b>，將以<b>無單價</b>建立訂單並標記「數量超出區間」，之後請補報價單：<br>' +
+                    overRangeLabels.map(function(s){ return '・' + escapeHtml(s); }).join('<br>'));
+            }
+            if (warnBlocks.length) {
+                opConfirm(warnBlocks.join('<br><br>'), function() { opSubmitOrders(items); });
                 return;
             }
             opSubmitOrders(items);

@@ -621,6 +621,12 @@ try {
         catch (PDOException $e) {
             try { $db->exec("ALTER TABLE order_track ADD COLUMN qty_over_range TINYINT(1) NOT NULL DEFAULT 0 COMMENT '轉單數量超出報價階梯區間(含容差後)=1,待補報價單'"); } catch (PDOException $e2) {}
         }
+        // 相容舊表：order_track.is_repeat_conversion（同一報價項目已轉過訂單、這次是追加訂單的旗標）首次執行自動補欄
+        // 僅供列表判讀用；KPI「報價單接單率」quote_to_order 是用 quote_no 判斷 EXISTS，不是算次數，追加訂單不會重複計入
+        try { $db->query("SELECT is_repeat_conversion FROM order_track LIMIT 1"); }
+        catch (PDOException $e) {
+            try { $db->exec("ALTER TABLE order_track ADD COLUMN is_repeat_conversion TINYINT(1) NOT NULL DEFAULT 0 COMMENT '同一報價項目先前已轉過訂單、此為追加訂單=1(不影響KPI報價轉訂單比例統計)'"); } catch (PDOException $e2) {}
+        }
 
         // 階梯區間工具（與前端 opTolRange/opMatchTier 同邏輯；伺服器端為準）
         $tolRange = function(array $t): array {
@@ -675,10 +681,13 @@ try {
                 if ($ateGet === '')         throw new Exception('缺少設計接收日');
                 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $ateGet)) throw new Exception('設計接收日格式錯誤（' . $ateGet . '）');
 
-                // 競態防護：確認此報價項目尚未被轉過訂單（避免同時多人操作重複轉單）
+                // 此報價項目先前是否已轉過訂單：
+                // - 前端沒送 repeat_confirm（使用者載入清單時這列還沒轉過、卻在送出前被別人轉走）→ 競態防護擋下要求重新整理
+                // - 前端有送 repeat_confirm（使用者是在清單已顯示「已轉訂單」的狀態下主動勾選）→ 視為客戶重複下單同一組合，允許建立追加訂單
                 $chk = $db->prepare("SELECT COUNT(*) FROM order_track WHERE quote_item_id = ?");
                 $chk->execute([$quoteItemId]);
-                if ((int)$chk->fetchColumn() > 0) {
+                $isRepeat = (int)$chk->fetchColumn() > 0;
+                if ($isRepeat && empty($row['repeat_confirm'])) {
                     throw new Exception("報價項目（ID {$quoteItemId}）已被轉建立過訂單，請重新整理清單後再試");
                 }
 
@@ -761,7 +770,7 @@ try {
                     unit_price=:unit_price, quote_no=:quote_no, quote_item_id=:quote_item_id,
                     Order_status=NULL, split_seq=1, parent_order_id=NULL,
                     Client_name_ID=:Client_name_ID, d_id_ID=:d_id_ID,
-                    qty_over_range=:qty_over_range,
+                    qty_over_range=:qty_over_range, is_repeat_conversion=:is_repeat_conversion,
                     Created_At=NOW(), Created_By=:Created_By");
                 $ins->execute([
                     ':Order_oo'         => $orderNo,
@@ -775,6 +784,7 @@ try {
                     ':ateGet'           => $ateGet,
                     ':unit_price'       => $ordPrice,
                     ':qty_over_range'   => $qtyOver,
+                    ':is_repeat_conversion' => $isRepeat ? 1 : 0,
                     ':quote_no'         => $src['quote_no'],
                     ':quote_item_id'    => $quoteItemId,
                     ':Client_name_ID'   => $clientId,
