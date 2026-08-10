@@ -204,15 +204,36 @@ case 'get_detail': {
                 if ($sr['dept_id'] !== null) { $d = (int)$sr['dept_id']; if (!isset($signedByDept[$d])) $signedByDept[$d] = $sr; }
                 $signedByUser[(int)$sr['user_id']] = $sr;
             }
+            // 實際簽名者的職稱(2026-08-10使用者要求要跟簽到表格式相同，圖章模板含職稱token時才會用到)：
+            // 若簽名者剛好就是 required_signers 算出的那位現場代表，直接沿用(已含職稱)；否則(部門其他出席人員、
+            // 或未出席透過通知回覆的人)現場查 user_department_position_map，優先取該負責部門底下的職稱，查不到才退回主要職稱。
+            $resolvePosition = function(int $confUid, ?int $deptId) use ($db): string {
+                if ($deptId !== null) {
+                    $st = $db->prepare("SELECT p.name FROM user_department_position_map m LEFT JOIN position p ON p.id=m.position_id
+                                         WHERE m.user_id=? AND m.department_id=? LIMIT 1");
+                    $st->execute([$confUid, $deptId]);
+                    $name = $st->fetchColumn();
+                    if ($name !== false && $name !== null && $name !== '') return (string)$name;
+                }
+                $st2 = $db->prepare("SELECT p.name FROM user_department_position_map m LEFT JOIN position p ON p.id=m.position_id
+                                      WHERE m.user_id=? ORDER BY m.is_main DESC LIMIT 1");
+                $st2->execute([$confUid]);
+                return (string)($st2->fetchColumn() ?: '');
+            };
             if ($ownerUserIds) {
                 $in = implode(',', $ownerUserIds);
                 $names = $db->query("SELECT id, user_cname FROM `user` WHERE id IN ($in)")->fetchAll(PDO::FETCH_KEY_PAIR);
                 foreach ($ownerUserIds as $ou) {
                     $sr = $signedByUser[$ou] ?? null;
                     $reqEntry = $req[$ou] ?? null;
+                    $confUid = $sr ? (int)$sr['user_id'] : $ou;
+                    $posName = $sr
+                        ? (($reqEntry && (int)$reqEntry['user_id'] === $confUid) ? (string)$reqEntry['position_name'] : $resolvePosition($confUid, null))
+                        : (string)($reqEntry['position_name'] ?? '');
                     $slots[] = ['dept_id'=>null, 'dept_name'=>'',
-                                'user_id'=>$sr ? (int)$sr['user_id'] : $ou,
+                                'user_id'=>$confUid,
                                 'user_name'=>$sr ? $sr['user_name'] : ($names[$ou] ?? ''),
+                                'position_name'=>$posName,
                                 'is_manager'=>true, 'is_main'=>true, 'can_sign_in_person'=>(bool)$reqEntry,
                                 'signed'=>(bool)$sr, 'confirmed_at'=>$sr['confirmed_at'] ?? null,
                                 'reply_content'=>$sr['reply_content'] ?? null];
@@ -223,9 +244,14 @@ case 'get_detail': {
                 foreach ($ownerDeptIds as $d) {
                     $sr = $signedByDept[$d] ?? null;
                     $reqEntry = $req[$d] ?? null;
+                    $confUid = $sr ? (int)$sr['user_id'] : (int)($reqEntry['user_id'] ?? 0);
+                    $posName = $sr
+                        ? (($reqEntry && (int)$reqEntry['user_id'] === $confUid) ? (string)$reqEntry['position_name'] : $resolvePosition($confUid, $d))
+                        : (string)($reqEntry['position_name'] ?? '');
                     $slots[] = ['dept_id'=>$d, 'dept_name'=>$deptNames[$d] ?? '',
-                                'user_id'=>$sr ? (int)$sr['user_id'] : ($reqEntry['user_id'] ?? 0),
+                                'user_id'=>$confUid,
                                 'user_name'=>$sr ? $sr['user_name'] : ($reqEntry['user_name'] ?? ''),
+                                'position_name'=>$posName,
                                 'is_manager'=>$reqEntry['is_manager'] ?? true, 'is_main'=>$reqEntry['is_main'] ?? true,
                                 'can_sign_in_person'=>(bool)$reqEntry,
                                 'signed'=>(bool)$sr, 'confirmed_at'=>$sr['confirmed_at'] ?? null,
@@ -322,10 +348,13 @@ case 'save': {
         }
 
         // 會議項目：整批取代（用 item_id 對應保留 gm_comment；沒有 item_id 的視為新增）。
-        // item_id 每次存檔都變(delete+insert新auto_increment)，所以確認簽名(meeting_item_confirm)要跟著把 item_id 改指到新的一列，
-        // 這次被拿掉的項目(使用者刪除)則連同其確認簽名一起清掉，避免變成指向不存在項目的孤兒列。
+        // item_id 每次存檔都變(delete+insert新auto_increment)，所以確認簽名(meeting_item_confirm)跟通知(live_event.ref_id)
+        // 都要跟著把 ref 改指到新的一列，不然任何一次存檔(即使只是改別的欄位)都會讓還在生效中的通知變成指向不存在的
+        // item_id，對方點進去回覆會被 meeting_item_confirm_via_notify 靜默丟棄(查無此項目)而不會有任何錯誤提示。
+        // 2026-08-10使用者明確要求：內容或負責部門/指定人員有異動時，該項目「舊的確認簽名視為失效」要清掉重新確認
+        // (不影響其他沒改動的項目、也不影響出席簽到)；沒異動的項目才照舊把確認紀錄與通知一起搬到新 item_id。
         $oldItems = [];
-        $iq = $db->prepare("SELECT item_id, gm_comment FROM meeting_item WHERE meeting_id=?");
+        $iq = $db->prepare("SELECT item_id, gm_comment, content, owner_depts, owner_users FROM meeting_item WHERE meeting_id=?");
         $iq->execute([$id]);
         foreach ($iq->fetchAll(PDO::FETCH_ASSOC) as $o) $oldItems[(int)$o['item_id']] = $o;
         $db->prepare("DELETE FROM meeting_item WHERE meeting_id=?")->execute([$id]);
@@ -342,15 +371,26 @@ case 'save': {
             // 負責人二擇一(2026-08-05使用者明確要求)：owner_users(指定人員)有值時完全取代 owner_depts(部門自動判定)
             $ownerUserIds = array_values(array_filter(array_map('intval', (array)($it['owner_users'] ?? []))));
             $ownerIds = $ownerUserIds ? [] : array_values(array_filter(array_map('intval', (array)($it['owner_depts'] ?? []))));
+            $ownerDeptsStr = $ownerIds ? implode(',', $ownerIds) : null;
+            $ownerUsersStr = $ownerUserIds ? implode(',', $ownerUserIds) : null;
             $ownerNames = trim((string)($it['owner_dept_names'] ?? '')) ?: null;
             $remark = trim((string)($it['remark'] ?? '')) ?: null;
             $prevId = (int)($it['item_id'] ?? 0);
             $prev = $oldItems[$prevId] ?? null;
-            $insI->execute([$id, $kind, $n, $content, $due, $ownerIds ? implode(',', $ownerIds) : null, $ownerNames,
-                $ownerUserIds ? implode(',', $ownerUserIds) : null, $remark, $prev['gm_comment'] ?? null]);
+            $insI->execute([$id, $kind, $n, $content, $due, $ownerDeptsStr, $ownerNames, $ownerUsersStr, $remark, $prev['gm_comment'] ?? null]);
             if ($prev) {
                 $keptOldIds[] = $prevId;
-                $db->prepare("UPDATE meeting_item_confirm SET item_id=? WHERE item_id=?")->execute([(int)$db->lastInsertId(), $prevId]);
+                $newItemId = (int)$db->lastInsertId();
+                $changed = (string)$prev['content'] !== $content
+                        || (string)($prev['owner_depts'] ?? '') !== (string)($ownerDeptsStr ?? '')
+                        || (string)($prev['owner_users'] ?? '') !== (string)($ownerUsersStr ?? '');
+                if ($changed) {
+                    $db->prepare("DELETE FROM meeting_item_confirm WHERE item_id=?")->execute([$prevId]);
+                    meeting_close_single_item_notice($db, $prevId); // 內容已變，舊通知內容跟著失真，關閉它；下次存檔並通知會用新內容重發
+                } else {
+                    $db->prepare("UPDATE meeting_item_confirm SET item_id=? WHERE item_id=?")->execute([$newItemId, $prevId]);
+                    $db->prepare("UPDATE live_event SET ref_id=? WHERE ref_type='MEETING_ITEM_CONFIRM' AND ref_id=?")->execute([$newItemId, $prevId]);
+                }
             }
             $n++;
         }
@@ -358,6 +398,7 @@ case 'save': {
         if ($goneIds) {
             $in = implode(',', array_map('intval', $goneIds));
             $db->exec("DELETE FROM meeting_item_confirm WHERE item_id IN ($in)");
+            foreach ($goneIds as $gid) meeting_close_single_item_notice($db, (int)$gid); // 項目被刪除，關閉其還在生效中的舊通知
         }
         // 暫存附件轉正（與主單同一筆交易內；限本人上傳的 temp）
         $tempIds = array_values(array_filter(array_map('intval', explode(',', (string)($_POST['temp_attach_ids'] ?? '')))));
