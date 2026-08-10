@@ -161,27 +161,42 @@ case 'get_detail': {
         unset($a['file_name']);
         $attaches[] = $a;
     }
-    // 每個項目附上通知系統的回覆狀態(含回覆內容)，供畫面顯示回覆者/回覆日期/回覆了什麼
+    // 每個項目附上通知系統的回覆狀態(含回覆內容/回覆附件)，供畫面顯示回覆者/回覆日期/回覆了什麼
     $items = meeting_items($db, $id);
-    $ntStmt = $db->prepare("SELECT lt.target_id AS user_id, u.user_cname AS user_name, lr.read_at, lr.signed_at,
-                                    lr.reply_content, lr.replied_at
+    $ntStmt = $db->prepare("SELECT lt.target_id AS user_id, u.user_cname AS user_name, lr.id AS resp_id,
+                                    lr.read_at, lr.signed_at, lr.reply_content, lr.replied_at
                              FROM live_event le
                              JOIN live_event_target lt ON lt.live_event_id = le.id
                              LEFT JOIN live_event_response lr ON lr.live_event_id = le.id AND lr.user_id = lt.target_id
                              LEFT JOIN `user` u ON u.id = lt.target_id
                              WHERE le.ref_type='MEETING_ITEM_CONFIRM' AND le.ref_id=?
                              ORDER BY lt.id");
+    $nfStmt = $db->prepare("SELECT id, file_name FROM live_event_resp_file WHERE response_id=?");
     $confStmt = $db->prepare("SELECT user_id, user_name, dept_name, dept_id, confirmed_at, reply_content FROM meeting_item_confirm WHERE item_id=?");
     foreach ($items as &$it) {
         $ntStmt->execute([(int)$it['item_id']]);
-        $it['notify_targets'] = $ntStmt->fetchAll(PDO::FETCH_ASSOC);
-        // 依負責部門/指定人員算出每格簽名槽(meeting_item_required_signers_for 統一入口，兩模式擇一)，
-        // 對照 meeting_item_confirm 已簽名單標記每格是否已簽。2026-08-06改版：送出時通知對象已擴大到
-        // 部門所有出席人員＋部門主管，實際簽名的人不一定是系統原本挑出的那位代表，所以部門模式改用
-        // dept_id 比對(誰簽都算這格已完成)，只有指定人員模式(dept_id=null)才需要精準比對 user_id。
-        $req = meeting_item_required_signers_for($db, $id, $it);
+        $ntRows = $ntStmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($ntRows as &$nr) {
+            $nr['files'] = [];
+            if ($nr['resp_id']) {
+                $nfStmt->execute([(int)$nr['resp_id']]);
+                $nr['files'] = $nfStmt->fetchAll(PDO::FETCH_ASSOC);
+            }
+            unset($nr['resp_id']);
+        }
+        unset($nr);
+        $it['notify_targets'] = $ntRows;
+
+        // 每個負責部門/指定人員都固定顯示一格「確認簽名/回簽狀態」(2026-08-10使用者實測回報修正)：
+        // 舊版只有 meeting_item_required_signers_for 找得到「本次有出席的代表」才會出現簽名槽，
+        // 完全沒人出席的部門即使已經有人透過通知回覆確認，畫面上仍然整格空白看不出已完成。
+        // 現在改成不論本次是否有人出席，該部門/該指定人員一律各佔一格：有出席→可現場密碼簽名(can_sign_in_person)，
+        // 沒出席→只能透過下方通知回覆(靠 dept_id/user_id 比對是否已經有人確認)。
+        $req = meeting_item_required_signers_for($db, $id, $it); // 現場代表(僅本次有出席者)，keyed by dept_id 或 user_id
+        $ownerUserIds = array_values(array_filter(array_map('intval', explode(',', (string)($it['owner_users'] ?? '')))));
+        $ownerDeptIds = $ownerUserIds ? [] : array_values(array_filter(array_map('intval', explode(',', (string)($it['owner_depts'] ?? '')))));
         $slots = [];
-        if ($req) {
+        if ($ownerUserIds || $ownerDeptIds) {
             $confStmt->execute([(int)$it['item_id']]);
             $confirmRows = $confStmt->fetchAll(PDO::FETCH_ASSOC);
             $signedByDept = []; $signedByUser = [];
@@ -189,14 +204,33 @@ case 'get_detail': {
                 if ($sr['dept_id'] !== null) { $d = (int)$sr['dept_id']; if (!isset($signedByDept[$d])) $signedByDept[$d] = $sr; }
                 $signedByUser[(int)$sr['user_id']] = $sr;
             }
-            foreach ($req as $signer) {
-                $sr = $signer['dept_id'] !== null ? ($signedByDept[$signer['dept_id']] ?? null) : ($signedByUser[$signer['user_id']] ?? null);
-                $slots[] = ['dept_id'=>$signer['dept_id'], 'dept_name'=>$signer['dept_name'],
-                            'user_id'=>$sr ? (int)$sr['user_id'] : $signer['user_id'],
-                            'user_name'=>$sr ? $sr['user_name'] : $signer['user_name'],
-                            'is_manager'=>$signer['is_manager'], 'is_main'=>$signer['is_main'],
-                            'signed'=>(bool)$sr, 'confirmed_at'=>$sr['confirmed_at'] ?? null,
-                            'reply_content'=>$sr['reply_content'] ?? null];
+            if ($ownerUserIds) {
+                $in = implode(',', $ownerUserIds);
+                $names = $db->query("SELECT id, user_cname FROM `user` WHERE id IN ($in)")->fetchAll(PDO::FETCH_KEY_PAIR);
+                foreach ($ownerUserIds as $ou) {
+                    $sr = $signedByUser[$ou] ?? null;
+                    $reqEntry = $req[$ou] ?? null;
+                    $slots[] = ['dept_id'=>null, 'dept_name'=>'',
+                                'user_id'=>$sr ? (int)$sr['user_id'] : $ou,
+                                'user_name'=>$sr ? $sr['user_name'] : ($names[$ou] ?? ''),
+                                'is_manager'=>true, 'is_main'=>true, 'can_sign_in_person'=>(bool)$reqEntry,
+                                'signed'=>(bool)$sr, 'confirmed_at'=>$sr['confirmed_at'] ?? null,
+                                'reply_content'=>$sr['reply_content'] ?? null];
+                }
+            } else {
+                $in = implode(',', $ownerDeptIds);
+                $deptNames = $db->query("SELECT id, name FROM department WHERE id IN ($in)")->fetchAll(PDO::FETCH_KEY_PAIR);
+                foreach ($ownerDeptIds as $d) {
+                    $sr = $signedByDept[$d] ?? null;
+                    $reqEntry = $req[$d] ?? null;
+                    $slots[] = ['dept_id'=>$d, 'dept_name'=>$deptNames[$d] ?? '',
+                                'user_id'=>$sr ? (int)$sr['user_id'] : ($reqEntry['user_id'] ?? 0),
+                                'user_name'=>$sr ? $sr['user_name'] : ($reqEntry['user_name'] ?? ''),
+                                'is_manager'=>$reqEntry['is_manager'] ?? true, 'is_main'=>$reqEntry['is_main'] ?? true,
+                                'can_sign_in_person'=>(bool)$reqEntry,
+                                'signed'=>(bool)$sr, 'confirmed_at'=>$sr['confirmed_at'] ?? null,
+                                'reply_content'=>$sr['reply_content'] ?? null];
+                }
             }
         }
         $it['confirm_slots'] = $slots;
