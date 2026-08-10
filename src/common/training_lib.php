@@ -17,6 +17,7 @@ include_once __DIR__ . '/attach_lib.php';     // 附件根路徑（鐵律5：只
 include_once __DIR__ . '/org_role_lib.php';   // 人事部門/最高核准人員等全站組織綁定（禁止各頁寫死）
 include_once __DIR__ . '/approval_lib.php';   // 簽核紀錄 approval_record
 include_once __DIR__ . '/role_features_helper.php';   // 角色可自訂名稱＋自訂功能（role_features，見 memory rbac_custom_roles）
+include_once __DIR__ . '/confirm_password_lib.php';   // 計畫/實行資料/考核成績三處鎖定的解鎖，一律走全站共用操作確認密碼
 
 /** 本模組的功能碼（角色可自訂名稱＋自己勾要哪些功能，存 role_features；沿用 purchase 模組同一套做法）
  *  group：view＝可視內容／op＝可操作。權限「由上而下包含」：勾了訓練管理員就自動含登錄與檢閱，不必逐個勾。 */
@@ -325,6 +326,42 @@ function training_ensure_schema(PDO $db): void {
     // 計畫回指來源申請單（列印/畫面顯示用，不再塞進備註文字）；轉計畫時順便把申請單的人員與日期原封帶入
     try { $db->exec("ALTER TABLE training_session ADD COLUMN from_request_id INT NULL COMMENT '來源需求申請單 training_request.request_id'"); }
     catch (Throwable $e) {}
+
+    // OJT/考核表：這兩張表原本是活資料庫既有的表、程式碼從沒建立過（孤兒表），這次補進本函式讓它們也走冪等初始化；
+    // CREATE TABLE IF NOT EXISTS 對已存在的表不會動到既有資料，形狀比照活資料庫現況。
+    $db->exec("CREATE TABLE IF NOT EXISTS training_ojt_checklist (
+        session_id INT PRIMARY KEY,
+        assessor_name VARCHAR(50) NULL COMMENT '考官姓名',
+        updated_at DATETIME NULL,
+        updated_by INT NULL,
+        updated_by_name VARCHAR(50) NULL
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練考核表(OJT)-每場次一筆抬頭'");
+    $db->exec("CREATE TABLE IF NOT EXISTS training_ojt_item (
+        item_id INT AUTO_INCREMENT PRIMARY KEY,
+        session_id INT NOT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        item_type VARCHAR(10) NOT NULL DEFAULT 'practice' COMMENT 'practice=實作演練 oral=口試詢問',
+        content VARCHAR(200) NOT NULL,
+        KEY idx_session (session_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練考核表(OJT)-考核項目清單'");
+    foreach ([
+        "ALTER TABLE training_ojt_item ADD COLUMN score_mode VARCHAR(10) NOT NULL DEFAULT 'pass_fail' COMMENT 'pass_fail=合格/不合格 score=輸入分數(0~100)'",
+        "ALTER TABLE training_ojt_checklist ADD COLUMN scores_submitted_at DATETIME NULL COMMENT '成績送出時間；NULL=尚未送出可繼續填改；有值=鎖定需操作確認密碼解鎖'",
+        "ALTER TABLE training_ojt_checklist ADD COLUMN scores_submitted_by VARCHAR(50) NULL COMMENT '成績送出人'",
+    ] as $sql) {
+        try { $db->exec($sql); } catch (Throwable $e) {}
+    }
+    // 考核成績矩陣：一人一項一列（線上填分，2026-08-10 新增，取代原本只能現場手寫的空白表）
+    $db->exec("CREATE TABLE IF NOT EXISTS training_ojt_score (
+        session_id INT NOT NULL,
+        item_id INT NOT NULL,
+        user_id INT NOT NULL,
+        score DECIMAL(5,1) NULL COMMENT 'score_mode=score 時用，0~100',
+        result VARCHAR(10) NULL COMMENT 'pass/fail，score_mode=pass_fail 時用',
+        updated_at DATETIME NULL,
+        PRIMARY KEY (item_id, user_id),
+        KEY idx_session (session_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='教育訓練考核表(OJT)-逐項逐人成績矩陣'");
 }
 
 /* ============================================================
@@ -882,7 +919,7 @@ function training_user_history(PDO $db, int $userId, ?int $year = null): array {
                        a.attended, a.signed, a.eval_result, a.eval_score, a.eval_note
                 FROM training_attendee a
                 JOIN training_session s ON s.session_id = a.session_id
-                WHERE a.user_id = ?" . ($year ? " AND s.year = ?" : "") . "
+                WHERE a.user_id = ? AND a.attended = 1" . ($year ? " AND s.year = ?" : "") . "
                 ORDER BY s.done_date DESC, s.session_id DESC";
         $st = $db->prepare($sql);
         $st->execute($year ? [$userId, $year] : [$userId]);

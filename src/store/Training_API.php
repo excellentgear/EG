@@ -13,6 +13,14 @@ include_once $document_root . '/EGsystem/src/common/training_lib.php';
 
 function jout($a){ echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code=400){ http_response_code($code); echo json_encode(['ok'=>false,'error'=>$msg], JSON_UNESCAPED_UNICODE); exit; }
+/* 已完成場次的實行資料/成績要改動，一律要求操作確認密碼（save_execution/save_attendees/ojt_score_save 共用）；
+   未鎖定（$locked=false）時什麼都不驗證，直接放行。 */
+function training_require_unlock(PDO $db, int $uid, bool $locked, string $pwd, string $what): void {
+    if (!$locked) return;
+    if ($pwd === '') jerr("{$what}已鎖定，需輸入操作確認密碼才能修改", 403);
+    $chk = eg_confirm_password_verify($db, $uid, $pwd);
+    if (!$chk['ok']) jerr($chk['msg'] ?: '密碼驗證失敗', 403);
+}
 
 try {
     $db = (new DBConnection())->getPDO();
@@ -130,6 +138,7 @@ case 'meta': {
           'request_signers'=>['top_approver'=>eg_org_user($db,'top_approver'), 'hr_signer'=>training_hr_signer_effective($db)],
           'attach_nas_dir'=>$perms['canAdmin'] ? training_attach_dir($db) : null,
           'attach_root'=>$perms['canAdmin'] ? eg_attach_root($db) : null,
+          'confirm_pw_allowed'=>eg_confirm_password_allowed($db, $uid),
           'cur_year'=>$cy, 'cur_month'=>(int)date('n'), 'today'=>date('Y-m-d'), 'uid'=>$uid]);
 }
 
@@ -459,9 +468,9 @@ case 'session_detail': {
         $in = implode(',', $deptIds);
         $dnames = $db->query("SELECT name FROM department WHERE id IN ({$in}) ORDER BY sort_order, id")->fetchAll(PDO::FETCH_COLUMN);
     }
-    $oq = $db->prepare("SELECT item_id, item_type, content FROM training_ojt_item WHERE session_id=? ORDER BY sort_order, item_id");
+    $oq = $db->prepare("SELECT item_id, item_type, score_mode, content FROM training_ojt_item WHERE session_id=? ORDER BY sort_order, item_id");
     $oq->execute([$sid]);
-    $oh = $db->prepare("SELECT assessor_name FROM training_ojt_checklist WHERE session_id=?");
+    $oh = $db->prepare("SELECT assessor_name, scores_submitted_at, scores_submitted_by FROM training_ojt_checklist WHERE session_id=?");
     $oh->execute([$sid]);
     $ohRow = $oh->fetch(PDO::FETCH_ASSOC);
     $sq = $db->prepare("SELECT user_id, day_date, signed_at FROM training_attendee_day_sign WHERE session_id=?");
@@ -478,7 +487,9 @@ case 'session_detail': {
           'days'=>$days, 'attendees'=>$aq->fetchAll(PDO::FETCH_ASSOC),
           'day_signs'=>$sq->fetchAll(PDO::FETCH_ASSOC),
           'attachments'=>training_attachments($db, $sid),
-          'ojt_items'=>$oq->fetchAll(PDO::FETCH_ASSOC), 'ojt_assessor_name'=>$ohRow['assessor_name'] ?? '']);
+          'ojt_items'=>$oq->fetchAll(PDO::FETCH_ASSOC), 'ojt_assessor_name'=>$ohRow['assessor_name'] ?? '',
+          'ojt_score_summary'=>['scores_submitted_at'=>$ohRow['scores_submitted_at'] ?? null,
+                                 'scores_submitted_by'=>$ohRow['scores_submitted_by'] ?? null]]);
 }
 
 /* 現場簽到頁 meta：場次基本資料＋名單（含簽到狀態）。免 training_edit 權限（見 $publicActions）——
@@ -530,6 +541,25 @@ case 'sign_attendee': {
        ->execute([$sid, $forUid, $dayDate]);
     $db->prepare("UPDATE training_attendee SET signed=1, signed_at=NOW(), sign_method='online', attended=1 WHERE att_id=?")->execute([$attId]);
     jout(['att_id'=>$attId, 'day_date'=>$dayDate]);
+}
+
+/* 紙本簽到登記／取消：承辦人收到紙本簽到單後手動記錄，跟現場密碼簽到並列成為「簽到」的兩種來源之一
+   （登錄完成前「至少一人簽到」的檢查兩種都算，見 save_execution）。這只是承辦人的行政記錄動作，不是解鎖已鎖定資料，不需要密碼。 */
+case 'mark_paper_sign': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $attId = (int)($_POST['att_id'] ?? 0);
+    $st = $db->prepare("UPDATE training_attendee SET signed=1, signed_at=NOW(), sign_method='paper', attended=1 WHERE att_id=?");
+    $st->execute([$attId]);
+    if (!$st->rowCount()) jerr('查無此參加人員');
+    jout(['att_id'=>$attId]);
+}
+case 'unmark_sign': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $attId = (int)($_POST['att_id'] ?? 0);
+    $st = $db->prepare("UPDATE training_attendee SET signed=0, signed_at=NULL, sign_method=NULL WHERE att_id=?");
+    $st->execute([$attId]);
+    if (!$st->rowCount()) jerr('查無此參加人員');
+    jout(['att_id'=>$attId]);
 }
 
 /* ---------- 上課地點主檔（設定後可下拉選擇） ---------- */
@@ -697,6 +727,7 @@ case 'save_execution': {
     $cur = $st->fetchColumn();
     if ($cur === false) jerr('找不到場次');
     if ($cur === 'cancelled') jerr('此計畫已取消，請先恢復為計畫中再確認實行');
+    training_require_unlock($db, $uid, $cur === 'done', (string)($_POST['unlock_password'] ?? ''), '此場次的實行資料');
     $location = trim((string)($_POST['location'] ?? '')) ?: null;
 
     $shiftId = ($_POST['shift_type_id'] ?? '') === '' ? null : (int)$_POST['shift_type_id'];
@@ -747,6 +778,13 @@ case 'save_execution': {
 
     $markDone = (int)($_POST['mark_done'] ?? 0) === 1;
     $newStatus = $markDone ? 'done' : ($cur === 'done' ? 'done' : 'scheduled');
+    // 登錄完成前至少要有一人簽到（線上密碼簽到或紙本簽到皆算，見 sign_attendee/mark_paper_sign）；
+    // 前端已經先攔一次（同一規則），這裡是後端的最終防線，不可只靠前端擋。
+    if ($markDone) {
+        $sc = $db->prepare("SELECT COUNT(*) FROM training_attendee WHERE session_id=? AND signed=1");
+        $sc->execute([$sid]);
+        if (!(int)$sc->fetchColumn()) jerr('登錄完成前，至少需要一位參加人員完成簽到（線上或紙本皆可）');
+    }
     try {
         $db->beginTransaction();
         training_event_remove($db, $sid);      // 舊事件先清（日期/時間可能已變動）
@@ -767,6 +805,15 @@ case 'save_execution': {
         $ins = $db->prepare("INSERT INTO training_session_day (session_id, day_no, day_date, start_time, end_time, break_minutes, hours)
                              VALUES (?,?,?,?,?,?,?)");
         foreach ($clean as $i => $c) $ins->execute([$sid, $i + 1, $c['date'], $c['start'], $c['end'], $c['break'], $c['hours']]);
+        if ($markDone) {
+            // 登錄完成當下，用實際簽到狀態覆蓋實到——不採信前端 checkbox 當下值，未簽到者一律視為未到
+            $db->prepare("UPDATE training_attendee SET attended = IF(signed=1, 1, 0) WHERE session_id=?")->execute([$sid]);
+            // 實到人數是從 attended 算出來的（save_attendees 也是同一套算法），這裡覆蓋過 attended 後要重算一次，
+            // 否則 save_attendees 先跑存的 actual_headcount 會跟這裡蓋過的最終 attended 對不上
+            $db->prepare("UPDATE training_session s SET actual_headcount =
+                          (SELECT COUNT(*) FROM training_attendee a WHERE a.session_id=s.session_id AND a.attended=1)
+                          WHERE s.session_id=?")->execute([$sid]);
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     // 確定開課後自動寫入行事曆（一天一筆；失敗不擋存檔）
@@ -782,9 +829,14 @@ case 'set_status': {
     $sid = (int)($_POST['session_id'] ?? 0);
     $status = (string)($_POST['status'] ?? '');
     if (!in_array($status, ['planned','cancelled'], true)) jerr('狀態只能設為計畫中或取消');
-    $st = $db->prepare("SELECT 1 FROM training_session WHERE session_id=?");
+    $st = $db->prepare("SELECT status FROM training_session WHERE session_id=?");
     $st->execute([$sid]);
-    if (!$st->fetchColumn()) jerr('找不到場次');
+    $curStatus = $st->fetchColumn();
+    if ($curStatus === false) jerr('找不到場次');
+    // 「退回計畫中」只有從已排定/已完成回頭才算解鎖計畫（需要密碼）；從取消恢復為計畫中是正常操作，不算解鎖
+    if ($status === 'planned' && in_array($curStatus, ['scheduled','done'], true)) {
+        training_require_unlock($db, $uid, true, (string)($_POST['password'] ?? ''), '計畫');
+    }
     try {
         $db->beginTransaction();
         training_event_remove($db, $sid);      // 退回計畫中/取消 → 一併撤掉行事曆事件
@@ -1104,52 +1156,206 @@ case 'get_attendees': {
 /* OJT/實作口試考核表：考核項目清單＋考官姓名（僅內訓；建立者＝內訓講師本人或訓練管理員） */
 case 'ojt_list': {
     $sid = (int)($_GET['session_id'] ?? 0);
-    $items = $db->prepare("SELECT item_id, item_type, content FROM training_ojt_item WHERE session_id=? ORDER BY sort_order, item_id");
+    $items = $db->prepare("SELECT item_id, item_type, score_mode, content FROM training_ojt_item WHERE session_id=? ORDER BY sort_order, item_id");
     $items->execute([$sid]);
-    $hd = $db->prepare("SELECT assessor_name FROM training_ojt_checklist WHERE session_id=?");
+    $hd = $db->prepare("SELECT assessor_name, scores_submitted_at, scores_submitted_by FROM training_ojt_checklist WHERE session_id=?");
     $hd->execute([$sid]);
     $h = $hd->fetch(PDO::FETCH_ASSOC);
-    jout(['items'=>$items->fetchAll(PDO::FETCH_ASSOC), 'assessor_name'=>$h['assessor_name'] ?? '']);
+    jout(['items'=>$items->fetchAll(PDO::FETCH_ASSOC), 'assessor_name'=>$h['assessor_name'] ?? '',
+          'scores_submitted_at'=>$h['scores_submitted_at'] ?? null, 'scores_submitted_by'=>$h['scores_submitted_by'] ?? null]);
 }
 
 /* 儲存 OJT 考核項目清單（整批取代） */
 case 'ojt_save': {
     $sid = (int)($_POST['session_id'] ?? 0);
-    $st = $db->prepare("SELECT train_type, trainer_id FROM training_session WHERE session_id=?");
+    $st = $db->prepare("SELECT train_type, trainer_id, status FROM training_session WHERE session_id=?");
     $st->execute([$sid]);
     $session = $st->fetch(PDO::FETCH_ASSOC);
     if (!$session) jerr('找不到場次');
     if (!training_ojt_can_edit($perms, $session, $uid)) jerr('無此場次 OJT 考核表編輯權限（僅內訓講師本人或訓練管理員）', 403);
+    training_require_unlock($db, $uid, ($session['status'] ?? '') === 'done', (string)($_POST['unlock_password'] ?? ''), '此場次的實行資料');
     $assessor = trim((string)($_POST['assessor_name'] ?? ''));
     $items = json_decode((string)($_POST['items'] ?? '[]'), true);
     if (!is_array($items)) $items = [];
     try {
         $db->beginTransaction();
-        $db->prepare("REPLACE INTO training_ojt_checklist (session_id, assessor_name, updated_at, updated_by, updated_by_name)
-                      VALUES (?,?,NOW(),?,?)")->execute([$sid, $assessor ?: null, $uid, $uname]);
-        $db->prepare("DELETE FROM training_ojt_item WHERE session_id=?")->execute([$sid]);
-        $ins = $db->prepare("INSERT INTO training_ojt_item (session_id, sort_order, item_type, content) VALUES (?,?,?,?)");
+        // 用 ON DUPLICATE KEY UPDATE 只更新考官/更新資訊，不動 scores_submitted_at/by——
+        // 之前這裡是 REPLACE INTO，會把整列砍掉重建，若成績已送出會連帶把送出紀錄清空，是個潛在資料遺失風險。
+        $db->prepare("INSERT INTO training_ojt_checklist (session_id, assessor_name, updated_at, updated_by, updated_by_name)
+                      VALUES (?,?,NOW(),?,?)
+                      ON DUPLICATE KEY UPDATE assessor_name=VALUES(assessor_name), updated_at=VALUES(updated_at),
+                          updated_by=VALUES(updated_by), updated_by_name=VALUES(updated_by_name)")
+           ->execute([$sid, $assessor ?: null, $uid, $uname]);
+        // 逐項 UPDATE(有 item_id)/INSERT(新項目)，不再整批刪除重建——舊做法用 DELETE+INSERT 會讓每一項的
+        // item_id 全部換新，若已經有人在 training_ojt_score 填過分數，那些分數就會變成指向不存在 item_id 的孤兒資料。
+        $keepIds = [];
+        $upd = $db->prepare("UPDATE training_ojt_item SET sort_order=?, item_type=?, score_mode=?, content=? WHERE item_id=? AND session_id=?");
+        $ins = $db->prepare("INSERT INTO training_ojt_item (session_id, sort_order, item_type, score_mode, content) VALUES (?,?,?,?,?)");
         $n = 0;
         foreach ($items as $it) {
             $content = trim((string)($it['content'] ?? ''));
             if ($content === '') continue;
             $type = ($it['item_type'] ?? '') === 'oral' ? 'oral' : 'practice';
-            $ins->execute([$sid, $n, $type, $content]);
+            $scoreMode = ($it['score_mode'] ?? '') === 'score' ? 'score' : 'pass_fail';
+            $itemId = (int)($it['item_id'] ?? 0);
+            if ($itemId > 0) {
+                $upd->execute([$n, $type, $scoreMode, $content, $itemId, $sid]);
+                $keepIds[] = $itemId;
+            } else {
+                $ins->execute([$sid, $n, $type, $scoreMode, $content]);
+                $keepIds[] = (int)$db->lastInsertId();
+            }
             $n++;
+        }
+        // 刪掉這次沒帶回來的舊項目（連同它們的成績矩陣一併清，避免孤兒資料）
+        $oq = $db->prepare("SELECT item_id FROM training_ojt_item WHERE session_id=?");
+        $oq->execute([$sid]);
+        $delIds = array_diff(array_map('intval', $oq->fetchAll(PDO::FETCH_COLUMN)), $keepIds);
+        if ($delIds) {
+            $in = implode(',', $delIds);
+            $db->exec("DELETE FROM training_ojt_score WHERE item_id IN ({$in})");
+            $db->exec("DELETE FROM training_ojt_item WHERE item_id IN ({$in})");
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存考核項目失敗：'.$e->getMessage(), 500); }
     jout(['total'=>$n]);
 }
 
+/* 考核成績矩陣（人員×項目）：查詢，含送出鎖定狀態。canView 即可（列印/檢視都要讀）。 */
+case 'ojt_score_list': {
+    $sid = (int)($_GET['session_id'] ?? 0);
+    $sq = $db->prepare("SELECT item_id, user_id, score, result FROM training_ojt_score WHERE session_id=?");
+    $sq->execute([$sid]);
+    $hd = $db->prepare("SELECT scores_submitted_at, scores_submitted_by FROM training_ojt_checklist WHERE session_id=?");
+    $hd->execute([$sid]);
+    $h = $hd->fetch(PDO::FETCH_ASSOC);
+    jout(['scores'=>$sq->fetchAll(PDO::FETCH_ASSOC),
+          'scores_submitted_at'=>$h ? $h['scores_submitted_at'] : null,
+          'scores_submitted_by'=>$h ? $h['scores_submitted_by'] : null]);
+}
+
+/* 儲存考核成績矩陣草稿（不鎖，可一直改；已送出鎖定要密碼解鎖才能再存）。 */
+case 'ojt_score_save': {
+    $sid = (int)($_POST['session_id'] ?? 0);
+    $st = $db->prepare("SELECT train_type, trainer_id FROM training_session WHERE session_id=?");
+    $st->execute([$sid]);
+    $session = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$session) jerr('找不到場次');
+    if (!training_ojt_can_edit($perms, $session, $uid)) jerr('無此場次考核成績填寫權限（僅內訓講師本人或訓練管理員）', 403);
+    $hd = $db->prepare("SELECT scores_submitted_at FROM training_ojt_checklist WHERE session_id=?");
+    $hd->execute([$sid]);
+    $submittedAt = $hd->fetchColumn();
+    training_require_unlock($db, $uid, !empty($submittedAt), (string)($_POST['unlock_password'] ?? ''), '考核成績');
+    $modeMap = [];
+    $mq = $db->prepare("SELECT item_id, score_mode FROM training_ojt_item WHERE session_id=?");
+    $mq->execute([$sid]);
+    foreach ($mq->fetchAll(PDO::FETCH_ASSOC) as $r) $modeMap[(int)$r['item_id']] = $r['score_mode'];
+    $scores = json_decode((string)($_POST['scores'] ?? '[]'), true);
+    if (!is_array($scores)) $scores = [];
+    try {
+        $db->beginTransaction();
+        $ins = $db->prepare("INSERT INTO training_ojt_score (session_id, item_id, user_id, score, result, updated_at)
+                              VALUES (?,?,?,?,?,NOW())
+                              ON DUPLICATE KEY UPDATE score=VALUES(score), result=VALUES(result), updated_at=VALUES(updated_at)");
+        foreach ($scores as $sc) {
+            $itemId = (int)($sc['item_id'] ?? 0);
+            $userId = (int)($sc['user_id'] ?? 0);
+            if ($itemId <= 0 || $userId <= 0 || !isset($modeMap[$itemId])) continue;   // 項目不屬於這場次，忽略
+            $mode = $modeMap[$itemId];
+            $result = null; $score = null;
+            if ($mode === 'score') {
+                $score = ($sc['score'] ?? '') === '' || $sc['score'] === null ? null : (float)$sc['score'];
+                if ($score !== null && ($score < 0 || $score > 100)) jerr('成績需在 0~100 之間');
+            } else {
+                $r = (string)($sc['result'] ?? '');
+                $result = in_array($r, ['pass','fail'], true) ? $r : null;
+            }
+            $ins->execute([$sid, $itemId, $userId, $score, $result]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存成績失敗：'.$e->getMessage(), 500); }
+    jout(['session_id'=>$sid]);
+}
+
+/* 送出考核成績（正式完成）：檢查未到人員以外的人是否都已填齊，依規則算每人建議整體結果寫回 training_attendee，
+   再鎖定 training_ojt_checklist.scores_submitted_at。規則：任一 pass_fail 項目為 fail → 整體 fail；
+   否則若有 score 項目 → 整體分數＝所有 score 項目平均(四捨五入到小數1位)、整體 pass；
+   否則(純 pass_fail 且全過) → 整體 pass，分數不變動。未到者整批跳過，不要求填也不寫建議值。 */
+case 'ojt_score_submit': {
+    $sid = (int)($_POST['session_id'] ?? 0);
+    $st = $db->prepare("SELECT train_type, trainer_id FROM training_session WHERE session_id=?");
+    $st->execute([$sid]);
+    $session = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$session) jerr('找不到場次');
+    if (!training_ojt_can_edit($perms, $session, $uid)) jerr('無此場次考核成績送出權限（僅內訓講師本人或訓練管理員）', 403);
+    $items = $db->prepare("SELECT item_id, score_mode FROM training_ojt_item WHERE session_id=?");
+    $items->execute([$sid]);
+    $items = $items->fetchAll(PDO::FETCH_ASSOC);
+    if (!$items) jerr('尚未建立任何考核項目，無法送出');
+    $atts = $db->prepare("SELECT att_id, user_id, user_name, attended FROM training_attendee WHERE session_id=?");
+    $atts->execute([$sid]);
+    $atts = $atts->fetchAll(PDO::FETCH_ASSOC);
+    $sq = $db->prepare("SELECT item_id, user_id, score, result FROM training_ojt_score WHERE session_id=?");
+    $sq->execute([$sid]);
+    $scoreMap = [];   // "item_id_user_id" => row
+    foreach ($sq->fetchAll(PDO::FETCH_ASSOC) as $r) $scoreMap[$r['item_id'].'_'.$r['user_id']] = $r;
+    $missing = [];
+    $result = [];   // user_id => ['eval_result'=>..,'eval_score'=>..]
+    foreach ($atts as $a) {
+        if (!(int)$a['attended']) continue;   // 未到者不需要填、不算建議值
+        $uidA = (int)$a['user_id'];
+        $anyFail = false; $scoresForAvg = []; $ok = true;
+        foreach ($items as $it) {
+            $k = $it['item_id'].'_'.$uidA;
+            $row = $scoreMap[$k] ?? null;
+            if ($it['score_mode'] === 'score') {
+                if (!$row || $row['score'] === null) { $ok = false; break; }
+                $scoresForAvg[] = (float)$row['score'];
+            } else {
+                if (!$row || !in_array($row['result'], ['pass','fail'], true)) { $ok = false; break; }
+                if ($row['result'] === 'fail') $anyFail = true;
+            }
+        }
+        if (!$ok) { $missing[] = $a['user_name'] ?: ('user#'.$uidA); continue; }
+        $evalResult = $anyFail ? 'fail' : 'pass';
+        $evalScore = $scoresForAvg ? round(array_sum($scoresForAvg) / count($scoresForAvg), 1) : null;
+        $result[(int)$a['att_id']] = ['eval_result'=>$evalResult, 'eval_score'=>$evalScore];
+    }
+    if ($missing) jerr('以下人員考核項目尚未填齊，無法送出：'.implode('、', $missing));
+    try {
+        $db->beginTransaction();
+        $upd = $db->prepare("UPDATE training_attendee SET eval_result=?, eval_score=? WHERE att_id=?");
+        foreach ($result as $attId => $r) $upd->execute([$r['eval_result'], $r['eval_score'], $attId]);
+        $db->prepare("UPDATE training_ojt_checklist SET scores_submitted_at=NOW(), scores_submitted_by=? WHERE session_id=?")
+           ->execute([$uname, $sid]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('送出失敗：'.$e->getMessage(), 500); }
+    jout(['session_id'=>$sid, 'updated'=>count($result)]);
+}
+
+/* 解鎖已送出的考核成績（需操作確認密碼），解鎖後保留既有分數，可繼續改再重新送出。 */
+case 'ojt_score_unlock': {
+    $sid = (int)($_POST['session_id'] ?? 0);
+    $st = $db->prepare("SELECT train_type, trainer_id FROM training_session WHERE session_id=?");
+    $st->execute([$sid]);
+    $session = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$session) jerr('找不到場次');
+    if (!training_ojt_can_edit($perms, $session, $uid)) jerr('無此場次考核成績權限（僅內訓講師本人或訓練管理員）', 403);
+    $chk = eg_confirm_password_verify($db, $uid, (string)($_POST['password'] ?? ''));
+    if (!$chk['ok']) jerr($chk['msg'] ?: '密碼驗證失敗', 403);
+    $db->prepare("UPDATE training_ojt_checklist SET scores_submitted_at=NULL, scores_submitted_by=NULL WHERE session_id=?")->execute([$sid]);
+    jout(['session_id'=>$sid]);
+}
+
 /* 儲存參加人員名單（整批取代；同步應到/實到人數） */
 case 'save_attendees': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $sid = (int)($_POST['session_id'] ?? 0);
-    $st = $db->prepare("SELECT eval_method FROM training_session WHERE session_id=?");
+    $st = $db->prepare("SELECT eval_method, status FROM training_session WHERE session_id=?");
     $st->execute([$sid]);
     $sRow = $st->fetch(PDO::FETCH_ASSOC);
     if (!$sRow) jerr('找不到場次');
+    training_require_unlock($db, $uid, ($sRow['status'] ?? '') === 'done', (string)($_POST['unlock_password'] ?? ''), '此場次的實行資料');
     $isNotice = ($sRow['eval_method'] ?? '') === 'notice';    // 宣導＝免評鑑
     $list = json_decode((string)($_POST['attendees'] ?? '[]'), true);
     if (!is_array($list)) $list = [];
@@ -1241,8 +1447,10 @@ case 'delete_session': {
         $db->prepare("DELETE FROM training_attendee WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_session_day WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_session_dept WHERE session_id=?")->execute([$sid]);
+        $db->prepare("DELETE FROM training_ojt_score WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_ojt_item WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_ojt_checklist WHERE session_id=?")->execute([$sid]);
+        $db->prepare("DELETE FROM training_attendee_day_sign WHERE session_id=?")->execute([$sid]);
         $db->prepare("DELETE FROM training_session WHERE session_id=?")->execute([$sid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：'.$e->getMessage(), 500); }

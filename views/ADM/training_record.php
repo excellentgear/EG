@@ -176,6 +176,14 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         table.att-tbl thead th { position:sticky; top:0; background:#F7E0BD; color:#5b3a1e; }
         table.att-tbl td.t-left { text-align:left; }
         .att-del { color:#DD5138; cursor:pointer; }
+        /* 考核成績矩陣：一個項目一個區塊（標題+批次工具列+橫向可捲動的人員一列），比照 batch-box 同色系 */
+        .ojt-score-item { border:1px solid #EADFC8; border-radius:6px; padding:8px 10px; margin-bottom:8px; background:#FDF8EF; }
+        .ojt-score-item-head { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:6px; font-size:13px; color:#5b3a1e; }
+        .ojt-score-row-wrap { overflow-x:auto; }
+        table.ojt-score-tbl { border-collapse:collapse; }
+        table.ojt-score-tbl td { border:1px solid #EADFC8; padding:4px 6px; text-align:center; background:#fff; vertical-align:top; }
+        .ojt-score-name { font-size:11.5px; color:#5b3a1e; white-space:nowrap; margin-bottom:3px; }
+        table.ojt-score-tbl input, table.ojt-score-tbl select { width:64px; border:1px solid #D8BE93; border-radius:4px; padding:2px 4px; font-size:12.5px; }
         /* 主分頁（訓練場次／達標狀況）與月份分頁 */
         .tr-tabs { display:flex; gap:4px; margin:6px 0 8px; flex-wrap:wrap; }
         .tr-tabs .tab { cursor:pointer; padding:5px 16px; font-size:13px; border:1.5px solid #E8D5B5; border-bottom:none;
@@ -587,22 +595,24 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             </div>
             <div class="att-list-wrap" style="max-height:210px;">
                 <table class="day-tbl">
-                    <thead><tr><th style="width:40px;">項次</th><th>考核／口試重點</th><th style="width:110px;">方式</th><th style="width:26px;"></th></tr></thead>
+                    <thead><tr><th style="width:40px;">項次</th><th>考核／口試重點</th><th style="width:100px;">方式</th><th style="width:100px;">計分方式</th><th style="width:26px;"></th></tr></thead>
                     <tbody id="ojtBody" data-eg-row-add="ojtAdd" data-eg-row-del="ojtDelLast"></tbody>
                 </table>
             </div>
             <div id="ojtOps" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 2px;">
                 <button type="button" class="b-att nw" onclick="ojtAdd()"><i class="fa fa-plus"></i> 新增項目</button>
                 <button type="button" class="b-att nw" onclick="ojtSave()"><i class="fa fa-save"></i> 儲存考核項目清單</button>
-                <button type="button" class="b-att nw" style="background:#fff;color:#8A5A2B;" onclick="printOjtSheet()"><i class="fa fa-print"></i> 列印考核表</button>
+                <button type="button" class="b-att nw ex-unlock-exempt" style="background:#fff;color:#8A5A2B;" onclick="printOjtSheetFromEx()"><i class="fa fa-print"></i> 列印考核表</button>
+                <button type="button" class="b-att nw ex-unlock-exempt" id="ojtScoreBtn" style="background:#fff;color:#8A5A2B;" onclick="openOjtScoreModal()"><i class="fa fa-list-ol"></i> 填寫/送出考核成績</button>
                 <span id="ojtMsg" style="font-size:12px;color:#8a6d45;"></span>
             </div>
             <div style="font-size:11px;color:#8a6d45;margin-top:3px;">列印表單<b>各考核細項</b>仍留白，供現場考核時手寫勾選合格／不合格並評分；表尾「總體評核結果」與分數<b>會直接印出上方「參加人員」名單已填的評鑑結果／分數</b>（尚未填則留白）；每位參加人員各印一份（考核項目少時自動併印多人於同一頁節省紙張），表單上附「未到考」勾選欄供考官現場勾填。
                 考核完成掃描後，請至下方「附件」上傳並勾選「考核表」類別佐證，作為簽到表評鑑結果的客觀證據。</div>
         </div>
 
-        <!-- 附件：簽到表掃描、教材、試卷…（DB 只存檔名，路徑由模組設定即時組出） -->
-        <div class="att-sec">
+        <!-- 附件：簽到表掃描、教材、試卷…（DB 只存檔名，路徑由模組設定即時組出）；不受「實行資料」鎖定影響，
+             登錄完成後補傳考核表掃描等佐證是常態流程，不應該還要先解鎖才能傳 -->
+        <div class="att-sec" id="attachSec">
             <div style="font-weight:bold;color:#5b3a1e;margin:12px 0 4px;">附件 <small id="atCount" style="color:#8a6d45;font-weight:normal;"></small>
                 <small style="color:#8a6d45;font-weight:normal;">（簽到表掃描件、教材/講義、試卷、上課照片…）</small></div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
@@ -629,6 +639,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         <button class="b-cancel" onclick="printSignSheet(false)"><i class="fa fa-print"></i> 列印簽到表</button>
         <button class="b-cancel" onclick="printSignSheet(true)" title="不帶目前名單，整張印成空白列供現場手寫簽到"><i class="fa fa-file-o"></i> 列印空白簽到表</button>
         <button class="b-cancel" id="exRevert" style="display:none;color:#DD5138;" onclick="revertPlanned()"><i class="fa fa-undo"></i> 退回計畫中</button>
+        <button class="b-cancel" id="exUnlockBtn" style="display:none;color:#DD5138;" onclick="unlockExMask()"><i class="fa fa-unlock"></i> 解鎖修改</button>
         <button class="b-cancel" onclick="closeMask('exMask')">取消</button>
         <button class="b-ok" id="exSave" onclick="submitEx(0)" title="課還沒上：確定要開這堂課（狀態→已排定，可印簽到表）">確認開課</button>
         <button class="b-ok" id="exFinish" style="margin-left:6px;" onclick="submitEx(1)" title="課已上完：連同實到名單登錄完成（狀態→已完成，計入 KPI 達成率）">登錄完成</button>
@@ -854,6 +865,40 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
     </div>
 </div></div>
 
+<!-- 操作確認密碼 modal（密碼一律用 password 欄位遮罩顯示，不用 window.prompt 明碼；照抄 vendor_audit.php 的 askSuperPwd 寫法，
+     驗證走全站共用 src/common/confirm_password_lib.php——計畫/實行資料/考核成績三處鎖定的解鎖都共用這一顆） -->
+<div class="tr-mask" id="pwMask"><div class="tr-modal">
+    <div class="m-head"><span>操作確認密碼</span><span class="m-close" onclick="closeMask('pwMask')">✕</span></div>
+    <div class="m-body">
+        <p id="pwMsg" style="white-space:pre-line;color:#5b3a1e;margin:0 0 8px;"></p>
+        <input type="password" id="pwInput" autocomplete="new-password" placeholder="請輸入操作確認密碼"
+            style="width:100%;border:1px solid #D8BE93;border-radius:4px;padding:6px 8px;font-size:13px;box-sizing:border-box;">
+        <div id="pwErr" style="color:#DD5138;margin-top:6px;font-size:12px;"></div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('pwMask')">取消</button>
+        <button class="b-ok" id="pwOk">確定</button>
+    </div>
+</div></div>
+
+<!-- 考核成績填寫（人員×項目矩陣，開課人員/講師本人或訓練管理員可填；登錄完成後可用，送出前隨時能存草稿） -->
+<div class="tr-mask" id="ojtScoreMask"><div class="tr-modal wide">
+    <div class="m-head"><span>考核成績填寫</span><span class="m-close" onclick="closeMask('ojtScoreMask')">✕</span></div>
+    <div class="m-body">
+        <div id="ojtScoreInfo" style="margin-bottom:8px;color:#5b3a1e;"></div>
+        <button type="button" class="b-att nw" onclick="ojtScoreClearAll()"><i class="fa fa-eraser"></i> 清除全部成績</button>
+        <div id="ojtScoreBody" style="margin-top:8px;"></div>
+        <div class="tr-hint" style="margin-top:8px;">每個考核項目各自一列，可用該列的批次按鈕快速全填；「未到」的人員不需要填、也不算進送出前的檢查。
+            送出後會依規則自動算出每人的整體評鑑結果／分數寫回「參加人員」名單（仍可手動覆蓋），並鎖定這張成績表。</div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('ojtScoreMask')">關閉</button>
+        <button class="b-ok" id="ojtScoreSaveBtn" onclick="ojtScoreSave()">儲存草稿</button>
+        <button class="b-ok" id="ojtScoreSubmitBtn" style="margin-left:6px;" onclick="ojtScoreSubmit()"><i class="fa fa-paper-plane"></i> 送出（正式完成）</button>
+        <button class="b-cancel" id="ojtScoreUnlockBtn" style="display:none;color:#DD5138;" onclick="ojtScoreUnlock()"><i class="fa fa-unlock"></i> 解鎖重新填寫</button>
+    </div>
+</div></div>
+
 <!-- 現場簽到（免編輯權限；選人→輸入本人密碼→Enter，比照會議記錄的密碼簽到模式） -->
 <div class="tr-mask" id="checkinMask"><div class="tr-modal">
     <div class="m-head"><span>現場簽到</span><span class="m-close" onclick="closeMask('checkinMask')">✕</span></div>
@@ -889,7 +934,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         ・<b>訓練需求申請人</b>是獨立角色（在使用者權限設定的「教育訓練管理」角色指派裡指派），只能新增/送出/檢視申請單，
         看得到訓練場次列表（唯讀）但**不能**修改計畫或任何設定，避免誤把整頁編輯權限一起給出去。<br>
         ・休息時間<b>系統自動算</b>（上課時間 ∩ 休息時段），欄位灰底不可改。<br>
-        ・已排定/已完成的場次，<b>計畫內容僅訓練管理員可改</b>。<br>
+        ・已排定/已完成的場次，<b>計畫內容任何人都不能直接改</b>，需先在「實行資料」按「退回計畫中」（輸入操作確認密碼，僅獲授權的管理員/超級管理員可用）解鎖；「登錄完成」後的實行資料（日期/名單/OJT 項目等）同樣要按「解鎖修改」輸入操作確認密碼才能再改；考核成績送出後也是同一套密碼機制才能解鎖重填。<br>
         ・刪除場次要連續兩次輸入大寫 <b>Y</b>，且會一併刪除附件實體檔。<br>
         ・點清單任一列可展開該場次明細（大綱、時段、名單與評鑑、附件）。<br>
         ・「達標狀況」分頁依顯示單位統計；子部門可合併成一列，也可排除不列入的部門。<br>
@@ -983,6 +1028,23 @@ function setErr($el, msgBoxId, msg){
 
 function closeMask(id){ document.getElementById(id).style.display='none'; }
 function openMask(id){ document.getElementById(id).style.display='block'; }
+/** 操作確認密碼：密碼一律用 password 欄位遮罩顯示，不用 window.prompt 明碼（會外洩）——
+ *  計畫/實行資料/考核成績三處解鎖都走這支，實際驗證在後端 src/common/confirm_password_lib.php，
+ *  超級管理員或被授權的管理員都能用自己的操作確認密碼（照抄 vendor_audit.php 的 askSuperPwd()）。 */
+function askSuperPwd(msg, onConfirm){
+    $('#pwMsg').text(msg); $('#pwInput').val(''); $('#pwErr').text('');
+    $('#pwMask').data('onConfirm', onConfirm);
+    openMask('pwMask');
+    setTimeout(function(){ $('#pwInput').trigger('focus'); }, 200);
+}
+$('#pwOk').on('click', function(){
+    var pwd = $('#pwInput').val();
+    if (!pwd) { $('#pwErr').text('請輸入密碼'); return; }
+    var cb = $('#pwMask').data('onConfirm');
+    closeMask('pwMask');
+    if (cb) cb(pwd);
+});
+$(document).on('keydown', '#pwInput', function(e){ if (e.key==='Enter'){ e.preventDefault(); $('#pwOk').trigger('click'); } });
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtDate(d){ return d ? String(d).substr(0,10) : ''; }   // 內部用（Y-m-d 原始值）：<input type=date>、日期加減、簽到日對照鍵…不可改動格式
@@ -1123,10 +1185,10 @@ function renderTable(){
             html += '<span class="tr-op" onclick="openCheckin('+r.session_id+')" title="現場裝置給學員自己選人輸入本人密碼簽到"><i class="fa fa-pencil-square-o"></i>現場簽到</span>';
         }
         if (PERMS.canEdit) {
-            // 已排定/已完成＝計畫已定案，只有訓練管理員可再改計畫內容
-            var lock = (r.status==='scheduled' || r.status==='done') && !PERMS.canAdmin;
+            // 已排定/已完成＝計畫已定案，任何人都不能直接改（連訓練管理員也不行），要先在「實行資料」按「退回計畫中」解鎖
+            var lock = (r.status==='scheduled' || r.status==='done');
             html += lock
-                ? '<span class="tr-op" style="color:#c4b79c;cursor:not-allowed;" title="已'+(r.status==='done'?'完成':'排定開課')+'，計畫內容僅訓練管理員可修改"><i class="fa fa-lock"></i>計畫</span>'
+                ? '<span class="tr-op" style="color:#c4b79c;cursor:not-allowed;" title="已'+(r.status==='done'?'完成':'排定開課')+'，需先在實行資料按「退回計畫中」（需操作確認密碼）才能修改計畫"><i class="fa fa-lock"></i>計畫</span>'
                 : '<span class="tr-op" onclick="openEd('+r.session_id+')" title="修改計畫內容"><i class="fa fa-pencil"></i>計畫</span>';
             if (r.status==='cancelled') {
                 html += '<span class="tr-op" onclick="setStatus('+r.session_id+',\'planned\')" title="恢復為計畫中"><i class="fa fa-undo"></i>恢復</span>';
@@ -1329,6 +1391,25 @@ $('#edDays,#edHours').on('input change', edValidate);
    語意：確認實行＝「確定要開這堂課」（狀態轉已排定，可先印簽到表）；
         上完課後回到同一畫面勾實到、按「登錄完成」才轉已完成（計入 KPI）。 */
 var EXROW = null;
+/* 實行資料鎖定：登錄完成（status='done'）後，日期/名單/OJT項目等一律唯讀，要輸入操作確認密碼「解鎖修改」才能再改；
+   附件上傳與 OJT 列印/填寫成績按鈕（.ex-unlock-exempt/#attachSec）不受此鎖影響，見 ai-rules 決策脈絡。 */
+var EX_UNLOCKED = false, EX_UNLOCK_PWD = '';
+function exLocked(){ return !!(EXROW && EXROW.status==='done' && !EX_UNLOCKED); }
+function applyExLock(){
+    var locked = exLocked();
+    $('#exMask .m-body input, #exMask .m-body select, #exMask .m-body textarea, #exMask .m-body button')
+        .not('#attachSec, #attachSec *').not('.ex-unlock-exempt')
+        .prop('disabled', locked);
+    $('#exSave,#exFinish').toggle(!locked);
+    $('#exUnlockBtn').toggle(locked && !!META.confirm_pw_allowed);
+}
+function unlockExMask(){
+    askSuperPwd('修改已完成場次的實行資料需要操作確認密碼：', function(pwd){
+        EX_UNLOCKED = true; EX_UNLOCK_PWD = pwd;
+        applyExLock();
+        alert('已解鎖，修改後請記得按「儲存實行紀錄」。');
+    });
+}
 /* 點「確認實行/實行資料」一律先向後端要一次這筆場次的最新狀態才開窗——
    避免 A 剛把這筆改成「已排定/已完成」，B 手上還是舊快取、點開來還是「計畫中」的畫面繼續填，
    兩人同時存檔會互相覆蓋或重複寫入。發現狀態跟畫面上顯示的不一樣，就擋下來、告知、刷新清單，不開窗。
@@ -1356,11 +1437,12 @@ function openExBody(sid){
     var r = ROWS.find(function(x){ return String(x.session_id)===String(sid); });
     if (!r) return;
     EXROW = r;
+    EX_UNLOCKED = false; EX_UNLOCK_PWD = '';   // 每次重開 modal 都要重新鎖定，不能沿用上次解鎖狀態
     var done = r.status==='done', sch = r.status==='scheduled';
     $('#exTitle').text(done ? '實行紀錄（已完成）' : (sch ? '實行資料（已排定開課）' : '確認實行（確定開課）'));
     $('#exSave').text(done ? '儲存實行紀錄' : (sch ? '儲存' : '確認開課'));
     $('#exFinish').toggle(!done);
-    $('#exRevert').toggle(done || sch);
+    $('#exRevert').toggle((done || sch) && !!META.confirm_pw_allowed);
     $('#exMask').data('sid', r.session_id);
     var ext = r.train_type==='external';
     // OJT/實作口試考核表：僅內訓；建立/編輯限本場講師本人或訓練管理員（見 ai-rules/08 第六節同精神：以目前狀態判定，不猜權限）
@@ -1413,8 +1495,8 @@ function openExBody(sid){
     $('#attNote').text('');
     DAY_SIGNS = {};
     $.getJSON(API, {action:'get_attendees', session_id:r.session_id}, function(res){
-        if (res.ok) ATT = res.attendees.map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name,
-            position_name:a.position_name||'', attended:+a.attended, signed:+a.signed, signed_at:a.signed_at||'',
+        if (res.ok) ATT = res.attendees.map(function(a){ return {att_id:+a.att_id, user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name,
+            position_name:a.position_name||'', attended:+a.attended, signed:+a.signed, signed_at:a.signed_at||'', sign_method:a.sign_method||'',
             eval_result:a.eval_result||'', eval_score:(a.eval_score==null?'':numTrim(a.eval_score)), eval_note:a.eval_note||''}; });
         if (res.ok) DAY_SIGNS = daySignMap(res.day_signs);
         // 講師不算參加人員（是上課的人，不是受訓的人）→ 名單內若有講師一律剔除
@@ -1424,6 +1506,7 @@ function openExBody(sid){
         renderAtt();
     });
     renderAtt();
+    applyExLock();
     openMask('exMask');
     setTimeout(function(){ $('#exDone').focus(); }, 100);
 }
@@ -1486,6 +1569,7 @@ function renderDays(){
     $('#exDays').val(DAYS.length);
     if (DAYS[0] && DAYS[0].date) $('#exDone').val(DAYS[0].date);   // 首日欄與明細第一天一致
     dayValidate();
+    applyExLock();   // 重繪後新產生的 input 要重新套用鎖定狀態
 }
 /* 單格編輯：typing=1 只即時檢查不改寫內容（不打斷輸入），change 才正規化成 HH:MM */
 function dayEdit(i, key, val, typing){
@@ -1708,8 +1792,35 @@ function attEvalAll(v){
     ATT.forEach(function(a){ if (only && v!=='' && !a.attended) return; a.eval_result = v; });
     renderAtt();
 }
+/* 簽名欄：signed=1 即算簽到（線上密碼簽到 sign_method=online，或這裡新增的「登記紙本簽到」sign_method=paper 皆算，
+   登錄完成前至少要有一人簽到才能登錄完成，見 submitEx()）。這幾個是 span 不是 input/button，
+   applyExLock() 的鎖定選不到，鎖定時直接不產生可點連結（純文字），跟刪除列那顆 x 一致的做法。 */
+function signCellHtml(a, i, locked){
+    var lbl = a.sign_method==='paper' ? '（紙本）' : (a.sign_method==='online' ? '（線上）' : '');
+    if (a.signed) {
+        return '<span style="color:#8A5A2B;">已簽'+lbl+'</span>'
+             + (!locked && a.att_id ? ' <span class="att-del" title="取消簽到" onclick="unmarkSign('+i+')"><i class="fa fa-times"></i></span>' : '');
+    }
+    if (!locked && a.att_id) return '<span class="tr-op" style="padding:0;" onclick="markPaperSign('+i+')" title="收到紙本簽到單後點此登記">登記紙本簽到</span>';
+    return '<span style="color:#c4b79c;" title="'+(a.att_id?'已鎖定':'請先儲存名單才能登記紙本簽到')+'">—</span>';
+}
+function markPaperSign(i){
+    var a = ATT[i]; if (!a || !a.att_id) return;
+    $.post(API, {action:'mark_paper_sign', att_id:a.att_id}, function(res){
+        if (!res.ok){ alert(res.error||'登記失敗'); return; }
+        a.signed=1; a.sign_method='paper'; a.attended=1; renderAtt();
+    }, 'json').fail(function(x){ alert('登記失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function unmarkSign(i){
+    var a = ATT[i]; if (!a || !a.att_id) return;
+    if (!confirm('取消此人員的簽到記錄？')) return;
+    $.post(API, {action:'unmark_sign', att_id:a.att_id}, function(res){
+        if (!res.ok){ alert(res.error||'取消失敗'); return; }
+        a.signed=0; a.sign_method=''; renderAtt();
+    }, 'json').fail(function(x){ alert('取消失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
 function renderAtt(){
-    var h='', notice=isNoticeCourse();
+    var h='', notice=isNoticeCourse(), locked=exLocked();
     ATT.forEach(function(a,i){
         var ev = notice ? 'exempt' : (a.eval_result||'');
         var sel = '<select onchange="ATT['+i+'].eval_result=this.value;attCount()"'+(notice?' disabled':'')+'>'
@@ -1725,11 +1836,12 @@ function renderAtt(){
           +'" onchange="ATT['+i+'].eval_score=this.value;attCount()"'+(notice?' disabled':'')+'></td>'
           +'<td><input type="text" maxlength="100" style="width:112px;" value="'+esc(a.eval_note||'')
           +'" onchange="ATT['+i+'].eval_note=this.value"></td>'
-          +'<td>'+(a.signed?'<span style="color:#8A5A2B;">已簽</span>':'—')+'</td>'
-          +'<td><span class="att-del" onclick="attDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
+          +'<td>'+signCellHtml(a, i, locked)+'</td>'
+          +'<td>'+(locked?'':'<span class="att-del" onclick="attDel('+i+')"><i class="fa fa-times"></i></span>')+'</td></tr>';
     });
     $('#attBody').html(h||'<tr><td colspan="9" style="color:#8a6d45;padding:8px;">尚未加入人員</td></tr>');
     attCount();
+    applyExLock();   // 重繪後新產生的 input 要重新套用鎖定狀態
 }
 function attCount(){
     var a=ATT.filter(function(x){return x.attended;}).length;
@@ -2006,7 +2118,8 @@ function saveGroups(){
 
 /* ---------- 場次附件（簽到表掃描/教材/試卷）：DB 只存檔名，路徑由後端即時組（鐵律5） ---------- */
 var ATT_CATS = {}, EVAL_METHODS = {}, ATT_DIRS = {nas:'', url:''};
-var OJT_ITEMS = [], OJT_TYPES = {}, OJT_EDITABLE = false;
+var OJT_ITEMS = [], OJT_TYPES = {}, OJT_EDITABLE = false, OJT_SCORES_LOCKED = false;
+var OJT_SCORE_MODE_LABEL = {pass_fail:'合格/不合格', score:'輸入分數'};
 var FILES = [], TEMP_ATT = [];      // TEMP_ATT＝場次還沒 id 時的暫存附件（本頁場次一定已存在，保留機制備用）
 function fmtSize(n){
     n = +n||0;
@@ -2019,13 +2132,15 @@ function loadOjt(sid){
     if (!sid) return;
     $.getJSON(API, {action:'ojt_list', session_id:sid}, function(res){
         if (!res.ok) return;
-        OJT_ITEMS = (res.items||[]).map(function(it){ return {item_type:it.item_type, content:it.content}; });
+        OJT_ITEMS = (res.items||[]).map(function(it){ return {item_id:+it.item_id, item_type:it.item_type,
+            score_mode:it.score_mode==='score'?'score':'pass_fail', content:it.content}; });
+        OJT_SCORES_LOCKED = !!res.scores_submitted_at;
         $('#ojtAssessor').val(res.assessor_name || (EXROW&&EXROW.trainer) || '');
         renderOjt();
     });
 }
 function renderOjt(){
-    var editable = OJT_EDITABLE, h='';
+    var editable = OJT_EDITABLE && !exLocked(), h='';
     OJT_ITEMS.forEach(function(it,i){
         h+='<tr><td>'+(i+1)+'</td>'
           +'<td><input type="text" maxlength="200" placeholder="例：[實作] 能否正確完成開機並登入 MES？" value="'+esc(it.content||'')+'"'
@@ -2033,59 +2148,209 @@ function renderOjt(){
           +'<td><select onchange="ojtEdit('+i+',\'item_type\',this.value)"'+(editable?'':' disabled')+'>'
           + Object.keys(OJT_TYPES).map(function(k){ return '<option value="'+k+'"'+(it.item_type===k?' selected':'')+'>'+esc(OJT_TYPES[k])+'</option>'; }).join('')
           + '</select></td>'
+          +'<td><select onchange="ojtEdit('+i+',\'score_mode\',this.value)"'+(editable?'':' disabled')+'>'
+          + Object.keys(OJT_SCORE_MODE_LABEL).map(function(k){ return '<option value="'+k+'"'+(it.score_mode===k?' selected':'')+'>'+esc(OJT_SCORE_MODE_LABEL[k])+'</option>'; }).join('')
+          + '</select></td>'
           +'<td>'+(editable?'<span class="att-del" onclick="ojtDel('+i+')"><i class="fa fa-times"></i></span>':'')+'</td></tr>';
     });
-    $('#ojtBody').html(h || '<tr><td colspan="4" style="color:#8a6d45;padding:6px;">尚未建立考核項目</td></tr>');
+    $('#ojtBody').html(h || '<tr><td colspan="5" style="color:#8a6d45;padding:6px;">尚未建立考核項目</td></tr>');
     $('#ojtCount').text(OJT_ITEMS.length ? '（共 '+OJT_ITEMS.length+' 項）' : '');
+    $('#ojtScoreBtn').toggle(!!(OJT_ITEMS.length && !isNoticeCourse()));
 }
 function ojtEdit(i, key, val){ if (!OJT_ITEMS[i]) return; OJT_ITEMS[i][key] = val; }
-function ojtAdd(){ if (!OJT_EDITABLE) return; OJT_ITEMS.push({item_type:'practice', content:''}); renderOjt(); }
-function ojtDelLast(){ if (!OJT_EDITABLE || !OJT_ITEMS.length) return; OJT_ITEMS.pop(); renderOjt(); }
-function ojtDel(i){ if (!OJT_EDITABLE) return; OJT_ITEMS.splice(i,1); renderOjt(); }
+function ojtAdd(){ if (!OJT_EDITABLE || exLocked()) return; OJT_ITEMS.push({item_id:0, item_type:'practice', score_mode:'pass_fail', content:''}); renderOjt(); }
+function ojtDelLast(){ if (!OJT_EDITABLE || exLocked() || !OJT_ITEMS.length) return; OJT_ITEMS.pop(); renderOjt(); }
+function ojtDel(i){ if (!OJT_EDITABLE || exLocked()) return; OJT_ITEMS.splice(i,1); renderOjt(); }
 function ojtSave(){
-    if (!OJT_EDITABLE){ alert('此場次的 OJT 考核項目僅本場講師本人或訓練管理員可編輯'); return; }
+    if (!OJT_EDITABLE || exLocked()){ alert('此場次的實行資料已鎖定，需先「解鎖修改」'); return; }
     var sid = $('#exMask').data('sid');
     var bad = OJT_ITEMS.some(function(it){ return !$.trim(it.content||''); });
     if (bad){ alert('有考核項目未填寫內容，請填寫或刪除該列'); return; }
     $('#ojtMsg').text('儲存中…');
-    $.post(API, {action:'ojt_save', session_id:sid, assessor_name:$('#ojtAssessor').val(), items:JSON.stringify(OJT_ITEMS)},
+    $.post(API, {action:'ojt_save', session_id:sid, assessor_name:$('#ojtAssessor').val(), items:JSON.stringify(OJT_ITEMS), unlock_password:EX_UNLOCK_PWD},
         function(res){
             if (!res.ok){ alert(res.error||'儲存失敗'); $('#ojtMsg').text(''); return; }
             $('#ojtMsg').text('已儲存'); setTimeout(function(){ $('#ojtMsg').text(''); }, 3000);
+            loadOjt(sid);   // 重新載入，補回新項目的真實 item_id（存檔前是暫時的 0）
         }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); $('#ojtMsg').text(''); });
 }
+
+/* ---------- 考核成績矩陣（人員×項目，線上填分，2026-08-10 新增） ----------
+   OJT_SCORE_DATA：{ "item_id_user_id": {score, result} }；每個項目各自一列，比照 vendor_audit.php 的
+   quickFillScore/quickClearScore 批次填寫寫法。未到者不放輸入格、送出檢查也跳過。 */
+var OJT_SCORE_DATA = {}, OJT_SCORE_SUBMITTED_AT = null;
+function ojtScoreKey(itemId, userId){ return itemId+'_'+userId; }
+function openOjtScoreModal(){
+    if (!EXROW) return;
+    if (!OJT_ITEMS.length){ alert('請先建立至少一項考核項目並儲存'); return; }
+    var sid = EXROW.session_id;
+    $('#ojtScoreInfo').text('載入中…'); $('#ojtScoreBody').html('');
+    openMask('ojtScoreMask');
+    // 重新抓一次最新名單（登錄完成當下伺服器可能剛用簽到狀態覆蓋過實到，畫面上的 ATT 要跟著同步才不會誤判未到）
+    $.getJSON(API, {action:'get_attendees', session_id:sid}, function(ares){
+        if (!ares.ok){ $('#ojtScoreInfo').html('<span style="color:#DD5138;">載入失敗</span>'); return; }
+        ATT = ares.attendees.map(function(a){ return {att_id:+a.att_id, user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name,
+            position_name:a.position_name||'', attended:+a.attended, signed:+a.signed, signed_at:a.signed_at||'', sign_method:a.sign_method||'',
+            eval_result:a.eval_result||'', eval_score:(a.eval_score==null?'':numTrim(a.eval_score)), eval_note:a.eval_note||''}; });
+        $.getJSON(API, {action:'ojt_score_list', session_id:sid}, function(res){
+            if (!res.ok){ $('#ojtScoreInfo').html('<span style="color:#DD5138;">載入失敗</span>'); return; }
+            OJT_SCORE_DATA = {};
+            (res.scores||[]).forEach(function(s){ OJT_SCORE_DATA[ojtScoreKey(s.item_id,s.user_id)] = {score:s.score, result:s.result}; });
+            OJT_SCORE_SUBMITTED_AT = res.scores_submitted_at || null;
+            OJT_SCORES_LOCKED = !!OJT_SCORE_SUBMITTED_AT;
+            renderOjtScore();
+        });
+    });
+}
+function renderOjtScore(){
+    var locked = !!OJT_SCORE_SUBMITTED_AT;
+    $('#ojtScoreInfo').html('<b>'+esc(EXROW.course_name||'')+'</b>'
+        + (locked ? '　<span style="color:#DD5138;">已送出鎖定（'+esc(dispDate(OJT_SCORE_SUBMITTED_AT,true))+'）</span>' : ''));
+    var people = ATT.filter(function(a){ return a.user_id; });
+    var h = '';
+    OJT_ITEMS.forEach(function(it){
+        h += '<div class="ojt-score-item">'
+           + '<div class="ojt-score-item-head"><b>'+esc(it.content||'')+'</b>　<span style="color:#8a6d45;font-size:12px;">（'+esc(OJT_SCORE_MODE_LABEL[it.score_mode]||'')+'）</span>';
+        if (!locked) {
+            if (it.score_mode==='score') {
+                h += ' <input type="number" step="any" min="0" max="100" style="width:60px;" id="ojtFillScore'+it.item_id+'" placeholder="分數">'
+                   + '<button type="button" class="b-att nw" onclick="ojtScoreFillAllScore('+it.item_id+')">套用全部</button>';
+            } else {
+                h += ' <button type="button" class="b-att nw" onclick="ojtScoreFillAll('+it.item_id+',\'pass\')">全部合格</button>'
+                   + '<button type="button" class="b-att nw" style="background:#fff;color:#8A5A2B;" onclick="ojtScoreFillAll('+it.item_id+',\'fail\')">全部不合格</button>';
+            }
+            h += '<button type="button" class="b-att nw" style="background:#fff;color:#DD5138;" onclick="ojtScoreClearItem('+it.item_id+')">清除此項</button>';
+        }
+        h += '</div><div class="ojt-score-row-wrap"><table class="ojt-score-tbl"><tbody><tr>';
+        people.forEach(function(a){
+            var d = OJT_SCORE_DATA[ojtScoreKey(it.item_id,a.user_id)] || {};
+            var cell;
+            if (!a.attended) cell = '<div class="ojt-score-cell" style="color:#c4b79c;">未到</div>';
+            else if (it.score_mode==='score') cell = '<input type="number" step="any" min="0" max="100" style="width:56px;" value="'+(d.score==null?'':d.score)+'"'
+                + (locked?' disabled':'')+' onchange="ojtScoreSet('+it.item_id+','+a.user_id+',\'score\',this.value)">';
+            else cell = '<select'+(locked?' disabled':'')+' onchange="ojtScoreSet('+it.item_id+','+a.user_id+',\'result\',this.value)">'
+                + '<option value=""'+(!d.result?' selected':'')+'>—</option>'
+                + '<option value="pass"'+(d.result==='pass'?' selected':'')+'>合格</option>'
+                + '<option value="fail"'+(d.result==='fail'?' selected':'')+'>不合格</option></select>';
+            h += '<td><div class="ojt-score-name">'+esc(a.user_name||'')+'</div>'+cell+'</td>';
+        });
+        h += '</tr></tbody></table></div></div>';
+    });
+    $('#ojtScoreBody').html(h || '<div style="color:#8a6d45;">無參加人員可填分</div>');
+    $('#ojtScoreSaveBtn,#ojtScoreSubmitBtn').toggle(!locked);
+    $('#ojtScoreUnlockBtn').toggle(locked && !!META.confirm_pw_allowed);
+}
+function ojtScoreSet(itemId, userId, key, val){
+    var k = ojtScoreKey(itemId, userId);
+    var d = OJT_SCORE_DATA[k] || (OJT_SCORE_DATA[k] = {score:null, result:null});
+    d[key] = val === '' ? null : val;
+}
+function ojtScoreFillAll(itemId, result){
+    ATT.forEach(function(a){ if (a.attended) ojtScoreSet(itemId, a.user_id, 'result', result); });
+    renderOjtScore();
+}
+function ojtScoreFillAllScore(itemId){
+    var v = $('#ojtFillScore'+itemId).val();
+    if (v === '') { alert('請先輸入要套用的分數'); return; }
+    ATT.forEach(function(a){ if (a.attended) ojtScoreSet(itemId, a.user_id, 'score', v); });
+    renderOjtScore();
+}
+function ojtScoreClearItem(itemId){
+    if (!confirm('清除此項目所有人的成績？')) return;
+    ATT.forEach(function(a){ delete OJT_SCORE_DATA[ojtScoreKey(itemId, a.user_id)]; });
+    renderOjtScore();
+}
+function ojtScoreClearAll(){
+    if (!confirm('清除全部考核成績（所有項目、所有人）？')) return;
+    OJT_SCORE_DATA = {};
+    renderOjtScore();
+}
+function ojtScoreCollect(){
+    var list = [];
+    OJT_ITEMS.forEach(function(it){
+        ATT.forEach(function(a){
+            if (!a.attended) return;
+            var d = OJT_SCORE_DATA[ojtScoreKey(it.item_id, a.user_id)];
+            if (!d || (d.score==null && !d.result)) return;
+            list.push({item_id:it.item_id, user_id:a.user_id, score:d.score, result:d.result});
+        });
+    });
+    return list;
+}
+function ojtScoreSave(){
+    $.post(API, {action:'ojt_score_save', session_id:EXROW.session_id, scores:JSON.stringify(ojtScoreCollect()), unlock_password:EX_UNLOCK_PWD}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        alert('已儲存草稿。');
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function ojtScoreSubmit(){
+    if (!confirm('確定送出考核成績？送出後會鎖定，需操作確認密碼才能再改；實到人員的考核項目未填齊會無法送出。')) return;
+    var sid = EXROW.session_id;
+    $.post(API, {action:'ojt_score_save', session_id:sid, scores:JSON.stringify(ojtScoreCollect()), unlock_password:EX_UNLOCK_PWD}, function(r1){
+        if (!r1.ok){ alert('儲存失敗：'+(r1.error||'')); return; }
+        $.post(API, {action:'ojt_score_submit', session_id:sid}, function(res){
+            if (!res.ok){ alert(res.error||'送出失敗'); return; }
+            alert('已送出，共更新 '+res.updated+' 人的整體評鑑結果（仍可到「參加人員」名單手動調整）。');
+            OJT_SCORES_LOCKED = true;
+            closeMask('ojtScoreMask');
+            openEx(sid);   // 重新整理實行紀錄，讓「參加人員」表格看到剛寫回的評鑑結果/分數
+        }, 'json').fail(function(x){ alert('送出失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function ojtScoreUnlock(){
+    var sid = EXROW.session_id;
+    askSuperPwd('解鎖考核成績重新填寫需要操作確認密碼：', function(pwd){
+        $.post(API, {action:'ojt_score_unlock', session_id:sid, password:pwd}, function(res){
+            if (!res.ok){ alert(res.error||'解鎖失敗'); return; }
+            OJT_SCORES_LOCKED = false;
+            openOjtScoreModal();
+        }, 'json').fail(function(x){ alert('解鎖失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    });
+}
+
 /* 列印：一人一份，考核日期固定為課程最後一天；各考核細項仍留白供現場手寫評分（現場口試/實作逐項考核用途不變），
    但表尾「總體評核結果」若參加人員名單（實行紀錄）已填評鑑結果／分數，直接印出既有結果，不必再手抄一次；未填則留白供事後填寫。
    每份考核表卡片標記「不可被分頁切開」，實際每頁塞幾份交給瀏覽器依內容高度原生分頁決定，
    不用考核項目數猜頁數（猜錯會跟瀏覽器實際分頁打架，見 print_pagination 鐵則）。
    src：選用，訓練場次檢視（唯讀）呼叫時帶入 {r,days,attendees,ojtItems,assessor} 取代 EXROW/DAYS/ATT/OJT_ITEMS 與表單欄位當下值，
    確保「訓練場次檢視」與「實行資料」的列印考核表輸出一致。 */
+/* src 必帶（見 printOjtSheetFromEx()/viewPrintSrc()）：{r,days,attendees,ojtItems,assessor,ojtScores}，
+   ojtScores＝{"item_id_user_id":{score,result}} 矩陣，兩處呼叫端都先向後端要一次最新資料再印，
+   確保「實行資料」跟「訓練場次檢視」印出來的都是當下實際已填的成績，不是舊快取。 */
 function printOjtSheet(src){
-    var r = (src && src.r) || EXROW || {};
+    var r = src.r || {};
     if (r.train_type==='external'){ alert('外訓不提供考核表'); return; }
-    var items = src ? (src.ojtItems||[]) : OJT_ITEMS;
+    var items = src.ojtItems||[];
     if (!items.length){ alert('請先建立至少一項考核項目並儲存'); return; }
-    var days = src ? (src.days||[]) : DAYS;
-    var attendees = src ? (src.attendees||[]) : ATT;
-    var list = attendees.length ? attendees.slice() : [];
+    var days = src.days||[];
+    var list = (src.attendees||[]).slice();
     if (!list.length){ alert('尚未加入參加人員，無法列印'); return; }
+    var scores = src.ojtScores||{};
     var course = r.course_name || '（課程名稱）';
     var lastDay = dispDate((days.length ? days[days.length-1].date : '') || r.done_date || '');
-    var assessor = (src ? src.assessor : $('#ojtAssessor').val()) || r.trainer || '';
-    var loc = src ? (r.location||'') : ($('#exLocSel option:selected').text() || r.location || '');
-    var itemRows = items.map(function(it,i){
-        return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content||'')+'</td>'
-             + '<td>'+esc(OJT_TYPES[it.item_type]||it.item_type)+'</td>'
-             + '<td></td><td style="white-space:nowrap;">☐合格　☐不合格</td><td></td></tr>';
-    }).join('');
+    var assessor = src.assessor || r.trainer || '';
+    var loc = r.location || '';
     var html = '';
     list.forEach(function(a, idx){
-        // 總體評核結果：已有 eval_result 就直接印出明確結論（粗體+色塊，不用 ☑/☐ 勾選框——那組符號在部分印表機/字型下
-        // 「已勾」「未勾」兩態幾乎印不出視覺差異，改印文字結論才不會讓人分不清楚）；還沒填的維持空白雙選框供現場手寫。
-        var scoreTxt = (a.eval_score!=null && a.eval_score!=='') ? '　總分：'+esc(numTrim(a.eval_score)) : '';
+        // 各考核細項：已有線上填的成績就直接印出（粗體色字，不用 ☑/☐——那組符號在部分字型下兩態視覺幾乎沒差異）；
+        // 沒資料的項目維持空白雙選框/空白分數欄供現場手寫。分數模式的項目不印合格/不合格勾選框（分數本身就是結果）。
+        var itemRows = items.map(function(it,i){
+            var sc = scores[ojtScoreKey(it.item_id, a.user_id)];
+            var scoreTxt = '', resultTxt = '☐合格　☐不合格';
+            if (it.score_mode==='score') {
+                resultTxt = '';
+                if (sc && sc.score!=null && sc.score!=='') scoreTxt = '<b style="color:#cf3a2b;">'+esc(numTrim(sc.score))+'</b>';
+            } else if (sc && sc.result==='pass') resultTxt = '<b style="color:#cf3a2b;">合格</b>';
+            else if (sc && sc.result==='fail') resultTxt = '<b style="color:#cf3a2b;">不合格</b>';
+            return '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content||'')+'</td>'
+                 + '<td>'+esc(OJT_TYPES[it.item_type]||it.item_type)+'</td>'
+                 + '<td>'+scoreTxt+'</td><td style="white-space:nowrap;">'+resultTxt+'</td><td></td></tr>';
+        }).join('');
+        // 總體評核結果：已有 eval_result 就直接印出明確結論；還沒填的維持空白雙選框供現場手寫。
+        var totalScoreTxt = (a.eval_score!=null && a.eval_score!=='') ? '　總分：'+esc(numTrim(a.eval_score)) : '';
         var resultLine;
-        if (a.eval_result==='pass') resultLine = '總體評核結果：<b style="color:#cf3a2b;">判定合格（已具備獨立作業能力）</b>'+scoreTxt;
-        else if (a.eval_result==='fail') resultLine = '總體評核結果：<b style="color:#cf3a2b;">需再進行補訓／複考</b>'+scoreTxt;
+        if (a.eval_result==='pass') resultLine = '總體評核結果：<b style="color:#cf3a2b;">判定合格（已具備獨立作業能力）</b>'+totalScoreTxt;
+        else if (a.eval_result==='fail') resultLine = '總體評核結果：<b style="color:#cf3a2b;">需再進行補訓／複考</b>'+totalScoreTxt;
         else if (a.eval_result==='exempt') resultLine = '總體評核結果：<b style="color:#cf3a2b;">列為免評鑑</b>';
         else resultLine = '總體評核結果：☐ 判定合格（已具備獨立作業能力）　☐ 需再進行補訓／複考';
         html += '<div class="pg"><table class="sf"><thead>'
@@ -2093,7 +2358,7 @@ function printOjtSheet(src){
             + '<div class="tt">考核表</div></div></th></tr>'
             + '<tr><td colspan="6" class="sf-i">課程名稱：'+esc(course)+'　　地點：'+esc(loc||'—')+'　　考核日期：'+esc(lastDay||'____.__.__')+'</td></tr>'
             + '<tr><td colspan="6" class="sf-i">受訓人員：'+esc(a.dept_name||'')+'　'+esc(a.position_name||'')+'　'+esc(a.user_name||'')
-            + '　　<b>☐ 未到考（未到考者以下免填）</b></td></tr>'
+            + '　　<b>'+(a.attended?'☐':'☑')+' 未到考（未到考者以下免填）</b></td></tr>'
             + '<tr><th style="width:32px;">項次</th><th>考核／口試重點</th><th style="width:76px;">方式</th>'
             + '<th style="width:50px;">分數</th><th style="width:150px;">評鑑結果</th><th style="width:100px;">備註</th></tr>'
             + '</thead><tbody>'+itemRows+'</tbody></table>'
@@ -2107,6 +2372,24 @@ function printOjtSheet(src){
         + 'table.sf td.sf-i{border:1px solid #999;padding:5px 8px;text-align:left;font-size:12.5px;background:#fff;}'
         + '.pg{margin-bottom:14px;page-break-inside:avoid;break-inside:avoid;}';
     egPrintWindow('考核表', html, css, '', false, true);
+}
+/* 「實行資料」modal 的列印考核表：先向後端要一次最新的考核項目/成績矩陣再印（不是印畫面上可能已經改過還沒存檔的暫存資料），
+   維持「開課前就能印空白表給講師手寫」的既有行為——沒人填過分數，itemRows 自然全部印成空白勾選框。 */
+function printOjtSheetFromEx(){
+    if (!EXROW) return;
+    if (EXROW.train_type==='external'){ alert('外訓不提供考核表'); return; }
+    var sid = EXROW.session_id;
+    $.getJSON(API, {action:'ojt_list', session_id:sid}, function(ires){
+        if (!ires.ok){ alert(ires.error||'載入失敗'); return; }
+        var items = (ires.items||[]).map(function(it){ return {item_id:+it.item_id, item_type:it.item_type,
+            score_mode:it.score_mode==='score'?'score':'pass_fail', content:it.content}; });
+        $.getJSON(API, {action:'ojt_score_list', session_id:sid}, function(sres){
+            var scores = {};
+            if (sres.ok) (sres.scores||[]).forEach(function(s){ scores[ojtScoreKey(s.item_id,s.user_id)] = {score:s.score, result:s.result}; });
+            printOjtSheet({r:EXROW, days:DAYS, attendees:ATT, ojtItems:items,
+                assessor:$('#ojtAssessor').val()||ires.assessor_name||EXROW.trainer||'', ojtScores:scores});
+        });
+    });
 }
 function loadAttach(sid){
     FILES = []; renderAttach();
@@ -2191,32 +2474,44 @@ function submitEd(){
 
 /* 確認實行：寫開課日期/時段/地點/實際時數＋參加名單
    markDone=0 → 已排定（確定開課，可印簽到表）；markDone=1 → 已完成（計入 KPI） */
+/* 登錄完成前先在前端擋一次「至少一人簽到」（後端 save_execution 是最終防線，同一規則雙保險）；
+   送出順序改成先 save_attendees 再 save_execution，這樣 save_execution 裡「用簽到覆蓋實到／檢查至少一人簽到」
+   看到的才是這次送出的最新名單，不是上一次存檔時的舊資料。 */
 function submitEx(markDone){
     var sid = $('#exMask').data('sid');
     if (!DAYS.length){ alert('請至少設定一天上課日期'); return; }
     if (!dayValidate()){ alert('上課日期有錯誤，請先修正：\n'+DAY_ERR); return; }
     if (!ATT.length && !confirm('尚未加入任何參加人員，仍要儲存？')) return;
-    if (markDone && !confirm('確定此場訓練已上完課？登錄完成後將計入當月教育訓練達成率。')) return;
-    if (markDone && $('#exEvalMethod').val()!=='notice'){
-        var noEval = ATT.filter(function(a){ return a.attended && !a.eval_result; }).length;
-        if (noEval && !confirm('還有 '+noEval+' 位實到人員沒有填評鑑結果（合格／不合格），仍要登錄完成？')) return;
+    if (markDone && !ATT.some(function(a){ return a.signed; })){
+        alert('登錄完成前，至少需要一位參加人員完成簽到（線上或紙本皆可，請至「參加人員」名單的「簽名」欄登記）。');
+        return;
     }
-    $.post(API, {action:'save_execution', session_id:sid, location:$('#exLocSel').val(),
-        shift_type_id:$('#exShift').val(), outline:$('#exOutline').val(),
-        eval_method:$('#exEvalMethod').val(), temp_att_ids:TEMP_ATT.join(','),
-        days:JSON.stringify(DAYS.map(function(d){
-            return {day_date:d.date, start_time:d.start, end_time:d.end,
-                    break_minutes:(d.brk===''||d.brk==null)?0:d.brk, hours:d.hours}; })),
-        mark_done:markDone?1:0},
-    function(res){
-        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        var evMsg = res.events>0 ? '已同步 '+res.events+' 筆行事曆事件。'
-                                 : '（未寫入行事曆：請於「模組設定」綁定行事曆類別）';
-        $.post(API, {action:'save_attendees', session_id:sid, attendees:JSON.stringify(ATT)}, function(r2){
-            if (!r2.ok){ alert('實行紀錄已存，但名單儲存失敗：'+(r2.error||'')); }
+    if (markDone && !confirm('確定此場訓練已上完課？登錄完成後將計入當月教育訓練達成率，未簽到的人員會自動視為未到。')) return;
+    if (markDone && $('#exEvalMethod').val()!=='notice'){
+        var noEval = ATT.filter(function(a){ return a.signed && !a.eval_result; }).length;
+        if (noEval && !confirm('還有 '+noEval+' 位已簽到人員沒有填評鑑結果（合格／不合格），仍要登錄完成？')) return;
+    }
+    $.post(API, {action:'save_attendees', session_id:sid, attendees:JSON.stringify(ATT), unlock_password:EX_UNLOCK_PWD}, function(r1){
+        if (!r1.ok){ alert('名單儲存失敗：'+(r1.error||'')); return; }
+        $.post(API, {action:'save_execution', session_id:sid, location:$('#exLocSel').val(),
+            shift_type_id:$('#exShift').val(), outline:$('#exOutline').val(),
+            eval_method:$('#exEvalMethod').val(), temp_att_ids:TEMP_ATT.join(','), unlock_password:EX_UNLOCK_PWD,
+            days:JSON.stringify(DAYS.map(function(d){
+                return {day_date:d.date, start_time:d.start, end_time:d.end,
+                        break_minutes:(d.brk===''||d.brk==null)?0:d.brk, hours:d.hours}; })),
+            mark_done:markDone?1:0},
+        function(res){
+            if (!res.ok){ alert('名單已存，但實行資料儲存失敗：'+(res.error||'')); return; }
+            var evMsg = res.events>0 ? '已同步 '+res.events+' 筆行事曆事件。'
+                                     : '（未寫入行事曆：請於「模組設定」綁定行事曆類別）';
             closeMask('exMask'); loadList(); alert('已儲存。'+evMsg);
-        }, 'json').fail(function(){ closeMask('exMask'); loadList(); });
-    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+            // 登錄完成、內訓、非免評鑑、已有考核項目、成績尚未送出 → 順手提示直接去填成績（當下不填也能事後從「實行紀錄」回來填）
+            if (markDone && EXROW && EXROW.train_type!=='external' && $('#exEvalMethod').val()!=='notice'
+                && OJT_ITEMS.length && !OJT_SCORES_LOCKED && confirm('是否現在直接填寫考核成績？（不填也可以之後從「實行紀錄」的「填寫/送出考核成績」按鈕回來繼續）')) {
+                openOjtScoreModal();
+            }
+        }, 'json').fail(function(x){ alert('實行資料儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    }, 'json').fail(function(x){ alert('名單儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 /* ---------- 固定班別（與輪值排班共用 shift_type）＋模組設定 ---------- */
 var SHIFTS = [], SETTINGS = {}, CATS = [], CAT_EFF = {internal:null, external:null};
@@ -2416,17 +2711,22 @@ function locDel(locId){
 }
 
 /* 退回計畫中（實行 modal 內） */
+/* 退回計畫中＝解鎖計畫（已排定/已完成→計畫中），屬於「解鎖已鎖定資料」，一律要操作確認密碼；
+   跟「恢復計畫」（取消→計畫中，setStatus 不帶密碼那個分支）是不同語意，不要混在一起。 */
 function revertPlanned(){
     if (!confirm('退回為「計畫中」？開課日期將清空、已同步的行事曆事件會一併撤除（時段/地點/休息/名單保留），此場次不再計入當月完成數。')) return;
-    setStatus($('#exMask').data('sid'), 'planned', true);
+    var sid = $('#exMask').data('sid');
+    askSuperPwd('退回計畫中需要操作確認密碼：', function(pwd){
+        setStatus(sid, 'planned', true, pwd);
+    });
 }
-/* 狀態切換：取消計畫 / 恢復計畫 / 退回計畫中 */
-function setStatus(sid, status, fromEx){
+/* 狀態切換：取消計畫 / 恢復計畫 / 退回計畫中（password 選用，只有從已排定/已完成退回計畫中才需要，後端會判斷） */
+function setStatus(sid, status, fromEx, password){
     if (!fromEx){
         var msg = status==='cancelled' ? '取消此訓練計畫？（取消的場次不計入 KPI 分母）' : '恢復為「計畫中」？';
         if (!confirm(msg)) return;
     }
-    $.post(API, {action:'set_status', session_id:sid, status:status}, function(res){
+    $.post(API, {action:'set_status', session_id:sid, status:status, password:password||''}, function(res){
         if (!res.ok){ alert(res.error||'狀態變更失敗'); return; }
         closeMask('exMask'); loadList();
     }, 'json').fail(function(x){ alert('狀態變更失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
@@ -2740,8 +3040,9 @@ function openView(sid){
         if (!res.ok){ $('#viewBody').html('<span style="color:#DD5138;">'+esc(res.error||'載入失敗')+'</span>'); return; }
         VIEW_RES = res;
         var s=res.session, ext=s.train_type==='external';
-        // 外訓或免評鑑(宣導)課程都不提供考核表，比照「實行資料」modal 的 applyEvalMethod() 同一套判斷
-        $('#viewOjtBtn').toggle(!ext && s.eval_method!=='notice');
+        // 外訓或免評鑑(宣導)課程都不提供考核表，比照「實行資料」modal 的 applyEvalMethod() 同一套判斷；
+        // 另外「檢視」是唯讀場次，要等考核成績正式送出鎖定後才顯示列印考核表——「實行資料」modal 那顆不受此限，開課前就能印空白表給講師手寫
+        $('#viewOjtBtn').toggle(!ext && s.eval_method!=='notice' && !!(res.ojt_score_summary && res.ojt_score_summary.scores_submitted_at));
         $('#viewBody').html('<div class="ex-plan"><div><b>'+esc(s.course_name)+'</b> '+statPill(s.status)+'</div>'
             +'<div>計畫：'+s.year+' 年 '+s.plan_month+' 月　類型：'+(ext?'外訓':'內訓')
             +'　計畫時數：'+(s.hours==null?'—':numTrim(s.hours))+'　開課日：'+(dispDate(s.done_date)||'—')+'</div></div>'
@@ -2763,7 +3064,14 @@ function printViewSignSheet(){
 }
 function printViewOjtSheet(){
     if (!VIEW_RES){ alert('資料尚未載入完成'); return; }
-    printOjtSheet(viewPrintSrc());
+    var sid = VIEW_RES.session.session_id;
+    $.getJSON(API, {action:'ojt_score_list', session_id:sid}, function(res){
+        var scores = {};
+        if (res.ok) (res.scores||[]).forEach(function(s){ scores[ojtScoreKey(s.item_id,s.user_id)] = {score:s.score, result:s.result}; });
+        var src = viewPrintSrc();
+        src.ojtScores = scores;
+        printOjtSheet(src);
+    });
 }
 
 /* ---------- 現場簽到（免 training_edit 權限；後端 checkin_meta/sign_attendee 已在 $publicActions 白名單） ----------
