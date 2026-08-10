@@ -131,11 +131,10 @@ case 'list': {
     foreach ($rows as $m) {
         if (!meeting_can_view($db, $uid, $perms, $m)) continue;
         $ap = meeting_approval_status($db, (int)$m['meeting_id']);
-        // 「回簽中」(2026-08-10使用者明確要求新增)：存檔並通知後、負責人尚未全部回覆確認前，狀態顯示改成
-        // 回簽中(不是草稿)，且鎖定不可編輯，避免記錄人趁對方還在回覆時把內容改掉。
-        $notifying = in_array($ap['status'], ['draft','rejected'], true) && meeting_has_active_item_notices($db, (int)$m['meeting_id']);
-        $m['approval_status'] = $notifying ? 'notifying' : $ap['status'];
-        $m['notifying'] = $notifying;
+        // 「回簽中」/「待送簽核」(2026-08-10使用者明確要求)：draft/rejected 階段再細分子狀態，
+        // 避免存檔並通知中、跟全部確認完成待送簽核、跟什麼都還沒做的新草稿，在畫面上長得一模一樣。
+        $m['approval_status'] = meeting_display_status($db, $m);
+        $m['notifying'] = $m['approval_status'] === 'notifying';
         $m['is_mine'] = (int)$m['recorder_user_id'] === $uid;
         $out[] = $m;
     }
@@ -147,12 +146,11 @@ case 'get_detail': {
     $m = meeting_load($db, $id);
     if (!meeting_can_view($db, $uid, $perms, $m)) jerr('無權檢視此會議記錄', 403);
     $ap = meeting_approval_status($db, $id);
-    $notifying = in_array($ap['status'], ['draft','rejected'], true) && meeting_has_active_item_notices($db, $id);
-    $m['approval_status'] = $notifying ? 'notifying' : $ap['status'];
-    $m['notifying'] = $notifying;
+    $m['approval_status'] = meeting_display_status($db, $m);
+    $m['notifying'] = $m['approval_status'] === 'notifying';
     $m['chair_approval'] = $ap['chair'];
     $m['gm_approval'] = $ap['gm'];
-    $m['can_edit'] = ((int)$m['recorder_user_id'] === $uid || $perms['canAdmin']) && in_array($m['status'], ['draft','rejected'], true) && !$notifying;
+    $m['can_edit'] = ((int)$m['recorder_user_id'] === $uid || $perms['canAdmin']) && in_array($m['status'], ['draft','rejected'], true) && !$m['notifying'];
     // 解出「目前實際該簽的人」(含代理)，前端才能正確顯示簽核按鈕給代理人看，不只給原本的主席/總經理
     $m['chair_signer_id'] = $m['chair_user_id'] ? meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name'])['id'] : null;
     $gmSigner = meeting_gm_signer_effective($db);
