@@ -147,6 +147,7 @@ foreach ($roleRows as $rr) {
         .st-pill { display:inline-block; font-size:12px; border-radius:10px; padding:2px 9px; }
         .st-draft { background:#efe7d8; color:#7a6d5a; }
         .st-notifying { background:#F0C987; color:#5C3D00; }
+        .st-ready { background:#E8B77A; color:#4d2f10; font-weight:bold; }
         .st-submitted { background:#F2C86D; color:#5C3D00; font-weight:bold; }
         .st-chair_done { background:#E8B77A; color:#4d2f10; font-weight:bold; }
         .st-done { background:#F0A24B; color:#fff; }
@@ -492,7 +493,7 @@ $(document).ready(function(){
 var API = '../../src/store/Meeting_API.php';
 var META = null, PERMS = null, DEPTS = [], ALL_PEOPLE = [];
 var MEETINGS = [];
-var STATUS_LABEL = {draft:'草稿', notifying:'回簽中', submitted:'待主席簽章', chair_done:'待總經理簽章', done:'已完成', rejected:'已退回'};
+var STATUS_LABEL = {draft:'草稿', notifying:'回簽中', ready:'待送簽核', submitted:'待主席簽章', chair_done:'待總經理簽章', done:'已完成', rejected:'已退回'};
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtDate(d){ return d ? String(d).substr(0,10) : ''; }
@@ -615,9 +616,10 @@ function renderList(){
            + '<td><span class="st-pill st-'+m.approval_status+'">'+(STATUS_LABEL[m.approval_status]||m.approval_status)+'</span></td>'
            + '<td><div class="mt-op-wrap">'
            + '<span class="mt-op" onclick="openView('+m.meeting_id+')"><i class="fa fa-search-plus"></i> 檢視</span>';
-        var canEditRow = (m.is_mine || PERMS.canAdmin) && (m.approval_status==='draft' || m.approval_status==='rejected');
+        var isDraftLike = m.approval_status==='draft' || m.approval_status==='rejected' || m.approval_status==='ready';
+        var canEditRow = (m.is_mine || PERMS.canAdmin) && isDraftLike;
         if (canEditRow) h += '<span class="mt-op" onclick="openEdit('+m.meeting_id+')"><i class="fa fa-pencil"></i> 編輯</span>';
-        if (m.approval_status==='draft' && (m.is_mine || PERMS.canAdmin))
+        if ((m.approval_status==='draft' || m.approval_status==='ready') && (m.is_mine || PERMS.canAdmin))
             h += '<span class="mt-op" style="color:#DD5138;" onclick="deleteMeeting('+m.meeting_id+')"><i class="fa fa-trash"></i> 刪除</span>';
         h += '</div></td></tr>';
     });
