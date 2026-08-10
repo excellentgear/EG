@@ -29,19 +29,19 @@ $filename = preg_replace('/[\\\\\/:\*\?"<>\|]/', '_', $filename);
 // /nas/xxx          → \\excellentnas\生產課\BOM\xxx
 // /nas/ERP/xxx      → \\excellentnas\生產課\BOM\ERP\xxx
 $relativePath = substr($path, strlen('/nas/')); // 去掉 /nas/ 前綴
-$relativePath = urldecode($relativePath);       // 解 URL 編碼（中文）
+// 注意：不能用 urldecode()——它會把檔名裡「原本就是字面上的 +」（如 B-xxx++.jpg 這種
+// 加工圖變體命名）誤當成空白解碼掉，變成 B-xxx  .jpg 而 404（此 bug 存在已久，另存新檔
+// 就踩過；rawurldecode() 只解 %XX，不動字面 + 字元，ERP 子路徑的中文 %E8...仍能正常解出）
+$relativePath = rawurldecode($relativePath);    // 解 URL 編碼（中文），保留字面 + 不誤轉空白
 
 // 實體讀取一律走 UNC 路徑，不用 Z: 磁碟機代號——Z: 是使用者session層級的持續連線，
 // 曾實測 `net use` 顯示狀態「無法使用」（連線失效/需重新協商），造成圖面查閱時好時壞的慢；
 // UNC 路徑（Z: 實際指向的位置）不吃這個持續連線，跟料號附件走的 part_attach_nas_dir 是同一種穩定做法。
 $physPath_utf8 = '\\\\excellentnas\\生產課\\BOM\\' . $relativePath;
 
-// Windows 下 PHP 的 file_exists / readfile 需 Big5/系統編碼
-if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-    $physPath = mb_convert_encoding($physPath_utf8, 'Big5', 'UTF-8');
-} else {
-    $physPath = $physPath_utf8;
-}
+// 注意：UNC 路徑不能轉 Big5——實測 Z: 磁碟機代號轉不轉 Big5 都讀得到（新舊都可），
+// 但 UNC 路徑轉 Big5 後中文檔名（如「作廢」）file_exists 一律失敗，維持 UTF-8 才對。
+$physPath = $physPath_utf8;
 
 if (!file_exists($physPath) || is_dir($physPath)) {
     header('HTTP/1.1 404 Not Found');

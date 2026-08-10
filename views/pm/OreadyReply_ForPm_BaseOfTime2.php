@@ -14924,6 +14924,7 @@ echo "</script>\n";
                                             </div>
                                             <!-- New button for searching completed BOMs -->
                                             <a><input type="button" id="btn-search-completed" class="btn btn-xs btn-info" value="查詢已完工" style="margin-left: 5px;"></a>
+                                            <a><input type="button" id="btn-search-completed-full" class="btn btn-xs btn-default" value="完整查詢(新分頁)" style="margin-left: 5px;" title="開新分頁查詢已完工資料，無筆數上限，含篩選/列印/匯出" onclick="window.open('OreadyReply_completed_query.php','_blank')"></a>
                                             <a><input type="button" id="btn-op-log" class="btn btn-xs btn-default" value="操作紀錄" style="margin-left: 5px;" title="查看BOM操作流水帳"></a>
                                             <?php if ($can_create): ?>
                                             <a><input type="button" id="btn-create-bom" class="btn btn-xs btn-success" value="新增BOM" style="margin-left: 5px;"></a>
