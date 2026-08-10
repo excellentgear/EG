@@ -677,7 +677,6 @@ a.docchip.has-online:hover i { color:#fff; }
 
 /* ── 預覽跳窗 ── */
 #pvMask .box { max-width:1180px; width:94vw; padding:0; }
-#aiCheckMask .box { max-width:1300px; width:94vw; }
 .pv-head { background:#F7E0BD; border-radius:8px 8px 0 0; padding:10px 16px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .pv-head h4 { margin:0; border:none; font-size:16px; color:#7A4E17; }
 .pv-head .pv-meta { font-size:12px; color:#8A6D45; }
@@ -812,7 +811,12 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       </select>
       <input type="text" id="issKw" placeholder="搜尋文件編號／問題內容…">
       <button id="btnIssClear"><i class="fa fa-eraser"></i> 清除</button>
-      <button id="btnAiCheckDoc" class="btn-warm"><i class="fa fa-search"></i> AI檢查檔案<?= $AI_CHECK_REPORTS ? ' (' . count($AI_CHECK_REPORTS) . ')' : '' ?></button>
+      <?php if ($AI_CHECK_REPORTS): ?>
+        <a class="btnlink btn-warm" target="_blank" rel="noopener" href="?ai_report=<?= urlencode($AI_CHECK_REPORTS[0]['name']) ?>">
+          <i class="fa fa-external-link"></i> AI檢查檔案（另開整頁，較寬方便看表格）</a>
+      <?php else: ?>
+        <button disabled title="尚無 AI 檢查紀錄"><i class="fa fa-search"></i> AI檢查檔案</button>
+      <?php endif; ?>
       <span class="fg-file">共 <span id="issCount"><?= count($ISSUES) ?></span> 筆</span>
     </div>
 
@@ -1043,25 +1047,6 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
        本頁以唯讀說明為主，僅「表單正確」／「資料齊全」點檢按鈕會寫入資料（沿用同一權限；取消確認另限原確認人或管理者）。</p>
   </div>
   <div style="text-align:right;margin-top:10px;"><button class="btn btn-sm btn-default" onclick="document.getElementById('helpUseMask').style.display='none'">關閉</button></div>
-</div></div>
-
-<!-- AI 檢查檔案跳窗（待處理問題分頁「AI檢查檔案」鈕） -->
-<div class="fg-mask" id="aiCheckMask"><div class="box">
-  <h4><i class="fa fa-search"></i> AI 檢查檔案</h4>
-  <?php if (!$AI_CHECK_REPORTS): ?>
-    <p style="color:#8A6D45;">目前尚無 AI 檢查紀錄。AI 核對「已修改」資料夾內的文件後，會在此資料夾產生檢查報告檔並顯示於此。</p>
-  <?php else: foreach ($AI_CHECK_REPORTS as $rep): ?>
-    <div style="margin-bottom:18px;">
-      <div style="font-size:12px;color:#8A6D45;margin-bottom:4px;display:flex;align-items:center;gap:10px;">
-        <span><i class="fa fa-file-text-o"></i> <?= htmlspecialchars($rep['name']) ?>（檔案時間 <?= $rep['time'] ?>）</span>
-        <a class="btnlink" target="_blank" rel="noopener" href="?ai_report=<?= urlencode($rep['name']) ?>"
-           style="height:24px;line-height:22px;font-size:12px;padding:0 10px;"><i class="fa fa-external-link"></i> 另開整頁（較寬，方便看表格）</a>
-      </div>
-      <div class="md-body"><?= $rep['html'] ?></div>
-    </div>
-    <hr class="md-hr">
-  <?php endforeach; endif; ?>
-  <div style="text-align:right;margin-top:10px;"><button class="btn btn-sm btn-default" onclick="document.getElementById('aiCheckMask').style.display='none'">關閉</button></div>
 </div></div>
 
 <!-- 文件／表單 線上預覽跳窗 -->
@@ -1306,7 +1291,6 @@ $(document).ready(function () {
 
     $('#btnRoleHelp').on('click', function () { $('#roleMask').show(); });
     $('#btnPageHelp').on('click', function () { $('#helpUseMask').show(); });
-    $('#btnAiCheckDoc').on('click', function () { $('#aiCheckMask').show(); });
     $('.fg-mask').on('click', function (e) { if (e.target === this) { this.style.display = 'none'; } });
 
     $(window).on('scroll', function () { $('#fgTop').toggle($(window).scrollTop() > 250); });
