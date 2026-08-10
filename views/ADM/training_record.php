@@ -925,6 +925,8 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <!-- 圖章模板設計器渲染引擎：沒掃描實體章時，模組設定選的「簽名圖章樣式」要靠這支才畫得出來（漏載會靜默退回泛用SVG章） -->
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
+<!-- 西元年日期顯示格式（YYYY.MM.DD）：畫面/列印顯示用，不影響 <input type=date> 與送後端的查詢值，唯一實作見 ai-rules/20 -->
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -977,7 +979,8 @@ function closeMask(id){ document.getElementById(id).style.display='none'; }
 function openMask(id){ document.getElementById(id).style.display='block'; }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
-function fmtDate(d){ return d ? String(d).substr(0,10) : ''; }
+function fmtDate(d){ return d ? String(d).substr(0,10) : ''; }   // 內部用（Y-m-d 原始值）：<input type=date>、日期加減、簽到日對照鍵…不可改動格式
+function dispDate(d, withTime){ return d ? egFmtDate(d, withTime) : ''; }   // 顯示用（YYYY.MM.DD）：畫面文字/列印文件/圖章日期，唯一實作見 ai-rules/20
 function numTrim(v){ if (v==null||v==='') return ''; var n=parseFloat(v); return (Math.round(n*10)/10)+''; }
 
 function loadMeta(cb){
@@ -1059,8 +1062,8 @@ function statPill(s){ return '<span class="st-pill st-'+s+'">'+(STATUS_LABEL[s]|
 /* 清單「開課日期」欄：多天課程顯示範圍與天數；計畫中/取消不顯示（尚未確認開課） */
 function dateRangeText(r){
     if (r.status==='planned' || r.status==='cancelled') return '—';
-    var ds = (r.days||[]).map(function(d){ return fmtDate(d.day_date); }).filter(Boolean).sort();
-    if (!ds.length) return fmtDate(r.done_date) || '—';
+    var ds = (r.days||[]).map(function(d){ return dispDate(d.day_date); }).filter(Boolean).sort();
+    if (!ds.length) return dispDate(r.done_date) || '—';
     if (ds.length===1) return ds[0];
     var t = ds[0]+' ~ '+ds[ds.length-1].substr(5)+'<br><span style="font-size:11px;color:#8a6d45;">共 '+ds.length+' 天</span>';
     return '<span title="'+ds.join('、')+'">'+t+'</span>';
@@ -1166,7 +1169,7 @@ function detailHtml(res){
     if (res.days && res.days.length){
         h+='<h5>上課日期</h5><table><tr><th>第</th><th>日期</th><th>時間</th><th>休息(分)</th><th>時數</th></tr>';
         res.days.forEach(function(d){
-            h+='<tr><td>'+d.day_no+'</td><td>'+fmtDate(d.day_date)+'</td><td>'+esc((d.start_time||'')+(d.end_time?'~'+d.end_time:''))
+            h+='<tr><td>'+d.day_no+'</td><td>'+dispDate(d.day_date)+'</td><td>'+esc((d.start_time||'')+(d.end_time?'~'+d.end_time:''))
              +'</td><td>'+(d.break_minutes||0)+'</td><td>'+(d.hours==null?'':numTrim(d.hours))+'</td></tr>';
         });
         h+='</table>';
@@ -1755,7 +1758,7 @@ function renderPlanStatus(){
         txt += '（' + (r && r.approver_name ? r.approver_name : '') + '：' + ((r && r.note) || '') + '）';
     } else if (s==='approved'){
         var a = PLAN_APPR.approve || {};
-        txt += '（' + (a.approver_name||'') + '　' + String(a.decided_at||'').substr(0,10) + '）';
+        txt += '（' + (a.approver_name||'') + '　' + dispDate(a.decided_at) + '）';
     }
     $('#planStat').html('<span style="color:'+(s==='rejected'?'#DD5138':(s==='approved'?'#7a5217':'#8a6d45'))+';">'+esc(txt)+'</span>');
     if (PERMS && PERMS.canEdit) {
@@ -2054,7 +2057,7 @@ function printOjtSheet(){
     var list = ATT.length ? ATT.slice() : [];
     if (!list.length){ alert('尚未加入參加人員，無法列印'); return; }
     var course = r.course_name || '（課程名稱）';
-    var lastDay = (DAYS.length ? DAYS[DAYS.length-1].date : '') || fmtDate(r.done_date) || '';
+    var lastDay = dispDate((DAYS.length ? DAYS[DAYS.length-1].date : '') || r.done_date || '');
     var assessor = $('#ojtAssessor').val() || r.trainer || '';
     var loc = $('#exLocSel option:selected').text() || r.location || '';
     var itemRows = OJT_ITEMS.map(function(it,i){
@@ -2067,7 +2070,7 @@ function printOjtSheet(){
         html += '<div class="pg"><table class="sf"><thead>'
             + '<tr><th colspan="6" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
             + '<div class="tt">考核表</div></div></th></tr>'
-            + '<tr><td colspan="6" class="sf-i">課程名稱：'+esc(course)+'　　地點：'+esc(loc||'—')+'　　考核日期：'+esc(lastDay||'____-__-__')+'</td></tr>'
+            + '<tr><td colspan="6" class="sf-i">課程名稱：'+esc(course)+'　　地點：'+esc(loc||'—')+'　　考核日期：'+esc(lastDay||'____.__.__')+'</td></tr>'
             + '<tr><td colspan="6" class="sf-i">受訓人員：'+esc(a.dept_name||'')+'　'+esc(a.position_name||'')+'　'+esc(a.user_name||'')
             + '　　<b>☐ 未到考（未到考者以下免填）</b></td></tr>'
             + '<tr><th style="width:32px;">項次</th><th>考核／口試重點</th><th style="width:76px;">方式</th>'
@@ -2098,7 +2101,7 @@ function renderAttach(){
           +'<td class="t-left"><a href="'+API+'?action=download_attach&att_id='+f.att_id+'" target="_blank" style="color:#b5762a;">'
           +'<i class="fa fa-paperclip"></i> '+esc(f.original_name||f.file_name)+'</a></td>'
           +'<td>'+fmtSize(f.file_size)+'</td><td>'+esc(f.user_name||'')+'</td>'
-          +'<td>'+esc(String(f.created_at||'').substr(0,16))+'</td>'
+          +'<td>'+esc(dispDate(f.created_at, true))+'</td>'
           +'<td>'+(PERMS && PERMS.canEdit ? '<span class="att-del" onclick="attachDel('+f.att_id+')" title="刪除附件"><i class="fa fa-times"></i></span>' : '')+'</td></tr>';
     });
     $('#atBody').html(h||'<tr><td colspan="6" style="color:#8a6d45;padding:8px;">尚未上傳附件</td></tr>');
@@ -2434,7 +2437,7 @@ function printSignSheet(blankOnly){
     var outline=$.trim($('#exOutline').val()||'');
     // 多天課程：每個表頭都附一行「全部上課日期」，方便第 3 天才簽的人也看得到整體排程；
     // 天數不多(≤6)逐一列出、換行不了就用頓號分隔；太多天(>6)改用「首~末（共N天）」範圍格式，避免那一行印成一長串。
-    var allDates = ds.map(function(d){ return d.date||'?'; });
+    var allDates = ds.map(function(d){ return dispDate(d.date)||'?'; });
     var allDatesLine = ds.length<=1 ? '' : (ds.length<=6
         ? '全部上課日期：'+allDates.join('、')
         : '全部上課日期：'+allDates[0]+' ~ '+allDates[allDates.length-1]+'（共 '+ds.length+' 天）');
@@ -2442,14 +2445,14 @@ function printSignSheet(blankOnly){
     ds.forEach(function(d, di){
         var tm=(d.start||'')+(d.end?'~'+d.end:'');
         var hh=d.hours||'';
-        var when='日期：'+(d.date||'____-__-__')+(tm?'　'+tm:'')+'　時數：'+(hh||'__')+' 小時';
+        var when='日期：'+(dispDate(d.date)||'____.__.__')+(tm?'　'+tm:'')+'　時數：'+(hh||'__')+' 小時';
         var rows='';
         list.forEach(function(a,i){
             // 評鑑結果一律印成空白勾選框讓現場圈選（紙本才是正本；線上已填的另有系統紀錄）；宣導(免評鑑)課程直接印「不須評鑑」不留勾選框
             // 簽名欄：該天現場密碼簽到過的人印出簽到章(章上日期＝該堂課的上課日，不是按鈕按下當下的日期)；還沒簽到的人維持空白供紙本簽名
             var daySigned = a.user_id!=null && d.date && DAY_SIGNS[a.user_id+'_'+d.date];
             rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
-                +'<td style="width:130px;">'+(daySigned?egStampHtml(a.user_name, fmtDate(d.date)):'')+'</td>'
+                +'<td style="width:130px;">'+(daySigned?egStampHtml(a.user_name, dispDate(d.date), false, a.dept_name):'')+'</td>'
                 +'<td style="width:112px;white-space:nowrap;">'+(noticeCourse?'不須評鑑':'☐ 合格　☐ 不合格')+'</td>'
                 +'<td style="width:120px;"></td></tr>';
         });
@@ -2478,7 +2481,7 @@ function printSignSheet(blankOnly){
         +'table.sf .stamp-wrap{height:90%;display:inline-flex;align-items:center;margin:0;}table.sf .stamp-wrap svg,table.sf svg.car-stamp{height:100%;width:auto;}'
         +'.pgbrk{page-break-before:always;}';
     // 人數多會跨頁，用 pageCount 模式（真頁碼＋表頭自動重印每一頁）
-    egPrintWindow(docTitle, html, css, DOC_NO.signsheet, false, true);
+    egPrintWindow(docTitle, html, css, (EXROW&&EXROW.as_doc_signsheet_no)||DOC_NO.signsheet, false, true);
 }
 /* 刪除：兩次都要輸入大寫 Y 才執行（連同上課日、參加名單、附件實體檔一起刪，無法復原） */
 /* ================= 列印（依 ai-rules/16：大標題＝公司全名、頁碼左下、AS文件編號右下） ================= */
@@ -2533,9 +2536,9 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount){
 function trStampSchema(){ return SETTINGS.stamp_template ? SETTINGS.stamp_template.schema : null; }
 /* 產生一顆簽章圖章（走共用 eg_stamp.js；載不到時退回姓名文字，至少不會整格空白）；
    有上傳掃描實體章的人一律優先用掃描章，trStampSchema() 只影響沒掃描章時自動產生的印章樣式。 */
-function egStampHtml(name, date, isDeputy){
+function egStampHtml(name, date, isDeputy, dept){
     try {
-        if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, date || '', !!isDeputy, trStampSchema());
+        if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, date || '', !!isDeputy, trStampSchema(), dept);
     } catch (e) {}
     return '<span style="font-size:14px;">'+esc(name)+'</span>'
          + (date ? '<div style="font-size:10px;color:#555;">'+esc(date)+'</div>' : '');
@@ -2567,7 +2570,7 @@ function signRowHtml(){
     }
     // 簽章一律蓋「圖章」（有上傳掃描章的人自動用實體章，其餘用共用回墨印 SVG），不是印姓名文字
     var cell = function(lb, nm){
-        var st = nm ? egStampHtml(nm, dt) : '';
+        var st = nm ? egStampHtml(nm, dispDate(dt)) : '';
         return '<td><div class="lb">'+lb+'</div><div class="stamp-box">'+st+'</div></td>';
     };
     return '<table class="pt-sign"><tr>'+cell('核准', appr)+cell('審核', rev)+cell('人事', hr)+'</tr></table>';
@@ -2644,7 +2647,7 @@ function printResultTable(){
          + '<th>實到</th><th>評鑑方式</th><th>評鑑結果</th></tr></thead><tbody>';
     if (!rows.length) body += '<tr><td colspan="12" style="height:24px;">（本年度尚無已完成的訓練）</td></tr>';
     rows.forEach(function(r,i){
-        var ds=(r.days||[]).map(function(d){ return fmtDate(d.day_date); }).filter(Boolean).sort();
+        var ds=(r.days||[]).map(function(d){ return dispDate(d.day_date); }).filter(Boolean).sort();
         var e=r.eval||{}, ev=[];
         if (r.eval_method==='notice') ev.push('免評鑑');
         else { if(e.pass) ev.push('合格 '+e.pass); if(e.fail) ev.push('不合格 '+e.fail);
@@ -2653,7 +2656,7 @@ function printResultTable(){
              + '<td class="l">'+esc(r.dept_name||'全公司')+'</td>'
              + '<td>'+(r.train_type==='external'?'外訓':'內訓')+'</td>'
              + '<td class="l">'+esc((r.train_type==='external'?r.org_unit:r.trainer)||'')+'</td>'
-             + '<td style="font-size:11px;">'+esc(ds.length?(ds[0]+(ds.length>1?'~'+ds[ds.length-1].substr(5):'')):fmtDate(r.done_date))+'</td>'
+             + '<td style="font-size:11px;">'+esc(ds.length?(ds[0]+(ds.length>1?'~'+ds[ds.length-1].substr(5):'')):dispDate(r.done_date))+'</td>'
              + '<td>'+(r.actual_hours==null?'':numTrim(r.actual_hours))+'</td>'
              + '<td>'+(r.target_headcount==null?'':r.target_headcount)+'</td>'
              + '<td>'+(r.actual_headcount==null?'':r.actual_headcount)+'</td>'
@@ -2693,7 +2696,7 @@ function openView(sid){
         var s=res.session, ext=s.train_type==='external';
         $('#viewBody').html('<div class="ex-plan"><div><b>'+esc(s.course_name)+'</b> '+statPill(s.status)+'</div>'
             +'<div>計畫：'+s.year+' 年 '+s.plan_month+' 月　類型：'+(ext?'外訓':'內訓')
-            +'　計畫時數：'+(s.hours==null?'—':numTrim(s.hours))+'　開課日：'+(fmtDate(s.done_date)||'—')+'</div></div>'
+            +'　計畫時數：'+(s.hours==null?'—':numTrim(s.hours))+'　開課日：'+(dispDate(s.done_date)||'—')+'</div></div>'
             + detailHtml(res));
     }).fail(function(){ $('#viewBody').html('<span style="color:#DD5138;">載入失敗</span>'); });
 }
@@ -2710,7 +2713,7 @@ function printRecord(){
     var outline = $.trim(s.outline||'');
     var ds = (res.days&&res.days.length) ? res.days
         : [{day_date:s.done_date||'', start_time:s.start_time||'', end_time:s.end_time||'', hours:s.actual_hours}];
-    var allDates = ds.map(function(d){ return fmtDate(d.day_date)||'?'; });
+    var allDates = ds.map(function(d){ return dispDate(d.day_date)||'?'; });
     var allDatesLine = ds.length<=1 ? '' : (ds.length<=6
         ? '全部上課日期：'+allDates.join('、')
         : '全部上課日期：'+allDates[0]+' ~ '+allDates[allDates.length-1]+'（共 '+ds.length+' 天）');
@@ -2720,14 +2723,14 @@ function printRecord(){
     ds.forEach(function(d, di){
         var tm=(d.start_time||'')+(d.end_time?'~'+d.end_time:'');
         var hh=(d.hours==null?'':numTrim(d.hours));
-        var when='日期：'+(fmtDate(d.day_date)||'—')+(tm?'　'+tm:'')+'　時數：'+(hh||'—')+' 小時';
+        var when='日期：'+(dispDate(d.day_date)||'—')+(tm?'　'+tm:'')+'　時數：'+(hh||'—')+' 小時';
         var rows='';
         list.forEach(function(a,i){
             var ev = a.eval_result==='pass'?'合格':a.eval_result==='fail'?'不合格':a.eval_result==='exempt'?'免評鑑':'—';
             // 簽名章：該天有電子簽到才印，章上日期＝該堂課的上課日(d.day_date)，不是簽到按鈕按下當下的日期
             var daySigned = d.day_date && recDaySigns[a.user_id+'_'+d.day_date];
             rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
-                +'<td>'+(daySigned?egStampHtml(a.user_name, fmtDate(d.day_date)):'')+'</td>'
+                +'<td>'+(daySigned?egStampHtml(a.user_name, dispDate(d.day_date), false, a.dept_name):'')+'</td>'
                 +'<td>'+ev+'</td>'
                 +'<td>'+esc(a.eval_note||'')+'</td></tr>';
         });
@@ -2747,7 +2750,7 @@ function printRecord(){
             +'</div>';
     });
     // 表尾兩格圖章：審核（org_role_setting.php 設定的「人事表單審核者」＝ SIGNERS.reviewer）／講師（外訓沒有系統內人員可蓋章，改印開課單位純文字）
-    var signDt = fmtDate(s.done_date) || META.today;
+    var signDt = dispDate(s.done_date || META.today);
     html += '<table class="pt-sign"><tr>'
         + '<td><div class="lb">審核</div><div class="stamp-box">'
         + ((SIGNERS.reviewer&&SIGNERS.reviewer.name)?egStampHtml(SIGNERS.reviewer.name, signDt):'')+'</div></td>'
@@ -2782,7 +2785,7 @@ function openCheckin(sid){
         var cur = days.filter(function(d){ return d.day_date===today; })[0];
         CHECKIN_DAY = cur ? cur.day_date : (days[0] ? days[0].day_date : '');
         if (days.length>1){
-            var h=''; days.forEach(function(d){ h+='<option value="'+d.day_date+'"'+(d.day_date===CHECKIN_DAY?' selected':'')+'>'+fmtDate(d.day_date)+'</option>'; });
+            var h=''; days.forEach(function(d){ h+='<option value="'+d.day_date+'"'+(d.day_date===CHECKIN_DAY?' selected':'')+'>'+dispDate(d.day_date)+'</option>'; });
             $('#checkinDaySel').html(h); $('#checkinDayBox').show();
         }
         renderCheckinBody();
@@ -2795,7 +2798,7 @@ function renderCheckinBody(){
         var signed = CHECKIN_DAY_SIGNS[a.user_id+'_'+CHECKIN_DAY];
         h += '<tr data-uid="'+a.user_id+'"><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
            + '<td>'+(signed
-                ? egStampHtml(a.user_name, fmtDate(CHECKIN_DAY))
+                ? egStampHtml(a.user_name, dispDate(CHECKIN_DAY), false, a.dept_name)
                 : '<input type="password" placeholder="本人密碼，按Enter簽到" id="ck-pw-'+a.user_id+'" data-eg-skip'
                   + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();checkinSign('+sid+','+a.user_id+');}">')+'</td></tr>';
     });
@@ -2809,7 +2812,7 @@ function checkinSign(sid, uidv){
         if (!res.ok){ alert(res.error||'簽到失敗'); $('#ck-pw-'+uidv).val('').select(); return; }
         CHECKIN_DAY_SIGNS[uidv+'_'+CHECKIN_DAY] = res.day_date;
         var a = (CHECKIN.attendees||[]).filter(function(x){ return String(x.user_id)===String(uidv); })[0];
-        $('tr[data-uid="'+uidv+'"] td:last-child').html(egStampHtml(a?a.user_name:'', fmtDate(CHECKIN_DAY)));
+        $('tr[data-uid="'+uidv+'"] td:last-child').html(egStampHtml(a?a.user_name:'', dispDate(CHECKIN_DAY), false, a?a.dept_name:''));
         var next = (CHECKIN.attendees||[]).filter(function(x){ return !CHECKIN_DAY_SIGNS[x.user_id+'_'+CHECKIN_DAY]; })[0];
         if (next) setTimeout(function(){ $('#ck-pw-'+next.user_id).focus(); }, 30);
         else alert('本日全員已簽到');
@@ -2861,9 +2864,9 @@ function renderRequestList(){
         var canConvert = r.status==='approved' && PERMS.canEdit;
         var canDel = (mine && r.status==='draft') || PERMS.canAdmin;
         var trNames = (r.trainees_list||[]).map(function(t){ return t.user_name; }).join('、');
-        h += '<tr><td>'+esc(r.apply_date)+'</td><td>'+esc(r.dept_name||'')+'</td><td class="t-left">'+esc(r.subject)+'</td>'
+        h += '<tr><td>'+esc(dispDate(r.apply_date))+'</td><td>'+esc(r.dept_name||'')+'</td><td class="t-left">'+esc(r.subject)+'</td>'
            + '<td class="t-left">'+esc(trNames)+'</td>'
-           + '<td>'+esc((r.start_date||'')+(r.end_date?'~'+r.end_date:''))+(r.days?'（'+r.days+'天）':'')+'</td>'
+           + '<td>'+esc((dispDate(r.start_date)||'')+(r.end_date?'~'+dispDate(r.end_date):''))+(r.days?'（'+r.days+'天）':'')+'</td>'
            + '<td>'+reqStatusPill(r.status)+(r.status==='rejected'&&r.reject_note?' <span title="'+esc(r.reject_note)+'" style="color:#DD5138;"><i class="fa fa-info-circle"></i></span>':'')+'</td>'
            + '<td style="white-space:nowrap;">'
            + '<span class="tr-op" onclick="openReq('+r.request_id+')"><i class="fa fa-search-plus"></i>檢視</span>';
@@ -3115,11 +3118,11 @@ function printRequestForm(){
     if (!r){ alert('請先開啟一筆申請單'); return; }
     var deptName = $('#reqDept option:selected').text() || r.dept_name || '';
     var body = '<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div><div class="tt">教育訓練需求申請單</div>'
-        + '<div class="sub">申請單位：'+esc(deptName)+'　　申請日期：'+esc(r.apply_date||'')+'</div></div>';
+        + '<div class="sub">申請單位：'+esc(deptName)+'　　申請日期：'+esc(dispDate(r.apply_date))+'</div></div>';
     var kv = function(lb, v){ return '<tr><th style="width:110px;background:#fff;text-align:right;border:none;">'+lb+'</th>'
         + '<td class="l" style="border:1px solid #333;">'+esc(v||'')+'</td></tr>'; };
     var trText = (r.trainees_list||[]).map(function(t){ return t.user_name; }).join('、');
-    var dayText = (r.days||[]).map(function(d){ return fmtDate(d.day_date)+' '+((d.start_time||'')+(d.end_time?'~'+d.end_time:'')); }).join('、');
+    var dayText = (r.days||[]).map(function(d){ return dispDate(d.day_date)+' '+((d.start_time||'')+(d.end_time?'~'+d.end_time:'')); }).join('、');
     body += '<table class="pt" style="margin-top:10px;">'
         + kv('主旨', r.subject)
         + kv('一、簡述內容', r.content)
@@ -3130,7 +3133,7 @@ function printRequestForm(){
         + kv('受訓費用', r.cost)
         + '</table>';
     var ready = (r.status==='approved' || r.status==='converted');
-    var dt = ready ? (r.apply_date||'') : '';
+    var dt = ready ? dispDate(r.apply_date) : '';
     var stamp = function(nm){ return (ready && nm) ? egStampHtml(nm, dt) : ''; };
     var top = REQ_SIGNERS.top_approver, hr = REQ_SIGNERS.hr_signer;
     body += '<table class="pt-sign" style="margin-top:14px;"><tr>'
@@ -3141,7 +3144,7 @@ function printRequestForm(){
         + '<td><div class="lb">主管（申請單位）</div><div class="stamp-box">'+stamp(r.dept_signer_name)+'</div></td>'
         + '<td><div class="lb">申請人</div><div class="stamp-box">'+stamp(r.user_name)+'</div></td>'
         + '</tr></table>';
-    egPrintWindow('教育訓練需求申請單', body, '', DOC_NO.request, false);
+    egPrintWindow('教育訓練需求申請單', body, '', r.as_doc_no||DOC_NO.request, false);
 }
 
 /* ================= 角色設定（角色名稱與功能都可自訂，沿用全站 Roles_API + role_features，比照 purchase_request.php） ================= */
@@ -3226,7 +3229,7 @@ $('#btnCsv').on('click', function(){
             ds.length||(r.plan_days||''),
             r.target_headcount==null?'':r.target_headcount,
             r.actual_headcount==null?'':r.actual_headcount, STATUS_LABEL[r.status]||r.status,
-            ds.length ? ds.map(function(d){ return fmtDate(d.day_date); }).join('、') : fmtDate(r.done_date),
+            ds.length ? ds.map(function(d){ return dispDate(d.day_date); }).join('、') : dispDate(r.done_date),
             ds.length ? ds.map(function(d){ return (d.start_time||'')+(d.end_time?'~'+d.end_time:''); }).join('、')
                       : (r.start_time||'')+(r.end_time?'~'+r.end_time:''),
             ds.length ? ds.map(function(d){ return (d.break_minutes==null?0:d.break_minutes); }).join('、') : '',

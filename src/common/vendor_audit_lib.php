@@ -150,8 +150,11 @@ function vendor_audit_ensure_schema(PDO $db): void {
         submitted_by INT NULL,
         submitted_by_name VARCHAR(50) NULL,
         approved_by_name VARCHAR(50) NULL,
-        approved_at DATETIME NULL
+        approved_at DATETIME NULL,
+        approved_date DATE NULL COMMENT '核准日期(業務日期,使用者核准當下可自行輸入,非一定是系統時間)'
     ) DEFAULT CHARSET=utf8mb4 COMMENT='供應商稽核計劃-年度送出鎖定'");
+    try { $db->exec("ALTER TABLE vendor_audit_plan_lock ADD COLUMN approved_date DATE NULL
+                     COMMENT '核准日期(業務日期,使用者核准當下可自行輸入,非一定是系統時間)' AFTER approved_at"); } catch (Throwable $e) {}
 
     foreach ([['vendor_audit_view','稽核檢閱'],['vendor_audit_edit','稽核登錄'],['vendor_audit_admin','稽核管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='vendor_audit' LIMIT 1");
@@ -850,18 +853,19 @@ function vendor_audit_plan_sign_save_setting(PDO $db, int $need): void {
                         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
     $st->execute([json_encode(['need'=>$need?1:0])]);
 }
+/** 核准來源可用方法目錄（供設定頁下拉與後端驗證共用，順序無意義，實際順序看 vendor_audit_plan_approver_chain()） */
+const VENDOR_AUDIT_APPROVER_METHODS = ['dept_or_user', 'auto_supervisor', 'top_approver'];
+
 /**
- * 供應商稽核計劃「核准人員」解析（org_role_binding role_key='vendor_audit_plan_approver'，見 org_role_lib.php）。
- * 規則（使用者 2026-08-06 明確要求，設定入口在 views/admin/org_role_setting.php 第三節）：
+ * 核准來源方法1：綁「部門」或「人員」（org_role_binding role_key='vendor_audit_plan_approver'，見 org_role_lib.php）。
  *   1. 綁「人員」→ 固定該人（僅此一人合格）。
  *   2. 綁「部門」→ 該部門(含子部門)內**所有**職級不低於送出者的主管都合格，任一人核准即生效(OR-gate)，
  *      不是只認部門主管(職級最高者)一人——這樣同職級的其他主管、或更高職級的人都能代為核准，不會卡在單一個人身上。
  *   3. 部門與人員都未設定 → 自動抓本模組目前綁定的 AS 文件(system_settings vendor_plan_as_doc_id)的
  *      as_document.department_id 當作部門，套用規則 2 同一套邏輯。
  * 送出者若本身沒有主管職級(非管理職)，視為無下限(該部門任一主管都合格)。
- * @return array 合格核准人清單 [['id'=>int,'user_cname'=>string], ...]；解析不到回傳空陣列。
  */
-function vendor_audit_plan_approver_pool(PDO $db, int $submitterUid): array {
+function vendor_audit_plan_approver_pool_dept_or_user(PDO $db, int $submitterUid): array {
     $bind = eg_org_bindings($db)['vendor_audit_plan_approver'] ?? null;
     $deptId = !empty($bind['dept_id']) ? (int)$bind['dept_id'] : null;
     $userId = !empty($bind['user_id']) ? (int)$bind['user_id'] : null;
@@ -900,6 +904,65 @@ function vendor_audit_plan_approver_pool(PDO $db, int $submitterUid): array {
         return $pool;
     } catch (Throwable $e) { return []; }
 }
+
+/**
+ * 核准來源方法2：自動抓送出者的「上一階主管」——沿用 delegate_lib.php 既有的 eg_resolve_supervisor()
+ * （請假、採購簽核已在用同一套解析）：先找送出者**同部門**職級更高者，同部門找不到才**往上一層部門**
+ * 找該部門的指定負責人，如此類推。回傳單一人（找不到或剛好解析到送出者本人則回空陣列）。
+ */
+function vendor_audit_plan_approver_pool_auto_supervisor(PDO $db, int $submitterUid): array {
+    $supId = eg_resolve_supervisor($db, $submitterUid);
+    if (!$supId || (int)$supId === $submitterUid) return [];
+    try {
+        $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+        $st->execute([$supId]);
+        $u = $st->fetch(PDO::FETCH_ASSOC);
+        return $u ? [$u] : [];
+    } catch (Throwable $e) { return []; }
+}
+
+/** 核准來源方法3：全站共用的「最高決策者」（org_role_lib.php 的 top_approver，跟其他表單同一人）。 */
+function vendor_audit_plan_approver_pool_top_approver(PDO $db): array {
+    $u = eg_org_user($db, 'top_approver');
+    return $u ? [['id'=>(int)$u['id'], 'user_cname'=>$u['user_cname']]] : [];
+}
+
+/** 目前設定的核准來源優先序（system_settings VENDOR_AUDIT_PLAN_APPROVER_CHAIN，JSON 陣列）；未設定＝三種依序全用。 */
+function vendor_audit_plan_approver_chain(PDO $db): array {
+    $raw = json_decode((string)vendor_eval_setting($db, 'VENDOR_AUDIT_PLAN_APPROVER_CHAIN', ''), true);
+    $chain = is_array($raw)
+        ? array_values(array_filter($raw, fn($m) => in_array($m, VENDOR_AUDIT_APPROVER_METHODS, true)))
+        : [];
+    return $chain ?: VENDOR_AUDIT_APPROVER_METHODS;
+}
+function vendor_audit_plan_approver_chain_save(PDO $db, array $chain): void {
+    $chain = array_values(array_unique(array_filter($chain, fn($m) => in_array($m, VENDOR_AUDIT_APPROVER_METHODS, true))));
+    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('VENDOR_AUDIT_PLAN_APPROVER_CHAIN', ?)
+                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+    $st->execute([json_encode($chain)]);
+}
+
+/**
+ * 供應商稽核計劃「核准人員」解析——依管理員設定的優先序（vendor_audit_plan_approver_chain()）依序嘗試，
+ * 取第一個有結果的方法，不再往下（2026-08-10 使用者明確要求，新增「自動抓上一階主管」與「最高決策者」
+ * 兩種來源，管理員可設定優先序清單）。
+ * 迴避鐵則：核准人不可為送出者本人（球員兼裁判）——某方法解析到送出者本人時視同該方法無結果，
+ * 自動改試優先序中的下一個方法（等同再往上一層找）。
+ * @return array 合格核准人清單 [['id'=>int,'user_cname'=>string], ...]；全部方法都解析不到回傳空陣列。
+ */
+function vendor_audit_plan_approver_pool(PDO $db, int $submitterUid): array {
+    foreach (vendor_audit_plan_approver_chain($db) as $method) {
+        $pool = match ($method) {
+            'dept_or_user'    => vendor_audit_plan_approver_pool_dept_or_user($db, $submitterUid),
+            'auto_supervisor' => vendor_audit_plan_approver_pool_auto_supervisor($db, $submitterUid),
+            'top_approver'    => vendor_audit_plan_approver_pool_top_approver($db),
+            default => [],
+        };
+        $pool = array_values(array_filter($pool, fn($p) => (int)$p['id'] !== $submitterUid));
+        if ($pool) return $pool;
+    }
+    return [];
+}
 function vendor_audit_plan_lock_get(PDO $db, int $year): ?array {
     $st = $db->prepare("SELECT * FROM vendor_audit_plan_lock WHERE year=?");
     $st->execute([$year]);
@@ -916,12 +979,13 @@ function vendor_audit_plan_submit(PDO $db, int $year, string $submitDate, int $b
     $status = $need ? 'pending' : 'approved';
     $approvedName = $need ? null : $byName;
     $approvedAt   = $need ? null : date('Y-m-d H:i:s');
-    $st = $db->prepare("INSERT INTO vendor_audit_plan_lock (year, status, submit_date, submitted_at, submitted_by, submitted_by_name, approved_by_name, approved_at)
-                        VALUES (?,?,?,NOW(),?,?,?,?)
+    $approvedDate = $need ? null : $submitDate; // 免簽核直接生效：核准日期比照送出日期(業務日期)
+    $st = $db->prepare("INSERT INTO vendor_audit_plan_lock (year, status, submit_date, submitted_at, submitted_by, submitted_by_name, approved_by_name, approved_at, approved_date)
+                        VALUES (?,?,?,NOW(),?,?,?,?,?)
                         ON DUPLICATE KEY UPDATE status=VALUES(status), submit_date=VALUES(submit_date), submitted_at=NOW(),
                             submitted_by=VALUES(submitted_by), submitted_by_name=VALUES(submitted_by_name),
-                            approved_by_name=VALUES(approved_by_name), approved_at=VALUES(approved_at)");
-    $st->execute([$year, $status, $submitDate, $byUid, $byName, $approvedName, $approvedAt]);
+                            approved_by_name=VALUES(approved_by_name), approved_at=VALUES(approved_at), approved_date=VALUES(approved_date)");
+    $st->execute([$year, $status, $submitDate, $byUid, $byName, $approvedName, $approvedAt, $approvedDate]);
     return vendor_audit_plan_lock_get($db, $year);
 }
 /** 年度計畫資料(給列印用)：彙總該年度(不分上下半年)所有目標的預定月份標記 + 廠商小類 */
