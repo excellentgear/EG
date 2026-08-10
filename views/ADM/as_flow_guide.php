@@ -503,7 +503,16 @@ foreach ($ISSUES as $idx => $r) {
     $ISSUES[$idx]['ckby'] = (string)($chk['checked_by'] ?? '');
     $ISSUES[$idx]['ckat'] = (string)($chk['checked_at'] ?? '');
     $ISSUES[$idx]['scan'] = eg_issue_scan_pattern($r[1], $r[3], $r[4]);
+    // 已檢查且核對人是 AI（checked_by 開頭為「AI」）才視為「AI 核對正確」，前端另外標色＋優先度改顯示已完成
+    $ISSUES[$idx]['aiok'] = $ISSUES[$idx]['ck'] && strpos($ISSUES[$idx]['ckby'], 'AI') === 0;
 }
+
+// ── AI 檢查檔案：讀取「已修改」資料夾內 AI 核對報告（AI檢查報告-*.md），供待處理問題頁「AI檢查檔案」按鈕顯示 ──
+$AI_CHECK_REPORTS = [];
+foreach ((glob($MD_DIR . '已修改/AI檢查報告-*.md') ?: []) as $f) {
+    $AI_CHECK_REPORTS[] = ['name' => basename($f), 'html' => egmd_render(file_get_contents($f)), 'time' => date('Y-m-d H:i', filemtime($f))];
+}
+usort($AI_CHECK_REPORTS, fn($a, $b) => strcmp($b['name'], $a['name']));
 
 // 四階表單清單（線上表單對照分頁用）：doc_no 有 3 段以上者＝表單
 $FORMS = [];
@@ -658,6 +667,9 @@ a.docchip.has-online:hover i { color:#fff; }
 .iss-table tbody tr:nth-child(even) { background:#FDF8EF; }
 .lv { display:inline-block; padding:1px 9px; border-radius:9px; font-size:11.5px; font-weight:bold; white-space:nowrap; }
 .lv-高 { background:#DD5138; color:#fff; } .lv-中 { background:#F0A24B; color:#4A2C0A; } .lv-低 { background:#F7E0BD; color:#5A3D1E; }
+.lv-done { background:#8A5A2B; color:#fff; }
+.iss-table tbody tr.iss-ai-ok { background:#FFF3E0; }
+.iss-table tbody tr.iss-ai-ok:hover { background:#F7E0BD; }
 a.doclink { color:#B24A12; text-decoration:none; border-bottom:1px solid #F0A24B; }
 a.doclink:hover { background:#F0A24B; color:#fff; text-decoration:none; }
 a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
@@ -768,6 +780,7 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       </select>
       <input type="text" id="issKw" placeholder="搜尋文件編號／問題內容…">
       <button id="btnIssClear"><i class="fa fa-eraser"></i> 清除</button>
+      <button id="btnAiCheckDoc" class="btn-warm"><i class="fa fa-search"></i> AI檢查檔案<?= $AI_CHECK_REPORTS ? ' (' . count($AI_CHECK_REPORTS) . ')' : '' ?></button>
       <span class="fg-file">共 <span id="issCount"><?= count($ISSUES) ?></span> 筆</span>
     </div>
 
@@ -790,8 +803,10 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       </tr></thead>
       <tbody>
       <?php foreach ($ISSUES as $r): ?>
-        <tr data-lv="<?= $r[0] ?>" data-dept="<?= htmlspecialchars($r[1]) ?>" data-fixed="<?= $r['fx'] ?>" data-checked="<?= $r['ck'] ?>">
-          <td><span class="lv lv-<?= $r[0] ?>"><?= $r[0] ?></span></td>
+        <tr data-lv="<?= $r[0] ?>" data-dept="<?= htmlspecialchars($r[1]) ?>" data-fixed="<?= $r['fx'] ?>" data-checked="<?= $r['ck'] ?>"
+            class="<?= $r['aiok'] ? 'iss-ai-ok' : '' ?>">
+          <td><?php if ($r['aiok']): ?><span class="lv lv-done" title="AI 已核對確認正確">已完成</span>
+              <?php else: ?><span class="lv lv-<?= $r[0] ?>"><?= $r[0] ?></span><?php endif; ?></td>
           <td><?= htmlspecialchars($r[1]) ?></td>
           <td><strong><?= eg_doclink($r[2]) ?></strong></td>
           <td><?= htmlspecialchars($r[3]) ?></td>
@@ -996,6 +1011,22 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
        本頁以唯讀說明為主，僅「表單正確」／「資料齊全」點檢按鈕會寫入資料（沿用同一權限；取消確認另限原確認人或管理者）。</p>
   </div>
   <div style="text-align:right;margin-top:10px;"><button class="btn btn-sm btn-default" onclick="document.getElementById('helpUseMask').style.display='none'">關閉</button></div>
+</div></div>
+
+<!-- AI 檢查檔案跳窗（待處理問題分頁「AI檢查檔案」鈕） -->
+<div class="fg-mask" id="aiCheckMask"><div class="box" style="max-width:920px;">
+  <h4><i class="fa fa-search"></i> AI 檢查檔案</h4>
+  <?php if (!$AI_CHECK_REPORTS): ?>
+    <p style="color:#8A6D45;">目前尚無 AI 檢查紀錄。AI 核對「已修改」資料夾內的文件後，會在此資料夾產生檢查報告檔並顯示於此。</p>
+  <?php else: foreach ($AI_CHECK_REPORTS as $rep): ?>
+    <div style="margin-bottom:18px;">
+      <div style="font-size:12px;color:#8A6D45;margin-bottom:4px;">
+        <i class="fa fa-file-text-o"></i> <?= htmlspecialchars($rep['name']) ?>（檔案時間 <?= $rep['time'] ?>）</div>
+      <div class="md-body"><?= $rep['html'] ?></div>
+    </div>
+    <hr class="md-hr">
+  <?php endforeach; endif; ?>
+  <div style="text-align:right;margin-top:10px;"><button class="btn btn-sm btn-default" onclick="document.getElementById('aiCheckMask').style.display='none'">關閉</button></div>
 </div></div>
 
 <!-- 文件／表單 線上預覽跳窗 -->
@@ -1240,6 +1271,7 @@ $(document).ready(function () {
 
     $('#btnRoleHelp').on('click', function () { $('#roleMask').show(); });
     $('#btnPageHelp').on('click', function () { $('#helpUseMask').show(); });
+    $('#btnAiCheckDoc').on('click', function () { $('#aiCheckMask').show(); });
     $('.fg-mask').on('click', function (e) { if (e.target === this) { this.style.display = 'none'; } });
 
     $(window).on('scroll', function () { $('#fgTop').toggle($(window).scrollTop() > 250); });
