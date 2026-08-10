@@ -513,6 +513,31 @@ function meeting_item_confirm_via_notify(PDO $db, int $itemId, int $uid, string 
                   VALUES (?,?,?,?,?,NOW(),?)
                   ON DUPLICATE KEY UPDATE reply_content=VALUES(reply_content)")
        ->execute([$itemId, $uid, $uname, $deptName, $deptId, $replyContent]);
+
+    // 2026-08-10使用者實測回報：一部門/一指定人員只要任一人回覆就完成，但其餘被通知的人開啟同一則通知時
+    // 還是看得到完整的回覆表單，容易讓人誤會「這樣回覆會不會蓋掉別人」。此項目所有負責部門(或所有指定人員)
+    // 都已有人確認時，關閉這則通知，其餘人之後開啟只會看到已讀/已處理，不再能送出回覆。
+    // 多負責部門的項目要「全部部門」都有人確認才關閉，避免A部門一有人回就連帶把B部門還沒回的通知也關掉。
+    $confAll = $db->prepare("SELECT user_id, dept_id FROM meeting_item_confirm WHERE item_id=?");
+    $confAll->execute([$itemId]);
+    $rows = $confAll->fetchAll(PDO::FETCH_ASSOC);
+    if ($ownerUserIds) {
+        $confirmedUserIds = array_map('intval', array_column($rows, 'user_id'));
+        $allDone = !array_diff($ownerUserIds, $confirmedUserIds);
+    } else {
+        $confirmedDeptIds = array_values(array_unique(array_filter(array_map(fn($r) => $r['dept_id'] !== null ? (int)$r['dept_id'] : null, $rows))));
+        $allDone = !array_diff($ownerIds, $confirmedDeptIds);
+    }
+    if ($allDone) meeting_close_single_item_notice($db, $itemId);
+}
+
+/** 單一項目的「待確認」通知已全部完成，關閉這則通知(其餘被通知的人之後開啟只會看到唯讀狀態，無法再送出回覆)。 */
+function meeting_close_single_item_notice(PDO $db, int $itemId): void {
+    try {
+        $db->prepare("UPDATE live_event SET enddate=DATE_SUB(CURDATE(), INTERVAL 1 DAY)
+                      WHERE ref_type='MEETING_ITEM_CONFIRM' AND ref_id=? AND (enddate IS NULL OR enddate>=CURDATE())")
+           ->execute([$itemId]);
+    } catch (Throwable $e) {}
 }
 
 /** 結果通知（核准/退回/項目已確認 都要回報，退回一定帶原因） */
