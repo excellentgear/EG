@@ -973,11 +973,23 @@ function vendor_audit_plan_locked(PDO $db, int $year): bool {
     $lock = vendor_audit_plan_lock_get($db, $year);
     return $lock !== null && in_array($lock['status'], ['pending','approved'], true);
 }
-/** 送出年度計畫：一律立即鎖定；不需簽核者直接視為已核准，需簽核者狀態=待核准並回傳待通知的簽核人 */
+/** 送出年度計畫：一律立即鎖定；不需簽核者直接視為已核准，需簽核者狀態=待核准並回傳待通知的簽核人
+ *  免簽核時的「核准」欄不印送出人自己的名字（避免球員兼裁判）：改比照合格供應商清冊的審核邏輯，
+ *  自動解析送出人部門的上一階主管（eg_resolve_supervisor()，同人再往上一層部門找），解析不到才退回送出人本人
+ *  （2026-08-10使用者明確要求「免審核時的核准人員要跟合格供應商清冊的審核人員自動一致」）。 */
 function vendor_audit_plan_submit(PDO $db, int $year, string $submitDate, int $byUid, string $byName): array {
     $need = vendor_audit_plan_sign_setting($db)['need'];
     $status = $need ? 'pending' : 'approved';
-    $approvedName = $need ? null : $byName;
+    $approvedName = null;
+    if (!$need) {
+        $supId = eg_resolve_supervisor($db, $byUid);
+        $approvedName = $byName;
+        if ($supId && (int)$supId !== $byUid) {
+            $st0 = $db->prepare("SELECT user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+            $st0->execute([$supId]);
+            $approvedName = $st0->fetchColumn() ?: $byName;
+        }
+    }
     $approvedAt   = $need ? null : date('Y-m-d H:i:s');
     $approvedDate = $need ? null : $submitDate; // 免簽核直接生效：核准日期比照送出日期(業務日期)
     $st = $db->prepare("INSERT INTO vendor_audit_plan_lock (year, status, submit_date, submitted_at, submitted_by, submitted_by_name, approved_by_name, approved_at, approved_date)
