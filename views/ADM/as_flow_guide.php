@@ -95,6 +95,29 @@ if ($rawKey !== '') {
     exit;
 }
 
+// ── 系統掃描比對（?scan=1）：待處理問題分頁「掃描比對」按鈕用。
+//    純文字比對現行 MD 內容，不靠 AI；只對「問題／建議處理各恰好出現一個 AS 編號」的單純編號誤植項目開放
+//    （見下方 eg_issue_scan_pattern），涉及判斷的項目（缺檔、命名不一致、版面殘留…）系統無法自動核對，仍需人工確認。 ──
+if (isset($_GET['scan'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!$canView) { echo json_encode(['status' => 'error', 'message' => '無權限']); exit; }
+    $dockey  = (string)($_GET['doc'] ?? '');
+    $wrong   = (string)($_GET['wrong'] ?? '');
+    $correct = (string)($_GET['correct'] ?? '');
+    if (!isset($DOCS[$dockey]) || $wrong === '' || $correct === '') {
+        echo json_encode(['status' => 'error', 'message' => '參數錯誤']); exit;
+    }
+    $f = $MD_DIR . $DOCS[$dockey][1];
+    if (!is_file($f)) { echo json_encode(['status' => 'error', 'message' => '找不到說明檔']); exit; }
+    $txt = file_get_contents($f);
+    echo json_encode([
+        'status'      => 'success',
+        'has_wrong'   => mb_strpos($txt, $wrong)   !== false,
+        'has_correct' => mb_strpos($txt, $correct) !== false,
+    ]);
+    exit;
+}
+
 // ══════════════ 文件／表單索引：讓 MD 內的文件編號變成可點（線上預覽＋線上表單）══════════════
 // 「有沒有線上表單」三種來源，缺一不可：
 //   ① as_form_template.form_doc_id          — AS 線上表單設計器做出來的表單
@@ -247,6 +270,18 @@ function eg_doclink($txt) {
                  . ' title="' . ($known ? htmlspecialchars($DOCMAP[$m[1]]['name'], ENT_QUOTES, 'UTF-8') . '｜' : '')
                  . '另開 AS 文件管理並篩選到此筆">' . $m[0] . '<i class="fa fa-external-link"></i></a>';
         }, $s);
+}
+/** 待處理問題「已修改」／「已檢查」點檢鈕（跟線上表單對照的表單正確／資料齊全同一套UX：
+ *  按下記人名＋時間，只有本人或管理者能再按一次取消）。*/
+function eg_iss_chk_btn($issueKey, $field, $label, $ok, $by, $at, $isRoleAdmin, $currentCname) {
+    $canCancel = $isRoleAdmin || ($ok && $by === $currentCname);
+    echo '<button class="btn-mini iss-chk-btn' . ($ok ? ' warm' : '') . '"'
+       . ' data-key="' . htmlspecialchars($issueKey, ENT_QUOTES) . '" data-field="' . $field . '"'
+       . ' data-label="' . htmlspecialchars($label, ENT_QUOTES) . '" data-val="' . $ok . '"'
+       . ' data-cancancel="' . ($canCancel ? 1 : 0) . '"'
+       . ($ok && !$canCancel ? ' disabled title="僅原確認人或管理者可取消"' : '') . '>'
+       . '<i class="fa ' . ($ok ? 'fa-check-circle' : 'fa-circle-o') . '"></i> ' . htmlspecialchars($label, ENT_QUOTES) . '</button>'
+       . '<div class="chk-meta" style="font-size:11px;color:#8A5A2B;margin-top:2px;">' . ($ok ? htmlspecialchars($by . ' ' . $at) : '') . '</div>';
 }
 function egmd_inline($s) {
     $s = htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
@@ -432,6 +467,44 @@ $ISSUES = [
     ['低','管理課','管理課資料夾','存在無 AS 編號的檔案：「主管人員考核表.docx」「間接人員考核表.odt」','確認是否納編給號或移除'],
     ['低','總經理室','2-GM-02 §6.7.1','引用製程開發作業程序定義專案生命週期，但與 2-TD-02 五階段的整合方式未具體定義','補充對應關係'],
 ];
+// ── 待處理問題 點檢狀態（已修改／已檢查）＋系統掃描比對可用性 ──
+// issue_key 用「課室＋文件/位置」內容雜湊，只要這兩欄內容不變，即使清單順序調整或改版，仍是同一筆點檢紀錄。
+$ISSUE_CHECK = [];
+try {
+    foreach ($conn->query("SELECT * FROM as_flow_issue_check") as $r) { $ISSUE_CHECK[$r['issue_key']] = $r; }
+} catch (Exception $e) { error_log('as_flow_guide issue_check: ' . $e->getMessage()); }
+
+$DEPT2KEY = ['總經理室'=>'gm','管理課'=>'mm','品保課'=>'qa','技術課'=>'td','業務課'=>'sm','生產課'=>'pm','文管中心'=>'dc','資材課'=>'zc'];
+function eg_issue_dept_key($dept) {
+    global $DEPT2KEY;
+    foreach ($DEPT2KEY as $k => $v) { if (strpos($dept, $k) === 0) { return $v; } }
+    return null;
+}
+/** 沒有 AI 也能自動核對的唯一情況：問題／建議處理欄「各恰好出現一個 AS 編號」的單純編號誤植
+ *（如「誤標為 (2-QA-05-01)…應為 (2-QA-01-01)」），可直接讀現行 MD 純文字比對錯誤編號是否還在／
+ *  正確編號是否已出現。缺檔、命名不一致、版面殘留等需要判斷的項目不硬做假的自動檢查，一律只顯示「需人工確認」。 */
+function eg_issue_scan_pattern($dept, $problem, $suggest) {
+    preg_match_all('/\(([0-9]-[A-Z]{2}[0-9A-Za-z\-]*)\)/u', $problem, $mw);
+    preg_match_all('/\(([0-9]-[A-Z]{2}[0-9A-Za-z\-]*)\)/u', $suggest, $mc);
+    $dk = eg_issue_dept_key($dept);
+    if ($dk && count($mw[1]) === 1 && count($mc[1]) === 1) {
+        return ['doc' => $dk, 'wrong' => $mw[1][0], 'correct' => $mc[1][0]];
+    }
+    return null;
+}
+foreach ($ISSUES as $idx => $r) {
+    $key = substr(md5($r[1] . '|' . $r[2]), 0, 16);
+    $chk = $ISSUE_CHECK[$key] ?? null;
+    $ISSUES[$idx]['key']  = $key;
+    $ISSUES[$idx]['fx']   = (int)($chk['fixed'] ?? 0);
+    $ISSUES[$idx]['fxby'] = (string)($chk['fixed_by'] ?? '');
+    $ISSUES[$idx]['fxat'] = (string)($chk['fixed_at'] ?? '');
+    $ISSUES[$idx]['ck']   = (int)($chk['checked'] ?? 0);
+    $ISSUES[$idx]['ckby'] = (string)($chk['checked_by'] ?? '');
+    $ISSUES[$idx]['ckat'] = (string)($chk['checked_at'] ?? '');
+    $ISSUES[$idx]['scan'] = eg_issue_scan_pattern($r[1], $r[3], $r[4]);
+}
+
 // 四階表單清單（線上表單對照分頁用）：doc_no 有 3 段以上者＝表單
 $FORMS = [];
 foreach ($DOCMAP as $no => $d) {
@@ -576,7 +649,8 @@ a.docchip.has-online:hover i { color:#fff; }
 .iss-card b { font-size:26px; display:block; line-height:1.2; }
 .iss-card span { font-size:12.5px; }
 .c-high { background:#DD5138; } .c-mid { background:#F0A24B; } .c-low { background:#F7E0BD; color:#5A3D1E !important; }
-.iss-table { width:100%; border-collapse:collapse; font-size:13px; }
+.iss-tablewrap { overflow-x:auto; }   /* 加了掃描比對/已修改/已檢查三欄變寬，表格自己捲，頁面不橫捲 */
+.iss-table { width:100%; border-collapse:collapse; font-size:13px; min-width:1180px; }
 .iss-table th { background:#F7E0BD; color:#5A3D1E; padding:7px 9px; border:1px solid #E0CBA0; text-align:left; }
 .iss-table td { padding:7px 9px; border:1px solid #E8D9B8; vertical-align:top; }
 .iss-table tbody tr:nth-child(even) { background:#FDF8EF; }
@@ -705,23 +779,39 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       來源：比對「AS9100(各組維護版)」內 47 份現行版程序書、實體表單檔案、系統 AS 文件管理（<code>as_document</code>）三方交叉檢查。
       各課詳細說明見左側「課室說明文件」各篇末節。</p>
 
+    <div class="iss-tablewrap">
     <table class="iss-table" id="issTable">
       <thead><tr>
-        <th style="width:58px;">優先</th><th style="width:130px;">課室</th><th style="width:190px;">文件／位置</th>
-        <th>問題</th><th style="width:270px;">建議處理</th>
+        <th style="width:52px;">優先</th><th style="width:118px;">課室</th><th style="width:170px;">文件／位置</th>
+        <th>問題</th><th style="width:210px;">建議處理</th>
+        <th style="width:112px;">系統掃描比對</th><th style="width:112px;">已修改</th><th style="width:112px;">已檢查</th>
       </tr></thead>
       <tbody>
       <?php foreach ($ISSUES as $r): ?>
-        <tr data-lv="<?= $r[0] ?>" data-dept="<?= htmlspecialchars($r[1]) ?>">
+        <tr data-lv="<?= $r[0] ?>" data-dept="<?= htmlspecialchars($r[1]) ?>" data-fixed="<?= $r['fx'] ?>" data-checked="<?= $r['ck'] ?>">
           <td><span class="lv lv-<?= $r[0] ?>"><?= $r[0] ?></span></td>
           <td><?= htmlspecialchars($r[1]) ?></td>
           <td><strong><?= eg_doclink($r[2]) ?></strong></td>
           <td><?= htmlspecialchars($r[3]) ?></td>
           <td style="color:#7A4E17;"><?= htmlspecialchars($r[4]) ?></td>
+          <td>
+            <?php if ($r['scan']): ?>
+              <button class="btn-mini iss-scan-btn" data-doc="<?= htmlspecialchars($r['scan']['doc']) ?>"
+                      data-wrong="<?= htmlspecialchars($r['scan']['wrong'], ENT_QUOTES) ?>"
+                      data-correct="<?= htmlspecialchars($r['scan']['correct'], ENT_QUOTES) ?>">
+                <i class="fa fa-search"></i> 掃描比對</button>
+              <div class="iss-scan-result" style="font-size:11px;margin-top:2px;"></div>
+            <?php else: ?>
+              <span style="color:#A08B70;font-size:12px;">需人工確認</span>
+            <?php endif; ?>
+          </td>
+          <td><?php eg_iss_chk_btn($r['key'], 'fixed', '已修改', $r['fx'], $r['fxby'], $r['fxat'], $isRoleAdmin, $currentCname); ?></td>
+          <td><?php eg_iss_chk_btn($r['key'], 'checked', '已檢查', $r['ck'], $r['ckby'], $r['ckat'], $isRoleAdmin, $currentCname); ?></td>
         </tr>
       <?php endforeach; ?>
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 
@@ -864,7 +954,9 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
     <ul>
       <li><b>課室說明文件</b>：左側選課室，右側閱讀。可在本篇搜尋（Enter 逐筆跳）、看原始 MD、下載 MD、列印。</li>
       <li><b>待處理問題</b>：比對程序書／實體表單檔／系統文件三方交叉檢查出的不一致，分高中低三級，可依優先度、課室、關鍵字篩選。
-          <b>點欄位裡的文件編號</b>會另開 AS 文件管理並自動篩選到該筆。</li>
+          <b>點欄位裡的文件編號</b>會另開 AS 文件管理並自動篩選到該筆。
+          每筆可按<b>「已修改」</b>（程序書／實體文件已經改好）與<b>「已檢查」</b>（已有人複核確認），
+          都會記錄確認人與時間，只有原確認人本人或管理者可再按一次取消。</li>
       <li><b>線上表單對照</b>：全部四階表單一覽，顯示是否已有線上表單，可直接開啟或新填一張；
           可對每張表單按<b>「表單正確」</b>／<b>「資料齊全」</b>做點檢確認（會記錄確認人與時間；只有原確認人本人或管理者可再按一次取消），
           兩者都可加入篩選條件（已確認正確／已確認齊全／尚未確認）。</li>
@@ -884,6 +976,13 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       <code>system_parameters(param_group='AS_DOC_BIND')</code>，本頁<b>動態掃描該群組，不需要手動登記</b>；
       少數尚未遷移的舊模組（供應商稽核管理／外來文件清單／報價單…）仍手動登記於本頁原始碼 <code>$PAGE_BINDS</code>，
       這類舊式綁定若日後有新頁面才需要回來補一列。</div>
+
+    <h4>「系統掃描比對」是怎麼運作的（沒有 AI，純文字比對）</h4>
+    <div class="tip">大部分待處理問題（缺檔、命名不一致、版面殘留…）都需要人判斷，系統無法自動確認，一律顯示「需人工確認」。
+      只有<b>「問題」與「建議處理」欄位各恰好出現一個 AS 編號</b>的單純編號誤植項目（例：「誤標為 (2-QA-05-01)」…「應為 (2-QA-01-01)」）
+      才會出現<b>「掃描比對」</b>鈕：按下會即時重讀該課室現行 MD 說明檔，純文字比對「錯誤編號是否還留著」「正確編號是否已出現」，
+      結果只供輔助判斷，<b>不會自動幫你按「已修改」</b>——看到系統回報「已無舊編號、已出現正確編號」後，仍要自己確認內容無誤再按「已修改」，
+      確認人與時間才會準確記錄是誰核對的。</div>
 
     <h4>「線上表單模板」功能尚未正式導入</h4>
     <p>AS 線上表單設計器（線上表單模板）仍在測試階段，預設對一般角色隱藏——「去建立線上表單」工具列按鈕、
@@ -1026,6 +1125,42 @@ $(document).ready(function () {
             $meta.text(r.value ? (r.by + ' ' + r.at) : '');
             $b.prop('disabled', false);
         }, 'json').fail(function () { alert('請求失敗'); $b.prop('disabled', false); });
+    });
+
+    // ── 待處理問題：已修改／已檢查 點檢（寫入 as_flow_issue_check，同一套UX：按下記人名時間，僅本人/管理者可取消）──
+    $(document).on('click', '.iss-chk-btn', function () {
+        var $b = $(this), $tr = $b.closest('tr'), $meta = $b.next('.chk-meta'), field = $b.data('field'),
+            cur = parseInt($b.data('val'), 10) || 0, next = cur ? 0 : 1, label = $b.data('label');
+        if (cur && !confirm('要取消「' + label + '」的確認狀態嗎？')) { return; }
+        $b.prop('disabled', true);
+        $.post(DOC_API, {action: 'flow_issue_toggle', issue_key: $b.data('key'), field: field, value: next}, function (r) {
+            if (r.status !== 'success') { alert(r.message || '操作失敗'); $b.prop('disabled', cur ? true : false); return; }
+            $b.data('val', r.value).data('cancancel', 1);
+            $tr.attr('data-' + field, r.value).data(field, r.value);
+            $b.toggleClass('warm', !!r.value)
+              .html('<i class="fa ' + (r.value ? 'fa-check-circle' : 'fa-circle-o') + '"></i> ' + esc(label));
+            $meta.text(r.value ? (r.by + ' ' + r.at) : '');
+            $b.prop('disabled', false);
+        }, 'json').fail(function () { alert('請求失敗'); $b.prop('disabled', false); });
+    });
+
+    // ── 待處理問題：系統掃描比對（純文字比對現行 MD 內容，不含 AI，僅單純編號誤植項目才有此鈕）──
+    $(document).on('click', '.iss-scan-btn', function () {
+        var $b = $(this), $res = $b.next('.iss-scan-result');
+        $b.prop('disabled', true);
+        $.getJSON(location.pathname, {scan: 1, doc: $b.data('doc'), wrong: $b.data('wrong'), correct: $b.data('correct')})
+          .done(function (r) {
+            if (r.status !== 'success') { $res.text(r.message || '掃描失敗').css('color', '#DD5138'); return; }
+            if (!r.has_wrong && r.has_correct) {
+                $res.html('<i class="fa fa-check-circle"></i> 文件內已無舊編號、已出現正確編號').css('color', '#8A5A2B');
+            } else if (r.has_wrong) {
+                $res.html('<i class="fa fa-exclamation-circle"></i> 文件內仍可見錯誤編號').css('color', '#DD5138');
+            } else {
+                $res.html('<i class="fa fa-question-circle"></i> 兩個編號在文件內都找不到，請人工確認').css('color', '#8A6D45');
+            }
+          })
+          .fail(function () { $res.text('掃描請求失敗').css('color', '#DD5138'); })
+          .always(function () { $b.prop('disabled', false); });
     });
 
     // 內部 MD 連結 → 切換課室

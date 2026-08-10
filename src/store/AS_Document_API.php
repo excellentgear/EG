@@ -1673,6 +1673,30 @@ case 'flow_check_toggle':   // AS流程總覽·線上表單對照：表單正確
     $st->execute([$docId, $val, $by]);
     jout(['status'=>'success', 'value'=>$val, 'by'=>$by, 'at'=>$val ? date('Y-m-d H:i') : null]);
 
+case 'flow_issue_toggle':   // AS流程總覽·待處理問題：已修改／已檢查 點檢（views/ADM/as_flow_guide.php）
+    if (!asCan('view')) jout(['status'=>'error','message'=>'無權限']);
+    $issueKey = trim($_POST['issue_key'] ?? '');
+    $field    = trim($_POST['field'] ?? '');
+    $val      = (int)($_POST['value'] ?? 0) ? 1 : 0;
+    if (!preg_match('/^[a-f0-9]{16}$/', $issueKey)) jout(['status'=>'error','message'=>'無效項目']);
+    if (!in_array($field, ['fixed','checked'], true)) jout(['status'=>'error','message'=>'欄位錯誤']);
+    $byCol = $field.'_by'; $atCol = $field.'_at';
+    if ($val === 0 && !$asIsRoleAdmin) {   // 取消確認：只有原確認人本人或管理者可取消
+        $chk = $db->prepare("SELECT $byCol FROM as_flow_issue_check WHERE issue_key=?");
+        $chk->execute([$issueKey]);
+        $curBy = (string)($chk->fetchColumn() ?: '');
+        if ($curBy !== '' && $curBy !== $currentCname) {
+            jout(['status'=>'error','message'=>'僅原確認人「'.$curBy.'」或管理者可取消']);
+        }
+    }
+    $by = $val ? $currentCname : null;
+    $st = $db->prepare("INSERT INTO as_flow_issue_check (issue_key, $field, $byCol, $atCol)
+                        VALUES (?, ?, ?, ".($val ? "NOW()" : "NULL").")
+                        ON DUPLICATE KEY UPDATE $field=VALUES($field), $byCol=VALUES($byCol),
+                            $atCol=".($val ? "NOW()" : "NULL"));
+    $st->execute([$issueKey, $val, $by]);
+    jout(['status'=>'success', 'value'=>$val, 'by'=>$by, 'at'=>$val ? date('Y-m-d H:i') : null]);
+
 default:
     jout(['status'=>'error','message'=>'無效的操作']);
 }
