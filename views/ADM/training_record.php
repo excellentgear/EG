@@ -712,9 +712,13 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 文件改編號不必回來改設定。未對應＝該表不印文件編號（見 <b>ai-rules/16 列印文件標準</b>）。</div>
 
             <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
-            <label>簽到表／訓練紀錄等自動產生的簽名圖章樣式</label>
+            <label>簽到表／訓練紀錄等「參加人員本人簽名」自動產生的圖章樣式</label>
             <select id="setStampTpl"><option value="0">（預設印章樣式）</option></select>
             <div class="tr-hint" style="margin-top:6px;">套用哪個模板請到「圖章管理 → 線上圖章設計」建立/挑選；有上傳掃描實體章的人一律優先用掃描章，這裡只影響沒掃描章時自動產生的印章樣式。</div>
+
+            <label style="margin-top:10px;">核准／審核／人事／考官等「核准類」圖章樣式</label>
+            <select id="setApprovalStampTpl"><option value="0">（預設圓形圖章）</option></select>
+            <div class="tr-hint" style="margin-top:6px;">考核表考官簽章、計畫表/結果明細表的核准／審核／人事、需求申請單的批示／會辦等核准類圖章，跟上面「參加人員本人簽名」是不同性質（一個是本人簽到證明、一個是主管核准戳），分開設定；未設定＝標準圓形圖章。</div>
 
             <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
             <label>教育訓練需求申請單是否需要主管簽核</label>
@@ -889,9 +893,10 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         ・刪除場次要連續兩次輸入大寫 <b>Y</b>，且會一併刪除附件實體檔。<br>
         ・點清單任一列可展開該場次明細（大綱、時段、名單與評鑑、附件）。<br>
         ・「達標狀況」分頁依顯示單位統計；子部門可合併成一列，也可排除不列入的部門。<br>
-        ・「檢視」內的「列印簽到表」「列印考核表」跟「實行資料」modal 裡的同名按鈕輸出完全相同（共用同一份版面），差別只在「檢視」是唯讀場次可隨時重印，不需要先開編輯畫面。
+        ・「檢視」內的「列印簽到表」「列印考核表」跟「實行資料」modal 裡的同名按鈕輸出完全相同（共用同一份版面），差別只在「檢視」是唯讀場次可隨時重印，不需要先開編輯畫面；外訓或免評鑑（宣導）課程不提供列印考核表。<br>
+        ・考核表「總體評核結果」與分數，會自動印出上方「參加人員」名單已填的評鑑結果／分數；未填則留白供現場手寫。
         <h4>設定入口</h4>
-        工具列「模組設定」：班別／休息時段／行事曆類別／附件路徑（一般）、排除部門（達標統計）、AS 文件編號與是否送審（文件編號與送審）、<b>簽到表/訓練紀錄的簽名圖章樣式</b>（套用「圖章管理→線上圖章設計」哪個模板；未設定＝預設印章樣式）。<br>
+        工具列「模組設定」：班別／休息時段／行事曆類別／附件路徑（一般）、排除部門（達標統計）、AS 文件編號與是否送審（文件編號與送審）、<b>簽到表/訓練紀錄的簽名圖章樣式</b>（參加人員本人簽名用，套用「圖章管理→線上圖章設計」哪個模板；未設定＝預設印章樣式）、<b>核准/審核/人事/考官等核准類圖章樣式</b>（跟本人簽名分開設定；未設定＝標準圓形圖章）。<br>
         簽章人員（人事／審核／核准）一律取自全站
         <a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>，本頁不另外設定。
         <h4>權限角色</h4>
@@ -1010,6 +1015,7 @@ function loadMeta(cb){
         GROUPS = m.dept_groups || []; UNITS = m.units || [];
         AS_DOCS = m.as_docs || []; DOC_NO = m.doc_no || {}; DOC_NAME = m.doc_name || {}; COMPANY = m.company_name || '';
         SETTINGS.stamp_template = m.stamp_template || null;
+        SETTINGS.approval_stamp_template = m.approval_stamp_template || null;
         TR_FEATURES = m.features || [];
         MY_DEPTS = m.my_depts || []; REQ_SIGNERS = m.request_signers || {};
         window.__ownCompany = COMPANY;      // eg_stamp.js 畫章時要用（公司全名）
@@ -2074,10 +2080,14 @@ function printOjtSheet(src){
     }).join('');
     var html = '';
     list.forEach(function(a, idx){
-        var passChk = a.eval_result==='pass' ? '☑' : '☐';
-        var failChk = a.eval_result==='fail' ? '☑' : '☐';
+        // 總體評核結果：已有 eval_result 就直接印出明確結論（粗體+色塊，不用 ☑/☐ 勾選框——那組符號在部分印表機/字型下
+        // 「已勾」「未勾」兩態幾乎印不出視覺差異，改印文字結論才不會讓人分不清楚）；還沒填的維持空白雙選框供現場手寫。
         var scoreTxt = (a.eval_score!=null && a.eval_score!=='') ? '　總分：'+esc(numTrim(a.eval_score)) : '';
-        var exemptTxt = a.eval_result==='exempt' ? '　（列為免評鑑）' : '';
+        var resultLine;
+        if (a.eval_result==='pass') resultLine = '總體評核結果：<b style="color:#cf3a2b;">判定合格（已具備獨立作業能力）</b>'+scoreTxt;
+        else if (a.eval_result==='fail') resultLine = '總體評核結果：<b style="color:#cf3a2b;">需再進行補訓／複考</b>'+scoreTxt;
+        else if (a.eval_result==='exempt') resultLine = '總體評核結果：<b style="color:#cf3a2b;">列為免評鑑</b>';
+        else resultLine = '總體評核結果：☐ 判定合格（已具備獨立作業能力）　☐ 需再進行補訓／複考';
         html += '<div class="pg"><table class="sf"><thead>'
             + '<tr><th colspan="6" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
             + '<div class="tt">考核表</div></div></th></tr>'
@@ -2087,8 +2097,8 @@ function printOjtSheet(src){
             + '<tr><th style="width:32px;">項次</th><th>考核／口試重點</th><th style="width:76px;">方式</th>'
             + '<th style="width:50px;">分數</th><th style="width:150px;">評鑑結果</th><th style="width:100px;">備註</th></tr>'
             + '</thead><tbody>'+itemRows+'</tbody></table>'
-            + '<div style="margin-top:8px;font-size:13px;">總體評核結果：'+passChk+' 判定合格（已具備獨立作業能力）　'+failChk+' 需再進行補訓／複考'+scoreTxt+exemptTxt+'</div>'
-            + '<div style="margin-top:16px;font-size:13px;display:flex;align-items:flex-end;gap:10px;">考官簽章：'+egStampHtml(assessor, lastDay)+'</div>'
+            + '<div style="margin-top:8px;font-size:13px;">'+resultLine+'</div>'
+            + '<div style="margin-top:16px;font-size:13px;display:flex;align-items:flex-end;gap:10px;">考官簽章：'+egApprovalStampHtml(assessor, lastDay)+'</div>'
             + '</div>';
     });
     var css = 'table.sf{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}'
@@ -2311,12 +2321,14 @@ function saveSettings(){
         as_doc_target:$('#setDocTarget').val(), need_approval:$('#setNeedAppr').val(),
         as_doc_request:$('#setDocRequest').val(), request_need_approval:$('#setReqNeedAppr').val(),
         as_doc_signsheet:$('#setDocSignsheet').val(), stamp_tpl_id:$('#setStampTpl').val(),
+        approval_stamp_tpl_id:$('#setApprovalStampTpl').val(),
         signsheet_blank_rows:(function(){ var m=$('#setSignBlankMode').val();
             return m==='fill16' ? 'fill16' : (m==='fixed' ? ($('#setSignBlankN').val()||'0') : '0'); })(),
         plan_sign_date:$('#setSignDate').val()}, function(res){
         if (!res.ok){ alert(res.error||'設定儲存失敗'); return; }
         SETTINGS = res.settings||{}; UNITS = res.units||UNITS; DOC_NO = res.doc_no||DOC_NO; DOC_NAME = res.doc_name||DOC_NAME;
         SETTINGS.stamp_template = res.stamp_template || null;
+        SETTINGS.approval_stamp_template = res.approval_stamp_template || null;
         TGSTATS = null; if ($('#paneTarget').is(':visible')) loadTargetStats();
         loadPlanStatus();
         CAT_EFF = {internal:res.cat_internal_eff||null, external:res.cat_external_eff||null};
@@ -2326,16 +2338,22 @@ function saveSettings(){
             alert('設定已儲存。日後行事曆類別改名不影響綁定（存的是類別 id）；附件路徑改變不影響舊附件（DB 只存檔名）。'); });
     }, 'json').fail(function(x){ alert('設定儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
-/* 簽到表/訓練紀錄等自動產生印章要套用的模板：SETTINGS.stamp_template 由 meta/save_settings 帶回（見 trStampSchema/egStampHtml） */
+/* 簽到表/訓練紀錄等自動產生印章要套用的模板：SETTINGS.stamp_template 由 meta/save_settings 帶回（見 trStampSchema/egStampHtml）；
+   核准/審核/人事/考官等核准類圖章是另一組獨立設定 SETTINGS.approval_stamp_template（見 trApprovalStampSchema/egApprovalStampHtml），
+   兩邊都用同一份模板清單（圖章管理→線上圖章設計建立的模板），只是各自記各自選的 id，互不影響。 */
 function loadStampTplOptions(){
     $.getJSON(API, {action:'stamp_tpl_options'}, function(res){
         if (!res.ok) return;
-        var cur = SETTINGS.stamp_template ? SETTINGS.stamp_template.id : 0;
-        var h = '<option value="0">（預設印章樣式）</option>';
-        (res.templates||[]).forEach(function(t){
-            h += '<option value="'+t.id+'"'+(String(t.id)===String(cur)?' selected':'')+'>'+(t.type_name?esc(t.type_name)+'｜':'')+esc(t.tpl_name)+'</option>';
-        });
-        $('#setStampTpl').html(h);
+        var opt = function(selId, defLabel){
+            var cur = selId ? (SETTINGS[selId] ? SETTINGS[selId].id : 0) : 0;
+            var h = '<option value="0">'+defLabel+'</option>';
+            (res.templates||[]).forEach(function(t){
+                h += '<option value="'+t.id+'"'+(String(t.id)===String(cur)?' selected':'')+'>'+(t.type_name?esc(t.type_name)+'｜':'')+esc(t.tpl_name)+'</option>';
+            });
+            return h;
+        };
+        $('#setStampTpl').html(opt('stamp_template', '（預設印章樣式）'));
+        $('#setApprovalStampTpl').html(opt('approval_stamp_template', '（預設圓形圖章）'));
     });
 }
 /* 附件路徑（限訓練管理員；沒改就不打這支 API） */
@@ -2559,6 +2577,16 @@ function egStampHtml(name, date, isDeputy, dept){
     return '<span style="font-size:14px;">'+esc(name)+'</span>'
          + (date ? '<div style="font-size:10px;color:#555;">'+esc(date)+'</div>' : '');
 }
+/* 核准/審核/人事/考官等「核准類」圖章樣式：跟上面「參加人員本人簽名」是分開的兩組設定（SETTINGS.approval_stamp_template），
+   未設定＝EGStamp.stamp 沒有 schema 可套時退回標準圓形回墨印，不會誤用「人員簽章(長方)」那種本人簽名樣式。 */
+function trApprovalStampSchema(){ return SETTINGS.approval_stamp_template ? SETTINGS.approval_stamp_template.schema : null; }
+function egApprovalStampHtml(name, date, isDeputy){
+    try {
+        if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, date || '', !!isDeputy, trApprovalStampSchema());
+    } catch (e) {}
+    return '<span style="font-size:14px;">'+esc(name)+'</span>'
+         + (date ? '<div style="font-size:10px;color:#555;">'+esc(date)+'</div>' : '');
+}
 /* 年度計畫表的圖章日期（免送審＝設定的簽章日期/計畫最後異動日/今天；需送審＝實際簽核日期），
    訓練計畫表的「已完成✔」判定也要用同一個日期基準：圖章日期(含)之後才實施的不算數(見 printPlanTable)。 */
 function planSignDate(){
@@ -2586,7 +2614,7 @@ function signRowHtml(){
     }
     // 簽章一律蓋「圖章」（有上傳掃描章的人自動用實體章，其餘用共用回墨印 SVG），不是印姓名文字
     var cell = function(lb, nm){
-        var st = nm ? egStampHtml(nm, dispDate(dt)) : '';
+        var st = nm ? egApprovalStampHtml(nm, dispDate(dt)) : '';
         return '<td><div class="lb">'+lb+'</div><div class="stamp-box">'+st+'</div></td>';
     };
     return '<table class="pt-sign"><tr>'+cell('核准', appr)+cell('審核', rev)+cell('人事', hr)+'</tr></table>';
@@ -2652,8 +2680,10 @@ function printResultTable(){
     var year=$('#yearSel').val(), rows=ROWS.filter(function(r){ return r.status==='done'; });
     signWarn();
     var docTitle = DOC_NAME.result || '教育訓練結果明細表';   // 表頭一律用綁定AS文件的doc_name，不寫死（ai-rules/16 第一之二節）
+    // 年份位置統一比照「年度教育訓練計畫表」印在表格左上角（獨立一行、左對齊），不要放進置中的 pt-head 副標
     var body='<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
-           + '<div class="tt">'+esc(docTitle)+'</div><div class="sub">'+year+' 年</div></div>';
+           + '<div class="tt">'+esc(docTitle)+'</div></div>'
+           + '<div style="text-align:left;font-size:13px;font-weight:bold;margin:4px 0 2px;">'+year+' 年</div>';
     body += '<table class="pt"><colgroup><col style="width:4%"><col style="width:4%"><col style="width:20%">'
          + '<col style="width:13%"><col style="width:6%"><col style="width:11%"><col style="width:12%">'
          + '<col style="width:5%"><col style="width:5%"><col style="width:5%"><col style="width:6%"><col style="width:9%">'
@@ -2700,7 +2730,7 @@ function delSession(sid){
     }, 'json').fail(function(x){ alert('刪除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
-/* ---------- 檢視（唯讀）＋列印訓練紀錄 ---------- */
+/* ---------- 檢視（唯讀）＋列印簽到表／考核表 ---------- */
 var VIEW_RES = null;
 function openView(sid){
     VIEW_RES = null;
@@ -2710,7 +2740,8 @@ function openView(sid){
         if (!res.ok){ $('#viewBody').html('<span style="color:#DD5138;">'+esc(res.error||'載入失敗')+'</span>'); return; }
         VIEW_RES = res;
         var s=res.session, ext=s.train_type==='external';
-        $('#viewOjtBtn').toggle(!ext);
+        // 外訓或免評鑑(宣導)課程都不提供考核表，比照「實行資料」modal 的 applyEvalMethod() 同一套判斷
+        $('#viewOjtBtn').toggle(!ext && s.eval_method!=='notice');
         $('#viewBody').html('<div class="ex-plan"><div><b>'+esc(s.course_name)+'</b> '+statPill(s.status)+'</div>'
             +'<div>計畫：'+s.year+' 年 '+s.plan_month+' 月　類型：'+(ext?'外訓':'內訓')
             +'　計畫時數：'+(s.hours==null?'—':numTrim(s.hours))+'　開課日：'+(dispDate(s.done_date)||'—')+'</div></div>'
@@ -3107,7 +3138,7 @@ function printRequestForm(){
         + '</table>';
     var ready = (r.status==='approved' || r.status==='converted');
     var dt = ready ? dispDate(r.apply_date) : '';
-    var stamp = function(nm){ return (ready && nm) ? egStampHtml(nm, dt) : ''; };
+    var stamp = function(nm){ return (ready && nm) ? egApprovalStampHtml(nm, dt) : ''; };
     var top = REQ_SIGNERS.top_approver, hr = REQ_SIGNERS.hr_signer;
     body += '<table class="pt-sign" style="margin-top:14px;"><tr>'
         + '<td><div class="lb">會辦（人事）</div><div class="stamp-box">'+stamp(hr?hr.name:'')+'</div></td>'

@@ -120,6 +120,7 @@ case 'meta': {
                      'signsheet'=>training_as_doc_name($db,'signsheet')],
           'company_name'=>eg_company_full_name($db),
           'stamp_template'=>training_stamp_template($db),
+          'approval_stamp_template'=>training_approval_stamp_template($db),
           'plan_signers'=>training_plan_signers($db),
           'plan_approval'=>training_plan_approval($db, (int)($_GET['year'] ?? date('Y'))),
           'plan_last_modified'=>training_plan_last_modified($db, (int)($_GET['year'] ?? date('Y'))),
@@ -140,7 +141,8 @@ case 'save_settings': {
             'as_doc_plan'=>'training_as_doc_plan', 'as_doc_result'=>'training_as_doc_result',
             'as_doc_target'=>'training_as_doc_target', 'need_approval'=>'training_need_approval',
             'as_doc_request'=>'training_as_doc_request', 'request_need_approval'=>'training_request_need_approval',
-            'as_doc_signsheet'=>'training_as_doc_signsheet', 'stamp_tpl_id'=>'training_stamp_tpl_id'];
+            'as_doc_signsheet'=>'training_as_doc_signsheet', 'stamp_tpl_id'=>'training_stamp_tpl_id',
+            'approval_stamp_tpl_id'=>'training_approval_stamp_tpl_id'];
     // 休息時段（HH:MM 字串）：兩欄都空＝不扣休息；只填一欄視為未設定
     $bs = tr_norm_time($_POST['break_start'] ?? null);
     $be = tr_norm_time($_POST['break_end'] ?? null);
@@ -185,6 +187,7 @@ case 'save_settings': {
                      'target'=>training_as_doc_name($db,'target'), 'request'=>training_as_doc_name($db,'request'),
                      'signsheet'=>training_as_doc_name($db,'signsheet')],
           'stamp_template'=>training_stamp_template($db),
+          'approval_stamp_template'=>training_approval_stamp_template($db),
           'cat_internal_eff'=>training_category_id($db, 'internal'), 'cat_external_eff'=>training_category_id($db, 'external')]);
 }
 
@@ -463,8 +466,16 @@ case 'session_detail': {
     $ohRow = $oh->fetch(PDO::FETCH_ASSOC);
     $sq = $db->prepare("SELECT user_id, day_date, signed_at FROM training_attendee_day_sign WHERE session_id=?");
     $sq->execute([$sid]);
+    $days = $dq->fetchAll(PDO::FETCH_ASSOC);
+    // 簽到表是「單一場次有自己上課日期」的單據，AS 編號版次依業務日期回推（ai-rules/16 第三之四節）；
+    // 多天課程取最晚一天(比照 inspection_print_multi.php 多製程合印「合印範圍內最新一筆」的做法)，
+    // 尚未登錄上課日就退回完成日、再退回建立日期。
+    $bizDate = null;
+    foreach ($days as $d) { if (!empty($d['day_date']) && (!$bizDate || $d['day_date'] > $bizDate)) $bizDate = $d['day_date']; }
+    if (!$bizDate) $bizDate = $s['done_date'] ?: substr((string)$s['created_at'], 0, 10);
+    $s['as_doc_signsheet_no'] = training_as_doc_no($db, 'signsheet', $bizDate);
     jout(['session'=>$s, 'dept_ids'=>$deptIds, 'dept_names'=>$dnames,
-          'days'=>$dq->fetchAll(PDO::FETCH_ASSOC), 'attendees'=>$aq->fetchAll(PDO::FETCH_ASSOC),
+          'days'=>$days, 'attendees'=>$aq->fetchAll(PDO::FETCH_ASSOC),
           'day_signs'=>$sq->fetchAll(PDO::FETCH_ASSOC),
           'attachments'=>training_attachments($db, $sid),
           'ojt_items'=>$oq->fetchAll(PDO::FETCH_ASSOC), 'ojt_assessor_name'=>$ohRow['assessor_name'] ?? '']);
@@ -817,6 +828,8 @@ case 'request_list': {
         $r['days'] = $dyMap[$rid] ?? [];
         $signer = training_request_signer($db, $r['dept_id'] !== null ? (int)$r['dept_id'] : null, (int)$r['user_id']);
         $r['dept_signer_name'] = $signer['name'] ?? null;
+        // 單一筆申請單有自己的申請日期，AS 編號版次依該日期回推（ai-rules/16 第三之四節）
+        $r['as_doc_no'] = training_as_doc_no($db, 'request', $r['apply_date'] ?: null);
     }
     unset($r);
     jout(['requests'=>$rows]);

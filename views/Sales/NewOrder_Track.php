@@ -5391,7 +5391,7 @@ foreach($dCounts as $c) {
                         var specTxt   = (s.Specification || '').substring(0, 14);
                         var noteTxt   = (s.Content || s.Note || '').substring(0, 20);
                         html += '<tr style="background:' + bg + ';border-bottom:1px solid #eee;">';
-                        html += '<td style="padding:2px 4px;white-space:nowrap;color:#666;">' + (s.Order_date||'').substring(0,10) + '</td>';
+                        html += '<td style="padding:2px 4px;white-space:nowrap;color:#666;">' + (s.Order_date||'').substring(0,10).replace(/-/g,'.') + '</td>';
                         html += '<td style="padding:2px 4px;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(s.Client_name||'') + '">' + escapeHtml((s.Client_name||'').substring(0,6)) + '</td>';
                         html += '<td style="padding:2px 4px;text-align:right;font-weight:600;">' + (parseInt(s.Qty)||0).toLocaleString() + '</td>';
                         html += '<td style="padding:2px 4px;text-align:right;">' + priceStr + '</td>';

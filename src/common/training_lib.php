@@ -337,7 +337,8 @@ const TRAINING_SETTING_KEYS = ['training_default_shift_id', 'training_cat_intern
     'training_need_approval',    // 1=訓練計劃表需要送審（審核→核准）；0=不送審，列印直接顯示簽章
     'training_as_doc_request',   // 需求申請單綁定的 AS 文件 id（2-MM-01-05）
     'training_as_doc_signsheet', // 簽到表綁定的 AS 文件 id
-    'training_stamp_tpl_id',     // 簽到表/訓練紀錄等自動產生印章要套用哪個「圖章管理→線上圖章設計」模板（0/未設定＝預設印章樣式）
+    'training_stamp_tpl_id',     // 簽到表/訓練紀錄等「參加人員本人簽名」自動產生印章要套用哪個「圖章管理→線上圖章設計」模板（0/未設定＝預設印章樣式）
+    'training_approval_stamp_tpl_id',   // 核准/審核/人事/考官等「核准類」圖章要套用哪個模板（0/未設定＝標準圓形圖章；跟上面本人簽名是分開的兩組設定）
     'training_request_need_approval'];  // 1=需求申請單需要部門主管核准；0=免簽核，送出即視同核准
 /* 休息時段（HH:MM 字串，不是 id）：上課時間與此時段重疊幾分鐘就扣幾分鐘。
    兩欄都留空＝完全不扣休息。預設 12:00~13:00（＝日班的午休）。 */
@@ -352,7 +353,7 @@ function training_settings(PDO $db): array {
             'training_as_doc_plan'=>null, 'training_as_doc_result'=>null, 'training_as_doc_target'=>null,
             'training_need_approval'=>null, 'training_exclude_depts'=>'', 'training_plan_sign_date'=>'',
             'training_as_doc_request'=>null, 'training_as_doc_signsheet'=>null, 'training_request_need_approval'=>1,
-            'training_signsheet_blank_rows'=>'0', 'training_stamp_tpl_id'=>null];
+            'training_signsheet_blank_rows'=>'0', 'training_stamp_tpl_id'=>null, 'training_approval_stamp_tpl_id'=>null];
     $out += TRAINING_BREAK_DEFAULT;      // 沒設定過才用預設；設定成空字串＝管理員刻意關閉，不可再被預設蓋回去
     try {
         $keys = array_merge(TRAINING_SETTING_KEYS, TRAINING_SETTING_STR_KEYS);
@@ -612,6 +613,21 @@ function training_as_doc_name(PDO $db, string $which): string {
  *  未設定或已停用回 null（消費端退回預設印章樣式，見 resource/js/eg_stamp.js 的 stamp() 備援邏輯）。 */
 function training_stamp_template(PDO $db): ?array {
     $id = (int)(training_settings($db)['training_stamp_tpl_id'] ?? 0);
+    if (!$id) return null;
+    try {
+        $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$id]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return null;
+        return ['id'=>(int)$r['id'], 'tpl_name'=>$r['tpl_name'], 'schema'=>json_decode((string)$r['schema_json'], true)];
+    } catch (Throwable $e) { return null; }
+}
+
+/** 核准／審核／人事／考官等「核准類」圖章要套用的模板（system_settings key training_approval_stamp_tpl_id），
+ *  跟 training_stamp_template() 是分開的兩組設定——後者是「參加人員本人簽名」用途，前者是主管核准戳，性質不同不可共用同一顆模板；
+ *  未設定或已停用回 null（消費端退回標準圓形圖章，見 eg_stamp.js 的 stamp() 備援邏輯）。 */
+function training_approval_stamp_template(PDO $db): ?array {
+    $id = (int)(training_settings($db)['training_approval_stamp_tpl_id'] ?? 0);
     if (!$id) return null;
     try {
         $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
