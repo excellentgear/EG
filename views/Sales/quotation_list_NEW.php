@@ -3394,7 +3394,7 @@ function buildQuoteCard(q) {
         <div class="qli-no">${escapeHtml(q.quote_no)}${negoBadge}${draftBadge}${tempBadge}${approvalBadgeHtml(q)}${srcBadge}${attachBadge}</div>
         ${clientRow}
         <div class="qli-foot">
-            <span class="qli-date">${escapeHtml(q.quote_date)}</span>
+            <span class="qli-date">${escapeHtml(String(q.quote_date||'').replace(/-/g,'.'))}</span>
             <span class="qli-amt">${formatNumber(q.total_amount)}</span>
         </div>
     </div>`;
@@ -3519,7 +3519,7 @@ function renderViewPanel(q, contact, detail) {
     $('#viewClientTag').text(q.client_name ? ' — ' + q.client_name : '');
     renderApprovalBar(q, detail);
     updatePrintGate(q);
-    const fmt = s => s ? String(s).replace('T',' ').slice(0,16) : '';
+    const fmt = s => s ? String(s).replace('T',' ').slice(0,16).replace(/^(\d{4})-(\d{2})-(\d{2})/,'$1.$2.$3') : '';
     const cname = (detail && detail.created_by_name) || q.created_by_name || '';
     if (cname) {
         $('#viewHistCreated').html(`<i class="fa fa-user-o"></i>建立：${escapeHtml(cname)}　${escapeHtml(fmt((detail||q).created_at))}`);
@@ -3617,8 +3617,8 @@ function renderViewPanel(q, contact, detail) {
         </div>
         <div class="col-sm-6">
             <table class="table table-condensed" style="margin:0;">
-                <tr><td style="width:80px;color:#888;white-space:nowrap;">報價日期</td><td>${esc(q.quote_date||'—')}</td></tr>
-                <tr><td style="color:#888;">有效日期</td><td>${esc(q.valid_until||'—')}</td></tr>
+                <tr><td style="width:80px;color:#888;white-space:nowrap;">報價日期</td><td>${esc(q.quote_date ? String(q.quote_date).replace(/-/g,'.') : '—')}</td></tr>
+                <tr><td style="color:#888;">有效日期</td><td>${esc(q.valid_until ? String(q.valid_until).replace(/-/g,'.') : '—')}</td></tr>
                 <tr><td style="color:#888;">業務人員</td><td>${esc(q.created_by_name||'')}</td></tr>
                 <tr><td style="color:#888;">總金額</td><td><strong style="color:var(--accent);font-size:15px;">${fmtNum(q.total_amount)}</strong></td></tr>
             </table>
@@ -5766,7 +5766,7 @@ function loadItemHistory($itemRow, productId) {
                 label = r.tiers.map(t => `${formatNumber(t.qty_min)}+: ${formatNumber(t.unit_price)}`).join(' / ');
                 payload = '';
             } else {
-                label = `${escapeHtml(r.quote_date)} @ <b>${formatNumber(r.unit_price)}</b>`;
+                label = `${escapeHtml(String(r.quote_date||'').replace(/-/g,'.'))} @ <b>${formatNumber(r.unit_price)}</b>`;
                 payload = r.unit_price;
             }
             const attr = payload !== '' ? `data-price="${payload}"` : '';
@@ -6391,7 +6391,7 @@ function restoreDeletedQuote(logId) {
 // ══════════════════════════════════════════════════════
 function renderHistoryBar(d) {
     if (!d || !d.created_by_name) { $('#historyBar').hide(); return; }
-    const fmt = s => s ? s.replace('T',' ').slice(0,16) : '';
+    const fmt = s => s ? s.replace('T',' ').slice(0,16).replace(/^(\d{4})-(\d{2})-(\d{2})/,'$1.$2.$3') : '';
     $('#histCreated').html(`<i class="fa fa-user-o"></i>建立：${escapeHtml(d.created_by_name)}　${escapeHtml(fmt(d.created_at))}`);
     const $upd = $('#histUpdated');
     if (d.updated_by_name && d.updated_at) {
@@ -6476,7 +6476,7 @@ function loadDeletedLog() {
             const reason = r.delete_reason ? escapeHtml(r.delete_reason) : '<span style="color:#ccc;">—</span>';
             html += `<tr>
                 <td style="font-weight:600;color:var(--primary);">${escapeHtml(r.quote_no)}</td>
-                <td>${escapeHtml(r.quote_date || '')}</td>
+                <td>${escapeHtml(String(r.quote_date||'').replace(/-/g,'.'))}</td>
                 <td>${escapeHtml(r.client_name || '—')}</td>
                 <td style="text-align:right;">${formatNumber(r.total_amount)}</td>
                 <td style="font-size:12px;color:#555;">${reason}</td>
@@ -6511,10 +6511,11 @@ function showSnapshot(logId, quoteNo) {
         if (!row || !row.snapshot) { $('#snapshotBody').html('<p class="text-muted">無快照資料</p>'); return; }
         let snap;
         try { snap = JSON.parse(row.snapshot); } catch(e) { $('#snapshotBody').html('<pre>' + escapeHtml(row.snapshot) + '</pre>'); return; }
-        const fmt = s => s ? s.replace('T',' ').slice(0,16) : '—';
+        const fmt = s => s ? s.replace('T',' ').slice(0,16).replace(/^(\d{4})-(\d{2})-(\d{2})/,'$1.$2.$3') : '—';
+        const fmtDate = s => s ? String(s).slice(0,10).replace(/-/g,'.') : '';
         let html = `<table class="table table-condensed" style="font-size:12px;">
             <tr><td style="width:100px;color:#888;">報價單號</td><td><strong>${escapeHtml(snap.quote_no||'')}</strong></td>
-                <td style="width:80px;color:#888;">日期</td><td>${escapeHtml(snap.quote_date||'')}</td></tr>
+                <td style="width:80px;color:#888;">日期</td><td>${escapeHtml(fmtDate(snap.quote_date))}</td></tr>
             <tr><td style="color:#888;">客戶</td><td>${escapeHtml(snap.client_name||'')}</td>
                 <td style="color:#888;">幣別</td><td>${escapeHtml(snap.currency||'')}</td></tr>
             <tr><td style="color:#888;">備註</td><td colspan="3">${escapeHtml(snap.note||'')}</td></tr>
