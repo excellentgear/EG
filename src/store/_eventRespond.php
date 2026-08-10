@@ -107,7 +107,17 @@ try {
     if (($action === 'sign' || $action === 'reply') && ($event['ref_type'] ?? '') === 'MEETING_ITEM_CONFIRM' && (int)($event['ref_id'] ?? 0) > 0) {
         try {
             require_once __DIR__ . '/../common/meeting_lib.php';
-            $uname = $_SESSION['user_cname'] ?? ('U' . $uid);
+            // 2026-08-10使用者實測回報：不同帳號登入回覆時，「確認簽名/回簽狀態」顯示的姓名都不對，查出來是
+            // $_SESSION['user_cname'] 這個鍵只有走過少數幾支舊版角色切換頁(_setupUser.php等)才會被寫入，
+            // 不是每個登入流程都會設定，沒設定時就會落到 'U'.$uid 這種假名字。$uid 本身(來自$_SESSION['id'])
+            // 是可靠的，改用它現查 user 表拿真實姓名，不要信任 user_cname 這個不可靠的 session 值。
+            $uname = 'U' . $uid;
+            try {
+                $unSt = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
+                $unSt->execute([$uid]);
+                $real = $unSt->fetchColumn();
+                if ($real !== false && $real !== null && $real !== '') $uname = (string)$real;
+            } catch (Throwable $e2) {}
             $replyContent = $action === 'reply' ? trim($_POST['reply_content'] ?? '') : null;
             meeting_item_confirm_via_notify($db, (int)$event['ref_id'], $uid, $uname, $replyContent !== '' ? $replyContent : null);
         } catch (Throwable $e) {
