@@ -517,18 +517,25 @@ function meeting_item_confirm_via_notify(PDO $db, int $itemId, int $uid, string 
     // 2026-08-10使用者實測回報：一部門/一指定人員只要任一人回覆就完成，但其餘被通知的人開啟同一則通知時
     // 還是看得到完整的回覆表單，容易讓人誤會「這樣回覆會不會蓋掉別人」。此項目所有負責部門(或所有指定人員)
     // 都已有人確認時，關閉這則通知，其餘人之後開啟只會看到已讀/已處理，不再能送出回覆。
-    // 多負責部門的項目要「全部部門」都有人確認才關閉，避免A部門一有人回就連帶把B部門還沒回的通知也關掉。
-    $confAll = $db->prepare("SELECT user_id, dept_id FROM meeting_item_confirm WHERE item_id=?");
-    $confAll->execute([$itemId]);
-    $rows = $confAll->fetchAll(PDO::FETCH_ASSOC);
+    if (meeting_item_is_confirmed($db, $item + ['item_id'=>$itemId])) meeting_close_single_item_notice($db, $itemId);
+}
+
+/** 這個項目的「所有負責部門/所有指定人員」是否都已確認(不論現場密碼簽名或通知回覆皆算)。
+ *  沒指派負責人時視同已確認(不擋)。用於：①送出主席簽核前的把關(2026-08-10使用者明確要求恢復：負責人未確認不可
+ *  送主席簽核) ②通知全部完成時關閉該則通知。多負責部門的項目要「全部部門」都有人確認才算完成。 */
+function meeting_item_is_confirmed(PDO $db, array $item): bool {
+    $ownerUserIds = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_users'] ?? '')))));
+    $ownerDeptIds = $ownerUserIds ? [] : array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_depts'] ?? '')))));
+    if (!$ownerUserIds && !$ownerDeptIds) return true;
+    $st = $db->prepare("SELECT user_id, dept_id FROM meeting_item_confirm WHERE item_id=?");
+    $st->execute([(int)($item['item_id'] ?? 0)]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     if ($ownerUserIds) {
         $confirmedUserIds = array_map('intval', array_column($rows, 'user_id'));
-        $allDone = !array_diff($ownerUserIds, $confirmedUserIds);
-    } else {
-        $confirmedDeptIds = array_values(array_unique(array_filter(array_map(fn($r) => $r['dept_id'] !== null ? (int)$r['dept_id'] : null, $rows))));
-        $allDone = !array_diff($ownerIds, $confirmedDeptIds);
+        return !array_diff($ownerUserIds, $confirmedUserIds);
     }
-    if ($allDone) meeting_close_single_item_notice($db, $itemId);
+    $confirmedDeptIds = array_values(array_unique(array_filter(array_map(fn($r) => $r['dept_id'] !== null ? (int)$r['dept_id'] : null, $rows))));
+    return !array_diff($ownerDeptIds, $confirmedDeptIds);
 }
 
 /** 單一項目的「待確認」通知已全部完成，關閉這則通知(其餘被通知的人之後開啟只會看到唯讀狀態，無法再送出回覆)。 */
