@@ -673,11 +673,32 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <hr style="margin:14px 0;border-color:#EADFC8;">
         <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;">供應商稽核計劃送出後是否需要核准</div>
         <label><input type="checkbox" id="ssPlanNeed"> 需要核准（不勾＝送出即生效）</label>
-        <div style="font-size:11px;color:#8a6d45;margin-top:4px;">目前符合資格的核准人：<b id="ssTopApprover">—</b>（任一人核准即生效；規則依「組織角色綁定設定」第三節「供應商稽核計劃核准」解析——綁部門＝該部門任一職級不低於送出者的主管，綁人員＝固定該人，都未設定＝自動依本計劃綁定的AS文件所屬部門判斷。要改請到該設定頁，不在這裡設定）</div>
+        <div style="font-size:11px;color:#8a6d45;margin-top:4px;">目前符合資格的核准人：<b id="ssTopApprover">—</b>（任一人核准即生效；實際解析依下方「核准來源優先序」，第一順位「部門或人員綁定」的內容要改請到「組織角色綁定設定」第三節）</div>
+        <hr style="margin:14px 0;border-color:#EADFC8;">
+        <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;">供應商稽核計劃「核准來源」優先序</div>
+        <div style="font-size:11px;color:#8a6d45;margin-bottom:6px;">依序嘗試，第一個解析得出人選就採用（解析到的人若剛好是送出計劃的本人，視同該順位無結果，自動改試下一順位，避免球員兼裁判）。「部門或人員綁定」要改設定內容請到「組織角色綁定設定」第三節。</div>
+        <div id="chainBox" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('signSetMask')">取消</button>
         <button class="b-ok" onclick="submitSignSetting()">儲存</button>
+    </div>
+</div></div>
+
+<!-- 供應商稽核計劃 核准/退回 modal -->
+<div class="va-mask" id="planDecideMask"><div class="va-modal">
+    <div class="m-head"><span>核准 / 退回年度稽核計劃</span><span class="m-close" onclick="closeMask('planDecideMask')">✕</span></div>
+    <div class="m-body">
+        <div style="margin-bottom:8px;">
+            <label style="display:inline-block;margin-right:16px;font-weight:normal;"><input type="radio" name="pdDecision" value="approved" checked> 核准</label>
+            <label style="display:inline-block;font-weight:normal;"><input type="radio" name="pdDecision" value="rejected"> 退回</label>
+        </div>
+        <div><label>核准日期（預設今天，可改成實際核准當天的日期）</label><input type="date" id="pdDate"></div>
+        <div id="pdNoteBox" style="display:none;margin-top:8px;"><label>退回原因（必填）</label><textarea id="pdNote" rows="3" style="width:100%;" maxlength="300"></textarea></div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('planDecideMask')">取消</button>
+        <button class="b-ok" onclick="submitPlanDecide()">送出</button>
     </div>
 </div></div>
 
@@ -800,7 +821,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             ● 但它<b>仍會</b>出現在<b>合格清冊</b>（納管＝固定要稽核的合格供應商，即使當年無交易仍列冊），其「建議等級」顯示「<b>—</b>」（無資料可算）；可手動設「採用等級」，或靠實地稽核判定。
         </div>
 
-        <h4>四、設定（管理員，於稽核批次工具列）</h4>
+        <h4>四、供應商稽核計劃（年度，2-PH-01-06）</h4>
+        <ul>
+            <li>「供應商稽核計劃」分頁：勾選各廠商預定稽核月份後<b>送出</b>即鎖定當年度（不可再增列對象），除非退回或管理員取消。</li>
+            <li><b>是否需要核准</b>：管理員於「簽核設定」勾選；不勾＝送出即生效。</li>
+            <li><b>核准來源優先序</b>（同樣在「簽核設定」設定）：依序嘗試「部門或人員綁定」／「自動：送出者的上一階主管」／「最高決策者」，取第一個解析得出人選的順位（該順位任一人核准即生效）；若解析到的人剛好是送出計劃的本人，視同該順位無結果，自動改試下一順位，避免球員兼裁判。</li>
+            <li><b>核准／退回</b>：核准人按「核准/退回」跳窗操作，<b>核准日期可自行輸入</b>（預設今天）；退回必須填寫原因，送出人可修改後重新送出。</li>
+        </ul>
+
+        <h4>五、設定（管理員，於稽核批次工具列）</h4>
         <ul>
             <li><b>稽核員設定</b>：按管理範圍（外包加工／採購／通用）指定部門與稽核員；離職者（在職狀態）自動不列入下拉。</li>
             <li><b>週期設定</b>：共用稽核週期（月），僅供「多久辦一期」提醒。</li>
@@ -809,7 +838,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li><b>門檻設定</b>（定期評核）：不良率／遲交率／特採率上限、約定工作天、評核等級門檻。</li>
         </ul>
 
-        <h4>五、權限角色</h4>
+        <h4>六、權限角色</h4>
         <ul>
             <li><b>稽核檢閱</b>：檢視/歷史/統計/匯出；<b>稽核登錄</b>：＋加入/移除對象、登錄稽核、上傳附件、清冊維護；<b>稽核管理員</b>：＋稽核員/週期/附件/AS綁定/門檻設定、兩年未交易移除；<b>管理者</b>固定全權。</li>
         </ul>
@@ -2107,20 +2136,41 @@ $('#rsCsvBtn').on('click', function(){
     var csv='﻿'+rows.map(function(l){return l.map(function(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
     var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'})); a.download='合格供應商清冊_'+$('#rsYear').val()+'.csv'; a.click();
 });
+/** 合格供應商清冊三欄簽章：製表＝目前登入者，審核＝eg_resolve_supervisor()解析的部門上一階主管
+ *  (若解不到就退回製表人本人)，核准＝全站共用「最高核准人員」(org_role_lib top_approver)；
+ *  三欄一律蓋自動圖章，日期本清冊沒有單一業務日期可用，改成每次列印當下手動輸入一次套用三欄
+ *  （使用者2026-08-10明確要求）。 */
 $('#rsPrintBtn').on('click', function(){
     if(!ROSTER||!ROSTER.rows.length){ alert('清冊無資料'); return; }
-    var doc=META.roster_as_doc, docName=(doc&&doc.doc_name)||'合格供應商清冊', docNo=(doc&&doc.doc_no)||'2-PH-01-04';
-    var head='<div style="position:relative;text-align:center;">'
-        +'<div style="position:absolute;left:0;top:4px;font-size:14px;font-weight:bold;">'+ROSTER.year+' 年</div>'
-        +'<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
-        +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
-    var rows='<table class="pf"><thead><tr><th style="width:40px;">序</th><th style="text-align:left;">加工項目</th><th>廠商</th><th>廠商備註</th><th style="width:60px;">評核等級</th></tr></thead><tbody>';
-    ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td class="q">'+esc(r.main_cat_name||'')+'</td>'
-        +'<td class="q"><b>'+esc(r.maker_id||'')+'</b><div style="font-size:11px;color:#555;">'+esc(r.maker_id_no)+'</div></td>'
-        +'<td class="q">'+esc(r.m_note||'')+'</td><td>'+esc(r.final_grade||'—')+'</td></tr>'; });
-    rows+='</tbody></table>';
-    var sign='<table class="pf-sign" style="page-break-inside:avoid;"><tr><td>製表：____________</td><td>審核：____________</td><td>核准：____________</td></tr></table>';
-    openPrintWindow(head+rows+sign, '合格供應商清冊', docNo);
+    var d = prompt('請輸入本次列印的簽章日期(YYYY-MM-DD)，留空＝今天：', META.today);
+    if (d === null) return;
+    d = $.trim(d) || META.today;
+    $.getJSON(API, {action:'roster_sign_info'}, function(res){
+        if (!res.ok){ alert(res.error||'載入簽章人失敗'); return; }
+        var dateStr = fmtDate(d);
+        var makeStamp = vaStampHtml(CUR_USER_NAME||'', dateStr);
+        var reviewName = res.reviewer_name || CUR_USER_NAME || '';
+        var reviewStamp = reviewName ? vaStampHtml(reviewName, dateStr) : '__________________';
+        var approveStamp = res.approver_name ? vaStampHtml(res.approver_name, dateStr) : '__________________';
+        var doc=META.roster_as_doc, docName=(doc&&doc.doc_name)||'合格供應商清冊', docNo=(doc&&doc.doc_no)||'2-PH-01-04';
+        var head='<div style="position:relative;text-align:center;">'
+            +'<div style="position:absolute;left:0;top:4px;font-size:14px;font-weight:bold;">'+ROSTER.year+' 年</div>'
+            +'<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
+            +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
+        var rows='<table class="pf" style="table-layout:fixed;"><colgroup><col style="width:5%;"><col style="width:25%;">'
+            +'<col style="width:40%;"><col style="width:20%;"><col style="width:10%;"></colgroup>'
+            +'<thead><tr><th>序</th><th style="text-align:left;">加工項目</th><th>廠商</th><th>廠商備註</th><th>評核等級</th></tr></thead><tbody>';
+        ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td class="q">'+esc(r.main_cat_name||'')+'</td>'
+            +'<td class="q"><b>'+esc(r.maker_id||'')+'</b><div style="font-size:11px;color:#555;">'+esc(r.maker_id_no)+'</div></td>'
+            +'<td class="q">'+esc(r.m_note||'')+'</td><td>'+esc(r.final_grade||'—')+'</td></tr>'; });
+        rows+='</tbody></table>';
+        var sign='<table class="pf-sign" style="page-break-inside:avoid;"><tr>'
+            +'<td style="width:33%;"><div style="font-size:11px;color:#555;">製表</div><div style="margin-top:2px;min-height:91px;">'+makeStamp+'</div></td>'
+            +'<td style="width:34%;"><div style="font-size:11px;color:#555;">審核</div><div style="margin-top:2px;min-height:91px;">'+reviewStamp+'</div></td>'
+            +'<td style="width:33%;"><div style="font-size:11px;color:#555;">核准</div><div style="margin-top:2px;min-height:91px;">'+approveStamp+'</div></td>'
+            +'</tr></table>';
+        openPrintWindow(head+rows+sign, '合格供應商清冊', docNo);
+    });
 });
 
 /* ---------- 供應商稽核計劃(2-PH-01-06,年度版) ---------- */
@@ -2149,7 +2199,7 @@ function renderPlan(res){
     $('#planBody').html(body||'<tr><td colspan="14" style="padding:16px;color:#8a6d45;">本年度尚無稽核計畫對象</td></tr>');
     var stMap={pending:'待核准',approved:'已核准',rejected:'已退回(修改後可重新送出)'};
     var lockInfo = res.lock ? ('送出日期：'+fmtDate(res.lock.submit_date)+'　狀態：'+(stMap[res.lock.status]||res.lock.status)
-        + (res.lock.status==='approved'&&res.lock.approved_by_name ? '（核准：'+esc(res.lock.approved_by_name)+' '+fmtDate(res.lock.approved_at)+'）' : '')
+        + (res.lock.status==='approved'&&res.lock.approved_by_name ? '（核准：'+esc(res.lock.approved_by_name)+' '+fmtDate(res.lock.approved_date||res.lock.approved_at)+'）' : '')
         + (res.lock.status==='pending'&&res.approver_names&&res.approver_names.length ? '（可核准：'+esc(res.approver_names.join('、'))+'）' : '')) : '尚未送出（可持續增列對象）';
     $('#planLockInfo').text(lockInfo);
     $('#planSubmitBtn').toggle(!!(PERMS.canEdit && !res.locked));
@@ -2206,18 +2256,29 @@ $('#planSubmitBtn').on('click', function(){
     }, 'json').fail(function(x){ alert('送出失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 });
 function openPlanDecideMask(){
-    if (confirm('要核准這份年度稽核計畫嗎？（取消可改為輸入退回原因）')) {
-        planDecideAction('approved', '');
-    } else {
-        var note = prompt('請輸入退回原因：');
-        if (!note || !note.trim()){ alert('退回必須填寫原因，已取消'); return; }
-        planDecideAction('rejected', note.trim());
-    }
+    $('input[name="pdDecision"][value="approved"]').prop('checked', true);
+    $('#pdNoteBox').hide();
+    $('#pdNote').val('');
+    $('#pdDate').val(META.today);
+    openMask('planDecideMask');
 }
-function planDecideAction(decision, note){
-    $.post(API, {action:'plan_decide', year:$('#planYear').val(), decision:decision, note:note||''}, function(res){
+$(document).on('change', 'input[name="pdDecision"]', function(){
+    $('#pdNoteBox').toggle($('input[name="pdDecision"]:checked').val()==='rejected');
+});
+function submitPlanDecide(){
+    var decision = $('input[name="pdDecision"]:checked').val();
+    var d = $('#pdDate').val();
+    if (!d){ alert('請選擇核准日期'); return; }
+    var note = $('#pdNote').val().trim();
+    if (decision==='rejected' && !note){ alert('退回必須填寫原因'); return; }
+    if (!confirm(decision==='approved' ? '確定核准這份年度稽核計畫？' : '確定退回這份年度稽核計畫？')) return;
+    planDecideAction(decision, note, d);
+}
+function planDecideAction(decision, note, approvedDate){
+    $.post(API, {action:'plan_decide', year:$('#planYear').val(), decision:decision, note:note||'', approved_date:approvedDate||META.today}, function(res){
         if(!res.ok){ alert(res.error||'處理失敗'); return; }
         alert(decision==='approved' ? '已核准' : '已退回');
+        closeMask('planDecideMask');
         loadPlan();
     }, 'json').fail(function(x){ alert('處理失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
@@ -2340,11 +2401,28 @@ function submitChecklist(){
 }
 
 /* ---------- 簽核設定(管理員) ---------- */
+var CHAIN_LABELS = {dept_or_user:'部門或人員綁定（組織角色綁定設定第三節）', auto_supervisor:'自動：送出者的上一階主管', top_approver:'最高決策者'};
+var CHAIN_METHODS_ALL = ['dept_or_user','auto_supervisor','top_approver'];
+function renderChainBox(chain){
+    chain = (chain && chain.length) ? chain : CHAIN_METHODS_ALL;
+    var h='';
+    for (var i=0;i<3;i++){
+        h += '<div><label>第'+(i+1)+'順位</label><select class="chain-sel" data-idx="'+i+'" style="width:220px;"><option value="">（不使用）</option>';
+        CHAIN_METHODS_ALL.forEach(function(m){
+            h += '<option value="'+m+'"'+(chain[i]===m?' selected':'')+'>'+esc(CHAIN_LABELS[m])+'</option>';
+        });
+        h += '</select></div>';
+    }
+    $('#chainBox').html(h);
+}
 $('#btnSignSetting').on('click', function(){
     $('#ssAuto').prop('checked', !!(META.sign_setting && META.sign_setting.auto));
     $('#ssPlanNeed').prop('checked', !!(META.plan_sign_setting && META.plan_sign_setting.need));
     $('#ssTopApprover').text((META.plan_approver_names && META.plan_approver_names.length) ? META.plan_approver_names.join('、')
         : '（目前解析不到任何合格人選，請先到「組織角色綁定設定」的「供應商稽核計劃核准」指定部門或人員）');
+    $.getJSON(API, {action:'get_approver_chain'}, function(res){
+        renderChainBox(res.ok ? res.chain : null);
+    });
     $.getJSON(API, {action:'sign_dept_options'}, function(res){
         if(!res.ok) return;
         var $s=$('#ssDept').html('<option value="">（尚未設定）</option>');
@@ -2360,7 +2438,13 @@ function submitSignSetting(){
         $.post(API, {action:'save_plan_sign_setting', need:$('#ssPlanNeed').is(':checked')?1:0}, function(res2){
             if(!res2.ok){ alert(res2.error||'儲存失敗'); return; }
             META.plan_sign_setting = res2.setting;
-            closeMask('signSetMask');
+            var chain=[];
+            $('.chain-sel').each(function(){ var v=$(this).val(); if (v && chain.indexOf(v)<0) chain.push(v); });
+            $.post(API, {action:'save_approver_chain', chain:JSON.stringify(chain)}, function(res3){
+                if(!res3.ok){ alert(res3.error||'儲存失敗'); return; }
+                closeMask('signSetMask');
+                loadPlan();
+            }, 'json');
         }, 'json');
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }

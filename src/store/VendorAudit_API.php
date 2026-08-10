@@ -209,6 +209,20 @@ case 'roster_set_grade': {
     $db->prepare("UPDATE maker_list SET roster_grade=? WHERE maker_id_no IN ($ph)")->execute(array_merge([$g], $ids));
     jout(['updated'=>count($ids)]);
 }
+/* 合格供應商清冊列印簽章名單：製表＝目前登入者(前端已知不必回傳)；
+   審核＝eg_resolve_supervisor()解析目前登入者的部門上一階主管(同人再往上一層部門找，找不到回null由前端退回製表人)；
+   核准＝org_role_lib全站共用「最高核准人員」(top_approver)。使用者2026-08-10明確要求的三段規則。 */
+case 'roster_sign_info': {
+    $reviewerId = eg_resolve_supervisor($db, $uid);
+    $reviewerName = null;
+    if ($reviewerId) {
+        $st = $db->prepare("SELECT user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+        $st->execute([$reviewerId]);
+        $reviewerName = $st->fetchColumn() ?: null;
+    }
+    $approver = eg_org_user($db, 'top_approver');
+    jout(['reviewer_name' => $reviewerName, 'approver_name' => $approver['user_cname'] ?? null]);
+}
 
 /* 兩年未交易外包廠（有 bom_ing 發包史但最後發包 >2 年）：納管或在冊者，供確認後移除 */
 case 'stale_vendors': {
@@ -872,6 +886,8 @@ case 'plan_decide': {
     $year = (int)($_POST['year'] ?? 0);
     $decision = (string)($_POST['decision'] ?? '');
     $noteIn = trim((string)($_POST['note'] ?? ''));
+    $approvedDate = trim((string)($_POST['approved_date'] ?? '')) ?: date('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $approvedDate)) jerr('核准日期格式不正確');
     if (!in_array($decision, ['approved','rejected'], true)) jerr('無效的決定');
     if ($decision === 'rejected' && $noteIn === '') jerr('退回必須填寫原因');
     $lock = vendor_audit_plan_lock_get($db, $year);
@@ -879,13 +895,25 @@ case 'plan_decide': {
     $pool = vendor_audit_plan_approver_pool($db, (int)($lock['submitted_by'] ?? 0));
     if (!$perms['canAdmin'] && !in_array($uid, array_column($pool, 'id'), true)) jerr('您不是本計劃的核准人員', 403);
     if ($decision === 'approved') {
-        $db->prepare("UPDATE vendor_audit_plan_lock SET status='approved', approved_by_name=?, approved_at=NOW() WHERE year=?")->execute([$uname, $year]);
+        $db->prepare("UPDATE vendor_audit_plan_lock SET status='approved', approved_by_name=?, approved_at=NOW(), approved_date=? WHERE year=?")
+           ->execute([$uname, $approvedDate, $year]);
     } else {
         $db->prepare("UPDATE vendor_audit_plan_lock SET status='rejected' WHERE year=?")->execute([$year]);
     }
     vendor_audit_close_plan_notice($db, $year, $uid);
     vendor_audit_notify_plan_result($db, $year, $lock['submitted_by'] ? (int)$lock['submitted_by'] : null, $uname, $decision, $noteIn ?: null);
     jout(['status'=>$decision]);
+}
+case 'get_approver_chain': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    jout(['chain'=>vendor_audit_plan_approver_chain($db), 'methods'=>VENDOR_AUDIT_APPROVER_METHODS]);
+}
+case 'save_approver_chain': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    $chain = json_decode((string)($_POST['chain'] ?? '[]'), true);
+    if (!is_array($chain)) jerr('格式不正確');
+    vendor_audit_plan_approver_chain_save($db, $chain);
+    jout(['chain'=>vendor_audit_plan_approver_chain($db)]);
 }
 /* 超級管理員或被授權的管理員：取消已送出/已核准的年度計畫，解除鎖定回到可增列對象的狀態
    (2026-08-06使用者明確要求；密碼驗證改用全站共用的操作確認密碼 confirm_password_lib.php，
