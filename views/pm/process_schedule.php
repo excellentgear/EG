@@ -3639,6 +3639,9 @@ function get_state_badge($state)
                                 <button class="btn btn-default btn-sm" id="btnSearchFinished" style="margin-bottom: 5px; margin-right: 5px;">
                                     <i class="fa fa-history"></i> 查詢已報工
                                 </button>
+                                <a class="btn btn-default btn-sm" href="process_report_query.php" target="_blank" style="margin-bottom: 5px; margin-right: 5px;">
+                                    <i class="fa fa-list-alt"></i> 報工紀錄查詢列印
+                                </a>
                                 <button class="btn btn-danger btn-sm" id="btnTempReport" style="margin-bottom: 5px; margin-right: 5px;">
                                     <i class="fa fa-bolt"></i> 臨時加工
                                 </button>

@@ -2206,8 +2206,9 @@ function renderPlan(res){
     $('#planSubmitBtn').toggle(!!(PERMS.canEdit && !res.locked));
     $('#planDecideBtn').remove();
     $('#planCancelBtn').remove();
-    if (res.lock && res.lock.status==='pending') {
-        // 顯示給所有看得到本頁的人；實際是否有權核准由後端 plan_decide 再驗一次(canAdmin 或最高核准人員本人/代理)
+    if (res.lock && res.lock.status==='pending' && res.can_decide) {
+        // can_decide後端算好(合格核准人/送出人本人/管理者)才顯示，跟plan_decide的權限判斷一致，
+        // 完全無關的人看不到這顆按鈕(使用者2026-08-10明確要求要「完全鎖住」，不是只靠後端擋)
         $('<button id="planDecideBtn" class="b-att2" style="margin-left:8px;">核准/退回</button>').on('click', openPlanDecideMask).insertAfter('#planLockInfo');
     }
     if (res.lock && (res.lock.status==='pending'||res.lock.status==='approved') && META.confirm_pw_allowed) {

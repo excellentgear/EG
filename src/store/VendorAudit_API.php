@@ -856,9 +856,17 @@ case 'plan_data': {
     // 年度計畫本身沒有單筆業務日期，但「送出計畫」是明確的定案事件，AS 編號版次依 submit_date 回推
     // （ai-rules/16 第三之四節）；尚未送出時沒有 submit_date，退回今天最新版（等同現行行為）。
     $planBizDate = $lock['submit_date'] ?? null;
+    // 「核准/退回」按鈕只給跟這筆待核准有關的人看：合格核准人、送出人本人(可自行退回)、或管理者；
+    // 跟 plan_decide 的權限判斷保持一致，不讓完全無關的人也看到按鈕(使用者2026-08-10明確要求要「完全鎖住」)。
+    $canDecide = false;
+    if ($lock && $lock['status'] === 'pending') {
+        $submittedBy = (int)($lock['submitted_by'] ?? 0);
+        $decidePool = vendor_audit_plan_approver_pool($db, $submittedBy);
+        $canDecide = $perms['canAdmin'] || $uid === $submittedBy || in_array($uid, array_column($decidePool, 'id'), true);
+    }
     jout(['year'=>$year, 'rows'=>vendor_audit_plan_data($db, $year), 'lock'=>$lock,
           'locked'=>vendor_audit_plan_locked($db, $year), 'sign_setting'=>$signSet,
-          'approver_names'=>$approverNames,
+          'approver_names'=>$approverNames, 'can_decide'=>$canDecide,
           'plan_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_plan_as_doc_id', $planBizDate),
           'company_name'=>vendor_audit_company_name($db)]);
 }
