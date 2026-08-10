@@ -501,7 +501,8 @@ case 'checkin_meta': {
     $st->execute([$sid]);
     $s = $st->fetch(PDO::FETCH_ASSOC);
     if (!$s) jerr('找不到場次');
-    if (!in_array($s['status'], ['scheduled','done'], true)) jerr('此場次尚未確認開課，尚無可簽到名單');
+    // 已完成的場次不再開放簽到（避免事後亂簽），需先退回已排定；跟前端清單「現場簽到」按鈕的顯示條件一致
+    if ($s['status'] !== 'scheduled') jerr($s['status']==='done' ? '此場次已完成，不再開放簽到（如需補簽請先退回已排定）' : '此場次尚未確認開課，尚無可簽到名單');
     $dq = $db->prepare("SELECT day_no, day_date, start_time, end_time FROM training_session_day WHERE session_id=? ORDER BY day_no, day_date");
     $dq->execute([$sid]);
     $aq = $db->prepare("SELECT a.user_id, a.user_name, a.dept_name, a.position_name
@@ -526,6 +527,12 @@ case 'sign_attendee': {
     $forUid = (int)($_POST['user_id'] ?? 0);
     $dayDate = (string)($_POST['day_date'] ?? '');
     $password = (string)($_POST['password'] ?? '');
+    $ss = $db->prepare("SELECT status FROM training_session WHERE session_id=?");
+    $ss->execute([$sid]);
+    $curStatus = $ss->fetchColumn();
+    if ($curStatus === false) jerr('找不到場次');
+    // 跟 checkin_meta 同一條規則：已完成不再開放簽到，避免瀏覽器分頁開著現場簽到畫面沒關、場次在別處已被登錄完成後還能繼續簽
+    if ($curStatus !== 'scheduled') jerr($curStatus==='done' ? '此場次已完成，不再開放簽到（如需補簽請先退回已排定）' : '此場次尚未確認開課，尚無可簽到名單');
     $st = $db->prepare("SELECT att_id FROM training_attendee WHERE session_id=? AND user_id=?");
     $st->execute([$sid, $forUid]);
     $attId = (int)$st->fetchColumn();
@@ -844,6 +851,22 @@ case 'set_status': {
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('狀態變更失敗：'.$e->getMessage(), 500); }
     jout(['session_id'=>$sid, 'status'=>$status]);
+}
+
+/* 退回已排定（2026-08-10 新增，比「退回計畫中」輕量）：只有「已完成」的場次能用，僅取消完成狀態，
+   不動 done_date/上課日期明細/名單/評鑑/OJT/成績、也不撤行事曆事件（已排定的場次本來就該有行事曆事件）——
+   用途是「事後發現需要補簽到/補改實行資料」，不想連計畫內容都要重填一次。跟「退回計畫中」一樣算解鎖，需操作確認密碼。 */
+case 'revert_to_scheduled': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $sid = (int)($_POST['session_id'] ?? 0);
+    $st = $db->prepare("SELECT status FROM training_session WHERE session_id=?");
+    $st->execute([$sid]);
+    $curStatus = $st->fetchColumn();
+    if ($curStatus === false) jerr('找不到場次');
+    if ($curStatus !== 'done') jerr('只有「已完成」的場次能退回已排定');
+    training_require_unlock($db, $uid, true, (string)($_POST['password'] ?? ''), '此場次');
+    $db->prepare("UPDATE training_session SET status='scheduled' WHERE session_id=?")->execute([$sid]);
+    jout(['session_id'=>$sid, 'status'=>'scheduled']);
 }
 
 /* ============================================================

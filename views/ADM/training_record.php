@@ -121,6 +121,9 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
         input[type=number] { -moz-appearance:textfield; }
         .tr-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
+        /* 操作確認密碼跳窗可能從別的跳窗（考核成績填寫等）裡面觸發，一律要蓋在最上層，
+           不能只靠 HTML 出現順序決定疊放順序（那樣任何在它之後新增的跳窗都會把它蓋住，這次就是被 #ojtScoreMask 蓋住才點不到）。 */
+        #pwMask { z-index:1200; }
         .tr-modal { background:#fff; border-radius:8px; max-width:600px; margin:48px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
             max-height:86vh; display:flex; flex-direction:column; }
         .tr-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
@@ -639,6 +642,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         <button class="b-cancel" onclick="printSignSheet(false)"><i class="fa fa-print"></i> 列印簽到表</button>
         <button class="b-cancel" onclick="printSignSheet(true)" title="不帶目前名單，整張印成空白列供現場手寫簽到"><i class="fa fa-file-o"></i> 列印空白簽到表</button>
         <button class="b-cancel" id="exRevert" style="display:none;color:#DD5138;" onclick="revertPlanned()"><i class="fa fa-undo"></i> 退回計畫中</button>
+        <button class="b-cancel" id="exRevertSch" style="display:none;color:#DD5138;" onclick="revertToScheduled()" title="只取消完成狀態，不動日期/名單/評鑑/成績，也重新開放現場簽到"><i class="fa fa-undo"></i> 退回已排定</button>
         <button class="b-cancel" id="exUnlockBtn" style="display:none;color:#DD5138;" onclick="unlockExMask()"><i class="fa fa-unlock"></i> 解鎖修改</button>
         <button class="b-cancel" onclick="closeMask('exMask')">取消</button>
         <button class="b-ok" id="exSave" onclick="submitEx(0)" title="課還沒上：確定要開這堂課（狀態→已排定，可印簽到表）">確認開課</button>
@@ -929,12 +933,13 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         <b>④送審計劃表</b>：工具列「送審計劃表」把年度計畫送審核→核准（是否需要送審在模組設定切換）。<br>
         <b>⑤教育訓練需求申請單</b>（2-MM-01-05）：「需求申請」分頁可新增申請單（草稿）、儲存並送出（申請單位主管核准，或模組設定免簽核自動核准），
         訓練管理員將已核准的申請按「轉為計畫」帶入①的新增計畫視窗確認後存檔即完成轉換。<br>
-        <b>⑥現場簽到</b>：場次為「已排定」或「已完成」時，清單上會出現「現場簽到」按鈕，開啟後不需要編輯權限，共用一台裝置給學員自己選姓名、輸入<b>本人密碼</b>按 Enter 完成電子簽到（密碼只驗證是不是本人，不是密碼反查身分）。
+        <b>⑥現場簽到</b>：場次為「已排定」時，清單上會出現「現場簽到」按鈕，開啟後不需要編輯權限，共用一台裝置給學員自己選姓名、輸入<b>本人密碼</b>按 Enter 完成電子簽到（密碼只驗證是不是本人，不是密碼反查身分）。「已完成」的場次不再開放簽到，需先在「實行資料」按「退回已排定」（操作確認密碼）才能重新開放。
         <h4>重要行為</h4>
         ・<b>訓練需求申請人</b>是獨立角色（在使用者權限設定的「教育訓練管理」角色指派裡指派），只能新增/送出/檢視申請單，
         看得到訓練場次列表（唯讀）但**不能**修改計畫或任何設定，避免誤把整頁編輯權限一起給出去。<br>
         ・休息時間<b>系統自動算</b>（上課時間 ∩ 休息時段），欄位灰底不可改。<br>
         ・已排定/已完成的場次，<b>計畫內容任何人都不能直接改</b>，需先在「實行資料」按「退回計畫中」（輸入操作確認密碼，僅獲授權的管理員/超級管理員可用）解鎖；「登錄完成」後的實行資料（日期/名單/OJT 項目等）同樣要按「解鎖修改」輸入操作確認密碼才能再改；考核成績送出後也是同一套密碼機制才能解鎖重填。<br>
+        ・「已完成」的場次不再開放現場簽到；若要補簽到或補改實行資料但不想連計畫內容都重填，可按「退回已排定」（同樣需操作確認密碼），只取消完成狀態，日期/名單/評鑑/考核成績都不會被清除。<br>
         ・刪除場次要連續兩次輸入大寫 <b>Y</b>，且會一併刪除附件實體檔。<br>
         ・點清單任一列可展開該場次明細（大綱、時段、名單與評鑑、附件）。<br>
         ・「達標狀況」分頁依顯示單位統計；子部門可合併成一列，也可排除不列入的部門。<br>
@@ -1180,8 +1185,9 @@ function renderTable(){
         html += '<td>'+dateRangeText(r)+'</td>';
         html += '<td style="white-space:nowrap;" onclick="event.stopPropagation();">';
         html += '<span class="tr-op" onclick="openView('+r.session_id+')" title="檢視完整內容（含名單與評鑑結果）"><i class="fa fa-search-plus"></i>檢視</span>';
-        if (r.status==='scheduled' || r.status==='done') {
-            // 免編輯權限：現場裝置給學員自己選人輸入密碼簽到，不需要 training_edit
+        if (r.status==='scheduled') {
+            // 免編輯權限：現場裝置給學員自己選人輸入密碼簽到，不需要 training_edit；
+            // 已完成的場次不再開放簽到（避免事後亂簽），除非先退回已排定
             html += '<span class="tr-op" onclick="openCheckin('+r.session_id+')" title="現場裝置給學員自己選人輸入本人密碼簽到"><i class="fa fa-pencil-square-o"></i>現場簽到</span>';
         }
         if (PERMS.canEdit) {
@@ -1443,6 +1449,7 @@ function openExBody(sid){
     $('#exSave').text(done ? '儲存實行紀錄' : (sch ? '儲存' : '確認開課'));
     $('#exFinish').toggle(!done);
     $('#exRevert').toggle((done || sch) && !!META.confirm_pw_allowed);
+    $('#exRevertSch').toggle(done && !!META.confirm_pw_allowed);
     $('#exMask').data('sid', r.session_id);
     var ext = r.train_type==='external';
     // OJT/實作口試考核表：僅內訓；建立/編輯限本場講師本人或訓練管理員（見 ai-rules/08 第六節同精神：以目前狀態判定，不猜權限）
@@ -2720,6 +2727,18 @@ function revertPlanned(){
         setStatus(sid, 'planned', true, pwd);
     });
 }
+/* 退回已排定：比「退回計畫中」輕量，只取消完成狀態，日期/名單/評鑑/OJT成績都不動，行事曆事件也保留（已排定場次本來就該有）——
+   用途是事後要補簽到或補改實行資料，不想連計畫內容都要重填。重新開放後會再從清單重載，回到「訓練場次」分頁。 */
+function revertToScheduled(){
+    if (!confirm('退回為「已排定」？只會取消完成狀態並重新開放現場簽到，上課日期/參加名單/評鑑結果/考核成績都不會被清除。')) return;
+    var sid = $('#exMask').data('sid');
+    askSuperPwd('退回已排定需要操作確認密碼：', function(pwd){
+        $.post(API, {action:'revert_to_scheduled', session_id:sid, password:pwd}, function(res){
+            if (!res.ok){ alert(res.error||'退回失敗'); return; }
+            closeMask('exMask'); loadList(); alert('已退回已排定，可重新開放現場簽到與修改實行資料。');
+        }, 'json').fail(function(x){ alert('退回失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    });
+}
 /* 狀態切換：取消計畫 / 恢復計畫 / 退回計畫中（password 選用，只有從已排定/已完成退回計畫中才需要，後端會判斷） */
 function setStatus(sid, status, fromEx, password){
     if (!fromEx){
@@ -2767,7 +2786,7 @@ function printSignSheet(blankOnly, src){
     for (var bi=0; bi<blanks; bi++) list.push({});
     var days = src ? (src.days||[]) : DAYS;
     var ds=(days.length?days:[{date:'', start:'', end:'', hours:''}]);
-    var em=src ? r.eval_method : $('#exEvalMethod').val(), emLabel=em?(EVAL_METHODS[em]||em):'（未設定）', noticeCourse=(em==='notice');
+    var em=src ? r.eval_method : $('#exEvalMethod').val(), emLabel=em?(EVAL_METHODS[em]||em):'（未設定）';
     var outline=$.trim((src ? r.outline : $('#exOutline').val())||'');
     // 多天課程：每個表頭都附一行「全部上課日期」，方便第 3 天才簽的人也看得到整體排程；
     // 天數不多(≤6)逐一列出、換行不了就用頓號分隔；太多天(>6)改用「首~末（共N天）」範圍格式，避免那一行印成一長串。
@@ -2782,26 +2801,25 @@ function printSignSheet(blankOnly, src){
         var when='日期：'+(dispDate(d.date)||'____.__.__')+(tm?'　'+tm:'')+'　時數：'+(hh||'__')+' 小時';
         var rows='';
         list.forEach(function(a,i){
-            // 評鑑結果一律印成空白勾選框讓現場圈選（紙本才是正本；線上已填的另有系統紀錄）；宣導(免評鑑)課程直接印「不須評鑑」不留勾選框
             // 簽名欄：該天現場密碼簽到過的人印出簽到章(章上日期＝該堂課的上課日，不是按鈕按下當下的日期)；還沒簽到的人維持空白供紙本簽名
+            // 評鑑結果不在簽到表上印了（考核表已經有，重複列印無意義；免評鑑的評鑑方式仍會印在上方「評鑑方式」那行）
             var daySigned = a.user_id!=null && d.date && daySigns[a.user_id+'_'+d.date];
             rows+='<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
                 +'<td style="width:130px;">'+(daySigned?egStampHtml(a.user_name, dispDate(d.date), false, a.dept_name):'')+'</td>'
-                +'<td style="width:112px;white-space:nowrap;">'+(noticeCourse?'不須評鑑':'☐ 合格　☐ 不合格')+'</td>'
-                +'<td style="width:120px;"></td></tr>';
+                +'<td style="width:160px;"></td></tr>';
         });
         html+='<div class="pg'+(di>0?' pgbrk':'')+'">'
             +'<table class="sf"><thead>'
-            +'<tr><th colspan="7" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
+            +'<tr><th colspan="6" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
             +'<div class="tt">'+esc(docTitle)+'</div></div></th></tr>'
-            +'<tr><td colspan="7" class="sf-i">課程名稱：'+esc(course)+(ds.length>1?'　（第 '+(di+1)+' / '+ds.length+' 天）':'')+'</td></tr>'
-            +(allDatesLine?'<tr><td colspan="7" class="sf-i">'+esc(allDatesLine)+'</td></tr>':'')
-            +'<tr><td colspan="7" class="sf-i">評鑑方式：'+esc(emLabel)+'</td></tr>'
-            +'<tr><td colspan="7" class="sf-i">'+esc(lect)+'　地點：'+esc(loc)+'</td></tr>'
-            +'<tr><td colspan="7" class="sf-i">'+esc(when)+'</td></tr>'
-            +(outline?'<tr><td colspan="7" class="sf-i ol">課程大綱：'+esc(outline)+'</td></tr>':'')
+            +'<tr><td colspan="6" class="sf-i">課程名稱：'+esc(course)+(ds.length>1?'　（第 '+(di+1)+' / '+ds.length+' 天）':'')+'</td></tr>'
+            +(allDatesLine?'<tr><td colspan="6" class="sf-i">'+esc(allDatesLine)+'</td></tr>':'')
+            +'<tr><td colspan="6" class="sf-i">評鑑方式：'+esc(emLabel)+'</td></tr>'
+            +'<tr><td colspan="6" class="sf-i">'+esc(lect)+'　地點：'+esc(loc)+'</td></tr>'
+            +'<tr><td colspan="6" class="sf-i">'+esc(when)+'</td></tr>'
+            +(outline?'<tr><td colspan="6" class="sf-i ol">課程大綱：'+esc(outline)+'</td></tr>':'')
             +'<tr><th style="width:36px;">序</th><th>部門</th><th>職稱</th><th>姓名</th><th>簽名</th>'
-            +'<th>評鑑結果</th><th>備註</th></tr>'
+            +'<th>備註</th></tr>'
             +'</thead><tbody>'+rows+'</tbody></table>'
             +'</div>';
     });
