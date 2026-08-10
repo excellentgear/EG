@@ -353,6 +353,36 @@ function meeting_has_active_item_notices(PDO $db, int $meetingId): bool {
 }
 
 /**
+ * 給畫面顯示用的狀態(2026-08-10使用者明確要求)：在真正的簽核狀態(submitted/chair_done/done/rejected)之外，
+ * draft/rejected 階段再細分出兩種一眼可辨的子狀態，避免「全部確認完成、可以送簽核了」跟「什麼都還沒做的
+ * 新草稿」在畫面上長得一模一樣(都只顯示「草稿」)：
+ *  - notifying(回簽中)：還有生效中的項目回覆通知。
+ *  - ready(待送簽核)：出席已全部簽到、負責部門/指定人員也全部確認完成、且已指定主席，只差按下送簽核。
+ * $m 需含 meeting_id、status、chair_user_id。
+ */
+function meeting_display_status(PDO $db, array $m): string {
+    $raw = (string)$m['status'];
+    if (!in_array($raw, ['draft', 'rejected'], true)) return $raw;
+    $meetingId = (int)$m['meeting_id'];
+    if (meeting_has_active_item_notices($db, $meetingId)) return 'notifying';
+    if (!$m['chair_user_id']) return $raw;
+    $ac = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=?");
+    $ac->execute([$meetingId]);
+    if ((int)$ac->fetchColumn() === 0) return $raw;
+    $unsigned = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=? AND signed=0");
+    $unsigned->execute([$meetingId]);
+    if ((int)$unsigned->fetchColumn() > 0) return $raw;
+    $itq = $db->prepare("SELECT * FROM meeting_item WHERE meeting_id=?");
+    $itq->execute([$meetingId]);
+    $items = $itq->fetchAll(PDO::FETCH_ASSOC);
+    if (!$items) return $raw;
+    foreach ($items as $it) {
+        if (!meeting_item_is_confirmed($db, $it)) return $raw;
+    }
+    return 'ready';
+}
+
+/**
  * 項目待確認通知(2026-08-06改版，使用者明確要求)：送出時若負責部門/指定人員尚未現場簽名完成，
  * 一律改發通知請對方回覆確認，不再擋下送出；對象範圍見 meeting_item_pending_notify_targets()
  * （未出席者本身／部門主管／已出席但尚未簽的部門成員或指定人員，任一人回覆即完成該項目）。
