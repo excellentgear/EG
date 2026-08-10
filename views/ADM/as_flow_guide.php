@@ -512,9 +512,11 @@ foreach ($DOCMAP as $no => $d) {
 }
 $onlineCnt = count(array_filter($FORMS, fn($d) => $d['tpl'] || $d['mod'] || $d['pgn']));
 
-$cntHigh = count(array_filter($ISSUES, fn($r) => $r[0] === '高'));
-$cntMid  = count(array_filter($ISSUES, fn($r) => $r[0] === '中'));
-$cntLow  = count(array_filter($ISSUES, fn($r) => $r[0] === '低'));
+// 已按「已檢查」者視為已核實處理完畢，分頁角標與優先度統計都不再計入未處理數
+$cntHigh = count(array_filter($ISSUES, fn($r) => $r[0] === '高' && !$r['ck']));
+$cntMid  = count(array_filter($ISSUES, fn($r) => $r[0] === '中' && !$r['ck']));
+$cntLow  = count(array_filter($ISSUES, fn($r) => $r[0] === '低' && !$r['ck']));
+$cntIssueOpen = count(array_filter($ISSUES, fn($r) => !$r['ck']));
 
 // 預設顯示的文件
 $cur = $_GET['doc'] ?? 'overview';
@@ -703,7 +705,7 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
 <div class="fg-tabs">
   <div class="fg-tab active" data-tab="doc"><i class="fa fa-file-text-o"></i> 課室說明文件</div>
   <div class="fg-tab" data-tab="iss"><i class="fa fa-exclamation-triangle"></i> 待處理問題
-    <span class="badge-warm"><?= count($ISSUES) ?></span></div>
+    <span class="badge-warm"><?= $cntIssueOpen ?></span></div>
   <div class="fg-tab" data-tab="onl"><i class="fa fa-bolt"></i> 線上表單對照
     <span class="badge-warm"><?= $onlineCnt ?>/<?= count($FORMS) ?></span></div>
 </div>
