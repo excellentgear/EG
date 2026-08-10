@@ -94,7 +94,7 @@ function prq_build_filter($p, $exclude = []) {
         if (!empty($p['date_from'])) { $where[] = 'pdr.report_date >= ?'; $params[] = $p['date_from']; }
         if (!empty($p['date_to']))   { $where[] = 'pdr.report_date <= ?'; $params[] = $p['date_to']; }
     }
-    if (!in_array('process_no', $exclude, true) && !empty($p['process_no'])) { $where[] = 'pdr.process_no = ?'; $params[] = intval($p['process_no']); }
+    if (!in_array('process_type_id', $exclude, true) && !empty($p['process_type_id'])) { $where[] = 'pn.process_type_id = ?'; $params[] = intval($p['process_type_id']); }
     if (!in_array('machine_id', $exclude, true) && !empty($p['machine_id'])) { $where[] = 'pdr.machine_id = ?'; $params[] = intval($p['machine_id']); }
     if (!in_array('person', $exclude, true) && !empty($p['person'])) {
         $where[] = '(CONVERT(u1.user_cname USING utf8mb4) LIKE ? OR CONVERT(u2.user_cname USING utf8mb4) LIKE ?)';
@@ -203,8 +203,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true, 'rows' => $rows, 'total' => count($rows), 'company_name' => $company]);
         } elseif ($action === 'get_facets') {
             // 每個維度各自排除「自己」的篩選條件，只套用其餘條件，才能算出「若改選這個，還會有資料」的清單（雙向連動）
-            list($whereP, $paramsP) = prq_build_filter($_POST, ['process_no']);
-            $stmtP = $pdo->prepare("SELECT pdr.process_no, pn.ProcessName, COUNT(*) cnt $PRQ_FROM $whereP GROUP BY pdr.process_no, pn.ProcessName ORDER BY pn.ProcessName");
+            // 製程按鈕比照 process_schedule.php「查詢已報工工單」：以製程大類(process_type)為單位，不是逐一製程
+            list($whereP, $paramsP) = prq_build_filter($_POST, ['process_type_id']);
+            $stmtP = $pdo->prepare("SELECT pn.process_type_id, pt.process_type AS category_name, COUNT(*) cnt
+                $PRQ_FROM LEFT JOIN process_type pt ON pn.process_type_id = pt.process_type_id
+                $whereP GROUP BY pn.process_type_id, pt.process_type ORDER BY pn.process_type_id");
             $stmtP->execute($paramsP);
             $processes = $stmtP->fetchAll(PDO::FETCH_ASSOC);
 
@@ -374,8 +377,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <p>逐筆列出「加工排程看板」每一筆報工紀錄（含臨時加工），供查找特定日期/人員/製程/機台的報工內容並列印或匯出，與看板上「查詢已報工工單」跳窗（依工單彙總、用於恢復任務/改綁BOM）用途不同、互不影響。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>上方篩選可組合使用：製程（頁籤按鈕）、日期區間、機台、人員（同時比對架機/生產人員）、備註關鍵字。</li>
-            <li>製程、機台、人員的可選清單會依「目前其餘篩選條件」動態連動——只列真的有資料的選項，選了製程會連動縮小機台/人員清單，反之亦然。</li>
+            <li>上方篩選可組合使用：製程大類（頁籤按鈕，比照排程看板「查詢已報工工單」的分類方式）、日期區間、機台、人員（同時比對架機/生產人員）、備註關鍵字。</li>
+            <li>製程大類、機台、人員的可選清單會依「目前其餘篩選條件」動態連動——只列真的有資料的選項，選了製程大類會連動縮小機台/人員清單，反之亦然。</li>
             <li>日期區間預設近30天；按「清除篩選(查全部)」可清空所有條件、改查全部歷史資料。</li>
             <li>列表分頁顯示（避免一次載入全部拖慢速度），可調整每頁筆數。</li>
             <li>「列印」「匯出CSV」皆依目前篩選條件抓「全部」符合筆數（不受分頁限制）。</li>
@@ -410,7 +413,7 @@ $(document).ready(function(){
 var COMPANY = '';
 var lastTotal = 0;
 var curPage = 1;
-var curProcess = ''; // 製程改用頁籤按鈕，不再是 <select>，用全域變數記目前選中的 process_no
+var curProcess = ''; // 製程改用「製程大類」頁籤按鈕，不再是逐一製程 <select>，用全域變數記目前選中的 process_type_id
 
 function esc(s){ return $('<div>').text(s==null?'':String(s)).html(); }
 
@@ -435,7 +438,7 @@ function curFilters(){
     return {
         date_from: $('#fDateFrom').val(),
         date_to: $('#fDateTo').val(),
-        process_no: curProcess,
+        process_type_id: curProcess,
         machine_id: $('#fMachine').val(),
         person: $.trim($('#fPerson').val()),
         remark: $.trim($('#fRemark').val())
@@ -504,8 +507,9 @@ function loadList(page){
     }, 'json');
 }
 
-// ── 動態連動篩選（facet）：製程頁籤／機台下拉／人員建議清單，皆依「目前其餘篩選條件」重新計算 ──
-// 只列有資料的選項；若目前選中的製程/機台在新清單裡消失了(跟其他篩選兜不出資料)，自動改回「全部」。
+// ── 動態連動篩選（facet）：製程大類頁籤／機台下拉／人員建議清單，皆依「目前其餘篩選條件」重新計算 ──
+// 製程按鈕比照 process_schedule.php「查詢已報工工單」以製程大類(process_type)為單位，不是逐一製程。
+// 只列有資料的選項；若目前選中的大類/機台在新清單裡消失了(跟其他篩選兜不出資料)，自動改回「全部」。
 function renderProcessTabs(list){
     var $t = $('#processTabs').empty();
     var total = 0;
@@ -514,10 +518,10 @@ function renderProcessTabs(list){
         .on('click', function(){ curProcess=''; applyFilters(); }).appendTo($t);
     var stillValid = false;
     list.forEach(function(p){
-        var pn = String(p.process_no);
-        if (pn === curProcess) stillValid = true;
-        $('<button class="prq-tab' + (pn===curProcess?' active':'') + '">' + esc(p.ProcessName) + '（' + p.cnt + '）</button>')
-            .on('click', function(){ curProcess=pn; applyFilters(); }).appendTo($t);
+        var tid = String(p.process_type_id);
+        if (tid === curProcess) stillValid = true;
+        $('<button class="prq-tab' + (tid===curProcess?' active':'') + '">' + esc(p.category_name || '（未分類）') + '（' + p.cnt + '）</button>')
+            .on('click', function(){ curProcess=tid; applyFilters(); }).appendTo($t);
     });
     if (curProcess !== '' && !stillValid) curProcess = ''; // 跟其他篩選兜不出資料，自動改回全部
 }
