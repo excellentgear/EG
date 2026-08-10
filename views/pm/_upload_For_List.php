@@ -3637,9 +3637,10 @@ if (isset($_GET['but']) && $_GET['but'] === 'Quotation_ERP_Commit') {
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) $validClients[$row['customer_id']] = $row['customer'];
         }
 
+        // pending_review=1：匯入的舊資料需經「報價單快速轉移頁」確認製程/料號ID/客戶後才轉為正式
         $insQuote = $db->prepare("INSERT INTO quotation_list
-            (quote_no, quote_date, valid_until, client_name, client_id, currency, exchange_rate, total_amount, note, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+            (quote_no, quote_date, valid_until, client_name, client_id, currency, exchange_rate, total_amount, note, created_by, pending_review, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())");
         $insItem = $db->prepare("INSERT INTO quotation_item
             (quote_id, product_id, specification, quantity, unit, unit_price, amount, sort_order)
             VALUES (?, ?, ?, ?, 'PCS', ?, ?, ?)");

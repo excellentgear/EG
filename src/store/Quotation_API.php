@@ -192,6 +192,8 @@ try { $pdo->exec("CREATE TABLE IF NOT EXISTS quotation_edit_lock (quote_id INT N
 try { $pdo->exec("CREATE TABLE IF NOT EXISTS quotation_delete_log (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, quote_id INT NOT NULL, quote_no VARCHAR(30) NOT NULL, quote_date DATE, client_name VARCHAR(100), total_amount DECIMAL(15,4), deleted_by INT, deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP, delete_reason VARCHAR(500), snapshot LONGTEXT, INDEX idx_del_at(deleted_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"); } catch(Exception $_e){}
 try { $pdo->exec("ALTER TABLE quotation_delete_log ADD COLUMN delete_reason VARCHAR(500) NULL AFTER deleted_at"); } catch(Exception $_e){}
 try { $pdo->exec("CREATE TABLE IF NOT EXISTS quotation_change_log (log_id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, quote_id INT NOT NULL, changed_by INT NOT NULL, changed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, summary VARCHAR(200) NOT NULL DEFAULT '', diff_json MEDIUMTEXT NOT NULL, INDEX idx_qcl(quote_id,log_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"); } catch(Exception $_e){}
+// 快速轉移頁（views/Sales/quotation_quick_transfer.php）用：1=尚待確認補件(製程/料號ID/客戶)，不影響本頁既有列表/查詢
+try { $pdo->exec("ALTER TABLE quotation_list ADD COLUMN pending_review TINYINT(1) NOT NULL DEFAULT 0 COMMENT '待審核(快速轉移頁用)：1=尚待確認補件, 0=正式'"); } catch(PDOException $e){}
 
 try {
     switch ($action) {
@@ -1349,6 +1351,98 @@ try {
             $stmt->execute();
             $response = ['success' => true, 'data' => $stmt->fetchAll(PDO::FETCH_ASSOC)];
             break;
+
+        // ══════════════════════════════════════════════════════════════════
+        // 報價單快速轉移頁（views/Sales/quotation_quick_transfer.php）專用
+        // 只作用於 pending_review=1 的報價單（ERP補建舊資料尚待確認），
+        // 不動一般已正式的報價單，避免繞過主編輯頁的鎖定/簽核/歷史紀錄機制。
+        // ══════════════════════════════════════════════════════════════════
+
+        case 'get_pending_transfer_list': {
+            $stmt = $pdo->query("
+                SELECT ql.quote_id, ql.quote_no, ql.quote_date, ql.client_id, ql.client_name,
+                       ql.total_amount,
+                       COUNT(qi.item_id) AS item_count,
+                       SUM(qi.d_setting_d_id IS NULL) AS items_no_dsetting,
+                       SUM(NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)) AS items_no_process
+                FROM quotation_list ql
+                LEFT JOIN quotation_item qi ON qi.quote_id = ql.quote_id
+                WHERE ql.pending_review = 1
+                GROUP BY ql.quote_id
+                ORDER BY ql.quote_date ASC, ql.quote_no ASC
+            ");
+            $response = ['success' => true, 'data' => $stmt->fetchAll(PDO::FETCH_ASSOC)];
+            break;
+        }
+
+        case 'quick_switch_quote_customer': {
+            $quote_id    = intval($_POST['quote_id'] ?? 0);
+            $customer_id = trim($_POST['customer_id'] ?? '');
+            if (!$quote_id || $customer_id === '') throw new Exception('缺少報價單或客戶代碼');
+            $chk = $pdo->prepare("SELECT pending_review FROM quotation_list WHERE quote_id=?");
+            $chk->execute([$quote_id]);
+            $pr = $chk->fetchColumn();
+            if ($pr === false) throw new Exception('找不到報價單');
+            if (!$pr) throw new Exception('此報價單已是正式資料，請至報價單管理頁編輯');
+            $cq = $pdo->prepare("SELECT customer FROM customer_list WHERE customer_id=? LIMIT 1");
+            $cq->execute([$customer_id]);
+            $cname = $cq->fetchColumn();
+            if ($cname === false) throw new Exception('找不到此客戶代碼');
+            $pdo->prepare("UPDATE quotation_list SET client_id=?, client_name=?, updated_by=?, updated_at=NOW() WHERE quote_id=?")
+                ->execute([$customer_id, $cname, $user_id, $quote_id]);
+            $response = ['success' => true, 'client_name' => $cname];
+            break;
+        }
+
+        case 'quick_bind_item_dsetting': {
+            $item_id = intval($_POST['item_id'] ?? 0);
+            $d_id    = intval($_POST['d_id'] ?? 0);
+            if (!$item_id || !$d_id) throw new Exception('缺少項目或料號ID');
+            $chk = $pdo->prepare("SELECT ql.pending_review FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id WHERE qi.item_id=?");
+            $chk->execute([$item_id]);
+            $pr = $chk->fetchColumn();
+            if ($pr === false) throw new Exception('找不到報價項目');
+            if (!$pr) throw new Exception('此報價單已是正式資料，請至報價單管理頁編輯');
+            $dq = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
+            $dq->execute([$d_id]);
+            $tds = $dq->fetchColumn();
+            if ($tds === false) throw new Exception('找不到此料號ID');
+            $pdo->prepare("UPDATE quotation_item SET d_setting_d_id=?, product_id=?, updated_at=NOW() WHERE item_id=?")
+                ->execute([$d_id, $tds, $item_id]);
+            $response = ['success' => true, 'product_id' => $tds];
+            break;
+        }
+
+        case 'quick_set_item_process': {
+            $item_id = intval($_POST['item_id'] ?? 0);
+            if (!$item_id) throw new Exception('缺少項目');
+            $chk = $pdo->prepare("SELECT ql.pending_review FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id WHERE qi.item_id=?");
+            $chk->execute([$item_id]);
+            $pr = $chk->fetchColumn();
+            if ($pr === false) throw new Exception('找不到報價項目');
+            if (!$pr) throw new Exception('此報價單已是正式資料，請至報價單管理頁編輯');
+            $pnos = array_filter(array_map('trim', explode(',', $_POST['process_nos'] ?? '')), fn($v) => $v !== '' && is_numeric($v));
+            $pdo->beginTransaction();
+            $pdo->prepare("DELETE FROM quotation_item_process_map WHERE quotation_item_id=?")->execute([$item_id]);
+            if (!empty($pnos)) {
+                $ins = $pdo->prepare("INSERT INTO quotation_item_process_map (quotation_item_id,process_no) VALUES (?,?)");
+                foreach ($pnos as $pno) $ins->execute([$item_id, $pno]);
+            }
+            $pdo->commit();
+            $response = ['success' => true];
+            break;
+        }
+
+        case 'quick_confirm_transfer': {
+            $ids = json_decode($_POST['quote_ids'] ?? '[]', true);
+            if (!is_array($ids) || empty($ids)) throw new Exception('未選擇任何報價單');
+            $ids = array_values(array_unique(array_map('intval', $ids)));
+            $ph  = implode(',', array_fill(0, count($ids), '?'));
+            $stmt = $pdo->prepare("UPDATE quotation_list SET pending_review=0, updated_by=?, updated_at=NOW() WHERE quote_id IN ($ph) AND pending_review=1");
+            $stmt->execute(array_merge([$user_id], $ids));
+            $response = ['success' => true, 'updated' => $stmt->rowCount()];
+            break;
+        }
 
         case 'save_customer':
             $id      = $_POST['customer_id_modal'] ?? '';
