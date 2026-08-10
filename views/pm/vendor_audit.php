@@ -2157,8 +2157,8 @@ $('#rsPrintBtn').on('click', function(){
             +'<div style="position:absolute;left:0;top:4px;font-size:14px;font-weight:bold;">'+ROSTER.year+' 年</div>'
             +'<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
             +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>';
-        var rows='<table class="pf" style="table-layout:fixed;"><colgroup><col style="width:5%;"><col style="width:52%;">'
-            +'<col style="width:13%;"><col style="width:20%;"><col style="width:10%;"></colgroup>'
+        var rows='<table class="pf" style="table-layout:fixed;"><colgroup><col style="width:5%;"><col style="width:26%;">'
+            +'<col style="width:13%;"><col style="width:46%;"><col style="width:10%;"></colgroup>'
             +'<thead><tr><th>序</th><th style="text-align:left;">加工項目</th><th>廠商</th><th>廠商備註</th><th>評核等級</th></tr></thead><tbody>';
         ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td class="q">'+esc(r.main_cat_name||'')+'</td>'
             +'<td class="q"><b>'+esc(r.maker_id||'')+'</b><div style="font-size:11px;color:#555;">'+esc(r.maker_id_no)+'</div></td>'
