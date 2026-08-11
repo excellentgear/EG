@@ -664,11 +664,29 @@ function confirmBatchBind() {
     $.post(API_URL, { action: 'batch_bind_items_dsetting', item_ids: JSON.stringify(ids), d_id: bbDId }, function(res) {
         if (!res.success) { alert('批次綁定失敗：' + res.message); return; }
         const idSet = ids.map(String);
+        const boundCandidates = bbCandidates.filter(function(c) { return idSet.indexOf(String(c.item_id)) !== -1; });
+
+        // 更新已快取的項目明細（若該報價單卡片曾經渲染過）
         Object.keys(qtItemsCache).forEach(function(qid) {
             qtItemsCache[qid].forEach(function(it) { if (idSet.indexOf(String(it.item_id)) !== -1) { it.d_setting_d_id = bbDId; it.product_id = bbDSettingId; } });
         });
+
+        // 只局部更新受影響的報價單卡片，不整頁重載，避免捲動位置/當前頁碼跳掉
+        const byQuote = {};
+        boundCandidates.forEach(function(c) { (byQuote[c.quote_id] = byQuote[c.quote_id] || []).push(c); });
+        Object.keys(byQuote).forEach(function(qid) {
+            if (qtItemsCache[qid]) {
+                drawItems(qid, qtItemsCache[qid]);
+                refreshStatsOnly(byQuote[qid][0].item_id);
+            } else {
+                // 該報價單卡片目前不在畫面上（尚未載入過明細），先更新統計數字，翻到那頁時會自然重新抓取正確明細
+                const row = qtData.find(function(r) { return String(r.quote_id) === String(qid); });
+                if (row) row.items_no_dsetting = Math.max(0, Number(row.items_no_dsetting) - byQuote[qid].length);
+                renderStats();
+            }
+        });
+
         closeMask('batchBindMask');
-        loadPendingList();
     });
 }
 
