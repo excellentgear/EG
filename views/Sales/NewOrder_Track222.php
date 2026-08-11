@@ -1124,7 +1124,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } elseif ($status === 'transferred') {
                 $whereClauses[] = "(ot.pmGet IS NOT NULL AND ot.pmGet != '')";
             } elseif ($status === 'communication') {
-                $whereClauses[] = "((ot.pmGet IS NULL OR ot.pmGet = '') AND ot.in_review IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '')";
+                // 溝通中＝有設計備註且還沒轉生管，不論目前是否在審圖中都算（審圖中仍可能持續溝通修改）
+                $whereClauses[] = "((ot.pmGet IS NULL OR ot.pmGet = '') AND ot.ateNote IS NOT NULL AND ot.ateNote != '')";
             }
 
             if (!empty($global)) {
@@ -1147,7 +1148,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $whereSql = "WHERE " . implode(' AND ', $whereClauses);
 
             // Query 1: 統計數據
-            $statsSql = "SELECT COUNT(*) as total_records, SUM(CASE WHEN (ot.pmGet IS NULL OR ot.pmGet = '') THEN 1 ELSE 0 END) as processing, SUM(CASE WHEN (ot.pmGet IS NOT NULL AND ot.pmGet != '') THEN 1 ELSE 0 END) as done, SUM(CASE WHEN ((ot.pmGet IS NULL OR ot.pmGet = '') AND ot.in_review IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '') THEN 1 ELSE 0 END) as communication FROM order_track ot LEFT JOIN user u ON u.id = ot.ate $whereSql";
+            $statsSql = "SELECT COUNT(*) as total_records, SUM(CASE WHEN (ot.pmGet IS NULL OR ot.pmGet = '') THEN 1 ELSE 0 END) as processing, SUM(CASE WHEN (ot.pmGet IS NOT NULL AND ot.pmGet != '') THEN 1 ELSE 0 END) as done, SUM(CASE WHEN ((ot.pmGet IS NULL OR ot.pmGet = '') AND ot.ateNote IS NOT NULL AND ot.ateNote != '') THEN 1 ELSE 0 END) as communication FROM order_track ot LEFT JOIN user u ON u.id = ot.ate $whereSql";
             $stmtStats = $pdo->prepare($statsSql);
             $stmtStats->execute($params);
             $statsResult = $stmtStats->fetch(PDO::FETCH_ASSOC);
@@ -1996,7 +1997,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     } elseif ($status === 'transferred') {
         $whereClauses[] = "(ot.pmGet IS NOT NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6))";
     } elseif ($status === 'communication') {
-        $whereClauses[] = "(ot.pmGet IS NULL AND ot.in_review IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6))";
+        $whereClauses[] = "(ot.pmGet IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6))";
     }
     if (!empty($global)) {
         // 全表搜尋一律用 LIKE 掃全部可見欄位。
@@ -2026,7 +2027,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         $mainStatsSql = "SELECT COUNT(*) as total_records,
             SUM(CASE WHEN (ot.pmGet IS NULL AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as processing,
             SUM(CASE WHEN (ot.pmGet IS NOT NULL AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as done,
-            SUM(CASE WHEN (ot.pmGet IS NULL AND ot.in_review IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as communication,
+            SUM(CASE WHEN (ot.pmGet IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND ot.Order_status IS NULL) THEN 1 ELSE 0 END) as communication,
             SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
             SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over
             FROM order_track ot LEFT JOIN user u ON u.id = ot.ate LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID $whereSql";
@@ -2036,7 +2037,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         $mainStatsSql = "SELECT COUNT(*) as total_records,
             SUM(CASE WHEN (ot.pmGet IS NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as processing,
             SUM(CASE WHEN (ot.pmGet IS NOT NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as done,
-            SUM(CASE WHEN (ot.pmGet IS NULL AND ot.in_review IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as communication,
+            SUM(CASE WHEN (ot.pmGet IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as communication,
             SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
             SUM(CASE WHEN (ot.qty_over_range = 1) THEN 1 ELSE 0 END) as qty_over
             FROM order_track ot LEFT JOIN user u ON u.id = ot.ate LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID $whereSql";
@@ -3026,7 +3027,7 @@ $initResult = $conn->getPDO()->query($initStatsSql)->fetch(PDO::FETCH_ASSOC);
 $processingSql = "SELECT
     SUM(CASE WHEN (ot.pmGet IS NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as processing,
     SUM(CASE WHEN (ot.pmGet IS NOT NULL AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as done,
-    SUM(CASE WHEN (ot.pmGet IS NULL AND ot.in_review IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as communication
+    SUM(CASE WHEN (ot.pmGet IS NULL AND ot.ateNote IS NOT NULL AND ot.ateNote != '' AND (ot.Order_status IS NULL OR ot.Order_status != 6)) THEN 1 ELSE 0 END) as communication
     FROM order_track ot $yearCondInit";
 $processingResult = $conn->getPDO()->query($processingSql)->fetch(PDO::FETCH_ASSOC);
 
