@@ -77,6 +77,9 @@ $perms = rvf_perms($db, $rvfUser);
         .mt-tags { max-height:120px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; padding:6px 8px; margin-bottom:6px; }
         .mt-tags .tg { display:inline-block; background:#F7E0BD; color:#5b3a1e; border-radius:9px; font-size:11px; padding:1px 8px; margin:2px; }
         .mt-tags .tg i { cursor:pointer; color:#b5762a; margin-left:4px; }
+        .role-item { padding:6px 10px; font-size:12.5px; color:#5b3a1e; cursor:pointer; border-bottom:1px solid #F0E7D5; }
+        .role-item:hover { background:#FBF0DD; } .role-item.on { background:#F7E0BD; font-weight:bold; } .role-item.sys { color:#b0a390; cursor:default; }
+        .role-feat { font-size:12.5px; }
         @media print { .page-help-btn { display:none; } }
     </style>
 </head>
@@ -96,6 +99,7 @@ $perms = rvf_perms($db, $rvfUser);
 <?php else: ?>
         <div class="rf-toolbar">
             <span>共用表單模板引擎：新建模板可綁定 AS 文件編號、設計項次欄位、設定審核/核准流程。</span>
+            <button id="btnRoleSetting" style="display:none;"><i class="fa fa-users"></i> 角色設定</button>
             <button class="btn-warm" id="btnAddTpl" style="display:none;margin-left:auto;"><i class="fa fa-plus"></i> 新增模板</button>
             <a href="review_form.php" class="btn" style="height:30px;line-height:28px;padding:0 12px;border:1px solid #D8BE93;border-radius:4px;color:#5b3a1e;text-decoration:none;">前往「建立/填寫表單」→</a>
         </div>
@@ -196,6 +200,39 @@ $perms = rvf_perms($db, $rvfUser);
         <button class="b-ok" onclick="submitSchema()">儲存項次欄位定義</button></div>
 </div></div>
 
+<!-- 角色設定 modal（管理員；定義本模組角色能看到/做什麼，指派給誰在「使用者權限設定」頁） -->
+<div class="rf-mask" id="roleSetMask"><div class="rf-modal wide">
+    <div class="m-head"><span>角色設定</span><span class="m-close" onclick="closeMask('roleSetMask')">✕</span></div>
+    <div class="m-body">
+        <p class="rf-hint">左邊選或新增角色 → 右邊改名稱、勾這個角色能看到什麼／能做什麼。「誰擁有這個角色」在<a href="../user/user_permissions.php" target="_blank">人員權限設定頁</a>設定，這裡只定義角色內容。項次內容的維護權限不透過此處角色，另在各模板的「維護部門/維護人員」設定。</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+            <div style="border:1px solid #E8D5B5;border-radius:6px;background:#fff;flex:0 0 190px;">
+                <div style="background:#F7E0BD;color:#5b3a1e;font-size:12px;font-weight:bold;padding:5px 10px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between;align-items:center;">角色
+                    <button type="button" id="btnRoleAdd" style="padding:1px 8px;height:22px;font-size:11px;border:1px solid #D8BE93;background:#fff;border-radius:4px;cursor:pointer;">＋ 新增</button></div>
+                <div id="roleList" style="max-height:280px;overflow-y:auto;"></div>
+            </div>
+            <div style="border:1px solid #E8D5B5;border-radius:6px;background:#fff;flex:1;min-width:260px;">
+                <div style="background:#F7E0BD;color:#5b3a1e;font-size:12px;font-weight:bold;padding:5px 10px;border-radius:6px 6px 0 0;">角色內容</div>
+                <div id="roleEdit" style="display:none;padding:10px;">
+                    <label>角色名稱</label>
+                    <div style="display:flex;gap:6px;">
+                        <input type="text" id="roleName" style="flex:1;">
+                        <button type="button" id="btnRoleRename" style="height:28px;font-size:12px;border:1px solid #D8BE93;background:#fff;border-radius:4px;cursor:pointer;">改名</button>
+                        <button type="button" id="btnRoleDel" style="height:28px;font-size:12px;border:1px solid #D8BE93;background:#fff;color:#DD5138;border-radius:4px;cursor:pointer;">刪除</button>
+                    </div>
+                    <div style="font-size:12px;font-weight:bold;color:#8A5A2B;margin:10px 0 4px;">可視內容（看得到什麼）</div>
+                    <div id="featView"></div>
+                    <div style="font-size:12px;font-weight:bold;color:#8A5A2B;margin:10px 0 4px;">可操作（能做什麼）</div>
+                    <div id="featOp"></div>
+                    <button type="button" id="btnRoleFeatSave" style="margin-top:10px;height:28px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:4px;cursor:pointer;"><i class="fa fa-save"></i> 儲存功能</button>
+                </div>
+                <div id="roleEditHint" style="padding:24px;text-align:center;color:#8a6d45;">請在左側選一個角色，或按「＋ 新增」</div>
+            </div>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('roleSetMask')">關閉</button></div>
+</div></div>
+
 <!-- 使用說明 modal（鐵律7） -->
 <div class="rf-mask" id="helpUseMask"><div class="rf-modal wide">
     <div class="m-head"><span>使用說明 — 審核表單模板管理</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
@@ -247,11 +284,80 @@ function loadMeta(cb){
         var userOpts = '<option value="">（未設定）</option>' + META.people.map(function(p){ return '<option value="'+p.id+'">'+esc(p.display)+'</option>'; }).join('');
         $('#stApproverUser').html(userOpts);
         $('#maintUserSel').html('<option value="">選擇人員…</option>' + META.people.map(function(p){ return '<option value="'+p.id+'">'+esc(p.display)+'</option>'; }).join(''));
-        if (META.perms.canAdmin) $('#btnAddTpl').show();
+        if (META.perms.canAdmin) { $('#btnAddTpl').show(); $('#btnRoleSetting').show(); }
         renderChainBox();
         if (cb) cb();
     });
 }
+$('#btnRoleSetting').on('click', function(){ openMask('roleSetMask'); loadRoles(); });
+var RAPI = '../../src/store/Roles_API.php';
+var ROLES = [], CURROLE = 0;
+function loadRoles(then){
+    $.getJSON(RAPI, {action:'get_roles', module:'review_form'}, function(res){
+        ROLES = res.data || [];
+        var h = '';
+        ROLES.forEach(function(r){
+            var sys = String(r.is_system)==='1';
+            h += '<div class="role-item'+(sys?' sys':'')+'" data-id="'+r.role_id+'">'+esc(r.role_name)+(sys?'（系統．固定全權）':'')+'</div>';
+        });
+        $('#roleList').html(h || '<div style="padding:10px;color:#8a6d45;">尚無角色</div>');
+        if (CURROLE) $('.role-item[data-id="'+CURROLE+'"]').addClass('on');
+        if (typeof then==='function') then();
+    });
+}
+function selRole(id){
+    var r = ROLES.filter(function(x){ return String(x.role_id)===String(id); })[0];
+    if (!r) return;
+    if (String(r.is_system)==='1'){ alert('系統角色「'+r.role_name+'」固定擁有全部權限，不可修改'); return; }
+    CURROLE = id;
+    $('.role-item').removeClass('on'); $('.role-item[data-id="'+id+'"]').addClass('on');
+    $('#roleEditHint').hide(); $('#roleEdit').show();
+    $('#roleName').val(r.role_name);
+    var vh='', oh='';
+    (META.features||[]).forEach(function(f){
+        var row = '<label class="role-feat" style="display:block;font-weight:normal;padding:2px 0;"><input type="checkbox" class="featcb" value="'+esc(f.code)+'"> '+esc(f.label)+'</label>';
+        if (f.group==='view') vh += row; else oh += row;
+    });
+    $('#featView').html(vh); $('#featOp').html(oh);
+    $.getJSON(RAPI, {action:'get_role_features', role_id:id}, function(res){
+        var has = res.data || [];
+        $('.featcb').each(function(){ $(this).prop('checked', has.indexOf(this.value)>-1 || has.indexOf('all')>-1); });
+    });
+}
+$(document).on('click', '#roleList .role-item', function(){ selRole($(this).data('id')); });
+$('#btnRoleAdd').on('click', function(){
+    var n = prompt('新角色名稱：');
+    if (!n || !$.trim(n)) return;
+    $.post(RAPI, {action:'save_role', role_name:$.trim(n), module:'review_form'}, function(r){
+        if (!r.success){ alert(r.message); return; }
+        loadRoles(function(){ selRole(r.role_id); });
+    }, 'json');
+});
+$('#btnRoleRename').on('click', function(){
+    if (!CURROLE) return;
+    var n = $.trim($('#roleName').val()||'');
+    if (!n){ alert('請輸入角色名稱'); return; }
+    $.post(RAPI, {action:'save_role', role_id:CURROLE, role_name:n}, function(r){
+        if (!r.success){ alert(r.message); return; }
+        loadRoles(); alert('已改名');
+    }, 'json');
+});
+$('#btnRoleDel').on('click', function(){
+    if (!CURROLE) return;
+    if (!confirm('確定刪除此角色？擁有此角色的人會失去對應權限。')) return;
+    $.post(RAPI, {action:'delete_role', role_id:CURROLE}, function(r){
+        if (!r.success){ alert(r.message); return; }
+        CURROLE = 0; $('#roleEdit').hide(); $('#roleEditHint').show();
+        loadRoles();
+    }, 'json');
+});
+$('#btnRoleFeatSave').on('click', function(){
+    if (!CURROLE) return;
+    var feats = $('.featcb:checked').map(function(){ return this.value; }).get();
+    $.post(RAPI, {action:'save_role_features', role_id:CURROLE, features:JSON.stringify(feats)}, function(r){
+        alert(r.success ? '已儲存。受影響的人重新整理頁面後生效。' : r.message);
+    }, 'json');
+});
 function renderChainBox(){
     var methods = {dept_or_user:'部門或人員', auto_supervisor:'自動抓上一階主管', top_approver:'最高決策者'};
     var h = '';

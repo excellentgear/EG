@@ -355,6 +355,7 @@ $_purcRoles     = [];  $_userPurcRoles   = [];
 $_kpiRoles      = [];  $_userKpiRoles    = [];
 $_extdocRoles   = [];  $_userExtdocRoles = [];
 $_otrkRoles     = [];  $_userOtrkRoles   = [];
+$_rvfRoles      = [];  $_userRvfRoles    = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -391,6 +392,7 @@ try {
     $st->execute(['accounting']);  $_accRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['external_doc']);$_extdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['order_track']); $_otrkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['review_form']); $_rvfRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -518,6 +520,10 @@ try {
     $st->execute(['order_track']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userOtrkRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['review_form']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userRvfRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -744,6 +750,43 @@ $_quotDepts = array_keys($_deptSet);
                         </div>
                     </div>
                     <!-- ／快速切換 ══ -->
+
+                    <?php if ($canEdit): ?>
+                    <!-- ══ 複製其他員工的權限設定（角色指派＋選單群組/頁面權限，一次複製）══ -->
+                    <div class="row" id="copy-perm-section">
+                        <div class="col-md-12">
+                            <div class="x_panel" style="padding:12px 15px;margin-bottom:10px;">
+                                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                    <strong><i class="fa fa-clone"></i> 複製其他員工的權限設定：</strong>
+                                    <span class="text-muted" style="font-size:12px;">複製來源員工「所有模組的角色指派」與「選單群組/頁面權限」；不含頁面白名單等個別例外設定，複製前會寫入稽核紀錄</span>
+                                </div>
+                                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                                    <label style="margin:0;">來源員工</label>
+                                    <select id="copy-perm-source" class="form-control input-sm" style="width:200px;" data-eg-filter="輸入姓名篩選…">
+                                        <option value="">-- 請選擇 --</option>
+                                        <?php foreach ($admins as $_cpA): ?>
+                                            <option value="<?= (int)$_cpA['id'] ?>"><?= htmlspecialchars($_cpA['user_cname'] ?: $_cpA['user_uname']) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <i class="fa fa-long-arrow-right"></i>
+                                    <label style="margin:0;">目標員工</label>
+                                    <select id="copy-perm-target" class="form-control input-sm" style="width:200px;" data-eg-filter="輸入姓名篩選…">
+                                        <option value="">-- 請選擇 --</option>
+                                        <?php foreach ($admins as $_cpA): ?>
+                                            <option value="<?= (int)$_cpA['id'] ?>"><?= htmlspecialchars($_cpA['user_cname'] ?: $_cpA['user_uname']) ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <select id="copy-perm-mode" class="form-control input-sm" style="width:240px;">
+                                        <option value="merge">合併（只補目標沒有的，保留原有設定）</option>
+                                        <option value="overwrite">覆蓋（先清空目標原設定，完全比照來源）</option>
+                                    </select>
+                                    <button type="button" class="btn btn-sm btn-primary" id="btn-copy-perm"><i class="fa fa-clone"></i> 複製</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- ／複製其他員工的權限設定 ══ -->
+                    <?php endif; ?>
 
                     <?php if (!empty($msg)): ?>
                     <div class="row">
@@ -1077,6 +1120,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('imgedit', 'imgedit', '批圖編輯器', 'fa-paint-brush', '#ab47bc',
                         '為每位使用者指派「批圖使用者」角色（批圖編輯器：訂單追蹤頁「批圖」按鈕開啟的圖面編輯跳窗）。<strong>尚未指派任何人之前，暫時開放所有登入者使用；一旦指派了第一位，未被指派者即無法開啟。</strong>管理者固定可用。',
                         $_imgRoles, $_userImgRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('rvf', 'review_form', '審核表單', 'fa-clipboard', '#c0782d',
+                        '為每位使用者指派審核表單引擎的操作角色（檢閱、檢視全部人員表單、建立/填寫/送出、列印、模板管理）。模板管理僅供設定 AS 文件綁定/審核核准流程；項次內容維護權限則另在「審核表單模板管理」頁依維護部門/維護人員指派，不透過此處角色。角色與功能定義請至 <strong>審核表單模板管理 → 使用說明</strong>。',
+                        $_rvfRoles, $_userRvfRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('drawren', 'drawing_rename', '圖面自動改檔名工具', 'fa-file-image-o', '#2c81ba',
                         '為每位使用者指派圖面自動改檔名工具的操作角色（檢閱、執行改檔名、管理資料夾與前後綴設定）。角色與功能定義請至 <strong>圖面自動改檔名工具</strong> 頁面內查看「權限說明」。',
@@ -1772,6 +1819,29 @@ $_quotDepts = array_keys($_deptSet);
 
         // ══ 角色指派（依模組通用：prefix=quot/notice，module=quotation/notice）══
         var ROLES_API = '../../src/store/Roles_API.php';
+
+        // 複製其他員工的權限設定（角色指派＋選單群組/頁面權限）
+        $(document).on('click', '#btn-copy-perm', function() {
+            var srcId = $('#copy-perm-source').val();
+            var tgtId = $('#copy-perm-target').val();
+            var mode  = $('#copy-perm-mode').val();
+            if (!srcId || !tgtId) { alert('請選擇來源與目標員工'); return; }
+            if (srcId === tgtId) { alert('來源與目標不可為同一人'); return; }
+            var srcName = $('#copy-perm-source option:selected').text();
+            var tgtName = $('#copy-perm-target option:selected').text();
+            var modeText = mode === 'overwrite'
+                ? '覆蓋：會先清空「' + tgtName + '」原本所有的角色與模組權限，再完全比照「' + srcName + '」'
+                : '合併：只補上「' + tgtName + '」目前沒有的設定，保留他原本已有的其他設定';
+            if (!confirm('確定要把「' + srcName + '」的權限設定複製給「' + tgtName + '」嗎？\n\n' + modeText + '\n\n（不含頁面白名單等個別例外設定）')) return;
+            var $btn = $(this).prop('disabled', true);
+            $.post(ROLES_API, { action: 'copy_user_permissions', source_user_id: srcId, target_user_id: tgtId, mode: mode })
+            .done(function(res) {
+                alert(res.success ? res.message : ('複製失敗：' + (res.message || '未知錯誤')));
+                if (res.success) location.reload();
+            })
+            .fail(function(xhr) { alert('連線失敗（' + xhr.status + '）：' + xhr.responseText.substring(0, 200)); })
+            .always(function() { $btn.prop('disabled', false); });
+        });
 
         function roleFilterTable(p) {
             var kw   = ($('#' + p + '-search-name').val() || '').toLowerCase().trim();
