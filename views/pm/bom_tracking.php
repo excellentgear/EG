@@ -153,13 +153,15 @@ if ($has_access) {
         .help-doc li { margin:2px 0; }
         .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
 
-        /* 「顯示製程」子列：像子項目一樣縮排顯示在該筆BOM下方 */
-        tr.process-subrow > td { background:#FAF6F0; padding:8px 10px 8px 40px !important; border-bottom:1px solid #F1F3F5; }
-        .process-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:12px; font-size:12px; white-space:nowrap; margin:2px 0; }
-        .process-chip.done { background:#8a5a2b; color:#fff; }
-        .process-chip.active { background:#F0A24B; color:#4E2C0B; font-weight:700; box-shadow:0 0 0 2px #F7E0BD; }
-        .process-chip.pending { background:#EBD3A8; color:#6B471A; }
-        .process-arrow { color:#a08a6f; margin:0 3px; font-size:12px; }
+        /* 「顯示製程」子列：像子項目一樣縮排顯示在該筆BOM下方；標籤縮小、顏色分四級但都走暖色調色盤(ai-rules/10) */
+        tr.process-subrow > td { background:#FAF6F0; padding:6px 10px 6px 40px !important; border-bottom:1px solid #F1F3F5; line-height:2; }
+        .process-chip { display:inline-flex; align-items:center; gap:3px; padding:1px 7px; border-radius:9px; font-size:11px; white-space:nowrap; border:1px solid transparent; }
+        .process-chip .fa { font-size:10px; }
+        .process-chip.pending { background:#FAF6F0; border-color:#E4DBCB; color:#a08a6f; }
+        .process-chip.active { background:#F7E0BD; border-color:#E4C293; color:#6B471A; }
+        .process-chip.done { background:#EBD3A8; border-color:#D8C7B0; color:#6B471A; }
+        .process-chip.is-current { background:#F0A24B; border-color:#D6851F; color:#4E2C0B; font-weight:700; }
+        .process-arrow { color:#c9bba3; margin:0 1px; font-size:11px; }
         #btnToggleProcess.active-on { background:#F0A24B; border-color:#D6851F; color:#4E2C0B; }
     </style>
 </head>
@@ -526,12 +528,14 @@ function openOreadyPmForBom(bom) {
     window.open('OreadyReply_ForPm_BaseOfTime.php?bom_filter=' + encodeURIComponent(bom), '_blank');
 }
 
-// 製程小圓標：完工一律以 qc_completed 判定(唯一完工旗標)，狀態顏色沿用暖色調色盤(ai-rules/10)
+// 製程小標籤：完工一律以 qc_completed 判定(唯一完工旗標)；「目前製程」只標記唯一一關，
+// 判定邏輯與主清單「目前製程」欄完全一致(後端 is_current 已算好)，不可用「有發包未完工」判斷——
+// 那可能同時好幾關都符合，會出現一整排都寫「目前」跟主清單欄位對不上。
 function renderProcessChip(step) {
     var cls = step.step_status === 'done' ? 'done' : (step.step_status === 'active' ? 'active' : 'pending');
     var icon = step.step_status === 'done' ? 'fa-check-circle' : (step.step_status === 'active' ? 'fa-caret-right' : 'fa-circle-o');
-    var label = step.process_name + (step.step_status === 'active' ? '（目前）' : '');
-    var $chip = $('<span class="process-chip ' + cls + '">').append($('<i class="fa ' + icon + '">')).append(document.createTextNode(' ' + label));
+    var label = step.process_name + (step.is_current ? '（目前）' : '');
+    var $chip = $('<span class="process-chip ' + cls + (step.is_current ? ' is-current' : '') + '">').append($('<i class="fa ' + icon + '">')).append(document.createTextNode(' ' + label));
     return $chip;
 }
 function loadProcessChain(bom, $cell) {

@@ -758,12 +758,19 @@ switch ($action) {
 
     // 依 bom_sn 排序列出製程序列(排除processing_state='skip')：完工狀態一律以 qc_completed 判定(該欄位是唯一
     // 「完工」旗標，processing_state 還有N/ing/P/Q/E等工作流子狀態不適合拿來判斷單一製程是否已完成)。
+    // is_current：只標記「唯一一關」，判定邏輯與主清單「目前製程」欄(get_matched_boms)完全一致(最新活動的那一關，
+    // 平手時取bom_sn較大者)，不可用「有發包未完工」當現在製程──那可能同時有好幾關都符合，會跟主清單欄位對不上。
     case 'get_bom_process_chain': {
         $bom = trim($_GET['bom'] ?? $_POST['bom'] ?? '');
         if ($bom === '') { $response = ['success' => false, 'message' => '缺少 bom']; break; }
         try {
             $st = $db->prepare("
-                SELECT bi.bom_sn, pn.ProcessName, bi.outsource_date, bi.qc_completed
+                SELECT bi.bom_sn, pn.ProcessName, bi.outsource_date, bi.qc_completed,
+                       (bi.bom_sn = (
+                           SELECT bi2.bom_sn FROM bom_ing bi2 WHERE bi2.bom = bi.bom AND bi2.processing_state != 'skip'
+                             AND (bi2.outsource_date IS NOT NULL OR bi2.QC_check_date IS NOT NULL)
+                           ORDER BY GREATEST(COALESCE(bi2.outsource_date,'0000-00-00'), COALESCE(bi2.QC_check_date,'0000-00-00')) DESC, bi2.bom_sn DESC LIMIT 1
+                       )) AS is_current
                 FROM bom_ing bi
                 LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
                 WHERE bi.bom = ? AND bi.processing_state != 'skip'
@@ -775,6 +782,7 @@ switch ($action) {
                 if (!empty($r['qc_completed'])) $r['step_status'] = 'done';
                 elseif (!empty($r['outsource_date'])) $r['step_status'] = 'active';
                 else $r['step_status'] = 'pending';
+                $r['is_current'] = !empty($r['is_current']);
                 $r['process_name'] = $r['ProcessName'] ?: '（未知製程）';
             }
             unset($r);
