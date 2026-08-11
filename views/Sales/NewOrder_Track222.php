@@ -1622,6 +1622,16 @@ $can_update = ($permission_code && (strpos($permission_code, 'A') !== false || s
 $can_delete = ($permission_code && (strpos($permission_code, 'A') !== false || strpos($permission_code, 'D') !== false));
 // 設計備註可編輯：只有 A 或有 'X'(設計)權限 才能編輯 ateNote；業務人員(C+R+U+D 但無 A)不可編輯
 $can_edit_ateNote = ($permission_code === 'A' || ($permission_code && strpos($permission_code, 'X') !== false));
+// 以下細部按鈕的舊制判斷（沿用原本散落頁面各處的門檻）；RBAC 啟用後改走對應功能碼，見下方 $OT_USE_RBAC 覆寫區塊
+$is_perm_a                = ($permission_code === 'A');  // 設計備註徽章/查詢等顯示用
+$can_batch_draw            = ($can_update && $permission_code === 'A'); // 審圖/取消審圖
+$can_to_pm                 = ($can_update && $permission_code === 'A'); // 轉生管/取消轉生管
+$can_order_change          = $can_update;                               // 訂單變更（舊制沿用一般編輯權限）
+$can_order_change_setting  = ($permission_code === 'A');                // 訂單變更設定
+$can_op_convert            = $can_create;                               // OP轉訂單（舊制沿用一般新增權限）
+$can_view_amount           = true;                                      // 金額顯示（舊制從未限制過，一律可見）
+$can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
+$can_designer_assign_cog   = ($permission_code === 'A');                // 指派設計旁的設定齒輪（無專屬功能碼，沿用管理員門檻）
 
 // 是否顯示操作欄位 (只有 R 權限時不顯示)
 $show_op_col = ($can_create || $can_update);
@@ -1670,10 +1680,14 @@ $_ot_my_roles  = [];
 $_ot_has_roles = false;
 $IS_OT_RBAC_ADMIN = false;
 try {
-    $_ot_chk = $db->prepare("SELECT 1 FROM user_roles WHERE user_id=? LIMIT 1");
-    $_ot_chk->execute([$id]);
-    $_ot_has_roles = (bool)$_ot_chk->fetchColumn();
+    // 功能碼一律走全站共用 helper（個人指派 ∪ 職稱指派 ∪ 請假完整承接代理，且非在職者自動回傳空陣列），
+    // 不要在本頁自己重複拼 user_roles 查詢——否則會漏掉職稱指派與離職封鎖，跟其他模組行為不一致
+    require_once __DIR__ . '/../../src/common/role_features_helper.php';
+    $_ot_features = rf_load_user_features_all($db, $id);
+    $IS_OT_RBAC_ADMIN = in_array('all', $_ot_features, true);
+    $_ot_has_roles = !empty($_ot_features);
     if ($_ot_has_roles) {
+        // 僅供本頁「目前角色」顯示用（非權限判斷）：只列對本頁有權限的角色名稱
         $_ot_st = $db->prepare("
             SELECT DISTINCT r.role_name, rf.feature_code
             FROM user_roles ur
@@ -1682,15 +1696,11 @@ try {
             WHERE ur.user_id = ?");
         $_ot_st->execute([$id]);
         foreach ($_ot_st->fetchAll(PDO::FETCH_ASSOC) as $_ot_r) {
-            $_ot_features[] = $_ot_r['feature_code'];
-            // 只把「對本頁有權限」的角色列為本頁角色，避免帶入其他模組的角色
             if ($_ot_r['feature_code'] === 'all' || strpos((string)$_ot_r['feature_code'], 'ot_') === 0) {
                 $_ot_my_roles[] = $_ot_r['role_name'];
             }
         }
-        $_ot_features = array_unique($_ot_features);
         $_ot_my_roles = array_unique($_ot_my_roles);
-        $IS_OT_RBAC_ADMIN = in_array('all', $_ot_features, true);
     }
 } catch (Exception $_ot_e) {}
 
@@ -1719,15 +1729,24 @@ $OT_PAGE_FEATURES = [
     ['group'=>'計算工具',     'code'=>'ot_keyway_calc',          'label'=>'鍵槽計算'],
 ];
 
-// ── 已寫好、尚未啟用的 RBAC 權限檢查（$OT_USE_RBAC = true 時生效）─────────
-// 切換時：PHP 端以下列覆寫為準；細部按鈕（審圖/轉生管/結案/取消/訂單變更/
-// OP轉訂單/金額顯示等）需把頁面裡的 `$permission_code === 'A'`、$can_update
-// 判斷改為對應 ot_hasF()；JS 端以 window.OT_FEAT（見頁尾 script）判斷。
+// ── RBAC 權限檢查（$OT_USE_RBAC = true 時生效）───────────────────────────
+// 全頁散落的舊制 `$permission_code === 'A'`／`$can_update` 判斷已於上方全部
+// 改成呼叫下列覆寫變數，啟用後即整頁一致改走角色制；JS 端以 window.OT_FEAT
+//（見頁尾 script）判斷。
 if ($OT_USE_RBAC) {
-    $can_create       = ot_hasF('ot_edit');
-    $can_update       = ot_hasF('ot_edit');
-    $can_delete       = ot_hasF('ot_delete');
-    $can_edit_ateNote = ot_hasF('ot_design_note');
+    $can_create               = ot_hasF('ot_edit');
+    $can_update                = ot_hasF('ot_edit');
+    $can_delete                = ot_hasF('ot_delete');
+    $can_edit_ateNote           = ot_hasF('ot_design_note');
+    $is_perm_a                 = ot_hasF('ot_design_note');
+    $can_batch_draw             = ot_hasF('ot_batch_draw');
+    $can_to_pm                  = ot_hasF('ot_to_pm');
+    $can_order_change           = ot_hasF('ot_order_change');
+    $can_order_change_setting  = ot_hasF('ot_order_change_setting');
+    $can_op_convert             = ot_hasF('ot_op_convert');
+    $can_view_amount            = ot_hasF('ot_view_amount');
+    $can_keyway_calc            = ot_hasF('ot_keyway_calc');
+    $can_designer_assign_cog   = $IS_OT_RBAC_ADMIN;
     $show_op_col      = ($can_create || $can_update);
     $show_gear_tool   = $IS_OT_RBAC_ADMIN || ot_hasF('ot_gear_calc'); // 齒輪計算改由角色控制
     if (!$IS_OT_RBAC_ADMIN && !ot_hasF('ot_view')) {
@@ -1842,73 +1861,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
 
     header('Content-Type: application/json');
 
-    // 1. 補齊權限變數（Session 快取：同一次登入只查一次 DB）
-    $id = intval($_SESSION['id'] ?? 0);
-    $current_script_path = '/EGsystem/src/store/_cleanOrder_Track_ate_only.php'; // 根據原檔案寫死
-    $perm_cache_key = 'perm_code_newordertrack_' . $id;
-    if (array_key_exists($perm_cache_key, $_SESSION)) {
-        $permission_code = $_SESSION[$perm_cache_key];
-    } else {
-        $permission_code = null;
-        try {
-            $sql_page_info = "
-                SELECT smp.page_id, smp.page_url, smp.page_url_readonly, smp.group_id
-                FROM system_module_pages smp
-                WHERE (:script LIKE CONCAT('%', smp.page_url) AND smp.page_url IS NOT NULL AND smp.page_url != '')
-                   OR (:script LIKE CONCAT('%', smp.page_url_readonly) AND smp.page_url_readonly IS NOT NULL AND smp.page_url_readonly != '')
-                LIMIT 1
-            ";
-            $stmt_page_info = $pdo->prepare($sql_page_info);
-            $stmt_page_info->execute([':script' => $current_script_path]);
-            $page_info = $stmt_page_info->fetch(PDO::FETCH_ASSOC);
-
-            if ($page_info) {
-                $page_id = $page_info['page_id'];
-                $group_id = $page_info['group_id'];
-                $group_module_code = null;
-                if (!empty($group_id)) {
-                    $stmt_group = $pdo->prepare("SELECT module_code FROM system_modules WHERE group_id = :gid LIMIT 1");
-                    $stmt_group->execute([':gid' => $group_id]);
-                    $group_module_code = $stmt_group->fetchColumn();
-                }
-                $user_perms = [];
-                $stmt_page_perm = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id = :uid AND scope = 'page' AND module_code = :pid");
-                $stmt_page_perm->execute([':uid' => $id, ':pid' => $page_id]);
-                $page_perms = $stmt_page_perm->fetchAll(PDO::FETCH_COLUMN);
-                $page_perms = array_filter($page_perms);
-                if (!empty($page_perms)) {
-                    $user_perms = $page_perms;
-                } elseif (!empty($group_module_code)) {
-                    $stmt_group_perm = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id = :uid AND scope = 'group' AND module_code = :mcode");
-                    $stmt_group_perm->execute([':uid' => $id, ':mcode' => $group_module_code]);
-                    $group_perms = $stmt_group_perm->fetchAll(PDO::FETCH_COLUMN);
-                    $group_perms = array_filter($group_perms);
-                    if (!empty($group_perms)) {
-                        $user_perms = $group_perms;
-                    }
-                }
-                $all_chars = [];
-                foreach ($user_perms as $p) {
-                    $all_chars = array_merge($all_chars, str_split($p));
-                }
-                $unique_perms = array_unique($all_chars);
-                if (in_array('A', $unique_perms)) {
-                    $permission_code = 'A';
-                } elseif (!empty($unique_perms)) {
-                    sort($unique_perms);
-                    $permission_code = implode('', $unique_perms);
-                }
-            }
-        } catch (Exception $e) {
-            error_log("Permission check error in AJAX: " . $e->getMessage());
-        }
-        $_SESSION[$perm_cache_key] = $permission_code;
-    }
-    $can_create = ($permission_code && (strpos($permission_code, 'A') !== false || strpos($permission_code, 'C') !== false));
-    $can_update = ($permission_code && (strpos($permission_code, 'A') !== false || strpos($permission_code, 'U') !== false));
-    $can_delete = ($permission_code && (strpos($permission_code, 'A') !== false || strpos($permission_code, 'D') !== false));
-    $can_edit_ateNote = ($permission_code === 'A' || ($permission_code && strpos($permission_code, 'X') !== false));
-    $show_op_col = ($can_create || $can_update);
+    // 1. 權限變數：load_page_data 這個 action 不在檔案最上方的 POST 動作分派區塊內，
+    // 執行到這裡之前一定會先跑過檔案前段「權限管理」那段（$permission_code/$can_*/RBAC 覆寫都已算好），
+    // 不要在這裡重複重算一次――否則 RBAC 開關切換時，AJAX 分頁這邊會繼續用舊邏輯，跟整頁載入不一致。
 
     // 2. 處理分頁變數、SQL WHERE 條件、執行 Query
     $page = max(1, intval($_POST['page'] ?? 1));
@@ -2242,7 +2197,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     }
 
     // ── 批次查詢：設計備註 / 標籤 / 圖面狀態 / 庫存 ─────────────────────────
-    $is_perm_a    = ($permission_code === 'A');
+    // $is_perm_a 已於檔案前段權限區塊算好（含 RBAC 覆寫），這裡不再重算
     $part_dn_map     = [];   // d_id string => ['count'=>N,'has_img'=>bool]
     $cust_dn_map     = [];   // customer_id  => ['count'=>N,'has_img'=>bool]
     $labels_map      = [];   // d_id_ID int  => [['name'=>'…','val'=>'…'],…]
@@ -2653,7 +2608,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                             <button type="button" class="btn btn-default btn-xs" title="複製並新增" onclick="copyOrder('<?= $order['Order_id'] ?>')" style="margin:0;"><i class="fa fa-copy"></i></button>
                             <?php endif; ?>
                         </div>
-                        <?php if ($can_update): ?>
+                        <?php if ($can_order_change): ?>
                         <button type="button" class="btn btn-warning btn-xs" title="訂單變更" onclick="openOrderChange('<?= $order['Order_id'] ?>')" style="margin:0;"><i class="fa fa-exchange"></i> 變更</button>
                         <?php endif; ?>
                     </div>
@@ -2856,7 +2811,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     $upDisplay = rtrim(rtrim(number_format(floatval($upRaw), 4, '.', ''), '0'), '.');
                 }
                 ?>
-                <td class="col-qty" style="color:#27ae60;"><?= $upDisplay ?></td>
+                <td class="col-qty" style="color:#27ae60;"><?= $can_view_amount ? $upDisplay : '' ?></td>
                 <td>
                     <div class="textarea-wrap">
                         <textarea class="table-textarea" name="Order_ps" <?= $can_update ? '' : 'readonly' ?> rows="1" data-orig="<?= safe_html($order['Order_ps']) ?>" oninput="autoResize(this)" onfocus="autoResize(this)" onblur="autoResize(this)" onkeydown="handleKeyDown(event, this, '<?= $order['Order_id'] ?>')"><?= safe_html($order['Order_ps']) ?></textarea>
@@ -2894,21 +2849,21 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         if (!(isset($order['pmGet_formatted']) && !empty($order['pmGet_formatted']))) {
                             if (isset($order['in_review_formatted']) && !empty($order['in_review_formatted'])) {
                                 echo '<span style="color: green; font-size: 11px; margin-right: 3px;">' . $order['in_review_formatted'] . '審圖</span>';
-                                if ($can_update && $permission_code === 'A') {
+                                if ($can_batch_draw) {
                                     echo '<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="cancelInReview(\'' . $order['Order_id'] . '\')">X</button>';
                                 }
                             } else {
-                                if ($can_update && $permission_code === 'A') {
+                                if ($can_batch_draw) {
                                     echo '<button type="button" class="btn btn-xs btn-success" style="padding: 2px 6px; font-size: 11px;" onclick="updateInReview(\'' . $order['Order_id'] . '\')">審圖</button>';
                                 } else {
                                     echo '<span style="font-size: 12px; color: #999;">批圖中</span>';
                                 }
                             }
-                            if ($can_update && $permission_code === 'A') {
+                            if ($can_to_pm) {
                                 echo '<button type="button" class="btn btn-warning btn-xs" style="padding: 2px 6px; font-size: 11px;" onclick="updatePmGet(\'' . $order['Order_id'] . '\')">轉生管</button>';
                             }
                         } else {
-                            if ($can_update && $permission_code === 'A') {
+                            if ($can_to_pm) {
                                 echo '<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="cancelPmGet(\'' . $order['Order_id'] . '\')">X</button> ';
                             }
                             echo '<span style="font-size: 12px;">' . $order['pmGet_formatted'] . '</span>';
@@ -3671,6 +3626,8 @@ foreach($dCounts as $c) {
                                 <div style="font-weight:600;font-size:13px;">新增訂單</div>
                             </div>
                         </div>
+                        <?php endif; ?>
+                        <?php if ($can_op_convert): ?>
                         <div class="stat-card" style="background:#e67e22;color:white;flex:0 0 90px;display:flex;align-items:center;justify-content:center;padding:0;" onclick="openOpConvertModal()">
                             <div style="text-align:center;">
                                 <i class="fa fa-exchange" style="font-size:24px;margin-bottom:3px;"></i>
@@ -3729,20 +3686,22 @@ foreach($dCounts as $c) {
                             <i class="fa fa-cog" style="font-size:13px;"></i><span class="fb-txt"> 齒輪計算</span>
                         </button>
                         <?php endif; ?>
+                        <?php if ($can_keyway_calc): ?>
                         <button type="button" id="btn-open-kw-tool"
                             onclick="openKwTool()"
                             title="軸件鍵槽計算工具"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#1a3a2a,#27ae60);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
                             <i class="fa fa-key" style="font-size:13px;"></i><span class="fb-txt"> 鍵槽計算</span>
                         </button>
-                        <!-- 訂單變更：變更(全部歷史) + 設定(限A權限)，緊鄰鍵槽計算右側 -->
+                        <?php endif; ?>
+                        <!-- 訂單變更：變更(全部歷史) + 設定(限A權限，見 $can_order_change_setting)，緊鄰鍵槽計算右側 -->
                         <button type="button" id="btn-order-change-history"
                             onclick="openChangeHistory()"
                             title="全部訂單變更歷史紀錄"
                             style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#5d4037,#a1887f);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
                             <i class="fa fa-history" style="font-size:13px;"></i><span class="fb-txt"> 變更</span>
                         </button>
-                        <?php if ($permission_code === 'A'): ?>
+                        <?php if ($can_order_change_setting): ?>
                         <button type="button" id="btn-order-change-settings"
                             onclick="openChangeSettings()"
                             title="訂單變更設定（通知對象、附件路徑、列印表頭表尾）"
@@ -3949,7 +3908,7 @@ foreach($dCounts as $c) {
                                     <!-- Row 5: 指派設計 | 設計接收日 -->
                                     <div class="col-xs-6 form-group" style="padding:0 5px;">
                                         <label class="ctrl-label">指派設計
-                                            <?php if ($permission_code === 'A'): ?>
+                                            <?php if ($can_designer_assign_cog): ?>
                                             <button type="button" class="btn btn-xs btn-default" onclick="openDesignerSetting()" style="margin-left:3px;padding:0 3px;"><i class="fa fa-cog"></i></button>
                                             <?php endif; ?>
                                         </label>
@@ -4749,7 +4708,7 @@ foreach($dCounts as $c) {
         window.canCreate = <?= json_encode($can_create) ?>;
         window.canUpdate = <?= json_encode($can_update) ?>;
         window.canDelete = <?= json_encode($can_delete) ?>;
-        window.canUpdatePmget = <?= json_encode($can_update && $permission_code === 'A') ?>; // 只有 A 權限才能操作轉生管
+        window.canUpdatePmget = <?= json_encode($can_to_pm) ?>; // 轉生管操作權限（ot_to_pm）
         window.designerList = <?= json_encode($ate_list) ?>; // 傳遞設計師列表給 JS
         
         function escapeHtml(text) {
