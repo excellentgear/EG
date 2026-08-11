@@ -282,8 +282,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if ($action === 'list') {
             list($whereSql, $params) = ocq_build_filter($_POST);
             $page = max(1, intval($_POST['page'] ?? 1));
-            $page_size = intval($_POST['page_size'] ?? 20);
-            if (!in_array($page_size, [5, 10, 20, 50], true)) $page_size = 20;
+            $page_size = intval($_POST['page_size'] ?? 10);
+            if (!in_array($page_size, [5, 10, 20, 50], true)) $page_size = 10;
             $offset = ($page - 1) * $page_size;
 
             $stmtCnt = $pdo->prepare("SELECT COUNT(*) $OCQ_FROM $whereSql");
@@ -484,6 +484,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .ocq-price { margin-top: 3px; font-size: 11px; line-height: 1.3; }
         .ocq-fillable { cursor: pointer; border-bottom: 1px dashed #D8BE93; }
         .ocq-fillable:hover { background: #FFF3E2; }
+        .ocq-nowrap { white-space: nowrap; }
     </style>
 </head>
 <body class="nav-sm">
@@ -504,15 +505,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         </div>
 
         <div class="ocq-toolbar">
-            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;">
-                <label>結案日期</label>
+            <div style="display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px;align-items:center;width:100%;">
+                <label title="2026-05-22「手動結案」功能上線前就已結案的舊資料沒有結案時間紀錄，改用BOM編號回推的建立日期篩選/顯示，並標註「(推算)」" style="cursor:help;border-bottom:1px dotted #a06a1f;white-space:nowrap;">結案日期 <i class="fa fa-info-circle" style="color:#a06a1f;"></i></label>
                 <input type="date" id="fDateFrom" max="9999-12-31">
                 <span>～</span>
                 <input type="date" id="fDateTo" max="9999-12-31">
-                <small style="color:#a06a1f;" title="2026-05-22「手動結案」功能上線前就已結案的舊資料沒有結案時間紀錄，改用BOM編號回推的建立日期篩選/顯示，並標註「(推算)」">
-                    <i class="fa fa-info-circle"></i> 舊資料無結案紀錄時以BOM編號推算日期
-                </small>
-                <label>客戶</label>
+                <label style="white-space:nowrap;">客戶</label>
                 <input type="text" id="fCustomer" list="ocqCustomerList" placeholder="客戶名稱或代號" style="width:110px;">
                 <datalist id="ocqCustomerList"></datalist>
                 <label>業務</label>
@@ -552,8 +550,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <label style="margin-left:auto;">每頁</label>
             <select id="pageSizeSel" style="height:28px;">
                 <option value="5">5</option>
-                <option value="10">10</option>
-                <option value="20" selected>20</option>
+                <option value="10" selected>10</option>
+                <option value="20">20</option>
                 <option value="50">50</option>
             </select>
             <span>筆</span>
@@ -679,7 +677,7 @@ function rowToTr(item, maxProc, priceMap){
           + (noPriceCount > 0 ? ' <span style="color:#aaa;font-size:10px;">('+noPriceCount+'關無價)</span>' : '') + '</div>' : '';
 
     var custSpan = '<span class="ocq-fillable" data-field="customer" title="雙擊帶入客戶篩選">'+esc(item.client_name_display||'')+'</span>';
-    var bomSpan = '<span class="ocq-fillable" data-field="bom" title="雙擊帶入BOM/料號篩選">'+esc(item.bom)+'</span>';
+    var bomSpan = '<span class="ocq-fillable ocq-nowrap" data-field="bom" title="雙擊帶入BOM/料號篩選">'+esc(item.bom)+'</span>';
     var didSpan = item.d_id ? '<span class="ocq-fillable" data-field="bom" title="雙擊帶入BOM/料號篩選">'+esc(item.d_id)+'</span>' : '';
     var tds = '<td>'+custSpan+'</td>'
         + '<td class="t-left"><figure class="'+cc+'"></figure>'+bomSpan+closedInfo+'</td>'

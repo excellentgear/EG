@@ -7,6 +7,7 @@
  * - 工作日一律用 evenement 行事曆（car_lib.php），不可用 calendar_workday（該表有誤）
  */
 require_once __DIR__ . '/car_lib.php'; // car_holiday_sets / car_working_days_between
+require_once __DIR__ . '/delegate_lib.php'; // eg_resolve_signer（擔當者請假代理判定，見 ai-rules/11）
 
 /* ============================================================
  * Schema（依專案慣例：CREATE TABLE IF NOT EXISTS + 首次自動 seed）
@@ -338,6 +339,24 @@ function kpi_as_can_modify(int $year, array $perms, bool $isOwner): bool {
     if ($perms['canAdmin']) return true;
     if (kpi_as_year_locked($year)) return false;
     return $isOwner || $perms['canFill'];
+}
+
+/** $uid 是否為 $ownerId 今天請假時的代理人（沿用 delegate_lib 標準解析，ai-rules/11）。 */
+function kpi_as_is_delegate_of_owner(PDO $db, int $ownerId, int $uid): bool {
+    if ($ownerId <= 0 || $uid <= 0 || $ownerId === $uid) return false;
+    if (!function_exists('eg_resolve_signer')) return false;
+    $res = eg_resolve_signer($db, $ownerId, ['auto_sign' => true, 'log' => false]);
+    return (int)$res['signer_id'] === $uid;
+}
+/**
+ * 手動覆寫／清除覆寫授權：只有擔當者本人、或擔當者今天請假時解析出的代理人可操作；
+ * 系統管理者固定全權（RBAC 鐵律）。年度鎖定後（隔年2/1起）僅 KPI 管理員可操作，不受擔當者限制。
+ */
+function kpi_as_can_override(PDO $db, int $year, array $perms, int $ownerId, int $uid): bool {
+    if (kpi_as_year_locked($year)) return !empty($perms['canAdmin']);
+    if (!empty($perms['isAdmin'])) return true;
+    if ($ownerId === $uid) return true;
+    return kpi_as_is_delegate_of_owner($db, $ownerId, $uid);
 }
 
 /* ============================================================
