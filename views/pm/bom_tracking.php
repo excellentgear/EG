@@ -551,6 +551,13 @@ function renderRows(rows) {
 }
 
 $('#btnFilter').on('click', function () { state.page = 1; loadMatchedList(); });
+// 篩選輸入框打字後即時篩選(防抖動)，不必等使用者按「篩選」鈕；狀態下拉選了也直接套用
+var filterBomTimer = null;
+$('#filterBom').on('input', function () {
+    clearTimeout(filterBomTimer);
+    filterBomTimer = setTimeout(function () { state.page = 1; loadMatchedList(); }, 400);
+});
+$('#filterStatus').on('change', function () { state.page = 1; loadMatchedList(); });
 $('#pageSizeSelect').on('change', function () { state.pageSize = parseInt($(this).val(), 10); state.page = 1; loadMatchedList(); });
 $('#btnPrevPage').on('click', function () { if (state.page > 1) { state.page--; loadMatchedList(); } });
 $('#btnNextPage').on('click', function () {
