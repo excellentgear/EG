@@ -444,6 +444,8 @@ if ($hrUserPerm === 'R') {
                             <button type="button" class="btn btn-danger pull-left" id="btn-delete-in-modal" style="display: none;">刪除</button>
                             <!-- 離職/留停者才出現：清掉殘留的權限設定資料（權限本身已由在職狀態自動擋下） -->
                             <button type="button" class="btn btn-warning pull-left" id="btn-revoke-perm" style="display: none; margin-left: 8px;">清除權限設定</button>
+                            <!-- 復職者才出現：目前沒有權限設定、但先前有被清除過紀錄時，一鍵還原離職前的設定 -->
+                            <button type="button" class="btn btn-success pull-left" id="btn-restore-perm" style="display: none; margin-left: 8px;">還原離職前權限</button>
                             <!-- 職務調動＋在職狀態的歷史紀錄（含補登過去資料；ai-rules/14 P1） -->
                             <button type="button" class="btn btn-default pull-left" id="btn-history" style="display: none; margin-left: 8px;">異動紀錄</button>
                             <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
@@ -998,13 +1000,30 @@ $(document).ready(function() {
                     // 離職/留停者才顯示「清除權限設定」，並先問後端還剩幾筆（0 筆就不用出現）
                     var st = parseInt(emp.state !== undefined ? emp.state : emp.user_status);
                     $('#btn-revoke-perm').hide();
-                    if ([0, 2, 3].indexOf(st) > -1 && (window.hrUserPerm.includes('A') || window.hrUserPerm.includes('U'))) {
+                    $('#btn-restore-perm').hide();
+                    var canEditPerm = (window.hrUserPerm.includes('A') || window.hrUserPerm.includes('U'));
+                    if ([0, 2, 3].indexOf(st) > -1 && canEditPerm) {
                         callApi('get_permission_summary', 'GET', { id: userId }, function(res) {
                             if (res.status === 'success' && res.total > 0) {
                                 $('#btn-revoke-perm').show()
                                     .data('id', userId)
                                     .data('summary', res)
                                     .text('清除權限設定 (' + res.total + ')');
+                            }
+                        });
+                    }
+                    // 在職者才可能是「復職」：目前若已無任何權限設定，且先前有清除紀錄，才提供一鍵還原
+                    if (st === 1 && canEditPerm) {
+                        callApi('get_permission_summary', 'GET', { id: userId }, function(sumRes) {
+                            if (sumRes.status === 'success' && sumRes.total === 0) {
+                                callApi('get_restorable_permissions', 'GET', { id: userId }, function(res) {
+                                    if (res.status === 'success' && res.found && res.total > 0) {
+                                        $('#btn-restore-perm').show()
+                                            .data('id', userId)
+                                            .data('summary', res)
+                                            .text('還原離職前權限 (' + res.total + ')');
+                                    }
+                                });
                             }
                         });
                     }
@@ -1040,6 +1059,25 @@ $(document).ready(function() {
         callApi('revoke_permissions', 'POST', { id: userId, reason: '人事手動清除' }, function(res) {
             alert(res.status === 'success' ? res.message : ('清除失敗：' + res.message));
             if (res.status === 'success') $('#btn-revoke-perm').hide();
+        });
+    });
+
+    // 一鍵還原離職前的權限設定（復職專用；來源是當初「清除權限設定」時寫入的稽核紀錄）
+    $('#btn-restore-perm').on('click', function() {
+        var userId  = $(this).data('id');
+        var summary = $(this).data('summary') || {};
+        var lines = ['將還原此帳號離職前（' + (summary.revoked_at || '') + ' 清除）的權限設定：', ''];
+        (summary.items || []).forEach(function(it) {
+            lines.push('● ' + it.label + '：' + it.count + ' 筆　' + (it.detail || ''));
+        });
+        if (summary.delegate_count > 0) {
+            lines.push('', '● 另有 ' + summary.delegate_count + ' 筆代理設定當初被停用，不會自動恢復，需要的話請至代理設定頁確認後手動啟用。');
+        }
+        lines.push('', '只會補回目前沒有的設定，不會動到還原前已存在的其他設定。確定要還原嗎？');
+        if (!confirm(lines.join('\n'))) return;
+        callApi('restore_permissions', 'POST', { id: userId }, function(res) {
+            alert(res.status === 'success' ? res.message : ('還原失敗：' + res.message));
+            if (res.status === 'success') $('#btn-restore-perm').hide();
         });
     });
 

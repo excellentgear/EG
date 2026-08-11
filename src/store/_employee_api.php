@@ -52,6 +52,12 @@ switch ($action) {
     case 'revoke_permissions':       // 一鍵清除此人所有權限設定（先寫 audit_log 再刪）
         revokePermissions();
         break;
+    case 'get_restorable_permissions': // 查此人是否有可還原的離職前權限設定（復職用）
+        getRestorablePermissions();
+        break;
+    case 'restore_permissions':      // 一鍵還原離職前的權限設定（只補目前沒有的，不覆蓋）
+        restorePermissionsAction();
+        break;
     case 'get_change_history':       // 異動紀錄（職務調動＋在職狀態）
         getChangeHistory();
         break;
@@ -530,6 +536,31 @@ function revokePermissions() {
         'message'  => $res['message'],
         'deleted'  => $res['deleted'],
         'warnings' => $res['warnings'],
+    ], JSON_UNESCAPED_UNICODE);
+}
+
+/** 查此人是否有可還原的離職前權限設定（復職專用；來源是 revoke_permissions 當初寫入的稽核快照） */
+function getRestorablePermissions() {
+    global $db;
+    $id = (int)($_REQUEST['id'] ?? 0);
+    if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。']); return; }
+
+    $snap = eg_get_restorable_permissions($db, $id);
+    if (!$snap) { echo json_encode(['status' => 'success', 'found' => false]); return; }
+    echo json_encode(array_merge(['status' => 'success', 'found' => true], $snap), JSON_UNESCAPED_UNICODE);
+}
+
+/** 一鍵還原離職前的權限設定（只補目前沒有的，不覆蓋還原當下已存在的設定） */
+function restorePermissionsAction() {
+    global $db;
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。']); return; }
+
+    $res = eg_restore_user_permissions($db, $id, $_SESSION['id'] ?? null, $_SESSION['user_cname'] ?? '');
+    echo json_encode([
+        'status'   => $res['ok'] ? 'success' : 'error',
+        'message'  => $res['message'],
+        'restored' => $res['restored'] ?? [],
     ], JSON_UNESCAPED_UNICODE);
 }
 

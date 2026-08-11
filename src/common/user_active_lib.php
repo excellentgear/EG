@@ -289,3 +289,180 @@ if (!function_exists('eg_revoke_user_permissions')) {
                 'message' => $total > 0 ? ('已清除 ' . $total . ' 筆權限設定') : '此帳號沒有殘留的權限設定'];
     }
 }
+
+/* ------------------------------------------------------------------
+ * 復職一鍵還原：eg_revoke_user_permissions 清除前一定先把完整設定寫進
+ * audit_log（action_type='PERM_REVOKE'），這裡只是把該筆快照讀回來、
+ * 補回「目前沒有的」設定（絕不覆蓋還原當下已存在的資料，見鐵律4）。
+ * 代理設定當初只是停用不是刪除，且涉及別人的簽核鏈，故不自動恢復，
+ * 只在還原結果裡提醒人事到代理設定頁手動處理（比照 ai-rules/11、14）。
+ * ------------------------------------------------------------------ */
+
+if (!function_exists('eg_find_latest_revoke_snapshot')) {
+    /** 找此人最近一次「清除權限設定」的稽核快照；查無則回 null */
+    function eg_find_latest_revoke_snapshot($pdo, $user_id) {
+        $uid = (int)$user_id;
+        try {
+            $st = $pdo->prepare("SELECT id, changes, created_at, operator FROM audit_log
+                                   WHERE action_type = 'PERM_REVOKE' AND target_type = 'user' AND target_id = ?
+                                   ORDER BY created_at DESC LIMIT 1");
+            $st->execute([(string)$uid]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$row) return null;
+            $data = json_decode($row['changes'], true);
+            if (!is_array($data) || empty($data['before']) || !is_array($data['before'])) return null;
+            return ['log_id' => $row['id'], 'created_at' => $row['created_at'], 'operator' => $row['operator'],
+                    'before' => $data['before'], 'reason' => $data['reason'] ?? ''];
+        } catch (Exception $e) {
+            error_log('[user_active] find revoke snapshot failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+}
+
+if (!function_exists('eg_get_restorable_permissions')) {
+    /** 查此人是否有可還原的權限設定（給還原前的確認清單用），查無回 null */
+    function eg_get_restorable_permissions($pdo, $user_id) {
+        $snap = eg_find_latest_revoke_snapshot($pdo, $user_id);
+        if (!$snap) return null;
+        $before = $snap['before'];
+        $items = [];
+        if (!empty($before['user_roles'])) {
+            $names = [];
+            foreach ($before['user_roles'] as $r) $names[] = ($r['role_name'] ?? ('角色' . $r['role_id']));
+            $items[] = ['label' => 'RBAC 角色', 'count' => count($before['user_roles']), 'detail' => implode('、', $names)];
+        }
+        if (!empty($before['user_module_permissions'])) {
+            $codes = [];
+            foreach ($before['user_module_permissions'] as $r) $codes[] = $r['module_code'] . '(' . $r['permission'] . ')';
+            $items[] = ['label' => '模組權限', 'count' => count($before['user_module_permissions']), 'detail' => implode('、', $codes)];
+        }
+        if (!empty($before['page_operator_acl'])) {
+            $keys = [];
+            foreach ($before['page_operator_acl'] as $r) $keys[] = $r['page_key'];
+            $items[] = ['label' => '頁面白名單', 'count' => count($before['page_operator_acl']), 'detail' => implode('、', $keys)];
+        }
+        if (!empty($before['user_permissions'])) {
+            $items[] = ['label' => '舊版個人權限(user_permissions)', 'count' => 1, 'detail' => '整列設定'];
+        }
+        return [
+            'log_id'         => $snap['log_id'],
+            'revoked_at'     => $snap['created_at'],
+            'revoked_by'     => $snap['operator'],
+            'items'          => $items,
+            'total'          => array_sum(array_column($items, 'count')),
+            'delegate_count' => !empty($before['user_delegate']) ? count($before['user_delegate']) : 0,
+        ];
+    }
+}
+
+if (!function_exists('eg_restore_user_permissions')) {
+    /**
+     * 還原此人最近一次被清除的權限設定（transaction；只補目前沒有的，不覆蓋）。
+     * @return array ['ok'=>bool,'restored'=>[表名=>筆數],'skipped'=>[],'message'=>'']
+     */
+    function eg_restore_user_permissions($pdo, $user_id, $operator_id = null, $operator = '') {
+        $uid = (int)$user_id;
+        if ($uid <= 0) return ['ok' => false, 'message' => '缺少使用者編號'];
+
+        $snap = eg_find_latest_revoke_snapshot($pdo, $uid);
+        if (!$snap) return ['ok' => false, 'message' => '查無可還原的權限清除紀錄'];
+        $before = $snap['before'];
+
+        $restored = [];
+        $skipped  = [];
+        $owns_tx  = !$pdo->inTransaction();
+
+        try {
+            if ($owns_tx) $pdo->beginTransaction();
+
+            // RBAC 角色：角色若已被刪除就跳過並記錄，其餘只補目前沒有的
+            if (!empty($before['user_roles'])) {
+                $chkRole = $pdo->prepare("SELECT COUNT(*) FROM roles WHERE role_id = ?");
+                $chkHas  = $pdo->prepare("SELECT COUNT(*) FROM user_roles WHERE user_id = ? AND role_id = ?");
+                $ins     = $pdo->prepare("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)");
+                $n = 0;
+                foreach ($before['user_roles'] as $r) {
+                    $rid = (int)($r['role_id'] ?? 0);
+                    if ($rid <= 0) continue;
+                    $chkRole->execute([$rid]);
+                    if (!$chkRole->fetchColumn()) { $skipped[] = ($r['role_name'] ?? ('角色' . $rid)) . '（角色已不存在）'; continue; }
+                    $chkHas->execute([$uid, $rid]);
+                    if ($chkHas->fetchColumn()) continue;
+                    $ins->execute([$uid, $rid]);
+                    $n++;
+                }
+                if ($n > 0) $restored['user_roles'] = $n;
+            }
+
+            // 舊版單列權限（user_permissions）：目前完全沒有才還原整列
+            if (!empty($before['user_permissions']) && is_array($before['user_permissions'])) {
+                $chk = $pdo->prepare("SELECT COUNT(*) FROM user_permissions WHERE user_id = ?");
+                $chk->execute([$uid]);
+                if (!$chk->fetchColumn()) {
+                    $row = $before['user_permissions'];
+                    unset($row['id']);
+                    $row['user_id'] = $uid;
+                    $cols = array_keys($row);
+                    $sql  = "INSERT INTO user_permissions (" . implode(',', $cols) . ") VALUES (" . implode(',', array_fill(0, count($cols), '?')) . ")";
+                    $pdo->prepare($sql)->execute(array_values($row));
+                    $restored['user_permissions'] = 1;
+                }
+            }
+
+            // 模組/頁面權限（選單群組、頁面等）
+            if (!empty($before['user_module_permissions'])) {
+                $chkHas = $pdo->prepare("SELECT COUNT(*) FROM user_module_permissions WHERE user_id = ? AND module_code = ? AND scope <=> ?");
+                $ins    = $pdo->prepare("INSERT INTO user_module_permissions (user_id, module_code, permission, scope, created_at) VALUES (?,?,?,?,NOW())");
+                $n = 0;
+                foreach ($before['user_module_permissions'] as $r) {
+                    $scope = $r['scope'] ?? null;
+                    $chkHas->execute([$uid, $r['module_code'], $scope]);
+                    if ($chkHas->fetchColumn()) continue;
+                    $ins->execute([$uid, $r['module_code'], $r['permission'], $scope]);
+                    $n++;
+                }
+                if ($n > 0) $restored['user_module_permissions'] = $n;
+            }
+
+            // 頁面白名單：還原本人自己先前的資格（不影響他人名單，上限由前台功能自行把關）
+            if (!empty($before['page_operator_acl'])) {
+                $chkHas = $pdo->prepare("SELECT COUNT(*) FROM page_operator_acl WHERE user_id = ? AND page_key = ?");
+                $ins    = $pdo->prepare("INSERT INTO page_operator_acl (page_key, user_id, created_by) VALUES (?,?,?)");
+                $n = 0;
+                foreach ($before['page_operator_acl'] as $r) {
+                    $chkHas->execute([$uid, $r['page_key']]);
+                    if ($chkHas->fetchColumn()) continue;
+                    $ins->execute([$r['page_key'], $uid, (string)($operator_id ?? 'system')]);
+                    $n++;
+                }
+                if ($n > 0) $restored['page_operator_acl'] = $n;
+            }
+
+            $st = $pdo->prepare("SELECT user_cname FROM `user` WHERE id = ?");
+            $st->execute([$uid]);
+            $uname = (string)$st->fetchColumn();
+
+            $changes = json_encode(['from_audit_log_id' => $snap['log_id'], 'restored' => $restored, 'skipped' => $skipped],
+                                   JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+            $pdo->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                            VALUES ('PERM_RESTORE', 'user', ?, ?, ?, ?, ?, NOW())")
+                ->execute([(string)$uid, $uname, $changes,
+                           $operator_id !== null ? (int)$operator_id : null,
+                           $operator !== '' ? $operator : 'system']);
+
+            if ($owns_tx) $pdo->commit();
+        } catch (Exception $e) {
+            if ($owns_tx && $pdo->inTransaction()) $pdo->rollBack();
+            return ['ok' => false, 'message' => '還原失敗：' . $e->getMessage()];
+        }
+
+        $total = array_sum($restored);
+        $msg = $total > 0 ? ('已還原 ' . $total . ' 筆權限設定') : '沒有可還原的設定（可能已被重新設定過）';
+        if ($skipped) $msg .= '；' . count($skipped) . ' 個角色已被刪除無法還原（' . implode('、', $skipped) . '）';
+        if (!empty($before['user_delegate'])) {
+            $msg .= '　另有 ' . count($before['user_delegate']) . ' 筆代理設定當初被停用，不會自動恢復，請至代理設定頁確認後手動啟用。';
+        }
+        return ['ok' => true, 'restored' => $restored, 'skipped' => $skipped, 'message' => $msg];
+    }
+}
