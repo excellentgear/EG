@@ -436,6 +436,77 @@ switch ($action) {
         break;
     }
 
+    // ──────────────────────────────────────────────────────────────────────
+    // 複製某員工的權限設定給另一位員工（所有模組的角色指派＋選單群組/頁面權限）
+    // POST action=copy_user_permissions  source_user_id=N  target_user_id=N  mode=merge|overwrite
+    // 刻意不複製 page_operator_acl（各頁獨立、名額有限的超級管理員白名單，不該靠複製角色帶過去）
+    // 與舊版 user_permissions（無任何頁面在讀寫，屬已停用的舊資料）
+    // ──────────────────────────────────────────────────────────────────────
+    case 'copy_user_permissions': {
+        if (!isAdmin($pdo, $user_id)) { $response = ['success'=>false,'message'=>'無管理員權限']; break; }
+        $srcId = intval($_POST['source_user_id'] ?? 0);
+        $tgtId = intval($_POST['target_user_id'] ?? 0);
+        $mode  = ($_POST['mode'] ?? 'merge') === 'overwrite' ? 'overwrite' : 'merge';
+        if (!$srcId || !$tgtId) { $response = ['success'=>false,'message'=>'請選擇來源與目標員工']; break; }
+        if ($srcId === $tgtId) { $response = ['success'=>false,'message'=>'來源與目標不可為同一人']; break; }
+        try {
+            $pdo->beginTransaction();
+
+            // 複製前先記下目標員工原本的設定，寫入稽核紀錄備查
+            $stmt = $pdo->prepare("SELECT r.role_id, r.role_name FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=?");
+            $stmt->execute([$tgtId]);
+            $beforeRoles = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $stmt = $pdo->prepare("SELECT module_code, permission, scope FROM user_module_permissions WHERE user_id=?");
+            $stmt->execute([$tgtId]);
+            $beforeModPerm = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            if ($mode === 'overwrite') {
+                $pdo->prepare("DELETE FROM user_roles WHERE user_id=?")->execute([$tgtId]);
+                $pdo->prepare("DELETE FROM user_module_permissions WHERE user_id=?")->execute([$tgtId]);
+            }
+
+            // 角色（跨所有模組，user_roles 本來就沒有分模組存放，一次複製即涵蓋全部）
+            $roleCount = 0;
+            $stmt = $pdo->prepare("SELECT role_id FROM user_roles WHERE user_id=?");
+            $stmt->execute([$srcId]);
+            $ins = $pdo->prepare("INSERT IGNORE INTO user_roles (user_id, role_id) VALUES (?,?)");
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $rid) {
+                $ins->execute([$tgtId, $rid]);
+                if ($ins->rowCount() > 0) $roleCount++;
+            }
+
+            // 選單群組/頁面權限
+            $permCount = 0;
+            $stmt = $pdo->prepare("SELECT module_code, permission, scope FROM user_module_permissions WHERE user_id=?");
+            $stmt->execute([$srcId]);
+            $chk  = $pdo->prepare("SELECT COUNT(*) FROM user_module_permissions WHERE user_id=? AND module_code=? AND scope=?");
+            $ins2 = $pdo->prepare("INSERT INTO user_module_permissions (user_id, module_code, permission, scope) VALUES (?,?,?,?)");
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $p) {
+                $chk->execute([$tgtId, $p['module_code'], $p['scope']]);
+                if ($chk->fetchColumn() > 0) continue; // 目標已有此模組/頁面設定，合併模式不覆蓋（覆蓋模式上面已先清空，不會走到這裡）
+                $ins2->execute([$tgtId, $p['module_code'], $p['permission'], $p['scope']]);
+                $permCount++;
+            }
+
+            $srcName = rbacUserName($pdo, $srcId);
+            $tgtName = rbacUserName($pdo, $tgtId);
+            rbacAudit($pdo, $user_id, 'PERM_COPY', 'rbac_user', $tgtId, $tgtName, [
+                'source_user_id' => $srcId, 'source_name' => $srcName, 'mode' => $mode,
+                'roles_copied' => $roleCount, 'module_perms_copied' => $permCount,
+                'before_roles' => $beforeRoles, 'before_module_permissions' => $beforeModPerm,
+            ]);
+
+            $pdo->commit();
+            $response = ['success' => true,
+                'message' => "已從「{$srcName}」複製 {$roleCount} 個角色、{$permCount} 筆模組權限給「{$tgtName}」"
+                    . ($mode === 'overwrite' ? '（已先清空目標原設定）' : '（保留目標原有設定，僅補上缺少的）')];
+        } catch(Exception $_e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $response = ['success'=>false,'message'=>$_e->getMessage()];
+        }
+        break;
+    }
+
     default:
         $response = ['success'=>false,'message'=>"未知的 action: {$action}"];
 }
