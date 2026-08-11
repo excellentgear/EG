@@ -1422,11 +1422,17 @@ try {
             if ($pr === false) throw new Exception('找不到報價項目');
             if (!$pr) throw new Exception('此報價單已是正式資料，請至報價單管理頁編輯');
             $pnos = array_filter(array_map('trim', explode(',', $_POST['process_nos'] ?? '')), fn($v) => $v !== '' && is_numeric($v));
+            // 比照 quotation_list_NEW.php 的製程標籤導覽：groupType 由前端依「最後點選的標籤所屬群組」帶入
+            $groupType = in_array($_POST['group_type'] ?? '', ['full_process','full_process_split','single_process'], true)
+                ? $_POST['group_type'] : (empty($pnos) ? 'single_process' : null);
             $pdo->beginTransaction();
             $pdo->prepare("DELETE FROM quotation_item_process_map WHERE quotation_item_id=?")->execute([$item_id]);
             if (!empty($pnos)) {
                 $ins = $pdo->prepare("INSERT INTO quotation_item_process_map (quotation_item_id,process_no) VALUES (?,?)");
                 foreach ($pnos as $pno) $ins->execute([$item_id, $pno]);
+            }
+            if ($groupType !== null) {
+                $pdo->prepare("UPDATE quotation_item SET process_group_type=?, updated_at=NOW() WHERE item_id=?")->execute([$groupType, $item_id]);
             }
             $pdo->commit();
             $response = ['success' => true];
@@ -1438,8 +1444,20 @@ try {
             if (!is_array($ids) || empty($ids)) throw new Exception('未選擇任何報價單');
             $ids = array_values(array_unique(array_map('intval', $ids)));
             $ph  = implode(',', array_fill(0, count($ids), '?'));
-            $stmt = $pdo->prepare("UPDATE quotation_list SET pending_review=0, updated_by=?, updated_at=NOW() WHERE quote_id IN ($ph) AND pending_review=1");
+            // 填表人：ERP直接匯入的資料本身沒有真實填表人資訊（created_by 目前記的是執行匯入的管理員），
+            // 轉正式時一併改標成業務公用帳號(id=99993)，避免誤植成管理員本人「製表」；
+            // 若該筆已被其他方式改過 note（代表非本次匯入的原樣資料），視為已有填表人資訊，不覆蓋。
+            $stmt = $pdo->prepare("
+                UPDATE quotation_list
+                SET pending_review = 0,
+                    created_by = IF(note = 'ERP直接匯入補建歷史資料', '99993', created_by),
+                    updated_by = ?, updated_at = NOW()
+                WHERE quote_id IN ($ph) AND pending_review = 1
+            ");
             $stmt->execute(array_merge([$user_id], $ids));
+            // 核准欄位刻意留空（approval_status 維持既有值/預設 none，不設 approved_by/approved_by_name/approved_at）：
+            // 系統無法可靠回推「該歷史日期當時的業務主管」是誰（人員部門職位無歷史版本紀錄），
+            // 與其虛構一個現在的主管簽在幾年前的日期上，不如誠實留空；也因此不會觸發「待核准」通知。
             $response = ['success' => true, 'updated' => $stmt->rowCount()];
             break;
         }

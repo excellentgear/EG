@@ -56,29 +56,41 @@ try {
         .va-modal .m-body { padding:15px; overflow-y:auto; }
         .va-modal .m-foot { padding:10px 15px; border-top:1px solid #EADFC8; text-align:right; }
 
-        .qt-wrap { background:#fff; border:1px solid #EADFC8; border-radius:8px; padding:14px; }
         .qt-stats { display:flex; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
         .qt-stat-chip { background:#FFF7E8; border:1px solid #F0A24B; border-radius:6px; padding:6px 12px; font-size:12px; color:#6B471A; }
         .qt-stat-chip b { font-size:15px; }
-        table.qt-table { width:100%; border-collapse:collapse; font-size:13px; }
-        table.qt-table th { background:#F7E0BD; color:#5b3a1e; padding:6px 8px; text-align:left; white-space:nowrap; border-bottom:1px solid #E4C293; }
-        table.qt-table td { padding:6px 8px; border-bottom:1px solid #f0e6d6; vertical-align:top; }
-        table.qt-table tr.qt-row:hover { background:#FFFBF3; }
         .qt-badge { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px; margin-right:3px; }
         .qt-badge.ok   { background:#E4F3E4; color:#2e7d32; }
         .qt-badge.warn { background:#FDEBD3; color:#a2703a; }
-        .qt-expand-btn { cursor:pointer; color:#b5762f; }
-        tr.qt-item-row td { background:#FBF6EC; }
+
+        .qt-card { background:#fff; border:1px solid #EADFC8; border-radius:8px; margin-bottom:12px; overflow:hidden; }
+        .qt-card-head { display:flex; align-items:center; flex-wrap:wrap; gap:10px; background:#FBF6EC; padding:8px 12px; border-bottom:1px solid #EADFC8; font-size:13px; }
+        .qt-card-head .qno { font-weight:700; color:#5b3a1e; }
+        .qt-card-body { padding:8px 12px; }
+
         table.qt-item-table { width:100%; border-collapse:collapse; font-size:12px; }
-        table.qt-item-table th { text-align:left; color:#8a5a2b; padding:3px 6px; border-bottom:1px solid #E4C293; }
-        table.qt-item-table td { padding:4px 6px; border-bottom:1px dashed #e9dcc4; }
-        .qt-proc-tag { display:inline-block; background:#E4C293; color:#4E2C0B; font-size:11px; padding:1px 6px; border-radius:8px; margin:1px; cursor:pointer; }
-        .qt-proc-tag.off { background:#f0f0f0; color:#999; }
+        table.qt-item-table th { text-align:left; color:#8a5a2b; padding:4px 6px; border-bottom:1px solid #E4C293; }
+        table.qt-item-table td { padding:5px 6px; border-bottom:1px dashed #e9dcc4; vertical-align:top; }
+
+        .qt-proc-l1 button, .qt-proc-l2 button { font-size:11px; padding:1px 8px; margin:1px 2px 1px 0; border-radius:10px;
+            border:1px solid #E4C293; background:#fff; color:#8a5a2b; cursor:pointer; }
+        .qt-proc-l1 button.active { background:#E4C293; color:#4E2C0B; font-weight:700; }
+        .qt-proc-l2 button.active { background:#8a5a2b; color:#fff; border-color:#8a5a2b; }
+        .qt-proc-chips { margin-top:2px; }
+        .qt-proc-chip { display:inline-block; background:#E4C293; color:#4E2C0B; font-size:11px; padding:1px 6px; border-radius:8px; margin:1px; }
+        .qt-proc-chip .x { cursor:pointer; margin-left:3px; color:#8a5a2b; }
+
         .qt-search-box { position:relative; }
         .qt-search-results { position:absolute; z-index:20; background:#fff; border:1px solid #E4C293; border-radius:4px;
             max-height:220px; overflow-y:auto; width:280px; box-shadow:0 3px 12px rgba(0,0,0,.15); display:none; }
-        .qt-search-results div { padding:5px 8px; font-size:12px; cursor:pointer; border-bottom:1px solid #f4ecd9; }
-        .qt-search-results div:hover { background:#FFF7E8; }
+        .qt-search-results div.qt-sr-item { padding:5px 8px; font-size:12px; cursor:pointer; border-bottom:1px solid #f4ecd9; }
+        .qt-search-results div.qt-sr-item:hover { background:#FFF7E8; }
+        .qt-search-results .qt-sr-new { padding:6px 8px; font-size:12px; color:#2e7d32; cursor:pointer; background:#F3FAF3; }
+        .qt-search-results .qt-sr-new:hover { background:#E4F3E4; }
+
+        .qt-quickform { border:1px dashed #E4C293; border-radius:4px; padding:6px; margin-top:4px; background:#FFFBF3; }
+        .qt-quickform input { font-size:11px; margin-bottom:3px; }
+
         .qt-pagination { margin-top:10px; text-align:right; }
         .qt-pagination button { margin-left:4px; }
     </style>
@@ -94,35 +106,21 @@ try {
             </div>
             <div class="clearfix"></div>
 
-            <div class="qt-wrap">
-                <div class="qt-stats" id="qtStats"></div>
-                <div style="margin-bottom:10px;">
-                    <button class="btn btn-warning btn-sm" id="btnBatchConfirm" <?= $canEdit ? '' : 'disabled' ?>>
-                        <i class="fa fa-check"></i> 批次轉入正式報價單
-                    </button>
-                    <span id="qtSelCount" style="font-size:12px;color:#888;margin-left:8px;"></span>
-                    <?php if (!$canEdit): ?>
-                        <span style="font-size:12px;color:#c0392b;margin-left:8px;">您沒有編輯權限，僅供檢視</span>
-                    <?php endif; ?>
-                </div>
-                <div style="overflow-x:auto;">
-                    <table class="qt-table">
-                        <thead>
-                        <tr>
-                            <th><input type="checkbox" id="qtCheckAll"></th>
-                            <th></th>
-                            <th>報價單號</th>
-                            <th>日期</th>
-                            <th>客戶</th>
-                            <th>項目數</th>
-                            <th>完成度</th>
-                        </tr>
-                        </thead>
-                        <tbody id="qtTbody"></tbody>
-                    </table>
-                </div>
-                <div class="qt-pagination" id="qtPagination"></div>
+            <div class="qt-stats" id="qtStats"></div>
+            <div style="margin-bottom:10px;">
+                <button class="btn btn-warning btn-sm" id="btnBatchConfirm" <?= $canEdit ? '' : 'disabled' ?>>
+                    <i class="fa fa-check"></i> 批次轉入正式報價單
+                </button>
+                <label style="font-size:12px;margin-left:10px;"><input type="checkbox" id="qtCheckAll"> 全選本頁</label>
+                <span id="qtSelCount" style="font-size:12px;color:#888;margin-left:8px;"></span>
+                <?php if (!$canEdit): ?>
+                    <span style="font-size:12px;color:#c0392b;margin-left:8px;">您沒有編輯權限，僅供檢視</span>
+                <?php endif; ?>
             </div>
+
+            <div id="qtCards"></div>
+            <div class="qt-pagination" id="qtPagination"></div>
+
             <?php include '../partPage/footer.html' ?>
         </div>
     </div>
@@ -133,21 +131,21 @@ try {
     <div class="m-head"><span><i class="fa fa-question-circle"></i> 報價單快速轉移 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc">
         <h4>功能說明</h4>
-        <p>用於補建舊報價單資料（例如 ERP 直接匯入的歷史報價單）。這類資料匯入時只有料號/數量/單價，<b>沒有製程分類、沒有綁定正式的料號ID(d_setting)</b>，客戶代碼也可能因年代久遠而與現行代碼不同。本頁讓您逐張快速補齊這些資訊，確認後再一次轉入正式報價單清單。</p>
+        <p>用於補建舊報價單資料（例如 ERP 直接匯入的歷史報價單）。這類資料匯入時只有料號/數量/單價，<b>沒有製程分類、沒有綁定正式的料號ID(d_setting)</b>，客戶代碼也可能因年代久遠而與現行代碼不同。本頁讓您逐張快速補齊這些資訊，確認後再轉入正式報價單清單。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>清單只列出「尚待確認」的報價單，確認轉入後就會從本頁消失（不會刪除，只是不再顯示於此）。</li>
-            <li>點列表最左邊的 <b>▶</b> 展開該張報價單的料號明細。</li>
-            <li><b>綁定料號ID</b>：在明細列的搜尋框輸入料號關鍵字，點選正確的項目即可綁定（只影響這一筆報價項目，不影響系統其他資料）。</li>
-            <li><b>設定製程</b>：點選要套用的製程標籤（可複選），點一下即存檔。</li>
-            <li><b>切換客戶</b>：點客戶欄位旁的「切換」，搜尋並選擇正確的客戶（只改這張報價單的客戶欄位，不影響系統其他歷史資料）。</li>
-            <li>逐張補齊後，勾選左側核取框，點上方「批次轉入正式報價單」，該幾張就會從本頁移除、並在報價單管理頁（quotation_list_NEW.php）正常顯示。</li>
+            <li>清單只列出「尚待確認」的報價單，確認轉入後就會從本頁消失（不會刪除，只是不再顯示於此）。每張報價單的所有料號明細直接顯示，不需點開。</li>
+            <li><b>設定製程</b>：跟報價單管理頁一樣的製程標籤（先選大類再選子標籤，可複選），點一下即存檔。</li>
+            <li><b>綁定料號ID</b>：在「料號ID綁定」欄搜尋料號關鍵字，點選正確的項目即可綁定；<b>找不到就直接在搜尋結果下方按「＋新增料號」</b>快速建立並自動綁定。</li>
+            <li><b>切換客戶</b>：點客戶欄位旁的「切換」，搜尋並選擇正確的客戶；找不到一樣可以「＋新建客戶」。</li>
+            <li>補齊後，可以用每張報價單右上角的「轉正式報價單」單張轉入，或勾選多張後用上方「批次轉入正式報價單」一次轉入。</li>
         </ul>
         <div class="tip">即使料號ID或製程還沒補齊也可以轉入正式，完成度只是提示、不會強制擋下轉入。</div>
         <h4>重要行為</h4>
         <ul>
             <li>本頁的修改只作用在「尚待確認」的報價單，一旦轉入正式，請回報價單管理頁編輯（本頁會拒絕再次修改已正式的資料）。</li>
             <li>綁定料號ID／設定製程／切換客戶都是<b>單張報價單/單筆項目</b>的修正，不會像料號管理頁的「移轉綁定」一樣影響全系統其他歷史資料。</li>
+            <li>轉入正式時：若這張報價單本身沒有真實填表人資訊（ERP匯入本來就沒有這項資料），系統會自動標記為「業務公用」帳號製表；<b>核准欄位刻意留空不自動核准</b>——系統無法確認幾年前當時真正的業務主管是誰，與其虛構一筆假的核准紀錄，不如留白讓有需要的人自行判斷；也因此<b>不會</b>發送「待核准」通知給現在的主管。</li>
         </ul>
         <h4>權限</h4>
         <p>沿用報價單管理頁權限（module: quotation_list），需要 U（修改）或 A（管理）權限才能編輯，僅檢閱者唯讀。</p>
@@ -163,6 +161,12 @@ try {
         <div class="qt-search-box">
             <input type="text" id="custSwitchKw" class="form-control" placeholder="輸入客戶名稱或代碼搜尋…" autocomplete="off">
             <div class="qt-search-results" id="custSwitchResults"></div>
+        </div>
+        <div class="qt-quickform" id="custNewForm" style="display:none;">
+            <input type="text" class="form-control input-sm" id="custNewId" placeholder="客戶代碼（新建用）">
+            <input type="text" class="form-control input-sm" id="custNewName" placeholder="客戶名稱">
+            <button class="btn btn-success btn-xs" onclick="submitNewCustomer()"><i class="fa fa-save"></i> 建立並套用</button>
+            <div id="custNewErr" style="color:#c0392b;font-size:11px;margin-top:3px;"></div>
         </div>
     </div>
     <div class="m-foot"><button class="btn btn-default" onclick="closeMask('custSwitchMask')">關閉</button></div>
@@ -183,28 +187,28 @@ $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 const API_URL = '../../src/store/Quotation_API.php';
 const CAN_EDIT = <?= $canEdit ? 'true' : 'false' ?>;
 let qtData = [];
-let qtProcesses = [];
+let processTagTree = [];
 let qtPage = 1;
-const QT_PAGE_SIZE = 20;
-let qtExpanded = {};        // quote_id => true 表示展開
+const QT_PAGE_SIZE = 10;
 let qtItemsCache = {};      // quote_id => items[]
+let qtProcState  = {};      // item_id => { activeGid, selected:[sub_tag_id,...] }
 let custSwitchQuoteId = null;
 
-function loadProcesses(cb) {
-    $.get(API_URL, { action: 'get_processes' }, function(res) {
-        if (res.success) qtProcesses = res.data;
+function loadProcessTagTree(cb) {
+    $.get(API_URL, { action: 'get_process_tag_tree' }, function(res) {
+        if (res.success) processTagTree = res.tree || [];
         if (cb) cb();
     });
 }
 
 function loadPendingList() {
-    $('#qtTbody').html('<tr><td colspan="7" style="text-align:center;color:#999;padding:20px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</td></tr>');
+    $('#qtCards').html('<div style="text-align:center;color:#999;padding:20px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>');
     $.get(API_URL, { action: 'get_pending_transfer_list' }, function(res) {
-        if (!res.success) { $('#qtTbody').html('<tr><td colspan="7">載入失敗：' + (res.message||'') + '</td></tr>'); return; }
+        if (!res.success) { $('#qtCards').html('載入失敗：' + (res.message||'')); return; }
         qtData = res.data;
         qtPage = 1;
         renderStats();
-        renderTable();
+        renderCards();
     });
 }
 
@@ -219,9 +223,9 @@ function renderStats() {
 
 function fmtDate(d) { return d || ''; }
 
-function renderTable() {
+function renderCards() {
     if (!qtData.length) {
-        $('#qtTbody').html('<tr><td colspan="7" style="text-align:center;color:#999;padding:20px;">目前沒有尚待確認的報價單</td></tr>');
+        $('#qtCards').html('<div style="text-align:center;color:#999;padding:20px;">目前沒有尚待確認的報價單</div>');
         $('#qtPagination').html('');
         return;
     }
@@ -236,44 +240,39 @@ function renderTable() {
         let badge = '';
         badge += (noDs === 0) ? '<span class="qt-badge ok">料號ID已綁定</span>' : '<span class="qt-badge warn">料號ID缺 ' + noDs + '/' + cnt + '</span>';
         badge += (noPc === 0) ? '<span class="qt-badge ok">製程已設定</span>' : '<span class="qt-badge warn">製程缺 ' + noPc + '/' + cnt + '</span>';
-        const expanded = !!qtExpanded[r.quote_id];
-        html += '<tr class="qt-row" data-qid="' + r.quote_id + '">' +
-            '<td><input type="checkbox" class="qt-row-chk" value="' + r.quote_id + '"></td>' +
-            '<td><span class="qt-expand-btn" onclick="toggleExpand(' + r.quote_id + ')"><i class="fa fa-caret-' + (expanded?'down':'right') + '"></i></span></td>' +
-            '<td>' + r.quote_no + '</td>' +
-            '<td>' + fmtDate(r.quote_date) + '</td>' +
-            '<td>' + (r.client_name || '<em style="color:#c0392b">未設定</em>') + (r.client_id ? ' <small style="color:#aaa">(' + r.client_id + ')</small>' : '') +
-                ' ' + (CAN_EDIT ? '<a href="javascript:void(0)" style="font-size:11px;" onclick="openCustSwitch(' + r.quote_id + ',\'' + r.quote_no + '\',\'' + (r.client_name||'').replace(/'/g,"") + '\')">切換</a>' : '') +
-            '</td>' +
-            '<td>' + cnt + '</td>' +
-            '<td>' + badge + '</td>' +
-            '</tr>';
-        html += '<tr class="qt-item-row" id="qtItemRow' + r.quote_id + '" style="' + (expanded?'':'display:none;') + '"><td colspan="7"><div id="qtItemBody' + r.quote_id + '">載入中…</div></td></tr>';
+        html += '<div class="qt-card" data-qid="' + r.quote_id + '">' +
+            '<div class="qt-card-head">' +
+                '<input type="checkbox" class="qt-row-chk" value="' + r.quote_id + '">' +
+                '<span class="qno">' + r.quote_no + '</span>' +
+                '<span>' + fmtDate(r.quote_date) + '</span>' +
+                '<span>客戶：' + (r.client_name || '<em style="color:#c0392b">未設定</em>') + (r.client_id ? ' <small style="color:#aaa">(' + r.client_id + ')</small>' : '') +
+                    (CAN_EDIT ? ' <a href="javascript:void(0)" onclick="openCustSwitch(' + r.quote_id + ',\'' + r.quote_no + '\',\'' + (r.client_name||'').replace(/'/g,"") + '\')">切換</a>' : '') +
+                '</span>' +
+                '<span>項目數：' + cnt + '</span>' +
+                '<span class="qt-badge-cell">' + badge + '</span>' +
+                (CAN_EDIT ? '<button class="btn btn-warning btn-xs" style="margin-left:auto;" onclick="confirmTransferOne(' + r.quote_id + ',\'' + r.quote_no + '\')"><i class="fa fa-check"></i> 轉正式報價單</button>' : '<span style="margin-left:auto;"></span>') +
+            '</div>' +
+            '<div class="qt-card-body" id="qtCardBody' + r.quote_id + '">載入項目中…</div>' +
+            '</div>';
     });
-    $('#qtTbody').html(html);
+    $('#qtCards').html(html);
 
     let pg = '';
     pg += '<button class="btn btn-default btn-xs" ' + (qtPage<=1?'disabled':'') + ' onclick="qtGoPage(' + (qtPage-1) + ')">上一頁</button>';
-    pg += ' 第 ' + qtPage + ' / ' + totalPages + ' 頁 ';
+    pg += ' 第 ' + qtPage + ' / ' + totalPages + ' 頁（共 ' + qtData.length + ' 張） ';
     pg += '<button class="btn btn-default btn-xs" ' + (qtPage>=totalPages?'disabled':'') + ' onclick="qtGoPage(' + (qtPage+1) + ')">下一頁</button>';
     $('#qtPagination').html(pg);
 
-    Object.keys(qtExpanded).forEach(function(qid) { if (qtExpanded[qid]) renderItemBody(qid); });
+    pageRows.forEach(function(r) { renderItemBody(r.quote_id); });
     updateSelCount();
 }
 
-function qtGoPage(p) { qtPage = p; renderTable(); }
-
-function toggleExpand(qid) {
-    qtExpanded[qid] = !qtExpanded[qid];
-    renderTable();
-}
+function qtGoPage(p) { qtPage = p; renderCards(); }
 
 function renderItemBody(qid) {
-    const $body = $('#qtItemBody' + qid);
+    const $body = $('#qtCardBody' + qid);
     if (!$body.length) return;
     if (qtItemsCache[qid]) { drawItems(qid, qtItemsCache[qid]); return; }
-    $body.html('<i class="fa fa-spinner fa-spin"></i> 載入項目中…');
     $.get(API_URL, { action: 'get_detail', quote_id: qid }, function(res) {
         if (!res.success) { $body.html('載入失敗：' + (res.message||'')); return; }
         qtItemsCache[qid] = res.data.items || [];
@@ -281,27 +280,145 @@ function renderItemBody(qid) {
     });
 }
 
+// 從已存的 process_no 清單推算目前選取的子標籤（跟主編輯頁 inferSubTagsFromProcessIds 邏輯一致）
+function inferSubTagsFromProcessIds(processIds) {
+    const result = [];
+    processTagTree.forEach(g => {
+        (g.sub_tags || []).forEach(st => {
+            const pnos = (st.process_nos || []).map(String);
+            if (pnos.length > 0 && pnos.every(p => processIds.includes(p))) result.push(st.sub_tag_id);
+        });
+    });
+    return result;
+}
+
 function drawItems(qid, items) {
-    let html = '<table class="qt-item-table"><thead><tr><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th style="width:220px;">料號ID綁定</th><th style="width:260px;">製程</th></tr></thead><tbody>';
+    let html = '<table class="qt-item-table"><thead><tr><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th style="width:230px;">料號ID綁定</th><th style="min-width:260px;">製程</th></tr></thead><tbody>';
     items.forEach(function(it) {
         const boundText = it.d_setting_d_id ? ('<span class="qt-badge ok">已綁定 #' + it.d_setting_d_id + '</span>') : '<span class="qt-badge warn">未綁定</span>';
-        const curProcNos = (it.processes || '').split(',').filter(function(v){return v!=='';}).map(Number);
-        let procTags = '';
-        qtProcesses.forEach(function(p) {
-            const on = curProcNos.indexOf(Number(p.ProcessNo)) !== -1;
-            procTags += '<span class="qt-proc-tag' + (on?'':' off') + '" data-item="' + it.item_id + '" data-proc="' + p.ProcessNo + '" onclick="toggleProcTag(this)">' + p.ProcessName + '</span>';
-        });
-        html += '<tr>' +
+        const procIds = (it.processes || '').split(',').filter(function(v){return v!=='';});
+        if (!qtProcState[it.item_id]) {
+            const selected = inferSubTagsFromProcessIds(procIds);
+            let activeGid = processTagTree.length ? processTagTree[0].group_id : null;
+            for (const g of processTagTree) {
+                if ((g.sub_tags || []).some(st => selected.includes(st.sub_tag_id))) { activeGid = g.group_id; break; }
+            }
+            qtProcState[it.item_id] = { activeGid: activeGid, selected: selected };
+        }
+        html += '<tr data-item="' + it.item_id + '">' +
             '<td>' + it.product_id + '</td>' +
             '<td>' + (it.specification || '') + '</td>' +
             '<td>' + it.quantity + '</td>' +
             '<td>' + it.unit_price + '</td>' +
-            '<td>' + boundText + (CAN_EDIT ? (' <div class="qt-search-box" style="margin-top:3px;"><input type="text" class="form-control input-sm" placeholder="搜尋料號ID…" data-item="' + it.item_id + '" onkeyup="partSearchKeyup(this)" autocomplete="off"><div class="qt-search-results"></div></div>') : '') + '</td>' +
-            '<td>' + (CAN_EDIT ? procTags : boundText) + '</td>' +
+            '<td>' + boundText + (CAN_EDIT ? renderPartBindWidget(it) : '') + '</td>' +
+            '<td>' + (CAN_EDIT ? renderProcWidget(it.item_id) : '') + '</td>' +
             '</tr>';
     });
     html += '</tbody></table>';
-    $('#qtItemBody' + qid).html(html);
+    $('#qtCardBody' + qid).html(html);
+}
+
+function renderPartBindWidget(it) {
+    return ' <div class="qt-search-box" style="margin-top:3px;">' +
+        '<input type="text" class="form-control input-sm" placeholder="搜尋料號ID…" data-item="' + it.item_id + '" onkeyup="partSearchKeyup(this)" autocomplete="off">' +
+        '<div class="qt-search-results"></div>' +
+        '</div>';
+}
+
+function renderProcWidget(itemId) {
+    const state = qtProcState[itemId];
+    let l1 = '<div class="qt-proc-l1">';
+    processTagTree.forEach(function(g) {
+        l1 += '<button type="button" class="' + (g.group_id === state.activeGid ? 'active' : '') + '" onclick="procSetActiveGroup(' + itemId + ',' + g.group_id + ')">' + g.group_name + '</button>';
+    });
+    l1 += '</div>';
+
+    let l2 = '<div class="qt-proc-l2">';
+    const g = processTagTree.find(function(x){ return x.group_id === state.activeGid; });
+    if (g) {
+        (g.sub_tags || []).forEach(function(st) {
+            const on = state.selected.indexOf(st.sub_tag_id) !== -1;
+            l2 += '<button type="button" class="' + (on?'active':'') + '" onclick="procToggleSubTag(' + itemId + ',' + st.sub_tag_id + ')">' + st.sub_tag_name + '</button>';
+        });
+    }
+    l2 += '</div>';
+
+    let chips = '';
+    if (state.selected.length) {
+        chips = '<div class="qt-proc-chips">';
+        state.selected.forEach(function(sid) {
+            let name = String(sid);
+            processTagTree.forEach(function(g2){ (g2.sub_tags||[]).forEach(function(st2){ if (st2.sub_tag_id === sid) name = st2.sub_tag_name; }); });
+            chips += '<span class="qt-proc-chip">' + name + '<span class="x" onclick="procRemoveSubTag(' + itemId + ',' + sid + ')">&times;</span></span>';
+        });
+        chips += '</div>';
+    }
+    return l1 + l2 + chips;
+}
+
+function procSetActiveGroup(itemId, gid) {
+    qtProcState[itemId].activeGid = gid;
+    redrawProcCell(itemId);
+}
+
+function procToggleSubTag(itemId, subTagId) {
+    const state = qtProcState[itemId];
+    const idx = state.selected.indexOf(subTagId);
+    if (idx === -1) state.selected.push(subTagId); else state.selected.splice(idx, 1);
+    saveItemProcess(itemId);
+    redrawProcCell(itemId);
+}
+
+function procRemoveSubTag(itemId, subTagId) {
+    const state = qtProcState[itemId];
+    state.selected = state.selected.filter(function(x){ return x !== subTagId; });
+    saveItemProcess(itemId);
+    redrawProcCell(itemId);
+}
+
+function redrawProcCell(itemId) {
+    $('tr[data-item="' + itemId + '"] td:last-child').html(renderProcWidget(itemId));
+}
+
+function saveItemProcess(itemId) {
+    const state = qtProcState[itemId];
+    const procIds = new Set();
+    state.selected.forEach(function(sid) {
+        processTagTree.forEach(function(g){ (g.sub_tags||[]).forEach(function(st){ if (st.sub_tag_id === sid) (st.process_nos||[]).forEach(function(p){ procIds.add(p); }); }); });
+    });
+    let groupType = 'single_process';
+    if (state.selected.length) {
+        const g = processTagTree.find(function(x){ return x.group_id === state.activeGid; });
+        if (g) groupType = g.group_type || 'single_process';
+    }
+    $.post(API_URL, { action: 'quick_set_item_process', item_id: itemId, process_nos: [...procIds].join(','), group_type: groupType }, function(res) {
+        if (!res.success) { alert('設定製程失敗：' + res.message); return; }
+        Object.keys(qtItemsCache).forEach(function(qid) {
+            qtItemsCache[qid].forEach(function(it) { if (String(it.item_id) === String(itemId)) it.processes = [...procIds].join(','); });
+        });
+        // 只更新完成度統計不必整頁重載
+        refreshStatsOnly(itemId);
+    });
+}
+
+// 局部更新該項目所屬報價單卡片的完成度徽章與頂端統計（避免重載整頁打斷正在操作的畫面）
+function refreshStatsOnly(itemId) {
+    let qid = null;
+    Object.keys(qtItemsCache).forEach(function(k) {
+        if (qtItemsCache[k].some(function(it){ return String(it.item_id) === String(itemId); })) qid = k;
+    });
+    if (!qid) return;
+    const items = qtItemsCache[qid];
+    const noDs = items.filter(function(it){ return !it.d_setting_d_id; }).length;
+    const noPc = items.filter(function(it){ return !(it.processes && it.processes !== ''); }).length;
+    const row = qtData.find(function(r){ return String(r.quote_id) === String(qid); });
+    if (row) { row.items_no_dsetting = noDs; row.items_no_process = noPc; }
+    renderStats();
+    const cnt = items.length;
+    const badgeHtml =
+        (noDs === 0 ? '<span class="qt-badge ok">料號ID已綁定</span>' : '<span class="qt-badge warn">料號ID缺 ' + noDs + '/' + cnt + '</span>') +
+        (noPc === 0 ? '<span class="qt-badge ok">製程已設定</span>' : '<span class="qt-badge warn">製程缺 ' + noPc + '/' + cnt + '</span>');
+    $('.qt-card[data-qid="' + qid + '"] .qt-badge-cell').html(badgeHtml);
 }
 
 let partSearchTimer = null;
@@ -313,42 +430,67 @@ function partSearchKeyup(input) {
     if (kw.length < 1) { $results.hide(); return; }
     partSearchTimer = setTimeout(function() {
         $.get(API_URL, { action: 'search_data', type: 'part', term: kw }, function(res) {
-            if (!res.success || !res.data.length) { $results.html('<div style="color:#999;">查無結果</div>').show(); return; }
             let h = '';
-            res.data.forEach(function(p) {
-                h += '<div onclick="bindPart(' + $input.data('item') + ',' + p.d_id + ',\'' + p.D_Setting_Id.replace(/'/g,"") + '\',this)">' +
-                    p.D_Setting_Id + (p.Client_Name ? '　<small style="color:#aaa">' + p.Client_Name + '</small>' : '') + '</div>';
-            });
+            if (res.success && res.data.length) {
+                res.data.forEach(function(p) {
+                    h += '<div class="qt-sr-item" onclick="bindPart(' + $input.data('item') + ',' + p.d_id + ',\'' + p.D_Setting_Id.replace(/'/g,"") + '\',this)">' +
+                        p.D_Setting_Id + (p.Client_Name ? '　<small style="color:#aaa">' + p.Client_Name + '</small>' : '') + '</div>';
+                });
+            } else {
+                h += '<div style="padding:5px 8px;color:#999;font-size:12px;">查無結果</div>';
+            }
+            h += '<div class="qt-sr-new" onclick="openNewPartForm(' + $input.data('item') + ',this)"><i class="fa fa-plus"></i> 新增料號「' + kw.replace(/'/g,"") + '」</div>';
             $results.html(h).show();
         });
     }, 300);
 }
 
-function bindPart(itemId, dId, dSettingId, el) {
-    $.post(API_URL, { action: 'quick_bind_item_dsetting', item_id: itemId, d_id: dId }, function(res) {
-        if (!res.success) { alert('綁定失敗：' + res.message); return; }
-        $(el).closest('.qt-search-results').hide();
-        // 更新快取並重繪該項目所屬報價單的明細（找到 item 所在 quote）
-        Object.keys(qtItemsCache).forEach(function(qid) {
-            qtItemsCache[qid].forEach(function(it) { if (String(it.item_id) === String(itemId)) { it.d_setting_d_id = dId; it.product_id = dSettingId; } });
-        });
-        loadPendingList();
+function openNewPartForm(itemId, el) {
+    const $results = $(el).closest('.qt-search-results');
+    const kw = $results.siblings('input').val().trim();
+    let qid = null;
+    Object.keys(qtItemsCache).forEach(function(k) {
+        if (qtItemsCache[k].some(function(it){ return String(it.item_id) === String(itemId); })) qid = k;
+    });
+    const row = qtData.find(function(r){ return String(r.quote_id) === String(qid); });
+    const custId = row ? row.client_id : null;
+    $results.html(
+        '<div class="qt-quickform" style="position:relative;">' +
+        '<input type="text" class="form-control input-sm qt-np-no" placeholder="料號" value="' + kw.replace(/"/g,'') + '">' +
+        '<input type="text" class="form-control input-sm qt-np-spec" placeholder="規格描述（選填）">' +
+        (custId ? ('<div style="font-size:11px;color:#888;margin-bottom:3px;">關聯客戶：' + (row.client_name || custId) + '</div>')
+                : '<div style="font-size:11px;color:#c0392b;margin-bottom:3px;">此報價單尚未設定客戶，新料號將不綁客戶</div>') +
+        '<button class="btn btn-success btn-xs" onclick="submitNewPart(' + itemId + ',\'' + (custId||'') + '\',this)"><i class="fa fa-save"></i> 建立並綁定</button>' +
+        '<div class="qt-np-err" style="color:#c0392b;font-size:11px;margin-top:3px;"></div>' +
+        '</div>'
+    ).show();
+}
+
+function submitNewPart(itemId, custId, el) {
+    const $box = $(el).closest('.qt-quickform');
+    const partNo = $box.find('.qt-np-no').val().trim();
+    const spec   = $box.find('.qt-np-spec').val().trim();
+    if (!partNo) { $box.find('.qt-np-err').text('料號不可為空'); return; }
+    $.post(API_URL, { action: 'save_part_info', part_no: partNo, type: 'N', customer_id: custId, remark: spec }, function(res) {
+        if (!res.success) { $box.find('.qt-np-err').text(res.message || '建立失敗'); return; }
+        bindPart(itemId, res.d_id, partNo, null);
     });
 }
 
-function toggleProcTag(el) {
-    const $el = $(el);
-    const itemId = $el.data('item');
-    $el.toggleClass('off');
-    const $row = $el.closest('td');
-    const pnos = [];
-    $row.find('.qt-proc-tag').not('.off').each(function() { pnos.push($(this).data('proc')); });
-    $.post(API_URL, { action: 'quick_set_item_process', item_id: itemId, process_nos: pnos.join(',') }, function(res) {
-        if (!res.success) { alert('設定製程失敗：' + res.message); return; }
+function bindPart(itemId, dId, dSettingId, el) {
+    $.post(API_URL, { action: 'quick_bind_item_dsetting', item_id: itemId, d_id: dId }, function(res) {
+        if (!res.success) { alert('綁定失敗：' + res.message); return; }
         Object.keys(qtItemsCache).forEach(function(qid) {
-            qtItemsCache[qid].forEach(function(it) { if (String(it.item_id) === String(itemId)) it.processes = pnos.join(','); });
+            qtItemsCache[qid].forEach(function(it) { if (String(it.item_id) === String(itemId)) { it.d_setting_d_id = dId; it.product_id = dSettingId; } });
         });
-        loadPendingList();
+        if (el) $(el).closest('.qt-search-results').hide();
+        // 重繪該項目所在的整張卡片（品項ID已變動）
+        let qid = null;
+        Object.keys(qtItemsCache).forEach(function(k) {
+            if (qtItemsCache[k].some(function(it){ return String(it.item_id) === String(itemId); })) qid = k;
+        });
+        if (qid) drawItems(qid, qtItemsCache[qid]);
+        refreshStatsOnly(itemId);
     });
 }
 
@@ -358,6 +500,9 @@ function openCustSwitch(quoteId, quoteNo, curName) {
     $('#custSwitchCurrent').text(curName || '（未設定）');
     $('#custSwitchKw').val('');
     $('#custSwitchResults').hide().empty();
+    $('#custNewForm').hide();
+    $('#custNewId, #custNewName').val('');
+    $('#custNewErr').text('');
     openMask('custSwitchMask');
 }
 
@@ -365,19 +510,35 @@ let custSearchTimer = null;
 $('#custSwitchKw').on('keyup', function() {
     const kw = $(this).val().trim();
     clearTimeout(custSearchTimer);
-    if (kw.length < 1) { $('#custSwitchResults').hide(); return; }
+    if (kw.length < 1) { $('#custSwitchResults').hide(); $('#custNewForm').hide(); return; }
     custSearchTimer = setTimeout(function() {
         $.get(API_URL, { action: 'search_data', type: 'customer', term: kw }, function(res) {
             const $r = $('#custSwitchResults');
-            if (!res.success || !res.data.length) { $r.html('<div style="color:#999;">查無結果</div>').show(); return; }
-            let h = '';
-            res.data.forEach(function(c) {
-                h += '<div onclick="switchCustomer(\'' + c.customer_id + '\',\'' + c.customer.replace(/'/g,"") + '\')">' + c.customer + '　<small style="color:#aaa">' + c.customer_id + '</small></div>';
-            });
-            $r.html(h).show();
+            if (res.success && res.data.length) {
+                let h = '';
+                res.data.forEach(function(c) {
+                    h += '<div class="qt-sr-item" onclick="switchCustomer(\'' + c.customer_id + '\',\'' + c.customer.replace(/'/g,"") + '\')">' + c.customer + '　<small style="color:#aaa">' + c.customer_id + '</small></div>';
+                });
+                $r.html(h).show();
+                $('#custNewForm').hide();
+            } else {
+                $r.html('<div style="padding:5px 8px;color:#999;font-size:12px;">查無結果</div>').show();
+                $('#custNewName').val(kw);
+                $('#custNewForm').show();
+            }
         });
     }, 300);
 });
+
+function submitNewCustomer() {
+    const id = $('#custNewId').val().trim();
+    const name = $('#custNewName').val().trim();
+    if (!id || !name) { $('#custNewErr').text('客戶代碼與名稱都必填'); return; }
+    $.post(API_URL, { action: 'save_customer', customer_id_new: id, customer_name_modal: name }, function(res) {
+        if (!res.success) { $('#custNewErr').text(res.message || '建立失敗'); return; }
+        switchCustomer(res.customer_id, name);
+    });
+}
 
 function switchCustomer(customerId, customerName) {
     $.post(API_URL, { action: 'quick_switch_quote_customer', quote_id: custSwitchQuoteId, customer_id: customerId }, function(res) {
@@ -396,15 +557,24 @@ $(document).on('change', '.qt-row-chk, #qtCheckAll', function() {
     updateSelCount();
 });
 
+function doConfirmTransfer(ids, doneMsg) {
+    $.post(API_URL, { action: 'quick_confirm_transfer', quote_ids: JSON.stringify(ids) }, function(res) {
+        if (!res.success) { alert('轉入失敗：' + res.message); return; }
+        alert(doneMsg || ('已轉入 ' + res.updated + ' 張報價單'));
+        loadPendingList();
+    });
+}
+
+function confirmTransferOne(quoteId, quoteNo) {
+    if (!confirm('確定要將報價單 ' + quoteNo + ' 轉入正式報價單嗎？轉入後將從本頁移除。')) return;
+    doConfirmTransfer([quoteId]);
+}
+
 $('#btnBatchConfirm').on('click', function() {
     const ids = $('.qt-row-chk:checked').map(function(){ return Number($(this).val()); }).get();
     if (!ids.length) { alert('請先勾選要轉入正式報價單的項目'); return; }
     if (!confirm('確定要將這 ' + ids.length + ' 張報價單轉入正式報價單清單嗎？轉入後將從本頁移除。')) return;
-    $.post(API_URL, { action: 'quick_confirm_transfer', quote_ids: JSON.stringify(ids) }, function(res) {
-        if (!res.success) { alert('轉入失敗：' + res.message); return; }
-        alert('已轉入 ' + res.updated + ' 張報價單');
-        loadPendingList();
-    });
+    doConfirmTransfer(ids);
 });
 
 // 點外部關閉搜尋結果下拉
@@ -412,7 +582,7 @@ $(document).on('click', function(e) {
     if (!$(e.target).closest('.qt-search-box').length) $('.qt-search-results').hide();
 });
 
-loadProcesses(function() { loadPendingList(); });
+loadProcessTagTree(function() { loadPendingList(); });
 </script>
 </body>
 </html>
