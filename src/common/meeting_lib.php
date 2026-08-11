@@ -127,6 +127,18 @@ function meeting_ensure_schema(PDO $db): void {
                        COMMENT '透過通知系統回覆時的回覆內容(現場密碼簽名無此內容)' AFTER confirmed_at");
         }
     } catch (Throwable $e) {}
+    // dept_id 回填(2026-08-11修正)：新增 dept_id 欄位之前就存在的舊確認簽名列全部是 NULL，get_detail
+    // 的簽名槽比對(部門模式)改用 dept_id 判定後，這些舊資料變成永遠對不到、畫面上顯示不出蓋章，但
+    // item_confirm 的「已簽過」檢查是用 item_id+user_id 比對不受影響，造成使用者點了被擋「已簽過」
+    // 卻完全看不到簽名的矛盾情況(2026-08-11使用者實測回報)。用當初存的 dept_name 文字比對 department
+    // 表回填一次；沒有符合部門名稱的(如指定人員模式，dept_name本來就是空的)不受影響，維持NULL。
+    try {
+        $needBackfill = (int)$db->query("SELECT COUNT(*) FROM meeting_item_confirm WHERE dept_id IS NULL AND dept_name IS NOT NULL AND dept_name<>''")->fetchColumn();
+        if ($needBackfill > 0) {
+            $db->exec("UPDATE meeting_item_confirm mic JOIN department d ON d.name=mic.dept_name
+                        SET mic.dept_id=d.id WHERE mic.dept_id IS NULL");
+        }
+    } catch (Throwable $e) {}
     // 舊資料一次性搬移(只搬一次)：把舊單欄位 confirm_user_id 的既有簽名保留下來，避免改版後歷史紀錄的簽名憑空消失
     try {
         $migrated = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='meeting_item_confirm_migrated'")->fetchColumn();
