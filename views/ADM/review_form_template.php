@@ -571,7 +571,9 @@ function doSchemaSave(schema, bumpedVersionId){
     }, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         closeMask('schemaMask'); loadTemplates();
-        alert('已儲存（第 '+res.version+' 版）');
+        // res.version 是內部 schema 快照序號(供舊表單對應建立當下的欄位定義用)，不是 AS 文件的正式版次，
+        // 沒勾「連動更新AS文件版次」時不要提到「版」字，否則使用者會誤以為文件正式改版了。
+        alert(bumpedVersionId ? '已儲存，AS 文件版次已一併更新' : '已儲存');
     }, 'json');
 }
 

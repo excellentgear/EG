@@ -48,6 +48,7 @@ $perms = rvf_perms($db, $rvfUser);
         .st-draft{background:#b0a390;} .st-submitted,.st-reviewing,.st-approving{background:#F0A24B;} .st-approved{background:#3f9142;} .st-rejected{background:#DD5138;} .st-void{background:#888;}
         .rf-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; overflow-y:auto; }
         .rf-modal { background:#fff; border-radius:8px; max-width:1040px; margin:24px auto; box-shadow:0 5px 25px rgba(0,0,0,.3); }
+        #viewMask .rf-modal { max-width:min(1500px, 96vw); }
         .rf-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
             display:flex; justify-content:space-between; position:sticky; top:0; }
         .rf-modal .m-head .m-close { cursor:pointer; color:#b5762a; }
@@ -64,9 +65,16 @@ $perms = rvf_perms($db, $rvfUser);
         table.itm-tbl th, table.itm-tbl td { border:1px solid #EADFC8; padding:5px 6px; vertical-align:top; }
         table.itm-tbl thead th { background:#F7E0BD; color:#5b3a1e; }
         table.itm-tbl textarea { width:100%; min-height:40px; border:1px solid #D8BE93; border-radius:4px; padding:4px 6px; font-size:12.5px; box-sizing:border-box; }
-        table.itm-tbl input[type=text], table.itm-tbl input[type=date], table.itm-tbl select { width:100%; border:1px solid #D8BE93; border-radius:4px; padding:3px 5px; font-size:12px; box-sizing:border-box; }
+        table.itm-tbl input[type=text], table.itm-tbl input[type=date], table.itm-tbl select { width:100%; min-width:84px; border:1px solid #D8BE93; border-radius:4px; padding:3px 5px; font-size:12px; box-sizing:border-box; }
+        table.itm-tbl td { min-width:70px; }
+        table.itm-tbl th:first-child, table.itm-tbl td:first-child,
+        table.itm-tbl th:last-child, table.itm-tbl td:last-child { min-width:auto; }
         .fld-block { display:block; margin-bottom:4px; } .fld-inline { display:inline-block; width:48%; margin:0 1% 4px; vertical-align:top; }
         .fld-lbl { font-size:10.5px; color:#8a6d45; }
+        .owner-lbl { font-size:10.5px; font-weight:bold; color:#8a6d45; margin:3px 0 1px; }
+        .owner-lbl:first-child { margin-top:0; }
+        .rf-btn-sm { height:28px; padding:0 12px; border-radius:4px; font-size:12.5px; border:1px solid #D8BE93; background:#fff; color:#5b3a1e; cursor:pointer; }
+        .rf-btn-sm:hover { background:#FBF0DD; }
         .dp-pick { position:relative; border:1px solid #D8BE93; border-radius:4px; background:#fff; padding:2px 3px; min-width:110px; margin-bottom:3px; }
         .dp-tags { display:flex; flex-wrap:wrap; gap:2px; }
         .dp-tags .tg { background:#F7E0BD; color:#5b3a1e; border-radius:9px; font-size:11px; padding:1px 5px 1px 7px; white-space:nowrap; }
@@ -247,7 +255,7 @@ function renderView(){
     (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+esc(c.label)+'</th>'; });
     h += '<th>負責單位/負責人</th>';
     h += '<th>簽名</th>'+(isDraftMine()?'<th></th>':'')+'</tr></thead><tbody id="itmBody" data-eg-row-add="itemAdd" data-eg-row-del="itemDelLast"></tbody></table>';
-    if (isDraftMine()) h += '<button onclick="itemAdd()" style="margin-right:6px;">+新增列</button><button onclick="itemDelLast()">-刪除末列</button>';
+    if (isDraftMine()) h += '<button class="rf-btn-sm" onclick="itemAdd()" style="margin-right:6px;">+新增列</button><button class="rf-btn-sm" onclick="itemDelLast()">-刪除末列</button>';
     h += '<div style="margin-top:12px;">';
     if (PREVIEW_MODE) {
         h += '<span style="color:#8a6d45;font-size:12px;">試填後按下方「列印」即可查看實際排版；不需要送出或審核。</span>';
@@ -302,9 +310,10 @@ function deptTagHtml(i, ids){
     var tags = ids.map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?'<span class="tg">'+esc(d.name)+'<i class="fa fa-times" onclick="ownerDeptDel('+i+',\''+id+'\')"></i></span>':''; }).join('');
     return '<div class="dp-pick itm-dp" data-i="'+i+'"><div class="dp-tags">'+tags+'</div>'+(isDraftMine()?'<input type="text" class="itm-dp-kw" placeholder="選部門…" data-eg-skip autocomplete="off"><div class="dp-list"></div>':'')+'</div>';
 }
-function userTagHtml(i, ids){
+function userTagHtml(i, ids, deptIds){
     var tags = ids.map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?'<span class="tg">'+esc(p.user_cname)+'<i class="fa fa-times" onclick="ownerUserDel('+i+',\''+id+'\')"></i></span>':''; }).join('');
-    return '<div class="dp-pick itm-up" data-i="'+i+'"><div class="dp-tags">'+tags+'</div>'+(isDraftMine()?'<input type="text" class="itm-up-kw" placeholder="選人員…" data-eg-skip autocomplete="off"><div class="dp-list"></div>':'')+'</div>';
+    var ph = (deptIds && deptIds.length) ? '只列該部門人員…' : '選人員…（未選部門，列全公司）';
+    return '<div class="dp-pick itm-up" data-i="'+i+'"><div class="dp-tags">'+tags+'</div>'+(isDraftMine()?'<input type="text" class="itm-up-kw" placeholder="'+ph+'" data-eg-skip autocomplete="off"><div class="dp-list"></div>':'')+'</div>';
 }
 function ownerDeptDel(i,id){ ITEMS[i].owner_depts = ITEMS[i].owner_depts.filter(function(x){return String(x)!==String(id);}); renderItems(); }
 function ownerUserDel(i,id){ ITEMS[i].owner_users = ITEMS[i].owner_users.filter(function(x){return String(x)!==String(id);}); renderItems(); }
@@ -327,12 +336,17 @@ $(document).on('click', '.itm-dp .dp-list div[data-id]', function(){
 $(document).on('focus input', '.itm-up-kw', function(){
     var $p=$(this).closest('.itm-up'), i=$p.data('i'), it=ITEMS[i]; if(!it) return;
     var kw=$.trim($(this).val()).toLowerCase(), h='';
+    // 選了負責部門後，負責人只列該部門(可複選部門則為聯集)的人，避免在全公司名單裡大海撈針；
+    // 未選部門時維持列出全公司（使用者要求：多個部門要逐一「選部門→選人」，不要一次把部門全選完才選人，
+    // 這裡的過濾行為本身就是照著這個順序運作——先選的部門會立刻篩到位）。
+    var deptFilter = (it.owner_depts||[]).map(String);
     (META.people||[]).forEach(function(p){
+        if (deptFilter.length && deptFilter.indexOf(String(p.dept_id))<0) return;
         if (kw && p.user_cname.toLowerCase().indexOf(kw)<0) return;
         var on=(it.owner_users||[]).some(function(x){return String(x)===String(p.id);});
         h += '<div data-id="'+p.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(p.display)+'</div>';
     });
-    $p.find('.dp-list').html(h||'<div style="color:#b0a390;">查無人員</div>').show();
+    $p.find('.dp-list').html(h||'<div style="color:#b0a390;">'+(deptFilter.length?'此部門查無人員':'查無人員')+'</div>').show();
 });
 $(document).on('click', '.itm-up .dp-list div[data-id]', function(){
     var $p=$(this).closest('.itm-up'), i=$p.data('i'), it=ITEMS[i]; if(!it) return;
@@ -368,7 +382,7 @@ function renderItems(){
         h += '<td><textarea '+(isDraftMine()?'':'disabled')+' onchange="itemEdit('+i+',\'content\',this.value)">'+esc(it.content)+'</textarea></td>';
         var inlineFields = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout!=='block'; });
         inlineFields.forEach(function(c){ h += '<td>'+fieldInputHtml(i,c)+'</td>'; });
-        h += '<td>'+('負責部門：'+deptTagHtml(i,it.owner_depts)+'負責人：'+userTagHtml(i,it.owner_users))+'</td>';
+        h += '<td><div class="owner-lbl">負責部門</div>'+deptTagHtml(i,it.owner_depts)+'<div class="owner-lbl">負責人</div>'+userTagHtml(i,it.owner_users,it.owner_depts)+'</td>';
         h += '<td>'+signSlotsHtml(i,it)+'</td>';
         if (isDraftMine()) h += '<td><span class="rf-del" onclick="itemDel('+i+')"><i class="fa fa-times"></i></span></td>';
         h += '</tr>';
