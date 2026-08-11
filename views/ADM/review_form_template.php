@@ -72,6 +72,11 @@ $perms = rvf_perms($db, $rvfUser);
         table.col-tbl thead th { background:#F7E0BD; color:#5b3a1e; }
         table.col-tbl input, table.col-tbl select { width:100%; border:1px solid #D8BE93; border-radius:4px; padding:3px 5px; font-size:12px; box-sizing:border-box; }
         .rf-del { color:#DD5138; cursor:pointer; }
+        .fld-drag-handle { cursor:move; color:#b0a390; text-align:center; }
+        .fld-drag-handle:hover { color:#8A5A2B; }
+        tr.fld-row.drag-over { box-shadow:inset 0 2px 0 #F0A24B; }
+        .fld-mv { border:none; background:none; color:#8a6d45; cursor:pointer; padding:0 2px; font-size:12px; }
+        .fld-mv:disabled { color:#dcd2c0; cursor:default; }
         .chain-row { display:flex; align-items:center; gap:6px; margin-bottom:4px; }
         .chain-row select { flex:1; }
         .mt-tags { max-height:120px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; padding:6px 8px; margin-bottom:6px; }
@@ -156,21 +161,13 @@ $perms = rvf_perms($db, $rvfUser);
     <div class="m-head"><span id="schemaTitle">項次欄位定義</span><span class="m-close" onclick="closeMask('schemaMask')">✕</span></div>
     <div class="m-body">
         <input type="hidden" id="scTplId" value="0">
-        <div class="rf-sec-title">逐列可填欄位（除固定的「項目」文字外，額外可設定審查結果／其他欄位）</div>
-        <div class="rf-hint">每列固定含「項目」文字欄；以下自訂欄位會依序顯示在項目欄之後。「排版」選整行代表獨佔一列（適合長文字），選並排代表與其他並排欄位同一列。</div>
+        <div class="rf-sec-title">逐列可填欄位（除固定的「項目」文字外，額外可設定審查結果／其他欄位／日期欄位，可自由混合排序）</div>
+        <div class="rf-hint">每列固定含「項目」文字欄；以下欄位會依此清單的順序顯示在項目欄之後，文字/下拉/日期欄位可任意混合排序——拖動最左側 <i class="fa fa-bars"></i> 或按 ▲▼ 調整順序。「排版」選整行代表獨佔一列（適合長文字），選並排代表與其他並排欄位同一列。</div>
         <table class="col-tbl">
-            <thead><tr><th style="width:16%;">標籤</th><th style="width:12%;">類型</th><th style="width:20%;">提示詞（灰字）</th><th style="width:18%;">選項(逗號分隔，僅下拉用)</th><th style="width:8%;">必填</th><th style="width:10%;">排版</th><th style="width:6%;"></th></tr></thead>
+            <thead><tr><th style="width:5%;"></th><th style="width:15%;">標籤</th><th style="width:11%;">類型</th><th style="width:18%;">提示詞（灰字）</th><th style="width:17%;">選項(逗號分隔，僅下拉用)</th><th style="width:7%;">必填</th><th style="width:9%;">排版</th><th style="width:10%;"></th></tr></thead>
             <tbody id="colBody"></tbody>
         </table>
-        <button type="button" onclick="colAdd()" style="height:26px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:4px;cursor:pointer;">+ 新增欄位</button>
-
-        <div class="rf-sec"><div class="rf-sec-title">相關日期欄位（自訂標題，如「開始日期」「結案日期」）</div>
-        <table class="col-tbl">
-            <thead><tr><th style="width:70%;">日期標題</th><th style="width:10%;"></th></tr></thead>
-            <tbody id="dateBody"></tbody>
-        </table>
-        <button type="button" onclick="dateAdd()" style="height:26px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:4px;cursor:pointer;">+ 新增日期欄位</button>
-        </div>
+        <button type="button" onclick="fieldAdd()" style="height:26px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:4px;cursor:pointer;">+ 新增欄位</button>
 
         <div class="rf-sec"><div class="rf-sec-title">負責人簽名方式</div>
             <label><input type="radio" name="signMode" value="password"> 現場輸入本人密碼線上簽名</label>
@@ -244,7 +241,7 @@ $perms = rvf_perms($db, $rvfUser);
         通用「審核表單」引擎：管理員可自建任意張表單模板（首發：2-TD-04-01 仿冒零件防制審核表、2-TD-03-01 產品安全審核表），各模板各自綁定一個 AS 文件編號。一般使用者依模板建立表單、逐列填寫並讓負責人線上簽名，模板可設定送出後要不要走審核/核准。
         <h4>操作步驟</h4>
         <b>①新增模板</b>：設定名稱、綁定 AS 文件編號、列印紙張大小（A4/A3）、是否需要審核（設審核部門，任一主管審過即完成）、是否需要核准（可設核准優先序：綁部門或人員／自動抓送出者上一階主管／全站最高決策者，預設只用「最高決策者」，可調整順序或組合）、維護部門（可指派誰能修改項次內容）。<br>
-        <b>②設定項次欄位定義</b>：除固定的「項目」文字欄外，可新增任意數量的自訂欄位（如審查結果下拉、說明欄），每欄可設提示詞（灰字顯示在填寫畫面）、是否必填、排版方式（並排/整行）；可另設「相關日期」欄位（自訂標題，如開始/結案日期）；並選擇負責人簽名方式（現場密碼簽名或送出後通知回簽）。<br>
+        <b>②設定項次欄位定義</b>：除固定的「項目」文字欄外，可新增任意數量的自訂欄位（文字/多行文字/下拉選單/日期，四種類型可自由混合排序，例如：欄位、日期、欄位、日期…），每欄可設提示詞（填寫畫面上顯示的灰字）、是否必填、排版方式（並排/整行）；欄位順序可拖動最左側圖示或用 ▲▼ 調整；並選擇負責人簽名方式（現場密碼簽名或送出後通知回簽）。<br>
         <b>③維護人員</b>：管理員或維護部門內主管可指派特定人員為「維護人員」，該名單與維護部門主管都能修改「項次欄位定義」，但不能改模板其他設定（AS文件綁定/審核/核准/維護部門本身）。<br>
         <b>④連動 AS 文件改版</b>：修改項次欄位定義存檔時可勾選「連動更新 AS 文件版次」，需上傳新版文件檔與文件制修申請單（有「免附件補登」權限者可免附件），存檔後立即生效成為現行版本；已建立的舊表單仍顯示建立當下的欄位定義，不受影響。
         <h4>重要行為</h4>
@@ -446,37 +443,51 @@ function submitTplSettings(){
 }
 
 /* ============ 項次欄位定義 ============ */
-var COLS = [], DATES = [], CUR_SCHEMA_TPL = null;
-function colAdd(){ COLS.push({key:'', label:'', type:'text', placeholder:'', required:0, layout:'inline', options:''}); renderCols(); }
-function colDel(i){ COLS.splice(i,1); renderCols(); }
-function colEdit(i,k,v){ COLS[i][k]=v; if (k==='label' && !COLS[i]._keyManual) COLS[i].key = slugify(v); renderCols(); }
+var FIELDS = [], CUR_SCHEMA_TPL = null;
+var FIELD_TYPES = {text:'單行文字', textarea:'多行文字', select:'下拉選單', date:'日期'};
+function fieldAdd(){ FIELDS.push({key:'', label:'', type:'text', placeholder:'', required:0, layout:'inline', options:''}); renderFields(); }
+function fieldDel(i){ FIELDS.splice(i,1); renderFields(); }
+function fieldEdit(i,k,v){ FIELDS[i][k]=v; if (k==='label' && !FIELDS[i]._keyManual) FIELDS[i].key = slugify(v); renderFields(); }
+function fieldMove(i,dir){ var j=i+dir; if (j<0 || j>=FIELDS.length) return; var t=FIELDS[i]; FIELDS[i]=FIELDS[j]; FIELDS[j]=t; renderFields(); }
 function slugify(s){ return 'c_' + String(s).replace(/[^a-zA-Z0-9一-龥]+/g,'').substr(0,20) + '_' + Math.floor(Math.random()*900+100); }
-function renderCols(){
+function renderFields(){
     var h = '';
-    COLS.forEach(function(c,i){
-        h += '<tr><td><input type="text" value="'+esc(c.label)+'" onchange="colEdit('+i+',\'label\',this.value)"></td>'
-           + '<td><select onchange="colEdit('+i+',\'type\',this.value)">'
-           +   ['text','textarea','select'].map(function(tp){ return '<option value="'+tp+'"'+(c.type===tp?' selected':'')+'>'+({text:'單行文字',textarea:'多行文字',select:'下拉選單'})[tp]+'</option>'; }).join('')
+    FIELDS.forEach(function(c,i){
+        h += '<tr class="fld-row" draggable="true" data-i="'+i+'">'
+           + '<td class="fld-drag-handle"><i class="fa fa-bars"></i></td>'
+           + '<td><input type="text" value="'+esc(c.label)+'" onchange="fieldEdit('+i+',\'label\',this.value)"></td>'
+           + '<td><select onchange="fieldEdit('+i+',\'type\',this.value)">'
+           +   Object.keys(FIELD_TYPES).map(function(tp){ return '<option value="'+tp+'"'+(c.type===tp?' selected':'')+'>'+FIELD_TYPES[tp]+'</option>'; }).join('')
            + '</select></td>'
-           + '<td><input type="text" value="'+esc(c.placeholder)+'" onchange="colEdit('+i+',\'placeholder\',this.value)"></td>'
-           + '<td><input type="text" value="'+esc(c.options)+'" '+(c.type!=='select'?'disabled':'')+' placeholder="合格,不合格,其他" onchange="colEdit('+i+',\'options\',this.value)"></td>'
-           + '<td style="text-align:center;"><input type="checkbox" '+(c.required?'checked':'')+' onchange="colEdit('+i+',\'required\',this.checked?1:0)"></td>'
-           + '<td><select onchange="colEdit('+i+',\'layout\',this.value)"><option value="inline"'+(c.layout==='inline'?' selected':'')+'>並排</option><option value="block"'+(c.layout==='block'?' selected':'')+'>整行</option></select></td>'
-           + '<td style="text-align:center;"><span class="rf-del" onclick="colDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
+           + '<td><input type="text" value="'+esc(c.placeholder)+'" onchange="fieldEdit('+i+',\'placeholder\',this.value)"></td>'
+           + '<td><input type="text" value="'+esc(c.options)+'" '+(c.type!=='select'?'disabled':'')+' title="下拉選項用逗號分隔，例如：合格,不合格,其他" onchange="fieldEdit('+i+',\'options\',this.value)"></td>'
+           + '<td style="text-align:center;"><input type="checkbox" '+(c.required?'checked':'')+' onchange="fieldEdit('+i+',\'required\',this.checked?1:0)"></td>'
+           + '<td><select onchange="fieldEdit('+i+',\'layout\',this.value)"><option value="inline"'+(c.layout==='inline'?' selected':'')+'>並排</option><option value="block"'+(c.layout==='block'?' selected':'')+'>整行</option></select></td>'
+           + '<td style="text-align:center;white-space:nowrap;">'
+           +   '<button type="button" class="fld-mv" '+(i===0?'disabled':'')+' onclick="fieldMove('+i+',-1)"><i class="fa fa-caret-up"></i></button>'
+           +   '<button type="button" class="fld-mv" '+(i===FIELDS.length-1?'disabled':'')+' onclick="fieldMove('+i+',1)"><i class="fa fa-caret-down"></i></button>'
+           +   '<span class="rf-del" onclick="fieldDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
     });
-    $('#colBody').html(h || '<tr><td colspan="7" style="text-align:center;color:#8a6d45;">尚未新增欄位</td></tr>');
+    $('#colBody').html(h || '<tr><td colspan="8" style="text-align:center;color:#8a6d45;">尚未新增欄位</td></tr>');
 }
-function dateAdd(){ DATES.push({key:'', label:''}); renderDates(); }
-function dateDel(i){ DATES.splice(i,1); renderDates(); }
-function dateEdit(i,v){ DATES[i].label = v; if (!DATES[i]._keyManual) DATES[i].key = slugify(v); renderDates(); }
-function renderDates(){
-    var h = '';
-    DATES.forEach(function(d,i){
-        h += '<tr><td><input type="text" value="'+esc(d.label)+'" placeholder="例：結案日期" onchange="dateEdit('+i+',this.value)"></td>'
-           + '<td style="text-align:center;"><span class="rf-del" onclick="dateDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
-    });
-    $('#dateBody').html(h || '<tr><td colspan="2" style="text-align:center;color:#8a6d45;">尚未新增日期欄位</td></tr>');
-}
+/* 拖移重排序（使用者明確要求「上下拖移」）：原生 HTML5 drag and drop，不引入額外套件。 */
+var FLD_DRAG_FROM = null;
+$(document).on('dragstart', '#colBody tr.fld-row', function(e){
+    FLD_DRAG_FROM = $(this).data('i');
+    if (e.originalEvent && e.originalEvent.dataTransfer) e.originalEvent.dataTransfer.effectAllowed = 'move';
+});
+$(document).on('dragover', '#colBody tr.fld-row', function(e){ e.preventDefault(); $(this).addClass('drag-over'); });
+$(document).on('dragleave', '#colBody tr.fld-row', function(){ $(this).removeClass('drag-over'); });
+$(document).on('drop', '#colBody tr.fld-row', function(e){
+    e.preventDefault();
+    $(this).removeClass('drag-over');
+    var to = $(this).data('i');
+    if (FLD_DRAG_FROM === null || to === FLD_DRAG_FROM) return;
+    var item = FIELDS.splice(FLD_DRAG_FROM, 1)[0];
+    FIELDS.splice(to, 0, item);
+    FLD_DRAG_FROM = null;
+    renderFields();
+});
 function openSchemaModal(id){
     $.getJSON(API, {action:'template_get', id:id}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
@@ -484,9 +495,14 @@ function openSchemaModal(id){
         CUR_SCHEMA_TPL = t;
         $('#scTplId').val(t.id);
         $('#schemaTitle').text('項次欄位定義：'+t.name);
-        COLS = (t.schema.columns||[]).map(function(c){ return $.extend({_keyManual:true}, c); });
-        DATES = (t.schema.date_fields||[]).map(function(d){ return $.extend({_keyManual:true}, d); });
-        renderCols(); renderDates();
+        // fields[] 是現行格式（欄位可混合排序）；舊資料若還是 columns[]+date_fields[] 分開存放，載入時自動合併相容。
+        if (t.schema.fields) {
+            FIELDS = t.schema.fields.map(function(c){ return $.extend({_keyManual:true}, c); });
+        } else {
+            FIELDS = (t.schema.columns||[]).map(function(c){ return $.extend({_keyManual:true}, c); })
+                .concat((t.schema.date_fields||[]).map(function(d){ return $.extend({_keyManual:true, type:'date', placeholder:'', required:0, layout:'inline', options:''}, d); }));
+        }
+        renderFields();
         $('input[name=signMode][value="'+(t.schema.sign_mode||'password')+'"]').prop('checked',true);
         renderMaintainers(t.maintainers||[]);
         $('#scBumpAsDoc').prop('checked',false); $('#bumpBox').hide();
@@ -515,11 +531,10 @@ $('#scBumpAsDoc').on('change', function(){ $('#bumpBox').toggle(this.checked); }
 
 function buildSchemaObj(){
     return {
-        columns: COLS.filter(function(c){ return $.trim(c.label)!==''; }).map(function(c){
+        fields: FIELDS.filter(function(c){ return $.trim(c.label)!==''; }).map(function(c){
             return {key:c.key, label:c.label, type:c.type, placeholder:c.placeholder||'', required:c.required?1:0, layout:c.layout,
                      options: c.type==='select' ? c.options.split(',').map(function(s){return $.trim(s);}).filter(Boolean) : []};
         }),
-        date_fields: DATES.filter(function(d){ return $.trim(d.label)!==''; }).map(function(d){ return {key:d.key, label:d.label}; }),
         sign_mode: $('input[name=signMode]:checked').val() || 'password'
     };
 }

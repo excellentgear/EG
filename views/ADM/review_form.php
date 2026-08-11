@@ -227,7 +227,7 @@ function openView(id){
         CUR.as_doc_no = res.as_doc_no; CUR.company_name = res.company_name;
         CUR.review = res.review; CUR.approval = res.approval; CUR.can_review = res.can_review; CUR.can_approve = res.can_approve;
         ITEMS = (res.items||[]).map(function(it){
-            return {id:it.id, content:it.content||'', data: it.data||{}, date_values: it.date_values||{},
+            return {id:it.id, content:it.content||'', data: it.data||{},
                      owner_depts:(it.owner_depts?String(it.owner_depts).split(',').filter(Boolean):[]),
                      owner_users:(it.owner_users?String(it.owner_users).split(',').filter(Boolean):[]),
                      confirms: it.confirms||[], required_signers: it.required_signers||[], fully_signed: it.fully_signed};
@@ -247,9 +247,8 @@ function renderView(){
           + '<div><label>業務日期</label><input type="date" id="vBizDate" max="9999-12-31" value="'+esc(CUR.business_date)+'" '+(isDraftMine()?'':'disabled')+'></div>'
           + '</div>';
     h += '<table class="itm-tbl"><thead><tr><th style="width:26px;">#</th><th>項目</th>';
-    (CUR_SCHEMA.columns||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+esc(c.label)+'</th>'; });
+    (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+esc(c.label)+'</th>'; });
     h += '<th>負責單位/負責人</th>';
-    (CUR_SCHEMA.date_fields||[]).forEach(function(d){ h += '<th>'+esc(d.label)+'</th>'; });
     h += '<th>簽名</th>'+(isDraftMine()?'<th></th>':'')+'</tr></thead><tbody id="itmBody"></tbody></table>';
     if (isDraftMine()) h += '<button onclick="itemAdd()" style="margin-right:6px;">+新增列</button><button onclick="itemDelLast()">-刪除末列</button>';
     h += '<div style="margin-top:12px;">';
@@ -283,17 +282,17 @@ function decide(kind, decision){
 }
 
 /* ---- 項次列 ---- */
-function itemAdd(){ ITEMS.push({id:0, content:'', data:{}, date_values:{}, owner_depts:[], owner_users:[], confirms:[], required_signers:[], fully_signed:false}); renderItems(); }
+function itemAdd(){ ITEMS.push({id:0, content:'', data:{}, owner_depts:[], owner_users:[], confirms:[], required_signers:[], fully_signed:false}); renderItems(); }
 function itemDelLast(){ if (ITEMS.length) ITEMS.pop(); renderItems(); }
 function itemDel(i){ ITEMS.splice(i,1); renderItems(); }
 function itemEdit(i,key,val){ if (ITEMS[i]) ITEMS[i].content = val; }
 function itemFieldEdit(i,key,val){ if (ITEMS[i]) ITEMS[i].data[key] = val; }
-function itemDateEdit(i,key,val){ if (ITEMS[i]) ITEMS[i].date_values[key] = val; }
 function fieldInputHtml(i, c){
     var v = ITEMS[i].data[c.key] || '';
     var cls = c.layout==='block' ? 'fld-block' : '';
     var lbl = c.layout==='block' ? '<div class="fld-lbl">'+esc(c.label)+'</div>' : '';
     var dis = isDraftMine() ? '' : 'disabled';
+    if (c.type==='date') return '<div class="'+cls+'">'+lbl+'<input type="date" max="9999-12-31" '+dis+' value="'+esc(v)+'" onchange="itemFieldEdit('+i+',\''+c.key+'\',this.value)"></div>';
     if (c.type==='select') {
         var opts = '<option value="">'+(c.placeholder?esc(c.placeholder):'請選擇')+'</option>' + (c.options||[]).map(function(o){ return '<option value="'+esc(o)+'"'+(o===v?' selected':'')+'>'+esc(o)+'</option>'; }).join('');
         return '<div class="'+cls+'">'+lbl+'<select '+dis+' onchange="itemFieldEdit('+i+',\''+c.key+'\',this.value)">'+opts+'</select></div>';
@@ -369,18 +368,15 @@ function renderItems(){
     ITEMS.forEach(function(it,i){
         h += '<tr><td style="text-align:center;">'+(i+1)+'</td>';
         h += '<td><textarea '+(isDraftMine()?'':'disabled')+' onchange="itemEdit('+i+',\'content\',this.value)">'+esc(it.content)+'</textarea></td>';
-        (CUR_SCHEMA.columns||[]).forEach(function(c){ if (c.layout!=='block') h += '<td>'+fieldInputHtml(i,c)+'</td>'; });
-        h += '<td>'+(isDraftMine()||true ? ('負責部門：'+deptTagHtml(i,it.owner_depts)+'負責人：'+userTagHtml(i,it.owner_users)) : '')+'</td>';
-        (CUR_SCHEMA.date_fields||[]).forEach(function(d){
-            var v = it.date_values[d.key]||'';
-            h += '<td><input type="date" max="9999-12-31" '+(isDraftMine()?'':'disabled')+' value="'+esc(v)+'" onchange="itemDateEdit('+i+',\''+d.key+'\',this.value)"></td>';
-        });
+        var inlineFields = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout!=='block'; });
+        inlineFields.forEach(function(c){ h += '<td>'+fieldInputHtml(i,c)+'</td>'; });
+        h += '<td>'+('負責部門：'+deptTagHtml(i,it.owner_depts)+'負責人：'+userTagHtml(i,it.owner_users))+'</td>';
         h += '<td>'+signSlotsHtml(i,it)+'</td>';
         if (isDraftMine()) h += '<td><span class="rf-del" onclick="itemDel('+i+')"><i class="fa fa-times"></i></span></td>';
         h += '</tr>';
-        var blocks = (CUR_SCHEMA.columns||[]).filter(function(c){ return c.layout==='block'; });
+        var blocks = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout==='block'; });
         if (blocks.length) {
-            var colspan = 3 + (CUR_SCHEMA.date_fields||[]).length + (isDraftMine()?1:0);
+            var colspan = 2 + inlineFields.length + 1 + (isDraftMine()?1:0);
             h += '<tr><td></td><td colspan="'+colspan+'">' + blocks.map(function(c){ return fieldInputHtml(i,c); }).join('') + '</td></tr>';
         }
     });
@@ -388,7 +384,7 @@ function renderItems(){
 }
 
 function collectItems(){
-    return ITEMS.map(function(it){ return {id:it.id, content:it.content, data:it.data, date_values:it.date_values, owner_depts:it.owner_depts, owner_users:it.owner_users}; });
+    return ITEMS.map(function(it){ return {id:it.id, content:it.content, data:it.data, owner_depts:it.owner_depts, owner_users:it.owner_users}; });
 }
 function saveDraft(cb){
     $.post(API, {action:'instance_save_items', csrf:META.csrf, instance_id:CUR.id, title:$('#vTitle').val(), business_date:$('#vBizDate').val(), items:JSON.stringify(collectItems())}, function(res){
@@ -456,13 +452,11 @@ function printForm(){
     h += '<table class="rf-p-head"><tr><th>標題</th><td>'+esc(CUR.title||'')+'</td><th>業務日期</th><td>'+dispDate(CUR.business_date)+'</td></tr>'
        + '<tr><th>填表人</th><td>'+esc(CUR.created_by_name)+'</td><th>狀態</th><td>'+STATUS_LABEL[CUR.status]+'</td></tr></table>';
     h += '<table class="rf-p-items"><thead><tr><th>#</th><th>項目</th>';
-    (schema.columns||[]).forEach(function(c){ h += '<th>'+esc(c.label)+'</th>'; });
-    (schema.date_fields||[]).forEach(function(d){ h += '<th>'+esc(d.label)+'</th>'; });
+    (schema.fields||[]).forEach(function(c){ h += '<th>'+esc(c.label)+'</th>'; });
     h += '<th>負責單位/人</th><th>簽名</th></tr></thead><tbody>';
     ITEMS.forEach(function(it,i){
         h += '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td>';
-        (schema.columns||[]).forEach(function(c){ h += '<td>'+esc(it.data[c.key]||'')+'</td>'; });
-        (schema.date_fields||[]).forEach(function(d){ h += '<td>'+dispDate(it.date_values[d.key]||'')+'</td>'; });
+        (schema.fields||[]).forEach(function(c){ h += '<td>'+(c.type==='date' ? dispDate(it.data[c.key]||'') : esc(it.data[c.key]||''))+'</td>'; });
         var ownerTxt = (it.owner_depts||[]).map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?d.name:''; })
             .concat((it.owner_users||[]).map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?p.user_cname:''; })).filter(Boolean).join('、');
         var signHtml = (it.confirms||[]).map(function(c){ return stampOrName(c.user_name, dispDate(c.signed_at)); }).join('');
@@ -485,7 +479,7 @@ function initPreview(){
     var raw = sessionStorage.getItem('rvf_preview_payload');
     if (!raw) { alert('找不到預覽資料，請從「審核表單模板管理」的「試填預覽並列印」按鈕開啟'); return; }
     var payload = JSON.parse(raw);
-    CUR_SCHEMA = payload.schema || {columns:[], date_fields:[], sign_mode:'password'};
+    CUR_SCHEMA = payload.schema || {fields:[], sign_mode:'password'};
     ITEMS = [];
     function openPreview(asDocNo){
         CUR = {
