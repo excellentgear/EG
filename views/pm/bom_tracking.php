@@ -139,6 +139,19 @@ if ($has_access) {
         /* 分頁列固定在表格右上角 */
         .table-toolbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px; }
         .rubber-select-box { position:absolute; border:1px solid #2980b9; background:rgba(41,128,185,.15); z-index:20; pointer-events:none; }
+
+        /* 使用說明按鈕/跳窗：全站統一樣式，照抄 views/pm/vendor_audit.php */
+        .page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
+            background:#F0A24B; color:#fff; cursor:pointer; }
+        .page-help-btn:hover { background:#d98a33; }
+        @media print { .page-help-btn { display:none !important; } }
+        .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
+        .help-doc h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
+        .help-doc h4:first-child { margin-top:0; }
+        .help-doc b { color:#8A5A2B; }
+        .help-doc ul { margin:4px 0 8px; padding-left:20px; }
+        .help-doc li { margin:2px 0; }
+        .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
     </style>
 </head>
 <body class="nav-sm">
@@ -154,8 +167,9 @@ if ($has_access) {
           <p style="color:#888;">您目前沒有「BOM追蹤」功能的使用權限，請聯絡管理者至「使用者權限管理」頁面指派角色。</p>
       </div>
 <?php else: ?>
-      <div class="page-title">
+      <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
         <div class="title_left"><h3>BOM 追蹤</h3></div>
+        <button id="btnPageHelp" class="page-help-btn" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
       </div>
       <div class="clearfix"></div>
 
@@ -234,10 +248,20 @@ if ($has_access) {
         </ul>
         <div class="tab-content" style="padding-top:15px;">
           <div class="tab-pane active" id="tabRules">
+            <div id="excludeClosedBox" style="margin-bottom:12px;padding:8px 10px;background:#FFF7E6;border-radius:6px;">
+              <label style="margin:0;"><input type="checkbox" id="excludeClosedToggle"> 排除已結案（僅排除勾選當下已符合規則且已結案的BOM，永久排除；之後才結案的仍會顯示）</label>
+              <span id="closedSnapInfo" style="color:#888;font-size:12px;margin-left:10px;"></span>
+              <button class="btn btn-default btn-xs" id="btnRefreshSnapshot" style="margin-left:8px;display:none;">重新整理快照</button>
+            </div>
             <div id="ruleList" style="margin-bottom:15px;"></div>
             <hr>
             <div class="form-group">
-              <label>新增規則</label>
+              <label>新增規則</label><br>
+              <label style="font-weight:normal;margin-right:6px;">加入條件組：</label>
+              <select id="newRuleCondGroup" class="form-control input-sm" style="width:160px;display:inline-block;"></select>
+              <button class="btn btn-default btn-xs" id="btnAddCondGroup" style="margin-left:4px;"><i class="fa fa-plus"></i> 新增條件組</button>
+              <span style="color:#888;font-size:12px;margin-left:8px;">同一條件組內的規則彼此是「且 AND」，不同條件組之間是「或 OR」</span>
+              <br><br>
               <select id="newRuleType" class="form-control" style="width:160px;display:inline-block;">
                 <option value="part">料號</option>
                 <option value="bom">BOM編號</option>
@@ -305,6 +329,50 @@ if ($has_access) {
         <h4 class="modal-title">進度時間軸：<span id="tlBomNo"></span></h4></div>
       <div class="modal-body"><div id="tlBody" style="max-height:450px;overflow-y:auto;"></div></div>
       <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 使用說明 Modal ══ -->
+<div class="modal fade" id="helpUseMask" role="dialog" tabindex="-1">
+  <div class="modal-dialog" style="width:680px;">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-question-circle"></i> BOM 追蹤 使用說明</h4></div>
+      <div class="modal-body help-doc">
+        <h4>功能說明</h4>
+        <p>依「群組」自訂追蹤規則，自動抓出符合條件的BOM並持續顯示進度，可對整個群組或單筆BOM設定通知、也可把群組分享給其他人（部門/個人）檢視。</p>
+
+        <h4>操作步驟</h4>
+        <ul>
+          <li>先在上方「群組」下拉新增或選擇一個追蹤群組。</li>
+          <li>點「管理此群組」→「追蹤規則」分頁，新增規則（料號／BOM編號／客戶／業務／交期區間）。</li>
+          <li>規則設好後，清單即自動列出符合條件的BOM，可用篩選列的關鍵字/狀態再縮小範圍。</li>
+          <li>「通知設定」分頁可開啟整個群組的通知，或在清單每列點「通知」單獨設定該筆BOM。</li>
+          <li>「分享設定」分頁可把群組分享給其他部門或人員（對方需已有BOM追蹤權限才看得到）。</li>
+        </ul>
+
+        <h4>條件組（AND / OR 混用）</h4>
+        <div class="tip">同一個「條件組」內的規則彼此是「且 AND」（例如料號=A 且 客戶=X）；不同條件組之間是「或 OR」。例如建立「條件組1：料號=A、客戶=X」與「條件組2：料號=B」，會匹配「(料號=A 且 客戶=X) 或 (料號=B)」。點「新增條件組」建立新的OR分支；每條規則新增前用「加入條件組」下拉選要放進哪一組。標示「排除：」的規則不分條件組，一律從最終結果中全域扣除。</div>
+
+        <h4>排除已結案</h4>
+        <div class="tip">勾選「排除已結案」的當下，會把此刻已符合規則、且狀態已是「已結案」的BOM做成一份永久排除清單；<b>之後才結案</b>的BOM不會被自動追加排除，仍會留在清單上。若之後新增了規則、想把新規則比對到的舊結案BOM也一併排除，可按「重新整理快照」手動再抓一次（先前已排除的不會被移除）。取消勾選會清空排除清單，之後重新勾選會以「重新勾選當下」的狀態重新快照。</div>
+
+        <h4>重要行為／常見疑問</h4>
+        <ul>
+          <li>已結案的BOM進度一律顯示100%、目前製程顯示「結案」，避免舊資料進度算不準造成誤解。</li>
+          <li>「進行中」的BOM整列會有淡橘底色，方便一眼找出還需要追蹤的項目。</li>
+          <li>清單可拖曳勾選欄框選多筆，批次設定通知。</li>
+          <li>轉CSV／轉PDF一律匯出符合目前篩選條件的「全部」資料，不是只匯出當頁。</li>
+        </ul>
+
+        <h4>設定入口</h4>
+        <p>群組管理／規則／通知／分享皆在「管理此群組」跳窗內設定，僅群組擁有者或管理員可修改；被分享者僅能檢視清單。</p>
+
+        <h4>權限角色</h4>
+        <p>本頁採全站二元權限：功能碼 <b>bom_track</b>。尚未取得權限者會看到「請先申請權限」畫面，請聯絡管理者至「使用者權限管理」頁面指派角色。</p>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">我知道了</button></div>
     </div>
   </div>
 </div>
@@ -580,11 +648,55 @@ $('#btnManageGroup').on('click', function () {
     if (!state.groupId) return;
     $('#mgGroupName').text(currentGroupOption().text());
     loadRules();
+    loadGroupSettings();
     loadGroupNotifyState();
     loadShares();
     $('#newRuleType').val('part');
     renderRuleValueArea(); // 下拉預設值不會觸發 change 事件，開啟 modal 時要手動渲染一次
     $('#manageGroupModal').modal('show');
+});
+
+// ── 排除已結案（以開關開啟當下的快照為準）───────────────────────────
+function loadGroupSettings() {
+    apiGet('get_group_settings', { group_id: state.groupId }).done(function (res) {
+        if (!res.success) return;
+        $('#excludeClosedToggle').prop('checked', !!res.exclude_closed_snapshot);
+        $('#btnRefreshSnapshot').toggle(!!res.exclude_closed_snapshot);
+        $('#closedSnapInfo').text(res.exclude_closed_snapshot ? ('目前已永久排除 ' + res.snapshot_count + ' 筆已結案BOM（設定啟用當下的狀態）') : '');
+    });
+}
+$('#excludeClosedToggle').on('change', function () {
+    var $cb = $(this);
+    var enable = $cb.is(':checked');
+    apiPost('toggle_exclude_closed', { group_id: state.groupId, enable: enable ? 1 : 0 }).done(function (res) {
+        if (!res.success) { alert(res.message || '設定失敗'); $cb.prop('checked', !enable); return; }
+        $('#btnRefreshSnapshot').toggle(enable);
+        $('#closedSnapInfo').text(enable ? ('目前已永久排除 ' + res.snapshot_count + ' 筆已結案BOM（設定啟用當下的狀態）') : '');
+        state.page = 1; loadMatchedList();
+    });
+});
+$('#btnRefreshSnapshot').on('click', function () {
+    if (!confirm('重新整理快照：會把「現在」符合規則且已結案的BOM也一併加入永久排除清單（先前已排除的不會恢復顯示）。確定要重新整理嗎？')) return;
+    apiPost('refresh_closed_snapshot', { group_id: state.groupId }).done(function (res) {
+        if (!res.success) { alert(res.message || '操作失敗'); return; }
+        $('#closedSnapInfo').text('目前已永久排除 ' + res.snapshot_count + ' 筆已結案BOM（本次新增 ' + res.added + ' 筆）');
+        state.page = 1; loadMatchedList();
+    });
+});
+
+// ── 條件組（AND/OR混用：組內AND、組間OR）──────────────────────────────
+function loadCondGroupSelect(condGroups, selectAfterId) {
+    var $sel = $('#newRuleCondGroup').empty();
+    condGroups.forEach(function (g) { $sel.append($('<option>').val(g.cond_group_id).text(g.label)); });
+    if (selectAfterId != null) $sel.val(selectAfterId);
+}
+$('#btnAddCondGroup').on('click', function () {
+    var label = prompt('請輸入條件組名稱（可留空自動命名）：');
+    if (label === null) return;
+    apiPost('add_cond_group', { group_id: state.groupId, label: label }).done(function (res) {
+        if (!res.success) { alert(res.message || '新增條件組失敗'); return; }
+        loadRules(res.cond_group_id);
+    });
 });
 
 function ruleTypeLabel(t) {
@@ -598,20 +710,66 @@ function ruleValueText(r) {
     return r.rule_value_label || r.rule_value;
 }
 
-function loadRules() {
-    apiGet('get_rules', { group_id: state.groupId }).done(function (res) {
+function renderRuleRow(r) {
+    var row = $('<div class="rule-row">');
+    row.append($('<span class="label ' + (r.is_exclude == 1 ? 'label-danger' : 'label-primary') + '">').text((r.is_exclude == 1 ? '排除：' : '') + ruleTypeLabel(r.rule_type)));
+    row.append($('<span>').text(ruleValueText(r)));
+    row.append($('<span class="rule-del"><i class="fa fa-times-circle"></i></span>').on('click', function () {
+        if (!confirm('刪除此規則？')) return;
+        apiPost('delete_rule', { rule_id: r.rule_id }).done(function () { state.page = 1; loadRules(); loadMatchedList(true); });
+    }));
+    return row;
+}
+
+// selectCondGroupId：新增條件組後，讓「加入條件組」下拉自動選到剛建立的那組，方便使用者接著往裡面加規則
+function loadRules(selectCondGroupId) {
+    $.when(apiGet('list_cond_groups', { group_id: state.groupId }), apiGet('get_rules', { group_id: state.groupId })).done(function (cgRes, ruleRes) {
+        var condGroups = (cgRes[0].success && cgRes[0].data) ? cgRes[0].data : [{ cond_group_id: 0, label: '條件組1' }];
+        loadCondGroupSelect(condGroups, selectCondGroupId);
+
+        var rules = (ruleRes[0].success && ruleRes[0].data) ? ruleRes[0].data : [];
+        var includeRules = rules.filter(function (r) { return r.is_exclude != 1; });
+        var excludeRules = rules.filter(function (r) { return r.is_exclude == 1; });
+
         var $box = $('#ruleList').empty();
-        if (!res.success || !res.data.length) { $box.html('<div class="text-muted">尚未設定任何規則</div>'); return; }
-        res.data.forEach(function (r) {
-            var row = $('<div class="rule-row">');
-            row.append($('<span class="label ' + (r.is_exclude == 1 ? 'label-danger' : 'label-primary') + '">').text((r.is_exclude == 1 ? '排除：' : '') + ruleTypeLabel(r.rule_type)));
-            row.append($('<span>').text(ruleValueText(r)));
-            row.append($('<span class="rule-del"><i class="fa fa-times-circle"></i></span>').on('click', function () {
-                if (!confirm('刪除此規則？')) return;
-                apiPost('delete_rule', { rule_id: r.rule_id }).done(function () { state.page = 1; loadRules(); loadMatchedList(true); });
-            }));
-            $box.append(row);
-        });
+        if (!includeRules.length) {
+            $box.append('<div class="text-muted" style="margin-bottom:8px;">尚未設定任何納入規則（至少要有一條，否則不會匹配任何BOM）</div>');
+        } else {
+            var byGroup = {};
+            includeRules.forEach(function (r) {
+                var cg = r.cond_group_id || 0;
+                if (!byGroup[cg]) byGroup[cg] = [];
+                byGroup[cg].push(r);
+            });
+            var groupIds = Object.keys(byGroup);
+            groupIds.forEach(function (cg, idx) {
+                if (idx > 0) $box.append('<div style="text-align:center;color:#e67e22;font-weight:700;font-size:12px;margin:6px 0;">— 或 (OR) —</div>');
+                var found = condGroups.find(function (g) { return String(g.cond_group_id) === String(cg); });
+                var gLabel = found ? found.label : '條件組';
+                var $gBox = $('<div style="border:1px solid #eee;border-radius:6px;padding:8px;background:#FAFBFE;">');
+                var $gHead = $('<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">');
+                $gHead.append($('<span style="font-weight:700;font-size:12px;color:#555;">').text(gLabel + '（組內為「且 AND」）'));
+                if (cg != 0 && groupIds.length > 1) {
+                    $gHead.append($('<span style="color:#d9534f;cursor:pointer;font-size:12px;">刪除此條件組</span>').on('click', function () {
+                        if (!confirm('刪除「' + gLabel + '」條件組？（組內規則會一併刪除）')) return;
+                        apiPost('delete_cond_group', { cond_group_id: cg }).done(function (res) {
+                            if (!res.success) { alert(res.message || '刪除失敗'); return; }
+                            loadRules(); loadMatchedList(true);
+                        });
+                    }));
+                }
+                $gBox.append($gHead);
+                byGroup[cg].forEach(function (r) { $gBox.append(renderRuleRow(r)); });
+                $box.append($gBox);
+            });
+        }
+
+        if (excludeRules.length) {
+            var $exBox = $('<div style="margin-top:10px;padding:8px;border-radius:6px;background:#FDECEA;">');
+            $exBox.append('<div style="font-weight:700;font-size:12px;color:#c0392b;margin-bottom:4px;">全域排除規則（不分條件組，一律從結果中扣除）</div>');
+            excludeRules.forEach(function (r) { $exBox.append(renderRuleRow(r)); });
+            $box.append($exBox);
+        }
     });
 }
 
@@ -637,7 +795,7 @@ function renderRuleValueArea() {
         });
         $('#btnAddDueRule').on('click', function () {
             var v = $('input[name=dueType]:checked').val();
-            var params = { group_id: state.groupId, rule_type: 'due_range', due_range_type: v, is_exclude: $('#dueIsExclude').is(':checked') ? 1 : 0 };
+            var params = { group_id: state.groupId, rule_type: 'due_range', due_range_type: v, is_exclude: $('#dueIsExclude').is(':checked') ? 1 : 0, cond_group_id: $('#newRuleCondGroup').val() };
             if (v === 'fixed') { params.due_from = $('#dueFrom').val(); params.due_to = $('#dueTo').val(); if (!params.due_from || !params.due_to) { alert('請選擇日期'); return; } }
             else { params.due_relative_from_days = $('#dueRelFrom').val(); params.due_relative_to_days = $('#dueRelTo').val(); }
             apiPost('save_rule', params).done(function (res) {
@@ -735,6 +893,7 @@ function renderRuleValueArea() {
         apiPost('save_rule', {
             group_id: state.groupId, rule_type: type, match_mode: 'exact',
             is_exclude: $('#ruleIsExclude').is(':checked') ? 1 : 0,
+            cond_group_id: $('#newRuleCondGroup').val(),
             rule_values: JSON.stringify(ids)
         }).done(function (res) {
             if (!res.success) { alert(res.message || '新增失敗'); return; }
@@ -750,6 +909,7 @@ function renderRuleValueArea() {
         apiPost('save_rule', {
             group_id: state.groupId, rule_type: type, match_mode: 'pattern',
             is_exclude: $('#ruleIsExclude').is(':checked') ? 1 : 0,
+            cond_group_id: $('#newRuleCondGroup').val(),
             rule_value: val
         }).done(function (res) {
             if (!res.success) { alert(res.message || '新增失敗'); return; }
@@ -943,6 +1103,8 @@ $shareSelect.on('change', function () {
         loadShares();
     });
 });
+
+$('#btnPageHelp').on('click', function () { $('#helpUseMask').modal('show'); });
 
 $(document).ready(function () { loadGroups(); });
 </script>

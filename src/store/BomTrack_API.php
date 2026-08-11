@@ -108,16 +108,18 @@ function bt_rule_condition(array $r) {
 }
 
 // 依群組已存規則，組出 bom 表的篩選條件：
-// 同一種規則類型內是 OR 聯集(例如一次勾選多個料號 = 符合任一個即可)，
-// 不同規則類型之間是 AND 交集(例如「料號」+「客戶」= 兩者都要符合才算)，
-// 最後再 AND NOT(排除規則1) AND NOT(排除規則2)... 扣除
+// 條件組內：同一種規則類型是 OR 聯集(例如一次勾選多個料號 = 符合任一個即可)，
+//           不同規則類型之間是 AND 交集(例如「料號」+「客戶」= 兩者都要符合才算)；
+// 條件組之間：OR 聯集(讓 AND/OR 可以混用，例如 (料號=A AND 客戶=X) OR (料號=B))；
+// 排除規則不分條件組、一律全域套用：最後再 AND NOT(排除規則1) AND NOT(排除規則2)... 扣除。
+// cond_group_id 為 NULL 的納入規則歸在同一個虛擬條件組(尚未材質化前的預設條件組1)。
 function bt_build_rule_where(PDO $db, int $groupId) {
-    $st = $db->prepare("SELECT * FROM bom_watch_rule WHERE group_id = ?");
+    $st = $db->prepare("SELECT * FROM bom_watch_rule WHERE group_id = ? ORDER BY rule_id ASC");
     $st->execute([$groupId]);
     $rules = $st->fetchAll(PDO::FETCH_ASSOC);
     if (!$rules) return [null, []]; // 沒有規則 → 不匹配任何BOM
 
-    $includeByType = []; // rule_type => ['sql'=>[], 'params'=>[]]
+    $includeByCondGroup = []; // cond_group_id(0=尚未材質化的預設組) => rule_type => ['sql'=>[], 'params'=>[]]
     $excludeParts = []; $excludeParams = [];
     foreach ($rules as $r) {
         [$sql, $params] = bt_rule_condition($r);
@@ -126,25 +128,46 @@ function bt_build_rule_where(PDO $db, int $groupId) {
             $excludeParts[] = "NOT ($sql)";
             $excludeParams = array_merge($excludeParams, $params);
         } else {
+            $cg = (int)($r['cond_group_id'] ?? 0);
             $t = $r['rule_type'];
-            if (!isset($includeByType[$t])) $includeByType[$t] = ['sql' => [], 'params' => []];
-            $includeByType[$t]['sql'][] = $sql;
-            $includeByType[$t]['params'] = array_merge($includeByType[$t]['params'], $params);
+            if (!isset($includeByCondGroup[$cg])) $includeByCondGroup[$cg] = [];
+            if (!isset($includeByCondGroup[$cg][$t])) $includeByCondGroup[$cg][$t] = ['sql' => [], 'params' => []];
+            $includeByCondGroup[$cg][$t]['sql'][] = $sql;
+            $includeByCondGroup[$cg][$t]['params'] = array_merge($includeByCondGroup[$cg][$t]['params'], $params);
         }
     }
-    if (!$includeByType) return [null, []]; // 排除規則沒有納入規則可扣，等同無規則
+    if (!$includeByCondGroup) return [null, []]; // 排除規則沒有納入規則可扣，等同無規則
 
-    $andParts = []; $params = [];
-    foreach ($includeByType as $grp) {
-        $andParts[] = '(' . implode(' OR ', $grp['sql']) . ')';
-        $params = array_merge($params, $grp['params']);
+    $orParts = []; $params = [];
+    foreach ($includeByCondGroup as $byType) {
+        $andParts = [];
+        foreach ($byType as $grp) {
+            $andParts[] = '(' . implode(' OR ', $grp['sql']) . ')';
+            $params = array_merge($params, $grp['params']);
+        }
+        $orParts[] = '(' . implode(' AND ', $andParts) . ')';
     }
-    $where = implode(' AND ', $andParts);
+    $where = count($orParts) > 1 ? ('(' . implode(' OR ', $orParts) . ')') : $orParts[0];
     if ($excludeParts) {
         $where .= ' AND ' . implode(' AND ', $excludeParts);
         $params = array_merge($params, $excludeParams);
     }
     return [$where, $params];
+}
+
+// 「排除已結案」快照：把目前已符合規則且已結案(processing_state=1)的BOM寫入永久黑名單(INSERT IGNORE不重複)，
+// 回傳新增筆數。呼叫端負責決定何時觸發(開啟開關當下 / 使用者按「重新整理快照」)。
+function bt_snapshot_closed_boms(PDO $db, int $groupId) {
+    [$whereRule, $params] = bt_build_rule_where($db, $groupId);
+    if ($whereRule === null) return 0;
+    $st = $db->prepare("SELECT bom.bom FROM bom WHERE $whereRule AND bom.processing_state = 1");
+    $st->execute($params);
+    $boms = $st->fetchAll(PDO::FETCH_COLUMN);
+    if (!$boms) return 0;
+    $ins = $db->prepare("INSERT IGNORE INTO bom_watch_closed_snapshot (group_id, bom) VALUES (?, ?)");
+    $n = 0;
+    foreach ($boms as $b) { $ins->execute([$groupId, $b]); $n += $ins->rowCount(); }
+    return $n;
 }
 
 // 使用者目前所屬的所有部門ID（含主要+兼職）
@@ -304,6 +327,8 @@ switch ($action) {
             }
             $db->prepare("DELETE FROM bom_watch_notify_scope WHERE group_id=?")->execute([$groupId]);
             $db->prepare("DELETE FROM bom_watch_rule WHERE group_id=?")->execute([$groupId]);
+            $db->prepare("DELETE FROM bom_watch_cond_group WHERE group_id=?")->execute([$groupId]);
+            $db->prepare("DELETE FROM bom_watch_closed_snapshot WHERE group_id=?")->execute([$groupId]);
             $db->prepare("DELETE FROM bom_watch_share WHERE group_id=?")->execute([$groupId]);
             $db->prepare("DELETE FROM bom_watch_group WHERE group_id=?")->execute([$groupId]);
             $db->commit();
@@ -359,6 +384,7 @@ switch ($action) {
 
     // 新增規則。exact模式支援一次多選：rule_values 傳 JSON 陣列（["12","34",...]），逐一各建一筆；
     // pattern模式一次一個樣式：rule_value 傳文字（前端已包好 % 萬用字元）。is_exclude=1 代表這是排除規則。
+    // cond_group_id：這筆規則屬於哪個條件組(同組AND、組間OR)；排除規則不分組，一律存NULL(全域套用)。
     case 'save_rule': {
         $groupId = (int)($_POST['group_id'] ?? 0);
         if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
@@ -368,14 +394,16 @@ switch ($action) {
         }
         $matchMode = ($_POST['match_mode'] ?? '') === 'pattern' ? 'pattern' : 'exact';
         $isExclude = !empty($_POST['is_exclude']) ? 1 : 0;
+        $condGroupIdRaw = (int)($_POST['cond_group_id'] ?? 0);
+        $condGroupId = ($isExclude || $condGroupIdRaw <= 0) ? null : $condGroupIdRaw;
         try {
             if ($ruleType === 'due_range') {
                 $rangeType = ($_POST['due_range_type'] ?? '') === 'relative' ? 'relative' : 'fixed';
                 $db->prepare("INSERT INTO bom_watch_rule
-                    (group_id, rule_type, is_exclude, due_range_type, due_from, due_to, due_relative_from_days, due_relative_to_days)
-                    VALUES (?, 'due_range', ?, ?, ?, ?, ?, ?)")
+                    (group_id, cond_group_id, rule_type, is_exclude, due_range_type, due_from, due_to, due_relative_from_days, due_relative_to_days)
+                    VALUES (?, ?, 'due_range', ?, ?, ?, ?, ?, ?)")
                     ->execute([
-                        $groupId, $isExclude, $rangeType,
+                        $groupId, $condGroupId, $isExclude, $rangeType,
                         $rangeType === 'fixed' ? ($_POST['due_from'] ?? null) : null,
                         $rangeType === 'fixed' ? ($_POST['due_to'] ?? null) : null,
                         $rangeType === 'relative' ? (int)($_POST['due_relative_from_days'] ?? 0) : null,
@@ -385,8 +413,8 @@ switch ($action) {
             } elseif ($matchMode === 'pattern') {
                 $val = trim($_POST['rule_value'] ?? '');
                 if ($val === '') { $response = ['success' => false, 'message' => '請輸入模糊比對樣式']; break; }
-                $db->prepare("INSERT INTO bom_watch_rule (group_id, rule_type, rule_value, match_mode, is_exclude) VALUES (?, ?, ?, 'pattern', ?)")
-                    ->execute([$groupId, $ruleType, '%' . $val . '%', $isExclude]);
+                $db->prepare("INSERT INTO bom_watch_rule (group_id, cond_group_id, rule_type, rule_value, match_mode, is_exclude) VALUES (?, ?, ?, ?, 'pattern', ?)")
+                    ->execute([$groupId, $condGroupId, $ruleType, '%' . $val . '%', $isExclude]);
                 $response = ['success' => true, 'rule_id' => (int)$db->lastInsertId()];
             } else {
                 $values = json_decode($_POST['rule_values'] ?? '[]', true);
@@ -395,16 +423,137 @@ switch ($action) {
                     if ($single === '') { $response = ['success' => false, 'message' => '請選擇至少一筆']; break; }
                     $values = [$single];
                 }
-                $ins = $db->prepare("INSERT INTO bom_watch_rule (group_id, rule_type, rule_value, match_mode, is_exclude) VALUES (?, ?, ?, 'exact', ?)");
+                $ins = $db->prepare("INSERT INTO bom_watch_rule (group_id, cond_group_id, rule_type, rule_value, match_mode, is_exclude) VALUES (?, ?, ?, ?, 'exact', ?)");
                 $lastId = 0;
                 foreach ($values as $v) {
                     $v = trim((string)$v);
                     if ($v === '') continue;
-                    $ins->execute([$groupId, $ruleType, $v, $isExclude]);
+                    $ins->execute([$groupId, $condGroupId, $ruleType, $v, $isExclude]);
                     $lastId = (int)$db->lastInsertId();
                 }
                 $response = ['success' => true, 'rule_id' => $lastId, 'count' => count($values)];
             }
+        } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
+        break;
+    }
+
+    // ── 條件組（AND/OR混用：組內AND、組間OR）────────────────────────────
+    case 'list_cond_groups': {
+        $groupId = (int)($_GET['group_id'] ?? 0);
+        if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+        try {
+            $st = $db->prepare("SELECT cond_group_id, label, sort_order FROM bom_watch_cond_group WHERE group_id=? ORDER BY sort_order ASC, cond_group_id ASC");
+            $st->execute([$groupId]);
+            $groups = $st->fetchAll(PDO::FETCH_ASSOC);
+            if (!$groups) {
+                // 尚未材質化：顯示一個虛擬的「條件組1」代表目前唯一的(預設)條件組，供使用者加規則進去
+                $groups = [['cond_group_id' => 0, 'label' => '條件組1', 'sort_order' => 1]];
+            }
+            $response = ['success' => true, 'data' => $groups];
+        } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
+        break;
+    }
+
+    // 新增條件組：若目前規則仍掛在「未材質化的預設條件組(cond_group_id=NULL)」下，先把它們材質化成正式的
+    // 條件組1，使用者才看得到條件組1確實存在，再建立新的條件組。
+    case 'add_cond_group': {
+        $groupId = (int)($_POST['group_id'] ?? 0);
+        if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+        try {
+            $db->beginTransaction();
+            $chk = $db->prepare("SELECT COUNT(*) FROM bom_watch_rule WHERE group_id=? AND cond_group_id IS NULL AND is_exclude=0");
+            $chk->execute([$groupId]);
+            if ((int)$chk->fetchColumn() > 0) {
+                $existingCg = $db->prepare("SELECT COUNT(*) FROM bom_watch_cond_group WHERE group_id=?");
+                $existingCg->execute([$groupId]);
+                if ((int)$existingCg->fetchColumn() === 0) {
+                    $db->prepare("INSERT INTO bom_watch_cond_group (group_id, label, sort_order) VALUES (?, '條件組1', 1)")->execute([$groupId]);
+                    $firstCgId = (int)$db->lastInsertId();
+                    $db->prepare("UPDATE bom_watch_rule SET cond_group_id=? WHERE group_id=? AND cond_group_id IS NULL AND is_exclude=0")->execute([$firstCgId, $groupId]);
+                }
+            }
+            $maxOrd = $db->prepare("SELECT COALESCE(MAX(sort_order),0) FROM bom_watch_cond_group WHERE group_id=?");
+            $maxOrd->execute([$groupId]);
+            $nextOrd = (int)$maxOrd->fetchColumn() + 1;
+            $label = trim($_POST['label'] ?? '');
+            if ($label === '') $label = '條件組' . $nextOrd;
+            $db->prepare("INSERT INTO bom_watch_cond_group (group_id, label, sort_order) VALUES (?, ?, ?)")->execute([$groupId, $label, $nextOrd]);
+            $newId = (int)$db->lastInsertId();
+            $db->commit();
+            $response = ['success' => true, 'cond_group_id' => $newId];
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            $response = ['success' => false, 'message' => $e->getMessage()];
+        }
+        break;
+    }
+
+    case 'delete_cond_group': {
+        $cgId = (int)($_POST['cond_group_id'] ?? 0);
+        try {
+            $st = $db->prepare("SELECT group_id FROM bom_watch_cond_group WHERE cond_group_id=?");
+            $st->execute([$cgId]);
+            $groupId = $st->fetchColumn();
+            if ($groupId === false) { $response = ['success' => false, 'message' => '找不到條件組']; break; }
+            if (!bt_can_access_group($db, (int)$groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+            $cntSt = $db->prepare("SELECT COUNT(*) FROM bom_watch_cond_group WHERE group_id=?");
+            $cntSt->execute([$groupId]);
+            if ((int)$cntSt->fetchColumn() <= 1) { $response = ['success' => false, 'message' => '至少要保留一個條件組']; break; }
+            $db->beginTransaction();
+            $db->prepare("DELETE FROM bom_watch_rule WHERE cond_group_id=?")->execute([$cgId]);
+            $db->prepare("DELETE FROM bom_watch_cond_group WHERE cond_group_id=?")->execute([$cgId]);
+            $db->commit();
+            $response = ['success' => true];
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            $response = ['success' => false, 'message' => $e->getMessage()];
+        }
+        break;
+    }
+
+    // ── 排除已結案（以開啟開關當下的快照為準，之後才結案的仍顯示）────────
+    case 'get_group_settings': {
+        $groupId = (int)($_GET['group_id'] ?? 0);
+        if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+        try {
+            $st = $db->prepare("SELECT exclude_closed_snapshot FROM bom_watch_group WHERE group_id=?");
+            $st->execute([$groupId]);
+            $enabled = (int)$st->fetchColumn();
+            $cnt = $db->prepare("SELECT COUNT(*) FROM bom_watch_closed_snapshot WHERE group_id=?");
+            $cnt->execute([$groupId]);
+            $response = ['success' => true, 'exclude_closed_snapshot' => $enabled, 'snapshot_count' => (int)$cnt->fetchColumn()];
+        } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
+        break;
+    }
+
+    case 'toggle_exclude_closed': {
+        $groupId = (int)($_POST['group_id'] ?? 0);
+        if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+        $enable = !empty($_POST['enable']);
+        try {
+            $db->prepare("UPDATE bom_watch_group SET exclude_closed_snapshot=? WHERE group_id=?")->execute([$enable ? 1 : 0, $groupId]);
+            if ($enable) {
+                bt_snapshot_closed_boms($db, $groupId);
+            } else {
+                // 關閉時清空快照，下次重開會以「重開當下」的狀態重新快照，不沿用舊的排除清單
+                $db->prepare("DELETE FROM bom_watch_closed_snapshot WHERE group_id=?")->execute([$groupId]);
+            }
+            $cnt = $db->prepare("SELECT COUNT(*) FROM bom_watch_closed_snapshot WHERE group_id=?");
+            $cnt->execute([$groupId]);
+            $response = ['success' => true, 'enabled' => $enable, 'snapshot_count' => (int)$cnt->fetchColumn()];
+        } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
+        break;
+    }
+
+    // 手動重新整理快照：把「現在」符合規則且已結案的BOM也一併加入永久排除清單(既有的不會被移除，即使已重開)
+    case 'refresh_closed_snapshot': {
+        $groupId = (int)($_POST['group_id'] ?? 0);
+        if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+        try {
+            $added = bt_snapshot_closed_boms($db, $groupId);
+            $cnt = $db->prepare("SELECT COUNT(*) FROM bom_watch_closed_snapshot WHERE group_id=?");
+            $cnt->execute([$groupId]);
+            $response = ['success' => true, 'added' => $added, 'snapshot_count' => (int)$cnt->fetchColumn()];
         } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
         break;
     }
@@ -440,6 +589,14 @@ switch ($action) {
             $status = trim($_GET['status'] ?? $_POST['status'] ?? '');
             if ($status === 'open') $extraWhere[] = "bom.processing_state IS NULL";
             elseif ($status === 'closed') $extraWhere[] = "bom.processing_state = 1";
+
+            // 排除已結案：僅排除「啟用當下」已快照的BOM(永久黑名單)，之後才結案的仍會顯示
+            $grpSt = $db->prepare("SELECT exclude_closed_snapshot FROM bom_watch_group WHERE group_id=?");
+            $grpSt->execute([$groupId]);
+            if ((int)$grpSt->fetchColumn() === 1) {
+                $extraWhere[] = "bom.bom NOT IN (SELECT bom FROM bom_watch_closed_snapshot WHERE group_id = ?)";
+                $params[] = $groupId;
+            }
 
             $whereSql = "WHERE $whereRule" . ($extraWhere ? ' AND ' . implode(' AND ', $extraWhere) : '');
 
