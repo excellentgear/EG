@@ -198,7 +198,7 @@ case 'matrix': {
             'months'=>$months, 'cells'=>$cells, 'avg'=>$avg, 'prev_avg'=>$prevAvg,
             'exposed_params'=>$exposed,
             'can_recalc'=>$iy['source_mode'] === 'auto' && kpi_as_can_modify($year, $perms, ((int)$iy['owner_user_id'] === $uid)),
-            'can_fill'=>$iy['source_mode'] === 'manual' && kpi_as_can_modify($year, $perms, ((int)$iy['owner_user_id'] === $uid)),
+            'can_fill'=>$iy['source_mode'] === 'manual' && kpi_as_can_override($db, $year, $perms, (int)$iy['owner_user_id'], $uid),
             'can_override'=>kpi_as_can_override($db, $year, $perms, (int)$iy['owner_user_id'], $uid),
         ];
     }
@@ -292,7 +292,7 @@ case 'apply_params': {
     jout(['changed'=>count($changed)]);
 }
 
-/* ---------- 手動填寫（manual 模式；擔當者/管理者；鎖定年僅管理者） ---------- */
+/* ---------- 手動填寫（manual 模式；擔當者本人／其請假代理人；鎖定年僅KPI管理員） ---------- */
 case 'fill': {
     $iid = (int)($_POST['indicator_id'] ?? 0);
     $year = (int)($_POST['year'] ?? 0);
@@ -301,9 +301,8 @@ case 'fill': {
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
     if ($iy['source_mode'] !== 'manual') jerr('此指標為自動計算，如需修正請用覆寫功能');
-    $isOwner = ((int)$iy['owner_user_id'] === $uid);
-    if (!($isOwner || $perms['canAdmin'])) jerr('僅擔當者或管理者可填寫', 403);
-    if (!kpi_as_can_modify($year, $perms, $isOwner)) jerr('此年度已鎖定，僅管理者可補填', 403);
+    if (!kpi_as_can_override($db, $year, $perms, (int)$iy['owner_user_id'], $uid))
+        jerr('僅擔當者本人或其請假代理人可填寫（年度鎖定後僅KPI管理員可補填）', 403);
     if (!in_array($month, kpi_as_months($iy['freq']), true)) jerr('該指標此月份不適用（頻率：'.$iy['freq'].'）');
     if ($year === $curY && $month > $curM) jerr('不可填寫未來月份');
     $raw = trim((string)($_POST['value'] ?? ''));
