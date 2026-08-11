@@ -560,12 +560,20 @@ $('#btnUpload').on('click', function(){
     refreshAttList();
     openMask('attMask');
 });
+function kpiPeriodStartMonth(freq, m){
+    // 手動指標的bucket月只代表期間結束點，期間開始就能填/傳附件，不必等到結束月，見 kpi_as_lib.php 同名函式
+    if (freq === 'quarterly') return m - 2;
+    if (freq === 'halfyear') return m - 5;
+    if (freq === 'yearly') return 1;
+    return m;
+}
 function fillAttMonths(){
     var iid = +$('#attIndSel').val();
     var mi = (META.my_indicators||[]).find(function(x){ return x.indicator_id === iid; });
     var $m = $('#attMonthSel').empty();
     (mi ? mi.months : [1,2,3,4,5,6,7,8,9,10,11,12]).forEach(function(m){
-        if (YEAR === META.cur_year && m > META.cur_month) return;
+        var startM = mi && mi.source_mode === 'manual' ? kpiPeriodStartMonth(mi.freq, m) : m;
+        if (YEAR === META.cur_year && startM > META.cur_month) return;
         $m.append('<option value="'+m+'">'+m+'月</option>');
     });
     if (YEAR === META.cur_year && $m.find('option').length) $m.val($m.find('option').last().val());

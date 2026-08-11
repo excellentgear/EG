@@ -140,7 +140,12 @@ case 'matrix': {
                 $res = kpi_as_compute($db, (string)$iy['calculator_key'], $year, $m, $params);
                 if ($res !== null) { $val = $res['value']; $src = $val === null ? 'none' : 'preview'; $preview = true; }
             }
-            $future = ($year === $curY && $m > $curM) || $year > $curY;
+            if ($iy['source_mode'] === 'manual') {
+                $periodStartM = kpi_as_period_start_month($iy['freq'], $m);
+                $future = ($year === $curY && $periodStartM > $curM) || $year > $curY;
+            } else {
+                $future = ($year === $curY && $m > $curM) || $year > $curY;
+            }
             if ($val !== null && !$preview) $vals[] = $val;
             $cells[$m] = [
                 'v' => $val === null ? null : round($val, 2),
@@ -304,7 +309,7 @@ case 'fill': {
     if (!kpi_as_can_override($db, $year, $perms, (int)$iy['owner_user_id'], $uid))
         jerr('僅擔當者本人或其請假代理人可填寫（年度鎖定後僅KPI管理員可補填）', 403);
     if (!in_array($month, kpi_as_months($iy['freq']), true)) jerr('該指標此月份不適用（頻率：'.$iy['freq'].'）');
-    if ($year === $curY && $month > $curM) jerr('不可填寫未來月份');
+    if ($year === $curY && kpi_as_period_start_month($iy['freq'], $month) > $curM) jerr('該期間尚未開始，不可提前填寫');
     $raw = trim((string)($_POST['value'] ?? ''));
     if ($raw === '') jerr('請輸入數值');
     $val = (float)$raw;

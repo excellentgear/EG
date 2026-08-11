@@ -525,6 +525,19 @@ function kpi_as_months(string $freq): array {
         default:          return [1,2,3,4,5,6,7,8,9,10,11,12];
     }
 }
+/**
+ * 頻率bucket月(m，即該期間的結束月)對應「期間起始月」。
+ * bucket月只代表期間結束點，手動填寫的活動(如客戶滿意度調查)實際發生在整個期間內、不必等到期間結束月才能填，
+ * 故「未來」判定改用起始月：期間已開始(curM>=起始月)即可填，不必等到結束月(m)到達。auto指標維持用bucket月本身判斷(需整期結束才能結算)。
+ */
+function kpi_as_period_start_month(string $freq, int $m): int {
+    switch ($freq) {
+        case 'quarterly': return $m - 2;
+        case 'halfyear':  return $m - 5;
+        case 'yearly':    return 1;
+        default:          return $m;
+    }
+}
 
 /* ============================================================
  * 工作日輔助（evenement 行事曆）
