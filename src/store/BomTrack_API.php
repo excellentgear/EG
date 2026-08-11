@@ -585,7 +585,7 @@ switch ($action) {
 
             $extraWhere = [];
             $kw = trim($_GET['bom_kw'] ?? $_POST['bom_kw'] ?? '');
-            if ($kw !== '') { $extraWhere[] = "bom.bom LIKE ?"; $params[] = "%{$kw}%"; }
+            if ($kw !== '') { $extraWhere[] = "(bom.bom LIKE ? OR bom.d_id LIKE ?)"; $params[] = "%{$kw}%"; $params[] = "%{$kw}%"; }
             $status = trim($_GET['status'] ?? $_POST['status'] ?? '');
             if ($status === 'open') $extraWhere[] = "bom.processing_state IS NULL";
             elseif ($status === 'closed') $extraWhere[] = "bom.processing_state = 1";
@@ -748,6 +748,33 @@ switch ($action) {
 
             usort($events, function ($a, $b) { return strcmp((string)$a['time'], (string)$b['time']); });
             $response = ['success' => true, 'data' => $events];
+        } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
+        break;
+    }
+
+    // 依 bom_sn 排序列出製程序列(排除processing_state='skip')：完工狀態一律以 qc_completed 判定(該欄位是唯一
+    // 「完工」旗標，processing_state 還有N/ing/P/Q/E等工作流子狀態不適合拿來判斷單一製程是否已完成)。
+    case 'get_bom_process_chain': {
+        $bom = trim($_GET['bom'] ?? $_POST['bom'] ?? '');
+        if ($bom === '') { $response = ['success' => false, 'message' => '缺少 bom']; break; }
+        try {
+            $st = $db->prepare("
+                SELECT bi.bom_sn, pn.ProcessName, bi.outsource_date, bi.qc_completed
+                FROM bom_ing bi
+                LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                WHERE bi.bom = ? AND bi.processing_state != 'skip'
+                ORDER BY bi.bom_sn ASC
+            ");
+            $st->execute([$bom]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$r) {
+                if (!empty($r['qc_completed'])) $r['step_status'] = 'done';
+                elseif (!empty($r['outsource_date'])) $r['step_status'] = 'active';
+                else $r['step_status'] = 'pending';
+                $r['process_name'] = $r['ProcessName'] ?: '（未知製程）';
+            }
+            unset($r);
+            $response = ['success' => true, 'data' => $rows];
         } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
         break;
     }

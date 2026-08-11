@@ -152,6 +152,15 @@ if ($has_access) {
         .help-doc ul { margin:4px 0 8px; padding-left:20px; }
         .help-doc li { margin:2px 0; }
         .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
+
+        /* 「顯示製程」子列：像子項目一樣縮排顯示在該筆BOM下方 */
+        tr.process-subrow > td { background:#FAF6F0; padding:8px 10px 8px 40px !important; border-bottom:1px solid #F1F3F5; }
+        .process-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 10px; border-radius:12px; font-size:12px; white-space:nowrap; margin:2px 0; }
+        .process-chip.done { background:#8a5a2b; color:#fff; }
+        .process-chip.active { background:#F0A24B; color:#4E2C0B; font-weight:700; box-shadow:0 0 0 2px #F7E0BD; }
+        .process-chip.pending { background:#EBD3A8; color:#6B471A; }
+        .process-arrow { color:#a08a6f; margin:0 3px; font-size:12px; }
+        #btnToggleProcess.active-on { background:#F0A24B; border-color:#D6851F; color:#4E2C0B; }
     </style>
 </head>
 <body class="nav-sm">
@@ -186,13 +195,14 @@ if ($has_access) {
         <button class="btn btn-default btn-sm" id="btnManageGroup" disabled><i class="fa fa-cog"></i> 管理此群組</button>
         <button class="btn btn-danger btn-sm" id="btnDeleteGroup" disabled><i class="fa fa-trash"></i> 刪除群組</button>
         <span id="groupOwnerBadge" style="color:#888;font-size:12px;"></span>
-        <input type="text" id="filterBom" class="form-control input-sm" placeholder="BOM編號關鍵字" style="width:160px;">
+        <input type="text" id="filterBom" class="form-control input-sm" placeholder="BOM編號／料號關鍵字" style="width:180px;">
         <select id="filterStatus" class="form-control input-sm" style="width:120px;">
           <option value="">全部狀態</option>
           <option value="open">進行中</option>
           <option value="closed">已結案</option>
         </select>
         <button class="btn btn-primary btn-sm" id="btnFilter">篩選</button>
+        <button class="btn btn-default btn-sm" id="btnToggleProcess"><i class="fa fa-sitemap"></i> 顯示製程</button>
         <div style="margin-left:auto; display:flex; gap:8px;">
           <button class="btn btn-info btn-sm" id="btnExportCsv">轉 CSV</button>
           <button class="btn btn-info btn-sm" id="btnExportPdf">轉 PDF</button>
@@ -364,6 +374,9 @@ if ($has_access) {
           <li>「進行中」的BOM整列會有淡橘底色，方便一眼找出還需要追蹤的項目。</li>
           <li>清單可拖曳勾選欄框選多筆，批次設定通知。</li>
           <li>轉CSV／轉PDF一律匯出符合目前篩選條件的「全部」資料，不是只匯出當頁。</li>
+          <li>「BOM編號／料號關鍵字」框會同時模糊比對BOM編號與料號，輸入後自動即時篩選；框內有字時雙擊可快速清空並解除篩選。</li>
+          <li>點擊清單上的BOM編號會另開分頁跳到「生管進度追蹤」頁並自動篩選該BOM。</li>
+          <li>按「顯示製程」可在每筆BOM下方展開該筆的製程序列（製程1→製程2→…），深色=已完工、橘色=目前製程、淺色=尚未開始；再按一次可收合。</li>
         </ul>
 
         <h4>設定入口</h4>
@@ -383,11 +396,12 @@ if ($has_access) {
 <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
 <script src="../../resource/js/select2.min.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/pdfmake.min.js"></script>
 <?php if ($has_access): ?>
 <script>
 var API = '../../src/store/BomTrack_API.php';
-var state = { groupId: null, isOwnerOrAdmin: false, page: 1, pageSize: 10, total: 0, rows: [], selected: {} };
+var state = { groupId: null, isOwnerOrAdmin: false, page: 1, pageSize: 10, total: 0, rows: [], selected: {}, showProcess: false };
 var bnBoms = []; // 目前通知設定Modal操作的BOM清單(單筆=1個, 批次=多個)
 var groupScopeId = null;
 
@@ -506,12 +520,38 @@ function fmtProcess(r, empty) {
     return r.latest_process_name || (empty != null ? empty : '');
 }
 
+// 生管進度追蹤頁：點BOM欄位開新分頁並篩選該BOM（沿用該頁既有的 bom_filter URL參數機制）
+function openOreadyPmForBom(bom) {
+    if (!bom) return;
+    window.open('OreadyReply_ForPm_BaseOfTime.php?bom_filter=' + encodeURIComponent(bom), '_blank');
+}
+
+// 製程小圓標：完工一律以 qc_completed 判定(唯一完工旗標)，狀態顏色沿用暖色調色盤(ai-rules/10)
+function renderProcessChip(step) {
+    var cls = step.step_status === 'done' ? 'done' : (step.step_status === 'active' ? 'active' : 'pending');
+    var icon = step.step_status === 'done' ? 'fa-check-circle' : (step.step_status === 'active' ? 'fa-caret-right' : 'fa-circle-o');
+    var label = step.process_name + (step.step_status === 'active' ? '（目前）' : '');
+    var $chip = $('<span class="process-chip ' + cls + '">').append($('<i class="fa ' + icon + '">')).append(document.createTextNode(' ' + label));
+    return $chip;
+}
+function loadProcessChain(bom, $cell) {
+    apiGet('get_bom_process_chain', { bom: bom }).done(function (res) {
+        $cell.empty();
+        if (!res.success || !res.data.length) { $cell.append($('<span class="text-muted" style="font-size:12px;">').text('尚無製程資料')); return; }
+        res.data.forEach(function (s, i) {
+            $cell.append(renderProcessChip(s));
+            if (i < res.data.length - 1) $cell.append($('<span class="process-arrow">').text('→'));
+        });
+    });
+}
+
 function renderRows(rows) {
     var $tb = $('#bomTrackTbody').empty();
     state.selected = {}; // 換頁/重新整理列表時，勾選狀態不跨頁保留，避免使用者誤以為選到看不見的資料
     updateBulkNotifyButton();
     $('#bomSelectAll').prop('checked', false);
     if (!rows.length) { $tb.html('<tr><td colspan="10" class="text-center text-muted">沒有符合規則的BOM</td></tr>'); return; }
+    var visibleCols = $('#bomTrackTable thead th:visible').length;
     rows.forEach(function (r) {
         var statusText = r.processing_state == 1 ? '已結案' : '進行中';
         var progress = fmtProgress(r);
@@ -522,7 +562,9 @@ function renderRows(rows) {
             updateBulkNotifyButton();
         });
         tr.append($('<td class="col-select">').append($cb));
-        tr.append($('<td>').text(r.bom));
+        var $bomLink = $('<a href="#" style="color:#2980b9;">').text(r.bom)
+            .on('click', function (e) { e.preventDefault(); openOreadyPmForBom(r.bom); });
+        tr.append($('<td>').append($bomLink));
         tr.append($('<td>').text(r.sales_name || '—'));
         var $partTd = $('<td>');
         var $partLink = $('<a href="#" style="color:#2980b9;">').text(r.d_id || '—')
@@ -547,8 +589,22 @@ function renderRows(rows) {
         }
         tr.append(opTd);
         $tb.append(tr);
+        if (state.showProcess) {
+            var $sub = $('<tr class="process-subrow">');
+            var $cell = $('<td>').attr('colspan', visibleCols).append($('<span class="text-muted" style="font-size:12px;">').append($('<i class="fa fa-spinner fa-spin">')).append(' 載入製程中...'));
+            $sub.append($cell);
+            $tb.append($sub);
+            loadProcessChain(r.bom, $cell);
+        }
     });
 }
+
+$('#btnToggleProcess').on('click', function () {
+    state.showProcess = !state.showProcess;
+    $(this).toggleClass('active-on', state.showProcess)
+        .html('<i class="fa fa-sitemap"></i> ' + (state.showProcess ? '隱藏製程' : '顯示製程'));
+    renderRows(state.rows);
+});
 
 $('#btnFilter').on('click', function () { state.page = 1; loadMatchedList(); });
 // 篩選輸入框打字後即時篩選(防抖動)，不必等使用者按「篩選」鈕；狀態下拉選了也直接套用
