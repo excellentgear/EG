@@ -2922,7 +2922,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                 </td>
                 <td>
                     <div style="font-size: 11px; color: #999; line-height: 1.3;">
-                        <?php if(!empty($order['Order_oo'])): ?><div title="訂單編號"><i class="fa fa-hashtag"></i> <?= safe_html($order['Order_oo']) ?></div><?php endif; ?>
+                        <?php if(!empty($order['Order_oo'])): ?><div title="訂單編號"><i class="fa fa-hashtag"></i> <?= safe_html($order['Order_oo']) ?><?php if (!empty($order['quote_no'])): ?> <span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;white-space:nowrap;" title="由此報價單(OP)轉入/綁定">來自 <?= safe_html($order['quote_no']) ?></span><?php endif; ?></div><?php endif; ?>
                         <?php if(!empty($order['C_order'])): ?><div title="客戶單號"><i class="fa fa-user"></i> <?= safe_html($order['C_order']) ?></div><?php endif; ?>
                         <?php if(!empty($order['Containers'])): ?><div title="容器"><i class="fa fa-cube"></i> <?= safe_html($order['Containers']) ?></div><?php endif; ?>
                         <?php if($order['Sample'] || $order['JIG']): ?>
