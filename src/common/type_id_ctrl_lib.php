@@ -1,6 +1,6 @@
 <?php
 /**
- * 型態識別文件管制表（AS 文件 RTD630EC0A00）—— 共用庫
+ * 型態識別文件管制表 —— 共用庫（本頁AS文件編號動態綁定，不寫死）
  * 每個料號一份「型態配置」清單，逐列記錄定義該料號目前狀態的文件（原圖/報價單/加工圖/
  * 產品開發評估表/PFMEA/檢驗報告…），可手動輸入版別/文件編號，也可連結「外來文件清單」
  * 既有附件（is_external_doc 標籤）即時取用其檔名與上傳日期——使用者明確要求即時連動不存快照，
@@ -28,7 +28,7 @@ function type_id_ctrl_ensure_schema(PDO $db): void {
         UNIQUE KEY uq_doc_no (doc_no),
         KEY idx_part (part_d_id),
         KEY idx_customer (customer_id)
-    ) DEFAULT CHARSET=utf8mb4 COMMENT='型態識別文件管制表(RTD630EC0A00)-表頭'");
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='型態識別文件管制表-表頭'");
 
     $db->exec("CREATE TABLE IF NOT EXISTS type_id_ctrl_item (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -45,7 +45,7 @@ function type_id_ctrl_ensure_schema(PDO $db): void {
         updated_at TIMESTAMP NULL,
         is_deleted TINYINT(1) NOT NULL DEFAULT 0,
         KEY idx_doc (doc_id)
-    ) DEFAULT CHARSET=utf8mb4 COMMENT='型態識別文件管制表(RTD630EC0A00)-項目列'");
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='型態識別文件管制表-項目列'");
 
     foreach ([['type_id_ctrl_view','型態文件檢閱'],['type_id_ctrl_edit','型態文件登錄'],['type_id_ctrl_admin','型態文件管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='type_id_ctrl' LIMIT 1");

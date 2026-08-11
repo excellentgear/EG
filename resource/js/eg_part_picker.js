@@ -47,7 +47,13 @@
           + '.eg-pp-item .cu{color:#8a6d45;margin-left:8px;font-size:12px;}'
           + '.eg-pp-cnt{font-size:12px;color:#8a6d45;margin-top:5px;}'
           + '.eg-pp-ft button{height:30px;padding:0 16px;border-radius:4px;font-size:13px;cursor:pointer;}'
-          + '.eg-pp-btn-no{border:1px solid #D8BE93;background:#fff;color:#5b3a1e;}'));
+          + '.eg-pp-btn-no{border:1px solid #D8BE93;background:#fff;color:#5b3a1e;}'
+          + '.eg-pp-inline-wrap{position:relative;}'
+          + '.eg-pp-inline-dd{position:absolute;left:0;right:0;top:100%;margin-top:2px;background:#fff;'
+          + 'border:1px solid #D8BE93;border-radius:4px;box-shadow:0 4px 14px rgba(0,0,0,.18);z-index:13000;'
+          + 'max-height:260px;overflow-y:auto;display:none;}'
+          + '.eg-pp-inline-dd .eg-pp-item{padding:5px 9px;}'
+          + '.eg-pp-inline-dd .eg-pp-empty{padding:8px 9px;font-size:12px;color:#8a6d45;}'));
         (document.head || document.documentElement).appendChild(st);
     }
 
@@ -67,6 +73,91 @@
             var pw = Math.min(1400, Math.round(w * 0.85)), ph = Math.min(900, Math.round(h * 0.88));
             window.open(viewerUrl + '?d_id=' + encodeURIComponent(dId), 'part_dv_' + dId,
                 'width=' + pw + ',height=' + ph + ',left=' + Math.round((w - pw) / 2) + ',top=' + Math.round((h - ph) / 2) + ',resizable=yes,scrollbars=yes');
+        },
+
+        /**
+         * 就地打字篩選（比開跳窗更直覺）：欄位本身可直接輸入，打字時下方長出建議清單，
+         * 點選（或方向鍵＋Enter）即完成選取；不需要先點「選擇」按鈕開跳窗。
+         *   EGPartPicker.attach(inputEl, {
+         *     apiUrl : '../../src/store/PartPicker_API.php',
+         *     onSelect: function(row){ ... }   // row = {d_id, part_no, drawing_no, customer_id, customer_name}
+         *   });
+         * 使用者若輸入後未從清單點選就離開欄位，欄位內容視為自由輸入文字（不會有 d_id），
+         * 呼叫端請自行判斷是否需要一個有效 d_id 才能存檔。
+         */
+        attach: function (input, opt) {
+            opt = opt || {};
+            var apiUrl = opt.apiUrl;
+            injectCss();
+
+            if (input.parentNode && !input.parentNode.classList.contains('eg-pp-inline-wrap')) {
+                var wrap = document.createElement('div');
+                wrap.className = 'eg-pp-inline-wrap';
+                input.parentNode.insertBefore(wrap, input);
+                wrap.appendChild(input);
+            }
+            var dd = document.createElement('div');
+            dd.className = 'eg-pp-inline-dd';
+            input.parentNode.appendChild(dd);
+            if (!input.hasAttribute('data-eg-skip')) input.setAttribute('data-eg-skip', '1');
+            if (!input.hasAttribute('autocomplete')) input.setAttribute('autocomplete', 'off');
+
+            var rows = [], selIdx = -1, timer = null;
+
+            function render() {
+                if (!rows.length) {
+                    dd.innerHTML = '<div class="eg-pp-empty">' + (input.value.trim() ? '查無符合的料號' : '輸入部分料號或圖號即可搜尋') + '</div>';
+                } else {
+                    dd.innerHTML = rows.map(function (r, idx) {
+                        return '<div class="eg-pp-item' + (idx === selIdx ? ' sel' : '') + '" data-idx="' + idx + '">'
+                             + '<span class="pn">' + esc(r.part_no) + '</span>'
+                             + (r.drawing_no ? '<span class="cu">圖號 ' + esc(r.drawing_no) + '</span>' : '')
+                             + '<span class="cu">' + esc(r.customer_name || r.customer_id || '（無客戶）') + '</span>'
+                             + '</div>';
+                    }).join('');
+                }
+                dd.style.display = 'block';
+            }
+            function hide() { dd.style.display = 'none'; }
+            function search() {
+                var q = input.value.trim();
+                if (!q) { rows = []; selIdx = -1; hide(); return; }
+                fetch(apiUrl + '?action=search&q=' + encodeURIComponent(q), {credentials: 'same-origin'})
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                        rows = (d && d.success) ? (d.rows || []) : [];
+                        selIdx = rows.length ? 0 : -1;
+                        render();
+                    })
+                    .catch(function () { rows = []; render(); });
+            }
+            function pick(idx) {
+                var row = rows[idx];
+                if (!row) return;
+                input.value = row.part_no;
+                hide();
+                if (typeof opt.onSelect === 'function') opt.onSelect(row);
+            }
+
+            input.addEventListener('input', function () {
+                clearTimeout(timer);
+                timer = setTimeout(search, 250);
+            });
+            input.addEventListener('focus', function () { if (rows.length) render(); });
+            input.addEventListener('keydown', function (e) {
+                if (dd.style.display !== 'block') return;
+                if (e.key === 'ArrowDown') { e.preventDefault(); if (selIdx < rows.length - 1) selIdx++; render(); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); if (selIdx > 0) selIdx--; render(); }
+                else if (e.key === 'Enter') { if (selIdx >= 0) { e.preventDefault(); pick(selIdx); } }
+                else if (e.key === 'Escape') { hide(); }
+            });
+            dd.addEventListener('mousedown', function (e) {
+                var item = e.target.closest('.eg-pp-item');
+                if (item) { e.preventDefault(); pick(parseInt(item.getAttribute('data-idx'), 10)); }
+            });
+            document.addEventListener('click', function (e) {
+                if (e.target !== input && !dd.contains(e.target)) hide();
+            });
         },
 
         open: function (opt) {

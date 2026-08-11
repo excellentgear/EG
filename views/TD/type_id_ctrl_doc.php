@@ -1,9 +1,12 @@
 <?php
 /**
- * 型態識別文件管制表（AS 文件 RTD630EC0A00）
+ * 型態識別文件管制表
  * 每個料號一份「型態配置」清單：原圖/報價單/加工圖/產品開發評估表/PFMEA/檢驗報告…等定義該料號
  * 目前狀態的文件，逐列記錄型態項目/生效日期/類別/版別文件編號；可連結「外來文件清單」既有附件
  * （即時查詢顯示，不落地快照，來源更新這裡就跟著變——使用者 2026-08-11 明確拍板）。
+ * 本頁自身的 AS 文件編號一律走 asdoc_lib 動態綁定顯示（管理員於「AS文件綁定」設定），
+ * 不可寫死——填寫範本檔名裡的 RTD630EC0A00 其實是範本內的「產品編號」欄位值，不是本表編號，
+ * 2026-08-11 使用者發現先前誤植後修正，往後也不要再從檔名反推 AS 編號。
  * 資料/權限見 src/common/type_id_ctrl_lib.php；資料操作走 src/store/ConfigIdDoc_API.php。
  */
 session_start();
@@ -114,7 +117,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     <div class="right_col" role="main">
         <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
             <h2 style="margin:6px 0;">型態識別文件管制表
-                <small style="color:#8a6d45;">RTD630EC0A00 ｜ 每料號一份配置文件清單</small></h2>
+                <small style="color:#8a6d45;">AS文件編號：<span id="hdrAsDocNo">載入中…</span> ｜ 每料號一份配置文件清單</small></h2>
             <button id="btnPageHelp" class="page-help-btn" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
         <div class="clearfix"></div>
@@ -155,10 +158,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <div class="ic-head-grid">
             <div>
                 <label>產品編號(料號) <span style="color:#DD5138;">*</span></label>
-                <div class="ic-part-box">
-                    <input type="text" id="fPartNo" readonly placeholder="請點選料號" data-eg-skip="1">
-                    <button type="button" class="ic-row-btn" id="btnPickPart">選擇</button>
-                </div>
+                <input type="text" id="fPartNo" placeholder="輸入部分料號或圖號即可搜尋" autocomplete="off">
                 <input type="hidden" id="fPartDId" value="0">
             </div>
             <div>
@@ -168,7 +168,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             </div>
             <div>
                 <label>製程</label>
-                <input type="text" id="fProcess" placeholder="例：滾齒至成品">
+                <div class="ic-part-box">
+                    <input type="text" id="fProcess" placeholder="例：滾齒至成品">
+                    <button type="button" class="ic-row-btn" id="btnPullProcess" title="從此料號與客戶的訂單製程帶入"><i class="fa fa-download"></i> 訂單帶入</button>
+                </div>
             </div>
         </div>
         <div style="margin-top:6px;font-size:12px;color:#8a6d45;">文件編號：<b id="fDocNo">存檔後自動產生</b>
@@ -207,6 +210,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         </table>
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('extMask')">取消</button></div>
+</div></div>
+
+<!-- 從訂單製程挑選（此料號×客戶的訂單有多種不同製程紀錄時） -->
+<div class="ic-mask" id="procMask" style="z-index:1200;"><div class="ic-modal">
+    <div class="m-head"><span>此料號與客戶的訂單製程</span><span class="m-close" onclick="closeMask('procMask')">✕</span></div>
+    <div class="m-body"><div id="procList"></div></div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('procMask')">取消</button></div>
 </div></div>
 
 <!-- AS 文件綁定 -->
@@ -335,14 +345,32 @@ function openEdit(id){
 window.btnAddClick = function(){ openEdit(0); };
 $('#btnAdd').on('click', function(){ openEdit(0); });
 
-$('#btnPickPart').on('click', function(){
-    EGPartPicker.open({
-        apiUrl: PART_API, title: '選擇產品編號(料號)',
-        onSave: function(row){
-            $('#fPartNo').val(row.part_no); $('#fPartDId').val(row.d_id);
-            $('#fCustomerName').val(row.customer_name||row.customer_id||''); $('#fCustomerId').val(row.customer_id||'');
-        }
-    });
+EGPartPicker.attach(document.getElementById('fPartNo'), {
+    apiUrl: PART_API,
+    onSelect: function(row){
+        $('#fPartDId').val(row.d_id);
+        $('#fCustomerName').val(row.customer_name||row.customer_id||''); $('#fCustomerId').val(row.customer_id||'');
+    }
+});
+// 直接打字修改料號文字但沒有從清單點選＝視同尚未選定有效料號，清空 d_id 避免存到舊選取值
+$('#fPartNo').on('input', function(){ $('#fPartDId').val('0'); $('#fCustomerName').val(''); $('#fCustomerId').val(''); });
+
+$('#btnPullProcess').on('click', function(){
+    var dId = $('#fPartDId').val(), custId = $('#fCustomerId').val();
+    if (!dId || dId === '0'){ alert('請先選擇產品編號(料號)'); return; }
+    $.post(API, {action:'get_order_process', part_d_id:dId, customer_id:custId}, function(res){
+        if (!res.success){ alert(res.message||'查詢失敗'); return; }
+        if (!res.rows.length){ alert('查無此料號與客戶的訂單製程紀錄'); return; }
+        if (res.rows.length === 1){ $('#fProcess').val(res.rows[0].process); return; }
+        var html = '';
+        res.rows.forEach(function(r, i){
+            html += '<div class="eg-pp-item" style="padding:6px 9px;border-bottom:1px solid #F3E9D6;cursor:pointer;" onclick="$(\'#fProcess\').val(window._procRows['+i+'].process); closeMask(\'procMask\');">'
+                + '<b>'+esc(r.process)+'</b><span style="color:#8a6d45;font-size:11px;margin-left:8px;">'+esc(r.order_oo)+'／'+fmtDate(r.order_date)+'</span></div>';
+        });
+        $('#procList').html(html);
+        window._procRows = res.rows;
+        openMask('procMask');
+    }, 'json');
 });
 
 function itemRowHtml(it, idx){
@@ -509,15 +537,22 @@ function printDoc(id){
 }
 
 /* ---------- AS 文件綁定 ---------- */
-function renderAsDocLabel(){ $('#asDocLabel').text(EGAsDoc.label(AS_DOC)); }
+function renderAsDocLabel(){
+    $('#asDocLabel').text(EGAsDoc.label(AS_DOC));
+    $('#hdrAsDocNo').text(AS_DOC && AS_DOC.doc_no ? AS_DOC.doc_no : '尚未綁定');
+}
+function loadAsDocCurrent(){
+    $.getJSON(API, {action:'asdoc_get'}, function(res){
+        AS_DOC = (res && res.success) ? res.as_doc : null;
+        renderAsDocLabel();
+    });
+}
 $('#btnAsDoc').on('click', function(){
     $.getJSON(API, {action:'asdoc_list'}, function(res){
         if (!res.success) return;
         AS_DOCS = res.docs || [];
-        $.getJSON(API, {action:'asdoc_get'}, function(res2){
-            AS_DOC = (res2 && res2.success) ? res2.as_doc : null;
-            openMask('asDocMask'); renderAsDocLabel();
-        });
+        loadAsDocCurrent();
+        openMask('asDocMask');
     });
 });
 function openAsDocPicker(){
@@ -537,6 +572,7 @@ $('.ic-mask').on('click', function(e){ if (e.target === this) this.style.display
 
 <?php if ($perms['canView']): ?>
 loadList();
+loadAsDocCurrent();
 <?php endif; ?>
 </script>
 </body>

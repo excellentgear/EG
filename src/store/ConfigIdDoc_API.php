@@ -1,6 +1,6 @@
 <?php
 /**
- * 型態識別文件管制表（AS 文件 RTD630EC0A00）API
+ * 型態識別文件管制表 API（本頁AS文件編號動態綁定，不寫死）
  * 資料/權限說明見 src/common/type_id_ctrl_lib.php
  */
 header('Content-Type: application/json; charset=utf-8');
@@ -225,7 +225,29 @@ case 'search_ext_doc':
     }
     jout(['success'=>true,'rows'=>$rows]);
 
-// ── AS 文件編號綁定（本頁自身模板 RTD630EC0A00）──────────────────────
+// ── 從此料號×客戶的訂單帶入製程（order_track.Processing_items）──────────
+case 'get_order_process':
+    needView($perms);
+    $partDId = (int)($_POST['part_d_id'] ?? 0);
+    $customerId = trim((string)($_POST['customer_id'] ?? ''));
+    if (!$partDId) jout(['success'=>false,'message'=>'缺少料號']);
+    $sql = "SELECT Processing_items AS process, Order_oo AS order_oo, Order_date AS order_date
+            FROM order_track
+            WHERE d_id_ID=? AND Processing_items IS NOT NULL AND Processing_items<>''";
+    $args = [$partDId];
+    if ($customerId !== '') { $sql .= " AND Client_name_ID=?"; $args[] = $customerId; }
+    $sql .= " ORDER BY Order_date DESC";
+    $st = $db->prepare($sql); $st->execute($args);
+    $seen = []; $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        if (isset($seen[$r['process']])) continue;
+        $seen[$r['process']] = 1;
+        $out[] = $r;
+        if (count($out) >= 10) break;
+    }
+    jout(['success'=>true,'rows'=>$out]);
+
+// ── AS 文件編號綁定（本頁自身模板）────────────────────────────────
 case 'asdoc_list':
     needView($perms);
     jout(['success'=>true,'docs'=>eg_asdoc_list($db)]);
