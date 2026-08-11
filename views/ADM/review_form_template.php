@@ -196,8 +196,11 @@ $perms = rvf_perms($db, $rvfUser);
             </div>
         </div>
     </div>
-    <div class="m-foot"><button class="b-cancel" onclick="closeMask('schemaMask')">取消</button>
-        <button class="b-ok" onclick="submitSchema()">儲存項次欄位定義</button></div>
+    <div class="m-foot">
+        <button style="background:#fff;color:#5b3a1e;border-color:#D8BE93;" onclick="previewSchema()"><i class="fa fa-eye"></i> 試填預覽並列印（不會儲存）</button>
+        <button class="b-cancel" onclick="closeMask('schemaMask')">取消</button>
+        <button class="b-ok" onclick="submitSchema()">儲存項次欄位定義</button>
+    </div>
 </div></div>
 
 <!-- 角色設定 modal（管理員；定義本模組角色能看到/做什麼，指派給誰在「使用者權限設定」頁） -->
@@ -510,8 +513,8 @@ function maintainerRemove(uid){
 }
 $('#scBumpAsDoc').on('change', function(){ $('#bumpBox').toggle(this.checked); });
 
-function submitSchema(){
-    var schema = {
+function buildSchemaObj(){
+    return {
         columns: COLS.filter(function(c){ return $.trim(c.label)!==''; }).map(function(c){
             return {key:c.key, label:c.label, type:c.type, placeholder:c.placeholder||'', required:c.required?1:0, layout:c.layout,
                      options: c.type==='select' ? c.options.split(',').map(function(s){return $.trim(s);}).filter(Boolean) : []};
@@ -519,6 +522,20 @@ function submitSchema(){
         date_fields: DATES.filter(function(d){ return $.trim(d.label)!==''; }).map(function(d){ return {key:d.key, label:d.label}; }),
         sign_mode: $('input[name=signMode]:checked').val() || 'password'
     };
+}
+/* 試填預覽（2026-08-11 使用者明確要求）：用目前編輯中、尚未存檔的欄位定義開一個新分頁試填+試列印，
+   完全不呼叫「儲存項次」或建立任何表單資料，只是把目前畫面上的設定丟到 sessionStorage 讓 review_form.php
+   讀取渲染，方便邊調欄位定義邊看實際排版，不會因為送出/審核而弄髒正式資料。 */
+function previewSchema(){
+    var payload = {
+        schema: buildSchemaObj(),
+        tpl_id: CUR_SCHEMA_TPL.id, tpl_name: CUR_SCHEMA_TPL.name, paper_size: CUR_SCHEMA_TPL.paper_size
+    };
+    sessionStorage.setItem('rvf_preview_payload', JSON.stringify(payload));
+    window.open('review_form.php?preview=1', '_blank');
+}
+function submitSchema(){
+    var schema = buildSchemaObj();
     if (!$('#scBumpAsDoc').is(':checked')) {
         doSchemaSave(schema, null); return;
     }

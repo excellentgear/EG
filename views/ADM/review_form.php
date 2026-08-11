@@ -162,6 +162,7 @@ $perms = rvf_perms($db, $rvfUser);
 <script>
 var API = '../../src/store/ReviewForm_API.php';
 var META = {}, TEMPLATES = [], ITEMS = [], CUR = null, CUR_SCHEMA = null;
+var PREVIEW_MODE = (new URLSearchParams(location.search).get('preview') === '1');
 function esc(s){ return $('<div>').text(s==null?'':s).html(); }
 function openMask(id){ $('#'+id).css('display','block'); }
 function closeMask(id){ $('#'+id).css('display','none'); }
@@ -169,6 +170,7 @@ $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
     if ($am.length) { $am.removeClass('active').find('ul.child_menu').hide(); $am.find('li.current-page').removeClass('current-page'); }
     $('#sidebar-menu').css('visibility','visible');
+    if (PREVIEW_MODE) { $('.rf-toolbar,.rf-table-wrap').hide(); $('h2').text('審核表單 — 試填預覽'); }
 });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 var STATUS_LABEL = {draft:'草稿', submitted:'已送出', reviewing:'審核中', approving:'核准中', approved:'已完成', rejected:'已退回', void:'已作廢'};
@@ -237,7 +239,10 @@ function openView(id){
 }
 function isDraftMine(){ return CUR.status==='draft' && String(CUR.created_by)===String(META.uid); }
 function renderView(){
-    var h = '<div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px;">'
+    var h = '';
+    if (PREVIEW_MODE) h += '<div style="background:#FFF7E8;border:1px dashed #E8D5B5;border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:12.5px;color:#8a6d45;">'
+        + '<i class="fa fa-flask"></i> 試填預覽模式：這裡的內容<b>不會儲存、不會建立實際表單資料</b>，純粹用來檢查目前欄位定義的排版與列印效果。關閉分頁即消失。</div>';
+    h += '<div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px;">'
           + '<div><label>標題</label><input type="text" id="vTitle" value="'+esc(CUR.title||'')+'" '+(isDraftMine()?'':'disabled')+'></div>'
           + '<div><label>業務日期</label><input type="date" id="vBizDate" max="9999-12-31" value="'+esc(CUR.business_date)+'" '+(isDraftMine()?'':'disabled')+'></div>'
           + '</div>';
@@ -248,12 +253,14 @@ function renderView(){
     h += '<th>簽名</th>'+(isDraftMine()?'<th></th>':'')+'</tr></thead><tbody id="itmBody"></tbody></table>';
     if (isDraftMine()) h += '<button onclick="itemAdd()" style="margin-right:6px;">+新增列</button><button onclick="itemDelLast()">-刪除末列</button>';
     h += '<div style="margin-top:12px;">';
-    if (isDraftMine()) {
+    if (PREVIEW_MODE) {
+        h += '<span style="color:#8a6d45;font-size:12px;">試填後按下方「列印」即可查看實際排版；不需要送出或審核。</span>';
+    } else if (isDraftMine()) {
         h += '<button class="btn-warm" style="height:32px;padding:0 14px;border-radius:4px;border:1px solid #d98a33;color:#fff;background:#F0A24B;" onclick="saveDraft()">存檔</button> '
            + '<button style="height:32px;padding:0 14px;border-radius:4px;border:1px solid #d98a33;background:#fff;color:#5b3a1e;" onclick="submitForm()">送出</button> '
            + '<button style="height:32px;padding:0 14px;border-radius:4px;border:1px solid #c23f28;background:#fff;color:#DD5138;" onclick="deleteForm()">刪除</button>';
     }
-    if (META.perms.canPrint) h += ' <button style="height:32px;padding:0 14px;border-radius:4px;border:1px solid #D8BE93;background:#fff;color:#5b3a1e;" onclick="printForm()">列印</button>';
+    if (META.perms.canPrint || PREVIEW_MODE) h += ' <button style="height:32px;padding:0 14px;border-radius:4px;border:1px solid #D8BE93;background:#fff;color:#5b3a1e;" onclick="printForm()">列印</button>';
     h += '</div>';
     if (CUR.can_review) h += reviewBoxHtml('review');
     if (CUR.can_approve) h += reviewBoxHtml('approval');
@@ -458,7 +465,9 @@ function printForm(){
         (schema.date_fields||[]).forEach(function(d){ h += '<td>'+dispDate(it.date_values[d.key]||'')+'</td>'; });
         var ownerTxt = (it.owner_depts||[]).map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?d.name:''; })
             .concat((it.owner_users||[]).map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?p.user_cname:''; })).filter(Boolean).join('、');
-        h += '<td>'+esc(ownerTxt)+'</td><td>'+(it.confirms||[]).map(function(c){ return stampOrName(c.user_name, dispDate(c.signed_at)); }).join('')+'</td></tr>';
+        var signHtml = (it.confirms||[]).map(function(c){ return stampOrName(c.user_name, dispDate(c.signed_at)); }).join('');
+        if (!signHtml && PREVIEW_MODE && (it.owner_depts.length || it.owner_users.length)) signHtml = stampOrName('（簽名樣式預覽）', dispDate(CUR.business_date));
+        h += '<td>'+esc(ownerTxt)+'</td><td>'+signHtml+'</td></tr>';
     });
     h += '</tbody></table>';
     h += '<table class="rf-p-foot"><tr>';
@@ -469,7 +478,35 @@ function printForm(){
     egPrintWindow(t.name, h, rfCss(), CUR.as_doc_no, t.paper_size);
 }
 
-loadMeta(function(){ loadTemplates(loadList); });
+/* 試填預覽入口（由 review_form_template.php 的「試填預覽並列印」開新分頁帶 ?preview=1 進來）：
+   讀 sessionStorage 裡未存檔的欄位定義，組一個假的 CUR/CUR_SCHEMA 直接開檢視畫面，不呼叫 instance_get，
+   不建立任何 rf_instance 資料列；存檔/送出/刪除/審核/核准一律不顯示，只留增減列與列印可用。 */
+function initPreview(){
+    var raw = sessionStorage.getItem('rvf_preview_payload');
+    if (!raw) { alert('找不到預覽資料，請從「審核表單模板管理」的「試填預覽並列印」按鈕開啟'); return; }
+    var payload = JSON.parse(raw);
+    CUR_SCHEMA = payload.schema || {columns:[], date_fields:[], sign_mode:'password'};
+    ITEMS = [];
+    function openPreview(asDocNo){
+        CUR = {
+            id: 0, title: '', business_date: META.today, status: 'draft',
+            created_by: META.uid, created_by_name: META.uname,
+            tpl: {name: payload.tpl_name || '(未命名模板)', paper_size: payload.paper_size || 'A4'},
+            as_doc_no: asDocNo || '', company_name: META.company_name,
+            review: null, approval: null, can_review: false, can_approve: false
+        };
+        $('#viewTitle').text('試填預覽 — ' + CUR.tpl.name);
+        renderView();
+        openMask('viewMask');
+    }
+    if (payload.tpl_id) {
+        $.getJSON(API, {action:'template_get', id:payload.tpl_id}, function(res){
+            openPreview(res.ok && res.template.as_doc ? (res.template.as_doc.doc_no) : '');
+        });
+    } else openPreview('');
+}
+if (PREVIEW_MODE) loadMeta(initPreview);
+else loadMeta(function(){ loadTemplates(loadList); });
 </script>
 </body>
 </html>
