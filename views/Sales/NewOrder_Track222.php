@@ -1683,12 +1683,10 @@ if ($permission_code === 'A') {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// RBAC 角色權限（module='order_track'）
-// 目前本頁功能權限檢查仍走 user_module_permissions（上方 $can_* 變數），
-// 這裡先建立「角色設定」介面與資料；待 user_permissions.php 完成本頁
-// 人員與角色對照後，把下方 $OT_USE_RBAC 改為 true 即切換成角色制檢查。
+// RBAC 角色權限（module='order_track'）—— 2026-08-11 已啟用（測試版）
+// 使用者已在角色設定頁補齊原本舊制有權限、但尚未指派新角色的 6 人，並確認要在測試版切換。
 // ══════════════════════════════════════════════════════════════════════════
-$OT_USE_RBAC = false; // ★切換開關：true = 改用 roles/role_features 檢查功能權限
+$OT_USE_RBAC = true; // ★切換開關：true = 改用 roles/role_features 檢查功能權限
 
 $_ot_features  = [];
 $_ot_my_roles  = [];
