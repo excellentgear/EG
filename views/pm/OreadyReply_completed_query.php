@@ -101,19 +101,30 @@ $OCQ_FROM = "FROM bom b
 
 $OCQ_CLIENT_DISP = "COALESCE(cl_ds.customer, cl.customer, b.Client_Name)";
 
+// closed_at 是 2026-05-22 才上線的「手動結案」功能才會填寫，在此之前就已 processing_state='1' 的舊資料
+// （約佔已結案總數92%）完全沒有結案日期紀錄。BOM編號格式固定為 B-YYYMMDDNNN（YYY=民國年3碼／MM/DD／NNN=流水號3碼，
+// 全站11641筆BOM長度一致驗證過），舊資料改用「BOM編號回推的建立日期」當作結案日期的替代值（使用者明確指示，
+// 2026-08-11）：有 closed_at 就用真正的結案日期，沒有才退回 BOM 編號回推的日期，此值同時用於篩選/排序/顯示。
+$OCQ_EFFDATE = "COALESCE(DATE(b.closed_at), STR_TO_DATE(CONCAT(
+        CAST(SUBSTRING(SUBSTRING_INDEX(b.bom,'-',-1),1,3) AS UNSIGNED) + 1911, '-',
+        SUBSTRING(SUBSTRING_INDEX(b.bom,'-',-1),4,2), '-',
+        SUBSTRING(SUBSTRING_INDEX(b.bom,'-',-1),6,2)
+    ), '%Y-%m-%d'))";
+
 $OCQ_COLS = "b.bom, b.d_id, b.sqty AS Qty, b.priority_type, b.d_setting_id, b.closed_by, b.closed_at,
     b.Delivery_date, $OCQ_CLIENT_DISP AS client_name_display,
-    u_sales_primary.user_cname AS sales_name, u_close.user_cname AS closed_by_name";
+    u_sales_primary.user_cname AS sales_name, u_close.user_cname AS closed_by_name,
+    $OCQ_EFFDATE AS effective_date, (b.closed_at IS NULL) AS date_is_derived";
 
 // $exclude：計算某個篩選欄位自己的可選清單(facet)時，要排除該欄位自己的條件
 function ocq_build_filter($p, $exclude = []) {
-    global $OCQ_CLIENT_DISP;
+    global $OCQ_CLIENT_DISP, $OCQ_EFFDATE;
     $where = ["b.processing_state = '1'"];
     $params = [];
 
     if (!in_array('date', $exclude, true)) {
-        if (!empty($p['date_from'])) { $where[] = 'b.closed_at >= ?'; $params[] = $p['date_from'] . ' 00:00:00'; }
-        if (!empty($p['date_to']))   { $where[] = 'b.closed_at <= ?'; $params[] = $p['date_to'] . ' 23:59:59'; }
+        if (!empty($p['date_from'])) { $where[] = "$OCQ_EFFDATE >= ?"; $params[] = $p['date_from']; }
+        if (!empty($p['date_to']))   { $where[] = "$OCQ_EFFDATE <= ?"; $params[] = $p['date_to']; }
     }
     if (!in_array('customer', $exclude, true) && !empty($p['customer'])) {
         $where[] = "$OCQ_CLIENT_DISP LIKE ?"; $params[] = '%' . $p['customer'] . '%';
@@ -219,7 +230,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($action === 'export_csv') {
         try {
             list($whereSql, $params) = ocq_build_filter($_POST);
-            $sql = "SELECT $OCQ_COLS $OCQ_FROM $whereSql ORDER BY b.closed_at DESC, b.bom ASC";
+            $sql = "SELECT $OCQ_COLS $OCQ_FROM $whereSql ORDER BY $OCQ_EFFDATE DESC, b.bom DESC";
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -234,6 +245,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             fputcsv($out, ['客戶', 'BOM', '料號', '數量', '交期', '業務', '優先權', '結案人', '結案時間', '加工總單價', '製程明細']);
             foreach ($rows as $r) {
                 $priLabel = $r['priority_type'] === 'E' ? '特急件' : ($r['priority_type'] === 'U' ? '急件' : '一般');
+                $closedTxt = $r['date_is_derived'] ? ($r['effective_date'] . '（依BOM編號推算，非實際結案時間）') : $r['closed_at'];
                 $procs = $proc_map[$r['bom']] ?? [];
                 $bomPrices = $price_map[$r['bom']] ?? [];
                 $total = 0;
@@ -246,7 +258,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 fputcsv($out, [
                     $r['client_name_display'], $r['bom'], $r['d_id'], $r['Qty'], $r['Delivery_date'],
-                    $r['sales_name'], $priLabel, $r['closed_by_name'], $r['closed_at'],
+                    $r['sales_name'], $priLabel, $r['closed_by_name'], $closedTxt,
                     $total > 0 ? $total : '', implode('; ', $procTxt),
                 ]);
             }
@@ -271,7 +283,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmtCnt->execute($params);
             $total = (int)$stmtCnt->fetchColumn();
 
-            $sql = "SELECT $OCQ_COLS $OCQ_FROM $whereSql ORDER BY b.closed_at DESC, b.bom ASC LIMIT $page_size OFFSET $offset";
+            $sql = "SELECT $OCQ_COLS $OCQ_FROM $whereSql ORDER BY $OCQ_EFFDATE DESC, b.bom DESC LIMIT $page_size OFFSET $offset";
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -286,7 +298,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'rows' => $rows, 'max_process_count' => $max_count, 'price_map' => $price_map]);
         } elseif ($action === 'get_print') {
             list($whereSql, $params) = ocq_build_filter($_POST);
-            $sql = "SELECT $OCQ_COLS $OCQ_FROM $whereSql ORDER BY b.closed_at DESC, b.bom ASC";
+            $sql = "SELECT $OCQ_COLS $OCQ_FROM $whereSql ORDER BY $OCQ_EFFDATE DESC, b.bom DESC";
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -428,6 +440,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <input type="date" id="fDateFrom" max="9999-12-31">
                 <span>～</span>
                 <input type="date" id="fDateTo" max="9999-12-31">
+                <small style="color:#a06a1f;" title="2026-05-22「手動結案」功能上線前就已結案的舊資料沒有結案時間紀錄，改用BOM編號回推的建立日期篩選/顯示，並標註「(推算)」">
+                    <i class="fa fa-info-circle"></i> 舊資料無結案紀錄時以BOM編號推算日期
+                </small>
                 <label>客戶</label>
                 <input type="text" id="fCustomer" list="ocqCustomerList" placeholder="客戶名稱" style="width:110px;">
                 <datalist id="ocqCustomerList"></datalist>
@@ -502,6 +517,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         </ul>
         <h4>重要行為/常見疑問</h4>
         <div class="tip">若篩選結果筆數較多（超過3000筆），列印/匯出前會先跳出確認提示，避免不小心產生過大的列印工作。</div>
+        <div class="tip">結案日期是2026-05-22「手動結案」功能上線才開始記錄的，在此之前就已結案的舊資料（約佔已結案總數九成以上）完全沒有結案時間紀錄。這類舊資料改用「BOM編號回推的建立日期」代替（BOM編號格式固定為 B-民國年3碼+月2碼+日2碼+流水號3碼），清單/列印上會標註「(推算)」以資區別；此推算日期同時用於日期篩選與排序。</div>
         <ul>
             <li>「業務」欄只顯示該客戶原本負責業務，不判斷代理人是否正在請假（歷史資料的負責業務是固定事實）。</li>
             <li>優先權燈號：橘色=急件U、紅色=特急件E、淺色=一般。</li>
@@ -570,8 +586,11 @@ function buildThead(maxProc){
 
 function rowToTr(item, maxProc, priceMap){
     var cc = item.priority_type==='E' ? 'circle_red' : (item.priority_type==='U' ? 'circle_y' : 'circle_green');
-    var closedInfo = (item.closed_by_name || item.closed_at)
-        ? '<div class="ocq-sub">' + (item.closed_by_name ? '結：'+esc(item.closed_by_name) : '') + (item.closed_at ? '　'+esc(item.closed_at) : '') + '</div>' : '';
+    var closedInfo = '<div class="ocq-sub">' + (item.closed_by_name ? '結：'+esc(item.closed_by_name)+'　' : '')
+        + (item.date_is_derived == 1 || item.date_is_derived === true
+            ? '<span title="無結案時間紀錄，依BOM編號推算">'+esc(egFmtDate(item.effective_date))+'(推算)</span>'
+            : esc(item.closed_at))
+        + '</div>';
     var bomPrices = (priceMap && priceMap[item.bom]) || {};
     var totalUnitPrice = 0, noPriceCount = 0;
     (item.processes || []).forEach(function(p){
@@ -716,14 +735,16 @@ $('#btnPrint').on('click', function(){
         var body = '<div class="p-comp">' + esc(res.company_name||'') + '</div>'
                  + '<div class="p-title">已完工BOM查詢列印</div>'
                  + '<div class="p-sub">' + esc(sub) + '</div>';
-        body += '<table class="p-tb"><thead><tr><th>客戶</th><th>BOM</th><th>料號</th><th>數量</th><th>交期</th><th>業務</th>';
+        body += '<table class="p-tb"><thead><tr><th>客戶</th><th>BOM</th><th>料號</th><th>數量</th><th>交期</th><th>業務</th><th>結案日期</th>';
         for (var ci=1; ci<=maxProc; ci++) body += '<th>製程'+ci+'</th>';
         body += '</tr></thead><tbody>';
         res.rows.forEach(function(r){
             var priLabel = r.priority_type==='E' ? '特急件' : (r.priority_type==='U' ? '急件' : '一般');
+            var closedTxt = (r.date_is_derived == 1) ? (esc(egFmtDate(r.effective_date))+'(推算)') : esc(r.closed_at||'');
             body += '<tr><td>'+esc(r.client_name_display||'')+'</td><td class="tl">'+esc(r.bom)+'（'+priLabel+'）</td>'
                   + '<td class="tl">'+esc(r.d_id||'')+'</td><td>'+esc(r.Qty||'')+'</td>'
-                  + '<td>'+esc(r.Delivery_date?egFmtDate(r.Delivery_date):'')+'</td><td>'+esc(r.sales_name||'')+'</td>';
+                  + '<td>'+esc(r.Delivery_date?egFmtDate(r.Delivery_date):'')+'</td><td>'+esc(r.sales_name||'')+'</td>'
+                  + '<td>'+closedTxt+'</td>';
             var procs = r.processes || [];
             for (var pi=0; pi<maxProc; pi++){
                 var p = procs[pi];
