@@ -120,7 +120,7 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         /* 兩份規則刻意重複：@media print 是保險（萬一使用者直接 Ctrl+P 未走 printKpi()）；
            body.kpi-printing 是 printKpi() 按下當下同步套用，讓縮放量測時的版面跟真正列印時一致（見下方 printKpi()） */
         @media print {
-            .kpi-toolbar, #chartBox, #cellMenu, .nav_menu, .left_col, .kpi-sim-bar, footer,
+            .page-title, .kpi-toolbar, #chartBox, #cellMenu, .nav_menu, .left_col, .kpi-sim-bar, footer,
             .kpi-role-badge .fa-question-circle, .kpi-ov-mark, .kpi-legend { display:none !important; }
             .right_col { margin:0 !important; padding:0 !important; }
             table.kpi-table { font-size:10px; }
@@ -129,7 +129,7 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
             table.kpi-table thead th { position:static; }
             .kpi-print-head { display:block !important; }
         }
-        body.kpi-printing .kpi-toolbar, body.kpi-printing #chartBox, body.kpi-printing #cellMenu,
+        body.kpi-printing .page-title, body.kpi-printing .kpi-toolbar, body.kpi-printing #chartBox, body.kpi-printing #cellMenu,
         body.kpi-printing .nav_menu, body.kpi-printing .left_col, body.kpi-printing .kpi-sim-bar,
         body.kpi-printing footer, body.kpi-printing .kpi-role-badge .fa-question-circle,
         body.kpi-printing .kpi-ov-mark, body.kpi-printing .kpi-legend { display:none !important; }
