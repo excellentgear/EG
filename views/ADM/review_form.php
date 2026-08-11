@@ -104,7 +104,7 @@ $perms = rvf_perms($db, $rvfUser);
         </div>
         <div class="rf-table-wrap">
         <table class="rf-tbl">
-            <thead><tr><th>編號</th><th>模板</th><th>標題</th><th>業務日期</th><th>填表人</th><th>狀態</th><th style="width:90px;">操作</th></tr></thead>
+            <thead><tr><th>編號</th><th>模板</th><th>建立日期</th><th>填表人</th><th>狀態</th><th style="width:90px;">操作</th></tr></thead>
             <tbody id="listBody"><tr><td colspan="7" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
         </table>
         </div>
@@ -118,8 +118,7 @@ $perms = rvf_perms($db, $rvfUser);
     <div class="m-head"><span>新增表單</span><span class="m-close" onclick="closeMask('addMask')">✕</span></div>
     <div class="m-body">
         <label>選擇模板</label><select id="addTplSel" style="width:100%;"></select>
-        <label>標題（選填）</label><input type="text" id="addTitle" style="width:100%;">
-        <label>業務日期</label><input type="date" id="addBizDate" max="9999-12-31" style="width:100%;">
+        <label>建立日期</label><input type="date" id="addBizDate" max="9999-12-31" style="width:100%;">
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('addMask')">取消</button><button class="b-ok" onclick="submitAdd()">建立</button></div>
 </div></div>
@@ -137,7 +136,7 @@ $perms = rvf_perms($db, $rvfUser);
         <h4>功能說明</h4>
         依「審核表單模板管理」建好的模板建立表單（首發：2-TD-04-01 仿冒零件防制審核表、2-TD-03-01 產品安全審核表），逐列填寫項目與模板定義的欄位，可指定負責單位/負責人並線上簽名，送出後依模板設定走審核/核准。
         <h4>操作步驟</h4>
-        <b>①新增表單</b>：選擇模板、填標題（選填）與業務日期，建立後進入草稿編輯畫面，「填表人」固定為建立者本人。<br>
+        <b>①新增表單</b>：選擇模板、填建立日期，建立後進入草稿編輯畫面，「填表人」固定為建立者本人，表單名稱固定沿用模板名稱。<br>
         <b>②填寫項次</b>：用「+新增列」「-刪除末列」增減項目，逐列填寫內容與模板定義的欄位；可設定該列的負責單位（可多選，該部門任一主管簽即算完成）與負責人（可多選，每人都要各自簽）；有設定「相關日期」欄位的模板可逐列填寫。<br>
         <b>③送出</b>：草稿階段可存檔或送出；送出後內容鎖定不可再編輯，依模板設定進入審核（審核部門任一主管審過即完成）→ 核准（依模板設定的核准優先序解析）。<br>
         <b>④負責人簽名</b>：模板設為「現場密碼簽名」時，畫面上各負責人可自行輸入本人密碼簽名；設為「通知回簽」時，送出後系統會通知負責人前來簽名。<br>
@@ -164,6 +163,7 @@ var API = '../../src/store/ReviewForm_API.php';
 var META = {}, TEMPLATES = [], ITEMS = [], CUR = null, CUR_SCHEMA = null;
 var PREVIEW_MODE = (new URLSearchParams(location.search).get('preview') === '1');
 function esc(s){ return $('<div>').text(s==null?'':s).html(); }
+function dispDate(d){ return (typeof egFmtDate === 'function') ? egFmtDate(d) : (d||''); }
 function openMask(id){ $('#'+id).css('display','block'); }
 function closeMask(id){ $('#'+id).css('display','none'); }
 $(document).ready(function(){
@@ -194,13 +194,13 @@ function loadTemplates(cb){
     });
 }
 $('#btnAdd').on('click', function(){
-    $('#addTitle').val(''); $('#addBizDate').val(META.today);
+    $('#addBizDate').val(META.today);
     openMask('addMask');
 });
 function submitAdd(){
     var tid = $('#addTplSel').val();
     if (!tid){ alert('請選擇模板'); return; }
-    $.post(API, {action:'instance_create', csrf:META.csrf, template_id:tid, title:$('#addTitle').val(), business_date:$('#addBizDate').val()}, function(res){
+    $.post(API, {action:'instance_create', csrf:META.csrf, template_id:tid, business_date:$('#addBizDate').val()}, function(res){
         if (!res.ok){ alert(res.error||'建立失敗'); return; }
         closeMask('addMask'); loadList(); openView(res.id);
     }, 'json');
@@ -211,7 +211,7 @@ function loadList(){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         var h = '';
         res.instances.forEach(function(r){
-            h += '<tr><td>#'+r.id+'</td><td>'+esc(r.template_name)+'</td><td>'+esc(r.title||'')+'</td><td>'+dispDate(r.business_date)+'</td>'
+            h += '<tr><td>#'+r.id+'</td><td>'+esc(r.template_name)+'</td><td>'+dispDate(r.business_date)+'</td>'
                + '<td>'+esc(r.created_by_name)+'</td><td><span class="st-badge st-'+r.status+'">'+STATUS_LABEL[r.status]+'</span></td>'
                + '<td><button onclick="openView('+r.id+')">開啟</button></td></tr>';
         });
@@ -242,10 +242,7 @@ function renderView(){
     var h = '';
     if (PREVIEW_MODE) h += '<div style="background:#FFF7E8;border:1px dashed #E8D5B5;border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:12.5px;color:#8a6d45;">'
         + '<i class="fa fa-flask"></i> 試填預覽模式：這裡的內容<b>不會儲存、不會建立實際表單資料</b>，純粹用來檢查目前欄位定義的排版與列印效果。關閉分頁即消失。</div>';
-    h += '<div class="grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px;">'
-          + '<div><label>標題</label><input type="text" id="vTitle" value="'+esc(CUR.title||'')+'" '+(isDraftMine()?'':'disabled')+'></div>'
-          + '<div><label>業務日期</label><input type="date" id="vBizDate" max="9999-12-31" value="'+esc(CUR.business_date)+'" '+(isDraftMine()?'':'disabled')+'></div>'
-          + '</div>';
+    h += '<div style="max-width:220px;"><label>建立日期</label><input type="date" id="vBizDate" max="9999-12-31" value="'+esc(CUR.business_date)+'" '+(isDraftMine()?'':'disabled')+'></div>';
     h += '<table class="itm-tbl"><thead><tr><th style="width:26px;">#</th><th>項目</th>';
     (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+esc(c.label)+'</th>'; });
     h += '<th>負責單位/負責人</th>';
@@ -388,7 +385,7 @@ function collectItems(){
     return ITEMS.map(function(it){ return {id:it.id, content:it.content, data:it.data, owner_depts:it.owner_depts, owner_users:it.owner_users}; });
 }
 function saveDraft(cb){
-    $.post(API, {action:'instance_save_items', csrf:META.csrf, instance_id:CUR.id, title:$('#vTitle').val(), business_date:$('#vBizDate').val(), items:JSON.stringify(collectItems())}, function(res){
+    $.post(API, {action:'instance_save_items', csrf:META.csrf, instance_id:CUR.id, business_date:$('#vBizDate').val(), items:JSON.stringify(collectItems())}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         if (cb) cb(); else { loadList(); openView(CUR.id); }
     }, 'json');
@@ -450,8 +447,8 @@ function stampOrName(name, date, isDeputy){
 function printForm(){
     var t = CUR.tpl, schema = CUR_SCHEMA;
     var h = '<div class="pt-head"><div class="co">'+esc(CUR.company_name||'')+'</div><div class="tt">'+esc(t.name)+'</div></div>';
-    h += '<table class="rf-p-head"><tr><th>標題</th><td>'+esc(CUR.title||'')+'</td><th>業務日期</th><td>'+dispDate(CUR.business_date)+'</td></tr>'
-       + '<tr><th>填表人</th><td>'+esc(CUR.created_by_name)+'</td><th>狀態</th><td>'+STATUS_LABEL[CUR.status]+'</td></tr></table>';
+    h += '<table class="rf-p-head"><tr><th>建立日期</th><td>'+dispDate(CUR.business_date)+'</td><th>填表人</th><td>'+esc(CUR.created_by_name)+'</td></tr>'
+       + '<tr><th>狀態</th><td colspan="3">'+STATUS_LABEL[CUR.status]+'</td></tr></table>';
     h += '<table class="rf-p-items"><thead><tr><th>#</th><th>項目</th>';
     (schema.fields||[]).forEach(function(c){ h += '<th>'+esc(c.label)+'</th>'; });
     h += '<th>負責單位/人</th><th>簽名</th></tr></thead><tbody>';
