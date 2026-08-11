@@ -93,9 +93,16 @@ try {
 
         .qt-pagination { margin-top:10px; text-align:right; }
         .qt-pagination button { margin-left:4px; }
+
+        .qt-scroll-top { position:fixed; bottom:20px; right:20px; width:46px; height:46px; background:#F0A24B;
+            color:#fff; border:none; border-radius:50%; text-align:center; line-height:46px; cursor:pointer;
+            font-size:18px; box-shadow:0 4px 8px rgba(0,0,0,.25); transition:background .2s; z-index:1000; display:none; }
+        .qt-scroll-top:hover { background:#d98a33; }
+        @media print { .qt-scroll-top { display:none !important; } }
     </style>
 </head>
 <body class="nav-sm">
+<button class="qt-scroll-top" id="qtScrollTop" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="回頂端"><i class="fa fa-arrow-up"></i></button>
 <div class="container body">
     <div class="main_container">
         <?php include '../partPage/sideAndTopBarMenu.html' ?>
@@ -113,6 +120,7 @@ try {
                 </button>
                 <label style="font-size:12px;margin-left:10px;"><input type="checkbox" id="qtCheckAll"> 全選本頁</label>
                 <span id="qtSelCount" style="font-size:12px;color:#888;margin-left:8px;"></span>
+                <label style="font-size:12px;margin-left:14px;">年份：<select id="qtYearFilter" class="form-control input-sm" style="display:inline-block;width:90px;"><option value="">全部</option></select></label>
                 <?php if (!$canEdit): ?>
                     <span style="font-size:12px;color:#c0392b;margin-left:8px;">您沒有編輯權限，僅供檢視</span>
                 <?php endif; ?>
@@ -137,10 +145,17 @@ try {
             <li>清單只列出「尚待確認」的報價單，確認轉入後就會從本頁消失（不會刪除，只是不再顯示於此）。每張報價單的所有料號明細直接顯示，不需點開。</li>
             <li><b>設定製程</b>：跟報價單管理頁一樣的製程標籤（先選大類再選子標籤，可複選），點一下即存檔。</li>
             <li><b>綁定料號ID</b>：在「料號ID綁定」欄搜尋料號關鍵字，點選正確的項目即可綁定；<b>找不到就直接在搜尋結果下方按「＋新增料號」</b>快速建立並自動綁定。</li>
-            <li><b>切換客戶</b>：點客戶欄位旁的「切換」，搜尋並選擇正確的客戶；找不到一樣可以「＋新建客戶」。</li>
+            <li><b>切換客戶</b>：點客戶欄位旁的「切換」，搜尋並選擇正確的客戶；找不到一樣可以「＋新建客戶」；跳窗內按 <b>Enter</b> 等同直接送出（唯一符合的搜尋結果或已填妥的新建表單）。</li>
             <li>補齊後，可以用每張報價單右上角的「轉正式報價單」單張轉入，或勾選多張後用上方「批次轉入正式報價單」一次轉入。</li>
+            <li>清單右上角可篩選<b>年份</b>；報價單依日期新到舊排序。</li>
         </ul>
         <div class="tip">即使料號ID或製程還沒補齊也可以轉入正式，完成度只是提示、不會強制擋下轉入。</div>
+        <h4>加快補件速度</h4>
+        <ul>
+            <li><b>製程「複製上一筆」</b>：一鍵複製同報價單中前一項的製程設定。</li>
+            <li><b>製程「套用到本單全部」</b>：把目前這筆的製程設定一次套用到同報價單其餘所有項目（會覆蓋原設定，套用前會再次確認）。</li>
+            <li><b>綁定料號後自動偵測同料號</b>：綁定或新增料號時，系統會找出「尚待確認」報價單中同料號文字、同客戶、還沒綁定的其他項目（常見於同一張報價單內同料號不同數量級距），跳窗列出讓您勾選是否一併綁定，不用逐筆重複搜尋。</li>
+        </ul>
         <h4>重要行為</h4>
         <ul>
             <li>本頁的修改只作用在「尚待確認」的報價單，一旦轉入正式，請回報價單管理頁編輯（本頁會拒絕再次修改已正式的資料）。</li>
@@ -186,6 +201,22 @@ try {
     </div>
 </div></div>
 
+<!-- 綁定後偵測同料號+同客戶的其他未綁定項目，詢問是否一併綁定 -->
+<div class="va-mask" id="batchBindMask"><div class="va-modal wide">
+    <div class="m-head"><span><i class="fa fa-clone"></i> 發現相同料號的其他項目</span><span class="m-close" onclick="closeMask('batchBindMask')">✕</span></div>
+    <div class="m-body">
+        <p style="font-size:12px;color:#5b3a1e;">找到 <b id="bbCount"></b> 筆同料號「<b id="bbProductText"></b>」、同客戶、尚未綁定的項目，是否一併綁定為「<b id="bbTargetPart"></b>」？</p>
+        <table class="qt-item-table" style="width:100%;">
+            <thead><tr><th style="width:30px;"><input type="checkbox" id="bbCheckAll" checked></th><th>報價單號</th><th>規格</th><th>數量</th><th>單價</th></tr></thead>
+            <tbody id="bbList"></tbody>
+        </table>
+    </div>
+    <div class="m-foot">
+        <button class="btn btn-default" onclick="closeMask('batchBindMask')">不用了</button>
+        <button class="btn btn-primary" onclick="confirmBatchBind()"><i class="fa fa-check"></i> 一併綁定已勾選項目</button>
+    </div>
+</div></div>
+
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/fastclick.js"></script>
@@ -194,6 +225,7 @@ try {
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script>
 $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); });
+$(window).on('scroll', function(){ $('#qtScrollTop').toggle($(window).scrollTop() > 200); });
 function closeMask(id){ document.getElementById(id).style.display='none'; }
 function openMask(id){ document.getElementById(id).style.display='block'; }
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
@@ -221,10 +253,12 @@ function loadPendingList() {
         if (!res.success) { $('#qtCards').html('載入失敗：' + (res.message||'')); return; }
         qtData = res.data;
         qtPage = 1;
+        populateYearFilter();
         renderStats();
         renderCards();
     });
 }
+$('#qtYearFilter').on('change', function(){ qtPage = 1; renderCards(); });
 
 function renderStats() {
     const total = qtData.length;
@@ -236,17 +270,38 @@ function renderStats() {
 }
 
 function fmtDate(d) { return d || ''; }
+function yearOf(d) { return d ? String(d).substring(0, 4) : ''; }
+
+function populateYearFilter() {
+    const years = Array.from(new Set(qtData.map(r => yearOf(r.quote_date)).filter(Boolean))).sort().reverse();
+    const $sel = $('#qtYearFilter');
+    const cur = $sel.val();
+    $sel.html('<option value="">全部</option>' + years.map(y => '<option value="' + y + '">' + y + '</option>').join(''));
+    if (years.indexOf(cur) !== -1) $sel.val(cur);
+}
+
+function getFilteredData() {
+    const y = $('#qtYearFilter').val();
+    if (!y) return qtData;
+    return qtData.filter(r => yearOf(r.quote_date) === y);
+}
 
 function renderCards() {
+    const filtered = getFilteredData();
     if (!qtData.length) {
         $('#qtCards').html('<div style="text-align:center;color:#999;padding:20px;">目前沒有尚待確認的報價單</div>');
         $('#qtPagination').html('');
         return;
     }
-    const totalPages = Math.max(1, Math.ceil(qtData.length / QT_PAGE_SIZE));
+    if (!filtered.length) {
+        $('#qtCards').html('<div style="text-align:center;color:#999;padding:20px;">此年份沒有尚待確認的報價單</div>');
+        $('#qtPagination').html('');
+        return;
+    }
+    const totalPages = Math.max(1, Math.ceil(filtered.length / QT_PAGE_SIZE));
     if (qtPage > totalPages) qtPage = totalPages;
     const start = (qtPage - 1) * QT_PAGE_SIZE;
-    const pageRows = qtData.slice(start, start + QT_PAGE_SIZE);
+    const pageRows = filtered.slice(start, start + QT_PAGE_SIZE);
 
     let html = '';
     pageRows.forEach(function(r) {
@@ -273,7 +328,7 @@ function renderCards() {
 
     let pg = '';
     pg += '<button class="btn btn-default btn-xs" ' + (qtPage<=1?'disabled':'') + ' onclick="qtGoPage(' + (qtPage-1) + ')">上一頁</button>';
-    pg += ' 第 ' + qtPage + ' / ' + totalPages + ' 頁（共 ' + qtData.length + ' 張） ';
+    pg += ' 第 ' + qtPage + ' / ' + totalPages + ' 頁（共 ' + filtered.length + ' 張） ';
     pg += '<button class="btn btn-default btn-xs" ' + (qtPage>=totalPages?'disabled':'') + ' onclick="qtGoPage(' + (qtPage+1) + ')">下一頁</button>';
     $('#qtPagination').html(pg);
 
@@ -317,7 +372,7 @@ function findQuoteIdByItemId(itemId) {
 function drawItems(qid, items) {
     const row = qtData.find(function(r){ return String(r.quote_id) === String(qid); });
     let html = '<table class="qt-item-table"><thead><tr><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th style="width:170px;">料號ID綁定</th><th style="min-width:260px;">製程</th></tr></thead><tbody>';
-    items.forEach(function(it) {
+    items.forEach(function(it, idx) {
         const boundText = it.d_setting_d_id ? ('<span class="qt-badge ok">已綁定 #' + it.d_setting_d_id + '</span>') : '<span class="qt-badge warn">未綁定</span>';
         const procIds = (it.processes || '').split(',').filter(function(v){return v!=='';});
         if (!qtProcState[it.item_id]) {
@@ -328,13 +383,14 @@ function drawItems(qid, items) {
             }
             qtProcState[it.item_id] = { activeGid: activeGid, selected: selected };
         }
+        const prevItemId = idx > 0 ? items[idx - 1].item_id : null;
         html += '<tr data-item="' + it.item_id + '">' +
             '<td>' + it.product_id + '</td>' +
             '<td>' + (it.specification || '') + '</td>' +
             '<td>' + it.quantity + '</td>' +
             '<td>' + it.unit_price + '</td>' +
             '<td>' + boundText + (CAN_EDIT ? renderPartBindWidget(it, row) : '') + '</td>' +
-            '<td>' + (CAN_EDIT ? renderProcWidget(it.item_id) : '') + '</td>' +
+            '<td>' + (CAN_EDIT ? renderProcWidget(it.item_id, prevItemId, items.length) : '') + '</td>' +
             '</tr>';
     });
     html += '</tbody></table>';
@@ -349,8 +405,17 @@ function renderPartBindWidget(it, row) {
         '<i class="fa fa-link"></i> ' + (it.d_setting_d_id ? '重新綁定' : '快速綁定') + '</button>';
 }
 
-function renderProcWidget(itemId) {
+function renderProcWidget(itemId, prevItemId, totalInQuote) {
     const state = qtProcState[itemId];
+
+    let toolbar = '';
+    if (prevItemId || (totalInQuote && totalInQuote > 1)) {
+        toolbar = '<div style="font-size:10px;margin-bottom:2px;">';
+        if (prevItemId) toolbar += '<a href="javascript:void(0)" onclick="copyProcessFromItem(' + itemId + ',' + prevItemId + ')"><i class="fa fa-clone"></i> 複製上一筆</a>';
+        if (totalInQuote && totalInQuote > 1) toolbar += (prevItemId ? '　' : '') + '<a href="javascript:void(0)" onclick="applyProcessToAllInQuote(' + itemId + ')"><i class="fa fa-copy"></i> 套用到本單全部</a>';
+        toolbar += '</div>';
+    }
+
     let l1 = '<div class="qt-proc-l1">';
     processTagTree.forEach(function(g) {
         l1 += '<button type="button" class="' + (g.group_id === state.activeGid ? 'active' : '') + '" onclick="procSetActiveGroup(' + itemId + ',' + g.group_id + ')">' + g.group_name + '</button>';
@@ -377,7 +442,30 @@ function renderProcWidget(itemId) {
         });
         chips += '</div>';
     }
-    return l1 + l2 + chips;
+    return toolbar + l1 + l2 + chips;
+}
+
+function copyProcessFromItem(itemId, sourceItemId) {
+    const src = qtProcState[sourceItemId];
+    if (!src) return;
+    qtProcState[itemId] = { activeGid: src.activeGid, selected: src.selected.slice() };
+    saveItemProcess(itemId);
+    redrawProcCell(itemId);
+}
+
+function applyProcessToAllInQuote(itemId) {
+    const qid = findQuoteIdByItemId(itemId);
+    if (!qid) return;
+    const items = qtItemsCache[qid];
+    const others = items.filter(function(it){ return String(it.item_id) !== String(itemId); });
+    if (!others.length) return;
+    if (!confirm('確定要把這筆的製程套用到本張報價單其餘 ' + others.length + ' 筆項目嗎？會覆蓋這些項目原有的製程設定。')) return;
+    const src = qtProcState[itemId];
+    others.forEach(function(it) {
+        qtProcState[it.item_id] = { activeGid: src.activeGid, selected: src.selected.slice() };
+    });
+    drawItems(qid, items);
+    others.forEach(function(it) { saveItemProcess(it.item_id); });
 }
 
 function procSetActiveGroup(itemId, gid) {
@@ -401,7 +489,11 @@ function procRemoveSubTag(itemId, subTagId) {
 }
 
 function redrawProcCell(itemId) {
-    $('tr[data-item="' + itemId + '"] td:last-child').html(renderProcWidget(itemId));
+    const qid = findQuoteIdByItemId(itemId);
+    const items = qid ? qtItemsCache[qid] : [];
+    const idx = items.findIndex(function(it){ return String(it.item_id) === String(itemId); });
+    const prevItemId = idx > 0 ? items[idx - 1].item_id : null;
+    $('tr[data-item="' + itemId + '"] td:last-child').html(renderProcWidget(itemId, prevItemId, items.length));
 }
 
 function saveItemProcess(itemId) {
@@ -446,10 +538,11 @@ function refreshStatsOnly(itemId) {
 }
 
 // ── 快速綁定料號ID：比照 NewOrder_Track.php 快速綁定 Modal，自動判斷客戶與料號 ──
-let qbpItemId = null, qbpClientId = null, qbpSelectedPart = null, qbpParts = [];
+let qbpItemId = null, qbpClientId = null, qbpSelectedPart = null, qbpParts = [], qbpOrigProductText = '';
 
 function openQuickBindPart(itemId, productId, clientId, clientName) {
     qbpItemId = itemId; qbpClientId = clientId || null; qbpSelectedPart = null; qbpParts = [];
+    qbpOrigProductText = productId;
     $('#qbpOrigText').text(productId);
     $('#qbpClientName').text(clientName || '（未設定）');
     $('#qbpLoading').show();
@@ -524,25 +617,71 @@ function submitQbpNewPart() {
 
 function saveQuickBindPart() {
     if (!qbpSelectedPart) return;
-    $.post(API_URL, { action: 'quick_bind_item_dsetting', item_id: qbpItemId, d_id: qbpSelectedPart.d_id }, function(res) {
+    const boundItemId = qbpItemId, boundDId = qbpSelectedPart.d_id, boundProductText = qbpOrigProductText, boundClientId = qbpClientId;
+    $.post(API_URL, { action: 'quick_bind_item_dsetting', item_id: boundItemId, d_id: boundDId }, function(res) {
         if (!res.success) { alert('綁定失敗：' + res.message); return; }
+        const dSettingId = res.product_id || qbpSelectedPart.D_Setting_Id;
         Object.keys(qtItemsCache).forEach(function(qid) {
-            qtItemsCache[qid].forEach(function(it) { if (String(it.item_id) === String(qbpItemId)) { it.d_setting_d_id = qbpSelectedPart.d_id; it.product_id = res.product_id || qbpSelectedPart.D_Setting_Id; } });
+            qtItemsCache[qid].forEach(function(it) { if (String(it.item_id) === String(boundItemId)) { it.d_setting_d_id = boundDId; it.product_id = dSettingId; } });
         });
         closeMask('quickBindPartMask');
-        const qid = findQuoteIdByItemId(qbpItemId);
+        const qid = findQuoteIdByItemId(boundItemId);
         if (qid) drawItems(qid, qtItemsCache[qid]);
-        refreshStatsOnly(qbpItemId);
+        refreshStatsOnly(boundItemId);
+        checkBatchBindCandidates(boundProductText, boundClientId, boundDId, dSettingId, boundItemId);
+    });
+}
+
+// 綁定成功後，找出同料號文字＋同客戶、還沒綁定的其他項目，問是否一併綁定
+function checkBatchBindCandidates(productText, clientId, dId, dSettingId, excludeItemId) {
+    if (!productText) return;
+    const params = { action: 'find_unbound_matches', product_text: productText, exclude_item_id: excludeItemId };
+    if (clientId) params.client_id = clientId;
+    $.get(API_URL, params, function(res) {
+        if (!res.success || !res.data.length) return;
+        bbCandidates = res.data;
+        bbDId = dId; bbDSettingId = dSettingId;
+        $('#bbCount').text(res.data.length);
+        $('#bbProductText').text(productText);
+        $('#bbTargetPart').text(dSettingId);
+        let html = '';
+        res.data.forEach(function(c, i) {
+            html += '<tr><td><input type="checkbox" class="bb-chk" checked data-i="' + i + '"></td><td>' + c.quote_no + '</td><td>' + (c.specification || '') + '</td><td>' + c.quantity + '</td><td>' + c.unit_price + '</td></tr>';
+        });
+        $('#bbList').html(html);
+        $('#bbCheckAll').prop('checked', true);
+        openMask('batchBindMask');
+    });
+}
+
+let bbCandidates = [], bbDId = null, bbDSettingId = '';
+$(document).on('change', '#bbCheckAll', function() { $('.bb-chk').prop('checked', this.checked); });
+
+function confirmBatchBind() {
+    const ids = [];
+    $('.bb-chk:checked').each(function() { ids.push(bbCandidates[$(this).data('i')].item_id); });
+    if (!ids.length) { closeMask('batchBindMask'); return; }
+    $.post(API_URL, { action: 'batch_bind_items_dsetting', item_ids: JSON.stringify(ids), d_id: bbDId }, function(res) {
+        if (!res.success) { alert('批次綁定失敗：' + res.message); return; }
+        const idSet = ids.map(String);
+        Object.keys(qtItemsCache).forEach(function(qid) {
+            qtItemsCache[qid].forEach(function(it) { if (idSet.indexOf(String(it.item_id)) !== -1) { it.d_setting_d_id = bbDId; it.product_id = bbDSettingId; } });
+        });
+        closeMask('batchBindMask');
+        loadPendingList();
     });
 }
 
 // Enter 鍵＝確認綁定（比照 NewOrder_Track.php 快速綁定 Modal；多選未選定時不觸發）
+// 先 preventDefault+stopPropagation：eg_input_rules.js 的 containerOf() 認不得 .va-modal，會退化成把整個
+// document.body 當成表單容器對整頁欄位做「Enter 跳下一欄」，導致跳窗內按 Enter 跳到頁面別處而不是送出。
 $('#quickBindPartMask').on('keydown', function(e) {
     if (e.key !== 'Enter') return;
+    e.preventDefault();
+    e.stopPropagation();
     const $btn = $('#qbpSaveBtn');
     if (!$btn.is(':visible')) return;
     if (qbpParts.length > 1 && !qbpSelectedPart) return;
-    e.preventDefault();
     saveQuickBindPart();
 });
 
@@ -592,9 +731,12 @@ $('#custSwitchKw').on('keyup', function(e) {
 });
 
 // Enter 鍵＝確認（唯一搜尋結果或已填妥新建表單時直接送出，比照 NewOrder_Track.php 快速綁定 Modal）
+// 先 stopPropagation：eg_input_rules.js 的 containerOf() 認不得 .va-modal，會退化成把整個 document.body
+// 當成表單容器、對整頁欄位做「Enter 跳下一欄」，導致跳窗內按 Enter 跳到頁面別處而不是送出。
 $('#custSwitchMask').on('keydown', function(e) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
+    e.stopPropagation();
     if ($('#custNewForm').is(':visible')) {
         if ($('#custNewId').val().trim() && $('#custNewName').val().trim()) submitNewCustomer();
     } else if (custSwitchResults.length === 1) {

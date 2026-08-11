@@ -1369,7 +1369,7 @@ try {
                 LEFT JOIN quotation_item qi ON qi.quote_id = ql.quote_id
                 WHERE ql.pending_review = 1
                 GROUP BY ql.quote_id
-                ORDER BY ql.quote_date ASC, ql.quote_no ASC
+                ORDER BY ql.quote_date DESC, ql.quote_no DESC
             ");
             $response = ['success' => true, 'data' => $stmt->fetchAll(PDO::FETCH_ASSOC)];
             break;
@@ -1410,6 +1410,49 @@ try {
             $pdo->prepare("UPDATE quotation_item SET d_setting_d_id=?, product_id=?, updated_at=NOW() WHERE item_id=?")
                 ->execute([$d_id, $tds, $item_id]);
             $response = ['success' => true, 'product_id' => $tds];
+            break;
+        }
+
+        // 找出「尚待確認」報價單中，跟剛綁定的這筆同料號文字(product_id)、同客戶、還沒綁 d_setting_d_id 的其他項目，
+        // 供快速轉移頁綁定一筆後彈窗詢問是否順便一起綁（同一張報價單內常見同料號不同數量級距）
+        case 'find_unbound_matches': {
+            $productText = trim($_GET['product_text'] ?? '');
+            $clientId    = trim($_GET['client_id'] ?? '');
+            $excludeId   = intval($_GET['exclude_item_id'] ?? 0);
+            if ($productText === '') { $response = ['success' => true, 'data' => []]; break; }
+            $sql = "SELECT qi.item_id, qi.quote_id, ql.quote_no, qi.specification, qi.quantity, qi.unit_price
+                    FROM quotation_item qi
+                    JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                    WHERE ql.pending_review = 1 AND qi.product_id = ? AND qi.d_setting_d_id IS NULL AND qi.item_id <> ?";
+            $params = [$productText, $excludeId];
+            if ($clientId !== '') { $sql .= " AND ql.client_id = ?"; $params[] = $clientId; }
+            $sql .= " ORDER BY ql.quote_date ASC, qi.item_id ASC";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            $response = ['success' => true, 'data' => $stmt->fetchAll(PDO::FETCH_ASSOC)];
+            break;
+        }
+
+        // 批次綁定多筆報價項目到同一個料號ID（快速轉移頁「一併綁定」確認後用）；
+        // 限定只能作用於 pending_review=1 的項目，跟其他 quick_* 動作一致
+        case 'batch_bind_items_dsetting': {
+            $itemIds = json_decode($_POST['item_ids'] ?? '[]', true);
+            $d_id    = intval($_POST['d_id'] ?? 0);
+            if (!is_array($itemIds) || empty($itemIds) || !$d_id) throw new Exception('缺少項目或料號ID');
+            $itemIds = array_values(array_unique(array_map('intval', $itemIds)));
+            $dq = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
+            $dq->execute([$d_id]);
+            $tds = $dq->fetchColumn();
+            if ($tds === false) throw new Exception('找不到此料號ID');
+            $ph = implode(',', array_fill(0, count($itemIds), '?'));
+            $chk = $pdo->prepare("SELECT qi.item_id FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id WHERE qi.item_id IN ($ph) AND ql.pending_review=1");
+            $chk->execute($itemIds);
+            $validIds = $chk->fetchAll(PDO::FETCH_COLUMN);
+            if (empty($validIds)) throw new Exception('沒有可綁定的項目（可能已轉為正式資料）');
+            $ph2 = implode(',', array_fill(0, count($validIds), '?'));
+            $upd = $pdo->prepare("UPDATE quotation_item SET d_setting_d_id=?, product_id=?, updated_at=NOW() WHERE item_id IN ($ph2)");
+            $upd->execute(array_merge([$d_id, $tds], $validIds));
+            $response = ['success' => true, 'updated' => count($validIds), 'product_id' => $tds];
             break;
         }
 
