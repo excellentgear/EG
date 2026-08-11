@@ -1373,7 +1373,10 @@ function itemConfirmCellHtml(it){
              + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();confirmItemWithPassword('+it.item_id+','+s.user_id+');}">'
              + '<button type="button" onclick="confirmItemWithPassword('+it.item_id+','+s.user_id+')">確認</button></div>';
     }).join('');
-    var nt = it.notify_targets || [];
+    // 2026-08-11修正：已經在上面簽名槽顯示過(蓋章+回覆內容)的人，不要在下面通知狀態清單再顯示一次，
+    // 否則同一個人的「OK」回覆內容會重複出現兩次，看起來像資料重複、造成混淆。
+    var signedUserIds = slots.filter(function(s){ return s.signed; }).map(function(s){ return String(s.user_id); });
+    var nt = (it.notify_targets || []).filter(function(t){ return signedUserIds.indexOf(String(t.user_id)) === -1; });
     if (nt.length) {
         h += '<div class="item-notify-status">' + nt.map(function(t){
             var st = t.replied_at ? ('已回覆 '+dispDate(t.replied_at)) : (t.read_at ? '已閱未回覆' : '未讀');
