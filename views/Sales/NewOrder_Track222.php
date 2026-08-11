@@ -7127,12 +7127,20 @@ foreach($dCounts as $c) {
                     (c.required ? ' <span style="color:#DD5138;" title="必備類別，需連結單一料號">*</span>' : '') + '</label>';
             }).join('') || '<span style="color:#aaa;">尚未設定本頁可用標籤，請至「設定」跳窗設定</span>';
             var parts = availableParts || [];
+            // 必備類別（沿用報價單 required_attach_cats）：這個檔已勾到必備類別時，「共用（全部）」選項直接不給選，
+            // 逼使用者一定要指定料號（比照報價單附件標籤功能 renderFileTagPanel 的 hasReqCat 做法）
+            var reqIds = (cats || []).filter(function(c) { return c.required; }).map(function(c) { return String(c.id); });
+            var hasReq = checkedIds.some(function(id) { return reqIds.indexOf(id) !== -1; });
+            var needPick = hasReq && !f.linked_part_no;
             var partTag = showPart
                 ? (parts.length > 1
-                    ? '<select class="oa-part-select" style="font-size:10px;padding:0 2px;">' +
-                        '<option value="">共用（全部）</option>' +
+                    ? '<select class="oa-part-select" style="font-size:10px;padding:0 2px;' + (needPick ? 'border-color:#DD5138;color:#DD5138;' : '') + '">' +
+                        (hasReq
+                            ? '<option value=""' + (needPick ? ' selected disabled' : '') + '>請選擇料號…</option>'
+                            : '<option value="">共用（全部）</option>') +
                         parts.map(function(p) { return '<option value="' + escapeHtml(p) + '"' + (f.linked_part_no === p ? ' selected' : '') + '>' + escapeHtml(p) + '</option>'; }).join('') +
-                      '</select>'
+                      '</select>' +
+                      (hasReq ? ' <span style="font-size:9px;color:#DD5138;" title="必備類別附件不可設為共用，須連結單一料號">*必選料號</span>' : '')
                     : '<span style="font-size:10px;color:#999;">' + (f.linked_part_no ? ('料號：' + escapeHtml(f.linked_part_no)) : '共用（全部）') + '</span>')
                 : '';
             return '<div class="oa-file-row" data-id="' + f.id + '" style="padding:4px 0;border-bottom:1px dotted #eee;' + (tagged ? '' : 'background:#FFF6F0;') + '">' +
@@ -7163,6 +7171,7 @@ foreach($dCounts as $c) {
                 [orderAttachFiles, opAttachFilesCache].forEach(function(arr) {
                     (arr || []).forEach(function(f) { if (String(f.id) === String(attId)) f.linked_part_no = newPart || null; });
                 });
+                oaRefreshRowPartSelect($row, catIds); // 選了實際料號後解除紅框/請選擇提示
             }, 'json');
         });
         // 目前有哪些附件清單快取存放這筆 attId（同時可能存在於訂單附件與OP附件），存回去讓存檔前檢查看到最新狀態
@@ -7170,6 +7179,26 @@ foreach($dCounts as $c) {
             [orderAttachFiles, opAttachFilesCache].forEach(function(arr) {
                 (arr || []).forEach(function(f) { if (String(f.id) === String(attId)) { f.category_name = categoryName; f.category_ids = categoryIds; } });
             });
+        }
+        // 類別勾選改變後，就地重繪這一列的料號下拉（不整列重畫，避免標籤面板被收合打斷使用者連續勾選）：
+        // 勾到必備類別就拿掉「共用（全部）」選項逼選料號；取消勾選必備類別則恢復「共用」選項
+        function oaRefreshRowPartSelect($row, ids) {
+            var $sel = $row.find('.oa-part-select');
+            if (!$sel.length) return; // 訂單附件/單一料號情境沒有這顆下拉，略過
+            var parts = opAttachPartsList || [];
+            var reqIds = (orderAttachCats || []).filter(function(c) { return c.required; }).map(function(c) { return String(c.id); });
+            var hasReq = (ids || []).some(function(id) { return reqIds.indexOf(String(id)) !== -1; });
+            var curVal = $sel.val() || '';
+            var needPick = hasReq && !curVal;
+            var optsHtml = (hasReq
+                ? '<option value=""' + (needPick ? ' selected disabled' : '') + '>請選擇料號…</option>'
+                : '<option value="">共用（全部）</option>') +
+                parts.map(function(p) { return '<option value="' + escapeHtml(p) + '">' + escapeHtml(p) + '</option>'; }).join('');
+            $sel.html(optsHtml);
+            if (curVal && parts.indexOf(curVal) !== -1) $sel.val(curVal);
+            $sel.css({'border-color': needPick ? '#DD5138' : '', 'color': needPick ? '#DD5138' : ''});
+            $row.find('.oa-part-required-hint').remove();
+            if (hasReq) $sel.after(' <span class="oa-part-required-hint" style="font-size:9px;color:#DD5138;" title="必備類別附件不可設為共用，須連結單一料號">*必選料號</span>');
         }
 
         // ── 事件委派（訂單附件／OP附件共用；一次綁定即可）──────────────────
@@ -7195,6 +7224,7 @@ foreach($dCounts as $c) {
                 $row.find('.oa-tag-badge').html('<span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;">' + escapeHtml(nameStr) + '</span>');
                 $row.css('background', '');
                 oaSyncCachedFile(attId, nameStr, ids.join(','));
+                oaRefreshRowPartSelect($row, ids);
             }, 'json');
         });
         $(document).on('click', '.oa-file-del', function() {
@@ -7955,15 +7985,37 @@ foreach($dCounts as $c) {
             });
             opAttachMultiPart = parts.length > 1;
             opAttachPartsList = parts;
-            var $sel = $('#op-attach-part').empty();
             if (parts.length > 1) {
-                $sel.append('<option value="">共用（全部）</option>');
-                parts.forEach(function(p) { $sel.append('<option value="' + escapeHtml(p) + '">' + escapeHtml(p) + '</option>'); });
                 $('#op-attach-part-wrap').css('display', 'inline-flex');
+                opAttachRebuildPartSelect();
             } else {
                 $('#op-attach-part-wrap').hide();
             }
         }
+        // 目前預設標籤是否勾到必備類別（沿用報價單 required_attach_cats）
+        function opAttachHasReqCatChecked() {
+            var reqIds = (orderAttachCats || []).filter(function(c) { return c.required; }).map(function(c) { return String(c.id); });
+            if (!reqIds.length) return false;
+            var hit = false;
+            $('#op-attach-cats input:checked').each(function() { if (reqIds.indexOf($(this).val()) !== -1) hit = true; });
+            return hit;
+        }
+        // 上傳前的「對應料號」下拉：預設標籤勾到必備類別時，比照報價單附件標籤功能拿掉「共用（全部）」選項，
+        // 逼使用者上傳前就先指定料號（而不是等存檔時才被擋下）
+        function opAttachRebuildPartSelect() {
+            var parts = opAttachPartsList || [];
+            if (parts.length <= 1) return;
+            var $sel = $('#op-attach-part');
+            var curVal = $sel.val() || '';
+            var hasReq = opAttachHasReqCatChecked();
+            var optsHtml = (hasReq
+                ? '<option value="" disabled' + (curVal ? '' : ' selected') + '>請選擇料號…</option>'
+                : '<option value="">共用（全部）</option>') +
+                parts.map(function(p) { return '<option value="' + escapeHtml(p) + '">' + escapeHtml(p) + '</option>'; }).join('');
+            $sel.html(optsHtml);
+            if (curVal && parts.indexOf(curVal) !== -1) $sel.val(curVal);
+        }
+        $(document).on('change', '#op-attach-cats input[type="checkbox"]', opAttachRebuildPartSelect);
         // 必備類別（reqCats，沿用報價單 required_attach_cats）在批次真的有多種料號時不可設為共用；
         // 只有單一料號時已自動視為該料號，不會落入這個問題
         function oaHasUnboundRequired(files) {
@@ -7993,6 +8045,10 @@ foreach($dCounts as $c) {
             var presetCats = [];
             $('#op-attach-cats input:checked').each(function() { presetCats.push($(this).val()); });
             var linkPart = $('#op-attach-part-wrap').is(':visible') ? $('#op-attach-part').val() : '';
+            if ($('#op-attach-part-wrap').is(':visible') && opAttachHasReqCatChecked() && !linkPart) {
+                showOrderAlert('預設標籤含必備類別，這批有多種料號，請先在「對應料號」選好要連結的料號再上傳。');
+                return;
+            }
             var tasks = [];
             Array.prototype.forEach.call(fileList, function(file) {
                 var fd = new FormData();
