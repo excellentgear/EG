@@ -1647,6 +1647,7 @@ $can_op_convert            = $can_create;                               // OP轉
 $can_view_amount           = true;                                      // 金額顯示（舊制從未限制過，一律可見）
 $can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
 $can_designer_assign_cog   = ($permission_code === 'A');                // 指派設計旁的設定齒輪（無專屬功能碼，沿用管理員門檻）
+$can_master_edit           = ($permission_code === 'A');                // 前往料號主檔編輯按鈕（舊制沿用管理員門檻；RBAC 啟用後改走 ot_master_edit）
 
 // 是否顯示操作欄位 (只有 R 權限時不顯示)
 $show_op_col = ($can_create || $can_update);
@@ -1761,6 +1762,7 @@ if ($OT_USE_RBAC) {
     $can_view_amount            = ot_hasF('ot_view_amount');
     $can_keyway_calc            = ot_hasF('ot_keyway_calc');
     $can_designer_assign_cog   = $IS_OT_RBAC_ADMIN;
+    $can_master_edit           = ot_hasF('ot_master_edit');
     $show_op_col      = ($can_create || $can_update);
     $show_gear_tool   = $IS_OT_RBAC_ADMIN || ot_hasF('ot_gear_calc'); // 齒輪計算改由角色控制
     if (!$IS_OT_RBAC_ADMIN && !ot_hasF('ot_view')) {
@@ -2716,6 +2718,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                             <i class="fa fa-file-text-o"></i><?= $_dn_total ?><?= $_dn_img ? '<i class="fa fa-image" style="font-size:8px;margin-left:1px;"></i>' : '' ?>
                         </button>
                         <?php endif; ?>
+                        <?php endif; ?>
+                        <?php if ($can_master_edit): ?>
                         <?php if (!empty($order['d_id_ID'])): ?>
                         <a href="../../views/pages/master_data_management.php?open_part=<?= intval($order['d_id_ID']) ?>&part_search=<?= urlencode($order['d_id'] ?? '') ?>" target="_blank"
                             class="btn btn-xs" style="padding:0 4px;font-size:10px;line-height:16px;background:#f0fff8;border:1px solid #1ABB9C;color:#1ABB9C;flex-shrink:0;" title="前往料號主檔編輯">
@@ -10009,7 +10013,7 @@ foreach($dCounts as $c) {
                             <div class="gear-out-row"><span class="gear-out-label">理論跨齒厚 Wk</span><span class="gear-output-val" id="go-wk">—</span></div>
                             <div class="gear-out-row" id="go-row-wk-bmin"><span class="gear-out-label">最小可量測齒寬 b<small style="color:#999;font-weight:400;">（跨此齒數所需工件厚度）</small></span><span class="gear-output-val" id="go-wk-bmin">—</span></div>
                             <div class="gear-out-row" id="go-row-cust-wk" style="display:none;"><span class="gear-out-label">客戶跨齒厚下限 / 上限</span><span class="gear-output-val" id="go-cust-wk-range">—</span></div>
-                            <div class="gear-out-row"><span class="gear-out-label">建議滾齒跨齒厚（依標準）</span><span class="gear-output-val val-ok" id="go-rechob-wk" style="font-weight:700;">—</span></div>
+                            <div class="gear-out-row"><span class="gear-out-label" id="go-rechob-wk-lbl">建議滾齒跨齒厚（依標準）</span><span class="gear-output-val val-ok" id="go-rechob-wk" style="font-weight:700;">—</span></div>
                             <div class="gear-out-row" id="go-row-cust-rh-wk" style="display:none;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒跨齒厚 Wk</span><span class="gear-output-val" id="go-cust-rh-wk" style="font-weight:700;color:#6a1b9a;">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label">預留量（模數/外徑取大）</span><span class="gear-output-val" id="go-allow-info">—</span></div>
                         </div>
@@ -11159,6 +11163,7 @@ foreach($dCounts as $c) {
         gSetText('go-m-lbl',  _gearInternal ? '跨銷值 M（內量 dc−dp）' : '標準跨珠值 M');
         gSetText('go-m-title',_gearInternal ? '跨銷值 M（內齒）' : '跨珠值 M');
         gSetText('go-rechob-m-range-lbl', _gearInternal ? '跨銷值 M 下/上限' : '建議滾齒 M 下/上限（依標準跨珠值 M 換算）');
+        gSetText('go-rechob-wk-lbl', '建議滾齒跨齒厚（依標準）');
         var blk = document.getElementById('go-block-wk'); if (blk) blk.style.display = _gearInternal ? 'none' : '';
         var rm  = document.getElementById('go-row-rechob-m'); if (rm) rm.style.display = _gearInternal ? 'none' : '';
         ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-wk-bmin','go-rechob-wk','go-allow-info','go-dp-used','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range'].forEach(function(id){ setOut(id,''); });
@@ -11324,9 +11329,27 @@ foreach($dCounts as $c) {
             }
         }
 
+        // 客戶提供跨齒厚（選填）：有填客戶跨齒厚 Wk 或公差才視為有效客戶規格
+        // 基準值：有填「客戶跨齒厚 Wk」用之，否則用理論跨齒厚 Wk
+        var cwu = gFloat('g-cust-wtol-up'), cwd = gFloat('g-cust-wtol-dn');
+        var custWkNom = gFloat('g-cust-wk');
+        var custWkBase = (custWkNom !== null) ? custWkNom : Wk;
+        var custWkHasData = (custWkNom !== null || cwu !== null || cwd !== null);
+        // 客戶跨齒厚上限（有客戶上公差或客戶 Wk 公稱才算得出上限；僅填下公差則無上限可用）
+        var custWkUpper = (cwu !== null) ? gRound(custWkBase + cwu, 5) : (custWkNom !== null ? custWkNom : null);
+        // 有客戶跨齒厚上限時，建議滾齒跨齒厚改依客戶規格；否則沿用標準理論值
+        var useCustRechob = (custWkUpper !== null);
+        gSetText('go-rechob-wk-lbl', useCustRechob ? '建議滾齒跨齒厚（依客戶）' : '建議滾齒跨齒厚（依標準）');
+
         var rec_hob_Wk = null, x_rec = null, M_rec = null, M_rec_up = null, M_rec_dn = null;
         if (!is_boss && allow_val > 0) {
-            rec_hob_Wk = gRound(Wk_actual + allow_val, 5);
+            if (useCustRechob) {
+                // 客戶跨齒厚上限 → 補正上公差至 -0.02 基準（客戶未填上公差視為 0）→ 加預留量
+                var custWkOffset = (cwu !== null ? cwu : 0) - (-0.02);
+                rec_hob_Wk = gRound(custWkUpper + custWkOffset + allow_val, 5);
+            } else {
+                rec_hob_Wk = gRound(Wk_actual + allow_val, 5);
+            }
             var A = mn * Math.cos(alpha_n) * (PI * (k_val - 0.5) + z * inv_alpha_t);
             var B = 2 * mn * Math.sin(alpha_n);
             if (B !== 0) {
@@ -11364,18 +11387,14 @@ foreach($dCounts as $c) {
         } else {
             setOut('go-wk-bmin', '≥ ' + fmtNum(gRound(b_min, 3), 3) + ' mm', 'val-ok');
         }
-        // 客戶提供跨齒厚（選填）：有填客戶跨齒厚 Wk 或公差才顯示上下限列
-        // 基準值：有填「客戶跨齒厚 Wk」用之，否則用理論跨齒厚 Wk
-        var cwu = gFloat('g-cust-wtol-up'), cwd = gFloat('g-cust-wtol-dn');
-        var custWkNom = gFloat('g-cust-wk');
-        var custWkBase = (custWkNom !== null) ? custWkNom : Wk;
+        // 客戶提供跨齒厚（選填）：有填客戶跨齒厚 Wk 或公差才顯示上下限列（cwu/cwd/custWkNom/custWkUpper 已於上方讀取）
         var custWkRow = document.getElementById('go-row-cust-wk');
         if (custWkRow) {
-            if (custWkNom !== null || cwu !== null || cwd !== null) {
+            if (custWkHasData) {
                 custWkRow.style.display = '';
                 setOut('go-cust-wk-range',
                     (cwd !== null ? fmtNum(gRound(custWkBase + cwd, 5), 5) : (custWkNom !== null ? fmtNum(custWkNom,5) : '—')) + '  ~  ' +
-                    (cwu !== null ? fmtNum(gRound(custWkBase + cwu, 5), 5) : (custWkNom !== null ? fmtNum(custWkNom,5) : '—')), 'val-ok');
+                    (custWkUpper !== null ? fmtNum(custWkUpper, 5) : '—'), 'val-ok');
             } else {
                 custWkRow.style.display = 'none';
             }
@@ -11849,6 +11868,7 @@ foreach($dCounts as $c) {
         var gxEl = document.getElementById('g-x');
         if (!gxEl) return;
         gxEl.value = fmtNum(x, 5);
+        calcGearM1();
         var m1btn = document.querySelector('.gear-tab-btn[data-tab="m1"]');
         switchGearTab('m1', m1btn);
         setTimeout(function(){ gxEl.focus(); gxEl.select(); }, 120);
@@ -11862,6 +11882,7 @@ foreach($dCounts as $c) {
         var gxEl = document.getElementById('g-x');
         if (!gxEl) return;
         gxEl.value = fmtNum(x, 5);
+        calcGearM1();
         var m1btn = document.querySelector('.gear-tab-btn[data-tab="m1"]');
         switchGearTab('m1', m1btn);
         setTimeout(function(){ gxEl.focus(); gxEl.select(); }, 120);
