@@ -635,12 +635,16 @@ switch ($action) {
                             WHERE bopm_d.bom = bom.bom ORDER BY ot_d.Delivery_date ASC LIMIT 1)
                        ) AS Delivery_date,
                        (SELECT COUNT(DISTINCT bi.bom_sn) FROM bom_ing bi WHERE bi.bom = bom.bom AND bi.processing_state != 'skip') AS process_count,
-                       (SELECT COUNT(DISTINCT bi.bom_sn) FROM bom_ing bi WHERE bi.bom = bom.bom AND bi.processing_state != 'skip' AND bi.bom_sn <= (
+                       -- 「目前製程/進度」只採計已有實際活動(發包或QC)的製程；全部都還沒開始時，
+                       -- 內層子查詢會是NULL、COALESCE成0，代表目前完成0關，不能誤判成「排序最後一關」(GREATEST同為'0000-00-00'時bom_sn DESC的tie-break陷阱)
+                       (SELECT COUNT(DISTINCT bi.bom_sn) FROM bom_ing bi WHERE bi.bom = bom.bom AND bi.processing_state != 'skip' AND bi.bom_sn <= COALESCE((
                            SELECT bi2.bom_sn FROM bom_ing bi2 WHERE bi2.bom = bom.bom AND bi2.processing_state != 'skip'
+                             AND (bi2.outsource_date IS NOT NULL OR bi2.QC_check_date IS NOT NULL)
                            ORDER BY GREATEST(COALESCE(bi2.outsource_date,'0000-00-00'), COALESCE(bi2.QC_check_date,'0000-00-00')) DESC, bi2.bom_sn DESC LIMIT 1
-                       )) AS current_step,
+                       ), 0)) AS current_step,
                        (SELECT pn.ProcessName FROM bom_ing bi3 LEFT JOIN process_no pn ON pn.ProcessNo = bi3.process_no
                           WHERE bi3.bom = bom.bom AND bi3.processing_state != 'skip'
+                            AND (bi3.outsource_date IS NOT NULL OR bi3.QC_check_date IS NOT NULL)
                           ORDER BY GREATEST(COALESCE(bi3.outsource_date,'0000-00-00'), COALESCE(bi3.QC_check_date,'0000-00-00')) DESC, bi3.bom_sn DESC LIMIT 1) AS latest_process_name,
                        COALESCE(
                          (SELECT ot.Order_oo FROM bom_order_process_map bopm JOIN order_track ot ON ot.Order_id = bopm.order_id WHERE bopm.bom = bom.bom LIMIT 1),
