@@ -676,12 +676,13 @@ function rowToTr(item, maxProc, priceMap){
         ? '<div class="ocq-price">' + (totalUnitPrice > 0 ? '<span style="color:#0a6;font-weight:bold;">$'+fmtPrice(totalUnitPrice)+'</span>' : '<span style="color:#ccc;">$--</span>')
           + (noPriceCount > 0 ? ' <span style="color:#aaa;font-size:10px;">('+noPriceCount+'關無價)</span>' : '') + '</div>' : '';
 
-    var custSpan = '<span class="ocq-fillable" data-field="customer" title="雙擊帶入客戶篩選">'+esc(item.client_name_display||'')+'</span>';
-    var bomSpan = '<span class="ocq-fillable ocq-nowrap" data-field="bom" title="雙擊帶入BOM/料號篩選">'+esc(item.bom)+'</span>';
-    var didSpan = item.d_id ? '<span class="ocq-fillable" data-field="bom" title="雙擊帶入BOM/料號篩選">'+esc(item.d_id)+'</span>' : '';
-    var tds = '<td>'+custSpan+'</td>'
-        + '<td class="t-left"><figure class="'+cc+'"></figure>'+bomSpan+closedInfo+'</td>'
-        + '<td class="t-left">'+didSpan+priceHtml+'</td>'
+    // 整格(含padding空白處)都要能雙擊帶入篩選，不能只有文字字元本身的範圍才有反應（客戶/料號常是短字串，
+    // 文字四周空白很大，只綁在文字span上很容易點在空白處沒反應）；值改用 data-val(URI編碼) 傳遞，
+    // 避免客戶名稱等內容含特殊字元時打斷HTML屬性字串。
+    var custTd = '<td class="ocq-fillable" data-field="customer" data-val="'+encodeURIComponent(item.client_name_display||'')+'" title="雙擊帶入客戶篩選">'+esc(item.client_name_display||'')+'</td>';
+    var bomTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.bom||'')+'" title="雙擊帶入BOM/料號篩選"><figure class="'+cc+'"></figure><span class="ocq-nowrap">'+esc(item.bom)+'</span>'+closedInfo+'</td>';
+    var didTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.d_id||'')+'" title="雙擊帶入BOM/料號篩選">'+esc(item.d_id||'')+priceHtml+'</td>';
+    var tds = custTd + bomTd + didTd
         + '<td>'+esc(item.Qty||'')+'</td>'
         + '<td>'+esc(item.Delivery_date ? egFmtDate(item.Delivery_date) : '')+'</td>'
         + '<td>'+esc(item.sales_name||'')+'</td>';
@@ -794,7 +795,8 @@ $('#pageSizeSel').on('change', function(){ loadList(1); });
 // 雙擊表格中的客戶／BOM／料號 → 帶入對應篩選框並立即查詢
 $('#ocqTbody').on('dblclick', '.ocq-fillable', function(){
     var field = $(this).data('field');
-    var val = $.trim($(this).text());
+    var raw = $(this).attr('data-val') || '';
+    var val = $.trim(decodeURIComponent(raw));
     if (!val) return;
     if (field === 'customer') $('#fCustomer').val(val);
     else if (field === 'bom') $('#fBom').val(val);
