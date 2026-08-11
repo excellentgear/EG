@@ -172,6 +172,20 @@ try {
     <div class="m-foot"><button class="btn btn-default" onclick="closeMask('custSwitchMask')">關閉</button></div>
 </div></div>
 
+<!-- 快速綁定料號ID（比照 NewOrder_Track.php 快速綁定：自動判斷客戶與料號，Enter 即確認綁定） -->
+<div class="va-mask" id="quickBindPartMask"><div class="va-modal">
+    <div class="m-head"><span><i class="fa fa-link"></i> 快速綁定料號ID</span><span class="m-close" onclick="closeMask('quickBindPartMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#888;margin-bottom:8px;">料號原文：<b id="qbpOrigText"></b>　所屬客戶：<span id="qbpClientName"></span></div>
+        <div id="qbpLoading" style="text-align:center;padding:15px;"><i class="fa fa-spinner fa-spin"></i></div>
+        <div id="qbpResultArea" style="display:none;"></div>
+    </div>
+    <div class="m-foot">
+        <button class="btn btn-default" onclick="closeMask('quickBindPartMask')">取消</button>
+        <button class="btn btn-primary" id="qbpSaveBtn" style="display:none;" onclick="saveQuickBindPart()"><i class="fa fa-save"></i> 確認綁定</button>
+    </div>
+</div></div>
+
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/fastclick.js"></script>
@@ -292,8 +306,17 @@ function inferSubTagsFromProcessIds(processIds) {
     return result;
 }
 
+function findQuoteIdByItemId(itemId) {
+    let qid = null;
+    Object.keys(qtItemsCache).forEach(function(k) {
+        if (qtItemsCache[k].some(function(it){ return String(it.item_id) === String(itemId); })) qid = k;
+    });
+    return qid;
+}
+
 function drawItems(qid, items) {
-    let html = '<table class="qt-item-table"><thead><tr><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th style="width:230px;">料號ID綁定</th><th style="min-width:260px;">製程</th></tr></thead><tbody>';
+    const row = qtData.find(function(r){ return String(r.quote_id) === String(qid); });
+    let html = '<table class="qt-item-table"><thead><tr><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th style="width:170px;">料號ID綁定</th><th style="min-width:260px;">製程</th></tr></thead><tbody>';
     items.forEach(function(it) {
         const boundText = it.d_setting_d_id ? ('<span class="qt-badge ok">已綁定 #' + it.d_setting_d_id + '</span>') : '<span class="qt-badge warn">未綁定</span>';
         const procIds = (it.processes || '').split(',').filter(function(v){return v!=='';});
@@ -310,7 +333,7 @@ function drawItems(qid, items) {
             '<td>' + (it.specification || '') + '</td>' +
             '<td>' + it.quantity + '</td>' +
             '<td>' + it.unit_price + '</td>' +
-            '<td>' + boundText + (CAN_EDIT ? renderPartBindWidget(it) : '') + '</td>' +
+            '<td>' + boundText + (CAN_EDIT ? renderPartBindWidget(it, row) : '') + '</td>' +
             '<td>' + (CAN_EDIT ? renderProcWidget(it.item_id) : '') + '</td>' +
             '</tr>';
     });
@@ -318,11 +341,12 @@ function drawItems(qid, items) {
     $('#qtCardBody' + qid).html(html);
 }
 
-function renderPartBindWidget(it) {
-    return ' <div class="qt-search-box" style="margin-top:3px;">' +
-        '<input type="text" class="form-control input-sm" placeholder="搜尋料號ID…" data-item="' + it.item_id + '" onkeyup="partSearchKeyup(this)" autocomplete="off">' +
-        '<div class="qt-search-results"></div>' +
-        '</div>';
+function renderPartBindWidget(it, row) {
+    const cid = row ? (row.client_id || '') : '';
+    const cname = row ? (row.client_name || '') : '';
+    return ' <button type="button" class="btn btn-default btn-xs" style="margin-top:3px;" ' +
+        'onclick="openQuickBindPart(' + it.item_id + ',\'' + String(it.product_id).replace(/'/g,"") + '\',\'' + cid + '\',\'' + cname.replace(/'/g,"") + '\')">' +
+        '<i class="fa fa-link"></i> ' + (it.d_setting_d_id ? '重新綁定' : '快速綁定') + '</button>';
 }
 
 function renderProcWidget(itemId) {
@@ -421,78 +445,106 @@ function refreshStatsOnly(itemId) {
     $('.qt-card[data-qid="' + qid + '"] .qt-badge-cell').html(badgeHtml);
 }
 
-let partSearchTimer = null;
-function partSearchKeyup(input) {
-    const $input = $(input);
-    const $results = $input.siblings('.qt-search-results');
-    const kw = $input.val().trim();
-    clearTimeout(partSearchTimer);
-    if (kw.length < 1) { $results.hide(); return; }
-    partSearchTimer = setTimeout(function() {
-        $.get(API_URL, { action: 'search_data', type: 'part', term: kw }, function(res) {
-            let h = '';
-            if (res.success && res.data.length) {
-                res.data.forEach(function(p) {
-                    h += '<div class="qt-sr-item" onclick="bindPart(' + $input.data('item') + ',' + p.d_id + ',\'' + p.D_Setting_Id.replace(/'/g,"") + '\',this)">' +
-                        p.D_Setting_Id + (p.Client_Name ? '　<small style="color:#aaa">' + p.Client_Name + '</small>' : '') + '</div>';
-                });
-            } else {
-                h += '<div style="padding:5px 8px;color:#999;font-size:12px;">查無結果</div>';
-            }
-            h += '<div class="qt-sr-new" onclick="openNewPartForm(' + $input.data('item') + ',this)"><i class="fa fa-plus"></i> 新增料號「' + kw.replace(/'/g,"") + '」</div>';
-            $results.html(h).show();
+// ── 快速綁定料號ID：比照 NewOrder_Track.php 快速綁定 Modal，自動判斷客戶與料號 ──
+let qbpItemId = null, qbpClientId = null, qbpSelectedPart = null, qbpParts = [];
+
+function openQuickBindPart(itemId, productId, clientId, clientName) {
+    qbpItemId = itemId; qbpClientId = clientId || null; qbpSelectedPart = null; qbpParts = [];
+    $('#qbpOrigText').text(productId);
+    $('#qbpClientName').text(clientName || '（未設定）');
+    $('#qbpLoading').show();
+    $('#qbpResultArea').hide().empty();
+    $('#qbpSaveBtn').hide();
+    openMask('quickBindPartMask');
+    qbpLookup(productId);
+}
+
+function qbpLookup(term) {
+    const params = { action: 'search_data', type: 'part', term: term };
+    if (qbpClientId) params.customer_id = qbpClientId;
+    $.get(API_URL, params, function(res) {
+        const parts = res.success ? res.data : [];
+        if (parts.length === 0 && qbpClientId) {
+            // 此客戶底下找不到，退而求其次做全範圍搜尋（可能是屬於其他客戶或尚未綁客戶的料號）
+            $.get(API_URL, { action: 'search_data', type: 'part', term: term }, function(res2) {
+                $('#qbpLoading').hide();
+                renderQbpResults(res2.success ? res2.data : [], term, true);
+            });
+        } else {
+            $('#qbpLoading').hide();
+            renderQbpResults(parts, term, false);
+        }
+    });
+}
+
+function renderQbpResults(parts, term, isFallback) {
+    qbpParts = parts;
+    const $area = $('#qbpResultArea').empty().show();
+    let html = '';
+    if (isFallback) html += '<div style="color:#a2703a;font-size:11px;margin-bottom:6px;">此客戶底下找不到符合的料號，以下是全範圍搜尋結果（可能屬於其他客戶）：</div>';
+
+    if (parts.length === 0) {
+        html += '<div style="color:#999;font-size:12px;margin-bottom:8px;">找不到符合的料號</div>';
+    } else if (parts.length === 1) {
+        qbpSelectedPart = parts[0];
+        html += '<div><span class="label label-success"><i class="fa fa-check"></i> ' + parts[0].D_Setting_Id + (parts[0].Client_Name ? (' (' + parts[0].Client_Name + ')') : '') + '</span></div>';
+    } else {
+        html += '<div>';
+        parts.forEach(function(p, i) {
+            html += '<button type="button" class="btn btn-default btn-xs qbp-part-btn" style="margin:2px;" data-i="' + i + '">' + p.D_Setting_Id + (p.Client_Name ? (' (' + p.Client_Name + ')') : '') + '</button>';
         });
-    }, 300);
-}
+        html += '</div>';
+    }
 
-function openNewPartForm(itemId, el) {
-    const $results = $(el).closest('.qt-search-results');
-    const kw = $results.siblings('input').val().trim();
-    let qid = null;
-    Object.keys(qtItemsCache).forEach(function(k) {
-        if (qtItemsCache[k].some(function(it){ return String(it.item_id) === String(itemId); })) qid = k;
+    html += '<div class="qt-quickform">' +
+        '<input type="text" class="form-control input-sm qbp-new-no" placeholder="料號" value="' + String(term).replace(/"/g,'') + '">' +
+        '<button type="button" class="btn btn-success btn-xs" onclick="submitQbpNewPart()"><i class="fa fa-plus"></i> 找不到？新增此料號' + (qbpClientId ? '（綁此客戶）' : '') + '</button>' +
+        '<div class="qbp-new-err" style="color:#c0392b;font-size:11px;margin-top:3px;"></div>' +
+        '</div>';
+
+    $area.html(html);
+    $area.find('.qbp-part-btn').on('click', function() {
+        $area.find('.qbp-part-btn').removeClass('btn-primary').addClass('btn-default');
+        $(this).removeClass('btn-default').addClass('btn-primary');
+        qbpSelectedPart = qbpParts[$(this).data('i')];
     });
-    const row = qtData.find(function(r){ return String(r.quote_id) === String(qid); });
-    const custId = row ? row.client_id : null;
-    $results.html(
-        '<div class="qt-quickform" style="position:relative;">' +
-        '<input type="text" class="form-control input-sm qt-np-no" placeholder="料號" value="' + kw.replace(/"/g,'') + '">' +
-        '<input type="text" class="form-control input-sm qt-np-spec" placeholder="規格描述（選填）">' +
-        (custId ? ('<div style="font-size:11px;color:#888;margin-bottom:3px;">關聯客戶：' + (row.client_name || custId) + '</div>')
-                : '<div style="font-size:11px;color:#c0392b;margin-bottom:3px;">此報價單尚未設定客戶，新料號將不綁客戶</div>') +
-        '<button class="btn btn-success btn-xs" onclick="submitNewPart(' + itemId + ',\'' + (custId||'') + '\',this)"><i class="fa fa-save"></i> 建立並綁定</button>' +
-        '<div class="qt-np-err" style="color:#c0392b;font-size:11px;margin-top:3px;"></div>' +
-        '</div>'
-    ).show();
+    $('#qbpSaveBtn').toggle(parts.length > 0);
 }
 
-function submitNewPart(itemId, custId, el) {
-    const $box = $(el).closest('.qt-quickform');
-    const partNo = $box.find('.qt-np-no').val().trim();
-    const spec   = $box.find('.qt-np-spec').val().trim();
-    if (!partNo) { $box.find('.qt-np-err').text('料號不可為空'); return; }
-    $.post(API_URL, { action: 'save_part_info', part_no: partNo, type: 'N', customer_id: custId, remark: spec }, function(res) {
-        if (!res.success) { $box.find('.qt-np-err').text(res.message || '建立失敗'); return; }
-        bindPart(itemId, res.d_id, partNo, null);
+function submitQbpNewPart() {
+    const $box = $('.qt-quickform');
+    const no = $box.find('.qbp-new-no').val().trim();
+    if (!no) { $box.find('.qbp-new-err').text('料號不可為空'); return; }
+    $.post(API_URL, { action: 'save_part_info', part_no: no, type: 'N', customer_id: qbpClientId || '' }, function(res) {
+        if (!res.success) { $box.find('.qbp-new-err').text(res.message || '建立失敗'); return; }
+        qbpSelectedPart = { d_id: res.d_id, D_Setting_Id: no };
+        saveQuickBindPart();
     });
 }
 
-function bindPart(itemId, dId, dSettingId, el) {
-    $.post(API_URL, { action: 'quick_bind_item_dsetting', item_id: itemId, d_id: dId }, function(res) {
+function saveQuickBindPart() {
+    if (!qbpSelectedPart) return;
+    $.post(API_URL, { action: 'quick_bind_item_dsetting', item_id: qbpItemId, d_id: qbpSelectedPart.d_id }, function(res) {
         if (!res.success) { alert('綁定失敗：' + res.message); return; }
         Object.keys(qtItemsCache).forEach(function(qid) {
-            qtItemsCache[qid].forEach(function(it) { if (String(it.item_id) === String(itemId)) { it.d_setting_d_id = dId; it.product_id = dSettingId; } });
+            qtItemsCache[qid].forEach(function(it) { if (String(it.item_id) === String(qbpItemId)) { it.d_setting_d_id = qbpSelectedPart.d_id; it.product_id = res.product_id || qbpSelectedPart.D_Setting_Id; } });
         });
-        if (el) $(el).closest('.qt-search-results').hide();
-        // 重繪該項目所在的整張卡片（品項ID已變動）
-        let qid = null;
-        Object.keys(qtItemsCache).forEach(function(k) {
-            if (qtItemsCache[k].some(function(it){ return String(it.item_id) === String(itemId); })) qid = k;
-        });
+        closeMask('quickBindPartMask');
+        const qid = findQuoteIdByItemId(qbpItemId);
         if (qid) drawItems(qid, qtItemsCache[qid]);
-        refreshStatsOnly(itemId);
+        refreshStatsOnly(qbpItemId);
     });
 }
+
+// Enter 鍵＝確認綁定（比照 NewOrder_Track.php 快速綁定 Modal；多選未選定時不觸發）
+$('#quickBindPartMask').on('keydown', function(e) {
+    if (e.key !== 'Enter') return;
+    const $btn = $('#qbpSaveBtn');
+    if (!$btn.is(':visible')) return;
+    if (qbpParts.length > 1 && !qbpSelectedPart) return;
+    e.preventDefault();
+    saveQuickBindPart();
+});
 
 function openCustSwitch(quoteId, quoteNo, curName) {
     custSwitchQuoteId = quoteId;
@@ -500,6 +552,7 @@ function openCustSwitch(quoteId, quoteNo, curName) {
     $('#custSwitchCurrent').text(curName || '（未設定）');
     $('#custSwitchKw').val('');
     $('#custSwitchResults').hide().empty();
+    custSwitchResults = [];
     $('#custNewForm').hide();
     $('#custNewId, #custNewName').val('');
     $('#custNewErr').text('');
@@ -507,19 +560,27 @@ function openCustSwitch(quoteId, quoteNo, curName) {
 }
 
 let custSearchTimer = null;
-$('#custSwitchKw').on('keyup', function() {
+let custSwitchResults = [];
+$('#custSwitchKw').on('keyup', function(e) {
+    if (e.key === 'Enter') return; // Enter 由下方 keydown 統一處理，避免重複觸發搜尋
     const kw = $(this).val().trim();
     clearTimeout(custSearchTimer);
+    custSwitchResults = [];
     if (kw.length < 1) { $('#custSwitchResults').hide(); $('#custNewForm').hide(); return; }
     custSearchTimer = setTimeout(function() {
         $.get(API_URL, { action: 'search_data', type: 'customer', term: kw }, function(res) {
             const $r = $('#custSwitchResults');
             if (res.success && res.data.length) {
+                custSwitchResults = res.data;
                 let h = '';
-                res.data.forEach(function(c) {
-                    h += '<div class="qt-sr-item" onclick="switchCustomer(\'' + c.customer_id + '\',\'' + c.customer.replace(/'/g,"") + '\')">' + c.customer + '　<small style="color:#aaa">' + c.customer_id + '</small></div>';
+                res.data.forEach(function(c, i) {
+                    h += '<div class="qt-sr-item" data-i="' + i + '">' + c.customer + '　<small style="color:#aaa">' + c.customer_id + '</small></div>';
                 });
                 $r.html(h).show();
+                $r.find('.qt-sr-item').on('click', function() {
+                    const c = custSwitchResults[$(this).data('i')];
+                    switchCustomer(c.customer_id, c.customer);
+                });
                 $('#custNewForm').hide();
             } else {
                 $r.html('<div style="padding:5px 8px;color:#999;font-size:12px;">查無結果</div>').show();
@@ -528,6 +589,17 @@ $('#custSwitchKw').on('keyup', function() {
             }
         });
     }, 300);
+});
+
+// Enter 鍵＝確認（唯一搜尋結果或已填妥新建表單時直接送出，比照 NewOrder_Track.php 快速綁定 Modal）
+$('#custSwitchMask').on('keydown', function(e) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if ($('#custNewForm').is(':visible')) {
+        if ($('#custNewId').val().trim() && $('#custNewName').val().trim()) submitNewCustomer();
+    } else if (custSwitchResults.length === 1) {
+        switchCustomer(custSwitchResults[0].customer_id, custSwitchResults[0].customer);
+    }
 });
 
 function submitNewCustomer() {
