@@ -40,7 +40,7 @@ $isAdmin = training_perms($db, $trUser)['isAdmin'];
 $signer  = training_request_signer($db, $req['dept_id'] !== null ? (int)$req['dept_id'] : null, (int)$req['user_id']);
 $canSign = $req['status'] === 'submitted' && $appr && $appr['status'] === 'pending' && ($isAdmin || ($signer && (int)$signer['id'] === $uid));
 $company = eg_company_full_name($db);
-$docNo   = training_as_doc_no($db, 'request');
+$docNo   = training_as_doc_no($db, 'request', $req['apply_date'] ?: null);
 $statusLabel = ['draft'=>'草稿','submitted'=>'待核准','approved'=>'已核准','rejected'=>'已駁回','converted'=>'已核准（已轉為訓練計畫）'];
 function trv_esc($s){ return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 ?>
