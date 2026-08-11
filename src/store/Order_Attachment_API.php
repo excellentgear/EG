@@ -44,6 +44,13 @@ function _oaIsAdmin(PDO $pdo, int $uid): bool {
     try { return rbac_has(rbac_user_features($pdo, $uid), 'all'); }
     catch (Exception $e) { return true; }
 }
+// 刪除他人附件（ot_attach_delete，角色設定內可另外指派）：舊制沒有這麼細的字元可對應，只能靠 RBAC 角色。
+// 查詢失敗一律當作沒有這項額外授權（跟 _oaIsAdmin/_oaCanEdit 故意放行避免鎖死的方向相反——這是新增的
+// 破例授權，寧可查不到就不給，不能反過來變成大家都能刪別人的附件）。
+function _oaHasAttachDelete(PDO $pdo, int $uid): bool {
+    try { return rbac_has(rbac_user_features($pdo, $uid), 'ot_attach_delete'); }
+    catch (Exception $e) { return false; }
+}
 
 // 本頁使用的附件標籤子集（避免共用類別表全部~16筆一次列出很混亂）；
 // 未設定過（system_settings 沒有這筆或空字串）＝尚未客製化，顯示全部類別
@@ -207,14 +214,14 @@ switch ($action) {
         if ($orderId <= 0 && $batchKey === '') { echo json_encode(['success'=>true,'files'=>[]]); break; }
         $rows = [];
         if ($orderId > 0) {
-            $stmt = $pdo->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.category_ids, a.linked_part_no, a.status,
+            $stmt = $pdo->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.category_ids, a.linked_part_no, a.status, a.uploaded_by,
                                           DATE_FORMAT(a.uploaded_at,'%Y-%m-%d %H:%i') AS uploaded_at
                                    FROM order_attachments a WHERE a.order_id=? AND a.status='active' ORDER BY a.id");
             $stmt->execute([$orderId]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         }
         if ($batchKey !== '') {
-            $stmt2 = $pdo->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.category_ids, a.linked_part_no, a.status,
+            $stmt2 = $pdo->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.category_ids, a.linked_part_no, a.status, a.uploaded_by,
                                            DATE_FORMAT(a.uploaded_at,'%Y-%m-%d %H:%i') AS uploaded_at
                                     FROM order_attachments a WHERE a.batch_key=? AND a.status='temp' ORDER BY a.id");
             $stmt2->execute([$batchKey]);
@@ -231,7 +238,9 @@ switch ($action) {
             $r['category_name'] = implode('、', array_map(fn($i) => $catMap[$i] ?? ('#'.$i), $ids));
         }
         unset($r);
-        echo json_encode(['success' => true, 'files' => $rows]);
+        // 刪除按鈕顯示用：只有上傳者本人／管理員／被指派 ot_attach_delete 角色功能才看得到刪除鈕（後端 delete_file 同規則再擋一次）
+        $canDeleteOthers = _oaIsAdmin($pdo, $uid) || _oaHasAttachDelete($pdo, $uid);
+        echo json_encode(['success' => true, 'files' => $rows, 'current_uid' => $uid, 'can_delete_others' => $canDeleteOthers]);
         break;
     }
 
@@ -259,9 +268,11 @@ switch ($action) {
         $st->execute([$attId]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
         if (!$row) { echo json_encode(['success'=>false,'message'=>'找不到附件']); break; }
-        // temp 限本人可刪；active 走訂單編輯權限
-        $allowed = ($row['status'] === 'temp') ? ((int)$row['uploaded_by'] === $uid) : _oaCanEdit($pdo, $uid);
-        if (!$allowed) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'無刪除權限']); break; }
+        // 刪除門檻（使用者明確要求收斂）：不論 temp（暫存中）或 active（已存檔），一律只有「上傳者本人」／
+        // 「管理員」／被指派「刪除他人附件」角色功能(ot_attach_delete，角色設定內可勾選)才能刪——不再是
+        // 「只要有訂單編輯權限就能刪任何人的附件」。
+        $allowed = ((int)$row['uploaded_by'] === $uid) || _oaIsAdmin($pdo, $uid) || _oaHasAttachDelete($pdo, $uid);
+        if (!$allowed) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'無刪除權限：僅上傳者本人與管理員可刪除此附件']); break; }
         $fp = $dir . $row['filename'];
         if (is_file($fp)) @unlink($fp);
         $pdo->prepare("DELETE FROM order_attachments WHERE id=?")->execute([$attId]);

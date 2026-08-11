@@ -9,6 +9,7 @@ session_start();
 // 包含必要文件
 include '../common/DBConnection.php';
 include '../common/_config.php';
+require_once '../common/order_track_perm_lib.php';
 
 // 輸出結果
 header('Content-Type: application/json');
@@ -23,22 +24,30 @@ try {
     // 獲取數據庫連接
     $conn = new DBConnection();
     $pdo = $conn->getPDO(); // Get PDO instance for prepared statements
-    
+
     // 確保請求包含訂單ID
     if (!isset($_POST['Order_id']) || empty($_POST['Order_id'])) {
         echo json_encode(['success' => false, 'message' => '缺少訂單ID參數']);
         exit;
     }
-    
+
     // 安全地轉換訂單ID為整數
     $order_id = intval($_POST['Order_id']);
-    
+
     // 檢查ID是否為有效數字
     if ($order_id <= 0) {
         echo json_encode(['success' => false, 'message' => '無效的訂單ID']);
         exit;
     }
-    
+
+    // 轉生管/取消轉生管：只有此訂單目前指定的設計人員與管理員可操作（原本無任何權限檢查，任何登入者皆可呼叫）
+    $uid = (int)($_SESSION['id'] ?? 0);
+    if (!ot_can_operate_design($pdo, $uid, $order_id, 'ot_to_pm')) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => '您不是此訂單目前指定的設計人員，無法操作轉生管狀態。']);
+        exit;
+    }
+
     // 檢查是否為取消操作
     $action = isset($_POST['action']) ? $_POST['action'] : 'update';
     

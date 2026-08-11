@@ -994,12 +994,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 更新訂單狀態（暫停/解除暫停/完結/解除完結）────────────────────────
     if ($_POST['action'] === 'save_order_status') {
         header('Content-Type: application/json');
+        require_once __DIR__ . '/../../src/common/order_track_perm_lib.php';
         try {
             $order_id = intval($_POST['order_id'] ?? 0);
             $new_status = $_POST['new_status'] ?? '';
             if (!$order_id) throw new Exception('未指定訂單ID');
             if (!in_array($new_status, ['6', '9', ''])) throw new Exception('不合法的狀態值');
             $uid = $_SESSION['id'] ?? 0;
+            // 權限：本檔原本完全沒有任何檢查，任何登入者都能暫停/結案任一訂單；補上功能碼門檻
+            // （結案/解除結案看 ot_close；暫停/取消/解除暫停看 ot_cancel；此區塊跑在頁面權限計算段之前，
+            // $can_*/ot_hasF() 尚未定義，改用獨立可重用的 ot_has_feature()，此處不重寫檢查邏輯）
+            $_reqFeature = ($new_status === '9') ? 'ot_close' : 'ot_cancel';
+            if ($new_status === '') {
+                $curSt = $pdo->prepare("SELECT Order_status FROM order_track WHERE Order_id = ?");
+                $curSt->execute([$order_id]);
+                $_reqFeature = ((int)$curSt->fetchColumn() === 9) ? 'ot_close' : 'ot_cancel';
+            }
+            if (!ot_has_feature($pdo, (int)$uid, $_reqFeature)) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => '您沒有此操作的權限。']);
+                exit;
+            }
             if ($new_status === '') {
                 $pdo->prepare("UPDATE order_track SET Order_status = NULL, Modified_By = ?, Modified_At = NOW() WHERE Order_id = ?")
                     ->execute([$uid, $order_id]);
@@ -1715,6 +1730,7 @@ $OT_PAGE_FEATURES = [
     ['group'=>'訂單基本操作', 'code'=>'ot_edit',                 'label'=>'新建/編輯訂單'],
     ['group'=>'訂單基本操作', 'code'=>'ot_delete',               'label'=>'刪除訂單按鈕'],
     ['group'=>'訂單基本操作', 'code'=>'ot_view_amount',          'label'=>'顯示訂單金額（單價）'],
+    ['group'=>'訂單基本操作', 'code'=>'ot_attach_delete',        'label'=>'刪除他人上傳的附件（預設只有上傳者本人與管理員可刪）'],
     ['group'=>'訂單流程',     'code'=>'ot_batch_draw',           'label'=>'批圖按鈕（審圖/取消審圖）'],
     ['group'=>'訂單流程',     'code'=>'ot_to_pm',                'label'=>'轉生管按鈕（含取消轉生管）'],
     ['group'=>'訂單流程',     'code'=>'ot_close',                'label'=>'結案按鈕（訂單完結/解除完結）'],
@@ -1755,6 +1771,9 @@ if ($OT_USE_RBAC) {
         exit;
     }
 }
+// 是否為「不限特定訂單」的全權管理員（跟隨目前生效中的制度：RBAC 開啟看 $IS_OT_RBAC_ADMIN，否則看舊制 'A'）；
+// 審圖/轉生管新規則要用：一般設計人員只能操作自己被指定(order_track.ate)的訂單，管理員不受此限
+$OT_IS_ADMIN_ANY = $OT_USE_RBAC ? $IS_OT_RBAC_ADMIN : ($permission_code === 'A');
 
 if (!($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']))) {
     $ate_list = $conn->getAll("SELECT `user_cname`,`user_uname`,`id` FROM `user` WHERE `user_status`=63");
@@ -2842,6 +2861,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     $order_status_val = (isset($order['Order_status']) && $order['Order_status'] !== null && $order['Order_status'] !== '') ? intval($order['Order_status']) : null;
                     $is_paused = ($order_status_val === 6);
                     $is_closed = ($order_status_val === 9);
+                    // 審圖/轉生管新規則：一般設計人員只能操作自己被指定(order_track.ate)的訂單，管理員不受此限
+                    $_row_is_own_design = $OT_IS_ADMIN_ANY || ((int)($order['ate'] ?? 0) > 0 && (int)$order['ate'] === (int)($_SESSION['id'] ?? 0));
+                    $_row_can_batch_draw = $can_batch_draw && $_row_is_own_design;
+                    $_row_can_to_pm      = $can_to_pm && $_row_is_own_design;
                     if ($is_paused) {
                         $pause_date = $order['Modified_At_formatted'] ?? '';
                         echo '<span style="color:#E67E22; font-size:11px;"><i class="fa fa-pause-circle"></i> ' . ($pause_date ? $pause_date . ' ' : '') . '訂單暫停/取消</span>';
@@ -2849,21 +2872,21 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         if (!(isset($order['pmGet_formatted']) && !empty($order['pmGet_formatted']))) {
                             if (isset($order['in_review_formatted']) && !empty($order['in_review_formatted'])) {
                                 echo '<span style="color: green; font-size: 11px; margin-right: 3px;">' . $order['in_review_formatted'] . '審圖</span>';
-                                if ($can_batch_draw) {
+                                if ($_row_can_batch_draw) {
                                     echo '<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="cancelInReview(\'' . $order['Order_id'] . '\')">X</button>';
                                 }
                             } else {
-                                if ($can_batch_draw) {
+                                if ($_row_can_batch_draw) {
                                     echo '<button type="button" class="btn btn-xs btn-success" style="padding: 2px 6px; font-size: 11px;" onclick="updateInReview(\'' . $order['Order_id'] . '\')">審圖</button>';
                                 } else {
                                     echo '<span style="font-size: 12px; color: #999;">批圖中</span>';
                                 }
                             }
-                            if ($can_to_pm) {
+                            if ($_row_can_to_pm) {
                                 echo '<button type="button" class="btn btn-warning btn-xs" style="padding: 2px 6px; font-size: 11px;" onclick="updatePmGet(\'' . $order['Order_id'] . '\')">轉生管</button>';
                             }
                         } else {
-                            if ($can_to_pm) {
+                            if ($_row_can_to_pm) {
                                 echo '<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="cancelPmGet(\'' . $order['Order_id'] . '\')">X</button> ';
                             }
                             echo '<span style="font-size: 12px;">' . $order['pmGet_formatted'] . '</span>';
@@ -3566,7 +3589,17 @@ foreach($dCounts as $c) {
                     <!-- Header -->
                     <div class="page-title">
                         <div class="title_left">
-                            <h3>訂單追蹤 <small>(權限：<?= $display_permission_code ?>)</small></h3>
+                            <?php
+                            // 權限標籤：舊制代碼一律顯示，若使用者有指派本頁角色則一併顯示角色名稱（$OT_USE_RBAC 尚未啟用前僅供對照參考，
+                            // 實際生效的仍是舊制代碼；管理員顯示為「管理員」而非角色名清單，避免跟指派的個別角色混淆）
+                            $_perm_label = $display_permission_code !== '' ? $display_permission_code : '無';
+                            if ($IS_OT_RBAC_ADMIN) {
+                                $_perm_label .= '｜角色：管理員';
+                            } elseif (!empty($_ot_my_roles)) {
+                                $_perm_label .= '｜角色：' . implode('、', $_ot_my_roles);
+                            }
+                            ?>
+                            <h3>訂單追蹤 <small>(權限：<?= safe_html($_perm_label) ?>)</small></h3>
                         </div>
                     </div>
                     <div class="clearfix"></div>
@@ -7073,6 +7106,8 @@ foreach($dCounts as $c) {
         var orderAttachCats = null; // 類別清單快取（get_categories 只需載入一次；本頁客製化子集由後端過濾好回傳）
         var orderAttachFiles = [];  // 目前訂單附件清單快取，供存檔前檢查是否都設定了標籤
         var opAttachFilesCache = []; // OP轉訂單附件清單快取，同上用途
+        var oaCurrentUid = 0;         // 目前登入者 id（list_files 回傳），用來判斷刪除鈕是否顯示
+        var oaCanDeleteOthers = false; // 是否可刪除非本人上傳的附件（管理員或被指派 ot_attach_delete）；後端 delete_file 同規則再擋一次
         function orderAttachNewBatchKey() { return 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
 
         // 產生單一附件列的 HTML（tagToggle/tagApply/fileDel 走事件委派，data-id 標記附件ID）
@@ -7103,6 +7138,11 @@ foreach($dCounts as $c) {
                       (hasReq ? ' <span style="font-size:9px;color:#DD5138;" title="必備類別附件不可設為共用，須連結單一料號">*必選料號</span>' : '')
                     : '<span style="font-size:10px;color:#999;">' + (f.linked_part_no ? ('料號：' + escapeHtml(f.linked_part_no)) : '共用（全部）') + '</span>')
                 : '';
+            // 刪除鈕：只有上傳者本人／管理員／被指派 ot_attach_delete 才顯示（後端 delete_file 同規則再擋一次，不可只靠前端隱藏）
+            var canDel = oaCanDeleteOthers || (!!f.uploaded_by && String(f.uploaded_by) === String(oaCurrentUid));
+            var delHtml = canDel
+                ? '<span class="oa-file-del" style="margin-left:auto;color:#c0392b;cursor:pointer;"><i class="fa fa-trash"></i></span>'
+                : '<span style="margin-left:auto;"></span>';
             return '<div class="oa-file-row" data-id="' + f.id + '" style="padding:4px 0;border-bottom:1px dotted #eee;' + (tagged ? '' : 'background:#FFF6F0;') + '">' +
                 '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
                 '<i class="fa fa-file-o" style="color:#999;"></i>' +
@@ -7113,7 +7153,7 @@ foreach($dCounts as $c) {
                     ? '<span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;">' + escapeHtml(f.category_name) + '</span>'
                     : '<span style="font-size:10px;color:#c0392b;font-weight:600;"><i class="fa fa-exclamation-circle"></i> 尚未設定標籤</span>') + '</span>' +
                 '<span class="oa-tag-toggle" style="cursor:pointer;color:#337ab7;font-size:10px;"><i class="fa fa-tags"></i> 標籤</span>' +
-                '<span class="oa-file-del" style="margin-left:auto;color:#c0392b;cursor:pointer;"><i class="fa fa-trash"></i></span>' +
+                delHtml +
                 '</div>' +
                 '<div class="oa-tag-panel" style="display:' + (tagged ? 'none' : 'block') + ';padding:4px 0 4px 22px;">' + panelHtml + '</div>' +
                 '</div>';
@@ -7216,6 +7256,7 @@ foreach($dCounts as $c) {
             if (orderId) params.order_id = orderId;
             function doList() {
                 $.post(ORDER_ATTACH_API, params, function(res) {
+                    if (res.success) { oaCurrentUid = res.current_uid || 0; oaCanDeleteOthers = !!res.can_delete_others; }
                     orderAttachRenderList(res.success ? res.files : []);
                 }, 'json');
             }
@@ -7996,6 +8037,7 @@ foreach($dCounts as $c) {
         }
         function opAttachRefreshList() {
             $.post(ORDER_ATTACH_API, { action: 'list_files', batch_key: opAttachBatchKey }, function(res) {
+                if (res.success) { oaCurrentUid = res.current_uid || 0; oaCanDeleteOthers = !!res.can_delete_others; }
                 opAttachRenderList(res.success ? res.files : []);
             }, 'json');
         }

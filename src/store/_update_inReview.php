@@ -3,6 +3,7 @@ session_start();
 // Ensure common files are included. Adjust paths if necessary.
 include_once dirname(__DIR__) . '/common/DBConnection.php'; // Adjusted path for robustness
 include_once dirname(__DIR__) . '/common/_config.php';    // Adjusted path for robustness
+require_once dirname(__DIR__) . '/common/order_track_perm_lib.php';
 
 header('Content-Type: application/json');
 
@@ -24,6 +25,14 @@ $action = isset($_POST['action']) ? $_POST['action'] : null;
 
 if (empty($orderId) || !is_numeric($orderId)) {
     echo json_encode(['success' => false, 'message' => 'Invalid Order ID.']);
+    exit;
+}
+
+// 審圖/取消審圖：只有此訂單目前指定的設計人員與管理員可操作（原本無任何權限檢查，任何登入者皆可呼叫）
+$uid = (int)($_SESSION['id'] ?? 0);
+if (!ot_can_operate_design($pdo, $uid, (int)$orderId, 'ot_batch_draw')) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'message' => '您不是此訂單目前指定的設計人員，無法操作審圖狀態。']);
     exit;
 }
 

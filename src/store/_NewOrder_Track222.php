@@ -4,12 +4,24 @@ session_start();
 include '../../src/common/DBConnection.php';
 include '../../src/common/_config.php';
 require_once '../../src/common/part_alias_lib.php';
+require_once '../../src/common/order_track_perm_lib.php';
 
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
 
 $conn = new DBConnection();
 $db = $conn->getPDO();
+$_ot_uid = (int)($_SESSION['id'] ?? 0);
+// 本檔原本完全沒有任何權限檢查（純靠前端隱藏按鈕把關），補上後端門檻：只檢查功能碼是否具備
+// （對應頁面 $can_create/$can_update/$can_delete/$can_op_convert 等頁級門檻，不含特定訂單的
+// 指定設計人員限制——那是審圖/轉生管專屬的新規則，已在 _update_inReview.php/simple_update_pmGet.php 處理）。
+function ot_require_feature(PDO $pdo, int $uid, string $feature): void {
+    if (!ot_has_feature($pdo, $uid, $feature)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'message' => '您沒有此操作的權限。']);
+        exit;
+    }
+}
 
 try {
     header('Content-Type: application/json');
@@ -133,6 +145,7 @@ try {
 
     // ── 新增 ──────────────────────────────────────────────────────────
     if (isset($_POST['or_new']) || isset($_POST['or_new_copy'])) {
+        ot_require_feature($db, $_ot_uid, 'ot_edit');
         // 附件標籤鐵則：這批暫存附件全部設好標籤才能存檔，否則擋下（不建立訂單）
         $batchKey = trim($_POST['batch_key'] ?? '');
         if ($batchKey !== '') {
@@ -205,6 +218,7 @@ try {
 
     // ── 更新 ──────────────────────────────────────────────────────────
     if (isset($_POST['or_update'])) {
+        ot_require_feature($db, $_ot_uid, 'ot_edit');
         $editOrderId = intval($_POST['Order_id']);
         $editBatchKey = trim($_POST['batch_key'] ?? '');
         // 附件標籤鐵則：這張訂單既有的正式附件、以及這次編輯中新上傳尚未存檔的暫存附件，全部設好標籤才能存檔
@@ -288,6 +302,7 @@ try {
 
     // ── 刪除主訂單 ────────────────────────────────────────────────────
     if (isset($_POST['del_order_track'])) {
+        ot_require_feature($db, $_ot_uid, 'ot_delete');
         $delId = intval($_POST['Order_id']);
         $db->beginTransaction();
         // 收集本單＋子批次ID，作廢其變更單並連動移除通知（政策A）
@@ -349,6 +364,7 @@ try {
     // ── 拆批：新增一筆子批次 ─────────────────────────────────────────────
     // =====================================================================
     if (isset($_POST['action']) && $_POST['action'] === 'add_split') {
+        ot_require_feature($db, $_ot_uid, 'ot_edit');
         $parentId  = intval($_POST['parent_order_id'] ?? 0);
         $splitQty  = intval($_POST['split_qty'] ?? 0);
         $splitDate = trim($_POST['split_date'] ?? '');
@@ -421,6 +437,7 @@ try {
     // ── 拆批：更新單筆子批次 ─────────────────────────────────────────────
     // =====================================================================
     if (isset($_POST['action']) && $_POST['action'] === 'update_split') {
+        ot_require_feature($db, $_ot_uid, 'ot_edit');
         $splitId   = intval($_POST['split_order_id'] ?? 0);
         $splitQty  = intval($_POST['split_qty'] ?? 0);
         $splitDate = trim($_POST['split_date'] ?? '');
@@ -464,6 +481,7 @@ try {
     // ── 拆批：刪除單筆子批次 ─────────────────────────────────────────────
     // =====================================================================
     if (isset($_POST['action']) && $_POST['action'] === 'delete_split') {
+        ot_require_feature($db, $_ot_uid, 'ot_edit');
         $splitId = intval($_POST['split_order_id'] ?? 0);
         if (!$splitId) { echo json_encode(['success' => false, 'message' => '未指定子批次ID']); exit; }
 
@@ -484,6 +502,7 @@ try {
     // ── 拆批：刪除所有子批次（撤銷全部拆批）────────────────────────────────
     // =====================================================================
     if (isset($_POST['action']) && $_POST['action'] === 'delete_all_splits') {
+        ot_require_feature($db, $_ot_uid, 'ot_edit');
         $parentId = intval($_POST['parent_order_id'] ?? 0);
         if (!$parentId) { echo json_encode(['success' => false, 'message' => '未指定主訂單ID']); exit; }
 
@@ -511,6 +530,7 @@ try {
     //    assembly_parent_order_id 標記來源母訂單（與拆批 parent_order_id 無關）
     // =====================================================================
     if (isset($_POST['action']) && $_POST['action'] === 'expand_assembly_children') {
+        ot_require_feature($db, $_ot_uid, 'ot_edit');
         $parentId = intval($_POST['parent_order_id'] ?? 0);
         if (!$parentId) { echo json_encode(['success' => false, 'message' => '未指定母訂單ID']); exit; }
         $userId = $_SESSION['id'] ?? 0;
@@ -590,6 +610,7 @@ try {
     // ── OP轉訂單：批次由報價單項目建立訂單 ──────────────────────────────────
     // =====================================================================
     if (isset($_POST['action']) && $_POST['action'] === 'create_orders_from_quotes') {
+        ot_require_feature($db, $_ot_uid, 'ot_op_convert');
         $userId = $_SESSION['id'] ?? 0;
         $items = json_decode($_POST['items'] ?? '', true);
         if (!is_array($items) || empty($items)) {
