@@ -239,10 +239,11 @@ switch ($action) {
         $settings  = drGetAllSettings($pdo, $userId);
         $sourceDir = rtrim($settings['source_dir'], '\\/');
         $outputDir = rtrim($settings['output_dir'], '\\/');
+        if ($outputDir === '') $outputDir = $sourceDir; // 輸出資料夾留空＝等於來源資料夾（呼應設定區塊 placeholder 的承諾）
         $prefix    = $settings['prefix'];
         $suffix    = $settings['suffix'];
 
-        if ($sourceDir === '' || $outputDir === '') { echo json_encode(['success' => false, 'message' => '尚未設定來源/輸出資料夾']); break; }
+        if ($sourceDir === '') { echo json_encode(['success' => false, 'message' => '尚未設定來源資料夾']); break; }
 
         $srcPath = $sourceDir . DIRECTORY_SEPARATOR . $file;
         $ext     = strtolower(pathinfo($file, PATHINFO_EXTENSION));

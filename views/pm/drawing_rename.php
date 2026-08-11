@@ -150,7 +150,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
         <div class="dr-mode-hint" id="dr-mode-hint">目前模式：作廢版 — 舊圖會蓋上「作廢」浮水印保留備查，新圖另外存檔，不會遺失舊資料。此為您個人的操作偏好，不影響其他使用者。</div>
       </div>
 
-      <div id="dr-setup-hint" class="alert alert-warning" style="display:none;"><i class="fa fa-info-circle"></i> 請先設定「來源資料夾」與「輸出資料夾」後，按「重新整理清單」開始。</div>
+      <div id="dr-setup-hint" class="alert alert-warning" style="display:none;"><i class="fa fa-info-circle"></i> 請先設定「來源資料夾」後，按「重新整理清單」開始（輸出資料夾留空則等於來源資料夾）。</div>
 
       <!-- 審核區 -->
       <div id="dr-review-panel" class="row" style="display:none;"><div class="col-md-12"><div class="x_panel"><div class="x_content">
@@ -335,8 +335,10 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
     }, 'json');
   });
 
+  function resolvedOutputDir(){ return settings.output_dir || settings.source_dir || ''; }
+
   function loadList(){
-    if (!settings.source_dir || !settings.output_dir) {
+    if (!settings.source_dir) {
       $('#dr-setup-hint').show();
       $('#dr-review-panel,#dr-done-card,#dr-empty-card').hide();
       return;
@@ -454,7 +456,7 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       $('#dr-review-panel').hide();
       if (processedCount > 0) {
         $('#dr-done-text').text('共 ' + processedCount + ' 張改名完畢');
-        $('#dr-done-output').text(settings.output_dir);
+        $('#dr-done-output').text(resolvedOutputDir());
         $('#dr-done-card').show();
       } else {
         $('#dr-empty-card').show();
