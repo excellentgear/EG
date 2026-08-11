@@ -10,6 +10,8 @@ header('Content-Type: application/json; charset=utf-8');
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/kpi_as_lib.php';
+include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
+include_once $document_root . '/EGsystem/src/common/org_role_lib.php';
 
 function jout($a){ echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code=400){ http_response_code($code); echo json_encode(['ok'=>false,'error'=>$msg], JSON_UNESCAPED_UNICODE); exit; }
@@ -70,25 +72,30 @@ switch ($action) {
 /* ---------- 基本資訊 ---------- */
 case 'meta': {
     $years = range(2025, $curY);
-    // 本人可填/可傳附件的指標（擔當者；管理者=全部）
-    $st = $db->prepare("SELECT i.indicator_id, i.item_no, i.name, i.freq, y.source_mode, y.year
-                        FROM kpi_as_indicator i
-                        JOIN kpi_as_indicator_year y ON y.indicator_id=i.indicator_id
-                        WHERE i.is_active=1 AND y.is_active=1 AND y.year=? " .
-                        ($perms['canAdmin'] ? "" : "AND y.owner_user_id=?") . " ORDER BY i.item_no");
+    // 本人可填/可傳附件的指標：僅擔當者本人、其請假代理人；系統管理者=全部（RBAC鐵律）
     $year = max(2025, min($curY, (int)($_GET['year'] ?? $curY)));
     kpi_as_ensure_year($db, $year);
-    $perms['canAdmin'] ? $st->execute([$year]) : $st->execute([$year, $uid]);
+    $st = $db->prepare("SELECT i.indicator_id, i.item_no, i.name, i.freq, y.source_mode, y.year, y.owner_user_id
+                        FROM kpi_as_indicator i
+                        JOIN kpi_as_indicator_year y ON y.indicator_id=i.indicator_id
+                        WHERE i.is_active=1 AND y.is_active=1 AND y.year=? ORDER BY i.item_no");
+    $st->execute([$year]);
     $mine = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $ownerId = (int)$r['owner_user_id'];
+        if (!($perms['isAdmin'] || $ownerId === $uid || kpi_as_is_delegate_of_owner($db, $ownerId, $uid))) continue;
         $r['months'] = kpi_as_months($r['freq']);
+        unset($r['owner_user_id']);
         $mine[] = $r;
     }
+    $asDoc = eg_asdoc_get($db, 'kpi_as');
     jout(['perms'=>$perms, 'uid'=>$uid, 'cname'=>$u['user_cname'], 'years'=>$years,
           'cur_year'=>$curY, 'cur_month'=>$curM,
           'attach_max'=>kpi_as_attach_max($db),
           'year_locked'=>kpi_as_year_locked($year),
-          'my_indicators'=>$mine]);
+          'my_indicators'=>$mine,
+          'company'=>eg_company_full_name($db),
+          'as_doc'=>$asDoc, 'as_doc_no'=>eg_asdoc_no($asDoc)]);
 }
 
 /* ---------- 年度矩陣（含懶惰結算＋當月即時試算） ---------- */
@@ -192,10 +199,11 @@ case 'matrix': {
             'exposed_params'=>$exposed,
             'can_recalc'=>$iy['source_mode'] === 'auto' && kpi_as_can_modify($year, $perms, ((int)$iy['owner_user_id'] === $uid)),
             'can_fill'=>$iy['source_mode'] === 'manual' && kpi_as_can_modify($year, $perms, ((int)$iy['owner_user_id'] === $uid)),
+            'can_override'=>kpi_as_can_override($db, $year, $perms, (int)$iy['owner_user_id'], $uid),
         ];
     }
     jout(['year'=>$year, 'rows'=>$rows, 'year_locked'=>kpi_as_year_locked($year),
-          'can_override'=>$perms['canAdmin'], 'attach_max'=>kpi_as_attach_max($db)]);
+          'can_admin'=>$perms['canAdmin'], 'attach_max'=>kpi_as_attach_max($db)]);
 }
 
 /* ---------- 重算（快照）：本年=擔當者/填報/管理者；舊年度僅管理者 ---------- */
@@ -316,14 +324,14 @@ case 'fill': {
     jout(['value'=>$val]);
 }
 
-/* ---------- 覆寫 / 清除覆寫（僅管理者；原因必填；保留原值可追溯） ---------- */
+/* ---------- 覆寫 / 清除覆寫（擔當者本人／其請假代理人；年度鎖定後僅KPI管理員；原因必填；保留原值可追溯） ---------- */
 case 'override': {
-    if (!$perms['canAdmin']) jerr('僅KPI管理者可手動覆寫', 403);
     $iid = (int)($_POST['indicator_id'] ?? 0);
     $year = (int)($_POST['year'] ?? 0);
     $month = (int)($_POST['month'] ?? 0);
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
+    if (!kpi_as_can_override($db, $year, $perms, (int)$iy['owner_user_id'], $uid)) jerr('僅擔當者本人或其請假代理人可手動覆寫', 403);
     if (!in_array($month, kpi_as_months($iy['freq']), true)) jerr('該指標此月份不適用');
     $raw = trim((string)($_POST['value'] ?? ''));
     $reason = mb_substr(trim((string)($_POST['reason'] ?? '')), 0, 200);
@@ -345,10 +353,12 @@ case 'override': {
 }
 
 case 'clear_override': {
-    if (!$perms['canAdmin']) jerr('僅KPI管理者可清除覆寫', 403);
     $iid = (int)($_POST['indicator_id'] ?? 0);
     $year = (int)($_POST['year'] ?? 0);
     $month = (int)($_POST['month'] ?? 0);
+    $iy = kpi_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    if (!kpi_as_can_override($db, $year, $perms, (int)$iy['owner_user_id'], $uid)) jerr('僅擔當者本人或其請假代理人可清除覆寫', 403);
     $st = $db->prepare("SELECT override_value FROM kpi_as_monthly_value WHERE indicator_id=? AND year=? AND month=?");
     $st->execute([$iid, $year, $month]);
     $old = $st->fetchColumn();
@@ -386,8 +396,9 @@ case 'attach_upload': {
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
     if (!in_array($month, kpi_as_months($iy['freq']), true)) jerr('該指標此月份不適用');
-    $isOwner = ((int)$iy['owner_user_id'] === $uid);
-    if (!($isOwner || $perms['canAdmin'])) jerr('僅該指標擔當者或管理者可上傳佐證', 403);
+    $ownerId = (int)$iy['owner_user_id'];
+    if (!($perms['isAdmin'] || $ownerId === $uid || kpi_as_is_delegate_of_owner($db, $ownerId, $uid)))
+        jerr('僅該指標擔當者本人或其請假代理人可上傳佐證', 403);
     if (empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) jerr('檔案上傳失敗');
     if ($_FILES['file']['size'] > 20 * 1024 * 1024) jerr('檔案超過 20MB');
     $allowed = ['jpg','jpeg','png','gif','webp','bmp','pdf','xls','xlsx','doc','docx','ppt','pptx','csv','txt','zip'];

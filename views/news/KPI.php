@@ -113,15 +113,32 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         #chartPicks label { cursor:pointer; margin:0; font-weight:normal; }
         .kpi-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5;
             border-radius:10px; padding:30px; background:#FDF8EF; color:#5b3a1e; }
+        .kpi-print-head { display:none; text-align:center; }
+        .kpi-print-comp { font-size:20px; font-weight:bold; }
+        .kpi-print-title { font-size:15px; font-weight:bold; letter-spacing:3px; margin-top:2px; }
+        .kpi-print-sub { font-size:11px; color:#555; margin-top:2px; }
+        /* 兩份規則刻意重複：@media print 是保險（萬一使用者直接 Ctrl+P 未走 printKpi()）；
+           body.kpi-printing 是 printKpi() 按下當下同步套用，讓縮放量測時的版面跟真正列印時一致（見下方 printKpi()） */
         @media print {
             .kpi-toolbar, #chartBox, #cellMenu, .nav_menu, .left_col, .kpi-sim-bar, footer,
-            .kpi-role-badge .fa-question-circle { display:none !important; }
+            .kpi-role-badge .fa-question-circle, .kpi-ov-mark, .kpi-legend { display:none !important; }
             .right_col { margin:0 !important; padding:0 !important; }
             table.kpi-table { font-size:10px; }
             table.kpi-table th, table.kpi-table td { padding:2px 3px; }
             .kpi-table-wrap { overflow:visible; border:none; }
             table.kpi-table thead th { position:static; }
+            .kpi-print-head { display:block !important; }
         }
+        body.kpi-printing .kpi-toolbar, body.kpi-printing #chartBox, body.kpi-printing #cellMenu,
+        body.kpi-printing .nav_menu, body.kpi-printing .left_col, body.kpi-printing .kpi-sim-bar,
+        body.kpi-printing footer, body.kpi-printing .kpi-role-badge .fa-question-circle,
+        body.kpi-printing .kpi-ov-mark, body.kpi-printing .kpi-legend { display:none !important; }
+        body.kpi-printing .right_col { margin:0 !important; padding:0 !important; }
+        body.kpi-printing table.kpi-table { font-size:10px; }
+        body.kpi-printing table.kpi-table th, body.kpi-printing table.kpi-table td { padding:2px 3px; }
+        body.kpi-printing .kpi-table-wrap { overflow:visible; border:none; }
+        body.kpi-printing table.kpi-table thead th { position:static; }
+        body.kpi-printing .kpi-print-head { display:block !important; }
     </style>
 </head>
 <body class="nav-sm">
@@ -147,11 +164,19 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
                 <i class="fa fa-refresh"></i> 重算本年</button>
             <button id="btnUpload"><i class="fa fa-paperclip"></i> 上傳佐證</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
-            <button onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
+            <label style="margin:0;font-size:13px;color:#5b3a1e;">紙張</label>
+            <select id="kpiPaperSel"><option value="A4">A4</option><option value="A3">A3</option></select>
+            <button onclick="printKpi()"><i class="fa fa-print"></i> 列印</button>
             <a class="btn" id="btnSetting" href="KPI_setting.php" style="display:none;line-height:28px;">
                 <i class="fa fa-gear"></i> 設定</a>
             <span class="kpi-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
                 <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
+        </div>
+
+        <div class="kpi-print-head" id="kpiPrintHead">
+            <div class="kpi-print-comp"></div>
+            <div class="kpi-print-title"></div>
+            <div class="kpi-print-sub"></div>
         </div>
 
         <div class="kpi-table-wrap">
@@ -167,7 +192,7 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
                 <tbody id="kpiBody"><tr><td colspan="19" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
-        <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
+        <div class="kpi-legend" style="font-size:11px;color:#8a6d45;margin-top:4px;">
             說明：<span class="kpi-preview">橘色斜體</span>=當月即時試算(未定案)；<span class="kpi-below">紅字</span>=未達標；
             <span class="kpi-ov-mark">✱</span>=手動覆寫；<span class="kpi-attach-badge">📎n</span>=佐證附件；?=無資料；NA=未到期。
             點儲存格可操作（明細/附件/填寫/覆寫/重算）。
@@ -259,9 +284,10 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
     <div class="m-head"><span>KPI 角色權限說明</span><span class="m-close" onclick="closeMask('helpMask')">✕</span></div>
     <div class="m-body" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
         <b>KPI檢閱</b>：可看KPI總覽、趨勢圖、附件清單與開啟附件；可用「試算」預覽開放參數（不影響正式數值）。<br>
-        <b>KPI填報</b>：檢閱＋可重算自動指標(當年度)；手動指標僅「該指標擔當者」可填寫本人負責項目、上傳佐證附件。<br>
-        <b>KPI管理員</b>：填報＋手動覆寫(需填原因)、舊年度重算、KPI設定頁(指標/公式參數/目標/權限規則/NAS路徑)。<br>
+        <b>KPI填報</b>：檢閱＋可重算自動指標(當年度)；手動指標僅「該指標擔當者」可填寫本人負責項目。<br>
+        <b>KPI管理員</b>：填報＋舊年度重算/補填、KPI設定頁(指標/公式參數/目標/權限規則/NAS路徑)。<br>
         <b>管理者</b>：系統管理者固定擁有全部權限。<br>
+        <b>手動覆寫／上傳佐證附件</b>：不分角色，一律僅該指標「擔當者」本人、或擔當者今天請假時系統解析出的代理人可操作(需填覆寫原因)；管理者不受此限。<br>
         <hr style="border-color:#EADFC8;">
         授權方式（聯集）：①權限設定頁指派 KPI 角色(個人/職稱)；②KPI設定頁建立「部門×主管階級」規則或指定人員為管理者。<br>
         年度鎖定：隔年 2/1 起該年度重算/補填/覆寫僅 KPI 管理員可操作，其他人僅能檢視快照。
@@ -311,6 +337,7 @@ function loadMeta(cb){
         var $y = $('#yearSel').empty();
         m.years.forEach(function(y){ $y.append('<option value="'+y+'"'+(y===YEAR?' selected':'')+'>'+y+'</option>'); });
         if (m.perms.canAdmin) $('#btnSetting').show();
+        renderPrintHead();
         if (cb) cb();
     });
 }
@@ -387,7 +414,7 @@ $(document).on('click', 'td.kpi-cell', function(e){
     if (r.can_fill && !c.future) items.push({t:'<i class="fa fa-pencil"></i> 填寫/修改', f:function(){ openFill(ri,m); }});
     if (r.can_recalc && !c.future && c.src !== 'preview')
         items.push({t:'<i class="fa fa-refresh"></i> 重算此月', f:function(){ doRecalc(r.indicator_id, m); }});
-    if (MATRIX.can_override && !c.future) {
+    if (r.can_override && !c.future) {
         items.push({t:'<i class="fa fa-hand-paper-o"></i> 手動覆寫', f:function(){ openOverride(ri,m); }});
         if (c.src === 'override') items.push({t:'<i class="fa fa-eraser"></i> 清除覆寫', f:function(){ doClearOverride(r.indicator_id, m); }});
     }
@@ -613,7 +640,7 @@ function toggleSim(ri, ev){
         h += '<label>'+esc(p.label)+'</label><input data-key="'+esc(p.key)+'" data-type="'+esc(p.type)+'" value="'+esc(val)+'">';
     });
     h += '<button onclick="runSim('+ri+')">試算</button>';
-    if (MATRIX.can_override) h += '<button style="background:#DD5138;border-color:#b53c28;" onclick="applySim('+ri+')" title="把目前試算參數寫回本年度設定並重算">套用修改</button>';
+    if (MATRIX.can_admin) h += '<button style="background:#DD5138;border-color:#b53c28;" onclick="applySim('+ri+')" title="把目前試算參數寫回本年度設定並重算">套用修改</button>';
     h += '<button style="background:#fff;color:#5b3a1e;border-color:#D8BE93;" onclick="toggleSim('+ri+')">還原</button>';
     h += '<span style="color:#b5762a;">試算僅預覽；「套用修改」才會寫回本年度設定</span></div>';
     $row.show().find('td').html(h);
@@ -731,6 +758,52 @@ $('#btnCsv').on('click', function(){
     a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}));
     a.download = 'KPI_2-GM-04-01_' + YEAR + '.csv';
     a.click();
+});
+
+/* ---------- 列印（ai-rules/16：大標題本公司名/表頭綁定AS文件表單名稱/頁碼左下/AS文件編號右下；
+   並按使用者選定紙張(A4/A3)自動縮放整份內容到一頁，見 printKpi()） ---------- */
+function renderPrintHead(){
+    if (!META) return;
+    var docName = (META.as_doc && META.as_doc.doc_name) ? META.as_doc.doc_name : 'KPI 關鍵績效指標總覽（2-GM-04-01）';
+    $('#kpiPrintHead .kpi-print-comp').text(META.company || '');
+    $('#kpiPrintHead .kpi-print-title').text(docName);
+    $('#kpiPrintHead .kpi-print-sub').text(YEAR + ' 年度｜列印日期：' + new Date().toISOString().substr(0,10));
+}
+var KPI_PAPER_MM = { A4:{w:297,h:210}, A3:{w:420,h:297} }; // 統一用橫式（19欄較容易排下）
+function kpiMmToPx(mm){ return mm * 96 / 25.4; }
+function applyPrintPageStyle(paper, asDocNo){
+    var size = KPI_PAPER_MM[paper] || KPI_PAPER_MM.A4;
+    var asTxt = String(asDocNo||'').replace(/['\\]/g, '');
+    var css = '@page{size:' + paper + ' landscape;margin:10mm 8mm 14mm 8mm;'
+        + (asTxt ? " @bottom-right{content:'" + asTxt + "';font-size:9pt;color:#333;}" : '')
+        + " @bottom-left{content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁';font-size:9pt;color:#333;}"
+        + '}';
+    var $st = $('#kpiPageStyle');
+    if (!$st.length) $st = $('<style id="kpiPageStyle"></style>').appendTo('head');
+    $st.text(css);
+    return size;
+}
+function printKpi(){
+    if (!MATRIX) return;
+    renderPrintHead();
+    var paper = $('#kpiPaperSel').val() || 'A4';
+    var size = applyPrintPageStyle(paper, META && META.as_doc_no);
+    document.body.classList.add('kpi-printing');
+    document.body.style.zoom = 1;
+    // 量測「即將列印」版面（此時工具列/圖表已被 body.kpi-printing 隱藏、表頭已顯示）算出縮放比例，塞滿選定紙張的一頁
+    var natW = document.getElementById('kpiTable').scrollWidth;
+    var natH = document.querySelector('.right_col').scrollHeight;
+    var safeMm = 6; // 印表機不可印邊界安全值
+    var pageWpx = kpiMmToPx(size.w - 8*2 - safeMm);
+    var pageHpx = kpiMmToPx(size.h - 10 - 14 - safeMm);
+    var scale = Math.min(pageWpx / natW, pageHpx / natH);
+    scale = Math.max(0.35, Math.min(scale, 2.5));
+    document.body.style.zoom = scale;
+    setTimeout(function(){ window.print(); }, 100);
+}
+window.addEventListener('afterprint', function(){
+    document.body.style.zoom = '';
+    document.body.classList.remove('kpi-printing');
 });
 
 /* ---------- 事件 ---------- */

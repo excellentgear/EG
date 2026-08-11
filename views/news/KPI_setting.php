@@ -198,6 +198,13 @@ $kpiPerms = kpi_as_perms($db, $kpiUser);
                 <div style="margin-top:8px;">
                     <button class="ks-btn" id="btnSaveSettings">儲存附件設定</button>
                 </div>
+                <div style="margin-top:16px;border-top:1px dashed #EADFC8;padding-top:10px;">
+                    <label style="font-size:13px;color:#5b3a1e;">AS 文件編號綁定（列印表頭自動取該文件表單名稱、頁尾右下角自動印文件編號）</label>
+                    <div style="display:flex;gap:6px;align-items:center;">
+                        <span id="asDocLabel" style="flex:1;padding:6px 8px;border:1px solid #D8BE93;border-radius:4px;background:#FFF7E8;">（尚未綁定）</span>
+                        <button type="button" class="ks-btn" onclick="openAsDocPicker()">選擇</button>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -302,6 +309,7 @@ $kpiPerms = kpi_as_perms($db, $kpiUser);
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $activeMenu = $('#sidebar-menu .nav.side-menu > li.active');
@@ -416,6 +424,7 @@ function loadAll(){
         $('#baseStatus').html('實際生效路徑：' + esc(res.settings.attach_base_effective) +
             (res.settings.attach_base_ok ? ' <span style="color:#7a9c3f;">✔ 可存取</span>'
                                          : ' <span style="color:#DD5138;">✘ 目前無法存取(請確認NAS)</span>'));
+        renderAsDocLabel();
         loadLog();
     }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
@@ -757,6 +766,26 @@ function delRule(rid){
         if (!res.ok) { alert(res.error||'刪除失敗'); return; }
         loadAll();
     }, 'json');
+}
+
+/* ---------- AS 文件編號綁定 ---------- */
+function renderAsDocLabel(){
+    $('#asDocLabel').text(EGAsDoc.label(DATA.settings.as_doc));
+}
+function openAsDocPicker(){
+    $.getJSON(API, {action:'asdoc_list'}, function(res){
+        if (!res.ok) { alert(res.error||'載入失敗'); return; }
+        EGAsDoc.open({
+            docs: res.docs||[], current: DATA.settings.as_doc ? DATA.settings.as_doc.id : 0,
+            title: 'KPI 關鍵績效指標 AS 文件綁定',
+            onSave: function(id, doc){
+                $.post(API, {action:'asdoc_save', doc_id:id}, function(r){
+                    if (!r.ok) { alert(r.error||'儲存失敗'); return; }
+                    DATA.settings.as_doc = r.as_doc; renderAsDocLabel();
+                }, 'json');
+            }
+        });
+    });
 }
 
 /* ---------- 附件設定 / 年度複製 / 變更歷史 ---------- */

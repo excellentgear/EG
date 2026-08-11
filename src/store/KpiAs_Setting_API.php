@@ -10,6 +10,7 @@ header('Content-Type: application/json; charset=utf-8');
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/kpi_as_lib.php';
+include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
 
 function jout($a){ echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code=400){ http_response_code($code); echo json_encode(['ok'=>false,'error'=>$msg], JSON_UNESCAPED_UNICODE); exit; }
@@ -89,6 +90,7 @@ case 'get_all': {
             'attach_base_effective'=>kpi_as_attach_base($db),
             'attach_base_ok'=>is_dir(kpi_as_attach_base($db)),
             'attach_max'=>kpi_as_attach_max($db),
+            'as_doc'=>eg_asdoc_get($db, 'kpi_as'),
         ],
         'dicts'=>['departments'=>$depts, 'users'=>$users, 'process_types'=>$ptypes,
                   'machines'=>$machines, 'return_types'=>$rtypes, 'dept_members'=>$deptMembers],
@@ -244,6 +246,15 @@ case 'save_settings': {
     if ($oldBase !== rtrim($base, '\\/')) kpi_as_log($db, null, null, null, 'setting', 'kpi_attach_base', $oldBase, $base, null, $u);
     if ($oldMax !== $max) kpi_as_log($db, null, null, null, 'setting', 'kpi_attach_max', $oldMax, $max, null, $u);
     jout(['attach_base_effective'=>kpi_as_attach_base($db), 'attach_base_ok'=>is_dir(kpi_as_attach_base($db))]);
+}
+
+/* ---------- AS 文件編號綁定（列印表頭取 doc_name、頁尾右下取 doc_no，見 ai-rules/16 第一之三節）---------- */
+case 'asdoc_list': {
+    jout(['docs'=>eg_asdoc_list($db)]);
+}
+case 'asdoc_save': {
+    eg_asdoc_save($db, 'kpi_as', (int)($_POST['doc_id'] ?? 0), $u['user_cname']);
+    jout(['as_doc'=>eg_asdoc_get($db, 'kpi_as')]);
 }
 
 /* ---------- 出貨目標達成率(週報)基礎設定：週目標金額/帳款起始日，共用 kpi_lib.php，Shipping_Analysis_new.php 存廢不影響這裡 ---------- */
