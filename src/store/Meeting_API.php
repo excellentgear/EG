@@ -425,14 +425,25 @@ case 'delete': {
     if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可刪除', 403);
     if ($m['status'] !== 'draft' && !$perms['canAdmin']) jerr('已送出的會議記錄僅管理員可刪除');
     meeting_close_item_notices($db, $id); // 項目資料列即將刪除，先關閉還在生效中的回簽通知(要在刪 meeting_item 之前查)
+    // 2026-08-11修正：刪除只清了 meeting_attendee/meeting_item/meeting_record 三張表，
+    // meeting_item_confirm(項目確認簽名)、approval_record(主席/總經理簽核紀錄)、meeting_attach(附件) 都沒清，
+    // 會留下指向不存在 meeting_id 的孤兒資料列。附件另外要清實體檔案，不能只刪DB列。
+    $atRows = $db->prepare("SELECT file_name FROM meeting_attach WHERE meeting_id=?");
+    $atRows->execute([$id]);
+    $attachFiles = $atRows->fetchAll(PDO::FETCH_COLUMN);
     try {
         $db->beginTransaction();
+        $db->exec("DELETE mic FROM meeting_item_confirm mic JOIN meeting_item mi ON mi.item_id=mic.item_id WHERE mi.meeting_id=" . (int)$id);
+        $db->prepare("DELETE FROM approval_record WHERE module='meeting' AND entity_id=?")->execute([$id]);
+        $db->prepare("DELETE FROM meeting_attach WHERE meeting_id=?")->execute([$id]);
         $db->prepare("DELETE FROM meeting_attendee WHERE meeting_id=?")->execute([$id]);
         $db->prepare("DELETE FROM meeting_item WHERE meeting_id=?")->execute([$id]);
         $db->prepare("DELETE FROM meeting_record WHERE meeting_id=?")->execute([$id]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：'.$e->getMessage(), 500); }
     meeting_close_notice($db, $id);
+    $dir = meeting_attach_dir($db);
+    foreach ($attachFiles as $fn) { $fp = $dir . basename((string)$fn); if (is_file($fp)) @unlink($fp); }
     jout([]);
 }
 
