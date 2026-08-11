@@ -100,16 +100,20 @@ $OCQ_FROM = "FROM bom b
     LEFT JOIN user u_close ON u_close.id = b.closed_by";
 
 $OCQ_CLIENT_DISP = "COALESCE(cl_ds.customer, cl.customer, b.Client_Name)";
+$OCQ_CLIENT_ID = "COALESCE(cl_ds.customer_id, cl.customer_id)";
 
 // closed_at 是 2026-05-22 才上線的「手動結案」功能才會填寫，在此之前就已 processing_state='1' 的舊資料
 // （約佔已結案總數92%）完全沒有結案日期紀錄。BOM編號格式固定為 B-YYYMMDDNNN（YYY=民國年3碼／MM/DD／NNN=流水號3碼，
 // 全站11641筆BOM長度一致驗證過），舊資料改用「BOM編號回推的建立日期」當作結案日期的替代值（使用者明確指示，
-// 2026-08-11）：有 closed_at 就用真正的結案日期，沒有才退回 BOM 編號回推的日期，此值同時用於篩選/排序/顯示。
-$OCQ_EFFDATE = "COALESCE(DATE(b.closed_at), STR_TO_DATE(CONCAT(
+// 2026-08-11）：有 closed_at 就用真正的結案日期，沒有才退回 BOM 編號回推的日期，此值同時用於篩選/排序/顯示；
+// 也用於「統整報表」的結案耗時統計（起算點＝BOM編號回推的建立日期，終點＝真正的closed_at，沒有closed_at的
+// 舊資料無法算出真實耗時，直接排除在耗時統計外，不能拿推算日期自己減自己）。
+$OCQ_BOMDATE = "STR_TO_DATE(CONCAT(
         CAST(SUBSTRING(SUBSTRING_INDEX(b.bom,'-',-1),1,3) AS UNSIGNED) + 1911, '-',
         SUBSTRING(SUBSTRING_INDEX(b.bom,'-',-1),4,2), '-',
         SUBSTRING(SUBSTRING_INDEX(b.bom,'-',-1),6,2)
-    ), '%Y-%m-%d'))";
+    ), '%Y-%m-%d')";
+$OCQ_EFFDATE = "COALESCE(DATE(b.closed_at), $OCQ_BOMDATE)";
 
 $OCQ_COLS = "b.bom, b.d_id, b.sqty AS Qty, b.priority_type, b.d_setting_id, b.closed_by, b.closed_at,
     b.Delivery_date, $OCQ_CLIENT_DISP AS client_name_display,
@@ -118,7 +122,7 @@ $OCQ_COLS = "b.bom, b.d_id, b.sqty AS Qty, b.priority_type, b.d_setting_id, b.cl
 
 // $exclude：計算某個篩選欄位自己的可選清單(facet)時，要排除該欄位自己的條件
 function ocq_build_filter($p, $exclude = []) {
-    global $OCQ_CLIENT_DISP, $OCQ_EFFDATE;
+    global $OCQ_CLIENT_DISP, $OCQ_CLIENT_ID, $OCQ_EFFDATE;
     $where = ["b.processing_state = '1'"];
     $params = [];
 
@@ -127,15 +131,18 @@ function ocq_build_filter($p, $exclude = []) {
         if (!empty($p['date_to']))   { $where[] = "$OCQ_EFFDATE <= ?"; $params[] = $p['date_to']; }
     }
     if (!in_array('customer', $exclude, true) && !empty($p['customer'])) {
-        $where[] = "$OCQ_CLIENT_DISP LIKE ?"; $params[] = '%' . $p['customer'] . '%';
+        // 客戶名稱或客戶代號皆可模糊比對
+        $where[] = "($OCQ_CLIENT_DISP LIKE ? OR $OCQ_CLIENT_ID LIKE ?)";
+        $like = '%' . $p['customer'] . '%'; $params[] = $like; $params[] = $like;
     }
     if (!in_array('sales', $exclude, true) && !empty($p['sales'])) {
         $where[] = 'u_sales_primary.user_cname LIKE ?'; $params[] = '%' . $p['sales'] . '%';
     }
     if (!in_array('vendor', $exclude, true) && !empty($p['vendor'])) {
+        // 廠商名稱或廠商代號(maker_id_no)皆可模糊比對
         $where[] = "EXISTS (SELECT 1 FROM bom_ing bi_v LEFT JOIN maker_list ml_v ON ml_v.maker_id_no = bi_v.maker_id_no
-            WHERE bi_v.bom = b.bom AND ml_v.maker_id LIKE ?)";
-        $params[] = '%' . $p['vendor'] . '%';
+            WHERE bi_v.bom = b.bom AND (ml_v.maker_id LIKE ? OR bi_v.maker_id_no LIKE ?))";
+        $like = '%' . $p['vendor'] . '%'; $params[] = $like; $params[] = $like;
     }
     if (!in_array('bom', $exclude, true) && !empty($p['bom'])) {
         $where[] = '(b.bom LIKE ? OR b.d_id LIKE ?)';
@@ -315,6 +322,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             echo json_encode(['success' => true, 'rows' => $rows, 'total' => count($rows),
                 'max_process_count' => $max_count, 'price_map' => $price_map, 'company_name' => $company]);
+        } elseif ($action === 'get_summary') {
+            list($whereSql, $params) = ocq_build_filter($_POST);
+            $sql = "SELECT b.bom, $OCQ_CLIENT_DISP AS client_name_display, b.closed_at,
+                    (b.closed_at IS NULL) AS date_is_derived,
+                    DATEDIFF(DATE(b.closed_at), $OCQ_BOMDATE) AS duration_days
+                    $OCQ_FROM $whereSql";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            $total = count($rows);
+            $excluded = 0; $qualified = [];
+            $customerCount = [];
+            foreach ($rows as $r) {
+                $nm = $r['client_name_display'] ?: '（未知客戶）';
+                $customerCount[$nm] = ($customerCount[$nm] ?? 0) + 1;
+                if ($r['date_is_derived']) { $excluded++; } else { $qualified[] = $r; }
+            }
+            arsort($customerCount);
+            $qualifiedCount = count($qualified);
+            $avgDuration = null; $minRec = null; $maxRec = null;
+            if ($qualifiedCount) {
+                $sum = 0;
+                foreach ($qualified as $r) {
+                    $d = (int)$r['duration_days'];
+                    $sum += $d;
+                    if ($minRec === null || $d < (int)$minRec['duration_days']) $minRec = $r;
+                    if ($maxRec === null || $d > (int)$maxRec['duration_days']) $maxRec = $r;
+                }
+                $avgDuration = round($sum / $qualifiedCount, 1);
+            }
+            if ($maxRec) {
+                list($maxProcMap,) = ocq_fetch_processes($pdo, [$maxRec['bom']]);
+                $maxRec['processes'] = $maxProcMap[$maxRec['bom']] ?? [];
+            }
+
+            // 製程分布（依目前篩選出的全部BOM，含推算日期者一起算，跟清單/列印的母體一致；筆數由多到少）
+            $bom_list = array_column($rows, 'bom');
+            $processes = [];
+            if ($bom_list) {
+                $ph = implode(',', array_fill(0, count($bom_list), '?'));
+                $stmtPr = $pdo->prepare("SELECT pt.process_type AS category_name, COUNT(DISTINCT bi.bom) cnt
+                    FROM bom_ing bi LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                    LEFT JOIN process_type pt ON pt.process_type_id = pn.process_type_id
+                    WHERE bi.bom IN ($ph) GROUP BY pt.process_type_id, pt.process_type ORDER BY cnt DESC");
+                $stmtPr->execute($bom_list);
+                $processes = $stmtPr->fetchAll(PDO::FETCH_ASSOC);
+            }
+
+            $company = '';
+            $cr = $pdo->query("SELECT customer_full FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+            if ($cr) $company = $cr['customer_full'];
+
+            $customers = [];
+            foreach ($customerCount as $nm => $cnt) { $customers[] = ['name' => $nm, 'cnt' => $cnt]; }
+
+            echo json_encode(['success' => true, 'total' => $total, 'excluded' => $excluded,
+                'qualified' => $qualifiedCount, 'avg_duration' => $avgDuration,
+                'min_record' => $minRec, 'max_record' => $maxRec,
+                'processes' => $processes, 'customers' => $customers, 'company_name' => $company]);
         } elseif ($action === 'get_facets') {
             list($whereP, $paramsP) = ocq_build_filter($_POST, ['process_type']);
             $stmtP = $pdo->prepare("SELECT pn.process_type_id, pt.process_type AS category_name, COUNT(DISTINCT b.bom) cnt
@@ -415,6 +482,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .circle_green { background: #F7E0BD; border: 1px solid #D8BE93; }
         .ocq-sub { font-size: 10px; color: #999; margin-top: 3px; line-height: 1.4; }
         .ocq-price { margin-top: 3px; font-size: 11px; line-height: 1.3; }
+        .ocq-fillable { cursor: pointer; border-bottom: 1px dashed #D8BE93; }
+        .ocq-fillable:hover { background: #FFF3E2; }
     </style>
 </head>
 <body class="nav-sm">
@@ -444,7 +513,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <i class="fa fa-info-circle"></i> 舊資料無結案紀錄時以BOM編號推算日期
                 </small>
                 <label>客戶</label>
-                <input type="text" id="fCustomer" list="ocqCustomerList" placeholder="客戶名稱" style="width:110px;">
+                <input type="text" id="fCustomer" list="ocqCustomerList" placeholder="客戶名稱或代號" style="width:110px;">
                 <datalist id="ocqCustomerList"></datalist>
                 <label>業務</label>
                 <input type="text" id="fSales" list="ocqSalesList" placeholder="負責業務" style="width:90px;">
@@ -460,12 +529,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <button id="btnClear"><i class="fa fa-eraser"></i> 清除篩選(查全部)</button>
                 <button id="btnPrint" style="margin-left:auto;"><i class="fa fa-print"></i> 列印</button>
                 <button id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
+                <button id="btnSummary"><i class="fa fa-bar-chart"></i> 統整報表(PDF)</button>
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;margin-top:6px;padding-top:6px;border-top:1px dashed #EADFC8;">
                 <label style="margin-left:0;">BOM/料號</label>
                 <input type="text" id="fBom" placeholder="關鍵字" style="width:120px;">
                 <label>廠商</label>
-                <input type="text" id="fVendor" list="ocqVendorList" placeholder="廠商名稱" style="width:110px;">
+                <input type="text" id="fVendor" list="ocqVendorList" placeholder="廠商名稱或代號" style="width:110px;">
                 <datalist id="ocqVendorList"></datalist>
                 <label>發單數量</label>
                 <input type="text" id="fQty" placeholder="例：>100" style="width:90px;">
@@ -478,6 +548,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         <div class="ocq-stat">
             <span>共 <b id="statTotal">0</b> 筆</span>
+            <small style="color:#a06a1f;"><i class="fa fa-hand-pointer-o"></i> 雙擊表格中的客戶／BOM／料號可快速帶入篩選</small>
             <label style="margin-left:auto;">每頁</label>
             <select id="pageSizeSel" style="height:28px;">
                 <option value="5">5</option>
@@ -508,19 +579,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <p>逐筆列出所有已結案(結案)的BOM，供查找特定客戶/業務/廠商/日期/製程的已完工資料並列印或匯出，取代主頁「查詢已完工資料」跳窗固定50筆上限、只能用單一關鍵字搜尋的限制；跳窗維持不變，兩者並存。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>上方篩選可組合使用：製程大類（頁籤按鈕）、結案日期區間、客戶、業務、優先權燈號、BOM/料號、廠商、發單數量、交期、全域關鍵字。</li>
+            <li>上方篩選可組合使用：製程大類（頁籤按鈕）、結案日期區間、客戶、業務、優先權燈號、BOM/料號、廠商、發單數量、交期、全域關鍵字，<b>輸入時即時篩選</b>（不需按Enter或查詢鈕）。</li>
+            <li>客戶／廠商欄位可輸入名稱或代號（部分字串模糊比對皆可）。</li>
+            <li>表格內的<b>客戶／BOM／料號用滑鼠雙擊</b>可直接帶入對應篩選框並立即查詢，方便快速鎖定同客戶或同BOM的其他資料。</li>
+            <li>篩選框有內容時雙擊可清空（全站共用規則），清空後會自動連帶重新查詢。</li>
             <li>製程大類的可選清單會依「目前其餘篩選條件」動態連動，只列真的有資料的選項。</li>
             <li>結案日期區間預設近30天；按「清除篩選(查全部)」可清空所有條件、改查全部歷史已結案資料。</li>
             <li>全域關鍵字可用空白分隔多個關鍵字，每個關鍵字都要在（可分散於不同欄位）命中才算符合。</li>
             <li>列表分頁顯示（避免一次載入全部拖慢速度），可調整每頁筆數。</li>
-            <li>「列印」「匯出CSV」皆依目前篩選條件抓「全部」符合筆數（不受分頁限制）。</li>
+            <li>「列印」「匯出CSV」「統整報表」皆依目前篩選條件抓「全部」符合筆數（不受分頁限制）。</li>
         </ul>
         <h4>重要行為/常見疑問</h4>
-        <div class="tip">若篩選結果筆數較多（超過3000筆），列印/匯出前會先跳出確認提示，避免不小心產生過大的列印工作。</div>
+        <div class="tip">若篩選結果筆數較多（超過3000筆），列印/匯出/統整報表前會先跳出確認提示，避免不小心產生過大的工作。</div>
         <div class="tip">結案日期是2026-05-22「手動結案」功能上線才開始記錄的，在此之前就已結案的舊資料（約佔已結案總數九成以上）完全沒有結案時間紀錄。這類舊資料改用「BOM編號回推的建立日期」代替（BOM編號格式固定為 B-民國年3碼+月2碼+日2碼+流水號3碼），清單/列印上會標註「(推算)」以資區別；此推算日期同時用於日期篩選與排序。</div>
+        <div class="tip">「統整報表」的<b>結案耗時</b>統計（平均/最短/最長結案時間）只計算真的有結案時間紀錄的BOM（合格結案紀錄），無結案時間、改用BOM編號推算日期的舊資料一律不列入耗時計算（會顯示在「不列入計算筆數」），因為推算日期本身就是建立日期，拿來跟自己相減沒有意義。</div>
         <ul>
             <li>「業務」欄只顯示該客戶原本負責業務，不判斷代理人是否正在請假（歷史資料的負責業務是固定事實）。</li>
             <li>優先權燈號：橘色=急件U、紅色=特急件E、淺色=一般。</li>
+            <li>統整報表的製程分布/客戶分布皆依BOM筆數由多到少排序。</li>
         </ul>
         <h4>設定入口</h4>
         <p>無需另外設定，資料即時取自BOM系統，結案狀態依主頁的結案/取消結案操作即時反映。</p>
@@ -602,9 +678,12 @@ function rowToTr(item, maxProc, priceMap){
         ? '<div class="ocq-price">' + (totalUnitPrice > 0 ? '<span style="color:#0a6;font-weight:bold;">$'+fmtPrice(totalUnitPrice)+'</span>' : '<span style="color:#ccc;">$--</span>')
           + (noPriceCount > 0 ? ' <span style="color:#aaa;font-size:10px;">('+noPriceCount+'關無價)</span>' : '') + '</div>' : '';
 
-    var tds = '<td>'+esc(item.client_name_display||'')+'</td>'
-        + '<td class="t-left"><figure class="'+cc+'"></figure>'+esc(item.bom)+closedInfo+'</td>'
-        + '<td class="t-left">'+esc(item.d_id||'')+priceHtml+'</td>'
+    var custSpan = '<span class="ocq-fillable" data-field="customer" title="雙擊帶入客戶篩選">'+esc(item.client_name_display||'')+'</span>';
+    var bomSpan = '<span class="ocq-fillable" data-field="bom" title="雙擊帶入BOM/料號篩選">'+esc(item.bom)+'</span>';
+    var didSpan = item.d_id ? '<span class="ocq-fillable" data-field="bom" title="雙擊帶入BOM/料號篩選">'+esc(item.d_id)+'</span>' : '';
+    var tds = '<td>'+custSpan+'</td>'
+        + '<td class="t-left"><figure class="'+cc+'"></figure>'+bomSpan+closedInfo+'</td>'
+        + '<td class="t-left">'+didSpan+priceHtml+'</td>'
         + '<td>'+esc(item.Qty||'')+'</td>'
         + '<td>'+esc(item.Delivery_date ? egFmtDate(item.Delivery_date) : '')+'</td>'
         + '<td>'+esc(item.sales_name||'')+'</td>';
@@ -702,10 +781,27 @@ function applyFilters(){ refreshFacets(function(){ loadList(1); }); }
 
 $('#btnSearch').on('click', applyFilters);
 ['#fDateFrom','#fDateTo','#fPriority'].forEach(function(sel){ $(sel).on('change', applyFilters); });
+// 即時篩選（防抖200ms，跟主頁全域搜尋同款）；eg_input_rules.js的「有值雙擊清空」也會觸發input事件，
+// 因此雙擊清空篩選框內容時會自動連帶重新查詢，不需要另外處理。
+var _ocqDebounce = null;
+function debouncedApplyFilters(){
+    clearTimeout(_ocqDebounce);
+    _ocqDebounce = setTimeout(applyFilters, 200);
+}
 ['#fCustomer','#fSales','#fBom','#fVendor','#fQty','#fDelivery','#fKeyword'].forEach(function(sel){
-    $(sel).on('keyup', function(e){ if (e.key==='Enter') applyFilters(); });
+    $(sel).on('input', debouncedApplyFilters);
 });
 $('#pageSizeSel').on('change', function(){ loadList(1); });
+
+// 雙擊表格中的客戶／BOM／料號 → 帶入對應篩選框並立即查詢
+$('#ocqTbody').on('dblclick', '.ocq-fillable', function(){
+    var field = $(this).data('field');
+    var val = $.trim($(this).text());
+    if (!val) return;
+    if (field === 'customer') $('#fCustomer').val(val);
+    else if (field === 'bom') $('#fBom').val(val);
+    applyFilters();
+});
 
 $('#btnClear').on('click', function(){
     $('#fCustomer, #fSales, #fBom, #fVendor, #fQty, #fDelivery, #fKeyword').val('');
@@ -789,6 +885,113 @@ $('#btnExportCsv').on('click', function(){
     $('body').append($form);
     $form[0].submit();
     $form.remove();
+});
+
+// ── 統整報表：依目前篩選條件抓「全部」符合筆數，彙總後開新視窗列印（可用瀏覽器列印功能另存為PDF）──
+function buildBarChartSvg(items){
+    if (!items || !items.length) return '';
+    var max = 0;
+    items.forEach(function(it){ if (it.cnt > max) max = it.cnt; });
+    if (max <= 0) max = 1;
+    var barH = 18, gap = 8, labelW = 110, chartW = 320, rowH = barH + gap;
+    var h = items.length * rowH + gap;
+    var w = labelW + chartW + 50;
+    var svg = '<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" style="max-width:520px;height:auto;">';
+    items.forEach(function(it, i){
+        var y = gap + i * rowH;
+        var bw = Math.max(2, Math.round(it.cnt / max * chartW));
+        svg += '<text x="' + (labelW - 8) + '" y="' + (y + barH * 0.75) + '" text-anchor="end" font-size="11" fill="#5b3a1e">' + esc(it.category_name || '（未分類）') + '</text>';
+        svg += '<rect x="' + labelW + '" y="' + y + '" width="' + bw + '" height="' + barH + '" rx="3" fill="#F0A24B"></rect>';
+        svg += '<text x="' + (labelW + bw + 6) + '" y="' + (y + barH * 0.75) + '" font-size="11" fill="#5b3a1e">' + it.cnt + '</text>';
+    });
+    svg += '</svg>';
+    return svg;
+}
+
+$('#btnSummary').on('click', function(){
+    if (!confirmLargeResult('產生統整報表')) return;
+    var f = curFilters();
+    f.action = 'get_summary';
+    $.post('', f, function(res){
+        if (!res.success){ alert(res.message||'載入失敗'); return; }
+
+        var critParts = [];
+        critParts.push('結案日期：' + ((f.date_from||f.date_to) ? ((f.date_from||'不限')+' ～ '+(f.date_to||'不限')) : '不限日期(全部)'));
+        if (f.process_type) critParts.push('製程：' + $.trim($('#processTabs .ocq-tab.active').text()));
+        if (f.customer) critParts.push('客戶：'+f.customer);
+        if (f.sales) critParts.push('業務：'+f.sales);
+        if (f.priority) critParts.push('優先權：'+$('#fPriority option:selected').text());
+        if (f.bom) critParts.push('BOM/料號：'+f.bom);
+        if (f.vendor) critParts.push('廠商：'+f.vendor);
+        if (f.qty) critParts.push('發單數量：'+f.qty);
+        if (f.delivery) critParts.push('交期：'+f.delivery);
+        if (f.keyword) critParts.push('全域關鍵字：'+f.keyword);
+
+        var tiles = ''
+            + '<div class="s-tile"><div class="s-lbl">總筆數</div><div class="s-val">'+res.total+'</div></div>'
+            + '<div class="s-tile"><div class="s-lbl">合格結案紀錄筆數</div><div class="s-val">'+res.qualified+'</div></div>'
+            + '<div class="s-tile"><div class="s-lbl">不列入計算筆數(推算日期)</div><div class="s-val">'+res.excluded+'</div></div>'
+            + '<div class="s-tile"><div class="s-lbl">平均結案時間</div><div class="s-val">'+(res.avg_duration!=null?res.avg_duration+' 天':'—')+'</div></div>';
+
+        var procTable = '<table class="p-tb"><thead><tr><th>製程</th><th>筆數</th></tr></thead><tbody>'
+            + (res.processes||[]).map(function(p){ return '<tr><td class="tl">'+esc(p.category_name||'（未分類）')+'</td><td>'+p.cnt+'</td></tr>'; }).join('')
+            + '</tbody></table>';
+
+        var custTable = '<table class="p-tb"><thead><tr><th>客戶</th><th>筆數</th></tr></thead><tbody>'
+            + (res.customers||[]).map(function(c){ return '<tr><td class="tl">'+esc(c.name)+'</td><td>'+c.cnt+'</td></tr>'; }).join('')
+            + '</tbody></table>';
+
+        function fmtRec(r){
+            if (!r) return '<p style="color:#888;font-size:12px;">（無合格結案紀錄可統計——目前篩選結果中沒有具備真實結案時間的BOM）</p>';
+            return '<table class="p-tb"><thead><tr><th>BOM</th><th>客戶</th><th>結案日期</th><th>結案耗時</th></tr></thead><tbody>'
+                + '<tr><td class="tl">'+esc(r.bom)+'</td><td class="tl">'+esc(r.client_name_display||'')+'</td>'
+                + '<td>'+esc(r.closed_at||'')+'</td><td>'+r.duration_days+' 天</td></tr></tbody></table>';
+        }
+        var maxProcTxt = '';
+        if (res.max_record && res.max_record.processes && res.max_record.processes.length){
+            maxProcTxt = '<p style="font-size:12px;color:#5b3a1e;">製程組成：' + res.max_record.processes.map(function(p){
+                return esc((p.process_no||'')+(p.ProcessName?' '+p.ProcessName:''));
+            }).join(' → ') + '</p>';
+        }
+
+        var body = '<div class="p-comp">' + esc(res.company_name||'') + '</div>'
+                 + '<div class="p-title">已完工BOM統整報表</div>'
+                 + '<div class="p-sub">篩選條件：' + esc(critParts.join('｜')) + '｜產出日期：' + todayStr() + '</div>'
+                 + '<div class="s-bar">' + tiles + '</div>'
+                 + '<div class="s-sec-title">製程分布（依BOM筆數，多到少）</div>'
+                 + buildBarChartSvg(res.processes||[])
+                 + procTable
+                 + '<div class="s-sec-title">客戶分布（依BOM筆數，多到少）</div>'
+                 + custTable
+                 + '<div class="s-sec-title">最短結案時間</div>' + fmtRec(res.min_record)
+                 + '<div class="s-sec-title">最長結案時間</div>' + fmtRec(res.max_record) + maxProcTxt;
+
+        var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+            + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
+            + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:6px;margin-bottom:2px;}'
+            + '.p-sub{font-size:11px;text-align:center;color:#555;margin-bottom:10px;}'
+            + '.s-sec-title{font-size:13px;font-weight:bold;color:#8A5A2B;border-bottom:2px solid #F7E0BD;padding-bottom:2px;margin:14px 0 6px;}'
+            + '.s-bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px;}'
+            + '.s-tile{flex:1 1 130px;border:1px solid #999;border-radius:4px;padding:6px 10px;}'
+            + '.s-lbl{font-size:10px;color:#666;}'
+            + '.s-val{font-size:18px;font-weight:bold;}'
+            + 'table.p-tb{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:6px;}'
+            + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 6px;text-align:center;}'
+            + 'table.p-tb thead th{background:#f3ead6;}'
+            + 'table.p-tb td.tl{text-align:left;}'
+            + '@page{margin:12mm 10mm 18mm;}';
+
+        var w = window.open('', '_blank');
+        w.document.write('<html><head><meta charset="utf-8"><title>已完工BOM統整報表</title><style>'+css+'</style></head><body>'+body
+            +'<scr'+'ipt>window.onload=function(){'
+            +'var onePageA4=(297-30)*96/25.4;'
+            +'if(document.body.scrollHeight>onePageA4*0.92){'
+            +'var st=document.createElement(\'style\');'
+            +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
+            +'document.head.appendChild(st);}'
+            +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+        w.document.close();
+    }, 'json');
 });
 
 applyFilters();
