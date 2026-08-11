@@ -3212,6 +3212,8 @@ foreach($dCounts as $c) {
         .gear-output-val.val-err   { background: #fff0f0; color: #c0392b; font-weight: 700; }
         .gear-output-val.val-warn  { background: #fffbea; color: #856404; font-weight: 700; }
         .gear-output-val.val-boss  { background: #fff3e0; color: #e65100; font-weight: 700; }
+        .gear-output-val.val-cust  { background: #f3e5f5; color: #6a1b9a; font-weight: 700; }
+        .gear-out-label.lbl-cust   { color: #6a1b9a; font-weight: 700; }
 
         /* DMS 三欄角度輸入 */
         .dms-wrap { display: flex; align-items: center; gap: 4px; }
@@ -11164,6 +11166,7 @@ foreach($dCounts as $c) {
         gSetText('go-m-title',_gearInternal ? '跨銷值 M（內齒）' : '跨珠值 M');
         gSetText('go-rechob-m-range-lbl', _gearInternal ? '跨銷值 M 下/上限' : '建議滾齒 M 下/上限（依標準跨珠值 M 換算）');
         gSetText('go-rechob-wk-lbl', '建議滾齒跨齒厚（依標準）');
+        var _rlEl = document.getElementById('go-rechob-wk-lbl'); if (_rlEl) _rlEl.classList.remove('lbl-cust');
         var blk = document.getElementById('go-block-wk'); if (blk) blk.style.display = _gearInternal ? 'none' : '';
         var rm  = document.getElementById('go-row-rechob-m'); if (rm) rm.style.display = _gearInternal ? 'none' : '';
         ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-wk-bmin','go-rechob-wk','go-allow-info','go-dp-used','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range'].forEach(function(id){ setOut(id,''); });
@@ -11340,13 +11343,14 @@ foreach($dCounts as $c) {
         // 有客戶跨齒厚上限時，建議滾齒跨齒厚改依客戶規格；否則沿用標準理論值
         var useCustRechob = (custWkUpper !== null);
         gSetText('go-rechob-wk-lbl', useCustRechob ? '建議滾齒跨齒厚（依客戶）' : '建議滾齒跨齒厚（依標準）');
+        var rechobLblEl = document.getElementById('go-rechob-wk-lbl');
+        if (rechobLblEl) rechobLblEl.classList.toggle('lbl-cust', useCustRechob);
 
         var rec_hob_Wk = null, x_rec = null, M_rec = null, M_rec_up = null, M_rec_dn = null;
         if (!is_boss && allow_val > 0) {
             if (useCustRechob) {
-                // 客戶跨齒厚上限 → 補正上公差至 -0.02 基準（客戶未填上公差視為 0）→ 加預留量
-                var custWkOffset = (cwu !== null ? cwu : 0) - (-0.02);
-                rec_hob_Wk = gRound(custWkUpper + custWkOffset + allow_val, 5);
+                // 客戶跨齒厚上限 → 加上公差偏移(0−(−0.02)=0.02，與 showCustRecHob 客戶M上限路徑同一套慣例)→ 加預留量
+                rec_hob_Wk = gRound(custWkUpper + 0.02 + allow_val, 5);
             } else {
                 rec_hob_Wk = gRound(Wk_actual + allow_val, 5);
             }
@@ -11408,7 +11412,7 @@ foreach($dCounts as $c) {
             setOut('go-rechob-m', '需詢問BOSS', 'val-boss');
             setOut('go-rechob-m-range', '需詢問BOSS', 'val-boss');
         } else {
-            setOut('go-rechob-wk', allow_val > 0 ? fmtNum(rec_hob_Wk, 5) : '（待查表）', allow_val > 0 ? 'val-ok' : 'val-warn');
+            setOut('go-rechob-wk', allow_val > 0 ? fmtNum(rec_hob_Wk, 5) : '（待查表）', allow_val > 0 ? (useCustRechob ? 'val-cust' : 'val-ok') : 'val-warn');
             setOut('go-m',     typeof M_std === 'string' ? M_std : fmtNum(M_std, 5), typeof M_std === 'string' ? 'val-err' : 'val-ok');
             if (M_rec !== null && typeof M_rec === 'number') {
                 setOut('go-rechob-m', fmtNum(M_rec, 5), 'val-ok');
