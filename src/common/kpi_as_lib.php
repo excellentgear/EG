@@ -526,16 +526,24 @@ function kpi_as_months(string $freq): array {
     }
 }
 /**
- * 頻率bucket月(m，即該期間的結束月)對應「期間起始月」。
- * bucket月只代表期間結束點，手動填寫的活動(如客戶滿意度調查)實際發生在整個期間內、不必等到期間結束月才能填，
- * 故「未來」判定改用起始月：期間已開始(curM>=起始月)即可填，不必等到結束月(m)到達。auto指標維持用bucket月本身判斷(需整期結束才能結算)。
+ * 手動填寫指標的「有效可填月份」：自動指標維持只有bucket月(該期間結束月)有資料；
+ * 手動指標(問卷/人工統計等)整個期間內任何一個月份都可以是實際填寫的月份(使用者自行選擇填在哪個月)，
+ * 故開放1~12月都是有效月份，實際「只能擇一月份填寫」的限制另由 kpi_as_period_group() 的期間互斥檢查把關。
  */
-function kpi_as_period_start_month(string $freq, int $m): int {
+function kpi_as_valid_months(array $iy): array {
+    if (($iy['source_mode'] ?? '') === 'manual') return [1,2,3,4,5,6,7,8,9,10,11,12];
+    return kpi_as_months($iy['freq']);
+}
+/**
+ * 月份 $m 所屬的「期間」內所有月份(quarterly=同季3個月／halfyear=同半年6個月／yearly=全年12個月／monthly=僅自己)。
+ * 手動填寫一個期間只能擇一月份填寫資料，此函式用來找出「同期間的其他月份」做互斥檢查（見 case 'fill' 的期間互斥擋）。
+ */
+function kpi_as_period_group(string $freq, int $m): array {
     switch ($freq) {
-        case 'quarterly': return $m - 2;
-        case 'halfyear':  return $m - 5;
-        case 'yearly':    return 1;
-        default:          return $m;
+        case 'quarterly': $s = intdiv($m - 1, 3) * 3 + 1; return range($s, $s + 2);
+        case 'halfyear':  return $m <= 6 ? range(1, 6) : range(7, 12);
+        case 'yearly':    return range(1, 12);
+        default:          return [$m];
     }
 }
 

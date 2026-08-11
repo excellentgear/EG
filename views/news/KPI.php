@@ -194,8 +194,8 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         </div>
         <div class="kpi-legend" style="font-size:11px;color:#8a6d45;margin-top:4px;">
             說明：<span class="kpi-preview">橘色斜體</span>=當月即時試算(未定案)；<span class="kpi-below">紅字</span>=未達標；
-            <span class="kpi-ov-mark">✱</span>=手動覆寫；<span class="kpi-attach-badge">📎n</span>=佐證附件；?=無資料；NA=未到期。
-            點儲存格可操作（明細/附件/填寫/覆寫/重算）。
+            <span class="kpi-ov-mark">✱</span>=手動覆寫；<span class="kpi-attach-badge">📎n</span>=佐證附件；?=無資料；NA=未到期；－=本期已填在其他月份。
+            點儲存格可操作（明細/附件/填寫/覆寫/重算）；每季/每半年/每年的手動指標一期只能擇一月份填寫，如需改填其他月份請先清除。
         </div>
 
         <div id="chartBox">
@@ -375,6 +375,7 @@ function renderTable(){
             var c = r.cells[m];
             var cls = 'kpi-cell', txt;
             if (c.future) { txt = '<span class="kpi-na">NA</span>'; }
+            else if (c.locked_month) { txt = '<span class="kpi-na" title="本期已於'+c.locked_month+'月填寫，如需改填此月份請先清除該月份內容">－</span>'; }
             else if (c.v === null) { txt = '<span class="kpi-none">?</span>'; }
             else {
                 var f = fmtVal(c.v, r.value_type);
@@ -411,10 +412,11 @@ $(document).on('click', 'td.kpi-cell', function(e){
     var items = [];
     items.push({t:'<i class="fa fa-info-circle"></i> 數值明細', f:function(){ showDetail(ri,m); }});
     items.push({t:'<i class="fa fa-paperclip"></i> 附件（'+c.attach+'）', f:function(){ openAttach(r.indicator_id, m, r); }});
-    if (r.can_fill && !c.future) items.push({t:'<i class="fa fa-pencil"></i> 填寫/修改', f:function(){ openFill(ri,m); }});
+    if (r.can_fill && !c.future && !c.locked_month) items.push({t:'<i class="fa fa-pencil"></i> 填寫/修改', f:function(){ openFill(ri,m); }});
+    if (r.can_fill && c.src === 'manual') items.push({t:'<i class="fa fa-eraser"></i> 清除填寫', f:function(){ doClearFill(r.indicator_id, m); }});
     if (r.can_recalc && !c.future && c.src !== 'preview')
         items.push({t:'<i class="fa fa-refresh"></i> 重算此月', f:function(){ doRecalc(r.indicator_id, m); }});
-    if (r.can_override && !c.future) {
+    if (r.can_override && !c.future && !c.locked_month) {
         items.push({t:'<i class="fa fa-hand-paper-o"></i> 手動覆寫', f:function(){ openOverride(ri,m); }});
         if (c.src === 'override') items.push({t:'<i class="fa fa-eraser"></i> 清除覆寫', f:function(){ doClearOverride(r.indicator_id, m); }});
     }
@@ -505,6 +507,13 @@ function submitFill(){
             closeMask('fillMask'); loadMatrix();
         }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
+function doClearFill(iid, m){
+    if (!confirm('清除此月份的填寫內容？(季/半年/年度指標可改填其他月份)')) return;
+    $.post(API, {action:'clear_fill', indicator_id:iid, year:YEAR, month:m}, function(res){
+        if (!res.ok) { alert(res.error||'失敗'); return; }
+        loadMatrix();
+    }, 'json');
+}
 
 /* ---------- 覆寫 ---------- */
 var ovCtx = null;
@@ -560,20 +569,12 @@ $('#btnUpload').on('click', function(){
     refreshAttList();
     openMask('attMask');
 });
-function kpiPeriodStartMonth(freq, m){
-    // 手動指標的bucket月只代表期間結束點，期間開始就能填/傳附件，不必等到結束月，見 kpi_as_lib.php 同名函式
-    if (freq === 'quarterly') return m - 2;
-    if (freq === 'halfyear') return m - 5;
-    if (freq === 'yearly') return 1;
-    return m;
-}
 function fillAttMonths(){
     var iid = +$('#attIndSel').val();
     var mi = (META.my_indicators||[]).find(function(x){ return x.indicator_id === iid; });
     var $m = $('#attMonthSel').empty();
     (mi ? mi.months : [1,2,3,4,5,6,7,8,9,10,11,12]).forEach(function(m){
-        var startM = mi && mi.source_mode === 'manual' ? kpiPeriodStartMonth(mi.freq, m) : m;
-        if (YEAR === META.cur_year && startM > META.cur_month) return;
+        if (YEAR === META.cur_year && m > META.cur_month) return;
         $m.append('<option value="'+m+'">'+m+'月</option>');
     });
     if (YEAR === META.cur_year && $m.find('option').length) $m.val($m.find('option').last().val());

@@ -84,7 +84,7 @@ case 'meta': {
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $ownerId = (int)$r['owner_user_id'];
         if (!($perms['isAdmin'] || $ownerId === $uid || kpi_as_is_delegate_of_owner($db, $ownerId, $uid))) continue;
-        $r['months'] = kpi_as_months($r['freq']);
+        $r['months'] = kpi_as_valid_months($r);
         unset($r['owner_user_id']);
         $mine[] = $r;
     }
@@ -114,9 +114,19 @@ case 'matrix': {
     $rows = [];
     foreach ($iys as $iy) {
         $iid = (int)$iy['indicator_id'];
-        $months = kpi_as_months($iy['freq']);
+        $months = kpi_as_valid_months($iy);
         $params = kpi_as_params($iy['params_json']);
         $cells = []; $vals = [];
+        // 手動填寫指標：一個期間(季/半年/年)只能擇一月份填寫，先算出各期間目前是哪個月份填了資料，供逐月建格時判斷是否鎖定
+        $groupFilledMonth = [];
+        if ($iy['source_mode'] === 'manual') {
+            foreach ($months as $m) {
+                $gkey = kpi_as_period_group($iy['freq'], $m)[0];
+                if (!array_key_exists($gkey, $groupFilledMonth)) $groupFilledMonth[$gkey] = null;
+                $mv0 = $mvs[$iid][$m] ?? null;
+                if ($mv0 && ($mv0['manual_value'] !== null || $mv0['override_value'] !== null)) $groupFilledMonth[$gkey] = $m;
+            }
+        }
         foreach ($months as $m) {
             $mv = $mvs[$iid][$m] ?? null;
             $src = 'none'; $val = null; $preview = false;
@@ -140,17 +150,19 @@ case 'matrix': {
                 $res = kpi_as_compute($db, (string)$iy['calculator_key'], $year, $m, $params);
                 if ($res !== null) { $val = $res['value']; $src = $val === null ? 'none' : 'preview'; $preview = true; }
             }
+            $future = ($year === $curY && $m > $curM) || $year > $curY;
+            $lockedMonth = null;
             if ($iy['source_mode'] === 'manual') {
-                $periodStartM = kpi_as_period_start_month($iy['freq'], $m);
-                $future = ($year === $curY && $periodStartM > $curM) || $year > $curY;
-            } else {
-                $future = ($year === $curY && $m > $curM) || $year > $curY;
+                $gkey = kpi_as_period_group($iy['freq'], $m)[0];
+                $fm = $groupFilledMonth[$gkey] ?? null;
+                if ($fm !== null && $fm !== $m) $lockedMonth = $fm;
             }
             if ($val !== null && !$preview) $vals[] = $val;
             $cells[$m] = [
                 'v' => $val === null ? null : round($val, 2),
                 'src' => $src,
                 'future' => $future,
+                'locked_month' => $lockedMonth,
                 'below' => kpi_as_below_target($val, $iy),
                 'num' => $mv['numerator'] ?? null,
                 'den' => $mv['denominator'] ?? null,
@@ -170,7 +182,7 @@ case 'matrix': {
         if ($iy['value_type'] !== 'yesno' && $vals) $avg = round(array_sum($vals) / count($vals), 2);
         // 去年平均
         $pvals = [];
-        foreach (kpi_as_months($iy['freq']) as $m) {
+        foreach (kpi_as_valid_months($iy) as $m) {
             $pv = kpi_as_display_value($pmvs[$iid][$m] ?? null);
             if ($pv !== null) $pvals[] = $pv;
         }
@@ -308,8 +320,18 @@ case 'fill': {
     if ($iy['source_mode'] !== 'manual') jerr('此指標為自動計算，如需修正請用覆寫功能');
     if (!kpi_as_can_override($db, $year, $perms, (int)$iy['owner_user_id'], $uid))
         jerr('僅擔當者本人或其請假代理人可填寫（年度鎖定後僅KPI管理員可補填）', 403);
-    if (!in_array($month, kpi_as_months($iy['freq']), true)) jerr('該指標此月份不適用（頻率：'.$iy['freq'].'）');
-    if ($year === $curY && kpi_as_period_start_month($iy['freq'], $month) > $curM) jerr('該期間尚未開始，不可提前填寫');
+    if (!in_array($month, kpi_as_valid_months($iy), true)) jerr('該指標此月份不適用（頻率：'.$iy['freq'].'）');
+    if ($year === $curY && $month > $curM) jerr('不可填寫未來月份');
+    // 一個期間(季/半年/年)只能擇一月份填寫，若同期間其他月份已有資料，需先清除才能改填此月份
+    $grp = kpi_as_period_group($iy['freq'], $month);
+    if (count($grp) > 1) {
+        $ph = implode(',', array_fill(0, count($grp), '?'));
+        $st = $db->prepare("SELECT month FROM kpi_as_monthly_value WHERE indicator_id=? AND year=? AND month IN ($ph)
+                            AND month<>? AND (manual_value IS NOT NULL OR override_value IS NOT NULL)");
+        $st->execute(array_merge([$iid, $year], $grp, [$month]));
+        $otherMonth = $st->fetchColumn();
+        if ($otherMonth !== false) jerr('本期已於 '.$otherMonth.' 月填寫，如需改填此月份請先清除該月份的填寫內容', 409);
+    }
     $raw = trim((string)($_POST['value'] ?? ''));
     if ($raw === '') jerr('請輸入數值');
     $val = (float)$raw;
@@ -328,6 +350,27 @@ case 'fill': {
     jout(['value'=>$val]);
 }
 
+/* ---------- 清除填寫（手動指標一個期間只能擇一月份，要改填其他月份需先清除；同fill權限） ---------- */
+case 'clear_fill': {
+    $iid = (int)($_POST['indicator_id'] ?? 0);
+    $year = (int)($_POST['year'] ?? 0);
+    $month = (int)($_POST['month'] ?? 0);
+    $iy = kpi_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    if ($iy['source_mode'] !== 'manual') jerr('僅手動填寫指標可清除填寫');
+    if (!kpi_as_can_override($db, $year, $perms, (int)$iy['owner_user_id'], $uid))
+        jerr('僅擔當者本人或其請假代理人可清除填寫', 403);
+    $st = $db->prepare("SELECT manual_value FROM kpi_as_monthly_value WHERE indicator_id=? AND year=? AND month=?");
+    $st->execute([$iid, $year, $month]);
+    $old = $st->fetchColumn();
+    $st = $db->prepare("UPDATE kpi_as_monthly_value
+                        SET manual_value=NULL, filled_by=NULL, filled_by_name=NULL, filled_at=NULL, note=NULL
+                        WHERE indicator_id=? AND year=? AND month=?");
+    $st->execute([$iid, $year, $month]);
+    kpi_as_log($db, $iid, $year, $month, 'fill', 'manual_value', $old === false ? null : $old, null, '清除填寫', $u);
+    jout([]);
+}
+
 /* ---------- 覆寫 / 清除覆寫（擔當者本人／其請假代理人；年度鎖定後僅KPI管理員；原因必填；保留原值可追溯） ---------- */
 case 'override': {
     $iid = (int)($_POST['indicator_id'] ?? 0);
@@ -336,7 +379,7 @@ case 'override': {
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
     if (!kpi_as_can_override($db, $year, $perms, (int)$iy['owner_user_id'], $uid)) jerr('僅擔當者本人或其請假代理人可手動覆寫', 403);
-    if (!in_array($month, kpi_as_months($iy['freq']), true)) jerr('該指標此月份不適用');
+    if (!in_array($month, kpi_as_valid_months($iy), true)) jerr('該指標此月份不適用');
     $raw = trim((string)($_POST['value'] ?? ''));
     $reason = mb_substr(trim((string)($_POST['reason'] ?? '')), 0, 200);
     if ($raw === '') jerr('請輸入覆寫值');
@@ -399,7 +442,7 @@ case 'attach_upload': {
     if ($year < 2025 || $year > $curY) jerr('年度不合法');
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
-    if (!in_array($month, kpi_as_months($iy['freq']), true)) jerr('該指標此月份不適用');
+    if (!in_array($month, kpi_as_valid_months($iy), true)) jerr('該指標此月份不適用');
     $ownerId = (int)$iy['owner_user_id'];
     if (!($perms['isAdmin'] || $ownerId === $uid || kpi_as_is_delegate_of_owner($db, $ownerId, $uid)))
         jerr('僅該指標擔當者本人或其請假代理人可上傳佐證', 403);
