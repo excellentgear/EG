@@ -162,10 +162,10 @@ $perms = rvf_perms($db, $rvfUser);
     <div class="m-body">
         <input type="hidden" id="scTplId" value="0">
         <div class="rf-sec-title">逐列可填欄位（除固定的「項目」文字外，額外可設定審查結果／其他欄位／日期欄位，可自由混合排序）</div>
-        <div class="rf-hint">每列固定含「項目」文字欄；以下欄位會依此清單的順序顯示在項目欄之後，文字/下拉/日期欄位可任意混合排序——拖動最左側 <i class="fa fa-bars"></i> 或按 ▲▼ 調整順序。「排版」選整行代表獨佔一列（適合長文字），選並排代表與其他並排欄位同一列。</div>
+        <div class="rf-hint">每列固定含「項目」文字欄；以下欄位會依此清單的順序顯示在項目欄之後，文字/下拉/日期/項次欄位可任意混合排序——拖動最左側 <i class="fa fa-bars"></i> 或按 ▲▼ 調整順序。「排版」選整行代表獨佔一列（適合長文字），選並排代表與其他並排欄位同一列。輸入欄按 ↓ 鍵在最後一列會自動新增一列，最後一列空白時按 ↑ 鍵會自動移除。</div>
         <table class="col-tbl">
             <thead><tr><th style="width:5%;"></th><th style="width:15%;">標籤</th><th style="width:11%;">類型</th><th style="width:18%;">提示詞（灰字）</th><th style="width:17%;">選項(逗號分隔，僅下拉用)</th><th style="width:7%;">必填</th><th style="width:9%;">排版</th><th style="width:10%;"></th></tr></thead>
-            <tbody id="colBody"></tbody>
+            <tbody id="colBody" data-eg-row-add="fieldAdd" data-eg-row-del="fieldDelLast"></tbody>
         </table>
         <button type="button" onclick="fieldAdd()" style="height:26px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:4px;cursor:pointer;">+ 新增欄位</button>
 
@@ -444,9 +444,10 @@ function submitTplSettings(){
 
 /* ============ 項次欄位定義 ============ */
 var FIELDS = [], CUR_SCHEMA_TPL = null;
-var FIELD_TYPES = {text:'單行文字', textarea:'多行文字', select:'下拉選單', date:'日期'};
+var FIELD_TYPES = {text:'單行文字', textarea:'多行文字', select:'下拉選單', date:'日期', seq:'項次（自動編號）'};
 function fieldAdd(){ FIELDS.push({key:'', label:'', type:'text', placeholder:'', required:0, layout:'inline', options:''}); renderFields(); }
 function fieldDel(i){ FIELDS.splice(i,1); renderFields(); }
+function fieldDelLast(){ if (FIELDS.length) FIELDS.pop(); renderFields(); }
 function fieldEdit(i,k,v){ FIELDS[i][k]=v; if (k==='label' && !FIELDS[i]._keyManual) FIELDS[i].key = slugify(v); renderFields(); }
 function fieldMove(i,dir){ var j=i+dir; if (j<0 || j>=FIELDS.length) return; var t=FIELDS[i]; FIELDS[i]=FIELDS[j]; FIELDS[j]=t; renderFields(); }
 function slugify(s){ return 'c_' + String(s).replace(/[^a-zA-Z0-9一-龥]+/g,'').substr(0,20) + '_' + Math.floor(Math.random()*900+100); }
@@ -459,9 +460,9 @@ function renderFields(){
            + '<td><select onchange="fieldEdit('+i+',\'type\',this.value)">'
            +   Object.keys(FIELD_TYPES).map(function(tp){ return '<option value="'+tp+'"'+(c.type===tp?' selected':'')+'>'+FIELD_TYPES[tp]+'</option>'; }).join('')
            + '</select></td>'
-           + '<td><input type="text" value="'+esc(c.placeholder)+'" onchange="fieldEdit('+i+',\'placeholder\',this.value)"></td>'
+           + '<td><input type="text" value="'+esc(c.placeholder)+'" '+(c.type==='seq'?'disabled':'')+' onchange="fieldEdit('+i+',\'placeholder\',this.value)"></td>'
            + '<td><input type="text" value="'+esc(c.options)+'" '+(c.type!=='select'?'disabled':'')+' title="下拉選項用逗號分隔，例如：合格,不合格,其他" onchange="fieldEdit('+i+',\'options\',this.value)"></td>'
-           + '<td style="text-align:center;"><input type="checkbox" '+(c.required?'checked':'')+' onchange="fieldEdit('+i+',\'required\',this.checked?1:0)"></td>'
+           + '<td style="text-align:center;"><input type="checkbox" '+(c.required?'checked':'')+' '+(c.type==='seq'?'disabled':'')+' onchange="fieldEdit('+i+',\'required\',this.checked?1:0)"></td>'
            + '<td><select onchange="fieldEdit('+i+',\'layout\',this.value)"><option value="inline"'+(c.layout==='inline'?' selected':'')+'>並排</option><option value="block"'+(c.layout==='block'?' selected':'')+'>整行</option></select></td>'
            + '<td style="text-align:center;white-space:nowrap;">'
            +   '<button type="button" class="fld-mv" '+(i===0?'disabled':'')+' onclick="fieldMove('+i+',-1)"><i class="fa fa-caret-up"></i></button>'

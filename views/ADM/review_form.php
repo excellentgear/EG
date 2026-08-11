@@ -249,7 +249,7 @@ function renderView(){
     h += '<table class="itm-tbl"><thead><tr><th style="width:26px;">#</th><th>項目</th>';
     (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+esc(c.label)+'</th>'; });
     h += '<th>負責單位/負責人</th>';
-    h += '<th>簽名</th>'+(isDraftMine()?'<th></th>':'')+'</tr></thead><tbody id="itmBody"></tbody></table>';
+    h += '<th>簽名</th>'+(isDraftMine()?'<th></th>':'')+'</tr></thead><tbody id="itmBody" data-eg-row-add="itemAdd" data-eg-row-del="itemDelLast"></tbody></table>';
     if (isDraftMine()) h += '<button onclick="itemAdd()" style="margin-right:6px;">+新增列</button><button onclick="itemDelLast()">-刪除末列</button>';
     h += '<div style="margin-top:12px;">';
     if (PREVIEW_MODE) {
@@ -292,6 +292,7 @@ function fieldInputHtml(i, c){
     var cls = c.layout==='block' ? 'fld-block' : '';
     var lbl = c.layout==='block' ? '<div class="fld-lbl">'+esc(c.label)+'</div>' : '';
     var dis = isDraftMine() ? '' : 'disabled';
+    if (c.type==='seq') return '<div class="'+cls+'" style="text-align:center;font-weight:bold;color:#5b3a1e;">'+lbl+(i+1)+'</div>';
     if (c.type==='date') return '<div class="'+cls+'">'+lbl+'<input type="date" max="9999-12-31" '+dis+' value="'+esc(v)+'" onchange="itemFieldEdit('+i+',\''+c.key+'\',this.value)"></div>';
     if (c.type==='select') {
         var opts = '<option value="">'+(c.placeholder?esc(c.placeholder):'請選擇')+'</option>' + (c.options||[]).map(function(o){ return '<option value="'+esc(o)+'"'+(o===v?' selected':'')+'>'+esc(o)+'</option>'; }).join('');
@@ -456,7 +457,10 @@ function printForm(){
     h += '<th>負責單位/人</th><th>簽名</th></tr></thead><tbody>';
     ITEMS.forEach(function(it,i){
         h += '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td>';
-        (schema.fields||[]).forEach(function(c){ h += '<td>'+(c.type==='date' ? dispDate(it.data[c.key]||'') : esc(it.data[c.key]||''))+'</td>'; });
+        (schema.fields||[]).forEach(function(c){
+            var cellTxt = c.type==='seq' ? String(i+1) : (c.type==='date' ? dispDate(it.data[c.key]||'') : esc(it.data[c.key]||''));
+            h += '<td>'+cellTxt+'</td>';
+        });
         var ownerTxt = (it.owner_depts||[]).map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?d.name:''; })
             .concat((it.owner_users||[]).map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?p.user_cname:''; })).filter(Boolean).join('、');
         var signHtml = (it.confirms||[]).map(function(c){ return stampOrName(c.user_name, dispDate(c.signed_at)); }).join('');
