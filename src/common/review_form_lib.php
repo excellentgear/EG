@@ -1,0 +1,542 @@
+<?php
+/**
+ * 審核表單引擎（Review Form）共用函式庫 — 2026-08-11 新增
+ * 首發模板：2-TD-04-01 仿冒零件防制審核表／2-TD-03-01 產品安全審核表（各自獨立模板，共用本引擎）
+ *
+ * 概念比照 meeting_record.php（模板→建立表單→逐列負責人簽名／通知簽名→審核/核准），
+ * 但改成「管理員可自建模板」的通用引擎，不是寫死兩支頁面。
+ *
+ * 資料表（前綴 rf_，注意此前綴只用於 DB 表名；PHP 函式一律用 rvf_ 前綴——
+ * role_features_helper.php 已經佔用 rf_ 前綴的函式命名空間，不可再撞名）：
+ *   rf_template / rf_template_version / rf_template_maintainer_user /
+ *   rf_instance / rf_instance_item / rf_instance_item_confirm
+ *
+ * 重用不新建：AS 文件綁定走 asdoc_lib.php（module code 動態組 'review_form_tpl_'.$id）；
+ * 審核/核准走共用 approval_record（module='review_form', level='review'/'approval'，approval_lib.php）；
+ * 通知走 live_event/live_event_target；核准人優先序鏈手法比照 vendor_audit_lib.php
+ * 的 vendor_audit_plan_approver_pool()（ai-rules/19 第五節已定案為可複用寫法），但改讀本模板列
+ * 自己的 approver_dept_id/approver_user_id（模板是動態建立的，不掛 org_role_lib 全站 registry）。
+ */
+
+require_once __DIR__ . '/asdoc_lib.php';
+require_once __DIR__ . '/approval_lib.php';
+require_once __DIR__ . '/delegate_lib.php';
+require_once __DIR__ . '/org_role_lib.php';
+
+const RVF_APPROVER_METHODS = ['dept_or_user', 'auto_supervisor', 'top_approver'];
+
+const RVF_FEATURES = [
+    ['code' => 'rvf_view',          'group' => 'view', 'label' => '檢閱審核表單列表（沒勾也看得到自己建立的表單）'],
+    ['code' => 'rvf_view_all',      'group' => 'view', 'label' => '檢視全部人員建立的表單'],
+    ['code' => 'rvf_create',        'group' => 'op',   'label' => '建立/填寫/送出表單'],
+    ['code' => 'rvf_print',         'group' => 'op',   'label' => '列印'],
+    ['code' => 'rvf_template_admin','group' => 'op',   'label' => '模板管理（新建模板、AS文件綁定、審核/核准設定、維護部門設定）'],
+];
+
+/* ============================================================ 使用者/權限 ============================================================ */
+
+function rvf_current_user(PDO $db): ?array {
+    $uname = $_SESSION['userName'] ?? '';
+    if ($uname === '') return null;
+    $st = $db->prepare("SELECT id, user_cname, user_status FROM user WHERE user_uname=?");
+    $st->execute([$uname]);
+    return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+
+function rvf_perms(PDO $db, ?array $u): array {
+    if (!$u) return ['isAdmin'=>false,'canAdmin'=>false,'canCreate'=>false,'canView'=>false,'canViewAll'=>false,'canPrint'=>false];
+    $uid = (int)$u['id'];
+    $isAdmin = in_array((int)$u['user_status'], [9, 90], true);
+    if (!$isAdmin) {
+        $st = $db->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                            WHERE ur.user_id=? AND r.role_code='admin' AND r.is_system=1 LIMIT 1");
+        $st->execute([$uid]);
+        $isAdmin = (bool)$st->fetchColumn();
+    }
+    require_once __DIR__ . '/role_features_helper.php';
+    $feat = rf_load_user_features_all($db, $uid);
+    $codes = array_values(array_intersect($feat, array_column(RVF_FEATURES, 'code')));
+    $has = function (string $code) use ($isAdmin, $feat, $codes) { return $isAdmin || in_array('all', $feat, true) || in_array($code, $codes, true); };
+    return [
+        'isAdmin'    => $isAdmin,
+        'canAdmin'   => $has('rvf_template_admin'),
+        'canCreate'  => $has('rvf_create'),
+        'canView'    => $has('rvf_view') || $has('rvf_create') || $has('rvf_template_admin') || true, // 每個登入者至少看得到自己建立的表單
+        'canViewAll' => $has('rvf_view_all') || $has('rvf_template_admin'),
+        'canPrint'   => $has('rvf_print') || $has('rvf_create') || $has('rvf_template_admin'),
+    ];
+}
+
+function rvf_verify_own_password(PDO $db, int $forUid, string $password): array {
+    if ($forUid <= 0) return ['ok'=>false, 'msg'=>'請先選擇人員'];
+    if ($password === '') return ['ok'=>false, 'msg'=>'請輸入密碼'];
+    try {
+        $st = $db->prepare("SELECT user_password FROM `user` WHERE id=?");
+        $st->execute([$forUid]);
+        $real = $st->fetchColumn();
+        if ($real === false) return ['ok'=>false, 'msg'=>'查無此人員'];
+        if (!hash_equals((string)$real, $password)) return ['ok'=>false, 'msg'=>'密碼錯誤，請由本人輸入自己的密碼'];
+        return ['ok'=>true, 'msg'=>''];
+    } catch (Throwable $e) { return ['ok'=>false, 'msg'=>'驗證失敗']; }
+}
+
+/* ============================================================ CSRF（比照 Leave_API.php 模式） ============================================================ */
+
+function rvf_csrf_token(): string {
+    if (empty($_SESSION['rvf_csrf'])) $_SESSION['rvf_csrf'] = bin2hex(random_bytes(16));
+    return $_SESSION['rvf_csrf'];
+}
+function rvf_csrf_ok(?string $t): bool {
+    return $t !== null && hash_equals((string)($_SESSION['rvf_csrf'] ?? ''), (string)$t);
+}
+function rvf_need_csrf(): void {
+    if (!rvf_csrf_ok($_POST['csrf'] ?? null)) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['ok'=>false, 'error'=>'CSRF token 驗證失敗，請重新整理頁面']);
+        exit;
+    }
+}
+
+/* ============================================================ 部門主管 / 審核池 / 核准鏈 ============================================================ */
+
+/** 部門(含子部門)內具主管職級者；$maxLevel 有給值時只留職級不高於它的(數字越小職級越高，比照 vendor_audit 手法)。 */
+function rvf_dept_managers(PDO $db, ?int $deptId, ?int $maxLevel = null): array {
+    if (!$deptId) return [];
+    $deptIds = eg_dept_subtree_ids($db, $deptId);
+    if (!$deptIds) return [];
+    try {
+        $in = implode(',', array_fill(0, count($deptIds), '?'));
+        $st = $db->prepare("SELECT u.id, u.user_cname, MIN(pl.level) AS lvl
+                            FROM user_department_position_map m
+                            JOIN user u ON u.id=m.user_id
+                            JOIN position_level pl ON pl.position_id=m.position_id AND pl.level IS NOT NULL
+                            WHERE m.department_id IN ($in) AND COALESCE(u.state,1) NOT IN (0,90)
+                            GROUP BY u.id, u.user_cname");
+        $st->execute($deptIds);
+        $pool = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if ($maxLevel === null || (int)$r['lvl'] <= $maxLevel) $pool[] = ['id'=>(int)$r['id'], 'user_cname'=>$r['user_cname']];
+        }
+        return $pool;
+    } catch (Throwable $e) { return []; }
+}
+
+/** 審核池（OR-gate）：審核部門內任一主管，不比較職級高低。 */
+function rvf_review_pool(PDO $db, array $tpl): array {
+    return rvf_dept_managers($db, $tpl['review_dept_id'] ? (int)$tpl['review_dept_id'] : null);
+}
+
+function rvf_approver_pool_dept_or_user(PDO $db, array $tpl, int $submitterUid): array {
+    $deptId = !empty($tpl['approver_dept_id']) ? (int)$tpl['approver_dept_id'] : null;
+    $userId = !empty($tpl['approver_user_id']) ? (int)$tpl['approver_user_id'] : null;
+    if ($userId) {
+        try {
+            $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+            $st->execute([$userId]);
+            $u = $st->fetch(PDO::FETCH_ASSOC);
+            return $u ? [$u] : [];
+        } catch (Throwable $e) { return []; }
+    }
+    if (!$deptId) return [];
+    $identity = eg_user_main_identity($db, $submitterUid);
+    $lvl = $identity['level'] ?? null;
+    return rvf_dept_managers($db, $deptId, $lvl);
+}
+
+function rvf_approver_pool_auto_supervisor(PDO $db, int $submitterUid): array {
+    $supId = eg_resolve_supervisor($db, $submitterUid);
+    if (!$supId || (int)$supId === $submitterUid) return [];
+    try {
+        $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+        $st->execute([$supId]);
+        $u = $st->fetch(PDO::FETCH_ASSOC);
+        return $u ? [$u] : [];
+    } catch (Throwable $e) { return []; }
+}
+
+function rvf_approver_pool_top_approver(PDO $db): array {
+    $u = eg_org_user($db, 'top_approver');
+    return $u ? [['id'=>(int)$u['id'], 'user_cname'=>$u['user_cname']]] : [];
+}
+
+/** 核准人員解析——依模板設定的優先序鏈依序嘗試，取第一個有結果的方法；強制 SoD（送出者本人一律剔除）。 */
+function rvf_approver_pool(PDO $db, array $tpl, int $submitterUid): array {
+    $chain = json_decode((string)($tpl['approver_chain_json'] ?? ''), true);
+    if (!is_array($chain) || !$chain) $chain = ['top_approver'];
+    foreach ($chain as $method) {
+        $pool = match ($method) {
+            'dept_or_user'    => rvf_approver_pool_dept_or_user($db, $tpl, $submitterUid),
+            'auto_supervisor' => rvf_approver_pool_auto_supervisor($db, $submitterUid),
+            'top_approver'    => rvf_approver_pool_top_approver($db),
+            default => [],
+        };
+        $pool = array_values(array_filter($pool, fn($p) => (int)$p['id'] !== $submitterUid));
+        if ($pool) return $pool;
+    }
+    return [];
+}
+
+/* ============================================================ 模板 CRUD ============================================================ */
+
+function rvf_asdoc_module(int $templateId): string { return 'review_form_tpl_' . $templateId; }
+
+function rvf_template_list(PDO $db): array {
+    $rows = $db->query("SELECT * FROM rf_template ORDER BY (status='active') DESC, id DESC")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) $r['as_doc'] = eg_asdoc_get($db, rvf_asdoc_module((int)$r['id']));
+    return $rows;
+}
+
+function rvf_template_get(PDO $db, int $id): ?array {
+    $st = $db->prepare("SELECT * FROM rf_template WHERE id=?");
+    $st->execute([$id]);
+    $t = $st->fetch(PDO::FETCH_ASSOC);
+    if ($t) $t['as_doc'] = eg_asdoc_get($db, rvf_asdoc_module($id));
+    return $t ?: null;
+}
+
+/** 管理員限定：建立/修改模板設定（不含項次內容 schema，schema 走 rvf_template_schema_save）。 */
+function rvf_template_settings_save(PDO $db, int $id, array $d, string $byName): int {
+    $chain = json_encode(array_values(array_intersect($d['approver_chain'] ?? ['top_approver'], RVF_APPROVER_METHODS)) ?: ['top_approver']);
+    if ($id) {
+        $db->prepare("UPDATE rf_template SET name=?,paper_size=?,need_review=?,review_dept_id=?,need_approval=?,
+                      approver_dept_id=?,approver_user_id=?,approver_chain_json=?,maintain_dept_id=?,updated_by=?,updated_at=NOW() WHERE id=?")
+           ->execute([$d['name'], $d['paper_size'], $d['need_review']?1:0, $d['review_dept_id'] ?: null,
+                      $d['need_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
+                      $chain, $d['maintain_dept_id'] ?: null, $byName, $id]);
+        return $id;
+    }
+    $db->prepare("INSERT INTO rf_template (name,paper_size,need_review,review_dept_id,need_approval,approver_dept_id,
+                  approver_user_id,approver_chain_json,maintain_dept_id,current_schema_json,published_version,created_by)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,0,?)")
+       ->execute([$d['name'], $d['paper_size'], $d['need_review']?1:0, $d['review_dept_id'] ?: null,
+                  $d['need_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
+                  $chain, $d['maintain_dept_id'] ?: null,
+                  json_encode(['columns'=>[], 'date_fields'=>[], 'sign_mode'=>'password'], JSON_UNESCAPED_UNICODE), $byName]);
+    return (int)$db->lastInsertId();
+}
+
+/** 誰能改模板設定：僅管理員（呼叫端已用 $perms['canAdmin'] 守門，這支保留供 API 二次確認）。 */
+function rvf_can_edit_settings(bool $isAdmin): bool { return $isAdmin; }
+
+/** 誰能改「項次內容」：管理員 OR 維護部門內主管 OR 被指派的維護人員。 */
+function rvf_can_edit_items(PDO $db, int $uid, bool $isAdmin, array $tpl): bool {
+    if ($isAdmin) return true;
+    if (!empty($tpl['maintain_dept_id'])) {
+        foreach (rvf_dept_managers($db, (int)$tpl['maintain_dept_id']) as $m) if ((int)$m['id'] === $uid) return true;
+    }
+    $st = $db->prepare("SELECT 1 FROM rf_template_maintainer_user WHERE template_id=? AND user_id=?");
+    $st->execute([(int)$tpl['id'], $uid]);
+    return (bool)$st->fetchColumn();
+}
+
+/** 存項次內容 schema（存檔即生效，見鐵律確認：使用者已選定「存檔即改版生效」）。$bumpedAsDocVersionId 有值代表這次連動 AS 文件改版。 */
+function rvf_template_schema_save(PDO $db, int $templateId, array $schema, string $byName, ?int $bumpedAsDocVersionId = null): int {
+    $tpl = rvf_template_get($db, $templateId);
+    if (!$tpl) throw new Exception('找不到此模板');
+    $newVersion = (int)$tpl['published_version'] + 1;
+    $json = json_encode($schema, JSON_UNESCAPED_UNICODE);
+    $db->beginTransaction();
+    try {
+        $db->prepare("INSERT INTO rf_template_version (template_id,version,schema_json,bumped_as_doc_version_id,created_by) VALUES (?,?,?,?,?)")
+           ->execute([$templateId, $newVersion, $json, $bumpedAsDocVersionId, $byName]);
+        $db->prepare("UPDATE rf_template SET current_schema_json=?,published_version=?,updated_by=?,updated_at=NOW() WHERE id=?")
+           ->execute([$json, $newVersion, $byName, $templateId]);
+        $db->commit();
+        return $newVersion;
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+}
+
+function rvf_template_schema_at_version(PDO $db, int $templateId, int $version): ?array {
+    $st = $db->prepare("SELECT schema_json FROM rf_template_version WHERE template_id=? AND version=?");
+    $st->execute([$templateId, $version]);
+    $j = $st->fetchColumn();
+    return $j ? (json_decode((string)$j, true) ?: null) : null;
+}
+
+function rvf_maintainer_list(PDO $db, int $templateId): array {
+    $st = $db->prepare("SELECT mu.user_id, u.user_cname, mu.added_by, mu.added_at
+                        FROM rf_template_maintainer_user mu JOIN user u ON u.id=mu.user_id
+                        WHERE mu.template_id=? ORDER BY mu.added_at DESC");
+    $st->execute([$templateId]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+function rvf_maintainer_add(PDO $db, int $templateId, int $userId, string $byName): void {
+    $db->prepare("INSERT IGNORE INTO rf_template_maintainer_user (template_id,user_id,added_by) VALUES (?,?,?)")
+       ->execute([$templateId, $userId, $byName]);
+}
+function rvf_maintainer_remove(PDO $db, int $templateId, int $userId): void {
+    $db->prepare("DELETE FROM rf_template_maintainer_user WHERE template_id=? AND user_id=?")->execute([$templateId, $userId]);
+}
+
+/* ============================================================ 表單（instance） ============================================================ */
+
+function rvf_instance_create(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate): int {
+    $tpl = rvf_template_get($db, $templateId);
+    if (!$tpl) throw new Exception('找不到此模板');
+    $db->prepare("INSERT INTO rf_instance (template_id,template_version,title,business_date,status,created_by,created_by_name)
+                  VALUES (?,?,?,?,'draft',?,?)")
+       ->execute([$templateId, (int)$tpl['published_version'], $title, $bizDate ?: date('Y-m-d'), $uid, $uname]);
+    return (int)$db->lastInsertId();
+}
+
+function rvf_instance_get(PDO $db, int $id): ?array {
+    $st = $db->prepare("SELECT * FROM rf_instance WHERE id=?");
+    $st->execute([$id]);
+    return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+
+function rvf_instance_list(PDO $db, int $templateId = 0, ?int $onlyCreatedBy = null): array {
+    $sql = "SELECT * FROM rf_instance WHERE 1=1";
+    $params = [];
+    if ($templateId) { $sql .= " AND template_id=?"; $params[] = $templateId; }
+    if ($onlyCreatedBy !== null) { $sql .= " AND created_by=?"; $params[] = $onlyCreatedBy; }
+    $sql .= " ORDER BY id DESC";
+    $st = $db->prepare($sql);
+    $st->execute($params);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function rvf_instance_items_get(PDO $db, int $instanceId): array {
+    $st = $db->prepare("SELECT * FROM rf_instance_item WHERE instance_id=? ORDER BY sort_order,id");
+    $st->execute([$instanceId]);
+    $items = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($items as &$it) {
+        $cst = $db->prepare("SELECT * FROM rf_instance_item_confirm WHERE item_id=? ORDER BY signed_at");
+        $cst->execute([$it['id']]);
+        $it['confirms'] = $cst->fetchAll(PDO::FETCH_ASSOC);
+        $it['data'] = json_decode((string)$it['data_json'], true) ?: new stdClass();
+        $it['date_values'] = json_decode((string)$it['date_values_json'], true) ?: new stdClass();
+    }
+    return $items;
+}
+
+/** 逐列存檔：以 item id 對應差異更新（有 id 且存在→UPDATE，否則→INSERT），送出的清單裡沒出現的既有列→DELETE(連同簽名)。
+ *  不採用「delete+insert 全部重來」——那會讓每次存檔後 item_id 全部改變，簽名/通知會對不上（meeting_record 就踩過這個坑，
+ *  在那邊靠額外的 id remap 補救；這裡直接用差異更新從根本避開，比較乾淨)。只允許 status='draft' 時呼叫。 */
+function rvf_instance_items_save(PDO $db, int $instanceId, array $items): void {
+    $st = $db->prepare("SELECT id FROM rf_instance_item WHERE instance_id=?");
+    $st->execute([$instanceId]);
+    $existingIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    $keepIds = [];
+    $ins = $db->prepare("INSERT INTO rf_instance_item (instance_id,sort_order,content,data_json,owner_depts,owner_users,date_values_json) VALUES (?,?,?,?,?,?,?)");
+    $upd = $db->prepare("UPDATE rf_instance_item SET sort_order=?,content=?,data_json=?,owner_depts=?,owner_users=?,date_values_json=? WHERE id=? AND instance_id=?");
+    $sort = 0;
+    foreach ($items as $it) {
+        $content   = (string)($it['content'] ?? '');
+        $dataJson  = json_encode($it['data'] ?? new stdClass(), JSON_UNESCAPED_UNICODE);
+        $ownDepts  = implode(',', array_values(array_filter(array_map('intval', $it['owner_depts'] ?? []))));
+        $ownUsers  = implode(',', array_values(array_filter(array_map('intval', $it['owner_users'] ?? []))));
+        $dateJson  = json_encode($it['date_values'] ?? new stdClass(), JSON_UNESCAPED_UNICODE);
+        $id = (int)($it['id'] ?? 0);
+        if ($id && in_array($id, $existingIds, true)) {
+            $upd->execute([$sort, $content, $dataJson, $ownDepts, $ownUsers, $dateJson, $id, $instanceId]);
+            $keepIds[] = $id;
+        } else {
+            $ins->execute([$instanceId, $sort, $content, $dataJson, $ownDepts, $ownUsers, $dateJson]);
+            $keepIds[] = (int)$db->lastInsertId();
+        }
+        $sort++;
+    }
+    $toDelete = array_values(array_diff($existingIds, $keepIds));
+    if ($toDelete) {
+        $in = implode(',', array_fill(0, count($toDelete), '?'));
+        $db->prepare("DELETE FROM rf_instance_item_confirm WHERE item_id IN ($in)")->execute($toDelete);
+        $db->prepare("DELETE FROM rf_instance_item WHERE id IN ($in)")->execute($toDelete);
+    }
+}
+
+/* -------- 逐列負責人簽名 -------- */
+
+function rvf_item_required_signers(PDO $db, array $item): array {
+    $ownerUsers = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_users'] ?? '')))));
+    if ($ownerUsers) {
+        $in = implode(',', array_fill(0, count($ownerUsers), '?'));
+        $st = $db->prepare("SELECT id, user_cname FROM user WHERE id IN ($in) AND COALESCE(state,1) NOT IN (0,90)");
+        $st->execute($ownerUsers);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    }
+    $ownerDepts = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_depts'] ?? '')))));
+    if ($ownerDepts) {
+        $seen = []; $out = [];
+        foreach ($ownerDepts as $d) foreach (rvf_dept_managers($db, $d) as $p) {
+            if (!isset($seen[$p['id']])) { $seen[$p['id']] = 1; $out[] = $p; }
+        }
+        return $out;
+    }
+    return [];
+}
+
+/** 該列是否已完成簽名：指定人員模式每人都要簽(AND)；部門模式每個部門任一主管簽即算完成(OR，比照會議記錄)。 */
+function rvf_item_is_fully_signed(PDO $db, array $item): bool {
+    $doneUids = array_map(fn($c) => (int)$c['user_id'], $item['confirms'] ?? []);
+    $ownerUsers = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_users'] ?? '')))));
+    foreach ($ownerUsers as $u) if (!in_array($u, $doneUids, true)) return false;
+    $ownerDepts = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_depts'] ?? '')))));
+    foreach ($ownerDepts as $d) {
+        $mgrIds = array_column(rvf_dept_managers($db, $d), 'id');
+        if (!array_intersect($mgrIds, $doneUids)) return false;
+    }
+    return true;
+}
+
+function rvf_item_confirm(PDO $db, int $itemId, int $forUid, string $password): array {
+    $st = $db->prepare("SELECT * FROM rf_instance_item WHERE id=?");
+    $st->execute([$itemId]);
+    $item = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$item) return ['ok'=>false, 'msg'=>'找不到此項目'];
+    $signers = rvf_item_required_signers($db, $item);
+    $signer = null;
+    foreach ($signers as $s) if ((int)$s['id'] === $forUid) { $signer = $s; break; }
+    if (!$signer) return ['ok'=>false, 'msg'=>'您不是此項目的負責人'];
+    $already = $db->prepare("SELECT 1 FROM rf_instance_item_confirm WHERE item_id=? AND user_id=?");
+    $already->execute([$itemId, $forUid]);
+    if ($already->fetchColumn()) return ['ok'=>false, 'msg'=>'您已經簽過此項目'];
+    $v = rvf_verify_own_password($db, $forUid, $password);
+    if (!$v['ok']) return $v;
+    $ownerDepts = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_depts'] ?? '')))));
+    $deptId = null; $deptName = null;
+    if ($ownerDepts) {
+        $st2 = $db->prepare("SELECT department_id FROM user_department_position_map WHERE user_id=? AND is_main=1 LIMIT 1");
+        $st2->execute([$forUid]);
+        $deptId = (int)$st2->fetchColumn() ?: null;
+        if ($deptId) {
+            $st3 = $db->prepare("SELECT name FROM department WHERE id=?");
+            $st3->execute([$deptId]);
+            $deptName = $st3->fetchColumn() ?: null;
+        }
+    }
+    $db->prepare("INSERT IGNORE INTO rf_instance_item_confirm (item_id,user_id,user_name,dept_id,dept_name,signed_at) VALUES (?,?,?,?,?,NOW())")
+       ->execute([$itemId, $forUid, $signer['user_cname'], $deptId, $deptName]);
+    return ['ok'=>true];
+}
+
+/* -------- 通知（比照 meeting_notify / meeting_notify_item_owners） -------- */
+
+function rvf_notify(PDO $db, int $refId, array $toUids, string $title, string $content, int $fromUid, string $refType, string $mode = 'sign'): int {
+    $toUids = array_values(array_unique(array_map('intval', $toUids)));
+    if (!$toUids) return 0;
+    try {
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, ?, '審核表單', 1, ?, ?)")
+           ->execute([$title, $content, $fromUid, $refType, $refId]);
+        $eid = (int)$db->lastInsertId();
+        $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, ?)");
+        foreach ($toUids as $tuid) $ins->execute([$eid, $tuid, $mode]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
+        } catch (Throwable $e) {}
+        return $eid;
+    } catch (Throwable $e) { return 0; }
+}
+
+function rvf_notify_item_owners(PDO $db, int $instanceId, int $fromUid): void {
+    $items = rvf_instance_items_get($db, $instanceId);
+    foreach ($items as $it) {
+        if (rvf_item_is_fully_signed($db, $it)) continue;
+        $doneUids = array_map(fn($c) => (int)$c['user_id'], $it['confirms']);
+        $need = [];
+        $ownerUsers = array_values(array_filter(array_map('intval', explode(',', (string)($it['owner_users'] ?? '')))));
+        foreach ($ownerUsers as $u) if (!in_array($u, $doneUids, true)) $need[] = $u;
+        $ownerDepts = array_values(array_filter(array_map('intval', explode(',', (string)($it['owner_depts'] ?? '')))));
+        foreach ($ownerDepts as $d) {
+            $mgrIds = array_column(rvf_dept_managers($db, $d), 'id');
+            if (!array_intersect($mgrIds, $doneUids)) $need = array_merge($need, $mgrIds);
+        }
+        $need = array_values(array_unique($need));
+        if ($need) rvf_notify($db, $it['id'], $need, '有一份審核表單項目待您簽名確認',
+            '「' . ($it['content'] ?: '(未命名項目)') . '」需要您確認並簽名。', $fromUid, 'RVF_ITEM_CONFIRM', 'reply');
+    }
+}
+
+/* -------- 送出／審核／核准 -------- */
+
+function rvf_instance_submit(PDO $db, int $instanceId, int $uid, string $uname): array {
+    $inst = rvf_instance_get($db, $instanceId);
+    if (!$inst) return ['ok'=>false, 'msg'=>'找不到此表單'];
+    if ((int)$inst['created_by'] !== $uid) return ['ok'=>false, 'msg'=>'只有填表人本人可以送出'];
+    if ($inst['status'] !== 'draft') return ['ok'=>false, 'msg'=>'此表單已送出，不可重複送出'];
+    $tpl = rvf_template_get($db, (int)$inst['template_id']);
+    if (!$tpl) return ['ok'=>false, 'msg'=>'模板不存在'];
+
+    $status = 'approved';
+    if (!empty($tpl['need_review'])) {
+        $pool = rvf_review_pool($db, $tpl);
+        if (!$pool) return ['ok'=>false, 'msg'=>'審核部門尚未設定可審核的主管，請聯絡管理員'];
+        eg_approval_submit($db, 'review_form', $instanceId, 'review', $uid, $uname);
+        rvf_notify($db, $instanceId, array_column($pool, 'id'),
+            '「' . $tpl['name'] . '」表單待您審核',
+            $uname . ' 送出了一份「' . $tpl['name'] . '」，請審核。', $uid, 'RVF_REVIEW', 'sign');
+        $status = 'reviewing';
+    } elseif (!empty($tpl['need_approval'])) {
+        $pool = rvf_approver_pool($db, $tpl, $uid);
+        if (!$pool) return ['ok'=>false, 'msg'=>'核准人員解析不到合格人選，請聯絡管理員'];
+        eg_approval_submit($db, 'review_form', $instanceId, 'approval', $uid, $uname);
+        rvf_notify($db, $instanceId, array_column($pool, 'id'),
+            '「' . $tpl['name'] . '」表單待您核准',
+            $uname . ' 送出了一份「' . $tpl['name'] . '」，請核准。', $uid, 'RVF_APPROVAL', 'sign');
+        $status = 'approving';
+    }
+    $db->prepare("UPDATE rf_instance SET status=?,updated_at=NOW() WHERE id=?")->execute([$status, $instanceId]);
+
+    $schema = json_decode((string)$tpl['current_schema_json'], true) ?: [];
+    if (($schema['sign_mode'] ?? 'password') === 'notify') rvf_notify_item_owners($db, $instanceId, $uid);
+
+    return ['ok'=>true, 'status'=>$status];
+}
+
+function rvf_review_decide(PDO $db, int $instanceId, int $uid, string $uname, string $decision, ?string $note = null): array {
+    $rec = eg_approval_latest($db, 'review_form', $instanceId, 'review');
+    if (!$rec || $rec['status'] !== 'pending') return ['ok'=>false, 'msg'=>'目前沒有待您審核的項目'];
+    $inst = rvf_instance_get($db, $instanceId);
+    $tpl = rvf_template_get($db, (int)$inst['template_id']);
+    $pool = rvf_review_pool($db, $tpl);
+    if (!in_array($uid, array_column($pool, 'id'), true)) return ['ok'=>false, 'msg'=>'您不是本表單的審核人'];
+    $r = eg_approval_decide($db, (int)$rec['id'], $uid, $uname, $decision, $note);
+    if (!$r['success']) return ['ok'=>false, 'msg'=>$r['message']];
+    if ($decision === 'rejected') {
+        $db->prepare("UPDATE rf_instance SET status='rejected',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
+        rvf_notify($db, $instanceId, [(int)$inst['created_by']], '「' . $tpl['name'] . '」表單被退回',
+            $uname . ' 退回了「' . $tpl['name'] . '」。退回原因：' . $note, $uid, 'RVF_RESULT', 'read');
+        return ['ok'=>true, 'status'=>'rejected'];
+    }
+    if (!empty($tpl['need_approval'])) {
+        $apool = rvf_approver_pool($db, $tpl, (int)$inst['created_by']);
+        if (!$apool) {
+            $db->prepare("UPDATE rf_instance SET status='approving',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
+            return ['ok'=>false, 'msg'=>'審核通過，但核准人員解析不到合格人選，請聯絡管理員'];
+        }
+        eg_approval_submit($db, 'review_form', $instanceId, 'approval', (int)$inst['created_by'], (string)$inst['created_by_name']);
+        rvf_notify($db, $instanceId, array_column($apool, 'id'), '「' . $tpl['name'] . '」表單待您核准',
+            '審核已通過「' . $tpl['name'] . '」，請核准。', $uid, 'RVF_APPROVAL', 'sign');
+        $db->prepare("UPDATE rf_instance SET status='approving',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
+        return ['ok'=>true, 'status'=>'approving'];
+    }
+    $db->prepare("UPDATE rf_instance SET status='approved',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
+    rvf_notify($db, $instanceId, [(int)$inst['created_by']], '「' . $tpl['name'] . '」表單已完成審核',
+        $uname . ' 已審核通過「' . $tpl['name'] . '」。', $uid, 'RVF_RESULT', 'read');
+    return ['ok'=>true, 'status'=>'approved'];
+}
+
+function rvf_approval_decide(PDO $db, int $instanceId, int $uid, string $uname, string $decision, ?string $note = null): array {
+    $rec = eg_approval_latest($db, 'review_form', $instanceId, 'approval');
+    if (!$rec || $rec['status'] !== 'pending') return ['ok'=>false, 'msg'=>'目前沒有待您核准的項目'];
+    $inst = rvf_instance_get($db, $instanceId);
+    $tpl = rvf_template_get($db, (int)$inst['template_id']);
+    $pool = rvf_approver_pool($db, $tpl, (int)$inst['created_by']);
+    if (!in_array($uid, array_column($pool, 'id'), true)) return ['ok'=>false, 'msg'=>'您不是本表單的核准人'];
+    $r = eg_approval_decide($db, (int)$rec['id'], $uid, $uname, $decision, $note);
+    if (!$r['success']) return ['ok'=>false, 'msg'=>$r['message']];
+    $newStatus = $decision === 'rejected' ? 'rejected' : 'approved';
+    $db->prepare("UPDATE rf_instance SET status=?,updated_at=NOW() WHERE id=?")->execute([$newStatus, $instanceId]);
+    $msg = $decision === 'rejected' ? ('被退回。退回原因：' . $note) : '已完成核准';
+    rvf_notify($db, $instanceId, [(int)$inst['created_by']], '「' . $tpl['name'] . '」表單' . ($decision==='rejected'?'被退回':'已核准'),
+        $uname . ' ' . $msg . '「' . $tpl['name'] . '」。', $uid, 'RVF_RESULT', 'read');
+    return ['ok'=>true, 'status'=>$newStatus];
+}
+
+/* ============================================================ 列印 ============================================================ */
+
+function rvf_asdoc_no_display(PDO $db, int $templateId, ?string $bizDate = null): string {
+    return eg_asdoc_no_asof($db, rvf_asdoc_module($templateId), $bizDate);
+}
