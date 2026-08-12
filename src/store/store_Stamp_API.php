@@ -204,7 +204,9 @@ case 'list': {
                                r.type_id, t.type_name, r.template_id, tp.tpl_name,
                                r.issue_date, r.revoke_date, r.status, r.note,
                                r.created_by, r.created_at,
-                               a.file_name IS NOT NULL AS has_asset, a.band_top, a.band_bottom
+                               a.file_name IS NOT NULL AS has_asset, a.band_top, a.band_bottom,
+                               (SELECT d2.name FROM user_department_position_map m2 JOIN department d2 ON d2.id = m2.department_id
+                                WHERE m2.user_id = r.user_id ORDER BY m2.is_main DESC, m2.id LIMIT 1) AS user_main_dept_name
                         $joins
                         LEFT JOIN stamp_type t ON t.id = r.type_id
                         LEFT JOIN stamp_template tp ON tp.id = r.template_id AND tp.is_active = 1

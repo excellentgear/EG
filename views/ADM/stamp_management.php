@@ -533,7 +533,7 @@ function renderRegStamp(x){
   const tpl=resolveTplFor(x);
   if(tpl){
     let sc={}; try{sc=JSON.parse(tpl.schema_json||'{}');}catch(e){sc={};}
-    const ctx={company:window.__ownCompany||'', dept:x.dept_name||'', position:x.position_name||'', name:x.user_cname||'', date:dot(x.issue_date)};
+    const ctx={company:window.__ownCompany||'', dept:x.dept_name||x.user_main_dept_name||'', position:x.position_name||'', name:x.user_cname||'', date:dot(x.issue_date)};
     return EGStampTpl.render(Object.assign({},sc,{size:76}), ctx);
   }
   return EGStamp.stamp(x.holder_name, dot(x.issue_date), false);
