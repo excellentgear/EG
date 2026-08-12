@@ -124,6 +124,56 @@ try {
         } catch (PDOException $e) { return null; }
     }
 
+    // 單筆新增/編輯訂單（or_new/or_update，非OP轉訂單批次）：存檔後把「共用附件」同步給相同訂單編號
+    // （Order_oo）底下的其他料號訂單（使用者明確要求，2026-08-12）。判定共用的方式沿用既有「必備類別，
+    // 需連結單一料號」設定：附件所勾的類別只要都不在 required_attach_cats 內＝視為共用附件，該訂單編號
+    // 底下每一張料號訂單都要看得到；只要有勾到需綁定單一料號的類別＝維持只掛在原本那張訂單，不做同步。
+    // 雙向同步：既有訂單新掛上共用附件時要補給其他料號；新建的訂單也要補上該訂單編號既有的共用附件。
+    // 同一實體檔案(filename)用多筆 order_attachments 列參照到不同 order_id，不複製實體檔（比照OP轉訂單既有作法）。
+    function eg_order_attach_sync_shared_by_orderno(PDO $db, string $orderNo): void {
+        $orderNo = trim($orderNo);
+        if ($orderNo === '') return;
+        try {
+            $rv = $db->query("SELECT param_value FROM system_parameters WHERE param_group='QUOTATION' AND param_key='required_attach_cats'")->fetchColumn();
+            $reqIds = $rv ? array_map('intval', (json_decode($rv, true) ?: [])) : [];
+
+            $oq = $db->prepare("SELECT Order_id FROM order_track WHERE Order_oo = ?");
+            $oq->execute([$orderNo]);
+            $orderIds = array_map('intval', $oq->fetchAll(PDO::FETCH_COLUMN));
+            if (count($orderIds) < 2) return; // 這個訂單編號目前只有一張訂單，沒有其他料號可同步
+
+            $ph = implode(',', array_fill(0, count($orderIds), '?'));
+            $aq = $db->prepare("SELECT order_id, filename, original_name, category_ids, file_size, uploaded_by
+                                 FROM order_attachments WHERE order_id IN ($ph) AND status='active'");
+            $aq->execute($orderIds);
+            $rows = $aq->fetchAll(PDO::FETCH_ASSOC);
+            if (!$rows) return;
+
+            // 依實體檔名(filename)分組：同一份檔案目前已經掛在哪些 order_id 底下、是否判定為共用附件
+            $byFile = [];
+            foreach ($rows as $r) {
+                $fn = $r['filename'];
+                if (!isset($byFile[$fn])) {
+                    $catIds = array_values(array_filter(array_map('intval', explode(',', (string)$r['category_ids']))));
+                    $shared = $catIds && !array_intersect($catIds, $reqIds);
+                    $byFile[$fn] = ['orders' => [], 'info' => $r, 'shared' => $shared];
+                }
+                $byFile[$fn]['orders'][(int)$r['order_id']] = true;
+            }
+
+            $ins = $db->prepare("INSERT INTO order_attachments (order_id, filename, original_name, category_ids, file_size, uploaded_by, status)
+                                  VALUES (?,?,?,?,?,?,'active')");
+            foreach ($byFile as $fn => $g) {
+                if (!$g['shared']) continue;
+                $info = $g['info'];
+                foreach ($orderIds as $oid) {
+                    if (isset($g['orders'][$oid])) continue; // 這張訂單已經有了，不重複掛
+                    $ins->execute([$oid, $fn, $info['original_name'], $info['category_ids'], $info['file_size'], $info['uploaded_by']]);
+                }
+            }
+        } catch (PDOException $e) { /* order_attachments 尚未建表（該功能尚未使用過）：略過 */ }
+    }
+
     // OP轉訂單用：把報價項目 process_notes（逗號分隔 sub_tag_id）轉成製程名稱字串（・連接）
     function eg_process_names_for(PDO $db, ?string $process_notes): string {
         if (empty($process_notes)) return '';
@@ -212,6 +262,8 @@ try {
                    ->execute([$newId, $batchKey]);
             } catch (PDOException $e) { /* order_attachments 尚未建表（該功能尚未使用過）：略過 */ }
         }
+        // 共用附件同步：這張新訂單若跟既有訂單共用同一個訂單編號，雙向補齊共用附件（見上方函式說明）
+        eg_order_attach_sync_shared_by_orderno($db, $_POST['OrderNo']);
         echo json_encode(['success' => true, 'new_order_id' => $newId, 'message' => isset($_POST['or_new_copy']) ? '新增並複製成功' : '新增成功']);
         exit;
     }
@@ -296,6 +348,8 @@ try {
                    ->execute([$editOrderId, $editBatchKey]);
             } catch (PDOException $e) { /* order_attachments 尚未建表（該功能尚未使用過）：略過 */ }
         }
+        // 共用附件同步：這張訂單若跟其他料號訂單共用同一個訂單編號，雙向補齊共用附件（見上方函式說明）
+        eg_order_attach_sync_shared_by_orderno($db, $_POST['OrderNo']);
         echo json_encode(['success' => true, 'message' => '更新成功']);
         exit;
     }
