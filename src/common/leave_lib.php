@@ -1201,7 +1201,7 @@ if (!function_exists('eg_leave_sign')) {
     function eg_leave_sign(PDO $db, int $requestId, int $userId, string $action, string $remark = ''): array {
         if (!in_array($action, ['approved', 'rejected'], true)) return ['ok' => false, 'msg' => '無效的動作'];
 
-        $st = $db->prepare("SELECT lr.*, lt.leave_name FROM leave_request lr
+        $st = $db->prepare("SELECT lr.*, lt.leave_name, lt.full_inherit_permission FROM leave_request lr
                             JOIN leave_type lt ON lt.id = lr.leave_type_id WHERE lr.id = ? LIMIT 1");
         $st->execute([$requestId]);
         $req = $st->fetch(PDO::FETCH_ASSOC);
@@ -1295,6 +1295,21 @@ if (!function_exists('eg_leave_sign')) {
                 $targets[] = (int)$req['agent_user_id'];
                 $names->execute([(int)$req['agent_user_id']]);
                 $agentLine = "\n職務代理人：" . (string)$names->fetchColumn() . "（請假期間請協助代理職務）";
+            }
+            // 假別開放「完整承接權限」→ 每個有實際代理人的職務身分都寫一筆稽核（AS9100 可追溯，見 delegate_lib.php）
+            if (!empty($req['full_inherit_permission'])) {
+                foreach ($agentRows as $ar) {
+                    if (empty($ar['agent_user_id'])) continue;
+                    eg_log_full_inherit_grant($db, (int)$req['employee_id'], (int)$ar['agent_user_id'], [
+                        'agent_name'       => (string)$ar['agent_name'],
+                        'target_name'      => $applicantName,
+                        'scope_label'      => (string)$ar['scope_label'],
+                        'leave_request_id' => $requestId,
+                        'leave_name'       => (string)$req['leave_name'],
+                        'start'            => (string)$req['start_datetime'],
+                        'end'              => (string)$req['end_datetime'],
+                    ]);
+                }
             }
             eg_leave_notify($db, $requestId, "✅ 請假單 #{$requestId} 已核准", $baseBody . $agentLine
                             . ((string)$req['attach_status'] === 'pending' ? "\n【提醒】證明文件尚未補上傳" : ''),
