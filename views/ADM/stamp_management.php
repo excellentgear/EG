@@ -24,7 +24,7 @@ try {
 <link href="../../resource/css/nprogress.css" rel="stylesheet">
 <link href="../../resource/css/custom.css" rel="stylesheet">
 <style>
-  html,body{overflow-x:hidden;}
+  html{overflow-x:hidden;}
   .right_col{background:#efe7da;font-family:"Microsoft JhengHei","微軟正黑體",Arial,sans-serif;color:#3a2a17;padding:16px;min-height:100vh;}
   .panel-warm{max-width:1100px;margin:0 auto 16px;background:#fff;border:1px solid #d8c19a;border-radius:6px;padding:14px 18px;box-shadow:0 2px 8px rgba(90,61,30,.12);}
   .panel-warm h4{margin:0 0 10px;font-size:15px;color:#7a4e17;border-bottom:2px solid #f0a24b;padding-bottom:6px;}
