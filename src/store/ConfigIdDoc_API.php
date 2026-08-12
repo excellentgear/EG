@@ -105,6 +105,8 @@ case 'list':
     needView($perms);
     $kw = trim((string)($_GET['kw'] ?? ''));
     $status = trim((string)($_GET['status'] ?? ''));
+    $customerKw = trim((string)($_GET['customer'] ?? ''));
+    $partKw = trim((string)($_GET['part_no'] ?? ''));
     $sql = "SELECT h.id, h.doc_no, h.customer_id, COALESCE(cl.customer,'') AS customer_name,
                    h.part_d_id, COALESCE(ds.D_Setting_Id,'') AS part_no,
                    h.review_status, h.confirmed_by_name, h.confirmed_at,
@@ -116,7 +118,15 @@ case 'list':
     $args = [];
     if ($kw !== '') {
         $sql .= " AND (h.doc_no LIKE ? OR ds.D_Setting_Id LIKE ? OR cl.customer LIKE ?)";
-        $like = '%'.$kw.'%'; $args = [$like,$like,$like];
+        $like = '%'.$kw.'%'; $args[] = $like; $args[] = $like; $args[] = $like;
+    }
+    if ($customerKw !== '') {
+        $sql .= " AND (cl.customer_id LIKE ? OR cl.customer LIKE ?)";
+        $like = '%'.$customerKw.'%'; $args[] = $like; $args[] = $like;
+    }
+    if ($partKw !== '') {
+        $sql .= " AND ds.D_Setting_Id LIKE ?";
+        $args[] = '%'.$partKw.'%';
     }
     if (isset(REVIEW_LABELS[$status])) { $sql .= " AND h.review_status=?"; $args[] = $status; }
     $sql .= " ORDER BY h.created_at DESC";
@@ -151,6 +161,25 @@ case 'delete_header':
     if (!$id) jout(['success'=>false,'message'=>'缺少id']);
     $db->prepare("UPDATE type_id_ctrl_doc SET is_deleted=1 WHERE id=?")->execute([$id]);
     jout(['success'=>true]);
+
+// 批次確認清單（僅型態文件管理員／管理員；確認者一律記為目前登入者，比照單筆「確認清單」同一套邏輯，
+// 不提供指定他人的介面——簽章日期仍是各文件自己項目列的最新日期即時算出，跟這裡的confirmed_at無關）
+case 'batch_confirm':
+    needAdmin($perms);
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    if (!is_array($ids)) $ids = [];
+    $ids = array_values(array_filter(array_map('intval', $ids)));
+    if (!$ids) jout(['success'=>false,'message'=>'請先勾選要確認的項目']);
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $db->beginTransaction();
+    try {
+        $st = $db->prepare("UPDATE type_id_ctrl_doc SET review_status='confirmed', confirmed_by=?, confirmed_by_name=?, confirmed_at=NOW()
+                             WHERE id IN ($in) AND is_deleted=0");
+        $st->execute(array_merge([$uid, $uname], $ids));
+        $n = $st->rowCount();
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'批次確認失敗：'.$e->getMessage()]); }
+    jout(['success'=>true,'confirmed_count'=>$n]);
 
 // ── 整張表頭+項目列一次儲存（交易內完成，避免部分寫入）─────────────
 // confirm=1：同時完成「確認清單」動作(review_status=>confirmed, confirmed_by/at 記錄目前使用者)
