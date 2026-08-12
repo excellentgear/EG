@@ -226,7 +226,7 @@ try {
     <h4 class="modal-title"><i class="fa fa-object-group"></i> 批次建立登記</h4></div>
   <div class="modal-body">
     <p class="text-muted" style="font-size:12px;">先多選部門與圖章模板（可複選多種），按「產生名單」列出候選清單，可再手動取消勾選不需要的人。
-      <strong>個人章</strong>（種類綁定對象為個人、或未限制）同一人只會出現一次；<strong>部門所屬人員章</strong>（種類同時綁定個人＋課室）同一人若身兼多部門主/兼任職位，主職位部門、兼任職位部門各自一筆。
+      <strong>個人章</strong>（種類綁定對象為個人、或未限制，且模板內容沒有部門變數）同一人只會出現一次；<strong>部門所屬人員章</strong>（種類同時綁定個人＋課室，或模板內容本身有 {部門}/{部門簡稱} 變數）同一人若身兼多部門主/兼任職位，主職位部門、兼任職位部門各自一筆——因為印出來的部門文字不同，不能只算一顆。
       重複檢查依「模板」而非「種類」：同一人已持有某模板的使用中登記才會略過，同種類的不同模板可同時持有。</p>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;">
       <div style="flex:1;min-width:200px;">
@@ -974,15 +974,20 @@ $('#btnBatchAdd').on('click',function(){
   $('#batchResult').text(''); $('#batchChkAll').prop('checked',true);
   $('#batchModal').modal('show');
 });
-// 依印章種類 bind_targets 判斷此模板屬於批次的哪種模式：個人(不綁部門，同人只列一次)／部門所屬人員(dept_id+user_id組合，主/兼任部門各一筆)；純部門或純職稱綁定不涉及挑人，批次不適用
+// 模板內容有沒有用到部門變數（{部門}/{部門簡稱}）：有的話同一人主職位部門、兼任職位部門要各印一顆（部門文字不同、不能只印一顆）
+function batchTplNeedsDept(tpl){
+  let sc={}; try{sc=JSON.parse(tpl.schema_json||'{}');}catch(e){sc={};}
+  return (sc.rows||[]).some(r=>/\{部門\}|\{部門簡稱\}/.test(r.text||''));
+}
+// 依印章種類 bind_targets 判斷此模板屬於批次的哪種模式：個人(不綁部門，同人只列一次)／部門所屬人員(dept_id+user_id組合，主/兼任部門各一筆)；純部門或純職稱綁定不涉及挑人，批次不適用。
+// 種類綁定為「個人」或未限制時，若模板本身有部門變數，改用部門所屬人員模式（主/兼任部門各一筆），避免同一人不同部門的印文被誤判成同一顆而漏建。
 function batchTplKind(tpl){
   const t=TYPES.find(x=>String(x.id)===String(tpl.type_id));
   const bt=t&&t.bind_targets?t.bind_targets.split(',').filter(Boolean):[];
-  if(!bt.length) return 'user';
-  const hasU=bt.includes('user'), hasD=bt.includes('dept');
-  if(hasU&&hasD) return 'user_dept';
-  if(hasU) return 'user';
-  return null;
+  const hasU=!bt.length||bt.includes('user'), hasD=bt.includes('dept');
+  if(!hasU) return null;
+  if(hasD||batchTplNeedsDept(tpl)) return 'user_dept';
+  return 'user';
 }
 function batchRowHtml(tpl,kind,uid,uname,deptId,deptLabel){
   return `<tr><td><input type="checkbox" class="batch-row-chk" checked
