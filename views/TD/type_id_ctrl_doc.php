@@ -187,9 +187,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     <div class="m-body">
         <div class="ic-head-grid" style="grid-template-columns:1fr 1fr;">
             <div>
-                <label>產品編號(料號) <span style="color:#DD5138;">*</span></label>
-                <input type="text" id="fPartNo" placeholder="輸入部分料號或圖號即可搜尋" autocomplete="off">
-                <input type="hidden" id="fPartDId" value="0">
+                <label>建立日期(最早外來文件日期)</label>
+                <input type="text" id="fEarliestDate" readonly data-eg-skip="1">
             </div>
             <div>
                 <label>客戶</label>
@@ -197,11 +196,20 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
                 <input type="hidden" id="fCustomerId" value="">
             </div>
         </div>
+        <div class="ic-head-grid" style="grid-template-columns:1fr 1fr;margin-top:8px;">
+            <div>
+                <label>產品編號(料號) <span style="color:#DD5138;">*</span></label>
+                <input type="text" id="fPartNo" placeholder="輸入部分料號或圖號即可搜尋" autocomplete="off">
+                <input type="hidden" id="fPartDId" value="0">
+            </div>
+            <div>
+                <label>製程</label>
+                <input type="text" id="fProcessSummary" readonly data-eg-skip="1">
+            </div>
+        </div>
         <div style="margin-top:6px;font-size:12px;color:#8a6d45;">文件編號：<b id="fDocNo">存檔後自動產生</b>
             ｜ 建立：<span id="fCreatedInfo">—</span></div>
         <div class="ic-hdr-info">
-            <span>製程：<b id="fProcessSummary">—</b></span>
-            <span>建立日期(最早外來文件日期)：<b id="fEarliestDate">—</b></span>
             <span>簽章日期(最新日期)：<b id="fLatestDate">—</b></span>
             <span>確認狀態：<span id="fReviewBadge" class="ic-status st-pending">待確認</span></span>
             <span id="fConfirmedInfo" style="color:#8a6d45;"></span>
@@ -465,8 +473,8 @@ function resetEditForm(){
     CUR_ID = 0; ITEMS = [];
     $('#fPartNo').val(''); $('#fPartDId').val('0'); $('#fCustomerName').val(''); $('#fCustomerId').val('');
     $('#fDocNo').text('存檔後自動產生'); $('#fCreatedInfo').text('—');
-    $('#fProcessSummary').text('—');
-    $('#fEarliestDate').text('—'); $('#fLatestDate').text('—');
+    $('#fProcessSummary').val('—');
+    $('#fEarliestDate').val('—'); $('#fLatestDate').text('—');
     $('#fReviewBadge').attr('class','ic-status st-pending').text('待確認'); $('#fConfirmedInfo').text('');
     $('#itemBody').empty();
 }
@@ -481,8 +489,8 @@ function openEdit(id){
         $('#fCustomerName').val(res.doc.customer_name||''); $('#fCustomerId').val(res.doc.customer_id||'');
         $('#fDocNo').text(res.doc.doc_no);
         $('#fCreatedInfo').text((res.doc.created_by_name||'')+' '+fmtDate((res.doc.created_at||'').substring(0,10)));
-        $('#fProcessSummary').text(res.process_summary ? res.process_summary : '共用(未標示特定製程)');
-        $('#fEarliestDate').text(res.doc_date_earliest ? fmtDate(res.doc_date_earliest) : '—');
+        $('#fProcessSummary').val(res.process_summary ? res.process_summary : '共用(未標示特定製程)');
+        $('#fEarliestDate').val(res.doc_date_earliest ? fmtDate(res.doc_date_earliest) : '—');
         $('#fLatestDate').text(res.sign_date_latest ? fmtDate(res.sign_date_latest) : '—');
         $('#fReviewBadge').attr('class','ic-status '+(STATUS_CLS[res.doc.review_status]||'st-pending')).text(res.doc.review_status_label||'待確認');
         $('#btnConfirm').text(res.doc.review_status === 'pending' ? ' 確認清單' : ' 重新確認').prepend('<i class="fa fa-check"></i>');
