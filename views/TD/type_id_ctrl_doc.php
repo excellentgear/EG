@@ -107,6 +107,18 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         .ic-row-btn.del { color:#DD5138; border-color:#f0c4bd; }
         .ic-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
+        .ic-status { display:inline-block; font-size:11px; border-radius:10px; padding:2px 9px; white-space:nowrap; }
+        .ic-status.st-pending { background:#F7E0BD; color:#7a5217; }
+        .ic-status.st-recheck { background:#DD5138; color:#fff; }
+        .ic-status.st-confirmed { background:#F0A24B; color:#fff; }
+        td.drg { width:22px; text-align:center; color:#b0a390; cursor:grab; }
+        td.drg:active { cursor:grabbing; }
+        table.ic-item-table tr.ic-excluded { opacity:.5; background:#f3ede0 !important; }
+        table.ic-item-table tr.drag-over { outline:2px dashed #F0A24B; outline-offset:-2px; }
+        .ic-chk { display:flex; align-items:center; gap:4px; font-size:11px; white-space:nowrap; cursor:pointer; margin:0; }
+        .ic-hdr-info { margin-top:8px; padding:6px 10px; background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px;
+            font-size:12px; color:#5b3a1e; display:flex; flex-wrap:wrap; gap:4px 16px; align-items:center; }
+        .stamp-wrap { display:inline-block; text-align:center; margin:2px 10px 2px 0; }
         @media print { .ic-toolbar, .nav_menu, .left_col, footer { display:none !important; } .right_col { margin:0 !important; padding:0 !important; } }
     </style>
 </head>
@@ -130,8 +142,18 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
 <?php else: ?>
         <div class="ic-toolbar">
             <label>搜尋</label>
-            <input type="text" id="kwInput" placeholder="文件編號／料號／客戶" style="width:180px;">
+            <input type="text" id="kwInput" placeholder="文件編號／料號／客戶" style="width:160px;">
+            <label>狀態</label>
+            <select id="statusFilter">
+                <option value="">全部</option>
+                <option value="pending">待確認</option>
+                <option value="needs_recheck">需重新確認</option>
+                <option value="confirmed">已確認</option>
+            </select>
             <button class="btn-warm" id="btnAdd" style="<?= $perms['canEdit']?'':'display:none;' ?>"><i class="fa fa-plus"></i> 新增</button>
+            <span style="border-left:1px solid #D8BE93;height:20px;"></span>
+            <input type="text" id="syncPartNo" placeholder="輸入料號自動產生/同步" style="width:150px;<?= $perms['canEdit']?'':'display:none;' ?>" autocomplete="off">
+            <button class="btn-warm" id="btnSyncPart" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="依此料號的訂單/報價單製程，自動建立(或更新)各製程的型態識別文件管制表，並同步外來文件清單附件"><i class="fa fa-refresh"></i> 自動產生/同步</button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <span class="ic-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b></span>
@@ -140,10 +162,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <div class="ic-table-wrap">
             <table class="ic-table" id="icTable">
                 <thead><tr>
-                    <th>文件編號</th><th>客戶</th><th>產品編號(料號)</th><th>製程</th>
+                    <th>文件編號</th><th>客戶</th><th>產品編號(料號)</th><th>製程</th><th>確認狀態</th>
                     <th>建立人</th><th>建立時間</th><th>操作</th>
                 </tr></thead>
-                <tbody id="icBody"><tr><td colspan="7" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="icBody"><tr><td colspan="8" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
 <?php endif; ?>
@@ -176,13 +198,21 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         </div>
         <div style="margin-top:6px;font-size:12px;color:#8a6d45;">文件編號：<b id="fDocNo">存檔後自動產生</b>
             ｜ 建立：<span id="fCreatedInfo">—</span></div>
+        <div class="ic-hdr-info">
+            <span>建立日期(最早外來文件日期)：<b id="fEarliestDate">—</b></span>
+            <span>簽章日期(最新日期)：<b id="fLatestDate">—</b></span>
+            <span>確認狀態：<span id="fReviewBadge" class="ic-status st-pending">待確認</span></span>
+            <span id="fConfirmedInfo" style="color:#8a6d45;"></span>
+            <button type="button" class="ic-row-btn" id="btnConfirm" style="margin-left:auto;<?= $perms['canEdit']?'':'display:none;' ?>" onclick="saveAll(true)"><i class="fa fa-check"></i> 確認清單</button>
+        </div>
 
         <table class="ic-item-table">
             <thead><tr>
-                <th style="width:28px;">項次</th>
-                <th style="width:16%;">型態項目名稱</th>
-                <th style="width:12%;">型態生效日期</th>
-                <th style="width:12%;">型態類別</th>
+                <th style="width:20px;"></th>
+                <th style="width:26px;">項次</th>
+                <th style="width:15%;">型態項目名稱</th>
+                <th style="width:11%;">型態生效日期</th>
+                <th style="width:11%;">型態類別</th>
                 <th>版別／文件編號</th>
                 <th class="op">操作</th>
             </tr></thead>
@@ -191,11 +221,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <div style="margin-top:6px;">
             <button type="button" class="ic-row-btn" onclick="icAddRow()"><i class="fa fa-plus"></i> 新增一列</button>
         </div>
-        <div class="tip" style="margin-top:8px;">版別／文件編號可手動輸入，或按「連結」從外來文件清單挑選既有附件——連結後此列會<b>即時顯示外來文件清單目前的檔名與日期</b>（不落地快照，來源異動這裡會跟著變）。</div>
+        <div class="tip" style="margin-top:8px;">選定產品編號(料號)後會自動列出「外來文件清單」中此料號的附件（拖曳列前的 <i class="fa fa-ellipsis-v"></i> 可調整順序，項次自動重編）；這些自動列出的列用「納入」勾選框決定是否套用到本製程文件，取消勾選＝人工確認此文件不適用本製程（例如齒研治具圖片不需連結到滾齒製程的文件），不會被之後的同步再次加回。手動新增的列可按「選外來文件」自行連結，或直接手動輸入版別／文件編號。</div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('editMask')">取消</button>
-        <button class="b-ok" id="btnSave" onclick="saveAll()">儲存</button>
+        <button class="b-ok" id="btnSave" onclick="saveAll(false)">儲存</button>
     </div>
 </div></div>
 
@@ -233,22 +263,27 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     <div class="m-head"><span><i class="fa fa-question-circle"></i> 型態識別文件管制表 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc">
         <h4>功能說明</h4>
-        <p>每個料號建立一份「型態識別文件管制表」，逐列記錄目前定義該料號狀態的文件（原圖、報價單、加工圖、產品開發評估表、PFMEA、檢驗報告…），用來追溯「這個料號現在的配置由哪些文件定義」。</p>
-        <h4>操作步驟</h4>
+        <p>每個料號、每種製程各建一份「型態識別文件管制表」，逐列記錄目前定義該料號該製程狀態的文件（原圖、報價單、加工圖、產品開發評估表、PFMEA、檢驗報告…），用來追溯「這個料號現在的配置由哪些文件定義」。項目列以「外來文件清單」為主要來源，可自動產生／同步，也可以手動增加。</p>
+        <h4>兩種建立方式</h4>
         <ul>
-            <li>按「新增」→ 先選擇「產品編號(料號)」（打部分字元搜尋，選定後自動帶出客戶），可點文件編號旁的料號連結開圖面。</li>
-            <li>逐列填「型態項目名稱」（如：原圖、報價單…）、「型態生效日期」、「型態類別」（圖面／治夾具／報告／其他文件）。</li>
-            <li>「版別／文件編號」可直接手動輸入；若該文件已在「外來文件清單」（<a href="../Sales/external_doc_list.php" target="_blank">開啟</a>）裡有附件，按「連結」挑選即可自動帶入，之後外來文件清單更新，這裡會跟著即時顯示最新檔名與日期。</li>
-            <li>末列填寫後按 ↓ 或「新增一列」可再加一列；空白的最後一列會自動不存檔。</li>
-            <li>按「儲存」整批寫入；文件編號（本表自身編號，格式：西元年月日＋3位流水號）存檔後自動產生，不可手動修改。</li>
+            <li><b>自動產生／同步（推薦）</b>：工具列輸入料號→按「自動產生/同步」，系統依此料號的訂單與報價單製程記錄，<b>每種製程各自動建立(或更新)一份</b>，並把外來文件清單中此料號的所有附件同步進項目列。之後每次執行都是「同步」：新出現的外來文件會被加入、已確認過的文件會被改成「需重新確認」提醒覆核。</li>
+            <li><b>新增（手動）</b>：按「新增」→ 選擇「產品編號(料號)」（打部分字元直接搜尋，不需先點按鈕；選定後自動帶出客戶、外來文件清單中此料號的資料也會自動列出），自行填「製程」，可再用「新增一列」手動加項目，或用列上的「選外來文件」挑選既有附件連結。</li>
         </ul>
-        <h4>重要行為／常見疑問</h4>
+        <h4>人工確認（審查是否有文件不適用此製程）</h4>
         <ul>
-            <li>「連結」的列不能手動改文字——顯示內容一律即時查詢外來文件清單目前狀態，若來源附件被刪除會顯示「來源已消失」，此時可解除連結改手動輸入。</li>
-            <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
+            <li>自動列出的項目預設「納入」（打勾）；若某份外來文件其實不適用這個製程（例如齒研治具圖片不需連結到滾齒製程的文件），把「納入」勾選框取消即可——會記為<b>已排除</b>，之後同步不會再自動加回來。</li>
+            <li>逐項確認後按「確認清單」：記錄確認人與確認時間，狀態變成「已確認」；製表人／簽章日期即取這次確認人與清單上最新的文件日期。</li>
+            <li>之後只要有新的外來文件同步進來，「已確認」會自動變回「需重新確認」，提醒重新逐項審視。清單上方「狀態」篩選可分別看「待確認／需重新確認／已確認」。</li>
+        </ul>
+        <h4>其他行為／常見疑問</h4>
+        <ul>
+            <li>「版別／文件編號」欄：連結自外來文件清單的列無法手動改文字——顯示內容一律即時查詢外來文件清單目前狀態（不落地快照，來源異動這裡會跟著變），若來源附件被刪除會顯示「來源已消失」；手動新增的列可直接輸入文字，也可按「選外來文件」改連結既有附件。</li>
+            <li>項目列可拖曳排序（列前 <i class="fa fa-ellipsis-v"></i> 圖示），放開後項次自動重新編號。</li>
+            <li>建立日期＝清單上最早的文件日期；簽章日期＝清單上最新的文件日期（皆排除已排除的項目）；兩者隨清單內容即時算出，不需手動填。</li>
+            <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號、製表人簽章使用全站通用圓形姓名章（若本人有上傳掃描實體章會優先用掃描章，否則自動產生標準回墨章，不需另外設定模板）。</li>
         </ul>
         <h4>設定入口</h4>
-        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。</p>
+        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。</p>
         <h4>權限角色</h4>
         <p>型態文件檢閱／登錄／管理員（管理者固定擁有全部權限）。</p>
     </div>
@@ -261,6 +296,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_part_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_part_picker.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
@@ -278,12 +314,14 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){retu
 function closeMask(id){ document.getElementById(id).style.display='none'; }
 function openMask(id){ document.getElementById(id).style.display='block'; }
 function fmtDate(s){ return (window.egFmtDate ? egFmtDate(s) : (s||'')); }
+var STATUS_CLS = {pending:'st-pending', needs_recheck:'st-recheck', confirmed:'st-confirmed'};
+function statusBadge(status, label){ return '<span class="ic-status '+(STATUS_CLS[status]||'st-pending')+'">'+esc(label||status)+'</span>'; }
 
 /* ---------- 清單 ---------- */
 function loadList(){
-    $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
-        if (!res.success){ $('#icBody').html('<tr><td colspan="7" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
-        if (!res.rows.length){ $('#icBody').html('<tr><td colspan="7" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
+    $.getJSON(API, {action:'list', kw:$('#kwInput').val()||'', status:$('#statusFilter').val()||''}, function(res){
+        if (!res.success){ $('#icBody').html('<tr><td colspan="8" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
+        if (!res.rows.length){ $('#icBody').html('<tr><td colspan="8" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
         var html = '';
         res.rows.forEach(function(r){
             html += '<tr>'
@@ -291,12 +329,13 @@ function loadList(){
                 + '<td>'+esc(r.customer_name||r.customer_id||'')+'</td>'
                 + '<td class="t-left">'+(r.part_d_id?EGPartPicker.viewerLink(r.part_d_id, VIEWER_URL, r.part_no):esc(r.part_no))+'</td>'
                 + '<td>'+esc(r.process_desc||'')+'</td>'
+                + '<td>'+statusBadge(r.review_status, r.review_status_label)+'</td>'
                 + '<td>'+esc(r.created_by_name||'')+'</td>'
                 + '<td>'+fmtDate((r.created_at||'').substring(0,10))+'</td>'
                 + '<td>'
-                + '<span class="ic-op" onclick="openEdit('+r.id+')">'+(CAN_EDIT?'編輯':'檢視')+'</span>'
-                + '<span class="ic-op" onclick="printDoc('+r.id+')">列印</span>'
-                + (CAN_ADMIN ? '<span class="ic-op" onclick="delDoc('+r.id+')">刪除</span>' : '')
+                + '<span class="ic-op" title="'+(CAN_EDIT?'編輯':'檢視')+'" onclick="openEdit('+r.id+')"><i class="fa fa-'+(CAN_EDIT?'pencil':'eye')+'"></i></span>'
+                + '<span class="ic-op" title="列印" onclick="printDoc('+r.id+')"><i class="fa fa-print"></i></span>'
+                + (CAN_ADMIN ? '<span class="ic-op" title="刪除" onclick="delDoc('+r.id+')"><i class="fa fa-trash"></i></span>' : '')
                 + '</td></tr>';
         });
         $('#icBody').html(html);
@@ -304,12 +343,13 @@ function loadList(){
 }
 var kwT=null;
 $('#kwInput').on('input', function(){ clearTimeout(kwT); kwT=setTimeout(loadList, 300); });
+$('#statusFilter').on('change', loadList);
 $('#btnCsv').on('click', function(){
-    $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
+    $.getJSON(API, {action:'list', kw:$('#kwInput').val()||'', status:$('#statusFilter').val()||''}, function(res){
         if (!res.success) return;
-        var lines = ['文件編號,客戶,產品編號,製程,建立人,建立時間'];
+        var lines = ['文件編號,客戶,產品編號,製程,確認狀態,建立人,建立時間'];
         res.rows.forEach(function(r){
-            lines.push([r.doc_no, r.customer_name||r.customer_id||'', r.part_no||'', r.process_desc||'', r.created_by_name||'', (r.created_at||'').substring(0,10)]
+            lines.push([r.doc_no, r.customer_name||r.customer_id||'', r.part_no||'', r.process_desc||'', r.review_status_label||'', r.created_by_name||'', (r.created_at||'').substring(0,10)]
                 .map(function(v){ return '"'+String(v).replace(/"/g,'""')+'"'; }).join(','));
         });
         var blob = new Blob(["\uFEFF"+lines.join("\n")], {type:'text/csv;charset=utf-8;'});
@@ -318,11 +358,30 @@ $('#btnCsv').on('click', function(){
     });
 });
 
+/* ---------- 依料號自動產生/同步 ---------- */
+var syncPartDId = 0;
+EGPartPicker.attach(document.getElementById('syncPartNo'), {
+    apiUrl: PART_API,
+    onSelect: function(row){ syncPartDId = row.d_id; }
+});
+$('#syncPartNo').on('input', function(){ syncPartDId = 0; });
+$('#btnSyncPart').on('click', function(){
+    if (!syncPartDId){ alert('請先從清單中選擇一個料號'); return; }
+    $.post(API, {action:'sync_part', part_d_id:syncPartDId}, function(res){
+        if (!res.success){ alert(res.message||'同步失敗'); return; }
+        alert('已同步：新建 '+res.created+' 份、更新 '+res.updated+' 份型態識別文件管制表');
+        $('#syncPartNo').val(''); syncPartDId = 0;
+        loadList();
+    }, 'json');
+});
+
 /* ---------- 新增/編輯 ---------- */
 function resetEditForm(){
     CUR_ID = 0; ITEMS = [];
     $('#fPartNo').val(''); $('#fPartDId').val('0'); $('#fCustomerName').val(''); $('#fCustomerId').val('');
     $('#fProcess').val(''); $('#fDocNo').text('存檔後自動產生'); $('#fCreatedInfo').text('—');
+    $('#fEarliestDate').text('—'); $('#fLatestDate').text('—');
+    $('#fReviewBadge').attr('class','ic-status st-pending').text('待確認'); $('#fConfirmedInfo').text('');
     $('#itemBody').empty();
 }
 function openEdit(id){
@@ -337,6 +396,11 @@ function openEdit(id){
         $('#fProcess').val(res.doc.process_desc||'');
         $('#fDocNo').text(res.doc.doc_no);
         $('#fCreatedInfo').text((res.doc.created_by_name||'')+' '+fmtDate((res.doc.created_at||'').substring(0,10)));
+        $('#fEarliestDate').text(res.doc_date_earliest ? fmtDate(res.doc_date_earliest) : '—');
+        $('#fLatestDate').text(res.sign_date_latest ? fmtDate(res.sign_date_latest) : '—');
+        $('#fReviewBadge').attr('class','ic-status '+(STATUS_CLS[res.doc.review_status]||'st-pending')).text(res.doc.review_status_label||'待確認');
+        $('#btnConfirm').text(res.doc.review_status === 'pending' ? ' 確認清單' : ' 重新確認').prepend('<i class="fa fa-check"></i>');
+        $('#fConfirmedInfo').text(res.doc.confirmed_by_name ? ('（'+res.doc.confirmed_by_name+' '+fmtDate((res.doc.confirmed_at||'').substring(0,10))+' 確認）') : '');
         ITEMS = res.items || [];
         renderItems();
         openMask('editMask');
@@ -350,6 +414,12 @@ EGPartPicker.attach(document.getElementById('fPartNo'), {
     onSelect: function(row){
         $('#fPartDId').val(row.d_id);
         $('#fCustomerName').val(row.customer_name||row.customer_id||''); $('#fCustomerId').val(row.customer_id||'');
+        // 新增流程(尚未存檔)：選定料號後自動列出外來文件清單中此料號的資料到項目列
+        if (!CUR_ID) {
+            $.post(API, {action:'fetch_ext_for_part', part_d_id:row.d_id}, function(res){
+                if (res && res.success && res.rows.length){ ITEMS = res.rows; renderItems(); }
+            }, 'json');
+        }
     }
 });
 // 直接打字修改料號文字但沒有從清單點選＝視同尚未選定有效料號，清空 d_id 避免存到舊選取值
@@ -375,19 +445,23 @@ $('#btnPullProcess').on('click', function(){
 
 function itemRowHtml(it, idx){
     var linked = it.is_linked;
+    var excluded = !!it.is_excluded;
     var typeOpts = TYPE_OPTS.map(function(t){ return '<option value="'+t[0]+'"'+(it.item_type===t[0]?' selected':'')+'>'+t[1]+'</option>'; }).join('');
-    var linkBadge = linked ? '<span class="ic-link-badge"><i class="fa fa-link"></i> 已連結</span>' : (it.ref_broken ? '<span class="ic-broken-badge">來源已消失</span>' : '');
+    var linkBadge = linked ? '<span class="ic-link-badge"><i class="fa fa-link"></i> 外來文件</span>' : (it.ref_broken ? '<span class="ic-broken-badge">來源已消失</span>' : '');
     var docNoCell = '<input type="text" class="f-docno" value="'+esc(it.doc_no_text||'')+'"'+(linked?' disabled':'')+' placeholder="版別／文件編號">';
-    var linkBtn = linked
-        ? '<button type="button" class="ic-row-btn" onclick="unlinkRow(this)">解除連結</button>'
-        : '<button type="button" class="ic-row-btn" onclick="pickExtDoc(this)"'+ (($('#fPartDId').val()|0) ? '' : ' disabled title="請先選擇料號"') +'>連結</button>';
-    return '<tr data-ref-source="'+esc(it.ref_source||'')+'" data-ref-attach-id="'+esc(it.ref_attach_id||'')+'" data-ref-ds-pk="'+esc(it.ref_ds_pk||'')+'" data-id="'+esc(it.id||0)+'">'
+    var opCell = linked
+        ? '<label class="ic-chk"><input type="checkbox" class="f-included"'+(excluded?'':' checked')+' onchange="toggleExcluded(this)"> 納入</label>'
+          + (it.file_url ? ' <a href="'+esc(it.file_url)+'" target="_blank" title="檢視檔案"><i class="fa fa-external-link"></i></a>' : '')
+        : '<button type="button" class="ic-row-btn" onclick="pickExtDoc(this)"'+ (($('#fPartDId').val()|0) ? '' : ' disabled title="請先選擇料號"') +'>選外來文件</button>'
+          + ' <button type="button" class="ic-row-btn del" onclick="$(this).closest(\'tr\').remove(); renumberRows();">刪除</button>';
+    return '<tr draggable="true" class="'+(excluded?'ic-excluded':'')+'" data-ref-source="'+esc(it.ref_source||'')+'" data-ref-attach-id="'+esc(it.ref_attach_id||'')+'" data-ref-ds-pk="'+esc(it.ref_ds_pk||'')+'" data-id="'+esc(it.id||0)+'">'
+        + '<td class="drg" title="拖曳調整順序"><i class="fa fa-ellipsis-v"></i></td>'
         + '<td class="seq">'+(idx+1)+'</td>'
         + '<td><input type="text" class="f-name" value="'+esc(it.item_name||'')+'" placeholder="型態項目名稱"></td>'
         + '<td><input type="date" class="f-date" value="'+esc(it.effective_date||'')+'"'+(linked?' disabled':'')+'></td>'
         + '<td><select class="f-type">'+typeOpts+'</select></td>'
-        + '<td>'+docNoCell+' '+linkBadge+(it.file_url?' <a href="'+esc(it.file_url)+'" target="_blank"><i class="fa fa-external-link"></i></a>':'')+'</td>'
-        + '<td class="op">'+linkBtn+' <button type="button" class="ic-row-btn del" onclick="$(this).closest(\'tr\').remove(); renumberRows();">刪除</button></td>'
+        + '<td>'+docNoCell+' '+linkBadge+'</td>'
+        + '<td class="op">'+opCell+'</td>'
         + '</tr>';
 }
 function renderItems(){
@@ -397,8 +471,34 @@ function renderItems(){
     if (!ITEMS.length) icAddRow();
 }
 function renumberRows(){ $('#itemBody tr').each(function(i){ $(this).find('td.seq').text(i+1); }); }
+window.toggleExcluded = function(chk){
+    $(chk).closest('tr').toggleClass('ic-excluded', !chk.checked);
+};
+/* 拖曳排序：純 HTML5 原生 DnD，放開後重新編項次 */
+var dragSrcRow = null;
+$('#itemBody').on('dragstart', 'tr', function(e){
+    dragSrcRow = this;
+    if (e.originalEvent.dataTransfer) { e.originalEvent.dataTransfer.effectAllowed = 'move'; try { e.originalEvent.dataTransfer.setData('text/plain', ''); } catch(e2){} }
+});
+$('#itemBody').on('dragover', 'tr', function(e){
+    e.preventDefault();
+    if (e.originalEvent.dataTransfer) e.originalEvent.dataTransfer.dropEffect = 'move';
+    $(this).addClass('drag-over');
+});
+$('#itemBody').on('dragleave', 'tr', function(){ $(this).removeClass('drag-over'); });
+$('#itemBody').on('drop', 'tr', function(e){
+    e.preventDefault();
+    $(this).removeClass('drag-over');
+    if (!dragSrcRow || this === dragSrcRow) return;
+    var rows = $('#itemBody tr').get();
+    var srcIdx = rows.indexOf(dragSrcRow), tgtIdx = rows.indexOf(this);
+    if (srcIdx < tgtIdx) $(this).after(dragSrcRow); else $(this).before(dragSrcRow);
+    renumberRows();
+});
+$('#itemBody').on('dragend', 'tr', function(){ dragSrcRow = null; $('#itemBody tr').removeClass('drag-over'); });
+
 window.icAddRow = function(){
-    var blank = {id:0, item_name:'', item_type:'other', effective_date:'', doc_no_text:'', is_linked:false, ref_source:null, ref_attach_id:null, ref_ds_pk:null};
+    var blank = {id:0, item_name:'', item_type:'other', effective_date:'', doc_no_text:'', is_linked:false, is_excluded:false, ref_source:null, ref_attach_id:null, ref_ds_pk:null};
     $('#itemBody').append(itemRowHtml(blank, $('#itemBody tr').length));
     renumberRows();
     return true;
@@ -439,30 +539,23 @@ window.applyExtDoc = function(i){
     $tr.replaceWith(itemRowHtml(ITEMS[idx], idx));
     closeMask('extMask');
 };
-window.unlinkRow = function(btn){
-    var $tr = $(btn).closest('tr');
-    var idx = $tr.index();
-    var it = collectRow($tr);
-    it.is_linked = false; it.ref_source = null; it.ref_attach_id = null; it.ref_ds_pk = null; it.doc_no_text = ''; it.effective_date = '';
-    ITEMS[idx] = it;
-    $tr.replaceWith(itemRowHtml(it, idx));
-};
-
 function collectRow($tr){
+    var linked = !!$tr.attr('data-ref-source');
     return {
         id: parseInt($tr.attr('data-id'),10) || 0,
         item_name: $tr.find('.f-name').val(),
         item_type: $tr.find('.f-type').val(),
         effective_date: $tr.find('.f-date').val(),
         doc_no_text: $tr.find('.f-docno').val(),
-        is_linked: !!$tr.attr('data-ref-source'),
+        is_linked: linked,
+        is_excluded: linked ? !$tr.find('.f-included').is(':checked') : false,
         ref_source: $tr.attr('data-ref-source') || null,
         ref_attach_id: $tr.attr('data-ref-attach-id') || null,
         ref_ds_pk: $tr.attr('data-ref-ds-pk') || null,
     };
 }
 
-function saveAll(){
+function saveAll(confirm){
     var partDId = $('#fPartDId').val();
     if (!partDId || partDId === '0'){ alert('請先選擇產品編號(料號)'); return; }
     var items = [];
@@ -473,6 +566,7 @@ function saveAll(){
             ref_source: it.is_linked ? it.ref_source : '',
             ref_attach_id: it.is_linked ? it.ref_attach_id : 0,
             ref_ds_pk: it.is_linked ? it.ref_ds_pk : 0,
+            is_excluded: it.is_excluded ? 1 : 0,
             manual_effective_date: it.is_linked ? '' : it.effective_date,
             manual_doc_no: it.is_linked ? '' : it.doc_no_text,
         };
@@ -480,7 +574,7 @@ function saveAll(){
     });
     $.post(API, {
         action: 'save_all', id: CUR_ID, customer_id: $('#fCustomerId').val(), part_d_id: partDId,
-        process_desc: $('#fProcess').val(), items: JSON.stringify(items)
+        process_desc: $('#fProcess').val(), items: JSON.stringify(items), confirm: confirm ? 1 : 0
     }, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); return; }
         closeMask('editMask'); loadList();
@@ -495,21 +589,28 @@ function delDoc(id){
     }, 'json');
 }
 
-/* ---------- 列印（ai-rules/16：大標題本公司名／頁尾右下AS編號／頁碼左下） ---------- */
+/* ---------- 列印（ai-rules/16：大標題本公司名／頁尾右下AS編號／頁碼左下；製表人簽章走 eg_stamp.js ---------- */
 function printDoc(id){
     $.getJSON(API, {action:'print_get', id:id}, function(res){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
         var d = res.doc;
+        window.__ownCompany = res.company_name || '';
         var typeLabel = {drawing:'圖面', jig:'治夾具', report:'報告', other:'其他文件'};
+        var activeItems = (res.items||[]).filter(function(it){ return !it.is_excluded; });
         var body = '<div class="p-comp">'+esc(res.company_name)+'</div>'
             + '<div class="p-title">'+esc(res.as_doc_name)+'</div>'
             + '<table class="p-hd"><tr><td>客戶</td><td>'+esc(d.customer_name||'')+'</td><td>製程</td><td>'+esc(d.process_desc||'')+'</td></tr>'
-            + '<tr><td>產品編號</td><td>'+esc(d.part_no||'')+'</td><td>建立日期</td><td>'+fmtDate((d.created_at||'').substring(0,10))+'</td></tr></table>'
+            + '<tr><td>產品編號</td><td>'+esc(d.part_no||'')+'</td><td>建立日期</td><td>'+(res.doc_date_earliest?fmtDate(res.doc_date_earliest):'')+'</td></tr></table>'
             + '<table class="p-tb"><thead><tr><th style="width:26px;">項次</th><th>型態項目名稱</th><th style="width:90px;">型態生效日期</th><th style="width:70px;">型態類別</th><th>版別／文件編號</th></tr></thead><tbody>';
-        (res.items||[]).forEach(function(it){
-            body += '<tr><td>'+it.seq+'</td><td class="tl">'+esc(it.item_name)+'</td><td>'+fmtDate(it.effective_date)+'</td><td>'+(typeLabel[it.item_type]||'')+'</td><td class="tl">'+esc(it.doc_no_text||'')+'</td></tr>';
+        activeItems.forEach(function(it, i){
+            body += '<tr><td>'+(i+1)+'</td><td class="tl">'+esc(it.item_name)+'</td><td>'+fmtDate(it.effective_date)+'</td><td>'+(typeLabel[it.item_type]||'')+'</td><td class="tl">'+esc(it.doc_no_text||'')+'</td></tr>';
         });
         body += '</tbody></table>';
+        var makerName = d.confirmed_by_name || '';
+        var makerDate = res.sign_date_latest ? fmtDate(res.sign_date_latest) : '';
+        var makerStamp = makerName ? EGStamp.stamp(makerName, makerDate) : '<span style="color:#999;font-size:12px;">（尚未確認）</span>';
+        body += '<div style="margin-top:16px;display:flex;justify-content:flex-end;align-items:flex-end;gap:6px;">'
+              + '<span style="font-size:12px;color:#777;margin-bottom:8px;">製表：</span>' + makerStamp + '</div>';
         var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
             + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:10px;}'
@@ -520,6 +621,7 @@ function printDoc(id){
             + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 5px;text-align:center;overflow-wrap:anywhere;}'
             + 'table.p-tb thead th{background:#f3ead6;} table.p-tb td.tl{text-align:left;}'
             + 'table.p-tb tr{break-inside:avoid;}'
+            + '.stamp-wrap{display:inline-block;text-align:center;margin:2px 10px 2px 0;}'
             + '@page{margin:12mm 10mm 18mm;'
             + (res.as_doc_no ? " @bottom-right{ content:'"+String(res.as_doc_no).replace(/['\\]/g,'')+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
             + '}';
