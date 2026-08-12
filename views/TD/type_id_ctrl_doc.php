@@ -148,6 +148,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <div class="ic-toolbar">
             <label>搜尋</label>
             <input type="text" id="kwInput" placeholder="文件編號／料號／客戶" style="width:160px;">
+            <label>客戶</label>
+            <input type="text" id="filterCustomer" placeholder="客戶ID或名稱" style="width:130px;">
+            <label>料號</label>
+            <input type="text" id="filterPartNo" placeholder="料號" style="width:130px;">
             <label>狀態</label>
             <select id="statusFilter">
                 <option value="">全部</option>
@@ -162,7 +166,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <button id="btnSyncPart" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="依此料號的訂單/報價單製程，自動建立(或更新)各製程的型態識別文件管制表，並同步外來文件清單附件"><i class="fa fa-refresh"></i> 同步</button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
             <button id="btnOwnDrawCats" style="<?= $perms['canAdmin']?'':'display:none;' ?>" title="設定哪些廠內「自家出的圖」標籤也要納入本模組的自動同步來源"><i class="fa fa-picture-o"></i> 廠內圖面標籤設定</button>
+            <span style="border-left:1px solid #D8BE93;height:20px;<?= $perms['canAdmin']?'':'display:none;' ?>"></span>
+            <button id="btnBatchConfirm" style="<?= $perms['canAdmin']?'':'display:none;' ?>" title="批次確認勾選的清單，確認者自動記為目前登入者"><i class="fa fa-check-square-o"></i> 批次確認清單</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
+            <button id="btnPrintAll" title="依目前篩選條件，逐筆列印所有搜尋結果"><i class="fa fa-print"></i> 列印全部搜尋結果</button>
             <span class="ic-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
                 <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
         </div>
@@ -170,10 +177,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <div class="ic-table-wrap">
             <table class="ic-table" id="icTable">
                 <thead><tr>
+                    <th style="<?= $perms['canAdmin']?'':'display:none;' ?>"><input type="checkbox" id="ckAll" data-eg-skip="1" title="全選/取消全選"></th>
                     <th>文件編號</th><th>客戶</th><th>產品編號(料號)</th><th>確認狀態</th>
                     <th>建立人</th><th>建立時間</th><th>操作</th>
                 </tr></thead>
-                <tbody id="icBody"><tr><td colspan="7" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="icBody"><tr><td colspan="8" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
 <?php endif; ?>
@@ -308,7 +316,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     <div class="m-body" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
         <b>型態文件檢閱</b>：檢視清單、開啟查看、列印。<br>
         <b>型態文件登錄</b>：檢閱＋新增/編輯、「掃描待建立料號」與自動產生/同步、確認清單（含排除項目）。<br>
-        <b>型態文件管理員</b>：登錄＋刪除、AS 文件編號綁定。<br>
+        <b>型態文件管理員</b>：登錄＋刪除、AS 文件編號綁定、批次確認清單。<br>
         <b>管理者</b>：系統管理者固定擁有全部權限。<br>
         <hr style="border-color:#EADFC8;">
         角色指派請洽管理者於「使用者權限設定」（<a href="../user/user_permissions.php" target="_blank">開啟</a>）→「型態識別文件管制表」區塊指派。未被指派角色者無法進入本頁。
@@ -335,6 +343,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li>自動列出的項目預設「納入」（打勾）；若某份文件其實不該出現在此清單，把「納入」勾選框取消即可——會記為<b>已排除</b>，之後同步不會再自動加回來。</li>
             <li>逐項確認後按「確認清單」：記錄確認人與確認時間，狀態變成「已確認」；製表人／簽章日期即取這次確認人與清單上最新的文件日期。</li>
             <li>之後只要有新的外來文件同步進來，「已確認」會自動變回「需重新確認」，提醒重新逐項審視。清單上方「狀態」篩選可分別看「待確認／需重新確認／已確認」。</li>
+            <li><b>批次確認清單</b>（僅型態文件管理員／管理員）：清單左側勾選要確認的多筆文件（表頭全選框可一次勾全部），按工具列「批次確認清單」；確認者一律自動記為目前登入者，不提供指定他人。簽章日期不受影響——一律是各文件自己項目列上最新的文件日期，跟誰按確認、何時按確認無關。</li>
+        </ul>
+        <h4>篩選與列印全部</h4>
+        <ul>
+            <li>清單上方除「搜尋」（文件編號／料號／客戶模糊比對其一）外，另有獨立的「客戶」（可輸入客戶ID或客戶名稱模糊搜尋）與「料號」篩選欄，皆為即時搜尋（輸入後自動觸發，不需按 Enter）。篩選欄有值時<b>雙擊可清空並同時解除該欄篩選</b>（全站共用行為，見 eg_input_rules.js）。</li>
+            <li><b>列印全部搜尋結果</b>：依目前「搜尋／客戶／料號／狀態」篩選條件，把畫面上列出的所有結果逐筆各自開視窗列印（不會合併成一份文件，所以每份文件仍是各自獨立算頁次、只有一頁時不顯示頁碼，跟單筆列印完全一樣）。結果筆數較多（超過 15 筆）時會先跳出確認，選擇繼續即自動依序逐筆觸發列印，不需要每筆手動點；若瀏覽器跳出「已封鎖快顯視窗」提示，請允許本頁彈出視窗才能讓後續筆數繼續列印。</li>
         </ul>
         <h4>其他行為／常見疑問</h4>
         <ul>
@@ -380,13 +394,23 @@ var STATUS_CLS = {pending:'st-pending', needs_recheck:'st-recheck', confirmed:'s
 function statusBadge(status, label){ return '<span class="ic-status '+(STATUS_CLS[status]||'st-pending')+'">'+esc(label||status)+'</span>'; }
 
 /* ---------- 清單 ---------- */
+var CUR_LIST_ROWS = [];
+function curFilterParams(){
+    return {
+        kw: $('#kwInput').val()||'', status: $('#statusFilter').val()||'',
+        customer: $('#filterCustomer').val()||'', part_no: $('#filterPartNo').val()||''
+    };
+}
 function loadList(){
-    $.getJSON(API, {action:'list', kw:$('#kwInput').val()||'', status:$('#statusFilter').val()||''}, function(res){
-        if (!res.success){ $('#icBody').html('<tr><td colspan="7" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
-        if (!res.rows.length){ $('#icBody').html('<tr><td colspan="7" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
+    $.getJSON(API, $.extend({action:'list'}, curFilterParams()), function(res){
+        if (!res.success){ CUR_LIST_ROWS=[]; $('#icBody').html('<tr><td colspan="8" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
+        CUR_LIST_ROWS = res.rows || [];
+        $('#ckAll').prop('checked', false);
+        if (!res.rows.length){ $('#icBody').html('<tr><td colspan="8" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
         var html = '';
         res.rows.forEach(function(r){
             html += '<tr>'
+                + '<td style="'+(CAN_ADMIN?'':'display:none;')+'"><input type="checkbox" class="ck-row" data-id="'+r.id+'" data-eg-skip="1"></td>'
                 + '<td>'+esc(r.doc_no)+'</td>'
                 + '<td>'+esc(r.customer_name||r.customer_id||'')+'</td>'
                 + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):esc(r.part_no))+'</td>'
@@ -404,9 +428,28 @@ function loadList(){
 }
 var kwT=null;
 $('#kwInput').on('input', function(){ clearTimeout(kwT); kwT=setTimeout(loadList, 300); });
+var custT=null;
+$('#filterCustomer').on('input', function(){ clearTimeout(custT); custT=setTimeout(loadList, 300); });
+var partT=null;
+$('#filterPartNo').on('input', function(){ clearTimeout(partT); partT=setTimeout(loadList, 300); });
 $('#statusFilter').on('change', loadList);
+$('#ckAll').on('change', function(){ $('#icBody .ck-row').prop('checked', this.checked); });
+
+/* ---------- 批次確認清單（型態文件管理員／管理員；確認者自動記為目前登入者。簽章日期不受影響——
+   一律取項目列最新文件日期即時算出，跟誰按確認、何時按確認無關） ---------- */
+$('#btnBatchConfirm').on('click', function(){
+    var ids = $('#icBody .ck-row:checked').map(function(){ return parseInt($(this).data('id'),10); }).get();
+    if (!ids.length){ alert('請先在清單左側勾選要確認的項目'); return; }
+    if (!confirm('確定要批次確認勾選的 '+ids.length+' 筆型態識別文件管制表嗎？確認者將記為目前登入者。')) return;
+    $.post(API, {action:'batch_confirm', ids: JSON.stringify(ids)}, function(res){
+        if (!res.success){ alert(res.message||'批次確認失敗'); return; }
+        alert('已確認 '+res.confirmed_count+' 筆。');
+        loadList();
+    }, 'json');
+});
+
 $('#btnCsv').on('click', function(){
-    $.getJSON(API, {action:'list', kw:$('#kwInput').val()||'', status:$('#statusFilter').val()||''}, function(res){
+    $.getJSON(API, $.extend({action:'list'}, curFilterParams()), function(res){
         if (!res.success) return;
         var lines = ['文件編號,客戶,產品編號,確認狀態,建立人,建立時間'];
         res.rows.forEach(function(r){
@@ -699,9 +742,11 @@ function delDoc(id){
 }
 
 /* ---------- 列印（ai-rules/16：大標題本公司名／頁尾右下AS編號／頁碼左下；製表人簽章走 eg_stamp.js ---------- */
-function printDoc(id){
+/* onDone：供「列印全部搜尋結果」排隊呼叫用，每筆各自獨立開視窗/各自獨立算頁次（不做合併分頁，
+   每份文件本來就是各自獨立的列印工作，第幾頁/共幾頁自然不會互相干擾，只有一頁時也維持原本邏輯不顯示頁碼） */
+function printDoc(id, onDone){
     $.getJSON(API, {action:'print_get', id:id}, function(res){
-        if (!res.success){ alert(res.message||'載入失敗'); return; }
+        if (!res.success){ alert(res.message||'載入失敗'); if (onDone) onDone(); return; }
         var d = res.doc;
         window.__ownCompany = res.company_name || '';
         var typeLabel = {drawing:'圖面', jig:'治夾具', report:'報告', other:'其他文件'};
@@ -746,8 +791,27 @@ function printDoc(id){
             +'document.head.appendChild(st);}'
             +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
         w.document.close();
+        if (onDone) setTimeout(onDone, 500);
     });
 }
+
+/* ---------- 列印全部搜尋結果（依目前篩選條件，逐筆各自開視窗列印；結果較多時先確認、自動分批排隊觸發，
+   不合併成單一份文件，所以「每份文件自己一份頁次、只有一頁不顯示頁次」直接沿用單筆列印既有邏輯） ---------- */
+var PRINT_ALL_BATCH_THRESHOLD = 15;
+$('#btnPrintAll').on('click', function(){
+    var ids = CUR_LIST_ROWS.map(function(r){ return r.id; });
+    if (!ids.length){ alert('目前沒有搜尋結果可列印'); return; }
+    if (ids.length > PRINT_ALL_BATCH_THRESHOLD) {
+        if (!confirm('目前搜尋結果共 '+ids.length+' 筆，數量較多，一次列印可能造成瀏覽器負擔。\n是否改為自動分批列印（依序逐筆觸發，不需手動操作）？\n（若瀏覽器跳出「已封鎖快顯視窗」提示，請允許本頁彈出視窗）')) return;
+    }
+    var idx = 0;
+    function next(){
+        if (idx >= ids.length){ alert('已完成列印 '+ids.length+' 筆。'); return; }
+        var cur = ids[idx++];
+        printDoc(cur, next);
+    }
+    next();
+});
 
 /* ---------- AS 文件綁定 ---------- */
 function renderAsDocLabel(){
