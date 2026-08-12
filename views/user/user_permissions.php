@@ -359,6 +359,7 @@ $_otrkRoles     = [];  $_userOtrkRoles   = [];
 $_rvfRoles      = [];  $_userRvfRoles    = [];
 $_tidcRoles     = [];  $_userTidcRoles   = [];
 $_tdevRoles     = [];  $_userTdevRoles   = [];
+$_pfmeaRoles    = [];  $_userPfmeaRoles  = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -398,6 +399,7 @@ try {
     $st->execute(['review_form']); $_rvfRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['type_id_ctrl']); $_tidcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['td_dev_eval']); $_tdevRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['pfmea']); $_pfmeaRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -537,6 +539,10 @@ try {
     $st->execute(['td_dev_eval']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userTdevRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['pfmea']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userPfmeaRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -1249,6 +1255,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('tdev', 'td_dev_eval', '產品開發評估表', 'fa-flask', '#c0762c',
                         '為每位使用者指派「產品開發評估表」頁（技術部 &gt; 產品開發評估表，AS 2-TD-02-01）的操作角色。角色功能：<strong>評估表檢閱</strong>＝檢視清單、開啟查看、列印；<strong>評估表登錄</strong>＝檢閱＋新增/編輯、逐項填寫、依部門身分簽核；<strong>評估表管理員</strong>＝登錄＋刪除、AS 文件編號綁定、取消他人簽核。<strong>APQP 小組簽認各部門欄位由該部門任一主管簽核</strong>，部門綁定在「組織角色綁定設定」頁（角色代碼 td_dev_eval_*_dept），與本頁的檢閱/登錄/管理角色是兩件事——這裡只決定誰能進本頁操作，能不能簽某部門的欄位另外看是否為該部門主管。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         $_tdevRoles, $_userTdevRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('pfmea', 'pfmea', 'PFMEA潛在失效模式及效應分析', 'fa-exclamation-triangle', '#8A5A2B',
+                        '為每位使用者指派「PFMEA潛在失效模式及效應分析」頁（技術部 &gt; PFMEA，AS 3-TD-01-02）的操作角色。角色功能：<strong>PFMEA檢閱</strong>＝檢視清單、開啟查看、列印；<strong>PFMEA登錄</strong>＝檢閱＋新增/編輯分析列；<strong>PFMEA管理員</strong>＝登錄＋刪除、AS 文件編號綁定。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
+                        $_pfmeaRoles, $_userPfmeaRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 
                     <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->
