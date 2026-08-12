@@ -335,6 +335,14 @@ function rvf_instance_items_get(PDO $db, int $instanceId): array {
         $it['confirms'] = $cst->fetchAll(PDO::FETCH_ASSOC);
         $it['data'] = json_decode((string)$it['data_json'], true) ?: new stdClass();
         $it['date_values'] = json_decode((string)$it['date_values_json'], true) ?: new stdClass();
+        // 小項（2026-08-12 新增，使用者明確要求）：一個項目可拆多個小項，每個小項各自的「項目內容」與自訂欄位
+        // 各自獨立，負責部門/負責人與簽名仍掛在項目本身不拆分。subitems_json 是新格式；
+        // 舊資料沒有這欄（NULL）就用舊的 content/data_json 包成一個小項，畫面上完全等同以前的單列項目。
+        $sub = json_decode((string)($it['subitems_json'] ?? ''), true);
+        if (!is_array($sub) || !$sub) $sub = [['content' => (string)$it['content'], 'data' => $it['data'] ?: new stdClass()]];
+        $it['subitems'] = array_values(array_map(function($s) {
+            return ['content' => (string)($s['content'] ?? ''), 'data' => $s['data'] ?? new stdClass()];
+        }, $sub));
     }
     return $items;
 }
@@ -347,21 +355,26 @@ function rvf_instance_items_save(PDO $db, int $instanceId, array $items): void {
     $st->execute([$instanceId]);
     $existingIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
     $keepIds = [];
-    $ins = $db->prepare("INSERT INTO rf_instance_item (instance_id,sort_order,content,data_json,owner_depts,owner_users,date_values_json) VALUES (?,?,?,?,?,?,?)");
-    $upd = $db->prepare("UPDATE rf_instance_item SET sort_order=?,content=?,data_json=?,owner_depts=?,owner_users=?,date_values_json=? WHERE id=? AND instance_id=?");
+    $ins = $db->prepare("INSERT INTO rf_instance_item (instance_id,sort_order,content,data_json,subitems_json,owner_depts,owner_users,date_values_json) VALUES (?,?,?,?,?,?,?,?)");
+    $upd = $db->prepare("UPDATE rf_instance_item SET sort_order=?,content=?,data_json=?,subitems_json=?,owner_depts=?,owner_users=?,date_values_json=? WHERE id=? AND instance_id=?");
     $sort = 0;
     foreach ($items as $it) {
-        $content   = (string)($it['content'] ?? '');
-        $dataJson  = json_encode($it['data'] ?? new stdClass(), JSON_UNESCAPED_UNICODE);
+        // 小項：至少保留 1 筆，每筆各自 content/data；subitems_json 存完整清單，
+        // 舊版 content/data_json 欄位同步寫入「第一筆小項」的值，給還沒改寫的舊消費端（如通知文字）當退回值用。
+        $subitems = is_array($it['subitems'] ?? null) && $it['subitems'] ? array_values($it['subitems']) : [['content'=>(string)($it['content'] ?? ''), 'data'=>$it['data'] ?? new stdClass()]];
+        $subitems = array_map(function($s) { return ['content'=>(string)($s['content'] ?? ''), 'data'=>$s['data'] ?? new stdClass()]; }, $subitems);
+        $content    = $subitems[0]['content'];
+        $dataJson   = json_encode($subitems[0]['data'], JSON_UNESCAPED_UNICODE);
+        $subJson    = json_encode($subitems, JSON_UNESCAPED_UNICODE);
         $ownDepts  = implode(',', array_values(array_filter(array_map('intval', $it['owner_depts'] ?? []))));
         $ownUsers  = implode(',', array_values(array_filter(array_map('intval', $it['owner_users'] ?? []))));
         $dateJson  = json_encode($it['date_values'] ?? new stdClass(), JSON_UNESCAPED_UNICODE);
         $id = (int)($it['id'] ?? 0);
         if ($id && in_array($id, $existingIds, true)) {
-            $upd->execute([$sort, $content, $dataJson, $ownDepts, $ownUsers, $dateJson, $id, $instanceId]);
+            $upd->execute([$sort, $content, $dataJson, $subJson, $ownDepts, $ownUsers, $dateJson, $id, $instanceId]);
             $keepIds[] = $id;
         } else {
-            $ins->execute([$instanceId, $sort, $content, $dataJson, $ownDepts, $ownUsers, $dateJson]);
+            $ins->execute([$instanceId, $sort, $content, $dataJson, $subJson, $ownDepts, $ownUsers, $dateJson]);
             $keepIds[] = (int)$db->lastInsertId();
         }
         $sort++;
@@ -478,8 +491,9 @@ function rvf_notify_item_owners(PDO $db, int $instanceId, int $fromUid): void {
             if (!array_intersect($mgrIds, $doneUids)) $need = array_merge($need, $mgrIds);
         }
         $need = array_values(array_unique($need));
+        $subLabel = implode('、', array_filter(array_map(fn($s) => (string)($s['content'] ?? ''), $it['subitems'] ?? [])));
         if ($need) rvf_notify($db, $it['id'], $need, '有一份審核表單項目待您簽名確認',
-            '「' . ($it['content'] ?: '(未命名項目)') . '」需要您確認並簽名。', $fromUid, 'RVF_ITEM_CONFIRM', 'reply');
+            '「' . ($subLabel ?: '(未命名項目)') . '」需要您確認並簽名。', $fromUid, 'RVF_ITEM_CONFIRM', 'reply');
     }
 }
 

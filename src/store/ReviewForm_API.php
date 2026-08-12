@@ -229,7 +229,7 @@ case 'instance_duplicate': {
     $newId = rvf_instance_create($db, (int)$src['template_id'], $uid, $uname, (string)$src['title'], date('Y-m-d'));
     $items = rvf_instance_items_get($db, $id);
     rvf_instance_items_save($db, $newId, array_map(function($it) {
-        return ['id'=>0, 'content'=>$it['content'], 'data'=>$it['data'], 'owner_depts'=>explode(',', (string)$it['owner_depts']), 'owner_users'=>explode(',', (string)$it['owner_users'])];
+        return ['id'=>0, 'subitems'=>$it['subitems'], 'owner_depts'=>explode(',', (string)$it['owner_depts']), 'owner_users'=>explode(',', (string)$it['owner_users'])];
     }, $items));
     jout(['id'=>$newId]);
 }

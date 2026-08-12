@@ -89,6 +89,10 @@ $perms = rvf_perms($db, $rvfUser);
         .dp-list div { padding:3px 8px; font-size:11.5px; color:#5b3a1e; cursor:pointer; }
         .dp-list div:hover { background:#FBF0DD; }
         .rf-del { color:#DD5138; cursor:pointer; }
+        .subitem-ctrl { margin-top:3px; display:flex; gap:6px; }
+        .subitem-ctrl .rf-mini-btn { font-size:10.5px; color:#8a5a2b; border:1px solid #D8BE93; border-radius:9px; padding:1px 7px; cursor:pointer; background:#FBF0DD; white-space:nowrap; }
+        .subitem-ctrl .rf-mini-btn:hover { background:#F7E0BD; }
+        table.itm-tbl td.subitem-num { text-align:center; vertical-align:middle; }
         .sign-slot { border:1px dashed #E8D5B5; border-radius:4px; padding:3px 5px; margin-bottom:3px; font-size:11px; }
         .sign-yes { color:#3f9142; font-weight:bold; } .sign-no { color:#b0a390; }
         .decide-box { border:1.5px solid #E8D5B5; border-radius:8px; padding:10px; margin-top:10px; background:#FDF8EF; }
@@ -149,7 +153,7 @@ $perms = rvf_perms($db, $rvfUser);
         依「審核表單模板管理」建好的模板建立表單（首發：2-TD-04-01 仿冒零件防制審核表、2-TD-03-01 產品安全審核表），逐列填寫項目與模板定義的欄位，可指定負責單位/負責人並線上簽名，送出後依模板設定走審核/核准。
         <h4>操作步驟</h4>
         <b>①新增表單</b>：選擇模板、填建立日期，建立後進入草稿編輯畫面，「填表人」固定為建立者本人，表單名稱固定沿用模板名稱。<br>
-        <b>②填寫項次</b>：用「+新增列」「-刪除末列」增減項目，逐列填寫內容與模板定義的欄位；可設定該列的負責單位（可多選，該部門任一主管簽即算完成）與負責人（可多選，每人都要各自簽）；有設定「相關日期」欄位的模板可逐列填寫。<br>
+        <b>②填寫項次</b>：用「+新增列」「-刪除末列」增減項目，逐列填寫內容與模板定義的欄位；可設定該列的負責單位（可多選，該部門任一主管簽即算完成）與負責人（可多選，每人都要各自簽）；有設定「相關日期」欄位的模板可逐列填寫。每個項目可用「+小項」拆出多個小項（例如同一項目下有好幾點要分別敘述），各小項的「項目」內容與其他自訂欄位各自獨立填寫，但「負責單位/負責人」與「簽名」是整個項目共用（畫面自動整列合併儲存格），項次編號只在該項目第一列顯示。<br>
         <b>③送出</b>：草稿階段可存檔或送出；送出後內容鎖定不可再編輯，依模板設定進入審核（審核部門任一主管審過即完成）→ 核准（依模板設定的核准優先序解析）。<br>
         <b>④負責人簽名</b>：模板設為「現場密碼簽名」時，畫面上各負責人可自行輸入本人密碼簽名；設為「通知回簽」時，送出後系統會通知負責人前來簽名。<br>
         <b>⑤列印</b>：完成或進行中都可列印，依模板設定的紙張大小（A4/A3）自動縮放至一頁，頁碼顯示於左下角、綁定的 AS 文件編號顯示於右下角，簽章一律蓋章並帶日期。<br>
@@ -242,7 +246,7 @@ function openView(id){
         CUR.as_doc_no = res.as_doc_no; CUR.company_name = res.company_name;
         CUR.review = res.review; CUR.approval = res.approval; CUR.can_review = res.can_review; CUR.can_approve = res.can_approve;
         ITEMS = (res.items||[]).map(function(it){
-            return {id:it.id, content:it.content||'', data: it.data||{},
+            return {id:it.id, subitems: (it.subitems&&it.subitems.length) ? it.subitems : [{content:it.content||'', data:it.data||{}}],
                      owner_depts:(it.owner_depts?String(it.owner_depts).split(',').filter(Boolean):[]),
                      owner_users:(it.owner_users?String(it.owner_users).split(',').filter(Boolean):[]),
                      confirms: it.confirms||[], required_signers: it.required_signers||[], fully_signed: it.fully_signed};
@@ -303,24 +307,40 @@ function decide(kind, decision){
 }
 
 /* ---- 項次列 ---- */
-function itemAdd(){ ITEMS.push({id:0, content:'', data:{}, owner_depts:[], owner_users:[], confirms:[], required_signers:[], fully_signed:false}); renderItems(); }
+function itemAdd(){ ITEMS.push({id:0, subitems:[{content:'',data:{}}], owner_depts:[], owner_users:[], confirms:[], required_signers:[], fully_signed:false}); renderItems(); }
 function itemDelLast(){ if (ITEMS.length) ITEMS.pop(); renderItems(); }
 function itemDel(i){ ITEMS.splice(i,1); renderItems(); }
-function itemEdit(i,key,val){ if (ITEMS[i]) ITEMS[i].content = val; }
-function itemFieldEdit(i,key,val){ if (ITEMS[i]) ITEMS[i].data[key] = val; }
-function fieldInputHtml(i, c){
-    var v = ITEMS[i].data[c.key] || '';
+/* 小項（2026-08-12 新增，使用者明確要求）：一個項目可拆多個小項，每個小項各自的「項目」內容與自訂欄位(下拉/日期/文字等)
+   各自獨立不合併；負責部門/負責人／簽名仍是整個項目共用，畫面上用 rowspan 橫跨該項目全部小項列，見 renderItems()。
+   全站每個模板都自動具備此功能，不另設模板層級開關；小項數量不限，至少保留 1 筆（刪到剩 1 筆就不能再刪）。 */
+function subItemAdd(i){ if (ITEMS[i]) { ITEMS[i].subitems.push({content:'', data:{}}); renderItems(); } }
+function subItemDel(i,k){ if (ITEMS[i] && ITEMS[i].subitems.length>1) { ITEMS[i].subitems.splice(k,1); renderItems(); } }
+function subItemContentEdit(i,k,val){ if (ITEMS[i] && ITEMS[i].subitems[k]) ITEMS[i].subitems[k].content = val; }
+function subItemFieldEdit(i,k,key,val){ if (ITEMS[i] && ITEMS[i].subitems[k]) ITEMS[i].subitems[k].data[key] = val; }
+function subItemContentHtml(i,k,sub,n){
+    var ta = '<textarea '+(isDraftMine()?'':'disabled')+' onchange="subItemContentEdit('+i+','+k+',this.value)">'+esc(sub.content)+'</textarea>';
+    if (!isDraftMine()) return ta;
+    var btns = '<div class="subitem-ctrl">';
+    btns += '<span class="rf-mini-btn" onclick="subItemAdd('+i+')">+小項</span>';
+    if (n>1) btns += '<span class="rf-mini-btn" onclick="subItemDel('+i+','+k+')">-此小項</span>';
+    btns += '</div>';
+    return ta+btns;
+}
+/* 項次(自動編號)欄位在有小項時只在第一列顯示數字、其餘小項列留空（使用者明確要求；欄位本身不合併，只是不重複顯示內容） */
+function fieldInputHtml(i, k, c){
+    var sub = ITEMS[i].subitems[k];
+    var v = sub.data[c.key] || '';
     var cls = c.layout==='block' ? 'fld-block' : '';
     var lbl = c.layout==='block' ? '<div class="fld-lbl">'+esc(c.label)+'</div>' : '';
     var dis = isDraftMine() ? '' : 'disabled';
-    if (c.type==='seq') return '<div class="'+cls+'" style="text-align:center;font-weight:bold;color:#5b3a1e;">'+lbl+(i+1)+'</div>';
-    if (c.type==='date') return '<div class="'+cls+'">'+lbl+'<input type="date" max="9999-12-31" '+dis+' value="'+esc(v)+'" onchange="itemFieldEdit('+i+',\''+c.key+'\',this.value)"></div>';
+    if (c.type==='seq') return '<div class="'+cls+'" style="text-align:center;font-weight:bold;color:#5b3a1e;">'+lbl+(k===0?(i+1):'')+'</div>';
+    if (c.type==='date') return '<div class="'+cls+'">'+lbl+'<input type="date" max="9999-12-31" '+dis+' value="'+esc(v)+'" onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)"></div>';
     if (c.type==='select') {
         var opts = '<option value="">'+(c.placeholder?esc(c.placeholder):'請選擇')+'</option>' + (c.options||[]).map(function(o){ return '<option value="'+esc(o)+'"'+(o===v?' selected':'')+'>'+esc(o)+'</option>'; }).join('');
-        return '<div class="'+cls+'">'+lbl+'<select '+dis+' onchange="itemFieldEdit('+i+',\''+c.key+'\',this.value)">'+opts+'</select></div>';
+        return '<div class="'+cls+'">'+lbl+'<select '+dis+' onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)">'+opts+'</select></div>';
     }
-    if (c.type==='textarea') return '<div class="'+cls+'">'+lbl+'<textarea '+dis+' placeholder="'+esc(c.placeholder)+'" onchange="itemFieldEdit('+i+',\''+c.key+'\',this.value)">'+esc(v)+'</textarea></div>';
-    return '<div class="'+cls+'">'+lbl+'<input type="text" '+dis+' placeholder="'+esc(c.placeholder)+'" value="'+esc(v)+'" onchange="itemFieldEdit('+i+',\''+c.key+'\',this.value)"></div>';
+    if (c.type==='textarea') return '<div class="'+cls+'">'+lbl+'<textarea '+dis+' placeholder="'+esc(c.placeholder)+'" onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)">'+esc(v)+'</textarea></div>';
+    return '<div class="'+cls+'">'+lbl+'<input type="text" '+dis+' placeholder="'+esc(c.placeholder)+'" value="'+esc(v)+'" onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)"></div>';
 }
 function deptTagHtml(i, ids){
     var tags = ids.map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?'<span class="tg">'+esc(d.name)+'<i class="fa fa-times" onclick="ownerDeptDel('+i+',\''+id+'\')"></i></span>':''; }).join('');
@@ -406,27 +426,35 @@ function doItemConfirm(itemId, uid){
 }
 function renderItems(){
     var h = '';
+    var inlineFields = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout!=='block'; });
+    var blockFields = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout==='block'; });
+    var hasSignCol = (CUR_SCHEMA.sign_mode||'password')!=='none';
+    var blockColspan = 1 + inlineFields.length;
     ITEMS.forEach(function(it,i){
-        h += '<tr><td style="text-align:center;">'+(i+1)+'</td>';
-        h += '<td><textarea '+(isDraftMine()?'':'disabled')+' onchange="itemEdit('+i+',\'content\',this.value)">'+esc(it.content)+'</textarea></td>';
-        var inlineFields = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout!=='block'; });
-        inlineFields.forEach(function(c){ h += '<td>'+fieldInputHtml(i,c)+'</td>'; });
-        h += '<td><div class="owner-lbl">負責部門</div>'+deptTagHtml(i,it.owner_depts)+'<div class="owner-lbl">負責人</div>'+userTagHtml(i,it.owner_users,it.owner_depts)+'</td>';
-        var hasSignCol = (CUR_SCHEMA.sign_mode||'password')!=='none';
-        if (hasSignCol) h += '<td>'+signSlotsHtml(i,it)+'</td>';
-        if (isDraftMine()) h += '<td><span class="rf-del" onclick="itemDel('+i+')"><i class="fa fa-times"></i></span></td>';
-        h += '</tr>';
-        var blocks = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout==='block'; });
-        if (blocks.length) {
-            var colspan = 2 + inlineFields.length + 1 + (hasSignCol?1:0) + (isDraftMine()?1:0);
-            h += '<tr><td></td><td colspan="'+colspan+'">' + blocks.map(function(c){ return fieldInputHtml(i,c); }).join('') + '</td></tr>';
-        }
+        if (!it.subitems || !it.subitems.length) it.subitems = [{content:'', data:{}}];
+        var subs = it.subitems, n = subs.length;
+        // 負責部門/負責人／簽名／刪除鈕整列合併：橫跨這個項目全部小項的所有實體列(含小項各自的整行欄位那一列)
+        var rowspanCount = blockFields.length ? n*2 : n;
+        subs.forEach(function(sub,k){
+            h += '<tr><td class="subitem-num">'+(k===0?(i+1):'')+'</td>';
+            h += '<td>'+subItemContentHtml(i,k,sub,n)+'</td>';
+            inlineFields.forEach(function(c){ h += '<td>'+fieldInputHtml(i,k,c)+'</td>'; });
+            if (k===0) {
+                h += '<td rowspan="'+rowspanCount+'"><div class="owner-lbl">負責部門</div>'+deptTagHtml(i,it.owner_depts)+'<div class="owner-lbl">負責人</div>'+userTagHtml(i,it.owner_users,it.owner_depts)+'</td>';
+                if (hasSignCol) h += '<td rowspan="'+rowspanCount+'">'+signSlotsHtml(i,it)+'</td>';
+                if (isDraftMine()) h += '<td rowspan="'+rowspanCount+'"><span class="rf-del" onclick="itemDel('+i+')"><i class="fa fa-times"></i></span></td>';
+            }
+            h += '</tr>';
+            if (blockFields.length) {
+                h += '<tr><td></td><td colspan="'+blockColspan+'">' + blockFields.map(function(c){ return fieldInputHtml(i,k,c); }).join('') + '</td></tr>';
+            }
+        });
     });
     $('#itmBody').html(h || '<tr><td colspan="10" style="text-align:center;color:#8a6d45;">尚未建立項目</td></tr>');
 }
 
 function collectItems(){
-    return ITEMS.map(function(it){ return {id:it.id, content:it.content, data:it.data, owner_depts:it.owner_depts, owner_users:it.owner_users}; });
+    return ITEMS.map(function(it){ return {id:it.id, subitems:it.subitems, owner_depts:it.owner_depts, owner_users:it.owner_users}; });
 }
 function saveDraft(cb){
     $.post(API, {action:'instance_save_items', csrf:META.csrf, instance_id:CUR.id, business_date:$('#vBizDate').val(), items:JSON.stringify(collectItems())}, function(res){
@@ -526,20 +554,24 @@ function printForm(){
     (schema.fields||[]).forEach(function(c){ h += '<th>'+esc(c.label)+'</th>'; });
     h += '<th>負責單位/人</th>'+(pHasSignCol?'<th>簽名</th>':'')+'</tr></thead><tbody>';
     ITEMS.forEach(function(it,i){
-        h += '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td>';
-        (schema.fields||[]).forEach(function(c){
-            var cellTxt = c.type==='seq' ? String(i+1) : (c.type==='date' ? dispDate(it.data[c.key]||'') : esc(it.data[c.key]||''));
-            h += '<td>'+cellTxt+'</td>';
-        });
+        var subs = (it.subitems&&it.subitems.length) ? it.subitems : [{content:it.content||'', data:it.data||{}}];
+        var n = subs.length;
         var ownerTxt = (it.owner_depts||[]).map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?d.name:''; })
             .concat((it.owner_users||[]).map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?p.user_cname:''; })).filter(Boolean).join('、');
-        h += '<td>'+esc(ownerTxt)+'</td>';
-        if (pHasSignCol) {
-            var signHtml = (it.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');
-            if (!signHtml && PREVIEW_MODE && (it.owner_depts.length || it.owner_users.length)) signHtml = stampList('（簽名樣式預覽）', dispDate(CUR.business_date));
-            h += '<td>'+signHtml+'</td>';
-        }
-        h += '</tr>';
+        var signHtml = (it.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');
+        if (!signHtml && PREVIEW_MODE && (it.owner_depts.length || it.owner_users.length)) signHtml = stampList('（簽名樣式預覽）', dispDate(CUR.business_date));
+        subs.forEach(function(sub,k){
+            h += '<tr><td>'+(k===0?(i+1):'')+'</td><td class="t-left">'+esc(sub.content).replace(/\n/g,'<br>')+'</td>';
+            (schema.fields||[]).forEach(function(c){
+                var cellTxt = c.type==='seq' ? (k===0?String(i+1):'') : (c.type==='date' ? dispDate(sub.data[c.key]||'') : esc(sub.data[c.key]||''));
+                h += '<td>'+cellTxt+'</td>';
+            });
+            if (k===0) {
+                h += '<td rowspan="'+n+'">'+esc(ownerTxt)+'</td>';
+                if (pHasSignCol) h += '<td rowspan="'+n+'">'+signHtml+'</td>';
+            }
+            h += '</tr>';
+        });
     });
     h += '</tbody></table>';
     h += '<table class="rf-p-foot"><tr>';
