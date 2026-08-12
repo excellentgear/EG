@@ -347,6 +347,72 @@ function type_id_ctrl_process_candidates(PDO $db, int $dsPk): array {
 }
 
 /**
+ * 廠內圖面標籤的「顯示名稱」／「需要顯示製程」設定變更後，套用回已經同步進本模組、目前仍連結
+ * 該附件的既有項目列（2026-08-12 使用者要求：沒有批次刪除重轉功能，改名要能直接更新舊資料，
+ * 不必整批刪除重轉）。只更新「型態項目名稱」與「需要顯示製程」提示旗標，不動使用者可能已手動
+ * 調整過的所屬製程／版別文件編號等其他欄位；連結來源已消失、或該附件目前類別已不在自動同步
+ * 名單內的列跳過不動（維持原名）。受影響的表頭若原本已「已確認」，一併改回「需重新確認」
+ * （比照 type_id_ctrl_sync_part 既有規則）。回傳 [updated_count, affected_docs]。
+ */
+function type_id_ctrl_refresh_synced_item_names(PDO $db): array {
+    $catRows = $db->query("SELECT id, COALESCE(NULLIF(external_doc_name,''), category_name) AS disp,
+                                   COALESCE(type_id_ctrl_need_process,0) AS need_process
+                            FROM quotation_file_categories WHERE is_external_doc=1 OR type_id_ctrl_include=1")->fetchAll(PDO::FETCH_ASSOC);
+    $cats = [];
+    foreach ($catRows as $cr) { $cats[(int)$cr['id']] = ['disp'=>$cr['disp'], 'need_process'=>(bool)$cr['need_process']]; }
+
+    $resolveNames = function (?string $categoryIds, $categoryIdSingle) use ($cats): array {
+        $names = []; $needProcess = false;
+        foreach (array_filter(explode(',', str_replace(' ', '', (string)$categoryIds))) as $cid) {
+            if (isset($cats[(int)$cid])) { $names[] = $cats[(int)$cid]['disp']; if ($cats[(int)$cid]['need_process']) $needProcess = true; }
+        }
+        if (!$names && $categoryIdSingle !== null && $categoryIdSingle !== '' && isset($cats[(int)$categoryIdSingle])) {
+            $names[] = $cats[(int)$categoryIdSingle]['disp'];
+            if ($cats[(int)$categoryIdSingle]['need_process']) $needProcess = true;
+        }
+        return [$names, $needProcess];
+    };
+
+    $items = $db->query("SELECT id, doc_id, item_name, need_process_hint, ref_source, ref_attach_id, ref_ds_pk
+                          FROM type_id_ctrl_item WHERE is_deleted=0 AND ref_source IS NOT NULL AND ref_attach_id IS NOT NULL")
+                ->fetchAll(PDO::FETCH_ASSOC);
+
+    $updated = 0; $affectedDocs = [];
+    $updSt = $db->prepare("UPDATE type_id_ctrl_item SET item_name=?, need_process_hint=?, updated_at=NOW() WHERE id=?");
+    $partSt = $db->prepare("SELECT category_ids FROM part_attachments WHERE id=? AND d_id=? AND deleted_at IS NULL");
+    $quoteSt = $db->prepare("SELECT category_ids, category_id FROM quotation_attachments WHERE id=? AND status='active'");
+
+    foreach ($items as $it) {
+        if ($it['ref_source'] === 'part') {
+            $partSt->execute([$it['ref_attach_id'], $it['ref_ds_pk']]);
+            $row = $partSt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) continue; // 來源已消失，跳過
+            [$names, $needProcess] = $resolveNames($row['category_ids'], null);
+        } elseif ($it['ref_source'] === 'quote') {
+            $quoteSt->execute([$it['ref_attach_id']]);
+            $row = $quoteSt->fetch(PDO::FETCH_ASSOC);
+            if (!$row) continue;
+            [$names, $needProcess] = $resolveNames($row['category_ids'], $row['category_id']);
+        } else {
+            continue;
+        }
+        if (!$names) continue; // 目前類別已不在自動同步名單內，維持原名不動
+        $newName = $names[0];
+        $newHint = $needProcess ? 1 : 0;
+        if ($newName === $it['item_name'] && $newHint == (int)$it['need_process_hint']) continue; // 沒變化
+        $updSt->execute([$newName, $newHint, $it['id']]);
+        $updated++;
+        $affectedDocs[(int)$it['doc_id']] = true;
+    }
+
+    if ($affectedDocs) {
+        $in = implode(',', array_map('intval', array_keys($affectedDocs)));
+        $db->exec("UPDATE type_id_ctrl_doc SET review_status='needs_recheck' WHERE id IN ($in) AND review_status='confirmed'");
+    }
+    return ['updated_count'=>$updated, 'affected_docs'=>count($affectedDocs)];
+}
+
+/**
  * 依料號自動產生/同步型態識別文件管制表：每個料號一份(找不到就建立)，把此料號目前所有外來文件
  * 附件同步進項目列（已存在的 ref 不重複新增，已排除/已刪除的也不會被復活）；每一列的「所屬製程」
  * 自動由該文件originating報價項目的製程推導(共用文件留空)；若先前已「已確認」又同步進新項目，
