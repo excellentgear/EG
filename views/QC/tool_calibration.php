@@ -306,7 +306,20 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <!-- 待核准（內校）modal -->
 <div class="tc-mask" id="pendMask"><div class="tc-modal xwide">
     <div class="m-head"><span>待我核准的內校紀錄</span><span class="m-close" onclick="closeMask('pendMask')">✕</span></div>
-    <div class="m-body" id="pendBody" style="font-size:13px;color:#5b3a1e;"></div>
+    <div class="m-body">
+        <div id="pendActionBar" style="margin-bottom:8px;"></div>
+        <div id="pendBody" style="font-size:13px;color:#5b3a1e;"></div>
+        <div id="pendSuperBox" style="display:none;margin-top:14px;padding:10px;border:1px dashed #DD5138;border-radius:6px;background:#FFF6F3;">
+            <div style="font-weight:bold;color:#DD5138;margin-bottom:6px;">超級管理員：全部補登核准（補資料用）</div>
+            <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">不受核准鏈池子限制，一次核准目前全部待核准紀錄；可指定簽核日期，供補登舊資料使用。</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                <label style="margin:0;">簽核日期</label><input type="date" id="superApDate" style="width:140px;">
+                <label style="margin:0;">最高權限密碼</label><input type="password" id="superApPw" autocomplete="new-password" style="width:160px;">
+                <button type="button" onclick="submitSuperApproveAll()" style="height:28px;font-size:12px;border:1px solid #DD5138;border-radius:4px;background:#DD5138;color:#fff;cursor:pointer;padding:0 12px;">
+                    <i class="fa fa-bolt"></i> 全部補登核准</button>
+            </div>
+        </div>
+    </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('pendMask')">關閉</button></div>
 </div></div>
 
@@ -1328,7 +1341,7 @@ function printDossier(tid){
     $.getJSON(API, {action:'history', tool_id:tid}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         var t = res.tool;
-        var specTxt = t.spec ? $.trim(($.trim(t.spec.brand||'')+' '+$.trim(t.spec.spec_text||''))) : '（未對應料號規格）';
+        var specTxt = t.spec ? $.trim(($.trim(t.spec.brand||'')+' '+$.trim(t.spec.spec_text||''))) : '—';
         var h = '<table class="hist" style="margin-bottom:14px;"><tbody>'
           + '<tr><th style="width:110px;">量具編號</th><td><b>'+esc(t.Tool_No)+'</b></td><th style="width:110px;">類別</th><td>'+esc(t.category_name||'')+'</td></tr>'
           + '<tr><th>規格</th><td>'+esc(specTxt)+'</td><th>校驗週期</th><td>'+(t.calib_cycle_months==null?'（未設）':t.calib_cycle_months+' 月')+'</td></tr>'
@@ -1354,7 +1367,7 @@ function printDossier(tid){
             h += '</tbody></table>';
         }
         var docNo = asdocNo(META && META.as_docs ? META.as_docs['tool_calib_dossier'] : null);
-        var title = '檢驗設備履歷表：'+t.Tool_No;
+        var title = '檢驗設備履歷表：'+t.Tool_No;   // 瀏覽器分頁標題保留量具編號方便辨識，內文標題不重複顯示（下方表格已有）
         var w = window.open('', '_blank');
         if (!w){ alert('瀏覽器阻擋了列印視窗，請允許彈出視窗'); return; }
         w.document.write('<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'+title+'</title><style>'
@@ -1372,7 +1385,7 @@ function printDossier(tid){
           + '@bottom-left{content:"第" counter(page) "頁／共" counter(pages) "頁";font-size:9pt;color:#333;}}'
           + '</style></head><body><div class="pg">'
           + '<div class="co">'+esc((META&&META.company_name)||'')+'</div>'
-          + '<h2>'+title+'</h2>'
+          + '<h2>檢驗設備履歷表</h2>'
           + h + '</div></body></html>');
         w.document.close();
         w.focus();
@@ -1710,10 +1723,20 @@ function loadPendingCount(){
         if (n){ $('#pendBadge').text(n).show(); } else { $('#pendBadge').hide(); }
     });
 }
-$('#btnPending').on('click', function(){
+$('#btnPending').on('click', openPending);
+function openPending(){
     $.getJSON(API, {action:'pending_approvals'}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
-        if (!res.list.length){ $('#pendBody').html('<div style="padding:12px;color:#8a6d45;">目前沒有待您核准的內校紀錄</div>'); openMask('pendMask'); return; }
+        $('#superApDate').val(META.today);
+        $('#pendSuperBox').toggle(!!(META && META.is_super));
+        if (!res.list.length){
+            $('#pendActionBar').html('');
+            $('#pendBody').html('<div style="padding:12px;color:#8a6d45;">目前沒有待您核准的內校紀錄</div>');
+            openMask('pendMask'); return;
+        }
+        $('#pendActionBar').html('<button type="button" onclick="submitBulkApprove()" '
+            + 'style="height:28px;font-size:12px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;padding:0 12px;">'
+            + '<i class="fa fa-check-square-o"></i> 一次核准全部（'+res.list.length+' 筆，簽核日期為今天，不可更改）</button>');
         var h = '<table class="hist"><thead><tr><th>校驗日</th><th>量具編號</th><th>校驗人員</th><th>覆驗者</th>'
               + '<th>憑證編號</th><th>登錄者</th><th>操作</th></tr></thead><tbody>';
         res.list.forEach(function(b){
@@ -1728,7 +1751,27 @@ $('#btnPending').on('click', function(){
         $('#pendBody').html(h);
         openMask('pendMask');
     }).fail(function(x){ alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
-});
+}
+function submitBulkApprove(){
+    if (!confirm('確定一次核准全部待核准內校紀錄？簽核日期固定為今天，不可更改。')) return;
+    $.post(API, {action:'batch_decide_bulk'}, function(res){
+        if (!res.ok){ alert(res.error||'處理失敗'); return; }
+        alert('已核准 '+res.done+' 筆' + (res.skipped ? '，' + res.skipped + ' 筆處理失敗（可能已被他人處理，請重新整理確認）' : '') + '。');
+        openPending(); loadPendingCount();
+    }, 'json').fail(function(x){ alert('處理失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function submitSuperApproveAll(){
+    var date = $('#superApDate').val(), pw = $('#superApPw').val() || '';
+    if (!date){ alert('請選擇簽核日期'); return; }
+    if (!pw){ alert('請輸入最高權限帳號（員工 id=1）的密碼'); $('#superApPw').focus(); return; }
+    if (!confirm('超級管理員補登核准：將把目前全部待核准內校紀錄一次核准，簽核日期設為 '+date+'。\n此操作供補登舊資料使用，確定執行？')) return;
+    $.post(API, {action:'super_approve_all', decided_date:date, password:pw}, function(res){
+        if (!res.ok){ alert(res.error||'處理失敗'); return; }
+        $('#superApPw').val('');
+        alert('已補登核准 '+res.done+' 筆。');
+        openPending(); loadPendingCount();
+    }, 'json').fail(function(x){ alert('處理失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
 function pendDecide(bid, decision){
     var note = '';
     if (decision === 'rejected'){
@@ -2402,9 +2445,9 @@ function footerStampHtml(name, date){
 }
 function planFooterHtml(ap){
     var h = '<table class="yr-p-foot"><tr>';
-    h += '<td><div class="foot-lbl">制表</div>' + (ap ? footerStampHtml(ap.submitted_by_name, ap.submitted_at) : '<span class="foot-na">（尚未送出核准，無制表紀錄）</span>') + '</td>';
+    h += '<td><div class="foot-lbl">制表</div>' + (ap ? footerStampHtml(ap.submitted_by_name, ap.submitted_at) : '') + '</td>';
     h += '<td><div class="foot-lbl">核准</div>' + (
-        !ap ? '<span class="foot-na">（尚未送出核准）</span>'
+        !ap ? ''
         : ap.status==='approved' ? footerStampHtml(ap.approver_name, ap.decided_at)
         : ap.status==='pending' ? '<span class="foot-na">（核准中）</span>'
         : '<span class="foot-na">（已退回：'+esc(ap.note||'')+'）</span>'
@@ -2441,7 +2484,7 @@ $('#yrPrint').on('click', function(){
       + '@bottom-left{content:"第" counter(page) "頁／共" counter(pages) "頁";font-size:9pt;color:#333;}}'
       + '</style></head><body><div class="pg">'
       + '<div class="co">'+esc((META&&META.company_name)||'')+'</div>'
-      + '<h2>'+title+'</h2><div class="sub">KPI 2-GM-04-01 #18 量測儀器按時校驗率</div>'
+      + '<h2>'+title+'</h2>'
       + body + '</div></body></html>');
     w.document.close();
     w.focus();

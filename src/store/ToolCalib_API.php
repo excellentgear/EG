@@ -98,6 +98,18 @@ function tc_recompute_due(PDO $db, int $tid): void {
     }
 }
 
+/** 依「最近一次校驗完成日 ＋ 指定週期」重算下次應校驗月（cycle 用呼叫端此刻要套用的值，不是歷史紀錄當時的週期）。
+ *  使用者 2026-08-12 明確要求：已有校驗紀錄的量具，週期後補/後改時下次應校驗月要能自動算出來，
+ *  不能因為「登錄校驗當下週期還沒設」就卡在未設基準（qc_tool_calibration.next_due 是登錄當下算的，補設週期不會回頭改它）。
+ *  無校驗紀錄或週期未設回 null，呼叫端應保留原值。 */
+function tc_due_from_history(PDO $db, int $tid, ?int $cycle): ?string {
+    if (!$cycle) return null;
+    $st = $db->prepare("SELECT calib_date FROM qc_tool_calibration WHERE Tool_id=? ORDER BY calib_date DESC, calib_id DESC LIMIT 1");
+    $st->execute([$tid]);
+    $d = $st->fetchColumn();
+    return $d ? tool_calib_next_due_month((string)$d, $cycle) : null;
+}
+
 switch ($action) {
 
 /* ---------- 基本資訊 ---------- */
@@ -357,12 +369,22 @@ case 'list': {
 
     // 類別設「不需校驗」者（例如「目視」＝檢驗方式非量具）不列入本頁與 KPI，只回報筆數提示
     $rows = []; $excluded = 0;
+    $fixDue = $db->prepare("UPDATE qc_tool SET calibration_due=? WHERE Tool_id=?");
     foreach ($tools as $t) {
         if ((int)$t['cat_required'] !== 1) { $excluded++; continue; }
         $t['calib_managed'] = (int)$t['calib_managed'];
         $t['cat_tab'] = (int)$t['cat_tab'];
-        $t['status'] = tool_calib_status($t);
         $t['last'] = $last[(int)$t['Tool_id']] ?? null;
+        // 順路自我修復：已有校驗紀錄且已設週期者，下次應校驗月一律用「最近校驗日＋週期」為準，
+        // 修正「週期是校驗完成後才補設/改設」造成的未設基準／舊值（使用者 2026-08-12 明確要求）
+        if ($t['last'] && $t['calib_cycle_months']) {
+            $correctDue = tool_calib_next_due_month((string)$t['last']['calib_date'], (int)$t['calib_cycle_months']);
+            if ($correctDue && $correctDue !== $t['calibration_due']) {
+                $fixDue->execute([$correctDue, $t['Tool_id']]);
+                $t['calibration_due'] = $correctDue;
+            }
+        }
+        $t['status'] = tool_calib_status($t);
         $rows[] = $t;
     }
 
@@ -472,10 +494,11 @@ case 'save_tool': {
     $cycle = ($_POST['cycle'] ?? '') === '' ? null : max(0, (int)$_POST['cycle']);
     $managed = (int)($_POST['managed'] ?? 0) === 1 ? 1 : 0;
     $method = trim((string)($_POST['method'] ?? '')) ?: null;
-    // baseline_due：允許管理員設定/修正下次應校驗「月」（尚無紀錄或需校正時）
+    // baseline_due：允許管理員設定/修正下次應校驗「月」（尚無紀錄或需校正時）；
+    // 未手動指定時，已有校驗紀錄者一律用「最近一次校驗日＋（新）週期」重算，不沿用可能因週期後補而漏算的舊值
     $setBase = array_key_exists('baseline_due', $_POST);
     $baseDue = $setBase ? tool_calib_month_start(trim((string)$_POST['baseline_due']) ?: null)
-                        : tool_calib_month_start($t['calibration_due']);
+                        : (tc_due_from_history($db, $tid, $cycle) ?? tool_calib_month_start($t['calibration_due']));
     // 可編輯基本資料：量具編號 / 類別（有帶才更新）
     $newNo = array_key_exists('tool_no', $_POST) ? trim((string)$_POST['tool_no']) : $t['Tool_No'];
     $newCat = array_key_exists('category_id', $_POST) && $_POST['category_id'] !== '' ? trim((string)$_POST['category_id']) : $t['QC_Tool_List_id'];
@@ -694,6 +717,56 @@ case 'batch_decide': {
         $uname . ($decision === 'rejected' ? (' 退回了您登錄的內校紀錄。退回原因：' . $note) : ' 已核准您登錄的內校紀錄。'),
         $uid, 'TOOL_CALIB_APPROVAL', 'read');
     jout(['status'=>$newStatus]);
+}
+
+/* ---------- 一次核准所有待核准紀錄（僅核准，不可改日期；使用者 2026-08-12 明確要求） ----------
+ * 只處理目前登入者有權核准的那些（canAdmin 或在核准鏈解析出的池子裡），不是 pending_approvals 清單以外的。
+ */
+case 'batch_decide_bulk': {
+    $rows = $db->query("SELECT batch_id, created_by FROM qc_tool_calib_batch WHERE approval_status='pending'")->fetchAll(PDO::FETCH_ASSOC);
+    $done = 0; $skipped = 0;
+    foreach ($rows as $r) {
+        $bid = (int)$r['batch_id'];
+        $pool = tool_calib_approver_pool($db, (int)$r['created_by']);
+        if (!$perms['canAdmin'] && !in_array($uid, array_column($pool, 'id'), true)) continue;
+        $rec = eg_approval_latest($db, 'tool_calib_batch', $bid, 'approval');
+        if (!$rec || $rec['status'] !== 'pending') continue;
+        $res = eg_approval_decide($db, (int)$rec['id'], $uid, $uname, 'approved', '（一次核准全部）');
+        if (!$res['success']) { $skipped++; continue; }
+        $db->prepare("UPDATE qc_tool_calib_batch SET approval_status='approved' WHERE batch_id=?")->execute([$bid]);
+        tool_calib_notify($db, $bid, [(int)$r['created_by']], '一筆內校紀錄已核准',
+            $uname . ' 已核准您登錄的內校紀錄。', $uid, 'TOOL_CALIB_APPROVAL', 'read');
+        $done++;
+    }
+    jout(['done'=>$done, 'skipped'=>$skipped]);
+}
+
+/* ---------- 超級管理員：全部補登核准（補資料用，可指定簽核日期；僅員工 id=1） ----------
+ * 不受核准鏈池子限制，一次把目前所有待核准紀錄全部核准；需輸入超級管理員密碼二次確認。
+ */
+case 'super_approve_all': {
+    if (!$isSuper) jerr('僅超級管理員可使用此功能', 403);
+    $date = trim((string)($_POST['decided_date'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) jerr('請選擇簽核日期');
+    $vp = tool_calib_verify_superadmin_password($db, (string)($_POST['password'] ?? ''));
+    if (!$vp['ok']) jerr($vp['msg'], 403);
+    $rows = $db->query("SELECT batch_id, created_by FROM qc_tool_calib_batch WHERE approval_status='pending'")->fetchAll(PDO::FETCH_ASSOC);
+    $done = 0;
+    foreach ($rows as $r) {
+        $bid = (int)$r['batch_id'];
+        $rec = eg_approval_latest($db, 'tool_calib_batch', $bid, 'approval');
+        if (!$rec || $rec['status'] !== 'pending') continue;
+        $res = eg_approval_decide($db, (int)$rec['id'], $uid, $uname, 'approved', '（超級管理員補登核准）');
+        if (!$res['success']) continue;
+        $db->prepare("UPDATE approval_record SET decided_at=? WHERE id=?")->execute([$date . ' 12:00:00', (int)$rec['id']]);
+        $db->prepare("UPDATE qc_tool_calib_batch SET approval_status='approved' WHERE batch_id=?")->execute([$bid]);
+        tool_calib_notify($db, $bid, [(int)$r['created_by']], '一筆內校紀錄已核准（補登）',
+            '超級管理員已補登核准您登錄的內校紀錄（簽核日期：' . $date . '）。', $uid, 'TOOL_CALIB_APPROVAL', 'read');
+        $done++;
+    }
+    tool_calib_log_change($db, '超級管理員批次補登核准內校紀錄',
+        "執行者：{$uname}（id={$uid}）\n簽核日期：{$date}\n核准筆數：{$done}", $uname);
+    jout(['done'=>$done]);
 }
 
 /* ---------- 待我核准的內校紀錄清單 ---------- */
