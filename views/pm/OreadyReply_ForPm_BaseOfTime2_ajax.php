@@ -1160,6 +1160,53 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_file_tags_setting'
     exit;
 }
 
+// ── 圖檔資料夾位置設定（管理員）─────────────────────────────────────────────
+// 目的：讓路徑可由管理員自行設定，不必再請人改程式或 httpd.conf；
+// 並提供「測試讀取」先確認新位置讀得到、掃到幾個檔，確認無誤才按儲存。
+// 實作一律走 src/common/bom_dir_lib.php（編碼與效能都在那裡處理）。
+else if (isset($_POST['action']) && in_array(($_POST['action'] ?? ''), ['get_bom_dirs', 'probe_bom_dir', 'save_bom_dirs'], true)) {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    include_once '../../src/common/bom_dir_lib.php';
+    header('Content-Type: application/json; charset=utf-8');
+    try {
+        if (!isset($db)) { $db = (new DBConnection())->getPDO(); }
+        $act = $_POST['action'];
+
+        if ($act === 'get_bom_dirs') {
+            echo json_encode(['success' => true,
+                'bom_scan_dir'     => eg_bom_scan_dir($db),
+                'bom_erp_scan_dir' => eg_bom_erp_scan_dir($db)], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        if ($act === 'probe_bom_dir') {
+            $p = trim((string)($_POST['dir'] ?? ''));
+            if ($p === '') throw new Exception('請先輸入資料夾位置');
+            echo json_encode(['success' => true] + eg_bom_dir_probe($p), JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // 儲存前一定要兩個位置都讀得到才寫入——設錯不會有錯誤訊息，
+        // 只會變成畫面上「沒有圖面」，等使用者發現就太慢了
+        $bomDir = trim((string)($_POST['bom_scan_dir'] ?? ''));
+        $erpDir = trim((string)($_POST['bom_erp_scan_dir'] ?? ''));
+        if ($bomDir === '' || $erpDir === '') throw new Exception('兩個資料夾位置都必須填寫');
+        foreach ([['BOM 圖檔', $bomDir], ['ERP 圖檔', $erpDir]] as [$lbl, $d]) {
+            $pr = eg_bom_dir_probe($d);
+            if (!$pr['ok']) throw new Exception($lbl . '資料夾讀不到，已取消儲存：' . $d);
+        }
+        $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?)
+                            ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+        $up->execute(['bom_scan_dir', $bomDir]);
+        $up->execute(['bom_erp_scan_dir', $erpDir]);
+        echo json_encode(['success' => true, 'message' => '已儲存，兩個位置都確認讀得到'], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
 // AJAX GET BOM FILES HANDLER
 else if (isset($_POST['action']) && $_POST['action'] === 'get_bom_files') {
     session_write_close();
@@ -1206,28 +1253,24 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_bom_files') {
         }
     }
 
-    $scan_dir = 'Z:/BOM/'; // 實體路徑
-    $url_dir = '/nas/';    // 網頁讀取路徑
+    // 資料夾位置改由管理員設定（設定鍵 bom_scan_dir，預設值＝原本寫死的 Z:/BOM/，
+    // 不設定就跟以前完全一樣）。掃描與編碼一律走 src/common/bom_dir_lib.php：
+    // 這個資料夾實測有 1.8 萬個檔，所以要先用檔名過濾、只對命中的少數檔取 mtime。
+    include_once '../../src/common/bom_dir_lib.php';
+    // 這個 handler 的連線變數是 $db（上面才建立），拿不到連線時退回預設路徑＝維持原行為
+    $scan_dir = isset($db) ? eg_bom_scan_dir($db) : 'Z:/BOM/';
+    $url_dir  = '/nas/';    // 網頁讀取路徑（走 bom_download.php 代理，見前端）
 
-    if (is_dir($scan_dir)) {
-        $allFiles = scandir($scan_dir);
-        foreach ($allFiles as $f) {
-            if ($f === '.' || $f === '..') continue;
-            // Check if file starts with BOM
-            if (strpos($f, $bom) === 0) {
-                $ext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
-                if (in_array($ext, ['jpg', 'jpeg', 'png', 'pdf'])) {
-                    $isPlus = (strpos($f, '++') !== false);
-                    $fileList[] = [
-                        'name' => $f,
-                        'path' => $url_dir . $f,
-                        'type' => $ext,
-                        'is_plus' => $isPlus,
-                        'mtime' => filemtime($scan_dir . $f)
-                    ];
-                }
-            }
-        }
+    foreach (eg_bom_scan($scan_dir, ['jpg', 'jpeg', 'png', 'pdf'], $bom) as $it) {
+        $fileList[] = [
+            'name'    => $it['name'],
+            'path'    => $url_dir . $it['name'],
+            'type'    => $it['ext'],
+            'is_plus' => (strpos($it['name'], '++') !== false),
+            'mtime'   => $it['mtime'],
+        ];
+    }
+    if ($fileList) {
         // Sort: Non-++ first, then by mtime desc
         usort($fileList, function($a, $b) {
             if ($a['is_plus'] !== $b['is_plus']) {
@@ -1239,26 +1282,16 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_bom_files') {
     }
 
     // --- Scan ERP Directory ---
+    // 位置改由管理員設定（bom_erp_scan_dir，預設值＝原本寫死的路徑）；
+    // 路徑編碼（此路徑含中文，Windows 下需 Big5）與檔名轉回 UTF-8 都由 bom_dir_lib 處理。
+    // 這裡不取 mtime（資料夾約 6 千個檔），只對真正命中的檔案取，維持原本的效能。
     $erp_files = [];
-    $erp_path_utf8 = 'Z:/BOM/ERP/資材(生管and業務)/BOM/';
-    $os = PHP_OS;
-    $erp_scan_path = $erp_path_utf8;
-    
-    // Windows 路徑編碼處理
-    if (strtoupper(substr($os, 0, 3)) === 'WIN') {
-        $erp_scan_path = mb_convert_encoding($erp_scan_path, 'Big5', 'UTF-8');
-    }
+    $erp_dir_utf8 = isset($db) ? eg_bom_erp_scan_dir($db) : 'Z:/BOM/ERP/資材(生管and業務)/BOM/';
+    $erp_entries  = eg_bom_scan($erp_dir_utf8, [], '', false);
 
-    if (is_dir($erp_scan_path)) {
-        $files = scandir($erp_scan_path);
-        foreach ($files as $f) {
-            if ($f === '.' || $f === '..') continue;
-            
-            // 轉回 UTF-8 進行比對
-            $f_utf8 = $f;
-            if (strtoupper(substr($os, 0, 3)) === 'WIN') {
-                $f_utf8 = mb_convert_encoding($f, 'UTF-8', 'Big5');
-            }
+    if ($erp_entries) {
+        foreach ($erp_entries as $__it) {
+            $f_utf8 = $__it['name'];
             
             // 篩選條件：開頭為 BOM 或 包含 [料號]
             $isMatchBOM = (strpos($f_utf8, $bom) === 0);
@@ -1336,7 +1369,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_bom_files') {
                     'path' => '/nas/ERP/' . rawurlencode('資材(生管and業務)') . '/BOM/' . rawurlencode($f_utf8),
                     'type' => $ext,
                     'tags' => $file_tags,
-                    'mtime' => filemtime($erp_scan_path . $f),
+                    'mtime' => (int)@filemtime($__it['fs']),   // 只對命中的檔案取時間
                     'match_type' => $isMatchBOM ? 'bom' : 'did'
                 ];
             }

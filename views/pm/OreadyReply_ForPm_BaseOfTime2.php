@@ -15192,6 +15192,7 @@ echo "</script>\n";
                         <h4 class="modal-title" id="drawingChoiceModalLabel" style="margin-right: 15px;">BOM 圖檔: <span id="modal-bom-title"></span></h4>
                         <button type="button" class="btn btn-default btn-sm" onclick="printCurrentFile()"><i class="fa fa-print"></i> 列印</button>
                         <button type="button" class="btn btn-info btn-sm" onclick="openFileTagsSetting()" style="margin-left: 5px;"><i class="fa fa-tags"></i> 設定標籤</button>
+                        <button type="button" class="btn btn-default btn-sm" onclick="openBomDirSetting()" style="margin-left: 5px;" title="設定圖面要去哪個資料夾找（換機或搬 NAS 時在這裡改，不必改程式）"><i class="fa fa-folder-open-o"></i> 資料夾位置</button>
                         <button type="button" class="btn btn-primary btn-sm" onclick="openImageEditor()" style="margin-left: 5px;"><i class="fa fa-pencil"></i> 線上標記</button>
                     </div>
                 </div>
@@ -15287,6 +15288,55 @@ echo "</script>\n";
                 <div class="modal-footer">
                     <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
                     <button type="button" class="btn btn-primary" onclick="saveFileTagsSetting()">儲存設定</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 圖檔資料夾位置設定（管理員）：路徑不再寫死在程式碼裡，換機或搬 NAS 時
+         由管理員自行設定即可，不必改程式、也不必改 httpd.conf。
+         一定要先「測試讀取」確認讀得到才存——設錯不會有錯誤訊息，只會變成畫面沒有圖面。 -->
+    <div class="modal fade" id="bomDirSettingModal" tabindex="-1" role="dialog" style="z-index: 10070;">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+                    <h4 class="modal-title"><i class="fa fa-folder-open-o"></i> 圖檔資料夾位置設定</h4>
+                </div>
+                <div class="modal-body">
+                    <div style="font-size:12px;color:#7f8c8d;line-height:1.6;margin-bottom:12px;">
+                        <b>建議填網路路徑</b>（<code>\\主機名\分享名\資料夾</code>），不要用磁碟機代號（<code>Z:\…</code>）。<br>
+                        磁碟機代號是每台電腦各自對應的，換機或對應掉了就整批讀不到；網路路徑則不受影響。
+                        目前的 <code>Z:</code> 實際指向 <code>\\excellentnas\生產課</code>，兩種寫法指同一個位置、檔案不需搬移。
+                    </div>
+                    <div class="form-group">
+                        <label style="font-size:13px;">BOM 圖檔資料夾</label>
+                        <div style="display:flex;gap:6px;">
+                            <input type="text" class="form-control input-sm" id="bomDirMain" style="font-family:monospace;"
+                                   placeholder="例：\\excellentnas\生產課\BOM\">
+                            <button type="button" class="btn btn-default btn-sm" style="white-space:nowrap;"
+                                    onclick="probeBomDir('bomDirMain','bomDirMainMsg')"><i class="fa fa-plug"></i> 測試讀取</button>
+                        </div>
+                        <div id="bomDirMainMsg" style="font-size:12px;margin-top:4px;"></div>
+                    </div>
+                    <div class="form-group">
+                        <label style="font-size:13px;">ERP／資材報告資料夾</label>
+                        <div style="display:flex;gap:6px;">
+                            <input type="text" class="form-control input-sm" id="bomDirErp" style="font-family:monospace;"
+                                   placeholder="例：\\excellentnas\生產課\BOM\ERP\資材(生管and業務)\BOM\">
+                            <button type="button" class="btn btn-default btn-sm" style="white-space:nowrap;"
+                                    onclick="probeBomDir('bomDirErp','bomDirErpMsg')"><i class="fa fa-plug"></i> 測試讀取</button>
+                        </div>
+                        <div id="bomDirErpMsg" style="font-size:12px;margin-top:4px;"></div>
+                    </div>
+                    <div style="font-size:12px;color:#c0392b;background:#fdecea;border:1px solid #f5b7b1;border-radius:4px;padding:8px;">
+                        <i class="fa fa-exclamation-triangle"></i> 儲存前系統會再確認兩個位置都讀得到，任一個讀不到就整筆取消不寫入。
+                        設定只影響「去哪裡找圖」，不會搬動或刪除任何檔案。
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="saveBomDirSetting()">儲存設定</button>
                 </div>
             </div>
         </div>
@@ -15746,6 +15796,42 @@ echo "</script>\n";
                 doc.write('</body></html>');
                 doc.close();
             }
+        }
+
+        /* ── 圖檔資料夾位置設定 ─────────────────────────────────────────────
+           路徑不再寫死在程式碼，改由管理員自行設定；換機或搬 NAS 都不必改程式或
+           httpd.conf。設錯路徑不會有錯誤訊息、只會變成「沒有圖面」，所以一定要
+           先「測試讀取」確認，儲存時後端也會再驗一次，任一個讀不到就整筆不寫入。 */
+        function openBomDirSetting() {
+            $.post('', { action: 'get_bom_dirs' }, function(res) {
+                if (!res || !res.success) { alert('載入設定失敗：' + ((res && res.message) || '未知錯誤')); return; }
+                $('#bomDirMain').val(res.bom_scan_dir || '');
+                $('#bomDirErp').val(res.bom_erp_scan_dir || '');
+                $('#bomDirMainMsg').text(''); $('#bomDirErpMsg').text('');
+                $('#bomDirSettingModal').modal('show');
+            }, 'json');
+        }
+        function probeBomDir(inputId, msgId) {
+            var dir = ($('#' + inputId).val() || '').trim();
+            var $m = $('#' + msgId);
+            if (!dir) { $m.css('color', '#c0392b').text('請先輸入資料夾位置'); return; }
+            $m.css('color', '#7f8c8d').text('測試中…（資料夾檔案很多時需要幾秒）');
+            $.post('', { action: 'probe_bom_dir', dir: dir }, function(res) {
+                if (!res || !res.success) { $m.css('color', '#c0392b').text((res && res.message) || '測試失敗'); return; }
+                $m.css('color', res.ok ? '#27ae60' : '#c0392b')
+                  .text((res.ok ? '✔ ' : '✘ ') + res.message + (res.encoding ? '　（' + res.encoding + '）' : ''));
+            }, 'json').fail(function () { $m.css('color', '#c0392b').text('測試失敗（連線錯誤）'); });
+        }
+        function saveBomDirSetting() {
+            var main = ($('#bomDirMain').val() || '').trim();
+            var erp  = ($('#bomDirErp').val()  || '').trim();
+            if (!main || !erp) { alert('兩個資料夾位置都必須填寫'); return; }
+            if (!confirm('儲存後，本頁的圖面就改到新位置去找。\n系統會先確認兩個位置都讀得到才寫入。\n\n確定儲存？')) return;
+            $.post('', { action: 'save_bom_dirs', bom_scan_dir: main, bom_erp_scan_dir: erp }, function(res) {
+                if (!res || !res.success) { alert('儲存失敗：' + ((res && res.message) || '未知錯誤')); return; }
+                alert(res.message || '已儲存');
+                $('#bomDirSettingModal').modal('hide');
+            }, 'json');
         }
 
         function openFileTagsSetting() {
