@@ -1199,7 +1199,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                         <option value="self">本人簽章（紅）</option>
                         <option value="tech" id="opt-stamp-tech">技術課章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）</option>
                         <option value="issue" id="opt-stamp-issue">發行章（<?= $deptStampColor === 'red' ? '紅' : '藍' ?>）</option>
-                        <option value="tpl">模板章（圖章管理）</option>
+                        <option value="tpl" id="opt-stamp-tpl">模板章（圖章管理）</option>
                     </select>
                 </label>
                 <label id="wrap-stamp-tpl" style="display:none;">模板
@@ -1209,6 +1209,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                     <select id="p-stamp-holder" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;max-width:150px;"></select>
                 </label>
                 <label>大小 <input type="number" class="ni" id="p-stamp-size" value="110" min="40" max="600"></label>
+                <label id="wrap-stamp-date" title="圖章上印的日期：預設今天；管理者可調整（例如依單據業務日期補蓋章），一般使用者固定今天不可改">日期 <input type="date" id="p-stamp-date"></label>
                 <button class="pb-btn" id="btn-stamp-perm" style="display:none;" onclick="openStampPermModal()" title="設定哪些人員可使用技術課章/發行章（管理者限定）"><i class="fa fa-cog"></i> 用章人員</button>
                 <span style="color:#8b949e;font-size:11px;">點圖面蓋章（透明背景、日期自動帶今天）；Esc 結束</span>
             </span>
@@ -3505,7 +3506,7 @@ function placeStamp(x, y) {
         tech:  { text: '技術課',             color: deptStampColorHex }, // 管理者可在「用章人員」設定藍/紅
         issue: { text: '發行章',             color: deptStampColorHex }
     }[type] || { text: USER_CNAME, color: '#cf3a2b' };
-    const g = makeStamp(conf.text, conf.color, size, todayStr());
+    const g = makeStamp(conf.text, conf.color, size, stampDateStr());
     g.set({ left: x, top: y });
     g.setCoords();
     canvas.add(g);
@@ -3541,8 +3542,19 @@ function onTplStampChange() {
     }
     wrapHolder.style.display = '';
     // 對象清單＝該模板綁定種類的「使用中」登記；且要能提供此模板實際用到的變數（過濾掉選了也印不出東西的對象，如模板要{部門}但選到純個人卻沒填部門）
-    const hs = TPL_HOLDERS.filter(h => (!t.type_id || String(h.type_id || '') === String(t.type_id || ''))
+    let hs = TPL_HOLDERS.filter(h => (!t.type_id || String(h.type_id || '') === String(t.type_id || ''))
         && (!need.name || h.name) && (!need.dept || h.dept) && (!need.position || h.position));
+    // 同一人可能同時登記多個模板（見圖章清冊）、也可能同時有主要部門＋兼任部門，後端已展開成多列。
+    // 此模板若用不到{部門}變數，多列印出來結果完全相同（純重複），只保留一筆避免同一人顯示兩次；
+    // 若模板要用到{部門}，才需要讓使用者依部門分別挑選（後端已依部門排序、標示主／兼任）。
+    if (!need.dept) {
+        const seen = new Set();
+        hs = hs.filter(h => {
+            const key = h.user_id != null ? 'u' + h.user_id : ('d' + h.dept_id + 'p' + h.position_id);
+            if (seen.has(key)) return false;
+            seen.add(key); return true;
+        });
+    }
     const selfOk = !need.dept && !need.position;   // 模板只用到{姓名}時，才能用「本人」快速預設（部門/職稱本人無法代表）
     hsel.innerHTML = (selfOk ? '<option value="">本人（' + (USER_CNAME || '') + '）</option>' : '<option value="">— 請選擇（此模板需要部門/職稱資料）—</option>') +
         hs.map((h, i) => `<option value="${i}">${h.holder_name}${h.dept_id ? '（部門章）' : ''}</option>`).join('');
@@ -3567,7 +3579,7 @@ async function placeTplStamp(x, y, size) {
     const ctx = h ? { name: h.name || '', dept: h.dept || '', position: h.position || '' }
                   : { name: USER_CNAME || '', dept: '', position: '' };
     ctx.company = OWN_COMPANY || '';
-    ctx.date = todayStr();
+    ctx.date = stampDateStr();
     if (EGStampTpl.hasSerial(schema)) {   // 有 {編號} 才取號（依模板跳號規則遞增，取了就算用掉）
         try {
             const fd = new FormData(); fd.append('template_id', t.id);
@@ -3588,11 +3600,23 @@ async function placeTplStamp(x, y, size) {
     });
 }
 
-/* 部門印章權限初始化：無權者隱藏技術課章/發行章；管理者顯示設定按鈕 */
+/* 部門印章權限初始化：無權者隱藏技術課章/發行章；管理者顯示設定按鈕
+   模板章（含個人章/職稱章等，變數會帶入被登記者姓名部門）2026-08-12 起限管理者可用，
+   避免非管理者任意挑選蓋上他人的個人章冒名簽署（後端 pick_meta/next_serial 同步擋，前端只是先隱藏） */
 (function initStampPerm() {
+    const sel = document.getElementById('p-stamp-type');
     if (!CAN_DEPT_STAMP) {
-        const sel = document.getElementById('p-stamp-type');
-        Array.from(sel.options).slice().forEach(o => { if (o.value !== 'self' && o.value !== 'tpl') sel.removeChild(o); });   // 模板章人人可選（模板/對象本就來自圖章管理的公開登記）
+        Array.from(sel.options).slice().forEach(o => { if (o.value === 'tech' || o.value === 'issue') sel.removeChild(o); });
+    }
+    if (!IS_MGR) {
+        const tplOpt = document.getElementById('opt-stamp-tpl');
+        if (tplOpt) tplOpt.remove();
+    }
+    const dateEl = document.getElementById('p-stamp-date');
+    if (dateEl) {
+        const d = new Date(), p = n => String(n).padStart(2, '0');
+        dateEl.value = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+        if (!IS_MGR) dateEl.disabled = true;   // 非管理者固定今天，不可改
     }
     if (IS_MGR) document.getElementById('btn-stamp-perm').style.display = '';
 })();
@@ -3734,6 +3758,12 @@ function makeDcSymbol(num, shape, size) {
 function todayStr() {
     const d = new Date(), p = n => String(n).padStart(2, '0');
     return d.getFullYear() + '.' + p(d.getMonth() + 1) + '.' + p(d.getDate());
+}
+// 圖章上印的日期：一般使用者固定今天；管理者可在工具列調整（依單據業務日期補蓋章），2026-08-12 使用者要求
+function stampDateStr() {
+    const el = document.getElementById('p-stamp-date');
+    if (el && el.value) { const [y, m, d] = el.value.split('-'); return y + '.' + m + '.' + d; }
+    return todayStr();
 }
 function nextDcNumber() {
     const used = canvas.getObjects().filter(o => o.dcNumber).map(o => o.dcNumber);

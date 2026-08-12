@@ -538,8 +538,10 @@ case 'tpl_delete': {
 }
 
 // ── 批圖蓋章挑選 meta（依種類→模板→持有對象；含變數 ctx）──
-// 所有登入者可用：蓋章是在圖面上作業的人做的，模板是參數化設計（非掃描原圖），姓名/部門/職稱本系統各頁本就可見。
+// 權限：僅管理者可用（2026-08-12 使用者明確要求限縮，避免任意人員蓋他人個人章／職稱章冒名簽署；
+// 本人簽章/技術課章/發行章不受此限，走各自既有的 CAN_DEPT_STAMP 判定）。
 case 'pick_meta': {
+    if (!$isAdmin) jerr('僅管理者可使用模板章', 403);
     $tpls = $db->query("SELECT p.id, p.type_id, t.type_name, p.tpl_name, p.schema_json,
                                p.serial_prefix, p.serial_digits, p.serial_reset
                         FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
@@ -547,37 +549,46 @@ case 'pick_meta': {
     // 各種類「使用中」持有對象＋變數 ctx。個人章：name=本人、dept/position=主要部門職稱。
     // 部門章：name=空字串（部門不是人，不可把部門名塞進{姓名}變數，否則模板誤用{姓名}時會顯示成部門名）、dept=部門名、holder_name(僅供下拉顯示用)=部門名。
     // 職稱章(dept_id+position_id)：即時查該部門該職稱「現任者」，人員異動時蓋章自動帶新任者，不需重新登記——name=現任者姓名(無人在任則空)、dept/position=登記當下的部門/職稱名。
+    // 2026-08-12：同種類允許不同模板各自持有登記（見圖章登記重複防呆改依模板判斷），故同一人可能有多筆 active
+    // stamp_register（僅 template_id 不同）；此處只挑「持有對象身分」不看是哪個模板登記的，先 DISTINCT 掉同人重複列，
+    // 再展開該人「主要部門＋兼任部門」各自一列並標示，附 dept_sort 供前端依部門排序，避免使用者誤選。
     $holders = $db->query("
-        SELECT r.type_id, r.user_id, r.dept_id, r.position_id,
-               COALESCE(u.user_cname, d.name) AS holder_name,
+        SELECT reg.type_id, reg.user_id, reg.dept_id, NULL AS position_id,
+               CASE WHEN u.user_cname IS NOT NULL AND d.name IS NOT NULL THEN CONCAT(u.user_cname, '（', d.name, '）')
+                    WHEN u.user_cname IS NOT NULL AND md.name IS NOT NULL
+                         THEN CONCAT(u.user_cname, '｜', md.name, IF(COALESCE(m.is_main,1)=1, '', '・兼任'))
+                    ELSE COALESCE(u.user_cname, d.name) END AS holder_name,
                COALESCE(u.user_cname, '') AS name,
                COALESCE(d.name, md.name, '')  AS dept,
-               COALESCE(mp.name, '')          AS position
-        FROM stamp_register r
-        LEFT JOIN user u ON u.id = r.user_id
-        LEFT JOIN department d ON d.id = r.dept_id
-        LEFT JOIN user_department_position_map m ON m.user_id = r.user_id AND m.is_main = 1
+               COALESCE(mp.name, '')          AS position,
+               COALESCE(m.is_main, 1)         AS is_main_dept,
+               COALESCE(md.sort_order, d.sort_order, 999999) AS dept_sort
+        FROM (SELECT DISTINCT type_id, user_id, dept_id FROM stamp_register WHERE status = 'active' AND position_id IS NULL) reg
+        LEFT JOIN user u ON u.id = reg.user_id
+        LEFT JOIN department d ON d.id = reg.dept_id
+        LEFT JOIN user_department_position_map m ON m.user_id = reg.user_id AND reg.dept_id IS NULL
         LEFT JOIN department md ON md.id = m.department_id
         LEFT JOIN position mp ON mp.id = m.position_id
-        WHERE r.status = 'active' AND r.position_id IS NULL
         UNION ALL
-        SELECT r.type_id, r.user_id, r.dept_id, r.position_id,
+        SELECT reg.type_id, NULL AS user_id, reg.dept_id, reg.position_id,
                CASE WHEN u2.user_cname IS NOT NULL THEN CONCAT(d2.name,'／',p2.name,'（',u2.user_cname,'）')
                     ELSE CONCAT(d2.name,'／',p2.name,'（尚無人員）') END AS holder_name,
                COALESCE(u2.user_cname, '') AS name,
-               d2.name AS dept, p2.name AS position
-        FROM stamp_register r
-        JOIN department d2 ON d2.id = r.dept_id
-        JOIN position p2 ON p2.id = r.position_id
-        LEFT JOIN user_department_position_map m2 ON m2.department_id = r.dept_id AND m2.position_id = r.position_id
+               d2.name AS dept, p2.name AS position,
+               1 AS is_main_dept, d2.sort_order AS dept_sort
+        FROM (SELECT DISTINCT type_id, dept_id, position_id FROM stamp_register WHERE status = 'active' AND position_id IS NOT NULL) reg
+        JOIN department d2 ON d2.id = reg.dept_id
+        JOIN position p2 ON p2.id = reg.position_id
+        LEFT JOIN user_department_position_map m2 ON m2.department_id = reg.dept_id AND m2.position_id = reg.position_id
         LEFT JOIN user u2 ON u2.id = m2.user_id
-        WHERE r.status = 'active' AND r.position_id IS NOT NULL
-        ORDER BY type_id, holder_name")->fetchAll(PDO::FETCH_ASSOC);
+        ORDER BY type_id, dept_sort, is_main_dept DESC, holder_name")->fetchAll(PDO::FETCH_ASSOC);
     jout(['ok'=>true, 'templates'=>$tpls, 'holders'=>$holders]);
 }
 
 // ── 取下一個編號（依模板跳號規則；交易併發安全）──
+// 權限同 pick_meta：僅管理者可用（模板章限縮，見上方說明）。
 case 'next_serial': {
+    if (!$isAdmin) jerr('僅管理者可使用模板章', 403);
     $tid = (int)($_POST['template_id'] ?? 0);
     if ($tid <= 0) jerr('參數錯誤');
     $st = $db->prepare("SELECT serial_prefix, serial_digits, serial_start, serial_step, serial_reset FROM stamp_template WHERE id=? AND is_active=1");
