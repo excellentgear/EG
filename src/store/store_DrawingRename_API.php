@@ -92,6 +92,14 @@ function drValidateBomNumber(string $number): ?string {
     }
     return '';
 }
+// 判斷檔名是否已經是「本工具產生的標準命名」（含已作廢者），用於清單掃描時排除——
+// 適用來源資料夾與輸出資料夾設同一個路徑（或留空 fallback 同一個）的情境：避免已改完名、
+// 留在原地的檔案每次「重新整理清單」又被當成新掃描檔重複跑一次。
+function drIsCanonicalName(string $body, string $prefix, string $suffix): bool {
+    if (mb_strpos($body, '作廢') !== false) return true;
+    $pattern = '/^' . preg_quote($prefix, '/') . 'B-\d{10}(\s?\+\+)?' . preg_quote($suffix, '/') . '/i';
+    return preg_match($pattern, $body) === 1;
+}
 function drUniqueVoidName(string $outputDir, string $body, string $ext): string {
     $today = date('Ymd');
     $base  = $body . '作廢' . $today;
@@ -195,6 +203,8 @@ switch ($action) {
                 if (!is_file($full)) continue;
                 $ext = strtolower(pathinfo($e, PATHINFO_EXTENSION));
                 if (!in_array($ext, DR_ALLOWED_EXT, true)) continue;
+                $body = pathinfo($e, PATHINFO_FILENAME);
+                if (drIsCanonicalName($body, $settings['prefix'], $settings['suffix'])) continue; // 已是本工具改過名的檔案，不重複列入待處理
                 $files[] = ['name' => $e, 'ext' => $ext, 'size' => filesize($full), 'mtime' => filemtime($full)];
             }
             usort($files, fn($a, $b) => strnatcasecmp($a['name'], $b['name']));
