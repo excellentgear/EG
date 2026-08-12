@@ -44,6 +44,7 @@ function buildItemView(PDO $db, array $it): array {
         'item_type' => $it['item_type'],
         'item_type_label' => TYPE_LABELS[$it['item_type']] ?? '其他文件',
         'process_tag' => $it['process_tag'] ?? null,
+        'need_process_hint' => !empty($it['need_process_hint']),
         'is_linked' => $linked !== null,
         'is_excluded' => !empty($it['is_excluded']),
         'ref_source' => $it['ref_source'],
@@ -170,6 +171,7 @@ case 'save_all':
             if ($itemName === '') continue; // 空白列不存（比照可增列表格鐵則：沒填東西的列不算）
 
             $processTag = trim((string)($it['process_tag'] ?? ''));
+            $needProcessHint = !empty($it['need_process_hint']) ? 1 : 0;
             $refSource = trim((string)($it['ref_source'] ?? ''));
             $refAttachId = (int)($it['ref_attach_id'] ?? 0);
             $refDsPk = (int)($it['ref_ds_pk'] ?? 0);
@@ -180,12 +182,12 @@ case 'save_all':
 
             $rowId = (int)($it['id'] ?? 0);
             if ($rowId && isset($existing[$rowId])) {
-                $st = $db->prepare("UPDATE type_id_ctrl_item SET seq=?, item_name=?, item_type=?, process_tag=?,
+                $st = $db->prepare("UPDATE type_id_ctrl_item SET seq=?, item_name=?, item_type=?, process_tag=?, need_process_hint=?,
                                      ref_source=?, ref_attach_id=?, ref_ds_pk=?, is_excluded=?,
                                      manual_effective_date=?, manual_doc_no=?, updated_at=NOW()
                                      WHERE id=?");
                 $st->execute([
-                    $seq, $itemName, $itemType, ($processTag !== '' ? $processTag : null),
+                    $seq, $itemName, $itemType, ($processTag !== '' ? $processTag : null), $needProcessHint,
                     $isLinked ? $refSource : null, $isLinked ? $refAttachId : null, $isLinked ? $refDsPk : null, $isExcluded,
                     $isLinked ? null : ($manualDate ?: null), $isLinked ? null : ($manualDocNo ?: null),
                     $rowId,
@@ -193,10 +195,10 @@ case 'save_all':
                 unset($existing[$rowId]);
             } else {
                 $st = $db->prepare("INSERT INTO type_id_ctrl_item
-                    (doc_id, seq, item_name, item_type, process_tag, ref_source, ref_attach_id, ref_ds_pk, is_excluded, manual_effective_date, manual_doc_no)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+                    (doc_id, seq, item_name, item_type, process_tag, need_process_hint, ref_source, ref_attach_id, ref_ds_pk, is_excluded, manual_effective_date, manual_doc_no)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
                 $st->execute([
-                    $id, $seq, $itemName, $itemType, ($processTag !== '' ? $processTag : null),
+                    $id, $seq, $itemName, $itemType, ($processTag !== '' ? $processTag : null), $needProcessHint,
                     $isLinked ? $refSource : null, $isLinked ? $refAttachId : null, $isLinked ? $refDsPk : null, $isExcluded,
                     $isLinked ? null : ($manualDate ?: null), $isLinked ? null : ($manualDocNo ?: null),
                 ]);
@@ -245,6 +247,7 @@ case 'fetch_ext_for_part':
             'item_name'=> !empty($er['categories']) ? $er['categories'][0] : $er['doc_name'],
             'item_type'=> type_id_ctrl_guess_type($er['categories'] ?? []),
             'process_tag'=> $er['origin_process'] ?? null,
+            'need_process_hint'=> !empty($er['need_process']),
             'is_linked'=>true, 'is_excluded'=>false,
             'ref_source'=>$er['source'], 'ref_attach_id'=>(int)$er['attach_id'], 'ref_ds_pk'=>(int)$er['ds_pk'],
             'ref_broken'=>false, 'effective_date'=>$er['doc_date'], 'doc_no_text'=>$er['doc_name'], 'file_url'=>null,
@@ -283,22 +286,35 @@ case 'sync_all_missing':
 // ── 廠內「自家出的圖」標籤設定：從 is_own_drawing=1 的類別挑選要納入本模組的 ──────
 case 'get_own_drawing_categories':
     needAdmin($perms);
-    $rows = $db->query("SELECT id, category_name, type_id_ctrl_include
+    $rows = $db->query("SELECT id, category_name, type_id_ctrl_include,
+                                COALESCE(external_doc_name,'') AS external_doc_name,
+                                COALESCE(type_id_ctrl_need_process,0) AS type_id_ctrl_need_process
                          FROM quotation_file_categories WHERE is_own_drawing=1 AND is_active=1
                          ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     jout(['success'=>true,'rows'=>$rows]);
 
+// rows: [{id, included, name, need_process}] — name 沿用既有 external_doc_name 欄位（與外來文件清單
+// 共用同一顯示名稱設定，不另開欄位）；need_process 僅供項目列「所屬製程」留空時的視覺提示，不做強制驗證。
 case 'save_own_drawing_categories':
     needAdmin($perms);
-    $ids = json_decode((string)($_POST['category_ids'] ?? '[]'), true);
-    if (!is_array($ids)) $ids = [];
-    $ids = array_map('intval', $ids);
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if (!is_array($rows)) $rows = [];
     $db->beginTransaction();
     try {
         $db->exec("UPDATE quotation_file_categories SET type_id_ctrl_include=0 WHERE is_own_drawing=1");
-        if ($ids) {
-            $in = implode(',', array_fill(0, count($ids), '?'));
-            $db->prepare("UPDATE quotation_file_categories SET type_id_ctrl_include=1 WHERE is_own_drawing=1 AND id IN ($in)")->execute($ids);
+        $st = $db->prepare("UPDATE quotation_file_categories
+                             SET type_id_ctrl_include=?, external_doc_name=?, type_id_ctrl_need_process=?
+                             WHERE id=? AND is_own_drawing=1");
+        foreach ($rows as $r) {
+            $id = (int)($r['id'] ?? 0);
+            if (!$id) continue;
+            $name = trim((string)($r['name'] ?? ''));
+            $st->execute([
+                !empty($r['included']) ? 1 : 0,
+                $name !== '' ? $name : null,
+                !empty($r['need_process']) ? 1 : 0,
+                $id,
+            ]);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'儲存失敗：'.$e->getMessage()]); }
