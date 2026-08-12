@@ -80,9 +80,12 @@ case 'template_settings_save': {
     $name = trim((string)($_POST['name'] ?? ''));
     if ($name === '') jerr('請輸入模板名稱');
     $paper = ($_POST['paper_size'] ?? 'A4') === 'A3' ? 'A3' : 'A4';
+    $orientation = ($_POST['orientation'] ?? 'landscape') === 'portrait' ? 'portrait' : 'landscape';
     $chain = json_decode((string)($_POST['approver_chain'] ?? '["top_approver"]'), true);
     $tid = rvf_template_settings_save($db, $id, [
-        'name'=>$name, 'paper_size'=>$paper,
+        'name'=>$name, 'paper_size'=>$paper, 'orientation'=>$orientation,
+        'list_stamp_tpl_id'=>(int)($_POST['list_stamp_tpl_id'] ?? 0) ?: null,
+        'footer_stamp_tpl_id'=>(int)($_POST['footer_stamp_tpl_id'] ?? 0) ?: null,
         'need_review'=>!empty($_POST['need_review']), 'review_dept_id'=>(int)($_POST['review_dept_id'] ?? 0) ?: null,
         'need_approval'=>!empty($_POST['need_approval']),
         'approver_dept_id'=>(int)($_POST['approver_dept_id'] ?? 0) ?: null,
@@ -122,6 +125,11 @@ case 'maintainer_add': case 'maintainer_remove': {
 }
 
 case 'asdoc_list': jout(['docs'=>eg_asdoc_list($db)]);
+
+case 'stamp_tpl_options': {
+    if (!$perms['canAdmin']) jerr('無設定權限（限模板管理員）', 403);
+    jout(['templates'=>rvf_stamp_tpl_options($db)]);
+}
 
 /* ============================================================ 表單（instance） ============================================================ */
 

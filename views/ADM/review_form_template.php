@@ -126,8 +126,15 @@ $perms = rvf_perms($db, $rvfUser);
         <label>綁定 AS 文件編號</label>
         <div><span id="stDocLabel" style="color:#5b3a1e;">未綁定</span>
             <button type="button" onclick="openTplAsDocPicker()" style="margin-left:8px;height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">選擇…</button></div>
-        <label>列印紙張大小</label>
-        <select id="stPaper"><option value="A4">A4</option><option value="A3">A3</option></select>
+        <div class="grid2">
+            <div><label>列印紙張大小</label><select id="stPaper"><option value="A4">A4</option><option value="A3">A3</option></select></div>
+            <div><label>列印方向</label><select id="stOrientation"><option value="landscape">橫式</option><option value="portrait">直式</option></select></div>
+        </div>
+        <div class="grid2">
+            <div><label>逐列簽章圖章樣式</label><select id="stListStamp"><option value="0">（預設樣式）</option></select></div>
+            <div><label>製表/審核/核准簽章圖章樣式</label><select id="stFooterStamp"><option value="0">（預設樣式）</option></select></div>
+        </div>
+        <div class="rf-hint">圖章樣式請至「圖章管理 → 線上圖章設計」建立/挑選；有上傳掃描實體章的人一律優先用掃描章，這裡只影響沒掃描章時自動產生的印章樣式。</div>
 
         <div class="rf-sec"><div class="rf-sec-title">審核（可選）</div>
             <label><input type="checkbox" id="stNeedReview"> 需要審核</label>
@@ -238,7 +245,7 @@ $perms = rvf_perms($db, $rvfUser);
         <h4>功能說明</h4>
         通用「審核表單」引擎：管理員可自建任意張表單模板（首發：2-TD-04-01 仿冒零件防制審核表、2-TD-03-01 產品安全審核表），各模板各自綁定一個 AS 文件編號。一般使用者依模板建立表單、逐列填寫並讓負責人線上簽名，模板可設定送出後要不要走審核/核准。
         <h4>操作步驟</h4>
-        <b>①新增模板</b>：設定名稱、綁定 AS 文件編號、列印紙張大小（A4/A3）、是否需要審核（設審核部門，任一主管審過即完成）、是否需要核准（可設核准優先序：綁部門或人員／自動抓送出者上一階主管／全站最高決策者，預設只用「最高決策者」，可調整順序或組合）、維護部門（可指派誰能修改項次內容）。<br>
+        <b>①新增模板</b>：設定名稱、綁定 AS 文件編號、列印紙張大小（A4/A3）與方向（預設橫式，可改直式）、逐列簽章／製表核准簽章要套用的圖章樣式（不設定則用預設樣式，樣式請到「圖章管理→線上圖章設計」建立）、是否需要審核（設審核部門，任一主管審過即完成）、是否需要核准（可設核准優先序：綁部門或人員／自動抓送出者上一階主管／全站最高決策者，預設只用「最高決策者」，可調整順序或組合）、維護部門（可指派誰能修改項次內容）。<br>
         <b>②設定項次欄位定義</b>：除固定的「項目」文字欄外，可新增任意數量的自訂欄位（文字/多行文字/下拉選單/日期，四種類型可自由混合排序，例如：欄位、日期、欄位、日期…），每欄可設提示詞（填寫畫面上顯示的灰字）、是否必填、排版方式（並排/整行）；欄位順序可拖動最左側圖示或用 ▲▼ 調整；並選擇負責人簽名方式（現場密碼簽名或送出後通知回簽）。<br>
         <b>③維護人員</b>：管理員或維護部門內主管可指派特定人員為「維護人員」，該名單與維護部門主管都能修改「項次欄位定義」，但不能改模板其他設定（AS文件綁定/審核/核准/維護部門本身）。<br>
         <b>④連動 AS 文件改版</b>：修改項次欄位定義存檔時可勾選「連動更新 AS 文件版次」，需上傳新版文件檔與文件制修申請單（有「免附件補登」權限者可免附件），存檔後立即生效成為現行版本；已建立的舊表單仍顯示建立當下的欄位定義，不受影響。
@@ -282,9 +289,17 @@ function loadMeta(cb){
         var userOpts = '<option value="">（未設定）</option>' + META.people.map(function(p){ return '<option value="'+p.id+'">'+esc(p.display)+'</option>'; }).join('');
         $('#stApproverUser').html(userOpts);
         $('#maintUserSel').html('<option value="">選擇人員…</option>' + META.people.map(function(p){ return '<option value="'+p.id+'">'+esc(p.display)+'</option>'; }).join(''));
-        if (META.perms.canAdmin) { $('#btnAddTpl').show(); $('#btnRoleSetting').show(); }
+        if (META.perms.canAdmin) { $('#btnAddTpl').show(); $('#btnRoleSetting').show(); loadStampTplOptions(); }
         renderChainBox();
         if (cb) cb();
+    });
+}
+function loadStampTplOptions(){
+    $.getJSON(API, {action:'stamp_tpl_options'}, function(res){
+        if (!res.ok) return;
+        var h = '<option value="0">（預設樣式）</option>';
+        (res.templates||[]).forEach(function(t){ h += '<option value="'+t.id+'">'+(t.type_name?esc(t.type_name)+'｜':'')+esc(t.tpl_name)+'</option>'; });
+        $('#stListStamp,#stFooterStamp').html(h);
     });
 }
 $('#btnRoleSetting').on('click', function(){ openMask('roleSetMask'); loadRoles(); });
@@ -373,7 +388,7 @@ function loadTemplates(){
         var h = '';
         TEMPLATES.forEach(function(t){
             var docTxt = t.as_doc ? (t.as_doc.doc_no + ' ' + t.as_doc.doc_name) : '<span class="tag-off">未綁定</span>';
-            h += '<tr><td>'+esc(t.name)+'</td><td>'+docTxt+'</td><td>'+t.paper_size+'</td>'
+            h += '<tr><td>'+esc(t.name)+'</td><td>'+docTxt+'</td><td>'+t.paper_size+(t.orientation==='portrait'?'直式':'橫式')+'</td>'
                + '<td>'+(t.need_review==1?'<span class="tag-on">需審核</span>':'<span class="tag-off">不需要</span>')+'</td>'
                + '<td>'+(t.need_approval==1?'<span class="tag-on">需核准</span>':'<span class="tag-off">不需要</span>')+'</td>'
                + '<td>'+(t.maintain_dept_id?deptName(t.maintain_dept_id):'<span class="tag-off">（未設定）</span>')+'</td>'
@@ -391,7 +406,8 @@ function deptName(id){ var d=(META.departments||[]).find(function(x){ return Str
 function openSettingModal(id){
     $('#stId').val(id||0);
     if (!id){
-        $('#settingTitle').text('新增模板'); $('#stName').val(''); $('#stPaper').val('A4');
+        $('#settingTitle').text('新增模板'); $('#stName').val(''); $('#stPaper').val('A4'); $('#stOrientation').val('landscape');
+        $('#stListStamp').val('0'); $('#stFooterStamp').val('0');
         $('#stDocLabel').text('未綁定').data('id',0);
         $('#stNeedReview').prop('checked',false); $('#stReviewDept').val('');
         $('#stNeedApproval').prop('checked',false); $('#stApproverDept').val(''); $('#stApproverUser').val('');
@@ -403,7 +419,8 @@ function openSettingModal(id){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         var t = res.template;
         $('#settingTitle').text('編輯模板：'+t.name);
-        $('#stName').val(t.name); $('#stPaper').val(t.paper_size);
+        $('#stName').val(t.name); $('#stPaper').val(t.paper_size); $('#stOrientation').val(t.orientation||'landscape');
+        $('#stListStamp').val(t.list_stamp_tpl_id||0); $('#stFooterStamp').val(t.footer_stamp_tpl_id||0);
         $('#stDocLabel').text(t.as_doc ? (t.as_doc.doc_no+' '+t.as_doc.doc_name) : '未綁定').data('id', t.as_doc?t.as_doc.id:0);
         $('#stNeedReview').prop('checked', t.need_review==1); $('#stReviewDept').val(t.review_dept_id||'');
         $('#stNeedApproval').prop('checked', t.need_approval==1);
@@ -429,6 +446,7 @@ function submitTplSettings(){
     $('.chain-sel').each(function(){ var v=$(this).val(); if (v) chain.push(v); });
     $.post(API, {
         action:'template_settings_save', csrf:META.csrf, id:$('#stId').val(), name:name, paper_size:$('#stPaper').val(),
+        orientation:$('#stOrientation').val(), list_stamp_tpl_id:$('#stListStamp').val(), footer_stamp_tpl_id:$('#stFooterStamp').val(),
         need_review: $('#stNeedReview').is(':checked')?1:0, review_dept_id:$('#stReviewDept').val(),
         need_approval: $('#stNeedApproval').is(':checked')?1:0,
         approver_dept_id:$('#stApproverDept').val(), approver_user_id:$('#stApproverUser').val(),

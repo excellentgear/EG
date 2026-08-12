@@ -48,7 +48,8 @@ $perms = rvf_perms($db, $rvfUser);
         .st-draft{background:#b0a390;} .st-submitted,.st-reviewing,.st-approving{background:#F0A24B;} .st-approved{background:#3f9142;} .st-rejected{background:#DD5138;} .st-void{background:#888;}
         .rf-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; overflow-y:auto; }
         .rf-modal { background:#fff; border-radius:8px; max-width:1040px; margin:24px auto; box-shadow:0 5px 25px rgba(0,0,0,.3); }
-        #viewMask .rf-modal { max-width:min(1500px, 96vw); }
+        #viewMask .rf-modal { max-width:min(1200px, 94vw); }
+        .itm-tbl-wrap { overflow-x:auto; margin-bottom:8px; }
         .rf-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
             display:flex; justify-content:space-between; position:sticky; top:0; }
         .rf-modal .m-head .m-close { cursor:pointer; color:#b5762a; }
@@ -80,8 +81,11 @@ $perms = rvf_perms($db, $rvfUser);
         .dp-tags .tg { background:#F7E0BD; color:#5b3a1e; border-radius:9px; font-size:11px; padding:1px 5px 1px 7px; white-space:nowrap; }
         .dp-tags .tg i { cursor:pointer; color:#b5762a; margin-left:3px; }
         .dp-pick > input { width:100%; border:none !important; outline:none; font-size:11px; padding:2px 3px !important; }
-        .dp-list { display:none; position:absolute; left:0; right:0; top:100%; z-index:30; background:#fff;
-            border:1px solid #D8BE93; border-radius:0 0 4px 4px; max-height:150px; overflow-y:auto; box-shadow:0 4px 10px rgba(0,0,0,.12); min-width:150px; }
+        /* position:fixed（不是absolute）：欄位表格改用 .itm-tbl-wrap 橫向捲動後，absolute 下拉會被捲動容器的
+           overflow 裁掉（CSS 規則：overflow-x 非 visible 時 overflow-y 會被瀏覽器強制視為 auto，兩軸一起裁切，
+           無法只裁橫向）。改用 fixed 定位＋JS 依 input 位置現算座標，直接相對視窗定位，不受任何捲動容器影響。 */
+        .dp-list { display:none; position:fixed; z-index:1200; background:#fff;
+            border:1px solid #D8BE93; border-radius:4px; max-height:180px; overflow-y:auto; box-shadow:0 4px 10px rgba(0,0,0,.18); min-width:150px; }
         .dp-list div { padding:3px 8px; font-size:11.5px; color:#5b3a1e; cursor:pointer; }
         .dp-list div:hover { background:#FBF0DD; }
         .rf-del { color:#DD5138; cursor:pointer; }
@@ -251,10 +255,10 @@ function renderView(){
     if (PREVIEW_MODE) h += '<div style="background:#FFF7E8;border:1px dashed #E8D5B5;border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:12.5px;color:#8a6d45;">'
         + '<i class="fa fa-flask"></i> 試填預覽模式：這裡的內容<b>不會儲存、不會建立實際表單資料</b>，純粹用來檢查目前欄位定義的排版與列印效果。關閉分頁即消失。</div>';
     h += '<div style="max-width:220px;"><label>建立日期</label><input type="date" id="vBizDate" max="9999-12-31" value="'+esc(CUR.business_date)+'" '+(isDraftMine()?'':'disabled')+'></div>';
-    h += '<table class="itm-tbl"><thead><tr><th style="width:26px;">#</th><th>項目</th>';
+    h += '<div class="itm-tbl-wrap"><table class="itm-tbl"><thead><tr><th style="width:26px;">#</th><th>項目</th>';
     (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+esc(c.label)+'</th>'; });
     h += '<th>負責單位/負責人</th>';
-    h += '<th>簽名</th>'+(isDraftMine()?'<th></th>':'')+'</tr></thead><tbody id="itmBody" data-eg-row-add="itemAdd" data-eg-row-del="itemDelLast"></tbody></table>';
+    h += '<th>簽名</th>'+(isDraftMine()?'<th></th>':'')+'</tr></thead><tbody id="itmBody" data-eg-row-add="itemAdd" data-eg-row-del="itemDelLast"></tbody></table></div>';
     if (isDraftMine()) h += '<button class="rf-btn-sm" onclick="itemAdd()" style="margin-right:6px;">+新增列</button><button class="rf-btn-sm" onclick="itemDelLast()">-刪除末列</button>';
     h += '<div style="margin-top:12px;">';
     if (PREVIEW_MODE) {
@@ -317,6 +321,14 @@ function userTagHtml(i, ids, deptIds){
 }
 function ownerDeptDel(i,id){ ITEMS[i].owner_depts = ITEMS[i].owner_depts.filter(function(x){return String(x)!==String(id);}); renderItems(); }
 function ownerUserDel(i,id){ ITEMS[i].owner_users = ITEMS[i].owner_users.filter(function(x){return String(x)!==String(id);}); renderItems(); }
+/* .dp-list 用 position:fixed（見上方CSS註解），顯示前要用輸入框當下在畫面上的實際座標現算位置。 */
+function showDpList($input, $list){
+    var r = $input[0].getBoundingClientRect();
+    $list.css({left: r.left, top: r.bottom + 2, minWidth: Math.max(r.width, 150)}).show();
+}
+$(document).on('scroll', '.itm-tbl-wrap', function(){ $('.dp-list').hide(); });
+$(window).on('resize', function(){ $('.dp-list').hide(); });
+$(document).on('click', function(e){ if (!$(e.target).closest('.dp-pick,.dp-list').length) $('.dp-list').hide(); });
 $(document).on('focus input', '.itm-dp-kw', function(){
     var $p=$(this).closest('.itm-dp'), i=$p.data('i'), it=ITEMS[i]; if(!it) return;
     var kw=$.trim($(this).val()).toLowerCase(), h='';
@@ -325,7 +337,8 @@ $(document).on('focus input', '.itm-dp-kw', function(){
         var on=(it.owner_depts||[]).some(function(x){return String(x)===String(d.id);});
         h += '<div data-id="'+d.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(d.name)+'</div>';
     });
-    $p.find('.dp-list').html(h||'<div style="color:#b0a390;">查無部門</div>').show();
+    var $list = $p.find('.dp-list').html(h||'<div style="color:#b0a390;">查無部門</div>');
+    showDpList($(this), $list);
 });
 $(document).on('click', '.itm-dp .dp-list div[data-id]', function(){
     var $p=$(this).closest('.itm-dp'), i=$p.data('i'), it=ITEMS[i]; if(!it) return;
@@ -346,7 +359,8 @@ $(document).on('focus input', '.itm-up-kw', function(){
         var on=(it.owner_users||[]).some(function(x){return String(x)===String(p.id);});
         h += '<div data-id="'+p.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(p.display)+'</div>';
     });
-    $p.find('.dp-list').html(h||'<div style="color:#b0a390;">'+(deptFilter.length?'此部門查無人員':'查無人員')+'</div>').show();
+    var $list = $p.find('.dp-list').html(h||'<div style="color:#b0a390;">'+(deptFilter.length?'此部門查無人員':'查無人員')+'</div>');
+    showDpList($(this), $list);
 });
 $(document).on('click', '.itm-up .dp-list div[data-id]', function(){
     var $p=$(this).closest('.itm-up'), i=$p.data('i'), it=ITEMS[i]; if(!it) return;
@@ -421,9 +435,9 @@ function deleteForm(){
 }
 
 /* ============ 列印 ============ */
-function egPrintWindow(title, bodyHtml, extraCss, docNo, paper){
+function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
     var asCss = String(docNo||'').replace(/['\\]/g,'');
-    var css = '@page{size:'+(paper||'A4')+' portrait;margin:12mm 8mm 16mm;}'
+    var css = '@page{size:'+(paper||'A4')+' '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;}'
             + 'html,body{margin:0;padding:0;}'
             + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.pt-head{text-align:center;margin-bottom:6px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
@@ -438,7 +452,7 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper){
         + (asCss ? '<div class="rf-as-doc">'+asCss+'</div>' : '')
         + '<div class="rf-page-num">第 1 頁／共 1 頁</div>'
         + '<scr'+'ipt>window.onload=function(){'
-        + 'var pageH=('+(paper==='A3'?'420':'297')+'-28)*96/25.4;'
+        + 'var pageH=('+(landscape ? (paper==='A3'?'297':'210') : (paper==='A3'?'420':'297'))+'-28)*96/25.4;'
         + 'var h=document.body.scrollHeight;'
         + 'if(h>pageH){ document.body.style.zoom = Math.max(0.5, pageH/h); }'
         + 'setTimeout(function(){window.print();},250);};</scr'+'ipt></body></html>');
@@ -455,9 +469,13 @@ function rfCss(){
          + 'table.rf-p-foot td{padding:10px 6px;width:33.33%;text-align:center;}'
          + 'table.rf-p-foot .stamp-wrap svg,table.rf-p-foot svg.car-stamp{width:80px !important;height:80px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
 }
-function stampOrName(name, date, isDeputy){
-    return (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy) : esc(name||'');
+function stampOrName(name, date, isDeputy, schema){
+    return (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
 }
+/* 兩種圖章樣式各自綁定：逐列簽章(list_stamp) 用在項目表每列負責人簽名；製表/審核/核准(footer_stamp) 用在頁尾三欄。
+   模板沒設定時 schema 是 null，EGStamp.stamp 會自動退回預設樣式。 */
+function stampList(name, date, isDeputy){ return stampOrName(name, date, isDeputy, CUR.tpl.list_stamp ? CUR.tpl.list_stamp.schema : null); }
+function stampFooter(name, date, isDeputy){ return stampOrName(name, date, isDeputy, CUR.tpl.footer_stamp ? CUR.tpl.footer_stamp.schema : null); }
 function printForm(){
     var t = CUR.tpl, schema = CUR_SCHEMA;
     var h = '<div class="pt-head"><div class="co">'+esc(CUR.company_name||'')+'</div><div class="tt">'+esc(t.name)+'</div></div>';
@@ -474,17 +492,17 @@ function printForm(){
         });
         var ownerTxt = (it.owner_depts||[]).map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?d.name:''; })
             .concat((it.owner_users||[]).map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?p.user_cname:''; })).filter(Boolean).join('、');
-        var signHtml = (it.confirms||[]).map(function(c){ return stampOrName(c.user_name, dispDate(c.signed_at)); }).join('');
-        if (!signHtml && PREVIEW_MODE && (it.owner_depts.length || it.owner_users.length)) signHtml = stampOrName('（簽名樣式預覽）', dispDate(CUR.business_date));
+        var signHtml = (it.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');
+        if (!signHtml && PREVIEW_MODE && (it.owner_depts.length || it.owner_users.length)) signHtml = stampList('（簽名樣式預覽）', dispDate(CUR.business_date));
         h += '<td>'+esc(ownerTxt)+'</td><td>'+signHtml+'</td></tr>';
     });
     h += '</tbody></table>';
     h += '<table class="rf-p-foot"><tr>';
-    h += '<td>'+(CUR.review && CUR.review.status==='approved' ? ('審核：'+stampOrName(CUR.review.approver_name, dispDate(CUR.review.decided_at))) : '審核：')+'</td>';
-    h += '<td>'+(CUR.approval && CUR.approval.status==='approved' ? ('核准：'+stampOrName(CUR.approval.approver_name, dispDate(CUR.approval.decided_at))) : '核准：')+'</td>';
-    h += '<td>製表：'+stampOrName(CUR.created_by_name, dispDate(CUR.business_date))+'</td>';
+    h += '<td>'+(CUR.review && CUR.review.status==='approved' ? ('審核：'+stampFooter(CUR.review.approver_name, dispDate(CUR.review.decided_at))) : '審核：')+'</td>';
+    h += '<td>'+(CUR.approval && CUR.approval.status==='approved' ? ('核准：'+stampFooter(CUR.approval.approver_name, dispDate(CUR.approval.decided_at))) : '核准：')+'</td>';
+    h += '<td>製表：'+stampFooter(CUR.created_by_name, dispDate(CUR.business_date))+'</td>';
     h += '</tr></table>';
-    egPrintWindow(t.name, h, rfCss(), CUR.as_doc_no, t.paper_size);
+    egPrintWindow(t.name, h, rfCss(), CUR.as_doc_no, t.paper_size, t.orientation!=='portrait');
 }
 
 /* 試填預覽入口（由 review_form_template.php 的「試填預覽並列印」開新分頁帶 ?preview=1 進來）：
@@ -496,11 +514,11 @@ function initPreview(){
     var payload = JSON.parse(raw);
     CUR_SCHEMA = payload.schema || {fields:[], sign_mode:'password'};
     ITEMS = [];
-    function openPreview(asDocNo){
+    function openPreview(tpl, asDocNo){
         CUR = {
             id: 0, title: '', business_date: META.today, status: 'draft',
             created_by: META.uid, created_by_name: META.uname,
-            tpl: {name: payload.tpl_name || '(未命名模板)', paper_size: payload.paper_size || 'A4'},
+            tpl: tpl || {name: payload.tpl_name || '(未命名模板)', paper_size: payload.paper_size || 'A4', orientation:'landscape'},
             as_doc_no: asDocNo || '', company_name: META.company_name,
             review: null, approval: null, can_review: false, can_approve: false
         };
@@ -509,10 +527,11 @@ function initPreview(){
         openMask('viewMask');
     }
     if (payload.tpl_id) {
+        // 用真實模板列（含紙張/方向/圖章綁定等設定），確保試列印跟正式列印用同一套設定，不是只用畫面上暫存的兩三個欄位。
         $.getJSON(API, {action:'template_get', id:payload.tpl_id}, function(res){
-            openPreview(res.ok && res.template.as_doc ? (res.template.as_doc.doc_no) : '');
+            openPreview(res.ok ? res.template : null, res.ok && res.template.as_doc ? res.template.as_doc.doc_no : '');
         });
-    } else openPreview('');
+    } else openPreview(null, '');
 }
 if (PREVIEW_MODE) loadMeta(initPreview);
 else loadMeta(function(){ loadTemplates(loadList); });

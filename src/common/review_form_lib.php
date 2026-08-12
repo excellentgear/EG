@@ -190,28 +190,57 @@ function rvf_template_get(PDO $db, int $id): ?array {
     $st = $db->prepare("SELECT * FROM rf_template WHERE id=?");
     $st->execute([$id]);
     $t = $st->fetch(PDO::FETCH_ASSOC);
-    if ($t) $t['as_doc'] = eg_asdoc_get($db, rvf_asdoc_module($id));
+    if ($t) {
+        $t['as_doc'] = eg_asdoc_get($db, rvf_asdoc_module($id));
+        $t['list_stamp'] = rvf_stamp_tpl_get($db, (int)($t['list_stamp_tpl_id'] ?? 0));
+        $t['footer_stamp'] = rvf_stamp_tpl_get($db, (int)($t['footer_stamp_tpl_id'] ?? 0));
+    }
     return $t ?: null;
+}
+
+/** 圖章模板（stamp_template）：id=0 或查無資料回 null，呼叫端沒拿到就用 EGStamp 預設樣式。 */
+function rvf_stamp_tpl_get(PDO $db, int $tplId): ?array {
+    if (!$tplId) return null;
+    try {
+        $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$tplId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ? ['id'=>(int)$r['id'], 'tpl_name'=>$r['tpl_name'], 'schema'=>json_decode((string)$r['schema_json'], true)] : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** 圖章模板下拉選單用清單（供設定頁挑選）。 */
+function rvf_stamp_tpl_options(PDO $db): array {
+    try {
+        return $db->query("SELECT p.id, p.tpl_name, t.type_name
+                           FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
+                           WHERE p.is_active=1 ORDER BY p.tpl_name")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
 }
 
 /** 管理員限定：建立/修改模板設定（不含項次內容 schema，schema 走 rvf_template_schema_save）。 */
 function rvf_template_settings_save(PDO $db, int $id, array $d, string $byName): int {
     $chain = json_encode(array_values(array_intersect($d['approver_chain'] ?? ['top_approver'], RVF_APPROVER_METHODS)) ?: ['top_approver']);
+    $orientation = ($d['orientation'] ?? 'landscape') === 'portrait' ? 'portrait' : 'landscape';
     if ($id) {
-        $db->prepare("UPDATE rf_template SET name=?,paper_size=?,need_review=?,review_dept_id=?,need_approval=?,
+        $db->prepare("UPDATE rf_template SET name=?,paper_size=?,orientation=?,list_stamp_tpl_id=?,footer_stamp_tpl_id=?,
+                      need_review=?,review_dept_id=?,need_approval=?,
                       approver_dept_id=?,approver_user_id=?,approver_chain_json=?,maintain_dept_id=?,updated_by=?,updated_at=NOW() WHERE id=?")
-           ->execute([$d['name'], $d['paper_size'], $d['need_review']?1:0, $d['review_dept_id'] ?: null,
+           ->execute([$d['name'], $d['paper_size'], $orientation, $d['list_stamp_tpl_id'] ?: null, $d['footer_stamp_tpl_id'] ?: null,
+                      $d['need_review']?1:0, $d['review_dept_id'] ?: null,
                       $d['need_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
                       $chain, $d['maintain_dept_id'] ?: null, $byName, $id]);
         return $id;
     }
-    $db->prepare("INSERT INTO rf_template (name,paper_size,need_review,review_dept_id,need_approval,approver_dept_id,
+    $db->prepare("INSERT INTO rf_template (name,paper_size,orientation,list_stamp_tpl_id,footer_stamp_tpl_id,
+                  need_review,review_dept_id,need_approval,approver_dept_id,
                   approver_user_id,approver_chain_json,maintain_dept_id,current_schema_json,published_version,created_by)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,0,?)")
-       ->execute([$d['name'], $d['paper_size'], $d['need_review']?1:0, $d['review_dept_id'] ?: null,
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)")
+       ->execute([$d['name'], $d['paper_size'], $orientation, $d['list_stamp_tpl_id'] ?: null, $d['footer_stamp_tpl_id'] ?: null,
+                  $d['need_review']?1:0, $d['review_dept_id'] ?: null,
                   $d['need_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
                   $chain, $d['maintain_dept_id'] ?: null,
-                  json_encode(['columns'=>[], 'date_fields'=>[], 'sign_mode'=>'password'], JSON_UNESCAPED_UNICODE), $byName]);
+                  json_encode(['fields'=>[], 'sign_mode'=>'password'], JSON_UNESCAPED_UNICODE), $byName]);
     return (int)$db->lastInsertId();
 }
 
