@@ -435,6 +435,7 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                                             <th>假別名稱</th>
                                             <th>需主管簽核</th>
                                             <th>需指定代理人</th>
+                                            <th>代理人完整承接權限</th>
                                             <th>最高簽核層級</th>
                                             <th>請假粒度</th>
                                             <th>需附證明</th>
@@ -674,6 +675,13 @@ $isHrAdmin = (strpos((string)$permission_code, 'A') !== false);
                                 <label><input type="checkbox" id="need_agent_sign" name="need_agent_sign"> 需指定職務代理人</label>
                                 <div class="text-muted" style="font-size:12px;margin-left:20px;">
                                     勾選後，申請此假別時必須從「代理人設定」既有的代理人中指定一位；<b>代理人不參與簽核</b>，核准後系統才通知他接手職務。
+                                </div>
+                            </div>
+                            <div class="checkbox">
+                                <label><input type="checkbox" id="full_inherit_permission" name="full_inherit_permission"> 代理人完整承接權限（含頁面/設定，不僅止於簽核）</label>
+                                <div class="text-muted" style="font-size:12px;margin-left:20px;">
+                                    一般假別代理人只能透過通知核准/退回簽核，不會拿到頁面或設定的操作權限。<b>勾選此項後</b>（例如留職停薪、育嬰留停等本人整段期間都不在的假別），
+                                    單據核准生效期間，代理人會在被代理人「該職務身分」的範圍內，即時取得對應的頁面操作與設定權限；假期結束或人事將單據提前結束時，權限立即現場收回，不需另外設定。
                                 </div>
                             </div>
                             <hr>
@@ -1753,6 +1761,7 @@ $(function () {
                             <td>${escapeHtml(item.leave_name)}</td>
                             <td>${parseInt(item.need_approval) === 1 ? '<i class="fa fa-check text-success"></i>' : '<i class="fa fa-times text-danger"></i>'}</td>
                             <td>${parseInt(item.agent) === 1 ? '<i class="fa fa-check text-success"></i>' : '<i class="fa fa-times text-danger"></i>'}</td>
+                            <td>${parseInt(item.full_inherit_permission) === 1 ? '<i class="fa fa-check text-success"></i> <span class="label label-warning">完整承接</span>' : '<i class="fa fa-times text-danger"></i>'}</td>
                             <td>${escapeHtml(item.max_approval_level)}
                                 ${supervisorTitles[item.max_approval_level] ? ` <span class="text-muted">(${supervisorTitles[item.max_approval_level]})</span>` : ''}</td>
                             <td>${unitTxt}</td>
@@ -1791,6 +1800,7 @@ $(function () {
                         $('#max_level').val(d.max_approval_level);
                         $('#need_manager_sign').prop('checked', parseInt(d.need_approval) === 1);
                         $('#need_agent_sign').prop('checked', parseInt(d.agent) === 1);
+                        $('#full_inherit_permission').prop('checked', parseInt(d.full_inherit_permission) === 1);
                         // 請假系統擴充欄位
                         $('#unit_type').val(d.unit_type || 'hour');
                         $('#require_attachment').prop('checked', parseInt(d.require_attachment) === 1).trigger('change');
