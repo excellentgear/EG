@@ -266,10 +266,10 @@ case 'add': {
         if (!$st->fetchColumn()) jerr('職稱不存在');
     }
     $db->beginTransaction();
-    // 同一持有對象（人員/部門/部門+職稱）＋同一種類 同時僅一筆使用中；不同種類可同時持有
-    $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND position_id <=> ? AND status='active' AND type_id <=> ? LIMIT 1 FOR UPDATE");
-    $st->execute([$tuid, $deptId, $posId, $typeId]);
-    if ($st->fetchColumn()) { $db->rollBack(); jerr('該持有對象此種類已有一筆「使用中」圖章，請先停用舊登記再核發'); }
+    // 同一持有對象（人員/部門/部門+職稱）＋同一「模板來源」同時僅一筆使用中；同種類不同模板可同時持有（2026-08-12 使用者明確要求：判斷重點是模板來源，不是種類）
+    $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND position_id <=> ? AND status='active' AND template_id <=> ? LIMIT 1 FOR UPDATE");
+    $st->execute([$tuid, $deptId, $posId, $tplId]);
+    if ($st->fetchColumn()) { $db->rollBack(); jerr('該持有對象此模板已有一筆「使用中」圖章，請先停用舊登記再核發'); }
     $st = $db->prepare("INSERT INTO stamp_register (user_id, dept_id, position_id, type_id, template_id, issue_date, status, note, created_by) VALUES (?,?,?,?,?,?,'active',?,?)");
     $st->execute([$tuid, $deptId, $posId, $typeId, $tplId, $issue, $note, $cname]);
     $newId = (int)$db->lastInsertId();
@@ -286,17 +286,19 @@ case 'update': {
     $note  = trim((string)($_POST['note'] ?? ''));
     if ($id <= 0) jerr('參數錯誤');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $issue)) jerr('核發日期格式錯誤');
-    $cur = $db->prepare("SELECT user_id, dept_id, position_id, type_id, status FROM stamp_register WHERE id=?");
+    $cur = $db->prepare("SELECT user_id, dept_id, position_id, type_id, template_id, status FROM stamp_register WHERE id=?");
     $cur->execute([$id]);
     $curRow = $cur->fetch(PDO::FETCH_ASSOC);
     if (!$curRow) jerr('登記不存在');
-    if ($curRow['status'] === 'active') {
-        $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND position_id <=> ? AND status='active' AND type_id <=> ? AND id<>? LIMIT 1");
-        $st->execute([$curRow['user_id'], $curRow['dept_id'], $curRow['position_id'], $typeId, $id]);
-        if ($st->fetchColumn()) jerr('該持有對象此種類已有另一筆「使用中」圖章');
-    }
     // 種類改變時，登記當初選的模板已不屬於新種類，清空 template_id（清冊預覽退回「該新種類任一啟用模板」）
     $clearTplSql = ((string)$curRow['type_id'] !== (string)$typeId) ? ", template_id=NULL" : "";
+    // 判斷重點是「模板來源」不是種類（同 add 案例規則）：種類未變則沿用原模板做重複檢查，種類改變則模板即將被清空，比對對象也改為 NULL
+    $newTplId = $clearTplSql === '' ? $curRow['template_id'] : null;
+    if ($curRow['status'] === 'active') {
+        $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND position_id <=> ? AND status='active' AND template_id <=> ? AND id<>? LIMIT 1");
+        $st->execute([$curRow['user_id'], $curRow['dept_id'], $curRow['position_id'], $newTplId, $id]);
+        if ($st->fetchColumn()) jerr('該持有對象此模板已有另一筆「使用中」圖章');
+    }
     $st = $db->prepare("UPDATE stamp_register SET type_id=?, issue_date=?, note=?, modified_by=?, modified_at=NOW()$clearTplSql WHERE id=?");
     $st->execute([$typeId, $issue, $note, $cname, $id]);
     jout(['ok'=>true]);
@@ -615,7 +617,7 @@ case 'batch_members': {
 
 // ── 批次寫入 ──
 // items：JSON 陣列 [{template_id,type_id,kind,user_id,dept_id}]；kind='user'＝個人章(不綁部門)｜'user_dept'＝部門所屬人員章(dept_id必填)
-// 同一持有對象＋種類已有使用中登記＝略過（不視為錯誤，回傳略過筆數），沿用單筆新增同一套防重複規則。
+// 同一持有對象＋同一「模板來源」已有使用中登記＝略過（不視為錯誤，回傳略過筆數），沿用單筆新增同一套防重複規則（判斷重點是模板不是種類，同種類不同模板可同時持有）。
 case 'batch_add': {
     needManage($canManage); needBatch($isAdmin, $uid);
     $issue = trim((string)($_POST['issue_date'] ?? ''));
@@ -639,8 +641,8 @@ case 'batch_add': {
             if ($tplRow === false) { $skipped++; continue; }
             $typeId = $tplRow['type_id'] !== null ? (int)$tplRow['type_id'] : null;
         }
-        $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND position_id IS NULL AND status='active' AND type_id <=> ? LIMIT 1 FOR UPDATE");
-        $st->execute([$tuid, $deptId, $typeId]);
+        $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND position_id IS NULL AND status='active' AND template_id <=> ? LIMIT 1 FOR UPDATE");
+        $st->execute([$tuid, $deptId, $tplId]);
         if ($st->fetchColumn()) { $skipped++; continue; }
         $st = $db->prepare("INSERT INTO stamp_register (user_id, dept_id, position_id, type_id, template_id, issue_date, status, note, created_by) VALUES (?,?,NULL,?,?,?,'active','批次建立',?)");
         $st->execute([$tuid, $deptId, $typeId, $tplId, $issue, $cname]);

@@ -64,6 +64,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         .ic-toolbar .btn-warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .ic-toolbar .btn-warm:hover { background:#d98a33; }
         .ic-role-badge { margin-left:auto; font-size:13px; color:#5b3a1e; background:#F7E0BD; border-radius:12px; padding:4px 12px; }
+        .ic-role-badge .fa-question-circle { cursor:pointer; color:#b5762a; margin-left:5px; }
         .ic-table-wrap { overflow-x:auto; border:1px solid #E8D5B5; border-radius:6px; background:#fff; }
         table.ic-table { width:100%; border-collapse:collapse; font-size:13px; }
         table.ic-table th, table.ic-table td { border:1px solid #EADFC8; padding:5px 8px; text-align:center; }
@@ -157,7 +158,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <button id="btnSyncPart" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="依此料號的訂單/報價單製程，自動建立(或更新)各製程的型態識別文件管制表，並同步外來文件清單附件"><i class="fa fa-refresh"></i> 同步</button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
-            <span class="ic-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b></span>
+            <span class="ic-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
+                <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
         </div>
 
         <div class="ic-table-wrap">
@@ -277,6 +279,19 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('asDocMask')">關閉</button></div>
 </div></div>
 
+<!-- 角色權限說明 -->
+<div class="ic-mask" id="roleHelpMask"><div class="ic-modal">
+    <div class="m-head"><span>角色權限說明</span><span class="m-close" onclick="closeMask('roleHelpMask')">✕</span></div>
+    <div class="m-body" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
+        <b>型態文件檢閱</b>：檢視清單、開啟查看、列印。<br>
+        <b>型態文件登錄</b>：檢閱＋新增/編輯、「掃描待建立料號」與自動產生/同步、確認清單（含排除項目）。<br>
+        <b>型態文件管理員</b>：登錄＋刪除、AS 文件編號綁定。<br>
+        <b>管理者</b>：系統管理者固定擁有全部權限。<br>
+        <hr style="border-color:#EADFC8;">
+        角色指派請洽管理者於「使用者權限設定」（<a href="../user/user_permissions.php" target="_blank">開啟</a>）→「型態識別文件管制表」區塊指派。未被指派角色者無法進入本頁。
+    </div>
+</div></div>
+
 <div class="ic-mask" id="helpUseMask"><div class="ic-modal xwide">
     <div class="m-head"><span><i class="fa fa-question-circle"></i> 型態識別文件管制表 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc">
@@ -301,9 +316,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號、製表人簽章使用全站通用圓形姓名章（若本人有上傳掃描實體章會優先用掃描章，否則自動產生標準回墨章，不需另外設定模板）。</li>
         </ul>
         <h4>設定入口</h4>
-        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。</p>
+        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。<b>角色指派</b>（誰可以檢閱／登錄／管理本頁）：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「型態識別文件管制表」區塊。</p>
         <h4>權限角色</h4>
-        <p>型態文件檢閱／登錄／管理員（管理者固定擁有全部權限）。</p>
+        <p>型態文件檢閱／登錄／管理員（管理者固定擁有全部權限）；點頁面右上角「目前角色」旁的 <i class="fa fa-question-circle"></i> 可看各角色的權限說明。</p>
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">我知道了</button></div>
 </div></div>
@@ -345,7 +360,7 @@ function loadList(){
             html += '<tr>'
                 + '<td>'+esc(r.doc_no)+'</td>'
                 + '<td>'+esc(r.customer_name||r.customer_id||'')+'</td>'
-                + '<td class="t-left">'+(r.part_d_id?EGPartPicker.viewerLink(r.part_d_id, VIEWER_URL, r.part_no):esc(r.part_no))+'</td>'
+                + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):esc(r.part_no))+'</td>'
                 + '<td>'+esc(r.process_desc||'')+'</td>'
                 + '<td>'+statusBadge(r.review_status, r.review_status_label)+'</td>'
                 + '<td>'+esc(r.created_by_name||'')+'</td>'
@@ -720,6 +735,7 @@ function openAsDocPicker(){
 }
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
+$('#btnRoleHelp').on('click', function(){ openMask('roleHelpMask'); });
 $('.ic-mask').on('click', function(e){ if (e.target === this) this.style.display='none'; });
 
 <?php if ($perms['canView']): ?>

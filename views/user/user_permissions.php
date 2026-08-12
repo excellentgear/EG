@@ -357,6 +357,7 @@ $_kpiRoles      = [];  $_userKpiRoles    = [];
 $_extdocRoles   = [];  $_userExtdocRoles = [];
 $_otrkRoles     = [];  $_userOtrkRoles   = [];
 $_rvfRoles      = [];  $_userRvfRoles    = [];
+$_tidcRoles     = [];  $_userTidcRoles   = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -394,6 +395,7 @@ try {
     $st->execute(['external_doc']);$_extdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['order_track']); $_otrkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['review_form']); $_rvfRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['type_id_ctrl']); $_tidcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -525,6 +527,10 @@ try {
     $st->execute(['review_form']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userRvfRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['type_id_ctrl']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userTidcRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -1229,6 +1235,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('otrk', 'order_track', '訂單追蹤', 'fa-list-alt', '#c0762c',
                         '為每位使用者指派「訂單追蹤」頁（業務 &gt; 訂單追蹤）的操作角色。角色與各功能的對應在<strong>訂單追蹤頁右上「角色設定」</strong>（僅管理員）依功能群組勾選：訂單基本操作（檢視/新建編輯/刪除/顯示金額）、訂單流程（批圖/轉生管/結案/取消訂單/OP轉訂單）、訂單變更、設計與批圖（設計備註/批圖編輯器/前往料號主檔）、計算工具（齒輪/鍵槽計算）。<strong>注意：訂單追蹤頁目前權限檢查尚未切換為角色制</strong>，此處指派先建立人員對照，切換後才會生效；管理者固定擁有全部權限。',
                         $_otrkRoles, $_userOtrkRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('tidc', 'type_id_ctrl', '型態識別文件管制表', 'fa-sitemap', '#b06f27',
+                        '為每位使用者指派「型態識別文件管制表」頁（技術部 &gt; 型態識別文件管制表）的操作角色。角色功能：<strong>型態文件檢閱</strong>＝檢視清單、開啟查看、列印；<strong>型態文件登錄</strong>＝檢閱＋新增/編輯、「掃描待建立料號」與自動產生/同步、確認清單（含排除項目）；<strong>型態文件管理員</strong>＝登錄＋刪除、AS 文件編號綁定。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
+                        $_tidcRoles, $_userTidcRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 
                     <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->

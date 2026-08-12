@@ -12,8 +12,10 @@
  *     title  : '選擇料號',                              // 可省略
  *     onSave : function(row){ ... }  // row = {d_id, part_no, drawing_no, customer_id, customer_name}
  *   });
- *   EGPartPicker.viewerLink(dId, viewerUrl)  // 回傳可點擊開 part_viewer.php 的 <a> HTML
+ *   EGPartPicker.viewerLink(partNo, viewerUrl)  // 回傳可點擊開 part_viewer.php 的 <a> HTML
  *     viewerUrl 例：'../pm/part_viewer.php'（依頁面深度調整）
+ *     【注意】part_viewer.php 的 ?d_id= 參數吃的是「料號字串」(d_setting.D_Setting_Id，如 SP-NME-GE-G5)，
+ *     不是 d_setting.d_id 數字主鍵——這裡務必傳 part_no，傳數字主鍵會查無圖檔（2026-08-12 踩過一次）。
  */
 (function () {
     'use strict';
@@ -58,20 +60,20 @@
     }
 
     var API = {
-        /** 顯示用連結：點擊開新視窗看料號圖面（比照 inspection_entry_v2.php 既有作法） */
-        viewerLink: function (dId, viewerUrl, label) {
-            if (!dId) return esc(label || '');
-            var url = viewerUrl + '?d_id=' + encodeURIComponent(dId);
-            return '<a href="javascript:void(0)" class="eg-pp-viewer-lnk" data-d-id="' + esc(dId)
+        /** 顯示用連結：點擊開新視窗看料號圖面（比照 inspection_entry_v2.php 既有作法）
+         *  partNo 務必傳「料號字串」(D_Setting_Id)，不是 d_setting.d_id 數字主鍵——part_viewer.php 用字串查表。 */
+        viewerLink: function (partNo, viewerUrl, label) {
+            if (!partNo) return esc(label || '');
+            return '<a href="javascript:void(0)" class="eg-pp-viewer-lnk" data-d-id="' + esc(partNo)
                  + '" data-viewer="' + esc(viewerUrl) + '" style="color:#b5762a;text-decoration:underline;">'
-                 + esc(label || dId) + '</a>';
+                 + esc(label || partNo) + '</a>';
         },
 
-        openViewer: function (dId, viewerUrl) {
-            if (!dId) return;
+        openViewer: function (partNo, viewerUrl) {
+            if (!partNo) return;
             var w = screen.availWidth, h = screen.availHeight;
             var pw = Math.min(1400, Math.round(w * 0.85)), ph = Math.min(900, Math.round(h * 0.88));
-            window.open(viewerUrl + '?d_id=' + encodeURIComponent(dId), 'part_dv_' + dId,
+            window.open(viewerUrl + '?d_id=' + encodeURIComponent(partNo), 'part_dv_' + partNo,
                 'width=' + pw + ',height=' + ph + ',left=' + Math.round((w - pw) / 2) + ',top=' + Math.round((h - ph) / 2) + ',resizable=yes,scrollbars=yes');
         },
 

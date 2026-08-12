@@ -99,7 +99,7 @@ try {
     <input type="date" id="addDate" class="form-control input-sm" style="width:150px;display:inline-block;" max="9999-12-31">
     <input type="text" id="addNote" class="form-control input-sm" style="width:180px;display:inline-block;" placeholder="備註（選填）">
     <button class="btn btn-primary btn-sm" id="btnAdd"><i class="fa fa-plus"></i> 登記核發</button>
-    <div class="text-muted" style="font-size:12px;margin-top:4px;">同一持有對象＋同一種類，同時只能有一筆「使用中」。各種類可綁定的持有對象請按右上「設定」維護。</div>
+    <div class="text-muted" style="font-size:12px;margin-top:4px;">同一持有對象＋同一「模板」，同時只能有一筆「使用中」；同種類不同模板可同時持有。各種類可綁定的持有對象請按右上「設定」維護。</div>
   </div>
   <div class="pager">
     <span style="font-size:12.5px;">
@@ -226,7 +226,8 @@ try {
     <h4 class="modal-title"><i class="fa fa-object-group"></i> 批次建立登記</h4></div>
   <div class="modal-body">
     <p class="text-muted" style="font-size:12px;">先多選部門與圖章模板（可複選多種），按「產生名單」列出候選清單，可再手動取消勾選不需要的人。
-      <strong>個人章</strong>（種類綁定對象為個人、或未限制）同一人只會出現一次；<strong>部門所屬人員章</strong>（種類同時綁定個人＋課室）同一人若身兼多部門主/兼任職位，主職位部門、兼任職位部門各自一筆。</p>
+      <strong>個人章</strong>（種類綁定對象為個人、或未限制）同一人只會出現一次；<strong>部門所屬人員章</strong>（種類同時綁定個人＋課室）同一人若身兼多部門主/兼任職位，主職位部門、兼任職位部門各自一筆。
+      重複檢查依「模板」而非「種類」：同一人已持有某模板的使用中登記才會略過，同種類的不同模板可同時持有。</p>
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;">
       <div style="flex:1;min-width:200px;">
         <strong style="color:#7a4e17;font-size:13px;">部門（可複選）</strong>
