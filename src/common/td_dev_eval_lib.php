@@ -8,6 +8,15 @@
  * org_role_lib 的 top_approver + delegate_lib 代理解析（ai-rules/18）。
  * 補資料用：具「操作確認密碼」資格者可一次輸入密碼把全部尚未簽的欄位補齊，但仍需逐格指定原簽核人
  * （2026-08-12 使用者明確要求，非直接蓋成自己名字）。
+ *
+ * 送出流程（2026-08-12 新增，使用者明確拍板）：draft(草稿，僅建立者/管理員可編輯表頭與32項) →
+ * 送出「submit」後鎖定表頭，狀態轉 submitted，通知六部門；32項確認結果改由各部門在自己的簽核關卡
+ * 自行填寫本部門負責的項目（TD_DEV_EVAL_TEMPLATE 第3欄與 TD_DEV_EVAL_SLOTS 標籤字串一致比對歸屬）
+ * +意見(非必填)後簽核；六部門不限順序皆可平行簽，但需六部門全部簽完才能簽「生產課決行」，決行完才能
+ * 簽「總經理決行」；總經理簽完自動 status=closed 並記錄 closed_at。各階段完成會通知下一階段的合格簽核池。
+ * 超級管理員（isAdmin，非僅td_dev_eval_admin模組角色）另有「32項快速設定」與「全部自動簽核(指定日期)」
+ * 兩個補舊資料專用動作，不受上述送出/簽核狀態限制；自動簽核時間比照 ai-rules/21：業務日期與精確時間戳
+ * 分離存放、時間跟送出時刻隨機錯開5~30分鐘、不可跨天。
  */
 
 /** 固定模板：32 項確認項目（項次=>[區分, 評估項目, 評估單位]），AS9100 表單本身格式固定，內容(答案)才是使用者填的 */
@@ -63,6 +72,8 @@ if (!defined('TD_DEV_EVAL_SLOTS')) define('TD_DEV_EVAL_SLOTS', [
     'gm'            => ['總經理決行', 'top_approver', true],
 ]);
 if (!defined('TD_DEV_EVAL_DECISIONS')) define('TD_DEV_EVAL_DECISIONS', ['make'=>'可行自製', 'outsource'=>'可行委外', 'reeval'=>'再評估', 'stop'=>'中止']);
+/** 六個部門類簽認欄位（不含生產課決行/總經理決行），簽核順序不限但需六個都簽完才能進下一階段 */
+if (!defined('TD_DEV_EVAL_DEPT_SLOTS')) define('TD_DEV_EVAL_DEPT_SLOTS', ['tech','sales','mgmt','prod','qa','material']);
 
 function td_dev_eval_ensure_schema(PDO $db): void {
     $db->exec("CREATE TABLE IF NOT EXISTS td_dev_eval (
@@ -86,6 +97,15 @@ function td_dev_eval_ensure_schema(PDO $db): void {
         UNIQUE KEY uq_doc_no (doc_no),
         KEY idx_part (part_d_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='產品開發評估表(2-TD-02-01)-表頭'");
+
+    foreach ([
+        "ALTER TABLE td_dev_eval ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'draft' COMMENT '狀態:draft/submitted/closed' AFTER decision",
+        "ALTER TABLE td_dev_eval ADD COLUMN submit_date DATE NULL COMMENT '送出日(業務日期，僅超管可回改)' AFTER status",
+        "ALTER TABLE td_dev_eval ADD COLUMN submitted_at DATETIME NULL COMMENT '送出精確時間戳' AFTER submit_date",
+        "ALTER TABLE td_dev_eval ADD COLUMN submitted_by INT NULL AFTER submitted_at",
+        "ALTER TABLE td_dev_eval ADD COLUMN submitted_by_name VARCHAR(50) NULL AFTER submitted_by",
+        "ALTER TABLE td_dev_eval ADD COLUMN closed_at DATETIME NULL COMMENT '六部門+生產課決行+總經理決行全部簽完的時間' AFTER submitted_by_name",
+    ] as $ddl) { try { $db->exec($ddl); } catch (Throwable $e) {} }
 
     $db->exec("CREATE TABLE IF NOT EXISTS td_dev_eval_answer (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -117,6 +137,24 @@ function td_dev_eval_ensure_schema(PDO $db): void {
                ->execute([$r[0], $r[1]]);
         }
     }
+
+    // 送出流程為 2026-08-12 新增，既有(此功能上線前建立)的舊資料沒有 submit/status 概念；
+    // 一律回填：已有任何簽核紀錄的舊資料視同已送出（submit_date/submitted_at 用建立時間回推），
+    // 六部門+決行+總經理欄全簽完的視同已結案，避免舊資料在新版介面顯示成「草稿」而無法檢視既有簽核。
+    try {
+        $db->exec("UPDATE td_dev_eval h SET h.status='submitted',
+                        h.submit_date=COALESCE(h.fill_date, DATE(h.created_at)), h.submitted_at=h.created_at,
+                        h.submitted_by=h.created_by, h.submitted_by_name=h.created_by_name
+                    WHERE h.status='draft' AND h.is_deleted=0
+                      AND EXISTS (SELECT 1 FROM td_dev_eval_signoff s WHERE s.doc_id=h.id AND s.signed_by IS NOT NULL)");
+        $totalSlots = count(TD_DEV_EVAL_SLOTS);
+        $st = $db->query("SELECT h.id, MAX(s.signed_at) AS last_signed, COUNT(*) AS c
+                           FROM td_dev_eval h JOIN td_dev_eval_signoff s ON s.doc_id=h.id AND s.signed_by IS NOT NULL
+                           WHERE h.status='submitted' AND h.is_deleted=0 GROUP BY h.id HAVING c>=$totalSlots");
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $db->prepare("UPDATE td_dev_eval SET status='closed', closed_at=? WHERE id=?")->execute([$r['last_signed'], $r['id']]);
+        }
+    } catch (Throwable $e) {}
 }
 
 function td_dev_eval_current_user(PDO $db): ?array {
@@ -198,4 +236,149 @@ function td_dev_eval_slot_pool(PDO $db, string $slotKey, int $docId = 0): array 
     $st->execute([$signerId]);
     $d = $st->fetch(PDO::FETCH_ASSOC);
     return $d ? [['id'=>(int)$d['id'], 'user_cname'=>$d['user_cname'], 'is_deputy'=>true]] : [['id'=>(int)$u['id'], 'user_cname'=>$u['user_cname'], 'is_deputy'=>false]];
+}
+
+/** 某部門簽認欄位負責填寫的項次清單（比對 TEMPLATE 第3欄的評估單位字串是否等於該 slot 的顯示名稱） */
+function td_dev_eval_slot_item_nos(string $slotKey): array {
+    if (!isset(TD_DEV_EVAL_SLOTS[$slotKey])) return [];
+    $label = TD_DEV_EVAL_SLOTS[$slotKey][0];
+    $out = [];
+    foreach (TD_DEV_EVAL_TEMPLATE as $no => $t) if ($t[2] === $label) $out[] = $no;
+    return $out;
+}
+
+/** 通知（比照 review_form 的 rvf_notify 同一套 live_event + push 寫法） */
+function td_dev_eval_notify(PDO $db, int $docId, array $toUids, string $title, string $content, int $fromUid, string $mode = 'sign'): int {
+    $toUids = array_values(array_unique(array_map('intval', $toUids)));
+    if (!$toUids) return 0;
+    try {
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, ?, '產品開發評估表', 1, 'TD_DEV_EVAL', ?)")
+           ->execute([$title, $content, $fromUid, $docId]);
+        $eid = (int)$db->lastInsertId();
+        $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, ?)");
+        foreach ($toUids as $tuid) $ins->execute([$eid, $tuid, $mode]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
+        } catch (Throwable $e) {}
+        return $eid;
+    } catch (Throwable $e) { return 0; }
+}
+
+/** 六個部門類簽認欄位是否全部簽完 */
+function td_dev_eval_dept_slots_done(PDO $db, int $docId): bool {
+    $in = implode(',', array_fill(0, count(TD_DEV_EVAL_DEPT_SLOTS), '?'));
+    $st = $db->prepare("SELECT COUNT(DISTINCT slot_key) FROM td_dev_eval_signoff
+                         WHERE doc_id=? AND signed_by IS NOT NULL AND slot_key IN ($in)");
+    $st->execute(array_merge([$docId], TD_DEV_EVAL_DEPT_SLOTS));
+    return (int)$st->fetchColumn() >= count(TD_DEV_EVAL_DEPT_SLOTS);
+}
+
+/** 某簽核欄位是否已簽 */
+function td_dev_eval_slot_signed(PDO $db, int $docId, string $slotKey): bool {
+    $st = $db->prepare("SELECT 1 FROM td_dev_eval_signoff WHERE doc_id=? AND slot_key=? AND signed_by IS NOT NULL");
+    $st->execute([$docId, $slotKey]);
+    return (bool)$st->fetchColumn();
+}
+
+/**
+ * 剛簽完 $slotKey 之後：判斷是否可以/該通知下一階段，或全部簽完自動結案。
+ * 六部門(任一順序)簽完才能生產課決行；生產課決行完才能總經理決行；總經理簽完自動結案。
+ */
+function td_dev_eval_advance_after_sign(PDO $db, int $docId, string $slotKey, int $fromUid, string $fromName): void {
+    $st = $db->prepare("SELECT doc_no, product_name FROM td_dev_eval WHERE id=?");
+    $st->execute([$docId]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC) ?: ['doc_no'=>'', 'product_name'=>''];
+    $docLabel = '「'.$doc['doc_no'].' '.$doc['product_name'].'」';
+
+    if (in_array($slotKey, TD_DEV_EVAL_DEPT_SLOTS, true)) {
+        if (td_dev_eval_dept_slots_done($db, $docId)) {
+            $pool = td_dev_eval_slot_pool($db, 'prod_decision', $docId);
+            if ($pool) td_dev_eval_notify($db, $docId, array_column($pool, 'id'),
+                '產品開發評估表待您決行', $docLabel.'六部門已全部簽認完成，請進行生產課決行。', $fromUid);
+        }
+        return;
+    }
+    if ($slotKey === 'prod_decision') {
+        $pool = td_dev_eval_slot_pool($db, 'gm', $docId);
+        if ($pool) td_dev_eval_notify($db, $docId, array_column($pool, 'id'),
+            '產品開發評估表待您決行', $docLabel.'生產課已決行，請進行總經理決行。', $fromUid);
+        return;
+    }
+    if ($slotKey === 'gm') {
+        $st = $db->prepare("UPDATE td_dev_eval SET status='closed', closed_at=NOW() WHERE id=?");
+        $st->execute([$docId]);
+        $st = $db->prepare("SELECT submitted_by FROM td_dev_eval WHERE id=?");
+        $st->execute([$docId]);
+        $creator = (int)$st->fetchColumn();
+        if ($creator) td_dev_eval_notify($db, $docId, [$creator],
+            '產品開發評估表已結案', $docLabel.'總經理已決行完成，本表單已結案。', $fromUid, 'read');
+    }
+}
+
+/** 送出：草稿→送出，鎖定表頭，通知六部門開始簽核（2026-08-12新增，比照ai-rules/21業務日期/精確時間戳分離） */
+function td_dev_eval_submit(PDO $db, int $docId, int $uid, string $uname): array {
+    $st = $db->prepare("SELECT * FROM td_dev_eval WHERE id=? AND is_deleted=0");
+    $st->execute([$docId]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) return ['ok'=>false, 'msg'=>'找不到該筆'];
+    if ($doc['status'] !== 'draft') return ['ok'=>false, 'msg'=>'此表單已送出，不可重複送出'];
+    if ($doc['customer_name'] === null || $doc['customer_name'] === '') return ['ok'=>false, 'msg'=>'請先填寫客戶名稱'];
+    if ($doc['product_name'] === null || $doc['product_name'] === '') return ['ok'=>false, 'msg'=>'請先填寫產品名稱'];
+
+    $submitDate = date('Y-m-d');
+    $db->prepare("UPDATE td_dev_eval SET status='submitted', submit_date=?, submitted_at=NOW(),
+                  submitted_by=?, submitted_by_name=? WHERE id=?")->execute([$submitDate, $uid, $uname, $docId]);
+
+    $docLabel = '「'.$doc['doc_no'].' '.$doc['product_name'].'」';
+    foreach (TD_DEV_EVAL_DEPT_SLOTS as $slotKey) {
+        $pool = td_dev_eval_slot_pool($db, $slotKey, $docId);
+        if (!$pool) continue;
+        $label = TD_DEV_EVAL_SLOTS[$slotKey][0];
+        td_dev_eval_notify($db, $docId, array_column($pool, 'id'), '產品開發評估表待您簽核',
+            $docLabel.'已送出，請填寫「'.$label.'」負責的確認項目結果與意見後簽核。', $uid);
+    }
+    return ['ok'=>true];
+}
+
+/**
+ * 超級管理員專用：全部欄位自動簽核（補舊資料用，指定業務日期，不受送出/簽核狀態與分階段卡關限制）。
+ * 若尚未送出會一併補上送出紀錄；每欄簽核人取該欄目前解析池的第一位；時間比照 ai-rules/21——
+ * 跟當天固定基準時刻隨機錯開5~30分鐘、不跨天。
+ */
+function td_dev_eval_admin_auto_sign_all(PDO $db, int $docId, string $bizDate, int $adminUid, string $adminName): array {
+    $st = $db->prepare("SELECT * FROM td_dev_eval WHERE id=? AND is_deleted=0");
+    $st->execute([$docId]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) return ['ok'=>false, 'msg'=>'找不到該筆'];
+    if (empty($doc['decision'])) return ['ok'=>false, 'msg'=>'請先選擇「生產課決行」結果（可行自製/可行委外/再評估/中止）再自動簽核'];
+
+    $db->beginTransaction();
+    try {
+        if ($doc['status'] === 'draft') {
+            $db->prepare("UPDATE td_dev_eval SET status='submitted', submit_date=?, submitted_at=CONCAT(?,' 08:30:00'),
+                          submitted_by=?, submitted_by_name=? WHERE id=?")
+               ->execute([$bizDate, $bizDate, $adminUid, $adminName, $docId]);
+        }
+        $lastSignedAt = null;
+        foreach (array_keys(TD_DEV_EVAL_SLOTS) as $slotKey) {
+            if (td_dev_eval_slot_signed($db, $docId, $slotKey)) continue;
+            $pool = td_dev_eval_slot_pool($db, $slotKey, $docId);
+            $signerId = $pool ? (int)$pool[0]['id'] : null;
+            $signerName = $pool ? $pool[0]['user_cname'] : null;
+            if (!$signerName) { $signerId = $adminUid; $signerName = $adminName; }
+            $offsetMin = random_int(5, 30);
+            $st = $db->prepare("INSERT INTO td_dev_eval_signoff (doc_id, slot_key, signed_by, signed_by_name, signed_at, is_backfill, backfill_by_name)
+                VALUES (?,?,?,?, LEAST(DATE_ADD(CONCAT(?,' 08:30:00'), INTERVAL ? MINUTE), CONCAT(?,' 23:59:59')), 1, ?)
+                ON DUPLICATE KEY UPDATE signed_by=VALUES(signed_by), signed_by_name=VALUES(signed_by_name),
+                    signed_at=VALUES(signed_at), is_backfill=1, backfill_by_name=VALUES(backfill_by_name)");
+            $st->execute([$docId, $slotKey, $signerId, $signerName, $bizDate, $offsetMin, $bizDate, $adminName]);
+            $lastSignedAt = $bizDate;
+        }
+        $db->prepare("UPDATE td_dev_eval SET status='closed', closed_at=CONCAT(?,' 23:59:00') WHERE id=?")
+           ->execute([$bizDate, $docId]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); return ['ok'=>false, 'msg'=>'自動簽核失敗：'.$e->getMessage()]; }
+    return ['ok'=>true];
 }
