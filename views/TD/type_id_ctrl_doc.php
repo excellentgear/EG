@@ -1,9 +1,12 @@
 <?php
 /**
  * 型態識別文件管制表
- * 每個料號一份「型態配置」清單：原圖/報價單/加工圖/產品開發評估表/PFMEA/檢驗報告…等定義該料號
- * 目前狀態的文件，逐列記錄型態項目/生效日期/類別/版別文件編號；可連結「外來文件清單」既有附件
- * （即時查詢顯示，不落地快照，來源更新這裡就跟著變——使用者 2026-08-11 明確拍板）。
+ * 每個料號「一份」型態配置清單（2026-08-12 使用者拍板改版，原本一個料號×一種製程各開一份，
+ * 造成同一張共用圖面在多份管制表重複出現）：逐列記錄定義該料號目前狀態的文件（原圖/報價單/
+ * 加工圖/產品開發評估表/PFMEA/檢驗報告…），每一列自己標記「所屬製程」——來源可辨識出製程的
+ * （報價附件對應到的報價項目有勾選製程）自動帶入，共用文件（如原圖，或無法辨識製程來源的
+ * 料號附件）留空即代表適用全部製程；標籤可手動修改或清空。
+ * 可連結「外來文件清單」既有附件（即時查詢顯示，不落地快照，來源更新這裡就跟著變）。
  * 本頁自身的 AS 文件編號一律走 asdoc_lib 動態綁定顯示（管理員於「AS文件綁定」設定），
  * 不可寫死——填寫範本檔名裡的 RTD630EC0A00 其實是範本內的「產品編號」欄位值，不是本表編號，
  * 2026-08-11 使用者發現先前誤植後修正，往後也不要再從檔名反推 AS 編號。
@@ -166,10 +169,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <div class="ic-table-wrap">
             <table class="ic-table" id="icTable">
                 <thead><tr>
-                    <th>文件編號</th><th>客戶</th><th>產品編號(料號)</th><th>製程</th><th>確認狀態</th>
+                    <th>文件編號</th><th>客戶</th><th>產品編號(料號)</th><th>確認狀態</th>
                     <th>建立人</th><th>建立時間</th><th>操作</th>
                 </tr></thead>
-                <tbody id="icBody"><tr><td colspan="8" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="icBody"><tr><td colspan="7" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
 <?php endif; ?>
@@ -181,7 +184,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
 <div class="ic-mask" id="editMask"><div class="ic-modal xwide">
     <div class="m-head"><span id="editTitle">型態識別文件管制表</span><span class="m-close" onclick="closeMask('editMask')">✕</span></div>
     <div class="m-body">
-        <div class="ic-head-grid">
+        <div class="ic-head-grid" style="grid-template-columns:1fr 1fr;">
             <div>
                 <label>產品編號(料號) <span style="color:#DD5138;">*</span></label>
                 <input type="text" id="fPartNo" placeholder="輸入部分料號或圖號即可搜尋" autocomplete="off">
@@ -191,13 +194,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
                 <label>客戶</label>
                 <input type="text" id="fCustomerName" readonly data-eg-skip="1">
                 <input type="hidden" id="fCustomerId" value="">
-            </div>
-            <div>
-                <label>製程</label>
-                <div class="ic-part-box">
-                    <input type="text" id="fProcess" placeholder="例：滾齒至成品">
-                    <button type="button" class="ic-row-btn" id="btnPullProcess" title="從此料號與客戶的訂單製程帶入"><i class="fa fa-download"></i> 訂單帶入</button>
-                </div>
             </div>
         </div>
         <div style="margin-top:6px;font-size:12px;color:#8a6d45;">文件編號：<b id="fDocNo">存檔後自動產生</b>
@@ -214,9 +210,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <thead><tr>
                 <th style="width:20px;"></th>
                 <th style="width:26px;">項次</th>
-                <th style="width:15%;">型態項目名稱</th>
-                <th style="width:11%;">型態生效日期</th>
-                <th style="width:11%;">型態類別</th>
+                <th style="width:13%;">型態項目名稱</th>
+                <th style="width:10%;">型態生效日期</th>
+                <th style="width:9%;">型態類別</th>
+                <th style="width:12%;">所屬製程</th>
                 <th>版別／文件編號</th>
                 <th class="op">操作</th>
             </tr></thead>
@@ -225,7 +222,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <div style="margin-top:6px;">
             <button type="button" class="ic-row-btn" onclick="icAddRow()"><i class="fa fa-plus"></i> 新增一列</button>
         </div>
-        <div class="tip" style="margin-top:8px;">選定產品編號(料號)後會自動列出「外來文件清單」中此料號的附件（拖曳列前的 <i class="fa fa-ellipsis-v"></i> 可調整順序，項次自動重編）；這些自動列出的列用「納入」勾選框決定是否套用到本製程文件，取消勾選＝人工確認此文件不適用本製程（例如齒研治具圖片不需連結到滾齒製程的文件），不會被之後的同步再次加回。手動新增的列可按「選外來文件」自行連結，或直接手動輸入版別／文件編號。</div>
+        <div class="tip" style="margin-top:8px;">選定產品編號(料號)後會自動列出「外來文件清單」中此料號的附件（拖曳列前的 <i class="fa fa-ellipsis-v"></i> 可調整順序，項次自動重編）；「所屬製程」欄能辨識來源（報價附件對應到有勾選製程的報價項目）時會自動帶入，共用文件（如原圖，或無法辨識製程來源）留空即代表適用全部製程，可手動修改或清空。這些自動列出的列用「納入」勾選框決定是否套用，取消勾選＝人工確認此文件不適用，不會被之後的同步再次加回。手動新增的列可按「選外來文件」自行連結，或直接手動輸入版別／文件編號。</div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('editMask')">取消</button>
@@ -246,9 +243,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('extMask')">取消</button></div>
 </div></div>
 
-<!-- 從訂單製程挑選（此料號×客戶的訂單有多種不同製程紀錄時） -->
+<!-- 從訂單/報價製程挑選（此料號有多種不同製程紀錄時，供項目列「所屬製程」欄快速挑選） -->
 <div class="ic-mask" id="procMask" style="z-index:1200;"><div class="ic-modal">
-    <div class="m-head"><span>此料號與客戶的訂單製程</span><span class="m-close" onclick="closeMask('procMask')">✕</span></div>
+    <div class="m-head"><span>此料號的訂單/報價製程</span><span class="m-close" onclick="closeMask('procMask')">✕</span></div>
     <div class="m-body"><div id="procList"></div></div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('procMask')">取消</button></div>
 </div></div>
@@ -311,15 +308,20 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     <div class="m-head"><span><i class="fa fa-question-circle"></i> 型態識別文件管制表 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc">
         <h4>功能說明</h4>
-        <p>每個料號、每種製程各建一份「型態識別文件管制表」，逐列記錄目前定義該料號該製程狀態的文件（原圖、報價單、加工圖、產品開發評估表、PFMEA、檢驗報告…），用來追溯「這個料號現在的配置由哪些文件定義」。項目列以「外來文件清單」為主要來源，可自動產生／同步，也可以手動增加。</p>
+        <p><b>每個料號建立一份</b>「型態識別文件管制表」，逐列記錄目前定義該料號狀態的文件（原圖、報價單、加工圖、產品開發評估表、PFMEA、檢驗報告…），用來追溯「這個料號現在的配置由哪些文件定義」。項目列以「外來文件清單」為主要來源，可自動產生／同步，也可以手動增加。</p>
+        <h4>所屬製程（同一張圖若多個製程共用，不會重複列出）</h4>
+        <ul>
+            <li>每一列項目可標記「所屬製程」：來源是報價附件、且能對應到<b>有勾選製程</b>的報價項目時，系統會自動帶入該製程（可手動修改或清空）；無法辨識來源製程的文件（例如料號附件、或不特定的共用圖面如原圖）留空，代表<b>適用全部製程</b>，不會特別標記。</li>
+            <li>找不到需要的製程文字時，按欄位旁的 <i class="fa fa-list"></i> 從此料號的訂單/報價紀錄挑選。</li>
+        </ul>
         <h4>兩種建立方式</h4>
         <ul>
-            <li><b>自動產生／同步（推薦）</b>：工具列輸入料號→按「自動產生/同步」，系統依此料號的訂單與報價單製程記錄，<b>每種製程各自動建立(或更新)一份</b>，並把外來文件清單中此料號的所有附件同步進項目列。之後每次執行都是「同步」：新出現的外來文件會被加入、已確認過的文件會被改成「需重新確認」提醒覆核。</li>
-            <li><b>新增（手動）</b>：按「新增」→ 選擇「產品編號(料號)」（打部分字元直接搜尋，不需先點按鈕；選定後自動帶出客戶、外來文件清單中此料號的資料也會自動列出），自行填「製程」，可再用「新增一列」手動加項目，或用列上的「選外來文件」挑選既有附件連結。</li>
+            <li><b>自動產生／同步（推薦）</b>：工具列輸入料號→按「同步」（或用「掃描待建立料號」批次列出所有還沒建立的料號，一鍵全部建立），系統把外來文件清單中此料號的所有附件同步進項目列，每列依來源自動帶入所屬製程。之後每次執行都是「同步」：新出現的外來文件會被加入、已確認過的清單會被改成「需重新確認」提醒覆核。</li>
+            <li><b>新增（手動）</b>：按「新增」→ 選擇「產品編號(料號)」（打部分字元直接搜尋，不需先點按鈕；選定後自動帶出客戶、外來文件清單中此料號的資料也會自動列出），可再用「新增一列」手動加項目，或用列上的「選外來文件」挑選既有附件連結。</li>
         </ul>
-        <h4>人工確認（審查是否有文件不適用此製程）</h4>
+        <h4>人工確認（審查是否有文件不適用）</h4>
         <ul>
-            <li>自動列出的項目預設「納入」（打勾）；若某份外來文件其實不適用這個製程（例如齒研治具圖片不需連結到滾齒製程的文件），把「納入」勾選框取消即可——會記為<b>已排除</b>，之後同步不會再自動加回來。</li>
+            <li>自動列出的項目預設「納入」（打勾）；若某份文件其實不該出現在此清單，把「納入」勾選框取消即可——會記為<b>已排除</b>，之後同步不會再自動加回來。</li>
             <li>逐項確認後按「確認清單」：記錄確認人與確認時間，狀態變成「已確認」；製表人／簽章日期即取這次確認人與清單上最新的文件日期。</li>
             <li>之後只要有新的外來文件同步進來，「已確認」會自動變回「需重新確認」，提醒重新逐項審視。清單上方「狀態」篩選可分別看「待確認／需重新確認／已確認」。</li>
         </ul>
@@ -368,15 +370,14 @@ function statusBadge(status, label){ return '<span class="ic-status '+(STATUS_CL
 /* ---------- 清單 ---------- */
 function loadList(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||'', status:$('#statusFilter').val()||''}, function(res){
-        if (!res.success){ $('#icBody').html('<tr><td colspan="8" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
-        if (!res.rows.length){ $('#icBody').html('<tr><td colspan="8" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
+        if (!res.success){ $('#icBody').html('<tr><td colspan="7" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
+        if (!res.rows.length){ $('#icBody').html('<tr><td colspan="7" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
         var html = '';
         res.rows.forEach(function(r){
             html += '<tr>'
                 + '<td>'+esc(r.doc_no)+'</td>'
                 + '<td>'+esc(r.customer_name||r.customer_id||'')+'</td>'
                 + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):esc(r.part_no))+'</td>'
-                + '<td>'+esc(r.process_desc||'')+'</td>'
                 + '<td>'+statusBadge(r.review_status, r.review_status_label)+'</td>'
                 + '<td>'+esc(r.created_by_name||'')+'</td>'
                 + '<td>'+fmtDate((r.created_at||'').substring(0,10))+'</td>'
@@ -395,9 +396,9 @@ $('#statusFilter').on('change', loadList);
 $('#btnCsv').on('click', function(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||'', status:$('#statusFilter').val()||''}, function(res){
         if (!res.success) return;
-        var lines = ['文件編號,客戶,產品編號,製程,確認狀態,建立人,建立時間'];
+        var lines = ['文件編號,客戶,產品編號,確認狀態,建立人,建立時間'];
         res.rows.forEach(function(r){
-            lines.push([r.doc_no, r.customer_name||r.customer_id||'', r.part_no||'', r.process_desc||'', r.review_status_label||'', r.created_by_name||'', (r.created_at||'').substring(0,10)]
+            lines.push([r.doc_no, r.customer_name||r.customer_id||'', r.part_no||'', r.review_status_label||'', r.created_by_name||'', (r.created_at||'').substring(0,10)]
                 .map(function(v){ return '"'+String(v).replace(/"/g,'""')+'"'; }).join(','));
         });
         var blob = new Blob(["\uFEFF"+lines.join("\n")], {type:'text/csv;charset=utf-8;'});
@@ -417,7 +418,7 @@ $('#btnSyncPart').on('click', function(){
     if (!syncPartDId){ alert('請先從清單中選擇一個料號'); return; }
     $.post(API, {action:'sync_part', part_d_id:syncPartDId}, function(res){
         if (!res.success){ alert(res.message||'同步失敗'); return; }
-        alert('已同步：新建 '+res.created+' 份、更新 '+res.updated+' 份型態識別文件管制表');
+        alert((res.is_new ? '已建立新的型態識別文件管制表' : '已同步既有型態識別文件管制表')+'，新增 '+res.added_count+' 筆項目');
         $('#syncPartNo').val(''); syncPartDId = 0;
         loadList();
     }, 'json');
@@ -449,7 +450,7 @@ function buildAllMissing(){
     $.post(API, {action:'sync_all_missing', part_ids: JSON.stringify(ids)}, function(res){
         $('#btnBuildAll').prop('disabled', false).html('<i class="fa fa-magic"></i> 一鍵建立全部');
         if (!res.success){ alert(res.message||'建立失敗'); return; }
-        alert('已建立：'+res.part_count+' 個料號，共 '+res.doc_count+' 份型態識別文件管制表');
+        alert('已處理 '+res.part_count+' 個料號，共新增 '+res.item_count+' 筆項目');
         closeMask('missingMask');
         loadList();
     }, 'json');
@@ -459,7 +460,7 @@ function buildAllMissing(){
 function resetEditForm(){
     CUR_ID = 0; ITEMS = [];
     $('#fPartNo').val(''); $('#fPartDId').val('0'); $('#fCustomerName').val(''); $('#fCustomerId').val('');
-    $('#fProcess').val(''); $('#fDocNo').text('存檔後自動產生'); $('#fCreatedInfo').text('—');
+    $('#fDocNo').text('存檔後自動產生'); $('#fCreatedInfo').text('—');
     $('#fEarliestDate').text('—'); $('#fLatestDate').text('—');
     $('#fReviewBadge').attr('class','ic-status st-pending').text('待確認'); $('#fConfirmedInfo').text('');
     $('#itemBody').empty();
@@ -473,7 +474,6 @@ function openEdit(id){
         CUR_ID = id;
         $('#fPartNo').val(res.doc.part_no||''); $('#fPartDId').val(res.doc.part_d_id||0);
         $('#fCustomerName').val(res.doc.customer_name||''); $('#fCustomerId').val(res.doc.customer_id||'');
-        $('#fProcess').val(res.doc.process_desc||'');
         $('#fDocNo').text(res.doc.doc_no);
         $('#fCreatedInfo').text((res.doc.created_by_name||'')+' '+fmtDate((res.doc.created_at||'').substring(0,10)));
         $('#fEarliestDate').text(res.doc_date_earliest ? fmtDate(res.doc_date_earliest) : '—');
@@ -505,23 +505,29 @@ EGPartPicker.attach(document.getElementById('fPartNo'), {
 // 直接打字修改料號文字但沒有從清單點選＝視同尚未選定有效料號，清空 d_id 避免存到舊選取值
 $('#fPartNo').on('input', function(){ $('#fPartDId').val('0'); $('#fCustomerName').val(''); $('#fCustomerId').val(''); });
 
-$('#btnPullProcess').on('click', function(){
-    var dId = $('#fPartDId').val(), custId = $('#fCustomerId').val();
+function pickProcessForRow(btn){
+    var dId = $('#fPartDId').val();
     if (!dId || dId === '0'){ alert('請先選擇產品編號(料號)'); return; }
-    $.post(API, {action:'get_order_process', part_d_id:dId, customer_id:custId}, function(res){
+    var $tr = $(btn).closest('tr');
+    $.post(API, {action:'get_order_process', part_d_id:dId}, function(res){
         if (!res.success){ alert(res.message||'查詢失敗'); return; }
-        if (!res.rows.length){ alert('查無此料號與客戶的訂單製程紀錄'); return; }
-        if (res.rows.length === 1){ $('#fProcess').val(res.rows[0].process); return; }
+        if (!res.rows.length){ alert('查無此料號的訂單/報價製程紀錄'); return; }
+        if (res.rows.length === 1){ $tr.find('.f-proc').val(res.rows[0].process); return; }
         var html = '';
         res.rows.forEach(function(r, i){
-            html += '<div class="eg-pp-item" style="padding:6px 9px;border-bottom:1px solid #F3E9D6;cursor:pointer;" onclick="$(\'#fProcess\').val(window._procRows['+i+'].process); closeMask(\'procMask\');">'
+            html += '<div class="eg-pp-item" style="padding:6px 9px;border-bottom:1px solid #F3E9D6;cursor:pointer;" onclick="applyProcessToRow('+i+');">'
                 + '<b>'+esc(r.process)+'</b><span style="color:#8a6d45;font-size:11px;margin-left:8px;">'+esc(r.order_oo)+'／'+fmtDate(r.order_date)+'</span></div>';
         });
         $('#procList').html(html);
         window._procRows = res.rows;
+        window._procTarget = $tr;
         openMask('procMask');
     }, 'json');
-});
+}
+window.applyProcessToRow = function(i){
+    if (window._procTarget) window._procTarget.find('.f-proc').val(window._procRows[i].process);
+    closeMask('procMask');
+};
 
 function itemRowHtml(it, idx){
     var linked = it.is_linked;
@@ -529,6 +535,8 @@ function itemRowHtml(it, idx){
     var typeOpts = TYPE_OPTS.map(function(t){ return '<option value="'+t[0]+'"'+(it.item_type===t[0]?' selected':'')+'>'+t[1]+'</option>'; }).join('');
     var linkBadge = linked ? '<span class="ic-link-badge"><i class="fa fa-link"></i> 外來文件</span>' : (it.ref_broken ? '<span class="ic-broken-badge">來源已消失</span>' : '');
     var docNoCell = '<input type="text" class="f-docno" value="'+esc(it.doc_no_text||'')+'"'+(linked?' disabled':'')+' placeholder="版別／文件編號">';
+    var procCell = '<div class="ic-part-box"><input type="text" class="f-proc" value="'+esc(it.process_tag||'')+'" placeholder="共用(空白)">'
+        + '<button type="button" class="ic-row-btn" onclick="pickProcessForRow(this)" title="從此料號的訂單/報價製程挑選"><i class="fa fa-list"></i></button></div>';
     var opCell = linked
         ? '<label class="ic-chk"><input type="checkbox" class="f-included"'+(excluded?'':' checked')+' onchange="toggleExcluded(this)"> 納入</label>'
           + (it.file_url ? ' <a href="'+esc(it.file_url)+'" target="_blank" title="檢視檔案"><i class="fa fa-external-link"></i></a>' : '')
@@ -540,6 +548,7 @@ function itemRowHtml(it, idx){
         + '<td><input type="text" class="f-name" value="'+esc(it.item_name||'')+'" placeholder="型態項目名稱"></td>'
         + '<td><input type="date" class="f-date" value="'+esc(it.effective_date||'')+'"'+(linked?' disabled':'')+'></td>'
         + '<td><select class="f-type">'+typeOpts+'</select></td>'
+        + '<td>'+procCell+'</td>'
         + '<td>'+docNoCell+' '+linkBadge+'</td>'
         + '<td class="op">'+opCell+'</td>'
         + '</tr>';
@@ -578,7 +587,7 @@ $('#itemBody').on('drop', 'tr', function(e){
 $('#itemBody').on('dragend', 'tr', function(){ dragSrcRow = null; $('#itemBody tr').removeClass('drag-over'); });
 
 window.icAddRow = function(){
-    var blank = {id:0, item_name:'', item_type:'other', effective_date:'', doc_no_text:'', is_linked:false, is_excluded:false, ref_source:null, ref_attach_id:null, ref_ds_pk:null};
+    var blank = {id:0, item_name:'', item_type:'other', process_tag:'', effective_date:'', doc_no_text:'', is_linked:false, is_excluded:false, ref_source:null, ref_attach_id:null, ref_ds_pk:null};
     $('#itemBody').append(itemRowHtml(blank, $('#itemBody tr').length));
     renumberRows();
     return true;
@@ -625,6 +634,7 @@ function collectRow($tr){
         id: parseInt($tr.attr('data-id'),10) || 0,
         item_name: $tr.find('.f-name').val(),
         item_type: $tr.find('.f-type').val(),
+        process_tag: $tr.find('.f-proc').val(),
         effective_date: $tr.find('.f-date').val(),
         doc_no_text: $tr.find('.f-docno').val(),
         is_linked: linked,
@@ -642,7 +652,7 @@ function saveAll(confirm){
     $('#itemBody tr').each(function(){
         var it = collectRow($(this));
         var payload = {
-            id: it.id, item_name: it.item_name, item_type: it.item_type,
+            id: it.id, item_name: it.item_name, item_type: it.item_type, process_tag: it.process_tag,
             ref_source: it.is_linked ? it.ref_source : '',
             ref_attach_id: it.is_linked ? it.ref_attach_id : 0,
             ref_ds_pk: it.is_linked ? it.ref_ds_pk : 0,
@@ -654,7 +664,7 @@ function saveAll(confirm){
     });
     $.post(API, {
         action: 'save_all', id: CUR_ID, customer_id: $('#fCustomerId').val(), part_d_id: partDId,
-        process_desc: $('#fProcess').val(), items: JSON.stringify(items), confirm: confirm ? 1 : 0
+        items: JSON.stringify(items), confirm: confirm ? 1 : 0
     }, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); return; }
         closeMask('editMask'); loadList();
@@ -679,11 +689,11 @@ function printDoc(id){
         var activeItems = (res.items||[]).filter(function(it){ return !it.is_excluded; });
         var body = '<div class="p-comp">'+esc(res.company_name)+'</div>'
             + '<div class="p-title">'+esc(res.as_doc_name)+'</div>'
-            + '<table class="p-hd"><tr><td>客戶</td><td>'+esc(d.customer_name||'')+'</td><td>製程</td><td>'+esc(d.process_desc||'')+'</td></tr>'
-            + '<tr><td>產品編號</td><td>'+esc(d.part_no||'')+'</td><td>建立日期</td><td>'+(res.doc_date_earliest?fmtDate(res.doc_date_earliest):'')+'</td></tr></table>'
-            + '<table class="p-tb"><thead><tr><th style="width:26px;">項次</th><th>型態項目名稱</th><th style="width:90px;">型態生效日期</th><th style="width:70px;">型態類別</th><th>版別／文件編號</th></tr></thead><tbody>';
+            + '<table class="p-hd"><tr><td>客戶</td><td>'+esc(d.customer_name||'')+'</td><td>產品編號</td><td>'+esc(d.part_no||'')+'</td></tr>'
+            + '<tr><td>建立日期</td><td colspan="3">'+(res.doc_date_earliest?fmtDate(res.doc_date_earliest):'')+'</td></tr></table>'
+            + '<table class="p-tb"><thead><tr><th style="width:26px;">項次</th><th>型態項目名稱</th><th style="width:85px;">型態生效日期</th><th style="width:65px;">型態類別</th><th style="width:90px;">所屬製程</th><th>版別／文件編號</th></tr></thead><tbody>';
         activeItems.forEach(function(it, i){
-            body += '<tr><td>'+(i+1)+'</td><td class="tl">'+esc(it.item_name)+'</td><td>'+fmtDate(it.effective_date)+'</td><td>'+(typeLabel[it.item_type]||'')+'</td><td class="tl">'+esc(it.doc_no_text||'')+'</td></tr>';
+            body += '<tr><td>'+(i+1)+'</td><td class="tl">'+esc(it.item_name)+'</td><td>'+fmtDate(it.effective_date)+'</td><td>'+(typeLabel[it.item_type]||'')+'</td><td>'+esc(it.process_tag||'共用')+'</td><td class="tl">'+esc(it.doc_no_text||'')+'</td></tr>';
         });
         body += '</tbody></table>';
         var makerName = d.confirmed_by_name || '';

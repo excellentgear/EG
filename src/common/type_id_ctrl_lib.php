@@ -60,6 +60,10 @@ function type_id_ctrl_ensure_schema(PDO $db): void {
         // is_own_drawing(自家出的圖)/is_external_doc(外來文件清單) 兩個既有旗標，這裡加第三個獨立旗標，
         // 讓管理員從「自家出的圖」的類別中，另外勾選哪些也要納入本模組（設定入口在本頁，不是主檔管理頁）。
         "ALTER TABLE quotation_file_categories ADD COLUMN type_id_ctrl_include TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否納入型態識別文件管制表(僅對is_own_drawing=1的類別有意義)'",
+        // 架構改版（2026-08-12 使用者拍板）：原本「一料號一製程一份」造成同一張共用圖面在多份管制表
+        // 重複出現，改成「一料號一份」，製程改記在每一列項目上（共用文件留空＝適用全部製程）。
+        // process_desc 欄位保留但不再是尋找/建立表頭的鍵值，僅作歷史相容用途，新資料不寫入。
+        "ALTER TABLE type_id_ctrl_item ADD COLUMN process_tag VARCHAR(200) NULL COMMENT '所屬製程(空=共用/適用全部製程)，自動由報價項目製程推導，可手動修改或清空' AFTER item_type",
     ] as $alter) {
         try { $db->exec($alter); } catch (Throwable $e) {}
     }
@@ -187,9 +191,11 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
     };
     $rows = [];
 
+    // 料號附件：無製程資訊(本來就與特定製程無關的共用文件，如原圖)，origin_process 一律 NULL
     $sql = "SELECT pa.id AS attach_id, pa.d_id AS ds_pk,
                    COALESCE(NULLIF(pa.original_name,''), pa.filename) AS doc_name,
-                   DATE(pa.uploaded_at) AS doc_date, pa.category_ids, '' AS category_id_single
+                   DATE(pa.uploaded_at) AS doc_date, pa.category_ids, '' AS category_id_single,
+                   NULL AS origin_process
             FROM part_attachments pa
             WHERE pa.d_id=? AND pa.deleted_at IS NULL AND " . $catCond('pa.category_ids');
     $st = $db->prepare($sql); $st->execute([$dsPk]);
@@ -199,15 +205,25 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
     $st->execute([$dsPk]);
     $partNo = (string)$st->fetchColumn();
     if ($partNo !== '') {
+        // 報價附件：若能對應到「此料號在同一張報價單的報價項目」，用該項目勾選的製程(quotation_item_process_map)
+        // 當作 origin_process 自動帶入（可手動修改/清空）；對應不到就是共用文件，維持 NULL 不顯示製程
+        // （2026-08-12 使用者要求：相同附件被多份共用時不特定標記某製程）。
         $sql = "SELECT DISTINCT a.id AS attach_id, ? AS ds_pk,
                        COALESCE(NULLIF(a.original_name,''), a.filename) AS doc_name,
-                       DATE(a.uploaded_at) AS doc_date, a.category_ids, COALESCE(a.category_id,'') AS category_id_single
+                       DATE(a.uploaded_at) AS doc_date, a.category_ids, COALESCE(a.category_id,'') AS category_id_single,
+                       (SELECT GROUP_CONCAT(DISTINCT pn.ProcessName ORDER BY pn.ProcessName SEPARATOR '+')
+                        FROM quotation_item qi3
+                        JOIN quotation_item_process_map m3 ON m3.quotation_item_id = qi3.item_id
+                        JOIN process_no pn ON pn.ProcessNo = m3.process_no
+                        WHERE qi3.quote_id = (SELECT quote_id FROM quotation_list WHERE quote_no=a.quote_no)
+                          AND qi3.d_setting_d_id = ?
+                       ) AS origin_process
                 FROM quotation_attachments a
                 JOIN quotation_item qi ON qi.quote_id = (SELECT quote_id FROM quotation_list WHERE quote_no=a.quote_no)
                 WHERE a.status='active' AND " . $catCond('a.category_ids', 'a.category_id') . "
                   AND ((a.linked_parts IS NULL AND qi.d_setting_d_id = ?)
                        OR (a.linked_parts IS NOT NULL AND JSON_CONTAINS(a.linked_parts, JSON_QUOTE(?))))";
-        $st = $db->prepare($sql); $st->execute([$dsPk, $dsPk, $partNo]);
+        $st = $db->prepare($sql); $st->execute([$dsPk, $dsPk, $dsPk, $partNo]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { $r['source'] = 'quote'; $rows[] = $r; }
     }
 
@@ -234,7 +250,7 @@ function type_id_ctrl_find_missing_parts(PDO $db): array {
     $existing = $db->query("SELECT DISTINCT part_d_id FROM type_id_ctrl_doc WHERE is_deleted=0 AND part_d_id IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
     $existingSet = array_flip(array_map('intval', $existing));
 
-    $cats = $db->query("SELECT id FROM quotation_file_categories WHERE is_external_doc=1")->fetchAll(PDO::FETCH_COLUMN);
+    $cats = $db->query("SELECT id FROM quotation_file_categories WHERE is_external_doc=1 OR type_id_ctrl_include=1")->fetchAll(PDO::FETCH_COLUMN);
     if (!$cats) return [];
     $catCond = function (string $col, string $singleCol = '') use ($cats): string {
         $parts = [];
@@ -318,63 +334,58 @@ function type_id_ctrl_process_candidates(PDO $db, int $dsPk): array {
 }
 
 /**
- * 依料號自動產生/同步型態識別文件管制表：每個不同製程各建一份(找不到就建立)，
- * 把此料號目前所有外來文件清單附件同步進每一份的項目列（已存在的 ref 不重複新增，
- * 已排除/已刪除的也不會被復活）；若該份先前已「已確認」又同步進新項目，狀態改回「需重新確認」。
- * 回傳受影響的 doc id 陣列。
+ * 依料號自動產生/同步型態識別文件管制表：每個料號一份(找不到就建立)，把此料號目前所有外來文件
+ * 附件同步進項目列（已存在的 ref 不重複新增，已排除/已刪除的也不會被復活）；每一列的「所屬製程」
+ * 自動由該文件originating報價項目的製程推導(共用文件留空)；若先前已「已確認」又同步進新項目，
+ * 狀態改回「需重新確認」。回傳 [doc_id, is_new, added_count]（2026-08-12 使用者拍板改一料號一份）。
  */
 function type_id_ctrl_sync_part(PDO $db, int $dsPk): array {
     $st = $db->prepare("SELECT Customer_Id FROM d_setting WHERE d_id=?");
     $st->execute([$dsPk]);
     $customerId = $st->fetchColumn();
-    if ($customerId === false) return [];
+    if ($customerId === false) return ['doc_id'=>0,'is_new'=>false,'added_count'=>0];
 
-    $processes = type_id_ctrl_process_candidates($db, $dsPk);
-    if (!$processes) $processes = [['process' => '(未指定製程)']];
     $extRows = type_id_ctrl_fetch_ext_docs_for_part($db, $dsPk);
 
-    $affected = [];
-    foreach ($processes as $p) {
-        $proc = $p['process'];
-        $st = $db->prepare("SELECT id, review_status FROM type_id_ctrl_doc WHERE part_d_id=? AND process_desc=? AND is_deleted=0 LIMIT 1");
-        $st->execute([$dsPk, $proc]);
-        $doc = $st->fetch(PDO::FETCH_ASSOC);
-        if ($doc) {
-            $docId = (int)$doc['id'];
-        } else {
-            $docNo = type_id_ctrl_next_doc_no($db);
-            $st = $db->prepare("INSERT INTO type_id_ctrl_doc (doc_no, customer_id, part_d_id, process_desc, created_by_name, review_status)
-                                 VALUES (?,?,?,?,?,'pending')");
-            $st->execute([$docNo, $customerId, $dsPk, $proc, '系統自動同步']);
-            $docId = (int)$db->lastInsertId();
-        }
-
-        $st = $db->prepare("SELECT ref_source, ref_attach_id, ref_ds_pk FROM type_id_ctrl_item WHERE doc_id=? AND ref_source IS NOT NULL");
-        $st->execute([$docId]);
-        $existingKeys = [];
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $existingKeys[$r['ref_source'] . '|' . $r['ref_attach_id'] . '|' . $r['ref_ds_pk']] = true;
-
-        $st = $db->prepare("SELECT COALESCE(MAX(seq),0) FROM type_id_ctrl_item WHERE doc_id=?");
-        $st->execute([$docId]);
-        $seq = (int)$st->fetchColumn();
-
-        $addedAny = false;
-        foreach ($extRows as $er) {
-            $key = $er['source'] . '|' . $er['attach_id'] . '|' . $er['ds_pk'];
-            if (isset($existingKeys[$key])) continue;
-            $seq++;
-            [$guessType] = [type_id_ctrl_guess_type($er['categories'] ?? [])];
-            $itemName = !empty($er['categories']) ? $er['categories'][0] : $er['doc_name'];
-            $st = $db->prepare("INSERT INTO type_id_ctrl_item (doc_id, seq, item_name, item_type, ref_source, ref_attach_id, ref_ds_pk)
-                                 VALUES (?,?,?,?,?,?,?)");
-            $st->execute([$docId, $seq, $itemName, $guessType, $er['source'], $er['attach_id'], $er['ds_pk']]);
-            $addedAny = true;
-        }
-
-        if ($addedAny && $doc && $doc['review_status'] === 'confirmed') {
-            $db->prepare("UPDATE type_id_ctrl_doc SET review_status='needs_recheck' WHERE id=?")->execute([$docId]);
-        }
-        $affected[] = $docId;
+    $st = $db->prepare("SELECT id, review_status FROM type_id_ctrl_doc WHERE part_d_id=? AND is_deleted=0 ORDER BY id LIMIT 1");
+    $st->execute([$dsPk]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC);
+    $isNew = !$doc;
+    if ($doc) {
+        $docId = (int)$doc['id'];
+    } else {
+        $docNo = type_id_ctrl_next_doc_no($db);
+        $st = $db->prepare("INSERT INTO type_id_ctrl_doc (doc_no, customer_id, part_d_id, created_by_name, review_status)
+                             VALUES (?,?,?,?,'pending')");
+        $st->execute([$docNo, $customerId, $dsPk, '系統自動同步']);
+        $docId = (int)$db->lastInsertId();
     }
-    return $affected;
+
+    $st = $db->prepare("SELECT ref_source, ref_attach_id, ref_ds_pk FROM type_id_ctrl_item WHERE doc_id=? AND ref_source IS NOT NULL");
+    $st->execute([$docId]);
+    $existingKeys = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $existingKeys[$r['ref_source'] . '|' . $r['ref_attach_id'] . '|' . $r['ref_ds_pk']] = true;
+
+    $st = $db->prepare("SELECT COALESCE(MAX(seq),0) FROM type_id_ctrl_item WHERE doc_id=?");
+    $st->execute([$docId]);
+    $seq = (int)$st->fetchColumn();
+
+    $addedCount = 0;
+    foreach ($extRows as $er) {
+        $key = $er['source'] . '|' . $er['attach_id'] . '|' . $er['ds_pk'];
+        if (isset($existingKeys[$key])) continue;
+        $seq++;
+        $guessType = type_id_ctrl_guess_type($er['categories'] ?? []);
+        $itemName = !empty($er['categories']) ? $er['categories'][0] : $er['doc_name'];
+        $originProcess = $er['origin_process'] ?? null;
+        $st = $db->prepare("INSERT INTO type_id_ctrl_item (doc_id, seq, item_name, item_type, process_tag, ref_source, ref_attach_id, ref_ds_pk)
+                             VALUES (?,?,?,?,?,?,?,?)");
+        $st->execute([$docId, $seq, $itemName, $guessType, ($originProcess !== '' ? $originProcess : null), $er['source'], $er['attach_id'], $er['ds_pk']]);
+        $addedCount++;
+    }
+
+    if ($addedCount > 0 && $doc && $doc['review_status'] === 'confirmed') {
+        $db->prepare("UPDATE type_id_ctrl_doc SET review_status='needs_recheck' WHERE id=?")->execute([$docId]);
+    }
+    return ['doc_id'=>$docId, 'is_new'=>$isNew, 'added_count'=>$addedCount];
 }

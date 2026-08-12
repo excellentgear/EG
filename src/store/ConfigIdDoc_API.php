@@ -43,6 +43,7 @@ function buildItemView(PDO $db, array $it): array {
         'item_name' => $it['item_name'],
         'item_type' => $it['item_type'],
         'item_type_label' => TYPE_LABELS[$it['item_type']] ?? '其他文件',
+        'process_tag' => $it['process_tag'] ?? null,
         'is_linked' => $linked !== null,
         'is_excluded' => !empty($it['is_excluded']),
         'ref_source' => $it['ref_source'],
@@ -81,7 +82,7 @@ case 'list':
     $kw = trim((string)($_GET['kw'] ?? ''));
     $status = trim((string)($_GET['status'] ?? ''));
     $sql = "SELECT h.id, h.doc_no, h.customer_id, COALESCE(cl.customer,'') AS customer_name,
-                   h.part_d_id, COALESCE(ds.D_Setting_Id,'') AS part_no, h.process_desc,
+                   h.part_d_id, COALESCE(ds.D_Setting_Id,'') AS part_no,
                    h.review_status, h.confirmed_by_name, h.confirmed_at,
                    h.created_by_name, h.created_at
             FROM type_id_ctrl_doc h
@@ -134,7 +135,6 @@ case 'save_all':
     $id = (int)($_POST['id'] ?? 0);
     $customerId = trim((string)($_POST['customer_id'] ?? ''));
     $partDId = (int)($_POST['part_d_id'] ?? 0);
-    $process = trim((string)($_POST['process_desc'] ?? ''));
     $confirm = !empty($_POST['confirm']);
     if (!$partDId) jout(['success'=>false,'message'=>'請先選擇產品編號(料號)']);
     $itemsRaw = json_decode((string)($_POST['items'] ?? '[]'), true);
@@ -146,14 +146,14 @@ case 'save_all':
             $st = $db->prepare("SELECT 1 FROM type_id_ctrl_doc WHERE id=? AND is_deleted=0");
             $st->execute([$id]);
             if (!$st->fetchColumn()) throw new Exception('找不到該筆或已刪除');
-            $st = $db->prepare("UPDATE type_id_ctrl_doc SET customer_id=?, part_d_id=?, process_desc=?,
+            $st = $db->prepare("UPDATE type_id_ctrl_doc SET customer_id=?, part_d_id=?,
                                  updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=?");
-            $st->execute([$customerId ?: null, $partDId, $process ?: null, $uid, $uname, $id]);
+            $st->execute([$customerId ?: null, $partDId, $uid, $uname, $id]);
         } else {
             $docNo = type_id_ctrl_next_doc_no($db);
-            $st = $db->prepare("INSERT INTO type_id_ctrl_doc (doc_no, customer_id, part_d_id, process_desc, created_by, created_by_name)
-                                 VALUES (?,?,?,?,?,?)");
-            $st->execute([$docNo, $customerId ?: null, $partDId, $process ?: null, $uid, $uname]);
+            $st = $db->prepare("INSERT INTO type_id_ctrl_doc (doc_no, customer_id, part_d_id, created_by, created_by_name)
+                                 VALUES (?,?,?,?,?)");
+            $st->execute([$docNo, $customerId ?: null, $partDId, $uid, $uname]);
             $id = (int)$db->lastInsertId();
         }
 
@@ -169,6 +169,7 @@ case 'save_all':
             if (!isset(TYPE_LABELS[$itemType])) $itemType = 'other';
             if ($itemName === '') continue; // 空白列不存（比照可增列表格鐵則：沒填東西的列不算）
 
+            $processTag = trim((string)($it['process_tag'] ?? ''));
             $refSource = trim((string)($it['ref_source'] ?? ''));
             $refAttachId = (int)($it['ref_attach_id'] ?? 0);
             $refDsPk = (int)($it['ref_ds_pk'] ?? 0);
@@ -179,12 +180,12 @@ case 'save_all':
 
             $rowId = (int)($it['id'] ?? 0);
             if ($rowId && isset($existing[$rowId])) {
-                $st = $db->prepare("UPDATE type_id_ctrl_item SET seq=?, item_name=?, item_type=?,
+                $st = $db->prepare("UPDATE type_id_ctrl_item SET seq=?, item_name=?, item_type=?, process_tag=?,
                                      ref_source=?, ref_attach_id=?, ref_ds_pk=?, is_excluded=?,
                                      manual_effective_date=?, manual_doc_no=?, updated_at=NOW()
                                      WHERE id=?");
                 $st->execute([
-                    $seq, $itemName, $itemType,
+                    $seq, $itemName, $itemType, ($processTag !== '' ? $processTag : null),
                     $isLinked ? $refSource : null, $isLinked ? $refAttachId : null, $isLinked ? $refDsPk : null, $isExcluded,
                     $isLinked ? null : ($manualDate ?: null), $isLinked ? null : ($manualDocNo ?: null),
                     $rowId,
@@ -192,10 +193,10 @@ case 'save_all':
                 unset($existing[$rowId]);
             } else {
                 $st = $db->prepare("INSERT INTO type_id_ctrl_item
-                    (doc_id, seq, item_name, item_type, ref_source, ref_attach_id, ref_ds_pk, is_excluded, manual_effective_date, manual_doc_no)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)");
+                    (doc_id, seq, item_name, item_type, process_tag, ref_source, ref_attach_id, ref_ds_pk, is_excluded, manual_effective_date, manual_doc_no)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)");
                 $st->execute([
-                    $id, $seq, $itemName, $itemType,
+                    $id, $seq, $itemName, $itemType, ($processTag !== '' ? $processTag : null),
                     $isLinked ? $refSource : null, $isLinked ? $refAttachId : null, $isLinked ? $refDsPk : null, $isExcluded,
                     $isLinked ? null : ($manualDate ?: null), $isLinked ? null : ($manualDocNo ?: null),
                 ]);
@@ -243,6 +244,7 @@ case 'fetch_ext_for_part':
             'id'=>0, 'seq'=>0,
             'item_name'=> !empty($er['categories']) ? $er['categories'][0] : $er['doc_name'],
             'item_type'=> type_id_ctrl_guess_type($er['categories'] ?? []),
+            'process_tag'=> $er['origin_process'] ?? null,
             'is_linked'=>true, 'is_excluded'=>false,
             'ref_source'=>$er['source'], 'ref_attach_id'=>(int)$er['attach_id'], 'ref_ds_pk'=>(int)$er['ds_pk'],
             'ref_broken'=>false, 'effective_date'=>$er['doc_date'], 'doc_no_text'=>$er['doc_name'], 'file_url'=>null,
@@ -250,17 +252,14 @@ case 'fetch_ext_for_part':
     }, $ext);
     jout(['success'=>true,'rows'=>$out]);
 
-// ── 依料號自動產生/同步型態識別文件管制表(依訂單/報價單製程各建一份)──────
+// ── 依料號自動產生/同步型態識別文件管制表(每料號一份，項目自標所屬製程)────
 case 'sync_part':
     needEdit($perms);
     $dsPk = (int)($_POST['part_d_id'] ?? 0);
     if (!$dsPk) jout(['success'=>false,'message'=>'請先選擇料號']);
-    $before = $db->prepare("SELECT id FROM type_id_ctrl_doc WHERE part_d_id=? AND is_deleted=0");
-    $before->execute([$dsPk]);
-    $beforeIds = array_map('intval', $before->fetchAll(PDO::FETCH_COLUMN));
-    $affected = type_id_ctrl_sync_part($db, $dsPk);
-    $newCount = count(array_diff($affected, $beforeIds));
-    jout(['success'=>true,'affected'=>$affected,'created'=>$newCount,'updated'=>count($affected)-$newCount]);
+    $r = type_id_ctrl_sync_part($db, $dsPk);
+    if (!$r['doc_id']) jout(['success'=>false,'message'=>'找不到此料號']);
+    jout(['success'=>true,'doc_id'=>$r['doc_id'],'is_new'=>$r['is_new'],'added_count'=>$r['added_count']]);
 
 // ── 掃描「外來文件清單有附件、但還沒建立型態識別文件管制表」的料號 ─────────
 case 'find_missing_parts':
@@ -272,14 +271,14 @@ case 'sync_all_missing':
     needEdit($perms);
     $ids = json_decode((string)($_POST['part_ids'] ?? '[]'), true);
     if (!is_array($ids) || !$ids) jout(['success'=>false,'message'=>'沒有可建立的料號']);
-    $partCount = 0; $docCount = 0;
+    $partCount = 0; $itemCount = 0;
     foreach ($ids as $dsPk) {
         $dsPk = (int)$dsPk;
         if (!$dsPk) continue;
-        $affected = type_id_ctrl_sync_part($db, $dsPk);
-        if ($affected) { $partCount++; $docCount += count($affected); }
+        $r = type_id_ctrl_sync_part($db, $dsPk);
+        if ($r['doc_id']) { $partCount++; $itemCount += $r['added_count']; }
     }
-    jout(['success'=>true,'part_count'=>$partCount,'doc_count'=>$docCount]);
+    jout(['success'=>true,'part_count'=>$partCount,'item_count'=>$itemCount]);
 
 // ── 廠內「自家出的圖」標籤設定：從 is_own_drawing=1 的類別挑選要納入本模組的 ──────
 case 'get_own_drawing_categories':
