@@ -102,6 +102,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         table.ic-item-table input[type=text], table.ic-item-table input[type=date], table.ic-item-table select {
             width:100%; box-sizing:border-box; border:1px solid #D8BE93; border-radius:3px; padding:3px 4px; font-size:12px; }
         table.ic-item-table input[disabled] { background:#F7F2E6; color:#5b3a1e; }
+        table.ic-item-table input.f-proc-hint:placeholder-shown { background:#FFF3E2; border-color:#F0A24B; }
         table.ic-item-table td.seq { width:32px; text-align:center; color:#8a6d45; }
         table.ic-item-table td.op { width:100px; white-space:nowrap; text-align:center; }
         .ic-link-badge { font-size:10px; color:#8A5A2B; background:#F7E0BD; border-radius:8px; padding:0 6px; margin-left:2px; white-space:nowrap; }
@@ -281,7 +282,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
 <div class="ic-mask" id="ownDrawMask"><div class="ic-modal">
     <div class="m-head"><span>廠內圖面標籤設定</span><span class="m-close" onclick="closeMask('ownDrawMask')">✕</span></div>
     <div class="m-body">
-        <div class="tip" style="margin-bottom:8px;">下方只列出主檔管理已標記「自家出的圖」的附件類別。勾選的類別，其料號附件會比照外來文件清單一併同步進本模組（版別／文件編號優先顯示<b>版次</b>，型態生效日期優先用<b>發行章日期</b>；未填版次/發行章日期時退回檔名與上傳日）。</div>
+        <div class="tip" style="margin-bottom:8px;">下方只列出主檔管理已標記「自家出的圖」的附件類別。勾選的類別，其料號附件會比照外來文件清單一併同步進本模組（版別／文件編號優先顯示<b>版次</b>，型態生效日期優先用<b>發行章日期</b>；未填版次/發行章日期時退回檔名與上傳日）。<br>「顯示名稱」留空則沿用類別原名，同步進本模組後會直接成為項目列的「型態項目名稱」（與外來文件清單共用同一顯示名稱設定，若該類別同時列入外來文件清單，改名會兩邊一起變）。勾選「需要顯示製程」後，同步出的項目列若「所屬製程」留空會加上提示色塊，僅供提醒不強制填寫。</div>
         <div id="ownDrawEmpty" style="color:#8a6d45;padding:10px;">載入中…</div>
         <div id="ownDrawList"></div>
     </div>
@@ -333,7 +334,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號、製表人簽章使用全站通用圓形姓名章（若本人有上傳掃描實體章會優先用掃描章，否則自動產生標準回墨章，不需另外設定模板）。</li>
         </ul>
         <h4>設定入口</h4>
-        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。<b>廠內圖面標籤</b>（哪些「自家出的圖」類別也要納入自動同步）：工具列「廠內圖面標籤設定」按鈕（僅管理員可見；類別本身要先在主檔管理→附件類別標籤設定勾選「自家出的圖」）。<b>角色指派</b>（誰可以檢閱／登錄／管理本頁）：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「型態識別文件管制表」區塊。</p>
+        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。<b>廠內圖面標籤</b>（哪些「自家出的圖」類別也要納入自動同步）：工具列「廠內圖面標籤設定」按鈕（僅管理員可見；類別本身要先在主檔管理→附件類別標籤設定勾選「自家出的圖」）。同一跳窗每個類別還可設定：<b>顯示名稱</b>（留空沿用類別原名；同步進本模組後即成為項目列的「型態項目名稱」，與外來文件清單共用同一顯示名稱欄位）與<b>需要顯示製程</b>（勾選後，該類別同步出的項目列若「所屬製程」留空，欄位會加提示色塊，僅供提醒不強制填寫）。<b>角色指派</b>（誰可以檢閱／登錄／管理本頁）：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「型態識別文件管制表」區塊。</p>
         <h4>權限角色</h4>
         <p>型態文件檢閱／登錄／管理員（管理者固定擁有全部權限）；點頁面右上角「目前角色」旁的 <i class="fa fa-question-circle"></i> 可看各角色的權限說明。</p>
     </div>
@@ -532,10 +533,11 @@ window.applyProcessToRow = function(i){
 function itemRowHtml(it, idx){
     var linked = it.is_linked;
     var excluded = !!it.is_excluded;
+    var needProc = !!it.need_process_hint;
     var typeOpts = TYPE_OPTS.map(function(t){ return '<option value="'+t[0]+'"'+(it.item_type===t[0]?' selected':'')+'>'+t[1]+'</option>'; }).join('');
     var linkBadge = linked ? '<span class="ic-link-badge"><i class="fa fa-link"></i> 外來文件</span>' : (it.ref_broken ? '<span class="ic-broken-badge">來源已消失</span>' : '');
     var docNoCell = '<input type="text" class="f-docno" value="'+esc(it.doc_no_text||'')+'"'+(linked?' disabled':'')+' placeholder="版別／文件編號">';
-    var procCell = '<div class="ic-part-box"><input type="text" class="f-proc" value="'+esc(it.process_tag||'')+'" placeholder="共用(空白)">'
+    var procCell = '<div class="ic-part-box"><input type="text" class="f-proc'+(needProc?' f-proc-hint':'')+'" data-need-process="'+(needProc?'1':'0')+'" value="'+esc(it.process_tag||'')+'" placeholder="共用(空白)"'+(needProc?' title="此類別文件建議標示所屬製程（僅提示，不強制）"':'')+'>'
         + '<button type="button" class="ic-row-btn" onclick="pickProcessForRow(this)" title="從此料號的訂單/報價製程挑選"><i class="fa fa-list"></i></button></div>';
     var opCell = linked
         ? '<label class="ic-chk"><input type="checkbox" class="f-included"'+(excluded?'':' checked')+' onchange="toggleExcluded(this)"> 納入</label>'
@@ -587,7 +589,7 @@ $('#itemBody').on('drop', 'tr', function(e){
 $('#itemBody').on('dragend', 'tr', function(){ dragSrcRow = null; $('#itemBody tr').removeClass('drag-over'); });
 
 window.icAddRow = function(){
-    var blank = {id:0, item_name:'', item_type:'other', process_tag:'', effective_date:'', doc_no_text:'', is_linked:false, is_excluded:false, ref_source:null, ref_attach_id:null, ref_ds_pk:null};
+    var blank = {id:0, item_name:'', item_type:'other', process_tag:'', need_process_hint:false, effective_date:'', doc_no_text:'', is_linked:false, is_excluded:false, ref_source:null, ref_attach_id:null, ref_ds_pk:null};
     $('#itemBody').append(itemRowHtml(blank, $('#itemBody tr').length));
     renumberRows();
     return true;
@@ -625,6 +627,7 @@ window.applyExtDoc = function(i){
     ITEMS[idx] = collectRow($tr);
     ITEMS[idx].is_linked = true; ITEMS[idx].ref_source = r.source; ITEMS[idx].ref_attach_id = r.attach_id; ITEMS[idx].ref_ds_pk = r.ds_pk;
     ITEMS[idx].doc_no_text = r.doc_name; ITEMS[idx].effective_date = r.doc_date;
+    ITEMS[idx].need_process_hint = !!r.need_process;
     $tr.replaceWith(itemRowHtml(ITEMS[idx], idx));
     closeMask('extMask');
 };
@@ -635,6 +638,7 @@ function collectRow($tr){
         item_name: $tr.find('.f-name').val(),
         item_type: $tr.find('.f-type').val(),
         process_tag: $tr.find('.f-proc').val(),
+        need_process_hint: $tr.find('.f-proc').attr('data-need-process') === '1',
         effective_date: $tr.find('.f-date').val(),
         doc_no_text: $tr.find('.f-docno').val(),
         is_linked: linked,
@@ -653,6 +657,7 @@ function saveAll(confirm){
         var it = collectRow($(this));
         var payload = {
             id: it.id, item_name: it.item_name, item_type: it.item_type, process_tag: it.process_tag,
+            need_process_hint: it.need_process_hint ? 1 : 0,
             ref_source: it.is_linked ? it.ref_source : '',
             ref_attach_id: it.is_linked ? it.ref_attach_id : 0,
             ref_ds_pk: it.is_linked ? it.ref_ds_pk : 0,
@@ -769,14 +774,26 @@ $('#btnOwnDrawCats').on('click', function(){
         $('#ownDrawEmpty').hide();
         var html = '';
         res.rows.forEach(function(r){
-            html += '<label class="ic-chk" style="display:flex;margin:4px 0;"><input type="checkbox" class="own-draw-ck" value="'+r.id+'"'+(r.type_id_ctrl_include?' checked':'')+'> '+esc(r.category_name)+'</label>';
+            html += '<div class="own-draw-row" data-id="'+r.id+'" style="display:flex;align-items:center;gap:8px;margin:6px 0;padding:6px 8px;border:1px solid #EADFC8;border-radius:6px;flex-wrap:wrap;">'
+                + '<label class="ic-chk" style="flex:0 0 auto;"><input type="checkbox" class="own-draw-ck"'+(r.type_id_ctrl_include?' checked':'')+'> '+esc(r.category_name)+'</label>'
+                + '<input type="text" class="own-draw-name" placeholder="顯示名稱(留空用「'+esc(r.category_name)+'」)" value="'+esc(r.external_doc_name||'')+'" style="flex:1 1 140px;height:28px;font-size:12px;padding:0 6px;border:1px solid #D8BE93;border-radius:4px;box-sizing:border-box;">'
+                + '<label class="ic-chk" style="flex:0 0 auto;color:#8A5A2B;" title="勾選後，此類別同步出的項目列在「所屬製程」欄位若留空會加提示色塊，僅視覺提示不強制"><input type="checkbox" class="own-draw-proc"'+(r.type_id_ctrl_need_process?' checked':'')+'> 需要顯示製程</label>'
+                + '</div>';
         });
         $('#ownDrawList').html(html);
     });
 });
 function saveOwnDrawCats(){
-    var ids = $('#ownDrawList .own-draw-ck:checked').map(function(){ return $(this).val(); }).get();
-    $.post(API, {action:'save_own_drawing_categories', category_ids: JSON.stringify(ids)}, function(res){
+    var rows = [];
+    $('#ownDrawList .own-draw-row').each(function(){
+        rows.push({
+            id: $(this).data('id'),
+            included: $(this).find('.own-draw-ck').is(':checked') ? 1 : 0,
+            name: $(this).find('.own-draw-name').val(),
+            need_process: $(this).find('.own-draw-proc').is(':checked') ? 1 : 0,
+        });
+    });
+    $.post(API, {action:'save_own_drawing_categories', rows: JSON.stringify(rows)}, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); return; }
         closeMask('ownDrawMask');
     }, 'json');
