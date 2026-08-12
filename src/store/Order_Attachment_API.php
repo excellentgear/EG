@@ -273,9 +273,15 @@ switch ($action) {
         // 「只要有訂單編輯權限就能刪任何人的附件」。
         $allowed = ((int)$row['uploaded_by'] === $uid) || _oaIsAdmin($pdo, $uid) || _oaHasAttachDelete($pdo, $uid);
         if (!$allowed) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'無刪除權限：僅上傳者本人與管理員可刪除此附件']); break; }
-        $fp = $dir . $row['filename'];
-        if (is_file($fp)) @unlink($fp);
         $pdo->prepare("DELETE FROM order_attachments WHERE id=?")->execute([$attId]);
+        // 共用附件（OP轉訂單批次／同訂單編號跨料號）會有多筆列參照同一個實體檔名(filename)；
+        // 刪掉這一筆之後還有其他列在參照，代表別的訂單/料號仍在用這份檔案，不可砍實體檔（否則對方會404）。
+        $stillUsed = $pdo->prepare("SELECT COUNT(*) FROM order_attachments WHERE filename=?");
+        $stillUsed->execute([$row['filename']]);
+        if ((int)$stillUsed->fetchColumn() === 0) {
+            $fp = $dir . $row['filename'];
+            if (is_file($fp)) @unlink($fp);
+        }
         echo json_encode(['success' => true, 'message' => '已刪除']);
         break;
     }
