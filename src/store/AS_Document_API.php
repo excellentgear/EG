@@ -809,7 +809,7 @@ case 'download':
     $verId = (int)($_GET['version_id'] ?? 0);
     $which = $_GET['which'] ?? 'file'; // file | apply
     if ($verId<=0) { http_response_code(400); exit('bad request'); }
-    $st = $db->prepare("SELECT * FROM as_document_version WHERE id=?");
+    $st = $db->prepare("SELECT v.*, d.doc_no, d.doc_name FROM as_document_version v JOIN as_document d ON d.id=v.doc_id WHERE v.id=?");
     $st->execute([$verId]);
     $v = $st->fetch(PDO::FETCH_ASSOC);
     if (!$v) { http_response_code(404); exit('版本不存在'); }
@@ -825,6 +825,16 @@ case 'download':
                                 : ($v['original_name'] ?: $v['file_name']);
     if ($which==='apply' && !$fname) { http_response_code(404); exit('此版本無申請單'); }
     if (!$fname) { http_response_code(404); header('Content-Type: text/plain; charset=utf-8'); exit('此版本未上傳文件檔（補登資料，可用「改版」補上檔案）'); }
+    // 下載檔名一律改為「文件編號 文件名稱-版次」，副檔名沿用原檔（僅套用於文件本檔，申請單維持原檔名）
+    if ($which !== 'apply') {
+        $ext = pathinfo($oname, PATHINFO_EXTENSION);
+        $base = trim(($v['doc_no'] ?? '') . ' ' . ($v['doc_name'] ?? ''));
+        $ver  = trim((string)($v['version'] ?? ''));
+        if ($base !== '') {
+            $oname = $base . ($ver !== '' ? ('-' . $ver) : '') . ($ext !== '' ? ('.' . $ext) : '');
+            $oname = preg_replace('/[\\\\\/:*?"<>|]/', '_', $oname);
+        }
+    }
     // 線上預覽：Office 檔先轉 PDF 快取再 inline 串流
     if ($inline) {
         $fext = strtolower(pathinfo($fname, PATHINFO_EXTENSION));
