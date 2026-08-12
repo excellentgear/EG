@@ -218,13 +218,18 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
     $st->execute([$dsPk]);
     $partNo = (string)$st->fetchColumn();
     if ($partNo !== '') {
-        // 報價附件：若能對應到「此料號在同一張報價單的報價項目」，用該項目勾選的製程(quotation_item_process_map)
-        // 當作 origin_process 自動帶入（可手動修改/清空）；對應不到就是共用文件，維持 NULL 不顯示製程
-        // （2026-08-12 使用者要求：相同附件被多份共用時不特定標記某製程）。
+        // 報價附件：若此料號在同一張報價單裡有「多個」報價項目(代表這張報價單本來就把此料號拆成多筆
+        // 不同製程分開報價)，用各項目勾選的製程(quotation_item_process_map)GROUP_CONCAT自動帶入
+        // （可手動修改/清空）；報價單裡此料號只有「一個」報價項目時，不論該項目勾了幾種製程，都不算
+        // 有需要區分的多筆文件，直接留 NULL 當共用文件（2026-08-12 使用者要求：只有一種文件時不該
+        // 自動代入製程，應自動留空——attachments 不記錄對應到哪一個報價項目，只有「存在多個報價項目」
+        // 才代表這批文件本來就要按製程拆開看，單一項目一律視為共用）。對應不到報價項目也維持 NULL。
         $sql = "SELECT DISTINCT a.id AS attach_id, ? AS ds_pk,
                        COALESCE(NULLIF(a.original_name,''), a.filename) AS doc_name,
                        DATE(a.uploaded_at) AS doc_date, a.category_ids, COALESCE(a.category_id,'') AS category_id_single,
-                       (SELECT GROUP_CONCAT(DISTINCT pn.ProcessName ORDER BY pn.ProcessName SEPARATOR '+')
+                       (SELECT CASE WHEN COUNT(DISTINCT qi3.item_id) > 1
+                                    THEN GROUP_CONCAT(DISTINCT pn.ProcessName ORDER BY pn.ProcessName SEPARATOR '+')
+                                    ELSE NULL END
                         FROM quotation_item qi3
                         JOIN quotation_item_process_map m3 ON m3.quotation_item_id = qi3.item_id
                         JOIN process_no pn ON pn.ProcessNo = m3.process_no
