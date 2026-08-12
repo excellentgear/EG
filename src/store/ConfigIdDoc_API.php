@@ -53,6 +53,9 @@ function buildItemView(PDO $db, array $it): array {
         'ref_broken' => ($it['ref_source'] && $it['ref_attach_id'] && $linked === null), // 曾連結但來源已消失
         'effective_date' => $linked ? $linked['doc_date'] : $it['manual_effective_date'],
         'doc_no_text' => $linked ? $linked['doc_name'] : $it['manual_doc_no'],
+        // 列印版：連結列若沒有真正版次、退回顯示檔名時，檔名不算真正的「版別／文件編號」，
+        // 列印不印（畫面上仍用 doc_no_text 顯示檔名以利辨識；手動輸入列一律視為真實文件編號）
+        'print_doc_no' => ($linked && !empty($linked['doc_no_is_filename'])) ? '' : ($linked ? $linked['doc_name'] : $it['manual_doc_no']),
         'file_url' => $linked ? $linked['file_url'] : null,
     ];
 }
