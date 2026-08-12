@@ -214,8 +214,24 @@ case 'instance_delete': {
     if ($inst['status'] !== 'draft' && !$perms['canAdmin']) jerr('已送出的表單不可刪除，如需作廢請洽管理員');
     $db->prepare("DELETE FROM rf_instance_item_confirm WHERE item_id IN (SELECT id FROM rf_instance_item WHERE instance_id=?)")->execute([$id]);
     $db->prepare("DELETE FROM rf_instance_item WHERE instance_id=?")->execute([$id]);
+    $db->prepare("DELETE FROM approval_record WHERE module='review_form' AND entity_id=?")->execute([$id]);
     $db->prepare("DELETE FROM rf_instance WHERE id=?")->execute([$id]);
     jout([]);
+}
+
+case 'instance_duplicate': {
+    rvf_need_csrf();
+    if (!$perms['canCreate']) jerr('您沒有建立表單的權限', 403);
+    $id = (int)($_POST['instance_id'] ?? 0);
+    $src = rvf_instance_get($db, $id);
+    if (!$src) jerr('找不到此表單', 404);
+    if (!$perms['canViewAll'] && (int)$src['created_by'] !== $uid) jerr('無權複製他人建立的表單', 403);
+    $newId = rvf_instance_create($db, (int)$src['template_id'], $uid, $uname, (string)$src['title'], date('Y-m-d'));
+    $items = rvf_instance_items_get($db, $id);
+    rvf_instance_items_save($db, $newId, array_map(function($it) {
+        return ['id'=>0, 'content'=>$it['content'], 'data'=>$it['data'], 'owner_depts'=>explode(',', (string)$it['owner_depts']), 'owner_users'=>explode(',', (string)$it['owner_users'])];
+    }, $items));
+    jout(['id'=>$newId]);
 }
 
 case 'item_confirm': {

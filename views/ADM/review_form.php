@@ -273,7 +273,11 @@ function renderView(){
         h += '<button class="btn-warm" style="height:32px;padding:0 14px;border-radius:4px;border:1px solid #d98a33;color:#fff;background:#F0A24B;" onclick="saveDraft()">存檔</button> '
            + '<button style="height:32px;padding:0 14px;border-radius:4px;border:1px solid #d98a33;background:#fff;color:#5b3a1e;" onclick="submitForm()">送出</button> '
            + '<button style="height:32px;padding:0 14px;border-radius:4px;border:1px solid #c23f28;background:#fff;color:#DD5138;" onclick="deleteForm()">刪除</button>';
+    } else if (META.perms.canAdmin) {
+        // 非草稿（已送出/審核中/已完成…）一般人不可刪，僅管理員可刪（比照後端 instance_delete 的守門邏輯）。
+        h += '<button style="height:32px;padding:0 14px;border-radius:4px;border:1px solid #c23f28;background:#fff;color:#DD5138;" onclick="deleteForm()">管理員刪除</button>';
     }
+    if (!PREVIEW_MODE && META.perms.canCreate) h += ' <button style="height:32px;padding:0 14px;border-radius:4px;border:1px solid #D8BE93;background:#fff;color:#5b3a1e;" onclick="duplicateForm()">複製此表單</button>';
     if (META.perms.canPrint || PREVIEW_MODE) h += ' <button style="height:32px;padding:0 14px;border-radius:4px;border:1px solid #D8BE93;background:#fff;color:#5b3a1e;" onclick="printForm()">列印</button>';
     h += '</div>';
     if (CUR.can_review) h += reviewBoxHtml('review');
@@ -434,10 +438,17 @@ function submitForm(){
     });
 }
 function deleteForm(){
-    if (!confirm('確定要刪除此草稿？')) return;
+    var msg = CUR.status==='draft' ? '確定要刪除此草稿？' : '此表單狀態為「'+STATUS_LABEL[CUR.status]+'」，刪除後含審核/核准紀錄一併移除且無法復原，確定要刪除？';
+    if (!confirm(msg)) return;
     $.post(API, {action:'instance_delete', csrf:META.csrf, instance_id:CUR.id}, function(res){
         if (!res.ok){ alert(res.error||'刪除失敗'); return; }
         closeMask('viewMask'); loadList();
+    }, 'json');
+}
+function duplicateForm(){
+    $.post(API, {action:'instance_duplicate', csrf:META.csrf, instance_id:CUR.id}, function(res){
+        if (!res.ok){ alert(res.error||'複製失敗'); return; }
+        loadList(); openView(res.id);
     }, 'json');
 }
 /* 補登舊資料用（ai-rules/21 鐵則2）：僅超級管理員看得到入口；回改後自動簽核紀錄的日期會同步跟著調整。 */
