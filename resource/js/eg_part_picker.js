@@ -12,10 +12,12 @@
  *     title  : '選擇料號',                              // 可省略
  *     onSave : function(row){ ... }  // row = {d_id, part_no, drawing_no, customer_id, customer_name}
  *   });
- *   EGPartPicker.viewerLink(partNo, viewerUrl)  // 回傳可點擊開 part_viewer.php 的 <a> HTML
- *     viewerUrl 例：'../pm/part_viewer.php'（依頁面深度調整）
- *     【注意】part_viewer.php 的 ?d_id= 參數吃的是「料號字串」(d_setting.D_Setting_Id，如 SP-NME-GE-G5)，
- *     不是 d_setting.d_id 數字主鍵——這裡務必傳 part_no，傳數字主鍵會查無圖檔（2026-08-12 踩過一次）。
+ *   EGPartPicker.viewerLink(partNo, viewerUrl)  // 回傳可點擊開圖面檢視窗的 <a> HTML
+ *     viewerUrl 建議用 '../pm/bom_viewer.php'（三分頁合併：圖面/報價/其他，唯讀檢視，比照報價單頁做法；
+ *     依頁面深度調整相對路徑）。part_viewer.php 是較舊的窄範圍版本(只認 part_attachments 的圖面類)，
+ *     來源是報價附件時會查無圖檔，2026-08-12 已確認 bom_viewer.php 才是全站標準，除非有特殊理由否則統一用它。
+ *     【注意】兩者 ?d_id= 參數都吃「料號字串」(d_setting.D_Setting_Id，如 SP-NME-GE-G5)，
+ *     不是 d_setting.d_id 數字主鍵——這裡務必傳 part_no，傳數字主鍵會查無資料。
  */
 (function () {
     'use strict';

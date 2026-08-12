@@ -215,45 +215,12 @@ case 'save_all':
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'儲存失敗：'.$e->getMessage()]); }
     jout(['success'=>true,'id'=>$id]);
 
-// ── 連結外來文件清單（即時查詢，不落地快照；只列已勾 is_external_doc 標籤的附件）──
+// ── 連結外來文件清單（即時查詢，不落地快照；含 is_external_doc + 廠內自家出圖已勾選類別）──
 case 'search_ext_doc':
     needView($perms);
     $dsPk = (int)($_POST['ds_pk'] ?? $_GET['ds_pk'] ?? 0);
     if (!$dsPk) jout(['success'=>true,'rows'=>[]]);
-    $cats = $db->query("SELECT id FROM quotation_file_categories WHERE is_external_doc=1")->fetchAll(PDO::FETCH_COLUMN);
-    if (!$cats) jout(['success'=>true,'rows'=>[]]);
-    $catCond = function(string $col, string $singleCol = '') use ($cats): string {
-        $parts = [];
-        foreach ($cats as $cid) $parts[] = "FIND_IN_SET($cid, REPLACE(COALESCE($col,''),' ',''))";
-        if ($singleCol !== '') $parts[] = "$singleCol IN (" . implode(',', $cats) . ")";
-        return '(' . implode(' OR ', $parts) . ')';
-    };
-    $rows = [];
-    // ① 料號附件
-    $sql = "SELECT pa.id AS attach_id, pa.d_id AS ds_pk,
-                   COALESCE(NULLIF(pa.original_name,''), pa.filename) AS doc_name,
-                   DATE(pa.uploaded_at) AS doc_date
-            FROM part_attachments pa
-            WHERE pa.d_id=? AND pa.deleted_at IS NULL AND " . $catCond('pa.category_ids');
-    $st = $db->prepare($sql); $st->execute([$dsPk]);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { $r['source']='part'; $rows[]=$r; }
-    // ② 報價附件：整張報價單料號皆適用 或 linked_parts 指定此料號字串
-    $st = $db->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
-    $st->execute([$dsPk]);
-    $partNo = (string)$st->fetchColumn();
-    if ($partNo !== '') {
-        $sql = "SELECT DISTINCT a.id AS attach_id, ? AS ds_pk,
-                       COALESCE(NULLIF(a.original_name,''), a.filename) AS doc_name,
-                       DATE(a.uploaded_at) AS doc_date
-                FROM quotation_attachments a
-                JOIN quotation_item qi ON qi.quote_id = (SELECT quote_id FROM quotation_list WHERE quote_no=a.quote_no)
-                WHERE a.status='active' AND " . $catCond('a.category_ids', 'a.category_id') . "
-                  AND ((a.linked_parts IS NULL AND qi.d_setting_d_id = ?)
-                       OR (a.linked_parts IS NOT NULL AND JSON_CONTAINS(a.linked_parts, JSON_QUOTE(?))))";
-        $st = $db->prepare($sql); $st->execute([$dsPk, $dsPk, $partNo]);
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { $r['source']='quote'; $rows[]=$r; }
-    }
-    jout(['success'=>true,'rows'=>$rows]);
+    jout(['success'=>true,'rows'=>type_id_ctrl_fetch_ext_docs_for_part($db, $dsPk)]);
 
 // ── 從此料號的訂單+報價單帶入製程（type_id_ctrl_process_candidates，2026-08-12 加入報價單來源）──
 case 'get_order_process':
@@ -313,6 +280,30 @@ case 'sync_all_missing':
         if ($affected) { $partCount++; $docCount += count($affected); }
     }
     jout(['success'=>true,'part_count'=>$partCount,'doc_count'=>$docCount]);
+
+// ── 廠內「自家出的圖」標籤設定：從 is_own_drawing=1 的類別挑選要納入本模組的 ──────
+case 'get_own_drawing_categories':
+    needAdmin($perms);
+    $rows = $db->query("SELECT id, category_name, type_id_ctrl_include
+                         FROM quotation_file_categories WHERE is_own_drawing=1 AND is_active=1
+                         ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    jout(['success'=>true,'rows'=>$rows]);
+
+case 'save_own_drawing_categories':
+    needAdmin($perms);
+    $ids = json_decode((string)($_POST['category_ids'] ?? '[]'), true);
+    if (!is_array($ids)) $ids = [];
+    $ids = array_map('intval', $ids);
+    $db->beginTransaction();
+    try {
+        $db->exec("UPDATE quotation_file_categories SET type_id_ctrl_include=0 WHERE is_own_drawing=1");
+        if ($ids) {
+            $in = implode(',', array_fill(0, count($ids), '?'));
+            $db->prepare("UPDATE quotation_file_categories SET type_id_ctrl_include=1 WHERE is_own_drawing=1 AND id IN ($in)")->execute($ids);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'儲存失敗：'.$e->getMessage()]); }
+    jout(['success'=>true]);
 
 // ── AS 文件編號綁定（本頁自身模板）────────────────────────────────
 case 'asdoc_list':

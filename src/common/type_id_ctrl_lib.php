@@ -56,6 +56,10 @@ function type_id_ctrl_ensure_schema(PDO $db): void {
         "ALTER TABLE type_id_ctrl_item ADD COLUMN is_excluded TINYINT(1) NOT NULL DEFAULT 0 COMMENT '人工確認此項不適用本製程(僅對連結自外來文件清單的列有意義)' AFTER ref_ds_pk",
         // review_status 原本建成 VARCHAR(12)，'needs_recheck' 13字會被截斷寫入失敗，補一次放寬（既有欄位已存在時 ADD COLUMN 會被上面的 try/catch 吃掉不會跑到這裡，故獨立用 MODIFY 確保既有環境也會放寬）
         "ALTER TABLE type_id_ctrl_doc MODIFY COLUMN review_status VARCHAR(20) NOT NULL DEFAULT 'pending'",
+        // 廠內「自家出的圖」標籤納入本模組來源（2026-08-12 使用者要求）：quotation_file_categories 已有
+        // is_own_drawing(自家出的圖)/is_external_doc(外來文件清單) 兩個既有旗標，這裡加第三個獨立旗標，
+        // 讓管理員從「自家出的圖」的類別中，另外勾選哪些也要納入本模組（設定入口在本頁，不是主檔管理頁）。
+        "ALTER TABLE quotation_file_categories ADD COLUMN type_id_ctrl_include TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否納入型態識別文件管制表(僅對is_own_drawing=1的類別有意義)'",
     ] as $alter) {
         try { $db->exec($alter); } catch (Throwable $e) {}
     }
@@ -131,18 +135,21 @@ function type_id_ctrl_next_doc_no(PDO $db): string {
 
 /**
  * 即時解析一筆連結外來文件（不快照）：回傳目前的檔名/日期/下載連結，來源已刪除則回傳 null。
+ * part 來源優先用「版次(revision)」「發行章日期(issue_stamp_date)」顯示（自家出的圖才會填這兩欄；
+ * 客戶提供的外來文件通常沒填，此時自動退回檔名/上傳日——2026-08-12 使用者要求）。
  */
 function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $dsPk): ?array {
     if ($source === 'part') {
         $st = $db->prepare("SELECT COALESCE(NULLIF(pa.original_name,''), pa.filename) AS doc_name,
-                                    DATE(pa.uploaded_at) AS doc_date, pa.filename
+                                    DATE(pa.uploaded_at) AS doc_date, pa.filename, pa.revision, pa.issue_stamp_date
                              FROM part_attachments pa
                              WHERE pa.id=? AND pa.d_id=? AND pa.deleted_at IS NULL LIMIT 1");
         $st->execute([$attachId, $dsPk]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return null;
         return [
-            'doc_name' => $r['doc_name'], 'doc_date' => $r['doc_date'],
+            'doc_name' => ($r['revision'] !== null && $r['revision'] !== '') ? $r['revision'] : $r['doc_name'],
+            'doc_date' => $r['issue_stamp_date'] ?: $r['doc_date'],
             'file_url' => '../../src/store/Part_Attachment_API.php?action=download&id=' . $attachId,
         ];
     }
@@ -163,12 +170,13 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
 }
 
 /**
- * 此料號目前所有「外來文件清單」附件（只列已勾 is_external_doc 標籤者），含類別名稱供猜測型態類別/名稱用。
+ * 此料號目前所有可納入本模組的附件：外來文件清單標籤(is_external_doc=1) ＋ 管理員另外勾選納入的
+ * 廠內「自家出的圖」標籤(type_id_ctrl_include=1，設定入口見本頁「廠內圖面標籤設定」)。
  * 與 ConfigIdDoc_API.php 舊版 search_ext_doc 邏輯相同來源，但不加關鍵字篩選（同步/自動產生用）。
  */
 function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
     $cats = $db->query("SELECT id, COALESCE(NULLIF(external_doc_name,''), category_name) AS disp
-                         FROM quotation_file_categories WHERE is_external_doc=1")->fetchAll(PDO::FETCH_KEY_PAIR);
+                         FROM quotation_file_categories WHERE is_external_doc=1 OR type_id_ctrl_include=1")->fetchAll(PDO::FETCH_KEY_PAIR);
     if (!$cats) return [];
     $catIds = array_keys($cats);
     $catCond = function (string $col, string $singleCol = '') use ($catIds): string {

@@ -157,6 +157,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <input type="text" id="syncPartNo" placeholder="或手動指定單一料號同步" style="width:150px;<?= $perms['canEdit']?'':'display:none;' ?>" autocomplete="off">
             <button id="btnSyncPart" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="依此料號的訂單/報價單製程，自動建立(或更新)各製程的型態識別文件管制表，並同步外來文件清單附件"><i class="fa fa-refresh"></i> 同步</button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
+            <button id="btnOwnDrawCats" style="<?= $perms['canAdmin']?'':'display:none;' ?>" title="設定哪些廠內「自家出的圖」標籤也要納入本模組的自動同步來源"><i class="fa fa-picture-o"></i> 廠內圖面標籤設定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <span class="ic-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
                 <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
@@ -279,6 +280,20 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('asDocMask')">關閉</button></div>
 </div></div>
 
+<!-- 廠內圖面標籤設定 -->
+<div class="ic-mask" id="ownDrawMask"><div class="ic-modal">
+    <div class="m-head"><span>廠內圖面標籤設定</span><span class="m-close" onclick="closeMask('ownDrawMask')">✕</span></div>
+    <div class="m-body">
+        <div class="tip" style="margin-bottom:8px;">下方只列出主檔管理已標記「自家出的圖」的附件類別。勾選的類別，其料號附件會比照外來文件清單一併同步進本模組（版別／文件編號優先顯示<b>版次</b>，型態生效日期優先用<b>發行章日期</b>；未填版次/發行章日期時退回檔名與上傳日）。</div>
+        <div id="ownDrawEmpty" style="color:#8a6d45;padding:10px;">載入中…</div>
+        <div id="ownDrawList"></div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('ownDrawMask')">取消</button>
+        <button class="b-ok" onclick="saveOwnDrawCats()">儲存</button>
+    </div>
+</div></div>
+
 <!-- 角色權限說明 -->
 <div class="ic-mask" id="roleHelpMask"><div class="ic-modal">
     <div class="m-head"><span>角色權限說明</span><span class="m-close" onclick="closeMask('roleHelpMask')">✕</span></div>
@@ -316,7 +331,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號、製表人簽章使用全站通用圓形姓名章（若本人有上傳掃描實體章會優先用掃描章，否則自動產生標準回墨章，不需另外設定模板）。</li>
         </ul>
         <h4>設定入口</h4>
-        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。<b>角色指派</b>（誰可以檢閱／登錄／管理本頁）：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「型態識別文件管制表」區塊。</p>
+        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。<b>廠內圖面標籤</b>（哪些「自家出的圖」類別也要納入自動同步）：工具列「廠內圖面標籤設定」按鈕（僅管理員可見；類別本身要先在主檔管理→附件類別標籤設定勾選「自家出的圖」）。<b>角色指派</b>（誰可以檢閱／登錄／管理本頁）：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「型態識別文件管制表」區塊。</p>
         <h4>權限角色</h4>
         <p>型態文件檢閱／登錄／管理員（管理者固定擁有全部權限）；點頁面右上角「目前角色」旁的 <i class="fa fa-question-circle"></i> 可看各角色的權限說明。</p>
     </div>
@@ -337,7 +352,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
 $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); });
 var API = '../../src/store/ConfigIdDoc_API.php';
 var PART_API = '../../src/store/PartPicker_API.php';
-var VIEWER_URL = '../pm/part_viewer.php';
+var VIEWER_URL = '../pm/bom_viewer.php'; // 三分頁合併(圖面/報價/其他)唯讀檢視，比照報價單頁的作法（部分料號在 part_viewer.php 查無圖檔）
 var CAN_EDIT = <?= $perms['canEdit'] ? 'true' : 'false' ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
 var TYPE_OPTS = [['drawing','圖面'],['jig','治夾具'],['report','報告'],['other','其他文件']];
@@ -732,6 +747,29 @@ function openAsDocPicker(){
             }, 'json');
         }
     });
+}
+
+/* ---------- 廠內圖面標籤設定 ---------- */
+$('#btnOwnDrawCats').on('click', function(){
+    $('#ownDrawEmpty').show().text('載入中…'); $('#ownDrawList').empty();
+    openMask('ownDrawMask');
+    $.getJSON(API, {action:'get_own_drawing_categories'}, function(res){
+        if (!res.success){ $('#ownDrawEmpty').text(res.message||'載入失敗'); return; }
+        if (!res.rows.length){ $('#ownDrawEmpty').text('主檔管理目前沒有任何標記「自家出的圖」的附件類別，請先到主檔管理→附件類別標籤設定勾選。'); return; }
+        $('#ownDrawEmpty').hide();
+        var html = '';
+        res.rows.forEach(function(r){
+            html += '<label class="ic-chk" style="display:flex;margin:4px 0;"><input type="checkbox" class="own-draw-ck" value="'+r.id+'"'+(r.type_id_ctrl_include?' checked':'')+'> '+esc(r.category_name)+'</label>';
+        });
+        $('#ownDrawList').html(html);
+    });
+});
+function saveOwnDrawCats(){
+    var ids = $('#ownDrawList .own-draw-ck:checked').map(function(){ return $(this).val(); }).get();
+    $.post(API, {action:'save_own_drawing_categories', category_ids: JSON.stringify(ids)}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        closeMask('ownDrawMask');
+    }, 'json');
 }
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
