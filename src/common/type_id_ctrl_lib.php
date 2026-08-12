@@ -60,6 +60,11 @@ function type_id_ctrl_ensure_schema(PDO $db): void {
         // is_own_drawing(自家出的圖)/is_external_doc(外來文件清單) 兩個既有旗標，這裡加第三個獨立旗標，
         // 讓管理員從「自家出的圖」的類別中，另外勾選哪些也要納入本模組（設定入口在本頁，不是主檔管理頁）。
         "ALTER TABLE quotation_file_categories ADD COLUMN type_id_ctrl_include TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否納入型態識別文件管制表(僅對is_own_drawing=1的類別有意義)'",
+        // 「廠內圖面標籤設定」新增兩項可設定值（2026-08-12 使用者要求）：①顯示名稱沿用既有
+        // external_doc_name 欄位(與外來文件清單共用同一顯示名稱，不另開欄位)；②need_process 標記
+        // 該類別文件是否建議標示所屬製程，僅供項目列「所屬製程」欄留空時的視覺提示，不強制驗證。
+        "ALTER TABLE quotation_file_categories ADD COLUMN type_id_ctrl_need_process TINYINT(1) NOT NULL DEFAULT 0 COMMENT '此類別文件是否建議標示所屬製程(僅視覺提示，設定入口見型態識別文件管制表「廠內圖面標籤設定」)'",
+        "ALTER TABLE type_id_ctrl_item ADD COLUMN need_process_hint TINYINT(1) NOT NULL DEFAULT 0 COMMENT '同步當下來源類別是否建議標示所屬製程(僅視覺提示，快照非即時)' AFTER process_tag",
         // 架構改版（2026-08-12 使用者拍板）：原本「一料號一製程一份」造成同一張共用圖面在多份管制表
         // 重複出現，改成「一料號一份」，製程改記在每一列項目上（共用文件留空＝適用全部製程）。
         // process_desc 欄位保留但不再是尋找/建立表頭的鍵值，僅作歷史相容用途，新資料不寫入。
@@ -179,9 +184,12 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
  * 與 ConfigIdDoc_API.php 舊版 search_ext_doc 邏輯相同來源，但不加關鍵字篩選（同步/自動產生用）。
  */
 function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
-    $cats = $db->query("SELECT id, COALESCE(NULLIF(external_doc_name,''), category_name) AS disp
-                         FROM quotation_file_categories WHERE is_external_doc=1 OR type_id_ctrl_include=1")->fetchAll(PDO::FETCH_KEY_PAIR);
-    if (!$cats) return [];
+    $catRows = $db->query("SELECT id, COALESCE(NULLIF(external_doc_name,''), category_name) AS disp,
+                                   COALESCE(type_id_ctrl_need_process,0) AS need_process
+                            FROM quotation_file_categories WHERE is_external_doc=1 OR type_id_ctrl_include=1")->fetchAll(PDO::FETCH_ASSOC);
+    if (!$catRows) return [];
+    $cats = [];
+    foreach ($catRows as $cr) { $cats[(int)$cr['id']] = ['disp'=>$cr['disp'], 'need_process'=>(bool)$cr['need_process']]; }
     $catIds = array_keys($cats);
     $catCond = function (string $col, string $singleCol = '') use ($catIds): string {
         $parts = [];
@@ -228,14 +236,19 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
     }
 
     foreach ($rows as &$r) {
-        $names = [];
+        $names = []; $needProcess = false;
         foreach (array_filter(explode(',', str_replace(' ', '', (string)$r['category_ids']))) as $cid) {
-            if (isset($cats[(int)$cid])) $names[] = $cats[(int)$cid];
+            if (isset($cats[(int)$cid])) {
+                $names[] = $cats[(int)$cid]['disp'];
+                if ($cats[(int)$cid]['need_process']) $needProcess = true;
+            }
         }
         if (!$names && $r['category_id_single'] !== '' && isset($cats[(int)$r['category_id_single']])) {
-            $names[] = $cats[(int)$r['category_id_single']];
+            $names[] = $cats[(int)$r['category_id_single']]['disp'];
+            if ($cats[(int)$r['category_id_single']]['need_process']) $needProcess = true;
         }
         $r['categories'] = $names;
+        $r['need_process'] = $needProcess;
         unset($r['category_ids'], $r['category_id_single']);
     }
     unset($r);
@@ -378,9 +391,10 @@ function type_id_ctrl_sync_part(PDO $db, int $dsPk): array {
         $guessType = type_id_ctrl_guess_type($er['categories'] ?? []);
         $itemName = !empty($er['categories']) ? $er['categories'][0] : $er['doc_name'];
         $originProcess = $er['origin_process'] ?? null;
-        $st = $db->prepare("INSERT INTO type_id_ctrl_item (doc_id, seq, item_name, item_type, process_tag, ref_source, ref_attach_id, ref_ds_pk)
-                             VALUES (?,?,?,?,?,?,?,?)");
-        $st->execute([$docId, $seq, $itemName, $guessType, ($originProcess !== '' ? $originProcess : null), $er['source'], $er['attach_id'], $er['ds_pk']]);
+        $needProcessHint = !empty($er['need_process']) ? 1 : 0;
+        $st = $db->prepare("INSERT INTO type_id_ctrl_item (doc_id, seq, item_name, item_type, process_tag, need_process_hint, ref_source, ref_attach_id, ref_ds_pk)
+                             VALUES (?,?,?,?,?,?,?,?,?)");
+        $st->execute([$docId, $seq, $itemName, $guessType, ($originProcess !== '' ? $originProcess : null), $needProcessHint, $er['source'], $er['attach_id'], $er['ds_pk']]);
         $addedCount++;
     }
 
