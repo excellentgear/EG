@@ -2441,8 +2441,7 @@ $('#yrPrint').on('click', function(){
       + '@bottom-left{content:"第" counter(page) "頁／共" counter(pages) "頁";font-size:9pt;color:#333;}}'
       + '</style></head><body><div class="pg">'
       + '<div class="co">'+esc((META&&META.company_name)||'')+'</div>'
-      + '<h2>'+title+'</h2><div class="sub">列印時間：'+new Date().toLocaleString('zh-TW')
-      + '　／　KPI 2-GM-04-01 #18 量測儀器按時校驗率</div>'
+      + '<h2>'+title+'</h2><div class="sub">KPI 2-GM-04-01 #18 量測儀器按時校驗率</div>'
       + body + '</div></body></html>');
     w.document.close();
     w.focus();
