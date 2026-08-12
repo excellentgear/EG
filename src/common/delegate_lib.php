@@ -357,6 +357,36 @@ if (!function_exists('eg_log_delegate_event')) {
     }
 }
 
+if (!function_exists('eg_log_full_inherit_grant')) {
+    /**
+     * 寫 audit_log：留停/育嬰留停等假別（leave_type.full_inherit_permission=1）核准生效，
+     * 代理人開始「完整承接」被代理人該職務身分的頁面/設定權限（見 rf_load_full_inherit_delegate_features）。
+     * 只在核准當下寫一次（見 leave_lib.php eg_leave_sign() 全過分支），不逐次頁面刷新都寫，避免灌爆稽核表。
+     * 提前結束/自然到期不另寫收回事件——leave_request 本身的 end_datetime／orig_end_datetime／
+     * early_end_reason 已是該次授權何時、為何提前結束的第一手紀錄。fail-open。
+     */
+    function eg_log_full_inherit_grant(PDO $db, int $targetUserId, int $agentUserId, array $meta): void {
+        try {
+            $st = $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                                VALUES ('DELEGATE_FULL_INHERIT', 'user', ?, ?, ?, NULL, 'delegate_lib', NOW())");
+            $st->execute([
+                (string)$agentUserId,
+                (string)($meta['agent_name'] ?? ''),
+                json_encode([
+                    'target_user_id'    => $targetUserId,
+                    'target_name'       => $meta['target_name'] ?? '',
+                    'agent_user_id'     => $agentUserId,
+                    'scope_label'       => $meta['scope_label'] ?? '',
+                    'leave_request_id'  => $meta['leave_request_id'] ?? null,
+                    'leave_name'        => $meta['leave_name'] ?? '',
+                    'start'             => $meta['start'] ?? '',
+                    'end'               => $meta['end'] ?? '',
+                ], JSON_UNESCAPED_UNICODE),
+            ]);
+        } catch (Throwable $e) { /* 稽核寫入失敗不擋流程 */ }
+    }
+}
+
 if (!function_exists('eg_resolve_signer')) {
     /**
      * 全系統唯一入口：解析某人（target）在特定情境下實際該簽核／收待辦的人。
