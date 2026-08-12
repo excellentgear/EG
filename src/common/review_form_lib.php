@@ -413,6 +413,11 @@ function rvf_item_confirm(PDO $db, int $itemId, int $forUid, string $password): 
     $st->execute([$itemId]);
     $item = $st->fetch(PDO::FETCH_ASSOC);
     if (!$item) return ['ok'=>false, 'msg'=>'找不到此項目'];
+    $inst = rvf_instance_get($db, (int)$item['instance_id']);
+    if ($inst) {
+        $schema = rvf_template_schema_at_version($db, (int)$inst['template_id'], (int)$inst['template_version']);
+        if (($schema['sign_mode'] ?? 'password') === 'none') return ['ok'=>false, 'msg'=>'本模板不須簽名，前端不應顯示此動作'];
+    }
     $signers = rvf_item_required_signers($db, $item);
     $signer = null;
     foreach ($signers as $s) if ((int)$s['id'] === $forUid) { $signer = $s; break; }

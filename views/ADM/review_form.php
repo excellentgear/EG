@@ -375,6 +375,7 @@ $(document).on('click', '.itm-up .dp-list div[data-id]', function(){
 });
 function signSlotsHtml(i, it){
     if (!it.required_signers || !it.required_signers.length) return '<span style="color:#b0a390;font-size:11px;">未指派負責人</span>';
+    if ((CUR_SCHEMA.sign_mode||'password')==='none') return '<span style="color:#b0a390;font-size:11px;">（本模板不須簽名）</span>';
     var doneUids = (it.confirms||[]).map(function(c){ return String(c.user_id); });
     return it.required_signers.map(function(s){
         var done = doneUids.indexOf(String(s.id))>=0;
@@ -514,8 +515,8 @@ function printForm(){
         });
         var ownerTxt = (it.owner_depts||[]).map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?d.name:''; })
             .concat((it.owner_users||[]).map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?p.user_cname:''; })).filter(Boolean).join('、');
-        var signHtml = (it.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');
-        if (!signHtml && PREVIEW_MODE && (it.owner_depts.length || it.owner_users.length)) signHtml = stampList('（簽名樣式預覽）', dispDate(CUR.business_date));
+        var signHtml = (schema.sign_mode||'password')==='none' ? '' : (it.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');
+        if (!signHtml && PREVIEW_MODE && (schema.sign_mode||'password')!=='none' && (it.owner_depts.length || it.owner_users.length)) signHtml = stampList('（簽名樣式預覽）', dispDate(CUR.business_date));
         h += '<td>'+esc(ownerTxt)+'</td><td>'+signHtml+'</td></tr>';
     });
     h += '</tbody></table>';
