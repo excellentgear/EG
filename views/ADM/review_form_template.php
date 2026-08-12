@@ -140,10 +140,12 @@ $perms = rvf_perms($db, $rvfUser);
             <label><input type="checkbox" id="stNeedReview"> 需要審核</label>
             <label>審核部門（該部門任一主管審核通過即完成）</label>
             <select id="stReviewDept"><option value="">（未設定）</option></select>
+            <label><input type="checkbox" id="stAutoReview"> 自動簽核（不等真人，送出後系統立即以審核池第一位的名義自動核准；簽核時間會刻意跟送出時間錯開幾分鐘，詳見 ai-rules/21）</label>
         </div>
 
         <div class="rf-sec"><div class="rf-sec-title">核准（可選）</div>
             <label><input type="checkbox" id="stNeedApproval"> 需要核准</label>
+            <label><input type="checkbox" id="stAutoApproval"> 自動簽核（不等真人，比照上方審核的自動簽核規則）</label>
             <div class="rf-hint">核准人員優先序：由上而下依序嘗試，取第一個有結果的方法；解析到送出者本人會自動跳下一順位（迴避球員兼裁判）。預設僅「最高決策者」。</div>
             <div id="chainBox"></div>
             <div class="grid2">
@@ -409,8 +411,8 @@ function openSettingModal(id){
         $('#settingTitle').text('新增模板'); $('#stName').val(''); $('#stPaper').val('A4'); $('#stOrientation').val('landscape');
         $('#stListStamp').val('0'); $('#stFooterStamp').val('0');
         $('#stDocLabel').text('未綁定').data('id',0);
-        $('#stNeedReview').prop('checked',false); $('#stReviewDept').val('');
-        $('#stNeedApproval').prop('checked',false); $('#stApproverDept').val(''); $('#stApproverUser').val('');
+        $('#stNeedReview').prop('checked',false); $('#stAutoReview').prop('checked',false); $('#stReviewDept').val('');
+        $('#stNeedApproval').prop('checked',false); $('#stAutoApproval').prop('checked',false); $('#stApproverDept').val(''); $('#stApproverUser').val('');
         renderChainBox(); $('.chain-sel[data-idx=0]').val('top_approver');
         $('#stMaintainDept').val('');
         openMask('settingMask'); return;
@@ -422,8 +424,8 @@ function openSettingModal(id){
         $('#stName').val(t.name); $('#stPaper').val(t.paper_size); $('#stOrientation').val(t.orientation||'landscape');
         $('#stListStamp').val(t.list_stamp_tpl_id||0); $('#stFooterStamp').val(t.footer_stamp_tpl_id||0);
         $('#stDocLabel').text(t.as_doc ? (t.as_doc.doc_no+' '+t.as_doc.doc_name) : '未綁定').data('id', t.as_doc?t.as_doc.id:0);
-        $('#stNeedReview').prop('checked', t.need_review==1); $('#stReviewDept').val(t.review_dept_id||'');
-        $('#stNeedApproval').prop('checked', t.need_approval==1);
+        $('#stNeedReview').prop('checked', t.need_review==1); $('#stAutoReview').prop('checked', t.auto_review==1); $('#stReviewDept').val(t.review_dept_id||'');
+        $('#stNeedApproval').prop('checked', t.need_approval==1); $('#stAutoApproval').prop('checked', t.auto_approval==1);
         $('#stApproverDept').val(t.approver_dept_id||''); $('#stApproverUser').val(t.approver_user_id||'');
         renderChainBox();
         (t.approver_chain||['top_approver']).forEach(function(m,i){ $('.chain-sel[data-idx='+i+']').val(m); });
@@ -447,8 +449,8 @@ function submitTplSettings(){
     $.post(API, {
         action:'template_settings_save', csrf:META.csrf, id:$('#stId').val(), name:name, paper_size:$('#stPaper').val(),
         orientation:$('#stOrientation').val(), list_stamp_tpl_id:$('#stListStamp').val(), footer_stamp_tpl_id:$('#stFooterStamp').val(),
-        need_review: $('#stNeedReview').is(':checked')?1:0, review_dept_id:$('#stReviewDept').val(),
-        need_approval: $('#stNeedApproval').is(':checked')?1:0,
+        need_review: $('#stNeedReview').is(':checked')?1:0, auto_review: $('#stAutoReview').is(':checked')?1:0, review_dept_id:$('#stReviewDept').val(),
+        need_approval: $('#stNeedApproval').is(':checked')?1:0, auto_approval: $('#stAutoApproval').is(':checked')?1:0,
         approver_dept_id:$('#stApproverDept').val(), approver_user_id:$('#stApproverUser').val(),
         approver_chain: JSON.stringify(chain.length?chain:['top_approver']),
         maintain_dept_id:$('#stMaintainDept').val(), as_doc_id:$('#stDocLabel').data('id')||0

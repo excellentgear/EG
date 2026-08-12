@@ -255,6 +255,10 @@ function renderView(){
     if (PREVIEW_MODE) h += '<div style="background:#FFF7E8;border:1px dashed #E8D5B5;border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:12.5px;color:#8a6d45;">'
         + '<i class="fa fa-flask"></i> 試填預覽模式：這裡的內容<b>不會儲存、不會建立實際表單資料</b>，純粹用來檢查目前欄位定義的排版與列印效果。關閉分頁即消失。</div>';
     h += '<div style="max-width:220px;"><label>建立日期</label><input type="date" id="vBizDate" max="9999-12-31" value="'+esc(CUR.business_date)+'" '+(isDraftMine()?'':'disabled')+'></div>';
+    if (!PREVIEW_MODE && CUR.status!=='draft' && CUR.submit_date) {
+        h += '<div style="margin-top:4px;font-size:12.5px;color:#8a6d45;">送出日：'+dispDate(CUR.submit_date)+
+             (META.perms.isAdmin ? ' <a href="javascript:void(0)" onclick="editSubmitDate()" style="margin-left:6px;">（超級管理員：修改送出日）</a>' : '')+'</div>';
+    }
     h += '<div class="itm-tbl-wrap"><table class="itm-tbl"><thead><tr><th style="width:26px;">#</th><th>項目</th>';
     (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+esc(c.label)+'</th>'; });
     h += '<th>負責單位/負責人</th>';
@@ -431,6 +435,16 @@ function deleteForm(){
     $.post(API, {action:'instance_delete', csrf:META.csrf, instance_id:CUR.id}, function(res){
         if (!res.ok){ alert(res.error||'刪除失敗'); return; }
         closeMask('viewMask'); loadList();
+    }, 'json');
+}
+/* 補登舊資料用（ai-rules/21 鐵則2）：僅超級管理員看得到入口；回改後自動簽核紀錄的日期會同步跟著調整。 */
+function editSubmitDate(){
+    var d = prompt('修改送出日（僅影響此筆；自動簽核的紀錄會同步調整日期）：', CUR.submit_date||'');
+    if (!d) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)){ alert('請輸入 YYYY-MM-DD 格式的日期'); return; }
+    $.post(API, {action:'instance_edit_submit_date', csrf:META.csrf, instance_id:CUR.id, submit_date:d}, function(res){
+        if (!res.ok){ alert(res.error||'修改失敗'); return; }
+        openView(CUR.id);
     }, 'json');
 }
 

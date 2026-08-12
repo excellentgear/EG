@@ -224,21 +224,21 @@ function rvf_template_settings_save(PDO $db, int $id, array $d, string $byName):
     $orientation = ($d['orientation'] ?? 'landscape') === 'portrait' ? 'portrait' : 'landscape';
     if ($id) {
         $db->prepare("UPDATE rf_template SET name=?,paper_size=?,orientation=?,list_stamp_tpl_id=?,footer_stamp_tpl_id=?,
-                      need_review=?,review_dept_id=?,need_approval=?,
+                      need_review=?,auto_review=?,review_dept_id=?,need_approval=?,auto_approval=?,
                       approver_dept_id=?,approver_user_id=?,approver_chain_json=?,maintain_dept_id=?,updated_by=?,updated_at=NOW() WHERE id=?")
            ->execute([$d['name'], $d['paper_size'], $orientation, $d['list_stamp_tpl_id'] ?: null, $d['footer_stamp_tpl_id'] ?: null,
-                      $d['need_review']?1:0, $d['review_dept_id'] ?: null,
-                      $d['need_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
+                      $d['need_review']?1:0, $d['auto_review']?1:0, $d['review_dept_id'] ?: null,
+                      $d['need_approval']?1:0, $d['auto_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
                       $chain, $d['maintain_dept_id'] ?: null, $byName, $id]);
         return $id;
     }
     $db->prepare("INSERT INTO rf_template (name,paper_size,orientation,list_stamp_tpl_id,footer_stamp_tpl_id,
-                  need_review,review_dept_id,need_approval,approver_dept_id,
+                  need_review,auto_review,review_dept_id,need_approval,auto_approval,approver_dept_id,
                   approver_user_id,approver_chain_json,maintain_dept_id,current_schema_json,published_version,created_by)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)")
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)")
        ->execute([$d['name'], $d['paper_size'], $orientation, $d['list_stamp_tpl_id'] ?: null, $d['footer_stamp_tpl_id'] ?: null,
-                  $d['need_review']?1:0, $d['review_dept_id'] ?: null,
-                  $d['need_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
+                  $d['need_review']?1:0, $d['auto_review']?1:0, $d['review_dept_id'] ?: null,
+                  $d['need_approval']?1:0, $d['auto_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
                   $chain, $d['maintain_dept_id'] ?: null,
                   json_encode(['fields'=>[], 'sign_mode'=>'password'], JSON_UNESCAPED_UNICODE), $byName]);
     return (int)$db->lastInsertId();
@@ -480,6 +480,53 @@ function rvf_notify_item_owners(PDO $db, int $instanceId, int $fromUid): void {
 
 /* -------- 送出／審核／核准 -------- */
 
+/** 自動簽核（ai-rules/21 三條鐵則）：立即建立一筆已核准的 approval_record，簽核人歸屬走該關卡合格簽核池第一位，
+ *  池空退回 top_approver；決行時間 = 送出時間 + 隨機5~30分鐘，跨天鎖回送出日23:59。不改 approval_lib.php 本身，
+ *  只在這裡事後 UPDATE decided_at，避免影響其他模組的人工簽核時間。 */
+function rvf_auto_sign(PDO $db, int $instanceId, string $level, array $tpl, int $submitterUid, string $submitterName, string $submitDate): string {
+    $pool = $level === 'review' ? rvf_review_pool($db, $tpl) : rvf_approver_pool($db, $tpl, $submitterUid);
+    $signerId = $pool ? (int)$pool[0]['id'] : null;
+    $signerName = $pool ? $pool[0]['user_cname'] : null;
+    if (!$signerName) {
+        $top = eg_org_user($db, 'top_approver');
+        $signerId = $top ? (int)$top['id'] : null;
+        $signerName = $top ? $top['user_cname'] : null;
+    }
+    if (!$signerName) { $signerId = $submitterUid; $signerName = $submitterName; }
+    $aid = eg_approval_submit($db, 'review_form', $instanceId, $level, $submitterUid, $submitterName);
+    eg_approval_decide($db, $aid, $signerId, $signerName, 'approved', '（系統自動簽核）');
+    $offsetMin = random_int(5, 30);
+    $db->prepare("UPDATE approval_record SET decided_at = LEAST(DATE_ADD(submitted_at, INTERVAL ? MINUTE), CONCAT(?, ' 23:59:59')) WHERE id=?")
+       ->execute([$offsetMin, $submitDate, $aid]);
+    return $signerName;
+}
+
+/** 審核關卡結束(不論是不需要審核、自動簽核、或人工審核通過)後接著判斷要不要進入核准關卡；不需要就直接approved。
+ *  submit() 與 rvf_review_decide() 都會走到這裡，抽成共用避免兩處各寫一份規則不一致。 */
+function rvf_advance_to_approval(PDO $db, int $instanceId, array $tpl, array $inst, string $submitDate): array {
+    if (empty($tpl['need_approval'])) {
+        $db->prepare("UPDATE rf_instance SET status='approved',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
+        return ['ok'=>true, 'status'=>'approved'];
+    }
+    $submitterUid = (int)$inst['created_by'];
+    $submitterName = (string)$inst['created_by_name'];
+    if (!empty($tpl['auto_approval'])) {
+        rvf_auto_sign($db, $instanceId, 'approval', $tpl, $submitterUid, $submitterName, $submitDate);
+        $db->prepare("UPDATE rf_instance SET status='approved',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
+        return ['ok'=>true, 'status'=>'approved'];
+    }
+    $apool = rvf_approver_pool($db, $tpl, $submitterUid);
+    if (!$apool) {
+        $db->prepare("UPDATE rf_instance SET status='approving',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
+        return ['ok'=>false, 'msg'=>'核准人員解析不到合格人選，請聯絡管理員'];
+    }
+    eg_approval_submit($db, 'review_form', $instanceId, 'approval', $submitterUid, $submitterName);
+    rvf_notify($db, $instanceId, array_column($apool, 'id'), '「' . $tpl['name'] . '」表單待您核准',
+        $submitterName . ' 的「' . $tpl['name'] . '」待您核准。', $submitterUid, 'RVF_APPROVAL', 'sign');
+    $db->prepare("UPDATE rf_instance SET status='approving',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
+    return ['ok'=>true, 'status'=>'approving'];
+}
+
 function rvf_instance_submit(PDO $db, int $instanceId, int $uid, string $uname): array {
     $inst = rvf_instance_get($db, $instanceId);
     if (!$inst) return ['ok'=>false, 'msg'=>'找不到此表單'];
@@ -488,30 +535,34 @@ function rvf_instance_submit(PDO $db, int $instanceId, int $uid, string $uname):
     $tpl = rvf_template_get($db, (int)$inst['template_id']);
     if (!$tpl) return ['ok'=>false, 'msg'=>'模板不存在'];
 
-    $status = 'approved';
+    // 送出日鐵則(ai-rules/21)：一般使用者不可自選，一律當下日期；業務日期跟精確時間戳分開存，送出後鎖定不可再改。
+    $submitDate = date('Y-m-d');
+    $db->prepare("UPDATE rf_instance SET submit_date=?, submitted_at=NOW() WHERE id=?")->execute([$submitDate, $instanceId]);
+    $inst['submit_date'] = $submitDate;
+
+    $result = null;
     if (!empty($tpl['need_review'])) {
-        $pool = rvf_review_pool($db, $tpl);
-        if (!$pool) return ['ok'=>false, 'msg'=>'審核部門尚未設定可審核的主管，請聯絡管理員'];
-        eg_approval_submit($db, 'review_form', $instanceId, 'review', $uid, $uname);
-        rvf_notify($db, $instanceId, array_column($pool, 'id'),
-            '「' . $tpl['name'] . '」表單待您審核',
-            $uname . ' 送出了一份「' . $tpl['name'] . '」，請審核。', $uid, 'RVF_REVIEW', 'sign');
-        $status = 'reviewing';
-    } elseif (!empty($tpl['need_approval'])) {
-        $pool = rvf_approver_pool($db, $tpl, $uid);
-        if (!$pool) return ['ok'=>false, 'msg'=>'核准人員解析不到合格人選，請聯絡管理員'];
-        eg_approval_submit($db, 'review_form', $instanceId, 'approval', $uid, $uname);
-        rvf_notify($db, $instanceId, array_column($pool, 'id'),
-            '「' . $tpl['name'] . '」表單待您核准',
-            $uname . ' 送出了一份「' . $tpl['name'] . '」，請核准。', $uid, 'RVF_APPROVAL', 'sign');
-        $status = 'approving';
+        if (!empty($tpl['auto_review'])) {
+            rvf_auto_sign($db, $instanceId, 'review', $tpl, $uid, $uname, $submitDate);
+            $result = rvf_advance_to_approval($db, $instanceId, $tpl, $inst, $submitDate);
+        } else {
+            $pool = rvf_review_pool($db, $tpl);
+            if (!$pool) return ['ok'=>false, 'msg'=>'審核部門尚未設定可審核的主管，請聯絡管理員'];
+            eg_approval_submit($db, 'review_form', $instanceId, 'review', $uid, $uname);
+            rvf_notify($db, $instanceId, array_column($pool, 'id'),
+                '「' . $tpl['name'] . '」表單待您審核',
+                $uname . ' 送出了一份「' . $tpl['name'] . '」，請審核。', $uid, 'RVF_REVIEW', 'sign');
+            $db->prepare("UPDATE rf_instance SET status='reviewing',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
+            $result = ['ok'=>true, 'status'=>'reviewing'];
+        }
+    } else {
+        $result = rvf_advance_to_approval($db, $instanceId, $tpl, $inst, $submitDate);
     }
-    $db->prepare("UPDATE rf_instance SET status=?,updated_at=NOW() WHERE id=?")->execute([$status, $instanceId]);
 
     $schema = json_decode((string)$tpl['current_schema_json'], true) ?: [];
     if (($schema['sign_mode'] ?? 'password') === 'notify') rvf_notify_item_owners($db, $instanceId, $uid);
 
-    return ['ok'=>true, 'status'=>$status];
+    return $result;
 }
 
 function rvf_review_decide(PDO $db, int $instanceId, int $uid, string $uname, string $decision, ?string $note = null): array {
@@ -529,22 +580,12 @@ function rvf_review_decide(PDO $db, int $instanceId, int $uid, string $uname, st
             $uname . ' 退回了「' . $tpl['name'] . '」。退回原因：' . $note, $uid, 'RVF_RESULT', 'read');
         return ['ok'=>true, 'status'=>'rejected'];
     }
-    if (!empty($tpl['need_approval'])) {
-        $apool = rvf_approver_pool($db, $tpl, (int)$inst['created_by']);
-        if (!$apool) {
-            $db->prepare("UPDATE rf_instance SET status='approving',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
-            return ['ok'=>false, 'msg'=>'審核通過，但核准人員解析不到合格人選，請聯絡管理員'];
-        }
-        eg_approval_submit($db, 'review_form', $instanceId, 'approval', (int)$inst['created_by'], (string)$inst['created_by_name']);
-        rvf_notify($db, $instanceId, array_column($apool, 'id'), '「' . $tpl['name'] . '」表單待您核准',
-            '審核已通過「' . $tpl['name'] . '」，請核准。', $uid, 'RVF_APPROVAL', 'sign');
-        $db->prepare("UPDATE rf_instance SET status='approving',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
-        return ['ok'=>true, 'status'=>'approving'];
+    $result = rvf_advance_to_approval($db, $instanceId, $tpl, $inst, (string)($inst['submit_date'] ?: date('Y-m-d')));
+    if ($result['ok'] && $result['status'] === 'approved') {
+        rvf_notify($db, $instanceId, [(int)$inst['created_by']], '「' . $tpl['name'] . '」表單已完成審核',
+            $uname . ' 已審核通過「' . $tpl['name'] . '」。', $uid, 'RVF_RESULT', 'read');
     }
-    $db->prepare("UPDATE rf_instance SET status='approved',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
-    rvf_notify($db, $instanceId, [(int)$inst['created_by']], '「' . $tpl['name'] . '」表單已完成審核',
-        $uname . ' 已審核通過「' . $tpl['name'] . '」。', $uid, 'RVF_RESULT', 'read');
-    return ['ok'=>true, 'status'=>'approved'];
+    return $result;
 }
 
 function rvf_approval_decide(PDO $db, int $instanceId, int $uid, string $uname, string $decision, ?string $note = null): array {
@@ -562,6 +603,25 @@ function rvf_approval_decide(PDO $db, int $instanceId, int $uid, string $uname, 
     rvf_notify($db, $instanceId, [(int)$inst['created_by']], '「' . $tpl['name'] . '」表單' . ($decision==='rejected'?'被退回':'已核准'),
         $uname . ' ' . $msg . '「' . $tpl['name'] . '」。', $uid, 'RVF_RESULT', 'read');
     return ['ok'=>true, 'status'=>$newStatus];
+}
+
+/** 超級管理員回改已送出單據的送出日（ai-rules/21 鐵則2，補登舊資料用；一般使用者不可呼叫，由 API 層守門）。
+ *  同步調整該表單底下自動簽核紀錄的日期——只搬日期、保留原本抽到的時分秒，不重新抽亂數，也不動 submitted_at
+ *  （那是「實際點擊送出」的稽核事實，不因補登而竄改）。 */
+function rvf_instance_edit_submit_date(PDO $db, int $instanceId, string $newDate): array {
+    $inst = rvf_instance_get($db, $instanceId);
+    if (!$inst) return ['ok'=>false, 'msg'=>'找不到此表單'];
+    if ($inst['status'] === 'draft') return ['ok'=>false, 'msg'=>'尚未送出的草稿沒有送出日可改'];
+    if (!$inst['submit_date']) return ['ok'=>false, 'msg'=>'此表單無送出日紀錄（舊資料，無法回改）'];
+    $db->prepare("UPDATE rf_instance SET submit_date=? WHERE id=?")->execute([$newDate, $instanceId]);
+    foreach (['review', 'approval'] as $level) {
+        $rec = eg_approval_latest($db, 'review_form', $instanceId, $level);
+        if ($rec && $rec['status'] === 'approved' && strpos((string)$rec['note'], '系統自動簽核') !== false) {
+            $db->prepare("UPDATE approval_record SET decided_at = CONCAT(?, ' ', TIME(decided_at)) WHERE id=?")
+               ->execute([$newDate, $rec['id']]);
+        }
+    }
+    return ['ok'=>true];
 }
 
 /* ============================================================ 列印 ============================================================ */

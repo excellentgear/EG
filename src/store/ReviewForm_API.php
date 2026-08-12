@@ -86,8 +86,9 @@ case 'template_settings_save': {
         'name'=>$name, 'paper_size'=>$paper, 'orientation'=>$orientation,
         'list_stamp_tpl_id'=>(int)($_POST['list_stamp_tpl_id'] ?? 0) ?: null,
         'footer_stamp_tpl_id'=>(int)($_POST['footer_stamp_tpl_id'] ?? 0) ?: null,
-        'need_review'=>!empty($_POST['need_review']), 'review_dept_id'=>(int)($_POST['review_dept_id'] ?? 0) ?: null,
-        'need_approval'=>!empty($_POST['need_approval']),
+        'need_review'=>!empty($_POST['need_review']), 'auto_review'=>!empty($_POST['auto_review']),
+        'review_dept_id'=>(int)($_POST['review_dept_id'] ?? 0) ?: null,
+        'need_approval'=>!empty($_POST['need_approval']), 'auto_approval'=>!empty($_POST['auto_approval']),
         'approver_dept_id'=>(int)($_POST['approver_dept_id'] ?? 0) ?: null,
         'approver_user_id'=>(int)($_POST['approver_user_id'] ?? 0) ?: null,
         'approver_chain'=>is_array($chain) ? $chain : ['top_approver'],
@@ -249,6 +250,18 @@ case 'approval_decide': {
     $r = rvf_approval_decide($db, $id, $uid, $uname, $decision, $note ?: null);
     if (!$r['ok']) jerr($r['msg']);
     jout(['status'=>$r['status']]);
+}
+
+/* ai-rules/21 鐵則2：僅超級管理員可回改已送出單據的送出日（補登舊資料用），一般使用者不可呼叫。 */
+case 'instance_edit_submit_date': {
+    rvf_need_csrf();
+    if (!$perms['isAdmin']) jerr('僅超級管理員可回改送出日', 403);
+    $id = (int)($_POST['instance_id'] ?? 0);
+    $newDate = trim((string)($_POST['submit_date'] ?? ''));
+    if (!$newDate) jerr('請選擇日期');
+    $r = rvf_instance_edit_submit_date($db, $id, $newDate);
+    if (!$r['ok']) jerr($r['msg']);
+    jout([]);
 }
 
 default: jerr('未知的操作：' . $action, 400);
