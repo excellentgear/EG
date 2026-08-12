@@ -83,8 +83,17 @@ $perms = td_dev_eval_perms($db, $teUser);
         .sg-modal .m-foot button { height:30px; padding:0 16px; border-radius:4px; font-size:13px; border:1px solid #d98a33; cursor:pointer; }
         .sg-modal .m-foot .b-ok { background:#F0A24B; color:#fff; }
         .sg-modal .m-foot .b-cancel { background:#fff; color:#5b3a1e; border-color:#D8BE93; margin-right:6px; }
-        .sg-cust-list { max-height:360px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; padding:8px; }
-        .sg-cust-list label { display:block; font-weight:normal; font-size:13px; margin:2px 0; cursor:pointer; }
+        .sg-cust-list { max-height:300px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; padding:8px; }
+        .sg-cust-row { display:flex; align-items:center; gap:6px; font-size:13px; padding:4px 6px; border-radius:4px; cursor:pointer; }
+        .sg-cust-row:hover { background:#F7E0BD; }
+        .sg-cust-row .sg-cust-id { color:#8a6d45; font-size:11px; }
+        .sg-cust-selected { display:flex; flex-wrap:wrap; gap:6px; min-height:30px; border:1px dashed #D8BE93; border-radius:6px;
+            padding:6px; margin-bottom:8px; background:#FDF8EF; }
+        .sg-cust-chip { display:inline-flex; align-items:center; gap:5px; background:#F0A24B; color:#fff; border-radius:12px;
+            padding:3px 6px 3px 10px; font-size:12px; white-space:nowrap; }
+        .sg-cust-chip i { cursor:pointer; opacity:.85; }
+        .sg-cust-chip i:hover { opacity:1; }
+        .sg-cust-empty-hint { color:#8a6d45; font-size:12px; }
         .sg-hist-row { border-bottom:1px dashed #EADFC8; padding:5px 0; font-size:13px; }
         .sg-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
@@ -140,8 +149,9 @@ $perms = td_dev_eval_perms($db, $teUser);
 <div class="sg-mask" id="custMask"><div class="sg-modal">
     <div class="m-head"><span>客戶名單設定</span><span class="m-close" onclick="closeMask('custMask')">✕</span></div>
     <div class="m-body">
-        <div class="sg-hint">勾選要納入建議建立清單掃描範圍的客戶（僅在名單內的客戶，其料號才會被列出）。</div>
-        <input type="text" id="custFilter" placeholder="輸入客戶名稱篩選…" style="width:100%;margin-bottom:8px;height:30px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;">
+        <div class="sg-hint">要納入建議建立清單掃描範圍的客戶（僅在名單內的客戶，其料號才會被列出）。已選客戶列在下方，點右側 ✕ 可移除。</div>
+        <div class="sg-cust-selected" id="custSelectedBox"></div>
+        <input type="text" id="custFilter" placeholder="輸入客戶名稱或客戶編號篩選…" style="width:100%;margin-bottom:8px;height:30px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;">
         <div class="sg-cust-list" id="custListBox"></div>
     </div>
     <div class="m-foot">
@@ -171,7 +181,7 @@ $perms = td_dev_eval_perms($db, $teUser);
         <p>依管理員設定的客戶名單，掃描指定區間內曾有「訂單、報工、BOM、出貨」任一記錄的料號，列為建議建立「產品開發評估表」的候選清單，避免漏掉該做評估卻忘記建立的料號。已經建立過評估表的客戶+料號組合、以及使用者手動「忽略」過的項目，都不會再出現。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>先按「客戶名單設定」勾選要掃描的客戶（只掃這份名單內的客戶）。</li>
+            <li>先按「客戶名單設定」，輸入客戶名稱或客戶編號篩選後點選要加入的客戶（可複選，已選客戶會列在上方，點 ✕ 可移除），存檔後只掃這份名單內的客戶。</li>
             <li>設定查詢區間（預設近一年），按「查詢」。</li>
             <li>清單依客戶、料號排序；點「相關記錄」可看該料號在區間內的訂單/出貨/BOM/報工/報價記錄明細。</li>
             <li>「建立日期」欄：有解析到訂單日期者自動帶入（可手動改）；查無訂單日期者欄位會標紅，需先手動輸入，或用旁邊「套用BOM日期」「套用最早報工日期」按鈕快速套用參考日期，否則無法勾選建立。</li>
@@ -280,7 +290,7 @@ function loadList(){
     $.getJSON(API, {action:'list', date_from:$('#dateFrom').val(), date_to:$('#dateTo').val()}, function(res){
         if (!res.success){ $('#sgBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
         if (res.no_customer_configured){
-            $('#listHint').text('尚未設定客戶名單，請先按「客戶名單設定」勾選要掃描的客戶。');
+            $('#listHint').text('尚未設定客戶名單，請先按「客戶名單設定」選擇要掃描的客戶。');
             $('#sgBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">尚未設定客戶名單</td></tr>');
             return;
         }
@@ -297,30 +307,54 @@ $('#btnQuery').on('click', loadList);
 
 /* ---------- 客戶名單設定 ---------- */
 var ALL_CUSTOMERS = [];
+var SELECTED_CUST = []; // [{customer_id, customer}]，多選結果，上方以按鈕(chip)列出可點X移除
 $('#btnCustSetting').on('click', function(){
     $.getJSON(API, {action:'get_customer_setting'}, function(res){
         if (!res.success) return;
         ALL_CUSTOMERS = res.all_customers || [];
-        renderCustList(res.selected_ids || []);
+        var selectedIds = res.selected_ids || [];
+        SELECTED_CUST = ALL_CUSTOMERS.filter(function(c){ return selectedIds.indexOf(c.customer_id) >= 0; });
+        $('#custFilter').val('');
+        renderCustChips();
+        renderCustPickList('');
         openMask('custMask');
     });
 });
-function renderCustList(selectedIds, filterKw){
-    var kw = (filterKw||'').trim();
+function renderCustChips(){
+    var html = SELECTED_CUST.map(function(c){
+        return '<span class="sg-cust-chip">'+esc(c.customer)+' <i class="fa fa-times" onclick="removeCustChip(\''+esc(c.customer_id)+'\')"></i></span>';
+    }).join('');
+    $('#custSelectedBox').html(html || '<span class="sg-cust-empty-hint">尚未選擇任何客戶</span>');
+}
+/** 篩選欄同時比對客戶名稱與客戶編號（使用者明確要求可用客戶編號篩選），已選客戶不重複出現在待選清單 */
+function renderCustPickList(filterKw){
+    var kw = (filterKw||'').trim().toUpperCase();
+    var selectedIds = SELECTED_CUST.map(function(c){ return c.customer_id; });
     var html = '';
     ALL_CUSTOMERS.forEach(function(c){
-        if (kw && c.customer.indexOf(kw) < 0) return;
-        var checked = selectedIds.indexOf(c.customer_id) >= 0 ? ' checked' : '';
-        html += '<label><input type="checkbox" class="cust-chk" value="'+esc(c.customer_id)+'"'+checked+'> '+esc(c.customer)+'</label>';
+        if (selectedIds.indexOf(c.customer_id) >= 0) return;
+        if (kw && c.customer.toUpperCase().indexOf(kw) < 0 && String(c.customer_id).toUpperCase().indexOf(kw) < 0) return;
+        html += '<div class="sg-cust-row" onclick="addCustChip(\''+esc(c.customer_id)+'\')"><i class="fa fa-plus-circle" style="color:#8A5A2B;"></i> '
+            + esc(c.customer) + ' <span class="sg-cust-id">('+esc(c.customer_id)+')</span></div>';
     });
-    $('#custListBox').html(html || '<div style="color:#8a6d45;">查無符合的客戶</div>');
+    $('#custListBox').html(html || '<div style="color:#8a6d45;padding:6px;">查無符合的客戶</div>');
 }
-$('#custFilter').on('input', function(){
-    var curSelected = $('.cust-chk:checked').map(function(){ return $(this).val(); }).get();
-    renderCustList(curSelected, $(this).val());
-});
+window.addCustChip = function(id){
+    if (SELECTED_CUST.some(function(c){ return c.customer_id === id; })) return;
+    var c = ALL_CUSTOMERS.find(function(x){ return x.customer_id === id; });
+    if (!c) return;
+    SELECTED_CUST.push(c);
+    renderCustChips();
+    renderCustPickList($('#custFilter').val());
+};
+window.removeCustChip = function(id){
+    SELECTED_CUST = SELECTED_CUST.filter(function(c){ return c.customer_id !== id; });
+    renderCustChips();
+    renderCustPickList($('#custFilter').val());
+};
+$('#custFilter').on('input', function(){ renderCustPickList($(this).val()); });
 function saveCustSetting(){
-    var ids = $('.cust-chk:checked').map(function(){ return $(this).val(); }).get();
+    var ids = SELECTED_CUST.map(function(c){ return c.customer_id; });
     $.ajax({url:API+'?action=save_customer_setting', method:'POST', contentType:'application/json',
         data: JSON.stringify({customer_ids: ids}), dataType:'json',
         success: function(res){
