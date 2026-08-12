@@ -70,6 +70,7 @@ $canManage = $isAdmin || hasStampRole($db, $uid, ['stamp_manage']);
 $canView   = $canManage || hasStampRole($db, $uid, ['stamp_view']);
 function needManage(bool $canManage){ if (!$canManage) jerr('無圖章管理權限（需管理者或「圖章管理員」角色）', 403); }
 function needView(bool $canView){ if (!$canView) jerr('無圖章清冊檢閱權限（需「圖章檢閱」或「圖章管理員」角色，請洽管理者至人員權限設定指派）', 403); }
+function needBatch(bool $isAdmin, int $uid) { if (!($isAdmin && $uid === 1)) jerr('僅超級管理員（員工ID=1）可使用批次建立功能', 403); }
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
@@ -595,7 +596,6 @@ case 'next_serial': {
 
 // ══════════ 批次建立登記（僅超級管理員 員工ID=1）══════════
 // 多選部門→抓部門成員（含主職位＋兼任職位部門，各自一列）；可同時多選模板一次建立多種章。
-function needBatch(bool $isAdmin, int $uid) { if (!($isAdmin && $uid === 1)) jerr('僅超級管理員（員工ID=1）可使用批次建立功能', 403); }
 
 // ── 選定部門的成員清單（一人可能因主/兼任職位出現多列，各自不同 department_id）──
 case 'batch_members': {
