@@ -263,7 +263,8 @@ function renderView(){
     h += '<div class="itm-tbl-wrap"><table class="itm-tbl"><thead><tr><th style="width:26px;">#</th><th>項目</th>';
     (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+esc(c.label)+'</th>'; });
     h += '<th>負責單位/負責人</th>';
-    h += '<th>簽名</th>'+(isDraftMine()?'<th></th>':'')+'</tr></thead><tbody id="itmBody" data-eg-row-add="itemAdd" data-eg-row-del="itemDelLast"></tbody></table></div>';
+    if ((CUR_SCHEMA.sign_mode||'password')!=='none') h += '<th>簽名</th>';
+    h += (isDraftMine()?'<th></th>':'')+'</tr></thead><tbody id="itmBody" data-eg-row-add="itemAdd" data-eg-row-del="itemDelLast"></tbody></table></div>';
     if (isDraftMine()) h += '<button class="rf-btn-sm" onclick="itemAdd()" style="margin-right:6px;">+新增列</button><button class="rf-btn-sm" onclick="itemDelLast()">-刪除末列</button>';
     h += '<div style="margin-top:12px;">';
     if (PREVIEW_MODE) {
@@ -375,7 +376,6 @@ $(document).on('click', '.itm-up .dp-list div[data-id]', function(){
 });
 function signSlotsHtml(i, it){
     if (!it.required_signers || !it.required_signers.length) return '<span style="color:#b0a390;font-size:11px;">未指派負責人</span>';
-    if ((CUR_SCHEMA.sign_mode||'password')==='none') return '<span style="color:#b0a390;font-size:11px;">（本模板不須簽名）</span>';
     var doneUids = (it.confirms||[]).map(function(c){ return String(c.user_id); });
     return it.required_signers.map(function(s){
         var done = doneUids.indexOf(String(s.id))>=0;
@@ -403,12 +403,13 @@ function renderItems(){
         var inlineFields = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout!=='block'; });
         inlineFields.forEach(function(c){ h += '<td>'+fieldInputHtml(i,c)+'</td>'; });
         h += '<td><div class="owner-lbl">負責部門</div>'+deptTagHtml(i,it.owner_depts)+'<div class="owner-lbl">負責人</div>'+userTagHtml(i,it.owner_users,it.owner_depts)+'</td>';
-        h += '<td>'+signSlotsHtml(i,it)+'</td>';
+        var hasSignCol = (CUR_SCHEMA.sign_mode||'password')!=='none';
+        if (hasSignCol) h += '<td>'+signSlotsHtml(i,it)+'</td>';
         if (isDraftMine()) h += '<td><span class="rf-del" onclick="itemDel('+i+')"><i class="fa fa-times"></i></span></td>';
         h += '</tr>';
         var blocks = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout==='block'; });
         if (blocks.length) {
-            var colspan = 2 + inlineFields.length + 1 + (isDraftMine()?1:0);
+            var colspan = 2 + inlineFields.length + 1 + (hasSignCol?1:0) + (isDraftMine()?1:0);
             h += '<tr><td></td><td colspan="'+colspan+'">' + blocks.map(function(c){ return fieldInputHtml(i,c); }).join('') + '</td></tr>';
         }
     });
@@ -504,9 +505,10 @@ function printForm(){
     var h = '<div class="pt-head"><div class="co">'+esc(CUR.company_name||'')+'</div><div class="tt">'+esc(t.name)+'</div></div>';
     h += '<table class="rf-p-head"><tr><th>建立日期</th><td>'+dispDate(CUR.business_date)+'</td><th>填表人</th><td>'+esc(CUR.created_by_name)+'</td></tr>'
        + '<tr><th>狀態</th><td colspan="3">'+STATUS_LABEL[CUR.status]+'</td></tr></table>';
+    var pHasSignCol = (schema.sign_mode||'password')!=='none';
     h += '<table class="rf-p-items"><thead><tr><th>#</th><th>項目</th>';
     (schema.fields||[]).forEach(function(c){ h += '<th>'+esc(c.label)+'</th>'; });
-    h += '<th>負責單位/人</th><th>簽名</th></tr></thead><tbody>';
+    h += '<th>負責單位/人</th>'+(pHasSignCol?'<th>簽名</th>':'')+'</tr></thead><tbody>';
     ITEMS.forEach(function(it,i){
         h += '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td>';
         (schema.fields||[]).forEach(function(c){
@@ -515,9 +517,13 @@ function printForm(){
         });
         var ownerTxt = (it.owner_depts||[]).map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?d.name:''; })
             .concat((it.owner_users||[]).map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?p.user_cname:''; })).filter(Boolean).join('、');
-        var signHtml = (schema.sign_mode||'password')==='none' ? '' : (it.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');
-        if (!signHtml && PREVIEW_MODE && (schema.sign_mode||'password')!=='none' && (it.owner_depts.length || it.owner_users.length)) signHtml = stampList('（簽名樣式預覽）', dispDate(CUR.business_date));
-        h += '<td>'+esc(ownerTxt)+'</td><td>'+signHtml+'</td></tr>';
+        h += '<td>'+esc(ownerTxt)+'</td>';
+        if (pHasSignCol) {
+            var signHtml = (it.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');
+            if (!signHtml && PREVIEW_MODE && (it.owner_depts.length || it.owner_users.length)) signHtml = stampList('（簽名樣式預覽）', dispDate(CUR.business_date));
+            h += '<td>'+signHtml+'</td>';
+        }
+        h += '</tr>';
     });
     h += '</tbody></table>';
     h += '<table class="rf-p-foot"><tr>';
