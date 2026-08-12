@@ -212,6 +212,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <input type="text" id="kwSel" placeholder="搜尋編號" style="width:120px;">
             <button class="btn-warm" id="btnBatch" style="display:none;"><i class="fa fa-check-square-o"></i> 批次校驗</button>
             <button id="btnBatchList"><i class="fa fa-list-alt"></i> 批次紀錄</button>
+            <button id="btnPending" style="display:none;position:relative;"><i class="fa fa-hourglass-half"></i> 待核准
+                <span id="pendBadge" style="display:none;position:absolute;top:-7px;right:-7px;background:#DD5138;color:#fff;border-radius:9px;font-size:10px;line-height:16px;min-width:16px;height:16px;text-align:center;padding:0 3px;">0</span></button>
             <button class="btn-warm" id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增儀器</button>
             <button id="btnCfg" style="display:none;"><i class="fa fa-cog"></i> 設定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
@@ -266,7 +268,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 
 <!-- 登錄校驗 modal -->
 <div class="tc-mask" id="recMask"><div class="tc-modal">
-    <div class="m-head"><span id="recTitle">登錄校驗</span><span class="m-close" onclick="closeMask('recMask')">✕</span></div>
+    <div class="m-head"><span id="recTitle">登錄校驗</span><span class="m-close" onclick="closeRec()">✕</span></div>
     <div class="m-body">
         <div style="font-size:12px;color:#8a6d45;" id="recInfo"></div>
         <div class="grid2">
@@ -278,15 +280,32 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <option value="外校">外校</option><option value="內校">內校</option><option value="">—</option>
             </select></div>
             <div><label>校驗人員／單位 *</label><div id="recOpBox" class="op-box"></div></div>
+            <div id="recReviewerBox" style="display:none;"><label>覆驗者（內校）*</label>
+                <select id="recReviewer" data-eg-filter="輸入人員姓名篩選…"></select></div>
             <div><label>憑證／報告編號</label><input type="text" id="recCert" maxlength="50"></div>
             <div><label>備註</label><input type="text" id="recNote" maxlength="200"></div>
         </div>
         <div style="font-size:12px;color:#b5762a;margin-top:8px;" id="recRoll"></div>
+        <div class="bt-sec" id="recAttSec" style="margin-top:10px;">
+            <div class="h">校驗報告／相關資料附件（可設定文件類別）</div>
+            <div style="margin-bottom:6px;">
+                <input type="file" id="recFile" multiple style="font-size:12px;">
+                <span id="recAttHint" style="font-size:11px;color:#8a6d45;"></span>
+            </div>
+            <div id="recAttList"></div>
+        </div>
     </div>
     <div class="m-foot">
-        <button class="b-cancel" onclick="closeMask('recMask')">取消</button>
+        <button class="b-cancel" onclick="closeRec()">取消</button>
         <button class="b-ok" onclick="submitRec()">登錄</button>
     </div>
+</div></div>
+
+<!-- 待核准（內校）modal -->
+<div class="tc-mask" id="pendMask"><div class="tc-modal xwide">
+    <div class="m-head"><span>待我核准的內校紀錄</span><span class="m-close" onclick="closeMask('pendMask')">✕</span></div>
+    <div class="m-body" id="pendBody" style="font-size:13px;color:#5b3a1e;"></div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('pendMask')">關閉</button></div>
 </div></div>
 
 <!-- 設定/新增儀器 modal -->
@@ -331,6 +350,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                     <option value="外校">外校</option><option value="內校">內校</option><option value="">—</option>
                 </select></div>
                 <div><label>校驗人員／單位（外校廠商）*</label><div id="btOpBox" class="op-box"></div></div>
+                <div id="btReviewerBox" style="display:none;"><label>覆驗者（內校）*</label>
+                    <select id="btReviewer" data-eg-filter="輸入人員姓名篩選…"></select></div>
                 <div><label>憑證／報告編號</label><input type="text" id="btCert" maxlength="50"></div>
                 <div><label>判定結果（套用到全部）</label><select id="btResult">
                     <option value="pass">合格</option><option value="pass_adjust">校正後合格</option><option value="fail">不合格</option>
@@ -426,6 +447,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <i class="fa fa-print"></i> 列印／匯出PDF</button>
             <button type="button" id="yrCsv" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;color:#5b3a1e;cursor:pointer;padding:0 12px;">匯出CSV</button>
         </div>
+        <div id="yrPlanApprovalBar" style="display:none;font-size:12px;color:#5b3a1e;background:#FBF0DD;border:1px solid #E8D5B5;border-radius:6px;padding:6px 10px;margin-bottom:8px;"></div>
         <div id="yrBody" style="font-size:12px;color:#5b3a1e;max-height:62vh;overflow:auto;"></div>
     </div>
 </div></div>
@@ -637,6 +659,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -658,6 +683,8 @@ function openMask(id){ document.getElementById(id).style.display='block'; }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function fmtDate(d){ return d ? String(d).substr(0,10) : ''; }
+/* 顯示用日期（ai-rules/20：西元年一律 YYYY.MM.DD），新增的列印內容一律呼叫這支；既有 fmtDate() 保留給內部運算/既有畫面用 */
+function dispDate(d){ return d ? egFmtDate(String(d).substr(0,10)) : ''; }
 /* 到期一律以「月」為單位（同月內完成即算準時） */
 function fmtMonth(d){ return d ? String(d).substr(0,7) : ''; }
 function monthEnd(d){
@@ -680,8 +707,9 @@ function loadMeta(cb){
         TABS_DEF = m.tabs || [];
         ATT_CFG = m.attach || ATT_CFG;
         STAFF = m.staff || []; STAFF_MULTI_DEPT = !!m.staff_multi_dept; QC_DEPT_SET = !!m.qc_dept_set;
+        window.__ownCompany = m.company_name || '';
         setCats(m.categories);
-        if (m.perms.canEdit)  { $('#btnBatch').show(); }
+        if (m.perms.canEdit)  { $('#btnBatch').show(); loadPendingCount(); }
         if (m.perms.canAdmin) { $('#btnAdd').show(); $('#btnCycleSet').show(); $('#btnCfg').show(); }
         if (cb) cb();
     });
@@ -857,6 +885,7 @@ $('#ymSel').on('change', loadList);
 
 /* ---------- 登錄/編輯校驗 ---------- */
 var recTool = null, editCalibId = null;
+var REC_ATT = [];   // 新增登錄用的附件（同批次附件機制，先存 temp，登錄時轉正並對應到這一支量具）
 function openRec(tid){
     var r = ROWS.find(function(x){ return x.Tool_id===tid; });
     recTool = r; editCalibId = null;
@@ -867,7 +896,12 @@ function openRec(tid){
     $('#recResult').val('pass');
     $('#recMethod').val(r.calib_method || '外校');
     opInit('recOpBox', $('#recMethod').val(), null);
+    refreshReviewerBox('recOpBox');
     $('#recCert').val(''); $('#recNote').val('');
+    REC_ATT = []; $('#recFile').val('');
+    $('#recAttHint').text('可用格式：' + (ATT_CFG.ext||[]).join('、') + '；單檔上限 ' + ATT_CFG.maxmb + ' MB');
+    renderRecAtt();
+    $('#recAttSec').show();
     updateRoll();
     openMask('recMask');
     setTimeout(function(){ $('#recDate').focus(); }, 100);
@@ -878,13 +912,15 @@ function editHis(cid){
     recTool = ROWS.find(function(x){ return x.Tool_id===HIST_TID; }) || {calib_cycle_months:null};
     editCalibId = cid;
     $('#recTitle').text('編輯校驗紀錄');
-    $('#recInfo').html('本次應校驗到期月：<b>'+(fmtMonth(a.due_date)||'（無）')+'</b>（編輯不改到期基準，僅修正內容）');
+    $('#recInfo').html('本次應校驗到期月：<b>'+(fmtMonth(a.due_date)||'（無）')+'</b>（編輯不改到期基準，僅修正內容；覆驗者／附件請於「批次校驗」重新登錄該次紀錄調整）');
     $('#recDate').val(fmtDate(a.calib_date));
     $('#recResult').val(a.result);
     $('#recMethod').val(a.method||'');
     opInit('recOpBox', a.method||'', {userId:a.operator_user_id||0, vendorId:a.vendor_id||'',
                                       vendorName:(a.vendor_id ? (a.operator||'') : ''), text:(a.operator||'')});
     $('#recCert').val(a.cert_no||''); $('#recNote').val(a.note||'');
+    $('#recReviewerBox').hide();
+    $('#recAttSec').hide();
     updateRoll();
     closeMask('hisMask'); openMask('recMask');
     setTimeout(function(){ $('#recDate').focus(); }, 100);
@@ -896,6 +932,51 @@ function updateRoll(){
     $('#recRoll').text('登錄後下次應校驗月將前滾為 '+dt.toISOString().substr(0,7)+'（依週期 '+cyc+' 月）');
 }
 $('#recDate').on('change', updateRoll);
+
+/* ---------- 登錄校驗附件（單支；沿用批次附件的 temp/active 機制，登錄時對應到這一支量具） ---------- */
+$('#recFile').on('change', function(){
+    var files = this.files;
+    if (!files || !files.length) return;
+    var i = 0;
+    function next(){
+        if (i >= files.length){ $('#recFile').val(''); renderRecAtt(); return; }
+        var fd = new FormData();
+        fd.append('action', 'upload_attach'); fd.append('batch_id', 0);
+        fd.append('category_id', recTool.QC_Tool_List_id || 0);
+        fd.append('doc_type', (ATT_CFG.types||[])[0] || '校驗報告');
+        fd.append('file', files[i]);
+        NProgress.start();
+        $.ajax({url:API, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+            .done(function(res){
+                if (!res.ok) { alert(res.error||'上傳失敗'); return; }
+                REC_ATT.push({attach_id:res.attach_id, name:res.original_name, doc_type:res.doc_type||'', note:''});
+            })
+            .fail(function(x){ alert('上傳失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); })
+            .always(function(){ NProgress.done(); i++; renderRecAtt(); next(); });
+    }
+    next();
+});
+function renderRecAtt(){
+    var h = REC_ATT.map(function(a, idx){
+        return '<div class="att-row" data-idx="'+idx+'">'
+            + '<span class="fn"><i class="fa fa-file-o"></i> '+esc(a.name)+'</span>'
+            + ' <select class="rec-att-type">'+typeOptions(a.doc_type)+'</select>'
+            + ' <input type="text" class="rec-att-note" placeholder="附件備註" value="'+esc(a.note)+'" style="width:150px;font-size:12px;border:1px solid #D8BE93;border-radius:3px;padding:1px 4px;">'
+            + ' <span class="op del"><i class="fa fa-trash"></i> 刪除</span></div>';
+    }).join('');
+    $('#recAttList').html(h || '<div style="font-size:12px;color:#8a6d45;">尚未上傳附件（可不上傳）。</div>');
+}
+$('#recAttList').on('change', '.rec-att-type', function(){ REC_ATT[+$(this).closest('.att-row').attr('data-idx')].doc_type = this.value; });
+$('#recAttList').on('input', '.rec-att-note', function(){ REC_ATT[+$(this).closest('.att-row').attr('data-idx')].note = this.value; });
+$('#recAttList').on('click', '.op.del', function(){
+    var idx = +$(this).closest('.att-row').attr('data-idx'), a = REC_ATT[idx];
+    if (!confirm('刪除附件「'+a.name+'」？')) return;
+    $.post(API, {action:'delete_attach', attach_id:a.attach_id}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+        REC_ATT.splice(idx, 1); renderRecAtt();
+    }, 'json').fail(function(x){ alert('刪除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+});
+
 function submitRec(){
     if (!$('#recDate').val()){ alert('請選擇校驗完成日'); return; }
     var op = opValue('recOpBox');
@@ -904,15 +985,39 @@ function submitRec(){
             : ($('#recMethod').val()==='外校' ? '請搜尋並選擇外校廠商' : '請填寫校驗人員／單位'));
         return;
     }
-    var data = {calib_date:$('#recDate').val(), result:$('#recResult').val(), method:$('#recMethod').val(),
-        operator:op.operator, operator_user_id:op.operator_user_id, vendor_id:op.vendor_id,
-        cert_no:$('#recCert').val(), note:$('#recNote').val()};
-    if (editCalibId){ data.action='edit_calib'; data.calib_id=editCalibId; }
-    else { data.action='record_calib'; data.tool_id=recTool.Tool_id; }
-    $.post(API, data, function(res){
+    if (editCalibId){
+        var data = {action:'edit_calib', calib_id:editCalibId, calib_date:$('#recDate').val(), result:$('#recResult').val(),
+            method:$('#recMethod').val(), operator:op.operator, operator_user_id:op.operator_user_id, vendor_id:op.vendor_id,
+            cert_no:$('#recCert').val(), note:$('#recNote').val()};
+        $.post(API, data, function(res){
+            if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+            closeMask('recMask'); loadList();
+        }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+        return;
+    }
+    // 新增登錄：走批次校驗共用的 create_batch（只選這一支量具），一併帶覆驗者與附件
+    var reviewerUid = '';
+    if ($('#recMethod').val()==='內校') {
+        reviewerUid = $('#recReviewer').val();
+        if (!reviewerUid){ alert('內校請選擇覆驗者'); return; }
+        if (String(reviewerUid)===String(op.operator_user_id)){ alert('覆驗者不可與校驗人員為同一人'); return; }
+    }
+    var attach = REC_ATT.map(function(a){
+        return {attach_id:a.attach_id, doc_type:a.doc_type, note:a.note, category_id:recTool.QC_Tool_List_id||0, tool_ids:[recTool.Tool_id]};
+    });
+    NProgress.start();
+    $.post(API, {action:'create_batch', calib_date:$('#recDate').val(), method:$('#recMethod').val(),
+                 operator:op.operator, operator_user_id:op.operator_user_id, vendor_id:op.vendor_id,
+                 reviewer_user_id:reviewerUid, cert_no:$('#recCert').val(), note:$('#recNote').val(),
+                 tools:JSON.stringify([{tool_id:recTool.Tool_id, result:$('#recResult').val()}]),
+                 attach:JSON.stringify(attach)}, function(res){
+        NProgress.done();
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        closeMask('recMask'); loadList();
-    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+        REC_ATT = [];
+        closeMask('recMask');
+        if (res.approval_status==='pending') alert('已登錄，本筆內校紀錄需主管核准，已送出通知。');
+        loadList();
+    }, 'json').fail(function(x){ NProgress.done(); alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
 /* ---------- 設定 / 新增 ---------- */
@@ -1198,6 +1303,7 @@ function openBatch(){
     BT_SEL = {}; BT_ATT = [];
     $('#btDate').val(META.today); $('#btMethod').val('外校'); $('#btResult').val('pass');
     opInit('btOpBox', '外校', null);
+    refreshReviewerBox('btOpBox');
     $('#btCert').val(''); $('#btNote').val('');
     $('#btFile').val(''); $('#btKw').val('');
     $('#btAttHint').text('可用格式：' + (ATT_CFG.ext||[]).join('、') + '；單檔上限 ' + ATT_CFG.maxmb + ' MB');
@@ -1217,6 +1323,13 @@ function openBatch(){
     $('#btCat').html(h);
     renderBtTools(); renderBtAtt();
     openMask('batMask');
+}
+function closeRec(){
+    if (REC_ATT.length && !confirm('取消將刪除本次已上傳的 '+REC_ATT.length+' 份附件，確定取消？')) return;
+    var ids = REC_ATT.map(function(a){ return a.attach_id; });
+    REC_ATT = [];
+    closeMask('recMask');
+    ids.forEach(function(id){ $.post(API, {action:'delete_attach', attach_id:id}, function(){}, 'json'); });
 }
 function closeBatch(){
     if (BT_ATT.length && !confirm('取消將刪除本次已上傳的 '+BT_ATT.length+' 份附件，確定取消？')) return;
@@ -1399,6 +1512,12 @@ function submitBatch(){
             : ($('#btMethod').val()==='外校' ? '請搜尋並選擇外校廠商' : '請填寫校驗人員／單位'));
         return;
     }
+    var reviewerUid = '';
+    if ($('#btMethod').val()==='內校') {
+        reviewerUid = $('#btReviewer').val();
+        if (!reviewerUid){ alert('內校請選擇覆驗者'); return; }
+        if (String(reviewerUid)===String(op.operator_user_id)){ alert('覆驗者不可與校驗人員為同一人'); return; }
+    }
     var ids = Object.keys(BT_SEL);
     if (!ids.length){ alert('請至少選擇一支量具'); return; }
     var tools = ids.map(function(id){ return {tool_id:parseInt(id,10), result:BT_SEL[id]}; });
@@ -1410,13 +1529,14 @@ function submitBatch(){
     NProgress.start();
     $.post(API, {action:'create_batch', calib_date:date, method:$('#btMethod').val(),
                  operator:op.operator, operator_user_id:op.operator_user_id, vendor_id:op.vendor_id,
+                 reviewer_user_id:reviewerUid,
                  cert_no:$('#btCert').val(), note:$('#btNote').val(),
                  tools:JSON.stringify(tools), attach:JSON.stringify(attach)}, function(res){
         NProgress.done();
         if (!res.ok){ alert(res.error||'登錄失敗'); return; }
         BT_ATT = []; BT_SEL = {};
         closeMask('batMask');
-        alert('已登錄 '+res.done+' 支量具的校驗紀錄。');
+        alert('已登錄 '+res.done+' 支量具的校驗紀錄。' + (res.approval_status==='pending' ? '（本批需主管核准，已送出通知）' : ''));
         loadList();
     }, 'json').fail(function(x){ NProgress.done(); alert('登錄失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
@@ -1481,6 +1601,49 @@ function delAttach(aid, bid){
         if (!res.ok){ alert(res.error||'刪除失敗'); return; }
         if (bid) openBatchDetail(bid); else if (HIST_TID) openHis(HIST_TID);
     }, 'json').fail(function(x){ alert('刪除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
+/* ---------- 內校主管核准（使用者 2026-08-12 明確要求；核准人走核准鏈，管理員可設定是否需要） ---------- */
+function loadPendingCount(){
+    $.getJSON(API, {action:'pending_approvals'}, function(res){
+        if (!res.ok) return;
+        var n = (res.list||[]).length;
+        $('#btnPending').show();
+        if (n){ $('#pendBadge').text(n).show(); } else { $('#pendBadge').hide(); }
+    });
+}
+$('#btnPending').on('click', function(){
+    $.getJSON(API, {action:'pending_approvals'}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        if (!res.list.length){ $('#pendBody').html('<div style="padding:12px;color:#8a6d45;">目前沒有待您核准的內校紀錄</div>'); openMask('pendMask'); return; }
+        var h = '<table class="hist"><thead><tr><th>校驗日</th><th>量具編號</th><th>校驗人員</th><th>覆驗者</th>'
+              + '<th>憑證編號</th><th>登錄者</th><th>操作</th></tr></thead><tbody>';
+        res.list.forEach(function(b){
+            h += '<tr><td>'+fmtDate(b.calib_date)+'</td><td style="text-align:left;">'+esc(b.tool_nos||'')+'</td>'
+               + '<td>'+esc(b.operator||'—')+'</td><td>'+esc(b.reviewer_name||'—')+'</td><td>'+esc(b.cert_no||'—')+'</td>'
+               + '<td>'+esc(b.created_by_name||'')+'</td>'
+               + '<td><span class="tc-op" onclick="pendDecide('+b.batch_id+',\'approved\')"><i class="fa fa-check"></i> 核准</span>'
+               + '<span class="tc-op" style="color:#DD5138;" onclick="pendDecide('+b.batch_id+',\'rejected\')"><i class="fa fa-times"></i> 退回</span>'
+               + '<span class="tc-op" onclick="openBatchDetail('+b.batch_id+')"><i class="fa fa-eye"></i> 明細</span></td></tr>';
+        });
+        h += '</tbody></table>';
+        $('#pendBody').html(h);
+        openMask('pendMask');
+    }).fail(function(x){ alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+});
+function pendDecide(bid, decision){
+    var note = '';
+    if (decision === 'rejected'){
+        note = prompt('請填寫退回原因：');
+        if (note === null) return;
+        note = $.trim(note);
+        if (!note){ alert('請填寫退回原因'); return; }
+    } else if (!confirm('確定核准此筆內校紀錄？')) return;
+    $.post(API, {action:'batch_decide', batch_id:bid, decision:decision, note:note}, function(res){
+        if (!res.ok){ alert(res.error||'處理失敗'); return; }
+        $('#btnPending').click();
+        loadPendingCount();
+    }, 'json').fail(function(x){ alert('處理失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
 /* ---------- 校驗附件設定（管理員） ---------- */
@@ -1582,13 +1745,37 @@ $(document).on('click', '.op-clear', function(){
 $(document).on('change', '.op-staff', function(){
     var boxId = $(this).closest('.op-box').attr('id');
     OP[boxId].userId = this.value;
+    refreshReviewerBox(boxId);
 });
 $(document).on('input', '.op-free', function(){
     var boxId = $(this).closest('.op-box').attr('id');
     OP[boxId].text = this.value;
 });
-$('#btMethod').on('change', function(){ opInit('btOpBox', this.value, OP['btOpBox']); });
-$('#recMethod').on('change', function(){ opInit('recOpBox', this.value, OP['recOpBox']); });
+$('#btMethod').on('change', function(){ opInit('btOpBox', this.value, OP['btOpBox']); refreshReviewerBox('btOpBox'); });
+$('#recMethod').on('change', function(){ opInit('recOpBox', this.value, OP['recOpBox']); refreshReviewerBox('recOpBox'); });
+
+/* ---------- 內校覆驗者（使用者 2026-08-12 明確要求；池同校驗人員資格，不可與校驗人員同一人） ---------- */
+function reviewerWrapIdFor(opBoxId){ return opBoxId==='recOpBox' ? 'recReviewerBox' : 'btReviewerBox'; }
+function reviewerSelIdFor(opBoxId){ return opBoxId==='recOpBox' ? 'recReviewer' : 'btReviewer'; }
+function renderReviewerSelect(selId, excludeUid, selectedUid){
+    var h = '<option value="">— 請選擇覆驗者 —</option>';
+    (STAFF||[]).forEach(function(s){
+        if (excludeUid && String(s.id)===String(excludeUid)) return;
+        var lab = s.user_cname + (s.on_leave ? '［'+s.leave_note+'］' : '');
+        h += '<option value="'+s.id+'"'+(String(selectedUid||'')===String(s.id)?' selected':'')+'>'+esc(lab)+'</option>';
+    });
+    $('#'+selId).html(h);
+}
+function refreshReviewerBox(opBoxId){
+    var method = (OP[opBoxId]||{}).method, wrapId = reviewerWrapIdFor(opBoxId), selId = reviewerSelIdFor(opBoxId);
+    if (method === '內校') {
+        $('#'+wrapId).show();
+        renderReviewerSelect(selId, OP[opBoxId].userId, $('#'+selId).val());
+    } else {
+        $('#'+wrapId).hide();
+        $('#'+selId).val('');
+    }
+}
 
 /* ================= 校驗人員資格設定（管理員） ================= */
 /* 統一設定視窗：切分頁時才載入該分頁資料 */
@@ -1919,25 +2106,82 @@ $('#yrSel').on('change', loadYear);
 function loadYear(){
     var y = $('#yrSel').val();
     $('#yrBody').html('<div style="padding:12px;color:#8a6d45;">載入中…</div>');
+    $('#yrPlanApprovalBar').hide();
     $.getJSON(API, {action:(YR_MODE==='rec' ? 'year_records' : 'year_plan'), year:y}, function(res){
         if (!res.ok){ $('#yrBody').html('<div style="padding:12px;color:#DD5138;">'+esc(res.error||'載入失敗')+'</div>'); return; }
         YR_DATA = res;
-        $('#yrBody').html(YR_MODE==='rec' ? yrRecHtml(res) : yrPlanHtml(res));
+        $('#yrBody').html(YR_MODE==='rec' ? yrRecHtml(res, false) : yrPlanHtml(res, false));
+        if (YR_MODE === 'plan') renderPlanApprovalBar(res);
     }).fail(function(x){ $('#yrBody').html('<div style="padding:12px;color:#DD5138;">載入失敗</div>'); });
 }
-function yrRecHtml(res){
+/** 年度校驗計畫表送出核准／核准退回（使用者 2026-08-12 明確要求；核准人走核准鏈 ai-rules/19） */
+function renderPlanApprovalBar(res){
+    var ap = res.approval, y = res.year, h = '';
+    if (!ap) {
+        h = '（本年度計畫表尚未送出核准）';
+        if (PERMS && PERMS.canEdit) h += ' <span class="tc-op" onclick="planSubmit('+y+')"><i class="fa fa-paper-plane"></i> 送出核准</span>';
+    } else if (ap.status === 'pending') {
+        h = '核准中：'+esc(ap.submitted_by_name||'')+' 於 '+dispDate(ap.submitted_at)+' 送出。';
+        h += ' <span class="tc-op" onclick="planDecide('+y+',\'approved\')"><i class="fa fa-check"></i> 核准</span>'
+           + ' <span class="tc-op" style="color:#DD5138;" onclick="planDecide('+y+',\'rejected\')"><i class="fa fa-times"></i> 退回</span>';
+    } else if (ap.status === 'approved') {
+        h = '已核准：'+esc(ap.approver_name||'')+' 於 '+dispDate(ap.decided_at)+' 核准。';
+        if (PERMS && PERMS.canEdit) h += ' <span class="tc-op" onclick="planSubmit('+y+')"><i class="fa fa-refresh"></i> 內容有異動，重新送出核准</span>';
+    } else {
+        h = '已退回：'+esc(ap.approver_name||'')+' 於 '+dispDate(ap.decided_at)+'。原因：'+esc(ap.note||'');
+        if (PERMS && PERMS.canEdit) h += ' <span class="tc-op" onclick="planSubmit('+y+')"><i class="fa fa-paper-plane"></i> 重新送出核准</span>';
+    }
+    $('#yrPlanApprovalBar').html(h).show();
+}
+function planSubmit(y){
+    if (!confirm(y+' 年度校驗計畫表確定送出核准？')) return;
+    $.post(API, {action:'plan_submit', year:y}, function(res){
+        if (!res.ok){ alert(res.error||'送出失敗'); return; }
+        loadYear();
+    }, 'json').fail(function(x){ alert('送出失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+function planDecide(y, decision){
+    var note = '';
+    if (decision === 'rejected'){
+        note = prompt('請填寫退回原因：');
+        if (note === null) return;
+        note = $.trim(note);
+        if (!note){ alert('請填寫退回原因'); return; }
+    } else if (!confirm(y+' 年度校驗計畫表確定核准？')) return;
+    $.post(API, {action:'plan_decide', year:y, decision:decision, note:note}, function(res){
+        if (!res.ok){ alert(res.error||'處理失敗'); return; }
+        loadYear();
+    }, 'json').fail(function(x){ alert('處理失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+/** 附件欄：類別＋檔名清單（使用者 2026-08-12 明確要求，取代只顯示份數） */
+function attachCellHtml(list){
+    if (!list || !list.length) return '—';
+    return list.map(function(a){ return esc(a.doc_type||'附件')+'：'+esc(a.name||''); }).join('<br>');
+}
+/** 校驗人員／覆驗者：列印版一律用圖章(ai-rules/18)，畫面預覽維持文字；只有內校才蓋人員章(外校對象是廠商) */
+function signerCellHtml(name, calibDate, method, forPrint){
+    if (!name) return '—';
+    if (!forPrint || method !== '內校' || !window.EGStamp) return esc(name);
+    var schema = (META && META.list_stamp) ? META.list_stamp.schema : null;
+    return EGStamp.stamp(name, dispDate(calibDate), false, schema);
+}
+function yrRecHtml(res, forPrint){
     if (!res.list.length) return '<div style="padding:12px;color:#8a6d45;">'+res.year+' 年度尚無校驗紀錄</div>';
     var h = '<table class="hist"><thead><tr><th>校驗完成日</th><th>量具編號</th><th>類別</th><th>應校驗到期月</th>'
-          + '<th>準時</th><th>結果</th><th>方式</th><th>校驗人員／單位</th><th>憑證編號</th><th>下次到期</th><th>附件</th><th>登錄者</th></tr></thead><tbody>';
+          + '<th>準時</th><th>結果</th><th>方式</th><th>校驗人員／單位</th><th>覆驗者</th><th>核准</th><th>憑證編號</th><th>下次到期</th><th>附件</th><th>登錄者</th></tr></thead><tbody>';
     res.list.forEach(function(r){
         var ontime = isOnTime(r.calib_date, r.due_date);
-        h += '<tr><td>'+fmtDate(r.calib_date)+'</td><td><b>'+esc(r.Tool_No)+'</b></td><td>'+esc(r.category_name||'')+'</td>'
+        h += '<tr><td>'+(forPrint?dispDate(r.calib_date):fmtDate(r.calib_date))+'</td><td><b>'+esc(r.Tool_No)+'</b></td><td>'+esc(r.category_name||'')+'</td>'
            + '<td>'+(fmtMonth(r.due_date)||'—')+'</td>'
            + '<td>'+(ontime===null?'—':(ontime?'<span style="color:#8A5A2B;">準時</span>':'<span style="color:#DD5138;">逾期</span>'))+'</td>'
            + '<td>'+(RESULT_LABEL[r.result]||r.result)+'</td><td>'+esc(r.method||'—')+'</td>'
-           + '<td style="text-align:left;">'+esc(r.operator||'—')+'</td><td>'+esc(r.cert_no||'—')+'</td>'
+           + '<td style="text-align:left;">'+signerCellHtml(r.operator, r.calib_date, r.method, forPrint)+'</td>'
+           + '<td style="text-align:left;">'+signerCellHtml(r.reviewer_name, r.calib_date, r.method, forPrint)+'</td>'
+           + '<td>'+(r.approval_status==='approved' ? signerCellHtml(r.approver_name, r.approved_at, '內校', forPrint)
+                    : (r.approval_status==='pending' ? '（核准中）' : (r.approval_status==='rejected' ? '（已退回）' : '（免核准）')))+'</td>'
+           + '<td>'+esc(r.cert_no||'—')+'</td>'
            + '<td>'+(fmtMonth(r.next_due)||'—')+'</td>'
-           + '<td>'+(r.attach_count>0 ? r.attach_count+' 份' : '—')+'</td>'
+           + '<td style="text-align:left;">'+(forPrint?attachCellHtml(r.attach_list):(r.attach_count>0?r.attach_count+' 份':'—'))+'</td>'
            + '<td>'+esc(r.created_by_name||'')+'</td></tr>';
     });
     return h + '</tbody></table>';
@@ -1965,25 +2209,61 @@ function yrPlanHtml(res){
        + '橘底＝逾期後才完成。計畫月份依各量具的下次應校驗日與週期推算。</div>';
     return h;
 }
-/** 列印：另開視窗只輸出表格（單一表格交給瀏覽器原生分頁，不自算分頁） */
+/** AS 文件編號（僅四階附加版次，比照 eg_asdoc_no()）；多筆彙總的現況清單一律印「現在最新版」，不回推業務日期 */
+function asdocNo(doc){
+    if (!doc || !doc.doc_no) return '';
+    return doc.doc_no + (doc.doc_level==='四階' ? (doc.current_version||'') : '');
+}
+/** 製表/核准 圖章（用於年度校驗計畫表頁尾，使用者 2026-08-12 明確要求） */
+function footerStampHtml(name, date){
+    if (!name) return '';
+    var schema = (META && META.footer_stamp) ? META.footer_stamp.schema : null;
+    return window.EGStamp ? EGStamp.stamp(name, dispDate(date), false, schema) : esc(name);
+}
+function planFooterHtml(ap){
+    var h = '<table class="yr-p-foot"><tr>';
+    h += '<td><div class="foot-lbl">制表</div>' + (ap ? footerStampHtml(ap.submitted_by_name, ap.submitted_at) : '<span class="foot-na">（尚未送出核准，無制表紀錄）</span>') + '</td>';
+    h += '<td><div class="foot-lbl">核准</div>' + (
+        !ap ? '<span class="foot-na">（尚未送出核准）</span>'
+        : ap.status==='approved' ? footerStampHtml(ap.approver_name, ap.decided_at)
+        : ap.status==='pending' ? '<span class="foot-na">（核准中）</span>'
+        : '<span class="foot-na">（已退回：'+esc(ap.note||'')+'）</span>'
+    ) + '</td>';
+    h += '</tr></table>';
+    return h;
+}
+/** 列印：另開視窗只輸出表格（單一表格交給瀏覽器原生分頁，不自算分頁）；比照 ai-rules/16：大標題公司名、
+ *  頁碼左下角(瀏覽器原生分頁交給 counter(pages)，本頁只有單一表格、單一文件，符合鐵則允許用 fixed/counter)、
+ *  AS 文件編號右下角(多筆彙總清單一律印現況最新版)；校驗計畫表另加頁尾制表/核准圖章。 */
 $('#yrPrint').on('click', function(){
     if (!YR_DATA){ alert('資料尚未載入'); return; }
-    var title = YR_DATA.year + ' 年度' + (YR_MODE==='rec' ? '量測儀器校驗紀錄' : '量測儀器校驗計畫表');
-    var body = (YR_MODE==='rec' ? yrRecHtml(YR_DATA) : yrPlanHtml(YR_DATA));
+    var isRec = YR_MODE === 'rec';
+    var title = YR_DATA.year + ' 年度' + (isRec ? '量測儀器校驗紀錄' : '量測儀器校驗計畫表');
+    var body = isRec ? yrRecHtml(YR_DATA, true) : yrPlanHtml(YR_DATA, true);
+    if (!isRec) body += planFooterHtml(YR_DATA.approval);
+    var docNo = asdocNo(META && META.as_docs ? META.as_docs[isRec ? 'tool_calib_record' : 'tool_calib_plan'] : null);
     var w = window.open('', '_blank');
     if (!w){ alert('瀏覽器阻擋了列印視窗，請允許彈出視窗'); return; }
     w.document.write('<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'+title+'</title><style>'
-      + 'body{font-family:"Microsoft JhengHei",sans-serif;color:#3b2a17;margin:12mm 8mm;}'
-      + 'h2{font-size:16px;margin:0 0 2px;} .sub{font-size:11px;color:#6b5637;margin-bottom:8px;}'
+      + 'body{font-family:"Microsoft JhengHei",sans-serif;color:#3b2a17;margin:0;}'
+      + '.pg{margin:12mm 8mm 16mm;}'
+      + '.co{text-align:center;font-size:20px;font-weight:bold;letter-spacing:2px;}'
+      + 'h2{font-size:15px;margin:2px 0;text-align:center;} .sub{font-size:11px;color:#6b5637;margin-bottom:8px;text-align:center;}'
       + 'table{width:100%;border-collapse:collapse;font-size:11px;}'
       + 'th,td{border:1px solid #999;padding:3px 4px;text-align:center;}'
       + 'thead th{background:#F7E0BD;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-      + 'thead{display:table-header-group;} tr{page-break-inside:avoid;}'
-      + '@page{size:A4 landscape;margin:10mm;}'
-      + '</style></head><body>'
+      + 'thead{display:table-header-group;} tbody tr{page-break-inside:avoid;}'
+      + 'table.yr-p-foot{margin-top:14px;} table.yr-p-foot td{width:50%;padding:6px;vertical-align:top;}'
+      + 'table.yr-p-foot .foot-lbl{margin-bottom:4px;} table.yr-p-foot .foot-na{color:#888;font-size:11px;}'
+      + 'table.yr-p-foot svg{width:76px !important;height:76px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+      + '@page{size:A4 landscape;margin:10mm 8mm 16mm 8mm;'
+      + (docNo ? '@bottom-right{content:"'+docNo.replace(/["\\]/g,'')+'";font-size:9pt;color:#333;}' : '')
+      + '@bottom-left{content:"第" counter(page) "頁／共" counter(pages) "頁";font-size:9pt;color:#333;}}'
+      + '</style></head><body><div class="pg">'
+      + '<div class="co">'+esc((META&&META.company_name)||'')+'</div>'
       + '<h2>'+title+'</h2><div class="sub">列印時間：'+new Date().toLocaleString('zh-TW')
       + '　／　KPI 2-GM-04-01 #18 量測儀器按時校驗率</div>'
-      + body + '</body></html>');
+      + body + '</div></body></html>');
     w.document.close();
     w.focus();
     setTimeout(function(){ w.print(); }, 300);
