@@ -303,7 +303,7 @@ function moveLeaveType($db) {
 function getLeaveTypes($db) { // 改為接收 $db
     try {
         // 使用 PDO 進行查詢
-        $stmt = $db->query("SELECT id, leave_name, need_approval, agent, max_approval_level,
+        $stmt = $db->query("SELECT id, leave_name, need_approval, agent, full_inherit_permission, max_approval_level,
                   unit_type, require_attachment, attach_min_days, allow_attach_later, sort_order
            FROM leave_type ORDER BY sort_order, id");
         $leaveTypes = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -326,6 +326,7 @@ function addLeaveType($db) { // 改為只接收 $db
     $name = isset($_POST['name']) ? trim($_POST['name']) : '';
     $need_approval = isset($_POST['need_manager_sign']) ? 1 : 0; // 修正：對應前端的 name="need_manager_sign"
     $agent = isset($_POST['need_agent_sign']) ? 1 : 0; // 修正：對應前端的 name="need_agent_sign"
+    $full_inherit = isset($_POST['full_inherit_permission']) ? 1 : 0;
     $max_level = isset($_POST['max_level']) ? intval($_POST['max_level']) : 1;
 
     if (empty($name)) {
@@ -346,11 +347,11 @@ function addLeaveType($db) { // 改為只接收 $db
         // 如果名稱不存在，則執行新增
         $ext = leaveTypeExtraFields();
         $stmt = $db->prepare(
-            "INSERT INTO leave_type (leave_name, need_approval, agent, max_approval_level,
+            "INSERT INTO leave_type (leave_name, need_approval, agent, full_inherit_permission, max_approval_level,
                                      unit_type, require_attachment, attach_min_days, allow_attach_later,
                                      rule_kind, rule_max_value, rule_max_unit, rule_deadline_days,
                                      rule_child_age_years, rule_min_days, rule_note)
-             VALUES (:name, :need_approval, :agent, :max_level, :unit_type, :req_att, :att_min, :att_later,
+             VALUES (:name, :need_approval, :agent, :full_inherit, :max_level, :unit_type, :req_att, :att_min, :att_later,
                      :rule_kind, :rule_max_value, :rule_max_unit, :rule_deadline_days,
                      :rule_child_age_years, :rule_min_days, :rule_note)"
         );
@@ -358,6 +359,7 @@ function addLeaveType($db) { // 改為只接收 $db
         $stmt->bindParam(':name', $name, PDO::PARAM_STR);
         $stmt->bindParam(':need_approval', $need_approval, PDO::PARAM_INT);
         $stmt->bindParam(':agent', $agent, PDO::PARAM_INT);
+        $stmt->bindParam(':full_inherit', $full_inherit, PDO::PARAM_INT);
         $stmt->bindParam(':max_level', $max_level, PDO::PARAM_INT);
         $stmt->bindValue(':unit_type', $ext['unit_type'], PDO::PARAM_STR);
         $stmt->bindValue(':req_att',   $ext['require_attachment'], PDO::PARAM_INT);
@@ -383,7 +385,7 @@ function getLeaveTypeDetails($db) { // 改為只接收 $db
     }
 
     try {
-        $stmt = $db->prepare("SELECT id, leave_name, need_approval, agent, max_approval_level,
+        $stmt = $db->prepare("SELECT id, leave_name, need_approval, agent, full_inherit_permission, max_approval_level,
                   unit_type, require_attachment, attach_min_days, allow_attach_later, sort_order,
                   rule_kind, rule_max_value, rule_max_unit, rule_deadline_days,
                   rule_child_age_years, rule_min_days, rule_note
@@ -419,6 +421,7 @@ function updateLeaveType($db) { // 改為只接收 $db
     $name = isset($_POST['name']) ? trim($_POST['name']) : '';
     $need_approval = isset($_POST['need_manager_sign']) ? 1 : 0; // 修正：對應前端的 name="need_manager_sign"
     $agent = isset($_POST['need_agent_sign']) ? 1 : 0; // 修正：對應前端的 name="need_agent_sign"
+    $full_inherit = isset($_POST['full_inherit_permission']) ? 1 : 0;
     $max_level = isset($_POST['max_level']) ? intval($_POST['max_level']) : 1;
 
     if ($id <= 0) {
@@ -445,6 +448,7 @@ function updateLeaveType($db) { // 改為只接收 $db
         $ext = leaveTypeExtraFields();
         $stmt = $db->prepare(
             "UPDATE leave_type SET leave_name = :name, need_approval = :need_approval, agent = :agent,
+                                   full_inherit_permission = :full_inherit,
                                    max_approval_level = :max_level, unit_type = :unit_type,
                                    require_attachment = :req_att, attach_min_days = :att_min,
                                    allow_attach_later = :att_later,
@@ -458,6 +462,7 @@ function updateLeaveType($db) { // 改為只接收 $db
         $stmt->bindParam(':name', $name, PDO::PARAM_STR);
         $stmt->bindParam(':need_approval', $need_approval, PDO::PARAM_INT);
         $stmt->bindParam(':agent', $agent, PDO::PARAM_INT);
+        $stmt->bindParam(':full_inherit', $full_inherit, PDO::PARAM_INT);
         $stmt->bindParam(':max_level', $max_level, PDO::PARAM_INT);
         $stmt->bindValue(':unit_type', $ext['unit_type'], PDO::PARAM_STR);
         $stmt->bindValue(':req_att',   $ext['require_attachment'], PDO::PARAM_INT);
