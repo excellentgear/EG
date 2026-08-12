@@ -70,7 +70,7 @@ if (!function_exists('eg_people_list')) {
      *                    states    允許的 state（預設 [1,2,3,99]；EG_PEOPLE_EXCLUDE_STATES 永遠排除）
      *                    keyword   姓名/帳號模糊搜尋
      * @return array 每列：id, user_cname, user_uname, state, state_label,
-     *               position_id, position_name, position_sort, dept_id, dept_name, dept_sort,
+     *               position_id, position_name, position_sort, dept_id, dept_name, dept_sort, dept_ids(含兼任的所有部門id),
      *               on_leave(0/1), leave_label, leave_start, leave_end, leave_note, display
      *               排序：職稱 → 部門 → id
      */
@@ -117,6 +117,18 @@ if (!function_exists('eg_people_list')) {
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
         if (!$rows) return [];
 
+        // 一人可能兼任多個部門（user_department_position_map 不只一列）：
+        // 上面 $pick 只選「顯示用」的那一列 dept_id/position，這裡另外撈出該人「所有」掛的部門，
+        // 讓呼叫端做部門篩選時能把兼任該部門的人也篩進來（不只是主要部門）。
+        $deptIdsMap = [];
+        if ($rows) {
+            $uidIn = implode(',', array_column($rows, 'id'));
+            $dRows = $db->query("SELECT user_id, department_id FROM user_department_position_map WHERE user_id IN ({$uidIn})")->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($dRows as $dr) {
+                $deptIdsMap[(int)$dr['user_id']][] = (int)$dr['department_id'];
+            }
+        }
+
         $leave = eg_people_long_leave_map($db, array_column($rows, 'id'));
         foreach ($rows as &$r) {
             $r['id'] = (int)$r['id'];
@@ -126,6 +138,9 @@ if (!function_exists('eg_people_list')) {
             $r['position_sort'] = (int)$r['position_sort'];
             $r['dept_id'] = $r['dept_id'] === null ? null : (int)$r['dept_id'];
             $r['dept_sort'] = (int)$r['dept_sort'];
+            // 含兼任的完整部門清單（給需要「選部門篩人員」的頁面用；沒有掛任何部門時退回單一 dept_id）
+            $r['dept_ids'] = isset($deptIdsMap[$r['id']]) ? array_values(array_unique($deptIdsMap[$r['id']]))
+                           : ($r['dept_id'] !== null ? [$r['dept_id']] : []);
             $r['position_name'] = $r['position_name'] ?: '';
             $r['dept_name'] = $r['dept_name'] ?: '';
 

@@ -364,9 +364,12 @@ $(document).on('focus input', '.itm-up-kw', function(){
     // 選了負責部門後，負責人只列該部門(可複選部門則為聯集)的人，避免在全公司名單裡大海撈針；
     // 未選部門時維持列出全公司（使用者要求：多個部門要逐一「選部門→選人」，不要一次把部門全選完才選人，
     // 這裡的過濾行為本身就是照著這個順序運作——先選的部門會立刻篩到位）。
+    // 比對用 dept_ids（含兼任的所有部門，見 people_lib.php），不只比對主要部門 dept_id，
+    // 否則兼任該部門的人在篩選時會消失，選不到（2026-08-12 使用者明確要求）。
     var deptFilter = (it.owner_depts||[]).map(String);
     (META.people||[]).forEach(function(p){
-        if (deptFilter.length && deptFilter.indexOf(String(p.dept_id))<0) return;
+        var pDeptIds = (p.dept_ids||[p.dept_id]).map(String);
+        if (deptFilter.length && !pDeptIds.some(function(d){ return deptFilter.indexOf(d)>=0; })) return;
         if (kw && p.user_cname.toLowerCase().indexOf(kw)<0) return;
         var on=(it.owner_users||[]).some(function(x){return String(x)===String(p.id);});
         h += '<div data-id="'+p.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(p.display)+'</div>';
