@@ -20,12 +20,15 @@ include_once '../../src/common/asdoc_lib.php';
 include_once '../../src/common/org_role_lib.php';
 include_once '../../src/common/confirm_password_lib.php';
 include_once '../../src/common/td_dev_eval_lib.php';
+include_once '../../src/common/td_dev_eval_suggest_lib.php';
 
 $db = (new DBConnection())->getPDO();
 eg_org_ensure_schema($db);
 td_dev_eval_ensure_schema($db);
+td_dev_eval_suggest_ensure_schema($db);
 $teUser = td_dev_eval_current_user($db);
 $perms = td_dev_eval_perms($db, $teUser);
+$suggestPending = $perms['canAdmin'] ? td_dev_eval_suggest_pending_count($db) : 0;
 $canBackfill = $teUser ? eg_confirm_password_allowed($db, (int)$teUser['id']) : false;
 $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表管理員' : ($perms['canEdit'] ? '評估表登錄' : ($perms['canView'] ? '評估表檢閱' : '無權限')));
 ?>
@@ -117,6 +120,18 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
         .te-pool-hint { font-size:11px; color:#8a6d45; }
         .te-decision-grp { display:flex; gap:14px; flex-wrap:wrap; margin:6px 0; }
         .te-decision-grp label { margin:0; cursor:pointer; font-size:13px; }
+        .te-status { font-size:11px; padding:2px 8px; border-radius:10px; white-space:nowrap; }
+        .te-status-draft { background:#EADFC8; color:#5b3a1e; }
+        .te-status-submitted { background:#F7E0BD; color:#8A5A2B; }
+        .te-status-closed { background:#F0A24B; color:#fff; }
+        .te-hdr-locked-tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin-bottom:8px; font-size:12px; color:#8A5A2B; }
+        .te-blocked-hint { font-size:11px; color:#b0a390; }
+        table.te-chk td.q.te-mine { background:#FFF7E8; }
+        table.te-slot .te-item-mini { width:100%; border-collapse:collapse; margin-top:6px; font-size:11px; }
+        table.te-slot .te-item-mini td { border:1px solid #EADFC8; padding:2px 4px; }
+        table.te-slot .te-item-mini td.q { text-align:left; }
+        .te-admin-panel { border:1.5px dashed #DD5138; border-radius:8px; padding:10px; margin-top:14px; background:#FFF3EE; }
+        .te-admin-panel h5 { margin:0 0 8px; color:#DD5138; font-size:13px; }
         @media print { .te-toolbar, .nav_menu, .left_col, footer { display:none !important; } .right_col { margin:0 !important; padding:0 !important; } }
     </style>
 </head>
@@ -142,6 +157,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
             <label>搜尋</label>
             <input type="text" id="kwInput" placeholder="表單編號／料號／產品名稱／客戶" style="width:200px;">
             <button class="btn-warm" id="btnAdd" style="<?= $perms['canEdit']?'':'display:none;' ?>"><i class="fa fa-plus"></i> 新增</button>
+            <button id="btnSuggest" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-lightbulb-o"></i> 建議建立料號清單<?= $suggestPending>0 ? ' <span class="te-badge-deputy" style="background:#DD5138;">'.(int)$suggestPending.'</span>' : '' ?></button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <span class="te-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
@@ -152,9 +168,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
             <table class="te-table" id="teTable">
                 <thead><tr>
                     <th>表單編號</th><th>客戶名稱</th><th>產品件號</th><th>產品名稱</th>
-                    <th>填表日期</th><th>決行</th><th>簽核進度</th><th>操作</th>
+                    <th>填表日期</th><th>狀態</th><th>決行</th><th>簽核進度</th><th>操作</th>
                 </tr></thead>
-                <tbody id="teBody"><tr><td colspan="8" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="teBody"><tr><td colspan="9" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
 <?php endif; ?>
@@ -164,8 +180,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
 
 <!-- 新增/編輯 -->
 <div class="te-mask" id="editMask"><div class="te-modal xwide">
-    <div class="m-head"><span id="editTitle">產品開發評估表</span><span class="m-close" onclick="closeMask('editMask')">✕</span></div>
+    <div class="m-head"><span id="editTitle">產品開發評估表</span> <span class="te-status" id="editStatusBadge" style="display:none;"></span><span class="m-close" onclick="closeMask('editMask')">✕</span></div>
     <div class="m-body">
+        <div class="te-hdr-locked-tip" id="hdrLockedTip" style="display:none;">
+            <i class="fa fa-lock"></i> 已送出：表頭與確認項目改由各部門於下方「APQP 小組簽認」自行填寫本部門負責的項次，僅系統管理員可整批修改。
+        </div>
         <div class="te-head-grid">
             <div>
                 <label>客戶名稱</label>
@@ -219,10 +238,19 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
         <div style="margin-top:10px;<?= $canBackfill?'':'display:none;' ?>">
             <button type="button" class="te-row-btn" id="btnBackfillOpen"><i class="fa fa-user-secret"></i> 補登簽核（操作確認密碼）</button>
         </div>
+
+        <div class="te-admin-panel" id="adminQuickPanel" style="<?= $perms['isAdmin']?'':'display:none;' ?>">
+            <h5><i class="fa fa-user-secret"></i> 系統管理員快速設定（僅補歷史紙本資料用，會跳過送出/簽核流程）</h5>
+            <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">上方「確認項目及結果」32項與各部門簽認欄位不受一般流程限制，管理員可直接編輯後按下方按鈕，一次把尚未簽核的欄位全部自動簽核。</div>
+            <label style="display:inline-block;margin:0 8px 0 0;">簽核業務日期</label>
+            <input type="date" id="adminAutoSignDate" style="width:160px;display:inline-block;">
+            <button type="button" class="te-row-btn" id="btnAdminAutoSignAll" style="margin-left:6px;"><i class="fa fa-magic"></i> 全部自動簽核</button>
+        </div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('editMask')">取消</button>
         <button class="b-ok" id="btnSave" onclick="saveHeader()">儲存</button>
+        <button class="b-ok" id="btnSubmitDoc" style="background:#DD5138;border-color:#c9432a;" onclick="submitDoc()"><i class="fa fa-paper-plane"></i> 送出</button>
     </div>
 </div></div>
 
@@ -277,6 +305,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
             <li>APQP 小組簽認：屬於該部門且有權限登錄的使用者，會在自己部門那一列看到「簽核」按鈕，填意見後按下即完成簽核並蓋章；六個部門任一位主管都可以簽，不限定特定一人。</li>
             <li>六部門簽認後由生產課勾選「可行自製／可行委外／再評估／中止」並簽核，最後由總經理決行簽核。</li>
         </ul>
+        <h4>建議建立料號清單（管理員）</h4>
+        <ul>
+            <li>工具列「建議建立料號清單」按鈕（僅管理員可見，紅色數字為近一年候選筆數提醒）：依管理員設定的客戶名單，掃描區間內曾有訂單/報工/BOM/出貨記錄、但尚未建立評估表的料號，可一次批次建立多筆草稿，避免漏建。詳見該頁「使用說明」。</li>
+        </ul>
         <h4>補登簽核（歷史紙本資料建檔用）</h4>
         <ul>
             <li>具「操作確認密碼」資格者，可用「補登簽核」一次把尚未簽核的欄位補齊——<b>仍須逐格指定當初實際簽核的人</b>，系統會清楚記錄「此筆為補登，由誰執行補登」，跟本人即時線上簽核的紀錄分開標示，不會誤植成操作者本人簽的。</li>
@@ -312,9 +344,11 @@ var PART_API = '../../src/store/PartPicker_API.php';
 var VIEWER_URL = '../pm/bom_viewer.php';
 var CAN_EDIT = <?= $perms['canEdit'] ? 'true' : 'false' ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
+var IS_SUPER_ADMIN = <?= $perms['isAdmin'] ? 'true' : 'false' ?>;
 var CUR_USER_NAME = <?= json_encode($teUser ? $teUser['user_cname'] : '', JSON_UNESCAPED_UNICODE) ?>;
-var CUR_ID = 0, TEMPLATE = {}, SLOTS = {}, DECISIONS = {}, AS_DOCS = [], AS_DOC = null;
+var CUR_ID = 0, CUR_STATUS = 'draft', TEMPLATE = {}, SLOTS = {}, DECISIONS = {}, AS_DOCS = [], AS_DOC = null, CUR_SLOTS = {};
 var RESULT_OPTS = [['yes','是'],['no','否'],['na','N/A']];
+var STATUS_LABELS = {draft:'草稿', submitted:'簽核中', closed:'已結案'};
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function closeMask(id){ document.getElementById(id).style.display='none'; }
@@ -337,8 +371,8 @@ function loadTemplate(cb){
 /* ---------- 清單 ---------- */
 function loadList(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
-        if (!res.success){ $('#teBody').html('<tr><td colspan="8" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
-        if (!res.rows.length){ $('#teBody').html('<tr><td colspan="8" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
+        if (!res.success){ $('#teBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
+        if (!res.rows.length){ $('#teBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
         var html = '';
         res.rows.forEach(function(r){
             var slotTotal = Object.keys(SLOTS).length || 8;
@@ -348,6 +382,7 @@ function loadList(){
                 + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):'')+'</td>'
                 + '<td class="t-left">'+esc(r.product_name||'')+'</td>'
                 + '<td>'+fmtDate(r.fill_date)+'</td>'
+                + '<td><span class="te-status te-status-'+esc(r.status)+'">'+esc(r.status_label||r.status)+'</span></td>'
                 + '<td>'+esc(r.decision_label||'')+'</td>'
                 + '<td>'+r.signed_count+' / '+slotTotal+(r.is_complete?' <i class="fa fa-check-circle" style="color:#8A5A2B;"></i>':'')+'</td>'
                 + '<td>'
@@ -364,11 +399,11 @@ $('#kwInput').on('input', function(){ clearTimeout(kwT); kwT=setTimeout(loadList
 $('#btnCsv').on('click', function(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
         if (!res.success) return;
-        var lines = ['表單編號,客戶名稱,產品件號,產品名稱,填表日期,決行,簽核進度,建立人,建立時間'];
+        var lines = ['表單編號,客戶名稱,產品件號,產品名稱,填表日期,狀態,決行,簽核進度,建立人,建立時間'];
         var slotTotal = Object.keys(SLOTS).length || 8;
         res.rows.forEach(function(r){
-            lines.push([r.doc_no, r.customer_name||'', r.part_no||'', r.product_name||'', fmtDate(r.fill_date), r.decision_label||'',
-                r.signed_count+'/'+slotTotal, r.created_by_name||'', (r.created_at||'').substring(0,10)]
+            lines.push([r.doc_no, r.customer_name||'', r.part_no||'', r.product_name||'', fmtDate(r.fill_date), r.status_label||r.status,
+                r.decision_label||'', r.signed_count+'/'+slotTotal, r.created_by_name||'', (r.created_at||'').substring(0,10)]
                 .map(function(v){ return '"'+String(v).replace(/"/g,'""')+'"'; }).join(','));
         });
         var blob = new Blob(["\uFEFF"+lines.join("\n")], {type:'text/csv;charset=utf-8;'});
@@ -378,17 +413,37 @@ $('#btnCsv').on('click', function(){
 });
 
 /* ---------- 新增/編輯 ---------- */
+/** 送出後，某項次是否為「目前登入者可以填」的項次：屬於自己現在能簽的部門欄，且該欄尚未簽核 */
+function itemOwnerSlot(no){
+    var found = null;
+    Object.keys(CUR_SLOTS).forEach(function(k){
+        var s = CUR_SLOTS[k];
+        if (s && s.item_nos && s.item_nos.indexOf(parseInt(no,10)) >= 0) found = k;
+    });
+    return found;
+}
+function itemEditable(no){
+    if (IS_SUPER_ADMIN) return true;
+    if (CUR_STATUS === 'draft') return CAN_EDIT;
+    if (CUR_STATUS === 'submitted') {
+        var k = itemOwnerSlot(no), s = k ? CUR_SLOTS[k] : null;
+        return !!(s && s.can_sign);
+    }
+    return false;
+}
 function renderChecklist(answers){
     answers = answers || {};
     var html = '', lastCat = null;
     Object.keys(TEMPLATE).forEach(function(no){
         var t = TEMPLATE[no], cat = t[0], text = t[1], unit = t[2];
+        var editable = itemEditable(no);
+        var mine = CUR_STATUS === 'submitted' && !IS_SUPER_ADMIN && editable;
         var radios = RESULT_OPTS.map(function(o){
-            return '<label><input type="radio" name="res_'+no+'" value="'+o[0]+'"'+(answers[no]===o[0]?' checked':'')+(CAN_EDIT?'':' disabled')+'> '+o[1]+'</label>';
+            return '<label><input type="radio" name="res_'+no+'" value="'+o[0]+'"'+(answers[no]===o[0]?' checked':'')+(editable?'':' disabled')+'> '+o[1]+'</label>';
         }).join('');
         html += '<tr data-item-no="'+no+'">'
             + (cat!==lastCat ? '<td class="cat" rowspan="'+catSpan(cat)+'">'+esc(cat)+'</td>' : '')
-            + '<td>'+no+'</td><td class="q">'+esc(text)+'</td><td class="unit">'+esc(unit)+'</td>'
+            + '<td>'+no+'</td><td class="q'+(mine?' te-mine':'')+'" title="'+(mine?'待您填寫':'')+'">'+esc(text)+'</td><td class="unit">'+esc(unit)+'</td>'
             + '<td><div class="te-radio-grp">'+radios+'</div></td></tr>';
         lastCat = cat;
     });
@@ -417,12 +472,16 @@ function slotRowHtml(slotKey, s){
             + (s.is_backfill ? '<span class="te-badge-backfill" title="'+esc(s.backfill_by_name||'')+' 補登">補登</span>' : '');
     } else if (s.can_sign) {
         signCell = '<button type="button" class="te-row-btn" onclick="signSlot(\''+slotKey+'\')"><i class="fa fa-pencil-square-o"></i> 我要簽核</button>';
+    } else if (s.blocked_reason) {
+        signCell = '<span class="te-blocked-hint"><i class="fa fa-hourglass-half"></i> '+esc(s.blocked_reason)+'</span>';
     } else {
         var names = (s.pool||[]).map(function(p){ return esc(p.user_cname); }).join('、');
         signCell = '<span class="te-sign-todo">待簽核</span><br><span class="te-pool-hint">'+(names?('可簽核：'+names):'尚未設定部門簽核人')+'</span>';
     }
+    var itemHint = (s.item_nos && s.item_nos.length)
+        ? '<div class="te-blocked-hint">本部門負責項次：'+s.item_nos.join('、')+(s.can_sign?'（請至上方「確認項目及結果」表格內醒目標示列填寫）':'')+'</div>' : '';
     return '<tr data-slot="'+slotKey+'"><td class="dept">'+esc(label)+'</td>'
-        + '<td><textarea class="note-in" data-slot-note="'+slotKey+'" placeholder="意見"'+(CAN_EDIT&&!s.signed_by_name?'':' readonly')+'>'+esc(s.note||'')+'</textarea></td>'
+        + '<td>'+itemHint+'<textarea class="note-in" data-slot-note="'+slotKey+'" placeholder="意見(非必填)"'+(s.can_sign?'':' readonly')+'>'+esc(s.note||'')+'</textarea></td>'
         + '<td class="te-sign-cell">'+signCell+'</td></tr>';
 }
 function renderSlots(slots){
@@ -434,38 +493,56 @@ function renderSlots(slots){
     $('#prodDecisionBody').html(prodDecHtml);
     $('#gmBody').html(gmHtml);
 }
-function renderDecisionGrp(cur){
+function renderDecisionGrp(cur, prodSlot){
+    var editable = IS_SUPER_ADMIN || (prodSlot && prodSlot.can_sign);
     var html = '';
     Object.keys(DECISIONS).forEach(function(k){
-        html += '<label><input type="radio" name="decision" value="'+k+'"'+(cur===k?' checked':'')+(CAN_EDIT?'':' disabled')+'> '+esc(DECISIONS[k])+'</label>';
+        html += '<label><input type="radio" name="decision" value="'+k+'"'+(cur===k?' checked':'')+(editable?'':' disabled')+'> '+esc(DECISIONS[k])+'</label>';
     });
     $('#decisionGrp').html(html);
 }
 $(document).on('change', 'input[name="decision"]', function(){
     if (!CUR_ID) return;
-    $.post(API, {action:'save_decision', id:CUR_ID, decision:$(this).val()}, function(){}, 'json');
+    $.post(API, {action:'save_decision', id:CUR_ID, decision:$(this).val()}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); openEdit(CUR_ID); } // 點開即刷新鐵則
+    }, 'json');
 });
 
+/** 依目前狀態顯示：草稿=可編表頭+存檔+送出；已送出/已結案=鎖表頭、隱藏存檔與送出(管理員仍可存檔) */
+function applyStatusUI(){
+    var badge = $('#editStatusBadge');
+    if (CUR_ID) {
+        badge.show().attr('class', 'te-status te-status-'+CUR_STATUS).text(STATUS_LABELS[CUR_STATUS]||CUR_STATUS);
+    } else badge.hide();
+    var locked = CUR_ID && CUR_STATUS !== 'draft' && !IS_SUPER_ADMIN;
+    $('#hdrLockedTip').toggle(!!locked);
+    $('#fCustomerName,#fPartNo,#fProductName,#fEstQty,#fFillDate,#fSampleTime').prop('disabled', !!locked);
+    $('#btnSave').toggle(!locked);
+    $('#btnSubmitDoc').toggle(!!CUR_ID && CUR_STATUS === 'draft' && CAN_EDIT);
+    $('#adminAutoSignDate').val($('#adminAutoSignDate').val() || (new Date()).toISOString().substring(0,10));
+    $('#btnAdminAutoSignAll').prop('disabled', !CUR_ID);
+}
 function resetEditForm(){
-    CUR_ID = 0;
+    CUR_ID = 0; CUR_STATUS = 'draft'; CUR_SLOTS = {};
     $('#fCustomerName').val(''); $('#fPartNo').val(''); $('#fPartDId').val('0');
     $('#fProductName').val(''); $('#fEstQty').val(''); $('#fFillDate').val(''); $('#fSampleTime').val('');
     $('#fDocNo').text('存檔後自動產生'); $('#fCreatedInfo').text('—');
     renderChecklist({});
-    renderDecisionGrp('');
+    renderDecisionGrp('', null);
+    applyStatusUI();
 }
 function openEdit(id){
     resetEditForm();
     $('#editTitle').text(id ? '編輯產品開發評估表' : '新增產品開發評估表');
     if (!id){
-        var blankSlots = {}; Object.keys(SLOTS).forEach(function(k){ blankSlots[k] = {note:'',signed_by_name:'',can_sign:false,pool:[]}; });
+        var blankSlots = {}; Object.keys(SLOTS).forEach(function(k){ blankSlots[k] = {note:'',signed_by_name:'',can_sign:false,pool:[],item_nos:[]}; });
         renderSlots(blankSlots);
         openMask('editMask');
         return;
     }
     $.getJSON(API, {action:'get', id:id}, function(res){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
-        CUR_ID = id;
+        CUR_ID = id; CUR_STATUS = res.doc.status || 'draft'; CUR_SLOTS = res.slots || {};
         $('#fCustomerName').val(res.doc.customer_name||'');
         $('#fPartNo').val(res.doc.part_no||''); $('#fPartDId').val(res.doc.part_d_id||0);
         $('#fProductName').val(res.doc.product_name||''); $('#fEstQty').val(res.doc.est_qty||'');
@@ -473,8 +550,9 @@ function openEdit(id){
         $('#fDocNo').text(res.doc.doc_no);
         $('#fCreatedInfo').text((res.doc.created_by_name||'')+' '+fmtDate((res.doc.created_at||'').substring(0,10)));
         renderChecklist(res.answers || {});
-        renderSlots(res.slots || {});
-        renderDecisionGrp(res.doc.decision || '');
+        renderSlots(CUR_SLOTS);
+        renderDecisionGrp(res.doc.decision || '', CUR_SLOTS['prod_decision']);
+        applyStatusUI();
         openMask('editMask');
     });
 }
@@ -515,15 +593,41 @@ function delDoc(id){
     }, 'json');
 }
 
+/* ---------- 送出 ---------- */
+function submitDoc(){
+    if (!CUR_ID){ alert('請先儲存後再送出'); return; }
+    if (!confirm('確定送出嗎？送出後表頭與確認項目將鎖定，改由各部門於簽核關卡自行填寫負責的項目並簽核。')) return;
+    $.post(API, {action:'submit', id:CUR_ID}, function(res){
+        if (!res.success){ alert(res.message||'送出失敗'); openEdit(CUR_ID); return; } // 點開即刷新鐵則
+        openEdit(CUR_ID); loadList();
+    }, 'json');
+}
+
 /* ---------- 簽核 ---------- */
 window.signSlot = function(slotKey){
     if (!CUR_ID){ alert('請先儲存後再簽核'); return; }
     var note = $('textarea[data-slot-note="'+slotKey+'"]').val();
-    $.post(API, {action:'sign', doc_id:CUR_ID, slot_key:slotKey, note:note}, function(res){
+    var answers = {};
+    var itemNos = (CUR_SLOTS[slotKey] && CUR_SLOTS[slotKey].item_nos) || [];
+    var all = collectAnswers();
+    itemNos.forEach(function(no){ if (all[no]) answers[no] = all[no]; });
+    $.post(API, {action:'sign', doc_id:CUR_ID, slot_key:slotKey, note:note, answers:JSON.stringify(answers)}, function(res){
         if (!res.success){ alert(res.message||'簽核失敗'); openEdit(CUR_ID); return; } // 點開即刷新鐵則：失敗也要重新載入看最新狀態
-        openEdit(CUR_ID);
+        openEdit(CUR_ID); loadList();
     }, 'json');
 };
+
+/* ---------- 系統管理員：全部自動簽核(補舊資料用) ---------- */
+$('#btnAdminAutoSignAll').on('click', function(){
+    if (!CUR_ID){ alert('請先儲存後再使用'); return; }
+    var bizDate = $('#adminAutoSignDate').val();
+    if (!bizDate){ alert('請先選擇簽核業務日期'); return; }
+    if (!confirm('確定要把此筆尚未簽核的欄位，全部以「'+bizDate+'」自動簽核完成嗎？此功能僅供補歷史紙本資料使用。')) return;
+    $.post(API, {action:'admin_auto_sign_all', doc_id:CUR_ID, biz_date:bizDate}, function(res){
+        if (!res.success){ alert(res.message||'自動簽核失敗'); return; }
+        openEdit(CUR_ID); loadList();
+    }, 'json');
+});
 
 /* ---------- 補登簽核 ---------- */
 var backfillPool = {};
@@ -664,6 +768,7 @@ function openAsDocPicker(){
     });
 }
 
+$('#btnSuggest').on('click', function(){ window.location.href = 'td_dev_eval_suggest.php'; });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('#btnRoleHelp').on('click', function(){ openMask('roleHelpMask'); });
 $('.te-mask').on('click', function(e){ if (e.target === this) this.style.display='none'; });
