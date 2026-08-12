@@ -550,7 +550,11 @@ if ($isAjax) {
         .page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
             background:#F0A24B; color:#fff; cursor:pointer; }
         .page-help-btn:hover { background:#d98a33; }
-        @media print { .page-help-btn, .ppr-toolbar, .nav_menu, .left_col, footer { display:none !important; } }
+        @media print { .page-help-btn, .ppr-toolbar, .nav_menu, .left_col, footer, .ppr-back-top { display:none !important; } }
+        .ppr-back-top { display:none; position:fixed; right:26px; bottom:26px; width:46px; height:46px; border-radius:50%;
+            background:#F0A24B; color:#fff; border:1px solid #d98a33; box-shadow:0 3px 12px rgba(0,0,0,.25);
+            font-size:18px; cursor:pointer; z-index:500; }
+        .ppr-back-top:hover { background:#d98a33; }
         .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
         .help-doc h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
         .help-doc h4:first-child { margin-top:0; }
@@ -596,15 +600,23 @@ if ($isAjax) {
         .ppr-dw-pick label { display:flex; align-items:center; gap:4px; font-size:12px; border:1px solid #D8BE93; border-radius:4px; padding:3px 6px; cursor:pointer; }
         .ppr-count-bar { font-size:12px; color:#8a6d45; margin:6px 0; }
 
-        /* ══════ 報告版面（螢幕預覽用陰影卡片；列印時去邊框改用 @page 分頁） ══════ */
-        .ppr-report-area { background:#EDE6D8; padding:16px 0; }
+        /* ══════ 報告版面（螢幕預覽用陰影卡片；列印時去邊框改用 @page 分頁） ══════
+         * 螢幕上：報告區塊本身就是「選A4就長得像A4、選A3就長得像A3」的實際版面（非另外算的排版），
+         * 列印鍵＝原樣把這個畫面轉成印表機輸出，沒有另一套「列印專用排版」，所見即所印。
+         * A4 模式螢幕上額外用 flex-wrap 讓多頁可以兩頁併排顯示，避免長報告要一直往下捲；
+         * 這只是「螢幕預覽排法」，列印時 @media print 一律強制改回單欄、一張接一張分頁。 */
+        .ppr-report-area { background:#EDE6D8; padding:16px 0 60px; }
+        .ppr-report-area:not(.ppr-paper-a3) { display:flex; flex-wrap:wrap; justify-content:center; align-items:flex-start; gap:20px; }
         .ppr-page { width:210mm; min-height:297mm; margin:0 auto 20px; padding:16mm 14mm; background:#fff;
             box-shadow:0 2px 10px rgba(90,60,20,.18); box-sizing:border-box; font-size:12.5px; color:#382a1a; }
+        .ppr-report-area:not(.ppr-paper-a3) .ppr-page { margin:0; }
         .ppr-report-area.ppr-paper-a3 .ppr-page { width:297mm; min-height:420mm; font-size:14px; }
         @media print {
-            .ppr-report-area { background:none; padding:0; }
-            .ppr-page { box-shadow:none; margin:0; width:auto; min-height:0; page-break-after:always; }
+            .ppr-report-area { background:none; padding:0; display:block !important; }
+            .ppr-page { box-shadow:none; margin:0 !important; width:auto; min-height:0; page-break-after:always; }
             .ppr-page:last-child { page-break-after:auto; }
+            /* 保證背景色/徽章色列印跟畫面上一致，不被瀏覽器「省墨」預設值吃掉 */
+            .ppr-page, .ppr-page * { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; color-adjust:exact !important; }
         }
 
         .ppr-head-block { page-break-inside:avoid; }
@@ -791,6 +803,8 @@ if ($isAjax) {
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">我知道了</button></div>
 </div></div>
 
+<button id="pprBackTop" class="ppr-back-top" title="回頂端"><i class="fa fa-arrow-up"></i></button>
+
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/fastclick.js"></script>
@@ -807,6 +821,11 @@ $(document).ready(function(){
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 function closeMask(id){ document.getElementById(id).style.display='none'; }
 function openMask(id){ document.getElementById(id).style.display='block'; }
+
+$(window).on('scroll', function(){
+    if ($(window).scrollTop() > 400) $('#pprBackTop').fadeIn(150); else $('#pprBackTop').fadeOut(150);
+});
+$('#pprBackTop').on('click', function(){ $('html,body').animate({scrollTop:0}, 350); });
 
 var PPR_API = 'part_process_report.php';
 var PPR_ROWS = [];
