@@ -282,12 +282,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
 <div class="ic-mask" id="ownDrawMask"><div class="ic-modal">
     <div class="m-head"><span>廠內圖面標籤設定</span><span class="m-close" onclick="closeMask('ownDrawMask')">✕</span></div>
     <div class="m-body">
-        <div class="tip" style="margin-bottom:8px;">下方只列出主檔管理已標記「自家出的圖」的附件類別。勾選的類別，其料號附件會比照外來文件清單一併同步進本模組（版別／文件編號優先顯示<b>版次</b>，型態生效日期優先用<b>發行章日期</b>；未填版次/發行章日期時退回檔名與上傳日）。<br>「顯示名稱」留空則沿用類別原名，同步進本模組後會直接成為項目列的「型態項目名稱」（與外來文件清單共用同一顯示名稱設定，若該類別同時列入外來文件清單，改名會兩邊一起變）。勾選「需要顯示製程」後，同步出的項目列若「所屬製程」留空會加上提示色塊，僅供提醒不強制填寫。</div>
+        <div class="tip" style="margin-bottom:8px;">下方只列出主檔管理已標記「自家出的圖」的附件類別。勾選的類別，其料號附件會比照外來文件清單一併同步進本模組（版別／文件編號優先顯示<b>版次</b>，型態生效日期優先用<b>發行章日期</b>；未填版次/發行章日期時退回檔名與上傳日）。<br>「顯示名稱」留空則沿用類別原名，同步進本模組後會直接成為項目列的「型態項目名稱」（與外來文件清單共用同一顯示名稱設定，若該類別同時列入外來文件清單，改名會兩邊一起變）。勾選「需要顯示製程」後，同步出的項目列若「所屬製程」留空會加上提示色塊，僅供提醒不強制填寫。<br><b>更新已同步項目名稱</b>：只改設定不會回頭改到之前已經同步進來的項目列，按這顆按鈕會先儲存目前設定、再用最新的顯示名稱／需要顯示製程覆蓋回所有目前仍連結有效附件的項目列（手動輸入的項目不受影響），不必整批刪除重轉。</div>
         <div id="ownDrawEmpty" style="color:#8a6d45;padding:10px;">載入中…</div>
         <div id="ownDrawList"></div>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('ownDrawMask')">取消</button>
+        <button class="b-cancel" onclick="refreshSyncedItemNames()" title="先儲存目前設定，再用最新顯示名稱／需要顯示製程覆蓋回既有已同步項目"><i class="fa fa-refresh"></i> 更新已同步項目名稱</button>
         <button class="b-ok" onclick="saveOwnDrawCats()">儲存</button>
     </div>
 </div></div>
@@ -334,7 +335,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號、製表人簽章使用全站通用圓形姓名章（若本人有上傳掃描實體章會優先用掃描章，否則自動產生標準回墨章，不需另外設定模板）。</li>
         </ul>
         <h4>設定入口</h4>
-        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。<b>廠內圖面標籤</b>（哪些「自家出的圖」類別也要納入自動同步）：工具列「廠內圖面標籤設定」按鈕（僅管理員可見；類別本身要先在主檔管理→附件類別標籤設定勾選「自家出的圖」）。同一跳窗每個類別還可設定：<b>顯示名稱</b>（留空沿用類別原名；同步進本模組後即成為項目列的「型態項目名稱」，與外來文件清單共用同一顯示名稱欄位）與<b>需要顯示製程</b>（勾選後，該類別同步出的項目列若「所屬製程」留空，欄位會加提示色塊，僅供提醒不強制填寫）。<b>角色指派</b>（誰可以檢閱／登錄／管理本頁）：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「型態識別文件管制表」區塊。</p>
+        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。<b>廠內圖面標籤</b>（哪些「自家出的圖」類別也要納入自動同步）：工具列「廠內圖面標籤設定」按鈕（僅管理員可見；類別本身要先在主檔管理→附件類別標籤設定勾選「自家出的圖」）。同一跳窗每個類別還可設定：<b>顯示名稱</b>（留空沿用類別原名；同步進本模組後即成為項目列的「型態項目名稱」，與外來文件清單共用同一顯示名稱欄位）與<b>需要顯示製程</b>（勾選後，該類別同步出的項目列若「所屬製程」留空，欄位會加提示色塊，僅供提醒不強制填寫）；改了設定不會回頭改到之前已同步的舊資料，跳窗內「更新已同步項目名稱」按鈕會把最新設定覆蓋回所有目前仍連結有效附件的既有項目列（不必整批刪除重轉；手動輸入的項目不受影響；已確認的清單若被更新會改回「需重新確認」）。<b>角色指派</b>（誰可以檢閱／登錄／管理本頁）：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「型態識別文件管制表」區塊。</p>
         <h4>權限角色</h4>
         <p>型態文件檢閱／登錄／管理員（管理者固定擁有全部權限）；點頁面右上角「目前角色」旁的 <i class="fa fa-question-circle"></i> 可看各角色的權限說明。</p>
     </div>
@@ -783,7 +784,7 @@ $('#btnOwnDrawCats').on('click', function(){
         $('#ownDrawList').html(html);
     });
 });
-function saveOwnDrawCats(){
+function collectOwnDrawRows(){
     var rows = [];
     $('#ownDrawList .own-draw-row').each(function(){
         rows.push({
@@ -793,9 +794,25 @@ function saveOwnDrawCats(){
             need_process: $(this).find('.own-draw-proc').is(':checked') ? 1 : 0,
         });
     });
-    $.post(API, {action:'save_own_drawing_categories', rows: JSON.stringify(rows)}, function(res){
+    return rows;
+}
+function saveOwnDrawCats(){
+    $.post(API, {action:'save_own_drawing_categories', rows: JSON.stringify(collectOwnDrawRows())}, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); return; }
         closeMask('ownDrawMask');
+    }, 'json');
+}
+function refreshSyncedItemNames(){
+    if (!$('#ownDrawList .own-draw-row').length) return;
+    if (!confirm('確定要用目前的「顯示名稱／需要顯示製程」設定，更新所有已同步項目的型態項目名稱嗎？\n（會先儲存目前設定；僅影響來源仍連結有效附件的項目列，手動輸入的項目不受影響；已確認的清單若被更新會改回「需重新確認」）')) return;
+    $.post(API, {action:'save_own_drawing_categories', rows: JSON.stringify(collectOwnDrawRows())}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        $.post(API, {action:'refresh_item_names_by_category'}, function(res2){
+            if (!res2.success){ alert(res2.message||'更新失敗'); return; }
+            alert('已更新 '+res2.updated_count+' 筆項目名稱'+(res2.affected_docs?'，其中 '+res2.affected_docs+' 份原已確認的清單已改回「需重新確認」':'')+'。');
+            closeMask('ownDrawMask');
+            loadList();
+        }, 'json');
     }, 'json');
 }
 
