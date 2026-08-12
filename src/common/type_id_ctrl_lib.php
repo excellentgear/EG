@@ -156,8 +156,12 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
         $st->execute([$attachId, $dsPk]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return null;
+        // doc_no_is_filename：沒填版次時退回檔名充當顯示用途，但檔名不是真正的「版別／文件編號」，
+        // 列印時不應印出（2026-08-12 使用者要求），僅畫面/跳窗仍顯示以利辨識檔案。
+        $hasRevision = ($r['revision'] !== null && $r['revision'] !== '');
         return [
-            'doc_name' => ($r['revision'] !== null && $r['revision'] !== '') ? $r['revision'] : $r['doc_name'],
+            'doc_name' => $hasRevision ? $r['revision'] : $r['doc_name'],
+            'doc_no_is_filename' => !$hasRevision,
             'doc_date' => $r['issue_stamp_date'] ?: $r['doc_date'],
             'file_url' => '../../src/store/Part_Attachment_API.php?action=download&id=' . $attachId,
         ];
@@ -171,7 +175,8 @@ function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $d
         $r = $st->fetch(PDO::FETCH_ASSOC);
         if (!$r) return null;
         return [
-            'doc_name' => $r['doc_name'], 'doc_date' => $r['doc_date'],
+            // 報價附件沒有版次欄位，doc_name 一律是檔名，同理列印時不印（僅畫面顯示供辨識）
+            'doc_name' => $r['doc_name'], 'doc_no_is_filename' => true, 'doc_date' => $r['doc_date'],
             'file_url' => '../../src/store/Quotation_File_API.php?action=download&quote_no=' . rawurlencode($r['quote_no']) . '&filename=' . rawurlencode($r['filename']),
         ];
     }
