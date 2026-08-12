@@ -68,8 +68,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         .pf-op { color:#b5762a; cursor:pointer; margin:0 4px; }
         .pf-op:hover { color:#8A5A2B; text-decoration:underline; }
         .pf-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
-        .pf-modal { background:#fff; border-radius:8px; max-width:600px; margin:36px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
-            max-height:90vh; display:flex; flex-direction:column; }
+        .pf-modal { background:#fff; border-radius:8px; max-width:680px; margin:36px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
+            max-height:90vh; display:flex; flex-direction:column; transition:max-width .15s ease; }
         .pf-modal.xwide { max-width:96vw; margin:12px auto; max-height:96vh; }
         .pf-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
             display:flex; justify-content:space-between; }
@@ -102,8 +102,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         /* 可增列分析表：改卡片式逐項顯示，畫面上不需要橫向捲動(列印仍走原橫式表格，見printDoc()) */
         .pf-card { border:1.5px solid #E8D5B5; border-radius:8px; background:#FDF8EF; padding:10px 12px; margin-bottom:12px; }
         .pf-card-hd { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;
-            padding-bottom:6px; border-bottom:1px dashed #E8D5B5; }
+            padding-bottom:6px; border-bottom:1px dashed #E8D5B5; cursor:pointer; }
+        .pf-card.collapsed .pf-card-hd { margin-bottom:0; padding-bottom:0; border-bottom:none; }
         .pf-card-hd b { color:#8A5A2B; font-size:13px; }
+        .pf-card-hd .toggle-ic { color:#b5762a; margin-right:4px; width:12px; display:inline-block; }
+        .pf-card-summary { color:#8a6d45; font-size:12px; font-weight:normal; margin-left:10px; }
+        .pf-card:not(.collapsed) .pf-card-summary { display:none; }
+        .pf-card.collapsed .pf-card-body { display:none; }
         .pf-card-grp-title { font-size:11px; font-weight:bold; color:#b5762a; margin:8px 0 4px; }
         .pf-card-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:6px 10px; }
         .pf-card-grid .f-sm { grid-column:span 1; }
@@ -161,7 +166,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
 </div>
 
 <!-- 新增/編輯 -->
-<div class="pf-mask" id="editMask"><div class="pf-modal xwide">
+<div class="pf-mask" id="editMask"><div class="pf-modal">
     <div class="m-head"><span id="editTitle">PFMEA潛在失效模式及效應分析</span><span class="m-close" onclick="closeMask('editMask')">✕</span></div>
     <div class="m-body">
         <div class="pf-head-grid">
@@ -208,7 +213,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         </div>
         <div class="pf-rpn-note">風險優先指數 RPN = S × O × D（系統自動計算，不可手填）：<b>&lt;50</b> 低風險｜<b>50-100</b> 中風險｜<b>101-200</b> 高風險｜<b>&gt;200</b> 極高風險，需優先改善。</div>
 
-        <div class="pf-sec-title">失效模式分析（逐項卡片，畫面上不需要橫向捲動；<b>列印仍是您提供的橫式表格格式</b>）</div>
+        <div class="pf-sec-title">失效模式分析（逐項卡片，預設收合成一行；<b>點擊卡片標題展開才會放大視窗輸入</b>，列印仍是您提供的橫式表格格式）</div>
         <div id="itemBody"></div>
         <div style="margin-top:6px;">
             <button type="button" class="pf-row-btn" onclick="pfAddRow()"><i class="fa fa-plus"></i> 新增一項失效模式分析</button>
@@ -337,8 +342,18 @@ $('#btnCsv').on('click', function(){
 });
 
 /* ---------- 新增/編輯 ---------- */
-function itemCardHtml(it, idx){
+/**
+ * 卡片預設收合成一行摘要（項次＋失效模式＋RPN），跳窗維持較小尺寸；
+ * 點擊卡片標題才展開該卡片的完整欄位，此時跳窗才放大（.xwide），避免欄位一次全部攤開遮蔽畫面。
+ * 新增的卡片（使用者當下要輸入）預設直接展開；既有資料載入時預設全部收合。
+ */
+function cardSummaryText(it){
+    var rpn = it.rpn != null ? it.rpn : '';
+    return '失效模式：' + esc(it.failure_mode || '（尚未填寫）') + (rpn !== '' ? '　RPN：' + rpn : '');
+}
+function itemCardHtml(it, idx, expanded){
     it = it || {};
+    expanded = !!expanded;
     function fld(field, label, type){
         var v = it[field] != null ? it[field] : '';
         var dis = CAN_EDIT ? '' : ' disabled';
@@ -352,9 +367,13 @@ function itemCardHtml(it, idx){
     var newRpn = it.new_rpn != null ? it.new_rpn : '';
     var rpnCls = (it.rpn != null && it.rpn > 200) ? ' rpn-hi' : '';
     var newRpnCls = (it.new_rpn != null && it.new_rpn > 200) ? ' rpn-hi' : '';
-    return '<div class="pf-card" data-id="'+esc(it.id||0)+'">'
-        + '<div class="pf-card-hd"><b>項次 <span class="seq">'+(idx+1)+'</span></b>'
-        + '<button type="button" class="pf-row-btn del" onclick="removeCard(this)"><i class="fa fa-trash"></i> 刪除此項</button></div>'
+    return '<div class="pf-card'+(expanded?'':' collapsed')+'" data-id="'+esc(it.id||0)+'">'
+        + '<div class="pf-card-hd" onclick="toggleCard(this)">'
+        + '<span><i class="fa fa-chevron-'+(expanded?'down':'right')+' toggle-ic"></i><b>項次 <span class="seq">'+(idx+1)+'</span></b>'
+        + '<span class="pf-card-summary">'+cardSummaryText(it)+'</span></span>'
+        + '<button type="button" class="pf-row-btn del" onclick="event.stopPropagation();removeCard(this)"><i class="fa fa-trash"></i> 刪除此項</button>'
+        + '</div>'
+        + '<div class="pf-card-body">'
         + '<div class="pf-card-grp-title">初步分析</div>'
         + '<div class="pf-card-grid">'
         + fld('process_desc','製程說明') + fld('function_desc','功能') + fld('requirement','要求')
@@ -382,13 +401,19 @@ function itemCardHtml(it, idx){
         + '<div class="pf-card-grid">'
         + fld('prevention_controls','預防管制') + fld('detection_controls','偵測管制')
         + '</div>'
+        + '</div>'
         + '</div>';
 }
 function renderItems(items){
-    var html = '';
-    (items||[]).forEach(function(it, idx){ html += itemCardHtml(it, idx); });
-    $('#itemBody').html(html);
-    if (!items || !items.length) pfAddRow();
+    if (items && items.length) {
+        var html = '';
+        items.forEach(function(it, idx){ html += itemCardHtml(it, idx, false); });
+        $('#itemBody').html(html);
+        updateModalWidth();
+    } else {
+        $('#itemBody').html('');
+        pfAddRow();
+    }
 }
 function renumberRows(){ $('#itemBody .pf-card').each(function(i){ $(this).find('.seq').text(i+1); }); }
 window.toggleRatingRef = function(){
@@ -397,9 +422,25 @@ window.toggleRatingRef = function(){
     box.style.display = show ? 'block' : 'none';
     document.getElementById('ratingToggleIcon').className = 'fa fa-chevron-' + (show ? 'down' : 'right');
 };
+function updateModalWidth(){
+    var anyExpanded = $('#itemBody .pf-card').filter(function(){ return !$(this).hasClass('collapsed'); }).length > 0;
+    $('#editMask .pf-modal').toggleClass('xwide', anyExpanded);
+}
+window.toggleCard = function(hdEl){
+    var $card = $(hdEl).closest('.pf-card');
+    var willCollapse = !$card.hasClass('collapsed');
+    if (willCollapse) {
+        var it = {failure_mode: $card.find('[data-f="failure_mode"]').val(), rpn: $card.find('[data-rpn]').val() || null};
+        $card.find('.pf-card-summary').html(cardSummaryText(it));
+    }
+    $card.toggleClass('collapsed', willCollapse);
+    $card.find('.toggle-ic').attr('class', 'fa fa-chevron-'+(willCollapse?'right':'down')+' toggle-ic');
+    updateModalWidth();
+};
 window.pfAddRow = function(){
-    $('#itemBody').append(itemCardHtml({}, $('#itemBody .pf-card').length));
+    $('#itemBody').append(itemCardHtml({}, $('#itemBody .pf-card').length, true));
     renumberRows();
+    updateModalWidth();
     return true;
 };
 window.pfDelRow = function(){
@@ -407,12 +448,14 @@ window.pfDelRow = function(){
     if (cards.length <= 1) return false;
     cards.last().remove();
     renumberRows();
+    updateModalWidth();
     return true;
 };
 window.removeCard = function(btn){
     if ($('#itemBody .pf-card').length <= 1){ alert('至少要保留一項'); return; }
     $(btn).closest('.pf-card').remove();
     renumberRows();
+    updateModalWidth();
 };
 /* RPN 即時重算(僅顯示用，實際以送出後後端重算為準) */
 $(document).on('input', '#itemBody .sod-in', function(){
